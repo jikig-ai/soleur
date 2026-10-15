@@ -13,6 +13,21 @@ requires_cpo_signoff: false
 
 Ref #9927 (no closing keyword anywhere; #9927 stays open). Draft PR #10355 already exists on this branch.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-15
+**Sections enhanced:** Scope Check (rebuilt to the gate schema), Observability (added), Guard Contract (validated by simulation), Research Insights.
+**Agents used:** none beyond the plan-phase CTO ruling and learnings researcher; the change is S-sized, so deepening was done as mechanical gate verification plus a simulation of the guard against the real workflow.
+
+### Key Improvements
+1. The guard design was simulated against the real workflow with python/yaml: 46 steps parsed, exactly 2 steps named "File an issue for orphaned rehearsal hosts", both flagged RED by the Hetzner write check and by the Doppler destroy check on the current file, and 0 flags after an in-memory removal of the 5 lines (no false positive elsewhere, including the read-only sweep steps that mention api.hetzner.cloud and HCLOUD_TOKEN).
+2. The Scope Check was rebuilt to the schema deepen-plan section 4.12 verifies (Ask Mapping, Plan-Item Provenance, Split Assessment with a Recommendation line).
+3. A five-field Observability block was added because section 4.7 applies to any plan whose Files to Edit are not all docs; its discoverability command is a one-line python count that prints 0 once the recipes are gone.
+
+### New Considerations Discovered
+- The old recipe lines begin with `echo`, so the suite's existing `strip_comments` (which drops only lines starting with `#`) does not hide them: no special handling is needed, and the comment-only must-PASS row is still required to prove comments are ignored.
+- The sweep steps (lines near 1918 and 2329) read `HCLOUD_TOKEN` as `TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)`; that confirms the CTO's point that the fence's token source is a separate hardening.
+
 ## Overview
 
 `.github/workflows/scheduled-terraform-drift.yml` auto-files two GitHub issues when a rehearsal host survives past its
@@ -80,11 +95,6 @@ volume 106443278.
 `gh issue list --label code-review --state open` filtered per planned file (the workflow, ADR-282, the runbook, the test):
 None. (Re-run at work time; the check is a snapshot.)
 
-## Scope Check
-
-- Ask mapping: remove two DELETE recipes (done: Phases 1-2); reword Remedy prose (Phase 2); keep list loop / rest of body (Phase 2); repo-wide subject sweep with a decision per hit (Research Reconciliation + Phase 3); regression assertion, test-first, in an existing drift test (Phase 1); targeted suites only (Phase 4); decisions recorded in `decision-challenges.md` (done at plan time).
-- Item provenance: ADR-282 erratum and runbook reword are `inferred` from the ask's "decide each hit" sweep clause; the Doppler one-liner reword is `inferred` and CTO-ratified (it is the same pasted-destroy class on the same lines). Nothing else added.
-- Split assessment: single PR, one workflow file plus three small text edits and one test file.
 
 ## User-Brand Impact
 
@@ -186,6 +196,44 @@ Run: `bash plugins/soleur/test/token-drift-workflow-causes.test.sh`; `bash plugi
 
 Path-glob check: no globs prescribed; all four edited paths verified to exist via `git ls-files`.
 
+## Scope Check
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "remove the runnable Hetzner DELETE recipes that .github/workflows/scheduled-terraform-drift.yml prints into drift-issue bodies" [brief] | Phase 2; Files to Edit: scheduled-terraform-drift.yml | mapped |
+| 2 | "Drop the DELETE recipe (and the TOKEN fetch only if nothing left needs it — keep the list loop, which is read-only), keep the rest of the issue body intact" [brief] | Phase 2 (TOKEN line kept because the list loop needs it) | mapped |
+| 3 | "the Remedy prose that says \"reclaim it by the API directly — the exact calls are\" must be reworded so it stays true once the DELETE call is gone" [brief] | Phase 2 (both Remedy paragraphs, CTO text) | mapped |
+| 4 | "Repo-wide sweep by SUBJECT before editing: ... and decide each hit" [brief] | Research Reconciliation table; Phase 3 | mapped |
+| 5 | "add a regression assertion (test-first per cq-write-failing-tests-before) that the drift workflow prints no `-X DELETE` / Hetzner write call in its issue bodies, placed in the most fitting existing test file" [brief] | Phase 1; Guard Contract; Files to Edit: token-drift-workflow-causes.test.sh | mapped |
+| 6 | "also check any lint that scans workflows for Hetzner write verbs or `-X DELETE` ... so the edit passes them" [brief] | Research Reconciliation (census row); Phase 4 | mapped |
+| 7 | "Locally run only targeted or TEST_GROUP=affected suites (CI is the authority)" [brief] | Phase 4 | mapped |
+| 8 | "record every decision as a row `| Item | Class | Ruling |` in knowledge-base/project/specs/feat-one-shot-9927-drift-delete-recipes/decision-challenges.md" [brief] | Files to Create: decision-challenges.md | mapped |
+| 9 | "\"Ref #9927\" only: no closing keyword in body, title or commits; #9927 stays open" and "note any ship UNTRUSTED-CI / no-agent --admin note for workflow diffs" [brief] | Phase 5; AC10 | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| Files to Edit: .github/workflows/scheduled-terraform-drift.yml | asks 1-3 | asked |
+| Files to Edit: plugins/soleur/test/token-drift-workflow-causes.test.sh | ask 5 | asked |
+| Files to Edit: ADR-282 residual bullet | ask 4 ("any runbook/ADR/test/learning that quotes the recipe") | asked |
+| Files to Edit: inngest-provision-rehearsal.md line | ask 4 ("tells an operator to paste it") | asked |
+| Files to Create: decision-challenges.md | ask 8 | asked |
+| Files to Create: tasks.md | — | inferred — justification: the plan skill derives tasks.md as the contract soleur:work executes against; without it the work phase has no task list |
+| Rewording the Doppler `configs delete` / `environments delete` one-liners | — | inferred — justification: they are the same pasted-destroy class on the same lines (the rung-2 config holds a live GIT_DATA_LUKS_KEY); leaving them while removing the Hetzner recipe defeats the intent of ask 1; CTO-ratified |
+| Mechanism: sandbox mutation row and anti-vacuity floor in the new guard | ask 5 ("test-first") | asked |
+| Mechanism: positive anti-vacuity row (exactly two filers keep the read-only loop) | — | inferred — justification: a scan over the wrong population passes trivially, so the guard must prove it examined both filers (Guard Contract harness rule) |
+| Phase 5 follow-up note (HCLOUD_TOKEN_READONLY) | — | inferred — justification: the ask keeps the read/write token fetch for the list loop; recording the hardening under #9927 stops it being lost |
+
+### Split Assessment
+
+- Subsystems touched: 3 - .github/workflows, plugins/soleur/test, knowledge-base (ADR, runbook, specs)
+- Planned files: 6 | Estimated changed lines: ~170
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR
+
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
@@ -211,6 +259,35 @@ Path-glob check: no globs prescribed; all four edited paths verified to exist vi
 - Edited workflow: Checks 1-4 GREEN.
 - Sandbox mutants per the Guard Contract matrix.
 - Regression suites listed in Phase 4 stay green (they never asserted the removed strings).
+
+## Observability
+
+```yaml
+liveness_signal:
+  what: the twice-daily orphan sweeps in the drift workflow and the infra-drift issue each files when it finds a survivor
+  cadence: twice daily (scheduled run) plus per-PR CI for the guard
+  alert_target: the infra-drift labelled GitHub issue and the existing drift ops email; the new guard reddens the PR check
+  configured_in: .github/workflows/scheduled-terraform-drift.yml
+error_reporting:
+  destination: GitHub Actions run annotations and the filed infra-drift issue; no Sentry change (no application code touched)
+  fail_loud: the guard section in token-drift-workflow-causes.test.sh exits non-zero and names the offending step, so the PR check goes red
+failure_modes:
+  - mode: a later edit re-adds a Hetzner write call or a Doppler destroy one-liner to an issue-body printer
+    detection: the new step-scoped Hetzner write check and the whole-workflow Doppler destroy check, run by CI on every PR touching the workflow
+    alert_route: red PR check on the author's PR
+  - mode: an echo quoting slip leaves the filer body unparseable or truncated
+    detection: YAML parse of the workflow plus bash -n of each extracted filer body in the same suite and in Phase 4
+    alert_route: red PR check
+  - mode: the guard scans the wrong population and passes over nothing
+    detection: the positive row requires exactly two filers, each keeping the read-only label_selector loop, and a steps-examined floor
+    alert_route: red PR check
+logs:
+  where: GitHub Actions run logs for the drift workflow and the test CI job
+  retention: the repository's Actions log retention window
+discoverability_test:
+  command: python3 -c "import re;print(len(re.findall(r'-X +DELETE',open('.github/workflows/scheduled-terraform-drift.yml').read())))"
+  expected_output: "0"
+```
 
 ## Domain Review
 
