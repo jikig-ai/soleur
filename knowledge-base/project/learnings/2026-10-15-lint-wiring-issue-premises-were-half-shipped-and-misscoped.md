@@ -44,3 +44,37 @@ An issue that cites a scanner's rule list is evidence about the scanner's view, 
 ## Tags
 category: workflow-issues
 module: soleur:brainstorm
+
+## PR1 work and review session (2026-10-15)
+
+### Problem
+Triage of two `js/comparison-between-incompatible-types` Code Quality findings in Art. 15/17 server code.
+
+### Solution
+- The Code Quality alert list is readable through an authenticated Playwright MCP session even though the code-scanning REST API does not return those alerts; the rule page (`/security/quality/rules/js%2Fcomparison-between-incompatible-types`) lists file:line and the CodeQL message.
+- Both findings were null guards CodeQL read as comparing a non-null value to null: one genuinely redundant (inside an already-truthy `if`), one a standalone type guard (`typeof null === "object"`) whose only caller pre-filters null. Neither was a behavior bug. Fixed the first by removing the redundant comparison; dismissed the second.
+- GitHub's Dismiss action on a Code Quality alert takes no reason field and acts on click (no confirmation); the reason has to be recorded elsewhere (the audit doc) and the dismissed list is reachable at `...?query=is%3Adismissed`.
+
+### Key Insight
+A regression test for a guard is only a regression test if a mutation of the guard reddens it. The `dsarStringify` null test looked like coverage and was vacuous (null never reaches `isPlainObject` through the exported surface); four independent review seats converged on that. Before writing a test for a guard, name the one-line mutation of the guard that should fail it, and run it.
+
+## Session Errors (PR1 work and review)
+
+9. **Wrote a test that could not discriminate the guard it named** (`dsarStringify` null test; `isPlainObject` is unexported and null is pre-filtered) — Recovery: deleted it after four review seats flagged it, and recorded in the audit that no test can reach the guard. Prevention: run the guard-deleting mutation before committing a test that claims to pin the guard.
+10. **Pinned `"[object Object]"` as a contract** — Recovery: weakened to the stable contract (stage prefix, non-empty detail, `message` used when present). Prevention: pin behavior a caller depends on, not an accidental `String()` fallback.
+11. **Clicked GitHub's Dismiss before learning it takes no reason and acts immediately** — Recovery: recorded the reason and dismissed-list link in the audit doc. Prevention: for an irreversible-feeling UI mutation, read the control (menu or dialog) first; this one was reversible via Reopen, which is why it was acceptable.
+12. **Ran a 6-seat focused panel instead of the prescribed 12 on a single-user-incident-tier PR** — Recovery: the review trailer records `degraded 6/12` with the six missing seats named; ship decides whether that is acceptable. Prevention: if the tier calls for the full panel, either run it or accept the degraded trailer knowingly.
+13. **Semgrep seat segfaulted twice (`semgrep-core` -11) before `ulimit -s unlimited` made it run** — Recovery: third run non-vacuous (79 rules, 3 files). Prevention: one-off; add `ulimit -s unlimited` to the semgrep invocation when it segfaults with 0 files scanned.
+
+### Triage
+| item | recurring? | disposition |
+|---|---|---|
+| test that cannot fail for its named guard | yes | fixed inline; already caught by the test-design seat |
+| pinned accident | no | fixed inline |
+| dismiss without reason | no | one-off |
+| reduced panel | no | disclosed in trailer |
+| semgrep segfault | no | one-off |
+
+## Tags
+category: workflow-issues
+module: soleur:work
