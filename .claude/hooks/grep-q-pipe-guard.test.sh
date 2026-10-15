@@ -1201,7 +1201,7 @@ eqv_sh="$(_eqv "$EQV_SH")"
 # the port drifting, and only a person who runs it will see one.
 PJ_DRAIN_WINDOW=4
 PJ_ALL="$(git ls-files)"
-PJ_TRIPLES=268   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples
+PJ_TRIPLES=269   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples
 PJ_VOCAB=' not-a-command text-only unverified helper-built-stub variable-named-verb pass-through deliberate-fault arm-drain fenced '
 PJ_FENCED_RE='^fenced[[:space:]]+#[0-9]+[[:space:]]+[^[:space:]]'   # the one word that carries a tracker link (pj_judge)
 PRODUCER_JOIN=(
@@ -1355,6 +1355,7 @@ PRODUCER_JOIN=(
   'tests/scripts/test-destroy-guard-counter-web-platform.sh | doppler | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T1; t1:rc0/41s; hits 0 (stdin-flag))'
   'tests/scripts/test-git-data-birth-readiness-gate.sh | curl | exempt | unverified reach probe: suite did not finish green here (cap or host), no matching piped call seen (2 non-test producers) (reach T1; t1:rc124/300s; hits 0 (stdin-flag))'
   'tests/scripts/test-git-data-birth-readiness-gate.sh | grep | exempt | pass-through shim execs the real grep; its exit-2 fault arm is reached only through a here-string since #9210, so no pipe reaches it'
+  'tests/scripts/test-git-data-wipe-wedge.sh | doppler | exempt | text-only reach probe not run for this pair: the producer pipes into doppler only in the CI-token mint step of apply-web-platform-infra.yml (two secrets set calls), which this suite never executes; it extracts the plan-time gates and runs them under a shim that answers doppler run or a quiet success'
   'tests/scripts/test-git-data-boot-signal-poll.sh | doppler | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T1; t1:rc0/21s; hits 0 (stdin-flag))'
   'tests/scripts/test-git-data-rung2-evidence-capture.sh | curl | exempt | text-only reach probe: suite ran green and no piped call reached the stub (2 non-test producers) (reach T1; t1:rc1/92s red3:rc0/38s; hits 0 (stdin-flag))'
   'tests/scripts/test-sentry-alert-live-fidelity.sh | curl | drains | 2 | *'
