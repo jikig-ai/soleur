@@ -89,7 +89,7 @@ Per the binding CTO ruling the work splits in two (the CTO folded the legal-word
 
 1. Write the DPIA screening addendum (CLO): record that the rollup changes the facts of the 2026-10-05 memo (app-database persistence, a 30-day store, a table that will become member-readable), that WP248 "systematic monitoring of employees" is now partly engaged, and add trigger **t7**: retention above 30 days, or any user, session, IP or path field added. The full t6 re-screen (viewer lands) stays a PR2 merge gate.
 2. Measure real daily CONNECT volume from the Better Stack copy (self-pull, 7-day window if retained) and record rows/day and the resulting rollup row estimate in this plan before the migration is written. This sizes the WAL estimate; the CTO's figure (about 80k rows/day at 1,000 workspaces) is the starting assumption, not the measurement.
-3. Decide, via the surfaced operator decisions below, whether PR1 may be enabled before PR2 exists. PR1 ships dark regardless.
+3. Collection stays off for every external workspace until PR2 ships (ruled by the CTO agent, decision A below). PR1 ships dark; the only carve-out is a Jikigai-owned canary workspace via a per-org flag override, which still needs explicit operator authorization.
 4. Measure before the acceptance criteria are frozen (the attribution and cardinality claims rest on reading, not on a test): on the pinned Squid image, whether `%un` logs the presented username on a failed login and whether `%>Hs` renders 407; with `vector test`, the `reduce` window and `throttle` behaviour including a 100,000-unique-host flood and its memory; and that Vector 0.43.1 accepts the default-value interpolation. The volume figures in this plan come from `betterstack-query.sh --since 24h --grep requested_host` (100 rows, the query cap: `TCP_TUNNEL` 50, `TCP_DENIED` 49, `TCP_DENIED_ABORTED` 1).
 
 ### Phase 1: migration (RED tests first)
@@ -121,7 +121,7 @@ ADR (below), the C4 edge (below), the DPIA addendum from Phase 0, the runbook se
 
 ### Phase 6: enablement (not part of the merge)
 
-Turning the flag on in production is a separate, operator-authorized step after the PR1 legal commits have merged and the DPIA addendum is filed. It is not performed by this PR.
+Turning the flag on in production is a separate, operator-authorized step and is not performed by this PR. Preconditions (CTO rulings A and B): no external-workspace enablement before PR2 has merged and the PR2 legal copy, the toggle copy and the owner notice are live; the owner notice has gone out at least 7 days earlier; the PR1 legal commits have merged and the DPIA addendum is filed. A Jikigai-owned canary workspace may be enabled earlier through a per-org flag override. A work-time check proves the per-org override works before this phase is relied on.
 
 ## Files to Create
 
@@ -341,7 +341,8 @@ The ADR is authored now describing the target state with status "adopting"; it i
 - [ ] CI proves the live-database cases executed: the `rls-authz-fuzz.yml` run asserts a non-zero executed count for the new cases, because the harness is wired through `describe.skipIf` and a skipped run exits 0.
 - [ ] The preflight discoverability ratchet (`BASELINE_DECLARED_PROBES`) is bumped to the new count with the required comment and its test passes.
 - [ ] Token rotation works: the previous token is still accepted during rotation, an unrelated token is rejected, and the comparison is constant-time.
-- [ ] The RPC drops (and counts) rows for a workspace whose `web_egress` is false and accepts them once it is true, tested in the live-database harness; toggle-off does not purge existing rows in this PR.
+- [ ] The RPC drops (and counts) rows for a workspace whose `web_egress` is false, and accepts them once it is true, tested in the live-database harness. The RPC checks the toggle's current state, not its state when the event happened, so buffered events from before a toggle-off are dropped (this errs toward minimization and is stated in the ADR); denied rows while the toggle is off are not stored (they remain in the 90-day raw log); toggle-off does not purge existing rows in this PR.
+- [ ] A short DSAR runbook (export or delete by `workspace_id`, service role) is committed, so an Art. 15 or Art. 17 request has a product path before any external enablement.
 - [ ] The new route has an exact `PUBLIC_PATHS` entry and passes the csrf-coverage test; the new table is a target (or an `EXCLUDED_ISOLATION` entry with rationale) in `test/rls-fuzz/targets.ts`.
 - [ ] The RPC is executable by `service_role` only; `anon` and `authenticated` have no table privileges.
 - [ ] The retention sweep deletes rows older than 30 days in bounded batches and is verified by a test that inserts an aged row (this table is not WORM-protected, so no trigger blocks the delete).
@@ -364,6 +365,8 @@ The ADR is authored now describing the target state with status "adopting"; it i
 ### PR2 (recorded here, planned later)
 
 - [ ] DPIA t6 re-screen completed before merge; member `SELECT` policy and route share `is_workspace_member`; wireframe for the destination view committed first.
+- [ ] (CTO rulings B and D) The owner notice (email to owners of workspaces with `web_egress=true`, plus a persistent in-app notice on the Agent web access card) is drafted by the CLO and goes out at least 7 days before external enablement; owners who switch on later see the confirmation copy at the toggle, which ships before enablement. Owners can opt out by switching the toggle off, which stops collection.
+- [ ] (CTO ruling D) The toggle copy says that switching off stops new records, that existing records are deleted within 30 days, and that deleting the workspace deletes everything; it also says counts are best-effort lower bounds and that history is visible to current members. An explicit erasure request goes through the DSAR runbook. Exact wording is settled in PR2 planning with the CLO and CPO; if the CLO objects before PR2 merges, ruling D is reopened.
 
 ## Test Scenarios
 
@@ -390,12 +393,16 @@ Five-seat panel (simplicity, architecture, flow, convention, over-engineering cr
 
 **Resolved by sign-off.** The CPO conditions are recorded under Domain Review.
 
-## Operator Decisions (surfaced, not decided)
+## Decisions Ruled by the CTO Agent
 
-- Whether collection may be enabled in production before PR2 exists. If yes, public disclosure is due at enablement and the PR1 legal commits must merge first; if no, the flag stays off until PR2.
-- Whether owners who already have web access switched on receive an Art. 13(3)-style notice or a re-confirmation that a member-visible record will exist.
-- Whether the workspace toggle gates collection (rows dropped while web access is off) and whether switching it off purges existing rows. Engineering answer (CTO): gate collection on the toggle by joining `workspaces.web_egress` in the RPC, and do not purge on toggle-off in this PR (existing rows age out in 30 days). Whether toggle-off should purge, and whether denied attempts are recorded while the toggle is off, is the CLO's call (Art. 5(1)(e) and 17); the toggle's copy and whether off means 'forget' is the CPO's; both end as operator decisions.
-- Publishing or declining any user notice, and the toggle's confirmation copy at PR2.
+The operator delegated the four open decisions to the CTO (ruled by CTO agent, with the CLO and CPO inputs recorded above). The CLO retains drafting of any text; the CPO and CLO are consulted on PR2 wording.
+
+- **A. Enabling before PR2.** Collection stays off for every external workspace until PR2 ships. Reason: collecting data no member can read, and that owners were never told about, leaves no product path for an Art. 15 request; Better Stack already holds the raw events for 90 days, so volume can be measured without app-database collection. Carve-out: a Jikigai-owned workspace only, as a canary, through a per-org flag override.
+- **B. Owners who already have web access on.** A notice is required; a re-confirmation gate is not. The basis is Art. 6(1)(f), not consent, so collection under it needs no gate, but the owner must be told beforehand, and a forced re-confirmation would silently break working agents. The notice goes out at least 7 days before external enablement (that is the PR2 enablement, not PR1), by email to owners of workspaces with `web_egress=true` plus a persistent in-app notice, and owners can opt out by switching the toggle off.
+- **C. Toggle off.** Switching it off stops collection and purges nothing in PR1. Denied attempts made while it is off are not stored in the app database (they stay in the 90-day raw log). The RPC checks the toggle's current state, so buffered events from before a toggle-off are dropped.
+- **D. 'Off' does not mean 'forget'.** The log exists so owners can account for what agents did, and a purge-on-off would let one toggle erase evidence of other members' agent activity. Retention is already bounded to 30 days. PR2's toggle copy must satisfy the constraints in the PR2 acceptance criteria; exact wording is settled in PR2 planning.
+
+**Still authorizations, not decisions (the operator's):** enabling the flag in production, creating the runtime flag (a typed-`yes` TTY step handed to the operator), and publishing any notice or legal text.
 
 ## Sharp Edges
 

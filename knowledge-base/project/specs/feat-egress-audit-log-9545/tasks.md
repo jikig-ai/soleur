@@ -58,5 +58,5 @@ Plan: `knowledge-base/project/plans/2026-10-15-feat-workspace-egress-audit-log-p
 
 ## Not in this PR
 
-- [ ] Enabling collection in production (operator-authorized, after the legal commits merge and the DPIA addendum is filed)
+- [ ] Enabling collection in production (operator-authorized; not before PR2 ships and the owner notice has been out 7 days; canary workspace excepted)
 - [ ] PR2: member `SELECT` policy, read route, card, wireframe, DPIA t6 re-screen (planned after volume is measured)
