@@ -74,3 +74,10 @@ MUST-FIX list (dedup all 3 seats):
 9. P3 batch (one-liners/doc edits): watchdog kill process-group or document; git diff -M twice→once; CI-detect strip comments (sed 's/#.*//'); js mode=selected→mode=full reason=no-selector; py xdist probe via pytest shebang interpreter; clamp budget_seconds/max_workers>0 or bad-config; self-check <15s claim → doc "worst ~80s bounded"; contract table add mode=explain|none|help; rc1 custom reason=ok→failed; bad-config malformed→document filename stand-in; consolidate 4 find census blocks→common.sh helper; delegated rc0 emit verdict sentence; runner rc contract paragraph in contract md; py over-detect→require pytest signal or test_*.py; rc6 wording for budget_ci; NXT suppress js only when suite produced; "marker on every path"→"verdict paths"; review/SKILL.md "seat scope"→"sole scope"
 
 THEN: spawn remaining 5 code-panel seats (correctness, security-sentinel, pattern-recognition, data-integrity, agent-native), synthesize all findings → gh issues labeled code-review w/ "PR #10389", verify affected-tests.test.sh still green, check /tmp/soleur-9307-gate.log GATE_RC, then qa→compound→ship. Ship conditions: #8231 comment, #8621/#10333 notes, PR body affected-suite-gate + Ref #9307.
+
+## Panel status
+- Design pass: DONE (3 seats) → fix agent applied all must-fixes + P3 batch → suite 175/0
+- Coordinator hygiene: 11 fixture-operand sites asserted (ratchet 71/0); review/SKILL.md trimmed under ceiling
+- Code panel: 7 seats spawned (git-history, pattern-recognition, security-sentinel, data-integrity, agent-native, code-quality, test-design) — semgrep skipped (no supported source in .sh diff), rails/migration/deploy n/a
+- Next: synthesize findings → gh issues (code-review label, "PR #10389") → fix P1/P2 (+P3) → fix-round → qa → compound → ship
+- Gate run still queued: /tmp/soleur-9307-gate.log
