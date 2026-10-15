@@ -19,7 +19,8 @@
 #      (cancelled): a descendant's successful run counts. A failed apply with nothing running is exit 3
 #      naming what clears it (a push-event apply that succeeds; a workflow_dispatch re-fire is NOT counted),
 #      never an endless 2.
-#   3. The newest SOLEUR_ZOT_DISK boot began AFTER the merge (the registry host was replaced) and has
+#   3. The newest SOLEUR_ZOT_DISK boot began AFTER the host template's delivery (PR 10322's merge, or this
+#      PR's merge if that is earlier; this PR changes no host bytes, so no boot follows ITS merge) and has
 #      at least 30 minutes of rows (a window to grade), and its newest row is not older than 30 minutes.
 #   4. The alert's SQL is extracted from betterstack-logs-alerts.tf (the local
 #      `registry_clientip_not_rfc1918_sql`; precedent: luks-monitor-host-timer-8706.sh). Absent while the
@@ -62,7 +63,7 @@
 #   78                     refused to run traced with a credential set.
 #
 # WHAT A PASS DOES AND DOES NOT PROVE (documented limits):
-#   * "The newest boot began AFTER the merge" (gate 3) is satisfied by a plain REBOOT of the old registry
+#   * "The newest boot began AFTER the anchor" (gate 3) is satisfied by a plain REBOOT of the old registry
 #     host as well as by a replace. The gate proves a host is reporting a fresh boot, not which template
 #     built it.
 #   * PASS grades the predicate as COMMITTED in the checkout (the extracted local) over the new window; it
@@ -115,6 +116,10 @@ export LC_ALL=C
 
 REPO="jikig-ai/soleur"
 PR_NUMBER=10320
+# The PR that last changed the registry host template (cloud-init-registry.yml) and ran its host replace.
+# PR 10320 changes no host bytes, so no boot ever follows ITS merge: the boot gate anchors on the EARLIER of
+# the two merge times (gate 3), so a boot that began after the template's delivery is the current host.
+TEMPLATE_PR_NUMBER=10322
 APPLY_WF="apply-web-platform-infra.yml"
 TF_REL="apps/web-platform/infra/betterstack-logs-alerts.tf"
 EXPECTED_HOST="soleur-registry"
@@ -187,6 +192,30 @@ if ! [[ "$MERGE_EPOCH" =~ $INT_RE ]]; then
   say "verdict=c_merge_time_unreadable" "CANNOT ESTABLISH: PR $PR_NUMBER is merged but its merge time is unreadable."
   exit 3
 fi
+rc=0
+TEMPLATE_JSON="$(gh pr view "$TEMPLATE_PR_NUMBER" -R "$REPO" --json state,mergedAt 2>/dev/null)" || rc=$?
+TEMPLATE_STATE=""
+if [[ "$rc" -eq 0 ]]; then
+  TEMPLATE_STATE="$(jq -r '.state // ""' <<<"$TEMPLATE_JSON" 2>/dev/null)" || TEMPLATE_STATE=""
+fi
+if [[ "$rc" -ne 0 || -z "$TEMPLATE_STATE" ]]; then
+  say "verdict=c_template_pr_unreadable rc=$rc" "CANNOT ESTABLISH: the registry-template PR $TEMPLATE_PR_NUMBER (the boot anchor) could not be read."
+  exit 3
+fi
+if [[ "$TEMPLATE_STATE" != "MERGED" ]]; then
+  say "verdict=c_template_pr_unmerged state=$TEMPLATE_STATE" "CANNOT ESTABLISH: the registry-template PR $TEMPLATE_PR_NUMBER is not merged, so the boot anchor constant is wrong."
+  exit 3
+fi
+TEMPLATE_MERGED_AT="$(jq -r '.mergedAt // ""' <<<"$TEMPLATE_JSON" 2>/dev/null)" || TEMPLATE_MERGED_AT=""
+TEMPLATE_EPOCH=""
+if [[ "$TEMPLATE_MERGED_AT" =~ $ISO_RE ]]; then
+  TEMPLATE_EPOCH="$(date -u -d "$TEMPLATE_MERGED_AT" +%s 2>/dev/null)" || TEMPLATE_EPOCH=""
+fi
+if ! [[ "$TEMPLATE_EPOCH" =~ $INT_RE ]]; then
+  say "verdict=c_template_time_unreadable" "CANNOT ESTABLISH: the registry-template PR $TEMPLATE_PR_NUMBER is merged but its merge time is unreadable."
+  exit 3
+fi
+ANCHOR_EPOCH=$(( TEMPLATE_EPOCH < MERGE_EPOCH ? TEMPLATE_EPOCH : MERGE_EPOCH ))
 if ! git -C "$ROOT" cat-file -e "${MERGE_SHA}^{commit}" 2>/dev/null; then
   say "verdict=c_history_unreadable which=merge" "CANNOT ESTABLISH: the merge commit is not in this checkout (a shallow clone cannot order runs)."
   exit 3
@@ -304,7 +333,7 @@ parse_rows() {
     }'
 }
 
-BOOT_SINCE="$(date -u -d "@$(( MERGE_EPOCH - PRE_MERGE_LOOKBACK_SECS ))" '+%Y-%m-%dT%H:%M:%SZ')"
+BOOT_SINCE="$(date -u -d "@$(( ANCHOR_EPOCH - PRE_MERGE_LOOKBACK_SECS ))" '+%Y-%m-%dT%H:%M:%SZ')"
 rc=0
 BOOT_RAW="$("$BQ" --since "$BOOT_SINCE" --grep "$MARKER" --limit "$WINDOW_LIMIT" 2>/dev/null)" || rc=$?
 if [[ "$rc" -ne 0 ]]; then
@@ -326,9 +355,9 @@ while IFS=$'\t' read -r dt boot; do
   N_BOOT_ROWS=$((N_BOOT_ROWS + 1))
 done <<<"$BOOT_ROWS"
 
-MERGE_STR="$(date -u -d "@$MERGE_EPOCH" '+%Y-%m-%d %H:%M:%S')"
-if ! [[ "$MERGE_STR" < "$FIRST_DT" ]]; then
-  say "verdict=n_no_post_merge_boot boot=${NEWEST_BOOT:0:8}" "NOT YET: the newest registry boot began before the merge, so the replaced host has not reported."
+ANCHOR_STR="$(date -u -d "@$ANCHOR_EPOCH" '+%Y-%m-%d %H:%M:%S')"
+if ! [[ "$ANCHOR_STR" < "$FIRST_DT" ]]; then
+  say "verdict=n_no_post_merge_boot boot=${NEWEST_BOOT:0:8}" "NOT YET: the newest registry boot began before the host template's delivery (PR $TEMPLATE_PR_NUMBER) or this merge, so the current host has not reported."
   exit 2
 fi
 

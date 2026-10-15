@@ -127,6 +127,10 @@ cat > "$BIN/gh" <<'GHEOF'
 printf '%s\n' "$*" >> "$FX_DIR/gh.calls"
 case "$1 $2" in
   "pr view")
+    if [[ "$3" == "10322" ]]; then
+      [[ -f "$FX_DIR/fail-template" ]] && { echo "gh: HTTP 500" >&2; exit 1; }
+      cat "$FX_DIR/pr-template.json"; exit 0
+    fi
     [[ -f "$FX_DIR/fail-pr" ]] && { echo "gh: HTTP 500" >&2; exit 1; }
     cat "$FX_DIR/pr.json" ;;
   "run list")
@@ -259,6 +263,7 @@ scenario() {
   : > "$FX/runs.ndjson"
   set_clock "${1:-240}"
   jq -n --arg sha "$SHA_M" --arg at "$(iso "@$M_EPOCH")" '{state:"MERGED", mergeCommit:{oid:$sha}, mergedAt:$at}' > "$FX/pr.json"
+  jq -n --arg at "$(iso "@$M_EPOCH")" '{state:"MERGED", mergedAt:$at}' > "$FX/pr-template.json"
   add_run 601 "$SHA_M" success completed
   {
     rowdisk "$(at $(( M_EPOCH - 3600 )))" "$OLDBOOT"
@@ -464,6 +469,39 @@ case_old_boot_only() {
     new_boot_rows 10 5 "$OLDBOOT"
   } > "$FX/disk.jsonl"
   expect "the newest boot began before the merge -> NOT YET" 2 "verdict=n_no_post_merge_boot"
+}
+# The registry host template was last delivered by PR 10322 (a replace that ran BEFORE this PR merged); this
+# PR changes no host bytes, so no boot ever follows its merge. The boot gate therefore anchors on the EARLIER
+# of the two merge times: a boot that began after the template's delivery is the current host.
+case_template_anchor_older() {
+  scenario
+  jq -n --arg at "$(iso "@$(( M_EPOCH - 36000 ))")" '{state:"MERGED", mergedAt:$at}' > "$FX/pr-template.json"
+  new_boot_rows -300 5 "$OLDBOOT" > "$FX/disk.jsonl"
+  expect "the running boot began after the template's delivery but before this PR's merge -> graded" 0 "verdict=p_pass"
+}
+case_template_boot_before_template() {
+  scenario
+  jq -n --arg at "$(iso "@$(( M_EPOCH - 6000 ))")" '{state:"MERGED", mergedAt:$at}' > "$FX/pr-template.json"
+  new_boot_rows -300 5 "$OLDBOOT" > "$FX/disk.jsonl"
+  expect "the newest boot began before the template's delivery -> NOT YET" 2 "verdict=n_no_post_merge_boot"
+}
+case_template_after_merge_min() {
+  scenario
+  jq -n --arg at "$(iso "@$(( M_EPOCH + 600 ))")" '{state:"MERGED", mergedAt:$at}' > "$FX/pr-template.json"
+  { rowdisk "$(at $(( M_EPOCH - 300 )))" "$OLDBOOT"; new_boot_rows 5 5 "$NEWBOOT"; } > "$FX/disk.jsonl"
+  expect "a template merge later than this PR's cannot move the anchor past this PR's merge (min of the two) -> graded" 0 "verdict=p_pass"
+}
+case_template_pr_unreadable() {
+  scenario; : > "$FX/fail-template"
+  expect "the template PR cannot be read -> CANNOT ESTABLISH" 3 "verdict=c_template_pr_unreadable"
+}
+case_template_pr_unmerged() {
+  scenario; jq -n '{state:"OPEN", mergedAt:null}' > "$FX/pr-template.json"
+  expect "the template PR is not merged -> CANNOT ESTABLISH (the anchor constant is wrong)" 3 "verdict=c_template_pr_unmerged"
+}
+case_template_time_bad() {
+  scenario; jq -n '{state:"MERGED", mergedAt:"garbage"}' > "$FX/pr-template.json"
+  expect "the template PR's merge time is unreadable -> CANNOT ESTABLISH" 3 "verdict=c_template_time_unreadable"
 }
 case_boot_too_young() {
   scenario 40; { rowdisk "$(at $(( M_EPOCH - 300 )))" "$OLDBOOT"; new_boot_rows 20 5 "$NEWBOOT"; } > "$FX/disk.jsonl"
@@ -816,7 +854,7 @@ for c in trace no_gh_token pr_read_failed pr_open pr_sha_bad merge_absent merge_
          tf_no_private_clause table_failed population_failed as_written_failed control_failed count_garbage count_junk count_missing \
          table_short table_unknown_lit table_dup table_mismatch table_mismatch_private as_written_positive population_empty \
          control_dead pass pass_redate_pointer runbook_heading pass_unquoted_counts table_flags_as_strings sql_parity \
-         old_host_premerge_only boot_time_unparsable dt_iso_pass dt_frac_pass dt_frac_boundary dt_isoz_boundary count_negative dt_both_pass dt_both_boundary rows_descending query_windows local_parity; do
+         old_host_premerge_only boot_time_unparsable template_anchor_older template_boot_before_template template_after_merge_min template_pr_unreadable template_pr_unmerged template_time_bad dt_iso_pass dt_frac_pass dt_frac_boundary dt_isoz_boundary count_negative dt_both_pass dt_both_boundary rows_descending query_windows local_parity; do
   "case_$c"
 done
 
@@ -942,7 +980,10 @@ mutant apply_failed_is_1       '/verdict=c_apply_failed/,/exit 3/ s/exit 3/exit 
 mutant offset0_anchor          's/startswith\(\$pfx\)/contains($pfx)/' quoting_offset
 mutant tail_cut                's/i = index\(m, " zot_last_err="\)/i = 0 * index(m, " zot_last_err=")/' tail_forge_boot
 mutant host_scope              's/^EXPECTED_HOST="[a-z-]+"$/EXPECTED_HOST=".*"/' other_host
-mutant post_merge_boot         's/if ! \[\[ "\$MERGE_STR" < "\$FIRST_DT" \]\]; then/if false; then/' old_boot_only foreign_new_boot
+mutant post_merge_boot         's/if ! \[\[ "\$ANCHOR_STR" < "\$FIRST_DT" \]\]; then/if false; then/' old_boot_only foreign_new_boot template_boot_before_template
+mutant anchor_is_merge         's/^ANCHOR_EPOCH=.*/ANCHOR_EPOCH="$MERGE_EPOCH"/' template_anchor_older
+mutant anchor_is_template      's/^ANCHOR_EPOCH=.*/ANCHOR_EPOCH="$TEMPLATE_EPOCH"/' template_after_merge_min
+mutant template_unmerged_is_1  '/verdict=c_template_pr_unmerged/,/exit 3/ s/exit 3/exit 1/' template_pr_unmerged
 mutant min_span                's/^MIN_SPAN_SECS=[0-9]+$/MIN_SPAN_SECS=0/' boot_too_young
 mutant silent_threshold        's/^SILENT_SECS=[0-9]+$/SILENT_SECS=99999999/' producer_silent
 mutant as_written_is_pass      '/verdict=f_non_rfc1918/,/exit 1/ s/exit 1/exit 0/' as_written_positive
@@ -1011,12 +1052,12 @@ if [[ -n "$missing_tokens" ]]; then
   fails=$((fails + 1))
 fi
 n_tokens="$(cut -f2 "$MARKER_LOG" | sort -u | /usr/bin/grep -ac .)"
-if [[ "$n_tokens" -lt 32 ]]; then
-  echo "FAIL: only $n_tokens distinct verdict tokens were asserted (floor 32, the measured count) — a case block stopped running" >&2
+if [[ "$n_tokens" -lt 35 ]]; then
+  echo "FAIL: only $n_tokens distinct verdict tokens were asserted (floor 35, the measured count) — a case block stopped running" >&2
   fails=$((fails + 1))
 fi
-if [[ "$passes" -lt 136 ]]; then
-  echo "FAIL: only $passes assertions passed (floor 136) — a case block stopped running" >&2
+if [[ "$passes" -lt 145 ]]; then
+  echo "FAIL: only $passes assertions passed (floor 145) — a case block stopped running" >&2
   exit 1
 fi
 [[ "$fails" -eq 0 ]] || exit 1
