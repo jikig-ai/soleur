@@ -641,12 +641,16 @@ sed "/--config -/s|/usr/bin/curl|$HB_STUB|" "$DEDICATED_PING" > "$HB_DED"
 assert "the stub-wired copies differ from the rendered scripts in EXACTLY one line (the transport line); the health probe keeps the real curl" \
   "[[ \$(diff '$WEB_PING' '$HB_WEB' | grep -c '^>') -eq 1 && \$(diff '$DEDICATED_PING' '$HB_DED' | grep -c '^>') -eq 1 && \$(grep -c '$HB_STUB' '$HB_WEB') -eq 1 && \$(grep -c '$HB_STUB' '$HB_DED') -eq 1 ]]"
 
+HB_RUN_SEQ=0
 hb_run() {  # <script> <url> <logger sink> [VAR=val ...]   (sets HB_RC, HB_OUT; recorded calls in $HB_CALLS)
   local script="$1" url="$2" sink="$3"; shift 3
+  # A per-call COUNTER names the refusal stamp: $RANDOM collided (birthday odds over ~100 calls) and a reused fresh stamp
+  # suppresses the marker the next row expects.
+  HB_RUN_SEQ=$((HB_RUN_SEQ + 1))
   : > "$HB_CALLS"; : > "$sink"
   HB_OUT="$(env PATH="$PING_TMP/bin:$PATH" LOGGER_OUT="$sink" HB_CALLS="$HB_CALLS" \
     INNGEST_HEARTBEAT_URL="$url" INNGEST_HEARTBEAT_HEALTH_URL="$HEALTH_OK_URL" \
-    INNGEST_HEARTBEAT_REFUSAL_STAMP="$PING_TMP/hb-refusal-$RANDOM.stamp" "$@" sh "$script" 2>&1)" && HB_RC=0 || HB_RC=$?
+    INNGEST_HEARTBEAT_REFUSAL_STAMP="$PING_TMP/hb-refusal-$HB_RUN_SEQ.stamp" "$@" sh "$script" 2>&1)" && HB_RC=0 || HB_RC=$?
   HB_N_ARGV="$(grep -c '^argv ' "$HB_CALLS" || true)"
   HB_N_MISSING="$(grep -c '^cfg-MISSING' "$HB_CALLS" || true)"
   HB_N_MARK="$(grep -c 'SOLEUR_CREDENTIAL_REFUSED' "$sink" || true)"
