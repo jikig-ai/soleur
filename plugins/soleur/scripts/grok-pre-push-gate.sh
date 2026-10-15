@@ -3,9 +3,10 @@
 #
 # Mirrors the reproducible subset of .github/workflows/ci.yml required checks:
 #   Phase 1 — fast always-run jobs (seconds)
-#   Phase 2 — scripts/test-all.sh --affected (diff-selected suites + always-on
+#   Phase 2 — affected-tests.sh (the plugin gate; in this repo it delegates
+#             scripts/test-all.sh --affected — diff-selected suites + always-on
 #             ratchets; the FULL battery is the CI `test` aggregator's job, and
-#             is opt-in locally via `test-all.sh --full`)
+#             is opt-in locally via `affected-tests.sh --full`)
 #   Phase 3 — web-platform next build (route-file validator; CI web-platform-build)
 #   Phase 4 — plugins/soleur/scripts/grok-fidelity-gate.sh (CI grok-fidelity)
 #
@@ -33,6 +34,10 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+# The affected gate is a plugin sibling — resolve it beside THIS script
+# (dirname $0), never through CLAUDE_PLUGIN_ROOT (ADR-179: env-directed roots
+# are a trust class; a sibling path cannot point anywhere else).
+GATE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/affected-tests.sh"
 cd "$REPO_ROOT"
 
 SKIP_BUILD=0
@@ -173,7 +178,7 @@ fi
 # CI `test` required check's job (and `test-all.sh --full` locally). An
 # undecidable diff degrades this step to the full battery on its own — the
 # AFFECTED_FALLBACK line in its output says so.
-run_step "test-all (affected gate)" bash scripts/test-all.sh --affected
+run_step "affected-tests gate" bash "$GATE"
 
 # --- Phase 3: next build / route validator (CI web-platform-build) ---
 # Local APPROXIMATION of the CI job: since #8136 `web-platform-build` builds the Dockerfile's
