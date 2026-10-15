@@ -574,8 +574,9 @@ tol "G1-13 tolerated skip plus a failing sibling" "$BODY" pull_request test-bun 
 tol "G1-13b tolerated skip plus a failing sibling still names the tolerated leg" "$BODY" pull_request test-bun true true 1 failure $S $OK $OK $OK $OK 1 "test-bun: $TOL_MSG" ""
 # G1-14 sibling inference: a leg stopped alone, whose siblings finished or were tolerated, is STOPPED ALONE, not an undetermined cancel
 tol "G1-14 cancelled alone beside tolerated skips" "$BODY" pull_request "test-webplat,test-bun" true true 1 $S $S cancelled $OK $OK $OK 1 "STOPPED ALONE" "cause not determined"
-# G1-8 pr-selection skipped (non-PR events) leaves the inputs empty: the full battery's normal verdict is unchanged
-for _ev in merge_group push workflow_dispatch; do
+# G1-8 pr-selection skipped leaves the inputs empty: the full battery's normal verdict is unchanged. Non-PR events always have it skipped; since the
+# job-level switch gate (ADR-276 S4 follow-up, #9729) a `pull_request` run does too while CI_PR_AFFECTED is unset or empty, so `pull_request` joins the loop.
+for _ev in merge_group push workflow_dispatch pull_request; do
   tol "G1-8 $_ev with empty pr-selection inputs, all green" "$BODY" "$_ev" "" "" "" "" $OK $OK $OK $OK $OK $OK 0 "All six legs green" "$TOL_MSG"
   tol "G1-8b $_ev with empty pr-selection inputs, a skipped leg" "$BODY" "$_ev" "" "" "" "" $S $OK $OK $OK $OK $OK 1 "test-webplat: SKIPPED" ""
 done
@@ -599,6 +600,29 @@ tol_exact "G1-16 one tolerated skip" "$BODY" test-bun $OK $S $OK "All legs green
 tol_exact "G1-16b all three tolerated" "$BODY" "$ALL3" $S $S $S "All legs green or $TOL_MSG tolerated (test-webplat,test-bun,test-scripts-heavy); skip_legs=$ALL3"
 tol_exact "G1-16c two tolerated, list in another order (legs print in entries order, skip_legs verbatim)" "$BODY" "test-scripts-heavy,test-webplat" $S $OK $S "All legs green or $TOL_MSG tolerated (test-webplat,test-scripts-heavy); skip_legs=test-scripts-heavy,test-webplat"
 tol_exact "G1-16d a leg listed but ran: the all-six sentence is byte-identical" "$BODY" test-bun $OK $OK $OK "$SIX_LINE"
+# G1-8c a pull_request run whose pr-selection job was SKIPPED (the job-level switch gate: CI_PR_AFFECTED unset or empty) hands the body EMPTY SKIP_LEGS and
+# ACTIVE, and HEAD_SHA_OK is the computed boolean string `false` (`'' != ''` is false) or, defensively, empty. That state is full CI: a must-PASS characterization
+# through the real body (SKIP_LEGS='' fails the regex on its own, so the tolerance arm is dead here; the G1-8c rows drive this state through the real body; p23 in the mutant set covers the empty HEAD_SHA_OK spelling).
+# All six legs success: rc 0 and EXACTLY the six-leg line (a whole-line match), never the tolerated banner. Each gateable leg skipped: rc 1 naming it. A failed leg: rc 1.
+tol_empty() {  # $1=label $2=head_ok $3=webplat $4=bun $5=heavy $6=want_rc $7=needle ; pull_request, attempt 1, SKIP_LEGS and ACTIVE empty, test-scripts/build/posture success
+  run_body "$BODY" "$3" "$4" success pull_request success "$5" success "" "" "" "$2" 1
+  local ok=1
+  [ "$RC" -eq "$6" ] || ok=0
+  if [ "$7" = "$SIX_LINE" ]; then grep -qxF -- "$7" "$OUT" || ok=0; else grep -qF -- "$7" "$OUT" || ok=0; fi
+  if grep -qF -- "$TOL_MSG" "$OUT"; then ok=0; fi
+  if [ "$ok" -eq 1 ]; then pass; return 0; fi
+  fail "$1 — head_ok='$2' legs=($3,$4,$5): want rc=$6 and the line '$7' (a whole line for the six-leg sentence) without $TOL_MSG; got rc=$RC, output: $(tr '\n' '|' <"$OUT" | head -c 300)"
+  return 1
+}
+for _ho in "" false; do
+  tol_empty "G1-8c all six green, empty pr-selection inputs, HEAD_SHA_OK='$_ho'" "$_ho" $OK $OK $OK 0 "$SIX_LINE"
+  tol_empty "G1-8c test-webplat skipped, empty inputs, HEAD_SHA_OK='$_ho'" "$_ho" $S $OK $OK 1 "test-webplat: SKIPPED — the leg did not run"
+  tol_empty "G1-8c test-bun skipped, empty inputs, HEAD_SHA_OK='$_ho'" "$_ho" $OK $S $OK 1 "test-bun: SKIPPED — the leg did not run"
+  tol_empty "G1-8c test-scripts-heavy skipped, empty inputs, HEAD_SHA_OK='$_ho'" "$_ho" $OK $OK $S 1 "test-scripts-heavy: SKIPPED — the leg did not run"
+  tol_empty "G1-8c test-webplat failure, empty inputs, HEAD_SHA_OK='$_ho'" "$_ho" failure $OK $OK 1 "test-webplat: FAILED — the leg concluded failure. GitHub reports an assertion failure and a timeout-minutes kill identically here; check the test-webplat job log for a timeout annotation before assuming assertions."
+  tol_empty "G1-8c test-bun failure, empty inputs, HEAD_SHA_OK='$_ho'" "$_ho" $OK failure $OK 1 "test-bun: FAILED — the leg concluded failure. GitHub reports an assertion failure and a timeout-minutes kill identically here; check the test-bun job log for a timeout annotation before assuming assertions."
+  tol_empty "G1-8c test-scripts-heavy failure, empty inputs, HEAD_SHA_OK='$_ho'" "$_ho" $OK $OK failure 1 "test-scripts-heavy: FAILED — one or more matrix legs concluded failure. GitHub reports an assertion failure and a timeout-minutes kill identically here; open the failing leg and check for a timeout annotation before assuming assertions."
+done
 # G1-17 the re-run remedy: on attempt > 1 a skipped leg that the cached skip decision NAMES (delimited match against SKIP_LEGS, the same
 # one the tolerance uses) names the remedy. A leg skipped for any other reason (draft-light, push-dedupe, an upstream need) keeps the plain
 # SKIPPED line: telling its reader "the pr-selection skip decision is cached" would misdiagnose an unrelated red.
@@ -688,6 +712,17 @@ elif op == "final-leading-comma":
     sub('tol_list="${tolerated#,}"', 'tol_list="${tolerated}"')
 elif op == "final-no-skip-legs":
     sub('; skip_legs=${SKIP_LEGS}"', '"')
+elif op == "head-loose-empty":
+    # ADR-276 S4 follow-up (#9729), Guard 3 row 1: HEAD_SHA_OK read as "not false", so its EMPTY spelling reads as bound
+    sub('"$HEAD_SHA_OK" == "true"', '"$HEAD_SHA_OK" != "false"')
+elif op == "compound-outer-removed-tolerate-skipped":
+    # Guard 3 row 2, COMPOUND: the whole outer tolerance condition removed AND any skipped leg tolerated, applied together (the two existing single
+    # operators, no-active/no-regex and tolerate-anything-skipped, each reach part of this; the compound is the named mutant; the existing probes p1..p22 kill it).
+    sub(COND, 'true')
+    sub('if [[ "$tolerated" == *",$shard,"* ]]; then', 'if [[ "$tolerated" == *",$shard,"* || "$result" == "skipped" ]]; then')
+elif op == "banner-when-none-tolerated":
+    # Guard 3 row 3: the tolerated banner printed when `tolerated` is "," (nothing was tolerated)
+    sub('if [[ "$tolerated" != "," ]]; then', 'if true; then')
 elif op == "six-green-reworded":
     sub('All six legs green (four shards', 'All six legs green (the four shards')
 else:
@@ -729,6 +764,8 @@ mutate_tol() {  # $1=label $2=op ; the Guard 1 rows over the mutant: at least on
     tol_exact "p20" "$m" test-bun $OK $S $OK "All legs green or $TOL_MSG tolerated (test-bun); skip_legs=test-bun"
     tol_exact "p21" "$m" "test-scripts-heavy,test-webplat" $S $OK $S "All legs green or $TOL_MSG tolerated (test-webplat,test-scripts-heavy); skip_legs=test-scripts-heavy,test-webplat"
     tol_exact "p22" "$m" test-bun $OK $OK $OK "$SIX_LINE"
+    # ADR-276 S4 follow-up (#9729), Guard 3: ONE new probe row (this p-set never runs the main-line G1-8c rows). p23: HEAD_SHA_OK EMPTY (the p-set had only `false`).
+    tol "p23" "$m" pull_request test-bun true "" 1 $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED" "$TOL_MSG"
   } >/dev/null 2>&1
   PROBE=0
   if [ "$PROBE_FAILS" -gt 0 ]; then
@@ -765,6 +802,11 @@ mutate_tol "G1-H1s the final line keeps its trailing comma" final-trailing-comma
 mutate_tol "G1-H1t the final line keeps its leading comma" final-leading-comma
 mutate_tol "G1-H1u the final line drops the skip_legs suffix" final-no-skip-legs
 mutate_tol "G1-H1v the all-six sentence is reworded (byte identity)" six-green-reworded
+# ADR-276 S4 follow-up (#9729), Guard 3 (matrix rows 1 to 3). Measured at review: p23 is the one probe H1w needs (without it H1w survives);
+# H1x is the union of two existing operators and H1y is killed by the existing p1..p22, so they add no kill power beyond their own verdict row.
+mutate_tol "G1-H1w HEAD_SHA_OK loosened to != false (its empty spelling reads as bound)" head-loose-empty
+mutate_tol "G1-H1x COMPOUND: the outer tolerance condition removed AND any skipped leg tolerated" compound-outer-removed-tolerate-skipped
+mutate_tol "G1-H1y the tolerated banner printed when nothing was tolerated" banner-when-none-tolerated
 
 # ── W1-W4: the STEP's wiring, which no row asserted ─────────────────────────
 # Every row above executes the extracted `run:` body against env vars the HARNESS
@@ -995,19 +1037,20 @@ fi
 # +  3 event/value cardinality (E1 merge_group, E1 workflow_dispatch, E3 out-of-enum)                                  = 34
 # + 27 the draft arm (ADR-276 S3, #9728): D1, D1b, D2 (3); D3 and D4 over 3 events (6); D5 over 9 values plus D5b (10); D6, D6b (2);
 #      the 5 arm mutants D7, D7b-D7e (5); D8 structure (1)                                                            = 61
-# + 73 Guard 1 executed rows (ADR-276 S4, #9729 PR B): 52 from the plan's G1-0..G1-15 matrix (G1-0 3, G1-1/5 2, G1-2 3, G1-3 9, G1-7b 7,
-#      G1-9 6, G1-4 family 8, G1-7/7c 2, G1-12 2, G1-13 2, G1-14 1, G1-8 6, G1-15 1) + 21 added by the review: G1-16 exact final line (4),
-#      G1-17 re-run remedy (12: 17 x3, 17b, 17b2, 17c-17g, 17h, 17i), G1-18 foreign-first lists (5)
-# + 24 tolerance mutants G1-H1a..v plus H1r2, H1r3 (one row per mutant verdict)                                            = 158
-# +  7 wiring: W1, W2, W5, W6, W7, W3, W4                                                                                = 165
-MIN_ROWS=165
+# + 89 Guard 1 executed rows (ADR-276 S4, #9729 PR B): 54 from the plan's G1-0..G1-15 matrix (G1-0 3, G1-1/5 2, G1-2 3, G1-3 9, G1-7b 7,
+#      G1-9 6, G1-4 family 8, G1-7/7c 2, G1-12 2, G1-13 2, G1-14 1, G1-8 8 (4 events x 2 rows; `pull_request` joined at the job-level switch gate,
+#      #9729 follow-up), G1-15 1) + 21 added by the review: G1-16 exact final line (4), G1-17 re-run remedy (12: 17 x3, 17b, 17b2, 17c-17g, 17h, 17i),
+#      G1-18 foreign-first lists (5) + 14 G1-8c (#9729 follow-up: HEAD_SHA_OK in {empty, false} x [all green, 3 skipped legs, 3 failed legs] = 2 x 7)
+# + 27 tolerance mutants G1-H1a..y plus H1r2, H1r3 (one row per mutant verdict; H1w..y are the #9729 follow-up's)         = 177
+# +  7 wiring: W1, W2, W5, W6, W7, W3, W4                                                                                = 184
+MIN_ROWS=184
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor — %d rows executed, at least %d required. Rows were removed or a loop stopped early.\n' \
     "$TOTAL" "$MIN_ROWS" >&2
   exit 1
 fi
-# 4 mutate() + 5 mutate_arm() + 24 mutate_tol() = 33, the measured count.
-MIN_MUTANTS=33
+# 4 mutate() + 5 mutate_arm() + 27 mutate_tol() = 36, the measured count.
+MIN_MUTANTS=36
 if [ "$MUT_TOTAL" -lt "$MIN_MUTANTS" ]; then
   printf 'FAIL: mutation floor — %d mutants executed, at least %d required.\n' \
     "$MUT_TOTAL" "$MIN_MUTANTS" >&2

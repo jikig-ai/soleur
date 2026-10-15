@@ -4111,6 +4111,7 @@ PIN_LATER=$(tr '\n' ' ' <<'LIST'
 154_inbox_item_idempotent_rearchive.down.sql
 160_dsar_export_audit_pii_cascade_null_carveout.down.sql
 161_audit_github_token_use_cascade_null_carveout.down.sql
+162_action_sends_message_id_cascade_null_carveout.down.sql
 LIST
 )
 if [[ "$scan_rc" == "0" && "${#DOWNS[@]}" -ge 95 && "$(grep -c . <<<"$scan")" == "${#DOWNS[@]}" \

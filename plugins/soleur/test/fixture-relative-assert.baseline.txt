@@ -280,7 +280,7 @@
 1	.claude/hooks/session-rules-loader.sh
 3	.claude/hooks/session-rules-loader.test.sh
 8	.claude/hooks/ship-kb-archive-gate.sh
-1	.claude/hooks/ship-kb-archive-gate.test.sh
+3	.claude/hooks/ship-kb-archive-gate.test.sh
 1	.claude/hooks/ship-soak-followthrough-gate.test.sh
 2	.claude/hooks/ship-unpushed-commits-gate.sh
 1	.claude/hooks/skill-invocation-logger.sh

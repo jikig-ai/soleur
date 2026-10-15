@@ -193,8 +193,9 @@ cat > "$HEARTBEAT_SCRIPT" <<'HEARTBEATSCRIPTEOF'
 LOG_TAG="inngest-heartbeat"
 #
 # --- #6617b: dark-arm rate limiter ---------------------------------------------------------
-# Reachable ONLY from the dark arm rendered below (the live co-located host's render deletes
-# that arm entirely, so on that host this function is defined and never called). It exists as a
+# Called from the dark arm rendered below, from the listener gate, and from the credential-refusal
+# branch at the end of this body, each on its OWN stamp (the dark arm's render is deleted entirely on
+# the live co-located host, but the gate and the refusal branch still call it there). It exists as a
 # function rather than inline in the sed replacement because the replacement is a single
 # `s|...|...|` expression with \n escapes -- readable logic does not survive in there.
 #
@@ -228,6 +229,11 @@ dark_arm_emit_due() {
   _last="$(cat "$_stamp" 2>/dev/null || true)"
   # A truncated/garbage stamp reads as "never emitted", not as "emitted just now".
   case "$_last" in '' | *[!0-9]*) _last=0 ;; esac
+  # A stamp longer than 10 digits is not an epoch, and a zero-padded one is OCTAL in arithmetic (dash aborts the shell
+  # with "Illegal number" on 08/09): strip the padding so a corrupted stamp reads as a number, never as a crash. This
+  # function now also serves the credential-refusal branch, whose contract is exit 0 (a crash here would exit 2).
+  [ "${#_last}" -le 10 ] || _last=0
+  _z=${_last%%[!0]*}; _last=${_last#"$_z"}; : "${_last:=0}"
   # A stamp in the FUTURE (boot-before-NTP wrote now+skew, then timesyncd stepped back) reads
   # as "never emitted" too. Without this the subtraction goes negative and suppresses the
   # marker for the entire skew -- the one path where this function failed CLOSED.
@@ -241,8 +247,9 @@ dark_arm_emit_due() {
 # just below): the skip branch on the dedicated host, EMPTY on the co-located web host.
 #
 # An absent INNGEST_HEARTBEAT_URL is NOT a curl no-op. `curl -fsS --max-time 10 ""` exits 2
-# ("option : blank argument where content is expected" -- measured, #6536); unset behaves
-# identically. That is why this oneshot failed every 60s for 3 days (3,724 fires) on the dark
+# ("option : blank argument where content is expected" -- measured, #6536); unset behaved
+# identically (since #9757 the shape guard at the end of this body refuses it first, reason=empty,
+# still exit 2, so the web render stays loud). That is why this oneshot failed every 60s for 3 days (3,724 fires) on the dark
 # host, and why inngest-host.tf's old "curl no-ops" claim was false. Same class as #4116.
 #
 # The dark host legitimately has NO url: inngest-host.tf:137-151 keeps one unambiguous pusher
@@ -255,7 +262,7 @@ dark_arm_emit_due() {
 # Everything above decides WHETHER THIS HOST SHOULD BEAT AT ALL. This decides whether it has
 # anything to beat ABOUT, and it is the whole of #7228.
 #
-# The beat below is `curl "$INNGEST_HEARTBEAT_URL"` fired by a 60s systemd timer: it proves a
+# The beat below (originally `curl "$INNGEST_HEARTBEAT_URL"`, now the stdin-config form) is fired by a 60s systemd timer: it proves a
 # TIMER FIRED, and asserts nothing whatsoever about :8288. That is why one correctly-armed,
 # correctly-scoped, unpaused monitor stayed GREEN for twelve days while the dedicated host
 # served nothing and every app dispatch failed with ECONNREFUSED. The tempting fix -- give the
@@ -306,8 +313,58 @@ fi
 # { } makes curl print the FULL URL in its glob-parse error (`curl: (3) bad range in URL
 # position N:` followed by the URL) — measured, curl 8.18 — which FR4's SyslogIdentifier
 # now ships straight to Better Stack. -g disables globbing (we never glob) and the echo
-# with it. Belt to cat-deploy-state.sh's braces: neither alone is sufficient.
-exec /usr/bin/curl -gfsS --max-time 10 "$INNGEST_HEARTBEAT_URL" >/dev/null
+# with it. Belt to cat-deploy-state.sh's braces: neither alone is sufficient. (Since #9757 the shape
+# guard below refuses any value carrying [ ] { } before curl runs, so -g is defence in depth here.)
+#
+# #9757 / ADR-280: the URL's PATH is the credential, so it must not be a curl ARGUMENT either (argv is
+# readable by every local user in /proc/<pid>/cmdline for the life of the child). It reaches curl on the
+# stdin config (`--config -`) through a PIPE: this body is POSIX sh (dash on Ubuntu), so no process
+# substitution and no [[ ]], and the repo's Rule E lint refuses a heredoc feeding the config. `printf` is a
+# builtin, so the URL is never an argument of any process. There is no `exec` before curl (inside a
+# pipeline it would only replace the pipeline's forked subshell, not this shell) and no pipefail: this line
+# is the script's LAST command, so the script's status is the pipeline's, which is curl's, exactly as
+# `exec curl` gave.
+# `--disable` (first, so no ~/.curlrc is read) and `--noproxy '*'` confine the transport (lint Rule D); the
+# host has no checkout, so this is the inline form of the shared library.
+#
+# The value is judged BEFORE any request, with no trimming: `https://` and then a non-empty rest of
+# [A-Za-z0-9._~:/?&=%+-] only. The scheme is its own test (the class alone admits `http://x`) and the
+# class is NEGATED (a positive pattern constrains only the first character, because `*` matches quotes
+# and newlines). A quote, backslash or newline would otherwise add directives to the config grammar.
+# LC_ALL=C pins bytewise matching: dash matches bytewise anyway, a busybox or bash `sh` would use locale
+# ranges.
+#
+# A refusal makes zero requests and logs ONE value-free marker through the hourly limiter on its OWN
+# stamp. EXIT STATUS (CTO-ruled, 2026-10-15): a present-but-malformed value (reason token_shape or
+# control_char) exits 0 ON PURPOSE. The missed Better Stack beat IS the alarm (the monitors are armed and
+# page within minutes, exactly as for the three web-1 probe scripts), and a non-zero exit would fire this
+# unit's unlimited OnFailure ERR logger on every 60 s tick (the #6536 storm shape: at least ~2.9k rows/day,
+# the ERR row on Source 4 plus the systemd failure row on Source 1, against Source 4 headroom as measured in
+# #7228). Only `reason=empty` keeps exit 2 and so keeps that storm exposure BY CHOICE (pre-existing since
+# #6536, a provisioning fault): the web render has no dark arm and an absent URL on the live pusher must stay
+# loud, as curl's own blank-URL rejection (rc 2) was.
+# The marker is assigned to a variable first so no logger line names the URL variable
+# (inngest.test.sh bans exactly that shape).
+LC_ALL=C
+_hb_ok=
+case $INNGEST_HEARTBEAT_URL in
+  https://*)
+    case ${INNGEST_HEARTBEAT_URL#https://} in
+      ''|*[!A-Za-z0-9._~:/?\&=%+-]*) ;;
+      *) _hb_ok=1 ;;
+    esac ;;
+esac
+if [ -z "$_hb_ok" ]; then
+  case $INNGEST_HEARTBEAT_URL in '') _hb_reason=empty ;; *[[:cntrl:]]*) _hb_reason=control_char ;; *) _hb_reason=token_shape ;; esac
+  _hb_marker="SOLEUR_CREDENTIAL_REFUSED script=inngest-heartbeat reason=$_hb_reason var=INNGEST_HEARTBEAT_URL"
+  if INNGEST_HEARTBEAT_DARK_STAMP="${INNGEST_HEARTBEAT_REFUSAL_STAMP:-/run/inngest-heartbeat/refusal.stamp}" dark_arm_emit_due; then
+    logger -t "$LOG_TAG" "$_hb_marker"
+  fi
+  # The exit is OUTSIDE the rate limit (the limit governs the LINE, never the DECISION).
+  case $_hb_reason in empty) exit 2 ;; esac
+  exit 0
+fi
+printf 'url = "%s"\n' "$INNGEST_HEARTBEAT_URL" | /usr/bin/curl --disable --noproxy '*' -gfsS --max-time 10 --config - >/dev/null
 HEARTBEATSCRIPTEOF
 chmod 0755 "$HEARTBEAT_SCRIPT"
 
@@ -343,7 +400,7 @@ if [[ "$DOPPLER_PROJECT" == "soleur-inngest" ]]; then
   log "inngest-heartbeat: dark arm RENDERED (DOPPLER_PROJECT=$DOPPLER_PROJECT) — an absent URL skips the ping and logs why, hourly"
 else
   sed -i '/^@@DARK_ARM@@$/d' "$HEARTBEAT_SCRIPT"
-  log "inngest-heartbeat: dark arm OMITTED (DOPPLER_PROJECT=$DOPPLER_PROJECT) — live pusher; an absent URL stays loud (curl rc=2)"
+  log "inngest-heartbeat: dark arm OMITTED (DOPPLER_PROJECT=$DOPPLER_PROJECT) — live pusher; an absent URL stays loud (guard refusal reason=empty, exit 2)"
 fi
 # @@DARK_ARM@@ render end
 
@@ -413,7 +470,8 @@ EnvironmentFile=/etc/default/inngest-server
 # Do NOT remove without moving DOPPLER_CONFIG_DIR off the shared /tmp.
 PrivateTmp=true
 # #6617b: the dark arm's hourly rate limiter keeps its last-emit stamp at
-# /run/inngest-heartbeat/dark.stamp. This unit runs User=deploy and /run is root-owned 0755,
+# /run/inngest-heartbeat/dark.stamp (and the listener gate and the credential refusal keep gate.stamp
+# and refusal.stamp in the same directory). This unit runs User=deploy and /run is root-owned 0755,
 # so deploy cannot create anything there directly -- without RuntimeDirectory= the stamp write
 # fails on every fire, the limiter never engages, and the quota fix is a silent no-op.
 # PrivateTmp=true above does NOT cover /run, so this is the right mechanism (and /tmp is

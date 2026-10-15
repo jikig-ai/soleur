@@ -842,7 +842,7 @@ EOF
   # that fails — it makes the count itself untrustworthy.
   #
   # It is made unconditional WITHOUT synthesizing a git repo. _incidents_repo_root
-  # (lib/incidents.sh:36-42) falls back to `dirname(BASH_SOURCE)/../../..` —
+  # (the dirname-fallback block in lib/incidents.sh) falls back to `dirname(BASH_SOURCE)/../../..` —
   # HELPER-relative, not cwd- or git-relative — so a synthesized sandbox repo is
   # a location the fallback can never resolve to, and "the synthesized repo's
   # ledger is untouched" could not fail under any mutation. That would have been

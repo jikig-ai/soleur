@@ -213,6 +213,7 @@ an unknown name is a usage error
 an unrelated edit to a plan that MAIN already archived compares against main's freeze (it does not self-freeze)
 an unresolvable base with NO block anywhere is NO-BLOCK, exit 0 (a repo that never used the feature ships)
 an unresolvable base with a block on disk is FAIL base-unresolvable
+an unwritable --out inside the fail-closed arm is noted, and rc 4 and the verdict line are unchanged
 archival is followed even when git's rename detection is off in the repository
 archival is the same plan even when git cannot see a rename (the body was rewritten): the archive prefix is stripped
 awk interpreter is a known implementation (mawk or gawk)
@@ -327,6 +328,7 @@ the script source holds no literal U+2028 or U+2029 (they are written as escapes
 the sha is filled in, with the dirty qualifier when the tree had uncommitted changes
 the skip predicate is pinned — widening it cannot silently shrink coverage
 the static rules judge the FROZEN block: an edit to a forbidden command is a change, not a rejection
+the unit probe: line shape, canary absent, failing and closed stderr safe, literal-label census
 the verb literal in the plan reference equals the verb gate's allowlist, and INTERPRETERS is a subset of it
 triple-SSOT: preflight + deepen-plan literals are byte-identical (whitespace-normalized)
 twin control: the pre-migration git-root block DOES execute the decoy

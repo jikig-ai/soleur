@@ -2951,7 +2951,14 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // TRUTH: the soak probe reads stored Better Stack rows through the ClickHouse HTTP connection credential (Doppler
   // prd_terraform); the warehouse has no unauthenticated read path. NO SUBSTITUTE: the decode and isolation are pinned
   // offline by the probe's own fixture suite, but that verifies code, not the stored stream. Genuine.
-  const BASELINE_DECLARED_PROBES = 66;
+  // #7530 (2026-10-15): +1 (66 -> 67) for `2026-10-14-fix-registry-phase2-batch-htpasswd-stdin-clientip-alert-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash scripts/followthroughs/registry-clientip-alert-7530.sh`) reads Better Stack through the
+  // ClickHouse HTTP connection credential (BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}, Doppler soleur/prd_terraform) and
+  // grades the stored registry log stream and the live alert predicate. NO SUBSTITUTE: the warehouse has no
+  // unauthenticated read path and the registry host is no-SSH; the offline suites verify the code and the SQL text,
+  // not the stored stream or the engine. Genuine.
+  const BASELINE_DECLARED_PROBES = 67;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

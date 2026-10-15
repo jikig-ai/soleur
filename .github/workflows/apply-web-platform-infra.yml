@@ -642,6 +642,8 @@ jobs:
               -target=logtail_exploration_alert.inngest_luks_wrong_volume \
               -target=logtail_exploration.registry_store_not_luks \
               -target=logtail_exploration_alert.registry_store_not_luks \
+              -target=logtail_exploration.registry_clientip_not_rfc1918 \
+              -target=logtail_exploration_alert.registry_clientip_not_rfc1918 \
               -target=logtail_exploration.inngest_step_524 \
               -target=logtail_exploration_alert.inngest_step_524 \
               -target=logtail_exploration.claude_cost_daily_burn \
@@ -662,6 +664,8 @@ jobs:
               -target=logtail_exploration_alert.egress_gw_probe_silent \
               -target=logtail_exploration.egress_gw_probe_fail \
               -target=logtail_exploration_alert.egress_gw_probe_fail \
+              -target=logtail_exploration.registry_zot_log_credential_shape \
+              -target=logtail_exploration_alert.registry_zot_log_credential_shape \
               -target=random_password.inngest_redis_luks \
               -target=doppler_secret.inngest_redis_luks_key \
               -target=supabase_project.prd
