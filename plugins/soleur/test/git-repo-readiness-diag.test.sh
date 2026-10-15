@@ -60,6 +60,28 @@ mk_plain() {
   seed_main "$d" || return 1
   git -C "$d" symbolic-ref HEAD refs/heads/main || return 1
 }
+mk_true_bare() {
+  local d="$1"; assert_fixture_dir "$d"
+  git init -q --bare "$d" || return 1
+  seed_main "$d" || return 1
+  git -C "$d" symbolic-ref HEAD refs/heads/main || return 1
+}
+# mk_wtmask: EFFECTIVE core.bare=true only via config.worktree — the fixture that
+# distinguishes the config-FILE read from an effective-config read (#10386 review).
+mk_wtmask() {
+  local d="$1"; mk_plain "$d" || return 1
+  git -C "$d" config extensions.worktreeConfig true || return 1
+  git -C "$d" config --worktree core.bare true || return 1
+}
+# mk_imposter: skeleton `.git` (bare=true config) inside a live worktree — the only
+# shape that exercises the --absolute-git-dir identity term.
+mk_imposter() {
+  local d="$1"; assert_fixture_dir "$d"
+  mkdir -p "$d/sub/.git"; git -C "$d" init -q || return 1
+  seed_main "$d" || return 1
+  git -C "$d" symbolic-ref HEAD refs/heads/main || return 1
+  printf '[core]\n\tbare = true\n' > "$d/sub/.git/config"
+}
 run_diag() { RC=0; OUT=$(cd "$1" && bash "$DIAG" 2>/dev/null) || RC=$?; }
 
 echo "git-repo-readiness-diag.test.sh"
@@ -116,13 +138,16 @@ begin D5
 # hook suite enumerates. Derive it behaviourally, not by grep: run both on the
 # same fixtures and require identical fire/no-fire verdicts.
 parity_ok=1
-for shape in bare plain masked sym nonrepo; do
+for shape in bare plain masked wtmask sym truebare imposter nonrepo; do
   case "$shape" in
-    bare)    d="$SANDBOX/p-bare"; mk_bare_root "$d" ;;
-    plain)   d="$SANDBOX/p-plain"; mk_plain "$d" ;;
-    masked)  d="$SANDBOX/p-masked"; mk_plain "$d"; printf 'bad\n' > "$d/.git/config" ;;
-    sym)     r="$SANDBOX/p-sym-real"; mk_bare_root "$r"; d="$SANDBOX/p-sym"; mkdir -p "$d"; ln -s "$r/.git" "$d/.git" ;;
-    nonrepo) d="$SANDBOX/p-nonrepo"; mkdir -p "$d" ;;
+    bare)     d="$SANDBOX/p-bare"; mk_bare_root "$d" ;;
+    plain)    d="$SANDBOX/p-plain"; mk_plain "$d" ;;
+    masked)   d="$SANDBOX/p-masked"; mk_plain "$d"; printf 'bad\n' > "$d/.git/config" ;;
+    wtmask)   d="$SANDBOX/p-wtmask"; mk_wtmask "$d" ;;
+    sym)      r="$SANDBOX/p-sym-real"; mk_bare_root "$r"; d="$SANDBOX/p-sym"; mkdir -p "$d"; ln -s "$r/.git" "$d/.git" ;;
+    truebare) d="$SANDBOX/p-truebare"; mk_true_bare "$d" ;;
+    imposter) d="$SANDBOX/p-imposter"; mk_imposter "$d"; d="$d/sub" ;;
+    nonrepo)  d="$SANDBOX/p-nonrepo"; mkdir -p "$d" ;;
   esac
   RC=0; GOUT=$(bash "$GUARD" "$d" 2>/dev/null) || RC=$?
   g_fires=0; [[ "$GOUT" == SOLEUR_BARE_ROOT_CWD* ]] && g_fires=1
@@ -132,7 +157,7 @@ for shape in bare plain masked sym nonrepo; do
     parity_ok=0; bad "parity: shape=$shape guard=$g_fires diag=$d_fires"
   fi
 done
-if [[ "$parity_ok" == "1" ]]; then ok "guard and diag predicates agree on all 5 fixture classes"; fi
+if [[ "$parity_ok" == "1" ]]; then ok "guard and diag predicates agree on all 8 fixture classes"; fi
 
 begin D6
 # Env-injection parity (#10386 A-P2): GIT_DIR pointed at a plain clone must not

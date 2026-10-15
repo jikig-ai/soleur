@@ -141,6 +141,32 @@ mk_plain() {
   git -C "$d" symbolic-ref HEAD refs/heads/main || return 1
 }
 
+# mk_wtmask: a clone whose EFFECTIVE core.bare reads true only through
+# config.worktree (extensions.worktreeConfig + `git config --worktree`). The
+# predicate reads the config FILE, so this MUST stay silent — the only fixture
+# that distinguishes `git config --file` from an effective-config read
+# (#10386 review, mutation survivor).
+mk_wtmask() {
+  local d="$1"
+  mk_plain "$d" || return 1
+  git -C "$d" config extensions.worktreeConfig true || return 1
+  git -C "$d" config --worktree core.bare true || return 1
+}
+
+# mk_imposter: a subdir inside a live worktree carrying a skeleton `.git` dir
+# whose config says bare=true but which is NOT the gitdir git resolves — the
+# ONLY fixture that exercises the --absolute-git-dir identity term (deleting
+# term 3 is otherwise a silent survivor, #10386 review).
+mk_imposter() {
+  local d="$1"
+  assert_fixture_dir "$d"
+  mkdir -p "$d/sub/.git"
+  git -C "$d" init -q || return 1
+  seed_main "$d" || return 1
+  git -C "$d" symbolic-ref HEAD refs/heads/main || return 1
+  printf '[core]\n\tbare = true\n' > "$d/sub/.git/config"
+}
+
 # run_helper <dir>: sets OUT (stdout) and RC (exit status).
 run_helper() {
   RC=0
@@ -244,15 +270,25 @@ OUT=$(cd "$p" && bash "$HELPER" 2>/dev/null) || RC=$?
 eq "no-arg run at a plain clone: silent" "" "$OUT"
 
 begin G10
-d="$SANDBOX/g10"; mk_bare_root "$d" || bad "fixture"
-printf 'x\ny\nINJECTED-LINE\n' > "$d/odd name"
-mv "$d" "$SANDBOX/g10 moved" || bad "fixture rename"
-run_helper "$SANDBOX/g10 moved"
-eq "a path containing a space still detects" "1" "$(count_marker "$OUT")"
-case "$OUT" in
-  *INJECTED-LINE*) bad "untrusted content reached the block" ;;
-  *) ok "no untrusted fixture content in the block" ;;
-esac
+d="$SANDBOX/g10"; mk_wtmask "$d" || bad "fixture"
+run_helper "$d"
+eq "worktreeConfig-masked bare: silent (predicate reads the config FILE)" "" "$OUT"
+eq "worktreeConfig: exit status is 0" "0" "$RC"
+
+begin G11
+d="$SANDBOX/g11"; mk_imposter "$d" || bad "fixture"
+run_helper "$d/sub"
+eq "imposter .git inside a worktree: silent (gitdir identity term)" "" "$OUT"
+eq "imposter: exit status is 0" "0" "$RC"
+run_helper "$d"
+eq "control: the host plain clone is also silent" "" "$OUT"
+
+begin G12
+d="$SANDBOX/g12"$'\n'"INJECTED-LINE"; mk_bare_root "$d" || bad "fixture"
+run_helper "$d"
+eq "a path containing a newline still detects" "1" "$(count_marker "$OUT")"
+injected=$(sed -n '2,$p' <<<"$OUT" | grep -cv '^\[bare-root-cwd\] ' || true)
+eq "the newline in the path cannot inject an unprefixed line" "0" "$injected"
 
 # --- parity anchor ----------------------------------------------------------------------------
 # The SAME three-term predicate is inlined in git-repo-readiness-diag.sh (the plugin script
@@ -260,10 +296,10 @@ esac
 # fixture above that fires here must fire there and vice versa, so the diag suite's fixtures
 # and this suite's stay one population. The byte-level parity check lives in
 # plugins/soleur/test/git-repo-readiness-diag.test.sh (the consumer side).
-begin G11
+begin G13
 diag="$(cd -P "$SCRIPT_DIR/../../plugins/soleur/skills/git-worktree/scripts" && pwd)/git-repo-readiness-diag.sh"
 if [[ -x "$diag" ]]; then
-  d="$SANDBOX/g11"; mk_bare_root "$d" || bad "fixture"
+  d="$SANDBOX/g13"; mk_bare_root "$d" || bad "fixture"
   RC=0
   DOUT=$(cd "$d" && bash "$diag" 2>/dev/null) || RC=$?
   case "$DOUT" in

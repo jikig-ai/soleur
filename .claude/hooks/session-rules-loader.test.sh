@@ -877,7 +877,11 @@ fi
 # the full envelope.
 TOTAL=$((TOTAL+1))
 T36=$(mktemp -d); LATE_TMPDIRS+=("$T36"); setup_repo "$T36"
-copy36="$T36-loader-copy"
+# Bare-root fixture on purpose (#10386 review): on a plain clone a helper is
+# silent anyway, so the no-marker arm could not tell helper-absent from
+# helper-silent. At a bare root a PRESENT helper would emit — absent means none.
+git -C "$T36" config core.bare true
+copy36="$T36-loader-copy"; LATE_TMPDIRS+=("$copy36")
 mkdir -p "$copy36"
 cp "$HOOK" "$copy36/session-rules-loader.sh"
 chmod +x "$copy36/session-rules-loader.sh"
@@ -897,7 +901,7 @@ fi
 TOTAL=$((TOTAL+1))
 T37=$(mktemp -d); LATE_TMPDIRS+=("$T37"); setup_repo "$T37"
 git -C "$T37" config core.bare true
-copy37="$T37-loader-copy"
+copy37="$T37-loader-copy"; LATE_TMPDIRS+=("$copy37")
 mkdir -p "$copy37"
 cp "$HOOK" "$copy37/session-rules-loader.sh"
 cat > "$copy37/bare-root-cwd-guard.sh" <<'STUB'
