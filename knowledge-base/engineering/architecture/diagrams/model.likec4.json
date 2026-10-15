@@ -2347,7 +2347,7 @@
 "id": "1amybls"
 },
 "1rnkjs7": {
-"title": "Tier-B Terraform credentials (#8209, ADR-241 D2/D3): a Tier-B job loads the WHOLE soleur-infra-privileged/prd project through .github/actions/infra-credentials, using a read service token that is a GitHub ENVIRONMENT secret (DOPPLER_TOKEN_INFRA_PRIVILEGED) on an environment whose deployment-branch policy admits `main` ONLY — infra-privileged (no reviewers, for the unattended apply-on-merge and drift paths and, since #9262, the inngest pin bump and auto-mint, and, since #9454 item 4, the weekly weakness-digest PR author), web-platform-infra-apply, inngest-cutover and workspaces-luks-cutover. The boundary is the BRANCH POLICY, not the reviewer gate: GitHub evaluates it before the job starts and before the secret is materialized, which is the one thing a repo secret cannot do (any workflow on any branch of this PUBLIC repo can name a repo secret, and that is how DOPPLER_TOKEN_TF, HCLOUD_TOKEN, CF_API_TOKEN_R2 and a soleur-ai App key became branch-reachable). A PROJECT, never a prd_* branch config: a branch config resolves its root's secrets, which is how prd_terraform inherited prd. Terraform declares the project and its environment and mints NOTHING into them — the web-platform root's state is Tier-A readable, so a doppler_secret or doppler_service_token declared there would land in exactly the tier this edge exists to evict it from; the containers are IaC, the values are supplied out of band. Every doppler run in a Tier-B job carries --preserve-env, so a value planted in the Tier-A-writable prd_terraform can never shadow a loaded Tier-B value (doppler run OVERRIDES the environment by default; the flag is what makes precedence a property of the code). Enforced on every PR by tests/scripts/test-infra-privileged-tier-census.sh, which derives the Tier-B job set from references to the secret and the environment set from what those jobs declare, never from a hand-kept list. NOMINAL UNTIL R1: a holder of a prd repo-secret token still reads the soleur-ai runtime key, whose App carries administration:write on jikig-ai/soleur and can therefore rewrite the branch policy this edge rests on — which is why ADR-241 D2 is `proposed`, not `accepted`. SINCE #8609 (ADR-241 D10) the project also carries GITHUB_APP_RUNTIME_DOPPLER_TOKEN, the web host's read token for the isolated soleur-github-app project (see the doppler -> hetzner edge). It is operator-minted into Tier B, never Terraform-minted (ADR-241 D3). The loader always exports its TF_VAR_ name and fills it only for the jobs that opt in (the deploy-pipeline push and the web-host create/replace jobs), so the Tier-A prd_terraform arm can never supply it. R1 is CLOSING with this mechanism; the NOMINAL clause above holds until the old key's JWT gets 401 (runbook R7) and D2 flips. SINCE #9262 two unattended App-token consumers on infra-privileged — build-inngest-bootstrap-image.yml's bump-cloud-init-pin and mint-inngest-bootstrap-tag.yml's mint — and, since #9454 item 4 (ADR-285), a third, weakness-miner.yml's open-pr, which mints a contents+pull_requests token to author, push and arm the weekly digest PR as the App, do NOT load the project through infra-credentials: the ./.github/actions/mint-infra-app-token composite makes a single-key read of GITHUB_INFRA_APP_ID and GITHUB_INFRA_APP_PRIVATE_KEY (doppler secrets get with --project and --config prd in argv, the project one of two validated names). SINCE #9321 (ADR-241 D11) those consumers read the NARROW Doppler project soleur-infra-app/prd, which holds a copy of only the two App values (Terraform declares the empty project; an operator-run script copies the values and mints its read token) and is reached with a read token that is the environment secret DOPPLER_TOKEN_INFRA_APP, so none of those jobs holds the whole-project token or can reach GITHUB_APP_RUNTIME_DOPPLER_TOKEN. The composite's one broad-source caller, apply-github-infra.yml, names the whole project explicitly and keeps DOPPLER_TOKEN_INFRA_PRIVILEGED, which it already holds for Terraform. The narrowing is least privilege by reference under the main-only policy, not a boundary against a change merged to main",
+"title": "Tier-B Terraform credentials (#8209, ADR-241 D2/D3): a Tier-B job loads the WHOLE soleur-infra-privileged/prd project through .github/actions/infra-credentials, using a read service token that is a GitHub ENVIRONMENT secret (DOPPLER_TOKEN_INFRA_PRIVILEGED) on an environment whose deployment-branch policy admits `main` ONLY — infra-privileged (no reviewers, for the unattended apply-on-merge and drift paths and, since #9262, the inngest pin bump and auto-mint, and, since #9454 item 4, the weekly weakness-digest PR author), web-platform-infra-apply, inngest-cutover and workspaces-luks-cutover. Since #10138 the `wipe` job of git-data-cutover.yml (environment web-platform-infra-apply) is a loader consumer too, and the first one in that workflow: it calls the loader once, with only the Tier-B token (no legacy token), and every step after the loader runs under an exec env -i allow-list (ADR-241 amendment 2026-10-14). The boundary is the BRANCH POLICY, not the reviewer gate: GitHub evaluates it before the job starts and before the secret is materialized, which is the one thing a repo secret cannot do (any workflow on any branch of this PUBLIC repo can name a repo secret, and that is how DOPPLER_TOKEN_TF, HCLOUD_TOKEN, CF_API_TOKEN_R2 and a soleur-ai App key became branch-reachable). A PROJECT, never a prd_* branch config: a branch config resolves its root's secrets, which is how prd_terraform inherited prd. Terraform declares the project and its environment and mints NOTHING into them — the web-platform root's state is Tier-A readable, so a doppler_secret or doppler_service_token declared there would land in exactly the tier this edge exists to evict it from; the containers are IaC, the values are supplied out of band. Every doppler run in a Tier-B job carries --preserve-env, so a value planted in the Tier-A-writable prd_terraform can never shadow a loaded Tier-B value (doppler run OVERRIDES the environment by default; the flag is what makes precedence a property of the code). Enforced on every PR by tests/scripts/test-infra-privileged-tier-census.sh, which derives the Tier-B job set from references to the secret and the environment set from what those jobs declare, never from a hand-kept list. NOMINAL UNTIL R1: a holder of a prd repo-secret token still reads the soleur-ai runtime key, whose App carries administration:write on jikig-ai/soleur and can therefore rewrite the branch policy this edge rests on — which is why ADR-241 D2 is `proposed`, not `accepted`. SINCE #8609 (ADR-241 D10) the project also carries GITHUB_APP_RUNTIME_DOPPLER_TOKEN, the web host's read token for the isolated soleur-github-app project (see the doppler -> hetzner edge). It is operator-minted into Tier B, never Terraform-minted (ADR-241 D3). The loader always exports its TF_VAR_ name and fills it only for the jobs that opt in (the deploy-pipeline push and the web-host create/replace jobs), so the Tier-A prd_terraform arm can never supply it. R1 is CLOSING with this mechanism; the NOMINAL clause above holds until the old key's JWT gets 401 (runbook R7) and D2 flips. SINCE #9262 two unattended App-token consumers on infra-privileged — build-inngest-bootstrap-image.yml's bump-cloud-init-pin and mint-inngest-bootstrap-tag.yml's mint — and, since #9454 item 4 (ADR-285), a third, weakness-miner.yml's open-pr, which mints a contents+pull_requests token to author, push and arm the weekly digest PR as the App, do NOT load the project through infra-credentials: the ./.github/actions/mint-infra-app-token composite makes a single-key read of GITHUB_INFRA_APP_ID and GITHUB_INFRA_APP_PRIVATE_KEY (doppler secrets get with --project and --config prd in argv, the project one of two validated names). SINCE #9321 (ADR-241 D11) those consumers read the NARROW Doppler project soleur-infra-app/prd, which holds a copy of only the two App values (Terraform declares the empty project; an operator-run script copies the values and mints its read token) and is reached with a read token that is the environment secret DOPPLER_TOKEN_INFRA_APP, so none of those jobs holds the whole-project token or can reach GITHUB_APP_RUNTIME_DOPPLER_TOKEN. The composite's one broad-source caller, apply-github-infra.yml, names the whole project explicitly and keeps DOPPLER_TOKEN_INFRA_PRIVILEGED, which it already holds for Terraform. The narrowing is least privilege by reference under the main-only policy, not a boundary against a change merged to main",
 "technology": "doppler CLI (project-scoped read service token, delivered as a main-only GitHub environment secret)",
 "source": {
 "model": "github"
@@ -2380,7 +2380,7 @@
 "id": "a7lm9k"
 },
 "j1bf5v": {
-"title": "Hetzner Cloud control-plane API (api.hetzner.cloud), never the hosts themselves. Named here: cutover-inngest.yml resolves the created time of the ONE server named soleur-inngest, the generation anchor below which op=resume G3, op=arm G3.7 H and op=luks-* G3 do not count a liveness row (ADR-225 section 4 amendment, AP-027), and workspaces-luks-cutover.yml looks up its volume id; both read HCLOUD_TOKEN_READONLY first and fall back to HCLOUD_TOKEN (ADR-241 D4) until it is minted. During #6604 step 7 (2026-10-08) workspaces-luks-cutover.yml ALSO WRITES through this edge, once: its environment-gated `wipe` job, holding the Tier-B token from the infra-credentials loader, proves write capability with an idempotent labels PUT, then DETACHES and DELETES the retired plaintext volume (105149570) — only after the host zeroed and read it back, and only for the pinned id — while its preflight and the single-use workspaces-plaintext-forget.yml read the volume and web-1 (a presence proof: a 404 counted as gone only from a token that could see web-1 holding the LUKS volume 106443278). The `wipe` job and the forget workflow run from main, where they exist until PR #9348 merges (only after both have run), and that PR deletes them; the cutover workflow's remaining Hetzner calls through this edge are reads. From 2026-10-07 until its retirement on 2026-10-12 (#9372) web-host-reboot.yml's environment-gated `reboot` job also WROTE through this edge: one soft-reboot request (POST /servers/{id}/actions/reboot) for the allow-listed web-2 server only, never web-1, with the Tier-B token from the loader, dispatch-only; the workflow is deleted. Other CI callers include op=backup create_image, the git-data rung-2 rehearsal (including a server reset), the #9175 inngest-provision forced-race rehearsal (Phase A births a NIC-less throwaway host, Phase B attaches it to the prod private net at 10.0.1.60, and a soft-reboot action proves the provisioning latch), drift and apply workflows, and every Terraform apply through the hcloud provider.",
+"title": "Hetzner Cloud control-plane API (api.hetzner.cloud), never the hosts themselves. Named here: cutover-inngest.yml resolves the created time of the ONE server named soleur-inngest, the generation anchor below which op=resume G3, op=arm G3.7 H and op=luks-* G3 do not count a liveness row (ADR-225 section 4 amendment, AP-027), and workspaces-luks-cutover.yml looks up its volume id; both read HCLOUD_TOKEN_READONLY first and fall back to HCLOUD_TOKEN (ADR-241 D4) until it is minted. During #6604 step 7 (2026-10-08) workspaces-luks-cutover.yml ALSO WRITES through this edge, once: its environment-gated `wipe` job, holding the Tier-B token from the infra-credentials loader, proves write capability with an idempotent labels PUT, then DETACHES and DELETES the retired plaintext volume (105149570) — only after the host zeroed and read it back, and only for the pinned id — while its preflight and the single-use workspaces-plaintext-forget.yml read the volume and web-1 (a presence proof: a 404 counted as gone only from a token that could see web-1 holding the LUKS volume 106443278). The `wipe` job and the forget workflow run from main, where they exist until PR #9348 merges (only after both have run), and that PR deletes them; the cutover workflow's remaining Hetzner calls through this edge are reads. Since #10138 git-data-cutover.yml's environment-gated `wipe` job (ADR-239 DL-2) READS through this edge (the server and volume identity, the volume's action history and the read-back, all with HCLOUD_TOKEN_READONLY and never a fall-back to the write token) and WRITES through it in two modes only: mode=wipe makes one detach and one DELETE, and mode=wipe_finish makes no detach call and at most one DELETE (none when the volume is already absent), each of the allow-listed plaintext volume soleur-git-data-store, named by the owner by id and checked against the API, with the Tier-B token from the infra-credentials loader reaching only those two steps; owner-named, environment-approved, and the only claim it makes about the end state is that the device was deleted at the provider API (a wipe_finish that finds the volume already absent claims only that it is absent, with the delete outcome in the origin run). From 2026-10-07 until its retirement on 2026-10-12 (#9372) web-host-reboot.yml's environment-gated `reboot` job also WROTE through this edge: one soft-reboot request (POST /servers/{id}/actions/reboot) for the allow-listed web-2 server only, never web-1, with the Tier-B token from the loader, dispatch-only; the workflow is deleted. Other CI callers include op=backup create_image, the git-data rung-2 rehearsal (including a server reset), the #9175 inngest-provision forced-race rehearsal (Phase A births a NIC-less throwaway host, Phase B attaches it to the prod private net at 10.0.1.60, and a soft-reboot action proves the provisioning latch), drift and apply workflows, and every Terraform apply through the hcloud provider.",
 "technology": "HTTPS (Hetzner Cloud API)",
 "source": {
 "model": "github"
@@ -2666,7 +2666,7 @@
 "id": "6kmw5a"
 },
 "1hj8skt": {
-"title": "Transport and root authentication LIVE (ADR-220 D1b accepted 2026-09-27). Reviewer-gated, READ-ONLY root SSH from git-data-cutover.yml (job `cutover`, environment web-platform-infra-apply, main only, serialized on git-data-state): through the ssh. tunnel to web-1 (10.0.1.10 via the bridge NAT rule), then a web-1 direct-tcpip channel (-W 10.0.1.20:22, literal target), authenticating end-to-end with the dedicated root key so no key or agent socket lands on web-1. The key is Terraform-minted in its own root (git-data-root-key), read at run time from the separate Doppler project soleur-git-data-root, and reaches the host only through a create of hcloud_server.git_data checked against a committed fingerprint. After the access gate the proof mode only reads the store (served by the LUKS mapper with its store marker bound, not frozen, empty) and the shape of its pre-receive fence, and exits. The flip, rollback, unfreeze and redeploy modes (#8211 PR2) write the freeze sentinel and clear it, write the prd flag through a windowed write token and redeploy the web fleet through the deploy webhook; the flip and the rollback end with a transactional probe over the same SSH path (provision, fenced push and remove with a synthetic id, zero residue) that proves erasure still works. None of the modes copies, mounts or wipes a volume: the store is born on LUKS (ADR-239) and rollback is flag-off only. A failed, stranded or cancelled run is reported by the separate notify-failure job (an issue plus an ops email) and never by this edge. Host keys PINNED on both hops (ADR-237, accepted 2026-09-27): web-1 by its committed ECDSA-P256 pin, git-data by its Terraform-minted ED25519 key, rotated on every replace and published as the TF-owned prd secret GIT_DATA_SSH_HOST_KEY, which the flag precheck reads with the prd token it already holds. web-1 can no longer impersonate git-data; a pinned key authenticates the host, not its answers (ADR-220 amendment log). THE READ CREDENTIAL'S SCOPE CHANGES (#8209, ADR-241 D7), and it is the half ADR-220 explicitly deferred: DOPPLER_TOKEN_GIT_DATA_ROOT stops being a REPO secret — which any workflow on any branch of this PUBLIC repo could name, so 'reviewer-gated, main only' described the cutover JOB and never the credential — and becomes an ENVIRONMENT secret on web-platform-infra-apply under the SAME NAME. Same name deliberately: this workflow is #8211-owned and needs no edit, because its cutover job already declares that environment and an environment secret overrides a repo secret of the same name. The Terraform-minted token and the repo secret are FORGOTTEN by Terraform (removed blocks carrying lifecycle destroy = false, so both live objects keep serving until they are replaced — that is what makes the change safe to merge ahead of any out-of-band step), then revoked. The second path to the same key moves too: web-platform/git-data-root-key/terraform.tfstate, which the prd_terraform backend keys could read, relocates to the soleur-terraform-state-privileged bucket that only a bucket-scoped Tier-B token reads (see the github -> cloudflare edge). Both paths ADR-220's D4 'repo-secret reach' residual named are therefore closed AS TO BRANCH-WORKFLOW REACH, and NOT as to a prd repo-secret holder: that holder still reads the soleur-ai runtime key, whose App carries administration:write on jikig-ai/soleur and can rewrite the very deployment-branch policy the new carrier rests on. That is ADR-241 residual R1, filed at p1, and it is why ADR-241 D2 is `proposed` rather than `accepted` and why ADR-220's D4 residual is addressed but not closed",
+"title": "Transport and root authentication LIVE (ADR-220 D1b accepted 2026-09-27). Reviewer-gated root SSH from git-data-cutover.yml (job `cutover`, environment web-platform-infra-apply, main only, serialized on git-data-state): through the ssh. tunnel to web-1 (10.0.1.10 via the bridge NAT rule), then a web-1 direct-tcpip channel (-W 10.0.1.20:22, literal target), authenticating end-to-end with the dedicated root key so no key or agent socket lands on web-1. The key is Terraform-minted in its own root (git-data-root-key), read at run time from the separate Doppler project soleur-git-data-root, and reaches the host only through a create of hcloud_server.git_data checked against a committed fingerprint. After the access gate the proof mode only reads the store (served by the LUKS mapper with its store marker bound, not frozen, empty) and the shape of its pre-receive fence, and exits. The flip, rollback, unfreeze and redeploy modes (#8211 PR2) write the freeze sentinel and clear it, write the prd flag through a windowed write token and redeploy the web fleet through the deploy webhook; the flip and the rollback end with a transactional probe over the same SSH path (provision, fenced push and remove with a synthetic id, zero residue) that proves erasure still works. None of those five modes copies or mounts a volume: the store is born on LUKS (ADR-239) and rollback is flag-off only. Since #10138 the same environment, bridge and root key also serve a second root-SSH consumer, the `wipe` job (modes wipe_check, wipe, wipe_finish; the cutover job is skipped for them): its host verb (MODE=wipe_assert, one ssh session) writes nothing to the store or to the retired plaintext volume and prints fixed words and per-type counts only, never a name; wipe_check, wipe_finish and the post-detach read create nothing on the host, but in mode=wipe the pre-detach read creates and removes one transient host-local device-mapper snapshot of the kernel read-only plaintext device (its copy-on-write file in RAM) and mounts that snapshot read-only to count top-level entry types. No mode copies a volume, and the retired plaintext volume is deleted through the Hetzner API edge, never through the host. A failed, stranded or cancelled run is reported by the separate notify-failure job (an issue plus an ops email) and never by this edge. Host keys PINNED on both hops (ADR-237, accepted 2026-09-27): web-1 by its committed ECDSA-P256 pin, git-data by its Terraform-minted ED25519 key, rotated on every replace and published as the TF-owned prd secret GIT_DATA_SSH_HOST_KEY, which the flag precheck reads with the prd token it already holds. web-1 can no longer impersonate git-data; a pinned key authenticates the host, not its answers (ADR-220 amendment log). THE READ CREDENTIAL'S SCOPE CHANGES (#8209, ADR-241 D7), and it is the half ADR-220 explicitly deferred: DOPPLER_TOKEN_GIT_DATA_ROOT stops being a REPO secret — which any workflow on any branch of this PUBLIC repo could name, so 'reviewer-gated, main only' described the cutover JOB and never the credential — and becomes an ENVIRONMENT secret on web-platform-infra-apply under the SAME NAME. Same name deliberately: this workflow is #8211-owned and needs no edit, because its cutover job already declares that environment and an environment secret overrides a repo secret of the same name. The Terraform-minted token and the repo secret are FORGOTTEN by Terraform (removed blocks carrying lifecycle destroy = false, so both live objects keep serving until they are replaced — that is what makes the change safe to merge ahead of any out-of-band step), then revoked. The second path to the same key moves too: web-platform/git-data-root-key/terraform.tfstate, which the prd_terraform backend keys could read, relocates to the soleur-terraform-state-privileged bucket that only a bucket-scoped Tier-B token reads (see the github -> cloudflare edge). Both paths ADR-220's D4 'repo-secret reach' residual named are therefore closed AS TO BRANCH-WORKFLOW REACH, and NOT as to a prd repo-secret holder: that holder still reads the soleur-ai runtime key, whose App carries administration:write on jikig-ai/soleur and can rewrite the very deployment-branch policy the new carrier rests on. That is ADR-241 residual R1, filed at p1, and it is why ADR-241 D2 is `proposed` rather than `accepted` and why ADR-220's D4 residual is addressed but not closed",
 "technology": "SSH",
 "source": {
 "model": "github"
@@ -16042,7 +16042,7 @@
 "bounds": {
 "x": 0,
 "y": 0,
-"width": 14805,
+"width": 14765,
 "height": 3969
 },
 "nodes": [
@@ -16072,7 +16072,7 @@
 "notation": "Person",
 "kind": "actor",
 "navigateTo": "__betaContact",
-"x": 7929,
+"x": 7945,
 "y": 2175,
 "width": 331,
 "height": 180,
@@ -16146,7 +16146,7 @@
 "notation": "Person",
 "kind": "actor",
 "navigateTo": "__emailSender",
-"x": 14459,
+"x": 14419,
 "y": 451,
 "width": 345,
 "height": 180,
@@ -16229,7 +16229,7 @@
 "notation": "Person",
 "kind": "actor",
 "navigateTo": "__founder",
-"x": 9406,
+"x": 9439,
 "y": 2585,
 "width": 362,
 "height": 180,
@@ -16365,7 +16365,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__cursorCli",
-"x": 9186,
+"x": 9168,
 "y": 2995,
 "width": 341,
 "height": 180,
@@ -17058,7 +17058,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__systemdUser",
-"x": 8697,
+"x": 8679,
 "y": 2995,
 "width": 379,
 "height": 180,
@@ -17133,7 +17133,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__platform_grokBuild",
-"x": 9637,
+"x": 9619,
 "y": 2995,
 "width": 359,
 "height": 180,
@@ -17213,7 +17213,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__resend",
-"x": 14252,
+"x": 14212,
 "y": 902,
 "width": 362,
 "height": 180,
@@ -17327,7 +17327,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__devin",
-"x": 10107,
+"x": 10089,
 "y": 2995,
 "width": 362,
 "height": 180,
@@ -17495,7 +17495,7 @@
 "kind": "system",
 "depth": 1,
 "navigateTo": "components",
-"x": 5600,
+"x": 5265,
 "y": 3244,
 "width": 1882,
 "height": 717,
@@ -17623,7 +17623,7 @@
 "technology": "Markdown SKILL.md",
 "kind": "container",
 "navigateTo": "__platform_plugin_skills",
-"x": 6608,
+"x": 6273,
 "y": 3327,
 "width": 336,
 "height": 180,
@@ -17661,7 +17661,7 @@
 "technology": "Markdown Agent Defs",
 "kind": "container",
 "navigateTo": "__platform_plugin_agents",
-"x": 6178,
+"x": 5843,
 "y": 3327,
 "width": 320,
 "height": 180,
@@ -17700,7 +17700,7 @@
 "technology": "Python 3 stdlib (redactor + stdio JSON-RPC relay) + bash PreToolUse hook",
 "kind": "component",
 "navigateTo": "__platform_plugin_snapshotGuard",
-"x": 7054,
+"x": 6719,
 "y": 3327,
 "width": 387,
 "height": 180,
@@ -17736,7 +17736,7 @@
 "technology": "bash PreToolUse hook + Perl shell lexer (hooks/lib/shell-argv.pl, spans byte-identical to .claude/hooks/lib/filing-shape.pl)",
 "kind": "component",
 "navigateTo": "__platform_plugin_destructiveGuard",
-"x": 5640,
+"x": 5305,
 "y": 3327,
 "width": 427,
 "height": 180,
@@ -17933,7 +17933,7 @@
 "technology": "Markdown + YAML",
 "kind": "database",
 "navigateTo": "__platform_plugin_kb",
-"x": 6383,
+"x": 6018,
 "y": 3720,
 "width": 348,
 "height": 200,
@@ -17971,7 +17971,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__playwrightMcp",
-"x": 14412,
+"x": 14372,
 "y": 3730,
 "width": 372,
 "height": 180,
@@ -18252,7 +18252,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__inngestReleases",
-"x": 12349,
+"x": 12309,
 "y": 1753,
 "width": 344,
 "height": 182,
@@ -18340,7 +18340,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__betterstack",
-"x": 9939,
+"x": 9972,
 "y": 1754,
 "width": 388,
 "height": 180,
@@ -18379,7 +18379,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__slack",
-"x": 9960,
+"x": 9993,
 "y": 2175,
 "width": 345,
 "height": 180,
@@ -18399,36 +18399,36 @@
 "label": "Conversation PII origin — the operator \ncaptures notes about this third party",
 "points": [
 [
-8070,
+8086,
 2354
 ],
 [
-8061,
+8077,
 2410
 ],
 [
-8060,
+8076,
 2480
 ],
 [
-8101,
+8117,
 2525
 ],
 [
-8188,
-2618
+8205,
+2619
 ],
 [
-9014,
-2656
+9044,
+2657
 ],
 [
-9396,
+9429,
 2669
 ]
 ],
 "labelBBox": {
-"x": 8102,
+"x": 8118,
 "y": 2439,
 "width": 241,
 "height": 56
@@ -18449,36 +18449,24 @@
 "label": "Runs /go (local plugin CLI)",
 "points": [
 [
-9641,
-2764
+9659,
+2765
 ],
 [
-9653,
-2784
+9688,
+2830
 ],
 [
-9666,
-2805
+9726,
+2919
 ],
 [
-9677,
-2825
-],
-[
-9707,
-2878
-],
-[
-9740,
-2937
-],
-[
-9765,
+9756,
 2986
 ]
 ],
 "labelBBox": {
-"x": 9737,
+"x": 9732,
 "y": 2858,
 "width": 169,
 "height": 39
@@ -18499,64 +18487,64 @@
 "label": "Browses and converses",
 "points": [
 [
-9406,
-2623
+9439,
+2624
 ],
 [
-9304,
+9335,
 2595
 ],
 [
-9176,
+9203,
 2558
 ],
 [
-9061,
+9086,
 2525
 ],
 [
-8805,
+8826,
 2451
 ],
 [
-8714,
-2494
+8733,
+2495
 ],
 [
-8487,
+8503,
 2354
 ],
 [
-8393,
+8409,
 2297
 ],
 [
-8414,
+8430,
 2224
 ],
 [
-8316,
+8332,
 2174
 ],
 [
-8133,
-2081
+8145,
+2080
 ],
 [
-8060,
-2148
+8071,
+2149
 ],
 [
-7857,
+7865,
 2114
 ],
 [
-7573,
+7577,
 2067
 ],
 [
-7476,
-2119
+7480,
+2120
 ],
 [
 7221,
@@ -18564,7 +18552,7 @@
 ],
 [
 7086,
-1912
+1913
 ],
 [
 7110,
@@ -18913,56 +18901,68 @@
 1543
 ],
 [
-2201,
+2200,
 1560
 ],
 [
-5242,
-1532
+5199,
+1529
 ],
 [
-5321,
+5275,
 1573
 ],
 [
-6062,
-1959
+5669,
+1806
 ],
 [
-5468,
-2827
+5781,
+2012
 ],
 [
-6196,
-3236
+5781,
+2469
 ],
 [
-6231,
-3256
+5781,
+2469
 ],
 [
-6516,
-3231
+5781,
+2469
 ],
 [
-6553,
+5781,
+3086
+],
+[
+5781,
+3093
+],
+[
+6212,
+3241
+],
+[
+6218,
 3244
 ],
 [
-6599,
-3260
+6257,
+3266
 ],
 [
-6643,
-3290
+6296,
+3293
 ],
 [
-6680,
+6331,
 3320
 ]
 ],
 "labelBBox": {
-"x": 5779,
+"x": 5782,
 "y": 2448,
 "width": 94,
 "height": 39
@@ -19003,52 +19003,52 @@
 1562
 ],
 [
-5562,
-1517
+5561,
+1518
 ],
 [
 5642,
 1573
 ],
 [
-5875,
-1737
+5997,
+1815
 ],
 [
-5772,
-1905
+6003,
+2040
 ],
 [
-5864,
-2174
+6003,
+2469
 ],
 [
-6023,
-2642
+6003,
+2469
 ],
 [
-5965,
-2799
+6003,
+2469
 ],
 [
-6196,
-3236
+6003,
+3086
 ],
 [
-6211,
-3265
+6003,
+3164
 ],
 [
-6231,
-3293
+6003,
+3251
 ],
 [
-6251,
-3319
+6003,
+3317
 ]
 ],
 "labelBBox": {
-"x": 5962,
+"x": 6004,
 "y": 2448,
 "width": 99,
 "height": 39
@@ -19134,79 +19134,79 @@
 ],
 [
 4221,
-1577
+1578
 ],
 [
-5716,
+5728,
 1508
 ],
 [
-5780,
+5792,
 1573
 ],
 [
-5814,
+5826,
 1608
 ],
 [
-5799,
+5812,
 1639
 ],
 [
-5780,
+5792,
 1684
 ],
 [
-5596,
-2115
+5600,
+2122
 ],
 [
-5251,
-2007
+5245,
+2003
 ],
 [
-5019,
+5002,
 2414
 ],
 [
-4960,
+4942,
 2517
 ],
 [
-4958,
+4938,
 2555
 ],
 [
-4958,
+4938,
 2674
 ],
 [
-4958,
+4938,
 2674
 ],
 [
-4958,
+4938,
 2674
 ],
 [
-4958,
+4938,
 3418
 ],
 [
-4958,
-3706
+4938,
+3639
 ],
 [
-5950,
-3789
+5658,
+3756
 ],
 [
-6372,
-3812
+6007,
+3799
 ]
 ],
 "labelBBox": {
-"x": 5020,
+"x": 5003,
 "y": 2457,
 "width": 25,
 "height": 18
@@ -19243,56 +19243,56 @@
 1543
 ],
 [
-1893,
+1891,
 1598
 ],
 [
-4590,
-1505
+4570,
+1507
 ],
 [
-4590,
+4570,
 1843
 ],
 [
-4590,
+4570,
 1843
 ],
 [
-4590,
+4570,
 1843
 ],
 [
-4590,
+4570,
 3418
 ],
 [
-4590,
+4570,
 3584
 ],
 [
-4722,
-3596
+4703,
+3594
 ],
 [
-4875,
+4855,
 3660
 ],
 [
-5141,
-3773
+5057,
+3749
 ],
 [
-5992,
-3806
+5689,
+3793
 ],
 [
-6372,
-3816
+6007,
+3811
 ]
 ],
 "labelBBox": {
-"x": 4591,
+"x": 4571,
 "y": 2644,
 "width": 200,
 "height": 56
@@ -19313,24 +19313,24 @@
 "label": "Reads/writes",
 "points": [
 [
-6728,
+6386,
 3506
 ],
 [
-6695,
+6349,
 3566
 ],
 [
-6651,
+6299,
 3646
 ],
 [
-6616,
+6260,
 3710
 ]
 ],
 "labelBBox": {
-"x": 6694,
+"x": 6347,
 "y": 3591,
 "width": 85,
 "height": 39
@@ -19351,24 +19351,36 @@
 "label": "Reads/writes",
 "points": [
 [
-6386,
-3506
+6035,
+3507
 ],
 [
-6419,
-3566
+6052,
+3553
 ],
 [
-6463,
-3646
+6075,
+3611
 ],
 [
-6498,
+6099,
+3660
+],
+[
+6107,
+3677
+],
+[
+6116,
+3694
+],
+[
+6125,
 3710
 ]
 ],
 "labelBBox": {
-"x": 6468,
+"x": 6100,
 "y": 3591,
 "width": 85,
 "height": 39
@@ -20057,11 +20069,11 @@
 "label": "Durable queue + run-state",
 "points": [
 [
-7634,
+7633,
 1503
 ],
 [
-7661,
+7660,
 1518
 ],
 [
@@ -20073,24 +20085,36 @@
 1543
 ],
 [
-7755,
+7757,
 1561
 ],
 [
-7768,
-1559
+7773,
+1552
 ],
 [
-7809,
+7813,
 1573
 ],
 [
-8010,
-1644
+7884,
+1610
 ],
 [
-8059,
-1665
+7882,
+1651
+],
+[
+7955,
+1684
+],
+[
+8079,
+1741
+],
+[
+8126,
+1704
 ],
 [
 8257,
@@ -20098,19 +20122,19 @@
 ],
 [
 8272,
-1750
+1748
 ],
 [
 8287,
-1756
+1753
 ],
 [
 8302,
-1762
+1759
 ]
 ],
 "labelBBox": {
-"x": 8104,
+"x": 7956,
 "y": 1607,
 "width": 167,
 "height": 39
@@ -20675,36 +20699,36 @@
 "label": "Replay buffer + control state",
 "points": [
 [
-1856,
+1895,
 902
 ],
 [
-1915,
+1986,
 833
 ],
 [
-2007,
+2122,
 743
 ],
 [
-2111,
+2259,
 701
 ],
 [
-2468,
-556
+2612,
+593
 ],
 [
-5195,
-543
+5214,
+553
 ],
 [
 5943,
-542
+544
 ]
 ],
 "labelBBox": {
-"x": 2112,
+"x": 2260,
 "y": 734,
 "width": 179,
 "height": 39
@@ -20875,16 +20899,16 @@
 "label": "Approves, per exact command, an \nagent-run staged operator script's \nGitHub writes (environment secret write, \nApp identity read) at the harness \napproval prompt, the same receipt-bound ",
 "points": [
 [
-9768,
+9801,
 2658
 ],
 [
-10285,
-2612
+10312,
+2611
 ],
 [
 11732,
-2465
+2461
 ],
 [
 11732,
@@ -21232,72 +21256,72 @@
 "label": "CI installs a pinned Grok CLI (versioned \nx.ai binary, sha256 content pin) and \nruns the inspect-contract + golden-path \neval (grok-fidelity, ADR-245)",
 "points": [
 [
-11469,
+11468,
 550
 ],
 [
-11895,
-569
+11888,
+570
 ],
 [
-12955,
-625
+12920,
+626
 ],
 [
-13096,
+13057,
 701
 ],
 [
-13640,
-992
+13599,
+997
 ],
 [
-13391,
+13351,
 1441
 ],
 [
-13391,
+13351,
 2058
 ],
 [
-13391,
+13351,
 2058
 ],
 [
-13391,
+13351,
 2058
 ],
 [
-13391,
+13351,
 2676
 ],
 [
-13391,
-3049
+13351,
+3046
 ],
 [
-10415,
+10395,
 2911
 ],
 [
-10052,
+10034,
 2995
 ],
 [
-10037,
+10019,
 2999
 ],
 [
-10022,
+10004,
 3003
 ],
 [
-10006,
+9988,
 3008
 ]
 ],
 "labelBBox": {
-"x": 13409,
+"x": 13369,
 "y": 1797,
 "width": 251,
 "height": 89
@@ -21525,7 +21549,7 @@
 "id": "e2l047",
 "source": "github",
 "target": "platform.infra.gitDataStore",
-"label": "Transport and root authentication LIVE \n(ADR-220 D1b accepted 2026-09-27). \nReviewer-gated, READ-ONLY root SSH from \ngit-data-cutover.yml (job `cutover`, \nenvironment web-platform-infra-apply, ",
+"label": "Transport and root authentication LIVE \n(ADR-220 D1b accepted 2026-09-27). \nReviewer-gated root SSH from \ngit-data-cutover.yml (job `cutover`, \nenvironment web-platform-infra-apply, ",
 "points": [
 [
 11469,
@@ -21607,7 +21631,7 @@
 "labelBBox": {
 "x": 12648,
 "y": 936,
-"width": 284,
+"width": 244,
 "height": 106
 },
 "parent": null,
@@ -21732,7 +21756,7 @@
 1170
 ],
 [
-8241,
+8240,
 1223
 ],
 [
@@ -21740,28 +21764,28 @@
 1253
 ],
 [
-8480,
-1350
+8512,
+1364
 ],
 [
-8556,
-1272
+8602,
+1259
 ],
 [
-8757,
+8837,
 1313
 ],
 [
-8816,
-1325
+8869,
+1321
 ],
 [
-8879,
+8903,
+1331
+],
+[
+8936,
 1342
-],
-[
-8935,
-1358
 ]
 ],
 "labelBBox": {
@@ -21826,16 +21850,16 @@
 1253
 ],
 [
-8759,
-1307
+8689,
+1257
 ],
 [
-8854,
-1344
+8820,
+1306
 ],
 [
 8935,
-1369
+1348
 ]
 ],
 "labelBBox": {
@@ -21958,48 +21982,48 @@
 "label": "Approves, per exact command, an \nagent-run staged operator script's \nDoppler writes (secret copy into a \ncontainer, service-token mint) at the \nharness approval prompt; the agent runs ",
 "points": [
 [
-9768,
-2671
+9801,
+2670
 ],
 [
-10462,
-2657
+10486,
+2655
 ],
 [
-12913,
-2585
+12873,
+2578
 ],
 [
-12913,
+12873,
 2265
 ],
 [
-12913,
+12873,
 1412
 ],
 [
-12913,
+12873,
 1412
 ],
 [
-12913,
+12873,
 1412
 ],
 [
-12913,
-1386
+12873,
+1363
 ],
 [
-12656,
-1203
+12645,
+1195
 ],
 [
-12490,
-1088
+12491,
+1087
 ]
 ],
 "labelBBox": {
-"x": 12914,
+"x": 12874,
 "y": 1788,
 "width": 256,
 "height": 107
@@ -22565,36 +22589,36 @@
 "label": "Sends email to the operator address",
 "points": [
 [
-14596,
+14556,
 631
 ],
 [
-14574,
+14534,
 683
 ],
 [
-14545,
+14505,
 751
 ],
 [
-14518,
+14478,
 811
 ],
 [
-14506,
+14466,
 838
 ],
 [
-14493,
+14453,
 867
 ],
 [
-14480,
+14440,
 893
 ]
 ],
 "labelBBox": {
-"x": 14564,
+"x": 14524,
 "y": 734,
 "width": 230,
 "height": 39
@@ -22643,27 +22667,27 @@
 747
 ],
 [
-11637,
+11619,
 763
 ],
 [
-11924,
-732
+11902,
+734
 ],
 [
-13059,
+13019,
 819
 ],
 [
-13483,
+13443,
 852
 ],
 [
-13977,
+13937,
 922
 ],
 [
-14242,
+14202,
 962
 ]
 ],
@@ -22690,47 +22714,47 @@
 "points": [
 [
 11469,
-543
+544
 ],
 [
-12054,
-549
+12049,
+550
 ],
 [
-13906,
-578
+13870,
+580
 ],
 [
-14143,
+14103,
 701
 ],
 [
-14199,
+14159,
 730
 ],
 [
-14188,
+14148,
 766
 ],
 [
-14231,
+14191,
 811
 ],
 [
-14258,
+14218,
 840
 ],
 [
-14288,
+14248,
 869
 ],
 [
-14318,
+14278,
 895
 ]
 ],
 "labelBBox": {
-"x": 14232,
+"x": 14192,
 "y": 701,
 "width": 258,
 "height": 106
@@ -22751,28 +22775,28 @@
 "label": "Inbound email webhook (svix-verified) → \nemail-triage ingress",
 "points": [
 [
-14252,
+14212,
 963
 ],
 [
-13989,
+13949,
 922
 ],
 [
-13488,
+13448,
 850
 ],
 [
-13059,
+13019,
 819
 ],
 [
-12629,
+12591,
 789
 ],
 [
-5699,
-680
+5697,
+681
 ],
 [
 5291,
@@ -22891,44 +22915,32 @@
 1543
 ],
 [
-7870,
-1586
+7874,
+1587
 ],
 [
-8999,
+9034,
 1562
 ],
 [
-9159,
+9199,
 1573
 ],
 [
-9562,
-1602
+9943,
+1627
 ],
 [
-9660,
-1635
+10822,
+1755
 ],
 [
-10061,
-1684
-],
-[
-10467,
-1733
-],
-[
-10942,
-1790
-],
-[
-11199,
-1820
+11200,
+1813
 ]
 ],
 "labelBBox": {
-"x": 10062,
+"x": 10221,
 "y": 1573,
 "width": 281,
 "height": 106
@@ -22950,35 +22962,35 @@
 "points": [
 [
 11469,
-542
+543
 ],
 [
-11861,
-547
+11855,
+549
 ],
 [
-12784,
-584
+12752,
+588
 ],
 [
-12960,
+12921,
 819
 ],
 [
-13366,
-1361
+13311,
+1356
 ],
 [
-12075,
-1698
+12065,
+1694
 ],
 [
 11576,
-1806
+1804
 ]
 ],
 "labelBBox": {
-"x": 13011,
+"x": 12962,
 "y": 1185,
 "width": 25,
 "height": 18
@@ -23102,16 +23114,16 @@
 1744
 ],
 [
-11870,
-1764
+11855,
+1763
 ],
 [
-12157,
-1797
+12125,
+1796
 ],
 [
-12339,
-1820
+12298,
+1819
 ]
 ],
 "labelBBox": {
@@ -23136,60 +23148,60 @@
 "label": "CI reaches upstream releases twice: \nbuild-inngest-bootstrap-image.yml \ndownloads the same pinned tarball (with \nthe checksums-file verify) when the \nbootstrap image is rebuilt, and the ",
 "points": [
 [
-11469,
+11468,
 545
 ],
 [
-11839,
+11833,
 555
 ],
 [
-12685,
+12656,
 588
 ],
 [
-12947,
+12911,
 701
 ],
 [
-13020,
+12982,
 733
 ],
 [
-13049,
-747
+13009,
+748
 ],
 [
-13082,
+13041,
 819
 ],
 [
-13162,
-995
+13119,
+996
 ],
 [
-13146,
-1079
+13102,
+1081
 ],
 [
-13063,
+13015,
 1253
 ],
 [
-12966,
-1458
+12914,
+1455
 ],
 [
-12773,
-1640
+12724,
+1639
 ],
 [
-12646,
-1747
+12600,
+1746
 ]
 ],
 "labelBBox": {
-"x": 13110,
+"x": 13065,
 "y": 1142,
 "width": 254,
 "height": 107
@@ -23698,28 +23710,28 @@
 1296
 ],
 [
-9909,
-1460
+9895,
+1466
 ],
 [
 10016,
 1684
 ],
 [
-10026,
-1705
+10028,
+1706
 ],
 [
-10039,
-1726
+10044,
+1727
 ],
 [
-10053,
-1746
+10061,
+1747
 ]
 ],
 "labelBBox": {
-"x": 9980,
+"x": 9975,
 "y": 1401,
 "width": 25,
 "height": 18
@@ -23745,10 +23757,10 @@
 ],
 [
 7650,
-1520
+1519
 ],
 [
-7682,
+7683,
 1534
 ],
 [
@@ -23756,44 +23768,44 @@
 1543
 ],
 [
-7926,
-1602
+7891,
+1593
 ],
 [
-8493,
-1503
+8357,
+1543
 ],
 [
-8700,
+8537,
 1573
 ],
 [
-8779,
-1600
+8700,
+1601
 ],
 [
-8774,
-1653
+8731,
+1649
 ],
 [
-8852,
+8892,
 1684
 ],
 [
-9043,
-1759
+9265,
+1764
 ],
 [
-9618,
+9708,
 1808
 ],
 [
-9928,
-1830
+9961,
+1829
 ]
 ],
 "labelBBox": {
-"x": 8853,
+"x": 8893,
 "y": 1573,
 "width": 278,
 "height": 106
@@ -23814,7 +23826,7 @@
 "label": "A queryable second copy of the \nboot-completion signal and gc-fault \nevents, posted by direct curl (NOT a \nVector agent — git-data ships no \nhost_metrics and so structurally cannot ",
 "points": [
 [
-7176,
+7177,
 1509
 ],
 [
@@ -23830,44 +23842,44 @@
 1543
 ],
 [
-7370,
-1575
+7354,
+1571
 ],
 [
-8191,
-1531
+8056,
+1535
 ],
 [
-8299,
+8147,
 1573
 ],
 [
-8368,
+8212,
 1601
 ],
 [
-8356,
-1654
+8197,
+1655
 ],
 [
-8424,
+8261,
 1684
 ],
 [
-8690,
-1799
+8560,
+1819
 ],
 [
-9535,
-1831
-],
-[
-9928,
+9534,
 1840
+],
+[
+9962,
+1843
 ]
 ],
 "labelBBox": {
-"x": 8425,
+"x": 8262,
 "y": 1573,
 "width": 247,
 "height": 106
@@ -23952,32 +23964,32 @@
 1143
 ],
 [
-10464,
-1237
+10457,
+1231
 ],
 [
-10445,
-1284
+10420,
+1259
 ],
 [
 10250,
 1684
 ],
 [
-10240,
-1705
+10242,
+1704
 ],
 [
-10227,
-1726
+10232,
+1725
 ],
 [
-10213,
-1746
+10222,
+1745
 ]
 ],
 "labelBBox": {
-"x": 10426,
+"x": 10417,
 "y": 1185,
 "width": 25,
 "height": 18
@@ -24002,11 +24014,11 @@
 1503
 ],
 [
-10757,
+10756,
 1559
 ],
 [
-10784,
+10783,
 1631
 ],
 [
@@ -24014,16 +24026,16 @@
 1684
 ],
 [
-10693,
-1748
+10697,
+1744
 ],
 [
-10495,
-1792
+10517,
+1787
 ],
 [
-10338,
-1817
+10370,
+1813
 ]
 ],
 "labelBBox": {
@@ -24048,36 +24060,36 @@
 "label": "Pages the operator INDEPENDENTLY of \nSentry — the second source. The apex \nuptime monitor, the database-readiness \nkeyword monitor on app.soleur.ai/health \n(#7884/ADR-222: pages when the /health ",
 "points": [
 [
-9939,
+9972,
 1925
 ],
 [
-9833,
+9866,
 1979
 ],
 [
-9710,
+9743,
 2062
 ],
 [
-9641,
+9674,
 2174
 ],
 [
-9567,
+9600,
 2297
 ],
 [
-9566,
+9599,
 2468
 ],
 [
-9574,
+9607,
 2575
 ]
 ],
 "labelBBox": {
-"x": 9642,
+"x": 9675,
 "y": 2209,
 "width": 262,
 "height": 106
@@ -24098,28 +24110,28 @@
 "label": "Origin uptime probe at the LB-fronted \napp.soleur.ai surface \n(betteruptime_monitor.app/soleur_apex) — \ncovers web-1 (the app A-record → web-1, \ndns.tf); the #5933 per-host web-<n> ",
 "points": [
 [
-9939,
-1791
+9972,
+1790
 ],
 [
-9705,
-1730
+9739,
+1728
 ],
 [
-9299,
-1630
+9337,
+1628
 ],
 [
-8945,
+8985,
 1573
 ],
 [
-8801,
-1551
+8824,
+1549
 ],
 [
-8756,
-1594
+8773,
+1599
 ],
 [
 8619,
@@ -24127,7 +24139,7 @@
 ],
 [
 8411,
-1466
+1467
 ],
 [
 8387,
@@ -24241,43 +24253,43 @@
 ],
 [
 9469,
-1482
+1481
 ],
 [
 9332,
 1543
 ],
 [
-9201,
-1602
+9218,
+1595
 ],
 [
-9151,
-1543
+9175,
+1554
 ],
 [
-9011,
+9051,
 1573
 ],
 [
-8868,
-1605
+8820,
+1610
 ],
 [
-8844,
-1654
+8768,
+1650
 ],
 [
-8700,
+8537,
 1684
 ],
 [
-8290,
-1768
+8195,
+1734
 ],
 [
-8161,
-1620
+8091,
+1640
 ],
 [
 7761,
@@ -24560,52 +24572,52 @@
 1953
 ],
 [
-7734,
-1971
+7733,
+1972
 ],
 [
 7761,
 1984
 ],
 [
-7810,
-2006
+7813,
+2008
 ],
 [
-7828,
-1993
+7832,
+1992
 ],
 [
-7880,
+7888,
 2004
 ],
 [
-8163,
-2066
+8175,
+2065
 ],
 [
-8237,
+8250,
 2075
 ],
 [
-8510,
+8526,
 2174
 ],
 [
-8836,
+8857,
 2293
 ],
 [
-9199,
+9226,
 2472
 ],
 [
-9409,
+9440,
 2580
 ]
 ],
 "labelBBox": {
-"x": 8930,
+"x": 8952,
 "y": 2209,
 "width": 265,
 "height": 106
@@ -24626,36 +24638,36 @@
 "label": "Closes the terminal (stopping its \nscope), or runs `systemctl --user stop \nsoleur.slice` as an explicit fallback — \nwhich stops EVERY agent session on the \nmachine (ADR-161)",
 "points": [
 [
-9406,
-2700
+9439,
+2697
 ],
 [
-9304,
-2721
+9327,
+2716
 ],
 [
-9177,
-2758
+9186,
+2754
 ],
 [
-9081,
+9077,
 2825
 ],
 [
-9022,
+9015,
 2866
 ],
 [
-8973,
+8962,
 2932
 ],
 [
-8939,
+8926,
 2987
 ]
 ],
 "labelBBox": {
-"x": 9082,
+"x": 9078,
 "y": 2824,
 "width": 262,
 "height": 107
@@ -24745,23 +24757,23 @@
 ],
 [
 7644,
-2781
+2780
 ],
 [
 7838,
 2935
 ],
 [
-7903,
-2987
+7854,
+2948
 ],
 [
-8402,
-3040
+8374,
+3019
 ],
 [
-8687,
-3067
+8669,
+3058
 ]
 ],
 "labelBBox": {
@@ -24786,16 +24798,16 @@
 "label": "Reaps the agent session by stopping its \nscope, via BindsTo= on the terminal's \nown scope — a UNIT dependency, because \nadoption moves the process out of the \nterminal's cgroup so co-membership can ",
 "points": [
 [
-8756,
+8741,
 2996
 ],
 [
-8551,
+8539,
 2859
 ],
 [
-8138,
-2594
+8134,
+2593
 ],
 [
 7764,
@@ -24806,19 +24818,19 @@
 2373
 ],
 [
-7043,
+7039,
 2163
 ],
 [
-6960,
+6956,
 2114
 ],
 [
-6743,
+6740,
 1986
 ],
 [
-6742,
+6740,
 1881
 ],
 [
@@ -24887,7 +24899,7 @@
 ]
 ],
 "labelBBox": {
-"x": 6961,
+"x": 6957,
 "y": 2004,
 "width": 276,
 "height": 106
@@ -24908,24 +24920,24 @@
 "label": "Incident alerts (native integration)",
 "points": [
 [
-10133,
+10166,
 1934
 ],
 [
-10133,
+10166,
 2001
 ],
 [
-10133,
+10166,
 2094
 ],
 [
-10133,
+10166,
 2164
 ]
 ],
 "labelBBox": {
-"x": 10134,
+"x": 10167,
 "y": 2037,
 "width": 214,
 "height": 39
@@ -24946,24 +24958,24 @@
 "label": "Mobile push notification",
 "points": [
 [
-10014,
+10047,
 2354
 ],
 [
-9926,
+9959,
 2421
 ],
 [
-9805,
+9838,
 2511
 ],
 [
-9714,
+9747,
 2579
 ]
 ],
 "labelBBox": {
-"x": 9926,
+"x": 9959,
 "y": 2448,
 "width": 150,
 "height": 39
@@ -25046,36 +25058,36 @@
 "label": "Runs Soleur sessions locally in the CLI \nor remotely in Devin Cloud",
 "points": [
 [
-9768,
-2745
+9801,
+2756
 ],
 [
-9823,
-2768
+9844,
+2777
 ],
 [
-9882,
-2795
+9889,
+2800
 ],
 [
-9934,
+9929,
 2825
 ],
 [
-10018,
-2873
+10009,
+2874
 ],
 [
-10105,
+10092,
 2937
 ],
 [
-10172,
+10157,
 2989
 ]
 ],
 "labelBBox": {
-"x": 10096,
+"x": 10084,
 "y": 2860,
 "width": 246,
 "height": 35
@@ -25099,68 +25111,68 @@
 543
 ],
 [
-11997,
-549
+11991,
+550
 ],
 [
-13539,
-576
+13503,
+578
 ],
 [
-13725,
+13685,
 701
 ],
 [
-13843,
+13803,
 781
 ],
 [
-13864,
+13824,
 848
 ],
 [
-13864,
+13824,
 991
 ],
 [
-13864,
+13824,
 991
 ],
 [
-13864,
+13824,
 991
 ],
 [
-13864,
+13824,
 2676
 ],
 [
-13864,
+13824,
 2884
 ],
 [
-13672,
+13632,
 2870
 ],
 [
-13474,
+13434,
 2935
 ],
 [
-13190,
+13153,
 3028
 ],
 [
-11124,
+11103,
 3070
 ],
 [
-10480,
+10461,
 3081
 ]
 ],
 "labelBBox": {
-"x": 13865,
+"x": 13825,
 "y": 1788,
 "width": 234,
 "height": 107
@@ -25181,36 +25193,36 @@
 "label": "Runs Soleur from the local Cursor CLI",
 "points": [
 [
-9461,
-2764
+9475,
+2765
 ],
 [
-9442,
+9454,
 2783
 ],
 [
-9425,
+9434,
 2803
 ],
 [
-9411,
+9418,
 2825
 ],
 [
-9383,
-2873
+9385,
+2872
 ],
 [
-9369,
+9365,
 2934
 ],
 [
-9363,
+9354,
 2985
 ]
 ],
 "labelBBox": {
-"x": 9412,
+"x": 9419,
 "y": 2868,
 "width": 241,
 "height": 18
@@ -25262,16 +25274,16 @@
 1582
 ],
 [
-5591,
-1547
+5589,
+1554
 ],
 [
 5666,
 1573
 ],
 [
-6121,
-1732
+6133,
+1693
 ],
 [
 6279,
@@ -25295,31 +25307,31 @@
 ],
 [
 6279,
-3250
+3271
 ],
 [
-6849,
-3179
+6501,
+3156
 ],
 [
-6999,
+6664,
 3244
 ],
 [
-7045,
-3264
+6705,
+3267
 ],
 [
-7090,
-3293
+6748,
+3294
 ],
 [
-7130,
+6786,
 3321
 ]
 ],
 "labelBBox": {
-"x": 6276,
+"x": 6277,
 "y": 2226,
 "width": 227,
 "height": 72
@@ -25356,80 +25368,80 @@
 1543
 ],
 [
-1645,
+1644,
 1554
 ],
 [
-4600,
+4580,
 1527
 ],
 [
-4673,
+4653,
 1573
 ],
 [
-5071,
+5050,
 1825
 ],
 [
-4875,
-2134
+4870,
+2123
 ],
 [
-5137,
+5113,
 2525
 ],
 [
-5273,
-2728
+5230,
+2719
 ],
 [
-5305,
-2792
+5236,
+2798
 ],
 [
-5503,
+5416,
 2935
 ],
 [
-5775,
-3132
+5712,
+3161
 ],
 [
-5868,
-3166
+5831,
+3165
 ],
 [
 6196,
 3236
 ],
 [
-6240,
+6247,
 3246
 ],
 [
-6956,
-3231
+6614,
+3228
 ],
 [
-6999,
+6664,
 3244
 ],
 [
-7049,
+6714,
 3260
 ],
 [
-7099,
+6763,
 3290
 ],
 [
-7140,
+6804,
 3320
 ]
 ],
 "labelBBox": {
-"x": 5138,
+"x": 5114,
 "y": 2439,
 "width": 238,
 "height": 56
@@ -25530,19 +25542,19 @@
 1730
 ],
 [
-6656,
+6655,
 1689
 ],
 [
-6743,
+6742,
 1744
 ],
 [
-6863,
+6862,
 1819
 ],
 [
-6847,
+6846,
 1889
 ],
 [
@@ -25566,35 +25578,35 @@
 2369
 ],
 [
-7285,
-2646
+7286,
+2645
 ],
 [
 7732,
 2935
 ],
 [
-8083,
-3163
+8076,
+3159
 ],
 [
-8231,
-3099
+8220,
+3100
 ],
 [
-8642,
+8624,
 3175
 ],
 [
-9790,
-3387
+9767,
+3390
 ],
 [
-13504,
+13466,
 3723
 ],
 [
-14401,
+14361,
 3802
 ]
 ],
@@ -25620,24 +25632,24 @@
 "label": "Relays JSON-RPC lines; appends \n--snapshot-mode none (and, opt-in via \n--chromium-fallback, --browser chromium \n--sandbox); refuses filename",
 "points": [
 [
-7442,
+7107,
 3428
 ],
 [
-8478,
-3485
+8170,
+3484
 ],
 [
-13359,
-3752
+13290,
+3753
 ],
 [
-14402,
+14361,
 3809
 ]
 ],
 "labelBBox": {
-"x": 11582,
+"x": 11421,
 "y": 3566,
 "width": 259,
 "height": 90
@@ -25678,52 +25690,28 @@
 1549
 ],
 [
-5143,
-1543
+5125,
+1541
 ],
 [
-5183,
+5163,
 1573
 ],
 [
-5528,
-1842
+5300,
+1687
 ],
 [
-5296,
-2110
+5463,
+2950
 ],
 [
-5433,
-2525
-],
-[
-5540,
-2848
-],
-[
-5550,
-2940
-],
-[
-5718,
-3236
-],
-[
-5734,
-3264
-],
-[
-5753,
-3293
-],
-[
-5773,
-3318
+5507,
+3316
 ]
 ],
 "labelBBox": {
-"x": 5434,
+"x": 5399,
 "y": 2439,
 "width": 229,
 "height": 56
@@ -25744,36 +25732,36 @@
 "label": "Loads via .grok/config.toml; the plugin \nroot resolves from the \nloader-substituted ${CLAUDE_PLUGIN_ROOT} \ntoken first, then GROK_PLUGIN_ROOT, then \nthe two managed Devin plugin caches by ",
 "points": [
 [
-9637,
+9619,
 3161
 ],
 [
-9619,
+9601,
 3167
 ],
 [
-9601,
+9583,
 3172
 ],
 [
-9583,
+9565,
 3175
 ],
 [
-9549,
-3182
+9527,
+3183
 ],
 [
-7188,
-3229
+6865,
+3228
 ],
 [
-7009,
+6674,
 3243
 ]
 ],
 "labelBBox": {
-"x": 8048,
+"x": 7875,
 "y": 3206,
 "width": 301,
 "height": 106
@@ -26036,7 +26024,7 @@
 1004
 ],
 [
-227,
+226,
 918
 ],
 [
@@ -26044,24 +26032,24 @@
 819
 ],
 [
-560,
-558
+574,
+545
 ],
 [
-1561,
-716
+1626,
+717
 ],
 [
-1917,
+2001,
 701
 ],
 [
-2189,
-689
+2268,
+690
 ],
 [
-6547,
-700
+6552,
+699
 ],
 [
 6813,
@@ -26084,7 +26072,7 @@
 "x": 3560,
 "y": 691,
 "width": 256,
-"height": 72
+"height": 73
 },
 "parent": null,
 "relations": [
@@ -26164,52 +26152,52 @@
 "label": "Opt-in release lookup \n(SOLEUR_UPDATE_CHECK=1 at session start) \nand the explicit, user-started \n/soleur:version compare: git ls-remote \n--tags against ",
 "points": [
 [
-7482,
-3818
+7147,
+3796
 ],
 [
-9530,
-3810
+9276,
+3741
 ],
 [
-14266,
-3754
+14226,
+3593
 ],
 [
-14266,
+14226,
 3418
 ],
 [
-14266,
+14226,
 2058
 ],
 [
-14266,
+14226,
 2058
 ],
 [
-14266,
+14226,
 2058
 ],
 [
-14266,
-908
+14226,
+909
 ],
 [
-14034,
+13994,
 805
 ],
 [
-13861,
+13821,
 701
 ],
 [
-13658,
-579
+13622,
+581
 ],
 [
-12036,
-550
+12030,
+551
 ],
 [
 11479,
@@ -26217,8 +26205,8 @@
 ]
 ],
 "labelBBox": {
-"x": 9099,
-"y": 3689,
+"x": 9052,
+"y": 3621,
 "width": 306,
 "height": 106
 },
@@ -26348,36 +26336,36 @@
 "label": "Loads skills, AGENTS.md rules, and MCP \nin both substrates; plugin subagents and \nSessionStart/SessionEnd hooks only on \nlocal. Since #8401 all three /soleur:go \nsession gates also resolve the plugin ",
 "points": [
 [
-10107,
+10089,
 3162
 ],
 [
-10089,
+10071,
 3167
 ],
 [
-10070,
+10052,
 3172
 ],
 [
-10052,
+10034,
 3175
 ],
 [
-10042,
+10023,
 3177
 ],
 [
-7204,
+6878,
 3237
 ],
 [
-7009,
+6674,
 3244
 ]
 ],
 "labelBBox": {
-"x": 8334,
+"x": 8160,
 "y": 3207,
 "width": 265,
 "height": 106
@@ -26398,37 +26386,37 @@
 "label": "Loads generated skill and agent stubs \nfrom the plugin root",
 "points": [
 [
-9187,
+9169,
 3161
 ],
 [
-9168,
-3166
-],
-[
 9150,
-3172
+3167
 ],
 [
 9132,
+3172
+],
+[
+9114,
 3175
 ],
 [
-8671,
-3271
+8850,
+3229
 ],
 [
-7463,
-3087
+6966,
+3155
 ],
 [
-7009,
+6674,
 3241
 ]
 ],
 "labelBBox": {
-"x": 7852,
-"y": 3127,
+"x": 7675,
+"y": 3136,
 "width": 240,
 "height": 56
 },
@@ -45650,7 +45638,7 @@
 "id": "e2l047",
 "source": "github",
 "target": "platform.infra.gitDataStore",
-"label": "Transport and root authentication LIVE \n(ADR-220 D1b accepted 2026-09-27). \nReviewer-gated, READ-ONLY root SSH from \ngit-data-cutover.yml (job `cutover`, \nenvironment web-platform-infra-apply, ",
+"label": "Transport and root authentication LIVE \n(ADR-220 D1b accepted 2026-09-27). \nReviewer-gated root SSH from \ngit-data-cutover.yml (job `cutover`, \nenvironment web-platform-infra-apply, ",
 "points": [
 [
 5917,
@@ -45708,7 +45696,7 @@
 "labelBBox": {
 "x": 6032,
 "y": 701,
-"width": 284,
+"width": 244,
 "height": 106
 },
 "parent": null,
@@ -63443,41 +63431,41 @@
 "id": "e2l047",
 "source": "github",
 "target": "platform.infra.gitDataStore",
-"label": "Transport and root authentication LIVE \n(ADR-220 D1b accepted 2026-09-27). \nReviewer-gated, READ-ONLY root SSH from \ngit-data-cutover.yml (job `cutover`, \nenvironment web-platform-infra-apply, ",
+"label": "Transport and root authentication LIVE \n(ADR-220 D1b accepted 2026-09-27). \nReviewer-gated root SSH from \ngit-data-cutover.yml (job `cutover`, \nenvironment web-platform-infra-apply, ",
 "points": [
 [
-221,
+235,
 180
 ],
 [
-254,
+276,
 237
 ],
 [
-305,
+338,
 308
 ],
 [
-369,
+408,
 350
 ],
 [
-521,
-451
+552,
+437
 ],
 [
-729,
-488
+740,
+476
 ],
 [
 876,
-502
+494
 ]
 ],
 "labelBBox": {
-"x": 370,
+"x": 409,
 "y": 240,
-"width": 284,
+"width": 244,
 "height": 106
 },
 "parent": null,
