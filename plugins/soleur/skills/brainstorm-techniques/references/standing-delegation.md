@@ -34,6 +34,13 @@ sentence):
 | Expiry | exactly one `**Expiry:**` line with an ISO date no later than the comment's creation date plus 30 days, not in the past; the epic closing also ends it | `expiry-missing`, `expiry-too-long`, `expired`, `epic-closed` |
 | Revoke | "delete or edit this comment" | (informational) |
 
+Time rules. A plain `verify` enforces the expiry and an open epic against the current time. The ship gate audits an act
+that has ALREADY run with `verify --audit --at <YYYY-MM-DDTHH:MM:SSZ>`, where the time is when the act ran: the delegation
+must have been in force then (created at or before that time, not past the end of its expiry day), and the only check
+skipped is `epic-closed`, because an epic closes on its last item. `--audit` without `--at` (or `--at` without `--audit`) is
+a usage error, an act dated before the delegation existed is `before-delegation`, and one dated after the expiry is
+`expired`. The CTO never runs `--audit`.
+
 ### Delegation record template
 
 ```text
@@ -65,8 +72,9 @@ straight back through `delegation-verify.sh verify`. `render` refuses an answer 
 longer than 600 characters (the answer is published word for word on the issue) and an answer or question that looks like a
 password or key. A record that does not verify is deleted and the epic stays on today's behaviour.
 
-Find the delegation of an epic with this exact discovery command, then verify the candidates newest first; the newest one
-that verifies as `valid` wins, and a comment that an administrator did not write is skipped by the verifier:
+Find the delegation of an epic with this exact discovery command. It lists the candidates oldest first, so verify them from
+the last line upward; the newest one that verifies as `valid` wins, and a comment that an administrator did not write is
+skipped by the verifier:
 
 ```text
 gh api repos/{owner}/{repo}/issues/<epic>/comments --paginate --jq '.[] | select(.body|startswith("<!-- soleur-delegation v1 -->")) | .html_url'
