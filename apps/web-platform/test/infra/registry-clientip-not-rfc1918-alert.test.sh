@@ -2,7 +2,7 @@
 #
 # Drift guard for the "#7530 a registry-plane clientIP that is not RFC1918" Better Stack Logs alert
 # (apps/web-platform/infra/betterstack-logs-alerts.tf, Guard 2 of
-# knowledge-base/project/plans/2026-10-14-fix-registry-phase2-batch-htpasswd-stdin-clientip-alert-plan.md).
+# knowledge-base/project/plans/archive/20261015-140620-2026-10-14-fix-registry-phase2-batch-htpasswd-stdin-clientip-alert-plan.md).
 #
 # WHAT THE ALERT IS FOR. The CLO's 2026-08-13 ruling lets the registry log shipper ship zot's
 # `clientIP` unredacted only while every observable value is RFC1918. Nothing enforced that. This
