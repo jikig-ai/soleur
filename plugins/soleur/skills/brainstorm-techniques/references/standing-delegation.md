@@ -41,6 +41,16 @@ skipped is `epic-closed`, because an epic closes on its last item. `--audit` wit
 a usage error, an act dated before the delegation existed is `before-delegation`, and one dated after the expiry is
 `expired`. The CTO never runs `--audit`.
 
+What a `valid` verdict prints, after the first line: `verified-created-at: <ISO time the delegation comment was created>`
+and `verified-expiry: <YYYY-MM-DD>` (the window the ship gate binds receipts to), then, when an envelope was checked,
+`verified-envelope-sha256: <hex>`, then one `verified-command:` and `verified-sha256:` pair per asked command. An invalid
+verdict prints none of them.
+
+Hidden text is not text. The verifier drops every HTML comment (`<!-- ... -->`, also across lines) from the delegation
+comment (after its marker line) and from the envelope file before it reads anything, so a Scope item or an envelope
+section that a reader of the rendered page cannot see is not a Scope item or a section. A Scope item that contains a
+negation (the whole words `not`, `never`, `except`, `excluding`, `without` or `don't`) never covers any command.
+
 ### Delegation record template
 
 ```text
@@ -73,8 +83,10 @@ longer than 600 characters (the answer is published word for word on the issue) 
 password or key. A record that does not verify is deleted and the epic stays on today's behaviour.
 
 Find the delegation of an epic with this exact discovery command. It lists the candidates oldest first, so verify them from
-the last line upward; the newest one that verifies as `valid` wins, and a comment that an administrator did not write is
-skipped by the verifier:
+the last line upward. The NEWEST marker comment written by an administrator decides: a comment the verifier rejects as
+`not-admin-author` or `bot-author` is skipped, but the first one it does not reject so decides, and if that one is invalid,
+edited, expired or its epic closed, the delegation is invalid. Never fall back to an older marker comment: editing or
+deleting the newest one is how an operator takes the approval back.
 
 ```text
 gh api repos/{owner}/{repo}/issues/<epic>/comments --paginate --jq '.[] | select(.body|startswith("<!-- soleur-delegation v1 -->")) | .html_url'
@@ -87,8 +99,9 @@ A section in a file the CTO commits (a plan, a spec, a runbook). One section per
 `path#<title substring>` (matched against the title, case-insensitively); more than one section and no anchor is
 `parse-ambiguous`. The section runs to the next level-two heading (fences are respected: a fence closes only on the same
 character, at least as long, with no text after it). Every part below is required (reason `envelope-incomplete`); the
-`Rollback:` must be a real way to undo the act in at least three words, never `none`, `n/a`, `unknown`, `irreversible`,
-`cannot` or `no rollback` (`rollback-unnamed`):
+`Rollback:` must be a real way to undo the act in at least three words, and a placeholder or an admission is refused
+(`none`, `n/a`, `unknown`, `tbd`, `todo`, `nothing`, `impossible`, `irreversible`, `cannot`, `can't`, `no rollback`,
+`not reversible`, `not possible`, `not undoable`) (`rollback-unnamed`):
 
 - `Delegation:` the comment URL; it must equal the URL passed to the verifier (`envelope-delegation-mismatch`).
 - `Epic:` `#<N>`, the issue the delegation comment sits on; a different number is `epic-mismatch`, a missing or malformed
@@ -104,6 +117,13 @@ character, at least as long, with no text after it). Every part below is require
 - `Verification:` commands run against telemetry afterwards, never an eyeball check.
 - `Abort:` when to stop before the act, and `Rollback:` how to undo it, named and tested.
 - `Stop conditions:` what makes the CTO halt after the act began.
+
+The text of `Verification:`, `Abort:`, `Rollback:` and `Stop conditions:` is run by the CTO, so it is checked too: every
+line of those parts (fenced lines, backticked spans and plain lines) is tested against the denylist of section 4
+(`non-delegable-command`). In a `Rollback:` every fenced line and every backticked span must be a command on the grammar
+below, and the rest of the line must be plain words without shell characters (`;`, `&`, `|`, `<`, `>`, `$`, backticks,
+`\`, `{`, `}`, `*`); otherwise `command-not-delegable`. A revert is therefore written in words or as a
+`gh pr create --fill` of a revert branch.
 
 ### The command grammar
 
@@ -131,8 +151,9 @@ what the operator approved, and a command filed under the wrong item is refused.
 
 The verifier never reads the working tree. The path must be relative to the current repository (no leading `/`, no `..`,
 none of `*`, `?`, `[`; otherwise `envelope-outside-repo` or `envelope-missing`), and the text is read from the committed
-`HEAD` blob: not in `HEAD` is `envelope-not-committed`, a symlink, an executable or a directory is
-`envelope-not-regular-file`. So the verified text is the committed text, an uncommitted edit changes nothing, and a
+`HEAD` blob (the path is a literal file name: git pathspec magic such as `:(top)` or `:/` is just a name that is not in
+`HEAD`): not in `HEAD` is `envelope-not-committed`, a symlink, an executable or a directory is
+`envelope-not-regular-file`; a control character or a trailing `/` in the path is `envelope-missing`. So the verified text is the committed text, an uncommitted edit changes nothing, and a
 verified envelope prints `verified-envelope-sha256: <sha256 of that blob>` for the receipt of section 8. `HEAD` is the
 checked-out commit, not a reviewed or pushed one.
 
@@ -164,7 +185,7 @@ Stop conditions: {STOP_CONDITIONS}
 ## 3. `Gate:` v1 grammar
 
 One predicate per line, closed set. An unknown kind, an unreadable probe, a missing or invalid delegation or a timeout
-means the hold STANDS (the evaluator exits 2). Adding a kind is a CTO ruling plus a test row.
+means the hold STANDS (the evaluator exits 1 for an invalid delegation and 2 for anything it cannot evaluate). Adding a kind is a CTO ruling plus a test row.
 
 ```text
 Gate: pr-merged <N>
@@ -276,7 +297,8 @@ immediately before every act, so a stop between verification and execution canno
 A conversational "stop" (or "take back the approval") makes the agent do all of the following, in this order; stopping
 reduces authority, so none of it needs a delegation. Deleting the comment is allowed, editing it is excluded.
 
-1. Delete the delegation comment (`gh api -X DELETE repos/{owner}/{repo}/issues/comments/<id>`).
+1. Delete EVERY delegation marker comment on the epic (`gh api -X DELETE repos/{owner}/{repo}/issues/comments/<id>`, one
+   per comment from the discovery command of section 1, not only the newest), so that nothing older can take over.
 2. List every merge it armed with `gh pr merge --auto` (the open changes whose auto-merge is set) and disarm each with
    `gh pr merge <N> --disable-auto`.
 3. Cancel every workflow run it dispatched that is still queued or running (`gh run cancel <run-id>`).
@@ -285,7 +307,8 @@ reduces authority, so none of it needs a delegation. Deleting the comment is all
 
 ### Reason tokens
 
-Every reason token the verifier can print has one plain sentence here. The agent says that sentence, never the token.
+Every reason token the verifier can print, and the two the hold evaluator and the ship gate print when the verifier gave no
+usable answer (`no-answer`, `verifier-error`), has one plain sentence here. The agent says that sentence, never the token.
 
 | Reason | What the operator is told |
 |---|---|
@@ -324,19 +347,22 @@ Every reason token the verifier can print has one plain sentence here. The agent
 | `command-not-delegable` | This step is not one of the few kinds of step a standing approval can cover, so I have not done it and I need you. |
 | `scope-mismatch` | This step is not what the item in your standing approval says it covers, so I have not done it. |
 | `command-not-in-envelope` | The step I was about to take is not word for word what the written plan says, so I have not done it. |
+| `no-answer` | I did not get an answer when I checked your standing approval, so I am waiting and have not done anything. |
+| `verifier-error` | The check of your standing approval gave an answer I could not understand, so I am waiting and have not done anything. |
 
 ## 8. The execution receipt
 
-After every delegated act the CTO posts one comment on the epic. Its first line is exactly this, with each value filled in
-and no spaces inside a value:
+After every delegated act the CTO posts one comment on the epic. Its first line is exactly this, with each value filled in.
+A value has no spaces, except that `envelope` may hold a space inside its optional `#title`:
 
 ```text
 <!-- soleur-delegated-act v1 delegation=<url> envelope=<path> sha256=<verified-envelope-sha256> result=ok|rolled-back run=<url|none> -->
 ```
 
 followed by one plain sentence from the execution log sentences of section 6. `delegation` is the delegation comment URL,
-`envelope` is the exact string passed to `--envelope` (path, plus `#title` when one was used), `sha256` is copied from the
-verifier's `verified-envelope-sha256:` line, `result` is `ok` or `rolled-back`, and `run` is the URL of the workflow run the
+`envelope` is the path with an optional `#title`, exactly the string passed to `--envelope`; the receipt parser compares it
+exactly with the row's envelope, never as a prefix. `sha256=<verified-envelope-sha256>` is the value of the verifier's
+`verified-envelope-sha256:` line, copied unchanged, `result` is `ok` or `rolled-back`, and `run` is the URL of the workflow run the
 act started, or `none`. The calling skill prints the same sentence in the session and lists the delegated acts in its run
 summary.
 
@@ -346,3 +372,8 @@ envelope and a result of `ok` or `rolled-back`, and whose author is an `OWNER`, 
 receipt is `receipt-missing`, a mismatch `receipt-mismatch`, a receipt that cannot be read `receipt-unreadable`; each stops
 the ship. This checks that a receipt exists, is attributable and matches. It is not proof of what ran; a hook-written
 receipt is the stronger follow-up (#10361).
+
+The `sha256` covers the WHOLE envelope file at `HEAD`, not only the section. Any later commit that edits that file changes
+the hash, and a receipt posted before the edit then no longer matches the file as it stands. So keep each envelope in a
+file of its own, do not edit it after the first act, and re-verify immediately before every act (an act keeps its receipt
+only if the receipt rows were checked while the verified text was still the file's current text).

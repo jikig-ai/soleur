@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
-# Shared `gh` stub for the standing-delegation suites (verifier, gate, hook). Test fixture, not production code.
+# Shared `gh` stub for the standing-delegation suites that need the verifier's reads (today: the Technical-Ruling Gate suite,
+# which wraps it). Test fixture, not production code. The verifier suite and the hold-evaluator suite keep their own inline
+# copies on purpose: each pins its own exact argv.
 # Answers ONLY these argv shapes (every other argv is refused with exit 64 after logging STUB-MISS), all reads:
 #   repo view --json nameWithOwner --jq .nameWithOwner
 #   api repos/<o>/<r>/issues/comments/<id> | collaborators/<login>/permission | issues/<n>
-#   pr view <n> --json state,mergeCommit,baseRefName
-#   run list --workflow <wf> --status <s> --limit 5 --json databaseId
-#   run list --workflow <wf> --commit <sha> --limit 5 --json status,conclusion
-# State comes from files in $STUB_DIR (comment-<id>.json, perm-<login>.json, issue-<n>.json, repo.txt, pr-<n>.json,
-# runs-<wf>-<status>.json, green-<wf>-<sha>.json); mode-<what> files hold `404` or `net` to simulate a failure;
-# a `slow` file makes every call hang for 30 s (timeout rows).
+# State comes from files in $STUB_DIR (comment-<id>.json, perm-<login>.json, issue-<n>.json, repo.txt); a mode-<what> file
+# (mode-repo, mode-comment-<id>, mode-perm, mode-issue) holds `404` or `net` to simulate a failure.
 d="${STUB_DIR:?}"
 echo "$*" >> "$d/calls.log"
-[ -f "$d/slow" ] && sleep 30
 miss() { echo "STUB-MISS $*" >> "$d/calls.log"; echo "gh stub: unsupported argv: $*" >&2; exit 64; }
 fail_mode() {
   case "$(cat "$d/$1" 2>/dev/null)" in
@@ -20,19 +17,6 @@ fail_mode() {
   esac
 }
 if [ "$*" = "repo view --json nameWithOwner --jq .nameWithOwner" ]; then fail_mode mode-repo; cat "$d/repo.txt"; exit 0; fi
-if [ "${1:-} ${2:-}" = "pr view" ]; then
-  [ "$#" -eq 5 ] && [ "$4" = "--json" ] && [ "$5" = "state,mergeCommit,baseRefName" ] || miss "$@"
-  fail_mode mode-pr; [ -f "$d/pr-$3.json" ] || { echo "no pull request found" >&2; exit 1; }; cat "$d/pr-$3.json"; exit 0
-fi
-if [ "${1:-} ${2:-}" = "run list" ]; then
-  if [ "$#" -eq 10 ] && [ "$3" = "--workflow" ] && [ "$5" = "--status" ] && [ "$7" = "--limit" ] && [ "$8" = "5" ] && [ "$9" = "--json" ] && [ "${10}" = "databaseId" ]; then
-    fail_mode mode-run; f="$d/runs-$4-$6.json"; if [ -f "$f" ]; then cat "$f"; else echo '[]'; fi; exit 0
-  fi
-  if [ "$#" -eq 10 ] && [ "$3" = "--workflow" ] && [ "$5" = "--commit" ] && [ "$7" = "--limit" ] && [ "$8" = "5" ] && [ "$9" = "--json" ] && [ "${10}" = "status,conclusion" ]; then
-    fail_mode mode-run; f="$d/green-$4-$6.json"; if [ -f "$f" ]; then cat "$f"; else echo '[]'; fi; exit 0
-  fi
-  miss "$@"
-fi
 [ "$#" -eq 2 ] && [ "$1" = api ] || miss "$@"
 p="$2"
 case "$p" in
