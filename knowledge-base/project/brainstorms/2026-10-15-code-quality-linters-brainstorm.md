@@ -5,7 +5,7 @@ Lane: cross-domain · Baseline: `knowledge-base/engineering/audits/2026-10-14-gi
 
 ## What We're Building
 
-Four independently shippable slices that turn the 2026-10-14 CodeQL Code Quality baseline (169 findings, 22 rules) into deterministic signal:
+Four independently shippable slices (the plan later split PR3 into 3a and 3b, so five PRs; and PR2 grew to five scripts, adding `incident/scripts/redact-engine.py`) that turn the 2026-10-14 CodeQL Code Quality baseline (169 findings, 22 rules) into deterministic signal:
 
 1. **PR1 — triage the two `js/comparison-between-incompatible-types` findings** in `apps/web-platform/server/account-delete.ts` and `dsar-export.ts` (Art. 17 / Art. 15 code). Failing test first, then fix or dismiss with a stated reason.
 2. **PR2 — shipped plugin scripts: replace silent handlers with logged ones**, surgical only. Shipped scripts with empty handlers: `playwright-mcp-redact-proxy.py`, `founder-check.py`, `resolve-debt.py`, `scan-ancestor-signal-helpers.py`. Behavior (fail-closed paths) must not change.

@@ -30,7 +30,7 @@ GitHub Code Quality reported 169 open findings (22 rules) on `main`. Most are re
 ## Functional Requirements
 
 - **FR1 (PR1):** Both comparison findings located (GitHub UI), each with a failing test or a documented dismissal reason; `gdpr-gate` run on the diff.
-- **FR2 (PR2):** `playwright-mcp-redact-proxy.py`, `founder-check.py`, `resolve-debt.py`, `scan-ancestor-signal-helpers.py`: empty handlers gain logging; proxy test suite passes; fail-closed paths unchanged.
+- **FR2 (PR2):** `playwright-mcp-redact-proxy.py`, `founder-check.py`, `resolve-debt.py`, `scan-ancestor-signal-helpers.py` and `incident/scripts/redact-engine.py`: empty handlers gain logging; proxy test suite passes; fail-closed paths unchanged.
 - **FR3 (PR3a):** ruff CI + lefthook step (`glob: "**/*.py"`) scoped to shipped Python, excluding `knowledge-base/**`; root eslint config covering `test/` and `plugins/soleur/test/`; ratchet keyed on `file:rule` plus content anchor, tool versions pinned.
 - **FR4 (PR3b):** `work` and `review` detect the project's eslint/ruff config, run it on changed files only, report the changed-line delta, and emit "no linter configured" when none exists.
 - **FR5 (PR4):** ADR-276 S5 amendment from a rule-by-rule overlap table of the 22 rules; `knowledge-base/operations/expenses.md` records Code Quality billing.

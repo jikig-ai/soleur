@@ -97,7 +97,7 @@ Create`; no body references any of them.
    `apps/web-platform/test/` driving the guard with the input class the comparison distinguishes
    (e.g. `CrossTenantViolation` for a foreign `invitee_user_id`; `refused`/`unauthorized` erasure
    outcomes set `gitDataErasurePending`). Run `soleur:gdpr-gate` on the diff.
-3. **Decide per site.** Real bug: fix, test green. False positive: dismiss the alert through the
+3. **Decide per site.** Real bug: fix, test green. Redundant-but-harmless check (outcome on `account-delete.ts`): remove the check with a test pinning the surrounding contract. False positive: dismiss the alert through the
    same browser automation with the stated reason (so it stops feeding PR4's counts), link the
    dismissal in the PR body, and change no production code. If a guard is shown defeatable: **PR1
    halts**, the CLO assesses the Art. 33 72-hour clock, and PR2 to PR4 proceed independently (they

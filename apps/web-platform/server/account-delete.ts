@@ -846,7 +846,7 @@ export async function deleteAccount(
         extra: { userId },
         message: "anonymise_organization_membership failed — aborting deletion",
       });
-      // `anonOrgErr` is truthy here (the enclosing `if`), so it cannot be null.
+      // Truthy here (the enclosing `if`), so never null.
       const detail = typeof anonOrgErr === "object" && "message" in anonOrgErr ? (anonOrgErr as { message: string }).message : String(anonOrgErr);
       return { success: false, error: `Account deletion failed at anonymise-organization-membership: ${detail}` };
     }

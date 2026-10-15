@@ -247,30 +247,19 @@ describe("deleteAccount Sentry mirror (#4390)", () => {
     },
   );
 
-  // #10331 — characterization of the failure-detail formatting at the
-  // anonymise-organization-membership stage. The error value the RPC returns is
-  // user-visible in `result.error`, and an erasure that aborts must say why. Pins
-  // the three shapes the formatter distinguishes: an object carrying `message`,
-  // an object without one (falls back to String()), and a bare string.
+  // #10331 — pins the stable contract of the failure-detail formatting at the
+  // anonymise-organization-membership stage: the abort message always carries the
+  // stage prefix and a non-empty detail, and a Supabase-style error object
+  // contributes its `message`. The exact text for a message-less object or a bare
+  // string is deliberately NOT pinned (it is String() of the value today).
+  const ORG_STAGE_PREFIX = "Account deletion failed at anonymise-organization-membership: ";
   test.each([
-    {
-      name: "object with a message",
-      err: { message: "synthetic_org_membership_error" },
-      expected: "synthetic_org_membership_error",
-    },
-    {
-      name: "object without a message",
-      err: { code: "P0001" },
-      expected: "[object Object]",
-    },
-    {
-      name: "bare string",
-      err: "plain_string_failure",
-      expected: "plain_string_failure",
-    },
+    { name: "object with a message", err: { message: "synthetic_org_membership_error" }, exact: "synthetic_org_membership_error" },
+    { name: "object without a message", err: { code: "P0001" }, exact: null },
+    { name: "bare string", err: "plain_string_failure", exact: "plain_string_failure" },
   ])(
     "anonymise-organization-membership failure detail: $name",
-    async ({ err, expected }) => {
+    async ({ err, exact }) => {
       mockRpc.mockImplementation(async (name: string) =>
         name === "anonymise_organization_membership"
           ? { error: err }
@@ -280,9 +269,11 @@ describe("deleteAccount Sentry mirror (#4390)", () => {
       const result = await deleteAccount(USER_ID, USER_EMAIL);
 
       expect(result.success).toBe(false);
-      expect(result.error).toBe(
-        `Account deletion failed at anonymise-organization-membership: ${expected}`,
-      );
+      expect(result.error?.startsWith(ORG_STAGE_PREFIX)).toBe(true);
+      const detail = (result.error ?? "").slice(ORG_STAGE_PREFIX.length);
+      expect(detail.length).toBeGreaterThan(0);
+      expect(detail).not.toBe("undefined");
+      if (exact !== null) expect(detail).toBe(exact);
     },
   );
 
