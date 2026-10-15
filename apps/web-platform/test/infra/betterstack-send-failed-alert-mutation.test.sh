@@ -269,7 +269,7 @@ expect_red "M8 (source id 2457082)" betterstack-logs-alerts.tf "source id != vec
 # premise is asserted directly below, so a reordered file cannot make "the first" mean another block.
 MUT='
 old = "    values        = [local.vector_prd_source_id]"
-assert s.count(old) == 13, "anchor"
+assert s.count(old) == 14, "anchor"
 assert s.index(old) > s.index("resource \"logtail_exploration\" \"monitor_send_failed\" {") and s.index(old) < s.index("resource \"logtail_exploration\" \"inngest_luks_wrong_volume\" {"), "first occurrence is not in monitor_send_failed"
 s = s.replace(old, "    values        = [\"2734275\"]", 1)'
 expect_red "M17 (exploration values literal, not the pinned local)" betterstack-logs-alerts.tf "exploration source not pinned"

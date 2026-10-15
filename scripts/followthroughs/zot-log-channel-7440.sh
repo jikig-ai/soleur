@@ -9,11 +9,20 @@
 # from the directive comment on #7455, so this reference is for a human reader; changing it does not
 # re-route the probe.
 #
+# STATUS CORRECTED 2026-10-15 (#10321): the "stays enrolled as a REGRESSION detector" sentence
+# this paragraph once carried was FALSE from ~2026-08-27 on — tracker #7455 closed 2026-08-13 and
+# scripts/sweep-followthroughs.sh reads only open issues plus closed ones inside
+# CLOSED_LOOKBACK_DAYS=14, so the sweeper has not invoked this file since. The standing
+# credential-shape check (the exit-1 arm's three shapes: unmasked Authorization, dp.(pt|st|sa|ct).
+# prefix with substance, bcrypt) now lives in
+# logtail_exploration_alert.registry_zot_log_credential_shape (ADR-218 vehicle; runbook
+# knowledge-base/engineering/operations/runbooks/registry-zot-credential-shape-10321.md). This
+# file remains the MANUAL deep-grader — runnable under scripts/betterstack-query.sh with
+# BETTERSTACK_QUERY_* env. Everything from here to the exit contract is the ORIGINAL pre-delivery
+# framing, kept because the arms still work when invoked by hand; read it as history, not as
+# current state.
 # STATUS AS OF 2026-08-12 (#7455): CLOSED. The condition below was met — first PASS 21:03:51Z, and
-# ADR-184 is now `accepted`. This probe stays enrolled as a REGRESSION detector: a future replace
-# can legitimately return the channel to not-delivered, and the arms below must keep working.
-# Everything from here to the exit contract is the ORIGINAL pre-delivery framing, kept because the
-# arms are still live; read it as history, not as current state.
+# ADR-184 is now `accepted`.
 #
 # WHAT IT CLOSED. ADR-184 shipped at status `adopting`. Its flip condition is an OBSERVED
 # envelope-stamped row read back OUT of the warehouse. That cannot happen before merge:
