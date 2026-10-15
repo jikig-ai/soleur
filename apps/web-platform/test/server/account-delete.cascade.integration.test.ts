@@ -135,6 +135,9 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           founder_id: user.id,
           action_class: CASCADE_ACTION_CLASS,
           tier: "draft_one_click",
+          // mig 059: workspace_id NOT NULL + solo-canary CHECK
+          // (workspace_id = founder_id for the solo-canary backfill shape).
+          workspace_id: user.id,
         })
         .select("id");
       expect(grantErr, "scope_grants seed").toBeNull();
