@@ -807,7 +807,9 @@ mutate_tol "G1-H1s the final line keeps its trailing comma" final-trailing-comma
 mutate_tol "G1-H1t the final line keeps its leading comma" final-leading-comma
 mutate_tol "G1-H1u the final line drops the skip_legs suffix" final-no-skip-legs
 mutate_tol "G1-H1v the all-six sentence is reworded (byte identity)" six-green-reworded
-# ADR-276 S4 follow-up (#9729), Guard 3 (matrix rows 1 to 3), each with NEW probe rows p23..p25 above.
+# ADR-276 S4 follow-up (#9729), Guard 3 (matrix rows 1 to 3). Measured at review: p23 is the one probe H1w needs (without it H1w survives); H1x is the union of two
+# existing operators and H1y is killed by the existing p1..p22, so p24, p24b, p24c and p25 are NOT additional kills. They are kept because they pin the state this PR
+# creates (a skipped pr-selection: empty outputs, each gateable leg skipped, then all green) through the real body, and they are counted in MIN_ROWS, not credited as kill power.
 mutate_tol "G1-H1w HEAD_SHA_OK loosened to != false (its empty spelling reads as bound)" head-loose-empty
 mutate_tol "G1-H1x COMPOUND: the outer tolerance condition removed AND any skipped leg tolerated" compound-outer-removed-tolerate-skipped
 mutate_tol "G1-H1y the tolerated banner printed when nothing was tolerated" banner-when-none-tolerated

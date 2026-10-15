@@ -91,7 +91,8 @@ DL_GATED_PINNED="shard-totality-mutations test-scripts test-scripts-heavy test-w
 # earlier term (draft-light's included), so the existing `!cancelled()` / push-dedupe / draft-light terms stay verbatim. The term is written
 # ONCE here (a prefix; the leg name and the closing `,'))` are appended) and chk.py, the truth table and the mutants all derive from it.
 PR_GATED_PINNED="test-bun test-scripts-heavy test-webplat"
-PR_T_EV="github.event_name == 'pull_request' && "
+PRSEL_EV="github.event_name == 'pull_request'"   # the ONE owner of the event predicate (the job-level PRSEL_IF below and the gated PR term both derive from it)
+PR_T_EV="$PRSEL_EV && "
 PR_T_AC="needs.pr-selection.outputs.active == 'true' && "
 PR_T_HN="needs.pr-selection.outputs.head_sha != '' && "
 PR_T_HE="needs.pr-selection.outputs.head_sha == github.event.pull_request.head.sha && "
@@ -101,7 +102,6 @@ pr_term() { printf "%s%s,'))" "$PR_TERM_PRE" "$1"; }
 # chk.py's P-JOBIF pin, the nine `y-prsel-*` mutant anchors, `y-budget-10` and the dark-equivalence mutants all derive from it, so changing the
 # condition is one edit in ci.yml and one here. `!= ''` and not `== 'on'` on purpose: Actions compares strings without regard to case, so the
 # exact `on` compare stays in the driver's bash and this term only tests "non-empty" (an undefined variable reads as an empty string).
-PRSEL_EV="github.event_name == 'pull_request'"
 PRSEL_VAR="vars.CI_PR_AFFECTED != ''"
 PRSEL_IF="$PRSEL_EV && $PRSEL_VAR"
 # sha256 of the `test` aggregator job minus its `needs` and `if`, as json.dumps(sort_keys=True), measured
@@ -338,20 +338,22 @@ if mode == "prcensus":
     # A step-level `if:`, a matrix `exclude`, a job `env:` or any other consumer inside a gated job could skip individual steps while the job
     # still concludes `success`, a reduced run the aggregator would never see as a `skipped` leg.
     d, jobs = load()
-    pat = re.compile(r"needs\.pr-selection\b|needs\[\s*['\"]pr-selection['\"]\s*\]")
-    found = {}
-    def walk(node, loc):
-        if isinstance(node, dict):
-            for k, v in node.items():
-                walk(v, loc + (str(k),))
-        elif isinstance(node, list):
-            for i, v in enumerate(node):
-                nm = v.get("name") if isinstance(v, dict) and isinstance(v.get("name"), str) else None
-                walk(v, loc + ("[%s]" % (nm if nm is not None else i),))
-        else:
-            n = len(pat.findall(str(node)))
-            if n: found[".".join(loc)] = found.get(".".join(loc), 0) + n
-    walk(d.get("jobs") or {}, ())
+    def census(pat):
+        found = {}
+        def walk(node, loc):
+            if isinstance(node, dict):
+                for k, v in node.items():
+                    walk(v, loc + (str(k),))
+            elif isinstance(node, list):
+                for i, v in enumerate(node):
+                    nm = v.get("name") if isinstance(v, dict) and isinstance(v.get("name"), str) else None
+                    walk(v, loc + ("[%s]" % (nm if nm is not None else i),))
+            else:
+                n = len(pat.findall(str(node)))
+                if n: found[".".join(loc)] = found.get(".".join(loc), 0) + n
+        walk(d.get("jobs") or {}, ())
+        return found
+    found = census(re.compile(r"needs\.pr-selection\b|needs\[\s*['\"]pr-selection['\"]\s*\]"))
     want = {"%s.if" % n: 4 for n in PRGATED}
     want.update({"test.steps.[Aggregate shard results].env.SKIP_LEGS": 1, "test.steps.[Aggregate shard results].env.ACTIVE": 1,
                  "test.steps.[Aggregate shard results].env.HEAD_SHA_OK": 2})
@@ -360,6 +362,16 @@ if mode == "prcensus":
         for k in sorted(set(found) | set(want)):
             if found.get(k, 0) != want.get(k, 0): tags.append("C-REF:%s:%d" % (k, found.get(k, 0)))
     if sum(found.values()) != 16: tags.append("C-TOTAL:%d" % sum(found.values()))
+    # THE SWITCH ITSELF and the whole-context reads. The census above matches only `needs.pr-selection` / `needs['pr-selection']`, so a direct
+    # reader of the repository variable (a step-level `if: vars.CI_PR_AFFECTED == 'on'` on a gated job's test step, a job `env:` carrying it) or a
+    # whole-context read (`toJSON(needs)`, `needs.*.result`) changes which work runs while the switch is unset and the job still concludes
+    # `success`. Exactly two reads of the variable may exist: the pr-selection job-level `if:` and the `SWITCH:` env of its step; no whole-context
+    # read of `needs` or `vars` may exist at all.
+    found2 = census(re.compile(r"CI_PR_AFFECTED|toJSON\(\s*(?:needs|vars)\b|\bneeds\.\*|\bvars\.\*"))
+    sw_keys = [k for k in found2 if k.startswith("pr-selection.steps.") and k.endswith(".env.SWITCH")]
+    if found2.get("pr-selection.if") != 1 or len(sw_keys) != 1 or found2[sw_keys[0]] != 1 or sum(found2.values()) != 2:
+        for k in sorted(found2): tags.append("C-VARS:%s:%d" % (k, found2[k]))
+        tags.append("C-VARS-TOTAL:%d" % sum(found2.values()))
     print(" ".join(tags)); sys.exit(0)
 
 if mode == "legparity":
@@ -484,7 +496,8 @@ if mode == "darkequiv":
     d, jobs = load()
     tags = []
     EVENTS = ("push", "pull_request", "merge_group", "workflow_dispatch")
-    VARS = (("unset", ""), ("empty", ""), ("on", "on"), ("ON", "ON"), ("zero", "0"), ("on-sp", "on "))
+    VARS = (("unset", ""), ("empty", ""),  # the same input twice on purpose: an undefined variable reads as the empty string, so both names pin it
+    ("on", "on"), ("ON", "ON"), ("zero", "0"), ("on-sp", "on "))
     PIN = {"unset": False, "empty": False, "on": True, "ON": True, "zero": True, "on-sp": True}
     job = jobs.get("pr-selection")
     if job is None:
@@ -516,7 +529,8 @@ if mode == "darkequiv":
                                 rows += 1
                                 if skipped is None or ran is None: tags.append("DE-ERR:%s" % n)
                                 elif skipped != ran: tags.append("DE-CONS:%s:%s" % (n, event))
-    if not cons or rows < 500: tags.append("DE-VACUOUS:%d" % rows)
+    # the real row count is about 1750 (4 consumers x 432 + the 24 job rows); the floor sits just under it so halving any dimension of the table is a tag
+    if not cons or rows < 1700: tags.append("DE-VACUOUS:%d" % rows)
     print(" ".join(sorted(set(tags)))); sys.exit(0)
 
 if mode == "agg":
@@ -1219,23 +1233,38 @@ if python3 "$SANDBOX/mut.py" "$WF" "$SANDBOX/mut/budget10.yml" "  pr-selection:
     timeout-minutes: 10" 2>/dev/null; then
   case "$(budget_tag "$SANDBOX/mut/budget10.yml")" in B-PATH:*) MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass ;; *) fail "MUTANT y-budget-10: a 10-minute pr-selection did not lengthen the declared path as measured (got: $(budget_tag "$SANDBOX/mut/budget10.yml"))" ;; esac
 else fail "MUTANT y-budget-10: mutation did NOT land"; fi
-# ADR-276 S4 follow-up (#9729), Guard 2: the job-level condition and the dark equivalence. Rows 1 to 4 are all caught by the single P-JOBIF equality
-# (ONE structural detector); the independent evidence is `darkequiv` (MODEL, not verified live), whose `zero` row kills `== 'on'` without leaning on
-# Actions' case-insensitivity. Rows 5 and 6 edit a GATED job (the lost-coverage direction), the second after a compliant first one.
+# ADR-276 S4 follow-up (#9729), Guard 2: the job-level condition and the dark equivalence. The eight job-`if` mutants (four edits, each driven twice)
+# are caught by the single P-JOBIF equality (ONE structural detector) and, independently, by `darkequiv` (MODEL, not verified live), whose `zero` row
+# kills `== 'on'` without leaning on Actions' case-insensitivity. The three gated-job mutants edit a GATED job (the lost-coverage direction), the
+# last after a compliant first one. The three y-vars-* mutants drive the switch census: a direct reader of the variable or of a whole context.
 prsel_hdr() { printf '  pr-selection:\n    if: %s\n    continue-on-error: true' "$1"; }
 PRSEL_HDR_OLD="$(prsel_hdr "$PRSEL_IF")"
-mutate_yml y-pj-var-removed "$PRSEL_HDR_OLD" "$(prsel_hdr "$PRSEL_EV")" prsel P-JOBIF
-mutate_yml y-pj-var-removed-dark "$PRSEL_HDR_OLD" "$(prsel_hdr "$PRSEL_EV")" darkequiv DE-JOB:pull_request:unset
-mutate_yml y-pj-event-removed "$PRSEL_HDR_OLD" "$(prsel_hdr "$PRSEL_VAR")" prsel P-JOBIF
-mutate_yml y-pj-event-removed-dark "$PRSEL_HDR_OLD" "$(prsel_hdr "$PRSEL_VAR")" darkequiv DE-JOB:push:
-mutate_yml y-pj-equals-on "$PRSEL_HDR_OLD" "$(prsel_hdr "$PRSEL_EV && vars.CI_PR_AFFECTED == 'on'")" prsel P-JOBIF
-mutate_yml y-pj-equals-on-dark "$PRSEL_HDR_OLD" "$(prsel_hdr "$PRSEL_EV && vars.CI_PR_AFFECTED == 'on'")" darkequiv DE-JOB:pull_request:zero
-mutate_yml y-pj-inverted "$PRSEL_HDR_OLD" "$(prsel_hdr "$PRSEL_EV && vars.CI_PR_AFFECTED == ''")" prsel P-JOBIF
-mutate_yml y-pj-inverted-dark "$PRSEL_HDR_OLD" "$(prsel_hdr "$PRSEL_EV && vars.CI_PR_AFFECTED == ''")" darkequiv DE-JOB:pull_request:unset
+mutate_yml y-prsel-if-var-removed "$PRSEL_HDR_OLD" "$(prsel_hdr "$PRSEL_EV")" prsel P-JOBIF
+mutate_yml y-prsel-if-var-removed-dark "$PRSEL_HDR_OLD" "$(prsel_hdr "$PRSEL_EV")" darkequiv DE-JOB:pull_request:unset
+mutate_yml y-prsel-if-event-removed "$PRSEL_HDR_OLD" "$(prsel_hdr "$PRSEL_VAR")" prsel P-JOBIF
+mutate_yml y-prsel-if-event-removed-dark "$PRSEL_HDR_OLD" "$(prsel_hdr "$PRSEL_VAR")" darkequiv DE-JOB:push:
+mutate_yml y-prsel-if-equals-on "$PRSEL_HDR_OLD" "$(prsel_hdr "$PRSEL_EV && vars.CI_PR_AFFECTED == 'on'")" prsel P-JOBIF
+mutate_yml y-prsel-if-equals-on-dark "$PRSEL_HDR_OLD" "$(prsel_hdr "$PRSEL_EV && vars.CI_PR_AFFECTED == 'on'")" darkequiv DE-JOB:pull_request:zero
+mutate_yml y-prsel-if-inverted "$PRSEL_HDR_OLD" "$(prsel_hdr "$PRSEL_EV && vars.CI_PR_AFFECTED == ''")" prsel P-JOBIF
+mutate_yml y-prsel-if-inverted-dark "$PRSEL_HDR_OLD" "$(prsel_hdr "$PRSEL_EV && vars.CI_PR_AFFECTED == ''")" darkequiv DE-JOB:pull_request:unset
 NEED_OK=" && needs.pr-selection.result == 'success'"
-mutate_yml y-pj-gated-needs-result "$PRT_BUN" "$PRT_BUN$NEED_OK" darkequiv DE-CONS:test-bun:pull_request
-mutate_yml y-pj-gated-needs-result-gcond "$PRT_BUN" "$PRT_BUN$NEED_OK" gated G-COND:test-bun
-mutate_yml y-pj-gated-second-job "$(pr_term test-scripts-heavy)" "$(pr_term test-scripts-heavy)$NEED_OK" darkequiv DE-CONS:test-scripts-heavy:pull_request
+mutate_yml y-prsel-if-gated-needs-result "$PRT_BUN" "$PRT_BUN$NEED_OK" darkequiv DE-CONS:test-bun:pull_request
+mutate_yml y-prsel-if-gated-needs-result-gcond "$PRT_BUN" "$PRT_BUN$NEED_OK" gated G-COND:test-bun
+mutate_yml y-prsel-if-gated-second-job "$(pr_term test-scripts-heavy)" "$(pr_term test-scripts-heavy)$NEED_OK" darkequiv DE-CONS:test-scripts-heavy:pull_request
+# the switch census (structural seat, review of #10341): none of these touches `needs.pr-selection`, so only `prcensus` can see them
+BUN_RUN="      - name: Run bun-side tests
+        run: bash scripts/test-all.sh bun"
+mutate_yml y-vars-step-if "$BUN_RUN" "      - name: Run bun-side tests
+        if: \${{ vars.CI_PR_AFFECTED == 'on' }}
+        run: bash scripts/test-all.sh bun" prcensus C-VARS:test-bun.steps.
+BUN_RUN_ENV="        run: bash scripts/test-all.sh bun
+        env:
+          GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}"
+mutate_yml y-vars-job-env "$BUN_RUN_ENV" "$BUN_RUN_ENV
+          SW: \${{ vars.CI_PR_AFFECTED }}" prcensus C-VARS:test-bun.steps.
+mutate_yml y-vars-toJSON-needs "$BUN_RUN" "      - name: Run bun-side tests
+        if: \${{ !contains(toJSON(needs), 'active') }}
+        run: bash scripts/test-all.sh bun" prcensus C-VARS-TOTAL:3
 mutate_yml y-extra-gated "    needs: detect-changes
     if: needs.detect-changes.outputs.docs == 'true'
 " "    needs: detect-changes
@@ -1327,8 +1356,8 @@ fi
 # ── Mutant accounting and measured counts ────────────────────────────────────
 if [ "$MUT_RUN" -eq "$MUT_CAUGHT" ]; then pass
 else fail "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught)"; fi
-if [ "$MUT_RUN" -ge 105 ] && [ "$EQUIV_RUN" -eq 2 ] && [ "$EQUIV_OK" -eq 2 ]; then pass
-else fail "MUTANT FLOOR: $MUT_RUN mutants and controls ran (floor 105), $EQUIV_OK of $EQUIV_RUN equivalent mutants confirmed (want 2 of 2)"; fi
+if [ "$MUT_RUN" -ge 108 ] && [ "$EQUIV_RUN" -eq 2 ] && [ "$EQUIV_OK" -eq 2 ]; then pass
+else fail "MUTANT FLOOR: $MUT_RUN mutants and controls ran (floor 108), $EQUIV_OK of $EQUIV_RUN equivalent mutants confirmed (want 2 of 2)"; fi
 
 # ── Assertion floor ──────────────────────────────────────────────────────────
 # DELIBERATELY NOT ROUTED THROUGH fail(): a floor that increments the counter it guards shares a
@@ -1337,7 +1366,7 @@ else fail "MUTANT FLOOR: $MUT_RUN mutants and controls ran (floor 105), $EQUIV_O
 # KEEP THESE TWO ASSIGNMENTS CONTIGUOUS (no comment between them or before the `if`):
 # scripts/guard-vacuity-floor.test.sh binds a floor's variables by walking BACKWARD from the `if`.
 _total=$((passes + fails))
-_FLOOR=202
+_FLOOR=205
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf 'FAIL: assertion floor: %d assertion(s) ran, floor is %d — the harness lost coverage rather than passing it\n' \
     "$_total" "$_FLOOR" >&2

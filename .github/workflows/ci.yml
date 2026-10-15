@@ -338,12 +338,16 @@ jobs:
   #
   # SWITCHED OFF, THEN DARK AND LOCKED. While the repository variable CI_PR_AFFECTED is unset or empty the job is SKIPPED (no runner, no
   # checkout, no dark cost): an undefined variable reads as an empty string in a job-level `if:`, so `vars.CI_PR_AFFECTED != ''` is false.
-  # The condition only tests "non-empty" on purpose: Actions compares strings WITHOUT regard to case, so `== 'on'` would also accept `ON`;
-  # do not simplify it. A skipped job is full CI (the state of every push, merge_group and workflow_dispatch run): the gated jobs keep
-  # `!cancelled()` and negate a term that needs non-empty outputs, and the `test` aggregator tolerates a skip only on ACTIVE == "true".
+  # The condition only tests "non-empty" on purpose: Actions compares strings WITHOUT regard to case, so the YAML cannot be the exact-value
+  # gate (`== 'on'` would run the job for `ON` too); the exact compare lives in the driver, where a mistyped value shows up as `switch=invalid`.
+  # Cost of that choice: ANY non-empty value, including `off` or `0`, runs the job (a runner and a checkout, about one billed minute) -
+  # to turn the lever off, DELETE the variable. The unset claim is about the repository variable; an organization variable of the same
+  # name would also resolve through `vars`. A skipped job is full CI (the state of every push, merge_group and workflow_dispatch run): the
+  # gated jobs keep `!cancelled()` and negate a term that needs non-empty outputs, and the `test` aggregator tolerates a skip only on
+  # ACTIVE == "true".
   # When the variable is set to any non-empty value the job runs; the driver always runs stage 1 (the pure-bash allowlist) and runs
-  # stage 2 (the selector) only for the exact, case-sensitive value `on`; any other value reports `reason=switch_off` on a doc-only diff
-  # with no selector call. Even with `on`, a literal activation lock inside the driver keeps `active=false` until PR C removes it in its
+  # stage 2 (the selector) only for the exact, case-sensitive value `on`; any other value makes no selector call and, on a doc-only diff
+  # that passed the paths cap, reports `reason=switch_off` (a code diff keeps its stage-1 reason; `switch=invalid` is on every notice). Even with `on`, a literal activation lock inside the driver keeps `active=false` until PR C removes it in its
   # last commit, so this PR alone is not activatable. Activation is a separate, authorized step (ADR-276 S4).
   # `sel_s` is no longer measured on every run: it is 0 whenever stage 2 did not run, and where stage 2 does run on a cold hosted runner it
   # can hit its budget (the canary run logged `reason=selector_timeout sel_s=90`), so it is a LOWER BOUND whenever `sel_censored=1`. The one

@@ -17,7 +17,7 @@
 # 1 with reason switch_off and ZERO stub calls, while every stage-1 reason is unchanged), and the must-PASS row: a legitimately
 # doc-only knowledge-base diff with SWITCH=on reaches stage 2 and shows would-skip evidence while skip_legs stays EMPTY (locked).
 # THE HARNESS DEFAULT IS SWITCH=on (drive() builds its environment from it; a row that wants the off-switch contract passes
-# SWITCH=<value> or the sentinel UNSET:SWITCH, which removes the variable): with the default left empty, 104 rows would test
+# SWITCH=<value> or the sentinel UNSET:SWITCH, which removes the variable): with the default left empty, the pre-existing rows would test
 # the old contract. row_switch_gate / row_switch_gate_unlocked carry the off-switch contract.
 # Also pinned here: the mode-aware stage 1 (a symlink or gitlink is `non_doc_mode`, a mode flip on a doc .md stays doc), the
 # narrowed allowlist (`knowledge-base/**/*.md` or a root `*.md`, the NAME ends in `.md`), non-ASCII paths, the selector child
@@ -322,6 +322,8 @@ fx_case docren; fx_op docren R "plugins/soleur/docs/zzleak-page.md" "plugins/sol
 fx_case docdel; fx_op docdel D "plugins/soleur/docs/zzleak-del.md"; fx_done docdel
 fx_case docmod; fx_op docmod M "plugins/soleur/docs/zzleak-page.md"; fx_done docmod
 fx_case code; fx_op code M "apps/web-platform/zzleak-app.ts"; fx_done code
+# docfirst: a doc path that SORTS BEFORE a non-doc path (knowledge-base/ < scripts/): a gate placed inside the stage-1 loop would see the doc first
+fx_case docfirst; fx_op docfirst M "$KB_A"; fx_op docfirst M "scripts/zzleak-docfirst.sh"; fx_done docfirst
 fx_case legal; fx_op legal M "docs/legal/zzleak-terms.md"; fx_done legal
 fx_case mk; fx_op mk M Makefile; fx_done mk
 fx_case e2ec; fx_op e2ec M "scripts/ci-e2e-classify.sh"; fx_done e2ec
@@ -843,9 +845,9 @@ row_skip_gated_on_active() {  # skip_legs is written ONLY when active=true
   drive k1 "$d" "SWITCH=on"
   check_eq "skip_legs only when active (switch on, locked: stage 2 produced would_skip=$ALL)" "$O_SKIP" ""
   drive k1 "$d" "SWITCH="
-  check_eq "skip_legs only when active (switch unset)" "$O_SKIP" ""
+  check_eq "skip_legs only when active (switch unset: stage 2 never runs, a stage-1 invariant; only the SWITCH=on leg kills the skip_legs mutant)" "$O_SKIP" ""
   drive k1 "$d" "SWITCH=ON"
-  check_eq "skip_legs only when active (switch ON)" "$O_SKIP" ""
+  check_eq "skip_legs only when active (switch ON: stage 2 never runs, a stage-1 invariant)" "$O_SKIP" ""
 }
 row_defaults_first() {  # G2-6 / G2-12: a step killed anywhere leaves exactly the defaults (adversarial config: unlocked + on)
   local d="$1" at
@@ -1213,7 +1215,7 @@ row_switch_gate() {  # G2-16 (Guard 1): stage 2 (EVERY selector call) runs ONLY 
     check_eq "G2-16 SWITCH=on ($f), locked (AC4): the notice says switch=on locked=true" "$N_SWITCH/$N_LOCKED" "on/true"
   done
   # AC3: stage 1 is unchanged while the switch is off: the same reason and files as with SWITCH=on, and no selector call either way
-  for s in "code:" "legal:" "mk:" "docmod:" "trg0:" "empty:" "k1:HEAD_REPO=x/other" "k1:RUN_ATTEMPT=2" "n501:"; do
+  for s in "code:" "legal:" "mk:" "docfirst:" "docmod:" "trg0:" "empty:" "k1:HEAD_REPO=x/other" "k1:RUN_ATTEMPT=2" "n501:"; do
     f="${s%%:*}"; a="${s#*:}"; x=(); [ -z "$a" ] || x=("$a")
     for b in "UNSET:SWITCH" "SWITCH="; do
       drive "$f" "$d" "$b" "${x[@]}"
@@ -1433,16 +1435,20 @@ mutate "G2-2 ci.yml dropped from the list AND .github/workflows/* allowlisted" "
 mutate "G2-5 switch lowercased and trimmed"       "$UNLOCKED" 's|^\[ -z "\${SWITCH:-}" \] \|\| sw=invalid$|SWITCH="${SWITCH:-}"; SWITCH="${SWITCH//[[:space:]]/}"; SWITCH="${SWITCH,,}"\n&|' row_switch
 mutate "G2-5 switch matched by prefix"            "$UNLOCKED" 's|^\[ "\${SWITCH:-}" = on \] && sw=on  # GUARD:G2-5-SWITCH-EXACT$|[[ "${SWITCH:-}" == on* ]] \&\& sw=on|' row_switch
 mutate "G2-5 any non-empty switch arms"           "$UNLOCKED" 's|^\[ "\${SWITCH:-}" = on \] && sw=on  # GUARD:G2-5-SWITCH-EXACT$|[ -n "${SWITCH:-}" ] \&\& sw=on|' row_switch
-# G2-16 (Guard 1): the stage-2 switch gate. Mutants 4 to 6 REORDER the gate (the original two lines are deleted, a copy lands elsewhere), so
-# the mutant differs from the pristine bytes and still compiles. All seven are driven by row_switch_gate against the locked driver.
+# G2-16 (Guard 1): the stage-2 switch gate. The last three mutants REORDER the gate (the original two lines are deleted, a copy lands elsewhere), so
+# the mutant differs from the pristine bytes and still compiles. Nine are driven by row_switch_gate against the locked driver, two by row_switch_gate_unlocked against the lock-neutralized copy.
 _gate_del='/GUARD:G2-16-SWITCH-GATE$/d'$'\n''/^  reason=switch_off$/d'
 mutate "G2-16 the switch gate is deleted (stage 2 runs for every doc-only diff)" "$PRISTINE" "$(kill_guard G2-16-SWITCH-GATE)" row_switch_gate
 mutate "G2-16 the gate is any non-empty switch (ON, off, 1, ' on' run stage 2)" "$PRISTINE" 's#^.*GUARD:G2-16-SWITCH-GATE$#  [ -n "${SWITCH:-}" ] || return 0#' row_switch_gate
 mutate "G2-16 the gate is sw != invalid (an unset or empty switch runs stage 2)" "$PRISTINE" 's#^.*GUARD:G2-16-SWITCH-GATE$#  [ "$sw" != invalid ] || return 0#' row_switch_gate
 mutate "G2-16 the gate is inverted (exactly on stops after stage 1)" "$PRISTINE" 's#^.*GUARD:G2-16-SWITCH-GATE$#  [ "$sw" = on ] \&\& return 0#' row_switch_gate
 mutate "G2-16 REORDER: the gate sits after the --print-selection call (one selector call is paid off-switch)" "$PRISTINE" "$_gate_del"$'\n''/GUARD:G2-9-CI-UNSET$/{n;n;s#$#\n  reason=switch_off\n  [ "$sw" = on ] || return 0#}' row_switch_gate
-mutate "G2-16 REORDER: the gate moves BEFORE stage 1 (a code diff reports switch_off, not its own reason)" "$PRISTINE" "$_gate_del"$'\n''s#^  diagrams=0$#  reason=switch_off\n  [ "$sw" = on ] || return 0\n&#' row_switch_gate   # EQUIVALENT-LABEL (a code diff stops at stage 1 either way: only the reason token differs)
-mutate "G2-16 REORDER: the gate moves BEFORE the paths_too_long cap (an over-cap doc diff reports switch_off)" "$PRISTINE" "$_gate_del"$'\n''s#^  reason=paths_too_long$#  reason=switch_off\n  [ "$sw" = on ] || return 0\n&#' row_switch_gate   # EQUIVALENT-LABEL (an over-cap diff stops before stage 2 either way: only the reason token differs)
+mutate "G2-16 REORDER: the gate moves BEFORE stage 1 (a code diff reports switch_off, not its own reason)" "$PRISTINE" "$_gate_del"$'\n''s#^  diagrams=0$#  reason=switch_off\n  [ "$sw" = on ] || return 0\n&#' row_switch_gate   # EQUIVALENT-LABEL (verified, PRSEL_PROBE_VERBOSE=all: only reason labels turn red): a code diff stops at stage 1 either way, no selector call, same files and active; only the reason token differs
+mutate "G2-16 REORDER: the gate moves BEFORE the paths_too_long cap (an over-cap doc diff reports switch_off)" "$PRISTINE" "$_gate_del"$'\n''s#^  reason=paths_too_long$#  reason=switch_off\n  [ "$sw" = on ] || return 0\n&#' row_switch_gate   # EQUIVALENT-LABEL (verified, PRSEL_PROBE_VERBOSE=all: only reason labels turn red): an over-cap diff stops before stage 2 either way, no selector call, same files and active; only the reason token differs
+mutate "G2-16 REORDER: the gate sits INSIDE the stage-1 loop after the first doc path (a mixed doc-first diff reports switch_off, not its own reason)" "$PRISTINE" "$_gate_del"$'\n''s#^    paths="\${paths:+\$paths,}\$p"$#&\n    reason=switch_off\n    [ "$sw" = on ] || return 0#' row_switch_gate   # EQUIVALENT-LABEL (verified, PRSEL_PROBE_VERBOSE=all: only reason labels turn red): a mixed diff stops at stage 1 either way, no selector call, same files and active; only the reason token differs (the docfirst fixture is the only shape that reaches it)
+mutate "G2-16 REORDER: the gate moves BEFORE the file count (stage 1 no longer counted the diff)" "$PRISTINE" "$_gate_del"$'\n''s#^  files=\$((nul / 2))$#  reason=switch_off\n  [ "$sw" = on ] || return 0\n&#' row_switch_gate
+mutate "G2-16 the gate is bypassed when the lock is absent (the PR C world: every non-on value runs stage 2)" "$UNLOCKED" 's#^.*GUARD:G2-16-SWITCH-GATE$#  [ "$sw" = on ] || [ "$locked" = false ] || return 0#' row_switch_gate_unlocked
+mutate "G2-13 MASKED PAIR: the gate is bypassed AND the arm's own switch test is removed (only the active=false rows can tell)" "$UNLOCKED" 's#^.*GUARD:G2-16-SWITCH-GATE$#  [ "$sw" = on ] || [ "$locked" = false ] || return 0#'$'\n''s# \&\& \[ "\$sw" = on \] \&\& \[ "\$locked" = false \]; then# \&\& [ "$locked" = false ]; then#' row_switch_gate_unlocked
 unset _gate_del
 mutate "G2-13 the lock is not read (locked stays false)" "$PRISTINE" "$(kill_guard G2-13-LOCK-READ)"       row_lock row_must_pass
 mutate "G2-13 the arm ignores the lock"          "$PRISTINE" 's| \&\& \[ "\$locked" = false \]; then  # GUARD:G2-13-ARM$|; then|' row_lock row_must_pass
@@ -1565,14 +1571,14 @@ fi
 # adding or removing a row:
 #   bash scripts/ci-pr-selection.test.sh | tail -1     then   BASE_ROWS = total - ROWS_PER_SOURCED_FILE * sourced_count
 ROWS_PER_SOURCED_FILE=19
-BASE_ROWS=4347
+BASE_ROWS=4413
 MIN_ROWS=$((BASE_ROWS + ROWS_PER_SOURCED_FILE * ${#SOURCED[@]}))
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor: %d rows executed, at least %d required. Rows were removed or a loop stopped early.\n' \
     "$TOTAL" "$MIN_ROWS" >&2
   exit 1
 fi
-MIN_MUTANTS=98
+MIN_MUTANTS=102
 if [ "$MUT_TOTAL" -lt "$MIN_MUTANTS" ]; then
   printf 'FAIL: mutation floor: %d mutants executed, at least %d required.\n' "$MUT_TOTAL" "$MIN_MUTANTS" >&2
   exit 1
