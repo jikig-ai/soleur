@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """ci-pr-affected-replay.py: escape-rate replay and go/no-go arithmetic for S4 PR C (#9729, ADR-276).
 
-READ-ONLY. It never writes to the repository, never sets a variable and never dispatches a workflow.
+READ-ONLY. It never writes to a tracked file, never sets a variable and never dispatches a workflow. It writes only
+under --out, and the selector it runs keeps its own gitignored derive cache under the checkout it reads.
 It answers one question for activation prerequisite 2: if the PROPOSED per-suite rule had been
 applied to the last N first-parent commits of main (and to every queue ejection in the same window),
 how many times would a pull_request run have skipped a suite that the full battery then failed?
@@ -41,11 +42,16 @@ Every remote read goes through `gh api` (a PATH seam for tests); the selector is
 SUBCOMMANDS
   collect      --out DIR [--commits N] [--chunk I/K] [--repo R] [--base REF] [--redo-unevaluable] [--reclassify]
   ejections    --out DIR [--since YYYY-MM-DDTHH:MM:SSZ] [--until YYYY-MM-DDTHH:MM:SSZ] [--commits N] [--repo R] [--base REF] [--redo-unevaluable] [--reclassify]
-  aggregate    DIR [--baseline-min M] [--selector-min S] [--out FILE]
-  verdict      --a S --b S --c S --d S
-  cp-upper     K N [CONF]
-  audit        [--root DIR] [--list FILE]
+  aggregate    DIR [--baseline-min M] [--selector-min S] [--out FILE] [--expect-commits N] [--commits-only]
+  verdict      --a S --b S --c S --d S     (status: pass | fail | within-10% | unmeasured; a and c only for within-10%)
+  cp-upper     K N [CONF]                  (a FRACTION, not a percent: 0.009936 is 0.99%)
+  audit        [--root DIR] [--list FILE] [--accept FILE] [--all-refs]
 The receipt paths are arguments; no repository path literal lives in this file.
+
+EXIT CODES (collect, ejections, aggregate, audit): 0 done and clean; 1 audit found gaps or unaudited suites; 2 usage or
+a value error (a malformed --since, an unknown status, an incomplete aggregate directory); 3 a remote or local READ
+failed; 4 an internal error. `verdict` and `cp-upper` exit 0 whatever they print: read `computed=GO|NO-GO|UNDECIDED`
+on stdout, the exit code carries no verdict. An uncaught Python error is rc 4, never rc 1.
 """
 import argparse
 import hashlib
@@ -65,8 +71,18 @@ RULE_TEXT = (
 RULE_SHA256 = hashlib.sha256(RULE_TEXT.encode()).hexdigest()
 LIST_LIMIT = 100000
 SUITE_JOB = re.compile(r"^test-(scripts|webplat|bun)( \(|$)|^test-scripts-heavy( \(|$)")
-FAIL_LINE = re.compile(r"^\[(?:FAIL|KILLED)\] (\S+) \((?:\d+ms|exit=)")
+# Every other ci.yml job, which the rule never skips. An allowlist: a failing job whose name is in neither set is a job
+# this tool has not classified, so the unit is not-evaluable rather than reassuring (a parity test pins this set to ci.yml).
+ALWAYS_RUN_JOBS = frozenset((
+    "detect-changes", "push-dedupe", "draft-light", "pr-selection", "credential-path-guard", "lint-bot-statuses",
+    "encryption-posture", "marketplace-manifest-guard", "service-role-allowlist-gate", "tc-document-sha-guard",
+    "adr-ordinals", "rule-body-lint", "lockfile-sync", "sandbox-canary-capture-gate", "plugin-root-propagation-gate",
+    "lint-webplat", "web-platform-build", "shard-totality-mutations", "grok-fidelity", "harness-discovery", "test", "e2e",
+    "critical-css-gate",
+))
+FAIL_LINE = re.compile(r"^\[(?:FAIL|KILLED)\] ([A-Za-z0-9._/+-]+) \((?:\d+ms|exit=)")
 FULL_EVENTS = ("merge_group", "push")
+COMMIT_FILES_CAP = 3000
 ANSI = re.compile(r"\x1b\[[0-9;]*[mGKHF]")
 STAMP = re.compile(r"^\d{4}-\d\d-\d\dT[\d:.]+Z ")
 
@@ -77,11 +93,12 @@ class ReadError(Exception):
 
 GH_TIMEOUT = float(os.environ.get("PR_AFFECTED_REPLAY_GH_TIMEOUT", "180"))
 SELECT_TIMEOUT = float(os.environ.get("PR_AFFECTED_REPLAY_SELECT_TIMEOUT", "900"))
-GIT_LOCATION_VARS = ("GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
-                     "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_PREFIX")
+# The same nine names as GIT_LOCATION_VARS in plugins/soleur/test/lib/git-fixture-env.sh and the gate's git_ro (a parity row pins all three).
+GIT_LOCATION_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
+                     "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_TEMPLATE_DIR", "GIT_EXEC_PATH")
 # The selector reads the repository and prints rows; it needs no credential. An allowlist, not a denylist: a new
 # secret-bearing variable (GH_TOKEN, a cloud key) must not reach a script that is itself part of the tree under test.
-SELECT_ENV_KEEP = ("PATH", "HOME", "LANG", "TMPDIR", "TZ", "USER", "SHELL")
+SELECT_ENV_KEEP = ("PATH", "LANG", "TMPDIR", "TZ", "USER", "SHELL")
 
 
 def run(cmd, cwd=None, env=None, check=True, timeout=None):
@@ -101,8 +118,11 @@ def retry_sleep(attempt):
 
 
 def transient(stderr):
-    """A 4xx other than 429 will answer the same way every time: do not spend three sleeps on it."""
+    """A 4xx other than 429 will answer the same way every time: do not spend three sleeps on it. GitHub answers a
+    primary rate limit with 403, which is the one 4xx that does clear."""
     m = re.search(r"HTTP (\d{3})", stderr or "")
+    if m and m.group(1) == "403" and "rate limit" in (stderr or "").lower():
+        return True
     return not (m and m.group(1).startswith("4") and m.group(1) != "429")
 
 
@@ -179,16 +199,30 @@ def evaluable(files):
     return True, ""
 
 
-def select_env():
-    return {k: v for k, v in os.environ.items() if k in SELECT_ENV_KEEP or k.startswith("PR_AFFECTED_REPLAY_")
-            or k.startswith("LC_")}
+def select_env(home):
+    """The allowlisted environment, with HOME pointed at an empty scratch directory: ~/.config/gh holds the credential
+    the allowlist exists to keep away from the selector."""
+    env = {k: v for k, v in os.environ.items() if k in SELECT_ENV_KEEP or k.startswith("PR_AFFECTED_REPLAY_")
+           or k.startswith("LC_")}
+    env["HOME"] = home
+    return env
+
+
+def run_selector(root, args):
+    import shutil
+    import tempfile
+    test_all = os.environ.get("PR_AFFECTED_REPLAY_TEST_ALL") or os.path.join(root, "scripts", "test-all.sh")
+    home = tempfile.mkdtemp(prefix="replay-home.")
+    try:
+        return run(["bash", test_all, "--print-selection"] + args, cwd=root, env=select_env(home), check=False,
+                   timeout=SELECT_TIMEOUT)
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
 
 
 def select(root, files):
     """-> (fallback, skipped_suites, selected_n, total_n). Raises ReadError on a selector failure."""
-    test_all = os.environ.get("PR_AFFECTED_REPLAY_TEST_ALL") or os.path.join(root, "scripts", "test-all.sh")
-    p = run(["bash", test_all, "--print-selection", "--paths=" + ",".join(files)], cwd=root, env=select_env(), check=False,
-            timeout=SELECT_TIMEOUT)
+    p = run_selector(root, ["--paths=" + ",".join(files)])
     if p.returncode != 0:
         raise ReadError("selector rc=%d" % p.returncode)
     skipped, fb, sel, tot = [], None, 0, 0
@@ -226,6 +260,9 @@ def api_commit_files(repo, sha):
     files = []
     for d in docs:
         files += [(x["filename"], x.get("sha") or "") for x in d.get("files", [])]
+    if len(files) >= COMMIT_FILES_CAP:
+        # the commits API stops listing at 3000 files without saying so: a list at the cap is a truncated list
+        raise ReadError("commit %s lists %d files, the API's cap: the list may be truncated" % (sha[:10], len(files)))
     return sorted(set(files))
 
 
@@ -234,7 +271,10 @@ def content_key(pairs):
 
 
 def ci_runs(repo, sha):
-    d = json.loads(gh_text("repos/%s/actions/workflows/ci.yml/runs?head_sha=%s&per_page=100" % (repo, sha)))
+    try:
+        d = json.loads(gh_text("repos/%s/actions/workflows/ci.yml/runs?head_sha=%s&per_page=100" % (repo, sha)))
+    except ValueError as e:
+        raise ReadError("unparseable run list for %s: %s" % (sha[:10], e))
     runs = d.get("workflow_runs", [])
     if d.get("total_count") != len(runs):
         raise ReadError("truncated run list for %s" % sha[:10])
@@ -262,15 +302,17 @@ def failing_jobs(repo, run_id, attempt=None):
 
 
 def fail_suites(repo, job_id, cache_dir):
-    path = os.path.join(cache_dir, "job-%s.log" % job_id)
+    path = os.path.join(cache_dir, "job-%d.log" % int(job_id))
     if os.path.exists(path):
-        text = open(path, errors="replace").read()
+        with open(path, errors="replace") as fh:
+            text = fh.read()
     else:
         text = gh_text("repos/%s/actions/jobs/%s/logs" % (repo, job_id), escapes=True)
         os.makedirs(cache_dir, exist_ok=True)
-        with open(path + ".part", "w") as fh:
+        part = "%s.part.%d" % (path, os.getpid())
+        with open(part, "w") as fh:
             fh.write(text)
-        os.replace(path + ".part", path)
+        os.replace(part, path)
     suites = []
     for line in ANSI.sub("", text).splitlines():
         m = FAIL_LINE.match(STAMP.sub("", line))
@@ -280,12 +322,17 @@ def fail_suites(repo, job_id, cache_dir):
 
 
 def suites_failed_in(repo, fj, cache_dir):
-    """-> (suites, notes) over the failing suite-shard jobs of one attempt. A job whose log cannot be read or names
-    no [FAIL] line is a note, never an empty answer."""
+    """-> (suites, failing rows, unread) over the failing jobs of one attempt. A suite-shard job whose log cannot be read
+    or names no [FAIL]/[KILLED] line, and a failing job in neither the suite-shard family nor ALWAYS_RUN_JOBS, set
+    `unread`: they are notes, never an empty answer."""
     suites, failing, ne = set(), [], False
     for jid, name in fj:
         if not SUITE_JOB.match(name):
-            failing.append({"job": name, "suites": [], "note": "always-run-job"})
+            if name.split(" (")[0] in ALWAYS_RUN_JOBS:
+                failing.append({"job": name, "suites": [], "note": "always-run-job"})
+            else:
+                failing.append({"job": name, "suites": [], "note": "unclassified-job"})
+                ne = True
             continue
         try:
             got = fail_suites(repo, jid, cache_dir)
@@ -346,7 +393,9 @@ def classify(unit, repo, cache_dir, same_tree_green):
         else:
             unit["cls"], unit["reason"] = "unverified", "would-skip-suite-failed"
     elif ne:
-        unit["cls"], unit["reason"] = "not-evaluable", "failed-job-without-fail-line"
+        odd = [f["job"] for f in unit["failing"] if f.get("note") == "unclassified-job"]
+        unit["cls"], unit["reason"] = "not-evaluable", ("unclassified-job: %s" % ",".join(odd)[:120] if odd
+                                                       else "failed-job-without-fail-line")
     elif unsettled:
         unit["cls"], unit["reason"] = "not-evaluable", "unsettled-jobs: %s" % ",".join(sorted(unsettled))[:120]
     elif not unit["failing"]:
@@ -368,7 +417,7 @@ def fill_selection(u, root, files, dur):
         u["reason"] = why
         u["fallback"] = "not-evaluable"
         return False
-    fb, skipped, sel, tot = select(root, files)
+    fb, skipped, _sel, _tot = select(root, files)
     u["fallback"] = fb
     if fb == "none":
         u["skipped_suites"] = skipped
@@ -383,7 +432,9 @@ def read_done(path, redo=False, reclassify=False):
     (the classifier changed: clean rows rest only on the run's own conclusion and stay)."""
     done, keep, dirty = {}, [], False
     if os.path.exists(path):
-        for line in open(path):
+        with open(path) as fh:
+            lines = fh.readlines()
+        for line in lines:
             try:
                 u = json.loads(line)
             except ValueError:
@@ -395,7 +446,8 @@ def read_done(path, redo=False, reclassify=False):
             done[(u["kind"], u["sha"])] = u
             keep.append(line if line.endswith("\n") else line + "\n")
         if dirty:
-            open(path, "w").write("".join(keep))
+            with open(path, "w") as fh:
+                fh.write("".join(keep))
     return done
 
 
@@ -432,7 +484,8 @@ def cmd_collect(a):
                             "attempt": pick["run_attempt"]}
                 u["runs_n"] = len(runs)
                 u["attempts_failed"] = pick["run_attempt"] if pick["conclusion"] != "success" else 0
-            classify(u, a.repo, cache, lambda x, rs=runs: any(r["conclusion"] == "success" for r in rs))
+            # a success run is picked first and classes `clean`, so a failed commit unit never has a same-sha success to clear it
+            classify(u, a.repo, cache, lambda unit: False)
         if u["cls"] == "not-evaluable" and not u["reason"]:
             u["reason"] = "no-run"
         out.write(json.dumps(u, sort_keys=True) + "\n")
@@ -466,13 +519,12 @@ def cmd_ejections(a):
         iso = lambda sha: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(run(["git", "log", "-1", "--format=%ct", sha], cwd=root).stdout.strip())))
         since = since or iso(shas[-1])
         until = until or iso(shas[0])
-    queried = until
     docs = gh_pages("repos/%s/actions/workflows/ci.yml/runs?event=merge_group&created=%s..%s&per_page=100"
-                    % (a.repo, since, queried))
+                    % (a.repo, since, until))
     runs = [r for d in docs for r in d.get("workflow_runs", [])]
     total = docs[0].get("total_count") if docs else None
     if not runs:
-        raise ReadError("no merge_group runs in %s..%s: an empty window is a failed read, not a clean one" % (since, queried))
+        raise ReadError("no merge_group runs in %s..%s: an empty window is a failed read, not a clean one" % (since, until))
     if total is None or total != len(runs) or total >= SEARCH_CAP:
         raise ReadError("merge_group run list is truncated or uncounted (total_count=%s, read %d, cap %d): narrow --since"
                         % (total, len(runs), SEARCH_CAP))
@@ -492,12 +544,20 @@ def cmd_ejections(a):
 
     out = open(path, "a")
     n = 0
-    fail_runs = sorted([r for r in runs if r["conclusion"] == "failure"], key=lambda r: r["created_at"])
+    # Every conclusion except `success` and `cancelled` is a queue run the full battery REFUSED or could not finish
+    # (`failure`, `timed_out`, `startup_failure`, an unfinished run) and is classed, not dropped. `cancelled` is a queue
+    # dequeue with no verdict on any suite. The conclusion histogram below names the whole population.
+    fail_runs = sorted([r for r in runs if r["conclusion"] not in ("success", "cancelled")], key=lambda r: r["created_at"])
+    hist = {}
+    for r in runs:
+        k = r["conclusion"] or "in-progress"
+        hist[k] = hist.get(k, 0) + 1
     for idx, r in enumerate(fail_runs):
         if ("ejection", r["head_sha"]) in done:
             continue
         u = base_unit("ejection", idx, r["head_sha"])
-        u["run"] = {"id": r["id"], "event": "merge_group", "conclusion": "failure", "attempt": r["run_attempt"]}
+        u["run"] = {"id": r["id"], "event": "merge_group", "conclusion": r["conclusion"] or "in-progress",
+                    "attempt": r["run_attempt"]}
         u["attempts_failed"] = r["run_attempt"]
         u["pr"] = pr_of(r.get("head_branch"))
         try:
@@ -534,7 +594,8 @@ def cmd_ejections(a):
         out.flush()
         n += 1
     print("replay ejections: wrote %d units to %s (window %s..%s, %d merge_group runs, %d failed)"
-          % (n, path, since, queried, len(runs), len(fail_runs)))
+          % (n, path, since, until, len(runs), len(fail_runs)))
+    print("replay ejections: conclusions %s" % json.dumps(hist, sort_keys=True))
     return 0
 
 
@@ -558,13 +619,35 @@ def cp_upper(k, n, conf=0.95):
 
 
 def load_units(d):
-    units = []
+    """Every unit under d. Raises ValueError on a duplicate (kind, sha) (two chunk layouts in one directory would count a
+    unit twice and tighten the bound) and on a torn line."""
+    units, seen = [], set()
     for name in sorted(os.listdir(d)):
         if name.startswith("units-") and name.endswith(".jsonl"):
-            for line in open(os.path.join(d, name)):
-                if line.strip():
-                    units.append(json.loads(line))
+            with open(os.path.join(d, name)) as fh:
+                for line in fh:
+                    if not line.strip():
+                        continue
+                    u = json.loads(line)
+                    key = (u["kind"], u["sha"])
+                    if key in seen:
+                        raise ValueError("duplicate unit %s %s (in %s): two chunk layouts in one directory?" % (key[0], key[1][:10], name))
+                    seen.add(key)
+                    units.append(u)
     return units
+
+
+def check_complete(units, expect_commits, commits_only, d):
+    """A population that is missing a chunk, or has no ejections file, reads exactly like a complete clean one."""
+    commits = [u for u in units if u["kind"] == "commit"]
+    idxs = sorted(u["idx"] for u in commits)
+    if commits and idxs != list(range(len(idxs))):
+        raise ValueError("commit units are not contiguous 0..%d (a chunk is missing or a layout was mixed)" % (len(idxs) - 1))
+    if expect_commits is not None and len(commits) != expect_commits:
+        raise ValueError("expected %d commit units, found %d" % (expect_commits, len(commits)))
+    if not commits_only and not os.path.exists(os.path.join(d, "units-ejections.jsonl")):
+        raise ValueError("no units-ejections.jsonl under %s: the commits population is near-vacuous by construction "
+                         "(pass --commits-only to say that is intended)" % d)
 
 
 def mark_multi_unit_flakes(units):
@@ -601,10 +684,12 @@ def cmd_aggregate(a):
     if not units:
         print("replay aggregate: no units under %s" % a.dir, file=sys.stderr)
         return 2
+    check_complete(units, a.expect_commits, a.commits_only, a.dir)
     flaky = mark_multi_unit_flakes(units)
     commits = [u for u in units if u["kind"] == "commit"]
     ejects = [u for u in units if u["kind"] == "ejection"]
-    lines = ["SOLEUR_PR_AFFECTED_REPLAY rule_sha256=%s" % RULE_SHA256, "rule=%s" % RULE_TEXT]
+    lines = ["SOLEUR_PR_AFFECTED_REPLAY rule_sha256=%s" % RULE_SHA256, "rule=%s" % RULE_TEXT,
+             "ejection_units=%d commit_units=%d" % (len(ejects), len(commits))]
     results = {}
     for label, pop in (("commits", commits), ("commits+ejections", commits + ejects)):
         s = summarize(pop)
@@ -638,12 +723,13 @@ def cmd_aggregate(a):
     text = "\n".join(lines) + "\n"
     sys.stdout.write(text)
     if a.out:
-        open(a.out, "w").write(text)
+        with open(a.out, "w") as fh:
+            fh.write(text)
         with open(a.out + ".tsv", "w") as t:
             t.write("kind\tidx\tsha\tfiles_n\tfallback\tskipped_min\tcls\treason\trun\n")
             for u in units:
                 t.write("\t".join(str(x) for x in (u["kind"], u["idx"], u["sha"], u["files_n"], u["fallback"], u["skipped_min"],
-                                                   u["cls"], u["reason"], (u.get("run") or {}).get("id", ""))) + "\n")
+                                                   u["cls"], re.sub(r"[\t\r\n]", " ", u["reason"]), (u.get("run") or {}).get("id", ""))) + "\n")
     return 0
 
 
@@ -699,85 +785,108 @@ def tracked_files(root):
     return set(run(["git", "ls-files"], cwd=root).stdout.splitlines())
 
 
-def pattern_regex(pt):
-    """A selector pattern is an anchored regex, except `^glob:<head>/<tail>`, which is the bash `[[ == ]]` edge the
-    selector's own grammar defines (`*` crosses `/`, `?` is one character, everything else literal)."""
-    if pt.startswith("^glob:"):
-        return re.compile("^" + "".join(".*" if c == "*" else "." if c == "?" else re.escape(c) for c in pt[len("^glob:"):]) + "$")
-    return re.compile(pt)
+def edge_hit(pt, path):
+    """The selector's own edge grammar (`_diff_edge_hit` in the runner), applied to one path: `^glob:<head>/<tail>` is a
+    bash `[[ == ]]` glob (`*` crosses `/`); `^dir/` is a prefix; `^file` is exact equality. Nothing is a regex: a path
+    holding ( ) [ ] + $ matches itself, and `^a.sh` does not match `a.sh.bak`."""
+    e = pt[1:] if pt.startswith("^") else pt
+    if e.startswith("glob:"):
+        g = e[len("glob:"):]
+        return re.match("^" + "".join(".*" if c == "*" else "." if c == "?" else re.escape(c) for c in g) + "$", path) is not None
+    if e.endswith("/"):
+        return path.startswith(e)
+    return path == e
 
 
 def suite_file(root, pattern):
     """The suite's own file is the FIRST pattern of its selector row (`^path`, dots literal). None when that is not a
     readable file (a directory suite, or a pattern the selector derived differently): the caller counts it unaudited."""
-    path = pattern.lstrip("^").replace("\\.", ".")
+    path = pattern[1:] if pattern.startswith("^") else pattern
     full = os.path.join(root, path)
-    return full if path and os.path.isfile(full) else None
+    return full if path and not path.endswith("/") and os.path.isfile(full) else None
 
 
 def suite_refs(root, suite, suite_path, tracked):
     """Tracked repo paths this suite file (and the libs it sources, one level) names literally."""
-    t = strip_comments(open(suite_path, errors="replace").read())
+    with open(suite_path, errors="replace") as fh:
+        t = strip_comments(fh.read())
     texts = [t]
     for m in re.finditer(r"""(?:source|\.)\s+["']?(?:\$\{?[A-Za-z_]+\}?/)?([A-Za-z0-9_./-]+\.sh)""", t):
         q = os.path.join(root, m.group(1))
         if os.path.isfile(q):
-            texts.append(strip_comments(open(q, errors="replace").read()))
+            with open(q, errors="replace") as fh:
+                texts.append(strip_comments(fh.read()))
     blob = "\n".join(texts)
     own = os.path.relpath(suite_path, root)
     return sorted(f for f in tracked if f not in (suite, own) and f not in RUNNER_TRIGGERS and len(f) > 6 and f in blob)
 
 
+def load_accept(path):
+    """Human-written exemptions: TSV `suite<TAB>path-or-*<TAB>false-positive: <reason>`. The reason is mandatory and must
+    start with `false-positive:` (a gap cannot be waved off by a bare name); `*` accepts a whole unaudited suite."""
+    acc = {}
+    with open(path) as fh:
+        for n, line in enumerate(fh, 1):
+            if not line.strip() or line.startswith("#"):
+                continue
+            f = line.rstrip("\n").split("\t")
+            if len(f) != 3 or not f[0] or not f[1] or not re.match(r"^false-positive: \S", f[2]):
+                raise ValueError("%s:%d: want `suite<TAB>path|*<TAB>false-positive: <reason>`" % (path, n))
+            acc.setdefault(f[0], {})[f[1]] = f[2]
+    return acc
+
+
 def cmd_audit(a):
     """Index-completeness audit over the selector's own rows: every tracked path a registered suite names
-    must match one of that suite's declared/derived patterns. Prints one `gap` line per suite with gaps and one
-    `unaudited` line per suite whose file could not be read. Exit 0 only when gap_suites=0 AND unaudited=0: a suite the
-    audit never read is not a suite with no gaps. always_on suites run on every diff, so their index is moot."""
+    must be hit by one of that suite's declared/derived edges. Prints one `gap` line per suite with gaps (the first six
+    paths, or all with --all-refs) and one `unaudited` line per suite whose file could not be read. Exit 0 only when no gap
+    and no unaudited suite remain after the --accept exemptions: a suite the audit never read is not a suite with no gaps.
+    always_on suites run on every diff, so their index is moot. A row too short to name its edges is unaudited."""
     root = a.root or repo_root()
-    test_all = os.environ.get("PR_AFFECTED_REPLAY_TEST_ALL") or os.path.join(root, "scripts", "test-all.sh")
+    accept = load_accept(a.accept) if a.accept else {}
     if a.list:
-        rows = open(a.list).read().splitlines()
+        with open(a.list) as fh:
+            rows = fh.read().splitlines()
     else:
-        rows = run(["bash", test_all, "--print-selection", "--paths=README.md"], cwd=root, env=select_env(),
-                   timeout=SELECT_TIMEOUT).stdout.splitlines()
+        rows = run_selector(root, ["--paths=README.md"]).stdout.splitlines()
     tracked = tracked_files(root)
-    suites = always_on = 0
+    suites = always_on = accepted = 0
     gaps, unaudited = [], []
     for line in rows:
         f = line.split("\t")
-        if f[0] != "AFFECTED_SELECTED" or len(f) < 5:
+        if f[0] != "AFFECTED_SELECTED":
             continue
         suites += 1
+        if len(f) < 5:
+            unaudited.append((f[1] if len(f) > 1 else "?", "short-row"))
+            continue
         suite, reason, pats = f[1], f[3], f[4].split("|")
         if reason == "always_on":
             always_on += 1
             continue
         path = suite_file(root, pats[0])
         if path is None:
-            unaudited.append((suite, pats[0]))
+            if "*" in accept.get(suite, {}):
+                accepted += 1
+            else:
+                unaudited.append((suite, pats[0]))
             continue
-        regs = []
-        for pt in pats:
-            try:
-                regs.append(pattern_regex(pt))
-            except re.error:
-                unaudited.append((suite, "bad-pattern " + pt))
-                regs = None
-                break
-        if regs is None:
-            continue
-        miss = [r for r in suite_refs(root, suite, path, tracked) if not any(rg.search(r) for rg in regs)]
-        if miss:
-            gaps.append((suite, miss))
+        miss = [r for r in suite_refs(root, suite, path, tracked) if not any(edge_hit(pt, r) for pt in pats)]
+        ok = accept.get(suite, {})
+        kept = [r for r in miss if r not in ok]
+        accepted += len(miss) - len(kept)
+        if kept:
+            gaps.append((suite, kept))
     if suites == 0:
         print("replay audit: the selector printed no AFFECTED_SELECTED rows", file=sys.stderr)
         return 2
     for suite, miss in gaps:
-        print("gap\t%s\t%d\t%s" % (suite, len(miss), ",".join(miss[:6])))
+        print("gap\t%s\t%d\t%s" % (suite, len(miss), ",".join(miss if a.all_refs else miss[:6])))
     for suite, why in unaudited:
         print("unaudited\t%s\t%s" % (suite, why))
-    print("SOLEUR_PR_AFFECTED_AUDIT suites=%d always_on=%d audited=%d unaudited=%d gap_suites=%d gap_refs=%d"
-          % (suites, always_on, suites - always_on - len(unaudited), len(unaudited), len(gaps), sum(len(m) for _, m in gaps)))
+    print("SOLEUR_PR_AFFECTED_AUDIT suites=%d always_on=%d audited=%d unaudited=%d gap_suites=%d gap_refs=%d accepted=%d"
+          % (suites, always_on, suites - always_on - len(unaudited), len(unaudited), len(gaps),
+             sum(len(m) for _, m in gaps), accepted))
     return 0 if not gaps and not unaudited else 1
 
 
@@ -786,37 +895,46 @@ def main(argv):
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("collect", help="classify the last N first-parent commits of main")
-    c.add_argument("--out", required=True)
-    c.add_argument("--commits", type=int, default=300)
-    c.add_argument("--chunk", default="1/1")
-    c.add_argument("--repo", default="jikig-ai/soleur")
-    c.add_argument("--base", default="origin/main")
-    c.add_argument("--redo-unevaluable", action="store_true", dest="redo_unevaluable")
+    c.add_argument("--out", required=True, help="directory the units-*.jsonl and joblogs/ are written under")
+    c.add_argument("--commits", type=int, default=300, help="how many first-parent commits of --base (default 300)")
+    c.add_argument("--chunk", default="1/1", help="I/K: collect every K-th commit starting at I (default 1/1)")
+    c.add_argument("--repo", default="jikig-ai/soleur", help="OWNER/REPO the run records are read from")
+    c.add_argument("--base", default="origin/main", help="ref whose first-parent history is replayed")
+    c.add_argument("--redo-unevaluable", action="store_true", dest="redo_unevaluable",
+                   help="drop every not-evaluable unit and collect it again")
     c.add_argument("--reclassify", action="store_true", help="drop every non-clean unit and collect it again")
     e = sub.add_parser("ejections", help="classify every failed merge_group run since the window start (--since is UTC)")
-    e.add_argument("--out", required=True)
+    e.add_argument("--out", required=True, help="the same directory collect wrote to")
     e.add_argument("--since", default="", help="window start, UTC; default: committer time of the oldest of the last N commits")
     e.add_argument("--until", default="", help="window end, UTC; default: committer time of the newest of them")
-    e.add_argument("--commits", type=int, default=300)
-    e.add_argument("--repo", default="jikig-ai/soleur")
-    e.add_argument("--base", default="origin/main")
-    e.add_argument("--redo-unevaluable", action="store_true", dest="redo_unevaluable")
+    e.add_argument("--commits", type=int, default=300, help="size of the commit window the default --since/--until come from")
+    e.add_argument("--repo", default="jikig-ai/soleur", help="OWNER/REPO the merge_group runs are read from")
+    e.add_argument("--base", default="origin/main", help="ref whose first-parent history defines the window")
+    e.add_argument("--redo-unevaluable", action="store_true", dest="redo_unevaluable",
+                   help="drop every not-evaluable unit and collect it again")
     e.add_argument("--reclassify", action="store_true", help="drop every non-clean unit and collect it again")
     g = sub.add_parser("aggregate", help="summarise a collected directory; prints the receipt text")
-    g.add_argument("dir")
-    g.add_argument("--baseline-min", type=float, default=99.8, dest="baseline_min")
-    g.add_argument("--selector-min", type=float, default=1.29, dest="selector_min")
-    g.add_argument("--out", default="")
+    g.add_argument("dir", help="the directory collect and ejections wrote to")
+    g.add_argument("--baseline-min", type=float, default=99.8, dest="baseline_min",
+                   help="billed job-minutes per PR run the 20%% bar is taken of (default 99.8)")
+    g.add_argument("--selector-min", type=float, default=1.29, dest="selector_min", help="billed selector minutes per run (default 1.29)")
+    g.add_argument("--out", default="", help="also write the receipt text here, and a per-unit TSV beside it")
+    g.add_argument("--expect-commits", type=int, default=None, dest="expect_commits",
+                   help="refuse (rc 2) unless exactly N commit units are present")
+    g.add_argument("--commits-only", action="store_true", dest="commits_only",
+                   help="allow a directory with no units-ejections.jsonl (the near-vacuous population only)")
     v = sub.add_parser("verdict", help="GO/NO-GO arithmetic over four criterion statuses (pass|fail|within-10%%|unmeasured)")
-    for k in "abcd":
-        v.add_argument("--" + k, required=True)
+    for k, what in (("a", "escape gate"), ("b", "index completeness"), ("c", "net saving"), ("d", "documentation census")):
+        v.add_argument("--" + k, required=True, help="criterion %s (%s): pass | fail | within-10%%%% | unmeasured" % (k, what))
     p = sub.add_parser("cp-upper", help="one-sided Clopper-Pearson upper bound for K events in N")
-    p.add_argument("k", type=int)
-    p.add_argument("n", type=int)
-    p.add_argument("conf", type=float, nargs="?", default=0.95)
+    p.add_argument("k", type=int, help="events observed")
+    p.add_argument("n", type=int, help="units observed")
+    p.add_argument("conf", type=float, nargs="?", default=0.95, help="one-sided confidence (default 0.95); prints a fraction")
     u = sub.add_parser("audit", help="index-completeness audit; run it on a pinned origin/main tree")
-    u.add_argument("--root", default="")
-    u.add_argument("--list", default="")
+    u.add_argument("--root", default="", help="the tree to audit (default: the current checkout; use a pinned detached one)")
+    u.add_argument("--list", default="", help="read AFFECTED_SELECTED rows from FILE instead of running the selector")
+    u.add_argument("--accept", default="", help="TSV of human exemptions: suite<TAB>path|*<TAB>false-positive: <reason>")
+    u.add_argument("--all-refs", action="store_true", dest="all_refs", help="print every undeclared path, not the first six")
     a = ap.parse_args(argv)
     if a.cmd == "collect" and not re.match(r"^[1-9][0-9]*/[1-9][0-9]*$", a.chunk):
         print("replay: --chunk must be I/K with I,K >= 1", file=sys.stderr)
@@ -830,6 +948,9 @@ def main(argv):
     except ValueError as e:
         print("replay: %s" % e, file=sys.stderr)
         return 2
+    except Exception as e:  # an internal error must not exit 1, which is the audit's "gaps found"
+        print("replay: internal error: %s: %s" % (type(e).__name__, e), file=sys.stderr)
+        return 4
 
 
 if __name__ == "__main__":

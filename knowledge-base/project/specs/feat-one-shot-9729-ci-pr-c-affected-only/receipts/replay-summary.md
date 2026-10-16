@@ -1,12 +1,20 @@
 # Escape-rate replay (S4 PR C, activation prerequisite 2, Ref #9729)
 
-Tool: `scripts/ci-pr-affected-replay.py` (read-only; suite `plugins/soleur/test/ci-pr-affected-replay.test.sh`). Collected 2026-10-16 against a
-pinned `origin/main` tree (`ee8644bded`), so the selector and index are TODAY's, applied to older diffs (a recorded limit). The queue ejections were
-re-classified at review on 2026-10-16T18:00Z..18:50Z with the hardened classifier (see "Review re-run" below).
-Window: the last 300 first-parent commits of `main`, committer time 2026-10-06T10:11:21Z to 2026-10-15T19:12:41Z (oldest `2cfef66506`, newest
-`ee8644bded`), plus every failed `merge_group` run of `ci.yml` created in the SAME window (**53 failed of 392** `merge_group` runs, the queue
-ejections; the first collection read 53 of 394 because its window had no upper bound and ran to the query time). Per-unit rows:
-`replay-commits.tsv` (353 rows). Raw run records were read live; the oldest listed run is recorded in `dark-cost.md`.
+Tool: `scripts/ci-pr-affected-replay.py` (read-only; suite `plugins/soleur/test/ci-pr-affected-replay.test.sh`). Collected 2026-10-16.
+**Window:** the last 300 first-parent commits of `origin/main` as it stood on 2026-10-16: newest `abbd36a696` (committer time
+2026-10-16T08:22:38Z), oldest `9fd4806940` (2026-10-06T11:48:18Z). (The first version of this receipt named the 300 commits ending at
+`ee8644bded`; that was the tree the selector ran on, not the window. The units file holds exactly the 300 commits ending at `abbd36a696`:
+`git rev-list --first-parent -n 300 abbd36a696` equals the set of unit shas, 0 missing, 0 extra.)
+**Trees:** the commit units' selections were taken on `origin/main` at `ee8644bded` (four docs and infra commits older than the window's tip);
+the audit (`index-audit.md`) ran on `abbd36a696`. The selector and index are TODAY's, applied to older diffs (a recorded limit); the two trees
+differ by 33 files of which six are test suites, so the commit units and the audit were not measured on one index. The verdict does not rest on
+the difference (the audit fails criterion (b) on its own).
+**Ejections:** every `merge_group` run of `ci.yml` created in the same window, 2026-10-06T11:48:18Z to 2026-10-16T08:22:38Z: **392 runs, 336
+`success`, 53 `failure`, 3 `cancelled`** (queue dequeues with no verdict on any suite: runs 37671649612, 37679605689, 38476004641). The 53
+failures are the same 53 head shas as for the window ending at `ee8644bded` (the 13 hours between the two windows ended no run in failure), and
+they were re-classified at review on 2026-10-16 with the hardened classifier; their selections were taken on the review branch's tree. Per-unit
+rows: `replay-commits.tsv` (353 rows; the `idx` column is the position in the window, re-derived because the first collection's resumed runs had
+numbered some units against an older tip). Raw run records were read live; the oldest listed run is recorded in `dark-cost.md`.
 
 ## The proposed rule (stored with its hash so PR D's selector can be pinned to it)
 
@@ -37,11 +45,16 @@ Saving (criterion c): over the 300 commits the selector skips a mean of **52.87 
 evaluated, 49 runner-changed full runs and 6 non-evaluable diffs count as 0); net of the 1.29 billed selector minutes that is
 **51.58**, and 54.75 at mean plus two standard errors. **The bar and the figure are in different units, so (c) is graded `unmeasured`, not `pass`.**
 The bar, 19.96, is 20% of the 99.8 baseline, which is billed job-minutes per PULL-REQUEST run; 51.58 is suite-minutes per full-battery main
-commit (every commit runs every suite). The performance review's one-day sample of PR runs (45 runs) found only about 24% (11) executing the
-`test-scripts` group the skippable suites sit in, and a mean PR run of about 50 raw job-minutes, so a per-PR-run reading is on the order of 0.24 x
-51.58 = 12.6 gross and about 11.6 net of the 1.29 dark selector minutes, below 19.96; the active-state selector cost (1.29 is the DARK-state figure)
-depends on the cache hit rate and was not measured per shard (a cold pass is 3 billed minutes, per shard fourteen times that). Both readings are
-recorded here; neither is a measurement of the billed per-PR-run saving. Units: suite-minutes from
+commit (every commit runs every suite). A rough per-PR-run reading, from the performance review's one-day sample (45 PR runs, of which 11, or
+24.4%, executed the `test-scripts` group the skippable suites sit in; the sample's query and run list were not committed, so treat it as an
+unsourced order of magnitude): 0.244 x 52.87 gross suite-minutes = 12.9 gross, 11.6 net of the 1.29 dark selector minutes (applying the share to
+51.58 and subtracting 1.29 again would count the selector twice). That is a point estimate with a 95% interval for the 24% share of about 14% to
+39% (11 of 45), which puts the net figure between about 6.2 and 19.2, i.e. straddling the bar's lower end rather than clearly under it. Three
+more reasons it is not a measurement (the commit split is the performance review's, from `replay-commits.tsv` and `git diff-tree`): the 52.87 mean mixes 36 doc-class commits (mean 85.87 skipped suite-minutes, whose PR runs are already
+skipped at job level and add no marginal saving) with 264 code commits (mean 48.37); the 99.8 baseline is itself a lower bound over 31 runs
+while the same sample's mean PR run is about 50 raw job-minutes, so the bar may be nearer 10; and the active-state selector cost depends on the
+cache hit rate (a cold pass bills 3 minutes, per shard fourteen times that). Both readings are recorded here; neither is a measurement of the
+billed per-PR-run saving. Units: suite-minutes from
 `scripts/suite-durations{,-heavy}.tsv`; a suite missing from those files counts 1.18 s, which UNDER-counts the web-platform unit registration
 (about 15 job-minutes, not in the files), so the figure is a lower bound on that axis; suite-minutes are not billed job-minutes (shards bill a
 rounded-up minute each), and the billed saving was not measured. The cheap pre-check on a 30-commit sample read 48.05 (se 5.22), see

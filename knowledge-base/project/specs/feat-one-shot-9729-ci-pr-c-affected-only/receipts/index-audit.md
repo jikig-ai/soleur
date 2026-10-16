@@ -11,14 +11,14 @@ matched with the selector's own glob grammar (`*` crosses `/`); `always_on` suit
 Fixture: the PR 9404 shape (a `-mutations` sibling that consumes `ci.yml` and a sibling suite while the index declares only its own file) IS
 flagged, and a suite whose file the audit cannot read is reported `unaudited` and makes the audit exit 1 (the replay suite pins both).
 
-**Measured: `SOLEUR_PR_AFFECTED_AUDIT suites=630 always_on=114 audited=515 unaudited=1 gap_suites=190 gap_refs=1079`** (exit 1). So **190 of
-the 515 audited suites (190 of 630 registered)** name an undeclared tracked path, 1,079 references; one suite (`plugins/soleur`, a directory
+**Measured: `SOLEUR_PR_AFFECTED_AUDIT suites=630 always_on=114 audited=515 unaudited=1 gap_suites=190 gap_refs=1079 accepted=0`** (exit 1; re-run with `--all-refs` and the selector-grammar edges at review, same figures). The full per-suite list is committed as `index-audit-gaps.tsv` (190 rows, 1,079 references) and the frequency table below is tallied from it, so it is reproducible. So **190 of
+the 515 audited suites (about 37%; 190 of 630 registered, about 30%)** name an undeclared tracked path, 1,079 references; one suite (`plugins/soleur`, a directory
 suite) is unaudited. **Correction of the first version of this receipt.** It reported 145 of 630 suites and 964 references. That audit located
 each suite's file by guessing name variants and never read 189 of the 631 suites it listed, yet exited 0 with `gap_suites` computed over the rest,
 and it silently skipped every `^glob:` edge (an uncompilable regex). 145 and 964 were floors; the corrected figures are above. The verdict is
 unchanged and the gap is larger.
 
-Most frequent undeclared paths (all 1,079 references, counted on the same pinned tree): `README.md` (36 suites), `AGENTS.md` (16),
+Most frequent undeclared paths (all 1,079 references, tallied from `index-audit-gaps.tsv`): `README.md` (36 suites), `AGENTS.md` (16),
 `AGENTS.rules.md` (14), `.claude/settings.json` (14), `package.json` (13), `.gitignore` (12), `.github/workflows/ci.yml` (11),
 `scripts/betterstack-query.sh` (10), `plugins/soleur/test/lib/git-fixture-env.sh` (7), `.github/workflows/apply-web-platform-infra.yml` (6),
 `lefthook.yml` (6), `package-lock.json` (6).

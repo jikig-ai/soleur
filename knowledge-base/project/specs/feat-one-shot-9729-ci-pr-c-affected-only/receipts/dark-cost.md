@@ -34,8 +34,10 @@ Command per day: `.../ci.yml/runs?event=pull_request&created=<day>T00:00:00Z..<d
 job (cancelled before any job; run ids 38871053197 and 38871069022). So **44 of the 45 runs that created the job were skipped**.
 The one success is run 38781446320, created 2026-10-15T17:56:10Z (head branch `feat-one-shot-argv-bearer-pr-c-inngest-probes`), six minutes
 after the merge: its merge ref predated the merge, so it ran the pre-Q1 workflow. With `CI_PR_AFFECTED` unset the dark job now costs 0 billed
-minutes. (An earlier read of this window, taken before the window had filled, listed 28 runs and 27 skipped; the count of a window that is
-still open grows, so the query time is part of the figure.)
+minutes. (An earlier read of this same window listed 28 runs and 27 skipped. The window's end is fixed, so it was not an open window still
+filling; the cause of the difference was not established, which is why the query time is part of the figure and the 47 run ids with their
+`pr-selection` conclusions are committed beside this receipt as `window2-runs.tsv`. The 09:40:00Z end is the end of the original sample, kept for
+comparability.)
 
 ## Oldest run record probed
 
@@ -49,4 +51,4 @@ that still lists a run). Earlier dates were not probed, so the retention is not 
 - AC9c (the first non-draft doc-only pull request after the Q1 follow-up merge, `pr-selection` skipped, battery green): **observed** on PR 10423
   (run 38867973491) and PR 10428 (run 38870968301), both created 2026-10-16 and both doc-only (every file under the documentation tree or a root
   `*.md`): `pr-selection` `skipped`, `test-bun`, every `test-scripts (n/8)` and `test-scripts-heavy (n/3)` shard and the aggregate `test` `success`
-  (the matrix `test-webplat (n/2)` legs are skipped by `draft-light` only on drafts; both PRs were non-draft). This is an observation, not proof.
+  (the matrix `test-webplat (n/2)` legs are skipped by `draft-light` only on drafts; both PRs were non-draft). This is an observation, not proof, and it is TRUE BY CONSTRUCTION while the variable is unset: the dark job is skipped exactly when the variable is empty, so a skipped `pr-selection` on a doc-only PR says nothing about the active state.

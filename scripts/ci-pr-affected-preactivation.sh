@@ -5,33 +5,44 @@
 # variable, never dispatches a workflow and never writes a file. It prints one line per prerequisite and a final
 #   SOLEUR_PR_AFFECTED_PREACTIVATION ready=<true|false> missing=<comma list | none>
 # `ready=true` only when EVERY prerequisite is positively read as met and at least one was read (ok_count == total > 0).
-# Any API failure, unreadable answer or missing artifact is `unknown`, which is NOT met. Explicit operator
-# authorization is a human act this script cannot satisfy (a menu acknowledgement is not authorization).
+# `unknown` means the gate could not read the answer (no network, a missing tool, an unparseable body, a missing driver or
+# ADR) and is NOT met; `unmet` means it read the answer and the answer is no (a present lock, a missing artifact or receipt).
+# Explicit operator authorization is a human act this script cannot satisfy (a menu acknowledgement is not authorization),
+# and `ready=true` does not recompute the evidence behind a GO: it checks the recorded lines and the live state, so read
+# the receipt it names.
 #
-# THE SIX PREREQUISITES (one loop, one list; the final line is computed from the list, never from the first failure):
-#   variable       absent: the variable read is HTTP 404 AND the variable list read is HTTP 200 (any other failure is unknown)
+# NEEDS: gh (authenticated for reads), jq, git, GNU date. Run it from a checkout; it reads the COMMITTED tree (HEAD).
+#
+# THE SEVEN PREREQUISITES (one loop, one list; the final line is computed from the list, never from the first failure):
+#   variable       absent: the variable read is HTTP 404 AND the variable list read (page of 100) is HTTP 200, complete and
+#                  does not name it
 #   org_variables  no organization variable resolves through `vars`: the repo-scoped read is HTTP 200 with total_count 0
-#   lock           the driver's activation lock is gone: no non-comment line of scripts/ci-pr-selection.sh assigns or
-#                  declares PR_AFFECTED_LOCKED (any spelling: indented, `declare -r`, `export`). An unreadable or
+#   lock           the driver's activation lock is gone: after whole-line comments and plain reads (`$X`, `${X}`, `${X:-d}`)
+#                  are removed, no line of scripts/ci-pr-selection.sh at HEAD still names PR_AFFECTED_LOCKED (any assignment
+#                  or declaration spelling: `readonly`, `declare -r`, `export`, `:=`, `printf -v`, `read`). An unreadable or
 #                  comment-only driver is unknown, never absent.
-#   artifacts      the Guard 3 read, its merge-authority call site and the audit script exist (in code, not in a comment),
-#                  and the NEWEST `full-battery-audit` job on main concluded success (a pending newest run is unmet,
-#                  it does not fall through to an older success)
-#   verdict        the go/no-go receipt named by the ADR, read from the COMMITTED tree (git show HEAD:<path>, so an
-#                  untracked file or a symlink proves nothing; after ship moves the spec directory the archived copy is
-#                  read), ends in `SOLEUR_PR_AFFECTED_VERDICT verdict=GO ruled=confirmed date=YYYY-MM-DD`, dated no
-#                  later than today and no more than 60 days ago (an unparseable date is unknown)
-#   prereq5        the ADR's `Skippable set:` names only gated groups (test-webplat, test-bun, test-scripts-heavy,
-#                  test-scripts) or registered suite labels, and the escape route's Better Stack follow-up is closed
-#                  as completed or the ADR carries a `Waiver: heartbeat <reason>` line
+#   artifacts      the Guard 3 read, its merge-authority call site (in code, not in a comment) and the executable audit
+#                  script exist at HEAD, and the NEWEST `full-battery-audit` job on main concluded success (a pending newest
+#                  run is unmet, it does not fall through to an older success)
+#   verdict        the go/no-go receipt named by the ADR, a regular file at HEAD (a symlink, a directory or an untracked file
+#                  proves nothing; after ship moves the spec directory the single archived copy is read), ends in
+#                  `SOLEUR_PR_AFFECTED_VERDICT verdict=GO ruled=confirmed date=YYYY-MM-DD`, dated no later than today and
+#                  no more than 60 days ago (an unparseable date is unknown)
+#   prereq5        the ADR's `Skippable set:` names only gated groups (test-webplat, test-bun, test-scripts-heavy: the three
+#                  groups ci.yml may skip) or registered suite labels, and the escape route's Better Stack follow-up
+#                  (issue 10415 by default) is closed AS COMPLETED, or the ADR carries a `Waiver: heartbeat <reason>` line
+#                  (the waiver stands in for that follow-up and for nothing else)
+#   tree           HEAD is the tip of origin/main as the API reports it now: a feature branch, a stale checkout or an
+#                  unmerged lock-removal commit cannot read as the state of main
 # `ac9c=observed|not-yet|unknown` is printed as INFORMATION and never gates. It looks for the first non-draft PR opened
 # after 2026-10-15T17:50:38Z (the Q1 merge) whose files are all doc-class, and is true by construction while the variable
-# is unset: the dark job is skipped exactly when `vars.CI_PR_AFFECTED` is empty.
+# is unset: the dark job is skipped exactly when `vars.CI_PR_AFFECTED` is empty, so it says nothing about the active state.
 #
 # ADR LINES THIS SCRIPT READS (each on its own line, at the start of the line; the LAST such line wins):
 #   Go/no-go receipt: <repo-relative path>
 #   Skippable set: <comma-separated group or suite names>
 #   Waiver: heartbeat <non-empty reason>
+# The ADR is the committed ADR-276 file unless --adr FILE names a file to read instead (a test and drill seam).
 #
 # USAGE: ci-pr-affected-preactivation.sh [--repo OWNER/REPO] [--root DIR] [--adr FILE] [--heartbeat-issue N]
 # SEAMS: `gh` is whatever is first on PATH; PR_AFFECTED_PREACT_TODAY (YYYY-MM-DD) pins the clock.
@@ -58,14 +69,49 @@ while [ $# -gt 0 ]; do
 done
 case "$repo" in */*) : ;; *) echo "preactivation: --repo must be OWNER/REPO" >&2; exit 2 ;; esac
 case "$heartbeat" in ''|*[!0-9]*) echo "preactivation: --heartbeat-issue must be a number" >&2; exit 2 ;; esac
-# git, read-only, with every location variable removed: an inherited GIT_DIR would make `git -C "$root"` read another repository
-git_ro() { env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE -u GIT_COMMON_DIR git "$@"; }
+# git, read-only, with every location variable removed: an inherited GIT_DIR would make `git -C "$root"` read another
+# repository. The same nine names as GIT_LOCATION_VARS in plugins/soleur/test/lib/git-fixture-env.sh and in the replay tool
+# (a parity row pins all three).
+git_ro() {
+  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \
+      -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_NAMESPACE -u GIT_TEMPLATE_DIR -u GIT_EXEC_PATH git "$@"
+}
 if [ -z "$root" ]; then root="$(git_ro rev-parse --show-toplevel 2>/dev/null)" || { echo "preactivation: not in a git repository and no --root" >&2; exit 2; }; fi
 case "$root" in /*) : ;; *) echo "preactivation: --root must be absolute" >&2; exit 2 ;; esac
-if [ -z "$adr" ]; then
-  adr_rel="$(git_ro -C "$root" ls-files -- '*ADR-276-*.md' 2>/dev/null | head -1)"
-  [ -z "$adr_rel" ] || adr="$root/$adr_rel"
+
+# committed <repo-relative path>: that file's bytes at HEAD on stdout. Non-zero when the path is absent, or is not a regular
+# file (a symlink, a directory and a submodule are refused), so a forged link or an untracked file proves nothing.
+committed() {
+  local entry mode
+  entry="$(git_ro -C "$root" ls-tree HEAD -- "$1" 2>/dev/null)" || return 1
+  [ -n "$entry" ] || return 1
+  mode="${entry%% *}"
+  case "$mode" in 100644|100755) : ;; *) return 1 ;; esac
+  git_ro -C "$root" cat-file blob "HEAD:$1" 2>/dev/null
+}
+committed_mode() { git_ro -C "$root" ls-tree HEAD -- "$1" 2>/dev/null | awk '{ print $1; exit }'; }
+
+# code_has <text> <token>: true when a non-comment line of <text> contains the token. A here-string, not a pipe: a
+# `grep -q` that exits on its first match must not be able to SIGPIPE a writer into a false miss under pipefail.
+code_has() {
+  local body
+  body="$(printf '%s\n' "$1" | grep -v '^[[:space:]]*#')" || return 1
+  grep -q -- "$2" <<<"$body"
+}
+
+# ---- the ADR: the committed ADR-276 file, or --adr FILE ---------------------------------------------------------------
+ADR_TEXT=""
+ADR_OK=0
+if [ -n "$adr" ]; then
+  if [ -f "$adr" ]; then ADR_TEXT="$(cat "$adr")"; ADR_OK=1; fi
+else
+  adr_rel="$(git_ro -C "$root" ls-tree -r --name-only HEAD 2>/dev/null | grep -E '(^|/)ADR-276-[^/]*[.]md$')" || adr_rel=""
+  if [ -n "$adr_rel" ] && [ "$(printf '%s\n' "$adr_rel" | wc -l)" -eq 1 ]; then
+    if ADR_TEXT="$(committed "$adr_rel")"; then ADR_OK=1; fi
+  fi
 fi
+# adr_line <label>: the LAST line of the ADR that starts with the label, label removed
+adr_line() { printf '%s\n' "$ADR_TEXT" | sed -n "s/^$1:[[:space:]]*//p" | tail -1; }
 
 # ---- one HTTP read: sets G_STATUS (3 digits or 000) and G_BODY (the body, headers stripped) ------------------------
 G_STATUS=000
@@ -85,10 +131,11 @@ R_LINE=""
 reader_variable() {
   local s1 s2
   gh_read "repos/$repo/actions/variables/CI_PR_AFFECTED"; s1="$G_STATUS"
-  gh_read "repos/$repo/actions/variables"; s2="$G_STATUS"
+  gh_read "repos/$repo/actions/variables?per_page=100"; s2="$G_STATUS"
   if [ "$s1" = 404 ] && [ "$s2" = 200 ]; then
-    # the list is the cross-check: a 404 on the single read next to a list that names the variable is a contradiction
-    if printf '%s' "$G_BODY" | jq -e '(.variables | type == "array") and ([.variables[].name] | index("CI_PR_AFFECTED") | not)' >/dev/null 2>&1; then
+    # the list is the cross-check: a 404 on the single read next to a list that names the variable is a contradiction, and
+    # a list shorter than its own total_count cannot show absence
+    if printf '%s' "$G_BODY" | jq -e '(.variables | type == "array") and (.total_count == (.variables | length)) and ([.variables[].name] | index("CI_PR_AFFECTED") | not)' >/dev/null 2>&1; then
       R_STATUS=ok; R_LINE="variable=absent"
     else R_STATUS=unknown; R_LINE="variable=unknown(list-unreadable-or-contradicts)"; fi
   elif [ "$s1" = 200 ]; then R_STATUS=unmet; R_LINE="variable=present"
@@ -108,14 +155,15 @@ reader_org_variables() {
   esac
 }
 
-# code_of <file>: the file without whole-line comments, on stdout; non-zero when it cannot be read or has no code line
-code_of() { grep -v '^[[:space:]]*#' "$1" 2>/dev/null; }
-
 reader_lock() {
-  local f="$root/scripts/ci-pr-selection.sh" code rc
-  if [ ! -f "$f" ]; then R_STATUS=unknown; R_LINE="lock=unknown(driver-missing)"; return; fi
-  code="$(code_of "$f")" || { R_STATUS=unknown; R_LINE="lock=unknown(driver-unreadable)"; return; }
-  printf '%s\n' "$code" | grep -Eq 'PR_AFFECTED_LOCKED[[:space:]]*\+?=|(readonly|declare|typeset|export)[[:space:]].*PR_AFFECTED_LOCKED'
+  local src code stripped rc
+  src="$(committed scripts/ci-pr-selection.sh)" || { R_STATUS=unknown; R_LINE="lock=unknown(driver-missing)"; return; }
+  code="$(printf '%s\n' "$src" | grep -v '^[[:space:]]*#')" || { R_STATUS=unknown; R_LINE="lock=unknown(driver-has-no-code)"; return; }
+  [ -n "$(printf '%s' "$code" | tr -d '[:space:]')" ] || { R_STATUS=unknown; R_LINE="lock=unknown(driver-has-no-code)"; return; }
+  # plain READS of the name are not the lock (the driver keeps one); whatever still names it assigns or declares it
+  # shellcheck disable=SC2016  # the sed program is literal text: the dollar signs are the shell syntax being removed
+  stripped="$(printf '%s\n' "$code" | sed -E 's/\$\{PR_AFFECTED_LOCKED(:-[^}]*)?\}//g; s/\$PR_AFFECTED_LOCKED//g')"
+  grep -q 'PR_AFFECTED_LOCKED' <<<"$stripped"
   rc=$?
   case "$rc" in
     0) R_STATUS=unmet; R_LINE="lock=present" ;;
@@ -125,18 +173,24 @@ reader_lock() {
 }
 
 reader_artifacts() {
-  local miss="" runs id jobs c found=""
-  code_of "$root/plugins/soleur/scripts/ci-head-verdict.sh" | grep -q 'full-verified' || miss="$miss full-verified"
-  code_of "$root/plugins/soleur/scripts/admin-merge-ready.sh" | grep -q 'full-verified' || miss="$miss admin-merge-ready-call"
-  [ -x "$root/plugins/soleur/scripts/ci-full-battery-audit.sh" ] || miss="$miss audit-script"
+  local miss="" hv am runs id jobs c found="" n
+  hv="$(committed plugins/soleur/scripts/ci-head-verdict.sh)" || hv=""
+  am="$(committed plugins/soleur/scripts/admin-merge-ready.sh)" || am=""
+  code_has "$hv" 'full-verified' || miss="$miss full-verified"
+  code_has "$am" 'full-verified' || miss="$miss admin-merge-ready-call"
+  [ "$(committed_mode plugins/soleur/scripts/ci-full-battery-audit.sh)" = 100755 ] || miss="$miss audit-script"
   if [ -n "$miss" ]; then R_STATUS=unmet; R_LINE="artifacts=missing:${miss# }"; return; fi
   gh_read "repos/$repo/actions/workflows/post-merge-monitor.yml/runs?branch=main&per_page=30"
   if [ "$G_STATUS" != 200 ]; then R_STATUS=unknown; R_LINE="artifacts=unknown(audit-runs-http=$G_STATUS)"; return; fi
-  runs="$(printf '%s' "$G_BODY" | jq -er '.workflow_runs | select(type == "array") | .[].id' 2>/dev/null)" || runs=""
+  runs="$(printf '%s' "$G_BODY" | jq -er '.workflow_runs | select(type == "array") | .[].id' 2>/dev/null)" \
+    || { R_STATUS=unknown; R_LINE="artifacts=unknown(runs-unparseable)"; return; }
   for id in $runs; do
     gh_read "repos/$repo/actions/runs/$id/jobs?per_page=100"
     if [ "$G_STATUS" != 200 ]; then R_STATUS=unknown; R_LINE="artifacts=unknown(jobs-http=$G_STATUS)"; return; fi
     jobs="$(printf '%s' "$G_BODY" | jq -er '.jobs | select(type == "array")' 2>/dev/null)" || { R_STATUS=unknown; R_LINE="artifacts=unknown(jobs-unparseable)"; return; }
+    # a jobs list shorter than its own total_count cannot show that the audit job is absent from the run
+    n="$(printf '%s' "$G_BODY" | jq -r 'if (.total_count | type) == "number" then (.total_count - (.jobs | length)) else 0 end' 2>/dev/null)" || n=1
+    [ "$n" = 0 ] || { R_STATUS=unknown; R_LINE="artifacts=unknown(jobs-truncated)"; return; }
     # the newest run that HAS the job decides; a null conclusion is pending, not "no run"
     c="$(printf '%s' "$jobs" | jq -r '[.[] | select(.name == "full-battery-audit") | (.conclusion // "pending")][0] // "absent"')"
     case "$c" in
@@ -152,23 +206,34 @@ reader_artifacts() {
   esac
 }
 
-# adr_line <label>: the LAST line of the ADR that starts with the label, label removed
-adr_line() { sed -n "s/^$1:[[:space:]]*//p" "$adr" | tail -1; }
-
 reader_verdict() {
-  local rp rel text last v r d today t_now t_rec age note="" cand
-  if [ -z "$adr" ] || [ ! -f "$adr" ]; then R_STATUS=unknown; R_LINE="verdict=unknown(adr-missing)"; return; fi
+  local rp rel text last v r d today t_now t_rec age note="" dir leaf cand n
+  if [ "$ADR_OK" -ne 1 ]; then R_STATUS=unknown; R_LINE="verdict=unknown(adr-missing)"; return; fi
   rp="$(adr_line 'Go\/no-go receipt')"
   if [ -z "$rp" ]; then R_STATUS=unmet; R_LINE="verdict=no-receipt-recorded"; return; fi
   case "$rp" in /*|*..*) R_STATUS=unknown; R_LINE="verdict=unknown(receipt-path-rejected)"; return ;; esac
-  # only the committed tree counts: a symlink or an untracked file at that path proves nothing
-  text="$(git_ro -C "$root" show "HEAD:$rp" 2>/dev/null)" || text=""
-  if [ -z "$text" ]; then
-    # ship archives the spec directory; the receipt moves with it
-    cand="$(printf '%s\n' "$rp" | sed -E 's#^(.*/specs)/([^/]+)/(.*)$#^\1/archive/[^/]+-\2/\3$#')"
-    rel="$(git_ro -C "$root" ls-tree -r --name-only HEAD 2>/dev/null | grep -E "$cand" | sort | tail -1)"
-    [ -z "$rel" ] || { text="$(git_ro -C "$root" show "HEAD:$rel" 2>/dev/null)" || text=""; note="(receipt-archived)"; }
-  fi
+  # only the committed tree counts: a symlink, a directory or an untracked file at that path proves nothing
+  if text="$(committed "$rp")"; then :
+  elif [ -z "$(git_ro -C "$root" ls-tree HEAD -- "$rp" 2>/dev/null)" ]; then
+    # absent from HEAD: ship archives the spec directory, so look for its ONE archived copy
+    text=""
+    case "$rp" in
+      */specs/*/*)
+        dir="${rp%%/specs/*}/specs"
+        leaf="${rp#"$dir"/}"      # <feature>/<path inside it>: the archive keeps both after a <timestamp>- prefix
+        cand="${dir}/archive/"
+        rel="$(git_ro -C "$root" ls-tree -r --name-only HEAD 2>/dev/null | awk -v pre="$cand" -v want="$leaf" '
+          index($0, pre) == 1 {
+            rest = substr($0, length(pre) + 1)
+            stamp = substr(rest, 1, 15)
+            if (stamp ~ /^[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]$/ && substr(rest, 16, 1) == "-" && substr(rest, 17) == want) print $0
+          }')"
+        n="$(printf '%s' "$rel" | grep -c .)"
+        if [ "$n" -gt 1 ]; then R_STATUS=unknown; R_LINE="verdict=unknown(receipt-archive-ambiguous)"; return; fi
+        if [ "$n" -eq 1 ] && text="$(committed "$rel")"; then note="(receipt-archived)"; else text=""; fi
+        ;;
+    esac
+  else text=""; fi
   if [ -z "$text" ]; then R_STATUS=unmet; R_LINE="verdict=receipt-absent"; return; fi
   last="$(printf '%s\n' "$text" | grep -v '^[[:space:]]*$' | tail -1)"
   if ! printf '%s' "$last" | grep -Eq '^SOLEUR_PR_AFFECTED_VERDICT verdict=(GO|NO-GO|UNDECIDED) ruled=(confirmed|pending) date=[0-9]{4}-[0-9]{2}-[0-9]{2}$'; then
@@ -179,6 +244,8 @@ reader_verdict() {
   d="$(printf '%s' "$last" | sed 's/.* date=//')"
   if [ "$v" != GO ] || [ "$r" != confirmed ]; then R_STATUS=unmet; R_LINE="verdict=$v-$r$note"; return; fi
   today="${PR_AFFECTED_PREACT_TODAY:-$(date -u +%F)}"
+  # the clock is a calendar day: `date -d` also reads "2026-10-10 + 30 days", which would age a stale GO into the window
+  printf '%s' "$today" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' || { R_STATUS=unknown; R_LINE="verdict=unknown(date-unparseable)"; return; }
   { t_now="$(date -u -d "$today" +%s 2>/dev/null)" && t_rec="$(date -u -d "$d" +%s 2>/dev/null)" && [ -n "$t_now" ] && [ -n "$t_rec" ]; } \
     || { R_STATUS=unknown; R_LINE="verdict=unknown(date-unparseable)"; return; }
   age=$(( (t_now - t_rec) / 86400 ))
@@ -186,44 +253,56 @@ reader_verdict() {
   R_STATUS=ok; R_LINE="verdict=GO-confirmed$note"
 }
 
-# registered_suite <label>: true when the label is a row of a suite-durations table
+# registered_suite <label>: true when the label is a row of a suite-durations table at HEAD
 registered_suite() {
-  local t
-  for t in "$root"/scripts/suite-durations.tsv "$root"/scripts/suite-durations-heavy.tsv; do
-    [ -f "$t" ] || continue
-    awk -F'\t' -v want="$1" '$0 !~ /^#/ && $1 == want { found = 1 } END { exit !found }' "$t" && return 0
+  local t body
+  for t in scripts/suite-durations.tsv scripts/suite-durations-heavy.tsv; do
+    body="$(committed "$t")" || continue
+    awk -F'\t' -v want="$1" '$0 !~ /^#/ && $1 == want { found = 1 } END { exit !found }' <<<"$body" && return 0
   done
   return 1
 }
 
 reader_prereq5() {
-  local ss item st reason bad="" n=0 items=()
-  if [ -z "$adr" ] || [ ! -f "$adr" ]; then R_STATUS=unknown; R_LINE="prereq5=unknown(adr-missing)"; return; fi
+  local ss item st reason w bad="" n=0 items=()
+  if [ "$ADR_OK" -ne 1 ]; then R_STATUS=unknown; R_LINE="prereq5=unknown(adr-missing)"; return; fi
   ss="$(adr_line 'Skippable set')"
   ss="${ss%%#*}"
   IFS=',' read -ra items <<<"$ss"
-  for item in "${items[@]}"; do
+  for item in ${items[@]+"${items[@]}"}; do
     item="$(printf '%s' "$item" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
     [ -n "$item" ] || continue
     n=$((n + 1))
     case "$item" in
-      test-webplat|test-bun|test-scripts-heavy|test-scripts) : ;;
+      test-webplat|test-bun|test-scripts-heavy) : ;;
       *[[:space:]]*) bad="$item"; break ;;
       *) registered_suite "$item" || { bad="$item"; break; } ;;
     esac
   done
   if [ "$n" -eq 0 ]; then R_STATUS=unmet; R_LINE="prereq5=skippable-set-empty"; return; fi
   if [ -n "$bad" ]; then R_STATUS=unmet; R_LINE="prereq5=skippable-set-unrecognised(${bad//[[:cntrl:]]/?})"; return; fi
-  if grep -Eq '^Waiver: heartbeat[[:space:]]+[^[:space:]]' "$adr"; then R_STATUS=ok; R_LINE="prereq5=ok(heartbeat-waived)"; return; fi
+  w="$(adr_line 'Waiver')"
+  if printf '%s' "$w" | grep -Eq '^heartbeat[[:space:]]+[^[:space:]]'; then R_STATUS=ok; R_LINE="prereq5=ok(heartbeat-waived)"; return; fi
   gh_read "repos/$repo/issues/$heartbeat"
   if [ "$G_STATUS" != 200 ]; then R_STATUS=unknown; R_LINE="prereq5=unknown(heartbeat-http=$G_STATUS)"; return; fi
   st="$(printf '%s' "$G_BODY" | jq -er '.state | select(type == "string")' 2>/dev/null)" || st=""
   reason="$(printf '%s' "$G_BODY" | jq -r '.state_reason // ""' 2>/dev/null)" || reason=""
   case "$st" in
-    closed) if [ "$reason" = not_planned ]; then R_STATUS=unmet; R_LINE="prereq5=heartbeat-not-planned"; else R_STATUS=ok; R_LINE="prereq5=ok"; fi ;;
+    closed) if [ "$reason" = completed ]; then R_STATUS=ok; R_LINE="prereq5=ok"; else R_STATUS=unmet; R_LINE="prereq5=heartbeat-closed-${reason:-without-reason}"; fi ;;
     open) R_STATUS=unmet; R_LINE="prereq5=heartbeat-open" ;;
     *) R_STATUS=unknown; R_LINE="prereq5=unknown(heartbeat-state)" ;;
   esac
+}
+
+reader_tree() {
+  local h o
+  h="$(git_ro -C "$root" rev-parse --verify -q HEAD 2>/dev/null)" || { R_STATUS=unknown; R_LINE="tree=unknown(no-head)"; return; }
+  gh_read "repos/$repo/commits/main"
+  if [ "$G_STATUS" != 200 ]; then R_STATUS=unknown; R_LINE="tree=unknown(main-http=$G_STATUS)"; return; fi
+  o="$(printf '%s' "$G_BODY" | jq -er '.sha | select(type == "string" and test("^[0-9a-f]{40}$"))' 2>/dev/null)" \
+    || { R_STATUS=unknown; R_LINE="tree=unknown(main-unparseable)"; return; }
+  if [ "$h" = "$o" ]; then R_STATUS=ok; R_LINE="tree=head-is-main"
+  else R_STATUS=unmet; R_LINE="tree=head-is-not-main(head=${h:0:7},main=${o:0:7})"; fi
 }
 
 # The doc-class directory name is built from two words so that this file carries no literal path of the documentation tree
@@ -263,7 +342,7 @@ reader_ac9c() {
   done
 }
 
-READERS=(variable org_variables lock artifacts verdict prereq5)
+READERS=(variable org_variables lock artifacts verdict prereq5 tree)
 if [ "${#READERS[@]}" -eq 0 ]; then echo "preactivation: the prerequisite list is empty; refusing to report readiness" >&2; exit 2; fi
 
 total=0; ok=0; unmet=0; missing=""
