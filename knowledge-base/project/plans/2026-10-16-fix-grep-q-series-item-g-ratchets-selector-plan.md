@@ -10,6 +10,27 @@ type: chore
 
 # chore: grep -q series Item G, `--ratchets` selector: decision record (recorded as not fixed)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-16
+**Scope of the pass:** a decision record with one comment-only edit, already reviewed by the CTO agent (binding ruling), a three-seat
+plan-review panel and a fact-check seat, so the deepen pass ran the mechanical gates and the verify-the-negative sweep instead of a
+per-section research fan-out (nothing in the plan is a framework or library claim to research).
+**Gates run:** 4.6 user-brand impact (present, threshold `none`, no sensitive path), 4.7 observability (not triggered), 4.8 PAT sweep
+(0 hits), 4.9 UI wireframe (no UI surface), 4.10 encryption posture (no `.tf`, store or connection), 4.11 guard contract (no guard
+delivered), 4.12 scope check (1 unfenced section, no `unmapped` row). Cited rule id `wg-when-deferring-a-capability-create-a` resolves to
+an active rule; commit `ee8644bded` is an ancestor of `origin/main`; cited issues and PRs resolved live.
+
+### Key improvements
+1. Q1 now names the one real path-level edit guard (the opt-in freeze edit-lock) and measures that it locks nothing here.
+2. Every negative claim ("no hook, CODEOWNERS entry or AGENTS rule bans the edit") was re-grepped: `.github/CODEOWNERS`,
+   `.claude/hooks/guardrails.sh`, `AGENTS.md` and `AGENTS.rules.md` each contain 0 mentions of `test-all`.
+3. The reviewer-found miscount (10, not 9, always-on files) and the answered `runner-changed` question are carried into Phase 2/3.
+
+### New considerations discovered
+- The follow-up's per-path sample must be drawn from the guard's own derived pairs; the first not-selected probe path is not shown to
+  be a producer, so its result is provisional until Phase 1 confirms it.
+
 Spec lacks valid lane: defaulted to cross-domain (TR2 fail-closed). No spec.md exists for this one-shot branch.
 
 ## Overview
@@ -48,6 +69,10 @@ Checked against `origin/main` at `ee8644bded`:
   kb-domain-allowlist-guard, no-memory-write, new-scheduled-cron-prefer-inngest, security_reminder_hook,
   skill-security-scan-write); `grep -rn 'test-all' .claude/hooks/*.sh` (hits only in suites and `pkill-self-match-guard.sh`
   comments); `.github/CODEOWNERS` (the `*` fallback only); `AGENTS.rules.md` (no rule names the file).
+- The repo's only path-level edit guard is the opt-in freeze edit-lock (`guardrails:freeze-edit-lock`, `.claude/hooks/lib/freeze-lock.sh`,
+  ADR-089): it denies edits outside ONE absolute prefix named in `.claude/.freeze-lock`, and fails open on an absent or malformed file.
+  Measured here: the state file is absent and `freeze_active_prefix` echoes nothing, so no path is locked, and the lock never names a
+  file. It cannot be what "forbidden-to-edit" refers to.
 - Brief premise corrected: the guard header (`.claude/hooks/grep-q-pipe-guard.test.sh`, near the `THE PRE-PUSH AFFECTED
   LANE DOES NOT SELECT THIS GUARD` line) overstates the gap; a probe selected the guard for two of three producer
   paths (see Q3).
@@ -306,8 +331,9 @@ The three CTO rulings are the rows of `knowledge-base/project/specs/feat-one-sho
 
 ## Observability
 
-Skipped (Phase 2.9): Files to Edit has no code-class file under `apps/*/server`, `apps/*/src`, `apps/*/infra` or `plugins/*/scripts`,
-and no new infrastructure surface.
+Skipped (Phase 2.9 and deepen Phase 4.7): the only non-knowledge-base path in Files to Edit is a comment-only edit to a test file under
+`.claude/hooks/`, which is outside the Phase 2.9 trigger set (`apps/*/server`, `apps/*/src`, `apps/*/infra`, `plugins/*/scripts`), and the
+PR adds no production code and no infrastructure surface.
 
 ## Architecture Decision (ADR/C4)
 
