@@ -70,13 +70,13 @@ build_repo() {
   (
     cd "$REPO" || exit 1
     gitq init -q -b main . || exit 1
-    printf 'scripts/lib/a\t60000\tmeasured\nscripts/suitex\t120000\tmeasured\nscripts/suitey\t30000\tmeasured\n' > scripts/suite-durations.tsv
-    : > scripts/suite-durations-heavy.tsv
-    printf 'seed\n' > README.md
+    printf 'scripts/lib/a\t60000\tmeasured\nscripts/suitex\t120000\tmeasured\nscripts/suitey\t30000\tmeasured\n' > "$REPO/scripts/suite-durations.tsv"
+    : > "$REPO/scripts/suite-durations-heavy.tsv"
+    printf 'seed\n' > "$REPO/README.md"
     gitq add -A && gitq commit -qm seed || exit 1
     n=0
     for f in doc/a.md x.txt doc/c.md doc/d.md doc/e.md scripts/runner.sh doc/g.md; do
-      n=$((n + 1)); mkdir -p "$(dirname "$f")"; printf 'v%s\n' "$n" > "$f"
+      n=$((n + 1)); mkdir -p "$(dirname "$REPO/$f")"; printf 'v%s\n' "$n" > "$REPO/$f"
       gitq add -A && gitq commit -qm "c$n $f" || exit 1
     done
     gitq update-ref refs/remotes/origin/main HEAD
@@ -359,10 +359,14 @@ if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_
 
 # Anti-vacuity floors, reported through printf + exit so they never ride on the helpers they guard.
 FLOOR_ASSERTIONS=53
-FLOOR_MUTANTS=10
 total=$((passes + fails))
-if [[ "$total" -lt "$FLOOR_ASSERTIONS" ]]; then printf '[FATAL] only %s assertions ran; the floor is %s\n' "$total" "$FLOOR_ASSERTIONS" >&2; exit 1; fi
-if [[ "$MUT_RUN" -lt "$FLOOR_MUTANTS" ]]; then printf '[FATAL] only %s mutants ran; the floor is %s\n' "$MUT_RUN" "$FLOOR_MUTANTS" >&2; exit 1; fi
+if [[ "$total" -lt "$FLOOR_ASSERTIONS" ]]; then
+  printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$total" "$FLOOR_ASSERTIONS" >&2; exit 1
+fi
+FLOOR_MUTANTS=10
+if [[ "$MUT_RUN" -lt "$FLOOR_MUTANTS" ]]; then
+  printf '[FATAL] mutation floor: only %s mutants ran, floor is %s\n' "$MUT_RUN" "$FLOOR_MUTANTS" >&2; exit 1
+fi
 echo "ci-pr-affected-replay.test.sh: $passes passed, $fails failed, $total assertions, $MUT_RUN mutants"
 [[ "$fails" -eq 0 ]] && exit 0
 printf 'FAILED: %s\n' "${FAILED[@]}" >&2
