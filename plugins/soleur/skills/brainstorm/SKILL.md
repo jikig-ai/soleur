@@ -164,7 +164,7 @@ Phase 0.4 must complete before Phase 0.5 spawns leaders. The two phases are sequ
 
 ### Phase 0.5: Domain Leader Assessment
 
-Assess whether the feature has implications for specific business domains; domain leaders participate when relevant. A technical fork goes to the CTO, not the operator ([technical-ruling-delegation.md](${CLAUDE_PLUGIN_ROOT}/skills/brainstorm-techniques/references/technical-ruling-delegation.md)).
+Assess whether the feature has implications for specific business domains; domain leaders participate when relevant. A technical fork goes to the CTO, not the operator ([technical-ruling-delegation.md](../brainstorm-techniques/references/technical-ruling-delegation.md)).
 
 <!-- To add a new domain: add a row to the Domain Config table below. No other structural edits needed. -->
 

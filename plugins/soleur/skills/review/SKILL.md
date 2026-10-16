@@ -866,7 +866,7 @@ Remove duplicates, prioritize by severity and impact.
     3. **Close as wontfix** — polish-only, low-value noise, or concern already
        covered by existing code. Close immediately (do not file) with a
        1-sentence rationale in the summary report.
-    4. **Route to the domain agent for a BINDING ruling** — the finding is not an edit but a *decision* (an architecture fork, a threshold or evidence bar, design A-vs-B, a legal-posture call): spawn `soleur:engineering:cto` (legal: `soleur:legal:clo`, requiring drafted replacement wording) per [technical-ruling-delegation.md](${CLAUDE_PLUGIN_ROOT}/skills/brainstorm-techniques/references/technical-ruling-delegation.md), implement exactly what it returns, and never surface it via `AskUserQuestion` or file it as a scope-out. **Weight is not a routing signal.** **Why:** #7347 — three legal decisions from a ten-P1 review were offered to the operator.
+    4. **Route to the domain agent for a BINDING ruling** — the finding is not an edit but a *decision* (an architecture fork, a threshold or evidence bar, design A-vs-B, a legal-posture call): spawn `soleur:engineering:cto` (legal: `soleur:legal:clo`, requiring drafted replacement wording) per [technical-ruling-delegation.md](../brainstorm-techniques/references/technical-ruling-delegation.md), implement exactly what it returns, and never surface it via `AskUserQuestion` or file it as a scope-out. **Weight is not a routing signal.** **Why:** #7347 — three legal decisions from a ten-P1 review were offered to the operator.
 
 The `pr-introduced → fix inline` rule is the mechanical version of rule
 `rf-review-finding-default-fix-inline`: it removes the judgment loophole ("is

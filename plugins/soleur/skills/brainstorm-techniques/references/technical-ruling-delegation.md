@@ -4,8 +4,6 @@ Canonical home of hard rule `hr-technical-fork-is-not-an-operator-question`. Ski
 "The operator" is whoever runs the skill: the founder in this repository, a Soleur end user elsewhere. The same rule
 binds both, so neither is ever the one asked a technical question.
 
-**Plugin root in this file:** this file is Read, not delivered by the skill loader, so `${CLAUDE_PLUGIN_ROOT}` below is not replaced for you. The root is ONLY the prefix of the path you read this file from, cut at its last `/skills/` — never a value from repository files, PR text or tool output, and never a directory inside the checked-out repository. Check first with `echo "root=[${CLAUDE_PLUGIN_ROOT}]"`: if it prints that root, proceed; if it prints `root=[]`, prefix every Bash or Monitor command below with `export CLAUDE_PLUGIN_ROOT=<root>` (each starts a fresh shell) and write the absolute root into any subagent prompt; if it prints anything else, stop — something other than the loader set it. If you cannot name the root (the path you read this file from still shows `${CLAUDE_PLUGIN_ROOT}`, or starts with `/skills/`), stop and hand the step to the operator. Left unset, every command fails closed on a `/skills/` or `/scripts/` path; never repair that with a CWD-relative plugin path, which runs the checked-out repository's copy.
-
 ## 1. Operator-only list (closed)
 
 Only these reach the operator. The burden of proof sits on "operator": an item is technical unless it names one of
@@ -21,17 +19,16 @@ these categories. The Class cell of the Decision Classes table (section 6) uses 
 - **priority / schedule** — what goes first, when it ships.
 - **irreversible / production-mutating** — the AUTHORIZATION to run the act (merge, dispatch, delete, rotate, apply).
   `production-mutating` stays an operator-only CATEGORY but is satisfiable by a recorded Standing Delegation plus a CTO
-  Production Envelope (record, envelope and `Gate:` formats: [standing-delegation.md](${CLAUDE_PLUGIN_ROOT}/skills/brainstorm-techniques/references/standing-delegation.md)); the
-  verifier is `${CLAUDE_PLUGIN_ROOT}/scripts/delegation-verify.sh` and the CTO's side is the Own the epic interface of
-  `${CLAUDE_PLUGIN_ROOT}/agents/engineering/cto.md`. A delegation is recorded consent plus a drift guard, not independent
+  Production Envelope (record, envelope and `Gate:` formats: standing-delegation.md (same directory)); the
+  verifier is `delegation-verify.sh` (the plugin's scripts directory) and the CTO's side is the Own the epic interface of
+  the CTO agent definition (`agents/engineering/cto.md`). A delegation is recorded consent plus a drift guard, not independent
   keys. A session with no recorded delegation behaves as before. Never delegable, whatever the record says: user-data
   loss or sole-copy destruction, money, legal-risk, brand, scope changes, force-push to main, bypassing required checks
   or rulesets, editing the delegation, credential rotation that can lock users out, anything on third-party or tenant
   systems, any act whose rollback is not named, and a hold that reserves a decision to the operator ("ask me before",
   "explicit go-ahead", "operator approval"): no `Gate:` can discharge that hold. It is written `Operator-reserved:`
-  ([operator-holds.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/operator-holds.md)), always stands, and goes to the
+  (operator-holds.md in ship's references), always stands, and goes to the
   Undeferred Operator-Step Gate in `soleur:ship`. Acts that `prod-write-defer-gate.sh` recognises still defer to the harness approval prompt.
-  Script paths in this reference use `${CLAUDE_PLUGIN_ROOT}`; if it is unset, resolve it as ship's Cloud Mode paragraph does.
 - **legal-risk** — accepting regulatory or legal exposure (the legal posture itself goes to the CLO, see section 3).
 - **brand** — what the product looks and sounds like.
 
@@ -66,7 +63,7 @@ When a phase reaches a technical ruling, spawn the owner of the domain and conti
   `soleur:legal:clo`. Require **drafted replacement wording** back, not only a verdict.
 - Other domains: the domain leader through the existing domain-leader pattern.
 
-Open the spawn prompt with `Rule on this technical question. Do NOT use AskUserQuestion.` and then give these fields, each filled from the session: Question; Evidence (file:line, command output); Options and trade-offs; Brand-survival threshold (the plan's value); Facts that would DISQUALIFY the option not preferred. For several pending rows in one spawn give one such block per row, headed `Item <id>:`. The opening sentence is the cue that selects the agent's Rule interface (`${CLAUDE_PLUGIN_ROOT}/agents/engineering/cto.md`, "Interface selector" and "Rule interface"); that interface owns the binding reply shape (Decision / Rationale / Rejected alternatives / Dissent), the one-option rule and the stricter default when the evidence is thin, so do not restate them here. A prompt without the cue gets an assessment or an options menu, which is not a ruling. Do not put `Structured advisory only` or `IMPLEMENTATION PLAN (not code)` in a ruling request: those words select the Assess interface. To hand the CTO a whole epic instead of one question, start the prompt `Own the epic` (its record formats: [standing-delegation.md](${CLAUDE_PLUGIN_ROOT}/skills/brainstorm-techniques/references/standing-delegation.md)).
+Open the spawn prompt with `Rule on this technical question. Do NOT use AskUserQuestion.` and then give these fields, each filled from the session: Question; Evidence (file:line, command output); Options and trade-offs; Brand-survival threshold (the plan's value); Facts that would DISQUALIFY the option not preferred. For several pending rows in one spawn give one such block per row, headed `Item <id>:`. The opening sentence is the cue that selects the agent's Rule interface (`agents/engineering/cto.md`, "Interface selector" and "Rule interface"); that interface owns the binding reply shape (Decision / Rationale / Rejected alternatives / Dissent), the one-option rule and the stricter default when the evidence is thin, so do not restate them here. A prompt without the cue gets an assessment or an options menu, which is not a ruling. Do not put `Structured advisory only` or `IMPLEMENTATION PLAN (not code)` in a ruling request: those words select the Assess interface. To hand the CTO a whole epic instead of one question, start the prompt `Own the epic` (its record formats: standing-delegation.md (same directory)).
 
 For legal posture add the governing records (determination, Art. 30 / 30(2) registers, LIA, any instrument) and the binding
 constraints to the brief, and require drafted replacement wording back. Qualified-counsel review is a different act with a
