@@ -51,3 +51,9 @@ Plan: `knowledge-base/project/plans/2026-10-15-feat-ci-pr-c-affected-only-plan.m
 - 5.2 Minimal local set, then CI's full battery as the authority; extend the declared inputs of `scripts/ci-pr-selection.test.sh`.
 - 5.3 Read this PR's own ready run (`pr-selection` skipped, legs and `test` green).
 - 5.4 11-seat review plus `soleur:engineering:review:user-impact-reviewer`; ship archives this plan and spec (Phase 6.45); UNTRUSTED-CI rules apply to a stage 2 PR (no agent `--admin`; BEHIND livelock means ask the user; never sync a BEHIND PR with auto-merge armed).
+
+## Status (2026-10-16)
+
+Done: Phase 0, Phase 1 (1.0 to 1.6), Phase 2 (verdict NO-GO, CTO-confirmed, ruled=confirmed). Phases 3 and 4 (stage 2: the reduced-run read, the audit probe,
+the census split, the lock removal) were NOT started: they are GO-only and the verdict is NO-GO. Follow-on decision: #10448. Phase 5: the minimal local set is
+green (see the PR body); CI's full battery is the merge authority.
