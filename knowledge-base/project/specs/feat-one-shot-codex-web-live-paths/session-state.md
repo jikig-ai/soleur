@@ -1906,6 +1906,14 @@
   operational tests pass 31/31; syntax and whitespace pass. Focused source
   review, final source pairing/export/description and new-head CI remain
   pending. See `prebuild-acquisition-2026-10-16.md` for scope and corrections.
+- Focused CTO/security review found optional raw Config keys were incorrectly
+  required and endpoint replacement detection was overstated. Acquisition now
+  preserves exact bounded Config dictionaries without defaults; the document
+  names persistent-replacement detection and the trusted namespace/peer-auth
+  limitation. Output owner/mode/identity is rechecked around requests and
+  before receipt creation. Synthesized omission and mode-change cases ran
+  RED before correction; all 18 acquisition cases pass on both the session
+  interpreter and explicit system Python 3.14. Focused recheck remains pending.
 - No actual prepare/execute acquisition, image observation, executable tool
   invocation, build, SQL, provider, browser/account, recovery or retry ran.
   Filesystem-only reads identified candidate socket/tool paths and hashed

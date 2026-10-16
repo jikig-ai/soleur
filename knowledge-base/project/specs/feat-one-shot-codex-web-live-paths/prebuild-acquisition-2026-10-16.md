@@ -66,12 +66,17 @@ false and issuer verification/independent review stays pending.
 - Gate failure prevents every request; a successful gate is consumed before
   the first request, and success or failure cannot replay the same attempt.
 - A single shrinking deadline bounds the pass and each request; timeout,
-  malformed metadata, image mismatch, incomplete Config or 404 stops without
+  malformed metadata, image mismatch, absent/non-dictionary/oversized Config or 404 stops without
   retry and without making later requests.
 - Receipts retain projected daemon fields, exact source/reference/Config
   bindings and partial-failure state; all authority flags stay false.
-- Symlinked or replaced output/manifest/endpoint paths fail closed. Synthetic
-  tests exercise these boundaries without contacting a real daemon.
+- Symlinked/replaced output or manifest paths and persistently replaced
+  endpoint paths fail closed. Synthetic tests exercise these boundaries
+  without contacting a real daemon. Before/after endpoint fingerprints do
+  not exclude replacement during a pathname connection followed by restore.
+  The endpoint namespace must remain trusted; peer authentication and host
+  administrator isolation remain unestablished. Local filesystem and Python
+  processing have cooperative deadline checks rather than preemption.
 
 ## User impact and remaining gates
 
@@ -107,14 +112,26 @@ matrices, full review/QA/preflight and promotion remain pending.
 ## Synthetic verification
 
 The new test module first failed because `prebuild_acquisition` did not exist.
-It now passes 16 cases, including the actual prepare/execute functions over
+It now passes 18 cases, including the actual prepare/execute functions over
 fake transports, persistent replay refusal across a forked process, copied
 directory and mid-request path replacement, FIFO/symlink refusal, retained
 byte binding, one shrinking deadline and contradictory daemon metadata.
 The related operational/preparation/candidate tests pass 31 cases. Both runs
 used `python3 -E -B -W error`; no real socket connection or acquisition ran.
-Bash syntax and whitespace checks pass. Focused independent source review,
-exact-head refresh and fresh exact-action approval remain pending.
+Bash syntax and whitespace checks pass. The 18 acquisition cases also pass
+under the explicit system Python 3.14 intended for the reviewed command.
+
+Focused CTO and security review found the initial raw Config key requirement
+rejected legitimate omitted optional keys. A synthesized omission case ran
+RED before preserving and hashing the exact returned dictionary; absent,
+non-dictionary and oversized Configs still refuse. No defaults or effective
+profile admission are inferred. The security review also identified an
+overstatement about endpoint replacement detection; the limitation above
+now names the actual guarantee. Additional output-mode hardening ran RED
+when a mode change allowed a second request, then GREEN after owner/mode/
+identity rechecks around requests and before receipt creation. Focused
+reverification, exact-head refresh and fresh exact-action approval remain
+pending. This is not the full PR panel or runtime clearance.
 
 ## Session corrections
 

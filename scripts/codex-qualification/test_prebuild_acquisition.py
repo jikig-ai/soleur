@@ -182,12 +182,12 @@ class Acquisition(unittest.TestCase):
                 self.collector().collect()
             self.responses[path] = saved
 
-    def test_image_identity_membership_platform_and_complete_config_required(self):
+    def test_image_identity_membership_platform_and_bounded_config_dict_required(self):
         path = sorted(path for path in self.responses if path.startswith('/images/'))[0]
         original = self.responses[path]
         for field, value in (('Id', 'fixture-latest'), ('RepoDigests', []),
                              ('Architecture', 'arm64'), ('Os', 'windows'),
-                             ('Config', {'Cmd': ['fixture']}),
+                             ('Config', None), ('Config', []), ('Config', 'fixture'),
                              ('Config', {**CONFIG, 'Env': ['X=' + 'x' * 1048576]})):
             self.responses[path] = (200, {**original[1], field: value})
             self.gate.reset_mock()
@@ -195,6 +195,35 @@ class Acquisition(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(acquisition.AcquisitionFailure):
                 self.collector().collect()
             self.assertEqual(self.transport.request.call_count, 3)
+
+    def test_raw_config_omissions_are_preserved_without_admitting_profiles(self):
+        raw_configs = [{key: value for key, value in CONFIG.items()
+                        if key not in ('Volumes', 'OnBuild')}, {}, {'Cmd': ['fixture-service']}]
+        for raw in raw_configs:
+            for path, (_, response) in self.responses.items():
+                if path.startswith('/images/'):
+                    response['Config'] = copy.deepcopy(raw)
+            self.gate.reset_mock()
+            with self.subTest(raw=raw):
+                receipt = self.collector().collect()
+                self.assertEqual(receipt['status'], 'complete')
+                for observed in receipt['roles'].values():
+                    self.assertEqual(observed['config'], raw)
+                    self.assertEqual(observed['config_sha256'], sha(canonical(raw)))
+                    self.assertNotIn('Volumes', observed['config'])
+                    self.assertNotIn('OnBuild', observed['config'])
+                for field in ('execute_authorized', 'profile_admissible', 'authentication_established',
+                              'ownership_verified', 'quiescence_verified'):
+                    self.assertIs(receipt[field], False)
+                self.assertEqual(receipt['issuer_verification'], 'pending')
+                self.assertEqual(receipt['independent_review'], 'pending')
+
+    def test_missing_config_stops_before_following_image(self):
+        path = sorted(path for path in self.responses if path.startswith('/images/'))[0]
+        del self.responses[path][1]['Config']
+        with self.assertRaises(acquisition.AcquisitionFailure):
+            self.collector().collect()
+        self.assertEqual(self.transport.request.call_count, 3)
 
     def test_optional_version_fields_are_omitted_and_receipt_has_measurements(self):
         minimal = {key: VERSION[key] for key in ('Version', 'ApiVersion', 'Os', 'Arch')}
@@ -312,6 +341,22 @@ class Acquisition(unittest.TestCase):
                     acquisition.execute_action(execute2)
                 transport_factory.return_value.request.assert_called_once()
                 self.assertEqual(list(other.iterdir()), [])
+                # Broadening the prepared output mode during a response must
+                # stop before the next request despite stable device/inode.
+                output3 = root / 'output3'
+                args.directory = str(output3)
+                digest3 = acquisition.prepare_action(args)
+                def broaden_output(*_args, **_kwargs):
+                    output3.chmod(0o755)
+                    return 200, VERSION
+                transport_factory.return_value.request.reset_mock()
+                transport_factory.return_value.request.side_effect = broaden_output
+                execute3 = Namespace(manifest=str(output3 / acquisition.MANIFEST),
+                    manifest_sha256=digest3, runner_sha256=execute.runner_sha256)
+                with self.assertRaises(Refused):
+                    acquisition.execute_action(execute3)
+                transport_factory.return_value.request.assert_called_once()
+                self.assertEqual((output3 / acquisition.RECEIPT).stat().st_mode & 0o777, 0o600)
 
     def test_file_helpers_refuse_symlink_ancestors_and_never_follow_leaf(self):
         with tempfile.TemporaryDirectory() as temporary:

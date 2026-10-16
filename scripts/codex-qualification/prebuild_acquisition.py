@@ -3,6 +3,8 @@
 The execute CLI requires separate harness approval. Its persistent marker only
 prevents replay: neither a marker nor a manifest proves human authorization.
 No pulls, discovery, builds, container operations or fallback paths exist here.
+Config dictionaries retain exactly the returned fields; omissions receive no
+defaults and establish no effective configuration or executable profile.
 """
 import argparse
 import copy
@@ -15,7 +17,7 @@ import stat
 import time
 from urllib.parse import quote
 
-from image_observations import MAX_CONFIG_BYTES, REQUIRED_CONFIG_FIELDS
+from image_observations import MAX_CONFIG_BYTES
 from prepare import Refused, canonical, git, require, sha
 
 ROLES = ('db', 'kong', 'auth', 'inbucket', 'rest', 'storage')
@@ -230,7 +232,7 @@ class PrebuildAcquisition:
                             all(_text(item, 512) for item in data['RepoDigests']) and ref in data['RepoDigests'] and
                             data.get('Os') == 'linux' and data.get('Architecture') == 'amd64' and
                             ('Variant' not in data or data['Variant'] == '') and
-                            type(data.get('Config')) is dict and REQUIRED_CONFIG_FIELDS <= set(data['Config']) and
+                            type(data.get('Config')) is dict and
                             len(canonical(data['Config'])) <= MAX_CONFIG_BYTES, ERROR)
                     observation = {'requested_reference': ref, 'image_id': data['Id'],
                                    'config': copy.deepcopy(data['Config']),
@@ -411,7 +413,9 @@ def execute_action(args):
             descriptor = _parent(args.manifest)
             try:
                 current = os.fstat(descriptor)
-                require((current.st_dev, current.st_ino) == (observed.st_dev, observed.st_ino), ERROR)
+                require((current.st_dev, current.st_ino, current.st_uid) ==
+                        (observed.st_dev, observed.st_ino, observed.st_uid) and
+                        stat.S_IMODE(current.st_mode) == 0o700, ERROR)
             finally:
                 os.close(descriptor)
         class BoundTransport:
@@ -422,6 +426,7 @@ def execute_action(args):
                 current_output()
                 return response
         def consume():
+            current_output()
             _write_at(output_parent, MARKER, {'manifest_sha256': args.manifest_sha256})
         collector = PrebuildAcquisition(manifest, BoundTransport(), consume,
                                        manifest_sha256=args.manifest_sha256)
@@ -433,6 +438,7 @@ def execute_action(args):
             except OSError:
                 pass
             raise Refused(ERROR) from None
+        current_output()
         _write_at(output_parent, RECEIPT, result)
     finally:
         os.close(output_parent)
