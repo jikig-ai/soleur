@@ -1913,8 +1913,12 @@
   limitation. Output owner/mode/identity is rechecked around requests and
   before receipt creation. Synthesized omission and mode-change cases ran
   RED before correction; all 18 acquisition cases pass on both the session
-  interpreter and explicit system Python 3.14. Focused recheck remains pending.
-- No actual prepare/execute acquisition, image observation, executable tool
+  interpreter and explicit system Python 3.14. Focused CTO/security rechecks
+  at pushed `663256a8947aec73065a7d3e09d2a2f21a835d73` close both findings
+  with no further concrete finding in the correction delta. This evidence
+  update changes no acquisition component bytes. Actual file-only action
+  preparation, binding review, source refresh and fresh approval remain pending.
+- No acquisition execution, image observation, Docker/buildx executable
   invocation, build, SQL, provider, browser/account, recovery or retry ran.
   Filesystem-only reads identified candidate socket/tool paths and hashed
   selected local executable bytes; these do not attest daemon identity or

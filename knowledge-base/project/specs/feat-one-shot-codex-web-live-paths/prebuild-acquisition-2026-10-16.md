@@ -2,7 +2,7 @@
 title: Separate prebuild evidence acquisition from runtime qualification
 date: 2026-10-16
 pr: 9051
-status: synthetic-source-verified-focused-review-and-approval-pending
+status: focused-source-reviewed-file-only-action-and-approval-pending
 ---
 
 # CTO ruling and scope
@@ -129,9 +129,14 @@ profile admission are inferred. The security review also identified an
 overstatement about endpoint replacement detection; the limitation above
 now names the actual guarantee. Additional output-mode hardening ran RED
 when a mode change allowed a second request, then GREEN after owner/mode/
-identity rechecks around requests and before receipt creation. Focused
-reverification, exact-head refresh and fresh exact-action approval remain
-pending. This is not the full PR panel or runtime clearance.
+identity rechecks around requests and before receipt creation. The CTO and
+security reviewer independently reverified pushed
+`663256a8947aec73065a7d3e09d2a2f21a835d73`: both findings are closed, with
+no further concrete finding in that correction delta. They ran source reads
+only. This evidence-record update changes no acquisition component bytes.
+Actual file-only action preparation, review of its exact bindings, exact-head
+refresh and fresh exact-command approval remain pending. This is not the full
+PR panel or runtime clearance.
 
 ## Session corrections
 
@@ -144,3 +149,10 @@ never as a CI or qualification verdict.
 An additional helper lookup guessed a filename; the canonical monitor's
 actual helper reference identified the read-only attribution script. Follow
 the resolved reference rather than deriving a helper name from its purpose.
+A multi-file evidence patch used the wrong tasks path and was rejected
+atomically; verified clean status before correcting the full path. Keep the
+entire discovered feature-spec prefix when constructing patch targets.
+Staging then hit a sandbox index-lock refusal; a trailing read hid its exit
+status and the subsequent commit correctly refused unstaged files. Run each
+Git mutation separately, inspect its status immediately, and use the required
+filesystem approval for index writes before continuing.
