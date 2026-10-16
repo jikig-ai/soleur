@@ -528,7 +528,7 @@ scripts/web-host-escrow-preflight	870	measured
 scripts/web2-luks-live-6931	23754	measured
 scripts/workspaces-plaintext-hold-9348	825	measured
 scripts/zot-fill-rate-7341	2822	measured
-scripts/zot-fill-rate-standing-wiring	1184	floor
+scripts/zot-fill-rate-standing-wiring	77000	measured
 scripts/zot-last-err-redact-7500	1183	measured
 scripts/zot-mirror-diagnosis	490	measured
 scripts/zot-restart-loop-alarm	5516	measured
