@@ -389,8 +389,8 @@ SHA() { printf '%040d' "$1"; }
 mgr2() { printf '{"id":%s,"event":"merge_group","conclusion":"%s","run_attempt":%s,"created_at":"2031-01-0%sT00:00:00Z","head_sha":"%s","head_branch":"%s"}' "$1" "$2" "$5" "$3" "$4" "$6"; }
 qb() { printf 'gh-readonly-queue/main/pr-%s-base' "$1"; }
 REPO_NAME="$R2"
-RUNS2="$(mgr2 8101 failure 1 "$(SHA 101)" 2 "$(qb 21)"),$(mgr2 8102 failure 1 "$(SHA 102)" 2 "$(qb 22)"),$(mgr2 8103 failure 1 "$(SHA 103)" 2 "$(qb 23)"),$(mgr2 8104 failure 1 "$(SHA 104)" 1 "$(qb 24)"),$(mgr2 8105 success 2 "$(SHA 105)" 1 "$(qb 24)"),$(mgr2 8106 failure 1 "$(SHA 106)" 1 "$(qb 25)"),$(mgr2 8107 success 2 "$(SHA 107)" 1 "$(qb 25)"),$(mgr2 8108 success 1 "$(SHA 108)" 1 "$(qb 26)"),$(mgr2 8109 failure 2 "$(SHA 109)" 1 "$(qb 26)"),$(mgr2 8110 failure 3 "$(SHA 110)" 1 gh-readonly-queue/main/weird),$(mgr2 8111 success 4 "$(SHA 111)" 1 gh-readonly-queue/main/weird2),$(mgr2 8112 failure 1 "$(SHA 112)" 1 "$(qb 27)"),$(mgr2 8113 failure 1 "$(SHA 113)" 1 "$(qb 28)"),$(mgr2 8114 failure 1 "$(SHA 114)" 1 "$(qb 29)"),$(mgr2 8115 failure 1 "$(SHA 115)" 1 "$(qb 31)"),$(mgr2 8116 failure 1 "$(SHA 116)" 1 "$(qb 32)"),$(mgr2 8117 failure 1 "$(SHA 117)" 1 "$(qb 33)"),$(mgr2 8118 failure 1 "$(SHA 118)" 1 "$(qb 34)"),$(mgr2 8119 failure 1 "$(SHA 119)" 1 "$(qb 35)"),$(mgr2 8120 failure 2 "$(SHA 120)" 1 "$(qb 35)"),$(mgr2 8121 failure 1 "$(SHA 121)" 1 "$(qb 36)"),$(mgr2 8122 success 2 "$(SHA 122)" 1 "$(qb 36)"),$(mgr2 8123 failure 1 "$(SHA 123)" 1 "$(qb 37)"),$(mgr2 8124 failure 1 "$(SHA 124)" 1 "$(qb 38)"),$(mgr2 8125 failure 1 "$(SHA 125)" 1 "$(qb 39)"),$(mgr2 8127 timed_out 1 "$(SHA 127)" 1 "$(qb 42)"),$(mgr2 8128 cancelled 1 "$(SHA 128)" 1 "$(qb 43)"),$(mgr2 8129 failure 1 "$(SHA 129)" 1 "$(qb 40)"),$(mgr2 8130 failure 1 "$(SHA 130)" 1 "$(qb 41)"),$(mgr2 8131 failure 1 "$(SHA 131)" 1 "$(qb 44)")"
-mg_runs "$RUNS2" 30 | fx "repos/$R2/actions/workflows/ci.yml/runs?event=merge_group&created=X&per_page=100"
+RUNS2="$(mgr2 8101 failure 1 "$(SHA 101)" 2 "$(qb 21)"),$(mgr2 8102 failure 1 "$(SHA 102)" 2 "$(qb 22)"),$(mgr2 8103 failure 1 "$(SHA 103)" 2 "$(qb 23)"),$(mgr2 8104 failure 1 "$(SHA 104)" 1 "$(qb 24)"),$(mgr2 8105 success 2 "$(SHA 105)" 1 "$(qb 24)"),$(mgr2 8106 failure 1 "$(SHA 106)" 1 "$(qb 25)"),$(mgr2 8107 success 2 "$(SHA 107)" 1 "$(qb 25)"),$(mgr2 8108 success 1 "$(SHA 108)" 1 "$(qb 26)"),$(mgr2 8109 failure 2 "$(SHA 109)" 1 "$(qb 26)"),$(mgr2 8110 failure 3 "$(SHA 110)" 1 gh-readonly-queue/main/weird),$(mgr2 8111 success 4 "$(SHA 111)" 1 gh-readonly-queue/main/weird2),$(mgr2 8112 failure 1 "$(SHA 112)" 1 "$(qb 27)"),$(mgr2 8113 failure 1 "$(SHA 113)" 1 "$(qb 28)"),$(mgr2 8114 failure 1 "$(SHA 114)" 1 "$(qb 29)"),$(mgr2 8115 failure 1 "$(SHA 115)" 1 "$(qb 31)"),$(mgr2 8116 failure 1 "$(SHA 116)" 1 "$(qb 32)"),$(mgr2 8117 failure 1 "$(SHA 117)" 1 "$(qb 33)"),$(mgr2 8118 failure 1 "$(SHA 118)" 1 "$(qb 34)"),$(mgr2 8119 failure 1 "$(SHA 119)" 1 "$(qb 35)"),$(mgr2 8120 failure 2 "$(SHA 120)" 1 "$(qb 35)"),$(mgr2 8121 failure 1 "$(SHA 121)" 1 "$(qb 36)"),$(mgr2 8122 success 2 "$(SHA 122)" 1 "$(qb 36)"),$(mgr2 8123 failure 1 "$(SHA 123)" 1 "$(qb 37)"),$(mgr2 8124 failure 1 "$(SHA 124)" 1 "$(qb 38)"),$(mgr2 8125 failure 1 "$(SHA 125)" 1 "$(qb 39)"),$(mgr2 8127 timed_out 1 "$(SHA 127)" 1 "$(qb 42)"),$(mgr2 8128 cancelled 1 "$(SHA 128)" 1 "$(qb 43)"),$(mgr2 8129 failure 1 "$(SHA 129)" 1 "$(qb 40)"),$(mgr2 8130 failure 1 "$(SHA 130)" 1 "$(qb 41)"),$(mgr2 8131 failure 1 "$(SHA 131)" 1 "$(qb 44)"),$(mgr2 8132 failure 1 "$(SHA 132)" 1 "$(qb 45)")"
+mg_runs "$RUNS2" 31 | fx "repos/$R2/actions/workflows/ci.yml/runs?event=merge_group&created=X&per_page=100"
 f2() { cfiles "$(cfile "$2" "$3")" | fx "repos/$R2/commits/$(SHA "$1")?per_page=100"; }   # f2 <n> <path> <blob>
 suitey_fail() { jobs_body "$1" "$2:test-scripts (1/8):failure" "$3:test:failure" | fx "$(jobs_path "$1")"; printf '[FAIL] scripts/suitey (90ms) log=/l/y.log\n' | fx "$(log_path "$2")"; }
 f2 101 doc/q1.md aaa111; suitey_fail 8101 95101 95102
@@ -428,8 +428,11 @@ cfiles "" | fx "repos/$R2/commits/$(SHA 122)?per_page=100"; fx_err "repos/$R2/co
 f2 123 doc/w.md blobW1; jobs_body 8123 "95291:test-webplat (1/2):failure" | fx "$(jobs_path 8123)"; printf '[FAIL] scripts/suitey (90ms) log=/l/y.log\n' | fx "$(log_path 95291)"
 f2 124 doc/b.md blobB1; jobs_body 8124 "95301:test-bun (1/2):failure" | fx "$(jobs_path 8124)"; printf '[FAIL] scripts/suitey (90ms) log=/l/y.log\n' | fx "$(log_path 95301)"
 f2 125 doc/h.md blobH1; jobs_body 8125 "95311:test-scripts-heavy (1/3):failure" | fx "$(jobs_path 8125)"; printf '[FAIL] scripts/suitey (90ms) log=/l/y.log\n' | fx "$(log_path 95311)"
-# a timed_out queue run is an unfinished refusal and is classed; a cancelled one is a dequeue and is not a unit
+# a timed_out queue run is an unfinished refusal and is classed; so is a cancelled one (a cancelled shard fails the aggregate)
 f2 127 doc/to.md blobT2; jobs_body 8127 "95321:e2e:failure" | fx "$(jobs_path 8127)"
+f2 128 doc/ca.md blobC2; jobs_body 8128 "95322:test-webplat (1/2):cancelled" "95323:test:failure" | fx "$(jobs_path 8128)"
+# a commit file entry with no blob sha cannot support an identical-content claim
+printf '{"files":[{"filename":"doc/nosha.md"}]}\n' | fx "repos/$R2/commits/$(SHA 132)?per_page=100"
 # a log whose suite label carries a terminal escape (OSC, which the ANSI strip does not touch) is not a [FAIL] line
 f2 129 doc/o.md blobO1; jobs_body 8129 "95331:test-scripts (1/8):failure" | fx "$(jobs_path 8129)"
 printf '[FAIL] bad\033]0;title\007label (90ms) log=/l/z.log\n' | fx "$(log_path 95331)"
@@ -443,7 +446,7 @@ rm -rf "$OUT"; mkdir -p "$OUT"; : > "$GHLOG"
 run_sut ejections --out "$OUT" --since "$since" --repo "$R2" > "$SANDBOX/ej2.out" 2>&1; rc=$?
 E2="$OUT/units-ejections.jsonl"
 cls_of() { unit_field "$E2" "$(SHA "$1")" '.cls+" "+.reason'; }
-[[ "$rc" -eq 0 && "$(wc -l < "$E2")" -eq 24 ]] && pass "twenty-four refused queue runs (failure and timed_out, not success and not cancelled) become twenty-four units" || fail "second window (rc=$rc, lines=$(wc -l < "$E2" 2>/dev/null)): $(tail -3 "$SANDBOX/ej2.out")"
+[[ "$rc" -eq 0 && "$(wc -l < "$E2")" -eq 26 ]] && pass "twenty-six non-success queue runs (failure, timed_out and cancelled) become twenty-six units" || fail "second window (rc=$rc, lines=$(wc -l < "$E2" 2>/dev/null)): $(tail -3 "$SANDBOX/ej2.out")"
 [[ "$(cls_of 101)" = "escape deterministic" ]] && pass "ESC: the would-skip suite failed in attempt 2 AND attempt 1 (read from attempt 1's jobs and log) is a deterministic escape" || fail "ESC: $(cls_of 101)"
 [[ "$(cls_of 102 | cut -d' ' -f1)" = unverified ]] && pass "attempt 1 failed a DIFFERENT suite: run_attempt is a counter, not evidence, so the unit is unverified" || fail "attempt-1 different suite: $(cls_of 102)"
 [[ "$(cls_of 103 | cut -d' ' -f1)" = unverified ]] && pass "attempt 1's jobs could not be read: the unit is unverified, never an escape and never cleared" || fail "attempt-1 unread: $(cls_of 103)"
@@ -463,7 +466,8 @@ cls_of() { unit_field "$E2" "$(SHA "$1")" '.cls+" "+.reason'; }
 for n in 123 124 125; do
   [[ "$(cls_of $n | cut -d' ' -f1)" = unverified ]] && pass "unit $n: a would-skip suite failing in a test-webplat / test-bun / test-scripts-heavy shard is read, not waved through" || fail "shard family $n: $(cls_of $n)"
 done
-[[ -n "$(unit_field "$E2" "$(SHA 127)" .cls)" && "$(unit_field "$E2" "$(SHA 128)" .cls)" = "" ]] && pass "a timed_out queue run is classed as a unit; a cancelled one (a dequeue) is not" || fail "timed_out/cancelled: 127='$(cls_of 127)' 128='$(cls_of 128)'"
+[[ -n "$(unit_field "$E2" "$(SHA 127)" .cls)" && "$(cls_of 128)" == "not-evaluable unsettled-jobs: test-webplat (1/2)" ]] && pass "a timed_out run is a unit, and so is a cancelled one: its cancelled shard is unsettled, so not-evaluable (never dropped as 'no verdict')" || fail "timed_out/cancelled: 127='$(cls_of 127)' 128='$(cls_of 128)'"
+[[ "$(cls_of 132)" == "not-evaluable files: "* ]] && pass "a commit file entry without a blob sha is a failed read: a name-only comparison is not an identical-content claim" || fail "no blob sha: $(cls_of 132)"
 [[ "$(cls_of 129 | cut -d' ' -f1)" = not-evaluable ]] && pass "a log line whose label carries a control byte is not a [FAIL] line: the shard has no fail line, so not-evaluable" || fail "control byte in label: $(cls_of 129)"
 [[ "$(cls_of 130)" == "not-evaluable unclassified-job: mystery-job" ]] && pass "a failing job in neither the shard family nor ci.yml's job list is unclassified, so the unit is not-evaluable" || fail "unclassified job: $(cls_of 130)"
 [[ "$(cls_of 131)" == "not-evaluable files: "* ]] && pass "a changed-file list of exactly 3000 files is the API's cap: truncated, so the unit is not-evaluable (never a shortened selector input)" || fail "3000-file cap: $(cls_of 131)"
@@ -471,19 +475,22 @@ done
 REPO_NAME=""
 
 echo "== the flake class and the escape, aggregated from hand-built units"
+mkmeta() {  # mkmeta <dir> <refused>: the ejections-window.json the `ejections` command writes
+  printf '{"since":"2031-01-01T00:00:00Z","until":"2031-01-09T00:00:00Z","runs":10,"refused":%s,"conclusions":{"failure":%s,"success":%s}}\n' "$2" "$2" "$((10 - $2))" > "$1/ejections-window.json"
+}
 mkunit() {  # mkunit <idx> <sha> <pr> <cls> <reason> <files_hash>
   printf '{"kind":"ejection","idx":%s,"sha":"%s","pr":"%s","cls":"%s","reason":"%s","files_hash":"%s","files_n":1,"fallback":"none","skipped_min":2.5,"would_skip_failures":["scripts/suitey"],"run":{"id":%s}}\n' "$1" "$2" "$3" "$4" "$5" "$6" "$1"
 }
 FA="$SANDBOX/flake-same-pr"; mkdir -p "$FA"
-{ mkunit 1 s1 7 unverified would-skip-suite-failed h1; mkunit 2 s2 7 unverified would-skip-suite-failed h2; mkunit 3 s3 7 unverified would-skip-suite-failed h3; } > "$FA/units-ejections.jsonl"
+{ mkunit 1 s1 7 unverified would-skip-suite-failed h1; mkunit 2 s2 7 unverified would-skip-suite-failed h2; mkunit 3 s3 7 unverified would-skip-suite-failed h3; } > "$FA/units-ejections.jsonl"; mkmeta "$FA" 3
 run_sut aggregate "$FA" > "$SANDBOX/fa.out" 2>&1
 grep -q "multi_unit_flake_suites=none" "$SANDBOX/fa.out" && grep -q '"unverified": 3' "$SANDBOX/fa.out" && pass "three failures of one suite from ONE PR are not a flake class (the class needs 3 distinct PRs)" || fail "same-PR flake: $(grep -E 'multi|population' "$SANDBOX/fa.out" | head -2)"
 FC="$SANDBOX/flake-same-files"; mkdir -p "$FC"
-{ mkunit 1 s1 7 unverified would-skip-suite-failed h1; mkunit 2 s2 8 unverified would-skip-suite-failed h1; mkunit 3 s3 9 unverified would-skip-suite-failed h1; } > "$FC/units-ejections.jsonl"
+{ mkunit 1 s1 7 unverified would-skip-suite-failed h1; mkunit 2 s2 8 unverified would-skip-suite-failed h1; mkunit 3 s3 9 unverified would-skip-suite-failed h1; } > "$FC/units-ejections.jsonl"; mkmeta "$FC" 3
 run_sut aggregate "$FC" > "$SANDBOX/fc.out" 2>&1
 grep -q "multi_unit_flake_suites=none" "$SANDBOX/fc.out" && pass "three PRs failing one suite on the SAME file set are not a flake class (the class needs 2 distinct file sets)" || fail "same-files flake: $(grep -E 'multi' "$SANDBOX/fc.out" | head -1)"
 FB="$SANDBOX/flake-esc"; mkdir -p "$FB"
-{ mkunit 1 s1 7 escape deterministic h0; mkunit 2 s2 8 unverified would-skip-suite-failed h2; mkunit 3 s3 9 unverified would-skip-suite-failed h3; mkunit 4 s4 10 unverified would-skip-suite-failed h4; } > "$FB/units-ejections.jsonl"
+{ mkunit 1 s1 7 escape deterministic h0; mkunit 2 s2 8 unverified would-skip-suite-failed h2; mkunit 3 s3 9 unverified would-skip-suite-failed h3; mkunit 4 s4 10 unverified would-skip-suite-failed h4; } > "$FB/units-ejections.jsonl"; mkmeta "$FB" 4
 run_sut aggregate "$FB" > "$SANDBOX/fb.out" 2>&1
 grep -q "multi_unit_flake_suites=scripts/suitey" "$SANDBOX/fb.out" && grep -q "attributable=1/4" "$SANDBOX/fb.out" && grep -q '"escape": 1' "$SANDBOX/fb.out" && pass "a flake class clears its UNVERIFIED units and never an escape (attributable stays 1 of 4)" || fail "escape under flake class: $(grep -E 'multi|attributable|population' "$SANDBOX/fb.out" | head -3)"
 
@@ -492,21 +499,21 @@ mkcommit() {  # mkcommit <idx> <sha> <skipped_min>
   printf '{"kind":"commit","idx":%s,"sha":"%s","cls":"clean","reason":"","files_hash":"h%s","files_n":1,"fallback":"none","skipped_min":%s,"run":{"id":%s}}\n' "$1" "$2" "$1" "$3" "$1"
 }
 { mkcommit 0 c0 10; mkcommit 1 c1 20; mkcommit 2 c2 30; } > "$FD/units-commits-1-of-1.jsonl"
-mkunit 1 e1 9 unverified would-skip-suite-failed h9 > "$FD/units-ejections.jsonl"
+mkunit 1 e1 9 unverified would-skip-suite-failed h9 > "$FD/units-ejections.jsonl"; mkmeta "$FD" 1
 run_sut aggregate "$FD" > "$SANDBOX/fd.out" 2>&1; rc=$?
 [[ "$rc" -eq 0 ]] && grep -q 'mean_skipped_suite_min=20.00 se=5.77 selector_min=1.29 net_mean=18.71 net_mean_plus_2se=30.26' "$SANDBOX/fd.out" \
   && pass "the saving arithmetic is exact on known values (mean 20, se 5.77, net 18.71, net plus 2 se 30.26)" || fail "saving arithmetic: $(grep '^saving' "$SANDBOX/fd.out")"
 grep -q 'attributable=0/4 unverified_as_escape=1/4 (point 25.00%)' "$SANDBOX/fd.out" && pass "the gating point estimate counts an unverified unit as an escape (1 of 4 is 25.00%)" || fail "point estimate: $(grep 'population=commits+' -A2 "$SANDBOX/fd.out" | tail -2)"
 grep -q 'ejection_units=1 commit_units=3' "$SANDBOX/fd.out" && pass "the receipt names how many units of each population it read" || fail "population counts: $(sed -n 3p "$SANDBOX/fd.out")"
-FE="$SANDBOX/no-ejections"; mkdir -p "$FE"; { mkcommit 0 c0 1; mkcommit 1 c1 1; } > "$FE/units-commits-1-of-1.jsonl"
+FE="$SANDBOX/no-ejections"; mkdir -p "$FE"; { mkcommit 0 c0 1; mkcommit 1 c1 1; } > "$FE/units-commits-1-of-1.jsonl"; mkmeta "$FE" 0
 run_sut aggregate "$FE" >/dev/null 2>&1; rc=$?
 [[ "$rc" -eq 2 ]] && pass "aggregate refuses a directory with no ejections file (the commits-only population is near-vacuous by construction)" || fail "no ejections file (rc=$rc)"
 run_sut aggregate "$FE" --commits-only >/dev/null 2>&1; rc=$?
 [[ "$rc" -eq 0 ]] && pass "--commits-only says that is intended, and aggregate then reads the commits alone" || fail "--commits-only (rc=$rc)"
-FG="$SANDBOX/gap-chunk"; mkdir -p "$FG"; { mkcommit 0 c0 1; mkcommit 2 c2 1; } > "$FG/units-commits-1-of-2.jsonl"; : > "$FG/units-ejections.jsonl"
+FG="$SANDBOX/gap-chunk"; mkdir -p "$FG"; { mkcommit 0 c0 1; mkcommit 2 c2 1; } > "$FG/units-commits-1-of-2.jsonl"; : > "$FG/units-ejections.jsonl"; mkmeta "$FG" 0
 run_sut aggregate "$FG" >/dev/null 2>&1; rc=$?
 [[ "$rc" -eq 2 ]] && pass "aggregate refuses commit units whose indices are not contiguous (a chunk is missing)" || fail "missing chunk (rc=$rc)"
-FH="$SANDBOX/dup-layout"; mkdir -p "$FH"; { mkcommit 0 c0 1; mkcommit 1 c1 1; } > "$FH/units-commits-1-of-1.jsonl"; { mkcommit 2 c0 1; } > "$FH/units-commits-1-of-2.jsonl"; : > "$FH/units-ejections.jsonl"
+FH="$SANDBOX/dup-layout"; mkdir -p "$FH"; { mkcommit 0 c0 1; mkcommit 1 c1 1; } > "$FH/units-commits-1-of-1.jsonl"; { mkcommit 2 c0 1; } > "$FH/units-commits-1-of-2.jsonl"; : > "$FH/units-ejections.jsonl"; mkmeta "$FH" 0
 run_sut aggregate "$FH" >/dev/null 2>&1; rc=$?
 [[ "$rc" -eq 2 ]] && pass "aggregate refuses a unit that appears in two chunk layouts (it would count twice and tighten the bound)" || fail "duplicate layout (rc=$rc)"
 run_sut aggregate "$FD" --expect-commits 4 >/dev/null 2>&1; rc=$?
@@ -514,14 +521,21 @@ run_sut aggregate "$FD" --expect-commits 4 >/dev/null 2>&1; rc=$?
 run_sut aggregate "$FD" --expect-commits 3 >/dev/null 2>&1; rc=$?
 [[ "$rc" -eq 0 ]] && pass "--expect-commits N accepts exactly N" || fail "--expect-commits exact (rc=$rc)"
 FT="$SANDBOX/tsv"; mkdir -p "$FT"; { mkcommit 0 c0 1; } > "$FT/units-commits-1-of-1.jsonl"
-printf '{"kind":"ejection","idx":0,"sha":"e0","pr":"1","cls":"not-evaluable","reason":"gh said:\\tfirst\\nsecond","files_hash":"h","files_n":1,"fallback":"none","skipped_min":0,"run":{"id":1}}\n' > "$FT/units-ejections.jsonl"
+printf '{"kind":"ejection","idx":0,"sha":"e0","pr":"1","cls":"not-evaluable","reason":"gh said:\\tfirst\\nsecond","files_hash":"h","files_n":1,"fallback":"none","skipped_min":0,"run":{"id":1}}\n' > "$FT/units-ejections.jsonl"; mkmeta "$FT" 1
 run_sut aggregate "$FT" --out "$SANDBOX/tsv.txt" >/dev/null 2>&1
 [[ "$(awk -F'\t' 'NF != 9 { bad++ } END { print bad + 0 }' "$SANDBOX/tsv.txt.tsv")" = 0 && "$(wc -l < "$SANDBOX/tsv.txt.tsv")" -eq 3 ]] && pass "a reason holding a tab or a newline cannot split a row of the per-unit TSV" || fail "tsv rows: $(awk -F'\t' '{print NF}' "$SANDBOX/tsv.txt.tsv" | tr '\n' ' ')"
-FI="$SANDBOX/internal"; mkdir -p "$FI"; printf '{"kind":"commit","sha":"x"}\n' > "$FI/units-commits-1-of-1.jsonl"; : > "$FI/units-ejections.jsonl"
+FI="$SANDBOX/internal"; mkdir -p "$FI"; printf '{"kind":"commit","sha":"x"}\n' > "$FI/units-commits-1-of-1.jsonl"; : > "$FI/units-ejections.jsonl"; mkmeta "$FI" 0
 ierr="$(run_sut aggregate "$FI" 2>&1 >/dev/null)"; rc=$?
 [[ "$rc" -eq 4 ]] && grep -q 'internal error' <<<"$ierr" && pass "an uncaught Python error exits 4 and says so, never 1 (which is the audit's 'gaps found')" || fail "internal error exit (rc=$rc: $ierr)"
+FM="$SANDBOX/no-meta"; mkdir -p "$FM"; { mkcommit 0 c0 1; } > "$FM/units-commits-1-of-1.jsonl"; mkunit 1 e1 9 unverified would-skip-suite-failed h9 > "$FM/units-ejections.jsonl"
+run_sut aggregate "$FM" >/dev/null 2>&1; rc=$?
+[[ "$rc" -eq 2 ]] && pass "aggregate refuses ejection units with no ejections-window.json (nothing says how many refused runs the window held)" || fail "no window manifest (rc=$rc)"
+FN="$SANDBOX/short-ejections"; mkdir -p "$FN"; { mkcommit 0 c0 1; } > "$FN/units-commits-1-of-1.jsonl"; mkunit 1 e1 9 unverified would-skip-suite-failed h9 > "$FN/units-ejections.jsonl"; mkmeta "$FN" 5
+run_sut aggregate "$FN" >/dev/null 2>&1; rc=$?
+[[ "$rc" -eq 2 ]] && pass "aggregate refuses a short ejection population: 1 unit against a window that held 5 refused runs" || fail "short ejections (rc=$rc)"
+grep -q 'ejection_window=2031-01-01T00:00:00Z..2031-01-09T00:00:00Z runs=10 refused=1' "$SANDBOX/fd.out" && pass "the receipt prints the ejection window, how many runs it held and how many were refused" || fail "ejection_window line: $(grep ejection_window "$SANDBOX/fd.out")"
 FP="$SANDBOX/flake-two-prs"; mkdir -p "$FP"
-{ mkunit 1 s1 7 unverified would-skip-suite-failed h1; mkunit 2 s2 8 unverified would-skip-suite-failed h2; mkunit 3 s3 8 unverified would-skip-suite-failed h3; } > "$FP/units-ejections.jsonl"
+{ mkunit 1 s1 7 unverified would-skip-suite-failed h1; mkunit 2 s2 8 unverified would-skip-suite-failed h2; mkunit 3 s3 8 unverified would-skip-suite-failed h3; } > "$FP/units-ejections.jsonl"; mkmeta "$FP" 3
 run_sut aggregate "$FP" > "$SANDBOX/fp.out" 2>&1
 grep -q "multi_unit_flake_suites=none" "$SANDBOX/fp.out" && grep -q '"unverified": 3' "$SANDBOX/fp.out" && pass "three failures of one suite from only TWO PRs are not a flake class (the class needs 3 distinct PRs)" || fail "two-PR flake: $(grep -E 'multi' "$SANDBOX/fp.out")"
 
@@ -664,6 +678,11 @@ audit "$SANDBOX/audit-many.rows" --all-refs
 [[ "$RC" -eq 1 ]] && grep -P -q '^gap\tscripts/many\t8\t([^,]+,){7}[^,]+$' <<<"$AOUT" && pass "--all-refs prints every undeclared path (the receipt's frequency table is reproducible from it)" || fail "--all-refs gap line: $(grep '^gap' <<<"$AOUT")"
 audit "$SANDBOX/audit-short.rows"
 [[ "$RC" -eq 1 ]] && grep -q 'unaudited=1' <<<"$AOUT" && grep -q 'short-row' <<<"$AOUT" && pass "a selector row too short to name its edges is unaudited, not skipped" || fail "short row (rc=$RC): $AOUT"
+printf '#!/usr/bin/env bash\nprintf "AFFECTED_SELECTED\\tscripts/declared-complete\\t0\\tedge:declared\\t^scripts/declared-complete.test.sh|^.github/workflows/ci.yml\\n"\nexit 7\n' > "$BIN/sel-partial.sh"; chmod +x "$BIN/sel-partial.sh"
+RUN_ENV=(PR_AFFECTED_REPLAY_TEST_ALL="$BIN/sel-partial.sh"); run_sut audit --root "$AREPO" >/dev/null 2>&1; rc=$?; RUN_ENV=()
+[[ "$rc" -eq 3 ]] && pass "an audit whose selector prints rows and then fails is a failed read (rc 3), never a pass over the rows it got" || fail "selector failing after rows (rc=$rc)"
+PR_AFFECTED_REPLAY_GH_TIMEOUT=abc python3 "$SUT" cp-upper 0 10 >/dev/null 2>&1; rc=$?
+[[ "$rc" -eq 2 ]] && pass "a non-numeric PR_AFFECTED_REPLAY_GH_TIMEOUT is a usage error (rc 2), never the audit's rc 1" || fail "bad timeout env (rc=$rc)"
 audit "$SANDBOX/audit-bad.rows" --accept "$SANDBOX/accept-ok.tsv"
 [[ "$RC" -eq 0 ]] && grep -q 'gap_suites=0 gap_refs=0 accepted=2' <<<"$AOUT" && pass "--accept removes exactly the gaps a human wrote a false-positive reason for, and counts them" || fail "--accept (rc=$RC): $AOUT"
 audit "$SANDBOX/audit-bad.rows" --accept "$SANDBOX/accept-noreason.tsv"
@@ -671,7 +690,7 @@ audit "$SANDBOX/audit-bad.rows" --accept "$SANDBOX/accept-noreason.tsv"
 audit "$SANDBOX/audit-bad.rows" --accept "$SANDBOX/accept-badreason.tsv"
 [[ "$RC" -eq 2 ]] && pass "an --accept reason that does not start with 'false-positive:' is refused (rc 2)" || fail "accept with another reason (rc=$RC)"
 audit "$SANDBOX/audit-dir.rows" --accept "$SANDBOX/accept-dir.tsv"
-[[ "$RC" -eq 0 ]] && grep -q 'unaudited=0' <<<"$AOUT" && grep -q 'accepted=1' <<<"$AOUT" && pass "an unaudited directory suite is accepted only by a '*' row carrying a false-positive reason" || fail "accepted directory suite (rc=$RC): $AOUT"
+[[ "$RC" -eq 0 ]] && grep -q 'audited=0 unaudited=0' <<<"$AOUT" && grep -q 'accepted=1' <<<"$AOUT" && pass "an unaudited directory suite is accepted only by a '*' row carrying a false-positive reason" || fail "accepted directory suite (rc=$RC): $AOUT"
 : > "$SANDBOX/audit-empty.rows"
 run_sut audit --root "$AREPO" --list "$SANDBOX/audit-empty.rows" >/dev/null 2>&1; rc=$?
 [[ "$rc" -eq 2 ]] && pass "an audit that examined zero suites exits non-zero (anti-vacuity)" || fail "an audit that examined zero suites exits non-zero (rc=$rc)"
@@ -707,7 +726,7 @@ mutate() {  # mutate <name> <old> <new> <row>
 }
 ej2_run() {  # re-run the second ejection window into a fresh dir with the SUT under test; sets E2
   REPO_NAME="$R2"; rm -rf "$OUT"; mkdir -p "$OUT"; : > "$GHLOG"
-  mg_runs "$RUNS2" 30 | fx "repos/$R2/actions/workflows/ci.yml/runs?event=merge_group&created=X&per_page=100"
+  mg_runs "$RUNS2" 31 | fx "repos/$R2/actions/workflows/ci.yml/runs?event=merge_group&created=X&per_page=100"
   run_sut ejections --out "$OUT" --since "$since" --repo "$R2" >/dev/null 2>&1; E2="$OUT/units-ejections.jsonl"; REPO_NAME=""
 }
 row_always_on() { collect_once; [[ "$(unit_field "$OUT/units-commits-1-of-1.jsonl" "${C[0]}" '.skipped_suites|join(",")')" = "scripts/suitex,scripts/suitey" ]]; }
@@ -757,7 +776,8 @@ row_cleared_by_failed() { ej2_run; [[ "$(unit_field "$E2" "$(SHA 119)" .cls)" = 
 row_cleared_read_error() { ej2_run; [[ "$(unit_field "$E2" "$(SHA 121)" .cls)" = unverified ]]; }
 row_shard_families() { ej2_run; local n; for n in 123 124 125; do [[ "$(unit_field "$E2" "$(SHA "$n")" .cls)" = unverified ]] || return 1; done; }
 row_two_page() { ej2_run; [[ "$(unit_field "$E2" "$(SHA 118)" .cls)" = rule-irrelevant ]]; }
-row_timed_out() { ej2_run; [[ -n "$(unit_field "$E2" "$(SHA 127)" .cls)" && -z "$(unit_field "$E2" "$(SHA 128)" .cls)" ]]; }
+row_timed_out() { ej2_run; [[ -n "$(unit_field "$E2" "$(SHA 127)" .cls)" && "$(unit_field "$E2" "$(SHA 128)" .cls)" = not-evaluable ]]; }
+row_no_sha() { ej2_run; [[ "$(unit_field "$E2" "$(SHA 132)" .reason)" == files:* ]]; }
 row_ctrl_label() { ej2_run; [[ "$(unit_field "$E2" "$(SHA 129)" .cls)" = not-evaluable ]]; }
 row_unclassified() { ej2_run; [[ "$(unit_field "$E2" "$(SHA 130)" .reason)" == "unclassified-job: mystery-job" ]]; }
 row_file_cap() { ej2_run; [[ "$(unit_field "$E2" "$(SHA 131)" .reason)" == files:* ]]; }
@@ -777,6 +797,11 @@ row_audit_parens() { audit "$SANDBOX/audit-parens.rows"; [[ "$RC" -eq 0 ]]; }
 row_audit_exact() { audit "$SANDBOX/audit-exact.rows"; [[ "$RC" -eq 1 ]] && grep -q 'scripts/x.sh.bak' <<<"$AOUT"; }
 row_audit_many() { audit "$SANDBOX/audit-many.rows" --all-refs; grep -P -q '^gap\tscripts/many\t8\t([^,]+,){7}[^,]+$' <<<"$AOUT"; }
 row_audit_short() { audit "$SANDBOX/audit-short.rows"; [[ "$RC" -eq 1 ]] && grep -q 'short-row' <<<"$AOUT"; }
+row_audit_sel_fail() { RUN_ENV=(PR_AFFECTED_REPLAY_TEST_ALL="$BIN/sel-partial.sh"); run_sut audit --root "$AREPO" >/dev/null 2>&1; local rc=$?; RUN_ENV=(); [[ "$rc" -eq 3 ]]; }
+row_bad_env() { PR_AFFECTED_REPLAY_GH_TIMEOUT=abc python3 "$SUT" cp-upper 0 10 >/dev/null 2>&1; [[ $? -eq 2 ]]; }
+row_agg_no_meta() { run_sut aggregate "$FM" >/dev/null 2>&1; [[ $? -eq 2 ]]; }
+row_agg_short() { run_sut aggregate "$FN" >/dev/null 2>&1; [[ $? -eq 2 ]]; }
+row_accept_dir() { audit "$SANDBOX/audit-dir.rows" --accept "$SANDBOX/accept-dir.tsv"; [[ "$RC" -eq 0 ]] && grep -q 'audited=0 unaudited=0' <<<"$AOUT"; }
 row_accept_ok() { audit "$SANDBOX/audit-bad.rows" --accept "$SANDBOX/accept-ok.tsv"; [[ "$RC" -eq 0 ]] && grep -q 'accepted=2' <<<"$AOUT"; }
 row_accept_badreason() { audit "$SANDBOX/audit-bad.rows" --accept "$SANDBOX/accept-badreason.tsv"; [[ "$RC" -eq 2 ]]; }
 mutate always-on-skippable 'elif f[2] == "0" and f[3] != "always_on":' 'elif f[2] == "0":' row_always_on
@@ -842,6 +867,11 @@ mutate audit-short-row-skipped '        if len(f) < 5:
             unaudited.append((f[1] if len(f) > 1 else "?", "short-row"))
             continue' '        if len(f) < 5:
             continue' row_audit_short
+mutate audit-selector-rc-ignored '        if sp.returncode != 0:' '        if False:' row_audit_sel_fail
+mutate bad-timeout-env-traceback 'except ValueError as _e:' 'except KeyError as _e:' row_bad_env
+mutate ejections-manifest-optional '        if not os.path.exists(meta_path):' '        if False:' row_agg_no_meta
+mutate ejections-count-unchecked '        if have != meta["refused"]:' '        if False:' row_agg_short
+mutate accepted-unread-counted-audited 'suites - always_on - len(unaudited) - accepted_unread' 'suites - always_on - len(unaudited)' row_accept_dir
 mutate accept-ignored '        kept = [r for r in miss if r not in ok]' '        kept = miss' row_accept_ok
 mutate accept-without-reason 'or not re.match(r"^false-positive: \S", f[2])' 'or False' row_accept_badreason
 mutate cleared-by-failed-run 'if o["created_at"] > r["created_at"] and o["conclusion"] == "success":' 'if o["created_at"] > r["created_at"]:' row_cleared_by_failed
@@ -854,13 +884,14 @@ mutate commit-files-first-page-only '    files = []
     for d in docs:' '    files = []
     for d in docs[:1]:' row_two_page
 mutate commit-file-cap-ignored '    if len(files) >= COMMIT_FILES_CAP:' '    if False:' row_file_cap
-mutate timed-out-not-a-unit 'r["conclusion"] not in ("success", "cancelled")' 'r["conclusion"] == "failure"' row_timed_out
+mutate timed-out-not-a-unit 'r["conclusion"] != "success"' 'r["conclusion"] == "failure"' row_timed_out
+mutate blob-sha-optional '            if not x.get("sha"):' '            if False:' row_no_sha
 mutate unclassified-job-reassuring '            if name.split(" (")[0] in ALWAYS_RUN_JOBS:' '            if True:' row_unclassified
 mutate window-ends-swapped '        since = since or iso(shas[-1])
         until = until or iso(shas[0])' '        since = since or iso(shas[0])
         until = until or iso(shas[-1])' row_window
 mutate window-ends-at-now '        until = until or iso(shas[0])' '        until = until or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())' row_window
-mutate rate-limit-not-retried '    if m and m.group(1) == "403" and "rate limit" in (stderr or "").lower():' '    if False:' row_rate_limit
+mutate rate-limit-not-retried '    return bool(m and m.group(1) == "403" and "rate limit" in (stderr or "").lower())' '    return False' row_rate_limit
 mutate home-not-scratch '    env["HOME"] = home' '    env["HOME"] = os.environ.get("HOME", home)' row_home
 mutate no-ejections-file-ok '    if not commits_only and not os.path.exists(os.path.join(d, "units-ejections.jsonl")):' '    if False:' row_agg_no_ejections
 mutate commit-gap-ignored '    if commits and idxs != list(range(len(idxs))):' '    if False:' row_agg_gap
@@ -900,12 +931,12 @@ ctl_mutate_records && pass "control: mutate() records a survivor as a failure" |
 if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_KILLED of $MUT_RUN)"; else fail "mutants killed $MUT_KILLED of $MUT_RUN"; fi
 
 # Anti-vacuity floors, reported through printf + exit so they never ride on the helpers they guard.
-FLOOR_ASSERTIONS=201
+FLOOR_ASSERTIONS=213
 total=$((passes + fails))
 if [[ "$total" -lt "$FLOOR_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$total" "$FLOOR_ASSERTIONS" >&2; exit 1
 fi
-FLOOR_MUTANTS=68
+FLOOR_MUTANTS=74
 if [[ "$MUT_RUN" -lt "$FLOOR_MUTANTS" ]]; then
   printf '[FATAL] mutation floor: only %s mutants ran, floor is %s\n' "$MUT_RUN" "$FLOOR_MUTANTS" >&2; exit 1
 fi

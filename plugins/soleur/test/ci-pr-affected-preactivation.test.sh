@@ -109,7 +109,10 @@ adr() { printf '# ADR\n' > "$ADRF"; printf '%s\n' "$@" >> "$ADRF"; }      # adr 
 receipt() { printf 'notes\n%s\n' "$1" > "$WORLD/$RCPT_DIR/go-no-go.md"; }   # receipt <last line>
 ARCH_DIR="$KBDIR/project/specs/archive/20261016-000000-feat-x/receipts"
 
-ALLOW_MISS=""; ADR_OVERRIDE=""; TODAY_OVERRIDE=""; RUN_GIT_DIR=""
+ALLOW_MISS=""; ADR_OVERRIDE=""; TODAY_OVERRIDE=""; RUN_GIT_DIR=""; SHIM_PATH=""
+REAL_SED="$(command -v sed)"
+mkdir -p "$SANDBOX/shim"
+printf '#!/usr/bin/env bash\ncase "$*" in *PR_AFFECTED_LOCKED*) exit 1 ;; esac\nexec "%s" "$@"\n' "$REAL_SED" > "$SANDBOX/shim/sed"; chmod +x "$SANDBOX/shim/sed"
 build_world() {
   assert_fixture_dir "$WORLD"
   rm -rf "$WORLD" "$GHFIX"; mkdir -p "$GHFIX"
@@ -122,7 +125,7 @@ build_world() {
   printf '#!/usr/bin/env bash\nexit 0\n' > "$WORLD/plugins/soleur/scripts/ci-full-battery-audit.sh"; chmod +x "$WORLD/plugins/soleur/scripts/ci-full-battery-audit.sh"
   printf '# suite durations\ntests/hooks/incidents\t1000\nscripts/lib/x.test\t2000\n' > "$WORLD/scripts/suite-durations.tsv"
   receipt "$GOLINE"
-  ALLOW_MISS=""; ADR_OVERRIDE=""; TODAY_OVERRIDE=""; RUN_GIT_DIR=""
+  ALLOW_MISS=""; ADR_OVERRIDE=""; TODAY_OVERRIDE=""; RUN_GIT_DIR=""; SHIM_PATH=""
   adr "$RL" "Skippable set: test-bun, tests/hooks/incidents"
   resp "repos/$R/actions/variables/CI_PR_AFFECTED" 404 '{"message":"Not Found"}'
   resp "repos/$R/actions/variables?per_page=100" 200 '{"total_count":4,"variables":[{"name":"A"},{"name":"B"},{"name":"C"},{"name":"D"}]}'
@@ -137,7 +140,7 @@ build_world() {
 }
 
 run_sut() {
-  env PATH="$BIN:$PATH" PR_AFFECTED_PREACT_TODAY="${TODAY_OVERRIDE:-$TODAY}" ${RUN_GIT_DIR:+GIT_DIR="$RUN_GIT_DIR"} \
+  env PATH="${SHIM_PATH:+$SHIM_PATH:}$BIN:$PATH" PR_AFFECTED_PREACT_TODAY="${TODAY_OVERRIDE:-$TODAY}" ${RUN_GIT_DIR:+GIT_DIR="$RUN_GIT_DIR"} \
     bash "$SUT" --repo "$R" --root "$WORLD" ${ADR_OVERRIDE:+--adr "$ADR_OVERRIDE"}
 }
 OUT=""; RC=0
@@ -179,6 +182,7 @@ arm_org_fraction() { resp "repos/$R/actions/organization-variables" 200 '{"total
 arm_lock_missing() { rm -f "$WORLD/scripts/ci-pr-selection.sh"; }
 arm_lock_comment_only() { printf '# only a comment\n#   and another\n' > "$WORLD/scripts/ci-pr-selection.sh"; }
 arm_lock_empty() { : > "$WORLD/scripts/ci-pr-selection.sh"; }
+arm_lock_transform_fails() { SHIM_PATH="$SANDBOX/shim"; }
 arm_art_runs500() { resp "repos/$R/actions/workflows/post-merge-monitor.yml/runs?branch=main&per_page=30" 500 '{}'; }
 arm_art_runs_unparse() { resp "repos/$R/actions/workflows/post-merge-monitor.yml/runs?branch=main&per_page=30" 200 '{"workflow_runs":"x"}'; }
 arm_art_jobs500() { resp "repos/$R/actions/runs/501/jobs?per_page=100" 500 '{}'; }
@@ -215,6 +219,7 @@ unk arm_org_fraction org_variables 'org_variables=unknown(unparseable)'
 unk arm_lock_missing lock 'lock=unknown(driver-missing)'
 unk arm_lock_comment_only lock 'lock=unknown'
 unk arm_lock_empty lock 'lock=unknown'
+unk arm_lock_transform_fails lock 'lock=unknown(transform-failed)'
 unk arm_art_runs500 artifacts 'artifacts=unknown(audit-runs-http=500)'
 unk arm_art_runs_unparse artifacts 'artifacts=unknown(runs-unparseable)'
 unk arm_art_jobs500 artifacts 'artifacts=unknown(jobs-http=500)'
@@ -257,6 +262,7 @@ build_world; resp "repos/$R/issues/10415" 200 '{"state":"open"}'; printf 'Waiver
 ck "G4-9c a waiver added to the ADR but not committed does not waive" expect 1 prereq5
 build_world; ADR_OVERRIDE="$SANDBOX/adr-file.md"; printf '# ADR\n%s\nSkippable set: test-webplat\n' "$RL" > "$ADR_OVERRIDE"; go
 ck "G4-9d --adr FILE reads that file instead of the committed ADR (the drill seam)" ready
+has_pat 'verdict=GO-confirmed(adr-from-file)' && has_pat 'prereq5=ok(adr-from-file)' && pass "the drill seam marks the lines it feeds, so a ready=true from a file ADR cannot pass for the committed one" || fail "adr seam marker: $OUT"
 
 # ---------------------------------------------------------------------------------------------------------------------
 echo "== G4-1 organization variables"
@@ -286,6 +292,10 @@ build_world; resp "repos/$R/issues/10415" 200 '{"state":"open"}'; adr "$RL" "Ski
 ck "a waiver line with no reason is not a waiver" expect 1 prereq5
 build_world; resp "repos/$R/issues/10415" 200 '{"state":"open"}'; adr "$RL" "Skippable set: test-bun" 'see the line "Waiver: heartbeat accepted" in the plan'; go
 ck "a waiver quoted mid-line is not a waiver (the line must start with it)" expect 1 prereq5
+build_world; resp "repos/$R/issues/10415" 200 '{"state":"open"}'; adr "$RL" "Skippable set: test-bun" "Waiver: heartbeat <non-empty reason>"; go
+ck "the grammar's own placeholder ('<non-empty reason>') is not a waiver reason" expect 1 prereq5
+build_world; resp "repos/$R/issues/10415" 200 '{"state":"closed","state_reason":"completed","pull_request":{"url":"x"}}'; go
+ck "a --heartbeat-issue number that is really a pull request does not count as the follow-up" expect 1 prereq5; has_line 'prereq5=heartbeat-is-a-pull-request' || fail "heartbeat PR line: $OUT"
 build_world; resp "repos/$R/issues/10415" 200 '{"state":"open"}'; adr "$RL" "Skippable set: test-bun" "Waiver: heartbeat accepted" "Waiver: none"; go
 ck "the LAST Waiver line wins (a later retraction cancels an earlier waiver)" expect 1 prereq5
 build_world; resp "repos/$R/issues/10415" 200 '{"state":"open"}'; adr "$RL" "Skippable set: test-bun" "Waiver: none" "Waiver: heartbeat accepted"; go
@@ -497,6 +507,9 @@ row_last_line_wins() { build_world; adr "$RL" "Skippable set: test-bun" "Skippab
 row_waiver() { build_world; resp "repos/$R/issues/10415" 200 '{"state":"open"}'; adr "$RL" "Skippable set: test-bun" "Waiver: heartbeat"; go; expect 1 prereq5 || return 1
   build_world; resp "repos/$R/issues/10415" 200 '{"state":"open"}'; adr "$RL" "Skippable set: test-bun" 'see the line "Waiver: heartbeat accepted" in the plan'; go; expect 1 prereq5; }
 row_waiver_last() { build_world; resp "repos/$R/issues/10415" 200 '{"state":"open"}'; adr "$RL" "Skippable set: test-bun" "Waiver: heartbeat accepted" "Waiver: none"; go; expect 1 prereq5; }
+row_waiver_placeholder() { build_world; resp "repos/$R/issues/10415" 200 '{"state":"open"}'; adr "$RL" "Skippable set: test-bun" "Waiver: heartbeat <non-empty reason>"; go; expect 1 prereq5; }
+row_hb_pr() { build_world; resp "repos/$R/issues/10415" 200 '{"state":"closed","state_reason":"completed","pull_request":{"url":"x"}}'; go; expect 1 prereq5; }
+row_lock_transform() { row_unk arm_lock_transform_fails lock 'lock=unknown(transform-failed)'; }
 row_contradict() { row_unk arm_var_contradict variable 'variable=unknown'; }
 row_list_short() { row_unk arm_var_list_short variable 'variable=unknown'; }
 row_exit3() { build_world; rm -f "$GHFIX"/*; rm -f "$WORLD/scripts/ci-pr-selection.sh"; ADR_OVERRIDE="$SANDBOX/no-such-adr.md"; ALLOW_MISS=1; commit_world; go_raw
@@ -560,7 +573,10 @@ mutate archive-ambiguity-ignored '        if [ "$n" -gt 1 ]; then R_STATUS=unkno
 mutate receipt-path-guard-dropped '  case "$rp" in /*|*..*) R_STATUS=unknown; R_LINE="verdict=unknown(receipt-path-rejected)"; return ;; esac' '  :' row_path_escape
 mutate adr-first-line-wins 'adr_line() { printf '"'"'%s\n'"'"' "$ADR_TEXT" | sed -n "s/^$1:[[:space:]]*//p" | tail -1; }' 'adr_line() { printf '"'"'%s\n'"'"' "$ADR_TEXT" | sed -n "s/^$1:[[:space:]]*//p" | head -1; }' row_last_line_wins
 mutate waiver-first-wins "w=\"\$(adr_line 'Waiver')\"" "w=\"\$(printf '%s\\n' \"\$ADR_TEXT\" | sed -n 's/^Waiver:[[:space:]]*//p' | head -1)\"" row_waiver_last
-mutate waiver-unanchored "grep -Eq '^heartbeat[[:space:]]+[^[:space:]]'" "grep -q 'heartbeat'" row_waiver
+mutate waiver-placeholder-accepted "grep -Eq '^heartbeat[[:space:]]+[^[:space:]<]'" "grep -Eq '^heartbeat[[:space:]]+[^[:space:]]'" row_waiver_placeholder
+mutate heartbeat-pull-request-accepted "  if printf '%s' \"\$G_BODY\" | jq -e 'has(\"pull_request\")' >/dev/null 2>&1; then R_STATUS=unmet; R_LINE=\"prereq5=heartbeat-is-a-pull-request\"; return; fi" ':' row_hb_pr
+mutate lock-transform-unchecked "  [ -n \"\$(printf '%s' \"\$stripped\" | tr -d '[:space:]')\" ] || { R_STATUS=unknown; R_LINE=\"lock=unknown(transform-failed)\"; return; }" ':' row_lock_transform
+mutate waiver-unanchored "grep -Eq '^heartbeat[[:space:]]+[^[:space:]<]'" "grep -q 'heartbeat'" row_waiver
 mutate git-location-inherited '  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \' '  env -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \' row_git_dir
 mutate tree-not-compared '  if [ "$h" = "$o" ]; then R_STATUS=ok; R_LINE="tree=head-is-main"' '  if true; then R_STATUS=ok; R_LINE="tree=head-is-main"' row_tree_differs
 DRV_REL="scripts/ci-pr""-selection.sh"   # joined from two words so this suite does not name the real driver (the kb-consumer census would count it as a reader)
@@ -598,12 +614,12 @@ row_empty_list && pass "G4-6 an emptied prerequisite list exits 2 and never repo
 echo "== control: the unmutated world still passes after the battery"
 row_all_met && pass "the unmutated SUT still reports ready=true (the control)" || fail "the unmutated SUT still reports ready=true (the control)"
 
-FLOOR_ASSERTIONS=191
+FLOOR_ASSERTIONS=198
 total=$((passes + fails))
 if [[ "$total" -lt "$FLOOR_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$total" "$FLOOR_ASSERTIONS" >&2; exit 1
 fi
-FLOOR_MUTANTS=47
+FLOOR_MUTANTS=50
 if [[ "$MUT_RUN" -lt "$FLOOR_MUTANTS" ]]; then
   printf '[FATAL] mutation floor: only %s mutants ran, floor is %s\n' "$MUT_RUN" "$FLOOR_MUTANTS" >&2; exit 1
 fi

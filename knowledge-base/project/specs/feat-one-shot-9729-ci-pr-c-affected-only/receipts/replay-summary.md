@@ -10,10 +10,14 @@ the audit (`index-audit.md`) ran on `abbd36a696`. The selector and index are TOD
 differ by 33 files of which six are test suites, so the commit units and the audit were not measured on one index. The verdict does not rest on
 the difference (the audit fails criterion (b) on its own).
 **Ejections:** every `merge_group` run of `ci.yml` created in the same window, 2026-10-06T11:48:18Z to 2026-10-16T08:22:38Z: **392 runs, 336
-`success`, 53 `failure`, 3 `cancelled`** (queue dequeues with no verdict on any suite: runs 37671649612, 37679605689, 38476004641). The 53
+`success`, 53 `failure`, 3 `cancelled`**. Every conclusion except `success` is a refused run and a unit (**56 units**): a cancelled run is not
+a dequeue with no verdict, because a cancelled shard fails the aggregate check, so the three cancelled runs (37671649612, 37679605689,
+38476004641) are classed like the rest (all three `not-evaluable`: an unsettled shard). The command writes `ejections-window.json` (the window,
+the run count, the refused count and the conclusion histogram) and `aggregate` refuses a population whose ejection units are not that many.
+The 53
 failures are the same 53 head shas as for the window ending at `ee8644bded` (the 13 hours between the two windows ended no run in failure), and
 they were re-classified at review on 2026-10-16 with the hardened classifier; their selections were taken on the review branch's tree. Per-unit
-rows: `replay-commits.tsv` (353 rows; the `idx` column is the position in the window, re-derived because the first collection's resumed runs had
+rows: `replay-commits.tsv` (356 rows; the `idx` column is the position in the window, re-derived because the first collection's resumed runs had
 numbered some units against an older tip). Raw run records were read live; the oldest listed run is recorded in `dark-cost.md`.
 
 ## The proposed rule (stored with its hash so PR D's selector can be pinned to it)
@@ -30,16 +34,18 @@ Today's shipped rule skips nothing, so replaying it would be vacuous (CTO R2); t
 | Population | n | clean | rule-irrelevant | flake-cleared | not-evaluable | attributable | unverified-as-escape (gating point) | worst case | 95% upper bound on the worst case |
 |---|---|---|---|---|---|---|---|---|---|
 | first-parent commits | 300 | 300 | 0 | 0 | 0 | 0 | 0 of 300 (0.00%) | 0 of 300 | 0.99% |
-| commits plus ejections | 353 | 300 | 29 | 21 | 3 | 0 | 0 of 353 (0.00%) | 3 of 353 | 2.18% |
+| commits plus ejections | 356 | 300 | 29 | 21 | 6 | 0 | 0 of 356 (0.00%) | 6 of 356 | 3.30% |
 
 Units are replay units (a commit, or an ejected queue run); the bound is the one-sided 95% Clopper-Pearson bound on the WORST-CASE numerator
 (attributable + unverified + not-evaluable). **"0 attributable" is defined as: zero units where a would-skip suite failed on at least two attempts of
 the identical tree, attempt 1's jobs and logs named the same suite, and no later green run cleared it.** Routes (units per class and reason): of the
-300 commits, 300 `clean` (a full-battery run on the identical tree concluded success); of the 53 ejections, **29 `rule-irrelevant`** (they failed in
-jobs or suites the rule would have RUN anyway: e2e, lint, build, selected suites), **21 `flake-cleared`, every one by `identical-tree-green`** (a later
-queue run of the same PR with the identical (name, blob sha) changed-file set concluded success; the multi-unit flake class, which needs 3 units from
-3 distinct PRs, flipped none of them, though `scripts/test-all-orphan-log-retention` meets it), and **3 `not-evaluable`** (2 failed shards with no
-`[FAIL]`/`[KILLED]` line, 1 failure with no failed job). No unit is `unverified` or `escape`.
+300 commits, 300 `clean` (a full-battery run on the identical tree concluded success); of the 56 ejections, **29 `rule-irrelevant`** (they failed in
+jobs or suites the rule would have RUN anyway: e2e, lint, build, selected suites), **21 `flake-cleared`, every one by `identical-tree-green`** (the label
+predates its definition: the claim is an identical changed-file (name, blob sha) set, which is not an identical tree; a later
+queue run of the same PR with that identical set concluded success; the multi-unit flake class, which needs 3 units from
+3 distinct PRs, flipped none of them, though `scripts/test-all-orphan-log-retention` meets it), and **6 `not-evaluable`** (the 3 cancelled runs, 2 failed shards with no
+`[FAIL]`/`[KILLED]` line, 1 failure with no failed job). No unit is `unverified` or `escape`. **Criterion (a) depends on that clearance**: without it the
+21 would be `unverified`, counted as escapes in the gating point estimate, which would read 21 of 356 (5.9%) against the 2% line.
 
 Saving (criterion c): over the 300 commits the selector skips a mean of **52.87 suite-minutes** per commit (standard error 1.59; 245 commits
 evaluated, 49 runner-changed full runs and 6 non-evaluable diffs count as 0); net of the 1.29 billed selector minutes that is
@@ -76,5 +82,11 @@ rounded-up minute each), and the billed saving was not measured. The cheap pre-c
 The review found that the first classifier let "could not measure" land in a reassuring class (a cancelled or unfinished job, a truncated jobs list,
 an empty diff, an unread attempt 1 and a name-only file match all reached `rule-irrelevant`, `flake-cleared` or `escape`), that the index audit never
 read 189 suites, and that `[KILLED]` lines were ignored. All were fixed in the class (see `decision-challenges.md`), every non-clean unit was
-re-collected with `--reclassify`, and the window was re-bounded. The classes did not move (29 / 21 / 3 of 53, 0 unverified, 0 escape); the audit
+re-collected with `--reclassify`, and the window was re-bounded. The classes of the 53 failed runs did not move (29 / 21 / 3, 0 unverified, 0 escape); the audit
 count did (145 to 190 of 630).
+
+A third, verification pass found that `ejections` had dropped the three cancelled runs as "no verdict" (the claim above was withdrawn), that the
+population could be short without anything saying so, that a commit file with no blob sha compared by name alone, and that an audit whose
+selector failed after printing rows read as a pass. Fixed in the class: cancelled runs are units, `ejections-window.json` is the count `aggregate`
+checks the population against, a missing blob sha is a failed read, and a selector that exits non-zero is a failed audit (rc 3). The worst-case
+numerator went from 3 to 6 (the three cancelled runs) and the bound from 2.18% to 3.30%, still under 12%.

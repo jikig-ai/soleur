@@ -31,7 +31,7 @@ It prints one line per prerequisite, the information-only `ac9c=` line, and a fi
 |---|---|---|
 | `variable=` | `absent` (the variable read is 404 and the 100-item variable list is complete and does not name it) | `present`, `unknown(...)` |
 | `org_variables=` | `0` organization variables resolve through `vars` | `<n>`, `unknown(http=<status>)` or `unknown(unparseable)` |
-| `lock=` | `absent` (no assignment or declaration of `PR_AFFECTED_LOCKED` in the committed driver) | `present`, `unknown(driver-missing)`, `unknown(driver-has-no-code)` |
+| `lock=` | `absent` (no line of the committed driver names `PR_AFFECTED_LOCKED` except as a plain `$PR_AFFECTED_LOCKED` or `${PR_AFFECTED_LOCKED:-…}` read) | `present`, `unknown(driver-missing)`, `unknown(driver-has-no-code)` |
 | `artifacts=` | `ok` (the Guard 3 read, its call site and an executable audit script are committed, and the newest `full-battery-audit` job on main succeeded) | `missing:<list>`, `no-audit-run`, `audit-run-<conclusion>` (`audit-run-pending` for an unfinished newest run), `unknown(...)` |
 | `verdict=` | `GO-confirmed` (the receipt at HEAD ends in a `verdict=GO ruled=confirmed` line dated within 60 days) | `<verdict>-<ruled>` (for example `NO-GO-confirmed`), `stale(age_days=<n>)`, `no-machine-line`, `receipt-absent`, `no-receipt-recorded`, `unknown(...)`; `(receipt-archived)` is appended when the archived copy was read |
 | `prereq5=` | `ok` or `ok(heartbeat-waived)` (a non-empty skippable set of gated groups or registered suites, and the Better Stack follow-up closed AS COMPLETED or waived) | `skippable-set-empty`, `skippable-set-unrecognised(<item>)`, `heartbeat-open`, `heartbeat-closed-<reason>`, `unknown(...)` |
@@ -76,7 +76,7 @@ All of these, in this order:
 ## 4. Re-run the evidence
 
 Run from a checkout of the commit under test. Every command is read-only; the replay writes only under `--out`. The replay runs the
-selector once per commit and once per failed queue run (about 21 to 28 s each on a warm cache: roughly 2.4 hours serially for 353 units),
+selector once per commit and once per failed queue run (about 21 to 28 s each on a warm cache: roughly 2.5 hours serially for 356 units),
 so use `--chunk I/K` for the commit population and expect the ejections to take about 25 minutes.
 
 ```bash
@@ -89,7 +89,7 @@ git worktree remove --force /var/tmp/s4-audit
 
 `audit` prints `gap` and `unaudited` lines and `SOLEUR_PR_AFFECTED_AUDIT suites=… always_on=… audited=… unaudited=… gap_suites=…
 gap_refs=… accepted=…`. It exits 0 only when no gap and no unaudited suite remain; `gap_suites=0` beside `unaudited>0` is not a clean
-audit (a suite the audit never read is not a suite with no gaps). `always_on` suites run on every diff and are exempt. Edges are read with
+audit (a suite the audit never read is not a suite with no gaps). `always_on` suites run on every diff and are exempt. The audit sees literal path names only: a path assembled from a variable, or read through a helper the audit does not follow, is invisible to it, so `gap_suites=0` is a lower bound, never proof of completeness. Edges are read with
 the selector's own grammar (`^dir/` prefix, `^file` exact, `^glob:` bash glob), not as regexes. Tally the most frequent undeclared paths
 from the `--all-refs` output (the default prints only the first six per suite).
 
@@ -97,10 +97,12 @@ from the `--all-refs` output (the default prints only the first six per suite).
 OUT=/var/tmp/s4-replay
 # the last 300 first-parent commits of main (resumable; --chunk I/K splits it; --reclassify re-reads every non-clean unit)
 python3 -I scripts/ci-pr-affected-replay.py collect --out "$OUT" --commits 300 --base origin/main
-# every refused merge_group run in the same window; the conclusion histogram of ALL runs is printed (success, failure, cancelled, ...)
+# every refused merge_group run (every conclusion except success, cancelled included) in the same window; prints the conclusion histogram
+# and writes ejections-window.json, the count aggregate checks the population against
 python3 -I scripts/ci-pr-affected-replay.py ejections --out "$OUT" --commits 300 --base origin/main
 # the receipt text: rule hash, classes, routes, worst-case bound, saving, net saving against the 20% bar.
-# It refuses (rc 2) a directory with no ejections file, missing or duplicated commit units, or a count other than --expect-commits.
+# It refuses (rc 2) a directory with no ejections file or no ejections-window.json, an ejection population that is not the window's refused count,
+# missing or duplicated commit units, or a count other than --expect-commits.
 python3 -I scripts/ci-pr-affected-replay.py aggregate "$OUT" --expect-commits 300 --out "$OUT/replay-summary.txt"
 # the one-sided 95% bound for K events in N (prints a fraction: 0.009936 is 0.99%)
 python3 -I scripts/ci-pr-affected-replay.py cp-upper 0 300

@@ -18,7 +18,8 @@ TWO POPULATIONS (a recorded limit, read it before trusting a rate):
              broke a skippable suite was already refused by the queue's full battery and is NOT here:
              this population is near-vacuous for escapes BY CONSTRUCTION (survivorship). It is the
              reading CTO ruling R2 names, so it is computed and reported.
-  ejections  every failed merge_group run of ci.yml between the oldest and the newest commit's date (the same window). These are the
+  ejections  every merge_group run of ci.yml between the oldest and the newest commit's date (the same window) that is not a
+             success: failure, timed_out, startup_failure, an unfinished run and cancelled (a cancelled shard fails the aggregate). These are the
              candidates the full battery refused: the population that can actually hold an escape.
 Both run against TODAY's index and selector (the replay of an older diff uses the current edges).
 
@@ -91,8 +92,12 @@ class ReadError(Exception):
     """A remote or local read failed. Callers class the unit not-evaluable; it is never 'nothing found'."""
 
 
-GH_TIMEOUT = float(os.environ.get("PR_AFFECTED_REPLAY_GH_TIMEOUT", "180"))
-SELECT_TIMEOUT = float(os.environ.get("PR_AFFECTED_REPLAY_SELECT_TIMEOUT", "900"))
+try:
+    GH_TIMEOUT = float(os.environ.get("PR_AFFECTED_REPLAY_GH_TIMEOUT", "180"))
+    SELECT_TIMEOUT = float(os.environ.get("PR_AFFECTED_REPLAY_SELECT_TIMEOUT", "900"))
+except ValueError as _e:  # import time is before main()'s handlers: a bad seam value is a usage error (rc 2), never rc 1
+    print("replay: PR_AFFECTED_REPLAY_GH_TIMEOUT / _SELECT_TIMEOUT must be numbers: %s" % _e, file=sys.stderr)
+    sys.exit(2)
 # The same nine names as GIT_LOCATION_VARS in plugins/soleur/test/lib/git-fixture-env.sh and the gate's git_ro (a parity row pins all three).
 GIT_LOCATION_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
                      "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_TEMPLATE_DIR", "GIT_EXEC_PATH")
@@ -113,15 +118,20 @@ def run(cmd, cwd=None, env=None, check=True, timeout=None):
     return p
 
 
-def retry_sleep(attempt):
-    time.sleep(float(os.environ.get("PR_AFFECTED_REPLAY_RETRY_SLEEP", "1")) * (1 + attempt))
+def retry_sleep(attempt, factor=1):
+    time.sleep(float(os.environ.get("PR_AFFECTED_REPLAY_RETRY_SLEEP", "1")) * (1 + attempt) * factor)
+
+
+def rate_limited(stderr):
+    m = re.search(r"HTTP (\d{3})", stderr or "")
+    return bool(m and m.group(1) == "403" and "rate limit" in (stderr or "").lower())
 
 
 def transient(stderr):
     """A 4xx other than 429 will answer the same way every time: do not spend three sleeps on it. GitHub answers a
     primary rate limit with 403, which is the one 4xx that does clear."""
     m = re.search(r"HTTP (\d{3})", stderr or "")
-    if m and m.group(1) == "403" and "rate limit" in (stderr or "").lower():
+    if rate_limited(stderr):
         return True
     return not (m and m.group(1).startswith("4") and m.group(1) != "429")
 
@@ -136,7 +146,7 @@ def gh_text(path, escapes=False):
         last = p.stderr.strip()[:160]
         if not transient(p.stderr):
             break
-        retry_sleep(attempt)
+        retry_sleep(attempt, 10 if rate_limited(p.stderr) else 1)   # a rate limit clears in tens of seconds at best
     raise ReadError("gh api %s failed: %s" % (path.split("?")[0], last))
 
 
@@ -163,7 +173,7 @@ def gh_pages(path):
         last = p.stderr.strip()[:160]
         if not transient(p.stderr):
             break
-        retry_sleep(attempt)
+        retry_sleep(attempt, 10 if rate_limited(p.stderr) else 1)
     raise ReadError("gh api --paginate %s failed: %s" % (path.split("?")[0], last))
 
 
@@ -259,7 +269,11 @@ def api_commit_files(repo, sha):
     docs = gh_pages("repos/%s/commits/%s?per_page=100" % (repo, sha))
     files = []
     for d in docs:
-        files += [(x["filename"], x.get("sha") or "") for x in d.get("files", [])]
+        for x in d.get("files", []):
+            if not x.get("sha"):
+                # a name-only comparison is exactly the claim the blob exists to prevent
+                raise ReadError("commit %s lists %s without a blob sha" % (sha[:10], x.get("filename")))
+            files.append((x["filename"], x["sha"]))
     if len(files) >= COMMIT_FILES_CAP:
         # the commits API stops listing at 3000 files without saying so: a list at the cap is a truncated list
         raise ReadError("commit %s lists %d files, the API's cap: the list may be truncated" % (sha[:10], len(files)))
@@ -544,10 +558,11 @@ def cmd_ejections(a):
 
     out = open(path, "a")
     n = 0
-    # Every conclusion except `success` and `cancelled` is a queue run the full battery REFUSED or could not finish
-    # (`failure`, `timed_out`, `startup_failure`, an unfinished run) and is classed, not dropped. `cancelled` is a queue
-    # dequeue with no verdict on any suite. The conclusion histogram below names the whole population.
-    fail_runs = sorted([r for r in runs if r["conclusion"] not in ("success", "cancelled")], key=lambda r: r["created_at"])
+    # Every conclusion except `success` is a queue run the full battery REFUSED or could not finish (`failure`, `timed_out`,
+    # `startup_failure`, an unfinished run, and `cancelled`: a cancelled shard fails the aggregate `test`, so the run is
+    # classed from its jobs, where an unsettled shard makes it not-evaluable). None is dropped. The conclusion histogram
+    # below names the whole population.
+    fail_runs = sorted([r for r in runs if r["conclusion"] != "success"], key=lambda r: r["created_at"])
     hist = {}
     for r in runs:
         k = r["conclusion"] or "in-progress"
@@ -593,6 +608,8 @@ def cmd_ejections(a):
         out.write(json.dumps(u, sort_keys=True) + "\n")
         out.flush()
         n += 1
+    with open(os.path.join(a.out, "ejections-window.json"), "w") as fh:
+        json.dump({"since": since, "until": until, "runs": len(runs), "refused": len(fail_runs), "conclusions": hist}, fh, sort_keys=True)
     print("replay ejections: wrote %d units to %s (window %s..%s, %d merge_group runs, %d failed)"
           % (n, path, since, until, len(runs), len(fail_runs)))
     print("replay ejections: conclusions %s" % json.dumps(hist, sort_keys=True))
@@ -648,6 +665,16 @@ def check_complete(units, expect_commits, commits_only, d):
     if not commits_only and not os.path.exists(os.path.join(d, "units-ejections.jsonl")):
         raise ValueError("no units-ejections.jsonl under %s: the commits population is near-vacuous by construction "
                          "(pass --commits-only to say that is intended)" % d)
+    if not commits_only:
+        meta_path = os.path.join(d, "ejections-window.json")
+        if not os.path.exists(meta_path):
+            raise ValueError("no ejections-window.json under %s: re-run `ejections` so the population is checked against the "
+                             "number of refused runs the window held" % d)
+        with open(meta_path) as fh:
+            meta = json.load(fh)
+        have = len([u for u in units if u["kind"] == "ejection"])
+        if have != meta["refused"]:
+            raise ValueError("%d ejection units, but the window held %d refused runs: the population is short or stale" % (have, meta["refused"]))
 
 
 def mark_multi_unit_flakes(units):
@@ -690,6 +717,12 @@ def cmd_aggregate(a):
     ejects = [u for u in units if u["kind"] == "ejection"]
     lines = ["SOLEUR_PR_AFFECTED_REPLAY rule_sha256=%s" % RULE_SHA256, "rule=%s" % RULE_TEXT,
              "ejection_units=%d commit_units=%d" % (len(ejects), len(commits))]
+    mp = os.path.join(a.dir, "ejections-window.json")
+    if os.path.exists(mp) and not a.commits_only:
+        with open(mp) as fh:
+            m = json.load(fh)
+        lines.append("ejection_window=%s..%s runs=%d refused=%d conclusions=%s"
+                     % (m["since"], m["until"], m["runs"], m["refused"], json.dumps(m["conclusions"], sort_keys=True)))
     results = {}
     for label, pop in (("commits", commits), ("commits+ejections", commits + ejects)):
         s = summarize(pop)
@@ -848,9 +881,12 @@ def cmd_audit(a):
         with open(a.list) as fh:
             rows = fh.read().splitlines()
     else:
-        rows = run_selector(root, ["--paths=README.md"]).stdout.splitlines()
+        sp = run_selector(root, ["--paths=README.md"])
+        if sp.returncode != 0:
+            raise ReadError("selector rc=%d: rows printed before a failure are not an audit" % sp.returncode)
+        rows = sp.stdout.splitlines()
     tracked = tracked_files(root)
-    suites = always_on = accepted = 0
+    suites = always_on = accepted = accepted_unread = 0
     gaps, unaudited = [], []
     for line in rows:
         f = line.split("\t")
@@ -868,6 +904,7 @@ def cmd_audit(a):
         if path is None:
             if "*" in accept.get(suite, {}):
                 accepted += 1
+                accepted_unread += 1
             else:
                 unaudited.append((suite, pats[0]))
             continue
@@ -885,7 +922,7 @@ def cmd_audit(a):
     for suite, why in unaudited:
         print("unaudited\t%s\t%s" % (suite, why))
     print("SOLEUR_PR_AFFECTED_AUDIT suites=%d always_on=%d audited=%d unaudited=%d gap_suites=%d gap_refs=%d accepted=%d"
-          % (suites, always_on, suites - always_on - len(unaudited), len(unaudited), len(gaps),
+          % (suites, always_on, suites - always_on - len(unaudited) - accepted_unread, len(unaudited), len(gaps),
              sum(len(m) for _, m in gaps), accepted))
     return 0 if not gaps and not unaudited else 1
 

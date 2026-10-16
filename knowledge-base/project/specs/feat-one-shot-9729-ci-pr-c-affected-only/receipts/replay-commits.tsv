@@ -352,3 +352,6 @@ ejection	49	060792064c12b44474fb0ee991796de60e8f25a1	5	none	61.432	flake-cleared
 ejection	50	5a620450b5c019ead7983503c62683c53b5d93c4	2	none	67.716	flake-cleared	identical-tree-green	38726074836
 ejection	51	5a507302e863a97d8112d3fb77a5c7d71f3346db	14	none	60.54	rule-irrelevant		38745517062
 ejection	52	12d7c9fb021317367c2f32ef86fb9d0a401e085e	68	runner-changed	0.0	rule-irrelevant		38787466108
+ejection	7	9950800b105b871cbc9cffbde3b586a02ac747ae	8	runner-changed	0.0	not-evaluable	unsettled-jobs: test-webplat (2/2)	37671649612
+ejection	8	34ccac2a674b8109de3ce09b15001a03f9350c3d	12	none	52.183	not-evaluable	unsettled-jobs: test-webplat (2/2)	37679605689
+ejection	45	211205291460f889bbe81be75b9d5d384b94d883	23	none	72.841	not-evaluable	unsettled-jobs: test-scripts (5/8)	38476004641

@@ -102,7 +102,9 @@ code_has() {
 # ---- the ADR: the committed ADR-276 file, or --adr FILE ---------------------------------------------------------------
 ADR_TEXT=""
 ADR_OK=0
+ADR_NOTE=""
 if [ -n "$adr" ]; then
+  ADR_NOTE="(adr-from-file)"   # the drill seam says so on the lines it feeds: ready=true must not hide that the ADR was not the committed one
   if [ -f "$adr" ]; then ADR_TEXT="$(cat "$adr")"; ADR_OK=1; fi
 else
   adr_rel="$(git_ro -C "$root" ls-tree -r --name-only HEAD 2>/dev/null | grep -E '(^|/)ADR-276-[^/]*[.]md$')" || adr_rel=""
@@ -163,6 +165,8 @@ reader_lock() {
   # plain READS of the name are not the lock (the driver keeps one); whatever still names it assigns or declares it
   # shellcheck disable=SC2016  # the sed program is literal text: the dollar signs are the shell syntax being removed
   stripped="$(printf '%s\n' "$code" | sed -E 's/\$\{PR_AFFECTED_LOCKED(:-[^}]*)?\}//g; s/\$PR_AFFECTED_LOCKED//g')"
+  # a transform that failed or ate everything is "could not read", never "no lock"
+  [ -n "$(printf '%s' "$stripped" | tr -d '[:space:]')" ] || { R_STATUS=unknown; R_LINE="lock=unknown(transform-failed)"; return; }
   grep -q 'PR_AFFECTED_LOCKED' <<<"$stripped"
   rc=$?
   case "$rc" in
@@ -250,7 +254,7 @@ reader_verdict() {
     || { R_STATUS=unknown; R_LINE="verdict=unknown(date-unparseable)"; return; }
   age=$(( (t_now - t_rec) / 86400 ))
   if [ "$age" -lt 0 ] || [ "$age" -gt 60 ]; then R_STATUS=unmet; R_LINE="verdict=stale(age_days=$age)"; return; fi
-  R_STATUS=ok; R_LINE="verdict=GO-confirmed$note"
+  R_STATUS=ok; R_LINE="verdict=GO-confirmed$note$ADR_NOTE"
 }
 
 # registered_suite <label>: true when the label is a row of a suite-durations table at HEAD
@@ -282,13 +286,15 @@ reader_prereq5() {
   if [ "$n" -eq 0 ]; then R_STATUS=unmet; R_LINE="prereq5=skippable-set-empty"; return; fi
   if [ -n "$bad" ]; then R_STATUS=unmet; R_LINE="prereq5=skippable-set-unrecognised(${bad//[[:cntrl:]]/?})"; return; fi
   w="$(adr_line 'Waiver')"
-  if printf '%s' "$w" | grep -Eq '^heartbeat[[:space:]]+[^[:space:]]'; then R_STATUS=ok; R_LINE="prereq5=ok(heartbeat-waived)"; return; fi
+  if printf '%s' "$w" | grep -Eq '^heartbeat[[:space:]]+[^[:space:]<]'; then R_STATUS=ok; R_LINE="prereq5=ok(heartbeat-waived)$ADR_NOTE"; return; fi
   gh_read "repos/$repo/issues/$heartbeat"
   if [ "$G_STATUS" != 200 ]; then R_STATUS=unknown; R_LINE="prereq5=unknown(heartbeat-http=$G_STATUS)"; return; fi
+  # a pull request is addressable as an issue number too: a wrong --heartbeat-issue naming one must not count
+  if printf '%s' "$G_BODY" | jq -e 'has("pull_request")' >/dev/null 2>&1; then R_STATUS=unmet; R_LINE="prereq5=heartbeat-is-a-pull-request"; return; fi
   st="$(printf '%s' "$G_BODY" | jq -er '.state | select(type == "string")' 2>/dev/null)" || st=""
   reason="$(printf '%s' "$G_BODY" | jq -r '.state_reason // ""' 2>/dev/null)" || reason=""
   case "$st" in
-    closed) if [ "$reason" = completed ]; then R_STATUS=ok; R_LINE="prereq5=ok"; else R_STATUS=unmet; R_LINE="prereq5=heartbeat-closed-${reason:-without-reason}"; fi ;;
+    closed) if [ "$reason" = completed ]; then R_STATUS=ok; R_LINE="prereq5=ok$ADR_NOTE"; else R_STATUS=unmet; R_LINE="prereq5=heartbeat-closed-${reason:-without-reason}"; fi ;;
     open) R_STATUS=unmet; R_LINE="prereq5=heartbeat-open" ;;
     *) R_STATUS=unknown; R_LINE="prereq5=unknown(heartbeat-state)" ;;
   esac

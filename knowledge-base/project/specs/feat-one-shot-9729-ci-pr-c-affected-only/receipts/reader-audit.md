@@ -3,7 +3,7 @@
 Question (CTO R3 (d)): is every test file that mentions the documentation tree classified, and is none a REAL reader inside a suite the
 proposed rule would skip?
 
-Commands and counts (2026-10-16, tree `origin/main` at `ee8644bded` plus this branch's tooling, which adds no reader):
+Commands and counts (2026-10-16, tree `origin/main` at `ee8644bded` plus this branch's tooling (the two new suites name no documentation-tree path: the census passes with them)):
 
 - `git grep -l "knowledge-base" -- 'apps/web-platform/**/*.test.*' 'apps/web-platform/test' | wc -l` returns **238** files in the
   web-platform tests (the plan-time count was 238; the CTO figure of 207 used a different grep shape).
