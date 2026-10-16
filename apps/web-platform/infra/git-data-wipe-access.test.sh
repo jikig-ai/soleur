@@ -2896,7 +2896,7 @@ if simok gold-clear && [ "$(R gold-clear .job_result)" = success ] && [ "$(ranse
   pass "N-clear-gold: snapshot_clear runs the identity read, the bridge and the ONE clear step and nothing else: the precheck runs ONLY in pin_only mode (it writes the host-key pin the ssh_config step requires and evaluates no predicate), no boot read, no host assertion, no loader (no Tier-B token), no provider write; it ends green with no phase and prints that it removed only a transient snapshot"
 else fail "N-clear-gold" "job=$(R gold-clear .job_result) ran=$(ranset gold-clear) failed=$(failed_step gold-clear)"; fi
 neg_row "N-clear-notours: a leftover the host verb does not recognise as ours refuses at the clear step (wipe_snapshot_not_ours); nothing at the provider changed" neg-clear-notours wipe_snapshot_clear 'verdict=wipe_snapshot_not_ours'
-if simok neg-clear-notours && snot neg-clear-notours | grep -qF 'SNAPSHOT_CLEAR_FAILED' && ! snot neg-clear-notours | grep -qiE 'unfreeze|WIPE_STATE_UNKNOWN|VOLUME_DETACHED'; then
+if simok neg-clear-notours && grep -qF 'SNAPSHOT_CLEAR_FAILED' < <(snot neg-clear-notours) && ! grep -qiE 'unfreeze|WIPE_STATE_UNKNOWN|VOLUME_DETACHED' < <(snot neg-clear-notours); then
   pass "N-clear-notify: a failed snapshot_clear pages SNAPSHOT_CLEAR_FAILED, never an unfreeze, detached-volume or unknown-state word"
 else fail "N-clear-notify" "$(snot neg-clear-notours | head -c 300)"; fi
 neg_row "N-sep-dirty: a separated run whose run records show a flag write refuses at wipe_flag_precheck (wipe_separated_store_dirty) before any Hetzner call" neg-sep-dirty wipe_flag_precheck 'verdict=wipe_separated_store_dirty'

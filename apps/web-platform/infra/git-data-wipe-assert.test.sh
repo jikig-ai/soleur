@@ -702,7 +702,7 @@ if [ "$RC" = 0 ] && [ "$(cat "$W/out")" = "wipe_assert clear ok snapshot=cleared
   ok "C01 a leftover snapshot of the typed device is cleared: ONE remove of the pinned name (--retry), ONE umount, ONE loop detach, nothing left -> rc 0, snapshot=cleared"
 else no "C01 clear failed: rc=$RC out=[$(cat "$W/out")] err=[$(tr '\n' '|' < "$W/err" | cut -c1-200)] removals=$(clear_removals) umount=$(called umount) detaches=$(clear_detaches)"; fi
 clear_inv "C01"
-if grep -qE "^dmsetup	remove	--retry	git-data-pt-snap$" "$W/state/argv" && ! grep -E "^dmsetup	remove" "$W/state/argv" | grep -vq "git-data-pt-snap$"; then
+if grep -qE "^dmsetup	remove	--retry	git-data-pt-snap$" "$W/state/argv" && ! grep -vq "git-data-pt-snap$" < <(grep -E "^dmsetup	remove" "$W/state/argv"); then
   ok "C01 the only dmsetup remove ever sent names the pinned snapshot (git-data-pt-snap); no name comes from an input"
 else no "C01 a dmsetup remove named something else"; fi
 world c-absent
