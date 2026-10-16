@@ -1886,8 +1886,13 @@ jobs:
   # filers, the email step and the gate below are the channel. The gate runs last and is red on any verdict that is
   # not clean, an empty one included. The job is read-only and prints no command that changes anything.
   #
-  # BOUNDED WAITS. The job has a 10-minute ceiling and every step that can stall carries its own timeout, so a stalled
-  # step ends as a failure the always() filers, the email and the gate all see, instead of eating the whole budget.
+  # BOUNDED WAITS. The job has a 10-minute ceiling. The steps this job runs itself carry a timeout-minutes (checkout 2,
+  # Doppler install 3, commit-time read 2, probe 3, each filer 2, clear 2). Inside them, the commit-time read has its own
+  # `timeout 30` (so it always exits 0 and the probe still runs with an unknown age), the credential read has
+  # `timeout -k 5 60`, each Hetzner request has `--max-time 30`, and the Doppler download has `--max-time 120`. The probe's
+  # worst case (65 + 3 x 30 + 2 x 5 = 165 s) is pinned below its 180 s step timeout by a suite. The notify step is bounded
+  # inside its own action and the gate is a case statement with nothing to wait on. A stalled step ends as a failure the
+  # always() filers, the email and the gate all see, instead of eating the whole budget.
   #
   # SCOPE AND FOLLOW-UPS. This job covers the Inngest store volume only. The web-1 workspaces_luks check is #10432; a
   # shared pinned Doppler install step for the loader, this job and cloud-init is #10431.
@@ -1899,6 +1904,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        timeout-minutes: 2
         with:
           persist-credentials: false
 
@@ -1924,7 +1930,9 @@ jobs:
 
       # The checkout is shallow, so the last-commit time of the declaration cannot come from the local history (it
       # would return the HEAD commit and silently extend the grace). It comes from the commits API. An unreadable or
-      # empty answer publishes nothing, and the probe then treats the age as unknown (fail open to a finding).
+      # empty answer publishes nothing, and the probe then treats the age as unknown (fail open to a finding). The call is
+      # bounded by `timeout 30` so a hang ends THIS step cleanly (exit 0, nothing published) and the probe still runs; the
+      # step's timeout-minutes is only the backstop (a step killed by it would leave the probe skipped).
       - name: Read the last commit time of the volume declaration
         id: tf_commit
         timeout-minutes: 2
@@ -1934,7 +1942,7 @@ jobs:
         run: |
           set +e
           epoch=""
-          stamp="$(gh api "repos/${REPOSITORY}/commits?sha=${GITHUB_SHA}&path=apps/web-platform/infra/inngest-redis-luks.tf&per_page=1" \
+          stamp="$(timeout 30 gh api "repos/${REPOSITORY}/commits?sha=${GITHUB_SHA}&path=apps/web-platform/infra/inngest-redis-luks.tf&per_page=1" \
             --jq '.[0].commit.committer.date // empty' 2>/dev/null)" || stamp=""
           if [[ "$stamp" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
             epoch="$(date -u -d "$stamp" +%s 2>/dev/null)" || epoch=""
@@ -1947,6 +1955,9 @@ jobs:
 
       - name: Probe the Inngest store volume protection flag at Hetzner
         id: probe
+        # Not the implicit success(): the commit-time read is a fail-open input, so even a failed or timed-out read
+        # must not skip the probe. Only a cancelled run, or a Doppler install that did not succeed, skips it.
+        if: ${{ !cancelled() && steps.doppler_cli.outcome == 'success' }}
         timeout-minutes: 3
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -1964,7 +1975,7 @@ jobs:
           readonly VOLUME_ID_PIN=106903269
           TF_FILE="${GITHUB_WORKSPACE:?}/apps/web-platform/infra/inngest-redis-luks.tf"
           name=""; expected=""; live=""; volume_id=""; http=""; tf_age_min=""
-          published=0; body_file=""
+          published=0; body_file=""; reason=""
 
           # shellcheck disable=SC2329  # invoked by the EXIT trap below
           on_exit() {
@@ -1995,15 +2006,17 @@ jobs:
               done
             } >> "$GITHUB_OUTPUT"
             published=1
-            echo "sole-copy-check verdict=${v} expected=${expected:-n/a} live=${live:-n/a} http=${http:-n/a} volume_id=${volume_id:-n/a} name=${name:-n/a}"
-            local note=""
+            echo "sole-copy-check verdict=${v} expected=${expected:-n/a} live=${live:-n/a} http=${http:-n/a} volume_id=${volume_id:-n/a} name=${name:-n/a}${reason:+ reason=${reason}}"
+            local note="" warn=1
             case "$v" in
               lift-pending-apply) note="the Inngest store volume is unprotected at Hetzner until the re-protect change applies" ;;
               unprotected-as-declared) note="the Inngest store volume is unprotected, as declared (the sanctioned lift window)" ;;
               lift-not-applied) note="the Inngest store volume is still protected at Hetzner although the declaration says unprotected (the lift has not applied)" ;;
+              # The ::error:: line above already annotates this verdict; the summary line makes the reason durable.
+              volume-not-found) note="no single Hetzner volume matched the expected name and pinned id (reason=${reason:-unknown})"; warn=0 ;;
             esac
             if [[ -n "$note" ]]; then
-              echo "::warning::sole-copy-check verdict=${v}: ${note} (declared=${expected:-n/a}, live=${live:-n/a})."
+              if (( warn == 1 )); then echo "::warning::sole-copy-check verdict=${v}: ${note} (declared=${expected:-n/a}, live=${live:-n/a})."; fi
               printf -- '- sole-copy-check %s: %s; declared %s, live %s (%s minutes since the declaration last changed)\n' "$v" "$note" "${expected:-n/a}" "${live:-n/a}" "${tf_age_min:-unknown}" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
             fi
             exit 0
@@ -2024,7 +2037,9 @@ jobs:
           # stripped, a top-level name and a top-level delete_protection exactly once each, bounded at the block's
           # closing brace. Anything else (a renamed resource, a variable, a duplicate, a name only inside labels)
           # is could-not-read, never a guess. A block comment opener anywhere in the file is could-not-read too (this awk
-          # does not model HCL block comments; the real file has none). POSIX awk: the runner's is mawk.
+          # does not model HCL block comments; the real file has none). The rejection is file-wide on purpose: the awk
+          # cannot tell a comment from a string or a glob, so it fails closed and the error text names the cause. POSIX awk:
+          # the runner's is mawk.
           derived="$(awk '
             function strip(s) { sub(/[ \t]*#.*$/, "", s); sub(/[ \t]*\/\/.*$/, "", s); return s }
             BEGIN { starts = 0; depth = 0; inblk = 0; done = 0; names = 0; dps = 0; other = 0; blockc = 0 }
@@ -2055,13 +2070,20 @@ jobs:
           expected="$(sed -n 's/^expected=//p' <<<"$derived")"
           if [[ ! "$name" =~ ^[a-z0-9-]{1,63}$ || ! "$expected" =~ ^(true|false)$ ]]; then
             name=""; expected=""
-            echo "::error::sole-copy-check could not derive the volume name and declared protection flag from the checked-out declaration."
+            echo "::error::sole-copy-check could not derive the volume name and declared protection flag from the checked-out declaration (an unexpected shape, or a block-comment opener '/*' anywhere in the file)."
             finish could-not-read
           fi
 
           # The Read-permission token, with no fallback to any other name. Masked per line before anything else.
-          TOKEN="$(timeout 60 doppler secrets get HCLOUD_TOKEN_READONLY --plain --project soleur --config prd_terraform 2>/dev/null)" || TOKEN=""
+          # Bounded: rc 124 is the timeout and 137 the kill that follows it. A timeout is NOT a missing credential (the
+          # operator-only remedy of no-token would be wrong), so it ends as could-not-read below.
+          doppler_rc=0
+          TOKEN="$(timeout -k 5 60 doppler secrets get HCLOUD_TOKEN_READONLY --plain --project soleur --config prd_terraform 2>/dev/null)" || doppler_rc=$?
           unset DOPPLER_TOKEN
+          if [[ -z "$TOKEN" && ( "$doppler_rc" == 124 || "$doppler_rc" == 137 ) ]]; then
+            echo "::error::sole_copy_probe_doppler_timeout — the secret store did not answer within 60 s; the check could not run (this is not a missing credential)."
+            finish could-not-read
+          fi
           while IFS= read -r _line; do
             if [[ -n "$_line" ]]; then printf '::add-mask::%s\n' "$_line"; fi
           done <<<"$TOKEN"
@@ -2169,11 +2191,11 @@ jobs:
             lifted-outside-terraform)
               TITLE="infra: Inngest store volume delete protection differs from Terraform (${NAME})"
               LEAD="The delete-protection flag of the Inngest store volume at Hetzner does not match what the committed Terraform declares."
-              REMEDY="To restore it, follow the runbook section 5c table row \`not-protected\`: the owner-approved \`manual-rerun\` dispatch of the per-merge apply (or the next infra-path merge) re-protects, then read back \`protected\`. An agent reports this and does not dispatch it unprompted." ;;
+              REMEDY="To restore it, follow the runbook section 5c table row \`not-protected\` in inngest-luks-cutover-6894.md: the owner-approved \`manual-rerun\` dispatch of the per-merge apply (or the next infra-path merge) re-protects, then read back \`protected\`. An agent reports this and does not dispatch it unprompted." ;;
             volume-not-found)
               TITLE="infra: Inngest store volume not found at Hetzner (${NAME})"
               LEAD="Hetzner reports no single volume with the expected name and identity for the Inngest store."
-              REMEDY="Treat this as an incident: use the \`soleur:incident\` skill and the runbook section \"After a total loss\". The probe step's log line names the reason (zero, many or id-mismatch)." ;;
+              REMEDY="Confirm the Hetzner listing first: the probe step's log line names the reason (zero, many or id-mismatch), and many or id-mismatch do not mean the volume is gone. Only if the volume is gone, treat it as a total loss: use the \`soleur:incident\` skill and the runbook section \"After a total loss\" in inngest-luks-cutover-6894.md." ;;
             *)
               echo "::error::sole_copy_finding_filer_unexpected_verdict — this step ran for a verdict it does not file (${VERDICT:-none})."
               exit 1 ;;
@@ -2291,7 +2313,11 @@ jobs:
             if [[ "${VERDICT:-}" == "no-token" ]]; then
               echo "The read-only Hetzner token was absent, malformed or rejected. Check in this order: step O5 of infra-credential-tiers-8209.md (HCLOUD_TOKEN_READONLY must exist in the prd_terraform config), then whether the DOPPLER_TOKEN repository secret can still read that config. Step O5 is operator-only (the token is minted in the Hetzner console); an agent reports this issue and stops."
             else
-              echo "Open the linked run and read the probe step: it names the cause (an unreachable API, a truncated or malformed answer, an unparseable declaration, or a probe that ended without a verdict)."
+              echo "Open the linked run and read the first failed or skipped step of the run (the probe, or an earlier step if the probe was skipped): it names the cause (an unreachable API, a truncated or malformed answer, an unparseable declaration, a secret read that timed out, or a probe that ended without a verdict)."
+              if [[ "$NAME" == "name-unreadable" ]]; then
+                echo ""
+                echo "The title ends in (name-unreadable): no volume name could be read from the declaration, or the probe ended before it read one."
+              fi
             fi
             echo ""
             echo "This workflow only reads. Closing this issue does not acknowledge anything; a matches-declared run closes it. Decision record: ADR-282."
@@ -2342,6 +2368,8 @@ jobs:
           failed=0
           # The two could-not-perform issues are filed under (name-unreadable) when the probe published no name (an
           # unparseable declaration, a crash), so a clean run clears that form of both titles too.
+          # The (name-unreadable) forms are NOT volume-scoped: they hold for whichever volume this check covers. The web-1
+          # check (#10432) must use a different title prefix, or its issues would be cleared by this job's clean run.
           TITLES=(
             "infra: Inngest store volume delete protection differs from Terraform (${NAME})"
             "infra: Inngest store volume not found at Hetzner (${NAME})"
@@ -2357,6 +2385,11 @@ jobs:
           for T in "${TITLES[@]}"; do
             for N in $(jq -r --arg t "$T" '.[] | select(.title == $t) | .number' <<<"$OPEN"); do
               AUTHOR="$(gh issue view "$N" --json author --jq '.author.login')" || AUTHOR=""
+              # An unreadable author is a failed lookup, never a "not ours": the issue stays open, the step goes red.
+              if [[ -z "$AUTHOR" ]]; then
+                echo "::error::sole_copy_clear_author_lookup_failed — could not read the author of #${N}; it was left open and not commented."
+                failed=1; continue
+              fi
               case "$AUTHOR" in
                 github-actions|app/github-actions|github-actions\[bot\])
                   if ! gh issue comment "$N" --body "cleared in run ${RUN_URL}: live equals declared"; then failed=1; continue; fi
@@ -2371,7 +2404,8 @@ jobs:
           fi
 
       # The email is the channel a red run lacks (nothing reads the run's conclusion): it fires on a finding verdict and
-      # whenever a filer step failed, so a dead issue channel is not silent. It must never fail the job itself.
+      # whenever a filer or the clear step failed, so a dead issue channel (or a stale open issue) is not silent. It
+      # must never fail the job itself.
       - name: Email notification (store volume protection check)
         id: notify
         if: >-
@@ -2381,12 +2415,14 @@ jobs:
               || steps.file_finding.outcome == 'failure'
               || steps.file_finding.outcome == 'cancelled'
               || steps.file_unreadable.outcome == 'failure'
-              || steps.file_unreadable.outcome == 'cancelled')
+              || steps.file_unreadable.outcome == 'cancelled'
+              || steps.clear.outcome == 'failure'
+              || steps.clear.outcome == 'cancelled')
         continue-on-error: true
         uses: ./.github/actions/notify-ops-email
         with:
           subject: '[INFRA DRIFT] Inngest store volume protection check needs attention'
-          body: '<p><strong>The twice-daily Inngest store volume protection check needs attention.</strong> Verdict: <code>${{ steps.probe.outputs.verdict }}</code>; declared <code>${{ steps.probe.outputs.expected }}</code>, live <code>${{ steps.probe.outputs.live }}</code>.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a>. The issue under the infra-drift label carries the facts and the pointers (ADR-282).</p><p>Issue filers: finding filer <code>${{ steps.file_finding.outcome }}</code>, could-not-perform filer <code>${{ steps.file_unreadable.outcome }}</code>. If either says failure, the issue channel itself did not accept the finding: read the named error in the run log.</p>'
+          body: '<p><strong>The twice-daily Inngest store volume protection check needs attention.</strong> Verdict: <code>${{ steps.probe.outputs.verdict }}</code>; declared <code>${{ steps.probe.outputs.expected }}</code>, live <code>${{ steps.probe.outputs.live }}</code>.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a>. The issue under the infra-drift label carries the facts and the pointers (ADR-282).</p><p>Issue filers: finding filer <code>${{ steps.file_finding.outcome }}</code>, could-not-perform filer <code>${{ steps.file_unreadable.outcome }}</code>, clear step <code>${{ steps.clear.outcome }}</code>. If any says failure, the issue channel itself did not accept or close an issue: read the named error in the run log.</p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
 
       # LAST, after the filers: red on every verdict that is not one of the four clean ones, an empty verdict included,
