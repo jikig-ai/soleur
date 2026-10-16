@@ -36,8 +36,8 @@ Every remote read goes through `gh api` (a PATH seam for tests); the selector is
 (default scripts/test-all.sh); durations come from scripts/suite-durations{,-heavy}.tsv.
 
 SUBCOMMANDS
-  collect      --out DIR [--commits N] [--chunk I/K] [--repo R] [--base REF]
-  ejections    --out DIR [--since ISO] [--commits N] [--repo R] [--base REF]
+  collect      --out DIR [--commits N] [--chunk I/K] [--repo R] [--base REF] [--redo-unevaluable]
+  ejections    --out DIR [--since ISO] [--commits N] [--repo R] [--base REF] [--redo-unevaluable]
   aggregate    DIR [--baseline-min M] [--selector-min S] [--out FILE]
   verdict      --a S --b S --c S --d S
   cp-upper     K N [CONF]
@@ -167,8 +167,13 @@ def select(root, files):
         elif line.startswith("AFFECTED_SUMMARY"):
             m = re.search(r"fallback=(\S+)", line)
             fb = m.group(1) if m else None
-    if fb is None or tot == 0:
-        raise ReadError("selector printed no summary or no rows")
+    if fb is None:
+        raise ReadError("selector printed no AFFECTED_SUMMARY line")
+    if fb != "none":
+        # a fallback (runner-changed, undecidable diff) runs the FULL battery and prints no per-suite rows: nothing is skipped
+        return fb, [], 0, 0
+    if tot == 0:
+        raise ReadError("selector reported fallback=none but printed no AFFECTED_SELECTED rows")
     return fb, sorted(skipped), sel, tot
 
 
@@ -227,6 +232,9 @@ def classify(unit, repo, cache_dir, same_tree_green):
         return
     if r["conclusion"] == "success":
         unit["cls"], unit["reason"] = "clean", ""
+        return
+    if unit.get("sel_error"):
+        unit["cls"], unit["reason"] = "not-evaluable", "selection: %s" % unit["sel_error"]
         return
     skipped = set(unit.get("skipped_suites") or [])
     try:
@@ -289,15 +297,22 @@ def fill_selection(u, root, files, dur):
     return True
 
 
-def read_done(path):
-    done = {}
+def read_done(path, redo=False):
+    """Units already collected. With redo, not-evaluable rows and rows with no recorded selection are dropped from
+    the file so they are collected again (a transient API failure must not be frozen as an answer)."""
+    done, keep = {}, []
     if os.path.exists(path):
         for line in open(path):
             try:
                 u = json.loads(line)
-                done[(u["kind"], u["sha"])] = u
             except ValueError:
-                pass
+                continue
+            if redo and (u.get("cls") == "not-evaluable" or not u.get("fallback")):
+                continue
+            done[(u["kind"], u["sha"])] = u
+            keep.append(line if line.endswith("\n") else line + "\n")
+        if redo:
+            open(path, "w").write("".join(keep))
     return done
 
 
@@ -309,7 +324,7 @@ def cmd_collect(a):
     i_, k_ = (int(x) for x in a.chunk.split("/"))
     os.makedirs(a.out, exist_ok=True)
     path = os.path.join(a.out, "units-commits-%d-of-%d.jsonl" % (i_, k_))
-    done = read_done(path)
+    done = read_done(path, a.redo_unevaluable)
     cache = os.path.join(a.out, "joblogs")
     out = open(path, "a")
     n = 0
@@ -320,7 +335,8 @@ def cmd_collect(a):
         try:
             fill_selection(u, root, commit_files(root, sha), dur)
         except ReadError as e:
-            u["reason"] = "selection: %s" % e
+            u["sel_error"] = str(e)
+            u["fallback"] = "selection-error"
         try:
             runs = ci_runs(a.repo, sha)
         except ReadError as e:
@@ -359,7 +375,7 @@ def cmd_ejections(a):
     runs = [r for d in docs for r in d.get("workflow_runs", [])]
     os.makedirs(a.out, exist_ok=True)
     path = os.path.join(a.out, "units-ejections.jsonl")
-    done = read_done(path)
+    done = read_done(path, a.redo_unevaluable)
     cache = os.path.join(a.out, "joblogs")
     by_pr = {}
     for r in runs:
@@ -385,10 +401,13 @@ def cmd_ejections(a):
             files = files_for(r)
             fill_selection(u, root, files, dur)
         except ReadError as e:
+            u["sel_error"] = str(e)
+            u["fallback"] = "selection-error"
             u["reason"] = "files: %s" % e
-            u["cls"] = "not-evaluable"
-            out.write(json.dumps(u, sort_keys=True) + "\n")
-            continue
+            if "selector" not in str(e):
+                u["cls"] = "not-evaluable"
+                out.write(json.dumps(u, sort_keys=True) + "\n")
+                continue
 
         def cleared(unit, r=r):
             # a LATER queue run of the same PR with the identical changed-file set that succeeded
@@ -630,12 +649,14 @@ def main(argv):
     c.add_argument("--chunk", default="1/1")
     c.add_argument("--repo", default="jikig-ai/soleur")
     c.add_argument("--base", default="origin/main")
+    c.add_argument("--redo-unevaluable", action="store_true", dest="redo_unevaluable")
     e = sub.add_parser("ejections")
     e.add_argument("--out", required=True)
     e.add_argument("--since", default="")
     e.add_argument("--commits", type=int, default=300)
     e.add_argument("--repo", default="jikig-ai/soleur")
     e.add_argument("--base", default="origin/main")
+    e.add_argument("--redo-unevaluable", action="store_true", dest="redo_unevaluable")
     g = sub.add_parser("aggregate")
     g.add_argument("dir")
     g.add_argument("--baseline-min", type=float, default=99.8, dest="baseline_min")

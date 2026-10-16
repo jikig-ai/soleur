@@ -97,6 +97,12 @@ for a in "$@"; do case "$a" in --paths=*) paths="${a#--paths=}" ;; esac; done
 [ -n "$paths" ] || { echo "sel-stub: no --paths" >&2; exit 64; }
 fb=none
 case ",$paths," in *,scripts/runner.sh,*) fb=runner-changed ;; esac
+if [ "$fb" != none ]; then
+  # a fallback runs the FULL battery and prints no per-suite rows
+  printf 'AFFECTED_FALLBACK\treason=%s\n' "$fb"
+  printf 'AFFECTED_SUMMARY selected=all of=all always_on=all edge=all fallback=%s\n' "$fb"
+  exit 0
+fi
 x=0; case ",$paths," in *,x.txt,*) x=1 ;; esac
 printf 'AFFECTED_SELECTED\tscripts/lib/a\t1\talways_on\t^scripts/lib/a\n'
 printf 'AFFECTED_SELECTED\tscripts/suitex\t%s\tedge:declared\t^x.txt|^scripts/suitex.test.sh\n' "$x"
@@ -105,6 +111,7 @@ printf 'AFFECTED_SELECTED\tscripts/suitez\t0\talways_on\t^scripts/suitez.test.sh
 printf 'AFFECTED_SUMMARY selected=2 of=4 always_on=1 edge=0 fallback=%s\n' "$fb"
 SEL
 chmod +x "$BIN/sel.sh"
+printf '#!/usr/bin/env bash\necho "selector exploded" >&2\nexit 3\n' > "$BIN/sel-fail.sh"; chmod +x "$BIN/sel-fail.sh"
 
 cat > "$BIN/gh" <<'GHSTUB'
 #!/usr/bin/env bash
@@ -206,6 +213,24 @@ U="$OUT/units-commits-1-of-1.jsonl"
   && pass "c7 a failed shard with no FAIL line is not-evaluable" || fail "c7 a failed shard with no FAIL line is not-evaluable"
 ! grep -q STUB-MISS "$GHLOG" && pass "collect made no request the stub does not know" || fail "collect made an unknown request: $(grep STUB-MISS "$GHLOG" | head -2)"
 
+echo "== collect: selection errors and the redo flag"
+rm -rf "$OUT"; mkdir -p "$OUT"
+( cd "$REPO" && env PATH="$BIN:$PATH" PR_AFFECTED_REPLAY_TEST_ALL="$BIN/sel-fail.sh" HOME="$FIXHOME" python3 "$SUT" collect --out "$OUT" --commits 7 --chunk 1/1 --repo "$R" >/dev/null 2>&1 )
+SU="$OUT/units-commits-1-of-1.jsonl"
+[[ "$(unit_field "$SU" "${C[0]}" .cls)" = clean && "$(unit_field "$SU" "${C[0]}" .fallback)" = selection-error ]] \
+  && pass "a selector failure on a green unit is recorded as selection-error and does not fake a clean saving" || fail "selector failure on a green unit (got $(unit_field "$SU" "${C[0]}" '.cls+" "+.fallback'))"
+[[ "$(unit_field "$SU" "${C[6]}" .cls)" = not-evaluable && "$(unit_field "$SU" "${C[6]}" .reason)" == selection:* ]] \
+  && pass "a selector failure on a failing unit is not-evaluable, with the selection named" || fail "selector failure on a failing unit (got $(unit_field "$SU" "${C[6]}" '.cls+" "+.reason'))"
+collect_once
+rm -f "$GHFIX/ERR_$(keyof "$(runs_path "${C[4]}")")"
+runs_body "${C[4]}" "5001:merge_group:success" | fx "$(runs_path "${C[4]}")"
+before="$(wc -l < "$OUT/units-commits-1-of-1.jsonl")"
+run_sut collect --out "$OUT" --commits 7 --chunk 1/1 --repo "$R" >/dev/null 2>&1
+[[ "$(unit_field "$OUT/units-commits-1-of-1.jsonl" "${C[4]}" .cls)" = not-evaluable ]] && pass "without --redo-unevaluable a frozen not-evaluable row stays (resume never re-reads it)" || fail "a frozen not-evaluable row stays without the flag"
+run_sut collect --out "$OUT" --commits 7 --chunk 1/1 --repo "$R" --redo-unevaluable >/dev/null 2>&1
+[[ "$(unit_field "$OUT/units-commits-1-of-1.jsonl" "${C[4]}" .cls)" = clean && "$(wc -l < "$OUT/units-commits-1-of-1.jsonl")" -eq "$before" ]] \
+  && pass "--redo-unevaluable re-reads the healed unit once and leaves every other row alone (7 rows, no duplicate)" || fail "--redo-unevaluable (got $(unit_field "$OUT/units-commits-1-of-1.jsonl" "${C[4]}" .cls), $(wc -l < "$OUT/units-commits-1-of-1.jsonl") rows)"
+fx_err "$(runs_path "${C[4]}")"   # re-break c5's runs read: every later section expects the original fixture
 echo "== collect: resumability and chunking"
 before="$(wc -l < "$U")"
 run_sut collect --out "$OUT" --commits 7 --chunk 1/1 --repo "$R" >/dev/null 2>&1
@@ -347,6 +372,9 @@ row_flake_threshold() { rm -rf "$OUT"; mkdir -p "$OUT"; run_sut ejections --out 
 row_verdict_fail() { [[ "$(python3 "$SUT" verdict --a pass --b fail --c pass --d pass)" == "computed=NO-GO "* ]]; }
 row_unmeasured() { [[ "$(python3 "$SUT" verdict --a pass --b pass --c unmeasured --d pass)" == "computed=UNDECIDED reason=incomplete" ]]; }
 row_selftest_line() { collect_once; [[ "$(unit_field "$OUT/units-commits-1-of-1.jsonl" "${C[2]}" '.failing[0].suites|join(",")')" = scripts/suitey ]]; }
+row_sel_error() { rm -rf "$OUT"; mkdir -p "$OUT"; ( cd "$REPO" && env PATH="$BIN:$PATH" PR_AFFECTED_REPLAY_TEST_ALL="$BIN/sel-fail.sh" HOME="$FIXHOME" python3 "$SUT" collect --out "$OUT" --commits 7 --chunk 1/1 --repo "$R" >/dev/null 2>&1 ); [[ "$(unit_field "$OUT/units-commits-1-of-1.jsonl" "${C[6]}" .reason)" == selection:* ]]; }
+row_fallback_rows() { collect_once; [[ "$(unit_field "$OUT/units-commits-1-of-1.jsonl" "${C[5]}" .fallback)" = runner-changed ]]; }
+row_redo() { fx_err "$(runs_path "${C[4]}")"; collect_once; rm -f "$GHFIX/ERR_$(keyof "$(runs_path "${C[4]}")")"; runs_body "${C[4]}" "5001:merge_group:success" | fx "$(runs_path "${C[4]}")"; run_sut collect --out "$OUT" --commits 7 --chunk 1/1 --repo "$R" --redo-unevaluable >/dev/null 2>&1; [[ "$(unit_field "$OUT/units-commits-1-of-1.jsonl" "${C[4]}" .cls)" = clean ]]; }
 row_clear() { collect_once; [[ "$(unit_field "$OUT/units-commits-1-of-1.jsonl" "${C[5]}" .cls)" = clean ]]; }
 row_audit_comment() { run_sut audit --root "$AREPO" --list "$SANDBOX/audit-comment.rows" 2>&1 | grep -q 'gap_suites=0'; }
 row_audit_runner() { run_sut audit --root "$AREPO" --list "$SANDBOX/audit-runner.rows" 2>&1 | grep -q 'gap_suites=0'; }
@@ -368,6 +396,15 @@ mutate audit-comments-counted '        if t.startswith("#") or t.startswith("//"
             continue' row_audit_comment
 mutate audit-runner-not-excused 'f not in (suite,) and f not in RUNNER_TRIGGERS and len(f) > 6' 'f not in (suite,) and len(f) > 6' row_audit_runner
 mutate audit-gap-blind 'miss = [r for r in refs if not any(rg.search(r) for rg in regs)]' 'miss = [r for r in refs if False]' row_audit_bad
+mutate sel-error-ignored '    if unit.get("sel_error"):
+        unit["cls"], unit["reason"] = "not-evaluable", "selection: %s" % unit["sel_error"]
+        return' '    if False:
+        return' row_sel_error
+mutate fallback-needs-rows '    if fb != "none":
+        # a fallback (runner-changed, undecidable diff) runs the FULL battery and prints no per-suite rows: nothing is skipped
+        return fb, [], 0, 0' '    if False:
+        return fb, [], 0, 0' row_fallback_rows
+mutate redo-flag-inert 'if redo and (u.get("cls") == "not-evaluable" or not u.get("fallback")):' 'if False and (u.get("cls") == "not-evaluable" or not u.get("fallback")):' row_redo
 mutate audit-zero-suites 'if suites == 0:' 'if False:' row_audit_zero
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -375,12 +412,12 @@ echo "== controls: a survivor and a crash are both reportable"
 if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_KILLED of $MUT_RUN)"; else fail "mutants killed $MUT_KILLED of $MUT_RUN"; fi
 
 # Anti-vacuity floors, reported through printf + exit so they never ride on the helpers they guard.
-FLOOR_ASSERTIONS=58
+FLOOR_ASSERTIONS=65
 total=$((passes + fails))
 if [[ "$total" -lt "$FLOOR_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$total" "$FLOOR_ASSERTIONS" >&2; exit 1
 fi
-FLOOR_MUTANTS=13
+FLOOR_MUTANTS=16
 if [[ "$MUT_RUN" -lt "$FLOOR_MUTANTS" ]]; then
   printf '[FATAL] mutation floor: only %s mutants ran, floor is %s\n' "$MUT_RUN" "$FLOOR_MUTANTS" >&2; exit 1
 fi
