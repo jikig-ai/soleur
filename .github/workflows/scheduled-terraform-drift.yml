@@ -1882,9 +1882,15 @@ jobs:
   # declaration's last commit is `lift-pending-apply` (green, warned), not a finding.
   #
   # NOTHING CONSUMES THIS JOB'S CONCLUSION. cron-terraform-drift.ts only dispatches the workflow and never reads the
-  # run, and no Sentry check-in covers this job (tracked follow-up), so a red run alone reaches nobody: the issue
+  # run, and no Sentry check-in covers this job (tracked: #10430), so a red run alone reaches nobody: the issue
   # filers, the email step and the gate below are the channel. The gate runs last and is red on any verdict that is
   # not clean, an empty one included. The job is read-only and prints no command that changes anything.
+  #
+  # BOUNDED WAITS. The job has a 10-minute ceiling and every step that can stall carries its own timeout, so a stalled
+  # step ends as a failure the always() filers, the email and the gate all see, instead of eating the whole budget.
+  #
+  # SCOPE AND FOLLOW-UPS. This job covers the Inngest store volume only. The web-1 workspaces_luks check is #10432; a
+  # shared pinned Doppler install step for the loader, this job and cloud-init is #10431.
   sole-copy-protection-check:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -1896,10 +1902,12 @@ jobs:
         with:
           persist-credentials: false
 
-      # PINNED, not DopplerHQ/cli-action (that action runs the mutable latest-CLI install script). Same release and
-      # sha256 as the loader and the web host's install; bump all three together. A suite pins this equal to the loader.
+      # PINNED, not DopplerHQ/cli-action (that action runs the mutable latest-CLI install script). The same release and
+      # sha256 as the credential loader, pinned equal to it by a suite. Other installs of the same release exist
+      # (`git grep 3.75.3`) and are NOT pinned by that suite; a shared step is #10431.
       - name: Install Doppler CLI (pinned)
         id: doppler_cli
+        timeout-minutes: 3
         env:
           DOPPLER_CLI_VERSION: "3.75.3"
           DOPPLER_CLI_SHA256: "9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db"
@@ -1907,7 +1915,7 @@ jobs:
           set -euo pipefail
           d="${RUNNER_TEMP}/doppler-cli"
           mkdir -p "$d"
-          curl -fsSL --retry 3 -o "$d/doppler.tar.gz" \
+          curl -fsSL --retry 3 --connect-timeout 20 --max-time 120 -o "$d/doppler.tar.gz" \
             "https://github.com/DopplerHQ/cli/releases/download/${DOPPLER_CLI_VERSION}/doppler_${DOPPLER_CLI_VERSION}_linux_amd64.tar.gz"
           echo "${DOPPLER_CLI_SHA256}  $d/doppler.tar.gz" | sha256sum -c -
           tar xzf "$d/doppler.tar.gz" -C "$d" doppler
@@ -1919,6 +1927,7 @@ jobs:
       # empty answer publishes nothing, and the probe then treats the age as unknown (fail open to a finding).
       - name: Read the last commit time of the volume declaration
         id: tf_commit
+        timeout-minutes: 2
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
@@ -1938,6 +1947,7 @@ jobs:
 
       - name: Probe the Inngest store volume protection flag at Hetzner
         id: probe
+        timeout-minutes: 3
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           DOPPLER_PROJECT: soleur
@@ -1986,11 +1996,16 @@ jobs:
             } >> "$GITHUB_OUTPUT"
             published=1
             echo "sole-copy-check verdict=${v} expected=${expected:-n/a} live=${live:-n/a} http=${http:-n/a} volume_id=${volume_id:-n/a} name=${name:-n/a}"
+            local note=""
             case "$v" in
-              lift-pending-apply|unprotected-as-declared|lift-not-applied)
-                echo "::warning::sole-copy-check verdict=${v}: the Inngest store volume is unprotected or its protection change has not applied yet (declared=${expected:-n/a}, live=${live:-n/a})."
-                printf -- '- sole-copy-check %s: declared %s, live %s (%s minutes since the declaration last changed)\n' "$v" "${expected:-n/a}" "${live:-n/a}" "${tf_age_min:-unknown}" >> "${GITHUB_STEP_SUMMARY:-/dev/null}" ;;
+              lift-pending-apply) note="the Inngest store volume is unprotected at Hetzner until the re-protect change applies" ;;
+              unprotected-as-declared) note="the Inngest store volume is unprotected, as declared (the sanctioned lift window)" ;;
+              lift-not-applied) note="the Inngest store volume is still protected at Hetzner although the declaration says unprotected (the lift has not applied)" ;;
             esac
+            if [[ -n "$note" ]]; then
+              echo "::warning::sole-copy-check verdict=${v}: ${note} (declared=${expected:-n/a}, live=${live:-n/a})."
+              printf -- '- sole-copy-check %s: %s; declared %s, live %s (%s minutes since the declaration last changed)\n' "$v" "$note" "${expected:-n/a}" "${live:-n/a}" "${tf_age_min:-unknown}" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+            fi
             exit 0
           }
 
@@ -2008,11 +2023,13 @@ jobs:
           # Name and declared flag come from the checked-out declaration: the block of the one resource, comments
           # stripped, a top-level name and a top-level delete_protection exactly once each, bounded at the block's
           # closing brace. Anything else (a renamed resource, a variable, a duplicate, a name only inside labels)
-          # is could-not-read, never a guess. POSIX awk: the runner's is mawk.
+          # is could-not-read, never a guess. A block comment opener anywhere in the file is could-not-read too (this awk
+          # does not model HCL block comments; the real file has none). POSIX awk: the runner's is mawk.
           derived="$(awk '
             function strip(s) { sub(/[ \t]*#.*$/, "", s); sub(/[ \t]*\/\/.*$/, "", s); return s }
-            BEGIN { starts = 0; depth = 0; inblk = 0; done = 0; names = 0; dps = 0; other = 0 }
+            BEGIN { starts = 0; depth = 0; inblk = 0; done = 0; names = 0; dps = 0; other = 0; blockc = 0 }
             {
+              if (index($0, "/*") > 0) blockc = 1
               line = strip($0)
               if (done) next
               if (!inblk) {
@@ -2031,7 +2048,7 @@ jobs:
               if (depth <= 0) { done = 1; inblk = 0 }
             }
             END {
-              if (starts == 1 && done && names == 1 && dps == 1 && other == 0) { printf "name=%s\nexpected=%s\n", nm, dp; exit 0 }
+              if (starts == 1 && done && names == 1 && dps == 1 && other == 0 && blockc == 0) { printf "name=%s\nexpected=%s\n", nm, dp; exit 0 }
               exit 1
             }' "$TF_FILE" 2>/dev/null)" || derived=""
           name="$(sed -n 's/^name=//p' <<<"$derived")"
@@ -2043,7 +2060,8 @@ jobs:
           fi
 
           # The Read-permission token, with no fallback to any other name. Masked per line before anything else.
-          TOKEN="$(doppler secrets get HCLOUD_TOKEN_READONLY --plain --project soleur --config prd_terraform 2>/dev/null)" || TOKEN=""
+          TOKEN="$(timeout 60 doppler secrets get HCLOUD_TOKEN_READONLY --plain --project soleur --config prd_terraform 2>/dev/null)" || TOKEN=""
+          unset DOPPLER_TOKEN
           while IFS= read -r _line; do
             if [[ -n "$_line" ]]; then printf '::add-mask::%s\n' "$_line"; fi
           done <<<"$TOKEN"
@@ -2091,7 +2109,8 @@ jobs:
             if type != "object" then "bad-body"
             elif ((.volumes | type) != "array") or ((.meta.pagination | type) != "object")
               or ((.meta.pagination | has("next_page")) | not) or (.meta.pagination.next_page != null) then "bad-container"
-            elif (.volumes | length) != 1 then "count"
+            elif (.volumes | length) == 0 then "zero"
+            elif (.volumes | length) > 1 then "many"
             else .volumes[0] as $v
               | if ($v | type) != "object" or ($v.id | type) != "number" then "bad-volume"
                 elif $v.id != $pin then "other-id"
@@ -2100,8 +2119,9 @@ jobs:
                 else "ok \($v.id) \($v.protection.delete)" end
             end' "$body_file" 2>/dev/null)" || facts=""
           case "$facts" in
-            count|other-id)
-              echo "::error::sole-copy-check found no single Hetzner volume with the expected name and pinned id."
+            zero|many|other-id)
+              reason="$facts"; if [[ "$facts" == "other-id" ]]; then reason="id-mismatch"; fi
+              echo "::error::sole-copy-check found no single Hetzner volume with the expected name and pinned id (reason=${reason}: zero matches, many matches or a pinned-id mismatch)."
               finish volume-not-found ;;
             "ok "*) read -r _ volume_id live <<<"$facts" ;;
             *) echo "::error::sole-copy-check could not read the volume listing (${facts:-unparseable})."; finish could-not-read ;;
@@ -2124,6 +2144,7 @@ jobs:
       # the volume, no command, no API answer.
       - name: File an issue when the store volume protection differs from its declaration
         id: file_finding
+        timeout-minutes: 2
         if: >-
           always()
           && (steps.probe.outputs.verdict == 'lifted-outside-terraform'
@@ -2147,12 +2168,12 @@ jobs:
           case "${VERDICT:-}" in
             lifted-outside-terraform)
               TITLE="infra: Inngest store volume delete protection differs from Terraform (${NAME})"
-              OTHER="infra: Inngest store volume not found at Hetzner (${NAME})"
-              LEAD="The delete-protection flag of the Inngest store volume at Hetzner does not match what the committed Terraform declares." ;;
+              LEAD="The delete-protection flag of the Inngest store volume at Hetzner does not match what the committed Terraform declares."
+              REMEDY="To restore it, follow the runbook section 5c table row \`not-protected\`: the owner-approved \`manual-rerun\` dispatch of the per-merge apply (or the next infra-path merge) re-protects, then read back \`protected\`. An agent reports this and does not dispatch it unprompted." ;;
             volume-not-found)
               TITLE="infra: Inngest store volume not found at Hetzner (${NAME})"
-              OTHER="infra: Inngest store volume delete protection differs from Terraform (${NAME})"
-              LEAD="Hetzner reports no single volume with the expected name and identity for the Inngest store." ;;
+              LEAD="Hetzner reports no single volume with the expected name and identity for the Inngest store."
+              REMEDY="Treat this as an incident: use the \`soleur:incident\` skill and the runbook section \"After a total loss\". The probe step's log line names the reason (zero, many or id-mismatch)." ;;
             *)
               echo "::error::sole_copy_finding_filer_unexpected_verdict — this step ran for a verdict it does not file (${VERDICT:-none})."
               exit 1 ;;
@@ -2165,7 +2186,6 @@ jobs:
           fi
           EXISTING="$(jq -r --arg t "$TITLE" '[.[] | select(.title == $t) | .number] | .[0] // empty' <<<"$OPEN")" \
             || { echo "::error::sole_copy_finding_list_unreadable — the issue list was not valid JSON."; exit 1; }
-          RELATED="$(jq -r --arg t "$OTHER" '[.[] | select(.title == $t) | .number] | .[0] // empty' <<<"$OPEN")" || RELATED=""
           COMMENT="Run ${RUN_URL}: verdict ${VERDICT}; declared ${EXPECTED:-unknown}; live ${LIVE:-unknown}; minutes since the declaration last changed ${TF_AGE_MIN:-unknown}; HTTP ${HTTP:-n/a}."
           if [[ -n "$EXISTING" ]]; then
             if gh issue comment "$EXISTING" --body "$COMMENT"; then
@@ -2185,11 +2205,11 @@ jobs:
             echo "- Live at Hetzner: ${LIVE:-unknown}"
             echo "- Minutes since the declaration last changed on the default branch: ${TF_AGE_MIN:-unknown}"
             echo "- Run: ${RUN_URL}"
-            if [[ -n "$RELATED" ]]; then echo "- Related open issue: #${RELATED}"; fi
             echo ""
             echo "If a re-protect change merged recently, check its apply run before acting: the flag is re-applied there and this check can read the old value until it finishes."
             echo ""
-            echo "This workflow only reads. It prints no command and changes nothing. Closing this issue does not acknowledge the finding: fix the declaration, or restore the flag through the reviewed route."
+            echo "This workflow only reads. It prints no command and changes nothing. Closing this issue does not acknowledge the finding."
+            echo "${REMEDY}"
             echo "Decision record: ADR-282. Loss modes and the reviewed route: the runbook section \"Sole-copy protection and key loss\" in inngest-luks-cutover-6894.md."
             echo ""
             echo "_Auto-created by the [terraform-drift workflow](${SERVER_URL}/${REPOSITORY}/actions/workflows/scheduled-terraform-drift.yml)._"
@@ -2216,6 +2236,7 @@ jobs:
       # is never quiet. Two titles so a later outage is not hidden by an old one. One comment per run while it holds.
       - name: File an issue when the protection check could not be performed
         id: file_unreadable
+        timeout-minutes: 2
         if: >-
           always()
           && steps.probe.outputs.verdict != 'matches-declared'
@@ -2268,12 +2289,12 @@ jobs:
             echo "- Run: ${RUN_URL}"
             echo ""
             if [[ "${VERDICT:-}" == "no-token" ]]; then
-              echo "The read-only Hetzner token was absent, malformed or rejected. Check in this order: step O5 of infra-credential-tiers-8209.md (HCLOUD_TOKEN_READONLY must exist in the prd_terraform config), then whether the DOPPLER_TOKEN repository secret can still read that config."
+              echo "The read-only Hetzner token was absent, malformed or rejected. Check in this order: step O5 of infra-credential-tiers-8209.md (HCLOUD_TOKEN_READONLY must exist in the prd_terraform config), then whether the DOPPLER_TOKEN repository secret can still read that config. Step O5 is operator-only (the token is minted in the Hetzner console); an agent reports this issue and stops."
             else
               echo "Open the linked run and read the probe step: it names the cause (an unreachable API, a truncated or malformed answer, an unparseable declaration, or a probe that ended without a verdict)."
             fi
             echo ""
-            echo "This workflow only reads. Closing this issue does not acknowledge anything; a clean run closes it. Decision record: ADR-282."
+            echo "This workflow only reads. Closing this issue does not acknowledge anything; a matches-declared run closes it. Decision record: ADR-282."
             echo ""
             echo "_Auto-created by the [terraform-drift workflow](${SERVER_URL}/${REPOSITORY}/actions/workflows/scheduled-terraform-drift.yml)._"
           } > "$BODY"
@@ -2294,10 +2315,12 @@ jobs:
           fi
           rm -f "$BODY"
 
-      # ── Clear step: a clean run says so on any open issue of the four titles and closes only the bot's own. ───────
-      # A human-opened issue is commented but never auto-closed; a closed issue is never commented on.
+      # ── Clear step: a matches-declared run says so on any open bot-authored issue of the titles and closes it. ──────
+      # A human-opened issue is neither commented nor closed (a ::notice:: only, so it is not commented every 12 hours);
+      # a closed issue is never commented on.
       - name: Clear the protection issues when live equals declared
         id: clear
+        timeout-minutes: 2
         if: always() && steps.probe.outputs.verdict == 'matches-declared'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -2317,18 +2340,28 @@ jobs:
             exit 1
           fi
           failed=0
-          for T in \
-            "infra: Inngest store volume delete protection differs from Terraform (${NAME})" \
-            "infra: Inngest store volume not found at Hetzner (${NAME})" \
-            "infra: the Inngest store volume protection check has no usable credential (${NAME})" \
-            "infra: the Inngest store volume protection check could not read Hetzner (${NAME})"; do
+          # The two could-not-perform issues are filed under (name-unreadable) when the probe published no name (an
+          # unparseable declaration, a crash), so a clean run clears that form of both titles too.
+          TITLES=(
+            "infra: Inngest store volume delete protection differs from Terraform (${NAME})"
+            "infra: Inngest store volume not found at Hetzner (${NAME})"
+            "infra: the Inngest store volume protection check has no usable credential (${NAME})"
+            "infra: the Inngest store volume protection check could not read Hetzner (${NAME})"
+          )
+          if [[ "$NAME" != "name-unreadable" ]]; then
+            TITLES+=(
+              "infra: the Inngest store volume protection check has no usable credential (name-unreadable)"
+              "infra: the Inngest store volume protection check could not read Hetzner (name-unreadable)"
+            )
+          fi
+          for T in "${TITLES[@]}"; do
             for N in $(jq -r --arg t "$T" '.[] | select(.title == $t) | .number' <<<"$OPEN"); do
-              if ! gh issue comment "$N" --body "cleared in run ${RUN_URL}: live equals declared"; then failed=1; continue; fi
               AUTHOR="$(gh issue view "$N" --json author --jq '.author.login')" || AUTHOR=""
               case "$AUTHOR" in
                 github-actions|app/github-actions|github-actions\[bot\])
+                  if ! gh issue comment "$N" --body "cleared in run ${RUN_URL}: live equals declared"; then failed=1; continue; fi
                   if ! gh issue close "$N"; then failed=1; fi ;;
-                *) echo "#${N} was not opened by this workflow; commented, not closed." ;;
+                *) echo "::notice::#${N} was not opened by this workflow; left open and not commented (live equals declared)." ;;
               esac
             done
           done
@@ -2353,7 +2386,7 @@ jobs:
         uses: ./.github/actions/notify-ops-email
         with:
           subject: '[INFRA DRIFT] Inngest store volume protection check needs attention'
-          body: '<p><strong>The twice-daily Inngest store volume protection check needs attention.</strong> Verdict: <code>${{ steps.probe.outputs.verdict }}</code>; declared <code>${{ steps.probe.outputs.expected }}</code>, live <code>${{ steps.probe.outputs.live }}</code>.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a>. The issue under the infra-drift label carries the facts and the pointers (ADR-282). If this email names a failed filer step, the issue channel itself did not accept the finding: read the named error in the run log.</p>'
+          body: '<p><strong>The twice-daily Inngest store volume protection check needs attention.</strong> Verdict: <code>${{ steps.probe.outputs.verdict }}</code>; declared <code>${{ steps.probe.outputs.expected }}</code>, live <code>${{ steps.probe.outputs.live }}</code>.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a>. The issue under the infra-drift label carries the facts and the pointers (ADR-282).</p><p>Issue filers: finding filer <code>${{ steps.file_finding.outcome }}</code>, could-not-perform filer <code>${{ steps.file_unreadable.outcome }}</code>. If either says failure, the issue channel itself did not accept the finding: read the named error in the run log.</p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
 
       # LAST, after the filers: red on every verdict that is not one of the four clean ones, an empty verdict included,

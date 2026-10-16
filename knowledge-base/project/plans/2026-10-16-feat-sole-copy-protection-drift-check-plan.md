@@ -100,7 +100,7 @@ the only distinct check", so this adds the recurring twin, not a rejected altern
 
 - Reuse of the loader-exported `HCLOUD_TOKEN` (it breaks property 5) -> the new job's own
   `HCLOUD_TOKEN_READONLY` read; the loader is not used.
-- A hard-coded volume id and a hard-coded expected `true` -> the id is looked up by name and the expected
+- A hard-coded volume id (reversed by E1: the id is pinned as an identity check) and a hard-coded expected `true` -> the id is looked up by name and the expected
   flag is derived from the checked-out `.tf` (already pinned by Guard 1 and the parity test, so a third
   copy would be a new place to drift and would page during a sanctioned lift).
 - (Reversed by deepen-plan, E2.) The email fallback the orphan sweeps carry was first cut on the premise that a
