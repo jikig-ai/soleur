@@ -2184,7 +2184,7 @@ The `soleur-registry-disk-prd` heartbeat stops pinging at 85 percent, which is t
 leading indicator, and the one probe that measured the store's fill rate (`scripts/followthroughs/zot-fill-rate-7341.sh`,
 the #7341 follow-through) ran only while that tracker was open: its PASS closed #7341 on 2026-08-14 and nothing
 has run it since. `.github/workflows/scheduled-zot-restart-loop.yml` therefore carries four steps after its Sentry
-check-in that run that script in place, unmodified, on that workflow's own trigger (the poller pattern of the
+check-in that run that script in place, on that workflow's own trigger (its logic is unchanged apart from a bounded `pcent` parse and a `future_dated_newest_sample` gate, each of which can only turn a crash or a forgery into exit 2) (the poller pattern of the
 [#6291 amendment of 2026-07-10](#durable-restart-loop-recurrence-alarm-amendment-2026-07-10-6291), its direct
 precedent; the same secrets and issue-filing idiom as the restart-loop alarm). The real cadence is the web hosts'
 watchdog dispatch clock (ADR-248): one run per hourly slot, dispatched by whichever web host fires first; collisions

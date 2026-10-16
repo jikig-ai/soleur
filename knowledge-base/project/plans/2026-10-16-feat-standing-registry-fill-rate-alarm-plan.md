@@ -180,7 +180,7 @@ The decision is true as soon as the workflow merges; nothing is gated on a later
 Ruled by CTO agent, 2026-10-16: take V1a. Persisted as rows in `knowledge-base/project/specs/feat-one-shot-7521-standing-fill-rate-detection/decision-challenges.md` (technical class). Summary:
 
 1. Vehicle V1a: new steps in `scheduled-zot-restart-loop.yml` running the existing script in place; V1b/V1c/V2/V3/V4 rejected (reasons in the Cut List).
-2. The script stays at `scripts/followthroughs/zot-fill-rate-7341.sh`, logic byte-identical; no `git mv`, no label env var. The `[#7341]` header stays (the 384-line harness pins it). The seam where `cur >= 85` sits behind the 24 h gate is documented, not hoisted.
+2. The script stays at `scripts/followthroughs/zot-fill-rate-7341.sh`, logic byte-identical; line-count-preserving prose edits allowed (CTO round-3 ruling Q1, 2026-10-16; line 130 stays put); no `git mv`, no label env var. The single logic amendment is the round-3 ruling Q2: the sample-parse `pcent` regex is bounded to `[0-9]{1,3}` with a non-digit lookahead, and a newest sample more than 300 s in the future is a `TRANSIENT future_dated_newest_sample` (a cause outside the workflow's benign set, so it files the probe-defect issue); both can only turn a crash or a forgery into exit 2, never into a PASS. The `[#7341]` header stays (the harness pins it). The seam where `cur >= 85` sits behind the 24 h gate is documented, not hoisted.
 3. FAIL conditions are the script's own (`cur >= 85`, or positive slope with `cur + slope*14d >= 85`); no floor. One deduped issue `[ci/zot-fill-rate] Registry store fill rate projects a breach`, label `ci/zot-fill-rate`; comment on each later FAIL; close on PASS only when the issue's `updatedAt` is at least 6 h old; TRANSIENT files nothing (the restart-loop alarm already owns PRODUCER_SILENT, INGEST_DARK and the credential fault for the same stream).
 4. Isolation: fill steps run after all existing zot and NIC steps (the ruling placed them before the Sentry check-in; review moved them AFTER it, so a fill-side hang or job timeout can never delay or kill the monitor check-in); `timeout-minutes: 3`; the Sentry `status:` expression is not edited (it references only `steps.alarm.*` and the check-in is `if: always()`, so a failing fill step turns the run red without touching the monitor); an exit code or output shape outside the contract is `UNEVALUATED`: an `::error::` annotation, and the probe step itself fails after writing its outputs.
 5. ADR-096 dated paragraph; no new ADR; no C4 edit.
@@ -222,7 +222,7 @@ Register `scripts/zot-fill-rate-standing-wiring` in `scripts/test-all.sh` (next 
 
 ### Phase 3 — ADR-096 amendment
 
-Add the dated paragraph described above. Leave ADR-184 and the script header untouched (a comment insert would shift the `:130` anchor cited by `lint-betterstack-emitter-read.sh`'s disposition map).
+Add the dated paragraph described above. Leave ADR-184 untouched. The script's prose may be edited only in a line-count-preserving way (a comment insert would shift the `:130` anchor cited by `lint-betterstack-emitter-read.sh`'s disposition map); any added line goes after line 130.
 
 ### Phase 4 — Verification (local, read-only)
 
@@ -289,7 +289,9 @@ What the merged PR does: it changes a workflow that the web-host dispatch clock 
 - `knowledge-base/project/specs/feat-one-shot-7521-standing-fill-rate-detection/decision-challenges.md`
 - `knowledge-base/project/specs/feat-one-shot-7521-standing-fill-rate-detection/tasks.md`
 
-Explicitly NOT touched (diff-scope guard, AC1/AC2): `scripts/followthroughs/zot-fill-rate-7341.sh` (byte-identical), `scripts/followthroughs/zot-fill-rate-7341.test.sh`, `scripts/zot-restart-loop-alarm.sh`, `scripts/lib/zot-telemetry-parse.sh`, anything under `apps/web-platform/infra/**`, `cloud-init-registry.yml`, `zot-registry.tf`, `variables.tf`, `apply-web-platform-infra.yml`, `*.c4`.
+Touched only under the round-3 CTO ruling (AC2): `scripts/followthroughs/zot-fill-rate-7341.sh` (logic byte-identical apart from the Q2 hardening; line-count-preserving prose edits) and its harness `scripts/followthroughs/zot-fill-rate-7341.test.sh` (five new assertions for the Q2 hardening).
+
+Explicitly NOT touched (diff-scope guard, AC1/AC2): `scripts/zot-restart-loop-alarm.sh`, `scripts/lib/zot-telemetry-parse.sh`, anything under `apps/web-platform/infra/**`, `cloud-init-registry.yml`, `zot-registry.tf`, `variables.tf`, `apply-web-platform-infra.yml`, `*.c4`.
 
 Path-glob verification: `.github/workflows/scheduled-zot-restart-loop.yml`, `scripts/test-all.sh`, both `.tsv` files, ADR-096 and `watchdog-workflow-idempotence.test.ts` each exist on `origin/main` (checked with `git ls-files` during research); `apps/web-platform/infra/**` matches many files and is the trigger glob the diff must avoid.
 
@@ -362,7 +364,7 @@ Note on `expected_output`: a blind TRANSIENT also prints the `zot-fill-rate[#734
 
 This list stops at row 11 on purpose: `scripts/zot-fill-rate-standing-wiring.test.sh` is authoritative and carries more than 100 mutation rows (the exact `if:` and env pins, the closed key sets of the steps, the job and the workflow, bracket syntax, the `--json` field pins, the `set` lines, the probe-defect step's own hostile-input handling, the close ordering, and a no-op roundtrip must-pass row).
 
-**Anchor.** No stored value: the guard compares the workflow with itself and with test constants. A weakening needs an edit to the workflow AND this test; the independent witnesses are the two suites named in the Assembly, plus the script's own harness (`zot-fill-rate-7341.test.sh`, unchanged), which pins the header and the exit codes the classification consumes, so producer and consumer cannot both drift in one diff without a second suite reddening.
+**Anchor.** No stored value: the guard compares the workflow with itself and with test constants. A weakening needs an edit to the workflow AND this test; the independent witnesses are the two suites named in the Assembly, plus the script's own harness (`zot-fill-rate-7341.test.sh`, extended only by the round-3 hardening cases), which pins the header and the exit codes the classification consumes, so producer and consumer cannot both drift in one diff without a second suite reddening.
 
 ## Domain Review
 
@@ -380,12 +382,12 @@ No Product/UX gate: no UI-surface path is in Files to Edit or Create. No marketi
 ### Pre-merge (PR)
 
 - [x] AC1: `git diff --name-only origin/main...HEAD` matches none of `apps/web-platform/infra/**`, `**/cloud-init-registry.yml`, `**/zot-registry.tf`, `**/variables.tf`, `.github/workflows/apply-web-platform-infra.yml`, `*.tf` (so neither the registry host replace gate nor the infra apply fires).
-- [x] AC2: `git diff origin/main...HEAD -- scripts/followthroughs/zot-fill-rate-7341.sh scripts/followthroughs/zot-fill-rate-7341.test.sh scripts/zot-restart-loop-alarm.sh scripts/lib/zot-telemetry-parse.sh` is empty.
+- [x] AC2: logic byte-identical; line-count-preserving prose edits allowed. `git diff origin/main...HEAD -- scripts/zot-restart-loop-alarm.sh scripts/lib/zot-telemetry-parse.sh` is empty; `scripts/followthroughs/zot-fill-rate-7341.sh` differs from `origin/main` only by prose edits that keep the line count (line 130 identical: `sed -n 130p` on both) plus the round-3 Q2 hardening (bounded `pcent` regex, `future_dated_newest_sample` gate), all added after line 130.
 - [x] AC3: `bash scripts/zot-fill-rate-standing-wiring.test.sh` passes with every T1-T5 case and, with `ZOT_FILL_WIRING_ROOT` pointed at a scratch copy holding the `origin/main` workflow (`git show origin/main:.github/workflows/scheduled-zot-restart-loop.yml`), exits non-zero (RED first, recorded in the PR).
 - [x] AC4: the Sentry `status:` expression in the workflow is byte-identical to `origin/main`'s (`git diff origin/main...HEAD -- .github/workflows/scheduled-zot-restart-loop.yml` shows no hunk inside it).
 - [x] AC5: `bash scripts/alarm-issue-filing-guard.test.sh` is green with its `.highwater` unchanged (new steps add no violation), and `watchdog-workflow-idempotence.test.ts` is green with the counts 19/17.
 - [x] AC6: the six ratchets pass for the new/edited `*.test.sh`: grep-q-pipe-guard (`bash .claude/hooks/grep-q-pipe-guard.test.sh`), fixture-relative-assert, fixture-dir-operand-assert, guard-vacuity-floor, lint-trap-tempfile-ownership (`--check-highwater`, highwater not raised), lint-shell-capture-exit (`--baseline scripts/lint-shell-capture-exit.baseline.txt`, baseline not raised).
-- [x] AC7: `bash scripts/followthroughs/zot-fill-rate-7341.test.sh`, `scripts/zot-restart-loop-alarm.test.sh` and `scripts/zot-restart-loop-alarm-scrub.test.sh` pass unchanged.
+- [x] AC7: `bash scripts/followthroughs/zot-fill-rate-7341.test.sh`, `scripts/zot-restart-loop-alarm.test.sh` and `scripts/zot-restart-loop-alarm-scrub.test.sh` pass (the alarm suites unchanged; the fill-rate harness gains the round-3 cases, floor 30 to 35).
 - [x] AC8: `bash plugins/soleur/test/c4-count-parity.test.sh` is green with `model.c4` unedited.
 - [x] AC9: `bash scripts/lint-orphan-test-suites.sh` and the shard-manifest tests pass (the new suite is registered in `scripts/test-all.sh`, `suite-shard-legs.tsv`, `suite-durations.tsv`).
 - [x] AC10: the live read-only probe (Phase 4) was run once before merge and its verdict line is pasted in the PR body; the allowed set is PASS, a FAIL (which would legitimately have opened the issue), or a TRANSIENT whose message names one of the script's distinct causes.
@@ -403,7 +405,7 @@ No Product/UX gate: no UI-surface path is in Files to Edit or Create. No marketi
 
 ## Test Scenarios
 
-Covered in Phase 0 (T1-T5) and, for the unchanged script, by its existing 384-line harness. Live scenario: store at 16 percent flat or falling -> PASS, no issue, no comment. Synthetic scenario (T3/T4 fixtures, never production): a store at 40 percent rising 8 pp/day -> FAIL, one issue, hourly comments, closes only after six quiet hours.
+Covered in Phase 0 (T1-T5) and, for the script, by its existing harness (extended with the round-3 hardening cases). Live scenario: store at 16 percent flat or falling -> PASS, no issue, no comment. Synthetic scenario (T3/T4 fixtures, never production): a store at 40 percent rising 8 pp/day -> FAIL, one issue, hourly comments, closes only after six quiet hours.
 
 ## Sharp Edges
 
@@ -416,17 +418,18 @@ Covered in Phase 0 (T1-T5) and, for the unchanged script, by its existing 384-li
 - Job-timeout headroom is measured, not assumed: the `alarm` job ran 20-28 s across the last 12 `main` runs (`gh api repos/jikig-ai/soleur/actions/runs/<id>/jobs`, `started_at`/`completed_at`, 2026-10-16), against `timeout-minutes: 8`; the fill leg adds about 3 s, at most about 2 minutes on a FAIL, and its own 3-minute step cap. The job timeout stays 8 and T1 pins it. A job timeout is recorded as `cancelled`, which the dispatch clock treats as non-covering (`watchdog-dispatch-clock.ts`), so exceeding it would re-dispatch the slot; the measured headroom is why that cannot happen here.
 - The fill leg is deliberately outside the Sentry monitor: a run where the fill steps are skipped or cancelled still checks in `ok`. Nothing in Sentry covers the leg's own liveness (accepted residual, recorded in the ADR-096 paragraph).
 - The fill leg shares credentials with the zot leg: a credential fault shows once, as the zot leg's exit 2 (Sentry error), and again as the fill leg's quiet TRANSIENT. That is intended, and the reason TRANSIENT files nothing.
-- Do not edit `scripts/followthroughs/zot-fill-rate-7341.sh` at all, including comments: `lint-betterstack-emitter-read.sh` cites its line `:130`, and the CTO ruling is "byte-identical".
+- Edit `scripts/followthroughs/zot-fill-rate-7341.sh` only in a line-count-preserving way above line 130 (`lint-betterstack-emitter-read.sh` cites its line `:130`); the CTO round-3 ruling is "logic byte-identical; line-count-preserving prose edits allowed", plus the Q2 hardening added after line 130. Check with `sed -n 130p` against `origin/main` and run `scripts/lint-betterstack-emitter-read.test.sh`.
 - Scheduled-job precedent (ADR-033, Inngest over a GitHub Actions cron): no new cron is added. The workflow already carries its `gate-override: new-scheduled-cron-prefer-inngest` justification (a bash pipeline over credentialed reads, I7's uncontained class); the new leg inherits it.
 - The Actions run log of this public repository is world-readable and the step source is echoed into it; nothing the probe prints may be a credential, and the step passes the three `BETTERSTACK_QUERY_*` secrets only through `env:` (masked by Actions), never as arguments.
 - A plan whose `## User-Brand Impact` section is empty, holds only filler text, or omits the threshold fails `deepen-plan` Phase 4.6; this one states `aggregate pattern`.
 
 ## Deferred items (each needs a tracking issue filed at ship, with a roadmap milestone)
 
-- Refresh the script's FAIL-arm prose (hard-coded zot#4235 and v2.1.22 pin sentence) so it cannot go stale.
-- Reconcile the script's post-decode invariants with a JSON-aware variant in `scripts/lib/zot-telemetry-parse.sh` (the script header already files this).
-- Rename `zot-fill-rate-7341.sh` to a standing name (touches `apps/web-platform/infra/**`, so it must ride a change that is already allowed to fire an apply).
-- Hoist the absolute `cur >= 85` check above the 24 h span gate, and shorten the post-reclaim and post-replace dark windows (roughly 25 h of TRANSIENT after any reclaim or host replace, while the store refills from empty); the heartbeat is the only cover meanwhile. The consecutive-run streak escalation was dropped by the CTO ruling in favour of the stateless probe-defect issue.
+The lead files these three trackers at ship (the implementing agent does not file issues). The earlier items for the script's FAIL-arm prose refresh and the sample-parse and future-dated hardening are no longer deferred: they are done in this PR under the round-3 CTO rulings.
+
+- (e) Rename `zot-fill-rate-7341.sh` to a standing name. Class: pre-existing-unrelated. Trigger: dependency on #10136 (`encryption-posture: private-network in-transit exceptions (zot x2, Inngest)`; state checked with `gh issue view 10136 --json state` on 2026-10-16: OPEN). The rename touches two path references under `apps/web-platform/infra/**`, so it must be bundled into that issue's infra apply, which is already allowed to fire one.
+- (d) JSON-aware parity: reconcile the script's post-decode invariants with a JSON-aware variant in `scripts/lib/zot-telemetry-parse.sh` (the script header already files this). Class: pre-existing-unrelated. Event-grep trigger: `git log --since=2026-10-16 -- scripts/lib/zot-telemetry-parse.sh scripts/followthroughs/zot-fill-rate-7341.sh` returns a commit that is not part of #7521 (the parse library or the script changed again, so the two copies can drift).
+- (f) Hoist the absolute `cur >= 85` check above the 24 h `MIN_SPAN_HOURS` gate, so the leg is not dark for about 25 h after any reclaim or host replace while the store refills from empty (the heartbeat is the only cover meanwhile). Class: contested-design. Approaches: hoist the level check after the 12-sample gate; a separate level-only leg; a shorter `MIN_SPAN_HOURS`. Date trigger: 2026-11-16. The consecutive-run streak escalation was dropped by the CTO ruling in favour of the stateless probe-defect issue.
 
 ## Rollback
 

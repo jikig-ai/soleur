@@ -39,12 +39,12 @@ Branch: `feat-one-shot-7521-standing-fill-rate-detection`. Draft PR: #10444. PR 
 
 - 4.1 Run the verification block in the plan (wiring test, script harness, alarm tests, filing guard, emitter-read lint, inventory workflow guard, ratchets, c4-count-parity, orphan census, vitest, bun, markdownlint, `lint-infra-no-human-steps --changed`).
 - 4.2 Run the live read-only probe once (`doppler run -p soleur -c prd_terraform -- bash scripts/followthroughs/zot-fill-rate-7341.sh`) and paste the verdict line into the PR body.
-- 4.3 Confirm AC1 and AC2 diff-scope commands (`git diff --name-only origin/main...HEAD` matches no infra path; the script, its harness, the alarm script and the parse library show an empty diff).
+- 4.3 Confirm AC1 and AC2 diff-scope commands (`git diff --name-only origin/main...HEAD` matches no infra path; the alarm script and the parse library show an empty diff; the fill-rate script differs only by line-count-preserving prose edits and the round-3 Q2 hardening, with `sed -n 130p` identical to `origin/main`'s).
 - 4.4 Re-run `gh run list --workflow apply-web-platform-infra.yml` and `--workflow registry-host-replace-dispatch.yml`, and re-read `knowledge-base/engineering/operations/runbooks/registry-host-replace-dispatch.md`.
 
 ## Phase 5 — Ship (stops at the owner-go gate)
 
 - 5.1 Run compound, rebase onto `origin/main` (never merge main), push.
-- 5.2 File the deferral issues listed in the plan (FAIL-arm prose refresh, library reconciliation, standing-name rename, 24 h seam / streak escalation) with a roadmap milestone each.
+- 5.2 The lead files the three deferral issues listed in the plan (e) standing-name rename (dependency on #10136), (d) JSON-aware parity (event-grep trigger), (f) hoist `cur >= 85` above the 24 h gate (date trigger 2026-11-16), with a roadmap milestone each.
 - 5.3 Stop and wait for the owner's explicit go; only then arm with a single bare `gh pr merge <N> --squash --auto`.
 - 5.4 After merge: deploy-arm `find --wait <full-sha>` then `served <full-sha>` from a detached `origin/main` worktree (expected `DEPLOY=skipped` and `NOT_CONTAINED`), then the first-post-merge-run read in the plan's `## Post-merge probe`.
