@@ -42,4 +42,4 @@ Apply the bounded Git fallback inline; a new helper would require the same boots
 
 ## Plan
 
-See `knowledge-base/project/plans/2026-10-15-fix-portable-hook-launchers-plan.md` and `interface-contract.md` for the exact expression, guard contract and code/test scopes.
+See `knowledge-base/project/plans/archive/20261016-160747-2026-10-15-fix-portable-hook-launchers-plan.md` and `interface-contract.md` for the exact expression, guard contract and code/test scopes.
