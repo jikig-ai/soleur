@@ -344,6 +344,51 @@ then pass "the real row and a 799-char real-shaped row count; decoys, a Foo rece
 else fail "expected patch_blob_upload=2 (real + 799-char counted, decoys and the 800-char cut row not). Output: $OUT"
 fi
 
+# ── FORGED SAMPLE SHAPES (#7521 round 3) ─────────────────────────────────────────────────────
+# Both cases are an INGEST-TOKEN holder writing a well-formed envelope row, which the envelope
+# anchor admits by design. They can only turn a crash or a forgery into exit 2, never into a PASS.
+# forged_rows <count> <pcent-text> <minutes-from-now-of-newest> <boot>: <count> envelope rows, one
+# per minute backwards from the newest, each carrying pcent=<pcent-text> verbatim.
+forged_rows() {
+  python3 -c '
+import sys, json, datetime
+n, p, off, boot = int(sys.argv[1]), sys.argv[2], float(sys.argv[3]), sys.argv[4]
+now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+for i in range(n):
+    t = now + datetime.timedelta(minutes=off - i)
+    msg = ("SOLEUR_ZOT_DISK pcent=%s fs_size_gb=59 zot_restarts=0 zot_oom_kills=0 "
+           "state_status=running boot_id=%s zot_image_digest=deadbeefcafe" % (p, boot))
+    print(json.dumps({"dt": t.strftime("%Y-%m-%d %H:%M:%S.%f"),
+                      "raw": json.dumps({"message": msg}, separators=(",", ":"))}, separators=(",", ":")))
+' "$1" "$2" "$3" "$4"
+}
+
+# 29. OVER-LONG DIGIT STRING. `pcent=(\d+)` let a 5000-digit value crash int() (the whole parse
+#     stage died and every sample vanished). {1,3} plus a non-digit lookahead drops the row instead,
+#     so the healthy history still decides: PASS, and no traceback.
+LONG_DIGITS="$(head -c 5000 /dev/zero | tr '\0' 9)"
+run "$GOOD,48,0,6,8,144" 0 "$(forged_rows 1 "$LONG_DIGITS" 0 "$GOOD")"
+expect "a 5000-digit pcent drops the row and does not crash the parse" 0 "PASS"
+cases=$((cases + 1))
+if [[ "$OUT" != *Traceback* ]]
+then pass "no python traceback on an over-long digit string"
+else fail "an over-long pcent crashed the parse. Output: $OUT"
+fi
+
+# 30. ...and a SHORT over-long value is dropped too, not read as a level: 12 forged rows of
+#     pcent=9999 would have become the trailing median `cur` and FAILed a 7% store.
+run "$GOOD,48,0,6,8,144" 0 "$(forged_rows 12 9999 0 "$GOOD")"
+expect "twelve pcent=9999 rows are dropped, not read as cur" 0 "PASS"
+
+# 31. FUTURE-DATED NEWEST SAMPLE. A row dated ahead is "age < 0", which the old `age > max_age`
+#     staleness gate treated as the freshest possible reading. Beyond 300 s of skew it is TRANSIENT
+#     with a cause token that matches nothing in the workflow's benign set (so it files the
+#     probe-defect issue); inside 300 s it is clock skew and must not trip.
+run "$GOOD,48,0,6,8,144" 0 "$(forged_rows 1 6 60 "$GOOD")"
+expect "a newest sample dated 60 min ahead is TRANSIENT future_dated_newest_sample" 2 "TRANSIENT future_dated_newest_sample"
+run "$GOOD,48,0,6,8,144" 0 "$(forged_rows 1 6 2 "$GOOD")"
+expect "a newest sample 2 min ahead (clock skew) is tolerated" 0 "PASS"
+
 # --- Anti-vacuity floor -----------------------------------------------------------------------
 # This harness's own dispatch. A stub that stops emitting, a `run()` that stops invoking the
 # probe, an early `return` — any of these leaves the suite asserting nothing about a probe whose
@@ -354,9 +399,9 @@ fi
 # neutering the verdict machinery silenced the rows AND the floor that exists to notice the
 # silence. A floor enforced through the suspect cannot witness the suspect.
 #
-# Measured from a green run with ZERO slack: 30 assertions (22 expect() rows + 8 inline
+# Measured from a green run with ZERO slack: 35 assertions (26 expect() rows + 9 inline
 # if/else rows). Ratchet upward only.
-MIN_CHECKS=30
+MIN_CHECKS=35
 if (( cases < MIN_CHECKS )); then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$cases" "$MIN_CHECKS" >&2
