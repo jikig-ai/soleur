@@ -22,12 +22,14 @@ delivered), 4.12 scope check (1 unfenced section, no `unmapped` row). Cited rule
 an active rule; commit `ee8644bded` is an ancestor of `origin/main`; cited issues and PRs resolved live.
 
 ### Key improvements
+
 1. Q1 now names the one real path-level edit guard (the opt-in freeze edit-lock) and measures that it locks nothing here.
 2. Every negative claim ("no hook, CODEOWNERS entry or AGENTS rule bans the edit") was re-grepped: `.github/CODEOWNERS`,
    `.claude/hooks/guardrails.sh`, `AGENTS.md` and `AGENTS.rules.md` each contain 0 mentions of `test-all`.
 3. The reviewer-found miscount (10, not 9, always-on files) and the answered `runner-changed` question are carried into Phase 2/3.
 
 ### New considerations discovered
+
 - The follow-up's per-path sample must be drawn from the guard's own derived pairs; the first not-selected probe path is not shown to
   be a producer, so its result is provisional until Phase 1 confirms it.
 
