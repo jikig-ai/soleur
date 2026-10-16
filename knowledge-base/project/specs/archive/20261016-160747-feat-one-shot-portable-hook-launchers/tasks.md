@@ -1,6 +1,6 @@
 # Tasks: Portable repository hook launchers
 
-Plan: `knowledge-base/project/plans/2026-10-15-fix-portable-hook-launchers-plan.md`.
+Plan: `knowledge-base/project/plans/archive/20261016-160747-2026-10-15-fix-portable-hook-launchers-plan.md`.
 
 ## Phase 1: Setup and Regression
 

@@ -2,7 +2,7 @@
 
 ## Plan Phase
 
-- Plan file: `knowledge-base/project/plans/2026-10-15-fix-portable-hook-launchers-plan.md`
+- Plan file: `knowledge-base/project/plans/archive/20261016-160747-2026-10-15-fix-portable-hook-launchers-plan.md`
 - Status: complete
 - Plan and deepen-plan ran through the installed Soleur skills; specialist roles ran in bounded waves.
 - Components: repository/learnings research, CTO, DHH, Kieran, simplicity, architecture, SpecFlow, security and test-design review.
