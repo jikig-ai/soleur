@@ -2,8 +2,11 @@
 """GitHub Actions expression interpreter (a subset) for workflow-step tests.
 
 Subset: literals, dotted context refs, ==, !=, !, &&, ||, (), always()/success()/failure()/cancelled().
-Semantics per the Actions docs, as the heartbeat-reconcile-issue-step suite models them (this is the
-same interpreter, packaged so a second suite does not carry a second copy):
+Semantics per the Actions docs. Only sole-copy-drift-check.test.sh imports this module.
+heartbeat-reconcile-issue-step.test.sh still carries its own inline interpreter, semantically identical for
+`if` mode; the two differ only in `value` mode, where this module renders a null as the empty string (what
+string interpolation does) and the inline copy prints it as `false`. Do not assume a change here reaches the
+heartbeat suite. Semantics:
   * `==` across different types coerces both sides to numbers (null -> 0, '' -> 0, a non-numeric
     string -> NaN); same-type strings compare case-insensitively.
   * `&&` / `||` return an operand, not a boolean.
