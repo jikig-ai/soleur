@@ -5,11 +5,23 @@
 # evidence file is committed. Re-run: bash run-all.sh   (needs gh auth, jq, python3; ~10 min)
 # Usage: ITEM_I_DIR=/var/tmp/item-i-rerun bash run-all.sh
 set -uo pipefail
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 export OUT="${ITEM_I_DIR:-/var/tmp/item-i}"
+assert_fixture_dir "$OUT"
 REPO="${ITEM_I_REPO:-jikig-ai/soleur}"; export REPO
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WINDOW_START="${ITEM_I_LEG_START:-2026-09-25T00:00:00Z}"   # sharded deploy-script-tests legs landed (#8763)
-rm -f "$OUT/leg-fetch-failures.txt"; mkdir -p "$OUT/ann" "$OUT/to" "$OUT/legs" "$OUT/legs-logs" "$OUT/mon-logs"
+rm -f "$OUT/leg-fetch-failures.txt" "$OUT"/ann/*.tsv "$OUT"/to/*.tsv   # a run that left the --limit window must not linger in the totals
+mkdir -p "$OUT/ann" "$OUT/to" "$OUT/legs" "$OUT/legs-logs" "$OUT/mon-logs"
 
 # ---- 1. monitor history (continue-on-error pins every job conclusion to success, so the
 #         verdict is the SOLEUR_MAIN_HEALTH annotation, never the conclusion) ---------------
@@ -17,6 +29,7 @@ gh run list -R "$REPO" --workflow main-health-monitor.yml --branch main --limit 
   --json databaseId,conclusion,status,createdAt,event,headSha,displayTitle > "$OUT/runs.json" || exit 1
 
 one_outcome() {
+  assert_fixture_dir "$OUT"
   rid="$1"
   meta=$(jq -r --argjson r "$rid" '.[]|select(.databaseId==$r)|"\(.createdAt)\t\(.conclusion)"' "$OUT/runs.json")
   job=$(gh api "repos/$REPO/actions/runs/$rid/jobs" --jq '[.jobs[]|select(.name=="health-check")][0]|"\(.id)\t\(.started_at)\t\(.completed_at)"' 2>/dev/null)
@@ -33,7 +46,7 @@ one_outcome() {
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$rid" "$meta" "$job" "${t:-ABSENT}" "${i:-ABSENT}" "${te:-}" "${ie:-}" > "$OUT/ann/$rid.tsv"
   printf '%s\t%s\t%s\n' "$rid" "${tt:-0}" "${it:-0}" > "$OUT/to/$rid.tsv"
 }
-export -f one_outcome
+export -f assert_fixture_dir one_outcome
 jq -r '.[].databaseId' "$OUT/runs.json" | xargs -P 6 -I{} bash -c 'one_outcome {}'
 cat "$OUT"/ann/*.tsv | sort -t$'\t' -k2 > "$OUT/outcomes.tsv"
 cat "$OUT"/to/*.tsv | sort > "$OUT/timeouts.tsv"
@@ -46,6 +59,7 @@ awk -F'\t' '$4!="" && $4!="null"{print $1" "$4}' "$OUT/outcomes.tsv" \
 gh run list -R "$REPO" --workflow infra-validation.yml --event push --branch main --limit 500 \
   --json databaseId,conclusion,createdAt,headSha > "$OUT/iv-push.json" || exit 1
 one_legs() {
+  assert_fixture_dir "$OUT"
   # Fetch raw JSON first and retry: a transient API error body must never reach legs.tsv as data
   # (a 2026-10-16 re-run parsed a 500 "Server Error" body into three bogus rows).
   rid="$1"; raw="$OUT/legs/$rid.json"; ok=0
@@ -61,7 +75,7 @@ jq -r --arg s "$WINDOW_START" '.[]|select(.createdAt>=$s)|.databaseId' "$OUT/iv-
 [[ -s "$OUT/leg-fetch-failures.txt" ]] && { echo "ABORT: leg fetch failures:"; cat "$OUT/leg-fetch-failures.txt"; exit 1; }
 cat "$OUT"/legs/*.tsv > "$OUT/legs.tsv"
 awk -F'\t' '$4=="failure"{print $1"\t"$2}' "$OUT/legs.tsv" > "$OUT/failed-legs.tsv"
-one_log() { f="$OUT/legs-logs/$2.log"; [[ -s "$f" ]] || gh api --allow-escape-sequences "repos/$REPO/actions/jobs/$2/logs" > "$f" 2>/dev/null; }
+one_log() { assert_fixture_dir "$OUT"; f="$OUT/legs-logs/$2.log"; [[ -s "$f" ]] || gh api --allow-escape-sequences "repos/$REPO/actions/jobs/$2/logs" > "$f" 2>/dev/null; }
 export -f one_log
 xargs -P 6 -L1 bash -c 'one_log $0 $1' < "$OUT/failed-legs.tsv"
 : > "$OUT/red-headers.tsv"
