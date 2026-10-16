@@ -9,10 +9,14 @@
 #     is itself admitted only in a baseline/ADR-241-only diff whose ADR diff adds
 #     'Allow: <file> <NAME> ... Ruled by <owner>' for it;
 #   - the tag of a key never changes and equals the group computed from its path; its class only moves
-#     tier-a -> tier-b|sink; its expiry is never later (a re-date needs an ADR-241 line 'Re-date: <YYYY-MM-DD> ...
-#     Ruled by <owner>' in a baseline/ADR-only diff);
+#     tier-a -> tier-b|sink, except sink -> tier-a (a read shape appeared in a sink file), which needs an ADR-241 line
+#     'Reclass: <file> <NAME> ... Ruled by <owner>' for each moved key in a diff that touches only this baseline,
+#     ADR-241 and the moved key's own file (tier-b -> tier-a has no lane); its expiry is never later (a re-date needs
+#     an ADR-241 line 'Re-date: <YYYY-MM-DD> ... Ruled by <owner>' in a baseline/ADR-only diff);
 #   - a row whose consumer no longer names the family is RED (the PR that moves a consumer deletes its row), and
-#     so is a deleted row whose name reappears in an exempt file ADDED by the same diff;
+#     so is a deleted row whose name reappears as a KEY (a read shape, or a file outside the exempt class) of a file
+#     ADDED by the same diff, unless that key spends a reserved @allow; a file in the exempt class that merely
+#     MENTIONS the name has no key and is not a consumer;
 #   - the base copy FAILS CLOSED: an unresolved ref or any failing git call is RED (TRIO_ALLOW_NO_BASE=1 is a
 #     local-only escape).
 # 'Ruled by' lines are self-attested text in this repository: the ratchet defends against accident and drift, not
@@ -21,14 +25,16 @@
 # Records (tab-separated; '#' lines and blank lines are ignored):
 #   @stems / @exempt / @binary / @kbcode   the pinned guard constants (stems of the name family; the structural
 #                                          test class: directory segments ; suffixes; the binary extensions that are
-#                                          skipped; the code extensions that ARE scanned under knowledge-base/ and
-#                                          docs/). Each must equal the scanner constant AND the base copy's record.
+#                                          skipped; the code extensions ; basenames that ARE scanned under knowledge-base/ and
+#                                          docs/, where any file starting with a shebang is code too). Each must equal the
+#                                          scanner constant AND the base copy's record.
 #   @allow file name max-expiry tag        a reserved NEW key (not a row; T1 does not require a row until the consumer
 #                                          exists); its tag is the group computed from file
 #   file name class expires tag            a row
 # Classes (COMPUTED by the scanner; the baseline must agree, T5c):
 #   tier-a  a READ SHAPE in a file that names the trio: any `doppler run` or `doppler secrets get|download`
-#           invocation (regardless of arguments), ${{ secrets.<NAME> }}, a ${!var} indirection of a family name,
+#           COMMAND (regardless of arguments; only option flags may sit between `doppler` and the subcommand, prose
+#           that merely contains the words is not one), ${{ secrets.<NAME> }}, a ${!var} indirection of a family name,
 #           terraform output -raw access_service_token_client_*; or a workflow naming the trio in a job without a
 #           literal Tier-B environment (an expression, a matrix, unparseable YAML are not literals); or a composite
 #           action; any FALLBACK:* or ALIAS:* row. Expiry required (strict ISO, at most MAX_EXPIRY 2027-03-31).
@@ -54,7 +60,8 @@
 # and repo-secret copies and by the main-only environment policy (sibling census G1b-G1d, G1h), not here:
 #   - `doppler run -c prd_terraform` injecting the whole project, and bulk `doppler secrets download`, in a file that
 #     does not itself name the trio;
-#   - `secrets: inherit` and `toJSON(secrets)` into a callee workflow;
+#   - `secrets: inherit` and `toJSON(secrets)` into a callee workflow, and loader adoption (a job that uses the infra
+#     credentials loader without naming a trio name);
 #   - computed names (`secrets[format(...)]`, `"${n}_DEPLOY_SECRET"`), and a ${!var} indirection whose family name is
 #     assigned on another line;
 #   - callers of a baselined script that fetches the trio itself (infra-config-verify.sh, verify-tunnel-ingress-origin.sh);
@@ -70,12 +77,12 @@
 @stems WEBHOOK_DEPLOY_SECRET,CF_ACCESS_CLIENT_ID,CF_ACCESS_CLIENT_SECRET
 @exempt __tests__,fixtures,test,tests;.test.*,.spec.*,.tftest.hcl
 @binary 7z,a,avif,bin,bmp,bpf,bz2,class,db,dylib,eot,gif,gz,ico,jar,jpeg,jpg,mov,mp3,mp4,o,otf,pdf,pen,png,so,sqlite,tgz,tif,tiff,tsq,tsr,ttf,wasm,webm,webp,woff,woff2,xz,zip
-@kbcode bash,cfg,cjs,hcl,js,json,jsx,mjs,py,service,sh,tf,tfvars,timer,tmpl,toml,ts,tsx,yaml,yml
+@kbcode bash,cfg,cjs,hcl,js,json,jsx,mjs,mk,pl,ps1,py,rb,service,sh,tf,tfvars,timer,tmpl,toml,ts,tsx,yaml,yml,zsh;Makefile
 @allow	apps/web-platform/infra/variables.tf	WEBHOOK_DEPLOY_SECRET_NEXT	-	#9294:PR-2
 @allow	apps/web-platform/infra/server.tf	WEBHOOK_DEPLOY_SECRET_NEXT	-	#9294:PR-2
 @allow	apps/web-platform/infra/hooks.json.tmpl	WEBHOOK_DEPLOY_SECRET_NEXT	-	#9294:PR-2
 @allow	apps/web-platform/infra/cloud-init.yml	WEBHOOK_DEPLOY_SECRET_NEXT	-	#9294:PR-2
-@allow	apps/web-platform/infra/soleur-host-bootstrap.sh	WEBHOOK_DEPLOY_SECRET_NEXT	-	#9294:PR-2
+@allow	apps/web-platform/infra/soleur-host-bootstrap.sh	WEBHOOK_DEPLOY_SECRET_NEXT	2026-11-30	#9294:PR-2
 .github/actions/dispatch-web-redeploy/track.sh	CF_ACCESS_CLIENT_ID	sink	-	#9294:PR-2
 .github/actions/dispatch-web-redeploy/track.sh	CF_ACCESS_CLIENT_SECRET	sink	-	#9294:PR-2
 .github/actions/dispatch-web-redeploy/track.sh	WEBHOOK_DEPLOY_SECRET	sink	-	#9294:PR-2
