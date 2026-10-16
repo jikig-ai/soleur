@@ -2223,8 +2223,8 @@ ADR-218 (see the rejected alternatives below).
 - **Accepted trades.** (i) The probe-defect issue closes on a single PASS, so a probe that flaps between a defect and
   PASS re-files a new issue number per flap (the breach issue keeps its 6 hour age test). (ii) Suppressing a
   `TRANSIENT` on alarm exit 2 depends on the Sentry monitor being live: exit 2 files no GitHub issue by design, so a
-  disabled monitor leaves that `TRANSIENT` unreported. (iii) A PRODUCER_SILENT issue that stays open leaves a
-  fill-only `TRANSIENT` quiet for as long as it stays open. (iv) A job-level timeout files nothing, as above.
+  disabled monitor leaves that `TRANSIENT` unreported. (iii) While the zot leg keeps exiting 3 or 4 (its own
+  PRODUCER_SILENT or INGEST_DARK issue is being filed), a fill-only `TRANSIENT` stays quiet. (iv) A job-level timeout files nothing, as above.
 - **Alternatives rejected** (CTO ruling, 2026-10-16): moving the script (two of its path references sit under
   `apps/web-platform/infra/**`, which would fire a production apply); folding the slope into
   `zot-restart-loop-alarm.sh` (a 3 hour window cannot hold a 72 hour slope, and it would duplicate the parse); a Better

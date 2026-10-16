@@ -236,6 +236,8 @@ def facts(wf, out):
         f["KEYS_" + role] = ",".join(sorted(str(k) for k in s0)) if idx else "<no step>"
         f["FIRST_" + role] = first_stmt(run_of(s0)) if idx else "<no step>"
     f["FILL_SHELL_STEPS"] = sum(1 for i in fill if "shell" in steps[i])
+    # A later `set +e` / `set +o errexit` would undo the first-statement set line (verifier P3-1).
+    f["FILL_SET_PLUS"] = sum(1 for i in fill if re.search(r"(^|[\n;&|(])\s*set\s+\+", run_of(steps[i])))
     f["TOP_KEYS"] = ",".join(sorted("on" if k is True else str(k) for k in doc))
     f["JOB_KEYS"] = ",".join(sorted(str(k) for k in doc["jobs"]["alarm"]))
     perms = doc.get("permissions") or {}
@@ -523,6 +525,7 @@ ck; eq "T1 the FAIL step has exactly the reviewed key set (no id, shell, continu
 ck; eq "T1 the probe-defect step has exactly the reviewed key set (no id, shell, continue-on-error, working-directory)" "env,if,name,run" "$(fact "$FACTS" KEYS_defect)"
 ck; eq "T1 the PASS close step has exactly the reviewed key set (no id, shell, continue-on-error, working-directory)" "env,if,name,run" "$(fact "$FACTS" KEYS_pass)"
 ck; eq "T1 no fill step declares shell: (the runner default bash -e applies)" "0" "$(fact "$FACTS" FILL_SHELL_STEPS)"
+ck; eq "T1 no fill step body switches an option off again with set +" "0" "$(fact "$FACTS" FILL_SET_PLUS)"
 ck; eq "T1 the probe step's first statement is set -uo pipefail" "set -uo pipefail" "$(fact "$FACTS" FIRST_probe)"
 ck; eq "T1 the FAIL step's first statement is set -euo pipefail" "set -euo pipefail" "$(fact "$FACTS" FIRST_fail)"
 ck; eq "T1 the probe-defect step's first statement is set -euo pipefail" "set -euo pipefail" "$(fact "$FACTS" FIRST_defect)"
@@ -953,6 +956,8 @@ raw_line="$hdr_line"'
 
   # The body's own set line (the harness adds no pipefail): first statement pinned, and the dedupe
   # annotation observable.
+  mut_row 22-pass-set-plus-e "T1 no fill step body switches an option off again with set +" run-replace pass 'set -euo pipefail' 'set -euo pipefail
+set +e'
   mut_row 22-probe-set-deleted "T1 the probe step's first statement is set -uo pipefail" run-replace probe 'set -uo pipefail
 ' ''
   mut_row 22-probe-set-no-pipefail "T1 the probe step's first statement is set -uo pipefail" run-replace probe 'set -uo pipefail' 'set -u'
@@ -1043,7 +1048,7 @@ if [[ -n "$CHILD" ]]; then
 fi
 
 # Floor: derived from a green run, with no headroom for silently dropped rows. Raise in lockstep.
-MIN_CASES=250
+MIN_CASES=252
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] vacuity floor: %d cases executed, expected at least %d\n' "$cases" "$MIN_CASES" >&2
   exit 1
