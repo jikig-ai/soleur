@@ -761,21 +761,25 @@ else
 fi
 
 # Census: with AF_UNIX no longer blocked inside the inner sandbox, list every pathname socket visible from it. Only the
-# SDK's own proxy bridge sockets under /tmp are expected; the count floor is the instrument check (a census that found
-# nothing proves nothing, so a run with zero sockets is a red, not a pass).
-CENSUS_OUT="$(sdk_bash 1 'find / -xdev -type s 2>/dev/null; find /tmp /run /var/run -type s 2>/dev/null; echo CENSUS_END')"
+# SDK's own proxy bridge sockets under /tmp are expected (peer-messaging and transcript dirs are masked). Two
+# instrument checks keep a silent census from passing: the listing must END with its sentinel (a failed `find` prints
+# nothing and would otherwise read as "no sockets"), and it must contain at least one socket (the current session's
+# own bridge socket is among them, so zero means the census did not see the session it ran in). The scan skips only
+# /proc and /sys rather than using -xdev, so a socket on a bind mount is listed; abstract-namespace sockets cannot be
+# listed from here and are bounded by the per-command --unshare-net (asserted in test/sandbox-wrapped-command-runtime.test.ts).
+CENSUS_OUT="$(sdk_bash 1 'find / \( -path /proc -o -path /sys \) -prune -o -type s -print 2>/dev/null; echo CENSUS_END')"
 CENSUS_PATHS="$(printf '%s' "$CENSUS_OUT" | sed 's/^SDK_BASH_RESULT //' | jq -r '.content // ""' 2>/dev/null | grep -a '^/' | sort -u)"
 CENSUS_N=0
 CENSUS_BAD=""
 while IFS= read -r cpath; do
   [[ -n "$cpath" ]] || continue
   CENSUS_N=$((CENSUS_N + 1))
-  [[ "$cpath" =~ ^/tmp/(claude-http-[0-9a-f]+|claude-socks-[0-9a-f]+|srt-mux-[0-9]+-[0-9]+)\.sock$ ]] || CENSUS_BAD+="$cpath "
+  [[ "$cpath" =~ ^/tmp/(claude-http-[0-9a-f]+|claude-socks-[0-9a-f]+|srt-mux-[0-9]+-[0-9a-z]+)\.sock$ ]] || CENSUS_BAD+="$cpath "
 done <<<"$CENSUS_PATHS"
-if [[ "$CENSUS_OUT" == *CENSUS_END* && -z "$CENSUS_BAD" ]]; then
-  pass "census: every pathname socket visible from the inner sandbox ($CENSUS_N) is an SDK proxy bridge socket under /tmp (no host runtime socket)"
+if [[ "$CENSUS_OUT" == *CENSUS_END* && "$CENSUS_N" -ge 1 && -z "$CENSUS_BAD" ]]; then
+  pass "census: every pathname socket visible from the inner sandbox ($CENSUS_N) is an SDK proxy bridge socket under /tmp (no host runtime or peer-messaging socket)"
 else
-  fail "census: unexpected pathname socket(s) visible from the inner sandbox: '${CENSUS_BAD}' (n=$CENSUS_N, complete=$([[ "$CENSUS_OUT" == *CENSUS_END* ]] && echo yes || echo no)); a host runtime socket reachable from a tenant sandbox is the residual ADR-075's 2026-10-16 addendum bounds"
+  fail "census: bad or missing socket listing from the inner sandbox: unexpected='${CENSUS_BAD}' n=$CENSUS_N complete=$([[ "$CENSUS_OUT" == *CENSUS_END* ]] && echo yes || echo no) (a host runtime or peer-messaging socket reachable from a tenant sandbox is the residual ADR-075's 2026-10-16 addendum bounds; n=0 means the census did not see its own session)"
 fi
 
 echo ""

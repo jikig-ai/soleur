@@ -502,3 +502,22 @@ existing alert covers it.
   set; the guard carries mutation and must-pass rows run on copies. Runbook:
   `knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-7530.md` (the alert is the
   observable signature of the public-ingress re-evaluation trigger; the legal steps live there).
+
+## Amendment — 2026-10-16 (#10445): the sixteenth Logs alert, the first over nested `message.*` keys
+
+Appended, not edited. `agent_sandbox_bash_denial` (`soleur-agent-sandbox-bash-denial-prd`) brings the Terraform-managed
+Logs alert count from 15 to **16** (re-derive if another alert lands first).
+
+- **Signal class: a stateless per-bucket count over app-container pino rows.** It counts rows from
+  `CONTAINER_NAME = 'soleur-web-platform'` whose `op` is `bash-tool-result` and whose `sandboxErrorCode` is
+  `helper_userns_eperm`, written by the cc-dispatcher `onToolResult` mirror. No sibling covers it: the existing alerts
+  read journald marker text or producer envelopes, and none reads user-visible Bash failures. It is the first alert to
+  read **nested `message.*` keys** (`JSONExtractString(raw, 'message', 'op')`): every earlier alert treats `message` as
+  a string.
+- **Parameters.** `higher_than 0`, `check_period 60`, `query_period 300`, `confirmation_period 0`,
+  `recovery_period 600`, `on_missing_data treat_as_zero`, email only (the `bwrap_probe_rollback` values). Auto-resolution
+  after 10 quiet minutes does not mean the cause was fixed.
+- **Limits.** `treat_as_zero` reads a dead log path as healthy, the mirror covers the cc-soleur-go path only (the legacy
+  agent-runner loop has no tool_result observer), and the classifier matches only the exact helper line. A forged row
+  can keep one incident open and suppress new pages; accepted at current scale, mitigation tracked in #10455.
+  Runbook: `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`.

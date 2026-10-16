@@ -62,6 +62,8 @@ describe("buildAgentSandboxConfig — constant tenant deny", () => {
   const TOKEN_DIR = process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens";
   // #10445: the CLI peer-messaging socket dir, masked for every session once AF_UNIX is allowed.
   const PEER_DIR = sandboxConfig.peerMessagingSocketDirs();
+  // #10445: the shared-HOME session transcripts (a sibling's proxy credential can be persisted there).
+  const TRANSCRIPT_DIR = sandboxConfig.sessionTranscriptDirs();
 
   it("denyRead is the constant parent set regardless of which siblings exist", () => {
     mkdirSync(join(root, "00000000-0000-0000-0000-0000000000a1"));
@@ -70,7 +72,7 @@ describe("buildAgentSandboxConfig — constant tenant deny", () => {
     writeFileSync(join(root, "stray.txt"), "not a dir");
 
     const result = buildAgentSandboxConfig(own);
-    expect(result.filesystem.denyRead).toEqual([root, "/var/lib/soleur/worktrees", staging, "/proc", "/sys", TOKEN_DIR, ...PEER_DIR]);
+    expect(result.filesystem.denyRead).toEqual([root, "/var/lib/soleur/worktrees", staging, "/proc", "/sys", TOKEN_DIR, ...PEER_DIR, ...TRANSCRIPT_DIR]);
   });
 
   it("a sibling created AFTER the config is built is covered without appearing in denyRead", () => {
@@ -96,7 +98,7 @@ describe("buildAgentSandboxConfig — constant tenant deny", () => {
     // "mounts nothing this wrap can place (absent, …)" skip reproduces the old
     // benign-ENOENT posture with no code. In production a missing root is a
     // vanished-mount fault — reported via reportSilentFallback, not silently.
-    expect(result.filesystem.denyRead).toEqual([missing, "/var/lib/soleur/worktrees", staging, "/proc", "/sys", TOKEN_DIR, ...PEER_DIR]);
+    expect(result.filesystem.denyRead).toEqual([missing, "/var/lib/soleur/worktrees", staging, "/proc", "/sys", TOKEN_DIR, ...PEER_DIR, ...TRANSCRIPT_DIR]);
   });
 
   it("a symlinked workspacePath does not change the deny set (no realpath classification)", () => {
@@ -112,7 +114,7 @@ describe("buildAgentSandboxConfig — constant tenant deny", () => {
     const elsewhere = mkdtempSync(join(tmpdir(), "sbx-elsewhere-"));
     extraDirs.push(elsewhere);
     const result = buildAgentSandboxConfig(join(elsewhere, "own"));
-    expect(result.filesystem.denyRead).toEqual([root, "/var/lib/soleur/worktrees", staging, "/proc", "/sys", TOKEN_DIR, ...PEER_DIR]);
+    expect(result.filesystem.denyRead).toEqual([root, "/var/lib/soleur/worktrees", staging, "/proc", "/sys", TOKEN_DIR, ...PEER_DIR, ...TRANSCRIPT_DIR]);
     expect(result.filesystem.allowWrite).toEqual([join(elsewhere, "own")]);
   });
 
@@ -129,7 +131,7 @@ describe("buildAgentSandboxConfig — constant tenant deny", () => {
     const result = buildAgentSandboxConfig(own, {
       denyReadExtra: [kb, root], // duplicate root must collapse
     });
-    expect(result.filesystem.denyRead).toEqual([root, "/var/lib/soleur/worktrees", staging, "/proc", "/sys", kb, TOKEN_DIR, ...PEER_DIR]);
+    expect(result.filesystem.denyRead).toEqual([root, "/var/lib/soleur/worktrees", staging, "/proc", "/sys", kb, TOKEN_DIR, ...PEER_DIR, ...TRANSCRIPT_DIR]);
   });
 
   it("readOnly (ADR-113 support persona): no write grant, allowRead restore inside the masked parent", () => {
@@ -157,7 +159,7 @@ describe("buildAgentSandboxConfig — constant tenant deny", () => {
     vi.stubEnv("GIT_DATA_STORE_ENABLED", "false");
     vi.stubEnv("WORKTREE_ROOT", worktree);
     const result = buildAgentSandboxConfig(own);
-    expect(result.filesystem.denyRead).toEqual([root, worktree, staging, "/proc", "/sys", TOKEN_DIR, ...PEER_DIR]);
+    expect(result.filesystem.denyRead).toEqual([root, worktree, staging, "/proc", "/sys", TOKEN_DIR, ...PEER_DIR, ...TRANSCRIPT_DIR]);
   });
 
   it("flag OFF + WORKTREE_ROOT unset: the deny carries the DEFAULT worktree root (post-rollback strays stay masked)", () => {
@@ -171,6 +173,7 @@ describe("buildAgentSandboxConfig — constant tenant deny", () => {
       "/sys",
       TOKEN_DIR,
       ...PEER_DIR,
+      ...TRANSCRIPT_DIR,
     ]);
   });
 
@@ -188,7 +191,7 @@ describe("buildAgentSandboxConfig — constant tenant deny", () => {
     vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
     vi.stubEnv("WORKTREE_ROOT", worktree);
     const result = buildAgentSandboxConfig(join(worktree, "00000000-0000-0000-0000-000000000002"));
-    expect(result.filesystem.denyRead).toEqual([root, worktree, staging, "/proc", "/sys", TOKEN_DIR, ...PEER_DIR]);
+    expect(result.filesystem.denyRead).toEqual([root, worktree, staging, "/proc", "/sys", TOKEN_DIR, ...PEER_DIR, ...TRANSCRIPT_DIR]);
   });
 
   it("flag ON: worktree root that does not exist on disk is still emitted (constant list; builder skips the landing)", () => {
@@ -203,6 +206,7 @@ describe("buildAgentSandboxConfig — constant tenant deny", () => {
       "/sys",
       TOKEN_DIR,
       ...PEER_DIR,
+      ...TRANSCRIPT_DIR,
     ]);
   });
 
@@ -210,7 +214,7 @@ describe("buildAgentSandboxConfig — constant tenant deny", () => {
     vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
     vi.stubEnv("WORKTREE_ROOT", root); // same dir via env — dedupe must hold
     const result = buildAgentSandboxConfig(own);
-    expect(result.filesystem.denyRead).toEqual([root, staging, "/proc", "/sys", TOKEN_DIR, ...PEER_DIR]);
+    expect(result.filesystem.denyRead).toEqual([root, staging, "/proc", "/sys", TOKEN_DIR, ...PEER_DIR, ...TRANSCRIPT_DIR]);
   });
 
   it("flag ON: own workspace under the worktree root is still restored (deny covers siblings, not self)", () => {

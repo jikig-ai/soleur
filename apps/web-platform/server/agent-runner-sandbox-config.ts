@@ -69,9 +69,12 @@ const log = createChildLogger("agent-sandbox");
 //
 // #10445 — `network.allowAllUnixSockets: true` is deliberate. The vendored
 // builder otherwise wraps every Bash command in `apply-seccomp`, whose first
-// call (unshare(CLONE_NEWUSER)) the shim filter below denies; AF_UNIX blocking
-// was never relied on here (ADR-075 addendum), and the runtime two-session
-// socket test (infra/sandbox-masked-proc-docker.test.sh) bounds the residual.
+// call (unshare(CLONE_NEWUSER)) the shim filter below denies. That helper WAS
+// the per-command AF_UNIX block until 2026-10-06, so this returns to a state
+// with no AF_UNIX block; the residual is bounded by per-session proxy
+// authentication on the bridge sockets (test/sandbox-wrapped-command-runtime.test.ts),
+// the peer-socket and transcript masks below, and `--unshare-net` for abstract
+// sockets (ADR-075 addendum 2026-10-16).
 //
 // #8752 — the two hardening layers this config cannot express through the SDK
 // (the vendored builder owns the whole bwrap argv, transported on `--args
@@ -388,11 +391,32 @@ function webEgressDenyReadPaths(): string[] {
 }
 
 
-/** Directories the CLI binds its peer-messaging sockets in: `/tmp/cc-socks` (the container case, XDG_RUNTIME_DIR
- *  unset) and `$XDG_RUNTIME_DIR/cc-socks` where that is set (developer hosts, some CI runners). */
-export function peerMessagingSocketDirs(env: Record<string, string | undefined> = process.env): string[] {
-  const xdg = env.XDG_RUNTIME_DIR;
-  return Array.from(new Set(["/tmp/cc-socks", ...(xdg && isAbsolute(xdg) ? [join(xdg, "cc-socks")] : [])]));
+/** Directories the CLI binds its peer-messaging sockets in. Measured in the vendored CLI 2.1.284: the primary path is
+ *  `(XDG_RUNTIME_DIR || CLAUDE_CODE_TMPDIR || os.tmpdir())/cc-socks/<pid>.sock`, and the CLI falls back to
+ *  `/tmp/cc-socks-<uid>/<pid>.sock` when that path is over 103 bytes or its directory is refused (shared/world-writable
+ *  without sticky, or not owned by the caller). The CLI's env is the allowlisted one (`TMPDIR` is forwarded, `XDG_RUNTIME_DIR`
+ *  is not), so this returns the UNION of every base: masking a dir the CLI never uses is free, missing one is a
+ *  cross-tenant channel. Only absolute bases count (the CLI ignores a relative one). */
+export function peerMessagingSocketDirs(
+  env: Record<string, string | undefined> = process.env,
+  uid: number | undefined = typeof process.getuid === "function" ? process.getuid() : undefined,
+): string[] {
+  const bases = [env.XDG_RUNTIME_DIR, env.CLAUDE_CODE_TMPDIR, env.TMPDIR, "/tmp"].filter(
+    (b): b is string => typeof b === "string" && b !== "" && isAbsolute(b),
+  );
+  const dirs = bases.map((b) => join(b, "cc-socks"));
+  if (uid !== undefined) dirs.push(`/tmp/cc-socks-${uid}`);
+  return Array.from(new Set(dirs));
+}
+
+/** Directories holding the CLI's session transcripts. With AF_UNIX allowed, a sibling session's proxy credential that
+ *  its own `env`/`printenv` output put into a transcript under a SHARED HOME becomes usable against that sibling's
+ *  bridge socket, so a tenant's Bash must not read them (the CLI process itself runs outside the sandbox). */
+export function sessionTranscriptDirs(env: Record<string, string | undefined> = process.env): string[] {
+  const dirs: string[] = [];
+  if (env.HOME && isAbsolute(env.HOME)) dirs.push(join(env.HOME, ".claude", "projects"));
+  if (env.CLAUDE_CONFIG_DIR && isAbsolute(env.CLAUDE_CONFIG_DIR)) dirs.push(join(env.CLAUDE_CONFIG_DIR, "projects"));
+  return Array.from(new Set(dirs));
 }
 
 /**
@@ -481,15 +505,20 @@ export function buildAgentSandboxConfig(
   // landing is a builder skip). Removal is the flag-deletion follow-up
   // (#9798), never part of this PR — the `denyRead` arm must not fork
   // per-flag.
+  // The SDK skips a deny landing that does not exist, so create each masked dir first (0700, the mode the CLI
+  // itself uses). A failure here leaves the mask silently off for a cross-tenant channel, so it PAGES
+  // (reportSilentFallback), unlike the c4 staging root above.
   const peerSocketDirs = peerMessagingSocketDirs();
-  for (const dir of peerSocketDirs) {
+  const transcriptDirs = sessionTranscriptDirs();
+  for (const dir of [...peerSocketDirs, ...transcriptDirs]) {
     try {
       mkdirSync(dir, { recursive: true, mode: 0o700 });
     } catch (err) {
-      warnSilentFallback(err, {
+      reportSilentFallback(err, {
         feature: "agent-sandbox",
-        op: "peer-socket-dir",
-        message: "agent-sandbox: peer-messaging socket dir could not be created; its read-deny may not apply",
+        op: "masked-dir-precreate",
+        extra: { dir },
+        message: "agent-sandbox: a masked dir could not be created; its read-deny may not apply",
       });
     }
   }
@@ -551,11 +580,13 @@ export function buildAgentSandboxConfig(
       // ONLY for the entitled session (the extra denies would be dead config
       // where no gateway exists — tracked as a hardening follow-up).
       process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
-      // #10445: the CLI's peer-messaging sockets (`/tmp/cc-socks/<pid>.sock`, 0700, same uid for every tenant
+      // #10445: the CLI's peer-messaging sockets (`<dir>/cc-socks/<pid>.sock`, 0700, same uid for every tenant
       // session in the container) were unreachable while the apply-seccomp helper blocked AF_UNIX for the
       // command; with allowAllUnixSockets set they would be connectable from a sibling's Bash. Masked for every
-      // session (pre-created below: the SDK skips a deny landing that does not exist yet).
+      // session (pre-created above: the SDK skips a deny landing that does not exist yet). The shared-HOME
+      // session transcripts are masked for the same reason (a sibling's proxy credential can land in one).
       ...peerSocketDirs,
+      ...transcriptDirs,
       ...(opts?.allowWebEgress ? webEgressDenyReadPaths() : []),
     ]),
   );

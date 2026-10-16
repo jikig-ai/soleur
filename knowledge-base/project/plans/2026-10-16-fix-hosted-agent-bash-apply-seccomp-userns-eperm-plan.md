@@ -430,6 +430,14 @@ call site is unchanged). Acknowledge: unrelated, own cycle; they stay open.
   (bounded by `--unshare-net`, `denyRead`, per-session proxy tokens and the G2 runtime test) and by a classifier
   that forwards a scrubbed matched line to Sentry/logs (only the single matched line, paths/uuids/tokens
   scrubbed, as today).
+  Concrete artifacts found in review, each mitigated (file: `apps/web-platform/server/agent-runner-sandbox-config.ts`
+  unless noted):
+  - CLI peer-messaging sockets under `cc-socks` (several candidate bases): masked by `peerMessagingSocketDirs()`.
+  - The per-session proxy credential on the sibling bridge sockets: per-session auth, proven for HTTP CONNECT by G2
+    (`apps/web-platform/test/sandbox-wrapped-command-runtime.test.ts`); SOCKS auth not yet tested (#10455).
+  - Session transcripts under a shared HOME (a printed credential persists there): masked by `sessionTranscriptDirs()`.
+  - The egress token directory `/var/lib/soleur/egress-tokens` (`EGRESS_TOKEN_DIR`): denied in the same config (see the
+    `EGRESS_TOKEN_DIR` read near the deny list).
 - **Brand-survival threshold:** `single-user incident`
 - **Threshold decision (challengeable):** one tenant whose agent cannot run any command cannot work, and the
   fix touches the tenant-isolation boundary; `aggregate pattern` would under-weight both. CPO signed off at plan
@@ -439,31 +447,51 @@ call site is unchanged). Acknowledge: unrelated, own cycle; they stay open.
 
 ```yaml
 liveness_signal:
-  what: deploy-status sandbox_canary and sdk_bash_smoke verdicts per deploy, plus the two Better Stack alerts' own evaluation
-  cadence: per deploy for the canary and smoke; 60 s check period for the alerts
-  alert_target: team email via the Better Stack escalation policy (the Slack wake path of ADR-260 is an inherited, unchanged posture)
-  configured_in: apps/web-platform/infra/betterstack-logs-alerts.tf and apps/web-platform/infra/ci-deploy.sh
+  what: the Better Stack alert agent_sandbox_bash_denial's own evaluation (Logs alert, count of helper_userns_eperm mirror rows); the deploy-status sandbox_canary verdict is read by the post-merge readback but was green throughout the outage and is NOT a liveness signal for hosted Bash
+  cadence: 60 s check period for the alert
+  alert_target: team email via the Better Stack escalation policy (the Slack wake path of ADR-260 is an inherited, unchanged posture; tracked in #10455)
+  configured_in: apps/web-platform/infra/betterstack-logs-alerts.tf
 error_reporting:
-  destination: Sentry project web-platform (op=sandbox-canary, op=bash-tool-result) and Better Stack Logs source soleur-inngest-vector-prd
-  fail_loud: ci-deploy journald row SANDBOX_CANARY_FAIL verdict=sandbox_broken reason=sdk_bash_smoke_failed; app container row op=bash-tool-result with sandboxErrorCode=helper_userns_eperm
+  destination: Better Stack Logs source soleur-inngest-vector-prd (app container row op=bash-tool-result with sandboxErrorCode=helper_userns_eperm); the pino mirror lives in the cc-dispatcher onToolResult path
+  fail_loud: the agent_sandbox_bash_denial alert (email). There is no deploy-time fail_loud: the SDK Bash smoke and its faithful_canary_sandbox_broken alert are deferred to #10453
 failure_modes:
-  - mode: shim filter kills the SDK command-side wrapper (this incident)
-    detection: in-surface deploy-time smoke that executes a real Bash command through the real wrapper path and the shim inside the canary container, plus the tool_result mirror from the live session
-    alert_route: faithful_canary_sandbox_broken and agent_sandbox_bash_denial Better Stack alerts
-  - mode: tool_result line shape changes so the classifier misses it
-    detection: the deploy-time smoke does not depend on the line text; the line is pinned from the real binary strings in a test
-    alert_route: faithful_canary_sandbox_broken
-  - mode: Vector or journald path drops the app mirror line
-    detection: deferred runtime synthetic with a dead-man arm (tracking issue); interim the ci-deploy rows travel a separate shipped path
-    alert_route: tracked in the deferral issue
+  - mode: 1 - the SDK helper line (exact apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted) in a live cc-soleur-go Bash call
+    detection: pino mirror (cc-dispatcher onToolResult) -> Vector app_container_journald + warn filter -> Better Stack alert agent_sandbox_bash_denial
+    alert_route: email only
+  - mode: 2 - the helper line changes shape, or another helper-step EPERM, and the classifier (line-anchored, exact line only) misses it
+    detection: UNCOVERED until #10453 (deploy-time smoke that does not depend on line text) and #10455 (classify other helper-step EPERMs)
+    alert_route: none
+  - mode: 3 - between-deploy drift, or a dead Vector/journald log path (the alert is silent on a fixed system and on a broken path)
+    detection: UNCOVERED until #10455 (runtime synthetic with a dead-man arm); interim, the runbook gives a positive-control query
+    alert_route: none
+  - mode: residual - the legacy agent-runner loop has no tool_result observer
+    detection: not covered; the alert covers the cc-soleur-go path only
+    alert_route: none
 logs:
   where: Better Stack Logs (ci-deploy, webhook, soleur-web-platform container rows)
   retention: hot window about 40 minutes, S3 archive beyond (use the archive arm of scripts/betterstack-query.sh)
 discoverability_test:
   command: bash scripts/followthroughs/sandbox-readback-10445.sh
-  expected_output: sandbox_canary=pass
-  credentials_required: Doppler soleur/prd_terraform deploy-webhook HMAC plus Cloudflare Access service token - the deploy-status read has no unauthenticated substitute and verifies the live canary verdict, not a fixture
+  expected_output: exits TRANSIENT (2) until the PR merge commit is an ancestor of the deployed tag, then exits 0 on sandbox_canary pass
+  proves: fix deployed and canary green. It does NOT prove hosted Bash works (the canary was green over a hard-down Bash); that proof is a real hosted Bash call recorded in the PIR by the agent-executed post-merge verification (owner #10456)
+  credentials_required: Doppler soleur/prd_terraform deploy-webhook HMAC plus Cloudflare Access service token for the deploy-status read, and GH_TOKEN for the gh api compare (the #10456 directive carries secrets=GH_TOKEN)
 ```
+
+## Review-time amendments
+
+Items that changed against the plan during the 12-seat review (the sections above that describe the original shape are
+kept as the planning record):
+
+- Stage B (deploy-time SDK Bash smoke, `sdk_bash_smoke`, the `faithful_canary_sandbox_broken` alert) is deferred to
+  #10453; Phase 2 and Guard 1 did not ship.
+- CLI peer-messaging socket directories are masked (`peerMessagingSocketDirs()` in
+  `apps/web-platform/server/agent-runner-sandbox-config.ts`: the union of `cc-socks` under `XDG_RUNTIME_DIR`,
+  `CLAUDE_CODE_TMPDIR`, `TMPDIR`, `/tmp`, plus `/tmp/cc-socks-<uid>`); a failed pre-create pages via `reportSilentFallback`.
+- The session-transcript directory is masked (`sessionTranscriptDirs()`: `$HOME/.claude/projects` and
+  `$CLAUDE_CONFIG_DIR/projects`); G2 asserts the sandbox sees none.
+- The classifier arm is narrowed to the exact line, line-anchored with nothing trailing; other helper-step EPERMs are
+  not classified (residual, #10455). The mirror debounce key includes `errorCode`.
+- The readback script is gated on the merge commit being an ancestor of the deployed tag.
 
 ## Infrastructure (IaC)
 
@@ -710,7 +738,7 @@ the runtime synthetic and the outer-wrap decision; PIR plus ADR addenda, no new 
 
 **Status:** reviewed
 **Assessment:** Sign-off with three conditions: (1) targeted outreach only to affected users, no global status
-page; (2) check for lost half-finished runs and say so in the outreach; (3) PIR stays internal and redaction-gated.
+page; (2) check for lost half-finished runs and say so in the outreach; (3) PIR redaction-gated (the repository is public, so it is not internal; no tenant data, mechanism detail already in public ADRs).
 Flow gaps: raw `apply-seccomp` text is poor UX (deferred, tracking issue); alerts should be live before the
 first deploy of the fix (alerts and release deploy apply concurrently, so the post-merge readback gates
 "resolved"); define who is paged when the promoted probe blocks a deploy (covered by the existing

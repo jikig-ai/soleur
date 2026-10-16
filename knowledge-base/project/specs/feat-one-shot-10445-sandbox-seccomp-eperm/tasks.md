@@ -34,23 +34,23 @@ Order: Stage A (1 -> 2 -> 4 -> 5) restores service and ships first; Stage B (3) 
 - [x] 4.1 Failing tests first: classifier fixtures (real helper line, benign-first/second-line, bare `unshare` negative, empty output)
 - [x] 4.2 `classifyBashSandboxFailure`: `apply-seccomp:` arm, `helper_userns_eperm`
 - [x] 4.3 Write the `agent_sandbox_bash_denial` SQL against the verified row shape (`CONTAINER_NAME`, `message.feature`, `message.op`, `message.sandboxErrorCode`); re-sample once to confirm before apply
-- [x] 4.4 `betterstack-logs-alerts.tf` + four `-target=` lines in `apply-web-platform-infra.yml`; `git grep -ln 'logtail_exploration' tests scripts apps/web-platform/test` and update every consumer
+- [x] 4.4 `betterstack-logs-alerts.tf` + two `-target=` lines in `apply-web-platform-infra.yml` (the second alert and its two lines are deferred to #10453); `git grep -ln 'logtail_exploration' tests scripts apps/web-platform/test` and update every consumer
 - [x] 4.5 `test/infra/sandbox-alerts.test.sh` (Guard 3 rows + production-shaped fixture row)
 - [x] 4.6 `terraform validate`; `plugins/soleur/test/c4-count-parity.test.sh`
 
 ## Phase 5: Record
 
 - [x] 5.1 PIR via the `soleur:incident` headless flow, `status: ongoing`, redaction sentinel first
-- [x] 5.2 ADR-079 addendum, ADR-075 addendum (conditional on G2; cross-reference ADR-051/ADR-278)
+- [x] 5.2 ADR-079 addendum, ADR-075 addendum (conditional on G2; the ADR-051/ADR-278 cross-reference was dropped at review: those ADRs do not cover unix sockets), ADR-218 amendment for the sixteenth Logs alert
 - [x] 5.3 Runbook updates: `betterstack-log-query.md`, `canary-probe-set.md` (including the accepted forgery limitation)
 - [x] 5.4 Comment on #10052 (paging path); file tracking issues: own AF_UNIX filter, runtime synthetic + dead-man arm, outer-wrap canary decision with deadline, plain-language Bash-failure message, the adjacent `spawnEgressForwarder` mkdir EACCES on `/var/lib/soleur/egress-tokens`, Stage B fallback if slipped
-- [ ] 5.5 Hand the CPO outreach condition to the operator as a brand decision (sending is not assumed)
+- [ ] 5.5 Hand the CPO outreach condition to the operator as a brand decision (sending is not assumed): handed to operator in the PR body; stays unchecked until ship writes the body
 
 ## Phase 6: Post-merge verification (agent-executed)
 
-- [ ] 6.1 Deploy-status shows `sandbox_canary.verdict=pass` and (Stage B) a non-null `sdk_bash_smoke.verdict=pass`
-- [ ] 6.2 Read both alerts back from the Better Stack API (present, unpaused)
-- [ ] 6.3 Real hosted Bash call succeeds; egress-audit canary #9545 gets its first gateway row
+- [ ] 6.1 `scripts/followthroughs/sandbox-readback-10445.sh` exits 0 (merge commit is an ancestor of the deployed tag and `sandbox_canary.verdict=pass`; this proves fix deployed and canary green, not that hosted Bash works). `sdk_bash_smoke` is #10453
+- [ ] 6.2 Read the `agent_sandbox_bash_denial` alert back from the Better Stack API (present, unpaused)
+- [ ] 6.3 Real hosted Bash call succeeds and is recorded in the PIR (this, not the readback, is the resolution proof; owner #10456); egress-audit canary #9545 gets its first gateway row
 - [ ] 6.4 Docs-only PR flipping the PIR to `resolved`; close #10445
 
 ## Post-ruling amendments (2026-10-16, CTO batch; see decision-challenges.md)
@@ -58,4 +58,4 @@ Order: Stage A (1 -> 2 -> 4 -> 5) restores service and ships first; Stage B (3) 
 - Stage B fallback if the stub-model smoke is not done in the half-day time box: ship Stage A alone plus the Phase 1 docker-suite wrapper arm as the pre-merge guard, and file the tracking issue for the unfinished smoke BEFORE merge.
 - Stage B probe ships non-blocking (reports + pages); promotion follow-through is `scripts/followthroughs/sandbox-readback-10445.sh`; `smoke_infra_error` never rolls back.
 - Runbook entry for the new alerts states the wake path is email-only until the ADR-260 Slack integration is verified; file a tracking issue to verify the Slack wake across all Better Stack alerts.
-- Optional public PIR summary only after Stage A readback is green on a real deploy; names no filter, socket-bridge or tenant-isolation mechanism.
+- Optional public PIR summary only after Stage A readback is green on a real deploy; names no filter, socket-bridge or tenant-isolation mechanism. (Review correction: the repository is public, so the PIR itself is redaction-gated rather than internal.)

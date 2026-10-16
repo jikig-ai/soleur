@@ -37,7 +37,7 @@ describe("mirrorBashSandboxFailure (#10032)", () => {
     expect(ctx.extra.sandboxErrorCode).toBe("proc_mount_eperm");
     expect(ctx.extra.sandboxStderr).toBe(PROC_EPERM);
     expect(userId).toBe(USER);
-    expect(errorClass).toBe("agent-sandbox-bash-tool-result");
+    expect(errorClass).toBe("agent-sandbox-bash-tool-result:proc_mount_eperm");
   });
 
   it("#10445: the apply-seccomp helper line flows through with sandboxErrorCode=helper_userns_eperm (the alert's needle)", () => {
@@ -51,6 +51,18 @@ describe("mirrorBashSandboxFailure (#10032)", () => {
     expect(ctx.message).toBe("bash sandbox denial: helper_userns_eperm");
     expect(ctx.extra.sandboxErrorCode).toBe("helper_userns_eperm");
     expect(ctx.extra.sandboxStderr).toBe(HELPER);
+  });
+
+  it("#10445: the debounce slot is per error code, so another code cannot consume the helper row's slot", () => {
+    const HELPER = "apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted";
+    mirrorBashSandboxFailure(PROC_EPERM, USER, CONV);
+    mirrorBashSandboxFailure(HELPER, USER, CONV);
+    const classes = mirrorSpy.mock.calls.map((c) => c[3]);
+    expect(classes).toEqual([
+      "agent-sandbox-bash-tool-result:proc_mount_eperm",
+      "agent-sandbox-bash-tool-result:helper_userns_eperm",
+    ]);
+    expect(new Set(classes).size).toBe(2);
   });
 
   it("data minimisation: neither the surrounding output nor a workspace path reaches the event", () => {

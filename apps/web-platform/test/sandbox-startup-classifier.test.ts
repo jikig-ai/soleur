@@ -236,10 +236,20 @@ describe("classifyBashSandboxFailure — apply-seccomp helper arm (#10445, Guard
     expect(f?.sdkVersion).toBe("0.3.284");
   });
 
-  it("row 1: an EPERM-spelled helper line also classifies (the arm accepts either denial spelling)", () => {
-    expect(classifyBashSandboxFailure("apply-seccomp: prctl(PR_SET_NO_NEW_PRIVS): EPERM", null)?.errorCode).toBe(
+  it("row 1: the EPERM spelling of the same step also classifies", () => {
+    expect(classifyBashSandboxFailure("apply-seccomp: unshare(CLONE_NEWUSER): EPERM", null)?.errorCode).toBe(
       "helper_userns_eperm",
     );
+  });
+
+  it("another helper step failing with EPERM is NOT this code (residual tracked in #10455)", () => {
+    expect(classifyBashSandboxFailure("apply-seccomp: prctl(PR_SET_NO_NEW_PRIVS): EPERM", null)).toBeNull();
+    expect(classifyBashSandboxFailure("apply-seccomp: seccomp(SET_MODE_FILTER): Operation not permitted", null)).toBeNull();
+  });
+
+  it("the line must match end to end: a tenant-chosen tail or prefix word does not classify", () => {
+    expect(classifyBashSandboxFailure(`${ISSUE_LINE} and then some tenant-chosen text`, null)).toBeNull();
+    expect(classifyBashSandboxFailure(`error: ${ISSUE_LINE}`, null)).toBeNull();
   });
 
   it("row 2: empty output and only-benign lines return null, while a positive control in the same shape is non-null", () => {
@@ -283,14 +293,8 @@ describe("classifyBashSandboxFailure — apply-seccomp helper arm (#10445, Guard
     expect(f?.errorCode).toBe("proc_mount_eperm");
   });
 
-  it("the helper line is scrubbed like every matched line (paths, uuids)", () => {
-    const uuid = "754ee124-706a-4f21-a4f4-e828257b0380";
-    const f = classifyBashSandboxFailure(
-      `apply-seccomp: open /workspaces/${uuid}/x: Operation not permitted`,
-      null,
-    );
-    expect(f?.errorCode).toBe("helper_userns_eperm");
-    expect(f?.matchedLine).not.toContain(uuid);
-    expect(f?.matchedLine).not.toContain("/workspaces/");
+  it("the matched line is the fixed helper line, whatever surrounds it", () => {
+    const f = classifyBashSandboxFailure(`/workspaces/x says:\n${ISSUE_LINE}\n`, null);
+    expect(f?.matchedLine).toBe(ISSUE_LINE);
   });
 });

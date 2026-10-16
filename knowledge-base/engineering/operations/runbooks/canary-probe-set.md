@@ -315,10 +315,10 @@ never runs the process the Agent SDK wraps around every sandboxed Bash command
 [`hosted-agent-bash-apply-seccomp-userns-eperm-postmortem.md`](../post-mortems/hosted-agent-bash-apply-seccomp-userns-eperm-postmortem.md)).
 A green `sandbox_canary` therefore certifies the bwrap setup only; it is NOT evidence that Bash works.
 
-**How the smoke is decoded.** `sdk_bash_smoke` is a separate verdict in `/hooks/deploy-status` (read it with the
-call pattern in `plugins/soleur/skills/postmerge/references/deploy-status-debugging.md`, no SSH). It runs a real
+**How the smoke will be decoded (PLANNED, #10453; nothing in this paragraph or table exists yet).** `sdk_bash_smoke` would be a separate verdict in `/hooks/deploy-status` (read it with the
+call pattern in `plugins/soleur/skills/postmerge/references/deploy-status-debugging.md`, no SSH). It would run a real
 Bash command end to end through the SDK's own wrapper path and the shipped shim, inside the canary container,
-under the production run tuple. It is non-blocking until promoted (`wg-dark-launch-deploy-gates`).
+under the production run tuple. It would be non-blocking until promoted (`wg-dark-launch-deploy-gates`).
 
 | `reason` | Meaning | First move |
 |---|---|---|
@@ -328,18 +328,25 @@ under the production run tuple. It is non-blocking until promoted (`wg-dark-laun
 
 **First move on a `helper_userns_eperm`** (the runtime classifier code on the `op=bash-tool-result` mirror, paged by
 `agent_sandbox_bash_denial`, see
-[`betterstack-log-query.md`](./betterstack-log-query.md#standing-alarms-over-this-source-log-content-recurrence-alarms)):
-(1) read `/hooks/deploy-status` for `sdk_bash_smoke` and `sandbox_canary`; (2) read the row count and first timestamp
-with the runbook's SQL; (3) a red smoke plus rows from more than one user is real and fleet-wide, so check the
-`allowAllUnixSockets` setting and the SDK version (`sandbox_canary.sdk_version`); (4) a single row with a green smoke
-is probably a tenant echoing the line, which is the accepted limitation below. If a rollback of the sandbox posture is
-ever considered, the shim kill-switch needs explicit CTO acknowledgement and a time box; it is not a routine step.
+[`betterstack-log-query.md`](./betterstack-log-query.md#standing-alarms-over-this-source-log-content-recurrence-alarms)).
+Executable today, without `sdk_bash_smoke`: (1) run the alert's Query block in that runbook for `rows`, `users` and the
+first timestamp (and its positive-control query if the count is zero); (2) read `/hooks/deploy-status` for
+`sandbox_canary` and the deployed tag, remembering a green canary does not certify the wrapper; (3) `rows` from more than
+one user is real and fleet-wide, so check that `network.allowAllUnixSockets` is still set in
+`agent-runner-sandbox-config.ts` and the SDK version (`sandbox_canary.sdk_version`), and re-run the pre-merge proofs
+(`test/sandbox-wrapped-command-runtime.test.ts` and the wrapped-command arms of `infra/sandbox-masked-proc-docker.test.sh`);
+(4) make a real hosted Bash call and read the result; (5) a single user's rows are probably a tenant echoing the line,
+which is the accepted limitation below. Once the smoke ships (#10453), add `sdk_bash_smoke` as a second read in step
+(2): a red smoke plus multi-user rows is conclusive. If a rollback of the sandbox posture is ever considered, the shim
+kill-switch needs explicit CTO acknowledgement and a time box; it is not a routine step.
 
 **Accepted forgery limitation.** The runtime classifier reads Bash `tool_result` text, which a tenant controls.
-The arm is anchored to the line start (`apply-seccomp:` after trim), debounced per user, and the alert filters on the
-new `sandboxErrorCode`, so a tenant-printed `bwrap` line cannot reach it. A tenant CAN still print the exact helper
-line and cause one email. That is accepted at this scale: the deploy-time smoke, which does not read tenant text, is
-the authoritative signal, and the email only prompts the check above. The wake path for both alerts is email-only on
+The arm matches only the exact helper line (`apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted`,
+line-anchored, nothing trailing), is debounced per user (keyed with the error code), and the alert filters on the new
+`sandboxErrorCode`, so a tenant-printed `bwrap` line cannot reach it. A tenant CAN still print the exact helper line and
+keep one incident open, suppressing new pages (see the alert's entry in `betterstack-log-query.md`; mitigation tracked
+in #10455). Once the deploy-time smoke ships (#10453) it, not tenant text, becomes the authoritative signal; until then
+the email only prompts the check above. The wake path for both alerts is email-only on
 the Better Stack free tier until the ADR-260 Slack integration is verified.
 
 ## Outer-wrap canary — #5863 arm-F verdicts

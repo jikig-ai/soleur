@@ -1656,7 +1656,8 @@ resource "logtail_exploration_alert" "registry_zot_log_credential_shape" {
 # mirrors ONE pino row per user per debounce window: feature `agent-sandbox`, op `bash-tool-result`, with the
 # code in `extra.sandboxErrorCode`. The row lands in this same prd Logs source under the app container.
 #
-# ROW SHAPE (verified against a live production row, 2026-10-16): `raw.CONTAINER_NAME` is
+# ROW SHAPE (verified on sibling pino rows that reach this source, 2026-10-16; no row of THIS emitter had ever arrived, so
+# its first real hit is its positive control): `raw.CONTAINER_NAME` is
 # `soleur-web-platform`; `raw.message` is an OBJECT (not a string) whose top-level keys are `feature`, `op`,
 # `level`, `msg` plus the `extra` keys, so the three message conjuncts use the nested form
 # `JSONExtractString(raw, 'message', '<key>')`.
@@ -1665,7 +1666,8 @@ resource "logtail_exploration_alert" "registry_zot_log_credential_shape" {
 #
 # WHAT IT DELIBERATELY DOES NOT DETECT: a session whose Bash output never reaches the dispatcher's tool_result
 # observer (the legacy agent-runner loop has none), and a dropped Vector/journald path (a silent row is silence,
-# not health). The deploy-time canary covers the container; this covers a live tenant session.
+# not health). The deploy-time canary covers the container (and was blind to this class: its replay never ran the
+# command-side wrapper); this covers a live tenant session on the cc-soleur-go path only.
 #
 # Paging semantics are bwrap_probe_rollback's (ADR-218): any one matching row in the 5-min window alerts,
 # treat_as_zero so the open incident observes recovery; on the free tier the channel is team email only.

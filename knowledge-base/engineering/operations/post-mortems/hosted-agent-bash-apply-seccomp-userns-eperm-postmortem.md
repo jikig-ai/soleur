@@ -2,7 +2,7 @@
 title: "Hosted agent Bash failed on every call with apply-seccomp unshare(CLONE_NEWUSER) EPERM for about ten days, and nothing alerted: our own seccomp filter killed the SDK's command-side helper while the canary replayed only the setup argv"
 date: 2026-10-16
 incident_pr: 10445
-incident_window: "2026-10-06T13:19:38Z (first production deploy of web-v0.324.3, web-1) → ongoing at the time of writing (fix committed in 21a7319bf7, not yet deployed)"
+incident_window: "2026-10-06T13:19:38Z (inferred onset: first production deploy of web-v0.324.3, web-1; no pre-2026-10-16 failure was observed directly) → ongoing at the time of writing (fix committed in 21a7319bf7, not yet deployed)"
 recovery_at: "TBD"
 suspected_change: "#9595 (shared bwrap seccomp filter plus fd hygiene, first shipped in tag web-v0.324.3, 2026-10-06)"
 brand_survival_threshold: aggregate pattern
@@ -28,18 +28,23 @@ art_33_deadline: "n/a"
 # Incident Overview
 
 Every hosted Concierge Bash call failed at sandbox start with `apply-seccomp: unshare(CLONE_NEWUSER): Operation not
-permitted` from the first production deploy of `web-v0.324.3` on 2026-10-06 until at least the moment of writing.
-Production `/health` stayed `ok` throughout and no alert fired. The cause was a collision between two controls we ship:
+permitted` from the first production deploy of `web-v0.324.3` on 2026-10-06 (inferred from deploy time and mechanism; no
+failure before 2026-10-16 was observed directly) until at least the moment of writing. Production `/health` stayed `ok`
+throughout and no alert fired. The cause was a collision between two controls we ship:
 the bwrap PATH shim's seccomp filter (introduced by #9595) denies `unshare(CLONE_NEWUSER)`, and the Agent SDK wraps every
 sandboxed Bash command in an embedded `apply-seccomp` helper whose first syscall, when it holds no capability, is
-exactly that `unshare`. The recorded premise that this helper was "inert today" was false.
+exactly that `unshare`. The recorded premise that this helper was "inert today" (the #8752 plan) was false.
 
 ## Status
 
-ongoing — the fix (`network.allowAllUnixSockets: true`, so the SDK does not engage the helper) is committed in
-`21a7319bf7` on branch `feat-one-shot-10445-sandbox-seccomp-eperm` and is not yet deployed. This section flips to
-`resolved` only after the post-merge readback and a real hosted Bash call are recorded (see Recovery verification and
-the follow-through tracker #10456).
+ongoing — the fix (`network.allowAllUnixSockets: true`, so the SDK does not engage the helper) is committed on branch
+`feat-one-shot-10445-sandbox-seccomp-eperm` (first commit `21a7319bf7`) and is not yet deployed. Resolution gate: the
+post-merge readback (`scripts/followthroughs/sandbox-readback-10445.sh`, which proves "fix deployed and canary green",
+not that hosted Bash works) plus a real hosted Bash call recorded in this report. The flip to `resolved` is owned by
+#10456.
+
+Visibility: the repository is public, so this report is not internal. It is redaction-gated, holds no tenant data, and
+the mechanism detail already lives in public ADRs.
 
 ## Symptom
 
@@ -49,7 +54,7 @@ permitted`. The line names the SDK helper, not bwrap, which is why the existing 
 ## Incident Timeline
 
 - **Start time (detected):** 2026-10-16T14:44:25Z (issue #10445 filed from a user report)
-- **Onset (impact start):** 2026-10-06T13:19:38Z (first production deploy of `web-v0.324.3`, web-1; web-2 accepted the same tag at 13:20:41Z)
+- **Onset (impact start):** 2026-10-06T13:19:38Z, inferred: first production deploy of `web-v0.324.3` (web-1; web-2 accepted the same tag at 13:20:41Z). No pre-2026-10-16 failure was observed directly; the onset follows from the deploy time and the mechanism (mechanism confirmed in Root-cause hypothesis and 5-Whys).
 - **End time (recovered):** TBD
 - **Duration (MTTR):** TBD (status not resolved)
 
@@ -59,7 +64,7 @@ timestamps only; sources are Better Stack `ci-deploy` rows, `/hooks/deploy-statu
 | Actor | Time (UTC) | Action |
 |---|---|---|
 | agent | 2026-10-06T11:48:18Z | Tag `web-v0.324.2` commit made; it does not contain #9595. It was deployed to web-1 at 13:03:12Z: the last deployed image without the shim filter. |
-| human | 2026-10-06T12:17:23Z | #9595 merged; tag `web-v0.324.3` points at its merge commit. |
+| human | 2026-10-06T12:53:43Z | #9595 merged (GitHub `mergedAt`); tag `web-v0.324.3` points at its merge commit `eb92243fe8`, whose commit timestamp is 12:17:23Z. |
 | agent | 2026-10-06T13:19:38Z | web-1 accepts `deploy web-platform ... v0.324.3`; image pull OK at 13:20:20Z, `SANDBOX_PROBE_OK` (the blocking bwrap probe, which ends in a trivial command) at 13:20:35Z, deploy exit_code 0 at 13:20:41Z. This is the incident onset. |
 | agent | 2026-10-06T13:20:41Z | web-2 accepts the same tag; image pull OK 13:21:48Z. Both fleet hosts now run the shim filter. |
 | agent | 2026-10-06 to 2026-10-16 | 216 further web-1 deploy acceptances after the onset deploy (2 to 35 per day); the faithful canary and the blocking bwrap probe did not fail on this cause in any of them, because every deploy-time probe ends in a command that never runs the wrapper. |
@@ -81,7 +86,7 @@ Better Stack Logs, Sentry.
 ## Detection (+ MTTD)
 
 - **How detected:** external — a user reported it; no monitoring system flagged it.
-- **MTTD (mean time to detect):** about 10 days (10d 1h 24m from the first production deploy of `web-v0.324.3` at 2026-10-06T13:19:38Z to the issue at 2026-10-16T14:44:25Z).
+- **MTTD (mean time to detect):** approximately 10 days (10d 1h 24m, taking the inferred onset; from the first production deploy of `web-v0.324.3` at 2026-10-06T13:19:38Z to the issue at 2026-10-16T14:44:25Z).
 
 ## Triggered by
 
@@ -93,19 +98,41 @@ Triage-time competing hypotheses; the post-resolution final root cause lives in 
 
 | Hypothesis | Supporting evidence | Disconfirming evidence | Status |
 |---|---|---|---|
-| Our seccomp filter denies `unshare(CLONE_NEWUSER)`, which the SDK's `apply-seccomp` helper needs | Exact production line reproduced locally with the committed filter and the embedded helper; EPERM text names the helper, not bwrap; onset matches the first deploy containing #9595 | none | confirmed |
+| Our seccomp filter denies `unshare(CLONE_NEWUSER)`, which the SDK's `apply-seccomp` helper needs | Exact production line reproduced locally with the committed filter and the embedded helper; EPERM text names the helper, not bwrap; onset matches the first deploy containing #9595 | none | confirmed (see Causal evidence below) |
 | The delivered seccomp profile is not the one enforcing | n/a | `seccomp_profile_host_present=true`, `seccomp_profile_loaded_matches_host=true` | refuted |
 | A kernel or AppArmor setting disabled unprivileged user namespaces | n/a | 30 `kernel_ns` DIAG rows all `restrict=0 clone=1 max=30852`; the canary replay creates user namespaces on the same hosts every deploy | refuted |
 | Only a subset of hosts or sessions is affected | n/a | The SDK wraps every command it sandboxes, so every session on every host running the image with the shim is affected | refuted |
 | #10349 caused it | The issue's 36-hour window | The cause predates the window by 10 days | refuted (incomplete premise) |
 
+### Causal evidence
+
+Measured 2026-10-16 in a production-like container (node:22-slim digest base, Debian bubblewrap 0.8.0, uid 1001, docker
+default masks, the committed seccomp profile; AppArmor unconfined): with no shim filter the wrapped Bash call succeeds;
+with the shim filter and the knob unset it fails with the helper EPERM. The filter is therefore the cause.
+
+This reconciles with the #10032 measurement (`knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-10032-sandbox-shim-procfs/measurements.md`,
+section 0.3), which showed the helper rc=1 "with and without our bpf": that run was on a host that denies unprivileged
+`NEWUSER` inside the container, which is a different kernel posture from production (`kernel_ns` rows: `restrict=0
+clone=1`). Its section 0.1 also left open whether the wrapper is present in production's real command.
+
 ## Resolution
 
 Set `network.allowAllUnixSockets: true` in `apps/web-platform/server/agent-runner-sandbox-config.ts` so the SDK does not
-wrap commands in the helper (commit `21a7319bf7`). The seccomp filter is left intact, so the nested-userns and `clone3`
-denial that #8752 and #9595 exist for is unchanged. The residual AF_UNIX exposure inside the inner sandbox is bounded by
-the ADR-075 addendum and a runtime two-session test; the fallback if that test fails is a single `socket(AF_UNIX)` deny
-folded into the one bwrap filter, never `socketpair`.
+wrap commands in the helper. The seccomp filter is left intact, so the nested-userns and `clone3` denial that #8752 and
+#9595 exist for is unchanged. With the helper gone there is no per-command AF_UNIX block, which is weaker than the
+pre-incident baseline in that one dimension. It is bounded by (1) per-session proxy-credential auth on the sibling
+bridge sockets, (2) masks over the CLI peer-messaging socket directories (the union of `cc-socks` under
+`XDG_RUNTIME_DIR`, `CLAUDE_CODE_TMPDIR`, `TMPDIR` and `/tmp`, plus `/tmp/cc-socks-<uid>`), where a failed pre-create now
+pages through `reportSilentFallback` (fail-closed signal), (3) a mask over the session-transcript directory
+(`$HOME/.claude/projects`, and `$CLAUDE_CONFIG_DIR/projects` when set), because a sibling's proxy credential printed by
+`env` and persisted in a shared-HOME transcript would otherwise be usable, and (4) per-command `--unshare-net`. See the
+ADR-075 addendum. The fallback if the two-session test fails is a single `socket(AF_UNIX)` deny folded into the one bwrap
+filter, never `socketpair`.
+
+Detection added: the Bash tool_result classifier now maps exactly the line
+`apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted` (line-anchored, nothing trailing) to
+`helper_userns_eperm`; a pino mirror feeds a Better Stack alert (`agent_sandbox_bash_denial`, email). Other helper-step
+EPERMs are not classified (residual, #10455), and the legacy agent-runner loop has no tool_result observer.
 
 ## Recovery verification
 
@@ -113,9 +140,10 @@ Pre-merge: the fix is proved through the real SDK in two places. `test/sandbox-w
 production config and our shim (control with the knob off reproduces the helper EPERM; treatment returns the command's
 stdout), and the docker suite repeats both arms under the production run tuple (docker masks, seccomp profile, uid 1001,
 Debian bubblewrap 0.8) plus a pathname-socket census. Post-merge: `scripts/followthroughs/sandbox-readback-10445.sh`
-reads the deployed tag and the faithful canary's verdict (green throughout the outage, so it proves the readback, not the
-fix), and the first real hosted Bash call is recorded here before the status flips. The flip to `resolved` is owned by
-#10456. The deploy-time `sdk_bash_smoke` that would make the canary see this class is #10453.
+exits transient until the PR's merge commit is an ancestor of the deployed tag, then reads the faithful canary's verdict.
+That proves "fix deployed and canary green", not that hosted Bash works: the canary was green throughout the outage. The
+first real hosted Bash call is recorded here by the post-merge verification (agent-executed) before the status flips. The
+flip to `resolved` is owned by #10456. The deploy-time SDK Bash smoke that would make the canary see this class is #10453.
 
 ---
 
@@ -128,11 +156,14 @@ fix), and the first real hosted Bash call is recorded here before the status fli
    `--cap-drop ALL`), is `unshare(CLONE_NEWUSER)`, and our shim filter returns EPERM for it.
 2. **Why did we ship a filter that kills the helper?** The #8752 plan recorded the helper as "inert today (our config sets
    no `allowUnixSockets`)". That premise was false: `allowAllUnixSockets` is unset, so the SDK emits the wrapper by
-   default, and the #10032 measurements already showed the wrapped argv on every command. The false premise was never
-   re-checked against the vendor binary before #9595 enabled the filter.
+   default. The 2026-10-09 learning `knowledge-base/project/learnings/security-issues/bwrap-args-payload-outer-resume-proc-mask-20261009.md`
+   already records that the vendored inner command execs `apply-seccomp /proc/self/fd/N` (its Solution and Key Insight
+   sections); the #10032 measurement left open whether the wrapper is present in production's real command. The false
+   premise was never re-checked against the vendor binary before #9595 enabled the filter.
 3. **Why did the contradicting evidence not stop the change?** #10032 logged "if prod's real command does wrap
-   apply-seccomp, its NEWUSER dies under our bpf" as a non-gating open risk, and no follow-up issue was filed. A risk
-   recorded without an owner or a trigger is not a control (`wg-when-deferring-a-capability-create-a`).
+   apply-seccomp, its NEWUSER dies under our bpf" as a non-gating open risk with no new issue of its own. The adjacent
+   gap (run the nested-unshare probe inside the production canary container) already had an owner, #5941, which is still
+   open (its probe is the layer-B `unshare` pair, not the SDK's wrapped command; #10453 is the successor for that class).
 4. **Why did the deploy-time canary stay green?** It replays only the captured bwrap SETUP argv, ending in `-- true`
    (`parseShimSetupArgv` documents the command tail as model-chosen and never replayed), so the command-side wrapper is
    never executed. Its `nested_userns_deny` probe even requires the denial that breaks the helper. `sandbox_canary` read
@@ -202,22 +233,24 @@ engaging the helper) was settled on evidence rather than by loosening the filter
 
 ### What went wrong
 
-A recorded risk had no owner; a false "inert" premise survived two plans; the canary and the classifier were both blind
+A recorded risk (#10032) was not linked to its existing owner (#5941, nested-unshare probe in the production canary); a false "inert" premise survived two plans; the canary and the classifier were both blind
 to the command-side wrapper; no alert covered user-visible Bash failure; a known-red canary paged nobody.
 
 ## Action Items & Follow-ups
 
-Every action item and follow-up so this incident cannot recur. Issue numbers are placeholders to be filled when the lead
-files the tracking issues; the PR cites #10445 only.
+Every action item and follow-up so this incident cannot recur. #10455 is one tracker holding several distinct actions,
+listed below as items of that tracker.
 
 | Issue | Action | Status |
 |---|---|---|
 | #10445 | Fix: `allowAllUnixSockets: true`, behaviour proof with a control arm, runtime two-session socket test, docker-suite wrapper arm | open |
-| #10455 | Own AF_UNIX `socket()` deny folded into the single bwrap filter (option b); re-evaluate on an SDK bump that changes the helper, or a decision to enforce unix-socket blocking; becomes in-scope immediately if the two-session test fails | open |
-| #10455 | Runtime synthetic of the wrapped Bash command with a dead-man arm (P2) | open |
+| #10455 (item 1) | Own AF_UNIX `socket()` deny folded into the single bwrap filter (option b); re-evaluate on an SDK bump that changes the helper, or a decision to enforce unix-socket blocking; becomes in-scope immediately if the two-session test fails | open |
+| #10455 (item 2) | Runtime synthetic of the wrapped Bash command with a dead-man arm (P2) | open |
+| #10455 (item 3) | Plain-language message when Bash fails (raw apply-seccomp text is the user-visible failure today) | open |
+| #10455 (item 4) | Verify the Slack wake path (ADR-260) across all Better Stack alerts; the new alerts are email-only until then | open |
+| #10455 (further items) | Classify other helper-step EPERMs; page on at least 2 distinct users or verify server-side (forged-row suppression); SOCKS proxy-auth test | open |
 | #10454 | Standing red outer-wrap canary (`wrong_elevation_userns`, Sentry 152662657): fix the elevation or demote explicitly, with a decision deadline; related to #9797 | open |
-| #10455 | Plain-language message when Bash fails (raw apply-seccomp text is the user-visible failure today) | open |
-| #10455 | Verify the Slack wake path (ADR-260) across all Better Stack alerts; the new alerts are email-only until then | open |
-| #10453 | End-to-end SDK Bash smoke fallback tracker if Stage B slips; promotion to the blocking lane per `sandbox-readback-10445.sh` | open |
+| #10453 | Deploy-time SDK Bash smoke in the canary container (non-blocking first); successor to #5941 for the wrapped-command class | open |
+| #5941 | Pre-existing owner of the nested-unshare probe inside the production canary container | open |
 | #10457 | Adjacent: `spawnEgressForwarder` mkdir EACCES on `/var/lib/soleur/egress-tokens` (entitled web-egress sessions) | open |
-| #10456 | PIR `status: ongoing` → `resolved` docs PR, owned by the `sandbox-readback-10445.sh` follow-through | open |
+| #10456 | PIR `status: ongoing` → `resolved` docs PR, owned by the `sandbox-readback-10445.sh` follow-through; its directive gains `secrets=GH_TOKEN` | open |

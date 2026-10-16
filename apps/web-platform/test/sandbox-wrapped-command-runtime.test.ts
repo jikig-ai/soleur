@@ -33,7 +33,12 @@ import { fileURLToPath } from "node:url";
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
 
-import { buildAgentSandboxConfig, peerMessagingSocketDirs } from "@/server/agent-runner-sandbox-config";
+import {
+  buildAgentSandboxConfig,
+  peerMessagingSocketDirs,
+  sessionTranscriptDirs,
+} from "@/server/agent-runner-sandbox-config";
+import { classifyBashSandboxFailure } from "@/server/sandbox-startup-classifier";
 import { startAnthropicStub, type AnthropicStub } from "./helpers/anthropic-stub";
 import { pointCliAtStub, scrubAmbientCliEnv } from "./helpers/hermetic-cli-env";
 
@@ -123,19 +128,39 @@ async function runBash(opts: {
 // The docker suite's probe (infra/lib/sdk-bash-probe.mjs) carries a LITERAL sandbox object because the production
 // builder is TypeScript and is not in the suite image. Its static deny entries must stay the production builder's:
 // the census arm is only meaningful if the probe masks what production masks.
-describe("the docker suite's probe literal tracks the production deny list (#10445)", () => {
-  it("every static, non-workspace-derived denyRead entry of the production config is in the probe's literal, and vice versa", () => {
-    const src = readFileSync(join(APP_ROOT, "infra", "lib", "sdk-bash-probe.mjs"), "utf8");
-    const m = /denyRead:\s*\[([^\]]*)\]/.exec(src);
-    expect(m, "the probe no longer carries a denyRead literal").not.toBeNull();
-    const probeDeny = [...m![1].matchAll(/"([^"]+)"/g)].map((x) => x[1]).sort();
-    const prod = buildAgentSandboxConfig("/var/lib/soleur/workspaces/00000000-0000-0000-0000-000000000001")
-      .filesystem.denyRead;
-    const wantStatic = ["/proc", "/sys", ...peerMessagingSocketDirs()].sort();
-    const staticProd = wantStatic.filter((p) => prod.includes(p)).sort();
-    expect(staticProd, "the production deny list lost a static entry this probe assumes").toEqual(wantStatic);
-    // The probe runs in the suite container (XDG_RUNTIME_DIR unset), so it carries the /tmp form only.
-    expect(probeDeny).toEqual(["/proc", "/sys", "/tmp/cc-socks"]);
+describe("the docker suite's probe literal tracks the production config (#10445)", () => {
+  const probeSrc = readFileSync(join(APP_ROOT, "infra", "lib", "sdk-bash-probe.mjs"), "utf8");
+  const literalOf = (key: string): string => {
+    const m = new RegExp(`\\b${key}:\\s*([^,}\\n]+)`).exec(probeSrc);
+    expect(m, `the probe no longer carries ${key}`).not.toBeNull();
+    return m![1].trim();
+  };
+
+  it("the probe masks exactly what the production builder masks in the suite container's env (no XDG/TMPDIR, uid, HOME)", () => {
+    // The probe derives these from its own process (uid, HOME); the production functions get the same inputs here.
+    expect(probeSrc).toContain('const MASKED_DIRS = ["/tmp/cc-socks", `/tmp/cc-socks-${uid}`, `${process.env.HOME}/.claude/projects`];');
+    expect(peerMessagingSocketDirs({}, 1001)).toEqual(["/tmp/cc-socks", "/tmp/cc-socks-1001"]);
+    expect(sessionTranscriptDirs({ HOME: "/home/soleur" })).toEqual(["/home/soleur/.claude/projects"]);
+    expect(probeSrc).toMatch(/denyRead:\s*\["\/proc",\s*"\/sys",\s*\.\.\.MASKED_DIRS\]/);
+    const prod = buildAgentSandboxConfig("/var/lib/soleur/workspaces/00000000-0000-0000-0000-000000000001").filesystem.denyRead;
+    expect(prod).toEqual(expect.arrayContaining(["/proc", "/sys", ...peerMessagingSocketDirs(), ...sessionTranscriptDirs()]));
+  });
+
+  it("the probe's static sandbox fields equal the production builder's (autoAllowBashIfSandboxed is the one documented difference)", () => {
+    const prod = buildAgentSandboxConfig("/var/lib/soleur/workspaces/00000000-0000-0000-0000-000000000001") as Record<string, unknown> & {
+      network: Record<string, unknown>;
+    };
+    expect(literalOf("failIfUnavailable")).toBe(String(prod.failIfUnavailable));
+    expect(literalOf("allowUnsandboxedCommands")).toBe(String(prod.allowUnsandboxedCommands));
+    expect(literalOf("enableWeakerNestedSandbox")).toBe(String(prod.enableWeakerNestedSandbox));
+    expect(literalOf("allowManagedDomainsOnly")).toBe(String(prod.network.allowManagedDomainsOnly));
+    // The knob itself: the probe sets it behind KNOB, and production sets it unconditionally to this value.
+    expect(probeSrc).toContain("...(KNOB ? { allowAllUnixSockets: true } : {})");
+    expect(prod.network.allowAllUnixSockets).toBe(true);
+    // Production is `false` so a Bash call reaches canUseTool (#10054); the probe runs with bypassPermissions and no
+    // canUseTool, so it sets `true` to avoid a permission prompt. It is the only static field that differs.
+    expect(prod.autoAllowBashIfSandboxed).toBe(false);
+    expect(literalOf("autoAllowBashIfSandboxed")).toBe("true");
   });
 });
 
@@ -222,6 +247,12 @@ describe.skipIf(!SANDBOX_OK)("a hosted Bash call through the real SDK, the produ
     expect(result, "no Bash tool_result came back").not.toBeNull();
     expect(result!.isError).toBe(true);
     expect(result!.content).toContain(HELPER_EPERM);
+    // The alert's classifier must recognise the line the REAL SDK produced, not only hand-written fixtures: an SDK
+    // bump that reshapes the helper's output turns this red instead of silently blinding the page.
+    expect(
+      classifyBashSandboxFailure(result!.content)?.errorCode,
+      `the classifier did not recognise the real tool_result: ${JSON.stringify(result!.content)}`,
+    ).toBe("helper_userns_eperm");
   }, 180_000);
 
   it("TREATMENT: the production config runs the command with no apply-seccomp wrapper and returns its stdout", async () => {
@@ -232,6 +263,10 @@ describe.skipIf(!SANDBOX_OK)("a hosted Bash call through the real SDK, the produ
     expect(wrapped.length, "the scripted command never reached a bwrap spawn").toBeGreaterThan(0);
     for (const toks of wrapped) {
       expect(toks.filter((t) => t.includes("apply-seccomp")), "the production config still wraps the command").toEqual([]);
+      // Abstract-namespace unix sockets are bounded only by the per-command network namespace; the vendored
+      // builder emits --unshare-net whenever it restricts the network, independent of allowAllUnixSockets.
+      const boundary = toks.indexOf("--");
+      expect(toks.slice(0, boundary), "the command spawn lost --unshare-net").toContain("--unshare-net");
     }
     expect(result, "no Bash tool_result came back").not.toBeNull();
     expect(result!.isError).toBe(false);
@@ -270,6 +305,7 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
       `done`,
       `echo SOCKETS=$n`,
       `echo CCSOCKS_IN_SANDBOX=$(ls -A ${peerMessagingSocketDirs().join(" ")} 2>/dev/null | grep -c '\\.sock$')`,
+      `echo TRANSCRIPTS_IN_SANDBOX=$(ls -A ${sessionTranscriptDirs().join(" ")} 2>/dev/null | grep -vc '^$')`,
     ].join("\n");
 
   beforeAll(async () => {
@@ -285,13 +321,17 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
     shimDir = realpathSync(mkdtempSync(join(tmpdir(), "sbx-g2-shim-")));
     mkdirSync(join(rootA, "00000000-0000-0000-0000-00000000000a"));
     mkdirSync(join(rootB, "00000000-0000-0000-0000-00000000000b"));
-    writeFileSync(join(shared, "probe.sh"), probeScript(shared));
     writeFileSync(join(shimDir, "bwrap"), `#!/usr/bin/env bash\nexec ${JSON.stringify(BWRAP_SHIM)} "$@"\n`);
     spawnSync("chmod", ["+x", join(shimDir, "bwrap")], { stdio: "ignore" });
     stubA = await startAnthropicStub("sleep 60");
     stubB = await startAnthropicStub(`bash ${shared}/probe.sh`);
     scrubAmbientCliEnv();
     pointCliAtStub(stubA.port, home, "decoy-api-key-sentinel");
+    // Production shape: the CLI's env is the allowlisted one, so XDG_RUNTIME_DIR is unset and TMPDIR is the short
+    // shared dir. The builder reads this same process env, so its masked dirs are derived from what the CLI sees.
+    vi.stubEnv("XDG_RUNTIME_DIR", undefined);
+    vi.stubEnv("TMPDIR", shared);
+    writeFileSync(join(shared, "probe.sh"), probeScript(shared));
     vi.stubEnv("SOLEUR_BWRAP_REAL", "/usr/bin/bwrap");
     vi.stubEnv("SOLEUR_BWRAP_SECCOMP_BPF", BWRAP_BPF);
     vi.stubEnv("PATH", `${shimDir}:${savedPath ?? "/usr/bin:/bin"}`);
@@ -372,6 +412,23 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
         "no live peer-messaging socket on the host side, so the mask assertion below is vacuous",
       ).toBeGreaterThan(0);
       expect(out).toContain("CCSOCKS_IN_SANDBOX=0");
+      // Session transcripts under the shared HOME: A's CLI wrote one (host-side non-vacuity), B's sandbox sees none.
+      const transcriptDirs = sessionTranscriptDirs();
+      const hostSideTranscripts = () =>
+        transcriptDirs.flatMap((d) => {
+          try {
+            return readdirSync(d);
+          } catch {
+            return [];
+          }
+        });
+      const tDeadline = Date.now() + 20_000;
+      while (Date.now() < tDeadline && hostSideTranscripts().length === 0) await new Promise((r) => setTimeout(r, 500));
+      expect(
+        hostSideTranscripts().length,
+        "no session transcript on the host side, so the transcript-mask assertion below is vacuous",
+      ).toBeGreaterThan(0);
+      expect(out).toContain("TRANSCRIPTS_IN_SANDBOX=0");
       // Negative control: the caller's own credential is accepted by its own socket(s) (the check is live,
       // not a proxy that answers 407 to everything) and refused by the sibling's.
       const ownAnswers = probes.filter((x) => x.label === "own");

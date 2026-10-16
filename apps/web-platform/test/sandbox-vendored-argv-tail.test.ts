@@ -386,7 +386,7 @@ describe("sandbox-vendored-argv-tail: fixture tail equality (synthetic)", () => 
   });
 });
 
-// Measured 2026-10-16 on 0.3.284 with fixed-string scans (`grep -a -o -F <literal> claude | wc -l`).
+// Measured 2026-10-16 (claude-agent-sdk 0.3.284, claude-code 2.1.293 -- the versions in PINS above) with fixed-string scans (`grep -a -o -F <literal> claude | wc -l`).
 // Only the agent-sdk package reads the programmatic `sandbox` option; the CLI package never maps it.
 const HELPER_PINS: Record<"claude-agent-sdk" | "claude-code", HelperSelectionPins> = {
   "claude-agent-sdk": { skipLine: 2, applyLine: 2, missingLine: 2, settingsMapping: 2 },

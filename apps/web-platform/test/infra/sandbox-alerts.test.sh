@@ -194,7 +194,7 @@ print("MATCH" if all(extract(raw, p) == v for p, v in conj) else "NOMATCH")
 PY
 }
 
-PROD_ROW='{"CONTAINER_NAME":"soleur-web-platform","message":{"level":"error","feature":"agent-sandbox","op":"bash-tool-result","msg":"bash sandbox denial: helper_userns_eperm","userId":"0123456789abcdef","conversationId":"c0ffee00-0000-4000-8000-000000000001","sandboxErrorCode":"helper_userns_eperm","sandboxStderr":"apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted"}}'
+PROD_ROW='{"CONTAINER_NAME":"soleur-web-platform","message":{"level":"error","feature":"agent-sandbox","op":"bash-tool-result","msg":"bash sandbox denial: helper_userns_eperm","userIdHash":"0123456789abcdef","conversationId":"c0ffee00-0000-4000-8000-000000000001","sandboxErrorCode":"helper_userns_eperm","sandboxStderr":"apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted"}}'
 NEG_OTHER_CODE='{"CONTAINER_NAME":"soleur-web-platform","message":{"level":"error","feature":"agent-sandbox","op":"bash-tool-result","msg":"bash sandbox denial: proc_mount_eperm","sandboxErrorCode":"proc_mount_eperm"}}'
 NEG_OTHER_OP='{"CONTAINER_NAME":"soleur-web-platform","message":{"level":"error","feature":"agent-sandbox","op":"sdk-startup","msg":"x","sandboxErrorCode":"helper_userns_eperm"}}'
 NEG_OTHER_CONTAINER='{"CONTAINER_NAME":"soleur-inngest","message":{"level":"error","feature":"agent-sandbox","op":"bash-tool-result","msg":"x","sandboxErrorCode":"helper_userns_eperm"}}'
@@ -247,6 +247,18 @@ line_in "$ALERT" 'email[[:space:]]*=[[:space:]]*true' \
 line_in "$ALERT" 'confirmation_period[[:space:]]*=[[:space:]]*0' \
   && ok "confirmation_period 0: one row alerts within about a minute" \
   || no "confirmation_period is not 0 — a single denial would not alert promptly"
+line_in "$ALERT" 'recovery_period[[:space:]]*=[[:space:]]*600' \
+  && ok "recovery_period 600: the incident auto-resolves after 10 quiet minutes (the runbook states this number)" \
+  || no "recovery_period is not 600 — the runbook's auto-resolve statement would be false"
+line_in "$ALERT" 'push[[:space:]]*=[[:space:]]*false' \
+  && line_in "$ALERT" 'call[[:space:]]*=[[:space:]]*false' \
+  && line_in "$ALERT" 'sms[[:space:]]*=[[:space:]]*false' \
+  && line_in "$ALERT" 'critical_alert[[:space:]]*=[[:space:]]*false' \
+  && ok "push/call/sms/critical_alert are all false: email only, as the runbook's wake-path statement says" \
+  || no "a paging channel other than email is on (or a channel key is missing) — the runbook's email-only wake-path statement would be false"
+line_in "$ALERT" 'runbook[[:space:]]*=[[:space:]]*local\.agent_sandbox_bash_denial_runbook_url' \
+  && ok "metadata.runbook points at the runbook URL local the incident cause text also uses" \
+  || no "metadata.runbook is not local.agent_sandbox_bash_denial_runbook_url"
 if grep -qE '^[[:space:]]*(count|for_each|lifecycle|ignore_changes)\b' <<< "$ALERT"$'\n'"$EXPL"; then
   no "the alert or exploration carries count/for_each/lifecycle/ignore_changes — the resource could silently not exist or never reconcile"
 else
@@ -288,8 +300,8 @@ _ex_n="$(grep -c '^resource "logtail_exploration" "' "$TF")"; _al_n="$(grep -c '
 # OUTER RUN ONLY. Each row copies ONE source file into $SCRATCH/mut, mutates the copy, and re-runs this guard with
 # MUT_SKIP=1 and the matching SANDBOX_ALERTS_GUARD_* override pointing at the copy.
 SELF="${BASH_SOURCE[0]}"
-PRESENCE_ROWS=29
-MUT_ROWS=14
+PRESENCE_ROWS=32
+MUT_ROWS=16
 if [ -z "${MUT_SKIP:-}" ]; then
   MUT_DIR="$SCRATCH/mut"; mkdir -p "$MUT_DIR" || { printf '[FATAL] mkdir failed\n' >&2; exit 2; }
   assert_fixture_dir "$MUT_DIR"
@@ -399,6 +411,18 @@ s = s.replace(old, "")'
     "the alert is paused" \
     'import re
 m = re.search(r"(resource \"logtail_exploration_alert\" \"agent_sandbox_bash_denial\" \{.*?\n  paused = )false", s, re.S)
+assert m
+s = s[:m.end(1)] + "true" + s[m.end():]'
+  mutate RED "recovery_period changes (the runbook's 10-minute auto-resolve statement becomes false)" TF \
+    "recovery_period is not 600" \
+    'import re
+m = re.search(r"(resource \"logtail_exploration_alert\" \"agent_sandbox_bash_denial\" \{.*?\n  recovery_period\s+= )600", s, re.S)
+assert m
+s = s[:m.end(1)] + "1" + s[m.end():]'
+  mutate RED "critical_alert is turned on (a paging channel beyond email)" TF \
+    "a paging channel other than email" \
+    'import re
+m = re.search(r"(resource \"logtail_exploration_alert\" \"agent_sandbox_bash_denial\" \{.*?\n  critical_alert\s+= )false", s, re.S)
 assert m
 s = s[:m.end(1)] + "true" + s[m.end():]'
   # The guard's OWN dispatch: the locals key is renamed so the heredoc extractor returns empty. A guard reporting

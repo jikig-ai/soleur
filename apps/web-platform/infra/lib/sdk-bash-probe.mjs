@@ -57,14 +57,18 @@ await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const port = server.address().port;
 
 const ws = mkdtempSync(`${process.env.TMPDIR || "/tmp"}/sdk-bash-probe-`);
-// The peer-messaging socket dir is masked for every production session and must exist before the namespace is
-// built (the SDK skips a deny landing that does not). Parity with the production deny list is pinned by
+// The masked dirs of the production config (server/agent-runner-sandbox-config.ts `peerMessagingSocketDirs` and
+// `sessionTranscriptDirs`) for THIS container's env: no XDG_RUNTIME_DIR / CLAUDE_CODE_TMPDIR / TMPDIR, so `/tmp/cc-socks`
+// plus the CLI's `/tmp/cc-socks-<uid>` fallback, and the shared-HOME transcript dir. Each must exist before the namespace
+// is built (the SDK skips a deny landing that does not). Parity with the production builder is pinned by
 // test/sandbox-wrapped-command-runtime.test.ts.
-mkdirSync("/tmp/cc-socks", { recursive: true, mode: 0o700 });
+const uid = process.getuid();
+const MASKED_DIRS = ["/tmp/cc-socks", `/tmp/cc-socks-${uid}`, `${process.env.HOME}/.claude/projects`];
+for (const d of MASKED_DIRS) mkdirSync(d, { recursive: true, mode: 0o700 });
 const sandbox = {
   enabled: true, failIfUnavailable: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false, enableWeakerNestedSandbox: true,
   network: { allowedDomains: [], allowManagedDomainsOnly: true, ...(KNOB ? { allowAllUnixSockets: true } : {}) },
-  filesystem: { allowWrite: [ws], denyRead: ["/proc", "/sys", "/tmp/cc-socks"] },
+  filesystem: { allowWrite: [ws], denyRead: ["/proc", "/sys", ...MASKED_DIRS] },
 };
 const env = { ...process.env, ANTHROPIC_API_KEY: "decoy-api-key-sentinel", ANTHROPIC_BASE_URL: `http://127.0.0.1:${port}`, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", DISABLE_TELEMETRY: "1", DISABLE_AUTOUPDATER: "1" };
 const timer = setTimeout(() => { console.log('SDK_BASH_RESULT {"error":"timeout"}'); process.exit(3); }, 120000);

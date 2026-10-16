@@ -25,7 +25,11 @@ import { join } from "path";
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-import { buildAgentSandboxConfig, peerMessagingSocketDirs } from "@/server/agent-runner-sandbox-config";
+import {
+  buildAgentSandboxConfig,
+  peerMessagingSocketDirs,
+  sessionTranscriptDirs,
+} from "@/server/agent-runner-sandbox-config";
 
 vi.mock("@/server/agent-env", () => ({
   buildAgentEnv: vi.fn(() => ({ ANTHROPIC_API_KEY: "sk-test" })),
@@ -124,6 +128,7 @@ describe("buildAgentSandboxConfig drift guard", () => {
       "/sys",
       process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
       ...peerMessagingSocketDirs(),
+      ...sessionTranscriptDirs(),
     ]);
   });
 
@@ -210,6 +215,7 @@ describe("buildAgentSandboxConfig drift guard", () => {
       "/sys",
       process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
       ...peerMessagingSocketDirs(),
+      ...sessionTranscriptDirs(),
     ]);
   });
 
@@ -228,6 +234,7 @@ describe("buildAgentSandboxConfig drift guard", () => {
       // #9534: token dir lands after extras (appended last in the union).
       process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
       ...peerMessagingSocketDirs(),
+      ...sessionTranscriptDirs(),
     ]);
   });
 
@@ -235,6 +242,47 @@ describe("buildAgentSandboxConfig drift guard", () => {
     const result = buildAgentSandboxConfig(own);
     expect(result.network.allowedDomains).toEqual([]);
     expect(result.network.allowManagedDomainsOnly).toBe(true);
+  });
+
+  // The pins above derive their expectation from the functions under test, so a typo inside them would
+  // agree with itself. These rows pin the CLI's real path derivation by LITERAL (measured in the vendored
+  // CLI 2.1.284: `(XDG_RUNTIME_DIR || CLAUDE_CODE_TMPDIR || os.tmpdir())/cc-socks/<pid>.sock`, falling back
+  // to `/tmp/cc-socks-<uid>/` when the primary path is over 103 bytes or its dir is refused).
+  it("peerMessagingSocketDirs pins the CLI path derivation by literal (#10445)", () => {
+    expect(peerMessagingSocketDirs({}, 1001)).toEqual(["/tmp/cc-socks", "/tmp/cc-socks-1001"]);
+    expect(
+      peerMessagingSocketDirs(
+        { XDG_RUNTIME_DIR: "/run/user/1001", CLAUDE_CODE_TMPDIR: "/ct", TMPDIR: "/t" },
+        1001,
+      ),
+    ).toEqual([
+      "/run/user/1001/cc-socks",
+      "/ct/cc-socks",
+      "/t/cc-socks",
+      "/tmp/cc-socks",
+      "/tmp/cc-socks-1001",
+    ]);
+    // A relative or empty base is not a path the CLI would use; a base of /tmp collapses with the default.
+    expect(peerMessagingSocketDirs({ TMPDIR: "rel", XDG_RUNTIME_DIR: "" }, 7)).toEqual([
+      "/tmp/cc-socks",
+      "/tmp/cc-socks-7",
+    ]);
+    expect(peerMessagingSocketDirs({ TMPDIR: "/tmp" }, 7)).toEqual(["/tmp/cc-socks", "/tmp/cc-socks-7"]);
+  });
+
+  it("sessionTranscriptDirs pins the shared-HOME transcript dir by literal (#10445)", () => {
+    expect(sessionTranscriptDirs({ HOME: "/home/soleur" })).toEqual(["/home/soleur/.claude/projects"]);
+    expect(sessionTranscriptDirs({ HOME: "/h", CLAUDE_CONFIG_DIR: "/cfg" })).toEqual([
+      "/h/.claude/projects",
+      "/cfg/projects",
+    ]);
+    expect(sessionTranscriptDirs({ HOME: "relative" })).toEqual([]);
+  });
+
+  it("the production config denies the peer-socket and transcript dirs by literal (#10445)", () => {
+    const deny = buildAgentSandboxConfig(own).filesystem.denyRead;
+    expect(deny).toContain("/tmp/cc-socks");
+    expect(deny).toContain(join(process.env.HOME ?? "/root", ".claude", "projects"));
   });
 
   // #10445: with the knob off the SDK wraps EVERY Bash command in its embedded
@@ -313,6 +361,7 @@ describe("buildAgentSandboxConfig — GitHub egress variant (#5041 follow-up)", 
       "/sys",
       process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
       ...peerMessagingSocketDirs(),
+      ...sessionTranscriptDirs(),
     ]);
   });
 

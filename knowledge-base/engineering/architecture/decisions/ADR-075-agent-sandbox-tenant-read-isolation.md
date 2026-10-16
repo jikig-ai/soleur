@@ -415,10 +415,11 @@ kernel stream it needed.
 
 ## Addendum — 2026-10-16 (#10445): AF_UNIX blocking inside the inner sandbox is deliberately not enforced
 
-**Context.** The 2026-10-11 addendum above recorded that the vendored `apply-seccomp` multicall
-"dies at `unshare(CLONE_NEWUSER)` on every kernel posture measured" and treated that as inert. It was not:
-the vendored builder wraps **every** sandboxed command in that helper (its job is to block `socket(AF_UNIX)`
-for the command), so under the shim's `--add-seccomp-fd` filter every hosted Bash call failed with
+**Context.** The #8752 plan recorded the vendored `apply-seccomp` helper as "inert today (our config sets no
+`allowUnixSockets`)", and the 2026-10-11 addendum above (its "Invariance caveat") recorded that the multicall "dies at
+`unshare(CLONE_NEWUSER)` on every kernel posture measured". The first was false, and the second was measured on a host
+that denies unprivileged `NEWUSER` in the container, not on production's posture. The vendored builder wraps **every**
+sandboxed command in that helper (its job is to block `socket(AF_UNIX)` for the command), so under the shim's `--add-seccomp-fd` filter every hosted Bash call failed with
 `apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted` from the first production deploy of
 `web-v0.324.3` (2026-10-06) until this change. The incident record is the PIR
 `knowledge-base/engineering/operations/post-mortems/hosted-agent-bash-apply-seccomp-userns-eperm-postmortem.md`.
@@ -429,17 +430,32 @@ nested-userns / `clone3` filter injected by the shim is **unchanged**. Rejected:
 the filter, because a seccomp filter cannot key on the caller and the exception would re-open nested user
 namespaces for every sandboxed process.
 
-**Residual and its bounds.** A tenant's Bash can now create and connect AF_UNIX sockets inside its sandbox, and
-bwrap's `--ro-bind / /` leaves sibling sessions' pathname sockets in the shared temp dir visible. This is bounded
-by authentication on the socket, not by the filter: `test/sandbox-wrapped-command-runtime.test.ts` (G2) runs two
-real SDK sessions and requires that, through every visible socket, a request with no credential and a request with a
-wrong credential both get `407`, while the caller's own credential is accepted by its own socket (the negative
-control that the check is live). That test runs on a CI runner; sockets of the host runtime (docker, dbus) are a
-property of the run tuple and are checked separately (see the production-tuple census in
-`infra/sandbox-masked-proc-docker.test.sh`, when present). The gateway-side bridge is governed by ADR-051 and ADR-278.
+**Residual and its bounds.** The SDK helper was the per-command AF_UNIX block until 2026-10-06 (when #9595 made it
+fail). This change returns to a state with no AF_UNIX block, which is weaker than the pre-incident baseline in this
+dimension: a tenant's Bash can create and connect AF_UNIX sockets inside its sandbox, and bwrap's `--ro-bind / /`
+leaves sibling sessions' pathname sockets in the shared temp dir visible. The exposure is bounded by:
+
+1. Per-session proxy-credential auth on the sibling bridge sockets. `test/sandbox-wrapped-command-runtime.test.ts` (G2)
+   runs two real SDK sessions and requires that, through every visible socket, a request with no credential and a
+   request with a wrong credential both get `407`, while the caller's own credential is accepted by its own socket (the
+   negative control). This is proven for HTTP CONNECT; SOCKS auth was established by reading the vendored binary and is
+   not yet tested (#10455).
+2. Masks over the CLI peer-messaging socket directories (`peerMessagingSocketDirs()`: the union of `cc-socks` under
+   `XDG_RUNTIME_DIR`, `CLAUDE_CODE_TMPDIR`, `TMPDIR` and `/tmp`, plus `/tmp/cc-socks-<uid>`). The peer-messaging
+   protocol's own auth was not characterised, so the mask, not auth, is the control there.
+3. A mask over the session-transcript directory (`$HOME/.claude/projects`, and `$CLAUDE_CONFIG_DIR/projects` when set),
+   because a sibling's proxy credential printed by `env` and persisted in a shared-HOME transcript would otherwise be
+   usable against that sibling's bridge socket; G2 asserts the sandbox sees none.
+4. Per-command `--unshare-net`, which bounds abstract-namespace sockets (asserted in the runtime test's spawn argv).
+
+Load-bearing assumption: SDK proxy auth is the only remaining AF_UNIX control for the bridge sockets. Sockets of the
+host runtime (docker, dbus) are a property of the run tuple and are checked by the pathname-socket census in
+`infra/sandbox-masked-proc-docker.test.sh`. The census has limits: one idle session in the suite image
+(which has none of production's `/workspaces` or plugin mounts), and no abstract sockets. The egress forwarder is a TCP loopback listener, outside the
+per-command network namespace, so it is not covered by these socket controls.
 
 **Follow-up.** If the SDK changes how the proxy sockets authenticate, or a decision is made to enforce AF_UNIX
 blocking again, the replacement is a single `socket(AF_UNIX)` deny in the one bwrap-level filter (`socketpair` stays
-allowed: libuv child processes need it), tracked in a follow-up issue. The vendored-binary pins in
+allowed: libuv child processes need it), tracked in #10455. The vendored-binary pins in
 `test/sandbox-vendored-argv-tail.test.ts` (helper-selection literals and the settings mapping) turn red on an SDK bump
 that changes how the helper is selected, so the premise is re-proved rather than inherited.
