@@ -9,7 +9,7 @@ export OUT="${ITEM_I_DIR:-/var/tmp/item-i}"
 REPO="${ITEM_I_REPO:-jikig-ai/soleur}"; export REPO
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WINDOW_START="${ITEM_I_LEG_START:-2026-09-25T00:00:00Z}"   # sharded deploy-script-tests legs landed (#8763)
-mkdir -p "$OUT/ann" "$OUT/to" "$OUT/legs" "$OUT/legs-logs" "$OUT/mon-logs"
+rm -f "$OUT/leg-fetch-failures.txt"; mkdir -p "$OUT/ann" "$OUT/to" "$OUT/legs" "$OUT/legs-logs" "$OUT/mon-logs"
 
 # ---- 1. monitor history (continue-on-error pins every job conclusion to success, so the
 #         verdict is the SOLEUR_MAIN_HEALTH annotation, never the conclusion) ---------------
@@ -46,11 +46,19 @@ awk -F'\t' '$4!="" && $4!="null"{print $1" "$4}' "$OUT/outcomes.tsv" \
 gh run list -R "$REPO" --workflow infra-validation.yml --event push --branch main --limit 500 \
   --json databaseId,conclusion,createdAt,headSha > "$OUT/iv-push.json" || exit 1
 one_legs() {
-  rid="$1"
-  gh api "repos/$REPO/actions/runs/$rid/jobs?per_page=100" --jq '.jobs[]|select(.name|test("^deploy-script-tests \\("))|"\(.id)\t\(.name)\t\(.conclusion)\t\(.started_at)\t\(.completed_at)"' 2>/dev/null | sed "s/^/$rid\t/" > "$OUT/legs/$rid.tsv"
+  # Fetch raw JSON first and retry: a transient API error body must never reach legs.tsv as data
+  # (a 2026-10-16 re-run parsed a 500 "Server Error" body into three bogus rows).
+  rid="$1"; raw="$OUT/legs/$rid.json"; ok=0
+  for _try in 1 2 3 4; do
+    if gh api "repos/$REPO/actions/runs/$rid/jobs?per_page=100" > "$raw" 2>/dev/null && jq -e '.jobs|type=="array"' "$raw" >/dev/null 2>&1; then ok=1; break; fi
+    sleep 3
+  done
+  if [[ $ok -ne 1 ]]; then echo "LEG FETCH FAILED run $rid" >> "$OUT/leg-fetch-failures.txt"; : > "$OUT/legs/$rid.tsv"; return 0; fi
+  jq -r '.jobs[]|select(.name|test("^deploy-script-tests \\("))|"\(.id)\t\(.name)\t\(.conclusion)\t\(.started_at)\t\(.completed_at)"' "$raw" | sed "s/^/$rid\t/" > "$OUT/legs/$rid.tsv"
 }
 export -f one_legs
 jq -r --arg s "$WINDOW_START" '.[]|select(.createdAt>=$s)|.databaseId' "$OUT/iv-push.json" | xargs -P 6 -I{} bash -c 'one_legs {}'
+[[ -s "$OUT/leg-fetch-failures.txt" ]] && { echo "ABORT: leg fetch failures:"; cat "$OUT/leg-fetch-failures.txt"; exit 1; }
 cat "$OUT"/legs/*.tsv > "$OUT/legs.tsv"
 awk -F'\t' '$4=="failure"{print $1"\t"$2}' "$OUT/legs.tsv" > "$OUT/failed-legs.tsv"
 one_log() { f="$OUT/legs-logs/$2.log"; [[ -s "$f" ]] || gh api --allow-escape-sequences "repos/$REPO/actions/jobs/$2/logs" > "$f" 2>/dev/null; }

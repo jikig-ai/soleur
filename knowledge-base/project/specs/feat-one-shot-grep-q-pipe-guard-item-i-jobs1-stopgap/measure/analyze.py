@@ -66,6 +66,11 @@ print('M1 infra -P values:', dict(collections.Counter(v['P'] for v in V.values()
 # ---- M2/M3 leg data (-P 4) -----------------------------------------------------------------------
 iv = {str(r['databaseId']): r for r in json.load(open(D + 'iv-push.json'))}
 legs = rows('legs.tsv')
+# instrument self-check: every leg row is a full row and every run with legs has exactly 4 of them
+bad = [l for l in legs if len(l) < 6 or not l[1].isdigit() or l[3] not in ('success', 'failure', 'cancelled', 'skipped')]
+assert not bad, 'INSTRUMENT: malformed leg rows (a fetch error leaked into legs.tsv): %r' % bad[:3]
+_per = collections.Counter(l[0] for l in legs)
+assert set(_per.values()) == {4}, 'INSTRUMENT: runs without exactly 4 legs: %r' % {r: n for r, n in _per.items() if n != 4}
 lc = collections.Counter(l[3] for l in legs)
 print('M2 legs (push-to-main, since 2026-09-25):', len(legs), dict(lc), 'runs:', len({l[0] for l in legs}))
 

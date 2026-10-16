@@ -167,6 +167,9 @@ jobs:
     # The infra figure is the standalone step on the same run, cold and sequential, with the
     # bounded in-container apt cycle already merged on that branch (the apt stall had inflated
     # earlier infra figures). Both steps are expected to keep growing with the suite set.
+    # That infra figure was measured at the sequential width; since #7432 the infra step runs at
+    # the runner's default width, so the 60-minute ceiling is now over-provisioned for it (the
+    # ceiling and its Sentry coupling are deliberately not re-derived here).
     #
     # Rule: roundup5(x) = 5*ceil(x/5); minutes fractional to 2dp
     #       tests_step = max(30, roundup5(tests_max * 1.5))
@@ -325,20 +328,31 @@ jobs:
         timeout-minutes: 110 # derived from run 36950488321 (uncensored); see the TIMEOUT BUDGET block above
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # JOBS=1 -- SEQUENTIAL, deliberately, and set on BOTH suite steps rather
-          # than at workflow scope. The runner defaults to min(nproc,6), i.e. -P 4
-          # on a 4-core hosted runner, which oversubscribes it: measured across
-          # SEVEN executions of the same 92-suite set on an unchanged tree, three
-          # failed naming four different suites, while -P 1 and -P 6-on-16-cores
-          # were clean. Different failure sets on an unchanged tree is a harness
-          # defect (#7376), and at that rate an armed monitor files a spurious P1
-          # every third run -- worse than the silence this PR removes.
+          # JOBS=1 -- SEQUENTIAL, deliberately, on THIS step only (the infra step below
+          # runs at the runner's default width; see the last paragraph). The tests
+          # step runs the nested infra runner whenever the branch diff touches
+          # apps/web-platform/infra/, and that nested run needs the pin. The pin is
+          # at step scope, NOT workflow scope: node-gyp reads JOBS as its `make -j`
+          # width, so a workflow-level value also serialises native rebuilds in
+          # `bun install` and `npm install -g`.
           #
-          # NOT at workflow scope: node-gyp reads JOBS as its `make -j` width, so a
-          # workflow-level value also serialises native rebuilds in `bun install`
-          # and `npm install -g`. Step scope covers both invocations that matter --
-          # the standalone runner below, and the NESTED one inside the tests step
-          # (which fires whenever the branch diff touches apps/web-platform/infra/).
+          # Why the pin existed: the runner defaults to min(nproc,6), i.e. -P 4 on a
+          # 4-core hosted runner, and a 2026-08 measurement across SEVEN executions of
+          # the same 92-suite set on an unchanged tree saw three fail naming four
+          # different suites, while -P 1 and -P 6-on-16-cores were clean (#7376),
+          # which would have filed a spurious P1 every third run.
+          #
+          # Why the infra step no longer carries it (Item I of the grep -q series,
+          # #9217; tracker #7432): the infra-validation `deploy-script-tests` legs
+          # run the SAME runner at -P 4 on the same hosted 4-core class (688 leg
+          # executions on push to main from 2026-09-25 to 2026-10-16: 609 success,
+          # 75 failure, none shown parallel-only), while the sequential infra step
+          # no longer fits its 60-minute ceiling at the current suite count: 81 of
+          # the 269 monitor runs that could deliver a verdict (30%) were killed at
+          # the ceiling and delivered none. On `main` the nested runner is skipped
+          # in this step, so this pin affects the branch-diff case only. Guard (12)
+          # in plugins/soleur/test/main-health-monitor-workflow.test.sh asserts both
+          # halves, and the revert trigger is recorded on #7432.
           JOBS: 1
         run: |
           set +e
@@ -365,8 +379,6 @@ jobs:
         timeout-minutes: 60 # derived from run 36950488321 (uncensored); see the TIMEOUT BUDGET block above
         env:
           TEST_GROUP: infra
-          # See the JOBS note on the tests step above.
-          JOBS: 1
         run: |
           set +e
           t0=$SECONDS
