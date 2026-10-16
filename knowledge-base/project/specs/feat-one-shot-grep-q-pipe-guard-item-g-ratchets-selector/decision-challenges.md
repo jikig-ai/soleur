@@ -9,6 +9,8 @@ the full evidence is in the plan, `knowledge-base/project/plans/2026-10-16-fix-g
 |---|---|---|
 | Item G: implement `--ratchets` in scripts/test-all.sh, or record not fixed | technical | Ruled by CTO agent, 2026-10-16: record as not fixed; do not edit the runner - cost is a full-battery `--affected` degrade plus armed `--pr-gated` batteries, and the pre-push ratchet lane plus `--affected` already buy the property |
 | Pipe-guard lane gap (option C): in this PR or a follow-up | technical | Ruled by CTO agent, 2026-10-16: separate follow-up issue, conditional-tier lane member preferred - Item G is the selector only and the unconditional-versus-conditional trade is its own decision |
+| Pipe-guard lane gap (option C) after the Phase 1 measurement: file the follow-up, or withdraw (supersedes the row above) | technical | Ruled by CTO agent, 2026-10-16: withdraw option C and file no issue - the guard is selected for 98/98 producers and 97/97 owner suites (`selection-measurement.md`), so no gap is named; the stage-1 lane omits the guard by design and stage-2 `--affected` selects it |
+| Guard header sentence `DOES NOT SELECT THIS GUARD` (now measurably false): correct in this PR or leave | technical | Ruled by CTO agent, 2026-10-16: correct it inline as a comment-only edit with the measured fact, in the same commit as the `STILL OPEN` edit - a stale comment would send the next reader back to option C |
 | Meaning of "forbidden-to-edit" for scripts/test-all.sh | technical | Ruled by CTO agent, 2026-10-16: a cost label (PR_GATE_MACHINERY_PATHS arming plus the `runner-changed` full-battery degrade), not a prohibition - no hook, CODEOWNERS entry or AGENTS rule bans the edit |
 
 ## Plan-review items not applied (taste)
@@ -18,7 +20,7 @@ Raised by the DHH, Kieran and simplicity reviewers; all mechanical findings were
 ## 1. Taste: drop the guard-header edit and fold it into the follow-up issue
 
 - Raised by: simplicity reviewer (the edit answers no ask and is the only deliverable that touches a code path).
-- Kept, narrowed: the `STILL OPEN` sentence in `.claude/hooks/grep-q-pipe-guard.test.sh` lists Item G as open; after the #9217 record it would assert a falsehood, and the Item D, E and H records updated that same sentence. The neighbouring `DOES NOT SELECT THIS GUARD` sentence moved to the follow-up as the reviewers asked. Decide: keep the one-sentence edit (default) or drop it and let the follow-up own both.
+- Kept, narrowed: the `STILL OPEN` sentence in `.claude/hooks/grep-q-pipe-guard.test.sh` lists Item G as open; after the #9217 record it would assert a falsehood, and the Item D, E and H records updated that same sentence. The neighbouring `DOES NOT SELECT THIS GUARD` sentence moved to the follow-up as the reviewers asked (superseded: the second CTO ruling corrects it in this PR, see the Decision Classes table). Decide: keep the one-sentence edit (default) or drop it and let the follow-up own both.
 
 ## 2. Taste: cut the six-path sample to the three already measured
 

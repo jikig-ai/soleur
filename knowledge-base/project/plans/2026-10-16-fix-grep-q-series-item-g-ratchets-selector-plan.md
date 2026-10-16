@@ -45,12 +45,17 @@ that would run "exactly the `grep -lis ratchet` set" as one local command. The s
 2. Is the selector still needed? No: the property it buys is already bought by `--affected` plus the pre-push
    ratchet lane, and the membership it proposes is a text-mention heuristic (Q2).
 3. Change, or recorded as not fixed? **Recorded as not fixed** (CTO ruling below), with the one genuine residual
-   gap split into a separate tracked follow-up instead of being folded into this PR.
+   gap claimed by the guard header measured to be zero, so no follow-up is filed (see the supersession note below).
 
-**Ruled by CTO agent, 2026-10-16: B plus C filed as a separate follow-up issue; do not implement A.** The runner
+**Ruled by CTO agent, 2026-10-16: record Item G as not fixed; do not implement the runner edit.** The runner
 edit costs a full-battery `--affected` degrade and arms every `--pr-gated` battery, and buys nothing the existing
-lanes do not already give. The residual gap (the pipe guard is not a lane member) is real, small, and a separate
-decision about a lane member, so it gets its own issue.
+lanes do not already give.
+
+> **Superseded 2026-10-16 (Phase 1 measurement):** the first ruling also split a "pipe guard is not selected" gap into a follow-up
+> issue (option C). Phase 1 measured the guard's full population and found no gap: 98 of 98 producer files and 97 of 97 owner suites
+> are selected. **Ruled by CTO agent, 2026-10-16 (second ruling): option C withdrawn, no follow-up issue is filed; the header sentence that
+> claimed the gap is corrected inline in this PR.** Where the sections below still describe option C as a follow-up, they record the plan as it
+> stood before the measurement; the operative scope is this paragraph, Phase 1 to 4 and the Acceptance Criteria.
 
 The PR is a decision record: no edit to `scripts/test-all.sh`, `scripts/lib/test-affected-paths.sh` or
 `scripts/lib/test-relevance-paths.sh`. It does not close #9217 and does not emit the series DONE promise.
@@ -109,7 +114,11 @@ Checked against `origin/main` at `ee8644bded`:
   content-reference heuristic that `TEST_GROUP=affected` (#8591) uses and #8621 wants converged away from; a declared
   `RATCHET_SUITES` list would duplicate `ALWAYS_ON_SUITES`.
 
-### Q3. The genuine residual gap (separate follow-up, option C)
+### Q3. The residual gap claimed by the guard header (measured: none; option C withdrawn)
+
+> **Superseded 2026-10-16:** the subsections below are the pre-measurement reading. The measurement is in
+> `knowledge-base/project/specs/feat-one-shot-grep-q-pipe-guard-item-g-ratchets-selector/selection-measurement.md`: 98/98 producers and 97/97 owner
+> suites selected (51 and 33 of them are outside the declared edge regex and are reached through derived edges), 0 `AFFECTED_FALLBACK`.
 
 - `.claude/hooks/grep-q-pipe-guard.test.sh` is not a lane member (CTO read the 12-row `LANE_MEMBERS` table). Measured
   runtime: `rc=0` in 18 s wall at load about 10 (CTO measured 19 s), so it fits a lane tier.
@@ -146,7 +155,7 @@ Checked against `origin/main` at `ee8644bded`:
 |---|---|---|---|
 | `--ratchets` flag in `scripts/test-all.sh` | P1 one local ratchet command | `scripts/pre-push-ratchet-lane.sh --print-members` (lane) and `scripts/test-all.sh --affected` (ALWAYS_ON); grepped `scripts/lib/test-affected-paths.sh` and the lane table | **Cut** |
 | membership = `grep -lis ratchet` set | P2 repo-global ratchets seen locally | the two incident ratchets are lane members; set measured as a text-mention heuristic | **Cut** |
-| (CTO) lane/edge coverage of the pipe guard | P3 a producer-file edit cannot reach CI before the guard runs locally | not covered for some producers (measured) | **Split to follow-up issue** |
+| (CTO) lane/edge coverage of the pipe guard | P3 a producer-file edit cannot reach CI before the guard runs locally | covered for 98/98 producers and 97/97 owner suites (measured in Phase 1) | **Cut (option C withdrawn)** |
 
 ### Value-Proposition Measurement (Phase 0.6c)
 
@@ -176,9 +185,9 @@ a selector that would save the minutes between "run ~36 named suites" and a lane
 |-----------|-----------------------------------|---------|
 | #9217 comment recording Item G as not fixed | "recorded on #9217 as not fixed with a reason and a `Ruled by CTO agent` line" | asked |
 | `decision-challenges.md` | "Persist every decision as a row" | asked |
-| Follow-up issue for the pipe-guard lane gap | — | inferred — justification: the CTO ruled C is real but out of scope, and `wg-when-deferring-a-capability-create-a` requires a tracking issue for a deferred capability; without it the gap is invisible |
-| One-sentence amendment of the guard header's STILL OPEN list | — | inferred — justification: after this PR the header would still list Item G as open, and the Item D/E/H records already updated that same sentence; a stale claim in the guard file rots |
-| Sampling extra producer paths with `--print-selection` | — | inferred — justification: the follow-up issue must state a measured gap, and the guard header's figure was falsified by the first probe |
+| Follow-up issue for the pipe-guard lane gap | — | withdrawn 2026-10-16 — the Phase 1 measurement found no gap, so no capability is deferred and `wg-when-deferring-a-capability-create-a` does not apply |
+| Amendment of the guard header (STILL OPEN list and the `DOES NOT SELECT THIS GUARD` sentence) | — | inferred — justification: after this PR the header would still list Item G as open, and its selection claim was falsified by the Phase 1 measurement; a stale claim in the guard file sends the next reader to re-open option C |
+| Sampling extra producer paths with `--print-selection` | — | inferred — justification: the guard header's figure was falsified by the first probe, so the full population was measured instead of a sample |
 | Plan review and tasks.md | — | inferred — justification: the plan skill's enforcement contract (plan-review, then tasks.md) applies to every plan |
 
 ### Split Assessment
@@ -196,7 +205,7 @@ a selector that would save the minutes between "run ~36 named suites" and a lane
 
 **Status:** reviewed
 **Assessment:** CTO agent ruled (2026-10-16): record Item G as not fixed; no edit to the runner; split the pipe-guard lane
-gap into a separate follow-up (conditional lane member preferred). No other domain has an implication: this is test-gate
+gap into a follow-up (superseded: the measurement found no gap). No other domain has an implication: this is test-gate
 tooling with no user-facing, legal, financial or brand surface.
 
 ## User-Brand Impact
@@ -216,80 +225,55 @@ specs files. #8659 and #7942 name `scripts/test-all.sh`, which this PR deliberat
 
 ## Files to Edit
 
-- `.claude/hooks/grep-q-pipe-guard.test.sh`: only the header sentence that begins `# STILL OPEN (listed, not planned here)`. Say
-  Item G is recorded as not fixed with its reason on #9217 and list what remains (Item I, the Wave A3 carriers, the #9639 and #9638
-  triage). Comment lines only; the suite must still pass. The neighbouring `THE PRE-PUSH AFFECTED LANE DOES NOT SELECT THIS GUARD`
-  sentence is left alone: its correction belongs to the follow-up issue, which owns the measurement.
+- `.claude/hooks/grep-q-pipe-guard.test.sh`: the header sentences that begin `# STILL OPEN (listed, not planned here)` and
+  `# THE PRE-PUSH AFFECTED LANE DOES NOT SELECT THIS GUARD`. The first says Item G is recorded as not fixed and lists what remains (Item I,
+  the Wave A3 carriers, the #9639 and #9638 triage); the second is replaced by the measured fact (98/98 producers, 97/97 owner suites
+  selected). Comment lines only; the suite must still pass.
 
 ## Files to Create
 
 - `knowledge-base/project/plans/2026-10-16-fix-grep-q-series-item-g-ratchets-selector-plan.md` (this file)
 - `knowledge-base/project/specs/feat-one-shot-grep-q-pipe-guard-item-g-ratchets-selector/tasks.md`
 - `knowledge-base/project/specs/feat-one-shot-grep-q-pipe-guard-item-g-ratchets-selector/decision-challenges.md`
+- `knowledge-base/project/specs/feat-one-shot-grep-q-pipe-guard-item-g-ratchets-selector/selection-measurement.md` (the Phase 1 evidence)
 
-GitHub artifacts (not files): one comment on #9217, one new follow-up issue (child of #9217).
+GitHub artifacts (not files): one comment on #9217. No follow-up issue (option C withdrawn).
 
 ## Implementation Phases
 
-### Phase 1. Refresh the evidence (read-only)
+### Phase 1. Refresh the evidence (read-only) — done 2026-10-16
 
-1. `git fetch origin main`; confirm `git grep -e '--ratchets' origin/main -- scripts/test-all.sh` prints nothing and #9217 has no
-   newer Item G comment (`gh issue view 9217 --json comments --jq '.comments[-1].createdAt'`).
-2. Sample the pipe-guard selection over at least six producer paths drawn from the guard's own derived pairs (the `JOINED:` lines the
-   guard prints, or its `PJ-DERIVE` recipe), one path per `--print-selection` call (about 13 s each unloaded):
-   `bash scripts/test-all.sh --print-selection --paths=<path> 2>&1 | grep 'grep-q-pipe-guard\|AFFECTED_SUMMARY'`. Record
-   selected/not-selected counts. Already measured: `scripts/cutover-inngest.sh` 1, `apps/web-platform/infra/web-private-nic-guard.sh` 1,
-   `scripts/expenses-verify-by-check.sh` 0 (provisional: not shown to be a producer in the guard's sense), `.claude/hooks/grep-q-pipe-guard.test.sh` 1.
-   Only confirmed numbers go into the follow-up issue.
-3. `decision-challenges.md` is already written (see Files to Create); re-read it and add the plan-review rows.
+1. `git fetch origin main`; `git grep -e '--ratchets' origin/main -- scripts/test-all.sh` prints nothing; #9217's newest comment is the
+   Item F record of 2026-10-15. Held.
+2. Measured the guard's whole population, not a sample: pairs from the guard's own `PJ-DERIVE` block (98 producer files, 97 owner suites);
+   the declared edge regex printed on the `AFFECTED_SELECTED` line matches 47 producers and 64 owner suites; the other 51 and 33 were each
+   run through `bash scripts/test-all.sh --print-selection --paths=<path>`. Result: 98/98 and 97/97 selected, 0 `AFFECTED_FALLBACK`, all rc 0.
+   Per-path rows: `selection-measurement.md`. The two earlier "not selected" probe paths were not guard-derived pairs
+   (`scripts/expenses-verify-by-check.sh` is not in the pair population).
+3. Second CTO ruling (the measurement falsified option C): see `decision-challenges.md`.
 
-### Phase 2. File the follow-up issue (option C)
+### Phase 2. (withdrawn) Follow-up issue
 
-`gh issue create` with labels `meta/machinery`, `type/chore`, `domain/engineering`, `priority/p3-low` and milestone
-`Post-MVP / Later` (the filing gate `guardrails:require-filing-justification` needs a measured fix size or the machinery
-ledger; the body supplies both).
-Title: `grep -q pipe guard not selected by the pre-push lane for producer or owner-suite edits`. Body: the gap and the Phase 1 sample
-(confirmed numbers only); the 18 s runtime; the proposal: a `conditional`-tier member in `scripts/pre-push-ratchet-lane.sh` triggered on
-producer or owner-suite paths, plus its row in `scripts/pre-push-ratchet-lane.test.sh`; the rejected alternative (widening the declared
-edge in `scripts/lib/test-affected-paths.sh`, which is a `runner-changed` trigger and would force a full battery on every edit); the note
-that the guard's effective edges are derived or merged, not only the 12-entry declared array; and that the guard header's `DOES NOT SELECT
-THIS GUARD` sentence should be corrected to the measured form as part of that follow-up. Child of #9217 (`Ref #9217`).
+No follow-up issue is filed: the measured gap is zero. If a future measurement finds a pair that is not selected, file it then.
 
 ### Phase 3. Comment on #9217
 
-Post with `gh issue comment 9217 --body-file <file>`; do not close the issue. Text (fill `<new>` with the Phase 2 issue number
-and `<counts>` with the confirmed Phase 1 sample; the posted text must contain neither slot):
-
-```text
-## Item G (`--ratchets` selector in scripts/test-all.sh): recorded as not fixed
-
-Ruled by CTO agent, 2026-10-16: not implemented; the existing lanes already answer the need.
-
-- "Forbidden-to-edit" is a cost label, not a prohibition. No hook, CODEOWNERS entry or AGENTS rule bans the edit. Any
-  non-registration-only edit of scripts/test-all.sh (a PR_GATE_MACHINERY_PATHS member) arms every --pr-gated battery on CI and
-  degrades the author's own --affected and pre-push stage 2 to the full battery (AFFECTED_FALLBACK reason=runner-changed, about
-  117 min). #9552 bounded only registration-only edits.
-- Need: scripts/pre-push-ratchet-lane.sh (#9400, pre-push stage 1) runs the diff-reachable cheap ratchets, including the two
-  from the 2026-10-05 incident learning (trap-ownership, fixture-relative-assert). scripts/test-all.sh --affected adds the
-  114 always-on suites (as of ee8644bded).
-- Membership: the `grep -lis ratchet` set is 36 files (27 explicitly registered, 9 via SUITE_GLOBS only; 10 in ALWAYS_ON_SUITES,
-  3 lane member files). It is a text-mention heuristic that includes non-ratchets. A selector on it is the content-reference
-  heuristic #8621 wants converged away from; a declared list would duplicate ALWAYS_ON_SUITES.
-- Residual real gap, split out: .claude/hooks/grep-q-pipe-guard.test.sh (18 s measured) is not a lane member and the declared
-  edge selects it for some producer paths and not others (sample: <counts>). Tracked in #<new>.
-
-Remaining in the series: Item I, the Wave A3 carriers, the #9639/#9638 triage. This tracker stays open.
-```
+Post with `gh issue comment 9217 --body-file <file>`; do not close the issue. The posted text must contain no unfilled slot. Content:
+the ruling line `Ruled by CTO agent, 2026-10-16`; "forbidden-to-edit" is a cost label, not a prohibition (the `PR_GATE_MACHINERY_PATHS`
+arming and the `runner-changed` degrade, about 117 min); the need is already met by the pre-push ratchet lane and `--affected` plus the
+114 always-on suites (as of `ee8644bded`); the `grep -lis ratchet` set is a 36-file text-mention heuristic; the measured pipe-guard selection
+(98/98 producers, 97/97 owner suites) with the evidence file named; the stale header sentence corrected in this PR; the two earlier probe
+paths were outside the pair population; the remaining series items (Item I, the Wave A3 carriers, the #9639/#9638 triage); the tracker stays open.
 
 ### Phase 4. Amend the guard header
 
-Edit only the `STILL OPEN` sentence as described under Files to Edit. Then run the guard (`bash .claude/hooks/grep-q-pipe-guard.test.sh`,
+Edit the two header sentences as described under Files to Edit. Then run the guard (`bash .claude/hooks/grep-q-pipe-guard.test.sh`,
 expect rc 0) and the real-diff selection preview `bash scripts/test-all.sh --print-selection` (expect no `AFFECTED_FALLBACK` line).
 
 ### Phase 5. Ship and postmerge
 
 Commit plan, tasks and decision-challenges with the header edit. PR body uses `Ref #9217` (never `Closes`), quotes the ruling
-line, lists the follow-up issue. After merge, run `soleur:postmerge` for the PR. Do not emit the series DONE promise.
+line, states the measured pipe-guard selection. After merge, run `soleur:postmerge` for the PR. Do not emit the series DONE promise.
 
 ## Decisions
 
@@ -299,7 +283,7 @@ The three CTO rulings are the rows of `knowledge-base/project/specs/feat-one-sho
 ## Non-Goals
 
 - No edit to `scripts/test-all.sh`, `scripts/lib/test-affected-paths.sh`, `scripts/lib/test-relevance-paths.sh` or
-  `scripts/pre-push-ratchet-lane.sh`. The lane member (option C) is the follow-up's work.
+  `scripts/pre-push-ratchet-lane.sh`. Option C (a lane member) is withdrawn.
 - No change to #9971, #9950, #10074 or #10313.
 - Items I, the Wave A3 carriers and the #9639/#9638 triage are not started here.
 
@@ -312,13 +296,13 @@ The three CTO rulings are the rows of `knowledge-base/project/specs/feat-one-sho
   and not `scripts/lib/test-relevance-paths.sh` or `scripts/pre-push-ratchet-lane.sh`. Pipeline-written files
   (the generated knowledge-base index if regenerated, `specs/<branch>/session-state.md`) are allowed alongside the three created files and the one header edit.
 - [ ] `bash scripts/test-all.sh --print-selection` (the real diff, no `--paths`) prints no `AFFECTED_FALLBACK` line.
-- [ ] `bash .claude/hooks/grep-q-pipe-guard.test.sh` exits 0 after the header edit. The edit is non-empty and comment-only:
+- [ ] `bash .claude/hooks/grep-q-pipe-guard.test.sh` exits 0 after the header edit. The edit is non-empty and comment-only (it replaces the `STILL OPEN` and `DOES NOT SELECT THIS GUARD` sentences):
   `git diff -U0 origin/main...HEAD -- .claude/hooks/grep-q-pipe-guard.test.sh | grep -c '^[+-][^+-]'` prints a number of at least 1, and
   `git diff -U0 origin/main...HEAD -- .claude/hooks/grep-q-pipe-guard.test.sh | grep -E '^[+-][^+-]' | grep -vE '^[+-][[:space:]]*#'` prints nothing.
 - [ ] `decision-challenges.md` has a `| Item | Class | Ruling |` table whose three CTO rows each start `Ruled by CTO agent, 2026-10-16:`.
-- [ ] The follow-up issue exists, is open, carries only confirmed Phase 1 numbers (not the guard header's figure), and references #9217.
+- [ ] No follow-up issue was filed for option C, and `selection-measurement.md` exists and states 98/98 producers and 97/97 owner suites selected.
 - [ ] #9217 carries the comment: `gh issue view 9217 --json state,comments --jq '[.comments[] | select(.body | test("Ruled by CTO agent, 2026-10-16"))] | length'`
-  prints at least 1, that comment names the follow-up number and contains neither `<new>` nor `<counts>`, and the issue state is still `OPEN`.
+  prints at least 1, that comment names `selection-measurement.md` and contains no unfilled slot, and the issue state is still `OPEN`.
 - [ ] The PR body contains `Ref #9217` and no `Closes #9217`.
 - [ ] Gates run with their own invocation: `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main`
   and `npx markdownlint-cli2` over the plan, `tasks.md` and `decision-challenges.md`.
@@ -344,7 +328,7 @@ competent engineer reading ADR-242 and the C4 files would not be misled after th
 
 ## Guard Contract
 
-Skipped (Phase 2.12): this PR delivers no guard, lint or gate. The follow-up issue (option C) would deliver one and carries its own contract.
+Skipped (Phase 2.12): this PR delivers no guard, lint or gate (option C, which would have, is withdrawn).
 
 ## Sharp Edges
 
