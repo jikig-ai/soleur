@@ -42,7 +42,7 @@ unauthorized merge or workflow dispatch on a user's repository ends trust in "th
 Be exact about the loss. Commit `fa06eef79a` (#2883, 2026-04-24) wrote that "the load-bearing safety net is the per-command
 confirmation (user reads the exact command before approving)", and
 `knowledge-base/project/learnings/2026-04-19-menu-option-ack-not-authorization-for-prod-writes.md` (#2618) records the incident
-behind it: an agent read a menu "A" as authorization for `terraform apply -auto-approve`. Inside a recorded delegation, for merge,
+behind it: an agent read a menu "A" as authorization for an unattended production infrastructure change (the `-auto-approve` form). Inside a recorded delegation, for merge,
 dispatch and revert only, this ADR removes the operator's per-command read of the exact command. The words merge, dispatch and
 revert name intents; the closed command set is merge, ready, dispatch of a named workflow file and PR creation (`gh pr create
 --fill`, scoped by a Scope item that names the act), and never a hook-gated form. It also makes the epic-start

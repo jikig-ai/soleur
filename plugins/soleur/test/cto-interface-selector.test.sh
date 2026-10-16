@@ -225,9 +225,9 @@ evaluate_cto() { # <cto.md> <base> [check|skip]   skip = the merge-base anchor i
   n_assess="$(selector_rules "$f" | awk -F'\t' '$3 == "assess" && $2 != "fallback" { print NR; exit }')"
   n_rule="$(selector_rules "$f" | awk -F'\t' '$3 == "rule" { print NR; exit }')"
   [[ -n "$n_assess" && -n "$n_rule" && "$n_assess" -lt "$n_rule" ]] || emit selector-assess-after-rule
-  selector_cues "$f" assess | grep -Fxq 'Structured advisory only' || emit selector-assess-cue-structured
-  selector_cues "$f" assess | grep -Fxq 'IMPLEMENTATION PLAN (not code)' || emit selector-assess-cue-plan
-  if selector_cues "$f" rule | grep -Fxq 'binding'; then emit selector-lowercase-binding; fi
+  grep -Fxq 'Structured advisory only' < <(selector_cues "$f" assess) || emit selector-assess-cue-structured
+  grep -Fxq 'IMPLEMENTATION PLAN (not code)' < <(selector_cues "$f" assess) || emit selector-assess-cue-plan
+  if grep -Fxq 'binding' < <(selector_cues "$f" rule); then emit selector-lowercase-binding; fi
   [[ "$sel" == *'case-sensitive'* ]] || emit selector-case-undeclared
 
   # Rule interface.
@@ -287,7 +287,7 @@ evaluate_cto() { # <cto.md> <base> [check|skip]   skip = the merge-base anchor i
 
   # The record format is defined once, in standing-delegation.md: no copy of it here. (The marker string
   # appears inside the discovery command; what is forbidden is the template's own whole-line marker.)
-  if printf '%s\n' "$body" | grep -Fxq '<!-- soleur-delegation v1 -->' || [[ "$body" == *'**Confirmation:**'* || "$body" == *'**Excluded (still operator-only):**'* ]]; then
+  if grep -Fxq '<!-- soleur-delegation v1 -->' <<<"$body" || [[ "$body" == *'**Confirmation:**'* || "$body" == *'**Excluded (still operator-only):**'* ]]; then
     emit format-duplicated
   fi
   return "$v"

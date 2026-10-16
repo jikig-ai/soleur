@@ -231,7 +231,7 @@ DENY_TOOLS='kubectl|supabase|psql|hcloud|ssh|scp|helm|docker|aws|gcloud|flyctl'
 OPS_TOOLS="$DENY_TOOLS|curl|wget|terraform|tofu|doppler|rm|dd|mkfs[.a-z0-9]*|nc|ncat|socat"
 CMDPOS_RE='(^|[;&|(`]|\$\()[[:space:]]*((env|timeout|nohup|xargs|sudo|nice|command|exec|time|setsid|stdbuf|doas)[[:space:]]+(-[^[:space:]]+[[:space:]]+|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+|[0-9]+[smhd]?[[:space:]]+)*)*'
 cmd_word() { # <text> <alternation of words>: 0 when the text runs one of them as a command
-  printf '%s\n' "$1" | grep -Eiq -- "${CMDPOS_RE}($2)([[:space:]]|\$)"
+  grep -Eiq -- "${CMDPOS_RE}($2)([[:space:]]|\$)" <<<"$1"
 }
 
 # is_denied <command>: the text backstop for the Excluded list, a SECOND layer behind the allowlist. It runs on the
@@ -258,7 +258,7 @@ is_denied() {
     '\|[[:space:]]*(sh|bash)([[:space:]]|$)'
   )
   for p in "${pats[@]}"; do
-    printf '%s\n%s\n' "$c" "$n" | grep -Eiq -- "$p" && return 0
+    grep -Eiq -- "$p" <<<"$c"$'\n'"$n" && return 0
   done
   return 1
 }
@@ -360,7 +360,7 @@ ops_readonly() {
     case "$t1 $t2 $t3" in
       # the pr-checks read is spelled in two halves on purpose: this table only ALLOWS a read-only text, it never reads CI state (the ci-head-verdict L1 census greps for the literal).
       "gh run view"*|"gh run list"*|"gh pr view"*|"gh pr list"*|"gh pr ch""ecks"*|"gh pr diff"*|"gh pr status"*|"gh issue view"*|"gh issue list"*|"gh workflow view"*|"gh workflow list"*|"gh release view"*|"gh release list"*|"gh repo view"*) ;;
-      "gh api"*) printf '%s\n' "$u" | grep -Eq -- '(^|[[:space:]])(-X|--method|-f|-F|--field|--raw-field|--input)' && fail_invalid non-delegable-command "A check, abort or stop text in the envelope would change something through the GitHub API, not just read." ;; # mut:ops-api
+      "gh api"*) grep -Eq -- '(^|[[:space:]])(-X|--method|-f|-F|--field|--raw-field|--input)' <<<"$u" && fail_invalid non-delegable-command "A check, abort or stop text in the envelope would change something through the GitHub API, not just read." ;; # mut:ops-api
       "git log"*|"git show"*|"git status"*|"git diff"*|"git rev-parse"*|"git ls-tree"*|"git cat-file"*|"git merge-base"*|"git describe"*|"git blame"*) ;;
       *) fail_invalid non-delegable-command "A check, abort or stop text in the envelope runs a command that changes something, and only reading is allowed there." ;; # mut:ops-readonly
     esac
@@ -400,7 +400,7 @@ ops_check() {
     rest="${rest/"$bt$span$bt"/ }"
   done
   case "$rest" in *[\;\&\|\<\>\$\`\\\{\}\*]*) fail_invalid command-not-delegable "The envelope's rollback holds shell characters, so it is not plain words or an allowed command." ;; esac # mut:ops-meta
-  printf '%s\n' "$rest" | grep -Eiq -- '(^|[^[:alnum:]_-])(wget|curl|bash|eval|nc|ncat|socat|python3?|perl|ruby|node|php)([^[:alnum:]_-]|$)|(^|[^[:alnum:]_-])sh[[:space:]]+-c|(run|execute|paste|download)[[:space:]]+(it|that|this|the[[:space:]]+script)|(^|[^[:alnum:]_-])gh[[:space:]]+(pr|workflow|issue|api|release|run|repo)' && fail_invalid non-delegable-command "The envelope's rollback tells the reader to fetch or run something, which is never delegated." # mut:ops-prose
+  grep -Eiq -- '(^|[^[:alnum:]_-])(wget|curl|bash|eval|nc|ncat|socat|python3?|perl|ruby|node|php)([^[:alnum:]_-]|$)|(^|[^[:alnum:]_-])sh[[:space:]]+-c|(run|execute|paste|download)[[:space:]]+(it|that|this|the[[:space:]]+script)|(^|[^[:alnum:]_-])gh[[:space:]]+(pr|workflow|issue|api|release|run|repo)' <<<"$rest" && fail_invalid non-delegable-command "The envelope's rollback tells the reader to fetch or run something, which is never delegated." # mut:ops-prose
 }
 
 # cmd_in_block <command> <file>: the command equals, byte for byte, a FULL line of the file.
@@ -413,7 +413,7 @@ rollback_named() {
   local r
   r="$(lower "$(trim "$1")")"
   [ "$(printf '%s' "$r" | wc -w | tr -d ' ')" -ge 3 ] || return 1
-  printf '%s' "$r" | grep -Eq "(^|[^a-z])(none|irreversible|cannot|unknown|tbd|todo|nothing|impossible|n/a)([^a-z]|\$)|can't|no[[:space:]]+rollback|not[[:space:]]+(reversible|possible|undoable)" && return 1
+  grep -Eq "(^|[^a-z])(none|irreversible|cannot|unknown|tbd|todo|nothing|impossible|n/a)([^a-z]|\$)|can't|no[[:space:]]+rollback|not[[:space:]]+(reversible|possible|undoable)" <<<"$r" && return 1
   return 0
 }
 
@@ -545,7 +545,7 @@ do_verify() {
       i=1
       while [ "$i" -le "$cnt" ]; do
         # the title is what follows `## Production Envelope` and an optional hyphen; match it case-insensitively
-        if sed -n "${i}p" "$WORK/sec.heads" | sed -e 's/^## Production Envelope//' -e 's/^[[:space:]]*-*[[:space:]]*//' | grep -qiF -- "$ANCHOR"; then n=$((n + 1)); sec="$WORK/sec.$i"; fi
+        if grep -qiF -- "$ANCHOR" < <(sed -n "${i}p" "$WORK/sec.heads" | sed -e 's/^## Production Envelope//' -e 's/^[[:space:]]*-*[[:space:]]*//'); then n=$((n + 1)); sec="$WORK/sec.$i"; fi
         i=$((i + 1))
       done
       [ "$n" -le 1 ] || fail_invalid parse-ambiguous "More than one envelope matches that title."
