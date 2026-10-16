@@ -212,6 +212,18 @@ class TestEntries(ScrubbedEnv):
         entries = lr.census([lr.Finding("a.py", "SIM115", 3, "m")], repo.root)
         self.assertEqual(entries[0][2], lr.anchor_of("c = open(x)"))
 
+    def test_census_hashes_a_last_line_that_has_no_trailing_newline(self):
+        repo = Repo(self)
+        repo.write("a.py", "x = 1\ny = open(p)")
+        entries = lr.census([lr.Finding("a.py", "SIM115", 2, "m")], repo.root)
+        self.assertEqual(entries[0][2], lr.anchor_of("y = open(p)"))
+
+    def test_census_counts_a_lone_carriage_return_as_a_line_break(self):
+        repo = Repo(self)
+        repo.write("a.py", "a\rb\rc = open(x)\r")
+        entries = lr.census([lr.Finding("a.py", "SIM115", 3, "m")], repo.root)
+        self.assertEqual(entries[0][2], lr.anchor_of("c = open(x)"))
+
     def test_census_rejects_a_pipe_or_newline_in_a_path(self):
         repo = Repo(self)
         for bad in ("a|b.py", "a\nb.py"):
@@ -290,6 +302,10 @@ class TestHelpers(ScrubbedEnv):
         with self.assertRaises(lr.InfraError) as ctx:
             lr._exec(missing, ["tool"], 5)
         self.assertIn("could not run", str(ctx.exception))
+
+    def test_clean_strips_bidi_and_zero_width_characters(self):
+        text = "a" + chr(0x202E) + "b" + chr(0x200B) + "c" + chr(0xFEFF) + "d" + chr(0x2066) + "e"
+        self.assertEqual(lr._clean(text), "a b c d e")
 
     def test_exec_always_bounds_and_decodes_utf8(self):
         seen = {}
@@ -724,9 +740,9 @@ class TestMergeBaseDelta(CheckBase):
         code, _ = self.update(base="HEAD")
         self.assertEqual(code, 0, "--base HEAD takes the committed baseline as the reference")
 
-    def test_under_ci_a_baseline_missing_where_the_script_exists_is_infrastructure(self):
-        self.repo.write("tools/ratchet.py", "x = 1\n")
-        base = self.repo.commit("the script landed without a baseline")
+    def test_under_ci_a_baseline_missing_where_the_script_defines_the_scope_is_infrastructure(self):
+        self.repo.write("tools/ratchet.py", 'SCOPES = {"fixture": {}}\n')
+        base = self.repo.commit("the scope landed without a baseline")
         self.update()
         cfg = dict(self.config, script="tools/ratchet.py")
         code, lines = self.check(cfg, base=base, extra_env={"CI": "true"})
@@ -736,6 +752,43 @@ class TestMergeBaseDelta(CheckBase):
         self.assertEqual(code, 0, "locally the comparison is skipped as before")
         code, _ = self.check(base=base, extra_env={"CI": "true"})
         self.assertEqual(code, 0, "no script at the base: this PR introduces both")
+
+    def test_a_new_scope_added_to_an_existing_script_is_admitted_under_ci(self):
+        self.repo.write("tools/ratchet.py", 'SCOPES = {"other": {}}\n')
+        base = self.repo.commit("a different scope exists")
+        self.update()
+        cfg = dict(self.config, script="tools/ratchet.py")
+        code, lines = self.check(cfg, base=base, extra_env={"CI": "true"})
+        self.assertEqual(code, 0)
+        self.assertIn("introduced by this diff", "\n".join(lines))
+
+    def test_a_rename_at_forty_percent_similarity_is_followed(self):
+        repo = Repo(self)
+        old = "".join("line-number-%02d-payload\n" % i for i in range(10))
+        repo.write("a.py", old)
+        base = repo.commit("base")
+        repo.git("mv", "a.py", "b.py")
+        repo.write("b.py", "".join(old.splitlines(True)[:4]) + "".join("different-text-%02d-xxxxxxx\n" % i
+                                                                         for i in range(6)))
+        repo.git("add", "-A")
+        self.assertEqual(lr.rename_map(repo.root, base, env=repo.env), {"a.py": "b.py"})
+
+    def test_a_baseline_under_a_symlinked_directory_is_refused(self):
+        (self.repo.root / "real").mkdir()
+        (self.repo.root / "sub").symlink_to("real")
+        cfg = make_config(self.specs, baseline="sub/base.txt")
+        for verb in (self.check, self.update):
+            with self.subTest(verb=verb.__name__):
+                code, lines = verb(cfg)
+                self.assertEqual(code, 2)
+                self.assertIn("symlink", "\n".join(lines))
+        self.assertEqual(list((self.repo.root / "real").iterdir()), [])
+
+    def test_the_baseline_is_written_world_readable_and_names_the_configured_recovery(self):
+        self.update(dict(self.config, recovery_cmd="RECOVER-CMD"))
+        path = self.repo.root / "base.txt"
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o644)
+        self.assertIn("RECOVER-CMD --update", path.read_text())
 
     def test_default_base_is_the_merge_base_with_origin_main(self):
         self.update()
@@ -863,6 +916,45 @@ class TestRunRuff(ScrubbedEnv):
             self.run_ruff(run)
         self.assertIn("Failed to lint", str(ctx.exception))
 
+    def test_an_empty_clean_report_with_rc_0_is_a_valid_result(self):
+        run, _ = self.stub(report="[]", rc=0)
+        self.assertEqual(self.run_ruff(run), ([], 1))
+
+    def test_the_modelled_argv_is_spelled_out_literally(self):
+        self.assertEqual(
+            lr.tool_argv("ruff", Path("/r"), ["a.py", "b.py"], Path("/x/ruff")),
+            ["/x/ruff", "check", "--config", "ruff.toml", "--ignore-noqa", "--no-cache", "--no-fix",
+             "--force-exclude", "--output-format", "json", "--", "a.py", "b.py"],
+        )
+        self.assertEqual(
+            lr.show_files_argv(Path("/x/ruff"), ["a.py"]),
+            ["/x/ruff", "check", "--config", "ruff.toml", "--no-cache", "--force-exclude", "--show-files", "--",
+             "a.py"],
+        )
+        self.assertEqual(
+            lr.tool_argv("eslint-test-dirs", Path("/r"), [], None),
+            ["/r/apps/web-platform/node_modules/.bin/eslint", "--config",
+             "apps/web-platform/eslint.test-dirs.config.mjs", "--no-inline-config",
+             "--no-error-on-unmatched-pattern", "-f", "json", "test/**", "plugins/soleur/test/**",
+             "plugins/soleur/skills/*/test/**", "scripts/*.test.mjs"],
+        )
+
+    def test_a_tracked_file_removed_without_git_rm_is_not_blamed_on_ruff(self):
+        self.repo.write("gone.py", "x = 1\n")
+        self.repo.git("add", "gone.py")
+        (self.repo.root / "gone.py").unlink()
+        run, calls = self.stub()
+        findings, file_count = self.run_ruff(run)
+        self.assertEqual(file_count, 1)
+        self.assertNotIn("gone.py", calls[1][0])
+
+    def test_a_nested_knowledge_base_directory_is_excluded_the_way_ruff_excludes_it(self):
+        self.repo.write("scripts/knowledge-base/x.py", "x = 1\n")
+        self.repo.git("add", "-A")
+        run, _ = self.stub()
+        findings, file_count = self.run_ruff(run)
+        self.assertEqual(file_count, 1)
+
     def test_ruff_rc_other_than_0_or_1_is_infrastructure(self):
         run, _ = self.stub(rc=2, stderr="boom")
         with self.assertRaises(lr.InfraError):
@@ -964,6 +1056,13 @@ class TestRunEslint(ScrubbedEnv):
         findings, _ = lr.run_eslint(self.repo.root, env=dict(self.repo.env), run=run)
         self.assertEqual(findings, [lr.Finding("test/a.ts", "@typescript-eslint/no-unused-vars", 1, "m")])
 
+    def test_a_tracked_file_removed_without_git_rm_is_not_blamed_on_eslint(self):
+        (self.repo.root / "test" / "b.ts").unlink()
+        run, _ = self.stub(self.report("test/a.ts", "test/c.cts", "scripts/x.test.mjs",
+                                       "plugins/soleur/test/sub/d.js"))
+        _findings, file_count = lr.run_eslint(self.repo.root, env=dict(self.repo.env), run=run)
+        self.assertEqual(file_count, 4)
+
     def test_a_missing_binary_names_the_recovery(self):
         (self.repo.root / lr.ESLINT_BIN).unlink()
         with self.assertRaises(lr.InfraError) as ctx:
@@ -982,6 +1081,8 @@ class TestScopePins(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         if tomllib is None:
+            if lr._is_ci(os.environ):
+                raise AssertionError("tomllib (Python 3.11+) is required under CI: the ruff.toml pin must run")
             raise unittest.SkipTest("tomllib needs Python 3.11+ (CI runs 3.12)")
         cls.toml = tomllib.loads((REPO_ROOT / "ruff.toml").read_text())
 
@@ -998,7 +1099,7 @@ class TestScopePins(unittest.TestCase):
         })
 
     def test_the_declared_exclusion_matches_the_scanner_constant(self):
-        self.assertEqual(tuple(p.rstrip("/") for p in lr.EXCLUDED_PREFIXES), tuple(self.toml["extend-exclude"]))
+        self.assertEqual(tuple(lr.EXCLUDED_DIRS), tuple(self.toml["extend-exclude"]))
 
 
 class TestConfigPins(unittest.TestCase):
@@ -1013,6 +1114,24 @@ class TestConfigPins(unittest.TestCase):
             tuple(lr.SCOPES["eslint-test-dirs"]["scope"]),
             ("test/**", "plugins/soleur/test/**", "plugins/soleur/skills/*/test/**", "scripts/*.test.mjs"),
         )
+
+    def test_script_rel_names_this_very_script(self):
+        self.assertEqual(lr.SCRIPT_REL, "scripts/lint-ratchet.py")
+        self.assertTrue((REPO_ROOT / lr.SCRIPT_REL).samefile(SCRIPT))
+        self.assertEqual(lr.build_config("ruff", {})["script"], lr.SCRIPT_REL)
+
+    def test_eslint_extensions_are_pinned(self):
+        self.assertEqual(lr.ESLINT_EXTS, (".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".mts", ".cts"))
+
+    def test_pip_marker_tuples_are_pinned(self):
+        self.assertEqual(lr.PIP_INTEGRITY_MARKERS, (
+            "DO NOT MATCH THE HASHES", "Hashes are required", "Invalid requirement",
+            "Could not open requirements file", "must be pinned", "In --require-hashes mode"))
+        self.assertEqual(lr.PIP_NETWORK_MARKERS, (
+            "Could not fetch URL", "Temporary failure in name resolution", "Name or service not known",
+            "Network is unreachable", "No route to host", "Max retries exceeded", "timed out", "Connection",
+            "nodename nor servname", "NameResolutionError", "NewConnectionError",
+            "Failed to establish a new connection", "Failed to resolve"))
 
     def test_baseline_paths_follow_the_lint_convention(self):
         for scope in lr.SCOPES.values():
@@ -1043,24 +1162,63 @@ class TestRegistration(unittest.TestCase):
         for label in ("scripts/lint-ratchet-ruff-live", "tests/scripts/lint-ratchet"):
             self.assertRegex(text, r'(?m)^\s*"%s"$' % re.escape(label))
 
-    def test_lefthook_runs_both_scopes_and_triggers_on_every_scope_glob(self):
+    def test_lefthook_entries_run_the_scopes_unconditionally(self):
         text = (REPO_ROOT / "lefthook.yml").read_text()
-        ruff = self.block(text, "ruff-ratchet")
-        eslint = self.block(text, "eslint-test-dirs-ratchet")
-        self.assertIn("run: python3 scripts/lint-ratchet.py ruff --check", ruff)
-        self.assertIn("run: python3 scripts/lint-ratchet.py eslint-test-dirs --check", eslint)
-        for glob in lr.SCOPES["ruff"]["scope"] + ("**/*.py",):
-            self.assertIn('- "%s"' % glob, ruff)
-        for glob in lr.SCOPES["eslint-test-dirs"]["scope"]:
-            prefix = glob.split("*")[0]
-            self.assertTrue(any(prefix in line for line in eslint.splitlines() if line.strip().startswith("- ")),
-                            "no lefthook glob covers %s" % glob)
-        self.assertIn("apps/web-platform/package.json", eslint)
+        for key, scope in (("ruff-ratchet", "ruff"), ("eslint-test-dirs-ratchet", "eslint-test-dirs")):
+            block = self.block(text, key)
+            self.assertRegex(block, r"(?m)^      run: python3 scripts/lint-ratchet\.py %s --check$" % re.escape(scope))
+            for forbidden in ("skip:", "exclude:", "|| true", "only:"):
+                self.assertNotIn(forbidden, block)
+
+    def test_lefthook_ruff_globs_are_exactly_the_scope_plus_the_inputs(self):
+        block = self.block((REPO_ROOT / "lefthook.yml").read_text(), "ruff-ratchet")
+        globs = re.findall(r'(?m)^        - "([^"]+)"$', block)
+        expected = []
+        for pattern in lr.SCOPES["ruff"]["scope"]:
+            expected += [pattern, "**/" + pattern]
+        expected += ["ruff.toml", "scripts/ruff-requirements.txt", lr.SCOPES["ruff"]["baseline"]]
+        self.assertEqual(sorted(globs), sorted(expected))
+
+    def test_lefthook_eslint_globs_cover_every_directory_extension_and_input(self):
+        block = self.block((REPO_ROOT / "lefthook.yml").read_text(), "eslint-test-dirs-ratchet")
+        globs = re.findall(r'(?m)^        - "([^"]+)"$', block)
+        braces = {frozenset(m.split(",")) for g in globs for m in re.findall(r"\{([^}]+)\}", g)}
+        self.assertEqual(braces, {frozenset(e[1:] for e in lr.ESLINT_EXTS)})
+        ext = lambda stem: [g for g in globs if g.startswith(stem)]  # noqa: E731
+        for directory in ("test", "plugins/soleur/test", "plugins/soleur/skills/*/test"):
+            self.assertEqual(len(ext(directory + "/*.")), 1, directory)
+            self.assertEqual(len(ext(directory + "/**/*.")), 1, directory)
+        for exact in ("scripts/*.test.mjs", lr.ESLINT_CONFIG, "apps/web-platform/package.json",
+                      "apps/web-platform/package-lock.json", lr.SCRIPT_REL, lr.SCOPES["eslint-test-dirs"]["baseline"]):
+            self.assertIn(exact, globs)
 
     def test_the_vitest_arm_is_registered_as_repo_wide(self):
         text = (REPO_ROOT / "apps" / "web-platform" / "test" / "repo-wide-suites.ts").read_text()
-        self.assertIn('"test/eslint-test-dirs-ratchet.test.ts",', text)
-        self.assertTrue((REPO_ROOT / "apps" / "web-platform" / "test" / "eslint-test-dirs-ratchet.test.ts").exists())
+        self.assertRegex(text, r'(?m)^  "test/eslint-test-dirs-ratchet\.test\.ts",$')
+        arm = (REPO_ROOT / "apps" / "web-platform" / "test" / "eslint-test-dirs-ratchet.test.ts").read_text()
+        self.assertIn('"scripts/lint-ratchet.py", "eslint-test-dirs", "--check"', arm)
+        self.assertIn("expect(result.status", arm)
+
+
+@unittest.skipUnless((REPO_ROOT / lr.ESLINT_BIN).exists(), "needs apps/web-platform/node_modules (npm ci)")
+class TestEslintConfigBehaviour(unittest.TestCase):
+    """The config's per-extension blocks, driven through the real pinned eslint."""
+
+    def test_cjs_jsx_and_cts_files_parse_and_report_their_rule(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        (root / "a.cjs").write_text("const unusedCjs = 1;\nmodule.exports = {};\nif (process) { return; }\n")
+        (root / "b.jsx").write_text("const unusedJsx = <div />;\nexport const ok = 1;\n")
+        (root / "c.cts").write_text("const unusedCts: number = 1;\nexport {};\n")
+        result = subprocess.run(
+            [str(REPO_ROOT / lr.ESLINT_BIN), "--config", str(REPO_ROOT / lr.ESLINT_CONFIG), "--no-inline-config",
+             "-f", "json", "a.cjs", "b.jsx", "c.cts"],
+            cwd=root, capture_output=True, text=True)
+        self.assertIn(result.returncode, (0, 1), result.stderr)
+        rules = {Path(r["filePath"]).name: [m["ruleId"] for m in r["messages"]] for r in json.loads(result.stdout)}
+        self.assertEqual(rules, {"a.cjs": ["no-unused-vars"], "b.jsx": ["no-unused-vars"],
+                                 "c.cts": ["@typescript-eslint/no-unused-vars"]})
 
 
 class TestPipArgvAndRequirements(ScrubbedEnv):
@@ -1252,6 +1410,48 @@ class TestEnsureRuff(ScrubbedEnv):
         self.assertEqual(len(pip.calls), 1)
         self.assertEqual(len(list(self.fallback.iterdir())), 1)
 
+    def test_a_world_writable_or_non_directory_cache_root_is_refused(self):
+        self.cache.mkdir(mode=0o700)
+        self.cache.chmod(0o707)
+        self.assertTrue(str(self.ensure(FakePip())).startswith(str(self.fallback)))
+        self.cache.chmod(0o700)
+        self.cache.rmdir()
+        self.cache.write_text("not a directory")
+        self.assertTrue(str(self.ensure(FakePip())).startswith(str(self.fallback)))
+
+    def test_a_cache_directory_owned_by_someone_else_is_refused(self):
+        with mock.patch.object(lr.os, "getuid", return_value=os.getuid() + 1):
+            with self.assertRaises(lr.InfraError):
+                self.ensure(FakePip())
+
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root ignores directory permissions")
+    def test_an_unwritable_cache_parent_falls_back_instead_of_failing(self):
+        parent = Path(self.fake_home.name) / "readonly"
+        parent.mkdir()
+        parent.chmod(0o500)
+        self.addCleanup(parent.chmod, 0o700)
+        exe = lr.ensure_ruff(self.req, env={}, run=FakePip(), cache_root=parent / "c", fallback_root=self.fallback)
+        self.assertTrue(str(exe).startswith(str(self.fallback)))
+
+    def test_the_cache_directory_changes_when_the_requirements_change(self):
+        other = Path(self.fake_home.name) / "req2.txt"
+        other.write_text(self.req.read_text() + "# a bumped hash set would change this file\n")
+        first = self.ensure(FakePip())
+        second = lr.ensure_ruff(other, env={}, run=FakePip(), cache_root=self.cache, fallback_root=self.fallback)
+        self.assertNotEqual(first.parent.parent, second.parent.parent)
+
+    def test_a_pip_timeout_names_pip_and_leaves_no_install_directory(self):
+        class TimeoutPip(FakePip):
+            def __call__(self, argv, **kwargs):
+                if "install" in argv:
+                    raise subprocess.TimeoutExpired(argv, 1)
+                return super().__call__(argv, **kwargs)
+
+        with self.assertRaises(lr.InfraError) as ctx:
+            self.ensure(TimeoutPip())
+        self.assertIn("pip timed out", str(ctx.exception))
+        self.assertEqual([p.name for p in self.cache.iterdir()], [])
+
     def test_no_usable_cache_directory_is_infrastructure(self):
         for path in (self.cache, self.fallback):
             real = Path(self.fake_home.name) / ("real-" + path.name)
@@ -1320,7 +1520,9 @@ class TestMain(CheckBase):
     def test_infrastructure_and_unexpected_errors_exit_2_never_1(self):
         for exc, text in ((lr.InfraError("tool crashed"), "tool crashed"), (KeyError("filename"), "unexpected KeyError"),
                           (UnicodeDecodeError("utf-8", b"\xff", 0, 1, "bad"), "unexpected UnicodeDecodeError"),
-                          (PermissionError("denied"), "unexpected PermissionError")):
+                          (PermissionError("denied"), "unexpected PermissionError"),
+                          (RuntimeError("odd"), "unexpected RuntimeError"), (IndexError("odd"), "unexpected IndexError"),
+                          (OverflowError("odd"), "unexpected OverflowError")):
             def boom(root, exc=exc):
                 raise exc
 
@@ -1348,6 +1550,32 @@ class TestMain(CheckBase):
                     cfg["run"](Path("/r"))
                 spy.assert_called_once_with(Path("/r"), env)
 
+    def test_ci_reaches_the_comparison_through_main(self):
+        self.run_main(["ruff", "--update"])
+        env = dict(self.repo.env, CI="true")
+        code, _, err = self.run_main(["ruff", "--check", "--base=no-such-ref"], env=env)
+        self.assertEqual(code, 2)
+        self.assertIn("under CI", err)
+        code, _, _ = self.run_main(["ruff", "--check", "--base=no-such-ref"])
+        self.assertEqual(code, 0)
+
+    def test_base_is_forwarded_by_update_too(self):
+        code, _, err = self.run_main(["ruff", "--update", "--base=-x"])
+        self.assertEqual(code, 2)
+        self.assertIn("looks like an option", err)
+
+    def test_an_infrastructure_error_escaping_a_library_call_still_exits_2(self):
+        with mock.patch.object(lr, "check", side_effect=lr.InfraError("boom from the library")):
+            code, _, err = self.run_main(["ruff", "--check"])
+        self.assertEqual(code, 2)
+        self.assertIn("boom from the library", err)
+
+    def test_a_tracked_path_can_never_start_a_workflow_command_in_list_output(self):
+        cfg = dict(self.config, run=lambda root: ([lr.Finding("::error::x.py", "F401", 1, "m")], 1))
+        code, out, _ = self.run_main(["ruff", "--list"], cfg)
+        self.assertEqual(code, 0)
+        self.assertTrue(out.startswith(" ::error::x.py:1"))
+
     def test_unknown_scope_is_a_usage_error(self):
         result = subprocess.run([sys.executable, str(SCRIPT), "nonsense", "--check"], cwd=REPO_ROOT,
                                 env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
@@ -1361,6 +1589,23 @@ class TestHarness(unittest.TestCase):
     def test_enough_cases_were_loaded(self):
         suite = unittest.TestLoader().loadTestsFromModule(sys.modules[__name__])
         self.assertGreaterEqual(suite.countTestCases(), MIN_CASES)
+
+    def test_every_guard_class_is_loaded(self):
+        suite = unittest.TestLoader().loadTestsFromModule(sys.modules[__name__])
+        loaded = set()
+
+        def walk(node):
+            for item in node:
+                if isinstance(item, unittest.TestSuite):
+                    walk(item)
+                else:
+                    loaded.add(type(item).__name__)
+
+        walk(suite)
+        self.assertGreaterEqual(loaded, {
+            "TestEntries", "TestAdapters", "TestCheckVerdicts", "TestFloors", "TestMergeBaseDelta", "TestRunRuff",
+            "TestRunEslint", "TestScopePins", "TestConfigPins", "TestRegistration", "TestPipArgvAndRequirements",
+            "TestEnsureRuff", "TestMain", "TestGrowthArithmetic", "TestToolFailures", "TestHelpers"})
 
     def test_the_captured_ruff_report_is_the_four_expected_findings(self):
         report = json.loads((FIXTURES / "ruff-report.json").read_text())

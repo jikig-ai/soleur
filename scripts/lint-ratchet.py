@@ -58,9 +58,10 @@ RUFF_REQUIREMENTS = REPO_ROOT / "scripts" / "ruff-requirements.txt"
 ESLINT_CONFIG = "apps/web-platform/eslint.test-dirs.config.mjs"
 ESLINT_BIN = "apps/web-platform/node_modules/.bin/eslint"
 ESLINT_EXTS = (".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".mts", ".cts")
-# Tracked Python that ruff.toml (extend-exclude) deliberately does not scan; anything else a
-# tracked file is missing from ruff's own file list for is a silent skip and fails the scan.
-EXCLUDED_PREFIXES = ("knowledge-base/",)
+# Directory names ruff.toml (extend-exclude) deliberately does not scan, wherever they sit in the
+# path; anything else a tracked file is missing from ruff's own file list for is a silent skip and
+# fails the scan.
+EXCLUDED_DIRS = ("knowledge-base",)
 DRAWDOWN = "#10433"
 
 GIT_TIMEOUT = 120
@@ -69,7 +70,7 @@ PIP_TIMEOUT = 300
 
 ENTRY_RE = re.compile(r"^([^|]+)\|([^|]+)\|([0-9a-f]{12})\|([0-9]+)$")
 LINE_SPLIT_RE = re.compile(r"\r\n|\r|\n")
-CONTROL_RE = re.compile("[\x00-\x1f\x7f-\x9f  ]")
+CONTROL_RE = re.compile("[\x00-\x1f\x7f-\x9f" + "".join(chr(c) for c in (0x2028, 0x2029, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069, 0xfeff)) + "]")
 # pip output that means the REQUIREMENTS are wrong or the wheel does not match its hash: never a
 # skip, because a skipped integrity failure is exactly how a poisoned index would get through.
 PIP_INTEGRITY_MARKERS = (
@@ -91,6 +92,11 @@ PIP_NETWORK_MARKERS = (
     "Max retries exceeded",
     "timed out",
     "Connection",
+    "nodename nor servname",
+    "NameResolutionError",
+    "NewConnectionError",
+    "Failed to establish a new connection",
+    "Failed to resolve",
 )
 
 REMEDY_RUFF = (
@@ -145,12 +151,12 @@ class Finding(NamedTuple):
 # --------------------------------------------------------------------------- process helpers
 
 
-def _exec(run, argv, timeout, **kwargs):
+def _exec(run, argv, timeout, label=None, **kwargs):
     """Run a child process with a bound, UTF-8 text capture, mapping spawn failures to InfraError."""
     kwargs.setdefault("capture_output", True)
     kwargs.setdefault("encoding", "utf-8")
     kwargs.setdefault("errors", "replace")
-    name = Path(str(argv[0])).name
+    name = label or Path(str(argv[0])).name
     try:
         return run(argv, timeout=timeout, **kwargs)
     except subprocess.TimeoutExpired:
@@ -205,14 +211,15 @@ def parse_baseline(text: str) -> list:
     return entries
 
 
-def render_baseline(name: str, entries: list, drawdown: str) -> str:
+def render_baseline(name: str, entries: list, drawdown: str, recovery=None) -> str:
+    recovery = recovery or "python3 {} {}".format(SCRIPT_REL, name)
     header = [
         "# lint-ratchet baseline for scope '{}' (PR3a of #10331; design in ADR-290).".format(name),
         "# Shrink-only: this file always equals the live census, and per (path, rule) it may never",
         "# hold more entries than the merge base. Entry: path|rule|anchor|n, where anchor is a 12-hex",
         "# fingerprint of the normalised source line (the line itself is never stored).",
-        "# List the live findings:  python3 scripts/lint-ratchet.py {} --list".format(name),
-        "# After fixing findings:   python3 scripts/lint-ratchet.py {} --update  (it refuses to add)".format(name),
+        "# List the live findings:  {} --list".format(recovery),
+        "# After fixing findings:   {} --update  (it refuses to add)".format(recovery),
         "# After a merge conflict, take the base branch's copy of this file and re-run --update.",
         "# Drawdown tracking: {}".format(drawdown),
     ]
@@ -392,21 +399,26 @@ def _recovery(config: dict) -> str:
 def _baseline_file(root: Path, config: dict) -> Path:
     """The baseline path, refused when it or its directory is a symlink (it is read and rewritten)."""
     path = root / config["baseline"]
-    if path.is_symlink() or path.parent.is_symlink():
-        raise InfraError("baseline {} is (or sits under) a symlink; refusing to read or write through it".format(
-            config["baseline"]))
+    current = root
+    for part in Path(config["baseline"]).parts:
+        current = current / part
+        if current.is_symlink():
+            raise InfraError("baseline {} is (or sits under) a symlink; refusing to read or write through it".format(
+                config["baseline"]))
     return path
 
 
 def _write_baseline(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name("{}.tmp-{}".format(path.name, os.getpid()))
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix="{}.tmp-".format(path.name))
     try:
-        tmp.write_text(text, encoding="utf-8")
-        os.replace(str(tmp), str(path))
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.chmod(tmp_name, 0o644)
+        os.replace(tmp_name, str(path))
     finally:
-        if tmp.exists():
-            tmp.unlink()
+        if os.path.lexists(tmp_name):
+            os.unlink(tmp_name)
 
 
 def _delta(config, root, head_entries, base, env, out: list) -> tuple:
@@ -423,9 +435,11 @@ def _delta(config, root, head_entries, base, env, out: list) -> tuple:
     base_text = baseline_at(root, sha, config["baseline"], env)
     if base_text is None:
         script = config.get("script")
-        if ci and script and baseline_at(root, sha, script, env) is not None:
-            out.append(pre + "the baseline is missing at the merge base {} although the ratchet script exists "
-                       "there: a baseline moved or renamed in this diff cannot be compared".format(sha[:12]))
+        base_script = baseline_at(root, sha, script, env) if (ci and script) else None
+        if base_script is not None and '"{}"'.format(config["name"]) in base_script:
+            out.append(pre + "the baseline is missing at the merge base {} although the ratchet script there already "
+                       "defines this scope: a baseline moved or renamed in this diff cannot be compared".format(
+                           sha[:12]))
             return 2, False
         out.append(pre + "baseline introduced by this diff (absent at {}); shrink-only comparison skipped".format(
             sha[:12]))
@@ -524,7 +538,7 @@ def update(config: dict, root, base=None, env=None) -> tuple:
         return 1, [pre + "vacuous scan: {}".format(exc)]
     except InfraError as exc:
         return 2, [pre + str(exc)]
-    _write_baseline(path, render_baseline(config["name"], entries, config["drawdown"]))
+    _write_baseline(path, render_baseline(config["name"], entries, config["drawdown"], _recovery(config)))
     return 0, [pre + "wrote {} entries to {}".format(len(entries), config["baseline"])]
 
 
@@ -558,7 +572,8 @@ def show_files_argv(ruff_path, files: list) -> list:
 
 def run_ruff(root, env=None, ruff_path=None, run=subprocess.run) -> tuple:
     root = Path(root)
-    files = [name for name in tracked_files(root, SCOPES["ruff"]["scope"], env) if not (root / name).is_symlink()]
+    files = [name for name in tracked_files(root, SCOPES["ruff"]["scope"], env)
+             if (root / name).exists() and not (root / name).is_symlink()]
     if not files:
         raise Vacuous("no tracked Python files; refusing to invoke ruff (with no file arguments it lints the "
                       "current directory)")
@@ -567,7 +582,7 @@ def run_ruff(root, env=None, ruff_path=None, run=subprocess.run) -> tuple:
     if listing.returncode != 0:
         raise InfraError("ruff --show-files failed (rc {}): {}".format(listing.returncode, listing.stderr.strip()[:300]))
     listed = {_relative(line.strip(), root) for line in listing.stdout.splitlines() if line.strip()}
-    skipped = sorted(name for name in files if name not in listed and not name.startswith(EXCLUDED_PREFIXES))
+    skipped = sorted(name for name in files if name not in listed and not set(Path(name).parts) & set(EXCLUDED_DIRS))
     if skipped:
         raise InfraError("ruff skipped {} tracked file(s) it was asked to lint (a default exclude such as dist/ or "
                          "venv/ matched): {}".format(len(skipped), ", ".join(_clean(n) for n in skipped[:5])))
@@ -590,7 +605,7 @@ def run_eslint(root, env=None, run=subprocess.run) -> tuple:
     result = _exec(run, tool_argv("eslint-test-dirs", root, [], None), RUN_TIMEOUT, cwd=str(root), env=env)
     if result.returncode not in (0, 1):
         raise InfraError("eslint exited {}: {}".format(result.returncode, result.stderr.strip()[:300]))
-    tracked = {n for n in tracked_files(root, (".",), env) if not (root / n).is_symlink()}
+    tracked = {n for n in tracked_files(root, (".",), env) if (root / n).exists() and not (root / n).is_symlink()}
     seen = set()
     findings, file_count = adapt_eslint(result.stdout, root, tracked, seen)
     scope = [":(glob)" + g for g in SCOPES["eslint-test-dirs"]["scope"]]
@@ -628,12 +643,15 @@ def _private_cache_dir(root):
     """Return ``root`` if it is a private directory of this user, creating it 0700; else None."""
     root = Path(root)
     try:
-        info = os.lstat(str(root))
-    except FileNotFoundError:
-        root.parent.mkdir(parents=True, exist_ok=True)
-        with contextlib.suppress(FileExistsError):
-            os.mkdir(str(root), 0o700)
-        info = os.lstat(str(root))
+        try:
+            info = os.lstat(str(root))
+        except FileNotFoundError:
+            root.parent.mkdir(parents=True, exist_ok=True)
+            with contextlib.suppress(FileExistsError):
+                os.mkdir(str(root), 0o700)
+            info = os.lstat(str(root))
+    except OSError:
+        return None
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
         return None
     return root
@@ -659,7 +677,11 @@ def ensure_ruff(requirements, env, run=subprocess.run, cache_root=None, fallback
     if not exe.exists():
         print("lint-ratchet: installing ruff {} (first run only)".format(version), file=sys.stderr)
         target = Path(tempfile.mkdtemp(prefix="install-", dir=str(base)))
-        result = _exec(run, pip_argv(target, requirements), PIP_TIMEOUT, env=pip_env(env))
+        try:
+            result = _exec(run, pip_argv(target, requirements), PIP_TIMEOUT, label="pip", env=pip_env(env))
+        except InfraError:
+            shutil.rmtree(str(target), ignore_errors=True)
+            raise
         if result.returncode != 0:
             shutil.rmtree(str(target), ignore_errors=True)
             output = "{}\n{}".format(result.stdout or "", result.stderr or "")
@@ -722,13 +744,19 @@ def main(argv=None) -> int:
     except InfraError as exc:
         print(_clean("lint-ratchet({}): {}".format(args.scope, exc)), file=sys.stderr)
         return 2
-    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+    except Exception as exc:  # the documented contract: nothing unexpected exits 1
         print(_clean("lint-ratchet({}): unexpected {}: {}".format(args.scope, type(exc).__name__, exc)),
               file=sys.stderr)
         return 2
     stream = sys.stdout if code == 0 else sys.stderr
-    for line in lines:
-        print(_clean(line), file=stream)
+    try:
+        for line in lines:
+            text = _clean(line)
+            # A tracked path can start a --list line; never let it read as a workflow command.
+            print((" " + text) if text.startswith(("::", "##[")) else text, file=stream)
+    except OSError as exc:
+        print(_clean("lint-ratchet({}): could not write the report: {}".format(args.scope, exc)), file=sys.stderr)
+        return 2
     return code
 
 

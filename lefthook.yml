@@ -243,12 +243,12 @@ pre-commit:
       # web-platform eslint run never reaches. Pinned binary only, as the tsc entry above: a
       # missing node_modules exits 2 naming the recovery.
       glob:
-        - "test/*.{ts,tsx,js,mjs,cjs,mts}"
-        - "test/**/*.{ts,tsx,js,mjs,cjs,mts}"
-        - "plugins/soleur/test/*.{ts,tsx,js,mjs,cjs,mts}"
-        - "plugins/soleur/test/**/*.{ts,tsx,js,mjs,cjs,mts}"
-        - "plugins/soleur/skills/*/test/*.{ts,tsx,js,mjs,cjs,mts}"
-        - "plugins/soleur/skills/*/test/**/*.{ts,tsx,js,mjs,cjs,mts}"
+        - "test/*.{ts,tsx,js,jsx,mjs,cjs,mts,cts}"
+        - "test/**/*.{ts,tsx,js,jsx,mjs,cjs,mts,cts}"
+        - "plugins/soleur/test/*.{ts,tsx,js,jsx,mjs,cjs,mts,cts}"
+        - "plugins/soleur/test/**/*.{ts,tsx,js,jsx,mjs,cjs,mts,cts}"
+        - "plugins/soleur/skills/*/test/*.{ts,tsx,js,jsx,mjs,cjs,mts,cts}"
+        - "plugins/soleur/skills/*/test/**/*.{ts,tsx,js,jsx,mjs,cjs,mts,cts}"
         - "scripts/*.test.mjs"
         - "apps/web-platform/eslint.test-dirs.config.mjs"
         - "apps/web-platform/package.json"
