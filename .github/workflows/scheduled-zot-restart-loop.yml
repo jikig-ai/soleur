@@ -827,7 +827,7 @@ jobs:
             printf -- '- **Run log:** %s\n\n' "$RUN_URL"
             printf '### What this is\n\nThe standing fill-rate probe could not evaluate. This is the probe failing, not a store state and not a restart loop: either the script returned an exit code or output shape outside its contract (UNEVALUATED), or it reported a TRANSIENT whose cause is not one of the expected ones while the zot restart-loop leg was healthy (so the fill leg alone is blind). The full script output is in the run log.\n\n'
             printf '### Reproduce (no SSH)\n\n```\ndoppler run -p soleur -c prd_terraform -- bash scripts/followthroughs/zot-fill-rate-7341.sh\n```\n\n'
-            printf '### Close rule\n\nThis issue auto-closes on the next PASS or FAIL run of the probe, since either proves it evaluated. A one-run blip therefore opens an issue the next run closes.\n'
+            printf '### Close rule\n\nA FAIL run of the probe closes this issue at once, since a FAIL proves the probe evaluated. A PASS run closes it once 6 hours have passed with no new comment. A one-run blip therefore resolves itself without a human.\n'
           } > "$BODY_FILE"
           EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty') || { echo "::error::zot-fill-rate-defect: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
           if [[ -n "$EXISTING" ]]; then
