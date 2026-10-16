@@ -297,17 +297,26 @@ AREPO="$SANDBOX/arepo"
 assert_fixture_dir "$AREPO"
 mkdir -p "$AREPO/scripts" "$AREPO/.github/workflows"
 printf 'name: ci\n' > "$AREPO/.github/workflows/ci.yml"
-printf '#!/usr/bin/env bash\n# reads .github/workflows/ci.yml and scripts/guard-vacuity-floor.test.sh\n' > "$AREPO/scripts/lint-orphan-mutations.test.sh"
+printf '#!/usr/bin/env bash\ncat .github/workflows/ci.yml\nbash scripts/guard-vacuity-floor.test.sh\n' > "$AREPO/scripts/lint-orphan-mutations.test.sh"
 printf '#!/usr/bin/env bash\n# reads nothing tracked but itself\n' > "$AREPO/scripts/guard-vacuity-floor.test.sh"
-printf '#!/usr/bin/env bash\n# reads .github/workflows/ci.yml\n' > "$AREPO/scripts/declared-complete.test.sh"
+printf '#!/usr/bin/env bash\ncat .github/workflows/ci.yml\n' > "$AREPO/scripts/declared-complete.test.sh"
+printf '#!/usr/bin/env bash\n# mentions .github/workflows/ci.yml only in a comment\ntrue\n' > "$AREPO/scripts/comment-only.test.sh"
+printf '#!/usr/bin/env bash\ngrep -q x scripts/test-all.sh\n' > "$AREPO/scripts/names-the-runner.test.sh"
+printf '#!/usr/bin/env bash\n' > "$AREPO/scripts/test-all.sh"
 (cd "$AREPO" && gitq init -q -b main . && gitq add -A && gitq commit -qm seed) || { echo "[FATAL] audit fixture" >&2; exit 1; }
 printf 'AFFECTED_SELECTED\tscripts/lint-orphan-mutations\t0\tedge:declared\t^scripts/lint-orphan-mutations.test.sh\n' > "$SANDBOX/audit-bad.rows"
 printf 'AFFECTED_SELECTED\tscripts/declared-complete\t0\tedge:declared\t^scripts/declared-complete.test.sh|^.github/workflows/ci.yml\n' > "$SANDBOX/audit-good.rows"
+printf 'AFFECTED_SELECTED\tscripts/comment-only\t0\tedge:derived\t^scripts/comment-only.test.sh\n' > "$SANDBOX/audit-comment.rows"
+printf 'AFFECTED_SELECTED\tscripts/names-the-runner\t0\tedge:derived\t^scripts/names-the-runner.test.sh\n' > "$SANDBOX/audit-runner.rows"
 run_sut audit --root "$AREPO" --list "$SANDBOX/audit-bad.rows" > "$SANDBOX/audit-bad.out" 2>&1; rc=$?
 [[ "$rc" -eq 1 ]] && grep -q 'gap_suites=1' "$SANDBOX/audit-bad.out" && pass "a -mutations sibling that reads ci.yml and a sibling suite but declares only its own file is flagged" || fail "the PR 9404 shape is flagged (rc=$rc: $(tail -2 "$SANDBOX/audit-bad.out"))"
 grep -q 'ci.yml' "$SANDBOX/audit-bad.out" && grep -q 'guard-vacuity-floor.test.sh' "$SANDBOX/audit-bad.out" && pass "the gap line names both undeclared inputs" || fail "the gap line names both undeclared inputs"
 run_sut audit --root "$AREPO" --list "$SANDBOX/audit-good.rows" > "$SANDBOX/audit-good.out" 2>&1; rc=$?
 [[ "$rc" -eq 0 ]] && grep -q 'gap_suites=0' "$SANDBOX/audit-good.out" && pass "a suite whose reads are all declared has no gap (must-pass control)" || fail "a fully declared suite has no gap (rc=$rc)"
+run_sut audit --root "$AREPO" --list "$SANDBOX/audit-comment.rows" > "$SANDBOX/audit-comment.out" 2>&1; rc=$?
+[[ "$rc" -eq 0 ]] && grep -q 'gap_suites=0' "$SANDBOX/audit-comment.out" && pass "a path named only in a comment is a mention, not a read (no gap)" || fail "comment-only mention is not a gap (rc=$rc)"
+run_sut audit --root "$AREPO" --list "$SANDBOX/audit-runner.rows" > "$SANDBOX/audit-runner.out" 2>&1; rc=$?
+[[ "$rc" -eq 0 ]] && grep -q 'gap_suites=0' "$SANDBOX/audit-runner.out" && pass "a suite that names the runner is covered by the runner-changed trigger (no gap)" || fail "runner path is covered by the trigger list (rc=$rc)"
 : > "$SANDBOX/audit-empty.rows"
 run_sut audit --root "$AREPO" --list "$SANDBOX/audit-empty.rows" >/dev/null 2>&1; rc=$?
 [[ "$rc" -eq 2 ]] && pass "an audit that examined zero suites exits non-zero (anti-vacuity)" || fail "an audit that examined zero suites exits non-zero (rc=$rc)"
@@ -339,6 +348,9 @@ row_verdict_fail() { [[ "$(python3 "$SUT" verdict --a pass --b fail --c pass --d
 row_unmeasured() { [[ "$(python3 "$SUT" verdict --a pass --b pass --c unmeasured --d pass)" == "computed=UNDECIDED reason=incomplete" ]]; }
 row_selftest_line() { collect_once; [[ "$(unit_field "$OUT/units-commits-1-of-1.jsonl" "${C[2]}" '.failing[0].suites|join(",")')" = scripts/suitey ]]; }
 row_clear() { collect_once; [[ "$(unit_field "$OUT/units-commits-1-of-1.jsonl" "${C[5]}" .cls)" = clean ]]; }
+row_audit_comment() { run_sut audit --root "$AREPO" --list "$SANDBOX/audit-comment.rows" 2>&1 | grep -q 'gap_suites=0'; }
+row_audit_runner() { run_sut audit --root "$AREPO" --list "$SANDBOX/audit-runner.rows" 2>&1 | grep -q 'gap_suites=0'; }
+row_audit_bad() { run_sut audit --root "$AREPO" --list "$SANDBOX/audit-bad.rows" 2>&1 | grep -q 'gap_suites=1'; }
 row_audit_zero() { run_sut audit --root "$AREPO" --list "$SANDBOX/audit-empty.rows" >/dev/null 2>&1; [[ $? -eq 2 ]]; }
 mutate always-on-skippable 'elif f[2] == "0" and f[3] != "always_on":' 'elif f[2] == "0":' row_always_on
 mutate fallback-ignored '    if fb == "none":
@@ -351,6 +363,11 @@ mutate verdict-fail-dropped 'if "fail" in s:' 'if False:' row_verdict_fail
 mutate unmeasured-as-pass 'if "unmeasured" in s:' 'if False:' row_unmeasured
 mutate fail-regex-loosened 'FAIL_LINE = re.compile(r"^\[FAIL\] (\S+) \((\d+)ms\) log=")' 'FAIL_LINE = re.compile(r"^\[FAIL\] (\S+)")' row_selftest_line
 mutate same-tree-ignored 'pick = ok[0] if ok else sorted(runs, key=lambda r: r["created_at"])[-1]' 'pick = sorted(runs, key=lambda r: r["created_at"])[0]' row_clear
+mutate audit-comments-counted '        if t.startswith("#") or t.startswith("//"):
+            continue' '        if False:
+            continue' row_audit_comment
+mutate audit-runner-not-excused 'f not in (suite,) and f not in RUNNER_TRIGGERS and len(f) > 6' 'f not in (suite,) and len(f) > 6' row_audit_runner
+mutate audit-gap-blind 'miss = [r for r in refs if not any(rg.search(r) for rg in regs)]' 'miss = [r for r in refs if False]' row_audit_bad
 mutate audit-zero-suites 'if suites == 0:' 'if False:' row_audit_zero
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -358,12 +375,12 @@ echo "== controls: a survivor and a crash are both reportable"
 if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_KILLED of $MUT_RUN)"; else fail "mutants killed $MUT_KILLED of $MUT_RUN"; fi
 
 # Anti-vacuity floors, reported through printf + exit so they never ride on the helpers they guard.
-FLOOR_ASSERTIONS=53
+FLOOR_ASSERTIONS=58
 total=$((passes + fails))
 if [[ "$total" -lt "$FLOOR_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$total" "$FLOOR_ASSERTIONS" >&2; exit 1
 fi
-FLOOR_MUTANTS=10
+FLOOR_MUTANTS=13
 if [[ "$MUT_RUN" -lt "$FLOOR_MUTANTS" ]]; then
   printf '[FATAL] mutation floor: only %s mutants ran, floor is %s\n' "$MUT_RUN" "$FLOOR_MUTANTS" >&2; exit 1
 fi

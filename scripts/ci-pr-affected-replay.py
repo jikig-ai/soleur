@@ -542,6 +542,22 @@ def cmd_cp(a):
     return 0
 
 
+# A diff that touches either path degrades --affected to the full battery (runner-changed), so a suite that names
+# them is covered by the trigger list and not by its own declared inputs.
+RUNNER_TRIGGERS = ("scripts/test-all.sh", "scripts/lib/test-affected-paths.sh")
+
+
+def strip_comments(text):
+    """Drop whole-line comments: a path named only in a comment is a mention, not a read."""
+    keep = []
+    for line in text.splitlines():
+        t = line.lstrip()
+        if t.startswith("#") or t.startswith("//"):
+            continue
+        keep.append(line)
+    return "\n".join(keep)
+
+
 def tracked_files(root):
     return set(run(["git", "ls-files"], cwd=root).stdout.splitlines())
 
@@ -556,14 +572,14 @@ def suite_refs(root, suite, tracked):
             cand.append(gp)
             break
     for p in cand:
-        t = open(p, errors="replace").read()
+        t = strip_comments(open(p, errors="replace").read())
         texts.append(t)
         for m in re.finditer(r"""(?:source|\.)\s+["']?(?:\$\{?[A-Za-z_]+\}?/)?([A-Za-z0-9_./-]+\.sh)""", t):
             q = os.path.join(root, m.group(1))
             if os.path.isfile(q):
-                texts.append(open(q, errors="replace").read())
+                texts.append(strip_comments(open(q, errors="replace").read()))
     blob = "\n".join(texts)
-    return sorted(f for f in tracked if f not in (suite,) and len(f) > 6 and f in blob)
+    return sorted(f for f in tracked if f not in (suite,) and f not in RUNNER_TRIGGERS and len(f) > 6 and f in blob)
 
 
 def cmd_audit(a):
