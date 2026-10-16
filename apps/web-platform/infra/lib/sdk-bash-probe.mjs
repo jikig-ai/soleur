@@ -9,7 +9,7 @@
 // TypeScript and is not in the suite image); test/sandbox-wrapped-command-runtime.test.ts drives the real builder.
 import http from "node:http";
 import { createRequire } from "node:module";
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 
 const APP = process.env.APP;
 const KNOB = process.env.KNOB === "1";
@@ -82,6 +82,8 @@ try {
   }
 } catch (e) { err = String(e).slice(0, 300); }
 clearTimeout(timer);
+// The scratch workspace is this probe's own; remove it so repeated runs do not accumulate directories.
+try { rmSync(ws, { recursive: true, force: true }); } catch { /* best-effort scratch cleanup */ }
 console.log(`SDK_BASH_RESULT ${JSON.stringify(found ?? { error: err || "no tool_result" })}`);
 server.close();
 process.exit(0);

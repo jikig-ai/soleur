@@ -273,7 +273,12 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
     ].join("\n");
 
   beforeAll(async () => {
-    shared = realpathSync(mkdtempSync(join("/tmp", "sbx-g2-")));
+    // The per-run temp root, kept short: a unix socket path is capped at 108 bytes and the SDK names its proxy sockets
+    // `<dir>/claude-http-<16 hex>.sock`, so a long TMPDIR fails bridge creation ("Failed to create bridge sockets").
+    shared = realpathSync(mkdtempSync(join(tmpdir(), "sbx-g2-")));
+    if (Buffer.byteLength(shared) > 60) {
+      throw new Error(`TMPDIR_TOO_LONG: ${shared} would push the SDK's proxy socket paths past the 108-byte limit; run with a shorter TMPDIR`);
+    }
     rootA = realpathSync(mkdtempSync(join(tmpdir(), "sbx-g2a-")));
     rootB = realpathSync(mkdtempSync(join(tmpdir(), "sbx-g2b-")));
     home = realpathSync(mkdtempSync(join(tmpdir(), "sbx-g2-home-")));
