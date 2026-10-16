@@ -42,8 +42,8 @@
 # a store filling toward the 85 percent heartbeat cliff surfaces as a deduped action-required
 # `[ci/zot-fill-rate]` issue hours or days ahead, with no follow-through tracker needing to be open.
 # The leg is deliberately outside the Sentry monitor and outside the zot exit code. A RED run of
-# this workflow now means a broken fill probe (the probe step fails itself on UNEVALUATED and a
-# probe-defect issue is filed), not a restart loop and not a store state.
+# this workflow can also mean a broken fill probe (the probe step fails itself on UNEVALUATED and a
+# probe-defect issue is filed), not only a restart loop; it is never a store state.
 #
 # TRIGGERS (#8495, ADR-248). PRIMARY: the web server's watchdog dispatch clock
 # (apps/web-platform/server/watchdog-dispatch-clock.ts) sends workflow_dispatch every
@@ -639,12 +639,14 @@ jobs:
       # the incident itself) as the only backstop. The verdict is classified HERE, not trusted:
       # the exit code and the single column-0 header line must agree, otherwise the verdict is
       # UNEVALUATED, the probe step fails and a deduped probe-defect issue is filed. A red run of
-      # this workflow therefore means a broken fill probe, not a restart loop and not a store state.
+      # this workflow can therefore also mean a broken fill probe; it is never a store state.
       #
       # TRANSIENT files nothing by itself: the zot alarm above already owns PRODUCER_SILENT,
       # INGEST_DARK and the credential fault for the same stream. The one exception is a TRANSIENT
-      # whose cause is outside a closed benign set while the zot leg is not itself failing: that
-      # is the fill leg alone being blind, and it files the probe-defect issue.
+      # whose cause is outside a closed benign set while the zot leg reports no fault of its own: that
+      # is the fill leg alone being blind, and it files the probe-defect issue. When the zot leg
+      # already reports its own fault (ALARM_EXIT 2, 3 or 4: the Sentry error, the PRODUCER_SILENT
+      # issue, the INGEST_DARK issue) that TRANSIENT is not filed a second time.
       #
       # The leg is outside the Sentry monitor: nothing in Sentry covers its own liveness. The
       # contract is pinned by scripts/zot-fill-rate-standing-wiring.test.sh (ADR-096, 2026-10-16).
@@ -659,6 +661,15 @@ jobs:
           ALARM_EXIT: ${{ steps.alarm.outputs.exit_code }}
         run: |
           set -uo pipefail
+          # FIRST ACTION. A step timeout or a runner kill ends this step without running anything
+          # below, which would leave no outputs and so fire no filing step. Pre-writing the
+          # pessimistic verdict makes that case a probe-defect issue; the end-of-step write below
+          # overrides it (the runner keeps the last value written for a key).
+          {
+            echo "fill_verdict=UNEVALUATED"
+            echo "fill_defect=true"
+            echo "fill_line=probe step did not complete"
+          } >> "$GITHUB_OUTPUT"
           # shellcheck disable=SC2020  # tr char-set strip is intentional (verbatim from the alarm step)
           strip_log_injection() {
             printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' \
@@ -670,9 +681,9 @@ jobs:
             echo "::add-mask::${BETTERSTACK_QUERY_HOST,,}"
           fi
 
-          # `|| rc=$?` IS THE CAPTURE: the runner shell is `bash -eo pipefail`, so a bare
-          # `out="$(...)"; rc=$?` would abort the step on the very exit codes (1 and 2) this
-          # probe exists to read.
+          # `|| rc=$?` IS THE CAPTURE: the step runs under `set -e` (the runner's default bash
+          # shell) and sets its own pipefail above, so a bare `out="$(...)"; rc=$?` would abort the
+          # step on the very exit codes (1 and 2) this probe exists to read.
           rc=0
           out="$(bash scripts/followthroughs/zot-fill-rate-7341.sh 2>&1)" || rc=$?
 
@@ -714,8 +725,9 @@ jobs:
           fi
 
           # fill_defect: the probe could not evaluate. UNEVALUATED always; a TRANSIENT only when its
-          # cause token is outside the CLOSED benign set AND the zot leg is not itself failing
-          # (ALARM_EXIT 2 already errors the Sentry monitor for the same shared credentials).
+          # cause token is outside the CLOSED benign set AND the zot leg reports no fault of its own.
+          # ALARM_EXIT 2 already errors the Sentry monitor for the same shared credentials, 3 files
+          # the PRODUCER_SILENT issue and 4 the INGEST_DARK issue, so a TRANSIENT there is owned.
           defect=false
           case "$verdict" in
             UNEVALUATED) defect=true ;;
@@ -726,7 +738,11 @@ jobs:
                 too_few_samples)
                   if [[ "$rows_scoped" =~ ^[0-9]+$ ]] && (( 10#$rows_scoped < 12 )); then benign=true; fi ;;
               esac
-              if [[ "$benign" != "true" && "${ALARM_EXIT:-}" != "2" ]]; then defect=true; fi ;;
+              case "${ALARM_EXIT:-}" in
+                2|3|4) owned=true ;;
+                *)     owned=false ;;
+              esac
+              if [[ "$benign" != "true" && "$owned" != "true" ]]; then defect=true; fi ;;
           esac
 
           # The published line: the header (or a synthesized one for UNEVALUATED) through
@@ -785,8 +801,8 @@ jobs:
             printf -- '- **Detected at:** %s\n' "$NOW"
             printf -- '- **Run log:** %s\n\n' "$RUN_URL"
             printf '### Reproduce (no SSH)\n\n```\ndoppler run -p soleur -c prd_terraform -- bash scripts/followthroughs/zot-fill-rate-7341.sh\n```\n\n'
-            printf '### Why this matters\n\nThe `soleur-registry-disk-prd` heartbeat stops pinging at 85 percent, and image pulls then fail fleet-wide. This probe fires while the store is still below that line.\n\n'
-            printf '### Close rule\n\nThis issue auto-closes on a PASS run once 6 hours have passed with no new FAIL comment. After a reclaim or a host replace the probe returns TRANSIENT while it rebuilds a 24 hour baseline, so expect the close about 30 hours after the store recovers. Silence during that window is the probe rebuilding its baseline, not a dead probe. Closing this issue by hand opens a new one within the hour while the projection holds: fix the store or comment instead.\n'
+            printf '### Why this matters\n\nThe `soleur-registry-disk-prd` heartbeat stops pinging at 85 percent, and image pulls then fail fleet-wide. This probe usually fires while the store is still below that line, from the projected trend.\n\n'
+            printf '### Close rule\n\nThis issue auto-closes on a PASS run once 6 hours have passed with no new FAIL comment. After a reclaim or a host replace the probe returns TRANSIENT while it rebuilds a 24 hour baseline, so expect the close about 25 hours after the store recovers. Silence during that window is the probe rebuilding its baseline, not a dead probe. Closing this issue by hand opens a new one within the hour while the projection holds: fix the store or comment instead.\n'
           } > "$BODY_FILE"
           EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty') || { echo "::error::zot-fill-rate: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
           if [[ -n "$EXISTING" ]]; then
@@ -825,9 +841,9 @@ jobs:
             printf -- '- **Cause:** `%s`\n' "$FILL_LINE"
             printf -- '- **Detected at:** %s\n' "$NOW"
             printf -- '- **Run log:** %s\n\n' "$RUN_URL"
-            printf '### What this is\n\nThe standing fill-rate probe could not evaluate. This is the probe failing, not a store state and not a restart loop: either the script returned an exit code or output shape outside its contract (UNEVALUATED), or it reported a TRANSIENT whose cause is not one of the expected ones while the zot restart-loop leg was healthy (so the fill leg alone is blind). The full script output is in the run log.\n\n'
+            printf '### What this is\n\nThe standing fill-rate probe could not evaluate. This is the probe failing, not a store state and not a restart loop: either the script returned an exit code or output shape outside its contract (UNEVALUATED), or it reported a TRANSIENT whose cause is not one of the expected ones while the zot restart-loop leg reported no fault of its own (so the fill leg alone is blind). The full script output is in the run log.\n\n'
             printf '### Reproduce (no SSH)\n\n```\ndoppler run -p soleur -c prd_terraform -- bash scripts/followthroughs/zot-fill-rate-7341.sh\n```\n\n'
-            printf '### Close rule\n\nA FAIL run of the probe closes this issue at once, since a FAIL proves the probe evaluated. A PASS run closes it once 6 hours have passed with no new comment. A one-run blip therefore resolves itself without a human.\n'
+            printf '### Close rule\n\nThe next PASS or FAIL run of the probe closes this issue at once, since either verdict proves the probe evaluated. A one-run blip therefore resolves itself without a human.\n'
           } > "$BODY_FILE"
           EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty') || { echo "::error::zot-fill-rate-defect: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
           if [[ -n "$EXISTING" ]]; then
@@ -848,24 +864,29 @@ jobs:
           # shellcheck disable=SC2016  # literal single-quoted jq programs are intentional
           set -euo pipefail
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
-          # updatedAt is the proxy for "last FAIL" (each FAIL run comments): close only an issue
-          # quiet for 6 hours, so a store sitting at the threshold does not flap. A human comment
-          # defers the close, which is the safe direction. An unparseable timestamp makes jq error,
-          # the guard below turns that into "do not close".
-          CUTOFF=$(( $(date -u +%s) - 21600 ))
-          for T in \
-            '[ci/zot-fill-rate] Registry store fill rate projects a breach' \
-            '[ci/zot-fill-rate] Registry fill-rate probe defect'; do
-            LIST=$(gh issue list --repo "$GH_REPO" --state open --label "ci/zot-fill-rate" --limit 100 --json number,title,updatedAt) || { echo "::warning::zot-fill-rate: the open-issue lookup failed; nothing is closed this run."; continue; }
-            CANDS=$(jq -r --arg t "$T" '.[] | select(.title | contains($t)) | "\(.number) \(.updatedAt)"' <<<"$LIST") || CANDS=""
-            while read -r N TS; do
-              [[ -n "$N" ]] || continue
-              AGE_OK=$(jq -rn --arg ts "$TS" --argjson c "$CUTOFF" '($ts | fromdateiso8601) < $c') || AGE_OK=false
-              if [[ "$AGE_OK" == "true" ]]; then
-                gh issue close "$N" --repo "$GH_REPO" --comment "The fill-rate probe returned PASS at ${NOW} and this issue has had no update for 6 hours. Run: ${RUN_URL}"
-              fi
-            done <<<"$CANDS"
+          BREACH_TITLE='[ci/zot-fill-rate] Registry store fill rate projects a breach'
+          DEFECT_TITLE='[ci/zot-fill-rate] Registry fill-rate probe defect'
+          # ONE lookup for both titles, filtered per title below. A failed lookup closes nothing.
+          LIST=$(gh issue list --repo "$GH_REPO" --state open --label "ci/zot-fill-rate" --limit 100 --json number,title,updatedAt) || { echo "::warning::zot-fill-rate: the open-issue lookup failed; nothing is closed this run."; exit 0; }
+          # A PASS proves the probe evaluated, so an open probe-defect issue is stale at once: no
+          # age test, because the next PASS or FAIL run is the close rule its body states.
+          DEFECTS=$(jq -r --arg t "$DEFECT_TITLE" '.[] | select(.title | contains($t)) | .number' <<<"$LIST") || DEFECTS=""
+          for N in $DEFECTS; do
+            gh issue close "$N" --repo "$GH_REPO" --comment "The fill-rate probe returned PASS at ${NOW}, which proves the probe evaluated, so the probe defect is cleared. Run: ${RUN_URL}"
           done
+          # The breach issue closes on hysteresis. updatedAt is the proxy for "last FAIL" (each FAIL
+          # run comments): close only an issue quiet for 6 hours, so a store sitting at the
+          # threshold does not flap. A human comment defers the close, which is the safe direction.
+          # An unparseable timestamp makes jq error, the guard below turns that into "do not close".
+          CUTOFF=$(( $(date -u +%s) - 21600 ))
+          CANDS=$(jq -r --arg t "$BREACH_TITLE" '.[] | select(.title | contains($t)) | "\(.number) \(.updatedAt)"' <<<"$LIST") || CANDS=""
+          while read -r N TS; do
+            [[ -n "$N" ]] || continue
+            AGE_OK=$(jq -rn --arg ts "$TS" --argjson c "$CUTOFF" '($ts | fromdateiso8601) < $c') || AGE_OK=false
+            if [[ "$AGE_OK" == "true" ]]; then
+              gh issue close "$N" --repo "$GH_REPO" --comment "The fill-rate probe returned PASS at ${NOW} and this issue has had no update for 6 hours. Run: ${RUN_URL}"
+            fi
+          done <<<"$CANDS"
 
   # #7377 — the restart-loop alarm is the read-only inventory lever's only automatic producer.
   # A separate job so `actions: write` (which can dispatch ANY workflow_dispatch workflow in the

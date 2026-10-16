@@ -22,8 +22,10 @@
 #
 # TEST SEAM. ZOT_FILL_WIRING_ROOT points the suite at a tree holding
 # .github/workflows/scheduled-zot-restart-loop.yml (default: the repo root). The mutation rows
-# below use it to run this same suite, as a child process, against edited copies of the workflow,
-# and AC3 uses it to prove the suite is RED against the pre-change workflow. ZOT_FILL_WIRING_CHILD
+# below use it to run this same suite, as a child process, against edited copies of the workflow.
+# AC3 (the suite is RED against the pre-change workflow) is checked in the PR by pointing this seam
+# at a tree holding `git show origin/main:.github/workflows/scheduled-zot-restart-loop.yml`; the
+# in-suite equivalents are the zero-fill-steps floor and mutation row 1. ZOT_FILL_WIRING_CHILD
 # marks such a child: it skips the mutation section (no recursion) and the vacuity floor, which
 # the parent enforces by comparing the child's executed-case count with its own.
 #
@@ -75,6 +77,7 @@ eq() { if [[ "$2" == "$3" ]]; then pass "$1"; else fail "$1 (want: [$2] got: [$3
 
 command -v python3 >/dev/null 2>&1 || { echo "FATAL: python3 missing" >&2; exit 2; }
 command -v jq >/dev/null 2>&1 || { echo "FATAL: jq missing" >&2; exit 2; }
+command -v timeout >/dev/null 2>&1 || { echo "FATAL: timeout missing" >&2; exit 2; }
 [[ -f "$WF" ]] || { echo "FATAL: workflow not found at $WF" >&2; exit 2; }
 
 # ── helper programs (heredocs: their bodies are data, not suite code) ───────────────────────────
@@ -83,12 +86,13 @@ SHIM="$S/shim"
 mkdir -p "$HELPERS" "$SHIM"
 
 cat > "$HELPERS/wf.py" <<'PY'
-import copy, hashlib, json, os, re, sys, yaml
+import json, os, re, sys, yaml
 
 PROBE_CALL = re.compile(r"\$\(bash scripts/followthroughs/zot-fill-rate-7341\.sh")
 ALARM_CALL = re.compile(r"\$\(bash scripts/zot-restart-loop-alarm\.sh")
 WRITE_VERB = re.compile(r"gh issue (create|comment|close)\b")
 TITLE = re.compile(r'^\s*ISSUE_TITLE="([^"]*)"\s*$', re.M)
+ECHO_KEY = re.compile(r'echo "([A-Za-z_][A-Za-z0-9_]*)=')
 
 def load(path):
     return yaml.safe_load(open(path, encoding="utf-8"))
@@ -166,6 +170,30 @@ def facts(wf, out):
     pass_body = open(os.path.join(out, "pass.sh")).read()
     f["PASS_TITLES_OK"] = int(bool(f["FAIL_TITLE"]) and bool(f["DEFECT_TITLE"])
                               and f["FAIL_TITLE"] in pass_body and f["DEFECT_TITLE"] in pass_body)
+    # Exact `if:` and env of every fill step, and the closed world of step outputs. Each value is
+    # compared against a reviewed literal by the shell side.
+    roles = {"probe": [p], "fail": kinds["fail"], "defect": kinds["defect"], "pass": kinds["pass"]}
+    for role, idx in roles.items():
+        s0 = steps[idx[0]] if idx else {}
+        env = s0.get("env") or {}
+        f["IF_" + role] = str(s0.get("if", "<absent>")) if idx else "<no step>"
+        f["ENV_" + role] = " ; ".join("%s=%s" % (k, env[k]) for k in sorted(env)) if idx else "<no step>"
+    ids = set(s.get("id") for s in steps if s.get("id"))
+    blobs = [json.dumps(s, sort_keys=True) for s in steps]
+    refs_any = set()
+    for b in blobs:
+        refs_any |= set(re.findall(r"steps\.([A-Za-z0-9_-]+)\.", b))
+    f["DANGLING_STEP_IDS"] = ",".join(sorted(refs_any - ids))
+    fill_refs = set()
+    for b in blobs:
+        fill_refs |= set(re.findall(r"steps\.%s\.outputs\.([A-Za-z0-9_]+)" % re.escape(pid), b))
+    written = set(ECHO_KEY.findall(run_of(steps[p])))
+    f["FILL_UNWRITTEN_REFS"] = ",".join(sorted(fill_refs - written))
+    f["FILL_REFS_N"] = len(fill_refs)
+    aid = steps[a].get("id", "")
+    alarm_refs = set(re.findall(r"steps\.%s\.outputs\.([A-Za-z0-9_]+)" % re.escape(aid), blobs[p]))
+    f["PROBE_ALARM_REFS_N"] = len(alarm_refs)
+    f["PROBE_ALARM_REFS_MISSING"] = ",".join(sorted(alarm_refs - set(ECHO_KEY.findall(run_of(steps[a])))))
     for k, v in f.items():
         print(f"{k}={v}")
 
@@ -197,6 +225,36 @@ def mutate(src, dst, op, args):
         if old not in tgt["run"]:
             sys.exit("mutation did not apply: " + op + " " + old)
         tgt["run"] = tgt["run"].replace(old, new)
+    elif op in ("if-replace", "if-delete", "env-set", "add-step"):
+        kind = args[0]
+        if kind == "probe":
+            tgt = steps[probe[0]]
+        else:
+            tgt = next(s for s in steps if kind_cond[kind] in str(s.get("if", "")))
+        if op == "if-replace":
+            if args[1] not in str(tgt.get("if", "")):
+                sys.exit("mutation did not apply: " + op + " " + args[1])
+            tgt["if"] = str(tgt["if"]).replace(args[1], args[2])
+        elif op == "if-delete":
+            if "if" not in tgt:
+                sys.exit("mutation did not apply: " + op)
+            del tgt["if"]
+        elif op == "env-set":
+            before = dict(tgt.get("env") or {})
+            env = dict(before)
+            if args[2] == "__DEL__":
+                env.pop(args[1], None)
+            else:
+                env[args[1]] = args[2]
+            if env == before:
+                sys.exit("mutation did not apply: " + op)
+            tgt["env"] = env
+        else:
+            steps.append({
+                "name": "Third-party writer",
+                "uses": "actions/github-script@v7",
+                "with": {"script": "core.setOutput('x', '${{ steps.%s.outputs.fill_verdict }}')" % steps[probe[0]]["id"]},
+            })
     elif op == "status-add":
         s = steps[sentry[0]]
         old = " && 'ok' || 'error'"
@@ -283,9 +341,14 @@ run_step() {
   assert_fixture_dir "$outf"
   : > "$GH_LOG"
   STEP_RC=0
-  env -C "$work" -i "PATH=${SHIM}:${BASE_PATH}" "HOME=$S" "GH_LOG=$GH_LOG" "$@" \
+  # RUN_WRAP (optional, word-split on purpose) prefixes the whole command, e.g. `timeout 1`.
+  # shellcheck disable=SC2086
+  ${RUN_WRAP:-} env -C "$work" -i "PATH=${SHIM}:${BASE_PATH}" "HOME=$S" "GH_LOG=$GH_LOG" "$@" \
     bash --noprofile --norc -eo pipefail "$script" > "$outf" 2>&1 || STEP_RC=$?
 }
+
+# gho_last <file> <key>: the LAST value written for a key, which is what the runner keeps.
+gho_last() { local v; v="$(sed -n "s/^$2=//p" "$1" | tail -n 1)" || v=""; printf '%s' "$v"; }
 
 CASE_N=0
 # probe_case <label> <rc|absent> <body (printf %b)> <alarm_exit> <want "VERDICT|DEFECT|STEPRC">
@@ -306,8 +369,8 @@ probe_case() {
     "BETTERSTACK_QUERY_HOST=Qhost.Example.test" "BETTERSTACK_QUERY_USERNAME=u" \
     "BETTERSTACK_QUERY_PASSWORD=p" "ALARM_EXIT=$aexit"
   local v d
-  v="$(sed -n 's/^fill_verdict=//p' "$w/gho.txt")" || v=""
-  d="$(sed -n 's/^fill_defect=//p' "$w/gho.txt")" || d=""
+  v="$(gho_last "$w/gho.txt" fill_verdict)" || v=""
+  d="$(gho_last "$w/gho.txt" fill_defect)" || d=""
   ck
   eq "$label" "$want" "${v}|${d}|${STEP_RC}"
 }
@@ -319,6 +382,10 @@ H_RECL='zot-fill-rate[#7341]: TRANSIENT reclaim_at_sample_30_left_5_samples_unde
 H_STALE='zot-fill-rate[#7341]: TRANSIENT newest_sample_95min_old_over_30min_pcent=16 samples=349 boot=46f08985 window=72h'
 H_FEW_LOW='zot-fill-rate[#7341]: TRANSIENT too_few_samples n=3 rows_env=3 rows_scoped=3 boot=46f08985 window=72h'
 H_FEW_HIGH='zot-fill-rate[#7341]: TRANSIENT too_few_samples n=3 rows_env=40 rows_scoped=40 boot=46f08985 window=72h'
+H_FEW_12='zot-fill-rate[#7341]: TRANSIENT too_few_samples n=3 rows_env=12 rows_scoped=12 boot=46f08985 window=72h'
+H_FEW_11='zot-fill-rate[#7341]: TRANSIENT too_few_samples n=3 rows_env=11 rows_scoped=11 boot=46f08985 window=72h'
+H_FEW_08='zot-fill-rate[#7341]: TRANSIENT too_few_samples n=3 rows_env=8 rows_scoped=08 boot=46f08985 window=72h'
+H_FEW_NONE='zot-fill-rate[#7341]: TRANSIENT too_few_samples n=3 rows_env=3 boot=46f08985 window=72h'
 H_QRC='zot-fill-rate[#7341]: TRANSIENT query_rc=3'
 H_NOEMIT='zot-fill-rate[#7341]: TRANSIENT no_emission_rows rows_returned=0 window=72h'
 H_NOBOOT='zot-fill-rate[#7341]: TRANSIENT no_real_boot_id rows_env=40 window=72h'
@@ -337,6 +404,21 @@ ck; eq "T1 exactly one probe step, one alarm step and one Sentry check-in" "1|1|
   "$(fact "$FACTS" N_PROBE)|$(fact "$FACTS" N_ALARM)|$(fact "$FACTS" N_SENTRY)"
 ck; eq "T1 exactly three fill filing steps (FAIL, probe defect, PASS close), each of one kind" "3|1|1|1" \
   "$(fact "$FACTS" N_FILING)|$(fact "$FACTS" N_FAIL)|$(fact "$FACTS" N_DEFECT)|$(fact "$FACTS" N_PASS)"
+
+PID="$(fact "$FACTS" PROBE_ID)"; AID="$(fact "$FACTS" ALARM_ID)"
+ck; eq "T1 exactly four steps reference the fill outputs or ci/zot-fill-rate by any key (run, uses, with, env, if)" "4" "$(fact "$FACTS" FILL_STEPS)"
+ck; eq "T1 the probe step if: is exactly the reviewed literal" '${{ !cancelled() }}' "$(fact "$FACTS" IF_probe)"
+ck; eq "T1 the FAIL step if: is exactly the reviewed literal" "\${{ !cancelled() && steps.${PID}.outputs.fill_verdict == 'FAIL' }}" "$(fact "$FACTS" IF_fail)"
+ck; eq "T1 the probe-defect step if: is exactly the reviewed literal" "\${{ !cancelled() && steps.${PID}.outputs.fill_defect == 'true' }}" "$(fact "$FACTS" IF_defect)"
+ck; eq "T1 the PASS close step if: is exactly the reviewed literal" "\${{ !cancelled() && steps.${PID}.outputs.fill_verdict == 'PASS' }}" "$(fact "$FACTS" IF_pass)"
+ENV_REPO='GH_REPO=${{ github.repository }} ; GH_TOKEN=${{ github.token }} ; RUN_URL=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+ck; eq "T1 the probe step env is exactly the reviewed key set and sources" "ALARM_EXIT=\${{ steps.${AID}.outputs.exit_code }} ; BETTERSTACK_QUERY_HOST=\${{ secrets.BETTERSTACK_QUERY_HOST }} ; BETTERSTACK_QUERY_PASSWORD=\${{ secrets.BETTERSTACK_QUERY_PASSWORD }} ; BETTERSTACK_QUERY_USERNAME=\${{ secrets.BETTERSTACK_QUERY_USERNAME }}" "$(fact "$FACTS" ENV_probe)"
+ck; eq "T1 the FAIL step env is exactly the reviewed key set and sources" "FILL_LINE=\${{ steps.${PID}.outputs.fill_line }} ; ${ENV_REPO}" "$(fact "$FACTS" ENV_fail)"
+ck; eq "T1 the probe-defect step env is exactly the reviewed key set and sources" "FILL_LINE=\${{ steps.${PID}.outputs.fill_line }} ; ${ENV_REPO}" "$(fact "$FACTS" ENV_defect)"
+ck; eq "T1 the PASS close step env is exactly the reviewed key set and sources" "${ENV_REPO}" "$(fact "$FACTS" ENV_pass)"
+ck; eq "T1 no step references a step id that does not exist" "" "$(fact "$FACTS" DANGLING_STEP_IDS)"
+ck; eq "T1 every steps.<probe>.outputs key referenced anywhere is written by the probe, and three are" "|3" "$(fact "$FACTS" FILL_UNWRITTEN_REFS)|$(fact "$FACTS" FILL_REFS_N)"
+ck; eq "T1 every steps.<alarm>.outputs key the probe reads exists, and it reads one" "|1" "$(fact "$FACTS" PROBE_ALARM_REFS_MISSING)|$(fact "$FACTS" PROBE_ALARM_REFS_N)"
 
 # ── T2 ordering ─────────────────────────────────────────────────────────────────────────────────
 echo "--- T2 ordering"
@@ -371,6 +453,23 @@ probe_case "T3 TRANSIENT query_rc= is a defect while the zot leg is not failing"
 probe_case "T3 TRANSIENT no_emission_rows is a defect" 2 "${H_NOEMIT}\n" 0 "TRANSIENT|true|0"
 probe_case "T3 TRANSIENT no_real_boot_id is a defect" 2 "${H_NOBOOT}\n" 0 "TRANSIENT|true|0"
 probe_case "T3 alarm exit 2 suppresses the TRANSIENT defect (Sentry already pages for it)" 2 "${H_QRC}\n" 2 "TRANSIENT|false|0"
+probe_case "T3 alarm exit 3 (PRODUCER_SILENT) suppresses the TRANSIENT defect" 2 "${H_QRC}\n" 3 "TRANSIENT|false|0"
+probe_case "T3 alarm exit 4 (INGEST_DARK) suppresses the TRANSIENT defect" 2 "${H_QRC}\n" 4 "TRANSIENT|false|0"
+probe_case "T3 alarm exit 1 (FIRE) does not suppress a non-benign TRANSIENT defect" 2 "${H_QRC}\n" 1 "TRANSIENT|true|0"
+probe_case "T3 alarm exit 3 does NOT suppress UNEVALUATED" 3 "${H_PASS}\n" 3 "UNEVALUATED|true|1"
+probe_case "T3 alarm exit 4 does NOT suppress UNEVALUATED" 3 "${H_PASS}\n" 4 "UNEVALUATED|true|1"
+probe_case "T3 TRANSIENT too_few_samples with rows_scoped of exactly 11 is benign" 2 "${H_FEW_11}\n" 0 "TRANSIENT|false|0"
+probe_case "T3 TRANSIENT too_few_samples with rows_scoped of exactly 12 is a defect" 2 "${H_FEW_12}\n" 0 "TRANSIENT|true|0"
+probe_case "T3 TRANSIENT too_few_samples with a zero-padded rows_scoped=08 is benign (decimal, not octal)" 2 "${H_FEW_08}\n" 0 "TRANSIENT|false|0"
+probe_case "T3 TRANSIENT too_few_samples with no rows_scoped is a defect" 2 "${H_FEW_NONE}\n" 0 "TRANSIENT|true|0"
+probe_case "T3 a PASSED header is not a header (UNEVALUATED)" 0 "zot-fill-rate[#7341]: PASSED pcent=16\n" 0 "UNEVALUATED|true|1"
+probe_case "T3 an indented header is not a header (UNEVALUATED)" 0 " ${H_PASS}\n" 0 "UNEVALUATED|true|1"
+probe_case "T3 an UNEVALUATED run publishes a non-empty fill_line" 0 "all good\n" 0 "UNEVALUATED|true|1"
+FL="$(gho_last "$S/p${CASE_N}/gho.txt" fill_line)" || FL=""
+ck; eq "T3 the UNEVALUATED fill_line names the exit code and header count" "UNEVALUATED rc=0 headers=0" "$FL"
+probe_case "T3 a header carrying U+2028, a control byte, NEL and a BOM is still a PASS" 0 'zot-fill-rate[#7341]: PASS x\xe2\x80\xa8y\x01z\xc2\x85w\xef\xbb\xbfv\n' 0 "PASS|false|0"
+FL="$(gho_last "$S/p${CASE_N}/gho.txt" fill_line)" || FL=""
+ck; eq "T3 fill_line carries none of the U+2028, control, NEL or BOM bytes" "PASS xyzwv" "$FL"
 probe_case "T3 alarm exit 2 does NOT suppress UNEVALUATED" 3 "${H_PASS}\n" 2 "UNEVALUATED|true|1"
 probe_case "T3 an unset alarm exit is not 2: a non-benign TRANSIENT is still a defect" 2 "${H_QRC}\n" "" "TRANSIENT|true|0"
 
@@ -395,9 +494,28 @@ ck; eq "T3 the lowercased query host is masked" "1" "$n_mask"
 BIGTAIL="$(head -c 10000 /dev/zero | tr '\0' 'A')" || BIGTAIL=""
 BIGB="$(head -c 10000 /dev/zero | tr '\0' 'B')" || BIGB=""
 probe_case "T3 a hostile header is classified PASS" 0 "zot-fill-rate[#7341]: PASS pcent=16 \`tick\` @octocat #1 [x](http://e.test) \$(id) ${BIGTAIL}\n" 0 "PASS|false|0"
-FL="$(sed -n 's/^fill_line=//p' "$S/p${CASE_N}/gho.txt")" || FL=""
+FL="$(gho_last "$S/p${CASE_N}/gho.txt" fill_line)" || FL=""
 ck; eq "T3 fill_line drops the script-name prefix and the hash, at-sign and backtick characters" "PASS pcent=16 tick octocat 1 [x](http://e.test) \$(id) AAAA" "${FL:0:58}"
 ck; if (( ${#FL} <= 400 )); then pass "T3 fill_line is capped at 400 characters"; else fail "T3 fill_line is capped at 400 characters (got ${#FL})"; fi
+
+# A step timeout or a runner kill must still leave a probe-defect verdict behind: the pessimistic
+# outputs are written before anything that can hang.
+CASE_N=$((CASE_N + 1))
+TW="$S/p$CASE_N"
+assert_fixture_dir "$TW"
+mkdir -p "$TW/scripts/followthroughs"
+: > "$TW/gho.txt"
+: > "$TW/summary.txt"
+printf '#!/usr/bin/env bash\nsleep 3\n' > "$TW/scripts/followthroughs/zot-fill-rate-7341.sh"
+RUN_WRAP="timeout -k 2 1"
+run_step "$LIVE/probe.sh" "$TW" "$TW/log.txt" \
+  "GITHUB_OUTPUT=$TW/gho.txt" "GITHUB_STEP_SUMMARY=$TW/summary.txt" \
+  "BETTERSTACK_QUERY_HOST=Qhost.Example.test" "BETTERSTACK_QUERY_USERNAME=u" \
+  "BETTERSTACK_QUERY_PASSWORD=p" "ALARM_EXIT=0"
+RUN_WRAP=""
+ck; eq "T3 a probe that outlives its step timeout leaves UNEVALUATED, defect=true and a line behind (rc 124)" \
+  "UNEVALUATED|true|probe step did not complete|124" \
+  "$(gho_last "$TW/gho.txt" fill_verdict)|$(gho_last "$TW/gho.txt" fill_defect)|$(gho_last "$TW/gho.txt" fill_line)|$STEP_RC"
 
 # ── T4 filing (EXECUTED against the gh shim) ────────────────────────────────────────────────────
 echo "--- T4 filing"
@@ -420,9 +538,20 @@ filing_case() { # filing_case <name> <script> <issues-json> [VAR=val ...] -> set
     "GITHUB_OUTPUT=$FW/gho.txt" "GH_TOKEN=t" "GH_REPO=o/r" \
     "RUN_URL=https://github.com/o/r/actions/runs/1" "GH_ISSUES=$issues" "$@"
 }
-glog() { cat "$GH_LOG"; }
 count_in_log() { local n; n="$(grep -c -- "$1" "$GH_LOG")" || n=0; printf '%s' "$n"; }
 count_fixed() { local n; n="$(grep -c -F -- "$1" "$GH_LOG")" || n=0; printf '%s' "$n"; }
+
+# lookup_flags: "<lookups>|<missing label>|<missing --state open>|<missing --limit 100>|<--search>"
+# over every `gh issue list` the last step ran, so a dropped flag in ANY lookup is visible.
+lookup_flags() {
+  local n nl ns nm sr
+  n="$(grep -c '^issue list ' "$GH_LOG")" || n=0
+  nl="$(grep '^issue list ' "$GH_LOG" | grep -vcE -- '--label ci/zot-fill-rate( |$)')" || nl=0
+  ns="$(grep '^issue list ' "$GH_LOG" | grep -vcE -- '--state open( |$)')" || ns=0
+  nm="$(grep '^issue list ' "$GH_LOG" | grep -vcE -- '--limit 100( |$)')" || nm=0
+  sr="$(grep -c -F -- '--search' "$GH_LOG")" || sr=0
+  printf '%s|%s|%s|%s|%s' "$n" "$nl" "$ns" "$nm" "$sr"
+}
 
 filing_case failnew "$LIVE/fail.sh" "[]" "FILL_LINE=$FILL_LINE_OK"
 ck; eq "T4 FAIL, no tracker: the step exits 0" "0" "$STEP_RC"
@@ -436,6 +565,7 @@ ck; eq "T4 the issue is created under the FAIL title" "1" "$(count_fixed "--titl
 ck; eq "T4 every lookup lists by the label and none uses --search" "0" "$(count_fixed '--search')"
 n_list_nolabel="$(grep '^issue list' "$GH_LOG" | grep -vc -- '--label ci/zot-fill-rate')" || n_list_nolabel=0
 ck; eq "T4 every issue lookup carries --label ci/zot-fill-rate" "0" "$n_list_nolabel"
+ck; eq "T4 FAIL: both lookups (tracker, stale defect) list open issues by label with --limit 100 and no --search" "2|0|0|0|0" "$(lookup_flags)"
 BODY="$(sed -n '/^BODY<<</,/^>>>BODY/p' "$GH_LOG")" || BODY=""
 ck; eq "T4 the body holds the verdict line" "1" "$(printf '%s\n' "$BODY" | grep -c -F -- "$FILL_LINE_OK")"
 ck; eq "T4 the body holds the reproduce command" "1" "$(printf '%s\n' "$BODY" | grep -c -F -- 'doppler run -p soleur -c prd_terraform -- bash scripts/followthroughs/zot-fill-rate-7341.sh')"
@@ -443,7 +573,7 @@ ck; eq "T4 the body holds the run link" "1" "$(printf '%s\n' "$BODY" | grep -c -
 ck; eq "T4 the body names #7521 and not a closing keyword for it" "0" "$(printf '%s\n' "$BODY" | grep -ci -E '(close[sd]?|fix(es|ed)?|resolve[sd]?) #7521')"
 
 filing_case failold "$LIVE/fail.sh" "[{\"number\":77,\"title\":\"${FAIL_TITLE}\"}]" "FILL_LINE=$FILL_LINE_OK"
-ck; eq "T4 FAIL, tracker exists: comment on it and create nothing" "1|0" "$(count_in_log '^issue comment 77 ')|$(count_in_log '^issue create ')"
+ck; eq "T4 FAIL, tracker exists: comment on it, create nothing and close nothing (the tracker is not a stale defect)" "1|0|0" "$(count_in_log '^issue comment 77 ')|$(count_in_log '^issue create ')|$(count_in_log '^issue close ')"
 
 filing_case faildedupe "$LIVE/fail.sh" "[]" "FILL_LINE=$FILL_LINE_OK" "GH_LIST_FAIL=1"
 ck; eq "T4 FAIL, dedupe query fails: proceeds to create (the documented trade) and the step exits 0" "1|0" "$(count_in_log '^issue create ')|$STEP_RC"
@@ -468,7 +598,7 @@ ck; if (( $(printf '%s' "$CMT" | wc -c) < 1000 )); then pass "T4 a 10 KB FILL_LI
 # End to end: the probe's published line feeds the FAIL step; nothing else of the script output
 # travels with it.
 probe_case "T4 chain: a FAIL probe run" 1 "${H_FAIL}\nThe store is refilling.\n  ATTRIB_SENTINEL_2 lead line\n" 0 "FAIL|false|0"
-CHAIN_LINE="$(sed -n 's/^fill_line=//p' "$S/p${CASE_N}/gho.txt")" || CHAIN_LINE=""
+CHAIN_LINE="$(gho_last "$S/p${CASE_N}/gho.txt" fill_line)" || CHAIN_LINE=""
 filing_case chain "$LIVE/fail.sh" "[]" "FILL_LINE=$CHAIN_LINE"
 BODY="$(sed -n '/^BODY<<</,/^>>>BODY/p' "$GH_LOG")" || BODY=""
 ck; eq "T4 chain: the body carries the measured line and none of the script's other output" "1|0" \
@@ -480,25 +610,32 @@ ck; eq "T4 defect, no tracker: label then one create under the defect title with
 BODY="$(sed -n '/^BODY<<</,/^>>>BODY/p' "$GH_LOG")" || BODY=""
 ck; eq "T4 the defect body holds the cause line, the reproduce command and the run link" "1|1|1" \
   "$(printf '%s\n' "$BODY" | grep -c -F 'UNEVALUATED rc=0')|$(printf '%s\n' "$BODY" | grep -c -F 'bash scripts/followthroughs/zot-fill-rate-7341.sh')|$(printf '%s\n' "$BODY" | grep -c -F 'actions/runs/1')"
-filing_case defold "$LIVE/defect.sh" "[{\"number\":91,\"title\":\"${DEFECT_TITLE}\"},{\"number\":90,\"title\":\"${FAIL_TITLE}\"}]" "FILL_LINE=UNEVALUATED rc=0 headers=0"
-ck; eq "T4 defect, tracker exists: comment on the defect issue (not the FAIL one) and create nothing" "1|0" "$(count_in_log '^issue comment 91 ')|$(count_in_log '^issue create ')"
+ck; eq "T4 defect, no tracker: its one lookup lists open issues by label with --limit 100 and no --search" "1|0|0|0|0" "$(lookup_flags)"
+filing_case defold "$LIVE/defect.sh" "[{\"number\":90,\"title\":\"${FAIL_TITLE}\"},{\"number\":91,\"title\":\"${DEFECT_TITLE}\"}]" "FILL_LINE=UNEVALUATED rc=0 headers=0"
+ck; eq "T4 defect, tracker exists (the FAIL issue listed FIRST): comment on the defect issue only and create nothing" "1|0|0" "$(count_in_log '^issue comment 91 ')|$(count_in_log '^issue comment 90 ')|$(count_in_log '^issue create ')"
 filing_case defdedupe "$LIVE/defect.sh" "[]" "FILL_LINE=x" "GH_LIST_FAIL=1"
 ck; eq "T4 defect, dedupe query fails: proceeds to create" "1" "$(count_in_log '^issue create ')"
 
 # ── T5 PASS close hysteresis (EXECUTED) ─────────────────────────────────────────────────────────
 echo "--- T5 PASS close"
 ago() { date -u -d "$1 hours ago" '+%Y-%m-%dT%H:%M:%SZ'; }
-T5_5H="$(ago 5)"; T5_7H="$(ago 7)"; T5_30H="$(ago 30)"
+ago_min() { date -u -d "$1 minutes ago" '+%Y-%m-%dT%H:%M:%SZ'; }
+T5_5H="$(ago 5)"; T5_7H="$(ago 7)"; T5_30H="$(ago 30)"; T5_1M="$(ago_min 1)"
 filing_case pass5h "$LIVE/pass.sh" "[{\"number\":50,\"title\":\"${FAIL_TITLE}\",\"updatedAt\":\"${T5_5H}\"}]"
 ck; eq "T5 a tracker updated 5 h ago is not closed (hysteresis)" "0|0" "$(count_in_log '^issue close ')|$STEP_RC"
 filing_case pass7h "$LIVE/pass.sh" "[{\"number\":51,\"title\":\"${FAIL_TITLE}\",\"updatedAt\":\"${T5_7H}\"}]"
 ck; eq "T5 a tracker updated 7 h ago is closed with a comment" "1|1" "$(count_in_log '^issue close 51 .*--comment')|$(count_in_log '^issue close ')"
+ck; eq "T5 the PASS step does ONE lookup (open, by label, --limit 100, no --search) for both titles" "1|0|0|0|0" "$(lookup_flags)"
 filing_case passnone "$LIVE/pass.sh" "[]"
 ck; eq "T5 no open tracker is a no-op that exits 0" "0|0" "$(count_in_log '^issue close ')|$STEP_RC"
 filing_case passtwo "$LIVE/pass.sh" "[{\"number\":52,\"title\":\"${FAIL_TITLE}\",\"updatedAt\":\"${T5_7H}\"},{\"number\":53,\"title\":\"${FAIL_TITLE}\",\"updatedAt\":\"${T5_30H}\"}]"
 ck; eq "T5 two old duplicates of the same title are both closed" "1|1" "$(count_in_log '^issue close 52 ')|$(count_in_log '^issue close 53 ')"
 filing_case passdefect "$LIVE/pass.sh" "[{\"number\":54,\"title\":\"${DEFECT_TITLE}\",\"updatedAt\":\"${T5_7H}\"},{\"number\":55,\"title\":\"${DEFECT_TITLE}\",\"updatedAt\":\"${T5_5H}\"}]"
-ck; eq "T5 the probe-defect issue closes by the same rule (old closes, recent stays)" "1|0" "$(count_in_log '^issue close 54 ')|$(count_in_log '^issue close 55 ')"
+ck; eq "T5 the probe-defect issue closes at once on a PASS whatever its age (7 h and 5 h old)" "1|1" "$(count_in_log '^issue close 54 ')|$(count_in_log '^issue close 55 ')"
+filing_case passdefect1m "$LIVE/pass.sh" "[{\"number\":58,\"title\":\"${DEFECT_TITLE}\",\"updatedAt\":\"${T5_1M}\"}]"
+ck; eq "T5 a probe-defect issue updated one minute ago is closed by the PASS" "1" "$(count_in_log '^issue close 58 ')"
+filing_case passbreach1m "$LIVE/pass.sh" "[{\"number\":59,\"title\":\"${FAIL_TITLE}\",\"updatedAt\":\"${T5_1M}\"}]"
+ck; eq "T5 a breach issue updated one minute ago is NOT closed by the PASS (hysteresis stays for the breach title)" "0|0" "$(count_in_log '^issue close ')|$STEP_RC"
 filing_case passother "$LIVE/pass.sh" "[{\"number\":56,\"title\":\"[ci/zot-fill-rate] some other class\",\"updatedAt\":\"${T5_30H}\"}]"
 ck; eq "T5 an unrelated issue under the same label is never closed" "0" "$(count_in_log '^issue close ')"
 filing_case passbadts "$LIVE/pass.sh" "[{\"number\":57,\"title\":\"${FAIL_TITLE}\",\"updatedAt\":\"not-a-date\"}]"
@@ -526,10 +663,17 @@ base_cases=$cases
 if [[ -z "$CHILD" ]]; then
   echo "--- mutation rows"
   # mut_row <name> <expected substring in the child's output> <wf.py mutate args...>
-  # The child must exit NON-ZERO and name the expected check, so a row cannot go red for an
-  # unrelated reason. A mutation that does not apply is a suite defect, not a pass.
+  # The child must exit NON-ZERO and name the expected check ON A VERDICT LINE (`  FAIL: ...`, or
+  # a whole-suite `[FATAL] ...` line), so a row cannot go red for an unrelated reason or because
+  # its label merely appears in a PASS line or a want/got dump. A mutation that does not apply is
+  # a suite defect, not a pass.
+  # Rows run as background children, MUT_JOBS at a time (each child re-executes the whole suite),
+  # and are judged afterwards by mut_collect in launch order.
+  MUT_JOBS=4
+  MUT_NAMES=(); MUT_EXPECT=(); MUT_ROOTS=()
+  MUT_RUNNING=()
   mut_row() {
-    local name="$1" expect="$2" mrc crc n
+    local name="$1" expect="$2" mrc
     shift 2
     local mroot="$S/m-$name"
     assert_fixture_dir "$mroot"
@@ -540,11 +684,24 @@ if [[ -z "$CHILD" ]]; then
       ck; fail "MUT $name: the mutation did not apply ($(cat "$mroot/mutate.txt"))"
       return 0
     fi
-    crc=0
-    env "ZOT_FILL_WIRING_ROOT=$mroot" "ZOT_FILL_WIRING_CHILD=1" bash "$SELF" > "$mroot/out.txt" 2>&1 || crc=$?
-    n="$(grep -c -F -- "$expect" "$mroot/out.txt")" || n=0
-    ck
-    if (( crc != 0 && n >= 1 )); then pass "MUT $name goes RED on [$expect]"; else fail "MUT $name did not go RED on [$expect] (rc=$crc, matches=$n)"; fi
+    if (( ${#MUT_RUNNING[@]} >= MUT_JOBS )); then
+      wait "${MUT_RUNNING[0]}" 2>/dev/null || true
+      MUT_RUNNING=("${MUT_RUNNING[@]:1}")
+    fi
+    ( env "ZOT_FILL_WIRING_ROOT=$mroot" "ZOT_FILL_WIRING_CHILD=1" bash "$SELF" > "$mroot/out.txt" 2>&1; echo $? > "$mroot/rc.txt" ) &
+    MUT_RUNNING+=("$!")
+    MUT_NAMES+=("$name"); MUT_EXPECT+=("$expect"); MUT_ROOTS+=("$mroot")
+  }
+  mut_collect() {
+    local i name expect mroot crc n
+    wait
+    for i in "${!MUT_NAMES[@]}"; do
+      name="${MUT_NAMES[$i]}"; expect="${MUT_EXPECT[$i]}"; mroot="${MUT_ROOTS[$i]}"
+      crc="$(cat "$mroot/rc.txt")" || crc=""
+      n="$(grep -E '^(  FAIL:|\[FATAL\])' "$mroot/out.txt" | grep -c -F -- "$expect")" || n=0
+      ck
+      if [[ -n "$crc" && "$crc" != "0" && "$n" -ge 1 ]]; then pass "MUT $name goes RED on [$expect]"; else fail "MUT $name did not go RED on [$expect] (rc=[$crc], matches=$n)"; fi
+    done
   }
   mut_row 1-zero-fill-steps "fill-referencing step(s) found" rename-literal "zot-fill-rate" "zot-renamed-rate"
   mut_row 2-status-references-fill "T1 the Sentry status expression references exactly the alarm step" status-add
@@ -552,7 +709,15 @@ if [[ -z "$CHILD" ]]; then
   mut_row 4-sentry-after-fill "T2 the Sentry check-in precedes the fill probe" move-sentry-last
   mut_row 5-extra-filing-step "T1 exactly three fill filing steps" add-filing
   mut_row 5b-query-rc-benign "T3 TRANSIENT query_rc= is a defect" run-replace probe 'span=*|reclaim_at_sample_*|newest_sample_*)' 'span=*|reclaim_at_sample_*|newest_sample_*|query_rc=*)'
-  mut_row 5b-drop-alarm-exit-guard "T3 alarm exit 2 suppresses the TRANSIENT defect" run-replace probe ' && "${ALARM_EXIT:-}" != "2"' ''
+  mut_row 5b-drop-alarm-exit-guard "T3 alarm exit 2 suppresses the TRANSIENT defect" run-replace probe '2|3|4) owned=true' '3|4) owned=true'
+  mut_row 5b-guard-only-exit-2 "T3 alarm exit 3 (PRODUCER_SILENT) suppresses" run-replace probe '2|3|4) owned=true' '2) owned=true'
+  mut_row 5b-guard-no-exit-4 "T3 alarm exit 4 (INGEST_DARK) suppresses" run-replace probe '2|3|4) owned=true' '2|3) owned=true'
+  mut_row 5b-guard-includes-exit-1 "T3 alarm exit 1 (FIRE) does not suppress" run-replace probe '2|3|4) owned=true' '1|2|3|4) owned=true'
+  mut_row 5b-guard-hides-unevaluated "T3 alarm exit 3 does NOT suppress UNEVALUATED" run-replace probe 'UNEVALUATED) defect=true ;;' 'UNEVALUATED) defect=false ;;'
+  mut_row 5c-rows-boundary-13 "T3 TRANSIENT too_few_samples with rows_scoped of exactly 12 is a defect" run-replace probe '10#$rows_scoped < 12' '10#$rows_scoped < 13'
+  mut_row 5c-rows-boundary-11 "T3 TRANSIENT too_few_samples with rows_scoped of exactly 11 is benign" run-replace probe '10#$rows_scoped < 12' '10#$rows_scoped < 11'
+  mut_row 5c-rows-missing-benign "T3 TRANSIENT too_few_samples with no rows_scoped is a defect" run-replace probe '[[ "$rows_scoped" =~ ^[0-9]+$ ]] && (( 10#$rows_scoped < 12 ))' '(( 10#${rows_scoped:-0} < 12 ))'
+  mut_row 5c-rows-octal "T3 TRANSIENT too_few_samples with a zero-padded rows_scoped=08 is benign" run-replace probe '10#$rows_scoped' '$rows_scoped'
   mut_row 6-drop-header-agreement "T3 rc 0 with a FAIL header (disagreement)" run-replace probe ' && "$hdr_verdict" == "$mapped"' ''
   mut_row 6-take-last-header "T3 two column-0 headers" run-replace probe '"$hdr_count" == "1"' '"$hdr_count" != "0"'
   mut_row 7-default-transient "T3 rc 3 with a TRANSIENT header" run-replace probe '*) mapped=UNEVALUATED ;;' '*) mapped=TRANSIENT ;;'
@@ -561,6 +726,60 @@ if [[ -z "$CHILD" ]]; then
   mut_row 9-close-threshold-3600 "T5 a tracker updated 5 h ago is not closed" run-replace pass '21600' '3600'
   mut_row 9-drop-cr-strip "T3 carriage returns are stripped from the log" run-replace probe '\013-\037' '\013-\014\016-\037'
   mut_row 9-drop-pipe-prefix "T3 script output lines are echoed behind a visible pipe prefix" run-replace probe "sed 's/^/| /'" "cat"
+
+  # Step-shape rows: the exact `if:`, the env wiring and the closed world of step outputs.
+  mut_row 12-probe-if-deleted "T1 the probe step if: is exactly" if-delete probe
+  mut_row 12-probe-if-failure "T1 the probe step if: is exactly" if-replace probe '!cancelled()' 'failure()'
+  mut_row 12-fail-if-failure "T1 the FAIL step if: is exactly" if-replace fail '!cancelled()' 'failure()'
+  mut_row 12-fail-if-or-arm "T1 the FAIL step if: is exactly" if-replace fail "== 'FAIL'" "== 'FAIL' || steps.fill.outputs.fill_verdict == 'PASS'"
+  mut_row 12-defect-if-success "T1 the probe-defect step if: is exactly" if-replace defect '!cancelled()' 'success()'
+  mut_row 12-defect-if-neq-arm "T1 the probe-defect step if: is exactly" if-replace defect "== 'true'" "== 'true' || steps.fill.outputs.fill_verdict != 'PASS'"
+  mut_row 12-pass-if-or-true "T1 the PASS close step if: is exactly" if-replace pass "== 'PASS'" "== 'PASS' || true"
+  mut_row 12-pass-if-never-arm "T1 the PASS close step if: is exactly" if-replace pass "== 'PASS'" "== 'NEVER'"
+  mut_row 12-dangling-id "T1 no step references a step id that does not exist" if-replace fail 'steps.fill.' 'steps.fil.'
+  mut_row 13-alarm-exit-deleted "T1 the probe step env is exactly" env-set probe ALARM_EXIT __DEL__
+  mut_row 13-alarm-exit-miswired "T1 every steps.<alarm>.outputs key the probe reads exists" env-set probe ALARM_EXIT '${{ steps.alarm.outputs.exit_cod }}'
+  mut_row 13-alarm-exit-wrong-source "T1 the probe step env is exactly" env-set probe ALARM_EXIT '${{ steps.alarm.outputs.verdict }}'
+  mut_row 13-window-injected "T1 the probe step env is exactly" env-set probe ZOT_FILL_WINDOW 1h
+  mut_row 13-query-injected "T1 the probe step env is exactly" env-set probe ZOT_FILL_QUERY x
+  mut_row 13-secret-misnamed "T1 the probe step env is exactly" env-set probe BETTERSTACK_QUERY_USERNAME '${{ secrets.BETTERSTACK_QUERY_USER }}'
+  mut_row 13-fail-line-miswired "T1 the FAIL step env is exactly" env-set fail FILL_LINE '${{ steps.fill.outputs.fill_verdict }}'
+  mut_row 13-defect-line-deleted "T1 the probe-defect step env is exactly" env-set defect FILL_LINE __DEL__
+  mut_row 13-pass-gets-line "T1 the PASS close step env is exactly" env-set pass FILL_LINE '${{ steps.fill.outputs.fill_line }}'
+  mut_row 13-pass-gets-secret "T1 the PASS close step env is exactly" env-set pass BETTERSTACK_QUERY_PASSWORD '${{ secrets.BETTERSTACK_QUERY_PASSWORD }}'
+  mut_row 13-unwritten-ref "T1 every steps.<probe>.outputs key referenced anywhere is written" env-set fail FILL_CAUSE '${{ steps.fill.outputs.fill_cause }}'
+  mut_row 14-script-writer-step "T1 exactly four steps reference the fill outputs" add-step probe
+
+  # Lookup rows: every lookup in every filing step keeps its flags.
+  mut_row 15-pass-lookup-no-state "T5 the PASS step does ONE lookup" run-replace pass ' --state open' ''
+  mut_row 15-pass-lookup-search "T5 the PASS step does ONE lookup" run-replace pass ' --state open' ' --state open --search x'
+  mut_row 15-pass-second-lookup "T5 the PASS step does ONE lookup" run-replace pass 'CUTOFF=$(( $(date' 'gh issue list --repo "$GH_REPO" --state open --label ci/zot-fill-rate --limit 100 --json number >/dev/null; CUTOFF=$(( $(date'
+  mut_row 15-pass-limit "T5 the PASS step does ONE lookup" run-replace pass '--limit 100' '--limit 30'
+  mut_row 15-fail-lookup-no-state "T4 FAIL: both lookups" run-replace fail ' --state open' ''
+  mut_row 15-fail-lookup-limit "T4 FAIL: both lookups" run-replace fail '--limit 100' '--limit 30'
+  mut_row 15-defect-lookup-no-state "T4 defect, no tracker: its one lookup" run-replace defect ' --state open' ''
+  mut_row 15-defect-lookup-label "T4 defect, no tracker: its one lookup" run-replace defect '--label "$(sed -E' '--label "x$(sed -E'
+
+  # Fixture rows.
+  mut_row 16-fail-closes-its-own-tracker "T4 FAIL, tracker exists" run-replace fail "'.[] | select(.title | contains(\$t)) | .number'" "'.[] | .number'"
+  mut_row 16-defect-takes-first-issue "T4 defect, tracker exists (the FAIL issue listed FIRST)" run-replace defect '[.[] | select(.title | contains($t))][0].number' '[.[]][0].number'
+  mut_row 16-pass-defect-needs-age "T5 a probe-defect issue updated one minute ago is closed" run-replace pass 'for N in $DEFECTS; do' 'for N in; do'
+  mut_row 16-pass-breach-closes-at-once "T5 a breach issue updated one minute ago is NOT closed" run-replace pass '< $c' '< ($c + 100000)'
+
+  # Probe rows beyond classification.
+  mut_row 17-no-pre-write "T3 a probe that outlives its step timeout" run-replace probe 'echo "fill_verdict=UNEVALUATED"' ':'
+  mut_row 17-pre-write-benign "T3 a probe that outlives its step timeout" run-replace probe 'echo "fill_defect=true"' 'echo "fill_defect=false"'
+  mut_row 18-headerless-fill-line-empty "T3 the UNEVALUATED fill_line names the exit code" run-replace probe 'raw_line="UNEVALUATED rc=${rc} headers=${hdr_count}"' 'raw_line=""'
+  mut_row 18-header-accepts-suffix "T3 a PASSED header is not a header" run-replace probe '\( .*\)\{0,1\}' '.*'
+  mut_row 18-header-accepts-indent "T3 an indented header is not a header" run-replace probe "sed -n 's/^zot-fill-rate\\[#7341\\]: \\(PASS" "sed -n 's/^ *zot-fill-rate\\[#7341\\]: \\(PASS"
+  mut_row 18-keep-u2028 "T3 fill_line carries none of the U+2028" run-replace probe 's/\xe2\x80\xa8//g; ' ''
+  mut_row 18-keep-control-bytes "T3 fill_line carries none of the U+2028" run-replace probe "tr -d '\\000-\\037\\177'" "tr -d '\\000'"
+  mut_row 18-keep-hash-at-tick "T3 fill_line drops the script-name prefix and the hash" run-replace probe "| tr -d '#@\`')" '| cat)'
+  mut_row 18-cap-4000 "T3 fill_line is capped at 400 characters" run-replace probe '${fill_line:0:400}' '${fill_line:0:4000}'
+  mut_row 18-host-scrub-off "T3 a *.betterstackdata.com hostname in script output is scrubbed" run-replace probe 's/[A-Za-z0-9.-]+\.betterstackdata\.com/[host]/g' 's/NOPE/[host]/g'
+  mut_row 18-mask-off "T3 the lowercased query host is masked" run-replace probe 'echo "::add-mask::${BETTERSTACK_QUERY_HOST,,}"' ':'
+
+  mut_collect
 
   # Row 10, the harness itself: neuter pass()/fail() in a copy of THIS file and run it against the
   # live workflow. The call-site `cases` counter keeps moving, so accounting must go RED.
@@ -620,7 +839,7 @@ if [[ -n "$CHILD" ]]; then
 fi
 
 # Floor: derived from a green run, with no headroom for silently dropped rows. Raise in lockstep.
-MIN_CASES=99
+MIN_CASES=184
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] vacuity floor: %d cases executed, expected at least %d\n' "$cases" "$MIN_CASES" >&2
   exit 1
