@@ -218,6 +218,17 @@ echo "-- consumption census (derived site set, not a member list) --"
 #     command boundary.
 #   resolve-regenerable-conflicts.test.sh:719 — `_PUSH_RE` `[^-[:alnum:]]`
 #     boundary: space before `git` already matches.
+#   delegation-verify.sh:244,245,250,251,254,403 (is_denied / ops-prose DENY lists) — these are
+#     refusal patterns over envelope TEXT, not gates on an executed command. Their boundary is the
+#     negative class `[^[:alnum:]_-]`, which a space satisfies, so `rtk git push`, `sudo rm -rf` and
+#     `X=1 gh secret` are already refused. Interpolating the wrapper-prefix atom would only NARROW
+#     what the deny list catches, so the exemption is the safe disposition.
+#   delegation-verify.sh:363 — `(^|[[:space:]])(-X|--method|-f|...)` anchors a FLAG on the gh api
+#     argument list, not a command boundary; the `gh api` literal is a case label.
+#   delegation-verify.test.sh:1217 — a deny_del fixture row (`--admin` pattern + the input text
+#     `gh pr merge 123 --squash --admin`), test data not a gate pattern.
+#   delegation-verify.test.sh:1260 — a mutation-kill row: the mutant replacement text for CMDPOS_RE
+#     and the `gh workflow run` command it is run against, both test data not a gate pattern.
 EXEMPTIONS=(
   ".claude/hooks/brand-hex-commit-gate.sh:119"
   ".claude/hooks/git-commit-secret-scan.sh:113"
@@ -232,6 +243,15 @@ EXEMPTIONS=(
   ".claude/hooks/incidents.test.sh:234"
   ".claude/hooks/incidents.test.sh:240"
   "plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh:719"
+  "plugins/soleur/scripts/delegation-verify.sh:244"
+  "plugins/soleur/scripts/delegation-verify.sh:245"
+  "plugins/soleur/scripts/delegation-verify.sh:250"
+  "plugins/soleur/scripts/delegation-verify.sh:251"
+  "plugins/soleur/scripts/delegation-verify.sh:254"
+  "plugins/soleur/scripts/delegation-verify.sh:363"
+  "plugins/soleur/scripts/delegation-verify.sh:403"
+  "plugins/soleur/scripts/delegation-verify.test.sh:1217"
+  "plugins/soleur/scripts/delegation-verify.test.sh:1260"
 )
 
 is_exempt() {

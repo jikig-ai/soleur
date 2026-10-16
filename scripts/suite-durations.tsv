@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=38090871167,38088705648,38086978176,38085840669,38055372785
 # default-weight-ms=1180
-# generated-at=2026-10-14T14:51:03Z
+# generated-at=2026-10-15T10:07:06Z
 # generator=regenerate-shard-manifest.py v3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	777	measured
@@ -91,6 +91,7 @@ apps/web-platform/scripts/supabase-local.test.sh	400	measured
 apps/web-platform/test/parse-gitleaks-allowlists	300	measured
 plugins/soleur/scripts/admin-merge-ready.test.sh	12147	measured
 plugins/soleur/scripts/alpha-metrics.test.sh	611	measured
+plugins/soleur/scripts/delegation-verify.test.sh	131500	measured
 plugins/soleur/scripts/emit-decision.test.sh	424	measured
 plugins/soleur/scripts/pipeline-tally.test.sh	5462	measured
 plugins/soleur/scripts/precommit-guard.test.sh	796	measured
@@ -164,6 +165,7 @@ plugins/soleur/test/codeql-main-alert-gate-workflow-wiring.test.sh	6759	measured
 plugins/soleur/test/codeql-main-alert-gate.test.sh	30628	measured
 plugins/soleur/test/compaction-state-hook.test.sh	11636	measured
 plugins/soleur/test/concurrent-ship.test.sh	2487	measured
+plugins/soleur/test/cto-interface-selector.test.sh	7400	measured
 plugins/soleur/test/debug-probe-residue.test.sh	3140	measured
 plugins/soleur/test/deploy-arm.test.sh	11666	measured
 plugins/soleur/test/deploy-script-tests-aggregator-diagnosis.test.sh	295	measured
@@ -191,10 +193,12 @@ plugins/soleur/test/git-fixture-env-shell.test.sh	381	measured
 plugins/soleur/test/git-tripwire.test.sh	309	measured
 plugins/soleur/test/gitleaks-merge-commit.test.sh	5441	measured
 plugins/soleur/test/gitleaks-rules.test.sh	13942	measured
+plugins/soleur/test/go-hold-routing.test.sh	3800	measured
 plugins/soleur/test/go-routing-table-parity.test.sh	60	measured
 plugins/soleur/test/go-session-gates.test.sh	3013	measured
 plugins/soleur/test/harvest-debt.test.sh	141	measured
 plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh	6566	measured
+plugins/soleur/test/hold-gate-eval.test.sh	175700	measured
 plugins/soleur/test/hook-git-env-coverage.test.sh	202	measured
 plugins/soleur/test/hook-git-env-receipt.test.sh	222	measured
 plugins/soleur/test/hook-input-classification-mutation.test.sh	66094	measured
@@ -234,6 +238,7 @@ plugins/soleur/test/pencil-adapter-auth-hard-fail.test.sh	44	measured
 plugins/soleur/test/pencil-setup-skill-cli-form.test.sh	13	measured
 plugins/soleur/test/plugin-version.test.sh	1194	floor
 plugins/soleur/test/pr-fanout-ledger.test.sh	56062	measured
+plugins/soleur/test/pr-overlap-preflight.test.sh	94900	measured
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	36705	measured
 plugins/soleur/test/proc.test.sh	2698	measured
 plugins/soleur/test/ralph-loop.test.sh	5125	measured
