@@ -15,6 +15,7 @@ tags:
   - devin-hooks
   - git-root-resolution
   - hook-launchers
+synced_to: [work]
 ---
 
 # Troubleshooting: Repository hook launchers fail from a bare root
@@ -60,10 +61,18 @@ Codex's configured SessionStart rules-loader and PreToolUse guardrails failed wh
 13. **An `apply_patch` attempt failed because expected text no longer matched after a concurrent update.** Recovery: reread the exact lines and retried the patch. **Prevention:** refresh the target immediately before applying a patch after concurrent edits.
 14. **The ADR-ordinal check was first called from a nonexistent plugin-relative path and exited 127.** Recovery: located the tracked script at `scripts/check-adr-ordinals.sh` and reran it successfully. **Prevention:** locate the tracked path before running repository-specific checks.
 15. **The staged `git diff --check` flagged an extra blank line at EOF.** Recovery: removed the blank line and reran the check. **Prevention:** run diff-whitespace validation after final documentation edits.
+16. **A performance optimization initially used Bash-only substring expansion in commands that can run under POSIX `sh`.** Recovery: code-quality review reproduced the failure in `dash`; the parser was changed to portable shell tools and exercised under `dash`. **Prevention:** execute registered commands with each supported shell, including both success and failure paths.
+17. **Two `sed` processes per fallback made the proposed optimization slower than the original three-Git path.** Recovery: consolidated the metadata parsing into one `sed` process and remeasured. **Prevention:** benchmark the complete final command, including parsing overhead, rather than counting only removed subprocesses.
+18. **An attempted newline-delimiter parser was escaped incorrectly and allowed malformed metadata through.** Recovery: replaced it with a single `sed` parser and tested its outputs. **Prevention:** test shell escaping through the actual TOML/JSON registry strings before replacing a known-good parser.
+19. **A pipeline from Git into `sed` hid Git's nonzero exit when Git emitted partial metadata.** Recovery: captured and checked Git's status before parsing; added a partial-output failure fixture across all affected registrations. **Prevention:** preserve and test producer exit status whenever parsing command output.
+20. **The POSIX executable was not at the hard-coded `/bin/dash` test path.** Recovery: resolved `dash` through the test PATH with `Bun.which`. **Prevention:** discover optional test interpreters through the environment instead of assuming a platform path.
+21. **A fix-round agent launch hit the active collaboration thread limit.** Recovery: waited for completed review threads and reused them for the remaining checks. **Prevention:** account for the four total collaboration slots, including the caller, before scheduling a new review wave.
+22. **An exact-match scripted replacement expected the wrong JSON-escaped form and stopped before changing that file.** Recovery: inspected the serialized substring and guarded the corrected replacement by the expected count. **Prevention:** inspect exact serialized text and verify match counts before writing generated configuration.
+23. **An `apply_patch` bundle included a nonexistent context line and was rejected without editing either file.** Recovery: split it into the valid work-skill edit and the separately reviewed learning update. **Prevention:** keep patches anchored only to context already read from each target.
 
 ## Solution
 
-The launcher bootstrap now tries `git rev-parse --show-toplevel` first, preserving the active checkout for ordinary and linked worktrees. Only if that fails and `git rev-parse --is-bare-repository` positively reports `true` does it use `git rev-parse --absolute-git-dir`; it removes only a terminal `/.git`. The complete root assignment is chained with target execution so failed resolution cannot fall through to `/.claude/hooks`.
+The launcher bootstrap tries `git rev-parse --show-toplevel` first, preserving the active checkout for ordinary and linked worktrees. If that fails, it captures the exit status from one combined `git rev-parse --is-bare-repository --absolute-git-dir` probe before parsing its two-line output. It requires the first line to be exactly `true`, validates a non-empty Git directory, and removes only a terminal `/.git`. One `sed` process joins the metadata lines for POSIX-safe shell parsing; failed or partial Git output cannot fall through to a hook target. The fallback works under `dash` and uses two Git launches instead of three.
 
 The bounded fallback was applied to both Codex hook commands and every affected deepest Git fallback in Devin. Devin's existing `CLAUDE_PROJECT_DIR` then `DEVIN_PROJECT_DIR` override precedence remains intact. The launchers preserve each registered target, interpreter, argument tail, working directory, stdin, output streams, and exit status. They do not search another checkout when the selected root or target is missing.
 
@@ -77,9 +86,9 @@ Keeping checkout discovery first prevents linked-worktree commands from being re
 
 ## Prevention
 
-- For repository hook launchers that must run from both working and bare checkouts, try `--show-toplevel` first and use `--absolute-git-dir` only after a positive bare-repository check.
+- For repository hook launchers that must run from both working and bare checkouts, try `--show-toplevel` first and use `--absolute-git-dir` only after a positive bare-repository check; capture the producer status before parsing its output.
 - Keep root assignment and target dispatch fail-closed; test that failed resolution does not invoke any target.
-- Execute the actual configured registry commands against ordinary, nested, linked-worktree, Soleur-style bare, and conventional-bare fixtures, with spaces and failure cases.
+- Execute commands extracted from the actual harness registries against ordinary, nested, linked-worktree, Soleur-style bare, and conventional-bare fixtures, with spaces and failure cases. Test each supported shell on successful and failed discovery paths.
 - Preserve selected-checkout ownership and independently freeze command interpreter, target, and argument expectations before editing the registries.
 
 ## Related Issues
