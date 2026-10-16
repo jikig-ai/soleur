@@ -29,11 +29,11 @@ PR body: `Ref #9927` only (no closing keyword); after every body edit assert `cl
 
 - [ ] 3.1 `python3 scripts/regenerate-shard-manifest.py --incremental --write` for the suite registration
 - [ ] 3.2 Add `AFFECTED_PLUGINS_SOLEUR_TEST_SOLE_COPY_DRIFT_CHECK_TEST_SH_PATHS` in `scripts/lib/test-affected-paths.sh`; quote the consuming line
-- [ ] 3.3 Group 3 row (Tier A) in `infra-credential-tiers-8209.md`
-- [ ] 3.4 ADR-282 addendum (grace, id pin, residuals, check gap) plus the residual "Detection of lifted protection is generic" edit; status stays accepted
-- [ ] 3.5 One sentence in `inngest-luks-cutover-6894.md` "No drift check by log search"; leave the section-5c one-liner block untouched
-- [ ] 3.6 Re-read the three `.c4` files; record "no C4 impact" with the enumeration or add one clause
-- [ ] 3.7 File three follow-up issues with a roadmap milestone: Sentry check-in for the job, shared pinned Doppler-install step, web-1 `workspaces_luks` check
+- [x] 3.3 Group 3 row (Tier A) in `infra-credential-tiers-8209.md`
+- [x] 3.4 ADR-282 addendum (grace, id pin, residuals, check gap) plus the residual "Detection of lifted protection is generic" edit; status stays accepted
+- [x] 3.5 One sentence in `inngest-luks-cutover-6894.md` "No drift check by log search"; leave the section-5c one-liner block untouched
+- [x] 3.6 Re-read the three `.c4` files; record "no C4 impact" with the enumeration or add one clause
+- [x] 3.7 File three follow-up issues with a roadmap milestone: Sentry check-in for the job, shared pinned Doppler-install step, web-1 `workspaces_luks` check
 
 ## Phase 4: verify (targeted only)
 
