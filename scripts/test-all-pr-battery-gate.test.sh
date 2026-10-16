@@ -157,6 +157,8 @@ build_base() {
   (
     cd "$BASE" || exit 1
     gitq init -q -b main . || exit 1
+    # No auto-maintenance in the fixture: `git maintenance run --auto` takes and drops objects/maintenance.lock mid-copy (#10373)
+    gitq config maintenance.auto false && gitq config gc.auto 0 || exit 1
     local a p
     for a in "${ARRAYS[@]}"; do
       # shellcheck disable=SC1087,SC2154  # the array is named by $a; eval is the bash-3.2 indirection (`el` is assigned by it)
