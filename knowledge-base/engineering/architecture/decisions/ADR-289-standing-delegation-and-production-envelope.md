@@ -10,7 +10,7 @@ tags: [authorization, delegation, cto, production, non-technical-operator]
 brand_survival_threshold: single-user incident
 ---
 
-# ADR-288: Production-mutating authorization is satisfiable by a verified Standing Delegation plus a CTO Production Envelope
+# ADR-289: Production-mutating authorization is satisfiable by a verified Standing Delegation plus a CTO Production Envelope
 
 ## Status
 
@@ -56,7 +56,7 @@ revocable, and because the allowlist below bounds what a "Yes" can mean.
 - **Not every production-mutating act was per-command before this ADR.** ADR-260 section 2 (Accepted, 2026-09-28) lets a scheduled
   watchdog POST a restart on the prd project "without a per-occurrence human ack", an "express, bounded deviation from
   `hr-menu-option-ack-not-prod-write-auth`" justified by a recorded delegation, a trigger predicate and a circuit breaker. Ship also
-  arms auto-merge of an ordinary PR without a per-merge ack (`wg-after-marking-a-pr-ready-run-gh-pr-merge`). ADR-288 follows the
+  arms auto-merge of an ordinary PR without a per-merge ack (`wg-after-marking-a-pr-ready-run-gh-pr-merge`). ADR-289 follows the
   ADR-260 shape (the ADR records the delegation, the bounds fail closed) for a different class of act.
 - **Why merge and dispatch differ from the operator-script class.** ADR-249 rejects prompt, nonce and hookify-style acknowledgements
   and makes a production write by an operator script "a person-at-a-terminal step on purpose"; ADR-264 builds a harness-approved,
@@ -281,7 +281,7 @@ The live canonical delegation on #9757 predates `Confirmation:` and verifies `in
 operator-confirmed act outside this PR.
 
 **Amends.** ADR-084's closed operator-only list: its production-mutating category is now satisfiable by delegation plus envelope. An
-`Amended by ADR-288` pointer is appended to ADR-084. `hr-technical-fork-is-not-an-operator-question` is left byte-unchanged
+`Amended by ADR-289` pointer is appended to ADR-084. `hr-technical-fork-is-not-an-operator-question` is left byte-unchanged
 because it says "category". The `hr-menu-option-ack-not-prod-write-auth` body gained the second path and the explicit exception to
 its menu-ack sentence, with its manifest hash regenerated and an append-only ack row that asks for human review by @deruelle.
 

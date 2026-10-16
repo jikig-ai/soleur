@@ -41,7 +41,7 @@
 # owner-label-unscoped, delegation-invalid, delegation-unverifiable, receipt-missing, receipt-mismatch,
 # receipt-unreadable.
 #
-# Delegation arm (ADR-288, hr-menu-option-ack-not-prod-write-auth): a row whose Class is exactly
+# Delegation arm (ADR-289, hr-menu-option-ack-not-prod-write-auth): a row whose Class is exactly
 # `operator (production-mutating)` and whose Ruling is
 #   Authorized by delegation <comment-url>, envelope <path>[, ran <ISO 8601 UTC time>]
 # is validated through plugins/soleur/scripts/delegation-verify.sh. A row WITHOUT `ran` is an authorization for an

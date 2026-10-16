@@ -140,7 +140,7 @@ dated in the future) or `receipt-unreadable` (the epic's comments could not be r
 carries the fingerprint of the whole committed file, so a later edit makes the receipt mismatch.
 
 **Why:** PR #7470 — a hold transcribed as "the PR stays a draft" outlived its cleared conditions. The mechanical evaluator
-exists because prose re-evaluation by the model is the failure mode a hold guards against (CTO ruling T4, ADR-288).
+exists because prose re-evaluation by the model is the failure mode a hold guards against (CTO ruling T4, ADR-289).
 
 ## 5. What the evaluator prints
 

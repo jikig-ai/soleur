@@ -8,7 +8,7 @@ Order is test-first: in every phase write the suite and fixtures, show them RED,
 
 ## Phase 0: Preconditions
 
-- [ ] 0.1 (not run: needs a GitHub write; ADR-288 states the behaviour as an observation only) Probe `updated_at` behaviour on a throwaway comment on the PR (post, react, read, delete) and note the result for the ADR.
+- [ ] 0.1 (not run: needs a GitHub write; ADR-289 states the behaviour as an observation only) Probe `updated_at` behaviour on a throwaway comment on the PR (post, react, read, delete) and note the result for the ADR.
 - [x] 0.2 Measure byte headroom: `ship/SKILL.md` vs ceiling 273955, `one-shot/SKILL.md` vs 52000 (`python3 scripts/lint-skill-body-budget.py --base origin/main`); draft the exact insertion text and count it with `wc -c` before touching either file.
 - [x] 0.3 Measure `python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.rules.md 2>&1` and the rule line byte count (review-fix round: B_ALWAYS=44263 WARN, rule line 596 bytes).
 - [x] 0.4 Confirm `pre-ask-technical-fork-gate.sh` payload shape with `__HI_RAW` for a two-question fixture.
@@ -69,7 +69,7 @@ Order is test-first: in every phase write the suite and fixtures, show them RED,
 
 ## Phase 10: ADR, C4, learning, finalize
 
-- [x] 10.1 `soleur:architecture` ADR-288 plus `Amended by ADR-288` pointer in ADR-084.
+- [x] 10.1 `soleur:architecture` ADR-289 plus `Amended by ADR-289` pointer in ADR-084.
 - [x] 10.2 Edit `model.c4` (CTO component, plugin-side GitHub edge; the hook-side edge was dropped in the review-fix round, R2); run C4 syntax, render and count-parity tests.
 - [x] 10.3 Write the compound learning.
 - [x] 10.4 (shard manifest, ordinal re-probe, markdownlint, body-budget and guard-contract lints done; `--print-selection` and the bounded default run belong to the ship step) Finalize, in this order: regenerate shard manifest (`python3 scripts/regenerate-shard-manifest.py --incremental --write`), re-probe the ADR ordinal across every `origin/*` ref, markdownlint plan and tasks, `lint-skill-body-budget.py`, `lint-guard-contract.py`, `bash scripts/test-all.sh --print-selection` then the bounded default run.
@@ -79,7 +79,7 @@ Order is test-first: in every phase write the suite and fixtures, show them RED,
 ## Review-fix round (PR #10348, 2026-10-15)
 
 Nine review seats reported on the pinned head; the contract and the four CTO rulings (R1 to R4, Ruled by CTO agent, 2026-10-15) are
-recorded in `decision-challenges.md` (rows RF-R1 to RF-R4) and ADR-288. Other fix agents own the items without a checkbox; their
+recorded in `decision-challenges.md` (rows RF-R1 to RF-R4) and ADR-289. Other fix agents own the items without a checkbox; their
 state is read from their commits, not from this file.
 
 Dispositions by class:
@@ -97,7 +97,7 @@ Dispositions by class:
         `4b86563d5be5ac98e1b377057a0ea34fd0761fd0087258bf9c4b5b4f6c5dd068` (superseded by the second round below).
   - [x] The ack row states the widening honestly, cites `fa06eef79a` and the 2026-04-19 learning, and asks for human review.
   - [x] The four AGENTS lints plus `lint-rule-bodies --check --base origin/main` pass.
-  - [x] ADR-288: claims corrected (no "two independent keys", receipt scope, "no seam in the script", AP-020 and AP-024, 5 s cap
+  - [x] ADR-289: claims corrected (no "two independent keys", receipt scope, "no seam in the script", AP-020 and AP-024, 5 s cap
         removed), V1 to V5, R1 to R4, precedents, residuals, overlap preflight as its own section.
   - [x] Learning: the false merge-hook claim replaced by the verified `ship-kb-archive-gate.sh` behaviour.
   - [x] C4: hook-side edge and hooks-to-plugin verifier mention removed; plugin-to-github comment corrected; model re-rendered
@@ -116,9 +116,9 @@ Two more seats reported (fix-round architecture and security). Items owned by ot
   - [x] The amended rule names the closed command set (merge, ready, dispatch, revert-PR) instead of "merge/dispatch/revert only";
         the line is 599 bytes; new hash `62f7ef9a380a9cc426964de82361b71db4fdd0f02cea987c683630a6e694bf7c`; the ack row carries the new
         sha256 and the same closed set; the five AGENTS lints pass.
-  - [x] ADR-288 and the learning: the CTO records the `ran <ISO>` row after each act, receipt enforcement fires only for rows
+  - [x] ADR-289 and the learning: the CTO records the `ran <ISO>` row after each act, receipt enforcement fires only for rows
         carrying `ran`, and the receipt window rules are stated as the gate's contract.
-  - [x] ADR-288, the learning and row T5: the routing trigger is an epic reference AND a `HOLDS:` list.
+  - [x] ADR-289, the learning and row T5: the routing trigger is an epic reference AND a `HOLDS:` list.
   - [x] `decision-challenges.md`: T1, T4, T5, C1 and R3 carry a supersession note; rows RF-9 to RF-11 added; the ruling gate passes.
   - [x] Plan: supersession banner, struck/annotated Gate grammar, `--audit`, `--issue`, Phase 5, Guard 3 and the FR3/FR5 boxes; tasks
         1.1.1 and 1.1.2 corrected.
@@ -134,11 +134,11 @@ Two more seats reported (fix-round architecture and security). Items owned by ot
 The verification pass found no P1. Items owned by other agents carry no checkbox.
 
 - Docs (agent F3b):
-  - [x] ADR-288 "What the ship gate checks": the CTO records the `ran` row (it replaces the plan-time row) and the exact receipt
+  - [x] ADR-289 "What the ship gate checks": the CTO records the `ran` row (it replaces the plan-time row) and the exact receipt
         rules are listed, including the `ran` instant, unedited, person-authored and one-per-row.
-  - [x] ADR-288: the pre-arming check sits at the start of Phase 6.45 and the residual is recorded; envelopes stay out of archived
+  - [x] ADR-289: the pre-arming check sits at the start of Phase 6.45 and the residual is recorded; envelopes stay out of archived
         directories; the vehicle row reaches the PR body through the normal body update; "Revert only" removed from line 46.
-  - [x] ADR-288 residuals: the `Operator-reserved:` removal path, the Verification, Abort and Rollback vetting limits, same-identity
+  - [x] ADR-289 residuals: the `Operator-reserved:` removal path, the Verification, Abort and Rollback vetting limits, same-identity
         forgery, and that the verification pass found no P1.
   - [x] Plan, tasks 6.3 and session-state: stale Phase 6.5 and ask-hook text annotated; repo-relative script paths replaced by
         `${CLAUDE_PLUGIN_ROOT}`.

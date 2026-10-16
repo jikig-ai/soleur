@@ -16,7 +16,7 @@ registry host replace workflow runs", is a machine-checkable predicate, not a pe
 
 ## Solution
 
-Recorded operator consent plus a drift guard, recorded in ADR-288 (the first draft called this a "two-key" model; review showed the two artifacts are produced by the same agent identity, so they are not independent):
+Recorded operator consent plus a drift guard, recorded in ADR-289 (the first draft called this a "two-key" model; review showed the two artifacts are produced by the same agent identity, so they are not independent):
 
 - **A Standing Delegation (the consent).** The operator is asked once, in plain language, at epic start. The calling skill writes an
   epic-issue comment through `delegation-verify.sh render`: marker on line 1, a verbatim quote, a `Confirmation:` line, numbered
@@ -48,7 +48,7 @@ Recorded operator consent plus a drift guard, recorded in ADR-288 (the first dra
    closed; if it cannot, say plainly that it needs a person. Prose evaluation by the model is the failure the holds guard against.
 3. **Name the residual instead of overclaiming.** The delegation is posted through the same `gh` identity as the agent, so the
    quote, the cap and edit-as-revocation are tamper-evidence, not prevention, and a pair of artifacts written by one agent is not
-   two independent keys. ADR-288 states that, states the flip conditions, and points at #10361 for the receipt that restores
+   two independent keys. ADR-289 states that, states the flip conditions, and points at #10361 for the receipt that restores
    independence.
 4. **Do not skip the probe and then write as if you ran it.** The `updated_at` behaviour for reactions was never probed with a
    write on this repository; the verifier takes the strict reading. A read-only look at `cli/cli` found 8 of 8 reacted comments
