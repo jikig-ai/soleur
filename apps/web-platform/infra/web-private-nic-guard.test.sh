@@ -99,7 +99,7 @@ printf '%s\n' "${STUB_IP_OUT:-}"
 EOS
 
 # `curl` serves three callers: the IMDS probe (private-networks), the Better Stack POST
-# (--data-raw), and the liveness heartbeat ping (WEB_NIC_GUARD_URL, the only other curl).
+# (--data-raw), and the liveness heartbeat ping (WEB_NIC_GUARD_URL on its stdin config, the only other curl).
 cat > "$BIN/curl" <<'EOS'
 #!/usr/bin/env bash
 # Log argv FIRST (before the IMDS early exit), one argument per line (printf, never echo: -n is a
@@ -114,12 +114,16 @@ kind=ping; prev=""
 for a in "$@"; do
   case "$a" in *private-networks*) kind=imds ;; --data-raw) [[ "$kind" == imds ]] || kind=post ;; esac
 done
+# stdin is read ONCE: a pipe or process substitution is consumed by its first reader, so the capture is held
+# in cfg_in and then fanned out to the stdin record (STUB_STDIN) and, for the ping kind, to the parsed URL.
+cfg_in=""
+for a in "$@"; do
+  if [[ "$prev" == "--config" && "$a" == "-" ]]; then cfg_in=$(cat); fi
+  prev="$a"
+done
 if [[ -n "${STUB_STDIN:-}" ]]; then
   printf 'CALL %s\n' "$kind" >> "$STUB_STDIN"
-  for a in "$@"; do
-    if [[ "$prev" == "--config" && "$a" == "-" ]]; then cat >> "$STUB_STDIN"; fi
-    prev="$a"
-  done
+  [[ -n "$cfg_in" ]] && printf '%s\n' "$cfg_in" >> "$STUB_STDIN"
 fi
 for a in "$@"; do
   case "$a" in
@@ -133,8 +137,10 @@ if $is_post; then
   for a in "$@"; do [[ "$prev" == "--data-raw" ]] && printf '%s\n' "$a" >> "$STUB_EMIT"; prev="$a"; done
   exit "${STUB_POST_RC:-0}"
 fi
-# Otherwise this is the heartbeat ping — record its URL (the last positional).
-url=""; for a in "$@"; do url="$a"; done
+# Otherwise this is the heartbeat ping. The URL never rides argv any more: it is the value of the
+# `url = "..."` line on the stdin config. A call whose stdin lost that line records an EMPTY line, which the
+# suite reads as "no URL" (T1 and the healthy-run row go RED; the negative rows are backed by TA_PING).
+url=$(printf '%s\n' "$cfg_in" | sed -n 's/^url = "\(.*\)"$/\1/p' | sed -n '1p')
 printf '%s\n' "$url" >> "$STUB_PING"
 exit "${STUB_PING_RC:-0}"
 EOS
@@ -159,17 +165,20 @@ chmod +x "$BIN"/*
 # run_guard <ip_present:true|false> <imds_rc> <imds_has_expected:true|false> [hide_ip:true|false]
 # Optional per-run knobs, reset after every run so nothing leaks between rows:
 #   SUT_UNDER_TEST  script to execute (default $SUT)
+#   FIXED_ROOT      basename of a root under $TMP to reuse (not wiped) so state under $TMP/$FIXED_ROOT/run survives between runs
 #   LAUNCH_FLAGS    bash flags (e.g. -x)
 #   EXTRA_ENV       NAME=value words handed to `env` AFTER the defaults (so they override). Nothing that
 #                   varies is exported in the test shell.
 # Results: RC OUT ERR EMIT PING TRACE, and ARGV_FILE (the stub curl's per-argument log).
 SUT_UNDER_TEST=""
+FIXED_ROOT=""   # BASENAME of a root under $TMP reused across runs (the refusal limiter's stamp lives under it); default is a fresh root per run
 LAUNCH_FLAGS=()
 EXTRA_ENV=()
 run_guard() {
   local ip_present="$1" imds_rc="$2" imds_expected="$3" hide_ip="${4:-false}"
-  local root="$TMP/root.$$.$RANDOM"
-  rm -rf "$root"; mkdir -p "$root/proc/sys/kernel/random"
+  local root="$TMP/${FIXED_ROOT:-root.$$.$RANDOM}"
+  [[ -n "$FIXED_ROOT" ]] || rm -rf "$root"
+  mkdir -p "$root/proc/sys/kernel/random" "$root/run"
   printf '99999.00 0.00\n' > "$root/proc/uptime"
   printf 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\n' > "$root/proc/sys/kernel/random/boot_id"
 
@@ -224,7 +233,7 @@ run_guard() {
     ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"} \
     "$TIMEOUT_BIN" 10 "$BASH_BIN" ${LAUNCH_FLAGS[@]+"${LAUNCH_FLAGS[@]}"} "$sut" >"$root/out" 2>"$root/err"
   RC=$?
-  SUT_UNDER_TEST=""; LAUNCH_FLAGS=(); EXTRA_ENV=()
+  SUT_UNDER_TEST=""; FIXED_ROOT=""; LAUNCH_FLAGS=(); EXTRA_ENV=()
 
   # shellcheck disable=SC2034  # consumed by assert() conditions via eval
   OUT="$(cat "$root/out" 2>/dev/null || true)"
@@ -259,7 +268,7 @@ _ta_flush() {
   # exempt from the credential flags BY EXACT URL (a call that merely contains `private-networks` is not),
   # and must still match its own golden argv.
   local ok=true
-  local -a want=(--disable --noproxy '*' -fsS -m 10 -o /dev/null); local n_tail=1
+  local -a want=(--disable --noproxy '*' -gfsS -m 10 -o /dev/null --config -); local n_tail=0
   case "$kind" in
     post) want=(--disable --noproxy '*' -fsS -m 10 -H 'Content-Type: application/json' --config -); n_tail=3 ;;
     imds) want=(-sf -m 5); n_tail=1 ;;
@@ -283,15 +292,17 @@ transport_audit() {
   done < "$ARGV_FILE"
   _ta_flush
   # Stdin GOLDEN per call class: a POST's stdin is exactly ONE `header = "Authorization: Bearer <token>"`
-  # line (no `url =`, `proxy =`, `insecure`, `data =` or any second directive); every other call's stdin is
-  # empty. `missing` counts POSTs without the line, `extra` counts anything beyond it.
+  # line (no `url =`, `proxy =`, `insecure`, `data =` or any second directive); a heartbeat PING's stdin is
+  # exactly ONE `url = "https://..."` line in the guard's permitted alphabet (no `header =`, `proxy =`, `next`
+  # or any second directive); the IMDS probe's stdin is empty. `missing` counts POSTs and pings without
+  # their line, `extra` counts anything beyond it.
   local miss extra
   read -r miss extra < <(awk '
     function flush() { if (k == "") return
-      if (k == "post") { if (n == 0) miss++; else { if (n > 1) extra += n - 1; if (!ok1) extra++ } } else extra += n
+      if (k == "post" || k == "ping") { if (n == 0) miss++; else { if (n > 1) extra += n - 1; if (!ok1) extra++ } } else extra += n
       k = ""; n = 0; ok1 = 0 }
     /^CALL / { flush(); k = $2; n = 0; ok1 = 0; next }
-    { if (k != "") { n++; if (n == 1 && $0 ~ /^header = "Authorization: Bearer [A-Za-z0-9._~+\/=-]+"$/) ok1 = 1 } }
+    { if (k != "") { n++; if (n == 1 && ((k == "post" && $0 ~ /^header = "Authorization: Bearer [A-Za-z0-9._~+\/=-]+"$/) || (k == "ping" && $0 ~ /^url = "https:\/\/[A-Za-z0-9._~:\/?&=%+-]+"$/))) ok1 = 1 } }
     END { flush(); printf "%d %d\n", miss + 0, extra + 0 }' "$STDIN_FILE")
   # Fail CLOSED: an awk that errors leaves both empty, which must not read as "no bad calls". Also require that
   # the stdin walk saw as many calls as the argv walk did (a control that the walk looked at anything).
@@ -302,6 +313,10 @@ transport_audit() {
 }
 
 field() { printf '%s' "$EMIT" | grep -oE "$1=[^ \"]+" | sed -n '1p' | cut -d= -f2; }
+# no_beat — the heartbeat was NOT sent, judged on three independent witnesses: the parsed URL (PING), the
+# argv call count (TA_PING, independent of the stdin parse, so a stub that lost the stdin cannot make this
+# vacuous) and the recorded stdin (no `url =` line reached any curl).
+no_beat() { [[ -z "$PING" && "$TA_PING" -eq 0 ]] && ! grep -q '^url = ' "$STDIN_FILE"; }
 
 # --- BEHAVIORAL: T1 ip present => nic_ok, converged_by=already, heartbeat PINGED ----------
 # T1 is the POSITIVE CONTROL for the whole ping suite: it proves the ping stub + mechanism are
@@ -312,6 +327,10 @@ assert "T1 emits an event" "[[ -n \"\$EMIT\" ]]"
 assert "T1 nic_ok=true" "[[ \"\$(field nic_ok)\" == true ]]"
 assert "T1 converged_by=already" "[[ \"\$(field converged_by)\" == already ]]"
 assert "T1 heartbeat PINGED (nic_ok=true)" "grep -q 'web-nic-guard' <<<\"\$PING\""
+assert "T1 the stub parsed the beat URL from curl's stdin config (non-empty, exact, one ping): a stub that lost the stdin cannot pass T1/X1 vacuously" \
+  "[[ \"\$PING\" == 'https://synthetic.invalid/beat/web-nic-guard' && \"\$TA_PING\" -eq 1 ]]"
+assert "T1 the beat URL is on stdin only: absent from every recorded argv word" "! grep -qF 'synthetic.invalid' \"\$ARGV_FILE\""
+assert "T1 the stdin record holds exactly one url line for the one ping" "[[ \"\$(grep -c '^url = ' \"\$STDIN_FILE\" || true)\" -eq 1 ]]"
 assert "T1 NO reboot invoked" "[[ -z \"\$TRACE\" ]]"
 assert "T1 emit carries the CONSTANT reboot_count=0" "grep -qE '(^| )reboot_count=0( |\")' <<<\"\$EMIT\""
 
@@ -323,7 +342,7 @@ assert "T2 nic_ok=false" "[[ \"\$(field nic_ok)\" == false ]]"
 assert "T2 converged_by=detect-only (NOT reboot — web host never power-cycles the sole origin)" \
   "[[ \"\$(field converged_by)\" == detect-only ]]"
 assert "T2 NO reboot invoked" "[[ -z \"\$TRACE\" ]]"
-assert "T2 heartbeat NOT pinged (broken NIC must let the beat lapse)" "[[ -z \"\$PING\" ]]"
+assert "T2 heartbeat NOT pinged (broken NIC must let the beat lapse)" "no_beat"
 assert "T2 imds_has_expected=true is carried for discrimination" "[[ \"\$(field imds_has_expected)\" == true ]]"
 
 # --- BEHAVIORAL: T3 ip probe unresolvable => probe-fault, NO reboot, NO ping --------------
@@ -334,7 +353,7 @@ assert "T3 converged_by=probe-fault (zero evidence, not a NIC diagnosis)" \
   "[[ \"\$(field converged_by)\" == probe-fault ]]"
 assert "T3 nic_ok=false" "[[ \"\$(field nic_ok)\" == false ]]"
 assert "T3 NO reboot invoked" "[[ -z \"\$TRACE\" ]]"
-assert "T3 heartbeat NOT pinged" "[[ -z \"\$PING\" ]]"
+assert "T3 heartbeat NOT pinged" "no_beat"
 
 # --- BEHAVIORAL: emit field contract (full set, always) ----------------------------------
 echo "--- behavioral: emit field contract ---"
@@ -444,7 +463,7 @@ for form in bash-x SHELLOPTS BASH_ENV; do
   assert "X1[$form] neither stream carries the token or the heartbeat URL" \
     "[[ \"\$OUT\$ERR\" != *SYNTH-TOKEN-7797* && \"\$OUT\$ERR\" != *SYNTH-BEAT-7797* ]]"
   assert "X1[$form] nothing was emitted, pinged or sent (the stub curl is on PATH)" \
-    "[[ -z \"\$EMIT\" && -z \"\$PING\" && ! -s \"\$ARGV_FILE\" ]]"
+    "[[ -z \"\$EMIT\" && ! -s \"\$ARGV_FILE\" ]] && no_beat"
 done
 # X1b: unconditional — no credential and no EXPECTED_IP still refuses (the lint accepts a
 # conditional `${TOKEN:+x}` refusal for this file, so this row is the only guard of that property).
@@ -458,7 +477,7 @@ assert "X1c: the untraced healthy run is not refused (positive control)" "[[ \"\
 echo "--- X2: every credentialed curl is --disable-first with --noproxy '*' ---"
 run_guard true 0 true;                              transport_audit; X2_HEALTHY_POST=$TA_POST; X2_HEALTHY_PING=$TA_PING; X2_BAD=$TA_BAD
 EXTRA_ENV=(STUB_POST_RC=1); run_guard true 0 true;  transport_audit; X2_POSTFAIL_POST=$TA_POST; X2_BAD=$((X2_BAD + TA_BAD))
-X2_POSTFAIL_BEAT=no; [[ -n "$PING" ]] && X2_POSTFAIL_BEAT=yes
+X2_POSTFAIL_BEAT=no; [[ -n "$PING" && "$TA_PING" -ge 1 ]] && X2_POSTFAIL_BEAT=yes
 EXTRA_ENV=(STUB_PING_RC=1); run_guard true 0 true;  transport_audit; X2_PINGFAIL_PING=$TA_PING; X2_BAD=$((X2_BAD + TA_BAD))
 assert "X2 floors: a healthy run issues >=1 POST and >=1 ping (the walk is not vacuous)" \
   "[[ \"\$X2_HEALTHY_POST\" -ge 1 && \"\$X2_HEALTHY_PING\" -ge 1 ]]"
@@ -475,10 +494,10 @@ assert "X3 pinned URL (other token, other EXPECTED_IP): exactly one POST, to the
   "[[ \"\$TA_POST\" -eq 1 && \"\$(grep -cxF -- \"\$PINNED_URL\" \"\$ARGV_FILE\")\" -eq 1 ]]"
 EXTRA_ENV=(BETTERSTACK_LOGS_TOKEN=)
 run_guard true 0 true; transport_audit
-assert "X3 pinned URL but no token: zero POSTs, and the heartbeat is withheld (cannot report)" "[[ \"\$TA_POST\" -eq 0 && -z \"\$PING\" ]]"
+assert "X3 pinned URL but no token: zero POSTs, and the heartbeat is withheld (cannot report)" "[[ \"\$TA_POST\" -eq 0 ]] && no_beat"
 EXTRA_ENV=(BETTERSTACK_LOGS_TOKEN="$SYNTH_TOKEN" BETTERSTACK_INGEST_URL=)
 run_guard true 0 true; transport_audit
-assert "X3 token but no ingest URL: zero POSTs, WARN on stderr, and the heartbeat is withheld" "[[ \"\$TA_POST\" -eq 0 && \"\$ERR\" == *WARN* && -z \"\$PING\" ]]"
+assert "X3 token but no ingest URL: zero POSTs, WARN on stderr, and the heartbeat is withheld" "[[ \"\$TA_POST\" -eq 0 && \"\$ERR\" == *WARN* ]] && no_beat"
 x3=0
 for url in "https://evil.invalid/ingest" "http://$PIN_HOST/" "${PINNED_URL%/}" \
            "https://$PIN_HOST@evil.invalid/" "https://evil.invalid/?x=$PIN_HOST/" \
@@ -489,7 +508,7 @@ for url in "https://evil.invalid/ingest" "http://$PIN_HOST/" "${PINNED_URL%/}" \
   assert "X3 refused[$x3] $url: zero POSTs" "[[ \"\$TA_POST\" -eq 0 ]]"
   assert "X3 refused[$x3]: the token is in no recorded argv" "[[ \"\$(grep -c -- \"\$SYNTH_TOKEN\" \"\$ARGV_FILE\")\" -eq 0 ]]"
   assert "X3 refused[$x3]: stderr names unpinned_url and rc is 0" "[[ \"\$ERR\" == *unpinned_url* && \"\$RC\" -eq 0 ]]"
-  assert "X3 refused[$x3]: the heartbeat is WITHHELD (a guard that cannot report must not claim health)" "[[ -z \"\$PING\" ]]"
+  assert "X3 refused[$x3]: the heartbeat is WITHHELD (a guard that cannot report must not claim health)" "no_beat"
   assert "X3 refused[$x3]: no curl was handed an Authorization header on stdin" "[[ \"\$(grep -c Authorization \"\$STDIN_FILE\")\" -eq 0 ]]"
 done
 # X3b: the pin cannot be redirected through the environment.
@@ -528,7 +547,7 @@ for bad in 'Aa"b' 'Aa b' $'Aa\nb' 'Aa\b' 'Aa;b' $'SYNTH"quote\nurl = "https://ev
   run_guard true 0 true; transport_audit
   assert "X6[$x6] a token with a forbidden character makes zero POSTs and names bad_token" "[[ \"\$TA_POST\" -eq 0 && \"\$ERR\" == *bad_token* ]]"
   assert "X6[$x6] nothing reached curl stdin" "[[ \"\$(grep -c Authorization \"\$STDIN_FILE\")\" -eq 0 ]]"
-  assert "X6[$x6] the heartbeat is withheld" "[[ -z \"\$PING\" ]]"
+  assert "X6[$x6] the heartbeat is withheld" "no_beat"
   assert "X6[$x6] the token value is not echoed to stderr" "[[ \"\$ERR\" != *\"\$bad\"* ]]"
 done
 EXTRA_ENV=(BETTERSTACK_LOGS_TOKEN="Aa0._~+/=-9")
@@ -603,6 +622,281 @@ assert "W-7 an address present at the first probe is found by the trigger itself
 assert "W-7 exactly two ip calls: the trigger and the emit, so the wait loop did not run" \
   "[[ \"\$(cat '$W7_CTR')\" -eq 2 ]]"
 
+# --- #9757 / ADR-280 (argv-bearer sweep PR C): the heartbeat URL rides curl's stdin config, never argv ----
+# The beat URL is itself the credential (its path is the secret). Before this change it was the last
+# positional of `beat()`, readable by every local user in /proc/<pid>/cmdline. It now reaches curl as one
+# `url = "..."` line on `--config -`, after a shape judgement; a refused value makes ZERO requests, logs one
+# value-free SOLEUR_CREDENTIAL_REFUSED marker per hour (own stamp under SOLEUR_NIC_TEST_ROOT/run), withholds
+# the beat (so absence alarms) and leaves the Better Stack POST and the exit status alone.
+echo "--- heartbeat URL transport: stdin config, per-attempt, positive controls ---"
+HB_GOOD="https://synthetic.invalid/beat/web-nic-guard"
+# The credential is the URL's PATH: its last segment is the bare secret token no output line may ever carry.
+HB_TOKEN="${HB_GOOD##*/}"
+HB_MARKER_EMPTY='SOLEUR_CREDENTIAL_REFUSED script=web-private-nic-guard reason=empty var=WEB_NIC_GUARD_URL'
+HB_WARN_EMPTY='[nic] WARN: web_nic_guard heartbeat URL unset (nic_ok=true, no ping sent) — the monitor will alarm on a healthy host.'
+HB_WARN_REFUSED='[nic] WARN: web_nic_guard heartbeat URL refused (nic_ok=true, no ping sent)'
+run_guard true 0 true
+assert "HB healthy run: exactly one ping call and exactly one stdin url line (the stub saw the stdin)" \
+  "[[ \"\$TA_PING\" -eq 1 && \"\$(grep -c '^url = ' \"\$STDIN_FILE\" || true)\" -eq 1 && \"\$PING\" == \"\$HB_GOOD\" ]]"
+assert "HB healthy run: no marker, no WARN, nothing on stdout, exit 0" \
+  "[[ \"\$ERR\" != *SOLEUR_CREDENTIAL_REFUSED* && \"\$ERR\" != *WARN* && -z \"\$OUT\" && \"\$RC\" -eq 0 ]]"
+HB_PUNCT="https://synthetic.invalid/beat/A.b_c~d:9?x=1&y=%2B+z-Q"
+EXTRA_ENV=("WEB_NIC_GUARD_URL=$HB_PUNCT")
+run_guard true 0 true
+assert "HB a different token using every permitted punctuation class beats once, on stdin only, unrefused (positive control)" \
+  "[[ \"\$PING\" == \"\$HB_PUNCT\" && \"\$TA_PING\" -eq 1 && \"\$ERR\" != *SOLEUR_CREDENTIAL_REFUSED* ]] && ! grep -qF 'A.b_c' \"\$ARGV_FILE\""
+EXTRA_ENV=(STUB_PING_RC=1)
+run_guard true 0 true
+assert "HB per-attempt: a failing first ping gives two ping calls, each with its OWN stdin url line (the second did not read EOF)" \
+  "[[ \"\$TA_PING\" -eq 2 && \"\$(grep -c '^url = ' \"\$STDIN_FILE\" || true)\" -eq 2 && \"\$(grep '^url = ' \"\$STDIN_FILE\" | sort -u | wc -l)\" -eq 1 ]]"
+assert "HB per-attempt: both attempts failing is a WARN with exit 0, never a refusal" \
+  "[[ \"\$ERR\" == *'heartbeat ping FAILED'* && \"\$ERR\" != *SOLEUR_CREDENTIAL_REFUSED* && \"\$RC\" -eq 0 ]]"
+assert "HB per-attempt: every ping used the golden argv with a zero tail (ALL transport rows stay clean)" "[[ \"\$TA_BAD\" -eq 0 ]]"
+# An UNSET beat URL on a healthy, shippable guard is now surfaced (it used to lapse the beat with no off-box reason):
+# the same hourly limiter, reason=empty, still no request.
+EXTRA_ENV=(WEB_NIC_GUARD_URL=)
+run_guard true 0 true
+assert "HB empty URL (healthy NIC, shippable): no ping on any witness, exit 0, nothing on stdout" "no_beat && [[ \"\$RC\" -eq 0 && -z \"\$OUT\" ]]"
+assert "HB empty URL (healthy NIC, shippable): exactly one marker, and it is exactly reason=empty with the variable name" \
+  "[[ \"\$(grep -c SOLEUR_CREDENTIAL_REFUSED <<<\"\$ERR\" || true)\" -eq 1 ]] && grep -qxF '$HB_MARKER_EMPTY' <<<\"\$ERR\""
+assert "HB empty URL (healthy NIC, shippable): exactly one WARN and it is the exact unset line (no 'refused' wording for an absent value)" \
+  "[[ \"\$(grep -c 'heartbeat URL' <<<\"\$ERR\" || true)\" -eq 1 ]] && grep -qxF '$HB_WARN_EMPTY' <<<\"\$ERR\""
+assert "HB empty URL (healthy NIC, shippable): the Better Stack POST is unaffected (one POST, the emit fired) and every curl stayed clean" \
+  "[[ \"\$TA_POST\" -eq 1 && -n \"\$EMIT\" && \"\$TA_BAD\" -eq 0 && \"\$TA_BEARER_BAD\" -eq 0 ]]"
+# A beat nobody would have attempted needs no explanation: a broken NIC, or a guard that cannot report, lapses the beat
+# for its OWN reason, and an empty URL adds no marker on top of it.
+EXTRA_ENV=(WEB_NIC_GUARD_URL=)
+run_guard false 0 true
+assert "HB empty URL on a broken NIC: no ping, no marker, no URL WARN (the beat lapses for its real reason)" \
+  "no_beat && [[ \"\$ERR\" != *SOLEUR_CREDENTIAL_REFUSED* && \"\$ERR\" != *'heartbeat URL'* && \"\$(field nic_ok)\" == false ]]"
+EXTRA_ENV=(WEB_NIC_GUARD_URL= BETTERSTACK_LOGS_TOKEN=)
+run_guard true 0 true
+assert "HB empty URL when the guard cannot report (no token): no ping, no marker, no URL WARN (SHIP_REFUSED already withholds)" \
+  "no_beat && [[ \"\$ERR\" != *SOLEUR_CREDENTIAL_REFUSED* && \"\$ERR\" != *'heartbeat URL'* && \"\$ERR\" == *WARN* ]]"
+EXTRA_ENV=(WEB_NIC_GUARD_URL= BETTERSTACK_INGEST_URL=https://evil.invalid/)
+run_guard true 0 true
+assert "HB empty URL when the ingest URL is unpinned: no ping, no marker, no URL WARN" \
+  "no_beat && [[ \"\$ERR\" != *SOLEUR_CREDENTIAL_REFUSED* && \"\$ERR\" != *'heartbeat URL'* && \"\$ERR\" == *unpinned_url* ]]"
+
+# The hostile and malformed values are defined ONCE; ONE defect per row (the good URL plus one bad thing).
+echo "--- heartbeat URL shape guard: one defect per row, zero pings, one marker, POST unaffected ---"
+HB_LABELS=(empty-rest http-scheme uppercase-scheme leading-space trailing-space double-quote single-quote backslash newline-smuggled-url-directive carriage-return tab semicolon dollar backtick at-sign hash)
+HB_VALUES=(
+  "https://"
+  "http://synthetic.invalid/beat/web-nic-guard"
+  "HTTPS://synthetic.invalid/beat/web-nic-guard"
+  " ${HB_GOOD}"
+  "${HB_GOOD} "
+  "${HB_GOOD}\""
+  "${HB_GOOD}'"
+  "${HB_GOOD}\\x"
+  "${HB_GOOD}"$'\nurl = "https://evil.invalid/"'
+  "${HB_GOOD}"$'\r'
+  "${HB_GOOD}"$'\t'
+  "${HB_GOOD};x"
+  "${HB_GOOD}\$x"
+  "${HB_GOOD}\`x"
+  "https://u@synthetic.invalid/beat/web-nic-guard"
+  "${HB_GOOD}#x"
+)
+HB_REASONS=(token_shape token_shape token_shape token_shape token_shape token_shape token_shape token_shape control_char control_char control_char token_shape token_shape token_shape token_shape token_shape)
+assert "HB hostile list: 16 values, 16 labels, 16 reasons (the list is defined once and loops below)" \
+  "[[ \"\${#HB_VALUES[@]}\" -eq 16 && \"\${#HB_LABELS[@]}\" -eq 16 && \"\${#HB_REASONS[@]}\" -eq 16 ]]"
+assert "HB hostile list: the labels are exactly the sixteen defects named by the plan, in order" \
+  "[[ \"\${HB_LABELS[*]}\" == 'empty-rest http-scheme uppercase-scheme leading-space trailing-space double-quote single-quote backslash newline-smuggled-url-directive carriage-return tab semicolon dollar backtick at-sign hash' ]]"
+hb_values_distinct() { local -A seen=(); local v n=0; for v in "${HB_VALUES[@]}"; do if [[ -z "${seen[$v]+x}" ]]; then seen[$v]=1; n=$((n + 1)); fi; done; echo "$n"; }
+hb_values_equal_good() { local v n=0; for v in "${HB_VALUES[@]}"; do if [[ "$v" == "$HB_GOOD" ]]; then n=$((n + 1)); fi; done; echo "$n"; }
+assert "HB hostile list: every value is distinct and none equals the good URL" \
+  "[[ \"\$(hb_values_distinct)\" -eq 16 && \"\$(hb_values_equal_good)\" -eq 0 ]]"
+assert "HB hostile list: exactly three control-character reasons (newline, CR, tab), thirteen token-shape" \
+  "[[ \"\$(printf '%s\\n' \"\${HB_REASONS[@]}\" | grep -c '^control_char\$' || true)\" -eq 3 && \"\$(printf '%s\\n' \"\${HB_REASONS[@]}\" | grep -c '^token_shape\$' || true)\" -eq 13 ]]"
+assert "HB hostile list: the content carries the bytes it names (quote, apostrophe, backslash, newline, CR, tab, ;, \$, backtick, @, #)" \
+  "[[ \"\${HB_VALUES[5]}\" == *'\"' && \"\${HB_VALUES[6]}\" == *\"'\" && \"\${HB_VALUES[7]}\" == *'\\'* && \"\${HB_VALUES[8]}\" == *\$'\\n'* && \"\${HB_VALUES[9]}\" == *\$'\\r' && \"\${HB_VALUES[10]}\" == *\$'\\t' && \"\${HB_VALUES[11]}\" == *';'* && \"\${HB_VALUES[12]}\" == *'\$'* && \"\${HB_VALUES[13]}\" == *'\`'* && \"\${HB_VALUES[14]}\" == *'@'* && \"\${HB_VALUES[15]}\" == *'#'* && \"\${HB_VALUES[3]}\" == ' '* && \"\${HB_VALUES[4]}\" == *' ' && \"\${HB_VALUES[0]}\" == 'https://' ]]"
+for ((hi = 0; hi < ${#HB_VALUES[@]}; hi++)); do
+  hl="${HB_LABELS[hi]}"; hv="${HB_VALUES[hi]}"; hr="${HB_REASONS[hi]}"
+  EXTRA_ENV=("WEB_NIC_GUARD_URL=$hv")
+  run_guard true 0 true
+  assert "HB refused[$hl]: zero ping calls, no stdin url line, the beat is withheld (argv count, parsed URL and stdin all agree)" "no_beat"
+  assert "HB refused[$hl]: exactly one marker with reason=$hr and the variable name, and exactly one WARN (both lines matched whole)" \
+    "[[ \"\$(grep -c SOLEUR_CREDENTIAL_REFUSED <<<\"\$ERR\" || true)\" -eq 1 && \"\$(grep -c 'heartbeat URL' <<<\"\$ERR\" || true)\" -eq 1 ]] && grep -qxF 'SOLEUR_CREDENTIAL_REFUSED script=web-private-nic-guard reason=$hr var=WEB_NIC_GUARD_URL' <<<\"\$ERR\" && grep -qxF '$HB_WARN_REFUSED' <<<\"\$ERR\""
+  assert "HB refused[$hl]: the Better Stack POST is unaffected (one POST, the emit fired) and the exit is 0" \
+    "[[ \"\$TA_POST\" -eq 1 && -n \"\$EMIT\" && \"\$RC\" -eq 0 ]]"
+  assert "HB refused[$hl]: the value is echoed to neither stream, and neither is the host or the bare secret path token" \
+    "[[ \"\$OUT\$ERR\" != *\"\$hv\"* && \"\$OUT\$ERR\" != *synthetic.invalid* && \"\$OUT\$ERR\" != *evil.invalid* && \"\$OUT\$ERR\" != *\"\$HB_TOKEN\"* ]]"
+  assert "HB refused[$hl]: no credentialed curl was malformed and the bearer stayed on the POST (ALL_* verdicts hold per run)" "[[ \"\$TA_BAD\" -eq 0 && \"\$TA_BEARER_BAD\" -eq 0 ]]"
+done
+# A refusal is a property of a beat that WOULD have been sent: a broken NIC (or a guard that cannot report)
+# already withholds it, so the judgement never runs and no marker is filed for a beat nobody attempted.
+EXTRA_ENV=("WEB_NIC_GUARD_URL=${HB_GOOD}\"")
+run_guard false 0 true
+assert "HB a hostile URL on a broken NIC: no ping and no marker (the existing predicate is unchanged)" "no_beat && [[ \"\$ERR\" != *SOLEUR_CREDENTIAL_REFUSED* ]]"
+EXTRA_ENV=("WEB_NIC_GUARD_URL=${HB_GOOD}\"" BETTERSTACK_LOGS_TOKEN=)
+run_guard true 0 true
+assert "HB a hostile URL when the guard cannot report: no ping and no marker (SHIP_REFUSED already withholds)" "no_beat && [[ \"\$ERR\" != *SOLEUR_CREDENTIAL_REFUSED* ]]"
+
+# Refusal limiter: its OWN stamp under SOLEUR_NIC_TEST_ROOT/run, 3600 s, future-dated or garbage = emit and
+# rewrite, unwritable = fail OPEN. FIXED_ROOT keeps the stamp across runs; markers are counted per run.
+echo "--- heartbeat URL refusal limiter: own stamp, one marker per window ---"
+HB_BAD="${HB_GOOD}\""
+STAMP_NAME="web-private-nic-guard.refusal"
+lim_run() {  # <root path under $TMP> -> leaves LIM_MARKERS (markers on this run's stderr)
+  FIXED_ROOT="${1#"$TMP"/}"; EXTRA_ENV=("WEB_NIC_GUARD_URL=$HB_BAD")
+  run_guard true 0 true
+  LIM_MARKERS=$(grep -c SOLEUR_CREDENTIAL_REFUSED <<<"$ERR" || true)
+}
+LIM1="$TMP/lim1"; rm -rf "$LIM1"; mkdir -p "$LIM1"
+lim_total=0; lim_pings=0; lim_posts=0; lim_first=""
+for _ in 1 2 3 4; do
+  lim_run "$LIM1"
+  lim_total=$((lim_total + LIM_MARKERS)); lim_pings=$((lim_pings + TA_PING)); lim_posts=$((lim_posts + TA_POST))
+  [[ -n "$lim_first" ]] || lim_first=$LIM_MARKERS
+done
+assert "HB limiter: four refused runs inside one window log exactly one marker (the first run), never a second" \
+  "[[ \"\$lim_total\" -eq 1 && \"\$lim_first\" -eq 1 ]]"
+assert "HB limiter: the suppressed runs still made zero pings and still POSTed (the limiter silences the marker, nothing else)" \
+  "[[ \"\$lim_pings\" -eq 0 && \"\$lim_posts\" -eq 4 ]]"
+assert "HB limiter: the stamp is one numeric epoch written under the test root" \
+  "[[ \"\$(cat '$LIM1/run/$STAMP_NAME')\" =~ ^[0-9]{10}\$ ]]"
+assert "HB limiter: the suppressed runs also withheld the WARN (marker and WARN sit inside the limiter together)" \
+  "[[ \"\$ERR\" != *'heartbeat URL refused'* ]]"
+# The empty-URL arm rides the same hourly limiter: its marker AND its WARN are counted across the four runs.
+LIM1E="$TMP/lim1e"; rm -rf "$LIM1E"; mkdir -p "$LIM1E"
+lime_marks=0; lime_warns=0; lime_pings=0; lime_posts=0; lime_bad=0
+for _ in 1 2 3 4; do
+  FIXED_ROOT="${LIM1E#"$TMP"/}"; EXTRA_ENV=("WEB_NIC_GUARD_URL=")
+  run_guard true 0 true
+  lime_marks=$((lime_marks + $(grep -c SOLEUR_CREDENTIAL_REFUSED <<<"$ERR" || true)))
+  lime_warns=$((lime_warns + $(grep -c 'heartbeat URL unset' <<<"$ERR" || true)))
+  lime_pings=$((lime_pings + TA_PING)); lime_posts=$((lime_posts + TA_POST))
+  [[ "$RC" -eq 0 ]] || lime_bad=$((lime_bad + 1))
+done
+assert "HB limiter (empty URL): four runs inside one window log exactly ONE marker and exactly ONE WARN" "[[ \"\$lime_marks\" -eq 1 && \"\$lime_warns\" -eq 1 ]]"
+assert "HB limiter (empty URL): all four runs made zero pings, still POSTed, and exited 0" "[[ \"\$lime_pings\" -eq 0 && \"\$lime_posts\" -eq 4 && \"\$lime_bad\" -eq 0 ]]"
+assert "HB limiter (empty URL): the stamp is one numeric epoch written under the test root" "[[ \"\$(cat '$LIM1E/run/web-private-nic-guard.refusal')\" =~ ^[0-9]{10}\$ ]]"
+
+lim_seed() {  # <root path under $TMP> <age seconds | literal> -> seeds the refusal stamp
+  local v="$2" stamp
+  mkdir -p "$TMP/${1#"$TMP"/}/run"; stamp="$TMP/${1#"$TMP"/}/run/$STAMP_NAME"
+  if [[ "$v" =~ ^-?[0-9]+$ ]]; then printf '%s\n' "$(( $(date +%s) - v ))" > "$stamp"; else printf '%s\n' "$v" > "$stamp"; fi
+}
+LIM2="$TMP/lim2"; rm -rf "$LIM2"; lim_seed "$LIM2" 2000; LIM2_SEED=$(cat "$LIM2/run/$STAMP_NAME")
+lim_run "$LIM2"
+assert "HB limiter: a stamp aged 2000 s suppresses (the window is 3600 s, not the 1800 s of the zot canary)" \
+  "[[ \"\$LIM_MARKERS\" -eq 0 && \"\$(cat '$LIM2/run/$STAMP_NAME')\" == \"\$LIM2_SEED\" ]]"
+assert "HB limiter: the suppressed run still withheld the beat" "no_beat"
+LIM3="$TMP/lim3"; rm -rf "$LIM3"; lim_seed "$LIM3" 3700; LIM3_SEED=$(cat "$LIM3/run/$STAMP_NAME")
+lim_run "$LIM3"
+assert "HB limiter: a stamp aged 3700 s re-emits one marker and the stamp is rewritten to now" \
+  "[[ \"\$LIM_MARKERS\" -eq 1 && \"\$(cat '$LIM3/run/$STAMP_NAME')\" != \"\$LIM3_SEED\" && \$(( \$(date +%s) - \$(cat '$LIM3/run/$STAMP_NAME') )) -lt 60 ]]"
+LIM4="$TMP/lim4"; rm -rf "$LIM4"; lim_seed "$LIM4" -100000; LIM4_SEED=$(cat "$LIM4/run/$STAMP_NAME")
+lim_run "$LIM4"
+assert "HB limiter: a future-dated stamp is read as 'emit' and rewritten (a clock step must not mute the marker for good)" \
+  "[[ \"\$LIM_MARKERS\" -eq 1 && \"\$(cat '$LIM4/run/$STAMP_NAME')\" != \"\$LIM4_SEED\" && \$(( \$(date +%s) - \$(cat '$LIM4/run/$STAMP_NAME') )) -lt 60 ]]"
+LIM5="$TMP/lim5"; rm -rf "$LIM5"; lim_seed "$LIM5" "not-an-epoch"
+lim_run "$LIM5"
+assert "HB limiter: a garbage stamp is read as 'emit' and rewritten to a numeric epoch" \
+  "[[ \"\$LIM_MARKERS\" -eq 1 && \"\$(cat '$LIM5/run/$STAMP_NAME')\" =~ ^[0-9]{10}\$ ]]"
+# The seeds below reach different arms of the stamp normalisation: the non-digit case (abc, 12ab, the 12-char text),
+# the base-10 coercion of a SHORT leading-zero stamp (0000000009 is an invalid octal without it), and (further down) the
+# length cap, pinned only by the zero-padded 12-char epoch.
+lim_seed_raw() {  # <root path under $TMP> <literal stamp text>: unlike lim_seed, a numeric value is NOT turned into an age
+  mkdir -p "$TMP/${1#"$TMP"/}/run"; printf '%s\n' "$2" > "$TMP/${1#"$TMP"/}/run/$STAMP_NAME"
+}
+for g in abc 12ab 0000000009 0000000008 not-an-epoch; do
+  LIMG="$TMP/limg.$g"; rm -rf "$LIMG"; lim_seed_raw "$LIMG" "$g"
+  lim_run "$LIMG"
+  assert "HB limiter: a stamp of '$g' reads as emit (one marker, the beat still withheld) and is rewritten to a numeric epoch" \
+    "[[ \"\$LIM_MARKERS\" -eq 1 && \"\$(cat '$LIMG/run/$STAMP_NAME')\" =~ ^[0-9]{10}\$ && \"\$(cat '$LIMG/run/$STAMP_NAME')\" != '$g' && \"\$RC\" -eq 0 ]] && no_beat"
+  assert "HB limiter: a stamp of '$g' leaves no shell arithmetic error text on stderr" "[[ \"\$ERR\" != *'value too great'* && \"\$ERR\" != *'syntax error'* ]]"
+done
+# Boundary rows at the exact edge of the 3600 s window. A run that straddles a clock-second tick would age the stamp by
+# one more second and move the edge under the assertion, so the helper re-seeds until a run began and ended in one second.
+lim_exact_age_run() {  # <root path under $TMP> <age seconds> -> LIM_T0 (the second everything happened in); rc 1 if no tick-free run in 5 tries
+  local t1 try
+  for try in 1 2 3 4 5; do
+    LIM_T0="$(date +%s)"; lim_seed "$1" "$2"; lim_run "$1"; t1="$(date +%s)"
+    [[ "$LIM_T0" == "$t1" ]] && return 0
+  done
+  return 1
+}
+LIMB1="$TMP/limb1"; rm -rf "$LIMB1"; lim_exact_age_run "$LIMB1" 3599; LIMB1_OK=$?
+assert "HB limiter: a stamp aged exactly 3599 s suppresses (one second inside the window): no marker, stamp left alone, no WARN" \
+  "[[ \"\$LIMB1_OK\" -eq 0 && \"\$LIM_MARKERS\" -eq 0 && \"\$(cat '$LIMB1/run/$STAMP_NAME')\" == \"\$((LIM_T0 - 3599))\" && \"\$ERR\" != *'heartbeat URL'* ]] && no_beat"
+LIMB2="$TMP/limb2"; rm -rf "$LIMB2"; lim_exact_age_run "$LIMB2" 3600; LIMB2_OK=$?
+assert "HB limiter: a stamp aged exactly 3600 s emits (the window is half-open: age < 3600 suppresses) and is rewritten to now" \
+  "[[ \"\$LIMB2_OK\" -eq 0 && \"\$LIM_MARKERS\" -eq 1 && \"\$(cat '$LIMB2/run/$STAMP_NAME')\" == \"\$LIM_T0\" ]] && no_beat"
+# lim_seed would turn a numeric argument into an AGE (and the 20-digit one would overflow into a negative stamp, which the
+# non-digit arm catches), so the over-long stamps are written literally. The 11- and 20-digit seeds are future-dated or
+# overflowing numbers and would emit WITHOUT the length cap too: they pin only "no arithmetic error, still emits". The cap
+# itself is pinned by DISC alone: a zero-padded epoch 10 s old (12 characters), which a cap-less limiter reads as a number
+# 10 s old and SUPPRESSES, and the capped limiter treats as not-an-epoch and EMITS.
+for g in 12345678901 99999999999999999999 DISC; do
+  if [[ "$g" == DISC ]]; then g="00$(( $(date +%s) - 10 ))"; g_name="the zero-padded 12-char epoch aged 10 s (the length cap)"; else g_name="an over-long numeric stamp of ${#g} digits (future-dated or overflowing)"; fi
+  LIM5B="$TMP/lim5b.${#g}"; rm -rf "$LIM5B"; lim_seed_raw "$LIM5B" "$g"
+  lim_run "$LIM5B"
+  assert "HB limiter: $g_name is read as 'emit' and is rewritten to a numeric epoch" \
+    "[[ \"\$LIM_MARKERS\" -eq 1 && \"\$(cat '$LIM5B/run/$STAMP_NAME')\" =~ ^[0-9]{10}\$ ]]"
+done
+LIM6="$TMP/lim6"; rm -rf "$LIM6"; mkdir -p "$LIM6/run"
+for other in web-zot-consumer-probe.refusal inngest-consumer-probe.refusal web-zot-consumer-probe web-private-nic-guard.dark web-private-nic-guard; do
+  printf '%s\n' "$(date +%s)" > "$LIM6/run/$other"
+done
+LIM6_BEFORE=$(cat "$LIM6"/run/* | md5sum | cut -d' ' -f1)
+lim_run "$LIM6"
+assert "HB limiter: fresh stamps of other scripts or limiters do NOT suppress this marker (the refusal stamp is its own file)" "[[ \"\$LIM_MARKERS\" -eq 1 ]]"
+LIM6_AFTER=$(for f6 in "$LIM6"/run/*; do [[ "${f6##*/}" == "$STAMP_NAME" ]] || cat "$f6"; done | md5sum | cut -d' ' -f1)
+assert "HB limiter: the run wrote only its own stamp (one new file) and left every other stamp byte-identical" \
+  "[[ \"\$(ls '$LIM6/run' | wc -l)\" -eq 6 && -f '$LIM6/run/$STAMP_NAME' && \"\$LIM6_AFTER\" == \"\$LIM6_BEFORE\" ]]"
+LIM7="$TMP/lim7"; rm -rf "$LIM7"; mkdir -p "$LIM7/run/$STAMP_NAME"
+lim_run "$LIM7"; lim7_first=$LIM_MARKERS; lim7_rc=$RC; lim7_err_noise=$(grep -c -e 'Is a directory' -e 'Permission denied' <<<"$ERR" || true)
+lim_run "$LIM7"; lim7_second=$LIM_MARKERS
+assert "HB limiter: an unwritable stamp path fails OPEN (a marker on every run, loud rather than silent)" \
+  "[[ \"\$lim7_first\" -eq 1 && \"\$lim7_second\" -eq 1 ]]"
+assert "HB limiter: the unwritable stamp costs no exit status and leaks no shell error text" \
+  "[[ \"\$lim7_rc\" -eq 0 && \"\$RC\" -eq 0 && \"\$lim7_err_noise\" -eq 0 ]]"
+LIM8="$TMP/lim8"; rm -rf "$LIM8"; mkdir -p "$LIM8"
+FIXED_ROOT="${LIM8#"$TMP"/}"; EXTRA_ENV=("WEB_NIC_GUARD_URL=$HB_BAD"); run_guard true 0 true
+assert "HB limiter: the stamp lives under SOLEUR_NIC_TEST_ROOT (nothing leaked to the real /run in a test)" \
+  "[[ -f '$LIM8/run/$STAMP_NAME' ]]"
+
+# --- REAL-curl smoke. Every row above runs a stub curl, which accepts any argv, so a flag the real curl rejects (exit 2,
+# "curl: option ...") would pass them all. Extract the SUT's own _hb_curl definition and run it against the real curl at a
+# closed port: a well-formed argv gets as far as the connect and fails with rc 7; a rejected option gives rc 2. The
+# definition silences curl's stderr, so a second copy with that redirect removed shows the text itself.
+echo "--- smoke: the real curl accepts the heartbeat argv ---"
+HB_DEF="$TMP/hb_curl.def"; HB_DEF_LOUD="$TMP/hb_curl_loud.def"
+sed -n '/^_hb_curl()/p' "$SUT" > "$HB_DEF"
+sed 's| 2>/dev/null||' "$HB_DEF" > "$HB_DEF_LOUD"
+SMOKE_RC="$(env URL='https://127.0.0.1:9/p' bash -c ". \"\$1\"; _hb_curl; echo \$?" _ "$HB_DEF" 2>&1)"
+SMOKE_TXT="$(env URL='https://127.0.0.1:9/p' bash -c ". \"\$1\"; _hb_curl; echo \"rc=\$?\"" _ "$HB_DEF_LOUD" 2>&1)"
+assert "smoke: the extracted _hb_curl definition is one non-empty line and the stderr-visible copy differs from it" \
+  "[[ \"\$(wc -l < '$HB_DEF')\" -eq 1 && -s '$HB_DEF' ]] && ! cmp -s '$HB_DEF' '$HB_DEF_LOUD'"
+assert "smoke: the curl on the test shell's PATH is the real one, not the stub" \
+  "[[ \"\$(command -v curl)\" != '$BIN/curl' && -x \"\$(command -v curl)\" ]]"
+assert "smoke: the real curl accepts the argv: exit 7 (connection refused), never 2 (option rejected)" "[[ '$SMOKE_RC' == 7 ]]"
+assert "smoke: the real curl's own message is a connect failure, with no 'curl: option' and no '(2)' text" \
+  "grep -qF '(7)' <<<\"\$SMOKE_TXT\" && ! grep -qF -e 'curl: option' -e '(2)' <<<\"\$SMOKE_TXT\""
+
+# --- static: the shape of the converted transport -----------------------------------------------------
+echo "--- static: one guarded stdin config line, class before it, no argv URL ---"
+HB_CLASS='[!A-Za-z0-9._~:/?\&=%+-]'
+assert "static: the guard class literal appears exactly once in the file (non-comment code)" \
+  "[[ \"\$(grep -cF -- \"\$HB_CLASS\" <<<\"\$STRIPPED\" || true)\" -eq 1 ]]"
+assert "static: exactly one stdin config line carries a url = \" directive" \
+  "[[ \"\$(grep -cF 'url = \"' <<<\"\$STRIPPED\" || true)\" -eq 1 ]]"
+assert "static: the class literal sits on a line BEFORE the url config line" \
+  "[[ \"\$(grep -nF -- \"\$HB_CLASS\" '$SUT' | sed -n '1p' | cut -d: -f1)\" -lt \"\$(grep -nF 'url = \"' '$SUT' | sed -n '1p' | cut -d: -f1)\" ]]"
+assert "static: the beat curl is the --disable --noproxy '*' -gfsS -m 10 -o /dev/null --config - form" \
+  "grep -qF -- \"curl --disable --noproxy '*' -gfsS -m 10 -o /dev/null --config -\" <<<\"\$STRIPPED\""
+assert "static: no code line carrying a curl word names the heartbeat URL variable (the one transport line takes it via printf on stdin)" \
+  "[[ \"\$(grep -E 'curl' <<<\"\$STRIPPED\" | grep -E '\\\$\\{?URL\\}?\\b' | grep -vF 'printf' | wc -l)\" -eq 0 ]]"
+assert "static: _hb_url_ok is called before the transport and the transport is called twice (the || fallback)" \
+  "grep -qF '_hb_url_ok \"\$URL\"' <<<\"\$STRIPPED\" && [[ \"\$(grep -cF '_hb_curl ||' <<<\"\$STRIPPED\" || true)\" -ge 1 ]]"
+assert "static: the comment no longer claims the URL rides argv, and still names #9639 for the unit expansion" \
+  "! grep -qF \"still rides curl's argv\" '$SUT' && grep -qF '#9639' '$SUT'"
+assert "static: no set -e was added (a failed beat or refusal must never change the exit status)" \
+  "! grep -qE '^[[:space:]]*set -[a-z]*e' <<<\"\$STRIPPED\""
+
 # --- every run, one verdict ------------------------------------------------------------------
 assert "no run anywhere issued a curl missing --disable-first or --noproxy '*' (ALL_TA_BAD=$ALL_TA_BAD)" "[[ \"\$ALL_TA_BAD\" -eq 0 ]]"
 assert "in no run did the bearer reach anything but the pinned POST, once per POST (ALL_BEARER_BAD=$ALL_BEARER_BAD)" "[[ \"\$ALL_BEARER_BAD\" -eq 0 ]]"
@@ -613,7 +907,7 @@ if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
   printf '\n[FATAL] accounting identity: PASS(%d) + FAIL(%d) != CASES(%d). An assertion recorded no verdict or more than one.\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
-MIN_CASES=169
+MIN_CASES=316
 if [[ "$CASES" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity floor: only %d assertions ran; floor is %d\n' "$CASES" "$MIN_CASES" >&2
   exit 1
