@@ -2030,13 +2030,15 @@ eqv_sh="$(_eqv "$EQV_SH")"
 #   pairs ran at all. PJ_TRIPLES is a count pin: an edit that adds one triple and removes another leaves the count and passes (the swap escape; a set-diff pin is deliberately not attempted here).
 #   Recompute PJ_TRIPLES from a tree with no uncommitted tracked change: `PJ_ALL="$(git ls-files)"; . <(sed -n '/^# PJ-DERIVE-BEGIN/,/^# PJ-DERIVE-END/p' .claude/hooks/grep-q-pipe-guard.test.sh); pj_join_pairs | LC_ALL=C sort -u | wc -l`
 #   (the guard prints the same number on its PASS line). The derivation is bounded: a wrapper chain is read to 200 characters, a joined line to 8192 bytes and 50 lines, the loop list to 32 entries.
-# STILL OPEN (listed, not planned here): the series of #9217 continues with Item G (a --ratchets selector in scripts/test-all.sh), Item I (whether JOBS=1 in
-# main-health-monitor.yml can go, once enough merge-queue runs exist), the wave A3 carriers (six carrier rows and 23 later-wave sites, gated on a host replace), and
-# the #9639 and #9638 triage. Items D and H are recorded as not fixed and Item E as moot, each with its reason on #9217; Item F is the multi-line passes, the
+# STILL OPEN (listed, not planned here): the series of #9217 continues with Item I (whether JOBS=1 in main-health-monitor.yml can go, once enough merge-queue runs
+# exist), the wave A3 carriers (six carrier rows and 23 later-wave sites, gated on a host replace), and the #9639 and #9638 triage. Items D and H are recorded as not
+# fixed, Item E as moot, and Item G (a --ratchets selector in scripts/test-all.sh) as not fixed, each with its reason on #9217; Item F is the multi-line passes, the
 # widened reader pattern and population in the sweep above, and the survivors it left are listed under its STATED LIMITS. This block does not claim the series is finished.
-# THE PRE-PUSH AFFECTED LANE DOES NOT SELECT THIS GUARD for a change to a PRODUCER file or to most owner suites: the declared edge list (AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS in scripts/lib/test-affected-paths.sh, a hand-maintained array)
-# names the hooks directories and the pinned FILES_* suites only, while this guard derives 95 producer files and 93 owner suites. A PR that adds one `| verb` to a producer file is green locally and red in CI, where the full battery runs
-# this guard in its group; run it by hand after editing a script a suite stubs a verb for.
+# THE PRE-PUSH AFFECTED GATE DOES NOT SELECT THIS GUARD for a change to many of the files it reads. Measured 2026-10-16 at ee8644bded over this guard's own pairs, with
+# `bash scripts/test-all.sh --print-selection --paths=<one path>` reading the selected bit: it selects the guard for 47 of the 98 producer files and 64 of the 97 owner suites and NOT for
+# the other 51 and 33 (.github workflows and actions, plugin hooks and skill scripts, many scripts/*.sh). The 12-entry declared array (AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS in
+# scripts/lib/test-affected-paths.sh) is only part of the declared edge. CI's full battery runs this guard, so a PR that adds one `| verb` to an unselected producer is green locally and red in CI; run it by hand
+# after editing a script a suite stubs a verb for. Tracked in #10447; per-path rows and the re-measure recipe are in selection-measurement.md, found by name under knowledge-base/project/specs/archive/ after this merges.
 # Only tracked files are read, so a new untracked file is invisible until it is staged. This awk derivation is AUTHORITATIVE. j0-derive.py in the S7c spec directory is a
 # one-time cross-check of it (its sorted triples equalled the awk's at the S7c head, recorded in evidence.md); nothing in CI runs it, so an unexplained difference between the two is
 # the port drifting, and only a person who runs it will see one.
