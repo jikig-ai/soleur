@@ -11,13 +11,13 @@ Issue: #7432 (Ref, not Closes). Tracker: #9217 (Ref). Draft PR: #10459.
 
 ## Phase 1: guard first, then the pin-removed edit, then the dry-run gate
 
-- 1.1 Lift check (12) into `check_jobs_pin(text)` in `plugins/soleur/test/main-health-monitor-workflow.test.sh`; write Guard 1 rows 1 to 5 and P1 as in-Python assertion pairs first and watch (12b) go RED against the current workflow
+- 1.1 Lift check (12) into `check_jobs_pin(text)` in `plugins/soleur/test/main-health-monitor-workflow.test.sh`; write Guard 1 rows 1, 2, 3, 4a, 4b, 5 and P1 as in-Python assertion pairs first (each asserts the mutation landed), watch (12b) go RED against the current workflow and save that output for `evidence.md`; raise `MIN_ASSERTIONS` by the rows added
 - 1.2 Edit `.github/workflows/main-health-monitor.yml`: remove the infra-step `JOBS: 1` and its pointer comment, keep the tests-step pin, rewrite the comment block (no literal `JOBS: 1` in comments), add one TIMEOUT BUDGET line
 - 1.3 Run `bash plugins/soleur/test/main-health-monitor-workflow.test.sh`; commit guard and workflow together
-- 1.4 Verify `git log -1 --format='%an <%ae>'` reads Jean Deruelle; push the branch (diff must touch no `apps/web-platform/infra/` path)
+- 1.4 Verify `git log -1 --format='%an <%ae>'` reads Jean Deruelle; push the branch (diff must touch no `apps/web-platform/infra/` path and not `apply-web-platform-infra.yml`)
 - 1.5 Dispatch twice: `gh workflow run main-health-monitor.yml --ref feat-one-shot-grep-q-pipe-guard-item-i-jobs1-stopgap -f dry_run=true`; list the runs with `gh run list --workflow main-health-monitor.yml --branch <branch> --event workflow_dispatch --json databaseId,createdAt,headSha`
 - 1.6 Wait with the Monitor tool (never a background polling loop), then read each run with `measure/extract-monitor-facts.sh` and the `main-health-outcomes` annotation
-- 1.7 Gate: both runs show `-P 4`, `infra=success` (or only the known tag-drift RED), `infra_elapsed_s` at most 2400, no timeout annotation, no `[KILLED]`, no `UNACCOUNTED`; elapsed 2400 to 3000 s is ambiguous, so dispatch a third time; a non-deterministic RED or elapsed above 3000 s goes to 5b
+- 1.7 Gate: the tests-step log prints the `not_in_diff` skip line and no nested runner; both runs show `-P 4`, `infra=success` (or only the known tag-drift RED), `infra_elapsed_s` at most 2400, no timeout annotation, no `[KILLED]`, no `UNACCOUNTED`; elapsed 2400 to 3000 s is ambiguous, so dispatch a third time; a non-deterministic RED or elapsed above 3000 s goes to 5b
 
 ## Phase 2: stale-statement corrections (comment-only)
 
@@ -28,11 +28,13 @@ Issue: #7432 (Ref, not Closes). Tracker: #9217 (Ref). Draft PR: #10459.
 
 ## Phase 3: follow-through probe
 
-- 3.1 Read `scripts/sweep-followthroughs.sh` exit map (0 close, 1 reopen/comment, 2 NOT YET, 3 CANNOT ESTABLISH, 5 ACTION REQUIRED)
-- 3.2 Write `scripts/followthroughs/jobs1-stopgap-7432.test.sh` first (Guard 2 rows 1 to 6 and P1, stub `gh`)
-- 3.3 Rewrite `scripts/followthroughs/jobs1-stopgap-7432.sh` to the soak criterion (12 oldest non-cancelled main runs after the workflow's last commit); add a `RETIREMENT:` header line
-- 3.4 Register the suite with one `run_suite` line in `scripts/test-all.sh`; run `bash scripts/lint-orphan-test-suites.sh`
-- 3.5 Update the #7432 body directive (`earliest=` merge plus 3 days) at ship time; keep the issue open
+- 3.1 Read `scripts/sweep-followthroughs.sh` exit map (0 close, 1 reopen/comment, 2 NOT YET, 3 CANNOT ESTABLISH, 5 ACTION REQUIRED) and how `SOLEUR_FT_EARLIEST` reaches the probe
+- 3.2 Write `scripts/followthroughs/jobs1-stopgap-7432.test.sh` first (Guard 2 rows 1 to 8, P1, X; strict stub `gh` that exits 64 on unmodeled argv; copy `assert_fixture_dir` from the 9728 suite)
+- 3.3 Rewrite `scripts/followthroughs/jobs1-stopgap-7432.sh`: xtrace refusal prologue (exit 78), soak window from `SOLEUR_FT_EARLIEST`, 12 oldest non-cancelled `main` runs, allowlist for the tag-drift RED, `RETIREMENT:` header line
+- 3.4 Delete line 30 of `scripts/lint-shell-trace-credential-refusal.baseline.txt`; run `python3 scripts/lint-shell-trace-credential-refusal.py`
+- 3.5 Register the suite with one `run_suite` line in `scripts/test-all.sh`; run `bash scripts/lint-orphan-test-suites.sh` and the PJ_TRIPLES recompute before and after
+- 3.6 Add `checks: read` to `.github/workflows/scheduled-followthrough-sweeper.yml` with a comment citing #8450
+- 3.7 After merge: edit the #7432 directive (`earliest=` merge time, trigger, caveat, #7376 assumption); read the first sweep comment and confirm NOT YET, not CANNOT ESTABLISH
 
 ## Phase 4: evidence, ship
 

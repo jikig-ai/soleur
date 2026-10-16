@@ -35,6 +35,7 @@ V = {rid: verdict(rid) for rid in out}
 
 # ---- CONTROLS (fail loudly) -------------------------------------------------------------------
 POS = '38897624648'   # 2026-10-16 12:01Z: tests and infra both killed at their ceilings
+assert POS in V, 'positive control run %s is outside the pulled window (retention or --limit): pick another run with tests=failure infra=failure and both timeout annotations' % POS
 assert V[POS]['tests'] == 'failure' and V[POS]['infra'] == 'failure' and V[POS]['tto'] and V[POS]['ito'], 'positive control lost'
 neg = [r for r, v in V.items() if v['tests'] == 'success' and v['infra'] == 'success']
 assert neg and all(not V[r]['tto'] and not V[r]['ito'] for r in neg), 'negative control: success rows must carry no timeout annotation'
@@ -86,6 +87,15 @@ for s_, ix in red.items():
             iso += 1
 print('M3 suite-REDs: isolated', iso, 'chained', chain, '| isolated suite-events per push run (a run with 2 isolated suites counts twice; upper bound, includes one-commit regressions)', round(iso / len(order), 3), 'over', len(order), 'runs (', len(cancelled_runs), 'runs with a cancelled leg left out )')
 
+# leg controls: a known-RED leg log yields a RED header, a known-green leg yields none
+KNOWN_RED_JOB = '108669589945'   # cutover-inngest-workflow.test.sh, rc=1 (2026-09-27)
+red_jobs = {l.rstrip('\n').split('\t')[1] for l in open(D + 'failed-legs.tsv')}
+if KNOWN_RED_JOB in red_jobs:
+    assert any(l.split()[1] for l in open(D + 'red-headers.tsv')), 'leg RED headers empty although failed legs exist'
+else:
+    print('NOTE: known-RED leg job', KNOWN_RED_JOB, 'is outside the pulled window; leg-control skipped')
+assert any(l[3] == 'success' for l in legs), 'no green leg to serve as the negative control'
+
 # ---- M4 paired same-sha ----------------------------------------------------------------------------
 sha_legs = collections.defaultdict(set)
 for l in open(D + 'red-headers.tsv'):
@@ -95,7 +105,8 @@ legsha = {iv[l[0]]['headSha'] for l in legs if l[0] not in cancelled_runs}
 mon = {str(r['databaseId']): r for r in json.load(open(D + 'runs.json'))}
 paired = par_only = mon_only = with_red = 0
 for rid, m in mon.items():
-    if m['headSha'] in legsha and V[rid]['infra'] not in ('ABSENT', 'skipped') and V[rid]['P'] == '1':
+    # a ceiling-killed monitor step has a right-censored RED set: leave it out of the paired set
+    if m['headSha'] in legsha and V[rid]['infra'] not in ('ABSENT', 'skipped') and V[rid]['P'] == '1' and not V[rid]['ito']:
         paired += 1
         a_, b_ = set(V[rid]['reds']), sha_legs.get(m['headSha'], set())
         par_only += len(b_ - a_)
