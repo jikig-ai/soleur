@@ -111,6 +111,11 @@ apps/web-platform/server/account-delete.ts
 apps/web-platform/server/concurrency.ts
 apps/web-platform/server/notifications.ts
 
+# Egress audit rollup ingest (#9545, ADR-288). Authenticated by a bearer token from Vector
+# on the same host, not by a user session: it resolves workspace -> organisation and calls
+# the service-role-only ingest_egress_audit_rollup RPC. No founder identity exists on this path.
+apps/web-platform/server/egress-audit-ingest.ts
+
 # Worktree write-lease RPC client (epic #5274 Phase 2, ADR-068 §2). Process-
 # scoped infra coordination keyed to workspace_id+worktree_id+host_id; the
 # acquire/touch/release functions are SECURITY DEFINER + service-role-only

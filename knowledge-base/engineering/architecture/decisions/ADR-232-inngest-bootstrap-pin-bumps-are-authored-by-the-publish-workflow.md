@@ -593,6 +593,20 @@ it.
 
 Plan: `knowledge-base/project/plans/archive/20261004-100500-2026-09-30-infra-retier-pin-bump-and-automint-to-infra-privileged-plan.md`.
 
+## Amendment — 2026-10-15 (#10120, sanctioned-window predicate)
+
+A change that edits a `vinngest-v*` carrier (`inngest-bootstrap.sh` or `vector.toml`) turns rows of
+`cloud-init-inngest-bootstrap.test.sh` red until the mint's tag and the bot's pin-bump PR land. Precedents #10073
+and #9944 merged inside that window; the open prerequisite that would remove the need is #9081 (a PR-context
+exemption for a PR's own carrier change). Until then the exception is a NAMED-ROW SUBSET predicate, not a blanket
+"GuardA is red by design" (CTO-ruled, 2026-10-15): the `FAIL:` rows of the suite on the merge tree are a subset of
+{the web pin row, the dedicated-host pin row, the byte-identity row `every baked carrier is byte-identical at ...`},
+the byte-identity row's drifted list is a subset of the carriers the change edited plus any carrier already drifted on main by an earlier change whose pin bump is still pending (on 2026-10-15: `vector.toml`, from #10255), and every other test file the PR
+touches is fully green. The mint decides from the tree against the newest merged `vinngest-v*` tag, not against the
+pin, so the change does not wait for an older open pin-bump PR; after the merge exactly one pin-bump PR may stay open
+and it must target the semver-maximum merged tag (the mint's PR and an older one rewrite the same four pin sites on
+per-target branches, so whichever merges second conflicts). The Status is unchanged.
+
 ## Verification
 
 - `.github/scripts/test/test-bump-inngest-bootstrap-pin.sh` — fixture suite

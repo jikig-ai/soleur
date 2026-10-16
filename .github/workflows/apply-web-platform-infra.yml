@@ -478,6 +478,8 @@ jobs:
               -target=doppler_secret.github_app_private_key \
               -target=random_id.github_webhook_secret \
               -target=doppler_secret.github_app_webhook_secret \
+              -target=random_id.egress_audit_ingest_token \
+              -target=doppler_secret.egress_audit_ingest_token \
               -target=cloudflare_bot_management.soleur_ai \
               -target=cloudflare_ruleset.seo_page_redirects \
               -target=cloudflare_ruleset.seo_response_headers \
@@ -642,6 +644,8 @@ jobs:
               -target=logtail_exploration_alert.inngest_luks_wrong_volume \
               -target=logtail_exploration.registry_store_not_luks \
               -target=logtail_exploration_alert.registry_store_not_luks \
+              -target=logtail_exploration.registry_clientip_not_rfc1918 \
+              -target=logtail_exploration_alert.registry_clientip_not_rfc1918 \
               -target=logtail_exploration.inngest_step_524 \
               -target=logtail_exploration_alert.inngest_step_524 \
               -target=logtail_exploration.claude_cost_daily_burn \

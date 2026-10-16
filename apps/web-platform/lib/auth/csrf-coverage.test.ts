@@ -41,6 +41,12 @@ const EXEMPT_ROUTES = new Set([
   // origin-validation CSRF does not apply — the secret is the trust boundary.
   // Same class as the internal routes above.
   "app/api/internal/cohort/route.ts",
+  // #9545 — egress audit rollup ingest is called by Vector on the same host ONLY,
+  // authenticated via a bearer token (current + previous, constant-time compare) plus a
+  // loopback-Host check that rejects any forwarded request. No cookies / no browser
+  // session, so origin-validation CSRF does not apply — the token is the trust boundary.
+  // Same class as the internal routes above.
+  "app/api/internal/egress-audit-ingest/route.ts",
   // #5103 — Resend Inbound email webhook uses svix signature verification
   // (resend.webhooks.verify → standardwebhooks constant-time HMAC + ±5-min
   // timestamp tolerance), not cookies. Called by Resend's servers (no browser

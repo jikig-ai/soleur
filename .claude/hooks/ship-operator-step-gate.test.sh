@@ -27,7 +27,14 @@ GROUP_B='T\+[0-9]+\s*(min|m|h|hour|d|day|wk|week)s?\b.*(verif|check|confirm|file
 GROUP_C='[Ww]ithin\s+[0-9]+\s*(min|m|h|hour|d|day|wk|week)s?(\s+of\s+merge)?\s*:.*(file|run|verif|check|confirm|create|provision|set)'
 GROUP_D='AC-PM[0-9]+'
 DETECT_RE="^[[:space:]]*([-*]|[0-9]+\.)[[:space:]]+(\[[[:space:]xX]\][[:space:]]+)?(\*\*)?(${GROUP_A}|${GROUP_B}|${GROUP_C}|${GROUP_D})"
-CMD_RE='(^|&&|\|\||;)\s*gh\s+pr\s+(ready|merge\s+.*--auto)(\s|$|&&|\|\||;)'
+# The shared wrapper-boundary fragment (#10248) — same source the gate's own
+# incidents.sh chain provides; restated here so CMD_RE stays a faithful copy.
+# unset-first per the lib contract: an inherited env value must not masquerade
+# as the loaded fragment after a failed source.
+# shellcheck source=../../plugins/soleur/scripts/lib/wrapper-boundary.sh
+unset SOLEUR_ENV_ASN_RE SOLEUR_LAUNCHER_RE SOLEUR_RTK_RE SOLEUR_BOUNDARY_PFX SOLEUR_BOUNDARY_PFX_LOADED
+source "$SCRIPT_DIR/../../plugins/soleur/scripts/lib/wrapper-boundary.sh" 2>/dev/null || true
+CMD_RE='(^|&&|\|\||;)\s*('"${SOLEUR_BOUNDARY_PFX:-}"'[[:space:]]+)*gh\s+pr\s+(ready|merge\s+.*--auto)(\s|$|&&|\|\||;)'
 
 t() {
   TOTAL=$((TOTAL + 1))
@@ -83,6 +90,11 @@ t "gh pr merge (no --auto) — direct merge, NOT this gate's scope" "$CMD_RE" \
   "gh pr merge 4227 --squash" no-match
 t "gh pr view — read-only, not gated" "$CMD_RE" \
   "gh pr view 4227" no-match
+t "rtk gh pr merge --auto (wrapper prefix, #10248)" "$CMD_RE" "rtk gh pr merge --auto" match
+t "rtk gh pr ready (wrapper prefix, #10248)" "$CMD_RE" "rtk gh pr ready 4227" match
+t "rtk-foo gh pr merge --auto (glued suffix is not rtk)" "$CMD_RE" "rtk-foo gh pr merge --auto" no-match
+t "rtk run -c 'gh pr merge --auto' (string payload — lexical-limit class)" "$CMD_RE" \
+  "rtk run -c 'gh pr merge --auto'" no-match
 t "echo containing 'gh pr ready' substring — word-bounded safe" "$CMD_RE" \
   "echo 'remember to gh pr ready when done'" no-match
 

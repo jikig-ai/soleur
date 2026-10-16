@@ -177,8 +177,9 @@ resource "logtail_exploration_alert" "monitor_send_failed" {
 # WHAT IT DETECTS. After the LUKS cutover, the dedicated host's own probe row resolves the device
 # backing /mnt/data all the way to a Hetzner by-id alias (`data_mount_devid`, probe_schema=8). Post
 # cutover that alias must be the ADDITIVE volume's. Anything else is the store having moved back —
-# an on-host rollback, a reboot that took the pre-cutover arm because the pointer went missing, or
-# a replace whose first boot resolved the plaintext volume — and each of those means writes are
+# an on-host rollback, or any boot that mounted a device other than the additive volume (the
+# plaintext volume is destroyed and the template no longer has an arm for it, #9786, so this is now
+# the tripwire for a regression of that, not a reachable state) — and each of those means writes are
 # landing UNENCRYPTED again, which is the one thing this whole change exists to prevent. Nothing
 # else notices: the scheduler is healthy in every one of those states, so uptime stays green.
 #
@@ -435,6 +436,153 @@ resource "logtail_exploration_alert" "registry_store_not_luks" {
   incident_cause = "The registry host's SOLEUR_ZOT_DISK heartbeat says its zot store is NOT on the LUKS mapper (store_luks is not yes), or the daily escrow re-test is not ok (store_escrow is fail_*, stale, none or indeterminate). Runbook: ${local.registry_store_not_luks_runbook_url}"
   metadata = {
     runbook = local.registry_store_not_luks_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+# ── #7530: a registry-plane clientIP that is not RFC1918 ────────────────────────────────────────
+#
+# WHAT IT DETECTS. zot logs the connecting peer as `clientIP` on its access lines. The CLO's
+# 2026-08-13 ruling (knowledge-base/legal/audits/2026-08-counsel-review-7440.md) holds that the
+# registry log shipper may ship `clientIP` unredacted ONLY while every observable value is
+# RFC1918 (the estate's own hosts, 10.0.1.x, behind the Cloudflare tunnel and a deny-all-public
+# firewall). Nothing enforced that. If ingress topology drifts (an inbound firewall rule, a proxy
+# change) a public address becomes Art. 4(1) personal data on rows already in flight, silently.
+# This alert EMAILS the team (free tier: email only, no escalation policy) on the first address-shaped `clientIP` outside 10/8, 172.16/12, 192.168/16
+# (any IPv6 that is not an IPv4-mapped RFC1918 value included). It is DETECTION, not prevention:
+# latency is up to about 20 minutes (300 s check, 900 s window, plus ingest), so the legal records
+# say "monitored and alerted by email", never "guaranteed". Runbook: registry-clientip-rfc1918-7530.md.
+#
+# WHICH ROWS. Both producer shapes the registry host POSTs to this source, each anchored at OFFSET 0
+# of the stored `raw` (the direct-POST envelope), so a Vector-shipped journald row that merely
+# QUOTES the marker (it starts `{"PRIORITY":…`) cannot match: the shipper envelope
+# `SOLEUR_ZOT_LOG shipper=zot-log-shipper host=soleur-registry ` (host-scoped: this source also
+# carries web-1 and web-2) and the `SOLEUR_ZOT_DISK ` heartbeat (host-agnostic exactly as
+# registry_store_not_luks is). The disk arm grades the WHOLE message including the free-text
+# ` zot_last_err=` tail ON PURPOSE: on the non-fallback tiers (panic / error / warn) that tail carries
+# zot's own log line, and so its clientIP (ADR-211 left it unmasked for this alert to see); on the
+# tier-4 fallback the producer emits the parsed message only. In practice the shipper rows are the
+# carrier: see the live probe (iv) below, and note the disk arm has NO live positive control.
+#
+# WHICH clientIP. Only the FIRST one in the decoded message (`extract` returns the first match):
+# zot writes its own `clientIP` BEFORE `method`, `path` and `headers`, so a later client-controlled
+# copy inside a header or a path cannot hide a real address (a decoy with no real field is a
+# safe-direction false alert). The value is stripped of an optional `[` and an IPv4-mapped
+# `::ffff:` prefix, then: dotted-IPv4-shaped AND not private -> alerts; two or more colons left
+# (IPv6, or `ip:port` of a public IPv6) -> alerts; anything else (`default`, empty) is quiet.
+#
+# WHY IT IS WRITTEN LIKE THIS. The one-element array binds the extracted value once so the lambda
+# reads it twice without a `WITH` alias; `[.]`, `[[]` and `[^ ,}"]` avoid backslashes in an HCL
+# heredoc; the single literal space inside `[^ ,}"]` survives the whitespace collapse at the
+# resource site.
+#
+# SAMPLING CAVEAT. The shipper rate-caps ORDINARY rows to 17 per tick, so detection is sampled over
+# SHIPPED rows only; a topology change would produce many public rows, so this is adequate. Rows
+# the shipper drops never reach Better Stack (they stay in the host-local journald log under its
+# size bound). A low-rate public prober inside the high-volume private stream can be sampled out
+# for some time. A public address in a top-level field other than `clientIP` is not covered.
+#
+# FIELD-ORDER CONTRACT. The grade depends on zot writing `clientIP` before `method`/`path`/
+# `headers` and on the field name; `treat_as_zero` makes a renamed or reordered field read as
+# healthy forever. The drift guard therefore pins the zot image digest the order was verified
+# against: a bump of `zot_image_amd64` in zot-registry.tf fails the guard until someone re-runs the
+# live population check below and updates the pin.
+#
+# BOOT FALSE-POSITIVE CHECK. The measured boots show no loopback or docker-NAT value. A localhost
+# readiness probe that ever surfaced as `127.0.0.1` alerts BY DESIGN; the predicate is then narrowed
+# with evidence, not guessed (the #7530 follow-through probe validates the first post-replace window).
+#
+# LIVE-PROBED 2026-10-14 against the ClickHouse table (hot remote() UNION ALL s3Cluster archive),
+# 7-day window, the predicate's conjuncts verbatim (time bounds replaced by the window):
+#   (i)   population: rows carrying a clientIP under the two anchors     -> 18767 (a rolling window: two runs seconds apart differ by a few rows)
+#   (ii)  as written                                                      -> 0   (quiet on the live fleet)
+#   (iii) positive control: private ranges flagged instead of excluded    -> 18767 (the whole population)
+#   (iv)  SOLEUR_ZOT_DISK rows carrying a clientIP                        -> 0
+#   (v)   16-literal classification table through the same predicate (RFC 5737 / 3849 documentation
+#         addresses, synthetic only; flagged = alerts):
+#         0: 10.0.1.10:54321  172.16.0.1:1  172.31.255.255:9  192.168.1.1:80  ::ffff:10.0.0.5  default
+#         1: 198.51.100.7:443  127.0.0.1:5000  172.15.0.1:1  172.32.0.1:9  192.169.0.1:80
+#            169.254.169.254:80  100.64.0.1:80  [2001:db8::1]:80  2001:db8::1  ::ffff:198.51.100.7
+# FIELD ORDER VERIFIED AGAINST zot v2.1.22 @sha256:46f688dc26315a35a247e1784368829e66a67bf91de94c7d8d1645044fac1d5b
+# (the running image, heartbeat zot_image_digest=46f688dc2631, at the time of the probe).
+#
+# WHY IT SHIPS UNPAUSED AT MERGE. The 7-day population is all-private (5 boots, plan-measured), so the rule
+# is quiet on arrival. value = 0 with higher_than: ONE shipped public row alerts (there is no
+# transient-row tolerance to buy here, unlike the escrow field). The channel is ONE email to the team
+# (free tier, no escalation policy; push, call, sms and critical_alert are all false).
+locals {
+  registry_clientip_not_rfc1918_sql = <<-SQL
+    SELECT {{time}} AS time, count(*) AS value
+    FROM {{source}}
+    WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND (startsWith(raw, '{"message":"SOLEUR_ZOT_LOG shipper=zot-log-shipper host=soleur-registry ')
+        OR startsWith(raw, '{"message":"SOLEUR_ZOT_DISK '))
+      AND arrayExists(n -> (match(n, '^[0-9]{1,3}([.][0-9]{1,3}){3}')
+            AND NOT match(n, '^(10[.]|192[.]168[.]|172[.](1[6-9]|2[0-9]|3[01])[.])'))
+          OR length(n) - length(replaceAll(n, ':', '')) >= 2,
+        [replaceRegexpOne(extract(JSONExtractString(raw, 'message'), 'clientIP[:=]"?([^ ,}"]+)'), '^[[]?(::ffff:)?', '')])
+    GROUP BY time
+  SQL
+
+  registry_clientip_not_rfc1918_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-7530.md"
+}
+
+resource "logtail_exploration" "registry_clientip_not_rfc1918" {
+  name      = "soleur-registry-clientip-not-rfc1918-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.registry_clientip_not_rfc1918_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "registry_clientip_not_rfc1918" {
+  exploration_id = logtail_exploration.registry_clientip_not_rfc1918.id
+  name           = "soleur-registry-clientip-not-rfc1918-prd"
+
+  # One shipped public-address row in a 900 s window alerts by email (no tolerance; email-only on the free tier). The
+  # window covers the */5 heartbeat and the shipper's per-tick envelopes; recovery_period covers two
+  # windows so one clean bucket does not close an incident the next would re-open.
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 300
+  query_period        = 900
+  confirmation_period = 0
+  recovery_period     = 1800
+  # A count query with no rows returns NO bucket, which must read as healthy (0) so an open
+  # incident can observe recovery. Silence is NOT this rule's job: registry_store_not_luks, the
+  # registry heartbeats (zot-registry.tf) and scheduled-zot-restart-loop.yml own liveness.
+  on_missing_data = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "The registry plane shipped a clientIP outside RFC1918 (a public or non-private address on a SOLEUR_ZOT_LOG or SOLEUR_ZOT_DISK row), so a client address may now be personal data on rows already in flight. Fix the ingress cause first; do not paste the address anywhere. Runbook: ${local.registry_clientip_not_rfc1918_runbook_url}"
+  metadata = {
+    runbook = local.registry_clientip_not_rfc1918_runbook_url
   }
 
   escalation_target {

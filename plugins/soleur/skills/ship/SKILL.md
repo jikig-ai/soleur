@@ -2561,8 +2561,8 @@ The agent maintains a `fix_attempt_count` counter (agent-level state, not a bash
 1. Read the failure details:
 
    ```bash
-   gh pr checks <number> --json name,state,description,detailsUrl \
-     | jq '.[] | select(.state != "SUCCESS" and (.state != "SKIPPED" or (.name | startswith("smoke (") | not)))'
+   gh pr checks <number> --json name,state,bucket,description,link \
+     | jq '.[] | select(.bucket != "pass" and .bucket != "skipping")'
    ```
 
 2. Identify the failing workflow run and read its logs:
@@ -2589,6 +2589,8 @@ The agent maintains a `fix_attempt_count` counter (agent-level state, not a bash
    b. If the failure is in a flaky or unrelated check (not reproducible locally): **Headless mode:** abort. **Interactive mode:** ask whether to wait for a re-run or abort.
 
 5. After re-queuing auto-merge, re-invoke the Phase 7 Monitor poll loop from the beginning. The agent carries `fix_attempt_count` across poll invocations.
+
+**Ask-before-push instruction:** read [cto-ruling-armed-push.md](./references/cto-ruling-armed-push.md) before pushing.
 
 Note: The DIRTY (merge conflict) exit is already handled inside the poll block — do not duplicate merge conflict resolution here. The CI auto-fix logic is OUTSIDE the Phase 7 poll block (`<!-- phase-7-poll-block:start/end -->` markers) and does NOT affect the mirror in `merge-pr/SKILL.md §5.2`.
 

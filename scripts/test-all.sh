@@ -5085,6 +5085,9 @@ if want_scripts; then
   # Image CVE scan (W3, epic #9601): hermetic suite (stub Grype/curl, file:// /health); scripts/*.test.sh is
   # not in SUITE_GLOBS, so it is registered explicitly.
   run_suite "scripts/image-cve-scan" bash scripts/image-cve-scan.test.sh
+  # Egress audit rollup retention/freshness probe (#9545, ADR-288): hermetic (curl PATH shim, stub gateway
+  # query); scripts/*.test.sh is not in SUITE_GLOBS, so it is registered explicitly.
+  run_suite "scripts/egress-audit-retention-check" bash scripts/egress-audit-retention-check.test.sh
   # Doppler's API caps a doppler_* `description` at 255; the provider schema and `terraform plan`
   # do not, so a 273-char doppler_project.infra_privileged reddened every push apply after the
   # credential-tiering merge. -live asserts the real tree; -unit is the mutation matrix.
@@ -6386,6 +6389,10 @@ if want_scripts; then
   # the measured record shapes, a restricted PATH, and a mutant per guard row). Same explicit-registration and LAST-in-block
   # reasons as above. Declared edge set, not always-on.
   run_suite "scripts/ci-pr-selection" bash scripts/ci-pr-selection.test.sh
+  # #7530 (PR 10320): the clientIP-alert post-merge probe's exit-code contract (same stubs, plus the SQL the
+  # probe sends compared against the committed betterstack-logs-alerts.tf text, and a no-address-in-output
+  # assertion on every run). Same explicit-registration and LAST-in-block reasons as above.
+  run_suite "scripts/followthroughs/registry-clientip-alert-7530" bash scripts/followthroughs/registry-clientip-alert-7530.test.sh
 fi
 
 # Named bun-test entries — bun shard.

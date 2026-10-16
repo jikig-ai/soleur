@@ -286,6 +286,22 @@ t06_envprefix_deny() {
   rm -rf "$tmp"
 }
 
+t06b_rtk_deny() {
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-rtk" specdir)
+  assert_fixture_dir "$work"
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "rtk gh pr merge --squash --auto")") || exit_code=$?
+  assert_deny "T06b rtk-prefixed merge (#10248)" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$incidents"; mkdir -p "$incidents"
+  out=$(run_hook "$incidents" "$(make_payload "$work" "rtk run gh pr merge --squash --auto")") || exit_code=$?
+  assert_deny "T06b2 rtk run exec-form merge (#10248)" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$incidents"; mkdir -p "$incidents"
+  out=$(run_hook "$incidents" "$(make_payload "$work" "rtk-foo gh pr merge --squash --auto")") || exit_code=$?
+  assert_pass "T06b3 rtk-foo glued suffix is not rtk (#10248)" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
 t07_pipe_deny() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-pipe" specdir)
@@ -1345,6 +1361,7 @@ t03_modspec_deny
 t04_brainstorm_deny
 t05_withlock_deny
 t06_envprefix_deny
+t06b_rtk_deny
 t07_pipe_deny
 t08_subst_deny
 t09_keyword_deny
