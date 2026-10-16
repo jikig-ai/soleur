@@ -28,16 +28,19 @@ This reproduces the ADR amendment's figures (1.29 billed minutes per executed jo
 2026-10-09 354, 10-10 183, 10-11 383, 10-12 387, 10-13 251, 10-14 264: mean 303.7, so "about 300 PR runs per day" holds.
 Command per day: `.../ci.yml/runs?event=pull_request&created=<day>T00:00:00Z..<day>T23:59:59Z&per_page=1` and read `total_count`.
 
-## Window 2: after the Q1 follow-up merge (2026-10-15T17:50:38Z to 2026-10-16T09:40Z)
+## Window 2: after the Q1 follow-up merge (2026-10-15T17:50:38Z to 2026-10-16T09:40:00Z, queried 2026-10-16T16:00Z)
 
-28 `ci.yml` pull_request runs: `pr-selection` **27 skipped, 1 success**. The one success is run 38781446320, created
-2026-10-15T17:56:10Z (head branch `feat-one-shot-argv-bearer-pr-c-inngest-probes`), six minutes after the merge: its merge ref predated the
-merge, so it ran the pre-Q1 workflow. With `CI_PR_AFFECTED` unset the dark job now costs 0 billed minutes.
+47 `ci.yml` pull_request runs listed by the API at the query time: `pr-selection` **44 skipped, 1 success**, and 2 runs that never created the
+job (cancelled before any job; run ids 38871053197 and 38871069022). So **44 of the 45 runs that created the job were skipped**.
+The one success is run 38781446320, created 2026-10-15T17:56:10Z (head branch `feat-one-shot-argv-bearer-pr-c-inngest-probes`), six minutes
+after the merge: its merge ref predated the merge, so it ran the pre-Q1 workflow. With `CI_PR_AFFECTED` unset the dark job now costs 0 billed
+minutes. (An earlier read of this window, taken before the window had filled, listed 28 runs and 27 skipped; the count of a window that is
+still open grows, so the query time is part of the figure.)
 
 ## Oldest run record probed
 
-`ci.yml` runs are still listed for 2026-06-01 (521 runs that day), the earliest date probed; earlier dates were not probed, so the
-retention is not inferred from a setting and not bounded here.
+Per-day counts of `ci.yml` runs (any event), read 2026-10-16T16:00Z: 2026-06-01 **160** runs, 2026-03-15 **1** run (the oldest date probed
+that still lists a run). Earlier dates were not probed, so the retention is not inferred from a setting and not bounded here.
 
 ## Organization variables and AC9c (read 2026-10-16 with `scripts/ci-pr-affected-preactivation.sh`)
 

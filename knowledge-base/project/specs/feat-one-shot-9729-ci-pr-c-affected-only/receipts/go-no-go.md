@@ -6,16 +6,16 @@ can only move a computed verdict toward NO-GO. Computed with `python3 scripts/ci
 | # | Criterion (R3) | Measured | Threshold | Status | Receipt |
 |---|---|---|---|---|---|
 | a | Escape rate (R2): the gating point estimate with unverified counted as escapes, AND the one-sided 95% Clopper-Pearson bound on the worst-case numerator | 0 of 300 commits (0.00%, bound 0.99%); 0 of 353 with the 53 queue ejections (0.00%, bound 2.18%) | point at most 2% and bound under 12% | **pass** (inside the 90% side of both thresholds) | `replay-summary.md` |
-| b | Index completeness: zero unexplained gaps (every path a suite names is declared for it or covered by the runner trigger) | 145 of 630 suites name an undeclared tracked path (964 references); a 14-pair sample found 6 real reads, 3 fixture writes, 5 mentions | 0 gaps | **fail** | `index-audit.md` |
-| c | Mean net saving at least 20% of the one 99.8 baseline, and no serial edge past the 75-minute declared path (restored selection plus overhead at most 120 s) | net mean 51.58 suite-minutes per commit (mean plus two standard errors 54.75, a lower bound on the web-platform axis); restored selection about 29 s of job time on a fresh runner | at least 19.96 and at most 120 s | **pass** (the 73 minute path plus about 33 s is 73.6 of 75) | `replay-summary.md`, `sel-s-canary.md` |
+| b | Index completeness: zero unexplained gaps (every path a suite names is declared for it or covered by the runner trigger) | 190 of 630 suites name an undeclared tracked path (1,079 references; 515 audited, 114 always-on exempt, 1 directory suite unaudited); a 14-pair sample of the first audit found 6 real reads, 3 fixture writes, 5 mentions | 0 gaps | **fail** | `index-audit.md` |
+| c | Mean net saving at least 20% of the one 99.8 baseline (billed job-minutes per PULL-REQUEST run), and no serial edge past the 75-minute declared path (restored selection plus overhead at most 120 s) | net mean 51.58 SUITE-minutes per full-battery main commit (mean plus two standard errors 54.75, a lower bound on the web-platform axis); per PR run on the order of 12.6 gross and 11.6 net (about 24% of sampled PR runs execute the skippable suites); restored selection about 11 s of a 29 s job path on a fresh runner (cold pass 146 s, 3 billed minutes) | at least 19.96 billed job-minutes per PR run and at most 120 s | **unmeasured** (the figure and the bar are in different units; both readings recorded; the serial-edge half holds: the 73 minute path plus about 29 s is 73.5 of 75) | `replay-summary.md`, `sel-s-canary.md` |
 | d | Every documentation-mentioning test file classified, none a real reader inside a skippable suite | 238 web-platform test files mention the tree; the dropped-consumer census passes 30 of 30, baseline 274 rows over 104 suites (266 covered, 8 classified false positives) | none unclassified | **pass** (blind spots stated) | `reader-audit.md` |
 
-Computed verdict: `computed=NO-GO reason=criterion-failed` (criterion b).
+Computed verdict: `computed=NO-GO reason=criterion-failed` (criterion b) from `verdict --a pass --b fail --c unmeasured --d pass`. A `pass` on (c) would give the same verdict; the re-grade (see `decision-challenges.md`) removes a claim the evidence did not support, it does not change the outcome.
 
 ## Why criterion b decides it
 
-The proposed per-suite rule is safe on the evidence the history can give (criterion a) and would save well over the bar (criterion c), but the
-index it relies on is incomplete: 145 suites read paths the index does not declare for them, including doc-class paths (`README.md`, read by 31
+The proposed per-suite rule is safe on the evidence the history can give (criterion a) and its suite-minute saving is large (51.58 per full-battery commit; the per-PR-run billed saving against the bar is unmeasured, criterion c), but the
+index it relies on is incomplete: 190 suites read paths the index does not declare for them, including doc-class paths (`README.md`, read by 36
 suites). A replay can only see failures that happened, and the queue's full battery refused anything that broke a skippable suite before it landed,
 so the history's zero escapes cannot show that the index is complete. Closing the gaps means declaring each real read (or removing it); that is
 index work, not a threshold to argue, and it is the entry condition for any later attempt.
