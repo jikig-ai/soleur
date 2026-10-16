@@ -113,6 +113,21 @@ jobs:
         working-directory: apps/web-platform
         run: bun run test:rls-fuzz
 
+      # The live-database cases are wired through describe.skipIf, and a skipped run exits 0, so the
+      # step above cannot tell "ran" from "skipped". Re-run the egress audit rollup cases (#9545,
+      # ADR-288) with a JSON report and require a non-zero EXECUTED count, zero skipped, zero failed.
+      - name: Assert the egress audit rollup cases executed (not skipped)
+        working-directory: apps/web-platform
+        env:
+          RLS_FUZZ_LOCAL: "1"
+        run: |
+          set -euo pipefail
+          report="${RUNNER_TEMP}/egress-audit-rollup-report.json"
+          ./node_modules/.bin/vitest run test/rls-fuzz/egress-audit-rollup.integration.test.ts \
+            --reporter=json --outputFile="$report"
+          jq -e '.numPassedTests >= 15 and .numPendingTests == 0 and .numFailedTests == 0' "$report" >/dev/null \
+            || { echo "::error::egress audit rollup live-database cases did not all execute"; jq '{numPassedTests,numPendingTests,numFailedTests}' "$report"; exit 1; }
+
       # Prod-parity catalog diff — read-only introspection over the run-verify
       # doppler path. Skipped when the prod-readonly token secret is not set (so
       # the gate does not hard-fail before the secret is provisioned).

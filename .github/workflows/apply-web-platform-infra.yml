@@ -478,6 +478,8 @@ jobs:
               -target=doppler_secret.github_app_private_key \
               -target=random_id.github_webhook_secret \
               -target=doppler_secret.github_app_webhook_secret \
+              -target=random_id.egress_audit_ingest_token \
+              -target=doppler_secret.egress_audit_ingest_token \
               -target=cloudflare_bot_management.soleur_ai \
               -target=cloudflare_ruleset.seo_page_redirects \
               -target=cloudflare_ruleset.seo_response_headers \

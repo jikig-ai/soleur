@@ -363,13 +363,11 @@ Two deliberate trade-offs:
   `extra.stdoutTail` (#4773 PR-A), alongside `extra.stderrTail`/`extra.exitCode`.
 - **Container log retention moved to journald.** Switching off `json-file`
   dropped its `max-size 10m/max-file 3` rotation; the container's `docker logs`
-  and retention are now governed by journald — at its **default** `SystemMaxUse`
-  (min(10% of /var, 4 GB)) unless an explicit bound is provisioned. Explicitly
-  sizing `SystemMaxUse` + ensuring `Storage=persistent` (so the journal survives
-  reboot and the redirected container volume can't evict the supervisor/system
-  journal Sources 1/2 depend on) is tracked as a follow-up infra task — the
-  journald storage config predates #4773 and applies equally to the two
-  pre-existing journald sources.
+  and retention are now governed by journald. The host provisions an explicit
+  bound (`journald-soleur.conf`: `Storage=persistent`, `SystemMaxUse=1G`,
+  `SystemKeepFree=2G`), so the journal survives reboot and the redirected
+  container volume cannot evict the supervisor/system journal that Sources 1/2
+  depend on.
 - **Rollout on existing hosts (non-load-bearing order).** PR-C is fully active
   only after BOTH (a) an inngest-bootstrap deploy ships the new `vector.toml`,
   AND (b) a web-platform deploy re-creates the `soleur-web-platform` container
@@ -1197,3 +1195,22 @@ content, URLs or addresses. `rewriteEmitted` means the hook returned a rewrite, 
 Soak/liveness read: `doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 7d --grep untrusted-classify`
 (counts only). Zero lines for 24 h while web-egress sessions exist is an alert, not a quiet window; with the flag off (the default) zero
 lines is the expected state. The alerts themselves are tracked on #10195.
+
+## Egress audit rollup markers (#9545, ADR-288)
+
+The egress gateway's decision log is also rolled up in Vector into per-workspace 15-minute buckets and posted to the app (dark until the
+`egress-audit-collection` flag is on for the workspace's organisation). One marker reaches Better Stack, through the PII-scrub chain:
+
+- `SOLEUR_EGRESS_AUDIT_THROTTLED workspace_id=<uuid> discarded_total=<n>`: the workspace exceeded
+  1,000 gateway events in 15 minutes and Vector discarded the excess from the rollup (the raw gateway log is unaffected). `<n>` is Vector's
+  lifetime counter since its last restart. Query it with
+  `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep SOLEUR_EGRESS_AUDIT_THROTTLED`.
+  Above the cap the rollup's host set is incomplete by design. The marker comes from Vector's per-key counter `events_discarded_total`
+  (the component-wide `component_discarded_events_total` has no workspace key). A second, keyless cap of 10,000 events per 15 minutes bounds the
+  whole pipeline; discards at that cap raise `SOLEUR_EGRESS_AUDIT_THROTTLED_GLOBAL discarded_total=<n>` (same identifier, no workspace id). For a solo workspace the `workspace_id` equals the owner's user id (migration 053), so
+  treat the marker as personal data under the same access rules as the raw gateway log.
+
+Table freshness and retention are checked without SSH by `bash scripts/egress-audit-retention-check.sh` (needs the Supabase prd service-role read).
+With `EGRESS_AUDIT_EXPECT_COLLECTION=1` it also needs `EGRESS_AUDIT_CANARY_WORKSPACES` (comma-separated ids of the enabled canary workspaces) and
+the Better Stack query credential. It is not scheduled anywhere yet: until it is, it is a manual probe, and scheduling it is a precondition of
+enabling collection (ADR-288).
