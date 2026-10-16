@@ -7,7 +7,7 @@ import {
   workspaceTenantDenyRoots,
 } from "./workspace-resolver";
 import { AGENT_AUTH_ENV_VARS } from "./agent-auth-env-vars";
-import { basename, delimiter, dirname, join, resolve } from "path";
+import { basename, delimiter, dirname, isAbsolute, join, resolve } from "path";
 import * as Sentry from "@sentry/nextjs";
 
 import { ALLOWED_SERVICE_ENV_VARS } from "./agent-env";
@@ -388,6 +388,13 @@ function webEgressDenyReadPaths(): string[] {
 }
 
 
+/** Directories the CLI binds its peer-messaging sockets in: `/tmp/cc-socks` (the container case, XDG_RUNTIME_DIR
+ *  unset) and `$XDG_RUNTIME_DIR/cc-socks` where that is set (developer hosts, some CI runners). */
+export function peerMessagingSocketDirs(env: Record<string, string | undefined> = process.env): string[] {
+  const xdg = env.XDG_RUNTIME_DIR;
+  return Array.from(new Set(["/tmp/cc-socks", ...(xdg && isAbsolute(xdg) ? [join(xdg, "cc-socks")] : [])]));
+}
+
 /**
  * Build the canonical sandbox options block. Drift here propagates to BOTH
  * the legacy domain-leader runner AND the cc-soleur-go factory (they both
@@ -474,6 +481,18 @@ export function buildAgentSandboxConfig(
   // landing is a builder skip). Removal is the flag-deletion follow-up
   // (#9798), never part of this PR — the `denyRead` arm must not fork
   // per-flag.
+  const peerSocketDirs = peerMessagingSocketDirs();
+  for (const dir of peerSocketDirs) {
+    try {
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+    } catch (err) {
+      warnSilentFallback(err, {
+        feature: "agent-sandbox",
+        op: "peer-socket-dir",
+        message: "agent-sandbox: peer-messaging socket dir could not be created; its read-deny may not apply",
+      });
+    }
+  }
   const denyRoots = workspaceTenantDenyRoots();
   const denyRootsExist = denyRoots.map((root) => existsSync(root));
   denyRoots.forEach((root, i) => {
@@ -532,6 +551,11 @@ export function buildAgentSandboxConfig(
       // ONLY for the entitled session (the extra denies would be dead config
       // where no gateway exists — tracked as a hardening follow-up).
       process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
+      // #10445: the CLI's peer-messaging sockets (`/tmp/cc-socks/<pid>.sock`, 0700, same uid for every tenant
+      // session in the container) were unreachable while the apply-seccomp helper blocked AF_UNIX for the
+      // command; with allowAllUnixSockets set they would be connectable from a sibling's Bash. Masked for every
+      // session (pre-created below: the SDK skips a deny landing that does not exist yet).
+      ...peerSocketDirs,
       ...(opts?.allowWebEgress ? webEgressDenyReadPaths() : []),
     ]),
   );

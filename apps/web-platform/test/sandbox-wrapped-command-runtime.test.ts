@@ -33,7 +33,7 @@ import { fileURLToPath } from "node:url";
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
 
-import { buildAgentSandboxConfig } from "@/server/agent-runner-sandbox-config";
+import { buildAgentSandboxConfig, peerMessagingSocketDirs } from "@/server/agent-runner-sandbox-config";
 import { startAnthropicStub, type AnthropicStub } from "./helpers/anthropic-stub";
 import { pointCliAtStub, scrubAmbientCliEnv } from "./helpers/hermetic-cli-env";
 
@@ -119,6 +119,25 @@ async function runBash(opts: {
   }
   return found;
 }
+
+// The docker suite's probe (infra/lib/sdk-bash-probe.mjs) carries a LITERAL sandbox object because the production
+// builder is TypeScript and is not in the suite image. Its static deny entries must stay the production builder's:
+// the census arm is only meaningful if the probe masks what production masks.
+describe("the docker suite's probe literal tracks the production deny list (#10445)", () => {
+  it("every static, non-workspace-derived denyRead entry of the production config is in the probe's literal, and vice versa", () => {
+    const src = readFileSync(join(APP_ROOT, "infra", "lib", "sdk-bash-probe.mjs"), "utf8");
+    const m = /denyRead:\s*\[([^\]]*)\]/.exec(src);
+    expect(m, "the probe no longer carries a denyRead literal").not.toBeNull();
+    const probeDeny = [...m![1].matchAll(/"([^"]+)"/g)].map((x) => x[1]).sort();
+    const prod = buildAgentSandboxConfig("/var/lib/soleur/workspaces/00000000-0000-0000-0000-000000000001")
+      .filesystem.denyRead;
+    const wantStatic = ["/proc", "/sys", ...peerMessagingSocketDirs()].sort();
+    const staticProd = wantStatic.filter((p) => prod.includes(p)).sort();
+    expect(staticProd, "the production deny list lost a static entry this probe assumes").toEqual(wantStatic);
+    // The probe runs in the suite container (XDG_RUNTIME_DIR unset), so it carries the /tmp form only.
+    expect(probeDeny).toEqual(["/proc", "/sys", "/tmp/cc-socks"]);
+  });
+});
 
 describe.skipIf(!SANDBOX_OK)("a hosted Bash call through the real SDK, the production config and our shim (#10445)", () => {
   let stub: AnthropicStub | undefined;
@@ -250,6 +269,7 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
       `  done`,
       `done`,
       `echo SOCKETS=$n`,
+      `echo CCSOCKS_IN_SANDBOX=$(ls -A ${peerMessagingSocketDirs().join(" ")} 2>/dev/null | grep -c '\\.sock$')`,
     ].join("\n");
 
   beforeAll(async () => {
@@ -333,6 +353,20 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
       for (const p of probes.filter((x) => x.label !== "own")) {
         expect(p.line, `${p.sock} answered a ${p.label} request with something other than 407`).toContain("407");
       }
+      // The CLI's peer-messaging sockets: present on the host side while the sessions are live (non-vacuity), and
+      // masked from the tenant's sandbox (ADR-075 addendum 2026-10-16).
+      const hostSideCcSocks = peerMessagingSocketDirs().flatMap((d) => {
+        try {
+          return readdirSync(d).filter((n) => n.endsWith(".sock"));
+        } catch {
+          return [];
+        }
+      });
+      expect(
+        hostSideCcSocks.length,
+        "no live peer-messaging socket on the host side, so the mask assertion below is vacuous",
+      ).toBeGreaterThan(0);
+      expect(out).toContain("CCSOCKS_IN_SANDBOX=0");
       // Negative control: the caller's own credential is accepted by its own socket(s) (the check is live,
       // not a proxy that answers 407 to everything) and refused by the sibling's.
       const ownAnswers = probes.filter((x) => x.label === "own");

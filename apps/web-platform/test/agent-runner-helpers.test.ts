@@ -25,7 +25,7 @@ import { join } from "path";
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-import { buildAgentSandboxConfig } from "@/server/agent-runner-sandbox-config";
+import { buildAgentSandboxConfig, peerMessagingSocketDirs } from "@/server/agent-runner-sandbox-config";
 
 vi.mock("@/server/agent-env", () => ({
   buildAgentEnv: vi.fn(() => ({ ANTHROPIC_API_KEY: "sk-test" })),
@@ -123,6 +123,7 @@ describe("buildAgentSandboxConfig drift guard", () => {
       "/proc",
       "/sys",
       process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
+      ...peerMessagingSocketDirs(),
     ]);
   });
 
@@ -208,6 +209,7 @@ describe("buildAgentSandboxConfig drift guard", () => {
       "/proc",
       "/sys",
       process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
+      ...peerMessagingSocketDirs(),
     ]);
   });
 
@@ -225,6 +227,7 @@ describe("buildAgentSandboxConfig drift guard", () => {
       extra,
       // #9534: token dir lands after extras (appended last in the union).
       process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
+      ...peerMessagingSocketDirs(),
     ]);
   });
 
@@ -309,6 +312,7 @@ describe("buildAgentSandboxConfig — GitHub egress variant (#5041 follow-up)", 
       "/proc",
       "/sys",
       process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
+      ...peerMessagingSocketDirs(),
     ]);
   });
 
