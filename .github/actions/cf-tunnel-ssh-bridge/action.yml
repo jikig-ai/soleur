@@ -167,6 +167,13 @@ runs:
           echo "::error::CI_SSH_ACCESS_TOKEN_ID/_SECRET missing or empty in Doppler prd_terraform. Apply apply-web-platform-infra.yml first (it auto-syncs both secrets post-apply)."
           exit 1
         fi
+        # K=V lines into $GITHUB_ENV: a value holding a newline or carriage return would write a SECOND variable
+        # (BASH_ENV, LD_PRELOAD, ...) that every later step honours, including a job's post-credential-loader steps.
+        # Both values are single-line tokens; refuse anything else instead of writing it.
+        if [[ "$TOKEN_ID$TOKEN_SECRET" == *$'\n'* || "$TOKEN_ID$TOKEN_SECRET" == *$'\r'* ]]; then
+          echo "::error::CI_SSH_ACCESS_TOKEN_ID/_SECRET in Doppler prd_terraform is not a single-line value; refusing to write it to the job environment."
+          exit 1
+        fi
         printf '::add-mask::%s\n' "$TOKEN_ID"
         printf '::add-mask::%s\n' "$TOKEN_SECRET"
         printf 'TUNNEL_SERVICE_TOKEN_ID=%s\n' "$TOKEN_ID" >> "$GITHUB_ENV"

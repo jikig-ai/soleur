@@ -86,7 +86,10 @@ for cmd in \
   "gh pr merge --auto --squash" \
   "gh pr merge 123 --squash" \
   "gh pr merge --admin" \
-  "git push && gh pr ready"
+  "git push && gh pr ready" \
+  "rtk gh pr merge 123 --squash" \
+  "rtk run gh pr merge --auto" \
+  "rtk gh pr ready 123"
 do
   cases=$((cases + 1))
   run_hook "$PROJ_DENY" "$cmd"
@@ -103,7 +106,9 @@ for cmd in \
   "gh pr list" \
   "gh pr create --draft" \
   "gh issue create --title x" \
-  "echo gh pr merge"
+  "echo gh pr merge" \
+  "rtk-foo gh pr merge 123" \
+  "rtk run -c 'gh pr merge 123'"
 do
   cases=$((cases + 1))
   run_hook "$PROJ_DENY" "$cmd"

@@ -101,7 +101,7 @@ function makePsqlStub(): string {
     [
       "#!/usr/bin/env bash",
       "# psql stub for run-migrations gate tests (#4241).",
-      'if echo "${*}" | grep -qi "SELECT count(\\*)"; then',
+      'if grep -qi "SELECT count(\\*)" <<<"${*}"; then',
       '  echo "1"',
       "fi",
       "exit 0",

@@ -178,6 +178,7 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
       "codex-engine": false,
       "untrusted-content-classify": false,
       "untrusted-content-wrap": false,
+      "egress-audit-collection": false,
     });
   });
 
@@ -204,6 +205,7 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
       "codex-engine": false,
       "untrusted-content-classify": false,
       "untrusted-content-wrap": false,
+      "egress-audit-collection": false,
     });
   });
 
@@ -230,6 +232,7 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
       "codex-engine": false,
       "untrusted-content-classify": false,
       "untrusted-content-wrap": false,
+      "egress-audit-collection": false,
     });
   });
 
@@ -457,6 +460,7 @@ describe("getIdentityFlags timeout → warn-level debounced mirror (Sentry-bug r
       "codex-engine": false,
       "untrusted-content-classify": false,
       "untrusted-content-wrap": false,
+      "egress-audit-collection": false,
     });
   });
 
