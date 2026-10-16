@@ -646,3 +646,28 @@ is not a completed lint check of those files.
   comparison against the pinned merge parent passed. A watch started near
   push registration can read historical check rows: independently verify
   the exact run's `headSha` and jobs before attributing its verdict.
+
+## Bounded maintenance probe corrections — 2026-10-16
+
+- The sandboxed `gh` launcher tried to provision its mise-managed CLI in a
+  read-only location. Exact approved read-only retries succeeded. A missing
+  cached CI-only reference and guessed offline-wrapper path established no
+  verification; the current worktree reference and qualification README
+  supplied the real paths. Discover paths before opening them and stop on the
+  producer's failure instead of consuming an empty downstream result.
+- Raw PR status rollup included superseded cancellations and duplicate guard
+  runs. The effective check list remained 82 pass / 13 skip / draft `test` red.
+  Main then advanced during the final probe, so the earlier no-drift reading
+  expired; canonical sync and a new exact-head watch replaced it.
+- The next infra artifact stopped on a fixture `printf` broken pipe, without
+  reaching its assertion floor. Existing OPEN Ref #9325 identifies the same
+  early-refusing consumer race. Feed refusal fixtures through redirection;
+  preserve their assertions and require a complete fresh CI verdict. This
+  evidence does not explain C.9 Ref #9791 or close either broader issue.
+- The census's tracked walk found 700 covered files, but its enumeration
+  subprocess could not create the required `/var/tmp` telemetry sandbox.
+  Downstream missing-registration errors were not evidence of 127 real orphans.
+  The direct metadata-only diagnostic exposed the filesystem refusal; request
+  the exact approved retry before interpreting the complete census. Default
+  ShellCheck also returned nonzero: compare diagnostics against the unchanged
+  source, retain the nonzero verdict, and do not let a trailing command mask it.

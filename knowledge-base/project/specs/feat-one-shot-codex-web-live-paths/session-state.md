@@ -1850,3 +1850,35 @@
   paragraph prefixes then positively verified both privacy surfaces. Prevention:
   rediscover sessions, honor the tool's patch format, use exact semantic scope
   and stop on each producer failure before consuming its output.
+
+### Bounded watch, main sync and fixture recurrence — 2026-10-16
+
+- Reobserved `35e94dad0ab0318e834eb5080da3d59b23cf07c3`: effective checks
+  settled at 82 passes, 13 skips and only intentional DRAFT_LIGHT `test` red.
+  Earlier cancelled guard rows were superseded by successful description runs.
+- Main advanced during the watch to `abbd36a69651a7adae197d99d272507cfc2c0450`.
+  Canonical sync merged/pushed `ee178134323f9d2da030fcd95af830684fbed948`
+  without conflicts. Its 31-file delta adds git-data wipe/workflow and internal
+  legal/architecture records; the prior bootstrap pin repair is now in main.
+  Application server, complete forward migrations, production Dockerfile,
+  qualification components and offline wrapper remain byte-identical to
+  `35e94dad`. This is source identity, not new runtime or legal clearance.
+- Infra Validation `38912655808` failed shard 3/4 and its aggregator. Its saved
+  suite artifact ends at the empty-emitter fixture with `printf: write error:
+  Broken pipe`, before a complete suite verdict. Ref #9325 was verified OPEN
+  and already documents this exact early-consumer-exit flake. Three refusal
+  fixtures now supply here-strings instead of racing pipe writers; their
+  assertions and exact floor remain unchanged. No production script changed,
+  local suite reran or old CI job was retried; new-head CI remains required.
+- Bash syntax, whitespace and the staged secret scan pass. ShellCheck emits
+  the same 103 diagnostics before and after the fixture repair, with zero new
+  diagnostics; this is no-new-diagnostics evidence, not a clean lint verdict.
+  Both evidence Markdown paths are excluded by the canonical Markdown invoker.
+  Git hooks resolve to `/dev/null`; no commit-hook execution is claimed.
+- The complete static registration census passes with explicit
+  `CODEX_POSTSYNC_CENSUS_RC=0`: 700 covered, zero orphans. Its first sandboxed
+  enumeration was refused by `/var/tmp` permissions, not a registration defect.
+- Ref #10082 and Ref #9791 remain verified OPEN, SAST VOID and latest-source
+  C.9 unverified. All profile/observation, hosted-auth, alternative-route,
+  approval, recovery, screenshot, routine, Web/CLO and promotion holds persist.
+  Refresh exact-head pairing/export, description and CI after this source edit.
