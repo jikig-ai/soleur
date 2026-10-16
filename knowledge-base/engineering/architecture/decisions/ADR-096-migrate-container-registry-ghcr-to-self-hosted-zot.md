@@ -2177,3 +2177,35 @@ names describe the state before this date and are left as written.
   exists for the third name. The proof is `zot-image-fetch.test.sh` R10 (the rendered entry executed against a
   re-rooted hosts file) and `web-ghcr-deny.test.sh` (byte parity of all copies on both `web_tunnel_connector`
   arms, and the assertion's per-name behaviour).
+
+## Amendment 2026-10-16 (#7521) — the restart-loop workflow also hosts a standing fill-rate leg
+
+The `soleur-registry-disk-prd` heartbeat stops pinging at 85 percent, which is the incident itself and not a
+leading indicator, and the one probe that measured the store's fill rate (`scripts/followthroughs/zot-fill-rate-7341.sh`,
+the #7341 follow-through) ran only while that tracker was open: its PASS closed #7341 on 2026-08-14 and nothing
+has run it since. `.github/workflows/scheduled-zot-restart-loop.yml` therefore carries four steps after its Sentry
+check-in that run that script in place, unmodified, every hour (poller pattern; the same hourly clock, secrets and
+issue-filing idiom as the restart-loop alarm). A projected breach surfaces as a deduped `action-required`
+`[ci/zot-fill-rate]` issue while the store is still well below 85 percent; a PASS closes it only after 6 hours with
+no new FAIL comment.
+
+- **Independent of the zot exit code and the Sentry status.** The leg follows the private-NIC stream's precedent: its
+  verdict is not folded into the checker's exit code, and the Sentry `status:` expression still reads only
+  `steps.alarm.*`. Nothing in Sentry covers the fill leg's own liveness (accepted residual).
+- **A red run of this workflow now means a broken fill probe**, not a restart loop and not a store state. The probe
+  classifies by exit code AND a single column-0 header line; any disagreement, an exit code outside the contract, or a
+  precondition exit that prints no header is `UNEVALUATED`, the probe step fails itself, and a deduped
+  `[ci/zot-fill-rate]` probe-defect issue is filed. A fill-leg-only `TRANSIENT` whose cause is outside a closed
+  benign set files the same issue when the zot leg is not itself failing; the benign causes (a young boot, a reclaim,
+  a stale newest sample, too few samples) file nothing.
+- **Alternatives rejected** (CTO ruling, 2026-10-16): moving the script (two of its path references sit under
+  `apps/web-platform/infra/**`, which would fire a production apply); folding the slope into
+  `zot-restart-loop-alarm.sh` (a 3 hour window cannot hold a 72 hour slope, and it would duplicate the parse); a Better
+  Stack logtail alert (ADR-218 limits native alerts to stateless per-bucket counts); a new scheduled workflow (the
+  watchdog-dispatch-table, Sentry monitor and parity-test registration for nothing the existing workflow lacks).
+- **Known seam.** The script returns `TRANSIENT` for the first 24 hours of any new boot, so after a reclaim or a host
+  replace this leg is dark for about 25 hours while the store refills from empty; the heartbeat is the only cover
+  meanwhile. Tracked as a follow-up, not hoisted here.
+- **What pins it.** `scripts/zot-fill-rate-standing-wiring.test.sh` parses the workflow and executes the probe and
+  filing bodies; `scripts/alarm-issue-filing-guard.test.sh` and `watchdog-workflow-idempotence.test.ts` are the
+  independent witnesses for the filing steps' conditions and lookup lines.
