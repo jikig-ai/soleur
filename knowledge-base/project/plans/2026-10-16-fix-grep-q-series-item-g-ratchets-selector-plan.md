@@ -186,7 +186,7 @@ specs files. #8659 and #7942 name `scripts/test-all.sh`, which this PR deliberat
 ## Files to Edit
 
 - `.claude/hooks/grep-q-pipe-guard.test.sh`: the header sentences that begin `# STILL OPEN (listed, not planned here)` and
-  `# THE PRE-PUSH AFFECTED LANE DOES NOT SELECT THIS GUARD`. The first says Item G is recorded as not fixed and lists what remains (Item I,
+  `# THE PRE-PUSH AFFECTED GATE DOES NOT SELECT THIS GUARD` (it read `AFFECTED LANE` before this PR). The first says Item G is recorded as not fixed and lists what remains (Item I,
   the Wave A3 carriers, the #9639 and #9638 triage); the second keeps its meaning and gets the measured figures (selected for 47 of 98 producers
   and 64 of 97 owner suites, not for 51 and 33) and #10447. Comment lines only; the suite must still pass.
 
@@ -210,7 +210,7 @@ GitHub artifacts (not files): one comment on #9217 and the follow-up issue #1044
    51 and 33 were each run through `bash scripts/test-all.sh --print-selection --paths=<path>`, reading the selected bit. Controls: a bogus path gives
    bit 0, `scripts/cutover-inngest.sh` gives bit 1. Result: all 84 are bit 0 (NOT selected), 0 `AFFECTED_FALLBACK`, all rc 0. Per-path rows:
    `selection-measurement.md`.
-3. Two CTO rulings followed: the first split the gap into a follow-up, the second (made on a first measurement that counted line presence instead of
+3. Three CTO rulings followed: the first split the gap into a follow-up, the second (made on a first measurement that counted line presence instead of
    the selected bit) withdrew it, and a third restored the first after the corrected measurement. All rows are in `decision-challenges.md`.
 
 ### Phase 2. File the follow-up issue
@@ -297,7 +297,7 @@ Skipped (Phase 2.12): this PR delivers no guard, lint or gate. The follow-up #10
 ## Sharp Edges
 
 - Cite the pipe-guard selection figures only from `selection-measurement.md` (98 producers, 97 owner suites at `ee8644bded`); the
-  header's earlier "95 and 93" was approximately right. Re-measure after any change to the edge list.
+  header's earlier "95 and 93" were stale (the population is 98 and 97) and its "most owner suites" was wrong (33 of 97). Re-measure after any change to the edge list.
 - Parse the selected bit (third tab-separated field) of the `AFFECTED_SELECTED` line; `--print-selection` prints that line for every suite, so counting its presence
   measures nothing. Run a bogus-path control (bit 0) and a known-producer control (bit 1) before reading any count.
 - A `--print-selection` call can slow down on a contended host; run the sample in the background if it does, and never poll with `sleep`.

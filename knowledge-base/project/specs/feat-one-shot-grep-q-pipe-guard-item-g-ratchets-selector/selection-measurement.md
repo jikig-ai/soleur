@@ -1,7 +1,7 @@
 # Pipe-guard selection measurement, 2026-10-16 (origin/main ee8644bded)
 
 Command per path: `bash scripts/test-all.sh --print-selection --paths=<path>`. That command prints one `AFFECTED_SELECTED` line for **every** suite
-(630 lines); a path selects the guard only when the line naming `.claude/hooks/grep-q-pipe-guard.test.sh` has `1` in its third tab-separated field.
+(about 630 lines; the count varies with the path); a path selects the guard only when the line naming `.claude/hooks/grep-q-pipe-guard.test.sh` has `1` in its third tab-separated field.
 An earlier version of this file counted the existence of that line and reported 98 of 98 selected; that was wrong. Controls for the corrected run:
 `bogus/not-a-path.txt` gives bit 0 and `scripts/cutover-inngest.sh` gives bit 1.
 
