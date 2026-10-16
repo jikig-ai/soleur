@@ -187,11 +187,11 @@ trap cleanup EXIT
 #   wipe_assert (#10138) the READ-ONLY host evidence the wipe workflow gates its Hetzner detach and
 #             delete on: ONE ssh session runs git-data-wipe-assert.sh (sent on stdin to `bash -s`)
 #             and prints one fixed-shape line of digits and fixed words, never a name. Inputs
-#             (env, validated before any host is dialed): WIPE_PHASE=pre|finish|post_detach,
+#             (env, validated before any host is dialed): WIPE_PHASE=pre|finish|post_detach|clear,
 #             WIPE_VOLUME_ID (the typed plaintext volume id), WIPE_LUKS_VOLUME_ID, WIPE_SERVER_ID,
 #             and for pre: WIPE_ROW_DT (the boot_complete row's dt: epoch seconds or
-#             `YYYY-MM-DD HH:MM:SS`, UTC) and WIPE_LISTING=run|skip (skip = the wipe_check mode: no
-#             snapshot is taken, layout_signal=not_run). Verdicts are exit 5 with a fixed word.
+#             `YYYY-MM-DD HH:MM:SS`, UTC) and WIPE_LISTING=run|skip (skip = the finish phase: no
+#             snapshot is taken, layout_signal=not_run; wipe_check and wipe both run the listing). Verdicts are exit 5 with a fixed word.
 # The legacy arm still stands for DRY_RUN!=1/CONFIRM_WIPE!=0 (refused below: the wipe is the `wipe` job of
 # the workflow, which drives MODE=wipe_assert and the Hetzner helper, not this script's legacy env);
 # ROLLBACK=1 maps to MODE=rollback at the WORKFLOW level, not here.
@@ -896,7 +896,7 @@ mode_probe() {
 # probe_failed rc=<n>, never a verdict about the host. The answer is digits and fixed words, matched in
 # full; the value is accepted per phase so a `finish` answer cannot satisfy a `pre` call.
 # Bounds: a `pre` with the snapshot listing runs a throwaway device-mapper snapshot on the host, so it
-# gets 300 s; every other call 90 s. Nothing here is writable toward the store or the volume.
+# gets 300 s, a `clear` 240 s (the host's own budget); every other call 90 s. Nothing here is writable toward the store or the volume.
 # The wipe_assert verb's own emitters: the same STORE line, but a surface of its own. The runbook's
 # store-probe word census (case RB of git-data-cutover-access.test.sh) covers the proof/fence probes;
 # the wipe words are held to their own parity rows (git-data-wipe-assert.test.sh P1-P3).
@@ -909,7 +909,7 @@ mode_wipe_assert() {
   local phase="${WIPE_PHASE:-}" typed="${WIPE_VOLUME_ID:-}" luks="${WIPE_LUKS_VOLUME_ID:-}" srv="${WIPE_SERVER_ID:-}"
   local row="${WIPE_ROW_DT:-}" listing="${WIPE_LISTING:-}" body pat cmd tmo rc=0 qa qb qc qr qm qk qp ql qd
   local here iso_re='^[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z?$'
-  [[ "$phase" =~ ^(pre|finish|post_detach)$ ]] || _wipe_refuse probe_failed "" arg_phase
+  [[ "$phase" =~ ^(pre|finish|post_detach|clear)$ ]] || _wipe_refuse probe_failed "" arg_phase
   [[ "$typed" =~ ^[0-9]{1,12}$ ]] || _wipe_refuse probe_failed "" arg_volume_id
   [[ "$luks" =~ ^[0-9]{1,12}$ ]] || _wipe_refuse probe_failed "" arg_luks_volume_id
   [[ "$srv" =~ ^[0-9]{1,12}$ ]] || _wipe_refuse probe_failed "" arg_server_id
@@ -943,8 +943,12 @@ mode_wipe_assert() {
   fi
   cmd="$cmd bash -s"
   if [ "$phase" = pre ]; then
-    pat='^wipe_assert pre ok layout_signal=(ok|not_run) journal=(dirty|clean|na) top_d=([0-9]+|na) top_f=([0-9]+|na) top_l=([0-9]+|na) top_o=([0-9]+|na) repos=([0-9]+|na) boot_to_row_s=[0-9]+$'
+    pat='^wipe_assert pre ok layout_signal=(ok|not_run) journal=(dirty|clean|na) top_d=([0-9]+|na) top_f=([0-9]+|na) top_l=([0-9]+|na) top_o=([0-9]+|na) repos=([0-9]+|na) boot_to_row_s=[0-9]+ lock_residue=([0-9]+|na) store_root_repos=[0-9]+$'
     if [ "$listing" = run ]; then tmo=300; else tmo=90; fi
+  elif [ "$phase" = clear ]; then
+    # A1 (2026-10-15): clearing a leftover throwaway snapshot; the answer says only whether one was cleared or none existed.
+    pat='^wipe_assert clear ok snapshot=(cleared|absent)$'
+    tmo=240
   else
     pat="^wipe_assert $phase ok byid=gone mapper_read=ok store_root=ok\$"
     tmo=90
@@ -979,6 +983,7 @@ mode_wipe_assert() {
     40) _wipe_refuse wipe_device_still_attached ;;
     41) _wipe_refuse wipe_mapper_read_failed ;;
     42) _wipe_refuse wipe_store_root_unreadable ;;
+    43) _wipe_refuse wipe_snapshot_not_ours ;;
     *) _wipe_refuse probe_failed "$rc" ;;
   esac
   # The answer matched the phase's fixed shape in full: digits and fixed words only.

@@ -1078,6 +1078,10 @@ No status change: D1 stays `adopting` and D2 stays `proposed`. The dispatch-only
 - **Census scope.** `tests/scripts/test-infra-privileged-tier-census.sh` derives the Tier-B job set from references to the loader (`LOADER_USES`), so `wipe` joins it by existing; the `git-data-cutover` census suites carry the per-step pins (the step order, the `exec env -i` first statement of every post-loader step, the exact `uses:` set, the single loader call and its single input). The convention above is stated here in prose so that a diff that weakens the census and the workflow together is still reviewable against this entry.
 - **Left open, tracked in #10300.** A single-name carrier (a direct narrow read of only the write token by a stdin child) would shrink the whole-project export, but it is a new carrier pattern needing its own amendment and census rows; the wipe uses the loader because D3 names the loader's project as the carrier.
 
+### 2026-10-15 (#10138, #8609): the separated wipe inherits the runtime-App-key residual (R1)
+
+Appended; the 2026-10-14 entry above is not edited. No status change: D1 stays `adopting`, D2 stays `proposed`, D10 stays `adopting`. ADR-239 Amendment 2026-10-15 separates the `wipe` job from the flip chain (#8573 and #8609 no longer gate it as sequencing dependencies; the Tier-B loader seam that #8209 provided is still a runtime dependency of the `wipe` job's W8 step, and its environment secret was present on 2026-10-15). That removes a sequencing dependency, not the residual this entry records: while #8609 is open (R1 above), a holder of the soleur-ai runtime App key can rewrite deployment-branch policy (the App holds `administration:write` on `jikig-ai/soleur`, measured by #8609 on 2026-09-22 and inherited here, not re-measured), so the boundary that D2 relies on, "a Tier-B credential is delivered only to an environment whose deployment-branch policy admits `main`", is not a secret boundary against that holder for ANY Tier-B consumer, `git-data-cutover.yml::wipe` included. The `wipe` job's destructive step is additionally bounded by the owner naming the exact command and approving the environment (D2: approval independence is a rule, not a platform separation). The owner accepted the residual for the separated wipe on 2026-10-15 (recorded on #6897, comment 6188355137; the CLO attested the wording as final on 2026-10-15, A.11, comment 6196825174); that is an acceptance for one owner-named destructive dispatch, not a status change for R1. Ref #8609, #6897.
+
 ## References
 
 - Plan: `knowledge-base/project/plans/archive/20261013-051752-2026-09-22-feat-evict-privileged-terraform-credentials-plan.md`
@@ -1105,3 +1109,4 @@ No status change: D1 stays `adopting` and D2 stays `proposed`. The dispatch-only
 - Apply-path injection removed and by-value gate (2026-10-10): #9362, #9914
 - D4 `accepted`; D1/D2 measured state (2026-10-12): #8209, #9294, #9295
 - `git-data-cutover.yml::wipe` loader consumer (2026-10-14): #10138, #6897, #10300, #8044; ADR-239 (DL-2), ADR-280
+- Separated wipe inherits R1 (2026-10-15): #10138, #8609, #6897; ADR-239 Amendment 2026-10-15
