@@ -995,7 +995,7 @@ end_row L3 "a malformed body carrying a label, both tokens and the other volume'
 echo "P: pins"
 # ---------------------------------------------------------------------------------------------------------
 _pin=$(sed -n 's/^readonly VOLUME_ID_PIN=\([0-9]*\).*/\1/p' "$TMP/x/steps/probe.sh")
-_adr=$(ls "$REPO_ROOT"/knowledge-base/engineering/architecture/decisions/ADR-282-*.md 2>/dev/null | head -1)
+_adr="$REPO_ROOT/knowledge-base/engineering/architecture/decisions/ADR-282-sole-copy-luks-volume-protection-set.md"
 if [[ "$_pin" == "$VOL_ID" && -f "$_adr" ]] && grep -qF "Hetzner id $_pin" "$_adr" && grep -qF "$_pin" "$SKILL"; then pass "N1 VOLUME_ID_PIN ($_pin) equals the id in ADR-282 and in the postmerge skill's section-5c one-liner"
 else fail "N1 VOLUME_ID_PIN='$_pin' does not equal the ADR-282 / postmerge skill id"; fi
 _dl=$(python3 -I - "$LOADER" "$TMP/x/job.json" <<'PYP'
