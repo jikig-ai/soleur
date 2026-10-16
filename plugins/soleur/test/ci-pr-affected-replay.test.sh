@@ -576,7 +576,7 @@ python3 "$SUT" verdict --a pass --b pass --c nope --d pass >/dev/null 2>&1; rc=$
 [[ "$rc" -eq 2 ]] && pass "an unknown criterion status is refused with rc 2" || fail "an unknown criterion status is refused (rc=$rc)"
 [[ "$(python3 "$SUT" verdict --a pass --b fail --c unmeasured --d pass)" = "computed=NO-GO reason=criterion-failed" ]] && pass "the PR C verdict (b fail, c unmeasured) computes NO-GO" || fail "PR C verdict arithmetic"
 helptxt="$(python3 "$SUT" --help 2>&1)"; rc=$?
-[[ "$rc" -eq 0 ]] && printf '%s\n' "$helptxt" | grep -q 'SUBCOMMANDS' && printf '%s\n' "$helptxt" | grep -q 'THE PROPOSED RULE' && printf '%s\n' "$helptxt" | grep -q 'pinned' \
+[[ "$rc" -eq 0 ]] && grep -q 'SUBCOMMANDS' <<<"$helptxt" && grep -q 'THE PROPOSED RULE' <<<"$helptxt" && grep -q 'pinned' <<<"$helptxt" \
   && pass "--help carries the rule, the subcommands and the pinned-tree instruction" || fail "--help (rc=$rc)"
 
 ci_jobs="$(python3 - "$SCRIPT_DIR/../../../.github/workflows/ci.yml" <<'PY'
@@ -732,7 +732,7 @@ ej2_run() {  # re-run the second ejection window into a fresh dir with the SUT u
 row_always_on() { collect_once; [[ "$(unit_field "$OUT/units-commits-1-of-1.jsonl" "${C[0]}" '.skipped_suites|join(",")')" = "scripts/suitex,scripts/suitey" ]]; }
 row_fallback() { collect_once; [[ "$(unit_field "$OUT/units-commits-1-of-1.jsonl" "${C[5]}" '.skipped_min == 0')" = true ]]; }
 row_read_error() { collect_once; [[ "$(unit_field "$OUT/units-commits-1-of-1.jsonl" "${C[4]}" .reason)" == runs-read* ]]; }
-row_worst_bound() { collect_once; run_sut aggregate "$OUT" --commits-only 2>&1 | grep -q "cp95_upper_on_worst_case=$(python3 -c "print('%.2f'%(100*$(python3 "$REAL_SUT" cp-upper 3 7)))")%"; }
+row_worst_bound() { collect_once; local o; o="$(run_sut aggregate "$OUT" --commits-only 2>&1)"; grep -q "cp95_upper_on_worst_case=$(python3 -c "print('%.2f'%(100*$(python3 "$REAL_SUT" cp-upper 3 7)))")%" <<<"$o"; }
 row_flake_same_files() { local o; o="$(run_sut aggregate "$FC" 2>&1)"; grep -q '"unverified": 3' <<<"$o"; }
 row_flake_same_pr() { local o; o="$(run_sut aggregate "$FA" 2>&1)"; grep -q '"unverified": 3' <<<"$o"; }
 row_flake_escape() { local o; o="$(run_sut aggregate "$FB" 2>&1)"; grep -q 'attributable=1/4' <<<"$o"; }
@@ -782,14 +782,14 @@ row_ctrl_label() { ej2_run; [[ "$(unit_field "$E2" "$(SHA 129)" .cls)" = not-eva
 row_unclassified() { ej2_run; [[ "$(unit_field "$E2" "$(SHA 130)" .reason)" == "unclassified-job: mystery-job" ]]; }
 row_file_cap() { ej2_run; [[ "$(unit_field "$E2" "$(SHA 131)" .reason)" == files:* ]]; }
 row_full_events() { collect_once; [[ "$(unit_field "$OUT/units-commits-1-of-1.jsonl" "${C[1]}" .cls)" = rule-irrelevant ]]; }
-row_window() { run_sut ejections --out "$SANDBOX/ej-win" --commits 7 --repo "$R" 2>&1 | grep -q 'window 2031-01-02T12:00:00Z\.\.2031-01-08T12:00:00Z'; }
+row_window() { local o; o="$(run_sut ejections --out "$SANDBOX/ej-win" --commits 7 --repo "$R" 2>&1)"; grep -q 'window 2031-01-02T12:00:00Z\.\.2031-01-08T12:00:00Z' <<<"$o"; }
 row_rate_limit() { REPO_NAME="$R3"; rm -rf "$OUT"; mkdir -p "$OUT"; : > "$GHLOG"; run_sut collect --out "$OUT" --commits 1 --chunk 1/1 --repo "$R3" >/dev/null 2>&1; local n; n="$(grep -c "^REQ $(keyof "$(runs_path "${C[6]}")")\$" "$GHLOG")"; REPO_NAME=""; [[ "$n" -eq 3 ]]; }
 row_agg_no_ejections() { run_sut aggregate "$FE" >/dev/null 2>&1; [[ $? -eq 2 ]]; }
 row_agg_gap() { run_sut aggregate "$FG" >/dev/null 2>&1; [[ $? -eq 2 ]]; }
 row_agg_dup() { run_sut aggregate "$FH" >/dev/null 2>&1; [[ $? -eq 2 ]]; }
 row_agg_expect() { run_sut aggregate "$FD" --expect-commits 4 >/dev/null 2>&1; [[ $? -eq 2 ]]; }
-row_agg_arith() { run_sut aggregate "$FD" 2>&1 | grep -q 'mean_skipped_suite_min=20.00 se=5.77 selector_min=1.29 net_mean=18.71 net_mean_plus_2se=30.26'; }
-row_agg_point() { run_sut aggregate "$FD" 2>&1 | grep -q 'unverified_as_escape=1/4 (point 25.00%)'; }
+row_agg_arith() { local o; o="$(run_sut aggregate "$FD" 2>&1)"; grep -q 'mean_skipped_suite_min=20.00 se=5.77 selector_min=1.29 net_mean=18.71 net_mean_plus_2se=30.26' <<<"$o"; }
+row_agg_point() { local o; o="$(run_sut aggregate "$FD" 2>&1)"; grep -q 'unverified_as_escape=1/4 (point 25.00%)' <<<"$o"; }
 row_tsv() { run_sut aggregate "$FT" --out "$SANDBOX/tsv.txt" >/dev/null 2>&1; [[ "$(awk -F'\t' 'NF != 9 { bad++ } END { print bad + 0 }' "$SANDBOX/tsv.txt.tsv")" = 0 ]]; }
 row_internal() { local e rc; e="$(run_sut aggregate "$FI" 2>&1 >/dev/null)"; rc=$?; [[ "$rc" -eq 4 ]] && grep -q 'internal error' <<<"$e"; }
 row_two_prs() { local o; o="$(run_sut aggregate "$FP" 2>&1)"; grep -q '"unverified": 3' <<<"$o"; }

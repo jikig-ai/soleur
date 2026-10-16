@@ -240,7 +240,7 @@ reader_verdict() {
   else text=""; fi
   if [ -z "$text" ]; then R_STATUS=unmet; R_LINE="verdict=receipt-absent"; return; fi
   last="$(printf '%s\n' "$text" | grep -v '^[[:space:]]*$' | tail -1)"
-  if ! printf '%s' "$last" | grep -Eq '^SOLEUR_PR_AFFECTED_VERDICT verdict=(GO|NO-GO|UNDECIDED) ruled=(confirmed|pending) date=[0-9]{4}-[0-9]{2}-[0-9]{2}$'; then
+  if ! grep -Eq '^SOLEUR_PR_AFFECTED_VERDICT verdict=(GO|NO-GO|UNDECIDED) ruled=(confirmed|pending) date=[0-9]{4}-[0-9]{2}-[0-9]{2}$' <<<"$last"; then
     R_STATUS=unmet; R_LINE="verdict=no-machine-line"; return
   fi
   v="$(printf '%s' "$last" | sed 's/.* verdict=\([A-Z-]*\) .*/\1/')"
@@ -249,7 +249,7 @@ reader_verdict() {
   if [ "$v" != GO ] || [ "$r" != confirmed ]; then R_STATUS=unmet; R_LINE="verdict=$v-$r$note"; return; fi
   today="${PR_AFFECTED_PREACT_TODAY:-$(date -u +%F)}"
   # the clock is a calendar day: `date -d` also reads "2026-10-10 + 30 days", which would age a stale GO into the window
-  printf '%s' "$today" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' || { R_STATUS=unknown; R_LINE="verdict=unknown(date-unparseable)"; return; }
+  grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' <<<"$today" || { R_STATUS=unknown; R_LINE="verdict=unknown(date-unparseable)"; return; }
   { t_now="$(date -u -d "$today" +%s 2>/dev/null)" && t_rec="$(date -u -d "$d" +%s 2>/dev/null)" && [ -n "$t_now" ] && [ -n "$t_rec" ]; } \
     || { R_STATUS=unknown; R_LINE="verdict=unknown(date-unparseable)"; return; }
   age=$(( (t_now - t_rec) / 86400 ))
@@ -286,7 +286,7 @@ reader_prereq5() {
   if [ "$n" -eq 0 ]; then R_STATUS=unmet; R_LINE="prereq5=skippable-set-empty"; return; fi
   if [ -n "$bad" ]; then R_STATUS=unmet; R_LINE="prereq5=skippable-set-unrecognised(${bad//[[:cntrl:]]/?})"; return; fi
   w="$(adr_line 'Waiver')"
-  if printf '%s' "$w" | grep -Eq '^heartbeat[[:space:]]+[^[:space:]<]'; then R_STATUS=ok; R_LINE="prereq5=ok(heartbeat-waived)$ADR_NOTE"; return; fi
+  if grep -Eq '^heartbeat[[:space:]]+[^[:space:]<]' <<<"$w"; then R_STATUS=ok; R_LINE="prereq5=ok(heartbeat-waived)$ADR_NOTE"; return; fi
   gh_read "repos/$repo/issues/$heartbeat"
   if [ "$G_STATUS" != 200 ]; then R_STATUS=unknown; R_LINE="prereq5=unknown(heartbeat-http=$G_STATUS)"; return; fi
   # a pull request is addressable as an issue number too: a wrong --heartbeat-issue naming one must not count

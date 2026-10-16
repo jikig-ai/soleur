@@ -151,8 +151,8 @@ missing_of() { final | sed -n 's/.* missing=//p'; }
 stub_clean() { [[ -n "$ALLOW_MISS" ]] || ! grep -q STUB-MISS "$GHLOG"; }   # a row whose request the stub did not know proves nothing
 expect() { [[ "$RC" -eq "$1" && "$(missing_of)" = "$2" ]] && stub_clean; }   # expect <rc> <missing>; rc 1 = unmet, rc 3 = only unknown
 ready() { [[ "$RC" -eq 0 && "$(final)" = "SOLEUR_PR_AFFECTED_PREACTIVATION ready=true missing=none" ]] && stub_clean; }
-has_line() { printf '%s\n' "$OUT" | grep -qxF -- "$1"; }
-has_pat() { printf '%s\n' "$OUT" | grep -qF -- "$1"; }
+has_line() { grep -qxF -- "$1" <<<"$OUT"; }
+has_pat() { grep -qF -- "$1" <<<"$OUT"; }
 ck() { local d="$1"; shift; if "$@"; then pass "$d"; else fail "$d: rc=$RC final='$(final)' out=$(printf '%s' "$OUT" | head -4 | tr '\n' '|') stubmiss=$(grep -m1 STUB-MISS "$GHLOG" 2>/dev/null)"; fi; }
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -420,10 +420,10 @@ env PATH="$BIN:$PATH" bash "$SUT" --repo "$R" --root relative/path >/dev/null 2>
 env PATH="$BIN:$PATH" bash "$SUT" --nope >/dev/null 2>&1; rc=$?
 [[ "$rc" -eq 2 ]] && pass "an unknown argument is refused with rc 2" || fail "unknown argument (rc=$rc)"
 helptxt="$(env PATH="$BIN:$PATH" bash "$SUT" --help 2>&1)"; rc=$?
-[[ "$rc" -eq 0 ]] && printf '%s\n' "$helptxt" | grep -q 'USAGE:' && printf '%s\n' "$helptxt" | grep -q 'Skippable set:' && printf '%s\n' "$helptxt" | grep -q 'EXIT: 0 ready=true' \
-  && printf '%s\n' "$helptxt" | grep -q 'NEEDS: gh' && pass "--help prints the needs, the prerequisites, the three ADR line shapes and the exit codes" || fail "--help (rc=$rc): $(printf '%s' "$helptxt" | head -3)"
+[[ "$rc" -eq 0 ]] && grep -q 'USAGE:' <<<"$helptxt" && grep -q 'Skippable set:' <<<"$helptxt" && grep -q 'EXIT: 0 ready=true' <<<"$helptxt" \
+  && grep -q 'NEEDS: gh' <<<"$helptxt" && pass "--help prints the needs, the prerequisites, the three ADR line shapes and the exit codes" || fail "--help (rc=$rc): $(printf '%s' "$helptxt" | head -3)"
 build_world; go
-grep -n 'gh api' "$SUT" | grep -vq -- 'gh api -i' && fail "every request goes through the one reader" || pass "every request goes through the one reader (gh api -i)"
+ghapi_lines="$(grep -n 'gh api' "$SUT")"; grep -vq -- 'gh api -i' <<<"$ghapi_lines" && fail "every request goes through the one reader" || pass "every request goes through the one reader (gh api -i)"
 grep -nE 'gh api[^|]*(-X|--method|--input|-f |-F )' "$SUT" >/dev/null && fail "the gate script issues only reads" || pass "the gate script issues only reads (no -X, --method, --input, -f, -F)"
 grep -nE 'variables.*(-X|--method|PATCH|POST|PUT|DELETE)' "$SUT" >/dev/null && fail "the gate never mutates the variable" || pass "the gate never mutates the variable"
 grep -nE '(^|[^A-Za-z_])git (-C|[a-z])' "$SUT" | grep -v 'git_ro\|^[0-9]*:[[:space:]]*#' >/dev/null && fail "every git call goes through git_ro (location variables removed)" || pass "every git call goes through git_ro (location variables removed)"
@@ -531,7 +531,7 @@ open(p, "w").write(s.replace(old, "READERS=()"))
 PY
   build_world
   local out rc=0; out="$(env PATH="$BIN:$PATH" PR_AFFECTED_PREACT_TODAY="$TODAY" bash "$e" --repo "$R" --root "$WORLD" 2>/dev/null)" || rc=$?
-  [[ "$rc" -eq 2 ]] && ! printf '%s' "$out" | grep -q 'ready=true'
+  [[ "$rc" -eq 2 ]] && ! grep -q 'ready=true' <<<"$out"
 }
 mutate unknown-counts-as-met '    ok) ok=$((ok + 1)) ;;' '    ok|unknown) ok=$((ok + 1)) ;;' row_org_403
 mutate org-count-ignored '    *) R_STATUS=unmet; R_LINE="org_variables=$n" ;;' '    *) R_STATUS=ok; R_LINE="org_variables=$n" ;;' row_org_count1
@@ -563,7 +563,7 @@ mutate comment-strip-dropped "code=\"\$(printf '%s\\n' \"\$src\" | grep -v '^[[:
 mutate comment-token-accepted "body=\"\$(printf '%s\\n' \"\$1\" | grep -v '^[[:space:]]*#')\" || return 1" 'body="$1"' row_comment_token
 mutate comment-call-accepted "body=\"\$(printf '%s\\n' \"\$1\" | grep -v '^[[:space:]]*#')\" || return 1" 'body="$1"' row_comment_call
 mutate date-failure-reads-zero '    || { R_STATUS=unknown; R_LINE="verdict=unknown(date-unparseable)"; return; }' '    || { t_now=0; t_rec=0; }' row_date_bad
-mutate clock-format-unchecked "printf '%s' \"\$today\" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}\$' || { R_STATUS=unknown; R_LINE=\"verdict=unknown(date-unparseable)\"; return; }" ':' row_today_natural
+mutate clock-format-unchecked "grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}\$' <<<\"\$today\" || { R_STATUS=unknown; R_LINE=\"verdict=unknown(date-unparseable)\"; return; }" ':' row_today_natural
 mutate receipt-from-worktree '  if text="$(committed "$rp")"; then :' '  if text="$(cat "$root/$rp" 2>/dev/null)"; then :' row_dirty_receipt
 mutate blob-mode-unchecked '  case "$mode" in 100644|100755) : ;; *) return 1 ;; esac' '  :' row_symlink_text
 mutate archive-for-present-path '  elif [ -z "$(git_ro -C "$root" ls-tree HEAD -- "$rp" 2>/dev/null)" ]; then' '  elif true; then' row_symlink_with_archive
