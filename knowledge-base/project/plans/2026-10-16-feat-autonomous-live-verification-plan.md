@@ -115,8 +115,8 @@ classification, job `live-verify`), `plugins/soleur/skills/{postmerge,flag-set-r
 
 ### Phase 4 — Tracking
 
-- 4.1 File the passive-verification issue: read-only credential path for the probe (not the service role), positive-observation
-  semantics, sweeper deadline escalation, post-flip trigger. Link from #10449 and `blocked-by` none.
+- 4.1 Passive-verification issue filed: #10461 (read-only credential path, positive observation, deadline escalation, post-flip trigger).
+- 4.1b OD1 filed as #10460 (operator chose to pursue a funded prod key as a separate brainstorm after this PR merges).
 - 4.2 Comment on #10450: runner/`flows/` split when flow #2 exists, contract ADR, and the dev/staging measurement question.
 
 ## Files to Edit
@@ -148,7 +148,7 @@ None (re-run `gh issue list --label code-review` and match the file list above b
 - [ ] ADR-064 amendment lands in this PR with the three new invariants and the contract paragraph.
 - [ ] `seed-qa-user.sh` appears in the Article 30 register; `soleur:gdpr-gate` ran.
 - [ ] The ADR and skill text state plainly that prod verification does not attest the real CONNECT path and that the flip and rollback stay operator-typed.
-- [ ] The passive-verification issue exists and names its four prerequisites.
+- [x] The passive-verification issue exists (#10461) and names its four prerequisites; OD1 is tracked as #10460.
 - [ ] `python3 scripts/lint-guard-contract.py` passes.
 
 ## Test Scenarios

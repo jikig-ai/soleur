@@ -19,5 +19,5 @@ Plan: knowledge-base/project/plans/2026-10-16-feat-autonomous-live-verification-
 - [ ] 3.3 Grep ADR-064 and skills for report-only|REPORT-ONLY; decide each hit
 
 ## Phase 4 — Tracking
-- [ ] 4.1 File the passive-verification issue (read-only credential path, positive observation, deadline escalation, post-flip trigger)
+- [x] 4.1 Passive-verification issue filed: #10461; OD1 filed: #10460
 - [ ] 4.2 Comment on #10450: runner/flows split at flow #2, contract ADR, dev/staging measurement
