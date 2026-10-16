@@ -379,20 +379,20 @@ No Product/UX gate: no UI-surface path is in Files to Edit or Create. No marketi
 
 ### Pre-merge (PR)
 
-- [ ] AC1: `git diff --name-only origin/main...HEAD` matches none of `apps/web-platform/infra/**`, `**/cloud-init-registry.yml`, `**/zot-registry.tf`, `**/variables.tf`, `.github/workflows/apply-web-platform-infra.yml`, `*.tf` (so neither the registry host replace gate nor the infra apply fires).
-- [ ] AC2: `git diff origin/main...HEAD -- scripts/followthroughs/zot-fill-rate-7341.sh scripts/followthroughs/zot-fill-rate-7341.test.sh scripts/zot-restart-loop-alarm.sh scripts/lib/zot-telemetry-parse.sh` is empty.
-- [ ] AC3: `bash scripts/zot-fill-rate-standing-wiring.test.sh` passes with every T1-T5 case and, with `ZOT_FILL_WIRING_ROOT` pointed at a scratch copy holding the `origin/main` workflow (`git show origin/main:.github/workflows/scheduled-zot-restart-loop.yml`), exits non-zero (RED first, recorded in the PR).
-- [ ] AC4: the Sentry `status:` expression in the workflow is byte-identical to `origin/main`'s (`git diff origin/main...HEAD -- .github/workflows/scheduled-zot-restart-loop.yml` shows no hunk inside it).
-- [ ] AC5: `bash scripts/alarm-issue-filing-guard.test.sh` is green with its `.highwater` unchanged (new steps add no violation), and `watchdog-workflow-idempotence.test.ts` is green with the counts 19/17.
-- [ ] AC6: the six ratchets pass for the new/edited `*.test.sh`: grep-q-pipe-guard (`bash .claude/hooks/grep-q-pipe-guard.test.sh`), fixture-relative-assert, fixture-dir-operand-assert, guard-vacuity-floor, lint-trap-tempfile-ownership (`--check-highwater`, highwater not raised), lint-shell-capture-exit (`--baseline scripts/lint-shell-capture-exit.baseline.txt`, baseline not raised).
-- [ ] AC7: `bash scripts/followthroughs/zot-fill-rate-7341.test.sh`, `scripts/zot-restart-loop-alarm.test.sh` and `scripts/zot-restart-loop-alarm-scrub.test.sh` pass unchanged.
-- [ ] AC8: `bash plugins/soleur/test/c4-count-parity.test.sh` is green with `model.c4` unedited.
-- [ ] AC9: `bash scripts/lint-orphan-test-suites.sh` and the shard-manifest tests pass (the new suite is registered in `scripts/test-all.sh`, `suite-shard-legs.tsv`, `suite-durations.tsv`).
-- [ ] AC10: the live read-only probe (Phase 4) was run once before merge and its verdict line is pasted in the PR body; the allowed set is PASS, a FAIL (which would legitimately have opened the issue), or a TRANSIENT whose message names one of the script's distinct causes.
+- [x] AC1: `git diff --name-only origin/main...HEAD` matches none of `apps/web-platform/infra/**`, `**/cloud-init-registry.yml`, `**/zot-registry.tf`, `**/variables.tf`, `.github/workflows/apply-web-platform-infra.yml`, `*.tf` (so neither the registry host replace gate nor the infra apply fires).
+- [x] AC2: `git diff origin/main...HEAD -- scripts/followthroughs/zot-fill-rate-7341.sh scripts/followthroughs/zot-fill-rate-7341.test.sh scripts/zot-restart-loop-alarm.sh scripts/lib/zot-telemetry-parse.sh` is empty.
+- [x] AC3: `bash scripts/zot-fill-rate-standing-wiring.test.sh` passes with every T1-T5 case and, with `ZOT_FILL_WIRING_ROOT` pointed at a scratch copy holding the `origin/main` workflow (`git show origin/main:.github/workflows/scheduled-zot-restart-loop.yml`), exits non-zero (RED first, recorded in the PR).
+- [x] AC4: the Sentry `status:` expression in the workflow is byte-identical to `origin/main`'s (`git diff origin/main...HEAD -- .github/workflows/scheduled-zot-restart-loop.yml` shows no hunk inside it).
+- [x] AC5: `bash scripts/alarm-issue-filing-guard.test.sh` is green with its `.highwater` unchanged (new steps add no violation), and `watchdog-workflow-idempotence.test.ts` is green with the counts 19/17.
+- [x] AC6: the six ratchets pass for the new/edited `*.test.sh`: grep-q-pipe-guard (`bash .claude/hooks/grep-q-pipe-guard.test.sh`), fixture-relative-assert, fixture-dir-operand-assert, guard-vacuity-floor, lint-trap-tempfile-ownership (`--check-highwater`, highwater not raised), lint-shell-capture-exit (`--baseline scripts/lint-shell-capture-exit.baseline.txt`, baseline not raised).
+- [x] AC7: `bash scripts/followthroughs/zot-fill-rate-7341.test.sh`, `scripts/zot-restart-loop-alarm.test.sh` and `scripts/zot-restart-loop-alarm-scrub.test.sh` pass unchanged.
+- [x] AC8: `bash plugins/soleur/test/c4-count-parity.test.sh` is green with `model.c4` unedited.
+- [x] AC9: `bash scripts/lint-orphan-test-suites.sh` and the shard-manifest tests pass (the new suite is registered in `scripts/test-all.sh`, `suite-shard-legs.tsv`, `suite-durations.tsv`).
+- [x] AC10: the live read-only probe (Phase 4) was run once before merge and its verdict line is pasted in the PR body; the allowed set is PASS, a FAIL (which would legitimately have opened the issue), or a TRANSIENT whose message names one of the script's distinct causes.
 - [ ] AC11: the PR body uses `Ref #7521`, has a `## Changelog` section, contains no closing keyword for #7521, and uses "unavailable" or "disruption" wording only.
-- [ ] AC12: ADR-096 carries the dated paragraph (grep for `#7521` in that file returns one hit).
-- [ ] AC12b: `BASELINE_DECLARED_PROBES` in `plugins/soleur/test/preflight-discoverability-test.test.ts` equals the live count of plans declaring `credentials_required` after the bump (`bun test plugins/soleur/test/preflight-discoverability-test.test.ts` green), re-derived after the final rebase; the bump is the last commit before arming the merge, since it is the one line expected to conflict when main moves.
-- [ ] AC13: the issue body published by the FAIL step is verified, in T4, to hold the verdict line, the reproduce command and the run link, and none of the script's other output.
+- [x] AC12: ADR-096 carries the dated paragraph (grep for `#7521` in that file returns one hit).
+- [x] AC12b: `BASELINE_DECLARED_PROBES` in `plugins/soleur/test/preflight-discoverability-test.test.ts` equals the live count of plans declaring `credentials_required` after the bump (`bun test plugins/soleur/test/preflight-discoverability-test.test.ts` green), re-derived after the final rebase; the bump is the last commit before arming the merge, since it is the one line expected to conflict when main moves.
+- [x] AC13: the issue body published by the FAIL step is verified, in T4, to hold the verdict line, the reproduce command and the run link, and none of the script's other output.
 - [ ] AC14: `gh run list --workflow apply-web-platform-infra.yml` and `--workflow registry-host-replace-dispatch.yml` were re-read before the merge arm and the runbook re-read; recorded in the PR body.
 - [ ] AC15: rebased on `origin/main` with no merge commit; the PR is armed with a single bare `gh pr merge <N> --squash --auto` only after the owner's explicit go.
 
