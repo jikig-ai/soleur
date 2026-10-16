@@ -1790,3 +1790,56 @@
   check producer exits rather than a trailing pipe's status. The session-start
   cleanup completed without reaping any branch or worktree; Docker pruning
   remained off. These process corrections confer no operational authorization.
+
+### Continued draft maintenance — 2026-10-16
+
+- Pushed `6d6e72028a18a3a3354c9aa195e8f03f31c0bb40` settled with 94
+  successful checks, 15 skipped and three red checks. Aggregate `test` in CI
+  `38714399844` is the intentional DRAFT_LIGHT result. Deploy shard 4/4 in
+  `38714399958` failed three source checks: the bootstrap pin was v1.1.53
+  while the latest merged tag was v1.1.54, and a baked Vector carrier differed.
+  `deploy-script-tests-done` propagated that real shard failure. No old CI job
+  was retried. The PR was OPEN, draft and disarmed.
+- Canonical sync classified conflicts against main
+  `ee8644bded6cb21bfc4720a479bd0c4c2c833213`. Its prescribed resolution path
+  produced `587f6ebb99ef75e3f61c420c6bb7e3803ca6d052`. Both privacy surfaces
+  retain the branch's exact engine/acknowledgment paragraph and main's exact
+  web-access/egress-audit paragraphs. DPA TOM 4 retains both service-only table
+  classes and the acknowledgment RPC exceptions, superseding main's now-false
+  exclusive RPC-read claim. The static checker includes both table names.
+  Three canonical legal hashes were recomputed from merged bytes. Two incoming
+  EOF-only whitespace warnings were removed without changing behavior.
+- The source RLS gate passes 25 assertions; its synthetic mutation suite passes
+  29 cases. Nine-document hashes and the mirror-drift ratchet pass. The existing
+  80-line drift/expired-target warning remains tracked by Ref #7465, verified
+  OPEN. These are mechanical source checks, not a new legal disposition.
+- The complete offline wrapper passes under inherited `PYTHONOPTIMIZE=1`, with
+  explicit `CODEX_20261016_OFFLINE_RC=0`. No qualification component, registered
+  wrapper or production Dockerfile changed. Incoming main adds two complete
+  forward migrations (191 total); their existing shared 162 prefix and original
+  bodies remain untouched. No SQL was executed. New DSAR/account-erasure and
+  dark egress-ingest source remains subject to full review and qualification.
+- The scoped advisory GDPR gate checked lawful-basis annotation, retention,
+  erasure/caller wiring, vendor disclosure and special-category column names;
+  no new scoped finding was identified. This is not legal review. Existing
+  mode-specific CLO and broader privacy gates remain pending.
+- Main's v1.1.54 pins still trail the merged v1.1.56 tag. A bounded local
+  static/mocked bootstrap suite reports 266/269, with two pin mismatches and
+  baked `inngest-bootstrap.sh`/`vector.toml` drift. All offending pins, carriers
+  and checker source match main exactly. Existing bot PR #10420 supplies the
+  two-file v1.1.56 pin update; it was verified OPEN, armed and awaiting CI. This
+  continuation does not alter that PR, deploy its change or observe an image.
+- Ref #10082 and Ref #9791 remain verified OPEN: SAST VOID and latest-source
+  C.9 unverified. Keep draft/disarmed/default-off/customer-blocked. Actual
+  reviewed profiles/observations, fresh exact-action approval, recovery and
+  authenticated screenshots, routine qualification, permitted Web/CLO matrices
+  and full review/QA/preflight/promotion remain pending. Sharing, retention/
+  inheritance and regions remain unresolved. Build approval is consumed and
+  the withdrawn command remains forbidden.
+- Process corrections: old shell-session IDs had expired; current GitHub reads
+  replaced them. Standard unified-diff hunk coordinates were rejected by the
+  patch tool and converted to its native hunk syntax before any file changed.
+  An overbroad paragraph selector matched an unrelated retention bullet; exact
+  paragraph prefixes then positively verified both privacy surfaces. Prevention:
+  rediscover sessions, honor the tool's patch format, use exact semantic scope
+  and stop on each producer failure before consuming its output.
