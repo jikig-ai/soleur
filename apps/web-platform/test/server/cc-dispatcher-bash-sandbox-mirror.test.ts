@@ -40,6 +40,19 @@ describe("mirrorBashSandboxFailure (#10032)", () => {
     expect(errorClass).toBe("agent-sandbox-bash-tool-result");
   });
 
+  it("#10445: the apply-seccomp helper line flows through with sandboxErrorCode=helper_userns_eperm (the alert's needle)", () => {
+    const HELPER = "apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted";
+    mirrorBashSandboxFailure(`ok\n${HELPER}\n`, USER, CONV);
+    expect(mirrorSpy).toHaveBeenCalledTimes(1);
+    const [err, ctx] = mirrorSpy.mock.calls[0];
+    expect(err).toBeNull();
+    expect(ctx.feature).toBe("agent-sandbox");
+    expect(ctx.op).toBe("bash-tool-result");
+    expect(ctx.message).toBe("bash sandbox denial: helper_userns_eperm");
+    expect(ctx.extra.sandboxErrorCode).toBe("helper_userns_eperm");
+    expect(ctx.extra.sandboxStderr).toBe(HELPER);
+  });
+
   it("data minimisation: neither the surrounding output nor a workspace path reaches the event", () => {
     const secret = "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
     const pathLine = `bwrap: Can't bind mount /workspaces/${USER}/repo on /newroot/x: Operation not permitted`;

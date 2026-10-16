@@ -220,3 +220,77 @@ describe("classifyBashSandboxFailure — Bash tool_result sandbox denial (#10032
     expect(classifyBashSandboxFailure("", null)).toBeNull();
   });
 });
+
+// #10445 — the SDK's command-side `apply-seccomp` helper dies with EPERM on `unshare(CLONE_NEWUSER)` when the shim's
+// seccomp filter is inherited; the helper prints its OWN line, which carries no bwrap token. Guard 2 mutation matrix.
+describe("classifyBashSandboxFailure — apply-seccomp helper arm (#10445, Guard 2)", () => {
+  // The exact line from the issue, and the shape pinned from the helper binary's strings.
+  const ISSUE_LINE = "apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted";
+  const BARE_UNSHARE = "unshare: unshare failed: Operation not permitted";
+
+  it("row 1: the exact issue line classifies as helper_userns_eperm and returns ONLY the matched line", () => {
+    const f = classifyBashSandboxFailure(ISSUE_LINE, "0.3.284");
+    expect(f).not.toBeNull();
+    expect(f?.errorCode).toBe("helper_userns_eperm");
+    expect(f?.matchedLine).toBe(ISSUE_LINE);
+    expect(f?.sdkVersion).toBe("0.3.284");
+  });
+
+  it("row 1: an EPERM-spelled helper line also classifies (the arm accepts either denial spelling)", () => {
+    expect(classifyBashSandboxFailure("apply-seccomp: prctl(PR_SET_NO_NEW_PRIVS): EPERM", null)?.errorCode).toBe(
+      "helper_userns_eperm",
+    );
+  });
+
+  it("row 2: empty output and only-benign lines return null, while a positive control in the same shape is non-null", () => {
+    expect(classifyBashSandboxFailure("", null)).toBeNull();
+    expect(classifyBashSandboxFailure("hello\nworld\nexit 0\n", null)).toBeNull();
+    // Positive control: the same benign scaffold plus the helper line must be non-null (guards a vacuous null).
+    expect(classifyBashSandboxFailure(`hello\nworld\n${ISSUE_LINE}\n`, null)).not.toBeNull();
+  });
+
+  it("row 3: benign first line, helper line second, bare unshare third classifies line 2 only (no stop-at-first-line)", () => {
+    const out = `ls: ok\n${ISSUE_LINE}\n${BARE_UNSHARE}\n`;
+    const f = classifyBashSandboxFailure(out, null);
+    expect(f?.errorCode).toBe("helper_userns_eperm");
+    expect(f?.matchedLine).toBe(ISSUE_LINE);
+    expect(f?.matchedLine).not.toContain("unshare failed");
+  });
+
+  it("row 3: CRLF line endings are split the same way", () => {
+    const f = classifyBashSandboxFailure(`ls: ok\r\n${ISSUE_LINE}\r\n`, null);
+    expect(f?.matchedLine).toBe(ISSUE_LINE);
+  });
+
+  it("row 4: an agent's own `unshare -U` output (bare unshare / seccomp token) stays non-matching", () => {
+    expect(classifyBashSandboxFailure(BARE_UNSHARE, null)).toBeNull();
+    expect(classifyBashSandboxFailure("unshare: unshare(CLONE_NEWUSER): Operation not permitted", null)).toBeNull();
+    expect(classifyBashSandboxFailure("seccomp: EPERM", null)).toBeNull();
+  });
+
+  it("the arm anchors on the line START: a line that merely mentions apply-seccomp mid-line does not match", () => {
+    expect(classifyBashSandboxFailure("grep apply-seccomp: Operation not permitted", null)).toBeNull();
+    expect(classifyBashSandboxFailure("echo 'see apply-seccomp: EPERM'", null)).toBeNull();
+  });
+
+  it("the arm needs a denial on the SAME line: apply-seccomp alone or a denial on another line is null", () => {
+    expect(classifyBashSandboxFailure("apply-seccomp: starting", null)).toBeNull();
+    expect(classifyBashSandboxFailure("apply-seccomp: starting\nrm: x: Operation not permitted", null)).toBeNull();
+  });
+
+  it("a bwrap line before the helper line is the one returned, with its own code", () => {
+    const f = classifyBashSandboxFailure(`bwrap: Can't mount proc on /newroot/proc: Operation not permitted\n${ISSUE_LINE}`, null);
+    expect(f?.errorCode).toBe("proc_mount_eperm");
+  });
+
+  it("the helper line is scrubbed like every matched line (paths, uuids)", () => {
+    const uuid = "754ee124-706a-4f21-a4f4-e828257b0380";
+    const f = classifyBashSandboxFailure(
+      `apply-seccomp: open /workspaces/${uuid}/x: Operation not permitted`,
+      null,
+    );
+    expect(f?.errorCode).toBe("helper_userns_eperm");
+    expect(f?.matchedLine).not.toContain(uuid);
+    expect(f?.matchedLine).not.toContain("/workspaces/");
+  });
+});
