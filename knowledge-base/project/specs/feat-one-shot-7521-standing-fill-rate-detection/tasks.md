@@ -8,17 +8,19 @@ Branch: `feat-one-shot-7521-standing-fill-rate-detection`. Draft PR: #10444. PR 
 - 0.1 Create `scripts/zot-fill-rate-standing-wiring.test.sh` with `set -uo pipefail`, one `trap ... EXIT` owning every `mktemp`, call-site `cases` counter, literal-bound `MIN_CASES` floor and accounting sentinel, and the `ZOT_FILL_WIRING_ROOT` test seam.
 - 0.2 T1 Sentry isolation: `steps.<id>` identifier set of the `status:` expression equals `{alarm}`; still `if: always()`; job timeout unchanged at 8; probe step timeout at most 3; at least 3 fill-referencing steps found.
 - 0.3 T2 ordering: alarm < existing filing steps < `Sentry check-in (final)` < fill < fill filing steps.
-- 0.4 T3 classification, executed against a fixture tree with a fake `scripts/followthroughs/zot-fill-rate-7341.sh`: three valid pairs; invalid cases (rc 0 no header, rc 2 no header, rc 0 with FAIL header, rc 3, rc 127, two headers, a `::error::` body line) -> UNEVALUATED, outputs written, step exits 1.
-- 0.5 T4 FAIL filing against a PATH-shimmed `gh`: create versus comment, label-list lookup (never `--search`), dedupe-failure trade, title parity with the PASS step, body holds only the verdict line, reproduce command and run link.
+- 0.4 T3 classification and defect flag, executed against a fixture tree with a fake `scripts/followthroughs/zot-fill-rate-7341.sh`: three valid pairs; invalid cases (rc 0 no header, rc 2 no header, rc 0 with FAIL header, rc 3, rc 127, two headers, a `::error::` body line) -> UNEVALUATED, outputs written, step exits 1; defect-flag fixtures for each benign token, one defect token, and `ALARM_EXIT` 2 suppression; a `\r::error::x` body line.
+- 0.5 T4 FAIL filing against a PATH-shimmed `gh`: create versus comment, label-list lookup (never `--search`), dedupe-failure trade, title parity with the PASS loop, hostile `FILL_LINE` defanged and capped, no `BETTERSTACK_*` in any filing step's env, body holds only the verdict line, reproduce command and run link.
 - 0.6 T5 PASS close hysteresis (5 h no close, 7 h close, none open no-op).
 - 0.7 Run the suite with `ZOT_FILL_WIRING_ROOT` pointed at the `origin/main` workflow and record that it is RED.
-- 0.8 Edit `apps/web-platform/test/server/watchdog-workflow-idempotence.test.ts`: the exact `select(.title` pin 15 -> 16 (and the floor 17 -> 18).
+- 0.8 Edit `apps/web-platform/test/server/watchdog-workflow-idempotence.test.ts`: the exact `select(.title` pin 15 -> 17 (and the floor 17 -> 19).
 
 ## Phase 1 — Workflow edit
 
 - 1.1 In `.github/workflows/scheduled-zot-restart-loop.yml`, after `Sentry check-in (final)`, add step `Run standing fill-rate probe` (`id: fill`, `if: !cancelled()`, `timeout-minutes: 3`, secrets via `env:`): `|| rc=$?` capture, pipe-prefixed log lines, exactly-one column-0 header, exit-code map plus header agreement, outputs `fill_verdict` / `fill_line`, annotations, step summary, `exit 1` on UNEVALUATED.
 - 1.2 Add step `Open or comment fill-rate issue (FAIL)` (bare `ISSUE_TITLE`, idempotent label create, label-list lookup, create or comment; body = origin sentence, verdict line, reproduce command, consequence sentence, close rule, run link).
-- 1.3 Add step `Auto-close fill-rate issue after a quiet period (PASS)` with the 21600 s `updatedAt` test.
+- 1.2b Add step `Open or comment probe-defect issue` (`fill_defect == 'true'`, title `[ci/zot-fill-rate] Registry fill-rate probe defect`, same label and lookup shape); the FAIL step also closes any open probe-defect issue.
+- 1.3 Add step `Auto-close fill-rate issue after a quiet period (PASS)` looping over both titles with the 21600 s `updatedAt` test.
+- 1.3b In the probe step add `::add-mask::` of the lowercased host, the `*.betterstackdata.com` scrub, control-character and CR stripping before the pipe prefix, the `fill_defect` computation (closed benign-token allowlist, `ALARM_EXIT` not 2) and `ALARM_EXIT` env.
 - 1.4 Update the workflow header comment only; leave the `Sentry check-in (final)` step byte-identical.
 
 ## Phase 2 — Registration
