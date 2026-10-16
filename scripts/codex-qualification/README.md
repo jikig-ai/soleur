@@ -1,9 +1,12 @@
 # Offline Codex qualification preparation
 
 This directory prepares a paired production-image and full-schema rehearsal
-contract. It has no build, download, Docker, application-start, SQL, browser-login
-or provider-execution command. The production runtime stays closed. The withdrawn
-October 11 runner is never imported or invoked.
+contract. The separate prebuild acquisition entrypoint prepares a finite
+read-only daemon metadata/image request manifest; its explicit execution mode
+requires fresh approval for the reviewed exact command. There is no build,
+download, application-start, SQL, browser-login or provider-execution command.
+The production runtime stays closed. The withdrawn October 11 runner is never
+imported or invoked.
 
 `prepare.py --repo <worktree> --source-sha <full-HEAD-SHA> --preview` reads only
 committed Git blobs and prints content-free preparation metadata. It binds the
@@ -204,3 +207,18 @@ real image was observed. Builder, SQL-session
 and retained-resource transports, actual image Configs/profiles, independent
 review and fresh exact-action approval remain pending. See the
 [transport record](../../knowledge-base/project/specs/feat-one-shot-codex-web-live-paths/namespace-transport-implementation-2026-10-14.md).
+
+`prebuild_acquisition.py` separates evidence acquisition for six pinned
+dependencies from the complete eleven-role profile gate. Its `prepare` mode
+writes a private manifest without opening a socket or invoking local tools.
+Its explicit `execute` mode is reserved for a separately reviewed exact action
+approved through the harness. Digests and the exclusive retained consumption
+marker prevent accidental substitution/replay; they do not authenticate human
+approval. The request allowlist contains daemon version/info and exact pinned
+image inspections only. Missing images stop the attempt without pulling.
+Complete image Configs and partial failure evidence remain private; projected
+public summaries contain hashes, counts and status only. Every resulting
+profile/authentication/ownership/quiescence/execution authority remains false.
+These observations cannot replace current-source builder review, a separately
+approved build, the final eleven-role Config/profile review, or recovery
+approval. See the [CTO acquisition ruling](../../knowledge-base/project/specs/feat-one-shot-codex-web-live-paths/prebuild-acquisition-2026-10-16.md).

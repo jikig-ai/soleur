@@ -37,7 +37,8 @@ def prepare_operational(repo, source, directory):
              'retained_files.py', 'session_controller.py', 'controller_inputs.py',
              'controller_adapters.py', 'test_controller_adapters.py',
              'controller_transports.py', 'test_controller_transports.py',
-             'image_observations.py', 'test_image_observations.py')]
+             'image_observations.py', 'test_image_observations.py',
+             'prebuild_acquisition.py', 'test_prebuild_acquisition.py')]
     paths += [root + 'scenarios/' + name for name in RACE_SCENARIOS]
     references = {}
     for entry in git(repo, 'ls-tree', '-z', source, '--', *paths).split(b'\0'):

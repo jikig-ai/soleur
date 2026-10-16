@@ -1882,3 +1882,32 @@
   C.9 unverified. All profile/observation, hosted-auth, alternative-route,
   approval, recovery, screenshot, routine, Web/CLO and promotion holds persist.
   Refresh exact-head pairing/export, description and CI after this source edit.
+
+### CTO-owned prebuild acquisition preparation — 2026-10-16
+
+- Resumed `bec74df32f1b318305a699a04292f3a77f831b02`: 83 effective checks
+  passed, 14 skipped, only intentional DRAFT_LIGHT `test` red. Main remains
+  `abbd36a69651a7adae197d99d272507cfc2c0450`; draft/disarmed, no sync required.
+  Required session-start maintenance completed with Docker pruning off.
+- The operator directed consultation with the CTO. Ruled by CTO agent:
+  actual profile/provenance acquisition is agent-owned. Historical October 11
+  renderer and six dependency provenance records exist, but do not qualify
+  the current source or establish current local immutable image IDs. Separate
+  prebuild evidence acquisition from the final eleven-role profile gate so
+  an unbuilt current renderer does not block its own build preparation.
+- Added a dormant explicit prebuild prepare/execute boundary, source/retained
+  byte and endpoint/output identity bindings, a fixed persistent replay
+  marker, private projected receipts, and a finite metadata/pinned-image GET
+  allowlist. Marker/digests do not authenticate human approval. Registered
+  the synthetic tests and operational source inputs; actual execution needs
+  fresh approval of its separately reviewed exact command.
+- New tests ran RED before implementation, then 16/16 passed with fake
+  transports and synthetic files only. Related source preparation/candidate/
+  operational tests pass 31/31; syntax and whitespace pass. Focused source
+  review, final source pairing/export/description and new-head CI remain
+  pending. See `prebuild-acquisition-2026-10-16.md` for scope and corrections.
+- No actual prepare/execute acquisition, image observation, executable tool
+  invocation, build, SQL, provider, browser/account, recovery or retry ran.
+  Filesystem-only reads identified candidate socket/tool paths and hashed
+  selected local executable bytes; these do not attest daemon identity or
+  admission. All prior approval, runtime, legal and ship holds persist.
