@@ -512,7 +512,7 @@ Logs alert count from 15 to **16** once the post-merge apply has run (re-derive 
   `CONTAINER_NAME = 'soleur-web-platform'` whose `op` is `bash-tool-result` and whose `sandboxErrorCode` is
   `helper_userns_eperm`, written by the cc-dispatcher `onToolResult` mirror. No sibling covers it: the existing alerts
   read journald marker text or producer envelopes, and none reads user-visible Bash failures. It reads **nested `message.*` keys**
-  (`JSONExtractString(raw, 'message', 'op')`), as `registry_clientip_not_rfc1918` already does.
+  (`JSONExtractString(raw, 'message', 'op')`), as `claude_cost_daily_burn` and `inngest_step_524` already do.
 - **Parameters.** `higher_than 0`, `check_period 60`, `query_period 300`, `confirmation_period 0`,
   `recovery_period 600`, `on_missing_data treat_as_zero`, email only (the `bwrap_probe_rollback` values). Auto-resolution
   after 10 quiet minutes does not mean the cause was fixed.

@@ -451,8 +451,8 @@ leaves sibling sessions' pathname sockets in the shared temp dir visible. The ex
    per-session proxy credential) under `<CLAUDE_CODE_TMPDIR or tmpdir>/claude-<uid>/...`, and the vendored builder binds
    that whole per-uid dir writable into every sandbox, so no `denyRead` can hide it (the covered allowWrite path is
    re-bound after the tmpfs). Found by the fix-round security seat: with AF_UNIX allowed, session B could read A's
-   persisted `env` output and replay A's credential against A's bridge sockets (accepted: 502, not 407). Each session
-   therefore gets its own CLI temp base (`agentSessionTmpDir`, `/tmp/.cs/<sha256(workspace)[0:16]>`, injected as
+   persisted `env` output and replay A's credential against A's bridge sockets (accepted: 502, not 407). Each tenant
+   (workspace) therefore gets its own CLI temp base (`agentSessionTmpDir`, `/tmp/.cs/<sha256(workspace)[0:16]>`, injected as
    `CLAUDE_CODE_TMPDIR`) and the sandbox config denies the shared root `/tmp/.cs`; G2 runs A with `env; sleep 60` and
    requires B to find none of A's credential under `/tmp`, `$TMPDIR` or `$HOME`, with a control arm (no per-tenant base)
    that must find it. This, not socket authentication, is now the primary control for the credential; proxy auth stays

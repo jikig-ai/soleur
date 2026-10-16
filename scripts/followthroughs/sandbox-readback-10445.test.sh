@@ -28,7 +28,9 @@ cat > "$STUBS/gh" <<STUB
 #!/usr/bin/env bash
 argv="\$*"
 case "\$argv" in
-  "pr view 10451 --repo jikig-ai/soleur --json mergeCommit --jq .mergeCommit.oid // \"\"") printf '%s\n' "\${STUB_MERGE_SHA:-}" ;;
+  "pr view 10451 --repo jikig-ai/soleur --json mergeCommit,mergedAt --jq [(.mergeCommit.oid // \"\"), (.mergedAt // \"\")] | @tsv")
+    [[ -z "\${STUB_GH_FAIL:-}" ]] || exit 1
+    printf '%s\t%s\n' "\${STUB_MERGE_SHA:-}" "\${STUB_MERGED_AT:-1970-01-01T00:08:20Z}" ;;
   "api repos/jikig-ai/soleur/compare/web-v1.2.3...$SHA --jq .status") printf '%s\n' "\${STUB_COMPARE:-}" ;;
 esac
 STUB
@@ -38,7 +40,7 @@ LAST_OUT=""
 run() { # <expected rc> <label> <body> <merge sha> <compare> [http] [env-unset-var]
   local want="$1" label="$2" body="$3" sha="$4" cmp="$5" http="${6:-200}" unset_var="${7:-}" out rc
   out="$(env PATH="$STUBS:$PATH" WEBHOOK_DEPLOY_SECRET=s CF_ACCESS_CLIENT_ID=id CF_ACCESS_CLIENT_SECRET=sec GH_TOKEN=t \
-    STUB_BODY="$body" STUB_MERGE_SHA="$sha" STUB_COMPARE="$cmp" STUB_HTTP="$http" env ${unset_var:+-u "$unset_var"} bash "$SUT" 2>&1)"
+    STUB_BODY="$body" STUB_MERGE_SHA="$sha" STUB_COMPARE="$cmp" STUB_HTTP="$http" STUB_GH_FAIL="${GH_FAIL:-}" env ${unset_var:+-u "$unset_var"} bash "$SUT" 2>&1)"
   rc=$?
   LAST_OUT="$out"
   if [[ "$rc" == "0" || "$rc" == "1" ]]; then FAIL_N=$((FAIL_N + 1)); FAILURES+=("$label: NOTIFY-ONLY violated (rc=$rc): $out"); echo "  FAIL: $label (rc=$rc is forbidden)"; return; fi
@@ -59,12 +61,17 @@ run 2 "diverged -> NOT YET" "$GREEN" "$SHA" diverged
 run 3 "gh api returned nothing -> CANNOT ESTABLISH" "$GREEN" "$SHA" ""
 run 3 "deploy-status HTTP 502 -> CANNOT ESTABLISH" "$GREEN" "$SHA" behind 502
 run 3 "body without sandbox_canary -> CANNOT ESTABLISH" '{"tag":"v1.2.3"}' "$SHA" behind
-run 3 "tag that is not a release tag -> CANNOT ESTABLISH" '{"tag":"main","sandbox_canary":{"verdict":"pass"}}' "$SHA" behind
+run 3 "tag that is not a release tag -> CANNOT ESTABLISH" '{"tag":"main","exit_code":0,"component":"web-platform","start_ts":1000,"sandbox_canary":{"verdict":"pass","checked_at":1500}}' "$SHA" behind
 run 2 "no verdict yet -> NOT YET" "$(body 0 web-platform 1000 canary_infra_error 1500)" "$SHA" behind
 # The deploy-in-flight / stale-canary rows: `.tag` is the last ATTEMPT and the canary ledger is the previous deploy's.
 run 2 "deploy in flight (exit_code=-1) with a stale green canary -> NOT YET" "$(body -1 web-platform 1000 pass 500)" "$SHA" behind
 run 2 "last deploy FAILED (exit_code=1) with a green canary -> NOT YET" "$(body 1 web-platform 1000 pass 1500)" "$SHA" behind
-run 2 "last deploy was another component -> NOT YET" "$(body 0 inngest 1000 pass 1500)" "$SHA" behind
+# The deploy frame is shared by every component: a later inngest deploy overwrites it, so the readback must fall back on the
+# durable canary ledger (checked after the PR merged, merged_at = epoch 500 in the stub) instead of sitting at NOT YET forever.
+run 5 "a later inngest deploy overwrote the frame; ledger checked after the merge -> ACTION REQUIRED (likely)" "$(body 0 inngest 1000 pass 1500 vinngest-v1.1.56)" "$SHA" behind
+run 2 "a later inngest deploy overwrote the frame; ledger predates the merge -> NOT YET" "$(body 0 inngest 1000 pass 400 vinngest-v1.1.56)" "$SHA" behind
+run 2 "web-platform deploy whose canary ran before the PR merged -> NOT YET" "$(body 0 web-platform 400 pass 499)" "$SHA" behind
+GH_FAIL=1 run 3 "gh pr view failing -> CANNOT ESTABLISH, not NOT YET" "$GREEN" "$SHA" behind
 run 2 "canary verdict predates the deploy start (checked_at < start_ts) -> NOT YET" "$(body 0 web-platform 1000 pass 999)" "$SHA" behind
 run 2 "no start_ts in the answer -> NOT YET" '{"tag":"v1.2.3","exit_code":0,"component":"web-platform","sandbox_canary":{"verdict":"pass","checked_at":1500}}' "$SHA" behind
 # The stub answers only the exact argv: a different tag in the answer makes the compare path differ and reads as unavailable.
@@ -85,8 +92,8 @@ ROWS=$((PASSES + FAIL_N))
 echo ""
 echo "=== sandbox-readback-10445: $PASSES passed, ${#FAILURES[@]} failed ($ROWS rows) ==="
 # Floor reported directly (not through the helper it backstops): the row count above.
-if (( PASSES + FAIL_N < 21 )); then
-  printf 'FAIL: only %d rows ran (floor 21)\n' "$((PASSES + FAIL_N))"
+if (( PASSES + FAIL_N < 24 )); then
+  printf 'FAIL: only %d rows ran (floor 24)\n' "$((PASSES + FAIL_N))"
   exit 1
 fi
 if (( ${#FAILURES[@]} > 0 )); then printf 'FAIL: %s\n' "${FAILURES[@]}"; exit 1; fi

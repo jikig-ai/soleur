@@ -81,39 +81,55 @@ fi
 # stdout into a tracker comment, and a newline or `::` workflow command must not ride along.
 VERDICT="$(printf '%s' "$BODY" | jq -r '.sandbox_canary.verdict // "unknown"' | tr -cd 'A-Za-z0-9._-')"
 TAG="$(printf '%s' "$BODY" | jq -r '.tag // ""' | tr -cd 'A-Za-z0-9._-')"
-[[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "CANNOT ESTABLISH: deploy-status tag '$TAG' is not a release tag" >&2; exit 3; }
-
-# `.tag` is the tag of the LAST deploy ATTEMPT (ci-deploy.sh writes it with exit_code=-1 the moment a deploy starts, and again
-# on failure), and the sandbox_canary ledger is a separate durable file that still holds the PREVIOUS deploy's verdict until the
-# new deploy's canary overwrites it. So "the tag contains the fix" is not "the host runs the fix": require the last deploy to
-# have SUCCEEDED for web-platform and the canary to have been checked at or after that deploy started.
+# `.tag`/`.exit_code`/`.component`/`.start_ts` are ONE shared deploy frame that EVERY component's deploy overwrites (ci-deploy.sh
+# write_state): it is the last deploy ATTEMPT of any component, written with exit_code=-1 the moment a deploy starts and again on
+# failure. The `sandbox_canary` ledger is a separate durable file that keeps the PREVIOUS deploy's verdict until a web-platform
+# deploy's canary overwrites it. Two cases follow:
+#   * the frame is a web-platform deploy: require it to have SUCCEEDED, the canary to have run since it started, and its release
+#     tag to contain the fix PR's merge commit;
+#   * the frame is another component's later deploy (it overwrote the web-platform frame): the tag says nothing about the web
+#     image, so fall back on the durable ledger alone - the canary must have been checked after the PR merged.
+# Either way exit 5 is only a notification to go verify by hand; the hosted Bash call is the real proof.
 EXIT_CODE="$(printf '%s' "$BODY" | jq -r '.exit_code // "none"' | tr -cd '0-9-')"
 COMPONENT="$(printf '%s' "$BODY" | jq -r '.component // ""' | tr -cd 'A-Za-z0-9._-')"
 START_TS="$(printf '%s' "$BODY" | jq -r '.start_ts // ""' | tr -cd '0-9')"
 CHECKED_AT="$(printf '%s' "$BODY" | jq -r '.sandbox_canary.checked_at // ""' | tr -cd '0-9')"
-[[ "$START_TS" =~ ^[0-9]+$ && "$CHECKED_AT" =~ ^[0-9]+$ ]] || { echo "NOT YET: deploy-status carries no numeric start_ts/checked_at (no canary run recorded)" >&2; exit 2; }
-[[ "$COMPONENT" == "web-platform" ]] || { echo "NOT YET: last deploy component is '$COMPONENT', not web-platform" >&2; exit 2; }
-[[ "$EXIT_CODE" == "0" ]] || { echo "NOT YET: last deploy exit_code=$EXIT_CODE (in flight, failed or rolled back)" >&2; exit 2; }
-(( CHECKED_AT >= START_TS )) || { echo "NOT YET: the sandbox canary verdict predates the last deploy (checked_at=$CHECKED_AT < start_ts=$START_TS)" >&2; exit 2; }
+[[ "$CHECKED_AT" =~ ^[0-9]+$ ]] || { echo "NOT YET: deploy-status carries no numeric sandbox_canary.checked_at (no canary run recorded)" >&2; exit 2; }
 
-# The fix is deployed only when the PR's merge commit is contained in the deployed release tag. `compare base...head`
-# reports head's position relative to base: `behind` or `identical` means the merge commit is an ancestor of the tag.
-MERGE_SHA="$(gh pr view "$FIX_PR" --repo "$REPO" --json mergeCommit --jq '.mergeCommit.oid // ""' 2>/dev/null | tr -cd '0-9a-f')"
-[[ "$MERGE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "NOT YET: PR #$FIX_PR has no merge commit yet (not merged, or gh unavailable)" >&2; exit 2; }
-CMP="$(gh api "repos/$REPO/compare/web-$TAG...$MERGE_SHA" --jq .status 2>/dev/null | tr -cd 'a-z')"
-case "$CMP" in
-  behind|identical) : ;;
-  ahead|diverged) echo "NOT YET: deployed tag $TAG does not contain the fix yet (compare=$CMP)" >&2; exit 2 ;;
-  *) echo "CANNOT ESTABLISH: could not compare web-$TAG with the merge commit (gh api returned '$CMP')" >&2; exit 3 ;;
-esac
+# gh failing is CANNOT ESTABLISH (exit 3); an unmerged PR is a clean answer and NOT YET (exit 2).
+PR_JSON="$(gh pr view "$FIX_PR" --repo "$REPO" --json mergeCommit,mergedAt --jq '[(.mergeCommit.oid // ""), (.mergedAt // "")] | @tsv' 2>/dev/null)" \
+  || { echo "CANNOT ESTABLISH: gh pr view $FIX_PR failed" >&2; exit 3; }
+MERGE_SHA="$(printf '%s' "$PR_JSON" | cut -f1 | tr -cd '0-9a-f')"
+MERGED_AT="$(printf '%s' "$PR_JSON" | cut -f2 | tr -cd '0-9TZ:-')"
+[[ "$MERGE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "NOT YET: PR #$FIX_PR has no merge commit yet (not merged)" >&2; exit 2; }
+MERGED_EPOCH="$(date -u -d "$MERGED_AT" +%s 2>/dev/null)" || MERGED_EPOCH=""
+[[ "$MERGED_EPOCH" =~ ^[0-9]+$ ]] || { echo "CANNOT ESTABLISH: PR #$FIX_PR mergedAt '$MERGED_AT' is not a timestamp" >&2; exit 3; }
+(( CHECKED_AT >= MERGED_EPOCH )) || { echo "NOT YET: the sandbox canary verdict predates the fix PR's merge (checked_at=$CHECKED_AT < merged=$MERGED_EPOCH)" >&2; exit 2; }
+
+DEPLOYED=likely
+if [[ "$COMPONENT" == "web-platform" ]]; then
+  [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "CANNOT ESTABLISH: deploy-status tag '$TAG' is not a release tag" >&2; exit 3; }
+  [[ "$START_TS" =~ ^[0-9]+$ ]] || { echo "NOT YET: deploy-status carries no numeric start_ts" >&2; exit 2; }
+  [[ "$EXIT_CODE" == "0" ]] || { echo "NOT YET: last deploy exit_code=$EXIT_CODE (in flight, failed or rolled back)" >&2; exit 2; }
+  (( CHECKED_AT >= START_TS )) || { echo "NOT YET: the sandbox canary verdict predates the last deploy (checked_at=$CHECKED_AT < start_ts=$START_TS)" >&2; exit 2; }
+  # `compare base...head` reports head's position relative to base: `behind` or `identical` means the merge commit is an
+  # ancestor of the tag.
+  CMP="$(gh api "repos/$REPO/compare/web-$TAG...$MERGE_SHA" --jq .status 2>/dev/null | tr -cd 'a-z')"
+  case "$CMP" in
+    behind|identical) : ;;
+    ahead|diverged) echo "NOT YET: deployed tag $TAG does not contain the fix yet (compare=$CMP)" >&2; exit 2 ;;
+    *) echo "CANNOT ESTABLISH: could not compare web-$TAG with the merge commit (gh api returned '$CMP')" >&2; exit 3 ;;
+  esac
+  DEPLOYED=yes
+fi
 
 case "$VERDICT" in
   pass)
-    echo "ACTION REQUIRED: fix_deployed=yes tag=$TAG sandbox_canary=pass. A green canary is NOT proof that hosted Bash works: make a real hosted Bash call, record it in the PIR, open the docs-only PR that sets status: resolved, then close this tracker and remove its follow-through label."
+    echo "ACTION REQUIRED: fix_deployed=$DEPLOYED tag=$TAG sandbox_canary=pass. A green canary is NOT proof that hosted Bash works: make a real hosted Bash call, record it in the PIR, open the docs-only PR that sets status: resolved, then close this tracker and remove its follow-through label."
     exit 5
     ;;
   sandbox_broken)
-    echo "ACTION REQUIRED: REGRESSION fix_deployed=yes tag=$TAG sandbox_canary=fail" >&2
+    echo "ACTION REQUIRED: REGRESSION fix_deployed=$DEPLOYED tag=$TAG sandbox_canary=fail" >&2
     exit 5
     ;;
   *)

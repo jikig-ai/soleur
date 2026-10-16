@@ -451,6 +451,8 @@ describe("agentSessionTmpDir (#10445)", () => {
     expect(a).toBe(agentSessionTmpDir("00000000-0000-0000-0000-00000000000a"));
     expect(a).not.toBe(agentSessionTmpDir("00000000-0000-0000-0000-00000000000b"));
     expect(a.startsWith(`${AGENT_SESSION_TMP_ROOT}/`)).toBe(true);
+    // 44 = the vendored CLI 2.1.284 threshold above which it silently falls back to the SHARED <tmpdir>/claude-<uid> for
+    // children (measured by the CTO ruling, 2026-10-16; G2's own-entry-only assertion re-proves it end to end).
     expect(Buffer.byteLength(`${a}/claude-4294967294`)).toBeLessThanOrEqual(44);
   });
 });
