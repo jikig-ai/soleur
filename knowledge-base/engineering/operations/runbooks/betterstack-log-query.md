@@ -145,6 +145,52 @@ Live standing alarms over this source:
   `apps/web-platform/test/infra/bwrap-probe-rollback-alert.test.sh` (mutation rows). It auto-resolves
   after 10 quiet minutes, which does not mean the cause was found. Runbook and no-SSH decode:
   [`canary-probe-set.md`](./canary-probe-set.md#blocking-bwrap-sandbox-probe--reading-its-self-report-8016-pr-8026).
+- **`logtail_exploration_alert.agent_sandbox_bash_denial`** (#10445, `higher_than 0` over 300 s, evaluated
+  every 60 s, missing data counts as zero): `soleur-agent-sandbox-bash-denial-prd`. **What it matches:** one row
+  from the app container (`CONTAINER_NAME = 'soleur-web-platform'`, no `host_name` conjunct: the name is the
+  same on web-1 and web-2) with `message.feature = 'agent-sandbox'`, `message.op = 'bash-tool-result'` AND
+  `message.sandboxErrorCode = 'helper_userns_eperm'`. That is the live-session mirror of a hosted agent's Bash
+  `tool_result` whose line starts `apply-seccomp:` and carries `Operation not permitted`: the SDK's command-side
+  helper could not create its user namespace, so EVERY Bash call in that session fails. It filters on the new
+  code, not on the whole `op`, so an older `bwrap_eperm` / `proc_mount_eperm` row never pages it. The row carries
+  only the scrubbed matched line and counts, never the command or the output. **First move (no SSH):** (1) read
+  the count and first timestamp with the SQL below; (2) pull `/hooks/deploy-status` (call pattern in
+  `plugins/soleur/skills/postmerge/references/deploy-status-debugging.md`) and read `sandbox_canary`,
+  `sdk_bash_smoke` (once the Stage B smoke has shipped) and the `seccomp_profile_*` fields; (3) if the smoke is
+  red or absent and the count is more than one user, treat it as the shim-filter-versus-SDK-helper collision of
+  [the 2026-10-16 PIR](../post-mortems/hosted-agent-bash-apply-seccomp-userns-eperm-postmortem.md): check whether
+  `network.allowAllUnixSockets` is still set in `agent-runner-sandbox-config.ts` and whether an SDK bump changed
+  the helper-selection condition; do NOT loosen the seccomp filter to unblock (a filter cannot key on the
+  caller). A single row from a single user with a green smoke is the forgery case below. **Wake path: email
+  only.** On the free tier the alert emails the team and nothing else; the Slack wake of
+  [ADR-260](../../architecture/decisions/ADR-260-db-outage-paging-and-bounded-auto-restart.md) is a
+  dashboard-side integration that has NOT been verified for this alert, so do not assume a Slack message
+  accompanies the email until that verification is recorded. **Accepted limitation:** a tenant can print the
+  exact `apply-seccomp:` line from their own Bash and send one email; the debounce and the line-start anchor
+  bound it, and the deploy-time smoke is the authoritative signal. It auto-resolves after 10 quiet minutes,
+  which does not mean the cause was found. Defined in `apps/web-platform/infra/betterstack-logs-alerts.tf`;
+  drift guard `apps/web-platform/test/infra/sandbox-alerts.test.sh` (mutation rows plus a fixture row shaped like
+  a production row). Decode and the deploy-time companion:
+  [`canary-probe-set.md`](./canary-probe-set.md#sdk-bash-smoke-and-the-helper_userns_eperm-denial-10445).
+
+  ```bash
+  # Count and first/last time of helper denials over the last day (hot window plus archive); a nonzero count is
+  # rows, not users: the mirror is per-user debounced.
+  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+    "SELECT count() AS rows, min(dt) AS first, max(dt) AS last
+     FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
+           UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
+     WHERE dt > now() - INTERVAL 1 DAY
+       AND JSONExtractString(raw,'CONTAINER_NAME') = 'soleur-web-platform'
+       AND JSONExtractString(raw,'message','feature') = 'agent-sandbox'
+       AND JSONExtractString(raw,'message','op') = 'bash-tool-result'
+       AND JSONExtractString(raw,'message','sandboxErrorCode') = 'helper_userns_eperm'
+     FORMAT JSONEachRow"
+  ```
+
+  A zero here is only meaningful with a delivery check: before 2026-10-16 no `feature = 'agent-sandbox'` row of
+  any op had reached this source from the app container in 12 days, so confirm the mirror path delivers (a
+  known-good `agent-sandbox` row, or the smoke verdict) before reading zero as "healthy".
 - **`logtail_exploration_alert.ghcr_hostsfile_deny_lost`** (#9391, `higher_than 0`, missing data counts as zero):
   `soleur-ghcr-hostsfile-deny-lost-prd`. It emails (team email on the free tier) when a host's hosts-file GHCR
   deny is no longer in force: a `ci-deploy` row whose whole message is `GHCR_DENY ghcr_blocked=0`, or a

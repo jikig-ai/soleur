@@ -612,3 +612,37 @@ byte-stable only because capture and verify both run as uid 0 in the pinned
 image). `prepDirs` now carries both; a structural test pins "every mount
 target and placeholder-subpath bind source resolves under a prepDirs entry".
 Status stays `adopting` (Deferral A).
+
+## Addendum — 2026-10-16 (#10445): the faithful replay must exercise the command-side wrapper
+
+The faithful canary replays the captured bwrap SETUP argv and ends in `-- true`
+(`parseShimSetupArgv` documents the command tail as model-chosen and never
+replayed). It therefore never runs the process the Agent SDK wraps around every
+sandboxed Bash command: `ARGV0=apply-seccomp /proc/self/fd/<N> <shell> -c <cmd>`.
+From the first production deploy of `web-v0.324.3` (2026-10-06) the shim's
+seccomp filter denied `unshare(CLONE_NEWUSER)`, which that embedded helper needs,
+so every hosted Bash call failed while `sandbox_canary` stayed green
+(`consecutive_pass=108` at the 2026-10-16 readback). The canary's own
+`nested_userns_deny` probe asserted the denial that broke the helper. See
+`knowledge-base/engineering/operations/post-mortems/hosted-agent-bash-apply-seccomp-userns-eperm-postmortem.md`.
+
+**Rule added.** A pass verdict from the faithful canary must be backed by a probe
+that executes a real Bash command through the SDK's real command-side path (the
+wrapper the SDK emits, not a captured tail) inside the production container, under
+the production run tuple and the shipped shim. A replay that ends in a command
+which never reaches the wrapper certifies the setup argv only and must not be
+described, in a verdict or in a runbook, as proof that Bash works. The probe
+reports a coverage field in the verdict so a replay-only pass is distinguishable
+from a wrapper-exercising pass.
+
+**Promotion is unchanged and still the ADR's.** The new probe (`sdk_bash_smoke`)
+ships non-blocking first (`wg-dark-launch-deploy-gates`) and is promoted to the
+blocking lane under this ADR's own soak criterion: 5 green verdicts over at least
+3 days, with the coverage field present. `smoke_infra_error` holds the soak and
+never rolls back. This addendum introduces no new soak number.
+
+**Scope.** This amends the Decision's canary contract (section 2) only. It does not
+change the profile-to-redeploy coupling (section 3), the interim mechanism, or the
+Adopting to Accepted criteria. Status stays `adopting` (Deferral A).
+
+**Status.** The `sdk_bash_smoke` probe described above is deferred to #10453 (time-boxed per the CTO's 2026-10-16 ruling). Until it ships, the wrapped-command guard is pre-merge only: `test/sandbox-wrapped-command-runtime.test.ts` (CI runner) and the wrapped-command control/treatment arms of `infra/sandbox-masked-proc-docker.test.sh` (production run tuple, driven by `infra/lib/sdk-bash-probe.mjs`). The faithful canary's replay is still blind to the command-side wrapper, which is exactly why the probe is required before this ADR's blocking promotion.
