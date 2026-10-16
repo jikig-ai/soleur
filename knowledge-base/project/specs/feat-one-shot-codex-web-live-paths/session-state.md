@@ -1829,6 +1829,13 @@
   and checker source match main exactly. Existing bot PR #10420 supplies the
   two-file v1.1.56 pin update; it was verified OPEN, armed and awaiting CI. This
   continuation does not alter that PR, deploy its change or observe an image.
+- Carrying the existing fix into this branch changes exactly the four pin
+  replacements from PR #10420 (v1.1.56, published digest
+  `a7557da673788bcc793eb5c96a4bdc8983f7197ba37b3e1765af7b8798bd6ca1`).
+  The bounded static/mocked suite now passes 269/269, including the rendered
+  checks; its unconditional floor is 192/192. This reads source and runs fake
+  peers only: no image pull/build/inspection or live infrastructure change.
+  The source-registration census also passes: 700 covered, zero orphans.
 - Ref #10082 and Ref #9791 remain verified OPEN: SAST VOID and latest-source
   C.9 unverified. Keep draft/disarmed/default-off/customer-blocked. Actual
   reviewed profiles/observations, fresh exact-action approval, recovery and
