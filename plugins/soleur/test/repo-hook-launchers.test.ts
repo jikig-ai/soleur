@@ -94,8 +94,8 @@ function marker(root: string, expected: Invocation, owner: string) {
   }
 }
 const payload = Buffer.from("synthesized input\u0000with bytes\n\n");
-function run(registration: Registration, cwd: string, extra: Record<string, string> = {}, stdin = payload) {
-  return Bun.spawnSync(["/bin/bash", "-c", registration.command], {
+function run(registration: Registration, cwd: string, extra: Record<string, string> = {}, stdin = payload, shell = "/bin/bash") {
+  return Bun.spawnSync([shell, "-c", registration.command], {
     cwd, env: { ...environment, ...extra }, stdin, timeout: 10000,
   });
 }
@@ -211,21 +211,20 @@ for (const [index, entry] of affected.entries()) {
     expect(result.stdout.toString()).toBe("");
     expect(existsSync(spies.HOOK_INTERPRETER_LOG)).toBe(false);
 
-    // Explicit failure branches: non-bare root-probe error, then bare=true with
-    // an absolute-git-dir error. Neither may attempt an empty-root script path.
+    // The fallback combines both Git fields in one process. Reject a non-bare
+    // response, a failed probe, and a positive-bare response without a git dir.
     const probeBin = directory("git probe stubs");
-    for (const bare of ["false", "probe-error", "true"]) {
+    for (const bare of ["false", "probe-error", "true-missing-dir"]) {
       const probeLog = join(temporary, "git probe calls");
       rmSync(probeLog, { force: true });
-      const bareReply = bare === "probe-error" ? "exit 29" : `printf '%s\\n' '${bare}'`;
-      write(join(probeBin, "git"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOOK_PROBE_LOG"\ncase "$*" in\n'rev-parse --show-toplevel') exit 23;;\n'rev-parse --is-bare-repository') ${bareReply};;\n'rev-parse --absolute-git-dir') exit 31;;\n*) exit 99;;\nesac\n`);
-      const failed = run(entry, outside, { ...spies, PATH: `${probeBin}:${spies.PATH}`, HOOK_PROBE_LOG: probeLog });
+      const bareReply = bare === "probe-error" ? "exit 29" : bare === "false" ? "printf 'false\\n%s\\n' '/not/bare'" : "printf '%s\\n' 'true'";
+      write(join(probeBin, "git"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOOK_PROBE_LOG"\ncase "$*" in\n'rev-parse --show-toplevel') exit 23;;\n'rev-parse --is-bare-repository --absolute-git-dir') ${bareReply};;\n*) exit 99;;\nesac\n`);
+      const failed = run(entry, outside, { ...spies, PATH: `${probeBin}:${spies.PATH}`, HOOK_PROBE_LOG: probeLog }, payload, Bun.which("dash")!);
       expect(failed.exitCode).not.toBe(0);
       expect(failed.stdout.toString()).toBe("");
       expect(existsSync(spies.HOOK_INTERPRETER_LOG)).toBe(false);
       expect(readFileSync(probeLog, "utf8").trim().split("\n")).toEqual([
-        "rev-parse --show-toplevel", "rev-parse --is-bare-repository",
-        ...(bare === "true" ? ["rev-parse --absolute-git-dir"] : []),
+        "rev-parse --show-toplevel", "rev-parse --is-bare-repository --absolute-git-dir",
       ]);
     }
   });
