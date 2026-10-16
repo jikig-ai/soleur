@@ -1884,6 +1884,85 @@ AFFECTED_TESTS_SCRIPTS_INFRA_PRIVILEGED_TIER_CENSUS_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# tests/scripts/trio-baseline-census — the deploy-channel trio census, Guard 1a (#9294 G1). Its population is
+# `git ls-files --cached --others` repo-wide (every file can name the trio: .github, scripts, plugins, apps, and the
+# .md skill docs), minus the prose and media under knowledge-base/ and docs/ (a CODE extension there is scanned); it
+# reads the sibling census for the Tier-B environment set, and its ratchet reads git history. So the edge is every
+# top-level entry (declared, not derived: no argv literal reaches the files it scans; a new top-level entry needs a
+# line here, and the suite's A5 row fails when one is missing) plus one `glob:knowledge-base/**.<ext>` per code
+# extension it scans there (the suite pins that list as the `@kbcode` record and A5 checks the two agree). ADR-241 is
+# declared individually: the ratchet diffs its Re-date and Allow lines. The self-edge literal is required by the
+# declared-edge census.
+AFFECTED_TESTS_SCRIPTS_TRIO_BASELINE_CENSUS_PATHS=(
+  ".agents/"
+  ".bun-version"
+  ".claude-plugin/"
+  ".claude/"
+  ".codex/"
+  ".cursor-plugin/"
+  ".devin/"
+  ".doppler.yaml"
+  ".gitattributes"
+  ".github/"
+  ".gitignore"
+  ".gitleaks.toml"
+  ".gitleaksignore"
+  ".grok/"
+  ".markdownlint.json"
+  ".markdownlintignore"
+  ".mcp.json"
+  ".nvmrc"
+  "AGENTS.md"
+  "AGENTS.rules.md"
+  "CLAUDE.md"
+  "CODE_OF_CONDUCT.md"
+  "CONTRIBUTING.md"
+  "LICENSE"
+  "LICENSES/"
+  "README.md"
+  "apps/"
+  "bin/"
+  "bunfig.toml"
+  "cla-smoke-test.md"
+  "docs/"
+  "eleventy.config.js"
+  "feature-request-plugin-dir-settings.md"
+  "feature-request-plugin-update-surfaces-install-divergence.md"
+  "infra/"
+  "lefthook.yml"
+  "package-lock.json"
+  "package.json"
+  "plugins/"
+  "pricing-wireframe.pen"
+  "scripts/"
+  "spike/"
+  "test/"
+  "tests/"
+  "todos/"
+  "glob:knowledge-base/**.sh"
+  "glob:knowledge-base/**.bash"
+  "glob:knowledge-base/**.py"
+  "glob:knowledge-base/**.ts"
+  "glob:knowledge-base/**.tsx"
+  "glob:knowledge-base/**.js"
+  "glob:knowledge-base/**.jsx"
+  "glob:knowledge-base/**.mjs"
+  "glob:knowledge-base/**.cjs"
+  "glob:knowledge-base/**.yml"
+  "glob:knowledge-base/**.yaml"
+  "glob:knowledge-base/**.tf"
+  "glob:knowledge-base/**.tfvars"
+  "glob:knowledge-base/**.tmpl"
+  "glob:knowledge-base/**.hcl"
+  "glob:knowledge-base/**.toml"
+  "glob:knowledge-base/**.json"
+  "glob:knowledge-base/**.cfg"
+  "glob:knowledge-base/**.service"
+  "glob:knowledge-base/**.timer"
+  "knowledge-base/engineering/architecture/decisions/ADR-241-terraform-credentials-are-tiered-main-only-environment-secrets.md"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # scripts/battery-tag-authorship — census of tag-authoring git commands reachable from the battery:
 # the write-boundary softening in repo-write-boundary.sh and the runner's own command surface.
 AFFECTED_SCRIPTS_BATTERY_TAG_AUTHORSHIP_PATHS=(

@@ -1,0 +1,190 @@
+# tests/scripts/trio-baseline.tsv  (#9294 G1, Guard 1a; read by tests/scripts/test-trio-baseline-census.sh)
+#
+# The name-reference census of the deploy-channel trio (WEBHOOK_DEPLOY_SECRET, CF_ACCESS_CLIENT_ID,
+# CF_ACCESS_CLIENT_SECRET and every name in their token family: *_NEXT, TF_VAR_ and lower-case spellings),
+# a REGRESSION RATCHET, not a reachability proof. Every (file, name) key that names the family in code has a
+# row here; the file only ratchets forward (see the suite header for the exact rules):
+#   - a key absent from the merge-base copy is RED unless an @allow line for that exact (file, name) exists
+#     at the merge-base and the same diff deletes it (land a reviewed @allow-only PR first); a NEW @allow line
+#     is itself admitted only in a baseline/ADR-241-only diff whose ADR diff adds
+#     'Allow: <file> <NAME> ... Ruled by <owner>' for it;
+#   - the tag of a key never changes and equals the group computed from its path; its class only moves
+#     tier-a -> tier-b|sink; its expiry is never later (a re-date needs an ADR-241 line 'Re-date: <YYYY-MM-DD> ...
+#     Ruled by <owner>' in a baseline/ADR-only diff);
+#   - a row whose consumer no longer names the family is RED (the PR that moves a consumer deletes its row), and
+#     so is a deleted row whose name reappears in an exempt file ADDED by the same diff;
+#   - the base copy FAILS CLOSED: an unresolved ref or any failing git call is RED (TRIO_ALLOW_NO_BASE=1 is a
+#     local-only escape).
+# 'Ruled by' lines are self-attested text in this repository: the ratchet defends against accident and drift, not
+# against a PR author (the platform does not require a second reviewer).
+#
+# Records (tab-separated; '#' lines and blank lines are ignored):
+#   @stems / @exempt / @binary / @kbcode   the pinned guard constants (stems of the name family; the structural
+#                                          test class: directory segments ; suffixes; the binary extensions that are
+#                                          skipped; the code extensions that ARE scanned under knowledge-base/ and
+#                                          docs/). Each must equal the scanner constant AND the base copy's record.
+#   @allow file name max-expiry tag        a reserved NEW key (not a row; T1 does not require a row until the consumer
+#                                          exists); its tag is the group computed from file
+#   file name class expires tag            a row
+# Classes (COMPUTED by the scanner; the baseline must agree, T5c):
+#   tier-a  a READ SHAPE in a file that names the trio: any `doppler run` or `doppler secrets get|download`
+#           invocation (regardless of arguments), ${{ secrets.<NAME> }}, a ${!var} indirection of a family name,
+#           terraform output -raw access_service_token_client_*; or a workflow naming the trio in a job without a
+#           literal Tier-B environment (an expression, a matrix, unparseable YAML are not literals); or a composite
+#           action; any FALLBACK:* or ALIAS:* row. Expiry required (strict ISO, at most MAX_EXPIRY 2027-03-31).
+#           TERMINAL: the end state is ZERO tier-a rows.
+#   tier-b  a workflow with no read shape where every job naming the trio (every job, when a workflow-level key
+#           names it) declares a literal environment: in the Tier-B set (single-sourced from the sibling Tier-B
+#           census, tests/scripts/test-infra-privileged-tier-census). Expiry '-'.
+#   sink    a non-workflow file with no read shape (variables.tf, server.tf, hooks.json.tmpl, host scripts). Expiry '-'.
+# Tags: #9294:PR-n is the consumer group of the plan, COMPUTED from the path by the scanner (a row or @allow whose
+# tag differs is RED). ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_ID|SECRET rows cover the Terraform spellings of the DEPLOY
+# Access token (tunnel.tf) and `terraform output -raw`; the ci_ssh and registry_push tokens are other credentials (G1b).
+# FALLBACK:<NAME> rows record `|| doppler secrets get <other credential>` on a (continuation-joined) line that names the
+# trio. The :- and `|| echo` fallback shapes wait for PR-2.
+#
+# EXPIRY 2026-11-30 (tier-a rows). The git-data plaintext-volume date is 2026-11-12 and the plan sequences G1 behind
+# the git-data rehearsal and wipe (Ruled by CTO agent, 2026-10-15, D-1): PR-2 to PR-4 either finish before the
+# rehearsal dispatch or resume after the wipe, so every row must outlive the wipe window and force the move soon
+# after it. Past expiry is a hard RED only on a blocking event that touches a tier-a row's file, this baseline or
+# ADR-241; on a main push, schedule, merge-queue gate or dispatch-on-main it is a non-blocking annotation (T3m), so an
+# expired row never stops a tenant deploy. Within 21 days: a T3w warning.
+#
+# KNOWN BLIND SPOTS (this census names; it does not trace). Reach WITHOUT naming is closed by deleting the Tier-A
+# and repo-secret copies and by the main-only environment policy (sibling census G1b-G1d, G1h), not here:
+#   - `doppler run -c prd_terraform` injecting the whole project, and bulk `doppler secrets download`, in a file that
+#     does not itself name the trio;
+#   - `secrets: inherit` and `toJSON(secrets)` into a callee workflow;
+#   - computed names (`secrets[format(...)]`, `"${n}_DEPLOY_SECRET"`), and a ${!var} indirection whose family name is
+#     assigned on another line;
+#   - callers of a baselined script that fetches the trio itself (infra-config-verify.sh, verify-tunnel-ingress-origin.sh);
+#   - host-side readers of the rendered /etc/webhook/hooks.json.
+# Acceptance criterion 1 is therefore: zero tier-a rows PLUS the owner-run deletion postcondition in the final PR body.
+# The G1b names (CI_SSH_ACCESS_TOKEN_*, DEPLOY_SSH_PRIVATE_KEY) are not tracked here (separate property, #8609).
+#
+# REGENERATE (derived from the tree, never hand-listed): keep this prose header and replace everything below it with
+#   bash tests/scripts/test-trio-baseline-census.sh --emit-baseline
+# (it prints the pinned records, the @allow lines that have not been spent, and the rows; an existing key keeps its tag
+# and its possibly re-dated expiry, a key that spends an @allow takes the allow's tag and max-expiry, a new key takes the
+# group tag and expiry 2026-11-30 on tier-a).
+@stems WEBHOOK_DEPLOY_SECRET,CF_ACCESS_CLIENT_ID,CF_ACCESS_CLIENT_SECRET
+@exempt __tests__,fixtures,test,tests;.test.*,.spec.*,.tftest.hcl
+@binary 7z,a,avif,bin,bmp,bpf,bz2,class,db,dylib,eot,gif,gz,ico,jar,jpeg,jpg,mov,mp3,mp4,o,otf,pdf,pen,png,so,sqlite,tgz,tif,tiff,tsq,tsr,ttf,wasm,webm,webp,woff,woff2,xz,zip
+@kbcode bash,cfg,cjs,hcl,js,json,jsx,mjs,py,service,sh,tf,tfvars,timer,tmpl,toml,ts,tsx,yaml,yml
+@allow	apps/web-platform/infra/variables.tf	WEBHOOK_DEPLOY_SECRET_NEXT	-	#9294:PR-2
+@allow	apps/web-platform/infra/server.tf	WEBHOOK_DEPLOY_SECRET_NEXT	-	#9294:PR-2
+@allow	apps/web-platform/infra/hooks.json.tmpl	WEBHOOK_DEPLOY_SECRET_NEXT	-	#9294:PR-2
+@allow	apps/web-platform/infra/cloud-init.yml	WEBHOOK_DEPLOY_SECRET_NEXT	-	#9294:PR-2
+@allow	apps/web-platform/infra/soleur-host-bootstrap.sh	WEBHOOK_DEPLOY_SECRET_NEXT	-	#9294:PR-2
+.github/actions/dispatch-web-redeploy/track.sh	CF_ACCESS_CLIENT_ID	sink	-	#9294:PR-2
+.github/actions/dispatch-web-redeploy/track.sh	CF_ACCESS_CLIENT_SECRET	sink	-	#9294:PR-2
+.github/actions/dispatch-web-redeploy/track.sh	WEBHOOK_DEPLOY_SECRET	sink	-	#9294:PR-2
+.github/workflows/apply-deploy-pipeline-fix.yml	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-2
+.github/workflows/apply-deploy-pipeline-fix.yml	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
+.github/workflows/apply-deploy-pipeline-fix.yml	FALLBACK:CI_SSH_ACCESS_TOKEN_ID	tier-a	2026-11-30	#9294:PR-2
+.github/workflows/apply-deploy-pipeline-fix.yml	FALLBACK:CI_SSH_ACCESS_TOKEN_SECRET	tier-a	2026-11-30	#9294:PR-2
+.github/workflows/apply-deploy-pipeline-fix.yml	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
+.github/workflows/apply-web-platform-infra.yml	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-2
+.github/workflows/apply-web-platform-infra.yml	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
+.github/workflows/apply-web-platform-infra.yml	FALLBACK:CI_SSH_ACCESS_TOKEN_ID	tier-a	2026-11-30	#9294:PR-2
+.github/workflows/apply-web-platform-infra.yml	FALLBACK:CI_SSH_ACCESS_TOKEN_SECRET	tier-a	2026-11-30	#9294:PR-2
+.github/workflows/apply-web-platform-infra.yml	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
+.github/workflows/canary-status.yml	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-3
+.github/workflows/canary-status.yml	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-3
+.github/workflows/canary-status.yml	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-3
+.github/workflows/cutover-inngest.yml	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-4
+.github/workflows/cutover-inngest.yml	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-4
+.github/workflows/cutover-inngest.yml	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-4
+.github/workflows/deploy-inngest-image.yml	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-4
+.github/workflows/deploy-inngest-image.yml	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-4
+.github/workflows/deploy-inngest-image.yml	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-4
+.github/workflows/git-data-cutover.yml	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-2
+.github/workflows/git-data-cutover.yml	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
+.github/workflows/git-data-cutover.yml	FALLBACK:CI_SSH_ACCESS_TOKEN_ID	tier-a	2026-11-30	#9294:PR-2
+.github/workflows/git-data-cutover.yml	FALLBACK:CI_SSH_ACCESS_TOKEN_SECRET	tier-a	2026-11-30	#9294:PR-2
+.github/workflows/git-data-cutover.yml	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
+.github/workflows/restart-inngest-server.yml	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-4
+.github/workflows/restart-inngest-server.yml	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-4
+.github/workflows/restart-inngest-server.yml	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-4
+.github/workflows/scheduled-followthrough-sweeper.yml	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-4
+.github/workflows/scheduled-followthrough-sweeper.yml	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-4
+.github/workflows/scheduled-followthrough-sweeper.yml	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-4
+.github/workflows/scheduled-inngest-health.yml	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-4
+.github/workflows/scheduled-inngest-health.yml	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-4
+.github/workflows/scheduled-inngest-health.yml	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-4
+.github/workflows/web-platform-release.yml	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-3
+.github/workflows/web-platform-release.yml	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-3
+.github/workflows/web-platform-release.yml	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-3
+apps/web-platform/infra/cloud-init-web-zot-seed.test.sh	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
+apps/web-platform/infra/cloud-init.yml	WEBHOOK_DEPLOY_SECRET	sink	-	#9294:PR-2
+apps/web-platform/infra/cutover-inngest-workflow.test.sh	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-2
+apps/web-platform/infra/cutover-inngest-workflow.test.sh	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
+apps/web-platform/infra/cutover-inngest-workflow.test.sh	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
+apps/web-platform/infra/hooks.json.tmpl	WEBHOOK_DEPLOY_SECRET	sink	-	#9294:PR-2
+apps/web-platform/infra/infra-config-repush-mutation.test.sh	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
+apps/web-platform/infra/infra-config-repush-mutation.test.sh	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
+apps/web-platform/infra/infra-config-verify.sh	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-2
+apps/web-platform/infra/infra-config-verify.sh	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
+apps/web-platform/infra/infra-config-verify.sh	FALLBACK:CI_SSH_ACCESS_TOKEN_ID	tier-a	2026-11-30	#9294:PR-2
+apps/web-platform/infra/infra-config-verify.sh	FALLBACK:CI_SSH_ACCESS_TOKEN_SECRET	tier-a	2026-11-30	#9294:PR-2
+apps/web-platform/infra/infra-config-verify.sh	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
+apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-2
+apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
+apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh	FALLBACK:CI_SSH_ACCESS_TOKEN_ID	tier-a	2026-11-30	#9294:PR-2
+apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh	FALLBACK:CI_SSH_ACCESS_TOKEN_SECRET	tier-a	2026-11-30	#9294:PR-2
+apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
+apps/web-platform/infra/server.tf	CF_ACCESS_CLIENT_ID	sink	-	#9294:PR-2
+apps/web-platform/infra/server.tf	CF_ACCESS_CLIENT_SECRET	sink	-	#9294:PR-2
+apps/web-platform/infra/server.tf	WEBHOOK_DEPLOY_SECRET	sink	-	#9294:PR-2
+apps/web-platform/infra/soleur-host-bootstrap.sh	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
+apps/web-platform/infra/tunnel.tf	ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_ID	tier-a	2026-11-30	#9294:PR-2
+apps/web-platform/infra/tunnel.tf	ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
+apps/web-platform/infra/variables.tf	CF_ACCESS_CLIENT_ID	sink	-	#9294:PR-2
+apps/web-platform/infra/variables.tf	CF_ACCESS_CLIENT_SECRET	sink	-	#9294:PR-2
+apps/web-platform/infra/variables.tf	WEBHOOK_DEPLOY_SECRET	sink	-	#9294:PR-2
+apps/web-platform/scripts/github-app-key-status.sh	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-4
+apps/web-platform/scripts/github-app-key-status.sh	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-4
+apps/web-platform/scripts/github-app-key-status.sh	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-4
+knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-8609-evict-runtime-app-key-prd/bootstrap.sh	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-2
+knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-8609-evict-runtime-app-key-prd/bootstrap.sh	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
+knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-8609-evict-runtime-app-key-prd/bootstrap.sh	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
+plugins/soleur/skills/plan/references/plan-sharp-edges.md	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
+plugins/soleur/skills/postmerge/SKILL.md	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-2
+plugins/soleur/skills/postmerge/SKILL.md	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
+plugins/soleur/skills/postmerge/SKILL.md	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
+plugins/soleur/skills/postmerge/references/deploy-status-debugging.md	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-2
+plugins/soleur/skills/postmerge/references/deploy-status-debugging.md	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
+plugins/soleur/skills/postmerge/references/deploy-status-debugging.md	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
+plugins/soleur/skills/qa/SKILL.md	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-2
+plugins/soleur/skills/qa/SKILL.md	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
+plugins/soleur/skills/qa/SKILL.md	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
+plugins/soleur/skills/ship/SKILL.md	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-2
+plugins/soleur/skills/ship/SKILL.md	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
+plugins/soleur/skills/ship/SKILL.md	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
+plugins/soleur/test/terraform-target-parity.test.ts	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
+scripts/check-deploy-script-parity.sh	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-2
+scripts/check-deploy-script-parity.sh	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
+scripts/check-deploy-script-parity.sh	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
+scripts/cutover-inngest.sh	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-2
+scripts/cutover-inngest.sh	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
+scripts/followthroughs/canary-promotion-5875.sh	CF_ACCESS_CLIENT_ID	sink	-	#9294:PR-4
+scripts/followthroughs/canary-promotion-5875.sh	CF_ACCESS_CLIENT_SECRET	sink	-	#9294:PR-4
+scripts/followthroughs/canary-promotion-5875.sh	WEBHOOK_DEPLOY_SECRET	sink	-	#9294:PR-4
+scripts/followthroughs/infra-config-activation-7220.sh	CF_ACCESS_CLIENT_ID	sink	-	#9294:PR-4
+scripts/followthroughs/infra-config-activation-7220.sh	CF_ACCESS_CLIENT_SECRET	sink	-	#9294:PR-4
+scripts/followthroughs/infra-config-activation-7220.sh	WEBHOOK_DEPLOY_SECRET	sink	-	#9294:PR-4
+scripts/followthroughs/infra-config-fatal-channel-7220.sh	CF_ACCESS_CLIENT_ID	sink	-	#9294:PR-4
+scripts/followthroughs/infra-config-fatal-channel-7220.sh	CF_ACCESS_CLIENT_SECRET	sink	-	#9294:PR-4
+scripts/followthroughs/infra-config-fatal-channel-7220.sh	WEBHOOK_DEPLOY_SECRET	sink	-	#9294:PR-4
+scripts/followthroughs/inngest-soak-6178.sh	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-4
+scripts/followthroughs/inngest-soak-6178.sh	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-4
+scripts/followthroughs/inngest-soak-6178.sh	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-4
+scripts/followthroughs/tenant-outer-wrap-soak-5863.sh	CF_ACCESS_CLIENT_ID	sink	-	#9294:PR-4
+scripts/followthroughs/tenant-outer-wrap-soak-5863.sh	CF_ACCESS_CLIENT_SECRET	sink	-	#9294:PR-4
+scripts/followthroughs/tenant-outer-wrap-soak-5863.sh	WEBHOOK_DEPLOY_SECRET	sink	-	#9294:PR-4
+scripts/followthroughs/workspace-isolation-verdict-2640.sh	CF_ACCESS_CLIENT_ID	sink	-	#9294:PR-4
+scripts/followthroughs/workspace-isolation-verdict-2640.sh	CF_ACCESS_CLIENT_SECRET	sink	-	#9294:PR-4
+scripts/followthroughs/workspace-isolation-verdict-2640.sh	WEBHOOK_DEPLOY_SECRET	sink	-	#9294:PR-4
+tests/scripts/test-argv-bearer-sweep.sh	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-2
+tests/scripts/test-argv-bearer-sweep.sh	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
+tests/scripts/test-argv-bearer-sweep.sh	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
