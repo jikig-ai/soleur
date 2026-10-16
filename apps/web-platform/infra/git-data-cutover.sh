@@ -61,7 +61,7 @@
 # LUKS mapper at /mnt/git-data from boot and the bootstrap plants the fence on it. There is
 # nothing to copy, because the store has never held a repository.
 #
-# MODES (#8211 PR2). MODE selects the verb — proof (default), freeze, unfreeze, probe.
+# MODES (#8211 PR2, #10138). MODE selects the verb — proof (default), freeze, unfreeze, probe, wipe_assert.
 # The flag write and the fleet redeploy are WORKFLOW steps, not script verbs: this script
 # reads no secret store and the webhook credentials never reach it. Host-side mode mapping:
 #   workflow flip     -> precheck(flip) -> preconditions -> MODE=freeze -> flag write ->
@@ -92,7 +92,8 @@
 # A host-key failure is its own verdict, host_key_mismatch, with a reason word (see
 # _access_reason, plan H4).
 #
-# CAPTURED VALUES (P8). gd_capture bounds every remote read (30 s, 4096 bytes), accepts a value
+# CAPTURED VALUES (P8). gd_capture bounds every remote read (30 s by default, 4096 bytes; a caller may
+# pass a script file for stdin and a longer bound of at most 999 s), accepts a value
 # only when it matches an anchored pattern in full, and never prints the value. A pinned host
 # key authenticates the host, not the answer's truth: a compromised web-1 or git-data can still
 # answer "mounted, empty", so the bounds stay.
@@ -183,11 +184,20 @@ trap cleanup EXIT
 #             mapper, marker bound, NOT frozen; a booting host reads as its store verdict and
 #             nothing is pushed or removed), then provision + fenced push + remove of a
 #             synthetic id (cutover-probe-<lineage>), leaving zero residue.
-# The legacy arm still stands for DRY_RUN!=1/CONFIRM_WIPE!=0 (the wipe is a later PR);
+#   wipe_assert (#10138) the READ-ONLY host evidence the wipe workflow gates its Hetzner detach and
+#             delete on: ONE ssh session runs git-data-wipe-assert.sh (sent on stdin to `bash -s`)
+#             and prints one fixed-shape line of digits and fixed words, never a name. Inputs
+#             (env, validated before any host is dialed): WIPE_PHASE=pre|finish|post_detach|clear,
+#             WIPE_VOLUME_ID (the typed plaintext volume id), WIPE_LUKS_VOLUME_ID, WIPE_SERVER_ID,
+#             and for pre: WIPE_ROW_DT (the boot_complete row's dt: epoch seconds or
+#             `YYYY-MM-DD HH:MM:SS`, UTC) and WIPE_LISTING=run|skip (skip = the finish phase: no
+#             snapshot is taken, layout_signal=not_run; wipe_check and wipe both run the listing). Verdicts are exit 5 with a fixed word.
+# The legacy arm still stands for DRY_RUN!=1/CONFIRM_WIPE!=0 (refused below: the wipe is the `wipe` job of
+# the workflow, which drives MODE=wipe_assert and the Hetzner helper, not this script's legacy env);
 # ROLLBACK=1 maps to MODE=rollback at the WORKFLOW level, not here.
 MODE="${MODE:-proof}"
 case "$MODE" in
-  proof|freeze|unfreeze|probe) : ;;
+  proof|freeze|unfreeze|probe|wipe_assert) : ;;
   *) log "REFUSE verdict=mode_invalid mode=${MODE}"
      echo "::error title=git-data-cutover::verdict=mode_invalid"
      exit 5 ;;
@@ -207,7 +217,7 @@ refuse_legacy_modes() {
   [ -n "$bad" ] || return 0
   log "REFUSE verdict=real_cutover_unreconciled vars=${bad# }"
   echo "::error title=git-data-cutover::verdict=real_cutover_unreconciled"
-  log "remedy: MODE selects the verb (proof|freeze|unfreeze|probe); the wipe remains a later PR (#8211)."
+  log "remedy: MODE selects the verb (proof|freeze|unfreeze|probe|wipe_assert); the plaintext-volume wipe is the workflow's wipe job (#10138), not these env words."
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     printf -- '- REFUSE verdict=real_cutover_unreconciled\n' >> "$GITHUB_STEP_SUMMARY" || true
   fi
@@ -268,12 +278,16 @@ probe_freeze() {
 # ============================================================================
 # gd_capture — one bounded, pattern-validated remote read on git-data (D-7)
 # ============================================================================
-# gd_capture <anchored-regex> <remote-cmd>: runs the command over GIT_DATA_SSH with a 30 s
-# bound, refuses more than 4096 bytes of stdout, takes ssh's own rc (PIPESTATUS[0], not the
-# pipeline's), strips ONE trailing newline, and accepts the value only when it matches the
-# pattern in full. A multi-line value never matches. On success GD_CAPTURED holds the value;
-# on failure it is empty and the return is ssh's rc, or 96 on a mismatch. The value is never
+# gd_capture <anchored-regex> <remote-cmd> [<stdin-file> [<timeout-seconds>]]: runs the command over
+# GIT_DATA_SSH with a 30 s bound, refuses more than 4096 bytes of stdout, takes ssh's own rc
+# (PIPESTATUS[0], not the pipeline's), strips ONE trailing newline, and accepts the value only when
+# it matches the pattern in full. A multi-line value never matches. On success GD_CAPTURED holds the
+# value; on failure it is empty and the return is ssh's rc, or 96 on a mismatch. The value is never
 # printed; a failed read's stderr goes out capped and filtered through _access_stderr.
+# The two optional parameters exist for ONE caller (mode_wipe_assert, which sends a host-side script on
+# stdin to `bash -s` and needs longer than 30 s for a snapshot read); with neither, the call is
+# byte-for-byte the old one: stdin /dev/null, 30 s. The stdin file must be a regular file; the bound a
+# positive integer of at most three digits. A malformed one is a local failure (95), never a default.
 _capture_tmp_drop() {
   [ -n "$CAPTURE_TMP" ] || return 0
   rm -f "$CAPTURE_TMP/capture.err"
@@ -281,16 +295,18 @@ _capture_tmp_drop() {
   CAPTURE_TMP=""
 }
 gd_capture() {
-  local pat="$1" cmd="$2" rc=0 val=""
+  local pat="$1" cmd="$2" sin="${3:-/dev/null}" tmo="${4:-30}" rc=0 val=""
   local -a inv
   GD_CAPTURED=""
   read -ra inv <<< "${GIT_DATA_SSH:-}"
   [ "${#inv[@]}" -gt 0 ] || return 97
+  [[ "$tmo" =~ ^[1-9][0-9]{0,2}$ ]] || return 95
+  if [ "$sin" != /dev/null ] && [ ! -f "$sin" ]; then return 95; fi
   if [ -z "$CAPTURE_TMP" ]; then CAPTURE_TMP="$(mktemp -d)" || return 95; fi
   : > "$CAPTURE_TMP/capture.err" || return 95
   # One byte past the cap is read so an oversized answer is refused, never truncated into a
   # value that happens to match. The trailing '.' keeps $(...) from eating newlines.
-  val="$(timeout 30 "${inv[@]}" -o BatchMode=yes -o ConnectTimeout=20 "$GIT_DATA_HOST" "$cmd" </dev/null 2>"$CAPTURE_TMP/capture.err" | head -c 4097
+  val="$(timeout "$tmo" "${inv[@]}" -o BatchMode=yes -o ConnectTimeout=20 "$GIT_DATA_HOST" "$cmd" <"$sin" 2>"$CAPTURE_TMP/capture.err" | head -c 4097
     st=("${PIPESTATUS[@]}"); printf '.'; exit "${st[0]}")" || rc=$?
   val="${val%.}"
   if [ "$rc" -ne 0 ]; then
@@ -871,6 +887,126 @@ mode_probe() {
 }
 
 # ============================================================================
+# wipe_assert — the host-side evidence read for the wipe (#10138, design 3.3)
+# ============================================================================
+# One gd_capture call: the script body goes on STDIN to `bash -s` (the optional gd_capture
+# parameters), the typed id, the LUKS id and the server id %q-quoted in front of it. The script's own
+# exit code names the stage; this verb maps each to a fixed verdict word (table in the script's
+# header; the suite derives both sides and compares them). Anything else, and every transport rc, is
+# probe_failed rc=<n>, never a verdict about the host. The answer is digits and fixed words, matched in
+# full; the value is accepted per phase so a `finish` answer cannot satisfy a `pre` call.
+# Bounds: a `pre` with the snapshot listing runs a throwaway device-mapper snapshot on the host, so it
+# gets 300 s, a `clear` 240 s (the host's own budget); every other call 90 s. Nothing here is writable toward the store or the volume.
+# The wipe_assert verb's own emitters: the same STORE line, but a surface of its own. The runbook's
+# store-probe word census (case RB of git-data-cutover-access.test.sh) covers the proof/fence probes;
+# the wipe words are held to their own parity rows (git-data-wipe-assert.test.sh P1-P3).
+_wipe_refuse() { _store_refuse wipe-assert "$@"; }
+_wipe_emit() { _store_emit wipe-assert "$@"; }
+# ADR-239 outer date for the ledger exception and the CLO re-ruling; not a retention end.
+WIPE_OUTER_DATE="2026-11-12"
+mode_wipe_assert() {
+  step "wipe_assert: host evidence for the plaintext-volume wipe (read-only toward the store and the volume)"
+  local phase="${WIPE_PHASE:-}" typed="${WIPE_VOLUME_ID:-}" luks="${WIPE_LUKS_VOLUME_ID:-}" srv="${WIPE_SERVER_ID:-}"
+  local row="${WIPE_ROW_DT:-}" listing="${WIPE_LISTING:-}" body pat cmd tmo rc=0 qa qb qc qr qm qk qp ql qd
+  local here iso_re='^[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z?$'
+  [[ "$phase" =~ ^(pre|finish|post_detach|clear)$ ]] || _wipe_refuse probe_failed "" arg_phase
+  [[ "$typed" =~ ^[0-9]{1,12}$ ]] || _wipe_refuse probe_failed "" arg_volume_id
+  [[ "$luks" =~ ^[0-9]{1,12}$ ]] || _wipe_refuse probe_failed "" arg_luks_volume_id
+  [[ "$srv" =~ ^[0-9]{1,12}$ ]] || _wipe_refuse probe_failed "" arg_server_id
+  [ "$typed" != "$luks" ] || _wipe_refuse wipe_target_is_luks
+  if [ "$phase" = pre ]; then
+    if [[ "$row" =~ $iso_re ]]; then
+      row="$(date -u -d "${row%%.*}" +%s 2>/dev/null)" || _wipe_refuse probe_failed "" arg_row_dt
+    fi
+    [[ "$row" =~ ^[0-9]{9,11}$ ]] || _wipe_refuse probe_failed "" arg_row_dt
+    [[ "$listing" =~ ^(run|skip)$ ]] || _wipe_refuse probe_failed "" arg_listing
+  else
+    [ -z "${WIPE_ROW_DT:-}" ] && [ -z "$listing" ] || _wipe_refuse probe_failed "" arg_pre_only
+  fi
+  refuse_if_config_unsafe
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || _wipe_refuse probe_failed "" arg_body
+  body="$here/git-data-wipe-assert.sh"
+  [ -f "$body" ] && [ -s "$body" ] || _wipe_refuse probe_failed "" arg_body
+  access_gate
+  printf -v qa '%q' "$phase"
+  printf -v qb '%q' "$typed"
+  printf -v qc '%q' "$luks"
+  printf -v qr '%q' "$srv"
+  printf -v qm '%q' "$OLD_ROOT"
+  printf -v qk '%q' "$LUKS_MAPPER"
+  printf -v qp '%q' "$STORE_VERIFIED"
+  cmd="WIPE_PHASE=$qa WIPE_TYPED_ID=$qb WIPE_LUKS_ID=$qc WIPE_SERVER_ID=$qr WIPE_OLD_ROOT=$qm WIPE_LUKS_MAPPER=$qk WIPE_STORE_VERIFIED=$qp"
+  if [ "$phase" = pre ]; then
+    printf -v ql '%q' "$row"
+    printf -v qd '%q' "$listing"
+    cmd="$cmd WIPE_ROW_DT=$ql WIPE_LISTING=$qd"
+  fi
+  cmd="$cmd bash -s"
+  if [ "$phase" = pre ]; then
+    pat='^wipe_assert pre ok layout_signal=(ok|not_run) journal=(dirty|clean|na) top_d=([0-9]+|na) top_f=([0-9]+|na) top_l=([0-9]+|na) top_o=([0-9]+|na) repos=([0-9]+|na) boot_to_row_s=[0-9]+ lock_residue=([0-9]+|na) store_root_repos=[0-9]+$'
+    if [ "$listing" = run ]; then tmo=300; else tmo=90; fi
+  elif [ "$phase" = clear ]; then
+    # A1 (2026-10-15): clearing a leftover throwaway snapshot; the answer says only whether one was cleared or none existed.
+    pat='^wipe_assert clear ok snapshot=(cleared|absent)$'
+    tmo=240
+  else
+    pat="^wipe_assert $phase ok byid=gone mapper_read=ok store_root=ok\$"
+    tmo=90
+  fi
+  gd_capture "$pat" "$cmd" "$body" "$tmo" || rc=$?
+  case "$rc" in
+    0) ;;
+    11) _wipe_refuse store_not_on_mapper ;;
+    12) _wipe_refuse cutover_frozen ;;
+    13) _wipe_refuse store_unverified "" no_fs_uuid ;;
+    14) _wipe_refuse store_unverified "" marker_absent ;;
+    15) _wipe_refuse store_unverified "" marker_mismatch ;;
+    20) _wipe_refuse wipe_device_absent ;;
+    21) _wipe_refuse wipe_device_not_block ;;
+    22) _wipe_refuse wipe_device_is_luks_backing ;;
+    23) _wipe_refuse wipe_device_luks_or_unknown ;;
+    24) _wipe_refuse wipe_device_mounted ;;
+    25) _wipe_refuse wipe_device_has_holders ;;
+    26) _wipe_refuse wipe_snapshot_present ;;
+    27) _wipe_refuse wipe_device_open ;;
+    28) _wipe_refuse wipe_device_active ;;
+    29) _wipe_refuse wipe_device_written ;;
+    30) _wipe_refuse wipe_ro_flag_lost ;;
+    31) _wipe_refuse wipe_instance_mismatch ;;
+    32) _wipe_refuse wipe_boot_generation_mismatch ;;
+    33) _wipe_refuse wipe_boot_layout_signal_absent ;;
+    34) _wipe_refuse wipe_boot_layout_signal_offlist ;;
+    35) _wipe_refuse wipe_boot_layout_signal_unparseable ;;
+    36) _wipe_refuse wipe_snapshot_teardown_failed ;;
+    37) _wipe_refuse wipe_plaintext_not_empty ;;
+    38) _wipe_refuse wipe_luks_identity_mismatch ;;
+    40) _wipe_refuse wipe_device_still_attached ;;
+    41) _wipe_refuse wipe_mapper_read_failed ;;
+    42) _wipe_refuse wipe_store_root_unreadable ;;
+    43) _wipe_refuse wipe_snapshot_not_ours ;;
+    *) _wipe_refuse probe_failed "$rc" ;;
+  esac
+  # The answer matched the phase's fixed shape in full: digits and fixed words only.
+  _wipe_emit ok
+  log "WIPE_ASSERT ${GD_CAPTURED#wipe_assert }"
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    printf -- '- WIPE_ASSERT %s\n' "${GD_CAPTURED#wipe_assert }" >> "$GITHUB_STEP_SUMMARY" || true
+  fi
+  if [ -n "${GITHUB_OUTPUT:-}" ]; then
+    printf 'wipe_assert=%s\n' "$GD_CAPTURED" >> "$GITHUB_OUTPUT" || true
+  fi
+  if [ "$phase" = pre ]; then
+    local end_epoch now_epoch days
+    end_epoch="$(date -u -d "$WIPE_OUTER_DATE" +%s 2>/dev/null)" || end_epoch=""
+    now_epoch="$(date -u +%s 2>/dev/null)" || now_epoch=""
+    if [[ "$end_epoch" =~ ^[0-9]+$ && "$now_epoch" =~ ^[0-9]+$ ]]; then
+      if [ "$end_epoch" -gt "$now_epoch" ]; then days=$(( (end_epoch - now_epoch) / 86400 )); else days=0; fi
+      log "WIPE_ASSERT reboot_since_row=no outer_date=${WIPE_OUTER_DATE} days_to_outer_date=${days}"
+    fi
+  fi
+}
+
+# ============================================================================
 # Main
 # ============================================================================
 main() {
@@ -891,6 +1027,7 @@ main() {
     freeze)   mode_freeze ;;
     unfreeze) mode_unfreeze ;;
     probe)    mode_probe ;;
+    wipe_assert) mode_wipe_assert ;;
   esac
 }
 

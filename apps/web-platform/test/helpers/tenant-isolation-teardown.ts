@@ -262,9 +262,8 @@ export async function tearDownTenantUser(
  * rate-limit burst it exists to absorb.
  *
  * `opts.tolerate` is the escape hatch for a KNOWN-undeletable residue
- * shape (see `hasUndeletableActionSendsAnchor` / #10254): it runs per
- * failed user and suppresses only a failure it confirms — every other
- * failure still aggregates and throws.
+ * shape: it runs per failed user and suppresses only a failure it
+ * confirms — every other failure still aggregates and throws.
  */
 export async function tearDownTenantUsers(
   service: SupabaseClient,
@@ -306,34 +305,3 @@ export async function tearDownTenantUsers(
   }
 }
 
-/**
- * #10254 tolerated-residue probe. `action_sends.message_id` is
- * `NOT NULL REFERENCES public.messages(id)` (NO ACTION, migration 051) and
- * action_sends rows are WORM — `anonymise_action_sends` zeroes user_id but the
- * row still anchors its message, and `messages.user_id → users` ON DELETE
- * CASCADE then cannot delete the message: `deleteUser` 500s on
- * `action_sends_message_id_fkey` for ANY user who ever had an action_sends
- * row (a production erasure gap, not just test residue).
- *
- * Call sites that know they seeded action_sends may tolerate a deleteUser
- * failure ONLY when this probe confirms the anchor — every other failure
- * stays loud.
- */
-export async function hasUndeletableActionSendsAnchor(
-  service: SupabaseClient,
-  userId: string,
-): Promise<boolean> {
-  const { data: msgs, error } = await service
-    .from("messages")
-    .select("id")
-    .eq("user_id", userId);
-  if (error || !msgs?.length) return false;
-  const { count, error: anchorErr } = await service
-    .from("action_sends")
-    .select("id", { count: "exact", head: true })
-    .in(
-      "message_id",
-      msgs.map((m: { id: string }) => m.id),
-    );
-  return !anchorErr && (count ?? 0) > 0;
-}

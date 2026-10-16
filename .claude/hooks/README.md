@@ -412,7 +412,7 @@ Per-process env overrides:
 On archive-write failure (disk full, permission denied), the helper preserves
 the active file, removes the partial archive, and emits ONE stderr warning
 per process — `[log-rotation] warning: failed to archive <path> ...`. Mirrors
-the warn-once pattern at `incidents.sh:130-138`.
+the warn-once pattern in incidents.sh's detect_bypass/log-rotation block.
 
 ### Aggregator rotator (defense-in-depth)
 

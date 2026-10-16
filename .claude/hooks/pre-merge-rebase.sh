@@ -118,18 +118,23 @@ SCAN=$(strip_command_bodies "$CMD")
 # Word boundary (\s|$) prevents false positives on hypothetical merge-* subcommands.
 # Chain operator pattern from guardrails.sh catches chained commands.
 # Runs against $SCAN (quote-stripped), not $CMD, per the #4600 fix above.
-# #10248: `rtk gh pr merge` still bypasses this anchor — prefix-tolerance is the
-# boundary-anchor follow-up; do NOT extend per-site, the issue mandates a shared fragment.
-if ! grep -qE '(^|&&|\|\||;|\s--\s)\s*gh\s+pr\s+merge(\s|$)' <<<"$SCAN"; then
+# #10248 landed: ${SOLEUR_BOUNDARY_PFX:-} between the boundary and `gh` is the
+# shared wrapper-prefix fragment (plugins/soleur/scripts/lib/wrapper-boundary.sh),
+# loaded once via lib/incidents.sh — keep the interpolation, do NOT restate atoms
+# per-site; the census test derives every anchored site and fails on hand-rolled
+# copies.
+if ! grep -qE '(^|&&|\|\||;|\s--\s)\s*('"${SOLEUR_BOUNDARY_PFX:-}"'[[:space:]]+)*gh\s+pr\s+merge(\s|$)' <<<"$SCAN"; then
   exit 0
 fi
 # One line per REAL `gh pr merge` invocation (the detector's own anchor), carrying its argument text.
 # `|| true`: a no-match grep exits 1 under pipefail and would abort the hook (fail-open).
 _merge_args() {
-  grep -oE '(^|&&|\|\||;|[[:space:]]--[[:space:]])[[:space:]]*gh[[:space:]]+pr[[:space:]]+merge([[:space:]][^;&|]*)?' <<<"$1" \
-    | sed -E 's/^[^g]*gh[[:space:]]+pr[[:space:]]+merge//' || true
-  # `^[^g]*`, not `.*`: the match's prefix is only separators, and a greedy `.*`
-  # would skip to the LAST `gh pr merge` in the segment (`… 4243 # gh pr merge 4242`).
+  grep -oE '(^|&&|\|\||;|[[:space:]]--[[:space:]])[[:space:]]*('"${SOLEUR_BOUNDARY_PFX:-}"'[[:space:]]+)*gh[[:space:]]+pr[[:space:]]+merge([[:space:]][^;&|]*)?' <<<"$1" \
+    | sed -E 's/^(&&|\|\||;|[[:space:]]--[[:space:]])?[[:space:]]*('"${SOLEUR_BOUNDARY_PFX:-}"'[[:space:]]+)*gh[[:space:]]+pr[[:space:]]+merge//' || true
+  # The strip replays the grep's own prefix shape (boundary + wrapper atoms),
+  # never `^[^g]*` — an env-assignment's `g` (`X=g rtk gh pr merge 5`) would
+  # strand it; and never `.*`, which would skip to the LAST `gh pr merge` in
+  # the segment (`… 4243 # gh pr merge 4242`).
 }
 _scan_args=$(_merge_args "$SCAN")
 

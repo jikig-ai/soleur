@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# STATUS 2026-10-15 (#10321 audit): tracker #6407 closed 2026-07-14; sweeps ended
+# ~2026-07-28 (open issues + CLOSED_LOOKBACK_DAYS=14 read set). The soak-gate/
+# exit-1 regression framing below is dormant by design post-PASS — retire at
+# next touch; no standing successor carries this exact check.
 # Follow-through soak gate for #6407 (AC10): the /health-corroboration fix must hold for a
 # 7-day soak with ZERO false `[ci/inngest-down]` P1s attributable to a TRANSIENT functions-query
 # failure. Before #6407, a transient `/v0/gql functions` blip (→ `__FETCH_FAILED__` → the

@@ -78,6 +78,8 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     let service: SupabaseClient;
     const user = { id: "", email: syntheticEmail() };
     let seedAuditRowId = "";
+    let seedActionSendId = "";
+    const CASCADE_ACTION_CLASS = "ops.cascade_mig162";
 
     beforeAll(async () => {
       const url = requireEnv("SUPABASE_URL");
@@ -122,6 +124,68 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect(seedSelErr, "select seed row").toBeNull();
       expect(seedRows?.length).toBe(1);
       seedAuditRowId = seedRows![0].id as string;
+
+      // #10254 / mig 162: seed scope_grants -> message -> action_sends
+      // ancestors so the cascade exercises the action_sends.message_id
+      // SET NULL carve-out. Without this seed a reversion to NO ACTION
+      // would surface only as teardown noise, not a hard red.
+      const { data: grantRows, error: grantErr } = await service
+        .from("scope_grants")
+        .insert({
+          founder_id: user.id,
+          action_class: CASCADE_ACTION_CLASS,
+          tier: "draft_one_click",
+          // mig 059: workspace_id NOT NULL + solo-canary CHECK
+          // (workspace_id = founder_id for the solo-canary backfill shape).
+          workspace_id: user.id,
+        })
+        .select("id");
+      expect(grantErr, "scope_grants seed").toBeNull();
+
+      const { data: convRow, error: convErr } = await service
+        .from("conversations")
+        // solo-canary convention: workspace_id = user_id (mig 059).
+        .insert({ user_id: user.id, workspace_id: user.id })
+        .select("id")
+        .single();
+      expect(convErr, "conversation seed").toBeNull();
+
+      const { data: msgRow, error: msgErr } = await service
+        .from("messages")
+        .insert({
+          role: "assistant",
+          content: "synthetic draft for mig 162 cascade test",
+          user_id: user.id,
+          workspace_id: user.id,
+          conversation_id: convRow!.id,
+          tier: "external_low_stakes",
+          source: "test",
+          owning_domain: "finance",
+          draft_preview: "test draft preview",
+          status: "draft",
+          action_class: CASCADE_ACTION_CLASS,
+          template_id: "default_legacy",
+        })
+        .select("id")
+        .single();
+      expect(msgErr, "messages seed").toBeNull();
+
+      const { data: sendRows, error: sendErr } = await service
+        .from("action_sends")
+        .insert({
+          user_id: user.id,
+          message_id: msgRow!.id,
+          action_class: CASCADE_ACTION_CLASS,
+          tier_at_send: "draft_one_click",
+          template_hash: randomBytes(32).toString("hex"),
+          per_send_body_sha256: randomBytes(32).toString("hex"),
+          recipient_id_hash: randomBytes(32).toString("hex"),
+          confirmed_typed: false,
+          grant_id: grantRows![0].id as string,
+        })
+        .select("id");
+      expect(sendErr, "action_sends seed").toBeNull();
+      seedActionSendId = sendRows![0].id as string;
     }, 30_000);
 
     afterAll(async () => {
@@ -185,6 +249,23 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       // workspace-scoped cost analytics.
       expect(auditRow!.workspace_id).toBe(user.id);
       expect(auditRow!.token_count).toBe(1);
+    }, 10_000);
+
+    test("mig 162: action_sends row preserved, de-linked post-erasure (message_id NULLed)", async () => {
+      const { data: sendRow, error: selErr } = await service
+        .from("action_sends")
+        .select("id, user_id, message_id")
+        .eq("id", seedActionSendId)
+        .maybeSingle();
+      expect(selErr).toBeNull();
+      // Row is preserved (WORM ledger lineage) — Art-17 means the linkage
+      // columns are scrubbed, not the row. anonymise_action_sends clears
+      // user_id inside the saga; message_id is cleared by the RPC
+      // hardening AND admitted on the raw-cascade path by the mig 162
+      // carve-out — either way the post-erasure state is de-linked.
+      expect(sendRow).not.toBeNull();
+      expect(sendRow!.user_id).toBeNull();
+      expect(sendRow!.message_id).toBeNull();
     }, 10_000);
   },
 );

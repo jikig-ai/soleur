@@ -336,22 +336,33 @@ jobs:
   # trigger list and the activation lock). It emits ONLY literal outputs: head_sha and base_sha (audit values, the merge commit's
   # second and first parents), skip_legs (a comma list over the three groups, EMPTY unless active) and active (`true`/`false`).
   #
-  # DARK AND LOCKED: with the repository variable CI_PR_AFFECTED unset the job only annotates `would_skip` (SOLEUR_PR_SELECTION) and
-  # every gated job runs. Even with the variable `on`, a literal activation lock inside the driver keeps `active=false` until PR C
-  # removes it in its last commit, so this PR alone is not activatable. Activation is a separate, authorized step (ADR-276 S4).
-  # It runs a stage-2 selector pass on doc-only diffs even while dark. On a cold runner that pass can hit its budget (the canary run
-  # logged `reason=selector_timeout sel_s=90`), so `sel_s` is a LOWER BOUND whenever `sel_censored=1`; the dark cost is a doc-only PR's
-  # runner minutes, bounded by this job's timeout (ADR-276 S4 amendment).
+  # SWITCHED OFF, THEN DARK AND LOCKED. While the repository variable CI_PR_AFFECTED is unset or empty the job is SKIPPED (no runner, no
+  # checkout, no dark cost): an undefined variable reads as an empty string in a job-level `if:`, so `vars.CI_PR_AFFECTED != ''` is false.
+  # The condition only tests "non-empty" on purpose: Actions compares strings WITHOUT regard to case, so the YAML cannot be the exact-value
+  # gate (`== 'on'` would run the job for `ON` too); the exact compare lives in the driver, where a mistyped value shows up as `switch=invalid`.
+  # Cost of that choice: ANY non-empty value, including `off` or `0`, runs the job (a runner and a checkout, about one billed minute) -
+  # to turn the lever off, DELETE the variable. The unset claim is about the repository variable; an organization variable of the same
+  # name would also resolve through `vars`. A skipped job is full CI (the state of every push, merge_group and workflow_dispatch run): the
+  # gated jobs keep `!cancelled()` and negate a term that needs non-empty outputs, and the `test` aggregator tolerates a skip only on
+  # ACTIVE == "true".
+  # When the variable is set to any non-empty value the job runs; the driver always runs stage 1 (the pure-bash allowlist) and runs
+  # stage 2 (the selector) only for the exact, case-sensitive value `on`; any other value makes no selector call and, on a doc-only diff
+  # that passed the paths cap, reports `reason=switch_off` (a code diff keeps its stage-1 reason, so read the off switch from `switch=`:
+  # `invalid` for any non-empty value that is not `on`). Even with `on`, a literal activation lock inside the driver keeps `active=false`
+  # until PR C removes it in its last commit, so this PR alone is not activatable. Activation is a separate, authorized step (ADR-276 S4).
+  # `sel_s` is no longer measured on every run: it is 0 whenever stage 2 did not run, and where stage 2 does run on a cold hosted runner it
+  # can hit its budget (the canary run logged `reason=selector_timeout sel_s=90`), so it is a LOWER BOUND whenever `sel_censored=1`. The one
+  # cold/warm measurement is taken in the PR C replay (a workflow_dispatch run cannot reach the selector); see the ADR-276 S4 amendment.
   #
   # `timeout-minutes` is written alone on its line and there is NO `needs:` on purpose: the release workflow's CI budget awk sums
   # the longest declared `needs:` path (73 today, cap 75), so a 3-minute root beside push-dedupe does not lengthen it, while a serial
-  # edge or a 10-minute bound would (scripts/ci-push-dedupe.test.sh executes that awk). Off a pull_request the job is skipped before
-  # it takes a runner; the gated jobs keep `!cancelled()` and compare `== 'true'`, so a skipped, failed or timed-out job is full CI
-  # (job-level continue-on-error reports a timeout as success, so EMPTY outputs must always mean "run everything").
+  # edge or a 10-minute bound would (scripts/ci-push-dedupe.test.sh executes that awk). Off a pull_request, or while the variable is unset
+  # or empty, the job is skipped before it takes a runner; the gated jobs keep `!cancelled()` and compare `== 'true'`, so a skipped, failed or
+  # timed-out job is full CI (job-level continue-on-error reports a timeout as success, so EMPTY outputs must always mean "run everything").
   # A NEW GATEABLE GROUP MUST JOIN BOTH the driver's list and the aggregator's literal allowlist. Least-privilege (contents: read),
   # no secrets, every input through env:, and nothing an API or a path returns is ever echoed into an output or an annotation.
   pr-selection:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && vars.CI_PR_AFFECTED != ''
     continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 3

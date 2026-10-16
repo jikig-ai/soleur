@@ -379,6 +379,24 @@ inngest_failed_check() { # <row-set> — viol on any `Failed to start <tracked-u
     || ok "zero 'Failed to start' journal rows for tracked units"
 }
 
+# FORBIDDEN IN EVERY MODE (#9786): the first-boot LUKS stage's unpointed-arm refusal. A rehearsal host
+# renders a `rehearsal_*` Doppler config with NO pointer and a raw volume, which is exactly the one state
+# in which the template may luksFormat. `stage=unpointed_raw_refused` on this host means the allowlist
+# and the rehearsal config disagree (a renamed config prefix), i.e. the rehearsal no longer exercises the
+# format arm it exists to rehearse, and no further polling heals it. The stage name is set before the
+# guard so the luks_err row and the inngest-luks-FAILED phone-home both carry it.
+unpointed_refused_check() { # <row-set> — viol on any stage=unpointed_raw_refused row
+  local n_refused
+  # ANCHORED on the row shape, never the bare token: #9786's own title/body and any webhook payload that quotes
+  # the stage name would otherwise read as a violation (the same false-positive class #9939 narrowed
+  # luks_failed_check for). The two real shapes both end the stage in `rc=`: the luks_emit row, and the
+  # inngest-luks-FAILED phone-home that carries `stage=<name> rc=<n>` in its detail.
+  n_refused="$(printf '%s\n' "$1" | grep -cE '(SOLEUR_INNGEST_LUKS_STAGE stage=|inngest-luks-FAILED.{0,80}stage=)unpointed_raw_refused rc=' 2>/dev/null || true)"
+  (( n_refused > 0 )) \
+    && viol "${n_refused} stage=unpointed_raw_refused row(s) — the unpointed LUKS arm refused to format on a rehearsal host (the allowlist and the rehearsal Doppler config disagree, #9786)" \
+    || ok "zero stage=unpointed_raw_refused rows"
+}
+
 # POSITIVE CONTROL FOR THE systemd-TAGGED PATH (#9963). The `ok` above — "zero 'Failed to
 # start' journal rows" — is only as good as the channel that would carry such a row: a
 # silently dead SYSLOG_IDENTIFIER=systemd delivery path reads as a green zero on every
@@ -445,6 +463,7 @@ case "$MODE" in
     fetch_control_rows
     systemd_path_check "$CONTROL_ROWS"
     inngest_failed_check "$HOST_ROWS"
+    unpointed_refused_check "$HOST_ROWS"
     KEY=REHEARSAL_PHASE_A_OBSERVED
     ;;
   phase-b)
@@ -466,6 +485,7 @@ case "$MODE" in
     fetch_control_rows
     systemd_path_check "$CONTROL_ROWS"
     inngest_failed_check "$HOST_ROWS"
+    unpointed_refused_check "$HOST_ROWS"
     KEY=REHEARSAL_PHASE_B_RECOVERY
     ;;
   post-reboot)
@@ -486,6 +506,7 @@ case "$MODE" in
     (( n_restage >= 1 ))  && ok "token-restage anchor re-emitted post-reboot ON THE PHONE-HOME CHANNEL (proves this boot ran AND the measured channel is live)" || want "token-restage anchor re-emitted post-reboot (stage=bs-token-restaged n=${n_restage})"
     systemd_path_check "$POST_ROWS"
     inngest_failed_check "$POST_ROWS"
+    unpointed_refused_check "$POST_ROWS"
     KEY=REHEARSAL_POST_REBOOT_LATCH
     ;;
 esac
