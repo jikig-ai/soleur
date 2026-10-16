@@ -52,3 +52,10 @@ Order: Stage A (1 -> 2 -> 4 -> 5) restores service and ships first; Stage B (3) 
 - [ ] 6.2 Read both alerts back from the Better Stack API (present, unpaused)
 - [ ] 6.3 Real hosted Bash call succeeds; egress-audit canary #9545 gets its first gateway row
 - [ ] 6.4 Docs-only PR flipping the PIR to `resolved`; close #10445
+
+## Post-ruling amendments (2026-10-16, CTO batch; see decision-challenges.md)
+
+- Stage B fallback if the stub-model smoke is not done in the half-day time box: ship Stage A alone plus the Phase 1 docker-suite wrapper arm as the pre-merge guard, and file the tracking issue for the unfinished smoke BEFORE merge.
+- Stage B probe ships non-blocking (reports + pages); promotion follow-through is `scripts/followthroughs/sandbox-readback-10445.sh`; `smoke_infra_error` never rolls back.
+- Runbook entry for the new alerts states the wake path is email-only until the ADR-260 Slack integration is verified; file a tracking issue to verify the Slack wake across all Better Stack alerts.
+- Optional public PIR summary only after Stage A readback is green on a real deploy; names no filter, socket-bridge or tenant-isolation mechanism.
