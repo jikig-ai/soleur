@@ -99,8 +99,8 @@ function run(registration: Registration, cwd: string, extra: Record<string, stri
     cwd, env: { ...environment, ...extra }, stdin, timeout: 10000,
   });
 }
-function expectMarker(registration: Registration, expected: Invocation, cwd: string, owner: string, extra: Record<string, string> = {}, exit = 0) {
-  const result = run(registration, cwd, { ...extra, HOOK_TARGET_EXIT: String(exit) });
+function expectMarker(registration: Registration, expected: Invocation, cwd: string, owner: string, extra: Record<string, string> = {}, exit = 0, shell = "/bin/bash") {
+  const result = run(registration, cwd, { ...extra, HOOK_TARGET_EXIT: String(exit) }, payload, shell);
   expect(result.exitCode).toBe(exit);
   const interpreter = expected.target.endsWith(".py") ? "python3" : "bash";
   const header = `${owner}|${expected.target}|${interpreter}\n${expected.args.length}\n${expected.args.join(" ")}\n${cwd}\n`;
@@ -113,6 +113,17 @@ test("enumerates every actual affected registration and freezes original invocat
   expect(devin).toHaveLength(37);
   expect(affected.map((entry) => invocation(entry.command))).toEqual(baseline);
   expect(new Set(baseline.map((entry) => entry.target)).size).toBeGreaterThan(25);
+});
+
+test("Codex and Devin dispatch bare-root hooks under POSIX sh", () => {
+  const dash = Bun.which("dash")!;
+  for (const entry of [codex[0], devin[0]]) {
+    const expected = baseline[affected.indexOf(entry)];
+    const bare = directory(`${entry.harness} POSIX bare root`);
+    git(bare, "init", "--bare", "-q", join(bare, ".git"));
+    marker(bare, expected, "POSIX");
+    expectMarker(entry, expected, bare, "POSIX", {}, 0, dash);
+  }
 });
 
 for (const [index, entry] of affected.entries()) {
@@ -212,12 +223,13 @@ for (const [index, entry] of affected.entries()) {
     expect(existsSync(spies.HOOK_INTERPRETER_LOG)).toBe(false);
 
     // The fallback combines both Git fields in one process. Reject a non-bare
-    // response, a failed probe, and a positive-bare response without a git dir.
+    // response, failed probes (including partial output), and a positive-bare
+    // response without a git dir.
     const probeBin = directory("git probe stubs");
-    for (const bare of ["false", "probe-error", "true-missing-dir"]) {
+    for (const bare of ["false", "probe-error", "partial-probe-error", "true-missing-dir"]) {
       const probeLog = join(temporary, "git probe calls");
       rmSync(probeLog, { force: true });
-      const bareReply = bare === "probe-error" ? "exit 29" : bare === "false" ? "printf 'false\\n%s\\n' '/not/bare'" : "printf '%s\\n' 'true'";
+      const bareReply = bare === "probe-error" ? "exit 29" : bare === "partial-probe-error" ? "printf '%s\\n' 'true' '/not/bare'; exit 29" : bare === "false" ? "printf 'false\\n%s\\n' '/not/bare'" : "printf '%s\\n' 'true'";
       write(join(probeBin, "git"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOOK_PROBE_LOG"\ncase "$*" in\n'rev-parse --show-toplevel') exit 23;;\n'rev-parse --is-bare-repository --absolute-git-dir') ${bareReply};;\n*) exit 99;;\nesac\n`);
       const failed = run(entry, outside, { ...spies, PATH: `${probeBin}:${spies.PATH}`, HOOK_PROBE_LOG: probeLog }, payload, Bun.which("dash")!);
       expect(failed.exitCode).not.toBe(0);

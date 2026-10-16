@@ -13,19 +13,19 @@
         "hooks": [
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/session-rules-loader.sh\""
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/session-rules-loader.sh\""
           },
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/supabase-loopback-warn.sh\""
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/supabase-loopback-warn.sh\""
           },
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/memory-backstop-resolve.sh\""
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/memory-backstop-resolve.sh\""
           },
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/scripts/ensure-kb-index.sh\" --soft"
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/scripts/ensure-kb-index.sh\" --soft"
           }
         ]
       }
@@ -36,89 +36,89 @@
         "hooks": [
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/guardrails.sh\"",
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/guardrails.sh\"",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/git-commit-secret-scan.sh\""
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/git-commit-secret-scan.sh\""
           },
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/brand-hex-commit-gate.sh\""
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/brand-hex-commit-gate.sh\""
           },
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/doppler-secrets-delete-redirect.sh\""
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/doppler-secrets-delete-redirect.sh\""
           },
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/cla-signed-author-gate.sh\"",
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/cla-signed-author-gate.sh\"",
             "timeout": 30
           },
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/context-reviewed-gate.sh\""
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/context-reviewed-gate.sh\""
           },
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/follow-through-directive-gate.sh\""
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/follow-through-directive-gate.sh\""
           },
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/grep-rewrite.sh\""
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/grep-rewrite.sh\""
           },
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/kb-domain-allowlist-guard.sh\""
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/kb-domain-allowlist-guard.sh\""
           },
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/no-memory-write.sh\""
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/no-memory-write.sh\""
           },
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/pkill-self-match-guard.sh\""
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/pkill-self-match-guard.sh\""
           },
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/pre-merge-auto-close-scan.sh\"",
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/pre-merge-auto-close-scan.sh\"",
             "timeout": 30
           },
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/pre-merge-rebase.sh\"",
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/pre-merge-rebase.sh\"",
             "timeout": 30
           },
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/prod-write-defer-gate.sh\""
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/prod-write-defer-gate.sh\""
           },
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/ship-net-issue-flow-gate.sh\"",
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/ship-net-issue-flow-gate.sh\"",
             "timeout": 30
           },
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/ship-operator-step-gate.sh\""
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/ship-operator-step-gate.sh\""
           },
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/ship-runbook-ssh-gate.sh\""
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/ship-runbook-ssh-gate.sh\""
           },
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/ship-soak-followthrough-gate.sh\""
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/ship-soak-followthrough-gate.sh\""
           },
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/ship-unpushed-commits-gate.sh\"",
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/ship-unpushed-commits-gate.sh\"",
             "timeout": 30
           },
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/ship-kb-archive-gate.sh\"",
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/ship-kb-archive-gate.sh\"",
             "timeout": 30
           }
         ]
@@ -128,20 +128,20 @@
         "hooks": [
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/guardrails.sh\"",
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/guardrails.sh\"",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/iac-plan-write-guard.sh\""
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/iac-plan-write-guard.sh\""
           },
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/kb-domain-allowlist-guard.sh\""
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/kb-domain-allowlist-guard.sh\""
           },
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/no-memory-write.sh\""
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/no-memory-write.sh\""
           }
         ]
       },
@@ -150,15 +150,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/new-scheduled-cron-prefer-inngest.sh\""
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/new-scheduled-cron-prefer-inngest.sh\""
           },
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/worktree-write-guard.sh\""
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/worktree-write-guard.sh\""
           },
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && python3 \"$hook_root/.claude/hooks/security_reminder_hook.py\""
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && python3 \"$hook_root/.claude/hooks/security_reminder_hook.py\""
           }
         ]
       },
@@ -167,7 +167,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/skill-invocation-logger.sh\""
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/skill-invocation-logger.sh\""
           }
         ]
       }
@@ -178,11 +178,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/post-dispatch-watch-gate.sh\""
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/post-dispatch-watch-gate.sh\""
           },
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/rule-incident-marker-capture.sh\""
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/rule-incident-marker-capture.sh\""
           }
         ]
       },
@@ -191,7 +191,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/docs-cli-verification.sh\""
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/docs-cli-verification.sh\""
           }
         ]
       },
@@ -200,11 +200,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/phase-surface-hint.sh\""
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/phase-surface-hint.sh\""
           },
           {
             "type": "command",
-            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/skill-context-queries.sh\""
+            "command": "hook_root=\"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || { hook_meta=$(git rev-parse --is-bare-repository --absolute-git-dir 2>/dev/null) || exit 1; hook_meta=$(printf \"%s\\n\" \"$hook_meta\" | sed -n \"1h;2{H;g;s/\\n/ /;p}\") || exit 1; hook_bare=${hook_meta%% *}; test \"$hook_bare\" = true || exit 1; hook_git_dir=${hook_meta#* }; test -n \"$hook_git_dir\" || exit 1; printf \"%s\\n\" \"${hook_git_dir%/.git}\"; })}}\" && bash \"$hook_root/.claude/hooks/skill-context-queries.sh\""
           }
         ]
       }
