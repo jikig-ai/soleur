@@ -50,7 +50,7 @@ Issue: #10331 (Ref only; never Closes) | Draft PR: #10426 | Branch: feat-one-sho
 
 ## Phase 5: Records
 
-- 5.1 ADR-289 via `soleur:architecture` (alternatives, human-review control with CODEOWNERS documented as non-enforcing, PR3b contract, bumping-ruff recipe, four residuals); probe the ordinal across every pushed `origin/*` ref
+- 5.1 ADR-290 via `soleur:architecture` (alternatives, human-review control with CODEOWNERS documented as non-enforcing, PR3b contract, bumping-ruff recipe, four residuals); probe the ordinal across every pushed `origin/*` ref
 - 5.2 Run `bash plugins/soleur/test/c4-count-parity.test.sh` (AC13)
 - 5.3 File the drawdown issue (labels `deferred-scope-out`, `chore`, `domain/engineering`, `priority/p3-low`; milestone `Post-MVP / Later`; body `Ref #10331` plus baseline links); put its number in both baseline headers
 - 5.4 PR body: `Ref #10331`, mutation evidence (AC5), decision-challenges rendering by `ship`

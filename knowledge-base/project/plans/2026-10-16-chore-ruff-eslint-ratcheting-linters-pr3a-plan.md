@@ -62,7 +62,7 @@ Both flow through one script, `scripts/lint-ratchet.py`, with a small adapter pe
 
 ## Research Insights
 
-**Premise Validation.** #10331 is OPEN. PRs #10342 and #10375 are merged (git log on main). The "no Python linter" claim holds: `git grep -w ruff|flake8|pyflakes` outside `knowledge-base/` hits one docs page only; no `ruff.toml`, `pyproject.toml` or `setup.cfg` exists. The "eslint scans only apps/web-platform" claim holds. The ADR corpus was grepped for "ratchet" and "linter" (ADR-076, 105, 106, 129, 133, 139, 151, 160 hit): none decides the mechanism proposed here, none lists it as rejected. Latest ADR ordinal on disk is ADR-288, so ADR-289 is the provisional next.
+**Premise Validation.** #10331 is OPEN. PRs #10342 and #10375 are merged (git log on main). The "no Python linter" claim holds: `git grep -w ruff|flake8|pyflakes` outside `knowledge-base/` hits one docs page only; no `ruff.toml`, `pyproject.toml` or `setup.cfg` exists. The "eslint scans only apps/web-platform" claim holds. The ADR corpus was grepped for "ratchet" and "linter" (ADR-076, 105, 106, 129, 133, 139, 151, 160 hit): none decides the mechanism proposed here, none lists it as rejected. Latest ADR ordinal on disk is ADR-288, so ADR-290 is the provisional next.
 
 **Property List (Phase 0.6b).**
 
@@ -123,7 +123,7 @@ Queried open `code-review` issues for every planned file path. Matches, each ack
 
 ### ADR
 
-Create ADR-289 via `soleur:architecture`: "Lint findings are admitted to a baseline by identity (`path|rule|anchor|n`), the baseline always equals the live census, and per `(path, rule)` its count may not exceed the merge-base count". It records the alternatives rejected in the Cut List (count highwater, advisory job, extending `eslint .`, digest/epoch header, anchor-at-base lookup), the human-review control (CODEOWNERS is documentation only: the repo has `* @deruelle` as a fallback and no ruleset sets `require_code_owner_review`), the PR3b contract (entry format, exit codes, the scope-config shape; PR3b will `git mv` the script into the plugin and change one path constant in the tests), a "bumping ruff" recipe (regenerate hashes from `https://pypi.org/pypi/ruff/<version>/json`), and the accepted residuals: a fix-A/add-B swap inside one `(path, rule)` is invisible; a rename below `git diff -M` similarity reads as growth (fix the findings or add an escape hatch when first needed); config weakening followed by `--update` is a legal shrink, stopped only by the pin test plus human PR review, and editing the pin test in the same diff is unenforced; a diff that edits the baseline-path constant presents "absent at base". The ordinal is provisional; `soleur:ship` re-verifies against `origin/main`. When renumbering, sweep `grep -rn 'ADR-289' knowledge-base/project/{plans,specs}/feat-one-shot-10331-pr3a-ruff-eslint-scope/`. Probe ordinal claims across every pushed branch (`git ls-tree -r --name-only <ref> -- knowledge-base/engineering/architecture/decisions/ | grep ADR-289` for each `origin/*`), not only `origin/main`, and again right before merge.
+Create ADR-290 via `soleur:architecture`: "Lint findings are admitted to a baseline by identity (`path|rule|anchor|n`), the baseline always equals the live census, and per `(path, rule)` its count may not exceed the merge-base count". It records the alternatives rejected in the Cut List (count highwater, advisory job, extending `eslint .`, digest/epoch header, anchor-at-base lookup), the human-review control (CODEOWNERS is documentation only: the repo has `* @deruelle` as a fallback and no ruleset sets `require_code_owner_review`), the PR3b contract (entry format, exit codes, the scope-config shape; PR3b will `git mv` the script into the plugin and change one path constant in the tests), a "bumping ruff" recipe (regenerate hashes from `https://pypi.org/pypi/ruff/<version>/json`), and the accepted residuals: a fix-A/add-B swap inside one `(path, rule)` is invisible; a rename below `git diff -M` similarity reads as growth (fix the findings or add an escape hatch when first needed); config weakening followed by `--update` is a legal shrink, stopped only by the pin test plus human PR review, and editing the pin test in the same diff is unenforced; a diff that edits the baseline-path constant presents "absent at base". The ordinal is provisional; `soleur:ship` re-verifies against `origin/main`. When renumbering, sweep `grep -rn 'ADR-290' knowledge-base/project/{plans,specs}/feat-one-shot-10331-pr3a-ruff-eslint-scope/`. Probe ordinal claims across every pushed branch (`git ls-tree -r --name-only <ref> -- knowledge-base/engineering/architecture/decisions/ | grep ADR-290` for each `origin/*`), not only `origin/main`, and again right before merge.
 
 ### C4 views
 
@@ -225,7 +225,7 @@ The baseline header comments never name a rule code (a unit test pins this), so 
 | `tests/scripts/test_lint_ratchet.py` (unit + pin test) | "a baseline that only ratchets down" | asked |
 | `scripts/ruff-requirements.txt` and the install logic inside `lint-ratchet.py` | — | inferred — justification: the brainstorm CTO ruling "pin ruff and eslint versions" needs an install path that CI, which has no ruff, can execute; unpinned `pip install ruff` is the unpinned-resolution defect class the repo already bans for `npx tsc` |
 | `apps/web-platform/test/repo-wide-suites.ts` entry | — | inferred — justification: `repo-wide-containment.test.ts` fails when a repo-reading vitest file is missing from the manifest, and a gated project would silently skip the guard on diffs under `plugins/soleur/test` and `test/` |
-| ADR-289 | — | inferred — justification: plan Phase 2.10 requires an ADR for a cross-PR design contract, and the brainstorm states PR3b "depends on 3a's ratchet design" |
+| ADR-290 | — | inferred — justification: plan Phase 2.10 requires an ADR for a cross-PR design contract, and the brainstorm states PR3b "depends on 3a's ratchet design" |
 | Drawdown tracking issue | — | inferred — justification: `wg-when-deferring-a-capability-create-a` requires a tracked issue for the 79 baselined findings deferred by the brief's baseline approach |
 
 ### Split Assessment
@@ -279,7 +279,7 @@ Stdlib-only Python that must run on contributors' Python 3 (macOS system Python 
 
 ### Phase 5: records
 
-- ADR-289 and, in the same PR, the drawdown issue: `gh issue create` titled `chore(quality): draw down the ruff and eslint-test-dir baselines`, body `Ref #10331` plus links to the two baseline files, labels `deferred-scope-out`, `chore`, `domain/engineering`, `priority/p3-low` (all verified to exist with `gh label list`), milestone `Post-MVP / Later` unless `knowledge-base/product/roadmap.md` names a closer phase. Put the issue number in each baseline's comment header.
+- ADR-290 and, in the same PR, the drawdown issue: `gh issue create` titled `chore(quality): draw down the ruff and eslint-test-dir baselines`, body `Ref #10331` plus links to the two baseline files, labels `deferred-scope-out`, `chore`, `domain/engineering`, `priority/p3-low` (all verified to exist with `gh label list`), milestone `Post-MVP / Later` unless `knowledge-base/product/roadmap.md` names a closer phase. Put the issue number in each baseline's comment header.
 - `knowledge-base/project/specs/feat-one-shot-10331-pr3a-ruff-eslint-scope/decision-challenges.md` is written by this plan run.
 
 ### Phase 6: verification (evidence, not assertion)
@@ -313,7 +313,7 @@ Run the six live rows named in AC5 on a scratch commit stacked on the PR head (t
 
 **Harness rows.** H1 (suite edit that must go RED): remove the finding from the unit suite's "new finding" fixture; the suite must fail because each case asserts the exit code and the module asserts a minimum executed-case count (a `0 tests` run exits non-zero). H2 (must-pass that is not the canonical): a hand-written baseline with shuffled entry order, blank lines and extra `#` comments passes. H3: rows 4, 7 and 8 run in fixture git repos with `--base`, because the baselines do not exist at `origin/main`.
 
-**Anchor.** The merge-base copy of the baseline (a diff cannot rewrite history) and human PR review of `lint-ratchet.py`, the pin test, the baselines, `ruff.toml`, the requirements file and the eslint config; CODEOWNERS is not an enforced control here. Known residuals (ADR-289): fix-A/add-B inside one `(path, rule)`; a rename below the similarity cutoff reads as growth; a diff that also changes the baseline-path constant presents "absent at base" and skips the delta; the same diff can edit the pin test and the config together (unenforced).
+**Anchor.** The merge-base copy of the baseline (a diff cannot rewrite history) and human PR review of `lint-ratchet.py`, the pin test, the baselines, `ruff.toml`, the requirements file and the eslint config; CODEOWNERS is not an enforced control here. Known residuals (ADR-290): fix-A/add-B inside one `(path, rule)`; a rename below the similarity cutoff reads as growth; a diff that also changes the baseline-path constant presents "absent at base" and skips the delta; the same diff can edit the pin test and the config together (unenforced).
 
 ### Guard 2 — anti-vacuity and scope pin
 
@@ -334,7 +334,7 @@ Run the six live rows named in AC5 on a scratch commit stacked on the PR head (t
 
 **Harness rows.** H1: the unit test that asserts the floor fires must itself fail if the floor comparison is inverted (`<` mutated to `>`). H2: must-pass: removing 10 finding-free fixture files from a 123-file report (still above 105) passes.
 
-**Anchor.** Human PR review; editing the pin test together with the config is stopped only by that review (stated in ADR-289 as unenforced). Boundary rows in the unit suite: floors 54 red / 55 green (ruff) and 104 red / 105 green (eslint).
+**Anchor.** Human PR review; editing the pin test together with the config is stopped only by that review (stated in ADR-290 as unenforced). Boundary rows in the unit suite: floors 54 red / 55 green (ruff) and 104 red / 105 green (eslint).
 
 ### Guard 3 — pin integrity
 
@@ -366,7 +366,7 @@ Run the six live rows named in AC5 on a scratch commit stacked on the PR head (t
 - `tests/scripts/test_lint_ratchet.py`
 - `apps/web-platform/eslint.test-dirs.config.mjs`
 - `apps/web-platform/test/eslint-test-dirs-ratchet.test.ts`
-- `knowledge-base/engineering/architecture/decisions/ADR-289-shrink-only-lint-ratchet-keyed-on-file-rule-anchor.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-290-shrink-only-lint-ratchet-keyed-on-file-rule-anchor.md`
 - `knowledge-base/project/specs/feat-one-shot-10331-pr3a-ruff-eslint-scope/tasks.md`
 - `knowledge-base/project/specs/feat-one-shot-10331-pr3a-ruff-eslint-scope/decision-challenges.md`
 
@@ -395,7 +395,7 @@ Path-glob verification (`hr-when-a-plan-specifies-relative-paths-e-g`): `git ls-
 - [ ] AC10. No tool invocation passes a fix mode: a unit test builds every argv list the script executes (check, update and list paths) and asserts none contains `--fix`, `--unsafe-fixes` or `--write` while the ruff one contains `--no-fix`. (Asserted on the constructed argv, because the files legitimately mention the prohibition in comments.)
 - [ ] AC11. The baseline files contain no source text: every non-comment line matches `^[^|]+\|[@A-Za-z0-9/_.-]+\|[0-9a-f]{12}\|[0-9]+$` (rule ids such as `@typescript-eslint/no-unused-vars` contain `@` and `/`).
 - [ ] AC12. Diff scope: `git diff --name-only origin/main...HEAD -- plugins/soleur/skills plugins/soleur/scripts .claude/hooks apps/web-platform/server apps/web-platform/app apps/web-platform/components` prints nothing (no shipped script, hook, SKILL.md or product code edited).
-- [ ] AC13. ADR-289 exists, names the rejected alternatives (count highwater, advisory job, extending `eslint .`, digest/epoch header, anchor-at-base lookup), states that CODEOWNERS is documentation only and human PR review is the control, records the PR3b contract (entry format, exit codes, scope-config shape, `git mv` plan) and the "bumping ruff" recipe, and lists the four residuals (fix-A/add-B swap; rename below the similarity cutoff; baseline-path constant change presents "absent at base"; pin test and config edited together); `bash plugins/soleur/test/c4-count-parity.test.sh` is green.
+- [ ] AC13. ADR-290 exists, names the rejected alternatives (count highwater, advisory job, extending `eslint .`, digest/epoch header, anchor-at-base lookup), states that CODEOWNERS is documentation only and human PR review is the control, records the PR3b contract (entry format, exit codes, scope-config shape, `git mv` plan) and the "bumping ruff" recipe, and lists the four residuals (fix-A/add-B swap; rename below the similarity cutoff; baseline-path constant change presents "absent at base"; pin test and config edited together); `bash plugins/soleur/test/c4-count-parity.test.sh` is green.
 - [ ] AC14. The PR body says `Ref #10331` and does not contain `Closes #10331` or `Fixes #10331`; the drawdown issue exists and the baseline headers cite its number.
 - [ ] AC15. CI is green on the PR, including the `test` context with both new suites visible in the `scripts` and `webplat` shard logs, and the first CI run confirms the pinned ruff installs on the runner image.
 - [ ] AC16. A new finding's failure output contains the live `path:row`, the rule, the tool's message and the fixed remedy text (including that inline waivers are not honoured and `--update` must not admit a new finding); a stale entry's output says `fixed: run --update and commit the baseline`; asserted by unit tests on the captured output.

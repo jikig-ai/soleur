@@ -7,7 +7,7 @@
 - cto_spawns=1 (one-shot batch for rows 23-24; plan phase used 2 more)
 
 ### Errors
-None. ADR-289 ordinal provisional (ship re-checks). Merge-base comparison needs a scratch-commit harness until baselines land on main.
+None. ADR-290 ordinal provisional (ship re-checks). Merge-base comparison needs a scratch-commit harness until baselines land on main.
 
 ### Decisions
 - Separate eslint config for test dirs; existing 192 ratchet untouched.
