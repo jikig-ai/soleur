@@ -1821,11 +1821,11 @@ iv = yaml.safe_load(open(iv_path)); ap = yaml.safe_load(open(apply_path))
 on = wf.get(True) or wf.get("on") or {}
 check("WF-on: the only trigger is workflow_dispatch (on: read through the True-key lookup)", isinstance(on, dict) and list(on.keys()) == ["workflow_dispatch"], on if not isinstance(on, dict) else list(on.keys()))
 inputs = ((on.get("workflow_dispatch") or {}).get("inputs") or {}) if isinstance(on, dict) else {}
-check("G7/AC9: workflow_dispatch inputs are exactly {confirm, lineage, mode, origin_run, volume_id} (mode selects the eight modes; lineage is the stranded-sentinel lever for unfreeze; volume_id and origin_run are read by the wipe modes only, #10138)", sorted(inputs.keys()) == ["confirm", "lineage", "mode", "origin_run", "volume_id"], sorted(inputs.keys()))
-check("AC9: the mode input is a closed choice of exactly proof|flip|rollback|unfreeze|redeploy|wipe|wipe_finish|wipe_check",
-      sorted((inputs.get("mode") or {}).get("options") or []) == ["flip", "proof", "redeploy", "rollback", "unfreeze", "wipe", "wipe_check", "wipe_finish"],
+check("G7/AC9: workflow_dispatch inputs are exactly {confirm, lineage, mode, origin_run, volume_id} (mode selects the nine modes; lineage is the stranded-sentinel lever for unfreeze; volume_id and origin_run are read by the wipe modes only, #10138)", sorted(inputs.keys()) == ["confirm", "lineage", "mode", "origin_run", "volume_id"], sorted(inputs.keys()))
+check("AC9: the mode input is a closed choice of exactly proof|flip|rollback|unfreeze|redeploy|wipe|wipe_finish|wipe_check|snapshot_clear",
+      sorted((inputs.get("mode") or {}).get("options") or []) == ["flip", "proof", "redeploy", "rollback", "snapshot_clear", "unfreeze", "wipe", "wipe_check", "wipe_finish"],
       (inputs.get("mode") or {}).get("options"))
-RUN_NAME = "${{ (inputs.mode == 'wipe' || inputs.mode == 'wipe_finish' || inputs.mode == 'wipe_check') && format('git-data {0} {1}', inputs.mode, inputs.volume_id) || format('git-data {0}', inputs.mode) }}"
+RUN_NAME = "${{ (inputs.mode == 'wipe' || inputs.mode == 'wipe_finish' || inputs.mode == 'wipe_check' || inputs.mode == 'snapshot_clear') && format('git-data {0} {1}', inputs.mode, inputs.volume_id) || format('git-data {0}', inputs.mode) }}"
 check("WF-runname: run-name is EXACTLY the pinned closed pattern (the wipe family carries the typed volume id, every other mode is `git-data <mode>`; the wipe preconditions parse it, scripts/lib/git-data-wipe-runs.sh)",
       wf.get("run-name") == RUN_NAME, wf.get("run-name"))
 check("WF-perm: permissions are exactly {contents: read, actions: read} (actions:read is the precondition run-state reads)",
@@ -1840,9 +1840,9 @@ check("G6: workflow-level cancel-in-progress is False", isinstance(conc, dict) a
 jobs = wf.get("jobs") or {}
 check("WF-jobs: exactly three jobs, cutover, wipe and notify-failure (the notify job is separate so it still runs when either gated job is cancelled, times out or loses its runner)", sorted(jobs.keys()) == ["cutover", "notify-failure", "wipe"], list(jobs.keys()))
 job = jobs.get("cutover") or {}
-CUTOVER_IF = "inputs.mode != 'wipe' && inputs.mode != 'wipe_finish' && inputs.mode != 'wipe_check'"
-WIPE_IF = "inputs.mode == 'wipe' || inputs.mode == 'wipe_finish' || inputs.mode == 'wipe_check'"
-check("WF-cutover-if: the cutover job's if: is EXACTLY the three-way exclusion of the wipe modes (a wipe dispatch can never start it), and the wipe job's if: is EXACTLY the three-way inclusion (no other mode can start it)",
+CUTOVER_IF = "inputs.mode != 'wipe' && inputs.mode != 'wipe_finish' && inputs.mode != 'wipe_check' && inputs.mode != 'snapshot_clear'"
+WIPE_IF = "inputs.mode == 'wipe' || inputs.mode == 'wipe_finish' || inputs.mode == 'wipe_check' || inputs.mode == 'snapshot_clear'"
+check("WF-cutover-if: the cutover job's if: is EXACTLY the four-way exclusion of the wipe-family modes (a wipe-family dispatch can never start it), and the wipe job's if: is EXACTLY the four-way inclusion (no other mode can start it)",
       " ".join(str(job.get("if") or "").split()) == CUTOVER_IF and " ".join(str((jobs.get("wipe") or {}).get("if") or "").split()) == WIPE_IF,
       (job.get("if"), (jobs.get("wipe") or {}).get("if")))
 envname = job.get("environment")
@@ -2009,7 +2009,7 @@ check("AC9: DOPPLER_TOKEN_PRD is named only by the three flag reads (cutover.fla
       and all(((s.get("env") or {}).get("DOPPLER_TOKEN")) == "${{ secrets.DOPPLER_TOKEN_PRD }}" for s in _prd_steps.values())
       and set(((_prd_steps.get("cutover.flag_precheck") or {}).get("env") or {})) == {"DOPPLER_TOKEN", "FLAG_MODE"}
       and set(((_prd_steps.get("wipe.wipe_flag_precheck") or {}).get("env") or {})) == {"DOPPLER_TOKEN", "FLAG_MODE", "GH_TOKEN", "WIPE_MODE"}
-      and set(((_prd_steps.get("wipe.wipe_flag_reread") or {}).get("env") or {})) == {"DOPPLER_TOKEN", "FLAG_MODE"}, prd_sites)
+      and set(((_prd_steps.get("wipe.wipe_flag_reread") or {}).get("env") or {})) == {"DOPPLER_TOKEN", "FLAG_MODE", "WIPE_VARIANT"}, prd_sites)
 # The write-seam token census: bound ONLY on the steps that write prd — flag_write, the
 # cutover-stamp step and the finalizer's unwind. secrets_check's presence probe
 # (FLAG_WRITE_TOKEN_PRESENT, a boolean) is a name-reference, not a binding — exempt.
@@ -2848,9 +2848,9 @@ g2n_row g2n-9-started-clause-dropped 2 "s# \\&\\& needs\\.cutover\\.outputs\\.st
 # 9b — the wipe clause loses its own started pairing (a skipped or refused wipe run, whose empty outputs satisfy '' != 'false', would email).
 g2n_row g2n-9w-wipe-started-clause-dropped 2 "s# \\&\\& needs\\.wipe\\.outputs\\.started != 'false'\\)#)#" "N-if:"
 # 9c — the cutover job loses the wipe_check exclusion (a read-only wipe_check dispatch would start the cutover job as well as the wipe job).
-g2n_row g4-1-cutover-if-wipe-check-dropped 2 "s# \\&\\& inputs\\.mode != 'wipe_check'\$##" "WF-cutover-if:"
-# 9d — the wipe job's if: gains a fifth mode (a mode that is not a wipe word would start the wipe job).
-g2n_row g4-2-wipe-if-widened 2 "s#^(    if: inputs\\.mode == 'wipe' \\|\\| inputs\\.mode == 'wipe_finish' \\|\\| inputs\\.mode == 'wipe_check')\$#\\1 || inputs.mode == 'redeploy'#" "WF-cutover-if:"
+g2n_row g4-1-cutover-if-wipe-check-dropped 2 "s# \\&\\& inputs\\.mode != 'snapshot_clear'\$##" "WF-cutover-if:"
+# 9d — the wipe job's if: gains a mode (a mode that is not a wipe word would start the wipe job).
+g2n_row g4-2-wipe-if-widened 2 "s#^(    if: inputs\\.mode == 'wipe' \\|\\| inputs\\.mode == 'wipe_finish' \\|\\| inputs\\.mode == 'wipe_check' \\|\\| inputs\\.mode == 'snapshot_clear')\$#\\1 || inputs.mode == 'redeploy'#" "WF-cutover-if:"
 # 9e — the run-name expression gains a trailing id for a non-wipe mode (a rollback title would carry a volume id).
 g2n_row g4-5-run-name-trailing-id 2 "s#format\\('git-data \\{0\\}', inputs\\.mode\\) \\}\\}\$#format('git-data {0} {1}', inputs.mode, inputs.volume_id) }}#" "WF-runname:"
 g2n_row g2n-10-workflow-env-secret 1 's#^env:$#&\n  LEAK: ${{ secrets.RESEND_API_KEY }}#' "N-secrets-form:"
