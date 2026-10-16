@@ -2235,8 +2235,8 @@ ADR-218 (see the rejected alternatives below).
   nothing the existing workflow lacks).
 - **Known seam.** The script returns `TRANSIENT` for the first 24 hours of any new boot, so after a reclaim or a host
   replace this leg is dark for about 25 hours while the store refills from empty; the heartbeat is the only cover
-  meanwhile. The breach issue's close therefore lands about 25 hours after the store recovers. Tracked as a
-  follow-up, not hoisted here.
+  meanwhile. The breach issue's close therefore lands about 25 hours after the store recovers. Tracked in #10464,
+  not hoisted here.
 - **What pins it.** `scripts/zot-fill-rate-standing-wiring.test.sh` parses the workflow and executes the probe and
   filing bodies; `scripts/alarm-issue-filing-guard.test.sh` and `watchdog-workflow-idempotence.test.ts` are the
   independent witnesses for the filing steps' conditions and lookup lines.
