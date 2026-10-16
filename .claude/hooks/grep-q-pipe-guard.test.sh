@@ -2034,11 +2034,11 @@ eqv_sh="$(_eqv "$EQV_SH")"
 # exist), the wave A3 carriers (six carrier rows and 23 later-wave sites, gated on a host replace), and the #9639 and #9638 triage. Items D and H are recorded as not
 # fixed, Item E as moot, and Item G (a --ratchets selector in scripts/test-all.sh) as not fixed, each with its reason on #9217; Item F is the multi-line passes, the
 # widened reader pattern and population in the sweep above, and the survivors it left are listed under its STATED LIMITS. This block does not claim the series is finished.
-# THE PRE-PUSH AFFECTED GATE SELECTS THIS GUARD for every producer file and owner suite this guard derives (measured 2026-10-16 at ee8644bded: 98 producer files and 97 owner
-# suites, all selected by `bash scripts/test-all.sh --print-selection --paths=<one path>`, no AFFECTED_FALLBACK). The 12-entry declared array
-# (AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS in scripts/lib/test-affected-paths.sh) covers only part of that population: 47 of the producers and 64 of the owner suites
-# match the declared edge regex, and the rest are reached through derived edges. Per-path results: selection-measurement.md in the Item G spec directory under knowledge-base/project/specs/ (the
-# directory is archived after merge). The pre-push ratchet lane (scripts/pre-push-ratchet-lane.sh, stage 1) does not list this guard by design; stage 2 (--affected) selects it. Re-measure after a change to the edge list.
+# THE PRE-PUSH AFFECTED GATE DOES NOT SELECT THIS GUARD for a change to many of the files it reads. Measured 2026-10-16 at ee8644bded over this guard's own pairs, with
+# `bash scripts/test-all.sh --print-selection --paths=<one path>` reading the selected bit: it selects the guard for 47 of the 98 producer files and 64 of the 97 owner suites and NOT for
+# the other 51 and 33 (.github workflows and actions, plugin hooks and skill scripts, many scripts/*.sh). The 12-entry declared array (AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS in
+# scripts/lib/test-affected-paths.sh) is only part of the declared edge. CI's full battery runs this guard, so a PR that adds one `| verb` to an unselected producer is green locally and red in CI; run it by hand
+# after editing a script a suite stubs a verb for. Tracked in #10447; per-path rows and the re-measure recipe are in selection-measurement.md, found by name under knowledge-base/project/specs/archive/ after this merges.
 # Only tracked files are read, so a new untracked file is invisible until it is staged. This awk derivation is AUTHORITATIVE. j0-derive.py in the S7c spec directory is a
 # one-time cross-check of it (its sorted triples equalled the awk's at the S7c head, recorded in evidence.md); nothing in CI runs it, so an unexplained difference between the two is
 # the port drifting, and only a person who runs it will see one.

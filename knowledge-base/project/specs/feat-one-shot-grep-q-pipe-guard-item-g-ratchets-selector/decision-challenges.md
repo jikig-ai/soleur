@@ -9,30 +9,12 @@ the full evidence is in the plan, `knowledge-base/project/plans/2026-10-16-fix-g
 |---|---|---|
 | Item G: implement `--ratchets` in scripts/test-all.sh, or record not fixed | technical | Ruled by CTO agent, 2026-10-16: record as not fixed; do not edit the runner - cost is a full-battery `--affected` degrade plus armed `--pr-gated` batteries, and the pre-push ratchet lane plus `--affected` already buy the property |
 | Pipe-guard lane gap (option C): in this PR or a follow-up | technical | Ruled by CTO agent, 2026-10-16: separate follow-up issue, conditional-tier lane member preferred - Item G is the selector only and the unconditional-versus-conditional trade is its own decision |
-| Pipe-guard lane gap (option C) after the Phase 1 measurement: file the follow-up, or withdraw (supersedes the row above) | technical | Ruled by CTO agent, 2026-10-16: withdraw option C and file no issue - the guard is selected for 98/98 producers and 97/97 owner suites (`selection-measurement.md`), so no gap is named; the stage-1 lane omits the guard by design and stage-2 `--affected` selects it |
-| Guard header sentence `DOES NOT SELECT THIS GUARD` (now measurably false): correct in this PR or leave | technical | Ruled by CTO agent, 2026-10-16: correct it inline as a comment-only edit with the measured fact, in the same commit as the `STILL OPEN` edit - a stale comment would send the next reader back to option C |
+| Pipe-guard lane gap (option C) after a first Phase 1 measurement that counted line presence instead of the selected bit | technical | Ruled by CTO agent, 2026-10-16: withdraw option C and file no issue - VOID, it rested on a measurement bug (98/98 and 97/97 "selected") found by a bogus-path negative control; superseded by the next row |
+| Pipe-guard lane gap (option C) after the corrected, bit-parsed measurement (47/98 producers and 64/97 owner suites selected, 51 and 33 not) | technical | Ruled by CTO agent, 2026-10-16: restore the first ruling - record Item G not fixed, file the follow-up issue (#10447) proposing a conditional lane member whose trigger is derived from the guard's own pairs, do not fix it inline and do not widen the edge array (a runner-changed trigger) |
+| Guard header sentence `DOES NOT SELECT THIS GUARD`: correct in this PR or leave | technical | Ruled by CTO agent, 2026-10-16: correct only its false parts as a comment-only edit (95/93 to 98/97, "most owner suites" to 33 of 97), keep the producer claim, stamp date and sha, cite #10447 |
+| #9217 comment that said "zero gap" | technical | Ruled by CTO agent, 2026-10-16: edit my own comment with a dated correction block stating the corrected figures and the follow-up |
 | Meaning of "forbidden-to-edit" for scripts/test-all.sh | technical | Ruled by CTO agent, 2026-10-16: a cost label (PR_GATE_MACHINERY_PATHS arming plus the `runner-changed` full-battery degrade), not a prohibition - no hook, CODEOWNERS entry or AGENTS rule bans the edit |
-
-## Plan-review items not applied (taste)
-
-Raised by the DHH, Kieran and simplicity reviewers; all mechanical findings were applied to the plan. These taste items were kept as planned, and each says what was asked and what was kept.
-
-## 1. Taste: drop the guard-header edit and fold it into the follow-up issue
-
-- Raised by: simplicity reviewer (the edit answers no ask and is the only deliverable that touches a code path).
-- Kept, narrowed: the `STILL OPEN` sentence in `.claude/hooks/grep-q-pipe-guard.test.sh` lists Item G as open; after the #9217 record it would assert a falsehood, and the Item D, E and H records updated that same sentence. The neighbouring `DOES NOT SELECT THIS GUARD` sentence moved to the follow-up as the reviewers asked (superseded: the second CTO ruling corrects it in this PR, see the Decision Classes table). Decide: keep the one-sentence edit (default) or drop it and let the follow-up own both.
-
-## 2. Taste: cut the six-path sample to the three already measured
-
-- Raised by: DHH and simplicity reviewers.
-- Kept: probes take about 13 s unloaded, the first sample included a path not shown to be a producer, and the follow-up issue must carry confirmed numbers. Three paths with one provisional zero is thin.
-
-## 3. Taste: shorten the #9217 comment and drop the 36/27/9/10/3 breakdown
-
-- Raised by: DHH and simplicity reviewers.
-- Kept: the CTO supplied that comment text as the record of the ruling and the counts are the evidence that the `grep -lis ratchet` set is a heuristic. They are stamped "as of ee8644bded".
-
-## 4. Taste: collapse the skipped-gate sections and the Property/Cut table into one line
-
-- Raised by: DHH reviewer.
-- Kept: the plan skill requires the Property List and Cut List in Research Insights (plan-review reads them) and each skipped gate states its reason in one line.
+| Plan review (DHH, Kieran, simplicity): drop the guard-header edit and fold it into a follow-up issue | taste | Kept, then widened: the header edit stays because its `STILL OPEN` list and its selection sentence were both false after this record; the CTO ruling moved the correction of the header's false selection figures into this PR |
+| Plan review: cut the producer-path sample to the three already measured | taste | Superseded: the whole 98-producer / 97-owner population was measured instead (`selection-measurement.md`), after the first count was found invalid |
+| Plan review: shorten the #9217 comment and drop the 36/27/9/10/3 breakdown | taste | Kept: the counts are the evidence that the `grep -lis ratchet` set is a text-mention heuristic, stamped as of `ee8644bded` |
+| Plan review: collapse the skipped-gate sections and the Property/Cut table | taste | Kept: the plan skill requires the Property List and Cut List, and each skipped gate states its reason in one line |
