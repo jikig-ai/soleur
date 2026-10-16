@@ -1,6 +1,6 @@
 # S4 PR C go/no-go record (Ref #9729, ADR-276)
 
-Rule of the record (CTO R3): GO iff every criterion passes; NO-GO iff any criterion fails outside the 10% band; UNDECIDED otherwise. A CTO ruling
+Rule of the record (CTO R3): GO iff every criterion passes; NO-GO iff any criterion fails outside the 10% band; UNDECIDED otherwise. The 10% band applies to the numeric thresholds (a and c) only: it does NOT apply to (b), whose threshold is zero (10% of zero is zero), so a later reader must not re-grade (b) as within-10%. A CTO ruling
 can only move a computed verdict toward NO-GO. Computed with `python3 scripts/ci-pr-affected-replay.py verdict`.
 
 | # | Criterion (R3) | Measured | Threshold | Status | Receipt |
@@ -30,4 +30,9 @@ index work, not a threshold to argue, and it is the entry condition for any late
 
 ## Status of this record
 
-SOLEUR_PR_AFFECTED_VERDICT verdict=NO-GO ruled=pending date=2026-10-16
+CTO confirmation (second spawn, 2026-10-16), full text in `decision-challenges.md`: NO-GO confirmed. (b) is correctly `fail`: a known lower bound above zero
+is a measurement, so `unmeasured` does not apply, and the status changes only on a re-run of the audit against a completed index, never on a better
+estimate of the real-read share. (a) passing is a necessary condition that does not carry the decision and must not be cited as support for a GO.
+Follow-on recommendation: fund index completion, and retire S4 if that work is not scheduled within one quarter (the operator owns the scope call).
+
+SOLEUR_PR_AFFECTED_VERDICT verdict=NO-GO ruled=confirmed date=2026-10-16
