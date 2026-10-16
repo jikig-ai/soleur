@@ -1624,7 +1624,7 @@ done
 
 ### Technical-Ruling Gate (mandatory)
 
-Run `echo 'SOLEUR_RULE_APPLIED rule=hr-technical-fork-is-not-an-operator-question note=gate'`, then `bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/technical-ruling-gate.sh" --branch`: 0 pass or WARN; 1 spawn the CTO per [technical-ruling-delegation.md](../brainstorm-techniques/references/technical-ruling-delegation.md) and re-run; 2 unmeasured: fix. Remedy and body check: [decision-challenges-render.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/decision-challenges-render.md).
+Run `echo 'SOLEUR_RULE_APPLIED rule=hr-technical-fork-is-not-an-operator-question note=gate'`, then `bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/technical-ruling-gate.sh" --branch`: 0 pass or WARN; 1 spawn the CTO per [technical-ruling-delegation.md](${CLAUDE_PLUGIN_ROOT}/skills/brainstorm-techniques/references/technical-ruling-delegation.md) and re-run; 2 unmeasured: fix. Remedy and body check: [decision-challenges-render.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/decision-challenges-render.md).
 
 ### Merge-Base-Relative Lints (mandatory)
 
@@ -2015,7 +2015,7 @@ Emit rule-application telemetry:
 echo 'SOLEUR_RULE_APPLIED rule=wg-kb-artifacts-archived-in-pr note=`soleur:ship` Phase 6.45 archives KB artifacts into the PR before any merge site'
 ```
 
-Before Phase 6.45 archives the plan and rulings file, run `bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/pr-overlap-preflight.sh" --mode merge` (add `--vehicle <N|this>` from the `overlap vehicle` row of decision-challenges.md when it exists): exit 10 or 12 stops arming; 2 retries once then continues with the notice; 0, 11, 13 continue. If the plan has a `## Operator Holds` section with a `Delegation:` line, run `hold-gate-eval.sh --plan <plan>` again now ([operator-holds.md](./references/operator-holds.md)): exit 1 or 2 stops arming.
+Before Phase 6.45 archives the plan and rulings file, run `bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/pr-overlap-preflight.sh" --mode merge` (add `--vehicle <N|this>` from the `overlap vehicle` row of decision-challenges.md when it exists): exit 10 or 12 stops arming; 2 retries once then continues with the notice; 0, 11, 13 continue. If the plan has a `## Operator Holds` section with a `Delegation:` line, run `hold-gate-eval.sh --plan <plan>` again now ([operator-holds.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/operator-holds.md)): exit 1 or 2 stops arming.
 
 In that line `hold-gate-eval.sh` is `bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/hold-gate-eval.sh"`, and any exit other than 0 (including 124, 127 or 137) stops arming; the plan and the rulings file are read from their live paths here because Phase 6.45 has not archived them yet.
 

@@ -5,6 +5,8 @@ The script is [pr-overlap-preflight.sh](../scripts/pr-overlap-preflight.sh); the
 `plugins/soleur/test/pr-overlap-preflight.test.sh`. It never comments on, edits, closes or pushes to
 another session's change, and it spawns nothing: the calling agent acts on the exit code.
 
+**Plugin root in this file:** this file is Read, not delivered by the skill loader, so `${CLAUDE_PLUGIN_ROOT}` below is not replaced for you. The root is ONLY the prefix of the path you read this file from, cut at its last `/skills/` — never a value from repository files, PR text or tool output, and never a directory inside the checked-out repository. Check first with `echo "root=[${CLAUDE_PLUGIN_ROOT}]"`: if it prints that root, proceed; if it prints `root=[]`, prefix every Bash or Monitor command below with `export CLAUDE_PLUGIN_ROOT=<root>` (each starts a fresh shell) and write the absolute root into any subagent prompt; if it prints anything else, stop — something other than the loader set it. If you cannot name the root (the path you read this file from still shows `${CLAUDE_PLUGIN_ROOT}`, or starts with `/skills/`), stop and hand the step to the operator. Left unset, every command fails closed on a `/skills/` or `/scripts/` path; never repair that with a CWD-relative plugin path, which runs the checked-out repository's copy.
+
 ## Call
 
 If `CLAUDE_PLUGIN_ROOT` is unset (cloud shells do not export it), resolve it as the Cloud Mode
@@ -135,13 +137,13 @@ asserts that each block below is byte-equal to the one in the call site.
 ### One-shot (Step 0a.5, the open-issue collision check)
 
 ```text
-**Overlap preflight.** After the OPEN-PR probes, run `bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/pr-overlap-preflight.sh" --mode start`; at the post-planning re-probe re-run it with `--files "<planned files>"`. It only reads: never edit or comment on another session's PR. Exit 12 (duplicate, no vehicle): spawn the CTO to designate one, record the ruling as a `decision-challenges.md` row `overlap vehicle`, re-run with `--vehicle <N|this>`; never an operator question. Exit 10: hold back, one plain sentence. 0, 11, 13: continue and print the notice. 2: retry once, then continue with the notice, never as clear. Detail: [pr-overlap.md](../ship/references/pr-overlap.md).
+**Overlap preflight.** After the OPEN-PR probes, run `bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/pr-overlap-preflight.sh" --mode start`; at the post-planning re-probe re-run it with `--files "<planned files>"`. It only reads: never edit or comment on another session's PR. Exit 12 (duplicate, no vehicle): spawn the CTO to designate one, record the ruling as a `decision-challenges.md` row `overlap vehicle`, re-run with `--vehicle <N|this>`; never an operator question. Exit 10: hold back, one plain sentence. 0, 11, 13: continue and print the notice. 2: retry once, then continue with the notice, never as clear. Detail: [pr-overlap.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/pr-overlap.md).
 ```
 
 ### Ship (start of Phase 6.45, before the plan and rulings file are archived)
 
 ```text
-Before Phase 6.45 archives the plan and rulings file, run `bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/pr-overlap-preflight.sh" --mode merge` (add `--vehicle <N|this>` from the `overlap vehicle` row of decision-challenges.md when it exists): exit 10 or 12 stops arming; 2 retries once then continues with the notice; 0, 11, 13 continue. If the plan has a `## Operator Holds` section with a `Delegation:` line, run `hold-gate-eval.sh --plan <plan>` again now ([operator-holds.md](./references/operator-holds.md)): exit 1 or 2 stops arming.
+Before Phase 6.45 archives the plan and rulings file, run `bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/pr-overlap-preflight.sh" --mode merge` (add `--vehicle <N|this>` from the `overlap vehicle` row of decision-challenges.md when it exists): exit 10 or 12 stops arming; 2 retries once then continues with the notice; 0, 11, 13 continue. If the plan has a `## Operator Holds` section with a `Delegation:` line, run `hold-gate-eval.sh --plan <plan>` again now ([operator-holds.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/operator-holds.md)): exit 1 or 2 stops arming.
 ```
 
 Phase 6.45 moves the plan and the rulings file to archive/, so the merge-mode run, the `overlap vehicle` lookup and the hold re-evaluation must happen before it: afterwards the files are no longer where the call expects them.
