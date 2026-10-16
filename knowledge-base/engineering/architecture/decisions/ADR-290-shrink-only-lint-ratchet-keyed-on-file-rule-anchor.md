@@ -2,6 +2,9 @@
 title: Shrink-only lint ratchet keyed on path, rule and anchor
 status: active
 date: 2026-10-16
+issue: 10331
+supersedes: null
+related: [10433]
 ---
 
 # ADR-290: Shrink-only lint ratchet keyed on path, rule and anchor
@@ -23,13 +26,15 @@ Alternatives rejected:
 
 `scripts/lint-ratchet.py` owns two scopes, `ruff` and `eslint-test-dirs`, each with a baseline file (`scripts/lint-ratchet-<scope>.baseline.txt`) of entries `path|rule|anchor|n`. `anchor` is the first 12 hex of the sha256 of the finding's whitespace-normalised source line (the text is never stored); `n` is the ordinal among identical `(path, rule, anchor)` triples. `--check` enforces, in order: the baseline exists; the tool ran and its report parsed; the scan saw at least a floor of files (ruff 55, eslint 105); the baseline EQUALS the live census (a new finding fails, and so does a stale entry); and per `(path, rule)` the baseline never holds more entries than at the merge base, after applying `git diff -M30%` renames measured against the working tree (so a staged `git mv` passes at pre-commit time). `--update` rewrites the baseline from the live census and refuses to grow it; `--list` prints the live findings.
 
+Before the comparison the scan must also be TOTAL: every tracked file in scope has to appear in the tool's own file list (ruff: the `--show-files` listing, minus the declared `knowledge-base/` exclusion; eslint: every tracked, non-symlink file matching the scope globs and the eight JS/TS extensions), a file ruff could not read is a failure rather than a smaller census, and the file-count floor stays as a backstop. The baseline is refused when it is a symlink or carries a duplicated line, `--update` applies the same floor and refuses to run when no merge base resolves, and under `CI` a baseline that is missing at the merge base is accepted only when the ratchet script is missing there too (the PR that introduces both). Any unexpected exception exits 2, never 1.
+
 Counting is waiver-proof (ruff `--ignore-noqa`, eslint `--no-inline-config`) and no tool runs in a fix mode. Ruff is provisioned by the script itself: `scripts/ruff-requirements.txt` pins `ruff==0.16.10` with a sha256 for each of the 17 wheels, installed with `pip --isolated --require-hashes --only-binary=:all:` into a per-user `0700` cache with ownership checks and a scrubbed `PIP_*`/`PYTHON*` environment. A hash mismatch is exit 2 everywhere; an unreachable index is a loud `SKIP` locally and exit 2 under `CI`. `ruff.toml` selects `SIM115`, `S110`, `S112`, `F401`, `F841` with `check-typed-exception = true`.
 
 Registration: a `run_suite` pair (`tests/scripts/lint-ratchet`, `scripts/lint-ratchet-ruff-live`) in the required `test` context, both always-on in `scripts/lib/test-affected-paths.sh`; the eslint live arm is `apps/web-platform/test/eslint-test-dirs-ratchet.test.ts` (in `REPO_WIDE_SUITES`); two lefthook pre-commit entries with dual globs. Exit codes: 0 clean, 1 drift or vacuity, 2 infrastructure.
 
-**Control.** CODEOWNERS is documentation only here: the repository has a `* @deruelle` fallback and no ruleset requires code-owner review. The controls are the merge-base comparison, the pin test in `tests/scripts/test_lint_ratchet.py` (parses `ruff.toml` with `tomllib` and asserts the rule set, `check-typed-exception`, `extend-exclude`, the scope tuple and both floors), and human PR review of the tooling.
+**Control.** CODEOWNERS is documentation only here: the repository has a `* @deruelle` fallback and no ruleset requires code-owner review. The controls are the merge-base comparison, the pin tests in `tests/scripts/test_lint_ratchet.py` (the whole parsed `ruff.toml` document, a sha256 of the eslint config, both scope tuples and both floors), a registration test that fails when a `run_suite` line, an `ALWAYS_ON_SUITES` entry, a lefthook entry or the vitest manifest entry is deleted, and human PR review of the tooling.
 
-**PR3b contract.** The entry format, the exit codes and the scope-config dict that `check()` takes (`name`, `baseline`, `floor`, `run`, `remedy`, `drawdown`) are the interface. PR3b will `git mv` the script into the plugin and change one path constant in the tests; it supplies its own scope-config for user repos.
+**PR3b contract.** The entry format, the exit codes and the scope-config dict that `check()` takes (`name`, `baseline`, `floor`, `run`, `remedy`, `drawdown`, optionally `script` and `recovery_cmd`) are the interface; `run(root)` returns `(findings, file_count)` and may raise `Vacuous`, `InfraError` or `Skip`, and `Skip` propagates to the caller. The module is not yet location-independent: `REPO_ROOT`, `RUFF_REQUIREMENTS`, `SCRIPT_REL`, the eslint paths and the `--config ruff.toml` argument are module constants. PR3b will move the script into the plugin and re-point those constants and the test loader path (a small, mechanical change, but more than one line), and it supplies its own scope-config for user repos.
 
 **Bumping ruff.** Take the version and one sha256 per wheel from `https://pypi.org/pypi/ruff/<version>/json`, replace the pin and all hash lines in `scripts/ruff-requirements.txt`, then run `python3 scripts/lint-ratchet.py ruff --update`; any finding the new version adds is fixed or the bump is held.
 
@@ -39,10 +44,12 @@ A new unclosed file, empty handler, unused import or unused binding in tracked P
 
 Accepted residuals, none of which the check can see:
 
-1. A fix of finding A plus a new finding B inside one `(path, rule)` is invisible: the count is unchanged.
+1. A fix of finding A plus a new finding B inside one `(path, rule)` is invisible: the count is unchanged. A rename at or above the 30% similarity cutoff carries the old file's counts to the new path, so replacing a file with a 30%-similar one that holds different findings of the same rule is invisible too.
 2. A rename below the `git diff -M30%` similarity cutoff reads as growth; fix the findings in the same PR.
-3. A diff that also changes the baseline-path constant presents the baseline as "absent at base" and skips the delta.
-4. The pin test and the config can be edited together in one diff; only human review stops it.
+3. A diff that moves the baseline path is caught under `CI` only while the ratchet script exists at the merge base (the rule above); a diff that also deletes or renames the script presents both as new.
+4. The pin tests, the configs and the script can be edited together in one diff, and the script is judged by tests that live in the same diff; only human review stops it. On a push to `main` the merge base equals `HEAD`, so the comparison is vacuous there and the baseline-equals-census check is the only gate.
+5. The scan is an enumerated list, not a property of the repository: a Python file with no `.py`, `.pyi` or `.pyw` extension (a shebang script, a notebook), and a JS/TS test file outside the four eslint scope globs (for example `tests/`, a nested `scripts/**/*.test.mjs`, or a `lib/` test), is never scanned and a totality check cannot see it. None is tracked today.
+6. `--update` and the anchors read the working tree, so a partially staged commit can disagree with the index; the full-tree run in CI is the backstop. Deleting a baselined file stages a deletion that no lefthook glob sees, and the stale entry surfaces only in CI.
 
 Two PRs that each delete one of two identical baselined lines merge cleanly and leave a stale `n=1`; the stale message and the baseline header say to take the base branch's copy and re-run `--update`. Anchors are read from the working tree, so a partially staged commit can disagree with the index; the full-tree CI run is the backstop.
 

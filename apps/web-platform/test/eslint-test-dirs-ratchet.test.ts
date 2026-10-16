@@ -20,6 +20,8 @@ describe("eslint test-dirs ratchet", () => {
     const result = spawnSync("python3", ["scripts/lint-ratchet.py", "eslint-test-dirs", "--check"], {
       cwd: REPO_ROOT,
       encoding: "utf8",
+      // spawnSync blocks the event loop, so vitest's own timeout cannot interrupt a hung child.
+      timeout: 110_000,
     });
     // Surface the script's own failure text (live path:row, rule, remedy) in the assertion.
     expect(`${result.stdout}${result.stderr}`.trim()).toMatch(/eslint-test-dirs/);

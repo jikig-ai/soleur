@@ -229,6 +229,10 @@ pre-commit:
       glob:
         - "*.py"
         - "**/*.py"
+        - "*.pyi"
+        - "**/*.pyi"
+        - "*.pyw"
+        - "**/*.pyw"
         - "ruff.toml"
         - "scripts/ruff-requirements.txt"
         - "scripts/lint-ratchet-ruff.baseline.txt"
@@ -247,6 +251,8 @@ pre-commit:
         - "plugins/soleur/skills/*/test/**/*.{ts,tsx,js,mjs,cjs,mts}"
         - "scripts/*.test.mjs"
         - "apps/web-platform/eslint.test-dirs.config.mjs"
+        - "apps/web-platform/package.json"
+        - "apps/web-platform/package-lock.json"
         - "scripts/lint-ratchet.py"
         - "scripts/lint-ratchet-eslint-test-dirs.baseline.txt"
       run: python3 scripts/lint-ratchet.py eslint-test-dirs --check

@@ -10,18 +10,24 @@ A baseline file lists the findings that existed when the scope was introduced. E
 of the finding (the line text is never stored) and ``n`` the 1-based ordinal among identical
 ``(path, rule, anchor)`` triples, so two identical lines are two entries. ``--check`` enforces
 
-1. the baseline file exists,
-2. the tool ran and its report parsed,
+1. the baseline file exists (and is neither a symlink nor carries duplicate lines),
+2. the tool ran and its report parsed, and every tracked in-scope file was actually scanned
+   (a tracked file the tool silently skipped is a failure, not a smaller census),
 3. the scan saw enough files (a floor per scope), so a scan of nothing cannot read as green,
 4. the baseline EQUALS the live census: a new finding fails, and so does a stale entry,
 5. per ``(path, rule)`` the baseline never holds more entries than at the merge base, after
    applying ``git diff -M`` renames, so the baseline can only shrink.
 
 Exit codes: 0 clean; 1 drift or vacuity; 2 infrastructure (tool missing or crashed, unparsable
-output, hash mismatch, baseline absent, no merge base under ``CI``).
+output, hash mismatch, baseline absent or unsafe, no merge base under ``CI``, any unexpected error).
 
 Counting is waiver-proof (ruff ``--ignore-noqa``, eslint ``--no-inline-config``) and no tool is
 ever run in a fix mode: the files under scan include test fixtures that are test INPUT.
+
+Library contract (PR3b): ``check(config, root, base, env)`` takes a plain dict with ``name``,
+``baseline``, ``floor``, ``run`` (``run(root) -> (findings, file_count)``, may raise ``Vacuous``,
+``InfraError`` or ``Skip``), ``remedy``, ``drawdown``, and optionally ``script`` and
+``recovery_cmd``. ``Skip`` propagates to the caller.
 
 Residual: anchors are read from the working tree, so a partially staged commit can disagree with
 the index; the full-tree CI run is the backstop.
@@ -32,9 +38,11 @@ Stdlib only and 3.9-safe: lefthook runs this on contributors' macOS system Pytho
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
+import platform
 import re
 import shutil
 import stat
@@ -45,12 +53,23 @@ from pathlib import Path
 from typing import NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+SCRIPT_REL = "scripts/lint-ratchet.py"
 RUFF_REQUIREMENTS = REPO_ROOT / "scripts" / "ruff-requirements.txt"
 ESLINT_CONFIG = "apps/web-platform/eslint.test-dirs.config.mjs"
 ESLINT_BIN = "apps/web-platform/node_modules/.bin/eslint"
+ESLINT_EXTS = (".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".mts", ".cts")
+# Tracked Python that ruff.toml (extend-exclude) deliberately does not scan; anything else a
+# tracked file is missing from ruff's own file list for is a silent skip and fails the scan.
+EXCLUDED_PREFIXES = ("knowledge-base/",)
+DRAWDOWN = "#10433"
 
-FIX_FLAGS = ("--fix", "--unsafe-fixes", "--write")
+GIT_TIMEOUT = 120
+RUN_TIMEOUT = 900
+PIP_TIMEOUT = 300
+
 ENTRY_RE = re.compile(r"^([^|]+)\|([^|]+)\|([0-9a-f]{12})\|([0-9]+)$")
+LINE_SPLIT_RE = re.compile(r"\r\n|\r|\n")
+CONTROL_RE = re.compile("[\x00-\x1f\x7f-\x9f  ]")
 # pip output that means the REQUIREMENTS are wrong or the wheel does not match its hash: never a
 # skip, because a skipped integrity failure is exactly how a poisoned index would get through.
 PIP_INTEGRITY_MARKERS = (
@@ -60,6 +79,18 @@ PIP_INTEGRITY_MARKERS = (
     "Could not open requirements file",
     "must be pinned",
     "In --require-hashes mode",
+)
+# Only a positively identified reachability failure may be skipped locally; any other pip
+# failure is infrastructure, so a reworded integrity message cannot turn into a silent skip.
+PIP_NETWORK_MARKERS = (
+    "Could not fetch URL",
+    "Temporary failure in name resolution",
+    "Name or service not known",
+    "Network is unreachable",
+    "No route to host",
+    "Max retries exceeded",
+    "timed out",
+    "Connection",
 )
 
 REMEDY_RUFF = (
@@ -75,9 +106,8 @@ SCOPES = {
     "ruff": {
         "baseline": "scripts/lint-ratchet-ruff.baseline.txt",
         "floor": 55,
-        "scope": ("*.py",),
+        "scope": ("*.py", "*.pyi", "*.pyw"),
         "remedy": REMEDY_RUFF,
-        "drawdown": "#10433",
     },
     "eslint-test-dirs": {
         "baseline": "scripts/lint-ratchet-eslint-test-dirs.baseline.txt",
@@ -89,7 +119,6 @@ SCOPES = {
             "scripts/*.test.mjs",
         ),
         "remedy": REMEDY_ESLINT,
-        "drawdown": "#10433",
     },
 }
 
@@ -113,6 +142,33 @@ class Finding(NamedTuple):
     message: str
 
 
+# --------------------------------------------------------------------------- process helpers
+
+
+def _exec(run, argv, timeout, **kwargs):
+    """Run a child process with a bound, UTF-8 text capture, mapping spawn failures to InfraError."""
+    kwargs.setdefault("capture_output", True)
+    kwargs.setdefault("encoding", "utf-8")
+    kwargs.setdefault("errors", "replace")
+    name = Path(str(argv[0])).name
+    try:
+        return run(argv, timeout=timeout, **kwargs)
+    except subprocess.TimeoutExpired:
+        raise InfraError("{} timed out after {}s".format(name, timeout))
+    except OSError as exc:
+        raise InfraError("could not run {}: {}".format(name, exc))
+
+
+def _clean(text: str) -> str:
+    """Strip terminal control characters from anything echoed from a file name or tool message."""
+    return CONTROL_RE.sub(" ", text)
+
+
+def _is_ci(env) -> bool:
+    value = (env if env is not None else os.environ).get("CI", "")
+    return value.strip().lower() not in ("", "0", "false", "no")
+
+
 # --------------------------------------------------------------------------- entries
 
 
@@ -130,14 +186,22 @@ def format_entry(path: str, rule: str, anchor: str, n: int) -> str:
 
 def parse_baseline(text: str) -> list:
     entries = []
-    for number, raw in enumerate(text.splitlines(), start=1):
+    seen = set()
+    for number, raw in enumerate(LINE_SPLIT_RE.split(text), start=1):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
+        if line.startswith(("<<<<<<<", "=======", ">>>>>>>")):
+            raise InfraError("baseline line {} is a merge-conflict marker: take the base branch's copy of the "
+                             "baseline and re-run --update".format(number))
         match = ENTRY_RE.match(line)
         if not match:
             raise InfraError("baseline line {} is not 'path|rule|anchor|n': {!r}".format(number, line[:80]))
-        entries.append((match.group(1), match.group(2), match.group(3), int(match.group(4))))
+        entry = (match.group(1), match.group(2), match.group(3), int(match.group(4)))
+        if entry in seen:
+            raise InfraError("baseline line {} duplicates an earlier entry: {!r}".format(number, line[:80]))
+        seen.add(entry)
+        entries.append(entry)
     return entries
 
 
@@ -174,7 +238,8 @@ def census_pairs(findings: list, root) -> list:
             continue
         if finding.path not in lines_cache:
             try:
-                lines_cache[finding.path] = full.read_text(encoding="utf-8", errors="replace").splitlines()
+                text = full.read_text(encoding="utf-8", errors="replace")
+                lines_cache[finding.path] = LINE_SPLIT_RE.split(text)
             except OSError:
                 lines_cache[finding.path] = []
         lines = lines_cache[finding.path]
@@ -195,9 +260,11 @@ def census(findings: list, root) -> list:
 
 def _relative(filename: str, root) -> str:
     root = Path(root)
+    if not os.path.isabs(filename):
+        filename = os.path.join(str(root), filename)
     for base in (str(root), os.path.realpath(str(root))):
         rel = os.path.relpath(filename, base)
-        if not rel.startswith(".."):
+        if rel != ".." and not rel.startswith(".." + os.sep):
             return rel
     raise InfraError("tool reported a path outside the repository: {!r}".format(filename))
 
@@ -211,16 +278,19 @@ def adapt_ruff(text: str, root) -> list:
         raise InfraError("ruff's JSON report is not a list")
     findings = []
     for item in report:
-        code = item.get("code")
-        path = _relative(item["filename"], root)
-        if not code:
-            raise InfraError("ruff could not parse {} ({}); a file that did not parse hides its findings".format(
-                path, item.get("message", "syntax error")))
-        findings.append(Finding(path, code, int(item["location"]["row"]), item.get("message", "")))
+        try:
+            code = item.get("code")
+            path = _relative(item["filename"], root)
+            if not code:
+                raise InfraError("ruff could not parse {} ({}); a file that did not parse hides its findings".format(
+                    path, item.get("message", "syntax error")))
+            findings.append(Finding(path, code, int(item["location"]["row"]), item.get("message", "")))
+        except (KeyError, TypeError, AttributeError, ValueError) as exc:
+            raise InfraError("ruff report item has an unexpected shape ({}: {})".format(type(exc).__name__, exc))
     return findings
 
 
-def adapt_eslint(text: str, root, tracked=None) -> tuple:
+def adapt_eslint(text: str, root, tracked=None, seen=None) -> tuple:
     try:
         report = json.loads(text)
     except ValueError as exc:
@@ -230,16 +300,21 @@ def adapt_eslint(text: str, root, tracked=None) -> tuple:
     findings = []
     file_count = 0
     for result in report:
-        path = _relative(result["filePath"], root)
-        if tracked is not None and path not in tracked:
-            continue
-        file_count += 1
-        for message in result.get("messages", []):
-            if message.get("fatal") or result.get("fatalErrorCount"):
-                raise InfraError("eslint could not parse {} ({}); a file that did not parse hides its findings".format(
-                    path, message.get("message", "fatal error")))
-            findings.append(Finding(path, message.get("ruleId") or "(eslint)", int(message.get("line", 0)),
-                                    message.get("message", "")))
+        try:
+            path = _relative(result["filePath"], root)
+            if tracked is not None and path not in tracked:
+                continue
+            file_count += 1
+            if seen is not None:
+                seen.add(path)
+            for message in result.get("messages", []):
+                if message.get("fatal") or result.get("fatalErrorCount"):
+                    raise InfraError("eslint could not parse {} ({}); a file that did not parse hides its "
+                                     "findings".format(path, message.get("message", "fatal error")))
+                findings.append(Finding(path, message.get("ruleId") or "(eslint)", int(message.get("line", 0)),
+                                        message.get("message", "")))
+        except (KeyError, TypeError, AttributeError, ValueError) as exc:
+            raise InfraError("eslint report item has an unexpected shape ({}: {})".format(type(exc).__name__, exc))
     return findings, file_count
 
 
@@ -247,11 +322,11 @@ def adapt_eslint(text: str, root, tracked=None) -> tuple:
 
 
 def _git(root, args: list, env=None) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", "-C", str(root)] + list(args), env=env, capture_output=True, text=True)
+    return _exec(subprocess.run, ["git", "-C", str(root)] + list(args), GIT_TIMEOUT, env=env)
 
 
-def tracked_files(root, pathspec: str, env=None) -> list:
-    result = _git(root, ["ls-files", "-z", "--", pathspec], env)
+def tracked_files(root, pathspecs, env=None) -> list:
+    result = _git(root, ["ls-files", "-z", "--"] + list(pathspecs), env)
     if result.returncode != 0:
         raise InfraError("git ls-files failed: {}".format(result.stderr.strip()[:200]))
     return [name for name in result.stdout.split("\0") if name]
@@ -265,34 +340,24 @@ def resolve_base(root, ref, env=None):
         if ref.startswith("-"):
             raise InfraError("--base {!r} looks like an option, not a ref".format(ref))
         result = _git(root, ["rev-parse", "--verify", "--end-of-options", ref + "^{commit}"], env)
-    sha = result.stdout.strip()
-    if result.returncode != 0 or not re.match(r"^[0-9a-f]{40,64}$", sha):
-        return None
-    return sha
+    return result.stdout.strip() if result.returncode == 0 else None
 
 
 def rename_map(root, sha: str, env=None) -> dict:
     """Map old -> new for renames between ``sha`` and the working tree (staged renames included)."""
-    result = _git(root, ["diff", "-M30%", "-z", "--name-status", sha, "--"], env)
+    result = _git(root, ["diff", "-M30%", "-z", "--name-status", "--diff-filter=R", sha, "--"], env)
     if result.returncode != 0:
         raise InfraError("git diff failed: {}".format(result.stderr.strip()[:200]))
     tokens = result.stdout.split("\0")
-    renames = {}
-    i = 0
-    while i < len(tokens) and tokens[i]:
-        status = tokens[i]
-        if status.startswith(("R", "C")):
-            if status.startswith("R") and i + 2 < len(tokens):
-                renames[tokens[i + 1]] = tokens[i + 2]
-            i += 3
-        else:
-            i += 2
-    return renames
+    return dict(zip(tokens[1::3], tokens[2::3]))
 
 
 def baseline_at(root, sha: str, path: str, env=None):
-    exists = _git(root, ["cat-file", "-e", "{}:{}".format(sha, path)], env)
-    if exists.returncode != 0:
+    """Return the file's text at ``sha``, or None only when the commit genuinely has no such path."""
+    listed = _git(root, ["ls-tree", "--name-only", sha, "--", path], env)
+    if listed.returncode != 0:
+        raise InfraError("git ls-tree {} failed: {}".format(sha[:12], listed.stderr.strip()[:200]))
+    if not listed.stdout.strip():
         return None
     shown = _git(root, ["show", "{}:{}".format(sha, path)], env)
     if shown.returncode != 0:
@@ -316,44 +381,76 @@ def growth(head_entries: list, base_entries: list, renames=None) -> list:
 # --------------------------------------------------------------------------- check / update
 
 
-def _is_ci(env) -> bool:
-    return bool((env if env is not None else os.environ).get("CI"))
-
-
 def _prefix(config: dict) -> str:
     return "lint-ratchet({}): ".format(config["name"])
 
 
-def _delta(config, root, head_entries, base, env, out: list) -> int:
+def _recovery(config: dict) -> str:
+    return config.get("recovery_cmd") or "python3 {} {}".format(SCRIPT_REL, config["name"])
+
+
+def _baseline_file(root: Path, config: dict) -> Path:
+    """The baseline path, refused when it or its directory is a symlink (it is read and rewritten)."""
+    path = root / config["baseline"]
+    if path.is_symlink() or path.parent.is_symlink():
+        raise InfraError("baseline {} is (or sits under) a symlink; refusing to read or write through it".format(
+            config["baseline"]))
+    return path
+
+
+def _write_baseline(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name("{}.tmp-{}".format(path.name, os.getpid()))
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(str(tmp), str(path))
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
+def _delta(config, root, head_entries, base, env, out: list) -> tuple:
+    """Return ``(exit_code, compared)``; ``compared`` is False when the comparison did not run."""
     ci = _is_ci(env)
     pre = _prefix(config)
     sha = resolve_base(root, base, env)
     if sha is None:
         if ci:
             out.append(pre + "no merge base could be resolved under CI; refusing to skip the shrink-only comparison")
-            return 2
+            return 2, False
         out.append(pre + "warning: merge base unresolvable here; the shrink-only comparison was skipped")
-        return 0
+        return 0, False
     base_text = baseline_at(root, sha, config["baseline"], env)
     if base_text is None:
-        out.append(pre + "baseline introduced by this diff (absent at {}); shrink-only comparison skipped".format(sha[:12]))
-        return 0
+        script = config.get("script")
+        if ci and script and baseline_at(root, sha, script, env) is not None:
+            out.append(pre + "the baseline is missing at the merge base {} although the ratchet script exists "
+                       "there: a baseline moved or renamed in this diff cannot be compared".format(sha[:12]))
+            return 2, False
+        out.append(pre + "baseline introduced by this diff (absent at {}); shrink-only comparison skipped".format(
+            sha[:12]))
+        return 0, False
     grew = growth(head_entries, parse_baseline(base_text), rename_map(root, sha, env))
     for path, rule, now, before in grew:
-        out.append(pre + "baseline grew for {} [{}]: {} entries now, {} at the merge base".format(path, rule, now, before))
+        out.append(pre + "baseline grew for {} [{}]: {} entries now, {} at the merge base".format(
+            _clean(path), rule, now, before))
     if grew:
         out.append(pre + "the baseline may only shrink; fix the finding instead of admitting it")
-        return 1
-    return 0
+        return 1, True
+    return 0, True
 
 
 def check(config: dict, root, base=None, env=None) -> tuple:
     root = Path(root)
     pre = _prefix(config)
     out = []
-    baseline_path = root / config["baseline"]
+    try:
+        baseline_path = _baseline_file(root, config)
+    except InfraError as exc:
+        return 2, [pre + str(exc)]
     if not baseline_path.exists():
-        return 2, [pre + "baseline {} is missing; create it with --update".format(config["baseline"])]
+        return 2, [pre + "baseline {} is missing; create it with {} --update".format(
+            config["baseline"], _recovery(config))]
     try:
         findings, file_count = config["run"](root)
     except Vacuous as exc:
@@ -365,20 +462,26 @@ def check(config: dict, root, base=None, env=None) -> tuple:
                    "cannot report green".format(file_count, config["floor"])]
     try:
         pairs = census_pairs(findings, root)
-        baseline_entries = parse_baseline(baseline_path.read_text())
+        baseline_entries = parse_baseline(baseline_path.read_text(encoding="utf-8"))
     except InfraError as exc:
         return 2, [pre + str(exc)]
     live = {entry: finding for entry, finding in pairs}
     known = set(baseline_entries)
     new = [entry for entry in sorted(live) if entry not in known]
     stale = [entry for entry in sorted(known) if entry not in live]
+    changed_keys = {(e[0], e[1]) for e in new} & {(e[0], e[1]) for e in stale}
     for entry in new:
         finding = live[entry]
-        out.append(pre + "NEW {}:{} {} {}".format(finding.path, finding.row, finding.rule, finding.message))
+        out.append(pre + _clean("NEW {}:{} {} {}".format(finding.path, finding.row, finding.rule, finding.message)))
     for entry in stale:
-        out.append(pre + "STALE {} -- fixed: run `python3 scripts/lint-ratchet.py {} --update` and commit the "
-                   "baseline. After a merge conflict take the base branch's copy of the baseline and re-run "
-                   "--update.".format(format_entry(*entry), config["name"]))
+        text = _clean(format_entry(*entry))
+        if (entry[0], entry[1]) in changed_keys:
+            out.append(pre + "STALE {} -- a line carrying this finding changed; if the finding itself is unchanged "
+                       "run `{} --update` (it refuses real growth)".format(text, _recovery(config)))
+        else:
+            out.append(pre + "STALE {} -- fixed: run `{} --update` and commit the baseline. After a merge conflict "
+                       "take the base branch's copy of the baseline and re-run --update.".format(
+                           text, _recovery(config)))
     if new or stale:
         if new:
             out.append(pre + "remedy: " + config["remedy"])
@@ -386,11 +489,12 @@ def check(config: dict, root, base=None, env=None) -> tuple:
                        "not be used to admit a new finding")
         return 1, out
     try:
-        code = _delta(config, root, [entry for entry in live], base, env, out)
+        code, compared = _delta(config, root, list(live), base, env, out)
     except InfraError as exc:
         return 2, out + [pre + str(exc)]
     if code == 0:
-        out.append(pre + "OK ({} findings baselined, {} files scanned)".format(len(live), file_count))
+        out.append(pre + "OK ({} findings baselined, {} files scanned{})".format(
+            len(live), file_count, "" if compared else "; shrink-only comparison skipped"))
     return code, out
 
 
@@ -398,24 +502,29 @@ def update(config: dict, root, base=None, env=None) -> tuple:
     root = Path(root)
     pre = _prefix(config)
     try:
-        findings, _file_count = config["run"](root)
+        path = _baseline_file(root, config)
+        findings, file_count = config["run"](root)
+        if file_count < config["floor"]:
+            return 1, [pre + "the scan saw only {} files, below the floor of {}; refusing to write a baseline from "
+                       "a scan of (almost) nothing".format(file_count, config["floor"])]
         entries = census(findings, root)
         sha = resolve_base(root, base, env)
+        if sha is None and path.exists():
+            return 2, [pre + "no merge base could be resolved, so the shrink-only guard cannot run; fetch "
+                       "origin/main or pass --base <ref> (--base HEAD takes the committed baseline as the reference)"]
         if sha is not None:
             base_text = baseline_at(root, sha, config["baseline"], env)
             if base_text is not None:
                 grew = growth(entries, parse_baseline(base_text), rename_map(root, sha, env))
                 if grew:
                     lines = [pre + "refusing to write: {} [{}] would hold {} entries, {} at the merge base".format(
-                        path, rule, now, before) for path, rule, now, before in grew]
+                        _clean(p), r, now, before) for p, r, now, before in grew]
                     return 1, lines + [pre + "fix the new findings instead of baselining them"]
     except Vacuous as exc:
         return 1, [pre + "vacuous scan: {}".format(exc)]
     except InfraError as exc:
         return 2, [pre + str(exc)]
-    path = root / config["baseline"]
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_baseline(config["name"], entries, config["drawdown"]))
+    _write_baseline(path, render_baseline(config["name"], entries, config["drawdown"]))
     return 0, [pre + "wrote {} entries to {}".format(len(entries), config["baseline"])]
 
 
@@ -449,42 +558,60 @@ def show_files_argv(ruff_path, files: list) -> list:
 
 def run_ruff(root, env=None, ruff_path=None, run=subprocess.run) -> tuple:
     root = Path(root)
-    files = [name for name in tracked_files(root, "*.py", env) if not (root / name).is_symlink()]
+    files = [name for name in tracked_files(root, SCOPES["ruff"]["scope"], env) if not (root / name).is_symlink()]
     if not files:
         raise Vacuous("no tracked Python files; refusing to invoke ruff (with no file arguments it lints the "
                       "current directory)")
     exe = ruff_path if ruff_path is not None else ensure_ruff(RUFF_REQUIREMENTS, env=dict(env or os.environ))
-    listing = run(show_files_argv(exe, files), cwd=str(root), env=env, capture_output=True, text=True)
+    listing = _exec(run, show_files_argv(exe, files), RUN_TIMEOUT, cwd=str(root), env=env)
     if listing.returncode != 0:
         raise InfraError("ruff --show-files failed (rc {}): {}".format(listing.returncode, listing.stderr.strip()[:300]))
-    file_count = len([line for line in listing.stdout.splitlines() if line.strip()])
-    result = run(tool_argv("ruff", root, files, exe), cwd=str(root), env=env, capture_output=True, text=True)
+    listed = {_relative(line.strip(), root) for line in listing.stdout.splitlines() if line.strip()}
+    skipped = sorted(name for name in files if name not in listed and not name.startswith(EXCLUDED_PREFIXES))
+    if skipped:
+        raise InfraError("ruff skipped {} tracked file(s) it was asked to lint (a default exclude such as dist/ or "
+                         "venv/ matched): {}".format(len(skipped), ", ".join(_clean(n) for n in skipped[:5])))
+    result = _exec(run, tool_argv("ruff", root, files, exe), RUN_TIMEOUT, cwd=str(root), env=env)
     if result.returncode not in (0, 1):
         raise InfraError("ruff exited {}: {}".format(result.returncode, result.stderr.strip()[:300]))
-    return adapt_ruff(result.stdout, root), file_count
+    failed = [line.strip() for line in result.stderr.splitlines() if "Failed to" in line]
+    if failed:
+        raise InfraError("ruff could not lint a file (a file it cannot read hides its findings): {}".format(
+            _clean(failed[0])[:200]))
+    return adapt_ruff(result.stdout, root), len(listed)
 
 
 def run_eslint(root, env=None, run=subprocess.run) -> tuple:
     root = Path(root)
     binary = root / ESLINT_BIN
     if not binary.exists():
-        raise InfraError("{} is missing; recover with: npm ci --ignore-scripts --prefix apps/web-platform".format(ESLINT_BIN))
-    result = run(tool_argv("eslint-test-dirs", root, [], None), cwd=str(root), env=env, capture_output=True, text=True)
+        raise InfraError("{} is missing; recover with: npm ci --ignore-scripts --prefix apps/web-platform".format(
+            ESLINT_BIN))
+    result = _exec(run, tool_argv("eslint-test-dirs", root, [], None), RUN_TIMEOUT, cwd=str(root), env=env)
     if result.returncode not in (0, 1):
         raise InfraError("eslint exited {}: {}".format(result.returncode, result.stderr.strip()[:300]))
-    tracked = set(tracked_files(root, ".", env))
-    return adapt_eslint(result.stdout, root, tracked)
+    tracked = {n for n in tracked_files(root, (".",), env) if not (root / n).is_symlink()}
+    seen = set()
+    findings, file_count = adapt_eslint(result.stdout, root, tracked, seen)
+    scope = [":(glob)" + g for g in SCOPES["eslint-test-dirs"]["scope"]]
+    expected = {n for n in tracked_files(root, scope, env)
+                if n.endswith(ESLINT_EXTS) and "node_modules/" not in n and n in tracked}
+    missing = sorted(expected - seen)
+    if missing:
+        raise InfraError("eslint did not report {} tracked in-scope file(s) (an ignore or config gap hides their "
+                         "findings): {}".format(len(missing), ", ".join(_clean(n) for n in missing[:5])))
+    return findings, file_count
 
 
 # --------------------------------------------------------------------------- ruff provisioning
 
 
-def requirements_pin(path) -> tuple:
-    text = Path(path).read_text()
+def requirements_pin(path) -> str:
+    text = Path(path).read_text(encoding="utf-8")
     match = re.search(r"^ruff==([0-9][0-9A-Za-z.]*)", text, re.MULTILINE)
     if not match:
         raise InfraError("{} does not pin ruff==<version>".format(path))
-    return match.group(1), len(re.findall(r"--hash=sha256:[0-9a-f]{64}", text))
+    return match.group(1)
 
 
 def pip_argv(target, requirements) -> list:
@@ -504,47 +631,58 @@ def _private_cache_dir(root):
         info = os.lstat(str(root))
     except FileNotFoundError:
         root.parent.mkdir(parents=True, exist_ok=True)
-        os.mkdir(str(root), 0o700)
+        with contextlib.suppress(FileExistsError):
+            os.mkdir(str(root), 0o700)
         info = os.lstat(str(root))
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
         return None
     return root
 
 
-def ensure_ruff(requirements, env, run=subprocess.run, cache_root=None) -> Path:
-    version, _hashes = requirements_pin(requirements)
+def ensure_ruff(requirements, env, run=subprocess.run, cache_root=None, fallback_root=None) -> Path:
+    version = requirements_pin(requirements)
     env = dict(env)
     if cache_root is None:
         home = env.get("XDG_CACHE_HOME") or os.path.join(env.get("HOME") or os.path.expanduser("~"), ".cache")
-        cache_root = Path(home) / "soleur"
-    digest = hashlib.sha256(Path(requirements).read_bytes()).hexdigest()[:12]
-    base = _private_cache_dir(cache_root)
+        # A directory of our own: the shared `soleur` cache dir is created by other tools under the
+        # user's umask and is often group-writable, which this check (rightly) refuses.
+        cache_root = Path(home) / "soleur-lint-ratchet"
+    if fallback_root is None:
+        fallback_root = Path(tempfile.gettempdir()) / "soleur-lint-ratchet-{}".format(os.getuid())
+    base = _private_cache_dir(cache_root) or _private_cache_dir(fallback_root)
     if base is None:
-        base = Path(tempfile.mkdtemp(prefix="soleur-ruff-"))
-    final = base / "ruff-{}".format(digest)
+        raise InfraError("no private cache directory is usable for ruff ({} and {} are not owned by this user with "
+                         "mode 0700)".format(cache_root, fallback_root))
+    digest = hashlib.sha256(Path(requirements).read_bytes()).hexdigest()[:12]
+    final = base / "ruff-{}-{}-{}".format(digest, sys.platform, platform.machine() or "unknown")
     exe = final / "bin" / "ruff"
     if not exe.exists():
         print("lint-ratchet: installing ruff {} (first run only)".format(version), file=sys.stderr)
         target = Path(tempfile.mkdtemp(prefix="install-", dir=str(base)))
-        result = run(pip_argv(target, requirements), env=pip_env(env), capture_output=True, text=True)
+        result = _exec(run, pip_argv(target, requirements), PIP_TIMEOUT, env=pip_env(env))
         if result.returncode != 0:
             shutil.rmtree(str(target), ignore_errors=True)
             output = "{}\n{}".format(result.stdout or "", result.stderr or "")
             if any(marker in output for marker in PIP_INTEGRITY_MARKERS):
                 raise InfraError("ruff install failed an integrity check: {}".format(output.strip()[-300:]))
-            reason = output.strip().splitlines()[-1][:200] if output.strip() else "pip exited {}".format(result.returncode)
+            reason = output.strip().splitlines()[-1][:200] if output.strip() else "pip exited {}".format(
+                result.returncode)
             if _is_ci(env):
                 raise InfraError("ruff could not be installed under CI: {}".format(reason))
-            raise Skip("ruff could not be installed ({}); recover with: python3 scripts/lint-ratchet.py ruff --check".format(reason))
+            if any(marker in output for marker in PIP_NETWORK_MARKERS):
+                raise Skip("ruff could not be installed ({}); recover with: {} ruff --check".format(
+                    reason, "python3 " + SCRIPT_REL))
+            raise InfraError("ruff install failed for an unrecognised reason: {}".format(reason))
         try:
             os.rename(str(target), str(final))
         except OSError:
             if not final.exists():
                 raise
             shutil.rmtree(str(target), ignore_errors=True)
-    probe = subprocess.run([str(exe), "--version"], capture_output=True, text=True)
+    probe = _exec(run, [str(exe), "--version"], 60)
     if probe.stdout.strip() != "ruff {}".format(version):
-        raise InfraError("installed ruff reports {!r}, the pin is {!r}".format(probe.stdout.strip(), "ruff " + version))
+        raise InfraError("installed ruff ({}) reports {!r}, the pin is {!r}; delete {} and retry".format(
+            exe, probe.stdout.strip(), "ruff " + version, final))
     return exe
 
 
@@ -552,10 +690,8 @@ def ensure_ruff(requirements, env, run=subprocess.run, cache_root=None) -> Path:
 
 
 def build_config(name: str, env) -> dict:
-    scope = SCOPES[name]
     runner = (lambda root: run_ruff(root, env)) if name == "ruff" else (lambda root: run_eslint(root, env))
-    return {"name": name, "baseline": scope["baseline"], "floor": scope["floor"], "run": runner,
-            "remedy": scope["remedy"], "drawdown": scope["drawdown"]}
+    return dict(SCOPES[name], name=name, run=runner, drawdown=DRAWDOWN, script=SCRIPT_REL)
 
 
 def main(argv=None) -> int:
@@ -569,6 +705,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     env = dict(os.environ)
     config = build_config(args.scope, env)
+    verb = "update" if args.update else "list" if args.list else "check"
     try:
         if args.update:
             code, lines = update(config, REPO_ROOT, base=args.base, env=env)
@@ -577,14 +714,21 @@ def main(argv=None) -> int:
         else:
             code, lines = check(config, REPO_ROOT, base=args.base, env=env)
     except Skip as exc:
-        print("SKIP lint-ratchet({}): {}".format(args.scope, exc))
-        return 0
+        if verb == "check":
+            print(_clean("SKIP lint-ratchet({}): {}".format(args.scope, exc)))
+            return 0
+        print(_clean("lint-ratchet({}): {} -- cannot --{}".format(args.scope, exc, verb)), file=sys.stderr)
+        return 2
     except InfraError as exc:
-        print("lint-ratchet({}): {}".format(args.scope, exc), file=sys.stderr)
+        print(_clean("lint-ratchet({}): {}".format(args.scope, exc)), file=sys.stderr)
+        return 2
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        print(_clean("lint-ratchet({}): unexpected {}: {}".format(args.scope, type(exc).__name__, exc)),
+              file=sys.stderr)
         return 2
     stream = sys.stdout if code == 0 else sys.stderr
     for line in lines:
-        print(line, file=stream)
+        print(_clean(line), file=stream)
     return code
 
 
