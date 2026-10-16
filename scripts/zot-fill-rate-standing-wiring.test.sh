@@ -280,6 +280,7 @@ run_step() {
   local script="$1" work="$2" outf="$3"
   shift 3
   assert_fixture_dir "$work"
+  assert_fixture_dir "$outf"
   : > "$GH_LOG"
   STEP_RC=0
   env -C "$work" -i "PATH=${SHIM}:${BASE_PATH}" "HOME=$S" "GH_LOG=$GH_LOG" "$@" \
@@ -358,6 +359,7 @@ probe_case "T3 rc 2 with only TRANSIENT text and no header (precondition exit) -
 probe_case "T3 rc 0 with a FAIL header (disagreement) -> UNEVALUATED" 0 "${H_FAIL}\n" 0 "UNEVALUATED|true|1"
 probe_case "T3 rc 1 with a PASS header (disagreement) -> UNEVALUATED" 1 "${H_PASS}\n" 0 "UNEVALUATED|true|1"
 probe_case "T3 rc 3 with a PASS header -> UNEVALUATED (exit outside the contract)" 3 "${H_PASS}\n" 0 "UNEVALUATED|true|1"
+probe_case "T3 rc 3 with a TRANSIENT header -> UNEVALUATED (the default arm is not TRANSIENT)" 3 "${H_SPAN}\n" 0 "UNEVALUATED|true|1"
 probe_case "T3 rc 127 (script absent) -> UNEVALUATED" absent "" 0 "UNEVALUATED|true|1"
 probe_case "T3 two column-0 headers -> UNEVALUATED (no late spoof picks the verdict)" 0 "${H_PASS}\n${H_FAIL}\n" 0 "UNEVALUATED|true|1"
 probe_case "T3 a header-looking line after a bare carriage return is not a header (PASS stands)" 0 "${H_PASS}\n\r${H_FAIL}\n" 0 "PASS|false|0"
@@ -553,9 +555,9 @@ if [[ -z "$CHILD" ]]; then
   mut_row 5b-drop-alarm-exit-guard "T3 alarm exit 2 suppresses the TRANSIENT defect" run-replace probe ' && "${ALARM_EXIT:-}" != "2"' ''
   mut_row 6-drop-header-agreement "T3 rc 0 with a FAIL header (disagreement)" run-replace probe ' && "$hdr_verdict" == "$mapped"' ''
   mut_row 6-take-last-header "T3 two column-0 headers" run-replace probe '"$hdr_count" == "1"' '"$hdr_count" != "0"'
-  mut_row 7-default-transient "T3 rc 3 with a PASS header" run-replace probe '*) mapped=UNEVALUATED ;;' '*) mapped=TRANSIENT ;;'
+  mut_row 7-default-transient "T3 rc 3 with a TRANSIENT header" run-replace probe '*) mapped=UNEVALUATED ;;' '*) mapped=TRANSIENT ;;'
   mut_row 8-drop-exit-1 "T3 rc 0 with no header -> UNEVALUATED" run-replace probe 'then exit 1; fi' 'then :; fi'
-  mut_row 8-headerless-rc2-transient "T3 rc 2 with only TRANSIENT text" run-replace probe '"$hdr_count" == "1" &&' '( "$hdr_count" == "1" || "$rc" == "2" ) &&'
+  mut_row 8-headerless-rc2-transient "T3 rc 2 with only TRANSIENT text" run-replace probe 'if [[ "$hdr_count" == "1" && "$mapped" != "UNEVALUATED" && "$hdr_verdict" == "$mapped" ]]; then' 'if [[ "$rc" == "2" ]] || [[ "$hdr_count" == "1" && "$mapped" != "UNEVALUATED" && "$hdr_verdict" == "$mapped" ]]; then'
   mut_row 9-close-threshold-3600 "T5 a tracker updated 5 h ago is not closed" run-replace pass '21600' '3600'
   mut_row 9-drop-cr-strip "T3 carriage returns are stripped from the log" run-replace probe '\013-\037' '\013-\014\016-\037'
   mut_row 9-drop-pipe-prefix "T3 script output lines are echoed behind a visible pipe prefix" run-replace probe "sed 's/^/| /'" "cat"
@@ -618,7 +620,7 @@ if [[ -n "$CHILD" ]]; then
 fi
 
 # Floor: derived from a green run, with no headroom for silently dropped rows. Raise in lockstep.
-MIN_CASES=0
+MIN_CASES=99
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] vacuity floor: %d cases executed, expected at least %d\n' "$cases" "$MIN_CASES" >&2
   exit 1
