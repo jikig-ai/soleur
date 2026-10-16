@@ -1,10 +1,11 @@
 ---
-title: "Hosted agent Bash failed on every call with apply-seccomp unshare(CLONE_NEWUSER) EPERM for about ten days, and nothing alerted: our own seccomp filter killed the SDK's command-side helper while the canary replayed only the setup argv"
+title: "Hosted agent Bash failed on every call with apply-seccomp unshare(CLONE_NEWUSER) EPERM for an inferred ten days, and nothing alerted: our own seccomp filter killed the SDK's command-side helper while the canary replayed only the setup argv"
 date: 2026-10-16
 incident_pr: 10445
 incident_window: "2026-10-06T13:19:38Z (inferred onset: first production deploy of web-v0.324.3, web-1; no pre-2026-10-16 failure was observed directly) → ongoing at the time of writing (fix committed in 21a7319bf7, not yet deployed)"
 recovery_at: "TBD"
 suspected_change: "#9595 (shared bwrap seccomp filter plus fd hygiene, first shipped in tag web-v0.324.3, 2026-10-06)"
+# incident class (every hosted session); the fix PR's plan declares `single-user incident` for the cross-tenant surface it widens
 brand_survival_threshold: aggregate pattern
 status: ongoing
 triggers:
@@ -123,15 +124,15 @@ wrap commands in the helper. The seccomp filter is left intact, so the nested-us
 pre-incident baseline in that one dimension. It is bounded by (1) per-session proxy-credential auth on the sibling
 bridge sockets, (2) masks over the CLI peer-messaging socket directories (the union of `cc-socks` under
 `XDG_RUNTIME_DIR`, `CLAUDE_CODE_TMPDIR`, `TMPDIR` and `/tmp`, plus `/tmp/cc-socks-<uid>`), where a failed pre-create now
-pages through `reportSilentFallback` (fail-closed signal), (3) a mask over the session-transcript directory
+is reported to Sentry through `reportSilentFallback` as an error event (the mask is then OFF for that directory, so this fails open and no dedicated alert routes the event yet, #10455), (3) a mask over the session-transcript directory
 (`$HOME/.claude/projects`, and `$CLAUDE_CONFIG_DIR/projects` when set), because a sibling's proxy credential printed by
-`env` and persisted in a shared-HOME transcript would otherwise be usable, and (4) per-command `--unshare-net`. See the
+`env` and persisted in a shared-HOME transcript would otherwise be usable, (4) per-command `--unshare-net`, and (5) a per-tenant CLI temp base so no sibling can read a persisted Bash output carrying a proxy credential (found in the fix-round review; CTO-ruled). See the
 ADR-075 addendum. The fallback if the two-session test fails is a single `socket(AF_UNIX)` deny folded into the one bwrap
 filter, never `socketpair`.
 
 Detection added: the Bash tool_result classifier now maps exactly the line
 `apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted` (line-anchored, nothing trailing) to
-`helper_userns_eperm`; a pino mirror feeds a Better Stack alert (`agent_sandbox_bash_denial`, email). Other helper-step
+`helper_userns_eperm`; a pino mirror feeds a Better Stack alert (`agent_sandbox_bash_denial`, email) that ships with this PR and is in force only after the post-merge Terraform apply (read back in tasks 6.2). Other helper-step
 EPERMs are not classified (residual, #10455), and the legacy agent-runner loop has no tool_result observer.
 
 ## Recovery verification
@@ -140,8 +141,8 @@ Pre-merge: the fix is proved through the real SDK in two places. `test/sandbox-w
 production config and our shim (control with the knob off reproduces the helper EPERM; treatment returns the command's
 stdout), and the docker suite repeats both arms under the production run tuple (docker masks, seccomp profile, uid 1001,
 Debian bubblewrap 0.8) plus a pathname-socket census. Post-merge: `scripts/followthroughs/sandbox-readback-10445.sh`
-exits transient until the PR's merge commit is an ancestor of the deployed tag, then reads the faithful canary's verdict.
-That proves "fix deployed and canary green", not that hosted Bash works: the canary was green throughout the outage. The
+is a NOTIFY-ONLY probe (it never exits 0, so the sweeper cannot close #10456 on its own): it reports NOT YET until the PR's merge commit is an ancestor of the deployed tag, the last deploy succeeded for web-platform and the canary ran since it started, then reports ACTION REQUIRED.
+That means "fix deployed and canary green", not that hosted Bash works: the canary was green throughout the outage. The
 first real hosted Bash call is recorded here by the post-merge verification (agent-executed) before the status flips. The
 flip to `resolved` is owned by #10456. The deploy-time SDK Bash smoke that would make the canary see this class is #10453.
 
@@ -207,6 +208,7 @@ gate clears it; a user-note decision stays with the operator.
 - Authenticated app user: any session whose agent used Bash saw the failure; other tools unaffected. Count unmeasurable.
 - Legal-document signer: not affected.
 - Admin via Access: not affected.
+- Entitled web-egress user: still affected after this fix until #10457 lands (`spawnEgressForwarder` cannot create its token directory, so the forwarder gets no gateway credential); the resolved flip must state whether an entitled-session call was verified.
 - Billing customer: not affected beyond the above; no billing path involved.
 - OAuth installation owner: not affected beyond the above.
 
@@ -253,4 +255,5 @@ listed below as items of that tracker.
 | #10453 | Deploy-time SDK Bash smoke in the canary container (non-blocking first); successor to #5941 for the wrapped-command class | open |
 | #5941 | Pre-existing owner of the nested-unshare probe inside the production canary container | open |
 | #10457 | Adjacent: `spawnEgressForwarder` mkdir EACCES on `/var/lib/soleur/egress-tokens` (entitled web-egress sessions) | open |
-| #10456 | PIR `status: ongoing` → `resolved` docs PR, owned by the `sandbox-readback-10445.sh` follow-through; its directive gains `secrets=GH_TOKEN` | open |
+| #10456 | PIR `status: ongoing` → `resolved` docs PR, notified by the notify-only `sandbox-readback-10445.sh` follow-through (ACTION REQUIRED); closed by hand after the flip; its directive gains `secrets=GH_TOKEN` | open |
+| (operator decision) | Affected-user outreach: a targeted note to users whose sessions used Bash since 2026-10-06, and a check for lost half-finished runs. An operator brand decision, not assumed; pending | pending |

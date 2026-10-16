@@ -169,7 +169,7 @@ allowlist of internal workspaces.** Taste items for the operator-visible record 
 ## Problem Statement / Motivation
 
 Hosted agents cannot run a shell command; every web-egress use (including the egress-audit canary #9545) is
-blocked behind it, the incident went undetected for ten days, and the only detector was a user. The same class
+blocked behind it (after this fix, entitled web-egress sessions stay blocked until #10457 lands), the incident went undetected for ten days, and the only detector was a user. The same class
 (report-only canary red, mirror silent, alert deferred) already produced the #9860 and #5873 incidents.
 
 ## Proposed Solution
@@ -472,7 +472,7 @@ logs:
   retention: hot window about 40 minutes, S3 archive beyond (use the archive arm of scripts/betterstack-query.sh)
 discoverability_test:
   command: bash scripts/followthroughs/sandbox-readback-10445.sh
-  expected_output: exits TRANSIENT (2) until the PR merge commit is an ancestor of the deployed tag, then exits 0 on sandbox_canary pass
+  expected_output: NOTIFY-ONLY (never 0, never 1): exits NOT YET (2) until the PR merge commit is an ancestor of the deployed tag, the last deploy succeeded for web-platform and the canary ran since it started; then ACTION REQUIRED (5)
   proves: fix deployed and canary green. It does NOT prove hosted Bash works (the canary was green over a hard-down Bash); that proof is a real hosted Bash call recorded in the PIR by the agent-executed post-merge verification (owner #10456)
   credentials_required: Doppler soleur/prd_terraform deploy-webhook HMAC plus Cloudflare Access service token for the deploy-status read, and GH_TOKEN for the gh api compare (the #10456 directive carries secrets=GH_TOKEN)
 ```
@@ -697,10 +697,9 @@ socket is reachable without that session's token.
 
 ### Post-merge (agent-executed, no operator steps)
 
-- [ ] The release deploy completes; `/hooks/deploy-status` shows `sandbox_canary.verdict=pass` AND, with Stage B,
-  the `sdk_bash_smoke` field present and non-null with `verdict=pass` (the canary alone was green during the
-  outage and is not evidence).
-- [ ] Both alerts read back from the Better Stack API as present and unpaused.
+- [ ] The release deploy completes; `/hooks/deploy-status` shows `sandbox_canary.verdict=pass` (the canary alone was
+  green during the outage and is not evidence; the `sdk_bash_smoke` field is Stage B, deferred to #10453).
+- [ ] The `agent_sandbox_bash_denial` alert reads back from the Better Stack API as present and unpaused (the Stage B alert is deferred to #10453).
 - [ ] A real Bash call in a hosted session succeeds in production (the egress-audit canary #9545 generates its
   first gateway row).
 - [ ] PIR `status: resolved` lands via a docs-only PR owned by the follow-through tracker; the issue is closed.

@@ -307,6 +307,8 @@ describe("buildAgentQueryOptions — in-sandbox git askpass threading (item 1c)"
         // Slice B: deployed plugin root → CLAUDE_PLUGIN_ROOT for the agent's
         // bash shell-outs; threaded verbatim from args.pluginPath.
         pluginPath: PLUGIN,
+        // #10445: per-tenant CLI temp base (the sandbox config denies its shared root).
+        claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/),
       },
     );
   });
@@ -341,6 +343,8 @@ describe("buildAgentQueryOptions — in-sandbox git askpass threading (item 1c)"
         // Slice B: pluginPath is ALWAYS threaded (both factories pass
         // getPluginPath()); only the git-askpass extras are per-call divergent.
         pluginPath: PLUGIN,
+        // #10445: per-tenant CLI temp base (the sandbox config denies its shared root).
+        claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/),
       },
     );
   });

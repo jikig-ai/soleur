@@ -447,6 +447,17 @@ leaves sibling sessions' pathname sockets in the shared temp dir visible. The ex
    because a sibling's proxy credential printed by `env` and persisted in a shared-HOME transcript would otherwise be
    usable against that sibling's bridge socket; G2 asserts the sandbox sees none.
 4. Per-command `--unshare-net`, which bounds abstract-namespace sockets (asserted in the runtime test's spawn argv).
+5. A per-tenant CLI temp base. The CLI persists every Bash command's output (a sibling's `env` included, with its
+   per-session proxy credential) under `<CLAUDE_CODE_TMPDIR or tmpdir>/claude-<uid>/...`, and the vendored builder binds
+   that whole per-uid dir writable into every sandbox, so no `denyRead` can hide it (the covered allowWrite path is
+   re-bound after the tmpfs). Found by the fix-round security seat: with AF_UNIX allowed, session B could read A's
+   persisted `env` output and replay A's credential against A's bridge sockets (accepted: 502, not 407). Each session
+   therefore gets its own CLI temp base (`agentSessionTmpDir`, `/tmp/.cs/<sha256(workspace)[0:16]>`, injected as
+   `CLAUDE_CODE_TMPDIR`) and the sandbox config denies the shared root `/tmp/.cs`; G2 runs A with `env; sleep 60` and
+   requires B to find none of A's credential under `/tmp`, `$TMPDIR` or `$HOME`, with a control arm (no per-tenant base)
+   that must find it. This, not socket authentication, is now the primary control for the credential; proxy auth stays
+   as the backstop. Other persisted CLI output locations (`<cfg>/tasks`, `debug`, `history.jsonl`, `cc-daemon-<uid>`)
+   are tracked in #10455.
 
 Load-bearing assumption: SDK proxy auth is the only remaining AF_UNIX control for the bridge sockets. Sockets of the
 host runtime (docker, dbus) are a property of the run tuple and are checked by the pathname-socket census in

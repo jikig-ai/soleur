@@ -63,7 +63,9 @@ const ws = mkdtempSync(`${process.env.TMPDIR || "/tmp"}/sdk-bash-probe-`);
 // is built (the SDK skips a deny landing that does not). Parity with the production builder is pinned by
 // test/sandbox-wrapped-command-runtime.test.ts.
 const uid = process.getuid();
-const MASKED_DIRS = ["/tmp/cc-socks", `/tmp/cc-socks-${uid}`, `${process.env.HOME}/.claude/projects`];
+const HOME = process.env.HOME;
+if (!HOME || !HOME.startsWith("/")) throw new Error("sdk-bash-probe: HOME must be an absolute path (the transcript mask is derived from it)");
+const MASKED_DIRS = ["/tmp/cc-socks", `/tmp/cc-socks-${uid}`, `${HOME}/.claude/projects`];
 for (const d of MASKED_DIRS) mkdirSync(d, { recursive: true, mode: 0o700 });
 const sandbox = {
   enabled: true, failIfUnavailable: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false, enableWeakerNestedSandbox: true,

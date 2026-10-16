@@ -1,19 +1,23 @@
 #!/usr/bin/env bash
 # Follow-through readback for #10445 (hosted agent Bash outage: apply-seccomp unshare(CLONE_NEWUSER) EPERM).
 #
-# WHAT EXIT 0 MEANS: the fix PR's merge commit is an ANCESTOR of the tag the host reports as deployed, AND the faithful
-# sandbox canary's verdict is `pass`. WHAT IT DOES NOT MEAN: that a hosted Bash call works. The canary was GREEN for the
-# whole outage (its replay ends in `-- true` and never runs the SDK's command-side wrapper), so a green verdict alone is
-# no evidence; it is only a regression tripwire once the fix is known to be deployed. The fix is pinned pre-merge by
-# test/sandbox-wrapped-command-runtime.test.ts and the docker suite's wrapped-command arms, watched at runtime by the
-# `agent_sandbox_bash_denial` Better Stack alert, and the first real hosted Bash call is recorded in the PIR
-# (knowledge-base/engineering/operations/post-mortems/hosted-agent-bash-apply-seccomp-userns-eperm-postmortem.md) by the
-# post-merge verification before its status flips.
+# NOTIFY-ONLY PROBE (followthrough-convention.md, "registered sub-vocabulary"): this script NEVER exits 0 and NEVER exits 1.
+# Exit 0 would make the sweeper CLOSE tracker #10456, and a green faithful canary is not proof that a hosted Bash call works:
+# the canary was GREEN for the whole outage (its replay ends in `-- true` and never runs the SDK's command-side wrapper). The
+# tracker's real close condition is the first real hosted Bash call recorded in the PIR
+# (knowledge-base/engineering/operations/post-mortems/hosted-agent-bash-apply-seccomp-userns-eperm-postmortem.md) and the docs
+# PR that flips its status, both done by a human/agent AFTER this probe reports ACTION REQUIRED. The operator ends the tracker
+# by closing it AND removing its `follow-through` label.
 #
-# Exit semantics (per scripts/sweep-followthroughs.sh contract):
-#   0 = PASS       (fix deployed AND sandbox_canary.verdict=pass)
-#   1 = FAIL       (fix deployed AND sandbox_canary.verdict=sandbox_broken)
-#   * = TRANSIENT  (PR not merged, fix not yet in the deployed tag, endpoint unreachable, non-JSON, no verdict yet)
+# Exit semantics (registered sub-vocabulary of the TRANSIENT bucket):
+#   2 = NOT YET            (PR unmerged, deployed tag predates the fix, a deploy is in flight/failed, canary not re-run since
+#                           the deploy started, no verdict yet)
+#   3 = CANNOT ESTABLISH   (credentials/endpoint/gh unavailable or malformed answer: the probe could not measure)
+#   5 = ACTION REQUIRED    (fix deployed by a successful deploy AND the canary ran since: record the first hosted Bash call in
+#                           the PIR and open the status flip PR; or the canary says sandbox_broken after the deploy: REGRESSION)
+# The never-0/never-1 invariant is asserted by sandbox-readback-10445.test.sh on every row.
+#
+# RETIREMENT: when #10456 is closed, delete this file, its .test.sh, and the `sandbox-readback-10445` line in scripts/test-all.sh.
 #
 # Required env (declared in the tracker's followthrough directive): WEBHOOK_DEPLOY_SECRET, CF_ACCESS_CLIENT_ID,
 # CF_ACCESS_CLIENT_SECRET, GH_TOKEN.
@@ -34,20 +38,20 @@ set -uo pipefail
 FIX_PR=10451
 REPO=jikig-ai/soleur
 
-if [[ -z "${WEBHOOK_DEPLOY_SECRET:-}" ]]; then echo "TRANSIENT: WEBHOOK_DEPLOY_SECRET not set" >&2; exit 2; fi
-if [[ -z "${CF_ACCESS_CLIENT_ID:-}" ]]; then echo "TRANSIENT: CF_ACCESS_CLIENT_ID not set" >&2; exit 2; fi
-if [[ -z "${CF_ACCESS_CLIENT_SECRET:-}" ]]; then echo "TRANSIENT: CF_ACCESS_CLIENT_SECRET not set" >&2; exit 2; fi
-if [[ -z "${GH_TOKEN:-}" ]]; then echo "TRANSIENT: GH_TOKEN not set" >&2; exit 2; fi
+if [[ -z "${WEBHOOK_DEPLOY_SECRET:-}" ]]; then echo "CANNOT ESTABLISH: WEBHOOK_DEPLOY_SECRET not set" >&2; exit 3; fi
+if [[ -z "${CF_ACCESS_CLIENT_ID:-}" ]]; then echo "CANNOT ESTABLISH: CF_ACCESS_CLIENT_ID not set" >&2; exit 3; fi
+if [[ -z "${CF_ACCESS_CLIENT_SECRET:-}" ]]; then echo "CANNOT ESTABLISH: CF_ACCESS_CLIENT_SECRET not set" >&2; exit 3; fi
+if [[ -z "${GH_TOKEN:-}" ]]; then echo "CANNOT ESTABLISH: GH_TOKEN not set" >&2; exit 3; fi
 
 STATUS_URL="https://deploy.soleur.ai/hooks/deploy-status"
 
 # (#9597, S2) The three credentials ride curl's stdin as `header = "..."` config lines, values checked first (the why and the
 # process-substitution rule: the comment above `_bs_refuse` in scripts/betterstack-query.sh). The signature must be exactly 64
 # lowercase hex (python3 missing or an empty key leaves SIGNATURE empty, and an unsigned request must never be sent). A refusal
-# is TRANSIENT (exit 2, never 1: exit 1 is the FAIL verdict that flags a tracker), sends no request and prints one value-free
+# is CANNOT ESTABLISH (exit 3, never 0 or 1), sends no request and prints one value-free
 # marker.
 _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
-_refuse() { echo "TRANSIENT: $1 is unusable; no request was sent" >&2; echo "SOLEUR_CREDENTIAL_REFUSED script=sandbox-readback-10445 reason=token_shape" >&2; exit 2; }
+_refuse() { echo "CANNOT ESTABLISH: $1 is unusable; no request was sent" >&2; echo "SOLEUR_CREDENTIAL_REFUSED script=sandbox-readback-10445 reason=token_shape" >&2; exit 3; }
 _bearer_ok "$CF_ACCESS_CLIENT_ID" || _refuse "the Cloudflare Access client id"
 _bearer_ok "$CF_ACCESS_CLIENT_SECRET" || _refuse "the Cloudflare Access client secret"
 
@@ -65,42 +69,55 @@ HTTP_STATUS="$(printf '%s' "$RESP" | sed -n 's/^HTTP_STATUS://p' | tr -d '[:spac
 BODY="$(printf '%s' "$RESP" | sed '$d')"
 
 if [[ "$HTTP_STATUS" != "200" ]]; then
-  echo "TRANSIENT: /hooks/deploy-status returned HTTP $HTTP_STATUS" >&2
-  exit 2
+  echo "CANNOT ESTABLISH: /hooks/deploy-status returned HTTP $HTTP_STATUS" >&2
+  exit 3
 fi
 if ! printf '%s' "$BODY" | jq -e '.sandbox_canary' >/dev/null 2>&1; then
-  echo "TRANSIENT: deploy-status body missing .sandbox_canary (non-JSON or old host)" >&2
-  exit 2
+  echo "CANNOT ESTABLISH: deploy-status body missing .sandbox_canary (non-JSON or old host)" >&2
+  exit 3
 fi
 
 # Output from the remote JSON is reduced to a safe alphabet before it is ever printed: the sweeper posts this script's
 # stdout into a tracker comment, and a newline or `::` workflow command must not ride along.
 VERDICT="$(printf '%s' "$BODY" | jq -r '.sandbox_canary.verdict // "unknown"' | tr -cd 'A-Za-z0-9._-')"
 TAG="$(printf '%s' "$BODY" | jq -r '.tag // ""' | tr -cd 'A-Za-z0-9._-')"
-[[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "TRANSIENT: deploy-status tag '$TAG' is not a release tag" >&2; exit 2; }
+[[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "CANNOT ESTABLISH: deploy-status tag '$TAG' is not a release tag" >&2; exit 3; }
+
+# `.tag` is the tag of the LAST deploy ATTEMPT (ci-deploy.sh writes it with exit_code=-1 the moment a deploy starts, and again
+# on failure), and the sandbox_canary ledger is a separate durable file that still holds the PREVIOUS deploy's verdict until the
+# new deploy's canary overwrites it. So "the tag contains the fix" is not "the host runs the fix": require the last deploy to
+# have SUCCEEDED for web-platform and the canary to have been checked at or after that deploy started.
+EXIT_CODE="$(printf '%s' "$BODY" | jq -r '.exit_code // "none"' | tr -cd '0-9-')"
+COMPONENT="$(printf '%s' "$BODY" | jq -r '.component // ""' | tr -cd 'A-Za-z0-9._-')"
+START_TS="$(printf '%s' "$BODY" | jq -r '.start_ts // ""' | tr -cd '0-9')"
+CHECKED_AT="$(printf '%s' "$BODY" | jq -r '.sandbox_canary.checked_at // ""' | tr -cd '0-9')"
+[[ "$START_TS" =~ ^[0-9]+$ && "$CHECKED_AT" =~ ^[0-9]+$ ]] || { echo "NOT YET: deploy-status carries no numeric start_ts/checked_at (no canary run recorded)" >&2; exit 2; }
+[[ "$COMPONENT" == "web-platform" ]] || { echo "NOT YET: last deploy component is '$COMPONENT', not web-platform" >&2; exit 2; }
+[[ "$EXIT_CODE" == "0" ]] || { echo "NOT YET: last deploy exit_code=$EXIT_CODE (in flight, failed or rolled back)" >&2; exit 2; }
+(( CHECKED_AT >= START_TS )) || { echo "NOT YET: the sandbox canary verdict predates the last deploy (checked_at=$CHECKED_AT < start_ts=$START_TS)" >&2; exit 2; }
 
 # The fix is deployed only when the PR's merge commit is contained in the deployed release tag. `compare base...head`
 # reports head's position relative to base: `behind` or `identical` means the merge commit is an ancestor of the tag.
 MERGE_SHA="$(gh pr view "$FIX_PR" --repo "$REPO" --json mergeCommit --jq '.mergeCommit.oid // ""' 2>/dev/null | tr -cd '0-9a-f')"
-[[ "$MERGE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "TRANSIENT: PR #$FIX_PR has no merge commit yet (not merged, or gh unavailable)" >&2; exit 2; }
+[[ "$MERGE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "NOT YET: PR #$FIX_PR has no merge commit yet (not merged, or gh unavailable)" >&2; exit 2; }
 CMP="$(gh api "repos/$REPO/compare/web-$TAG...$MERGE_SHA" --jq .status 2>/dev/null | tr -cd 'a-z')"
 case "$CMP" in
   behind|identical) : ;;
-  ahead|diverged) echo "TRANSIENT: deployed tag $TAG does not contain the fix yet (compare=$CMP)" >&2; exit 2 ;;
-  *) echo "TRANSIENT: could not compare web-$TAG with the merge commit (gh api returned '$CMP')" >&2; exit 2 ;;
+  ahead|diverged) echo "NOT YET: deployed tag $TAG does not contain the fix yet (compare=$CMP)" >&2; exit 2 ;;
+  *) echo "CANNOT ESTABLISH: could not compare web-$TAG with the merge commit (gh api returned '$CMP')" >&2; exit 3 ;;
 esac
 
 case "$VERDICT" in
   pass)
-    echo "fix_deployed=yes tag=$TAG sandbox_canary=pass"
-    exit 0
+    echo "ACTION REQUIRED: fix_deployed=yes tag=$TAG sandbox_canary=pass. A green canary is NOT proof that hosted Bash works: make a real hosted Bash call, record it in the PIR, open the docs-only PR that sets status: resolved, then close this tracker and remove its follow-through label."
+    exit 5
     ;;
   sandbox_broken)
-    echo "fix_deployed=yes tag=$TAG sandbox_canary=fail" >&2
-    exit 1
+    echo "ACTION REQUIRED: REGRESSION fix_deployed=yes tag=$TAG sandbox_canary=fail" >&2
+    exit 5
     ;;
   *)
-    echo "TRANSIENT: sandbox_canary.verdict='$VERDICT' (no verdict yet)" >&2
+    echo "NOT YET: sandbox_canary.verdict='$VERDICT' (no verdict yet)" >&2
     exit 2
     ;;
 esac

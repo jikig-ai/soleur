@@ -48,7 +48,7 @@ Order: Stage A (1 -> 2 -> 4 -> 5) restores service and ships first; Stage B (3) 
 
 ## Phase 6: Post-merge verification (agent-executed)
 
-- [ ] 6.1 `scripts/followthroughs/sandbox-readback-10445.sh` exits 0 (merge commit is an ancestor of the deployed tag and `sandbox_canary.verdict=pass`; this proves fix deployed and canary green, not that hosted Bash works). `sdk_bash_smoke` is #10453
+- [ ] 6.1 `scripts/followthroughs/sandbox-readback-10445.sh` reports ACTION REQUIRED (exit 5; it is notify-only and never exits 0: merge commit is an ancestor of the deployed tag, the last deploy succeeded and the canary ran since, `sandbox_canary.verdict=pass`; this proves fix deployed and canary green, not that hosted Bash works). `sdk_bash_smoke` is #10453
 - [ ] 6.2 Read the `agent_sandbox_bash_denial` alert back from the Better Stack API (present, unpaused)
 - [ ] 6.3 Real hosted Bash call succeeds and is recorded in the PIR (this, not the readback, is the resolution proof; owner #10456); egress-audit canary #9545 gets its first gateway row
 - [ ] 6.4 Docs-only PR flipping the PIR to `resolved`; close #10445

@@ -14,7 +14,7 @@
 #     needle from the classifier, never retyped, so a reworded emitter reds here instead of silently disarming it.
 #   * The predicate is exactly four ANDed conjuncts (container, feature, op, code) plus GROUP BY time, with the
 #     NESTED `JSONExtractString(raw, 'message', '<key>')` form the production row shape needs, and NO host_name.
-#   * A fixture row shaped like the sampled production row (raw.message is an OBJECT with top-level feature, op,
+#   * A fixture row shaped like the pino rows this app container writes (no row of THIS op has arrived yet; raw.message is an OBJECT with top-level feature, op,
 #     level, msg and the extra keys; raw.CONTAINER_NAME = soleur-web-platform) is run through the SAME predicate:
 #     a positive control plus near-miss negatives. Mutating the SQL alone proves a string; this proves the shape.
 #   * The paging semantics are bwrap_probe_rollback's (ADR-218): threshold, higher_than 0, 300 s window,
@@ -160,7 +160,7 @@ grep -qi 'host_name' <<< "$LOCAL_SQL" \
   || ok "no host_name conjunct: any web host's denial alerts"
 
 # ── The production-shaped fixture row, run through the SAME predicate ─────────────────────────
-# The row is shaped like the live row sampled 2026-10-16: raw.message is an OBJECT whose top-level keys are the pino
+# The row is shaped like the live agent-sandbox rows sampled 2026-10-16 (other ops; none of THIS op has arrived): raw.message is an OBJECT whose top-level keys are the pino
 # fields (level, feature, op, msg) plus the `extra` keys; raw.CONTAINER_NAME is the container. Values are synthesized.
 # The evaluator parses the conjuncts OUT OF THE SQL under test (not retyped here), and follows ClickHouse's
 # JSONExtractString: the string at the path, else ''. A SQL that reads a flat key for a nested one matches nothing.
@@ -194,10 +194,10 @@ print("MATCH" if all(extract(raw, p) == v for p, v in conj) else "NOMATCH")
 PY
 }
 
-PROD_ROW='{"CONTAINER_NAME":"soleur-web-platform","message":{"level":"error","feature":"agent-sandbox","op":"bash-tool-result","msg":"bash sandbox denial: helper_userns_eperm","userIdHash":"0123456789abcdef","conversationId":"c0ffee00-0000-4000-8000-000000000001","sandboxErrorCode":"helper_userns_eperm","sandboxStderr":"apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted"}}'
-NEG_OTHER_CODE='{"CONTAINER_NAME":"soleur-web-platform","message":{"level":"error","feature":"agent-sandbox","op":"bash-tool-result","msg":"bash sandbox denial: proc_mount_eperm","sandboxErrorCode":"proc_mount_eperm"}}'
-NEG_OTHER_OP='{"CONTAINER_NAME":"soleur-web-platform","message":{"level":"error","feature":"agent-sandbox","op":"sdk-startup","msg":"x","sandboxErrorCode":"helper_userns_eperm"}}'
-NEG_OTHER_CONTAINER='{"CONTAINER_NAME":"soleur-inngest","message":{"level":"error","feature":"agent-sandbox","op":"bash-tool-result","msg":"x","sandboxErrorCode":"helper_userns_eperm"}}'
+PROD_ROW='{"CONTAINER_NAME":"soleur-web-platform","message":{"level":50,"feature":"agent-sandbox","op":"bash-tool-result","msg":"bash sandbox denial: helper_userns_eperm","userIdHash":"0123456789abcdef","conversationId":"c0ffee00-0000-4000-8000-000000000001","sandboxErrorCode":"helper_userns_eperm","sandboxStderr":"apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted"}}'
+NEG_OTHER_CODE='{"CONTAINER_NAME":"soleur-web-platform","message":{"level":50,"feature":"agent-sandbox","op":"bash-tool-result","msg":"bash sandbox denial: proc_mount_eperm","sandboxErrorCode":"proc_mount_eperm"}}'
+NEG_OTHER_OP='{"CONTAINER_NAME":"soleur-web-platform","message":{"level":50,"feature":"agent-sandbox","op":"sdk-startup","msg":"x","sandboxErrorCode":"helper_userns_eperm"}}'
+NEG_OTHER_CONTAINER='{"CONTAINER_NAME":"soleur-inngest","message":{"level":50,"feature":"agent-sandbox","op":"bash-tool-result","msg":"x","sandboxErrorCode":"helper_userns_eperm"}}'
 NEG_STRING_MESSAGE='{"CONTAINER_NAME":"soleur-web-platform","message":"{\"feature\":\"agent-sandbox\",\"op\":\"bash-tool-result\",\"sandboxErrorCode\":\"helper_userns_eperm\"}"}'
 NEG_FLAT_KEYS='{"CONTAINER_NAME":"soleur-web-platform","feature":"agent-sandbox","op":"bash-tool-result","sandboxErrorCode":"helper_userns_eperm","message":"bash sandbox denial: helper_userns_eperm"}'
 

@@ -8,9 +8,11 @@ import {
 } from "./workspace-resolver";
 import { AGENT_AUTH_ENV_VARS } from "./agent-auth-env-vars";
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from "path";
+import { homedir } from "os";
 import * as Sentry from "@sentry/nextjs";
 
 import { ALLOWED_SERVICE_ENV_VARS } from "./agent-env";
+import { AGENT_SESSION_TMP_ROOT } from "./agent-session-tmp";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback, warnSilentFallback } from "./observability";
 
@@ -71,10 +73,12 @@ const log = createChildLogger("agent-sandbox");
 // builder otherwise wraps every Bash command in `apply-seccomp`, whose first
 // call (unshare(CLONE_NEWUSER)) the shim filter below denies. That helper WAS
 // the per-command AF_UNIX block until 2026-10-06, so this returns to a state
-// with no AF_UNIX block; the residual is bounded by per-session proxy
-// authentication on the bridge sockets (test/sandbox-wrapped-command-runtime.test.ts),
-// the peer-socket and transcript masks below, and `--unshare-net` for abstract
-// sockets (ADR-075 addendum 2026-10-16).
+// with no AF_UNIX block; the residual is bounded by (1) a per-tenant CLI temp base
+// (`agentSessionTmpDir`, denied as a whole root below) so no sibling can READ a
+// persisted Bash output that carries a proxy credential, (2) per-session proxy
+// authentication on the bridge sockets as the backstop
+// (test/sandbox-wrapped-command-runtime.test.ts), (3) the peer-socket and transcript
+// masks below, and (4) `--unshare-net` for abstract sockets (ADR-075 addendum 2026-10-16).
 //
 // #8752 — the two hardening layers this config cannot express through the SDK
 // (the vendored builder owns the whole bwrap argv, transported on `--args
@@ -415,6 +419,8 @@ export function peerMessagingSocketDirs(
 export function sessionTranscriptDirs(env: Record<string, string | undefined> = process.env): string[] {
   const dirs: string[] = [];
   if (env.HOME && isAbsolute(env.HOME)) dirs.push(join(env.HOME, ".claude", "projects"));
+  // The CLI falls back to the passwd home when HOME is unset, so an unset HOME must not silently drop the mask.
+  else if (!env.HOME) dirs.push(join(homedir(), ".claude", "projects"));
   if (env.CLAUDE_CONFIG_DIR && isAbsolute(env.CLAUDE_CONFIG_DIR)) dirs.push(join(env.CLAUDE_CONFIG_DIR, "projects"));
   return Array.from(new Set(dirs));
 }
@@ -506,11 +512,11 @@ export function buildAgentSandboxConfig(
   // (#9798), never part of this PR — the `denyRead` arm must not fork
   // per-flag.
   // The SDK skips a deny landing that does not exist, so create each masked dir first (0700, the mode the CLI
-  // itself uses). A failure here leaves the mask silently off for a cross-tenant channel, so it PAGES
-  // (reportSilentFallback), unlike the c4 staging root above.
+  // itself uses). A failure here leaves that dir's mask OFF for a cross-tenant channel, so it is reported to
+  // Sentry (reportSilentFallback, an error event; no dedicated alert routes it yet, #10455), unlike the c4 staging root above.
   const peerSocketDirs = peerMessagingSocketDirs();
   const transcriptDirs = sessionTranscriptDirs();
-  for (const dir of [...peerSocketDirs, ...transcriptDirs]) {
+  for (const dir of [...peerSocketDirs, ...transcriptDirs, AGENT_SESSION_TMP_ROOT]) {
     try {
       mkdirSync(dir, { recursive: true, mode: 0o700 });
     } catch (err) {
@@ -587,6 +593,9 @@ export function buildAgentSandboxConfig(
       // session transcripts are masked for the same reason (a sibling's proxy credential can land in one).
       ...peerSocketDirs,
       ...transcriptDirs,
+      // #10445: sibling sessions' CLI temp bases (persisted Bash output incl. proxy credentials). The session's own
+      // `<root>/<id>/claude-<uid>` is re-bound writable by the builder (the CLI's own allowWrite), nothing else is.
+      AGENT_SESSION_TMP_ROOT,
       ...(opts?.allowWebEgress ? webEgressDenyReadPaths() : []),
     ]),
   );

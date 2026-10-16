@@ -335,8 +335,7 @@ first timestamp (and its positive-control query if the count is zero); (2) read 
 one user is real and fleet-wide, so check that `network.allowAllUnixSockets` is still set in
 `agent-runner-sandbox-config.ts` and the SDK version (`sandbox_canary.sdk_version`), and re-run the pre-merge proofs
 (`test/sandbox-wrapped-command-runtime.test.ts` and the wrapped-command arms of `infra/sandbox-masked-proc-docker.test.sh`);
-(4) make a real hosted Bash call and read the result; (5) a single user's rows are probably a tenant echoing the line,
-which is the accepted limitation below. Once the smoke ships (#10453), add `sdk_bash_smoke` as a second read in step
+(4) make a real hosted Bash call and read the result; (5) a single user's rows are either a tenant echoing the line (the accepted limitation below) or a real regression seen by the only active tenant; step (4) decides, never the user count. Once the smoke ships (#10453), add `sdk_bash_smoke` as a second read in step
 (2): a red smoke plus multi-user rows is conclusive. If a rollback of the sandbox posture is ever considered, the shim
 kill-switch needs explicit CTO acknowledgement and a time box; it is not a routine step.
 

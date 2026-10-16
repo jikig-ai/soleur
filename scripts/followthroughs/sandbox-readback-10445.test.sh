@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Behavioural rows for sandbox-readback-10445.sh with `curl` and `gh` stubbed on PATH (no network, no credentials).
-# The property: exit 0 only when the fix PR's merge commit is contained in the deployed tag AND the canary is green;
-# an unmerged PR, a tag that predates the fix, or a malformed answer is TRANSIENT, never PASS.
+# The properties: the probe is NOTIFY-ONLY (it never exits 0 or 1 on any input: exit 0 would close tracker #10456 on a canary
+# that was green throughout the outage); it reports ACTION REQUIRED (5) only when the fix PR's merge commit is contained in the
+# deployed tag AND the last deploy succeeded for web-platform AND the canary ran since that deploy started; every other state is
+# NOT YET (2) or CANNOT ESTABLISH (3). The `gh` stub answers ONLY the exact argv the script must send, so a swapped compare
+# range, a dropped `web-` prefix, a wrong PR number or a wrong repo reads as "gh returned nothing" and fails the row.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$HERE/sandbox-readback-10445.sh"
@@ -11,6 +14,8 @@ STUBS="$ROOT_TMP/bin"
 mkdir -p "$STUBS"
 FAILURES=()
 PASSES=0
+FAIL_N=0
+SHA=0123456789abcdef0123456789abcdef01234567
 
 # curl stub: prints $STUB_BODY then the HTTP_STATUS trailer the SUT parses.
 cat > "$STUBS/curl" <<'STUB'
@@ -18,46 +23,71 @@ cat > "$STUBS/curl" <<'STUB'
 cat >/dev/null 2>&1 || true
 printf '%s\nHTTP_STATUS:%s' "${STUB_BODY:-}" "${STUB_HTTP:-200}"
 STUB
-# gh stub: `pr view` -> $STUB_MERGE_SHA ; `api` -> $STUB_COMPARE
-cat > "$STUBS/gh" <<'STUB'
+# gh stub: answers only the exact argv the SUT must send; anything else prints nothing (the SUT then reads "unavailable").
+cat > "$STUBS/gh" <<STUB
 #!/usr/bin/env bash
-case "$1" in
-  pr) printf '%s\n' "${STUB_MERGE_SHA:-}" ;;
-  api) printf '%s\n' "${STUB_COMPARE:-}" ;;
+argv="\$*"
+case "\$argv" in
+  "pr view 10451 --repo jikig-ai/soleur --json mergeCommit --jq .mergeCommit.oid // \"\"") printf '%s\n' "\${STUB_MERGE_SHA:-}" ;;
+  "api repos/jikig-ai/soleur/compare/web-v1.2.3...$SHA --jq .status") printf '%s\n' "\${STUB_COMPARE:-}" ;;
 esac
 STUB
 chmod +x "$STUBS/curl" "$STUBS/gh"
 
-SHA=0123456789abcdef0123456789abcdef01234567
-run() { # <expected rc> <label> <body> <merge sha> <compare> [http]
-  local want="$1" label="$2" body="$3" sha="$4" cmp="$5" http="${6:-200}" out rc
-  out="$(PATH="$STUBS:$PATH" WEBHOOK_DEPLOY_SECRET=s CF_ACCESS_CLIENT_ID=id CF_ACCESS_CLIENT_SECRET=sec GH_TOKEN=t \
-    STUB_BODY="$body" STUB_MERGE_SHA="$sha" STUB_COMPARE="$cmp" STUB_HTTP="$http" bash "$SUT" 2>&1)"
+LAST_OUT=""
+run() { # <expected rc> <label> <body> <merge sha> <compare> [http] [env-unset-var]
+  local want="$1" label="$2" body="$3" sha="$4" cmp="$5" http="${6:-200}" unset_var="${7:-}" out rc
+  out="$(env PATH="$STUBS:$PATH" WEBHOOK_DEPLOY_SECRET=s CF_ACCESS_CLIENT_ID=id CF_ACCESS_CLIENT_SECRET=sec GH_TOKEN=t \
+    STUB_BODY="$body" STUB_MERGE_SHA="$sha" STUB_COMPARE="$cmp" STUB_HTTP="$http" env ${unset_var:+-u "$unset_var"} bash "$SUT" 2>&1)"
   rc=$?
   LAST_OUT="$out"
-  if [[ "$rc" == "$want" ]]; then PASSES=$((PASSES + 1)); echo "  ok: $label (rc=$rc)"; else FAILURES+=("$label: want rc=$want got rc=$rc: $out"); echo "  FAIL: $label (want $want got $rc)"; fi
+  if [[ "$rc" == "0" || "$rc" == "1" ]]; then FAIL_N=$((FAIL_N + 1)); FAILURES+=("$label: NOTIFY-ONLY violated (rc=$rc): $out"); echo "  FAIL: $label (rc=$rc is forbidden)"; return; fi
+  if [[ "$rc" == "$want" ]]; then PASSES=$((PASSES + 1)); echo "  ok: $label (rc=$rc)"; else FAIL_N=$((FAIL_N + 1)); FAILURES+=("$label: want rc=$want got rc=$rc: $out"); echo "  FAIL: $label (want $want got $rc)"; fi
 }
-GREEN='{"tag":"v1.2.3","sandbox_canary":{"verdict":"pass"}}'
-RED='{"tag":"v1.2.3","sandbox_canary":{"verdict":"sandbox_broken"}}'
+body() { # <exit_code> <component> <start_ts> <verdict> <checked_at> [tag]
+  printf '{"tag":"%s","exit_code":%s,"component":"%s","start_ts":%s,"sandbox_canary":{"verdict":"%s","checked_at":%s}}' "${6:-v1.2.3}" "$1" "$2" "$3" "$4" "$5"
+}
+GREEN="$(body 0 web-platform 1000 pass 1500)"
+RED="$(body 0 web-platform 1000 sandbox_broken 1500)"
 
-run 0 "fix contained in the deployed tag and canary green -> PASS" "$GREEN" "$SHA" behind
-run 0 "merge commit IS the tag -> PASS" "$GREEN" "$SHA" identical
-run 1 "fix deployed and canary broken -> FAIL" "$RED" "$SHA" behind
-run 2 "PR not merged yet -> TRANSIENT even though the canary is green" "$GREEN" "" behind
-run 2 "tag predates the fix (merge commit ahead of the tag) -> TRANSIENT, not PASS" "$GREEN" "$SHA" ahead
-run 2 "diverged -> TRANSIENT" "$GREEN" "$SHA" diverged
-run 2 "gh api returned nothing -> TRANSIENT" "$GREEN" "$SHA" ""
-run 2 "deploy-status HTTP 502 -> TRANSIENT" "$GREEN" "$SHA" behind 502
-run 2 "body without sandbox_canary -> TRANSIENT" '{"tag":"v1.2.3"}' "$SHA" behind
-run 2 "tag that is not a release tag -> TRANSIENT" '{"tag":"main","sandbox_canary":{"verdict":"pass"}}' "$SHA" behind
-run 2 "no verdict yet -> TRANSIENT" '{"tag":"v1.2.3","sandbox_canary":{"verdict":"canary_infra_error"}}' "$SHA" behind
+run 5 "fix contained in the deployed tag, deploy ok, canary re-run since -> ACTION REQUIRED" "$GREEN" "$SHA" behind
+run 5 "merge commit IS the tag -> ACTION REQUIRED" "$GREEN" "$SHA" identical
+run 5 "canary broken after the deploy -> ACTION REQUIRED (regression), never exit 1" "$RED" "$SHA" behind
+run 2 "PR not merged yet -> NOT YET even though the canary is green" "$GREEN" "" behind
+run 2 "tag predates the fix (merge commit ahead of the tag) -> NOT YET" "$GREEN" "$SHA" ahead
+run 2 "diverged -> NOT YET" "$GREEN" "$SHA" diverged
+run 3 "gh api returned nothing -> CANNOT ESTABLISH" "$GREEN" "$SHA" ""
+run 3 "deploy-status HTTP 502 -> CANNOT ESTABLISH" "$GREEN" "$SHA" behind 502
+run 3 "body without sandbox_canary -> CANNOT ESTABLISH" '{"tag":"v1.2.3"}' "$SHA" behind
+run 3 "tag that is not a release tag -> CANNOT ESTABLISH" '{"tag":"main","sandbox_canary":{"verdict":"pass"}}' "$SHA" behind
+run 2 "no verdict yet -> NOT YET" "$(body 0 web-platform 1000 canary_infra_error 1500)" "$SHA" behind
+# The deploy-in-flight / stale-canary rows: `.tag` is the last ATTEMPT and the canary ledger is the previous deploy's.
+run 2 "deploy in flight (exit_code=-1) with a stale green canary -> NOT YET" "$(body -1 web-platform 1000 pass 500)" "$SHA" behind
+run 2 "last deploy FAILED (exit_code=1) with a green canary -> NOT YET" "$(body 1 web-platform 1000 pass 1500)" "$SHA" behind
+run 2 "last deploy was another component -> NOT YET" "$(body 0 inngest 1000 pass 1500)" "$SHA" behind
+run 2 "canary verdict predates the deploy start (checked_at < start_ts) -> NOT YET" "$(body 0 web-platform 1000 pass 999)" "$SHA" behind
+run 2 "no start_ts in the answer -> NOT YET" '{"tag":"v1.2.3","exit_code":0,"component":"web-platform","sandbox_canary":{"verdict":"pass","checked_at":1500}}' "$SHA" behind
+# The stub answers only the exact argv: a different tag in the answer makes the compare path differ and reads as unavailable.
+run 3 "a deployed tag the exact-argv stub does not model -> CANNOT ESTABLISH (proves argv is pinned)" "$(body 0 web-platform 1000 pass 1500 v9.9.9)" "$SHA" behind
+run 3 "GH_TOKEN unset -> CANNOT ESTABLISH" "$GREEN" "$SHA" behind 200 GH_TOKEN
 # A forged remote value must not reach stdout with a newline or a workflow command.
-run 2 "a newline/command in the verdict is reduced to a safe alphabet" '{"tag":"v1.2.3","sandbox_canary":{"verdict":"x\n::error::boom"}}' "$SHA" behind
-if grep -q '::error::' <<<"$LAST_OUT" && ! grep -q "verdict='x" <<<"$LAST_OUT"; then FAILURES+=("forged workflow command reached stdout: $LAST_OUT"); fi
+run 2 "forged verdict falls to NOT YET with the value reduced" '{"tag":"v1.2.3","exit_code":0,"component":"web-platform","start_ts":1000,"sandbox_canary":{"verdict":"x\n::error::boom","checked_at":1500}}' "$SHA" behind
+if grep -qE '^::' <<<"$LAST_OUT" || [[ "$(wc -l <<<"$LAST_OUT")" -ne 1 ]] || ! grep -q "verdict='xerrorboom'" <<<"$LAST_OUT"; then
+  FAIL_N=$((FAIL_N + 1)); FAILURES+=("forged workflow command not neutralised (want one line with verdict='xerrorboom'): $LAST_OUT")
+else PASSES=$((PASSES + 1)); echo "  ok: forged verdict is one line, no leading ::, value reduced to xerrorboom"; fi
 
+# xtrace refusal with a live credential: rc 78 (declined before any request), never 0/1.
+xt_out="$(PATH="$STUBS:$PATH" WEBHOOK_DEPLOY_SECRET=s CF_ACCESS_CLIENT_ID=id CF_ACCESS_CLIENT_SECRET=sec GH_TOKEN=t bash -x "$SUT" 2>&1 >/dev/null | grep -c 'refusing to trace' )"
+xt_rc=$(PATH="$STUBS:$PATH" WEBHOOK_DEPLOY_SECRET=s CF_ACCESS_CLIENT_ID=id CF_ACCESS_CLIENT_SECRET=sec GH_TOKEN=t bash -x "$SUT" >/dev/null 2>&1; echo $?)
+if [[ "$xt_rc" == "78" && "$xt_out" -ge 1 ]]; then PASSES=$((PASSES + 1)); echo "  ok: xtrace with a live credential is refused (rc=78)"; else FAIL_N=$((FAIL_N + 1)); FAILURES+=("xtrace refusal: rc=$xt_rc refusals=$xt_out"); fi
+
+ROWS=$((PASSES + FAIL_N))
 echo ""
-echo "=== sandbox-readback-10445: $PASSES passed, ${#FAILURES[@]} failed ==="
-# Floor reported directly (not through the helper it backstops): 12 rows above.
-if (( PASSES + ${#FAILURES[@]} < 12 )); then printf 'FAIL: only %d rows ran (floor 12)\n' "$((PASSES + ${#FAILURES[@]}))"; exit 1; fi
+echo "=== sandbox-readback-10445: $PASSES passed, ${#FAILURES[@]} failed ($ROWS rows) ==="
+# Floor reported directly (not through the helper it backstops): the row count above.
+if (( PASSES + FAIL_N < 21 )); then
+  printf 'FAIL: only %d rows ran (floor 21)\n' "$((PASSES + FAIL_N))"
+  exit 1
+fi
 if (( ${#FAILURES[@]} > 0 )); then printf 'FAIL: %s\n' "${FAILURES[@]}"; exit 1; fi
 exit 0

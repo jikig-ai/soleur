@@ -19,8 +19,9 @@
 // shape, ignoring divergent per-call overrides (mcpServers,
 // allowedTools, maxTurns, maxBudgetUsd).
 
+import { AGENT_SESSION_TMP_ROOT, agentSessionTmpDir } from "@/server/agent-session-tmp";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "fs";
-import { tmpdir } from "os";
+import { homedir, tmpdir } from "os";
 import { join } from "path";
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -129,6 +130,7 @@ describe("buildAgentSandboxConfig drift guard", () => {
       process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
       ...peerMessagingSocketDirs(),
       ...sessionTranscriptDirs(),
+      AGENT_SESSION_TMP_ROOT,
     ]);
   });
 
@@ -216,6 +218,7 @@ describe("buildAgentSandboxConfig drift guard", () => {
       process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
       ...peerMessagingSocketDirs(),
       ...sessionTranscriptDirs(),
+      AGENT_SESSION_TMP_ROOT,
     ]);
   });
 
@@ -235,6 +238,7 @@ describe("buildAgentSandboxConfig drift guard", () => {
       process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
       ...peerMessagingSocketDirs(),
       ...sessionTranscriptDirs(),
+      AGENT_SESSION_TMP_ROOT,
     ]);
   });
 
@@ -277,6 +281,8 @@ describe("buildAgentSandboxConfig drift guard", () => {
       "/cfg/projects",
     ]);
     expect(sessionTranscriptDirs({ HOME: "relative" })).toEqual([]);
+    // Unset HOME: the CLI uses the passwd home, so the mask must not silently disappear.
+    expect(sessionTranscriptDirs({})).toEqual([join(homedir(), ".claude", "projects")]);
   });
 
   it("the production config denies the peer-socket and transcript dirs by literal (#10445)", () => {
@@ -362,6 +368,7 @@ describe("buildAgentSandboxConfig — GitHub egress variant (#5041 follow-up)", 
       process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
       ...peerMessagingSocketDirs(),
       ...sessionTranscriptDirs(),
+      AGENT_SESSION_TMP_ROOT,
     ]);
   });
 
@@ -433,5 +440,17 @@ describe("buildAgentQueryOptions drift guard (legacy ↔ cc — #2922)", () => {
       // biome-ignore lint/style/noNonNullAssertion: shape verified by other tests
       cc.hooks!.PreToolUse![0].matcher,
     );
+  });
+});
+
+// #10445 CTO ruling: the per-tenant CLI temp base. The CLI falls back to the SHARED `<tmpdir>/claude-<uid>` for children when
+// `<base>/claude-<uid>` is over 44 bytes, which would silently re-open the sibling-output channel.
+describe("agentSessionTmpDir (#10445)", () => {
+  it("is per tenant, stable, and keeps the per-uid dir within the CLI's 44-byte child-TMPDIR limit for any uid", () => {
+    const a = agentSessionTmpDir("00000000-0000-0000-0000-00000000000a");
+    expect(a).toBe(agentSessionTmpDir("00000000-0000-0000-0000-00000000000a"));
+    expect(a).not.toBe(agentSessionTmpDir("00000000-0000-0000-0000-00000000000b"));
+    expect(a.startsWith(`${AGENT_SESSION_TMP_ROOT}/`)).toBe(true);
+    expect(Buffer.byteLength(`${a}/claude-4294967294`)).toBeLessThanOrEqual(44);
   });
 });

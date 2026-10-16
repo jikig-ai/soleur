@@ -163,7 +163,7 @@ Live standing alarms over this source:
   [the 2026-10-16 PIR](../post-mortems/hosted-agent-bash-apply-seccomp-userns-eperm-postmortem.md): check whether
   `network.allowAllUnixSockets` is still set in `agent-runner-sandbox-config.ts` and whether an SDK bump changed
   the helper-selection condition; do NOT loosen the seccomp filter to unblock (a filter cannot key on the
-  caller). A single row from a single user is the forgery case below. **Wake path: email
+  caller). A single row from a single user is either a forged line (the limitation below) or a real regression seen by the only active tenant: make a real hosted Bash call and read the result (step 4 of `canary-probe-set.md`) before dismissing it. **Wake path: email
   only.** On the free tier the alert emails the team and nothing else; the Slack wake of
   [ADR-260](../../architecture/decisions/ADR-260-db-outage-paging-and-bounded-auto-restart.md) is a
   dashboard-side integration that has NOT been verified for this alert, so do not assume a Slack message

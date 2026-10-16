@@ -503,17 +503,16 @@ existing alert covers it.
   `knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-7530.md` (the alert is the
   observable signature of the public-ingress re-evaluation trigger; the legal steps live there).
 
-## Amendment — 2026-10-16 (#10445): the sixteenth Logs alert, the first over nested `message.*` keys
+## Amendment — 2026-10-16 (#10445): the sixteenth Logs alert (nested `message.*` keys)
 
 Appended, not edited. `agent_sandbox_bash_denial` (`soleur-agent-sandbox-bash-denial-prd`) brings the Terraform-managed
-Logs alert count from 15 to **16** (re-derive if another alert lands first).
+Logs alert count from 15 to **16** once the post-merge apply has run (re-derive if another alert lands first).
 
 - **Signal class: a stateless per-bucket count over app-container pino rows.** It counts rows from
   `CONTAINER_NAME = 'soleur-web-platform'` whose `op` is `bash-tool-result` and whose `sandboxErrorCode` is
   `helper_userns_eperm`, written by the cc-dispatcher `onToolResult` mirror. No sibling covers it: the existing alerts
-  read journald marker text or producer envelopes, and none reads user-visible Bash failures. It is the first alert to
-  read **nested `message.*` keys** (`JSONExtractString(raw, 'message', 'op')`): every earlier alert treats `message` as
-  a string.
+  read journald marker text or producer envelopes, and none reads user-visible Bash failures. It reads **nested `message.*` keys**
+  (`JSONExtractString(raw, 'message', 'op')`), as `registry_clientip_not_rfc1918` already does.
 - **Parameters.** `higher_than 0`, `check_period 60`, `query_period 300`, `confirmation_period 0`,
   `recovery_period 600`, `on_missing_data treat_as_zero`, email only (the `bwrap_probe_rollback` values). Auto-resolution
   after 10 quiet minutes does not mean the cause was fixed.

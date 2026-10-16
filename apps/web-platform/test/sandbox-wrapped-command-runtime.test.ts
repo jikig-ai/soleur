@@ -24,7 +24,7 @@
 // Runs on a CI runner, not the production image: the docker suite
 // (infra/sandbox-masked-proc-docker.test.sh) carries the production-tuple arms.
 
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -38,6 +38,8 @@ import {
   peerMessagingSocketDirs,
   sessionTranscriptDirs,
 } from "@/server/agent-runner-sandbox-config";
+import { buildAgentEnv } from "@/server/agent-env";
+import { AGENT_SESSION_TMP_ROOT, agentSessionTmpDir } from "@/server/agent-session-tmp";
 import { classifyBashSandboxFailure } from "@/server/sandbox-startup-classifier";
 import { startAnthropicStub, type AnthropicStub } from "./helpers/anthropic-stub";
 import { pointCliAtStub, scrubAmbientCliEnv } from "./helpers/hermetic-cli-env";
@@ -138,7 +140,8 @@ describe("the docker suite's probe literal tracks the production config (#10445)
 
   it("the probe masks exactly what the production builder masks in the suite container's env (no XDG/TMPDIR, uid, HOME)", () => {
     // The probe derives these from its own process (uid, HOME); the production functions get the same inputs here.
-    expect(probeSrc).toContain('const MASKED_DIRS = ["/tmp/cc-socks", `/tmp/cc-socks-${uid}`, `${process.env.HOME}/.claude/projects`];');
+    expect(probeSrc).toContain('const MASKED_DIRS = ["/tmp/cc-socks", `/tmp/cc-socks-${uid}`, `${HOME}/.claude/projects`];');
+    expect(probeSrc).toContain("const HOME = process.env.HOME;");
     expect(peerMessagingSocketDirs({}, 1001)).toEqual(["/tmp/cc-socks", "/tmp/cc-socks-1001"]);
     expect(sessionTranscriptDirs({ HOME: "/home/soleur" })).toEqual(["/home/soleur/.claude/projects"]);
     expect(probeSrc).toMatch(/denyRead:\s*\["\/proc",\s*"\/sys",\s*\.\.\.MASKED_DIRS\]/);
@@ -266,6 +269,7 @@ describe.skipIf(!SANDBOX_OK)("a hosted Bash call through the real SDK, the produ
       // Abstract-namespace unix sockets are bounded only by the per-command network namespace; the vendored
       // builder emits --unshare-net whenever it restricts the network, independent of allowAllUnixSockets.
       const boundary = toks.indexOf("--");
+      expect(boundary, "no -- boundary in the command spawn").toBeGreaterThan(0);
       expect(toks.slice(0, boundary), "the command spawn lost --unshare-net").toContain("--unshare-net");
     }
     expect(result, "no Bash tool_result came back").not.toBeNull();
@@ -289,7 +293,7 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
 
   // Runs inside B's sandbox. For every pathname socket in the shared dir it sends a CONNECT with (1) no
   // credential, (2) a wrong credential and (3) B's own proxy credential, and prints the status line.
-  const probeScript = (dir: string) =>
+  const probeScript = (dir: string, needle: string) =>
     [
       `cd ${dir}`,
       `own=$(printf '%s' "$grpc_proxy" | sed -n 's|^http://\\([^@]*\\)@.*|\\1|p' | sed 's/%3D/=/g')`,
@@ -303,12 +307,24 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
       `    echo "PROBE $b $label [$line]"`,
       `  done`,
       `done`,
+      // #10445 CTO ruling: A ran `env`, so its per-session proxy credential sits in the CLI's persisted output. The host
+      // read it from A's own temp dir and wrote it here as the needle; B searches everything it can read for it.
+      `needle='${needle}'`,
+      `hits=$(grep -rIlF --exclude=probe.sh -- "$needle" /tmp "$TMPDIR" "$HOME" 2>/dev/null | head -5)`,
+      `echo NEEDLE_HITS=$(printf '%s' "$hits" | grep -c .)`,
+      `echo NEEDLE_PATHS=$(printf '%s' "$hits" | tr '\\n' ,)`,
+      `echo SESSION_TMP_ROOT_ENTRIES=$(ls -A ${AGENT_SESSION_TMP_ROOT} 2>/dev/null | grep -c .)`,
+      `lc=$(printf '%s' "$needle" | sed 's/%3D/=/g')`,
+      `for s in $([ -n "$hits" ] && echo ${dir}/*.sock); do [ -S "$s" ] || continue; b=$(basename "$s")`,
+      `  line=$( { printf "CONNECT example.test:443 HTTP/1.1\\r\\nHost: example.test:443\\r\\nProxy-Authorization: Basic $(printf '%s' "$lc" | base64 -w0)\\r\\n\\r\\n"; sleep 1; } | socat -T3 - "UNIX-CONNECT:$s" 2>/dev/null | head -n1 | tr -d '\\r')`,
+      `  echo "REPLAY $b [$line]"`,
+      `done`,
       `echo SOCKETS=$n`,
       `echo CCSOCKS_IN_SANDBOX=$(ls -A ${peerMessagingSocketDirs().join(" ")} 2>/dev/null | grep -c '\\.sock$')`,
       `echo TRANSCRIPTS_IN_SANDBOX=$(ls -A ${sessionTranscriptDirs().join(" ")} 2>/dev/null | grep -vc '^$')`,
     ].join("\n");
 
-  beforeAll(async () => {
+  beforeEach(async () => {
     // The per-run temp root, kept short: a unix socket path is capped at 108 bytes and the SDK names its proxy sockets
     // `<dir>/claude-http-<16 hex>.sock`, so a long TMPDIR fails bridge creation ("Failed to create bridge sockets").
     shared = realpathSync(mkdtempSync(join(tmpdir(), "sbx-g2-")));
@@ -323,7 +339,7 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
     mkdirSync(join(rootB, "00000000-0000-0000-0000-00000000000b"));
     writeFileSync(join(shimDir, "bwrap"), `#!/usr/bin/env bash\nexec ${JSON.stringify(BWRAP_SHIM)} "$@"\n`);
     spawnSync("chmod", ["+x", join(shimDir, "bwrap")], { stdio: "ignore" });
-    stubA = await startAnthropicStub("sleep 60");
+    stubA = await startAnthropicStub("env; sleep 60");
     stubB = await startAnthropicStub(`bash ${shared}/probe.sh`);
     scrubAmbientCliEnv();
     pointCliAtStub(stubA.port, home, "decoy-api-key-sentinel");
@@ -331,17 +347,17 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
     // shared dir. The builder reads this same process env, so its masked dirs are derived from what the CLI sees.
     vi.stubEnv("XDG_RUNTIME_DIR", undefined);
     vi.stubEnv("TMPDIR", shared);
-    writeFileSync(join(shared, "probe.sh"), probeScript(shared));
+    writeFileSync(join(shared, "probe.sh"), probeScript(shared, "NO_NEEDLE_YET"));
     vi.stubEnv("SOLEUR_BWRAP_REAL", "/usr/bin/bwrap");
     vi.stubEnv("SOLEUR_BWRAP_SECCOMP_BPF", BWRAP_BPF);
     vi.stubEnv("PATH", `${shimDir}:${savedPath ?? "/usr/bin:/bin"}`);
   });
 
-  afterAll(async () => {
+  afterEach(async () => {
     vi.unstubAllEnvs();
     await stubA?.close();
     await stubB?.close();
-    for (const dir of [shared, rootA, rootB, home, shimDir]) {
+    for (const dir of [shared, rootA, rootB, home, shimDir, agentSessionTmpDir(IDS.a), agentSessionTmpDir(IDS.b)]) {
       if (!dir) continue;
       try {
         rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
@@ -351,7 +367,37 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
     }
   });
 
-  it("tokenless and wrong-credential requests through any visible sibling socket return 407; the caller's own credential is live", async () => {
+  const IDS = { a: "00000000-0000-0000-0000-00000000000a", b: "00000000-0000-0000-0000-00000000000b" };
+  const tenantEnv = (id: string, perTenantTmp: boolean): Record<string, string> => ({
+    TMPDIR: shared,
+    // The production env builder, not a hand-set value: the control arm omits the option (the pre-fix shared CLI temp).
+    ...(perTenantTmp
+      ? { CLAUDE_CODE_TMPDIR: buildAgentEnv({ value: "decoy", scheme: "api_key" }, {}, { claudeTmpDir: agentSessionTmpDir(id) }).CLAUDE_CODE_TMPDIR! }
+      : {}),
+  });
+  /** Host side: the proxy userinfo A's `env` printed, read from A's own persisted output (null until it exists). */
+  const findNeedle = (perTenantTmp: boolean): string | null => {
+    const root = perTenantTmp ? agentSessionTmpDir(IDS.a) : shared;
+    const walk = (d: string): string[] =>
+      readdirSync(d, { withFileTypes: true }).flatMap((e) => {
+        try {
+          return e.isDirectory() ? walk(join(d, e.name)) : e.name.endsWith(".output") ? [join(d, e.name)] : [];
+        } catch {
+          return [];
+        }
+      });
+    try {
+      for (const f of walk(root)) {
+        const m = /grpc_proxy=http:\/\/([^@\s]+)@/.exec(readFileSync(f, "utf8"));
+        if (m) return m[1];
+      }
+    } catch {
+      /* not there yet */
+    }
+    return null;
+  };
+
+  const scenario = async (perTenantTmp: boolean) => {
     const ownA = join(rootA, "00000000-0000-0000-0000-00000000000a");
     const ownB = join(rootB, "00000000-0000-0000-0000-00000000000b");
     const stopA = new AbortController();
@@ -363,7 +409,7 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
       home,
       cwd: ownA,
       sandbox: sandboxA,
-      env: { TMPDIR: shared },
+      env: tenantEnv(IDS.a, perTenantTmp),
       signal: stopA.signal,
     });
     try {
@@ -373,12 +419,19 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
       while (Date.now() < deadline && sockets().length === 0) await new Promise((r) => setTimeout(r, 500));
       expect(sockets().length, "session A never created a proxy socket (the probe would be vacuous)").toBeGreaterThan(0);
 
+      // Non-vacuity: A's `env` output (with its credential) is on disk host-side BEFORE B looks. B runs against the oracle.
+      let needle: string | null = null;
+      const nDeadline = Date.now() + 60_000;
+      while (Date.now() < nDeadline && !(needle = findNeedle(perTenantTmp))) await new Promise((r) => setTimeout(r, 500));
+      expect(needle, "A's persisted `env` output never appeared, so the cross-tenant scan would be vacuous").not.toBeNull();
+      writeFileSync(join(shared, "probe.sh"), probeScript(shared, needle!));
+
       const result = await runBash({
         stubPort: stubB!.port,
         home,
         cwd: ownB,
         sandbox: sandboxB,
-        env: { TMPDIR: shared },
+        env: tenantEnv(IDS.b, perTenantTmp),
       });
       expect(result, "B's probe returned no tool_result").not.toBeNull();
       const out = result!.content;
@@ -394,6 +447,20 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
       expect(out).toContain("OWN_CRED_PRESENT=yes");
       expect(probes.length).toBe(socketsSeen * 3);
 
+      // #10445 CTO ruling. The credential-recovery channel: B must not find A's credential anywhere it can read, and must not
+      // be able to replay it. The control arm (shared CLI temp, the pre-fix layout) PROVES the scan can see the leak.
+      const hits = Number(/^NEEDLE_HITS=(\d+)$/m.exec(out)?.[1] ?? "-1");
+      const replays = [...out.matchAll(/^REPLAY (\S+) \[(.*)\]$/gm)].map((m) => ({ sock: m[1], line: m[2] }));
+      if (perTenantTmp) {
+        expect(replays, "B found nothing to replay").toEqual([]);
+        expect(hits, `B found A's credential at: ${/^NEEDLE_PATHS=(.*)$/m.exec(out)?.[1]}`).toBe(0);
+        expect(Number(/^SESSION_TMP_ROOT_ENTRIES=(\d+)$/m.exec(out)?.[1] ?? "-1"), "B sees a sibling's CLI temp base").toBe(1);
+      } else {
+        expect(hits, "control: the scan failed to find the leak in the shared CLI temp").toBeGreaterThan(0);
+        expect(replays.length, `control: no replay ran:\n${out}`).toBe(socketsSeen);
+        expect(replays.some((r) => !r.line.includes("407")), "control: the replay was never accepted").toBe(true);
+      }
+
       // The property: no request lacking the target session's credential is served.
       for (const p of probes.filter((x) => x.label !== "own")) {
         expect(p.line, `${p.sock} answered a ${p.label} request with something other than 407`).toContain("407");
@@ -407,10 +474,12 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
           return [];
         }
       });
-      expect(
-        hostSideCcSocks.length,
-        "no live peer-messaging socket on the host side, so the mask assertion below is vacuous",
-      ).toBeGreaterThan(0);
+      if (!perTenantTmp) {
+        expect(
+          hostSideCcSocks.length,
+          "no live peer-messaging socket on the host side, so the mask assertion below is vacuous",
+        ).toBeGreaterThan(0);
+      }
       expect(out).toContain("CCSOCKS_IN_SANDBOX=0");
       // Session transcripts under the shared HOME: A's CLI wrote one (host-side non-vacuity), B's sandbox sees none.
       const transcriptDirs = sessionTranscriptDirs();
@@ -438,5 +507,8 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
       stopA.abort();
       await sessionA.catch(() => undefined);
     }
-  }, 240_000);
+  };
+
+  it("per-tenant CLI temp: B cannot find or replay A's credential (A ran `env`); tokenless and wrong-credential requests return 407; the caller's own credential is live", () => scenario(true), 240_000);
+  it("CONTROL: with a shared CLI temp (the pre-fix layout) the same scan finds A's credential and the replay is accepted", () => scenario(false), 240_000);
 });

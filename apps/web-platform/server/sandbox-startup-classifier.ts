@@ -186,7 +186,7 @@ const BASH_BWRAP_TOKEN = /\b(?:bwrap|bubblewrap)\b/i;
 // (a) another helper step failing with EPERM is a different fault that must not page with this name (residual,
 // tracked in #10455), and (b) a line that must match end to end carries no tenant-chosen tail, so the emitted
 // `matchedLine` is a fixed string a forged line cannot extend.
-const BASH_APPLY_SECCOMP_LINE = /^\s*apply-seccomp:\s*unshare\(CLONE_NEWUSER\):\s*(?:Operation not permitted|EPERM)\s*$/i;
+const BASH_APPLY_SECCOMP_LINE = /^[ \t]*apply-seccomp: unshare\(CLONE_NEWUSER\): (?:Operation not permitted|EPERM)[ \t]*$/;
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 // EVERY absolute path token (a solo workspace's id IS the user id, and /home, /var/lib, /tmp paths are tenant-adjacent
 // too) except bwrap's own `/newroot/{proc,dev,sys,tmp}` targets, which carry the diagnostic. Linear: it only starts at
