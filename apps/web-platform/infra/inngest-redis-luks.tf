@@ -135,11 +135,12 @@ resource "doppler_secret" "inngest_redis_luks_key" {
 #
 # NO `format` ATTRIBUTE, AND THAT IS LOAD-BEARING — the same reasoning the retired recut
 # apparatus recorded for the plaintext volume. The device must be born RAW so
-# `blkid -o value -s TYPE` is a sound discriminator: "" means empty and may be
-# luksFormatted, `crypto_LUKS` means already cut, anything else is a signature we
-# refuse to destroy. Declaring `format = "ext4"` would make the guard's empty arm
-# unreachable and the first boot would mount a plaintext ext4 filesystem at the
-# staging path — the precise outcome this volume exists to avoid. The precedents
+# `blkid -o value -s TYPE` is a sound discriminator: "" means empty (formatted only on a
+# `rehearsal_*` Doppler config; refused as `unpointed_raw_refused` on prd, #9786),
+# `crypto_LUKS` means already cut, anything else is a signature we refuse to destroy.
+# Declaring `format = "ext4"` would make the guard's empty arm unreachable on a rehearsal
+# host, and the template now REFUSES an ext4 signature on this volume outright (there is no
+# plaintext mount arm and no staging path any more). The precedents
 # omit it for this reason (hcloud_volume.workspaces_luks, and the `ignore_changes` note
 # that sat on the plaintext `hcloud_volume.inngest_redis` before #8285 PR A removed its
 # declaration).

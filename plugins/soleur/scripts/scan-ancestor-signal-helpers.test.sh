@@ -58,7 +58,7 @@ passes=0
 fails=0
 cases=0
 skipped=0
-PLANNED_TOTAL=127
+PLANNED_TOTAL=139
 
 pass() { passes=$((passes + 1)); printf '[ok] %s\n' "$1"; }
 fail() { fails=$((fails + 1)); printf '[FAIL] %s\n' "$1"; }
@@ -350,6 +350,7 @@ if [[ -w /dev/full ]]; then
   ( cd "$FIX" && timeout 60 python3 -I "$SCAN" --list site-base.txt ) >/dev/full 2>"$TMP/err"
   RC=$?
   check "D7 an exception inside main (stdout is full): rc 3, never a traceback-only rc 1" test "$RC" -eq 3 -a "$(has_err 'UNRESOLVED' && echo y || echo n)" = y
+  check "D7b the swallowed flush error is noted by class name; the UNRESOLVED line and rc 3 are unchanged" test "$RC" -eq 3 -a "$(has_err ': swallowed [A-Za-z]+ at flush-stdout$' && echo y || echo n)" = y -a "$(has_err '^ancestor-signal scan: UNRESOLVED: ' && echo y || echo n)" = y
 else
   skipped=$((skipped + 1)); printf 'SKIP D7: /dev/full is not writable here\n'
 fi
@@ -465,10 +466,93 @@ run_scan --list "$TMP/stress.txt"
 check "H9 many parent assignments times many kills finish inside the 60 s cap (no quadratic stall)" test "$RC" -eq 0
 
 # ============================================================================================
+# F. Swallowed-exception note (PR2 of #10331): class name and a literal site label only, never raises
+# ============================================================================================
+assert_fixture_dir "$TMP"
+python3 -I - "$SCAN" flush-stdout > "$TMP/note-probe.out" 2>&1 <<'PY' || true
+import ast, importlib.util, io, os, sys
+spec = importlib.util.spec_from_file_location("note_target", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+def say(ok, name):
+    print(("OK " if ok else "NOT-OK ") + name)
+
+class Boom(OSError):
+    pass
+
+def run_note(exc, stream):
+    real, sys.stderr = sys.stderr, stream
+    try:
+        mod._note(exc, "probe")
+    finally:
+        sys.stderr = real
+
+buf = io.StringIO()
+run_note(Boom("CANARY-7f3a"), buf)
+line = buf.getvalue()
+say(line.endswith(" swallowed Boom at probe\n") and line.count("\n") == 1, "line-shape")
+say("CANARY" not in line, "canary-absent")
+
+class Failing:
+    def __init__(self, exc):
+        self.exc = exc
+    def write(self, s):
+        raise self.exc
+    def flush(self):
+        raise self.exc
+
+for name, exc in (("oserror-stderr", OSError("w")), ("valueerror-stderr", ValueError("w"))):
+    try:
+        run_note(Boom("x"), Failing(exc))
+        say(True, name)
+    except BaseException:
+        say(False, name)
+
+try:
+    run_note(Boom("x"), None)
+    say(True, "none-stderr")
+except BaseException:
+    say(False, "none-stderr")
+
+closed = open(os.devnull, "w")
+closed.close()
+try:
+    run_note(Boom("x"), closed)
+    say(True, "closed-stderr")
+except BaseException:
+    say(False, "closed-stderr")
+
+def census(src):
+    calls, bad, labels = 0, [], set()
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_note":
+            calls += 1
+            lit = (len(node.args) == 2 and not node.keywords
+                   and isinstance(node.args[0], ast.Name)
+                   and isinstance(node.args[1], ast.Constant) and isinstance(node.args[1].value, str))
+            if lit:
+                labels.add(node.args[1].value)
+            else:
+                bad.append(node.lineno)
+    return calls, bad, labels
+
+calls, bad, labels = census(open(sys.argv[1], encoding="utf-8").read())
+say(calls >= 1 and not bad, "census-literal-labels")
+say(labels == set(sys.argv[2].split(",")), "census-label-set")
+say(census("_note(exc, site='x')")[1] != [], "census-rejects-keyword")
+say(census("_note(str(exc), 'a')")[1] != [], "census-rejects-computed")
+say(census("_note(exc, 'a')")[:2] == (1, []), "census-accepts-literal")
+PY
+for tok in line-shape canary-absent oserror-stderr valueerror-stderr none-stderr closed-stderr census-literal-labels census-label-set census-rejects-keyword census-rejects-computed census-accepts-literal; do
+  check "F-$tok the _note probe reports $tok" grep -qxF "OK $tok" "$TMP/note-probe.out"
+done
+
+# ============================================================================================
 # Anti-vacuity and accounting (direct printf + exit, never through fail())
 # ============================================================================================
-if [[ "$cases" -lt 124 ]]; then
-  printf '[FATAL] anti-vacuity floor: only %s cases ran, floor is 124\n' "$cases" >&2
+if [[ "$cases" -lt 136 ]]; then
+  printf '[FATAL] anti-vacuity floor: only %s cases ran, floor is 136\n' "$cases" >&2
   exit 1
 fi
 if [[ $((passes + fails)) -ne "$cases" ]]; then

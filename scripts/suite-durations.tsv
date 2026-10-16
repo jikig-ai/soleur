@@ -357,6 +357,7 @@ scripts/followthroughs/ci-draft-light-soak-9728	104456	measured
 scripts/followthroughs/ci-push-dedupe-soak-9512	87919	measured
 scripts/followthroughs/inngest-provision-rehearsal-capture	1223	measured
 scripts/followthroughs/pr-battery-gate-saving-9323	11826	measured
+scripts/followthroughs/registry-clientip-alert-7530	1180	floor
 scripts/followthroughs/t5-skip-persistence-bound-7510	9027	measured
 scripts/followthroughs/tty-ack-migration-9387	3438	measured
 scripts/generate-kb-index-live	2444	measured
@@ -387,6 +388,7 @@ scripts/learning-retrieval-bench	922	measured
 scripts/lib/bearer-curl.test.sh	3576	measured
 scripts/lib/frontmatter-strip.test.sh	197	measured
 scripts/lib/git-data-rotate-stamp.test.sh	1177	floor
+scripts/lib/git-data-wipe-runs.test.sh	1180	floor
 scripts/lib/incidents-roots.test.sh	177	measured
 scripts/lib/inngest-probe-row.test.sh	11441	measured
 scripts/lib/legal-base-ref.test.sh	324	measured
@@ -453,7 +455,6 @@ scripts/lint-workflow-local-action-checkout-live	1453	measured
 scripts/lint-workflow-run-body-syntax	2746	measured
 scripts/lint-workflow-step-env-refs	2729	measured
 scripts/lint-workflow-step-env-refs-live	2301	measured
-scripts/luks-monitor-host-timer-8706	504	measured
 scripts/marketplace-drift-check	1808	measured
 scripts/marketplace-manifest-validate	804	measured
 scripts/md-to-mrkdwn	218	measured
@@ -561,6 +562,7 @@ tests/scripts/git-data-root-key-arm	5960	measured
 tests/scripts/git-data-root-token-census	22452	measured
 tests/scripts/git-data-rung2-evidence-capture	14744	measured
 tests/scripts/git-data-rung2-plan-shape	884	measured
+tests/scripts/git-data-wipe-wedge	1180	floor
 tests/scripts/host-image-coherence-preflight	47	measured
 tests/scripts/infra-privileged-tier-census	16830	measured
 tests/scripts/inngest-host-dark-gate	16167	measured

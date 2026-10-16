@@ -4,8 +4,10 @@
 #
 # Property: DOPPLER_TOKEN_GIT_DATA_ROOT — the token that reads the key which is root on the host
 # holding every connected user's source code — is named under .github/workflows and .github/actions
-# ONLY by git-data-cutover.yml job `cutover` (environment web-platform-infra-apply), in exactly the
-# secrets-check presence boolean and the key-fetch bind; the `secrets: inherit` callers are the known
+# ONLY by git-data-cutover.yml jobs `cutover` and `wipe` (#10138; both in environment
+# web-platform-infra-apply). `cutover` names it in exactly the secrets-check presence boolean and the
+# 'Fetch git-data root key' bind; `wipe` in exactly its own 'Fetch git-data root key' bind (step
+# wipe_key_fetch). The job set is closed: a third job, or a second site in either, fails; the `secrets: inherit` callers are the known
 # release pair; reusable-release.yml (the inherit receiver) never names it; and nothing reads secrets
 # dynamically (`toJSON(secrets)`, `secrets[...]`), which would hand every secret — this one included —
 # to a job the name census cannot see.
@@ -119,21 +121,32 @@ check("G3b: the token is named (outside comments; secrets.<name> in any case) on
 jobs = (cut or {}).get("jobs") or {}
 top = [k for k, v in (cut or {}).items() if k != "jobs" and names(v)]
 jn = [j for j, b in jobs.items() if names(b)]
-check("G3c: within it only job `cutover` names the token, and no workflow-level key does", jn == ["cutover"] and not top, (jn, top))
-env = (jobs.get("cutover") or {}).get("environment")
-if isinstance(env, dict): env = env.get("name")
-check("G3d: job `cutover` declares environment web-platform-infra-apply", env == "web-platform-infra-apply", env)
-steps = (jobs.get("cutover") or {}).get("steps") or []
-sites = []
-for s in steps:
-    if not names(s): continue
-    e = s.get("env") or {}
-    keys = [k for k, v in e.items() if mentions(str(v))]
-    rest = {k: v for k, v in s.items() if k != "env"}
-    sites.append((s.get("id"), keys, [e[k] for k in keys], names(rest)))
-check("G3e: the token's steps are exactly the secrets check (presence boolean) and the key fetch (value bind)",
-      sites == [("secrets_check", ["GIT_DATA_ROOT_TOKEN_PRESENT"], ["${{ secrets.%s != '' }}" % NAME], False),
-                ("key_fetch", ["DOPPLER_TOKEN"], ["${{ secrets.%s }}" % NAME], False)], sites)
+ALLOWED_JOBS = ["cutover", "wipe"]
+check("G3c: within it exactly the jobs `cutover` and `wipe` name the token (a closed set), and no workflow-level key does", jn == ALLOWED_JOBS and not top, (jn, top))
+def job_env(j):
+    env = (jobs.get(j) or {}).get("environment")
+    if isinstance(env, dict): env = env.get("name")
+    return env
+envs = {j: job_env(j) for j in ALLOWED_JOBS}
+check("G3d: each of jobs `cutover` and `wipe` declares environment web-platform-infra-apply", all(v == "web-platform-infra-apply" for v in envs.values()), envs)
+def job_sites(j):
+    out_ = []
+    for s in (jobs.get(j) or {}).get("steps") or []:
+        if not names(s): continue
+        e = s.get("env") or {}
+        keys = [k for k, v in e.items() if mentions(str(v))]
+        rest = {k: v for k, v in s.items() if k != "env"}
+        out_.append((s.get("id"), s.get("name"), keys, [e[k] for k in keys], names(rest)))
+    return out_
+KEYSTEP = "Fetch git-data root key"
+want_cut = [("secrets_check", None, ["GIT_DATA_ROOT_TOKEN_PRESENT"], ["${{ secrets.%s != '' }}" % NAME], False),
+            ("key_fetch", KEYSTEP, ["DOPPLER_TOKEN"], ["${{ secrets.%s }}" % NAME], False)]
+want_wipe = [("wipe_key_fetch", KEYSTEP, ["DOPPLER_TOKEN"], ["${{ secrets.%s }}" % NAME], False)]
+got_cut, got_wipe = job_sites("cutover"), job_sites("wipe")
+# secrets_check's name is free text; compare it with the name masked (every other site's name is pinned).
+got_cut = [(a, None if a == "secrets_check" else b, c, d, e) for (a, b, c, d, e) in got_cut]
+check("G3e: per job the token's steps are exactly: cutover = the secrets check (presence boolean) + the 'Fetch git-data root key' bind; wipe = its own 'Fetch git-data root key' bind (wipe_key_fetch)",
+      got_cut == want_cut and got_wipe == want_wipe, (got_cut, got_wipe))
 check("G3f: `secrets: inherit` sites are exactly the known release callers", inherit == KNOWN_INHERIT, sorted(inherit))
 check("G3g: no toJSON(secrets) / secrets[...] dynamic secret access anywhere (any case, any spacing)", not dynamic, dynamic)
 check("G3h: reusable-release.yml never names the token (any case)", not reusable_names)
@@ -225,12 +238,25 @@ if mutate g3-second-job "$_gm/workflows/git-data-cutover.yml" 6 '$a\  second:\n 
   python3 "$T/g3.py" "$_gm" > "$T/mut/g3-1.tsv" 2>&1
   mutant_red g3-second-job wf_row "$T/mut/g3-1.tsv" "G3c:"
 fi
-# Row 2 — remove environment: from cutover.
+# Row 2 — remove environment: from ONE job at a time (the first occurrence is `cutover`'s, the one inside `wipe:` its own).
 _gm="$(_ghcopy m-noenv)"; assert_fixture_dir "$_gm"
-if mutate g3-no-environment "$_gm/workflows/git-data-cutover.yml" 1 '/^    environment: web-platform-infra-apply$/d'; then
+if mutate g3-no-environment "$_gm/workflows/git-data-cutover.yml" 1 '0,/^    environment: web-platform-infra-apply$/{/^    environment: web-platform-infra-apply$/d}'; then
   cp "$MUTANT" "$_gm/workflows/git-data-cutover.yml"
   python3 "$T/g3.py" "$_gm" > "$T/mut/g3-2.tsv" 2>&1
   mutant_red g3-no-environment wf_row "$T/mut/g3-2.tsv" "G3d:"
+fi
+_gm="$(_ghcopy m-noenv-wipe)"; assert_fixture_dir "$_gm"
+if mutate g3-no-environment-wipe "$_gm/workflows/git-data-cutover.yml" 1 '/^  wipe:$/,/^  notify-failure:$/{/^    environment: web-platform-infra-apply$/d}'; then
+  cp "$MUTANT" "$_gm/workflows/git-data-cutover.yml"
+  python3 "$T/g3.py" "$_gm" > "$T/mut/g3-2w.tsv" 2>&1
+  mutant_red g3-no-environment-wipe wf_row "$T/mut/g3-2w.tsv" "G3d:"
+fi
+# Row 2b — the wipe job's key-fetch step gains a second bind of the token (a second site in the allowed job).
+_gm="$(_ghcopy m-wipe-extra)"; assert_fixture_dir "$_gm"
+if mutate g3-wipe-second-bind "$_gm/workflows/git-data-cutover.yml" 1 '/id: wipe_key_fetch/,/^        run:/ s#^(          DOPPLER_TOKEN: \$\{\{ secrets\.DOPPLER_TOKEN_GIT_DATA_ROOT \}\})$#\1\n          ZZ_EXTRA: ${{ secrets.DOPPLER_TOKEN_GIT_DATA_ROOT }}#'; then
+  cp "$MUTANT" "$_gm/workflows/git-data-cutover.yml"
+  python3 "$T/g3.py" "$_gm" > "$T/mut/g3-2b.tsv" 2>&1
+  mutant_red g3-wipe-second-bind wf_row "$T/mut/g3-2b.tsv" "G3e:"
 fi
 # Row 3 — a second workflow file referencing the token, sorted after the compliant first.
 _gm="$(_ghcopy m-secondwf)"; assert_fixture_dir "$_gm"
@@ -270,13 +296,13 @@ fi
 }
 
 # ── FLOOR + LEDGER (ADR-193: printf + exit, never through pass()/fail()) ─────────────
-MUTANT_FLOOR=7   # the matrix rows above
+MUTANT_FLOOR=9   # the matrix rows above (row 2 is two mutants, one per job; row 2b is the wipe job's second bind)
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
 fi
-# Assertion FLOOR: census 8 + harness 3 + mutants 7 x 2 = 25 (exact).
-FLOOR=25
+# Assertion FLOOR: census 8 + harness 3 + mutants 9 x 2 = 29 (exact).
+FLOOR=29
 _ran=$((passes + fails))
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2

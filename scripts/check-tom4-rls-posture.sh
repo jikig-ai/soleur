@@ -201,6 +201,7 @@ SHAPE_IV = {  # TOM 4 shape (iv): RLS enabled, ZERO policies, Customer Data
     "agent_engine_attempts", "agent_engine_recovery_checkpoints",
     "pending_checkout_sessions",  # user-keyed checkout claim marker (migration 144)
     "codex_history_transfer_acknowledgments",  # member-scoped ack ledger, RPC-only (migration 149)
+    "workspace_egress_audit_rollup",  # per-workspace egress audit rollup, dark until PR2 (migration 162, ADR-288)
 }
 # Zero-policy tables that hold no Customer Data. Assertion 4 requires every
 # zero-policy table to sit in exactly one of these two lists, so a NEW

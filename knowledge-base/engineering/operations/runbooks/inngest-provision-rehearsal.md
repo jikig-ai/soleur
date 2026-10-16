@@ -164,7 +164,44 @@ required (the validate step is unconditional):
 gh workflow run inngest-provision-rehearsal.yml --ref main   -f confirm=REHEARSE-INNGEST-PROVISION -f teardown_only=true
 ```
 
-or reclaim by API — the filed issue prints the exact calls.
+If the arm cannot remove a survivor (state forgot it), the filed issue lists the stranded objects read-only, with their
+ids. Reclaiming them is a separately authorized action, described next.
+
+### Reclaiming survivors that state forgot (owner-authorized, per command)
+
+The filed issue prints no delete call. An agent session reclaims a survivor only from objects that the issue's
+`label_selector` listing (Hetzner) or its name list (Doppler) returned, and runs each write only after the owner's
+per-command go-ahead (`hr-menu-option-ack-not-prod-write-auth`): show the exact command and the live-state read
+below, wait, and do not treat an earlier go-ahead as covering the next object. No SSH step is involved.
+
+Bounds, stated exactly. The label bound covers Hetzner objects only: `app=soleur-inngest-provision-rehearsal` here
+and `app=soleur-rung2-rehearsal` for the rung-2 sweep never select the sole-copy volume, the web-1 volume or any
+unlabeled object, and an id outside the listing is out of bounds. Doppler objects carry no label and are bounded by
+name: the rung-2 scratch config is `prd_git_data_rehearsal_<run id>` in project `soleur` (environment `prd`), and the
+inngest scratch environment is `rehearsal_<run id>` in project `soleur-inngest`. Any other name is out of bounds.
+
+1. Re-run the read-only listing from the issue body. Require HTTP 200 per kind (use `curl -f` and `set -o pipefail`,
+   or print the status code): an auth or rate-limit error prints nothing through the `jq` filter and would read as
+   "empty".
+2. Before each write, read the object (`GET /v1/<kind>/<id>`; the response wraps it, so the fields are
+   `volume.labels.app` and so on) and require: `labels.app` equals the expected rehearsal value; for a server or volume,
+   `protection.delete` is false (firewalls and ssh keys have no protection object); a volume's `server` is null or a
+   listed rehearsal server; a firewall's `applied_to` holds only listed rehearsal servers. Never act on volume 106903269
+   or web-1 volume 106443278, whatever the listing shows. Show that output with the command
+   (`hr-bulk-delete-per-item-live-infra-role-check`).
+3. Delete in dependency order, server first, then its volumes, firewalls, ssh keys: `DELETE /v1/<kind>/<id>`. Detach a
+   volume (`POST /v1/volumes/<id>/actions/detach`) only if the read in step 2 shows it attached. If a delete is
+   refused (for example `resource_in_use`), stop and report; do not unprotect, relabel or detach by other means.
+4. Doppler, rung-2: the Doppler CLI `configs delete` subcommand with `-p soleur`, only on a config named
+   `prd_git_data_rehearsal_*` that the issue listed; list configs first and compare the name character for
+   character. Never `environments delete` for rung-2 (that removes the production `prd` environment). Doppler,
+   inngest: `environments delete` with `-p soleur-inngest`, only on a slug matching `rehearsal_*` that the issue listed.
+5. Before a Doppler delete, confirm no rehearsal run is in flight (the config or environment is live while its
+   rehearsal workflow runs). A `server(name):` line in the issue that the label listing does not return is a
+   name-prefix hit with a different label: report it to the owner instead of acting on it.
+6. Verify: re-run the listing; empty output with HTTP 200 for every kind means reclaimed.
+
+A label-scoped reclaim dispatch (so step 3 needs no ad hoc API call) is a candidate follow-up, recorded on #9927.
 
 ## Failure table
 

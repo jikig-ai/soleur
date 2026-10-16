@@ -5085,6 +5085,9 @@ if want_scripts; then
   # Image CVE scan (W3, epic #9601): hermetic suite (stub Grype/curl, file:// /health); scripts/*.test.sh is
   # not in SUITE_GLOBS, so it is registered explicitly.
   run_suite "scripts/image-cve-scan" bash scripts/image-cve-scan.test.sh
+  # Egress audit rollup retention/freshness probe (#9545, ADR-288): hermetic (curl PATH shim, stub gateway
+  # query); scripts/*.test.sh is not in SUITE_GLOBS, so it is registered explicitly.
+  run_suite "scripts/egress-audit-retention-check" bash scripts/egress-audit-retention-check.test.sh
   # Doppler's API caps a doppler_* `description` at 255; the provider schema and `terraform plan`
   # do not, so a 273-char doppler_project.infra_privileged reddened every push apply after the
   # credential-tiering merge. -live asserts the real tree; -unit is the mutation matrix.
@@ -5691,12 +5694,6 @@ if want_scripts; then
   # 2026-10-15, forget >48 h old, or closed unmerged; 2 = NOT YET; 3 = gh failed). Registered
   # explicitly (orphan-suite class above): a false 0 would close the tracker on a live hold.
   run_suite "scripts/workspaces-plaintext-hold-9348" bash scripts/followthroughs/workspaces-plaintext-hold-9348.test.sh
-  # #8706: exit-code harness for the luks-monitor host-timer closure probe. Registered explicitly
-  # (orphan-suite class above). Its exit 0 closes #8706, so the suite pins that PASS needs three
-  # CONSECUTIVE UTC nights (two, or three with gaps, is FAIL), that a dark channel (zero
-  # luks-monitor rows) is exit 2 and never FAIL/PASS, and that an empty result is a real zero
-  # while a failed query is exit 2.
-  run_suite "scripts/luks-monitor-host-timer-8706" bash scripts/followthroughs/luks-monitor-host-timer-8706.test.sh
   # #6931: exit-code harness for the web-2 live-LUKS soak-gated closure probe. Registered explicitly
   # (orphan-suite class above). Its exit 0 closes #6931, so the suite pins the arms that must NOT reach
   # it: a young marker, a red probe row since the marker (and that a FAIL row from BEFORE the marker is
@@ -6176,6 +6173,7 @@ if want_scripts; then
   run_suite "tests/scripts/zot-log-channel-probe" bash tests/scripts/test-zot-log-channel-probe.sh
   # git-data-host-replace scoped-recreate destroy-guard (#6242; 5-target, preserves BOTH data volumes + LUKS passphrase by omission).
   run_suite "tests/scripts/git-data-host-replace-gate" bash tests/scripts/test-git-data-host-replace-gate.sh
+  run_suite "tests/scripts/git-data-wipe-wedge" bash tests/scripts/test-git-data-wipe-wedge.sh
   # git-data root-key create-gate arm (#8189, ADR-220, Guard 4), sourced by the replace and birth gates.
   run_suite "tests/scripts/git-data-root-key-arm" bash tests/scripts/test-git-data-root-key-arm.sh
   run_suite "tests/scripts/git-data-root-token-census" bash tests/scripts/test-git-data-root-token-census.sh
@@ -6391,6 +6389,10 @@ if want_scripts; then
   # the measured record shapes, a restricted PATH, and a mutant per guard row). Same explicit-registration and LAST-in-block
   # reasons as above. Declared edge set, not always-on.
   run_suite "scripts/ci-pr-selection" bash scripts/ci-pr-selection.test.sh
+  # #7530 (PR 10320): the clientIP-alert post-merge probe's exit-code contract (same stubs, plus the SQL the
+  # probe sends compared against the committed betterstack-logs-alerts.tf text, and a no-address-in-output
+  # assertion on every run). Same explicit-registration and LAST-in-block reasons as above.
+  run_suite "scripts/followthroughs/registry-clientip-alert-7530" bash scripts/followthroughs/registry-clientip-alert-7530.test.sh
 fi
 
 # Named bun-test entries — bun shard.

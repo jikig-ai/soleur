@@ -26,6 +26,7 @@ function flagSnapshot(c4Edit: boolean): Record<FlagName, boolean> {
     "codex-engine": false,
     "untrusted-content-classify": false,
     "untrusted-content-wrap": false,
+    "egress-audit-collection": false,
   };
 }
 

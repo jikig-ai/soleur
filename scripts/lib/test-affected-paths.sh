@@ -896,6 +896,17 @@ AFFECTED_TESTS_SCRIPTS_GIT_DATA_RUNG2_EVIDENCE_CAPTURE_PATHS=(
   "tests/scripts/test-git-data-rung2-evidence-capture.sh"
 )
 
+# tests/scripts/git-data-wipe-wedge — derived edges could not reach its subject; the population is DERIVED at run time
+# (git ls-files .github/workflows filtered to the workflows that plan or apply the web-platform root, plus the root's HCL
+# for the -target dependency closure and the gate libraries those workflows source).
+AFFECTED_TESTS_SCRIPTS_GIT_DATA_WIPE_WEDGE_PATHS=(
+  ".github/workflows/"
+  "glob:apps/web-platform/infra/*.tf"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/lib/"
+  "tests/scripts/test-git-data-wipe-wedge.sh"
+)
+
 # tests/scripts/eu-location-allowset-parity — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_TESTS_SCRIPTS_EU_LOCATION_ALLOWSET_PARITY_PATHS=(
@@ -2106,6 +2117,8 @@ AFFECTED_SCRIPTS_LINT_TRAP_TEMPFILE_OWNERSHIP_PATHS=(
 AFFECTED_SCRIPTS_CHECK_CLOUDFLARE_TOKEN_DRIFT_PATHS=(
   ".github/"
   "infra/"
+  # token-drift-workflow-causes.test.sh (R4) pins that the drift filers' pointer resolves to this heading.
+  "knowledge-base/engineering/operations/runbooks/inngest-provision-rehearsal.md"
   "scripts/check-cloudflare-token-drift.sh"
   "scripts/check-cloudflare-token-drift.test.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -2296,4 +2309,24 @@ AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
   "scripts/lint-betterstack-emitter-read.sh"
   "scripts/lint-betterstack-emitter-read.test.sh"
   "scripts/test-all.sh"
+)
+
+# scripts/followthroughs/registry-clientip-alert-7530.test.sh — the #7530 post-merge probe's
+# exit-code battery. Beyond the probe itself it READS the committed alert file at runtime (the suite
+# compares the SQL the probe sends against that text, and the probe extracts its predicate from it),
+# a read the name-stem convention cannot reach. Its retirement-header row also READS the alert drift
+# guard (apps/web-platform/test/infra/registry-clientip-not-rfc1918-alert.test.sh, the rename cross-reference),
+# the two suite-registration tables and the preflight-discoverability baseline. Its case_refire_parity
+# row also READS the apply workflow (the printed re-fire command is compared with the workflow's own comment).
+AFFECTED_SCRIPTS_FOLLOWTHROUGHS_REGISTRY_CLIENTIP_ALERT_7530_PATHS=(
+  ".github/workflows/apply-web-platform-infra.yml"
+  "apps/web-platform/infra/betterstack-logs-alerts.tf"
+  "apps/web-platform/test/infra/registry-clientip-not-rfc1918-alert.test.sh"
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "plugins/soleur/test/preflight-discoverability-test.test.ts"
+  "scripts/followthroughs/registry-clientip-alert-7530.sh"
+  "scripts/followthroughs/registry-clientip-alert-7530.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/suite-durations.tsv"
+  "scripts/suite-shard-legs.tsv"
 )

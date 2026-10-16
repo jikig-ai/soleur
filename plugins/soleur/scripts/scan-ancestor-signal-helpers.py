@@ -506,11 +506,21 @@ def run(argv):
     return 0
 
 
+def _note(exc, site):
+    # Class name and a static site label only. Never str(exc)/repr(exc)/input text: exception text can carry
+    # scanned content. `site` is a string literal at every call site.
+    try:
+        sys.stderr.write("ancestor-signal scan: swallowed %s at %s\n" % (type(exc).__name__, site))
+        sys.stderr.flush()
+    except (OSError, ValueError, AttributeError):
+        pass  # a closed, full or missing stderr (None when fd 2 is closed) must not turn a swallowed error into a crash
+
+
 def flush_stdout():
     try:
         sys.stdout.flush()
-    except (OSError, ValueError):
-        pass  # a full or closed stdout must not hide the verdict line on stderr
+    except (OSError, ValueError) as exc:
+        _note(exc, "flush-stdout")  # a full or closed stdout must not hide the verdict line on stderr
 
 
 def main():
@@ -519,7 +529,7 @@ def main():
             sys.stdout.reconfigure(errors="surrogateescape")
             sys.stderr.reconfigure(errors="surrogateescape")
         except AttributeError:
-            pass
+            pass  # a replaced stream without reconfigure(): a capability probe, the negative result is normal
         rc = run(sys.argv[1:])
         sys.stdout.flush()
         return rc

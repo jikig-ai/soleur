@@ -44,8 +44,9 @@ Live standing alarms over this source:
   over a 5400 s window) — `soleur-inngest-luks-wrong-volume-prd`. Pages when the dedicated Inngest
   host's hourly `SOLEUR_INNGEST_SERVER_PROBE` row reports `/mnt/data` backed by a by-id alias that
   is **not** the encrypted volume's — i.e. Redis is writing unencrypted again after the cutover
-  (an on-host rollback, a reboot that took the pre-cutover arm, or a replace whose first boot
-  resolved the plaintext volume). Nothing else notices: the scheduler is healthy in all three.
+  (an on-host rollback, or a boot that mounted a device other than the additive volume; the
+  plaintext volume is destroyed and the template has no arm for it since #9786, so this is the
+  tripwire for a regression of that). Nothing else notices: the scheduler is healthy in both.
   **Armed.** It shipped paused, because before the cutover the plaintext alias was the CORRECT
   value and an armed rule would have paged continuously. Since #8296 the variable's declared
   default is `true`, so every apply arms it: the push apply of `b53173a04` did so, and the alert
@@ -172,6 +173,27 @@ Live standing alarms over this source:
   destination) or `reason=gw_absent` (the gateway container is missing). Previously Sentry-only
   (`op=egress_gw_probe_fail`), which paged nobody. Decode + per-host repair:
   [`cron-egress-blocked.md`](./cron-egress-blocked.md#egress-gateway-better-stack-alerts).
+- **`logtail_exploration_alert.registry_zot_log_credential_shape`** (#10321, `higher_than 0`
+  over 900 s, missing data counts as zero): `soleur-registry-zot-log-credential-shape-prd`.
+  Pages on ANY `SOLEUR_ZOT_LOG` envelope row carrying a credential shape — an unmasked
+  `Authorization` value, a `dp.(pt|st|sa|ct).` Doppler prefix with a ≥16 non-separator run,
+  or a bcrypt `$2[aby]$` hash — the standing vehicle for the check the now-dormant
+  `zot-log-channel-7440.sh` probe's exit-1 arm performed. One row is an incident; rotate the
+  affected credential FIRST, counts-only (never echo the value). Runbook:
+  [`registry-zot-credential-shape-10321.md`](./registry-zot-credential-shape-10321.md).
+
+- **`logtail_exploration_alert.registry_clientip_not_rfc1918`** (#7530, `higher_than 0` over 900 s,
+  checked every 300 s, missing data counts as zero): `soleur-registry-clientip-not-rfc1918-prd`. Emails
+  (team email on the free tier) when a registry-plane row shipped to this source carries a FIRST `clientIP`
+  that is address-shaped and outside 10/8, 172.16/12 and 192.168/16: a `SOLEUR_ZOT_LOG shipper=zot-log-shipper
+  host=soleur-registry` envelope row (trailing space included) or a `SOLEUR_ZOT_DISK` row, each anchored at offset 0 of the stored row.
+  It is the enforcement of the CLO's "every observable clientIP is RFC1918" condition (ADR-211): a
+  topology change that exposes a public address emails the team here (free tier: email only, no escalation)
+  instead of silently turning a log field into personal data. Detection, not prevention: sampled over SHIPPED rows (the shipper rate-caps ordinary rows
+  to 17 per tick), up to about 20 minutes late. Defined in `apps/web-platform/infra/betterstack-logs-alerts.tf`;
+  drift guard `apps/web-platform/test/infra/registry-clientip-not-rfc1918-alert.test.sh`. Triage, legal
+  consequence and the counts-only readback (never paste an address):
+  [`registry-clientip-rfc1918-7530.md`](./registry-clientip-rfc1918-7530.md).
 - **`scheduled-zot-restart-loop.yml`** (#6291; hourly, dispatched by the web-server watchdog clock since #8495 with a GHA-cron fallback — see `inngest-server.md` "How the external watchdogs are triggered") — the zot registry restart-loop
   recurrence alarm. Reads the `SOLEUR_ZOT_DISK` marker, fires a deduped `[ci/zot-restart-loop]`
   issue on a newest-`boot_id` OOM/crash-loop and a `[ci/zot-telemetry-silent]` issue if the
@@ -341,13 +363,11 @@ Two deliberate trade-offs:
   `extra.stdoutTail` (#4773 PR-A), alongside `extra.stderrTail`/`extra.exitCode`.
 - **Container log retention moved to journald.** Switching off `json-file`
   dropped its `max-size 10m/max-file 3` rotation; the container's `docker logs`
-  and retention are now governed by journald — at its **default** `SystemMaxUse`
-  (min(10% of /var, 4 GB)) unless an explicit bound is provisioned. Explicitly
-  sizing `SystemMaxUse` + ensuring `Storage=persistent` (so the journal survives
-  reboot and the redirected container volume can't evict the supervisor/system
-  journal Sources 1/2 depend on) is tracked as a follow-up infra task — the
-  journald storage config predates #4773 and applies equally to the two
-  pre-existing journald sources.
+  and retention are now governed by journald. The host provisions an explicit
+  bound (`journald-soleur.conf`: `Storage=persistent`, `SystemMaxUse=1G`,
+  `SystemKeepFree=2G`), so the journal survives reboot and the redirected
+  container volume cannot evict the supervisor/system journal that Sources 1/2
+  depend on.
 - **Rollout on existing hosts (non-load-bearing order).** PR-C is fully active
   only after BOTH (a) an inngest-bootstrap deploy ships the new `vector.toml`,
   AND (b) a web-platform deploy re-creates the `soleur-web-platform` container
@@ -988,7 +1008,9 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3
 ```
 
 `unpinned_url`, `bad_token` or `WARN: BETTERSTACK_LOGS_TOKEN/BETTERSTACK_INGEST_URL unset` means the guard refused to
-ship (fix the Doppler value or the pin); a `SOLEUR_PRIVATE_NIC ... nic_ok=false` row means the private NIC is
+ship (fix the Doppler value or the pin); `SOLEUR_CREDENTIAL_REFUSED script=web-private-nic-guard reason=…
+var=WEB_NIC_GUARD_URL` (or a `heartbeat URL refused|unset` WARN) means the beat URL itself was refused or unset,
+hourly-limited, so search at least 70 minutes (ADR-280, PR C follow-ups); a `SOLEUR_PRIVATE_NIC ... nic_ok=false` row means the private NIC is
 really absent. A malformed token can blind Vector too (it reads the same secret), in which case the absence of
 rows is the only off-box signal. The monitor alerts only once the arm step has un-paused it.
 
@@ -1173,3 +1195,22 @@ content, URLs or addresses. `rewriteEmitted` means the hook returned a rewrite, 
 Soak/liveness read: `doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 7d --grep untrusted-classify`
 (counts only). Zero lines for 24 h while web-egress sessions exist is an alert, not a quiet window; with the flag off (the default) zero
 lines is the expected state. The alerts themselves are tracked on #10195.
+
+## Egress audit rollup markers (#9545, ADR-288)
+
+The egress gateway's decision log is also rolled up in Vector into per-workspace 15-minute buckets and posted to the app (dark until the
+`egress-audit-collection` flag is on for the workspace's organisation). One marker reaches Better Stack, through the PII-scrub chain:
+
+- `SOLEUR_EGRESS_AUDIT_THROTTLED workspace_id=<uuid> discarded_total=<n>`: the workspace exceeded
+  1,000 gateway events in 15 minutes and Vector discarded the excess from the rollup (the raw gateway log is unaffected). `<n>` is Vector's
+  lifetime counter since its last restart. Query it with
+  `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep SOLEUR_EGRESS_AUDIT_THROTTLED`.
+  Above the cap the rollup's host set is incomplete by design. The marker comes from Vector's per-key counter `events_discarded_total`
+  (the component-wide `component_discarded_events_total` has no workspace key). A second, keyless cap of 10,000 events per 15 minutes bounds the
+  whole pipeline; discards at that cap raise `SOLEUR_EGRESS_AUDIT_THROTTLED_GLOBAL discarded_total=<n>` (same identifier, no workspace id). For a solo workspace the `workspace_id` equals the owner's user id (migration 053), so
+  treat the marker as personal data under the same access rules as the raw gateway log.
+
+Table freshness and retention are checked without SSH by `bash scripts/egress-audit-retention-check.sh` (needs the Supabase prd service-role read).
+With `EGRESS_AUDIT_EXPECT_COLLECTION=1` it also needs `EGRESS_AUDIT_CANARY_WORKSPACES` (comma-separated ids of the enabled canary workspaces) and
+the Better Stack query credential. It is not scheduled anywhere yet: until it is, it is a manual probe, and scheduling it is a precondition of
+enabling collection (ADR-288).

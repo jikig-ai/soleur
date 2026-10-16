@@ -11,7 +11,7 @@
 #
 # INPUTS ARE ENV ONLY (the workflow passes them through `env:`; nothing is interpolated into the script):
 #   EVENT_NAME      github.event_name                       (anything but `pull_request` is full)
-#   SWITCH          vars.CI_PR_AFFECTED                      (only the exact string `on` can arm; compared in bash)
+#   SWITCH          vars.CI_PR_AFFECTED                      (only the exact string `on` runs stage 2 and can arm; compared in bash)
 #   GITHUB_SHA      the merge commit the checkout is at
 #   PR_HEAD_SHA     github.event.pull_request.head.sha
 #   HEAD_REPO       github.event.pull_request.head.repo.full_name   (a fork head is full)
@@ -36,10 +36,10 @@
 # The step also prints ONE `::notice title=ci-pr-selection::SOLEUR_PR_SELECTION ...` line (counts and fixed tokens only:
 # a path, a ref name, a SHA from the diff, the repository name or the raw switch value is NEVER echoed) and a short step
 # summary. The notice carries, in this order: switch, locked, attempt, files, stage, reason, would_skip, sel_s, sel_censored,
-# budget, active, groups. `sel_s` is the stage-2 wall time and a LOWER BOUND when `sel_censored=1` (the stage-2 budget or a
-# per-call timeout was hit); the first dark runs on a cold runner are expected to be censored, so they do NOT measure cold wall
-# time. `groups` is webplat:TOK,bun:TOK,scripts-heavy:TOK (`-` when stage 2 did not finish). Reason `affected_degraded`
-# replaces `affected` when any group token is timeout|bad_rc|parse|missing_row|no_records|empty, so a degraded enumerate never
+# budget, active, groups. `sel_s` is the stage-2 wall time (0 whenever stage 2 did not run), a LOWER BOUND when `sel_censored=1` (budget or
+# per-call timeout hit; a cold runner is expected to censor it). Reason `switch_off`: a doc-only diff that passed the paths cap, switch not `on`;
+# a code diff keeps its stage-1 reason, so read the off switch from `switch=` (`invalid`: any non-empty value but `on`). `groups` is webplat:TOK,bun:TOK,scripts-heavy:TOK
+# (`-` when stage 2 did not finish). Reason `affected_degraded` replaces `affected` when any group token is timeout|bad_rc|parse|missing_row|no_records|empty, so a degraded enumerate never
 # reads as the benign `affected would_skip=none`. `affected_degraded` is TELEMETRY ONLY: healthy groups still arm when a sibling
 # group is degraded (per-group evaluation), a decision to revisit before the lock is removed (ADR-276 S4 amendment). Reasons
 # `signalled` (HUP/INT/TERM) and `lever_error` (an internal abort) are the two trap exits: both exit 0 with only the defaults.
@@ -57,12 +57,12 @@
 #   * every byte of the path is printable ASCII 0x20-0x7e (this also rejects ASCII control characters, U+2028 and C1
 #     controls as `odd_path`), the path has no `::` and no comma;
 #   * the path is not on the TRIGGER LIST below.
-# Nothing else runs in stage 1, so a code PR pays no pre-pass. STAGE 2 runs only for a doc-only diff, in dark mode too:
+# Nothing else runs in stage 1, so a code PR pays no pre-pass. STAGE 2 runs only for a doc-only diff AND only when the switch is exactly `on`:
 #   env -u CI -u SOLEUR_TEST_FORCE_ALL -u GITHUB_OUTPUT ... bash test-all.sh --print-selection --paths=<list>
 #   env -u CI -u SOLEUR_TEST_FORCE_ALL -u GITHUB_OUTPUT ... bash test-all.sh --enumerate-commands --paths=<list> <group>
 # (the selector child also loses GITHUB_STEP_SUMMARY, GITHUB_ENV, GITHUB_PATH and GITHUB_STATE. That denies it the INHERITED
 # variables only: a same-user child could still discover the path some other way. The real boundary is that stage 2 runs only
-# for a doc-only diff and the final output block is written LAST, after the child has exited, so nothing a child appended can
+# for a doc-only diff with the switch on and the final output block is written LAST, after the child has exited, so nothing a child appended can
 # outlive it: the last value per key wins.)
 # A group joins the would-skip set only if its enumerate stream is non-empty, every runnable record is an
 # AFFECTED_SELECTED row with sel=0 (and not always_on) or a SUITE_COMMAND_DECLINED record whose label is a known
@@ -354,7 +354,10 @@ run() {
   reason=paths_too_long
   [ "${#paths}" -le 100000 ] || return 0  # GUARD:G2-15-PATHS-CAP
 
-  # (6) STAGE 2: a doc-only diff, in dark mode too.
+  # (6) STAGE 2 runs only for a doc-only diff AND only when the switch is exactly `on` (the sw token above is the stage-2
+  # decision point). Any other value stops here with ZERO selector calls; stage 1 and the notice already ran.
+  reason=switch_off
+  [ "$sw" = on ] || return 0  # GUARD:G2-16-SWITCH-GATE
   stage=2
   reason=selector_error
   test_all="${PR_SELECTION_TEST_ALL:-scripts/test-all.sh}"
@@ -410,6 +413,10 @@ run() {
 run
 
 # ---- (7) the arm: switch exactly `on` AND the lock absent AND the selector answered cleanly -------------------------------
+# The `sw = on` conjunct is REDUNDANT with the stage-2 gate (mode=affected already implies it) and is kept on purpose: it is the
+# independent arming check, so a regression that deletes the stage-2 gate still cannot arm a skip for another switch value.
+# Removing it ALONE is an equivalent mutant and no test isolates it (a masked-pair mutant was dropped: it was killed by its gate-bypass half).
+# Treat it as defence in depth, not as a separately protected control.
 if [ "$mode" = affected ] && [ "$would_skip" != none ] && [ "$sw" = on ] && [ "$locked" = false ]; then  # GUARD:G2-13-ARM
   active=true
   skip_legs="$would_skip"  # GUARD:G2-13-SKIP-ONLY-WHEN-ACTIVE
