@@ -67,6 +67,12 @@ const log = createChildLogger("agent-sandbox");
 //     re-inverts it fails `test/sandbox-canary.test.ts`'s ordering pin and the
 //     capture gate's byte-diff.
 //
+// #10445 — `network.allowAllUnixSockets: true` is deliberate. The vendored
+// builder otherwise wraps every Bash command in `apply-seccomp`, whose first
+// call (unshare(CLONE_NEWUSER)) the shim filter below denies; AF_UNIX blocking
+// was never relied on here (ADR-075 addendum), and the runtime two-session
+// socket test (infra/sandbox-masked-proc-docker.test.sh) bounds the residual.
+//
 // #8752 — the two hardening layers this config cannot express through the SDK
 // (the vendored builder owns the whole bwrap argv, transported on `--args
 // <fd>`) live OUTSIDE this object, at the spawn layer: the PATH shim
@@ -91,6 +97,9 @@ export type AgentSandboxConfig = {
   network: {
     allowedDomains: string[];
     allowManagedDomainsOnly: true;
+    /** #10445: makes the vendored builder skip the SDK's `apply-seccomp`
+     *  unix-socket helper (see the header note and the ADR-075 addendum). */
+    allowAllUnixSockets: true;
   };
   filesystem: {
     allowWrite: string[];
@@ -589,6 +598,14 @@ export function buildAgentSandboxConfig(
     network: {
       allowedDomains: opts?.allowGithubEgress ? [...ENTITLED_EGRESS_DOMAINS] : [],
       allowManagedDomainsOnly: true,
+      // #10445: with this off, the vendored builder wraps EVERY Bash command in
+      // its embedded `apply-seccomp` helper to block AF_UNIX sockets, and the
+      // helper's first call is unshare(CLONE_NEWUSER) — which the bwrap-shim
+      // nested-userns filter denies, so every hosted Bash call died with EPERM
+      // from 2026-10-06. Setting it makes the builder skip the helper ("Skipping
+      // seccomp filter - allowAllUnixSockets is enabled"); the nested-userns /
+      // clone3 filter is untouched. Posture and residual bounds: ADR-075 addendum.
+      allowAllUnixSockets: true,
     },
     filesystem: {
       // Full read+write of the agent's OWN workspace: it sits UNDER the

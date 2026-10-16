@@ -97,6 +97,10 @@ describe("buildAgentSandboxConfig drift guard", () => {
     expect(result.network).toEqual({
       allowedDomains: [],
       allowManagedDomainsOnly: true,
+      // #10445: the SDK's unix-socket seccomp helper (`apply-seccomp`) needs
+      // unshare(CLONE_NEWUSER), which our shim filter denies. Setting this makes
+      // the vendored builder skip the helper (ADR-075 addendum).
+      allowAllUnixSockets: true,
     });
     // filesystem: write own; CONSTANT parent deny; NO allowRead key.
     expect(result.filesystem.allowWrite).toEqual([own]);
@@ -229,6 +233,21 @@ describe("buildAgentSandboxConfig drift guard", () => {
     expect(result.network.allowedDomains).toEqual([]);
     expect(result.network.allowManagedDomainsOnly).toBe(true);
   });
+
+  // #10445: with the knob off the SDK wraps EVERY Bash command in its embedded
+  // `apply-seccomp` helper, which calls unshare(CLONE_NEWUSER) — denied by our
+  // bwrap-shim filter, so every hosted Bash call died with EPERM. Pin the exact
+  // post-state (toBe(true), not truthy) for BOTH egress arms.
+  it("allowAllUnixSockets is exactly true on every arm (#10445)", () => {
+    for (const opts of [
+      undefined,
+      { allowGithubEgress: true },
+      { allowWebEgress: true },
+      { readOnly: true },
+    ]) {
+      expect(buildAgentSandboxConfig(own, opts).network.allowAllUnixSockets).toBe(true);
+    }
+  });
 });
 
 // Expected signed-URL account fleet, generated locally (NOT imported from the
@@ -276,6 +295,7 @@ describe("buildAgentSandboxConfig — GitHub egress variant (#5041 follow-up)", 
         ...EXPECTED_SA_ACCOUNTS,
       ],
       allowManagedDomainsOnly: true,
+      allowAllUnixSockets: true,
     });
     // Filesystem is unchanged by the egress flag.
     expect(result.filesystem.allowWrite).toEqual([own]);
