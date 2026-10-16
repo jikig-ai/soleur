@@ -61,6 +61,24 @@ recorded a CONSTRAINT to make a deliberate decision before enabling it; the #100
 and no follow-up issue was filed. The wrapper IS emitted by default (`allowAllUnixSockets` unset), so the
 premise was false from the day the shim shipped.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-16
+**Sections enhanced:** Research Insights (verified alert field shape, adjacent defect), Phase 3 SQL, Observability, Encryption Posture (new), Phase 2/5 scope.
+**Verification passes run:** halts 4.6-4.12 (all pass; 4.10 triggered by the `.tf` path and answered), cited issue/PR/ADR/rule-ID/label census (all resolve), vendored-binary reads for the config mapping, live Better Stack sample of the app-container log shape.
+
+### Key improvements
+1. The alert predicate is now written against a real production row: app pino lines reach Better Stack with
+   `raw.message` as a JSON object carrying top-level `feature`, `op`, `level` and the extras, and
+   `CONTAINER_NAME=soleur-web-platform` (host_name `soleur-web-platform` for web-1; web-2 shares the source).
+2. The config path is confirmed in the vendored binary: `allowAllUnixSockets: e.sandbox?.network?.allowAllUnixSockets`.
+3. The discoverability readback script moved to Stage A so the Observability block is valid even if Stage B slips.
+
+### New considerations discovered
+- Adjacent defect (not this incident): `spawnEgressForwarder` logs `EACCES: permission denied, mkdir
+  '/var/lib/soleur/egress-tokens'` in the production app container (3 rows 2026-10-15/16). Entitled web-egress
+  sessions may still fail after Bash is restored. Filed as a tracking issue (Phase 5), not folded in.
+
 ## Research Insights
 
 ### Premise Validation (Phase 0.6)
@@ -272,8 +290,9 @@ What AF_UNIX blocking stopped, and what bounds each path after this change:
   `smoke_infra_error` (infra errors hold the soak and never roll back), surfaced in deploy-status and journald as
   `SANDBOX_CANARY_FAIL: verdict=sandbox_broken reason=sdk_bash_smoke_failed ... (op=sandbox-canary; ...)` so the
   Phase 3 alert covers it.
-- Follow-through (plan skill 2.9.1): ONE script, `scripts/followthroughs/sdk-bash-smoke-promotion-10445.sh`, also
-  used as the discoverability readback; exit 0 when deploy-status shows `sdk_bash_smoke.verdict=pass` with the
+- Follow-through (plan skill 2.9.1): ONE script, `scripts/followthroughs/sandbox-readback-10445.sh` (created in
+  Stage A as the readback of `sandbox_canary`, extended in Stage B with the `sdk_bash_smoke` line), also used as
+  the discoverability test; exit 0 when deploy-status shows `sdk_bash_smoke.verdict=pass` with the
   coverage field present on a deploy after this PR and the soak criterion in ADR-079 (5 green verdicts over at
   least 3 days, the ADR's number, not the rule's floor) holds. Its tracker also carries the PIR
   `status: ongoing -> resolved` docs PR so the flip has an owner and a trigger. The promotion PR moves the reason
@@ -285,9 +304,12 @@ What AF_UNIX blocking stopped, and what bounds each path after this change:
 - `apps/web-platform/server/sandbox-startup-classifier.ts`: `classifyBashSandboxFailure` gains the helper arm
   (line starts `apply-seccomp:` and carries `Operation not permitted`/`EPERM`) with new `errorCode`
   `helper_userns_eperm`; bare `unshare`/`seccomp` lines stay non-matching (an agent's own `unshare -U`).
-  Sample one live app-container row first to pin the JSON field shape (`feature`/`op` as top-level JSON inside
-  `raw`, container name `soleur-web-platform` on both hosts) and add a `host_name`/container conjunct; the alert
-  SQL is written against that sample.
+  The JSON field shape is verified against a live production row (2026-10-16): `raw.message` is an object with
+  top-level `feature`, `op`, `level`, `msg` and the `extra` keys; `raw.CONTAINER_NAME` is `soleur-web-platform`.
+  The alert SQL therefore reads `JSONExtractString(raw,'CONTAINER_NAME') = 'soleur-web-platform'`,
+  `JSONExtractString(raw,'message','feature') = 'agent-sandbox'`, `JSONExtractString(raw,'message','op') =
+  'bash-tool-result'` and `JSONExtractString(raw,'message','sandboxErrorCode') = 'helper_userns_eperm'` (the
+  container name is the same on web-1 and web-2, so no host conjunct is needed or wanted).
 - `apps/web-platform/infra/betterstack-logs-alerts.tf` plus `.github/workflows/apply-web-platform-infra.yml`
   `-target=` lines plus ONE drift-guard suite `apps/web-platform/test/infra/sandbox-alerts.test.sh`:
   - `agent_sandbox_bash_denial`: app-container rows with `op=bash-tool-result` AND
@@ -314,7 +336,8 @@ What AF_UNIX blocking stopped, and what bounds each path after this change:
   ADR-051 and ADR-278 for the bridge sockets; the option (b) follow-up).
 - Tracking issues (CTO and CPO): own AF_UNIX filter (becomes in-scope only if G2 fails); runtime synthetic with
   dead-man arm (P2); outer-wrap canary decision with a deadline; plain-language Bash-failure message; stub-model
-  smoke fallback if Stage B slips. Each with re-evaluation criteria and the milestone from
+  smoke fallback if Stage B slips; the adjacent `spawnEgressForwarder` mkdir EACCES on
+  `/var/lib/soleur/egress-tokens` (entitled web-egress sessions). Each with re-evaluation criteria and the milestone from
   `knowledge-base/product/roadmap.md`.
 
 ## Files to Edit
@@ -343,7 +366,7 @@ What AF_UNIX blocking stopped, and what bounds each path after this change:
 - `apps/web-platform/test/infra/sandbox-alerts.test.sh`
 - `apps/web-platform/scripts/sdk-bash-smoke.mjs` (Stage B)
 - `apps/web-platform/test/sdk-bash-smoke.test.ts` (Stage B)
-- `scripts/followthroughs/sdk-bash-smoke-promotion-10445.sh` (Stage B)
+- `scripts/followthroughs/sandbox-readback-10445.sh` (Stage A readback; Stage B adds the smoke and promotion exit)
 - `knowledge-base/project/specs/feat-one-shot-10445-sandbox-seccomp-eperm/tasks.md`
 
 Dropped by plan-review: fixture schema v2 and `sandbox-canary-argv.json` re-capture, `sandbox-canary.mjs`
@@ -437,8 +460,8 @@ logs:
   where: Better Stack Logs (ci-deploy, webhook, soleur-web-platform container rows)
   retention: hot window about 40 minutes, S3 archive beyond (use the archive arm of scripts/betterstack-query.sh)
 discoverability_test:
-  command: bash scripts/followthroughs/sdk-bash-smoke-promotion-10445.sh
-  expected_output: sdk_bash_smoke=pass
+  command: bash scripts/followthroughs/sandbox-readback-10445.sh
+  expected_output: sandbox_canary=pass
   credentials_required: Doppler soleur/prd_terraform deploy-webhook HMAC plus Cloudflare Access service token - the deploy-status read has no unauthenticated substitute and verifies the live canary verdict, not a fixture
 ```
 
@@ -500,6 +523,39 @@ file ends up edited.
 ### Sequencing
 
 The ADR addenda describe the target state at merge; the smoke's gating flip is the only later step.
+
+## Encryption Posture
+
+No persistent data store is introduced: the two Better Stack explorations read the existing shared Logs source
+(`soleur-inngest-vector-prd`, whose at-rest posture is owned by the vendor and the existing disclosures); the PIR
+is a repo markdown file. The new connections are below.
+
+```yaml
+at_rest:
+  - store: none introduced
+    mechanism: not applicable - the explorations are queries over the existing Logs source, they persist no new data
+    evidence: apps/web-platform/infra/betterstack-logs-alerts.tf (exploration and alert resources only)
+    defends_against: not applicable (no new store)
+    does_not_defend: the existing Logs source's vendor-side plaintext access and its S3 archive posture, unchanged by this plan
+    disclosed_as: existing Better Stack disclosures (unchanged)
+    live_verification: not applicable (no new store)
+in_transit:
+  - connection: Terraform logtail provider -> Better Stack API
+    tls: yes (HTTPS, vendor endpoint)
+    cert_verification: on
+    does_not_defend: a compromised provider token or a vendor-side compromise; the apply credential is the existing prd_terraform token
+    disclosed_as: ADR-218
+  - connection: Claude CLI -> local stub Messages API inside the canary container (Stage B, test-only)
+    tls: none (plaintext loopback inside one container, never leaves the container netns)
+    cert_verification: off
+    does_not_defend: any process in the same container netns reading the loopback traffic; the stub carries a canned reply and a dummy key, no tenant data and no real credential
+    disclosed_as: this plan and the smoke script header
+exception:
+  justification: a loopback test double needs no TLS; the stub exists only for the duration of the canary run and holds no secret
+  tracking_issue: 10445
+  reevaluate_when: the smoke is promoted to rollback-gating or the stub is exposed beyond loopback
+  expires_on: 2026-11-30
+```
 
 ## Guard Contract
 
