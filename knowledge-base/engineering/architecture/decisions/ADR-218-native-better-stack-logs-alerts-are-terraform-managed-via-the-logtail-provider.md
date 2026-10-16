@@ -490,7 +490,7 @@ existing alert covers it.
   20 minutes late, sampled over shipped rows only (the shipper rate-caps ordinary rows). The channel is
   the sibling's: email on the free tier, no escalation policy. **Delivery state: the alert exists only
   after the merge's push apply creates it, and it is not treated as an enforced invariant until the #7530
-  follow-through probe has graded the new boot's window.**
+  follow-through probe has graded the new boot's window.** **[Amendment 2026-10-16: In force, graded 2026-10-15 (#7530): PR #10320 merged 2026-10-15T17:57Z, its push apply created the alert (2 added, 0 changed, 0 destroyed), and the #7530 follow-through probe passed over the running registry boot (46f08985, which postdates the host template's last delivery, PR #10322): 1152 clientIP-bearing shipper rows over 660 minutes, 0 outside RFC1918, the private-flagged control 1152, 16 of 16 classification literals correct (counts only). The measured population is the `SOLEUR_ZOT_LOG` shipper arm only; the disk-heartbeat arm is not graded. Detection, not prevention: monitored and alerted by email. The Better Stack Vendor DPA remains PENDING (#7529).]**
 - **Consumed contract.** The grade depends on zot writing `clientIP` before `method`, `path` and
   `headers` and on the field name; `treat_as_zero` reads a renamed field as healthy forever, so the
   drift guard (`apps/web-platform/test/infra/registry-clientip-not-rfc1918-alert.test.sh`) pins the
