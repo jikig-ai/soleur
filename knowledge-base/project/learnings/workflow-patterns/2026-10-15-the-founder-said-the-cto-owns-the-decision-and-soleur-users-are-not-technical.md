@@ -124,6 +124,14 @@ Recorded operator consent plus a drift guard, recorded in ADR-289 (the first dra
 | Gate queued behind others | recurring | none new: `--capacity` and own-pgroup kill already exist |
 | Stale recorded baseline | one-off | none |
 
+### Ship-phase errors (added at ship, 2026-10-16)
+
+1. **A stray git identity (`s <s@example.invalid>`) appeared in the SHARED repository config** (all worktrees read it), so four commits were authored as `s` and the required CLA check failed on an unsigned committer. Source not found: none of this branch's suites write it, and the config file's mtime fell inside a session restart. Restored the real identity, rebuilt the four commits under it and force-pushed this branch with a lease. **Prevention:** after any session restart or test run, `git config --local --get-regexp '^user\.'` before the first commit, and check `git log origin/main..HEAD --format=%an | sort -u` before pushing; a fixture that needs an identity must set it on its own temp repo with `git -C "$d" config`, never on the cwd repo. *(One-off to this host; no new rule.)*
+2. **A fix for one ratchet (anchor links to the plugin root) broke another (SKILL.md byte ceilings)**: four lifecycle skills went over by 11 to 44 bytes. **Prevention:** a fix that rewrites text inside a lifecycle SKILL.md re-runs `lint-skill-body-budget.py --base <merge-base>` before the commit; the cheaper fix was to stop the linked reference from carrying the plugin-root token, so callers keep their relative links. *(Covered by the existing Merge-Base-Relative Lints gate; the miss was running it before the fix round, not after.)*
+3. **A sibling PR took the ADR ordinal during the pipeline** (288), found only by the sync's `check-adr-ordinals.sh`. **Prevention:** already the ship ADR-Ordinal Collision Gate; renumbered to 289 with a scoped sweep that left the sibling's citations alone.
+4. **The first affected-set gate on the final tree was red on nine repo-wide ratchets** that a file-selected suite set cannot see (work skill already names this class). All nine were this PR's own new suites and docs. **Prevention:** none new; run the nine ratchet suites (`guard-vacuity-floor`, `lint-orphan-test-suites`, `test-affected-kb-consumers`, `fixture-relative-assert`, `fixture-dir-operand-assert`, `battery-tag-authorship-mutations`, `lint-shell-capture-exit`, `ci-head-verdict`, the plugin bun suite) before the first push when a PR adds test suites.
+5. **A session restart dropped the Doppler keyring token**, so the post-merge reads that need Better Stack could not run. **Prevention:** none possible from the agent side; the loss is reported rather than worked around.
+
 ## Tags
 
 category: workflow-patterns
