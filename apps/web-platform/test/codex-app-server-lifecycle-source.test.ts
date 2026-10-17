@@ -3,11 +3,52 @@ import { createCodexAppServerEventBridge } from "@/server/codex-app-server-event
 import { createCodexAppServerTransport } from "@/server/codex-code-adapter";
 import { createCodexAppServerLifecycleSource } from "@/server/codex-app-server-lifecycle-source";
 import { createEngineObservability } from "@/server/agent-engine-observability";
+import type { EngineRunContext } from "@/server/agent-engine-contract";
 
-const context = { runId: "run-1" } as never;
+const context: EngineRunContext = {
+  runId: "run-1",
+  binding: {
+    workspaceId: "workspace-1",
+    execution: { kind: "conversation", conversationId: "conversation-1" },
+    engineId: "codex",
+    authMode: "managed",
+    adapterVersion: "codex-v1",
+    boundAt: "2026-01-01T00:00:00Z",
+  },
+  idempotencyKey: "test-turn",
+  signal: new AbortController().signal,
+};
 const lease = { accessToken: "opaque", expiresAt: Date.now() + 60_000 };
 
 describe("Codex App Server lifecycle source", () => {
+  it("does not open a connection for a pre-aborted turn", async () => {
+    const open = vi.fn();
+    const source = createCodexAppServerLifecycleSource({ open, nextRequestId: () => "rpc" });
+    const controller = new AbortController();
+    controller.abort("member-stopped-turn");
+    await expect(source.start({ ...context, signal: controller.signal }, { text: "Synthetic stopped prompt", attachmentIds: [] }, lease))
+      .rejects.toMatchObject({ code: "codex_turn_cancelled" });
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("does not start a provider turn when Stop arrives while the runtime is opening", async () => {
+    const controller = new AbortController();
+    const request = vi.fn();
+    const source = createCodexAppServerLifecycleSource({
+      open: vi.fn(async () => {
+        controller.abort("member-stopped-turn");
+        return {
+          client: { request, notify: vi.fn(), respond: vi.fn(), receiveLine: vi.fn(), receive: vi.fn(), close: vi.fn(), pendingCount: () => 0 },
+          events: createCodexAppServerEventBridge(), dispose: vi.fn(async () => undefined),
+        };
+      }),
+      nextRequestId: () => "rpc",
+    });
+    await expect(source.start({ ...context, signal: controller.signal }, { text: "Synthetic stopped prompt", attachmentIds: [] }, lease))
+      .rejects.toMatchObject({ code: "codex_turn_cancelled" });
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("starts and resumes through one server-owned connection", async () => {
     const events = createCodexAppServerEventBridge();
     const request = vi.fn()
@@ -63,6 +104,30 @@ describe("Codex App Server lifecycle source", () => {
     await expect(source.reconcile(context, { resumeHandle: "thread-1", sessionId: null }, lease)).resolves.toBe("running");
     expect(request.mock.calls.map(([rpcRequest]) => rpcRequest.method)).toEqual([
       "initialize", "thread/start", "turn/start", "turn/interrupt", "thread/read",
+    ]);
+  });
+
+  it("interrupts the active provider turn when its dispatch signal is aborted", async () => {
+    const events = createCodexAppServerEventBridge();
+    const request = vi.fn()
+      .mockResolvedValueOnce({ serverInfo: { name: "codex" } })
+      .mockResolvedValueOnce({ thread: { id: "thread-1", sessionId: null } })
+      .mockResolvedValueOnce({ turn: { id: "turn-1" } })
+      .mockResolvedValueOnce({});
+    const connection = {
+      client: { request, notify: vi.fn(), respond: vi.fn(), receiveLine: vi.fn(), receive: vi.fn(), close: vi.fn(), pendingCount: () => 0 },
+      events,
+      dispose: vi.fn(async () => undefined),
+    };
+    const source = createCodexAppServerLifecycleSource({ open: vi.fn(async () => connection), nextRequestId: () => "rpc" });
+    const controller = new AbortController();
+
+    await source.start({ ...context, signal: controller.signal }, { text: "Inspect", attachmentIds: [] }, lease);
+    controller.abort("member-stopped-turn");
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(4));
+
+    expect(request.mock.calls.map(([rpcRequest]) => rpcRequest.method)).toEqual([
+      "initialize", "thread/start", "turn/start", "turn/interrupt",
     ]);
   });
 

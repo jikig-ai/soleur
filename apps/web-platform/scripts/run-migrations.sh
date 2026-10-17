@@ -421,16 +421,39 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
     echo "::error::Migration $filename has unsupported transaction commands; refusing non-atomic ledger write"
     exit 1
   fi
+  # Applied migration bytes stay immutable. Admission must hold its lock through
+  # the body and ledger insert; a separate preflight SELECT is not race-safe.
+  codex_guard="$SCRIPT_DIR/sql/codex-auth-mode-pre-migration.sql"
+  if [[ "$filename" == "145_codex_auth_mode_rebind.sql" && ! -r "$codex_guard" ]]; then
+    echo "::error::Codex auth-mode pre-migration guard is unavailable; refusing migration 145"
+    exit 1
+  fi
   # psql's --single-transaction requires -f/-c; plain piped stdin silently
   # disables it. The ledger row carries content_sha when known.
   if ! {
+    if [[ "$filename" == "145_codex_auth_mode_rebind.sql" ]]; then
+      cat "$codex_guard" || exit 1
+    fi
     if [[ "$strip_outer_txn" == "true" ]]; then
       sed -E '/^[[:space:]]*BEGIN;[[:space:]]*$/d; /^[[:space:]]*COMMIT;[[:space:]]*$/d' "$migration_file"
     else
       cat "$migration_file"
     fi
     if [[ -n "$content_sha" ]]; then
-      printf "\nINSERT INTO public._schema_migrations (filename, content_sha) VALUES ('%s', '%s');\n" "$filename" "$content_sha"
+      # A fresh --bootstrap=skip schema does not have content_sha until 054.
+      # Inspect AFTER this migration body in the SAME transaction: the file
+      # adding the column gets its own apply-time hash, while earlier rows stay
+      # NULL when 054 adds it. Do not create/backfill columns outside migrations.
+      # SQL dollar-quote delimiter is literal, not shell interpolation.
+      # shellcheck disable=SC2016
+      printf '\nDO $migration_ledger$\nBEGIN\n'
+      printf "  IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public._schema_migrations'::regclass AND attname = 'content_sha' AND NOT attisdropped) THEN\n"
+      printf "    INSERT INTO public._schema_migrations (filename, content_sha) VALUES ('%s', '%s');\n" "$filename" "$content_sha"
+      printf '  ELSE\n'
+      printf "    INSERT INTO public._schema_migrations (filename) VALUES ('%s');\n" "$filename"
+      # SQL dollar-quote delimiter is literal, not shell interpolation.
+      # shellcheck disable=SC2016
+      printf '  END IF;\nEND;\n$migration_ledger$;\n'
     else
       printf "\nINSERT INTO public._schema_migrations (filename) VALUES ('%s');\n" "$filename"
     fi

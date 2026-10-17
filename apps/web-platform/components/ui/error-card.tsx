@@ -8,6 +8,8 @@ interface ErrorCardProps {
   message: string;
   onRetry?: () => void;
   retryLabel?: string;
+  onConfirm?: () => void;
+  confirmLabel?: string;
   action?: { label: string; href: string };
   onDismiss?: () => void;
 }
@@ -17,6 +19,8 @@ export function ErrorCard({
   message,
   onRetry,
   retryLabel = "Try again",
+  onConfirm,
+  confirmLabel = "Confirm",
   action,
   onDismiss,
 }: ErrorCardProps) {
@@ -57,6 +61,16 @@ export function ErrorCard({
             className="px-3 py-1.5 text-soleur-text-secondary hover:text-soleur-text-primary"
           >
             {retryLabel}
+          </Button>
+        )}
+        {onConfirm && (
+          <Button
+            variant="outlined"
+            type="button"
+            onClick={onConfirm}
+            className="px-3 py-1.5 text-soleur-text-secondary hover:text-soleur-text-primary"
+          >
+            {confirmLabel}
           </Button>
         )}
         {action && (

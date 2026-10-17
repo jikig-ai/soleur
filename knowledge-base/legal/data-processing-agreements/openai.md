@@ -14,6 +14,12 @@ signed agreement and does not itself approve customer-content processing. The
 runtime remains synthetic-only until the open conditions below are discharged
 for each authentication mode.
 
+> **Superseded 2026-10-03 (PR #9051):** “Synthetic-only” above is not standing
+> permission for provider egress. The specific 2026-10-01 disposition allows
+> offline invented fixtures only. The [current mode authorization audit](../audits/2026-10-03-codex-web-mode-authorization.md)
+> records API key PENDING account permission/custody evidence and the existing
+> managed hosted-auth path BLOCKED pending provider-permitted integration.
+
 ## Public evidence reviewed
 
 | Field | API-key mode | Managed ChatGPT sign-in |
@@ -62,6 +68,13 @@ Before customer repository content is enabled, record all of the following:
 Until those fields are evidenced, the only permitted use is synthetic or
 explicitly redacted internal qualification under the default-off
 `codex-engine` flag.
+
+> **Superseded 2026-10-03 (PR #9051):** The standing synthetic/redacted live-use
+> implication above is withdrawn. Neither mode has live authorization; redaction
+> does not supply account permission or provider permission. Any future narrow
+> synthetic-egress allowance requires a separate attributable CLO disposition
+> and a reviewed runtime satisfying the actual gate. Historical smoke results
+> below and above remain measurements, not Web authorization.
 
 ## Deployment and flag evidence
 

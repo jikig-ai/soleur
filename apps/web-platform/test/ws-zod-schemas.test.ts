@@ -32,6 +32,14 @@ describe("wsMessageSchema: existing variants round-trip", () => {
     expect(r.ok).toBe(true);
   });
 
+  test("complete answer snapshots round-trip and reject invalid markers", () => {
+    const frame = { type: "stream", content: "Complete synthetic answer", partial: true, leaderId: "cc_router", answerSnapshot: true };
+    const result = parseWSMessage(frame);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.msg).toEqual(frame);
+    expect(parseWSMessage({ ...frame, answerSnapshot: "true" }).ok).toBe(false);
+  });
+
   test("auth_ok succeeds (no payload fields)", () => {
     const r = parseWSMessage({ type: "auth_ok" });
     expect(r.ok).toBe(true);

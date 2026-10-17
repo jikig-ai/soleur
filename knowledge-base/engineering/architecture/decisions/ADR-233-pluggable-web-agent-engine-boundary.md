@@ -165,8 +165,15 @@ adapter invocation.
 Adding an engine requires a reviewed definition, adapter transport, lifecycle
 tests, credential and qualification evidence, and settings/catalog wiring. A
 workspace default change affects new runs only; existing runs retain their
-binding. Registry injection keeps future engine wiring additive but does not
-bypass enablement, binding identity, event validation, or egress policy. System-
+binding. An explicit, owner-confirmed Codex auth-mode change is a scoped
+exception: it rebinds existing Codex conversations in that workspace, increments
+their auth-mode generation, and clears provider recovery checkpoints in the same
+transaction. An already accepted attempt may finish under its original mode;
+stale retries and checkpoint writes are fenced, and subsequent turns use the
+new generation. Settings selectability remains separate from execution
+eligibility, so exposing a provider in owner settings cannot authorize dispatch.
+Registry injection keeps future engine wiring additive but does not bypass
+enablement, binding identity, event validation, or egress policy. System-
 triggered routines still require a dedicated service identity before they can
 participate in the same binding path.
 

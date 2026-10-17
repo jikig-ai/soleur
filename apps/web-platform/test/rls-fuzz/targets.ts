@@ -27,8 +27,9 @@ export interface Ctx {
   convA: string;
   /** A second A-owned conversation — the ucs INSERT-forge needs a non-colliding (user,conv) pair. */
   convA2: string;
-  /** An A-owned engine run shared by event-table and append-RPC isolation attacks. */
+  /** An A-owned Codex engine run with a seeded generation-bound history acknowledgment. */
   engineRunA: string;
+  engineAuthModeGenerationA: string;
 }
 
 /** A WHERE clause + params that uniquely identify A's seeded canonical row. */

@@ -2234,6 +2234,15 @@ AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_AGENT_RUNNABLE_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# Offline qualification contract reads every committed runtime/plugin input.
+AFFECTED_SCRIPTS_LIB_CODEX_QUALIFICATION_TEST_SH_PATHS=(
+  "scripts/codex-qualification/"
+  "scripts/lib/codex-qualification.test.sh"
+  "apps/web-platform/"
+  "plugins/soleur/"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # scripts/probe-github-app-mint (#9995) — the JWT reaches curl only through
 # scripts/lib/bearer-curl.sh's stdin-config channel, and the mu1 step of
 # scheduled-integration-suites.yml invokes it; an edit to either must select it.

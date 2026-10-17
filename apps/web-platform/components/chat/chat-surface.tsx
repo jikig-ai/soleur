@@ -226,12 +226,15 @@ export function ChatSurface({
     startSession,
     resumeSession,
     sendMessage,
+    resendMessage,
+    acknowledgeCodexHistoryTransfer,
     sendReviewGateResponse,
     sendAutonomousDisclosureResponse,
     sendInteractivePromptResponse,
     resolveInteractivePrompt,
     status,
     sessionConfirmed,
+    hasPendingCodexHistoryTransfer,
     disconnectReason,
     lastError,
     reconnect,
@@ -454,7 +457,8 @@ export function ChatSurface({
   }, [recomputeNearBottom]);
 
   useEffect(() => {
-    if (status !== "connected" || sessionStarted || contextPending) return;
+    const heldCodexDraftNeedsRecovery = !sessionConfirmed && hasPendingCodexHistoryTransfer;
+    if (status !== "connected" || sessionStarted || contextPending || heldCodexDraftNeedsRecovery) return;
 
     if (conversationId === "new") {
       if (resumeByContextPath) {
@@ -471,7 +475,7 @@ export function ChatSurface({
       resumeSession(conversationId);
       setSessionStarted(true);
     }
-  }, [status, conversationId, leaderId, sessionStarted, startSession, resumeSession, initialContext, resumeByContextPath, contextPending]);
+  }, [status, conversationId, leaderId, sessionStarted, startSession, resumeSession, initialContext, resumeByContextPath, contextPending, sessionConfirmed, hasPendingCodexHistoryTransfer]);
 
   useEffect(() => {
     if (resumedFrom && onThreadResumed) {
@@ -938,7 +942,10 @@ export function ChatSurface({
             </span>
             <Button
               variant="ghost"
-              onClick={resumeAfterUnrecoverable}
+              onClick={() => {
+                if (hasPendingCodexHistoryTransfer) setSessionStarted(true);
+                resumeAfterUnrecoverable();
+              }}
               className="shrink-0 text-xs text-red-200 underline hover:text-red-100"
             >
               Resume with full context
@@ -1002,10 +1009,16 @@ export function ChatSurface({
               <DelegationErrorCard errorCode={lastError.code} message={lastError.message} />
             ) : (
               <ErrorCard
-                title={lastError.code === "key_invalid" ? "Invalid API Key" : lastError.code === "rate_limited" ? "Rate Limited" : lastError.code === "subscription_limit" ? "Subscription Limit Reached" : "Connection Error"}
+                title={lastError.code === "codex_history_transfer_required" ? "Codex account changed" : lastError.code === "key_invalid" ? "Invalid API Key" : lastError.code === "rate_limited" ? "Rate Limited" : lastError.code === "subscription_limit" ? "Subscription Limit Reached" : "Connection Error"}
                 message={lastError.message}
-                onRetry={lastError.code !== "key_invalid" && lastError.code !== "subscription_limit" ? reconnect : undefined}
+                onRetry={lastError.code !== "key_invalid" && lastError.code !== "subscription_limit" && lastError.code !== "codex_history_transfer_required" ? reconnect : undefined}
                 retryLabel="Reconnect"
+                confirmLabel="Acknowledge history transfer"
+                onConfirm={lastError.code === "codex_history_transfer_required"
+                  && lastError.conversationId
+                  && lastError.authModeGeneration !== undefined
+                  ? () => acknowledgeCodexHistoryTransfer(lastError.conversationId!, lastError.authModeGeneration!)
+                  : undefined}
                 action={lastError.action}
                 onDismiss={() => setDismissedErrorKey(activeErrorKey)}
               />
@@ -1073,6 +1086,9 @@ export function ChatSurface({
                       getDisplayName={getDisplayName}
                       getIconPath={getIconPath}
                       attachments={msg.attachments}
+                      delivery={msg.delivery}
+                      onResend={msg.delivery === "retryable" ? () => resendMessage(msg) : undefined}
+                      resendDisabled={status !== "connected" || !sessionConfirmed}
                       variant={variant}
                       status={msg.status}
                       usage={msg.usage}
