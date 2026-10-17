@@ -21,7 +21,10 @@ import { fileURLToPath } from "node:url";
 import { stripComments } from "./helpers/strip-comments";
 import {
   EXPECTED_TAIL_CALLS,
+  HELPER_SELECTION_NEEDLES,
   assertBuilderTail,
+  assertHelperSelection,
+  scanHelperSelection,
   assertLiteralCensus,
   assertTailMatchesFixture,
   bufferSource,
@@ -34,6 +37,7 @@ import {
   resolveVendoredBinary,
   scanLiterals,
   shouldSkipRealBinaryRows,
+  type HelperSelectionPins,
   type LiteralPins,
 } from "./helpers/vendored-bwrap-tail";
 
@@ -298,6 +302,34 @@ describe("sandbox-vendored-argv-tail: synthetic mutation rows (extractor + censu
   });
 });
 
+describe("sandbox-vendored-argv-tail: helper-selection pins (#10445, synthetic)", () => {
+  const FULL = Buffer.from(Object.values(HELPER_SELECTION_NEEDLES).join(" \0 "));
+  const PINS_ONE: HelperSelectionPins = { skipLine: 1, applyLine: 1, missingLine: 1, settingsMapping: 1 };
+
+  it("a buffer carrying every selection literal once passes (must-PASS control)", () => {
+    expect(failureOf(() => assertHelperSelection(scanHelperSelection(bufferSource(FULL)), PINS_ONE, "synthetic"))).toBe("");
+  });
+
+  it("a vanished skip line reds HELPER_SELECTION skipLine naming the wrapped-command arm", () => {
+    const without = Buffer.from(FULL.toString().replace(HELPER_SELECTION_NEEDLES.skipLine, "X"));
+    const msg = failureOf(() => assertHelperSelection(scanHelperSelection(bufferSource(without)), PINS_ONE, "synthetic"));
+    expect(msg).toMatch(/HELPER_SELECTION skipLine want 1 got 0/);
+    expect(msg).toMatch(/sandbox-masked-proc-docker\.test\.sh/);
+  });
+
+  it("a vanished settings->builder mapping reds even when all three log lines remain", () => {
+    const without = Buffer.from(FULL.toString().replace(HELPER_SELECTION_NEEDLES.settingsMapping, "X"));
+    const msg = failureOf(() => assertHelperSelection(scanHelperSelection(bufferSource(without)), PINS_ONE, "synthetic"));
+    expect(msg).toMatch(/HELPER_SELECTION settingsMapping want 1 got 0/);
+  });
+
+  it("a second copy of a literal reds (a new code path selects the helper elsewhere)", () => {
+    const doubled = Buffer.concat([FULL, Buffer.from(" \0 " + HELPER_SELECTION_NEEDLES.applyLine)]);
+    const msg = failureOf(() => assertHelperSelection(scanHelperSelection(bufferSource(doubled)), PINS_ONE, "synthetic"));
+    expect(msg).toMatch(/HELPER_SELECTION applyLine want 1 got 2/);
+  });
+});
+
 describe("sandbox-vendored-argv-tail: spawn-tail normalization (cap segment is not ignored)", () => {
   const base = ["--dev", "/dev", "--unshare-pid", "--unshare-user"];
   it("collapses `--cap-drop ALL` with and without `--cap-add CAP_SETFCAP` to the same token", () => {
@@ -354,6 +386,13 @@ describe("sandbox-vendored-argv-tail: fixture tail equality (synthetic)", () => 
   });
 });
 
+// Measured 2026-10-16 (claude-agent-sdk 0.3.284, claude-code 2.1.293 -- the versions in PINS above) with fixed-string scans (`grep -a -o -F <literal> claude | wc -l`).
+// Only the agent-sdk package reads the programmatic `sandbox` option; the CLI package never maps it.
+const HELPER_PINS: Record<"claude-agent-sdk" | "claude-code", HelperSelectionPins> = {
+  "claude-agent-sdk": { skipLine: 2, applyLine: 2, missingLine: 2, settingsMapping: 2 },
+  "claude-code": { skipLine: 2, applyLine: 2, missingLine: 2, settingsMapping: 0 },
+};
+
 describe.skipIf(SKIP_REAL)("sandbox-vendored-argv-tail: real vendored binaries", () => {
   for (const pkg of PKGS) {
     const pins = PINS[pkg];
@@ -370,12 +409,22 @@ describe.skipIf(SKIP_REAL)("sandbox-vendored-argv-tail: real vendored binaries",
 
       // One read of the ~250 MB binary per package: the tail and the census are computed once and every row
       // below asserts on them (each row used to reopen and rescan the file).
-      let scanned: { version: string; tail: ReturnType<typeof extractBuilderTailFrom>; census: ReturnType<typeof scanLiterals> };
+      let scanned: {
+        version: string;
+        tail: ReturnType<typeof extractBuilderTailFrom>;
+        census: ReturnType<typeof scanLiterals>;
+        helper: ReturnType<typeof scanHelperSelection>;
+      };
       beforeAll(() => {
         const bin = resolveVendoredBinary(pkg, join(APP_ROOT, "node_modules"));
         const fs = fileSource(bin.path);
         try {
-          scanned = { version: bin.version, tail: extractBuilderTailFrom(fs.source), census: scanLiterals(fs.source) };
+          scanned = {
+            version: bin.version,
+            tail: extractBuilderTailFrom(fs.source),
+            census: scanLiterals(fs.source),
+            helper: scanHelperSelection(fs.source),
+          };
         } finally {
           fs.close();
         }
@@ -390,6 +439,10 @@ describe.skipIf(SKIP_REAL)("sandbox-vendored-argv-tail: real vendored binaries",
           assertLiteralCensus(scanned.census, pins, `${pkg}@${scanned.version}`, `measured on ${pins.measuredVersion}`),
         );
         expect(msg).toBe("");
+      });
+
+      it("the unix-socket helper selection (skip/apply/missing lines, settings mapping) equals the measured pin (#10445)", () => {
+        expect(failureOf(() => assertHelperSelection(scanned.helper, HELPER_PINS[pkg], `${pkg}@${scanned.version}`))).toBe("");
       });
 
       it("the builder tail equals the committed fixture tail (infra/sandbox-canary-argv.json), cap segment normalized", () => {

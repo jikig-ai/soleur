@@ -15,12 +15,11 @@
 // the bwrap-shim unit rows, the real-bwrap row in that file, sandbox-isolation
 // FR7b (control/treatment), and the canary proc_mask probe — all of which
 // measure the setup namespace directly. An in-sandbox outcome assertion is
-// deliberately absent here: the vendored `apply-seccomp` helper re-mounts
-// /proc in a deeper userns on hosts where it runs (masking the defect from
-// the command's view) and is denied CLONE_NEWUSER by the shim's own
-// --add-seccomp-fd filter where it can't — either way the inner command is
-// not a reliable defect discriminator, so asserting on it would be
-// host-dependent theater. Same two-arm convention as
+// deliberately absent here: before #10445 the vendored `apply-seccomp` helper was in every command's path and
+// either re-mounted /proc in a deeper userns (masking the defect from the command's view) or was denied
+// CLONE_NEWUSER by the shim's own --add-seccomp-fd filter. Production now sets allowAllUnixSockets, so the helper
+// is no longer in the path; the in-sandbox command outcome is asserted in sandbox-wrapped-command-runtime.test.ts.
+// Same two-arm convention as
 // sandbox-credential-deny-runtime.test.ts (W1/ADR-272).
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
