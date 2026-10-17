@@ -5140,6 +5140,13 @@ if want_scripts; then
   # alert path that had never once delivered, because `set -u` killed it before the curl.
   run_suite "scripts/lint-workflow-step-env-refs" bash scripts/lint-workflow-step-env-refs.test.sh
   run_suite "scripts/lint-workflow-step-env-refs-live" python3 scripts/lint-workflow-step-env-refs.py
+  # #10331 PR3a, ADR-290. Same both-halves shape: the unit suite proves the shrink-only RULE (and
+  # pins ruff.toml, the scope tuple and the floors); the live run proves the TREE equals its
+  # baseline. The eslint-test-dirs live arm runs as a vitest file in `test-webplat` (it needs
+  # apps/web-platform/node_modules, which this shard does not have). The live ruff run installs a
+  # hash-pinned ruff on first use; under CI an unobtainable ruff is exit 2, never a skip.
+  run_suite "tests/scripts/lint-ratchet" python3 -m unittest tests.scripts.test_lint_ratchet
+  run_suite "scripts/lint-ratchet-ruff-live" python3 scripts/lint-ratchet.py ruff --check
   # ADR-170. Both halves are required: the unit suite proves the RULE is right (its fixtures are
   # the executable spec), the live scan proves the TREE is clean. Either alone is satisfiable by
   # a detector that has stopped detecting -- a broken linter and a clean repo emit identical

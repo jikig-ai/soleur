@@ -433,6 +433,7 @@ scripts/lint-migrated-rule-ids-unit	3884	measured
 scripts/lint-orphan-test-suites	27207	measured
 scripts/lint-orphan-test-suites-mutations-a	112147	measured
 scripts/lint-orphan-test-suites-mutations-b	127716	measured
+scripts/lint-ratchet-ruff-live	1180	floor
 scripts/lint-rule-bodies-live	61	measured
 scripts/lint-rule-ids-live	45	measured
 scripts/lint-shell-capture-exit	6308	measured
@@ -570,6 +571,7 @@ tests/scripts/inngest-host-replace-gate	1533	measured
 tests/scripts/inngest-host-shape-gate	3811	measured
 tests/scripts/inngest-provision-plan-shape	1177	measured
 tests/scripts/kb-drift-walker	68	measured
+tests/scripts/lint-ratchet	1180	floor
 tests/scripts/lint-rule-bodies	4936	measured
 tests/scripts/lint-rule-ids	1098	measured
 tests/scripts/main-duplicate-skip	717	measured
