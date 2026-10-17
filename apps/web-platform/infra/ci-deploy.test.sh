@@ -11166,12 +11166,27 @@ FO99="$(mktemp -d)"
 assert_fixture_dir "$FO99"
 awk '/^fan_out_to_peers\(\) \{$/{f=1} f{print} f&&/^}$/{exit}' "$DEPLOY_SCRIPT" > "$FO99/fn.sh"
 fo99_run() {
-  local secret="$1" cmd="$2" pymode="$3" rec="${4:-}" d="$FO99/run"
+  local secret="$1" cmd="$2" pymode="$3" rec="${4:-}" shape="${5:-single}" secret2="${6:-}" d="$FO99/run"
   assert_fixture_dir "$d"
   rm -rf "$d"; mkdir -p "$d"
   local f
   for f in curl.argv curl.stdin curl.n curl.keyenv py.argv py.keyenv ossl.argv log; do : > "$d/$f"; done
-  jq -n --arg s "$secret" '[{id:"deploy-peer","trigger-rule":{match:{secret:$s}}}]' > "$d/hooks.json"
+  if [[ "$shape" == "single" ]]; then
+    jq -n --arg s "$secret" '[{id:"deploy-peer","trigger-rule":{match:{secret:$s}}}]' > "$d/hooks.json"
+  else
+    # The shapes adnanh/webhook renders: a bare `match`, or an `or` of `match` rules (the rotation's two-secret
+    # window, #9294 PR-1), each carrying the `parameter` object that has no `secret` key. A DECOY hook with its own
+    # secret sits first, so a reader that is not scoped to id==deploy-peer signs with the wrong key.
+    jq -n --arg s "$secret" --arg s2 "$secret2" --arg shape "$shape" '
+      def m($x): {match:{type:"payload-hmac-sha256", secret:$x, parameter:{source:"header", name:"X-Signature-256"}}};
+      [ {id:"deploy", "trigger-rule": m("decoy-deploy-hook-secret")},
+        (if $shape == "nopeer" then {id:"not-the-peer", "trigger-rule": m($s)}
+         else {id:"deploy-peer", "trigger-rule":
+           (if $shape == "or2" then {or: [m($s), m($s2)]}
+            elif $shape == "or3" then {or: [m($s), m($s2), m("third-secret-in-the-or")]}
+            elif $shape == "nosecret" then {or: [{match:{type:"value", value:"x", parameter:{source:"header", name:"X"}}}]}
+            else error("unknown shape") end)} end) ]' > "$d/hooks.json"
+  fi
   jq -cn --arg cmd "$cmd" '{command:$cmd}' > "$d/payload"
   local rc=0
   (
@@ -11312,6 +11327,58 @@ if [[ "$FO99_E_RC" -ne 0 && ! -s "$FO99_E/curl" ]] && /usr/bin/grep -qF 'FANOUT:
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: T-9799-6 fan-out under errexit with python3 absent (rc=$FO99_E_RC curl_bytes=$(wc -c < "$FO99_E/curl") log=$(cut -c1-90 "$FO99_E/log" | head -1)) — the signing failure aborted before the FANOUT line or a request was forwarded"
 fi
+
+# #9294 PR-1: the rotation renders an `or` of two payload-hmac-sha256 matches under trigger-rule, so a reader
+# of `.["trigger-rule"].match.secret` returns null on those hosts and fan-out refuses to forward. fan_out_to_peers
+# must sign with the FIRST secret under the deploy-peer rule (the signers' current secret; the rotation puts the
+# next secret second) and never with a later one, a decoy hook's, or an empty one.
+FO94_OK=1; FO94_MSG=""; FO94_N=0
+for _shape in or2 or3; do
+  fo99_run "fixture-fanout-secret" "deploy fixture" real "" "$_shape" "fixture-next-secret-xyz"
+  FO94_N=$((FO94_N + 1))
+  _got="$(sed -n 's/^header = "X-Signature-256: sha256=\(.*\)"$/\1/p' "$FO99/run/curl.stdin")"
+  _want="$(fo99_oracle "fixture-fanout-secret" "$FO99/run/payload")"
+  _other="$(fo99_oracle "fixture-next-secret-xyz" "$FO99/run/payload")"
+  if [[ ! "$_got" =~ ^[0-9a-f]{64}$ || "$_got" != "$_want" || "$_got" == "$_other" \
+        || "$(cat "$FO99/run/rc")" != "0" || "$(wc -l < "$FO99/run/curl.n")" -ne 1 ]]; then
+    FO94_OK=0; FO94_MSG+=" [$_shape rc=$(cat "$FO99/run/rc") curl_calls=$(wc -l < "$FO99/run/curl.n") sig=${_got:0:12}]"
+  fi
+done
+TOTAL=$((TOTAL + 1))
+if [[ "$FO94_OK" -eq 1 && "$FO94_N" -eq 2 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-9794-1 fan-out under an \`or\` of two or three matches signs with the FIRST secret (byte-identical to the independent oracle, different from the second secret's signature) and forwards once, ignoring a decoy hook's secret"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-9794-1 fan-out under an \`or\` trigger-rule (cases run: ${FO94_N}, want 2):$FO94_MSG"
+fi
+
+FO94_REFUSE_OK=1; FO94_REFUSE_MSG=""; FO94_REFUSE_N=0
+for _case in "or-first-empty||or2|fixture-next-secret-xyz" "or-no-secret-key|x|nosecret|" "no-deploy-peer-rule|x|nopeer|"; do
+  FO94_REFUSE_N=$((FO94_REFUSE_N + 1))
+  IFS='|' read -r _label _sec _shape _sec2 <<< "$_case"
+  fo99_run "$_sec" "deploy fixture" real "" "$_shape" "$_sec2"
+  if [[ "$(cat "$FO99/run/rc")" != "1" || -s "$FO99/run/curl.n" || -s "$FO99/run/curl.stdin" ]] \
+     || ! /usr/bin/grep -qF -- "FANOUT: webhook secret unavailable" "$FO99/run/log"; then
+    FO94_REFUSE_OK=0; FO94_REFUSE_MSG+=" [$_label rc=$(cat "$FO99/run/rc") curl_calls=$(wc -l < "$FO99/run/curl.n") log=$(cut -c1-80 "$FO99/run/log" | head -1)]"
+  fi
+done
+TOTAL=$((TOTAL + 1))
+if [[ "$FO94_REFUSE_OK" -eq 1 && "$FO94_REFUSE_N" -eq 3 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-9794-2 fan-out fails closed under the \`or\` shapes: an empty first secret (the second is NOT used as a fallback), no secret key anywhere under the rule, and no deploy-peer rule each return 1, log FANOUT and never call curl"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-9794-2 fan-out did not fail closed under the \`or\` shapes (cases run: ${FO94_REFUSE_N}, want 3):$FO94_REFUSE_MSG"
+fi
+
+# Source census, comment-stripped and scoped to the function body: the single-match-only path is gone and the
+# first-secret selection is what reads the rule.
+FO94_BODY="$(grep -vE '^[[:space:]]*#' "$FO99/fn.sh")"
+TOTAL=$((TOTAL + 1))
+if ! printf '%s\n' "$FO94_BODY" | /usr/bin/grep -qE 'match\.secret' \
+   && [[ "$(printf '%s\n' "$FO94_BODY" | /usr/bin/grep -cE '\.\.[[:space:]]*\|[[:space:]]*objects[[:space:]]*\|[[:space:]]*select\(has\("secret"\)\)' || true)" -eq 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-9794-3 fan_out_to_peers reads the first secret under the deploy-peer rule (recursive, scoped to id==deploy-peer) and no longer reads a bare .match.secret"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-9794-3 fan_out_to_peers still reads the single-match path or the recursive first-secret selection is missing from the function body"
+fi
+unset FO94_OK FO94_MSG FO94_N FO94_REFUSE_OK FO94_REFUSE_MSG FO94_REFUSE_N FO94_BODY _shape _other
 rm -rf "$FO99"; unset FO99 FO99_E FO99_E_RC FO99_ARGV_N FO99_REFUSE_N _s _c _got _want _case _label _sec _mode _logmsg FO99_SECRETS FO99_CMDS FO99_LONG FO99_RAN FO99_BAD FO99_BADMSG FO99_ARGV_OK FO99_ARGV_MSG \
   FO99_REFUSE_OK FO99_REFUSE_MSG FO99_SNIP_N; unset -f fo99_run fo99_oracle
 
@@ -11365,7 +11432,9 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # fallback under BOTH recorded denial bodies), D10k4/rs+gnu (denied + readable unprivileged still reaches j=ok), D10k5
 # (accepted-but-failed reads j=error, no re-run), D10k6 (accepted-run sudo: warning stripped, empty stays empty),
 # D10k7 (warning + silent failure is no masquerading denial).
-CI_DEPLOY_ASSERT_FLOOR=618
+# #9294 PR-1: raised 618 -> 622 (measured on the live tree: the floor had one slack) with T-9794-1..3 (fan-out under an `or`
+# trigger-rule: first-secret signing, three fail-closed shapes, and the source census).
+CI_DEPLOY_ASSERT_FLOOR=622
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"
