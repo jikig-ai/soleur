@@ -264,6 +264,7 @@ plugins/soleur/test/ship-battery-owed.test.sh	3
 plugins/soleur/test/ship-followthrough-directive.test.sh	7
 plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh	6
 plugins/soleur/test/ship-pir-action-items-gate.test.sh	8
+plugins/soleur/test/sole-copy-drift-check.test.sh	1
 plugins/soleur/test/sync-pr-behind.test.sh	3
 plugins/soleur/test/technical-ruling-gate.test.sh	1
 plugins/soleur/test/terraform-drift-sentry-leg.test.sh	7

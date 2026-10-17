@@ -397,7 +397,7 @@ field, a missing token, an empty token and a failing `doppler` (no word). It was
 
 **No drift check by log search.** The scheduled drift workflow does not print its plan to the job log (the plan goes to a
 file and, when drift is found, to the body or a comment of the open `infra-drift` issue, titled `infra: drift detected in
-<stack>`), so a log search would pass vacuously. Drift plans surface as comments on that issue; the read-back is the arbiter.
+<stack>`), so a log search would pass vacuously. Drift plans surface as comments on that issue; the read-back is the arbiter. The drift workflow's `sole-copy-protection-check` job (#9927 item 9) is the recurring distinct signal: it compares the live protection flag with the Terraform declaration and files its own issue titled `infra: Inngest store volume delete protection differs from Terraform (...)` when they differ (a sanctioned lift is quiet by design; see ADR-282, Addendum 2026-10-16).
 
 ### Delivery route and ordering
 

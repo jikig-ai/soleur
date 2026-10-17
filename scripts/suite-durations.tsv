@@ -261,6 +261,7 @@ plugins/soleur/test/ship-battery-owed.test.sh	17960	measured
 plugins/soleur/test/ship-followthrough-directive.test.sh	447	measured
 plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh	124725	measured
 plugins/soleur/test/ship-pir-action-items-gate.test.sh	2569	measured
+plugins/soleur/test/sole-copy-drift-check.test.sh	1180	floor
 plugins/soleur/test/sync-pr-behind.test.sh	32366	measured
 plugins/soleur/test/technical-ruling-gate.test.sh	1194	floor
 plugins/soleur/test/terraform-drift-sentry-leg.test.sh	543	measured
