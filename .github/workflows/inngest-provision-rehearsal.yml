@@ -670,3 +670,46 @@ jobs:
             exit 1
           fi
           echo "no rehearsal orphans"
+
+      # The scratch Doppler environment is NOT a Hetzner object, so the assert above cannot
+      # see it — and the scheduled sweep's token is config-scoped by construction, so the
+      # sweep's own probe arm could never enumerate the project (#9919: that arm is deleted;
+      # this check moved to the one job that holds a credential able to see what it created).
+      # The credential here is the Doppler provider token the rehearsal root itself
+      # authenticates with (DOPPLER_TOKEN_TF, exported by infra-credentials; the
+      # prd_terraform read is the same fallback the R2-credentials step above uses).
+      - name: Assert no scratch Doppler environment remains (Doppler API)
+        timeout-minutes: 3
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          # Declared floor, mirroring the sweep's honest-verdict shape: the project must
+          # enumerate at least `prd` before a "no rehearsal_*" answer means anything. A
+          # token that cannot see the project returns zero and FAILS this check rather than
+          # reporting a clean verdict it never measured.
+          ENV_FLOOR: 1
+        run: |
+          set -euo pipefail
+          ENV_TOKEN="${DOPPLER_TOKEN_TF:-$(doppler secrets get DOPPLER_TOKEN_TF -p soleur -c prd_terraform --plain)}"
+          [[ -n "$ENV_TOKEN" ]] || { echo "::error::no Doppler provider token resolvable — the scratch-environment check has no verdict."; exit 1; }
+          printf '::add-mask::%s\n' "$ENV_TOKEN"
+          env_rc=0
+          env_raw="$(DOPPLER_TOKEN="$ENV_TOKEN" doppler environments -p soleur-inngest --json)" || env_rc=$?
+          if [[ "$env_rc" -ne 0 ]]; then
+            echo "::error::doppler environments -p soleur-inngest failed (rc=${env_rc}) — the scratch-environment check has no verdict. Fail-closed."
+            exit 1
+          fi
+          env_total="$(printf '%s' "$env_raw" | jq -r 'if type == "array" then length else "notarray" end' 2>/dev/null)" || env_total=""
+          if [[ ! "$env_total" =~ ^[0-9]+$ ]]; then
+            echo "::error::could not parse the doppler environments listing as a JSON array — fail-closed rather than reporting a clean verdict on an unreadable listing."
+            exit 1
+          fi
+          if [[ "$env_total" -lt "$ENV_FLOOR" ]]; then
+            echo "::error::doppler listed ${env_total} soleur-inngest environment(s), below the declared floor of ${ENV_FLOOR} (prd must exist) — the token cannot see what the rehearsal created; the check measured nothing."
+            exit 1
+          fi
+          env_left="$(printf '%s' "$env_raw" | jq -r '[.[]? | (.slug // .name) | select(startswith("rehearsal_"))] | .[]')"
+          if [[ -n "$env_left" ]]; then
+            echo "::error::scratch Doppler environment(s) remain in soleur-inngest after destroy: $(printf '%s\n' "$env_left" | paste -sd' ' -). Reclaim per the inngest-provision-rehearsal runbook."
+            exit 1
+          fi
+          echo "no scratch rehearsal_* Doppler environments remain (${env_total} listed)"

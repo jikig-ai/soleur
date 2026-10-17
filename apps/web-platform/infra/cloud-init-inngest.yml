@@ -1473,9 +1473,19 @@ write_files:
       priv="$(curl -s -o /dev/null -w '%%{http_code}' --max-time 5 http://${inngest_private_ip}:8288/ 2>&1)" || true
       nic="$(ip -o -4 addr show 2>/dev/null | grep -oE '10\.0\.1\.[0-9]+' | tr '\n' ',')" || true
       bind="$(ss -tlnH 2>/dev/null | grep ':8288' | awk '{print $4}' | tr '\n' ',')" || true
-      nft="$(nft list chain inet soleur_inngest input 2>/dev/null | tr '\n' ' ' | head -c 160)" || true
+      # #10382: ship the chain WHOLE — the old `| head -c 160` cut every render mid-rule at
+      # `ip saddr {`, so the member set (the field this emit exists to show) never reached
+      # Better Stack. Untruncated the rendered chain space-joins to ~230 B (measured against
+      # the two-member web-host saddr set), well inside the 400/1200-char caps neighbouring
+      # detail strings already pay — no cap needed. nft_sha256= fingerprints the RAW nft
+      # output so a changed ruleset is detectable even if a later field budget trims nft=
+      # again; the phone-home sanitizer's #6780 D2 leg exempts a labelled `sha256=<64hex>`,
+      # so the digest survives the redaction pass.
+      nft_raw="$(nft list chain inet soleur_inngest input 2>/dev/null)" || true
+      nft="$(printf '%s' "$nft_raw" | tr '\n' ' ')" || true
+      nft_sha256="$(printf '%s' "$nft_raw" | sha256sum | awk '{print $1}')" || true
       last_stage=net-health
-      /usr/local/bin/inngest-boot-phone-home.sh net-health "priv8288=$priv nic=[$nic] bind=[$bind] nft=[$nft]" || true
+      /usr/local/bin/inngest-boot-phone-home.sh net-health "priv8288=$priv nic=[$nic] bind=[$bind] nft=[$nft] nft_sha256=$nft_sha256" || true
       exit 0
     owner: root:root
     permissions: '0755'

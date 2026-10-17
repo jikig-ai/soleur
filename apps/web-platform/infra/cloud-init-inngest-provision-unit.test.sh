@@ -59,8 +59,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UBUNTU_BASE="$(sed -nE "s/^UBUNTU_BASE='(ubuntu:24\.04@sha256:[0-9a-f]{64})'\$/\1/p" "${SCRIPT_DIR}/git-data-runcmd-rehearsal.test.sh" 2>/dev/null | head -1)"
 [ -n "$UBUNTU_BASE" ] || { echo "FAIL SETUP: no UBUNTU_BASE pin readable from git-data-runcmd-rehearsal.test.sh" >&2; exit 1; }
 BUDGET="$SCRIPT_DIR/inngest-userdata-budget.sh"
-EXPECTED_ROWS=83
-EXPECTED_RED=74
+EXPECTED_ROWS=85
+EXPECTED_RED=76
 EXPECTED_MUSTPASS=9
 
 die() { printf 'INSTRUMENT FAULT: %s\n' "$*" >&2; exit 2; }
@@ -584,6 +584,25 @@ def cmd_static(render):
     anchor = any("HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)" in body for _, op, body in heredocs(sc) if "doppler run" in op)
     chk("G8: the isolation regex keeps BETTERSTACK_LOGS_TOKEN a top-level sibling (HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN) anchor)", anchor)
 
+    # ---- #10382: the net-health emit ships the WHOLE nftables chain + a digest --------------
+    # code_lines() strips comments, so each anchor below binds CODE, not prose that names it
+    # (cq-assert-anchor-not-bare-token). The defect: `| head -c 160` cut every render mid-rule
+    # at `ip saddr {`, so the saddr member set never reached Better Stack.
+    nft_reads = [s for _, s in L if "nft list chain inet soleur_inngest input" in s]
+    chk("#10382: the script reads the live nft chain (nft list chain inet soleur_inngest input)",
+        len(nft_reads) == 1, "reads=%d" % len(nft_reads))
+    chk("#10382: the nft capture is NOT truncated (no head -c bound on the nft list chain read)",
+        not any("head -c" in s for s in nft_reads), "offenders=%d" % sum(1 for s in nft_reads if "head -c" in s))
+    nh = [s for _, s in L if "inngest-boot-phone-home.sh net-health" in s]
+    chk("#10382: the net-health emit carries nft=[<whole chain>] AND a labelled nft_sha256= field",
+        len(nh) == 1 and "nft=[$nft]" in nh[0] and "nft_sha256=" in nh[0],
+        "emit=%s" % (nh[0][:100] if nh else "<none>"))
+    chk("#10382: nft_sha256 is computed from the captured nft output (sha256sum reads $nft_raw, not a re-list)",
+        any(re.search(r'nft_sha256="\$\(', s) and "sha256sum" in s and "$nft_raw" in s for _, s in L))
+    chk("#10382: every line of the nft capture/emit keeps the || true failure-isolation",
+        all(s.rstrip().endswith("|| true") for s in nft_reads + nh),
+        "offenders=%s" % [s[:60] for s in nft_reads + nh if not s.rstrip().endswith("|| true")])
+
     for st, name in R:
         print("  %s: %s" % (st, name))
 
@@ -1027,7 +1046,7 @@ echo "  C0: $C0_PASS assertions, all PASS"
 # EXACT, not a floor with slack: the control's assertion inventory is fixed by this file, so a
 # count that drifts (an assertion deleted, a scenario silently not run) is itself a RED. Bump it in
 # the same edit that adds an assertion.
-C0_EXPECTED=162
+C0_EXPECTED=167
 [ "$C0_PASS" -eq "$C0_EXPECTED" ] || { echo "  FAIL: C0 anti-vacuity — $C0_PASS assertions ran, the inventory is exactly $C0_EXPECTED"; exit 1; }
 
 # =================================================================================================
@@ -1365,6 +1384,12 @@ row G6-r16 RED "G6: the restart delay backs off" '
 del_line("RestartSteps=4"); save()'
 row G8-r6 PASS - '
 ins_after("attempt=0", [": $(( 1 << 2 ))", ": # a trailing comment that names <<NOTAHEREDOC"]); save()'
+
+# ---- #10382: the net-health nft emit (re-adding the truncation must red the static guard) -------
+row NFT-r1 RED "#10382: the nft capture is NOT truncated" '
+rep_line("nft_raw=\"$(nft list chain inet soleur_inngest input 2>/dev/null)\" || true", "nft_raw=\"$(nft list chain inet soleur_inngest input 2>/dev/null | head -c 160)\" || true"); save()'
+row NFT-r2 RED "#10382: nft_sha256 is computed from the captured nft output" '
+rep_line("nft_sha256=\"$(printf \x27%s\x27 \"$nft_raw\" | sha256sum | awk \x27{print $1}\x27)\" || true", "nft_sha256=deadbeef || true"); save()'
 
 # ---- execute (bounded parallelism; each row owns its directory) --------------------------------
 echo ""

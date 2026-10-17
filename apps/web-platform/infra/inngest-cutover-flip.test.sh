@@ -133,6 +133,21 @@ EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$LOGTRACE"
 EOF
+  # --- #10382: the noop-emit nft read + phone-home dual channel -------------------------------
+  # Canned chain output — the nft stub answers the SAME fixed ruleset regardless of argv so
+  # the assertions below recompute the expected digest from the same bytes the script saw.
+  NFTSTUB="$WORK/nft.sh"
+  cat > "$NFTSTUB" <<'EOF'
+#!/usr/bin/env bash
+printf 'table inet soleur_inngest {\n  chain input {\n    type filter hook input priority -10; policy accept;\n    tcp dport { 8288, 8289 } ip saddr { 10.0.1.10, 10.0.1.11 } accept\n    tcp dport { 8288, 8289 } drop\n  }\n}\n'
+EOF
+  PHONETRACE="$WORK/phonetrace"
+  : > "$PHONETRACE"
+  PHONE="$WORK/phone-home.sh"
+  cat > "$PHONE" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$PHONETRACE"
+EOF
   # --- #7228: the serving-verification seam ---------------------------------------------
   # `done` is now PROBE-DERIVED: the FSM will not record it until a bounded-window /health
   # returns 200 AND the v0/gql registry comes back non-empty. Seamed at the CURL COMMAND, not
@@ -182,7 +197,7 @@ printf 'flag:%s\n' "\$1" >> "$TRACE"
 [ -e "$OWNER_MARKER" ] && printf 'owner@%s\n' "\$1" >> "$TRACE"
 exit 0
 EOF
-  chmod +x "$SYSCTL" "$REDIS" "$FLAGSET" "$LOGGER"
+  chmod +x "$SYSCTL" "$REDIS" "$FLAGSET" "$LOGGER" "$NFTSTUB" "$PHONE"
 }
 
 teardown_case() { rm -rf "$WORK"; clean_host_state_slot; }
@@ -201,6 +216,8 @@ run_flip() {
       INNGEST_CUTOVER_LATCH="$LATCH" \
       INNGEST_CUTOVER_LATCH_MOUNT="" \
       CUTOVER_CURL_CMD="$CURLSTUB" \
+      CUTOVER_NFT_CMD="$NFTSTUB" \
+      CUTOVER_PHONE_HOME_CMD="$PHONE" \
       CUTOVER_DONE_OWNER_MARKER="$OWNER_MARKER" \
       CUTOVER_VERIFY_WINDOW_S=0 \
       CUTOVER_VERIFY_INTERVAL_S=0 \
@@ -484,6 +501,49 @@ assert_eq "exit 0 (non-numeric interval, first fire)" "0" "$rc"
 rc=$(run_flip "" CUTOVER_NOOP_THROTTLE_S=banana)
 assert_eq "non-numeric interval still throttles (default applies)" \
   "1" "$(wc -l < "$LOGTRACE" | tr -d ' ')"
+teardown_case
+
+# --- Test 5n (#10382): the emitted noop row carries the FULL nft chain + its sha256 on BOTH
+# channels. The nft fields must live INSIDE the JSON — _fsm_own_rows (scripts/cutover-inngest.sh)
+# counts only rows whose .message parses to an OBJECT, so text appended after `}` would zero the
+# liveness signal. The expected digest is recomputed from the stub's own bytes, so a mutation that
+# truncates the capture or hashes something else changes the value and reds this.
+echo "TEST: #10382 the emitted noop row carries the full nft chain + sha256 on both channels"
+setup_case
+rc=$(run_flip "")
+assert_eq "exit 0 on the noop fire" "0" "$rc"
+NFT_FLAT="$(printf '%s' "$("$NFTSTUB")" | tr '\n' ' ')"
+NFT_SHA="$(printf '%s' "$("$NFTSTUB")" | sha256sum | awk '{print $1}')"
+assert_contains "the logger row carries the UNTRUNCATED nft chain inside the JSON" \
+  "$(cat "$LOGTRACE")" "\"nft\":\"$NFT_FLAT\""
+assert_contains "the logger row carries \"nft_sha256\":\"<digest of the nft output>\"" \
+  "$(cat "$LOGTRACE")" "\"nft_sha256\":\"$NFT_SHA\""
+# The row must stay a JSON OBJECT — the consumer selects .message | type == "object".
+assert_eq "the noop row's message is still a JSON object (logger argv minus '-t <tag>' parses)" \
+  "object" "$(tail -1 "$LOGTRACE" | sed 's/^-t [^ ]* //' | jq -r 'type' 2>/dev/null || echo unparsable)"
+assert_contains "the phone-home dual emit carries the same nft=[...] payload" \
+  "$(cat "$PHONETRACE")" "nft=[$NFT_FLAT]"
+assert_contains "the phone-home row carries the same nft_sha256=" \
+  "$(cat "$PHONETRACE")" "nft_sha256=$NFT_SHA"
+assert_contains "the phone-home stage names the noop arm (cutover-flip-<reason>)" \
+  "$(cat "$PHONETRACE")" "cutover-flip-noop-unset"
+# The throttle gates BOTH channels — an in-window fire emits neither.
+rc=$(run_flip "" CUTOVER_NOOP_THROTTLE_S=3600)
+assert_eq "the in-window second fire dual-emits nothing (throttle gates both channels)" \
+  "1" "$(wc -l < "$PHONETRACE" | tr -d ' ')"
+teardown_case
+
+echo "TEST: #10382 a missing/failed nft read still emits, marked unavailable (never silent)"
+setup_case
+cat > "$NFTSTUB" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "$NFTSTUB"
+rc=$(run_flip "")
+assert_eq "exit 0 on the noop fire with a failing nft read" "0" "$rc"
+assert_contains "the row still ships with nft_sha256=unavailable" \
+  "$(cat "$PHONETRACE")" "nft_sha256=unavailable"
 teardown_case
 
 # --- Test 6: the script NEVER disables the flip timer (P0-1, static guard) ---
@@ -1275,7 +1335,9 @@ fi
 # assertions) and the evidence-less refusal case (4f, 7 assertions).
 # 163 -> 177: +14 for the #7696 noop-throttle block — the cadence case (10), the
 # interval-0 seam case (2), and the non-numeric-interval fallback case (2).
-MIN_ASSERTIONS=177
+# 177 -> 187: +10 for the #10382 measured-nft-on-noop block — the dual-channel case (8)
+# and the nft-read-failure case (2).
+MIN_ASSERTIONS=187
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
   # printf + exit, NOT fail() (ADR-193): routing the floor through the counter it exists to
   # protect means one edit disarms both. See the instrument self-test at the top.
