@@ -3,9 +3,10 @@
 #
 # Mirrors the reproducible subset of .github/workflows/ci.yml required checks:
 #   Phase 1 — fast always-run jobs (seconds)
-#   Phase 2 — scripts/test-all.sh --affected (diff-selected suites + always-on
+#   Phase 2 — affected-tests.sh (the plugin gate; in this repo it delegates
+#             scripts/test-all.sh --affected — diff-selected suites + always-on
 #             ratchets; the FULL battery is the CI `test` aggregator's job, and
-#             is opt-in locally via `test-all.sh --full`)
+#             is opt-in locally via `affected-tests.sh --full`)
 #   Phase 3 — web-platform next build (route-file validator; CI web-platform-build)
 #   Phase 4 — plugins/soleur/scripts/grok-fidelity-gate.sh (CI grok-fidelity)
 #
@@ -33,6 +34,10 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+# The affected gate is a plugin sibling — resolve it beside THIS script
+# (dirname $0), never through CLAUDE_PLUGIN_ROOT (ADR-179: env-directed roots
+# are a trust class; a sibling path cannot point anywhere else).
+GATE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/affected-tests.sh"
 cd "$REPO_ROOT"
 
 SKIP_BUILD=0
@@ -66,17 +71,26 @@ run_step() {
   # signal-shaped status) or 4 (REFUSED — nothing ran) would be re-labelled a failure.
   # Non-zero either way: a step that was not measured is not a step that passed. What the
   # distinct arms buy is that the MESSAGE names the cause that actually occurred.
+  # rc 6/7 pass-with-note applies ONLY to the affected gate — matched on the
+  # step name or the invoked script path (both, so a renamed label or a moved
+  # script path can't silently demote another step's 6/7 to a pass).
+  local _affected_step=0
+  if [[ "$name" == "affected-tests gate" ]] \
+     || { [[ -n "${2:-}" ]] \
+          && [[ "$2" == "${GATE:-}" || "$2" == *affected-tests.sh ]]; }; then
+    _affected_step=1
+  fi
   local rc=0
   "$@" || rc=$?
   if (( rc == 0 )); then
     echo "[ok] $name"
   elif (( rc == 3 )); then
-    # Worded WITHOUT promising [KILLED] lines. exit 3 is test-all.sh's contract, and
-    # run_step drives ten steps; the other nine emit no [KILLED] lines, so the old
-    # wording asserted evidence that would not be there. None of them returns 3 today
-    # (verified), which makes this latent rather than live — but a message that names
-    # absent evidence is the ADR-166 class this repo gates on.
-    echo "[UNRESOLVED] $name — exited 3 without reporting a failure; if this step is test-all.sh see its EXIT CONTRACT block" >&2
+    # Worded WITHOUT promising [KILLED] lines. exit 3 is test-all.sh's contract
+    # (reached here via the affected-tests gate step — the gate maps a runner's
+    # 3 to its own rc 1, so this arm fires only for a step returning a bare 3);
+    # run_step drives ten steps and the others emit no [KILLED] lines, so the
+    # old wording asserted evidence that would not be there.
+    echo "[UNRESOLVED] $name — exited 3 without reporting a failure; if this step delegates to test-all.sh see its EXIT CONTRACT block" >&2
     exit 3
   elif (( rc == 4 )); then
     # Same class as the rc=3 arm above, and the arm that arm exists to prevent: rc=4 is
@@ -91,6 +105,22 @@ run_step() {
     echo "  sibling run or a subagent context — resolve the printed reason= and re-run, or wait" >&2
     echo "  for the sibling. An AFFECTED_UNRESOLVED print names the refusal directly." >&2
     exit 4
+  elif (( rc == 6 || rc == 7 )) && (( _affected_step )); then
+    # SCOPED to the affected-gate step: rc 6/7 are affected-tests.sh's
+    # pass-with-note verdicts (ADR-288, block-vs-pass decision). On any OTHER
+    # step 6/7 is an ordinary failure — a random suite exiting 6 must never
+    # read as a CI deferral.
+    if (( rc == 6 )); then
+      # AFFECTED_GATE_BUDGET_DEFERRED: the wall-clock budget expired AND a CI
+      # test workflow was detected, which the contract makes the authoritative
+      # gate. Pass WITH a note — the local evidence is partial, the push is
+      # allowed, and the CI `test` context remains the merge blocker.
+      echo "[note] $name — exited 6 (budget-deferred): the detected CI test workflow is the authoritative gate; local coverage is partial." >&2
+    else
+      # rc 7 no-suite verdict: the gate found nothing to run and disclosed it.
+      # Disclosed non-coverage, never a silent pass and never labelled one.
+      echo "[note] $name — exited 7: no test suite detected; the gate disclosed the gap rather than running tests." >&2
+    fi
   else
     echo "[FAIL] $name" >&2
     exit 1
@@ -103,9 +133,9 @@ echo "grok-pre-push-gate: starting local CI parity (repo: $REPO_ROOT)"
 #
 # Answers "can this box absorb the gate I am about to start?" in ~3 s
 # (measured p50 on a 16-core box with ~640 pids; it walks /proc once). Phase 2
-# below runs `test-all.sh --affected` — the diff-selected set plus the
-# always-on ratchets, roughly half the ~45-min serial battery on the measured
-# baseline (#8322). The probe still earns its place: an affected run can DEGRADE to the
+# below runs `affected-tests.sh` — which in THIS repo delegates to
+# `test-all.sh --affected` (the diff-selected set plus the always-on ratchets,
+# roughly half the ~45-min serial battery on the measured baseline, #8322). The probe still earns its place: an affected run can DEGRADE to the
 # full battery (undecidable diff, runner/index touched, FORCE_ALL), and on a
 # contended box that run's REDs may be interleaving rather than regressions.
 #
@@ -164,16 +194,18 @@ else
   echo "SKIP lockfile-sync (npm not on PATH)" >&2
 fi
 
-# --- Phase 2: affected test gate (#8322) ---
-# `--affected`: the suites this diff can move, plus every always-on repo-global
-# ratchet — roughly half the ~45-min battery, and exempt from the full-gate
-# refusals unless the selection DEGRADES to full — so the
-# SOLEUR_ALLOW_FULL_GATE=1 hatch this step previously
-# carried is gone rather than merely unneeded. The full battery remains the
-# CI `test` required check's job (and `test-all.sh --full` locally). An
-# undecidable diff degrades this step to the full battery on its own — the
-# AFFECTED_FALLBACK line in its output says so.
-run_step "test-all (affected gate)" bash scripts/test-all.sh --affected
+# --- Phase 2: affected test gate (#8322, #9307) ---
+# `affected-tests.sh` — the plugin-generic gate; in THIS repo its capability
+# probe resolves scripts/test-all.sh and delegates `--affected`: the suites
+# this diff can move, plus every always-on repo-global ratchet — roughly half
+# the ~45-min battery, and exempt from the full-gate refusals unless the
+# selection DEGRADES to full — so the SOLEUR_ALLOW_FULL_GATE=1 hatch this step
+# previously carried is gone rather than merely unneeded. The full battery
+# remains the CI `test` required check's job (and `test-all.sh --full` or
+# `affected-tests.sh --full` locally). An undecidable diff degrades the
+# delegated run to the full battery on its own — the runner's
+# AFFECTED_FALLBACK line says so.
+run_step "affected-tests gate" bash "$GATE"
 
 # --- Phase 3: next build / route validator (CI web-platform-build) ---
 # Local APPROXIMATION of the CI job: since #8136 `web-platform-build` builds the Dockerfile's
