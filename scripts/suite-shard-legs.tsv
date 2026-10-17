@@ -2,8 +2,8 @@
 # n=8
 # generated-from-run=incremental
 # generated-from-runs=incremental
-# default-weight-ms=1180
-# generated-at=2026-10-14T14:51:03Z
+# default-weight-ms=1184
+# generated-at=2026-10-16T15:27:16Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -147,6 +147,7 @@ plugins/soleur/test/_base-notice-frontmatter.test.sh	8
 plugins/soleur/test/admin-merge-ready-wiring.test.sh	4
 plugins/soleur/test/audit-flag-flip.test.sh	5
 plugins/soleur/test/auto-close-scanner.test.sh	7
+plugins/soleur/test/boundary-prefix.test.sh	1
 plugins/soleur/test/brand-workshop-pen-commit-after-save.test.sh	7
 plugins/soleur/test/c4-count-parity.test.sh	2
 plugins/soleur/test/c4-from-components.test.sh	5
@@ -177,6 +178,7 @@ plugins/soleur/test/domain-model-headless-append.test.sh	1
 plugins/soleur/test/domain-model-init.test.sh	5
 plugins/soleur/test/drain-labeled-backlog.test.sh	2
 plugins/soleur/test/drain-prs.test.sh	5
+plugins/soleur/test/ext-filter-detect-hook.test.sh	1
 plugins/soleur/test/fanout-suite-scope.test.sh	4
 plugins/soleur/test/fixture-cd-containment.test.sh	7
 plugins/soleur/test/fixture-dir-operand-assert.test.sh	8
@@ -185,6 +187,7 @@ plugins/soleur/test/fixture-relative-assert.test.sh	2
 plugins/soleur/test/flag-detach-shared.test.sh	5
 plugins/soleur/test/flag-org-scoping-pr2.test.sh	7
 plugins/soleur/test/flagsmith-stdin-config.test.sh	1
+plugins/soleur/test/flip-flag-map-parity.test.sh	1
 plugins/soleur/test/gdpr-gate-glob-liveness.test.sh	1
 plugins/soleur/test/gdpr-gate-self-test.test.sh	6
 plugins/soleur/test/generate-kb-index.test.sh	6
@@ -254,6 +257,7 @@ plugins/soleur/test/reusable-release-degraded-pointer.test.sh	8
 plugins/soleur/test/reusable-release-idempotency.test.sh	4
 plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh	3
 plugins/soleur/test/roadmap-reconcile.test.sh	3
+plugins/soleur/test/rtk-grammar-parity.test.sh	1
 plugins/soleur/test/schedule-skill-once.test.sh	5
 plugins/soleur/test/scripts-shard-manifest.test.sh	4
 plugins/soleur/test/scripts-shard-runtime-coverage.test.sh	8
@@ -347,6 +351,7 @@ scripts/digest-oracle-guard	4
 scripts/dogfood/grok-gpu-bootstrap	4
 scripts/dogfood/grok-measure	7
 scripts/domain-model-drift	4
+scripts/egress-audit-retention-check	1
 scripts/ensure-doppler	8
 scripts/ensure-kb-index	4
 scripts/expenses-verify-by-check	3
@@ -391,6 +396,7 @@ scripts/learning-retrieval-bench	7
 scripts/lib/bearer-curl.test.sh	8
 scripts/lib/frontmatter-strip.test.sh	1
 scripts/lib/git-data-rotate-stamp.test.sh	1
+scripts/lib/git-data-store-dirty-scan.test.sh	1
 scripts/lib/git-data-wipe-runs.test.sh	1
 scripts/lib/incidents-roots.test.sh	3
 scripts/lib/inngest-probe-row.test.sh	6
@@ -525,6 +531,7 @@ scripts/web-host-escrow-preflight	3
 scripts/web2-luks-live-6931	4
 scripts/workspaces-plaintext-hold-9348	2
 scripts/zot-fill-rate-7341	6
+scripts/zot-fill-rate-standing-wiring	1
 scripts/zot-last-err-redact-7500	7
 scripts/zot-mirror-diagnosis	2
 scripts/zot-restart-loop-alarm	2
