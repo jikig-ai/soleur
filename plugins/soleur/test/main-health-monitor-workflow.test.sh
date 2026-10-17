@@ -670,25 +670,121 @@ if offenders:
 else:
     ok("(10) no setup pipeline silently discards its producer's exit status")
 
-# ---- (12) JOBS=1 on BOTH suite steps ---------------------------------------
-# Added after this guard FAILED to catch its own regression: the review moved
-# JOBS off workflow scope (node-gyp reads it as `make -j`) and did not re-add it
-# to the steps, so run 31367748528 ran the infra runner at -P 4, hit the harness
-# flake (#7376) and filed a spurious issue. The step-scoped form is what covers
-# BOTH invocations -- the standalone runner and the nested one inside the tests
-# step -- so assert it on each, not merely somewhere in the file.
-step_env_blocks = re.findall(
-    r'^        id: (tests|infra)\n(?:.*\n)*?^        env:\n((?:^          .*\n)+)',
-    stripped, re.M)
-jobs_ok = {sid: bool(re.search(r'^          JOBS:\s*1\s*$', env, re.M))
-           for sid, env in step_env_blocks}
-if set(jobs_ok) == {"tests", "infra"} and all(jobs_ok.values()):
-    ok("(12) JOBS: 1 is set on both the tests and infra step env blocks")
+# ---- (12) the JOBS pin: kept on the tests step, ABSENT from the infra step --
+# Origin: this guard FAILED to catch its own regression once. The review moved JOBS
+# off workflow scope (node-gyp reads it as `make -j`) and did not re-add it to the
+# steps, so run 31367748528 ran the infra runner at -P 4, hit the harness flake
+# (#7376) and filed a spurious issue (#7386); (12) then asserted the pin on BOTH
+# steps. Item I of the grep -q series (#9217, tracker #7432) measured the infra pin
+# and ruled it off (decision-challenges.md in this feature's spec dir): the
+# deploy-script-tests legs in infra-validation.yml run the same runner at -P 4 on the
+# same runner class, and the sequential infra step was killed at its 60-minute
+# ceiling in 81 of 269 monitor runs that could deliver a verdict. The tests step
+# keeps its pin (a branch diff touching apps/web-platform/infra/ nests the infra
+# runner inside it), so the check is split, not deleted:
+#   (12a) the tests step env sets JOBS to 1 (value `1`, "1" or '1' and nothing else)
+#   (12b) both suite steps were extracted with their OWN env: block, and no JOBS
+#         assignment exists anywhere outside the tests step env -- not in the infra
+#         step env, the infra run: text, a job or workflow env:, or a trailing
+#         comment on a code line (counted on purpose: a whole-line comment is
+#         stripped, a `# JOBS: 2` after code is not, and failing closed there is
+#         cheaper than an allowlist).
+# Restoring the infra pin therefore means editing (12b) in the same diff, which a
+# reviewer sees. The compared subject is a stated property, not a stored value.
+JOBS_TOKEN = re.compile(r'(?<![A-Za-z0-9_])JOBS\s*[:=]')
+JOBS_ONE = re.compile(r'^          JOBS:\s*(?:1|"1"|\'1\')\s*$', re.M)
+
+def step_envs(text):
+    """{step id: own env: block text, or None} for the tests and infra steps.
+    Each step is bounded by the next `- name:`/`- uses:` line, so a step WITHOUT an
+    env: block yields None instead of borrowing the env: of the step after it."""
+    out = {}
+    cuts = [m.start() for m in re.finditer(r'^      - (?:name|uses):', text, re.M)] + [len(text)]
+    for a, b in zip(cuts, cuts[1:]):
+        chunk = text[a:b] + "\n"
+        mid = re.search(r'^        id: (tests|infra)\s*$', chunk, re.M)
+        if not mid:
+            continue
+        menv = re.search(r'^        env:\n((?:^          .*\n)+)', chunk, re.M)
+        out[mid.group(1)] = menv.group(1) if menv else None
+    return out
+
+def strip_comments(raw_text):
+    return "\n".join(l for l in raw_text.splitlines() if not re.match(r'^\s*#', l))
+
+def check_jobs_pin(text):
+    """(12a_ok, 12b_ok, detail) over comment-stripped workflow text."""
+    envs = step_envs(text)
+    tests_env = envs.get("tests")
+    a_ok = tests_env is not None and bool(JOBS_ONE.search(tests_env))
+    outside = len(JOBS_TOKEN.findall(text)) - len(JOBS_TOKEN.findall(tests_env or ""))
+    structure = set(envs) == {"tests", "infra"} and all(v is not None for v in envs.values())
+    b_ok = structure and outside == 0
+    return a_ok, b_ok, f"steps_with_env={ {k: v is not None for k, v in envs.items()} } jobs_assignments_outside_tests_env={outside}"
+
+_a, _b, _d = check_jobs_pin(stripped)
+if _a:
+    ok("(12a) the tests step env pins JOBS to 1")
 else:
-    bad("(12) JOBS: 1 is set on both the tests and infra step env blocks",
-        f"found={jobs_ok} -- without it run-registered-suites.sh defaults to "
-        "-P min(nproc,6) = -P 4 on a hosted runner, which is the configuration "
-        "measured flaky in 3 of 7 executions (#7376) and files a spurious P1")
+    bad("(12a) the tests step env pins JOBS to 1", f"{_d} -- the tests step nests the infra runner whenever the "
+        "branch diff touches apps/web-platform/infra/, where node-gyp would also read JOBS as `make -j`")
+if _b:
+    ok("(12b) the infra step carries no JOBS pin and no JOBS assignment exists outside the tests step env")
+else:
+    bad("(12b) the infra step carries no JOBS pin and no JOBS assignment exists outside the tests step env",
+        f"{_d} -- Item I (#7432, tracker #9217) removed the infra-step pin on measured evidence: the "
+        "deploy-script-tests legs run the same runner at -P 4 and the sequential infra step was killed at "
+        "its 60-minute ceiling in 81 of 269 monitor runs. To restore it, flip this check in the same diff "
+        "and cite the revert trigger (a suite RED here that does not reproduce in infra-validation, or a "
+        "new ceiling kill, within the first 12 scheduled runs). See "
+        "knowledge-base/project/learnings/2026-08-09-the-monitor-reported-success-and-i-read-the-field-that-cannot-say-otherwise.md")
+
+# Mutation matrix for (12): each row perturbs an in-memory copy of the RAW workflow, re-strips it, and
+# asserts (i) the mutation landed (a mutation that did not land would just re-grade the original) and
+# (ii) the verdict. In-memory on purpose: this suite is one python run against one file, and swapping
+# the whole file per mutation would also trip unrelated checks and blur which row fired.
+def _mutate_once(raw_text, pat, repl, flags=re.M):
+    new, n = re.subn(pat, repl, raw_text, count=1, flags=flags)
+    return new if n == 1 else raw_text
+
+def jobs_row(tag, label, mutated, want_a, want_b):
+    landed = mutated != raw
+    if landed:
+        ok(f"(12{tag}) mutation landed: {label}")
+    else:
+        bad(f"(12{tag}) mutation landed: {label}", "the mutation did not change the workflow text, so the row below would re-grade the original")
+    a, b, d = check_jobs_pin(strip_comments(mutated))
+    if (a, b) == (want_a, want_b):
+        ok(f"(12{tag}) verdict (12a={want_a}, 12b={want_b}) for: {label}")
+    else:
+        bad(f"(12{tag}) verdict (12a={want_a}, 12b={want_b}) for: {label}", f"got 12a={a} 12b={b}; {d}")
+
+_ANCHOR_INFRA_ENV = "          TEST_GROUP: infra\n"
+_ANCHOR_INFRA_RUN = "          bash scripts/test-all.sh 2>&1 | tee -a /tmp/infra-output.txt\n"
+if raw.count(_ANCHOR_INFRA_ENV) != 1 or raw.count(_ANCHOR_INFRA_RUN) != 1:
+    bad("(12) mutation anchors are unique in the workflow",
+        f"TEST_GROUP: infra x{raw.count(_ANCHOR_INFRA_ENV)}, infra runner line x{raw.count(_ANCHOR_INFRA_RUN)}")
+else:
+    ok("(12) mutation anchors are unique in the workflow")
+    # row 1: a pin restored at each of four scopes, one scope per copy -> (12b) RED, (12a) untouched
+    jobs_row("-m1a", "JOBS: 1 restored in the infra step env", raw.replace(_ANCHOR_INFRA_ENV, _ANCHOR_INFRA_ENV + "          JOBS: 1\n", 1), True, False)
+    jobs_row("-m1b", "JOBS: 1 added at job-level env:", raw.replace("    runs-on: ubuntu-latest\n", "    runs-on: ubuntu-latest\n    env:\n      JOBS: 1\n", 1), True, False)
+    jobs_row("-m1c", "export JOBS=1 added to the infra run: script", raw.replace(_ANCHOR_INFRA_RUN, "          export JOBS=1\n" + _ANCHOR_INFRA_RUN, 1), True, False)
+    jobs_row("-m1d", "JOBS: 1 added at workflow-level env:", raw.replace('env:\n  GITLEAKS_VERSION:', 'env:\n  JOBS: 1\n  GITLEAKS_VERSION:', 1), True, False)
+    # row 2: location axis -- the tests pin deleted and a job-level pin added, so the token COUNT stays 1
+    _m2 = _mutate_once(raw, r'^          JOBS:\s*1\s*\n', '')
+    jobs_row("-m2", "tests pin deleted and a job-level pin added (token count unchanged)", _m2.replace("    runs-on: ubuntu-latest\n", "    runs-on: ubuntu-latest\n    env:\n      JOBS: 1\n", 1), False, False)
+    # row 3: value axis
+    jobs_row("-m3a", "tests pin value changed to 2", _mutate_once(raw, r'^          JOBS:\s*1\s*$', '          JOBS: 2'), False, True)
+    jobs_row("-m3b", 'tests pin written as the quoted string "1" (still the same value)', _mutate_once(raw, r'^          JOBS:\s*1\s*$', '          JOBS: "1"'), True, True)
+    # row 4: extractor failure modes must RED (12b), never read as a vacuous pass
+    jobs_row("-m4a", "infra step id renamed so only the tests step is extracted", raw.replace("        id: infra\n", "        id: infrax\n", 1), True, False)
+    jobs_row("-m4b", "infra step has no env: block", _mutate_once(raw, r'(        id: infra\n(?:.*\n)*?)        env:\n(?:          .*\n)+(        run: )', r'\1\2'), True, False)
+    # row 5: the documented fail-closed case
+    jobs_row("-m5", "trailing `# JOBS: 2` comment on a code line in the infra env", raw.replace(_ANCHOR_INFRA_ENV, "          TEST_GROUP: infra # JOBS: 2\n", 1), True, False)
+    # P1: must-PASS non-canonical -- whole-line comments naming JOBS, and the infra env keys reordered
+    jobs_row("-p1", "whole-line comments mention JOBS and the infra env reorders TEST_GROUP (must PASS)",
+             raw.replace(_ANCHOR_INFRA_ENV, "          # JOBS: 9 is only a comment here\n          NOOP: x\n" + _ANCHOR_INFRA_ENV, 1), True, True)
 
 # ---- (11) the machine-readable verdict annotation --------------------------
 # GitHub exposes no REST field for job summaries; annotations ARE retrievable via
@@ -1785,7 +1881,9 @@ fi
 # Raised from 63 to 135 in #8112 (the classifier, leak, elapsed-annotation and Sentry-parity rows;
 # every behavioural row runs in BOTH shell arms, so count rows x 2). Re-read the current total
 # from the `anti-vacuity: N assertions ran` line rather than carrying this literal forward.
-MIN_ASSERTIONS=135
+# Raised from 135 to 159 for Item I (#7432): check (12) became (12a)/(12b) plus 11 in-memory mutation copies
+# (a "landed" row and a verdict row each) and one anchor-uniqueness row, a net +24 over the 147 measured before.
+MIN_ASSERTIONS=159
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
