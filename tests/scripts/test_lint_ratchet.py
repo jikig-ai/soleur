@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for scripts/lint-ratchet.py (PR3a of #10331).
+"""Tests for plugins/soleur/scripts/lint-ratchet.py (PR3a and PR3b of #10331).
 
 The script's filename is hyphenated, so it is loaded with importlib. The tool JSON under
 tests/scripts/fixtures/lint-ratchet/ is the REAL output of the pinned ruff and eslint on the
@@ -37,7 +37,8 @@ except ModuleNotFoundError:  # Python < 3.11: the ruff.toml pin class below is s
 from tests.scripts._git_fixture_env import git_fixture_env
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = REPO_ROOT / "scripts" / "lint-ratchet.py"
+SCRIPT = REPO_ROOT / "plugins" / "soleur" / "scripts" / "lint-ratchet.py"
+REQUIREMENTS = REPO_ROOT / "plugins" / "soleur" / "scripts" / "ruff-requirements.txt"
 FIXTURES = REPO_ROOT / "tests" / "scripts" / "fixtures" / "lint-ratchet"
 MIN_CASES = 60
 
@@ -48,7 +49,7 @@ EXPECTED_RUFF_ROWS = {("F401", 1), ("SIM115", 5), ("S110", 8), ("F841", 10)}
 # sha256 of apps/web-platform/eslint.test-dirs.config.mjs. Weakening a rule or an ignore pattern
 # there is a legal shrink of the baseline, so the file is pinned: changing it is a two-file edit.
 # Re-pin with: sha256sum apps/web-platform/eslint.test-dirs.config.mjs
-ESLINT_CONFIG_SHA256 = "f36b6eeb53eb23ce4ee9fbc7f6fdb9df5d3500a0a68419d34e4d44cac5023c29"
+ESLINT_CONFIG_SHA256 = "b8b6f9db65badaa7e3900b97af6ef01055cfeee74275bf3b27e8a96af0b89b64"
 
 
 def load_module():
@@ -1137,7 +1138,7 @@ class TestConfigPins(unittest.TestCase):
         )
 
     def test_script_rel_names_this_very_script(self):
-        self.assertEqual(lr.SCRIPT_REL, "scripts/lint-ratchet.py")
+        self.assertEqual(lr.SCRIPT_REL, "plugins/soleur/scripts/lint-ratchet.py")
         self.assertTrue((REPO_ROOT / lr.SCRIPT_REL).samefile(SCRIPT))
         self.assertEqual(lr.build_config("ruff", {})["script"], lr.SCRIPT_REL)
 
@@ -1176,7 +1177,7 @@ class TestRegistration(unittest.TestCase):
         self.assertRegex(text, r'(?m)^\s*run_suite "tests/scripts/lint-ratchet" python3 -m unittest '
                                r"tests\.scripts\.test_lint_ratchet$")
         self.assertRegex(text, r'(?m)^\s*run_suite "scripts/lint-ratchet-ruff-live" python3 '
-                               r"scripts/lint-ratchet\.py ruff --check$")
+                               r"plugins/soleur/scripts/lint-ratchet\.py ruff --check$")
 
     def test_both_labels_are_always_on(self):
         text = (REPO_ROOT / "scripts" / "lib" / "test-affected-paths.sh").read_text()
@@ -1187,7 +1188,7 @@ class TestRegistration(unittest.TestCase):
         text = (REPO_ROOT / "lefthook.yml").read_text()
         for key, scope in (("ruff-ratchet", "ruff"), ("eslint-test-dirs-ratchet", "eslint-test-dirs")):
             block = self.block(text, key)
-            self.assertRegex(block, r"(?m)^      run: python3 scripts/lint-ratchet\.py %s --check$" % re.escape(scope))
+            self.assertRegex(block, r"(?m)^      run: python3 plugins/soleur/scripts/lint-ratchet\.py %s --check$" % re.escape(scope))
             for forbidden in ("skip:", "exclude:", "|| true", "only:"):
                 self.assertNotIn(forbidden, block)
 
@@ -1197,7 +1198,8 @@ class TestRegistration(unittest.TestCase):
         expected = []
         for pattern in lr.SCOPES["ruff"]["scope"]:
             expected += [pattern, "**/" + pattern]
-        expected += ["ruff.toml", "scripts/ruff-requirements.txt", lr.SCOPES["ruff"]["baseline"]]
+        expected += ["ruff.toml", "plugins/soleur/scripts/ruff-requirements.txt", lr.SCRIPT_REL,
+                     lr.SCOPES["ruff"]["baseline"]]
         self.assertEqual(sorted(globs), sorted(expected))
 
     def test_lefthook_eslint_globs_cover_every_directory_extension_and_input(self):
@@ -1217,7 +1219,7 @@ class TestRegistration(unittest.TestCase):
         text = (REPO_ROOT / "apps" / "web-platform" / "test" / "repo-wide-suites.ts").read_text()
         self.assertRegex(text, r'(?m)^  "test/eslint-test-dirs-ratchet\.test\.ts",$')
         arm = (REPO_ROOT / "apps" / "web-platform" / "test" / "eslint-test-dirs-ratchet.test.ts").read_text()
-        self.assertIn('"scripts/lint-ratchet.py", "eslint-test-dirs", "--check"', arm)
+        self.assertIn('"plugins/soleur/scripts/lint-ratchet.py", "eslint-test-dirs", "--check"', arm)
         self.assertIn("expect(result.status", arm)
 
 
@@ -1244,12 +1246,12 @@ class TestEslintConfigBehaviour(unittest.TestCase):
 
 class TestPipArgvAndRequirements(ScrubbedEnv):
     def test_requirements_pin_and_wheel_hash_count(self):
-        path = REPO_ROOT / "scripts" / "ruff-requirements.txt"
+        path = REQUIREMENTS
         self.assertEqual(lr.requirements_pin(path), "0.16.10")
         self.assertEqual(len(re.findall(r"--hash=sha256:[0-9a-f]{64}", path.read_text())), 17)
 
     def test_requirements_have_no_trailing_comment_after_a_continuation(self):
-        for line in (REPO_ROOT / "scripts" / "ruff-requirements.txt").read_text().splitlines():
+        for line in REQUIREMENTS.read_text().splitlines():
             if line.rstrip().endswith("\\"):
                 self.assertNotIn("#", line)
 
@@ -1320,7 +1322,7 @@ class RacePip(FakePip):
         result = super().__call__(argv, **kwargs)
         if "install" in argv and result.returncode == 0:
             target = Path(argv[argv.index("--target") + 1])
-            digest = hashlib.sha256((REPO_ROOT / "scripts" / "ruff-requirements.txt").read_bytes()).hexdigest()[:12]
+            digest = hashlib.sha256(REQUIREMENTS.read_bytes()).hexdigest()[:12]
             final = target.parent / "ruff-{}-{}-{}".format(digest, sys.platform, platform.machine() or "unknown")
             shutil.copytree(str(target), str(final))
         return result
@@ -1331,7 +1333,7 @@ class TestEnsureRuff(ScrubbedEnv):
         super().setUp()
         self.cache = Path(self.fake_home.name) / "cache"
         self.fallback = Path(self.fake_home.name) / "fallback"
-        self.req = REPO_ROOT / "scripts" / "ruff-requirements.txt"
+        self.req = REQUIREMENTS
 
     def ensure(self, pip, env=None):
         return lr.ensure_ruff(self.req, env=env or {}, run=pip, cache_root=self.cache, fallback_root=self.fallback)

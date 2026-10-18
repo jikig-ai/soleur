@@ -2,8 +2,8 @@
 # Shrink-only: this file always equals the live census, and per (path, rule) it may never
 # hold more entries than the merge base. Entry: path|rule|anchor|n, where anchor is a 12-hex
 # fingerprint of the normalised source line (the line itself is never stored).
-# List the live findings:  python3 scripts/lint-ratchet.py eslint-test-dirs --list
-# After fixing findings:   python3 scripts/lint-ratchet.py eslint-test-dirs --update  (it refuses to add)
+# List the live findings:  python3 plugins/soleur/scripts/lint-ratchet.py eslint-test-dirs --list
+# After fixing findings:   python3 plugins/soleur/scripts/lint-ratchet.py eslint-test-dirs --update  (it refuses to add)
 # After a merge conflict, take the base branch's copy of this file and re-run --update.
 # Drawdown tracking: #10433
 plugins/soleur/test/cloud-init-user-data-size.test.ts|@typescript-eslint/no-unused-vars|00113e74358f|1

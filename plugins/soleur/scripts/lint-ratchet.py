@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Shrink-only lint ratchet: ruff over tracked Python, eslint no-unused-vars over test dirs.
 
-    python3 scripts/lint-ratchet.py <scope> [--check | --update | --list] [--base <ref>]
+    python3 plugins/soleur/scripts/lint-ratchet.py <scope> [--check | --update | --list] [--base <ref>]
 
 Scopes: ``ruff`` and ``eslint-test-dirs`` (see SCOPES). Design record: ADR-290; tracker #10331.
 
@@ -52,9 +52,11 @@ import tempfile
 from pathlib import Path
 from typing import NamedTuple
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-SCRIPT_REL = "scripts/lint-ratchet.py"
-RUFF_REQUIREMENTS = REPO_ROOT / "scripts" / "ruff-requirements.txt"
+# The Soleur scopes (ruff, eslint-test-dirs) always run against the repository this script is vendored
+# in: REPO_ROOT is derived from the script location (plugins/soleur/scripts/), never from the cwd.
+REPO_ROOT = Path(__file__).resolve().parents[3]
+SCRIPT_REL = "plugins/soleur/scripts/lint-ratchet.py"
+RUFF_REQUIREMENTS = Path(__file__).resolve().parent / "ruff-requirements.txt"
 ESLINT_CONFIG = "apps/web-platform/eslint.test-dirs.config.mjs"
 ESLINT_BIN = "apps/web-platform/node_modules/.bin/eslint"
 ESLINT_EXTS = (".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".mts", ".cts")
@@ -721,6 +723,10 @@ def ensure_ruff(requirements, env, run=subprocess.run, cache_root=None, fallback
 
 
 def build_config(name: str, env) -> dict:
+    own = REPO_ROOT / SCRIPT_REL
+    if not own.exists() or not own.samefile(Path(__file__)):
+        raise InfraError("the {} scope runs only from the Soleur repository checkout ({} is not it); user "
+                         "repositories use the user-ruff or auto scope".format(name, REPO_ROOT))
     runner = (lambda root: run_ruff(root, env)) if name == "ruff" else (lambda root: run_eslint(root, env))
     return dict(SCOPES[name], name=name, run=runner, drawdown=DRAWDOWN, script=SCRIPT_REL)
 
