@@ -10,6 +10,33 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-18
+**Sections enhanced:** 6 (E1 to E3 wording, E2 scope, Acceptance Criteria 5, 8, 9, Test Scenarios)
+**Review passes used:** CLO agent (twice, wording), CTO agent (placement, lint, test coupling), learnings-researcher,
+user-impact-reviewer (single-user threshold), a scratch-copy dry run of E1 to E4.
+
+### Key Improvements
+
+1. E2 no longer says the C1 hold is superseded: it is scoped "as to run 39136900735 only", states that the note does not
+   otherwise change the hold and does not read C1's parenthetical for a later `wipe`, and authorizes nothing.
+2. E3 states what `repos=0` measures, read from `apps/web-platform/infra/git-data-wipe-assert.sh` (count of entries directly
+   under a top-level `repositories` directory in the transient snapshot; 0 also when that directory is absent), so it cannot
+   be read as "no user repository remains".
+3. E1's dispatch-absence claim carries a mandatory as-of date; AC 5 is widened to synonyms and to every added file, the PR
+   body and commit messages; AC 8 (owner has posted or approved the line in the runbook) is blocking for marking the PR ready.
+
+### New Considerations Discovered
+
+- The exit-34 line is printed after `repos` is counted; what the exit skips is the later `repositories_not_empty` refusal.
+- Deepen-plan halts 4.6 to 4.12 checked: User-Brand Impact present with threshold; no Observability (pure docs); no PAT-shaped
+  token; no UI surface; no store or connection (Encryption Posture n/a); no guard (Guard Contract n/a); one unfenced
+  `## Scope Check`. No AGENTS rule IDs are cited; PR #10480 verified MERGED, #10506 OPEN, #10138/#6897/#9066 OPEN.
+- Dry-run hits of the AC 5 grep on the added lines are all negations or an exclusion description (`Nothing in this note
+  authorizes ...`, `an empty lost+found excluded`, `not a statement that no user repository remains`); the negative control
+  (an inserted `benign`/`empty`) hits as it should.
+
 ## Overview
 
 Record the measured result of the second read-only `wipe_check` of the git-data cutover workflow in
@@ -112,10 +139,10 @@ lines; line numbers are approximate and drift).
 In the paragraph starting `**Status (2026-10-14).**`, replace only the sentence starting `Update (2026-10-18, measured):`
 with:
 
-> Update (2026-10-18, measured): two `wipe_check` runs have since been dispatched (read-only) and both refused with `wipe_boot_layout_signal_offlist`: run 39081408368, and [run 39136900735](https://github.com/jikig-ai/soleur/actions/runs/39136900735), the first to print the `has_hooks_d`, `lf_entries` and `offlist_n` fields (see 'Reading the exit-34 line'). No `wipe`, `wipe_finish` or `snapshot_clear` has been dispatched. CLO addendum 2 ([#6897 comment](https://github.com/jikig-ai/soleur/issues/6897#issuecomment-6251181879)) lifted C1 for one further `wipe_check` only; run 39136900735 is that run and spent the lift. It refused at exit 34 before `lock_residue` and `store_root_repos` printed, so neither run measured either field and the closed posting list is unchanged.
+> Update (2026-10-18, measured): two `wipe_check` runs have since been dispatched (read-only) and both refused with `wipe_boot_layout_signal_offlist`: run 39081408368, and [run 39136900735](https://github.com/jikig-ai/soleur/actions/runs/39136900735), the first to print the `has_hooks_d`, `lf_entries` and `offlist_n` fields (see 'Reading the exit-34 line'). As of the `gh run list` read on 2026-10-18, no `wipe`, `wipe_finish` or `snapshot_clear` had been dispatched; re-read the run list before relying on this. CLO addendum 2 ([#6897 comment](https://github.com/jikig-ai/soleur/issues/6897#issuecomment-6251181879)) lifted C1 for one further `wipe_check` only; run 39136900735 is that run and spent the lift. It refused at exit 34 before `lock_residue` and `store_root_repos` printed, so neither run measured either field and the closed posting list is unchanged.
 
-Wording follows the CLO review (R2). The dispatch statement is anchored by re-reading the run list at work time
-(AC 4); if it was not re-read, the sentence drops the anchor rather than claim it.
+Wording follows the CLO review (R2) and the user-impact review (finding 4: the as-of date is mandatory, never
+optional; the run list is re-read at work time, AC 4, and the date in the sentence is the date of that read).
 
 ### E2 Marker beneath the `wipe_check` bullet (C1 hold)
 
@@ -124,16 +151,20 @@ blockquote, two-space indent so it stays inside the list item. That list is alre
 blank line before the quote changes nothing (CTO ruling 1, `decision-challenges.md`; measured with the repo's markdownlint,
 0 errors):
 
-> **Superseded 2026-10-18, as to run 39136900735 only ([run](https://github.com/jikig-ai/soleur/actions/runs/39136900735), CLO addendum 2 on #6897):** the hold on the first run that prints residue counts (`Hold the first run that prints the residue counts ...`) was lifted for one `wipe_check` only; that run is run 39136900735 and the lift is spent. It refused at exit 34 before any `lock_residue` or `store_root_repos` value printed. Any further `wipe_check` needs a new CLO addendum (addendum 2, item 7); the hold is otherwise left as written. The DPD §10.3(b) re-ruling stays due 2026-10-24. `wipe`, `wipe_finish` and `snapshot_clear` stay held.
+> **Superseded 2026-10-18, as to run 39136900735 only ([run](https://github.com/jikig-ai/soleur/actions/runs/39136900735), CLO addendum 2 on #6897):** addendum 2 lifted C1 for one further `wipe_check`, and that run is run 39136900735; the lift is spent. This note does not otherwise change the hold above (`Hold the first run that prints the residue counts ...`), and does not read C1's parenthetical for a later `wipe`. Both prior `wipe_check` runs refused at exit 34 and printed neither `lock_residue` nor `store_root_repos`. `repos` did print (`repos=0`) in both exit-34 lines; whether that falls under C1 is the CLO's to say. Any further `wipe_check` needs a new CLO addendum (addendum 2, item 7) and the owner to name the exact command ('Who names a dispatch'). Nothing in this note authorizes dispatching any mode; `wipe`, `wipe_finish` and `snapshot_clear` stay held (addendum 2). The DPD §10.3(b) re-ruling stays due 2026-10-24.
 
-CLO review R1: "Superseded" is kept because the brief requires it, but only with the "as to run 39136900735 only" scope;
-the bare "superseded as to that hold" form is rejected because the hold is not superseded, it was lifted once.
+CLO review R1 and follow-up (a)-(c): "Superseded" is kept because the brief requires it, but only with the "as to run
+39136900735 only" scope and the sentence "This note does not otherwise change the hold above". Rejected: the bare
+"superseded as to that hold" form (the hold is not superseded, it was lifted once) and a lead of "Hold still binds every
+later run" (that would interpret C1, which the CLO leaves open). The user-impact review's finding that a later `wipe` might
+read as having a "prior `wipe_check`" is met by stating that the note does not read the parenthetical, not by
+interpreting it.
 
 ### E3 Measured finding replaces the 'Not proven' hypothesis
 
 In 'Reading the exit-34 line', replace the bullet starting `- Not proven: that `hooks` is the off-list entry` with:
 
-> - Measured 2026-10-18 ([run 39136900735](https://github.com/jikig-ai/soleur/actions/runs/39136900735), read-only, verdict `wipe_boot_layout_signal_offlist`): `wipe-assert: rc=34 reason=offlist top_d=3 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=1`. Read through the table above, row `has_hooks_d=1 offlist_n=1 lf_entries=0`: the only off-list entry is a directory named `hooks`; its owner and contents are unread. This is not an emptiness reading, the allowlist is unchanged and the refusal stands. `lock_residue` and `store_root_repos` are not in the line; this run did not print or measure them. Not proven: what `hooks` holds.
+> - Measured 2026-10-18 ([run 39136900735](https://github.com/jikig-ai/soleur/actions/runs/39136900735), read-only, verdict `wipe_boot_layout_signal_offlist`): `wipe-assert: rc=34 reason=offlist top_d=3 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=1`. Read through the table in this section, row `has_hooks_d=1 offlist_n=1 lf_entries=0`: the only off-list entry is a directory named `hooks`; its owner and contents are unread. This is not an emptiness reading, the allowlist is unchanged and the refusal stands. `repos=0` is a count at one moment, in the transient host-local snapshot, of the entries directly under a top-level `repositories` directory (lock-named files and an empty `lost+found` excluded); it also reads 0 when no such directory is present. It is not a statement that no user repository remains and not an emptiness reading. `lock_residue` and `store_root_repos` are not in the line; this run did not print or measure them. Recorded here from the public run log; posting to #6897 stays the owner's act. Not proven: what `hooks` holds.
 
 The earlier bullets (`Measured 2026-10-18 (run 39081408368 ...)` and `Inherited ...`) are not edited.
 
@@ -143,7 +174,7 @@ Immediately after the bullet starting `- Nothing here dispatches a run or sets a
 quote with a two-space indent and NO blank line before it, so this tight list stays tight (CTO ruling 1, variant c; an
 unindented quote would make the next list start trip MD032):
 
-> **Superseded 2026-10-18 (run 39136900735), as to that sentence for the run it describes only:** the exact command was set out in CLO addendum 2, item 1 ([comment](https://github.com/jikig-ai/soleur/issues/6897#issuecomment-6251181879)), and [run 39136900735](https://github.com/jikig-ai/soleur/actions/runs/39136900735) is that further `wipe_check`; the lift in addendum 2 is spent. The sentence still binds any run after it.
+> **Superseded 2026-10-18, as to that sentence for run 39136900735 only:** the exact command was set out in CLO addendum 2, item 1 ([comment](https://github.com/jikig-ai/soleur/issues/6897#issuecomment-6251181879)), and [run 39136900735](https://github.com/jikig-ai/soleur/actions/runs/39136900735) is that further `wipe_check`; the lift in addendum 2 is spent. The sentence still binds any run after it.
 
 CLO review R3: the draft said "the owner named the command"; addendum 2 does not say that, so the claim is dropped.
 
@@ -168,16 +199,20 @@ CLO review R3: the draft said "the owner named the command"; addendum 2 does not
    at least 1, and the same string was read from `gh run view 39136900735 --log`).
 4. Dispatch claims were re-read: `gh run list --workflow git-data-cutover.yml` shows no `wipe`, `wipe_finish` or
    `snapshot_clear` dispatch; the date of that read is the one the Status sentence carries (or the anchor is omitted).
-5. Added lines contain none of `empty`, `clean`, `erased`, `purged` except inside quoted prior text, and no listing name
-   other than `hooks` (`git diff origin/main -- <runbook> | grep '^+' | grep -n -i -E '\b(empty|clean|erased|purged)\b'`
-   reviewed line by line, each hit explained as a negation or a quoted existing phrase).
+5. Added lines contain none of `empty`, `clean`, `safe`, `benign`, `harmless`, `wiped`, `cleared`, `erased`, `purged`,
+   `ready` except as a negation or inside quoted prior text, and no listing name other than `hooks`
+   (`git diff origin/main | grep '^+' | grep -n -i -E '\b(empty|clean|safe|benign|harmless|wiped|cleared|erased|purged|ready|nothing|no (user|personal))\b'`
+   over ALL added files, not only the runbook, plus the PR description and commit messages; each hit explained). Only the
+   closed-list fields, the posted line and the word `hooks` may appear as measured values: no `lock_residue=` or
+   `store_root_repos=` value anywhere.
 6. Presence check: each new claim maps to a named measurement (log line, addendum item, or run-list read); the mapping
    is in the PR description.
 7. `lint-infra-no-human-steps.py` and markdownlint pass on the runbook; `git-data-wipe-access.test.sh` and
    `git-data-cutover-access.test.sh` still pass (or are unchanged by a docs-only diff, shown by running them).
 8. The PR description states that the quoted line is copied from the public run log and carries only the fixed closed
    fields (counts and one boolean), with no listing name; it flags to the owner, rather than asserting, whether the owner has
-   posted the line on #6897 (the runbook's rule: the owner posts, an agent does not).
+   posted the line on #6897 (the runbook's rule: the owner posts, an agent does not). This AC is blocking: PR #10506 stays
+   draft, and is not marked ready, until the owner (or the CLO) has said the runbook may carry the line.
 9. `node_modules/.bin/markdownlint` on the runbook reports 0 errors, and no new backticked `wipe_*` verdict word and no
    change to the 'Verdict map' section appear in the diff (`git diff origin/main -- <runbook> | grep -c 'Verdict map'` is 0).
 10. PR #10506 body carries `Ref #10138` and `Ref #6897`, no `Closes`/`Fixes`/`Resolves`.
@@ -206,7 +241,10 @@ in `decision-challenges.md`.
 ## Test Scenarios
 
 - Re-run the two access test scripts and the repo markdown/infra lints against the edited runbook.
-- Negative control for AC 5: run the same grep on a scratch copy with a deliberately inserted `empty` and confirm it hits.
+- Negative control for AC 5: run the same grep on a scratch copy with a deliberately inserted `empty` and `benign` and confirm both hit.
+- Dry run (done at deepen time on a scratch copy, not the repo): E1 to E4 applied, markdownlint 0 errors (baseline 0),
+  `lint-infra-no-human-steps.py` OK, 2 lines deleted, no 'Verdict map' hunk, posted line byte-identical, no hits on
+  empty/clean/erased/purged in added lines.
 
 ## GDPR / Compliance
 

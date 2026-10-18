@@ -6,7 +6,7 @@ Runbook: knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-52
 ## Phase 1: Setup
 
 - 1.1 Re-read run 39136900735 (conclusion failure, step Host-side wipe assertion (W7)) and copy the wipe-assert line byte for byte from `gh run view 39136900735 --log`.
-- 1.2 Re-read `gh run list --workflow git-data-cutover.yml`: no wipe, wipe_finish or snapshot_clear dispatch; note the read date.
+- 1.2 Re-read `gh run list --workflow git-data-cutover.yml`: no wipe, wipe_finish or snapshot_clear dispatch; the read date goes into the Status sentence (mandatory).
 
 ## Phase 2: Core Implementation (one file, Edit tool, anchors quoted from the live file)
 
@@ -20,5 +20,6 @@ Runbook: knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-52
 - 3.1 `node_modules/.bin/markdownlint` on the runbook: 0 errors.
 - 3.2 `python3 scripts/lint-infra-no-human-steps.py` on the runbook: rc 0.
 - 3.3 Run git-data-wipe-access.test.sh and git-data-cutover-access.test.sh; confirm unchanged.
-- 3.4 Diff checks: only the two listed lines deleted; posted line byte-identical; no empty/clean/erased/purged in added lines (with a negative control); no listing name besides hooks; no `Verdict map` hunk.
+- 3.4 Diff checks: only the two listed lines deleted; posted line byte-identical; widened word grep (plan AC 5) over all added files, PR body and commit messages, with a negative control; no listing name besides hooks; no `lock_residue=`/`store_root_repos=` value anywhere; no `Verdict map` hunk.
 - 3.5 Write the one learning file; PR description maps each new claim to its measurement, uses `Ref #10138` and `Ref #6897`, flags owner-posting status, and states the CTO/CLO rulings in flight are not recorded.
+- 3.6 PR #10506 stays draft until the owner or the CLO says the runbook may carry the posted line (plan AC 8).
