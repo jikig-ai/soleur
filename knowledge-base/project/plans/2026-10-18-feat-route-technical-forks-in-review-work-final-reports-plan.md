@@ -342,16 +342,16 @@ any `description:` frontmatter, `review/workflows/review.workflow.js`, `.claude/
 
 ### Pre-merge (PR)
 
-- [ ] AC1: `grep -c '^## 8\. Final-report check and seat dissent from a ruling$' plugins/soleur/skills/brainstorm-techniques/references/technical-ruling-delegation.md` prints `1`; `grep -c '^| Item | Class | Ruling |' <same file>` still prints `1`; `grep -c 'Authorized by delegation' <same file>` is unchanged from `origin/main`.
-- [ ] AC2: `review/SKILL.md` contains exactly one `**Final-report decision check`, exactly one `**Seat dissent from a ruling.**` (located before the `#### Parallel Agents to review the PR:` heading), and item 4 contains `a GATE before Step 3`, `implement exactly what it returns` and `#7347`.
-- [ ] AC3: `work/SKILL.md` contains exactly one `**Final-report decision check`; the compressed hard gate still contains `Technical rulings route to the CTO agent`, `NEVER the operator`, `HARD GATE` and `"do NOT use AskUserQuestion"`; step 3.5 no longer carries a second copy of the closing-message rule.
-- [ ] AC4: `[ "$(wc -c < plugins/soleur/skills/review/SKILL.md)" -le 475913 ]` and `[ "$(wc -c < plugins/soleur/skills/work/SKILL.md)" -le 359179 ]` (net <= 0; hard ceilings 475921 / 359189), and `python3 scripts/lint-skill-body-budget.py --base "$(git merge-base origin/main HEAD)"` exits 0 (run the lint itself, not a restated path list).
-- [ ] AC5: `bun test plugins/soleur/test/components.test.ts`, `bash plugins/soleur/test/cto-interface-selector.test.sh`, `bash plugins/soleur/test/technical-ruling-gate.test.sh` and `bun test plugins/soleur/test/workflow-fidelity.test.ts` all pass.
-- [ ] AC6: `git diff origin/main...HEAD -- 'plugins/soleur/skills/*/SKILL.md' | grep -cE '^[+-]description:'` prints `0`.
-- [ ] AC7: `node plugins/soleur/skills/eval-harness/scripts/eval-gate.cjs --check plugins/soleur/skills/review/SKILL.md` and the same for `work` print `"gated":false`.
-- [ ] AC8: Guard 1 mutation rows 1-3 each turn the new describe block RED on a scratch copy, and the reflow must-PASS row stays GREEN (output recorded in the PR body).
-- [ ] AC9: `bash plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh --branch` exits 0 for this branch.
-- [ ] AC10: `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-10-18-feat-route-technical-forks-in-review-work-final-reports-plan.md` exits 0, and `npx markdownlint-cli2` is clean on the plan, `tasks.md` and the edited reference.
+- [x] AC1: `grep -c '^## 8\. Final-report check and seat dissent from a ruling$' plugins/soleur/skills/brainstorm-techniques/references/technical-ruling-delegation.md` prints `1`; `grep -c '^| Item | Class | Ruling |' <same file>` still prints `1`; `grep -c 'Authorized by delegation' <same file>` is unchanged from `origin/main`.
+- [x] AC2: `review/SKILL.md` contains exactly one `**Final-report decision check`, exactly one `**Seat dissent from a ruling.**` (located before the `#### Parallel Agents to review the PR:` heading), and item 4 contains `a GATE before Step 3`, `implement exactly what it returns` and `#7347`.
+- [x] AC3: `work/SKILL.md` contains exactly one `**Final-report decision check`; the compressed hard gate still contains `Technical rulings route to the CTO agent`, `NEVER the operator`, `HARD GATE` and `"do NOT use AskUserQuestion"`; step 3.5 no longer carries a second copy of the closing-message rule.
+- [x] AC4: `[ "$(wc -c < plugins/soleur/skills/review/SKILL.md)" -le 475913 ]` and `[ "$(wc -c < plugins/soleur/skills/work/SKILL.md)" -le 359179 ]` (net <= 0; hard ceilings 475921 / 359189), and `python3 scripts/lint-skill-body-budget.py --base "$(git merge-base origin/main HEAD)"` exits 0 (run the lint itself, not a restated path list).
+- [x] AC5: `bun test plugins/soleur/test/components.test.ts`, `bash plugins/soleur/test/cto-interface-selector.test.sh`, `bash plugins/soleur/test/technical-ruling-gate.test.sh` and `bun test plugins/soleur/test/workflow-fidelity.test.ts` all pass.
+- [x] AC6: `git diff origin/main...HEAD -- 'plugins/soleur/skills/*/SKILL.md' | grep -cE '^[+-]description:'` prints `0`.
+- [x] AC7: `node plugins/soleur/skills/eval-harness/scripts/eval-gate.cjs --check plugins/soleur/skills/review/SKILL.md` and the same for `work` print `"gated":false`.
+- [x] AC8: Guard 1 mutation rows 1-3 each turn the new describe block RED on a scratch copy, and the reflow must-PASS row stays GREEN (output recorded in the PR body).
+- [x] AC9: `bash plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh --branch` exits 0 for this branch.
+- [x] AC10: `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-10-18-feat-route-technical-forks-in-review-work-final-reports-plan.md` exits 0, and `npx markdownlint-cli2` is clean on the plan, `tasks.md` and the edited reference.
 
 ### Post-merge
 
