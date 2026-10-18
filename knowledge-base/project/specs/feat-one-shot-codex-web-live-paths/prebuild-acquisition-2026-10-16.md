@@ -138,6 +138,17 @@ Actual file-only action preparation, review of its exact bindings, exact-head
 refresh and fresh exact-command approval remain pending. This is not the full
 PR panel or runtime clearance.
 
+## Action freshness after main sync
+
+The CTO independently reviewed the file-only manifest prepared at
+`741ae4081ddc85f1d5e13c5ce3c5fc0d635daf9d`; its canonical digest was
+`b0b6baec527c6717083fa4e61f6b36669f6bb72f61b5522e3177e9849657d207`.
+No execution approval was requested or consumed, no marker exists and no
+receipt was produced. This historical manifest must not be executed after
+the October 18 source sync. Source-bound preparation and exact manifest
+review must be refreshed before a new approval request. Acquisition components
+are unchanged; this is an input/source freshness gate, not runtime clearance.
+
 ## Session corrections
 
 The initial evidence search used the retired rollout directory rather than

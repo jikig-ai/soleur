@@ -1923,3 +1923,26 @@
   Filesystem-only reads identified candidate socket/tool paths and hashed
   selected local executable bytes; these do not attest daemon identity or
   admission. All prior approval, runtime, legal and ship holds persist.
+
+### Continued main sync and unused action refresh — 2026-10-18
+
+- Resumed pushed `741ae4081ddc85f1d5e13c5ce3c5fc0d635daf9d`; its effective
+  checks remain 83 pass, 14 skip and intentional DRAFT_LIGHT `test` red. The
+  worktree was clean, draft and disarmed. Main advanced to
+  `62183a40eb1e67bfef09d61cff95042dc33c2e43`, and canonical sync merged/pushed
+  `7bd60c3be8d69f896a0ea68527ae69ec024dfaca` without conflicts. Its 31-file
+  incoming delta concerns affected-CI evidence tooling and internal records.
+- Application server, production Dockerfile, complete forward migrations,
+  acquisition/qualification components and registered offline wrapper are
+  byte-identical to `741ae408`. No tests or operational action reran; the
+  new-head CI watch is armed. Prior results remain source-attributable and
+  do not establish a full-suite or runtime verdict for the merged head.
+- The prior file-only action manifest was independently reviewed by the CTO
+  at `741ae408`, but never approved for execution: both its consumption marker
+  and receipt remain absent. It is historical after the source change. Refresh
+  source pairing/export, action bindings, focused manifest review and PR
+  description before requesting fresh approval for a new exact action.
+- Ref #10082, Ref #9791 and Ref #9325 were verified OPEN. SAST remains VOID;
+  latest-source C.9 remains unverified. Hosted auth remains BLOCKED, alternate
+  route PENDING, default-off/customer-blocked, build approval consumed,
+  withdrawn command forbidden, all recovery and ship gates held.
