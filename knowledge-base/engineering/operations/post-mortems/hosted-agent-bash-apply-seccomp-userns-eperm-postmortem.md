@@ -246,14 +246,14 @@ listed below as items of that tracker.
 | Issue | Action | Status |
 |---|---|---|
 | #10445 | Fix: `allowAllUnixSockets: true`, behaviour proof with a control arm, runtime two-session socket test, docker-suite wrapper arm | open |
-| #10455 (item 1) | Own AF_UNIX `socket()` deny folded into the single bwrap filter (option b); re-evaluate on an SDK bump that changes the helper, or a decision to enforce unix-socket blocking; becomes in-scope immediately if the two-session test fails | open |
-| #10455 (item 2) | Runtime synthetic of the wrapped Bash command with a dead-man arm (P2) | open |
-| #10455 (item 3) | Plain-language message when Bash fails (raw apply-seccomp text is the user-visible failure today) | open |
-| #10455 (item 4) | Verify the Slack wake path (ADR-260) across all Better Stack alerts; the new alerts are email-only until then | open |
-| #10455 (further items) | Classify other helper-step EPERMs; page on at least 2 distinct users or verify server-side (forged-row suppression); SOCKS proxy-auth test | open |
+| #10455 | (item 1) Own AF_UNIX `socket()` deny folded into the single bwrap filter (option b); re-evaluate on an SDK bump that changes the helper, or a decision to enforce unix-socket blocking; becomes in-scope immediately if the two-session test fails | open |
+| #10455 | (item 2) Runtime synthetic of the wrapped Bash command with a dead-man arm (P2) | open |
+| #10455 | (item 3) Plain-language message when Bash fails (raw apply-seccomp text is the user-visible failure today) | open |
+| #10455 | (item 4) Verify the Slack wake path (ADR-260) across all Better Stack alerts; the new alerts are email-only until then | open |
+| #10455 | (further items) Classify other helper-step EPERMs; page on at least 2 distinct users or verify server-side (forged-row suppression); SOCKS proxy-auth test | open |
 | #10454 | Standing red outer-wrap canary (`wrong_elevation_userns`, Sentry 152662657): fix the elevation or demote explicitly, with a decision deadline; related to #9797 | open |
 | #10453 | Deploy-time SDK Bash smoke in the canary container (non-blocking first); successor to #5941 for the wrapped-command class | open |
 | #5941 | Pre-existing owner of the nested-unshare probe inside the production canary container | open |
 | #10457 | Adjacent: `spawnEgressForwarder` mkdir EACCES on `/var/lib/soleur/egress-tokens` (entitled web-egress sessions) | open |
 | #10456 | PIR `status: ongoing` → `resolved` docs PR, notified by the notify-only `sandbox-readback-10445.sh` follow-through (ACTION REQUIRED); closed by hand after the flip; its directive gains `secrets=GH_TOKEN` | open |
-| (operator decision) | Affected-user outreach: a targeted note to users whose sessions used Bash since 2026-10-06, and a check for lost half-finished runs. An operator brand decision, not assumed; pending | pending |
+| #10477 | Affected-user outreach: a targeted note to users whose sessions used Bash since 2026-10-06, and a check for lost half-finished runs. An operator brand decision, not assumed; pending | pending |
