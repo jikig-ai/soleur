@@ -131,6 +131,8 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-workflow-install-sites-live"
   "scripts/lint-workflow-issue-write-scope-live"
   "scripts/lint-workflow-step-env-refs-live"
+  "scripts/lint-ratchet-ruff-live"
+  "tests/scripts/lint-ratchet"
   "scripts/review-reminder-liveness"
   "scripts/watch-live-verify-pass"
   # live-scanner batteries named for the gates they probe (#8384 landed these)

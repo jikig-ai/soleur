@@ -1,0 +1,11 @@
+import os
+
+
+def read_config(path):
+    handle = open(path)
+    try:
+        pass
+    except OSError:
+        pass
+    unused = 1
+    return handle

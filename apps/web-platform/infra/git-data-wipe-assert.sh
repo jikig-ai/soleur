@@ -40,8 +40,12 @@
 # repositories/ the lock-name exclusion applies to regular files only). Anything else is off the list.
 #
 # NO NAME LEAVES THE HOST. The output is one fixed-shape line of per-type COUNTS (no digest, no name,
-# no per-name hash, nothing from inside repositories/ but a count). Names are read into shell variables
-# for classification only: stdout is held back until the final line, stderr of every command is
+# no per-name hash, nothing from inside repositories/ but a count). The off-list refusal adds exactly one
+# bit, whether a top-level directory is named hooks (the name git-data-bootstrap.sh uses for its hooks
+# directory; the bit proves the name only, not who made the directory or what it holds), and two counts;
+# the compared name is one constant in this file, and no listed name is printed, hashed or stored.
+# Names are read into shell variables for classification only: stdout is held back until the final
+# line, stderr of every command is
 # discarded, and the only stderr this file writes is a fixed reason word and digits (gd_capture prints
 # a failed session's stderr, so nothing else may reach it).
 #
@@ -301,8 +305,9 @@ wa_main() {
 
   # ---- BEGIN wipe-listing unit ----
   # Inputs: DEV MM SYS BYID W0 (set by the identity stages). Outputs: J (dirty|clean), TOP_D TOP_F TOP_L
-  # TOP_O REPOS. The loopback suite extracts this unit (and the core above) by their sentinels and drives
-  # them on real loop devices.
+  # TOP_O REPOS, and for the off-list refusal HAS_HOOKS (0|1), LF_ENTRIES and OFFLIST_N (counts). The
+  # loopback suite extracts this unit (and the core above) by their sentinels and drives them on real
+  # loop devices.
   wl_has_nr() { awk_hit "$1" '/^Filesystem features:/ && / needs_recovery( |$)/ { f = 1 } END { exit !f }'; }
   wl_valid() {
     local st
@@ -315,7 +320,7 @@ wa_main() {
   # body and never written anywhere. A name that cannot be classified is "unparseable", not skipped.
   wl_classify() {
     local rec t n saw_end=0
-    TOP_D=0 TOP_F=0 TOP_L=0 TOP_O=0 HAS_REPOS=no HAS_LF=no OFFLIST=0 LOCKS_TOP=0
+    TOP_D=0 TOP_F=0 TOP_L=0 TOP_O=0 HAS_REPOS=no HAS_LF=no OFFLIST=0 LOCKS_TOP=0 HAS_HOOKS=0 OFFLIST_N=0 LF_ENTRIES=0
     while IFS= read -r -d '' rec; do
       t="${rec%%$'\t'*}"
       n="${rec#*$'\t'}"
@@ -325,12 +330,15 @@ wa_main() {
       [ -n "$n" ] || die 35 record_empty
       case "$n" in *[[:cntrl:]]*) die 35 record_control ;; esac
       case "$t" in d) TOP_D=$((TOP_D + 1)) ;; f) TOP_F=$((TOP_F + 1)) ;; l) TOP_L=$((TOP_L + 1)) ;; *) TOP_O=$((TOP_O + 1)) ;; esac
+      # One constant name, a directory only, an exact match: the bit is not an allowlist entry, so a
+      # directory named hooks still falls into the off-list arm below.
+      if [ "$n" = hooks ] && [ "$t" = d ]; then HAS_HOOKS=1; fi
       case "$n:$t" in
         repositories:d) HAS_REPOS=yes ;;
         lost+found:d) HAS_LF=yes ;;
         .*.init.lock:f) LOCKS_TOP=$((LOCKS_TOP + 1)) ;;
         .gc-cursor:f | .init.lock:f) : ;;
-        *) OFFLIST=1 ;;
+        *) OFFLIST=1; OFFLIST_N=$((OFFLIST_N + 1)) ;;
       esac
     done
     [ "$saw_end" = 1 ] || die 33 listing_failed
@@ -402,6 +410,7 @@ wa_main() {
     if [ "$HAS_LF" = yes ]; then
       ln="$(timeout 30 find "$WA_MNT/lost+found" -mindepth 1 -maxdepth 1 -printf x | wc -c)" || die 33 lostfound_count_failed
       [[ "$ln" =~ ^[0-9]+$ ]] || die 33 lostfound_count_unparseable
+      LF_ENTRIES="$ln"   # keep after the digit check above: only a validated count is ever printed
       [ "$ln" -eq 0 ] || OFFLIST=1
     fi
     e1="$(wl_errs "$dm")" || die 33 errors_count_unreadable
@@ -417,9 +426,9 @@ wa_main() {
     [ -z "$hold_after" ] || die 25 holders_after
     ro_after="$(blockdev --getro "$DEV")" || die 16 getro_failed_after
     [ "$ro_after" = 1 ] || die 30 ro_flag_lost_after
-    # Verdicts: off-list beats not-empty (the counts on stderr are digits only).
+    # Verdicts: off-list beats not-empty (the counts on stderr are digits only; has_hooks_d is a single 0 or 1).
     if [ "$OFFLIST" = 1 ]; then
-      say "wipe-assert: rc=34 reason=offlist top_d=$TOP_D top_f=$TOP_F top_l=$TOP_L top_o=$TOP_O repos=$REPOS"
+      say "wipe-assert: rc=34 reason=offlist top_d=$TOP_D top_f=$TOP_F top_l=$TOP_L top_o=$TOP_O repos=$REPOS has_hooks_d=$HAS_HOOKS lf_entries=$LF_ENTRIES offlist_n=$OFFLIST_N"
       exit 34
     fi
     [ "$REPOS" -eq 0 ] || die 37 repositories_not_empty "repos=$REPOS"
