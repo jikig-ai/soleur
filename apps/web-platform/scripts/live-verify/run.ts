@@ -1741,8 +1741,10 @@ async function main(): Promise<void> {
     // (CANNOT_SPEND_VIOLATED); every other class here is non-blocking.
     emit(failureResult(err));
     // I-ephemerality: the session is destroyed on this path too. Local scope so a
-    // sibling run's session is not invalidated, and bounded so a hung fetch cannot
-    // hold the process past the already-emitted verdict.
+    // sibling run's session is not invalidated. `bounded` bounds the AWAIT only: a
+    // fetch that never answers can still hold its socket (and so the process) open
+    // after the verdict is emitted, as on the success path below; the job timeout is
+    // the backstop for that pre-existing hazard.
     await bounded(
       async () => {
         await supabase?.auth.signOut({ scope: "local" });

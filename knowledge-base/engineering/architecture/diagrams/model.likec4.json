@@ -2402,7 +2402,7 @@
 "id": "nhep6c"
 },
 "3s091x": {
-"title": "live-verify harness (web-platform-release.yml job live-verify, ADR-064) signs in as the single synthetic prod principal with the anon key and, through its own RLS session and never the service role, first reads its own api_keys rows (every one must equal the decrypt-poisoned sentinel) and its un-revoked byok_delegations rows (none may exist) before the browser launches (I-cannot-spend, ADR-064 amendment 2026-10-18); the later conversation writes (create, archive, delete by conversation id) are I-teardown's. The seed step in the same job is the separate service-role actor.",
+"title": "live-verify harness (web-platform-release.yml job live-verify, ADR-064) signs in as the single synthetic prod principal with the anon key and, through its own RLS session and never the service role, first reads its own api_keys rows (every one must equal the decrypt-poisoned sentinel) and its un-revoked byok_delegations rows (none may exist) before the browser launches (I-cannot-spend, ADR-064 amendment 2026-10-18); it then stamps its own conversations with a session marker and archives and deletes them (by conversation id, and orphans by user plus marker), which is I-teardown. The seed step in the same job is the separate service-role actor.",
 "technology": "HTTPS (GoTrue, PostgREST)",
 "source": {
 "model": "github"

@@ -424,8 +424,10 @@ describe("I-cannot-spend gate (before launch, also under --dry-run)", () => {
     expect(apiKeyLines[0]).toContain('"$SB_URL/rest/v1/api_keys?user_id=eq.$user_id&provider=eq.anthropic&select=id"');
     expect(apiKeyLines[1]).toContain('"$SB_URL/rest/v1/api_keys" \\');
     const lines = seed.split("\n");
-    // The insert is the only write to api_keys: its option line is `-X POST`. A
-    // PATCH/DELETE would address the endpoint again and break the count above.
+    // Spelling-level pin, not a closed set of writes: the insert's option line is
+    // `-X POST`, and a second api_keys address (a PATCH/DELETE on a new line) breaks
+    // the count above. A write added to the lookup line's own continuation, or built
+    // from a variable URL, would escape it.
     expect(lines[lines.indexOf(apiKeyLines[1]) + 1].trim()).toMatch(/^-X POST /);
     const m = seed.match(
       /provider: "anthropic", encrypted_key: "([^"]+)", iv: "([^"]+)", auth_tag: "([^"]+)"/,
