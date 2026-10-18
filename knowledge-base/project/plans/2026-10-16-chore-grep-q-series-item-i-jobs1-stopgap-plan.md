@@ -370,17 +370,17 @@ Write rows 1 to 5 and P1 BEFORE changing the assertion (cq-write-failing-tests-b
 
 ### Pre-merge (PR)
 
-- [ ] `measure/run-all.sh` ran in the work phase and printed `CONTROLS OK` before any count was read; its M1 to M4 figures are in `evidence.md` with the command beside each.
-- [ ] Two `dry_run=true` dispatches of the branch workflow both show `-P 4`, `infra=success` (or only the known tag-drift RED), `infra_elapsed_s` at most 2400 (a third dispatch exists in `evidence.md` if one landed in 2400 to 3000 s), no ceiling-timeout annotation, no `[KILLED]`, no `UNACCOUNTED`; run ids and values are in `evidence.md`.
-- [ ] `grep -nE '^\s+JOBS:' .github/workflows/main-health-monitor.yml` returns exactly one line, inside the tests step env block (verified by the (12a)/(12b) rows, `.github/workflows/main-health-monitor.yml:<tests step env>`).
-- [ ] Check (12) is split into (12a) and (12b) over `check_jobs_pin(text)`; Guard 1 rows 1 to 5 and P1 exist as in-Python assertion pairs in `plugins/soleur/test/main-health-monitor-workflow.test.sh`, each RED row reds on its mutated copy and P1 passes; the suite's assertion count rose by exactly the number of rows added.
-- [ ] `bash plugins/soleur/test/main-health-monitor-workflow.test.sh` passes on the final tree.
-- [ ] `scripts/followthroughs/jobs1-stopgap-7432.test.sh` covers Guard 2 rows 1 to 6 and P1; it is registered in `scripts/test-all.sh` with one `run_suite` line and `scripts/lint-orphan-test-suites.sh` passes.
-- [ ] `python3 scripts/lint-guard-contract.py` passes on this plan file; `python3 scripts/lint-shell-trace-credential-refusal.py` is green with the probe's baseline line deleted; `plugins/soleur/test/fixture-relative-assert.test.sh` and the `PJ_TRIPLES` recompute are unchanged by the new suite; `.github/workflows/scheduled-followthrough-sweeper.yml` carries `checks: read`.
-- [ ] The workflow comment block states the infra step runs at the default width, cites #7432 and the legs, and contains no literal `JOBS: 1` token.
-- [ ] `infra-validation.yml` and ADR-252 no longer say the monitor keeps `JOBS: 1` for the infra step, and the `grep-q-pipe-guard.test.sh` header no longer lists Item I as open; `git diff origin/main...HEAD --stat` shows no `apps/` path.
-- [ ] `decision-challenges.md` carries one row per ruling with a `Ruled by CTO agent, 2026-10-16` line.
-- [ ] Every commit on the branch reads `Jean Deruelle <...>` under `git log --format='%an <%ae>'`.
+- [x] `measure/run-all.sh` ran in the work phase and printed `CONTROLS OK` before any count was read; its M1 to M4 figures are in `evidence.md` with the command beside each.
+- [x] Two `dry_run=true` dispatches of the branch workflow both show `-P 4`, `infra=success` (or only the known tag-drift RED), `infra_elapsed_s` at most 2400 (a third dispatch exists in `evidence.md` if one landed in 2400 to 3000 s), no ceiling-timeout annotation, no `[KILLED]`, no `UNACCOUNTED`; run ids and values are in `evidence.md`.
+- [x] `grep -nE '^\s+JOBS:' .github/workflows/main-health-monitor.yml` returns exactly one line, inside the tests step env block (verified by the (12a)/(12b) rows, `.github/workflows/main-health-monitor.yml:<tests step env>`).
+- [x] Check (12) is split into (12a) and (12b) over `check_jobs_pin(text)`; Guard 1 rows 1 to 5 and P1 exist as in-Python assertion pairs in `plugins/soleur/test/main-health-monitor-workflow.test.sh`, each RED row reds on its mutated copy and P1 passes; the suite's assertion count rose by exactly the number of rows added.
+- [x] `bash plugins/soleur/test/main-health-monitor-workflow.test.sh` passes on the final tree.
+- [x] `scripts/followthroughs/jobs1-stopgap-7432.test.sh` covers Guard 2 rows 1 to 6 and P1; it is registered in `scripts/test-all.sh` with one `run_suite` line and `scripts/lint-orphan-test-suites.sh` passes.
+- [x] `python3 scripts/lint-guard-contract.py` passes on this plan file; `python3 scripts/lint-shell-trace-credential-refusal.py` is green with the probe's baseline line deleted; `plugins/soleur/test/fixture-relative-assert.test.sh` and the `PJ_TRIPLES` recompute are unchanged by the new suite; `.github/workflows/scheduled-followthrough-sweeper.yml` carries `checks: read`.
+- [x] The workflow comment block states the infra step runs at the default width, cites #7432 and the legs, and contains no literal `JOBS: 1` token.
+- [x] `infra-validation.yml` and ADR-252 no longer say the monitor keeps `JOBS: 1` for the infra step, and the `grep-q-pipe-guard.test.sh` header no longer lists Item I as open; `git diff origin/main...HEAD --stat` shows no `apps/` path.
+- [x] `decision-challenges.md` carries one row per ruling with a `Ruled by CTO agent, 2026-10-16` line.
+- [x] Every commit on the branch reads `Jean Deruelle <...>` under `git log --format='%an <%ae>'`.
 - [ ] PR body uses `Ref #7432` / `Ref #9217` and carries the figures, the revert trigger and the CTO lines.
 
 ### Post-merge (operator-free)
