@@ -47,9 +47,19 @@ dispatch and revert only, this ADR removes the operator's per-command read of th
 revert name intents; the closed command set is merge, ready, dispatch of a named workflow file and PR creation (`gh pr create
 --fill`, scoped by a Scope item that names the act), and never a hook-gated form. It also makes the epic-start
 confirmation a deliberate, single menu-style acknowledgement that DOES extend to commands the operator never saw. The rule's
-sentence "Menu acks and prior approvals do NOT extend to new commands" therefore carries the exception explicitly ("outside a
-recorded delegation"). The trade is accepted because the question is plain-language, names act classes, is recorded verbatim and is
-revocable, and because the allowlist below bounds what a "Yes" can mean.
+sentence "Menu acks and prior approvals never cover new commands" is therefore paired with an explicit second path: a Standing
+Delegation that `plugins/soleur/scripts/delegation-verify.sh` reports valid (exit 0; any other result is no authority). The trade
+is accepted because the question is plain-language, names act classes, is recorded verbatim and is revocable, and because the
+allowlist below bounds what a "Yes" can mean.
+
+The widening is larger than "merge, ready and a named file". Dispatching a named workflow file can run a CI production apply
+that has no environment reviewer. The example is `apply-web-platform-infra.yml` with `apply_target=registry-host-replace`, the
+exact act in the live #9757 scope. The verifier binds the file name and the `-f` inputs, not what the workflow does. Inputs named
+`confirm` or `rollback_ack*` are the typo-guards of the destructive host create/replace and credential-rotation targets, so the
+verifier rejects any `gh workflow run` that passes one, with the `non-delegable-command` verdict; those targets stay
+operator-only. The rest of a delegated dispatch is a production change that no human reads command by command. This was
+reviewed by the CTO agent on 2026-10-18 on founder instruction (users are not asked; the CTO reviews when no human does). The
+ack row for the rule records the same facts.
 
 ### Precedents
 
@@ -282,8 +292,14 @@ operator-confirmed act outside this PR.
 
 **Amends.** ADR-084's closed operator-only list: its production-mutating category is now satisfiable by delegation plus envelope. An
 `Amended by ADR-289` pointer is appended to ADR-084. `hr-technical-fork-is-not-an-operator-question` is left byte-unchanged
-because it says "category". The `hr-menu-option-ack-not-prod-write-auth` body gained the second path and the explicit exception to
-its menu-ack sentence, with its manifest hash regenerated and an append-only ack row that asks for human review by @deruelle.
+because it says "category". The `hr-menu-option-ack-not-prod-write-auth` body gained the second path (a delegation the verifier
+reports valid) in place of a prose description of one, with its manifest hash regenerated and an append-only ack row that asks for
+human review by @deruelle and records the dispatch widening.
+
+**Verified by.** `plugins/soleur/scripts/delegation-verify.test.sh` pins the typo-guard rejection: the dispatch
+`apply-web-platform-infra.yml -f apply_target=registry-host-replace` still verifies as valid inside a Scope item that names the
+file, the same line plus `-f confirm=...` or `-f rollback_ack_luks_writes=...` (and the `-F`, `--field`, `--raw-field`, glued and
+`=` spellings) is refused with `non-delegable-command`, and mutants that delete or narrow the pattern are killed.
 
 **Follow-ups tracked as issues.** The `soleur:production-change` skill (envelope pre-flight, merge, watch, verify, rollback),
 a delegated-act digest for the operator digest, and the receipt hook (#10361).
