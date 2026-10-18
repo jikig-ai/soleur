@@ -12,7 +12,19 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 engine="$(cd "$here/../../../../plugins/soleur/scripts" && pwd)/lint-ratchet.py"
 [[ -f "$engine" ]] || { echo "lint-ratchet engine not found at $engine" >&2; exit 2; }
 
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 work="$(mktemp -d "${TMPDIR:-/var/tmp}/lint-ratchet-probe.XXXXXXXX")"
+assert_fixture_dir "$work"
 trap 'rm -rf "$work"' EXIT
 mkdir "$work/home" "$work/repo"
 cd "$work/repo"
