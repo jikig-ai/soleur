@@ -2965,7 +2965,14 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // grades the stored registry log stream and the live alert predicate. NO SUBSTITUTE: the warehouse has no
   // unauthenticated read path and the registry host is no-SSH; the offline suites verify the code and the SQL text,
   // not the stored stream or the engine. Genuine.
-  const BASELINE_DECLARED_PROBES = 68;
+  // #7521 (2026-10-16): +1 (68 -> 69) for `2026-10-16-feat-standing-registry-fill-rate-alarm-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`doppler run -p soleur -c prd_terraform -- bash scripts/followthroughs/zot-fill-rate-7341.sh`)
+  // reads Better Stack through the ClickHouse HTTP connection credential (BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD},
+  // Doppler soleur/prd_terraform) and grades the stored SOLEUR_ZOT_DISK fill series. NO SUBSTITUTE: the warehouse has no
+  // unauthenticated read path and the registry host is no-SSH; the offline suites verify the code and the verdict
+  // classification, not the stored stream. Genuine.
+  const BASELINE_DECLARED_PROBES = 69;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
