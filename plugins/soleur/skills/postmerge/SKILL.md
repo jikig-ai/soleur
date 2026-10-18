@@ -383,32 +383,9 @@ dedicated **synthetic prod principal** (never an operator/real-user session),
 drives the deployed UI, and asserts a freshly-started conversation appears in the
 Recent Conversations rail.
 
-**Gate posture: BLOCKING, enforced in CI (#5463, flipped 2026-06-18, PR #5576).** The
-authority is the `live-verify` job in `.github/workflows/web-platform-release.yml`: its
-"Enforce live-verify gate" step fails the release run when the emit step computes `BLOCK=1`
-(a `FAIL`, an empty result line, or `CANT-RUN:cannot-spend-violated`). A
-`CANT-RUN:cannot-spend-unverified` (the I-cannot-spend check could not read its inputs) is
-annotated `::error` but is BLOCK=0, because the throw before the browser launch already
-delivers the safety property. Re-derive gate state from that workflow, not from this prose.
-This skill's own run of the harness (below) is separate evidence for the post-merge report; it
-does not decide the release, and a boolean flip inside this agent-driven skill is NOT the gate
-(it would recreate the #4932 non-deterministic-blocking-gate class).
+**Gate posture: BLOCKING, enforced in CI (#5463, PR #5576).** The authority is the `live-verify` job in `.github/workflows/web-platform-release.yml`: its "Enforce live-verify gate" step fails the release run when the emit step computes `BLOCK=1` (a `FAIL`, an empty result line, or `CANT-RUN:cannot-spend-violated`). `CANT-RUN:cannot-spend-unverified` (the I-cannot-spend check could not read its inputs) is annotated `::error` but BLOCK=0, because the throw before the browser launch already delivers the safety property. Re-derive gate state from that workflow, not from this prose. This skill's own harness run (below) is separate evidence for the report and does not decide the release; a boolean flip inside this skill is NOT the gate (the #4932 non-deterministic-blocking-gate class).
 
-**What a PASS does and does not prove.** The harness refuses to run unless the synthetic
-principal holds no decryptable credential (ADR-064 `I-cannot-spend`, checked in
-`verifyPrincipal` before the browser launches, also under `--dry-run`). A `RESULT: PASS`
-means ONE flow worked against the deployed app: a freshly started conversation appeared in the
-Recent Conversations rail. It is not a coverage list for auth, realtime or persist beyond that
-flow, it does not attest the real CONNECT path or Squid `%un` egress attribution
-(`I-egress-not-attested-by-gate`), and it generates no Concierge traffic. **A green
-`live-verify` job is not a PASS:** SKIPPED and every environmental `CANT-RUN` leave the job
-green, so only the `RESULT: PASS` line counts, and anything else is UNVERIFIED. A check that
-needs traffic the gate cannot lawfully generate is not a reason to ask the operator to start a
-session: record `Live verification: UNVERIFIED:<capability>` and reference #10460 / #10461
-(see `flag-set-role` §"Verifying a flip"). The job runs after each successful deploy
-(`workflow_run`) and its harness step is diff-gated on `trigger-paths.txt`; a flag flip is not
-a commit, so a flip starts nothing. The flip and rollback themselves stay operator-typed
-(ADR-249).
+**What a PASS does and does not prove.** The harness refuses to run unless the synthetic principal holds no decryptable credential (ADR-064 `I-cannot-spend`, in `verifyPrincipal`, also under `--dry-run`). `RESULT: PASS` means ONE flow worked against the deployed app: a fresh conversation appeared in the Recent Conversations rail. It does not attest the real CONNECT path or Squid `%un` egress attribution (`I-egress-not-attested-by-gate`) and generates no Concierge traffic. **A green `live-verify` job is not a PASS:** SKIPPED and every environmental `CANT-RUN` leave it green, so only the `RESULT: PASS` line counts and anything else is UNVERIFIED. When a check needs traffic the gate cannot generate, do not ask the operator to start a session: record `Live verification: UNVERIFIED:<capability>` and reference #10460 / #10461 (see `flag-set-role` §"Verifying a flip"). The job runs after each successful deploy (`workflow_run`) but its harness step is diff-gated on `trigger-paths.txt`, and a flag flip is not a commit, so a flip starts nothing; the flip and rollback stay operator-typed (ADR-249).
 
 **1. Path trigger (FR7).** The trigger set is the committed source-of-truth
 `apps/web-platform/scripts/live-verify/trigger-paths.txt` (not SKILL.md prose).
