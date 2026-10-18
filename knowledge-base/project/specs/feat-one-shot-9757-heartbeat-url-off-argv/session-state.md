@@ -7,7 +7,7 @@
 
 ### Errors
 
-None blocking. Stale premise handled by re-scoping: the code change the brief asked for already merged (PR #10356, PR #10086); the deliverable is an evidence-only closeout. The operator confirmed that scope on 2026-10-18.
+None blocking. Stale premise handled by re-scoping: the code change the brief asked for already merged (PR #10356, PR #10086); the deliverable is an evidence-only closeout. The operator chose this scope when asked in session on 2026-10-18 (evidence-only closeout PR over close-and-tick or leave-unchanged).
 
 ### Decisions
 

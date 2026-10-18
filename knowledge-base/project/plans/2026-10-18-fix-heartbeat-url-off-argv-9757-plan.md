@@ -12,26 +12,7 @@ brand_survival_threshold: none
 
 # fix: heartbeat-URL path secrets off argv: verified closeout (Ref #9757)
 
-## Enhancement Summary
-
-**Deepened on:** 2026-10-18
-**Sections enhanced:** Phase 1 (c) evidence, Research Insights, gate results
-**Research agents used:** none spawned beyond plan-review and the CTO; the deepen pass was mechanical verification against GitHub and the repo (a knowledge-base-only, no-code plan has no technology surface for per-section research or framework docs)
-
-### Key Improvements
-
-1. Phase 1 (c) now has a measured plan-time reading instead of a promise: the apply run for PR #10086's merge commit succeeded and replaced `terraform_data.git_data_probe_install` (see "Deepen findings").
-2. Every cited PR number, merge commit, merge date, changed-file claim and path in the plan was re-resolved live; none was stale.
-3. The halt gates 4.6 to 4.12 were evaluated and recorded, including one false positive of the network-outage keyword scan.
-
-### New Considerations Discovered
-
-- The delivery evidence for `web-git-data-probe.sh` is readable from a public run log with no secret, so the "per-resource re-delivery not read" fallback should not be needed for that script.
-- Re-delivery evidence for `luks-monitor.sh` does not exist and cannot exist from this workflow: it ships through the operator-applied `workspaces-luks.tf` root, which the push-apply does not reach.
-
 ## Overview
-
-Spec lacks valid lane: defaulted to cross-domain (fail-closed); no spec.md exists for this one-shot branch.
 
 The brief asked for the "Heartbeat-URL path secrets" item of umbrella #9757 to be implemented: move the
 Better Stack heartbeat URL (its path is the credential) off curl's argument list in
@@ -83,7 +64,7 @@ recorded decision, and ten residuals are tracked on #10093.
 **Cut List.**
 
 - Convert the three scripts again, or add a fourth guard copy: buys no property (P1, P2 already hold, enforced by S6-HB); covered by PR #10086 and PR #10356.
-- Rate-limit `web-git-data-probe.sh`'s refusal marker and unset-URL WARN (#10093 residuals 3 and 8): hygiene, not an argv exposure; would fire the production push-apply plus six ratchet bumps; already tracked on #10093.
+- Rate-limit `web-git-data-probe.sh`'s refusal marker and unset-URL WARN (#10093 residuals 3 and 8): hygiene, not an argv exposure; would fire the production push-apply plus the ratchet bumps; already tracked on #10093.
 - A new live-evidence verifier for the git-data and luks monitors: out of scope for a closeout.
 - A repeat transport-line `git grep` cross-check (cut at plan review): S6-HB already asserts one guarded stdin line per script and is the authoritative scanner.
 
@@ -95,13 +76,9 @@ recorded decision, and ten residuals are tracked on #10093.
 
 **Evidence gathered at plan time** (read-only, no secret printed):
 
-- Full `bash tests/scripts/test-argv-bearer-sweep.sh` on this tree (origin/main plus the branch-init commit): `823 passed, 0 failed`, every S6-HB row `[ok]` (6 converted scripts in the derived heartbeat population: the three named plus `web-zot-consumer-probe.sh`, `inngest-consumer-probe.sh` and `web-private-nic-guard.sh`; allowlist ceiling 0; guard-copy parity across 4 bash copies). Wall time about 3.5 minutes.
-- Delivery paths: `web-git-data-probe.sh` is delivered to web-1 by the `server.tf` terraform_data install on the push-apply. `luks-monitor.sh` is delivered by `workspaces-luks.tf`, an operator-applied root. The `soleur-workspaces-luks-prd` monitor (`uptime-alerts.tf`) is `paused = true` with `ignore_changes = [paused]`, period 86400, grace 3600, and has a second pusher (`workspaces-luks-verify.yml`), so an "up" read on it would not prove this script is on any host.
+- Full `bash tests/scripts/test-argv-bearer-sweep.sh` on this tree (origin/main plus the branch-init commit): `823 passed, 0 failed`, every S6-HB row `[ok]` (S6-HB derives 16 files that name a heartbeat; 6 are manifest-pinned to exactly one guarded stdin line each - the three named plus `web-zot-consumer-probe.sh`, `inngest-consumer-probe.sh` and `web-private-nic-guard.sh` - and the other 10 are held to the no-argv rule only; allowlist ceiling 0; guard-copy parity across 4 bash copies). Wall time about 3.5 minutes.
+- Delivery paths: `web-git-data-probe.sh` is delivered to web-1 by the `server.tf` terraform_data install on the push-apply. `luks-monitor.sh` is installed by `terraform_data.luks_monitor_install` (`workspaces-luks.tf`), which is in the auto-applied SSH target list of `apply-web-platform-infra.yml`, and is also baked into the fresh-host cloud-init file list in `server.tf`. Only the heartbeat monitor `betteruptime_heartbeat.workspaces_luks` and its URL secret are operator-applied; that monitor (`uptime-alerts.tf`) is `paused = true` with `ignore_changes = [paused]`, so an "up" read on it cannot show this script is on any host, and whether the installer re-ran on a given apply was not read.
 - The git-data monitor is `soleur-git-data-prd` (`git-data.tf`, period 60, grace 180).
-
-## Open Code-Review Overlap
-
-None. The plan edits no source file; the only files touched are under `knowledge-base/project/{plans,specs}/` and GitHub issue comments.
 
 ## Scope Check
 
@@ -125,14 +102,14 @@ None. The plan edits no source file; the only files touched are under `knowledge
 | Phase 1: re-verify S6-HB and the apply-run delivery evidence | "Move the heartbeat URL (whose path is the secret) off argv" (asks 1-2) | asked |
 | Phase 1 (c): apply-run conclusion for the PR #10086 merge | - | inferred - justification: the CTO evidence bar requires delivery evidence for the one script the push-apply delivers; without it the tick would claim more than the evidence supports |
 | Phase 4: umbrella tick and evidence comment | "the unticked \"Heartbeat-URL path secrets\" checklist item" (ask 3) | asked |
-| Phase 4: #10093 luks residual comment | - | inferred - justification: the luks monitor is paused and operator-applied, so the tick must not imply luks delivery; the residual keeps the gap visible |
+| Phase 4: #10093 luks residual comment | - | inferred - justification: the luks monitor is paused and its re-delivery was not read, so the tick must not imply luks delivery; the residual keeps the gap visible |
 | Phase 3: KB-only PR with plan, tasks, decision record, evidence file | "Ship through review and CI to a merge-ready PR" (ask 5) | asked |
 | Files to Create: `closeout-evidence.md` | "Ship through review and CI to a merge-ready PR" (ask 5) | inferred - justification: the evidence must live in the PR so a reviewer can re-check it without the session; the post-merge issue comments cite it by PR number |
 
 ### Split Assessment
 
 - Subsystems touched: 1 - `knowledge-base`
-- Planned files: 4 | Estimated changed lines: 300
+- Planned files: 5 | Estimated changed lines: 300
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR
 
@@ -152,17 +129,16 @@ threshold: none, reason: the diff touches only knowledge-base planning artifacts
 
 Create `knowledge-base/project/specs/feat-one-shot-9757-heartbeat-url-off-argv/closeout-evidence.md` and fill it from these reads. The file records results only: pass/fail, counts, content anchors (a quoted fragment of the transport line, never a line number), monitor names, and `status=`/`paused=` fields. Never the heartbeat URL, the Better Stack token, or any digest.
 
-- (a) S6-HB. Run `bash tests/scripts/test-argv-bearer-sweep.sh` on a tree equal to origin/main for the files named; record the final summary line and say "6 converted of 16 derived heartbeat scripts" so the file matches the test output. Pass: `0 failed` and every `S6-HB` row `[ok]`. The plan-time run (823 passed, 0 failed) is cited; re-run only if the branch has drifted from main for any file in the `apps/web-platform/infra/*.sh` set. This is the authoritative scanner for the argv property and for the one-guarded-stdin-line-per-script property; no separate grep is prescribed.
+- (a) S6-HB. Run `bash tests/scripts/test-argv-bearer-sweep.sh` on a tree equal to origin/main for the files named; record the final summary line and say "S6-HB derived 16 heartbeat-naming files; 6 are manifest-pinned", the wording the suite supports. Pass: `0 failed` and every `S6-HB` row `[ok]`. The plan-time run (823 passed, 0 failed) is cited; re-run only if the branch has drifted from main for any file in the `apps/web-platform/infra/*.sh` set. This is the authoritative scanner for the argv property and for the one-guarded-stdin-line-per-script property; no separate grep is prescribed.
 - (b) Anchors on main. Record, per script, the content anchor of its transport line and its guard function (`_hb_url_ok` / `hb_url_ok` / the negated allow-class `case` in the inngest heartbeat body), read from `git show origin/main:<path>`.
 - (c) Delivery of `web-git-data-probe.sh`. Resolve a successful `apply-web-platform-infra.yml` push run whose head SHA contains PR #10086's merge commit (`64046de076`; check with `git merge-base --is-ancestor`), via `gh run list`; no secret involved. Say whether the run log or a run summary readable without a secret shows the `server.tf` terraform_data install ran. A green run with no diff does not prove re-delivery, so if per-resource re-delivery is unreadable, write "run succeeded; per-resource re-delivery not read" and never "delivered". Plan-time reading (deepen pass): run 38303163269 on head 64046de076 succeeded and replaced `terraform_data.git_data_probe_install` with its provisioners; re-confirm on the merged tree and record the resource name and outcome only.
-- (c2) Optional, informational: the `soleur-git-data-prd` monitor state, using the read-scope form the cutover runbook documents (`knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md`; only the monitor name is substituted: the runbook's example targets `soleur-git-data-host-prd`): `doppler run --only-secrets BETTERSTACK_API_TOKEN_READONLY -p soleur -c prd_terraform -- env -u SHELLOPTS -u BASH_ENV -u BASHOPTS bash --noprofile --norc -c 'BS_TOKEN="$BETTERSTACK_API_TOKEN_READONLY" exec bash apps/web-platform/infra/arm-heartbeats.sh --status soleur-git-data-prd'`. Redirect stdout to a scratch file, keep only the `status=` and `paused=` fields, scan the scratch file for the heartbeat URL shape before anything is pasted, and never `set -x`. `--status` never issues a PATCH. `status=up` proves only that some probe is beating; it is never cited as delivery. A `status=down` is a finding filed on #10093 and does not block the transport tick. If Doppler or Better Stack is unreadable, record "not read" and why.
-- (d) Luks. Cite from `uptime-alerts.tf` and `workspaces-luks.tf` that the monitor is `paused = true` with `ignore_changes = [paused]` and that delivery of `luks-monitor.sh` is through the operator-applied `workspaces-luks.tf` root. Claim no luks delivery or liveness.
+- (d) Luks. Cite that the monitor is `paused = true` with `ignore_changes = [paused]` (`uptime-alerts.tf`), that the installer `terraform_data.luks_monitor_install` is in the auto-applied target list, and that only the monitor and its URL secret are operator-applied. Claim no luks delivery or liveness.
 
 If (a) fails on a fresh read, stop the closeout and switch to a real fix PR for whatever failed (CTO fallback).
 
 ### Phase 2 - Review and CI on the knowledge-base-only PR
 
-Commit with explicit pathspecs only (never `git add -A` or `git add .`): the plan, `tasks.md`, `decision-challenges.md`, `closeout-evidence.md`. Run markdownlint on the plan and `tasks.md`, and the repo's changed-files lint for human-run infra steps, before the commit.
+Commit with explicit pathspecs only (never `git add -A` or `git add .`): the plan, `tasks.md`, `decision-challenges.md`, `closeout-evidence.md`, `session-state.md`. Run markdownlint on the plan and `tasks.md`, and the repo's changed-files lint for human-run infra steps, before the commit.
 
 ### Phase 3 - Ship: PR #10504 to merge-ready, then stop
 
@@ -170,11 +146,11 @@ Update draft PR #10504: title `docs(infra): verified closeout for heartbeat-URL 
 
 ### Phase 4 - After the merge: record on GitHub (non-production writes, by the executing session)
 
-Runs only after PR #10504 merges, so a rejected PR leaves the umbrella untouched. Evidence is cited by PR number (`#10504`), not by a path in an unmerged branch. `gh issue comment` and `gh issue edit` are not production infrastructure writes; no secret in any body.
+Runs only after PR #10504 merges (precondition: `gh pr view 10504 --json state` reads MERGED, and the three scripts are unchanged on main since 2026-10-15), so a rejected PR leaves the umbrella untouched. Order: tick the body line (step 2), then post the evidence comment (step 1), then read back that exactly one line changed and the issue is still OPEN. Evidence is cited by PR number (`#10504`), not by a path in an unmerged branch. `gh issue comment` and `gh issue edit` are not production infrastructure writes; no secret in any body.
 
 1. Umbrella #9757, new comment: the Phase 1 (a)-(d) results, the corrected rationale ("web-git-data-probe.sh and luks-monitor.sh are converted, PR #10086"), "Ref #9757" wording, and that the tick covers the **transport (argv)** scope while residuals stay open on #10093.
 2. Umbrella #9757 body: tick only the "Heartbeat-URL path secrets" line and append the scoped label `(transport (argv): done, PRs #10086 and #10356; residuals on #10093)`; decide deliberately what happens to the line's existing note ("Same production-apply constraint, rides S4/S5"): replace it with the scoped label so the line does not contradict the tick. Edit guard: capture `updatedAt` and a backup of the body to a scratch file, build the new body by replacing that one line, diff before/after (exactly one line differs), re-read the issue immediately before writing and abort without writing if `updatedAt` or the body changed, then `gh issue edit 9757 --body-file`. Do not close the issue.
-3. #10093, new comment (never an edit of an old one): "luks-monitor.sh transport is on main but unverified on any host; delivery is via the operator-applied workspaces-luks.tf root (runbook: `knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md`); the monitor is paused until cutover. Verify at the cutover unpause." Read #10093 first: its 2026-10-15 residual list has no luks-delivery item at plan time; comment only if that still holds.
+3. #10093, new comment (never an edit of an old one): "luks-monitor.sh transport is on main but unverified on any host; the installer is auto-applied but re-delivery to a host was not read, and its heartbeat monitor (operator-applied, paused until cutover; runbook: `knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md`) cannot show delivery. Verify at the cutover unpause." Read #10093 first: its 2026-10-15 residual list has no luks-delivery item at plan time; comment only if that still holds.
 
 ## Files to Edit
 
@@ -186,24 +162,18 @@ None. No source, test, workflow, ADR, Terraform or script file is edited.
 - `knowledge-base/project/specs/feat-one-shot-9757-heartbeat-url-off-argv/tasks.md`
 - `knowledge-base/project/specs/feat-one-shot-9757-heartbeat-url-off-argv/decision-challenges.md`
 - `knowledge-base/project/specs/feat-one-shot-9757-heartbeat-url-off-argv/closeout-evidence.md` (written in Phase 1)
+- `knowledge-base/project/specs/feat-one-shot-9757-heartbeat-url-off-argv/session-state.md` (pipeline-written)
 
-## Ratchets and gates (planned for, none tripped)
+## Ratchets and gates
 
-The brief asked to plan for the ratchets that infra shell changes trip. This PR edits no infra shell file, so each is left untouched on purpose (CTO ruling: touch none). For a future code PR on these scripts, the bumps are:
-
-| Ratchet | Where | Tripped here? | If a future code PR edits these scripts |
-|---|---|---|---|
-| Heartbeat argv scan (S6-HB), allowlist ceiling 0, guard-copy parity across 4 bash copies | `tests/scripts/test-argv-bearer-sweep.sh` (`EXPECTED_TESTS=823`) | No | Keep the allowlist empty; edit all guard copies byte-identically |
-| Non-paging marker pin, per-script suite floors, promoted-file floor | `betterstack-send-failed-alert-mutation.test.sh` (`BASELINE_PASSES=79`, not selected by `--affected`), `luks-monitor.test.sh` (`EXPECTED_PASSES=155`), `scripts/guard-vacuity-floor.test.sh` `PROMOTED_FILES` | No | A new `SOLEUR_*` emit site moves the pin; re-measure floors |
-| GuardA byte-identity row, push-apply and release triggers | `cloud-init-inngest-bootstrap.test.sh`; `apply-web-platform-infra.yml` paths `apps/web-platform/infra/**` | No (KB-only diff) | Editing `inngest-bootstrap.sh` turns GuardA red until the tag mint and pin-bump PR (ADR-232); any infra edit fires the production apply and needs the operator's per-command go-ahead |
-| grep-q pipe guard, infra tool census, boundary-prefix census, plugin-root anchoring, SKILL.md byte ceilings | `.claude/hooks/grep-q-pipe-guard.test.sh`; infra and plugin suites | No | Not reached by a knowledge-base-only diff; re-check any census that lists a tool the edited script uses |
+The brief asked to plan for the neighbouring ratchets. This PR edits no infra shell, test, workflow or plugin file, so none is tripped and none is touched on purpose (CTO ruling). A future code PR on these scripts owns the bumps and the production push-apply.
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
 
-- [ ] `git diff --name-only origin/main...HEAD | grep -vE '^knowledge-base/project/(plans/2026-10-18-fix-heartbeat-url-off-argv-9757-plan\.md|specs/feat-one-shot-9757-heartbeat-url-off-argv/)'` prints nothing, except the pipeline-written `plugins/soleur/knowledge-base/INDEX.md` if the ship step regenerates it (merge-base form, so a sibling merge to main cannot redden it); in particular no `apps/`, `tests/`, `scripts/`, `.github/` path.
-- [ ] `closeout-evidence.md` records: the S6-HB result (`0 failed`, "6 converted of 16 derived"), a content anchor and guard per script, the apply-run conclusion with the per-resource re-delivery statement, the optional monitor reading or "not read", and the luks paused/operator-applied citation.
+- [ ] `git diff --name-only origin/main...HEAD | grep -vE '^knowledge-base/project/(plans/2026-10-18-fix-heartbeat-url-off-argv-9757-plan\.md|specs/feat-one-shot-9757-heartbeat-url-off-argv/)'` prints nothing, (merge-base form, so a sibling merge to main cannot redden it); in particular no `apps/`, `tests/`, `scripts/`, `.github/` or `plugins/` path - a `plugins/soleur/**` change such as a regenerated `plugins/soleur/knowledge-base/INDEX.md` would fire the web release and version bump, so it must be absent or called out in the PR body.
+- [ ] `closeout-evidence.md` records: the S6-HB result (`0 failed`, "16 derived, 6 manifest-pinned"), a content anchor and guard per script, the apply-run conclusion with the per-resource re-delivery statement, and the luks citation (installer auto-applied; monitor paused and operator-applied; no delivery claimed).
 - [ ] No outgoing text contains a heartbeat URL, token or digest. Scan the files, the PR body draft and every comment draft with `grep -rnE 'betterstack\.com/api/v1/heartbeat/[A-Za-z0-9]'` (plain `grep -r`, not `git grep`, because the spec files are untracked until the commit) plus a scan for any 20-or-more-character alphanumeric token in `closeout-evidence.md`; both return nothing.
 - [ ] PR #10504 body uses "Ref #9757" and contains no `Closes`, `Fixes` or `Resolves` keyword for #9757, #10093 or #10363.
 - [ ] CI is green on the PR head; review findings resolved.
@@ -218,8 +188,6 @@ The brief asked to plan for the ratchets that infra shell changes trip. This PR 
 - Given the S6-HB stage on a tree equal to main, when it runs, then every S6-HB row is `[ok]` and the summary reads `0 failed`.
 - Given a mutation that puts the URL back on argv in any converted script, when S6-HB runs, then it is RED (already pinned by the suite's mutation rows; this plan adds none).
 - Given the apply run's per-resource re-delivery cannot be read, when Phase 1 (c) completes, then the evidence says "run succeeded; per-resource re-delivery not read".
-- Given `soleur-git-data-prd` reads `status=down`, when Phase 1 (c2) completes, then the finding is filed on #10093 and the transport tick still proceeds.
-- Given Doppler is unreadable in the session, when Phase 1 (c2) completes, then the evidence says "not read".
 - Given the umbrella body changed between the read and the write, when Phase 4 step 2 runs, then it aborts without writing.
 - Given the umbrella body edit, when the before/after diff is taken, then exactly one line differs.
 
@@ -236,50 +204,11 @@ The brief asked to plan for the ratchets that infra shell changes trip. This PR 
 
 Skipped: the diff touches no code-class path (`apps/*/server/`, `apps/*/src/`, `apps/*/infra/`, `plugins/*/scripts/`) and introduces no infrastructure surface. The existing liveness signal for these scripts is unchanged (Better Stack heartbeats, S6-HB in CI).
 
-## Deepen findings (2026-10-18)
-
-**Live resolution of every citation** (commands run in this pass, outputs summarised, no secret printed):
-
-| Claim in the plan | Resolution |
-|---|---|
-| PR #10086 merged 2026-10-12, converted `web-git-data-probe.sh` and `luks-monitor.sh` | `gh pr view 10086`: MERGED 2026-10-12T20:16:44Z, merge commit 64046de076; its file list contains both scripts |
-| PR #10356 merged 2026-10-15, converted `inngest-bootstrap.sh` | `gh pr view 10356`: MERGED 2026-10-15T19:05:58Z, merge commit 1c0cf63dd3; file list contains `inngest-bootstrap.sh` |
-| PR #10322 merged (registry) | MERGED 2026-10-15T09:36:41Z, merge commit 8c8401e6fa |
-| 64046de076 is on main | `git merge-base --is-ancestor 64046de076 origin/main`: true |
-| Cited runbooks, lint script and delegation verifier exist | `workspaces-luks-cutover-6604.md`, `git-data-luks-cutover-5274.md`, `scripts/lint-infra-no-human-steps.py`, `plugins/soleur/scripts/delegation-verify.sh` all present |
-| No AGENTS rule ids, labels, SHAs-as-pins or version tags are cited as authority | rule-id regex over the plan returns nothing; no label is prescribed |
-
-**Delivery evidence for `web-git-data-probe.sh` (plan-time reading of Phase 1 (c)).** `gh run list` shows a successful `apply-web-platform-infra.yml` push run on head 64046de076 created 2026-10-12T20:16:46Z (run id 38303163269). Its log (read-only, `gh run view <id> --log` to a scratch file) shows `terraform_data.git_data_probe_install` being **replaced** (destroyed, then created) with the `file` and `remote-exec` provisioners running, ending `Creation complete after 8s`. That is per-resource re-delivery evidence, so the work phase should record "run succeeded; `terraform_data.git_data_probe_install` replaced, provisioners ran" and re-confirm it on the merged tree. Four later successful push runs follow (the next on head f663c4af0e), none needed for this claim. No log line was copied into the plan beyond the resource name and the outcome words.
-
-**Halt gates evaluated.**
-
-- 4.6 User-Brand Impact: section present, threshold `none`, non-placeholder body; the diff is knowledge-base only (no sensitive path) and carries a `threshold: none, reason:` bullet anyway. Pass.
-- 4.7 Observability: pure knowledge-base diff, skip rule applies; the plan records the skip. Pass.
-- 4.8 PAT-shaped variable sweep: no match. Pass.
-- 4.9 UI wireframe: no UI-surface file. Skip. 4.10 Encryption posture: no store or new connection introduced. Skip. 4.11 Guard Contract: the deliverable is not a guard. Skip. 4.55 Downtime and cutover: no running surface is touched. Skip.
-- 4.12 Scope Check: exactly one unfenced `## Scope Check`, all three subsections present, eight asks mapped or descoped with a justification, no `status: BLOCKED` line; counts in Split Assessment match the four listed files. Pass.
-- 4.5 Network-outage keyword scan: the only hits are the substring `504` inside the PR number 10504, a false positive; no SSH, firewall or timeout is a hypothesis of this plan, so no deep-dive is spawned. Note for the work phase: reading the apply run's provisioner lines is a log read, not an SSH dependency of this plan.
-
-**Edge cases and conflicts.**
-
-- Conflict check: the CTO's original bar said a down monitor blocks the tick; the revised bar (recorded in `decision-challenges.md` row 3) supersedes it. The plan and tasks carry only the revised bar.
-- `status=up` on `soleur-git-data-prd` is optional evidence and never cited as delivery; the apply-run log above is the delivery evidence.
-- A rejected or revised PR leaves the umbrella untouched because the tick and comments run only after the merge.
-- If `origin/main` moves a file in the `apps/web-platform/infra/*.sh` set before the work phase, Phase 1 (a) must be re-run rather than cited.
-
-## Plan Review Revisions (2026-10-18)
-
-Panel: DHH, Kieran, code-simplicity (threshold none, so no escalation); the CTO was already the ruling authority, so no separate devex seat.
-
-- Applied (mechanical): sequencing (tick and comments after merge, evidence cited by PR number); umbrella-edit guard and the existing-note decision; secret-scan AC uses plain `grep -r` and covers the PR body and comment drafts; diff-scope AC now has a failing condition and the real INDEX path; "6 converted of 16 derived"; Split Assessment file count corrected (4); ADR sections cited by their real headings; luks residual names the cutover runbook; transport-line cross-check grep cut (S6-HB is authoritative); line-number citations replaced by content anchors in the evidence file; existing-residual read before the #10093 comment.
-- Applied (CTO-ruled technical): bar (c) is the apply-run conclusion, the monitor read is optional and never delivery evidence, `status=down` does not block the transport tick.
-- Surfaced, not applied (taste): fold `closeout-evidence.md`, `tasks.md` and `decision-challenges.md` into the plan (kept: the brief requires the decision record, the pipeline consumes `tasks.md`, and the evidence file lets a reviewer re-check without the session); collapse the ratchet table further (kept in four rows because ask 7 names them); the tick is a one-way signal an owner may read as "done" while residuals remain (mitigated by the scoped label; restated in the merge-approval ask).
-
 ## Sharp Edges
 
 - A plan whose `## User-Brand Impact` section is empty or omits the threshold fails `deepen-plan`; this one declares `none` with a reason because the diff is knowledge-base only.
 - Do not put the heartbeat URL, the Better Stack token or a digest into the evidence file, a comment, or the PR body; a path-bearing URL pasted as "proof" is the exposure this item exists to prevent.
 - The umbrella body edit must change exactly one line; a read-modify-write that reflows the checklist would silently rewrite other items. Diff, and re-read for concurrent edits, before posting.
 - Do not use a closing keyword for #9757, #10093 or #10363 anywhere in the PR; closure of #10093 and the umbrella is evidenced work later.
-- Never cite a monitor "up" read as delivery evidence: `soleur-git-data-prd` only shows some probe is beating, and the luks monitor is paused with a second pusher.
+- Never cite a monitor "up" read as delivery evidence: `soleur-git-data-prd` only shows some probe is beating, and the luks monitor is paused.
 - Stale-premise lesson: re-read main before acting on a brief that names files as unconverted; the umbrella text lags merged work.
