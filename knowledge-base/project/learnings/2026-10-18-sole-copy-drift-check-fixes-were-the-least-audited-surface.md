@@ -31,6 +31,7 @@ mutate it in a sandbox with a landing assertion before claiming RED.
 5. **A process-listing command was blocked by a hook (full-command-line match is self-matching); `test-argv-bearer-sweep` hung without stdin** — Recovery: PIDs from `$!`, `</dev/null` — Prevention: run suites with `</dev/null` in non-interactive shells, and keep the blocked command's text out of heredocs (the hook scans the whole command).
 6. **A foreground mutation batch exceeded the 120 s tool limit** — Recovery: it continued in the background and was read from its output file — Prevention: run multi-mutant batches with `run_in_background` from the start.
 7. **Assumed the sandbox copy held the ADR/runbook files the suite reads; it did not** — Recovery: copied them in before the control run — Prevention: always run the unmutated control first (it caught this).
+8. **CI `test-scripts (6/8)` went red on `.claude/hooks/grep-q-pipe-guard.test.sh`: a new suite that stubs `curl`/`doppler` needs `PRODUCER_JOIN` rows and a `PJ_TRIPLES` bump (275 to 277)** — Recovery: two exempt rows with vocabulary reasons plus the count, guard green locally — Prevention: the affected selector does not pick this guard for workflow-file or new-suite changes (the guard's own header says so, #10447), so run `bash .claude/hooks/grep-q-pipe-guard.test.sh` by hand whenever a new suite stubs a verb that a workflow or script pipes text into.
 
 ## Tags
 category: workflow-issues
