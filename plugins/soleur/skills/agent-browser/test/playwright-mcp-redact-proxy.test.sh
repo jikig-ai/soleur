@@ -1385,7 +1385,7 @@ assert_true 'Guard 3 mutant 5: renaming the server key fails the lookup loudly' 
 
 # PR2 (#10331): the swallowed-error note carries a class name and a literal site label only, never raises,
 # and runs after the group kill. The probe text is shared with the other suites except its census and the teardown case.
-note_probe="$(python3 -I - "$PROXY_SHIPPED" reply-unrelayed-request,teardown-stdin-close,teardown-sigkill,teardown-final-wait,teardown-flush 2>&1 <<'PY' || true
+note_probe="$(python3 -I - "$PROXY" reply-unrelayed-request,teardown-stdin-close,teardown-sigkill,teardown-final-wait,teardown-flush 2>&1 <<'PY' || true
 import ast, importlib.util, io, os, signal, sys
 spec = importlib.util.spec_from_file_location("note_target", sys.argv[1])
 mod = importlib.util.module_from_spec(spec)
@@ -1534,9 +1534,37 @@ finally:
     os._exit, os.killpg, sys.stderr = real_exit, real_killpg, real_err
 say(code == 0 and attempts == [[signal.SIGTERM]] and "child exited rc=0" in captured, "teardown-note-after-kill")
 say(texts == [mod.PREFIX + " swallowed OSError at teardown-stdin-close\n"], "teardown-note-text")
+
+# Guard 1 row 5 (slice 1 of #10331): the SIGTERM step suppresses ProcessLookupError ONLY. A PermissionError from os.killpg is not
+# "the group is already empty" and must surface; widening the suppress to Exception would swallow it.
+def fake_killpg_denied(pg, sig):
+    if sig == 0:
+        raise ProcessLookupError
+    raise PermissionError("denied")
+
+proxy2 = mod.Proxy.__new__(mod.Proxy)
+proxy2.out = io.BytesIO()
+proxy2.tearing_down = False
+proxy2.grace = 0.2
+proxy2.pgid = 4242425
+proxy2.child = FakeChild()
+real_exit, real_killpg, real_err = os._exit, os.killpg, sys.stderr
+os._exit, os.killpg, sys.stderr = fake_exit, fake_killpg_denied, io.StringIO()
+outcome = "returned"
+try:
+    proxy2.teardown("probe-denied")
+except Exit:
+    outcome = "exit"
+except PermissionError:
+    outcome = "PermissionError"
+except BaseException:
+    outcome = "other"
+finally:
+    os._exit, os.killpg, sys.stderr = real_exit, real_killpg, real_err
+say(outcome == "PermissionError", "teardown-permerror-surfaces")
 PY
 )"
-for tok in line-shape canary-absent oserror-stderr valueerror-stderr runtimeerror-stderr none-stderr closed-stderr census-literal-labels census-label-set census-rejects-keyword census-rejects-computed census-accepts-literal census-accepts-pending-literal census-rejects-pending-computed teardown-note-after-kill teardown-note-text; do
+for tok in line-shape canary-absent oserror-stderr valueerror-stderr runtimeerror-stderr none-stderr closed-stderr census-literal-labels census-label-set census-rejects-keyword census-rejects-computed census-accepts-literal census-accepts-pending-literal census-rejects-pending-computed teardown-note-after-kill teardown-note-text teardown-permerror-surfaces; do
   assert_true "PR2 note probe: $tok" grep -qxF "OK $tok" <<<"$note_probe"
 done
 
@@ -1556,7 +1584,7 @@ if [[ $mutants_declared -ne $EXPECTED_MUTANTS || $red_rows -ne $EXPECTED_RED_ROW
   printf '[FATAL] mutation matrix: %d mutants / %d mutation rows ran, expected %d / %d — a row vanished\n' "$mutants_declared" "$red_rows" "$EXPECTED_MUTANTS" "$EXPECTED_RED_ROWS" >&2
   exit 1
 fi
-MIN_ASSERTIONS=497
+MIN_ASSERTIONS=498
 if [[ $cases -lt $MIN_ASSERTIONS ]]; then
   printf '[FATAL] vacuity floor: only %d cases executed, expected at least %d\n' "$cases" "$MIN_ASSERTIONS" >&2
   exit 1
