@@ -17,7 +17,7 @@ seat read the fix rather than the feature:
 - To close a quadratic email regex (100k characters with no `@` took ~23 s) I added a
   lookbehind and wrote "the redacted output is identical" in the comment and "same output" in
   the test title. It was not: after one match ends, a back-to-back address whose local part
-  begins with a local-part character (`a@b.com+c@d.org`) can no longer start a match, so the
+  begins with a local-part character (`a@example.com+c@example.org`) can no longer start a match, so the
   second address stayed in a public Actions log. No test had two addresses in one string.
 - The tests ran the emit step only up to a cut before the Sentry payload, and compared a
   hand-copied `redact(err.message)` instead of the conversion `main()`'s catch performs. The
