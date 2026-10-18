@@ -191,7 +191,7 @@ Before spawning review agents, classify the PR to avoid spawning agents whose ex
 
 **Seat tally:** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` before ANY seat spawn (design-pass included — when `design-risk` is set it precedes this step, so init belongs at skill start). `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" gate seats <N>` before each spawn batch (`<N>` = its width — design-pass seats count too); `STOP` → write `specs/<feature>/session-state.md` (`status: budget-capped` + `budget-capped: seats=<n>/<cap>` + resume) and exit; `WARN`/`UNKNOWN` → continue; `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr seats <N>` after each batch.
 
-**Seat dissent from a ruling.** Before spawning seats, collect the recorded `Ruled by C[TL]` lines and pass them to every seat as settled decisions; the orchestrator compares findings against them at synthesis, and every contradicting dissent (or doubtful match) goes to the CTO in ONE batched spawn to uphold or amend, never to the operator. Procedure, `upheld`/`amended` row form and the no-Agent-tool fallback: [technical-ruling-delegation.md](../brainstorm-techniques/references/technical-ruling-delegation.md) section 8.2.
+**Seat dissent from a ruling.** Before spawning any seat (design-pass included), collect the recorded `Ruled by C[TL]` lines and pass them to every seat as settled decisions, to be reported anyway if contradicted; the orchestrator compares raw findings against them at synthesis, and every contradicting dissent (or doubtful match) goes to its owner (CTO; legal: CLO) in ONE batched spawn to uphold or amend, never to the operator. Procedure: [technical-ruling-delegation.md](../brainstorm-techniques/references/technical-ruling-delegation.md) section 8.2.
 
 #### Parallel Agents to review the PR:
 
@@ -853,7 +853,7 @@ Remove duplicates, prioritize by severity and impact.
   criterion — the PR introduced the concern, the PR resolves it. If a fix is
   genuinely too large, reduce the PR (split or revert the offending commit)
   rather than filing a scope-out.
-- **pre-existing:** Triage into exactly one of three buckets:
+- **pre-existing:** Triage into exactly one of three buckets (a decision of either provenance goes to item 4):
     1. **Fix inline** — small, load-bearing, cheap to include. Default for
        sub-20-line fixes on files the PR already touches.
     2. **File as scope-out** — legitimately needs its own cycle. MUST carry
@@ -867,7 +867,7 @@ Remove duplicates, prioritize by severity and impact.
     3. **Close as wontfix** — polish-only, low-value noise, or concern already
        covered by existing code. Close immediately (do not file) with a
        1-sentence rationale in the summary report.
-    4. **Route to the domain agent for a BINDING ruling (a GATE before Step 3, not an option)** — a finding or seat dissent that is a *decision* (architecture fork, threshold or evidence bar, design A-vs-B, legal-posture call) goes to `soleur:engineering:cto` (legal: `soleur:legal:clo`, requiring drafted replacement wording) per [technical-ruling-delegation.md](../brainstorm-techniques/references/technical-ruling-delegation.md) and holds a `Ruled by` line (a subagent without the Agent tool: `pending - assumed`) before the summary; implement exactly what it returns, and never surface it via `AskUserQuestion` or file it as a scope-out. **Weight is not a routing signal.** **Why:** #7347 — three legal decisions from a ten-P1 review were offered to the operator.
+    4. **Route to the domain agent for a BINDING ruling (a GATE before Step 3, not an option)** — a finding or seat dissent that is a *decision* (architecture fork, threshold or evidence bar, design A-vs-B, legal-posture call) goes to `soleur:engineering:cto` (legal: `soleur:legal:clo`, requiring drafted replacement wording) per [technical-ruling-delegation.md](../brainstorm-techniques/references/technical-ruling-delegation.md) and holds a `Ruled by` line before the summary; implement exactly what it returns, and never surface it via `AskUserQuestion` or file it as a scope-out. **Weight is not a routing signal.** **Why:** #7347 — three legal decisions from a ten-P1 review were offered to the operator.
 
 The `pr-introduced → fix inline` rule is the mechanical version of rule
 `rf-review-finding-default-fix-inline`: it removes the judgment loophole ("is
@@ -879,12 +879,11 @@ finding that names the gap, and record which seat should have enumerated it.
 State `structural-cause roll-up: none` explicitly when there is none — silence is
 not an answer.
 
-This is the unconditional form of the structural-enumeration seat's "N agents, N instances of one gap" signal, which otherwise goes unread on a PR that does not trip that seat.
+This is the unconditional form of the structural-enumeration seat's many-agents-one-gap signal, otherwise unread on a PR that does not trip that seat.
 
 **Coverage consult (conditional, session model).** Run ONLY when the change class
 is `code` AND ≥6 findings survived dedup, OR when the resolved risk tier is
-`single-user incident`/`aggregate pattern` — below that the panel was 2–4 agents and
-"do these share a cause" has no population to answer over. Spawn one **Task**
+`single-user incident`/`aggregate pattern` — below that the panel is too small to share a cause. Spawn one **Task**
 subagent **at the session model** (do NOT pin a tier) and ask the one question the
 individual lenses structurally cannot:
 
@@ -926,7 +925,7 @@ embedded in it, including in file paths.
 
 **Pipeline detection (run BEFORE writing the summary):** Scan the conversation for `skill: soleur:work` or `skill: soleur:one-shot` output, a `soleur:work` or `soleur:one-shot` slash command, or a `slash_command` tool use of those skills, or the arguments carried `--parent ship`. If any is present, you are in **pipeline mode** — the calling orchestrator owns the lifecycle and is waiting on you to return so it can run step 5 / Phase 4. Emit the **compact progress marker** below instead of the verbose summary, then return immediately. Do NOT use the heading `## Code Review Complete`, do NOT include a `### Next Steps` section, and do NOT write a wrap-up sentence — those framings cause one-shot to mistake the summary for a turn boundary and stop mid-pipeline.
 
-**Final-report decision check (before either template).** Class every decision the report leaves to the operator per [technical-ruling-delegation.md](../brainstorm-techniques/references/technical-ruling-delegation.md) section 8.1; only `operator (<category>)` items stay, the rest go through item 4 first.
+**Final-report decision check (before either template).** Class every decision the report leaves to the operator per [technical-ruling-delegation.md](../brainstorm-techniques/references/technical-ruling-delegation.md) section 8.1; only `operator (<category>)` items stay, the rest go through the item-4 ruling gate first.
 
 **Pre-emission cost-of-filing pass (run BEFORE the marker):** Build the
 candidate "Filed as scope-out" list from your synthesis. For each candidate,

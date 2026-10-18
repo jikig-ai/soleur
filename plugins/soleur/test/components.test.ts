@@ -648,19 +648,27 @@ describe("Technical-ruling delegation wiring", () => {
 // hr-technical-fork-is-not-an-operator-question. Presence pins, so the paragraphs cannot be
 // trimmed away under the SKILL.md byte ceilings without a red test naming the file + anchor.
 describe("Technical-ruling final-report wiring (#10499)", () => {
-  const flat = (rel: string) => readFileSync(resolve(PLUGIN_ROOT, rel), "utf-8").replace(/\s+/g, " ");
-  const hasAnchor = (text: string, anchor: string) => text.replace(/\s+/g, " ").includes(anchor);
+  // Fenced blocks and HTML comments are stripped first: an anchor moved into either is not live prose.
+  const strip = (t: string) => t.replace(/```[\s\S]*?```|<!--[\s\S]*?-->/g, " ").replace(/\s+/g, " ");
+  const flat = (rel: string) => strip(readFileSync(resolve(PLUGIN_ROOT, rel), "utf-8"));
+  const hasAnchor = (text: string, anchor: string) => strip(text).includes(anchor);
   const REF = "skills/brainstorm-techniques/references/technical-ruling-delegation.md";
+  const LINK81 = "technical-ruling-delegation.md) section 8.1; only `operator (<category>)` items stay";
   const PAIRS: Array<[string, string]> = [
     [REF, "## 8. Final-report check and seat dissent from a ruling"],
-    ["skills/review/SKILL.md", "**Final-report decision check"],
+    [REF, "**8.1 Final-report decision check"],
+    [REF, "**8.2 Seat dissent from a ruling"],
+    ["skills/review/SKILL.md", "**Final-report decision check (before either template).** Class every decision"],
+    ["skills/review/SKILL.md", LINK81],
     ["skills/review/SKILL.md", "**Seat dissent from a ruling.**"],
-    ["skills/review/SKILL.md", "a GATE before Step 3"],
-    ["skills/work/SKILL.md", "**Final-report decision check"],
+    ["skills/review/SKILL.md", "to uphold or amend, never to the operator"],
+    ["skills/review/SKILL.md", "**Route to the domain agent for a BINDING ruling (a GATE before Step 3"],
+    ["skills/work/SKILL.md", "**Final-report decision check.** Class every decision"],
+    ["skills/work/SKILL.md", LINK81],
   ];
 
   test("the anchor table has a floor (an emptied table must not pass)", () => {
-    expect(PAIRS.length).toBeGreaterThanOrEqual(5);
+    expect(PAIRS.length).toBeGreaterThanOrEqual(10);
   });
 
   for (const [rel, anchor] of PAIRS) {
@@ -678,9 +686,12 @@ describe("Technical-ruling final-report wiring (#10499)", () => {
     expect(dissent < seats, "the seat-dissent rule must precede the seat spawn (rulings are read before seats exist)").toBe(true);
   });
 
-  test("the instrument self-test: the helper rejects an absent anchor and accepts a re-flowed one", () => {
-    expect(hasAnchor("no wiring here", "**Final-report decision check")).toBe(false);
-    expect(hasAnchor("**Final-report\n    decision   check (x)", "**Final-report decision check")).toBe(true);
+  test("the instrument self-test: the helper rejects an absent, fenced or commented anchor and accepts a re-flowed one", () => {
+    const a = "**Final-report decision check";
+    expect(hasAnchor("no wiring here", a)).toBe(false);
+    expect(hasAnchor("```\n" + a + " (x)\n```", a)).toBe(false);
+    expect(hasAnchor("<!-- " + a + " (x) -->", a)).toBe(false);
+    expect(hasAnchor("**Final-report\n    decision   check (x)", a)).toBe(true);
   });
 });
 
