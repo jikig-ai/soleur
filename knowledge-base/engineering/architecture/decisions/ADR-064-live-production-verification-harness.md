@@ -32,7 +32,7 @@ MCP-browser dependency), asserting a fresh conversation appears in the rail, the
 tears it down. It is wired into `/soleur:postmerge` as a **path-triggered,
 report-only** gate (Phase 5.5).
 
-> **Superseded 2026-06-18 (#5463) for the gate posture:** the gate is BLOCKING, enforced by the
+> **Superseded 2026-06-18 (#5463, PR #5576) for the gate posture:** the gate is BLOCKING, enforced by the
 > `live-verify` job in `web-platform-release.yml`. The "report-only" wording in this section and
 > in §Substrate records the v1 stage and is kept as history. See the 2026-10-18 amendment below.
 
@@ -282,41 +282,72 @@ This **more completely satisfies ADR-044** (which defines `current_workspace_id`
 does not introduce or reverse any decision. Tracked by #5501; the live `RESULT: PASS`
 de-risks #5463 item 4 (report-only → blocking flip).
 
-## Amendment 2026-10-18 — the prod gate is LLM-free and the principal provably cannot spend
+## Amendment 2026-10-18 — the prod gate refuses to run when the principal holds a decryptable credential
 
 **Status: Accepted (extends the invariants; reverses nothing).** Issue #10449.
 
 An agent must not hand live verification to the operator ("start a Concierge session in the
 web app"). The harness can verify LLM-free behaviour in prod through the blocking gate, but
-only if the synthetic principal can never spend. Three invariants make that checkable and
-bound what a PASS means.
+only if the synthetic principal provably holds no credential that could spend. Three
+invariants make that checkable and bound what a PASS means.
 
-- **I-cannot-spend:** every `api_keys` row for the principal (all providers: anthropic,
-  anthropic_oauth, openai, and any later one) equals the seed's decrypt-poisoned sentinel
-  (`encrypted_key`, `iv`, `auth_tag` as `seed-live-verify-user.sh` inserts them), and no
-  `byok_delegations` row exists. Zero rows, a read error or a null body fail closed. Enforced
-  inside `verifyPrincipal`, the only constructor of `VerifiedPrincipal`, so the browser launch
-  is unreachable without it, and it runs under `--dry-run`. The read uses the principal's own
-  RLS session, never the service role (I-service-role-bootstrap-only holds). A violation is
-  `CANT-RUN:cannot-spend-violated`, which the release workflow classifies `BLOCK=1`: a safety
-  breach must not fail open like the environmental CANT-RUNs. Row contents are never logged and
-  the ciphertext JSON keys are in `redact.ts`. A funded key would break this invariant; any such
-  key needs its own ADR and CLO sign-off (tracked #10460).
-- **I-no-model-turn-in-prod:** the harness runs no model turn against the production principal.
-  Verification of behaviour that needs a model turn (Concierge URL fetch) is out of scope for
-  this gate; where a check needs traffic the gate cannot lawfully generate, the agent files a
-  tracker naming the missing capability and never asks the operator to start a session. The
-  passive path is tracked in #10461.
+- **I-cannot-spend:** at launch, every `api_keys` row for the principal (any provider the
+  table's CHECK allows) equals the seed's decrypt-poisoned sentinel (`encrypted_key`, `iv`,
+  `auth_tag` exactly as `seed-live-verify-user.sh` inserts them, exported as `SENTINEL_KEY`
+  and pinned against the seed by `gate.test.ts`), and no ACTIVE `byok_delegations` row is
+  visible to the principal. Active means `revoked_at IS NULL`, the filter the runtime
+  resolver applies; the table is append-only, so counting revoked rows would hold the gate
+  violated forever. The read uses the principal's own RLS session, never the service role
+  (the gate-run path stays service-role-free), so "no delegation" means "none the principal
+  can see", which is the visibility a delegation needs to confer spend. Enforced inside
+  `verifyPrincipal`, the only constructor of `VerifiedPrincipal` by convention (the type is
+  structural), so the browser launch is unreachable without it; it also runs under `--dry-run`
+  because `main()` calls it first (pinned by a source-order test).
+  - **Two failure classes (CTO ruling).** `cannot-spend-violated` (`api_keys-non-sentinel-row`,
+    `byok_delegations-present`) means the principal holds spend authority: BLOCK=1 in the
+    release workflow, `::error`. `cannot-spend-unverified` (`api_keys-unreadable`,
+    `byok_delegations-unreadable`, `api_keys-empty`) means the check could not be performed:
+    the throw still stops the launch, which is what delivers the safety property, so the
+    classifier keeps BLOCK=0 (a red run adds no safety and would gate prod on an infra blip,
+    against commit 2686235be9's intent and AP-021) and annotates `::error` so a permanently
+    unverifiable gate is not invisible. The BLOCK=0 here is a deliberate fail-open of the red
+    run only, never of the safety property. `CANT-TEARDOWN-has-action-sends` and the
+    allowlist (wrong UID or email) throws stay BLOCK=0, unchanged.
+  - Row contents are never logged; messages carry a class only, and `redact.ts` scrubs the
+    ciphertext keys as a backstop.
+  - **Recovery.** `cannot-spend-violated` stays red until the offending state is removed with
+    the service role from the local bootstrap path: delete non-sentinel `api_keys` rows for
+    the principal UID (the seed never repairs an existing row), and revoke any active
+    delegation through `revoke_byok_delegation`. `cannot-spend-unverified` means check the seed step
+    (`live-verify principal may be stale`), the RLS/jti-deny state and PostgREST health, then
+    re-run the release job.
+  - **What the assembly covers.** The BYOK key chain (`api_keys` plus delegations), which is
+    the chain `resolve_byok_key_owner` consults. It does not cover other tables a future
+    feature could attach spend to (for example `email_inbox_routes`, `scope_grants`), and it
+    attests stored state at launch, per triggered release, not continuously.
+- **I-no-model-turn-in-prod:** the prod gate does not verify any outcome that needs a model
+  turn. The non-dry-run path does send one message; the turn fails inside the app because the
+  stored key cannot decrypt, and only that poisoned row stops a model call. Where a check
+  needs traffic the gate cannot lawfully generate, the agent files a tracker naming the
+  missing capability and never asks the operator to start a session (#10460 funded key,
+  #10461 passive path).
 - **I-egress-not-attested-by-gate:** a PASS does not attest Squid `%un` egress attribution or
-  the real CONNECT path. Skills must say so wherever they report a PASS.
+  the real CONNECT path. The harness process also runs under `doppler run -c prd`, so this
+  invariant covers the principal's rows, not the job's environment.
+- **I-service-role-bootstrap-only, restated precisely:** it holds for `run.ts`. The release
+  job's seed step runs with the service role (a pre-existing, separately scoped exception);
+  this amendment does not widen it.
 
 **`qa-fixtures` contract (sketch, build deferred to #10450).** Extra personas exist only in
 non-prod environments, with fresh orgs. `I-allowlist` stays exactly one prod principal.
 
 **An agent-filed tracker is a repo write, not a prod write.** It needs no operator
 authorisation and does not widen I-blast-radius. The flag flip and rollback stay operator-typed
-(ADR-249; migration tracked #9387).
+([ADR-249](./ADR-249-operator-prod-writes-need-a-tty-ack-layered-with-credential-custody.md),
+partly superseded by ADR-264 for generated operator scripts only; the four flag skills remain
+TTY-gated, migration tracked #9387).
 
 **Residual "report-only" mentions in this ADR** (Decision, §Substrate, the 2026-06-17
 runner-browser section and amendment) were each reviewed and describe the v1 stage; they are
-history, superseded for posture by the blockquote under §Decision.
+history, superseded for posture by the blockquote under §Decision. The flip to blocking is
+PR #5576 (commit 2686235be9); run 27786435514 was the first real PASS that unblocked it.

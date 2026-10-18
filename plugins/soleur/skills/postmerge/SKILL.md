@@ -383,26 +383,31 @@ dedicated **synthetic prod principal** (never an operator/real-user session),
 drives the deployed UI, and asserts a freshly-started conversation appears in the
 Recent Conversations rail.
 
-**Gate posture: BLOCKING, enforced in CI (#5463, flipped 2026-06-18).** The authority
-is the `live-verify` job in `.github/workflows/web-platform-release.yml`: its
-"Enforce live-verify gate" step fails the release run when the emit step computes
-`BLOCK=1` (a `FAIL`, an empty result line, or `CANT-RUN:cannot-spend-violated`).
-Re-derive gate state from that workflow, not from this prose. This skill's own run
-of the harness (below) records and surfaces the same tri-state result for the
-post-merge report; it does not itself decide the release, and a boolean flip inside
-this agent-driven skill is NOT the gate (it would recreate the #4932
-non-deterministic-blocking-gate class).
+**Gate posture: BLOCKING, enforced in CI (#5463, flipped 2026-06-18, PR #5576).** The
+authority is the `live-verify` job in `.github/workflows/web-platform-release.yml`: its
+"Enforce live-verify gate" step fails the release run when the emit step computes `BLOCK=1`
+(a `FAIL`, an empty result line, or `CANT-RUN:cannot-spend-violated`). A
+`CANT-RUN:cannot-spend-unverified` (the I-cannot-spend check could not read its inputs) is
+annotated `::error` but is BLOCK=0, because the throw before the browser launch already
+delivers the safety property. Re-derive gate state from that workflow, not from this prose.
+This skill's own run of the harness (below) is separate evidence for the post-merge report; it
+does not decide the release, and a boolean flip inside this agent-driven skill is NOT the gate
+(it would recreate the #4932 non-deterministic-blocking-gate class).
 
-**What a PASS does and does not prove.** The gate is LLM-free: the synthetic
-principal runs no model turn in prod and cannot spend (ADR-064 `I-cannot-spend`,
-checked in `verifyPrincipal` before the browser launches, also under `--dry-run`),
-so a PASS covers deterministic trigger-path behaviour (auth, realtime, persist, rail).
-It does **not** attest the real CONNECT path or Squid `%un` egress attribution
-(`I-egress-not-attested-by-gate`), and it generates no Concierge traffic. A check
-that needs traffic the gate cannot lawfully generate is not a reason to ask the
-operator to start a session: file a tracker naming the missing capability (see
-`flag-set-role` §"Verifying a flip"). A flag flip never triggers this job (it is
-diff-triggered), and the flip and rollback themselves stay operator-typed (ADR-249).
+**What a PASS does and does not prove.** The harness refuses to run unless the synthetic
+principal holds no decryptable credential (ADR-064 `I-cannot-spend`, checked in
+`verifyPrincipal` before the browser launches, also under `--dry-run`). A `RESULT: PASS`
+means ONE flow worked against the deployed app: a freshly started conversation appeared in the
+Recent Conversations rail. It is not a coverage list for auth, realtime or persist beyond that
+flow, it does not attest the real CONNECT path or Squid `%un` egress attribution
+(`I-egress-not-attested-by-gate`), and it generates no Concierge traffic. **A green
+`live-verify` job is not a PASS:** SKIPPED and every environmental `CANT-RUN` leave the job
+green, so only the `RESULT: PASS` line counts, and anything else is UNVERIFIED. A check that
+needs traffic the gate cannot lawfully generate is not a reason to ask the operator to start a
+session: record `Live verification: UNVERIFIED:<capability>` and reference #10460 / #10461
+(see `flag-set-role` §"Verifying a flip"). The job runs on every deploy but its harness step
+is diff-gated on `trigger-paths.txt`, and a flag flip is not a commit, so a flip starts
+nothing; the flip and rollback themselves stay operator-typed (ADR-249).
 
 **1. Path trigger (FR7).** The trigger set is the committed source-of-truth
 `apps/web-platform/scripts/live-verify/trigger-paths.txt` (not SKILL.md prose).
@@ -587,8 +592,8 @@ git mv <row-path> knowledge-base/project/<root>/archive/$(date +%Y%m%d-%H%M%S)-<
 
 then open a follow-up PR — archival cannot ride a PR that already merged. **M-row caveat:** an `M` on `specs/<dir>/` can be a
 drive-by edit to a SIBLING feature's in-flight spec — verify the dir belongs to the merged feature first; if not, revert the
-edit (`git checkout origin/main -- <path>` then commit) rather than `git mv`-ing another feature's dir. Like Phases 5.5/5.6/5.7
-it is REPORT-ONLY: it never blocks the "done" verdict; the signal is for immediate operator attention, not rollback.
+edit (`git checkout origin/main -- <path>` then commit) rather than `git mv`-ing another feature's dir. Like Phases 5.6/5.7
+it is REPORT-ONLY (Phase 5.5 is blocking in CI): it never blocks the "done" verdict; the signal is for immediate operator attention, not rollback.
 
 ## Phase 6: Update Issue and Compound
 
@@ -603,7 +608,7 @@ gh issue comment <issue-number> --body "Post-merge verification complete for PR 
 - Sentry error-count delta: <AUTO-RESOLVED/STOPPED/STILL-FIRING/SKIPPED>
 - File freshness: <PASSED/N files checked>
 - Browser verification: <PASSED/SKIPPED/DELEGATED-TO-LIVE-VERIFY>
-- Live verification: <PASS/FAIL/CANT-RUN:reason/SKIPPED> (blocking in CI, #5463)
+- Live verification: <PASS/FAIL/CANT-RUN:reason/SKIPPED/UNVERIFIED:capability> (blocking in CI, #5463)
 - Sole-copy read-back: <protected/not-protected/volume-gone/read-failed/missing-token/no word/SKIPPED> (report-only, #9879)
 - KB archival read-back: <clean/verbatim rows> (report-only)
 "
@@ -630,7 +635,7 @@ Sentry monitors: <HEALTHY/WARNING/SKIPPED>
 Sentry error-count delta: <AUTO-RESOLVED/STOPPED/STILL-FIRING/SKIPPED>
 File freshness: <N files verified>
 Browser verification: <PASSED/SKIPPED/DELEGATED-TO-LIVE-VERIFY>
-Live verification: <PASS/FAIL/CANT-RUN:reason/SKIPPED> (blocking in CI, #5463)
+Live verification: <PASS/FAIL/CANT-RUN:reason/SKIPPED/UNVERIFIED:capability> (blocking in CI, #5463)
 Sole-copy read-back: <protected/not-protected/volume-gone/read-failed/missing-token/no word/SKIPPED> (report-only, #9879)
 KB archival read-back: <clean/verbatim rows> (report-only)
 Feature-tweet draft: <path + "flip publish_date + status: scheduled to publish" / CATCH-UP: run soleur:feature-tweet #N / NONE — ineligible>

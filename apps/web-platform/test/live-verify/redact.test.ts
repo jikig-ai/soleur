@@ -108,13 +108,39 @@ describe("redact", () => {
     expect(out).toContain("[REDACTED_SB_SESSION]");
   });
 
-  it("redacts api_keys ciphertext fields by JSON key (I-cannot-spend read)", () => {
-    const row = '{"provider":"anthropic","encrypted_key":"ct-secret-value","iv":"iv-secret-value","auth_tag":"tag-secret-value"}';
-    const out = redact(row);
-    for (const v of ["ct-secret-value", "iv-secret-value", "tag-secret-value"]) {
-      expect(out).not.toContain(v);
-    }
-    expect(out).toContain('"provider":"anthropic"');
-    expect(out).toContain('"encrypted_key":"[REDACTED]');
+  describe("api_keys ciphertext fields (I-cannot-spend backstop)", () => {
+    // Exact equality, not not.toContain: a rule that redacts one character, or
+    // all of the line, would satisfy an absence-only assertion.
+    it.each([
+      [
+        "JSON",
+        '{"provider":"anthropic","encrypted_key":"ct-secret-value","iv":"iv-secret-value","auth_tag":"tag-secret-value"}',
+        '{"provider":"anthropic","encrypted_key":"[REDACTED]","iv":"[REDACTED]","auth_tag":"[REDACTED]"}',
+      ],
+      [
+        "JSON, pretty-printed",
+        '{\n  "encrypted_key": "ct secret",\n  "iv": "x"\n}',
+        '{\n  "encrypted_key": "[REDACTED]",\n  "iv": "[REDACTED]"\n}',
+      ],
+      [
+        "util.inspect",
+        "{ provider: 'anthropic', encrypted_key: 'ct-secret', iv: 'iv-secret', auth_tag: 'tag-secret' }",
+        "{ provider: 'anthropic', encrypted_key: '[REDACTED]', iv: '[REDACTED]', auth_tag: '[REDACTED]' }",
+      ],
+      [
+        "query string",
+        "encrypted_key=ct-secret&iv=iv-secret&auth_tag=tag-secret",
+        "encrypted_key=[REDACTED]&iv=[REDACTED]&auth_tag=[REDACTED]",
+      ],
+    ])("redacts the %s form exactly", (_n, input, expected) => {
+      expect(redact(input)).toBe(expected);
+      expect(redact(expected)).toBe(expected); // idempotent
+    });
+
+    it("keeps diagnostic text that merely contains the key names (retention)", () => {
+      // Shaped like what an over-broad rule eats: identifiers, paths, filenames.
+      const keep = "div=keepme device_iv: keep /usr/lib/iv.so libkeyring.so.1 fetch failed: ENOENT";
+      expect(redact(keep)).toBe(keep);
+    });
   });
 });

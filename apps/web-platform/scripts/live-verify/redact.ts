@@ -69,10 +69,18 @@ const RULES: Array<[RegExp, string]> = [
     `$1${PLACEHOLDER}`,
   ],
   // api_keys ciphertext columns (I-cannot-spend read in verifyPrincipal). The
-  // gate never logs row contents; this is the backstop should a row ever reach
-  // a captured error, response body or console line.
+  // gate never logs row data; this is the backstop should a row ever reach a
+  // captured error, response body or console line. Two shapes: JSON
+  // (`"encrypted_key":"…"`) and unquoted/`util.inspect`/query-string
+  // (`encrypted_key: '…'`, `iv=…&`). The lookbehind keeps `iv` from matching
+  // inside other identifiers (`div=`, `device_iv:`); the lookahead keeps the
+  // rule idempotent on its own output.
   [
     /(["'](?:encrypted_key|iv|auth_tag)["']\s*:\s*")[^"]+/gi,
+    `$1${PLACEHOLDER}`,
+  ],
+  [
+    /((?<![A-Za-z0-9_])(?:encrypted_key|iv|auth_tag)["']?\s*[:=]\s*["']?)(?!\[REDACTED)[^\s"',&;)}\]]+/gi,
     `$1${PLACEHOLDER}`,
   ],
   // Generic JWT shape (3 base64url segments) — catches bare tokens in DOM/logs.
