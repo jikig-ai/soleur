@@ -40,7 +40,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "plugins" / "soleur" / "scripts" / "lint-ratchet.py"
 REQUIREMENTS = REPO_ROOT / "plugins" / "soleur" / "scripts" / "ruff-requirements.txt"
 FIXTURES = REPO_ROOT / "tests" / "scripts" / "fixtures" / "lint-ratchet"
-MIN_CASES = 60
+MIN_CASES = 205
 
 # The synthetic sample and the rule rows its captured report holds (row numbers are 1-based).
 SAMPLE_PY = (FIXTURES / "sample.py.txt").read_text()
@@ -1606,6 +1606,674 @@ class TestMain(CheckBase):
         self.assertEqual(result.returncode, 2)
 
 
+
+FAKE_RUFF = r"""#!{python}
+import json, os, sys
+argv = sys.argv[1:]
+log = os.environ.get("FAKE_RUFF_LOG")
+if log:
+    with open(log, "a") as handle:
+        handle.write(json.dumps({{"argv": argv, "cwd": os.getcwd(),
+                                  "env": sorted(k for k in os.environ if k.startswith(("RUFF_", "PYTHON")))}}) + "\n")
+files = argv[argv.index("--") + 1:] if "--" in argv else []
+mode = os.environ.get("FAKE_RUFF_MODE", "")
+if mode == "config":
+    sys.stderr.write("ruff failed\n  Cause: unknown field `bogus` in /secret/home/ruff.toml\n")
+    sys.exit(2)
+if "--show-files" in argv:
+    if mode == "nolist":
+        sys.exit(0)
+    for name in files:
+        print(os.path.join(os.getcwd(), name))
+    sys.exit(0)
+if mode == "crash":
+    sys.stderr.write("error: boom\n")
+    sys.exit(2)
+if mode == "failed":
+    sys.stderr.write("warning: Failed to lint x.py: stream did not contain valid UTF-8\n")
+    print("[]")
+    sys.exit(0)
+if mode == "badjson":
+    print("not json")
+    sys.exit(1)
+if mode == "rc3":
+    sys.exit(3)
+if os.environ.get("FAKE_FIX_ONLY") and "--no-fix-only" not in argv:
+    for name in files:
+        with open(name, "a") as handle:
+            handle.write("# rewritten by fix-only\n")
+out = []
+for name in files:
+    with open(name) as handle:
+        for row, line in enumerate(handle.read().splitlines(), start=1):
+            if "open(" in line and not ("# noqa" in line and "--ignore-noqa" not in argv):
+                out.append({{"code": "SIM115", "filename": os.path.join(os.getcwd(), name),
+                             "location": {{"row": row, "column": 1}}, "message": "use a context manager"}})
+print(json.dumps(out))
+sys.exit(1 if out else 0)
+"""
+
+PYPROJECT_RUFF = "[project]\nname = 'demo'\n\n[tool.ruff]\nline-length = 100\n"
+USER_BASELINE = ".lint-ratchet/ruff.baseline.txt"
+
+
+class UserModeBase(ScrubbedEnv):
+    """A throwaway user repository whose ruff is a deterministic fake, driven through the real CLI."""
+
+    def setUp(self):
+        super().setUp()
+        self.repo = Repo(self)
+        self.tools = Path(self.fake_home.name) / "tools"
+        self.tools.mkdir()
+        self.fake_ruff = self.tools / "ruff"
+        self.fake_ruff.write_text(FAKE_RUFF.format(python=sys.executable))
+        self.fake_ruff.chmod(0o755)
+        self.log = self.tools / "calls.log"
+        self.provisioned = 0
+
+    def ensure(self, requirements, env, **kwargs):
+        self.provisioned += 1
+        return self.fake_ruff
+
+    def cli(self, *argv, env=None, root=None):
+        merged = dict(self.repo.env)
+        merged["FAKE_RUFF_LOG"] = str(self.log)
+        merged.update(env or {})
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                mock.patch.object(lr, "ensure_ruff", self.ensure), \
+                mock.patch.object(lr, "resolve_root", lambda env=None: root or self.repo.root), \
+                mock.patch.dict(os.environ, merged, clear=True):
+            try:
+                code = lr.main(list(argv))
+            except SystemExit as exc:
+                code = exc.code
+        return code, out.getvalue(), err.getvalue()
+
+    def calls(self):
+        if not self.log.exists():
+            return []
+        return [json.loads(line) for line in self.log.read_text().splitlines()]
+
+    def adopt_files(self, config=PYPROJECT_RUFF):
+        self.repo.write("pyproject.toml", config)
+        self.repo.write("a.py", "import os\n" + VIOLATION)
+
+    def adopt(self):
+        """Config + one finding, baselined and committed; origin/main points at the adopting commit."""
+        self.adopt_files()
+        self.repo.git("update-ref", "refs/remotes/origin/main", self.repo.commit("code"))
+        code, out, err = self.cli("user-ruff", "--update")
+        self.assertEqual((code, err), (0, ""), out)
+        sha = self.repo.commit("adopt")
+        self.repo.git("update-ref", "refs/remotes/origin/main", sha)
+        return sha
+
+    def script_cmd(self, scope="user-ruff", mode="--update"):
+        import shlex
+        return "python3 {} {} {}".format(shlex.quote(str(Path(lr.__file__).resolve())), scope, mode)
+
+
+class TestUserModeStates(UserModeBase):
+    def test_no_ruff_config_is_a_quiet_zero_and_never_provisions(self):
+        self.repo.write("a.py", "x = 1\n")
+        self.repo.commit()
+        code, out, _ = self.cli("auto")
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip(), "lint-ratchet: no linter configured (no tracked ruff config at {}; nested "
+                                      "configs unsupported); nothing to ratchet".format(self.repo.root))
+        self.assertEqual(self.provisioned, 0)
+
+    def test_a_config_without_a_baseline_is_not_adopted_and_never_provisions(self):
+        self.adopt_files()
+        self.repo.commit()
+        code, out, err = self.cli("auto")
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip(), "lint-ratchet(user-ruff): not adopted. Ask the user whether to adopt; if yes, "
+                                      "run: " + self.script_cmd())
+        self.assertEqual(self.provisioned, 0, "pip must never run for a repository that did not opt in")
+        self.assertEqual(self.calls(), [])
+
+    def test_not_adopted_with_an_unresolvable_base_says_the_deletion_check_did_not_run(self):
+        self.adopt_files()
+        self.repo.commit()
+        self.repo.git("branch", "-m", "work")
+        code, out, err = self.cli("auto")
+        self.assertEqual(code, 0)
+        self.assertIn("not adopted", out)
+        self.assertIn("lint-ratchet(user-ruff): base unresolvable: baseline-deletion check not performed", err)
+
+    def test_adopted_and_clean_is_ok_and_runs_the_fake_ruff_with_the_user_argv(self):
+        self.adopt()
+        code, out, err = self.cli("auto")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(out.strip(), "lint-ratchet(user-ruff): OK (1 findings baselined, 1 files scanned)")
+        argv = [c["argv"] for c in self.calls() if "--show-files" not in c["argv"]][-1]
+        for flag in ("--no-cache", "--no-fix", "--no-fix-only", "--force-exclude", "--output-format", "json"):
+            self.assertIn(flag, argv)
+        for forbidden in ("--config", "--ignore-noqa", "--isolated"):
+            self.assertNotIn(forbidden, argv)
+
+    def test_a_new_finding_blocks(self):
+        self.adopt()
+        self.repo.write("a.py", "import os\n" + VIOLATION + "    again = open(other)\n")
+        code, out, err = self.cli("auto")
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("NEW a.py:3 SIM115", err)
+
+    def test_a_stale_entry_blocks(self):
+        self.adopt()
+        self.repo.write("a.py", "import os\n")
+        code, _, err = self.cli("auto")
+        self.assertEqual(code, 1)
+        self.assertIn("STALE", err)
+
+    def test_growth_is_compared_against_a_master_default_branch_with_no_origin(self):
+        self.adopt_files()
+        self.repo.commit("code")
+        self.repo.git("branch", "-m", "master")
+        self.cli("user-ruff", "--update")
+        self.repo.commit("adopt")
+        self.repo.git("update-ref", "-d", "refs/remotes/origin/main", check=False)
+        self.repo.git("checkout", "-q", "-b", "feature")
+        self.repo.write("a.py", "import os\n" + VIOLATION + "    again = open(other)\n")
+        findings, _ = lr.run_user_ruff(self.repo.root, dict(self.repo.env), ruff_path=self.fake_ruff)
+        text = lr.render_baseline("user-ruff", lr.census(findings, self.repo.root), None, None, header=lr.toolchain_header(self.repo.root))
+        (self.repo.root / USER_BASELINE).write_text(text)
+        code, _, err = self.cli("auto")
+        self.assertEqual(code, 1, err)
+        self.assertIn("baseline grew", err)
+        self.assertIn("WARN: using local master as merge base", err)
+
+    def test_a_baseline_deleted_since_the_merge_base_blocks_even_under_ci(self):
+        self.adopt()
+        (self.repo.root / USER_BASELINE).unlink()
+        for env in ({}, {"CI": "true"}):
+            code, out, err = self.cli("auto", env=env)
+            self.assertEqual(code, 1, env)
+            self.assertIn("baseline deleted since the merge base: restore it, or un-adopt on purpose with git rm -r "
+                          ".lint-ratchet", err)
+            self.assertNotIn("not adopted", out + err)
+
+    def test_a_baseline_kept_after_the_config_is_deleted_blocks(self):
+        self.adopt()
+        (self.repo.root / "pyproject.toml").unlink()
+        code, _, err = self.cli("auto")
+        self.assertEqual(code, 1)
+        self.assertIn("baseline exists but no ruff config detected", err)
+
+    def test_a_committed_baseline_missing_from_the_tree_with_no_base_is_2_under_ci_and_a_warning_locally(self):
+        self.adopt()
+        self.repo.git("update-ref", "-d", "refs/remotes/origin/main")
+        self.repo.git("branch", "-m", "work")
+        (self.repo.root / USER_BASELINE).unlink()
+        code, out, err = self.cli("auto", env={"CI": "true"})
+        self.assertEqual(code, 2, err)
+        code, out, err = self.cli("auto")
+        self.assertEqual(code, 0)
+        self.assertIn("WARN", out + err)
+        self.assertNotIn("not adopted", out + err)
+
+    def test_an_unresolvable_base_never_prints_ok_locally_and_is_2_under_ci(self):
+        self.adopt()
+        self.repo.git("update-ref", "-d", "refs/remotes/origin/main")
+        self.repo.git("branch", "-m", "work")
+        code, out, err = self.cli("auto")
+        self.assertEqual(code, 0)
+        self.assertNotIn("OK", out)
+        self.assertIn("WARN lint-ratchet(user-ruff)", out)
+        code, _, err = self.cli("auto", env={"CI": "true"})
+        self.assertEqual(code, 2)
+        self.assertIn("under CI", err)
+
+    def test_an_untracked_baseline_is_read_with_a_note_to_add_it(self):
+        self.adopt_files()
+        self.repo.commit("code")
+        self.cli("user-ruff", "--update")
+        code, out, err = self.cli("auto")
+        self.assertIn("git add .lint-ratchet", out + err)
+
+    def test_auto_and_user_ruff_check_agree_on_every_state(self):
+        scenarios = []
+        self.repo.write("a.py", "x = 1\n")
+        self.repo.commit("c0")
+        scenarios.append("no-linter")
+        results = {}
+        results["no-linter"] = (self.cli("auto"), self.cli("user-ruff", "--check"))
+        self.adopt_files()
+        self.repo.commit("c1")
+        results["not-adopted"] = (self.cli("auto"), self.cli("user-ruff", "--check"))
+        self.cli("user-ruff", "--update")
+        sha = self.repo.commit("c2")
+        self.repo.git("update-ref", "refs/remotes/origin/main", sha)
+        results["adopted"] = (self.cli("auto"), self.cli("user-ruff", "--check"))
+        (self.repo.root / USER_BASELINE).unlink()
+        results["deleted"] = (self.cli("auto"), self.cli("user-ruff", "--check"))
+        for name, (left, right) in results.items():
+            self.assertEqual(left, right, name)
+
+    def test_auto_rejects_update_and_list(self):
+        for flag in ("--update", "--list"):
+            code, _, err = self.cli("auto", flag)
+            self.assertEqual(code, 2, flag)
+
+    def test_the_soleur_repository_is_skipped_by_script_identity_without_provisioning(self):
+        state = lr.classify_user(REPO_ROOT, None, dict(os.environ))
+        self.assertEqual(state.kind, "SOLEUR")
+        self.assertEqual(state.code, 0)
+        self.assertIn("Soleur repository: scopes run via lefthook and CI; nothing to ratchet here", state.lines[0])
+
+    def test_a_planted_soleur_baseline_in_a_user_repo_does_not_disable_the_ratchet(self):
+        self.adopt_files()
+        self.repo.write("scripts/lint-ratchet-ruff.baseline.txt", "# planted\n")
+        self.repo.commit()
+        code, out, _ = self.cli("auto")
+        self.assertIn("not adopted", out)
+
+    def test_not_a_repository_is_a_skip_and_a_bare_repository_is_told_to_use_a_worktree(self):
+        plain = tempfile.TemporaryDirectory()
+        self.addCleanup(plain.cleanup)
+        previous = os.getcwd()
+        self.addCleanup(os.chdir, previous)
+        os.chdir(plain.name)
+        with self.assertRaises(lr.Skip) as ctx:
+            lr.resolve_root(dict(self.repo.env, GIT_CEILING_DIRECTORIES=str(Path(plain.name).parent)))
+        self.assertIn("not a git repository", str(ctx.exception))
+        bare = tempfile.TemporaryDirectory()
+        self.addCleanup(bare.cleanup)
+        subprocess.run(["git", "init", "-q", "--bare", bare.name], env=self.repo.env, check=True)
+        os.chdir(bare.name)
+        with self.assertRaises(lr.InfraError) as ctx:
+            lr.resolve_root(dict(self.repo.env))
+        self.assertIn("worktree", str(ctx.exception))
+
+    def test_an_injected_raising_runner_never_reads_as_green(self):
+        self.adopt()
+
+        def boom(root, env=None, **kwargs):
+            raise lr.InfraError("boom from the runner")
+
+        with mock.patch.object(lr, "run_user_ruff", boom):
+            code, _, err = self.cli("auto")
+        self.assertEqual(code, 2)
+        self.assertIn("lint-ratchet(user-ruff): boom from the runner", err)
+
+
+class TestUserModeTotality(UserModeBase):
+    def setUp(self):
+        super().setUp()
+        self.adopt()
+
+    def test_each_tool_failure_is_exit_2(self):
+        for mode, needle in (("failed", "could not lint"), ("badjson", "not JSON"), ("rc3", "exited 3"),
+                             ("crash", "error: boom")):
+            with self.subTest(mode=mode):
+                code, _, err = self.cli("auto", env={"FAKE_RUFF_MODE": mode})
+                self.assertEqual(code, 2, err)
+                self.assertIn(needle, err)
+
+    def test_a_config_caused_exit_2_is_repo_content_with_the_pinned_version_hint_and_one_line_only(self):
+        code, _, err = self.cli("auto", env={"FAKE_RUFF_MODE": "config"})
+        self.assertEqual(code, 2)
+        self.assertIn("lint-ratchet(user-ruff): REPO-CONTENT: ", err)
+        self.assertIn("pinned ruff is 0.16.10; a config with required-version or rules newer than the pin fails here",
+                      err)
+        self.assertEqual(len(err.strip().splitlines()), 1)
+        code, _, err = self.cli("auto", env={"FAKE_RUFF_MODE": "crash"})
+        self.assertNotIn("pinned ruff is", err)
+
+    def test_ruff_listing_nothing_for_tracked_files_is_not_a_skipped_file_error(self):
+        self.repo.write("dist/x.py", "x = 1\n")
+        self.repo.commit("dist")
+        code, out, _ = self.cli("auto", env={"FAKE_RUFF_MODE": "nolist"})
+        self.assertEqual(code, 1, "an empty listing against a baseline with entries is STALE, not InfraError")
+
+    def test_zero_tracked_python_files_warns_when_the_baseline_is_empty_and_is_stale_otherwise(self):
+        self.repo.git("rm", "-q", "a.py")
+        code, out, err = self.cli("auto")
+        self.assertEqual(code, 1, "a baseline entry with nothing to scan is STALE")
+        self.assertEqual(self.provisioned, 1, "adopt() provisioned once; zero files must not provision again")
+        (self.repo.root / USER_BASELINE).write_text(lr.render_baseline("user-ruff", [], None, None,
+                                                                         header=lr.toolchain_header(self.repo.root)))
+        code, out, err = self.cli("auto")
+        self.assertEqual(code, 0)
+        self.assertIn("WARN lint-ratchet(user-ruff)", out)
+        self.assertNotIn("OK", out)
+
+    def test_an_invalid_syntax_finding_is_an_ordinary_finding(self):
+        report = json.dumps([{"code": "invalid-syntax", "filename": str(self.repo.root / "a.py"),
+                              "location": {"row": 2, "column": 1}, "message": "bad", "url": None}])
+        findings = lr.adapt_ruff(report, self.repo.root)
+        self.assertEqual([(f.rule, f.row) for f in findings], [("invalid-syntax", 2)])
+
+
+class TestUserModeSafety(UserModeBase):
+    def test_a_symlinked_oversized_or_non_regular_config_is_refused_without_echoing_content(self):
+        self.repo.write("target.toml", "line-length = 9\n")
+        (self.repo.root / "ruff.toml").symlink_to("target.toml")
+        self.repo.write("a.py", "x = 1\n")
+        self.repo.commit()
+        code, _, err = self.cli("auto")
+        self.assertEqual(code, 2)
+        self.assertIn("REPO-CONTENT", err)
+        self.assertNotIn("line-length", err)
+        self.assertEqual(self.provisioned, 0)
+
+    def test_an_oversized_config_is_refused(self):
+        self.repo.write("ruff.toml", "# " + "x" * (1 << 20) + "\n")
+        self.repo.write("a.py", "x = 1\n")
+        self.repo.commit()
+        code, _, err = self.cli("auto")
+        self.assertEqual(code, 2)
+        self.assertIn("over 1 MiB", err)
+
+    def test_fix_only_cannot_rewrite_the_tree(self):
+        self.adopt()
+        before = (self.repo.root / "a.py").read_bytes()
+        self.cli("auto", env={"FAKE_FIX_ONLY": "1"})
+        self.assertEqual((self.repo.root / "a.py").read_bytes(), before)
+
+    def test_ruff_and_python_variables_never_reach_the_ruff_child(self):
+        self.adopt()
+        self.log.unlink()
+        code, _, _ = self.cli("auto", env={"RUFF_CONFIG": "/evil", "RUFF_NO_CACHE": "0", "PYTHONPATH": "/evil"})
+        self.assertEqual(code, 0)
+        self.assertTrue(self.calls())
+        for call in self.calls():
+            self.assertEqual(call["env"], [])
+
+    def test_a_relative_xdg_cache_home_is_ignored_and_the_home_cache_is_used(self):
+        req = Path(self.fake_home.name) / "req.txt"
+        req.write_text("ruff==0.16.10 \\\n    --hash=sha256:" + "0" * 64 + "\n")
+        seen = {}
+
+        def run(argv, **kwargs):
+            seen.setdefault("argv", argv)
+            raise lr.Skip("stop here")
+
+        env = {"HOME": self.fake_home.name, "XDG_CACHE_HOME": "relative/cache"}
+        cwd = tempfile.TemporaryDirectory()
+        self.addCleanup(cwd.cleanup)
+        previous = os.getcwd()
+        self.addCleanup(os.chdir, previous)
+        os.chdir(cwd.name)
+        with self.assertRaises(lr.Skip):
+            lr.ensure_ruff(req, env, run=run)
+        self.assertFalse((Path(cwd.name) / "relative").exists())
+        self.assertTrue((Path(self.fake_home.name) / ".cache" / "soleur-lint-ratchet").exists())
+
+    def test_git_runs_without_the_fsmonitor_hook(self):
+        seen = []
+        real = subprocess.run
+
+        def spy(argv, **kwargs):
+            seen.append(list(argv))
+            return real(argv, **kwargs)
+
+        self.adopt_files()
+        self.repo.commit()
+        with mock.patch.object(subprocess, "run", spy):
+            self.cli("auto")
+        gits = [a for a in seen if a and a[0] == "git"]
+        self.assertTrue(gits)
+        for argv in gits:
+            self.assertIn("core.fsmonitor=false", argv)
+
+    def test_the_user_scope_ignores_the_soleur_tables(self):
+        self.adopt()
+        with mock.patch.object(lr, "SCOPES", {}), mock.patch.object(lr, "DRAWDOWN", "POISON"), \
+                mock.patch.object(lr, "ESLINT_CONFIG", "POISON"), mock.patch.object(lr, "ESLINT_BIN", "POISON"):
+            code, out, err = self.cli("auto")
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("OK", out)
+
+
+class TestUserModeFingerprint(UserModeBase):
+    def header_of(self, path=None):
+        text = (path or self.repo.root / USER_BASELINE).read_text()
+        return [line for line in text.splitlines() if line.startswith("# toolchain: ")]
+
+    def test_the_rendered_baseline_is_machine_independent(self):
+        self.adopt()
+        text = (self.repo.root / USER_BASELINE).read_text()
+        self.assertEqual(len(self.header_of()), 1)
+        self.assertRegex(self.header_of()[0], r"^# toolchain: ruff 0\.16\.10 ; config sha256:[0-9a-f]{16}$")
+        for forbidden in (str(self.repo.root), self.fake_home.name, "10331", "Drawdown", "/home/", "/tmp/"):
+            self.assertNotIn(forbidden, text)
+        self.assertIn('python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lint-ratchet.py" user-ruff --update', text)
+
+    def test_a_pyproject_edit_outside_the_ruff_tables_leaves_the_hash_unchanged(self):
+        self.adopt_files()
+        before = lr.toolchain_header(self.repo.root)
+        self.repo.write("pyproject.toml", PYPROJECT_RUFF.replace("demo", "renamed") + "\n[tool.other]\nx = 1\n")
+        self.assertEqual(lr.toolchain_header(self.repo.root), before)
+        self.repo.write("pyproject.toml", PYPROJECT_RUFF.replace("100", "88"))
+        self.assertNotEqual(lr.toolchain_header(self.repo.root), before)
+
+    def grow_with_changed_config(self):
+        """A config change that surfaces one more finding, baselined by plain --update."""
+        self.repo.git("checkout", "-q", "-b", "feature")
+        self.repo.write("pyproject.toml", PYPROJECT_RUFF.replace("100", "88"))
+        self.repo.write("a.py", "import os\n" + VIOLATION + "    again = open(other)\n")
+
+    def test_a_config_change_may_grow_the_baseline_with_a_visible_sentinel_and_never_a_plain_ok(self):
+        self.adopt()
+        self.grow_with_changed_config()
+        code, out, err = self.cli("user-ruff", "--update")
+        self.assertEqual(code, 0, err)
+        code, out, err = self.cli("auto")
+        self.assertEqual(code, 0, err)
+        self.assertIn("lint-ratchet(user-ruff): CONFIG CHANGED vs merge base: shrink-only not enforced; review the "
+                      "config diff", out)
+        self.assertNotIn("OK (", out)
+
+    def test_plain_update_refuses_growth_when_the_config_did_not_change(self):
+        self.adopt()
+        self.repo.git("checkout", "-q", "-b", "feature")
+        self.repo.write("a.py", "import os\n" + VIOLATION + "    again = open(other)\n")
+        code, _, err = self.cli("user-ruff", "--update")
+        self.assertEqual(code, 1)
+        self.assertIn("refusing to write", err)
+
+    def test_editing_only_the_header_buys_no_exemption(self):
+        self.adopt()
+        self.repo.git("checkout", "-q", "-b", "feature")
+        self.repo.write("a.py", "import os\n" + VIOLATION + "    again = open(other)\n")
+        findings, _ = lr.run_user_ruff(self.repo.root, dict(self.repo.env), ruff_path=self.fake_ruff)
+        forged = lr.render_baseline("user-ruff", lr.census(findings, self.repo.root), None, None,
+                                    header="# toolchain: ruff 0.16.10 ; config sha256:" + "f" * 16)
+        (self.repo.root / USER_BASELINE).write_text(forged)
+        code, _, err = self.cli("auto")
+        self.assertEqual(code, 1, "a forged header must still be growth-checked")
+        self.assertIn("baseline grew", err)
+
+    def test_a_missing_header_means_no_exemption(self):
+        self.adopt()
+        self.grow_with_changed_config()
+        findings, _ = lr.run_user_ruff(self.repo.root, dict(self.repo.env), ruff_path=self.fake_ruff)
+        text = lr.render_baseline("user-ruff", lr.census(findings, self.repo.root), None, None, header=None)
+        (self.repo.root / USER_BASELINE).write_text(text)
+        code, _, err = self.cli("auto")
+        self.assertEqual(code, 1)
+
+    def test_a_stale_header_with_an_equal_census_still_passes_and_says_so(self):
+        self.adopt()
+        self.repo.write("pyproject.toml", PYPROJECT_RUFF.replace("100", "88"))
+        code, out, err = self.cli("auto")
+        self.assertEqual(code, 0, err)
+        self.assertIn("lint-ratchet(user-ruff): fingerprint stale: run --update to refresh", out)
+
+    def test_a_baseline_from_a_newer_ruff_asks_for_a_plugin_update(self):
+        self.adopt()
+        text = (self.repo.root / USER_BASELINE).read_text().replace("ruff 0.16.10", "ruff 99.0.0")
+        (self.repo.root / USER_BASELINE).write_text(text)
+        code, out, _ = self.cli("auto")
+        self.assertEqual(code, 0)
+        self.assertIn("plugin older than the baseline's ruff 99.0.0: update the plugin", out)
+        self.assertNotIn("run --update to refresh", out)
+
+
+class TestUserModeUpdateAndLadder(UserModeBase):
+    def test_update_prints_the_path_and_warns_when_the_target_is_git_ignored(self):
+        self.adopt_files()
+        self.repo.write(".gitignore", ".lint-ratchet/\n")
+        self.repo.commit()
+        code, out, err = self.cli("user-ruff", "--update")
+        self.assertEqual(code, 0, err)
+        self.assertIn("wrote 1 entries to .lint-ratchet/ruff.baseline.txt", out)
+        self.assertIn("git-ignored", out)
+        self.assertEqual((self.repo.root / ".gitignore").read_text(), ".lint-ratchet/\n", "the .gitignore is never edited")
+
+    def test_the_ladder_uses_upstream_main_when_there_is_no_origin(self):
+        self.adopt_files()
+        sha = self.repo.commit()
+        self.repo.git("branch", "-m", "work")
+        self.repo.git("update-ref", "refs/remotes/upstream/main", sha)
+        resolved, notes = lr.resolve_base_ladder(self.repo.root, None, dict(self.repo.env))
+        self.assertEqual(resolved, sha)
+        self.assertEqual(notes, [])
+
+    def test_a_dangling_origin_head_is_skipped(self):
+        self.adopt_files()
+        sha = self.repo.commit()
+        self.repo.git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop")
+        self.repo.git("update-ref", "refs/remotes/origin/main", sha)
+        resolved, _ = lr.resolve_base_ladder(self.repo.root, None, dict(self.repo.env))
+        self.assertEqual(resolved, sha)
+
+    def test_a_local_branch_rung_is_flagged(self):
+        self.adopt_files()
+        sha = self.repo.commit()
+        resolved, notes = lr.resolve_base_ladder(self.repo.root, None, dict(self.repo.env))
+        self.assertEqual(resolved, sha)
+        self.assertEqual(notes, ["WARN: using local main as merge base"])
+
+    def test_a_shallow_clone_without_a_merge_base_gets_the_fetch_hint(self):
+        self.adopt_files()
+        self.repo.commit("one")
+        self.repo.write("b.py", "x = 2\n")
+        self.repo.commit("two")
+        clone = tempfile.TemporaryDirectory()
+        self.addCleanup(clone.cleanup)
+        env = dict(self.repo.env)
+        subprocess.run(["git", "clone", "-q", "--depth", "1", "file://" + str(self.repo.root), clone.name],
+                       env=env, check=True, capture_output=True)
+        base = ["git", "-C", clone.name, "-c", "user.name=f", "-c", "user.email=f@example.invalid",
+                "-c", "commit.gpgsign=false"]
+        subprocess.run(base + ["checkout", "-q", "--orphan", "x"], env=env, check=True, capture_output=True)
+        subprocess.run(base + ["commit", "-q", "--allow-empty", "-m", "orphan"], env=env, check=True,
+                       capture_output=True)
+        resolved, notes = lr.resolve_base_ladder(Path(clone.name), None, env)
+        self.assertIsNone(resolved)
+        self.assertTrue(any("shallow clone: fetch more history (fetch-depth: 0)" in n for n in notes), notes)
+
+
+class TestUserModeWaiversAndSoleurIsolation(UserModeBase):
+    def test_a_noqa_is_honoured_in_user_mode_and_still_ignored_for_the_soleur_scopes(self):
+        self.repo.write("pyproject.toml", PYPROJECT_RUFF)
+        self.repo.write("a.py", "import os\n    handle = open(path)  # noqa: SIM115\n")
+        self.repo.commit()
+        findings, _ = lr.run_user_ruff(self.repo.root, dict(self.repo.env), ruff_path=self.fake_ruff)
+        self.assertEqual(findings, [])
+        self.assertIn("--ignore-noqa", lr.tool_argv("ruff", self.repo.root, ["a.py"], self.fake_ruff))
+        self.assertNotIn("--ignore-noqa", lr.tool_argv("ruff", self.repo.root, ["a.py"], self.fake_ruff, user=True))
+
+    def test_the_soleur_scopes_keep_their_exact_argv_and_wording(self):
+        self.assertEqual(
+            lr.tool_argv("ruff", "/r", ["a.py"], "/x/ruff"),
+            ["/x/ruff", "check", "--config", "ruff.toml", "--ignore-noqa", "--no-cache", "--no-fix",
+             "--force-exclude", "--output-format", "json", "--", "a.py"])
+        self.assertEqual(
+            lr.show_files_argv("/x/ruff", ["a.py"]),
+            ["/x/ruff", "check", "--config", "ruff.toml", "--no-cache", "--force-exclude", "--show-files", "--",
+             "a.py"])
+        repo = Repo(self)
+        repo.write("a.py", "import os\n" + VIOLATION)
+        repo.commit()
+        config = make_config({"a.py": [("SIM115", "open(")]})
+        code, lines = lr.check(config, repo.root, env=dict(repo.env))
+        self.assertEqual(code, 2)
+        (repo.root / "base.txt").write_text(lr.render_baseline("fixture", [], "#1"))
+        code, lines = lr.check(config, repo.root, env=dict(repo.env))
+        self.assertEqual(code, 1)
+        self.assertEqual(lines[-2:], [
+            "lint-ratchet(fixture): remedy: REMEDY-TEXT",
+            "lint-ratchet(fixture): inline waivers (# noqa, eslint-disable) are NOT honoured here, and --update must "
+            "not be used to admit a new finding"])
+        text = lr.render_baseline("ruff", [], "#10433")
+        self.assertIn("(PR3a of #10331; design in ADR-290)", text)
+        self.assertIn("# Drawdown tracking: #10433", text)
+
+
+class TestCarryIns(ScrubbedEnv):
+    def test_a_ruff_cache_directory_without_the_binary_names_itself_and_the_recovery(self):
+        req = REQUIREMENTS
+        cache = Path(self.fake_home.name) / "cache"
+        digest = hashlib.sha256(req.read_bytes()).hexdigest()[:12]
+        final = cache / "ruff-{}-{}-{}".format(digest, sys.platform, platform.machine() or "unknown")
+        final.mkdir(parents=True)
+        (final / "stray").write_text("x")
+
+        def run(argv, **kwargs):
+            if "pip" in argv:
+                return completed(argv, 0, "", "")
+            raise AssertionError("the version probe must not run without a binary: " + str(argv))
+
+        with self.assertRaises(lr.InfraError) as ctx:
+            lr.ensure_ruff(req, dict(os.environ), run=run, cache_root=cache, fallback_root=Path(self.fake_home.name) / "fb")
+        message = str(ctx.exception)
+        self.assertIn(str(final), message)
+        self.assertIn("rm -rf {}".format(final), message)
+
+    def test_the_version_probe_failure_carries_the_same_hint(self):
+        req = REQUIREMENTS
+        cache = Path(self.fake_home.name) / "cache2"
+        digest = hashlib.sha256(req.read_bytes()).hexdigest()[:12]
+        final = cache / "ruff-{}-{}-{}".format(digest, sys.platform, platform.machine() or "unknown")
+        (final / "bin").mkdir(parents=True)
+        (final / "bin" / "ruff").write_text("")
+        with self.assertRaises(lr.InfraError) as ctx:
+            lr.ensure_ruff(req, dict(os.environ), run=lambda argv, **kw: completed(argv, 0, "ruff 0.0.1\n", ""),
+                           cache_root=cache, fallback_root=Path(self.fake_home.name) / "fb2")
+        self.assertIn("rm -rf {}".format(final), str(ctx.exception))
+
+
+class TestDiscoverabilityProbe(unittest.TestCase):
+    def test_the_probe_proves_the_not_adopted_and_deleted_baseline_arms_without_ruff_or_network(self):
+        probe = FIXTURES / "not-adopted-demo.sh"
+        result = subprocess.run(["bash", str(probe)], cwd=REPO_ROOT, capture_output=True, text=True,
+                                env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")})
+        self.assertEqual((result.returncode, result.stdout.strip()), (0, "LINT_RATCHET_PROBE_OK"), result.stderr)
+
+
+class TestSkillPointers(unittest.TestCase):
+    """The work and review skills carry the guarded call; deleting or weakening it must fail loudly."""
+
+    @staticmethod
+    def read(rel):
+        text = (REPO_ROOT / "plugins" / "soleur" / "skills" / rel / "SKILL.md").read_text()
+        return re.sub(r"<!--.*?-->", "", text, flags=re.S)
+
+    def test_work_runs_the_guarded_auto_call_in_phase_3_and_no_longer_names_linting_agent(self):
+        text = self.read("work")
+        self.assertNotIn("linting-agent", text)
+        phase3 = text.split("### Phase 3: Quality Check", 1)[1].split("### Phase 4", 1)[0]
+        line = [l for l in phase3.splitlines() if 'lint-ratchet.py" auto' in l]
+        self.assertEqual(len(line), 1, line)
+        for clause in ('[ -n "$CLAUDE_PLUGIN_ROOT" ] &&', "never a repo-local copy", "never --update unprompted",
+                       "ship only if user confirms un-adoption"):
+            self.assertIn(clause, line[0])
+
+    def test_review_points_at_auto_between_the_bootstrap_paragraph_and_the_next_agent_heading(self):
+        text = self.read("review")
+        start = text.index("**Bootstrap (mandatory before spawning the agent):**")
+        end = text.index("**What this agent checks:**", start)
+        window = text[start:end]
+        self.assertEqual(window.count('lint-ratchet.py" auto'), 1)
+        for clause in ('[ -n "$CLAUDE_PLUGIN_ROOT" ] &&', "never a repo-local copy", "REPO-CONTENT", "CONFIG CHANGED"):
+            self.assertIn(clause, window)
+
+
 class TestHarness(unittest.TestCase):
     """Instrument checks: a run that silently loaded nothing must not read as green."""
 
@@ -1628,7 +2296,10 @@ class TestHarness(unittest.TestCase):
         self.assertGreaterEqual(loaded, {
             "TestEntries", "TestAdapters", "TestCheckVerdicts", "TestFloors", "TestMergeBaseDelta", "TestRunRuff",
             "TestRunEslint", "TestScopePins", "TestConfigPins", "TestRegistration", "TestPipArgvAndRequirements",
-            "TestEnsureRuff", "TestMain", "TestGrowthArithmetic", "TestToolFailures", "TestHelpers"})
+            "TestEnsureRuff", "TestMain", "TestGrowthArithmetic", "TestToolFailures", "TestHelpers",
+            "TestUserModeStates", "TestUserModeTotality", "TestUserModeSafety", "TestUserModeFingerprint",
+            "TestUserModeUpdateAndLadder", "TestUserModeWaiversAndSoleurIsolation", "TestCarryIns",
+            "TestSkillPointers", "TestDiscoverabilityProbe"})
 
     def test_the_captured_ruff_report_is_the_four_expected_findings(self):
         report = json.loads((FIXTURES / "ruff-report.json").read_text())

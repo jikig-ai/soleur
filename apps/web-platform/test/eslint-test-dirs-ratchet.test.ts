@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -26,5 +27,25 @@ describe("eslint test-dirs ratchet", () => {
     // Surface the script's own failure text (live path:row, rule, remedy) in the assertion.
     expect(`${result.stdout}${result.stderr}`.trim()).toMatch(/eslint-test-dirs/);
     expect(result.status).toBe(0);
+  }, 120_000);
+
+  it("the per-extension eslint config test runs here and is not skipped (#10507)", () => {
+    // TestEslintConfigBehaviour is skipUnless(node_modules), and the `test-scripts` shard has no
+    // npm ci, so it ran in no CI shard. This shard has node_modules: run it and prove it RAN.
+    const source = readFileSync(resolve(REPO_ROOT, "tests/scripts/test_lint_ratchet.py"), "utf8");
+    const cls = source.split(/^class TestEslintConfigBehaviour\b/m)[1]?.split(/^class /m)[0] ?? "";
+    const cases = (cls.match(/^\s+def test_/gm) ?? []).length;
+    expect(cases).toBeGreaterThan(0);
+    const result = spawnSync(
+      "python3",
+      ["-m", "unittest", "tests.scripts.test_lint_ratchet.TestEslintConfigBehaviour", "-v"],
+      { cwd: REPO_ROOT, encoding: "utf8", timeout: 110_000 },
+    );
+    const output = `${result.stdout}${result.stderr}`;
+    expect(result.status, output).toBe(0);
+    const ran = /Ran (\d+) tests?/.exec(output);
+    expect(ran, output).not.toBeNull();
+    expect(Number(ran![1])).toBeGreaterThanOrEqual(cases);
+    expect(output).not.toMatch(/skipped/i);
   }, 120_000);
 });
