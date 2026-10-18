@@ -288,8 +288,8 @@ describe("argument parsing refuses, rather than defaulting to something plausibl
   });
 
   test("an unknown harness is named in the error, not silently coerced", () => {
-    const r = parseArgs(["--harness", "opencode"]);
-    expect("error" in r && r.error).toContain("opencode");
+    const r = parseArgs(["--harness", "cursor"]);
+    expect("error" in r && r.error).toContain("cursor");
   });
 
   test("--pin without a value is an error, NOT an unpinned run", () => {
