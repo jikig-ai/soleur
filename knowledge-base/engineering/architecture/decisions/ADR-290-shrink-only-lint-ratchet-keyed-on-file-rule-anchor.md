@@ -40,7 +40,7 @@ Registration: a `run_suite` pair (`tests/scripts/lint-ratchet`, `scripts/lint-ra
 
 ## Consequences
 
-A new unclosed file, empty handler, unused import or unused binding in tracked Python, or an unused binding in the scoped test and fixture directories, now fails `lefthook` and the required `test` context. The 59 ruff and 20 eslint findings that exist today are baselined and tracked for drawdown in #10433; none is fixed here. A Dependabot eslint bump that moves findings fails the vitest arm and is fixed or held (no escape hatch is built until one is first needed).
+A new unclosed file, empty handler, unused import or unused binding in tracked Python, or an unused binding in the scoped test and fixture directories, now fails `lefthook` and the required `test` context. The 62 ruff and 20 eslint findings that exist today are baselined and tracked for drawdown in #10433; none is fixed here. A Dependabot eslint bump that moves findings fails the vitest arm and is fixed or held (no escape hatch is built until one is first needed).
 
 Accepted residuals, none of which the check can see:
 

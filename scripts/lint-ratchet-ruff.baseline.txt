@@ -48,6 +48,9 @@ plugins/soleur/test/fixtures/codeql-main-alert-gate-workflow-wiring/wiring_facts
 scripts/backfill-frontmatter.py|F401|a8e4ea89098d|1
 scripts/backfill-frontmatter.py|F841|c04c76dca8b4|1
 scripts/backfill-frontmatter.py|F841|dc8d0966adf6|1
+scripts/ci-pr-affected-replay.py|SIM115|dee6f98a5066|1
+scripts/ci-pr-affected-replay.py|SIM115|dee6f98a5066|2
+scripts/ci-pr-affected-replay.py|SIM115|e4c70a4ef007|1
 scripts/lint-agents-enforcement-tags.py|S112|4e6d523f491a|1
 scripts/lint-anthropic-content-position.py|S112|4e6d523f491a|1
 scripts/lint-rule-ids.py|S110|e46902f4c394|1
