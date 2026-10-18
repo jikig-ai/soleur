@@ -24,7 +24,9 @@ USAGE
   * With --baseline the verdict is gated on classes W, P and G (below). Exit 0 clean, 1 findings,
     3 UNRESOLVED (empty population, failed git, unreadable or malformed baseline, a listed member that
     is missing or was skipped (symlink, special file, over 2 MB: an unread file is an unchecked file), or
-    ANY uncaught exception: a traceback can never read as rc 1 "findings"). A usage error is argparse's rc 2.
+    any uncaught Exception or KeyboardInterrupt: a traceback from those can never read as rc 1 "findings").
+    A BaseException subclass outside those (GeneratorExit, CancelledError) is unreachable from this synchronous,
+    stdlib-only scan and is deliberately not caught: it would exit 1 with a traceback. A usage error is argparse's rc 2.
   * --list prints `class TAB bounded TAB path TAB text` for every finding of every class (bounded is
     yes or no for W and a dash for the others); `--list PATH...` scopes it to the given files, which is
     how a mutation seat checks the one file it is about to mutate.
@@ -539,7 +541,7 @@ def main():
         sys.stderr.write("ancestor-signal scan: UNRESOLVED: %s\n" % exc)
         sys.stderr.flush()
         os._exit(3)
-    except (Exception, KeyboardInterrupt) as exc:  # an uncaught exception must read as rc 3, never as rc 1 "findings"
+    except (Exception, KeyboardInterrupt) as exc:  # an uncaught exception must read as rc 3, never as rc 1 "findings" (other BaseException subclasses: see the docstring)
         try:
             flush_stdout()
             import traceback

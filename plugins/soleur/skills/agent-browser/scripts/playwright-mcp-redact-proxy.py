@@ -38,7 +38,10 @@ path uses (loaded by path from the sibling `redact-a11y-snapshot.py`; this file
 defines no predicate of its own). Three fail-closed arms, no bypass variable:
 
   * startup  -- `refuse_argv_and_env`, `load_redactor`, `self_test`: stderr
-                `refusing to start: <reason>`, exit 2, no child spawned;
+                `refusing to start: <reason>`, exit 2, no child spawned (these three catch
+                Exception, SystemExit and KeyboardInterrupt; a BaseException subclass outside
+                them is unreachable here and would die with exit 1 and a traceback before any
+                child is spawned, so nothing is relayed);
   * per call -- `refuse_request` / `rewrite_result`: an `isError` result naming the
                 tool, built by `error_result`, whose reason never quotes input;
   * transport -- `teardown`: the child's whole process group is ended on stdin

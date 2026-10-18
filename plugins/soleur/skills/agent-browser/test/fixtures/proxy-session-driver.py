@@ -113,7 +113,7 @@ def main():
     t_end = time.monotonic() + o["timeout"]
     while time.monotonic() < t_end:
         if p.poll() is not None: break
-        with contextlib.suppress(OSError, ValueError):
+        with contextlib.suppress(Exception):
             while sel.get_map() and pump(False): pass
         time.sleep(0.05)
     if p.poll() is None:

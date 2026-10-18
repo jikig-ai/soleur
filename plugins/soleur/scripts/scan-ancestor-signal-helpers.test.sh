@@ -58,7 +58,7 @@ passes=0
 fails=0
 cases=0
 skipped=0
-PLANNED_TOTAL=143
+PLANNED_TOTAL=147
 
 pass() { passes=$((passes + 1)); printf '[ok] %s\n' "$1"; }
 fail() { fails=$((fails + 1)); printf '[FAIL] %s\n' "$1"; }
@@ -549,7 +549,7 @@ for tok in line-shape canary-absent oserror-stderr valueerror-stderr none-stderr
 done
 
 # ============================================================================================
-# G. Catch-all exit contract (slice 1 of #10331): main() narrowed from BaseException to (Exception, KeyboardInterrupt);
+# G. Uncaught-exception exit contract (slice 1 of #10331): main() narrowed from BaseException to (Exception, KeyboardInterrupt);
 #    an uncaught exception of either class must still read as rc 3 UNRESOLVED, never rc 1 "findings".
 #    main() ends in os._exit(3), so each probe runs in its own subprocess. kill -INT is not used (non-interactive
 #    background jobs ignore SIGINT); the exception is raised from the replaced run() instead.
@@ -572,14 +572,63 @@ mod.main()
 sys.exit(0)
 PY
   check "G-$exc_name an uncaught $exc_name from run() exits 3 (UNRESOLVED), not 1 (findings)" test "$g_rc" -eq 3
-  check "G-$exc_name the $exc_name arm names its class on the UNRESOLVED line" grep -qF "UNRESOLVED: uncaught $exc_name" "$TMP/uncaught-$exc_name.out"
+  check "G-$exc_name the UNRESOLVED line names $exc_name" grep -qF "UNRESOLVED: uncaught $exc_name" "$TMP/uncaught-$exc_name.out"
 done
+
+# G2. The narrowing is deliberate: a BaseException subclass outside (Exception, KeyboardInterrupt) is not caught and exits 1
+#     with a traceback (the script docstring records it as unreachable from this synchronous scan). Pinned so a revert to
+#     `except BaseException` (rc 3) is a visible decision rather than a silent one.
+g2_rc=0
+python3 -I - "$SCAN" > "$TMP/uncaught-base.out" 2>&1 <<'PY' || g2_rc=$?
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("main_target", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+class OutsideBase(BaseException):
+    pass
+
+def boom(argv):
+    raise OutsideBase("synthetic")
+
+mod.run = boom
+mod.main()
+sys.exit(0)
+PY
+check "G2 a BaseException subclass outside the narrowed tuple exits 1, not 3 (deliberate narrowing)" test "$g2_rc" -eq 1
+check "G2 that exit carries a traceback and no UNRESOLVED line" bash -c '! grep -qF "UNRESOLVED" "$1" && grep -qF "OutsideBase" "$1"' _ "$TMP/uncaught-base.out"
+
+# G3. The reconfigure capability probe is ONE suppress around both calls: a stdout without reconfigure() (an io.StringIO)
+#     skips the stderr call too, and main() still returns run()'s rc.
+assert_fixture_dir "$TMP"
+python3 -I - "$SCAN" > "$TMP/reconfigure-probe.out" 2>&1 <<'PY' || true
+import importlib.util, io, sys
+spec = importlib.util.spec_from_file_location("main_target", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+real_out = sys.stdout
+
+class Err(io.StringIO):
+    calls = 0
+    def reconfigure(self, **kw):
+        Err.calls += 1
+
+mod.run = lambda argv: 0
+sys.stdout, sys.stderr = io.StringIO(), Err()
+try:
+    rc = mod.main()
+finally:
+    sys.stdout = real_out
+print("RC=%s CALLS=%s" % (rc, Err.calls))
+PY
+check "G3 a stdout without reconfigure() does not stop main() returning run()'s rc" grep -qxF "RC=0 CALLS=0" "$TMP/reconfigure-probe.out"
+check "G3 the first reconfigure failure skips the second call (one suppress around both)" grep -qF "CALLS=0" "$TMP/reconfigure-probe.out"
 
 # ============================================================================================
 # Anti-vacuity and accounting (direct printf + exit, never through fail())
 # ============================================================================================
-if [[ "$cases" -lt 140 ]]; then
-  printf '[FATAL] anti-vacuity floor: only %s cases ran, floor is 140\n' "$cases" >&2
+if [[ "$cases" -lt 144 ]]; then
+  printf '[FATAL] anti-vacuity floor: only %s cases ran, floor is 144\n' "$cases" >&2
   exit 1
 fi
 if [[ $((passes + fails)) -ne "$cases" ]]; then

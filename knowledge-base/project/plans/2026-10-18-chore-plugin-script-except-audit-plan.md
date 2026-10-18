@@ -362,7 +362,8 @@ is part of the affected gate in Phase 3.
 **If this lands broken, the user experiences:** a redaction proxy that refuses to start (rc 2) or that fails
 to reap Chrome on teardown, so a browser-driven session stops working or leaves a browser running; or a
 `scan-ancestor`/`founder-check`/`resolve-debt` run that reports the wrong verdict (rc 1 "findings" instead
-of rc 3 "unresolved").
+of rc 3 "unresolved"), or a `redact-engine` postmortem gate that reads "clean" (rc 0) where it should read
+"redaction needed" (rc 1) or "cannot evaluate" (rc 2).
 
 **If this leaks, the user's data is exposed via:** a handler that begins writing exception text or
 input-derived content to stderr (the proxy's stderr is persisted in Claude Code's MCP logs), or a startup
