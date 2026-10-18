@@ -11190,6 +11190,7 @@ fo99_run() {
             elif $shape == "orval" then {or: [other, m($s), m($s2)]}
             elif $shape == "nested" then {and: [{or: [m($s), m($s2)]}, {match:{type:"value", value:"y", parameter:{source:"header", name:"Y"}}}]}
             elif $shape == "ornull" then {or: [{match:{type:"payload-hmac-sha256", secret:null, parameter:{source:"header", name:"X-Signature-256"}}}, m($s2)]}
+            elif $shape == "ornum" then {or: [{match:{type:"payload-hmac-sha256", secret:12345, parameter:{source:"header", name:"X-Signature-256"}}}, m($s2)]}
             elif $shape == "orkeyless" then {or: [{match:{type:"payload-hmac-sha256", parameter:{source:"header", name:"X-Signature-256"}}}, m($s2)]}
             elif $shape == "nosecret" then {or: [other]}
             else error("unknown shape") end)} end) ]' > "$d/hooks.json"
@@ -11359,7 +11360,7 @@ else
 fi
 
 FO94_REFUSE_OK=1; FO94_REFUSE_MSG=""; FO94_REFUSE_N=0
-for _case in "or-first-empty||or2|fixture-next-secret-xyz" "or-first-null|x|ornull|fixture-next-secret-xyz" "or-first-keyless|x|orkeyless|fixture-next-secret-xyz" "or-no-hmac-match|x|nosecret|" "no-deploy-peer-rule|x|nopeer|"; do
+for _case in "or-first-empty||or2|fixture-next-secret-xyz" "or-first-null|x|ornull|fixture-next-secret-xyz" "or-first-keyless|x|orkeyless|fixture-next-secret-xyz" "or-first-non-string|x|ornum|fixture-next-secret-xyz" "or-no-hmac-match|x|nosecret|" "no-deploy-peer-rule|x|nopeer|"; do
   FO94_REFUSE_N=$((FO94_REFUSE_N + 1))
   IFS='|' read -r _label _sec _shape _sec2 <<< "$_case"
   fo99_run "$_sec" "deploy fixture" real "" "$_shape" "$_sec2"
@@ -11369,10 +11370,10 @@ for _case in "or-first-empty||or2|fixture-next-secret-xyz" "or-first-null|x|ornu
   fi
 done
 TOTAL=$((TOTAL + 1))
-if [[ "$FO94_REFUSE_OK" -eq 1 && "$FO94_REFUSE_N" -eq 5 ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: T-9294-2 fan-out fails closed under the \`or\` shapes: an empty, null or absent first HMAC secret (the second is NOT used as a fallback), no HMAC match under the rule, and no deploy-peer rule each return 1, log FANOUT and never call curl"
+if [[ "$FO94_REFUSE_OK" -eq 1 && "$FO94_REFUSE_N" -eq 6 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-9294-2 fan-out fails closed under the \`or\` shapes: an empty, null, absent or non-string first HMAC secret (the second is NOT used as a fallback), no HMAC match under the rule, and no deploy-peer rule each return 1, log FANOUT and never call curl"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: T-9294-2 fan-out did not fail closed under the \`or\` shapes (cases run: ${FO94_REFUSE_N}, want 5):$FO94_REFUSE_MSG"
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-9294-2 fan-out did not fail closed under the \`or\` shapes (cases run: ${FO94_REFUSE_N}, want 6):$FO94_REFUSE_MSG"
 fi
 
 # Source census, comment-stripped and scoped to the function body: the single-match-only path is gone and the
@@ -11440,7 +11441,7 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # (accepted-but-failed reads j=error, no re-run), D10k6 (accepted-run sudo: warning stripped, empty stays empty),
 # D10k7 (warning + silent failure is no masquerading denial).
 # #9294 PR-1: raised 618 -> 622 (619 measured on main, which carried one slack row, plus 3 new rows) with T-9294-1..3 (fan-out
-# under an `or` trigger-rule: first-HMAC-secret signing over four shapes, five fail-closed shapes, and the source census).
+# under an `or` trigger-rule: first-HMAC-secret signing over four shapes, six fail-closed shapes, and the source census).
 CI_DEPLOY_ASSERT_FLOOR=622
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
