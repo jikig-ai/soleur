@@ -15,6 +15,21 @@ brand_survival_threshold: aggregate pattern
 
 Spec lacks valid `lane:` (no spec.md for this branch) — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-18
+**Sections enhanced:** Research Insights, Observability (5-field schema), Guard Contract (checked), Scope Check (checked)
+**Research agents used:** soleur:engineering:cto (rulings R1-R4, pre-plan), learnings-researcher, plan-review panel (code-simplicity, Kieran, DHH lenses), plus the deepen-plan gates 4.4-4.12 run inline.
+
+### Key Improvements
+1. Observability section converted to the mandatory 5-field schema with an executable, allowlisted, sub-second discoverability probe that prints `true` before the fix and `false` after.
+2. Transition safety (R4) and the original defect were reproduced with commands and results (see Research Insights, "Deepen-plan verification").
+3. Precedent diff against the PR B driver recorded, including the `set -u` fall-through-mutant trap.
+
+### New Considerations Discovered
+- Three tracked `.md` files are symlinks (`.grok/commands/*.md`) and sit off the allowlist, so the stricter rule cannot reduce today's saving.
+- `plugins/soleur/test/ci-pr-affected-*.test.sh` (not `scripts/`) are the real S4 suite paths; the plan's AC7 now names them.
+
 ## Overview
 
 Two follow-ups deferred from the S4 affected-only work (Ref #9729) were asked for in one PR.
@@ -65,6 +80,15 @@ Hard constraints honoured: `CI_PR_AFFECTED` is not touched, the lock stays, acti
 - `2026-05-10-empirical-hook-input-shape-prevents-silent-zero-emission.md` and `2026-03-03-set-euo-pipefail-upgrade-pitfalls.md` — here-string over pipe (SIGPIPE) is already used; keep it.
 - `2026-10-14-a-dark-lever-measures-itself-...md` — after editing test files, run the repo-global ratchets (`fixture-relative-assert`, `guard-vacuity-floor`, `test-affected-kb-consumers`), not only the touched suites.
 - `2026-07-24-count-vs-floor-guard-single-value-fixtures-cannot-discriminate-operator.md` — test off the boundary; applied to the mutation-count pin.
+
+**Deepen-plan verification (2026-10-18), commands and results.**
+- Old classifier on raw rows (R4 transition): `printf ':100644 100644 1111111 2222222 M\tknowledge-base/a.md\n' | bash scripts/ci-e2e-classify.sh pull_request` printed `true`; the symlink raw row printed `true` too -> the old base-ref classifier fails closed on the new feed.
+- The hole, reproduced: `printf 'A\tknowledge-base/x.md\n' | bash scripts/ci-shard-totality-classify.sh pull_request` printed `false` (a name-status row carries no mode, so an added symlink is indistinguishable from a markdown file).
+- Negative claims (verify-the-negative pass): `grep -c "ci-e2e-classify\|ci-shard-totality-classify"` over `plugins/soleur/test/ci-pr-affected-preactivation.test.sh`, `plugins/soleur/test/ci-pr-affected-replay.test.sh`, `scripts/ci-pr-affected-preactivation.sh` and `scripts/ci-pr-affected-replay.py` returned 0 for each -> those suites' assertion/mutant floors cannot move. `.github/workflows/tenant-integration.yml` has one `classify` hit, a comment on line 213 (no invocation).
+- Cited numbers resolved live: #10451 OPEN (sandbox classifier, no path overlap), #7390 OPEN (stale WIP touching ci.yml), #10098 MERGED (the PR that introduced the shard-totality classifier), #8450 CLOSED (introduced the e2e classifier), #10325 OPEN (S4 PR C go/no-go inputs; not touched).
+- Precedent diff (pattern-bound behaviour: raw-row mode gate). Precedent is the PR B driver, `scripts/ci-pr-selection.sh` stage 1 (lines 332-356): it reads `git diff -z --raw --no-renames --no-abbrev`, matches `^:([0-7]{6}) ([0-7]{6}) ([0-9a-f]{40,64}) ([0-9a-f]{40,64}) ([A-Z][0-9]*)$` on the meta field and allows modes `{000000,100644,100755}`. Differences in this plan, each deliberate: no `-z` (the here-string and `$(...)` drop NULs; the row is matched whole with a tab-separated tail), default rename detection kept (a rename row has two paths and fails closed), hash width relaxed to any lower-case hex run (default abbreviated output), and modes narrowed to `100644` (ruling R2). Divergence is documented in both script headers.
+- Under `set -u` the sketched fall-through mutant must assign `BASH_REMATCH` explicitly (Kieran review, reproduced in scratch bash): a bare deletion of the grammar guard crashes with rc 1 and would count as RED for the wrong reason.
+- Only three tracked `.md` files in the repo have a non-`100644` mode (`.grok/commands/*.md` symlinks, off the allowlist), so P2 (the saving) is not affected by the stricter rule.
 
 **Overlap preflight.** `bash plugins/soleur/skills/ship/scripts/pr-overlap-preflight.sh --mode start --files "<planned files>"` -> `No other open work overlaps`. Open PR probe for the planned paths: #10451 touches only `apps/web-platform/server/sandbox-startup-classifier.ts` (no overlap); #7390 (a stale WIP) edits `.github/workflows/ci.yml` in an unrelated job (provenance build arg) — textual conflict is possible only if it is revived; acknowledged. Sibling worktree `feat-one-shot-9757-heartbeat-url-off-argv` is a different issue and does not touch these paths.
 
@@ -303,6 +327,8 @@ Phase 5 - Replay and records. Run the AC9 replay once locally; simulate the roll
 - [ ] AC13. `python3 scripts/lint-guard-contract.py` passes on this plan (3 entries, each with at least 3 matrix rows).
 - [ ] AC14. Rollback simulated at work time: in a scratch detached worktree, `git revert --no-commit` of the change commits followed by the three edited suites exits 0.
 
+- [ ] AC15. The `## Observability` discoverability probe (an ordinary-mode raw row piped into `scripts/ci-e2e-classify.sh pull_request`) prints `false` after the change (it prints `true` on `origin/main`).
+
 ## Test Scenarios
 
 - Given an `A` row `:000000 120000 ... A\tknowledge-base/x.md` (symlink), when either classifier runs for `pull_request`, then it emits `true` (unit).
@@ -321,7 +347,36 @@ Phase 5 - Replay and records. Run the AC9 replay once locally; simulate the roll
 
 ## Observability
 
-Not triggered as a new surface (Files to Edit are CI scripts and tests, outside the application/infra/plugin-script paths of the gate). The existing run-visible signal is unchanged: each classify step emits `::notice::e2e applicable=<verdict> (event=<event>)` and `::notice::shard-totality applicable=<verdict> ...` and, on a fallback, a `::warning::` that names the measured cause. A mode-driven `true` is deliberately not given a new reason channel (Cut List: not asked, and the verdict line plus the diff already identify the offending row).
+The classifiers are CI verdict emitters, not a runtime service; the surface is the workflow run itself. A mode-driven `true` is deliberately not given a new reason channel (Cut List: not asked; the verdict line plus the diff identify the offending row).
+
+```yaml
+liveness_signal:
+  what: each classify step prints a verdict line, "::notice::e2e applicable=<verdict> (event=<event>)" and "::notice::shard-totality applicable=<verdict> (event=<event>)", and appends applicable=<verdict> to GITHUB_OUTPUT; an invalid verdict reds the job
+  cadence: every pull_request and merge_group run of ci.yml
+  alert_target: the required "e2e" check (a red job blocks the merge queue) and the run's step summary; the non-required shard-totality-mutations job surfaces in the PR checks list
+  configured_in: .github/workflows/ci.yml, steps "Classify e2e applicability" and "Classify shard-totality applicability"
+error_reporting:
+  destination: GitHub Actions run annotations; the fallback path prints a "::warning::" naming git stderr, shallow state, base-ref resolvability, head and uid
+  fail_loud: an unparseable or unexpected verdict exits 1 (job red); a classifier usage error exits 2; any unparseable diff row emits true (the full job runs), never a silent skip
+failure_modes:
+  - mode: a symlink, gitlink or exec-bit markdown path is judged markdown-only (the defect this plan fixes)
+    detection: the executed suite plugins/soleur/test/ci-classify-step-exec.test.sh (modes symlink, execbit, modeflip) and the mode matrices in the two anchor suites fail
+    alert_route: the "scripts" shard legs of the CI run on the PR (red check)
+  - mode: the raw feed and the classifier grammar drift apart so every pull request falls back to the full job (cost regression, safe direction)
+    detection: the plain md mode of ci-classify-step-exec.test.sh expects applicable=false, and the "::warning::... fell back to enum-failed" annotation appears in the run
+    alert_route: the "scripts" shard legs (red check); CI minutes census scripts/ci-demand-census.sh
+  - mode: the two duplicated parse blocks diverge
+    detection: the parity assertion in plugins/soleur/test/ci-shard-totality-skip.test.sh
+    alert_route: the "scripts" shard legs (red check)
+logs:
+  where: GitHub Actions run logs and step summaries for the two classify steps
+  retention: the repository's Actions log retention (default 90 days)
+discoverability_test:
+  command: printf ':000000 100644 1111111 2222222 A\tknowledge-base/x.md\n' | bash scripts/ci-e2e-classify.sh pull_request
+  expected_output: false
+```
+
+The probe feeds one well-formed ordinary-mode raw row: it prints `true` on the unmodified classifier (which cannot read raw rows and fails closed) and `false` after the fix, so a green probe proves the new grammar is live. The refusal half (a `120000` or `100755` row prints `true`) is carried by the suites named in `failure_modes`, not by this single probe. It runs in milliseconds, uses no network and no ssh.
 
 ## Rollback
 

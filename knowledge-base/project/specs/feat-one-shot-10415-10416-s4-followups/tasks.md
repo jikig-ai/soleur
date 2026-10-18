@@ -28,6 +28,7 @@ Scope: build #10416; #10415 is deferred by CTO ruling R1 (no code). Reference #9
 - 3.3 AC9 replay over the 30 most recent markdown-only first-parent commits; one-sentence result for the PR body.
 - 3.4 Rollback simulation in a scratch detached worktree (AC14).
 - 3.5 `python3 scripts/lint-guard-contract.py` on the plan passes.
+- 3.6 Run the plan's Observability discoverability probe (ordinary-mode raw row into `scripts/ci-e2e-classify.sh pull_request`): prints `false` after the change (AC15).
 
 ## Phase 4: Records and handoff
 
