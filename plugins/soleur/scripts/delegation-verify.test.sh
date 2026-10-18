@@ -383,6 +383,15 @@ DENY=(
   'git clean -fd'
   'git filter-branch --all'
   'git update-ref -d refs/heads/x'
+  'gh workflow run apply-web-platform-infra.yml -f apply_target=registry-host-replace -f confirm=X'
+  'gh workflow run apply-web-platform-infra.yml -f apply_target=registry-host-replace -f rollback_ack_luks_writes=Y'
+  'gh workflow run apply-web-platform-infra.yml -f apply_target=registry-host-replace -f note=a -f confirm=X'
+  'gh workflow run apply-web-platform-infra.yml -F confirm=X'
+  'gh workflow run apply-web-platform-infra.yml --field confirm=X'
+  'gh workflow run apply-web-platform-infra.yml --raw-field rollback_ack_luks_writes=Y'
+  'gh workflow run apply-web-platform-infra.yml -fconfirm=X'
+  'gh workflow run apply-web-platform-infra.yml --field=confirm=X'
+  "gh workflow run apply-web-platform-infra.yml -f 'confirm=X'"
 )
 i=0; for c in "${DENY[@]}"; do i=$((i + 1)); mk_envcmd "env-d$i.md" 1 "$c"; done
 didx() { local k=0 c; for c in "${DENY[@]}"; do k=$((k + 1)); [[ "$c" == "$1" ]] && { echo "$k"; return; }; done; echo 0; }
@@ -428,6 +437,23 @@ BAD=(
 i=0; for row in "${BAD[@]}"; do i=$((i + 1)); mk_envcmd "env-b$i.md" "${row%%|*}" "${row#*|}"; done
 mk_envcmd env-hid8.md 8 'gh pr merge 999 --squash'
 mk_envcmd env-hid9.md 9 'gh pr merge 998 --squash'
+# typo-guard dispatches: Scope item 8 (added to the body by ti_scope) names the infra apply workflow file
+TIOK=(
+  'gh workflow run apply-web-platform-infra.yml -f apply_target=registry-host-replace'
+  'gh workflow run apply-web-platform-infra.yml -f apply_target=registry-host-replace -f confirm_note=x'
+  'gh workflow run apply-web-platform-infra.yml -f apply_target=registry-host-replace -f unconfirm=x'
+  'gh workflow run apply-web-platform-infra.yml -f rollback=x'
+)
+TIBAD=(
+  'gh workflow run apply-web-platform-infra.yml -f apply_target=registry-host-replace -f confirm=X'
+  'gh workflow run apply-web-platform-infra.yml -f apply_target=registry-host-replace -f rollback_ack_luks_writes=Y'
+  'gh workflow run apply-web-platform-infra.yml -f confirm=X -f apply_target=registry-host-replace'
+  'gh workflow run apply-web-platform-infra.yml --field confirm=X'
+  'gh workflow run apply-web-platform-infra.yml -fconfirm=X'
+)
+i=0; for c in "${TIOK[@]}"; do i=$((i + 1)); mk_envcmd "env-tiok$i.md" 8 "$c"; done
+i=0; for c in "${TIBAD[@]}"; do i=$((i + 1)); mk_envcmd "env-tibad$i.md" 8 "$c"; done
+ti_scope() { b_awk '{ print } /^7\. / { print "8. Dispatch the registry host replacement with `gh workflow run apply-web-platform-infra.yml -f apply_target=registry-host-replace`, at most once." }'; }
 mk_envcmd env-bnl.md 1 $'gh pr merge 123 --squash\necho ok'                 # two lines, one fenced block: the second is not on the grammar
 # row = "<scope item>|<command line>"; every one verifies as valid
 PASSC=(
@@ -737,6 +763,11 @@ scn; run_v verify --delegation "$URL" --envelope env-p15.md --command 'gh pr cre
 expect "near miss (must-PASS): revert/example as a branch name" 0 "$V_OK"
 scn; run_v verify --delegation "$URL" --envelope env-valid.md --command 'git log --oneline'
 expect "near miss: git log is not denylisted, it is simply not on the grammar" 1 "$(inv command-not-delegable)"
+echo "  -- typo-guard dispatches: confirm and rollback_ack* inputs are never delegated --"
+i=0; for c in "${TIOK[@]}"; do i=$((i + 1)); scn; ti_scope; run_v verify --delegation "$URL" --envelope "env-tiok$i.md"; expect "must-PASS (the dispatch without a typo-guard input verifies): $c" 0 "$V_OK"; done
+i=0; for c in "${TIBAD[@]}"; do i=$((i + 1)); scn; ti_scope; run_v verify --delegation "$URL" --envelope "env-tibad$i.md"; expect "typo-guard input refused even inside a scope that names the file: $c" 1 "$(inv non-delegable-command)"; done
+scn; ti_scope; run_v verify --delegation "$URL" --envelope env-tiok1.md --command "${TIBAD[0]}"
+expect "typo-guard input refused on --command too" 1 "$(inv non-delegable-command)"
 
 echo "=== Arm 2d: the closed command grammar (V1) ==="
 i=0
@@ -1240,6 +1271,13 @@ mutate dm-boundary 's/;&\|\)\]\|\$\)/]|$)/' && {
 }
 mutate dm-normalise 's/^(  n="\$\(printf .%s. "\$c" \| tr -d ).*$/\1"x")"/' && killed dm-normalise "1|$(inv non-delegable-command)|0" nothing verify --delegation "$URL" --envelope "env-d$(didx "g''it push origin main").md"
 
+# 10b' the typo-guard line: deleted, or narrowed to one key or one flag, a destructive dispatch must stop being refused
+mutate_del typo-guard 'rollback_ack' && killed typo-guard "1|$(inv non-delegable-command)|0" ti_scope verify --delegation "$URL" --envelope env-tibad1.md
+mutate dm-narrow-ack 's/\|rollback_ack\[a-z0-9_.-\]\*//' && killed dm-narrow-ack "1|$(inv non-delegable-command)|0" ti_scope verify --delegation "$URL" --envelope env-tibad2.md
+mutate dm-narrow-confirm 's/\(confirm\|rollback_ack/(rollback_ack/' && killed dm-narrow-confirm "1|$(inv non-delegable-command)|0" ti_scope verify --delegation "$URL" --envelope env-tibad1.md
+mutate dm-narrow-flag 's/\(-\[fF\]\|--field/(--field/' && killed dm-narrow-flag "1|$(inv non-delegable-command)|0" ti_scope verify --delegation "$URL" --envelope env-tibad1.md
+mutate dm-narrow-flagfield 's/\|--field\|--raw-field\)/|--raw-field)/' && killed dm-narrow-flagfield "1|$(inv non-delegable-command)|0" nothing verify --delegation "$URL" --envelope "env-d$(didx 'gh workflow run apply-web-platform-infra.yml --field=confirm=X').md"
+
 # 10c the tools alternation, git misc, command position
 mutate_line() { # <name> <line prefix> <replacement line>: replace the one line that starts with the prefix
   DV_P="$2" DV_N="$3" awk 'index($0, ENVIRON["DV_P"]) == 1 { print ENVIRON["DV_N"]; next } { print }' "$PRISTINE" > "$MUT/dv.$1.sh"
@@ -1376,7 +1414,7 @@ mutate render-guard 's/\[ \$# -ge 2 \] \|\| die_render "--epic needs a value"; E
 
 echo "=== Floors: the SUT answered every row (zero slack) ==="
 n_calls="$(cat "$TMP"/scn*/calls.log 2>/dev/null | wc -l | tr -d ' ')"
-CALLS_FLOOR=2684; RESULTS_FLOOR=1733
+CALLS_FLOOR=2800; RESULTS_FLOOR=1800
 if (( n_calls >= CALLS_FLOOR )); then
   echo "  PASS: gh stub calls $n_calls >= $CALLS_FLOOR"; PASS=$((PASS + 1))
 else

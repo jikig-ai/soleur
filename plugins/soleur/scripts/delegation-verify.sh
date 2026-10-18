@@ -253,6 +253,7 @@ is_denied() {
     'gh[[:space:]]+repo[[:space:]]+(delete|archive|rename|transfer|edit)'
     '(^|[^[:alnum:]_-])gh[[:space:]]+(secret|variable)([[:space:]]|$)'
     'gh[[:space:]]+[a-z-]+[[:space:]]+delete([[:space:]]|$)'
+    'gh[[:space:]]+(.*[[:space:]])?workflow[[:space:]]+run[[:space:]]+(.*[[:space:]])?(-[fF]|--field|--raw-field)[[:space:]=]*(confirm|rollback_ack[a-z0-9_.-]*)=' # confirm and rollback_ack* inputs are the typo-guards of destructive dispatches # mut:typo-guard
     "${CMDPOS_RE}(${DENY_TOOLS})([[:space:]]|\$)"
     '(^|[^[:alnum:]_-])(curl|wget)[[:space:]]+(.*[[:space:]])?(-X|--request)'
     '\|[[:space:]]*(sh|bash)([[:space:]]|$)'
