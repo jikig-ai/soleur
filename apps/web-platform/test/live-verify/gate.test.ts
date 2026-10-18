@@ -431,7 +431,13 @@ describe("release workflow: BLOCK classification (executed, not grepped)", () =>
     const line = emitLine({ kind: "CANT-RUN", reason: redact((err as Error).message) });
     expect(line).toMatch(/^RESULT: CANT-RUN:cannot-spend-violated: api_keys-non-sentinel-row$/);
     const r = classify(line);
-    expect(r).toMatchObject({ status: 0, result: "CANT-RUN", level: "error", block: "1" });
+    expect(r).toMatchObject({
+      status: 0,
+      result: "CANT-RUN",
+      level: "error",
+      block: "1",
+      reason: "cannot-spend-violated:api_keys-non-sentinel-row",
+    });
     expect(r.stdout).toContain("::error title=live-verify cannot-spend check did not pass::");
   });
 
@@ -446,7 +452,13 @@ describe("release workflow: BLOCK classification (executed, not grepped)", () =>
     const line = emitLine({ kind: "CANT-RUN", reason: redact((err as Error).message) });
     expect(line).toMatch(/^RESULT: CANT-RUN:cannot-spend-unverified: api_keys-empty$/);
     const r = classify(line);
-    expect(r).toMatchObject({ status: 0, result: "CANT-RUN", level: "error", block: "0" });
+    expect(r).toMatchObject({
+      status: 0,
+      result: "CANT-RUN",
+      level: "error",
+      block: "0",
+      reason: "cannot-spend-unverified:api_keys-empty",
+    });
     expect(r.stdout).toContain("::error title=live-verify cannot-spend check did not pass::");
   });
 
@@ -457,7 +469,12 @@ describe("release workflow: BLOCK classification (executed, not grepped)", () =>
     "RESULT: CANT-RUN:CONFIG:cannot-spend-violated",
     "RESULT: PASS — cannot-spend-violated",
   ])("near-miss %j does not BLOCK", (line) => {
-    expect(classify(line)).toMatchObject({ status: 0, block: "0" });
+    expect(classify(line)).toMatchObject({ status: 0, block: "0", reason: "" });
+  });
+
+  it("the reason tag stays a closed vocabulary (page-controlled text never reaches it)", () => {
+    const forged = "RESULT: CANT-RUN:cannot-spend-violated: x; $(evil) ${IFS}";
+    expect(classify(forged)).toMatchObject({ status: 0, reason: "" });
   });
 
   it.each([

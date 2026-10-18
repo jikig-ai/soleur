@@ -2090,10 +2090,19 @@ jobs:
           fi
           echo "live-verify: result=${RESULT} level=${LEVEL} block=${BLOCK}" >> "$GITHUB_STEP_SUMMARY"
           echo "live-verify reason: \`${MSG}\`" >> "$GITHUB_STEP_SUMMARY"
+          # Sentry `reason` tag, so cannot-spend-violated and cannot-spend-unverified
+          # are queryable and alertable apart from the other CANT-RUNs. A closed
+          # vocabulary: it is set ONLY when the line matches the fixed grammar the
+          # harness emits for these two classes, never from page-controlled text.
+          SPEND_REASON=""
+          if [[ "${MSG}" =~ ^RESULT:\ CANT-RUN:(cannot-spend-(violated|unverified)):\ ([a-z_-]+)$ ]]; then
+            SPEND_REASON="${BASH_REMATCH[1]}:${BASH_REMATCH[3]}"
+          fi
           {
             echo "result=${RESULT}"
             echo "level=${LEVEL}"
             echo "block=${BLOCK}"
+            echo "reason=${SPEND_REASON}"
           } >> "$GITHUB_OUTPUT"
           # Parse the public client DSN: https://<public_key>@<host>/<project_id>.
           # The POST host MUST carry the DSN's own region segment
@@ -2115,9 +2124,10 @@ jobs:
           fi
           STORE_URL="https://${HOST}/api/${PROJECT_ID}/store/"
           PAYLOAD=$(jq -nc --arg msg "$MSG" --arg level "$LEVEL" --arg result "$RESULT" \
-            --arg sha "${GITHUB_SHA:-}" \
+            --arg reason "$SPEND_REASON" --arg sha "${GITHUB_SHA:-}" \
             '{message:$msg, level:$level, platform:"other",
-              tags:{gate:"live-verify", component:"web-platform", result:$result},
+              tags:({gate:"live-verify", component:"web-platform", result:$result}
+                    + (if $reason == "" then {} else {reason:$reason} end)),
               extra:{sha:$sha}}')
           ok=0; code="000"
           for attempt in 1 2 3; do

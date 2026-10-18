@@ -311,7 +311,14 @@ invariants make that checkable and bound what a PASS means.
     classifier keeps BLOCK=0 (a red run adds no safety and would gate prod on an infra blip,
     against commit 2686235be9's intent and AP-021) and annotates `::error` so a permanently
     unverifiable gate is not invisible. The BLOCK=0 here is a deliberate fail-open of the red
-    run only, never of the safety property. `CANT-TEARDOWN-has-action-sends` and the
+    run only, never of the safety property. **Visibility today** is the `::error` annotation and
+    the Sentry event (level `error`, tag `reason=cannot-spend-<class>:<failure class>`, a closed
+    vocabulary set only from the harness's fixed grammar). No Sentry alert rule covers
+    `gate=live-verify` at all (the older CANT-RUN classes are equally un-alerted); the `reason`
+    tag is the hook for one. Adding it is not a one-block change in this root (a unique
+    `frequency_minutes`, the README and alert-reference counts, the live-fidelity and destroy
+    guards, and an auto-apply to the production Sentry org on merge), so this change does
+    not provide one. `CANT-TEARDOWN-has-action-sends` and the
     allowlist (wrong UID or email) throws stay BLOCK=0, unchanged.
   - Row contents are never logged; messages carry a class only, and `redact.ts` scrubs the
     ciphertext keys as a backstop.
