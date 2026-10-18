@@ -334,7 +334,67 @@ export async function verifyPrincipal(
       `allowlist gate: session email "${email ?? ""}" != "${EXPECTED_EMAIL}" — aborting before launch`,
     );
   }
+  await assertCannotSpend(supabase);
   return { __brand: "verified-live-verify-principal", uid: id };
+}
+
+// ---------------------------------------------------------------------------
+// I-cannot-spend (ADR-064): the principal's Anthropic key must be undecryptable
+// ---------------------------------------------------------------------------
+
+/**
+ * The decrypt-poisoned dummy `seed-live-verify-user.sh` inserts. A real
+ * encrypted key can never equal this plaintext literal, so weakening the stored
+ * value cannot make a funded key pass; only removing the compare can.
+ * `gate.test.ts` pins these three literals against the seed script.
+ */
+const SENTINEL_KEY = {
+  encrypted_key: "live-verify-dummy-not-real",
+  iv: "bGl2ZS12ZXJpZnktaXY=",
+  auth_tag: "bGl2ZS12ZXJpZnktdGFn",
+} as const;
+
+/**
+ * Refuse to proceed unless the principal provably cannot spend: EVERY
+ * `api_keys` row (all providers — the set drifts, the all-rows read does not)
+ * equals the sentinel, and no `byok_delegations` row exists. Reads go through
+ * the principal's OWN RLS session, never the service role. An error, a null
+ * body or zero key rows all fail closed — "could not read" must never look like
+ * "nothing to worry about". Messages carry a failure CLASS only, never row
+ * contents. Runs under `--dry-run` too: `main()` calls `verifyPrincipal` before
+ * the dry-run branch.
+ *
+ * Does not attest egress (Squid `%un` attribution / the real CONNECT path);
+ * ADR-064 `I-egress-not-attested-by-gate`.
+ */
+async function assertCannotSpend(
+  supabase: ReturnType<typeof createServerClient>,
+): Promise<void> {
+  const fail = (why: string): never => {
+    throw new Error(`cannot-spend-violated: ${why}`);
+  };
+
+  const keys = await supabase
+    .from("api_keys")
+    .select("provider, encrypted_key, iv, auth_tag");
+  if (keys.error || !Array.isArray(keys.data)) fail("api_keys-unreadable");
+  const keyRows = keys.data as Array<Record<string, unknown>>;
+  if (keyRows.length === 0) fail("api_keys-empty");
+  for (const row of keyRows) {
+    const sentinel =
+      row.encrypted_key === SENTINEL_KEY.encrypted_key &&
+      row.iv === SENTINEL_KEY.iv &&
+      row.auth_tag === SENTINEL_KEY.auth_tag;
+    if (!sentinel) fail("api_keys-non-sentinel-row");
+  }
+
+  const delegations = await supabase.from("byok_delegations").select("id");
+  if (delegations.error || !Array.isArray(delegations.data)) {
+    fail("byok_delegations-unreadable");
+  }
+  if ((delegations.data as unknown[]).length > 0) {
+    fail("byok_delegations-present");
+  }
 }
 
 // ---------------------------------------------------------------------------

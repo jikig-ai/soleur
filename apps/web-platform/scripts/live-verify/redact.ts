@@ -68,6 +68,13 @@ const RULES: Array<[RegExp, string]> = [
     /(["'](?:access_token|refresh_token|provider_token)["']\s*:\s*")[^"]+/gi,
     `$1${PLACEHOLDER}`,
   ],
+  // api_keys ciphertext columns (I-cannot-spend read in verifyPrincipal). The
+  // gate never logs row contents; this is the backstop should a row ever reach
+  // a captured error, response body or console line.
+  [
+    /(["'](?:encrypted_key|iv|auth_tag)["']\s*:\s*")[^"]+/gi,
+    `$1${PLACEHOLDER}`,
+  ],
   // Generic JWT shape (3 base64url segments) — catches bare tokens in DOM/logs.
   [/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "[REDACTED_JWT]"],
   // Email addresses.

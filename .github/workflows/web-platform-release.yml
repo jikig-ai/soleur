@@ -1824,8 +1824,11 @@ jobs:
   # status breaks, surfacing a bad deploy loudly instead of recording a green run
   # over a broken WS/auth/persist path. Enforced by the final "Enforce live-verify
   # gate" step on the BLOCK signal computed in the emit step:
-  #   BLOCK=1 ONLY for FAIL (the #5391/#5436 persist regression) or an unverifiable
-  #           TRIGGERED run (no-result-line — "empty fails closed").
+  #   BLOCK=1 ONLY for FAIL (the #5391/#5436 persist regression), an unverifiable
+  #           TRIGGERED run (no-result-line — "empty fails closed"), or
+  #           CANT-RUN:cannot-spend-violated (ADR-064 I-cannot-spend: the synthetic
+  #           principal could decrypt or be delegated a real key — a safety breach,
+  #           unlike the environmental CANT-RUNs below, so it must not fail open).
   #   BLOCK=0 for PASS, SKIPPED, the deliberate environmental CANT-RUNs (rate-limited
   #           / session-rejected / session-not-acked), and pre-harness INFRA failures
   #           (setup-failed / gate-diff-failed — these fire on EVERY push, including
@@ -1973,7 +1976,7 @@ jobs:
           fi
           exit 0
 
-      - name: Run live-verify harness (report-only)
+      - name: Run live-verify harness (verdict enforced by the Enforce step)
         id: harness
         if: steps.gate.outputs.triggered == '1'
         continue-on-error: true
@@ -2036,7 +2039,8 @@ jobs:
           # ran").
           # BLOCK is the #5463 flip authority (1 = fail the job → redden the
           # release; 0 = record-only). Default 0; set to 1 ONLY for a genuine FAIL
-          # or an unverifiable TRIGGERED run (no-result-line — "empty fails closed").
+          # an unverifiable TRIGGERED run (no-result-line — "empty fails closed"), or
+          # CANT-RUN:cannot-spend-violated (I-cannot-spend breach; fails closed).
           # PASS/SKIPPED, the environmental CANT-RUNs, and the pre-harness infra
           # failures (setup-failed / gate-diff-failed, which fire on every push)
           # stay BLOCK=0 so they never gate prod. See the job-header comment.
@@ -2059,6 +2063,7 @@ jobs:
               "RESULT: PASS"*) RESULT="PASS"; LEVEL="info" ;;
               "RESULT: FAIL"*) RESULT="FAIL"; LEVEL="error"; BLOCK=1 ;;
               *no-result-line*) RESULT="CANT-RUN"; LEVEL="error"; BLOCK=1 ;;
+              "RESULT: CANT-RUN:cannot-spend-violated"*) RESULT="CANT-RUN"; LEVEL="error"; BLOCK=1 ;;
               *gate-diff-failed*) RESULT="CANT-RUN"; LEVEL="error" ;;
               "RESULT: CANT-RUN"*) RESULT="CANT-RUN"; LEVEL="warning" ;;
               *) RESULT="CANT-RUN"; LEVEL="warning" ;;

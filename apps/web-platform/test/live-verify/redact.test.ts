@@ -107,4 +107,14 @@ describe("redact", () => {
     expect(out).not.toContain(blob);
     expect(out).toContain("[REDACTED_SB_SESSION]");
   });
+
+  it("redacts api_keys ciphertext fields by JSON key (I-cannot-spend read)", () => {
+    const row = '{"provider":"anthropic","encrypted_key":"ct-secret-value","iv":"iv-secret-value","auth_tag":"tag-secret-value"}';
+    const out = redact(row);
+    for (const v of ["ct-secret-value", "iv-secret-value", "tag-secret-value"]) {
+      expect(out).not.toContain(v);
+    }
+    expect(out).toContain('"provider":"anthropic"');
+    expect(out).toContain('"encrypted_key":"[REDACTED]');
+  });
 });
