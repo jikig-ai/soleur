@@ -303,6 +303,11 @@ class TestHelpers(ScrubbedEnv):
             lr._exec(missing, ["tool"], 5)
         self.assertIn("could not run", str(ctx.exception))
 
+    def test_clean_strips_every_invisible_character_class(self):
+        for cp in (0x00AD, 0x061C, 0x180E, 0x2060, 0x2061, 0x206A, 0x206F):
+            with self.subTest(codepoint=hex(cp)):
+                self.assertEqual(lr._clean("a" + chr(cp) + "b"), "a b")
+
     def test_clean_strips_bidi_and_zero_width_characters(self):
         text = "a" + chr(0x202E) + "b" + chr(0x200B) + "c" + chr(0xFEFF) + "d" + chr(0x2066) + "e"
         self.assertEqual(lr._clean(text), "a b c d e")
@@ -752,6 +757,14 @@ class TestMergeBaseDelta(CheckBase):
         self.assertEqual(code, 0, "locally the comparison is skipped as before")
         code, _ = self.check(base=base, extra_env={"CI": "true"})
         self.assertEqual(code, 0, "no script at the base: this PR introduces both")
+
+    def test_a_comment_naming_the_scope_does_not_count_as_defining_it(self):
+        self.repo.write("tools/ratchet.py", '# the "fixture" scope is planned\nSCOPES = {"other": {}}\n')
+        base = self.repo.commit("only a comment mentions it")
+        self.update()
+        cfg = dict(self.config, script="tools/ratchet.py")
+        code, _ = self.check(cfg, base=base, extra_env={"CI": "true"})
+        self.assertEqual(code, 0)
 
     def test_a_new_scope_added_to_an_existing_script_is_admitted_under_ci(self):
         self.repo.write("tools/ratchet.py", 'SCOPES = {"other": {}}\n')

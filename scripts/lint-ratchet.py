@@ -70,7 +70,13 @@ PIP_TIMEOUT = 300
 
 ENTRY_RE = re.compile(r"^([^|]+)\|([^|]+)\|([0-9a-f]{12})\|([0-9]+)$")
 LINE_SPLIT_RE = re.compile(r"\r\n|\r|\n")
-CONTROL_RE = re.compile("[\x00-\x1f\x7f-\x9f" + "".join(chr(c) for c in (0x2028, 0x2029, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069, 0xfeff)) + "]")
+# Invisible or direction-changing characters, listed as code points so this source never holds a raw
+# line separator: line/paragraph separators, zero-width and bidi controls, invisible operators,
+# the soft hyphen, the Mongolian vowel separator and the byte-order mark.
+INVISIBLE_CODEPOINTS = (0x00ad, 0x061c, 0x180e, 0x2028, 0x2029, 0x2060, 0x2061, 0x2062, 0x2063, 0x2064,
+                        0x206a, 0x206b, 0x206c, 0x206d, 0x206e, 0x206f, 0xfeff) + tuple(range(0x200b, 0x2010)) \
+    + tuple(range(0x202a, 0x202f)) + tuple(range(0x2066, 0x206a))
+CONTROL_RE = re.compile("[\x00-\x1f\x7f-\x9f" + "".join(chr(c) for c in INVISIBLE_CODEPOINTS) + "]")
 # pip output that means the REQUIREMENTS are wrong or the wheel does not match its hash: never a
 # skip, because a skipped integrity failure is exactly how a poisoned index would get through.
 PIP_INTEGRITY_MARKERS = (
@@ -436,7 +442,7 @@ def _delta(config, root, head_entries, base, env, out: list) -> tuple:
     if base_text is None:
         script = config.get("script")
         base_script = baseline_at(root, sha, script, env) if (ci and script) else None
-        if base_script is not None and '"{}"'.format(config["name"]) in base_script:
+        if base_script is not None and re.search(r'"{}"\s*:\s*\{{'.format(re.escape(config["name"])), base_script):
             out.append(pre + "the baseline is missing at the merge base {} although the ratchet script there already "
                        "defines this scope: a baseline moved or renamed in this diff cannot be compared".format(
                            sha[:12]))
