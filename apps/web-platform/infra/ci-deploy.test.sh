@@ -11380,7 +11380,7 @@ fi
 # first-secret selection is what reads the rule.
 FO94_BODY="$(/usr/bin/grep -vE '^[[:space:]]*#' "$FO99/fn.sh" || true)"
 TOTAL=$((TOTAL + 1))
-if ! printf '%s\n' "$FO94_BODY" | /usr/bin/grep -qE 'match\.secret' \
+if ! /usr/bin/grep -qE 'match\.secret' <<<"$FO94_BODY" \
    && [[ "$(printf '%s\n' "$FO94_BODY" | /usr/bin/grep -cE 'select\(\.id=="deploy-peer"\) \| \.\["trigger-rule"\] \| \.\. \| objects \| select\(\.type=="payload-hmac-sha256"\)\] \| first \| \.secret \| select\(type=="string"\)' || true)" -eq 1 ]]; then
   PASS=$((PASS + 1)); echo "  PASS: T-9294-3 fan_out_to_peers reads the secret of the first payload-hmac-sha256 match under the deploy-peer trigger-rule (one comment-stripped site) and no longer reads a bare .match.secret"
 else
