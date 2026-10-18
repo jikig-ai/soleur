@@ -1,0 +1,92 @@
+# Escape-rate replay (S4 PR C, activation prerequisite 2, Ref #9729)
+
+Tool: `scripts/ci-pr-affected-replay.py` (read-only; suite `plugins/soleur/test/ci-pr-affected-replay.test.sh`). Collected 2026-10-16.
+**Window:** the last 300 first-parent commits of `origin/main` as it stood on 2026-10-16: newest `abbd36a696` (committer time
+2026-10-16T08:22:38Z), oldest `9fd4806940` (2026-10-06T11:48:18Z). (The first version of this receipt named the 300 commits ending at
+`ee8644bded`; that was the tree the selector ran on, not the window. The units file holds exactly the 300 commits ending at `abbd36a696`:
+`git rev-list --first-parent -n 300 abbd36a696` equals the set of unit shas, 0 missing, 0 extra.)
+**Trees:** the commit units' selections were taken on `origin/main` at `ee8644bded` (four docs and infra commits older than the window's tip);
+the audit (`index-audit.md`) ran on `abbd36a696`. The selector and index are TODAY's, applied to older diffs (a recorded limit); the two trees
+differ by 33 files of which six are test suites, so the commit units and the audit were not measured on one index. The verdict does not rest on
+the difference (the audit fails criterion (b) on its own).
+**Ejections:** every `merge_group` run of `ci.yml` created in the same window, 2026-10-06T11:48:18Z to 2026-10-16T08:22:38Z: **392 runs, 336
+`success`, 53 `failure`, 3 `cancelled`**. Every conclusion except `success` is a refused run and a unit (**56 units**): a cancelled run is not
+a dequeue with no verdict, because a cancelled shard fails the aggregate check, so the three cancelled runs (37671649612, 37679605689,
+38476004641) are classed like the rest (all three `not-evaluable`: an unsettled shard). The command writes `ejections-window.json` (the window,
+the run count, the refused count and the conclusion histogram) and `aggregate` refuses a population whose ejection units are not that many.
+The 53
+failures are the same 53 head shas as for the window ending at `ee8644bded` (the 13 hours between the two windows ended no run in failure), and
+they were re-classified at review on 2026-10-16 with the hardened classifier; their selections were taken on the review branch's tree. Per-unit
+rows: `replay-commits.tsv` (356 rows; the `idx` column is the position in the window, re-derived because the first collection's resumed runs had
+numbered some units against an older tip). Raw run records were read live; the oldest listed run is recorded in `dark-cost.md`.
+
+## The proposed rule (stored with its hash so PR D's selector can be pinned to it)
+
+`rule_sha256=ad9e6916307c65de162a5e151641d30449471242b4c62f11344c37d7b43d2cec`
+
+> skip a suite iff AFFECTED_SELECTED sel=0 and reason is not always_on and AFFECTED_SUMMARY fallback=none and the diff is evaluable
+> (no comma or non-printable path byte, list at most 100000 bytes)
+
+Today's shipped rule skips nothing, so replaying it would be vacuous (CTO R2); this is the per-suite rule PR C was to gate.
+
+## Result
+
+| Population | n | clean | rule-irrelevant | flake-cleared | not-evaluable | attributable | unverified-as-escape (gating point) | worst case | 95% upper bound on the worst case |
+|---|---|---|---|---|---|---|---|---|---|
+| first-parent commits | 300 | 300 | 0 | 0 | 0 | 0 | 0 of 300 (0.00%) | 0 of 300 | 0.99% |
+| commits plus ejections | 356 | 300 | 29 | 21 | 6 | 0 | 0 of 356 (0.00%) | 6 of 356 | 3.30% |
+
+Units are replay units (a commit, or an ejected queue run); the bound is the one-sided 95% Clopper-Pearson bound on the WORST-CASE numerator
+(attributable + unverified + not-evaluable). **"0 attributable" is defined as: zero units where a would-skip suite failed on at least two attempts of
+the identical tree, attempt 1's jobs and logs named the same suite, and no later green run cleared it.** Routes (units per class and reason): of the
+300 commits, 300 `clean` (a full-battery run on the identical tree concluded success); of the 56 ejections, **29 `rule-irrelevant`** (they failed in
+jobs or suites the rule would have RUN anyway: e2e, lint, build, selected suites), **21 `flake-cleared`, every one by `identical-tree-green`** (the label
+predates its definition: the claim is an identical changed-file (name, blob sha) set, which is not an identical tree; a later
+queue run of the same PR with that identical set concluded success; the multi-unit flake class, which needs 3 units from
+3 distinct PRs, flipped none of them, though `scripts/test-all-orphan-log-retention` meets it), and **6 `not-evaluable`** (the 3 cancelled runs, 2 failed shards with no
+`[FAIL]`/`[KILLED]` line, 1 failure with no failed job). No unit is `unverified` or `escape`. **Criterion (a) depends on that clearance**: without it the
+21 would be `unverified`, counted as escapes in the gating point estimate, which would read 21 of 356 (5.9%) against the 2% line.
+
+Saving (criterion c): over the 300 commits the selector skips a mean of **52.87 suite-minutes** per commit (standard error 1.59; 245 commits
+evaluated, 49 runner-changed full runs and 6 non-evaluable diffs count as 0); net of the 1.29 billed selector minutes that is
+**51.58**, and 54.75 at mean plus two standard errors. **The bar and the figure are in different units, so (c) is graded `unmeasured`, not `pass`.**
+The bar, 19.96, is 20% of the 99.8 baseline, which is billed job-minutes per PULL-REQUEST run; 51.58 is suite-minutes per full-battery main
+commit (every commit runs every suite). A rough per-PR-run reading, from the performance review's one-day sample (45 PR runs, of which 11, or
+24.4%, executed the `test-scripts` group the skippable suites sit in; the sample's query and run list were not committed, so treat it as an
+unsourced order of magnitude): 0.244 x 52.87 gross suite-minutes = 12.9 gross, 11.6 net of the 1.29 dark selector minutes (applying the share to
+51.58 and subtracting 1.29 again would count the selector twice). That is a point estimate with a 95% interval for the 24% share of about 14% to
+39% (11 of 45), which puts the net figure between about 6.2 and 19.2, i.e. straddling the bar's lower end rather than clearly under it. Three
+more reasons it is not a measurement (the commit split is the performance review's, from `replay-commits.tsv` and `git diff-tree`): the 52.87 mean mixes 36 doc-class commits (mean 85.87 skipped suite-minutes, whose PR runs are already
+skipped at job level and add no marginal saving) with 264 code commits (mean 48.37); the 99.8 baseline is itself a lower bound over 31 runs
+while the same sample's mean PR run is about 50 raw job-minutes, so the bar may be nearer 10; and the active-state selector cost depends on the
+cache hit rate (a cold pass bills 3 minutes, per shard fourteen times that). Both readings are recorded here; neither is a measurement of the
+billed per-PR-run saving. Units: suite-minutes from
+`scripts/suite-durations{,-heavy}.tsv`; a suite missing from those files counts 1.18 s, which UNDER-counts the web-platform unit registration
+(about 15 job-minutes, not in the files), so the figure is a lower bound on that axis; suite-minutes are not billed job-minutes (shards bill a
+rounded-up minute each), and the billed saving was not measured. The cheap pre-check on a 30-commit sample read 48.05 (se 5.22), see
+`cheap-kill-sample.tsv`; it did not fire.
+
+## Limits (read before trusting the rate)
+
+1. **Survivorship.** Every one of the 300 commits landed, so a commit that broke a skippable suite was refused by the queue's full battery and is
+   NOT in that population: its zero is near-vacuous by construction (all 300 carry a green full-battery run on the identical tree). The ejection
+   population is the one that can hold an escape; it shows none that is deterministic and uncleared.
+2. **A zero escape rate is not a complete index.** The replay can only see failures that happened. The index audit (`index-audit.md`) shows 190 of 630
+   suites that name tracked paths the index does not declare for them, a structural way for the rule to skip a suite that reads a changed file.
+3. Today's index applied to older diffs; ejection files come from the commits API; a suite flake class is detected by 3 failing units from 3 distinct PRs with at
+   least 2 distinct changed-file sets, which is a heuristic, not proof; a clearance is a claim about a LATER run of the same PR with the identical
+   (name, blob sha) changed-file set, never an earlier run and never a run on a branch that names no PR.
+
+## Review re-run (what changed after the 11-seat review)
+
+The review found that the first classifier let "could not measure" land in a reassuring class (a cancelled or unfinished job, a truncated jobs list,
+an empty diff, an unread attempt 1 and a name-only file match all reached `rule-irrelevant`, `flake-cleared` or `escape`), that the index audit never
+read 189 suites, and that `[KILLED]` lines were ignored. All were fixed in the class (see `decision-challenges.md`), every non-clean unit was
+re-collected with `--reclassify`, and the window was re-bounded. The classes of the 53 failed runs did not move (29 / 21 / 3, 0 unverified, 0 escape); the audit
+count did (145 to 190 of 630).
+
+A third, verification pass found that `ejections` had dropped the three cancelled runs as "no verdict" (the claim above was withdrawn), that the
+population could be short without anything saying so, that a commit file with no blob sha compared by name alone, and that an audit whose
+selector failed after printing rows read as a pass. Fixed in the class: cancelled runs are units, `ejections-window.json` is the count `aggregate`
+checks the population against, a missing blob sha is a failed read, and a selector that exits non-zero is a failed audit (rc 3). The worst-case
+numerator went from 3 to 6 (the three cancelled runs) and the bound from 2.18% to 3.30%, still under 12%.
