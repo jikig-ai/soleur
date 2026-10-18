@@ -2,8 +2,8 @@
 # n=8
 # generated-from-run=incremental
 # generated-from-runs=incremental
-# default-weight-ms=1180
-# generated-at=2026-10-14T14:51:03Z
+# default-weight-ms=1184
+# generated-at=2026-10-18T01:51:18Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -94,6 +94,7 @@ apps/web-platform/scripts/supabase-local.test.sh	4
 apps/web-platform/test/parse-gitleaks-allowlists	2
 plugins/soleur/scripts/admin-merge-ready.test.sh	3
 plugins/soleur/scripts/alpha-metrics.test.sh	5
+plugins/soleur/scripts/delegation-verify.test.sh	1
 plugins/soleur/scripts/emit-decision.test.sh	8
 plugins/soleur/scripts/pipeline-tally.test.sh	4
 plugins/soleur/scripts/precommit-guard.test.sh	2
@@ -147,6 +148,7 @@ plugins/soleur/test/_base-notice-frontmatter.test.sh	8
 plugins/soleur/test/admin-merge-ready-wiring.test.sh	4
 plugins/soleur/test/audit-flag-flip.test.sh	5
 plugins/soleur/test/auto-close-scanner.test.sh	7
+plugins/soleur/test/boundary-prefix.test.sh	1
 plugins/soleur/test/brand-workshop-pen-commit-after-save.test.sh	7
 plugins/soleur/test/c4-count-parity.test.sh	2
 plugins/soleur/test/c4-from-components.test.sh	5
@@ -159,6 +161,8 @@ plugins/soleur/test/ci-concurrency-key.test.sh	8
 plugins/soleur/test/ci-e2e-skip-anchors.test.sh	2
 plugins/soleur/test/ci-head-verdict.test.sh	4
 plugins/soleur/test/ci-path-gating.test.sh	5
+plugins/soleur/test/ci-pr-affected-preactivation.test.sh	1
+plugins/soleur/test/ci-pr-affected-replay.test.sh	1
 plugins/soleur/test/ci-shard-totality-skip.test.sh	1
 plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh	5
 plugins/soleur/test/claude-code-action-auth.test.sh	5
@@ -167,6 +171,7 @@ plugins/soleur/test/codeql-main-alert-gate-workflow-wiring.test.sh	7
 plugins/soleur/test/codeql-main-alert-gate.test.sh	8
 plugins/soleur/test/compaction-state-hook.test.sh	6
 plugins/soleur/test/concurrent-ship.test.sh	3
+plugins/soleur/test/cto-interface-selector.test.sh	1
 plugins/soleur/test/debug-probe-residue.test.sh	6
 plugins/soleur/test/deploy-arm.test.sh	5
 plugins/soleur/test/deploy-script-tests-aggregator-diagnosis.test.sh	5
@@ -177,6 +182,7 @@ plugins/soleur/test/domain-model-headless-append.test.sh	1
 plugins/soleur/test/domain-model-init.test.sh	5
 plugins/soleur/test/drain-labeled-backlog.test.sh	2
 plugins/soleur/test/drain-prs.test.sh	5
+plugins/soleur/test/ext-filter-detect-hook.test.sh	1
 plugins/soleur/test/fanout-suite-scope.test.sh	4
 plugins/soleur/test/fixture-cd-containment.test.sh	7
 plugins/soleur/test/fixture-dir-operand-assert.test.sh	8
@@ -185,6 +191,7 @@ plugins/soleur/test/fixture-relative-assert.test.sh	2
 plugins/soleur/test/flag-detach-shared.test.sh	5
 plugins/soleur/test/flag-org-scoping-pr2.test.sh	7
 plugins/soleur/test/flagsmith-stdin-config.test.sh	1
+plugins/soleur/test/flip-flag-map-parity.test.sh	1
 plugins/soleur/test/gdpr-gate-glob-liveness.test.sh	1
 plugins/soleur/test/gdpr-gate-self-test.test.sh	6
 plugins/soleur/test/generate-kb-index.test.sh	6
@@ -194,10 +201,12 @@ plugins/soleur/test/git-fixture-env-shell.test.sh	4
 plugins/soleur/test/git-tripwire.test.sh	7
 plugins/soleur/test/gitleaks-merge-commit.test.sh	6
 plugins/soleur/test/gitleaks-rules.test.sh	6
+plugins/soleur/test/go-hold-routing.test.sh	1
 plugins/soleur/test/go-routing-table-parity.test.sh	1
 plugins/soleur/test/go-session-gates.test.sh	5
 plugins/soleur/test/harvest-debt.test.sh	2
 plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh	6
+plugins/soleur/test/hold-gate-eval.test.sh	1
 plugins/soleur/test/hook-git-env-coverage.test.sh	6
 plugins/soleur/test/hook-git-env-receipt.test.sh	8
 plugins/soleur/test/hook-input-classification-mutation.test.sh	5
@@ -237,6 +246,7 @@ plugins/soleur/test/pencil-adapter-auth-hard-fail.test.sh	7
 plugins/soleur/test/pencil-setup-skill-cli-form.test.sh	6
 plugins/soleur/test/plugin-version.test.sh	8
 plugins/soleur/test/pr-fanout-ledger.test.sh	4
+plugins/soleur/test/pr-overlap-preflight.test.sh	1
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	7
 plugins/soleur/test/proc.test.sh	2
 plugins/soleur/test/ralph-loop.test.sh	2
@@ -254,6 +264,7 @@ plugins/soleur/test/reusable-release-degraded-pointer.test.sh	8
 plugins/soleur/test/reusable-release-idempotency.test.sh	4
 plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh	3
 plugins/soleur/test/roadmap-reconcile.test.sh	3
+plugins/soleur/test/rtk-grammar-parity.test.sh	1
 plugins/soleur/test/schedule-skill-once.test.sh	5
 plugins/soleur/test/scripts-shard-manifest.test.sh	4
 plugins/soleur/test/scripts-shard-runtime-coverage.test.sh	8
@@ -348,6 +359,7 @@ scripts/digest-oracle-guard	4
 scripts/dogfood/grok-gpu-bootstrap	4
 scripts/dogfood/grok-measure	7
 scripts/domain-model-drift	4
+scripts/egress-audit-retention-check	1
 scripts/ensure-doppler	8
 scripts/ensure-kb-index	4
 scripts/expenses-verify-by-check	3
@@ -392,6 +404,7 @@ scripts/learning-retrieval-bench	7
 scripts/lib/bearer-curl.test.sh	8
 scripts/lib/frontmatter-strip.test.sh	1
 scripts/lib/git-data-rotate-stamp.test.sh	1
+scripts/lib/git-data-store-dirty-scan.test.sh	1
 scripts/lib/git-data-wipe-runs.test.sh	1
 scripts/lib/incidents-roots.test.sh	3
 scripts/lib/inngest-probe-row.test.sh	6
@@ -437,6 +450,7 @@ scripts/lint-migrated-rule-ids-unit	8
 scripts/lint-orphan-test-suites	2
 scripts/lint-orphan-test-suites-mutations-a	5
 scripts/lint-orphan-test-suites-mutations-b	2
+scripts/lint-ratchet-ruff-live	1
 scripts/lint-rule-bodies-live	7
 scripts/lint-rule-ids-live	6
 scripts/lint-shell-capture-exit	8
@@ -526,6 +540,7 @@ scripts/web-host-escrow-preflight	3
 scripts/web2-luks-live-6931	4
 scripts/workspaces-plaintext-hold-9348	2
 scripts/zot-fill-rate-7341	6
+scripts/zot-fill-rate-standing-wiring	1
 scripts/zot-last-err-redact-7500	7
 scripts/zot-mirror-diagnosis	2
 scripts/zot-restart-loop-alarm	2
@@ -574,6 +589,7 @@ tests/scripts/inngest-host-replace-gate	2
 tests/scripts/inngest-host-shape-gate	3
 tests/scripts/inngest-provision-plan-shape	8
 tests/scripts/kb-drift-walker	4
+tests/scripts/lint-ratchet	1
 tests/scripts/lint-rule-bodies	8
 tests/scripts/lint-rule-ids	4
 tests/scripts/main-duplicate-skip	8

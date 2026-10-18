@@ -9,8 +9,8 @@
 # The untreated cause is upstream zot#4235: gc completes repeatedly for `soleur-inngest-bootstrap`
 # and never for `soleur-web-platform`, panicking in `pkg/scheduler/scheduler.go`. Upstream #4235 (as
 # filed: gc re-reads every manifest per deleted blob) is closed and its fix PR #4236 merged 2026-08-11,
-# in v2.1.21 and later, so the v2.1.22 pin this host runs (from the #9252 replace on) carries it; before
-# that replace the host ran v2.1.20, which did not. The issue text does not describe the one-repo-never-
+# in v2.1.21 and later. The v2.1.22 pin (from #9252) is staged in IaC but the live host may still run the
+# older v2.1.20, which lacks it, until a replace lands. The issue text does not describe the one-repo-never-
 # completes signature above, so whether #4236 ends the refill on THIS host is exactly what this probe
 # measures: a refill after that replace is a result to report, not an expected outcome. A second
 # candidate — orphaned `.uploads/` staging, seen as `i/o timeout ... PatchBlobUpload` during the
@@ -18,8 +18,8 @@
 # was blocked by #7440 (the registry shipped no zot logs; this heartbeat was its only instrument).
 # UNBLOCKED 2026-08-12 (#7455): the zot container-log channel is LIVE, and it counts
 # the func-keyed PatchBlobUpload error line (#9373) as one of its evidence classes — which is the
-# very discriminator named as missing below. Attribution is now answerable; this script has not
-# yet been rewritten to use it.
+# very discriminator named as missing below. Attribution is now answerable, and the FAIL arm's
+# attribution_lead (#7456 item b) below reads that channel; it is a lead, never a verdict.
 #
 # ── EVERY PARSE STEP BELOW IS A GUARD. DO NOT REGEX THE WHOLE ROW. ───────────────────────────
 #
@@ -164,7 +164,10 @@ for line in sys.stdin:
     if not b or b.group(1)=="unknown": continue
     # Does NOT match the pcent=-1 df-failure sentinel; with the tail already cut there is nothing
     # further along to fall through to.
-    m=re.search(r"pcent=(\d+)", msg)
+    # {1,3} plus a trailing non-digit lookahead: an over-long digit string DROPS the row. The old
+    # `(\d+)` let a 5000-digit forgery crash int() (ValueError, a probe defect) or a 7-digit one
+    # become `cur`. This can only turn a crash or forgery into exit 2, never into a PASS.
+    m=re.search(r"pcent=([0-9]{1,3})(?![0-9])", msg)
     if not (dt and m): continue
     # Better Stack emits dt NAIVE IN UTC. .timestamp() on a naive datetime assumes LOCAL, which on
     # a UTC+2 host read every sample two hours old and made the staleness gate call a live
@@ -218,6 +221,12 @@ pts=sorted(tuple(map(int,l.split())) for l in sys.stdin if l.strip())
 # STALENESS first: everything below reads the newest sample as the current state, which holds only
 # if it IS current. A dead host keeps 48h of low-flat history in the window and used to PASS.
 age=time.time()-pts[-1][0]
+# A newest sample dated in the FUTURE (beyond 300 s of clock skew) is not "recent", it is a forgery
+# or a broken clock; `age > max_age` alone passed it as the freshest possible reading. The token
+# matches no entry of the benign cause set in the workflow, so it files the probe-defect issue.
+if age < -300:
+    print(f"TRANSIENT future_dated_newest_sample_{-age/60:.0f}min_ahead_pcent={pts[-1][1]}")
+    raise SystemExit(0)
 if age > max_age:
     print(f"TRANSIENT newest_sample_{age/60:.0f}min_old_over_{max_age/60:.0f}min_pcent={pts[-1][1]}")
     raise SystemExit(0)
@@ -386,8 +395,8 @@ if lagging:
     print("  survives, and the trailing window edge cuts gc cycles that had not finished yet.")
     print("  the one-repo-never-completes signature (gc completing for one repo and never another,")
     print("  attributed to zot#4235 whose text does not describe it) was the standing suspect; the")
-    print("  #4236 fix for that issue ships in v2.1.21+, and whether it covers this signature is")
-    print("  what this probe measures, so a recurrence on v2.1.22 is a result to report;")
+    print("  #4236 fix for that issue ships in v2.1.21+ (pin staged; the live host may run older), and")
+    print("  whether it covers this signature is what this probe measures, so a refill is a result;")
     print("  .uploads/ staging is the other.")
 elif sum(starts.values()) == 0:
     # NOT an exoneration. starts==dones==0 is also what a dead shipper, an unparseable row shape
@@ -411,7 +420,7 @@ else:
 echo "zot-fill-rate[#7341]: ${verdict} ${detail} samples=${n} boot=${boot:0:8} window=${WINDOW}"
 case "$verdict" in
   PASS) exit 0 ;;
-  FAIL) echo "The store is refilling toward the threshold. The zot#4235 fix (#4236) ships in v2.1.21+ and is in the v2.1.22 pin, so if this host is on that pin weigh other causes, including the orphaned .uploads/ lead (i/o timeout during PatchBlobUpload cleanup, observed 2026-08-10)."
+  FAIL) echo "The store is refilling toward the threshold. The zot#4235 fix (#4236) ships in v2.1.21+ and is in the v2.1.22 pin (staged; the live host may still run the older one), so if this host is on that pin weigh other causes, including the orphaned .uploads/ lead (i/o timeout during PatchBlobUpload cleanup, observed 2026-08-10)."
         attribution_lead || true
         exit 1 ;;
   TRANSIENT) echo "TRANSIENT: the store's state could not be established. NOT a pass."; exit 2 ;;

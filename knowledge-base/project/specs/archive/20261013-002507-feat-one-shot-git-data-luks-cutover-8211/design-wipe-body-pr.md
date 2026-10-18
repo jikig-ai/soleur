@@ -22,6 +22,8 @@ Governing text: ADR-239, "Consequences" bullet "The wipe branch needs a rehearsa
 that PR's evidence is the end event, the volume is NEVER mounted to purge in place) and "Amendment 2026-10-12"
 (blocker chain; second slip past 2026-11-12 returns to the CLO); #10138 decision 1; #6897.
 
+> **Superseded 2026-10-15 (#6897): the "blocker chain" (flip chain before the wipe) no longer applies to the separated wipe variant; see ADR-239 Amendment 2026-10-15.**
+
 ## 1. What exists today (read, not assumed)
 
 - **There is no wipe body to restore, and there never was a destroying one.** `git show 7fb9c5b399^:apps/web-platform/infra/git-data-cutover.sh`
@@ -702,6 +704,8 @@ Preconditions (all must hold; the machine enforces what it can):
    satisfy the soak. So a precondition is that the rollback-clears-the-stamp fix (that document's R8 / section 6) has
    MERGED; failing that, W3 requires the stamp to be newer than the last rollback run (section 2.3), and the flag is
    re-read right before W9.
+
+> **Superseded 2026-10-15 (#6897): precondition 1 (flip done and soaked) applies to the `flip_chained` variant only; the `separated` variant needs neither a flip nor the soak. See ADR-239 Amendment 2026-10-15.**
 2. The chain it rides: the #10137 fix merged (PR #10155, merged 2026-10-12, read on `origin/main`), #8209, #8609 (so
    the Tier-B seam exists: `precondition_8209_open`) and #8573 (flag write seam), and a REAL key rotate that preceded
    the flip, evidenced per `design-rollback-rehearsal.md` R0 (its independent rotate check). **`d6_replace_stale` is

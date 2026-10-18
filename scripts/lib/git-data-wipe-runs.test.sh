@@ -96,6 +96,11 @@ tc() { check_out "T $1" "$2" 0 -- wipe_run_title_class "$1"; }
 tc 'git-data wipe 123' wipe
 tc 'git-data wipe_finish 999999999999' wipe_finish
 tc 'git-data wipe_check 7' wipe_check
+tc 'git-data snapshot_clear 7' snapshot_clear
+tc 'git-data snapshot_clear' wipe_other
+tc 'git-data snapshot_clear 7 ' wipe_other
+tc 'git-data snapshot_clear abc' wipe_other
+tc 'git-data snapshot_clear 1234567890123' wipe_other
 tc 'git-data wipe 0123' wipe
 tc 'git-data proof' other
 tc 'git-data flip' other
@@ -159,7 +164,7 @@ case_at_stamp_refuses && pass "G4 a rollback created AT the stamp second refuses
 case_legacy_refuses && pass "G5 a legacy-titled run newer than the stamp refuses wipe_precondition_legacy_run_after_stamp" || fail "G5 a newer legacy run was not refused"
 case_wipe_other_ignored && pass "G6 an off-pattern wipe title (a refused dispatch with a free-text volume_id) is ignored" || fail "G6 a wipe_other title blocked or confused the guard"
 check_out "G7 wipe, wipe_finish, wipe_check, proof, flip, unfreeze, redeploy runs after the stamp are all ok" ok 0 -- LR "$(mklist \
-  "$(run 'git-data wipe 5' "$AFTER")" "$(run 'git-data wipe_finish 5' "$AFTER")" "$(run 'git-data wipe_check 5' "$AFTER")" \
+  "$(run 'git-data wipe 5' "$AFTER")" "$(run 'git-data wipe_finish 5' "$AFTER")" "$(run 'git-data wipe_check 5' "$AFTER")" "$(run 'git-data snapshot_clear 5' "$AFTER")" \
   "$(run 'git-data proof' "$AFTER")" "$(run 'git-data flip' "$AFTER")" "$(run 'git-data unfreeze' "$AFTER")" "$(run 'git-data redeploy' "$AFTER")")"
 check_out "G8 an unclassifiable title after the stamp refuses (never a skip)" wipe_precondition_run_title_unparseable 5 -- LR "$(mklist "$(run 'who knows' "$AFTER")")"
 check_out "G9 an unclassifiable title BEFORE the stamp is ignored" ok 0 -- LR "$(mklist "$(run 'who knows' "$BEFORE")")"
@@ -207,6 +212,7 @@ check_out "O2 another volume id in the title" wipe_origin_run_title_mismatch 5 -
 check_out "O2b a title that merely STARTS with the typed id's digits (12345678 vs 123456789)" wipe_origin_run_title_mismatch 5 -- OR "$(view "git-data wipe ${VID}0" main workflow_dispatch "$GOOD_JOBS")"
 check_out "O2c the wipe_finish title is not an origin run" wipe_origin_run_title_mismatch 5 -- OR "$(view "git-data wipe_finish $VID" main workflow_dispatch "$GOOD_JOBS")"
 check_out "O2d the wipe_check title is not an origin run" wipe_origin_run_title_mismatch 5 -- OR "$(view "git-data wipe_check $VID" main workflow_dispatch "$GOOD_JOBS")"
+check_out "O2e the snapshot_clear title is not an origin run" wipe_origin_run_title_mismatch 5 -- OR "$(view "git-data snapshot_clear $VID" main workflow_dispatch "$GOOD_JOBS")"
 check_out "O2e a trailing space on the title" wipe_origin_run_title_mismatch 5 -- OR "$(view "git-data wipe $VID " main workflow_dispatch "$GOOD_JOBS")"
 check_out "O2f the right title under ANOTHER workflow (a run-name is free text)" wipe_origin_run_workflow_mismatch 5 -- OR "$(view "git-data wipe $VID" main workflow_dispatch "$GOOD_JOBS" 'some other workflow')"
 check_out "O2g a workflow name that merely contains the real one" wipe_origin_run_workflow_mismatch 5 -- OR "$(view "git-data wipe $VID" main workflow_dispatch "$GOOD_JOBS" "${WIPE_LEGACY_TITLE} copy")"
@@ -307,7 +313,7 @@ printf '== %d passed, %d failed\n' "$PASS" "$FAIL"
 # PASS==1 at that point, which proves the literal.
 SELFTEST_PASSES=1
 REAL=$(( PASS - SELFTEST_PASSES ))
-MIN_ASSERTIONS=111
+MIN_ASSERTIONS=117
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity assertion floor: only %d real assertion(s) ran (PASS=%d minus %d self-test), expected >= %d.\n' \
     "$REAL" "$PASS" "$SELFTEST_PASSES" "$MIN_ASSERTIONS" >&2

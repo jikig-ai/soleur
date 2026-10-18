@@ -1,0 +1,28 @@
+# lint-ratchet baseline for scope 'eslint-test-dirs' (PR3a of #10331; design in ADR-290).
+# Shrink-only: this file always equals the live census, and per (path, rule) it may never
+# hold more entries than the merge base. Entry: path|rule|anchor|n, where anchor is a 12-hex
+# fingerprint of the normalised source line (the line itself is never stored).
+# List the live findings:  python3 scripts/lint-ratchet.py eslint-test-dirs --list
+# After fixing findings:   python3 scripts/lint-ratchet.py eslint-test-dirs --update  (it refuses to add)
+# After a merge conflict, take the base branch's copy of this file and re-run --update.
+# Drawdown tracking: #10433
+plugins/soleur/test/cloud-init-user-data-size.test.ts|@typescript-eslint/no-unused-vars|00113e74358f|1
+plugins/soleur/test/cloud-init-user-data-size.test.ts|@typescript-eslint/no-unused-vars|ede485b913ac|1
+plugins/soleur/test/harness-model-map.test.ts|@typescript-eslint/no-unused-vars|43a8b319d70d|1
+plugins/soleur/test/harness-parity.test.ts|@typescript-eslint/no-unused-vars|f087292a2d85|1
+plugins/soleur/test/heartbeat-live-reconcile.test.ts|@typescript-eslint/no-unused-vars|ac763541aff8|1
+plugins/soleur/test/lib/scratch-session.ts|@typescript-eslint/no-unused-vars|56282e4cce61|1
+plugins/soleur/test/marketing-content-drift.test.ts|@typescript-eslint/no-unused-vars|073bd2385eca|1
+plugins/soleur/test/model-launch-review.test.ts|@typescript-eslint/no-unused-vars|e8846c9e11e2|1
+plugins/soleur/test/preflight-discoverability-test.test.ts|@typescript-eslint/no-unused-vars|54a0ed44d00a|1
+plugins/soleur/test/preflight-discoverability-test.test.ts|@typescript-eslint/no-unused-vars|c9fa6fa9fbd7|1
+plugins/soleur/test/redirect-tombstones.test.ts|@typescript-eslint/no-unused-vars|e61be94c6b18|1
+plugins/soleur/test/skill-security-scan.test.ts|@typescript-eslint/no-unused-vars|06f9c9cec68a|1
+plugins/soleur/test/terraform-target-parity.test.ts|@typescript-eslint/no-unused-vars|70e479ad5dd6|1
+plugins/soleur/test/terraform-target-parity.test.ts|@typescript-eslint/no-unused-vars|e8270898a10e|1
+plugins/soleur/test/terraform-target-parity.test.ts|@typescript-eslint/no-unused-vars|e8270898a10e|2
+plugins/soleur/test/web-host-escrow-preflight-census.test.ts|@typescript-eslint/no-unused-vars|fa7fe5fae715|1
+test/content-publisher.test.ts|@typescript-eslint/no-unused-vars|13e60d775737|1
+test/content-publisher.test.ts|@typescript-eslint/no-unused-vars|13e60d775737|2
+test/content-publisher.test.ts|@typescript-eslint/no-unused-vars|13e60d775737|3
+test/content-publisher.test.ts|@typescript-eslint/no-unused-vars|13e60d775737|4
