@@ -299,7 +299,7 @@ Appended; the only change above is the parenthetical in the residual "A holder o
 
 ## Addendum — 2026-10-16 (#9927 item 9, recurring protection check)
 
-Appended; the only change above is the residual "Detection of lifted protection is generic", which now points at the check below. Status stays `accepted`. Plan: `knowledge-base/project/plans/2026-10-16-feat-sole-copy-protection-drift-check-plan.md`.
+Appended; the only change above is the residual "Detection of lifted protection is generic", which now points at the check below. Status stays `accepted`. Plan: `knowledge-base/project/plans/archive/20261018-182041-2026-10-16-feat-sole-copy-protection-drift-check-plan.md`.
 
 **What was added.** The job `sole-copy-protection-check` in `.github/workflows/scheduled-terraform-drift.yml` makes one read-only GET per attempt (up to three attempts, retried only on a transport failure, 429 or 5xx) and compares the live `protection.delete` flag of the Inngest store volume with the value declared in `apps/web-platform/infra/inngest-redis-luks.tf`. A difference files an issue of its own (labels `infra-drift`, `action-required`), instead of one more comment on the standing drift issue. The post-apply read-back of runbook section 5c stays the point-in-time arbiter; this job is its recurring twin and the distinct signal the residual lacked. It prints no command and mutates nothing.
 
