@@ -32,6 +32,10 @@ MCP-browser dependency), asserting a fresh conversation appears in the rail, the
 tears it down. It is wired into `/soleur:postmerge` as a **path-triggered,
 report-only** gate (Phase 5.5).
 
+> **Superseded 2026-06-18 (#5463) for the gate posture:** the gate is BLOCKING, enforced by the
+> `live-verify` job in `web-platform-release.yml`. The "report-only" wording in this section and
+> in §Substrate records the v1 stage and is kept as history. See the 2026-10-18 amendment below.
+
 ### Partial-supersession of ADR-049 (load-bearing)
 
 ADR-049 (Headless Visual-Regression Gate) mandates "runs with zero credentials,"
@@ -277,3 +281,42 @@ This **more completely satisfies ADR-044** (which defines `current_workspace_id`
 `user_session_state` as THE active-workspace binding) for the synthetic principal; it
 does not introduce or reverse any decision. Tracked by #5501; the live `RESULT: PASS`
 de-risks #5463 item 4 (report-only → blocking flip).
+
+## Amendment 2026-10-18 — the prod gate is LLM-free and the principal provably cannot spend
+
+**Status: Accepted (extends the invariants; reverses nothing).** Issue #10449.
+
+An agent must not hand live verification to the operator ("start a Concierge session in the
+web app"). The harness can verify LLM-free behaviour in prod through the blocking gate, but
+only if the synthetic principal can never spend. Three invariants make that checkable and
+bound what a PASS means.
+
+- **I-cannot-spend:** every `api_keys` row for the principal (all providers: anthropic,
+  anthropic_oauth, openai, and any later one) equals the seed's decrypt-poisoned sentinel
+  (`encrypted_key`, `iv`, `auth_tag` as `seed-live-verify-user.sh` inserts them), and no
+  `byok_delegations` row exists. Zero rows, a read error or a null body fail closed. Enforced
+  inside `verifyPrincipal`, the only constructor of `VerifiedPrincipal`, so the browser launch
+  is unreachable without it, and it runs under `--dry-run`. The read uses the principal's own
+  RLS session, never the service role (I-service-role-bootstrap-only holds). A violation is
+  `CANT-RUN:cannot-spend-violated`, which the release workflow classifies `BLOCK=1`: a safety
+  breach must not fail open like the environmental CANT-RUNs. Row contents are never logged and
+  the ciphertext JSON keys are in `redact.ts`. A funded key would break this invariant; any such
+  key needs its own ADR and CLO sign-off (tracked #10460).
+- **I-no-model-turn-in-prod:** the harness runs no model turn against the production principal.
+  Verification of behaviour that needs a model turn (Concierge URL fetch) is out of scope for
+  this gate; where a check needs traffic the gate cannot lawfully generate, the agent files a
+  tracker naming the missing capability and never asks the operator to start a session. The
+  passive path is tracked in #10461.
+- **I-egress-not-attested-by-gate:** a PASS does not attest Squid `%un` egress attribution or
+  the real CONNECT path. Skills must say so wherever they report a PASS.
+
+**`qa-fixtures` contract (sketch, build deferred to #10450).** Extra personas exist only in
+non-prod environments, with fresh orgs. `I-allowlist` stays exactly one prod principal.
+
+**An agent-filed tracker is a repo write, not a prod write.** It needs no operator
+authorisation and does not widen I-blast-radius. The flag flip and rollback stay operator-typed
+(ADR-249; migration tracked #9387).
+
+**Residual "report-only" mentions in this ADR** (Decision, §Substrate, the 2026-06-17
+runner-browser section and amendment) were each reviewed and describe the v1 stage; they are
+history, superseded for posture by the blockquote under §Decision.

@@ -102,6 +102,27 @@ cd <WORKTREE> && bash <WORKTREE>/plugins/soleur/skills/flag-set-role/scripts/fli
 The operator types `yes` at the prompt. Any other answer stops the script with exit
 `1` and `SOLEUR_BOOTSTRAP_ABORTED stage=ack`, before anything is written.
 
+## Verifying a flip
+
+After the operator reports the flip ran, verify it without asking them to open a session
+in the web app. Walk the ladder in order; each rung ends in an action:
+
+1. **LLM-free behaviour in trigger paths** (auth, realtime, persist, rail): covered by the
+   blocking `live-verify` gate, `.github/workflows/web-platform-release.yml` ("Enforce
+   live-verify gate"). Read that job's result for the deploy that carries the change. It is
+   diff-triggered, so the flip itself does not run it; if the gating deploy predates the
+   flip, read the run that did.
+2. **Traffic-dependent behaviour** (anything that needs a real model turn, such as a
+   Concierge fetch): the gate cannot lawfully generate it (the synthetic principal cannot
+   spend, ADR-064 `I-cannot-spend`). File a tracker issue naming the missing capability
+   (a funded-key authorisation, #10460, or the passive verification path, #10461) and record
+   the check as UNVERIFIED in the report. Do not ask the operator to start a session.
+3. **Operator-only, and only these:** CAPTCHA, credential entry, 2FA, payment, an
+   admin-scoped mint, and the typed-`yes` flip and rollback commands themselves.
+
+The gate does not attest the real CONNECT path or Squid `%un` egress attribution
+(`I-egress-not-attested-by-gate`); a PASS says nothing about either.
+
 ## Incident rollback (the operator, in their own terminal)
 
 When a flip has to be undone during an incident, skip the preview: give the

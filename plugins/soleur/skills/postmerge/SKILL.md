@@ -373,7 +373,7 @@ chromium bundled in `@playwright/test` with no MCP-browser dependency. The
 warn-and-skip punt is exactly what let the #5391/#5421/#5436 broken fixes pass
 green. Record `Browser verification: DELEGATED-TO-LIVE-VERIFY` and proceed.
 
-## Phase 5.5: Live Verification (path-triggered, REPORT-ONLY)
+## Phase 5.5: Live Verification (path-triggered; BLOCKING in CI)
 
 Verifies the **deployed artifact** for the PR classes where the mock-hermetic e2e
 suite structurally lies (realtime / server-commit-timing / session-auth /
@@ -383,13 +383,26 @@ dedicated **synthetic prod principal** (never an operator/real-user session),
 drives the deployed UI, and asserts a freshly-started conversation appears in the
 Recent Conversations rail.
 
-**Dark-launch posture (`wg-dark-launch-deploy-gates`):** this gate ships
-**REPORT-ONLY**. It records and surfaces a tri-state result but does **NOT** block
-"done". The empty→FAIL-closed + FAIL-blocks-done flip is tracked in **#5463**, and
-that flip **also requires re-homing the harness into a GitHub Action /
-`workflow_dispatch` with a Sentry-observable result** (ADR-033 Option C) — a
-boolean flip inside this agent-driven skill is NOT acceptable for a blocking gate
-(it would recreate the #4932 non-deterministic-blocking-gate class).
+**Gate posture: BLOCKING, enforced in CI (#5463, flipped 2026-06-18).** The authority
+is the `live-verify` job in `.github/workflows/web-platform-release.yml`: its
+"Enforce live-verify gate" step fails the release run when the emit step computes
+`BLOCK=1` (a `FAIL`, an empty result line, or `CANT-RUN:cannot-spend-violated`).
+Re-derive gate state from that workflow, not from this prose. This skill's own run
+of the harness (below) records and surfaces the same tri-state result for the
+post-merge report; it does not itself decide the release, and a boolean flip inside
+this agent-driven skill is NOT the gate (it would recreate the #4932
+non-deterministic-blocking-gate class).
+
+**What a PASS does and does not prove.** The gate is LLM-free: the synthetic
+principal runs no model turn in prod and cannot spend (ADR-064 `I-cannot-spend`,
+checked in `verifyPrincipal` before the browser launches, also under `--dry-run`),
+so a PASS covers deterministic trigger-path behaviour (auth, realtime, persist, rail).
+It does **not** attest the real CONNECT path or Squid `%un` egress attribution
+(`I-egress-not-attested-by-gate`), and it generates no Concierge traffic. A check
+that needs traffic the gate cannot lawfully generate is not a reason to ask the
+operator to start a session: file a tracker naming the missing capability (see
+`flag-set-role` §"Verifying a flip"). A flag flip never triggers this job (it is
+diff-triggered), and the flip and rollback themselves stay operator-typed (ADR-249).
 
 **1. Path trigger (FR7).** The trigger set is the committed source-of-truth
 `apps/web-platform/scripts/live-verify/trigger-paths.txt` (not SKILL.md prose).
@@ -410,7 +423,7 @@ fi
 If `TRIGGERED=0`: record `Live verification: SKIPPED (no triggering paths)` and
 continue to Phase 6.
 
-**2. Run the harness (report-only).** The harness needs Doppler `prd` secrets
+**2. Run the harness.** The harness needs Doppler `prd` secrets
 (`LIVE_VERIFY_USER_PASSWORD`, `LIVE_VERIFY_EXPECTED_UID/REF`, the Supabase
 anon-key, `PRODUCTION_URL`). It is service-role-free (AC2b) and message-minimal
 (I-action-send-free). Run from the app dir under `prd`:
@@ -426,13 +439,13 @@ cd apps/web-platform && \
 prepend a system-browser override — `LIVE_VERIFY_BROWSER_CHANNEL=chrome` (or
 `LIVE_VERIFY_BROWSER_PATH=/path/to/chrome`) — to the `doppler run` line. Unset on
 ubuntu-latest (bundled chromium works); see ADR-064 §"Runner browser + cookie
-shape". The terminal substrate for the blocking flip is the GH-Action re-home
-(#5463 item 3), not this override.
+shape". The blocking substrate is the GitHub Actions job (#5463 item 3), not this
+override.
 
 The harness emits exactly one structured line: `RESULT: PASS`,
 `RESULT: FAIL — <redacted detail>`, or `RESULT: CANT-RUN:<reason>`. Empty output
 is treated as `CANT-RUN:no-result-line` (fail-closed semantics for the result
-*recording*, even though the gate is report-only for "done"). If the harness
+*recording*; CI independently blocks on a missing result line). If the harness
 cannot bootstrap (synthetic principal not yet seeded — see
 `apps/web-platform/scripts/bootstrap-live-verify.sh`), expect `CANT-RUN:CONFIG:…`.
 
@@ -441,8 +454,8 @@ drop it:
 
 - `PASS` → record `Live verification: PASS`.
 - `FAIL` → record `Live verification: FAIL — <detail>` and **surface prominently**
-  (this is the regression the gate exists to catch). Report-only: it does not
-  block "done" on this PR, but it is the signal the #5463 flip will gate on.
+  (this is the regression the gate exists to catch). The CI job has already
+  blocked the release run on a FAIL; report what it concluded.
 - `CANT-RUN:<reason>` → record `Live verification: CANT-RUN:<reason>` and
   **auto-file a tracking issue** (`wg-when-deferring-a-capability-create-a`):
 
@@ -452,7 +465,7 @@ gh issue create --label type/chore \
   --body "deferred-automation backlog item; the live-verify harness could not complete.
 reason: <reason>
 re-evaluate when: synthetic principal seeded / deploy URL reachable / teardown invariant restored.
-Tracks the #5463 blocking-flip precondition."
+Tracks the live-verify gate (blocking in CI since #5463)."
 ```
 
 A `CANT-RUN:CANT-TEARDOWN-has-action-sends` reason is an invariant breach (the
@@ -538,7 +551,7 @@ gh issue create --label type/chore --milestone "Post-MVP / Later" \
 ```
 
 A failed or unrun read-back is a **red post-merge status**: report it verbatim as `Sole-copy read-back: <word>` in the Phase 6
-comment and the Phase 7 summary. It does not itself block "done" (report-only, like Phases 5.5 and 5.6).
+comment and the Phase 7 summary. It does not itself block "done" (report-only, like Phase 5.6; Phase 5.5 is blocking in CI).
 
 ## Phase 5.8: KB archival read-back (REPORT-ONLY)
 
@@ -590,7 +603,7 @@ gh issue comment <issue-number> --body "Post-merge verification complete for PR 
 - Sentry error-count delta: <AUTO-RESOLVED/STOPPED/STILL-FIRING/SKIPPED>
 - File freshness: <PASSED/N files checked>
 - Browser verification: <PASSED/SKIPPED/DELEGATED-TO-LIVE-VERIFY>
-- Live verification: <PASS/FAIL/CANT-RUN:reason/SKIPPED> (report-only, #5463)
+- Live verification: <PASS/FAIL/CANT-RUN:reason/SKIPPED> (blocking in CI, #5463)
 - Sole-copy read-back: <protected/not-protected/volume-gone/read-failed/missing-token/no word/SKIPPED> (report-only, #9879)
 - KB archival read-back: <clean/verbatim rows> (report-only)
 "
@@ -617,7 +630,7 @@ Sentry monitors: <HEALTHY/WARNING/SKIPPED>
 Sentry error-count delta: <AUTO-RESOLVED/STOPPED/STILL-FIRING/SKIPPED>
 File freshness: <N files verified>
 Browser verification: <PASSED/SKIPPED/DELEGATED-TO-LIVE-VERIFY>
-Live verification: <PASS/FAIL/CANT-RUN:reason/SKIPPED> (report-only, #5463)
+Live verification: <PASS/FAIL/CANT-RUN:reason/SKIPPED> (blocking in CI, #5463)
 Sole-copy read-back: <protected/not-protected/volume-gone/read-failed/missing-token/no word/SKIPPED> (report-only, #9879)
 KB archival read-back: <clean/verbatim rows> (report-only)
 Feature-tweet draft: <path + "flip publish_date + status: scheduled to publish" / CATCH-UP: run soleur:feature-tweet #N / NONE — ineligible>
