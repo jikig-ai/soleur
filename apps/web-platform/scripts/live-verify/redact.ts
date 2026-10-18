@@ -86,7 +86,11 @@ const RULES: Array<[RegExp, string]> = [
   // Generic JWT shape (3 base64url segments) — catches bare tokens in DOM/logs.
   [/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "[REDACTED_JWT]"],
   // Email addresses.
-  [/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "[REDACTED_EMAIL]"],
+  // The lookbehind makes a match start only at the BEGINNING of a local-part run:
+  // without it every start inside a long run of local-part characters with no `@`
+  // rescans to the end of the run (quadratic: 100k chars took ~23 s). The
+  // leftmost match was already the run start, so the redacted output is identical.
+  [/(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "[REDACTED_EMAIL]"],
 ];
 
 /**

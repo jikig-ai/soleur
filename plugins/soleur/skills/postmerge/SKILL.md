@@ -405,9 +405,10 @@ flow, it does not attest the real CONNECT path or Squid `%un` egress attribution
 green, so only the `RESULT: PASS` line counts, and anything else is UNVERIFIED. A check that
 needs traffic the gate cannot lawfully generate is not a reason to ask the operator to start a
 session: record `Live verification: UNVERIFIED:<capability>` and reference #10460 / #10461
-(see `flag-set-role` §"Verifying a flip"). The job runs on every deploy but its harness step
-is diff-gated on `trigger-paths.txt`, and a flag flip is not a commit, so a flip starts
-nothing; the flip and rollback themselves stay operator-typed (ADR-249).
+(see `flag-set-role` §"Verifying a flip"). The job runs after each successful deploy
+(`workflow_run`) and its harness step is diff-gated on `trigger-paths.txt`; a flag flip is not
+a commit, so a flip starts nothing. The flip and rollback themselves stay operator-typed
+(ADR-249).
 
 **1. Path trigger (FR7).** The trigger set is the committed source-of-truth
 `apps/web-platform/scripts/live-verify/trigger-paths.txt` (not SKILL.md prose).
@@ -461,6 +462,9 @@ drop it:
 - `FAIL` → record `Live verification: FAIL — <detail>` and **surface prominently**
   (this is the regression the gate exists to catch). The CI job has already
   blocked the release run on a FAIL; report what it concluded.
+- `UNVERIFIED:<capability>` is not a harness result: record it when a check needs traffic the
+  gate cannot generate, or when CI's verdict is SKIPPED or a `CANT-RUN` (see the PASS caveat
+  above). It reuses #10460 / #10461; a failed LOCAL harness run below still files its own issue.
 - `CANT-RUN:<reason>` → record `Live verification: CANT-RUN:<reason>` and
   **auto-file a tracking issue** (`wg-when-deferring-a-capability-create-a`):
 

@@ -2082,7 +2082,7 @@ jobs:
           # log — which is exactly how #7969 stayed invisible for five releases.
           # Emit the FULL reason, not just the classified token.
           if [[ "${RESULT}" == CANT-RUN* ]]; then
-            if [[ "${MSG}" == "RESULT: CANT-RUN:cannot-spend-"* ]]; then
+            if [[ "${MSG}" == "RESULT: CANT-RUN:cannot-spend-violated"* || "${MSG}" == "RESULT: CANT-RUN:cannot-spend-unverified"* ]]; then
               echo "::error title=live-verify cannot-spend check did not pass::${MSG}"
             else
               echo "::warning title=live-verify could not reach a verdict::${MSG}"
@@ -2095,7 +2095,7 @@ jobs:
           # vocabulary: it is set ONLY when the line matches the fixed grammar the
           # harness emits for these two classes, never from page-controlled text.
           SPEND_REASON=""
-          if [[ "${MSG}" =~ ^RESULT:\ CANT-RUN:(cannot-spend-(violated|unverified)):\ ([a-z_-]+)$ ]]; then
+          if [[ "${MSG}" =~ ^RESULT:\ CANT-RUN:(cannot-spend-(violated|unverified)):\ (api_keys-non-sentinel-row|api_keys-unreadable|api_keys-empty|byok_delegations-present|byok_delegations-unreadable)$ ]]; then
             SPEND_REASON="${BASH_REMATCH[1]}:${BASH_REMATCH[3]}"
           fi
           {
@@ -2151,6 +2151,7 @@ jobs:
         env:
           RESULT: ${{ steps.emit.outputs.result }}
           BLOCK: ${{ steps.emit.outputs.block }}
+          REASON: ${{ steps.emit.outputs.reason }}
         run: |
           set -uo pipefail
           # The report-only→blocking flip (#5463, PR #5576), unblocked by the first
@@ -2162,7 +2163,7 @@ jobs:
           # (a Sentry outage must not gate prod), so the gate keys on BLOCK, not on
           # whether the event POSTed.
           if [ "${BLOCK:-0}" = "1" ]; then
-            echo "::error::live-verify gate BLOCKED the release: result=${RESULT:-unknown}. Inspect the 'Run live-verify harness' step output and the gate=live-verify Sentry event. For result=CANT-RUN:cannot-spend-violated see ADR-064 (2026-10-18 amendment, Recovery)."
+            echo "::error::live-verify gate BLOCKED the release: result=${RESULT:-unknown}${REASON:+ reason=${REASON}}. Inspect the 'Run live-verify harness' step output and the gate=live-verify Sentry event. If the reason is cannot-spend-violated, see ADR-064 (2026-10-18 amendment, Recovery)."
             exit 1
           fi
           echo "live-verify gate: non-blocking (result=${RESULT:-unknown})"

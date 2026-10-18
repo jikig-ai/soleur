@@ -108,6 +108,24 @@ describe("redact", () => {
     expect(out).toContain("[REDACTED_SB_SESSION]");
   });
 
+  describe("email rule (linear time, same output)", () => {
+    it("redacts emails exactly as before, including when glued to a local-part run", () => {
+      expect(redact("mail jean.deruelle+x@jikigai.com now")).toBe("mail [REDACTED_EMAIL] now");
+      expect(redact("a@b.co")).toBe("[REDACTED_EMAIL]");
+      // The match still starts at the beginning of the whole local-part run.
+      expect(redact("x_y.z%w+v@sub.example.org")).toBe("[REDACTED_EMAIL]");
+      expect(redact("no at sign here")).toBe("no at sign here");
+    });
+
+    it("does not go quadratic on a long local-part-shaped run with no @", () => {
+      // 100k chars took ~23 s with the unanchored rule; linear is a few ms.
+      const t0 = performance.now();
+      redact("a".repeat(100_000));
+      redact(`${"a.".repeat(50_000)}@`);
+      expect(performance.now() - t0).toBeLessThan(2_000);
+    });
+  });
+
   describe("api_keys ciphertext fields (I-cannot-spend backstop)", () => {
     // Exact equality, not not.toContain: a rule that redacts one character, or
     // all of the line, would satisfy an absence-only assertion.

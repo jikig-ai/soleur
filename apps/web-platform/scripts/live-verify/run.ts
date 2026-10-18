@@ -345,7 +345,7 @@ export async function verifyPrincipal(
 }
 
 // ---------------------------------------------------------------------------
-// I-cannot-spend (ADR-064): the principal's Anthropic key must be undecryptable
+// I-cannot-spend (ADR-064): the principal must hold no decryptable credential
 // ---------------------------------------------------------------------------
 
 /**
@@ -379,22 +379,34 @@ export const CANNOT_SPEND_VIOLATED = "cannot-spend-violated";
 export const CANNOT_SPEND_UNVERIFIED = "cannot-spend-unverified";
 
 /** Columns read from `api_keys`; pinned by `gate.test.ts` (the client is untyped). */
-const KEY_COLUMNS = "provider, encrypted_key, iv, auth_tag";
+const KEY_COLUMNS = "encrypted_key, iv, auth_tag";
 
 /**
  * Refuse to proceed unless the principal holds no DECRYPTABLE credential:
  * EVERY `api_keys` row (all providers; the set drifts, the all-rows read does
- * not) equals the sentinel, and no active `byok_delegations` row is visible.
- * "Active" means `revoked_at IS NULL`, the same filter the runtime resolver
- * applies (`server/byok-resolver.ts`); the table is append-only, so counting a
- * revoked row would hold the gate violated forever.
+ * not) equals the sentinel, and no un-revoked `byok_delegations` row is
+ * visible.
+ *
+ * The delegation filter is `revoked_at IS NULL` ONLY, deliberately a SUPERSET
+ * of what the runtime resolver (`resolve_byok_key_owner`, migration 083/084)
+ * treats as active: that RPC also requires an unexpired delegation and a
+ * current-version acceptance, so an expired or unaccepted row still counts as a
+ * violation here. Over-counting is the safe direction; revoked rows are
+ * excluded because the table is append-only and a revoked row could otherwise
+ * never be cleared.
  *
  * Reads go through the principal's OWN RLS session, never the service role, so
- * "no delegation row" means "none the principal can see" (a delegation needs
- * workspace membership to confer spend, which is the same visibility). A read
- * error, a non-array body or zero key rows is UNVERIFIED, never a pass. Messages
- * carry a failure CLASS only, never row contents. Runs under `--dry-run` too:
- * `main()` calls `verifyPrincipal` before the dry-run branch.
+ * "no delegation" means "none the principal can see". A delegation for a
+ * principal that is no longer a workspace member is invisible but unreachable
+ * anyway: the resolver consults the caller's own key first, and this gate
+ * forces that key to exist and to be the poisoned sentinel.
+ *
+ * Classification (CTO ruling, #10449): a VIOLATION (non-sentinel key row, or an
+ * un-revoked delegation) outranks "could not check". Both reads happen unless a
+ * violation is already certain, so an unreadable or empty `api_keys` never
+ * masks a visible delegation. Messages carry a failure CLASS only, never row
+ * contents. Runs under `--dry-run` too: `main()` calls `verifyPrincipal`
+ * before the dry-run branch.
  *
  * This attests stored credential state at launch. It does not attest egress
  * (Squid `%un` attribution / the real CONNECT path), nor that the app keeps
@@ -404,21 +416,23 @@ const KEY_COLUMNS = "provider, encrypted_key, iv, auth_tag";
 async function assertCannotSpend(
   supabase: ReturnType<typeof createServerClient>,
 ): Promise<void> {
+  let unverified: string | null = null;
+
   const keys = await supabase.from("api_keys").select(KEY_COLUMNS);
   if (keys.error || !Array.isArray(keys.data)) {
-    throw new Error(`${CANNOT_SPEND_UNVERIFIED}: api_keys-unreadable`);
-  }
-  const keyRows: Array<Record<string, unknown>> = keys.data;
-  if (keyRows.length === 0) {
-    throw new Error(`${CANNOT_SPEND_UNVERIFIED}: api_keys-empty`);
-  }
-  for (const row of keyRows) {
-    const sentinel =
-      row.encrypted_key === SENTINEL_KEY.encrypted_key &&
-      row.iv === SENTINEL_KEY.iv &&
-      row.auth_tag === SENTINEL_KEY.auth_tag;
-    if (!sentinel) {
-      throw new Error(`${CANNOT_SPEND_VIOLATED}: api_keys-non-sentinel-row`);
+    unverified = "api_keys-unreadable";
+  } else if (keys.data.length === 0) {
+    unverified = "api_keys-empty";
+  } else {
+    const keyRows: Array<Record<string, unknown>> = keys.data;
+    for (const row of keyRows) {
+      const sentinel =
+        row.encrypted_key === SENTINEL_KEY.encrypted_key &&
+        row.iv === SENTINEL_KEY.iv &&
+        row.auth_tag === SENTINEL_KEY.auth_tag;
+      if (!sentinel) {
+        throw new Error(`${CANNOT_SPEND_VIOLATED}: api_keys-non-sentinel-row`);
+      }
     }
   }
 
@@ -427,10 +441,13 @@ async function assertCannotSpend(
     .select("id")
     .is("revoked_at", null);
   if (delegations.error || !Array.isArray(delegations.data)) {
-    throw new Error(`${CANNOT_SPEND_UNVERIFIED}: byok_delegations-unreadable`);
-  }
-  if (delegations.data.length > 0) {
+    unverified ??= "byok_delegations-unreadable";
+  } else if (delegations.data.length > 0) {
     throw new Error(`${CANNOT_SPEND_VIOLATED}: byok_delegations-present`);
+  }
+
+  if (unverified !== null) {
+    throw new Error(`${CANNOT_SPEND_UNVERIFIED}: ${unverified}`);
   }
 }
 
@@ -1665,6 +1682,17 @@ export function emitLine(result: Result): string {
     : `RESULT: ${result.kind} — ${redact(result.detail)}`;
 }
 
+/**
+ * The Result a pre-launch failure becomes. Exported so the tests drive the SAME
+ * conversion `main()`'s catch performs (a hand-copied `redact(err.message)` in
+ * the suite would leave this hop unpinned): the workflow classifier matches the
+ * resulting line by prefix, so wrapping or re-prefixing the message here would
+ * silently turn a BLOCK=1 breach into a BLOCK=0 CANT-RUN.
+ */
+export function failureResult(err: unknown): Result {
+  return { kind: "CANT-RUN", reason: redact((err as Error).message) };
+}
+
 function emit(result: Result): void {
   // Delegates to emitLine: the wire format lives in exactly ONE place —
   // the exported, test-pinned builder. An inline copy here would let the
@@ -1711,9 +1739,17 @@ async function main(): Promise<void> {
     // redact the message defensively in case a captured value leaked into it.
     // The workflow classifier BLOCKs only on the `cannot-spend-violated` prefix
     // (CANNOT_SPEND_VIOLATED); every other class here is non-blocking.
-    emit({ kind: "CANT-RUN", reason: redact((err as Error).message) });
-    // I-ephemerality: the session is destroyed on this path too.
-    await supabase?.auth.signOut().catch(() => undefined);
+    emit(failureResult(err));
+    // I-ephemerality: the session is destroyed on this path too. Local scope so a
+    // sibling run's session is not invalidated, and bounded so a hung fetch cannot
+    // hold the process past the already-emitted verdict.
+    await bounded(
+      async () => {
+        await supabase?.auth.signOut({ scope: "local" });
+      },
+      undefined,
+      5_000,
+    );
     process.exitCode = 1;
   } finally {
     jar.cookies.clear();

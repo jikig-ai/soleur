@@ -141,7 +141,7 @@ None (re-run `gh issue list --label code-review` and match the file list above b
 
 ## Acceptance Criteria
 
-- [x] `verifyPrincipal` fails with `CANT-RUN:cannot-spend-violated` for each case in 2.4, including under `--dry-run`.
+- [x] `verifyPrincipal` fails for each case in 2.4, including under `--dry-run`: `CANT-RUN:cannot-spend-violated` for a non-sentinel row or an active delegation, `CANT-RUN:cannot-spend-unverified` (BLOCK=0, CTO ruling) for zero rows or an unreadable read.
 - [x] The release workflow emit step sets `BLOCK=1` for `cannot-spend-violated` and no step is named "report-only".
 - [x] `grep -rniE 'report-only' plugins/soleur/skills/postmerge/SKILL.md knowledge-base/engineering/architecture/decisions/ADR-064-live-production-verification-harness.md` returns only hits that describe history, each reviewed.
 - [x] `flag-set-role/SKILL.md` contains the three-step ladder and no instruction to ask the operator to start a live session.
