@@ -260,6 +260,8 @@ mkdir -p "$FX_BASE"
 (
   cd "$FX_BASE" || exit 1
   git init -q -b main . || exit 1
+  # No auto-maintenance in the fixture: `git maintenance run --auto` takes and drops objects/maintenance.lock mid-`cp -a` (#10373)
+  git config maintenance.auto false && git config gc.auto 0 || exit 1
   mk() { mkdir -p "$(dirname "$1")"; printf 'seed %s\n' "$1" > "$1"; }
   mk knowledge-base/project/learnings/zzleak-a.md
   mk knowledge-base/project/zzleak-b.md
