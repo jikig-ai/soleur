@@ -826,7 +826,7 @@ for dest in sorted(all_dests):
 # extractor is fail-closed by over-extraction by design, and the path is genuinely installed
 # on the fresh-boot path by soleur-host-bootstrap.sh, so it clears §2 truthfully rather than
 # needing an exception. Measured, not assumed: origin/main sweeps 57, this tree sweeps 59.
-FLOOR_DESTS = 79  # +16 #9151: the web-2 sibling's destinations not already swept via the web-1 bridge (7 FILE_MAP scripts, 4 drop-in confs, 5 others — measured, margin-zero); +4 #9534: egress_gateway writes (squid.conf, auth helper, deny CIDRs, bootstrap script)
+FLOOR_DESTS = 80  # +1 #10136: /etc/soleur/inngest-ca.pem placeholder (web-1 bridge + web-2; fresh-boot writer: cloud-init docker_run stage, measured); +16 #9151: the web-2 sibling's destinations not already swept via the web-1 bridge (7 FILE_MAP scripts, 4 drop-in confs, 5 others — measured, margin-zero); +4 #9534: egress_gateway writes (squid.conf, auth helper, deny CIDRs, bootstrap script)
 if len(all_dests) >= FLOOR_DESTS:
     if not uncovered:
         ok(f"2: all {len(all_dests)} SSH-written destinations have a fresh-boot writer "

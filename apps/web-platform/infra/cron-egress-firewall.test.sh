@@ -339,6 +339,7 @@ else
 fi
 # Mutation (Guard 1 row 2): delete the 10.0.1.40 :8443 accept from a COPY of the loader; the pin above must go RED
 # on it, while the egress gateway's own `dport 8443` accept (a different daddr) stays and must NOT mask the deletion.
+assert_fixture_dir "$SUITE_SCRATCH"
 LOADER_NO8443="$SUITE_SCRATCH/loader-no-8443.sh"
 grep -v 'ip daddr 10\.0\.1\.40 tcp dport 8443 accept' "$LOADER" > "$LOADER_NO8443"
 if ! cmp -s "$LOADER" "$LOADER_NO8443" && grep -qE 'ip daddr \$\{EGRESS_GW_IP\} tcp dport 8443 accept' "$LOADER_NO8443" \

@@ -268,7 +268,7 @@ write_files:
       # block that CREATES the dir, so a mandatory token would 226/NAMESPACE this
       # unit on fresh boot (:9000 never binds). systemd ignores it while absent;
       # it becomes a real ReadWritePath once inngest-bootstrap creates it (#6090).
-      ReadWritePaths=/mnt/data /var/lock /etc/systemd/system /etc/default /etc/sudoers.d /etc/webhook -/var/lib/inngest -/var/lib/vector -/etc/vector /usr/local/bin
+      ReadWritePaths=/mnt/data /var/lock /etc/systemd/system /etc/default /etc/sudoers.d /etc/webhook -/etc/soleur -/var/lib/inngest -/var/lib/vector -/etc/vector /usr/local/bin
       ReadOnlyPaths=/etc/default/webhook-deploy
       TimeoutStopSec=180
 

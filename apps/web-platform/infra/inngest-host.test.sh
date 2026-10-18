@@ -877,34 +877,34 @@ grep -qE '^  - stunnel4( |$)' "$CLOUD_INIT" && pass || fail "stunnel4 must be in
 [[ -n "$TLS_CONF" && -n "$TLS_UNIT" && -n "$TLS_FETCH" && -n "$TLS_HUNIT" && -n "$TLS_HTIMER" ]] && pass || fail "all five TLS write_files entries must exist (conf, unit, script, health unit, health timer)"
 grep -qE '^  - path: /etc/stunnel/' "$CLOUD_INIT" && fail "the stunnel conf must live OUTSIDE /etc/stunnel/ so no packaged unit can glob it" || pass
 for _k in 'foreground = yes' 'setuid = stunnel4' 'setgid = stunnel4' 'sslVersionMin = TLSv1.2' 'ciphers = ECDHE+AESGCM:ECDHE+CHACHA20' 'options = NO_TICKET' 'renegotiation = no' 'accept = 10.0.1.40:8443' 'connect = 127.0.0.1:8288' 'cert = /run/soleur-inngest-tls/cert.pem' 'key = /run/soleur-inngest-tls/key.pem'; do
-  printf '%s\n' "$TLS_CONF" | grep -qxF "$_k" && pass || fail "stunnel conf must carry exactly: $_k"
+  grep -qxF "$_k" <<<"$TLS_CONF" && pass || fail "stunnel conf must carry exactly: $_k"
 done
-printf '%s\n' "$TLS_CONF" | grep -qE '^(chroot|verify|CAfile|sslVersion) ' && fail "stunnel conf must not set chroot or client-verify keys" || pass
-printf '%s\n' "$TLS_UNIT" | grep -qE '^EnvironmentFile' && fail "the TLS unit must carry NO EnvironmentFile= (the Doppler token must not reach the network-facing process)" || pass
-printf '%s\n' "$TLS_UNIT" | grep -qxF 'ExecStartPre=+/usr/local/bin/soleur-inngest-tls fetch' && pass || fail "the key/cert fetch must run as ExecStartPre=+ (root) from the baked script"
-printf '%s\n' "$TLS_UNIT" | grep -qxF 'ExecStart=/usr/bin/stunnel4 /etc/soleur/inngest-tls.conf' && pass || fail "ExecStart must run stunnel4 on the out-of-/etc/stunnel conf"
-printf '%s\n' "$TLS_UNIT" | grep -qxF 'Requires=inngest-nftables.service' && printf '%s\n' "$TLS_UNIT" | grep -qE '^After=.*inngest-nftables\.service' && pass || fail "the listener must Require and order After inngest-nftables.service (never runs without its drop rule)"
-printf '%s\n' "$TLS_UNIT" | grep -qxF 'Restart=on-failure' && printf '%s\n' "$TLS_UNIT" | grep -qxF 'StartLimitIntervalSec=0' && pass || fail "the unit must retry forever (Restart=on-failure + StartLimitIntervalSec=0): a Doppler disruption at boot must not leave it failed"
+grep -qE '^(chroot|verify|CAfile|sslVersion) ' <<<"$TLS_CONF" && fail "stunnel conf must not set chroot or client-verify keys" || pass
+grep -qE '^EnvironmentFile' <<<"$TLS_UNIT" && fail "the TLS unit must carry NO EnvironmentFile= (the Doppler token must not reach the network-facing process)" || pass
+grep -qxF 'ExecStartPre=+/usr/local/bin/soleur-inngest-tls fetch' <<<"$TLS_UNIT" && pass || fail "the key/cert fetch must run as ExecStartPre=+ (root) from the baked script"
+grep -qxF 'ExecStart=/usr/bin/stunnel4 /etc/soleur/inngest-tls.conf' <<<"$TLS_UNIT" && pass || fail "ExecStart must run stunnel4 on the out-of-/etc/stunnel conf"
+grep -qxF 'Requires=inngest-nftables.service' <<<"$TLS_UNIT" && grep -qE '^After=.*inngest-nftables\.service' <<<"$TLS_UNIT" && pass || fail "the listener must Require and order After inngest-nftables.service (never runs without its drop rule)"
+grep -qxF 'Restart=on-failure' <<<"$TLS_UNIT" && grep -qxF 'StartLimitIntervalSec=0' <<<"$TLS_UNIT" && pass || fail "the unit must retry forever (Restart=on-failure + StartLimitIntervalSec=0): a Doppler disruption at boot must not leave it failed"
 for _h in NoNewPrivileges=yes ProtectSystem=strict ProtectHome=yes PrivateTmp=yes PrivateDevices=yes MemoryDenyWriteExecute=yes 'SystemCallFilter=@system-service' RuntimeDirectoryPreserve=restart; do
-  printf '%s\n' "$TLS_UNIT" | grep -qxF "$_h" && pass || fail "the TLS unit must be hardened: $_h"
+  grep -qxF "$_h" <<<"$TLS_UNIT" && pass || fail "the TLS unit must be hardened: $_h"
 done
 # stunnel drops privileges with setuid/setgid, so the bounding set must keep exactly those two capabilities.
-printf '%s\n' "$TLS_UNIT" | grep -qxF 'CapabilityBoundingSet=CAP_SETUID CAP_SETGID' && pass || fail "CapabilityBoundingSet must be exactly CAP_SETUID CAP_SETGID (an empty set breaks the setuid drop)"
+grep -qxF 'CapabilityBoundingSet=CAP_SETUID CAP_SETGID' <<<"$TLS_UNIT" && pass || fail "CapabilityBoundingSet must be exactly CAP_SETUID CAP_SETGID (an empty set breaks the setuid drop)"
 # inngest-server must never depend on the terminator.
 if grep -nE '^ *(Requires|Wants|BindsTo|PartOf|Requisite)=.*soleur-inngest-tls\.service' "$CLOUD_INIT" >/dev/null; then fail "nothing may Require/Want/Bind soleur-inngest-tls.service (a terminator fault must not stop the scheduler)"; else pass; fi
-printf '%s\n' "$TLS_UNIT" | grep -q 'inngest-server' && fail "the TLS unit must not reference inngest-server" || pass
-printf '%s\n' "$TLS_FETCH" | grep -qE '^ *umask 0077$' && pass || fail "the fetch script must set umask 0077 before writing the key"
-printf '%s\n' "$TLS_FETCH" | grep -qE -- '(--token|set -x|bash -x|sh -x|echo .*\$\(doppler)' && fail "the fetch script must never put the token on argv, trace, or echo a secret" || pass
-printf '%s\n' "$TLS_FETCH" | grep -qF 'openssl pkey' && printf '%s\n' "$TLS_FETCH" | grep -qE 'openssl x509 .*-pubkey' && pass || fail "the fetch script must prove the key matches the cert (public keys compared) before publishing"
-printf '%s\n' "$TLS_FETCH" | grep -qF 'chown root:stunnel4' && printf '%s\n' "$TLS_FETCH" | grep -qF 'chmod 0640' && pass || fail "the key must be 0640 root:stunnel4 (a 0600 root key breaks a SIGHUP reload after the setuid drop)"
-printf '%s\n' "$TLS_FETCH" | grep -qF '/etc/default/inngest-doppler' && pass || fail "the fetch script must source the Doppler token file itself (the unit has no EnvironmentFile=)"
+grep -q 'inngest-server' <<<"$TLS_UNIT" && fail "the TLS unit must not reference inngest-server" || pass
+grep -qE '^ *umask 0077$' <<<"$TLS_FETCH" && pass || fail "the fetch script must set umask 0077 before writing the key"
+grep -qE -- '(--token|set -x|bash -x|sh -x|echo .*\$\(doppler)' <<<"$TLS_FETCH" && fail "the fetch script must never put the token on argv, trace, or echo a secret" || pass
+grep -qF 'openssl pkey' <<<"$TLS_FETCH" && grep -qE 'openssl x509 .*-pubkey' <<<"$TLS_FETCH" && pass || fail "the fetch script must prove the key matches the cert (public keys compared) before publishing"
+grep -qF 'chown root:stunnel4' <<<"$TLS_FETCH" && grep -qF 'chmod 0640' <<<"$TLS_FETCH" && pass || fail "the key must be 0640 root:stunnel4 (a 0600 root key breaks a SIGHUP reload after the setuid drop)"
+grep -qF '/etc/default/inngest-doppler' <<<"$TLS_FETCH" && pass || fail "the fetch script must source the Doppler token file itself (the unit has no EnvironmentFile=)"
 # Multi-line emit_refusal definer + a call carrying the crit marker: the alert drift guard
 # (betterstack-send-failed-alert.test.sh) recognises exactly this shape.
-printf '%s\n' "$TLS_HEALTH" | grep -qxF 'emit_refusal() {' && printf '%s\n' "$TLS_HEALTH" | grep -qxF '  logger -p user.crit -t inngest-tls-health "$1"' && pass || fail "the health script must define a MULTI-LINE emit_refusal() logging at user.crit with tag inngest-tls-health"
-[[ "$(printf '%s\n' "$TLS_HEALTH" | grep -c 'emit_refusal "SOLEUR_INNGEST_TLS_REFUSED reason=')" == 1 ]] && printf '%s\n' "$TLS_HEALTH" | grep -qE 'r=listener_down' && printf '%s\n' "$TLS_HEALTH" | grep -qE 'r="\$r cert_expiring"' && pass || fail "both refusal reasons (listener_down, cert_expiring) must feed ONE emit_refusal call carrying the marker (a second call line adds a second census case to the alert drift guard)"
-printf '%s\n' "$TLS_HEALTH" | grep -qE 'inngest-boot-phone-home\.sh tls-health ' && pass || fail "the periodic row must ship through inngest-boot-phone-home.sh with stage tls-health"
-printf '%s\n' "$TLS_HEALTH" | grep -E 'logger' | grep -vF 'logger -p user.crit -t inngest-tls-health "$1"' | grep -q . && fail "the health script must have no logger call outside emit_refusal" || pass
-printf '%s\n' "$TLS_HTIMER" | grep -qxF 'OnUnitActiveSec=5min' && printf '%s\n' "$TLS_HUNIT" | grep -qE '^After=.*inngest-bs-token-restage\.service' && printf '%s\n' "$TLS_HUNIT" | grep -qxF 'ExecStart=/usr/local/bin/soleur-inngest-tls' && pass || fail "the health timer fires every 5 minutes and its unit runs after inngest-bs-token-restage.service"
+grep -qxF 'emit_refusal() {' <<<"$TLS_HEALTH" && grep -qxF '  logger -p user.crit -t inngest-tls-health "$1"' <<<"$TLS_HEALTH" && pass || fail "the health script must define a MULTI-LINE emit_refusal() logging at user.crit with tag inngest-tls-health"
+[[ "$(grep -c 'emit_refusal "SOLEUR_INNGEST_TLS_REFUSED reason=' <<<"$TLS_HEALTH")" == 1 ]] && grep -qE 'r=listener_down' <<<"$TLS_HEALTH" && grep -qE 'r="\$r cert_expiring"' <<<"$TLS_HEALTH" && pass || fail "both refusal reasons (listener_down, cert_expiring) must feed ONE emit_refusal call carrying the marker (a second call line adds a second census case to the alert drift guard)"
+grep -qE 'inngest-boot-phone-home\.sh tls-health ' <<<"$TLS_HEALTH" && pass || fail "the periodic row must ship through inngest-boot-phone-home.sh with stage tls-health"
+grep -q . < <(grep -E 'logger' <<<"$TLS_HEALTH" | grep -vF 'logger -p user.crit -t inngest-tls-health "$1"') && fail "the health script must have no logger call outside emit_refusal" || pass
+grep -qxF 'OnUnitActiveSec=5min' <<<"$TLS_HTIMER" && grep -qE '^After=.*inngest-bs-token-restage\.service' <<<"$TLS_HUNIT" && grep -qxF 'ExecStart=/usr/local/bin/soleur-inngest-tls' <<<"$TLS_HUNIT" && pass || fail "the health timer fires every 5 minutes and its unit runs after inngest-bs-token-restage.service"
 # runcmd: arm the listener and the timer, each failing loudly to the boot phone-home.
 grep -nE '^ +systemctl enable --now \$u' "$CLOUD_INIT" >/dev/null && grep -qF 'for u in soleur-inngest-tls.service soleur-inngest-tls-health.timer; do' "$CLOUD_INIT" && grep -qE 'inngest-boot-phone-home\.sh tls-enable-FAILED' "$CLOUD_INIT" && pass || fail "runcmd must enable --now the TLS unit and the health timer and report a failure to the boot phone-home (tls-enable-FAILED)"
 L_NIC="$(grep -nF 'soleur-inngest-nic-wait ${inngest_private_ip}' "$CLOUD_INIT" | tail -n 1 | cut -d: -f1)"
@@ -1000,6 +1000,7 @@ STUB
     cat > "$W/bin/openssl" <<'STUB'
 #!/bin/sh
 if [ "$1" = s_client ]; then
+  [ -t 0 ] || timeout 2 cat >/dev/null
   [ -f "$W/served.pem" ] && cat "$W/served.pem"
   exit 0
 fi
@@ -1018,7 +1019,7 @@ STUB
   rc="$(tls_health_run)"
   HROW="$(cat "$W/phone.log" 2>/dev/null)"
   HRE='^tls-health\|unit=active nrestarts=2 fetch_rc=0 bind=10\.0\.1\.40:8443 listener=1 served_sha256=[0-9a-f]{64} cert_sha256=[0-9a-f]{64} notafter_days=[0-9]+ hs_fail_15m=3 legacy_8288_packets=6 tls_8443_packets=9 nft8443_sha256=[0-9a-f]{64} nft_rules=[0-9]+ boot_id=[0-9a-f]{8}$'
-  [[ "$rc" == 0 ]] && printf '%s\n' "$HROW" | grep -qE "$HRE" && pass || fail "healthy emit must be exactly one tls-health row with the planned field list in order (rc=$rc row='$HROW')"
+  [[ "$rc" == 0 ]] && grep -qE "$HRE" <<<"$HROW" && pass || fail "healthy emit must be exactly one tls-health row with the planned field list in order (rc=$rc row='$HROW')"
   _s="$(printf '%s' "$HROW" | sed -n 's/.*served_sha256=\([0-9a-f]*\).*/\1/p')"; _c="$(printf '%s' "$HROW" | sed -n 's/.* cert_sha256=\([0-9a-f]*\).*/\1/p')"
   _real="$(openssl x509 -in "$TLS_T/cert" -noout -fingerprint -sha256 | cut -d= -f2 | tr -d : | tr 'A-F' 'a-f')"
   [[ -n "$_s" && "$_s" == "$_c" && "$_c" == "$_real" ]] && pass || fail "served_sha256 and cert_sha256 must both equal the lowercase colon-free SHA-256 of the DER cert (served=$_s cert=$_c real=$_real)"
@@ -1031,13 +1032,13 @@ STUB
 
   tls_hsandbox hdown "$TLS_T/cert" 0
   rc="$(tls_health_run)"; HROW="$(cat "$W/phone.log" 2>/dev/null)"
-  printf '%s\n' "$HROW" | grep -q 'listener=0 served_sha256= ' && pass || fail "a down listener must report listener=0 and an empty served_sha256 (row='$HROW')"
+  grep -q 'listener=0 served_sha256= ' <<<"$HROW" && pass || fail "a down listener must report listener=0 and an empty served_sha256 (row='$HROW')"
   grep -qE '^-p user\.crit -t inngest-tls-health SOLEUR_INNGEST_TLS_REFUSED reason=listener_down unit=active fetch_rc=0 nrestarts=2 notafter_days=[0-9]+$' "$W/logger.log" 2>/dev/null && pass || fail "listener=0 must emit the crit SOLEUR_INNGEST_TLS_REFUSED reason=listener_down marker (logger: $(cat "$W/logger.log" 2>/dev/null))"
 
   tls_hsandbox hexp "$TLS_T/cert30" 1
   rc="$(tls_health_run)"; HROW="$(cat "$W/phone.log" 2>/dev/null)"
   grep -qE '^-p user\.crit -t inngest-tls-health SOLEUR_INNGEST_TLS_REFUSED reason=cert_expiring unit=active fetch_rc=0 nrestarts=2 notafter_days=(29|30)$' "$W/logger.log" 2>/dev/null && pass || fail "notafter_days < 90 must emit the crit cert_expiring marker (logger: $(cat "$W/logger.log" 2>/dev/null))"
-  printf '%s\n' "$HROW" | grep -qE 'listener=1 .*notafter_days=(29|30) ' && pass || fail "an expiring cert still reports listener=1 with its day count (row='$HROW')"
+  grep -qE 'listener=1 .*notafter_days=(29|30) ' <<<"$HROW" && pass || fail "an expiring cert still reports listener=1 with its day count (row='$HROW')"
 
   tls_hsandbox hboth "$TLS_T/cert30" 0
   rc="$(tls_health_run)"

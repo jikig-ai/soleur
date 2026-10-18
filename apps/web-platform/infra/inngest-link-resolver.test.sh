@@ -41,12 +41,12 @@ command -v base64 >/dev/null 2>&1 || die "base64 is required"
 
 assert_fixture_dir() {
   case "${1-}" in
-    "") printf 'FATAL: fixture dir is EMPTY\n' >&2; exit 2 ;;
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
     */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
     /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
     /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
     /*) : ;;
-    *) printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
   esac
 }
 
@@ -491,6 +491,7 @@ row_D1_link_env_not_derived_from_text() {
 row_D2_recheck_detects_tamper() {
   SNAP_EXTRA="$ONFLAG" CA_MODE=ok scenario "$1" "$ROW_ID"
   ok_https || return 1
+  assert_fixture_dir "$ETC"
   # replay the recheck against tampered states, inside a subshell that re-sources the block
   local st
   for st in 'printf x >> "$ETC/inngest-ca.pem"' 'rm -f "$ETC/inngest-ca.pem"' 'rm -f "$ETC/inngest-ca.pem"; ln -s /etc/hostname "$ETC/inngest-ca.pem"' 'rm -f "$ETC/inngest-ca.pem"; mkdir "$ETC/inngest-ca.pem"'; do
@@ -575,7 +576,7 @@ row_E2_canary_all_good() {
   local argv; argv="$(cat "$RUN/docker.argv")"
   need "no docker inspect" "$(case "$argv" in *"inspect"*soleur-web-platform-canary*) echo 0 ;; *) echo 1 ;; esac)" || return 1
   need "the positive script must run WITHOUT env -u" "$(grep -E '^exec soleur-web-platform-canary /usr/local/bin/node -e ' "$RUN/docker.argv" >/dev/null && echo 0 || echo 1)" || return 1
-  need "the negative control must run with env -u NODE_EXTRA_CA_CERTS" "$(grep -cE '^exec soleur-web-platform-canary env -u NODE_EXTRA_CA_CERTS /usr/local/bin/node -e ' "$RUN/docker.argv" | grep -qx 1 && echo 0 || echo 1)" || return 1
+  need "the negative control must run with env -u NODE_EXTRA_CA_CERTS" "$([ "$(grep -cE '^exec soleur-web-platform-canary env -u NODE_EXTRA_CA_CERTS /usr/local/bin/node -e ' "$RUN/docker.argv")" = 1 ] && echo 0 || echo 1)" || return 1
   need "the scripts must name the synthetic event" "$(grep -q 'soleur.tls-canary.ping' "$RUN/docker.argv" && echo 0 || echo 1)" || return 1
   need "the scripts must not carry key material on argv (-e or an inline value)" "$(grep -qE -- '^exec (-e|--env)|signkey-[0-9a-f]{8}' "$RUN/docker.argv" && echo 1 || echo 0)" || return 1
 }
@@ -771,7 +772,7 @@ kill_mut M08a-third-https-value "A2_flag_on_https A3_pending_live_https" \
 kill_mut M08b-third-http-value "A1_unset_http B1_lease_expired_http" \
   'INNGEST_LINK_HTTP_URL="http://10.0.1.40:8288"' 'INNGEST_LINK_HTTP_URL="http://10.0.1.40:8443"'
 kill_mut M08c-link-env-from-flag-text "A3_pending_live_https D1_link_env_not_derived_from_text" \
-  '"$url" "$scheme" "$cacert" > "$cand"' '"$url" "$scheme" "$cacert $flag" > "$cand"'
+  '"$url" "$scheme" "$cacert"' '"$url" "$scheme" "$cacert $flag"'
 # Guard 1 row 9: a read error is not an absence
 kill_mut M09a-read-error-falls-through "B4_snapshot_unreadable_fails" \
   '_inngest_link_snap_get "$snap" DOPPLER_PROJECT || { INNGEST_LINK_REASON=inngest_link_snapshot_unreadable; inngest_link_event snapshot_unreadable error; return 1; }' '_inngest_link_snap_get "$snap" DOPPLER_PROJECT || true' \
@@ -841,7 +842,7 @@ kill_mut M13e-canary-runs-with-flag-off "E1_canary_flag_off_is_a_noop" \
   envs=' '  envs='
 # the flag-off placeholder, the install failure, the recheck
 kill_mut M12a-flag-off-writes-unvalidated-ca "C9_flag_off_invalid_ca_placeholder" \
-  '[[ -n "$cand" ]] && : > "$cand"' '[[ -n "$cand" ]] && { printf "%s" "$b64" | base64 -d > "$cand" 2>/dev/null || cp /dev/null "$cand"; }'
+  '[[ -n "$cand" ]] && : ' '[[ -n "$cand" ]] && { printf "%s" "$b64" | base64 -d 2>/dev/null || :; } '
 kill_mut M12b-strict-install-failure-ignored "D3_dest_is_directory" \
   'INNGEST_LINK_REASON=inngest_link_write_failed; inngest_link_event write_failed error "file=ca"; return 1' ':'
 kill_mut M12c-recheck-sha-ignored "D2_recheck_detects_tamper" \
@@ -852,13 +853,15 @@ kill_mut M12c-recheck-sha-ignored "D2_recheck_detects_tamper" \
 # LEDGER
 # ---------------------------------------------------------------------------------------
 printf '\n=== inngest-link-resolver: %d passed, %d failed, %d skipped (%d rows) ===\n' "$PASS" "$FAIL" "$SKIP" "$ROWS"
-if [ "$((PASS + FAIL + SKIP))" -lt "$ROWS" ]; then
-  printf '[FATAL] accounting: passes(%s)+fails(%s)+skips(%s) < rows(%s) - a verdict was discarded\n' "$PASS" "$FAIL" "$SKIP" "$ROWS" >&2
-  exit 1
-fi
+# The anti-vacuity floor comes FIRST: scripts/guard-vacuity-floor.test.sh neuters every counter and runs the first floor it
+# finds, which must be this one (the accounting identity below holds trivially at zero).
 MIN_ROWS=95
 if [ "$ROWS" -lt "$MIN_ROWS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s rows ran, floor is %s\n' "$ROWS" "$MIN_ROWS" >&2
+  exit 1
+fi
+if [ "$((PASS + FAIL + SKIP))" -lt "$ROWS" ]; then
+  printf '[FATAL] accounting: passes(%s)+fails(%s)+skips(%s) < rows(%s) - a verdict was discarded\n' "$PASS" "$FAIL" "$SKIP" "$ROWS" >&2
   exit 1
 fi
 # The floor is pinned EXACTLY to the measured row count: deleting a row is as visible as lowering the literal.

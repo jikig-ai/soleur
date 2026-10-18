@@ -61,7 +61,7 @@ PY
 WANT_A10="['bash scripts/inngest-link-flip.sh \"\$ACTION\"']"
 [[ "$(yq '[s["run"].strip() for s in steps if "Run the flip" in s.get("name","")]')" == "$WANT_A10" ]] && ok "A10 the flip step calls the script with the action from env" || bad "A10 flip step: $(yq '[s["run"].strip() for s in steps if "Run the flip" in s.get("name","")]')"
 [[ "$(yq '[s["run"].strip() for s in steps if "Revert" in s.get("name","")]')" == "['bash scripts/inngest-link-flip.sh revert']" ]] && ok "A11 the revert step calls the script's revert subcommand" || bad "A11 revert step"
-check "A12 no terraform, doppler or ssh command in the workflow text" bash -c "! grep -v '^ *#' '$WF' | grep -Eq '(^|[^-a-z_])(terraform|doppler|ssh) '"
+check "A12 no terraform, doppler or ssh command in the workflow text" bash -c "! grep -Eq '(^|[^-a-z_])(terraform|doppler|ssh) ' < <(grep -v '^ *#' '$WF')"
 [[ "$(yq 'on["workflow_dispatch"]["inputs"]["action"]["options"]')" == "['flip', 'off']" ]] && ok "A13 the action input is exactly {flip, off} (off quoted: YAML 1.1 reads a bare off as false)" || bad "A13 options"
 check "A14 the flip needs the FLIP-INNGEST-LINK typo-guard before any call" grep -q 'FLIP-INNGEST-LINK' "$WF"
 
@@ -76,14 +76,26 @@ assert "inngest_link_value" in on["workflow_dispatch"]["inputs"]
 PY
 check "A16 the script dispatches that exact workflow, target and input name" bash -c "grep -q 'FLIP_APPLY_WORKFLOW=\"apply-web-platform-infra.yml\"' '$BODY' && grep -q 'apply_target=inngest-link-flag' '$BODY' && grep -q 'inngest_link_value=' '$BODY'"
 check "A17 the script's lease constant matches the resolver's 30 minutes" grep -q '^FLIP_LEASE_S=1800$' "$BODY"
-check "A18 no eval, no insecure/-k curl, no credential in an argument list" bash -c "! grep -v '^ *#' '$BODY' | grep -Eq '\\beval\\b|--insecure| -k |-H .?(Authorization|X-Signature)'"
+check "A18 no eval, no insecure/-k curl, no credential in an argument list" bash -c "! grep -Eq '\\beval\\b|--insecure| -k |-H .?(Authorization|X-Signature)' < <(grep -v '^ *#' '$BODY')"
 check "A19 every network call is bounded: three --max-time curls and a timeout around gh run watch" bash -c "[ \"\$(grep -v '^ *#' '$BODY' | grep -c -- '--max-time')\" -ge 3 ] && grep -q 'timeout \"\$FLIP_WATCH_TIMEOUT_S\" gh run watch' '$BODY'"
 check "A20 the script parses clean (bash -n)" bash -n "$BODY"
 if command -v shellcheck >/dev/null 2>&1; then check "A21 shellcheck is clean" shellcheck "$BODY"; else ok "A21 shellcheck not installed; skipped"; fi
 
 printf '\n=== B. behaviour against stubs ===\n'
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 make_stubs() { # dir
-  local d="$1"; mkdir -p "$d/bin" "$d/state"
+  local d="$1"
+  assert_fixture_dir "$d"
+  mkdir -p "$d/bin" "$d/state"
   printf '1000000000\n' > "$d/state/now"
   cat > "$d/bin/advance" <<'SH'
 #!/usr/bin/env bash
@@ -153,7 +165,7 @@ run_script() { # dir script mode [env assignments...] -> rc in $RC, output in $O
     FLIP_SLEEP="$d/bin/advance" FLIP_NOW="$d/bin/nowcmd" FLIP_WATCH_TIMEOUT_S=20 FLIP_POLL_MAX=40 "$@" \
     bash "$script" "$mode" 2>&1)"; RC=$?
 }
-fresh() { local d="$TMP/$1"; rm -rf "$d"; make_stubs "$d"; printf '%s' "$d"; }
+fresh() { local d="$TMP/$1"; assert_fixture_dir "$d"; rm -rf "$d"; make_stubs "$d"; printf '%s' "$d"; }
 dispatched() { if [[ -f "$1/gh.log" ]]; then grep -c 'workflow run' "$1/gh.log" || true; else echo 0; fi; }
 values() { grep -o 'inngest_link_value=[^ ]*' "$1/gh.log" 2>/dev/null | sed 's/inngest_link_value=//; s/pending:[0-9]*/pending/' | tr '\n' ' '; }
 posted() { if [[ -f "$1/curl.log" ]]; then grep -c 'POST' "$1/curl.log" || true; else echo 0; fi; }
@@ -228,5 +240,8 @@ fi
 
 printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 FLOOR=45
-if (( PASS + FAIL < FLOOR )); then printf 'FAIL ANTI-VACUITY: %d assertions ran, floor is %d\n' $((PASS + FAIL)) "$FLOOR"; exit 1; fi
+if (( PASS + FAIL < FLOOR )); then
+  printf 'FAIL ANTI-VACUITY: %d assertions ran, floor is %d\n' $((PASS + FAIL)) "$FLOOR" >&2
+  exit 1
+fi
 exit $(( FAIL > 0 ))

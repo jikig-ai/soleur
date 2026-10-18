@@ -619,13 +619,13 @@ test_rp_tls_handshake_mode() {
   if [[ "$HS_RC" -ne 0 && "$HS_OUT" == *"unverified=other"* ]]; then echo "  PASS: a non-verification failure (rc 7) is not accepted as proof"; PASS=$((PASS + 1)); else echo "  FAIL: rc 7 accepted as verification proof ($HS_RC: $HS_OUT)"; FAIL=$((FAIL + 1)); fi
   # output is rc + fixed tokens only
   hs_run ''
-  if printf '%s' "$HS_OUT" | grep -qxE 'inngest-tls-handshake verified=(200|fail) verified_rc=[0-9]{1,3} unverified=(fail|ACCEPTED|other) unverified_rc=[0-9]{1,3} result=(pass|fail)'; then
+  if grep -qxE 'inngest-tls-handshake verified=(200|fail) verified_rc=[0-9]{1,3} unverified=(fail|ACCEPTED|other) unverified_rc=[0-9]{1,3} result=(pass|fail)' < <(printf '%s' "$HS_OUT"); then
     echo "  PASS: output is one line of fixed tokens"; PASS=$((PASS + 1))
   else echo "  FAIL: output is not the fixed-token line: $HS_OUT"; FAIL=$((FAIL + 1)); fi
 }
 test_rp_no_verification_bypass_in_source() {
   echo "TEST: registry-probe — the source never spells curl -k/--insecure/--capath"
-  if grep -vE '^[[:space:]]*#' "$TARGET" | grep -qE '(^|[[:space:]])(-k|--insecure|--capath)([[:space:]]|$)'; then
+  if grep -qE '(^|[[:space:]])(-k|--insecure|--capath)([[:space:]]|$)' < <(grep -vE '^[[:space:]]*#' "$TARGET"); then
     echo "  FAIL: a verification bypass is spelled in the source"; FAIL=$((FAIL + 1))
   else echo "  PASS: no -k/--insecure/--capath"; PASS=$((PASS + 1)); fi
 }
