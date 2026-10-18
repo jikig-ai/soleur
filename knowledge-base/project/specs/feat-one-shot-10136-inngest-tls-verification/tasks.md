@@ -1,66 +1,64 @@
 # Tasks: Inngest TLS with certificate verification
 
-Plan: `knowledge-base/project/plans/2026-10-18-feat-inngest-tls-verification-plan.md`
+Plan: `knowledge-base/project/plans/2026-10-18-feat-inngest-tls-verification-plan.md` (deepened 2026-10-18)
 Branch: `feat-one-shot-10136-inngest-tls-verification` | PR #10501 (draft) | Ref #10136, Ref #10205, Ref #10382, Ref #9139
 
 Spec lacks a valid `lane:`; defaulted to cross-domain (fail-closed).
 
-## Phase 0: Preflight and spikes (no behaviour change)
+## Phase 0: Preflight and re-verification (no behaviour change)
 
-- 0.1 Infra-merge checks: `gh run list` for `apply-web-platform-infra.yml` and `registry-host-replace-dispatch.yml` (nothing in flight); re-read `registry-host-replace-dispatch.md` and `inngest-server.md` "Replace triggers"
-- 0.2 Measure the user_data delta first with `bash apps/web-platform/infra/inngest-userdata-budget.sh` on a scratch copy; margin must be at least 300 B and under the repo test budget; apply the Risks fallback ladder if not; never raise or bypass the gate
+- 0.1 Infra-merge checks: `gh run list` for `apply-web-platform-infra.yml` and `registry-host-replace-dispatch.yml` (nothing in flight); re-read `registry-host-replace-dispatch.md` and `inngest-server.md` "Replace triggers" and "Inherited done after a host replace (#7228)"
+- 0.2 Measure the user_data delta first with `bash apps/web-platform/infra/inngest-userdata-budget.sh` on a scratch copy; margin at least 300 B and under the repo test budget (real headroom 1,852 B against the cap, 1,384 B against `INNGEST_GZIP_BUDGET`); apply the Risks fallback ladder if not; never raise or bypass the gate
 - 0.3 `inngest start --help` at v1.45.1 from the sha256-verified tarball in a fresh scratch dir (record "no TLS flag")
-- 0.4 `NODE_EXTRA_CA_CERTS` with an empty file, a missing file and a directory on `node:22-slim` (record warnings)
-- 0.5 Measure with real binaries and keep the output as fixtures: nft named counters on nftables v1.0.9 (Ubuntu 24.04 container), stunnel4 config semantics and the `stunnel4` user/group, `curl --cacert` exit 60 and SAN-mismatch cases
-- 0.6 NIC ordering for the stunnel unit (`soleur-inngest-nic-wait`); decide between binding `10.0.1.40` and the `accept = 8443` + nft-drop fallback
-- 0.7 Name the emitters: `inngest-boot-phone-home.sh` for the periodic `tls-health` series; `logger -p user.crit -t inngest-tls-health` for `SOLEUR_INNGEST_TLS_REFUSED`; confirm redaction keeps a labelled `sha256=` field
-- 0.8 Coordination: grep `gh pr diff 10405` for pinned chain literals; trial-merge budget run (the PR that merges second yields bytes); measure replace duration and send-failure behaviour; show the doppler stderr parse separating "not found" from other errors (else treat every non-zero as an error)
-- 0.9 Delivery census, bounded to files that change: workflow `paths:` filter plus provisioner `triggers_replace` for each web-host file
+- 0.4 Commit the fixtures captured at deepen (stunnel failure/success lines, nft chain text and counter parse, curl exit 60/56, Node error codes) and re-run them against the production package versions and the pinned `node:22-slim` digest; prove offline that Node accepts a self-signed `CA:FALSE` leaf as an extra root
+- 0.5 NIC ordering for the stunnel unit (`soleur-inngest-nic-wait`); decide between binding `10.0.1.40` and the `accept = 8443` + nft-drop fallback; confirm no distro unit globs our conf
+- 0.6 Coordination: grep `gh pr diff 10405` for pinned chain literals; trial-merge budget run (the PR that merges second yields bytes); measure replace duration (`provision-unit-armed` to `bootstrap-done`) and what the app does on a failed send; confirm `openssl` on the web hosts
+- 0.7 Delivery census, bounded to files that change (plan "Delivery census" and Research Insights)
 
-## Phase 1: Terraform (cert, key, Doppler copies)
+## Phase 1: Terraform (cert, key, Doppler copies, flag)
 
-- 1.1 Write failing tests/plan checks first (additive-only plan, no `hcloud_server` in the merge `-target` list)
-- 1.2 `apps/web-platform/infra/inngest-tls.tf`: `tls_private_key`, `tls_self_signed_cert` (ECDSA P256, 10 y, SAN IP only, `prevent_destroy`, no `early_renewal_hours`), three masked `doppler_secret`s
-- 1.3 Add the addresses to the merge `-target` list in `apply-web-platform-infra.yml`; sweep the `-target` guard suites (`git grep -ln -e '-target='`)
-- 1.4 Boot isolation regex: add the two secret names, keep floor 5 (`doppler-injection-bound.test.sh` and the template check)
+- 1.1 Failing tests/plan checks first: additive-only plan, no `hcloud_server` in the merge `-target` closure
+- 1.2 `apps/web-platform/infra/inngest-tls.tf`: `tls_private_key`, `tls_self_signed_cert` (ECDSA P256, 10 y, SAN IP only, `is_ca_certificate = false`, `prevent_destroy`, no `early_renewal_hours`), `doppler_secret` x2 in `soleur-inngest/prd` (reference `doppler_project.inngest` / `doppler_environment.inngest_prd`), `INNGEST_TLS_CA` base64 in `soleur/prd`; `variable inngest_link_tls` + count-gated `doppler_secret.inngest_link_tls` (in `variables.tf`)
+- 1.3 Merge `-target` list: add the five addresses (not the flag); run `terraform-target-parity.test.ts`, `test-infra-privileged-tier-census.sh` and the `git grep -ln -e '-target='` sweep; add the `tls_*`-create-aborts row to `test-inngest-host-replace-gate.sh`; no `templatefile` var in `inngest-host.tf` may reference the new resources
+- 1.4 Isolation regex rows in `inngest-host.test.sh` (PASS for the two names, FATAL for a bare `TLS_KEY` and a look-alike), floor stays 5
 
 ## Phase 2: Inngest host (`cloud-init-inngest.yml`)
 
 - 2.1 Failing tests first: `inngest-host.test.sh` (accept line unchanged, new rules), bootstrap and provision-unit suites, top-level key set, budget test
-- 2.2 `stunnel4` package, stunnel conf, `soleur-inngest-tls.service` (hardening, restart policy, packaged unit masked), explicit fail-closed key/cert fetch after the heredoc that writes the script
+- 2.2 `stunnel4` package; stunnel conf outside `/etc/stunnel/*.conf`; `soleur-inngest-tls.service` (no `EnvironmentFile=`, hardening set, `Requires=`/`After=` the nftables unit and NIC wait, restart policy, RuntimeDirectory 0750 preserved on restart); fail-closed fetch with `umask 0077`, redirect-only key write, `openssl pkey` public-key match, key `0640 root:stunnel4`, after the heredoc that writes the script
 - 2.3 nft block: named counters `legacy_8288` and `tls_8443`, counting rules before the accepts, `8443` accept + drop; existing `8288/8289` lines byte-identical
-- 2.4 `tls-health` unit and timer: phone-home series (`listener`, `cert_sha256`, `notafter_days`, `legacy_8288_packets`, `tls_8443_packets`, `nft8443_sha256`, `nft_rules`, `boot_id`) and the crit-priority refusal marker (`listener=0`, `notafter_days < 90` only)
-- 2.5 Enable the units in `runcmd`, each failing loudly to the boot phone-home
-- 2.6 Do not touch the `net-health` emit region or `inngest-cutover-flip.sh`
-- 2.7 Re-run the budget gate; register new tests in `infra-validation.yml`
+- 2.4 `tls-health` unit and timer (after `inngest-bs-token-restage.service`): phone-home series with `unit`, `nrestarts`, `fetch_rc`, `bind`, `listener`, `served_sha256`, `cert_sha256`, `notafter_days`, `hs_fail_15m`, both counters, `nft8443_sha256`, `nft_rules`, dashed `boot_id`; multi-line `emit_refusal()` for `SOLEUR_INNGEST_TLS_REFUSED` on `listener=0` or `notafter_days < 90` only
+- 2.5 Enable the units in `runcmd`, each failing loudly to the boot phone-home; do not touch the `net-health` emit region or `inngest-cutover-flip.sh`
+- 2.6 Re-run the budget gate; register new tests in `infra-validation.yml`
 
 ## Phase 3: Web side (inert)
 
-- 3.1 Failing tests first: `inngest-link-resolver.test.sh` (flag absent, `pending:<epoch>` in/out of lease, `1` with good/bad CA, read error, third value), tuple-gate mutation rows K07/K10 plus new rows
-- 3.2 `ci-deploy.sh` `resolve_inngest_link`, CA file write, link env file, both docker run sites
+- 3.1 Failing tests first: `inngest-link-resolver.test.sh` (flag absent, `pending:<epoch>` in/out of lease and beyond now+31 min, `1` with good/bad CA, non-allowlisted values, snapshot read error, third resolver value, CA variants: PRIVATE KEY block, wrong SAN, `CA:TRUE`, more than 2 certs), tuple-gate K07/K10 rows, `NODE_*` env refusal rows
+- 3.2 `ci-deploy.sh` `resolve_inngest_link` (snapshot read, scope guard, validate-then-write CA, link env from constants only, host-side self-gate, re-check before `docker run`), both docker run sites
 - 3.3 `cloud-init.yml` first-boot site: mount, env, placeholder CA file
-- 3.4 `lib/docker-run-tuple.py`: resolver expansion, `NODE_EXTRA_CA_CERTS`, CA `-v`, pinned absence of `NODE_TLS_REJECT_UNAUTHORIZED`
-- 3.5 `cron-egress-nftables.sh` `8443` accept, `cron-egress-postapply-assert.sh`, `cron-egress-firewall.test.sh`
-- 3.6 Probes prefer `/etc/soleur/inngest-link.env`; `inngest-registry-probe.sh --tls-handshake` mode; suites updated; hook template only if the mode argument needs passing
-- 3.7 Watchdog parity test to resolver-expansion membership; `INNGEST_HOST_FALLBACK` unchanged
-- 3.8 `.github/workflows/inngest-link-flip.yml` (lease, canary, prod, promote, revert on failure/cancel); resolve the credential-tier open item before writing it
-- 3.9 Canary layer in `canary-probe-set.md` (docker inspect, in-container fetch of the handed URL, CA-withheld negative control, registry over https)
+- 3.4 `lib/docker-run-tuple.py`: resolver expansion, `NODE_EXTRA_CA_CERTS`, CA `-v`, pinned absence of `NODE_TLS_REJECT_UNAUTHORIZED`; no posture-literal edit
+- 3.5 `cron-egress-nftables.sh` `10.0.1.40 tcp dport 8443` accept; postapply assert greps the full `10.0.1.40 tcp dport 8443 accept` text (not a bare `dport 8443`); `cron-egress-firewall.test.sh`
+- 3.6 `inngest-registry-probe.sh`: link resolution (parse the env file with a key allowlist, never source; override inherited `INNGEST_REMOTE_GQL_URL`) and `--tls-handshake` mode; `inngest-doublefire-probe.sh`; suites updated; new `inngest-tls-handshake` hook in `hooks.json.tmpl`; the consumer probe, `server.tf` and `web-probe-envwrite.sh` are not edited
+- 3.7 Watchdog parity test to resolver-expansion membership; `INNGEST_HOST_FALLBACK` unchanged; test that the container always receives `INNGEST_BASE_URL`
+- 3.8 `schedule-reminder/route.ts`: 503 for timeout and TLS causes, with a test
+- 3.9 Flip actuator: flag `apply_target` job in `apply-web-platform-infra.yml` under `infra-privileged` (source key written first, then `-target` apply), `inngest-link-flip.yml` orchestrator (pending, canary, on, best-effort off + redeploy), D8 census row and `infra-credential-tiers-8209.md`
+- 3.10 Canary layer in `canary-probe-set.md`: `docker inspect` https, in-container fetch of the handed URL, real `inngest.send` of `soleur.tls-canary.ping` (test that no function triggers on it), CA-withheld negative control, registry over https
 
 ## Phase 4: Observability, follow-through, docs
 
-- 4.1 Guard row for the new marker in the `monitor_send_failed` drift guard; decode row in `betterstack-log-query.md`; synthetic `synthetic=1` proof through `scripts/betterstack-query.sh`
-- 4.2 `scripts/followthroughs/inngest-tls-soak-10136.sh` plus test covering every Guard 2 row; sweeper `secrets=` additions
-- 4.3 `inngest-server.md` runbook section "Link TLS (#10136)" with the Production Envelope, flag semantics, rollback, replace order, release-blocking note, cert expiry, replace duration and event behaviour
-- 4.4 ADR-292 (provisional ordinal, re-verify across `origin/*` before merge), ADR-100 addendum, C4 edits, C4 count-parity and render tests
+- 4.1 Drift guard `betterstack-send-failed-alert.test.sh` baseline 79/9 to 81/10 (`BASELINE_PASSES`, `BASELINE_CASES`) plus a mutation row; decode rows in `monitor-send-failed-alert.md` (fix the "web-1 monitor unit" wording) and `betterstack-log-query.md`; synthetic `synthetic=1` proof through `scripts/betterstack-query.sh`
+- 4.2 `scripts/followthroughs/inngest-tls-soak-10136.sh` plus test covering every Guard 2 row (query `--limit 1000` or more, trusted-verdict read of T, exit 2 on empty or transport failure); sweeper dry run
+- 4.3 `inngest-server.md` runbook section "Link TLS (#10136)" with the Production Envelope, flag semantics, rollback, release-blocking note, replace order including A1b, cert expiry, replace duration and event behaviour, best-effort off step
+- 4.4 ADR-292 (provisional; ordinal re-derived across all `origin/*` refs), ADR-100 addendum, C4 edits, C4 count-parity and render tests
 - 4.5 `BASELINE_DECLARED_PROBES` bump in `preflight-discoverability-test.test.ts` with the PLACEMENT/TRUTH/NO-SUBSTITUTE comment
-- 4.6 File the deferral issues before merge: sdk_url poll TLS, loopback bind and Connect ports, rotation apply route, `--only-secrets`
+- 4.6 File the deferral issues before merge (plan "Deferral Tracking", items 1-11)
 
 ## Phase 5: Verification and ship
 
-- 5.1 `scripts/lint-encryption-posture.py` PASS, `lint-guard-contract.py`, markdownlint, `git grep` for the banned word in changed files
+- 5.1 `scripts/lint-encryption-posture.py` PASS, `lint-guard-contract.py`, markdownlint, banned-word grep in changed files
 - 5.2 Compound; PR body first line answers "does merging this alone mutate production"; `Ref #10136` only; `## Changelog`
 - 5.3 Single bare `gh pr merge 10501 --squash --auto`, then no sync pushes; `deploy-arm.sh find --wait <full-sha>` then `served <full-sha>` from a detached `origin/main` worktree
 
 ## Post-merge (Production Actions, see plan; each only on its recorded owner go)
 
-- A0 verify merge apply and delivery; A1 host replace (due 2026-11-05, bundled with #10405 unless the 2026-10-28 checkpoint passes); A2 handshake mode from both web hosts; A3 flip workflow (own owner go); A4 48 h soak; A5 rotation (after the rotation follow-up lands); A6 "no known access" record; A7 leg-2 accepted-risk record (owner-typed)
+- A0 verify merge apply and delivery; A1 host replace (due 2026-11-05, bundled with #10405 unless the 2026-10-28 checkpoint passes); A1b `op=resume` approval (own owner go); A2 handshake hook; A3 flip workflow (own owner go); A4 48 h soak; A5 rotation (after the rotation follow-up lands; event key per O5); A6 "no known access" record; A7 leg-2 accepted-risk record (owner-typed)
