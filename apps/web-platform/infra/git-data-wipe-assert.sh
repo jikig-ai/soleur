@@ -18,7 +18,11 @@
 #                           quiescent (sectors written/discarded ABSOLUTELY 0 0 and stable over 2 s),
 #                           kernel read-only, the host is the instance Hetzner names, and the host
 #                           booted before, and within a bounded window of, the boot_complete row.
-#                           With WIPE_LISTING=run it also takes the layout-independent listing below.
+#                           With WIPE_LISTING=run it also takes the layout-independent listing below, and the pre line
+#                           ends in `lock_residue=<n|na> store_root_repos=<n>` (counts only; store_root_repos counts the
+#                           entries of the LUKS store's repositories/ directory and refuses rc 42 if it cannot be read).
+#   WIPE_PHASE=clear        (A1) Remove a LEFTOVER throwaway snapshot a killed listing left behind, after proving it has the
+#                           shape the listing makes (rc 43 and nothing removed otherwise). No volume operation.
 #   WIPE_PHASE=post_detach  After the Hetzner detach: the store facts again, the by-id link of the
 #   WIPE_PHASE=finish       typed id is GONE, an uncached direct-I/O read of the mapper and a listing
 #                           of the store root succeed (the store is still served).
@@ -56,6 +60,7 @@
 #   35 wipe_boot_layout_signal_unparseable                    36 wipe_snapshot_teardown_failed
 #   37 wipe_plaintext_not_empty   38 wipe_luks_identity_mismatch
 #   40 wipe_device_still_attached 41 wipe_mapper_read_failed  42 wipe_store_root_unreadable
+#   43 wipe_snapshot_not_ours (phase=clear only: a leftover snapshot this file did not make)
 # (git-data-cutover.sh itself refuses wipe_target_is_luks, before any call, when the two ids are equal.)
 # Keep the table, the `die` calls below and the case in git-data-cutover.sh equal (the suite derives
 # the set from all three).
@@ -181,7 +186,7 @@ wa_main() {
   local PHASE="${WIPE_PHASE-}" TYPED="${WIPE_TYPED_ID-}" LUKSID="${WIPE_LUKS_ID-}" SERVERID="${WIPE_SERVER_ID-}"
   local OLD_ROOT="${WIPE_OLD_ROOT-}" MAPPER="${WIPE_LUKS_MAPPER-}" MARKER="${WIPE_STORE_VERIFIED-}"
   local ROW_DT="${WIPE_ROW_DT-}" LISTING="${WIPE_LISTING-}" w_late
-  [[ "$PHASE" =~ ^(pre|finish|post_detach)$ ]] || die 16 arg_phase
+  [[ "$PHASE" =~ ^(pre|finish|post_detach|clear)$ ]] || die 16 arg_phase
   [[ "$TYPED" =~ ^[0-9]{1,12}$ && "$LUKSID" =~ ^[0-9]{1,12}$ && "$SERVERID" =~ ^[0-9]{1,12}$ ]] || die 16 arg_ids
   [ "$TYPED" != "$LUKSID" ] || die 16 arg_ids_equal
   [[ "$OLD_ROOT" =~ ^/[A-Za-z0-9/_.-]+$ && "$MARKER" =~ ^/[A-Za-z0-9/_.-]+$ && "$MAPPER" =~ ^/dev/[A-Za-z0-9/_.-]+$ ]] || die 16 arg_paths
@@ -310,7 +315,7 @@ wa_main() {
   # body and never written anywhere. A name that cannot be classified is "unparseable", not skipped.
   wl_classify() {
     local rec t n saw_end=0
-    TOP_D=0 TOP_F=0 TOP_L=0 TOP_O=0 HAS_REPOS=no HAS_LF=no OFFLIST=0
+    TOP_D=0 TOP_F=0 TOP_L=0 TOP_O=0 HAS_REPOS=no HAS_LF=no OFFLIST=0 LOCKS_TOP=0
     while IFS= read -r -d '' rec; do
       t="${rec%%$'\t'*}"
       n="${rec#*$'\t'}"
@@ -323,14 +328,15 @@ wa_main() {
       case "$n:$t" in
         repositories:d) HAS_REPOS=yes ;;
         lost+found:d) HAS_LF=yes ;;
-        .gc-cursor:f | .init.lock:f | .*.init.lock:f) : ;;
+        .*.init.lock:f) LOCKS_TOP=$((LOCKS_TOP + 1)) ;;
+        .gc-cursor:f | .init.lock:f) : ;;
         *) OFFLIST=1 ;;
       esac
     done
     [ "$saw_end" = 1 ] || die 33 listing_failed
   }
   wipe_listing() {
-    local sb jb bs cow_bytes eh sz deps src got want ssb dm e0 e1 rn ln names_after hold_after w_after ro_after
+    local sb jb bs cow_bytes eh sz deps src got want ssb dm e0 e1 rn ln lk names_after hold_after w_after ro_after
     wl_same
     sb="$(timeout 20 dumpe2fs -h "$DEV")" || die 33 dumpe2fs_failed
     if wl_has_nr "$sb"; then J=dirty; else J=clean; fi
@@ -383,6 +389,14 @@ wa_main() {
       [[ "$rn" =~ ^[0-9]+$ ]] || die 33 repos_count_unparseable
       REPOS="$rn"
     fi
+    # id-bearing lock residue (A1, 2026-10-15): regular files named .<id>.init.lock at the top level (counted by the
+    # classifier) and under repositories/. A COUNT only, never a name; the bare .init.lock carries no id.
+    LOCKS="$LOCKS_TOP"
+    if [ "$HAS_REPOS" = yes ]; then
+      lk="$(timeout 30 find "$WA_MNT/repositories" -mindepth 1 -maxdepth 1 -type f -name '.?*.init.lock' -printf x | wc -c)" || die 33 lock_count_failed
+      [[ "$lk" =~ ^[0-9]+$ ]] || die 33 lock_count_unparseable
+      LOCKS=$((LOCKS + lk))
+    fi
     # The allowlisted top-level lost+found is a directory whose CONTENTS the classifier never opens: it must be
     # empty (any entry inside is off the list; only the count is read, never a name).
     if [ "$HAS_LF" = yes ]; then
@@ -412,15 +426,99 @@ wa_main() {
   }
   # ---- END wipe-listing unit ----
 
-  line_pre() {
-    local lsig journal d f l o r
-    if [ "$LISTING" = run ]; then
-      lsig=ok journal="$J" d="$TOP_D" f="$TOP_F" l="$TOP_L" o="$TOP_O" r="$REPOS"
-    else
-      lsig=not_run journal=na d=na f=na l=na o=na r=na
+  # store_root_repos (A1, 2026-10-15): a read-only COUNT of the entries under the LUKS store root's repositories/
+  # directory, with the bootstrap's exclusions (id-bearing and bare lock files, an EMPTY lost+found). It is an
+  # independent barrier for the separated wipe (ADR-239 Amendment 2026-10-15): the runner refuses when it is not
+  # 0. The host is not told which variant is running, so no input can steer it. A repositories entry that is not a
+  # directory (a symlink or a file) is unreadable, never "empty". Only the integer leaves the host.
+  store_root_repos() {
+    local rt n
+    rt="$(find -H "$OLD_ROOT" -mindepth 1 -maxdepth 1 -name repositories -printf 'T:%y')" || die 42 store_root_unreadable
+    case "$rt" in
+      "") SRR=0 ;;
+      T:d)
+        n="$(timeout 30 find -H "$OLD_ROOT/repositories" -mindepth 1 -maxdepth 1 ! \( -type f \( -name '.*.init.lock' -o -name '.init.lock' \) \) ! \( -type d -name lost+found -empty \) -printf x | wc -c)" || die 42 store_root_unreadable
+        [[ "$n" =~ ^[0-9]+$ ]] || die 42 store_root_unreadable
+        SRR="$n" ;;
+      *) die 42 store_root_unreadable ;;
+    esac
+  }
+
+  # clear_origin_ok — the retained device is untouched and kernel read-only (before AND after a clear).
+  clear_origin_ok() {
+    local ro
+    W0="$(wstat)" || die 16 stat_unreadable
+    case "$W0" in "0 0") : ;; *) die 29 sectors_written ;; esac
+    ro="$(blockdev --getro "$DEV")" || die 16 getro_unreadable
+    case "$ro" in 1) : ;; *) die 30 ro_flag_lost ;; esac
+  }
+  # clear_snapshot (phase=clear; A1 2026-10-15, CTO follow-up ruling) — remove a LEFTOVER git-data-pt-snap that a run
+  # killed with SIGKILL (which no trap can catch) left behind. It touches nothing that does not match the shape this file's
+  # own listing makes (a SHAPE proof, not authorship: git-data-bootstrap.sh makes the same name and shape, and only a held
+  # handle or a busy device stops a removal there): the
+  # snapshot's origin must be the typed device and it must be non-persistent (N); its COW must be a loop device whose
+  # backing file lives in a /dev/shm/tmp.<id> directory, and a mount of the snapshot, if any, must be that directory's
+  # mnt. Anything else is rc 43 and NOTHING is removed. The removal is wa_release, the one function that also tears
+  # down this file's own listing (its single `dmsetup remove` names the pinned constant; no name is an input).
+  clear_snapshot() {
+    local names tbl tbl2 c d e f h dmn rc try hits tgt mntdir lo lk lf cowdir
+    names="$(dmsetup ls)" || die 16 dmsetup_ls
+    if ! awk_hit "$names" -v n="$WA_SNAP" '$1 == n { f = 1 } END { exit !f }'; then CLEAR_RESULT=absent; return 0; fi
+    tbl="$(dmsetup table "$WA_SNAP")" || die 16 table_unreadable
+    case "$tbl" in *$'\n'*) die 43 snapshot_not_ours ;; esac  # one segment only: the first line alone is never trusted for a multi-target table
+    read -r _ _ c d e f _ h <<< "$tbl"
+    [ "$c" = snapshot ] && [ "$d" = "$(devno_dec "$MM")" ] && [ "$f" = N ] && [ -z "$h" ] || die 43 snapshot_not_ours
+    dmn="$(dmsetup info -c --noheadings -o blkdevname "$WA_SNAP")" || die 16 blkdevname_unreadable
+    [[ "$dmn" =~ ^dm-[0-9]+$ ]] || die 16 blkdevname_unparseable
+    for try in 1 2; do
+      rc=0
+      hits="$(timeout 20 find /proc -ignore_readdir_race -maxdepth 3 -type l -regex '/proc/[[:digit:]]+/fd/[[:digit:]]+' -lname "/dev/$dmn" -print -quit)" || rc=$?
+      [ -z "$hits" ] || die 27 handle_open
+      [ "$rc" -eq 0 ] && break
+      [ "$try" = 2 ] && die 27 handle_unknown
+      sleep 1
+    done
+    rc=0
+    tgt="$(findmnt -n -o TARGET -S "/dev/mapper/$WA_SNAP")" || rc=$?
+    { [ "$rc" -eq 0 ] || [ "$rc" -eq 1 ]; } || die 16 findmnt_snapshot_lookup
+    mntdir=""
+    if [ -n "$tgt" ]; then
+      case "$tgt" in *$'\n'*) die 43 snapshot_not_ours ;; esac
+      [[ "$tgt" =~ ^(/dev/shm/tmp\.[A-Za-z0-9]{6,12})/mnt$ ]] || die 43 snapshot_not_ours
+      mntdir="${BASH_REMATCH[1]}"
     fi
-    printf 'wipe_assert pre ok layout_signal=%s journal=%s top_d=%s top_f=%s top_l=%s top_o=%s repos=%s boot_to_row_s=%s\n' \
-      "$lsig" "$journal" "$d" "$f" "$l" "$o" "$r" "$BOOT_TO_ROW" >&4
+    lo="$(losetup -l -n -O NAME,BACK-FILE)" || die 16 losetup_list
+    # The COW must be a LOOP device: major 7 is the loop driver. The name /dev/loop<minor> below assumes loop.max_part=0 (the
+    # kernel default); with partitions the minor differs and every leftover is refused (rc 43, nothing removed), which is safe.
+    [[ "$e" =~ ^7:[0-9]+$ ]] || die 43 snapshot_not_ours
+    lk="/dev/loop${e#*:}"
+    lf="$(printf '%s\n' "$lo" | sed -n "s#^${lk}[[:space:]][[:space:]]*\(.*\)\$#\1#p")"
+    case "$lf" in "" | *$'\n'*) die 43 snapshot_not_ours ;; esac
+    [[ "$lf" =~ ^(/dev/shm/tmp\.[A-Za-z0-9]{6,12})/cow(\ \(deleted\))?$ ]] || die 43 snapshot_not_ours
+    cowdir="${BASH_REMATCH[1]}"
+    if [ -n "$mntdir" ] && [ "$mntdir" != "$cowdir" ]; then die 43 snapshot_not_ours; fi
+    clear_origin_ok
+    # Removal is by name, so re-read the table once more right before it: a snapshot swapped in during the proof is refused.
+    tbl2="$(dmsetup table "$WA_SNAP")" || die 16 table_unreadable
+    [ "$tbl2" = "$tbl" ] || die 43 snapshot_not_ours
+    WA_DIR="$cowdir"; WA_MNT="$cowdir/mnt"; WA_LOOP="$lk"; WA_SNAP_UP=1
+    if [ -n "$mntdir" ]; then WA_MOUNTED=1; fi
+    if ! wa_release; then die 36 teardown_failed; fi
+    names="$(dmsetup ls)" || die 16 dmsetup_ls
+    if awk_hit "$names" -v n="$WA_SNAP" '$1 == n { f = 1 } END { exit !f }'; then die 36 snapshot_remains; fi
+    clear_origin_ok
+    CLEAR_RESULT=cleared
+  }
+
+  line_pre() {
+    local lsig journal d f l o r k
+    if [ "$LISTING" = run ]; then
+      lsig=ok journal="$J" d="$TOP_D" f="$TOP_F" l="$TOP_L" o="$TOP_O" r="$REPOS" k="$LOCKS"
+    else
+      lsig=not_run journal=na d=na f=na l=na o=na r=na k=na
+    fi
+    printf 'wipe_assert pre ok layout_signal=%s journal=%s top_d=%s top_f=%s top_l=%s top_o=%s repos=%s boot_to_row_s=%s lock_residue=%s store_root_repos=%s\n' \
+      "$lsig" "$journal" "$d" "$f" "$l" "$o" "$r" "$BOOT_TO_ROW" "$k" "$SRR" >&4
   }
 
   phase_post() {
@@ -439,6 +537,14 @@ wa_main() {
     printf 'wipe_assert %s ok byid=gone mapper_read=ok store_root=ok\n' "$PHASE" >&4
   }
 
+  if [ "$PHASE" = clear ]; then
+    store_facts
+    h3_to_h5
+    budget
+    clear_snapshot
+    printf 'wipe_assert clear ok snapshot=%s\n' "$CLEAR_RESULT" >&4
+    return 0
+  fi
   if [ "$PHASE" != pre ]; then phase_post; return 0; fi
   store_facts
   h3_to_h5
@@ -447,6 +553,8 @@ wa_main() {
   budget
   h8
   h9_h10
+  budget
+  store_root_repos
   budget
   if [ "$LISTING" = run ]; then wipe_listing; fi
   budget
