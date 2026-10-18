@@ -420,7 +420,10 @@ def _write_baseline(path: Path, text: str) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(text)
-        os.chmod(tmp_name, 0o644)
+        # mkstemp makes the file 0600; a tracked file should carry the mode the user's umask gives a new file.
+        umask = os.umask(0)
+        os.umask(umask)
+        os.chmod(tmp_name, 0o666 & ~umask)
         os.replace(tmp_name, str(path))
     finally:
         if os.path.lexists(tmp_name):

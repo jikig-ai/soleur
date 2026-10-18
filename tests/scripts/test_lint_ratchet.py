@@ -798,10 +798,18 @@ class TestMergeBaseDelta(CheckBase):
         self.assertEqual(list((self.repo.root / "real").iterdir()), [])
 
     def test_the_baseline_is_written_world_readable_and_names_the_configured_recovery(self):
+        previous = os.umask(0o022)
+        self.addCleanup(os.umask, previous)
         self.update(dict(self.config, recovery_cmd="RECOVER-CMD"))
         path = self.repo.root / "base.txt"
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o644)
         self.assertIn("RECOVER-CMD --update", path.read_text())
+
+    def test_the_baseline_mode_follows_the_umask_rather_than_a_fixed_world_readable_mode(self):
+        previous = os.umask(0o077)
+        self.addCleanup(os.umask, previous)
+        self.update()
+        self.assertEqual(stat.S_IMODE((self.repo.root / "base.txt").stat().st_mode), 0o600)
 
     def test_default_base_is_the_merge_base_with_origin_main(self):
         self.update()
