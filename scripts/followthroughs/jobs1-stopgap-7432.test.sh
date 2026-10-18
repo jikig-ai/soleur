@@ -125,7 +125,8 @@ new_fx() {
 #   MK_K (default 4; "none" omits the width line)  MK_DUPK=1 (a second width line)  MK_ELAPSED (default 1, or 0 when timeout=1)
 #   MK_UNACC=1 (the real shape: an UNACCOUNTED line AND unaccounted=1 in the tally)  MK_UNACCLINE=1 (the line only)  MK_SUMU=1 (the tally only)
 #   MK_UNACC_PRE=1 (an UNACCOUNTED line BEFORE the infra env dump, outside the slice)  MK_SUMMARY=none (no tally line)  MK_SUMF=<n> (failed count)
-#   MK_NOESC=1 (a log with no ESC byte)  MK_TESTTMO=1 (the tests-step timeout annotation, a decoy)
+#   MK_SUMDUP=1 (the tally twice)  MK_DECOY=1 (SOLEUR|-prefixed look-alike tally and width lines)  MK_JOBDECOY=1 (a non-health-check job FIRST)
+#   MK_ANNDECOY=1 (an annotation with another title, saying infra=success, FIRST)  MK_NOESC=1 (a log with no ESC byte)  MK_TESTTMO=1 (the tests-step timeout annotation, a decoy)
 #   MK_MSG (the whole outcome message)  MK_ANN2=1 (a second valid outcome annotation)  MK_NOLOG / MK_NOJOBS / MK_NOHC=1
 mkrun() {
   local rid="$1" off="$2" st="$3" concl="$4" infra="$5" to="$6"; shift 6
@@ -135,6 +136,7 @@ mkrun() {
     '. + [{databaseId:$id, createdAt:$c, status:$s, conclusion:$k, event:"workflow_dispatch"}]' "$FX/runs.json" > "$FX/runs.tmp" && mv "$FX/runs.tmp" "$FX/runs.json"
   if [ -z "${MK_NOJOBS:-}" ]; then
     if [ -n "${MK_NOHC:-}" ]; then printf '{"jobs":[{"id":%d,"name":"other"}]}\n' "$((jid + 1))" > "$FX/jobs-$rid.json"
+    elif [ -n "${MK_JOBDECOY:-}" ]; then printf '{"jobs":[{"id":%d,"name":"other"},{"id":%d,"name":"health-check"}]}\n' "$((jid + 1))" "$jid" > "$FX/jobs-$rid.json"
     else printf '{"jobs":[{"id":%d,"name":"health-check"},{"id":%d,"name":"other"}]}\n' "$jid" "$((jid + 1))" > "$FX/jobs-$rid.json"; fi
   fi
   msg="${MK_MSG-SOLEUR_MAIN_HEALTH tests=failure infra=$infra tests_elapsed_s=100$([ "$el" = 1 ] && echo ' infra_elapsed_s=200')}"
@@ -146,6 +148,9 @@ mkrun() {
   fi
   if [ -n "${MK_TESTTMO:-}" ]; then
     jq '. + [{title:"",message:"The action '"'"'Run test suite'"'"' has timed out after 110 minutes."}]' "$FX/ann-$jid.json" > "$FX/ann.tmp" && mv "$FX/ann.tmp" "$FX/ann-$jid.json"
+  fi
+  if [ -n "${MK_ANNDECOY:-}" ]; then
+    jq '[{title:"other-title",message:"SOLEUR_MAIN_HEALTH tests=success infra=success"}] + .' "$FX/ann-$jid.json" > "$FX/ann.tmp" && mv "$FX/ann.tmp" "$FX/ann-$jid.json"
   fi
   if [ -n "${MK_ANN2:-}" ]; then
     jq --arg m "$msg" '. + [{title:"main-health-outcomes",message:$m}]' "$FX/ann-$jid.json" > "$FX/ann.tmp" && mv "$FX/ann.tmp" "$FX/ann-$jid.json"
@@ -163,15 +168,17 @@ mkrun() {
       { [ -n "${MK_UNACC:-}" ] || [ -n "${MK_UNACCLINE:-}" ]; } && echo "2026-11-01T00:02:30.0000000Z UNACCOUNTED  some-killed-shim.test.sh"
       { [ -n "${MK_UNACC:-}" ] || [ -n "${MK_SUMU:-}" ]; } && uacc=1
       sf="${MK_SUMF-$nf}"
+      [ -z "${MK_DECOY:-}" ] || { echo "2026-11-01T00:02:40.0000000Z SOLEUR| Running 3 registered infra suite(s) with -P 1…"; echo "2026-11-01T00:02:41.0000000Z SOLEUR| === registered infra suites: 0 passed, 5 failed, 0 unaccounted (of 5) ==="; }
       [ "${MK_SUMMARY:-}" = none ] || printf '2026-11-01T00:03:00.0000000Z === registered infra suites: %d passed, %d failed, %d unaccounted (of 179) ===\n' $((179 - sf - uacc)) "$sf" "$uacc"
+      [ -z "${MK_SUMDUP:-}" ] || printf '2026-11-01T00:03:01.0000000Z === registered infra suites: %d passed, %d failed, %d unaccounted (of 179) ===\n' $((179 - sf - uacc)) "$sf" "$uacc"
       echo "2026-11-01T00:03:30.0000000Z === done ==="; } > "$FX/log-$jid.txt"
   fi
-  unset MK_K MK_DUPK MK_ELAPSED MK_UNACC MK_UNACCLINE MK_SUMU MK_UNACC_PRE MK_SUMMARY MK_SUMF MK_NOESC MK_TESTTMO MK_MSG MK_ANN2 MK_NOLOG MK_NOJOBS MK_NOHC
+  unset MK_K MK_DUPK MK_ELAPSED MK_UNACC MK_UNACCLINE MK_SUMU MK_UNACC_PRE MK_SUMMARY MK_SUMF MK_SUMDUP MK_DECOY MK_JOBDECOY MK_ANNDECOY MK_NOESC MK_TESTTMO MK_MSG MK_ANN2 MK_NOLOG MK_NOJOBS MK_NOHC
 }
 good_runs() { local i; for i in $(seq 1 "$1"); do mkrun $((90000 + i)) $((i * 3600)) completed success success 0; done; }
 run_probe() {  # run_probe <probe path> [extra env...]; sets RC and OUT, resets the refused log first
   : > "$FX/refused.log"
-  OUT="$(env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" FX="$FX" GH_TOKEN=synthetic SOLEUR_FT_EARLIEST="${EARLIEST-$START}" "${@:2}" bash "$1" 2>&1)"; RC=$?
+  OUT="$(cd "$FX" && env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" FX="$FX" GH_TOKEN=synthetic SOLEUR_FT_EARLIEST="${EARLIEST-$START}" "${@:2}" bash "$1" 2>&1)"; RC=$?
 }
 expect() {  # expect <label> <rc> [output substring...]
   local label="$1" want="$2" sub; shift 2
@@ -292,6 +299,14 @@ new_fx r4e5; good_runs 11; MK_SUMMARY=none mkrun 90073 40000 completed success f
 run_probe "$PROBE"; expect "R4e5 an infra=failure run with no runner tally line cannot be a clean allowlisted run" 5 90073
 new_fx r4e6; good_runs 11; MK_SUMF=0 mkrun 90074 40000 completed success failure 0 cloud-init-inngest-bootstrap.test.sh
 run_probe "$PROBE"; expect "R4e6 a tally that counts fewer failures than there are RED lines (a forged RED line) is a measurement defect" 5 90074
+new_fx r4e7; good_runs 11; MK_SUMDUP=1 mkrun 90076 40000 completed success failure 0 cloud-init-inngest-bootstrap.test.sh
+run_probe "$PROBE"; expect "R4e7 a log carrying the runner's tally TWICE is a measurement defect (exactly one is required)" 5 90076
+new_fx r4e8; good_runs 11; MK_DECOY=1 mkrun 90077 40000 completed success failure 0 cloud-init-inngest-bootstrap.test.sh
+run_probe "$PROBE"; expect "R4e8 SOLEUR|-prefixed look-alike tally and width lines inside a suite excerpt change nothing" 0 "Allowlisted tag-drift RED in run(s): 90077"
+new_fx r4r; good_runs 11; mkrun 90078 40000 completed success failure 0 '*'
+run_probe "$PROBE"; expect "R4r a RED name of * is ONE strike named <unsafe-name>, never expanded against the working directory" 0 "Tolerated strike(s): 90078(<unsafe-name>)"
+new_fx r4s; good_runs 11; MK_JOBDECOY=1 mkrun 90079 40000 completed success success 0; run_probe "$PROBE"; expect "R4s the health-check job is picked by NAME, not by position" 0
+new_fx r4t; good_runs 11; MK_ANNDECOY=1 mkrun 90080 40000 completed success failure 1; run_probe "$PROBE"; expect "R4t an annotation with another title (saying infra=success) is ignored: the kill still reads" 1 90080
 # precedence: every conflict between two verdict classes, so a reordered block cannot stay green
 new_fx r10a; good_runs 10; mkrun 90080 40000 completed success skipped 0; mkrun 90081 41000 completed success failure 1
 run_probe "$PROBE"; expect "R10a a kill AND a hard failure: the kill wins" 1 90081
@@ -449,10 +464,26 @@ new_fx m32; good_runs 10; jq -c '. + [.[0], .[1]]' "$FX/runs.json" > "$FX/runs.t
 if mutate m32 'unique_by(.databaseId) | ' ''; then run_probe "$MUT"; kill_row "K31 counting a duplicated run id twice is caught by R5p" 0; fi
 new_fx m33; good_runs 11; MK_NOESC=1 mkrun 90093 40000 completed success success 0
 if mutate m33 'gh api --allow-escape-sequences "repos/$REPO/actions/jobs/$jid/logs"' 'gh api --allow-escape-sequences "repos/$REPO/actions/jobs/$jid/logs" --jq .'; then run_probe "$MUT"; if [ "$RC" -eq 3 ] && [ -s "$FX/refused.log" ]; then pass "K32 an extra operand on the flagged log call is refused by the strict stub"; else fail "K32 survived (rc $RC)"; fi; fi
+new_fx m37; good_runs 11; MK_SUMDUP=1 mkrun 90076 40000 completed success failure 0 cloud-init-inngest-bootstrap.test.sh
+if mutate m37 '|| [ "$sumn" != 1 ] || [ "$su" != 0 ]' '|| [ "$su" != 0 ]'; then run_probe "$MUT"; kill_row "K34 dropping the exactly-one tally conjunct is caught by R4e7" 0; fi
+new_fx m38; good_runs 11; MK_DECOY=1 mkrun 90077 40000 completed success failure 0 cloud-init-inngest-bootstrap.test.sh
+if mutate m38 "SUMMARY_RE='^[0-9TZ:.-]+ +=== registered" "SUMMARY_RE='=== registered"; then run_probe "$MUT"; kill_row "K35 dropping the tally line's timestamp anchor is caught by R4e8" 5; fi
+new_fx m39; good_runs 11; MK_DECOY=1 mkrun 90077 40000 completed success failure 0 cloud-init-inngest-bootstrap.test.sh
+if mutate m39 "WIDTH_RE='^[0-9TZ:.-]+ +Running" "WIDTH_RE='Running"; then run_probe "$MUT"; kill_row "K36 dropping the width line's timestamp anchor is caught by R4e8" 3; fi
+new_fx m40; good_runs 11; mkrun 90078 40000 completed success failure 0 '*'
+if mutate m40 '
+set -f
+' '
+set +f
+'; then run_probe "$MUT"; kill_row "K37 enabling pathname expansion is caught by R4r (a RED name of * expands to the fixture files)" 5; fi
+new_fx m41; good_runs 11; MK_JOBDECOY=1 mkrun 90079 40000 completed success success 0
+if mutate m41 '[.jobs[] | select(.name == "health-check")][0].id // empty' '.jobs[0].id'; then run_probe "$MUT"; kill_row "K38 picking the first job instead of health-check is caught by R4s" 3; fi
+new_fx m42; good_runs 11; MK_ANNDECOY=1 mkrun 90080 40000 completed success failure 1
+if mutate m42 '.title == "main-health-outcomes" and ' ''; then run_probe "$MUT"; kill_row "K39 dropping the annotation title filter is caught by R4t" 3; fi
 
 # --- accounting --------------------------------------------------------------------------------------------------------------
 printf '=== jobs1-stopgap-7432: %d passed, %d failed ===\n' "$passes" "$fails"
-MIN_ASSERTIONS=258
+MIN_ASSERTIONS=278
 if [ "$asserted" -lt "$MIN_ASSERTIONS" ] || [ $((passes + fails)) -ne "$asserted" ]; then
   printf '[FATAL] anti-vacuity: %d assertions (floor %d), %d recorded\n' "$asserted" "$MIN_ASSERTIONS" $((passes + fails)) >&2
   exit 1

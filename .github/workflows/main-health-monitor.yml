@@ -352,8 +352,8 @@ jobs:
           # #9217; tracker #7432): the infra-validation `deploy-script-tests` legs
           # run the same runner at -P 4 on the same runner image (688 leg
           # executions on push to main from 2026-09-25 to 2026-10-16: 609 success,
-          # 75 failure, none shown parallel-only; each leg runs a quarter of the
-          # suite set, the monitor runs all of it), while the sequential infra step
+          # 75 failure, none shown parallel-only; each leg runs about a quarter
+          # of the suite set on average, the monitor runs all of it), while the sequential infra step
           # did not reliably fit its 60-minute ceiling at the current suite count:
           # 81 of about 270 monitor runs that reported a verdict (30%) had the infra
           # step killed at the ceiling (the verdict reads infra=failure with no
