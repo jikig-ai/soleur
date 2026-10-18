@@ -393,11 +393,11 @@ RC34_LINES_CHECKED=0
 # invariants as well: the hooks bit implies an off-list entry (the bit never feeds the allowlist), and the off-list
 # count cannot exceed the top-level entries counted by type.
 line34_ok() {
-  local l="$1" n lf hk tops
+  local l="$1" n lf hk tops _k _v
   [[ "$l" =~ $RE_34 ]] || return 1
   n="${l##*offlist_n=}"; lf="${l##*lf_entries=}"; lf="${lf%% *}"; hk="${l##*has_hooks_d=}"; hk="${hk%% *}"
   tops=0
-  for _k in top_d top_f top_l top_o; do _v="${l##*"$_k"=}"; tops=$((tops + ${_v%% *})); done
+  for _k in top_d top_f top_l top_o; do _v="${l##*"$_k"=}"; tops=$((tops + 10#${_v%% *})); done
   { [ "$n" -gt 0 ] || [ "$lf" -gt 0 ]; } && { [ "$hk" = 0 ] || [ "$n" -ge 1 ]; } && [ "$n" -le "$tops" ]
 }
 # invariants <label> — what EVERY run owes, success or refusal.
