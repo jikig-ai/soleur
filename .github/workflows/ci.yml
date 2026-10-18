@@ -1713,7 +1713,9 @@ jobs:
           if [ "$EVENT_NAME" = "pull_request" ]; then
             GIT_ERR="$RUNNER_TEMP/shard-totality-git.err"
             : > "$GIT_ERR"
-            if CHANGED="$(git diff --name-status "origin/${GITHUB_BASE_REF}...HEAD" 2>>"$GIT_ERR")" \
+            # Raw rows, not --name-status (#10416): the classifier gates on the file MODES a raw row carries, so an added
+            # symlink or an exec-bit `.md` runs the battery. A base-ref classifier that predates this feed fails closed (true).
+            if CHANGED="$(git diff --raw --no-color --no-ext-diff "origin/${GITHUB_BASE_REF}...HEAD" 2>>"$GIT_ERR")" \
               && git show "origin/${GITHUB_BASE_REF}:scripts/ci-shard-totality-classify.sh" > "$RUNNER_TEMP/ci-shard-totality-classify.sh" 2>>"$GIT_ERR"; then
               # Here-string, not `printf | bash`: see the e2e classify step (SIGPIPE on a >64 KB listing).
               APPLICABLE="$(bash "$RUNNER_TEMP/ci-shard-totality-classify.sh" pull_request <<<"$CHANGED")"
@@ -2230,10 +2232,12 @@ jobs:
             # for the whole life of this gate (#9729). The warning below prints only observed values.
             GIT_ERR="$RUNNER_TEMP/e2e-git.err"
             : > "$GIT_ERR"
-            if CHANGED="$(git diff --name-status "origin/${GITHUB_BASE_REF}...HEAD" 2>>"$GIT_ERR")" \
+            # Raw rows, not --name-status (#10416): the classifier gates on the file MODES a raw row carries, so an added
+            # symlink or an exec-bit `.md` runs the job. A base-ref classifier that predates this feed fails closed (true).
+            if CHANGED="$(git diff --raw --no-color --no-ext-diff "origin/${GITHUB_BASE_REF}...HEAD" 2>>"$GIT_ERR")" \
               && git show "origin/${GITHUB_BASE_REF}:scripts/ci-e2e-classify.sh" > "$RUNNER_TEMP/ci-e2e-classify.sh" 2>>"$GIT_ERR"; then
               # A here-string, not `printf | bash`: the classifier exits at the first non-allowlisted row without reading the
-              # rest, so on a name-status listing over the 64 KB pipe buffer the printf takes SIGPIPE and pipefail reds the step.
+              # rest, so on a raw-row listing over the 64 KB pipe buffer the printf takes SIGPIPE and pipefail reds the step.
               APPLICABLE="$(bash "$RUNNER_TEMP/ci-e2e-classify.sh" pull_request <<<"$CHANGED")"
             else
               echo "::warning::e2e classification fell back to enum-failed; git stderr: [$(tr '\n' ' ' < "$GIT_ERR" | cut -c1-300)] shallow=$(git rev-parse --is-shallow-repository 2>&1 | head -1) base_ref_resolves=$(git rev-parse --verify -q "origin/${GITHUB_BASE_REF}" >/dev/null 2>&1 && echo yes || echo no) head=$(git rev-parse --short HEAD 2>&1 | head -1) uid=$(id -u)"

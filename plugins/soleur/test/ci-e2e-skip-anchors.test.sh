@@ -14,7 +14,7 @@
 #
 # ASSEMBLY. Two chokepoints, both tested here:
 #   (a) the shipped classifier scripts/ci-e2e-classify.sh — the test executes
-#       the REAL artifact over fixture `git diff --name-status` rows on stdin,
+#       the REAL artifact over fixture `git diff --raw` rows on stdin,
 #       never a re-implemented mirror;
 #   (b) grep-anchored wiring assertions on ci.yml itself — the classify step
 #       (`id: detect`) precedes the heavy steps inside the `e2e` job, the
@@ -24,11 +24,13 @@
 #       skip-verdict step exists. A dropped wiring line reds even when the
 #       classifier is correct.
 #
-# Stdin contract (pinned by the plan): `git diff --name-status` rows —
-# `STATUS<TAB>path` (renames carry a second TAB-separated path). A bare path
-# with no status column is treated as modified. Any status other than M/A
-# (deletions, renames, copies, type changes, unmerged) emits `true`: an
-# unresolvable or mutating changeset is indistinguishable from unsafe.
+# Stdin contract: `git diff --raw` rows — `:OLDMODE NEWMODE OLDSHA NEWSHA STATUS<TAB>path`
+# (renames and copies carry a second TAB-separated path and fail the grammar). The skip
+# is mode-aware (#10416): status A needs old mode 000000 and new mode 100644, status M
+# needs 100644 on both sides, so a symlink, gitlink or exec-bit `.md` runs the job. Any
+# other status (deletions, renames, copies, type changes, unmerged) and any row that is
+# not a well-formed raw row (legacy name-status, a bare path, uppercase hex) emits
+# `true`: an unresolvable or mutating changeset is indistinguishable from unsafe.
 # `--enum-failed` as argv[1] is the enumeration-failure verdict path the
 # workflow step falls back to when `git diff` itself fails.
 #
@@ -66,6 +68,12 @@ expect_verdict() {
   fi
 }
 
+# raw_row <status> <old-mode> <new-mode> <path> — one `git diff --raw` row (default abbreviation: 7-hex object names).
+# A rename/copy passes a path holding a TAB. Rows print with a trailing newline; join several as "$(mrow a; mrow b)".
+raw_row() { printf ':%s %s 1111111 2222222 %s\t%s\n' "$2" "$3" "$1" "$4"; }
+mrow() { raw_row M 100644 100644 "$1"; }
+arow() { raw_row A 000000 100644 "$1"; }
+
 # expect_rc_nonzero <desc> <argv...> — genuinely broken usage must exit non-zero
 # so a broken classifier reds the required job instead of fabricating a skip.
 expect_rc_nonzero() {
@@ -98,43 +106,62 @@ else
 fi
 
 echo "── Guard 1: decision matrix (pull_request)"
-expect_verdict "app-affecting path runs e2e"            true  pull_request $'M\tapps/web-platform/x.ts\n'
-expect_verdict "pure kb + root-md diff skips"           false pull_request $'M\tknowledge-base/project/specs/x.md\nM\tREADME.md\n'
-expect_verdict "docs/legal is NOT safe (pinned SHAs)"   true  pull_request $'M\tdocs/legal/foo.md\n'
-expect_verdict "mixed allowlist + app path runs"        true  pull_request $'M\tknowledge-base/a.md\nM\tapps/web-platform/x.ts\n'
-expect_verdict "deleted-file-only diff runs"            true  pull_request $'D\tknowledge-base/a.md\n'
-expect_verdict "typechange is NOT safe (kind mutates)"  true  pull_request $'T\tknowledge-base/a.md\n'
-expect_verdict "renamed file runs"                      true  pull_request $'R100\tknowledge-base/a.md\tknowledge-base/b.md\n'
-expect_verdict "added allowlisted file skips"           false pull_request $'A\tknowledge-base/a.md\n'
+expect_verdict "app-affecting path runs e2e"            true  pull_request "$(mrow apps/web-platform/x.ts)"
+expect_verdict "pure kb + root-md diff skips"           false pull_request "$(mrow knowledge-base/project/specs/x.md; mrow README.md)"
+expect_verdict "docs/legal is NOT safe (pinned SHAs)"   true  pull_request "$(mrow docs/legal/foo.md)"
+expect_verdict "mixed allowlist + app path runs"        true  pull_request "$(mrow knowledge-base/a.md; mrow apps/web-platform/x.ts)"
+expect_verdict "deleted-file-only diff runs"            true  pull_request "$(raw_row D 100644 000000 knowledge-base/a.md)"
+expect_verdict "typechange is NOT safe (kind mutates)"  true  pull_request "$(raw_row T 100644 120000 knowledge-base/a.md)"
+expect_verdict "renamed file runs"                      true  pull_request "$(raw_row R100 100644 100644 $'knowledge-base/a.md\tknowledge-base/b.md')"
+expect_verdict "added allowlisted file skips"           false pull_request "$(arow knowledge-base/a.md)"
 expect_verdict "empty changeset runs"                   true  pull_request ''
-expect_verdict "subdir .md is NOT root-md safe"         true  pull_request $'M\tplugins/soleur/README.md\n'
-expect_verdict "workflow edit itself runs"              true  pull_request $'M\t.github/workflows/ci.yml\n'
-expect_verdict "bare path (no status) treated as M"     false pull_request $'knowledge-base/a.md\nREADME.md\n'
-expect_verdict "unmerged status runs"                   true  pull_request $'U\tknowledge-base/a.md\n'
+expect_verdict "subdir .md is NOT root-md safe"         true  pull_request "$(mrow plugins/soleur/README.md)"
+expect_verdict "workflow edit itself runs"              true  pull_request "$(mrow .github/workflows/ci.yml)"
+expect_verdict "bare path (no status column) fails closed" true pull_request $'knowledge-base/a.md\nREADME.md\n'
+expect_verdict "unmerged status runs"                   true  pull_request "$(raw_row U 000000 000000 knowledge-base/a.md)"
 # Single-slash markdown outside the tree: the inner root-md guard must treat ANY slash as non-root (a `*/*/*` edit would not).
-expect_verdict "single-slash .md is NOT root-md safe"    true  pull_request $'M\tapps/README.md\n'
+expect_verdict "single-slash .md is NOT root-md safe"    true  pull_request "$(mrow apps/README.md)"
 
 echo "── Guard 1: hostile-input + self-evaluation axes"
 # Copy status is the same unsafe class as rename: a copied-in app file must run.
-expect_verdict "copy status runs"                       true  pull_request $'C\tknowledge-base/a.md\tknowledge-base/b.md\n'
+expect_verdict "copy status runs"                       true  pull_request "$(raw_row C100 100644 100644 $'knowledge-base/a.md\tknowledge-base/b.md')"
 # Prefix without the literal slash is NOT knowledge-base/**.
-expect_verdict "knowledge-base-evil is NOT allowlisted" true  pull_request $'M\tknowledge-base-evil/x.md\n'
+expect_verdict "knowledge-base-evil is NOT allowlisted" true  pull_request "$(mrow knowledge-base-evil/x.md)"
 # A bare `knowledge-base` file (no trailing slash) is not under the tree.
-expect_verdict "bare knowledge-base path runs"          true  pull_request $'M\tknowledge-base\n'
-# git C-quotes control characters in --name-status output; the quoted row must
+expect_verdict "bare knowledge-base path runs"          true  pull_request "$(mrow knowledge-base)"
+# git C-quotes control characters in diff output; the quoted row must
 # fail every allowlist arm (smuggled newline/tab payloads are unreachable).
-expect_verdict "C-quoted path runs"                     true  pull_request $'M\t"knowledge-base/x\\ny.ts"\n'
+expect_verdict "C-quoted path runs"                     true  pull_request "$(mrow '"knowledge-base/x\ny.ts"')"
 # Editing the gate machinery itself always runs the gate — the rows below make
 # that an enforced invariant, not an accident of the current allowlist.
-expect_verdict "classifier edit runs e2e"               true  pull_request $'M\tscripts/ci-e2e-classify.sh\n'
-expect_verdict "this guard's own edit runs e2e"         true  pull_request $'M\tplugins/soleur/test/ci-e2e-skip-anchors.test.sh\n'
-expect_verdict "sweeper edit runs e2e"                  true  pull_request $'M\tscripts/sweep-followthroughs.sh\n'
-expect_verdict "soak-probe edit runs e2e"               true  pull_request $'M\tscripts/followthroughs/actions-queue-tail-8450.sh\n'
+expect_verdict "classifier edit runs e2e"               true  pull_request "$(mrow scripts/ci-e2e-classify.sh)"
+expect_verdict "this guard's own edit runs e2e"         true  pull_request "$(mrow plugins/soleur/test/ci-e2e-skip-anchors.test.sh)"
+expect_verdict "sweeper edit runs e2e"                  true  pull_request "$(mrow scripts/sweep-followthroughs.sh)"
+expect_verdict "soak-probe edit runs e2e"               true  pull_request "$(mrow scripts/followthroughs/actions-queue-tail-8450.sh)"
+
+echo "── Guard 1: file-mode axis (#10416) — a symlink, gitlink or exec-bit .md is not markdown"
+expect_verdict "added symlinked .md runs"               true  pull_request "$(raw_row A 000000 120000 knowledge-base/x.md)"
+expect_verdict "added executable .md runs"              true  pull_request "$(raw_row A 000000 100755 knowledge-base/x.md)"
+expect_verdict "added gitlink runs"                     true  pull_request "$(raw_row A 000000 160000 knowledge-base/x.md)"
+expect_verdict "exec-bit flip on root .md runs"         true  pull_request "$(raw_row M 100644 100755 README.md)"
+expect_verdict "exec-bit removal on kb .md runs"        true  pull_request "$(raw_row M 100755 100644 knowledge-base/x.md)"
+expect_verdict "modify of an existing symlink runs"     true  pull_request "$(raw_row M 120000 120000 knowledge-base/x.md)"
+expect_verdict "A row with a non-null old mode runs"    true  pull_request "$(raw_row A 100644 100644 knowledge-base/x.md)"
+expect_verdict "M99 (unknown status) runs"              true  pull_request "$(raw_row M99 100644 100644 knowledge-base/x.md)"
+expect_verdict "compliant first row, symlink second, runs" true pull_request "$(arow knowledge-base/a.md; raw_row A 000000 120000 knowledge-base/b.md)"
+expect_verdict "symlink first row, compliant second, runs" true pull_request "$(raw_row A 000000 120000 knowledge-base/b.md; arow knowledge-base/a.md)"
+expect_verdict "legacy name-status row fails closed"    true  pull_request $'M\tknowledge-base/a.md\n'
+expect_verdict "uppercase-hex raw row fails closed"     true  pull_request $':100644 100644 ABCDEF1 2222222 M\tknowledge-base/a.md\n'
+expect_verdict "raw row with a space for the tab fails closed" true pull_request $':100644 100644 1111111 2222222 M knowledge-base/a.md\n'
+expect_verdict "raw row with an empty path fails closed" true  pull_request $':100644 100644 1111111 2222222 M\t\n'
+expect_verdict "plain 100644 kb .md added+modified skips" false pull_request "$(arow knowledge-base/a/b/c.md; mrow README.md)"
+expect_verdict "path with spaces still skips"           false pull_request "$(arow 'knowledge-base/with space/a b.md')"
+expect_verdict "40-hex (--no-abbrev) raw row skips"     false pull_request "$(printf ':100644 100644 %040d %040d M\tknowledge-base/a.md\n' 1 2)"
 
 echo "── Guard 1: non-PR events always run"
-expect_verdict "push event runs"                        true  push          $'M\tknowledge-base/a.md\n'
-expect_verdict "merge_group event runs"                 true  merge_group   $'M\tknowledge-base/a.md\n'
-expect_verdict "workflow_dispatch runs"                 true  workflow_dispatch $'M\tknowledge-base/a.md\n'
+expect_verdict "push event runs"                        true  push          "$(mrow knowledge-base/a.md)"
+expect_verdict "merge_group event runs"                 true  merge_group   "$(mrow knowledge-base/a.md)"
+expect_verdict "workflow_dispatch runs"                 true  workflow_dispatch "$(mrow knowledge-base/a.md)"
 
 echo "── Guard 1: failure polarity"
 # Enumeration failure is a distinct argv verdict path: emits true, exits 0.
@@ -207,7 +234,7 @@ anchor_in_e2e "classify fallback prints the git stderr"  'git stderr: ['
 
 # The diff range is load-bearing: a narrowed spec (HEAD~1, fixed base) hides
 # app changes in earlier commits of a multi-commit PR.
-anchor_in_e2e "diff range is the PR merge-base"         'git diff --name-status "origin/${GITHUB_BASE_REF}...HEAD"'
+anchor_in_e2e "diff range is the PR merge-base, as raw rows" 'git diff --raw --no-color --no-ext-diff "origin/${GITHUB_BASE_REF}...HEAD"'
 # The verdict-validation case converts a malformed verdict into a red job —
 # without it a classifier emitting garbage yields `applicable=`, every
 # `== 'true'` gate AND the `== 'false'` verdict step are false, and the job
@@ -290,8 +317,8 @@ fi
 # (ADR-193): a floor routed through fail()/FAIL++ is disarmed by the same
 # neutered machinery it exists to catch.
 total=$((PASS + FAIL))
-if [ "$total" -lt 51 ]; then
-  echo "[FATAL] assertion floor: only $total assertions ran, want >=51" >&2
+if [ "$total" -lt 68 ]; then
+  echo "[FATAL] assertion floor: only $total assertions ran, want >=68" >&2
   exit 1
 fi
 
