@@ -41,9 +41,11 @@
 #
 # NO NAME LEAVES THE HOST. The output is one fixed-shape line of per-type COUNTS (no digest, no name,
 # no per-name hash, nothing from inside repositories/ but a count). The off-list refusal adds exactly one
-# bit, whether a top-level directory is named hooks (the system directory the bootstrap creates), and two
-# counts; the compared name is one constant in this file, and no listed name is printed, hashed or stored. Names are read into shell variables
-# for classification only: stdout is held back until the final line, stderr of every command is
+# bit, whether a top-level directory is named hooks (the name git-data-bootstrap.sh uses for its hooks
+# directory; the bit proves the name only, not who made the directory or what it holds), and two counts;
+# the compared name is one constant in this file, and no listed name is printed, hashed or stored.
+# Names are read into shell variables for classification only: stdout is held back until the final
+# line, stderr of every command is
 # discarded, and the only stderr this file writes is a fixed reason word and digits (gd_capture prints
 # a failed session's stderr, so nothing else may reach it).
 #
@@ -328,7 +330,7 @@ wa_main() {
       [ -n "$n" ] || die 35 record_empty
       case "$n" in *[[:cntrl:]]*) die 35 record_control ;; esac
       case "$t" in d) TOP_D=$((TOP_D + 1)) ;; f) TOP_F=$((TOP_F + 1)) ;; l) TOP_L=$((TOP_L + 1)) ;; *) TOP_O=$((TOP_O + 1)) ;; esac
-      # One constant system name, a directory only, an exact match: the bit is not an allowlist entry, so a
+      # One constant name, a directory only, an exact match: the bit is not an allowlist entry, so a
       # directory named hooks still falls into the off-list arm below.
       if [ "$n" = hooks ] && [ "$t" = d ]; then HAS_HOOKS=1; fi
       case "$n:$t" in

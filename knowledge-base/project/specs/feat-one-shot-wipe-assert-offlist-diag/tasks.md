@@ -25,13 +25,13 @@ Refs: #10138, #6897 (Ref only, never Closes). Dispatches nothing.
 
 ## Phase 3: Runbook (exit-34 section only)
 
-- 3.1 Replace the final clause near line 1236 with the CLO wording (decision row L-2).
+- 3.1 Replace the final clause at 'Other results that route to the CLO' with the CLO wording (decision row L-2).
 - 3.2 Add `### Reading the exit-34 line` (definitions, decode table, measured / inherited / not proven / policy labels with 2026-10-18, conditioned on the merge, follow-up issue number, no promise of a next run).
-- 3.3 Update the verdict-map cell near line 1350.
+- 3.3 Update the verdict-map cell in the verdict-map row for the host listing.
 
 ## Phase 4: Hand-offs (no production mutation)
 
-- 4.1 `gh issue create` for the `hooks:d` allowlist question (Ref #10138, Ref #6897; roadmap milestone); cite its number in the runbook.
+- 4.1 SUPERSEDED by decision row R-8: the `hooks:d` allowlist question is tracked in place on #6897 (no new issue); the runbook cites #6897.
 - 4.2 Route the final strings (script line, runbook subsection, PR body) to `soleur:legal:clo`; record the verdict in decision-challenges.md.
 - 4.3 PR body: `Ref #10138`, `Ref #6897`; states only the rc=34 stderr output changes and nothing was dispatched; honest note that arm H runs in CI.
 

@@ -389,12 +389,16 @@ INVARIANT_RUNS=0
 NAMES_SEEN_RUNS=0
 RC34_LINES_CHECKED=0
 # line34_ok <line> — the strict rc=34 grammar, and a refusal must be explainable: some top-level entry was off the
-# list, or the top-level lost+found held something (an all-zero pair cannot occur with rc 34).
+# list, or the top-level lost+found held something (an all-zero pair cannot occur with rc 34). Two derived
+# invariants as well: the hooks bit implies an off-list entry (the bit never feeds the allowlist), and the off-list
+# count cannot exceed the top-level entries counted by type.
 line34_ok() {
-  local l="$1" n lf
+  local l="$1" n lf hk tops
   [[ "$l" =~ $RE_34 ]] || return 1
-  n="${l##*offlist_n=}"; lf="${l##*lf_entries=}"; lf="${lf%% *}"
-  [ "$n" -gt 0 ] || [ "$lf" -gt 0 ]
+  n="${l##*offlist_n=}"; lf="${l##*lf_entries=}"; lf="${lf%% *}"; hk="${l##*has_hooks_d=}"; hk="${hk%% *}"
+  tops=0
+  for _k in top_d top_f top_l top_o; do _v="${l##*"$_k"=}"; tops=$((tops + ${_v%% *})); done
+  { [ "$n" -gt 0 ] || [ "$lf" -gt 0 ]; } && { [ "$hk" = 0 ] || [ "$n" -ge 1 ]; } && [ "$n" -le "$tops" ]
 }
 # invariants <label> — what EVERY run owes, success or refusal.
 invariants() {
@@ -445,8 +449,8 @@ expect_refuse() {
     if [ -n "$tail34" ]; then
       if [ "$last" = "wipe-assert: rc=34 reason=offlist $tail34" ]; then ok "$label: the whole rc=34 line equals the expected one"
       else no "$label: the rc=34 line differs: got [$last], want [wipe-assert: rc=34 reason=offlist $tail34]"; fi
-    fi
-  fi
+    else no "$label: an rc=34 row must pin the whole expected line (no tail given)"; fi
+  elif [ -n "$tail34" ]; then no "$label: a tail was given for a row that is not an rc=34 refusal (want rc=$rc, got rc=$RC)"; fi
   invariants "$label"
 }
 # expect_line <label> <regex>
@@ -633,7 +637,7 @@ expect_refuse "A07 a top-level lost+found that holds a directory is off the allo
 world a-lockdir-top
 mkdir -p "$W/tree/.init.lock"
 run_script pre
-expect_refuse "A08 a top-level DIRECTORY named like the lock file is off the allowlist (the lock exclusion is for regular files)" 34 offlist
+expect_refuse "A08 a top-level DIRECTORY named like the lock file is off the allowlist (the lock exclusion is for regular files)" 34 offlist "top_d=3 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"
 world a-lockdir-repos
 mkdir -p "$W/tree/repositories/.ws-9.init.lock/$CORPUS_REPO_A"
 run_script pre
@@ -822,7 +826,7 @@ expect_refuse "A10 an extra top-level directory: the refusal carries COUNTS and 
 world a-offfile
 : > "$W/tree/$CORPUS_TOP_FILE"
 run_script pre
-expect_refuse "A11 an extra top-level file" 34 offlist
+expect_refuse "A11 an extra top-level file" 34 offlist "top_d=2 top_f=2 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"
 
 world a-reposlink
 tree_reset; mkdir -p "$W/tree/lost+found" "$W/outside/$CORPUS_REPO_A"; ln -s "$W/outside" "$W/tree/repositories"
@@ -832,28 +836,28 @@ expect_refuse "A12 repositories is a SYMLINK: never followed, off the allowlist"
 world a-reposfile
 tree_reset; mkdir -p "$W/tree/lost+found"; : > "$W/tree/repositories"
 run_script pre
-expect_refuse "A13 repositories is a regular file" 34 offlist
+expect_refuse "A13 repositories is a regular file" 34 offlist "top_d=1 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"
 
 world a-fifo
 mkfifo "$W/tree/$CORPUS_TOP_FILE" || instrument "mkfifo failed"
 run_script pre
-expect_refuse "A14 a FIFO at the top level counts as other and is off the allowlist" 34 offlist
+expect_refuse "A14 a FIFO at the top level counts as other and is off the allowlist" 34 offlist "top_d=2 top_f=1 top_l=0 top_o=1 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"
 if grep -q 'top_o=1' "$W/err"; then ok "A14 the FIFO is counted under top_o"; else no "A14 the FIFO was not counted as other: $(cat "$W/err")"; fi
 
 world a-gclink
 rm -f "$W/tree/.gc-cursor"; ln -s /etc/hostname "$W/tree/.gc-cursor"
 run_script pre
-expect_refuse "A15 .gc-cursor as a symlink is off the allowlist (path-typed, not name-only)" 34 offlist
+expect_refuse "A15 .gc-cursor as a symlink is off the allowlist (path-typed, not name-only)" 34 offlist "top_d=2 top_f=0 top_l=1 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"
 
 world a-lostfile
 rmdir "$W/tree/lost+found" && : > "$W/tree/lost+found" || instrument "A16 setup failed"
 run_script pre
-expect_refuse "A16 lost+found as a file is off the allowlist" 34 offlist
+expect_refuse "A16 lost+found as a file is off the allowlist" 34 offlist "top_d=1 top_f=2 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"
 
 world a-absent-beside
 tree_reset; mkdir -p "$W/tree/$CORPUS_TOP_DIR"
 run_script pre
-expect_refuse "A17 no repositories directory beside a non-allowlisted entry" 34 offlist
+expect_refuse "A17 no repositories directory beside a non-allowlisted entry" 34 offlist "top_d=1 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"
 
 world a-nonempty
 mkdir -p "$W/tree/repositories/$CORPUS_REPO_A" "$W/tree/repositories/$CORPUS_REPO_B"
@@ -871,13 +875,15 @@ world a122-hooks-and-tenant
 mkdir -p "$W/tree/hooks" "$W/tree/$CORPUS_TOP_DIR"; : > "$W/tree/$CORPUS_TOP_FILE"
 run_script pre
 expect_refuse "A122 hooks beside a tenant-shaped directory and file in one listing: only the bit and the counts leave" 34 offlist "top_d=4 top_f=2 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=3"
-for v in symlink file dotd upper; do
+for v in symlink file dotd upper fifo suffix; do
   world "a123-$v"
   case "$v" in
     symlink) ln -s repositories "$W/tree/hooks"; ex="top_d=2 top_f=1 top_l=1 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1" ;;
     file)    : > "$W/tree/hooks"; ex="top_d=2 top_f=2 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1" ;;
     dotd)    mkdir -p "$W/tree/hooks.d"; ex="top_d=3 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1" ;;
     upper)   mkdir -p "$W/tree/Hooks"; ex="top_d=3 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1" ;;
+    fifo)    mkfifo "$W/tree/hooks" || instrument "mkfifo failed"; ex="top_d=2 top_f=1 top_l=0 top_o=1 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1" ;;
+    suffix)  mkdir -p "$W/tree/old-hooks"; ex="top_d=3 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1" ;;
   esac
   run_script pre
   expect_refuse "A123 hooks variant ($v): only an exact, case-sensitive DIRECTORY named hooks sets the bit" 34 offlist "$ex"
@@ -886,6 +892,14 @@ world a124-nested-hooks
 mkdir -p "$W/tree/lost+found/hooks"
 run_script pre
 expect_refuse "A124 a nested lost+found/hooks directory: the top-level bit reads 0 and the entry is counted under lost+found" 34 offlist "top_d=2 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=1 offlist_n=0"
+world a125-locks-and-offdir
+touch "$W/tree/.init.lock" "$W/tree/.5.init.lock"; mkdir -p "$W/tree/$CORPUS_TOP_DIR"
+run_script pre
+expect_refuse "A125 allowlisted lock files beside one off-list directory: the locks are not counted as off-list" 34 offlist "top_d=3 top_f=3 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"
+world a126-lf-many
+mkdir -p "$W/tree/lost+found/d"; touch "$W/tree/lost+found/a" "$W/tree/lost+found/d/b"
+run_script pre
+expect_refuse "A126 lost+found holding two entries (one nested deeper): lf_entries is a non-recursive COUNT, not a flag" 34 offlist "top_d=2 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=2 offlist_n=0"
 world a129-offdir-and-lf
 mkdir -p "$W/tree/$CORPUS_TOP_DIR"; : > "$W/tree/lost+found/$CORPUS_TOP_FILE"
 run_script pre
@@ -1453,6 +1467,8 @@ if line34_ok "$_g34"; then ok "H3: a non-canonical good rc=34 line (lf_entries=7
 if ! line34_ok "${_g34/has_hooks_d=0/has_hooks_d=2}"; then ok "H3: has_hooks_d=2 is rejected (the bit is 0 or 1)"; else no "H3: has_hooks_d=2 was accepted"; fi
 if ! line34_ok "$_g34 digest=0f0f"; then ok "H3: a trailing token is rejected"; else no "H3: a trailing token was accepted"; fi
 if ! line34_ok "${_g34/lf_entries=7/lf_entries=0}"; then ok "H3: offlist_n=0 with lf_entries=0 is rejected (nothing explains the refusal)"; else no "H3: an unexplained rc=34 line was accepted"; fi
+if ! line34_ok "${_g34/has_hooks_d=0/has_hooks_d=1}"; then ok "H3: has_hooks_d=1 with offlist_n=0 is rejected (the bit implies an off-list entry)"; else no "H3: a hooks bit without an off-list entry was accepted"; fi
+if ! line34_ok "${_g34/offlist_n=0/offlist_n=9}"; then ok "H3: offlist_n above the top-level entry count is rejected"; else no "H3: an impossible offlist_n was accepted"; fi
 
 # ══════════════════════════════════════════════════════════════════════════════════════════
 # TIER B — the cutover verb
@@ -1520,11 +1536,11 @@ if [ "$(paste -sd' ' "$TL/timeouts")" = "30 25 30 300" ]; then ok "B04 bounds: a
 else no "B04 bounds differ: [$(paste -sd' ' "$TL/timeouts")]"; fi
 
 # rc 34: the host's last stderr line is relayed by the verb as one probe-stderr line, whole (this row guards the
-# passthrough filter and the cap in the verb, not the host script).
+# passthrough filter in the verb, not the host script; the line is far below the 8192-byte cap, so it does not guard that).
 L34='wipe-assert: rc=34 reason=offlist top_d=3 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=1'
 run_verb b34 - 34 "${V_PRE[@]}" SHIM_ERR="$L34"
-if grep -qxF "[git-data-cutover] probe-stderr: $L34" "$TL/out"; then ok "B34 the rc=34 diagnostic line survives the verb's stderr filter and cap whole, behind one probe-stderr prefix"
-else no "B34 the rc=34 line did not pass through the verb: $(tr '\n' '|' < "$TL/out" | cut -c1-300)"; fi
+if grep -qxF "[git-data-cutover] probe-stderr: $L34" "$TL/out"; then ok "B04b the rc=34 diagnostic line survives the verb's stderr filter whole, behind one probe-stderr prefix"
+else no "B04b the rc=34 line did not pass through the verb: $(tr '\n' '|' < "$TL/out" | cut -c1-300)"; fi
 
 run_verb b05 "$PRE_ANS" 0 "${V_PRE[@]/WIPE_LISTING=run/WIPE_LISTING=skip}"
 if [ "$VRC" = 0 ] && [ "$(paste -sd' ' "$TL/timeouts")" = "30 25 30 90" ] && grep -q 'WIPE_LISTING=skip bash -s' "$TL/cmd"; then ok "B05 pre with WIPE_LISTING=skip (wipe_check): 90 s bound, skip is what is sent"
@@ -1919,17 +1935,20 @@ fi
 # FLOOR — self-contained: bash builtins and this suite's own counters, reported by printf + exit and
 # never through ok()/no() (ADR-193). Each bound is a literal on the line directly above its `if`.
 # ══════════════════════════════════════════════════════════════════════════════════════════
-EXPECTED_RC34_LINES=19
+# 23 = the 19 reviewed rows + A125, A126 + the fifo and suffix hooks variants (measured, unprivileged, loopback skipped)
+EXPECTED_RC34_LINES=23
 if [ "$RC34_LINES_CHECKED" -lt "$EXPECTED_RC34_LINES" ]; then
   printf '[FATAL] anti-vacuity floor: only %s rc=34 lines were checked for the strict shape, floor is %s\n' "$RC34_LINES_CHECKED" "$EXPECTED_RC34_LINES" >&2
   exit 1
 fi
-EXPECTED_INVARIANT_RUNS=125
+# 129 = 125 + the same 4 new refusal runs (measured, unprivileged, loopback skipped)
+EXPECTED_INVARIANT_RUNS=129
 if [ "$INVARIANT_RUNS" -lt "$EXPECTED_INVARIANT_RUNS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s host-script runs were checked for the output invariants, floor is %s\n' "$INVARIANT_RUNS" "$EXPECTED_INVARIANT_RUNS" >&2
   exit 1
 fi
-MIN_ASSERTIONS=787
+# 824 = executed assertions of an unprivileged run with the loopback tier skipped (the way the local gate runs)
+MIN_ASSERTIONS=824
 if [ "$executed" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s — rows were deleted, skipped, or the suite exited early\n' "$executed" "$MIN_ASSERTIONS" >&2
   exit 1
