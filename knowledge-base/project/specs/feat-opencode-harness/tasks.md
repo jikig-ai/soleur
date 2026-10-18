@@ -81,24 +81,24 @@ and a `routingInstructions` arm.
 
 ### 2.1 RED: generator drift test
 
-- [ ] 2.1.1 Create `plugins/soleur/test/opencode-adapter-drift.test.ts`.
-- [ ] 2.1.2 Write failing cases: a hand-edited stub fails `--check`; a missing stub fails `--check`; a canonical agent with no stub fails `--check`; a clean run exits 0.
-- [ ] 2.1.3 Run `bun test plugins/soleur/test/opencode-adapter-drift.test.ts` — confirm RED.
+- [x] 2.1.1 Create `plugins/soleur/test/opencode-adapter-drift.test.ts`.
+- [x] 2.1.2 Write failing cases: a hand-edited stub fails `--check`; a missing stub fails `--check`; a canonical agent with no stub fails `--check`; a clean run exits 0.
+- [x] 2.1.3 Run `bun test plugins/soleur/test/opencode-adapter-drift.test.ts` — confirm RED.
 
 ### 2.2 Generator script
 
-- [ ] 2.2.1 Create `plugins/soleur/scripts/sync-opencode-adapter.ts`, modelled on `sync-grok-agent-compat.ts` and `sync-cursor-name-map.ts`, with a `--check` mode that exits non-zero on drift.
-- [ ] 2.2.2 Walk `plugins/soleur/agents/**/*.md`; for each, emit `plugins/soleur/opencode/agents/<relpath>.md` with frontmatter `mode: subagent`, `description:` copied from the canonical agent, `model: inherit`, and a body pointing at the canonical agent file.
-- [ ] 2.2.3 Walk `plugins/soleur/commands/*.md`; emit `plugins/soleur/opencode/commands/<name>.md` preserving `$ARGUMENTS`.
-- [ ] 2.2.4 Emit `plugins/soleur/opencode/opencode.json` declaring the canonical `skills` root and `instructions`.
-- [ ] 2.2.5 Emit `plugins/soleur/opencode/INSTRUCTIONS.md` with the routing/tool sections (see 5.3).
-- [ ] 2.2.6 Ensure the emitted agent path **is** the agent id (e.g. `opencode/agents/engineering/cto.md` → `engineering/cto`).
-- [ ] 2.2.7 GREEN `opencode-adapter-drift.test.ts`; `--check` exits 0 on a clean tree.
+- [x] 2.2.1 Create `plugins/soleur/scripts/sync-opencode-adapter.ts`, modelled on `sync-grok-agent-compat.ts` and `sync-cursor-name-map.ts`, with a `--check` mode that exits non-zero on drift.
+- [x] 2.2.2 Walk `plugins/soleur/agents/**/*.md`; for each, emit `plugins/soleur/opencode/agents/<relpath>.md` with frontmatter `mode: subagent`, `description:` copied from the canonical agent, `model: inherit`, and a body pointing at the canonical agent file.
+- [x] 2.2.3 Walk `plugins/soleur/commands/*.md`; emit `plugins/soleur/opencode/commands/<name>.md` preserving `$ARGUMENTS`.
+- [x] 2.2.4 Emit `plugins/soleur/opencode/opencode.json` declaring the canonical `skills` root and `instructions`.
+- [x] 2.2.5 Emit `plugins/soleur/opencode/INSTRUCTIONS.md` with the routing/tool sections (see 5.3).
+- [x] 2.2.6 Ensure the emitted agent path **is** the agent id (e.g. `opencode/agents/engineering/cto.md` → `engineering/cto`).
+- [x] 2.2.7 GREEN `opencode-adapter-drift.test.ts`; `--check` exits 0 on a clean tree.
 
 ### 2.3 Hygiene
 
-- [ ] 2.3.1 Run the repo formatter/linter over the generated tree (biome / markdownlint as configured for `plugins/soleur`).
-- [ ] 2.3.2 Confirm the generator is idempotent: a second run is byte-identical.
+- [x] 2.3.1 Run the repo formatter/linter over the generated tree (biome / markdownlint as configured for `plugins/soleur`).
+- [x] 2.3.2 Confirm the generator is idempotent: a second run is byte-identical.
 
 ## Phase 3 — Hook plugin + registry (ADR-223)
 
