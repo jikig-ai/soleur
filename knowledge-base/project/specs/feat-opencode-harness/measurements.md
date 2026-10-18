@@ -65,6 +65,69 @@ disjoint by these names) — none of the current four markers is set.
   the stricter one — a marker that also matches a non-CLI process fails. Confirming that is a
   spec step (spawn a plain shell and a `--standalone` server, check both).
 
+### 1.1 — CLI-specificity probe (the ADR-274 bar)
+
+**Run 2026-10-18, same host, `opencode v2.0.32`. Verdict: PASS — and the marker is narrower than
+"CLI-only": it is tool-spawn-only.**
+
+§1.0's last caveat left this open. The probe tests every OpenCode process mode reachable on this
+host, plus the two bracketing arms.
+
+#### Method
+
+Read `/proc/<pid>/environ` for each mode, launched under a scrubbed `env -i HOME PATH TERM …` so an
+inherited value cannot confound the reading — the same trap the `Test Fixture Conventions` section of
+`plugins/soleur/AGENTS.md` names for `git`. The clean-env arm and the tool-child arm bracket the
+result on both sides.
+
+#### Arms
+
+| Arm | How launched | `OPENCODE` | `OPENCODE_SESSION_ID` | `OPENCODE_TERMINAL` | `AI_AGENT` |
+|---|---|---|---|---|---|
+| Clean env | `env -i /usr/bin/env` | absent | absent | absent | absent |
+| Server | `env -i … opencode serve --port 4999` | absent | absent | absent | absent |
+| ACP (editor embed) | `env -i … opencode acp` | absent | absent | absent | absent |
+| Session runtime | the live `opencode.exe` process (208 vars) | absent | absent | absent | absent |
+| Tool child | a shell the session spawned | `1` | `ses_…` | `1` | `opencode` |
+| Headless `run` | `opencode run --auto …`, read via its own tool child | `1` | `ses_eb3b2ae7…` | `1` | `opencode` |
+
+#### Verdict
+
+The marker is set **only** in the environment OpenCode constructs for a process it spawns as a tool
+call. It is absent from a clean environment, from `serve`, from `acp` — and, the load-bearing one,
+from the session runtime process *itself*, whose 208-variable environment was read directly. So it
+identifies exactly "a process an OpenCode agent session is driving", which is the set Soleur code
+runs inside.
+
+Headless `run` is covered by the same property, via its own tool child. That arm cannot use the
+`env -i` scrub — it was launched from an interactive tool shell that already carried `OPENCODE=1`,
+so mere presence would be confounded by inheritance. The `ses_` id is what resolves it: the file
+shows `ses_eb3b2ae7…`, not the launching session's `ses_eb832230…`. The headless session therefore
+**overwrote** the inherited values rather than passing them through — injection, not inheritance.
+
+This clears ADR-274's bar in the stricter direction: the marker matches no non-session OpenCode
+process. Consequences:
+
+- Task 1.2.2 proceeds — the `detectHarness` predicate is on `OPENCODE`.
+- The predicate stays `OPENCODE`-only. §1.0's caveat on `AI_AGENT` holds, so it is not used as a
+  primary test even though it is present in the same arm.
+
+#### Ordering
+
+`OPENCODE` is checked **after `CLAUDECODE`, before `GROK_*` / `CODEX_THREAD_ID` / `DEVIN*`**.
+`CLAUDECODE` keeps its established first position (the existing precedence tests pin it).
+`GROK_HOME` / `DEVIN_HOME` are installation *paths* that a shell profile can export into any
+session — including an OpenCode one — so they must not be able to shadow a marker OpenCode injects
+itself. Running Claude inside OpenCode is an accepted, unmeasured edge; §1.0 already recorded that
+no other marker is present in a plain OpenCode session.
+
+#### Refuted reading (recorded so it is not reintroduced)
+
+The first ACP arm located the process with `pgrep -f 'opencode acp'` and read a full marker set
+apparently under `env -i`. That process was the **wrapper subshell** (`sh -c … opencode acp`), whose
+environment is the outer session's, not the ACP process's. Re-run against the exec'd process
+(backgrounded `$!`, `comm=opencode`), every marker is absent. The wrapper is not the subject.
+
 ---
 
 ## 2.0 — Skill discovery
