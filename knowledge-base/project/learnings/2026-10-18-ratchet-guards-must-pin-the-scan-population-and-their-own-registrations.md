@@ -24,7 +24,7 @@ A ratchet is correct only for the population it scans and the rules its configs 
 ## Session Errors
 
 1. **Plan `decision-challenges.md` rows were planner-ruled or contained literal pipes.** Recovery: one batched CTO spawn plus pipe removal. **Prevention:** the technical-ruling gate caught it before `work`; no change.
-2. **A local clone of the worktree into `/var/tmp` failed with a cross-device link error, and chained commands then ran in the live worktree (the lead, then an architecture seat).** Recovery: `git reset`, `git rm -f`, `unlink`, verified with `git status`. **Prevention:** review Sharp Edge added (use the sandbox allocator, gate every step).
+2. **A local clone of the worktree into `/var/tmp` failed with a cross-device link error, and chained commands then ran in the live worktree (the lead, then an architecture seat).** Recovery: `git reset`, `git rm -f`, `unlink`, verified with `git status`. **Prevention:** use the sandbox allocator and gate every step after a clone or `cd` with `&&`; the existing review rule on allocated sandboxes already says so (a new bullet did not fit the skill body budget).
 3. **New always-on suite labels had no `suite-durations.tsv` row, so only the full battery failed.** Recovery: two `floor` rows. **Prevention:** the `test-affected-paths.sh` header now says so.
 4. **The Write tool turned ` ` escapes into raw separators in a regex literal.** Recovery: build the class from code points. **Prevention:** already documented in the review notes; nothing added.
 5. **Hooks blocked `git stash list`, a process-pattern search and `rm -rf` on a worktree path, and one hook matched prose inside a heredoc.** **Prevention:** hooks worked as designed; write prose files with the Write tool.
