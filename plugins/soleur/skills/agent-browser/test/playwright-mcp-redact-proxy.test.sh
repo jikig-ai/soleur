@@ -733,7 +733,7 @@ assert_refused_start 'G1: looks_like_a11y_tree raising SystemExit in the self-te
 # dies with rc 1 and a traceback. Still fail-closed (no stdout line, no child) -- pinned so widening back to BaseException (rc 2) is a decision.
 mk_variant "$WORK/v-load-outside" "$PROXY" 'def main() -> None:' "class _OutsideBase(BaseException):\n    pass\n\n\nraise _OutsideBase()\n\n\ndef main() -> None:"
 r="$(session v-load-outside "$WORK/v-load-outside/proxy.py" --send "$INIT" --end eof --timeout 3)"
-assert_true 'G1: a BaseException subclass outside the narrowed tuple at import → rc 1, nothing relayed, no child spawned' bash -c '[[ "$(rcof "$1")" == "1" && "$(fact "$1" 0 lines)" == "0" && -z "$(cat "$1/child_pgid" 2>/dev/null)" ]]' _ "$r"
+assert_true 'G1: a BaseException subclass outside the narrowed tuple at import → rc 1, nothing relayed, no child spawned' bash -c '[[ "$(rcof "$1")" == "1" && "$(fact "$1" 0 lines)" == "0" && -z "$(cat "$1/child_pgid" 2>/dev/null)" ]] && stderr_has "$1" "_OutsideBase"' _ "$r"
 # FR13 behavioural: a SPY redactor tags every string it is handed. Every text block
 # the proxy delivers must carry the tag — a proxy-side predicate that skips some
 # text (a literal, a tool-name allowlist, any spelling of either) cannot hide.
