@@ -215,10 +215,14 @@ describe("live-spawn tail comparison (pure rows)", () => {
     expect(drift(fixture)).toBe("");
   });
 
-  it("a non-root spawn (`--cap-drop ALL` without `--cap-add CAP_SETFCAP`) matches the root-captured fixture", () => {
-    const nonRoot = fixture.filter((t, i) => !(i >= capAt + 2 && i < capAt + 4));
-    expect(nonRoot).not.toEqual(fixture);
-    expect(drift(nonRoot)).toBe("");
+  it("both recorded cap shapes (`--cap-drop ALL` with and without `--cap-add CAP_SETFCAP`) match the fixture", () => {
+    // The fixture records whichever shape its capture environment produced (the SDK adds CAP_SETFCAP only for a root
+    // with setfcap), so build BOTH shapes from it instead of assuming a position.
+    const noAdd = fixture.filter((t, i) => !(t === "--cap-add" || (i > 0 && fixture[i - 1] === "--cap-add")));
+    const withSetfcap = [...noAdd.slice(0, capAt + 2), "--cap-add", "CAP_SETFCAP", ...noAdd.slice(capAt + 2)];
+    expect(withSetfcap).not.toEqual(noAdd);
+    expect(drift(noAdd)).toBe("");
+    expect(drift(withSetfcap)).toBe("");
   });
 
   it("an added `--cap-add CAP_SYS_ADMIN` is rejected as CAP_BARRIER, not normalized away", () => {
