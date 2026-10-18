@@ -129,8 +129,9 @@ is the closed operator-only list:
 2. **Traffic-dependent behaviour** (anything that needs a real model turn, such as a Concierge
    fetch): the gate cannot lawfully generate it (the synthetic principal holds no decryptable
    key, ADR-064 `I-cannot-spend`). First read the passive evidence you can already reach: real
-   traffic after the flip in Better Stack `SOLEUR_*` markers (`scripts/betterstack-query.sh`,
-   invocation in `one-shot` Step 5.5) and in Sentry. With no such signal the check is
+   traffic after the flip in Better Stack `SOLEUR_*` markers
+   ([betterstack-query.sh](../../../../scripts/betterstack-query.sh); invocation in `one-shot`
+   Step 5.5) and in Sentry. With no such signal the check is
    UNVERIFIED: record `Live verification: UNVERIFIED:<capability missing>` in the `postmerge`
    Phase 7 summary, or in your reply and on the feature issue when no postmerge run exists,
    and reference the existing trackers (#10460 funded-key authorisation, #10461 passive
