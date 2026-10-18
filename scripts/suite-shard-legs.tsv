@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1184
-# generated-at=2026-10-16T15:27:16Z
+# generated-at=2026-10-18T01:51:18Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -161,6 +161,8 @@ plugins/soleur/test/ci-concurrency-key.test.sh	8
 plugins/soleur/test/ci-e2e-skip-anchors.test.sh	2
 plugins/soleur/test/ci-head-verdict.test.sh	4
 plugins/soleur/test/ci-path-gating.test.sh	5
+plugins/soleur/test/ci-pr-affected-preactivation.test.sh	1
+plugins/soleur/test/ci-pr-affected-replay.test.sh	1
 plugins/soleur/test/ci-shard-totality-skip.test.sh	1
 plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh	5
 plugins/soleur/test/claude-code-action-auth.test.sh	5
@@ -447,6 +449,7 @@ scripts/lint-migrated-rule-ids-unit	8
 scripts/lint-orphan-test-suites	2
 scripts/lint-orphan-test-suites-mutations-a	5
 scripts/lint-orphan-test-suites-mutations-b	2
+scripts/lint-ratchet-ruff-live	1
 scripts/lint-rule-bodies-live	7
 scripts/lint-rule-ids-live	6
 scripts/lint-shell-capture-exit	8
@@ -585,6 +588,7 @@ tests/scripts/inngest-host-replace-gate	2
 tests/scripts/inngest-host-shape-gate	3
 tests/scripts/inngest-provision-plan-shape	8
 tests/scripts/kb-drift-walker	4
+tests/scripts/lint-ratchet	1
 tests/scripts/lint-rule-bodies	8
 tests/scripts/lint-rule-ids	4
 tests/scripts/main-duplicate-skip	8
