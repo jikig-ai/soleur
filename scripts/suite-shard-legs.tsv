@@ -94,6 +94,7 @@ apps/web-platform/scripts/supabase-local.test.sh	4
 apps/web-platform/test/parse-gitleaks-allowlists	2
 plugins/soleur/scripts/admin-merge-ready.test.sh	3
 plugins/soleur/scripts/alpha-metrics.test.sh	5
+plugins/soleur/scripts/delegation-verify.test.sh	1
 plugins/soleur/scripts/emit-decision.test.sh	8
 plugins/soleur/scripts/pipeline-tally.test.sh	4
 plugins/soleur/scripts/precommit-guard.test.sh	2
@@ -168,6 +169,7 @@ plugins/soleur/test/codeql-main-alert-gate-workflow-wiring.test.sh	7
 plugins/soleur/test/codeql-main-alert-gate.test.sh	8
 plugins/soleur/test/compaction-state-hook.test.sh	6
 plugins/soleur/test/concurrent-ship.test.sh	3
+plugins/soleur/test/cto-interface-selector.test.sh	1
 plugins/soleur/test/debug-probe-residue.test.sh	6
 plugins/soleur/test/deploy-arm.test.sh	5
 plugins/soleur/test/deploy-script-tests-aggregator-diagnosis.test.sh	5
@@ -197,10 +199,12 @@ plugins/soleur/test/git-fixture-env-shell.test.sh	4
 plugins/soleur/test/git-tripwire.test.sh	7
 plugins/soleur/test/gitleaks-merge-commit.test.sh	6
 plugins/soleur/test/gitleaks-rules.test.sh	6
+plugins/soleur/test/go-hold-routing.test.sh	1
 plugins/soleur/test/go-routing-table-parity.test.sh	1
 plugins/soleur/test/go-session-gates.test.sh	5
 plugins/soleur/test/harvest-debt.test.sh	2
 plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh	6
+plugins/soleur/test/hold-gate-eval.test.sh	1
 plugins/soleur/test/hook-git-env-coverage.test.sh	6
 plugins/soleur/test/hook-git-env-receipt.test.sh	8
 plugins/soleur/test/hook-input-classification-mutation.test.sh	5
@@ -240,6 +244,7 @@ plugins/soleur/test/pencil-adapter-auth-hard-fail.test.sh	7
 plugins/soleur/test/pencil-setup-skill-cli-form.test.sh	6
 plugins/soleur/test/plugin-version.test.sh	8
 plugins/soleur/test/pr-fanout-ledger.test.sh	4
+plugins/soleur/test/pr-overlap-preflight.test.sh	1
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	7
 plugins/soleur/test/proc.test.sh	2
 plugins/soleur/test/ralph-loop.test.sh	2

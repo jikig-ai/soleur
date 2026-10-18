@@ -944,7 +944,7 @@
 },
 "technology": "Domain Leader",
 "description": {
-"txt": "Engineering assessment, architecture decision detection"
+"txt": "Engineering assessment, architecture decision detection, technical rulings and epic ownership under a recorded Standing Delegation (ADR-289)"
 },
 "title": "CTO agent",
 "kind": "component",
@@ -2017,8 +2017,8 @@
 "id": "ttq3vz"
 },
 "1cn6cfg": {
-"title": "Opt-in release lookup (SOLEUR_UPDATE_CHECK=1 at session start) and the explicit, user-started /soleur:version compare: git ls-remote --tags against github.com/jikig-ai/soleur and, for a commit-hash or local-checkout install only, one unauthenticated compare API request whose URL carries the installed commit hash (for a local checkout, its current commit, possibly one never pushed). Git config isolated (no user config, no ssh, no credentials, https only), each request time-limited, retried at most once per 10 minutes while failing, result cached per install (all commits of a local checkout share one entry) and treated as fresh for 24 hours. Jikigai receives nothing; GitHub sees the user's IP address and user agent.",
-"technology": "HTTPS (git ls-remote, GitHub REST API)",
+"title": "Opt-in release lookup (SOLEUR_UPDATE_CHECK=1 at session start) and the explicit, user-started /soleur:version compare: git ls-remote --tags against github.com/jikig-ai/soleur and, for a commit-hash or local-checkout install only, one unauthenticated compare API request whose URL carries the installed commit hash (for a local checkout, its current commit, possibly one never pushed). Git config isolated (no user config, no ssh, no credentials, https only), each request time-limited, retried at most once per 10 minutes while failing, result cached per install (all commits of a local checkout share one entry) and treated as fresh for 24 hours. Jikigai receives nothing; GitHub sees the user's IP address and user agent. SEPARATELY (ADR-289), the delegation verifier, the hold evaluator, the ship gate (read-only gh api of the epic's comments for execution receipts) and the overlap preflight read the epic's Standing Delegation comment, receipts, workflow runs and open pull requests of the USER'S OWN repository through the user's own authenticated gh CLI, read-only; they run on the user's machine and Jikigai receives nothing.",
+"technology": "HTTPS (git ls-remote, GitHub REST API, gh CLI)",
 "source": {
 "model": "platform.plugin"
 },
@@ -12791,7 +12791,7 @@
 "color": "gray",
 "line": "dashed",
 "head": "normal",
-"technology": "HTTPS (git ls-remote, GitHub REST API)"
+"technology": "HTTPS (git ls-remote, GitHub REST API, gh CLI)"
 },
 {
 "id": "1wxn3xn",
@@ -26217,7 +26217,7 @@
 "color": "gray",
 "line": "dashed",
 "head": "normal",
-"technology": "HTTPS (git ls-remote, GitHub REST API)"
+"technology": "HTTPS (git ls-remote, GitHub REST API, gh CLI)"
 },
 {
 "id": "1jcvjxp",
@@ -27450,7 +27450,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Engineering assessment, architecture decision detection"
+"txt": "Engineering assessment, architecture decision detection, technical rulings and epic ownership under a recorded Standing Delegation (ADR-289)"
 },
 "tags": [],
 "notation": "Component",
@@ -27463,9 +27463,9 @@
 "height": 180,
 "labelBBox": {
 "x": 38,
-"y": 44,
+"y": 26,
 "width": 314,
-"height": 85
+"height": 121
 }
 },
 {
@@ -54093,7 +54093,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Engineering assessment, architecture decision detection"
+"txt": "Engineering assessment, architecture decision detection, technical rulings and epic ownership under a recorded Standing Delegation (ADR-289)"
 },
 "tags": [],
 "notation": "Component",
@@ -54106,9 +54106,9 @@
 "height": 180,
 "labelBBox": {
 "x": 38,
-"y": 44,
+"y": 26,
 "width": 314,
-"height": 85
+"height": 121
 }
 },
 {
@@ -54538,7 +54538,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Engineering assessment, architecture decision detection"
+"txt": "Engineering assessment, architecture decision detection, technical rulings and epic ownership under a recorded Standing Delegation (ADR-289)"
 },
 "tags": [],
 "notation": "Component",
@@ -54551,9 +54551,9 @@
 "height": 180,
 "labelBBox": {
 "x": 38,
-"y": 44,
+"y": 26,
 "width": 314,
-"height": 85
+"height": 121
 }
 }
 ],
@@ -56159,7 +56159,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Engineering assessment, architecture decision detection"
+"txt": "Engineering assessment, architecture decision detection, technical rulings and epic ownership under a recorded Standing Delegation (ADR-289)"
 },
 "tags": [],
 "notation": "Component",
@@ -56172,9 +56172,9 @@
 "height": 180,
 "labelBBox": {
 "x": 38,
-"y": 44,
+"y": 26,
 "width": 314,
-"height": 85
+"height": 121
 }
 },
 {
@@ -56613,7 +56613,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Engineering assessment, architecture decision detection"
+"txt": "Engineering assessment, architecture decision detection, technical rulings and epic ownership under a recorded Standing Delegation (ADR-289)"
 },
 "tags": [],
 "notation": "Component",
@@ -56625,9 +56625,9 @@
 "height": 180,
 "labelBBox": {
 "x": 38,
-"y": 44,
+"y": 26,
 "width": 314,
-"height": 85
+"height": 121
 }
 },
 {

@@ -16,7 +16,7 @@ f986fe104836beadb13264dfdf5223c2a13cac35b29e54a9d5226d1cf8144a7b  hr-exhaust-all
 221d3ef7d81bdfaea8e0aae386eef875f51dda5ae23847d069fccd7c9ded8f3b  hr-github-api-endpoints-with-enum
 87b13f93ec4e0da7508b061cf18200d53f91b746ecb98563f1e6f42e1c6f9db8  hr-github-app-auth-not-pat
 738a82a8ccf5c3187525393771e88e94c478d4b219ede66c2db4ba2ce504591c  hr-mcp-tools-playwright-etc-resolve-paths
-5cbdc0d4e9a5760e32ed53a4152f06914a270d4a82ccb007a0823db8f08f8d8f  hr-menu-option-ack-not-prod-write-auth
+b67d0632b486564f4642bcbac38cafea0d2f6504ba2d4863c8482f8e9f834af3  hr-menu-option-ack-not-prod-write-auth
 f8a323e9c2570956a875ac91fa6a915df7dfad6b28513eee83dd5be0592f0c93  hr-monitor-not-run-in-background-for-polling
 29514c8270d1e3e410842b549c09c74b52471f28ce357751c7a9a1f6cdd0bbba  hr-multi-step-post-merge-bootstrap-script
 9173df3a578ecdc1a4a64c3eccede6dcb7a57fed6474cb696875c2d5d7ff7e57  hr-never-git-add-a-in-user-repo-agents
@@ -60,6 +60,7 @@ bcfab9abb9f678ddac38725bac7010de8218dc5908dabc958c3bc61c3d056278  wg-cla-signed-
 0be82735a6032bcc450f6c182a5d1878ea4ac290ec8090a51c48324cf83139db  wg-end-of-work-emit-resume-prompt
 695ee8e150a170130d85bfcd007faa8a1cb65944148cbd649f3aa31936178e79  wg-every-feature-listed-in-a-roadmap-phase
 5371eb922a7d2402648dbf68dbe902abf582e97d36e3f9e8f04942ed69443cea  wg-every-session-error-must-produce-either
+9a9b99772702e8d998eaab437c88812d751273122f7ceeba8d99e5c77fbbb648  wg-kb-artifacts-archived-in-pr
 0b5b98521f73bb69f3b0311e5025da9bb07621d124bb4ca6ad13c5dc2214c57e  wg-never-bump-version-files-in-feature
 39ed623e28da2625d40d2a4ae3ae75a5051bda0d50db94f8a2844dbdedcb19d4  wg-plan-prescribed-skills-must-run-inline
 de4d2ffc8bf6f0393474450cf1616d2029a436174712348d85e8f5ddf1d72576  wg-pm-class-followthrough-for-operator-dogfood
