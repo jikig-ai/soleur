@@ -106,6 +106,51 @@ readonly LOG_TAG="inngest-doublefire-probe"
 # The DEDICATED host GQL over the private net (NOT loopback). Mirrors the
 # registry-probe's INNGEST_REMOTE_GQL_URL parameterisation.
 GQL_URL="${INNGEST_REMOTE_GQL_URL:-http://10.0.1.40:8288/v0/gql}"
+# >>> inngest-link-env >>>
+# (#10136) The Inngest link the web hosts' resolver (ci-deploy.sh resolve_inngest_link) chose, read from
+# /etc/soleur/inngest-link.env. PARSED, NEVER SOURCED: a key allowlist plus an exact literal check of the three values,
+# so a hostile or corrupt file can neither run code nor select another endpoint (anything else is `invalid`: the default
+# http endpoint plus a loud marker; the resolver, the tuple gate and the canary are the real gate, this file is advisory
+# for the probes). It OVERRIDES an inherited INNGEST_REMOTE_GQL_URL (server.tf writes an explicit http one into the
+# consumer probe's env, which would otherwise win). Byte-identical in inngest-registry-probe.sh and
+# inngest-doublefire-probe.sh (the doublefire test compares the two); the registry probe is the documented owner.
+INNGEST_LINK_ENV_FILE="${INNGEST_LINK_ENV_FILE:-/etc/soleur/inngest-link.env}"
+LINK_BASE="http://10.0.1.40:8288"
+LINK_CACERT=""
+LINK_STATE="default"
+_link_env_resolve() {
+  local f="$INNGEST_LINK_ENV_FILE" k v url="" scheme="" cacert="" bad=0 n=0
+  LINK_BASE="http://10.0.1.40:8288"; LINK_CACERT=""; LINK_STATE="default"
+  if [ ! -e "$f" ] && [ ! -L "$f" ]; then return 0; fi
+  if [ ! -f "$f" ] || [ -L "$f" ] || [ ! -r "$f" ]; then LINK_STATE="invalid"; return 0; fi
+  while IFS='=' read -r k v || [ -n "$k" ]; do
+    n=$((n + 1))
+    if [ "$n" -gt 16 ]; then bad=1; break; fi
+    case "$k" in
+      INNGEST_LINK_URL) url="$v" ;;
+      INNGEST_LINK_SCHEME) scheme="$v" ;;
+      INNGEST_LINK_CACERT) cacert="$v" ;;
+      '') ;;
+      *) bad=1 ;;
+    esac
+  done < "$f"
+  if [ "$bad" = 0 ] && [ "$url" = "http://10.0.1.40:8288" ] && [ "$scheme" = "http" ] && [ -z "$cacert" ]; then
+    LINK_STATE="http"
+  elif [ "$bad" = 0 ] && [ "$url" = "https://10.0.1.40:8443" ] && [ "$scheme" = "https" ] && [ "$cacert" = "/etc/soleur/inngest-ca.pem" ]; then
+    LINK_BASE="$url"; LINK_CACERT="$cacert"; LINK_STATE="https"
+  else
+    LINK_STATE="invalid"
+  fi
+  return 0
+}
+_link_env_resolve
+LINK_CURL_TLS=()
+case "$LINK_STATE" in
+  http) GQL_URL="$LINK_BASE/v0/gql" ;;
+  https) GQL_URL="$LINK_BASE/v0/gql"; LINK_CURL_TLS=(--cacert "$LINK_CACERT" --noproxy '*') ;;
+  invalid) logger -t "${LOG_TAG:-inngest-probe}" "SOLEUR_INNGEST_LINK_ENV_INVALID file=$INNGEST_LINK_ENV_FILE action=default_http" 2>/dev/null || true ;;
+esac
+# <<< inngest-link-env <<<
 PAGE_SIZE="${INNGEST_GQL_PAGE_SIZE:-100}"
 # #6940 item 3 — INNGEST_GQL_PAGE_SIZE reaches us through hooks.json.tmpl's url-query
 # pass-environment (?page_size=N), i.e. caller-supplied. It must be a positive integer in
@@ -313,7 +358,7 @@ _fetch_runs_page() {
     _last_curl_exit=0
     return 0
   fi
-  if curl -s --max-time "$max_time" --connect-timeout "$CONNECT_TIMEOUT" \
+  if curl -s --max-time "$max_time" --connect-timeout "$CONNECT_TIMEOUT" ${LINK_CURL_TLS[@]+"${LINK_CURL_TLS[@]}"} \
        -X POST -H "Content-Type: application/json" \
        --data-binary "$body" "$GQL_URL" > "$out"; then
     _last_curl_exit=0

@@ -157,6 +157,13 @@ on:
       # its admission literal and its 30-odd renders. Same class as the two comments above and
       # as #8378 ("the gate that caught it was the one suite I had no reason to run").
       - "scripts/cutover-inngest.sh"
+      # (#10136) inngest-link-flip-workflow.test.sh asserts the flip workflow's posture (dispatch-only, least privilege,
+      # the revert step's exact `if`) and drives its body, scripts/inngest-link-flip.sh, against stubbed gh/curl. Neither
+      # file is under apps/*/infra/**, so a PR editing only one of them would skip the suite whose job is to turn that
+      # edit red - the same defect class as the #6178 and #8079 entries above. (apply-web-platform-infra.yml, which holds
+      # the Tier-B flag job the suite also reads, is already listed.)
+      - ".github/workflows/inngest-link-flip.yml"
+      - "scripts/inngest-link-flip.sh"
       - "tests/scripts/lib/inngest-host-dark-gate.sh"
       - "scripts/lib/betterstack-read-classify.sh"
       # (#8846) the shared probe-row predicate the dark-gate lib, the cutover liveness counters and

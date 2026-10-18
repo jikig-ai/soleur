@@ -1,5 +1,7 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -274,23 +276,82 @@ describe("cron-inngest-cron-watchdog — resolveInngestHost", () => {
     expect(resolveInngestHost("")).toBe("http://10.0.1.40:8288");
   });
 
-  // Parity guard: the fallback host must equal EVERY INNGEST_BASE_URL the
-  // web-platform container is started with — ci-deploy.sh's canary and prod
-  // `docker run` sites AND cloud-init.yml's first-boot run. Every site is read
-  // (not the first match) and the site count is pinned, so a repoint or revert
-  // that misses one site — or deletes one — goes red and names the file.
-  it("INNGEST_HOST_FALLBACK matches every INNGEST_BASE_URL in ci-deploy.sh and cloud-init.yml", () => {
-    const SITE_RE = /^\s*-e INNGEST_BASE_URL=([^\s\\]+)/gm;
+  // Parity guard (#10136: relaxed from "equals every site" to SET MEMBERSHIP). The web-platform container's INNGEST_BASE_URL
+  // is now produced by ONE resolver (ci-deploy.sh resolve_inngest_link) whose only two values are the http default and the
+  // verified-TLS endpoint; the canary and prod `docker run` sites carry the resolver's expansion, never a literal, and only
+  // the first-boot site in cloud-init.yml (which cannot call the resolver) keeps a literal, the http default. The fallback
+  // below is used ONLY when INNGEST_BASE_URL is unset in the container, and it stays http: it must be a member of the
+  // resolver's value set (a repoint of the host that misses this constant goes red), and the site shapes are pinned so a
+  // third value or a literal at a resolver-governed site goes red naming the file.
+  const infraFile = (file: string) => readFileSync(resolve(__dirname, "../../../infra", file), "utf8");
+  const resolverValues = () => {
+    const src = infraFile("ci-deploy.sh");
+    const http = src.match(/^INNGEST_LINK_HTTP_URL="([^"]+)"$/m)?.[1];
+    const https = src.match(/^INNGEST_LINK_HTTPS_URL="([^"]+)"$/m)?.[1];
+    return { http, https };
+  };
+
+  it("the resolver produces exactly two values and INNGEST_HOST_FALLBACK (still http) is a member", () => {
+    const { http, https } = resolverValues();
+    expect(http, "ci-deploy.sh INNGEST_LINK_HTTP_URL").toBeDefined();
+    expect(https, "ci-deploy.sh INNGEST_LINK_HTTPS_URL").toBeDefined();
+    const set = new Set([http, https]);
+    expect([...set].sort()).toEqual(["http://10.0.1.40:8288", "https://10.0.1.40:8443"]);
     const fallback = resolveInngestHost(undefined);
+    expect(set.has(fallback), `INNGEST_HOST_FALLBACK ${fallback} must be a resolver value`).toBe(true);
+    expect(fallback, "the fallback stays plain http: the soak counts its use rather than hiding it").toBe(http);
+  });
+
+  it("every INNGEST_BASE_URL site is the resolver expansion (canary, prod) or a resolver-set literal (first boot)", () => {
+    const SITE_RE = /^\s*-e INNGEST_BASE_URL=([^\s\\]+)/gm;
+    const { http, https } = resolverValues();
+    const members = new Set([http, https]);
     for (const [file, count] of [
       ["ci-deploy.sh", 2],
       ["cloud-init.yml", 1],
     ] as const) {
-      const src = readFileSync(resolve(__dirname, "../../../infra", file), "utf8");
-      const values = [...src.matchAll(SITE_RE)].map((m) => m[1]);
-      expect(values, `${file} INNGEST_BASE_URL sites`).toEqual(
-        Array(count).fill(fallback),
-      );
+      const values = [...infraFile(file).matchAll(SITE_RE)].map((m) => m[1]);
+      if (file === "ci-deploy.sh") {
+        expect(values, `${file} INNGEST_BASE_URL sites`).toEqual(
+          Array(count).fill('"$INNGEST_BASE_URL_RESOLVED"'),
+        );
+      } else {
+        expect(values, `${file} INNGEST_BASE_URL sites`).toHaveLength(count);
+        for (const v of values) expect(members.has(v), `${file} literal ${v} is a resolver value`).toBe(true);
+      }
+    }
+  });
+
+  // The fallback is only reachable when INNGEST_BASE_URL is UNSET in the container. The closed-world tuple gate
+  // (infra/lib/docker-run-tuple.py) must therefore refuse a tuple without it: drop the variable from a COPY of each
+  // `docker run` and the gate has to go red with MISSING_REQUIRED naming the tuple.
+  it("the tuple gate forbids an unset INNGEST_BASE_URL path (the http fallback is unreachable by construction)", () => {
+    const helper = resolve(__dirname, "../../../infra/lib/docker-run-tuple.py");
+    const mutations: Array<[string, string, string]> = [
+      ["ci-deploy.sh", '      -e INNGEST_BASE_URL="$INNGEST_BASE_URL_RESOLVED" \\\n', "canary"],
+      ["ci-deploy.sh", '        -e INNGEST_BASE_URL="$INNGEST_BASE_URL_RESOLVED" \\\n', "prod"],
+      ["cloud-init.yml", "      -e INNGEST_BASE_URL=http://10.0.1.40:8288 \\\n", "first-boot"],
+    ];
+    for (const [file, line, tuple] of mutations) {
+      const tmp = mkdtempSync(join(tmpdir(), "inngest-unset-url-"));
+      try {
+        const infra = join(tmp, "apps", "web-platform", "infra");
+        mkdirSync(infra, { recursive: true });
+        for (const f of ["ci-deploy.sh", "cloud-init.yml"]) {
+          let text = infraFile(f);
+          if (f === file) {
+            expect(text.includes(line), `${file}: the ${tuple} INNGEST_BASE_URL line moved; update this anchor`).toBe(true);
+            text = text.replace(line, "");
+          }
+          writeFileSync(join(infra, f), text);
+        }
+        const r = spawnSync("python3", ["-I", helper, "check", "--root", tmp], { encoding: "utf8", timeout: 60_000 });
+        expect(r.error, `python3 could not be spawned: ${String(r.error)}`).toBeUndefined();
+        expect(r.status, `${tuple}: expected exit 1, got:\n${r.stdout}${r.stderr}`).toBe(1);
+        expect(r.stdout).toMatch(new RegExp(`^FAIL MISSING_REQUIRED: -e INNGEST_BASE_URL is required in every tuple.* in ${file.replace(".", "\\.")} ${tuple}`, "m"));
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
     }
   });
 });

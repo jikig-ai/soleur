@@ -33,6 +33,11 @@ export DEPLOY_DOCKER_CONFIG_DIR
 # seed block re-arms the guard explicitly to prove the refusal fires.
 export PLUGIN_MOUNT_DIR_ALLOW_UNSAFE=1
 
+# #10136: resolve_inngest_link writes /etc/soleur/inngest-ca.pem and inngest-link.env. /etc/soleur is root-owned on a real
+# host and absent on the runner, so every deploy subshell (they inherit this export) writes under a scratch dir instead.
+INNGEST_LINK_TEST_DIR="$(mktemp -d)"
+export INNGEST_LINK_DIR="$INNGEST_LINK_TEST_DIR"
+
 # #6665: the sleep mock's invocation cap has to be able to REPORT itself, and its own stderr
 # cannot. `run_deploy` merges the deploy script's stderr into the subshell's stdout
 # (`bash "$DEPLOY_SCRIPT" 2>&1`) and 18 call sites close with `>/dev/null 2>&1`, so a diagnostic
@@ -46,7 +51,7 @@ MOCK_SLEEP_CAP_MARKER="$(mktemp -t ci-deploy-sleep-cap.XXXXXXXX)"
 export MOCK_SLEEP_CAP_MARKER
 # The footer removes this on the normal path, ~5100 lines below; the trap covers every `set -e`
 # abort in between, so a failing run cannot leak the file into the shared /tmp tmpfs (#6734).
-trap 'rm -f "$MOCK_SLEEP_CAP_MARKER"' EXIT
+trap 'rm -f "$MOCK_SLEEP_CAP_MARKER"; rm -rf "$INNGEST_LINK_TEST_DIR"' EXIT
 
 # --- Mock factories ---------------------------------------------------------
 # All specialized mocks are driven by env vars. Tests set MOCK_DOCKER_MODE /
@@ -482,7 +487,8 @@ if [[ "${1:-}" == "secrets" && "${2:-}" == "download" ]]; then
     exit 0
   fi
   if [[ -n "${MOCK_GAK_PRD_BODY:-}" ]]; then cat "$MOCK_GAK_PRD_BODY"; exit 0; fi
-  printf 'KEY=value\nGITHUB_APP_ID=4242\nGITHUB_APP_PRIVATE_KEY=%s\n' "mock-prd-app-key"
+  # DOPPLER_PROJECT/CONFIG/ENVIRONMENT: `doppler secrets download` ALWAYS injects them; resolve_inngest_link's scope guard reads them.
+  printf 'KEY=value\nDOPPLER_PROJECT=soleur\nDOPPLER_CONFIG=prd\nDOPPLER_ENVIRONMENT=prd\nGITHUB_APP_ID=4242\nGITHUB_APP_PRIVATE_KEY=%s\n' "mock-prd-app-key"
   exit 0
 fi
 if [[ "${1:-}" == "secrets" ]]; then
@@ -3118,6 +3124,55 @@ assert_apparmor_profile "web-platform: docker run has apparmor=soleur-bwrap" \
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
 
 echo ""
+echo "--- Inngest link on docker run (#10136, Guard 1: the resolver chokepoint) ---"
+
+# Default path (flag absent): BOTH app starts carry the resolver's http value, the CA env and the read-only CA volume, and the
+# resolver wrote the placeholder + link env under the scratch dir. The unit suite (inngest-link-resolver.test.sh) owns the
+# flag/CA/self-gate matrix; these rows prove the WIRING into the real deploy flow.
+TOTAL=$((TOTAL + 1))
+IL_OUT=$( ( export MOCK_DOCKER_MODE="apparmor-trace"; rm -f "$INNGEST_LINK_DIR"/inngest-*; run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1 ) ) && IL_RC=0 || IL_RC=$?
+IL_RUNS=$(printf '%s\n' "$IL_OUT" | grep -c '^DOCKER_RUN_ARGS:' || true)
+IL_OK=1
+[[ "$IL_RUNS" -eq 2 ]] || IL_OK=0
+[[ "$(printf '%s\n' "$IL_OUT" | grep '^DOCKER_RUN_ARGS:' | grep -cF -- '-e INNGEST_BASE_URL=http://10.0.1.40:8288')" -eq 2 ]] || IL_OK=0
+[[ "$(printf '%s\n' "$IL_OUT" | grep '^DOCKER_RUN_ARGS:' | grep -cF -- '-e NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem')" -eq 2 ]] || IL_OK=0
+[[ "$(printf '%s\n' "$IL_OUT" | grep '^DOCKER_RUN_ARGS:' | grep -cF -- '-v /etc/soleur/inngest-ca.pem:/etc/soleur/inngest-ca.pem:ro')" -eq 2 ]] || IL_OK=0
+[[ -f "$INNGEST_LINK_DIR/inngest-ca.pem" && ! -s "$INNGEST_LINK_DIR/inngest-ca.pem" ]] || IL_OK=0
+[[ "$(cat "$INNGEST_LINK_DIR/inngest-link.env" 2>/dev/null)" == $'INNGEST_LINK_URL=http://10.0.1.40:8288\nINNGEST_LINK_SCHEME=http\nINNGEST_LINK_CACERT=' ]] || IL_OK=0
+if [[ "$IL_OK" -eq 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: flag absent: canary + prod get INNGEST_BASE_URL=http://10.0.1.40:8288, NODE_EXTRA_CA_CERTS and the :ro CA volume; placeholder + http link env written"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: flag absent wiring (rc=$IL_RC runs=$IL_RUNS)"; printf '%s\n' "$IL_OUT" | grep -E 'DOCKER_RUN_ARGS|INNGEST_LINK|DEPLOY_ABORT' | head -6
+fi
+
+# Flag on, the CA secret unusable (the mock serves a non-PEM value): the deploy FAILS before any container is touched - no
+# `docker run`, no stop of the serving container, no http downgrade - and the reason names the resolver.
+TOTAL=$((TOTAL + 1))
+IL_DIR=$(mktemp -d)
+printf 'DOPPLER_PROJECT=soleur\nDOPPLER_CONFIG=prd\nINNGEST_LINK_TLS=1\nGITHUB_APP_ID=4242\nGITHUB_APP_PRIVATE_KEY=mock-prd-app-key\n' > "$IL_DIR/prd.env"
+IL_OUT=$( ( export MOCK_DOCKER_MODE="apparmor-trace" MOCK_GAK_PRD_BODY="$IL_DIR/prd.env" CI_DEPLOY_STATE="$IL_DIR/state.json"; run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1 ) ) && IL_RC=0 || IL_RC=$?
+IL_OK=1
+[[ "$IL_RC" -ne 0 ]] || IL_OK=0
+[[ "$(printf '%s\n' "$IL_OUT" | grep -c '^DOCKER_RUN_ARGS:' || true)" -eq 0 ]] || IL_OK=0
+[[ "$(jq -r '.reason' "$IL_DIR/state.json" 2>/dev/null)" == inngest_link_ca_invalid ]] || IL_OK=0
+if [[ "$IL_OK" -eq 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: flag on + unusable CA: exit non-zero, reason=inngest_link_ca_invalid, no docker run (the old container keeps serving)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: flag on + unusable CA (rc=$IL_RC reason=$(jq -r '.reason' "$IL_DIR/state.json" 2>/dev/null))"; printf '%s\n' "$IL_OUT" | grep -E 'DOCKER_|DEPLOY_ABORT|INNGEST_LINK' | head -6
+fi
+
+# A snapshot bound to another project (a mis-bound token) fails the deploy instead of reading "flag absent".
+TOTAL=$((TOTAL + 1))
+printf 'DOPPLER_PROJECT=soleur-inngest\nDOPPLER_CONFIG=prd\nGITHUB_APP_ID=4242\nGITHUB_APP_PRIVATE_KEY=mock-prd-app-key\n' > "$IL_DIR/prd.env"
+IL_OUT=$( ( export MOCK_DOCKER_MODE="apparmor-trace" MOCK_GAK_PRD_BODY="$IL_DIR/prd.env" CI_DEPLOY_STATE="$IL_DIR/state2.json"; run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1 ) ) && IL_RC=0 || IL_RC=$?
+if [[ "$IL_RC" -ne 0 && "$(jq -r '.reason' "$IL_DIR/state2.json" 2>/dev/null)" == inngest_link_scope_mismatch && "$(printf '%s\n' "$IL_OUT" | grep -c '^DOCKER_RUN_ARGS:' || true)" -eq 0 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: a snapshot bound to another Doppler project fails the deploy (reason=inngest_link_scope_mismatch), no docker run"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: scope guard wiring (rc=$IL_RC reason=$(jq -r '.reason' "$IL_DIR/state2.json" 2>/dev/null))"
+fi
+rm -rf "$IL_DIR"
+
+echo ""
 echo "--- tmpfs /tmp on docker run (closes #2473) ---"
 
 assert_tmpfs_flag() {
@@ -4571,7 +4626,7 @@ diag_check "#9871 D4e: a path, a library name, a sha256 digest and a host:port s
 # env file. The control run (env file unarmed) must show it verbatim, or the armed run proves nothing.
 D4F_VAL='Qm7xK2pV9dLw4TnR8sYb3HcZ'
 D4F_BODY=$(mktemp "$DIAGD/envbody.XXXXXX")
-printf 'GITHUB_APP_ID=4242\nGITHUB_APP_PRIVATE_KEY=mock-prd-app-key\nDIAG_PROBE_SECRET=%s\n' "$D4F_VAL" > "$D4F_BODY"
+printf 'DOPPLER_PROJECT=soleur\nDOPPLER_CONFIG=prd\nGITHUB_APP_ID=4242\nGITHUB_APP_PRIVATE_KEY=mock-prd-app-key\nDIAG_PROBE_SECRET=%s\n' "$D4F_VAL" > "$D4F_BODY"
 run_diag_case "$DIAGD" "MOCK_CANARY_DIAG_OUT=proc leaked=$D4F_VAL"
 diag_check "#9871 D4f control: with the env file unarmed the bare value is NOT redacted (so the armed row below is a real measurement)" \
   "$(grep -qF -- "$D4F_VAL" "$DIAGD/logger" && echo 0 || echo 1)"
@@ -10482,7 +10537,7 @@ GAK_PRD_KEY="$(_gak_pem prd)"; GAK_ISO_KEY="$(_gak_pem iso)"; GAK_RETIRED_KEY="$
 GAK_ISO_MARK="${GAK_ISO_KEY:80:40}"; GAK_PRD_MARK="${GAK_PRD_KEY:80:40}"
 # The base prd env carries one legitimate name of each excepted shape (NODE_ENV, the app's GIT_DATA_*
 # config), so every control proves the hijack refusal does not over-reach.
-_gak_prd_base() { printf 'KEY=value\nNODE_ENV=production\nGIT_DATA_SSH_HOST=git.example.invalid\nGITHUB_APP_ID=4242\n'; }
+_gak_prd_base() { printf 'KEY=value\nDOPPLER_PROJECT=soleur\nDOPPLER_CONFIG=prd\nDOPPLER_ENVIRONMENT=prd\nNODE_ENV=production\nGIT_DATA_SSH_HOST=git.example.invalid\nGITHUB_APP_ID=4242\n'; }
 { _gak_prd_base; printf 'GITHUB_APP_PRIVATE_KEY=%s\nZZ_LAST=1\n' "$GAK_PRD_KEY"; } > "$GAK_FIX/prd.env"
 { printf 'GITHUB_APP_PRIVATE_KEY=%s\n' "$GAK_PRD_KEY"; _gak_prd_base; printf 'GITHUB_APP_PRIVATE_KEY=%s\nZZ_LAST=1\n' "$GAK_PRD_KEY"; } > "$GAK_FIX/prd-twice.env"
 { _gak_prd_base; printf 'ZZ_LAST=1\n'; } > "$GAK_FIX/prd-nokey.env"
@@ -10501,6 +10556,8 @@ chmod +x "$GAK_FIX/mvfail/mv"
 GAK_HIJACK_CLASSES=(
   "node|NODE_PATH=/workspaces/x|NODE_[A-Za-z0-9_]*|"
   "node_options|NODE_OPTIONS=--require /tmp/x.js|NODE_[A-Za-z0-9_]*|"
+  "node_tls_reject|NODE_TLS_REJECT_UNAUTHORIZED=0|NODE_[A-Za-z0-9_]*|"
+  "node_extra_ca|NODE_EXTRA_CA_CERTS=/tmp/evil-ca.pem|NODE_[A-Za-z0-9_]*|"
   "ld|LD_AUDIT=/tmp/x.so|LD_[A-Za-z0-9_]*|"
   "glibc|GLIBC_TUNABLES=glibc.malloc.x=1|GLIBC_[A-Za-z0-9_]*|"
   "git|GIT_CONFIG_COUNT=1|GIT_[A-Za-z0-9_]*|"
@@ -11275,7 +11332,7 @@ gak_row 7.c4 "ci: an UNVERIFIED (WARN fail-open) digest is recorded as verified"
 for _hc in "${GAK_HIJACK_CLASSES[@]}"; do
   IFS='|' read -r _hid _hline _halt <<<"$_hc"
   _hsep='|'; [[ "$_hid" == perl ]] && _hsep=''
-  if [[ "$_hid" == node || "$_hid" == node_options ]]; then
+  if [[ "$_hid" == node || "$_hid" == node_options || "$_hid" == node_tls_reject || "$_hid" == node_extra_ca ]]; then
     gak_row "7.15/$_hid" "prd carries ${_hline%%=*} and the NODE_* class is dropped from the refusal" "hijack_$_hid" "$GAK_BOTH" \
       '(NODE_[A-Za-z0-9_]*|LD_' '(LD_'
   elif [[ "$_hid" == perl ]]; then

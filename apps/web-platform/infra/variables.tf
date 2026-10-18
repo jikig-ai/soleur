@@ -681,6 +681,17 @@ variable "inngest_config_digest" {
   default     = ""
 }
 
+variable "inngest_link_tls" {
+  description = "Scheme flag for the web -> Inngest scheduler link (#10136, inngest-tls.tf). Empty (the default) means the flag secret INNGEST_LINK_TLS does not exist in Doppler soleur/prd and ci-deploy.sh resolves the legacy http://10.0.1.40:8288. `pending:<epoch>` is a 30-minute lease (https while now <= epoch + 30 min, then http plus an event); `1` is https, fail-closed. Not a secret: a mode switch. Published to Doppler soleur/prd_terraform as TF_VAR_inngest_link_tls (--name-transformer tf-var) ONLY by the Tier-B `inngest_link_flag` job (apply_target=inngest-link-flag), which writes that key first and then applies doppler_secret.inngest_link_tls; the resource is deliberately outside the per-merge -target list, so a merge never changes it. NO minted-secret default (hr-tf-variable-no-operator-mint-default): the empty default is the legitimate absent state and keeps every unrelated plan resolving."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = can(regex("^(1|pending:[0-9]{1,10})?$", var.inngest_link_tls))
+    error_message = "inngest_link_tls must be empty, 1, or pending:<epoch seconds> (up to 10 digits); the ci-deploy.sh resolver rejects anything else and fails the deploy."
+  }
+}
+
 # --- PR-H (#3244) — GitHub App + KB-drift -----------------------------------
 # Post-#4150: client_id / client_secret / github_actions_token /
 # doppler_token_kb_drift variables were deleted. See plan

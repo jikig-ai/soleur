@@ -14,12 +14,17 @@
 # A bare dollar-var ($n_total, $i) is left literal by terraform templatefile() — only a
 # dollar-brace interpolates. `$${VAR}` renders a literal shell dollar-brace VAR.
 package_update: true
+# docker.io runs the bootstrap OCI extract + login (arm64-native; RUN-only host). nftables scopes the
+# :8288/:8289 control API (SEC-H2). jq parses `doppler secrets --only-names --json` for the boot isolation
+# self-check. cryptsetup is #7695 guest-side LUKS-at-rest for /mnt/data (the Redis AOF store). stunnel4 is
+# the #10136 TLS terminator for the :8288 link.
 packages:
-  - docker.io # runs the bootstrap OCI extract + login (arm64-native; RUN-only host)
-  - nftables # host-local :8288/:8289 control-API scoping (SEC-H2)
+  - docker.io
+  - nftables
   - curl
-  - jq # parse `doppler secrets --only-names --json` for the boot isolation self-check
-  - cryptsetup # #7695 guest-side LUKS-at-rest for /mnt/data (the Redis AOF store)
+  - jq
+  - cryptsetup
+  - stunnel4
 
 groups:
   - docker
@@ -78,6 +83,8 @@ write_files:
       # re-run within a boot.
       nft -f - <<'NFTEOF'
       table inet soleur_inngest {
+        counter legacy_8288 { }
+        counter tls_8443 { }
         chain input {
           type filter hook input priority -10; policy accept;
           iif "lo" accept
@@ -85,8 +92,12 @@ write_files:
           # unlisted means policy-accept (reachable intra-subnet), not blocked; and
           # adding them to the {8288,8289} drop set would cut Connect traffic from
           # the web hosts. Scoping decision tracked in the #7463 follow-through.
+          tcp dport 8288 ip saddr { ${web_host_private_ips} } counter name "legacy_8288"
           tcp dport { 8288, 8289 } ip saddr { ${web_host_private_ips} } accept
           tcp dport { 8288, 8289 } drop
+          tcp dport 8443 ip saddr { ${web_host_private_ips} } counter name "tls_8443"
+          tcp dport 8443 ip saddr { ${web_host_private_ips} } accept
+          tcp dport 8443 drop
         }
       }
       NFTEOF
@@ -370,6 +381,109 @@ write_files:
       [Install]
       WantedBy=multi-user.target
     owner: root:root
+    permissions: '0644'
+
+  # --- #10136: TLS terminator for the :8288 link (rationale: inngest-tls.tf + runbook) ---
+  - path: /etc/soleur/inngest-tls.conf
+    content: |
+      foreground = yes
+      pid =
+      syslog = no
+      setuid = stunnel4
+      setgid = stunnel4
+      sslVersionMin = TLSv1.2
+      ciphers = ECDHE+AESGCM:ECDHE+CHACHA20
+      options = NO_TICKET
+      renegotiation = no
+      [inngest]
+      accept = ${inngest_private_ip}:8443
+      connect = 127.0.0.1:8288
+      cert = /run/soleur-inngest-tls/cert.pem
+      key = /run/soleur-inngest-tls/key.pem
+    permissions: '0644'
+
+  - path: /usr/local/bin/soleur-inngest-tls
+    content: |
+      #!/bin/bash
+      d=/run/soleur-inngest-tls
+      u=soleur-inngest-tls
+      if [ "$1" = fetch ]; then
+        umask 0077
+        die() { echo $1 > $d.rc; exit 1; }
+        get() { ( set -a; . /etc/default/inngest-doppler || exit 90; timeout 30 doppler secrets get $1 --project soleur-inngest --plain 2>/dev/null ) > $t/$2; }
+        chgrp stunnel4 $d && chmod 0750 $d || die 91
+        t=$(mktemp -d -p $d) || die 92
+        trap 'rm -rf $t' EXIT
+        get INNGEST_TLS_KEY k || die 93
+        get INNGEST_TLS_CERT c || die 94
+        kp=$(openssl pkey -in $t/k -pubout 2>/dev/null) && [ "$kp" = "$(openssl x509 -in $t/c -noout -pubkey 2>/dev/null)" ] || die 95
+        chown root:stunnel4 $t/k && chmod 0640 $t/k && chmod 0644 $t/c && mv $t/k $d/key.pem && mv $t/c $d/cert.pem || die 96
+        echo 0 > $d.rc
+        exit
+      fi
+      emit_refusal() {
+        logger -p user.crit -t inngest-tls-health "$1"
+      }
+      fp() { openssl x509 -noout -fingerprint -sha256 | cut -d= -f2 | tr -d : | tr A-F a-f; }
+      cn() { nft list counter inet soleur_inngest $1 | awk '/packets/{print $2}'; }
+      st=$(systemctl is-active $u)
+      nr=$(systemctl show -p NRestarts --value $u)
+      rc=$(cat $d.rc)
+      b=$(ss -ltnH 'sport = :8443' | awk '{print $4}')
+      l=0; [ "$b" ] && l=1
+      cs=$(fp 2>/dev/null < $d/cert.pem)
+      sv=$(echo | timeout 8 openssl s_client -connect ${inngest_private_ip}:8443 2>/dev/null | fp)
+      nd=$(( ($(date -d "$(openssl x509 -noout -enddate < $d/cert.pem | cut -d= -f2)" +%s) - $(date +%s)) / 86400 ))
+      ch=$(nft list chain inet soleur_inngest input)
+      /usr/local/bin/inngest-boot-phone-home.sh tls-health "unit=$st nrestarts=$nr fetch_rc=$rc bind=$b listener=$l served_sha256=$sv cert_sha256=$cs notafter_days=$nd hs_fail_15m=$(journalctl -u $u --since -15min | grep -c SSL_accept:) legacy_8288_packets=$(cn legacy_8288) tls_8443_packets=$(cn tls_8443) nft8443_sha256=$(echo "$ch" | grep 8443 | sha256sum | cut -c1-64) nft_rules=$(echo "$ch" | grep -cE '^[[:space:]]+(iif|tcp)') boot_id=$(cut -c1-8 /proc/sys/kernel/random/boot_id)"
+      r=
+      [ $l = 1 ] || r=listener_down
+      [ $nd -ge 90 ] || r="$r cert_expiring"
+      [ -z "$r" ] || emit_refusal "SOLEUR_INNGEST_TLS_REFUSED reason=$(echo $r | tr ' ' ,) unit=$st fetch_rc=$rc nrestarts=$nr notafter_days=$nd"
+    permissions: '0755'
+
+  - path: /etc/systemd/system/soleur-inngest-tls.service
+    content: |
+      [Unit]
+      Requires=inngest-nftables.service
+      After=network-online.target inngest-nftables.service
+      StartLimitIntervalSec=0
+      [Service]
+      RuntimeDirectory=soleur-inngest-tls
+      RuntimeDirectoryPreserve=restart
+      ExecStartPre=+/usr/local/bin/soleur-inngest-tls fetch
+      ExecStart=/usr/bin/stunnel4 /etc/soleur/inngest-tls.conf
+      Restart=on-failure
+      RestartSec=15
+      NoNewPrivileges=yes
+      ProtectSystem=strict
+      ProtectHome=yes
+      PrivateTmp=yes
+      PrivateDevices=yes
+      CapabilityBoundingSet=CAP_SETUID CAP_SETGID
+      RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+      SystemCallFilter=@system-service
+      MemoryDenyWriteExecute=yes
+      [Install]
+      WantedBy=multi-user.target
+    permissions: '0644'
+
+  - path: /etc/systemd/system/soleur-inngest-tls-health.service
+    content: |
+      [Unit]
+      After=inngest-bs-token-restage.service soleur-inngest-tls.service
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/soleur-inngest-tls
+    permissions: '0644'
+
+  - path: /etc/systemd/system/soleur-inngest-tls-health.timer
+    content: |
+      [Timer]
+      OnBootSec=2min
+      OnUnitActiveSec=5min
+      [Install]
+      WantedBy=timers.target
     permissions: '0644'
 
   # --- #6178 boot observability: early-boot stage-marker emitter -----------------------
@@ -1056,7 +1170,7 @@ write_files:
       set -euo pipefail
       names="$(doppler secrets --only-names --json | jq -r 'keys[]' | grep -v '^DOPPLER_' || true)"
       n_total="$(printf '%s\n' "$names" | grep -c . || true)"
-      n_inngest="$(printf '%s\n' "$names" | grep -Ec '^(INNGEST_(SIGNING_KEY|EVENT_KEY|REDIS_PASSWORD|POSTGRES_URI|CUTOVER_FLIP|DIAGNOSTIC_BOOT|CONFIG_DIGEST|REDIS_LUKS_KEY|LUKS_CUTOVER|LUKS_ACTIVE_VOLUME_ID|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)$' || true)"
+      n_inngest="$(printf '%s\n' "$names" | grep -Ec '^(INNGEST_(SIGNING_KEY|EVENT_KEY|REDIS_PASSWORD|POSTGRES_URI|CUTOVER_FLIP|DIAGNOSTIC_BOOT|CONFIG_DIGEST|REDIS_LUKS_KEY|LUKS_CUTOVER|LUKS_ACTIVE_VOLUME_ID|TLS_KEY|TLS_CERT|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)$' || true)"
       if [ "$n_total" -ne "$n_inngest" ] || [ "$n_inngest" -lt 5 ]; then
         echo "[inngest] FATAL: boot credential not isolated (sees $n_total non-DOPPLER, $n_inngest INNGEST_) — refusing to bootstrap"; exit 1
       fi
@@ -1297,7 +1411,8 @@ write_files:
       # because this host downloads the arch-matched tarball — a wrong-arch SHA would fail verify.
       VECTOR_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^VECTOR_CLI_VERSION=' | head -1 | cut -d= -f2- || true)
       set +e
-      install -m 600 /dev/null /var/log/inngest-bootstrap.log   # 0600 pre-create (secrets in the tail; see inngest-redact.sh)
+      # 0600 pre-create (secrets in the tail; see inngest-redact.sh)
+      install -m 600 /dev/null /var/log/inngest-bootstrap.log
       # #7228: DELIVER THE DIAGNOSTIC FLAG. inngest-bootstrap.sh reads INNGEST_DIAGNOSTIC_BOOT from
       # its ENV to choose the SQLite-only ExecStart, but this script is NOT wrapped in `doppler run`
       # and the explicit env list below is the only thing it inherits — so the flag never arrived and
@@ -2574,16 +2689,15 @@ runcmd:
   - |
     set +e
     set -a; . /etc/default/inngest-doppler; set +a
-    # #6178 diag: capture WHY doppler reads fail on the host (works off-host w/ same token+env).
-    # Probe api.doppler.com reachability (DNS/connect/http) + the doppler CLI's own stderr.
-    api_probe="$(curl -sS -o /dev/null -w 'http=%%{http_code};ip=%%{remote_ip};dns=%%{time_namelookup}s;conn=%%{time_connect}s;curlrc=%%{exitcode}' --max-time 12 https://api.doppler.com/v3/me 2>&1 | head -c 160)"
+    # #6178 diag: capture WHY doppler reads fail on the host: the CLI own stderr (derr) carries the DNS/dial/auth
+    # error. #10136: the separate api.doppler.com curl probe was dropped to keep user_data under the Hetzner cap.
     derr="$(doppler secrets get BETTERSTACK_LOGS_TOKEN --project soleur-inngest --config ${inngest_doppler_config} --plain 2>&1 1>/tmp/bstok)"; drc=$?
     t="$(cat /tmp/bstok 2>/dev/null)"; rm -f /tmp/bstok
     if [ -n "$t" ]; then
       printf '%s' "$t" > /run/inngest-bs-logs-token; chmod 600 /run/inngest-bs-logs-token 2>/dev/null
-      /usr/local/bin/inngest-boot-phone-home.sh doppler-token-fetched "arch=${inngest_cli_arch} apiprobe=[$api_probe]"
+      /usr/local/bin/inngest-boot-phone-home.sh doppler-token-fetched "arch=${inngest_cli_arch}"
     else
-      /usr/local/bin/inngest-boot-phone-home.sh doppler-token-fetch-FAILED "drc=$drc apiprobe=[$api_probe] derr=[$(printf %s "$derr" | head -c 200)]"
+      /usr/local/bin/inngest-boot-phone-home.sh doppler-token-fetch-FAILED "drc=$drc derr=[$(printf %s "$derr" | head -c 200)]"
     fi
 
   # --- #7228: arm the per-boot re-stage so the block above stops being a one-shot ---------
@@ -2693,6 +2807,14 @@ runcmd:
   # attempt (the NIC wait itself deliberately stays here: per-attempt private_nic_* events would
   # re-page web_private_nic_boot_gate). The address is the Terraform-bound local, not a literal.
   - /usr/local/bin/soleur-inngest-nic-wait ${inngest_private_ip} || true
+
+  # #10136: arm the TLS listener and its health timer after the NIC wait (it binds the private address).
+  - systemctl daemon-reload
+  - |
+    set +e
+    for u in soleur-inngest-tls.service soleur-inngest-tls-health.timer; do
+      systemctl enable --now $u || /usr/local/bin/inngest-boot-phone-home.sh tls-enable-FAILED "unit=$u rc=$(cat /run/soleur-inngest-tls.rc 2>&1)"
+    done
 
   # #6178: ensure the deploy user+group exist BEFORE the bootstrap chowns /var/lib/inngest to
   # deploy:deploy. The cloud-config `users:` block above did NOT create deploy on this host (the

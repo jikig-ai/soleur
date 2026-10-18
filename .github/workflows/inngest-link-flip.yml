@@ -1,0 +1,87 @@
+# Flip (or roll back) the web -> Inngest scheduler link between plaintext http://10.0.1.40:8288 and verified
+# TLS https://10.0.1.40:8443 (#10136, ADR-292 provisional ordinal; runbook inngest-server.md "Link TLS").
+#
+# DISPATCH-ONLY, and a production act: the owner's recorded go names the PR build, not this flag write (plan
+# Production Actions A3), so `flip` needs its own dated go and the typo-guard below. `off` is the rollback and needs
+# none. The orchestration body is scripts/inngest-link-flip.sh (unit-tested with stubbed gh/curl by
+# apps/web-platform/infra/inngest-link-flip-workflow.test.sh); this file is the thin, least-privilege shell around it.
+#
+# WHY THE FLAG IS NOT WRITTEN HERE. This workflow holds no Doppler token and no Terraform credential. It dispatches
+# the Tier-B `inngest_link_flag` job of apply-web-platform-infra.yml (environment infra-privileged, ADR-241 D8), which
+# writes the prd_terraform source key and applies doppler_secret.inngest_link_tls, and then redeploys the RUNNING web
+# image through the signed deploy webhook so ci-deploy.sh's resolver re-reads the flag.
+#
+# THE 30-MINUTE LEASE IS THE CONTROL. `flip` first applies `pending:<epoch>`; the resolver honours it only until
+# epoch + 30 min, then resolves http plus an event. If this run is cancelled or fails, the `revert` step below applies
+# the flag-absent baseline and redeploys, but it is BEST EFFORT: if the Tier-B job ever blocks on an environment
+# reviewer nobody is there to approve, the lease still bounds the exposure.
+name: Inngest Link Flip
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "flip = pending lease, canary-then-prod redeploy, verify, then flag 1. off = remove the flag and redeploy on http (rollback)."
+        required: true
+        type: choice
+        options:
+          - flip
+          - "off"
+      confirm:
+        description: "For action=flip only: type FLIP-INNGEST-LINK. A typo-guard, NOT the authorization (that is the owner's dated go on #10136)."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  # gh workflow run / gh run list / gh run watch for the Tier-B flag job. No other scope.
+  actions: write
+
+# One flip at a time, never cancelled mid-flight (cancelling a half-applied flag is the worse state). The Tier-B job
+# and the deploy serialize on their own groups (terraform-apply-web-platform-host; ci-deploy.sh's flock).
+concurrency:
+  group: inngest-link-flip
+  cancel-in-progress: false
+
+jobs:
+  flip:
+    runs-on: ubuntu-24.04
+    # Worst case: flag apply (<=10 min to appear + 25 min), redeploy (<=60 min), verify, flag apply again (<=35 min).
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Typo-guard
+        env:
+          ACTION: ${{ inputs.action }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          # Inputs are compared as data (env:), never interpolated into the shell.
+          case "$ACTION" in
+            flip) [[ "$CONFIRM" == "FLIP-INNGEST-LINK" ]] || { echo "::error::action=flip needs confirm=FLIP-INNGEST-LINK (a typo-guard; the authorization is the owner's dated go)."; exit 1; } ;;
+            off) ;;
+            *) echo "::error::action must be flip or off."; exit 1 ;;
+          esac
+
+      - name: Run the flip
+        env:
+          ACTION: ${{ inputs.action }}
+          GH_TOKEN: ${{ github.token }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: bash scripts/inngest-link-flip.sh "$ACTION"
+
+      # Best effort, and only after a failure or a cancel. Applies the flag-absent baseline and redeploys; see the header.
+      - name: Revert to http (best effort)
+        if: failure() || cancelled()
+        timeout-minutes: 45
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: bash scripts/inngest-link-flip.sh revert

@@ -92,7 +92,7 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // Exact again: grep -cE '^\s*test\(' = 276.
 // 276 -> 279 (#10166, +3): the d6 rotate marker / flip gate wiring describe (real-tree pins, twelve-mutant battery, the executed gate block). The 2 rows of slack were already there (declared 278 vs floor 276 on main).
 // 279 -> 286 (#10175, +7): the rotate's store-never-written gate describe (real-tree pins, the wiring mutation battery, the no-other-flag-writer scan, the flag-seam credential enumeration, the census pin, and the two executed-step tests). The 2 rows of slack above are unchanged (declared 288).
-const TEST_FLOOR = 286;
+const TEST_FLOOR = 296;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -1207,12 +1207,16 @@ function stripDispatchJobs(workflowText: string): string {
   // rather than merely uniform: ALL EIGHTEEN of its -targets are
   // OPERATOR_APPLIED_EXCLUSIONS (ADR-103), so folding them into `allTargets` would assert
   // per-merge coverage for a fan-out the per-merge apply deliberately never touches.
+  // inngest_link_flag (#10136, CTO G1): the Tier-B flag actuator. Its ONE -target is
+  // doppler_secret.inngest_link_tls, an OPERATOR_APPLIED_EXCLUSION on purpose: a merge must never flip the
+  // production Inngest URL. Stripped so the dispatch job's target cannot masquerade as per-merge coverage
+  // (the per-merge list is asserted below NOT to contain it).
   //
   // NOTE for whoever edits this function next: the guard above extracts EVERY
   // "[a-z0-9_]+" string literal in this body and requires each to name a real top-level
   // job. Adding any other lowercase quoted literal here — even in a helper call — makes
   // that guard treat it as a job name and go red. Comments are fine; literals are not.
-  return stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(workflowText, "inngest_host"), "registry_host_replace"), "registry_region_migrate"), "registry_luks_recut"), "git_data_host_replace"), "workspaces_luks_recut"), "web_host_create"), "web_host_replace"), "git_data_host_create");
+  return stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(workflowText, "inngest_host"), "registry_host_replace"), "registry_region_migrate"), "registry_luks_recut"), "git_data_host_replace"), "workspaces_luks_recut"), "web_host_create"), "web_host_replace"), "git_data_host_create"), "inngest_link_flag");
 }
 
 /** Inverse of stripJob: return ONLY the named job's block (header → next job/EOF). */
@@ -1515,6 +1519,11 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // CI-published token type. (`github_repository_environment.inngest_config_signing`, by contrast, IS host-
   // independent and carries a normal -target — see apply-web-platform-infra.yml.)
   "doppler_secret.inngest_config_digest",
+  // #10136 (CTO G1) - the Inngest link flag: count-gated on var.inngest_link_tls, written and applied ONLY by
+  // the Tier-B `inngest_link_flag` dispatch job (stripped from the per-merge view in stripDispatchJobs).
+  // A merge must never change the URL the web tier dials. Its five siblings in inngest-tls.tf (the key, the
+  // cert and the three Doppler copies) ARE per-merge targeted.
+  "doppler_secret.inngest_link_tls",
   "doppler_service_token.inngest",
   // #6545 — Grok Build dogfood host (headless Grok 4.5 trial). Gated by
   // `enable_grok_dogfood` (default false). Per-PR CI cannot birth this host
@@ -8253,6 +8262,260 @@ echo "gh stub refused: $*" >&2; exit 64`;
       for (const val of [...Object.values(st.env ?? {}), ...Object.values(st.with ?? {})]) for (const m of String(val).matchAll(/secrets\.([A-Z0-9_]+)/g)) secrets.add(m[1]);
     }
     expect([...secrets].sort()).toEqual(["DOPPLER_TOKEN", "DOPPLER_TOKEN_INFRA_PRIVILEGED", "GITHUB_TOKEN"]);
+  });
+});
+
+// ─── #10136: Inngest link TLS (inngest-tls.tf), the merge -target additions and the Tier-B flag actuator ───
+//
+// WHAT THIS PINS, in the order a reviewer would ask:
+//   1. the five key-material addresses exist with the attributes the trust model depends on (non-CA leaf,
+//      private-IP SAN only, no early renewal, prevent_destroy on key and cert);
+//   2. the merge apply creates exactly those five, in the saved-plan command, and NOT the flag;
+//   3. the dependency closure of those five contains no hcloud_server (the merge apply cannot replace the
+//      scheduler), and nothing else in the root references them (a templatefile variable that did would put
+//      the cert into hcloud_server.inngest's user_data and into the inngest-host-replace closure);
+//   4. the flag resource is count-gated, outside the per-merge view, and reachable from exactly ONE job;
+//   5. that job writes the source key BEFORE it plans, applies only the flag, and its plan gate rejects
+//      every other shape (the gate's jq is executed here, not just grepped).
+const TLS_FIVE = [
+  "tls_private_key.inngest_link",
+  "tls_self_signed_cert.inngest_link",
+  "doppler_secret.inngest_tls_key",
+  "doppler_secret.inngest_tls_cert",
+  "doppler_secret.inngest_tls_ca",
+];
+const TLS_FLAG = "doppler_secret.inngest_link_tls";
+
+/** Body of the first top-level block whose header matches, brace-matched; "" when absent (so a rename reds the row). */
+function tlsBlock(text: string, header: RegExp): string {
+  const m = header.exec(text);
+  if (!m) return "";
+  let depth = 0;
+  for (let i = text.indexOf("{", m.index); i < text.length; i++) {
+    if (text[i] === "{") depth++;
+    else if (text[i] === "}" && --depth === 0) return text.slice(m.index, i + 1);
+  }
+  return "";
+}
+
+/**
+ * Transitive DEPENDENCY closure of `roots` over a {file: comment-stripped HCL} map. `-target` pulls in what an
+ * address depends on (never its dependents), so this is the set the merge plan can touch on account of the roots.
+ * Edges: any `<type>.<name>` token naming a declared resource, and `local.X` (followed into the locals blocks).
+ * `var.`/`data.` edges end the walk (a variable has no resource behind it). Deliberately simple; the mutation in
+ * the test proves it sees a server reference.
+ */
+function tlsDependencyClosure(files: Record<string, string>, roots: string[]): Set<string> {
+  const resources = new Map<string, string>();
+  const locals = new Map<string, string>();
+  for (const text of Object.values(files)) {
+    for (const m of text.matchAll(/(?:^|\n)\s*resource\s+"([a-z0-9_]+)"\s+"([A-Za-z0-9_]+)"\s*\{/g)) {
+      resources.set(`${m[1]}.${m[2]}`, tlsBlock(text.slice(m.index!), /^\s*resource\s+"[a-z0-9_]+"\s+"[A-Za-z0-9_]+"\s*\{/));
+    }
+    for (const lb of text.matchAll(/(?:^|\n)\s*locals\s*\{/g)) {
+      const body = tlsBlock(text.slice(lb.index!), /^\s*locals\s*\{/);
+      for (const part of body.split(/\n(?=\s{2}[a-z0-9_]+\s*=)/)) {
+        const nm = /^\s*([a-z0-9_]+)\s*=/.exec(part);
+        if (nm) locals.set(nm[1], part);
+      }
+    }
+  }
+  const refsOf = (body: string): string[] =>
+    [...body.matchAll(/\b([a-z][a-z0-9_]*\.[A-Za-z0-9_]+)\b/g)].map((m) => m[1]).filter((a) => resources.has(a));
+  const seen = new Set<string>();
+  const queue = [...roots];
+  while (queue.length > 0) {
+    const addr = queue.pop()!;
+    if (seen.has(addr)) continue;
+    seen.add(addr);
+    const body = resources.get(addr) ?? "";
+    queue.push(...refsOf(body).filter((a) => !seen.has(a)));
+    const localQueue = [...body.matchAll(/\blocal\.([a-z0-9_]+)/g)].map((m) => m[1]);
+    const seenLocals = new Set<string>();
+    while (localQueue.length > 0) {
+      const ln = localQueue.pop()!;
+      if (seenLocals.has(ln)) continue;
+      seenLocals.add(ln);
+      const lbody = locals.get(ln) ?? "";
+      queue.push(...refsOf(lbody).filter((a) => !seen.has(a)));
+      localQueue.push(...[...lbody.matchAll(/\blocal\.([a-z0-9_]+)/g)].map((m) => m[1]));
+    }
+  }
+  return seen;
+}
+
+describe("#10136 inngest link TLS: key material, merge targets, flag actuator", () => {
+  const infraFile = (n: string): string => stripComments(readFileSync(join(INFRA_DIR, n), "utf8"));
+  const tlsTf = infraFile("inngest-tls.tf");
+  const allInfra = (): Record<string, string> =>
+    Object.fromEntries(listInfraTfFiles().map((f) => [f, stripComments(readFileSync(f, "utf8"))]));
+  const wfText = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const res = (type: string, name: string): string =>
+    tlsBlock(tlsTf, new RegExp(`^\\s*resource\\s+"${type}"\\s+"${name}"\\s*\\{`, "m"));
+  const flagJob = extractJobBlock(wfText, "inngest_link_flag");
+
+  test("the key and the cert: ECDSA P256, 10 y, private-IP SAN only, non-CA, no early renewal, prevent_destroy on both", () => {
+    const key = res("tls_private_key", "inngest_link");
+    expect(key).toMatch(/^\s*algorithm\s*=\s*"ECDSA"\s*$/m);
+    expect(key).toMatch(/^\s*ecdsa_curve\s*=\s*"P256"\s*$/m);
+    expect(key).toMatch(/prevent_destroy\s*=\s*true/);
+    const cert = res("tls_self_signed_cert", "inngest_link");
+    expect(cert).toMatch(/^\s*private_key_pem\s*=\s*tls_private_key\.inngest_link\.private_key_pem\s*$/m);
+    expect(cert).toMatch(/^\s*validity_period_hours\s*=\s*87600\s*$/m);
+    expect(cert).toMatch(/^\s*ip_addresses\s*=\s*\[local\.inngest_private_ip\]\s*$/m);
+    expect(cert).toMatch(/^\s*is_ca_certificate\s*=\s*false\s*$/m);
+    expect(cert).toMatch(/^\s*"server_auth",?\s*$/m);
+    expect(cert).toMatch(/prevent_destroy\s*=\s*true/);
+    // The trust model: the cert must not be able to issue, must name no DNS identity, and must not renew into a
+    // replace that prevent_destroy then blocks on every later merge apply.
+    expect(cert).not.toMatch(/early_renewal_hours/);
+    expect(cert).not.toMatch(/dns_names/);
+    expect(cert).not.toMatch(/is_ca_certificate\s*=\s*true/);
+    expect(cert).not.toMatch(/"cert_signing"|"crl_signing"/);
+  });
+
+  test("the three Doppler copies: key and cert in the host's isolated project, the base64 CA in soleur/prd; all masked", () => {
+    for (const [name, secret] of [["inngest_tls_key", "INNGEST_TLS_KEY"], ["inngest_tls_cert", "INNGEST_TLS_CERT"]]) {
+      const b = res("doppler_secret", name);
+      expect(b, `${name} missing`).not.toBe("");
+      expect(b).toMatch(/^\s*project\s*=\s*doppler_project\.inngest\.name\s*$/m);
+      expect(b).toMatch(/^\s*config\s*=\s*doppler_environment\.inngest_prd\.slug\s*$/m);
+      expect(b).toMatch(new RegExp(`^\\s*name\\s*=\\s*"${secret}"\\s*$`, "m"));
+      expect(b).toMatch(/^\s*visibility\s*=\s*"masked"\s*$/m);
+      expect(b).not.toMatch(/ignore_changes|count\s*=/);
+    }
+    expect(res("doppler_secret", "inngest_tls_key")).toMatch(/^\s*value\s*=\s*tls_private_key\.inngest_link\.private_key_pem\s*$/m);
+    expect(res("doppler_secret", "inngest_tls_cert")).toMatch(/^\s*value\s*=\s*tls_self_signed_cert\.inngest_link\.cert_pem\s*$/m);
+    const ca = res("doppler_secret", "inngest_tls_ca");
+    expect(ca).toMatch(/^\s*project\s*=\s*"soleur"\s*$/m);
+    expect(ca).toMatch(/^\s*config\s*=\s*"prd"\s*$/m);
+    expect(ca).toMatch(/^\s*name\s*=\s*"INNGEST_TLS_CA"\s*$/m);
+    expect(ca).toMatch(/^\s*value\s*=\s*base64encode\(tls_self_signed_cert\.inngest_link\.cert_pem\)\s*$/m);
+    expect(ca).toMatch(/^\s*visibility\s*=\s*"masked"\s*$/m);
+  });
+
+  test("the merge apply creates the five key-material addresses, between the last inngest target and supabase_project.prd, and NOT the flag", () => {
+    const saved = commandIn(stripComments(extractJobBlock(wfText, "apply")), /^\s*terraform plan\b.*-out=tfplan/);
+    const order = [...saved.matchAll(/-target=(\S+)/g)].map((m) => m[1].replace(/\\$/, ""));
+    for (const a of TLS_FIVE) expect(order, `${a} not in the saved-plan command`).toContain(a);
+    const iLast = order.indexOf("doppler_secret.inngest_redis_luks_key");
+    expect(iLast).toBeGreaterThan(-1);
+    expect(order.slice(iLast + 1, iLast + 6)).toEqual(TLS_FIVE);
+    expect(order[iLast + 6]).toBe("supabase_project.prd");
+    expect(order).not.toContain(TLS_FLAG);
+    const perMerge = extractAllTargets(stripDispatchJobs(wfText));
+    expect(TLS_FIVE.filter((a) => !perMerge.has(a))).toEqual([]);
+    expect(perMerge.has(TLS_FLAG)).toBe(false);
+    // Non-vacuity: the unstripped file DOES see the flag (the flip job targets it), so the strip is load-bearing.
+    expect(extractAllTargets(wfText).has(TLS_FLAG)).toBe(true);
+  });
+
+  test("no hcloud_server is in the dependency closure of the five merge targets (the merge apply cannot replace the scheduler)", () => {
+    const closure = tlsDependencyClosure(allInfra(), TLS_FIVE);
+    expect([...closure].filter((a) => a.startsWith("hcloud_"))).toEqual([]);
+    // Non-vacuity: the walk reached the Doppler parents the secrets reference ...
+    expect(closure.has("doppler_project.inngest")).toBe(true);
+    expect(closure.has("doppler_environment.inngest_prd")).toBe(true);
+    // ... and it sees a server when one is there: the host's own closure contains it, and a mutated copy of the
+    // cert that reads the host through its address reaches it.
+    expect(tlsDependencyClosure(allInfra(), ["hcloud_server_network.inngest"]).has("hcloud_server.inngest")).toBe(true);
+    const mutated = allInfra();
+    const f = Object.keys(mutated).find((k) => k.endsWith("inngest-tls.tf"))!;
+    const before = mutated[f];
+    mutated[f] = before.replace(/ip_addresses\s*=\s*\[local\.inngest_private_ip\]/, "ip_addresses = [hcloud_server.inngest.ipv4_address]");
+    expect(mutated[f]).not.toBe(before);
+    expect(tlsDependencyClosure(mutated, TLS_FIVE).has("hcloud_server.inngest")).toBe(true);
+  });
+
+  test("nothing outside inngest-tls.tf references the key material, so no templatefile variable can pull it into the host's user_data", () => {
+    const REF = /tls_private_key\.inngest_link|tls_self_signed_cert\.inngest_link|doppler_secret\.inngest_tls_(?:key|cert|ca)|doppler_secret\.inngest_link_tls|var\.inngest_link_tls/;
+    const offenders = Object.entries(allInfra())
+      .filter(([f]) => !f.endsWith("inngest-tls.tf") && !f.endsWith("variables.tf"))
+      .filter(([, text]) => REF.test(text))
+      .map(([f]) => f);
+    expect(offenders).toEqual([]);
+    const host = infraFile("inngest-host.tf");
+    expect(host).toContain("templatefile("); // non-vacuity: the file under test is the host's
+    const call = host.slice(host.indexOf("templatefile("), host.indexOf("local.inngest_rationale_strip"));
+    expect(call.length).toBeGreaterThan(500);
+    expect(call).not.toMatch(/\btls_|inngest_tls|inngest_link/);
+    // The tripwire itself fires on a synthetic reference.
+    expect(REF.test("x = tls_self_signed_cert.inngest_link.cert_pem")).toBe(true);
+  });
+
+  test("the flag is count-gated on an empty default, validated to the resolver's allowlist, and unreachable from the per-merge list", () => {
+    const flag = res("doppler_secret", "inngest_link_tls");
+    expect(flag).toMatch(/^\s*count\s*=\s*var\.inngest_link_tls\s*==\s*""\s*\?\s*0\s*:\s*1\s*$/m);
+    expect(flag).toMatch(/^\s*project\s*=\s*"soleur"\s*$/m);
+    expect(flag).toMatch(/^\s*config\s*=\s*"prd"\s*$/m);
+    expect(flag).toMatch(/^\s*name\s*=\s*"INNGEST_LINK_TLS"\s*$/m);
+    expect(flag).toMatch(/^\s*value\s*=\s*var\.inngest_link_tls\s*$/m);
+    const v = tlsBlock(infraFile("variables.tf"), /^variable\s+"inngest_link_tls"\s*\{/m);
+    expect(v).toMatch(/^\s*type\s*=\s*string\s*$/m);
+    expect(v).toMatch(/^\s*default\s*=\s*""\s*$/m);
+    expect(v).not.toMatch(/sensitive\s*=\s*true/);
+    expect(v).toContain('"^(1|pending:[0-9]{1,10})?$"');
+    expect(OPERATOR_APPLIED_EXCLUSIONS.has(TLS_FLAG)).toBe(true);
+    // Every workflow: exactly one job targets the flag, and it is the Tier-B actuator.
+    const sites: string[] = [];
+    for (const f of readdirSync(resolve(REPO_ROOT, ".github/workflows")).filter((n) => /\.ya?ml$/.test(n))) {
+      const text = readFileSync(resolve(REPO_ROOT, ".github/workflows", f), "utf8");
+      for (const [job, body] of g2Jobs(text)) {
+        if (new RegExp(`-target[= ]['"]?${g2Esc(TLS_FLAG)}\\b`).test(stripShellLineComments(body))) sites.push(`${f}|${job}`);
+      }
+    }
+    expect(sites).toEqual(["apply-web-platform-infra.yml|inngest_link_flag"]);
+  });
+
+  test("the flag job: Tier-B environment, dispatch-gated on its own option, writes the source key BEFORE it plans, applies only the flag", () => {
+    expect(flagJob).not.toBe("");
+    expect(flagJob).toMatch(/^\s+environment:\s*infra-privileged\s*$/m);
+    expect(flagJob).toContain("if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'inngest-link-flag'");
+    expect(Number(/timeout-minutes:\s*(\d+)/.exec(flagJob)?.[1])).toBeLessThanOrEqual(15);
+    expect(flagJob).toContain("uses: ./.github/actions/infra-credentials");
+    const code = stripShellLineComments(flagJob);
+    const iSet = code.indexOf("doppler secrets set INNGEST_LINK_TLS");
+    const iDel = code.indexOf("doppler secrets delete INNGEST_LINK_TLS");
+    const iPlan = code.indexOf("terraform plan");
+    const iApply = code.indexOf("terraform apply");
+    expect(iSet).toBeGreaterThan(-1);
+    expect(iDel).toBeGreaterThan(-1);
+    expect(Math.max(iSet, iDel)).toBeLessThan(iPlan);
+    expect(iPlan).toBeLessThan(iApply);
+    expect([...extractAllTargets(flagJob)]).toEqual([TLS_FLAG]);
+    // Every `doppler run` in the job keeps the Tier-B precedence (ADR-241 D6).
+    const runs = code.split("\n").filter((l) => /doppler run\b/.test(l));
+    expect(runs.length).toBe(2);
+    expect(runs.filter((l) => !l.includes("--preserve-env"))).toEqual([]);
+    expect(code).toContain("secrets.DOPPLER_TOKEN_WRITE");
+    // The option and the input exist; the new job is stripped from the per-merge view.
+    const opts = /apply_target:[\s\S]*?options:([\s\S]*?)\n\nconcurrency:/.exec(wfText)![1];
+    expect(opts).toMatch(/^\s*-\s+inngest-link-flag\s*$/m);
+    const doc = parseYaml(wfText) as { on: { workflow_dispatch: { inputs: Record<string, unknown> } } };
+    const inputs = Object.keys(doc.on.workflow_dispatch.inputs);
+    expect(inputs).toContain("inngest_link_value");
+    expect(inputs.length).toBeLessThanOrEqual(25);
+    expect(extractJobBlock(stripDispatchJobs(wfText), "inngest_link_flag")).toBe("");
+  });
+
+  test("the flag job's blast-radius gate (jq, executed): the flag address only, the right action per value", () => {
+    const m = /jq -e --arg v "\$LINK_VALUE" '([\s\S]*?)' >\/dev\/null/.exec(flagJob);
+    expect(m, "the gate's jq program was not found in the job").not.toBeNull();
+    const run = (value: string, changes: Array<[string, string[]]>): number => {
+      const plan = JSON.stringify({ resource_changes: changes.map(([address, actions]) => ({ address, change: { actions } })) });
+      return spawnSync("jq", ["-e", "--arg", "v", value, m![1]], { input: plan }).status ?? -1;
+    };
+    const F = "doppler_secret.inngest_link_tls[0]";
+    expect(run("1", [[F, ["create"]]])).toBe(0);
+    expect(run("pending:1700000000", [[F, ["update"]]])).toBe(0);
+    expect(run("off", [[F, ["delete"]]])).toBe(0);
+    expect(run("1", [[F, ["no-op"]]])).toBe(0); // already applied: nothing to do is not an error
+    expect(run("off", [[F, ["create"]]])).not.toBe(0); // `off` must never create
+    expect(run("1", [[F, ["delete"]]])).not.toBe(0); // a value must never delete
+    expect(run("1", [[F, ["create"]], ["hcloud_server.inngest", ["update"]]])).not.toBe(0);
+    expect(run("1", [[F, ["create"]], ["doppler_secret.inngest_tls_ca", ["update"]]])).not.toBe(0);
+    expect(run("1", [["doppler_secret.inngest_link_tls_other[0]", ["create"]]])).not.toBe(0);
+    expect(run("1", [[F, ["create", "delete"]]])).not.toBe(0); // a replace is not a create
   });
 });
 

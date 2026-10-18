@@ -803,6 +803,250 @@ _D1_NEUTERED="$( d1_violations() { return 0; }; fails=0; fail() { fails=$((fails
   printf '%s' "$fails" )"
 [[ "$_D1_NEUTERED" == 1 ]] && pass || fail "D1-H2 a neutered d1_violations did not fail the RED row (fails=${_D1_NEUTERED}) — the RED rows are vacuous"
 
+# 12. (#10136) TLS terminator for the :8288 link: stunnel4 on ${inngest_private_ip}:8443 forwarding to
+#     127.0.0.1:8288, a counted legacy listener, a 5-minute `tls-health` emitter, and the two new
+#     boot-isolation names. Template rationale lives in inngest-tls.tf and the runbook; this block
+#     pins the SHAPE (static) and the BEHAVIOUR of the two host scripts (extracted, path-rewritten,
+#     run against stubs).
+tls_entry() { # <write_files path> -> the entry's content block, de-indented, template tokens resolved
+  awk -v p="  - path: $1" '
+    $0 == p { f = 1; next }
+    f && /^  - path: / { exit }
+    f && /^    content: \|/ { c = 1; next }
+    f && c && /^    (owner|permissions):/ { exit }
+    f && c { sub(/^      /, ""); print }
+  ' "$CLOUD_INIT" | sed -e 's/\${inngest_private_ip}/10.0.1.40/g' -e 's/\$\${/${/g'
+}
+ln_of() { grep -nxF -- "$1" "$CLOUD_INIT" | head -n 1 | cut -d: -f1; }
+
+# 12a. nft: named counters, counting rules BEFORE their accepts, the 8443 accept/drop pair, and the
+#      pre-existing 8288/8289 accept + drop lines BYTE-IDENTICAL (other suites and the #10405 chain
+#      fingerprint read them).
+NFT_IND="          "
+L_ACC="$(ln_of "${NFT_IND}tcp dport { 8288, 8289 } ip saddr { \${web_host_private_ips} } accept")"
+L_DROP="$(ln_of "${NFT_IND}tcp dport { 8288, 8289 } drop")"
+L_LEG="$(ln_of "${NFT_IND}tcp dport 8288 ip saddr { \${web_host_private_ips} } counter name \"legacy_8288\"")"
+L_TC="$(ln_of "${NFT_IND}tcp dport 8443 ip saddr { \${web_host_private_ips} } counter name \"tls_8443\"")"
+L_TA="$(ln_of "${NFT_IND}tcp dport 8443 ip saddr { \${web_host_private_ips} } accept")"
+L_TD="$(ln_of "${NFT_IND}tcp dport 8443 drop")"
+L_C1="$(ln_of "        counter legacy_8288 { }")"
+L_C2="$(ln_of "        counter tls_8443 { }")"
+L_TBL="$(ln_of "      table inet soleur_inngest {")"
+L_CHN="$(ln_of "        chain input {")"
+[[ -n "$L_ACC" && -n "$L_DROP" ]] && pass || fail "the existing 8288/8289 accept and drop lines must stay byte-identical (accept='${L_ACC:-}' drop='${L_DROP:-}')"
+[[ -n "$L_LEG" && -n "$L_ACC" && "$L_LEG" -lt "$L_ACC" ]] && pass || fail "the verdict-less legacy_8288 counting rule must sit BEFORE the 8288 accept (first match wins)"
+[[ -n "$L_TC" && -n "$L_TA" && -n "$L_TD" && "$L_TC" -lt "$L_TA" && "$L_TA" -lt "$L_TD" ]] && pass || fail "8443 order must be: tls_8443 counting rule, source-scoped accept, then drop"
+[[ -n "$L_ACC" && -n "$L_DROP" && -n "$L_TA" && "$L_ACC" -lt "$L_DROP" && "$L_DROP" -lt "$L_TC" ]] && pass || fail "the 8443 block must follow the unchanged 8288/8289 accept+drop pair"
+[[ -n "$L_C1" && -n "$L_C2" && -n "$L_TBL" && -n "$L_CHN" && "$L_TBL" -lt "$L_C1" && "$L_C1" -lt "$L_CHN" && "$L_TBL" -lt "$L_C2" && "$L_C2" -lt "$L_CHN" ]] && pass || fail "both named counter objects must be declared inside table inet soleur_inngest before the chain"
+# The rendered chain text must not carry inline packet counts (an inline counter would change the
+# chain listing on every read and break any fingerprint over it): rules use named counters only.
+if sed -n "${L_CHN:-1},\$p" "$CLOUD_INIT" | grep -E '^ +tcp dport' | grep -E 'counter( packets| [^n])' >/dev/null; then
+  fail "no inline 'counter' (anonymous) in the chain; named counter objects only"
+else
+  pass
+fi
+
+TLS_T="$(mktemp -d)"
+NFT_BODY="$(awk '/nft -f - <<.NFTEOF.$/ { f = 1; next } /^      NFTEOF$/ { f = 0 } f { sub(/^      /, ""); print }' "$CLOUD_INIT" | sed 's/\${web_host_private_ips}/10.0.1.10,10.0.1.11/')"
+printf '%s\n' "$NFT_BODY" > "$TLS_T/nft.conf"
+if command -v nft >/dev/null 2>&1 && unshare -rn true 2>/dev/null; then
+  if unshare -rn nft -c -f "$TLS_T/nft.conf" 2>"$TLS_T/nft.err"; then pass; else fail "nft -c -f rejects the extracted ruleset: $(head -c 300 "$TLS_T/nft.err")"; fi
+else
+  echo "SKIP: nft -c syntax check needs nft and unprivileged user namespaces"
+fi
+
+# 12b. Isolation: INNGEST_TLS_KEY / INNGEST_TLS_CERT are admitted (Terraform mints both into
+#      soleur-inngest/prd at merge; an unadmitted name boot-bricks the next re-provision), the floor
+#      stays 5, and neither a bare nor a suffixed look-alike is.
+[[ "$(isolation_decision "${DARK5[@]}" INNGEST_TLS_KEY INNGEST_TLS_CERT)" == PASS ]] && pass || fail "DARK5 + INNGEST_TLS_KEY + INNGEST_TLS_CERT must PASS — the TLS key and cert are minted into soleur-inngest/prd (#10136)"
+[[ "$(isolation_decision "${LIVE7[@]}" INNGEST_CONFIG_DIGEST INNGEST_REDIS_LUKS_KEY INNGEST_LUKS_CUTOVER INNGEST_LUKS_ACTIVE_VOLUME_ID INNGEST_TLS_KEY INNGEST_TLS_CERT)" == PASS ]] && pass || fail "the full 13-name set incl. the TLS pair must PASS"
+[[ "$(isolation_decision "${DARK5[@]}" INNGEST_TLS_KEY)" == PASS ]] && pass || fail "INNGEST_TLS_KEY alone must PASS (the pair is written by one apply but each name stands alone)"
+[[ "$(isolation_decision "${DARK5[@]}" TLS_KEY)" == FATAL ]] && pass || fail "a BARE TLS_KEY (no INNGEST_ prefix) must FATAL — the member is nested inside the INNGEST_ group"
+[[ "$(isolation_decision "${DARK5[@]}" TLS_CERT)" == FATAL ]] && pass || fail "a BARE TLS_CERT (no INNGEST_ prefix) must FATAL — the member is nested inside the INNGEST_ group"
+[[ "$(isolation_decision "${DARK5[@]}" INNGEST_TLS_KEY_EXTRA)" == FATAL ]] && pass || fail "INNGEST_TLS_KEY_EXTRA must FATAL — the alternation is anchored, a suffixed look-alike is foreign"
+[[ "$(isolation_decision "${DARK5[@]}" INNGEST_TLS_CERT_OLD)" == FATAL ]] && pass || fail "INNGEST_TLS_CERT_OLD must FATAL — a suffixed look-alike is foreign"
+
+# 12c. Static shape of the new write_files entries and the runcmd arm.
+TLS_CONF="$(tls_entry /etc/soleur/inngest-tls.conf)"
+TLS_UNIT="$(tls_entry /etc/systemd/system/soleur-inngest-tls.service)"
+TLS_FETCH="$(tls_entry /usr/local/bin/soleur-inngest-tls)"   # one script: `fetch` mode (ExecStartPre) and the default health mode
+TLS_HEALTH="$TLS_FETCH"
+TLS_HUNIT="$(tls_entry /etc/systemd/system/soleur-inngest-tls-health.service)"
+TLS_HTIMER="$(tls_entry /etc/systemd/system/soleur-inngest-tls-health.timer)"
+grep -qE '^  - stunnel4( |$)' "$CLOUD_INIT" && pass || fail "stunnel4 must be in packages:"
+[[ -n "$TLS_CONF" && -n "$TLS_UNIT" && -n "$TLS_FETCH" && -n "$TLS_HUNIT" && -n "$TLS_HTIMER" ]] && pass || fail "all five TLS write_files entries must exist (conf, unit, script, health unit, health timer)"
+grep -qE '^  - path: /etc/stunnel/' "$CLOUD_INIT" && fail "the stunnel conf must live OUTSIDE /etc/stunnel/ so no packaged unit can glob it" || pass
+for _k in 'foreground = yes' 'setuid = stunnel4' 'setgid = stunnel4' 'sslVersionMin = TLSv1.2' 'ciphers = ECDHE+AESGCM:ECDHE+CHACHA20' 'options = NO_TICKET' 'renegotiation = no' 'accept = 10.0.1.40:8443' 'connect = 127.0.0.1:8288' 'cert = /run/soleur-inngest-tls/cert.pem' 'key = /run/soleur-inngest-tls/key.pem'; do
+  printf '%s\n' "$TLS_CONF" | grep -qxF "$_k" && pass || fail "stunnel conf must carry exactly: $_k"
+done
+printf '%s\n' "$TLS_CONF" | grep -qE '^(chroot|verify|CAfile|sslVersion) ' && fail "stunnel conf must not set chroot or client-verify keys" || pass
+printf '%s\n' "$TLS_UNIT" | grep -qE '^EnvironmentFile' && fail "the TLS unit must carry NO EnvironmentFile= (the Doppler token must not reach the network-facing process)" || pass
+printf '%s\n' "$TLS_UNIT" | grep -qxF 'ExecStartPre=+/usr/local/bin/soleur-inngest-tls fetch' && pass || fail "the key/cert fetch must run as ExecStartPre=+ (root) from the baked script"
+printf '%s\n' "$TLS_UNIT" | grep -qxF 'ExecStart=/usr/bin/stunnel4 /etc/soleur/inngest-tls.conf' && pass || fail "ExecStart must run stunnel4 on the out-of-/etc/stunnel conf"
+printf '%s\n' "$TLS_UNIT" | grep -qxF 'Requires=inngest-nftables.service' && printf '%s\n' "$TLS_UNIT" | grep -qE '^After=.*inngest-nftables\.service' && pass || fail "the listener must Require and order After inngest-nftables.service (never runs without its drop rule)"
+printf '%s\n' "$TLS_UNIT" | grep -qxF 'Restart=on-failure' && printf '%s\n' "$TLS_UNIT" | grep -qxF 'StartLimitIntervalSec=0' && pass || fail "the unit must retry forever (Restart=on-failure + StartLimitIntervalSec=0): a Doppler disruption at boot must not leave it failed"
+for _h in NoNewPrivileges=yes ProtectSystem=strict ProtectHome=yes PrivateTmp=yes PrivateDevices=yes MemoryDenyWriteExecute=yes 'SystemCallFilter=@system-service' RuntimeDirectoryPreserve=restart; do
+  printf '%s\n' "$TLS_UNIT" | grep -qxF "$_h" && pass || fail "the TLS unit must be hardened: $_h"
+done
+# stunnel drops privileges with setuid/setgid, so the bounding set must keep exactly those two capabilities.
+printf '%s\n' "$TLS_UNIT" | grep -qxF 'CapabilityBoundingSet=CAP_SETUID CAP_SETGID' && pass || fail "CapabilityBoundingSet must be exactly CAP_SETUID CAP_SETGID (an empty set breaks the setuid drop)"
+# inngest-server must never depend on the terminator.
+if grep -nE '^ *(Requires|Wants|BindsTo|PartOf|Requisite)=.*soleur-inngest-tls\.service' "$CLOUD_INIT" >/dev/null; then fail "nothing may Require/Want/Bind soleur-inngest-tls.service (a terminator fault must not stop the scheduler)"; else pass; fi
+printf '%s\n' "$TLS_UNIT" | grep -q 'inngest-server' && fail "the TLS unit must not reference inngest-server" || pass
+printf '%s\n' "$TLS_FETCH" | grep -qE '^ *umask 0077$' && pass || fail "the fetch script must set umask 0077 before writing the key"
+printf '%s\n' "$TLS_FETCH" | grep -qE -- '(--token|set -x|bash -x|sh -x|echo .*\$\(doppler)' && fail "the fetch script must never put the token on argv, trace, or echo a secret" || pass
+printf '%s\n' "$TLS_FETCH" | grep -qF 'openssl pkey' && printf '%s\n' "$TLS_FETCH" | grep -qE 'openssl x509 .*-pubkey' && pass || fail "the fetch script must prove the key matches the cert (public keys compared) before publishing"
+printf '%s\n' "$TLS_FETCH" | grep -qF 'chown root:stunnel4' && printf '%s\n' "$TLS_FETCH" | grep -qF 'chmod 0640' && pass || fail "the key must be 0640 root:stunnel4 (a 0600 root key breaks a SIGHUP reload after the setuid drop)"
+printf '%s\n' "$TLS_FETCH" | grep -qF '/etc/default/inngest-doppler' && pass || fail "the fetch script must source the Doppler token file itself (the unit has no EnvironmentFile=)"
+# Multi-line emit_refusal definer + a call carrying the crit marker: the alert drift guard
+# (betterstack-send-failed-alert.test.sh) recognises exactly this shape.
+printf '%s\n' "$TLS_HEALTH" | grep -qxF 'emit_refusal() {' && printf '%s\n' "$TLS_HEALTH" | grep -qxF '  logger -p user.crit -t inngest-tls-health "$1"' && pass || fail "the health script must define a MULTI-LINE emit_refusal() logging at user.crit with tag inngest-tls-health"
+[[ "$(printf '%s\n' "$TLS_HEALTH" | grep -c 'emit_refusal "SOLEUR_INNGEST_TLS_REFUSED reason=')" == 1 ]] && printf '%s\n' "$TLS_HEALTH" | grep -qE 'r=listener_down' && printf '%s\n' "$TLS_HEALTH" | grep -qE 'r="\$r cert_expiring"' && pass || fail "both refusal reasons (listener_down, cert_expiring) must feed ONE emit_refusal call carrying the marker (a second call line adds a second census case to the alert drift guard)"
+printf '%s\n' "$TLS_HEALTH" | grep -qE 'inngest-boot-phone-home\.sh tls-health ' && pass || fail "the periodic row must ship through inngest-boot-phone-home.sh with stage tls-health"
+printf '%s\n' "$TLS_HEALTH" | grep -E 'logger' | grep -vF 'logger -p user.crit -t inngest-tls-health "$1"' | grep -q . && fail "the health script must have no logger call outside emit_refusal" || pass
+printf '%s\n' "$TLS_HTIMER" | grep -qxF 'OnUnitActiveSec=5min' && printf '%s\n' "$TLS_HUNIT" | grep -qE '^After=.*inngest-bs-token-restage\.service' && printf '%s\n' "$TLS_HUNIT" | grep -qxF 'ExecStart=/usr/local/bin/soleur-inngest-tls' && pass || fail "the health timer fires every 5 minutes and its unit runs after inngest-bs-token-restage.service"
+# runcmd: arm the listener and the timer, each failing loudly to the boot phone-home.
+grep -nE '^ +systemctl enable --now \$u' "$CLOUD_INIT" >/dev/null && grep -qF 'for u in soleur-inngest-tls.service soleur-inngest-tls-health.timer; do' "$CLOUD_INIT" && grep -qE 'inngest-boot-phone-home\.sh tls-enable-FAILED' "$CLOUD_INIT" && pass || fail "runcmd must enable --now the TLS unit and the health timer and report a failure to the boot phone-home (tls-enable-FAILED)"
+L_NIC="$(grep -nF 'soleur-inngest-nic-wait ${inngest_private_ip}' "$CLOUD_INIT" | tail -n 1 | cut -d: -f1)"
+L_TLSRUN="$(grep -nF 'for u in soleur-inngest-tls.service' "$CLOUD_INIT" | head -n 1 | cut -d: -f1)"
+[[ -n "$L_NIC" && -n "$L_TLSRUN" && "$L_NIC" -lt "$L_TLSRUN" ]] && pass || fail "the listener is armed AFTER the private-NIC wait (it binds the private address)"
+
+# 12d. BEHAVIOUR of the fetch script: extracted, paths rewritten into a sandbox, doppler/chown/chgrp
+#      stubbed. Fixture material is generated here and thrown away (never a real cert or key).
+if command -v openssl >/dev/null 2>&1 && [[ -n "$TLS_FETCH" ]]; then
+  tls_fx() { # <dir> <days>
+    openssl ecparam -name prime256v1 -genkey -noout -out "$1/key" 2>/dev/null
+    openssl req -new -x509 -key "$1/key" -subj /CN=fixture -days "$2" -addext "subjectAltName=IP:10.0.1.40" -out "$1/cert" 2>/dev/null
+  }
+  tls_sandbox() { # <name> -> $W with stubs and an env file
+    W="$TLS_T/$1"; mkdir -p "$W/bin" "$W/fx" "$W/run"
+    cat > "$W/bin/doppler" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$*" >> "$W/doppler.argv"
+[ -f "$W/fx/$3" ] || exit 1
+cat "$W/fx/$3"
+STUB
+    for _c in chown chgrp; do printf '#!/bin/sh\nprintf "%s %%s\\n" "$*" >> "$W/own.log"\n' "$_c" > "$W/bin/$_c"; done
+    chmod +x "$W/bin/"*
+    printf 'HOME=/root\nDOPPLER_TOKEN=dp.st.prd.FIXTURETOKEN0123456789abcdef\nDOPPLER_CONFIG=prd\n' > "$W/doppler.env"
+    printf '%s\n' "$TLS_FETCH" | sed -e "s|/run/soleur-inngest-tls|$W/run/soleur-inngest-tls|g" -e "s|/etc/default/inngest-doppler|$W/doppler.env|g" > "$W/fetch.sh"
+    mkdir -p "$W/run/soleur-inngest-tls"
+  }
+  tls_fetch_run() { ( cd "$W" && PATH="$W/bin:$PATH" W="$W" bash "$W/fetch.sh" fetch >"$W/out" 2>"$W/err"; echo $? ); }
+  tls_fx "$TLS_T" 3650
+  openssl ecparam -name prime256v1 -genkey -noout -out "$TLS_T/otherkey" 2>/dev/null
+  D() { echo "$W/run/soleur-inngest-tls"; }
+
+  tls_sandbox ok; cp "$TLS_T/key" "$W/fx/INNGEST_TLS_KEY"; cp "$TLS_T/cert" "$W/fx/INNGEST_TLS_CERT"
+  rc="$(tls_fetch_run)"
+  [[ "$rc" == 0 && -s "$(D)/key.pem" && -s "$(D)/cert.pem" ]] && pass || fail "fetch happy path must publish key.pem and cert.pem (rc=$rc)"
+  [[ "$(stat -c %a "$(D)/key.pem" 2>/dev/null)" == 640 && "$(stat -c %a "$(D)/cert.pem" 2>/dev/null)" == 644 ]] && pass || fail "published modes must be key 0640, cert 0644"
+  [[ "$(stat -c %a "$(D)")" == 750 ]] && grep -qxF "chgrp stunnel4 $(D)" "$W/own.log" && grep -q "^chown root:stunnel4 .*/k\$" "$W/own.log" && pass || fail "the runtime dir must be 0750 group stunnel4 and the key group stunnel4 (own.log: $(tr '\n' '|' < "$W/own.log"))"
+  [[ "$(cat "$W/run/soleur-inngest-tls.rc" 2>/dev/null)" == 0 ]] && pass || fail "fetch must record rc 0 for the health emitter"
+  [[ "$(ls -A "$(D)" | sort | tr '\n' ' ')" == "cert.pem key.pem " ]] && pass || fail "no temp directory may be left behind (found: $(ls -A "$(D)" | tr '\n' ' '))"
+  # No secret on argv, stdout or stderr.
+  if grep -qF 'FIXTURETOKEN' "$W/doppler.argv" || grep -qE 'PRIVATE KEY|FIXTURETOKEN' "$W/out" "$W/err"; then fail "the Doppler token / key must never appear on argv, stdout or stderr"; else pass; fi
+  [[ "$(grep -c . "$W/doppler.argv")" == 2 ]] && grep -qE '^secrets get INNGEST_TLS_KEY --project soleur-inngest ' "$W/doppler.argv" && pass || fail "fetch must call doppler secrets get exactly twice against soleur-inngest (argv: $(tr '\n' '|' < "$W/doppler.argv"))"
+
+  tls_sandbox mismatch; cp "$TLS_T/otherkey" "$W/fx/INNGEST_TLS_KEY"; cp "$TLS_T/cert" "$W/fx/INNGEST_TLS_CERT"
+  rc="$(tls_fetch_run)"
+  [[ "$rc" != 0 && ! -e "$(D)/key.pem" && ! -e "$(D)/cert.pem" && "$(cat "$W/run/soleur-inngest-tls.rc")" != 0 ]] && pass || fail "a key that does not match the cert must fail closed and publish nothing (rc=$rc)"
+
+  tls_sandbox nokey; cp "$TLS_T/cert" "$W/fx/INNGEST_TLS_CERT"
+  rc="$(tls_fetch_run)"
+  [[ "$rc" != 0 && ! -e "$(D)/key.pem" ]] && pass || fail "a missing/failed key read must fail closed (rc=$rc)"
+
+  tls_sandbox emptycert; cp "$TLS_T/key" "$W/fx/INNGEST_TLS_KEY"; : > "$W/fx/INNGEST_TLS_CERT"
+  rc="$(tls_fetch_run)"
+  [[ "$rc" != 0 && ! -e "$(D)/key.pem" ]] && pass || fail "an empty cert must fail closed (rc=$rc)"
+
+  tls_sandbox garbage; printf 'not a key\n' > "$W/fx/INNGEST_TLS_KEY"; cp "$TLS_T/cert" "$W/fx/INNGEST_TLS_CERT"
+  rc="$(tls_fetch_run)"
+  [[ "$rc" != 0 && ! -e "$(D)/key.pem" ]] && pass || fail "an unparseable key must fail closed (rc=$rc)"
+
+  tls_sandbox noenv; cp "$TLS_T/key" "$W/fx/INNGEST_TLS_KEY"; cp "$TLS_T/cert" "$W/fx/INNGEST_TLS_CERT"; rm -f "$W/doppler.env"
+  rc="$(tls_fetch_run)"
+  [[ "$rc" != 0 && ! -e "$(D)/key.pem" ]] && pass || fail "a missing Doppler token file must fail closed (rc=$rc)"
+
+  # 12e. BEHAVIOUR of the health emitter: stubs for systemctl, ss, nft, journalctl, logger, the phone-home
+  #      emitter and `openssl s_client`; every other openssl call is real.
+  tls_hsandbox() { # <name> <cert> <listening 1|0>
+    W="$TLS_T/$1"; mkdir -p "$W/bin" "$W/run/soleur-inngest-tls"
+    cp "$2" "$W/run/soleur-inngest-tls/cert.pem"; printf '0\n' > "$W/run/soleur-inngest-tls.rc"
+    cat > "$W/bin/systemctl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  is-active*) echo active ;;
+  *NRestarts*) echo 2 ;;
+esac
+STUB
+    if [ "$3" = 1 ]; then
+      printf '#!/bin/sh\necho "LISTEN 0 128 10.0.1.40:8443 0.0.0.0:*"\n' > "$W/bin/ss"
+    else
+      printf '#!/bin/sh\nexit 0\n' > "$W/bin/ss"
+    fi
+    cat > "$W/bin/nft" <<'STUB'
+#!/bin/sh
+case "$*" in
+  *"counter inet soleur_inngest legacy_8288"*) printf 'table inet soleur_inngest {\n\tcounter legacy_8288 {\n\t\tpackets 6 bytes 338\n\t}\n}\n' ;;
+  *"counter inet soleur_inngest tls_8443"*) printf 'table inet soleur_inngest {\n\tcounter tls_8443 {\n\t\tpackets 9 bytes 1200\n\t}\n}\n' ;;
+  *"chain inet soleur_inngest input"*) cat "$W/chain.txt" ;;
+esac
+STUB
+    printf 'table inet soleur_inngest {\n\tchain input {\n\t\ttype filter hook input priority -10; policy accept;\n\t\tiif "lo" accept\n\t\ttcp dport 8288 ip saddr { 10.0.1.10 } counter name "legacy_8288"\n\t\ttcp dport { 8288, 8289 } ip saddr { 10.0.1.10 } accept\n\t\ttcp dport { 8288, 8289 } drop\n\t\ttcp dport 8443 ip saddr { 10.0.1.10 } counter name "tls_8443"\n\t\ttcp dport 8443 ip saddr { 10.0.1.10 } accept\n\t\ttcp dport 8443 drop\n\t}\n}\n' > "$W/chain.txt"
+    printf '#!/bin/sh\nprintf "SSL_accept: unsupported protocol\\nSSL_accept: no shared cipher\\nSSL_accept: bad certificate\\nTLS accepted: ok\\n"\n' > "$W/bin/journalctl"
+    printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$W/logger.log"\n' > "$W/bin/logger"
+    printf '#!/bin/sh\nprintf "%%s|%%s\\n" "$1" "$2" >> "$W/phone.log"\n' > "$W/phone.sh"
+    cat > "$W/bin/openssl" <<'STUB'
+#!/bin/sh
+if [ "$1" = s_client ]; then
+  [ -f "$W/served.pem" ] && cat "$W/served.pem"
+  exit 0
+fi
+exec /usr/bin/openssl "$@"
+STUB
+    if [ "$3" = 1 ]; then cp "$2" "$W/served.pem"; fi
+    chmod +x "$W/bin/"* "$W/phone.sh"
+    printf '%s\n' "$TLS_HEALTH" | sed -e "s|/run/soleur-inngest-tls|$W/run/soleur-inngest-tls|g" -e "s|/usr/local/bin/inngest-boot-phone-home.sh|$W/phone.sh|g" > "$W/health.sh"
+  }
+  tls_health_run() { ( cd "$W" && PATH="$W/bin:$PATH" W="$W" bash "$W/health.sh" >"$W/out" 2>"$W/err"; echo $? ); }
+  # A cert 30 days from expiry (the 90-day alert threshold).
+  openssl ecparam -name prime256v1 -genkey -noout -out "$TLS_T/key30" 2>/dev/null
+  openssl req -new -x509 -key "$TLS_T/key30" -subj /CN=fixture -days 30 -addext "subjectAltName=IP:10.0.1.40" -out "$TLS_T/cert30" 2>/dev/null
+
+  tls_hsandbox hok "$TLS_T/cert" 1
+  rc="$(tls_health_run)"
+  HROW="$(cat "$W/phone.log" 2>/dev/null)"
+  HRE='^tls-health\|unit=active nrestarts=2 fetch_rc=0 bind=10\.0\.1\.40:8443 listener=1 served_sha256=[0-9a-f]{64} cert_sha256=[0-9a-f]{64} notafter_days=[0-9]+ hs_fail_15m=3 legacy_8288_packets=6 tls_8443_packets=9 nft8443_sha256=[0-9a-f]{64} nft_rules=[0-9]+ boot_id=[0-9a-f]{8}$'
+  [[ "$rc" == 0 ]] && printf '%s\n' "$HROW" | grep -qE "$HRE" && pass || fail "healthy emit must be exactly one tls-health row with the planned field list in order (rc=$rc row='$HROW')"
+  _s="$(printf '%s' "$HROW" | sed -n 's/.*served_sha256=\([0-9a-f]*\).*/\1/p')"; _c="$(printf '%s' "$HROW" | sed -n 's/.* cert_sha256=\([0-9a-f]*\).*/\1/p')"
+  _real="$(openssl x509 -in "$TLS_T/cert" -noout -fingerprint -sha256 | cut -d= -f2 | tr -d : | tr 'A-F' 'a-f')"
+  [[ -n "$_s" && "$_s" == "$_c" && "$_c" == "$_real" ]] && pass || fail "served_sha256 and cert_sha256 must both equal the lowercase colon-free SHA-256 of the DER cert (served=$_s cert=$_c real=$_real)"
+  [[ ! -s "$W/logger.log" ]] && pass || fail "a healthy host must not emit the crit refusal marker (logger: $(cat "$W/logger.log"))"
+  [[ "$(printf '%s\n' "$HROW" | grep -c .)" == 1 ]] && pass || fail "exactly one phone-home row per run"
+  # The phone-home redaction pass must preserve the labelled sha256 fields and the 8-char boot_id.
+  _sedexpr="$(tls_entry /usr/local/bin/inngest-boot-phone-home.sh | grep -E "^detail=.*sed -E" | sed -E "s/.*sed -E '([^']*)'.*/\1/")"
+  _detail="${HROW#tls-health|}"
+  if [[ -n "$_sedexpr" ]] && [[ "$(printf '%s' "$_detail" | sed -E "$_sedexpr")" == "$_detail" ]]; then pass; else fail "the phone-home redaction must leave the tls-health detail intact (labelled sha256 fields, 8-char boot_id)"; fi
+
+  tls_hsandbox hdown "$TLS_T/cert" 0
+  rc="$(tls_health_run)"; HROW="$(cat "$W/phone.log" 2>/dev/null)"
+  printf '%s\n' "$HROW" | grep -q 'listener=0 served_sha256= ' && pass || fail "a down listener must report listener=0 and an empty served_sha256 (row='$HROW')"
+  grep -qE '^-p user\.crit -t inngest-tls-health SOLEUR_INNGEST_TLS_REFUSED reason=listener_down unit=active fetch_rc=0 nrestarts=2 notafter_days=[0-9]+$' "$W/logger.log" 2>/dev/null && pass || fail "listener=0 must emit the crit SOLEUR_INNGEST_TLS_REFUSED reason=listener_down marker (logger: $(cat "$W/logger.log" 2>/dev/null))"
+
+  tls_hsandbox hexp "$TLS_T/cert30" 1
+  rc="$(tls_health_run)"; HROW="$(cat "$W/phone.log" 2>/dev/null)"
+  grep -qE '^-p user\.crit -t inngest-tls-health SOLEUR_INNGEST_TLS_REFUSED reason=cert_expiring unit=active fetch_rc=0 nrestarts=2 notafter_days=(29|30)$' "$W/logger.log" 2>/dev/null && pass || fail "notafter_days < 90 must emit the crit cert_expiring marker (logger: $(cat "$W/logger.log" 2>/dev/null))"
+  printf '%s\n' "$HROW" | grep -qE 'listener=1 .*notafter_days=(29|30) ' && pass || fail "an expiring cert still reports listener=1 with its day count (row='$HROW')"
+
+  tls_hsandbox hboth "$TLS_T/cert30" 0
+  rc="$(tls_health_run)"
+  [[ "$(grep -c 'SOLEUR_INNGEST_TLS_REFUSED reason=listener_down,cert_expiring ' "$W/logger.log" 2>/dev/null)" == 1 && "$(grep -c . "$W/logger.log")" == 1 ]] && pass || fail "listener=0 AND an expiring cert must emit ONE marker naming both reasons (logger: $(cat "$W/logger.log" 2>/dev/null))"
+else
+  fail "openssl and the extracted TLS write_files entries are required for the behavioural rows (found openssl=$(command -v openssl || echo none), fetch bytes=${#TLS_FETCH})"
+fi
+rm -rf "$TLS_T"
+
 # ANTI-VACUITY FLOOR. Reported by printf + exit, never through fail()/pass(), so neutering those
 # cannot disarm it. The bound is the exact passing count; raise it with every added assertion.
 # 99 -> 100 (#9786): measured 101 before the D1 rewrite (the old floor carried 2 of slack). The rewrite drops the
@@ -810,7 +1054,10 @@ _D1_NEUTERED="$( d1_violations() { return 0; }; fails=0; fail() { fails=$((fails
 # neutered-scan harness row (+1): 101 - 3 + 1 + 1 = 100, exact.
 # 100 -> 105 (#9786 review fix round): D1-M8 quoted key, D1-M9 inline map, D1-M10 rehearsal-root reintroduction
 # (+3), and the D1-V1/V2 value pins on the surviving key (+2). Exact.
-INNGEST_HOST_MIN_ASSERTIONS=105
+# 105 -> 183 (#10136): the TLS block (nft order/pins, isolation rows, write_files shape, fetch and health
+# behaviour) adds 78 unconditional assertions (197 passing measured locally, which includes the one
+# `nft -c` row that only runs where nft and unprivileged user namespaces exist).
+INNGEST_HOST_MIN_ASSERTIONS=183
 if [ "$((passes + fails))" -lt "$INNGEST_HOST_MIN_ASSERTIONS" ]; then
   printf 'FAIL: only %s assertions ran against a floor of %s — a section was skipped or the suite narrowed\n' "$((passes + fails))" "$INNGEST_HOST_MIN_ASSERTIONS" >&2
   exit 1

@@ -788,6 +788,10 @@ runcmd:
     # from /tmp — if future hardening flips it on, grep for other
     # exec-from-/tmp call sites first.
     stage=docker_run
+    # #10136: the Inngest CA bind source must exist as a FILE before docker starts (a missing source becomes a root-owned
+    # directory). Empty placeholder; ci-deploy.sh (user deploy, hence the owner and the sticky group-writable dir) installs the real PEM.
+    install -d -o root -g deploy -m 1775 /etc/soleur
+    [ -f /etc/soleur/inngest-ca.pem ] || install -o deploy -g deploy -m 0644 /dev/null /etc/soleur/inngest-ca.pem
     docker run -d \
       --name soleur-web-platform \
       --log-driver journald \
@@ -798,8 +802,10 @@ runcmd:
       --env-file "$TMPENV" \
       --add-host host.docker.internal:host-gateway \
       -e INNGEST_BASE_URL=http://10.0.1.40:8288 \
+      -e NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
+      -v /etc/soleur/inngest-ca.pem:/etc/soleur/inngest-ca.pem:ro \
       -e SOLEUR_EGRESS_REAPER=1 \
       -v /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens \
       -p 0.0.0.0:80:3000 \

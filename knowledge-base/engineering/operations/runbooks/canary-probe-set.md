@@ -39,6 +39,7 @@ spot.
 | 2 | Headless chromium hydrates `/login` AND `/dashboard`; rejects on any `pageerror`, console.error, or `Unhandled error` event during hydration | client-only throws at module load (validators, polyfill incompatibilities, encoding mismatches) | **required — was D1, promoted post-#3014** |
 | 3 | `apps/web-platform/infra/canary-bundle-claim-check.sh` fetches the deployed login chunk and asserts the inlined Supabase JWT has canonical claims (`iss=supabase`, `role=anon`, ref shape) | inlined build-arg corruption (the #3007 regression class) — runs without a browser, catches what Layer 1 cannot see | enforced |
 | 4 | GitHub App key check (#8609), after the bwrap probes and last before promotion: the env-file holds exactly one `GITHUB_APP_PRIVATE_KEY` line that is not `EVICTED_SEE_ADR_241`, then `docker exec soleur-web-platform-canary /bin/sh -c '… exec /usr/bin/env -i PATH=… GITHUB_APP_ID=… GITHUB_APP_PRIVATE_KEY=… /usr/local/bin/node /app/scripts/github-app-key-probe.mjs'` (only those two variables reach an absolute-path node, so no `prd`-set `PATH`/`NODE_*`/`LD_*`/proxy/CA variable picks the interpreter or hooks TLS) prints exactly one of `github_app_key_probe=ok`, `github_app_key_probe=transport`, or `github_app_key_probe=rejected reason=<no_app_id\|unparseable_key\|http_401\|http_404\|wrong_app\|http_other>` | a missing, evicted, wrong or other-App key reaching production (`reason=canary_github_app_key_missing` / `canary_github_app_key_rejected`); `transport` and an absent script (rc 127) promote, each with a Sentry warning | enforced |
+| 5 | Inngest link TLS layer (#10136, ADR-292), **only while `INNGEST_LINK_TLS` is on or `pending`**: five checks inside the canary container (an https `INNGEST_BASE_URL` in `docker inspect`; one in-container fetch of the URL the container was handed; a real in-container `inngest.send` of `soleur.tls-canary.ping`; a CA-withheld negative control; a non-empty registry over https) | a container that was handed https but cannot complete a verified handshake (empty or wrong CA file, missing `:8443` egress accept, Node not trusting the pinned certificate) — invisible to a host-side `curl --cacert`, which proves neither container egress nor Node trust | **adopting — enforced from the first flag-on deploy** |
 
 Layer 1 is the cheapest broad-coverage gate. Layer 2 is the ONLY layer
 that exercises the production browser environment — including webpack's
@@ -95,6 +96,34 @@ during SSR). Client-only throws are caught by Layer 3.
    --stage github_app_key_ok` (and the other `github_app_key_*` stages), with
    `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 2h --grep
    GITHUB_APP_KEY_BOOT` as the fallback.
+
+### Registered: the Inngest link TLS layer (Layer 5, #10136, ADR-292)
+
+This layer is the container-level proof that the flag flip works. It is skipped, silently and by design, while the resolver
+chose the legacy link (flag absent): the default path is the old `http://10.0.1.40:8288` URL and nothing about it changed.
+
+1. **When it runs:** whenever `resolve_inngest_link` resolved `https` (the flag is `1`, or an unexpired `pending:<epoch>` lease
+   that `inngest-link-flip.yml` wrote before dispatching the release). It runs against the **canary** container, before the
+   swap, so a failure refuses promotion and the old container keeps serving.
+2. **The five checks, all inside the canary container (the host's own `curl --cacert` self-gate proves the host OUTPUT path and
+   the pinned bytes only, never container egress or Node trust):**
+   1. `docker inspect` shows the canary's `INNGEST_BASE_URL` is `https://10.0.1.40:8443`.
+   2. One in-container `fetch` of the URL the container was actually handed succeeds (`/health`, and `/v1/events?limit=1` with the
+      Bearer).
+   3. A real in-container `inngest.send` of the synthetic event `soleur.tls-canary.ping` is accepted. A test asserts no function
+      under `apps/web-platform/server/inngest/functions/` triggers on that name, so the event does no work.
+   4. A **negative control**: the same fetch with the CA withheld (`env -u NODE_EXTRA_CA_CERTS` in the same container) must FAIL
+      with a verification error. A canary that cannot see this fail would pass vacuously on a container that trusts everything.
+   5. The registry read over https is non-empty.
+3. **What it does NOT prove:** the second prod host. web-1 and web-2 each run their own canary at their own deploy, so the per-host
+   proof is each host's own canary; the web-host hook `inngest-tls-handshake` terminates on web-1 only.
+4. **Counters are read only after both prod swaps complete.** Until the old prod container is drained it still dials `:8288`,
+   so a `legacy_8288` read taken earlier is contaminated. T for the soak is the last prod swap plus the old-container drain.
+5. **Failure reads (no SSH):** the failed release run's log carries the `::error::` line with the failing check; the host-side
+   `tls-health` row shows `hs_fail_15m` rising when a client rejects the CA. See
+   [inngest-server.md](inngest-server.md) section "Link TLS (#10136)".
+6. **A broken gate blocks ordinary releases while the flag is on** (the resolver fails the deploy rather than downgrade to http).
+   Rollback: `inngest-link-flip.yml` with `action=off`, then a redeploy.
 
 ## Removing a probe
 

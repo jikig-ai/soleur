@@ -611,6 +611,9 @@ def classify(u):
     if 'doppler' in e and re.search(r'\brun\b', e) and not re.search(
             r'\bdoppler\s+(?:login|setup|configure\s+set|configure\s+token)\b', e):
         return 'doppler-run'            # token read (redis/inngest/vector); no home-cred write
+    if '/usr/bin/stunnel4' in e:        # #10136 Inngest link TLS terminator: its ExecStartPre=+ fetch runs
+        return 'tls-terminator'         # `doppler secrets get` (a read) as root outside the sandbox; no login,
+                                        # no docker/doppler credential write to any home
     return 'unknown'                    # fail-closed: new unit must be classified
 
 def map_scripts(u, root):

@@ -55,7 +55,7 @@ on:
         required: true
         type: string
       # NOTE on the input budget: GitHub raised the `workflow_dispatch` cap from 10 to 25 inputs on
-      # 2025-12-04; 8 are used (the five inngest-backstop-retire inputs were removed when that dispatch was retired).
+      # 2025-12-04; 9 are used (the five inngest-backstop-retire inputs were removed when that dispatch was retired).
       # Prefer a DEDICATED workflow for the next per-target group (precedent: workspaces-luks-cutover.yml;
       # the concurrency group is a shared literal and survives the split). Re-derive the count:
       #   awk '/^  workflow_dispatch:/,/^concurrency:/' .github/workflows/apply-web-platform-infra.yml \
@@ -133,6 +133,10 @@ on:
         description: "[registry-luks-recut] the numeric Hetzner id of the zot store volume to destroy (id-pin — the gate refuses to replace a different physical volume). Read it from the Hetzner API, not from a drift run."
         required: false
         type: string
+      inngest_link_value:
+        description: "[inngest-link-flag] the flag state to apply: off | 1 | pending:<10-digit epoch seconds>. Driven by inngest-link-flip.yml; see inngest-tls.tf."
+        required: false
+        type: string
       # `manual-rerun` (default) preserves the historical escape-hatch behavior EXACTLY
       # — the `apply` job's allow-list re-run. Every other value selects a dedicated,
       # MUTUALLY-EXCLUSIVE dispatch job (see each job's `if:`), so a dispatch runs
@@ -162,7 +166,7 @@ on:
           registry-host-replace | registry-region-migrate | registry-luks-recut |
           git-data-host-replace | git-data-host-rotate | git-data-host-create | workspaces-luks-cutover |
           workspaces-luks-recut (RETIRED: exits 1) | web-host-create | web-host-replace |
-          ci-ssh-token-replace | vector-redeliver | entrypoint-audit.
+          ci-ssh-token-replace | vector-redeliver | entrypoint-audit | inngest-link-flag.
           DESTRUCTIVE targets need `confirm` and an id-pin — see the runbook for the
           target you are firing.
           ci-ssh-token-replace RE-MINTS the CF Access ci_ssh service token when Cloudflare
@@ -227,6 +231,8 @@ on:
           # vector_redeliver job and knowledge-base/engineering/operations/runbooks/vector-redeliver.md.
           - vector-redeliver
           - entrypoint-audit
+          # #10136 - the Inngest link flag actuator (job inngest_link_flag); driven by inngest-link-flip.yml.
+          - inngest-link-flag
 
 concurrency:
   # LOAD-BEARING shared group (#4844): this MUST be the IDENTICAL literal string
@@ -672,6 +678,11 @@ jobs:
               -target=logtail_exploration_alert.registry_zot_log_credential_shape \
               -target=random_password.inngest_redis_luks \
               -target=doppler_secret.inngest_redis_luks_key \
+              -target=tls_private_key.inngest_link \
+              -target=tls_self_signed_cert.inngest_link \
+              -target=doppler_secret.inngest_tls_key \
+              -target=doppler_secret.inngest_tls_cert \
+              -target=doppler_secret.inngest_tls_ca \
               -target=supabase_project.prd
           rc=$?
           if [[ $rc -ne 0 ]]; then
@@ -6463,6 +6474,119 @@ jobs:
           fi
           echo "::error::ci_ssh_liveness_unavailable — scan returned live='${live}' dead='${dead}' unverifiable='${unver}', which certifies nothing. A zero live-count means no pair was measured. The re-mint is NOT known to have failed; do not re-dispatch."
           exit 1
+
+  # ── #10136: the Inngest link flag (Tier-B actuator, ADR-241 D8; rationale in inngest-tls.tf) ──
+  # apply_target=inngest-link-flag, driven by inngest-link-flip.yml. Writes the prd_terraform source key
+  # INNGEST_LINK_TLS (or deletes it for `off`) FIRST, then plans and applies ONLY
+  # doppler_secret.inngest_link_tls. The resource is NOT in the per-merge -target list (a merge must never
+  # flip the URL). The gate below admits that one address and nothing else.
+  inngest_link_flag:
+    environment: infra-privileged
+    if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'inngest-link-flag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+
+      - name: Validate the value and write the source key
+        env:
+          LINK_VALUE: ${{ inputs.inngest_link_value }}
+          REASON_RAW: ${{ inputs.reason }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_WRITE }}
+        run: |
+          set -euo pipefail
+          # Input is compared as data (env:), never interpolated into the shell.
+          if [[ ! "$LINK_VALUE" =~ ^(off|1|pending:[0-9]{10})$ ]]; then
+            echo "::error::inngest_link_value must be exactly 'off', '1' or 'pending:<10-digit epoch>'."; exit 1
+          fi
+          if [[ "$LINK_VALUE" == pending:* ]]; then
+            now=$(date +%s); ep="${LINK_VALUE#pending:}"
+            if (( 10#$ep > now + 60 || 10#$ep < now - 600 )); then
+              echo "::error::the pending epoch must be within [now-600s, now+60s]; the lease is 30 minutes from it and the resolver refuses an epoch more than 31 minutes ahead."; exit 1
+            fi
+          fi
+          if [[ -z "${REASON_RAW// /}" || -z "${DOPPLER_TOKEN:-}" ]]; then
+            echo "::error::reason and DOPPLER_TOKEN_WRITE are required."; exit 1
+          fi
+          # The source key is written FIRST (it is what the plan reads). A failure after this line leaves
+          # prd_terraform ahead of prd; nothing but Terraform reads the key, and a re-dispatch reconciles.
+          if [[ "$LINK_VALUE" == off ]]; then
+            doppler secrets delete INNGEST_LINK_TLS --yes --silent -p soleur -c prd_terraform >/dev/null 2>&1 || true
+          else
+            printf '%s' "$LINK_VALUE" | doppler secrets set INNGEST_LINK_TLS --silent --no-interactive -p soleur -c prd_terraform >/dev/null 2>&1
+          fi
+          {
+            echo "### inngest-link-flag dispatch"
+            echo "- Value: ${LINK_VALUE}"
+            echo "- Reason: ${REASON_RAW}"
+            echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Generate ephemeral SSH public key for var.ssh_key_path
+        run: |
+          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
+          printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
+
+      - name: Extract backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || { echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || { echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
+          if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then echo "::error::AWS R2 backend credentials are empty."; exit 1; fi
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+
+      - name: Terraform init
+        working-directory: ${{ env.INFRA_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+
+      - name: Terraform plan (the flag resource only) and gate
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          LINK_VALUE: ${{ inputs.inngest_link_value }}
+        run: |
+          set -euo pipefail
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan \
+              -var="ssh_key_path=${CI_SSH_PUB}" \
+              -target=doppler_secret.inngest_link_tls
+          # Blast-radius gate: read the PLAN. Only this address may change; `off` may only delete it, any
+          # other value may only create or update it.
+          terraform show -json tfplan | jq -e --arg v "$LINK_VALUE" '
+            [.resource_changes[]? | select(.change.actions != ["no-op"] and .change.actions != ["read"])] as $c
+            | ($c | all(.[]; .address == "doppler_secret.inngest_link_tls[0]"))
+              and (if $v == "off" then ($c | all(.[]; .change.actions == ["delete"]))
+                   else ($c | all(.[]; .change.actions == ["create"] or .change.actions == ["update"])) end)' >/dev/null \
+            || { echo "::error::blast-radius gate: the plan changes something other than doppler_secret.inngest_link_tls, or the wrong action for '${LINK_VALUE}'. Nothing was applied."; exit 1; }
+
+      - name: Terraform apply
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -no-color -input=false -auto-approve tfplan
 
   # #7542 — deliver a `vector.toml` change to web-1 WITHOUT riding unrelated pending drift.
   # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §vector_redeliver (test-anchored lines kept below)

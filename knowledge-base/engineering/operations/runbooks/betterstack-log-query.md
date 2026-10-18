@@ -35,6 +35,9 @@ Live standing alarms over this source:
   Sentry send failed. `SOLEUR_*_SEND_SKIPPED` and `SOLEUR_*_HALT` never match by construction.
   Since #8706 it also pages on `SOLEUR_WORKSPACES_LUKS_SEND_FAILED reason=no_dsn|send_failed`, which
   `workspaces-luks-emit.sh` logs at `user.crit` when a LUKS drift event cannot reach Sentry.
+  Since #10136 it also pages on `SOLEUR_INNGEST_TLS_REFUSED reason=listener_down|cert_expiring`, which the dedicated
+  Inngest host's `soleur-inngest-tls-health` timer logs at `user.crit` (the stunnel :8443 listener is down, or its
+  certificate is under 90 days from expiry); the periodic `--grep stage=tls-health` row carries the detail.
   Defined in `apps/web-platform/infra/betterstack-logs-alerts.tf`; verified through the real apply
   path by `terraform_data.send_failed_alert_probe` + `scripts/followthroughs/send-failed-alert-probe-8097.sh`;
   self-health via the `logs_alert` arm of `reconcile-live-heartbeats.ts`. Runbook:

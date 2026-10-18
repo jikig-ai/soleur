@@ -326,6 +326,27 @@ if [[ -n "$DEDICATED_LINE" && -n "$DROP_RULE_LINE" && "$DEDICATED_LINE" -lt "$DR
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: dedicated inngest host accept must precede the default drop (dedicated=$DEDICATED_LINE drop=$DROP_RULE_LINE)"
 fi
+# #10136 (Inngest TLS, Guard 1 row 2): the TLS listener on the dedicated host. The container's NODE_EXTRA_CA_CERTS path
+# dials 10.0.1.40:8443, so the egress chain needs ITS OWN accept (the egress gateway's `dport 8443` accept is a different
+# daddr and must not satisfy this). Anchored on the 10.0.1.40 form; the legacy :8288 accept above stays (counted, not removed).
+assert_grep "dedicated inngest host :8443 accept (#10136)" \
+  'ip daddr 10\.0\.1\.40 tcp dport 8443 accept comment "soleur-egress: dedicated inngest host tls' "$LOADER"
+DEDICATED_TLS_LINE="$(grep -n 'ip daddr 10\.0\.1\.40 tcp dport 8443 accept' "$LOADER" | sed -n '1p' | cut -d: -f1)"
+if [[ -n "$DEDICATED_TLS_LINE" && -n "$DROP_RULE_LINE" && "$DEDICATED_TLS_LINE" -lt "$DROP_RULE_LINE" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: dedicated inngest host :8443 accept precedes the default drop (line $DEDICATED_TLS_LINE < $DROP_RULE_LINE)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: dedicated inngest host :8443 accept must precede the default drop (tls=$DEDICATED_TLS_LINE drop=$DROP_RULE_LINE)"
+fi
+# Mutation (Guard 1 row 2): delete the 10.0.1.40 :8443 accept from a COPY of the loader; the pin above must go RED
+# on it, while the egress gateway's own `dport 8443` accept (a different daddr) stays and must NOT mask the deletion.
+LOADER_NO8443="$SUITE_SCRATCH/loader-no-8443.sh"
+grep -v 'ip daddr 10\.0\.1\.40 tcp dport 8443 accept' "$LOADER" > "$LOADER_NO8443"
+if ! cmp -s "$LOADER" "$LOADER_NO8443" && grep -qE 'ip daddr \$\{EGRESS_GW_IP\} tcp dport 8443 accept' "$LOADER_NO8443" \
+   && ! grep -qE 'ip daddr 10\.0\.1\.40 tcp dport 8443 accept comment "soleur-egress: dedicated inngest host tls' "$LOADER_NO8443"; then
+  PASS=$((PASS + 1)); echo "  PASS: mutation: deleting the 10.0.1.40:8443 accept is visible to the pin (the gateway's 8443 accept does not mask it)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: mutation: the 10.0.1.40:8443 pin cannot see its own deletion (vacuous)"
+fi
 assert_grep "bridge gateway derived, not hardcoded" 'docker network inspect bridge' "$LOADER"
 assert_grep "IPv6 bypass guard" 'EnableIPv6' "$LOADER"
 assert_grep "jump rule scoped to the bridge interface" 'iifname "\$BRIDGE_IF" counter jump SOLEUR-EGRESS' "$LOADER"
@@ -1806,9 +1827,12 @@ case "$*" in
     # `egress-blocked` prefix (which the old sentinel mistook for the drop) AND its own comment
     # `... default drop log`, which a sentinel that loses its closing quote would mistake for the drop.
     if [[ -n "${GA_NODROP:-}" ]]; then
-      echo 'log prefix "egress-blocked: " comment "soleur-egress: default drop log" ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; cidr allowlist'; exit 0
+      echo 'log prefix "egress-blocked: " comment "soleur-egress: default drop log" ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8443 accept ; cidr allowlist'; exit 0
     fi
-    echo 'log prefix "egress-blocked: " ; counter drop comment "soleur-egress: default drop" ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; cidr allowlist'; exit 0 ;;
+    if [[ -n "${GA_NO8443:-}" ]]; then
+      echo 'log prefix "egress-blocked: " ; counter drop comment "soleur-egress: default drop" ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; ip daddr 10.9.9.9 tcp dport 8443 accept ; cidr allowlist'; exit 0
+    fi
+    echo 'log prefix "egress-blocked: " ; counter drop comment "soleur-egress: default drop" ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8443 accept ; cidr allowlist'; exit 0 ;;
   "list set ip filter soleur_egress_allow") echo "elements = { 104.18.24.159 }"; exit 0 ;;
   "list set ip filter soleur_egress_allow_cidr") echo "elements = { 140.82.112.0/22, 20.1.2.3, 4.5.6.7 }"; exit 0 ;;
 esac
@@ -1979,6 +2003,15 @@ GA_OK=1
 [[ "$GA_RC" -ne 0 ]] || GA_OK=0
 grep -q 'ASSERT-FAILED: default-drop' <<<"$GA_OUT" || GA_OK=0
 ga_row "post-apply assert: log rule present but terminal drop gone -> ASSERT-FAILED: default-drop, non-zero exit" "$GA_OK"
+
+# Row B2b (#10136, Guard 1 row 2): the dedicated host's :8443 accept is gone (only ANOTHER daddr's 8443 accept remains, like the
+# egress gateway's) -> its own sentinel, non-zero. The 8288 accepts are intact, so only the new assert can see it.
+GA_D="$(ga_setup no8443)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr.txt"; ga_set_of "$GA_D/cidr.txt" > "$GA_D/set.txt"
+ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_NO8443=1
+GA_OK=1
+[[ "$GA_RC" -ne 0 ]] || GA_OK=0
+grep -q 'ASSERT-FAILED: dedicated-inngest-8443-accept' <<<"$GA_OUT" || GA_OK=0
+ga_row "post-apply assert: no 10.0.1.40 :8443 accept (another daddr's 8443 accept does not count) -> ASSERT-FAILED: dedicated-inngest-8443-accept, non-zero exit" "$GA_OK"
 
 # Row B3: a jump to a similarly named chain is not our jump -> docker-user-jump sentinel (the target token is matched, not a prefix).
 GA_D="$(ga_setup jumpold)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr.txt"; ga_set_of "$GA_D/cidr.txt" > "$GA_D/set.txt"

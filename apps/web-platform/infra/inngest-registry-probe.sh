@@ -49,6 +49,51 @@ readonly LOG_TAG="inngest-registry-probe"
 # runs on a web host, not on the inngest host). INNGEST_REMOTE_GQL_URL mirrors the
 # sibling scripts' INNGEST_GQL_URL/SCHEDULE_REMINDER_URL parameterisation.
 GQL_URL="${INNGEST_REMOTE_GQL_URL:-http://10.0.1.40:8288/v0/gql}"
+# >>> inngest-link-env >>>
+# (#10136) The Inngest link the web hosts' resolver (ci-deploy.sh resolve_inngest_link) chose, read from
+# /etc/soleur/inngest-link.env. PARSED, NEVER SOURCED: a key allowlist plus an exact literal check of the three values,
+# so a hostile or corrupt file can neither run code nor select another endpoint (anything else is `invalid`: the default
+# http endpoint plus a loud marker; the resolver, the tuple gate and the canary are the real gate, this file is advisory
+# for the probes). It OVERRIDES an inherited INNGEST_REMOTE_GQL_URL (server.tf writes an explicit http one into the
+# consumer probe's env, which would otherwise win). Byte-identical in inngest-registry-probe.sh and
+# inngest-doublefire-probe.sh (the doublefire test compares the two); the registry probe is the documented owner.
+INNGEST_LINK_ENV_FILE="${INNGEST_LINK_ENV_FILE:-/etc/soleur/inngest-link.env}"
+LINK_BASE="http://10.0.1.40:8288"
+LINK_CACERT=""
+LINK_STATE="default"
+_link_env_resolve() {
+  local f="$INNGEST_LINK_ENV_FILE" k v url="" scheme="" cacert="" bad=0 n=0
+  LINK_BASE="http://10.0.1.40:8288"; LINK_CACERT=""; LINK_STATE="default"
+  if [ ! -e "$f" ] && [ ! -L "$f" ]; then return 0; fi
+  if [ ! -f "$f" ] || [ -L "$f" ] || [ ! -r "$f" ]; then LINK_STATE="invalid"; return 0; fi
+  while IFS='=' read -r k v || [ -n "$k" ]; do
+    n=$((n + 1))
+    if [ "$n" -gt 16 ]; then bad=1; break; fi
+    case "$k" in
+      INNGEST_LINK_URL) url="$v" ;;
+      INNGEST_LINK_SCHEME) scheme="$v" ;;
+      INNGEST_LINK_CACERT) cacert="$v" ;;
+      '') ;;
+      *) bad=1 ;;
+    esac
+  done < "$f"
+  if [ "$bad" = 0 ] && [ "$url" = "http://10.0.1.40:8288" ] && [ "$scheme" = "http" ] && [ -z "$cacert" ]; then
+    LINK_STATE="http"
+  elif [ "$bad" = 0 ] && [ "$url" = "https://10.0.1.40:8443" ] && [ "$scheme" = "https" ] && [ "$cacert" = "/etc/soleur/inngest-ca.pem" ]; then
+    LINK_BASE="$url"; LINK_CACERT="$cacert"; LINK_STATE="https"
+  else
+    LINK_STATE="invalid"
+  fi
+  return 0
+}
+_link_env_resolve
+LINK_CURL_TLS=()
+case "$LINK_STATE" in
+  http) GQL_URL="$LINK_BASE/v0/gql" ;;
+  https) GQL_URL="$LINK_BASE/v0/gql"; LINK_CURL_TLS=(--cacert "$LINK_CACERT" --noproxy '*') ;;
+  invalid) logger -t "${LOG_TAG:-inngest-probe}" "SOLEUR_INNGEST_LINK_ENV_INVALID file=$INNGEST_LINK_ENV_FILE action=default_http" 2>/dev/null || true ;;
+esac
+# <<< inngest-link-env <<<
 FUNCTIONS_FIXTURE="${INNGEST_PROBE_FUNCTIONS_FIXTURE:-}"
 CONNECT_TIMEOUT="${INNGEST_CONNECT_TIMEOUT:-5}"
 PREFLIGHT_OP="verify-registry"
@@ -105,7 +150,7 @@ fetch_functions() {
   fi
   local body
   body=$(jq -nc --arg q "$FUNCTIONS_GQL_QUERY" '{query:$q}')
-  curl -s --max-time 15 --connect-timeout "$CONNECT_TIMEOUT" -X POST -H "Content-Type: application/json" \
+  curl -s --max-time 15 --connect-timeout "$CONNECT_TIMEOUT" ${LINK_CURL_TLS[@]+"${LINK_CURL_TLS[@]}"} -X POST -H "Content-Type: application/json" \
     --data-binary "$body" "$GQL_URL" \
     || echo '{"errors":[{"message":"__FETCH_FAILED__"}],"data":null}'
 }
@@ -157,7 +202,33 @@ run_probe() {
     '{registry_empty:$empty, function_count:$count, function_ids:$ids, functions:$fns}'
 }
 
+# --tls-handshake (#10136, plan Phase 3 "handshake evidence"): the web-host proof that the Inngest host's TLS listener is
+# reachable AND verifies against the pinned CA, with no new probe script. (a) `curl --cacert <CA>` must return 200 on /health;
+# (b) the SAME request without the CA must fail with a certificate-verification error (curl exit 60), so (a) is not an
+# accident of a server that accepts everything. Independent of the link env (it runs BEFORE the flip too). The output is one
+# line of fixed tokens plus numeric curl exit codes - never curl's stderr, never a certificate or a path. No -k, no --capath.
+# Exit 0 only when verified=200 AND the unverified leg exited 60. CA file: INNGEST_CA_FILE (test seam), default the host file.
+tls_handshake() {
+  local ca="${INNGEST_CA_FILE:-/etc/soleur/inngest-ca.pem}" url="https://10.0.1.40:8443/health"
+  local code_v="" rc_v=0 rc_u=0 vtok utok result=fail
+  code_v=$(curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code}' --connect-timeout "$CONNECT_TIMEOUT" --max-time 10 \
+    --cacert "$ca" "$url" 2>/dev/null) || rc_v=$?
+  curl --disable --noproxy '*' -s -o /dev/null --connect-timeout "$CONNECT_TIMEOUT" --max-time 10 "$url" >/dev/null 2>&1 || rc_u=$?
+  if [[ "$rc_v" -eq 0 && "$code_v" == 200 ]]; then vtok=200; else vtok=fail; fi
+  case "$rc_u" in 60) utok=fail ;; 0) utok=ACCEPTED ;; *) utok=other ;; esac
+  if [[ "$vtok" == 200 && "$utok" == fail ]]; then result=pass; fi
+  [[ "$rc_v" =~ ^[0-9]{1,3}$ ]] || rc_v=255
+  [[ "$rc_u" =~ ^[0-9]{1,3}$ ]] || rc_u=255
+  printf 'inngest-tls-handshake verified=%s verified_rc=%s unverified=%s unverified_rc=%s result=%s\n' "$vtok" "$rc_v" "$utok" "$rc_u" "$result"
+  logger -t "$LOG_TAG" "SOLEUR_INNGEST_TLS_HANDSHAKE verified=$vtok unverified=$utok result=$result" 2>/dev/null || true
+  [[ "$result" == pass ]]
+}
+
 # Run only when executed directly — sourcing (unit tests) must NOT hit the network.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-  run_probe
+  case "${1:-}" in
+    --tls-handshake) tls_handshake ;;
+    "") run_probe ;;
+    *) echo "inngest-registry-probe: unknown argument (only --tls-handshake is accepted)" >&2; exit 2 ;;
+  esac
 fi

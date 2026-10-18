@@ -50,16 +50,31 @@ function isCutoverQuiesced(): boolean {
 // not the window length.
 const RETRY_AFTER_S = "120";
 
-// inngest.send surfaces a refused loopback as TypeError("fetch failed") with the
-// errno on `cause` (measured, inngest 3.54.2) — match the code, never message text.
-function isConnectionRefused(err: unknown): boolean {
+// inngest.send surfaces a transport failure as TypeError("fetch failed") with the errno/TLS code on
+// `cause` (refusal measured on inngest 3.54.2; TLS codes surface the same way from undici) — match the
+// code, never message text. Every code here means "the scheduler is not reachable / not verifiable right
+// now" and nothing was persisted, so the caller must re-arm (inngest-rearm-reminders.sh aborts on the
+// `backend-refused` 503 instead of continuing past a lost arm):
+//   ECONNREFUSED                  the cutover window after op=quiesce-web, or a restart;
+//   ETIMEDOUT, UND_ERR_CONNECT_TIMEOUT, ECONNRESET   a host replace / restart, or a listener that dropped the connection;
+//   ERR_TLS_*, DEPTH_ZERO_SELF_SIGNED_CERT, UNABLE_TO_VERIFY_LEAF_SIGNATURE   the verified-TLS link (#10136) failing
+//                                 certificate verification (pinned CA missing or wrong).
+// Only a FAILURE changes behaviour here; a successful send is untouched.
+const UNAVAILABLE_CAUSE_CODES = new Set([
+  "ECONNREFUSED",
+  "ETIMEDOUT",
+  "ECONNRESET",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+]);
+function isBackendUnavailable(err: unknown): boolean {
   if (!(err instanceof TypeError)) return false;
   const cause = (err as { cause?: unknown }).cause;
-  return (
-    typeof cause === "object" &&
-    cause !== null &&
-    (cause as { code?: unknown }).code === "ECONNREFUSED"
-  );
+  if (typeof cause !== "object" || cause === null) return false;
+  const code = (cause as { code?: unknown }).code;
+  if (typeof code !== "string") return false;
+  return UNAVAILABLE_CAUSE_CODES.has(code) || code.startsWith("ERR_TLS_");
 }
 
 export async function POST(request: Request) {
@@ -143,11 +158,11 @@ export async function POST(request: Request) {
       op: "dispatch",
       extra: { reminder_id: reminderId },
     });
-    // A REFUSED connection means the scheduler is not listening — the cutover
-    // window after op=quiesce-web, or a restart. Answer like the quiesce gate
-    // (retry later) instead of a terminal-looking 502; nothing was persisted
-    // either way, so the caller must re-arm.
-    if (isConnectionRefused(err)) {
+    // An unreachable or unverifiable scheduler (refused, timed out, reset, or failing TLS
+    // verification) — the cutover window after op=quiesce-web, a restart or replace, or a
+    // link misconfiguration. Answer like the quiesce gate (retry later) instead of a
+    // terminal-looking 502; nothing was persisted either way, so the caller must re-arm.
+    if (isBackendUnavailable(err)) {
       return NextResponse.json(
         { error: "Reminder arming temporarily unavailable (Inngest backend not accepting connections)" },
         { status: 503, headers: { "Retry-After": RETRY_AFTER_S, "X-Soleur-Unavailable": "backend-refused" } },

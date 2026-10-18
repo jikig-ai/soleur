@@ -195,12 +195,13 @@ describe("POST /api/internal/schedule-reminder — backend refusing connections"
     expect(res.headers.get("Retry-After")).toBeNull();
   });
 
-  it("stays 502 when the cause code is ECONNRESET even if its message mentions ECONNREFUSED", async () => {
+  it("503 (not 502) when the cause code is ECONNRESET, whatever the message says (#10136: a reset is retryable too)", async () => {
     const cause = Object.assign(new Error("read ECONNRESET (after ECONNREFUSED)"), { code: "ECONNRESET" });
     mockSendInngestWithRetry.mockRejectedValueOnce(new TypeError("fetch failed", { cause }));
     const res = await POST(makeRequest(validBody()));
-    expect(res.status).toBe(502);
-    expect(res.headers.get("X-Soleur-Unavailable")).toBeNull();
+    expect(res.status).toBe(503);
+    expect(res.headers.get("Retry-After")).toBe("120");
+    expect(res.headers.get("X-Soleur-Unavailable")).toBe("backend-refused");
   });
 
   it("stays 502 for a non-TypeError whose cause carries code ECONNREFUSED", async () => {
@@ -212,5 +213,61 @@ describe("POST /api/internal/schedule-reminder — backend refusing connections"
   it("stays 502 for a non-TypeError carrying ECONNREFUSED text only in its message", async () => {
     mockSendInngestWithRetry.mockRejectedValueOnce(new Error("upstream said ECONNREFUSED"));
     expect((await POST(makeRequest(validBody()))).status).toBe(502);
+  });
+});
+
+// #10136 (CTO G4): the verified-TLS link adds failure modes the refusal branch did not cover. Each of these is a
+// "scheduler unreachable or unverifiable right now, nothing persisted" outcome, so the caller (inngest-rearm-reminders.sh,
+// which aborts on X-Soleur-Unavailable: backend-refused) must see a retryable 503 rather than a terminal-looking 502 and
+// keep going past a lost arm. Error shapes are synthesized: TypeError("fetch failed") with the code on `cause`.
+function fetchFailedWith(code: string, message = `synthetic ${code}`): TypeError {
+  return new TypeError("fetch failed", { cause: Object.assign(new Error(message), { code }) });
+}
+
+describe("POST /api/internal/schedule-reminder — timeout and TLS-verification causes are retryable (503)", () => {
+  it.each([
+    "ECONNREFUSED",
+    "ETIMEDOUT",
+    "ECONNRESET",
+    "UND_ERR_CONNECT_TIMEOUT",
+    "ERR_TLS_CERT_ALTNAME_INVALID",
+    "ERR_TLS_HANDSHAKE_TIMEOUT",
+    "ERR_TLS_INVALID_PROTOCOL_VERSION",
+    "DEPTH_ZERO_SELF_SIGNED_CERT",
+    "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  ])("%s -> 503 + Retry-After + X-Soleur-Unavailable: backend-refused, mirrored to Sentry", async (code) => {
+    mockSendInngestWithRetry.mockRejectedValueOnce(fetchFailedWith(code));
+    const res = await POST(makeRequest(validBody()));
+    expect(res.status).toBe(503);
+    expect(res.headers.get("Retry-After")).toBe("120");
+    expect(res.headers.get("X-Soleur-Unavailable")).toBe("backend-refused");
+    expect(mockReportSilentFallback.mock.calls[0][1].op).toBe("dispatch");
+  });
+
+  it.each(["ENOTFOUND", "EAI_AGAIN", "EPIPE", "ERR_TLSX", "ERR_TLS", "err_tls_cert", "CERT_HAS_EXPIRED", ""])(
+    "%s stays 502 (only the listed causes are retryable; ERR_TLS_ needs its underscore and exact case)",
+    async (code) => {
+      mockSendInngestWithRetry.mockRejectedValueOnce(fetchFailedWith(code));
+      const res = await POST(makeRequest(validBody()));
+      expect(res.status).toBe(502);
+      expect(res.headers.get("Retry-After")).toBeNull();
+      expect(res.headers.get("X-Soleur-Unavailable")).toBeNull();
+    },
+  );
+
+  it("stays 502 for a retryable code on something that is not a TypeError, or with no object cause", async () => {
+    mockSendInngestWithRetry.mockRejectedValueOnce(Object.assign(new Error("wrapped"), { cause: { code: "ETIMEDOUT" } }));
+    expect((await POST(makeRequest(validBody()))).status).toBe(502);
+    mockSendInngestWithRetry.mockRejectedValueOnce(new TypeError("fetch failed: ETIMEDOUT"));
+    expect((await POST(makeRequest(validBody()))).status).toBe(502);
+    mockSendInngestWithRetry.mockRejectedValueOnce(new TypeError("fetch failed", { cause: "ETIMEDOUT" }));
+    expect((await POST(makeRequest(validBody()))).status).toBe(502);
+  });
+
+  it("a successful send is untouched (202, no Retry-After)", async () => {
+    mockSendInngestWithRetry.mockResolvedValueOnce(undefined);
+    const res = await POST(makeRequest(validBody()));
+    expect(res.status).toBe(202);
+    expect(res.headers.get("Retry-After")).toBeNull();
   });
 });

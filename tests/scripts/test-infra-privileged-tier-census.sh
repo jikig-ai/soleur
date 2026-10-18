@@ -4194,6 +4194,56 @@ else
 fi
 }
 
+# ── D8 row for the Inngest link flag actuator (#10136, CTO G1) ───────────────────────
+# `apply-web-platform-infra.yml::inngest_link_flag` writes a prd_terraform key with the write-scoped Doppler token and
+# applies a prd secret, so it is a Tier-B job by every rule above: it must declare a Tier-B environment, its `doppler
+# run` must keep `--preserve-env`, and the runbook inventory must carry its row. G1b/G1c already census it generically
+# (they are keyed on what a job references); this row pins the NAMED job so a rename or a dropped `environment:` cannot
+# slip through as "the job no longer exists", and the self-check proves the predicate can see a missing environment.
+d8_flag_job_ok() {
+  python3 - "$1" "$2" <<'PYD'
+import sys, yaml
+wf = yaml.safe_load(open(sys.argv[1]))
+job = (wf.get("jobs") or {}).get("inngest_link_flag")
+if not job:
+    sys.exit(1)
+if job.get("environment") not in ("infra-privileged", "web-platform-infra-apply", "inngest-cutover", "workspaces-luks-cutover"):
+    sys.exit(1)
+text = yaml.safe_dump(job)
+if "DOPPLER_TOKEN_WRITE" not in text:
+    sys.exit(1)
+runs = [l for s in job.get("steps", []) for l in str(s.get("run", "")).splitlines() if "doppler run" in l and not l.lstrip().startswith("#")]
+if len(runs) < 2 or any("--preserve-env" not in l for l in runs):
+    sys.exit(1)
+doc = open(sys.argv[2]).read()
+sys.exit(0 if "inngest_link_flag" in doc else 1)
+PYD
+}
+_d8_wf="$GHDIR/workflows/apply-web-platform-infra.yml"
+_d8_doc="$REPODIR/knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md"
+if d8_flag_job_ok "$_d8_wf" "$_d8_doc"; then
+  pass "D8-flag: inngest_link_flag declares a Tier-B environment, holds DOPPLER_TOKEN_WRITE under --preserve-env, and has its runbook inventory row"
+else
+  fail "D8-flag: inngest_link_flag is missing, not on a Tier-B environment, drops --preserve-env, or has no row in infra-credential-tiers-8209.md"
+fi
+mkdir -p "$T/mut"
+sed '/^  inngest_link_flag:/,/^    if:/ s/^    environment: infra-privileged$/    # environment removed/' "$_d8_wf" > "$T/mut/d8-noenv.yml"
+if cmp -s "$T/mut/d8-noenv.yml" "$_d8_wf"; then
+  fail "D8-flag-m1: the environment-removal mutation matched nothing; the job header shape drifted"
+elif d8_flag_job_ok "$T/mut/d8-noenv.yml" "$_d8_doc"; then
+  fail "D8-flag-m1: a flag job without an environment still passes the D8 predicate (vacuous)"
+else
+  pass "D8-flag-m1: removing the flag job's environment turns the D8 predicate RED"
+fi
+sed 's/--preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \\$/-p soleur -c prd_terraform --name-transformer tf-var -- \\/' "$_d8_wf" > "$T/mut/d8-nopreserve.yml"
+if cmp -s "$T/mut/d8-nopreserve.yml" "$_d8_wf"; then
+  fail "D8-flag-m2: the --preserve-env removal matched nothing"
+elif d8_flag_job_ok "$T/mut/d8-nopreserve.yml" "$_d8_doc"; then
+  fail "D8-flag-m2: a flag job whose doppler run drops --preserve-env still passes the D8 predicate (vacuous)"
+else
+  pass "D8-flag-m2: dropping --preserve-env from the flag job's doppler run turns the D8 predicate RED"
+fi
+
 # ── FLOOR + LEDGER (ADR-193: printf + exit, never through pass()/fail()) ─────────────
 # 26 -> 27 (review W1): M-g1-10-destroy-only-no-environment.
 # 27 -> 30 (#8714): M-g4-6 (two landings) and M-g4-7, the intended-destroy allowance rows.
@@ -4267,7 +4317,8 @@ _ran=$((passes + fails))
 #   Measured: 364 ran.
 # 364 -> 365 (#9956 review round 2 fixes): G4c-b9d — the floor arm reaches the row as
 #   'base unavailable' end-to-end. Measured: 365 ran.
-FLOOR=365
+# 365 -> 368 (#10136): D8-flag (live) and D8-flag-m1/m2 (environment and --preserve-env mutants; 1 verdict each). Measured: 368 ran.
+FLOOR=368
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1
