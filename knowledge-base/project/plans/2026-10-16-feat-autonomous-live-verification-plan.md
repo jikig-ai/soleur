@@ -141,15 +141,15 @@ None (re-run `gh issue list --label code-review` and match the file list above b
 
 ## Acceptance Criteria
 
-- [ ] `verifyPrincipal` fails with `CANT-RUN:cannot-spend-violated` for each case in 2.4, including under `--dry-run`.
-- [ ] The release workflow emit step sets `BLOCK=1` for `cannot-spend-violated` and no step is named "report-only".
-- [ ] `grep -rniE 'report-only' plugins/soleur/skills/postmerge/SKILL.md knowledge-base/engineering/architecture/decisions/ADR-064-live-production-verification-harness.md` returns only hits that describe history, each reviewed.
-- [ ] `flag-set-role/SKILL.md` contains the three-step ladder and no instruction to ask the operator to start a live session.
-- [ ] ADR-064 amendment lands in this PR with the three new invariants and the contract paragraph.
-- [ ] `seed-qa-user.sh` appears in the Article 30 register; `soleur:gdpr-gate` ran.
-- [ ] The ADR and skill text state plainly that prod verification does not attest the real CONNECT path and that the flip and rollback stay operator-typed.
+- [x] `verifyPrincipal` fails with `CANT-RUN:cannot-spend-violated` for each case in 2.4, including under `--dry-run`.
+- [x] The release workflow emit step sets `BLOCK=1` for `cannot-spend-violated` and no step is named "report-only".
+- [x] `grep -rniE 'report-only' plugins/soleur/skills/postmerge/SKILL.md knowledge-base/engineering/architecture/decisions/ADR-064-live-production-verification-harness.md` returns only hits that describe history, each reviewed.
+- [x] `flag-set-role/SKILL.md` contains the three-step ladder and no instruction to ask the operator to start a live session.
+- [x] ADR-064 amendment lands in this PR with the three new invariants and the contract paragraph.
+- [x] `seed-qa-user.sh` appears in the Article 30 register; `soleur:gdpr-gate` ran.
+- [x] The ADR and skill text state plainly that prod verification does not attest the real CONNECT path and that the flip and rollback stay operator-typed.
 - [x] The passive-verification issue exists (#10461) and names its four prerequisites; OD1 is tracked as #10460.
-- [ ] `python3 scripts/lint-guard-contract.py` passes.
+- [x] `python3 scripts/lint-guard-contract.py` passes.
 
 ## Test Scenarios
 
