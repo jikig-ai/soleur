@@ -11370,7 +11370,7 @@ fi
 
 # Source census, comment-stripped and scoped to the function body: the single-match-only path is gone and the
 # first-secret selection is what reads the rule.
-FO94_BODY="$(grep -vE '^[[:space:]]*#' "$FO99/fn.sh")"
+FO94_BODY="$(grep -vE '^[[:space:]]*#' "$FO99/fn.sh" || true)"
 TOTAL=$((TOTAL + 1))
 if ! printf '%s\n' "$FO94_BODY" | /usr/bin/grep -qE 'match\.secret' \
    && [[ "$(printf '%s\n' "$FO94_BODY" | /usr/bin/grep -cE '\.\.[[:space:]]*\|[[:space:]]*objects[[:space:]]*\|[[:space:]]*select\(has\("secret"\)\)' || true)" -eq 1 ]]; then
