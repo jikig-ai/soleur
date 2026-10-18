@@ -48,8 +48,9 @@ permissions:
   # — under an explicit permissions block an unlisted scope is `none`, which is
   # a silent 403 for that probe.
   actions: read
-  # (#7432, precedent #8450) the JOBS-pin soak probe reads the monitor's check-run annotations (the
-  # `main-health-outcomes` verdict) through `gh api`; an unlisted scope is `none` and would read as a 403.
+  # (#7432) the JOBS-pin soak probe reads the monitor's check-run annotations (the `main-health-outcomes`
+  # verdict) through `gh api`; under the explicit-permissions rule (#8450) an unlisted scope is `none` and 403s.
+  # Retire this line with the probe.
   checks: read
 
 jobs:

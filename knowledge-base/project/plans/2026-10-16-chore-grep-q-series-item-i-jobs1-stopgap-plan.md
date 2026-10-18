@@ -10,6 +10,13 @@ lane: cross-domain
 
 # chore: measure whether the JOBS=1 stopgap on the main health monitor can be removed (Item I)
 
+> **Review-round supersession (2026-10-18, 10 seats plus CTO rulings; see `decision-challenges.md`).** Where this plan and the shipped
+> tree differ, the tree wins: the `measure/` scripts were cut (queries live in `evidence.md`); the probe now proves `-P K >= 2` from each
+> counted run's log, counts strikes (one tolerated, two exit 5) with a committed `JUDGED_REPRODUCING_RUNS` list instead of exiting 5 on any
+> non-allowlisted RED, and reads the log with `--allow-escape-sequences`; `earliest=` is set before merge to 2026-10-19T00:00:00Z or later
+> (not "the merge time" after it); #7376 is unchained (its probe is deleted); the monitor is pinned to `runs-on: ubuntu-24.04`; guard (12b)
+> also catches quoted `"JOBS"` keys; per-suite bounds were widened in a separate PR merged first.
+
 ## Enhancement Summary
 
 **Deepened on:** 2026-10-16

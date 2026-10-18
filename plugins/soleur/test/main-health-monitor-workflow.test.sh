@@ -45,6 +45,7 @@ WF="${MHM_WORKFLOW:-$WF}"
 # of it as well and not only the workflow.
 SENTRY_TF="${MHM_SENTRY_TF:-$REPO_ROOT/apps/web-platform/infra/sentry/cron-monitors.tf}"
 RUNNER_SH="$REPO_ROOT/scripts/test-all.sh"
+INFRA_VALIDATION="${MHM_INFRA_VALIDATION:-$REPO_ROOT/.github/workflows/infra-validation.yml}"
 
 PASS=0
 FAIL=0
@@ -76,12 +77,13 @@ fi
 RESULT_FILE="$(mktemp -t mhm-guards.XXXXXXXX)" || exit 1
 trap 'rm -f "$RESULT_FILE"' EXIT
 
-python3 - "$WF" "$RUNNER_SH" "$SENTRY_TF" >"$RESULT_FILE" 2>&1 <<'PY'
+python3 - "$WF" "$RUNNER_SH" "$SENTRY_TF" "$INFRA_VALIDATION" >"$RESULT_FILE" 2>&1 <<'PY'
 import re, sys, math
 
 wf_path = sys.argv[1]
 runner_path = sys.argv[2]
 sentry_tf_path = sys.argv[3]
+infra_validation_path = sys.argv[4]
 raw = open(wf_path).read()
 
 # Whole-line comments only. A naive strip-from-# would truncate legitimate
@@ -676,22 +678,28 @@ else:
 # steps, so run 31367748528 ran the infra runner at -P 4, hit the harness flake
 # (#7376) and filed a spurious issue (#7386); (12) then asserted the pin on BOTH
 # steps. Item I of the grep -q series (#9217, tracker #7432) measured the infra pin
-# and ruled it off (decision-challenges.md in this feature's spec dir): the
-# deploy-script-tests legs in infra-validation.yml run the same runner at -P 4 on the
-# same runner class, and the sequential infra step was killed at its 60-minute
-# ceiling in 81 of 269 monitor runs that could deliver a verdict. The tests step
+# and ruled it off (evidence in this feature's spec dir; figures live in the JOBS note
+# of main-health-monitor.yml and the revert trigger in the header of
+# scripts/followthroughs/jobs1-stopgap-7432.sh -- not restated here). The tests step
 # keeps its pin (a branch diff touching apps/web-platform/infra/ nests the infra
 # runner inside it), so the check is split, not deleted:
 #   (12a) the tests step env sets JOBS to 1 (value `1`, "1" or '1' and nothing else)
 #   (12b) both suite steps were extracted with their OWN env: block, and no JOBS
 #         assignment exists anywhere outside the tests step env -- not in the infra
 #         step env, the infra run: text, a job or workflow env:, or a trailing
-#         comment on a code line (counted on purpose: a whole-line comment is
-#         stripped, a `# JOBS: 2` after code is not, and failing closed there is
-#         cheaper than an allowlist).
+#         comment on a code line, and with the key bare OR quoted ("JOBS": 1 is
+#         valid YAML and the same assignment; counted on purpose: a whole-line
+#         comment is stripped, a `# JOBS: 2` after code is not, and failing closed
+#         there is cheaper than an allowlist).
+# Scope, stated so it is not read as more: this is a TRIPWIRE against accidentally
+# re-adding the pin, not an adversary model. Width reaching the infra step by another
+# channel (OMP_NUM_THREADS, BASH_ENV, a pin inside scripts/test-all.sh or
+# run-registered-suites.sh, an `unset JOBS` in the tests run:) is not matched here;
+# the soak probe reads the real `-P K` from every counted run's log and refuses K < 2,
+# which is the authoritative width check (CTO ruling Q5, decision-challenges.md).
 # Restoring the infra pin therefore means editing (12b) in the same diff, which a
-# reviewer sees. The compared subject is a stated property, not a stored value.
-JOBS_TOKEN = re.compile(r'(?<![A-Za-z0-9_])JOBS\s*[:=]')
+# reviewer sees.
+JOBS_TOKEN = re.compile(r'(?<![A-Za-z0-9_])["\']?JOBS["\']?\s*[:=]')
 JOBS_ONE = re.compile(r'^          JOBS:\s*(?:1|"1"|\'1\')\s*$', re.M)
 
 def step_envs(text):
@@ -732,11 +740,9 @@ if _b:
     ok("(12b) the infra step carries no JOBS pin and no JOBS assignment exists outside the tests step env")
 else:
     bad("(12b) the infra step carries no JOBS pin and no JOBS assignment exists outside the tests step env",
-        f"{_d} -- Item I (#7432, tracker #9217) removed the infra-step pin on measured evidence: the "
-        "deploy-script-tests legs run the same runner at -P 4 and the sequential infra step was killed at "
-        "its 60-minute ceiling in 81 of 269 monitor runs. To restore it, flip this check in the same diff "
-        "and cite the revert trigger (a suite RED here that does not reproduce in infra-validation, or a "
-        "new ceiling kill, within the first 12 scheduled runs). See "
+        f"{_d} -- Item I (#7432, tracker #9217) removed the infra-step pin on measured evidence. To "
+        "restore it, flip this check in the same diff and apply the revert trigger stated in the header of "
+        "scripts/followthroughs/jobs1-stopgap-7432.sh. See "
         "knowledge-base/project/learnings/2026-08-09-the-monitor-reported-success-and-i-read-the-field-that-cannot-say-otherwise.md")
 
 # Mutation matrix for (12): each row perturbs an in-memory copy of the RAW workflow, re-strips it, and
@@ -768,12 +774,12 @@ else:
     ok("(12) mutation anchors are unique in the workflow")
     # row 1: a pin restored at each of four scopes, one scope per copy -> (12b) RED, (12a) untouched
     jobs_row("-m1a", "JOBS: 1 restored in the infra step env", raw.replace(_ANCHOR_INFRA_ENV, _ANCHOR_INFRA_ENV + "          JOBS: 1\n", 1), True, False)
-    jobs_row("-m1b", "JOBS: 1 added at job-level env:", raw.replace("    runs-on: ubuntu-latest\n", "    runs-on: ubuntu-latest\n    env:\n      JOBS: 1\n", 1), True, False)
+    jobs_row("-m1b", "JOBS: 1 added at job-level env:", raw.replace("    runs-on: ubuntu-24.04\n", "    runs-on: ubuntu-24.04\n    env:\n      JOBS: 1\n", 1), True, False)
     jobs_row("-m1c", "export JOBS=1 added to the infra run: script", raw.replace(_ANCHOR_INFRA_RUN, "          export JOBS=1\n" + _ANCHOR_INFRA_RUN, 1), True, False)
     jobs_row("-m1d", "JOBS: 1 added at workflow-level env:", raw.replace('env:\n  GITLEAKS_VERSION:', 'env:\n  JOBS: 1\n  GITLEAKS_VERSION:', 1), True, False)
     # row 2: location axis -- the tests pin deleted and a job-level pin added, so the token COUNT stays 1
     _m2 = _mutate_once(raw, r'^          JOBS:\s*1\s*\n', '')
-    jobs_row("-m2", "tests pin deleted and a job-level pin added (token count unchanged)", _m2.replace("    runs-on: ubuntu-latest\n", "    runs-on: ubuntu-latest\n    env:\n      JOBS: 1\n", 1), False, False)
+    jobs_row("-m2", "tests pin deleted and a job-level pin added (token count unchanged)", _m2.replace("    runs-on: ubuntu-24.04\n", "    runs-on: ubuntu-24.04\n    env:\n      JOBS: 1\n", 1), False, False)
     # row 3: value axis
     jobs_row("-m3a", "tests pin value changed to 2", _mutate_once(raw, r'^          JOBS:\s*1\s*$', '          JOBS: 2'), False, True)
     jobs_row("-m3b", 'tests pin written as the quoted string "1" (still the same value)', _mutate_once(raw, r'^          JOBS:\s*1\s*$', '          JOBS: "1"'), True, True)
@@ -782,9 +788,51 @@ else:
     jobs_row("-m4b", "infra step has no env: block", _mutate_once(raw, r'(        id: infra\n(?:.*\n)*?)        env:\n(?:          .*\n)+(        run: )', r'\1\2'), True, False)
     # row 5: the documented fail-closed case
     jobs_row("-m5", "trailing `# JOBS: 2` comment on a code line in the infra env", raw.replace(_ANCHOR_INFRA_ENV, "          TEST_GROUP: infra # JOBS: 2\n", 1), True, False)
+    # row 6 (CTO Q5.2): the pin moved into the WRONG block -- tests pin deleted, infra pin present (token count stays 1)
+    _m6 = _mutate_once(raw, r'^          JOBS:\s*1\s*\n', '')
+    jobs_row("-m6", "tests pin deleted and the pin sits in the infra env instead (wrong block)", _m6.replace(_ANCHOR_INFRA_ENV, _ANCHOR_INFRA_ENV + "          JOBS: 1\n", 1), False, False)
+    # row 7 (CTO Q5.1): a QUOTED key is the same YAML assignment and must read as a pin at every scope
+    jobs_row("-m7a", 'JOBS written as a double-quoted key in the infra env', raw.replace(_ANCHOR_INFRA_ENV, _ANCHOR_INFRA_ENV + '          "JOBS": 1\n', 1), True, False)
+    jobs_row("-m7b", "JOBS written as a single-quoted key in the infra env", raw.replace(_ANCHOR_INFRA_ENV, _ANCHOR_INFRA_ENV + "          'JOBS': 1\n", 1), True, False)
+    jobs_row("-m7c", 'double-quoted "JOBS" key at job-level env:', raw.replace("    runs-on: ubuntu-24.04\n", '    runs-on: ubuntu-24.04\n    env:\n      "JOBS": 1\n', 1), True, False)
+    jobs_row("-m7d", "single-quoted 'JOBS' key at workflow-level env:", raw.replace('env:\n  GITLEAKS_VERSION:', "env:\n  'JOBS': 1\n  GITLEAKS_VERSION:", 1), True, False)
     # P1: must-PASS non-canonical -- whole-line comments naming JOBS, and the infra env keys reordered
     jobs_row("-p1", "whole-line comments mention JOBS and the infra env reorders TEST_GROUP (must PASS)",
              raw.replace(_ANCHOR_INFRA_ENV, "          # JOBS: 9 is only a comment here\n          NOOP: x\n" + _ANCHOR_INFRA_ENV, 1), True, True)
+
+# ---- (12c) runner parity (CTO ruling Q6, Item I) ----------------------------
+# The soak evidence (688 deploy-script-tests leg executions and the five dispatches) ran on the
+# ubuntu-24.04 image. `ubuntu-latest` moves to a newer image on 2026-10-19, inside the soak, so the
+# monitor is pinned to the same label infra-validation's deploy-script-tests job uses. Asserting the
+# two labels are EQUAL (and not a floating `*latest`) keeps one from drifting off the other.
+def job_runs_on(text, job):
+    m = re.search(r'^  ' + re.escape(job) + r':\s*$', text, re.M)
+    if not m:
+        return None
+    rest = text[m.end():]
+    nxt = re.search(r'^  [A-Za-z0-9_-]+:\s*$', rest, re.M)
+    body = rest[:nxt.start()] if nxt else rest
+    r = re.search(r'^    runs-on:\s*(\S+)\s*$', body, re.M)
+    return r.group(1) if r else None
+
+_iv_raw = open(infra_validation_path).read()
+_iv_stripped = "\n".join(l for l in _iv_raw.splitlines() if not re.match(r'^\s*#', l))
+
+def runner_parity(mon_text, iv_text):
+    a = job_runs_on(mon_text, "health-check")
+    b = job_runs_on(iv_text, "deploy-script-tests")
+    return (a is not None and a == b and "latest" not in a), f"monitor runs-on={a} infra-validation deploy-script-tests runs-on={b}"
+
+_par, _pd = runner_parity(stripped, _iv_stripped)
+if _par:
+    ok("(12c) the monitor runs on the same pinned runner label as infra-validation's deploy-script-tests")
+else:
+    bad("(12c) the monitor runs on the same pinned runner label as infra-validation's deploy-script-tests", _pd)
+_mut_stripped = stripped.replace("    runs-on: ubuntu-24.04\n", "    runs-on: ubuntu-latest\n", 1)
+if _mut_stripped != stripped and not runner_parity(_mut_stripped, _iv_stripped)[0]:
+    ok("(12c) mutation: a floating ubuntu-latest label on the monitor fails the parity check")
+else:
+    bad("(12c) mutation: a floating ubuntu-latest label on the monitor fails the parity check", "the mutation did not land or the parity check still passed")
 
 # ---- (11) the machine-readable verdict annotation --------------------------
 # GitHub exposes no REST field for job summaries; annotations ARE retrievable via
@@ -1881,9 +1929,11 @@ fi
 # Raised from 63 to 135 in #8112 (the classifier, leak, elapsed-annotation and Sentry-parity rows;
 # every behavioural row runs in BOTH shell arms, so count rows x 2). Re-read the current total
 # from the `anti-vacuity: N assertions ran` line rather than carrying this literal forward.
-# Raised from 135 to 159 for Item I (#7432): check (12) became (12a)/(12b) plus 11 in-memory mutation copies
-# (a "landed" row and a verdict row each) and one anchor-uniqueness row, a net +24 over the 147 measured before.
-MIN_ASSERTIONS=159
+# Raised from 135 to 183 for Item I (#7432): check (12) became (12a)/(12b) plus in-memory mutation copies
+# (a "landed" row and a verdict row each), the quoted-key / wrong-block rows and the (12c) runner-parity
+# rows. Set to the MEASURED count (the `anti-vacuity: N assertions ran` line), not below it: slack here is
+# budget for deleted rows to hide in (review of #10459: six rows, twelve assertions, deletable at 159/171).
+MIN_ASSERTIONS=183
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \

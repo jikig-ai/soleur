@@ -2031,7 +2031,8 @@ eqv_sh="$(_eqv "$EQV_SH")"
 #   Recompute PJ_TRIPLES from a tree with no uncommitted tracked change: `PJ_ALL="$(git ls-files)"; . <(sed -n '/^# PJ-DERIVE-BEGIN/,/^# PJ-DERIVE-END/p' .claude/hooks/grep-q-pipe-guard.test.sh); pj_join_pairs | LC_ALL=C sort -u | wc -l`
 #   (the guard prints the same number on its PASS line). The derivation is bounded: a wrapper chain is read to 200 characters, a joined line to 8192 bytes and 50 lines, the loop list to 32 entries.
 # STILL OPEN (listed, not planned here): the series of #9217 continues with the wave A3 carriers (six carrier rows and 23 later-wave sites, gated on a host replace)
-# and the #9639 and #9638 triage. Item I removed the infra-step JOBS pin of main-health-monitor.yml on measured evidence (tracker #7432 stays open for its soak; recorded on #9217). Items D and H are recorded as not
+# and the #9639 and #9638 triage. Item I (PR #10459) removes the infra-step JOBS pin of main-health-monitor.yml; its soak runs under tracker #7432, which stays
+# open, and its merge record goes on #9217. Items D and H are recorded as not
 # fixed, Item E as moot, and Item G (a --ratchets selector in scripts/test-all.sh) as not fixed, each with its reason on #9217; Item F is the multi-line passes, the
 # widened reader pattern and population in the sweep above, and the survivors it left are listed under its STATED LIMITS. This block does not claim the series is finished.
 # THE PRE-PUSH AFFECTED GATE DOES NOT SELECT THIS GUARD for a change to many of the files it reads. Measured 2026-10-16 at ee8644bded over this guard's own pairs, with

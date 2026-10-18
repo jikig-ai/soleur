@@ -5,8 +5,8 @@ Issue: #7432 (Ref, not Closes). Tracker: #9217 (Ref). Draft PR: #10459.
 
 ## Phase 0: re-measure
 
-- 0.1 Run `ITEM_I_DIR=/var/tmp/item-i-work bash knowledge-base/project/specs/feat-one-shot-grep-q-pipe-guard-item-i-jobs1-stopgap/measure/run-all.sh`
-- 0.2 Confirm the output contains `CONTROLS OK` before reading any count
+- 0.1 Pull the monitor history and the infra-validation legs with the `gh` queries in `evidence.md` (the `measure/` scripts were cut at review)
+- 0.2 Confirm the pull is well-formed (every run has its annotation and its legs) before reading any count
 - 0.3 Compare M1 to M4 with the plan figures; a suite RED at `-P 4` that was clean at `-P 1` in a paired sha goes back to the CTO agent before any edit
 
 ## Phase 1: guard first, then the pin-removed edit, then the dry-run gate
@@ -16,7 +16,7 @@ Issue: #7432 (Ref, not Closes). Tracker: #9217 (Ref). Draft PR: #10459.
 - 1.3 Run `bash plugins/soleur/test/main-health-monitor-workflow.test.sh`; commit guard and workflow together
 - 1.4 Verify `git log -1 --format='%an <%ae>'` reads Jean Deruelle; push the branch (diff must touch no `apps/web-platform/infra/` path and not `apply-web-platform-infra.yml`)
 - 1.5 Dispatch twice: `gh workflow run main-health-monitor.yml --ref feat-one-shot-grep-q-pipe-guard-item-i-jobs1-stopgap -f dry_run=true`; list the runs with `gh run list --workflow main-health-monitor.yml --branch <branch> --event workflow_dispatch --json databaseId,createdAt,headSha`
-- 1.6 Wait with the Monitor tool (never a background polling loop), then read each run with `measure/extract-monitor-facts.sh` and the `main-health-outcomes` annotation
+- 1.6 Wait with the Monitor tool (never a background polling loop), then read each run's `main-health-outcomes` annotation and job log (`gh api --allow-escape-sequences`)
 - 1.7 Gate: the tests-step log prints the `not_in_diff` skip line and no nested runner; both runs show `-P 4`, `infra=success` (or only the known tag-drift RED), `infra_elapsed_s` at most 2400, no timeout annotation, no `[KILLED]`, no `UNACCOUNTED`; elapsed 2400 to 3000 s is ambiguous, so dispatch a third time; a non-deterministic RED or elapsed above 3000 s goes to 5b
 
 ## Phase 2: stale-statement corrections (comment-only)
@@ -34,7 +34,8 @@ Issue: #7432 (Ref, not Closes). Tracker: #9217 (Ref). Draft PR: #10459.
 - 3.4 Delete line 30 of `scripts/lint-shell-trace-credential-refusal.baseline.txt`; run `python3 scripts/lint-shell-trace-credential-refusal.py`
 - 3.5 Register the suite with one `run_suite` line in `scripts/test-all.sh`; run `bash scripts/lint-orphan-test-suites.sh` and the PJ_TRIPLES recompute before and after
 - 3.6 Add `checks: read` to `.github/workflows/scheduled-followthrough-sweeper.yml` with a comment citing #8450
-- 3.7 After merge: edit the #7432 directive (`earliest=` merge time, trigger, caveat, #7376 assumption); read the first sweep comment and confirm NOT YET, not CANNOT ESTABLISH
+- 3.7 BEFORE merge (ship gating, CTO Q3/Q4): set the #7432 directive `earliest=2026-10-19T00:00:00Z` or later (re-edit if the merge slips past it), post the revert trigger on #7432, update its body item 1, raise it to priority/p2, and remove the follow-through directive from #7376's body; after merge read the first sweep comment: NOT YET (exit 2), not CANNOT ESTABLISH (exit 3)
+- 3.8 Review round (2026-10-18): bounds PR #10486 merged first; probe rewritten (flag, per-run width proof, strikes, judged list); guard quoted-key, wrong-block and runner-parity rows; monitor pinned to `ubuntu-24.04`; #7376 probe deleted; `measure/` deleted
 
 ## Phase 4: evidence, ship
 

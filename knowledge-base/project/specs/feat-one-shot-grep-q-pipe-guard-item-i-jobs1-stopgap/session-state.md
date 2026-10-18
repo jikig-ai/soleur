@@ -14,7 +14,7 @@ None blocking (a scripted splice that dropped plan sections was restored; a wron
 ### Decisions
 
 - Ruled by CTO agent, 2026-10-16: option D, remove the infra-step JOBS pin only and keep the tests-step pin; work-phase gate is two dry_run dispatches from the branch; revert trigger is the first 12 scheduled runs.
-- The #7432 deadlock premise is false (infra-validation runs the runner at -P 4); the tests-step pin is a no-op for the runner; the infra step is killed at its 60-minute ceiling in 81 of 269 runs.
+- The #7432 deadlock premise is false (infra-validation runs the runner at -P 4); the tests-step pin is a no-op on main (the nested runner is skipped there) and is needed on a branch diff touching `apps/web-platform/infra/`; the infra step is killed at its 60-minute ceiling in 81 of 269 runs.
 - Check (12) is split, not deleted. #7432 is Ref, not Closes; it closes through its probe. No DONE for this PR.
 
 ### Components Invoked
