@@ -13,6 +13,32 @@ requires_cpo_signoff: true
 
 # chore(quality): audit silent and catch-all exception handlers in shipped plugin scripts (slice 1 of #10331)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-18. **Sections enhanced:** Research Insights, Work list, Implementation Phases, Observability, Guard Contract, Sharp Edges. **Inputs:** the CTO rulings (five forks plus two plan-review rows), the five-seat plan-review panel (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow), the learnings sweep and the gdpr-gate run. The mechanical halts of this skill ran (4.6 user-brand, 4.7 observability, 4.8 PAT-shaped variables, 4.11 guard contract, 4.12 scope check); 4.5, 4.55, 4.9 and 4.10 do not fire (no network symptom, no downtime-inducing change, no UI surface, no store or `.tf`/migration file). No further agent fan-out was run: the slice is one subsystem with mechanical edits, the review panel already covered the correctness, simplicity, blast-radius and flow lenses, and every load-bearing claim was re-verified live below.
+
+### Key improvements
+
+1. Kieran's code reads closed three execution gaps that would have failed at work time: the proxy suite's stdlib import allowlist (`contextlib` must be added), `mk_variant` instead of `beside()` for characterization cases, and the proxy suite's pinned `EXPECTED_MUTANTS` / `EXPECTED_RED_ROWS` / `MIN_ASSERTIONS`.
+2. The discoverability probe now exits 0 on success (Check 10 requires rc 0): the "count is zero" and `grep -L` forms exit non-zero when the slice succeeds, so the probe counts the new tuples instead.
+3. B2 lost its helper: `decoded = None` in the handler plus `if decoded is not None: return decoded` is F841-clean and mirrors B3.
+
+### Live verification (commands run 2026-10-18)
+
+```text
+PAT-shaped variable sweep (4.8)                  -> none
+unfenced '## Scope Check' count (4.12)           -> 1 ; no 'unmapped' cell, no 'status: BLOCKED', one 'Recommendation:' line
+'## User-Brand Impact' count (4.6)               -> 1 ; threshold: single-user incident
+python3 scripts/lint-guard-contract.py <plan>    -> 1 guard entry ; lint-infra-no-human-steps.py -> OK
+cited AGENTS rule ids resolved against AGENTS.rules.md / migrated-rule-ids.txt -> none missing
+scripts/ruff-requirements.txt                    -> ruff==0.16.10 (the pin the plan cites)
+cited paths exist: work-scratch-sandboxes.md, check10-test-manifest.txt, preflight-check10-suite-integrity.test.sh; proxy suite has fake_killpg (in-process teardown probe) and mk_variant; run_suite 'scripts/lint-ratchet-ruff-live' is wired in scripts/test-all.sh and test-affected-paths.sh
+labels type/chore, deferred-scope-out, priority/p3-low exist; milestone 'Post-MVP / Later' exists
+#10331 #10433 #10381 #8659 OPEN ; #10375 #10426 MERGED
+grep -vc '^#' baseline -> 62 ; plugins S110/S112 entries -> 18 (S110 14, S112 4) ; post-slice S110 7, S112 6, total 44 / 52 lines
+grep -c "SystemExit, KeyboardInterrupt" <proxy>  -> 0 today (rc 1), 3 after C1-C3
+```
+
 Spec lacks a valid `lane:` (no `spec.md` for this branch): defaulted to `cross-domain` (fail-closed).
 
 ## Overview
