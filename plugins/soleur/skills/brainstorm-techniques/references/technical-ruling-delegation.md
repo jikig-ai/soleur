@@ -113,7 +113,8 @@ per persisted decision, whatever shape the free-form body uses. Columns: `Item |
   with a recommendation and rendered under Model Dissents in the PR body; it needs no ruling cell and files no issue (accepted
   residual: a preference the model auto-decided is recorded where the operator reads the PR, not filed as an issue). A user-visible
   *preference* is `taste`, never an operator category. A technical row that overrides a direction the operator STATED also
-  gets an `operator (scope)` row naming that override, so the operator sees it.
+  gets an `operator (scope)` row naming that override, so the operator sees it. A CLO ruling on legal posture is recorded
+  with Class `operator (legal-risk)` and a `Ruled by CLO agent, <date>: ...` Ruling; `technical (legal)` is not a valid Class.
 - **Ruling, technical row:** `Ruled by CTO agent, <date>: <decision> - <rationale>` (`CLO` for legal; and `Dissent: <line>` when
   present). If the ruling differs from what a headless subagent assumed and built, re-enter `work` for the item.
 - **Ruling, operator row:** the ACTION being authorised, citing the sibling technical row's item id when split. For a

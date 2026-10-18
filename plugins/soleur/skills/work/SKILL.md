@@ -1423,6 +1423,8 @@ See [references/key-principles.md](${CLAUDE_PLUGIN_ROOT}/skills/work/references/
 
 ## Common Pitfalls to Avoid
 
+- When changing harness-owned commands, test commands extracted from the actual harness registries across supported repository layouts; a copied helper test alone does not verify registration wiring.
+
 - **A sibling sweep is done when the SHAPE LISTS that drive the guards match, not when the guards match.** When a new guard joins an existing one (a `transitions` check beside a `sub_steps` check), diff the two enumerations beneath them — the fixture rows, the FATAL modes the message names, the shapes the suite drives — line for line. Parallel-looking guard bodies over unequal shape lists ship one side container-only. **Why:** #8382 — `transitions` asserted the container while `sub_steps` asserted members; the suite drove 5 shapes vs 2. See `knowledge-base/project/learnings/2026-09-21-a-conflict-starved-merge-ref-reads-as-ci-never-ran.md`.
 
 - **A claim about a platform's runtime semantics is a measurement you have not taken yet — take it
@@ -1431,12 +1433,8 @@ See [references/key-principles.md](${CLAUDE_PLUGIN_ROOT}/skills/work/references/
   them, not the one line you wanted.** For systemd the measurement is a thirty-second transient unit
   with a counting `OnFailure=` reporter (`systemd-run --user … -p OnFailure=rep.service`), and it
   must be re-run for every sentence the diff adds about ordering, retry or terminal state.
-  **Why:** #8210 — five claims written from `systemd.service(5)` and the v255 source were each
-  inverted on the box: `OnFailure=` fired per attempt (not once), a refused timer tick fired nothing
-  (not "~96/day"), `Result=success` reset when a retry STARTED (the terminal boolean read `yes`
-  mid-ladder), `Persistent=` was inert without `OnCalendar=`, and the `RestartMode=direct` fix made
-  `enable --now` block through the whole ladder; separately the rung-2 interlock was copied onto the
-  replace job without the sibling's `fetch-depth: 0`, so the route was held permanently. See
+  **Why:** #8210 — five systemd assumptions reversed under measurement, and a copied interlock
+  omitted `fetch-depth: 0`, holding the route. See
   `knowledge-base/project/learnings/2026-09-19-every-systemd-claim-i-reasoned-was-inverted-by-a-thirty-second-measurement.md`.
 - **Scope every mechanical edit to lines the BRANCH added** (`git diff origin/main...HEAD`), and
   assert the pre-existing count is unchanged afterwards. **Why:** #7810 — a remediation keyed on

@@ -720,7 +720,8 @@ async function runQueryAttempt(opts: QueryAttemptOpts): Promise<QueryAttemptResu
         autoAllowBashIfSandboxed: true,
         allowUnsandboxedCommands: false,
         enableWeakerNestedSandbox: true,
-        network: { allowedDomains: [], allowManagedDomainsOnly: true },
+        // Production sets allowAllUnixSockets (#10445) so the SDK's apply-seccomp wrapper is not engaged.
+        network: { allowedDomains: [], allowManagedDomainsOnly: true, allowAllUnixSockets: true },
         filesystem: {
           // Mirror the prod fix (#5733 → per-sibling deny, #5862 → constant
           // parent deny): deny the shared PARENT root explicitly. Under the

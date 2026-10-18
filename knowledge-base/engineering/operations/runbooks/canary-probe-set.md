@@ -303,6 +303,51 @@ the consecutive-pass soak and page; `canary_infra_error` rows hold the soak and 
 | `args_fd_closed` | The `--args <fd>` transport probe failed — the SDK's real spawn shape broke (shim closed the argv fd) | Every agent spawn fails too; treat as deploy-blocking |
 | `bwrap_shim_refused[: <detail>]` | The shim itself exited 65 (`bwrap-shim:` marker) — artifact or real bwrap missing in the image; **post-#10032 also fires on unresolvable command-side `/proc/self/fd/N` refs** (deleted/non-file/procfs-resident/absent fd — including a command that merely *mentions* the path), and on `/proc`-mounting argvs lacking `--unshare-pid`/`--unshare-user`. The verdict's `detail` field (folded into the deploy-state reason as `bwrap_shim_refused: bwrap-shim: <first refusal line>`) names the class | `probeAgentSandboxHardening` fields (`shim`, `filter`, `bpfBytes`) cover the artifact/binary-missing classes; the `bwrap-shim:` line names the rest |
 
+## SDK Bash smoke and the `helper_userns_eperm` denial (#10445)
+
+> **Status (2026-10-16): the deploy-time `sdk_bash_smoke` has not shipped; it is tracked in #10453.** The decode table below is the *planned* contract. What exists today: the runtime `agent_sandbox_bash_denial` alert, the pre-merge wrapped-command guards (`test/sandbox-wrapped-command-runtime.test.ts` and the wrapped-command/census arms of `infra/sandbox-masked-proc-docker.test.sh`), and the readback `scripts/followthroughs/sandbox-readback-10445.sh`.
+
+**Why this exists.** The faithful canary above replays the captured bwrap SETUP argv and ends in `-- true`, so it
+never runs the process the Agent SDK wraps around every sandboxed Bash command
+(`ARGV0=apply-seccomp /proc/self/fd/<N> <shell> -c <cmd>`). From 2026-10-06 the shim's seccomp filter denied
+`unshare(CLONE_NEWUSER)`, which that embedded helper needs, and every hosted Bash call failed while
+`sandbox_canary` read `verdict=pass` (ADR-079 addendum 2026-10-16; PIR
+[`hosted-agent-bash-apply-seccomp-userns-eperm-postmortem.md`](../post-mortems/hosted-agent-bash-apply-seccomp-userns-eperm-postmortem.md)).
+A green `sandbox_canary` therefore certifies the bwrap setup only; it is NOT evidence that Bash works.
+
+**How the smoke will be decoded (PLANNED, #10453; nothing in this paragraph or table exists yet).** `sdk_bash_smoke` would be a separate verdict in `/hooks/deploy-status` (read it with the
+call pattern in `plugins/soleur/skills/postmerge/references/deploy-status-debugging.md`, no SSH). It would run a real
+Bash command end to end through the SDK's own wrapper path and the shipped shim, inside the canary container,
+under the production run tuple. It would be non-blocking until promoted (`wg-dark-launch-deploy-gates`).
+
+| `reason` | Meaning | First move |
+|---|---|---|
+| `pass` | A real wrapped Bash command ran green through the shim. Read the coverage field: a verdict without it certifies nothing about the wrapper | None. Promotion needs 5 green verdicts over at least 3 days (ADR-079) |
+| `sdk_bash_smoke_failed` | The wrapped command failed. A journald row `SANDBOX_CANARY_FAIL: verdict=sandbox_broken reason=sdk_bash_smoke_failed ... (op=sandbox-canary; ...)` carries the failure context; the smoke records the wrapped command's stderr in its verdict detail | Read the recorded stderr. `apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted` is this incident: confirm `network.allowAllUnixSockets` is still set and that no SDK bump changed the helper-selection condition (`vendored-bwrap-tail` tests). Do NOT carve a `CLONE_NEWUSER` exception in the filter: a seccomp filter cannot key on the caller, so it re-opens nested userns for every sandboxed process (undoes #8752) |
+| `smoke_infra_error` | The smoke itself could not run (stub model or harness error). Holds the soak, never rolls back, never a Bash verdict | Treat as no signal; re-run the deploy readback, and open an issue if it persists across deploys |
+
+**First move on a `helper_userns_eperm`** (the runtime classifier code on the `op=bash-tool-result` mirror, paged by
+`agent_sandbox_bash_denial`, see
+[`betterstack-log-query.md`](./betterstack-log-query.md#standing-alarms-over-this-source-log-content-recurrence-alarms)).
+Executable today, without `sdk_bash_smoke`: (1) run the alert's Query block in that runbook for `rows`, `users` and the
+first timestamp (and its positive-control query if the count is zero); (2) read `/hooks/deploy-status` for
+`sandbox_canary` and the deployed tag, remembering a green canary does not certify the wrapper; (3) `rows` from more than
+one user is real and fleet-wide, so check that `network.allowAllUnixSockets` is still set in
+`agent-runner-sandbox-config.ts` and the SDK version (`sandbox_canary.sdk_version`), and re-run the pre-merge proofs
+(`test/sandbox-wrapped-command-runtime.test.ts` and the wrapped-command arms of `infra/sandbox-masked-proc-docker.test.sh`);
+(4) make a real hosted Bash call and read the result; (5) a single user's rows are either a tenant echoing the line (the accepted limitation below) or a real regression seen by the only active tenant; step (4) decides, never the user count. Once the smoke ships (#10453), add `sdk_bash_smoke` as a second read in step
+(2): a red smoke plus multi-user rows is conclusive. If a rollback of the sandbox posture is ever considered, the shim
+kill-switch needs explicit CTO acknowledgement and a time box; it is not a routine step.
+
+**Accepted forgery limitation.** The runtime classifier reads Bash `tool_result` text, which a tenant controls.
+The arm matches only the exact helper line (`apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted`,
+line-anchored, nothing trailing), is debounced per user (keyed with the error code), and the alert filters on the new
+`sandboxErrorCode`, so a tenant-printed `bwrap` line cannot reach it. A tenant CAN still print the exact helper line and
+keep one incident open, suppressing new pages (see the alert's entry in `betterstack-log-query.md`; mitigation tracked
+in #10455). Once the deploy-time smoke ships (#10453) it, not tenant text, becomes the authoritative signal; until then
+the email only prompts the check above. The wake path for both alerts is email-only on
+the Better Stack free tier until the ADR-260 Slack integration is verified.
+
 ## Outer-wrap canary — #5863 arm-F verdicts
 
 `outer_wrap_canary.verdict` in deploy-state (Sentry `op=sandbox-canary-outer-wrap`) covers the
