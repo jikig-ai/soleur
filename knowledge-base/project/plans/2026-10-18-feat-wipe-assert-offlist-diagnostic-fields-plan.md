@@ -11,6 +11,14 @@ requires_cpo_signoff: true
 
 # feat(git-data): name the cause of a wipe-assert rc=34 refusal with fixed-vocabulary fields
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-18. **Halts run:** 4.6 user-brand, 4.7 observability (probe-verb gate accepted the command), 4.8 PAT sweep, 4.11 guard contract (`lint-guard-contract.py` green), 4.12 scope check: all pass. **Reviewers:** code-simplicity, test-design, security-sentinel (read-only), plus the earlier CTO, CLO and CPO rulings.
+
+Key improvements: (1) tests fold exact-suffix checks into existing rows instead of cloning worlds and assert WHOLE-line equality (a substring match accepts `offlist_n=10`); (2) six mutants whose cases require rc 34 plus the full line, including a flag-vs-counter mutant and a name-leak mutant; (3) floors are measured unprivileged so the local gate cannot FATAL; (4) the runbook reading for `hooks` no longer implies provenance the bit cannot prove; (5) a control-character row pins that the `hooks` test sits after the rc 35 refusal.
+
+New considerations: no new external command may be added (the suite pins recorded argv multisets); `LF_ENTRIES` must be assigned after the digit check; arm H and its RED-first state are observable only in CI. Reviewer findings and their dispositions are rows R-1..R-7 of decision-challenges.md.
+
 Refs: #10138, #6897 (Ref only; this PR never closes either). Spec lacks `lane:` (no spec.md for this
 branch): defaulted to `cross-domain` (fail-closed).
 
