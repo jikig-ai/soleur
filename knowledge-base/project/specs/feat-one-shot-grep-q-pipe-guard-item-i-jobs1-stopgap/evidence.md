@@ -45,9 +45,10 @@ and rewrote the guard and the probe, neither of which is on the dispatched path.
 
 ### What the two green re-gates do and do not show
 
-They are two off-peak samples (Fri 2026-10-16 17:49Z to Sun 2026-10-18 05:47Z; parity-mutation has only 3 uncensored durations:
-240, 424, 481 s). Slowness is a shared run-level factor (total suite-seconds ranged 4474 to 6242 across the five runs). Longest
-reconstructed duration over the bound, in the slowest run:
+They are two samples from a weekend-heavy span (Fri 2026-10-16 17:49Z to Sun 2026-10-18 05:47Z, which includes a US Friday
+afternoon; no weekday-peak sample; parity-mutation has only 3 uncensored durations: 240, 424, 481 s). Slowness is a shared
+run-level factor (total suite-seconds ranged 4474 to 6242 across the five runs). Each suite's longest reconstructed duration
+over its bound (the maxima come from different runs):
 
 | suite | longest / bound | ratio |
 |---|---|---|
@@ -59,8 +60,10 @@ reconstructed duration over the bound, in the slowest run:
 | ci-deploy | 410 / 540 | 0.76 |
 
 The step wall (1666 to 1881 s against 3600 s) has 1.9 to 2.2x headroom; the per-suite bounds are the tight constraint at `-P 4`.
-That is why the bounds were widened in a separate PR (#10486, to 1.5x of the observed maximum, a judgement and not a measured
-ceiling), merged before this soak starts. The soak, not these two runs, is the instrument for headroom.
+That is why the bounds are widened in a separate PR (#10486: parity, repush and zot-pull 540 to 720, boot-unlock 900 to 1200,
+a new 540 entry for `run-registered-suites.test.sh`; about 1.5x of the observed maximum, 1.9x for the new entry; a judgement
+and not a measured ceiling). It MUST merge before the soak starts: until it does, the soak runs on the bounds above and each
+bound-kill counts as a strike. The soak, not these two runs, is the instrument for headroom.
 
 ## The one RED and its fix
 

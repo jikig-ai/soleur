@@ -126,9 +126,9 @@ env:
 
 jobs:
   health-check:
-    # Pinned to match infra-validation and the Item I soak evidence (the `ubuntu-latest` label
-    # moves to a newer image on 2026-10-19, inside the soak); re-evaluate the image together
-    # with infra-validation's pin.
+    # Pinned to match infra-validation and the Item I soak evidence (the runner's own annotation
+    # says the `ubuntu-latest` label starts moving to a newer image on 2026-10-19, inside the
+    # soak); re-evaluate the image together with infra-validation's pin.
     runs-on: ubuntu-24.04
 
     # TIMEOUT BUDGET — measured, not guessed. Re-derive; do not copy.
@@ -342,15 +342,18 @@ jobs:
           # Why the pin existed: the runner defaults to min(nproc,6), i.e. -P 4 on a
           # 4-core hosted runner, and a 2026-08 measurement (#7376, eight executions
           # of the same 92-suite set on an unchanged tree) saw four fail naming six
-          # distinct suites, while -P 1 was clean; a local -P 6 run on 16 cores
-          # also failed, under load, which the tracker now reads as contention. At
-          # that rate an armed monitor would have filed a spurious P1 every other run.
+          # distinct suites, while the -P 1 runs were clean. #7376 later traced the
+          # flake mostly to the `grep -q` early-exit pipe shape under pipefail, with
+          # -P contention only opening the scheduling gap; #9554 removed that shape
+          # from the production roots on 2026-10-06, which is the start of this
+          # change's observation window.
           #
           # Why the infra step no longer carries it (Item I of the grep -q series,
           # #9217; tracker #7432): the infra-validation `deploy-script-tests` legs
-          # run the SAME runner at -P 4 on the same runner image (688 leg
+          # run the same runner at -P 4 on the same runner image (688 leg
           # executions on push to main from 2026-09-25 to 2026-10-16: 609 success,
-          # 75 failure, none shown parallel-only), while the sequential infra step
+          # 75 failure, none shown parallel-only; each leg runs a quarter of the
+          # suite set, the monitor runs all of it), while the sequential infra step
           # did not reliably fit its 60-minute ceiling at the current suite count:
           # 81 of about 270 monitor runs that reported a verdict (30%) had the infra
           # step killed at the ceiling (the verdict reads infra=failure with no
@@ -358,7 +361,7 @@ jobs:
           # this pin affects the branch-diff case only. Guard (12) in
           # plugins/soleur/test/main-health-monitor-workflow.test.sh asserts both
           # halves. The revert trigger is stated once, in the header of
-          # scripts/followthroughs/jobs1-stopgap-7432.sh, and posted on #7432.
+          # scripts/followthroughs/jobs1-stopgap-7432.sh, and mirrored on #7432.
           JOBS: 1
         run: |
           set +e

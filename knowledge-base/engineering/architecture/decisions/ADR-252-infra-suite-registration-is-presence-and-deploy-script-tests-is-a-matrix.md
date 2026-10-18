@@ -73,7 +73,7 @@ was the objection any infra sharding had to answer *with numbers*.
    slow leg here.
 
    > **Superseded (#7432, Item I of #9217):** for the monitor's infra step
-   > only. The infra-step pin was removed; the tests step keeps its pin (it
+   > only. The infra-step pin is removed; the tests step keeps its pin (it
    > nests the runner on a branch diff touching `apps/web-platform/infra/`).
    > Figures: the JOBS note in `main-health-monitor.yml`. Revert trigger: the
    > header of `scripts/followthroughs/jobs1-stopgap-7432.sh`.

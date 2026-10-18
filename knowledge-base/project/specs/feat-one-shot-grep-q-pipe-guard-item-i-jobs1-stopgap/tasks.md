@@ -24,7 +24,7 @@ Issue: #7432 (Ref, not Closes). Tracker: #9217 (Ref). Draft PR: #10459.
 - 2.1 `.github/workflows/infra-validation.yml` comment: monitor infra step now runs at the default width
 - 2.2 ADR-252 sentence "main-health-monitor keeps JOBS:1 ..." corrected
 - 2.3 `.claude/hooks/grep-q-pipe-guard.test.sh` STILL OPEN header: Item I outcome with its #9217 reference
-- 2.4 Leave the `run-registered-suites.sh` clause; record it in the PR body
+- 2.4 The `run-registered-suites.sh` "pinned on both steps" clause is fixed by the separate bounds PR #10486, not here (an edit under `apps/web-platform/infra/` would arm the nested runner)
 
 ## Phase 3: follow-through probe
 
@@ -35,7 +35,7 @@ Issue: #7432 (Ref, not Closes). Tracker: #9217 (Ref). Draft PR: #10459.
 - 3.5 Register the suite with one `run_suite` line in `scripts/test-all.sh`; run `bash scripts/lint-orphan-test-suites.sh` and the PJ_TRIPLES recompute before and after
 - 3.6 Add `checks: read` to `.github/workflows/scheduled-followthrough-sweeper.yml` with a comment citing #8450
 - 3.7 BEFORE merge (ship gating, CTO Q3/Q4): set the #7432 directive `earliest=2026-10-19T00:00:00Z` or later (re-edit if the merge slips past it), post the revert trigger on #7432, update its body item 1, raise it to priority/p2, and remove the follow-through directive from #7376's body; after merge read the first sweep comment: NOT YET (exit 2), not CANNOT ESTABLISH (exit 3)
-- 3.8 Review round (2026-10-18): bounds PR #10486 merged first; probe rewritten (flag, per-run width proof, strikes, judged list); guard quoted-key, wrong-block and runner-parity rows; monitor pinned to `ubuntu-24.04`; #7376 probe deleted; `measure/` deleted
+- 3.8 Review round (2026-10-18): bounds PR #10486 must merge BEFORE this PR is marked ready (the soak starts on its bounds); probe rewritten (flag, per-run width proof, strikes, judged list); guard quoted-key, wrong-block and runner-parity rows; monitor pinned to `ubuntu-24.04`; #7376 probe deleted; `measure/` deleted
 
 ## Phase 4: evidence, ship
 

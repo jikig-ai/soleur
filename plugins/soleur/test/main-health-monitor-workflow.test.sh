@@ -834,6 +834,17 @@ if _mut_stripped != stripped and not runner_parity(_mut_stripped, _iv_stripped)[
 else:
     bad("(12c) mutation: a floating ubuntu-latest label on the monitor fails the parity check", "the mutation did not land or the parity check still passed")
 
+# One row per conjunct of the parity predicate, on synthetic two-job texts, so dropping `a == b` or the floating-label clause
+# cannot hide behind the other (the real-file rows above exercise only the combined predicate).
+for _mon, _iv, _want, _lbl in [("ubuntu-24.04", "ubuntu-24.04", True, "the same pinned label"),
+                               ("ubuntu-22.04", "ubuntu-24.04", False, "two different pinned labels"),
+                               ("ubuntu-latest", "ubuntu-latest", False, "both floating on ubuntu-latest")]:
+    _got = runner_parity("jobs:\n  health-check:\n    runs-on: %s\n" % _mon, "jobs:\n  deploy-script-tests:\n    runs-on: %s\n" % _iv)[0]
+    if _got == _want:
+        ok(f"(12c) parity verdict {_want} for {_lbl}")
+    else:
+        bad(f"(12c) parity verdict {_want} for {_lbl}", f"got {_got}")
+
 # ---- (11) the machine-readable verdict annotation --------------------------
 # GitHub exposes no REST field for job summaries; annotations ARE retrievable via
 # gh api .../check-runs/<id>/annotations. Without this the verdict is unreadable
@@ -1929,11 +1940,11 @@ fi
 # Raised from 63 to 135 in #8112 (the classifier, leak, elapsed-annotation and Sentry-parity rows;
 # every behavioural row runs in BOTH shell arms, so count rows x 2). Re-read the current total
 # from the `anti-vacuity: N assertions ran` line rather than carrying this literal forward.
-# Raised from 135 to 183 for Item I (#7432): check (12) became (12a)/(12b) plus in-memory mutation copies
+# Raised from 135 to 186 for Item I (#7432): check (12) became (12a)/(12b) plus in-memory mutation copies
 # (a "landed" row and a verdict row each), the quoted-key / wrong-block rows and the (12c) runner-parity
 # rows. Set to the MEASURED count (the `anti-vacuity: N assertions ran` line), not below it: slack here is
 # budget for deleted rows to hide in (review of #10459: six rows, twelve assertions, deletable at 159/171).
-MIN_ASSERTIONS=183
+MIN_ASSERTIONS=186
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \

@@ -15,7 +15,7 @@ lane: cross-domain
 > counted run's log, counts strikes (one tolerated, two exit 5) with a committed `JUDGED_REPRODUCING_RUNS` list instead of exiting 5 on any
 > non-allowlisted RED, and reads the log with `--allow-escape-sequences`; `earliest=` is set before merge to 2026-10-19T00:00:00Z or later
 > (not "the merge time" after it); #7376 is unchained (its probe is deleted); the monitor is pinned to `runs-on: ubuntu-24.04`; guard (12b)
-> also catches quoted `"JOBS"` keys; per-suite bounds were widened in a separate PR merged first.
+> also catches quoted `"JOBS"` keys; per-suite bounds are widened in a separate PR (#10486) that must merge before this one.
 
 ## Enhancement Summary
 

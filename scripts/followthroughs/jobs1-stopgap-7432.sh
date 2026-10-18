@@ -15,19 +15,25 @@
 # from the clock: every counted run's job log must carry exactly one `with -P K` with K >= 2, else the run is unreadable.
 #
 # REVERT TRIGGER (stated here once; the workflow comment, guard (12b) and the ADR point here): within the 12 runs, an infra
-# step killed or not completed (exit 1), or two or more suite REDs that do NOT reproduce, restores the pin in a PR that also
-# flips guard (12b) in plugins/soleur/test/main-health-monitor-workflow.test.sh. A RED reproduces if the same suite is RED
-# at the same sha in an infra-validation run, or a rerun of it at -P 1 also fails. HUMAN clause, not encoded here: revert
+# step killed or not completed (exit 1), or two or more suite REDs that do NOT reproduce (each non-allowlisted RED suite is
+# one strike, so one run holding two of them is two), restores the pin in a PR that also flips guard (12b) in
+# plugins/soleur/test/main-health-monitor-workflow.test.sh. A RED reproduces if the same suite is RED at the same sha in
+# an infra-validation run, or a rerun of it at -P 1 also fails. HUMAN clause, not encoded here: revert
 # early on a single non-deterministic RED in the first 3 runs, judged on the monitor's own filed P1 in the first ~18 hours.
 # Evidence limit: of 15 same-sha pairs only 3 were informative and none showed a parallel-only failure, so the history
-# cannot rule a parallel-only RED out; this soak is the instrument.
+# cannot rule a parallel-only RED out; this soak is the instrument. #7376 later traced the original flake mostly to the
+# `grep -q` early-exit pipe shape (contention only opened the scheduling gap), which #9554 removed on 2026-10-06 -- the
+# start of this soak's observation window.
 #
 # CLASSIFICATION per counted run, in this order: width not provable (unread) | annotation missing, duplicated or malformed
 # (unread) | killed (the `Run infra suites` timeout annotation, or infra=failure with no infra_elapsed_s) | infra=success
-# (clean) | infra neither success nor failure (hard) | infra=failure: an UNACCOUNTED or ACCOUNTING FAILURE line (hard), no
-# RED line (hard), a RED set inside KNOWN_DETERMINISTIC_REDS (clean, disclosed), otherwise a STRIKE unless the run id is in
-# JUDGED_REPRODUCING_RUNS. A human adds an id there, by PR, only after confirming the RED reproduces (which makes it not a
-# strike under the trigger above); a run judged NON-reproducing stays a strike.
+# (clean) | infra neither success nor failure (hard) | infra=failure: the runner's own tally line (`=== registered infra
+# suites: P passed, F failed, U unaccounted ===`) absent, duplicated, with U > 0 or with F not equal to the RED lines, or an
+# UNACCOUNTED line (all hard), no RED line (hard), a RED set inside KNOWN_DETERMINISTIC_REDS (clean, disclosed), otherwise
+# one STRIKE per non-allowlisted RED suite unless the run id is in JUDGED_REPRODUCING_RUNS (run-granular). A human adds an
+# id there, by PR, only after confirming the RED reproduces (which makes it not a strike under the trigger above); a run
+# judged NON-reproducing stays a strike. A run whose only REDs are allowlisted reads clean and is named in the PASS line;
+# there is no cap, because the deterministic tag-drift RED has its own P1 from the monitor.
 #
 # Exit codes (sweep-followthroughs.sh vocabulary), in precedence order: 1 FAIL (a counted run was killed) | 5 ACTION
 # REQUIRED (any hard failure, or two or more strikes: whether they reproduce needs a person) | 3 CANNOT ESTABLISH (any read
@@ -37,13 +43,15 @@
 # the PASS line names it, together with every allowlisted run, so whoever closes sees it.
 #
 # #7376 is NOT closed by this probe. 12 clean runs bound the failure rate at about 25% (rule of three) and #7376's own fix
-# criteria are unmet, so the evidence supports "mitigated", not "fixed". On a PASS, post the figures on #7376 and let a
-# person decide closure.
+# criteria are unmet, so the evidence supports "mitigated", not "fixed" (the runs are not independent, so the bound is
+# generous). On a PASS, post the figures on #7376 and let a person decide closure.
 #
 # RETIREMENT: when #7432 closes, delete this file, its .test.sh and the run_suite line in scripts/test-all.sh, remove
 # `checks: read` from scheduled-followthrough-sweeper.yml, and decide whether to re-derive the infra step's 60-minute ceiling
 # (over-provisioned at the default width; it and its Sentry coupling were deliberately not re-derived in Item I).
 set -uo pipefail
+# no pathname expansion: a RED name is attacker-influenceable text and `for s in $reds` must not glob it
+set -f
 
 case "$-" in
   *x*)
@@ -81,6 +89,8 @@ body="$(base64 -d <<<"$content" 2>/dev/null)" || body=""
 [ -n "$body" ] || { echo "CANNOT ESTABLISH: $WF on main decoded to nothing"; exit 3; }
 case "$body" in *main-health-monitor*) : ;; *) echo "CANNOT ESTABLISH: fetched content does not look like the monitor workflow"; exit 3 ;; esac
 PIN_RE="(^|[^A-Za-z0-9_])[\"']?JOBS[\"']?[[:space:]]*[:=]"
+WIDTH_RE='^[0-9TZ:.-]+ +Running [0-9]+ registered infra suite\(s\)[^|]* with -P [0-9]+'
+SUMMARY_RE='^[0-9TZ:.-]+ +=== registered infra suites: [0-9]+ passed, [0-9]+ failed, [0-9]+ unaccounted \(of [0-9]+\) ===$'
 pins="$(grep -vE '^[[:space:]]*#' <<<"$body" | grep -cE "$PIN_RE")" || pins=0
 if [ "$pins" -ge 2 ]; then
   echo "NOT YET: $pins JOBS assignments on main (the tests-step pin plus another); the infra-step pin has not been removed."
@@ -96,14 +106,14 @@ if [ "$count" -ge 200 ]; then
   echo "CANNOT ESTABLISH: the run list filled its 200-run limit, so the oldest $N runs may be missing"
   exit 3
 fi
-oldest="$(jq -r --argjson n "$N" '[.[] | select(.conclusion != "cancelled")] | sort_by(.createdAt) | .[0:$n] | .[] | "\(.databaseId) \(.status)"' <<<"$runs" 2>/dev/null)" \
+oldest="$(jq -r --argjson n "$N" '[.[] | select(.conclusion != "cancelled")] | unique_by(.databaseId) | sort_by(.createdAt) | .[0:$n] | .[] | "\(.databaseId) \(.status)"' <<<"$runs" 2>/dev/null)" \
   || { echo "CANNOT ESTABLISH: could not project the run list"; exit 3; }
 
 # --- 3. classify each counted run --------------------------------------------------------------------------------------------
 killed=""; hard=""; unread=""; allowlisted=""; judged=""; strikes=""; nstrikes=0; ks=""; pending=0; seen=0
 
 classify() {  # classify <run id>: appends to the lists above and returns; it never exits
-  local rid="$1" jobs_json jid log slice nw k ann msg tmo toks infra_vals ni infra reds s other n_other name
+  local rid="$1" jobs_json jid log slice nw k ann msg tmo toks infra_vals ni infra reds nred sumn sumline sf su s other n_other name
   jobs_json="$(gh api "repos/$REPO/actions/runs/$rid/jobs?per_page=100" 2>/dev/null)" || { unread="$unread $rid(jobs)"; return; }
   jid="$(jq -r '[.jobs[] | select(.name == "health-check")][0].id // empty' <<<"$jobs_json" 2>/dev/null)" || jid=""
   [ -n "$jid" ] || { unread="$unread $rid(job)"; return; }
@@ -112,9 +122,11 @@ classify() {  # classify <run id>: appends to the lists above and returns; it ne
   # only the infra step's part of the job log: everything from its env dump onward
   slice="$(awk '/TEST_GROUP: infra$/ {on=1} on' <<<"$log")"
   # width proof, BEFORE any kill classification: a pre-removal -P 1 killed run must not raise a false FAIL
-  nw="$(grep -cE 'Running [0-9]+ registered infra suite\(s\).* with -P [0-9]+' <<<"$slice")" || nw=0
-  k="$(grep -E 'Running [0-9]+ registered infra suite\(s\).* with -P [0-9]+' <<<"$slice" | sed -E 's/.* with -P ([0-9]+).*/\1/' | head -1)"
-  if [ "$nw" != 1 ] || [ -z "$k" ] || [ "$k" -lt 2 ]; then unread="$unread $rid(width:${k:-none})"; return; fi
+  # anchored on the runner's own timestamped line: a `SOLEUR| ` suite excerpt or a quoted decoy cannot match
+  nw="$(grep -cE "$WIDTH_RE" <<<"$slice")" || nw=0
+  k="$(grep -E "$WIDTH_RE" <<<"$slice" | head -1 | grep -oE ' with -P [0-9]+' | grep -oE '[0-9]+' | head -1)"
+  case "$k" in ''|*[!0-9]*) unread="$unread $rid(width:none)"; return ;; esac
+  if [ "$nw" != 1 ] || [ "${#k}" -gt 3 ] || [ "$k" -lt 2 ]; then unread="$unread $rid(width:$k)"; return; fi
   case " $ks " in *" $k "*) : ;; *) ks="$ks $k" ;; esac
   ann="$(gh api "repos/$REPO/check-runs/$jid/annotations?per_page=100" 2>/dev/null)" || { unread="$unread $rid(annotations)"; return; }
   msg="$(jq -r '[.[] | select(.title == "main-health-outcomes" and ((.message // "") | startswith("SOLEUR_MAIN_HEALTH ")))] | if length == 1 then .[0].message else "" end' <<<"$ann" 2>/dev/null)" || { unread="$unread $rid(annotations)"; return; }
@@ -130,8 +142,15 @@ classify() {  # classify <run id>: appends to the lists above and returns; it ne
   if [ "$tmo" -gt 0 ] || { [ "$infra" = failure ] && ! grep -qE '^infra_elapsed_s=[0-9]+$' <<<"$toks"; }; then killed="$killed $rid"; return; fi
   if [ "$infra" = success ]; then return; fi
   if [ "$infra" != failure ]; then hard="$hard $rid(infra=$infra)"; return; fi
-  if grep -qE '^[0-9TZ:.-]+ +(UNACCOUNTED  |ACCOUNTING FAILURE)' <<<"$slice"; then hard="$hard $rid(unaccounted)"; return; fi
   reds="$(grep -oE '^[0-9TZ:.-]+ +RED  apps/web-platform/infra/[^ ]+' <<<"$slice" | sed -E 's|.*RED  apps/web-platform/infra/||' | sort -u)"
+  nred="$(grep -c . <<<"$reds")" || nred=0
+  # the runner's own tally is the accounting proof: exactly one line, no unaccounted suite, F equal to the RED lines. A line
+  # of the shape of a RED line cannot forge a clean run past it, and a suite killed with no rc (the OOM class) shows in U.
+  sumn="$(grep -cE "$SUMMARY_RE" <<<"$slice")" || sumn=0
+  sumline="$(grep -E "$SUMMARY_RE" <<<"$slice" | head -1)"
+  sf="$(sed -E 's/.*: [0-9]+ passed, ([0-9]+) failed, ([0-9]+) unaccounted.*/\1/' <<<"$sumline")"
+  su="$(sed -E 's/.*: [0-9]+ passed, ([0-9]+) failed, ([0-9]+) unaccounted.*/\2/' <<<"$sumline")"
+  if grep -qE '^[0-9TZ:.-]+ +UNACCOUNTED  ' <<<"$slice" || [ "$sumn" != 1 ] || [ "$su" != 0 ] || [ "$sf" != "$nred" ]; then hard="$hard $rid(accounting)"; return; fi
   if [ -z "$reds" ]; then hard="$hard $rid(infra=failure,no-RED-line)"; return; fi
   other=""; n_other=0
   for s in $reds; do
@@ -141,7 +160,7 @@ classify() {  # classify <run id>: appends to the lists above and returns; it ne
   done
   if [ "$n_other" -eq 0 ]; then allowlisted="$allowlisted $rid"; return; fi
   case " $JUDGED_REPRODUCING_RUNS " in *" $rid "*) judged="$judged $rid"; return ;; esac
-  strikes="$strikes $rid(${other# })"; nstrikes=$((nstrikes + 1))
+  strikes="$strikes $rid(${other# })"; nstrikes=$((nstrikes + n_other))
 }
 
 while read -r rid status; do

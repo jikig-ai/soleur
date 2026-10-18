@@ -97,10 +97,15 @@ case "$ep" in
     [ -f "$FX/ann-$jid.json" ] || { echo "gh: HTTP 404" >&2; exit 1; }
     cat "$FX/ann-$jid.json"; exit 0 ;;
   "repos/$R/actions/jobs/"*"/logs")
-    # real gh 2.102 on a body carrying ESC bytes, without the flag: exit 1, no body
+    # real gh 2.102 refuses a body that carries ESC bytes unless the flag is passed; an ESC-free body is served
     [ $# -eq 2 ] || refuse "$@"
-    echo "the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway" >&2
-    exit 1 ;;
+    jid="${ep#repos/$R/actions/jobs/}"; jid="${jid%%/*}"
+    [ -f "$FX/log-$jid.txt" ] || { echo "gh: HTTP 404" >&2; exit 1; }
+    if LC_ALL=C grep -q "$(printf '\033')" "$FX/log-$jid.txt"; then
+      echo "the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway" >&2
+      exit 1
+    fi
+    cat "$FX/log-$jid.txt"; exit 0 ;;
 esac
 refuse "$@"
 FAKE
@@ -118,7 +123,9 @@ new_fx() {
 # mkrun <rid> <offset s> <status> <conclusion> <infra: success|failure|skipped|cancelled|ABSENT> <timeout 0|1> [red suite...]
 # knobs read from the environment and UNSET after each call (so a knob never leaks into the next fixture):
 #   MK_K (default 4; "none" omits the width line)  MK_DUPK=1 (a second width line)  MK_ELAPSED (default 1, or 0 when timeout=1)
-#   MK_UNACC=1 (UNACCOUNTED + ACCOUNTING FAILURE lines)  MK_TESTTMO=1 (the tests-step timeout annotation, a decoy)
+#   MK_UNACC=1 (the real shape: an UNACCOUNTED line AND unaccounted=1 in the tally)  MK_UNACCLINE=1 (the line only)  MK_SUMU=1 (the tally only)
+#   MK_UNACC_PRE=1 (an UNACCOUNTED line BEFORE the infra env dump, outside the slice)  MK_SUMMARY=none (no tally line)  MK_SUMF=<n> (failed count)
+#   MK_NOESC=1 (a log with no ESC byte)  MK_TESTTMO=1 (the tests-step timeout annotation, a decoy)
 #   MK_MSG (the whole outcome message)  MK_ANN2=1 (a second valid outcome annotation)  MK_NOLOG / MK_NOJOBS / MK_NOHC=1
 mkrun() {
   local rid="$1" off="$2" st="$3" concl="$4" infra="$5" to="$6"; shift 6
@@ -144,16 +151,22 @@ mkrun() {
     jq --arg m "$msg" '. + [{title:"main-health-outcomes",message:$m}]' "$FX/ann-$jid.json" > "$FX/ann.tmp" && mv "$FX/ann.tmp" "$FX/ann-$jid.json"
   fi
   if [ -z "${MK_NOLOG:-}" ]; then
-    { echo "2026-11-01T00:00:00.0000000Z RED  apps/web-platform/infra/tests-part-decoy.test.sh"
+    local nf=$# uacc=0 sf
+    { [ -z "${MK_UNACC_PRE:-}" ] || echo "2026-11-01T00:00:10.0000000Z UNACCOUNTED  tests-part-decoy.test.sh"
+      echo "2026-11-01T00:00:00.0000000Z RED  apps/web-platform/infra/tests-part-decoy.test.sh"
       echo "2026-11-01T00:00:30.0000000Z Running 1 registered infra suite(s) with -P 1…"
       echo "2026-11-01T00:01:00.0000000Z   TEST_GROUP: infra"
-      [ "$k" = none ] || printf '2026-11-01T00:01:30.0000000Z \033[36;1mRunning 179 registered infra suite(s) with -P %s…\033[0m\n' "$k"
+      [ -n "${MK_NOESC:-}" ] || printf '2026-11-01T00:01:10.0000000Z \033[36;1mgroup\033[0m\n'
+      [ "$k" = none ] || printf '2026-11-01T00:01:30.0000000Z Running 179 registered infra suite(s) with -P %s…\n' "$k"
       [ -z "${MK_DUPK:-}" ] || printf '2026-11-01T00:01:31.0000000Z Running 179 registered infra suite(s) with -P 4…\n'
       local s; for s in "$@"; do echo "2026-11-01T00:02:00.0000000Z RED  apps/web-platform/infra/$s"; done
-      [ -z "${MK_UNACC:-}" ] || { echo "2026-11-01T00:02:30.0000000Z UNACCOUNTED  some-killed-shim.test.sh"; echo "2026-11-01T00:02:31.0000000Z ACCOUNTING FAILURE: 179 suites were dispatched but only 178 reported."; }
-      echo "2026-11-01T00:03:00.0000000Z === done ==="; } > "$FX/log-$jid.txt"
+      { [ -n "${MK_UNACC:-}" ] || [ -n "${MK_UNACCLINE:-}" ]; } && echo "2026-11-01T00:02:30.0000000Z UNACCOUNTED  some-killed-shim.test.sh"
+      { [ -n "${MK_UNACC:-}" ] || [ -n "${MK_SUMU:-}" ]; } && uacc=1
+      sf="${MK_SUMF-$nf}"
+      [ "${MK_SUMMARY:-}" = none ] || printf '2026-11-01T00:03:00.0000000Z === registered infra suites: %d passed, %d failed, %d unaccounted (of 179) ===\n' $((179 - sf - uacc)) "$sf" "$uacc"
+      echo "2026-11-01T00:03:30.0000000Z === done ==="; } > "$FX/log-$jid.txt"
   fi
-  unset MK_K MK_DUPK MK_ELAPSED MK_UNACC MK_TESTTMO MK_MSG MK_ANN2 MK_NOLOG MK_NOJOBS MK_NOHC
+  unset MK_K MK_DUPK MK_ELAPSED MK_UNACC MK_UNACCLINE MK_SUMU MK_UNACC_PRE MK_SUMMARY MK_SUMF MK_NOESC MK_TESTTMO MK_MSG MK_ANN2 MK_NOLOG MK_NOJOBS MK_NOHC
 }
 good_runs() { local i; for i in $(seq 1 "$1"); do mkrun $((90000 + i)) $((i * 3600)) completed success success 0; done; }
 run_probe() {  # run_probe <probe path> [extra env...]; sets RC and OUT, resets the refused log first
@@ -171,9 +184,9 @@ expect() {  # expect <label> <rc> [output substring...]
 expect_not() {  # expect_not <label> <output substring>: the output must NOT carry it
   case "$OUT" in *"$2"*) fail "$1: output must not carry '$2' ($OUT)" ;; *) pass "$1: output does not carry '$2'" ;; esac
 }
-mutate() {  # mutate <name> <old> <new>: a mutated COPY of the probe by exact literal; it must land exactly once. Sets MUT.
-  local m="$TMP/mut.$1.sh"
-  if ! python3 - "$PROBE" "$m" "$2" "$3" <<'PY'
+mutate() {  # mutate <name> <old> <new> [base file]: a mutated COPY (of the probe by default) by exact literal; it must land exactly once. Sets MUT.
+  local m="$TMP/mut.$1.sh" base="${4:-$PROBE}"
+  if ! python3 - "$base" "$m" "$2" "$3" <<'PY'
 import sys
 src, dst, old, new = sys.argv[1:5]
 s = open(src).read()
@@ -182,12 +195,38 @@ if s.count(old) != 1:
 open(dst, "w").write(s.replace(old, new))
 PY
   then fail "mutant $1: the mutation did not land exactly once"; return 1; fi
-  if cmp -s "$PROBE" "$m"; then fail "mutant $1: the mutated copy is identical to the probe"; return 1; fi
+  if cmp -s "$base" "$m"; then fail "mutant $1: the mutated copy is identical to its base"; return 1; fi
   MUT="$m"
 }
 kill_row() {  # kill_row <label> <want rc of the mutant>: RC (from the mutant) must be exactly the stated one
   if [ "$RC" -eq "$2" ]; then pass "$1 (mutant exit $2)"; else fail "$1: the mutant exited $RC, want $2 ($OUT)"; fi
 }
+
+# helper self-test: expect/expect_not/kill_row/mutate each own a verdict and pass()/fail() cannot vouch for them. Drive each with an
+# input that MUST fail and require exactly one recorded failure, then with a good input and require none; unwind every counter so the
+# floor below stays exact. Reported with printf + exit, never through the helpers under test.
+_selftest_helpers() {
+  local p0=$passes f0=$fails a0=$asserted n0=${#FAILURES[@]} d
+  FX="$TMP/fx.selftest"; assert_fixture_dir "$FX"; mkdir -p "$FX"; : > "$FX/refused.log"
+  _must_fail() {  # _must_fail <name>: the fails counter must have moved by exactly one since the snapshot in $d
+    if [ $((fails - d)) -ne 1 ]; then printf '[FATAL] helper self-test: %s did not record exactly one failure for a wrong input\n' "$1" >&2; exit 1; fi
+  }
+  RC=1; OUT="abc"
+  d=$fails; expect "selftest" 0 >/dev/null; _must_fail "expect (rc compare)"
+  RC=0; OUT="abc"; d=$fails; expect "selftest" 0 "zzz" >/dev/null; _must_fail "expect (substring)"
+  RC=0; OUT="abc"; echo REFUSED > "$FX/refused.log"; d=$fails; expect "selftest" 0 >/dev/null; _must_fail "expect (refused.log)"; : > "$FX/refused.log"
+  OUT="abc"; d=$fails; expect_not "selftest" "abc" >/dev/null; _must_fail "expect_not"
+  RC=1; d=$fails; kill_row "selftest" 0 >/dev/null; _must_fail "kill_row"
+  d=$fails; mutate selftest-absent 'THIS-LITERAL-IS-NOT-IN-THE-PROBE' 'x' >/dev/null; _must_fail "mutate (absent literal)"
+  d=$fails; mutate selftest-many 'set ' 'x' >/dev/null; _must_fail "mutate (literal not unique)"
+  d=$fails; mutate selftest-same 'N=12' 'N=12' >/dev/null; _must_fail "mutate (identical copy)"
+  # and the good inputs must record no failure
+  RC=0; OUT="abc"; d=$fails; expect "selftest" 0 "abc" >/dev/null; [ "$fails" -eq "$d" ] || { printf '[FATAL] helper self-test: expect failed a good input\n' >&2; exit 1; }
+  RC=0; d=$fails; kill_row "selftest" 0 >/dev/null; [ "$fails" -eq "$d" ] || { printf '[FATAL] helper self-test: kill_row failed a good input\n' >&2; exit 1; }
+  d=$fails; mutate selftest-ok 'N=12' 'N=11' >/dev/null; [ "$fails" -eq "$d" ] || { printf '[FATAL] helper self-test: mutate failed a good input\n' >&2; exit 1; }
+  passes=$p0; fails=$f0; asserted=$a0; FAILURES=("${FAILURES[@]:0:$n0}")
+}
+_selftest_helpers
 
 [ -r "$PROBE" ] || { echo "[FATAL] probe not found at $PROBE"; exit 1; }
 
@@ -205,8 +244,8 @@ new_fx r2c; good_runs 11; mkrun 90101 0 completed success failure 1; run_probe "
 new_fx r3; mkrun 90001 3600 completed success success 0; mkrun 90002 7200 completed success failure 1; mkrun 90003 10800 completed success failure 1; for i in $(seq 4 12); do mkrun $((90000 + i)) $((i * 3600)) completed success success 0; done
 run_probe "$PROBE"; expect "R3 two ceiling kills" 1 90002 90003
 # R4 classification and precedence
-new_fx r4a; good_runs 10; mkrun 90020 40000 completed success failure 0 some-other.test.sh; mkrun 90021 41000 completed success failure 1
-run_probe "$PROBE"; expect "R4a a RED outside the allowlist AND a ceiling kill: the kill wins" 1 90021
+new_fx r4a; good_runs 9; mkrun 90020 40000 completed success failure 0 some-other.test.sh; mkrun 90022 40500 completed success failure 0 another.test.sh; mkrun 90021 41000 completed success failure 1
+run_probe "$PROBE"; expect "R4a TWO strikes AND a ceiling kill: the kill wins" 1 90021
 new_fx r4b; good_runs 11; mkrun 90030 40000 completed success failure 0 cloud-init-inngest-bootstrap.test.sh some-other.test.sh
 run_probe "$PROBE"; expect "R4b ONE strike is tolerated, and the PASS line names it" 0 "Tolerated strike(s): 90030(some-other.test.sh)"
 new_fx r4b2; good_runs 10; mkrun 90030 40000 completed success failure 0 some-other.test.sh; mkrun 90031 41000 completed success failure 0 another.test.sh
@@ -230,6 +269,56 @@ run_probe "$PROBE"; expect "R4j a RED name outside a plain path alphabet is repl
 expect_not "R4j" "x@mention"
 new_fx r4k; good_runs 11; MK_ELAPSED=0 mkrun 90041 40000 completed success failure 0 cloud-init-inngest-bootstrap.test.sh
 run_probe "$PROBE"; expect "R4k infra=failure with NO infra_elapsed_s and no timeout annotation is a kill that lost its annotation" 1 90041
+new_fx r4l; good_runs 11; mkrun 90060 40000 completed success failure 0 foo.test.sh bar.test.sh
+run_probe "$PROBE"; expect "R4l ONE run holding TWO non-allowlisted REDs is two strikes, not one" 5 90060 foo.test.sh bar.test.sh
+new_fx r4l2; good_runs 11; MK_MSG="SOLEUR_MAIN_HEALTH tests=failure infra=failure infra_elapsed_s=" mkrun 90061 40000 completed success failure 0 other.test.sh
+run_probe "$PROBE"; expect "R4l2 an EMPTY infra_elapsed_s token is not a number: the step did not complete" 1 90061
+new_fx r4n; good_runs 11; MK_ELAPSED=1 mkrun 90062 40000 completed success failure 1 other.test.sh
+run_probe "$PROBE"; expect "R4n the infra timeout annotation kills even when infra_elapsed_s is present" 1 90062
+new_fx r4o; good_runs 11; MK_ELAPSED=1 mkrun 90063 40000 completed success success 1
+run_probe "$PROBE"; expect "R4o the infra timeout annotation kills even when the verdict token says success" 1 90063
+new_fx r4p; good_runs 10; mkrun 90064 40000 completed success failure 0 a_b/c_d.test.sh; mkrun 90065 41000 completed success failure 0 e.test.sh
+run_probe "$PROBE"; expect "R4p a RED name with an underscore and a slash is a plain path, not an unsafe name" 5 a_b/c_d.test.sh
+new_fx r4q; good_runs 10; mkrun 90030 40000 completed success failure 0 some-other.test.sh; mkrun 90032 41000 completed success failure 0 another.test.sh
+mutate judged2 'JUDGED_REPRODUCING_RUNS=""' 'JUDGED_REPRODUCING_RUNS="900301"' && { run_probe "$MUT"; expect "R4q a judged id that merely CONTAINS a run id (900301 vs 90030) judges nothing" 5 90030 90032; }
+# accounting: the runner's own tally is the proof
+new_fx r4e2; good_runs 11; MK_UNACCLINE=1 mkrun 90070 40000 completed success failure 0 cloud-init-inngest-bootstrap.test.sh
+run_probe "$PROBE"; expect "R4e2 an UNACCOUNTED line alone (the tally says 0) is a measurement defect" 5 90070
+new_fx r4e3; good_runs 11; MK_SUMU=1 mkrun 90071 40000 completed success failure 0 cloud-init-inngest-bootstrap.test.sh
+run_probe "$PROBE"; expect "R4e3 unaccounted=1 in the tally with no UNACCOUNTED line is a measurement defect" 5 90071
+new_fx r4e4; good_runs 11; MK_UNACC_PRE=1 mkrun 90072 40000 completed success failure 0 cloud-init-inngest-bootstrap.test.sh
+run_probe "$PROBE"; expect "R4e4 an UNACCOUNTED line BEFORE the infra env dump is outside the slice and is ignored" 0 "Allowlisted tag-drift RED in run(s): 90072"
+new_fx r4e5; good_runs 11; MK_SUMMARY=none mkrun 90073 40000 completed success failure 0 cloud-init-inngest-bootstrap.test.sh
+run_probe "$PROBE"; expect "R4e5 an infra=failure run with no runner tally line cannot be a clean allowlisted run" 5 90073
+new_fx r4e6; good_runs 11; MK_SUMF=0 mkrun 90074 40000 completed success failure 0 cloud-init-inngest-bootstrap.test.sh
+run_probe "$PROBE"; expect "R4e6 a tally that counts fewer failures than there are RED lines (a forged RED line) is a measurement defect" 5 90074
+# precedence: every conflict between two verdict classes, so a reordered block cannot stay green
+new_fx r10a; good_runs 10; mkrun 90080 40000 completed success skipped 0; mkrun 90081 41000 completed success failure 1
+run_probe "$PROBE"; expect "R10a a kill AND a hard failure: the kill wins" 1 90081
+new_fx r10b; good_runs 9; mkrun 90082 40000 completed success skipped 0; mkrun 90083 40500 completed success failure 0 foo.test.sh; mkrun 90084 41000 completed success failure 0 bar.test.sh
+run_probe "$PROBE"; expect "R10b a hard failure AND two strikes: the hard failure is named" 5 "measurement defect"
+expect_not "R10b" "REDs outside the allowlist"
+new_fx r10c; good_runs 9; mkrun 90085 40000 completed success ABSENT 0; mkrun 90086 40500 completed success failure 0 foo.test.sh; mkrun 90087 41000 completed success failure 0 bar.test.sh
+run_probe "$PROBE"; expect "R10c two strikes AND an unreadable run: the strikes win" 5 "REDs outside the allowlist"
+new_fx r10d; good_runs 10; mkrun 90088 40000 completed success ABSENT 0; mkrun 90089 41000 in_progress "" ABSENT 0
+run_probe "$PROBE"; expect "R10d an unreadable run AND a still-running run: unreadable wins over not-yet" 3 90088
+new_fx r10e; good_runs 10; mkrun 90090 40000 completed success ABSENT 0
+run_probe "$PROBE"; expect "R10e an unreadable run among FEWER than 12: unreadable wins over short" 3 90090
+# boundaries
+new_fx w6; good_runs 11; MK_K=2 mkrun 90091 40000 completed success success 0; run_probe "$PROBE"; expect "W6 -P 2 is the smallest accepted width" 0 "-P 4 2"
+new_fx w7; good_runs 11; MK_K=99999999999999999999999 mkrun 90092 40000 completed success success 0; run_probe "$PROBE"; expect "W7 a K that overflows integer comparison is refused, not accepted" 3 90092
+new_fx w8; good_runs 11; MK_NOESC=1 mkrun 90093 40000 completed success success 0; run_probe "$PROBE"; expect "W8 a log with no ESC byte (gh serves it unflagged too) reads the same" 0
+new_fx r5e2; for i in $(seq 1 199); do mkrun $((80000 + i)) $((i * 60)) completed success success 0; done; run_probe "$PROBE"; expect "R5e2 199 runs is under the 200 limit" 0
+new_fx r5p; good_runs 10; jq -c '. + [.[0], .[1]]' "$FX/runs.json" > "$FX/runs.tmp" && mv "$FX/runs.tmp" "$FX/runs.json"; run_probe "$PROBE"; expect "R5p duplicate run ids do not each count as a run" 2
+new_fx r1d; good_runs 12; printf '%s\n' '        env:' '          JOBS=2' >> "$FX/workflow.txt"; run_probe "$PROBE"; expect "R1d a JOBS= assignment counts as a pin" 2
+new_fx r1e; good_runs 12; printf '%s\n' '        env:' '          MAX_JOBS: 2' >> "$FX/workflow.txt"; run_probe "$PROBE"; expect "R1e MAX_JOBS is not a JOBS assignment" 0
+new_fx r1f; good_runs 12; grep -v 'JOBS: 1' "$FX/workflow.txt" > "$FX/w.tmp" && mv "$FX/w.tmp" "$FX/workflow.txt"; run_probe "$PROBE"; expect "R1f a workflow with NO JOBS assignment still passes the read, and says so" 0 "(-P 4; 0 JOBS"
+new_fx r1g; good_runs 12; printf 'unrelated: yaml\nJOBS: 1\n' > "$FX/workflow.txt"; run_probe "$PROBE"; expect "R1g a contents body that is not the monitor workflow" 3
+new_fx r1h; good_runs 12; : > "$FX/workflow.txt"; run_probe "$PROBE"; expect "R1h an empty contents body" 3
+new_fx r1i; good_runs 12; run_probe "$PROBE" GH_TOKEN=; expect "R1i GH_TOKEN unset" 3
+new_fx r8b; good_runs 12; : > "$FX/refused.log"
+OUT="$(env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" FX="$FX" GITHUB_TOKEN=synthetic SOLEUR_FT_EARLIEST="$START" bash -x "$PROBE" 2>&1)"; RC=$?
+expect "R8b run under xtrace with only GITHUB_TOKEN set" 78
 # R5 never 0 on a read it could not make
 new_fx r5a; good_runs 11; mkrun 90040 40000 completed success ABSENT 0; run_probe "$PROBE"; expect "R5a a non-cancelled run with no main-health-outcomes annotation" 3
 new_fx r5b; good_runs 12; : > "$FX/fail-contents"; run_probe "$PROBE"; expect "R5b a failed contents read" 3
@@ -257,6 +346,7 @@ new_fx w5; good_runs 11; MK_K=6 mkrun 90054 40000 completed success success 0; r
 new_fx r6; good_runs 12; mkrun 90200 99999 completed success failure 1; run_probe "$PROBE"; expect "R6 a bad run AFTER the 12 oldest" 0
 # R7 pending: a still-running run among the first 12
 new_fx r7; good_runs 11; mkrun 90300 50000 in_progress "" ABSENT 0; run_probe "$PROBE"; expect "R7 a counted run is still running" 2
+new_fx r7b; good_runs 5; mkrun 90301 50000 in_progress "" ABSENT 0; run_probe "$PROBE"; expect "R7b a still-running run among FEWER than 12: the message names the running run, not the short count" 2 "still running"
 # R8 xtrace refusal
 new_fx r8; good_runs 12; : > "$FX/refused.log"
 OUT="$(env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" FX="$FX" GH_TOKEN=synthetic SOLEUR_FT_EARLIEST="$START" bash -x "$PROBE" 2>&1)"; RC=$?
@@ -279,7 +369,7 @@ for _lit in 'main-health-outcomes' 'SOLEUR_MAIN_HEALTH' 'name: Run infra suites'
   case "$_wfs" in *"$_lit"*) pass "X the real workflow still carries the literal the probe reads: $_lit" ;; *) fail "X the real workflow lost the literal the probe reads: $_lit" ;; esac
 done
 _rs="$(grep -vE '^[[:space:]]*#' "$RUNNER")"
-for _lit in 'registered infra suite(s)' 'with -P ' "UNACCOUNTED  %s" 'ACCOUNTING FAILURE'; do
+for _lit in 'registered infra suite(s)' 'with -P ' "UNACCOUNTED  %s" '=== registered infra suites:' 'unaccounted (of'; do
   case "$_rs" in *"$_lit"*) pass "X the real runner still emits the literal the probe parses: $_lit" ;; *) fail "X the real runner lost the literal the probe parses: $_lit" ;; esac
 done
 _known="$(sed -n 's/^KNOWN_DETERMINISTIC_REDS="\(.*\)"$/\1/p' "$PROBE")"
@@ -314,18 +404,10 @@ new_fx m10; good_runs 11; MK_DUPK=1 mkrun 90052 40000 completed success success 
 if mutate m10 '[ "$nw" != 1 ]' '[ "$nw" -lt 1 ]'; then run_probe "$MUT"; kill_row "K9b dropping the exactly-one width line is caught by W3" 0; fi
 new_fx m11; good_runs 11; MK_ELAPSED=0 mkrun 90041 40000 completed success failure 0 other.test.sh
 if mutate m11 '! grep -qE '"'"'^infra_elapsed_s=[0-9]+$'"'"' <<<"$toks"' '! true'; then run_probe "$MUT"; kill_row "K10 dropping the no-infra_elapsed_s kill route is caught by R4k" 0; fi
-new_fx m12; good_runs 11; MK_UNACC=1 mkrun 90034 40000 completed success failure 0 cloud-init-inngest-bootstrap.test.sh
-if mutate m12 '(UNACCOUNTED  |ACCOUNTING FAILURE)' '(NEVERMATCHES)'; then run_probe "$MUT"; kill_row "K11 dropping the UNACCOUNTED scan is caught by R4e" 0; fi
 new_fx m13; good_runs 10; mkrun 90030 40000 completed success failure 0 some-other.test.sh; mkrun 90031 41000 completed success failure 0 another.test.sh
-if mutate m13a 'JUDGED_REPRODUCING_RUNS=""' 'JUDGED_REPRODUCING_RUNS="90030 90031"' && cp "$MUT" "$TMP/mut.m13b.sh" \
-   && python3 - "$TMP/mut.m13b.sh" <<'PY'
-import sys
-p = sys.argv[1]; s = open(p).read()
-old = '*" $rid "*) judged="$judged $rid"; return ;; esac'
-assert s.count(old) == 1
-open(p, "w").write(s.replace(old, '*" zz "*) judged="$judged $rid"; return ;; esac'))
-PY
-then run_probe "$TMP/mut.m13b.sh"; kill_row "K12 a judged-id list that is never consulted is caught by R4b3" 5; fi
+if mutate m13a 'JUDGED_REPRODUCING_RUNS=""' 'JUDGED_REPRODUCING_RUNS="90030 90031"' && mutate m13b '*" $rid "*) judged="$judged $rid"; return ;; esac' '*" zz "*) judged="$judged $rid"; return ;; esac' "$TMP/mut.m13a.sh"; then
+  run_probe "$MUT"; kill_row "K12 a judged-id list that is never consulted is caught by R4b3" 5
+fi
 new_fx m14; good_runs 10; mkrun 90030 40000 completed success failure 0 some-other.test.sh; mkrun 90031 41000 completed success failure 0 another.test.sh
 if mutate m14 '"$nstrikes" -ge 2' '"$nstrikes" -ge 3'; then run_probe "$MUT"; kill_row "K13 raising the strike threshold is caught by R4b2" 0; fi
 new_fx m15; good_runs 11; MK_ANN2=1 mkrun 90042 40000 completed success success 0
@@ -342,10 +424,35 @@ new_fx m19; for i in $(seq 1 12); do MK_TESTTMO=1 mkrun $((91000 + i)) $((i * 36
 if mutate m19 'action .Run infra suites. has timed out' 'timed out'; then run_probe "$MUT"; kill_row "K18 a generic timed-out regex is caught by R4h" 1; fi
 new_fx m20; good_runs 10; mkrun 90037 40000 completed success failure 0 inngest-bootstrap.test.sh; mkrun 90038 41000 completed success failure 0 x-cloud-init-inngest-bootstrap.test.sh
 if mutate m20 '*" $name "*) :' '*"$name"*) :'; then run_probe "$MUT"; kill_row "K19 an unfenced allowlist match is caught by R4i" 0; fi
+new_fx m22; good_runs 11; mkrun 90060 40000 completed success failure 0 foo.test.sh bar.test.sh
+if mutate m22 'nstrikes=$((nstrikes + n_other))' 'nstrikes=$((nstrikes + 1))'; then run_probe "$MUT"; kill_row "K21 counting a run as ONE strike however many REDs it holds is caught by R4l" 0; fi
+new_fx m23; good_runs 10; mkrun 90030 40000 completed success failure 0 some-other.test.sh; mkrun 90032 41000 completed success failure 0 another.test.sh
+if mutate m23a 'JUDGED_REPRODUCING_RUNS=""' 'JUDGED_REPRODUCING_RUNS="900301"' && mutate m23b '*" $rid "*) judged=' '*"$rid"*) judged=' "$TMP/mut.m23a.sh"; then run_probe "$MUT"; kill_row "K22 an unfenced judged-id match is caught by R4q" 0; fi
+new_fx m24; good_runs 11; MK_MSG="SOLEUR_MAIN_HEALTH tests=failure infra=failure infra_elapsed_s=" mkrun 90061 40000 completed success failure 0 other.test.sh
+if mutate m24 "'^infra_elapsed_s=[0-9]+\$'" "'^infra_elapsed_s='"; then run_probe "$MUT"; kill_row "K23 a digits-free infra_elapsed_s match is caught by R4k/R4l2" 0; fi
+new_fx m25; good_runs 11; MK_ELAPSED=1 mkrun 90062 40000 completed success failure 1 other.test.sh
+if mutate m25 'if [ "$tmo" -gt 0 ] || {' 'if false || {'; then run_probe "$MUT"; kill_row "K24 dropping the timeout-annotation kill route is caught by R4n" 0; fi
+new_fx m26; good_runs 11; MK_ELAPSED=1 mkrun 90063 40000 completed success success 1
+if mutate m26 '  if [ "$tmo" -gt 0 ] ||' '  if [ "$infra" = success ]; then return; fi
+  if [ "$tmo" -gt 0 ] ||'; then run_probe "$MUT"; kill_row "K25 returning clean before the kill test is caught by R4o" 0; fi
+new_fx m27; good_runs 11; MK_UNACCLINE=1 mkrun 90070 40000 completed success failure 0 cloud-init-inngest-bootstrap.test.sh
+if mutate m27 "^[0-9TZ:.-]+ +UNACCOUNTED  '" "^NEVERMATCHES  '"; then run_probe "$MUT"; kill_row "K26 dropping the UNACCOUNTED-line scan is caught by R4e2" 0; fi
+new_fx m28; good_runs 11; MK_SUMU=1 mkrun 90071 40000 completed success failure 0 cloud-init-inngest-bootstrap.test.sh
+if mutate m28 '[ "$su" != 0 ]' 'false'; then run_probe "$MUT"; kill_row "K27 ignoring the tally's unaccounted count is caught by R4e3" 0; fi
+new_fx m29; good_runs 11; MK_SUMF=0 mkrun 90074 40000 completed success failure 0 cloud-init-inngest-bootstrap.test.sh
+if mutate m29 '[ "$sf" != "$nred" ]' 'false'; then run_probe "$MUT"; kill_row "K28 ignoring a tally/RED-line mismatch is caught by R4e6" 0; fi
+new_fx m30; good_runs 11; MK_UNACC_PRE=1 mkrun 90072 40000 completed success failure 0 cloud-init-inngest-bootstrap.test.sh
+if mutate m30 'grep -qE '"'"'^[0-9TZ:.-]+ +UNACCOUNTED  '"'"' <<<"$slice"' 'grep -qE '"'"'^[0-9TZ:.-]+ +UNACCOUNTED  '"'"' <<<"$log"'; then run_probe "$MUT"; kill_row "K29 scanning the whole log instead of the infra slice is caught by R4e4" 5; fi
+new_fx m31; good_runs 11; MK_K=99999999999999999999999 mkrun 90092 40000 completed success success 0
+if mutate m31 '[ "${#k}" -gt 3 ] || ' ''; then run_probe "$MUT"; kill_row "K30 dropping the width-length cap is caught by W7" 0; fi
+new_fx m32; good_runs 10; jq -c '. + [.[0], .[1]]' "$FX/runs.json" > "$FX/runs.tmp" && mv "$FX/runs.tmp" "$FX/runs.json"
+if mutate m32 'unique_by(.databaseId) | ' ''; then run_probe "$MUT"; kill_row "K31 counting a duplicated run id twice is caught by R5p" 0; fi
+new_fx m33; good_runs 11; MK_NOESC=1 mkrun 90093 40000 completed success success 0
+if mutate m33 'gh api --allow-escape-sequences "repos/$REPO/actions/jobs/$jid/logs"' 'gh api --allow-escape-sequences "repos/$REPO/actions/jobs/$jid/logs" --jq .'; then run_probe "$MUT"; if [ "$RC" -eq 3 ] && [ -s "$FX/refused.log" ]; then pass "K32 an extra operand on the flagged log call is refused by the strict stub"; else fail "K32 survived (rc $RC)"; fi; fi
 
 # --- accounting --------------------------------------------------------------------------------------------------------------
 printf '=== jobs1-stopgap-7432: %d passed, %d failed ===\n' "$passes" "$fails"
-MIN_ASSERTIONS=164
+MIN_ASSERTIONS=258
 if [ "$asserted" -lt "$MIN_ASSERTIONS" ] || [ $((passes + fails)) -ne "$asserted" ]; then
   printf '[FATAL] anti-vacuity: %d assertions (floor %d), %d recorded\n' "$asserted" "$MIN_ASSERTIONS" $((passes + fails)) >&2
   exit 1
