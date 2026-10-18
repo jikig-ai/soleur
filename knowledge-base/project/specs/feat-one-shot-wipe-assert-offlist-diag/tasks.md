@@ -5,13 +5,15 @@ Refs: #10138, #6897 (Ref only, never Closes). Dispatches nothing.
 
 ## Phase 1: RED tests first (git-data-wipe-assert.test.sh only)
 
-- 1.1 Add `RE_34` strict regex and `line34_ok` helper; add the strict check to `expect_refuse` conditioned on BOTH expected rc and actual `$RC` being 34; add `RC34_LINES_CHECKED` counter.
-- 1.2 Add shim rows A120-A131 (incident replay, unknown dir, hooks plus tenant-shaped names in one listing, hooks symlink/file/`hooks.d`/`Hooks`, lost+found entries 1 and 2, off-list plus lost+found, must-PASS allowlisted tree, rc 37 carries no new field).
-- 1.3 Add four mutant rows (hooks name-only, lf_entries hard-coded 0, offlist_n uncounted, hooks:d allowlisted).
-- 1.4 Add harness rows driving `line34_ok` directly (reject `has_hooks_d=2`, missing field, extra `digest=`, trailing name, reordered; accept a non-canonical good line).
-- 1.5 Add loopback arm H (`repositories`, `hooks` with `pre-receive`, `lost+found`) and pin `has_hooks_d=0` in arms B, D, G; `EXPECTED_ARMS_C` 7 to 8.
-- 1.6 Extend the `ssh` shim with `$TL/stderr` passthrough; add exactly one Tier B row (rc 34, exit 5, verdict word unchanged, line passed through verbatim, `grep -qxF` on a file).
-- 1.7 Run the suite against the UNCHANGED script and record the new rows RED (not a crash).
+- 1.1 Add `RE_34` and `line34_ok` (also enforces `offlist_n>0 || lf_entries>0`); give `expect_refuse` an optional 4th argument (exact expected tail from `top_d=`); inside a branch conditioned on BOTH expected and actual rc 34, assert `line34_ok`, increment `RC34_LINES_CHECKED` (initialised beside `INVARIANT_RUNS`) and compare the whole last stderr line.
+- 1.2 Fold the exact suffix into existing rows A06, A07, A10, A12; add a no-`has_hooks_d` assertion to A20 (rc 37).
+- 1.3 Add worlds A120 (incident replay), A122 (hooks + tenant-shaped dir + file, `offlist_n=3`), A123 (loop: hooks symlink, file, `hooks.d`, `Hooks`), A124 (nested `lost+found/hooks`), A129 (off-list dir + lost+found entry), A132 (valid hooks + control-character name gives rc 35, no field).
+- 1.4 Add mutant rows: hooks-name-only, hooks-glob, lf-entries-zero, offlist-n-flag, hooks-allowlisted, line-leaks-name; each case requires rc 34 and the whole expected line.
+- 1.5 Add harness rows driving `line34_ok` (accept `lf_entries=7 offlist_n=0`; reject `has_hooks_d=2`, a trailing token, `offlist_n=0 lf_entries=0`).
+- 1.6 Add loopback arm H only (`repositories`, `hooks` with `pre-receive`, `lost+found`), full-line equality; `EXPECTED_ARMS_C` 7 to 8; arms B, D, G unchanged.
+- 1.7 Extend the `ssh` shim with `SHIM_ERR` passthrough; add exactly one Tier B row asserting only the `probe-stderr:` passthrough (`grep -qxF` on a file).
+- 1.8 Set floors from an UNPRIVILEGED loopback-skipped run (`MIN_ASSERTIONS`, `EXPECTED_INVARIANT_RUNS`), `EXPECTED_ARMS_C` 8 and the one-line `RC34_LINES_CHECKED` floor.
+- 1.9 Run the suite against the UNCHANGED script and record the new rows RED (not a crash or unbound variable).
 
 ## Phase 2: Script change (git-data-wipe-assert.sh)
 

@@ -124,62 +124,78 @@ new CLO addendum, the 2026-11-12 date) are named there and nowhere promised.
 
 ### Phase 1 - RED first (`cq-write-failing-tests-before`)
 
-Edit `apps/web-platform/infra/git-data-wipe-assert.test.sh` only; run it against the UNCHANGED
-script and record that the new rows are RED (not a crash):
+Edit `apps/web-platform/infra/git-data-wipe-assert.test.sh` only. Plan-review revisions
+(2026-10-18, see decision-challenges.md rows R-1..R-7) are folded in below.
 
-1. `line34_ok` helper plus strict regex `RE_34='^wipe-assert: rc=34 reason=offlist top_d=[0-9]+
+1. **Strict check, whole-line equality.** Add `RE_34='^wipe-assert: rc=34 reason=offlist top_d=[0-9]+
    top_f=[0-9]+ top_l=[0-9]+ top_o=[0-9]+ repos=[0-9]+ has_hooks_d=[01] lf_entries=[0-9]+
-   offlist_n=[0-9]+$'`; in `expect_refuse`, when BOTH expected and actual rc are 34, assert the
-   last stderr line matches `RE_34`, that `offlist_n>0 || lf_entries>0`, and increment a counter
-   `RC34_LINES_CHECKED` (floor below). Conditioned on the actual `$RC` so the H2 self-test's
-   `executed - 4` bookkeeping is undisturbed.
-2. Shim-tier rows (new ids A120-A131, in the "layout-independent signal" block, using
-   `tree_reset` and the synthesized corpus):
-   - A120 incident replay: dirs `repositories`, `lost+found`, `hooks` -> rc 34, exact suffix
+   offlist_n=[0-9]+$'` and a `line34_ok <line>` helper that also enforces `offlist_n>0 ||
+   lf_entries>0`. Give `expect_refuse` an optional 4th argument: the exact expected tail from
+   `top_d=` onward. Inside a branch conditioned on BOTH the expected rc and the actual `$RC` being 34
+   (so the H2 self-test, which runs against a clean host with `RC=0`, adds nothing and `executed - 4`
+   stays correct) it asserts `line34_ok "$(tail -n 1 "$W/err")"`, increments
+   `RC34_LINES_CHECKED` (initialised beside `INVARIANT_RUNS`; the suite runs under `set -u`) and,
+   when the 4th argument is present, compares the WHOLE last stderr line for equality (a substring
+   match would accept `offlist_n=10` or a trailing `digest=`).
+2. **Fold, do not clone.** Pass the exact suffix from the existing rows A06 and A07 (non-empty
+   top-level `lost+found`: `lf_entries=1`, `offlist_n=0`), A10 (unknown directory; replaces its
+   counts `grep`), and A12 (symlinked `repositories`). Add to the existing A20 (rc 37) row one
+   assertion that its last stderr line contains no `has_hooks_d`.
+3. **New worlds (five):**
+   - A120 incident replay: `repositories`, `lost+found`, `hooks` (dirs) -> rc 34, suffix
      `top_d=3 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=1`.
-   - A121 unknown directory (`$CORPUS_TOP_DIR`) beside `repositories` and `lost+found` ->
-     `has_hooks_d=0 lf_entries=0 offlist_n=1`.
    - A122 `hooks` dir AND `$CORPUS_TOP_DIR` dir AND `$CORPUS_TOP_FILE` file in the SAME listing ->
-     `has_hooks_d=1 offlist_n=3`; the per-run leak invariant proves no corpus name reached any
-     stream (CLO condition d: only the bit leaves).
-   - A123 `hooks` as a symlink -> `has_hooks_d=0 top_l=1 offlist_n=1`. A124 `hooks` as a regular
-     file -> `has_hooks_d=0 offlist_n=1`. A125 directory `hooks.d` and A126 directory `Hooks`
-     (exact, case-sensitive) -> `has_hooks_d=0 offlist_n=1`.
-   - A127 allowlisted tree, `lost+found` holds one file -> `has_hooks_d=0 lf_entries=1
-     offlist_n=0`; A128 two entries -> `lf_entries=2`. A129 off-list dir AND a `lost+found` entry
-     -> `offlist_n=1 lf_entries=1`.
-   - A130 (must-PASS, non-canonical) a tree that differs from the canonical clean tree in a way
-     the allowlist permits (`.gc-cursor`, `.init.lock`, `.ws-9.init.lock`, empty `lost+found`,
-     no `hooks`) -> rc 0 and the stdout line unchanged; A131 rc 37 (`repositories` holds
-     entries) prints NO new field (`has_hooks_d` absent from the last stderr line).
-3. Mutant rows (existing `mutant_row` machinery, each must turn its named case RED):
-   - m-hooks-name-only: `if [ "$n" = hooks ] && [ "$t" = d ]` loses the type test; world = `hooks`
-     as a regular file; case = `has_hooks_d=0`.
-   - m-lf-entries-zero: `LF_ENTRIES="$ln"` becomes `LF_ENTRIES=0`; world = `lost+found` with one
-     file; case = `lf_entries=1`.
-   - m-offlist-n-uncounted: the increment in the `*)` arm removed; world = `set_offdir`; case =
-     `offlist_n=1`.
-   - m-hooks-allowlisted: add `hooks:d) : ;;` to the allowlist `case`; world = `hooks` dir only;
-     case = `caught_34` (the mutant exits 0, so the allowlist-not-widened property is pinned).
-   - Existing `m17-lostfound-contents-unread` anchors on `      [ "$ln" -eq 0 ] || OFFLIST=1`; that
-     line stays byte-identical.
-4. Harness rows: `line34_ok` must accept a good line with different counts and a high
-   `lf_entries` (must-PASS non-canonical) and must REJECT `has_hooks_d=2`, a missing field, an
-   extra `digest=0f0f`, a trailing name, and a reordered line (a vacuous or too-loose regex goes
-   RED here).
-5. Loopback arm H (real ext4 image, real device-mapper snapshot): populate with the production
-   layout `mkdir -p repositories hooks && : > hooks/pre-receive`; expect rc 34 and the literal
-   `top_d=3 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=1`; arm floor
-   `EXPECTED_ARMS_C` 7 -> 8. Existing arms B, D, G also pin `has_hooks_d=0` in their literal.
-6. Tier B verb row (exactly one): extend the `ssh` shim with `[ -f "$TL/stderr" ] && cat
-   "$TL/stderr" >&2` before its final `exit`; run `MODE=wipe_assert` with rc 34 and a stderr file
-   holding the A120 line; assert exit 5, `STORE probe=wipe-assert verdict=wipe_boot_layout_signal_offlist`
-   unchanged, and the line `[git-data-cutover] probe-stderr: <the A120 line>` present verbatim
-   (`grep -qxF` on a file, no pipe).
-7. Raise the anti-vacuity floors (`MIN_ASSERTIONS`, `EXPECTED_INVARIANT_RUNS`,
-   `EXPECTED_ARMS_C`) to the new measured counts, each literal directly above its `if`; add
-   `RC34_LINES_CHECKED` floor (a floor of the number of rc-34 rows run, so deleting the strict
-   check cannot pass silently).
+     `has_hooks_d=1 offlist_n=3`; the per-run leak invariant shows no corpus name reached any stream
+     (CLO condition d: only the bit leaves). Three off-list entries also separate a counter from a flag.
+   - A123 one loop over four `hooks` variants, each its own labelled sub-check: a symlink, a regular
+     file, a directory `hooks.d`, a directory `Hooks` -> `has_hooks_d=0` and `offlist_n=1` for each
+     (exact, case-sensitive match, CLO condition b).
+   - A124 non-canonical control: a nested `lost+found/hooks` directory in an otherwise allowlisted
+     tree -> `has_hooks_d=0 lf_entries=1 offlist_n=0` (the top-level bit reads 0 although a `hooks`
+     exists one level down).
+   - A129 off-list directory AND a `lost+found` entry -> `offlist_n=1 lf_entries=1`.
+   - A132 a valid `hooks` directory AND a name containing a control character -> rc 35
+     `record_control` and NO `has_hooks_d` in the last stderr line (pins that the `hooks` test sits
+     after the control-character refusal).
+   Cut by plan review (already pinned): the clean-tree must-PASS (A02/A03), rc-37 as its own world
+   (folded into A20), the single-entry `lost+found` clones (A06/A07), the two-entry count clone.
+4. **Mutant rows** (existing `mutant_row` machinery). Each case function requires rc 34 AND the
+   whole expected line for its world, so a crash or a different count cannot read as "caught"; each
+   mutant world is the same world as a pristine whole-line row above, which is its control (against
+   the unchanged script the new mutant rows read "anchor is not unique" - expected until Phase 2):
+   - m-hooks-name-only: drop the type test (world: `hooks` regular file from A123).
+   - m-hooks-glob: `[ "$n" = hooks ]` becomes `[[ "$n" == hooks* ]]` (world: `hooks.d` from A123).
+   - m-lf-entries-zero: `LF_ENTRIES="$ln"` becomes `LF_ENTRIES=0` (world: A06).
+   - m-offlist-n-flag: the increment becomes `OFFLIST_N=1` (world: A122, expects `offlist_n=3`).
+   - m-hooks-allowlisted: add `hooks:d) : ;;` to the allowlist `case` (world: A120; the mutant exits 0).
+   - m-line-leaks-name: two-edit mutant (`LEAK="$n"` inside the `wl_classify` loop and a
+     ` x=$LEAK` suffix on the `say` line) -> the whole-line case and the leak invariant go RED.
+   - The existing `m17-lostfound-contents-unread` anchors on `      [ "$ln" -eq 0 ] || OFFLIST=1`;
+     that line stays byte-identical.
+5. **Harness rows** (`line34_ok` driven directly): ACCEPT a non-canonical good line with
+   `lf_entries=7 offlist_n=0`; REJECT `has_hooks_d=2`; REJECT a trailing token; REJECT a line with
+   `offlist_n=0 lf_entries=0` (the OR-predicate). A loosened regex or a dropped predicate goes RED.
+   Missing or reordered fields are caught by A120's whole-line equality.
+6. **Loopback arm H only** (real ext4 image, real device-mapper snapshot): populate `mkdir -p
+   repositories hooks && : > hooks/pre-receive`; compare `tail -n 1` of the arm's stderr file to the
+   full line `wipe-assert: rc=34 reason=offlist top_d=3 top_f=0 top_l=0 top_o=0 repos=0
+   has_hooks_d=1 lf_entries=0 offlist_n=1`; `EXPECTED_ARMS_C` 7 -> 8. Arms B, D and G are left
+   unchanged (the shim worlds already pin their cases). Arm H needs root: locally it SKIPs, so
+   RED-first for arm H is not locally observable; CI runs it.
+7. **Verb-tier row (exactly one), passthrough only.** Extend the `ssh` shim with
+   `[ -z "${SHIM_ERR:-}" ] || printf '%s\n' "$SHIM_ERR" >&2` before its final `exit`, passing
+   `SHIM_ERR=<the A120 line>` as an extra `run_verb` argument (`run_verb` forwards `"$@"` into the
+   env). Exit 5 and the verdict word for rc 34 are already pinned by the existing `RC 34` loop, so
+   the new row asserts only `grep -qxF "[git-data-cutover] probe-stderr: <the A120 line>" "$TL/out"`
+   (no pipe). Honest scope: it guards the 8192-byte cap and `_access_clean`, not the script.
+8. **Floors.** Run the suite UNPRIVILEGED (loopback skipped), the way the local gate runs, and set
+   `MIN_ASSERTIONS` and `EXPECTED_INVARIANT_RUNS` from that measured count (at plan time the
+   unchanged suite measures 697/699 assertions and 116 invariant runs against floors of 697 and
+   114); `EXPECTED_ARMS_C` 8; one line `RC34_LINES_CHECKED` floor beside them, named for its reason:
+   deleting the strict check removes its assertions, and in CI the loopback tier lifts `executed`
+   so `MIN_ASSERTIONS` alone is loose there.
+9. Run the suite against the UNCHANGED script and record the new rows RED (a crash or an
+   unbound-variable abort is not RED).
 
 ### Phase 2 - the script change (`git-data-wipe-assert.sh`)
 
@@ -189,8 +205,11 @@ script and record that the new rows are RED (not a crash):
    `*) OFFLIST=1; OFFLIST_N=$((OFFLIST_N + 1)) ;;`. No arm is added to the allowlist; `hooks:d`
    still falls into `*)`. None of the three variables is `local` (`wl_classify` runs in the
    current shell; `wipe_listing` reads them after it returns).
-2. `wipe_listing`, inside the existing `if [ "$HAS_LF" = yes ]` block after the validated count:
-   `LF_ENTRIES="$ln"` on the line before the untouched `[ "$ln" -eq 0 ] || OFFLIST=1`.
+2. `wipe_listing`, inside the existing `if [ "$HAS_LF" = yes ]` block AFTER the digit check
+   (`[[ "$ln" =~ ^[0-9]+$ ]] || die 33 lostfound_count_unparseable`): `LF_ENTRIES="$ln"` on the
+   line before the untouched `[ "$ln" -eq 0 ] || OFFLIST=1`, with a one-line comment that the
+   assignment must stay after the validation (a test cannot see a misplacement: `wc -c` always
+   yields digits).
 3. The verdict line: `say "wipe-assert: rc=34 reason=offlist top_d=$TOP_D top_f=$TOP_F top_l=$TOP_L
    top_o=$TOP_O repos=$REPOS has_hooks_d=$HAS_HOOKS lf_entries=$LF_ENTRIES offlist_n=$OFFLIST_N"`
    (prefix byte-identical; `exit 34` and the placement after `wa_release` and the origin checks
@@ -219,11 +238,9 @@ Exact text to apply (every sentence labelled measured, policy or inherited, with
 
   | Fields | Reading the owner may post |
   |---|---|
-  | `has_hooks_d=1 offlist_n=1 lf_entries=0` | the only off-list entry is the system directory the bootstrap creates; this does not say what the directory holds |
+  | `has_hooks_d=1 offlist_n=1 lf_entries=0` | the only off-list entry is a directory named `hooks`, the name the bootstrap uses; its owner and contents are unread |
   | `offlist_n=0 lf_entries>=1` | the refusal came from entries inside `lost+found`; the count only |
-  | `has_hooks_d=0 offlist_n>=1` | an off-list entry that is not a directory named `hooks`; nothing more |
-  | `offlist_n>=2` | no inference about the other entries is made or posted |
-  | `offlist_n=0 lf_entries=0` | cannot occur with rc 34; treat as an instrument fault and route to the CTO |
+  | any other combination | post the fields only; no inference about which entries they are (`offlist_n=0 lf_entries=0` cannot occur with rc 34: an instrument fault, route to the CTO) |
 
   then `Measured 2026-10-18 (run 39081408368, read-only; the line as printed before these fields
   existed)`: the five counts; `Inherited`: the bootstrap creates `hooks` beside `repositories`
@@ -232,8 +249,7 @@ Exact text to apply (every sentence labelled measured, policy or inherited, with
   `hooks` holds (unread); `Policy (CLO, 2026-10-18)`: allowlist unchanged, the refusal stands,
   widening needs a CTO ruling plus counts-only evidence, CLO review with a dated addendum and an
   ADR-239 amendment where the allowlist is part of the recorded gate, and each new field its own
-  CLO ruling; the follow-up issue number; and one closing line that this subsection dispatches
-  nothing and that each run is named by the owner.
+  CLO ruling; and the follow-up issue number.
 - Verdict-map cell at line ~1350 (`offlist`: "the verdict word and counts only, route to the CLO")
   becomes "the verdict word and the closed field list of 'Reading the exit-34 line', route to the
   CLO".
@@ -324,17 +340,14 @@ error_reporting:
   destination: GitHub Actions run log plus the verdict annotation; this is a one-shot host script on a retired volume, not a Sentry-instrumented server, so there is no Sentry project or DSN
   fail_loud: exit 34 maps to verdict wipe_boot_layout_signal_offlist and the run fails; the new fields only add detail to the stderr line
 failure_modes:
-  - mode: a field is missing, non-numeric, out of 0/1 or reordered in the rc=34 line
-    detection: the strict RE_34 check in git-data-wipe-assert.test.sh on every rc-34 row, the loopback arm H literal and the verb-tier row (layer 6, workflow-run log)
+  - mode: a field is missing, non-numeric, out of 0/1 or reordered in the rc=34 line, or truncated on its way to the log
+    detection: the strict whole-line check in git-data-wipe-assert.test.sh on every rc-34 row, the loopback arm H equality and the verb-tier passthrough row (layer 6, workflow-run log)
     alert_route: CI red on the required test context (infra-validation)
   - mode: a listing name reaches stdout, stderr or any state file
-    detection: the per-run leak invariant over the synthesized corpus on every run, including A122 (hooks plus tenant-shaped names in one listing), and the loopback leak check (layer 6)
-    alert_route: CI red on the required test context
-  - mode: the longer line is truncated or mangled on its way to the log
-    detection: the verb-tier row asserts the line verbatim after _access_clean and the 8192-byte cap (the line is about 125 bytes) (layer 6)
+    detection: the per-run leak invariant over the synthesized corpus on every run, including A122 (hooks plus tenant-shaped names in one listing), and the loopback corpus check (layer 6)
     alert_route: CI red on the required test context
   - mode: the fields misdiagnose (for example has_hooks_d=1 for a symlink)
-    detection: rows A123-A126 and the m-hooks-name-only mutant (layer 6)
+    detection: the A123 variants, A124 and the m-hooks-name-only and m-hooks-glob mutants (layer 6)
     alert_route: CI red on the required test context
 logs:
   where: GitHub Actions run log of the cutover workflow (gh run view <run> --log)
@@ -358,31 +371,30 @@ tiers) in CI.
 listing name reaches any output stream.
 
 **Assembly.** The chokepoint is the single `say` in `wipe_listing` ahead of the one `exit 34` (a
-grep of the script finds `exit 34` once); the suite quantifies over it from three places: the shim
-tier (`expect_refuse` strict check on every rc-34 row, plus the per-run `invariants` leak check
-over the whole corpus), the loopback tier (arms B, D, G, H literals and the corpus leak check) and
-the verb tier (passthrough row). A new rc-34 emission site would not pass through the strict check
-unless added to the same chokepoint, and the `RC34_LINES_CHECKED` floor plus the parity rows (rc
-table equals `die` calls equals verb arms) make a second site visible.
+grep of the script finds `exit 34` once, at the verdict site); the suite quantifies over it from
+three places: the shim tier (`expect_refuse` strict whole-line check on every rc-34 row, plus the
+per-run `invariants` leak check over the whole corpus), the loopback tier (arm H equality and the
+corpus leak check) and the verb tier (passthrough row). A second rc-34 emission site would not pass
+through the strict check unless added to the same chokepoint; the parity rows (rc table equals
+`die` calls equals verb arms) and the `RC34_LINES_CHECKED` floor make a second site visible.
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | The `say` line interpolates `$n` or a find output into a field (a name leaves) | RED (leak invariant and strict regex) |
-| 2 | The strict check in `expect_refuse` is deleted or never reached (dispatch of the guard itself) | RED (`RC34_LINES_CHECKED` below its floor) |
-| 3 | A listing with `hooks`, an unknown directory AND an unknown file (a SECOND and third member after a compliant first) | RED unless `offlist_n=3` (a check or counter that stops at the first member fails) |
-| 4 | `hooks:d` added to the allowlist arm | RED (A120 expects rc 34; the mutant exits 0) |
-| 5 | `hooks` matched by name only (a file or symlink reads 1) | RED (A123/A124) |
-| 6 | `lf_entries` hard-coded to 0, or `offlist_n` not incremented | RED (A127/A121) |
+| 1 | `m-line-leaks-name`: a listing name is carried into the rc-34 line | RED (whole-line case and leak invariant) |
+| 2 | Dispatch of the guard itself: the strict check is deleted or never reached (not a script mutation; the suite cannot mutate its own check) | RED via the `RC34_LINES_CHECKED` floor and `MIN_ASSERTIONS` |
+| 3 | `m-offlist-n-flag`: a flag where a counter is needed, in a listing with three off-list entries (a SECOND and third member after a compliant first) | RED (`offlist_n=3` expected, A122) |
+| 4 | `m-hooks-allowlisted`: `hooks:d` added to the allowlist arm | RED (A120 expects rc 34; the mutant exits 0) |
+| 5 | `m-hooks-name-only` and `m-hooks-glob`: type test dropped, or a prefix glob | RED (A123 variants) |
+| 6 | `m-lf-entries-zero`: `lf_entries` hard-coded 0 | RED (A06) |
 
-**Harness rows.** `line34_ok` is exercised directly: it must REJECT `has_hooks_d=2`, a missing
-field, an extra `digest=` token, a trailing name and a reordered line (a regex loosened to
-`.*` goes RED), and must ACCEPT a non-canonical good line (`lf_entries=7 offlist_n=0`), so a guard
-that rejects everything also goes RED. **Anchor.** No stored hash or count floor compares against
-the guarded thing; the strict regex is a literal in the suite, and the external anchor for a
-weakening is that the CLO sees the new strings before merge (L-3) and the line prefix is pinned by
-the existing A10 literal.
+**Harness rows.** `line34_ok` is driven directly: it must REJECT `has_hooks_d=2`, a trailing token
+and `offlist_n=0 lf_entries=0`, and must ACCEPT a non-canonical good line (`lf_entries=7
+offlist_n=0`), so a regex loosened to `.*`, a dropped predicate, or a guard that rejects everything
+goes RED. **Anchor.** No stored hash or count floor compares against the guarded thing; the strict
+regex is a literal in the suite, and the external anchor for a weakening is that the CLO sees the
+new strings before merge (L-3) and the line prefix stays pinned by whole-line equality.
 
 ## Scope Check
 
@@ -408,7 +420,7 @@ the existing A10 literal.
 |-----------|-----------------------------------|---------|
 | Phase 2 classifier + `say` edit | "adding fixed-vocabulary fields to the rc=34 line" | asked |
 | Phase 1 shim rows, mutants, harness rows | "the PR ... must be swept and kept green" (asks 3, 8) | asked |
-| Loopback arm H | - | inferred - justification: CTO ruling F-5 (2026-10-18) requires one real-ext4 reproduction of the incident layout; shims cannot reproduce a real directory tree |
+| Loopback arm H (only; arms B, D, G unchanged) | - | inferred - justification: CTO ruling F-5 (2026-10-18) requires one real-ext4 reproduction of the incident layout; shims cannot reproduce a real directory tree |
 | Verb-tier row + ssh-shim stderr passthrough | "consumers of the rc=34 probe line ... must be swept and kept green" | asked |
 | Raised floors + `RC34_LINES_CHECKED` | - | inferred - justification: without them the new rows can be deleted without the suite noticing (the suite's own anti-vacuity convention) |
 | Runbook subsection + cell edit | "the runbook (...) exit-34 section" | asked |
@@ -450,11 +462,11 @@ the existing A10 literal.
   `grep -cE 'say "wipe-assert: rc=34 reason=offlist top_d=\$TOP_D top_f=\$TOP_F top_l=\$TOP_L top_o=\$TOP_O repos=\$REPOS has_hooks_d=\$HAS_HOOKS lf_entries=\$LF_ENTRIES offlist_n=\$OFFLIST_N"' apps/web-platform/infra/git-data-wipe-assert.sh` prints `1`, and `grep -c 'exit 34' apps/web-platform/infra/git-data-wipe-assert.sh` still counts the single exit (comments excepted: assert with the exit-site anchor `      exit 34` returning `1`).
 - [ ] The allowlist is not widened: `git diff origin/main -- apps/web-platform/infra/git-data-wipe-assert.sh` shows no added line of the shape `<name>:<type>)` inside `wl_classify` (`grep -cE '^\+\s+[a-z.*+_-]+:[dfl]( \| [a-z.*+_-]+:[dfl])*\)'` on that diff prints `0`; the only `case` change is the `*)` arm body), and the mutant m-hooks-allowlisted is RED in the suite output.
 - [ ] `git diff origin/main --stat` lists only: the script, the test, the runbook, this plan, `specs/feat-one-shot-wipe-assert-offlist-diag/{tasks.md,decision-challenges.md,session-state.md}` and the generated `knowledge-base/INDEX.md` if the pipeline rewrites it - no workflow, no `git-data-cutover.sh`, no `.tf`.
-- [ ] `bash apps/web-platform/infra/git-data-wipe-assert.test.sh` exits 0 with 0 failures and the new rows (A120-A131, four mutants, harness rows, verb row) listed `ok`; Phase 1 recorded those rows RED against the unchanged script first.
+- [ ] `bash apps/web-platform/infra/git-data-wipe-assert.test.sh` exits 0 with 0 failures and the new rows (A120-A132 as revised, six mutants, harness rows, verb row) listed `ok`; Phase 1 recorded those rows RED against the unchanged script first.
 - [ ] `git-data-wipe-access.test.sh`, `git-data-cutover-access.test.sh` and `.claude/hooks/grep-q-pipe-guard.test.sh` exit 0.
 - [ ] CI's required test context is green, including the loopback step (arm H ran: `LOOPBACK_UNAVAILABLE` absent from that job's log).
-- [ ] No `| grep -q` in the diff: `git diff origin/main | grep -cE '^\+.*\| *grep -q'` prints `0` (and the pipe-guard suite is green).
-- [ ] Forbidden wording absent from every ADDED line: `git diff origin/main | grep -ciE '^\+.*\b(erased|wiped|secure erasure|no copies|holds no personal data|benign|harmless|false positive|waivable|will pass|is unblocked)\b'` prints `0`.
+- [ ] No `| grep -q` in the diff: `git diff origin/main -- apps/web-platform/infra/git-data-wipe-assert.sh apps/web-platform/infra/git-data-wipe-assert.test.sh knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md | grep -cE '^\+.*\| *grep -q'` prints `0` (and the pipe-guard suite is green).
+- [ ] Forbidden wording absent from every ADDED line of the three edited files (the plan and decision-challenges.md quote the list and are excluded): `git diff origin/main -- apps/web-platform/infra/git-data-wipe-assert.sh apps/web-platform/infra/git-data-wipe-assert.test.sh knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md | grep -ciE '^\+.*\b(erased|wiped|secure erasure|no copies|holds no personal data|benign|harmless|false positive|waivable|will pass|is unblocked)\b'` prints `0`.
 - [ ] The runbook carries the CLO wording verbatim (L-2), the decode table, and the measured/inherited/policy labels with `2026-10-18`; every added runbook sentence about the fields is conditioned on the merge ("takes effect on the merge of the PR that adds the fields"), none in past tense about a run having printed them.
 - [ ] The PR body uses `Ref #10138` and `Ref #6897` and never `Closes`/`Fixes`/`Resolves`; it says the PR changes the stderr output of the rc=34 refusal only and dispatched nothing.
 - [ ] The allowlist follow-up issue exists and its number appears in the runbook subsection.
@@ -472,16 +484,18 @@ an ssh shim); no `e2e`.
 
 - Given the production layout (`repositories`, `hooks`, `lost+found`), when `pre` runs with the
   listing, then rc 34 and `has_hooks_d=1 lf_entries=0 offlist_n=1` (A120, arm H).
-- Given an unknown directory, when run, then `has_hooks_d=0 offlist_n=1` and the name appears
-  nowhere (A121, leak invariant).
+- Given an unknown directory (A10), a symlinked `repositories` (A12) or a non-empty `lost+found`
+  (A06/A07), then the whole last stderr line equals the expected suffix (fold-in of the existing rows).
 - Given `hooks`, an unknown directory and an unknown file together, then `offlist_n=3` and only the
   bit about `hooks` leaves (A122).
-- Given `hooks` as a symlink, a file, `hooks.d` or `Hooks`, then `has_hooks_d=0` (A123-A126).
-- Given a non-empty `lost+found` only, then `offlist_n=0 lf_entries=n` (A127-A129).
-- Given a clean allowlisted tree, then rc 0 and the stdout line unchanged (A130); given
-  `repositories/` entries, then rc 37 with no new field (A131).
-- Given the ssh shim emitting the A120 line with rc 34, then exit 5, the verdict word unchanged and
-  the line passed through verbatim (verb row).
+- Given `hooks` as a symlink, a file, `hooks.d` or `Hooks`, then `has_hooks_d=0` (A123); given a
+  nested `lost+found/hooks`, then `has_hooks_d=0 lf_entries=1 offlist_n=0` (A124).
+- Given an off-list directory and a `lost+found` entry, then `offlist_n=1 lf_entries=1` (A129).
+- Given a valid `hooks` and a control-character name, then rc 35 with no `has_hooks_d` field (A132);
+  given `repositories/` entries, then rc 37 with no new field (folded into A20).
+- Given the ssh shim emitting the A120 line with rc 34 (via `SHIM_ERR`), then the line is passed
+  through verbatim behind the `probe-stderr:` prefix (verb row; exit 5 and the verdict word are
+  already pinned by the existing RC loop).
 - Regression: the existing A10/A14/A15/A16/A17 refusals, m17 and the parity rows stay green
   unchanged.
 
@@ -517,3 +531,8 @@ ledger row; updating the runbook's stale status paragraph.
   change are scanned by `grep -inE` over the script.
 - The floors in the suite are literals directly above their `if`; set them from the measured
   counts after the suite is green, not from a guess.
+- The suite pins the recorded argv of every selector-bearing call as one exact multiset per phase
+  (`EXP_PRE`, `EXP_SKIP`, `EXP_POST`, `contract_eq`). The change must add NO external command
+  (no second `find`, no `test -d`): `hooks` is classified from the record the existing listing
+  `find` already prints, and `lost+found` reuses the existing count call. A new call turns every
+  contract row RED and is the wrong fix.
