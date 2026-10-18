@@ -3,8 +3,10 @@
 This directory prepares a paired production-image and full-schema rehearsal
 contract. The separate prebuild acquisition entrypoint prepares a finite
 read-only daemon metadata/image request manifest; its explicit execution mode
-requires fresh approval for the reviewed exact command. There is no build,
-download, application-start, SQL, browser-login or provider-execution command.
+requires fresh approval for the reviewed exact command. The separate registry
+entrypoint acquires only pinned manifest/Config metadata after its own approval.
+There is no build, layer fetch, application start, SQL, browser login or model
+execution command.
 The production runtime stays closed. The withdrawn October 11 runner is never
 imported or invoked.
 
@@ -237,3 +239,17 @@ remains pending independent review. If all candidate lookups return 404, this
 establishes only that none of the approved immutable lookup forms resolved.
 It does not establish that image data or layers are absent. The acquisition
 collector's stricter stop-on-404 behavior is unchanged.
+
+`registry_metadata.py` prepares a separate Mailpit-only HTTPS metadata action.
+Its explicit execution requires fresh approval for the reviewed exact command.
+Three fixed GETs acquire one anonymous bearer token in memory, then the retained
+platform manifest and Config blob. URLs, headers, scope, CA-bundle bytes,
+source/components and private outputs are bound in a file-only manifest.
+There is no Docker socket/executable, credential/config lookup, shared cache,
+layer fetch, unpacking or import. Redirects, challenges, retries and alternate
+hosts are unavailable. Verify raw content digests before interpretation;
+require the manifest's exact Config descriptor and expected Config platform.
+A redirect can leave only private verified manifest evidence and grants no
+permission to contact its Location. Tokens and error/redirect bodies are never
+retained. Content-addressed consistency establishes no publisher authenticity,
+observed local Docker ID, executable profile or runtime permission.

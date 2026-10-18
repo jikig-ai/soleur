@@ -2045,3 +2045,47 @@
   the exact approved host-context rerun passed. No actual Docker/provider/
   browser/account/SQL/recovery/build/pull/retry occurred. Both live metadata
   attempt markers remain spent. All runtime/legal/ship holds persist.
+
+### Diagnostic consumed and registry-only metadata preparation — 2026-10-18
+
+- Focused CTO and security review at pushed `3f2b5979eb` found no remaining
+  source blocker/actionable security finding in the diagnostic/cleanup delta.
+  Canonical Ruff passes (62 baseline findings, 110 files), staged secret/
+  whitespace checks pass, and seven positive proxy checks use fake peers
+  with zero Docker calls. Combined affected unit verification totals 224 tests;
+  the ownership script separately passes 51 checks. Full PR/runtime/SAST/legal
+  and shipping gates are not cleared.
+- Refreshed file-only pairing/export at `3f2b5979eb` match: 5,155 inputs,
+  191 migrations, 55 components and 6,927 source leaves plus metadata. The CTO
+  independently verified actual diagnostic manifest
+  `157090b6fd705e99db260a47f049cc7b6b99c6ef8ed8df826c6b05323c1dae0a`.
+  The exact command was freshly approved and executed once, completing
+  statuses 200/200/404/404/404 with zero Config observations. Receipt checksum
+  `9eb1b3e3df86f773291171002b48de52ada756efb7d22bc0d66cbe6d4ef4617f`
+  and file digest
+  `8800e359d9a343a40956b4bb901d44167c2b9d29235c82d0d5d00f04c1d03bf1`
+  verify. All three approved immutable forms failed to resolve; layer absence
+  and shared-host ownership remain unestablished. Marker spent, earlier
+  receipts unchanged, no follow-on operation authorized.
+- CTO ruled the next source-only boundary: three finite HTTPS GETs for an
+  anonymous in-memory bearer, retained Mailpit platform manifest and exact
+  Config blob in private task storage. No shared Docker pull/mutation. Bind
+  raw digests, exact URLs/headers/scope, CA-bundle/source/retained/output bytes;
+  verify Config descriptor/platform; disable redirects/challenges/retries and
+  fetch no layers. All source/actual-manifest reviews and fresh exact-action
+  approval remain required. No registry request has run during preparation.
+- Owned image-store/import design remains required after actual metadata
+  review. Build approval is consumed, withdrawn command forbidden, hosted auth
+  BLOCKED and alternate route PENDING. Keep draft/disarmed/default-off/customer-
+  blocked, with all recovery, routine, Web/CLO and promotion gates held.
+- The dormant registry metadata module and tests are implemented. Initial RED
+  was the missing module; ten methods pass on explicit system Python 3.14
+  with warnings as errors, using fake HTTPS/SSL and synthesized files only.
+  Cases cover exact requests, token exclusion/aliases, 401/307 stopping,
+  digest-before-parse, descriptor/platform/media/size, private staged outputs,
+  CA bindings, marker replay and failure diagnostics. Local two-file Ruff
+  passes. Combined registry/reference/acquisition/operational/preparation/
+  candidate verification passes 77 tests; canonical Ruff passes (62 baseline
+  findings, 112 files), staged secret/syntax/whitespace checks pass. Independent
+  source/actual-manifest review and fresh exact-action approval remain required;
+  no registry request has run.

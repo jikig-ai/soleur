@@ -2,7 +2,7 @@
 title: Separate prebuild evidence acquisition from runtime qualification
 date: 2026-10-16
 pr: 9051
-status: diagnostic-implemented-focused-source-review-pending
+status: registry-metadata-implemented-focused-source-review-pending
 ---
 
 # CTO ruling and scope
@@ -328,6 +328,93 @@ found zero tests and exited 5; its direct registered script invocation supplied
 the actual result. Transport/TLS sandbox setup also required exact synthetic
 peer approvals before successful host-context runs. No setup refusal or
 empty discovery is counted as a test verdict.
+
+### Reviewed diagnostic consumed; registry metadata boundary
+
+Focused CTO and security review of pushed
+`3f2b5979eb277ff7433b76f7b9cb13d6e56c0ce1` found no remaining blocker or
+actionable security finding in the diagnostic/cleanup delta. Whole-tree Ruff
+passes with 62 existing baseline findings and 110 files scanned; staged secret
+and whitespace checks pass. The positive proxy script also passes seven
+transport checks with zero Docker calls. These are focused source/fixture
+results, not full PR, SAST, runtime, legal or shipping clearance.
+
+File-only preview/export at that source match: 5,155 production/plugin inputs,
+191 migrations, 55 components, 1,770 vendored inputs and 6,927 source leaves
+plus three metadata leaves. Pairing:
+`d99f7abf6efe6ad5954f36a9e7ff4fa3758ed09fdda59c39e07813fd79eb6199`;
+operational:
+`1337fb9492cb5b1b4a8ef9e09f4120d45d7678f43b14c7ffd690383f96d3a1f4`.
+The CTO independently verified actual file-only diagnostic manifest
+`157090b6fd705e99db260a47f049cc7b6b99c6ef8ed8df826c6b05323c1dae0a`,
+runner `ada64abc37b4f0c4784bf356eef3e822988e7ae49693b7a99c21a2463a8ecef0`,
+exact five GETs, retained candidates, host endpoint/private outputs and unused
+marker/receipt. The operator freshly approved the exact timeout-wrapped action.
+
+It executed once and completed statuses **200, 200, 404, 404, 404**. All three
+approved immutable Mailpit lookup forms failed to resolve; no Config was
+observed. This does not prove layer absence or shared-host ownership.
+Private receipt checksum:
+`9eb1b3e3df86f773291171002b48de52ada756efb7d22bc0d66cbe6d4ef4617f`;
+file-byte digest:
+`8800e359d9a343a40956b4bb901d44167c2b9d29235c82d0d5d00f04c1d03bf1`.
+The checksum verifies, receipt is mode 0600, marker spent, and both earlier
+receipt bytes unchanged. All authority remains false/pending. No follow-on
+operation is authorized by this completed diagnostic.
+
+Ruled by CTO agent: next prepare a Mailpit-only credential-free registry
+metadata acquisition into a fresh private task directory, without a shared
+Docker mutation. Exact proactive sequence: anonymous token GET for service
+`registry.docker.io`, scope `repository:axllent/mailpit:pull`, at
+`https://auth.docker.io/token`; then the retained platform manifest and Config
+blob at `https://registry-1.docker.io/v2/axllent/mailpit/` digest routes.
+Fixed initial URLs and headers belong in the reviewed source-bound manifest.
+Only the exact registry host receives bearer authorization. Token aliases
+must agree if both present; token material stays in memory and never appears
+in output, errors, receipts or persisted request headers.
+
+Pin the selected CA-bundle bytes, verify TLS hostname/chain, request identity
+encoding and accept only fixed manifest/Config media types. This is a CA-bundle
+hash binding, not a server-certificate or publisher pin. Disable redirects,
+challenge processing, alternate hosts and retries. Any 401/3xx stops before
+contacting its Location; a Config redirect may leave only a verified manifest.
+Consume an exclusive private marker before token acquisition, retain it on
+failure, and bound token/manifest/Config streams to 16 KiB/1 MiB/1 MiB under
+one 60-second collector budget with at most 10 seconds requested per request.
+Unpreempted DNS/Python/filesystem stages remain cooperative; require a separate
+90-second outer timeout with five-second kill grace.
+
+Hash raw manifest bytes before interpreting descriptors. Require the exact
+retained Config digest
+`sha256:3f56e44ddc1a5655b8f288a2aa812db567b2f5f0b8bc18ef3da63b94a95608d5`,
+permitted descriptor media type and bounded size, then verify raw Config bytes
+and linux/amd64 platform. Retain complete successful bytes privately and layer
+descriptors/sizes as data only. No layer fetch, unpack, execution, shared cache
+or image import is included. Content-addressed consistency establishes neither
+publisher authenticity nor observed local Docker IDs, admission or ownership.
+After actual metadata review, document an owned image-store/import boundary
+before any separately approved layer acquisition or import proposal. Source
+implementation, synthetic verification, independent source/actual-manifest
+review and fresh exact-action approval are still required. No registry request
+has been made during this preparation; all build/runtime/legal/ship holds persist.
+
+The dormant registry module and tests are implemented. The initial test run
+failed for the absent module; ten methods now pass under system Python 3.14
+with warnings as errors. Cases use synthesized bytes, fake HTTPS/SSL adapters
+and temporary files only. They distinguish token aliases and mismatches,
+401/307 stopping without body/Location retention, exact digest-before-parse
+ordering, strict Config descriptor/media/size/platform, duplicate JSON,
+bounded streams and encoding refusal, late/binding failure, staged publication
+cleanup, private modes, CA-byte refusal before the marker, persistent replay
+across a fork and output replacement. The actual HTTPS adapter constructor
+loads only supplied verified PEM bytes and opens no connection. The tests
+create no real registry action and use no account credentials or network.
+Two-file Ruff passes. Registration includes both new components and tests;
+combined verification passes 77 tests across registry/reference/acquisition,
+operational, preparation and candidate modules. Canonical whole-tree Ruff
+passes with 62 existing baseline findings and 112 files scanned; staged secret,
+Bash syntax and whitespace checks pass. Focused source review and all actual
+action/approval gates remain pending.
 
 The initial evidence search used the retired rollout directory rather than
 the live-paths directory. Discover current filenames before following older
