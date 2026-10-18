@@ -27,6 +27,10 @@
 #   * `tar xzf ... || true` is NOT equivalent: X17b feeds a verified tarball whose doppler member is missing.
 #   * mawk is UNVERIFIED here (not installable on the authoring host): the suite runs the derivation under gawk --posix,
 #     and the awk uses only POSIX features (index, sub, gsub, regex match).
+#   * dropping the full-token terms (RWTOK, DOPTOK; TOK on argv) is EQUIVALENT: each full value contains its own 6-character
+#     prefix term, which stays and is controlled (H5), so no leak can reach one without the other.
+#   * a leak of a NON-prefix slice of a token (e.g. its last 8 characters) is a declared limit: the invariant scans the whole
+#     value and its first 6 characters only.
 #   * the Doppler tarball and `timeout` behaviour are exercised under stubs only (no network).
 #
 # Run: bash plugins/soleur/test/sole-copy-drift-check.test.sh
@@ -36,10 +40,10 @@ set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
 # ANTI-VACUITY FLOOR at the REALIZED count (the number here and the number the run prints must agree).
-FLOOR=193
+FLOOR=194
 # Rows of the case table (every end_row call before the harness section), declared apart from the counters so
 # deleting one is a diff here (H3).
-TABLE_ROWS=125
+TABLE_ROWS=126
 
 if [[ -z "${_SC_DRIFT_INNER:-}" ]]; then
   _log=$(mktemp "$TMPDIR/sole-copy-drift.XXXXXX") || { printf 'FATAL: mktemp for the suite log\n' >&2; exit 2; }
@@ -629,6 +633,7 @@ done
 [[ "$plain" == 1 && "${DOPPLER_PROJECT:-}" == soleur && "${DOPPLER_CONFIG:-}" == prd_terraform && -n "${DOPPLER_TOKEN:-}" ]] || refuse "scope"
 echo "doppler secrets get $nm" >> "$SEQ"
 [[ "${DOPPLER_HANG:-}" == ignore-term ]] && { trap '' TERM; exec "${REAL_SLEEP:?}" 25; }
+[[ "${DOPPLER_HANG:-}" == partial ]] && { printf 'partial-read-fragment'; exec "${REAL_SLEEP:?}" 25; }
 [[ -n "${DOPPLER_HANG:-}" ]] && exec "${REAL_SLEEP:?}" 25
 case "$nm" in
   HCLOUD_TOKEN_READONLY) [[ "${DOPPLER_FIX_RO:-}" == "__absent__" ]] && { echo "Doppler Error: Could not find requested secret" >&2; exit 1; }; printf '%s' "${DOPPLER_FIX_RO:-}" ;;
@@ -1199,8 +1204,13 @@ end_row X1b "a credential read that fails fast (non-zero rc, empty) is still no-
 new_case; STUB_ENV+=("DOPPLER_HANG=ignore-term" "TIMEOUT_CAP=2"); _t0=$SECONDS; go; _el=$((SECONDS - _t0))
 want_out "${V}could-not-read|$OK_KEYS"; want_steps skip ran skip skip 1; want_req 0
 a "the error names the timeout (the kill-after path, rc 137)" "$(grep -c '^::error::sole_copy_probe_doppler_timeout' "$CASE/probe.log")" 1
-if (( _el < 5 || _el > 25 )); then CHK+=$'\n    '"the read that ignores SIGTERM took ${_el}s; want 5..25 (the kill-after is not applied)"; fi
+if (( _el < 5 || _el > 15 )); then CHK+=$'\n    '"the read that ignores SIGTERM took ${_el}s; want 5..15 (the kill-after is not applied)"; fi
 end_row X1c "a credential read that ignores SIGTERM is killed after the 5 s kill-after (rc 137) and still reads as could-not-read"
+new_case; STUB_ENV+=("DOPPLER_HANG=partial" "TIMEOUT_CAP=2"); go
+want_out "${V}could-not-read|$OK_KEYS"; want_steps skip ran skip skip 1; want_req 0
+a "a read that printed a fragment and then stalled is a timeout, not a credential" "$(grep -c '^::error::sole_copy_probe_doppler_timeout' "$CASE/probe.log")" 1
+a "it does not say the credential is missing" "$(grep -c 'has no Hetzner Read token' "$CASE/probe.log")" 0
+end_row X1d "a credential read that printed part of a value and then stalled is still a timeout (rc 124), never graded on the fragment"
 new_case; go
 a "the request process never sees the Doppler token" "$(grep -c '^DOPPLER_TOKEN=' "$CASE/curl.1.env")" 0
 a "control: the request environment was captured" "$(grep -c '^DOPPLER_PROJECT=soleur$' "$CASE/curl.1.env")" 1
@@ -1468,6 +1478,13 @@ _inv_fires() { # _inv_fires <setup-function>: 0 when invariants() reports someth
 _iv_clean() { :; }
 _iv_leak() { printf 'x %s y\n' "$TOK" > "$CASE/zz.log"; }
 _iv_prefix() { printf 'dbg %s\n' "${TOK:0:6}" > "$CASE/zz.log"; }
+_iv_rwleak() { printf 'x %s y\n' "$RWTOK" > "$CASE/zz.log"; }
+_iv_rwprefix() { printf 'dbg %s\n' "$RWPFX" > "$CASE/zz.log"; }
+_iv_dopleak() { printf 'x %s y\n' "$DOPTOK" > "$CASE/zz.log"; }
+_iv_dopprefix() { printf 'dbg %s\n' "$DOPPFX" > "$CASE/zz.log"; }
+_iv_argvprefix() { printf 'https://api.hetzner.cloud/v1/volumes?name=%s&per_page=50\0-H\0%s\0' "$CASE_NAME" "$TOKPFX" > "$CASE/curl.1.argv"; printf 'header = "Authorization: Bearer %s"' "$CASE_TOK" > "$CASE/curl.1.stdin"; }
+_iv_argvrw() { printf 'https://api.hetzner.cloud/v1/volumes?name=%s&per_page=50\0-H\0%s\0' "$CASE_NAME" "$RWTOK" > "$CASE/curl.1.argv"; printf 'header = "Authorization: Bearer %s"' "$CASE_TOK" > "$CASE/curl.1.stdin"; }
+_iv_argvrwprefix() { printf 'https://api.hetzner.cloud/v1/volumes?name=%s&per_page=50\0-H\0%s\0' "$CASE_NAME" "$RWPFX" > "$CASE/curl.1.argv"; printf 'header = "Authorization: Bearer %s"' "$CASE_TOK" > "$CASE/curl.1.stdin"; }
 _iv_canary() { printf 'x %s y\n' "$CANARY" > "$CASE/summary"; }
 _iv_ghenv() { echo "X=1" > "$CASE/github_env"; }
 _iv_refused() { echo "refused: argv" > "$CASE/curl.refused"; }
@@ -1477,9 +1494,9 @@ _iv_cred() { printf 'https://api.hetzner.cloud/v1/volumes?name=%s&per_page=50\0'
 _iv_argvtok() { printf 'https://api.hetzner.cloud/v1/volumes?name=%s&per_page=50\0-H\0%s\0' "$CASE_NAME" "$TOK" > "$CASE/curl.1.argv"; printf 'header = "Authorization: Bearer %s"' "$CASE_TOK" > "$CASE/curl.1.stdin"; }
 _iv_good() { printf 'https://api.hetzner.cloud/v1/volumes?name=%s&per_page=50\0' "$CASE_NAME" > "$CASE/curl.1.argv"; printf 'header = "Authorization: Bearer %s"' "$CASE_TOK" > "$CASE/curl.1.stdin"; }
 _hv=""
-for _f in _iv_leak _iv_prefix _iv_canary _iv_ghenv _iv_refused _iv_heredoc _iv_url _iv_cred _iv_argvtok; do _inv_fires "$_f" || _hv+=" $_f"; done
+for _f in _iv_leak _iv_prefix _iv_rwleak _iv_rwprefix _iv_dopleak _iv_dopprefix _iv_argvprefix _iv_argvrw _iv_argvrwprefix _iv_canary _iv_ghenv _iv_refused _iv_heredoc _iv_url _iv_cred _iv_argvtok; do _inv_fires "$_f" || _hv+=" $_f"; done
 for _f in _iv_clean _iv_good; do if _inv_fires "$_f"; then _hv+=" CONTROL:$_f"; fi; done
-if [[ -z "$_hv" ]]; then pass "H5 invariants() flags a leaked token, a 6-character token prefix, a label canary, a non-empty GITHUB_ENV, a stub refusal, a heredoc output, a wrong request URL, a wrong credential channel and a token on argv, and stays quiet for a clean case"
+if [[ -z "$_hv" ]]; then pass "H5 invariants() flags a leaked token (read-only, read/write or Doppler), a 6-character prefix of each, a token or prefix on argv, a label canary, a non-empty GITHUB_ENV, a stub refusal, a heredoc output, a wrong request URL, a wrong credential channel and a token on argv, and stays quiet for a clean case"
 else fail "H5 invariants self-test: not flagged or falsely flagged:$_hv"; fi
 CASE_N=$((CASE_N + 1))
 _h6=$( new_case; go
