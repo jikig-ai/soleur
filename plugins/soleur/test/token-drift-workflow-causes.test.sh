@@ -1715,7 +1715,7 @@ fi
 # One python source for the scan, the verdict rule and the mutation table, so the file scan and the
 # mutation rows run the SAME code. The mutation rows run in-process (one YAML load, no dump/reload).
 SCAN_PY=$(cat <<'PYD'
-ROWS_MIN = 95
+ROWS_MIN = 99
 import copy, re, sys, yaml
 
 SKIP = {"name", "id", "if"}
@@ -1777,6 +1777,7 @@ def scan(wf):
             n += 1
             units.append(("%s/%s" % (jname, st.get("name", "<unnamed>")), st, True))
     for who, unit, is_step in units:
+        recs.append(("unit", who))
         joined, flat = forms(unit)
         if write_hit(joined, flat):
             recs.append(("write", who))
@@ -1861,6 +1862,10 @@ ROWS = [
     ("g-hcloud",  "none",    "run",  "hcloud server list"),
     ("g-doppler", "none",    "run",  "doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain"),
     ("g-gh",      "none",    "run",  "gh issue create --title t --body-file b"),
+    ("sc-x-delete", "write",  "scrun", "curl -sS -X DELETE https://api.hetzner.cloud/v1/volumes/1"),
+    ("sc-detach",   "write",  "scrun", "hcloud volume detach 1"),
+    ("sc-data",     "write",  "scrun", 'curl -sS -d "{}" -H "Authorization: Bearer $T" https://api.hetzner.cloud/v1/volumes/1/actions/change_protection'),
+    ("sc-ok",       "none",   "scrun", "echo ok"),
 ]
 
 # one row per alternative of each matcher family, so a tidy-up that drops one token goes red
@@ -1886,6 +1891,10 @@ def build(wf, row, field, payload):
     elif field == "jobenv":
         step["run"] = "echo ok"
         jobs[0].setdefault("env", {})["REMEDY"] = payload
+    elif field == "scrun":
+        step["run"] = payload
+        m["jobs"]["sole-copy-protection-check"]["steps"].append(step)
+        return m
     elif field == "wfenv":
         step["run"] = "echo ok"
         m.setdefault("env", {})["REMEDY"] = payload
@@ -1983,6 +1992,21 @@ else
   fail "the R1/R2 scan could pass over nothing, or a filer's text lives outside the scanned YAML (${_nf} filer(s))"
 fi
 
+echo "R3b: the scan's population includes every unit of the sole-copy-protection-check job (#9927 item 9)"
+_sc_want=$(python3 -c 'import sys,yaml; j=yaml.safe_load(open(sys.argv[1]))["jobs"].get("sole-copy-protection-check") or {}; print(1+len(j.get("steps") or []) if j else 0)' "$WF") || _sc_want=0
+_sc_units=$(cut -f2 <<<"$(grep '^unit' <<<"$R_REAL")" | grep -c '^sole-copy-protection-check/') || _sc_units=0
+_r3b=1
+(( _sc_want >= 10 )) || { _r3b=0; echo "    the job has ${_sc_want} units, expected the job-level unit plus at least 9 steps"; }
+(( _sc_units == _sc_want )) || { _r3b=0; echo "    the scan examined ${_sc_units} units of the job, the workflow defines ${_sc_want}"; }
+for _u in "sole-copy-protection-check/(job-level)" "sole-copy-protection-check/Probe the Inngest store volume protection flag at Hetzner" "sole-copy-protection-check/Fail the run on any verdict that is not clean"; do
+  grep -qxF "$(printf 'unit\t%s' "$_u")" <<<"$R_REAL" || { _r3b=0; echo "    unit '${_u}' was not examined"; }
+done
+if [[ "$_r3b" == "1" ]]; then
+  pass "R3b all ${_sc_units} units of the sole-copy-protection-check job (job level, probe, filers, gate) are in the R1/R2 scanned population"
+else
+  fail "R3b the sole-copy-protection-check job's steps are not all in the R1/R2 scanned population — a write verb added to them would pass unseen"
+fi
+
 runbook_heading_ok() { grep -qE '^### Reclaiming survivors that state forgot( |$)' "$1"; }
 echo "R4: the filers' pointer to the reclaim procedure resolves (the heading exists in the runbook)"
 _rb="$REPO_ROOT/knowledge-base/engineering/operations/runbooks/inngest-provision-rehearsal.md"
@@ -1999,7 +2023,7 @@ fi
 # R5 — the mutation table runs in-process (python, one YAML load); each row injects one spelling into a
 # copy of the workflow. A red row must be flagged under its OWN unit; a green row must produce no
 # finding. The control rows prove the verdict rule can fail in both directions and the table is intact.
-R5_MIN=97
+R5_MIN=101
 echo "R5: mutation rows — every spelling of an injected write/destroy is RED, legitimate steps are GREEN"
 R5_OUT=$(python3 -c "$SCAN_PY" mutate "$WF") || { echo "FATAL: the mutation runner crashed" >&2; exit 2; }
 r5_line() { if [[ "$1" == "PASS" ]]; then pass "R5/$2: $3"; else fail "R5/$2: $3"; fi; }
@@ -2033,12 +2057,13 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # Raised 57 -> 60 with #7234's F5 (the for_each list IS the inventory) and C-a
 # (`config = each.key`, never a literal), then 60 -> 61 with F4b (the inventory's name set
 # never shrinks), then 61 -> 163 with R1-R5 (no step prints or runs a Hetzner write or Doppler
-# destroy, #9927 item 8c: 5 assertions + 97 mutation-runner verdicts). 163 is the REALIZED `PASS + FAIL`, and the number
+# destroy, #9927 item 8c: 5 assertions + 97 mutation-runner verdicts), then 163 -> 168 with R3b (the sole-copy-protection-check
+# job's units are in the scanned population) and its 4 injected-step mutation rows (#9927 item 9). 168 is the REALIZED `PASS + FAIL`, and the number
 # in this comment and the number in the guard below MUST be the same number. They disagreed once
 # (comment 46, guard 48, run 48/48), which is a ratchet whose own prose says the notch is
 # lower than it is — a reader trusting the comment would have "raised" it downward.
-if [[ "$((PASS + FAIL))" -lt 163 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 163." >&2
+if [[ "$((PASS + FAIL))" -lt 168 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 168." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

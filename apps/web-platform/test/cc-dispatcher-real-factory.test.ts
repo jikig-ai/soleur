@@ -831,7 +831,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       // Issue A: third opts arg always present; ghToken undefined here
       // because the default mock resolves no installation (null). Slice B:
       // pluginPath (getPluginPath() = deployed root) is always threaded.
-      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur" },
+      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur", claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/) },
     );
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.env.ANTHROPIC_API_KEY).toBe("sk-test");
@@ -869,6 +869,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
         gitAskpassScriptPath: `${WORKSPACE_PATH}/.askpass-fixed-test.sh`,
         gitInstallationToken: "ghs_minted_xyz",
         pluginPath: "/app/shared/plugins/soleur",
+        claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/),
       },
     );
   });
@@ -953,6 +954,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
         gitAskpassScriptPath: undefined,
         gitInstallationToken: undefined,
         pluginPath: "/app/shared/plugins/soleur",
+        claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/),
       },
     );
   });
@@ -997,7 +999,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     expect(mockBuildAgentEnv).toHaveBeenCalledWith(
       { value: "sk-test", scheme: "api_key" },
       {},
-      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur" },
+      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur", claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/) },
     );
     expect(mockQuery).toHaveBeenCalledOnce();
   });
@@ -1017,7 +1019,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     expect(mockBuildAgentEnv).toHaveBeenCalledWith(
       { value: "sk-test", scheme: "api_key" },
       {},
-      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur" },
+      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur", claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/) },
     );
   });
 
@@ -1526,7 +1528,7 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
     expect(mockBuildAgentEnv).toHaveBeenCalledWith(
       { value: "sk-test", scheme: "api_key" },
       {},
-      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur" },
+      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur", claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/) },
     );
     // Egress closed (also pinned in T2 via the sandbox-config call).
     expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(
@@ -1559,7 +1561,7 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
     expect(mockBuildAgentEnv).toHaveBeenCalledWith(
       { value: "sk-test", scheme: "api_key" },
       { STRIPE_SECRET_KEY: "sk_live_other" },
-      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur" },
+      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur", claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/) },
     );
   });
 
