@@ -12,6 +12,23 @@ brand_survival_threshold: none
 
 # fix: heartbeat-URL path secrets off argv: verified closeout (Ref #9757)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-18
+**Sections enhanced:** Phase 1 (c) evidence, Research Insights, gate results
+**Research agents used:** none spawned beyond plan-review and the CTO; the deepen pass was mechanical verification against GitHub and the repo (a knowledge-base-only, no-code plan has no technology surface for per-section research or framework docs)
+
+### Key Improvements
+
+1. Phase 1 (c) now has a measured plan-time reading instead of a promise: the apply run for PR #10086's merge commit succeeded and replaced `terraform_data.git_data_probe_install` (see "Deepen findings").
+2. Every cited PR number, merge commit, merge date, changed-file claim and path in the plan was re-resolved live; none was stale.
+3. The halt gates 4.6 to 4.12 were evaluated and recorded, including one false positive of the network-outage keyword scan.
+
+### New Considerations Discovered
+
+- The delivery evidence for `web-git-data-probe.sh` is readable from a public run log with no secret, so the "per-resource re-delivery not read" fallback should not be needed for that script.
+- Re-delivery evidence for `luks-monitor.sh` does not exist and cannot exist from this workflow: it ships through the operator-applied `workspaces-luks.tf` root, which the push-apply does not reach.
+
 ## Overview
 
 Spec lacks valid lane: defaulted to cross-domain (fail-closed); no spec.md exists for this one-shot branch.
@@ -137,7 +154,7 @@ Create `knowledge-base/project/specs/feat-one-shot-9757-heartbeat-url-off-argv/c
 
 - (a) S6-HB. Run `bash tests/scripts/test-argv-bearer-sweep.sh` on a tree equal to origin/main for the files named; record the final summary line and say "6 converted of 16 derived heartbeat scripts" so the file matches the test output. Pass: `0 failed` and every `S6-HB` row `[ok]`. The plan-time run (823 passed, 0 failed) is cited; re-run only if the branch has drifted from main for any file in the `apps/web-platform/infra/*.sh` set. This is the authoritative scanner for the argv property and for the one-guarded-stdin-line-per-script property; no separate grep is prescribed.
 - (b) Anchors on main. Record, per script, the content anchor of its transport line and its guard function (`_hb_url_ok` / `hb_url_ok` / the negated allow-class `case` in the inngest heartbeat body), read from `git show origin/main:<path>`.
-- (c) Delivery of `web-git-data-probe.sh`. Resolve a successful `apply-web-platform-infra.yml` push run whose head SHA contains PR #10086's merge commit (`64046de076`; check with `git merge-base --is-ancestor`), via `gh run list`; no secret involved. Say whether the run log or a run summary readable without a secret shows the `server.tf` terraform_data install ran. A green run with no diff does not prove re-delivery, so if per-resource re-delivery is unreadable, write "run succeeded; per-resource re-delivery not read" and never "delivered".
+- (c) Delivery of `web-git-data-probe.sh`. Resolve a successful `apply-web-platform-infra.yml` push run whose head SHA contains PR #10086's merge commit (`64046de076`; check with `git merge-base --is-ancestor`), via `gh run list`; no secret involved. Say whether the run log or a run summary readable without a secret shows the `server.tf` terraform_data install ran. A green run with no diff does not prove re-delivery, so if per-resource re-delivery is unreadable, write "run succeeded; per-resource re-delivery not read" and never "delivered". Plan-time reading (deepen pass): run 38303163269 on head 64046de076 succeeded and replaced `terraform_data.git_data_probe_install` with its provisioners; re-confirm on the merged tree and record the resource name and outcome only.
 - (c2) Optional, informational: the `soleur-git-data-prd` monitor state, using the read-scope form the cutover runbook documents (`knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md`; only the monitor name is substituted: the runbook's example targets `soleur-git-data-host-prd`): `doppler run --only-secrets BETTERSTACK_API_TOKEN_READONLY -p soleur -c prd_terraform -- env -u SHELLOPTS -u BASH_ENV -u BASHOPTS bash --noprofile --norc -c 'BS_TOKEN="$BETTERSTACK_API_TOKEN_READONLY" exec bash apps/web-platform/infra/arm-heartbeats.sh --status soleur-git-data-prd'`. Redirect stdout to a scratch file, keep only the `status=` and `paused=` fields, scan the scratch file for the heartbeat URL shape before anything is pasted, and never `set -x`. `--status` never issues a PATCH. `status=up` proves only that some probe is beating; it is never cited as delivery. A `status=down` is a finding filed on #10093 and does not block the transport tick. If Doppler or Better Stack is unreadable, record "not read" and why.
 - (d) Luks. Cite from `uptime-alerts.tf` and `workspaces-luks.tf` that the monitor is `paused = true` with `ignore_changes = [paused]` and that delivery of `luks-monitor.sh` is through the operator-applied `workspaces-luks.tf` root. Claim no luks delivery or liveness.
 
@@ -218,6 +235,37 @@ The brief asked to plan for the ratchets that infra shell changes trip. This PR 
 ## Observability
 
 Skipped: the diff touches no code-class path (`apps/*/server/`, `apps/*/src/`, `apps/*/infra/`, `plugins/*/scripts/`) and introduces no infrastructure surface. The existing liveness signal for these scripts is unchanged (Better Stack heartbeats, S6-HB in CI).
+
+## Deepen findings (2026-10-18)
+
+**Live resolution of every citation** (commands run in this pass, outputs summarised, no secret printed):
+
+| Claim in the plan | Resolution |
+|---|---|
+| PR #10086 merged 2026-10-12, converted `web-git-data-probe.sh` and `luks-monitor.sh` | `gh pr view 10086`: MERGED 2026-10-12T20:16:44Z, merge commit 64046de076; its file list contains both scripts |
+| PR #10356 merged 2026-10-15, converted `inngest-bootstrap.sh` | `gh pr view 10356`: MERGED 2026-10-15T19:05:58Z, merge commit 1c0cf63dd3; file list contains `inngest-bootstrap.sh` |
+| PR #10322 merged (registry) | MERGED 2026-10-15T09:36:41Z, merge commit 8c8401e6fa |
+| 64046de076 is on main | `git merge-base --is-ancestor 64046de076 origin/main`: true |
+| Cited runbooks, lint script and delegation verifier exist | `workspaces-luks-cutover-6604.md`, `git-data-luks-cutover-5274.md`, `scripts/lint-infra-no-human-steps.py`, `plugins/soleur/scripts/delegation-verify.sh` all present |
+| No AGENTS rule ids, labels, SHAs-as-pins or version tags are cited as authority | rule-id regex over the plan returns nothing; no label is prescribed |
+
+**Delivery evidence for `web-git-data-probe.sh` (plan-time reading of Phase 1 (c)).** `gh run list` shows a successful `apply-web-platform-infra.yml` push run on head 64046de076 created 2026-10-12T20:16:46Z (run id 38303163269). Its log (read-only, `gh run view <id> --log` to a scratch file) shows `terraform_data.git_data_probe_install` being **replaced** (destroyed, then created) with the `file` and `remote-exec` provisioners running, ending `Creation complete after 8s`. That is per-resource re-delivery evidence, so the work phase should record "run succeeded; `terraform_data.git_data_probe_install` replaced, provisioners ran" and re-confirm it on the merged tree. Four later successful push runs follow (the next on head f663c4af0e), none needed for this claim. No log line was copied into the plan beyond the resource name and the outcome words.
+
+**Halt gates evaluated.**
+
+- 4.6 User-Brand Impact: section present, threshold `none`, non-placeholder body; the diff is knowledge-base only (no sensitive path) and carries a `threshold: none, reason:` bullet anyway. Pass.
+- 4.7 Observability: pure knowledge-base diff, skip rule applies; the plan records the skip. Pass.
+- 4.8 PAT-shaped variable sweep: no match. Pass.
+- 4.9 UI wireframe: no UI-surface file. Skip. 4.10 Encryption posture: no store or new connection introduced. Skip. 4.11 Guard Contract: the deliverable is not a guard. Skip. 4.55 Downtime and cutover: no running surface is touched. Skip.
+- 4.12 Scope Check: exactly one unfenced `## Scope Check`, all three subsections present, eight asks mapped or descoped with a justification, no `status: BLOCKED` line; counts in Split Assessment match the four listed files. Pass.
+- 4.5 Network-outage keyword scan: the only hits are the substring `504` inside the PR number 10504, a false positive; no SSH, firewall or timeout is a hypothesis of this plan, so no deep-dive is spawned. Note for the work phase: reading the apply run's provisioner lines is a log read, not an SSH dependency of this plan.
+
+**Edge cases and conflicts.**
+
+- Conflict check: the CTO's original bar said a down monitor blocks the tick; the revised bar (recorded in `decision-challenges.md` row 3) supersedes it. The plan and tasks carry only the revised bar.
+- `status=up` on `soleur-git-data-prd` is optional evidence and never cited as delivery; the apply-run log above is the delivery evidence.
+- A rejected or revised PR leaves the umbrella untouched because the tick and comments run only after the merge.
+- If `origin/main` moves a file in the `apps/web-platform/infra/*.sh` set before the work phase, Phase 1 (a) must be re-run rather than cited.
 
 ## Plan Review Revisions (2026-10-18)
 
