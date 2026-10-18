@@ -709,6 +709,26 @@ assert_rc 'FR7: the session ended cleanly after the withhold' "$r" 0
 mk_variant "$WORK/v-rename" "$PROXY" 'def main() -> None:' 'del looks_like_a11y_tree\n\n\ndef main() -> None:'
 r="$(session v-rename "$WORK/v-rename/proxy.py" --send "$INIT" --end eof --timeout 3)"
 assert_refused_start 'B2: a redactor missing one of the four names → refuse (not a per-result withhold)' "$r" 'does not export looks_like_a11y_tree'
+# Guard 1 (slice 1 of #10331): the startup handlers catch (Exception, SystemExit, KeyboardInterrupt), not BaseException. Each excluded
+# class must still refuse with rc 2 and the unchanged reason line, at every member: the import, the redact_text call and the
+# looks_like_a11y_tree call in the self-test (a case for one member does not cover the other).
+for cls in SystemExit KeyboardInterrupt; do
+  mk_variant "$WORK/v-load-$cls" "$PROXY" 'def main() -> None:' "raise $cls()\n\n\ndef main() -> None:"
+  r="$(session "v-load-$cls" "$WORK/v-load-$cls/proxy.py" --send "$INIT" --end eof --timeout 3)"
+  assert_refused_start "G1: a redactor raising $cls at import → refuse to start (rc 2), class named" "$r" "cannot load redact-a11y-snapshot.py: $cls"
+done
+mk_variant "$WORK/v-st-redact" "$PROXY" 'def redact_text(text: str) -> str:' 'def redact_text(text: str) -> str:\n    raise KeyboardInterrupt()\n\ndef _unused_redact_text(text: str) -> str:'
+r="$(session v-st-redact "$WORK/v-st-redact/proxy.py" --send "$INIT" --end eof --timeout 3)"
+assert_refused_start 'G1: redact_text raising KeyboardInterrupt in the self-test → refuse (rc 2), class named' "$r" 'redactor self-test raised KeyboardInterrupt'
+mk_variant "$WORK/v-st-redact-exit" "$PROXY" 'def redact_text(text: str) -> str:' 'def redact_text(text: str) -> str:\n    raise SystemExit(3)\n\ndef _unused_redact_text(text: str) -> str:'
+r="$(session v-st-redact-exit "$WORK/v-st-redact-exit/proxy.py" --send "$INIT" --end eof --timeout 3)"
+assert_refused_start 'G1: redact_text raising SystemExit in the self-test → refuse (rc 2), class named' "$r" 'redactor self-test raised SystemExit'
+mk_variant "$WORK/v-st-looks" "$PROXY" 'def looks_like_a11y_tree(value: str) -> bool:' 'def looks_like_a11y_tree(value: str) -> bool:\n    raise KeyboardInterrupt()\n\ndef _unused_looks(value: str) -> bool:'
+r="$(session v-st-looks "$WORK/v-st-looks/proxy.py" --send "$INIT" --end eof --timeout 3)"
+assert_refused_start 'G1: looks_like_a11y_tree raising KeyboardInterrupt in the self-test → refuse (rc 2), class named' "$r" 'looks_like_a11y_tree raised KeyboardInterrupt'
+mk_variant "$WORK/v-st-looks-exit" "$PROXY" 'def looks_like_a11y_tree(value: str) -> bool:' 'def looks_like_a11y_tree(value: str) -> bool:\n    raise SystemExit(3)\n\ndef _unused_looks(value: str) -> bool:'
+r="$(session v-st-looks-exit "$WORK/v-st-looks-exit/proxy.py" --send "$INIT" --end eof --timeout 3)"
+assert_refused_start 'G1: looks_like_a11y_tree raising SystemExit in the self-test → refuse (rc 2), class named' "$r" 'looks_like_a11y_tree raised SystemExit'
 # FR13 behavioural: a SPY redactor tags every string it is handed. Every text block
 # the proxy delivers must carry the tag — a proxy-side predicate that skips some
 # text (a literal, a tool-name allowlist, any spelling of either) cannot hide.
@@ -938,7 +958,7 @@ assert_true 'NFR1/NFR3: stdlib-only imports, no threading' python3 - "$PROXY" <<
 import ast, sys
 t = ast.parse(open(sys.argv[1]).read())
 mods = {(n.names[0].name if isinstance(n, ast.Import) else n.module).split(".")[0] for n in ast.walk(t) if isinstance(n, (ast.Import, ast.ImportFrom))}
-allowed = {"__future__", "importlib", "json", "os", "selectors", "signal", "subprocess", "sys", "time", "typing"}
+allowed = {"__future__", "contextlib", "importlib", "json", "os", "selectors", "signal", "subprocess", "sys", "time", "typing"}
 sys.exit(0 if mods <= allowed and "threading" not in mods else 1)
 PY
 
@@ -1536,7 +1556,7 @@ if [[ $mutants_declared -ne $EXPECTED_MUTANTS || $red_rows -ne $EXPECTED_RED_ROW
   printf '[FATAL] mutation matrix: %d mutants / %d mutation rows ran, expected %d / %d — a row vanished\n' "$mutants_declared" "$red_rows" "$EXPECTED_MUTANTS" "$EXPECTED_RED_ROWS" >&2
   exit 1
 fi
-MIN_ASSERTIONS=491
+MIN_ASSERTIONS=497
 if [[ $cases -lt $MIN_ASSERTIONS ]]; then
   printf '[FATAL] vacuity floor: only %d cases executed, expected at least %d\n' "$cases" "$MIN_ASSERTIONS" >&2
   exit 1

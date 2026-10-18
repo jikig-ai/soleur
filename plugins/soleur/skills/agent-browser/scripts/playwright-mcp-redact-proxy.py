@@ -54,6 +54,7 @@ server". Stdlib only, single `selectors` loop, POSIX.
 """
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import json
 import os
@@ -123,6 +124,10 @@ GOOGLE_CHROME_PATHS = {
 _LOG_SCRUB = {c: " " for c in list(range(0x20)) + [0x7F, 0x2028, 0x2029]}
 
 
+# json.loads can legitimately return None (JSON null), so a failed parse needs its own marker.
+_NOT_JSON = object()
+
+
 def log(msg: str) -> None:
     sys.stderr.write(f"{PREFIX} {msg.translate(_LOG_SCRUB)}\n")
     sys.stderr.flush()
@@ -131,10 +136,9 @@ def log(msg: str) -> None:
 def _log_quiet(msg: str) -> None:
     # log() that cannot raise: for lines written on the teardown path, where an exception would skip the reap and the exit.
     # RuntimeError is in the guard because teardown can run from the SIGTERM handler, where a reentrant stderr write raises it.
-    try:
+    # A closed, full, busy or missing stderr (None when fd 2 is closed) must not abort teardown.
+    with contextlib.suppress(OSError, ValueError, RuntimeError, AttributeError):
         log(msg)
-    except (OSError, ValueError, RuntimeError, AttributeError):
-        pass  # a closed, full, busy or missing stderr (None when fd 2 is closed) must not abort teardown
 
 
 def _note(exc: BaseException, site: str) -> None:
@@ -271,7 +275,7 @@ def load_redactor() -> Tuple[Any, Any, int, str]:
             raise ImportError("no loader")
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-    except BaseException as exc:  # noqa: BLE001 - a module-level sys.exit is a refusal too
+    except (Exception, SystemExit, KeyboardInterrupt) as exc:  # a module-level sys.exit is a refusal too
         refuse_start(f"cannot load {REDACTOR_BASENAME}: {type(exc).__name__}")
     missing = [n for n in ("redact_text", "looks_like_a11y_tree", "MAX_INPUT_BYTES", "REDACTED") if not hasattr(mod, n)]
     if missing:
@@ -286,14 +290,14 @@ def self_test(redact_text: Any, looks_like_a11y_tree: Any, redacted: str) -> Non
     row = '- textbox "Token" [ref=e1]: ZZQP-SENTINEL-7980'
     try:
         out = redact_text(row)
-    except BaseException as exc:  # noqa: BLE001
+    except (Exception, SystemExit, KeyboardInterrupt) as exc:
         refuse_start(f"redactor self-test raised {type(exc).__name__}")
     if redacted not in out or "ZZQP-SENTINEL-7980" in out:
         refuse_start("redactor self-test did not redact the sentinel row")
     try:
         tree_true = looks_like_a11y_tree(row)
         prose_false = looks_like_a11y_tree("### Page\n- Page URL: x")
-    except BaseException as exc:  # noqa: BLE001
+    except (Exception, SystemExit, KeyboardInterrupt) as exc:
         refuse_start(f"looks_like_a11y_tree raised {type(exc).__name__}")
     if not tree_true or prose_false:
         refuse_start("looks_like_a11y_tree self-test failed (tree row / prose row)")
@@ -742,7 +746,9 @@ class Proxy:
             try:
                 parsed = json.loads(cand)
             except (ValueError, RecursionError):
-                continue  # a per-line probe over page text: most lines are not JSON, the negative result is the normal one
+                parsed = _NOT_JSON  # a per-line probe over page text: most lines are not JSON, the negative result is the normal one
+            if parsed is _NOT_JSON:
+                continue
             # No newline requirement: one row returned by `ariaSnapshot()` on a
             # single locator is a whole tree to the redactor's predicate.
             if any(self.looks_like_a11y_tree(s) for s in json_strings(parsed)):
@@ -838,10 +844,9 @@ class Proxy:
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
             if self.child is not None and self.child.poll() is None:
-                try:
+                # A 50 ms poll: the child still running is the normal outcome of each tick.
+                with contextlib.suppress(subprocess.TimeoutExpired):
                     self.child.wait(timeout=0.05)
-                except subprocess.TimeoutExpired:
-                    pass  # a 50 ms poll: the child still running is the normal outcome of each tick
             if not self.group_alive():
                 return True
             time.sleep(0.05)
@@ -863,16 +868,14 @@ class Proxy:
                 child.stdin.close()
         except OSError as exc:
             pending.append((exc, "teardown-stdin-close"))
-        try:
+        # The designed route into the SIGTERM step: a child that ignores EOF is the case the ladder exists for.
+        with contextlib.suppress(subprocess.TimeoutExpired):
             child.wait(timeout=STDIN_CLOSE_WAIT_S)
-        except subprocess.TimeoutExpired:
-            pass  # the designed route into the SIGTERM step: a child that ignores EOF is the case the ladder exists for
         # Always signal the GROUP: the direct child (npx) may already have exited
         # while Chrome, its grandchild, still holds the group.
-        try:
+        # The group is already empty after a clean exit: the normal outcome of every clean session.
+        with contextlib.suppress(ProcessLookupError):
             os.killpg(self.pgid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass  # the group is already empty after a clean exit: the normal outcome of every clean session
         if not self.wait_group_empty(self.grace):
             try:
                 os.killpg(self.pgid, signal.SIGKILL)

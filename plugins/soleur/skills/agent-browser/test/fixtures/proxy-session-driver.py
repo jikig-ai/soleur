@@ -16,6 +16,7 @@ Exit 0 always (the suite reads the files); usage error exits 2.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -62,11 +63,9 @@ def main():
     buf = bytearray(); raw = bytearray(); objs = []
     want = set()
     for line in o["send"]:
-        try:
+        with contextlib.suppress(ValueError):
             m = json.loads(line)
             if isinstance(m, dict) and "id" in m and "method" in m: want.add(json.dumps(m["id"]))
-        except ValueError:
-            pass
         try:
             p.stdin.write(line.encode() + b"\n"); p.stdin.flush()
         except (BrokenPipeError, OSError):
@@ -87,8 +86,8 @@ def main():
                 obj = json.loads(line.decode("utf-8", "replace")); objs.append(obj)
                 if isinstance(obj, dict) and ("result" in obj or "error" in obj): got.add(json.dumps(obj.get("id")))
                 if isinstance(obj, dict) and "method" in obj and "id" in obj:  # server request: answer roots
-                    try: p.stdin.write((json.dumps({"jsonrpc": "2.0", "id": obj["id"], "result": {"roots": []}}) + "\n").encode()); p.stdin.flush()
-                    except OSError: pass
+                    with contextlib.suppress(OSError):
+                        p.stdin.write((json.dumps({"jsonrpc": "2.0", "id": obj["id"], "result": {"roots": []}}) + "\n").encode()); p.stdin.flush()
             except ValueError:
                 objs.append({"__unparsable__": line.decode("utf-8", "replace")})
         return True
@@ -101,8 +100,8 @@ def main():
     m = re.search(rb"child pgid (\d+)", open(err_path, "rb").read())
     if m: child_pgid = m.group(1).decode()
     if o["end"] == "eof":
-        try: p.stdin.close()
-        except OSError: pass
+        with contextlib.suppress(OSError):
+            p.stdin.close()
     elif o["end"] == "sigterm":
         os.kill(p.pid, signal.SIGTERM)
     elif o["end"] == "killchild":  # SIGTERM the CHILD's group; the proxy must clamp the exit code
@@ -114,9 +113,8 @@ def main():
     t_end = time.monotonic() + o["timeout"]
     while time.monotonic() < t_end:
         if p.poll() is not None: break
-        try:
+        with contextlib.suppress(OSError, ValueError):
             while sel.get_map() and pump(False): pass
-        except Exception: pass
         time.sleep(0.05)
     if p.poll() is None:
         p.kill(); rc = "TIMEOUT"

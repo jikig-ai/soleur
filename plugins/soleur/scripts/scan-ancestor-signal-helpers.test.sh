@@ -58,7 +58,7 @@ passes=0
 fails=0
 cases=0
 skipped=0
-PLANNED_TOTAL=139
+PLANNED_TOTAL=143
 
 pass() { passes=$((passes + 1)); printf '[ok] %s\n' "$1"; }
 fail() { fails=$((fails + 1)); printf '[FAIL] %s\n' "$1"; }
@@ -549,10 +549,37 @@ for tok in line-shape canary-absent oserror-stderr valueerror-stderr none-stderr
 done
 
 # ============================================================================================
+# G. Catch-all exit contract (slice 1 of #10331): main() narrowed from BaseException to (Exception, KeyboardInterrupt);
+#    an uncaught exception of either class must still read as rc 3 UNRESOLVED, never rc 1 "findings".
+#    main() ends in os._exit(3), so each probe runs in its own subprocess. kill -INT is not used (non-interactive
+#    background jobs ignore SIGINT); the exception is raised from the replaced run() instead.
+# ============================================================================================
+assert_fixture_dir "$TMP"
+for exc_name in KeyboardInterrupt RuntimeError; do
+  g_rc=0
+  python3 -I - "$SCAN" "$exc_name" > "$TMP/uncaught-$exc_name.out" 2>&1 <<'PY' || g_rc=$?
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("main_target", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+exc_name = sys.argv[2]
+
+def boom(argv):
+    raise KeyboardInterrupt() if exc_name == "KeyboardInterrupt" else RuntimeError("synthetic")
+
+mod.run = boom
+mod.main()
+sys.exit(0)
+PY
+  check "G-$exc_name an uncaught $exc_name from run() exits 3 (UNRESOLVED), not 1 (findings)" test "$g_rc" -eq 3
+  check "G-$exc_name the $exc_name arm names its class on the UNRESOLVED line" grep -qF "UNRESOLVED: uncaught $exc_name" "$TMP/uncaught-$exc_name.out"
+done
+
+# ============================================================================================
 # Anti-vacuity and accounting (direct printf + exit, never through fail())
 # ============================================================================================
-if [[ "$cases" -lt 136 ]]; then
-  printf '[FATAL] anti-vacuity floor: only %s cases ran, floor is 136\n' "$cases" >&2
+if [[ "$cases" -lt 140 ]]; then
+  printf '[FATAL] anti-vacuity floor: only %s cases ran, floor is 140\n' "$cases" >&2
   exit 1
 fi
 if [[ $((passes + fails)) -ne "$cases" ]]; then
