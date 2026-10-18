@@ -19,9 +19,6 @@
 #     diff: repo-wide scanners, whole-corpus legal gates, runner-SUT suites (the
 #     runner is always its own SUT), credential/path lints, ratchet baselines.
 #     Add the registration's label verbatim to ALWAYS_ON_SUITES.
-#     Also add the label to scripts/suite-durations.tsv (a `floor` row at the default
-#     weight is fine): test-all-fast-tier-budget fails any always-on label without one,
-#     and only the full battery runs it (#10331).
 #   EDGE — the suite's verdict is a property of specific files. Do nothing when
 #     derivation already reaches the edge: argv literals (self-edge), source /
 #     import closure, and the name-stem conventions (<x>.test.sh -> <x>.sh,
