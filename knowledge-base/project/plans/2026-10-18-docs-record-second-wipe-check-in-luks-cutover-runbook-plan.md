@@ -125,6 +125,9 @@ Result: None (a docs-only runbook edit; recorded so the next planner can see the
 - **If this leaks, the user's data is exposed via:** a public runbook and public run logs (this repository and #6897 are
   public): a listing name, a per-user identifier, or a count read as a statement about what the volume holds would be
   published against a user who has no way to retract it.
+- **Misreads this text must block** (E1 to E3 and the CLO/review rationale in this plan): the tenant git data on the retired
+  volume is the artifact; the vectors are a marker read as precedent to dispatch a further run or a `wipe`, `hooks` or
+  `repos=0` read as an emptiness statement, and a dated 'nothing dispatched' sentence read after the next dispatch.
 - **Brand-survival threshold:** `single-user incident`
 - **Threshold decision (challengeable):** inherited from the parent plan; a wipe of user repositories is
   single-user-visible and irreversible, and this runbook is the control text for it.
@@ -274,7 +277,7 @@ policy bullet requires for any allowlist change is explicitly not part of this P
 | 4 | "update the Status paragraph ~1106 (two wipe_check runs, both refused; no wipe, wipe_finish or snapshot_clear dispatched)" | E1 | mapped |
 | 5 | "state CLO addendum 2 ... was spent by that run and extend the closed posting list ... only if the run reaches them" | E1, E2, E4 (spent stated; list not extended) | mapped |
 | 6 | "No script, workflow, gate or allowlist change. Dispatch nothing." | Acceptance Criteria 1, Deliberate non-edits | mapped |
-| 7 | "record nothing from them in this PR" (the in-flight CTO and CLO rulings on the hooks allowlist path and the DPD 10.3(b) re-ruling) | Deliberate non-edits; no allowlist or re-ruling text | mapped |
+| 7 | "record nothing from them in this PR" (concurrent rulings on the open allowlist question and the DPD 10.3(b) re-ruling, both tracked on #6897) | Deliberate non-edits; no allowlist or re-ruling text | mapped |
 
 ### Plan-Item Provenance
 
@@ -300,4 +303,4 @@ policy bullet requires for any allowlist change is explicitly not part of this P
 - Do not write "above" or "below" in the new markers; quote the opening words of the sentence they refer to.
 - The `Superseded` marker must keep its "as to run 39136900735 only" scope; without it, it reads as lifting the C1 hold for every later run.
 - The Status paragraph keeps its `(2026-10-14)` heading date: the sentence after it is a dated snapshot.
-- Do not copy anything from the in-flight CTO and CLO rulings (hooks allowlist path, DPD 10.3(b) re-ruling) into this PR.
+- Do not copy anything from the concurrent rulings (open allowlist question, DPD 10.3(b) re-ruling) into this PR.
