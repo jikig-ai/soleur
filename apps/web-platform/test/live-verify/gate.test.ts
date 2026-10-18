@@ -313,6 +313,12 @@ describe("I-cannot-spend gate (before launch, also under --dry-run)", () => {
     expect(main.indexOf("if (!cfg.dryRun)")).toBeGreaterThan(verifyAt);
     expect(main.indexOf("driveAndVerify(verified")).toBeGreaterThan(verifyAt);
     expect(main.slice(0, verifyAt)).not.toContain("dryRun");
+    // I-ephemerality: the throw path signs the session out, after emitting.
+    const catchAt = main.indexOf("} catch (err) {", verifyAt);
+    expect(catchAt).toBeGreaterThan(verifyAt);
+    expect(main.indexOf("supabase?.auth.signOut()", catchAt)).toBeGreaterThan(
+      main.indexOf("emit({ kind: \"CANT-RUN\"", catchAt),
+    );
   });
 
   it("never puts any row field in the error message", async () => {
