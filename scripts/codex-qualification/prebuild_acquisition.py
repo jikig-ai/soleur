@@ -476,7 +476,7 @@ def execute_action(args):
             try:
                 _write_at(output_parent, RECEIPT, error.receipt)
             except OSError:
-                pass
+                raise Refused(ERROR) from None
             raise Refused(ERROR) from None
         current_output()
         _write_at(output_parent, RECEIPT, result)

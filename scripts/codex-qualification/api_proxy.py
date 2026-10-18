@@ -1,6 +1,7 @@
 """Private Unix Docker API proxy. Transport tests use a fake Unix backend only."""
 import http.client
 import http.server
+import errno
 import json
 import os
 from pathlib import Path
@@ -323,8 +324,12 @@ class Proxy:
                 destination = backend if source is front else front
                 if not data:
                     readable.remove(source)
-                    try: destination.shutdown(socket.SHUT_WR)
-                    except OSError: pass
+                    try:
+                        destination.shutdown(socket.SHUT_WR)
+                    except OSError as error:
+                        if error.errno != errno.ENOTCONN:
+                            raise Refused('Exec stream half-close failed') from None
+                        handler.close_connection = True
                     continue
                 if source is front:
                     raise Refused('Exec stdin is unavailable; source-bound mounted recipes required')

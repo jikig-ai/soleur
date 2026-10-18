@@ -29,13 +29,15 @@ class LocalTLS(unittest.TestCase):
         listener.listen(1)
         listener.settimeout(3)
         errors = []
+        refusals = []
+        received = []
         def server():
             try:
                 connection, _ = listener.accept()
                 with server_context(self.material, self.hostname).wrap_socket(connection, server_side=True) as tls:
-                    tls.recv(1)
-            except ssl.SSLError:
-                pass  # Expected peer/SNI certificate refusal; checked by client below.
+                    received.append(tls.recv(1))
+            except ssl.SSLError as error:
+                refusals.append(error)
             except Exception as error:
                 errors.append(error)
         worker = threading.Thread(target=server)
@@ -50,6 +52,9 @@ class LocalTLS(unittest.TestCase):
             listener.close()
             self.assertFalse(worker.is_alive())
             self.assertEqual(errors, [])
+            expected_refusal = not trust or hostname != self.hostname
+            self.assertEqual(len(refusals), int(expected_refusal))
+            self.assertEqual(received, [] if expected_refusal else [b'x'])
 
     def test_actual_ca_and_exact_sni(self):
         self.handshake(self.hostname)
@@ -83,13 +88,14 @@ class LocalTLS(unittest.TestCase):
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(self.material['cert'], self.material['key'])
         errors = []
+        refusals = []
         def serve():
             try:
                 connection, _ = listener.accept()
                 with context.wrap_socket(connection, server_side=True):
                     pass
-            except ssl.SSLError:
-                pass
+            except ssl.SSLError as error:
+                refusals.append(error)
             except Exception as error:
                 errors.append(error)
         worker = threading.Thread(target=serve)
@@ -103,6 +109,7 @@ class LocalTLS(unittest.TestCase):
             listener.close()
             self.assertFalse(worker.is_alive())
             self.assertEqual(errors, [])
+            self.assertEqual(len(refusals), 1)
 
     def test_http_boundary_has_no_general_proxy_or_redirect_escape(self):
         proxy = TLSProxy(self.hostname, '172.28.5.3', 8000)

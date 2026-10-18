@@ -95,11 +95,14 @@ class _Adapter:
         require(remaining > 0, 'Adapter deadline expired')
         return remaining
 
-    def _fail(self, message):
+    def _record_failure(self, message):
         if self._primary is None:
             self._primary = message
             self._cleanup_deadline = self._last + CLEANUP_SECONDS
         self._state = 'failed'
+
+    def _fail(self, message):
+        self._record_failure(message)
         raise Refused(self._primary)
 
     def _call(self, operation, *args, cleanup=False, check_after=True):
@@ -669,10 +672,7 @@ class RetainedAdapter(_Adapter):
                 except OSError:
                     failure = failure or 'Owned root descriptor close failed'
             if failure:
-                try:
-                    self._fail(failure)
-                except Refused:
-                    pass
+                self._record_failure(failure)
             try:
                 released = self._call('release', self._resource, self._writers,
                                       binding['quiescence_id'], cleanup=True)

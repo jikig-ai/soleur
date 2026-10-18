@@ -2,7 +2,7 @@
 title: Separate prebuild evidence acquisition from runtime qualification
 date: 2026-10-16
 pr: 9051
-status: source-diagnostics-reviewed-new-action-and-approval-pending
+status: diagnostic-implemented-focused-source-review-pending
 ---
 
 # CTO ruling and scope
@@ -208,6 +208,127 @@ exact-action approval remain required. No live request was repeated to
 develop or verify this source repair. This is not full PR/runtime/legal or
 shipping clearance.
 
+### Reviewed second metadata attempt: HTTP 404
+
+Canonical sync resolved BEHIND at
+`ff1e7aa9ee6f28f3df785763423d354d95059a86`, including main
+`840dc667fce537b8e99a8d96047a7ceaa2fdfb95`. Acquisition components remain
+identical to the focused reviewed diagnostic implementation. Runtime/plugin
+inputs changed, so file-only preparation and export were refreshed: 5,155
+inputs, 191 migrations, 53 components, 1,770 vendored inputs and 6,927 source
+leaves plus three metadata leaves. Preview and export receipts match.
+Pairing: `a41d550612fdc5c338d8b567f5d80d4d2e049a4e2c70f5fee31137ca7555dff9`;
+operational: `116fc68441dd26f086b6bb71fde982e8ce45bc72950c7ddfa8f590406eb4b6ec`.
+
+File-only v3 preparation refused changed local executable bytes before
+creating an output directory. Fresh filesystem reads and independent CTO
+verification rebound those bytes in v4; neither executable was invoked.
+This binds current filesystem identity, not provenance or builder admission.
+The CTO independently verified the actual v4 manifest, exact eight bodyless
+GETs, source/retained/output bindings and unused marker/receipt. Manifest:
+`daf5143a1e6ec02c5b93f3a9890d60f12e48a24190b1c23c440e4b4fc91788fe`;
+runner: `d9c795968e949c1a24d450fc2335d08c6791f407589218d7e6750e55a19daadf`.
+
+The operator freshly approved that exact host-context timeout-wrapped action.
+It ran once and stopped incomplete after three requests, retaining two daemon
+projections and zero image Configs. Its private mode-0600 receipt records
+action 3, `response_validation`, `http_status`, status **404** for the approved
+pinned Mailpit request. Request-path hash:
+`b6f5efb2b149ef7b7164da5a6364d4a54145582a9cfb92d4a85050a4ce376167`;
+reference hash:
+`3b7d76f278ac28fc51e89cae5e1d0a02f967b2926e7bdc63a8a0b90f41e1be16`.
+No failed response body or Config was retained. Receipt checksum:
+`e0ff00ee3005bca0f26ff168305e55c10a6c1773e85b0b664927cc9d03dddb30`;
+file-byte digest:
+`702e937112281ba57651c2d4e3953b4105e2f638f7145fe35023dbe02c1e82e9`.
+Checksum verified; marker spent; all authority remains false/pending. The
+first attempt's receipt bytes remain unchanged and its cause remains unknown.
+
+HTTP 404 alone does not distinguish absence from reference-resolution
+ambiguity. CTO ruled that a separate Mailpit-only diagnostic must precede any
+pull proposal; do not repeat the full six-image acquisition.
+No retry, pull, build, startup, SQL, provider, browser/account, recovery or
+follow-on operation is authorized. Preserve both consumed manifests and
+receipts. All profile/runtime/legal/review/QA/preflight/promotion holds persist.
+
+### Separate reference-resolution diagnostic
+
+The dormant diagnostic must bind the same source/retained/component/file/
+endpoint/private-output identities and require a separate fresh exact-action
+approval. Enumerate exactly five bodyless GETs: version, info, the retained
+Mailpit repository/platform reference with `docker.io/` removed, the retained
+platform digest as a candidate, and the retained registry Config digest as a
+candidate. Derive candidates from original retained bytes; digest-only
+addresses are never asserted to be observed local image IDs. Do not query
+tags, enumerate images, consult registry/account configuration or pull.
+
+Read all pre-enumerated candidates even after a valid 200. A candidate 404
+records its fixed status and advances only to the next approved candidate;
+daemon metadata 404 or any other transport/binding/deadline/validation failure
+terminates. Capture returned status before post-request checks. Keep successful
+bounded raw Configs private, stage projections before final checks, publish no
+failed Config and preserve fixed sanitized reasons without exception/error
+bodies. The exclusive private replay marker remains spent on failure.
+Collector budget stays 60 seconds overall and at most 10 per request.
+Clean HEAD and executing component/retained/file bytes are checked before
+execution. Per-request checks revalidate the in-memory manifest and endpoint/
+output identities; they do not continuously monitor source files on disk.
+Every authority remains false/pending; successful alternative lookups require
+independent identity/reference review and cannot admit an image/profile.
+All-404 outcome means only “none of the approved immutable lookup forms
+resolved”; it does not prove layers absent. Existing acquisition behavior
+remains unchanged. Synthetic RED/GREEN, focused independent source review,
+new source-bound manifest review and fresh approval remain required.
+
+The separate diagnostic first ran RED because its source module was absent,
+then passed eight synthetic test methods, including real temporary filesystem
+prepare/execute calls over a fake transport, persistent replay across a fork,
+status preservation on late/binding failure, Config exclusion, retained/tool
+byte refusal and private directory/receipt checks. No real diagnostic prepare
+or execution ran. The new module binds its executing bytes and all reused
+prebuild dependencies. Valid 200s may lack RepoDigests; absent/null/list states
+are distinct, exact matches are observations, and membership verification is
+pending for every candidate. All five requests remain pre-enumerated even
+after a successful candidate response.
+
+### Main's new lint gate and explicit cleanup outcomes
+
+The newly merged shrink-only Ruff gate identified 18 findings in earlier
+feature files, plus two findings in the new diagnostic. No baseline or waiver
+was changed. Unused imports were removed; the candidate test now imports
+Refused from its defining preparation module. Existing directory collisions
+receive descriptor-relative no-follow directory checks before the existing
+no-follow open. Adapter failure recording is separated from raising so
+quiescence release still runs with the original primary failure. Race
+snapshots verify that caught refusals recorded terminal failure. Failed
+partial-receipt writes raise the same fixed sanitized refusal and retain
+the spent marker.
+
+Manifest cleanup consumes descriptors before each close, records fixed
+cleanup outcomes, attempts remaining cleanup, and unlinks only its created
+inode. A final parent-close failure after an otherwise successful write now
+refuses rather than returning a success digest. A synthesized regression ran
+RED before this correction. Proxy half-close accepts only established
+ENOTCONN peer disconnection; unexpected errors receive a fixed refusal.
+The EBADF discriminator likewise ran RED before correction. No exception
+text is logged. Test peers record expected disconnection/TLS refusal apart
+from unexpected errors; descriptor cleanup verifies EBADF explicitly.
+
+The focused diagnostic/acquisition/operational/preparation/candidate/image/
+adapter/session set passes 164 tests under system Python 3.14 with warnings
+as errors. The upgraded-input/half-close suite passes three tests. Its initial
+sandboxed run failed socket setup with EPERM; the exact approved host-context
+rerun used temporary synthetic Unix peers only and passed. This is not a live
+Docker operation or runtime qualification. Focused source review and fresh
+source/action bindings are required after these cleanup component changes.
+The separately affected controller-input, synthetic transport, TLS and proxy
+barrier suites pass 57 additional unit tests; the ownership script passes
+51 checks with zero Docker calls. Initial unittest discovery on that script
+found zero tests and exited 5; its direct registered script invocation supplied
+the actual result. Transport/TLS sandbox setup also required exact synthetic
+peer approvals before successful host-context runs. No setup refusal or
+empty discovery is counted as a test verdict.
+
 The initial evidence search used the retired rollout directory rather than
 the live-paths directory. Discover current filenames before following older
 slugs. GitHub CLI subprocesses in this worktree encountered a sandboxed mise
@@ -224,3 +345,11 @@ Staging then hit a sandbox index-lock refusal; a trailing read hid its exit
 status and the subsequent commit correctly refused unstaged files. Run each
 Git mutation separately, inspect its status immediately, and use the required
 filesystem approval for index writes before continuing.
+This continuation guessed a CI job ID and received 404; discovery through
+the current check URL supplied the actual ID. Raw-log output then required
+the CLI's advertised escape-sequence flag; an unsupported output flag was
+rejected before the successful sanitized read. Discover exact IDs and inspect
+supported CLI flags before constructing log commands. The executed aggregate
+log confirms DRAFT_LIGHT and its intentional full-battery-owed failure.
+A source search guessed `test_prepare.py`, which does not exist; scoped file
+discovery identified `test_preparation.py`. Use discovered test filenames.

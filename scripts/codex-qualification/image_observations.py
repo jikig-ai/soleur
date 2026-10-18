@@ -83,6 +83,8 @@ def write_action_manifest(path, manifest, *, pairing_sha256, operational_sha256)
     descriptor = None
     parent_descriptor = None
     created = None
+    failed = False
+    cleanup_failures = []
     try:
         directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
         parent_descriptor = os.open('/', directory_flags)
@@ -112,21 +114,21 @@ def write_action_manifest(path, manifest, *, pairing_sha256, operational_sha256)
         descriptor = None
         os.close(closing_descriptor)
     except Exception:
+        failed = True
         if descriptor is not None:
             closing_descriptor = descriptor
             descriptor = None
             try:
                 os.close(closing_descriptor)
             except Exception:
-                pass
+                cleanup_failures.append('partial-file-close')
         if created is not None:
             try:
                 current = os.stat(path.name, dir_fd=parent_descriptor, follow_symlinks=False)
                 if (current.st_dev, current.st_ino) == created:
                     os.unlink(path.name, dir_fd=parent_descriptor)
             except Exception:
-                pass
-        raise Refused('File-only action manifest write failed') from None
+                cleanup_failures.append('partial-file-unlink')
     finally:
         if descriptor is not None:
             closing_descriptor = descriptor
@@ -134,14 +136,16 @@ def write_action_manifest(path, manifest, *, pairing_sha256, operational_sha256)
             try:
                 os.close(closing_descriptor)
             except Exception:
-                pass
+                cleanup_failures.append('final-file-close')
         if parent_descriptor is not None:
             closing_descriptor = parent_descriptor
             parent_descriptor = None
             try:
                 os.close(closing_descriptor)
             except Exception:
-                pass
+                cleanup_failures.append('parent-close')
+    if failed or cleanup_failures:
+        raise Refused('File-only action manifest write failed') from None
     return hashlib.sha256(payload).hexdigest()
 
 

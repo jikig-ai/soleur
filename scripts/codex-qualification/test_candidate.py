@@ -8,8 +8,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import candidate
-from candidate import Refused, candidate_spec, assemble
+from candidate import candidate_spec, assemble
 import prepare
+from prepare import Refused
 
 
 DOCKERFILE = '''FROM node:fixture AS builder

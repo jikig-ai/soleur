@@ -1,19 +1,43 @@
 """Prohibited upgraded stdin never reaches a task-owned fake Unix backend."""
 import http.server
-import json
+import errno
 from pathlib import Path
 import socket
 import tempfile
 import threading
+import time
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import api_proxy
-from api_policy import Policy
+from api_policy import Policy, Refused
 from api_proxy import Proxy, UnixHTTPServer
 from fixture_roles import fixture_profiles
 from fixture_transport import receive_until
 
 class Stdin(unittest.TestCase):
+    def test_exec_halfclose_preserves_expected_disconnect_and_refuses_other_socket_errors(self):
+        for error_number in (errno.ENOTCONN, errno.EBADF):
+            proxy = SimpleNamespace(lock=threading.RLock(), deadline=time.monotonic() + 30,
+                                    fatal=None, backend='/never-contacted', require_open=Mock())
+            backend = Mock()
+            backend.recv.side_effect = [b'HTTP/1.1 101 Synthetic\r\n\r\n', b'']
+            front = Mock()
+            front.shutdown.side_effect = OSError(error_number, 'SYNTHETIC_PRIVATE_SHUTDOWN_FAILURE')
+            handler = SimpleNamespace(headers={}, command='POST', connection=front, close_connection=False)
+            with self.subTest(error_number=error_number), \
+                    patch.object(api_proxy.select, 'select', return_value=([backend], [], [])):
+                if error_number == errno.ENOTCONN:
+                    Proxy.hijack_owned(proxy, handler, '/exec/fixture/start', b'', backend)
+                    self.assertTrue(handler.close_connection)
+                    backend.close.assert_called_once()
+                else:
+                    with self.assertRaisesRegex(Refused, '^Exec stream half-close failed$') as caught:
+                        Proxy.hijack_owned(proxy, handler, '/exec/fixture/start', b'', backend)
+                    self.assertTrue(caught.exception.__suppress_context__)
+                    self.assertNotIn('SYNTHETIC_', str(caught.exception))
+            front.shutdown.assert_called_once_with(socket.SHUT_WR)
+
     def test_oracle_detects_deleted_stdin_guard(self):
         source = Path(api_proxy.__file__).read_text()
         guard = "                if source is front:\n                    raise Refused('Exec stdin is unavailable; source-bound mounted recipes required')\n"

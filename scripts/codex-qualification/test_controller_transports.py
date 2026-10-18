@@ -63,6 +63,7 @@ class Peer:
         self.linger = linger
         self.received = b''
         self.errors = []
+        self.client_disconnects = []
         self.connections = 0
         self.directory = tempfile.TemporaryDirectory(prefix='cq9051-peer-', dir='/tmp')
         self.listener = None
@@ -112,9 +113,9 @@ class Peer:
                     connection.sendall(fragment)
                 if self.linger:
                     time.sleep(self.linger)
-        except (BrokenPipeError, ConnectionResetError):
+        except (BrokenPipeError, ConnectionResetError) as error:
             # Expected when the client refuses malformed or late synthetic data.
-            pass
+            self.client_disconnects.append(error.errno)
         except Exception as error:
             self.errors.append(error)
 
@@ -127,6 +128,9 @@ class Peer:
             raise AssertionError('Synthetic peer thread did not terminate')
         if self.errors:
             raise AssertionError('Synthetic peer error: ' + repr(self.errors))
+        if self.client_disconnects and (self.connections != 1 or b'\r\n\r\n' not in self.received or
+                any(number not in (errno.EPIPE, errno.ECONNRESET) for number in self.client_disconnects)):
+            raise AssertionError('Synthetic peer disconnected outside a captured request')
 
 
 class FakeSocket:

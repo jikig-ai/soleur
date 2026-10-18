@@ -1,6 +1,5 @@
 """Requests paused before dispatch cannot survive fatal/deadline transitions."""
 import io
-import json
 import threading
 import time
 from types import SimpleNamespace

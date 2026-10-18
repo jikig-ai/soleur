@@ -222,3 +222,18 @@ profile/authentication/ownership/quiescence/execution authority remains false.
 These observations cannot replace current-source builder review, a separately
 approved build, the final eleven-role Config/profile review, or recovery
 approval. See the [CTO acquisition ruling](../../knowledge-base/project/specs/feat-one-shot-codex-web-live-paths/prebuild-acquisition-2026-10-16.md).
+
+`reference_diagnostic.py` is a separate Mailpit-only resolution diagnostic.
+File-only preparation binds the retained manifest, exact source/components,
+selected executable bytes, explicit socket and private output identities.
+Its separately approved one-use execution permits exactly five bodyless GETs:
+daemon version/info, the retained repository/platform reference without its
+`docker.io/` prefix, and the retained platform and registry Config digests as
+explicit lookup candidates. Digest-only candidates are not asserted local IDs.
+A candidate 404 may advance only to the next pre-enumerated candidate; other
+transport, binding, deadline or response failures stop without a retry or pull.
+Successful Configs stay private and all identity/reference/profile admission
+remains pending independent review. If all candidate lookups return 404, this
+establishes only that none of the approved immutable lookup forms resolved.
+It does not establish that image data or layers are absent. The acquisition
+collector's stricter stop-on-404 behavior is unchanged.

@@ -310,7 +310,8 @@ class RaceController:
             try:
                 self._tick()
             except Refused:
-                pass
+                require(self._state == 'failed' and self._primary_failure is not None,
+                        'Snapshot refusal must record its terminal failure')
         return {'state': self._state, 'source_sha': self._binding.source_sha,
                 'scenario_binding_sha256': self._binding.fingerprint,
                 'primary_failure': self._primary_failure, 'cleanup_status': self._cleanup_status(),

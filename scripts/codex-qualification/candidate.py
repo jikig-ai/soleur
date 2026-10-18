@@ -11,7 +11,7 @@ import os
 from pathlib import Path, PurePosixPath
 import posixpath
 import stat
-from prepare import (INPUT_ROOTS, Refused, canonical, controlled_dockerfile, git,
+from prepare import (INPUT_ROOTS, canonical, controlled_dockerfile, git,
                      preparation, require, sha, synthetic_browser_config)
 
 
@@ -144,7 +144,8 @@ def open_directory(task_fd, parts, create=False):
                 try:
                     os.mkdir(part, mode=0o700, dir_fd=descriptor)
                 except FileExistsError:
-                    pass
+                    require(stat.S_ISDIR(os.stat(part, dir_fd=descriptor, follow_symlinks=False).st_mode),
+                            'Existing export component must be a direct directory')
             next_descriptor = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
             os.close(descriptor)
             descriptor = next_descriptor

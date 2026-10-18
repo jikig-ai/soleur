@@ -1,5 +1,4 @@
 """Ownership and privileged-exec regression fixtures. No Docker or database calls."""
-import copy
 import json
 from api_policy import Policy, Refused, MissingOwnedContainer
 from fixture_roles import fixture_profiles

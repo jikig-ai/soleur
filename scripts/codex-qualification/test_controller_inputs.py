@@ -6,7 +6,6 @@ from unittest.mock import patch
 
 import controller_inputs as inputs
 import operational
-import retained_files
 from prepare import Refused, canonical, sha
 
 

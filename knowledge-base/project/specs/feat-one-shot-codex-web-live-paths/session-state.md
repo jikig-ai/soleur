@@ -1989,3 +1989,59 @@
   update changes no acquisition code. Prepare/review a new source-bound
   manifest before requesting fresh exact approval; the prior failure remains
   unexplained and its receipt/marker unchanged. No retry is authorized yet.
+
+### Canonical sync and second approved metadata attempt — 2026-10-18
+
+- Canonical sync resolved BEHIND at `ff1e7aa9ee6f28f3df785763423d354d95059a86`,
+  including main `840dc667fce537b8e99a8d96047a7ceaa2fdfb95`. Acquisition
+  components are unchanged from focused reviewed `6c9489d37e`; main changes
+  runtime telemetry, infrastructure diagnostics, tests and vendored plugin
+  sources. File-only preview/export match: 5,155 inputs, 191 migrations,
+  53 components, 1,770 vendored inputs and 6,927 source leaves plus metadata.
+- File-only v3 preparation refused changed executable bytes before creating
+  output. New filesystem bindings were independently verified by the CTO;
+  no executable was invoked. CTO reviewed actual v4 manifest
+  `daf5143a1e6ec02c5b93f3a9890d60f12e48a24190b1c23c440e4b4fc91788fe`.
+  The operator freshly approved its exact host-context command, executed once.
+- The attempt stopped incomplete after three requests. Its sanitized receipt
+  reports approved action 3, response_validation/http_status **404**, for the
+  pinned Mailpit lookup. Two daemon projections and zero image Configs were
+  retained. Receipt checksum
+  `e0ff00ee3005bca0f26ff168305e55c10a6c1773e85b0b664927cc9d03dddb30`
+  and file digest
+  `702e937112281ba57651c2d4e3953b4105e2f638f7145fe35023dbe02c1e82e9`
+  verify. Marker spent; first receipt unchanged, first cause still unknown.
+- HTTP 404 alone does not prove absence versus digest-reference resolution.
+  CTO is assessing the source-only next path. No automatic retry, pull or
+  follow-on operation is authorized. Actual profiles/observations and all
+  build/recovery/auth/runtime/legal/full-review/QA/preflight/ship holds persist.
+- Current-head CI and refreshed-description guards remain watched. The exact
+  aggregate log confirms intentional DRAFT_LIGHT red. Ref #10082, Ref #9791
+  and Ref #9325 were reverified OPEN; SAST VOID and latest-source C.9 unverified.
+  Keep draft, disarmed, default-off and customer-blocked. Build approval stays
+  consumed and the withdrawn command forbidden.
+
+### Separate diagnostic and newly merged lint gate — 2026-10-18
+
+- CTO ruled a separate Mailpit-only resolution diagnostic before any pull
+  proposal. Added source-only prepare/explicit execute over five fixed GETs:
+  version/info, short repository/platform spelling and retained platform and
+  registry Config digests as lookup candidates. Candidate 404s alone advance;
+  valid 200s keep membership/profile admission pending. The existing
+  acquisition request/stop behavior is unchanged. No live diagnostic ran.
+- New tests ran RED for the absent module, then eight methods pass with
+  synthetic transports/files and persistent replay checks. New main's Ruff
+  gate found 18 earlier feature findings and two new-file findings. Corrected
+  unused imports, explicit directory collision checks, nonraising adapter
+  failure recording, snapshot failure invariants and fixed receipt-write
+  refusal without a baseline waiver. Manifest cleanup now reports failure
+  after final-close errors; the proxy refuses unexpected half-close errors.
+  Both discriminating cases ran RED first. Expected peer errors are recorded
+  separately in fixtures. New component hashes require focused source review
+  and fresh source/action bindings.
+- Focused Python 3.14 verification with warnings as errors passes 164 tests
+  across eight affected modules; the synthetic Unix-peer input/half-close
+  suite passes three. Its sandbox EPERM was a socket setup restriction, and
+  the exact approved host-context rerun passed. No actual Docker/provider/
+  browser/account/SQL/recovery/build/pull/retry occurred. Both live metadata
+  attempt markers remain spent. All runtime/legal/ship holds persist.
