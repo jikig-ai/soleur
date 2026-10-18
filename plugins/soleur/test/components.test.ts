@@ -644,6 +644,46 @@ describe("Technical-ruling delegation wiring", () => {
   });
 });
 
+// Final-report wiring (#10499): the report list of review/work is a carrier of
+// hr-technical-fork-is-not-an-operator-question. Presence pins, so the paragraphs cannot be
+// trimmed away under the SKILL.md byte ceilings without a red test naming the file + anchor.
+describe("Technical-ruling final-report wiring (#10499)", () => {
+  const flat = (rel: string) => readFileSync(resolve(PLUGIN_ROOT, rel), "utf-8").replace(/\s+/g, " ");
+  const hasAnchor = (text: string, anchor: string) => text.replace(/\s+/g, " ").includes(anchor);
+  const REF = "skills/brainstorm-techniques/references/technical-ruling-delegation.md";
+  const PAIRS: Array<[string, string]> = [
+    [REF, "## 8. Final-report check and seat dissent from a ruling"],
+    ["skills/review/SKILL.md", "**Final-report decision check"],
+    ["skills/review/SKILL.md", "**Seat dissent from a ruling.**"],
+    ["skills/review/SKILL.md", "a GATE before Step 3"],
+    ["skills/work/SKILL.md", "**Final-report decision check"],
+  ];
+
+  test("the anchor table has a floor (an emptied table must not pass)", () => {
+    expect(PAIRS.length).toBeGreaterThanOrEqual(5);
+  });
+
+  for (const [rel, anchor] of PAIRS) {
+    test(`${rel} carries "${anchor}"`, () => {
+      expect(hasAnchor(flat(rel), anchor), `${rel} lost the final-report wiring anchor "${anchor}".`).toBe(true);
+    });
+  }
+
+  test("the seat-dissent paragraph sits at the spawn site, before the seat list", () => {
+    const review = flat("skills/review/SKILL.md");
+    const dissent = review.indexOf("**Seat dissent from a ruling.**");
+    const seats = review.indexOf("#### Parallel Agents to review the PR:");
+    expect(dissent, "review lost the seat-dissent paragraph").toBeGreaterThan(-1);
+    expect(seats, "review lost the seat-list heading").toBeGreaterThan(-1);
+    expect(dissent < seats, "the seat-dissent rule must precede the seat spawn (rulings are read before seats exist)").toBe(true);
+  });
+
+  test("the instrument self-test: the helper rejects an absent anchor and accepts a re-flowed one", () => {
+    expect(hasAnchor("no wiring here", "**Final-report decision check")).toBe(false);
+    expect(hasAnchor("**Final-report\n    decision   check (x)", "**Final-report decision check")).toBe(true);
+  });
+});
+
 describe("operator-bootstrap predecessor wiring (#8287 R14/R32)", () => {
   // Loop until stable, not a single pass. A one-shot replace is incomplete
   // multi-character sanitization (CodeQL js/incomplete-multi-character-sanitization,
