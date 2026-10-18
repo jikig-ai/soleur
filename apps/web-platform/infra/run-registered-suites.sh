@@ -650,6 +650,12 @@ _SUITE_BOUNDS=(
   # default (rc=124, run 36912548151) on a starved -P4 CI leg while green. Pin at 900 per the
   # boot-unlock precedent above, so a slow day renders as this suite's RED, not a leg timeout.
   "apps/web-platform/infra/workspaces-luks-provision.test.sh=900"
+  # #7432 (Item I of #9217): this serial mutation suite (143 rows) took 171 s alone on 4 pinned cores
+  # but 401 s beside three other heavy suites, and was bound-killed at the 360 s default (rc=124 at
+  # 360-361 s while every visible row was ok) in 2 of 3 main-health-monitor dry runs at -P 4 (runs
+  # 38942396026 and 38942417986, the third, 38965464152, passed). Pin at 540
+  # (1.35x the 401 s worst case, the ci-deploy precedent above) so a slow day renders as its own RED.
+  "apps/web-platform/infra/web-host-provisioner-parity-mutation.test.sh=540"
 )
 export SOLEUR_SUITE_TIMEOUTS="${_SUITE_BOUNDS[*]}"
 export SOLEUR_SUITE_TIMEOUT_DEFAULT
