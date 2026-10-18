@@ -47,6 +47,18 @@ export function pathToAgentId(relativePath: string): string {
   return `soleur:${normalized.split("/").join(":")}`;
 }
 
+/**
+ * Inverse of `pathToAgentId`: `soleur:engineering:review:security-sentinel` →
+ * `engineering/review/security-sentinel`.
+ *
+ * OpenCode derives an agent's id from its **file path**, not from frontmatter `name:`
+ * (measurement §3.0), so the path form is the only id its Task tool resolves. A bare
+ * one-segment id is returned unchanged.
+ */
+export function agentIdToPath(id: string): string {
+  return id.replace(/^soleur:/, "").split(":").join("/");
+}
+
 function parseFrontmatter(relativePath: string): Record<string, unknown> {
   const raw = readFileSync(resolve(PLUGIN_ROOT, relativePath), "utf-8");
   const match = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);

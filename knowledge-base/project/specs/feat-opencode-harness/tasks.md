@@ -16,10 +16,16 @@ Phases 0 and 3.5 are measurement gates, not code — they gate the claim, not th
 
 ### 0.1 Detection CLI-specificity (ADR-274 bar)
 
-- [ ] 0.1.1 Run OpenCode in each non-CLI mode the install offers (desktop/app/headless `run`) and record whether `OPENCODE` / `OPENCODE_SESSION_ID` / `OPENCODE_TERMINAL` are set in `env`.
-- [ ] 0.1.2 Record the probe command, version, and the observed variable set per mode in `measurements.md` under a new §1.1 (append-only; do not rewrite §1.0).
-- [ ] 0.1.3 Decide: if the marker matches a non-CLI process, `detectHarness` does not grow the predicate and Phase 1.2 is dropped. If CLI-only, proceed.
+- [x] 0.1.1 Run OpenCode in each non-CLI mode the install offers (desktop/app/headless `run`) and record whether `OPENCODE` / `OPENCODE_SESSION_ID` / `OPENCODE_TERMINAL` are set in `env`.
+- [x] 0.1.2 Record the probe command, version, and the observed variable set per mode in `measurements.md` under a new §1.1 (append-only; do not rewrite §1.0).
+- [x] 0.1.3 Decide: if the marker matches a non-CLI process, `detectHarness` does not grow the predicate and Phase 1.2 is dropped. If CLI-only, proceed.
 - [ ] 0.1.4 If the predicate is dropped, file a follow-up issue and stop Phase 1.2; FR1 and the ADR's detection clause move to a later slice.
+
+Outcome (2026-10-18): **PASS — the predicate was retained**, so 0.1.4 is moot. Measured on
+`opencode v2.0.32`: `OPENCODE` is absent from a clean env, `serve`, `acp`, and the session runtime
+process, and present only in tool-spawned children (measurements §1.1). The arm set is wider than
+0.1.1 named — the desktop/app mode is not installed on this host, so `acp` (the editor-embedding
+entry) and `serve` stand in for the non-session surfaces, and headless `run` was measured directly.
 
 ### 0.2 `session.idle` continuation
 
@@ -30,25 +36,46 @@ Phases 0 and 3.5 are measurement gates, not code — they gate the claim, not th
 
 ### 1.1 RED: harness tests
 
-- [ ] 1.1.1 Extend `plugins/soleur/test/harness.test.ts` with an `opencode` case: `detectHarness` returns `opencode` for the measured marker set and leaves a plain env unchanged.
-- [ ] 1.1.2 Add `formatSkillInvocation` cases: `soleur:plan` under `opencode` → `plan` (bare); a non-soleur name passes through.
-- [ ] 1.1.3 Add `formatAgentSpawn` cases: `soleur:engineering:cto` under `opencode` → the path id `engineering/cto`.
-- [ ] 1.1.4 Add the routing-instruction case: the `unknown` text is not returned for an `opencode` session.
-- [ ] 1.1.5 Run `bun test plugins/soleur/test/harness.test.ts` — confirm RED.
+- [x] 1.1.1 Extend `plugins/soleur/test/harness.test.ts` with an `opencode` case: `detectHarness` returns `opencode` for the measured marker set and leaves a plain env unchanged.
+- [x] 1.1.2 Add `formatSkillInvocation` cases: `soleur:plan` under `opencode` → `plan` (bare); a non-soleur name passes through.
+- [x] 1.1.3 Add `formatAgentSpawn` cases: `soleur:engineering:cto` under `opencode` → the path id `engineering/cto`.
+- [x] 1.1.4 Add the routing-instruction case: the `unknown` text is not returned for an `opencode` session.
+- [x] 1.1.5 Run `bun test plugins/soleur/test/harness.test.ts` — confirm RED.
 
 ### 1.2 GREEN: `Harness` union + detection
 
-- [ ] 1.2.1 Add `"opencode"` to the `Harness` union in `plugins/soleur/lib/harness.ts`.
-- [ ] 1.2.2 Add the `detectHarness` predicate on `OPENCODE` (only if 0.1.3 cleared), with `OPENCODE_SESSION_ID` / `OPENCODE_TERMINAL` corroboration. Do not use `AI_AGENT`.
-- [ ] 1.2.3 Order the predicate so it cannot be shadowed by another harness marker.
-- [ ] 1.2.4 Add the `formatSkillInvocation`, `formatAgentSpawn`, and routing-instruction arms.
-- [ ] 1.2.5 GREEN `harness.test.ts`.
+- [x] 1.2.1 Add `"opencode"` to the `Harness` union in `plugins/soleur/lib/harness.ts`.
+- [x] 1.2.2 Add the `detectHarness` predicate on `OPENCODE` (only if 0.1.3 cleared), with `OPENCODE_SESSION_ID` / `OPENCODE_TERMINAL` corroboration. Do not use `AI_AGENT`.
+- [x] 1.2.3 Order the predicate so it cannot be shadowed by another harness marker.
+- [x] 1.2.4 Add the `formatSkillInvocation`, `formatAgentSpawn`, and routing-instruction arms.
+- [x] 1.2.5 GREEN `harness.test.ts`.
 
 ### 1.3 Workflow fidelity
 
-- [ ] 1.3.1 RED: extend `plugins/soleur/test/workflow-fidelity.test.ts` with the `opencode` invocation form.
-- [ ] 1.3.2 Add the `opencode` arm to `plugins/soleur/lib/workflow-fidelity.ts` where the invocation form differs.
-- [ ] 1.3.3 GREEN.
+- [x] 1.3.1 RED: extend `plugins/soleur/test/workflow-fidelity.test.ts` with the `opencode` invocation form.
+- [x] 1.3.2 Add the `opencode` arm to `plugins/soleur/lib/workflow-fidelity.ts` where the invocation form differs.
+- [x] 1.3.3 GREEN.
+
+Outcome (2026-10-18): RED confirmed at **8 failing arms**, all `opencode`-specific, then GREEN with no
+collateral. The full plugin bun suite passes (4519 pass / 0 fail). Three deviations from the letter of
+the plan, recorded:
+
+- **1.2.2 is `OPENCODE`-only, no corroboration.** §1.1 shows the corroborating variables are always
+  co-present, so requiring them would only add a way to miss a live session.
+- **An `agentIdToPath` inverse was needed** (`plugins/soleur/lib/agent-registry.ts`). Only
+  `pathToAgentId` existed, and OpenCode keys agents on the path form.
+- **A predicate change is a cross-cutting env-boundary change.** Adding a detectable harness makes
+  the suite's ambient environment observable: six test files manipulate harness markers, and this
+  suite itself runs inside an OpenCode session, so each needed the OpenCode keys added to its sweep
+  (`harness`, `workflow-fidelity`, `codex-harness`, `devin-harness`, `codex-plugin`, `devin-plugin`).
+  Two harness-enumeration loops gained `opencode` (`pr-merge-poll` queue-mode sweeps, and the
+  parked-deliverable contract, which for OpenCode is the *only* enforcement — there is no blocking
+  Stop hook). Verified no runtime consumer outside tests imports `detectHarness`; the hooks do not
+  call it, so no script needed changing.
+
+Also delivered beyond the plan's list, because every `Harness` arm is expected to be total: a
+`pollInstructions` arm (no wait primitive measured → bounded foreground `gh` loop, stated as such)
+and a `routingInstructions` arm.
 
 ## Phase 2 — Generator (ADR-245 obligation)
 
