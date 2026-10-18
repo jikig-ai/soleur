@@ -1981,3 +1981,11 @@
   checksum, no sensitive sentinel, stopping and no replay. CLI output checks
   now use an explicit collector callback with the same private write and
   owner/mode/identity guards. Focused review remains pending; no live retry ran.
+- Focused CTO and security review at pushed
+  `6c9489d37ee7101df8133700bc5245ec46c4ef88` found no code blocker or
+  actionable security finding. Their shared documentation correction is
+  applied: fields are null before action selection, while a binding failure
+  may identify a prospective action with zero requests sent. This record
+  update changes no acquisition code. Prepare/review a new source-bound
+  manifest before requesting fresh exact approval; the prior failure remains
+  unexplained and its receipt/marker unchanged. No retry is authorized yet.

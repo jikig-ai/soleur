@@ -2,7 +2,7 @@
 title: Separate prebuild evidence acquisition from runtime qualification
 date: 2026-10-16
 pr: 9051
-status: source-diagnostics-verified-focused-review-and-fresh-approval-pending
+status: source-diagnostics-reviewed-new-action-and-approval-pending
 ---
 
 # CTO ruling and scope
@@ -173,8 +173,10 @@ phase/reason enums, a one-based approved action index, approved request-path
 and selected-reference hashes, and an observed strict HTTP status or null.
 Capture a returned status immediately after transport returns, before late
 response/binding checks; it grants no response admission. An exception inside
-transport has null status. Pre-request failures have null action/reference
-fields. Recompute the receipt checksum including diagnostic fields. Preserve
+transport has null status. Failures before action selection have null action/
+reference fields; later binding failures identify the prospective action even
+when no request was sent. Recompute the receipt checksum including diagnostic
+fields. Preserve
 the fixed CLI error and existing one-use/failure semantics.
 
 Synthetic regressions must distinguish transport failure, malformed receipt,
@@ -196,8 +198,15 @@ projections are staged before final deadline/source/endpoint/output checks,
 then published by small assignment. The CLI passes its output-binding check
 explicitly into the collector so returned status is captured first; its
 private write and pre/post owner/mode/identity checks remain enforced.
-Focused independent review and any new exact action remain pending. No live
-request was repeated to develop or verify this source repair.
+Focused CTO and security review of pushed
+`6c9489d37ee7101df8133700bc5245ec46c4ef88` found no code blocker or
+actionable security finding in the diagnostic implementation. Their shared
+documentation correction distinguishes a selected action from a sent request
+and is applied above. This record update changes no acquisition component.
+A new source-bound file-only manifest, independent binding review and fresh
+exact-action approval remain required. No live request was repeated to
+develop or verify this source repair. This is not full PR/runtime/legal or
+shipping clearance.
 
 The initial evidence search used the retired rollout directory rather than
 the live-paths directory. Discover current filenames before following older
