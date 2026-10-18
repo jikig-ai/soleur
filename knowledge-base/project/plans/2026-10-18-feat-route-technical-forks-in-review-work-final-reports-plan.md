@@ -200,7 +200,7 @@ logs:
   where: GitHub Actions job logs
   retention: GitHub default run-log retention
 discoverability_test:
-  command: grep -c 'Final-report decision check' plugins/soleur/skills/work/SKILL.md
+  command: grep -c '\*\*Final-report decision check' plugins/soleur/skills/work/SKILL.md
   expected_output: 1
 ```
 
