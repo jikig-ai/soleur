@@ -86,7 +86,7 @@ blocks the plan.
   `knowledge-base/project/specs/<branch>/decision-challenges.md`
   (`mkdir -p` the spec dir first) with one row per item in that file's
   `## Decision Classes` table as `operator (scope)` (see
-  [technical-ruling-delegation.md](../../brainstorm-techniques/references/technical-ruling-delegation.md)),
+  `technical-ruling-delegation.md` (the `brainstorm-techniques` skill's references)),
   and write the plan file carrying the marker — "do not emit as finished" means halt before Phase 2.5, not that no
   file exists. Resolving the rows removes the marker — deepen-plan §4.12
   rejects a section still carrying it.

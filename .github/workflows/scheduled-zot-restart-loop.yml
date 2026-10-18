@@ -36,6 +36,15 @@
 #
 # Closes #6291.
 #
+# STANDING FILL-RATE LEG (#7521, ADR-096 2026-10-16). The last four steps of job `alarm`, after the
+# Sentry check-in, run scripts/followthroughs/zot-fill-rate-7341.sh in place as an independent
+# verdict stream (the NIC stream is the precedent): they watch the registry store's fill rate, so
+# a store filling toward the 85 percent heartbeat cliff surfaces as a deduped action-required
+# `[ci/zot-fill-rate]` issue hours or days ahead, with no follow-through tracker needing to be open.
+# The leg is deliberately outside the Sentry monitor and outside the zot exit code. A RED run of
+# this workflow can also mean a broken fill probe (the probe step fails itself on UNEVALUATED and a
+# probe-defect issue is filed), not only a restart loop; it does not by itself mean a store state.
+#
 # TRIGGERS (#8495, ADR-248). PRIMARY: the web server's watchdog dispatch clock
 # (apps/web-platform/server/watchdog-dispatch-clock.ts) sends workflow_dispatch every
 # hourly slot from both web hosts — GitHub's `schedule:` delivered this cron only once
@@ -617,6 +626,277 @@ jobs:
           sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
           sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
           sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}
+
+      # ── STANDING FILL-RATE LEG (#7521) ─────────────────────────────────────────────
+      # Everything from here to the end of this job is the fill-rate leg. It sits AFTER the
+      # Sentry check-in on purpose: a hang, a crash or a job timeout in this leg can then never
+      # delay or kill the monitor check-in, and the check-in's `status:` expression above reads
+      # only steps.alarm.* so a fill-side failure cannot change the monitor state either.
+      #
+      # The probe runs the registry store fill-rate detector in place and unmodified. It was the
+      # #7341 follow-through; its PASS closed that tracker on 2026-08-14 and nothing ran it since,
+      # which left the soleur-registry-disk-prd heartbeat (it stops pinging at 85 percent, i.e.
+      # the incident itself) as the only backstop. The verdict is classified HERE, not trusted:
+      # the exit code and the single column-0 header line must agree, otherwise the verdict is
+      # UNEVALUATED, the probe step fails and a deduped probe-defect issue is filed. A red run of
+      # this workflow can therefore also mean a broken fill probe; that does not by itself mean a
+      # store state (a failing gh call in a filing step also reddens a run).
+      #
+      # TRANSIENT files nothing by itself: the zot alarm above already owns PRODUCER_SILENT,
+      # INGEST_DARK and the credential fault for the same stream. The one exception is a TRANSIENT
+      # whose cause is outside a closed benign set, unless the zot leg already files the shared
+      # fault: that is the fill leg alone being blind, and it files the probe-defect issue. When
+      # the zot leg already reports its own fault (ALARM_EXIT 2, 3 or 4: the Sentry error, the
+      # PRODUCER_SILENT issue, the INGEST_DARK issue) that TRANSIENT is not filed a second time.
+      #
+      # What files nothing: a JOB-level timeout (8 minutes) or a cancellation. Every filing step
+      # is gated on !cancelled(), which is false then, so such a run is red and nothing else.
+      #
+      # The leg is outside the Sentry monitor: nothing in Sentry covers its own liveness. The
+      # contract is pinned by scripts/zot-fill-rate-standing-wiring.test.sh (ADR-096, 2026-10-16).
+      - name: Run standing fill-rate probe
+        id: fill
+        if: ${{ !cancelled() }}
+        timeout-minutes: 3
+        env:
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+          ALARM_EXIT: ${{ steps.alarm.outputs.exit_code }}
+        run: |
+          set -uo pipefail
+          # FIRST ACTION. A 3-minute step timeout ends this step without running anything below,
+          # which would leave no outputs and so fire no filing step. Pre-writing the pessimistic
+          # verdict makes that case a probe-defect issue; the end-of-step write below overrides it
+          # (the runner keeps the last value written for a key). A JOB-level timeout or a
+          # cancellation files nothing (a red run only). This relies on the runner processing
+          # GITHUB_OUTPUT after the step ends (actions/runner ActionRunner, the finally block),
+          # which two review seats verified from the runner source; it has not been drilled live.
+          {
+            echo "fill_verdict=UNEVALUATED"
+            echo "fill_defect=true"
+            echo "fill_line=probe step did not complete"
+          } >> "$GITHUB_OUTPUT"
+          # shellcheck disable=SC2020  # tr char-set strip is intentional (verbatim from the alarm step)
+          strip_log_injection() {
+            printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' \
+              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g'
+          }
+
+          # The query tool prints the LOWERCASED host, which exact-match secret masking can miss.
+          if [[ -n "${BETTERSTACK_QUERY_HOST:-}" ]]; then
+            echo "::add-mask::${BETTERSTACK_QUERY_HOST,,}"
+          fi
+
+          # `|| rc=$?` IS THE CAPTURE: the step runs under `set -e` (the runner's default bash
+          # shell) and sets its own pipefail above, so a bare `out="$(...)"; rc=$?` would abort the
+          # step on the very exit codes (1 and 2) this probe exists to read.
+          rc=0
+          out="$(bash scripts/followthroughs/zot-fill-rate-7341.sh 2>&1)" || rc=$?
+
+          # The run log of this public repository is world-readable and the runner trims leading
+          # whitespace before matching `::`, so indenting is not a control. Strip control
+          # characters (a bare carriage return included), scrub the vendor hostname, then prefix
+          # EVERY line with a visible pipe so no script output can start a workflow command.
+          safe="$(printf '%s\n' "$out" | LC_ALL=C tr -d '\000-\010\013-\037\177' | sed -E 's/[A-Za-z0-9.-]+\.betterstackdata\.com/[host]/g')" || safe=""
+          printf '%s\n' "$safe" | sed 's/^/| /'
+
+          # Headers are read from the RAW output and anchored at column 0, so a carriage return
+          # cannot be stripped into a spoofed header. SINGLE backslashes: `run: |` is a literal
+          # block and sed receives these bytes verbatim.
+          headers="$(printf '%s\n' "$out" | sed -n 's/^zot-fill-rate\[#7341\]: \(PASS\|FAIL\|TRANSIENT\)\( .*\)\{0,1\}$/\1/p')" || headers=""
+          hdr_count="$(printf '%s' "$headers" | sed -n '$=')" || hdr_count=0
+          hdr_count="${hdr_count:-0}"
+          hdr_verdict="$(printf '%s\n' "$headers" | sed -n '1p')" || hdr_verdict=""
+          hdr_line="$(printf '%s\n' "$out" | sed -n 's/^\(zot-fill-rate\[#7341\]: \(PASS\|FAIL\|TRANSIENT\)\( .*\)\{0,1\}\)$/\1/p' | sed -n '1p')" || hdr_line=""
+
+          case "$rc" in
+            0) mapped=PASS ;;
+            1) mapped=FAIL ;;
+            2) mapped=TRANSIENT ;;
+            *) mapped=UNEVALUATED ;;
+          esac
+          # EXACTLY ONE header, and it must agree with the exit code. Zero or several headers, an
+          # exit code outside the contract (3, 127, ...) and the script's own precondition exits
+          # (rc 2 with only `TRANSIENT:` text) are all UNEVALUATED: a probe defect, never a state.
+          verdict=UNEVALUATED
+          if [[ "$hdr_count" == "1" && "$mapped" != "UNEVALUATED" && "$hdr_verdict" == "$mapped" ]]; then
+            verdict="$mapped"
+          fi
+
+          cause=""
+          rows_scoped=""
+          if [[ "$verdict" == "TRANSIENT" ]]; then
+            cause="$(printf '%s\n' "$hdr_line" | sed -n 's/^zot-fill-rate\[#7341\]: TRANSIENT \([^ ]*\).*$/\1/p')" || cause=""
+            rows_scoped="$(printf '%s\n' "$hdr_line" | sed -n 's/^.* rows_scoped=\([0-9]*\)\( .*\)\{0,1\}$/\1/p')" || rows_scoped=""
+          fi
+
+          # fill_defect: the probe could not evaluate. UNEVALUATED always; a TRANSIENT only when its
+          # cause token is outside the CLOSED benign set AND the zot leg does not already file the
+          # shared fault.
+          # ALARM_EXIT 2 already errors the Sentry monitor for the same shared credentials, 3 files
+          # the PRODUCER_SILENT issue and 4 the INGEST_DARK issue, so a TRANSIENT there is owned.
+          defect=false
+          case "$verdict" in
+            UNEVALUATED) defect=true ;;
+            TRANSIENT)
+              benign=false
+              case "$cause" in
+                span=*|reclaim_at_sample_*|newest_sample_*) benign=true ;;
+                too_few_samples)
+                  if [[ "$rows_scoped" =~ ^[0-9]+$ ]] && (( 10#$rows_scoped < 12 )); then benign=true; fi ;;
+              esac
+              case "${ALARM_EXIT:-}" in
+                2|3|4) owned=true ;;
+                *)     owned=false ;;
+              esac
+              if [[ "$benign" != "true" && "$owned" != "true" ]]; then defect=true; fi ;;
+          esac
+
+          # The published line: the header (or a synthesized one for UNEVALUATED) through
+          # strip_log_injection, the script-name prefix removed, `#` `@` and backticks deleted so
+          # it can neither mention a user nor reference an issue nor break out of a code span,
+          # capped at 400 characters.
+          raw_line="$hdr_line"
+          if [[ "$verdict" == "UNEVALUATED" ]]; then
+            raw_line="UNEVALUATED rc=${rc} headers=${hdr_count}"
+          fi
+          fill_line="$(strip_log_injection "$raw_line" | sed 's/^zot-fill-rate\[#7341\]: //' | tr -d '#@`')" || fill_line=""
+          fill_line="${fill_line:0:400}"
+
+          {
+            echo "fill_verdict=${verdict}"
+            echo "fill_defect=${defect}"
+            echo "fill_line=${fill_line}"
+          } >> "$GITHUB_OUTPUT"
+
+          case "$verdict" in
+            PASS)      echo "::notice::standing fill-rate PASS — ${fill_line}" ;;
+            FAIL)      echo "::error::standing fill-rate FAIL — ${fill_line}" ;;
+            TRANSIENT) echo "::warning::standing fill-rate TRANSIENT (the store state was not established; defect=${defect}) — ${fill_line}" ;;
+            *)         echo "::error::standing fill-rate probe UNEVALUATED — ${fill_line}. This is a probe defect, not a store state and not a restart loop." ;;
+          esac
+          echo "- Standing fill-rate probe: **${verdict}** (defect: ${defect}) \`${fill_line}\`" >> "$GITHUB_STEP_SUMMARY"
+
+          # Outputs are written first, so the filing steps below still see the verdict. The red run
+          # is the fallback for when gh itself fails; the actionable surface is the defect issue.
+          if [[ "$verdict" == "UNEVALUATED" ]]; then exit 1; fi
+
+      - name: Open or comment fill-rate issue (FAIL)
+        if: ${{ !cancelled() && steps.fill.outputs.fill_verdict == 'FAIL' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          FILL_LINE: ${{ steps.fill.outputs.fill_line }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # shellcheck disable=SC2016  # literal single-quoted jq program + backticked markdown are intentional
+          set -euo pipefail
+          ISSUE_TITLE="[ci/zot-fill-rate] Registry store fill rate projects a breach"
+          DEFECT_TITLE="[ci/zot-fill-rate] Registry fill-rate probe defect"
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          # Defence in depth: the probe already sanitized this, but it is an env var that reaches a
+          # public issue, so it is re-stripped and re-capped here.
+          FILL_LINE="$(printf '%s' "$FILL_LINE" | LC_ALL=C tr -d '\000-\037\177#@`')" || FILL_LINE=""
+          FILL_LINE="${FILL_LINE:0:400}"
+          gh label create "ci/zot-fill-rate" --repo "$GH_REPO" \
+            --description "Standing alarm: registry store fill rate (SOLEUR_ZOT_DISK) and the fill-rate probe's own health" --color "B60205" 2>/dev/null || true
+          BODY_FILE=$(mktemp); trap 'rm -f "$BODY_FILE"' EXIT
+          {
+            printf '## Registry store fill rate projects a breach\n\n'
+            printf 'Originally the #7341 follow-through, now a standing hourly probe (#7521) that needs no tracker to be open.\n\n'
+            printf -- '- **Verdict line:** `%s`\n' "$FILL_LINE"
+            printf -- '- **Detected at:** %s\n' "$NOW"
+            printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+            printf '### Reproduce (no SSH)\n\n```\ndoppler run -p soleur -c prd_terraform -- bash scripts/followthroughs/zot-fill-rate-7341.sh\n```\n\n'
+            printf '### Remediation (no SSH)\n\nFull verdict and attribution block: `gh run view <run id> --log`, or run the reproduce command above. Runbooks: `knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md` and `knowledge-base/engineering/operations/post-mortems/zot-registry-disk-full-postmortem.md`. A remediating agent should COMMENT here with the remediation instead of closing: closing opens a new issue within the hour while the projection holds.\n\n'
+            printf '### Why this matters\n\nThe `soleur-registry-disk-prd` heartbeat stops pinging at 85 percent, and image pulls then fail fleet-wide. This probe usually fires while the store is still below that line, from the projected trend.\n\n'
+            printf '### Close rule\n\nThis issue auto-closes on a PASS run once 6 hours have passed with no new FAIL comment. After a reclaim or a host replace the probe returns TRANSIENT while it rebuilds a 24 hour baseline, so expect the close about 25 hours after the store recovers. Silence during that window is the probe rebuilding its baseline, not a dead probe. Closing this issue by hand opens a new one within the hour while the projection holds: fix the store or comment instead.\n'
+          } > "$BODY_FILE"
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty') || { echo "::error::zot-fill-rate: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Still projecting a breach at ${NOW}: \`${FILL_LINE}\`. Run: ${RUN_URL}"
+          else
+            gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
+              --label "ci/zot-fill-rate" --label "action-required" --label "observability" --label "domain/engineering" \
+              --body-file "$BODY_FILE"
+          fi
+
+          # A FAIL proves the probe evaluated, so any open probe-defect issue is stale.
+          DEFECTS=$(gh issue list --repo "$GH_REPO" --state open --label "ci/zot-fill-rate" --limit 100 --json number,title | jq -r --arg t "$DEFECT_TITLE" '.[] | select(.title | contains($t)) | .number') || DEFECTS=""
+          for N in $DEFECTS; do
+            gh issue close "$N" --repo "$GH_REPO" --comment "A FAIL run proves the probe evaluated, so the probe defect is cleared at ${NOW}. Run: ${RUN_URL}"
+          done
+
+      - name: Open or comment probe-defect issue
+        if: ${{ !cancelled() && steps.fill.outputs.fill_defect == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          FILL_LINE: ${{ steps.fill.outputs.fill_line }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # shellcheck disable=SC2016  # literal single-quoted jq program + backticked markdown are intentional
+          set -euo pipefail
+          ISSUE_TITLE="[ci/zot-fill-rate] Registry fill-rate probe defect"
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          FILL_LINE="$(printf '%s' "$FILL_LINE" | LC_ALL=C tr -d '\000-\037\177#@`')" || FILL_LINE=""
+          FILL_LINE="${FILL_LINE:0:400}"
+          gh label create "ci/zot-fill-rate" --repo "$GH_REPO" \
+            --description "Standing alarm: registry store fill rate (SOLEUR_ZOT_DISK) and the fill-rate probe's own health" --color "B60205" 2>/dev/null || true
+          BODY_FILE=$(mktemp); trap 'rm -f "$BODY_FILE"' EXIT
+          {
+            printf '## Registry fill-rate probe defect\n\n'
+            printf -- '- **Cause:** `%s`\n' "$FILL_LINE"
+            printf -- '- **Detected at:** %s\n' "$NOW"
+            printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+            printf '### What this is\n\nThe standing fill-rate probe could not evaluate. This is the probe failing, not a store state and not a restart loop. There are three causes: the script returned an exit code or output shape outside its contract (UNEVALUATED); it reported a TRANSIENT whose cause is not one of the expected ones, unless the zot leg already files the shared fault (alarm exit 2, 3 or 4), so the fill leg alone is blind; or the probe step did not complete, for example a step timeout (the Cause line then reads: probe step did not complete). The full script output is in the run log: `gh run view <run id> --log`. A precondition such as a missing python3 or an unreadable script may not reproduce outside the runner, so read the run log first.\n\n'
+            printf '### Reproduce (no SSH)\n\n```\ndoppler run -p soleur -c prd_terraform -- bash scripts/followthroughs/zot-fill-rate-7341.sh\n```\n\n'
+            printf '### Close rule\n\nThe next PASS or FAIL run of the probe closes this issue at once, since either verdict proves the probe evaluated. A one-run blip is closed by the next PASS or FAIL run (a TRANSIENT run leaves it open), without a human.\n'
+          } > "$BODY_FILE"
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty') || { echo "::error::zot-fill-rate-defect: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Probe defect persists at ${NOW}: \`${FILL_LINE}\`. Run: ${RUN_URL}"
+          else
+            gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
+              --label "ci/zot-fill-rate" --label "action-required" --label "observability" --label "domain/engineering" \
+              --body-file "$BODY_FILE"
+          fi
+
+      - name: Auto-close fill-rate issue after a quiet period (PASS)
+        if: ${{ !cancelled() && steps.fill.outputs.fill_verdict == 'PASS' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # shellcheck disable=SC2016  # literal single-quoted jq programs are intentional
+          set -euo pipefail
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          BREACH_TITLE='[ci/zot-fill-rate] Registry store fill rate projects a breach'
+          DEFECT_TITLE='[ci/zot-fill-rate] Registry fill-rate probe defect'
+          # ONE lookup for both titles, filtered per title below. A failed lookup closes nothing.
+          LIST=$(gh issue list --repo "$GH_REPO" --state open --label "ci/zot-fill-rate" --limit 100 --json number,title,updatedAt) || { echo "::warning::zot-fill-rate: the open-issue lookup failed; nothing is closed this run."; exit 0; }
+          # The breach issue closes on hysteresis. updatedAt is the proxy for "last FAIL" (each FAIL
+          # run comments): close only an issue quiet for 6 hours, so a store sitting at the
+          # threshold does not flap. A human comment defers the close, which is the safe direction.
+          # An unparseable timestamp makes jq error, the guard below turns that into "do not close".
+          CUTOFF=$(( $(date -u +%s) - 21600 ))
+          CANDS=$(jq -r --arg t "$BREACH_TITLE" '.[] | select(.title | contains($t)) | "\(.number) \(.updatedAt)"' <<<"$LIST") || CANDS=""
+          while read -r N TS; do
+            [[ -n "$N" ]] || continue
+            AGE_OK=$(jq -rn --arg ts "$TS" --argjson c "$CUTOFF" '($ts | fromdateiso8601) < $c') || AGE_OK=false
+            if [[ "$AGE_OK" == "true" ]]; then
+              gh issue close "$N" --repo "$GH_REPO" --comment "The fill-rate probe returned PASS at ${NOW} and this issue has had no update for 6 hours. Run: ${RUN_URL}"
+            fi
+          done <<<"$CANDS"
+          # A PASS proves the probe evaluated, so an open probe-defect issue is stale at once: no
+          # age test, because the next PASS or FAIL run is the close rule its body states. It runs
+          # AFTER the breach close so that a failing defect close (set -e) cannot starve it.
+          DEFECTS=$(jq -r --arg t "$DEFECT_TITLE" '.[] | select(.title | contains($t)) | .number' <<<"$LIST") || DEFECTS=""
+          for N in $DEFECTS; do
+            gh issue close "$N" --repo "$GH_REPO" --comment "The fill-rate probe returned PASS at ${NOW}, which proves the probe evaluated, so the probe defect is cleared. Run: ${RUN_URL}"
+          done
 
   # #7377 — the restart-loop alarm is the read-only inventory lever's only automatic producer.
   # A separate job so `actions: write` (which can dispatch ANY workflow_dispatch workflow in the

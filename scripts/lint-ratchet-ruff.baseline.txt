@@ -1,0 +1,70 @@
+# lint-ratchet baseline for scope 'ruff' (PR3a of #10331; design in ADR-290).
+# Shrink-only: this file always equals the live census, and per (path, rule) it may never
+# hold more entries than the merge base. Entry: path|rule|anchor|n, where anchor is a 12-hex
+# fingerprint of the normalised source line (the line itself is never stored).
+# List the live findings:  python3 scripts/lint-ratchet.py ruff --list
+# After fixing findings:   python3 scripts/lint-ratchet.py ruff --update  (it refuses to add)
+# After a merge conflict, take the base branch's copy of this file and re-run --update.
+# Drawdown tracking: #10433
+.claude/hooks/security_reminder_hook.py|S110|7057e48b6879|1
+.claude/hooks/security_reminder_hook.py|S110|e9dc52bf3963|1
+apps/web-platform/infra/doppler-download-error-channel.mutation.py|SIM115|5a8c134ab60d|1
+apps/web-platform/infra/doppler-download-error-channel.mutation.py|SIM115|d1307d3b8a18|1
+plugins/soleur/scripts/scan-ancestor-signal-helpers.py|S110|15eba7423d48|1
+plugins/soleur/scripts/scan-ancestor-signal-helpers.py|S110|7e98f7cd1b45|1
+plugins/soleur/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py|S110|48f29490a2a4|1
+plugins/soleur/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py|S110|7bc7ace233da|1
+plugins/soleur/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py|S110|f5aa9c351dec|1
+plugins/soleur/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py|S110|f5aa9c351dec|2
+plugins/soleur/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py|S112|0ced676a6b9a|1
+plugins/soleur/skills/agent-browser/test/fixtures/capture-playwright-mcp-fixtures.py|S110|4e6d523f491a|1
+plugins/soleur/skills/agent-browser/test/fixtures/fake-playwright-mcp.py|SIM115|3c9c4601680f|1
+plugins/soleur/skills/agent-browser/test/fixtures/fake-playwright-mcp.py|SIM115|a370bc5d19f4|1
+plugins/soleur/skills/agent-browser/test/fixtures/fake-playwright-mcp.py|SIM115|a809367c147b|1
+plugins/soleur/skills/agent-browser/test/fixtures/fake-playwright-mcp.py|SIM115|e5226b16029f|1
+plugins/soleur/skills/agent-browser/test/fixtures/make-proxy-mutant.py|SIM115|3c40c5053352|1
+plugins/soleur/skills/agent-browser/test/fixtures/make-proxy-mutant.py|SIM115|7500140557d0|1
+plugins/soleur/skills/agent-browser/test/fixtures/proxy-session-driver.py|S110|27fd92a2acf1|1
+plugins/soleur/skills/agent-browser/test/fixtures/proxy-session-driver.py|S110|27fd92a2acf1|2
+plugins/soleur/skills/agent-browser/test/fixtures/proxy-session-driver.py|S110|60dc67ee5ba9|1
+plugins/soleur/skills/agent-browser/test/fixtures/proxy-session-driver.py|S110|a2ad58d9f50d|1
+plugins/soleur/skills/agent-browser/test/fixtures/proxy-session-driver.py|SIM115|49b76bb23ea5|1
+plugins/soleur/skills/agent-browser/test/fixtures/proxy-session-driver.py|SIM115|6fff6bd623a8|1
+plugins/soleur/skills/agent-browser/test/fixtures/proxy-session-driver.py|SIM115|bcc07acc2069|1
+plugins/soleur/skills/agent-browser/test/fixtures/proxy-session-driver.py|SIM115|f30f8a0ac041|1
+plugins/soleur/skills/agent-browser/test/fixtures/session-facts.py|S112|60dc67ee5ba9|1
+plugins/soleur/skills/agent-browser/test/fixtures/session-facts.py|SIM115|4ecabce89017|1
+plugins/soleur/skills/agent-browser/test/fixtures/session-facts.py|SIM115|5b8ab81d71de|1
+plugins/soleur/skills/agent-browser/test/fixtures/session-facts.py|SIM115|b6cd023f8883|1
+plugins/soleur/skills/incident/scripts/redact-engine.py|S110|15eba7423d48|1
+plugins/soleur/skills/incident/scripts/redact-engine.py|S112|60dc67ee5ba9|1
+plugins/soleur/skills/incident/scripts/redact-engine.py|S112|8f6d7f23ae42|1
+plugins/soleur/skills/preflight/scripts/founder-check.py|F841|80a339a18713|1
+plugins/soleur/skills/preflight/scripts/founder-check.py|F841|a622c46594b2|1
+plugins/soleur/skills/preflight/scripts/founder-check.py|S110|15eba7423d48|1
+plugins/soleur/skills/resolve-debt/scripts/resolve-debt.py|S110|15eba7423d48|1
+plugins/soleur/skills/skill-creator/scripts/quick_validate.py|F401|de2abade832c|1
+plugins/soleur/test/fixtures/codeql-main-alert-gate-workflow-wiring/wiring_facts.py|SIM115|5d2cf8f6e59e|1
+scripts/backfill-frontmatter.py|F401|a8e4ea89098d|1
+scripts/backfill-frontmatter.py|F841|c04c76dca8b4|1
+scripts/backfill-frontmatter.py|F841|dc8d0966adf6|1
+scripts/ci-pr-affected-replay.py|SIM115|dee6f98a5066|1
+scripts/ci-pr-affected-replay.py|SIM115|dee6f98a5066|2
+scripts/ci-pr-affected-replay.py|SIM115|e4c70a4ef007|1
+scripts/lint-agents-enforcement-tags.py|S112|4e6d523f491a|1
+scripts/lint-anthropic-content-position.py|S112|4e6d523f491a|1
+scripts/lint-rule-ids.py|S110|e46902f4c394|1
+scripts/lint-rule-ids.py|S110|e46902f4c394|2
+scripts/lint-shell-capture-exit.py|SIM115|a82405b0903e|1
+scripts/lint-trap-tempfile-ownership.py|S112|4e6d523f491a|1
+scripts/lint-workflow-local-action-checkout.py|S110|7057e48b6879|1
+scripts/lint-workflow-local-action-checkout.py|S112|4e6d523f491a|1
+scripts/lint-workflow-local-action-checkout.py|S112|c8f4074a18fc|1
+scripts/regenerate-shard-manifest.py|SIM115|21270787aded|1
+scripts/regenerate-shard-manifest.py|SIM115|a262d9816ba8|1
+scripts/regenerate-shard-manifest.py|SIM115|a262d9816ba8|2
+scripts/regenerate-shard-manifest.py|SIM115|a262d9816ba8|3
+tests/conftest.py|S110|4e6d523f491a|1
+tests/conftest.py|S110|60dc67ee5ba9|1
+tests/conftest.py|S112|aaaa10571e09|1
+tests/scripts/test_lint_rule_ids.py|F401|de2abade832c|1
