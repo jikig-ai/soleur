@@ -1,9 +1,9 @@
 ---
 title: "Your bug investigator now refuses to guess"
 type: feature-launch
-publish_date: ""
+publish_date: 2026-10-15
 channels: x, bluesky
-status: draft
+status: published
 pr_reference: "#8352"
 issue_reference: "#8288"
 ---

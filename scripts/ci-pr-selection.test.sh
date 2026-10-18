@@ -12,8 +12,13 @@
 # scripts/test-all.sh sources), G2-5 (the switch is compared exactly), G2-6 / G2-12 (a step killed anywhere leaves only the
 # defaults), G2-7 (a re-run), G2-9 (CI leaking into the selector call), G2-10 (empty or summary-less selector output), G2-11
 # (a group with no records or a non-pr-gated decline), G2-13 (the activation lock), G2-14 (a newline or `::` in a path),
-# G2-15 (docs rename/delete, diagrams, fork, >500 files, >64 KB listing, empty diff), and the must-PASS row: a legitimately
-# doc-only knowledge-base diff reaches stage 2 and shows would-skip evidence while skip_legs stays EMPTY (locked).
+# G2-15 (docs rename/delete, diagrams, fork, >500 files, >64 KB listing, empty diff), G2-16 (the stage-2 SWITCH GATE: stage 2
+# and every selector call run ONLY when the switch is exactly `on`; any other value, unset or empty included, stops after stage
+# 1 with ZERO stub calls (reason switch_off on a doc-only diff past the paths cap; a code diff keeps its own stage-1 reason)), and the must-PASS row: a legitimately
+# doc-only knowledge-base diff with SWITCH=on reaches stage 2 and shows would-skip evidence while skip_legs stays EMPTY (locked).
+# THE HARNESS DEFAULT IS SWITCH=on (drive() builds its environment from it; a row that wants the off-switch contract passes
+# SWITCH=<value> or the sentinel UNSET:SWITCH, which removes the variable): with the default left empty, the pre-existing rows would test
+# the old contract. row_switch_gate / row_switch_gate_unlocked carry the off-switch contract.
 # Also pinned here: the mode-aware stage 1 (a symlink or gitlink is `non_doc_mode`, a mode flip on a doc .md stays doc), the
 # narrowed allowlist (`knowledge-base/**/*.md` or a root `*.md`, the NAME ends in `.md`), non-ASCII paths, the selector child
 # never inheriting the step's output files, the notice fields (active, budget, sel_censored, groups) and the reasons
@@ -255,6 +260,8 @@ mkdir -p "$FX_BASE"
 (
   cd "$FX_BASE" || exit 1
   git init -q -b main . || exit 1
+  # No auto-maintenance in the fixture: `git maintenance run --auto` takes and drops objects/maintenance.lock mid-`cp -a` (#10373)
+  git config maintenance.auto false && git config gc.auto 0 || exit 1
   mk() { mkdir -p "$(dirname "$1")"; printf 'seed %s\n' "$1" > "$1"; }
   mk knowledge-base/project/learnings/zzleak-a.md
   mk knowledge-base/project/zzleak-b.md
@@ -317,6 +324,8 @@ fx_case docren; fx_op docren R "plugins/soleur/docs/zzleak-page.md" "plugins/sol
 fx_case docdel; fx_op docdel D "plugins/soleur/docs/zzleak-del.md"; fx_done docdel
 fx_case docmod; fx_op docmod M "plugins/soleur/docs/zzleak-page.md"; fx_done docmod
 fx_case code; fx_op code M "apps/web-platform/zzleak-app.ts"; fx_done code
+# docfirst: a doc path that SORTS BEFORE a non-doc path (knowledge-base/ < scripts/): a gate placed inside the stage-1 loop would see the doc first
+fx_case docfirst; fx_op docfirst M "$KB_A"; fx_op docfirst M "scripts/zzleak-docfirst.sh"; fx_done docfirst
 fx_case legal; fx_op legal M "docs/legal/zzleak-terms.md"; fx_done legal
 fx_case mk; fx_op mk M Makefile; fx_done mk
 fx_case e2ec; fx_op e2ec M "scripts/ci-e2e-classify.sh"; fx_done e2ec
@@ -618,15 +627,28 @@ drive() {  # $1=fixture $2=driver-file; remaining args: KEY=VALUE overrides (lat
     "PATH=$BIN" "HOME=$SANDBOX/home" "TMPDIR=$SANDBOX/tmp" "LANG=C"
     "GIT_CEILING_DIRECTORIES=$GIT_CEILING_DIRECTORIES" "GIT_CONFIG_NOSYSTEM=1" "GIT_CONFIG_GLOBAL=/dev/null"
     "GIT_ATTR_NOSYSTEM=1" "XDG_CONFIG_HOME=$XDG_CONFIG_HOME" "GIT_TERMINAL_PROMPT=0"
-    "EVENT_NAME=pull_request" "SWITCH=" "GITHUB_SHA=$head" "PR_HEAD_SHA=$prhead"
+    "EVENT_NAME=pull_request" "SWITCH=on" "GITHUB_SHA=$head" "PR_HEAD_SHA=$prhead"
     "HEAD_REPO=$REPO_NAME" "GH_REPO=$REPO_NAME" "RUN_ATTEMPT=1"
     "GITHUB_OUTPUT=$o/gh.out" "GITHUB_STEP_SUMMARY=$o/sum.out" "RUNNER_TEMP=$SANDBOX/rt"
     "GITHUB_ENV=$o/gh.env" "GITHUB_PATH=$o/gh.path" "GITHUB_STATE=$o/gh.state"
     "PR_SELECTION_TEST_ALL=$STUB" "PR_SELECTION_STAGE2_TIMEOUT=30"
     "STUB_DIR=$o/stub" "STUB_PIDFILE=$o/pid" "DRV=$drv"
   )
+  # `UNSET:SWITCH` as an override removes SWITCH from the child's environment entirely (a truly unset variable, as opposed to the
+  # empty one `SWITCH=`); every other override is a KEY=VALUE, later wins.
+  local -a ov=() e2=()
+  local a x
+  for a in "$@"; do
+    if [ "$a" = "UNSET:SWITCH" ]; then
+      e2=()
+      for x in "${e[@]}"; do case "$x" in SWITCH=*) ;; *) e2+=("$x") ;; esac; done
+      e=("${e2[@]}")
+    else
+      ov+=("$a")
+    fi
+  done
   # shellcheck disable=SC2016  # the single-quoted body is for the child shell to expand
-  { ( cd "$repo" && env -i "${e[@]}" "$@" bash -c 'printf %s "$$" | tee "$STUB_PIDFILE" > /dev/null; exec bash "$DRV"' ) > "$o/stdout" 2> "$o/stderr"; } 2> /dev/null
+  { ( cd "$repo" && env -i "${e[@]}" "${ov[@]}" bash -c 'printf %s "$$" | tee "$STUB_PIDFILE" > /dev/null; exec bash "$DRV"' ) > "$o/stdout" 2> "$o/stderr"; } 2> /dev/null
   RC=$?
   O="$o"
   # outputs: last value per key wins (the GITHUB_OUTPUT rule); the line count tells defaults-only from defaults+final
@@ -817,14 +839,17 @@ row_lock() {  # G2-13: the lock is present and SWITCH=on
   check_eq "G2-13 the would-skip evidence is still produced under the lock" "$N_WOULD" "$ALL"
   drive k1 "$d" "SWITCH="
   check_eq "G2-13 dark: skip_legs" "$O_SKIP" ""
-  check_eq "G2-13 dark: would-skip evidence" "$N_WOULD" "$ALL"
+  check_eq "G2-13 dark (switch unset): stage 2 does not run, so there is no would-skip evidence" "$N_WOULD" "none"
+  check_eq "G2-13 dark (switch unset): zero selector calls" "$STUB_CALLS" "0"
 }
 row_skip_gated_on_active() {  # skip_legs is written ONLY when active=true
   local d="$1"
+  drive k1 "$d" "SWITCH=on"
+  check_eq "skip_legs only when active (switch on, locked: stage 2 produced would_skip=$ALL)" "$O_SKIP" ""
   drive k1 "$d" "SWITCH="
-  check_eq "skip_legs only when active (switch unset)" "$O_SKIP" ""
+  check_eq "skip_legs only when active (switch unset: stage 2 never runs, a stage-1 invariant; only the SWITCH=on leg kills the skip_legs mutant)" "$O_SKIP" ""
   drive k1 "$d" "SWITCH=ON"
-  check_eq "skip_legs only when active (switch ON)" "$O_SKIP" ""
+  check_eq "skip_legs only when active (switch ON: stage 2 never runs, a stage-1 invariant)" "$O_SKIP" ""
 }
 row_defaults_first() {  # G2-6 / G2-12: a step killed anywhere leaves exactly the defaults (adversarial config: unlocked + on)
   local d="$1" at
@@ -1153,7 +1178,95 @@ row_leak() {  # the raw switch value, the repo name and the shas reach no output
   local d="$1"
   drive k1 "$d" "SWITCH=zzleak-raw-switch-value"
   check_eq "LEAK a raw switch value is reported as 'invalid' only" "$N_SWITCH" "invalid"
-  check_eq "LEAK the run still reaches stage 2" "$N_STAGE" "2"
+  check_eq "LEAK a raw switch value stops after stage 1 (switch_off, no selector call)" "$N_REASON/$N_STAGE/$STUB_CALLS" "switch_off/1/0"
+  drive k1 "$d" "SWITCH=on"
+  check_eq "LEAK the run with the switch on still reaches stage 2 (the sweep is not vacuous there)" "$N_STAGE" "2"
+}
+row_switch_gate() {  # G2-16 (Guard 1): stage 2 (EVERY selector call) runs ONLY for the exact switch value `on`; stage 1 and the notice run for all
+  local d="$1" v lbl sa want_sw f s a b off_reason off_files on_reason on_files
+  local -a L x
+  # AC1: every spelling that is not exactly `on` stops after stage 1 on the doc-only fixture, with ZERO selector calls
+  for v in "<unset>" "" "ON" " on" "on " $'on\n' $'\non\n' "1" "off" "zzleak-raw-switch-value"; do
+    lbl="${v//$'\n'/\\n}"
+    if [ "$v" = "<unset>" ]; then sa="UNSET:SWITCH"; want_sw="unset"
+    else sa="SWITCH=$v"; want_sw="invalid"; [ -n "$v" ] || want_sw="unset"; fi
+    drive k1 "$d" "$sa"
+    check_eq "G2-16 SWITCH='$lbl': no selector call at all (--print-selection and all three --enumerate-commands)" "$STUB_CALLS" "0"
+    check_eq "G2-16 SWITCH='$lbl': stage 1" "$N_STAGE" "1"
+    check_eq "G2-16 SWITCH='$lbl': reason" "$N_REASON" "switch_off"
+    check_eq "G2-16 SWITCH='$lbl': would_skip" "$N_WOULD" "none"
+    check_eq "G2-16 SWITCH='$lbl': sel_s and sel_censored" "$N_SELS/$N_CENS" "0/0"
+    check_eq "G2-16 SWITCH='$lbl': groups" "$N_GROUPS" "-"
+    check_eq "G2-16 SWITCH='$lbl': notice active" "$N_ACTIVE" "false"
+    check_eq "G2-16 SWITCH='$lbl': files (stage 1 still counted the diff)" "$N_FILES" "1"
+    check_eq "G2-16 SWITCH='$lbl': the notice names the switch class, never the raw value" "$N_SWITCH" "$want_sw"
+    check_eq "G2-16 SWITCH='$lbl': 8-line output file" "$O_NLINES" "8"
+    mapfile -t L <<< "$O_TEXT"
+    check_eq "G2-16 SWITCH='$lbl': the output file ends active=false" "${L[6]:-}" "active=false"
+    check_eq "G2-16 SWITCH='$lbl': the output file ends skip_legs=" "${L[7]:-}" "skip_legs="
+  done
+  # AC2 (must-PASS, not only the canonical k1): exactly `on` still runs stage 2, on every doc-only shape, locked
+  for f in k1 k2 kad krn; do
+    drive "$f" "$d" "SWITCH=on"
+    check_eq "G2-16 SWITCH=on ($f): the four selector calls ran" "$STUB_CALLS" "4"
+    check_eq "G2-16 SWITCH=on ($f): stage 2" "$N_STAGE" "2"
+    check_eq "G2-16 SWITCH=on ($f): reason" "$N_REASON" "affected"
+    check_eq "G2-16 SWITCH=on ($f): would_skip evidence" "$N_WOULD" "$ALL"
+    check_eq "G2-16 SWITCH=on ($f), locked (AC4): active" "$O_ACTIVE" "false"
+    check_eq "G2-16 SWITCH=on ($f), locked (AC4): skip_legs empty" "$O_SKIP" ""
+    check_eq "G2-16 SWITCH=on ($f), locked (AC4): the notice says switch=on locked=true" "$N_SWITCH/$N_LOCKED" "on/true"
+  done
+  # AC3: stage 1 is unchanged while the switch is off: the same reason and files as with SWITCH=on, and no selector call either way
+  for s in "code:" "legal:" "mk:" "docfirst:" "docmod:" "trg0:" "empty:" "k1:HEAD_REPO=x/other" "k1:RUN_ATTEMPT=2" "n501:"; do
+    f="${s%%:*}"; a="${s#*:}"; x=(); [ -z "$a" ] || x=("$a")
+    for b in "UNSET:SWITCH" "SWITCH="; do
+      drive "$f" "$d" "$b" "${x[@]}"
+      off_reason="$N_REASON"; off_files="$N_FILES"
+      check_eq "G2-16 stage 1 unchanged ($s, ${b:0:6}): no selector call" "$STUB_CALLS" "0"
+      drive "$f" "$d" "SWITCH=on" "${x[@]}"
+      on_reason="$N_REASON"; on_files="$N_FILES"
+      check_eq "G2-16 stage 1 unchanged ($s, ${b:0:6}): reason equals the SWITCH=on reason" "$off_reason" "$on_reason"
+      check_eq "G2-16 stage 1 unchanged ($s, ${b:0:6}): files equals the SWITCH=on files" "$off_files" "$on_files"
+      check_true "G2-16 stage 1 unchanged ($s, ${b:0:6}): the off-switch reason '$off_reason' is not switch_off" "$([ "$off_reason" != switch_off ]; echo $?)"
+      check_eq "G2-16 stage 1 unchanged ($s): SWITCH=on makes no selector call either" "$STUB_CALLS" "0"
+    done
+  done
+  # ... and a doc-only diff is the ONLY shape that reports switch_off (every doc-only shape: add, delete, rename, root file, mode flip, an advanced base,
+  # >64 KB listing, the 500-file edge, the diagrams edit and the joined list just under the cap)
+  for f in k2 kad krn dia mflip adv big bigok n500; do
+    drive "$f" "$d" "UNSET:SWITCH"
+    off_files="$N_FILES"
+    check_eq "G2-16 doc-only ($f), switch unset: reason" "$N_REASON" "switch_off"
+    check_eq "G2-16 doc-only ($f), switch unset: no selector call" "$STUB_CALLS" "0"
+    drive "$f" "$d" "SWITCH=on"
+    check_eq "G2-16 doc-only ($f): files equals the SWITCH=on files" "$off_files" "$N_FILES"
+    check_eq "G2-16 doc-only ($f): SWITCH=on reaches stage 2" "$STUB_CALLS" "4"
+  done
+  # an over-cap doc-only diff reports paths_too_long first (the gate sits AFTER the cap), with the switch off and on
+  drive bigargv "$d" "UNSET:SWITCH"
+  check_eq "G2-16 over-cap doc-only diff, switch unset: paths_too_long, not switch_off" "$N_REASON" "paths_too_long"
+  check_eq "G2-16 over-cap doc-only diff, switch unset: no selector call" "$STUB_CALLS" "0"
+  drive bigargv "$d" "SWITCH=on"
+  check_eq "G2-16 over-cap doc-only diff, SWITCH=on: paths_too_long" "$N_REASON" "paths_too_long"
+  drive bigok "$d" "SWITCH=ON"
+  check_eq "G2-16 just-under-cap doc-only diff, SWITCH=ON: switch_off" "$N_REASON" "switch_off"
+}
+row_switch_gate_unlocked() {  # AC4 against the lock-NEUTRALIZED copy: exactly `on` arms, every other spelling stays at zero selector calls
+  local d="$1" v lbl sa
+  drive k1 "$d" "SWITCH=on"
+  check_eq "G2-16/13 no lock + SWITCH=on: active" "$O_ACTIVE" "true"
+  check_eq "G2-16/13 no lock + SWITCH=on: skip_legs" "$O_SKIP" "$ALL"
+  check_eq "G2-16/13 no lock + SWITCH=on: the four selector calls ran" "$STUB_CALLS" "4"
+  check_eq "G2-16/13 no lock + SWITCH=on: the notice says switch=on locked=false" "$N_SWITCH/$N_LOCKED" "on/false"
+  for v in "<unset>" "" "ON" " on" "on " "1" "off" "zzleak-raw-switch-value"; do
+    lbl="${v:-<empty>}"
+    if [ "$v" = "<unset>" ]; then sa="UNSET:SWITCH"; else sa="SWITCH=$v"; fi
+    drive k1 "$d" "$sa"
+    check_eq "G2-16/13 no lock + SWITCH='$lbl': active" "$O_ACTIVE" "false"
+    check_eq "G2-16/13 no lock + SWITCH='$lbl': skip_legs" "$O_SKIP" ""
+    check_eq "G2-16/13 no lock + SWITCH='$lbl': no selector call" "$STUB_CALLS" "0"
+    check_eq "G2-16/13 no lock + SWITCH='$lbl': reason" "$N_REASON" "switch_off"
+  done
 }
 row_trigger_active() {  # against the UNLOCKED driver with the switch ON: a trigger path must still never arm a skip
   local d="$1" i
@@ -1218,8 +1331,8 @@ PRISTINE_ROWS=(row_not_pr row_shape_ok row_shape_count row_shape_githubsha row_s
                row_odd_comma row_status row_docs_outside row_docs_inside row_fork row_maxfiles row_bigpaths row_empty
                row_ci_leak row_selector_unknowns row_selector_timeout row_groups row_real_shape row_must_pass
                row_modes row_allowlist row_nonascii row_advanced_base row_selection_shapes row_argv_cap row_leak row_budget
-               row_hang_first row_child_env row_lever_error row_empty_tok row_scratch row_signal_window)
-UNLOCKED_ROWS=(row_switch row_diagrams row_defaults_first row_term row_trigger_active)
+               row_switch_gate row_hang_first row_child_env row_lever_error row_empty_tok row_scratch row_signal_window)
+UNLOCKED_ROWS=(row_switch row_switch_gate_unlocked row_diagrams row_defaults_first row_term row_trigger_active)
 
 # ── CONTROL: the unmutated driver must be GREEN before any mutant is read ────
 _c0=$fails
@@ -1324,6 +1437,20 @@ mutate "G2-2 ci.yml dropped from the list AND .github/workflows/* allowlisted" "
 mutate "G2-5 switch lowercased and trimmed"       "$UNLOCKED" 's|^\[ -z "\${SWITCH:-}" \] \|\| sw=invalid$|SWITCH="${SWITCH:-}"; SWITCH="${SWITCH//[[:space:]]/}"; SWITCH="${SWITCH,,}"\n&|' row_switch
 mutate "G2-5 switch matched by prefix"            "$UNLOCKED" 's|^\[ "\${SWITCH:-}" = on \] && sw=on  # GUARD:G2-5-SWITCH-EXACT$|[[ "${SWITCH:-}" == on* ]] \&\& sw=on|' row_switch
 mutate "G2-5 any non-empty switch arms"           "$UNLOCKED" 's|^\[ "\${SWITCH:-}" = on \] && sw=on  # GUARD:G2-5-SWITCH-EXACT$|[ -n "${SWITCH:-}" ] \&\& sw=on|' row_switch
+# G2-16 (Guard 1): the stage-2 switch gate. Five of the mutants below REORDER the gate (the original two lines are deleted, a copy lands elsewhere), so
+# the mutant differs from the pristine bytes and still compiles. Nine are driven by row_switch_gate against the locked driver, one by row_switch_gate_unlocked against the lock-neutralized copy.
+_gate_del='/GUARD:G2-16-SWITCH-GATE$/d'$'\n''/^  reason=switch_off$/d'
+mutate "G2-16 the switch gate is deleted (stage 2 runs for every doc-only diff)" "$PRISTINE" "$(kill_guard G2-16-SWITCH-GATE)" row_switch_gate
+mutate "G2-16 the gate is any non-empty switch (ON, off, 1, ' on' run stage 2)" "$PRISTINE" 's#^.*GUARD:G2-16-SWITCH-GATE$#  [ -n "${SWITCH:-}" ] || return 0#' row_switch_gate
+mutate "G2-16 the gate is sw != invalid (an unset or empty switch runs stage 2)" "$PRISTINE" 's#^.*GUARD:G2-16-SWITCH-GATE$#  [ "$sw" != invalid ] || return 0#' row_switch_gate
+mutate "G2-16 the gate is inverted (exactly on stops after stage 1)" "$PRISTINE" 's#^.*GUARD:G2-16-SWITCH-GATE$#  [ "$sw" = on ] \&\& return 0#' row_switch_gate
+mutate "G2-16 REORDER: the gate sits after the --print-selection call (one selector call is paid off-switch)" "$PRISTINE" "$_gate_del"$'\n''/GUARD:G2-9-CI-UNSET$/{n;n;s#$#\n  reason=switch_off\n  [ "$sw" = on ] || return 0#}' row_switch_gate
+mutate "G2-16 REORDER: the gate moves BEFORE stage 1 (a code diff reports switch_off, not its own reason)" "$PRISTINE" "$_gate_del"$'\n''s#^  diagrams=0$#  reason=switch_off\n  [ "$sw" = on ] || return 0\n&#' row_switch_gate   # EQUIVALENT-LABEL (verified, PRSEL_PROBE_VERBOSE=all: only reason labels turn red): a code diff stops at stage 1 either way, no selector call, same files and active; only the reason token differs
+mutate "G2-16 REORDER: the gate moves BEFORE the paths_too_long cap (an over-cap doc diff reports switch_off)" "$PRISTINE" "$_gate_del"$'\n''s#^  reason=paths_too_long$#  reason=switch_off\n  [ "$sw" = on ] || return 0\n&#' row_switch_gate   # EQUIVALENT-LABEL (verified, PRSEL_PROBE_VERBOSE=all: only reason labels turn red): an over-cap diff stops before stage 2 either way, no selector call, same files and active; only the reason token differs
+mutate "G2-16 REORDER: the gate sits INSIDE the stage-1 loop after the first doc path (a mixed doc-first diff reports switch_off, not its own reason)" "$PRISTINE" "$_gate_del"$'\n''s#^    paths="\${paths:+\$paths,}\$p"$#&\n    reason=switch_off\n    [ "$sw" = on ] || return 0#' row_switch_gate   # EQUIVALENT-LABEL (verified, PRSEL_PROBE_VERBOSE=all: only reason labels turn red): a mixed diff stops at stage 1 either way, no selector call, same files and active; only the reason token differs (the docfirst fixture and the over-cap row both reach it)
+mutate "G2-16 REORDER: the gate moves BEFORE the file count (stage 1 no longer counted the diff)" "$PRISTINE" "$_gate_del"$'\n''s#^  files=\$((nul / 2))$#  reason=switch_off\n  [ "$sw" = on ] || return 0\n&#' row_switch_gate
+mutate "G2-16 the gate is bypassed when the lock is absent (the PR C world: every non-on value runs stage 2)" "$UNLOCKED" 's#^.*GUARD:G2-16-SWITCH-GATE$#  [ "$sw" = on ] || [ "$locked" = false ] || return 0#' row_switch_gate_unlocked
+unset _gate_del
 mutate "G2-13 the lock is not read (locked stays false)" "$PRISTINE" "$(kill_guard G2-13-LOCK-READ)"       row_lock row_must_pass
 mutate "G2-13 the arm ignores the lock"          "$PRISTINE" 's| \&\& \[ "\$locked" = false \]; then  # GUARD:G2-13-ARM$|; then|' row_lock row_must_pass
 _e1='s|^# Re-validate every value.*$|skip_legs="$would_skip"\n&|'
@@ -1436,22 +1563,23 @@ fi
 # through pass()/fail() is silenced by the same edit that silences everything else. DERIVED FROM A MEASURED GREEN RUN, not
 # guessed: a floor above the real count is a broken instrument that reds a correct tree, a floor below it is slack in
 # which an undispatched row can hide. Re-derive after adding a row:  bash scripts/ci-pr-selection.test.sh | tail -1
-# MEASURED green run (2026-10-14): 3090 rows = BASE_ROWS + ROWS_PER_SOURCED_FILE * 7 sourced files, with 91 mutant
-# verdicts counted among them. ROWS_PER_SOURCED_FILE is MEASURED, not estimated: running this suite on a copy of the repo whose
-# scripts/test-all.sh has ONE fewer `source` line moved the total by exactly 18 rows (one `drive` of the file's trigger
-# fixture with its 12 invariants, the 5 expect_full checks, and the 1 "sourced file is under scripts/lib/" row). BASE_ROWS is
-# the remainder. An unrelated `source` edit in scripts/test-all.sh therefore no longer reds the suite; removing rows from the
-# fixed part still does. Re-derive BASE_ROWS after adding or removing a row:
+# MEASURED green run (2026-10-15, with the G2-16 switch gate and its review-round mutants): 4545 rows = BASE_ROWS + ROWS_PER_SOURCED_FILE * 7 sourced files, with 101
+# mutant verdicts counted among them. ROWS_PER_SOURCED_FILE is MEASURED, not estimated: running this suite on a scratch copy whose
+# scripts/test-all.sh has ONE fewer `source` line gave 4526 rows against 4545, a delta of exactly 19 (one `drive` of the file's
+# trigger fixture with its 13 invariants, the 5 expect_full checks, and the 1 "sourced file is under scripts/lib/" row; the
+# earlier figure of 18 was re-verified this way and is superseded). BASE_ROWS is the remainder. An unrelated `source` edit in
+# scripts/test-all.sh therefore no longer reds the suite; removing rows from the fixed part still does. Re-derive BASE_ROWS after
+# adding or removing a row:
 #   bash scripts/ci-pr-selection.test.sh | tail -1     then   BASE_ROWS = total - ROWS_PER_SOURCED_FILE * sourced_count
-ROWS_PER_SOURCED_FILE=18
-BASE_ROWS=2964
+ROWS_PER_SOURCED_FILE=19
+BASE_ROWS=4412
 MIN_ROWS=$((BASE_ROWS + ROWS_PER_SOURCED_FILE * ${#SOURCED[@]}))
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor: %d rows executed, at least %d required. Rows were removed or a loop stopped early.\n' \
     "$TOTAL" "$MIN_ROWS" >&2
   exit 1
 fi
-MIN_MUTANTS=91
+MIN_MUTANTS=101
 if [ "$MUT_TOTAL" -lt "$MIN_MUTANTS" ]; then
   printf 'FAIL: mutation floor: %d mutants executed, at least %d required.\n' "$MUT_TOTAL" "$MIN_MUTANTS" >&2
   exit 1

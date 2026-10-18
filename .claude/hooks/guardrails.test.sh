@@ -141,6 +141,17 @@ assert "implicit repo, milestone alone no longer allows" "deny" \
 assert "explicit jikig-ai repo, no milestone denies" "deny" \
   'gh issue create --repo jikig-ai/soleur --title "x" --body "y"'
 
+# #10248 — the shared wrapper-boundary fragment: rtk-prefixed spellings reach
+# the same boundary-anchored gates.
+assert "rtk gh issue create, no milestone denies (#10248)" "deny" \
+  'rtk gh issue create --title "x" --body "y"'
+assert "rtk run gh issue create, no milestone denies (#10248)" "deny" \
+  'rtk run gh issue create --title "x" --body "y"'
+# NB: `rtk-foo gh issue create` still denies via the filing-justification gate's
+# word-boundary scan (`[^A-Za-z0-9_-]`), which was never chain-anchored — the
+# glued-suffix negative lives on the stash surface (AC3c) where only the
+# chain-boundary gate governs.
+
 # External repo without --milestone → allow (exempt: different owner).
 assert "external repo, no milestone allows" "<none>" \
   'gh issue create --repo highagency/pencil-desktop-releases --title "x" --body-file /tmp/b.md'
@@ -183,6 +194,11 @@ assert "AC3 commit-body git stash allows (FP fixed)" "<none>" \
 # … but a real `git stash` STILL denies.
 assert "AC3 real git stash still denies" "deny" \
   'git stash'
+# #10248 — rtk-prefixed stash reaches the same deny.
+assert "AC3b rtk git stash still denies (#10248)" "deny" \
+  'rtk git stash'
+assert "AC3c rtk-foo git stash allows (glued suffix is not rtk, #10248)" "<none>" \
+  'rtk-foo git stash'
 
 # AC4 — bare heredoc (`-F - <<EOF … EOF`) body is NOT blocked …
 assert "AC4 bare-heredoc gh issue create allows (FP fixed)" "<none>" \
@@ -500,6 +516,15 @@ theirs
 $MK_GT other"
 assert_run "conflict: full marker triple denies" "deny" \
   "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
+
+# #10248 — the same deny under the rtk-prefixed commit spelling.
+cm_stage "$MK_LT HEAD
+ours
+$MK_EQ
+theirs
+$MK_GT other"
+assert_run "conflict: marker triple under 'rtk git commit' denies (#10248)" "deny" \
+  "$(mk_payload 'rtk git commit -m x')" "$CM/repo" "$CM/repo"
 
 # Partial resolution — `=======` deleted, two types left → still deny.
 cm_stage "$MK_LT HEAD

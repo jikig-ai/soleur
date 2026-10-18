@@ -78,7 +78,7 @@ WORK_DIR="$HOOK_CWD"
 # stays on $CMD so a REAL create's quoted body is still read (its flags live
 # outside the stripped span).
 SCAN=$(strip_command_bodies "$CMD")
-if ! grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create(\s|$)' <<<"$SCAN"; then
+if ! grep -qE '(^|&&|\|\||;)\s*('"${SOLEUR_BOUNDARY_PFX:-}"'[[:space:]]+)*gh\s+issue\s+create(\s|$)' <<<"$SCAN"; then
   exit 0
 fi
 

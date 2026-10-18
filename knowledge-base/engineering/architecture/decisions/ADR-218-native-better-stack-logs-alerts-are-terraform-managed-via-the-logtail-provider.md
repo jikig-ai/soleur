@@ -449,3 +449,56 @@ thirteenth.
   conjunct, the host-distinct scalar shape, the paging semantics, the emitter needles in
   `cron-egress-resolve.sh`, and the runbook anchor — and carries the mutation rows proving it can
   red.
+
+## Amendment 2026-10-15 — credential-shape signal class + the dormant-probe rule (#10321)
+
+- The managed-alert census gains `logtail_exploration_alert.registry_zot_log_credential_shape`
+  (`soleur-registry-zot-log-credential-shape-prd`), the 14th managed Logs alert on the merge-SHA
+  main (re-derive if #10320 lands first — 15th then). Signal class: **credential-shape content
+  match over producer-anchored envelope rows** — three disjuncts ported from
+  `scripts/followthroughs/zot-log-channel-7440.sh`'s exit-1 arm (unmasked `Authorization` value,
+  `dp.(pt|st|sa|ct).` prefix with a >=16 non-separator run, bcrypt `$2[aby]$`). `value = 0` +
+  `higher_than`: one row is an incident; unlike the delivery-grader probe there is no
+  newest-boot scoping.
+- **The rule this codifies:** a check meant to outlive its tracker is a standing alert, not a
+  follow-through probe. A probe's enrollment dies with its tracker's `CLOSED_LOOKBACK_DAYS=14`
+  lookback — #7455 closed 2026-08-13 and the probe's regression arm silently went dark
+  ~2026-08-27 while its header (and ADR-184's) still claimed enrollment. Convention clause in
+  `knowledge-base/engineering/operations/runbooks/followthrough-convention.md`.
+
+## Amendment — 2026-10-14 (#7530): the fifteenth Logs alert, a producer-anchored per-bucket count
+
+Appended, not edited. `registry_clientip_not_rfc1918` (`soleur-registry-clientip-not-rfc1918-prd`)
+brings the Terraform-managed Logs alert count from 14 to **15** (the 2026-10-15 #10321 amendment above
+counted 14, with this PR landing second). The 2026-09-18 amendment asks each new alert to name its signal class and show that no
+existing alert covers it.
+
+- **Signal class: a stateless per-bucket count over producer-anchored rows, graded on one field.**
+  It counts shipped `SOLEUR_ZOT_LOG` envelope rows (host-scoped) and `SOLEUR_ZOT_DISK` rows, each
+  anchored at offset 0 of the stored row, whose FIRST `clientIP` is address-shaped and outside
+  RFC1918. No sibling covers it: `registry_store_not_luks` grades two fields of one heartbeat head,
+  `monitor_send_failed` greps a marker class, and the absence alerts count silence. Here the
+  predicate is a value test on a producer-controlled field, and the producer's field order is part of
+  the contract.
+- **Why an alert and not a follow-through probe.** The CLO's condition (every observable `clientIP`
+  is RFC1918) must hold continuously. A probe's tracker closes on PASS and drops out of the sweeper's
+  14-day lookback (`CLOSED_LOOKBACK_DAYS`), so the dormant `zot-log-channel-7440.sh` regression arm
+  has not run since about 2026-08-27 (tracked as #10321). An alert has no tracker to close.
+- **Parameters.** `higher_than 0`, `check_period 300`, `query_period 900`, `confirmation_period 0`,
+  `recovery_period 1800`, `on_missing_data treat_as_zero` (silence is the heartbeats' job), declared
+  `paused = false` because the 7-day population is all-private. Detection, not prevention: up to about
+  20 minutes late, sampled over shipped rows only (the shipper rate-caps ordinary rows). The channel is
+  the sibling's: email on the free tier, no escalation policy. **Delivery state: the alert exists only
+  after the merge's push apply creates it, and it is not treated as an enforced invariant until the #7530
+  follow-through probe has graded the new boot's window.** **[Amendment 2026-10-16: In force, graded 2026-10-15 (#7530): PR #10320 merged 2026-10-15T17:57Z, its push apply created the alert (2 added, 0 changed, 0 destroyed), and the #7530 follow-through probe passed over the running registry boot (46f08985, which postdates the host template's last delivery, PR #10322): 1152 clientIP-bearing shipper rows over 660 minutes, 0 outside RFC1918, the private-flagged control 1152, 16 of 16 classification literals correct (counts only). The measured population is the `SOLEUR_ZOT_LOG` shipper arm only; the disk-heartbeat arm is not graded. Detection, not prevention: monitored and alerted by email. The Better Stack Vendor DPA remains PENDING (#7529).]**
+- **Consumed contract.** The grade depends on zot writing `clientIP` before `method`, `path` and
+  `headers` and on the field name; `treat_as_zero` reads a renamed field as healthy forever, so the
+  drift guard (`apps/web-platform/test/infra/registry-clientip-not-rfc1918-alert.test.sh`) pins the
+  zot image digest the order was verified against and reds on a `zot_image_amd64` bump until the live
+  population check is re-run (ADR-184 records the producer side of this contract).
+- **Vendor-tier reality.** The free-tier alert-count cap remains unmeasured; a refusal at this count
+  is the measurement and would land here.
+- **Enforcement and runbook.** Both `-target=` lines sit in `apply-web-platform-infra.yml`'s MAIN plan
+  set; the guard carries mutation and must-pass rows run on copies. Runbook:
+  `knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-7530.md` (the alert is the
+  observable signature of the public-ingress re-evaluation trigger; the legal steps live there).

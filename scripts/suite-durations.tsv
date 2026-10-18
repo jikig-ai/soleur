@@ -357,6 +357,7 @@ scripts/followthroughs/ci-draft-light-soak-9728	104456	measured
 scripts/followthroughs/ci-push-dedupe-soak-9512	87919	measured
 scripts/followthroughs/inngest-provision-rehearsal-capture	1223	measured
 scripts/followthroughs/pr-battery-gate-saving-9323	11826	measured
+scripts/followthroughs/registry-clientip-alert-7530	1180	floor
 scripts/followthroughs/t5-skip-persistence-bound-7510	9027	measured
 scripts/followthroughs/tty-ack-migration-9387	3438	measured
 scripts/generate-kb-index-live	2444	measured
@@ -454,7 +455,6 @@ scripts/lint-workflow-local-action-checkout-live	1453	measured
 scripts/lint-workflow-run-body-syntax	2746	measured
 scripts/lint-workflow-step-env-refs	2729	measured
 scripts/lint-workflow-step-env-refs-live	2301	measured
-scripts/luks-monitor-host-timer-8706	504	measured
 scripts/marketplace-drift-check	1808	measured
 scripts/marketplace-manifest-validate	804	measured
 scripts/md-to-mrkdwn	218	measured

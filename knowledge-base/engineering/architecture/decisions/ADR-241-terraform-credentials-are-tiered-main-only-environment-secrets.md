@@ -1091,6 +1091,10 @@ Single-sourced rationale and the PR sequence: `knowledge-base/project/plans/2026
 - **Host coverage (verified 2026-10-15).** The webhook secret reaches web-1 through `terraform_data.deploy_pipeline_fix`, web-2 through `terraform_data.deploy_pipeline_fix_web2`, and fresh web hosts through `cloud-init.yml` (`WEBHOOK_DEPLOY_SECRET='...' sh soleur-host-bootstrap.sh`). `cloud-init-inngest.yml` and `cloud-init-registry.yml` carry no webhook secret and no `hooks.json` (0 matches each).
 - **Status.** D1 stays `adopting`. G1 closes with the final PR of the sequence, after the rotation; D2 and D10 do not flip here (G1b and #8609 remain open).
 
+### 2026-10-15 (#10138, #8609): the separated wipe inherits the runtime-App-key residual (R1)
+
+Appended; the 2026-10-14 entry above is not edited. No status change: D1 stays `adopting`, D2 stays `proposed`, D10 stays `adopting`. ADR-239 Amendment 2026-10-15 separates the `wipe` job from the flip chain (#8573 and #8609 no longer gate it as sequencing dependencies; the Tier-B loader seam that #8209 provided is still a runtime dependency of the `wipe` job's W8 step, and its environment secret was present on 2026-10-15). That removes a sequencing dependency, not the residual this entry records: while #8609 is open (R1 above), a holder of the soleur-ai runtime App key can rewrite deployment-branch policy (the App holds `administration:write` on `jikig-ai/soleur`, measured by #8609 on 2026-09-22 and inherited here, not re-measured), so the boundary that D2 relies on, "a Tier-B credential is delivered only to an environment whose deployment-branch policy admits `main`", is not a secret boundary against that holder for ANY Tier-B consumer, `git-data-cutover.yml::wipe` included. The `wipe` job's destructive step is additionally bounded by the owner naming the exact command and approving the environment (D2: approval independence is a rule, not a platform separation). The owner accepted the residual for the separated wipe on 2026-10-15 (recorded on #6897, comment 6188355137; the CLO attested the wording as final on 2026-10-15, A.11, comment 6196825174); that is an acceptance for one owner-named destructive dispatch, not a status change for R1. Ref #8609, #6897.
+
 ## References
 
 - Plan: `knowledge-base/project/plans/archive/20261013-051752-2026-09-22-feat-evict-privileged-terraform-credentials-plan.md`
@@ -1119,3 +1123,4 @@ Single-sourced rationale and the PR sequence: `knowledge-base/project/plans/2026
 - D4 `accepted`; D1/D2 measured state (2026-10-12): #8209, #9294, #9295
 - `git-data-cutover.yml::wipe` loader consumer (2026-10-14): #10138, #6897, #10300, #8044; ADR-239 (DL-2), ADR-280
 - G1 deploy-channel trio inventory, narrow carrier and census gap (2026-10-15): #9294, #8609, #10300, #9295; D11 (the narrow-project precedent)
+- Separated wipe inherits R1 (2026-10-15): #10138, #8609, #6897; ADR-239 Amendment 2026-10-15

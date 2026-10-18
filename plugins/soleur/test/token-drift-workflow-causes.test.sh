@@ -39,6 +39,9 @@
 #      reads a field parsed out of the YAML (comments cannot survive yaml.safe_load)
 #      or the step's published outputs.
 #
+# ALSO PINNED HERE (R1-R5, bottom of file): no step in the drift workflow prints or runs a Hetzner write
+# or a Doppler destroy (#9927 item 8c).
+#
 # Run: bash plugins/soleur/test/token-drift-workflow-causes.test.sh
 
 set -uo pipefail
@@ -1685,6 +1688,336 @@ else
   fail "the scratch-config probe must grade its listing against a DECLARED floor, not against 2. At a threshold of 2 a credential seeing 2 of 13 configs publishes 'performed', files nothing, and the sweep reports 'no orphaned scratch Doppler config' — an answer by construction, from a listing that never covered 11 of the places the config could be"
 fi
 
+# ---------------------------------------------------------------------------
+# R1-R5 — THE DRIFT WORKFLOW PRINTS NO RUNNABLE HETZNER WRITE OR DOPPLER DESTROY (#9927 item 8c).
+#
+# The two orphan filers ("File an issue for orphaned rehearsal hosts") used to print a pasteable
+# Hetzner delete call and a Doppler destroy one-liner into the auto-filed issue (ADR-282 residual).
+# Listing stranded objects is a GET and stays; reclaiming one is an owner-authorized, per-command
+# action (runbook inngest-provision-rehearsal.md), never text printed in an issue.
+#
+# SCOPE, stated exactly. Population: every string leaf of every step, of every job-level key and of
+# the workflow-level keys outside `jobs` (run, with.*, env.*, dispatch inputs), not the two filers by
+# name; both filers share one step name, so `step_get name:` reaches only the first. Text is matched
+# in two forms: with line continuations joined, and "flattened" (quotes, backticks and backslashes
+# removed, whitespace collapsed) so a command re-wrapped across echo lines is one string. Comments are
+# NOT stripped: a match in a comment can only false-RED, the safe direction, and a `#` line inside a
+# heredoc is printed content. Matchers: any non-GET method flag, key or word on a http client
+# (-X / --request / --method / `request =` / httpie, any case, a variable value included), curl/wget
+# body flags and hcloud write verbs (global flags tolerated), and a doppler subcommand followed by
+# delete/destroy/revoke. A filer must assemble its body inline (no cat/bash of a repo file, no `uses:`).
+# This is a tripwire against re-adding the recipes, not a proof: python/node clients, a Doppler CLI
+# reached through a shell variable, a URL built across steps and any file the workflow executes are
+# out of reach, and `terraform destroy` / `-replace` text (token re-mint) is a different class and is
+# not scanned. New prose must not SPELL a command it replaces, or the guard fires on its own text.
+# ---------------------------------------------------------------------------
+
+# One python source for the scan, the verdict rule and the mutation table, so the file scan and the
+# mutation rows run the SAME code. The mutation rows run in-process (one YAML load, no dump/reload).
+SCAN_PY=$(cat <<'PYD'
+ROWS_MIN = 95
+import copy, re, sys, yaml
+
+SKIP = {"name", "id", "if"}
+def leaves(x, top=False):
+    if isinstance(x, str):
+        yield x
+    elif isinstance(x, dict):
+        for k, v in x.items():
+            if top and k in SKIP:
+                continue
+            yield from leaves(v)
+    elif isinstance(x, list):
+        for v in x:
+            yield from leaves(v)
+
+METHOD = re.compile(r"(?:^|[\s=])(?:-[A-Za-z]*X|--request|--method)[ \t=]*([^\s]+)")
+KEYWORD = re.compile(r"\brequest[ \t]*=[ \t]*(?:DELETE|PUT|POST|PATCH)\b", re.I)
+HTTPIE = re.compile(r"\b(?:http|https|xh)[ \t]+(?:-\S+[ \t]+)*(?:DELETE|PUT|POST|PATCH)\b")
+BARE = re.compile(r"\b(?:DELETE|PUT|POST|PATCH)[ \t]+https?://")
+BODYF = re.compile(r"(?:^|\s)(?:-[A-Za-z]*d(?=[\"'@\s=]|$)|--data(?:-raw|-binary|-urlencode|-ascii)?|--post-data|--post-file|--json|-F|--form(?:-string)?|-T|--upload-file)(?=[\s=\"'@]|$)")
+BODYF_FLAT = re.compile(r"\b(?:curl|wget)\b.{0,300}?" + BODYF.pattern)
+CLI = re.compile(r"\bhcloud(?:[ \t]+-\S+(?:[ \t]+[^\s-]\S*)?)*[ \t]+(?:server|volume|firewall|ssh-key|network|floating-ip|primary-ip|image|load-balancer|certificate|placement-group|zone)[ \t]+(?:delete|rm|create|update|detach|attach|enable-protection|disable-protection|shutdown|poweroff|reset|reboot|rebuild|resize|change-[a-z-]+|add-[a-z-]+|remove-[a-z-]+|set-[a-z-]+|assign|unassign)\b")
+DOP = re.compile(r"\bdoppler\b(?:[ \t]+-\S+(?:[ \t]+[^\s-]\S*)?)*[ \t]+(?:configs|environments|projects|secrets|tokens|api|workplace|groups|integrations)\b.{0,80}?\b(?:delete|destroy|revoke)\b", re.I)
+REPOPATH = re.compile(r"(?:^|[\s<>=\"'(])(?:\.{1,2}/|\.github/|scripts/|docs/|knowledge-ba[s]e/|plugins/|apps/)\S*")
+BODYFILE = re.compile(r"(?:--body-file|-F[ \t]+body=@)[ \t=]*(\S+)")
+def filer_inline(joined):
+    # a filer builds its body inline: no repo-path token anywhere, and every --body-file operand is the scratch file
+    if REPOPATH.search(joined):
+        return False
+    return all(re.fullmatch(r"[\"']?/tmp/orphan-body(?:-inngest)?\.md[\"']?", m.group(1)) for m in BODYFILE.finditer(joined))
+SCOPE = ("api.hetzner.cloud", "HCLOUD_TOKEN", "api.doppler.com")
+
+def forms(unit):
+    joined = re.sub(r"\\\n[ \t]*", " ", "\n".join(leaves(unit, top=True)))
+    flat = re.sub(r"\s+", " ", re.sub(r"[`'\"\\]", " ", joined))
+    return joined, flat
+
+def write_hit(joined, flat):
+    for text in (joined, flat):
+        for m in METHOD.finditer(text):
+            if m.group(1).strip("\\\"'").upper() not in ("GET", "HEAD"):
+                return True
+        if KEYWORD.search(text) or HTTPIE.search(text) or BARE.search(text) or CLI.search(text):
+            return True
+    if any(s in joined for s in SCOPE):
+        for line in joined.split("\n"):
+            if re.search(r"\b(?:curl|wget)\b", line) and BODYF.search(line):
+                return True
+        if BODYF_FLAT.search(flat):
+            return True
+    return False
+
+def scan(wf):
+    recs, n = [], 0
+    units = [("(workflow-level)", {k: v for k, v in wf.items() if k != "jobs"}, False)]
+    for jname, job in wf["jobs"].items():
+        units.append(("%s/(job-level)" % jname, {k: v for k, v in job.items() if k != "steps"}, False))
+        for st in job.get("steps", []) or []:
+            n += 1
+            units.append(("%s/%s" % (jname, st.get("name", "<unnamed>")), st, True))
+    for who, unit, is_step in units:
+        joined, flat = forms(unit)
+        if write_hit(joined, flat):
+            recs.append(("write", who))
+        if DOP.search(flat):
+            recs.append(("destroy", who))
+        if is_step and str(unit.get("name", "")).startswith("File an issue for orphaned rehearsal hosts"):
+            label = ("rung2" if "app%3Dsoleur-rung2-rehearsal" in joined
+                     else "inngest" if "app%3Dsoleur-inngest-provision-rehearsal" in joined else "?")
+            ok = "label_selector=" in joined and "uses" not in unit and filer_inline(joined)
+            recs.append(("filer", "%s:%s" % ("ok" if ok else "bad", label)))
+    return recs, n
+
+def verdict(expect, hit, other):
+    # the rule every mutation row is judged by; the control below proves it can fail both ways
+    if expect == "none":
+        return (not hit) and other == 0
+    return expect in hit
+
+# (row, expect, field, payload); field: run | body | env | jobenv | wfenv | filer
+ROWS = [
+    ("control",   "none",    "run",  "echo ok"),
+    ("x-delete",  "write",   "run",  "curl -sS -X DELETE https://api.hetzner.cloud/v1/volumes/1"),
+    ("request",   "write",   "run",  "curl -sS --request DELETE https://api.hetzner.cloud/v1/volumes/1"),
+    ("x-put",     "write",   "run",  "curl -sS -X PUT https://api.hetzner.cloud/v1/volumes/1"),
+    ("x-post",    "write",   "run",  "curl -sS -X POST https://api.hetzner.cloud/v1/volumes/1/actions/detach"),
+    ("x-patch",   "write",   "run",  "curl -sS -X PATCH https://api.hetzner.cloud/v1/volumes/1"),
+    ("lowercase", "write",   "run",  'curl -sS -X delete "$HZ_API/volumes/1"'),
+    ("combined",  "write",   "run",  'curl -sSX DELETE "$U"'),
+    ("varmethod", "write",   "run",  'curl -sS -X "$M" "$U"'),
+    ("method",    "write",   "run",  "wget --method=DELETE https://api.hetzner.cloud/v1/volumes/1"),
+    ("continued", "write",   "run",  'curl -sS -X \\\n  DELETE "$U"'),
+    ("rewrapped", "write",   "run",  "echo 'curl -sS -X'\necho 'DELETE \"https://api.hetzner.cloud/v1/volumes/1\"'"),
+    ("rewrap-bs", "write",   "run",  "echo 'curl -sS -X \\'\necho '  DELETE https://api.hetzner.cloud/v1/volumes/1'"),
+    ("configfile","write",   "run",  "curl -K - https://api.hetzner.cloud/v1/volumes/1 <<< 'request = \"DELETE\"'"),
+    ("httpie",    "write",   "run",  "http DELETE https://api.hetzner.cloud/v1/volumes/1"),
+    ("bare-verb", "write",   "run",  "echo DELETE https://api.hetzner.cloud/v1/volumes/1"),
+    ("data",      "write",   "run",  'curl -sS -d "{}" -H "Authorization: Bearer $HCLOUD_TOKEN" https://api.hetzner.cloud/v1/volumes/1/actions/detach'),
+    ("data-glued","write",   "run",  "curl -sS -d'{}' https://api.hetzner.cloud/v1/volumes/1/actions/detach"),
+    ("data-sSd",  "write",   "run",  "curl -sSd '{}' https://api.hetzner.cloud/v1/volumes/1/actions/detach"),
+    ("data-raw",  "write",   "run",  "curl -sS --data-raw '{}' https://api.hetzner.cloud/v1/volumes/1/actions/detach"),
+    ("data-bin",  "write",   "run",  "curl -sS --data-binary @b https://api.hetzner.cloud/v1/volumes/1/actions/detach"),
+    ("json",      "write",   "run",  'curl -sS --json "{}" https://api.hetzner.cloud/v1/volumes/1/actions/detach'),
+    ("form",      "write",   "run",  "curl -sS -F a=b https://api.hetzner.cloud/v1/volumes/1"),
+    ("upload",    "write",   "run",  "curl -sS --upload-file f https://api.hetzner.cloud/v1/volumes/1"),
+    ("post-data", "write",   "run",  "wget --post-data=x https://api.hetzner.cloud/v1/volumes/1"),
+    ("hc-detach", "write",   "run",  "hcloud volume detach 1"),
+    ("hc-delete", "write",   "run",  "hcloud volume delete 1"),
+    ("hc-server", "write",   "run",  "hcloud server delete 1"),
+    ("hc-flag",   "write",   "run",  "hcloud --quiet volume delete 1"),
+    ("hc-flagval","write",   "run",  'hcloud --token "$T" server poweroff 1'),
+    ("doppler-api","write",  "run",  "curl -sS -X DELETE https://api.doppler.com/v3/configs/config"),
+    ("email",     "write",   "body", "curl -sS -X DELETE https://api.hetzner.cloud/v1/volumes/1"),
+    ("envtext",   "write",   "env",  "curl -sS -X DELETE https://api.hetzner.cloud/v1/volumes/1"),
+    ("jobenv",    "write",   "jobenv", "curl -sS -X DELETE https://api.hetzner.cloud/v1/volumes/1"),
+    ("wfenv",     "write",   "wfenv", "curl -sS -X DELETE https://api.hetzner.cloud/v1/volumes/1"),
+    ("d-config",  "destroy", "run",  "doppler configs delete scratch -p soleur"),
+    ("d-env",     "destroy", "run",  "doppler environments delete scratch -p soleur"),
+    ("d-project", "destroy", "run",  "doppler projects delete scratch"),
+    ("d-flag",    "destroy", "run",  "doppler -p soleur configs delete scratch"),
+    ("d-flag2",   "destroy", "run",  "doppler configs -p soleur delete scratch"),
+    ("d-secret",  "destroy", "run",  "doppler secrets delete GIT_DATA_LUKS_KEY -p soleur -c prd"),
+    ("d-revoke",  "destroy", "run",  "doppler configs tokens revoke tok -p soleur"),
+    ("d-destroy", "destroy", "run",  "doppler configs destroy scratch"),
+    ("d-upper",   "destroy", "run",  "doppler api DELETE /v3/configs/config"),
+    ("d-rewrap",  "destroy", "run",  "echo \"run `doppler configs\"\necho \"delete scratch -p soleur`\""),
+    ("filer-cat", "filer-bad", "filer", "cat docs/orphan-remedy.md >> /tmp/orphan-body.md"),
+    ("filer-envsubst", "filer-bad", "filer", "envsubst < .github/templates/orphan.md.tmpl >> /tmp/orphan-body.md"),
+    ("filer-cp", "filer-bad", "filer", "cp docs/orphan-remedy.md /tmp/orphan-body.md"),
+    ("filer-bodyfile", "filer-bad", "filer", "gh issue comment 1 --body-file docs/x/remedy.md"),
+    ("filer-uppercase", "filer-bad", "filer", "cat docs/Orphan.MD >> /tmp/orphan-body.md"),
+    ("filer-bodyfile-other", "filer-bad", "filer", "gh issue comment 1 --body-file \"$RUNNER_TEMP/remedy.md\""),
+    ("filer-ok", "filer-ok", "filer", "gh issue comment 1 --body-file /tmp/orphan-body.md"),
+    ("data-wrapped", "write", "run", "echo 'curl -sS -H \"Authorization: Bearer $HCLOUD_TOKEN\" \\'\necho '  -d \"{}\" https://api.hetzner.cloud/v1/volumes/1/actions/change_protection'"),
+    ("json-wrapped", "write", "run", "echo 'curl -sS -H \"Authorization: Bearer $HCLOUD_TOKEN\" \\'\necho '  --json {} https://api.hetzner.cloud/v1/volumes/1/actions/change_protection'"),
+    ("form-long", "write", "run", "curl -sS --form a=b https://api.hetzner.cloud/v1/volumes/1"),
+    ("form-string", "write", "run", "curl -sS --form-string a=b https://api.hetzner.cloud/v1/volumes/1"),
+    ("post-file", "write", "run", "wget --post-file=f https://api.hetzner.cloud/v1/volumes/1"),
+    ("g-list",    "none",    "run",  'curl -sS -H "Authorization: Bearer $HCLOUD_TOKEN" "https://api.hetzner.cloud/v1/servers?label_selector=a"'),
+    ("g-get",     "none",    "run",  "curl -sS -X GET https://api.hetzner.cloud/v1/servers"),
+    ("g-head",    "none",    "run",  "curl -sS -X HEAD https://api.hetzner.cloud/v1/servers"),
+    ("g-lower",   "none",    "run",  "curl -sS -X get https://api.hetzner.cloud/v1/servers"),
+    ("g-hcloud",  "none",    "run",  "hcloud server list"),
+    ("g-doppler", "none",    "run",  "doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain"),
+    ("g-gh",      "none",    "run",  "gh issue create --title t --body-file b"),
+]
+
+# one row per alternative of each matcher family, so a tidy-up that drops one token goes red
+for _res in ("firewall", "ssh-key", "network", "floating-ip", "primary-ip", "image", "load-balancer", "certificate", "placement-group", "zone"):
+    ROWS.append(("hc-res-" + _res, "write", "run", "hcloud %s delete 1" % _res))
+for _verb in ("rm", "create", "update", "attach", "enable-protection", "disable-protection", "shutdown", "reset", "reboot", "rebuild", "resize", "change-type", "add-label", "remove-label", "set-rdns", "assign", "unassign"):
+    ROWS.append(("hc-verb-" + _verb, "write", "run", "hcloud server %s 1" % _verb))
+for _res in ("tokens", "workplace", "groups", "integrations"):
+    ROWS.append(("d-res-" + _res, "destroy", "run", "doppler %s delete x" % _res))
+
+def build(wf, row, field, payload):
+    m = copy.deepcopy(wf)
+    jobs = list(m["jobs"].values())
+    step = {"name": "ZZ injected " + row}
+    if field == "run":
+        step["run"] = payload
+    elif field == "body":
+        step["uses"] = "./.github/actions/notify-ops-email"
+        step["with"] = {"body": payload}
+    elif field == "env":
+        step["run"] = "echo ok"
+        step["env"] = {"REMEDY": payload}
+    elif field == "jobenv":
+        step["run"] = "echo ok"
+        jobs[0].setdefault("env", {})["REMEDY"] = payload
+    elif field == "wfenv":
+        step["run"] = "echo ok"
+        m.setdefault("env", {})["REMEDY"] = payload
+    elif field == "filer":
+        base = next(s for j in jobs for s in j["steps"] if str(s.get("name", "")).startswith("File an issue for orphaned rehearsal hosts"))
+        step = copy.deepcopy(base)
+        step["name"] = "File an issue for orphaned rehearsal hosts ZZ injected " + row
+        step["run"] = step["run"] + "\n" + payload
+        jobs[0]["steps"].append(step)
+        return m
+    else:
+        raise SystemExit("unknown field " + field)
+    jobs[0]["steps"].append(step)
+    return m
+
+if __name__ == "__main__":
+    mode, path = sys.argv[1], sys.argv[2]
+    wf = yaml.safe_load(open(path))
+    if mode == "scan":
+        recs, n = scan(wf)
+        for k, who in recs:
+            print("%s\t%s" % (k, who))
+        print("steps=%d" % n)
+    else:  # mutate
+        base, _ = scan(wf)
+        base_bad = [r for r in base if r[0] in ("write", "destroy")]
+        base_filer_bad = [r for r in base if r[0] == "filer" and r[1].startswith("bad")]
+        # instrument control: the verdict rule must be able to fail in BOTH directions
+        ctl = (verdict("write", [], 0) is False and verdict("none", ["write"], 1) is False
+               and verdict("write", ["write"], 1) is True and verdict("none", [], 0) is True)
+        print("%s\tcontrol\tverdict rule rejects a missed red and a flagged green, accepts the right ones" % ("PASS" if ctl else "FAIL"))
+        print("%s\trows\t%d mutation rows (table intact)" % ("PASS" if len(ROWS) >= ROWS_MIN else "FAIL", len(ROWS)))
+        results = []
+        for row, expect, field, payload in ROWS:
+            recs, n = scan(build(wf, row, field, payload))
+            if expect in ("filer-bad", "filer-ok"):
+                nbad = len([r for r in recs if r[0] == "filer" and r[1].startswith("bad")])
+                ok = nbad == len(base_filer_bad) + (1 if expect == "filer-bad" else 0)
+                print("%s\t%s\t%s" % ("PASS" if ok else "FAIL", row, ("filer indirection is flagged" if expect == "filer-bad" else "an inline filer is not flagged") if ok else "filer verdict wrong (%s): bad filers %d" % (expect, nbad)))
+                results.append(ok)
+                continue
+            marker = {"jobenv": "(job-level)", "wfenv": "(workflow-level)"}.get(field, "ZZ injected " + row)
+            mine = [r for r in recs if r[0] in ("write", "destroy") and marker in r[1]]
+            hit = [r[0] for r in mine]
+            other = len([r for r in recs if r[0] in ("write", "destroy") and marker not in r[1]]) - len(base_bad)
+            ok = verdict(expect, hit, other)
+            what = "legitimate input is not flagged" if expect == "none" else "injected %s is flagged under its own unit" % expect
+            print("%s\t%s\t%s" % ("PASS" if ok else "FAIL", row, what if ok else "wrong verdict (expect %s, got %s, collateral %d)" % (expect, hit or "nothing", other)))
+            results.append(ok)
+        print("RESULT\t%d\t%d" % (len(results), len([r for r in results if not r])))
+PYD
+)
+
+scan_wf() { python3 -c "$SCAN_PY" scan "$1"; }
+
+# scan_or_die <workflow-path>: the scan's output, or a non-zero status when the scan crashed or
+# examined no steps — so a "must find nothing" check can never pass over a broken scan.
+scan_or_die() {
+  local out
+  out=$(scan_wf "$1") || return 99
+  grep -qE '^steps=[1-9][0-9]*$' <<<"$out" || return 99
+  printf '%s\n' "$out"
+}
+
+R_REAL=$(scan_or_die "$WF") || { echo "FATAL: scan_wf failed on the real workflow" >&2; exit 2; }
+
+echo "R1: no unit holds a Hetzner/Doppler write verb (non-GET method, curl body flag, hcloud write verb)"
+_r1=$(grep -c '^write' <<<"$R_REAL") || _r1=0
+if [[ "$_r1" == "0" ]]; then
+  pass "no step, job or workflow-level key prints or runs a write verb"
+else
+  fail "a unit holds a write verb (${_r1}: $(grep '^write' <<<"$R_REAL" | cut -f2 | tr '\n' ';')) — an auto-filed issue body must list stranded objects with GET calls only; reclaiming one is an owner-authorized, per-command action, never a printed command (ADR-282 residual, #9927 item 8c)"
+fi
+
+echo "R2: no unit holds a Doppler delete/destroy/revoke"
+_r2=$(grep -c '^destroy' <<<"$R_REAL") || _r2=0
+if [[ "$_r2" == "0" ]]; then
+  pass "no unit prints or runs a Doppler destroy"
+else
+  fail "a unit holds a Doppler destroy (${_r2}: $(grep '^destroy' <<<"$R_REAL" | cut -f2 | tr '\n' ';')) — the rung-2 scratch config holds a live GIT_DATA_LUKS_KEY, so a printed destroy is the same one-paste vector"
+fi
+
+echo "R3: the scan examined the right population (both orphan filers, inline, each keeping a label_selector listing)"
+_r3=1
+_nf=$(grep -c '^filer' <<<"$R_REAL") || _nf=0
+(( _nf >= 2 )) || { _r3=0; echo "    ${_nf} step(s) named 'File an issue for orphaned rehearsal hosts', expected at least 2"; }
+for _lbl in rung2 inngest; do
+  grep -qxF "$(printf 'filer\tok:%s' "$_lbl")" <<<"$R_REAL" \
+    || { _r3=0; echo "    the ${_lbl} filer is missing, lost its label_selector listing, or assembles its body from a repo file"; }
+done
+grep -qE '^filer.bad' <<<"$R_REAL" && { _r3=0; echo "    a filer lost its label_selector listing or assembles its body from a repo file"; }
+if [[ "$_r3" == "1" ]]; then
+  pass "${_nf} orphan filers examined, each inline and keeping its label_selector listing"
+else
+  fail "the R1/R2 scan could pass over nothing, or a filer's text lives outside the scanned YAML (${_nf} filer(s))"
+fi
+
+runbook_heading_ok() { grep -qE '^### Reclaiming survivors that state forgot( |$)' "$1"; }
+echo "R4: the filers' pointer to the reclaim procedure resolves (the heading exists in the runbook)"
+_rb="$REPO_ROOT/knowledge-base/engineering/operations/runbooks/inngest-provision-rehearsal.md"
+_head="Reclaiming survivors that state forgot"
+printf '#### Reclaiming survivors that state forgot\nsee "### Reclaiming survivors that state forgot" in prose\n' > "$TMP/rb-neg.md"
+printf '### Reclaiming survivors that state forgot (x)\n' > "$TMP/rb-pos.md"
+if runbook_heading_ok "$_rb" && runbook_heading_ok "$TMP/rb-pos.md" && ! runbook_heading_ok "$TMP/rb-neg.md" \
+   && python3 -c 'import re,sys,yaml; w=yaml.safe_load(open(sys.argv[1])); c=[re.sub(r"[\"\\\\]\s*\n\s*echo [\"]"," ",str(s.get("run",""))).count(sys.argv[2]) for j in w["jobs"].values() for s in j.get("steps",[]) or [] if str(s.get("name","")).startswith("File an issue for orphaned rehearsal hosts")]; sys.exit(0 if len(c)>=2 and min(c)>=1 else 1)' "$WF" "$_head"; then
+  pass "each filer body names the runbook section, the section exists as a real heading, and a demoted or prose-only mention does not satisfy the check"
+else
+  fail "a filer body no longer names '${_head}', the runbook heading was renamed or demoted, or the heading check cannot reject a prose-only mention — the issue would point at nothing"
+fi
+
+# R5 — the mutation table runs in-process (python, one YAML load); each row injects one spelling into a
+# copy of the workflow. A red row must be flagged under its OWN unit; a green row must produce no
+# finding. The control rows prove the verdict rule can fail in both directions and the table is intact.
+R5_MIN=97
+echo "R5: mutation rows — every spelling of an injected write/destroy is RED, legitimate steps are GREEN"
+R5_OUT=$(python3 -c "$SCAN_PY" mutate "$WF") || { echo "FATAL: the mutation runner crashed" >&2; exit 2; }
+r5_line() { if [[ "$1" == "PASS" ]]; then pass "R5/$2: $3"; else fail "R5/$2: $3"; fi; }
+# the consumer is a verdict-owning helper: drive it once each way with stubbed counters, so a mapping
+# that always passes (or always fails) is caught here and not only through the python rows
+_c_fail=$( ( pass() { echo P; }; fail() { echo F; }; r5_line FAIL probe x ) )
+_c_pass=$( ( pass() { echo P; }; fail() { echo F; }; r5_line PASS probe x ) )
+if [[ "$_c_fail" == "F" && "$_c_pass" == "P" ]]; then pass "R5/consumer: the verdict mapping fails a FAIL line and passes a PASS line"
+else fail "R5/consumer: the verdict mapping does not discriminate (FAIL->'${_c_fail}', PASS->'${_c_pass}')"; fi
+_r5n=0; _r5res=""
+while IFS=$'\t' read -r _verdict _row _msg; do
+  if [[ "$_verdict" == "RESULT" ]]; then _r5res="$_row/$_msg"; continue; fi
+  _r5n=$((_r5n + 1))
+  r5_line "$_verdict" "$_row" "$_msg"
+done <<<"$R5_OUT"
+[[ -n "$_r5res" ]] || { echo "FATAL: the mutation runner printed no RESULT line" >&2; exit 2; }
+(( _r5n >= R5_MIN )) || { echo "FATAL: the mutation runner produced only ${_r5n} verdict lines" >&2; exit 2; }
+
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # ANTI-VACUITY FLOOR. Deleting every assertion call yields "0/0 passed" and exit 0,
@@ -1699,12 +2032,13 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 #
 # Raised 57 -> 60 with #7234's F5 (the for_each list IS the inventory) and C-a
 # (`config = each.key`, never a literal), then 60 -> 61 with F4b (the inventory's name set
-# never shrinks). 61 is the REALIZED `PASS + FAIL`, and the number
+# never shrinks), then 61 -> 163 with R1-R5 (no step prints or runs a Hetzner write or Doppler
+# destroy, #9927 item 8c: 5 assertions + 97 mutation-runner verdicts). 163 is the REALIZED `PASS + FAIL`, and the number
 # in this comment and the number in the guard below MUST be the same number. They disagreed once
 # (comment 46, guard 48, run 48/48), which is a ratchet whose own prose says the notch is
 # lower than it is — a reader trusting the comment would have "raised" it downward.
-if [[ "$((PASS + FAIL))" -lt 61 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 61." >&2
+if [[ "$((PASS + FAIL))" -lt 163 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 163." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

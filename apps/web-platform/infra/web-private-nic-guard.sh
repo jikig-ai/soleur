@@ -143,12 +143,59 @@ fi
 # emitter is observable-when-healthy (a SOLEUR_PRIVATE_NIC emit that never fires is indistinguishable
 # from "guard dead"). Ping ONLY when nic_ok AND the guard could report (not SHIP_REFUSED) — a NIC-broken
 # host, or a guard that cannot ship, must let the beat lapse so absence alarms. Decode a missing beat by
-# reading the guard's stderr in Better Stack (`bad_token` / `unpinned_url` / `WARN` vs `nic_ok=false`). Independent unit/failure-domain from the zot beat (folding would re-introduce OR-masking).
+# reading the guard's stderr in Better Stack (`bad_token` / `unpinned_url` / `WARN` / `SOLEUR_CREDENTIAL_REFUSED` vs `nic_ok=false`). Independent unit/failure-domain from the zot beat (folding would re-introduce OR-masking).
 URL="${WEB_NIC_GUARD_URL:-}"
-# The ping URL is itself the secret and still rides curl's argv (tracked as #9639); the flags confine it.
-beat() { curl --disable --noproxy '*' -fsS -m 10 -o /dev/null "$URL" 2>/dev/null; }
-if [ "$NIC_OK" = true ] && [ "$SHIP_REFUSED" = false ] && [ -n "$URL" ]; then
-  beat || beat || echo "[nic] WARN: web_nic_guard heartbeat ping FAILED (nic_ok=true, url_present=yes)" >&2
+# The beat URL is itself the credential (its path is the secret), so it must not ride curl's argument list
+# (readable by every local user in /proc/<pid>/cmdline; ADR-280, #9757): it reaches curl on the stdin config
+# (`--config -`). `--disable` (first, so no ~/.curlrc is read as root) and `--noproxy '*'` confine the
+# transport; `-g` is new here (a URL with [ ] or { } would otherwise print itself in curl's glob-parse error).
+# #9639 still tracks only the unit's pre-refusal expansion of the secret in its ExecStart wrapper. The value is
+# judged BEFORE any request, with no trimming: a scheme other than https://, an empty rest, or any byte
+# outside [A-Za-z0-9._~:/?&=%+-] (a quote, backslash or newline would add directives to the config grammar)
+# is refused: zero requests, one value-free marker on stderr (the unit's SyslogIdentifier ships it), and the
+# beat lapses so the absence alarm names the guard. A URL refusal does NOT set SHIP_REFUSED: the Better Stack
+# POST was attempted, so the telemetry channel is healthy.
+_hb_url_ok() {
+  local LC_ALL=C
+  case "$1" in https://*) ;; *) return 1 ;; esac
+  case "${1#https://}" in ''|*[!A-Za-z0-9._~:/?\&=%+-]*) return 1 ;; esac
+}
+# One call = one attempt = one fresh process substitution (a substitution is consumed once, so a second
+# attempt sharing the first one's would read EOF and send no URL).
+_hb_curl() { curl --disable --noproxy '*' -gfsS -m 10 -o /dev/null --config - 2>/dev/null < <(printf 'url = "%s"\n' "$URL"); }
+_refusal_reason() { local LC_ALL=C; case "$1" in *[[:cntrl:]]*) echo control_char ;; *) echo token_shape ;; esac; }
+# Refusal limiter: at most one marker per hour, on this script's OWN stamp (never shared with another script's
+# or limiter's). The path derives from the one existing test-root seam, so no new environment-overridable write
+# path exists in this root-run script. A future-dated, garbage or over-long stamp reads as "emit" and is
+# rewritten; an unwritable stamp fails OPEN (a marker every tick: loud, never silent).
+_refusal_due() {
+  local m="$R/run/web-private-nic-guard.refusal" now last=0
+  now=$(date +%s 2>/dev/null || echo 0)
+  [ "$now" -gt 0 ] 2>/dev/null || return 0
+  [ -f "$m" ] && last=$(cat "$m" 2>/dev/null || echo 0)
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  [ "${#last}" -le 10 ] || last=0
+  last=$((10#$last))
+  if [ "$last" -le "$now" ] && [ $((now - last)) -lt 3600 ]; then return 1; fi
+  # tee, not a redirect: an unwritable stamp fails open exactly as a redirect would, and the write site stays out of the
+  # fixture-relative-assert ratchet, which counts quoted-variable redirect targets (the path derives from the test root).
+  printf '%s\n' "$now" | tee "$m" >/dev/null 2>&1 || true
+  return 0
+}
+if [ "$NIC_OK" = true ] && [ "$SHIP_REFUSED" = false ]; then
+  if [ -z "$URL" ]; then
+    # An unset beat URL (a wrong key name, or a secret missing on a freshly replaced host) pages "host down" with
+    # nothing off-box saying why: same hourly limiter, reason=empty (the inngest heartbeat body uses the same token).
+    if _refusal_due; then
+      echo "SOLEUR_CREDENTIAL_REFUSED script=web-private-nic-guard reason=empty var=WEB_NIC_GUARD_URL" >&2
+      echo "[nic] WARN: web_nic_guard heartbeat URL unset (nic_ok=true, no ping sent) — the monitor will alarm on a healthy host." >&2
+    fi
+  elif _hb_url_ok "$URL"; then
+    _hb_curl || _hb_curl || echo "[nic] WARN: web_nic_guard heartbeat ping FAILED (nic_ok=true, url_present=yes)" >&2
+  elif _refusal_due; then
+    echo "SOLEUR_CREDENTIAL_REFUSED script=web-private-nic-guard reason=$(_refusal_reason "$URL") var=WEB_NIC_GUARD_URL" >&2
+    echo "[nic] WARN: web_nic_guard heartbeat URL refused (nic_ok=true, no ping sent)" >&2
+  fi
 fi
 # NO reboot. The web-host variant terminates here by design.
 exit 0

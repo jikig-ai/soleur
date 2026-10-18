@@ -269,6 +269,12 @@ and logged like any other, and the sequencing is a property of the gates rather 
                                            replaced and born raw
     4. apply_target=inngest-host-replace   a fresh FIRST boot; ARM 3 luksFormats the raw device
 
+> **Superseded in part, 2026-10-12 (#9786, adopting at the next host replace):** ARM 1 (the ext4 mount),
+> `reopen_skip_plaintext` and the `expect_luks` branches described above are removed from the template. With no
+> pointer, a non-LUKS volume now fails the reopen unit with `reopen_not_luks` and takes the first-boot stage's
+> unhandled-signature refusal; a blank volume is formatted only when the rendered config starts `rehearsal_`
+> (every other config refuses as `unpointed_raw_refused`). See ADR-142, addendum 2026-10-12.
+
 > **Amended 2026-09-07 (#7695) — step 2 carried a false premise, and it closed this interlock's own
 > escape hatch.** Step 2 says the replace makes the boot emit the current `probe_schema`. That does not follow
 > from a replace: the emitter lives in `inngest-bootstrap.sh`, which is **baked into the OCI image**
