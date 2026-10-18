@@ -5895,6 +5895,10 @@ if want_scripts; then
   # exists to report. Static gate over both alarm workflows — the condition is evaluated by
   # GitHub, so the YAML is the only artifact there is to test.
   run_suite "scripts/alarm-issue-filing-guard" bash scripts/alarm-issue-filing-guard.test.sh
+  # #7521: the standing registry fill-rate leg lives in YAML (four steps after the Sentry check-in of
+  # scheduled-zot-restart-loop.yml); this suite parses it and EXECUTES the probe and filing bodies, so
+  # its Sentry isolation, ordering, classification, filing and close rules are pinned by a test.
+  run_suite "scripts/zot-fill-rate-standing-wiring" bash scripts/zot-fill-rate-standing-wiring.test.sh
   # A workflow that writes to the issue tracker must hold `issues: write`. Registered beside the
   # alarm guard because they are the same class one layer apart: that one checks an alarm step CAN
   # RUN, this one checks it CAN WRITE. The dispatcher's refusal artifact satisfied the first and
