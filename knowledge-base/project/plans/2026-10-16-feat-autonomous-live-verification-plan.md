@@ -218,7 +218,6 @@ logs:
 discoverability_test:
   command: python3 scripts/lint-guard-contract.py
   expected_output: lint-guard-contract
-  credentials_required: Sentry read token for gate=live-verify events — the runtime property (a recorded gate event) has no unauthenticated substitute, so the command above checks only this plan's contract
 ```
 
 ## Architecture Decision (ADR/C4)
