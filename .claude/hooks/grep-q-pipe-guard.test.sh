@@ -2044,7 +2044,7 @@ eqv_sh="$(_eqv "$EQV_SH")"
 # the port drifting, and only a person who runs it will see one.
 PJ_DRAIN_WINDOW=4
 PJ_ALL="$(git ls-files)"
-PJ_TRIPLES=269   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples
+PJ_TRIPLES=271   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples
 PJ_VOCAB=' not-a-command text-only unverified helper-built-stub variable-named-verb pass-through deliberate-fault arm-drain fenced '
 PJ_FENCED_RE='^fenced[[:space:]]+#[0-9]+[[:space:]]+[^[:space:]]'   # the one word that carries a tracker link (pj_judge)
 PRODUCER_JOIN=(
@@ -2141,6 +2141,7 @@ PRODUCER_JOIN=(
   'plugins/soleur/skills/community/test/community-argv.test.sh | od | exempt | pass-through delegates: recorder shim (1178 loop) logs argv then `exec`s the real od, which reads stdin (reach T1; t1:rc0/52s; hits 36)'
   'plugins/soleur/skills/community/test/community-argv.test.sh | openssl | exempt | pass-through delegates: recorder shim execs the real openssl (reach T1; t1:rc0/52s; hits 56)'
   'plugins/soleur/skills/community/test/community-argv.test.sh | tr | exempt | pass-through delegates: recorder shim execs the real tr (reach T1; t1:rc0/52s; hits 36)'
+  'plugins/soleur/test/ci-pr-affected-preactivation.test.sh | sed | exempt | deliberate-fault some-arms: the shim exits 1 only for a sed program naming the lock variable (the lock-transform-failed arm), else execs the real sed; the driver text is piped to it by the gate and the arm asserts the unknown(transform-failed) verdict'
   'plugins/soleur/test/destructive-command-guard-hook.test.sh | jq | exempt | pass-through delegates: shims `-nc) exit 3` fault arm else `exec` real jq (reads stdin); the producer shape `-j .tool_input.command` reaches the exec arm (reach T1; t1:rc124/300s; hits 12)'
   'plugins/soleur/test/destructive-command-guard-hook.test.sh | lexer | exempt | not-a-command a word in a quoted case-pattern alternation (destructive-command-guard:382), prose (reach T1; t1:rc124/300s; hits 0)'
   'plugins/soleur/test/destructive-command-guard-hook.test.sh | perl | exempt | deliberate-fault never: def 292 `exit 255` first statement (bad perl farm) (reach T1; t1:rc124/300s; hits 2)'
