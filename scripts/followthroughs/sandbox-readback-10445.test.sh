@@ -17,10 +17,12 @@ PASSES=0
 FAIL_N=0
 SHA=0123456789abcdef0123456789abcdef01234567
 
-# curl stub: prints $STUB_BODY then the HTTP_STATUS trailer the SUT parses.
+# curl stub: records the config the SUT feeds on stdin (CURL_STDIN_LOG) and the call count (CURL_CALLS_LOG), then prints
+# $STUB_BODY and the HTTP_STATUS trailer the SUT parses.
 cat > "$STUBS/curl" <<'STUB'
 #!/usr/bin/env bash
-cat >/dev/null 2>&1 || true
+cat >"${CURL_STDIN_LOG:-/dev/null}" 2>/dev/null || true
+[[ -z "${CURL_CALLS_LOG:-}" ]] || echo call >>"$CURL_CALLS_LOG"
 printf '%s\nHTTP_STATUS:%s' "${STUB_BODY:-}" "${STUB_HTTP:-200}"
 STUB
 # gh stub: answers only the exact argv the SUT must send; anything else prints nothing (the SUT then reads "unavailable").
@@ -88,12 +90,31 @@ xt_out="$(PATH="$STUBS:$PATH" WEBHOOK_DEPLOY_SECRET=s CF_ACCESS_CLIENT_ID=id CF_
 xt_rc=$(PATH="$STUBS:$PATH" WEBHOOK_DEPLOY_SECRET=s CF_ACCESS_CLIENT_ID=id CF_ACCESS_CLIENT_SECRET=sec GH_TOKEN=t bash -x "$SUT" >/dev/null 2>&1; echo $?)
 if [[ "$xt_rc" == "78" && "$xt_out" -ge 1 ]]; then PASSES=$((PASSES + 1)); echo "  ok: xtrace with a live credential is refused (rc=78)"; else FAIL_N=$((FAIL_N + 1)); FAILURES+=("xtrace refusal: rc=$xt_rc refusals=$xt_out"); fi
 
+# The credentials ride curl's stdin as three exact config lines, the signature is 64 lowercase hex, and a hostile Cloudflare Access
+# value is refused before any request is made (one value-free marker, rc 3, zero curl calls).
+curl_stdin_log="$ROOT_TMP/curl-stdin.log"
+env PATH="$STUBS:$PATH" WEBHOOK_DEPLOY_SECRET=s CF_ACCESS_CLIENT_ID=id CF_ACCESS_CLIENT_SECRET=sec GH_TOKEN=t \
+  STUB_BODY="$GREEN" STUB_MERGE_SHA="$SHA" STUB_COMPARE=behind CURL_STDIN_LOG="$curl_stdin_log" bash "$SUT" >/dev/null 2>&1
+if grep -qE '^header = "X-Signature-256: sha256=[0-9a-f]{64}"$' "$curl_stdin_log" && grep -qxF 'header = "CF-Access-Client-Id: id"' "$curl_stdin_log" \
+   && grep -qxF 'header = "CF-Access-Client-Secret: sec"' "$curl_stdin_log" && [[ "$(wc -l <"$curl_stdin_log")" -eq 3 ]]; then
+  PASSES=$((PASSES + 1)); echo "  ok: curl stdin carries exactly the three header lines (a 64-hex signature, the id, the secret)"
+else FAIL_N=$((FAIL_N + 1)); FAILURES+=("curl stdin does not carry exactly the three header lines"); echo "  FAIL: curl stdin header lines"; fi
+curl_calls_log="$ROOT_TMP/curl-calls.log"
+: >"$curl_calls_log"
+hostile_out="$(env PATH="$STUBS:$PATH" WEBHOOK_DEPLOY_SECRET=s CF_ACCESS_CLIENT_ID=id CF_ACCESS_CLIENT_SECRET=$'se"c\nheader = "x' GH_TOKEN=t \
+  STUB_BODY="$GREEN" STUB_MERGE_SHA="$SHA" STUB_COMPARE=behind CURL_CALLS_LOG="$curl_calls_log" bash "$SUT" 2>&1)"
+hostile_rc=$?
+if [[ "$hostile_rc" == "3" && ! -s "$curl_calls_log" && "$(grep -c 'SOLEUR_CREDENTIAL_REFUSED script=sandbox-readback-10445' <<<"$hostile_out")" == "1" ]] \
+   && ! grep -q 'se"c' <<<"$hostile_out"; then
+  PASSES=$((PASSES + 1)); echo "  ok: a hostile Cloudflare Access secret is refused (rc=3, zero curl calls, one marker, value not echoed)"
+else FAIL_N=$((FAIL_N + 1)); FAILURES+=("hostile CF secret: rc=$hostile_rc calls=$(wc -l <"$curl_calls_log") out=$hostile_out"); echo "  FAIL: hostile CF secret"; fi
+
 ROWS=$((PASSES + FAIL_N))
 echo ""
 echo "=== sandbox-readback-10445: $PASSES passed, ${#FAILURES[@]} failed ($ROWS rows) ==="
 # Floor reported directly (not through the helper it backstops): the row count above.
-if (( PASSES + FAIL_N < 24 )); then
-  printf 'FAIL: only %d rows ran (floor 24)\n' "$((PASSES + FAIL_N))"
+if (( PASSES + FAIL_N < 26 )); then
+  printf 'FAIL: only %d rows ran (floor 26)\n' "$((PASSES + FAIL_N))"
   exit 1
 fi
 if (( ${#FAILURES[@]} > 0 )); then printf 'FAIL: %s\n' "${FAILURES[@]}"; exit 1; fi

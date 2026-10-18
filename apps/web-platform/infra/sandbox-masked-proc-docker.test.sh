@@ -782,10 +782,23 @@ else
   fail "census: bad or missing socket listing from the inner sandbox: unexpected='${CENSUS_BAD}' n=$CENSUS_N complete=$([[ "$CENSUS_OUT" == *CENSUS_END* ]] && echo yes || echo no) (a host runtime or peer-messaging socket reachable from a tenant sandbox is the residual ADR-075's 2026-10-16 addendum bounds; n=0 means the census did not see its own session)"
 fi
 
+# Environ scan (W1, ADR-272): with the knob set, can a hosted Bash call read ANY process environ carrying the owner's key?
+# The probe puts a decoy ANTHROPIC_API_KEY in the CLI's (outside-the-sandbox) environment. The `[i]` keeps the scan's own
+# command line from matching its pattern. Non-vacuity: the counters must PRINT (a command that never ran prints none, and
+# the empty comparison below would then fail); the matching positive control, a scan that does find the decoy when
+# /proc is open, is test/sandbox-credential-deny-runtime.test.ts's shim-less CONTROL arm.
+ENV_OUT="$(sdk_bash 1 'echo PIDDIRS=$(ls -d /proc/[0-9]* 2>/dev/null | wc -l); n=0; f=0; for p in /proc/[0-9]*; do if cat $p/environ >/dev/null 2>&1; then n=$((n+1)); grep -qa decoy-api-key-sent[i]nel $p/environ 2>/dev/null && f=$((f+1)); fi; done; echo READABLE=$n; echo DECOY=$f; echo SCAN_END')"
+ENV_TXT="$(printf '%s' "$ENV_OUT" | sed 's/^SDK_BASH_RESULT //' | jq -r '.content // ""' 2>/dev/null)"
+if [[ "$ENV_TXT" == *SCAN_END* && "$ENV_TXT" == *PIDDIRS=0* && "$ENV_TXT" == *READABLE=0* && "$ENV_TXT" == *DECOY=0* ]]; then
+  pass "environ scan: with the knob set no process environ is readable from a hosted Bash call and none carries the decoy (empty /proc)"
+else
+  fail "environ scan: a process environ is readable from the sandbox or the scan did not run (a W1 regression, ADR-272): $(printf '%s' "$ENV_TXT" | tr '\n' ' ' | head -c 300)"
+fi
+
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 # Anti-vacuity floor: a literal adjacent to its use (guard-vacuity-floor shape).
-MIN_ASSERTIONS=51
+MIN_ASSERTIONS=52
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   echo "FAIL: only $((PASS + FAIL)) assertions ran (floor $MIN_ASSERTIONS) — the suite did not exercise its arms"
   exit 1
