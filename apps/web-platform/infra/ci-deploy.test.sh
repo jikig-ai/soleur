@@ -11120,7 +11120,7 @@ unset GAK_PRD_KEY GAK_ISO_KEY GAK_RETIRED_KEY GAK_ISO_MARK GAK_PRD_MARK
 # files, then pins the request shape (URL, body, content type, one call) and the CORRECT signature.
 FO_FIX="$(mktemp -d)"
 FO_ARGV="$FO_FIX/argv"; FO_STDIN="$FO_FIX/stdin"; : > "$FO_ARGV"; : > "$FO_STDIN"
-printf '%s\n' '[{"id":"deploy-peer","trigger-rule":{"match":{"secret":"fixture-fanout-secret"}}}]' > "$FO_FIX/hooks.json"
+printf '%s\n' '[{"id":"deploy-peer","trigger-rule":{"match":{"type":"payload-hmac-sha256","secret":"fixture-fanout-secret"}}}]' > "$FO_FIX/hooks.json"
 awk '/^fan_out_to_peers\(\) \{$/{f=1} f{print} f&&/^}$/{exit}' "$DEPLOY_SCRIPT" > "$FO_FIX/fn.sh"
 FO_PAYLOAD='{"command":"deploy fixture"}'
 FO_WANT_SIG="$(printf '%s' "$FO_PAYLOAD" | openssl dgst -sha256 -hmac fixture-fanout-secret | sed 's/.*= //')"
@@ -11172,19 +11172,26 @@ fo99_run() {
   local f
   for f in curl.argv curl.stdin curl.n curl.keyenv py.argv py.keyenv ossl.argv log; do : > "$d/$f"; done
   if [[ "$shape" == "single" ]]; then
-    jq -n --arg s "$secret" '[{id:"deploy-peer","trigger-rule":{match:{secret:$s}}}]' > "$d/hooks.json"
+    jq -n --arg s "$secret" '[{id:"deploy-peer","trigger-rule":{match:{type:"payload-hmac-sha256",secret:$s}}}]' > "$d/hooks.json"
   else
     # The shapes adnanh/webhook renders: a bare `match`, or an `or` of `match` rules (the rotation's two-secret
     # window, #9294 PR-1), each carrying the `parameter` object that has no `secret` key. A DECOY hook with its own
-    # secret sits first, so a reader that is not scoped to id==deploy-peer signs with the wrong key.
+    # secret sits first, so a reader that is not scoped to id==deploy-peer signs with the wrong key; the deploy-peer
+    # hook also carries an HMAC-typed object OUTSIDE its trigger-rule (listed before it), so a reader that is not
+    # scoped to the trigger-rule signs with that one.
     jq -n --arg s "$secret" --arg s2 "$secret2" --arg shape "$shape" '
       def m($x): {match:{type:"payload-hmac-sha256", secret:$x, parameter:{source:"header", name:"X-Signature-256"}}};
+      def other: {match:{type:"value", value:"x", secret:"non-hmac-matcher-secret", parameter:{source:"header", name:"X"}}};
       [ {id:"deploy", "trigger-rule": m("decoy-deploy-hook-secret")},
         (if $shape == "nopeer" then {id:"not-the-peer", "trigger-rule": m($s)}
-         else {id:"deploy-peer", "trigger-rule":
+         else {id:"deploy-peer", "outside-trigger-rule": m("outside-the-trigger-rule-decoy").match, "trigger-rule":
            (if $shape == "or2" then {or: [m($s), m($s2)]}
             elif $shape == "or3" then {or: [m($s), m($s2), m("third-secret-in-the-or")]}
-            elif $shape == "nosecret" then {or: [{match:{type:"value", value:"x", parameter:{source:"header", name:"X"}}}]}
+            elif $shape == "orval" then {or: [other, m($s), m($s2)]}
+            elif $shape == "nested" then {and: [{or: [m($s), m($s2)]}, {match:{type:"value", value:"y", parameter:{source:"header", name:"Y"}}}]}
+            elif $shape == "ornull" then {or: [{match:{type:"payload-hmac-sha256", secret:null, parameter:{source:"header", name:"X-Signature-256"}}}, m($s2)]}
+            elif $shape == "orkeyless" then {or: [{match:{type:"payload-hmac-sha256", parameter:{source:"header", name:"X-Signature-256"}}}, m($s2)]}
+            elif $shape == "nosecret" then {or: [other]}
             else error("unknown shape") end)} end) ]' > "$d/hooks.json"
   fi
   jq -cn --arg cmd "$cmd" '{command:$cmd}' > "$d/payload"
@@ -11309,7 +11316,7 @@ fi
 # function as a bare call under `bash -euo pipefail` with python3 absent and requires the FANOUT
 # line to be logged: the line is written only if the guard let execution reach the shape check.
 FO99_E="$FO99/errexit"; assert_fixture_dir "$FO99_E"; mkdir -p "$FO99_E"; : > "$FO99_E/log"; : > "$FO99_E/curl"
-jq -n --arg s "fixture-fanout-secret" '[{id:"deploy-peer","trigger-rule":{match:{secret:$s}}}]' > "$FO99_E/hooks.json"
+jq -n --arg s "fixture-fanout-secret" '[{id:"deploy-peer","trigger-rule":{match:{type:"payload-hmac-sha256",secret:$s}}}]' > "$FO99_E/hooks.json"
 FO99_E_RC=0
 FO99_E="$FO99_E" FO99_FN="$FO99/fn.sh" bash --noprofile --norc -c '
   set -euo pipefail
@@ -11333,7 +11340,7 @@ fi
 # must sign with the FIRST secret under the deploy-peer rule (the signers' current secret; the rotation puts the
 # next secret second) and never with a later one, a decoy hook's, or an empty one.
 FO94_OK=1; FO94_MSG=""; FO94_N=0
-for _shape in or2 or3; do
+for _shape in or2 or3 orval nested; do
   fo99_run "fixture-fanout-secret" "deploy fixture" real "" "$_shape" "fixture-next-secret-xyz"
   FO94_N=$((FO94_N + 1))
   _got="$(sed -n 's/^header = "X-Signature-256: sha256=\(.*\)"$/\1/p' "$FO99/run/curl.stdin")"
@@ -11345,14 +11352,14 @@ for _shape in or2 or3; do
   fi
 done
 TOTAL=$((TOTAL + 1))
-if [[ "$FO94_OK" -eq 1 && "$FO94_N" -eq 2 ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: T-9794-1 fan-out under an \`or\` of two or three matches signs with the FIRST secret (byte-identical to the independent oracle, different from the second secret's signature) and forwards once, ignoring a decoy hook's secret"
+if [[ "$FO94_OK" -eq 1 && "$FO94_N" -eq 4 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-9294-1 fan-out under an \`or\` of two or three matches, behind a non-HMAC matcher that carries a secret, and nested under an \`and\`, signs with the FIRST HMAC match's secret (byte-identical to the independent oracle, different from the second secret's signature) and forwards once, ignoring a decoy hook's secret and any secret outside the trigger-rule"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: T-9794-1 fan-out under an \`or\` trigger-rule (cases run: ${FO94_N}, want 2):$FO94_MSG"
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-9294-1 fan-out under an \`or\` trigger-rule (cases run: ${FO94_N}, want 4):$FO94_MSG"
 fi
 
 FO94_REFUSE_OK=1; FO94_REFUSE_MSG=""; FO94_REFUSE_N=0
-for _case in "or-first-empty||or2|fixture-next-secret-xyz" "or-no-secret-key|x|nosecret|" "no-deploy-peer-rule|x|nopeer|"; do
+for _case in "or-first-empty||or2|fixture-next-secret-xyz" "or-first-null|x|ornull|fixture-next-secret-xyz" "or-first-keyless|x|orkeyless|fixture-next-secret-xyz" "or-no-hmac-match|x|nosecret|" "no-deploy-peer-rule|x|nopeer|"; do
   FO94_REFUSE_N=$((FO94_REFUSE_N + 1))
   IFS='|' read -r _label _sec _shape _sec2 <<< "$_case"
   fo99_run "$_sec" "deploy fixture" real "" "$_shape" "$_sec2"
@@ -11362,23 +11369,23 @@ for _case in "or-first-empty||or2|fixture-next-secret-xyz" "or-no-secret-key|x|n
   fi
 done
 TOTAL=$((TOTAL + 1))
-if [[ "$FO94_REFUSE_OK" -eq 1 && "$FO94_REFUSE_N" -eq 3 ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: T-9794-2 fan-out fails closed under the \`or\` shapes: an empty first secret (the second is NOT used as a fallback), no secret key anywhere under the rule, and no deploy-peer rule each return 1, log FANOUT and never call curl"
+if [[ "$FO94_REFUSE_OK" -eq 1 && "$FO94_REFUSE_N" -eq 5 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-9294-2 fan-out fails closed under the \`or\` shapes: an empty, null or absent first HMAC secret (the second is NOT used as a fallback), no HMAC match under the rule, and no deploy-peer rule each return 1, log FANOUT and never call curl"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: T-9794-2 fan-out did not fail closed under the \`or\` shapes (cases run: ${FO94_REFUSE_N}, want 3):$FO94_REFUSE_MSG"
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-9294-2 fan-out did not fail closed under the \`or\` shapes (cases run: ${FO94_REFUSE_N}, want 5):$FO94_REFUSE_MSG"
 fi
 
 # Source census, comment-stripped and scoped to the function body: the single-match-only path is gone and the
 # first-secret selection is what reads the rule.
-FO94_BODY="$(grep -vE '^[[:space:]]*#' "$FO99/fn.sh" || true)"
+FO94_BODY="$(/usr/bin/grep -vE '^[[:space:]]*#' "$FO99/fn.sh" || true)"
 TOTAL=$((TOTAL + 1))
 if ! printf '%s\n' "$FO94_BODY" | /usr/bin/grep -qE 'match\.secret' \
-   && [[ "$(printf '%s\n' "$FO94_BODY" | /usr/bin/grep -cE '\.\.[[:space:]]*\|[[:space:]]*objects[[:space:]]*\|[[:space:]]*select\(has\("secret"\)\)' || true)" -eq 1 ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: T-9794-3 fan_out_to_peers reads the first secret under the deploy-peer rule (recursive, scoped to id==deploy-peer) and no longer reads a bare .match.secret"
+   && [[ "$(printf '%s\n' "$FO94_BODY" | /usr/bin/grep -cE 'select\(\.id=="deploy-peer"\) \| \.\["trigger-rule"\] \| \.\. \| objects \| select\(\.type=="payload-hmac-sha256"\)\] \| first \| \.secret \| select\(type=="string"\)' || true)" -eq 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-9294-3 fan_out_to_peers reads the secret of the first payload-hmac-sha256 match under the deploy-peer trigger-rule (one comment-stripped site) and no longer reads a bare .match.secret"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: T-9794-3 fan_out_to_peers still reads the single-match path or the recursive first-secret selection is missing from the function body"
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-9294-3 fan_out_to_peers still reads the single-match path or its first-HMAC-match selection is not the single scoped expression in the function body"
 fi
-unset FO94_OK FO94_MSG FO94_N FO94_REFUSE_OK FO94_REFUSE_MSG FO94_REFUSE_N FO94_BODY _shape _other
+unset FO94_OK FO94_MSG FO94_N FO94_REFUSE_OK FO94_REFUSE_MSG FO94_REFUSE_N FO94_BODY _shape _other _sec2
 rm -rf "$FO99"; unset FO99 FO99_E FO99_E_RC FO99_ARGV_N FO99_REFUSE_N _s _c _got _want _case _label _sec _mode _logmsg FO99_SECRETS FO99_CMDS FO99_LONG FO99_RAN FO99_BAD FO99_BADMSG FO99_ARGV_OK FO99_ARGV_MSG \
   FO99_REFUSE_OK FO99_REFUSE_MSG FO99_SNIP_N; unset -f fo99_run fo99_oracle
 
@@ -11432,8 +11439,8 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # fallback under BOTH recorded denial bodies), D10k4/rs+gnu (denied + readable unprivileged still reaches j=ok), D10k5
 # (accepted-but-failed reads j=error, no re-run), D10k6 (accepted-run sudo: warning stripped, empty stays empty),
 # D10k7 (warning + silent failure is no masquerading denial).
-# #9294 PR-1: raised 618 -> 622 (measured on the live tree: the floor had one slack) with T-9794-1..3 (fan-out under an `or`
-# trigger-rule: first-secret signing, three fail-closed shapes, and the source census).
+# #9294 PR-1: raised 618 -> 622 (619 measured on main, which carried one slack row, plus 3 new rows) with T-9294-1..3 (fan-out
+# under an `or` trigger-rule: first-HMAC-secret signing over four shapes, five fail-closed shapes, and the source census).
 CI_DEPLOY_ASSERT_FLOOR=622
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
