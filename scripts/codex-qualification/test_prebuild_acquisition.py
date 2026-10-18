@@ -68,6 +68,12 @@ class Acquisition(unittest.TestCase):
             endpoint_probe=self.probe)
 
     def test_constructor_has_no_io_and_order_is_exact(self):
+        events = []
+        self.probe.side_effect = lambda _endpoint: events.append('binding') or self.fingerprint
+        def observed_request(*args, **kwargs):
+            events.append('request')
+            return self.respond(*args, **kwargs)
+        self.transport.request.side_effect = observed_request
         collector = self.collector()
         self.transport.request.assert_not_called()
         self.probe.assert_not_called()
@@ -76,8 +82,12 @@ class Acquisition(unittest.TestCase):
         expected = ['/version', '/info'] + ['/images/' + quote(ref, safe='') + '/json'
                                          for ref in sorted(self.refs.values())]
         self.assertEqual([call.args[1] for call in self.transport.request.call_args_list], expected)
-        self.assertEqual(self.probe.call_count, 16)
+        for index, event in enumerate(events):
+            if event == 'request':
+                self.assertEqual(events[index - 1], 'binding')
+                self.assertEqual(events[index + 1], 'binding')
         self.assertEqual(result['status'], 'complete')
+        self.assertNotIn('failure', result)
         self.assertEqual(result['daemon'], {'version': VERSION, 'info': INFO})
         for role, value in result['roles'].items():
             self.assertEqual(value['requested_reference'], self.refs[role])
@@ -357,6 +367,9 @@ class Acquisition(unittest.TestCase):
                     acquisition.execute_action(execute3)
                 transport_factory.return_value.request.assert_called_once()
                 self.assertEqual((output3 / acquisition.RECEIPT).stat().st_mode & 0o777, 0o600)
+                failure = json.loads((output3 / acquisition.RECEIPT).read_bytes())['failure']
+                self.assertEqual((failure['phase'], failure['reason'], failure['status_code']),
+                                 ('post_request_binding', 'output_binding', 200))
 
     def test_file_helpers_refuse_symlink_ancestors_and_never_follow_leaf(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -390,15 +403,211 @@ class Acquisition(unittest.TestCase):
             collector.manifest['source_sha'] = '8' * 40
             return response
         self.transport.request.side_effect = mutate
-        with self.assertRaises(acquisition.AcquisitionFailure):
+        with self.assertRaises(acquisition.AcquisitionFailure) as raised:
             collector.collect()
         self.transport.request.assert_called_once()
+        self.assertEqual(raised.exception.receipt['failure']['reason'], 'source_binding')
+        self.assertEqual(raised.exception.receipt['failure']['phase'], 'post_request_binding')
+        self.assertEqual(raised.exception.receipt['failure']['status_code'], 200)
 
     def test_daemon_version_contradiction_refuses_before_images(self):
         self.responses['/info'][1]['ServerVersion'] = 'different-daemon-version'
         with self.assertRaises(acquisition.AcquisitionFailure):
             self.collector().collect()
         self.assertEqual(self.transport.request.call_count, 2)
+
+    def test_failure_diagnostics_distinguish_transport_receipt_status_and_image_causes(self):
+        sensitive = 'synthesized-private-failure-sentinel'
+        variants = [
+            ('transport', RuntimeError(sensitive), 'transport', 'unexpected_failure', None),
+            ('shape', (200, sensitive), 'response_validation', 'receipt_shape', 200),
+            ('status', (404, {'private': sensitive}), 'response_validation', 'http_status', 404),
+            ('bool-status', (True, {}), 'response_validation', 'receipt_shape', None),
+            ('invalid-status', (600, {}), 'response_validation', 'receipt_shape', None),
+            ('float-status', (200.0, {}), 'response_validation', 'receipt_shape', None),
+            ('lower-http-status', (100, {}), 'response_validation', 'http_status', 100),
+            ('upper-http-status', (599, {}), 'response_validation', 'http_status', 599),
+            ('immutable-id', {'Id': sensitive}, 'image_validation', 'immutable_id', 200),
+            ('repository', {'RepoDigests': [sensitive]}, 'image_validation', 'repository_digest_membership', 200),
+            ('platform', {'Architecture': 'arm64'}, 'image_validation', 'platform', 200),
+            ('config-shape', {'Config': [sensitive]}, 'image_validation', 'config_shape', 200),
+            ('config-size', {'Config': {'Env': [sensitive + 'x' * 1048576]}},
+             'image_validation', 'config_size', 200),
+        ]
+        for name, replacement, phase, reason, status in variants:
+            self.setUp()
+            path = sorted(path for path in self.responses if path.startswith('/images/'))[0]
+            reference = next(ref for ref in self.refs.values()
+                             if path == '/images/' + quote(ref, safe='') + '/json')
+            normal = self.respond
+            def response(method, request_path, payload, *, timeout):
+                returned = normal(method, request_path, payload, timeout=timeout)
+                if request_path != path:
+                    return returned
+                if isinstance(replacement, Exception):
+                    raise replacement
+                if type(replacement) is dict:
+                    return 200, {**returned[1], **replacement}
+                return replacement
+            self.transport.request.side_effect = response
+            collector = self.collector()
+            with self.subTest(name=name), self.assertRaises(acquisition.AcquisitionFailure) as raised:
+                collector.collect()
+            receipt = raised.exception.receipt
+            self.assertEqual(receipt['failure'], {'action_index': 3,
+                'request_path_sha256': sha(path.encode()), 'reference_sha256': sha(reference.encode()),
+                'phase': phase, 'reason': reason, 'status_code': status})
+            self.assertEqual(receipt['roles'], {})
+            self.assertNotIn(sensitive.encode(), canonical(receipt))
+            self.assertEqual(str(raised.exception), 'Prebuild acquisition incomplete')
+            self.assertEqual(receipt['receipt_sha256'], sha(canonical(
+                {key: value for key, value in receipt.items() if key != 'receipt_sha256'})))
+            with self.assertRaises(Refused):
+                collector.collect()
+            self.gate.assert_called_once()
+            self.assertEqual(self.transport.request.call_count, 3)
+
+    def test_failure_before_request_has_null_action_fields(self):
+        for stage in ('initialization', 'consume_gate'):
+            self.setUp()
+            if stage == 'initialization':
+                self.clock = lambda: float('nan')
+            else:
+                self.gate.side_effect = RuntimeError('synthesized-sensitive-gate-detail')
+            with self.subTest(stage=stage), self.assertRaises(acquisition.AcquisitionFailure) as raised:
+                self.collector().collect()
+            self.assertEqual(raised.exception.receipt['failure'], {'action_index': None,
+                'request_path_sha256': None, 'reference_sha256': None,
+                'phase': stage, 'reason': 'unexpected_failure', 'status_code': None})
+            self.transport.request.assert_not_called()
+
+    def test_late_success_status_is_recorded_before_deadline_refusal(self):
+        def late(*args, **kwargs):
+            returned = self.respond(*args, **kwargs)
+            self.now += 61
+            return returned
+        self.transport.request.side_effect = late
+        with self.assertRaises(acquisition.AcquisitionFailure) as raised:
+            self.collector().collect()
+        self.assertEqual(raised.exception.receipt['failure'], {'action_index': 1,
+            'request_path_sha256': sha(b'/version'), 'reference_sha256': None,
+            'phase': 'deadline', 'reason': 'unexpected_failure', 'status_code': 200})
+        self.assertEqual(raised.exception.receipt['daemon'], {})
+        self.transport.request.assert_called_once()
+
+    def test_returned_status_precedes_endpoint_and_output_post_binding_failure(self):
+        for binding in ('endpoint', 'output'):
+            self.setUp()
+            collector = self.collector()
+            if binding == 'endpoint':
+                self.probe.side_effect = [self.fingerprint, {**self.fingerprint, 'ino': 999}]
+            else:
+                collector.output_binding = Mock(side_effect=[None, None, RuntimeError('private-output-detail')])
+            with self.subTest(binding=binding), self.assertRaises(acquisition.AcquisitionFailure) as raised:
+                collector.collect()
+            failure = raised.exception.receipt['failure']
+            self.assertEqual(failure['phase'], 'post_request_binding')
+            self.assertEqual(failure['reason'], binding + '_binding')
+            self.assertEqual(failure['status_code'], 200)
+            self.transport.request.assert_called_once()
+
+    def test_late_image_receipt_does_not_retain_its_config(self):
+        sensitive = 'synthesized-late-config-sentinel'
+        image_path = sorted(path for path in self.responses if path.startswith('/images/'))[0]
+        def late_image(*args, **kwargs):
+            returned = self.respond(*args, **kwargs)
+            if args[1] == image_path:
+                returned[1]['Config'] = {'Env': [sensitive]}
+                self.now += 61
+            return returned
+        self.transport.request.side_effect = late_image
+        with self.assertRaises(acquisition.AcquisitionFailure) as raised:
+            self.collector().collect()
+        receipt = raised.exception.receipt
+        self.assertEqual(receipt['failure']['phase'], 'deadline')
+        self.assertEqual(receipt['failure']['status_code'], 200)
+        self.assertEqual(receipt['failure']['action_index'], 3)
+        self.assertEqual(receipt['roles'], {})
+        self.assertNotIn(sensitive.encode(), canonical(receipt))
+        self.assertEqual(self.transport.request.call_count, 3)
+
+    def test_version_and_info_failures_have_fixed_phases(self):
+        for path, field, value, phase, reason in (
+                ('/version', 'Version', [], 'version_validation', 'receipt_shape'),
+                ('/version', 'Os', 'windows', 'version_validation', 'platform'),
+                ('/info', 'NCPU', True, 'info_validation', 'receipt_shape'),
+                ('/info', 'Architecture', 'arm64', 'info_validation', 'platform')):
+            self.setUp()
+            self.responses[path][1][field] = value
+            with self.subTest(path=path, field=field), self.assertRaises(acquisition.AcquisitionFailure) as raised:
+                self.collector().collect()
+            failure = raised.exception.receipt['failure']
+            self.assertEqual((failure['phase'], failure['reason'], failure['status_code']), (phase, reason, 200))
+            self.assertEqual(failure['request_path_sha256'], sha(path.encode()))
+            self.assertIsNone(failure['reference_sha256'])
+
+    def test_pre_request_binding_failure_has_no_http_status(self):
+        self.probe.return_value = {**self.fingerprint, 'ino': 999}
+        with self.assertRaises(acquisition.AcquisitionFailure) as raised:
+            self.collector().collect()
+        failure = raised.exception.receipt['failure']
+        self.assertEqual((failure['phase'], failure['reason'], failure['status_code']),
+                         ('pre_request_binding', 'endpoint_binding', None))
+        self.gate.assert_called_once()
+        self.transport.request.assert_not_called()
+
+    def test_config_processing_overrun_never_publishes_failed_config(self):
+        sensitive = 'synthesized-config-processing-sentinel'
+        path = sorted(path for path in self.responses if path.startswith('/images/'))[0]
+        self.responses[path][1]['Config'] = {'Env': [sensitive]}
+        def slow_canonical(value):
+            if type(value) is dict and value.get('Env') == [sensitive]:
+                self.now += 61
+            return canonical(value)
+        with patch.object(acquisition, 'canonical', side_effect=slow_canonical), \
+                self.assertRaises(acquisition.AcquisitionFailure) as raised:
+            self.collector().collect()
+        receipt = raised.exception.receipt
+        self.assertEqual((receipt['failure']['phase'], receipt['failure']['status_code']), ('deadline', 200))
+        self.assertEqual(receipt['roles'], {})
+        self.assertNotIn(sensitive.encode(), canonical(receipt))
+        self.assertEqual(self.transport.request.call_count, 3)
+
+    def test_config_processing_binding_change_is_checked_before_publication(self):
+        sensitive = 'synthesized-config-binding-sentinel'
+        path = sorted(path for path in self.responses if path.startswith('/images/'))[0]
+        self.responses[path][1]['Config'] = {'Env': [sensitive]}
+        def replaced_during_canonical(value):
+            if type(value) is dict and value.get('Env') == [sensitive]:
+                self.probe.return_value = {**self.fingerprint, 'ino': 999}
+            return canonical(value)
+        with patch.object(acquisition, 'canonical', side_effect=replaced_during_canonical), \
+                self.assertRaises(acquisition.AcquisitionFailure) as raised:
+            self.collector().collect()
+        receipt = raised.exception.receipt
+        self.assertEqual((receipt['failure']['phase'], receipt['failure']['reason'], receipt['failure']['status_code']),
+                         ('post_request_binding', 'endpoint_binding', 200))
+        self.assertEqual(receipt['roles'], {})
+        self.assertNotIn(sensitive.encode(), canonical(receipt))
+        self.assertEqual(self.transport.request.call_count, 3)
+
+    def test_role_projection_overrun_is_staged_before_publication(self):
+        sensitive = 'synthesized-role-projection-sentinel'
+        path = sorted(path for path in self.responses if path.startswith('/images/'))[0]
+        self.responses[path][1]['Config'] = {'Env': [sensitive]}
+        original_copy = copy.deepcopy
+        def slow_projection(value, *args, **kwargs):
+            if type(value) is dict and value.get('config') == {'Env': [sensitive]}:
+                self.now += 61
+            return original_copy(value, *args, **kwargs)
+        with patch.object(acquisition.copy, 'deepcopy', side_effect=slow_projection), \
+                self.assertRaises(acquisition.AcquisitionFailure) as raised:
+            self.collector().collect()
+        receipt = raised.exception.receipt
+        self.assertEqual((receipt['failure']['phase'], receipt['failure']['status_code']), ('deadline', 200))
+        self.assertEqual(receipt['roles'], {})
+        self.assertNotIn(sensitive.encode(), canonical(receipt))
+        self.assertEqual(self.transport.request.call_count, 3)
 
 
 if __name__ == '__main__':

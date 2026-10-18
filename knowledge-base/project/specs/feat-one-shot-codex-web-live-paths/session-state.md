@@ -1946,3 +1946,38 @@
   latest-source C.9 remains unverified. Hosted auth remains BLOCKED, alternate
   route PENDING, default-off/customer-blocked, build approval consumed,
   withdrawn command forbidden, all recovery and ship gates held.
+
+### Approved metadata attempt consumed; source diagnostics pending — 2026-10-18
+
+- Source pairing and file-only preview/export at pushed
+  `177b981cb6ee8e067c2db645e49a7d6f57c42fa0` match: 5,118 production/plugin
+  inputs, 191 migrations, 53 components, 6,855 export leaves and 1,735 vendored
+  plugin inputs. Pairing is
+  `297ba5be3a39fc9363e7bee21b4f1119d1cddab30600f8413e04efddc6f44b2b`;
+  operational is
+  `e1ba4778c53743df994f1b2ad602399cca0aacf2614f58ee5b0b92245c6cb6ef`.
+  Export operation counts remain zero; no image was built.
+- CTO independently reverified the exact host-context manifest
+  `7a03a4ae685500e197d3cb1281d0c88335f345d6aefe95530901308e0dfea4eb`.
+  The exact timeout-wrapped command was freshly approved and executed once.
+  It exited incomplete after three requests were attempted, retaining daemon
+  version/info projections and no image Configs. Its marker is spent and the
+  private incomplete receipt exists; checksum
+  `459d2cf6a3641b134558b54628900ab4a8462191ee1b6b0e804d2c17460f86a3`.
+- The receipt has no failure status/cause. Do not infer missing images, 404,
+  transport failure or validation mismatch. CTO ruled the source diagnostic
+  gap must be repaired inline with fixed-enum phases/reasons, action/reference
+  hashes and returned status, then independently reviewed. No exception/error
+  body or failed Config contents may become diagnostics. The old receipt and
+  marker must remain immutable; no retry is authorized.
+- The PR description records this incomplete result. New-head CI and latest
+  description guards remain watched. No image pull, Docker/buildx executable,
+  build, SQL, provider, browser/account, recovery or follow-on action ran. All
+  profile/provenance/runtime/legal and ship holds persist.
+- The diagnostic source repair ran RED, then passes 28 synthetic cases under
+  explicit system Python 3.14 with warnings as errors. Status crosses the
+  transport boundary before deadline/binding checks; failed image projections
+  remain excluded. Tests cover fixed reasons, action/reference hashes,
+  checksum, no sensitive sentinel, stopping and no replay. CLI output checks
+  now use an explicit collector callback with the same private write and
+  owner/mode/identity guards. Focused review remains pending; no live retry ran.

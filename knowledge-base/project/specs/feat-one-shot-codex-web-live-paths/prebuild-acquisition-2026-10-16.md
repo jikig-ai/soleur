@@ -2,7 +2,7 @@
 title: Separate prebuild evidence acquisition from runtime qualification
 date: 2026-10-16
 pr: 9051
-status: focused-source-reviewed-file-only-action-and-approval-pending
+status: source-diagnostics-verified-focused-review-and-fresh-approval-pending
 ---
 
 # CTO ruling and scope
@@ -150,6 +150,54 @@ review must be refreshed before a new approval request. Acquisition components
 are unchanged; this is an input/source freshness gate, not runtime clearance.
 
 ## Session corrections
+
+### Consumed October 18 metadata attempt and diagnostic repair
+
+The CTO reviewed a new manifest at source
+`177b981cb6ee8e067c2db645e49a7d6f57c42fa0`, digest
+`7a03a4ae685500e197d3cb1281d0c88335f345d6aefe95530901308e0dfea4eb`.
+The operator approved the exact host-context timeout-wrapped command once.
+That attempt consumed its fixed marker and stopped incomplete after three
+requests were attempted. Its private receipt retains two daemon projections
+and zero image Configs. Self checksum:
+`459d2cf6a3641b134558b54628900ab4a8462191ee1b6b0e804d2c17460f86a3`;
+file-byte digest:
+`6cd5eae2d9edbf688f78e736b3aa5260b0bc29c039e30fbe37621f31c8c845f0`.
+The receipt records no failure status/cause. It proves neither a 404 or absent
+image nor a transport/validation mismatch. Do not rewrite it or infer a cause.
+No retry or follow-on operation is authorized by the consumed approval.
+
+Ruled by CTO agent: repair the observation gap inline before proposing any
+later live action. In incomplete collector receipts add only fixed failure
+phase/reason enums, a one-based approved action index, approved request-path
+and selected-reference hashes, and an observed strict HTTP status or null.
+Capture a returned status immediately after transport returns, before late
+response/binding checks; it grants no response admission. An exception inside
+transport has null status. Pre-request failures have null action/reference
+fields. Recompute the receipt checksum including diagnostic fields. Preserve
+the fixed CLI error and existing one-use/failure semantics.
+
+Synthetic regressions must distinguish transport failure, malformed receipt,
+returned 404, repository membership/platform/Config failures and a late 200
+whose status is retained. Test gate order, no later request, no replay and
+absence of sensitive sentinels. Retain no raw error body, response keys or
+values, exception text or failed Config/Env. Keep output owner/mode/identity
+checks around requests and before receipt creation. Revalidate source and
+obtain focused review before preparing a new attempt and fresh exact approval.
+The previous consumed manifest remains immutable and unavailable for retry.
+
+The diagnostic tests first ran RED with four missing-failure-object errors.
+They now pass 28 cases under explicit system Python 3.14, also with `-W error`.
+The suite discriminates transport, malformed receipt, strict status/404,
+identity/repository/platform/Config, gate and late/binding failures, checks the
+receipt checksum and rejects sensitive sentinels. A late Config-processing
+and role-projection schedule proves failed Configs are not retained. Large
+projections are staged before final deadline/source/endpoint/output checks,
+then published by small assignment. The CLI passes its output-binding check
+explicitly into the collector so returned status is captured first; its
+private write and pre/post owner/mode/identity checks remain enforced.
+Focused independent review and any new exact action remain pending. No live
+request was repeated to develop or verify this source repair.
 
 The initial evidence search used the retired rollout directory rather than
 the live-paths directory. Discover current filenames before following older
