@@ -647,6 +647,9 @@ _SUITE_BOUNDS=(
   # every row still passing, so pin at 900; a slow day renders as this
   # suite's RED, not a leg timeout. Widened 900 -> 1200 for #7432: it ran 766 s (0.85 of 900) in the
   # slowest of five main-health-monitor dry runs at -P 4, where it also starts last and runs alone.
+  # The wider bound only takes effect in the monitor's 60-minute infra step: infra-validation's legs
+  # carry `timeout-minutes: 15` (900 s), which ends a leg before a 1200 s bound can fire, exactly as it
+  # already did at 900 s, so there a hang still reads as a leg timeout rather than this suite's RED.
   "apps/web-platform/infra/workspaces-boot-unlock.test.sh=1200"
   # #6931: the guest-side LUKS provisioner suite re-runs itself once per mutation row (68 rows, 6 in
   # parallel) over a stub-PATH runtime — ~220 s serial on the dev box and bound-killed at the 360 s
@@ -659,8 +662,8 @@ _SUITE_BOUNDS=(
   # 38942396026 and 38942417986, the third, 38965464152, passed). PR #10478 pinned it at 540; the two
   # passing re-gates then measured it at 481 s and 424 s, so 540 was only 1.12x the worst observed run.
   # Pin at 720 (~1.5x 481 s). Basis, stated plainly: the worst durations seen across the five dispatches
-  # were parity-mutation 481 s, zot-pull 475 s, repush 468 s, boot-unlock 766 s and this suite's own
-  # driver 281 s, from five OFF-PEAK runs (Fri 2026-10-16 to Sun 2026-10-18). The new bounds are a
+  # were parity-mutation 481 s, zot-pull 475 s, repush 468 s, boot-unlock 766 s and
+  # run-registered-suites.test.sh 281 s, from five OFF-PEAK runs (Fri 2026-10-16 to Sun 2026-10-18). The new bounds are a
   # judgement of ~1.5x those figures, NOT a measured ceiling, and weekday-peak runner variance is not
   # in the sample. A bound hit still renders as its own `RED  <path>` (rc=124), so a slow day is a
   # named suite failure, not a step-ceiling kill.
@@ -770,8 +773,7 @@ JOBS="${JOBS:-$(( _NPROC < 6 ? _NPROC : 6 ))}"
 # can carry this runner's output: the infra step invokes it directly, and the tests step runs
 # scripts/test-all.sh, which invokes it as a NESTED suite (that is why the TESTS step keeps its
 # JOBS: 1 pin; PR #10459 (Item I of #9217, #7432) removes the infra step's pin, which then runs at
-# the default width). So
-# filtering only the infra capture would still leak dumped bytes
+# the default width). So filtering only the infra capture would still leak dumped bytes
 # through the tests half. But a blanket `^| ` filter on the tests capture is also wrong:
 # scripts/expenses-verify-by-check.test.sh prints markdown tables at column 0
 # (`| Service | Provider | …`), and stripping those deletes an existing signal from the public
