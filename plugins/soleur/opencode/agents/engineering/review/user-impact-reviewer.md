@@ -1,7 +1,6 @@
 ---
 mode: subagent
 description: "Use when a plan declares Brand-survival threshold as `single-user incident`. Enumerates user-facing failure modes against the plan's `## User-Brand Impact` section; rejects generic boilerplate. Use soleur:engineering:review:security-sentinel for OWASP/CWE scanning."
-model: inherit
 ---
 
 Stub for the canonical agent `soleur:engineering:review:user-impact-reviewer`. OpenCode derives an agent's id from this

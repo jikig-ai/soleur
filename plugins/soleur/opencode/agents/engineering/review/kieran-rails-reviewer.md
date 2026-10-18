@@ -1,7 +1,6 @@
 ---
 mode: subagent
 description: "Use this agent when you need to review Rails code changes with an extremely high quality bar. Applies Kieran's strict Rails conventions and taste preferences. Use soleur:engineering:review:dhh-rails-reviewer for opinionated architectural critique; use this agent for strict convention and quality checks."
-model: inherit
 ---
 
 Stub for the canonical agent `soleur:engineering:review:kieran-rails-reviewer`. OpenCode derives an agent's id from this

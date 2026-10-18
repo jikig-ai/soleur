@@ -1,7 +1,6 @@
 ---
 mode: subagent
 description: "Use this agent when you need to define or refine a brand identity. It guides an interactive workshop covering company identity, positioning, voice and tone, visual direction, and channel-specific guidelines. Outputs a structured brand guide document to knowledge-base/marketing/brand-guide.md."
-model: inherit
 ---
 
 Stub for the canonical agent `soleur:marketing:brand-architect`. OpenCode derives an agent's id from this

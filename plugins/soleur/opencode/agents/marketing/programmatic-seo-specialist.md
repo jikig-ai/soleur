@@ -1,7 +1,6 @@
 ---
 mode: subagent
 description: "Creates programmatic SEO strategies -- template design, data schemas, and page generation plans for comparison pages, alternatives pages, and other scalable content patterns. Use soleur:marketing:seo-aeo-analyst for technical SEO audits; use soleur:marketing:growth-strategist for keyword research; use this agent for template-driven page generation at scale."
-model: inherit
 ---
 
 Stub for the canonical agent `soleur:marketing:programmatic-seo-specialist`. OpenCode derives an agent's id from this

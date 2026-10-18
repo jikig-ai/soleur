@@ -135,12 +135,17 @@ describe("opencode adapter drift", () => {
     expect(stub).toContain("description:");
   });
 
-  test("a Claude SKU alias in the canonical model never leaks into the stub", () => {
+  test("no model line is emitted: a canonical alias is not an OpenCode id, and `inherit` drops the agent", () => {
     const files = expectedOpenCodeAdapter(fixture());
     const stub = files.get("opencode/agents/product/cpo.md")!;
-    // `model: sonnet` is a Claude Code alias, not an OpenCode `provider/model` id.
-    expect(stub).toContain("model: inherit");
+    // `model: sonnet` is a Claude Code alias, not an OpenCode `provider/model` id. The first
+    // draft substituted the literal `model: inherit` to avoid leaking the alias; measurement
+    // §3.1 shows `inherit` is not an OpenCode model ref either — an agent carrying it is
+    // dropped from `GET /api/agent` entirely, so all 67 stubs were invisible. Omitting the
+    // key is what actually means "inherits the session model".
+    expect(stub).not.toMatch(/^model:/m);
     expect(stub).not.toContain("sonnet");
+    expect(stub).toContain("mode: subagent");
   });
 
   test("opencode.json declares the skills root and instructions, both rooted on the token", () => {

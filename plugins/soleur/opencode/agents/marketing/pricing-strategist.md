@@ -1,7 +1,6 @@
 ---
 mode: subagent
 description: "Designs and analyzes SaaS pricing strategy -- pricing research methods, tier design, value metric selection, and competitive pricing analysis. Use soleur:sales:deal-architect for deal-level negotiation and proposals; use soleur:finance:revenue-analyst for company-level revenue tracking and P&L modeling; use this agent for product pricing strategy."
-model: inherit
 ---
 
 Stub for the canonical agent `soleur:marketing:pricing-strategist`. OpenCode derives an agent's id from this

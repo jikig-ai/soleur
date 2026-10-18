@@ -1,7 +1,6 @@
 ---
 mode: subagent
 description: "Use this agent when you need to generate Terraform configurations or review existing .tf files for security and cost issues. Use soleur:engineering:infra:infra-security for live Cloudflare configuration and security auditing; use this agent for Terraform code generation and review."
-model: inherit
 ---
 
 Stub for the canonical agent `soleur:engineering:infra:terraform-architect`. OpenCode derives an agent's id from this

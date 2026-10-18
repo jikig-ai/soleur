@@ -1,7 +1,6 @@
 ---
 mode: subagent
 description: "Builds paid advertising campaigns across Google, Meta, and LinkedIn -- defines campaign structure, audience targeting, budget allocation, and ad creative variations."
-model: inherit
 ---
 
 Stub for the canonical agent `soleur:marketing:paid-media-strategist`. OpenCode derives an agent's id from this

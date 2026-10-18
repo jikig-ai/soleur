@@ -1,7 +1,6 @@
 ---
 mode: subagent
 description: "Use this agent when you need a final review pass to ensure code changes are as simple and minimal as possible. Invoked after implementation to identify simplification opportunities and ensure YAGNI adherence."
-model: inherit
 ---
 
 Stub for the canonical agent `soleur:engineering:review:code-simplicity-reviewer`. OpenCode derives an agent's id from this

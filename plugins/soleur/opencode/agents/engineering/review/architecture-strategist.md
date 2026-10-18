@@ -1,7 +1,6 @@
 ---
 mode: subagent
 description: "Use this agent when you need to analyze code changes from an architectural perspective, evaluate system design decisions, or ensure modifications align with established architectural patterns. Use soleur:engineering:design:ddd-architect for Domain-Driven Design modeling; use this agent for general architectural compliance review."
-model: inherit
 ---
 
 Stub for the canonical agent `soleur:engineering:review:architecture-strategist`. OpenCode derives an agent's id from this

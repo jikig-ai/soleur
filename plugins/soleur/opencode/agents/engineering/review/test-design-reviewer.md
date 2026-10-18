@@ -1,7 +1,6 @@
 ---
 mode: subagent
 description: "Use this agent to score test quality (Farley's 8 properties) or check a diff's new tests against the test pyramid — layer classification, e2e justification markers, fast-feedback cost signals. Produces a weighted score, a separate Pyramid verdict block, and recommendations."
-model: inherit
 ---
 
 Stub for the canonical agent `soleur:engineering:review:test-design-reviewer`. OpenCode derives an agent's id from this

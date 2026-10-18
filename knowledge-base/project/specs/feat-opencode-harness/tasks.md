@@ -88,7 +88,8 @@ and a `routingInstructions` arm.
 ### 2.2 Generator script
 
 - [x] 2.2.1 Create `plugins/soleur/scripts/sync-opencode-adapter.ts`, modelled on `sync-grok-agent-compat.ts` and `sync-cursor-name-map.ts`, with a `--check` mode that exits non-zero on drift.
-- [x] 2.2.2 Walk `plugins/soleur/agents/**/*.md`; for each, emit `plugins/soleur/opencode/agents/<relpath>.md` with frontmatter `mode: subagent`, `description:` copied from the canonical agent, `model: inherit`, and a body pointing at the canonical agent file.
+- [x] 2.2.2 Walk `plugins/soleur/agents/**/*.md`; for each, emit `plugins/soleur/opencode/agents/<relpath>.md` with frontmatter `mode: subagent`, `description:` copied from the canonical agent, **no `model:` line**, and a body pointing at the canonical agent file. (`model: inherit` was measured to drop the agent entirely — §11.2; omit the key instead.)
+- [x] 2.2.2b Correction pass 2026-10-18: drop `model: inherit` from the generator and regenerate all 67 stubs (measurement §11.2). End-to-end proof after the fix: `GET /api/agent` = 74 (7 built-in + 67 stubs), `GET /api/skill` = 105 (103 canonical + 2 built-in), `GET /api/command` = 6 (2 built-in + 4 Soleur).
 - [x] 2.2.3 Walk `plugins/soleur/commands/*.md`; emit `plugins/soleur/opencode/commands/<name>.md` preserving `$ARGUMENTS`.
 - [x] 2.2.4 Emit `plugins/soleur/opencode/opencode.json` declaring the canonical `skills` root and `instructions`.
 - [x] 2.2.5 Emit `plugins/soleur/opencode/INSTRUCTIONS.md` with the routing/tool sections (see 5.3).

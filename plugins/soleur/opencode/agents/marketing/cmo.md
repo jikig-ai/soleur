@@ -1,7 +1,6 @@
 ---
 mode: subagent
 description: "Orchestrates the marketing domain -- assesses marketing posture, creates unified strategy, and delegates to specialist agents (brand, SEO, content, conversion, paid, pricing, retention). Use individual marketing agents for focused tasks; use this agent for cross-cutting marketing strategy and multi-agent coordination."
-model: inherit
 ---
 
 Stub for the canonical agent `soleur:marketing:cmo`. OpenCode derives an agent's id from this

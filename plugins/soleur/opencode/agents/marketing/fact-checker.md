@@ -1,7 +1,6 @@
 ---
 mode: subagent
 description: "Verifies factual claims, statistics, and attributed quotes in drafts by fetching cited URLs and confirming source support. Use soleur:marketing:copywriter for marketing copy; use content-writer for blog articles; use this agent for citation verification."
-model: inherit
 ---
 
 Stub for the canonical agent `soleur:marketing:fact-checker`. OpenCode derives an agent's id from this

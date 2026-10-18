@@ -1,7 +1,6 @@
 ---
 mode: subagent
 description: "Use this agent when you need to analyze sales pipeline health, model revenue forecasts, define pipeline stage criteria, or review deal velocity metrics. Use soleur:marketing:analytics-analyst for marketing attribution and A/B testing; use this agent for post-MQL sales pipeline metrics. Use soleur:sales:cro for cross-cutting sales strategy."
-model: inherit
 ---
 
 Stub for the canonical agent `soleur:sales:pipeline-analyst`. OpenCode derives an agent's id from this

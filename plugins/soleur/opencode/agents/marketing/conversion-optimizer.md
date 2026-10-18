@@ -1,7 +1,6 @@
 ---
 mode: subagent
 description: "Analyzes and optimizes conversion surfaces -- landing pages, signup flows, onboarding sequences, forms, popups, and paywall/upgrade screens. Use soleur:sales:outbound-strategist for human-assisted outbound motions; use soleur:marketing:cmo for overall strategy; use this agent for product-led conversion surface optimization."
-model: inherit
 ---
 
 Stub for the canonical agent `soleur:marketing:conversion-optimizer`. OpenCode derives an agent's id from this

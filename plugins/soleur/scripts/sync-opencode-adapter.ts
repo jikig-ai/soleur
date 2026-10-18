@@ -107,9 +107,11 @@ function agentStub(agent: CanonicalAgent): string {
     "---",
     "mode: subagent",
     `description: ${yamlQuote(agent.description)}`,
-    // Always `inherit`, never the canonical value: canonical agents carry Claude Code SKU
-    // aliases (`sonnet`, `opus`), which are not OpenCode `provider/model` ids.
-    "model: inherit",
+    // No `model:` line, deliberately. Canonical agents carry Claude Code SKU aliases
+    // (`sonnet`, `opus`) or the literal `inherit`; neither is an OpenCode `provider/model`
+    // id, and measurement §3.1 shows an agent carrying `model: inherit` is dropped from
+    // `GET /api/agent` entirely — the first draft emitted it and all 67 stubs were invisible.
+    // Omitting the key is what actually expresses "inherits the session model".
     "---",
     "",
     `Stub for the canonical agent \`${agent.id}\`. OpenCode derives an agent's id from this`,

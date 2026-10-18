@@ -1,7 +1,6 @@
 ---
 mode: subagent
 description: "Orchestrates the finance domain -- assesses financial posture, recommends budgeting and reporting actions, and delegates to finance specialist agents. Use individual finance agents for focused tasks; use this agent for cross-cutting financial strategy and multi-agent coordination."
-model: inherit
 ---
 
 Stub for the canonical agent `soleur:finance:cfo`. OpenCode derives an agent's id from this

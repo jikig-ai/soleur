@@ -1,7 +1,6 @@
 ---
 mode: subagent
 description: "Use this agent when you need a formal quality report with severity-scored findings and a prioritized refactoring roadmap. Use soleur:engineering:review:pattern-recognition-specialist for quick pattern checks; use this agent when you need a formal report to plan refactoring work."
-model: inherit
 ---
 
 Stub for the canonical agent `soleur:engineering:review:code-quality-analyst`. OpenCode derives an agent's id from this

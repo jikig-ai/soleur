@@ -1,7 +1,6 @@
 ---
 mode: subagent
 description: "Orchestrates the support domain -- assesses support posture, recommends actions, and delegates to support specialist agents. Use individual support agents for focused tasks; use this agent for cross-cutting support strategy and multi-agent coordination."
-model: inherit
 ---
 
 Stub for the canonical agent `soleur:support:cco`. OpenCode derives an agent's id from this

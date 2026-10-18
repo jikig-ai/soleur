@@ -1,7 +1,6 @@
 ---
 mode: subagent
 description: "Orchestrates the legal domain -- assesses legal document posture, recommends actions, and delegates to legal specialist agents. Use individual legal agents for focused tasks; use this agent for cross-cutting legal strategy and multi-agent coordination."
-model: inherit
 ---
 
 Stub for the canonical agent `soleur:legal:clo`. OpenCode derives an agent's id from this

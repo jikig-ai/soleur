@@ -137,8 +137,8 @@ equivalent are stated as unsupported — the record shows no `todo`, `Monitor`/`
 
 `harness-model-map.ts` gains an `opencode` entry mapping `cheap` / `standard` / `strong` /
 `advisor` to OpenCode `provider/model#variant` slugs. Slug choices follow ADR-110's
-bump-one-table rule; `inherit` stays a passthrough (measured harmless — `model: inherit` resolves
-to null, measurement §3.0).
+bump-one-table rule; `inherit` stays a passthrough — it is a source-form value, not a semantic
+tier, and it is never written into a generated agent stub (measurement §11.2).
 
 ### TR5: Per-harness hook registry (ADR-223)
 
@@ -187,9 +187,16 @@ surface with a user's own bare-named skills is **accepted and recorded**: no col
 
 Measured: without `mode: subagent`, every canonical agent registers as `primary` and is
 unspawnable; `name:` frontmatter is ignored and the id is the path (measurement §3.0). The generator
-therefore emits `mode: subagent`, `description:`, `model: inherit`, and a body pointing at the
-canonical agent file, at a path that **is** the id (`opencode/agents/engineering/cto.md` →
-`engineering/cto`).
+therefore emits `mode: subagent`, `description:`, and a body pointing at the canonical agent file,
+at a path that **is** the id (`opencode/agents/engineering/cto.md` → `engineering/cto`).
+
+**Amended 2026-10-18 (§11.2).** The first draft also emitted `model: inherit`, reasoning that a
+Claude SKU alias (`sonnet`, `opus`) must not leak and `inherit` was the measured-harmless literal
+(§3.0). That reading is **refuted**: `inherit` is not an OpenCode `provider/model` id, and an agent
+carrying it produces no document and **does not register at all** — with all 67 stubs emitting it,
+`GET /api/agent` returned only the 7 built-ins. The generator now emits **no `model:` line**, which
+is this harness's spelling of "inherits the session model" (a stub with `mode: subagent` and no
+`model` registers with no `model` key and inherits, §11.2).
 
 ### D3 — Completion: `session.idle` is advisory; structural checks are the contract
 

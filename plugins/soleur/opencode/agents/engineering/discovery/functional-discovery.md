@@ -1,7 +1,6 @@
 ---
 mode: subagent
 description: "Use this agent when running soleur:plan to check whether community registries already have skills or agents with similar functionality to the feature being planned. Use soleur:engineering:discovery:agent-finder for stack-gap detection; use this agent to check if a planned feature already exists in registries."
-model: inherit
 ---
 
 Stub for the canonical agent `soleur:engineering:discovery:functional-discovery`. OpenCode derives an agent's id from this

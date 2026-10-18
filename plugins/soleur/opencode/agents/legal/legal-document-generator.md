@@ -1,7 +1,6 @@
 ---
 mode: subagent
 description: "Use this agent when you need to generate draft legal documents for a project or company. All output is clearly marked as a draft requiring professional legal review. Use soleur:legal:legal-compliance-auditor to audit existing documents; use this agent to generate new ones; use soleur:legal:clo for cross-cutting legal strategy."
-model: inherit
 ---
 
 Stub for the canonical agent `soleur:legal:legal-document-generator`. OpenCode derives an agent's id from this

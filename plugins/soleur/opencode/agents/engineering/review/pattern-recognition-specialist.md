@@ -1,7 +1,6 @@
 ---
 mode: subagent
 description: "Use this agent when you need to analyze code for design patterns, anti-patterns, naming conventions, and code duplication. This agent excels at identifying architectural patterns, detecting code smells, and ensuring consistency across the codebase."
-model: inherit
 ---
 
 Stub for the canonical agent `soleur:engineering:review:pattern-recognition-specialist`. OpenCode derives an agent's id from this

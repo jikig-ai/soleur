@@ -374,3 +374,90 @@ Each is a spec/decision item, not a measurement defect.
    decision of what it emits (config file vs. generated dir) is open.
 8. **Distribution.** OpenCode plugins load from `.opencode/plugins/` or npm/config; Soleur's
    delivery path is a Claude Code manifest + marketplace. The OpenCode install story is unmeasured.
+
+---
+
+## 11.0 — Correction pass, 2026-10-18 (re-measures §2.2, §3.0, §9.0)
+
+**Run 2026-10-18, OpenCode 2.0.32 (unchanged). Verdict: three recorded readings reproduce, one is
+refuted, and two load-bearing behaviors were missed — the listing is empty until a session exists,
+and `model: inherit` silently drops an agent.**
+
+Correction by citation, per the append-only rule; the bodies above stay as recorded.
+
+### Method (differs from §2.2/§3.0 in two ways)
+
+1. A hermetic `HOME` (`mktemp -d`) with `XDG_CONFIG_HOME`/`XDG_DATA_HOME`/`XDG_STATE_HOME` inside it,
+   a git-committed scratch project as cwd, and an **explicitly started** server
+   (`opencode serve --port N`) instead of the shared background daemon. Auth is the
+   `OPENCODE_PASSWORD` line the server prints on stdout; without it every `/api/*` route answers
+   `UnauthorizedError`. (`opencode api` also reads `GET /api/info` first — a bare `curl` skips that.)
+2. `opencode api --standalone` works and is self-cleaning, but spawns a fresh server per call. The
+   explicit server is what permits a sequence of reads against one process.
+
+### 11.1 — The listing is empty until a session exists (§2.2/§3.0/§9.0 all read it mid-session)
+
+One hermetic server, config already in place:
+
+| Read | `GET /api/skill` | `GET /api/agent` |
+|---|---|---|
+| after boot (10–12 s settle) | **0** | **7** (built-ins only) |
+| after `POST /api/session` | **105** | **74** |
+
+Rewriting the config file (config-directory watch) or calling `POST /api/location/reload` also
+clears it without a session. So a pre-trigger read is not evidence of a broken install — it is
+evidence the location has no session yet. Every zero this pass first observed was a pre-trigger read.
+
+### 11.2 — `model: inherit` drops the agent (refutes the §3.0 `model: inherit` row)
+
+Four agents in one hermetic `<configdir>/agents/`, each with a `description`, read after a session:
+
+| Frontmatter | Registered |
+|---|---|
+| `description` only | **yes** (`mode: primary`) |
+| `+ mode: subagent` | **yes** (`mode: subagent`, no `model` key — inherits) |
+| `+ model: inherit` | **NO — dropped entirely** |
+| `+ model: anthropic/claude-sonnet-4-5` | **yes** (`model: {id, providerID}`) |
+
+§3.0's "`model: inherit` … accepted, resolved to `null`" is **refuted**. `inherit` is not an OpenCode
+model ref, so the file yields no document and the agent never appears. The generator must **omit**
+`model:`; omitting it is this harness's spelling of "inherits the session model". The first draft of
+`sync-opencode-adapter.ts` emitted `model: inherit` on all 67 stubs and `GET /api/agent` showed only
+the 7 built-ins.
+
+### 11.3 — Project-local roots did not register (cites §2.2 rows 2–3)
+
+Real copies of `plan`/`work` under a `git init`-ed project's `.opencode/skills`, and `work`/`review`
+under its `.claude/skills` and `.agents/skills`, read **after** `POST /api/session`, returned **0**.
+The `skills` config key pointing at the canonical tree returned **103** in the same setup. The root
+the adapter can rely on is therefore the config `skills` key. Whether the project-local rows need a
+trust/registration step this probe did not perform is **not settled here**.
+
+### 11.4 — Full-surface discovery proof (supersedes §9.0's "not hermetic" caveat)
+
+Hermetic `HOME`, adapter installed with `scripts/install-opencode-adapter.ts`, one session created:
+
+| Surface | Total | Soleur | Other |
+|---|---|---|---|
+| `GET /api/skill` | **105** | **103** — every `path` under `<checkout>/skills/` | 2 built-ins (`/builtin/opencode.md`, `/builtin/report.md`) |
+| `GET /api/agent` | **74** | **67** stubs (`engineering/cto`, …) | 7 built-ins |
+| `GET /api/command` | **6** | **4** (`go`, `help`, `sync`, `version`) | 2 built-ins (`init`, `review`) |
+
+`HOME` control alone makes this hermetic: with `HOME` redirected, `~/.claude/skills` and
+`~/.agents/skills` are not read, so the 17 "global/other" skills §9.0 saw do not appear. Keying on
+`path` is still the discriminator, and is what the 103-of-105 split above uses.
+
+### 11.5 — Probe recipe
+
+```bash
+HOME=<scratch> XDG_CONFIG_HOME=<scratch>/.config XDG_DATA_HOME=<scratch>/.local/share \
+  XDG_STATE_HOME=<scratch>/.local/state  opencode serve --port N   # cwd = a git-committed project
+# take <pw> from the `server password <pw>` line on stdout
+OPENCODE_PASSWORD=<pw> opencode api --server http://127.0.0.1:N POST /api/session -d '{}'
+OPENCODE_PASSWORD=<pw> opencode api --server http://127.0.0.1:N GET /api/skill > out.json
+```
+
+Two footguns: `GET /api/skill` returns each skill's full `content` (~3 MB for 103) — read it from a
+**file**, a pipe truncates near 139 kB; and with `HOME` redirected the `opencode` shim re-resolves
+through mise and **installs another copy into the scratch HOME** (hit `Disk quota exceeded` once) —
+invoke the resolved binary path directly to avoid it.
