@@ -69,5 +69,5 @@ Write each phase's RED tests before its code. Commit order: Phase 1 first, Phase
 
 - [x] 7.1 ADR-079, ADR-075, ADR-218 text; `model.c4` edge prose; run C4 tests
 - [ ] 7.2 Comment on #10455 listing remaining open items and the new residuals
-- [ ] 7.3 Open Code-Review Overlap re-check against the final file list
-- [ ] 7.4 LAST commit: retire `sandbox-readback-10445.sh`, its test and its `test-all.sh` line
+- [x] 7.3 Open Code-Review Overlap re-check against the final file list
+- [x] 7.4 LAST commit: retire `sandbox-readback-10445.sh`, its test and its `test-all.sh` line

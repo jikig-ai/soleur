@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1200
-# generated-at=2026-10-19T12:17:37Z
+# generated-at=2026-10-19T13:55:54Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -496,7 +496,6 @@ scripts/rotate-supabase-db-credential	2
 scripts/rule-metrics-aggregate	4
 scripts/rules-loader-stamp-probe	1
 scripts/run-report-exit-first-contact-8076	5
-scripts/sandbox-readback-10445	1
 scripts/seccomp-unenforced-alert	2
 scripts/secret-scan-smoke-gate	5
 scripts/send-failed-alert-probe-8097	3

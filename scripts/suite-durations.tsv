@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=38090871167,38088705648,38086978176,38085840669,38055372785
 # default-weight-ms=1200
-# generated-at=2026-10-19T12:17:37Z
+# generated-at=2026-10-19T13:55:54Z
 # generator=regenerate-shard-manifest.py v3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	777	measured
@@ -493,7 +493,6 @@ scripts/rotate-supabase-db-credential	682	measured
 scripts/rule-metrics-aggregate	2298	measured
 scripts/rules-loader-stamp-probe	159	measured
 scripts/run-report-exit-first-contact-8076	1160	measured
-scripts/sandbox-readback-10445	1200	floor
 scripts/seccomp-unenforced-alert	106	measured
 scripts/secret-scan-smoke-gate	13786	measured
 scripts/send-failed-alert-probe-8097	2172	measured
