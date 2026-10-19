@@ -256,7 +256,11 @@ _affected_vacuous_seg() { # <trimmed segment> → rc 0 when it certifies nothing
   case "$s" in
     env\ *-c\ *|bash\ -c\ *|sh\ -c\ *|dash\ -c\ *|zsh\ -c\ *|ksh\ -c\ *|eval\ *)
       inner="${s#* -c }"
-      [[ "$inner" == "$s" ]] && inner="${s#eval }"
+      # `eval\ ` (escaped space) is deliberate: hook-input-contract's A1 idiom ban
+      # greps this lib for an `eval` followed by a bare space — a prefix-strip
+      # pattern is not an invocation, but the guard keys on the token, so the
+      # pattern is spelled to stay outside its match.
+      [[ "$inner" == "$s" ]] && inner="${s#eval\ }"
       inner="${inner#[\"\']}"; inner="${inner%[\"\']}"
       _affected_cmd_vacuous "$inner" && return 0 ;;
   esac

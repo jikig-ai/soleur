@@ -197,21 +197,23 @@ Before spawning review agents, classify the PR to avoid spawning agents whose ex
 
 **Suite scope for every agent below — a review agent never runs the FULL gate.**
 Spawned agents run only the suites targeting the files they were given — mechanically,
-that is `bash "${CLAUDE_PLUGIN_ROOT}/scripts/affected-tests.sh"` — it delegates `--affected`
+`bash "${CLAUDE_PLUGIN_ROOT}/scripts/affected-tests.sh"` — it delegates `--affected`
 to a capability-positive [runner](../../../../scripts/test-all.sh) when present, else its
-stack adapters select; no hand-derived suite list is needed. **`SOLEUR_SUBAGENT=1` is a
+stack adapters select; the founder-repo runner-side equivalent is
+`TEST_GROUP=affected bash scripts/test-all.sh`. No hand-derived suite list is needed.
+**`SOLEUR_SUBAGENT=1` is a
 convention a lead MAY export before spawning — the harness does not set it** (measured 2026-08-19:
-UNSET inside two independent spawned agents, and no repo-controlled spawn path sets it). When it IS exported, a plain `test-all.sh` invocation exits 4 while `affected`
+UNSET inside spawned agents). When it IS exported, a plain `test-all.sh` invocation exits 4 while `affected`
 proceeds. Agents must not run the runner unscoped,
 `apps/web-platform/infra/run-registered-suites.sh`, or any other full-gate runner: this panel is
 the densest concurrency in the whole pipeline, and concurrent full-gate runs inflate each other's
 timings and corrupt the measurement (860→1675 s, 2026-08-11). The lead runs the gate ONCE after the
-panel returns — `bash "${CLAUDE_PLUGIN_ROOT}/scripts/affected-tests.sh"` ([contract](../ship/references/affected-gate-contract.md)); absent a [runner](../../../../scripts/test-all.sh) it is the sole scope. Two backstops:
+panel returns — `bash "${CLAUDE_PLUGIN_ROOT}/scripts/affected-tests.sh"` ([contract](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/affected-gate-contract.md)); absent a [runner](../../../../scripts/test-all.sh) it is the sole scope. Two backstops:
 [scripts/test-all.sh](../../../../scripts/test-all.sh) exits 4 when it MEASURES a sibling full-gate run already in flight
 (#7553) — `affected` is exempt from that too — and `tc_acquire`'s advisory lock (ADR-133)
 serialises whatever gets past that. The
-`SOLEUR_SUBAGENT=1` exit-4 path is a deliberate-export convention, not harness-enforced — so the
-paragraph above IS agent discretion for the non-concurrent case, written as instruction not claim.
+`SOLEUR_SUBAGENT=1` exit-4 path is a deliberate-export convention, not harness-enforced — the
+paragraph above is instruction for the non-concurrent case, not claim.
 
 **A mutating seat gets an ALLOCATED sandbox, never a hand-copied tree.** Brief it with this, anchored to the live root (the script exists only in this repo): `ROOT=$(git rev-parse --show-toplevel); SBX=$(bash "$ROOT/scripts/soleur-sandbox.sh" new <seat>) && [ -d "$SBX" ] || { echo ALLOC-FAILED; exit 2; }`. One copy, restored per row, then `bash "$ROOT/scripts/soleur-sandbox.sh" rm "$SBX"` before returning. On ALLOC-FAILED it stops: never mutate the live tree, never fall back to `/tmp` or the scratchpad. The owner is the SESSION, so the lead `rm`s the path after any seat returns or fails. No script in the repo: use the fallback in [work-scratch-sandboxes.md](../work/references/work-scratch-sandboxes.md). A helper that signals or removes files: run each mutant via `run-isolated "$SBX" -- <cmd>` under `timeout -k 5 120`; one that cannot start there (125 with `RUN_IN_PID_NAMESPACE_REFUSED`, a missing script or verb) is `UNVERIFIED-NO-NAMESPACE`, never run on the host (same file, mutating-helper section).
 

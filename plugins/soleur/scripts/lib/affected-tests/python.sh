@@ -27,7 +27,9 @@ affected_py_detect() {
     [[ "$m" == pytest.ini ]] && return 0
     grep -qiE 'pytest' "$m" 2>/dev/null && return 0
   done
-  affected_find_files any 'test_*.py' '*_test.py' | grep -q .
+  # `< <(producer)`, not `producer | grep -q .`: under pipefail grep's early
+  # exit SIGPIPEs the producer and a match can read as a miss (#9217).
+  grep -q . < <(affected_find_files any 'test_*.py' '*_test.py')
 }
 
 # Resolve the pytest invocation into ADP_TOOL (argv). A direct `pytest` binary

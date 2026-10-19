@@ -533,7 +533,10 @@ affected_resolve_base || {
   # One bounded deepen on a shallow clone — then refuse, never a silent
   # full and never a silent empty.
   if [[ "$(git rev-parse --is-shallow-repository 2>/dev/null || true)" == "true" ]]; then
-    affected_timeout 60 git fetch --deepen=200 >/dev/null 2>&1 || true
+    # --no-tags: the deepen buys commit history for the merge-base, never tag
+    # objects — and a bare `git fetch` in the battery closure is a tag-write
+    # surface the repo-write-boundary census refuses (battery-tag-authorship).
+    affected_timeout 60 git fetch --no-tags --deepen=200 >/dev/null 2>&1 || true
     affected_resolve_base || finish 4 none no-base-ref - "$CI_NAME" - - -
   else
     finish 4 none no-base-ref - "$CI_NAME" - - -
@@ -553,7 +556,7 @@ _base_rc=0
 _base_diff="$(git -c core.quotePath=false diff --name-only -M "${BASE}...HEAD" -- 2>/dev/null)" || _base_rc=$?
 if (( _base_rc != 0 )); then
   if [[ "$(git rev-parse --is-shallow-repository 2>/dev/null || true)" == "true" ]]; then
-    affected_timeout 60 git fetch --deepen=200 >/dev/null 2>&1 || true
+    affected_timeout 60 git fetch --no-tags --deepen=200 >/dev/null 2>&1 || true
     _base_rc=0
     _base_diff="$(git -c core.quotePath=false diff --name-only -M "${BASE}...HEAD" -- 2>/dev/null)" || _base_rc=$?
   fi
@@ -857,8 +860,9 @@ if (( SAW_SUITE == 0 )); then
     finish 4 "$MODE" "${AGG_REASON:-toolchain-missing}" "${STACKS:--}" "$CI_NAME" - - -
   fi
   _tests_exist=0
-  if affected_find_files any '*.test.*' '*.spec.*' 'test_*.py' '*_test.py' '*_test.go' \
-      | grep -q .; then
+  # Process substitution, not `… | grep -q .`: under pipefail grep's early exit
+  # SIGPIPEs the producer and a match can read as a miss (#9217).
+  if grep -q . < <(affected_find_files any '*.test.*' '*.spec.*' 'test_*.py' '*_test.py' '*_test.go'); then
     _tests_exist=1
   fi
   if (( _tests_exist )); then
