@@ -121,3 +121,10 @@ PENDING seats: pattern-recognition (391b64d9), test-design (f947202a).
 - gate3 run backgrounded at /tmp/soleur-9307/gate3.log (check GATE_RC)
 - REMAINING: soleur:qa → soleur:compound → soleur:ship (merge + postmerge) → DONE
 - Findings synthesis: all P1/P2 fixed inline; P3s fixed or documented SKIPPED; no deferred issue filings needed beyond existing issues
+
+## Ship entry (2026-10-19)
+- review (10 seats + fix-round) DONE: all P1/P2 + P3s fixed, suite 268/0
+- qa: SKIPPED per qa-skill short-circuit (no Browser:/API verify: steps in plan)
+- compound: 2 learnings committed (hook-workdir false-positive, literal-NUL fail-open)
+- gate3 log /tmp/soleur-9307/gate3.log — was queued pos 2; check GATE_RC at ship
+- NEXT: soleur:ship — ready PR, wait CI, merge (auto-close scan: body uses Ref #9307), postmerge verify, cleanup-merged, then <promise>DONE</promise>
