@@ -1288,6 +1288,7 @@ AFFECTED_SCRIPTS_CI_PR_SELECTION_PATHS=(
 AFFECTED_PLUGINS_SOLEUR_TEST_CI_SHARD_TOTALITY_SKIP_TEST_SH_PATHS=(
   ".github/workflows"
   "plugins/soleur/test/ci-shard-totality-skip.test.sh"
+  "scripts/ci-e2e-classify.sh"
   "scripts/ci-shard-totality-classify.sh"
   "scripts/lib/test-affected-paths.sh"
 )
