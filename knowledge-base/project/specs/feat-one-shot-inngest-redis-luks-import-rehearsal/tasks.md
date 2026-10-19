@@ -30,15 +30,18 @@ deletion of the rehearsal volume (#10112 lands after); targeted local tests only
 - 3.4 Repair: `state pull | jq (serial+1, special=false) | state push -`; assert `plan -detailed-exitcode` rc 0 and digest equal to the pre-loss digest.
 - 3.5 Negative control: same fixture without `prevent_destroy` (validated well-formed) mints a different digest on apply.
 - 3.6 `import {}` characterization: plan = 1 import / 1 add / 1 destroy + error; report `note import_block_plan_prints_value=yes|no` (not gated); canary through the scan path; scan terraform files with `grep -F -f`.
-- 3.7 In-suite mutation battery per the plan's Guard Contract (Guard 1 five rows, Guard 2 four rows, harness rows), each mutated fixture proven well-formed first; child runs bounded.
+- 3.6b Real-filter rows: save plans with `-out` in the scratch dir; `terraform show -json` | `jq -f tests/scripts/lib/destroy-guard-filter-web-platform.jq`: state-loss plan gives `luks_passphrase_rotations >= 1`, post-repair plan gives `0`; report imported-not-edited and `import {}` states as `plan error`.
+- 3.6c Controls: empty-state plan of the fixture is "1 to add" rc 2 (plannable); resolved provider version equals the lock entry; stale-serial push refused without `-force`; repair filter selects exactly one instance (type, name, `module == null`).
+- 3.7 In-suite mutation battery per the plan's Guard Contract (Guard 1 eight rows, Guard 2 four rows, harness rows) on scratch COPIES (never in-place), each mutated fixture proven well-formed first; a pristine child must exit 0 first and only exit 1 with the expected failing assertion NAME counts as caught (>= 2 or 127 = instrument failure); child output to a 0600 file, never forwarded; parent asserts its own stdout lacks the value; `timeout -k` on every terraform call; registry init bounded with two retries.
+- 3.7b Print `RAN <n> dynamic assertions`; pin it statically; pin `MIN_CASES` exactly; CI detection `CI=true || GITHUB_ACTIONS=true`; `::add-mask::` under CI; seams honoured only with the child marker and FATAL under CI otherwise; stale-scratch sweep by prefix.
 - 3.8 Run the full suite locally (provider from the plugin cache) GREEN; run it once with the cache hidden and `CI` unset (SKIP path) and once with `CI=1` and no provider (FATAL path).
 
 ## Phase 4: Records (CTO R4, CPO conditions)
 
 - 4.1 ADR-282: dated addendum (states its convention exception explicitly) with UNVERIFIED first, VERIFIED scoped to local state and the terraform versions actually run; in-place edit of the `| Terraform state entry lost |` row limited to the false `import {}` parenthetical, the "remains UNVERIFIED" sentence and the DEFERRED clause. Finalize wording after reading the first green CI leg (1.10.5) and quote the `import_block_plan_prints_value` observation.
-- 4.2 Runbook `inngest-luks-cutover-6894.md` row: same correction; passphrase-echo warning; shell prefix-assignment form (never `env VAR=value terraform`); R2-backed state not run.
+- 4.2 Runbook `inngest-luks-cutover-6894.md` row: same correction plus the full owner procedure of the plan's Phase 4(b) items (1)-(7): merge pause + backup + plan before/after + stop rule; imported-value verification and the zero-diff rule on the Doppler copy; live-RED window and serial re-read, no `-force`; owner-terminal handling (unexported variable, prefix assignment, 0600 tmpfs capture, no `env VAR=value`, no `-out`); cleanup list; not-covered list; verbatim scope qualifier.
 - 4.3 Paraphrase sweep (`import ?\{\}|plans as a no-op|candidate recipe|NOT rehearsed|state-loss recovery`) over `knowledge-base/engineering` and `apps/web-platform/infra`; read every hit; list the left-unchanged hits (ADR-142 history, `inngest-arm-write-token.tf`, ADR-006 and the rationale runbook web-class text).
-- 4.4 Run `scripts/test-affected-kb-consumers.test.sh` once after the doc edits.
+- 4.4 Run `scripts/test-affected-kb-consumers.test.sh`, `apps/web-platform/infra/inngest-luks-sole-copy.test.sh` and `plugins/soleur/test/sole-copy-drift-check.test.sh` once after the doc edits. ADR addendum records two accepted residuals (ADR-only edit does not trigger the suite; the leg is advisory).
 
 ## Phase 5: Registration, verification, ship notes
 

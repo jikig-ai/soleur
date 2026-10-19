@@ -33,3 +33,14 @@ Panel: DHH, Kieran, code-simplicity (single-user-incident adds architecture-stra
 | DHH: drop the pointer assertion in `inngest-provision-rehearsal.test.sh`; simplicity: keep | taste | Kept per CTO R1 (binding): it is the operator-named file and the only edit the operator's wording still owes. |
 | DHH: collapse boilerplate sections (Observability, Encryption, IaC, C4) | taste | Kept: template-required gates (Phase 2.8-2.11); already short where not applicable. |
 | Simplicity: floor/skipped-count bookkeeping and the version-note split | taste | Kept per CTO R3 (binding): counted `SKIPPED` marker, floor on non-skipped runs, FATAL under CI. |
+
+## 3. Deepen-plan (headless) - dispositions
+
+Seven agents ran (architecture, security, spec-flow, test-design, observability, user-impact, terraform docs). Every finding was technical or mechanical and was folded into the plan (see its "Deepen-plan additions" block and Phase 4(b)); none moved operator-requested scope or added cost.
+
+| Item | Class | Ruling |
+|---|---|---|
+| Feed the real destroy-guard filter in the suite (spec-flow P2) | technical | Adopted by the plan author (de minimis, reversible within the diff, extends the evidence for a claim the operator asked to close): one-resource fixture rows; the full production plan stays UNVERIFIED. |
+| ADR is outside the leg's PR `paths:` list (architecture) | technical | Accepted residual, recorded in the addendum; editing `infra-validation.yml` would collide with PR 10405. |
+| Runbook procedure for the real passphrase (security, user-impact, spec-flow) | technical | Adopted in Phase 4(b) and as an acceptance criterion; the owner decides and runs any real repair, no agent applies it. |
+

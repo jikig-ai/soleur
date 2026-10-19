@@ -12,6 +12,22 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-19
+**Sections enhanced:** Architecture (new "Deepen-plan additions" block), Phase 4 (runbook procedure), Guard Contract (3 rows), Observability (4 corrections), User-Brand Impact (rewritten), Acceptance Criteria (5 added), Research Insights (documentation findings below).
+**Agents used:** architecture-strategist, security-sentinel, spec-flow-analyzer, test-design-reviewer, observability-coverage-reviewer, user-impact-reviewer, framework-docs-researcher (plus the plan-review panel and the CPO/CTO advisories earlier).
+
+### Key Improvements
+1. The suite now also feeds the repo's REAL destroy-guard filter, turning "per-merge jq HALT" from wholly UNVERIFIED into measured for the one-resource fixture.
+2. The runbook procedure is specified (merge pause, backup, imported-value verification against the Doppler copy, live-RED window, owner-terminal secret handling, cleanup, not-covered cases, scope qualifier) because the owner will copy the recipe with the REAL passphrase and the harm of a wrong push is losing the sole-copy volume.
+3. Test-of-test hardening: pristine-child instrument control, zero-match repair mutation, positive controls, cascade control, diagnostics without leaking, CI detection by the runner's own convention, RAN-line pin.
+
+### New Considerations Discovered
+- `deploy-script-tests` is an ADVISORY leg: a red suite is visible-red but not merge-blocking; main-health-monitor is the backstop (its `TERRAFORM_VERSION` is also 1.10.5).
+- The ADR is not in the leg's PR `paths:` list: an ADR-only edit does not trigger the suite (accepted residual; editing the workflow would collide with PR 10405).
+- Documentation findings (framework-docs-researcher): the random provider's `ImportState` hard-codes `special/upper/lower/number/numeric = true`, `min_* = 0`, `override_special = null` and sets `length = len(id)` (a wrong-length value therefore shows as a `length` change); the `import` command prints the id in per-resource hook lines (`Importing from ID`, `Preparing import... [id=...]`, `Importing... [id=...]`, `Import complete [id=...]`) with no redaction code; `state push` refuses lineage mismatch, higher remote serial, lower serial and equal-serial-different-content, and whether `-force` bypasses the lower/equal checks is UNVERIFIED; whether a `-plugin-dir` package is checked against the lock `h1:` hashes is UNVERIFIED (the planning run installed it as "unauthenticated" and selected the locked 3.9.0); sensitive-variable id redaction on 1.10.x is UNVERIFIED (the CI leg's observation line settles it); no 1.9.8 -> 1.10.x change was found for TF_CLI_ARGS, state push, plugin-dir/lockfile or `-detailed-exitcode` (an error plan exits 1, not 2). Sources: developer.hashicorp.com `cli/config/environment-variables`, `cli/commands/import`, `cli/commands/state/push`, `cli/commands/init`, `language/files/dependency-lock`, `language/meta-arguments/lifecycle`; hashicorp/terraform-provider-random `internal/provider/resource_password.go` at v3.9.0; hashicorp/terraform v1.10.0 `internal/command/views/hook_ui.go` and `internal/states/statemgr/migrate.go`.
+
 ## Overview
 
 Item 5 of the Inngest LUKS arc (#9927). ADR-282 records the loss mode "Terraform state entry lost" and
@@ -141,7 +157,7 @@ Every mutated fixture must be proven well-formed (`terraform validate` rc 0) bef
 ### Split Assessment
 
 - Subsystems touched: 3 - `apps/web-platform/infra/` (tests), `knowledge-base/engineering/architecture/decisions/` (ADR-282), `knowledge-base/engineering/operations/runbooks/`.
-- Planned files: 6 | Estimated changed lines: ~420 (suite ~300, ADR ~35, runbook ~6, pointer ~5, tsv 1, plan artifacts excluded).
+- Planned files: 7 (suite, pointer edit, ADR-282, runbook, two generated tsv files, and nothing else) | Estimated changed lines: ~560 (suite ~420 including the in-suite battery and real-filter rows, ADR ~45, runbook ~30, pointer ~5, tsv 2; plan artifacts excluded).
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR
 
@@ -205,6 +221,19 @@ exit 1. A CI terraform version other than the pin is FATAL; a local mismatch is 
 once; a local `-plugin-dir` package whose `h1:` hash is absent from the lock for this platform is a distinct
 local note (checksum mismatch), not a silent pass.
 
+Deepen-plan additions (2026-10-19; reviewer findings folded in, each with its disposition):
+
+- **Real per-merge filter rows (closes the "per-merge jq HALT" gap for the one case the scratch root can model).** Save plans with `-out` inside the scratch dir only and feed `terraform show -json <plan>` to the repo's own filter (`jq -f tests/scripts/lib/destroy-guard-filter-web-platform.jq`, the form `tests/scripts/test-destroy-guard-counter-web-platform.sh` uses): the pure-create plan after state loss must give `luks_passphrase_rotations >= 1` (the HALT fires), and the post-repair "No changes" plan must give `0`. The imported-not-edited state fails at plan time (`prevent_destroy`) before any plan JSON exists, which is itself the recorded result. These rows measure the filter on a one-resource fixture; the production plan also carries the Doppler copy, so the ADR keeps "the HALT on the full production plan" as UNVERIFIED.
+- **Repair selects exactly one instance.** The `jq` repair filter selects by `type == "random_password"`, `name == "inngest_redis_luks"` and `module == null` (the form runbook section 5c uses) and the suite asserts exactly one match before pushing. Added mutation: a filter that matches zero instances still pushes with serial+1 but the post-push plan is still a replacement, so the suite must go RED on the PLAN, not on the edit's exit code.
+- **Stale push is refused.** A row pushes a state pulled before the repair (lower serial than the current one) and asserts the push is refused without `-force` (docs: lineage and serial checks; `-force` bypass semantics for lower/equal serial are UNVERIFIED, so the suite never uses `-force`). This documents the only protection `state push` has; it is NOT a lock (R2 has none).
+- **Positive controls and instrument controls.** (i) The fixture with `special = false` already in config and an EMPTY state plans "1 to add" with rc 2 and no error (the config is plannable, so rc 1 after import is the import's doing, not a provider failure). (ii) The resolved provider version equals the lock entry (3.9.0) and `terraform version` equals the pin on CI (a local mismatch is a counted note). (iii) Every mutation child run is preceded by a pristine child run that must exit 0; only exit 1 with the expected failing assertion NAME counts as caught; exit >= 2 or 127 is reported as an instrument failure, never as evidence.
+- **Anchors.** The primary evidence is terraform's exit code and the digest; plan phrases are secondary. "Apply refused" must additionally match `Instance cannot be destroyed` (otherwise any other failure, such as a provider load error, would pass). Under `-no-color` `Instance cannot be destroyed` is stable; `forces replacement` is a diff annotation that can move, so it is never the sole anchor.
+- **Cascade control.** The dynamic chain is split into independently reported subsections (mint, loss+import, repair, negative control, `import {}` characterization, filter rows); a failure in an earlier subsection marks the later ones `blocked by <name>` instead of cascading RED.
+- **Failure diagnostics without leaking.** On failure the funnel prints the boolean and exit code of every anchor and a REDACTED excerpt (redaction by pattern file, never argv); the first CI run on 1.10.5 is otherwise blind because every terraform output goes to a file.
+- **Hygiene additions.** The value file is born 0600 (`umask 077`, never chmod afterwards). Scratch dirs use the prefix `inngest-luks-import-rehearsal.` and never sit under, or start with, the runner's per-suite log dir name (`infra-suites.`) that CI uploads on RED; no keep-for-debug flag; a suite-start sweep removes stale scratch dirs of its own prefix older than 30 minutes (SIGKILL and `timeout` kills never run the trap). Mutation children write stdout/stderr to a 0600 file in the scratch dir that the parent never forwards; the parent asserts only exit code and a strict `FAIL <name>` extraction, and asserts its OWN stdout lacks the value. The whole-scratch-dir scan (`grep -F -f`) excludes only the value file and the canary file. Under CI the value is registered with `::add-mask::` at mint time. The `SOLEUR_*` seams are honoured only when the child marker `SOLEUR_IMPORT_REHEARSAL_NO_MUT=1` is also set, and are FATAL under CI otherwise (a leaked env var in a leg cannot redirect the static reads). Children reuse the parent's resolved plugin dir (no second registry fetch, no shared `TF_PLUGIN_CACHE_DIR` race between concurrent legs).
+- **Timeouts and CI detection.** Every terraform call runs under `timeout -k 5 <n>`; the registry `init` has up to two retries with backoff and a bound, so a registry outage ends as a FATAL line well inside the 360 s per-suite bound instead of eating it. CI detection is `CI=true` or `GITHUB_ACTIONS=true` (the runner's own convention), not "`CI` set". A missing `jq` follows the same two-way rule as terraform. The dynamic section prints a positive `RAN <n> dynamic assertions` line and a static assertion pins that string, so a scrubbed `CI` cannot silently skip; `MIN_CASES` is pinned to an exact number (the sole-copy suite's approach), not a loose floor.
+- **Failure message for the drift rows.** A red on the extracted block (`length`, `special`, `prevent_destroy` changed) says "re-review the recovery claim in ADR-282 and the runbook row", not "broken"; the suite header records that an emergency edit to `inngest-redis-luks.tf` merges with `[skip-web-platform-apply]` and is EXPECTED to turn this advisory leg red.
+
 Mutation driver (the matrices below are tests, not prose): the suite exposes two seams, `SOLEUR_IMPORT_REHEARSAL_SRC_TF`
 (alternate source for the resource block; default the real file) and `SOLEUR_TF_PLUGIN_DIR`, plus
 `SOLEUR_IMPORT_REHEARSAL_NO_MUT=1` (set in the child, prevents recursion). An in-suite battery builds each
@@ -236,7 +265,7 @@ with `-detailed-exitcode` rc 0; digest equality; negative control; `import {}` b
 characterization; leak positive control then scan; argv-shim assertion. Mutation fixtures validated with
 `terraform validate` before use.
 
-**Phase 4 - Records (CTO R4).** (a) ADR-282: a dated addendum "2026-10-19 (#9927 item 5, import rehearsal)" that states the convention exception explicitly ("Appended; the only change above is the loss-mode row ...")
+**Phase 4 - Records (CTO R4).** (a) ADR-282: a dated addendum "2026-10-19 (#9927 item 5, import rehearsal)" that reuses the item-8c form ("Appended; the only change above is the loss-mode row ..."; status stays `accepted`, no frontmatter change) and records two accepted residuals: an ADR-only edit that drops the suite's name does not trigger `deploy-script-tests` (the ADR is not in the PR `paths:` list and editing `infra-validation.yml` would collide with PR 10405), and the suite is advisory
 stating exactly what is VERIFIED (offline, local state, terraform version(s) run, random provider 3.9.0,
 synthetic value, extracted block) and what stays UNVERIFIED (R2-backed state, the per-merge jq HALT's behavior
 after the state edit, every other `random_password` including `workspaces_luks_web`, the Doppler-copy
@@ -246,7 +275,31 @@ with a pointer to the addendum and the suite. The row's `DEFERRED (#9927)` claus
 updated to done. (b) Runbook `inngest-luks-cutover-6894.md` row "Terraform state entry lost": same
 correction, naming the owner-local env route (`TF_CLI_ARGS_import`, output to a file, never to CI) and the
 pull/edit/push repair as the verified-on-local-state recipe, still owner-decided and never applied by an agent.
-(c) Paraphrase sweep (`2026-10-06-narrowing-a-guard...` learning): re-run `grep -rn -i -E "import ?\{\}|plans as a no-op|candidate recipe|NOT rehearsed|state-loss recovery"` over `knowledge-base/engineering` and `apps/web-platform/infra`; read every hit; the known others (ADR-142 line 713 history, `inngest-arm-write-token.tf:47` a different resource, ADR-006/rationale web-class text) are left unchanged by design and listed in the PR.
+The runbook row carries the owner-facing procedure the reviews required (all of it text in one row or a short
+sub-list directly under it): (1) FIRST pause infra merges (`[skip-web-platform-apply]`), because R2 has no lock; take a
+secured backup of the pre-edit state (0600, tmpfs, deleted afterwards; `shred` is meaningless on SSD/CoW storage, tmpfs is
+the control); run a plain `terraform plan` before and after the push; STOP if the post-repair plan is not "No changes".
+(2) Verify the imported value before any apply: a wrong-LENGTH value shows as a `length` change in the first plan (the
+provider's `ImportState` sets `length` from the id); compare the state value to the Doppler copy by digest without
+printing (`jq --rawfile`, never `--arg`); the first plan after the repair must show `doppler_secret.inngest_redis_luks_key`
+with no diff, otherwise do not apply, because an apply (or a manual-rerun, where the per-merge HALT does not apply) would
+overwrite the only opener. (3) The imported-but-not-edited state is a LIVE RED state once written to R2: every per-merge
+apply and every 12-hour drift run fails on `prevent_destroy` until the edit is pushed, so import and edit happen in one
+sitting; re-read the state serial immediately before the push and never pass `-force`. (4) Owner-terminal handling of the
+real value: read it without echo into an unexported variable (`IFS= read -rs`), single-command prefix assignment
+`TF_CLI_ARGS_import="-input=false <addr> $v" terraform import >file 2>&1` (flags INSIDE the variable; never an exported
+variable, never `env VAR=value terraform`, which puts the value on `env`'s world-readable cmdline); `unset TF_LOG
+TF_LOG_PATH`; not through an agent, a `!` prefix or a recorded session; no `-out` plan file for the `import {}` route;
+the `env -i` isolation used by the test is a harness device only (a real run needs the R2 and provider credentials and
+the `TF_VAR_*` set the CI job uses; the owner's local terraform must match the pinned version, because a state written by
+a newer terraform is refused). (5) Cleanup list: `terraform.tfstate*` including the timestamped `.backup` files that
+`.gitignore` does not cover, `crash.log`, plan files, `.terraform/`; every capture file is mode 0600 on tmpfs. (6) Not
+covered by the recipe: whole-state loss (a lost state object plans creates for everything), loss of BOTH pair members
+(the Doppler copy would then plan as a create; whether to import it or accept a same-value create is unverified), and the
+backlog of merges made with `[skip-web-platform-apply]` (the first apply after the repair carries all of them: review that
+plan before delivery). (7) Scope qualifier, verbatim: "verified on local state with a synthetic value; not run against
+R2-backed state".
+(c) Paraphrase sweep (`2026-10-06-narrowing-a-guard...` learning; ADR-282 line ~186 is the unrelated project-deletion residual and is NOT edited): re-run `grep -rn -i -E "import ?\{\}|plans as a no-op|candidate recipe|NOT rehearsed|state-loss recovery"` over `knowledge-base/engineering` and `apps/web-platform/infra`; read every hit; the known others (ADR-142 line 713 history, `inngest-arm-write-token.tf:47` a different resource, ADR-006/rationale web-class text) are left unchanged by design and listed in the PR.
 
 **Phase 5 - Registration, local verification, ship notes.** `git add -N` the new suite first (the generator, `--list` and the orphan lint read tracked files). Add the `suite-shard-legs.tsv` row via
 `python3 scripts/regenerate-shard-manifest.py --group infra --incremental --write` (the same `--write` emits
@@ -295,8 +348,8 @@ vendor. No Product/UX Gate (no UI-surface path in the Files lists).
 
 ## User-Brand Impact
 
-- **If this lands broken, the user experiences:** nothing directly (a test and records); a falsely "verified" recovery claim would mislead the repository owner during a state-loss incident and prolong an Inngest scheduler outage that delays or drops every user's armed reminders.
-- **If this leaks, the user's data is exposed via:** no real credential is touched; the only secret in play is a synthetic passphrase minted inside the test. The exposure vector this plan defends against is a future edit that prints a REAL recovered passphrase through the same recipe: terraform echoes the import id on stdout and an `import {}` plan prints it, so the documented recipe sends output to a file and never to CI.
+- **If this lands broken, the user experiences:** a wrong "verified" recovery claim sends the repository owner into a real state-loss repair with a recipe that is either unsafe or incomplete. Two concrete harms, both reaching every user of the scheduler: (a) importing a wrong, stale or mistyped 40-character value, then pushing the edited state, lets the next apply overwrite `INNGEST_REDIS_LUKS_KEY` (`doppler_secret.inngest_redis_luks_key`, value `random_password.inngest_redis_luks.result` at `inngest-redis-luks.tf`) with a value that does not open the header of the sole-copy volume, so the host cannot mount its Redis store and all armed reminders and in-flight jobs are lost; (b) a push against the R2 backend, which has no lock and no versioning, can race a concurrent apply or leave an unrecoverable wrong state. A red or flaky suite on `deploy-script-tests` is advisory (not in the required-check ruleset) but would be visible-red noise on unrelated infra PRs.
+- **If this leaks, the user's data is exposed via:** the REAL recovered passphrase, not the test's synthetic value: `terraform import` echoes `Importing from ID "<value>"`, an `import {}` plan prints it twice despite a sensitive variable, `terraform state pull` output and every local state write (`terraform.tfstate`, timestamped `.backup` files that `.gitignore` does not cover, `crash.log`) hold it in plaintext, and CI uploads per-suite logs on RED for 14 days. The runbook row therefore carries the owner-terminal procedure (unexported variable read without echo, single-command prefix assignment, output redirected into a 0600 file on tmpfs, no `env VAR=value` form, no `-out` plan file for the `import {}` route), and the suite keeps its own synthetic value out of stdout, argv and any uploaded path.
 - **Brand-survival threshold:** `single-user incident`
 - **Threshold decision (challengeable):** adopted from the governing ADR (ADR-282 frontmatter `brand_survival_threshold: single-user incident`): this PR rewrites that ADR's sole-copy recovery claim, so it carries the ADR's tier rather than a lower one. Consequences: `requires_cpo_signoff: true` (advisory obtained at plan time, recorded in `## Domain Review`) and `soleur:engineering:review:user-impact-reviewer` at review time. The test itself touches no real credential.
 
@@ -361,7 +414,7 @@ Authored now; nothing is deferred to a follow-up issue.
 liveness_signal:
   what: deploy-script-tests leg result line "PASS apps/web-platform/infra/inngest-redis-luks-import-rehearsal.test.sh" (RED line on failure) from run-registered-suites.sh
   cadence: per CI run touching apps/web-platform/infra/ (every PR and every main push through the leg that owns the suite)
-  alert_target: required-check surface of the PR; main-health-monitor files an issue on a red main run
+  alert_target: the red check on the PR (deploy-script-tests is an ADVISORY leg, not in ruleset-ci-required.tf: visible-red, not merge-blocking); main-health-monitor.yml (its own TERRAFORM_VERSION literal is also 1.10.5) files an issue on a red main run
   configured_in: .github/workflows/infra-validation.yml (deploy-script-tests job) via run-registered-suites.sh glob registration; apps/web-platform/infra/suite-shard-legs.tsv
 error_reporting:
   destination: CI job log of the owning leg, per-suite log dir retained on RED by run-registered-suites.sh (no Sentry: a test has no runtime)
@@ -371,20 +424,28 @@ failure_modes:
     detection: "[FATAL] ... CI is set: refusing to skip silently" and exit 1
     alert_route: RED line on the leg; main-health-monitor on main
   - mode: the dynamic section skipped locally (no provider cache)
-    detection: counted "SKIPPED <n> assertions" marker in the suite output
-    alert_route: visible in local output; CI never skips (FATAL instead)
+    detection: counted "SKIPPED <n> assertions" marker, visible only when the suite is run directly (run-registered-suites.sh prints a bare PASS for a skip and keeps logs only on RED)
+    alert_route: local output only; CI never skips (FATAL instead)
+  - mode: CI scrubbed or unset on a leg so the dynamic section would silently skip
+    detection: CI detection is CI=true or GITHUB_ACTIONS=true; the dynamic section prints "RAN <n> dynamic assertions" and a static assertion pins that string, so a skip without the line goes RED
+    alert_route: RED line on the leg (workflow run log, ::error annotation)
+  - mode: main-health-monitor terraform pin drifts from the infra-validation pin
+    detection: version-mismatch FATAL under CI names both versions
+    alert_route: main-health-monitor issue on a red main run
   - mode: production block drifts (length, special, prevent_destroy changed)
     detection: static-section assertions inside the extracted block go RED
     alert_route: RED line on the leg of the PR that changes inngest-redis-luks.tf
   - mode: a change prints or argv-leaks the synthetic value
     detection: self-scan of the suite's own output and the argv-shim assertion go RED
-    alert_route: RED line on the leg
+    alert_route: RED line on the leg (workflow run log; the runner prints a bounded excerpt anchored on the failure marker, and the suite's own funnel never prints the value, so the excerpt cannot echo it)
 logs:
   where: GitHub Actions job log of the deploy-script-tests leg that owns the suite
   retention: GitHub Actions default log retention
 discoverability_test:
   command: bash apps/web-platform/infra/run-registered-suites.sh --list
   expected_output: inngest-redis-luks-import-rehearsal.test.sh
+  # registration probe only: it proves the suite is tracked and discoverable, NOT that the dynamic section runs
+  # (that is the RAN-line assertion above). It is true once the file is tracked (git add -N counts).
 ```
 
 ## Encryption Posture
@@ -418,6 +479,9 @@ that block stays with `inngest-luks-sole-copy.test.sh`).
 | 3 | Real block `special = true` (premise drift: the repair would be unnecessary) | RED (the suite pins the replacement premise and demands a re-review) |
 | 4 | Reorder: skip the repair, assert "No changes" straight after import | RED (the imported-not-edited state is a first-class RED row) |
 | 5 | Repair edits `special` but not the serial (push without serial+1) | RED (the push is refused; the row asserts the post-push plan, not the edit's exit code) |
+| 6 | Repair filter matches zero instances (wrong `name`/`module` selector): the push succeeds with serial+1 | RED (the post-push plan is still a replacement; the verdict comes from the plan, and the exactly-one-match assertion also fires) |
+| 7 | Run under `CI=true` with the `RAN <n> dynamic assertions` line removed (or `CI` scrubbed so the dynamic section skips) | RED (the static assertion pinning the RAN line fails; a scrubbed CI cannot produce a silent green) |
+| 8 | Feed the real destroy-guard filter the post-repair plan JSON with the state still lost (a pure create) as if it were the repaired plan | RED (`luks_passphrase_rotations` is >= 1, not 0: the "repaired plan scores 0" row distinguishes the two states) |
 
 **Harness rows.** (H1, edit to the SUITE) a suite copy with the argv shim removed from `PATH` -> RED (the shim
 row asserts the log exists and is non-empty, so a missing shim cannot pass by recording nothing); the
@@ -427,8 +491,8 @@ canonical text.
 
 **Anchor.** The oracle compares digests it computes itself in the same run (pre-loss vs post-repair), so a
 one-diff edit cannot move both sides: the pre-loss value is minted at run time. What a single diff CAN weaken
-is the suite itself; the outside anchors are the CI leg (required to be green on the PR) and the doc-pin rows
-that make the ADR/runbook rows name this suite.
+is the suite itself; the outside anchors are the CI leg (advisory, so the ready-gate AC reads its result by hand and
+main-health-monitor is the backstop on main) and the doc-pin rows that make the ADR/runbook rows name this suite.
 
 ### Guard 2 - Secret hygiene (argv, output, residue)
 
@@ -467,12 +531,14 @@ version that redacts it cannot turn the suite red for the wrong reason.
 - [ ] The failing run (Phase 1) was observed before the repair and doc-pin code existed, and the PR records the failing assertion names only.
 - [ ] The static section extracts the block with the shared lexer's `block_of` (zero blocks = failure) and asserts `length = 40`, `special = false`, `prevent_destroy = true` INSIDE it.
 - [ ] The dynamic section asserts, by terraform's own verdicts: replace + `Instance cannot be destroyed` rc 1 after import; apply refused with digest unchanged; plan rc 0 after the pull/edit/push repair; digest equal to the pre-loss digest; negative control (no `prevent_destroy`) changes the digest; `import {}` route plans replace + error and its plan text contains the value.
+- [ ] The real destroy-guard filter scores `luks_passphrase_rotations >= 1` on the state-loss plan JSON and `0` on the post-repair plan JSON; the `import {}` and imported-not-edited states are reported as `plan error` (no plan JSON exists).
+- [ ] A stale-serial push is refused without `-force`; the `RAN <n> dynamic assertions` line is pinned by a static assertion; `MIN_CASES` is pinned to an exact number; every mutation child follows a pristine child that exited 0.
 - [ ] Argv shim log exists, is non-empty, never contains the value; the suite's captured stdout/stderr never contains the value; the scratch dir is gone after the run.
 - [ ] `inngest-provision-rehearsal.test.sh` gains only the pointer assertion; `git diff --stat origin/main -- apps/web-platform/infra/inngest-provision-rehearsal/ .github/workflows/` is empty.
 - [ ] Anchored on the row start `| Terraform state entry lost |` (content anchor, never a line number), in both the ADR-282 loss-mode table and the runbook table: the row names `inngest-redis-luks-import-rehearsal.test.sh`, and none of `State-loss recovery (is|remains) UNVERIFIED`, `CANDIDATE recipe`, `NOT rehearsed`, `passes the HALT` appears inside it (the runbook says "is UNVERIFIED", the ADR "remains UNVERIFIED": both alternatives are checked).
 - [ ] ADR-282 addendum states the VERIFIED and UNVERIFIED lists exactly as ruled (R4), UNVERIFIED first, scoped "local state only" with the terraform versions the suite actually ran (1.10.5 on the CI leg; 1.9.8 locally) - the wording is finalized AFTER the first green CI leg is read, and the `note import_block_plan_prints_value=` observation from that log is quoted as the version-scoped fact; ADR frontmatter `status: accepted` unchanged.
-- [ ] The runbook row warns that `terraform import` and an `import {}` plan echo the real passphrase (output to a file, never CI, scrollback or a ticket), names the shell-prefix-assignment form (never `env VAR=value terraform`, which puts the value on `env`'s cmdline), and states the recipe has not been run against R2-backed state.
-- [ ] `scripts/test-affected-kb-consumers.test.sh` (the KB consumer ratchet mapped to ADR-282 and the runbook by `scripts/lib/test-affected-paths.sh`) is run once locally after the doc edits; paraphrase sweep run and every hit read; the left-unchanged hits are listed in the PR body.
+- [ ] The runbook row carries items (1)-(7) of Phase 4(b): merge pause + secured backup + plan before/after + stop rule; imported-value verification against the Doppler copy by digest and the zero-diff rule on `doppler_secret.inngest_redis_luks_key`; the live-RED import-to-edit window and serial re-read with no `-force`; the owner-terminal procedure (unexported variable, prefix assignment, `2>&1` into a 0600 tmpfs file, no `env VAR=value`, no `-out`); the cleanup list; the not-covered list (whole-state loss, both pair members lost, skipped-merge backlog); and the verbatim scope qualifier. Anchored greps inside the row: `local state` and `R2-backed state` both present.
+- [ ] `scripts/test-affected-kb-consumers.test.sh`, `apps/web-platform/infra/inngest-luks-sole-copy.test.sh` and `plugins/soleur/test/sole-copy-drift-check.test.sh` (all three read the ADR or the runbook) are run once locally after the doc edits; paraphrase sweep run and every hit read; the left-unchanged hits are listed in the PR body.
 - [ ] `suite-shard-legs.tsv` and `suite-durations.tsv` each have a row for the new suite; `.github/scripts/test/test-infra-suite-registration.sh` passes; `bash scripts/lint-orphan-test-suites.sh` does not list the new suite; `python3 scripts/lint-trap-tempfile-ownership.py` reports no new finding for it.
 - [ ] PR body contains `Ref #9927` and `Ref #10112` and no closing keyword; `gh pr view 10524 --json closingIssuesReferences --jq '.closingIssuesReferences | length'` prints `0` after every body edit.
 - [ ] The `deploy-script-tests` leg that owns the suite is green on CI at the pinned terraform 1.10.5 BEFORE the PR is marked ready (the only unrelated red allowed is the push-arm "Tenant integration (dev-Supabase)" on `test/server/action-sends-worm.test.ts`, which is not touched).
