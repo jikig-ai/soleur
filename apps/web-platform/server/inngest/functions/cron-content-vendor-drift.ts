@@ -523,7 +523,8 @@ async function spawnGitStdout(
     child.stderr?.on("data", (d: Buffer) => {
       stderr += d.toString();
     });
-    child.on("exit", (exitCode) => {
+    // `close`, not `exit`: `exit` can fire before stdout/stderr have been fully delivered (#10553).
+    child.on("close", (exitCode) => {
       if (exitCode === 0) {
         resolve(stdout.trim());
       } else {
@@ -728,7 +729,7 @@ async function spawnScriptCapture(
       child.stdin.write(opts.stdin);
       child.stdin.end();
     }
-    child.on("exit", (exitCode) => resolve({ exitCode, stdout, stderr }));
+    child.on("close", (exitCode) => resolve({ exitCode, stdout, stderr }));
     child.on("error", () => resolve({ exitCode: -1, stdout, stderr }));
   });
 }
