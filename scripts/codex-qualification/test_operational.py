@@ -17,12 +17,14 @@ class Operational(unittest.TestCase):
         class FixtureClock:
             @classmethod
             def now(cls, _zone):
-                return datetime(2026, 10, 13, tzinfo=timezone.utc)
+                return datetime.fromtimestamp(prepare.synthetic_browser_config()['claims']['iat'] + 86400,
+                                              timezone.utc)
         self.clock_patch = patch('candidate.datetime', FixtureClock)
         self.clock_patch.start()
         self.addCleanup(self.clock_patch.stop)
         self.fixture = test_candidate.Candidate()
         self.fixture.setUp()
+        self.addCleanup(self.fixture.tearDown)
         self.repo = self.fixture.repo
         self.destination = self.fixture.destination
         self.component = self.repo / 'scripts/codex-qualification/operational.py'
@@ -43,14 +45,11 @@ class Operational(unittest.TestCase):
         self.fixture.commit()
         self.source = self.fixture.source
         self.contract = operational.prepare_operational(self.repo, self.source, self.destination)
-        self.now = 1791849600  # Synthesized observation clock, not a live receipt.
+        self.now = int(FixtureClock.now(timezone.utc).timestamp())  # Synthetic observation, not a live receipt.
         self.image = {'Id': 'sha256:' + 'a' * 64,
                       'Config': {'Entrypoint': ['docker-entrypoint.sh'], 'Cmd': ['node', 'dist/server/index.cjs'],
                                  'Env': [], 'User': 'soleur', 'WorkingDir': '/app',
                                  'Healthcheck': None, 'ExposedPorts': {}, 'Volumes': {}, 'OnBuild': None}}
-
-    def tearDown(self):
-        self.fixture.tearDown()
 
     def receipt(self, kind):
         facts = {
@@ -229,12 +228,18 @@ class Operational(unittest.TestCase):
             self.fixture.commit()
 
     def test_candidate_expiry_remains_enforced_with_explicit_fixture_clock(self):
-        class ExpiredClock:
-            @classmethod
-            def now(cls, _zone):
-                return datetime(2026, 10, 20, tzinfo=timezone.utc)
-        with patch('candidate.datetime', ExpiredClock), self.assertRaisesRegex(prepare.Refused, 'expired'):
-            operational.prepare_operational(self.repo, self.source, self.destination)
+        expiry = prepare.synthetic_browser_config()['claims']['exp']
+        for offset in (-1, 0, 1):
+            class BoundaryClock:
+                @classmethod
+                def now(cls, _zone):
+                    return datetime.fromtimestamp(expiry + offset, timezone.utc)
+            with self.subTest(offset=offset), patch('candidate.datetime', BoundaryClock):
+                if offset < 0:
+                    operational.prepare_operational(self.repo, self.source, self.destination)
+                else:
+                    with self.assertRaisesRegex(prepare.Refused, 'expired'):
+                        operational.prepare_operational(self.repo, self.source, self.destination)
 
     def test_mutated_contract_or_forged_authority_refuses(self):
         self.contract['builder']['binary_sha256'] = '0' * 64

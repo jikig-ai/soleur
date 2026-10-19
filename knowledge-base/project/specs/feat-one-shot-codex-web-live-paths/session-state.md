@@ -2089,3 +2089,34 @@
   findings, 112 files), staged secret/syntax/whitespace checks pass. Independent
   source/actual-manifest review and fresh exact-action approval remain required;
   no registry request has run.
+- Focused security review of pushed `6632033252` found the collector's final
+  post-publication check could reject current metadata after the sink released
+  ownership, leaving its final file. The source correction must retain exact
+  created-inode rollback through final acceptance, preserving foreign files
+  and prior accepted platform metadata. Synthetic schedules, pushed correction
+  and independent recheck are required. Earlier file-only source contract/
+  preview preparation is historical after that correction; no actual registry
+  action manifest or network request exists.
+- On October 19 the parent verified the written rollback correction after
+  its implementation agent hit a usage limit: 11 registry methods pass, and
+  the new tempfile regression fails six rejection schedules against the old
+  committed source. Rollback remains bound to the exact created inode through
+  final acceptance, preserving foreign replacements and prior accepted
+  platform evidence. Pushed correction/independent recheck remain pending.
+  Synthetic browser preparation expired at 00:00 UTC; CTO must rule a source
+  refresh before fresh contract/export preparation. No expiry bypass, new
+  registry manifest or network request exists; all approval/ship holds persist.
+- CTO ruled renewal of the existing deterministic fixture to attempt
+  `codex9051-oct19-local-auth-preparation-v1`, issued October 19 and expiring
+  October 26 at 00:00 UTC, preserving the current contract/export chain.
+  Valid observation clocks are inside the new window; tests derive acceptance
+  just before expiry and refusal at/after it. The old fixture first refused
+  the new valid clock as expected. Setup cleanup is now registered before
+  preparation, addressing the temporary-directory warning from that RED run.
+  This grants no browser/account/build/runtime permission; all source/action
+  artifacts need regeneration after commit and canonical main sync.
+- Combined affected verification passes 78 methods; latest focused registry/
+  operational rerun passes 25 (12/13), including explicit sanitized cleanup
+  failure and exact expiry boundary controls. A cleanup-failure survivor stays
+  private and absent from accepted Config evidence. Ruff passes against the
+  existing baseline. No registry network operation or action approval ran.

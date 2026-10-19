@@ -11,7 +11,7 @@ import re
 import subprocess
 
 INPUT_ROOTS = ('apps/web-platform', 'plugins/soleur')
-ATTEMPT = 'codex9051-oct12-local-auth-preparation-v1'
+ATTEMPT = 'codex9051-oct19-local-auth-preparation-v1'
 ENV = {'PATH': '/usr/bin:/bin', 'HOME': '/nonexistent/codex9051-preparation',
        'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null',
        'GIT_TERMINAL_PROMPT': '0', 'LANG': 'C.UTF-8'}
@@ -36,8 +36,8 @@ def synthetic_browser_config():
     # Public, deterministic fixture material. It is never a hosted account key.
     ref = sha((ATTEMPT + ':hostname').encode())[:20]
     secret = sha((ATTEMPT + ':synthetic-signing-material').encode()).encode()
-    issued = int(datetime(2026, 10, 12, tzinfo=timezone.utc).timestamp())
-    expiry = int(datetime(2026, 10, 19, tzinfo=timezone.utc).timestamp())
+    issued = int(datetime(2026, 10, 19, tzinfo=timezone.utc).timestamp())
+    expiry = int(datetime(2026, 10, 26, tzinfo=timezone.utc).timestamp())
     claims = {'iss': 'supabase', 'role': 'anon', 'ref': ref, 'iat': issued, 'exp': expiry}
     signing_input = encoded(canonical({'alg': 'HS256', 'typ': 'JWT'})) + b'.' + encoded(canonical(claims))
     token = (signing_input + b'.' + encoded(hmac.new(secret, signing_input, hashlib.sha256).digest())).decode()

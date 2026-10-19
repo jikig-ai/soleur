@@ -416,6 +416,56 @@ passes with 62 existing baseline findings and 112 files scanned; staged secret,
 Bash syntax and whitespace checks pass. Focused source review and all actual
 action/approval gates remain pending.
 
+Focused security review of pushed
+`66320332529dbd63ef4e6f6a4b5031787c214157` identified a publication rollback
+gap: the sink could finish, then the collector's final deadline/binding check
+could reject the current metadata while its final private file remained.
+Retain exact created-inode rollback ownership through the collector's final
+acceptance. On rejection remove only the current owned artifact, preserve
+foreign replacements and earlier accepted platform metadata, and report any
+cleanup failure with a fixed reason. Discriminating tempfile schedules and
+pushed correction/review are required before preparing any actual action.
+No other actionable HTTPS/TLS/token/digest finding was identified in that
+focused pass. File-only contract/preview preparation at `6632033252` is
+historical after the correction; no action manifest or registry request exists.
+
+The correction retains a publisher rollback callback bound to the pinned
+output descriptor, fixed created names and exact inode through final collector
+checks and metadata acceptance. Rejection rolls back only that current owned
+artifact and removes its projection; earlier accepted platform metadata and
+foreign replacement files remain. Cleanup failure uses a fixed sanitized
+reason. On October 19, the parent verified all 11 registry test methods pass
+and ran the new tempfile discriminator against the previous committed source:
+six rejection schedules fail on the old source, while corrected tests pass.
+The implementation agent hit its usage limit before handoff; the parent read
+its diff and verified the actual bytes rather than treating that notification
+as completion. Pushed correction and focused independent recheck remain pending.
+
+The synthetic browser fixture expired October 19 at 00:00 UTC. Current-source
+operational/export preparation therefore needs a reviewed source-only refresh;
+no expiry bypass, fixture renewal, registry action preparation or live retry
+has run. CTO technical disposition is pending. All exact-action holds persist.
+
+CTO ruled a source-only renewal through the existing binding chain: attempt
+`codex9051-oct19-local-auth-preparation-v1`, issued October 19 at 00:00 UTC,
+expires October 26 at 00:00 UTC. The deterministic algorithm derives fresh
+synthetic hostname/signing material/token; no hosted credential or account
+operation is involved. Do not add a separate registry-only identity path or
+bypass expiry. Valid synthetic observation clocks move inside that window;
+negative tests derive the exact expiry boundary and its following second
+rather than assuming a fixed calendar date remains expired. The first run
+with the new valid observation clock correctly refused the expired old
+fixture. That setup failure exposed implicit temporary-directory cleanup;
+cleanup is now registered before contract preparation so refusal also cleans
+the fixture. Fresh source bindings and independent review remain required.
+Combined affected verification passes 78 methods; the latest focused rerun
+passes 12 registry and 13 operational methods after adding cleanup-failure
+coverage. If owned removal itself fails, the receipt excludes Config, retains
+prior accepted platform evidence and reports fixed `publication_cleanup`;
+the surviving private file is not admitted. Exact expiry-minus-one acceptance
+and expiry/expiry-plus-one refusal pass. Ruff remains clean against the
+existing 62-finding baseline, with 112 files scanned. No network action ran.
+
 The initial evidence search used the retired rollout directory rather than
 the live-paths directory. Discover current filenames before following older
 slugs. GitHub CLI subprocesses in this worktree encountered a sandboxed mise

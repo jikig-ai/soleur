@@ -270,6 +270,16 @@ class RegistryMetadata:
                 remaining()
                 bindings()
                 remaining()
+            def publish_projection(name, raw, key, projected):
+                rollback = self.publish(name, raw, publication_checks)
+                require(callable(rollback), ERROR)
+                try:
+                    publication_checks()
+                    result['metadata'][key] = projected
+                except Exception:
+                    result['metadata'].pop(key, None)
+                    rollback()
+                    raise
             enter('consume_gate', 'output_binding')
             self.output_binding()
             enter('consume_gate')
@@ -322,9 +332,7 @@ class RegistryMetadata:
                                  'layer_count': len(layers), 'declared_layer_bytes': sum(layer['size'] for layer in layers)}
                     publication_checks()
                     enter('publication')
-                    self.publish(PLATFORM_FILE, raw, publication_checks)
-                    publication_checks()
-                    result['metadata']['platform'] = projected
+                    publish_projection(PLATFORM_FILE, raw, 'platform', projected)
                 else:
                     enter('config_validation', 'digest_mismatch')
                     check('sha256:' + sha(raw) == image['image_id'], 'digest_mismatch')
@@ -335,9 +343,7 @@ class RegistryMetadata:
                                  'meaning': 'registry-config-blob-digest-not-a-local-image-ID'}
                     publication_checks()
                     enter('publication')
-                    self.publish(CONFIG_FILE, raw, publication_checks)
-                    publication_checks()
-                    result['metadata']['config'] = projected
+                    publish_projection(CONFIG_FILE, raw, 'config', projected)
                 enter('response_validation', 'observed')
             result['status'] = 'registry-metadata-sequence-completed'
             return finish()
@@ -378,6 +384,16 @@ def _remove_owned(directory, name, identity):
 def publish_artifact(directory, name, raw, validate):
     require(name in STAGING and type(raw) is bytes and len(raw) <= 1024**2, ERROR)
     stage, identity, published = STAGING[name], None, False
+    def rollback():
+        if identity is None:
+            return
+        try:
+            candidates = (stage, name) if published else (stage,)
+            outcomes = [_remove_owned(directory, candidate, identity) for candidate in candidates]
+            os.fsync(directory)
+            require(all(outcomes), ERROR)
+        except Exception:
+            raise BoundaryFailure('publication_cleanup') from None
     try:
         validate()
         descriptor = os.open(stage, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory)
@@ -398,10 +414,10 @@ def publish_artifact(directory, name, raw, validate):
         require(_remove_owned(directory, stage, identity), ERROR)
         os.fsync(directory)
         validate()
+        return rollback
     except Exception:
-        candidates = (stage, name) if published else (stage,)
-        outcomes = [_remove_owned(directory, candidate, identity) for candidate in candidates] if identity is not None else [True]
-        raise BoundaryFailure('publication' if all(outcomes) else 'publication_cleanup') from None
+        rollback()
+        raise BoundaryFailure('publication') from None
 
 
 def _source_inputs(args):
@@ -477,7 +493,7 @@ def execute_action(args):
         def consume():
             base._write_at(directory, MARKER, {'manifest_sha256': args.manifest_sha256})
         def publish(name, raw, validate):
-            publish_artifact(directory, name, raw, validate)
+            return publish_artifact(directory, name, raw, validate)
         collector = RegistryMetadata(manifest, transport, consume, publish,
             manifest_sha256=args.manifest_sha256, output_binding=output_binding)
         try:

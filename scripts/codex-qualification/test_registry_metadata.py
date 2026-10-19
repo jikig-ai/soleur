@@ -65,6 +65,10 @@ class RegistryMetadata(unittest.TestCase):
         validate()
         self.assertNotIn(name, self.published)
         self.published[name] = raw
+        def rollback():
+            if self.published.get(name) is raw:
+                del self.published[name]
+        return rollback
 
     def collector(self):
         return metadata.RegistryMetadata(self.manifest, self.transport, self.gate, self.publish,
@@ -279,6 +283,86 @@ class RegistryMetadata(unittest.TestCase):
                 self.assertEqual(other.stat().st_mode & 0o777, 0o600)
                 with self.assertRaises(Refused):
                     metadata.publish_artifact(directory, '../unapproved-name', CONFIG, lambda: None)
+            finally:
+                os.close(directory)
+
+    def test_post_publish_collector_failure_rolls_back_only_current_owned_artifact(self):
+        for target in (metadata.PLATFORM_FILE, metadata.CONFIG_FILE):
+            for failure in ('deadline', 'source', 'output', 'foreign-replacement'):
+                self.setUp()
+                with self.subTest(target=target, failure=failure), tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    root.chmod(0o700)
+                    directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+                    try:
+                        collector = self.collector()
+                        def publish_then_change_binding(name, raw, validate):
+                            rollback = metadata.publish_artifact(directory, name, raw, validate)
+                            if name == target:
+                                if failure == 'deadline':
+                                    self.now += 61
+                                elif failure == 'source':
+                                    collector.manifest['context']['source_sha'] = '8' * 40
+                                elif failure == 'output':
+                                    self.output.side_effect = OSError('synthetic private output failure')
+                                else:
+                                    path = root / target
+                                    path.unlink()
+                                    path.write_bytes(b'foreign replacement must survive')
+                                    path.chmod(0o600)
+                                    self.now += 61
+                            return rollback
+                        collector.publish = publish_then_change_binding
+                        with self.assertRaises(metadata.MetadataFailure) as raised:
+                            collector.collect()
+                        receipt = raised.exception.receipt
+                        self.assertNotIn('config', receipt['metadata'])
+                        if target == metadata.PLATFORM_FILE:
+                            self.assertEqual(receipt['metadata'], {})
+                            self.assertEqual(self.transport.request.call_count, 2)
+                        else:
+                            self.assertEqual((root / metadata.PLATFORM_FILE).read_bytes(), PLATFORM)
+                            self.assertIn('platform', receipt['metadata'])
+                            self.assertEqual(self.transport.request.call_count, 3)
+                        if failure == 'foreign-replacement':
+                            self.assertEqual((root / target).read_bytes(), b'foreign replacement must survive')
+                        else:
+                            self.assertFalse((root / target).exists(), 'Rejected current artifact survived final collector checks')
+                        self.assertFalse((root / metadata.STAGING[target]).exists())
+                    finally:
+                        os.close(directory)
+
+    def test_failed_post_publish_cleanup_is_sanitized_and_never_accepts_config(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            root.chmod(0o700)
+            directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                collector = self.collector()
+                def publish_then_block_cleanup(name, raw, validate):
+                    rollback = metadata.publish_artifact(directory, name, raw, validate)
+                    if name != metadata.CONFIG_FILE:
+                        return rollback
+                    self.now += 61
+                    def blocked_rollback():
+                        with patch.object(metadata, '_remove_owned', return_value=False):
+                            rollback()
+                    return blocked_rollback
+                collector.publish = publish_then_block_cleanup
+                with self.assertRaises(metadata.MetadataFailure) as raised:
+                    collector.collect()
+                receipt = raised.exception.receipt
+                self.assertEqual(receipt['failure']['reason'], 'publication_cleanup')
+                self.assertEqual(receipt['failure']['status_code'], 200)
+                self.assertNotIn('config', receipt['metadata'])
+                self.assertIn('platform', receipt['metadata'])
+                self.assertEqual((root / metadata.PLATFORM_FILE).read_bytes(), PLATFORM)
+                self.assertEqual((root / metadata.CONFIG_FILE).stat().st_mode & 0o777, 0o600)
+                self.assertNotIn(TOKEN.encode(), canonical(receipt))
+                self.assertEqual(self.transport.request.call_count, 3)
+                with self.assertRaises(Refused):
+                    collector.collect()
+                self.assertEqual(self.transport.request.call_count, 3)
             finally:
                 os.close(directory)
 
