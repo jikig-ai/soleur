@@ -51,8 +51,10 @@ chmod +x "$STUBS/curl"
 WH_SECRET="whsec-synth-0123456789"
 CF_ID="cfid-synth-abc"
 CF_SECRET="cfsec-synth-xyz"
-FIRST=1000000
 DAY=86400
+# Anchored to the real clock: the PASS path refuses a ledger whose checked_at is more than 3 days old, so the synthetic soak ends
+# FIRST + 4 days = one day ago (fresh) and every boundary row below stays inside the 3-day freshness window.
+FIRST=$(( $(date +%s) - 5 * DAY ))
 
 LAST_OUT=""; LAST_ERR=""
 run() { # <expected rc> <expected status word or ""> <label> <body> [http] [env-unset-var]
@@ -86,14 +88,25 @@ run 5 PASS "a long soak (9 greens over 30 days) is still exit 5, not 0" "$(body 
 if grep -qF 'ACTION REQUIRED: soak complete' <<<"$LAST_ERR" && grep -qF 'decide the agent-sandbox-unix-deny flag enablement' <<<"$LAST_ERR" && grep -qF 'exits 5, never 0' <<<"$LAST_ERR"; then PASSES=$((PASSES + 1)); echo "  ok: the PASS path says ACTION REQUIRED on stderr (promote + decide the flag; the tracker stays open)"
 else FAIL_N=$((FAIL_N + 1)); FAILURES+=("PASS stderr lacks the ACTION REQUIRED text: $LAST_ERR"); echo "  FAIL: PASS stderr text"; fi
 # The script must have no path that exits 0 (a literal `exit 0` would let the sweeper close #10548 on a complete soak).
-if grep -vE '^[[:space:]]*#' "$SUT" | grep -qE '(^|[^A-Za-z0-9_])exit 0([^0-9]|$)'; then FAIL_N=$((FAIL_N + 1)); FAILURES+=("the probe contains an exit 0"); echo "  FAIL: no exit 0 in the probe"
-else PASSES=$((PASSES + 1)); echo "  ok: the probe has no exit 0 (it exits 1, 2 or 5 only)"; fi
+# Precise scan: EVERY non-comment `exit <arg>` must carry a literal from the allowed set (1, 2, 5, and 78 for the xtrace refusal). A
+# literal 0, `exit "$rc"`, `exit $((0))` or a bare `exit` (which would return the last status) all fail it.
+exit_args="$(grep -vE '^[[:space:]]*#' "$SUT" | grep -oP '(?<![\w.-])exit(?![\w-])[ \t]*[^\s;&|)}]*' | sed -E 's/^exit[[:space:]]*//')"
+bad_exits="$(printf '%s\n' "$exit_args" | grep -vxE '1|2|5|78' || true)"
+exit_n="$(printf '%s\n' "$exit_args" | grep -c . || true)"
+if [[ -n "$bad_exits" || "$exit_n" -lt 10 ]]; then FAIL_N=$((FAIL_N + 1)); FAILURES+=("the probe has an exit outside {1,2,5,78} (or the scan found too few: n=$exit_n): [$bad_exits]"); echo "  FAIL: exit scan"
+else PASSES=$((PASSES + 1)); echo "  ok: every exit in the probe is a literal 1, 2, 5 or 78 (never 0; $exit_n exits scanned)"; fi
+# Ledger freshness (the exit-5 path only): a complete soak whose host last observation is more than 3 days old is not reported.
+NOW_S="$(date +%s)"
+run 2 TRANSIENT "a complete soak but checked_at 4 days ago -> TRANSIENT reason=ledger_stale (no exit 5 from a stale ledger)" "$(body pass 9 $((NOW_S - 30 * DAY)) $((NOW_S - 4 * DAY)) "$FULL")"
+if ! grep -qF 'reason=ledger_stale' <<<"$LAST_OUT"; then FAIL_N=$((FAIL_N + 1)); FAILURES+=("stale ledger lacks reason=ledger_stale: $LAST_OUT"); echo "  FAIL: ledger_stale reason"
+else PASSES=$((PASSES + 1)); echo "  ok: the stale-ledger refusal names reason=ledger_stale"; fi
+run 5 PASS "a complete soak with checked_at 2 days ago -> PASS (inside the freshness window)" "$(body pass 9 $((NOW_S - 30 * DAY)) $((NOW_S - 2 * DAY)) "$FULL")"
 run 2 TRANSIENT "4 greens over 4 days -> TRANSIENT" "$(body pass 4 "$FIRST" $((FIRST + 4 * DAY)) "$FULL")"
 run 2 TRANSIENT "5 greens over 2d23h59m59s -> TRANSIENT (the span boundary)" "$(body pass 5 "$FIRST" $((FIRST + 3 * DAY - 1)) "$FULL")"
 run 2 TRANSIENT "5 greens, replay_only coverage -> TRANSIENT (a replay-only pass never counts)" "$(body pass 5 "$FIRST" $((FIRST + 4 * DAY)) replay_only)"
 run 2 TRANSIENT "5 greens, coverage field empty -> TRANSIENT" "$(body pass 5 "$FIRST" $((FIRST + 4 * DAY)) "")"
 run 2 TRANSIENT "5 greens over 4 days but the LATEST verdict is smoke_infra_error -> TRANSIENT (the held counter must not PASS)" "$(body smoke_infra_error 5 "$FIRST" $((FIRST + 4 * DAY)) "$FULL" probe_absent)"
-# Dead-probe signal (CTO ruling F3): >= 3 consecutive infra errors means the probe is blind, which is a FAIL (flags the tracker), not a retry.
+# Dead-probe signal (2026-10-19 review ruling; rationale: ADR-079 addendum): >= 3 consecutive infra errors means the probe is blind, which is a FAIL (flags the tracker), not a retry.
 run 2 TRANSIENT "2 consecutive infra errors -> still TRANSIENT (below the threshold)" "$(body smoke_infra_error 0 0 $((FIRST + 4 * DAY)) "" probe_absent 2)"
 run 1 FAIL "3 consecutive infra errors -> FAIL (the probe is blind)" "$(body smoke_infra_error 0 0 $((FIRST + 4 * DAY)) "" probe_absent 3)"
 if grep -qF 'probe is blind' <<<"$LAST_ERR" && grep -qF 'consecutive_infra_error=3' <<<"$LAST_OUT"; then PASSES=$((PASSES + 1)); echo "  ok: the blind-probe FAIL says so on stderr and carries consecutive_infra_error=3 on the summary line"
@@ -155,7 +168,7 @@ echo ""
 echo "=== sdk-bash-smoke-verdict-10548: $PASSES passed, ${#FAILURES[@]} failed ==="
 # Floor reported directly (not through the helper it backstops): both operands are literals on the lines immediately above the if.
 SELFTEST_ROWS=0
-MIN_ROWS=33
+MIN_ROWS=36
 REAL=$((PASSES + FAIL_N - SELFTEST_ROWS))
 if (( REAL < MIN_ROWS )); then
   printf 'FAIL: only %d rows ran (floor %d)\n' "$REAL" "$MIN_ROWS"

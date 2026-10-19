@@ -160,6 +160,9 @@ assert "no live reference to the retired Sentry op sandbox-canary-outer-wrap out
 [[ "$OUTER_OP_RC" == 1 && -z "$OUTER_OP_HITS" ]] || printf '%s\n' "$OUTER_OP_HITS" | head -n 20 | sed 's/^/        hit: /'
 # The negative-control exclusion list is itself pinned: every named file exists AND carries the token (a typo or a rename must not
 # silently widen the exclusion to "nothing is scanned"), and each is a tracked file.
+# Cardinality: the list is exactly the four files named in the comment above (an added or dropped entry changes what is scanned).
+assert "the op-token negative-control exclusion list holds exactly four files" \
+  "[[ \"${#OUTER_OP_NEGATIVE_CONTROL_FILES[@]}\" == 4 ]]"
 for _f in "${OUTER_OP_NEGATIVE_CONTROL_FILES[@]}"; do
   assert "negative-control file is tracked and still names the op token: $_f" \
     "sgit -C \"$REPO_ROOT\" ls-files --error-unmatch -- \"$_f\" >/dev/null 2>&1 && grep -qF \"$OUTER_OP_RE\" \"$REPO_ROOT/$_f\""
@@ -167,7 +170,7 @@ done
 
 # 7d-pc. A REAL git-grep positive control (a regex-only check proves the pattern, not the scan): a throwaway repo with a planted live
 # reader of each token form must RED (exit 0 + a hit), the same token inside a named negative-control file must NOT red the op scan,
-# and a repo with none must read exit 1. Built under a constructed environment, three levels below / so the ceiling is enforceable.
+# and a repo with none must read exit 1. Built under a constructed environment with GIT_CEILING_DIRECTORIES pinned to the fixture parent, so no enclosing repository is found.
 PC_REPO="$TMP/pc/repo"
 mkdir -p "$PC_REPO/apps/web-platform/infra" "$PC_REPO/.github/workflows" "$PC_REPO/knowledge-base/engineering/operations/runbooks" "$PC_REPO/apps/web-platform/test/infra"
 sgit_pc() { env -i PATH="$PATH" HOME="$TMP/githome" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_CEILING_DIRECTORIES="$TMP/pc" \
@@ -232,7 +235,7 @@ echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # Assertion floor (literal, read straight off the counter, derived from a green run): a suite that silently stops reaching its
 # assertions (an early return, a swallowed extraction failure, an emptied loop) must not pass on the strength of the few that ran.
-MIN_ASSERTIONS=49
+MIN_ASSERTIONS=50
 if (( TOTAL < MIN_ASSERTIONS )); then
   printf 'FAIL: only %d assertions ran (floor %d)\n' "$TOTAL" "$MIN_ASSERTIONS"
   exit 1

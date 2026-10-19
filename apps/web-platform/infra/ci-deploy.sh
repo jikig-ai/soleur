@@ -470,10 +470,15 @@ readonly SDK_BASH_SMOKE_LEDGER_STAMP="sdk-bash-smoke"
 # The probe baked into the image (Dockerfile `COPY --from=builder /app/infra/lib/sdk-bash-probe.mjs`). An image that predates
 # it is `smoke_infra_error reason=probe_absent`; test/sdk-bash-probe-parity.test.ts pins this path to the Dockerfile COPY.
 SDK_BASH_SMOKE_PROBE="${SDK_BASH_SMOKE_PROBE:-/app/infra/lib/sdk-bash-probe.mjs}"
-# Host-side cap on the smoke's `docker exec`, above the probe's own 120 s internal cap (a hang INSIDE the probe is reported by
-# the probe; this fires only when the probe itself is wedged). Same 0/non-numeric fail-safe as WORKSPACE_ISOLATION_TIMEOUT.
+# Host-side cap on the smoke's PROBE `docker exec`, above the probe's own 120 s internal cap (a hang INSIDE the probe is reported
+# by the probe; this fires only when the probe itself is wedged). Same 0/non-numeric fail-safe as WORKSPACE_ISOLATION_TIMEOUT.
 SDK_BASH_SMOKE_TIMEOUT="${SDK_BASH_SMOKE_TIMEOUT:-150}"
 [[ "$SDK_BASH_SMOKE_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || SDK_BASH_SMOKE_TIMEOUT=150
+# Separate, much shorter cap on the PRE-exec (probe presence + container HOME: a `test -f` and a printf). It used to share the
+# 150 s cap, so a wedged daemon could burn 150 s before the probe even started. The smoke's total time is therefore bounded
+# by SDK_BASH_SMOKE_PREEXEC_TIMEOUT + SDK_BASH_SMOKE_TIMEOUT (170 s by default), plus the bounded DIAG bundle on a failure.
+SDK_BASH_SMOKE_PREEXEC_TIMEOUT="${SDK_BASH_SMOKE_PREEXEC_TIMEOUT:-20}"
+[[ "$SDK_BASH_SMOKE_PREEXEC_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || SDK_BASH_SMOKE_PREEXEC_TIMEOUT=20
 # Aliasing guard (the WORKSPACE_ISOLATION_LEDGER_ALIAS pattern): an env override pointing the smoke ledger at another
 # canary ledger would interleave verdict vocabularies and corrupt both soaks. Warn AND skip the smoke.
 SDK_BASH_SMOKE_LEDGER_ALIAS=0
@@ -3109,12 +3114,20 @@ run_workspace_isolation_probe() {
 # sandbox-canary, level warning): deliberately not the SANDBOX_CANARY_FAIL marker the Better Stack alert keys on, so it never
 # emails. Best-effort + env-guarded, fail-open under set -e (mirrors cosign_verify_event).
 sdk_bash_smoke_stale_event() {
-  local n="$1" reason="$2"
-  logger -t "$LOG_TAG" "SDK_BASH_SMOKE_STALE: consecutive_infra_error=$n last_reason=$reason (the smoke has not produced a verdict for $n deploys in a row; warning, not a page)" || true
+  local n="$1" reason="$2" what msg
+  if [[ "$reason" == "ledger_write_failed" ]]; then
+    # Its own wording: the counter did NOT advance in the ledger (the write failed), so "N deploys in a row" would be false.
+    what="SDK smoke ledger write failed (consecutive_infra_error not advanced)"
+    msg="SDK smoke ledger write failed (consecutive_infra_error not advanced)"
+  else
+    what="the smoke has not produced a verdict for $n deploys in a row"
+    msg="sdk bash smoke stale: $n consecutive smoke_infra_error ($reason) - the deploy-time Bash check is blind"
+  fi
+  logger -t "$LOG_TAG" "SDK_BASH_SMOKE_STALE: consecutive_infra_error=$n last_reason=$reason ($what; warning, not a page)" || true
   if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
     local payload
-    payload="$(jq -n --arg n "$n" --arg r "$reason" \
-      '{message: ("sdk bash smoke stale: " + $n + " consecutive smoke_infra_error (" + $r + ") - the deploy-time Bash check is blind"),
+    payload="$(jq -n --arg n "$n" --arg r "$reason" --arg m "$msg" \
+      '{message: $m,
         level: "warning", platform: "other", logger: "ci-deploy",
         tags: {feature: "agent-sandbox", op: "sandbox-canary", verdict: "smoke_infra_error", event: "sdk_bash_smoke_stale"},
         extra: {consecutive_infra_error: $n, reason: $r}}' 2>/dev/null)" || return 0
@@ -3140,16 +3153,21 @@ sdk_bash_smoke_stale_event() {
 #   pass                  the per-run NONCE came back in the real tool_result AND coverage is sdk_wrapper_shim_prodtuple
 #   sdk_bash_smoke_failed Bash was dispatched and no verified nonce came back (error, no nonce, hang): signature-independent
 #   smoke_infra_error     Bash was never dispatched; also a pass-shaped result with coverage replay_only (a HOLD)
-# docker-exec classification (the #4941 false-rollback guard): ANY non-zero rc whose output already carries `SDK_BASH_DISPATCHED`
-# (Bash was handed to the SDK, so a hang or a death after that is the #10445 shape) is sdk_bash_smoke_failed: 124 as
-# host_timeout_<N>s, any other rc as probe_rc_<N>_after_dispatch. Without the marker a 124 is a daemon stall or a wedged node
-# start (smoke_infra_error host_timeout_before_dispatch), 125/126/127 (daemon / not-executable / not-found) are
-# docker_exec_rc_<N> and any other rc (the probe crashed before printing) is probe_rc_<N>, all smoke_infra_error. So is an
-# absent probe file (an image that predates the probe: `probe_absent`, rc 66 of the ONE capped pre-exec that also reads the
-# container HOME) and a nonce that /dev/urandom could not supply (`nonce_unavailable`: never a $RANDOM-derived nonce, the nonce
+# docker-exec classification (the #4941 false-rollback guard): a non-zero rc whose output already carries the WHOLE LINE
+# `SDK_BASH_DISPATCHED` (Bash was handed to the SDK, so a hang or a death after that is the #10445 shape) is sdk_bash_smoke_failed:
+# 124 as host_timeout_<N>s, any other rc as probe_rc_<N>_after_dispatch, EXCEPT 137 and 143 (SIGKILL / SIGTERM: the OOM killer, a
+# container stop or a deploy-side signal, not a Bash result), which are smoke_infra_error probe_killed_rc_<N>. Without the marker
+# a 124 is a daemon stall or a wedged node start (smoke_infra_error host_timeout_before_dispatch), 125/126/127 (daemon /
+# not-executable / not-found) are docker_exec_rc_<N> and any other rc (the probe crashed before printing) is probe_rc_<N>, all
+# smoke_infra_error. The ONE pre-exec (probe presence + container HOME, capped by SDK_BASH_SMOKE_PREEXEC_TIMEOUT) maps rc 66 ONLY
+# to `probe_absent` (an image that predates the probe); its 124 is host_timeout_before_dispatch and every other non-zero rc
+# (docker's 125/126/127, a missing container's 1) is `preflight_rc_<N>` with docker's first scrubbed stderr line, all
+# smoke_infra_error. A nonce that /dev/urandom could not supply is `nonce_unavailable` (never a $RANDOM-derived nonce, the nonce
 # is the proof the tool_result came from this run; the probe verifies the TRANSFORMED nonce its command computes, so a result
 # that merely quotes the command text cannot pass).
-# Ordering (CTO ruling F4, 2026-10-19): the call site is AFTER github_app_key_canary_check, under its own CANARY_HEALTHY check. The
+# Total time: SDK_BASH_SMOKE_PREEXEC_TIMEOUT (20 s) + SDK_BASH_SMOKE_TIMEOUT (150 s), each a separate `timeout`, plus the bounded
+# DIAG bundle after a failure page.
+# Ordering (2026-10-19 review ruling; rationale: ADR-079 addendum): the call site is AFTER github_app_key_canary_check, under its own CANARY_HEALTHY check. The
 # canary runs with `--memory 1536m --memory-swap 1536m` and already hosts the Next server; a probe OOM, or a probe still running
 # after a host-cap 124 (only the `docker exec` client is killed), could fail the key gate and roll back a healthy deploy. After the
 # gate the canary is torn down immediately, so the smoke cannot change the outcome even indirectly.
@@ -3165,14 +3183,14 @@ run_sdk_bash_smoke() {
   fi
   local ctr="soleur-web-platform-canary"
   local verdict reason coverage="" exec_rc=0 out="" err_file docker_err home="" nonce="" line="" json="" t0
-  local prior_ledger prior_cie=0 cie=0 extra ledger_ok=0 pre_rc=0 stale_emitted=0
+  local prior_ledger prior_cie=0 cie=0 extra ledger_ok=0 pre_rc=0 stale_emitted=0 ledger_ours=0
   t0="$(date +%s)"
   err_file="$(mktemp 2>/dev/null || echo /dev/null)"
   # ONE capped pre-exec (was two bare execs): probe presence (rc 66) and the container's real HOME in a single `docker exec`
-  # under the host cap, so a wedged daemon cannot stall the deploy outside it. `if` (not a bare capture): a failed exec must
-  # not abort under set -e. Any non-zero rc other than the cap's 124 is read as before: the probe cannot be reached, with
-  # docker's own first stderr line (scrubbed, then cut) as the cause.
-  if home="$(timeout "$SDK_BASH_SMOKE_TIMEOUT" docker exec "$ctr" /bin/sh -c 'test -f "$1" || exit 66; printf %s "$HOME"' sh "$SDK_BASH_SMOKE_PROBE" 2>"$err_file")"; then
+  # under its own short cap, so a wedged daemon cannot stall the deploy outside it. `if` (not a bare capture): a failed exec must
+  # not abort under set -e. rc 66 is the ONLY "probe absent" answer; the cap's 124 and every other non-zero rc (docker's own
+  # 125/126/127, a missing container) are an infra error that names the rc, with docker's first stderr line (scrubbed, then cut).
+  if home="$(timeout "$SDK_BASH_SMOKE_PREEXEC_TIMEOUT" docker exec "$ctr" /bin/sh -c 'test -f "$1" || exit 66; printf %s "$HOME"' sh "$SDK_BASH_SMOKE_PROBE" 2>"$err_file")"; then
     pre_rc=0
   else
     pre_rc=$?
@@ -3181,7 +3199,11 @@ run_sdk_bash_smoke() {
     verdict="smoke_infra_error"; reason="host_timeout_before_dispatch: preflight"
   elif [[ "$pre_rc" -ne 0 ]]; then
     docker_err="$(_cred_err_tail "$(head -1 "$err_file" 2>/dev/null)" | cut -c1-120)"
-    verdict="smoke_infra_error"; reason="probe_absent${docker_err:+: $docker_err}"
+    if [[ "$pre_rc" -eq 66 ]]; then
+      verdict="smoke_infra_error"; reason="probe_absent${docker_err:+: $docker_err}"
+    else
+      verdict="smoke_infra_error"; reason="preflight_rc_${pre_rc}${docker_err:+: $docker_err}"
+    fi
   else
     nonce="$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' || true)"
     if ! [[ "$nonce" =~ ^[0-9a-f]{32}$ ]]; then
@@ -3228,7 +3250,13 @@ run_sdk_bash_smoke() {
           # Any other non-zero rc: if the probe had already printed SDK_BASH_DISPATCHED, Bash was handed to the SDK and the
           # run died after that (a crash, a kill): the #10445 shape, not an infra hiccup. Otherwise it never got that far.
           if [[ $'\n'"$out"$'\n' == *$'\nSDK_BASH_DISPATCHED\n'* ]]; then
-            verdict="sdk_bash_smoke_failed"; reason="probe_rc_${exec_rc}_after_dispatch${docker_err:+: $docker_err}"
+            if [[ "$exec_rc" == "137" || "$exec_rc" == "143" ]]; then
+              # SIGKILL / SIGTERM after dispatch: the OOM killer, a container stop or a deploy signal, not a Bash result. Not a
+              # page; the reason says what happened.
+              verdict="smoke_infra_error"; reason="probe_killed_rc_${exec_rc}${docker_err:+: $docker_err}"
+            else
+              verdict="sdk_bash_smoke_failed"; reason="probe_rc_${exec_rc}_after_dispatch${docker_err:+: $docker_err}"
+            fi
           elif [[ "$exec_rc" == "125" || "$exec_rc" == "126" || "$exec_rc" == "127" ]]; then
             verdict="smoke_infra_error"; reason="docker_exec_rc_${exec_rc}${docker_err:+: $docker_err}"
           else
@@ -3271,8 +3299,17 @@ run_sdk_bash_smoke() {
       verdict="smoke_infra_error"; reason="ledger_write_failed"; coverage=""
     elif [[ "$verdict" == "sdk_bash_smoke_failed" ]]; then
       # A failed verdict that did not land must not leave the PREVIOUS record behind: a stale consecutive_pass would keep
-      # reading as a soak that this failure should have reset.
-      rm -f "$SDK_BASH_SMOKE_STATE_FILE" 2>/dev/null || true
+      # reading as a soak that this failure should have reset. Remove ONLY a record that is ours (ledger stamp checked first)
+      # and OLDER than this run (checked_at < t0), so a record that did land is never deleted; an unparseable file goes too.
+      # The removal needs the directory permission whose absence usually broke the write: when it is not writable the stale
+      # record survives (the page and the stale warning above still fire).
+      if jq -e --argjson t0 "$t0" --arg stamp "$SDK_BASH_SMOKE_LEDGER_STAMP" \
+          '((.ledger // "") == "" or .ledger == $stamp) and ((.checked_at // 0) < $t0)' \
+          "$SDK_BASH_SMOKE_STATE_FILE" >/dev/null 2>&1 \
+        || { [[ -f "$SDK_BASH_SMOKE_STATE_FILE" ]] && ! jq -e . "$SDK_BASH_SMOKE_STATE_FILE" >/dev/null 2>&1; }; then
+        ledger_ours=1
+      fi
+      if [[ "$ledger_ours" == "1" ]]; then rm -f "$SDK_BASH_SMOKE_STATE_FILE" 2>/dev/null || true; fi
     fi
   fi
   logger -t "$LOG_TAG" "SDK_BASH_SMOKE: verdict=$verdict reason=$reason coverage=$coverage" || true
@@ -4767,7 +4804,7 @@ case "$COMPONENT" in
     # through the real Agent SDK in the CANARY container: the check the faithful canary cannot make (its replay ends in `-- true`,
     # the #10445 shape). Records a verdict to its own ledger and pages on a failure, but never gates or rolls back this deploy.
     # It runs AFTER the last promotion gate (the key check above) so that a probe OOM in the memory-capped canary, or a probe
-    # still running after a host-cap 124, cannot fail that gate and roll back a healthy deploy, even indirectly (CTO ruling F4).
+    # still running after a host-cap 124, cannot fail that gate and roll back a healthy deploy, even indirectly (2026-10-19 review ruling; rationale: ADR-079 addendum).
     # `|| true` is LOAD-BEARING: no verdict may abort a deploy under set -e. Promotion is #10548.
     if [[ "$CANARY_HEALTHY" == "true" ]]; then
       run_sdk_bash_smoke || true

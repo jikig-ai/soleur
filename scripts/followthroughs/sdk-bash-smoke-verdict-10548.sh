@@ -28,13 +28,18 @@
 #                   last 3 deploys; flags the tracker. The host records the same condition as `SDK_BASH_SMOKE_STALE` in journald and
 #                   Sentry; nothing emails it)
 #   2 = TRANSIENT  (endpoint unreachable / non-JSON / field absent / soak not complete / 1-2 `smoke_infra_error` / unknown / a pass whose
-#                   coverage is not the shim-and-wrapper tuple / a non-numeric counter; retry next sweep)
-#   (any other code is read by the sweeper as TRANSIENT; this script exits only 1, 2 or 5, and never 0)
+#                   coverage is not the shim-and-wrapper tuple / a non-numeric counter / a complete soak whose ledger `checked_at` is
+#                   older than 3 days (`reason=ledger_stale`: the host has not recorded a verdict recently, so the soak is not
+#                   evidence; retry next sweep)
+#   (any other code is read by the sweeper as TRANSIENT; this script exits only 1, 2 or 5, plus 78 on the xtrace refusal at the top
+#   (declined before any request), and never 0)
 #
 # Required env (declared in the #10548 followthrough directive): WEBHOOK_DEPLOY_SECRET, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET.
 #
 # RETIREMENT: when #10548 closes (soak green, the smoke promoted and the flag decision made) delete this file, its .test.sh, the `sdk-bash-smoke-verdict-10548`
-# line in scripts/test-all.sh, the shard-TSV rows and the bearer-sweep manifest row.
+# line in scripts/test-all.sh, the shard-TSV rows and the bearer-sweep manifest row. ALSO remove the `follow-through` label when closing
+# #10548: exit 5 comments ACTION REQUIRED at every sweep on an open follow-through tracker (and on a closed one that still carries the
+# label), so a finished soak with the label left on is a daily comment forever.
 
 # #7797: refuse to run under xtrace while a live credential is bound. `$-` is tested FIRST and the
 # bindings ONLY with `${VAR:+x}` (expands to a literal `x`): a `-n "$VAR"` test would itself print
@@ -63,6 +68,7 @@ STATUS_URL="https://deploy.soleur.ai/hooks/deploy-status"
 REQUIRED_GREENS=5
 MIN_SPAN_SECS=$((3 * 24 * 3600)) # >= 3 days
 FULL_COVERAGE="sdk_wrapper_shim_prodtuple"
+MAX_LEDGER_AGE_SECS=$((3 * 24 * 3600)) # a complete soak is only reported from a ledger the host touched within 3 days
 
 # (#9597, S2) The three credentials ride curl's stdin as `header = "..."` config lines, values checked first (the why and the
 # process-substitution rule: the comment above `_bs_refuse` in scripts/betterstack-query.sh). The signature must be exactly 64
@@ -135,12 +141,20 @@ esac
 # The latest verdict must itself be `pass` (`smoke_infra_error` HOLDS counters rather than resetting them, so a stale counter could
 # otherwise PASS while the current verdict is an infra flake), and the coverage must be the shim-and-wrapper tuple.
 if [[ "$VERDICT" == "pass" && "$COVERAGE" == "$FULL_COVERAGE" && "$CONSEC" -ge "$REQUIRED_GREENS" && "$FIRST" -gt 0 && "$SPAN" -ge "$MIN_SPAN_SECS" ]]; then
+  # A ledger the host has not touched for more than MAX_LEDGER_AGE_SECS is not evidence that the smoke is still green (a frozen
+  # ledger would otherwise comment ACTION REQUIRED forever): refuse to report PASS from it. Only a PRESENT checked_at is judged;
+  # a future one (clock skew) is not stale.
+  if [[ "$CHECKED" =~ ^[0-9]+$ ]] && [[ "$CHECKED" -gt 0 ]] && [[ $(( $(date +%s) - CHECKED )) -gt "$MAX_LEDGER_AGE_SECS" ]]; then
+    _say "status=TRANSIENT reason=ledger_stale $SUMMARY"
+    echo "TRANSIENT: the soak criteria are met but the smoke ledger's last observation (checked_at=$CHECKED) is more than 3 days old: the host has not recorded a verdict since. Not reporting ACTION REQUIRED from a stale ledger; retry next sweep (a long-running staleness means deploys have stopped or the smoke is not writing)." >&2
+    exit 2
+  fi
   _say "status=PASS $SUMMARY"
   echo "ACTION REQUIRED: soak complete: $CONSEC consecutive green sdk_bash_smoke verdicts over $((SPAN / 86400))d (>= ${REQUIRED_GREENS} / >= 3d) with coverage $COVERAGE since first_pass_at=$FIRST. The smoke is proven: promote it in a follow-up PR (add the red-verdict->rollback path in run_sdk_bash_smoke AND drop the call-site '|| true'), review the alert rows against the real failed verdicts (no flap), and decide the agent-sandbox-unix-deny flag enablement (operator-authorized). This tracker stays OPEN until both are done: this probe exits 5, never 0, so the sweeper cannot close it." >&2
   exit 5
 fi
 
-# A dead probe must not stay silent (CTO ruling F3, 2026-10-19): >= 3 consecutive `smoke_infra_error` verdicts mean no deploy has
+# A dead probe must not stay silent (2026-10-19 review ruling; rationale: ADR-079 addendum): >= 3 consecutive `smoke_infra_error` verdicts mean no deploy has
 # actually exercised Bash for 3 deploys running. Exit 1 so the sweeper flags the #10548 tracker; the host side only records it in
 # journald and Sentry (`SDK_BASH_SMOKE_STALE`), it does not email.
 if [[ "$CIE" -ge "$BLIND_THRESHOLD" ]]; then

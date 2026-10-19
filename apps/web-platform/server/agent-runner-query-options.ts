@@ -516,7 +516,7 @@ export function buildAgentQueryOptions(
   if (args.maxBudgetUsd !== undefined) opts.maxBudgetUsd = args.maxBudgetUsd;
   if (args.abortController !== undefined) opts.abortController = args.abortController;
 
-  // #10455 (a): spawn-time agreement, FAIL-SAFE (CTO ruling F1, 2026-10-19). The selector in `env` and the
+  // #10455 (a): spawn-time agreement, FAIL-SAFE (ADR-075 addendum 2026-10-19). The selector in `env` and the
   // posture recorded on `sandbox` were derived from the same arguments a few lines above. A disagreement
   // is mirrored to Sentry and never thrown: a throw here would fail every tenant query start, and the
   // weaker posture is today's base artifact. The only correction is TOWARD the base artifact: an

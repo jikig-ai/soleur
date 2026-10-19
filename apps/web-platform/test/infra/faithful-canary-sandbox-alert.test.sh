@@ -382,8 +382,12 @@ PY
     else
       env "FCSB_GUARD_${which}=$copy" MUT_SKIP=1 bash "$SELF" >"$ilog" 2>&1 || rc=$?
     fi
-    # Only rc=1 (an assertion went red) is a caught mutation; rc>=2 is this guard's own FATAL class. A RED row must ALSO
-    # name the row it targets: "any row failed" would let one unrelated red row certify every mutation.
+    # Only rc=1 (an assertion went red) is a caught mutation; rc>=2 is this guard's own FATAL class, with ONE exception: the
+    # inner assertion floor is now the EXACT inner count, so a mutation that removes assertion rows (an emptied fixture loop)
+    # ALSO trips the floor (rc=2, "[FATAL] assertion floor"). That is the floor doing its job, and it is accepted only together
+    # with the targeted `[FAIL] <row>` line below. A RED row must ALSO name the row it targets: "any row failed" would let one
+    # unrelated red row certify every mutation.
+    if [ "$want:$rc" = "RED:2" ] && grep -qF -- '[FATAL] assertion floor' "$ilog"; then rc=1; fi
     case "$want:$rc" in
       RED:1)
         if grep -qF -- "[FAIL] $expect" "$ilog"; then
@@ -451,10 +455,11 @@ assert s.count(old) == 1
 s = s.replace(old, "(op=$op; report-only canary, never gated; extra human-readable tail words)")'
 fi
 
-# MUT_SKIP floor = the presence-row count; the outer floor adds the mutation rows.
+# INNER (MUT_SKIP) floor = the real inner count, 37 presence rows (the same number as PRESENCE_ROWS above); the OUTER floor is
+# PRESENCE_ROWS + MUT_ROWS = 47.
 # Reported by printf + exit 2 (never through ok()/no()), with both operands literal on the lines immediately above the if.
 SELFTEST_ROWS=0
-MIN_ASSERTIONS=27
+MIN_ASSERTIONS=37
 REAL=$((pass + fail - SELFTEST_ROWS))
 if [ -z "${MUT_SKIP:-}" ]; then MIN_ASSERTIONS=$((PRESENCE_ROWS + MUT_ROWS)); fi
 if [ "$REAL" -lt "$MIN_ASSERTIONS" ]; then printf '[FATAL] assertion floor: %s ran, floor %s\n' "$REAL" "$MIN_ASSERTIONS" >&2; exit 2; fi
