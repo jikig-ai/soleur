@@ -113,14 +113,14 @@ wa_main() {
   readonly WA_HK_DIR=hooks
   readonly WA_HK_PR=pre-receive
   # WA_HK_PR_MAX is a coarse plausibility bound on the size of that file, not an identity test. It is read off the pre-receive
-  # file Terraform delivered to a host: the placeholder file (base64-delivered at first; decoded size 997 bytes unstripped from
-  # 2026-07-01, 197 bytes stripped once the comment strip was added, 34654d7ab1, 2026-07-29, until 2026-09-29), then the real
-  # script, stripped, 2784 bytes from 2026-09-30 (a96d123938). Only 2784 (the real script) and 197 (the placeholder) were ever
-  # rendered to a host. The real script's six source commits strip to 1870 to 2784 bytes. 4096 clears all of these. A size at or
-  # under it says nothing about provenance or content (a zero-byte file reads 1; there is no lower bound); a size over it is not
-  # evidence of foreign content (an unstripped copy of the real script, raw 6170 to 9325 bytes, reads over it). Which of these
-  # renders the retired volume's pre-receive file came from (the era of that file) is not established in the repo. A change of
-  # the value returns to the CLO.
+  # file Terraform delivered into cloud-init. The sizes delivered were 997 bytes (the placeholder, unstripped, base64-delivered
+  # at first; 2026-07-01 to 2026-07-28), 197 bytes (the stripped placeholder, once the comment strip was added, 34654d7ab1;
+  # 2026-07-29 to 2026-09-29) and 2784 bytes (the real script, stripped, from 2026-09-30, a96d123938). Which of them reached the
+  # retired volume is not established. 4096 is above all three. The real script's six source commits strip to 1870 to 2784
+  # bytes. A size at or under the bound says nothing about provenance or content (a zero-byte file reads 1; there is no lower
+  # bound); a size over it is not evidence of foreign content (an unstripped copy of the real script, raw 6170 to 9325 bytes,
+  # reads over it). Which delivery the retired volume's pre-receive file came from (the era of that file) is likewise not
+  # established in the repo. A change of the value returns to the CLO.
   readonly WA_HK_PR_MAX=4096
   readonly WA_ROW_WINDOW_S=3600      # max seconds from host boot to the boot_complete row (UNMEASURED: wipe_check prints boot_to_row_s)
   readonly WA_BUDGET_S=240           # self-imposed ceiling; the ssh bound in git-data-cutover.sh is longer
