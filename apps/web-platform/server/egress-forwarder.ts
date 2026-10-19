@@ -91,6 +91,25 @@ export function egressForwarderWorkspaceId(
   return egressForwarders.get(conversationId)?.workspaceId;
 }
 
+/**
+ * A token file's NAME is a live gateway credential, and a node fs error carries the full path
+ * (`rm returned EISDIR ... /var/lib/soleur/egress-tokens/<token>`). Never hand such an error to
+ * Sentry / logs raw: replace everything under the token dir with a placeholder and drop `path`.
+ */
+function withoutTokenPath(err: unknown): unknown {
+  if (!(err instanceof Error)) return err;
+  const dir = egressTokenDir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`${dir}/[^\\s'"]*`, "g");
+  const clean = new Error(err.message.replace(re, "<token-dir>/<redacted>"));
+  clean.name = err.name;
+  const code = (err as NodeJS.ErrnoException).code;
+  if (code) (clean as NodeJS.ErrnoException).code = code;
+  return clean; // a fresh Error: no stack frames or `path` carried over from the original
+}
+
+/** egress-gateway-bootstrap.sh collision-probes exactly these four /24s. */
+const GW_SUBNET_RE = /^172\.31\.(100|101|102|103)\.(\d{1,3})$/;
+
 /** Gateway dial target. The bootstrap collision-probes 172.31.100-103.0/24
  *  and publishes the winner to `<token dir>/.gw-target` ("host:port") — the
  *  shared dir is already the app's rw / gateway's ro channel, so no new mount
@@ -109,7 +128,11 @@ function egressGwTarget(): { host: string; port: number } {
       "utf8",
     ).trim();
     const m = /^([0-9.]+):([0-9]+)$/.exec(line);
-    if (m) return { host: m[1], port: Number(m[2]) };
+    // The bootstrap only ever publishes an address from its 172.31.100-103.0/24
+    // candidates. The file sits in a dir every same-uid process in this container
+    // can write, so anything else is ignored (pinned default) rather than dialled:
+    // a forged target would receive every session's CONNECT head, token included.
+    if (m && GW_SUBNET_RE.test(m[1])) return { host: m[1], port: Number(m[2]) };
   } catch {
     /* absent/unreadable → fall through to the pinned default */
   }
@@ -217,7 +240,7 @@ export async function spawnEgressForwarder(
       try {
         rmSync(join(egressTokenDir(), entry.token), { force: true });
       } catch (err) {
-        reportSilentFallback(err, {
+        reportSilentFallback(withoutTokenPath(err), {
           feature: "egress-forwarder",
           op: "exit-token-cleanup",
           extra: { conversationId },
@@ -327,7 +350,7 @@ export function teardownEgressForwarder(conversationId: string): void {
   try {
     rmSync(join(egressTokenDir(), entry.token), { force: true });
   } catch (err) {
-    reportSilentFallback(err, {
+    reportSilentFallback(withoutTokenPath(err), {
       feature: "egress-forwarder",
       op: "teardown-token",
       extra: { conversationId },
@@ -426,7 +449,7 @@ export function reapOrphanEgressForwarders(): void {
       );
     }
   } catch (err) {
-    reportSilentFallback(err, {
+    reportSilentFallback(withoutTokenPath(err), {
       feature: "egress-forwarder",
       op: "reap-tokens",
     });

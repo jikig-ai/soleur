@@ -24,6 +24,7 @@ import net from "node:net";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }));
+import * as SentryMock from "@sentry/nextjs";
 
 import { buildAgentEnv } from "@/server/agent-env";
 import { buildAgentSandboxConfig } from "@/server/agent-runner-sandbox-config";
@@ -326,6 +327,32 @@ describe("egress-forwarder lifecycle (#9534)", () => {
     const h = await spawnEgressForwarder("conv-1", "ws-123");
     expect(statSync(join(tokenDir, h.token)).mode & 0o777).toBe(0o644);
   }, 15000);
+
+  it("a failing token-file delete is reported WITHOUT the token file name (the name is the credential)", async () => {
+    // rmSync(<non-empty dir>, {force:true}) throws EISDIR with the full path in its message.
+    const h = await spawnEgressForwarder("conv-1", "ws-123");
+    rmSync(join(tokenDir, h.token), { force: true });
+    mkdirSync(join(tokenDir, h.token));
+    writeFileSync(join(tokenDir, h.token, "x"), "x");
+    vi.mocked(SentryMock.captureException).mockClear();
+    teardownEgressForwarder("conv-1");
+    const calls = vi.mocked(SentryMock.captureException).mock.calls;
+    expect(calls.length).toBeGreaterThan(0); // positive control: the failure WAS reported
+    for (const [err] of calls) {
+      const text = `${(err as Error).message}\n${(err as Error).stack ?? ""}`;
+      expect(text).not.toContain(h.token);
+    }
+    rmSync(join(tokenDir, h.token), { recursive: true, force: true });
+  }, 15000);
+
+  it(".gw-target outside 172.31.100-103.0/24 is ignored (falls back to the pinned default), one inside is honoured", async () => {
+    vi.stubEnv("EGRESS_GW_HOST", "");
+    vi.stubEnv("EGRESS_GW_PORT", "");
+    writeFileSync(join(tokenDir, ".gw-target"), "10.9.9.9:4444\n");
+    await expect(spawnEgressForwarder("conv-1", "ws-123")).rejects.toThrow(/172\.31\.100\.2:8443/);
+    writeFileSync(join(tokenDir, ".gw-target"), "172.31.102.2:9443\n");
+    await expect(spawnEgressForwarder("conv-1", "ws-123")).rejects.toThrow(/172\.31\.102\.2:9443/);
+  }, 20000);
 
   it("reaper keeps a FRESH probe-* token (a host cron probe mints these in the same dir) but sweeps a stale one", async () => {
     // A boot-time sweep landing between the probe writing its file and its curl

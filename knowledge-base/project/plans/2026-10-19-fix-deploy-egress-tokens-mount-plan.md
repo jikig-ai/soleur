@@ -499,8 +499,15 @@ lands and the pre-merge proofs below are recorded.
    (c) Only then enable the entitled dispatch and require the first `soleur-egress-gw` allow row. Mint NO real token and
    do NOT run the egress-audit-enable runbook's first entitled dispatch until (b) is green. The Better Stack
    absence check alone is vacuous when no entitled session dispatches.
-8. **Deferred (one bundled tracker, R14):** the agent-visible 'web access enabled but unavailable' addendum, the missing
-   Sentry alert rule for `web-egress-forwarder-spawn`, the toggle's missing runtime state, hashed token file names,
-   `.gw-target` subnet validation in the forwarder, the stale `egress-gateway-bootstrap.sh` comment, token-path
-   redaction in forwarder error reports, and extending the checker (posture-flag required-ness, control-flow/verb/
-   indirect-docker/other-file census gaps).
+8. **Flipped inline after the second-reviewer gate DISSENTed (cost-of-filing, 1 file each):** `.gw-target` is ignored
+   unless its host is in 172.31.100-103.0/24 (`GW_SUBNET_RE` in `egress-forwarder.ts`), and token-file paths are scrubbed
+   from the three `rmSync` error reports (`withoutTokenPath`), each with a RED-first test in `web-egress.test.ts`.
+9. **Deferred (one checklist tracker, R14, date trigger):** the agent-visible 'web access enabled but unavailable'
+   addendum, the missing Sentry alert rule for `web-egress-forwarder-spawn`, the toggle's missing runtime state, hashed
+   token file names together with the stale `egress-gateway-bootstrap.sh` comment (gateway artifact hash), and extending
+   the checker's CENSUS gaps (control flow, `docker rename|start|restart|update` verbs, indirect docker word, start
+   sites outside the scanned set). Scalar posture-flag required-ness was flipped inline (item 10).
+10. **Scalar posture flags are now required per tuple (CTO withdrew E4 after the second-reviewer DISSENT):** `-d`,
+   `--log-driver`, `--restart`, `--env-file`, `--add-host` on all three tuples; `--init`, `--memory`, `--memory-swap` on
+   canary and prod (first-boot has none by design). Before this, deleting `--env-file` (prod with zero secrets) or
+   `--memory` passed the checker at rc 0. Rows K28a-i; `MIN_ROWS=251`.

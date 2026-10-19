@@ -39,9 +39,9 @@ ci-deploy.sh overlay_github_app_key refuses runtime-hijack names such as PATH an
 runs; a prd secret SOLEUR_EGRESS_REAPER=1 would give the canary the reaper, and EGRESS_TOKEN_DIR can decouple the
 mount from the code, neither of which the argv shows) and the value of -e NODE_OPTIONS (pinned to the
 --max-old-space-size assignment lines, not to the flag set). Required-ness (MISSING_DECLARED) covers volumes,
-environment NAMES and ports only: the scalar posture flags (--restart, --memory, --memory-swap, --init,
---log-driver, --add-host, --env-file) are allowed-sets, so deleting one of them passes. The scan is a text scan with
-no control-flow model: a tuple behind an `exit 0`, a start through an indirect docker word (`d=docker; $d run`), a
+environment NAMES, ports and the scalar options (-d, --restart, --log-driver, --add-host, --env-file, and for the two
+deploy starts --init, --memory, --memory-swap) PER TUPLE: the first-boot start has no memory cap or --init by design,
+so they are not required there. The scan is a text scan with no control-flow model: a tuple behind an `exit 0`, a start through an indirect docker word (`d=docker; $d run`), a
 `docker rename|start|restart|update` of an existing container, and an app start in a file outside the scanned set
 are not seen. Containers started on other hosts (the zot registry, the egress gateway) are not part of the closed set.
 """
@@ -79,6 +79,9 @@ _COMMON_ENV = {
 _VOLS = {"/mnt/data/workspaces:/workspaces", "/mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro"}
 # The host session-token dir (server.tf: 1001:1001, 0711). Prod and first-boot mount it and set SOLEUR_EGRESS_REAPER;
 # the canary neither mounts it nor reaps (ADR-278 canary isolation: its /proc cannot see prod forwarders).
+# Scalar options a start must CARRY (their allowed values are checked separately). first-boot has no memory cap or --init by design.
+_SCALARS = {"-d", "--log-driver", "--restart", "--env-file", "--add-host"}
+_SCALARS_APP = _SCALARS | {"--init", "--memory", "--memory-swap"}
 _EGRESS_TOKENS_VOL = "/var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens"
 
 # tuple name -> declared spec. `file` is the basename of the file the tuple lives in.
@@ -87,20 +90,20 @@ TUPLES = {
         "file": "ci-deploy.sh", "name": "soleur-web-platform-canary", "restart": {"no"},
         "mem_exprs": {"$CANARY_MEMORY_CAP"}, "env_files": {"$ENV_FILE"}, "images": {"$VERIFIED_REF"},
         "env": dict(_COMMON_ENV, NODE_OPTIONS={"$CANARY_NODE_OPTIONS"}),
-        "volumes": set(_VOLS), "ports": {"0.0.0.0:3001:3000"},
+        "volumes": set(_VOLS), "ports": {"0.0.0.0:3001:3000"}, "scalars": _SCALARS_APP,
     },
     "prod": {
         "file": "ci-deploy.sh", "name": "soleur-web-platform", "restart": {"unless-stopped"},
         "mem_exprs": {"$PROD_MEMORY_CAP"}, "env_files": {"$ENV_FILE"}, "images": {"$VERIFIED_REF"},
         "env": dict(_COMMON_ENV, NODE_OPTIONS={"$PROD_NODE_OPTIONS"}, SOLEUR_EGRESS_REAPER={"1"}),
-        "volumes": _VOLS | {_EGRESS_TOKENS_VOL}, "ports": {"0.0.0.0:80:3000", "0.0.0.0:3000:3000"},
+        "volumes": _VOLS | {_EGRESS_TOKENS_VOL}, "ports": {"0.0.0.0:80:3000", "0.0.0.0:3000:3000"}, "scalars": _SCALARS_APP,
     },
     "first-boot": {
         "file": "cloud-init.yml", "name": "soleur-web-platform", "restart": {"unless-stopped"},
         "mem_exprs": set(), "env_files": {"$TMPENV"}, "images": {"$(cat /run/soleur-image-ref)"},
         "env": {"INNGEST_BASE_URL": {"http://10.0.1.40:8288"}, "SOLEUR_EGRESS_REAPER": {"1"}},
         "volumes": _VOLS | {_EGRESS_TOKENS_VOL},
-        "ports": {"0.0.0.0:80:3000", "0.0.0.0:3000:3000"},
+        "ports": {"0.0.0.0:80:3000", "0.0.0.0:3000:3000"}, "scalars": _SCALARS,
     },
 }
 TUPLE_ORDER = ("canary", "prod", "first-boot")
@@ -446,6 +449,7 @@ class Record:
         self.volumes = set()      # the -v, -e NAME and -p values the tuple actually carries (check_declared)
         self.env = set()
         self.ports = set()
+        self.scalars = set()      # the scalar options (-d, --restart, --memory, --env-file, ...) the tuple carries
 
 
 def walk_options(site, spec, tuple_name):
@@ -499,6 +503,7 @@ def walk_options(site, spec, tuple_name):
                     if name in seen:
                         v("DUPLICATE_OPTION", name)
                     seen[name] = True
+                    rec.scalars.add(name)
                     if name == "--init":
                         rec.init = True
                 i += 1
@@ -533,6 +538,7 @@ def walk_options(site, spec, tuple_name):
 
 
 def check_value(name, val, spec, rec, seen, env_seen, v):
+    rec.scalars.add(name)
     def bad(token, label):
         v("UNPARSEABLE_OPTION" if has_exp(val) else token, label)
 
@@ -617,7 +623,7 @@ def check_options(app_sites):
 
 
 def check_declared(app_sites):
-    """Every volume, env name and port a tuple DECLARES must be present on its site. check_options only refuses
+    """Every volume, env name, port and scalar option a tuple DECLARES must be present on its site. check_options only refuses
     members outside the declared set, so a deleted member (the egress-token mount on the prod start) passed."""
     out = []
     for s in app_sites:
@@ -628,7 +634,8 @@ def check_declared(app_sites):
         spec = TUPLES[s.tuple]
         for kind, declared, got in (("volume", spec["volumes"], s.rec.volumes),
                                     ("env", set(spec["env"]), s.rec.env),
-                                    ("port", spec["ports"], s.rec.ports)):
+                                    ("port", spec["ports"], s.rec.ports),
+                                    ("option", spec["scalars"], s.rec.scalars)):
             for member in sorted(declared - set(got)):
                 out.append("FAIL MISSING_DECLARED: %s %s missing from %s %s (declared in TUPLES)" % (kind, member, s.file, s.tuple))
     return out

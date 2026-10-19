@@ -433,6 +433,17 @@ kill_row K27e-first-boot-no-inngest-env 'm_del first-boot "-e INNGEST_BASE_URL"'
 kill_row K27f-first-boot-no-port      'm_del first-boot "-p 0.0.0.0:3000:3000"'             'MISSING_DECLARED: port 0.0.0.0:3000:3000 missing from cloud-init.yml first-boot' '!ci-deploy.sh' '#1'
 kill_row K27g-prod-two-members-gone   'm_del prod "-v /mnt/data/workspaces:/workspaces"; m_del prod "-e SOLEUR_EGRESS_REAPER"' 'MISSING_DECLARED: volume /mnt/data/workspaces:/workspaces missing from ci-deploy.sh prod' 'MISSING_DECLARED: env SOLEUR_EGRESS_REAPER missing from ci-deploy.sh prod' '!canary' '#2'
 kill_row K27h-prod-unbalanced-quote   'm_repl prod "-e SOLEUR_HOST_ID=\"\$HOST_ID\"" "-e SOLEUR_HOST_ID=\"\$HOST_ID"' 'UNPARSEABLE_OPTION' 'ci-deploy.sh prod' '!MISSING_DECLARED'
+# --- scalar posture flags are REQUIRED too, per tuple (first-boot has no --memory/--memory-swap/--init by design): deleting
+# --- --env-file runs prod with zero secrets, --memory leaves it unbounded, --restart leaves it down after a reboot.
+kill_row K28a-prod-no-env-file        'm_del prod "--env-file"'                              'MISSING_DECLARED: option --env-file missing from ci-deploy.sh prod' '!canary' '!cloud-init.yml' '#1'
+kill_row K28b-prod-no-memory          'm_del prod "--memory \""'                             'MISSING_DECLARED: option --memory missing from ci-deploy.sh prod' '!canary' '#1'
+kill_row K28c-canary-no-restart       'm_del canary "--restart"'                             'MISSING_DECLARED: option --restart missing from ci-deploy.sh canary' '!prod' '!cloud-init.yml' '#1'
+kill_row K28d-first-boot-no-env-file  'm_del first-boot "--env-file"'                        'MISSING_DECLARED: option --env-file missing from cloud-init.yml first-boot' '!ci-deploy.sh' '#1'
+kill_row K28e-first-boot-no-add-host  'm_del first-boot "--add-host"'                        'MISSING_DECLARED: option --add-host missing from cloud-init.yml first-boot' '!ci-deploy.sh' '#1'
+kill_row K28f-prod-no-init            'm_del prod "--init"'                                  'MISSING_DECLARED: option --init missing from ci-deploy.sh prod' '!canary' '#1'
+kill_row K28g-prod-not-detached       'm_repl prod "docker run -d" "docker run"'             'MISSING_DECLARED: option -d missing from ci-deploy.sh prod' '!canary' '#1'
+kill_row K28h-canary-no-log-driver    'm_del canary "--log-driver"'                          'MISSING_DECLARED: option --log-driver missing from ci-deploy.sh canary' '!prod' '#1'
+kill_row K28i-prod-no-memory-swap     'm_del prod "--memory-swap"'                           'MISSING_DECLARED: option --memory-swap missing from ci-deploy.sh prod' '!canary' '#1'
 kill_row K20i-memory-zero-unlimited 'm_repl prod "--memory \"\$PROD_MEMORY_CAP\"" "--memory 0"' 'POSTURE_VALUE: --memory 0 in ci-deploy.sh prod'
 kill_row K20h-main-file-symlink   'm_symlink "$CI_DEPLOY_REL" /dev/zero'                 'TUPLE_COUNT: cannot read ci-deploy.sh' 'not a regular file'
 
@@ -631,7 +642,9 @@ h1_stub declared check_declared '[]' \
   K24a-prod-no-workspaces-vol K24b-prod-no-plugin-vol K24c-prod-no-host-id-env K24d-prod-no-second-port \
   K25a-prod-no-token-mount K25b-prod-no-reaper-env K25c-first-boot-no-token-mount \
   K27a-canary-no-workspaces-vol K27b-canary-no-port K27c-canary-no-host-id-env K27d-first-boot-no-reaper-env \
-  K27e-first-boot-no-inngest-env K27f-first-boot-no-port K27g-prod-two-members-gone
+  K27e-first-boot-no-inngest-env K27f-first-boot-no-port K27g-prod-two-members-gone \
+  K28a-prod-no-env-file K28b-prod-no-memory K28c-canary-no-restart K28d-first-boot-no-env-file K28e-first-boot-no-add-host \
+  K28f-prod-no-init K28g-prod-not-detached K28h-canary-no-log-driver K28i-prod-no-memory-swap
 h1_stub census check_count '[]' \
   K05-prod-renamed K06-fourth-site-dup K11-heredoc-all K16-missing-cloud-init K20h-main-file-symlink
 h1_stub projection check_projection '[]' \
@@ -655,7 +668,7 @@ if [ "$((PASS + FAIL))" -ne "$ROWS" ]; then
   printf '[FATAL] accounting identity: passes(%s) + fails(%s) != rows(%s) - a verdict was discarded\n' "$PASS" "$FAIL" "$ROWS" >&2
   exit 1
 fi
-MIN_ROWS=233
+MIN_ROWS=251
 if [ "$ROWS" -lt "$MIN_ROWS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s rows ran, floor is %s\n' "$ROWS" "$MIN_ROWS" >&2
   exit 1
