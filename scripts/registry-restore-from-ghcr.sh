@@ -577,10 +577,11 @@ esac
 # file, which would put the secret on disk. The pipeline sits inside `if !` and this script runs
 # `set -uo pipefail` WITHOUT `-e`, so a failed (or SIGPIPE'd, 141) login still takes the die arm.
 # A die here means the login COMMAND failed locally (a crane without --password-stdin, an
-# unwritable DOCKER_CONFIG); a merely wrong credential is classified later, at `digest`/`copy`.
+# unwritable DOCKER_CONFIG). Measured against crane v0.20.2 (#9757): login stores the credential and
+# never contacts the registry, so a merely wrong credential is classified later, at `digest`/`copy`.
 if ! printf '%s' "$ZOT_PUSH_TOKEN" | $CRANE auth login "$TARGET" -u "$ZOT_PUSH_USER" --password-stdin $SINK_TLS_FLAG \
      >"$WORK/login.out" 2>"$WORK/login.err"; then
-  die 5 "the crane login command for the sink ${TARGET} (as '${ZOT_PUSH_USER}') failed locally — a crane without --password-stdin, an unwritable DOCKER_CONFIG, or a rejected credential. crane: $(tail -c 300 "$WORK/login.err" 2>/dev/null | tr '\r\n' '  ')"
+  die 5 "the crane login command for the sink ${TARGET} (as '${ZOT_PUSH_USER}') failed locally — a crane without --password-stdin, or an unwritable DOCKER_CONFIG (crane login stores the credential and does not contact the registry, so a wrong credential surfaces later, at digest/copy). crane: $(tail -c 300 "$WORK/login.err" 2>/dev/null | tr '\r\n' '  ')"
 fi
 
 # GHCR is a PRIVATE package set: an anonymous read 401s. Optional here because the caller may
@@ -589,7 +590,7 @@ fi
 if [[ -n "${GHCR_USER:-}" && -n "${GHCR_TOKEN:-}" ]]; then
   if ! printf '%s' "$GHCR_TOKEN" | $CRANE auth login ghcr.io -u "$GHCR_USER" --password-stdin \
        >"$WORK/ghlogin.out" 2>"$WORK/ghlogin.err"; then
-    die 2 "the crane login command for ghcr.io (as '${GHCR_USER}') failed locally — a crane without --password-stdin, an unwritable DOCKER_CONFIG, or a rejected credential. crane: $(tail -c 300 "$WORK/ghlogin.err" 2>/dev/null | tr '\r\n' '  ')"
+    die 2 "the crane login command for ghcr.io (as '${GHCR_USER}') failed locally — a crane without --password-stdin, or an unwritable DOCKER_CONFIG (crane login stores the credential and does not contact the registry, so a wrong credential surfaces later, at digest/copy). crane: $(tail -c 300 "$WORK/ghlogin.err" 2>/dev/null | tr '\r\n' '  ')"
   fi
 fi
 
