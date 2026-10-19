@@ -27,6 +27,7 @@ Second, the review loop is only as strong as its last pass: the verification sea
 - **Empty test body plus a filtered run hid an `IndentationError`** — Recovery: re-ran with an explicit RC. **Prevention:** capture the rc and read the verdict from it (existing work-skill rule on verdicts and rc); never grep a test run for only the success shapes.
 - **New ruff findings in tests I added (S110, F841)** — Recovery: fixed before commit; the shrink-only ratchet caught them as designed. **Prevention:** none needed.
 - **A fix-round seat ran in another seat's sandbox via a shared fixed-name pointer file, and ran a pip install there** — Recovery: the seat re-ran its results in its own sandbox. **Prevention:** seat briefs say not to write fixed-name pointer files in the shared scratchpad (bullet added to `risk-tier-and-fix-rounds.md`).
+- **Skill pointer used `${CLAUDE_PLUGIN_ROOT:-}`, a form the repo-wide `plugin-root-anchoring` guard bans (the loader substitutes only the exact braced token)** — Recovery: guard is now `[ -d "${CLAUDE_PLUGIN_ROOT}" ]`; CI `test-webplat` caught it. **Prevention:** when a diff adds a shell snippet to a SKILL.md, run `apps/web-platform/test/plugin-root-anchoring.test.ts` locally; a file-selected test run cannot see a repo-wide guard.
 
 ## Tags
 category: logic-errors

@@ -3465,7 +3465,7 @@ class TestSkillPointers(unittest.TestCase):
     """The work and review skills carry the guarded call; deleting or weakening it must fail loudly."""
 
     CALL = 'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lint-ratchet.py" auto'
-    GUARD = re.compile(r'if \[ -n "\$\{CLAUDE_PLUGIN_ROOT:-\}" \] && command -v python3 >/dev/null; then '
+    GUARD = re.compile(r'if \[ -d "\$\{CLAUDE_PLUGIN_ROOT\}" \] && command -v python3 >/dev/null; then '
                        r'python3 "\$\{CLAUDE_PLUGIN_ROOT\}/scripts/lint-ratchet\.py" auto; else echo SKIP lint-ratchet; fi')
 
     @staticmethod
