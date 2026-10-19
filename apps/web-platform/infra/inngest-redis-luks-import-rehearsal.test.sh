@@ -134,6 +134,19 @@ esac
 # A stray bare `terraform` call must fail loudly; the real binary is only reached by absolute path in tf().
 terraform() { printf 'FATAL: bare terraform call\n' >&2; return 97; }
 
+# Canonical fixture-dir guard (byte-identical to the tracked copies; plugins/soleur/test/fixture-dir-operand-assert.test.sh
+# pins that). Every function below that writes under the scratch root asserts it is absolute first.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 # ---------------------------------------------------------------------------------------------------
 # STATIC SECTION (no terraform needed)
 # ---------------------------------------------------------------------------------------------------
@@ -233,6 +246,7 @@ FILTER_REPAIRED=""
 # tfd DIR ARGS...: run the shimmed terraform in DIR under a scrubbed environment with no network
 # proxy path, no color and a bound. Output is redirected by the caller into files that are never printed.
 tfd() {
+  assert_fixture_dir "$SCR"
   local d="$1"
   shift
   ( cd "$d" && env -i PATH="$PATH" HOME="$SCR/home" TMPDIR="$SCR/tmp" TF_IN_AUTOMATION=1 CHECKPOINT_DISABLE=1 \
@@ -252,6 +266,7 @@ build_root() { # DIR BLOCKTEXT
 }
 
 init_root() { # DIR
+  assert_fixture_dir "$SCR"
   if [ "$REGISTRY_INIT" = 1 ]; then
     local i
     for i in 1 2 3; do
@@ -266,6 +281,7 @@ init_root() { # DIR
 }
 
 digest_of_state() { # DIR -> 12 hex of sha256(result), never the value
+  assert_fixture_dir "$SCR"
   tfd "$1" state pull >"$SCR/pull.json" 2>/dev/null
   jq -r '.resources[] | select(.type == "random_password") | .instances[0].attributes.result' "$SCR/pull.json" | sha256sum | cut -c1-12
 }
@@ -273,6 +289,7 @@ digest_of_state() { # DIR -> 12 hex of sha256(result), never the value
 # Env-route import: the value is read inside the child shell from the 0600 file and placed in
 # TF_CLI_ARGS_import together with ALL the flags; it is never an argument of env(1) or of terraform.
 do_import() { # DIR OUTFILE
+  assert_fixture_dir "$SCR"
   if [ "$MUT" = "positional-import" ]; then
     ( cd "$1" && env -i PATH="$PATH" HOME="$SCR/home" TMPDIR="$SCR/tmp" TF_IN_AUTOMATION=1 CHECKPOINT_DISABLE=1 \
         TF_LOG= TF_CLI_ARGS=-no-color SHIM_LOG="$SCR/argv.log" REAL_TF="$TF_BIN" VF="$SCR/value" TF_SHIM="$TF_SHIM" \
@@ -286,6 +303,7 @@ do_import() { # DIR OUTFILE
 
 # repair_state NAME BUMP: state pull, special=false on the matching instance, serial += BUMP, push.
 repair_state() {
+  assert_fixture_dir "$SCR"
   local name="$1" bump="$2"
   tf state pull >"$SCR/cur.json" 2>"$SCR/out/pull.err"
   REPAIR_MATCHES="$(jq --arg n "$name" '[.resources[] | select(.type == "random_password" and .name == $n and .module == null)] | length' "$SCR/cur.json")"
@@ -296,6 +314,7 @@ repair_state() {
 }
 
 dynamic_section() {
+  assert_fixture_dir "$SCR"
   mkdir -p "$SCR/w" "$SCR/out" "$SCR/shim" "$SCR/home" "$SCR/tmp"
   TF_SHIM="$SCR/shim/tfshim"
   if [ "$MUT" = "no-shim" ]; then
@@ -464,8 +483,12 @@ if [ "$CHILD" = 0 ] && [ "$RAN_DYNAMIC" = 1 ]; then
   wellformed() { # FILE: the mutated block must still parse, or a RED is a syntax error, not evidence
     tfd "$SCR/w" fmt -write=false -list=false - <"$1" >/dev/null 2>&1
   }
+  # The pristine control brackets the battery (one child before the first row, one after the last): the
+  # per-row cost is a full terraform sequence and the suite shares a 360 s per-suite bound.
+  PRISTINE_STATE=""
   pristine_ok() {
-    run_child pristine
+    run_child "pristine-$1"
+    PRISTINE_STATE="$CHILD_RC"
     [ "$CHILD_RC" = 0 ]
   }
   # caught NAME EXPECTED_FAILING_ASSERTION ARGS...
@@ -473,7 +496,7 @@ if [ "$CHILD" = 0 ] && [ "$RAN_DYNAMIC" = 1 ]; then
     local name="$1" want="$2"
     shift 2
     cases=$((cases + 1))
-    if ! pristine_ok; then fail "battery $name: the pristine control child did not exit 0"; return; fi
+    if [ "$PRISTINE_STATE" != 0 ]; then fail "battery $name: the pristine control child did not exit 0"; return; fi
     run_child "$name" "$@"
     if [ "$CHILD_RC" = 1 ] && grep -qF -- "FAIL: $want" "$SCR/mut/$name.out"; then pass; else fail "battery $name: want exit 1 with FAIL: $want (got rc=$CHILD_RC)"; fi
   }
@@ -496,6 +519,8 @@ HCL
     if wellformed "$SCR/mut/$f.tf"; then pass; else fail "battery fixture $f is not well formed HCL"; fi
   done
 
+  cases=$((cases + 1))
+  if pristine_ok before; then pass; else fail "battery: the opening pristine control child did not exit 0 (rc=$CHILD_RC)"; fi
   caught drop-prevent-destroy "static: prevent_destroy = true inside the extracted block" --src-tf "$SCR/mut/no-pd.tf"
   caught special-true "static: special = false inside the extracted block" --src-tf "$SCR/mut/special-true.tf"
   caught skip-repair "dynamic: plan after the repair reports no changes" --mut skip-repair
@@ -507,17 +532,16 @@ HCL
   caught repaired-uses-loss-plan "dynamic: the real destroy-guard filter scores the repaired plan 0" --mut repaired-uses-loss-plan
 
   cases=$((cases + 1))
-  if pristine_ok; then
-    run_child reordered --src-tf "$SCR/mut/reordered.tf"
-    if [ "$CHILD_RC" = 0 ]; then pass; else fail "battery reordered: the non-canonical but valid block must still pass (rc=$CHILD_RC)"; fi
-  else
-    fail "battery reordered: the pristine control child did not exit 0"
-  fi
+  run_child reordered --src-tf "$SCR/mut/reordered.tf"
+  if [ "$CHILD_RC" = 0 ]; then pass; else fail "battery reordered: the non-canonical but valid block must still pass (rc=$CHILD_RC)"; fi
 
   cases=$((cases + 1))
   timeout -k 5 120 bash -x "$SELF" --child --plugin-dir "$RESOLVED_PLUGIN" >"$SCR/mut/xtrace.out" 2>&1
   xrc=$?
   if [ "$xrc" = 1 ] && grep -qF -- 'FAIL: secret: xtrace is off' "$SCR/mut/xtrace.out"; then pass; else fail "battery xtrace: want exit 1 with FAIL: secret: xtrace is off (got rc=$xrc)"; fi
+
+  cases=$((cases + 1))
+  if pristine_ok after; then pass; else fail "battery: the closing pristine control child did not exit 0 (rc=$CHILD_RC)"; fi
 
   cases=$((cases + 1))
   if grep -rqF -- "$VALUE" "$SCR/mut" 2>/dev/null; then fail "secret: a battery child output contains the parent's value"; else pass; fi
@@ -547,7 +571,7 @@ fi
 
 # Floor, pinned EXACTLY to the measured count of the parent run (a loose floor is attack budget).
 if [ "$CHILD" = 0 ] && [ "$RAN_DYNAMIC" = 1 ]; then
-  MIN_CASES=63
+  MIN_CASES=65
   if [ "$cases" -ne "$MIN_CASES" ]; then
     printf '[FATAL] floor drift: %s cases ran but MIN_CASES is %s - re-measure and set MIN_CASES=%s\n' "$cases" "$MIN_CASES" "$cases" >&2
     exit 1
