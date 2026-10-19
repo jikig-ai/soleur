@@ -335,7 +335,7 @@ from the handler's start, and its `RET` pattern matches `ok` anywhere in a `retu
   `repoRoot` or any other non-zero git exit THROWS, so a lost workspace stays a loud run `error`
   rather than becoming a weekly refusal that the probe reads as a model fault.
 - `git show HEAD:<path>`; the base must end with `\n` and contain no `\r`, else
-  `edit-target-unreadable`. Measured: all 105 allowlisted targets end with LF and none contains CR,
+  `edit-target-unreadable`. Measured: all 104 allowlisted targets end with LF and none contains CR,
   so this refuses nothing today; appending to a base with no trailing newline would rewrite the
   last line (reproduced: `-two`, `\ No newline at end of file`, `+two`, `+three`).
 
@@ -893,7 +893,7 @@ re-counted as a refused draft - the `record()` helper keys on the apply outcome 
 memoized, and a note in the code says so; (c) a base ending in a blank line gets a must-PASS row
 (T4 variant) because `insert_after_line === ""` appends and a trailing empty element in the split
 array must not be mistaken for an anchor; (d) the target count is 103 `SKILL.md` files plus
-`AGENTS.rules.md` (104 allowlisted targets, not 105 or 104 `SKILL.md`).
+`AGENTS.rules.md` (104 allowlisted targets in total).
 
 ## Plan Review (2026-10-19)
 
