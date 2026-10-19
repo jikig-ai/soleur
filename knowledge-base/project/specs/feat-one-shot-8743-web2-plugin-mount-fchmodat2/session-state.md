@@ -28,3 +28,18 @@
 - REMAINING SEATS (11, spawning): git-history-analyzer, pattern-recognition-specialist, security-sentinel, performance-oracle, data-integrity-guardian, agent-native-reviewer, code-quality-analyst, test-design-reviewer, structural-enumeration, semgrep-sast, user-impact-reviewer
 - AFTER PANEL: synthesize → fix findings → fix-round → soleur:qa → soleur:compound → soleur:ship → postmerge → DONE
 - Follow-ups filed: #10584 (alert on plugin_seed_copy_failed), #10585 (web-host-replace first-deploy verify); #8743 enrolled (follow-through label + directive earliest=2026-10-21)
+
+## Review Phase (panel synthesis, PANEL_SHA d6ee10ae30)
+13 seats ran (2 design + 11 panel/conditional). Verdicts: all APPROVE/PASS except git-history (REQUEST CHANGES — red suite) and performance-oracle (request changes — job ceiling).
+
+### Findings → disposition
+- BLOCKING: docker-run-tuple.test.sh 11 rows red — EXEMPT_CREATE removal orphaned `docker create --name soleur-plugin-seed` fixtures + P8 → repoint fixtures to `$INNGEST_EXTRACT_CONTAINER` or update expectations [FIX INLINE]
+- HIGH: deploy job timeout-minutes=90 can't hold serial web-1 poll (4800s) + peer poll (4800s); worst ~160m → separate job or bump ceiling (check prod-version-drift binding at yml:1245) [FIX INLINE]
+- HIGH: PLUGIN_MOUNT_DIR shape guard before container-side root `find -delete` (env-derived bind source, wrong-path blast) [FIX INLINE]
+- MED: peers_json serial N×3s curls vs caller --max-time 10 → parallelize fetch or pin fleet bound [FIX INLINE]
+- MED: unsigned cleartext peer response → forgeable green verdict; static empty-body HMAC = replayable token → document accepted private-net trust (ADR-068 posture) + file issue [DEFER+ISSUE]
+- MED: cold-start ordering — if web-1's delivered scripts predate merge, first gated release burns ~80m then red → distinguish "no .peers key" in terminal msg + runbook note [FIX INLINE]
+- LOW batch: local merged; runbook `unsigned` slot; skip fanout_peers persist when self_ips empty; sanitize PEER_REASON echo; rm -f /tmp/status-body per attempt; postmortem version label (v0.291.x onset, not v0.293.0); peer `^[0-9.]+$` guard; curl --max-filesize; self-filter parity pin; 10.0.1.10 ingress literal → terraform binding [FIX INLINE]
+- DEFER: peer-gate test sed scoping hygiene; unsigned reason sub-field
+### Next
+fix batch → re-run suites → commit+push → fix-round review on fix range → QA → compound → ship → postmerge → DONE

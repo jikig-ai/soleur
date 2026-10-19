@@ -192,10 +192,12 @@ success for 25 days.
 
 ## Versions of Components
 
-- **Version(s) that triggered the outage:** the first deploy after web-2's
-  #8660-template fresh boot (v0.293.0, merge `2426534dc6`, deploy run
-  36016449118 was the last attempted pre-filing); the LATENT defect is the
-  `docker cp` seed, made fatal by the 09-24 cloud-init seed.
+- **Version(s) that triggered the outage:** the onset deploys were
+  web-`v0.291.x` — `v0.291.0` merged 2026-09-24T03:22Z riding #8660's
+  fresh-boot work, and web-2's first post-boot deploy at 07:19Z hit the EPERM.
+  (`v0.293.0`, merge `2426534dc6`, deploy run 36016449118, was the LAST
+  attempted deploy before #8743 was filed — not the trigger.) The LATENT
+  defect is the `docker cp` seed, made fatal by the 09-24 cloud-init seed.
 - **Version(s) that restored the service:** this PR's `ci-deploy.sh` once
   delivered by `apply-deploy-pipeline-fix.yml` +
   `terraform_data.deploy_pipeline_fix_web2`, verified on the first post-delivery

@@ -787,7 +787,8 @@ SECCOMP_LIVE="$(seccomp_live_json)"
 # payload-hmac-sha256 over the GET's empty body; the signature rides curl's
 # stdin, never argv, and the key rides the python3 child's env). Each slot
 # carries the peer's WHOLE status JSON — including its ci_deploy_sha256 — or a
-# discriminating error: unreachable | http_<code> | not_json | unsigned.
+# discriminating error: unreachable | http_<code> | not_json | unsigned |
+# bad_peer.
 # BOUNDED (--max-time 3 per peer) and FAIL-OPEN: a peer error fills its slot
 # and can never fail this hook — the release workflow's
 # `Verify peer deploy completion` step owns the verdict. Callers: emits `{}`
@@ -812,37 +813,71 @@ peers_json() {
     [[ "$sig" =~ ^[0-9a-f]{64}$ ]] || can_sign=0
   fi
 
-  local result="{}" peer resp code body slot _parr
+  # _peer_fetch <ip>: prints the peer's slot — its whole status JSON, or the
+  # discriminating error object. One bounded read: -w appends a newline and
+  # %{http_code} after the body, so the last line is the code and the rest is
+  # the body. --max-filesize caps a misbehaving/bloating peer at 1 MiB (the
+  # slot embeds the response verbatim into this hook's own body).
+  _peer_fetch() {
+    local p="$1" resp code body s
+    resp=$(curl --disable --noproxy '*' -s -w $'\n%{http_code}' --max-time 3 \
+      --max-filesize 1048576 \
+      --config - \
+      "http://${p}:9000/hooks/deploy-status" \
+      < <(printf 'header = "X-Signature-256: sha256=%s"\n' "$sig") 2>/dev/null || true)
+    code="${resp##*$'\n'}"
+    body="${resp%$'\n'*}"
+    [[ "$code" =~ ^[0-9]{3}$ ]] || code="000"
+    if [[ "$code" == "200" ]]; then
+      if s=$(printf '%s' "$body" | jq -c 'if type=="object" then . else error end' 2>/dev/null); then :; else
+        s='{"error":"not_json"}'
+      fi
+    elif [[ "$code" == "000" ]]; then
+      s='{"error":"unreachable"}'
+    else
+      s="{\"error\":\"http_$code\"}"
+    fi
+    printf '%s' "$s"
+  }
+
+  local result="{}" peer slot merged _parr _ptmpdir
+  local -a _pending=()
   IFS=',' read -ra _parr <<< "$peers_csv"
+  # PARALLEL fetch (review finding): N serial --max-time-3 curls can exceed the
+  # caller's 10s read bound on a 4-peer fleet; one backgrounded _peer_fetch per
+  # peer into a per-peer slot file bounds the wall-clock by the SLOWEST peer,
+  # not the sum. A missing/empty slot file reads as `unreachable` below — the
+  # same slot a crashed fetch would have produced serially.
+  _ptmpdir=$(mktemp -d 2>/dev/null) || _ptmpdir=""
   for peer in "${_parr[@]}"; do
     peer="${peer//[[:space:]]/}"
     [[ -n "$peer" ]] || continue
-    if [[ "$can_sign" -eq 0 ]]; then
+    if [[ ! "$peer" =~ ^[0-9.]+$ ]]; then
+      # fanout_peers is webhook-payload-derived state: a token that is not bare
+      # digits-and-dots never reaches curl's URL position (a flag-shaped entry
+      # would otherwise be parsed as a curl OPTION).
+      slot='{"error":"bad_peer"}'
+    elif [[ "$can_sign" -eq 0 ]]; then
       slot='{"error":"unsigned"}'
+    elif [[ -n "$_ptmpdir" ]]; then
+      _pending+=("$peer")
+      _peer_fetch "$peer" > "$_ptmpdir/$peer" &
+      continue
     else
-      # Body + status in ONE read: -w appends a newline and %{http_code} after
-      # the body, so the last line is the code and the rest is the body.
-      resp=$(curl --disable --noproxy '*' -s -w $'\n%{http_code}' --max-time 3 \
-        --config - \
-        "http://${peer}:9000/hooks/deploy-status" \
-        < <(printf 'header = "X-Signature-256: sha256=%s"\n' "$sig") 2>/dev/null || true)
-      code="${resp##*$'\n'}"
-      body="${resp%$'\n'*}"
-      [[ "$code" =~ ^[0-9]{3}$ ]] || code="000"
-      if [[ "$code" == "200" ]]; then
-        if slot=$(printf '%s' "$body" | jq -c 'if type=="object" then . else error end' 2>/dev/null); then :; else
-          slot='{"error":"not_json"}'
-        fi
-      elif [[ "$code" == "000" ]]; then
-        slot='{"error":"unreachable"}'
-      else
-        slot="{\"error\":\"http_$code\"}"
-      fi
+      # mktemp -d unavailable — serial fallback, identical slot taxonomy.
+      slot=$(_peer_fetch "$peer")
     fi
     # A jq failure here must not propagate under set -e — keep the slots
     # collected so far and let the malformed peer simply be absent.
     merged=$(printf '%s' "$result" | jq --arg p "$peer" --argjson s "$slot" '. + {($p): $s}' 2>/dev/null) && result="$merged" || true
   done
+  wait 2>/dev/null || true
+  for peer in "${_pending[@]}"; do
+    slot="$(cat "$_ptmpdir/$peer" 2>/dev/null || true)"
+    [[ -n "$slot" ]] || slot='{"error":"unreachable"}'
+    merged=$(printf '%s' "$result" | jq --arg p "$peer" --argjson s "$slot" '. + {($p): $s}' 2>/dev/null) && result="$merged" || true
+  done
+  [[ -z "$_ptmpdir" ]] || rm -rf "$_ptmpdir" 2>/dev/null || true
   printf '%s' "$result"
 }
 

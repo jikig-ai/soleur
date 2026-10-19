@@ -56,6 +56,7 @@ The `soleur:ship` Phase 5.5 "Deploy Pipeline Fix Drift Gate" surfaces this contr
 | `canary_sandbox_failed` | 1 | stderr `/usr/local/bin/bwrap: line 424: /usr/bin/bwrap: Operation not permitted` (the shim's final `exec`; inner rc 126; read `bwrap_err=` on the `DEPLOY_ROLLBACK: bwrap sandbox non-functional` journald row, Better Stack tag `ci-deploy`) — execve EPERM: file caps on the real binary not covered by the container bounding set (capped image + clean container, no `--cap-add`) | Deploy the cap-free image tag (post-#9874 build — in #9871 the fix landed as `v0.334.1` after a rerun of the upstream flaked `test-scripts` job re-armed the `ci_not_green`-skipped deploy). If the image is clean but `--cap-add` symptoms persist, the host script is stale: merged is not delivered — the installed `ci-deploy.sh` runs until `apply-deploy-pipeline-fix.yml` delivers it; verify `.ci_deploy_sha256` in the deploy-status hook's JSON body vs `git show origin/main:apps/web-platform/infra/ci-deploy.sh \| sha256sum` (or `scripts/check-deploy-script-parity.sh`) and re-dispatch the apply on drift |
 | `canary_failed` | 1 | Canary health-check failed 10x | Roll back; inspect canary container logs |
 | `production_start_failed` | 1 | Production container didn't start post-swap | Check docker state; consider manual rollback |
+| `plugin_seed_mount_unsafe` | 1 | The plugin-mount seed REFUSED to run: `PLUGIN_MOUNT_DIR` was not non-empty/absolute/under `/mnt/data/` ending `/plugins/soleur`. The seed's container-side `find -delete` runs as root on the bind source, so a wrong-path env value would be a recursive delete on an arbitrary host path — this reason means the guard caught that, not that the copy failed. Emits the stderr/journald marker `PLUGIN_SEED_MOUNT_UNSAFE` | Check what set `PLUGIN_MOUNT_DIR` (webhook.service env, `/etc/default/webhook-deploy`, an infra-config delivery) — the deploy never attempted the seed, so nothing was deleted. The correct value is `/mnt/data/plugins/soleur` |
 | `plugin_seed_copy_failed` | 1 | The plugin-mount seed failed. Post-#8743 the seed is container-side (`docker run --rm -u 0 --entrypoint /bin/sh -v $PLUGIN_MOUNT_DIR:/plugin-mount`: clear → `cp -a` → `.seed-complete`, all inside the image), so a foreign-uid or root-seeded tree CANNOT wedge it the way the pre-#8743 deploy-uid `docker cp` did (the `fchmodat2 .claude-plugin: operation not permitted` EPERM that killed every web-2 deploy for 25 days — cloud-init's root-run seed produces a uid-1001 tree that uid-1000's client-side untar cannot chmod/delete) | Read the `PLUGIN_SEED_PROBE dst_owner=<u>:<g> marker=<u>:<g>\|absent findmnt=<src>` journald row emitted immediately before the mutation (Better Stack — ships only when the probe line reaches stderr/PRIORITY 3, the arm that admitted the fchmodat2 rows; discriminating uid/gid/mount-source probe — the facts the fchmodat2 root cause needed and could not get off-box). A post-#8743 `plugin_seed_copy_failed` with a seed that is ownership-agnostic means the mount itself is broken (read-only remount, missing dir, image missing `/opt/soleur/plugin`), not ownership — grep Better Stack for the container's stderr around the timestamp. Do NOT SSH the host. |
 | `ok_peer_fanout_degraded` | 0 | Deploy SUCCEEDED locally, but a PEER web host did not ACCEPT the fan-out (missing 202: unreachable / HMAC-rejected / secret unreadable / signature uncomputable). Non-ACCEPTANCE, NOT peer-failed — the peer's own async verdict is the `.peers["<ip>"]` slot (see below) | Deploy is live on this host; the peer is the problem. Grep Better Stack (tag `ci-deploy`) for `FANOUT: peer <ip> NOT accepted`, `FANOUT: webhook secret unavailable`, `FANOUT: could not compute the request signature`. Check the peer's webhook on the private net (`:9000` firewall is private-only). Do NOT SSH the host. |
 | `inngest_restart_failed` | 1 | `systemctl restart inngest-server.service` itself exited non-zero (restart path, before any health probe) | Check Sentry + Better Stack for OOM/unit errors around the timestamp; re-dispatch `restart-inngest-server.yml` once — repeated failures mean a unit/host problem, not a transient |
@@ -95,8 +96,20 @@ Each key is a peer private IP (`10.0.1.x`); each value is that peer's **whole**
 deploy-status JSON, fetched `GET http://<ip>:9000/hooks/deploy-status` over the
 private net with the shared `webhook_deploy_secret` HMAC (`curl --max-time 3`,
 stdin `--config` — the `fan_out_to_peers` pattern). An unreadable peer fills its
-slot with `{"error":"unreachable"|"http_<code>"|"not_json"}` — the merge never
-fails the hook; the release workflow owns the verdict.
+slot with `{"error":"unreachable"|"http_<code>"|"not_json"|"unsigned"|"bad_peer"}`
+— the merge never fails the hook; the release workflow owns the verdict.
+
+Error-slot vocabulary: `unreachable` (connect/timeout), `http_<code>` (non-200),
+`not_json` (200 but unparseable), `bad_peer` (the fanout_peers entry was not
+`^[0-9.]+$` — it never reached curl), `unsigned` (web-1 could not sign the read
+— its hooks.json deploy-status secret unreadable/uncomputable). The workflow
+treats **`unsigned` as TERMINAL** (exit 1 on first sight — a credential defect
+cannot heal inside the poll budget); every other class, a missing slot, and a
+non-object `.peers` are polled until the budget exhausts. If the budget
+exhausts while every body still lacks a `.peers` key entirely, web-1's
+`cat-deploy-state.sh` predates the peers merge — its delivery rides
+`apply-deploy-pipeline-fix.yml` / `terraform_data.deploy_pipeline_fix_web2`,
+and that red is a delivery gap, not a peer failure.
 
 The release workflow's `Verify peer deploy completion` step grades each expected
 peer (every `WEB_HOST_PRIVATE_IPS` member except the `deploy.` ingress host):

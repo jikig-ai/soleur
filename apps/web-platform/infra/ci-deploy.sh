@@ -280,7 +280,9 @@ readonly PROD_NODE_MAX_OLD_SPACE_MB="${PROD_NODE_MAX_OLD_SPACE_MB:-3072}"
 readonly CANARY_NODE_MAX_OLD_SPACE_MB="${CANARY_NODE_MAX_OLD_SPACE_MB:-1152}"
 
 # Plugin bind-mount target. Test harness overrides via env so the seed block
-# writes under a tmpdir instead of /mnt/data (which the GH runner cannot create).
+# writes under a tmpdir instead of /mnt/data (which the GH runner cannot create)
+# — paired with PLUGIN_MOUNT_DIR_ALLOW_UNSAFE=1, the harness-only opt-out of the
+# mount shape guard that runs before the seed's container-side `find -delete`.
 PLUGIN_MOUNT_DIR="${PLUGIN_MOUNT_DIR:-/mnt/data/plugins/soleur}"
 
 # -----------------------------------------------------------------------------
@@ -558,6 +560,12 @@ write_state() {
   if [[ -n "${SOLEUR_DEPLOY_PEERS:-}" ]]; then
     local _fp_self _fp _fp_csv="" _fp_json="" _fp_arr
     _fp_self=" $(ip -4 -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | tr '\n' ' ') "
+    # Fail-safe (review finding): when the self-IP probe yields NOTHING the
+    # filter below cannot exclude this host's own address, so a persisted list
+    # could contain self and make cat-deploy-state.sh's peers merge poll the
+    # host's own hook (self-slot recursion). An empty probe persists NO
+    # fanout_peers rather than an unfiltered one.
+    if [[ -n "${_fp_self// /}" ]]; then
     IFS=',' read -ra _fp_arr <<< "$SOLEUR_DEPLOY_PEERS"
     for _fp in "${_fp_arr[@]}"; do
       _fp="${_fp//[[:space:]]/}"
@@ -570,6 +578,7 @@ write_state() {
       # never be able to corrupt the state document.
       _fp_json="$(printf '%s' "$_fp_csv" | jq -Rs . 2>/dev/null || true)"
       [[ -n "$_fp_json" ]] && fp=",\"fanout_peers\":$_fp_json"
+    fi
     fi
   fi
   # start_ts: schema-stable, consumed by web-platform-release.yml elapsed
@@ -4239,6 +4248,24 @@ case "$COMPONENT" in
     # root `docker cp` seed (birth path, works once, never repaired thereafter
     # — a DIFFERENT contract than this block; the first deploy after a boot
     # rewrites whatever it left).
+    # PLUGIN_MOUNT_DIR shape guard (review finding, #8743): the seed below runs
+    # `find "$DST" -mindepth 1 -delete` on the bind source AS CONTAINER ROOT, so
+    # an env-derived PLUGIN_MOUNT_DIR pointing anywhere else turns the seed into
+    # a recursive delete on that host path. Refuse unless it is non-empty,
+    # absolute, under /mnt/data/, and basename `soleur` (i.e. ends
+    # /plugins/soleur — a trailing slash is tolerated; a `..` segment is not).
+    # The discriminating stderr marker is PLUGIN_SEED_MOUNT_UNSAFE; the state
+    # reason is plugin_seed_mount_unsafe. Harness opt-out: tests redirect the
+    # mount under a mktemp dir, so they set PLUGIN_MOUNT_DIR_ALLOW_UNSAFE=1 —
+    # a value production env never carries, same posture as the MOCK_* levers.
+    _pmd="${PLUGIN_MOUNT_DIR%/}"
+    if [[ "${PLUGIN_MOUNT_DIR_ALLOW_UNSAFE:-0}" != "1" ]] && \
+       [[ -z "$_pmd" || "$_pmd" != /mnt/data/* || "$_pmd" != */plugins/soleur || "$_pmd" == *..* ]]; then
+      echo "PLUGIN_SEED_MOUNT_UNSAFE: refusing the plugin-mount seed — PLUGIN_MOUNT_DIR='$PLUGIN_MOUNT_DIR' is not under /mnt/data/ ending /plugins/soleur" >&2
+      logger -t "$LOG_TAG" "DEPLOY_ABORT: PLUGIN_SEED_MOUNT_UNSAFE PLUGIN_MOUNT_DIR='$PLUGIN_MOUNT_DIR' refused by the seed shape guard"
+      final_write_state 1 "plugin_seed_mount_unsafe"
+      exit 1
+    fi
     echo "Seeding plugin mount from image..."
     # Pre-flight: a prior SIGKILLed deploy may have left this container behind.
     docker rm -f soleur-plugin-seed >/dev/null 2>&1 || true

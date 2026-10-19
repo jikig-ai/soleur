@@ -55,12 +55,25 @@ fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; }
 [ -f "$WORKFLOW" ] || { echo "FAIL: workflow not found at $WORKFLOW" >&2; exit 1; }
 
 # --- The step block, extracted by step-name: from `- name: Verify peer deploy
-# completion` through the next same-indent `- name:` (or EOF). ---
+# completion` through the next same-indent `- name:` (or EOF). The step lives in
+# its own `verify-peer-deploy` job (needs: [resolve-target, deploy], own 90m
+# ceiling) since the review round — the job-level pins below bind that. ---
 STEP="$(awk '
   /^      - name: Verify peer deploy completion$/ {in_step=1}
   in_step && /^      - name: / && $0 !~ /Verify peer deploy completion/ {in_step=0}
   in_step {print}
 ' "$WORKFLOW")"
+
+# --- The JOB block: from `  verify-peer-deploy:` through the next job key. ---
+JOB="$(awk '
+  /^  verify-peer-deploy:$/ {in_job=1}
+  in_job && /^  [a-z]/ && $0 !~ /^  verify-peer-deploy:/ {in_job=0}
+  in_job {print}
+' "$WORKFLOW")"
+assert_job() { # assert_job <name> <fixed string that must appear in the job block>
+  checks=$((checks + 1))
+  if grep -qF -- "$2" <<<"$JOB"; then pass; else fail "$1 (missing from the verify-peer-deploy job: $2)"; fi
+}
 
 assert_step() { # assert_step <name> <fixed string that must appear in the step block>
   checks=$((checks + 1))
@@ -77,18 +90,42 @@ checks=$((checks + 1))
 if [ -n "$STEP" ]; then pass
 else fail "step 'Verify peer deploy completion' not found in $WORKFLOW (empty extraction — renamed or deleted)"; fi
 
-# Exactly ONE env-shaped declaration in the file: the job-level copy shared by
-# `Deploy via webhook` (peers payload) and this step (expected-peer derivation).
+# Exactly TWO env-shaped declarations in the file, byte-identical: the canonical
+# copy in the `deploy` job env (feeds the `peers:` webhook payload) and the
+# `verify-peer-deploy` job env (feeds this step's expected-peer derivation) —
+# a job's env does not cross the job boundary, so the split is required. A THIRD
+# copy would desync again, and two copies with different values split the gate
+# from the fan-out.
 checks=$((checks + 1))
 copies="$(grep -cE 'WEB_HOST_PRIVATE_IPS:[[:space:]]*"' "$WORKFLOW" || true)"
-if [ "$copies" -eq 1 ]; then pass
-else fail "expected exactly 1 WEB_HOST_PRIVATE_IPS declaration in web-platform-release.yml (the job-level canonical copy), found $copies — a second copy desyncs the peer-gate derivation and breaks cutover-inngest-workflow.test.sh's dedup-less CANON_RELEASE extraction"; fi
+if [ "$copies" -eq 2 ]; then pass
+else fail "expected exactly 2 WEB_HOST_PRIVATE_IPS declarations in web-platform-release.yml (deploy job + verify-peer-deploy job), found $copies"; fi
 
-# The declaration must sit at JOB-env indentation (6 spaces). A step-level
-# re-declaration would shadow it for one step only.
 checks=$((checks + 1))
-if grep -qE '^      WEB_HOST_PRIVATE_IPS:[[:space:]]*"' "$WORKFLOW"; then pass
-else fail "WEB_HOST_PRIVATE_IPS is not declared at job-env indentation — the peer gate must inherit it from the deploy job's env"; fi
+distinct="$(grep -oE 'WEB_HOST_PRIVATE_IPS:[[:space:]]*"[^"]+"' "$WORKFLOW" | sort -u | wc -l)"
+if [ "$distinct" -eq 1 ]; then pass
+else fail "the $copies WEB_HOST_PRIVATE_IPS declarations disagree — the fan-out set and the peer-gate expectation must be the SAME literal"; fi
+
+# Both declarations must sit at JOB-env indentation (6 spaces). A step-level
+# re-declaration would shadow for one step only.
+checks=$((checks + 1))
+if [ "$(grep -cE '^      WEB_HOST_PRIVATE_IPS:[[:space:]]*"' "$WORKFLOW")" -eq 2 ]; then pass
+else fail "WEB_HOST_PRIVATE_IPS is not declared at job-env indentation in both jobs — the peer gate must inherit it from the verify-peer-deploy job's env"; fi
+
+# --- Job-level pins: the gate is its own job (own ceiling, needs deploy, and
+# gated on deploy's `superseded` output — a superseded deploy is GREEN having
+# shipped nothing, so its peers must never be polled). ---
+assert_job "verify-peer-deploy job exists" 'verify-peer-deploy:'
+assert_job "needs deploy" 'needs: [resolve-target, deploy]'
+assert_job "own 90m ceiling" 'timeout-minutes: 90'
+assert_job "superseded gate (job level)" "needs.deploy.outputs.superseded != 'true'"
+
+# The superseded signal crosses the job boundary as a deploy job OUTPUT — the
+# step-level pin it replaced is gone, so pin the publishing side: the deploy
+# job must declare `outputs.superseded` off `steps.ordering`.
+checks=$((checks + 1))
+if grep -qF 'superseded: ${{ steps.ordering.outputs.superseded }}' "$WORKFLOW"; then pass
+else fail "deploy job must publish 'superseded' as a job output (steps.ordering.outputs.superseded) — the verify-peer-deploy gate reads needs.deploy.outputs.superseded"; fi
 
 # Ordering: the gate must poll AFTER `Verify deploy script completion` — the
 # peer's deploy starts when web-1's ends, so polling earlier can only burn
@@ -101,7 +138,6 @@ else fail "ordering: 'Verify peer deploy completion' (line ${peer_ln:-absent}) m
 
 # --- Step-level pins -------------------------------------------------------
 
-assert_step "superseded gate" "if: steps.ordering.outputs.superseded != 'true'"
 assert_step "expected-peer derivation reads the shared env" '"$WEB_HOST_PRIVATE_IPS"'
 assert_step "ingress exclusion" "grep -vxF '10.0.1.10'"
 

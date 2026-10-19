@@ -24,6 +24,15 @@ readonly TEST_PATH_BASE="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 DEPLOY_DOCKER_CONFIG_DIR="$(mktemp -d)"   # split from export so SC2155 doesn't mask mktemp's rc
 export DEPLOY_DOCKER_CONFIG_DIR
 
+# Harness-only opt-out of the plugin-mount shape guard (ci-deploy.sh refuses a
+# PLUGIN_MOUNT_DIR that is not /mnt/data/.../plugins/soleur — the seed's
+# container-side `find -delete` runs as root on the bind source). Every runner
+# below redirects PLUGIN_MOUNT_DIR under a mktemp dir, which is exactly the
+# shape the guard exists to refuse; the opt-out is exported once here so all
+# `bash "$DEPLOY_SCRIPT"` subshells inherit it. The pin test near the #8743
+# seed block re-arms the guard explicitly to prove the refusal fires.
+export PLUGIN_MOUNT_DIR_ALLOW_UNSAFE=1
+
 # #6665: the sleep mock's invocation cap has to be able to REPORT itself, and its own stderr
 # cannot. `run_deploy` merges the deploy script's stderr into the subshell's stdout
 # (`bash "$DEPLOY_SCRIPT" 2>&1`) and 18 call sites close with `>/dev/null 2>&1`, so a diagnostic
@@ -2242,6 +2251,47 @@ assert_seed_failure_aborts() {
 }
 assert_seed_failure_aborts
 
+# Shape guard (review finding, #8743): the seed's `find -delete` runs as
+# container root on the bind source, so an env-derived PLUGIN_MOUNT_DIR that is
+# not /mnt/data/.../plugins/soleur must be REFUSED — marker on stderr,
+# reason=plugin_seed_mount_unsafe, and no seed docker run issued at all. The
+# row CANNOT ride run_deploy/run_deploy_traced: both overwrite PLUGIN_MOUNT_DIR
+# with their own mktemp path, so the unsafe value has to be set inside a
+# bespoke subshell (and the guard re-armed — this file exports
+# PLUGIN_MOUNT_DIR_ALLOW_UNSAFE=1 for the tmpdir redirects everywhere else).
+assert_seed_mount_unsafe() {
+  TOTAL=$((TOTAL + 1))
+  local d output actual_exit reason exitc seed_seen
+  d=$(mktemp -d)
+  output=$(
+    MOCK_DIR=$(mktemp -d)
+    trap 'rm -rf "$MOCK_DIR"' EXIT
+    create_base_mocks "$MOCK_DIR"
+    export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+    export MOCK_SEED_ARGV_LOG="$d/seed-argv"
+    export CI_DEPLOY_STATE="$d/ci-deploy.state" CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    export PLUGIN_MOUNT_DIR="$d/evil-mount" PLUGIN_MOUNT_DIR_ALLOW_UNSAFE=0
+    export DOPPLER_TOKEN="dp.st.prd.mock-token"
+    export PATH="$MOCK_DIR:$TEST_PATH_BASE"
+    export CANARY_LAYER_3_SCRIPT="$MOCK_DIR/canary-bundle-claim-check.sh"
+    MOCK_DOCKER_MODE=trace bash "$DEPLOY_SCRIPT" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+  read_state_reason_and_exit "$d/ci-deploy.state" reason exitc
+  seed_seen="$(wc -l < "$d/seed-argv" 2>/dev/null || echo 0)"
+  rm -rf "$d"
+  if [[ "$actual_exit" -ne 0 && "$reason" == "plugin_seed_mount_unsafe" && "$exitc" == "1" \
+     && "$seed_seen" == "0" ]] \
+     && printf '%s\n' "$output" | grep -qF 'PLUGIN_SEED_MOUNT_UNSAFE'; then
+    PASS=$((PASS + 1))
+    echo "  PASS: unsafe PLUGIN_MOUNT_DIR refuses the seed with plugin_seed_mount_unsafe before any docker run (#8743)"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: mount guard (exit=$actual_exit reason=$reason state_exit=$exitc seed_runs=$seed_seen)"
+    echo "        output: $output"
+  fi
+}
+assert_seed_mount_unsafe
+
 echo ""
 echo "--- #8743 Phase 2: write_state persists fanout_peers ---"
 # The peers map on /hooks/deploy-status (cat-deploy-state.sh peers_json) reads
@@ -2295,6 +2345,27 @@ assert_fanout_peers_state \
 assert_fanout_peers_state \
   "fanout_peers ABSENT when every peer filtered to self" \
   "127.0.0.1" "<absent>"
+
+# Self-filter parity pin (review finding): write_state's comment claims the
+# self-IP filter is "THE SAME ONE fan_out_to_peers applies" — pin that claim
+# mechanically. The probe pipeline must be byte-identical in both functions
+# (exactly 2 occurrences), and each loop's member-test must use the same
+# `*" <ip> "*` containment shape (one per function — `$peer` in
+# fan_out_to_peers, `$_fp` in write_state).
+assert_self_filter_parity() {
+  TOTAL=$((TOTAL + 1))
+  local probes member_tests
+  probes=$(grep -cF "ip -4 -o addr show 2>/dev/null | awk '{print \$4}' | cut -d/ -f1 | tr '\n' ' '" "$DEPLOY_SCRIPT" || true)
+  member_tests=$(printf '%s\n' "$(grep -oE '\*"[[:space:]]\$[a-z_]+[[:space:]]"\*' "$DEPLOY_SCRIPT" | sort -u | tr '\n' ' ')" )
+  if [[ "$probes" == "2" && "$member_tests" == *'$peer '* && "$member_tests" == *'$_fp '* ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: write_state self-IP filter is shape-identical to fan_out_to_peers' (probe ×2, *\" <var> \"* member test in each)"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: self-IP filter drift (probes=$probes member_tests=[$member_tests]) — write_state's comment claims parity with fan_out_to_peers"
+  fi
+}
+assert_self_filter_parity
 rm -rf "$FPEERS_DIR"
 
 # Flock rejects concurrent deploy
