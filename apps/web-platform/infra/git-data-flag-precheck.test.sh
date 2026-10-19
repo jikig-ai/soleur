@@ -112,6 +112,10 @@ if [ "${2:-}" = delete ]; then
   d="$DOPPLER_STORE/$proj/$cfg"
   [ -d "$d" ] || { echo "Doppler Error: Could not find requested config '$cfg'" >&2; exit 1; }
   if [ "${SHIM_DELETE_NOOP:-0}" != 1 ]; then rm -f "$d/$name"; : > "$DOPPLER_STORE/.deleted-$name"; fi
+  # The real CLI prints the config's REMAINING secrets on a delete (cutover-inngest.sh keeps its delete >/dev/null for that
+  # reason; the repo hook doppler-secrets-delete-redirect refuses one without the redirect). The canary stands for that table,
+  # so a caller that stops discarding stdout puts it in the run log and RB1 goes RED.
+  echo "STDOUT-CANARY-DELETE GIT_DATA_SSH_HOST_KEY=fixture-remaining-secret"
   exit 0
 fi
 if [ "${2:-}" = set ]; then
@@ -386,7 +390,7 @@ case_rb_clears() {
     && [ "$RC" = 0 ] && [ "$(cat "$OUT")" = "$(printf 'cutover_at=cleared\nflag_write=ok value=false')" ] \
     && [ "$(cat "$DLOG")" = "$RB_DLOG_OK" ] \
     && [ ! -e "$RB_STORE/soleur/prd/GIT_DATA_LUKS_CUTOVER_AT" ] && [ "$(rb_flag)" = false ] \
-    && ! grep -qF "$RB_STAMP" "$OUT" "$DLOG"
+    && ! grep -qF "$RB_STAMP" "$OUT" "$DLOG" && ! grep -qF 'STDOUT-CANARY' "$OUT"
 }
 case_rb_token() { # every call of the clear rode the write token
   case_rb rb-token true false "${RB_WRITE[@]}" && [ "$RC" = 0 ] \
@@ -418,6 +422,9 @@ case_rb_other_modes() { # <mode> — only rollback clears: unfreeze/proof/wipe-c
   case_rb "rb-mode-$1" true false DOPPLER_TOKEN_GIT_DATA_FLAG=fixture-prd-write FLAG_MODE="$1" \
     && [ "$RC" = 0 ] && [ -z "$(grep -F GIT_DATA_LUKS_CUTOVER_AT "$DLOG")" ] && [ -e "$RB_STORE/soleur/prd/GIT_DATA_LUKS_CUTOVER_AT" ]
 }
+rb_ws_cleared() { CASE_STAMP=' ' case_rb rb-ws true false "${RB_WRITE[@]}" && [ "$RC" = 0 ] && [ ! -e "$RB_STORE/soleur/prd/GIT_DATA_LUKS_CUTOVER_AT" ] && [ -n "$(grep -F 'secrets delete' "$DLOG")" ]; }
+rb_ws_noop_refused() { CASE_STAMP=' ' case_rb_delete_refused rb-ws-noop 'step=readback reason=still_present' SHIM_DELETE_NOOP=1; }
+rb_nocred_refused() { case_rb rb-nocred true false DOPPLER_TOKEN_GIT_DATA_FLAG= FLAG_MODE=rollback && [ "$RC" = 5 ] && grep -qF 'verdict=flag_write_credential_absent' "$OUT" && [ ! -s "$DLOG" ]; }
 if case_rb_clears; then pass "RB1: a rollback flag-off write reads the stamp, deletes it with --yes, reads it back absent, THEN sets the flag false and reads it back (exactly 5 doppler calls in that order); the stamp value is never printed"
 else fail "RB1: the rollback arm did not clear the stamp then write the flag" "$(detail) dlog=[$(tr '\n' '|' < "$DLOG")]"; fi
 if case_rb_token; then pass "RB2: all five calls of the clear (read, delete, read-back, set, read-back) ride DOPPLER_TOKEN_GIT_DATA_FLAG, never the read token"
@@ -443,8 +450,22 @@ if case_rb_flip_untouched; then pass "RB9: the FLIP's flag-on write never reads,
 else fail "RB9: the flip write touched the stamp" "$(detail) dlog=[$(tr '\n' '|' < "$DLOG")]"; fi
 if case_rb_value_true; then pass "RB10: a TRUE write under rollback mode leaves the stamp alone (the clear is keyed on mode=rollback AND value=false)"
 else fail "RB10: a true write cleared the stamp" "$(detail)"; fi
-if case_rb_other_modes unfreeze && case_rb_other_modes proof; then pass "RB11: a FALSE write under unfreeze or proof mode leaves the stamp alone (only mode=rollback clears)"
-else fail "RB11: a non-rollback false write cleared the stamp" "$(detail)"; fi
+if case_rb_other_modes unfreeze; then pass "RB11a: a FALSE write under unfreeze mode leaves the stamp alone (only mode=rollback clears)"
+else fail "RB11a: an unfreeze-mode false write cleared the stamp" "$(detail)"; fi
+if case_rb_other_modes proof; then pass "RB11b: a FALSE write under proof mode leaves the stamp alone (only mode=rollback clears)"
+else fail "RB11b: a proof-mode false write cleared the stamp" "$(detail)"; fi
+# RB12/RB13: the wipe reads ANY non-empty stamp as present (a garbage stamp counts as present), so the clear must too.
+if CASE_STAMP=' ' case_rb rb-ws true false "${RB_WRITE[@]}" && [ "$RC" = 0 ] && [ "$(cat "$OUT")" = "$(printf 'cutover_at=cleared\nflag_write=ok value=false')" ] \
+  && [ ! -e "$RB_STORE/soleur/prd/GIT_DATA_LUKS_CUTOVER_AT" ] && [ -n "$(grep -F 'secrets delete' "$DLOG")" ]; then
+  pass "RB12: a whitespace-only stamp is PRESENT (as the wipe reads it): it is deleted, read back absent, and the flag-off write lands"
+else fail "RB12: a whitespace-only stamp was treated as absent" "$(detail) dlog=[$(tr '\n' '|' < "$DLOG")]"; fi
+if CASE_STAMP=' ' case_rb_delete_refused rb-ws-noop 'step=readback reason=still_present' SHIM_DELETE_NOOP=1; then
+  pass "RB13: a delete that leaves a whitespace-only stamp behind is still step=readback reason=still_present (the read-back compares the raw value), flag NOT written"
+else fail "RB13: a residual whitespace-only stamp was accepted as cleared" "$(detail)"; fi
+# RB14: with the write credential absent, a rollback refuses BEFORE any doppler call (the clear must not run on an empty or ambient token).
+if case_rb rb-nocred true false DOPPLER_TOKEN_GIT_DATA_FLAG= FLAG_MODE=rollback && [ "$RC" = 5 ] && grep -qF 'verdict=flag_write_credential_absent' "$OUT" && [ ! -s "$DLOG" ]; then
+  pass "RB14: a rollback flag-off write without DOPPLER_TOKEN_GIT_DATA_FLAG -> verdict=flag_write_credential_absent, exit 5, doppler never called (the clear sits below the credential guard)"
+else fail "RB14: the clear ran without the write credential" "$(detail) dlog=[$(tr '\n' '|' < "$DLOG")]"; fi
 
 if case_absent; then pass "P1: an absent flag (exit 0, empty stdout WITH the flag) prints exactly the TOFU_ARM line, the pin fingerprint and flag=unset, exit 0"
 else fail "P1: an absent flag was not flag=unset" "$(detail)"; fi
@@ -1075,8 +1096,13 @@ if mutate rb-read-failure-as-absent "$PRECHECK" 2 's#\|\| clear_fail read "#|| :
 fi
 # M-rb-delete-without-yes: the delete would prompt on the real CLI (the shim refuses it). RB1 goes RED.
 # shellcheck disable=SC2016
-if mutate rb-delete-without-yes "$PRECHECK" 2 's#secrets delete GIT_DATA_LUKS_CUTOVER_AT -p soleur -c prd --yes >/dev/null#secrets delete GIT_DATA_LUKS_CUTOVER_AT -p soleur -c prd >/dev/null#'; then
+if mutate rb-delete-without-yes "$PRECHECK" 2 's#(secrets delete GIT_DATA_LUKS_CUTOVER_AT -p soleur -c prd) --yes#\1#'; then
   CASE_SCRIPT="$MUTANT" mutant_red rb-delete-without-yes case_rb_clears
+fi
+# M-rb-delete-stdout-leaked: the delete's stdout (the config's remaining secrets on the real CLI) is no longer discarded. RB1 goes RED.
+# shellcheck disable=SC2016
+if mutate rb-delete-stdout-leaked "$PRECHECK" 2 's#(secrets delete GIT_DATA_LUKS_CUTOVER_AT -p soleur -c prd --yes) >/dev/null#\1#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red rb-delete-stdout-leaked case_rb_clears
 fi
 # M-rb-read-token: the delete rides the read token, not the write seam. RB2 goes RED.
 # shellcheck disable=SC2016
@@ -1108,6 +1134,37 @@ open(p, "w").write("\n".join(rest[:c] + block + rest[c:]))
 PY
 if mutate rb-after-flag "$PRECHECK" 36 "python:$T/mut/rb-after-flag.py"; then
   CASE_SCRIPT="$MUTANT" mutant_red rb-after-flag case_rb_delete_refused rb-forbidden 'step=delete reason=forbidden' SHIM_DELETE_ERR=forbidden
+fi
+
+# M-rb-readback-failure-as-absent: an unreadable read-back reads as cleared. RB6 goes RED.
+# shellcheck disable=SC2016
+if mutate rb-readback-failure-as-absent "$PRECHECK" 2 's#\|\| clear_fail readback "#|| : "#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red rb-readback-failure-as-absent case_rb_delete_refused rb-rbread 'step=readback reason=network' SHIM_STAMP_READBACK_ERR=network
+fi
+# M-rb-trimmed-presence: a whitespace-only stamp reads as absent and is never deleted. RB12 goes RED.
+# shellcheck disable=SC2016
+if mutate rb-trimmed-presence "$PRECHECK" 2 's#^    if \[ -n "\$cur" \]; then$#    if [ -n "${cur//[[:space:]]/}" ]; then#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red rb-trimmed-presence rb_ws_cleared
+fi
+# M-rb-trimmed-readback: a residual whitespace-only stamp reads as cleared. RB13 goes RED.
+# shellcheck disable=SC2016
+if mutate rb-trimmed-readback "$PRECHECK" 2 's#^      \[ -z "\$cur" \] \|\| clear_fail readback still_present$#      [ -z "${cur//[[:space:]]/}" ] || clear_fail readback still_present#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red rb-trimmed-readback rb_ws_noop_refused
+fi
+# M-rb-clear-before-credential-guard: the clear block moves above the write-credential guard. RB14 goes RED.
+cat > "$T/mut/rb-before-cred.py" <<'PY'
+import sys
+p = sys.argv[1]
+src = open(p).read().split("\n")
+a = next(i for i, l in enumerate(src) if l.startswith("  # #10297: the rollback arm clears"))
+b = next(i for i, l in enumerate(src) if l.startswith("  # stdin carries the value (never argv)"))
+block = src[a:b]
+rest = src[:a] + src[b:]
+c = next(i for i, l in enumerate(rest) if l.startswith('  if [ -z "${DOPPLER_TOKEN_GIT_DATA_FLAG:-}" ]; then'))
+open(p, "w").write("\n".join(rest[:c] + block + rest[c:]))
+PY
+if mutate rb-clear-before-credential-guard "$PRECHECK" 14 "python:$T/mut/rb-before-cred.py"; then
+  CASE_SCRIPT="$MUTANT" mutant_red rb-clear-before-credential-guard rb_nocred_refused
 fi
 
 # ── SANDBOX_DENY_ROOTS arm (#9725) ────────────────────────────────────────────────
@@ -1152,13 +1209,13 @@ if mutate pin-only-dropped "$PRECHECK" 2 's#\|wipe_reread\|pin_only\) : ;;#|wipe
 fi
 
 # ── FLOOR + LEDGER ────────────────────────────────────────────────────────────────────
-MUTANT_FLOOR=43  # Guard 1 matrix rows 1-8, pin rows 9-16 (with 10b), deny-refusal 17, wipe Guard 6 rows (7), census rows 3b and 3c, A1 variant rows (5), stamp-clear rows (9, #10297)
+MUTANT_FLOOR=48  # Guard 1 matrix rows 1-8, pin rows 9-16 (with 10b), deny-refusal 17, wipe Guard 6 rows (7), census rows 3b and 3c, A1 variant rows (5), stamp-clear rows (14, #10297)
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2; exit 1
 fi
 # Assertion FLOOR: script cases 33 + pin/TOFU_ARM cases 15 (K1-K11 with K3b/K3c/K10b/K10c) + workflow rows 8 + deny-arm rows 7 + mutants 19 x 2 + census mutants 2 x 2 + wipe rows 26 + wipe mutants 7 x 2 + 1 must-refuse row = 146, plus the A1 (2026-10-15) variant rows WV1-WV14 (14) and 5 A1 mutants x 2 (10) = 170 (exact).
-# #10297 stamp-clear: RB1-RB11 (11) + 9 mutants x 2 (18) = 29 more, so the exact count is 175 + 29 = 204.
-FLOOR=204
+# #10297 stamp-clear: RB1-RB10, RB11a/b, RB12-RB14 (15) + 14 mutants x 2 (28) = 43 more, so the count is 175 + 43 = 218 (a -lt floor: scripts/guard-vacuity-floor.test.sh only recognises -lt/-le/-ge, so this suite stays out of -ne).
+FLOOR=218
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s\n' "$_ran" "$FLOOR" >&2; exit 1

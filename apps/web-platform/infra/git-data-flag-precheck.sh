@@ -239,7 +239,7 @@ if [ -n "${FLAG_WRITE_VALUE:-}" ]; then
   # #10297: the rollback arm clears the wipe's soak anchor BEFORE it writes the flag off. See "STAMP CLEAR" in the header.
   if [ "$FLAG_MODE" = rollback ] && [ "$FLAG_WRITE_VALUE" = false ]; then
     clear_fail() { # <step> <reason>
-      echo "::error title=git-data-flag-precheck::verdict=cutover_at_clear_failed step=$1 reason=$2 - GIT_DATA_LUKS_CUTOVER_AT (the wipe soak anchor) is not confirmed cleared, so GIT_DATA_STORE_ENABLED was NOT written and the fleet is unchanged. Fallback R8: an owner-gated delete of GIT_DATA_LUKS_CUTOVER_AT with a read-back (design-rollback-rehearsal section 6; runbook \"Before the first flip: the rollback rehearsal\"), then re-dispatch mode=rollback. The DELETE permission of DOPPLER_TOKEN_GIT_DATA_FLAG on prd is unverified."
+      echo "::error title=git-data-flag-precheck::verdict=cutover_at_clear_failed step=$1 reason=$2 - GIT_DATA_LUKS_CUTOVER_AT (the wipe soak anchor) is not confirmed cleared, so GIT_DATA_STORE_ENABLED was NOT written and the fleet is unchanged. Fallback R8: an owner-gated delete of GIT_DATA_LUKS_CUTOVER_AT with a read-back (design-rollback-rehearsal section 6; runbook Verdict map row \"The rollback could not clear the wipe soak anchor\"), then re-dispatch mode=rollback. The DELETE permission of DOPPLER_TOKEN_GIT_DATA_FLAG on prd is unverified."
       echo "[git-data-flag-precheck] verdict=cutover_at_clear_failed step=$1 reason=$2"
       exit 5
     }
