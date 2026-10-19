@@ -300,6 +300,9 @@ the consecutive-pass soak and page; `canary_infra_error` rows hold the soak and 
 | `userns_filter_bypass` | Nested `unshare -U` ran INSIDE the replayed sandbox — the shared seccomp filter is not engaged (shim absent/misrouted) | `bash apps/web-platform/scripts/bwrap-userns-seccomp-probe.sh` in the canary image; check `op=sandbox-hardening-selfprobe` |
 | `userns_filter_overbroad` | A forked child failed inside the filtered sandbox — the filter denies more than nested userns | Regenerate/verify the artifact (`gen-bwrap-userns-seccomp.mjs --check`); do NOT weaken the filter to unblock |
 | `fd_hygiene_bypass` | The in-sandbox fd census exceeded `4 + #fd-valued-argv-options` — an unreferenced fd leaked past the shim's sweep | Inspect `bwrap-shim:` lines + the shim's preserve-set arity table |
+| `unixdeny_filter_bypass` | Under the unixdeny artifact the in-sandbox probe CREATED an AF_UNIX socket (ENOENT on connect) - the variant's `socket(AF_UNIX)` deny is not engaged (#10455 a) | `node apps/web-platform/scripts/gen-bwrap-userns-seccomp.mjs --check` in the canary image; the flag must stay OFF until this is green |
+| `unixdeny_artifact_unusable` | The shim refused the variant artifact (`bwrap-shim:` line: absent or unreadable `/app/infra/bwrap-userns-clone3-unixdeny.bpf`) - with the flag ON every no-egress session would die with exit 65 | Check the Dockerfile COPY and the `.dockerignore` bang; do NOT turn the flag on |
+| `base_denies_af_unix` | Under the BASE artifact `socket(AF_UNIX)` was denied - egress sessions' proxy bridges would break | Base artifact drifted from `origin/main` bytes: regenerate with the generator and re-run `bwrap-userns-seccomp.test.ts` |
 | `args_fd_closed` | The `--args <fd>` transport probe failed — the SDK's real spawn shape broke (shim closed the argv fd) | Every agent spawn fails too; treat as deploy-blocking |
 | `bwrap_shim_refused[: <detail>]` | The shim itself exited 65 (`bwrap-shim:` marker) — artifact or real bwrap missing in the image; **post-#10032 also fires on unresolvable command-side `/proc/self/fd/N` refs** (deleted/non-file/procfs-resident/absent fd — including a command that merely *mentions* the path), and on `/proc`-mounting argvs lacking `--unshare-pid`/`--unshare-user`. The verdict's `detail` field (folded into the deploy-state reason as `bwrap_shim_refused: bwrap-shim: <first refusal line>`) names the class | `probeAgentSandboxHardening` fields (`shim`, `filter`, `bpfBytes`) cover the artifact/binary-missing classes; the `bwrap-shim:` line names the rest |
 
@@ -404,6 +407,29 @@ in #10455). The same forgery can reach the tenant notice: the notice requires th
 line and a pre-fork step, but a command that ran and exited non-zero can print that line. That residual is accepted, which
 is why the notice does not claim the command did not run. The deploy-time smoke (#10453), not tenant text, is the authoritative signal; the email only prompts the check above. The wake path for both alerts is email-only on
 the Better Stack free tier until the ADR-260 Slack integration is verified.
+
+## Tenant-visible: no-egress AF_UNIX deny (#10455 a), runtime flag `agent-sandbox-unix-deny`
+
+**State (2026-10-19): the flag is OFF; nothing changes for tenants until it is turned on.** Enabling is a production write that needs a
+green deploy `sdk_bash_smoke` (the smoke runs the no-egress tuple with the unixdeny artifact selected, so a variant that breaks Bash start
+shows as `sdk_bash_smoke_failed` on the deploy that carries it) and the operator's explicit authorization at that time (#10548). Rollback is
+flipping the flag OFF: the next query of every session is spawned with the base artifact; a running query keeps the artifact it started with.
+
+**Release-notes line (dated, for the release that turns the flag ON).** `2026-10-19 - Sandbox: shell commands in projects without outbound
+network access can no longer open Unix-domain sockets (for example a local Postgres or Redis socket path, or Python multiprocessing
+Manager). Pipes, socketpair and normal networking checks are unchanged; sessions with GitHub or web access are not affected.` (GitHub
+release bodies are generated from the merged PR text and the in-app Releases page sanitizes security wording, so the line is carried in the
+PR body, which is the release-notes source of record; there is no committed changelog file.)
+
+**Support runbook line.** A user report of `Operation not permitted` from a Unix-socket workload (`psycopg2` to a local socket,
+`redis-cli -s`, `multiprocessing.Manager()`, a D-Bus client) in a session with no GitHub token and no web access, dated after the flag was
+turned on, is this change, not a bug: tell the user the workload needs a TCP address on loopback (works inside the per-command network
+namespace) or a session with outbound access; engineering confirms with `soleur:flag-list` (flag `agent-sandbox-unix-deny` ON) and by the
+absence of `apply-seccomp:` helper rows for that user (those are a different failure). To roll back for everyone, set the flag OFF (`soleur:flag-set-role
+agent-sandbox-unix-deny prd off`, operator-authorized). No server restart is needed.
+
+**Reading the probes.** Boot: `op=sandbox-hardening-selfprobe` now carries `unixdenyFilter` beside `filter`; an `ok: false` with
+`unixdenyFilter: false` means the image lacks the variant artifact (flag must stay OFF). Deploy: the three hardening reasons above.
 
 ## Outer-wrap canary - RETIRED 2026-10-19 (#10454)
 

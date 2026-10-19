@@ -41,13 +41,13 @@ Write each phase's RED tests before its code. Commit order: Phase 1 first, Phase
 
 ## Phase 4: AF_UNIX variant behind a runtime flag (#10455 a)
 
-- [ ] 4.1 RED: interpreter-level cases, golden-bytes base artifact, dispatcher agreement test (both egress values, both flag states), call-site census, flag-default-OFF test, shim exit 65 on unreadable alternate
-- [ ] 4.2 Restructure `gen-bwrap-userns-seccomp.mjs` into builders (`emit()` exported); `--variant unixdeny`; commit `bwrap-userns-clone3-unixdeny.bpf`; `--check` both
-- [ ] 4.3 `seccompArtifactFor`; `buildAgentSandboxConfig`; conditional selector in `buildAgentEnv`; sweep the five callers; spawn-time assertion; `probeAgentSandboxHardening` both artifacts
-- [ ] 4.4 Create flag `agent-sandbox-unix-deny` with `soleur:flag-create` (default OFF)
-- [ ] 4.5 Dockerfile/.dockerignore bake; canary hardening probe checks it
-- [ ] 4.6 Real-SDK and run-tuple tests (no-egress ON, egress, flag OFF; non-skipped-row floor); vendored-argv-tail pins
-- [ ] 4.7 ADR-075 addendum superseding the 2026-10-16 statements; release-notes and support-runbook line
+- [x] 4.1 RED: interpreter-level cases, golden-bytes base artifact, dispatcher agreement test (both egress values, both flag states), call-site census, flag-default-OFF test, shim exit 65 on unreadable alternate
+- [x] 4.2 Restructure `gen-bwrap-userns-seccomp.mjs` into builders (`emit()` exported); `--variant unixdeny`; commit `bwrap-userns-clone3-unixdeny.bpf`; `--check` both
+- [x] 4.3 `seccompArtifactFor`; `buildAgentSandboxConfig`; conditional selector in `buildAgentEnv`; sweep the five callers; spawn-time assertion; `probeAgentSandboxHardening` both artifacts
+- [ ] 4.4 Create flag `agent-sandbox-unix-deny` with `soleur:flag-create` (default OFF) - CODE WIRING DONE (RUNTIME_FLAGS entry, `.env.example` mirror =0, resolver fails closed to OFF); the Flagsmith feature + Doppler mirror are the operator-typed `create.sh` write (exit 64 in an agent shell by design, ADR-249) and have NOT been run
+- [x] 4.5 Dockerfile/.dockerignore bake; canary hardening probe checks it
+- [x] 4.6 (real-SDK + vendored pins verified locally; the docker-suite run-tuple arms are written but NOT run here - they need sudo/AppArmor) Real-SDK and run-tuple tests (no-egress ON, egress, flag OFF; non-skipped-row floor); vendored-argv-tail pins
+- [x] 4.7 ADR-075 addendum superseding the 2026-10-16 statements; release-notes and support-runbook line
 - [ ] 4.8 Post-merge, operator-authorized: enable the flag after a green deploy smoke (tracked in #10548)
 
 ## Phase 5: Runtime synthetic (#10455 b), objective cut line
