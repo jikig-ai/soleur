@@ -849,6 +849,13 @@ peers_json() {
   # not the sum. A missing/empty slot file reads as `unreachable` below — the
   # same slot a crashed fetch would have produced serially.
   _ptmpdir=$(mktemp -d 2>/dev/null) || _ptmpdir=""
+  # lint-trap-ownership (#6734): peers_json is only invoked via $() at the
+  # merge site, so this EXIT trap lives and dies with that subshell — it
+  # removes the slot dir even if the script dies between allocation and the
+  # tail rm, and never clobbers the main shell's trap table.
+  if [[ -n "$_ptmpdir" ]]; then
+    trap "rm -rf '$_ptmpdir' 2>/dev/null || true" EXIT
+  fi
   for peer in "${_parr[@]}"; do
     peer="${peer//[[:space:]]/}"
     [[ -n "$peer" ]] || continue
