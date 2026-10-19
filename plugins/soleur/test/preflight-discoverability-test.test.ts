@@ -12,7 +12,6 @@ import {
   parseCommand,
   parseCredentialsRequired,
   parseExpected,
-  PROBE_VERB_ALLOWLIST,
   rejectReason,
   type ExecResult,
   type Executor,
@@ -1525,7 +1524,6 @@ describe("#7393 GATE — executable parity between the runtime and its TS mirror
   ];
 
   test("the gate and rejectReason agree on verdict and reason for every shape", () => {
-    let compared = 0;
     const seenShapes = new Set<string>();
     for (const cmd of PARITY_CASES) {
       // Skip BEFORE spawning: `ssh` and the shell-active reject live in the
@@ -1534,7 +1532,6 @@ describe("#7393 GATE — executable parity between the runtime and its TS mirror
       if (SKIPPED_BY_DESIGN.test(cmd)) continue;
       const gate = runGate(cmd);
       const mirror = rejectReason(cmd);
-      compared++;
       seenShapes.add(cmd);
       expect(gate.rejected, `verdict mismatch for: ${JSON.stringify(cmd)}`).toBe(mirror !== null);
       if (gate.rejected) {
@@ -1556,7 +1553,7 @@ describe("#7393 GATE — executable parity between the runtime and its TS mirror
     // edit reddens immediately. So the floor must be ABSOLUTE, and it ratchets
     // upward only — never derived from the table it guards.
     const MIN_COMPARED = 22;
-    // DISTINCT shapes, not iterations: `compared` increments once per surviving
+    // DISTINCT shapes, not iterations: an iteration count increments once per surviving
     // row regardless of what the row IS, so replacing the six separator rows with
     // six duplicate reject-rows held the floor at 22 — and deleting `export
     // LC_ALL=C` from the runtime of record was then green again. That is this
@@ -1586,7 +1583,7 @@ describe("#7393 GATE — executable parity between the runtime and its TS mirror
     // was tried first and rejected: it false-REDs on a legitimate `ssh` row
     // addition — the very shape the predicate's ssh alternative exists for — while
     // the absolute MIN_COMPARED floor above already catches a widened predicate
-    // (widening drops `compared` below 22). Reason-pinning catches the case the
+    // (widening drops the distinct-shape count below 22). Reason-pinning catches the case the
     // count was actually for: a predicate rewritten to skip an UNSANCTIONED shape.
     const skipped = PARITY_CASES.filter((c) => SKIPPED_BY_DESIGN.test(c));
     expect(skipped.length, "at least the sanctioned skip is present").toBeGreaterThanOrEqual(

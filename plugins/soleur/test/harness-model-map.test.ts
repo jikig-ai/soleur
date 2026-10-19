@@ -235,7 +235,6 @@ describe("workflow inline resolver is a copy of TIER_MAPS (no import in workflow
       { DEVIN: "1" },
       { DEVIN_HOME: "/h/.devin" },
     ];
-    let checked = 0;
     for (const rel of PINNED_WORKFLOWS) {
       const src = readFileSync(join(SKILLS_DIR, rel), "utf-8");
       const start = src.indexOf(MAP_FENCE_START);
