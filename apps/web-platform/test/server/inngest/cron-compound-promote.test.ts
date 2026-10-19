@@ -316,6 +316,20 @@ describe("handler-side persistence (#5111)", () => {
     expect(body).not.toMatch(/\.(?:on|once|addListener)\(\s*"exit"/);
   });
 
+  it("the sibling crons that capture a child's stdout resolve on `close`, not `exit`", () => {
+    const dir = join(__dirname, "../../../server/inngest/functions");
+    // The output-capturing listeners today: weekly-analytics 1, vendor-drift 2. Reverting any one
+    // to `exit` lowers its file's `close` count (the other `exit` listeners there use stdio:ignore).
+    const expected: Record<string, number> = { "cron-weekly-analytics.ts": 1, "cron-content-vendor-drift.ts": 2 };
+    for (const [f, n] of Object.entries(expected)) {
+      const src = readFileSync(join(dir, f), "utf-8")
+        .split("\n")
+        .map((l) => l.replace(/^\s*\/\/.*$/, ""))
+        .join("\n");
+      expect((src.match(/\.on\("close",/g) ?? []).length, f).toBe(n);
+    }
+  });
+
   it("inlines stripFrontmatter — does NOT cross-root-import repo-root scripts/ (#6794/#6860)", () => {
     // The Next.js Docker build context copies only apps/web-platform/ (+ the
     // vendored plugin), NOT repo-root scripts/. A `../../../../../scripts/…`
