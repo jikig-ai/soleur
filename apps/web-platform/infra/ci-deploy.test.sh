@@ -2208,7 +2208,7 @@ assert_seed_probe_order
 assert_no_host_side_seed() {
   TOTAL=$((TOTAL + 1))
   local body
-  body=$(grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT")
+  body=$(grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT" || true)
   if ! grep -qF 'docker cp soleur-plugin-seed' <<<"$body" \
      && ! grep -qF 'docker create --name soleur-plugin-seed' <<<"$body" \
      && ! grep -qF 'find "$PLUGIN_MOUNT_DIR" -mindepth 1 -delete' <<<"$body" \
