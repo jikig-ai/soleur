@@ -1973,7 +1973,12 @@ jobs:
                 echo "Attempt $i/$STATUS_POLL_MAX_ATTEMPTS: peer $PEER_IP has no usable status slot yet"
                 continue
               fi
+              # Peer-supplied fields are annotation-injection surfaces — a `\n`
+              # in `.error`/`.tag`/`.reason` line-splits a forged `::error::`
+              # through echo. Strip every extracted field to a safe alphabet
+              # before it reaches a workflow command line (fix-round, #8743).
               PEER_ERROR=$(echo "$PEER_JSON" | jq -r '.error // ""')
+              PEER_ERROR="${PEER_ERROR//[^A-Za-z0-9._ -]/}"
               if [ -n "$PEER_ERROR" ]; then
                 # `unsigned` is terminal: web-1 could not sign the peer read —
                 # a credential/hooks.json defect that cannot heal inside this
@@ -1992,8 +1997,9 @@ jobs:
                 echo "Attempt $i/$STATUS_POLL_MAX_ATTEMPTS: peer $PEER_IP slot error=$PEER_ERROR (transport-class — polling)"
                 continue
               fi
-              PEER_EXIT=$(echo "$PEER_JSON" | jq -r '.exit_code // -99')
+              PEER_EXIT=$(echo "$PEER_JSON" | jq -r '.exit_code // -99' | tr -cd '0-9-')
               PEER_TAG=$(echo "$PEER_JSON" | jq -r '.tag // ""')
+              PEER_TAG="${PEER_TAG//[^A-Za-z0-9._ -]/}"
               case "$PEER_EXIT" in
                 0)
                   if [ "$PEER_TAG" = "v$VERSION" ]; then
