@@ -69,12 +69,11 @@ All of these, in this order:
 
 1. The audit exits 0: `gap_suites=0` and `unaudited=0` after the human exemptions in an `--accept` file (one row per exempted name,
    `suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason>`, or `suite<TAB>*<TAB>-<TAB>-<TAB>false-positive: <reason>` for a
-   suite the audit cannot read at all; the reason is mandatory. The anchor is the first 12 hex of sha256 over the source line with its
+   suite with no tracked input at all; the reason is mandatory. The anchor is the first 12 hex of sha256 over the source line with its
    whitespace collapsed (`" ".join(line.split())`), the ordinal counts the lines whose collapsed whitespace form (`" ".join(line.split())`) is hashed to the same anchor, in the suite file then its
    sourced libraries; `--all-refs` prints both. A row whose anchor matches no live line, or whose pair is no longer a gap, is `stale` and
    fails the audit. The 3-column row of earlier revisions is retired and exits 2. The directory suite `plugins/soleur` is now audited
-   (its bun-discoverable test files are scanned); a tracked file that cannot be read makes its suite `unaudited`, and a `*` row accepts only a suite that has no tracked input at all: it
-   is `stale` (`star-row-tracked-suite`) for a suite whose file git tracks even when the work tree lost it, and for a suite with an unreadable member). `unaudited` rows must be READ or accepted by a human, never argued away.
+   (its bun-discoverable test files are scanned); a tracked file that cannot be read makes its suite `unaudited`, and a `*` row accepts only a suite that has no tracked input at all. Otherwise it is `stale`, with one of two reasons: `star-row-tracked-suite` when git tracks the suite's input but the work tree lost or cannot open it (deleted, dangling symlink, link to a directory), and `star-row-unreadable-members` when the suite has readable inputs and some member cannot be read). `unaudited` rows must be READ or accepted by a human, never argued away.
 2. A ratchet that fails on any suite naming an undeclared tracked path is a **required** CI check.
 3. The escape replay, the saving and the reader audit are re-run on a fresh window (section 4) and the go/no-go is re-ruled.
 
@@ -93,7 +92,7 @@ git worktree remove --force /var/tmp/s4-audit
 ```
 
 `audit` prints `gap`, `unaudited` and `stale` lines and `SOLEUR_PR_AFFECTED_AUDIT suites=… always_on=… audited=… unaudited=… gap_suites=…
-gap_refs=… accepted=… stale=… refs=… files_read=…` (a stale row also exits 1; `suites` counts selector rows, every other count is per suite label, rows sharing a label being one suite; `refs` is the number of distinct (label, path) pairs the audited suites name before any exemption and `files_read` the number of distinct files read, so a change of the audit's reach shows even when the gaps do not move). It exits 0 only when no gap and no unaudited suite remain; `gap_suites=0` beside `unaudited>0` is not a clean
+gap_refs=… accepted=… stale=… refs=… files_read=…` (a stale row also exits 1; `suites` counts selector rows; `always_on`, `audited`, `unaudited` and `gap_suites` are per suite label (rows sharing a label are one suite, and `audited` never counts a label that is also unaudited or always_on); `gap_refs`, `refs` and `accepted` count (label, path) pairs (`refs` before any exemption, `gap_refs` after, `accepted` plus one per suite accepted whole by a `*` row); `stale` counts accept-row entries; `files_read` is the number of distinct files read, so a change of the audit's reach shows even when the gaps do not move). It exits 0 only when no gap and no unaudited suite remain; `gap_suites=0` beside `unaudited>0` is not a clean
 audit (a suite the audit never read is not a suite with no gaps). `always_on` suites run on every diff and are exempt. The audit sees literal path names only: a path assembled from a variable, or read through a helper the audit does not follow, is invisible to it, so `gap_suites=0` is a lower bound, never proof of completeness. Edges are read with
 the selector's own grammar (`^dir/` prefix, `^file` exact, `^glob:` bash glob), not as regexes. Tally the most frequent undeclared paths
 from the `--all-refs` output (the default prints only the first six per suite).
