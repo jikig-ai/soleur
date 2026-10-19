@@ -8,7 +8,7 @@ Write each phase's RED tests before its code. Commit order: Phase 1 first, Phase
 - [ ] 0.1 Re-read the CTO rulings in `decision-challenges.md`
 - [ ] 0.2 `io_uring_setup` blocked by the container profile? If not, can ENOSYS be added to the variant cheaply? (Phase 4 go/no-go)
 - [ ] 0.3 Logs-alert count and free-tier cap; is there a Sentry rule on `op=sandbox-canary`? (Phase 3 fallback decision)
-- [ ] 0.4 Heartbeat period floor and `/fail` support; prod container memory headroom for one SDK CLI spawn; `cloud-init.yml` user_data size headroom (Phase 5 go/no-go)
+- [ ] 0.4 Heartbeat period floor (`/fail` support is CONFIRMED by the vendor docs, 2026-10-19; append `/fail` to the host's own heartbeat URL); prod container memory headroom for one SDK CLI spawn; `cloud-init.yml` user_data size headroom (Phase 5 go/no-go)
 - [ ] 0.5 Does the tool_result observer's `block` carry an error flag? Helper step order: which of the 14 steps run before the worker fork (Phase 2)
 - [ ] 0.6 `bash plugins/soleur/test/c4-count-parity.test.sh` green baseline; list the five callers of `buildAgentSandboxConfig`/`buildAgentEnv`
 

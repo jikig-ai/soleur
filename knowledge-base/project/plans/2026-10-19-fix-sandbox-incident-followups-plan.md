@@ -14,6 +14,22 @@ requires_cpo_signoff: true
 lane: cross-domain
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-19
+**Passes applied:** six CTO rulings (outer-wrap, probe config/synthetic/message/classifier/Slack/alert, AF_UNIX design, review forks), CPO and CLO advisories, a six-seat plan review (DHH, Kieran, simplicity, architecture, spec-flow, CTO devex), the deepen halts 4.6 to 4.12, and live verification of vendor and repo facts.
+
+### Key improvements
+1. The AF_UNIX item was reshaped by a measured fact: the SDK's in-sandbox `socat ... UNIX-CONNECT` bridges start before the user command in every session, so a blanket bwrap-level deny is infeasible. The plan ships a second artifact, applied to no-egress sessions only, behind a default-OFF runtime flag.
+2. The user-facing notice no longer claims "this command did not run" (a tenant can forge the helper line after a command that ran); it is single-line, error-flagged and pre-fork-step only, and the directive keys on the raw line the model actually sees.
+3. The deploy smoke closes the signature-dependence trap: Bash dispatched with no nonce, or a hang, is `sdk_bash_smoke_failed`; `smoke_infra_error` is reserved for "Bash never dispatched" and has a stale-warning escalation so a dead probe cannot stay silent.
+4. The runtime synthetic gained deploy-swap guards (deploy lock, container state, first run at timer start), a 900 s / 900 s heartbeat (a 300 s grace would false-page on every deploy straddling a skipped tick), and an objective cut line.
+
+### New considerations discovered
+- `GET .../heartbeat/<token>/fail` is documented by Better Stack (verified live below), so a failed synthetic can alert immediately instead of waiting for a missed beat.
+- The plan's discoverability probe is credential-declared, which moves the repo-global `BASELINE_DECLARED_PROBES` ratchet (70 to 71).
+- Phase 5 touches about 25 parity registrations that a host-resident heartbeat drags in (cloud-init user_data size cap, birth gate, vacuity floor, templates validator).
+
 ## Overview
 
 One pull request that closes the follow-ups the hosted-agent Bash outage (#10445) left open: a deploy-time end-to-end
@@ -91,6 +107,16 @@ header prescribes.
   a claim; notify-only readbacks; shared deploy frame); `2026-07-18-betterstack-followthrough-probe-must-field-isolate-
   syslog-identifier` (isolate the journald field, fixtures in the real `raw` shape); `2026-07-03-dark-launch-pr-must-
   exclude-operator-prerequisite-infra`.
+
+### Deepen-pass verification (2026-10-19)
+
+- **Vendor contract (CLI-verification gate).** Heartbeat failure reporting: appending `/fail` to the heartbeat URL, with an optional exit code and POST body, is documented. <!-- verified: 2026-10-19 source: https://betterstack.com/docs/uptime/cron-and-heartbeat-monitor/ -->
+  The page lists no minimum period or grace values, so the free-tier floor stays a Phase 0.2 live read. Note the documented host is `incidents.betterstack.com`; the Terraform `betteruptime_heartbeat.url` output is the source of the real URL, to which `/fail` is appended.
+- **Precedent diff (4.4).** Atomic ledger write: `write_sandbox_canary_state` (`mktemp "${state_file}.XXXXXX"` in the same directory, then `mv`), which the smoke ledger reuses rather than copying. Deploy lock: `LOCK_FILE="${CI_DEPLOY_LOCK:-/var/lock/ci-deploy.lock}"` (`ci-deploy.sh` L3798), FD-200 advisory flock; the synthetic uses `flock -n` on the same path. Host timer: `web-zot-consumer-probe.{service,timer}` (`OnBootSec=90s`, `Persistent=true`, retagged `SyslogIdentifier`). Alert: `bwrap_probe_rollback` (SYSLOG_IDENTIFIER + startsWith marker, no host_name). Dark-launch probe: `run_workspace_isolation_probe`. No novel pattern is introduced.
+- **Rule and reference existence.** Cited rule ids `wg-dark-launch-deploy-gates`, `hr-menu-option-ack-not-prod-write-auth`, `hr-prod-host-config-change-immutable-redeploy`, `hr-observability-as-plan-quality-gate`, `cq-write-failing-tests-before` exist as active ids. Issues #9773, #9797, #10445, #10548, #10549 and PR #9874 resolve live; #8752 is the closed seccomp-filter issue; #10456 is closed.
+- **Downtime and cutover (4.55).** Not triggered: the host timer and the Better Stack resources are additive, `ci-deploy.sh` edits add a non-blocking call after the canary, and no hcloud resource is replaced.
+- **Halts 4.6 to 4.12.** User-Brand Impact valid (`single-user incident`); Observability fields present, probe verb allowlisted, literal expected output, credential-declared; no PAT-shaped variable; no UI-surface file (so no `.pen` is required); Encryption Posture present with an exception block carrying `tracking_issue` and `expires_on`; Guard Contract lint green (5 guards); Scope Check has exactly one live section and no BLOCKED marker.
+- **Propagation.** `tasks.md` carries the 900/900 heartbeat, the flag, the cut trigger and the `/fail` resolution.
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -203,8 +229,8 @@ Seven work items in one PR, ordered by blast radius (lowest first) so each phase
   `docker exec soleur-web-platform /usr/bin/env -i ... node /app/infra/lib/sdk-bash-probe.mjs` in synthetic mode (scratch
   `CLAUDE_CONFIG_DIR`, removed after the run, so no synthetic transcript lands in the shared HOME). It pings the host's own
   Better Stack heartbeat only on a verified `pass`; `sdk_bash_smoke_failed` pings the heartbeat `/fail` path when the vendor
-  supports it (resolved in Phase 0.2 and written into the runbook as one chosen branch; a test asserts a failed run never pings
-  the success URL) and otherwise stays silent; `smoke_infra_error` pings nothing. The
+  supports it (CONFIRMED by the vendor docs retrieved 2026-10-19: the failed-run branch appends `/fail` to the host's own heartbeat URL; a test
+  asserts a failed run never pings the success URL) and otherwise stays silent; `smoke_infra_error` pings nothing. The
   heartbeat payload carries no user or workspace identifiers (CLO). Period 900 s, grace 900 s (CTO 2026-10-19: a 300 s grace would false-page on every deploy that straddles one skipped tick; detection within about 30 minutes of the last good beat, plus an email read; the tier floor is measured in Phase 0.2 and `arm_one` is set explicitly per host).
   Delivered like `web-private-nic-guard`: an SSH `terraform_data` provisioner for running hosts, cloud-init for fresh ones.
   Guards against the deploy swap (flow review P0): the script takes a non-blocking `flock -n` on `/var/lock/ci-deploy.lock`
@@ -549,7 +575,7 @@ All records ship in this PR; none is deferred. ADR-079's promotion status stays 
   2. Phase 3: the current Logs-alert count and the free-tier cap (read live via the Telemetry API and the ADR-218 amendments),
      and whether a Sentry alert rule already pages on `op=sandbox-canary`; if the cap would be exceeded, the pre-decided fallback is to
      fold the smoke row into the existing `agent_sandbox_bash_denial` alert's incident text and rely on Sentry for the deploy signal.
-  3. Phase 5: Better Stack heartbeat period floor and whether `/fail` is supported (live read); the prod container's memory headroom
+  3. Phase 5: Better Stack heartbeat period floor (live read; `/fail` is already confirmed by the vendor docs); the prod container's memory headroom
      for one SDK CLI spawn; `cloud-init.yml` user_data size headroom against the 32 KB cap (`cloud-init-user-data-size.test.ts`).
   4. Phase 2: does the tool_result observer's `block` carry an error flag / exit information; the helper's step order (which of the 14
      steps run strictly before the worker fork), read from the vendored binary and the incident reproduction.
