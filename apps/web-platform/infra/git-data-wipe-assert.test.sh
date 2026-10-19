@@ -6,7 +6,8 @@
 # THREE TIERS.
 #   A  SHIM. The REAL host script, fed the way production feeds it (`bash -s < file`), over a simulated
 #      host: every system read the script makes goes through an external command (cat, stat, realpath,
-#      ls, find, date, findmnt, cryptsetup, blockdev, dmsetup, losetup, mount, umount, dumpe2fs, dd), and
+#      ls, find, date, wc, head, du, findmnt, cryptsetup, blockdev, dmsetup, losetup, mount, umount, dumpe2fs, dd; wc can
+#      answer the n-th call of a run with an override, see hk_only), and
 #      those are PATH shims reading one "world" directory. The script carries no test seam (ADR-214).
 #      Runs unprivileged, everywhere. It proves every verdict, the fixed output grammar, the
 #      path-typed allowlist, the teardown, and that NO synthesized tenant name reaches stdout, stderr, a
@@ -133,6 +134,9 @@ rec() { { printf '%s' "$n"; local a; for a in "$@"; do printf '\t%s' "$a"; done;
 case "$n" in
   blockdev|cryptsetup|dd|dumpe2fs|findmnt|find|losetup|mount|umount|dmsetup|sleep|udevadm|realpath|stat|mktemp|truncate) rec "$@" ;;
 esac
+# hooks_touch — one line per call of ANY shimmed command (including the content readers head, du, sha256sum, md5sum, cksum,
+# readlink, grep and sed, which pass straight through) whose argv names the hooks subtree of the snapshot (#10476, CLO C2)
+case "$*" in *"/mnt/hooks"*) { printf '%s' "$n"; for _a in "$@"; do printf '\t%s' "$_a"; done; printf '\n'; } >> "$ST/hooks_touch" ;; esac
 case "$n" in
   cat)
     case "$last" in
@@ -151,6 +155,7 @@ case "$n" in
   date)
     if [ "${1-}" = "+%s" ]; then exec cat "$W/now"; fi
     exec date "$@" ;;
+  head|du|sha256sum|md5sum|cksum|readlink|grep|sed) exec "$n" "$@" ;;
   sleep) exit 0 ;;
   udevadm) exit 0 ;;
   mktemp)
@@ -276,7 +281,9 @@ case "$n" in
     # the two finds over the top-level hooks directory (#10476): fail_find_hooks_f / fail_find_hooks_t hold the rc the
     # named find exits with (a failure, or 124 for a timeout); bump_errors_on_hooks moves the ext4 error counter while
     # the total-count find runs (a filesystem fault that surfaces DURING the hooks read)
-    case "$*" in *"/hooks -xdev -mindepth 1 -maxdepth 1 -name pre-receive "*) if flag fail_find_hooks_f; then exit "$(cat "$W/fail_find_hooks_f")"; fi ;; esac
+    case "$*" in *"/hooks -xdev -mindepth 1 -maxdepth 1 -name pre-receive "*)
+      if flag fail_find_hooks_f; then exit "$(cat "$W/fail_find_hooks_f")"; fi
+      if flag bump_errors_on_hooks_f; then printf '1\n' > "$W/files/sys/fs/ext4/dm-3/errors_count"; fi ;; esac
     case "$*" in *"/hooks -xdev -mindepth 1 -printf x"*)
       if flag fail_find_hooks_t; then exit "$(cat "$W/fail_find_hooks_t")"; fi
       if flag bump_errors_on_hooks; then printf '1\n' > "$W/files/sys/fs/ext4/dm-3/errors_count"; fi ;; esac
@@ -344,7 +351,7 @@ echo "shim: no arm for $n" >&2
 exit 99
 SHIM
 chmod +x "$SH/_shim" || instrument "chmod shim failed"
-for _n in awk cat date sleep udevadm stat realpath findmnt cryptsetup blockdev ls find dd dumpe2fs losetup dmsetup mount umount mktemp truncate wc; do
+for _n in awk cat date sleep udevadm stat realpath findmnt cryptsetup blockdev ls find dd dumpe2fs losetup dmsetup mount umount mktemp truncate wc head du sha256sum md5sum cksum readlink grep sed; do
   ln -s _shim "$SH/$_n" || instrument "ln shim $_n failed"
 done
 
@@ -440,7 +447,11 @@ invariants() {
   if [ "$lines" -eq 1 ] && ! [[ "$(cat "$W/out")" =~ $RE_PRE || "$(cat "$W/out")" =~ $RE_POST ]]; then bad=1; fi
   while IFS= read -r l; do
     [[ "$l" =~ $RE_ERR ]] || bad=1
+    # the two hooks fields exist on the rc=34 line ONLY (CLO C1): any other stderr line that carries one is a violation, whatever
+    # its reason word (a later die in the listing would otherwise carry them past RE_ERR, which admits any key=digits suffix)
+    case "$l" in *hooks_pre_receive_f=* | *hooks_other_n=*) [[ "$l" =~ $RE_34 ]] || bad=1 ;; esac
   done < "$W/err"
+  case "$(cat "$W/out")" in *hooks_pre_receive_f* | *hooks_other_n*) bad=1 ;; esac
   if [ "$bad" = 0 ]; then ok "$label: stdout is empty or one fixed-shape line, every stderr line is a fixed reason line"
   else no "$label: output grammar violated: out=[$(tr '\n' '|' < "$W/out" | cut -c1-200)] err=[$(tr '\n' '|' < "$W/err" | cut -c1-200)]"; fi
   # 3. teardown: no snapshot, loop or mount, and no directory THIS run's script created is left behind. The
@@ -469,7 +480,7 @@ expect_refuse() {
   else no "$label: expected rc=$rc reason=$reason; got rc=$RC out=[$(cut -c1-80 "$W/out")] err=[$(tr '\n' '|' < "$W/err" | cut -c1-200)]"; fi
   if [ "$rc" = 34 ] && [ "$RC" = 34 ]; then
     RC34_LINES_CHECKED=$((RC34_LINES_CHECKED + 1))
-    if line34_ok "$last"; then ok "$label: the rc=34 line is the strict fixed shape (digits and one 0/1 bit only)"
+    if line34_ok "$last"; then ok "$label: the rc=34 line is the strict fixed shape (digits and two 0/1 fields only)"
     else no "$label: the rc=34 line is not the strict fixed shape: [$last]"; fi
     if [ -n "$tail34" ]; then
       if [ "$last" = "wipe-assert: rc=34 reason=offlist $tail34" ]; then ok "$label: the whole rc=34 line equals the expected one"
@@ -891,7 +902,7 @@ expect_refuse "A20 repositories/ holds entries after the replay" 37 repositories
 if grep -q 'repos=2' "$W/err"; then ok "A20 the refusal carries a COUNT (repos=2) and no name"; else no "A20 count missing: $(cat "$W/err")"; fi
 if [[ "$(tail -n 1 "$W/err")" != *has_hooks_d* && "$(tail -n 1 "$W/err")" != *hooks_pre_receive_f* && "$(tail -n 1 "$W/err")" != *hooks_other_n* ]]; then ok "A20 an rc 37 refusal carries no rc=34 diagnostic field"; else no "A20 an rc 37 line carries an rc=34 field: $(tail -n 1 "$W/err")"; fi
 
-# ── rc=34 diagnostic fields (2026-10-18): a fixed-vocabulary bit for the system directory and two counts ──────
+# ── rc=34 diagnostic fields (2026-10-18): a fixed-vocabulary bit for the system directory and two counts; the 2026-10-19 hooks fields follow at HK01 ──────
 world a120-incident
 tree_reset; mkdir -p "$W/tree/repositories" "$W/tree/lost+found" "$W/tree/hooks"
 run_script pre
@@ -910,6 +921,7 @@ for v in symlink file dotd upper fifo suffix symlinkfull upperfull; do
     fifo)    mkfifo "$W/tree/hooks" || instrument "mkfifo failed"; ex="top_d=2 top_f=1 top_l=0 top_o=1 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1 hooks_pre_receive_f=0 hooks_other_n=0" ;;
     suffix)  mkdir -p "$W/tree/old-hooks"; ex="top_d=3 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1 hooks_pre_receive_f=0 hooks_other_n=0" ;;
     # content a find would count if the name were taken as the hooks directory: the two new fields stay constant 0
+    # (symlinkfull documents the rule; find does not descend into a command-line link by default, so only upperfull can bite)
     symlinkfull) mkdir -p "$W/outside/full"; touch "$W/outside/full/pre-receive" "$W/outside/full/$CORPUS_HK_A"; ln -s "$W/outside/full" "$W/tree/hooks"; ex="top_d=2 top_f=1 top_l=1 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1 hooks_pre_receive_f=0 hooks_other_n=0" ;;
     upperfull)   mkdir -p "$W/tree/Hooks"; touch "$W/tree/Hooks/pre-receive" "$W/tree/Hooks/$CORPUS_HK_A"; ex="top_d=3 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1 hooks_pre_receive_f=0 hooks_other_n=0" ;;
   esac
@@ -944,25 +956,26 @@ if [[ "$(tail -n 1 "$W/err")" != *has_hooks_d* ]]; then ok "A132 the rc 35 line 
 HK_BASE="top_d=3 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=1"
 HK_TAB=$'\t'
 hk_world() { world "$1"; tree_reset; mkdir -p "$W/tree/repositories" "$W/tree/lost+found" "$W/tree/hooks"; }
-hk_argv_ok() { # <label> — C2/C3: every call that names the hooks subtree is one of the two finds, flags exactly as ruled
-  local f="$W/state/argv" re1 re2 touching matching
-  re1="^find${HK_TAB}[^${HK_TAB}]*/mnt/hooks${HK_TAB}-xdev${HK_TAB}-mindepth${HK_TAB}1${HK_TAB}-maxdepth${HK_TAB}1${HK_TAB}-name${HK_TAB}pre-receive${HK_TAB}-type${HK_TAB}f${HK_TAB}-printf${HK_TAB}x\$"
-  re2="^find${HK_TAB}[^${HK_TAB}]*/mnt/hooks${HK_TAB}-xdev${HK_TAB}-mindepth${HK_TAB}1${HK_TAB}-printf${HK_TAB}x\$"
-  touching="$(grep -cF '/mnt/hooks' "$f")"
-  matching="$(grep -cE -e "$re1" -e "$re2" "$f")"
-  if [ "$touching" = 2 ] && [ "$matching" = 2 ] && [ "$(grep -cE -e "$re1" "$f")" = 1 ] && [ "$(grep -cE -e "$re2" "$f")" = 1 ]; then
-    ok "$1: exactly two calls touch the hooks subtree, both predicate-only finds (-xdev, no -L/-H/-follow, -printf x, no cat/head/stat/hash)"
-  else no "$1: argv over the hooks subtree differs (touching=$touching matching=$matching): $(grep -F '/mnt/hooks' "$f" | tr '\t' ' ' | head -4 | cut -c1-240)"; fi
+# hk_touch_ok <hooks_touch file> — C2/C3: EVERY shimmed call that names the hooks subtree is one of the two finds, flags exactly
+# as ruled; one shared predicate for the per-row check, the mutation rows and the H-rows that drive it with bad records
+hk_touch_ok() {
+  local f="$1" t="$HK_TAB" re1 re2
+  [ -f "$f" ] || return 1
+  re1="^find${t}[^${t}]*/mnt/hooks${t}-xdev${t}-mindepth${t}1${t}-maxdepth${t}1${t}-name${t}pre-receive${t}-type${t}f${t}-printf${t}x\$"
+  re2="^find${t}[^${t}]*/mnt/hooks${t}-xdev${t}-mindepth${t}1${t}-printf${t}x\$"
+  [ "$(wc -l < "$f")" = 2 ] && [ "$(grep -cE -e "$re1" "$f")" = 1 ] && [ "$(grep -cE -e "$re2" "$f")" = 1 ]
 }
-hk_canary() { # <label> — C9: no fixture name from under hooks in captured stdout or stderr
-  if [ -z "$(grep -lF -f "$PATS" "$W/out" "$W/err" || true)" ]; then ok "$1: no canary name from under hooks in stdout or stderr"
-  else no "$1: a canary name reached stdout or stderr"; fi
+hk_argv_ok() { # <label>
+  if hk_touch_ok "$W/state/hooks_touch"; then ok "$1: exactly two calls touch the hooks subtree, both predicate-only finds (-xdev, no -L/-H/-follow, -printf x; no cat, ls, head, du, hash, stat or readlink call names it)"
+  else no "$1: the calls that name the hooks subtree differ: $(tr '\t' ' ' < "$W/state/hooks_touch" 2>/dev/null | head -4 | cut -c1-240)"; fi
 }
+# hk_no_field <line> — true iff the line carries neither hooks field
+hk_no_field() { [[ "$1" != *hooks_pre_receive_f* && "$1" != *hooks_other_n* ]]; }
 # hk_row <label> <f> <other_n> — run the hooks world just built and pin the whole line
 hk_row() {
   run_script pre
   expect_refuse "$1" 34 offlist "$HK_BASE hooks_pre_receive_f=$2 hooks_other_n=$3"
-  hk_argv_ok "$1"; hk_canary "$1"
+  hk_argv_ok "$1"
 }
 hk_world hk01-fence-only;            touch "$W/tree/hooks/pre-receive"
 hk_row "HK01 hooks holds exactly one regular file named pre-receive" 1 0
@@ -998,17 +1011,19 @@ hk_world hk16-deep;                  mkdir -p "$W/tree/hooks/d1/d2/d3"; touch "$
 hk_row "HK16 a file three directories down is counted: four entries, no depth bound" 0 4
 
 # the fields exist only on the rc=34 line: a clean run (stdout) and an rc 33 refusal carry none of them
+hk_world hk18-twelve;                touch "$W/tree/hooks/pre-receive"; for _i in 1 2 3 4 5 6 7 8 9 10 11 12; do touch "$W/tree/hooks/s$_i.sample"; done
+hk_row "HK18 pre-receive plus twelve sample files: a two-digit hooks_other_n (a stock git hooks directory holds about thirteen)" 1 12
 hk_world hk17-clean-has-none;        rmdir "$W/tree/hooks"
 run_script pre
+invariants "HK17"
 if [ "$RC" = 0 ] && [[ "$(cat "$W/out")" != *hooks_* ]] && [[ "$(cat "$W/err")" != *hooks_* ]]; then ok "HK17 a run with no hooks directory prints neither field, on any stream"
 else no "HK17 a hooks field appeared on a run that is not an rc=34 refusal: rc=$RC out=[$(cut -c1-120 "$W/out")]"; fi
 
 # C4: a failed or timed-out find, or a non-digit or impossible answer, is rc 33 with a fixed word and no field, never a 0
 hk_fail() { # <label> <reason> — the last stderr line is the fixed reason line and carries no hooks field
   expect_refuse "$1" 33 "$2"
-  if [[ "$(tail -n 1 "$W/err")" != *hooks_pre_receive_f* && "$(tail -n 1 "$W/err")" != *hooks_other_n* ]]; then ok "$1: the rc 33 line carries no hooks field"
-  else no "$1: an rc 33 line carries a hooks field: $(tail -n 1 "$W/err")"; fi
-  hk_canary "$1"
+  if hk_no_field "$(cat "$W/err")"; then ok "$1: no stderr line of the rc 33 refusal carries a hooks field"
+  else no "$1: an rc 33 refusal carries a hooks field: $(tail -n 1 "$W/err")"; fi
 }
 hk_world hkf1-find-file-fails;       touch "$W/tree/hooks/pre-receive"; printf '3' > "$W/fail_find_hooks_f"
 run_script pre; hk_fail "HKF1 the pre-receive find fails" hooks_file_count_failed
@@ -1028,9 +1043,25 @@ hk_only hkf7-total-nondigit;         printf 'x' > "$W/wc_override_2"
 run_script pre; hk_fail "HKF7 a non-digit total answer" hooks_count_unparseable
 hk_only hkf8-total-below-flag;       printf '0\n' > "$W/wc_override_2"
 run_script pre; hk_fail "HKF8 a total below the flag is an impossible count, never a negative other-count" hooks_count_inconsistent
+hk_only hkf10-file-trailing;         printf '1x\n' > "$W/wc_override_1"
+run_script pre; hk_fail "HKF10 a pre-receive answer with trailing text is not a flag" hooks_file_count_unparseable
+hk_only hkf11-total-trailing;        printf '5x\n' > "$W/wc_override_2"
+run_script pre; hk_fail "HKF11 a total answer with trailing text is not a count" hooks_count_unparseable
+hk_only hkf12-total-leading-zero;    printf '08\n' > "$W/wc_override_2"
+run_script pre
+expect_refuse "HKF12 a total with a leading zero is a decimal count (08 less the flag), never octal and never an abort" 34 offlist "top_d=1 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=1 hooks_pre_receive_f=1 hooks_other_n=7"
 # C5: the reads sit inside the snapshot window, BEFORE the errors_count re-read: a fault that surfaces during the hooks read is caught
 hk_world hkf9-errors-during-read;    touch "$W/tree/hooks/pre-receive"; touch "$W/bump_errors_on_hooks"
-run_script pre; hk_fail "HKF9 the ext4 error counter moves while the hooks subtree is read" errors_count_changed_by_listing
+run_script pre; hk_fail "HKF9 the ext4 error counter moves while the hooks subtree is read (total find)" errors_count_changed_by_listing
+hk_world hkf9b-errors-during-flag-read; touch "$W/tree/hooks/pre-receive"; touch "$W/bump_errors_on_hooks_f"
+run_script pre; hk_fail "HKF9b the ext4 error counter moves while the pre-receive find runs (the flag find sits before the re-read too)" errors_count_changed_by_listing
+# CLO C1: the fields are on the rc=34 line ONLY. A later die in the listing (here the teardown) must not carry them.
+hk_world hkf10t-teardown-fails;      touch "$W/tree/hooks/pre-receive" "$W/tree/hooks/$CORPUS_HK_A"; touch "$W/fail_umount"
+run_script pre
+if [ "$RC" = 36 ] && [ ! -s "$W/out" ] && grep -q 'rc=36 reason=teardown_failed' "$W/err" && hk_no_field "$(cat "$W/err")"; then ok "HKF13 a failed teardown on a hooks volume is rc 36 teardown_failed and no stderr line carries a hooks field"
+else no "HKF13 expected rc 36 with no hooks field; got rc=$RC err=[$(tr '\n' '|' < "$W/err" | cut -c1-200)]"; fi
+rm -rf -- "$W/shm"
+if [ -z "$(grep -rlF -f "$PATS" "$W/out" "$W/err" "$W/state" || true)" ]; then ok "HKF13 no canary name in any output or state file on the teardown-failure path"; else no "HKF13 a canary name leaked on the teardown-failure path"; fi
 
 world a-newline
 tree_reset; mkdir -p "$W/tree/repositories" "$W/tree/${CORPUS_NL_A}"$'\n'"${CORPUS_NL_B}"
@@ -1533,6 +1564,11 @@ set_hkf6() { set_hkonly; printf '2\n' > "$W/wc_override_1"; }
 set_hkf7() { set_hkonly; printf 'x' > "$W/wc_override_2"; }
 set_hkf8() { set_hkonly; printf '0\n' > "$W/wc_override_2"; }
 set_hkf9() { set_hk01; touch "$W/bump_errors_on_hooks"; }
+set_hkf9b() { set_hk01; touch "$W/bump_errors_on_hooks_f"; }
+set_hkf10() { set_hkonly; printf '1x\n' > "$W/wc_override_1"; }
+set_hkf11() { set_hkonly; printf '5x\n' > "$W/wc_override_2"; }
+set_hkf13() { set_hk02; touch "$W/fail_umount"; }
+set_hk18() { set_hk01; for _i in 1 2 3 4 5 6 7 8 9 10 11 12; do touch "$W/tree/hooks/s$_i.sample"; done; }
 hk_line_is() { line34_is "$HK_BASE hooks_pre_receive_f=$1 hooks_other_n=$2"; }
 caught_hk01() { hk_line_is 1 0; }
 caught_hk02() { hk_line_is 1 1; }
@@ -1552,20 +1588,17 @@ caught_hkf5() { caught_reason hooks_file_count_unparseable; }
 caught_hkf7() { caught_reason hooks_count_unparseable; }
 caught_hkf8() { caught_reason hooks_count_inconsistent; }
 caught_hkf9() { caught_reason errors_count_changed_by_listing; }
-caught_hk_argv() { # the argv record over the hooks subtree is exactly the two ruled finds
-  local f="$W/state/argv" t="$HK_TAB" re1 re2
-  re1="^find${t}[^${t}]*/mnt/hooks${t}-xdev${t}-mindepth${t}1${t}-maxdepth${t}1${t}-name${t}pre-receive${t}-type${t}f${t}-printf${t}x\$"
-  re2="^find${t}[^${t}]*/mnt/hooks${t}-xdev${t}-mindepth${t}1${t}-printf${t}x\$"
-  [ "$(grep -cF '/mnt/hooks' "$f")" = 2 ] && [ "$(grep -cE -e "$re1" "$f")" = 1 ] && [ "$(grep -cE -e "$re2" "$f")" = 1 ]
-}
+caught_hk18() { hk_line_is 1 12; }
+caught_nofield36() { [ "$RC" = 36 ] && hk_no_field "$(cat "$W/err")"; }
+caught_hk_argv() { hk_touch_ok "$W/state/hooks_touch"; }
 HK_F='find "$WA_MNT/hooks" -xdev -mindepth 1 -maxdepth 1 -name pre-receive -type f -printf x'
 HK_T='find "$WA_MNT/hooks" -xdev -mindepth 1 -printf x'
 mutant_row m-hk-name-glob "$HK_F" 'find "$WA_MNT/hooks" -xdev -mindepth 1 -maxdepth 1 -name '"'"'pre-receive*'"'"' -type f -printf x' set_hk11 pre caught_hk11
 mutant_row m-hk-name-caseless "$HK_F" 'find "$WA_MNT/hooks" -xdev -mindepth 1 -maxdepth 1 -iname pre-receive -type f -printf x' set_hk12 pre caught_hk12
 mutant_row m-hk-type-dropped "$HK_F" 'find "$WA_MNT/hooks" -xdev -mindepth 1 -maxdepth 1 -name pre-receive -printf x' set_hk05 pre caught_hk05
 mutant_row m-hk-depth-unbounded "$HK_F" 'find "$WA_MNT/hooks" -xdev -mindepth 1 -name pre-receive -type f -printf x' set_hk06 pre caught_hk06
-mutant_row m-hk-other-includes-fence 'HOOKS_OTHER_N=$((ht - hp))' 'HOOKS_OTHER_N="$ht"' set_hk02 pre caught_hk02
-mutant_row m-hk-other-is-flag 'HOOKS_OTHER_N=$((ht - hp))' 'HOOKS_OTHER_N=$(( (ht - hp) > 0 ))' set_hk08 pre caught_hk08
+mutant_row m-hk-other-includes-fence 'HOOKS_OTHER_N=$((10#$ht - 10#$hp))' 'HOOKS_OTHER_N="$ht"' set_hk02 pre caught_hk02
+mutant_row m-hk-other-is-flag 'HOOKS_OTHER_N=$((10#$ht - 10#$hp))' 'HOOKS_OTHER_N=$(( (10#$ht - 10#$hp) > 0 ))' set_hk08 pre caught_hk08
 mutant_row m-hk-total-not-recursive "$HK_T" 'find "$WA_MNT/hooks" -xdev -mindepth 1 -maxdepth 1 -printf x' set_hk03 pre caught_hk03
 mutant_row m-hk-total-follows-links "$HK_T" 'find -L "$WA_MNT/hooks" -xdev -mindepth 1 -printf x' set_hk14 pre caught_hk14
 mutant_row m-hk-flag-find-no-xdev "$HK_F" 'find "$WA_MNT/hooks" -mindepth 1 -maxdepth 1 -name pre-receive -type f -printf x' set_hk01 pre caught_hk_argv
@@ -1576,6 +1609,13 @@ mutant_row m-hk-total-find-failure-is-zero '-printf x | wc -c)" || die 33 hooks_
 mutant_row m-hk-flag-digit-check-dropped '      [[ "$hp" =~ ^[01]$ ]] || die 33 hooks_file_count_unparseable' '      :' set_hkf5 pre caught_hkf5
 mutant_row m-hk-flag-may-exceed-one '[[ "$hp" =~ ^[01]$ ]] ||' '[[ "$hp" =~ ^[0-9]+$ ]] ||' set_hkf6 pre caught_hkf5
 mutant_row m-hk-total-digit-check-dropped '      [[ "$ht" =~ ^[0-9]+$ ]] || die 33 hooks_count_unparseable' '      :' set_hkf7 pre caught_hkf7
+mutant_row m-hk-flag-anchor-dropped '[[ "$hp" =~ ^[01]$ ]] ||' '[[ "$hp" =~ ^[01] ]] ||' set_hkf10 pre caught_hkf5
+mutant_row m-hk-total-anchor-dropped '[[ "$ht" =~ ^[0-9]+$ ]] ||' '[[ "$ht" =~ ^[0-9]+ ]] ||' set_hkf11 pre caught_hkf7
+mutant_row m-hk-other-wraps-at-ten 'HOOKS_OTHER_N=$((10#$ht - 10#$hp))' 'HOOKS_OTHER_N=$(( (10#$ht - 10#$hp) % 10 ))' set_hk18 pre caught_hk18
+mutant_row m-hk-field-on-later-die '    wa_release || die 36 teardown_failed' '    wa_release || die 36 teardown_failed "hooks_other_n=$HOOKS_OTHER_N"' set_hkf13 pre caught_nofield36
+mutant_row m-hk-pipefail-dropped 'set -uo pipefail
+export LC_ALL=C' 'set -u
+export LC_ALL=C' set_hkf1 pre caught_hkf1
 mutant_row m-hk-inconsistent-total-accepted '      [ "$ht" -ge "$hp" ] || die 33 hooks_count_inconsistent' '      :' set_hkf8 pre caught_hkf8
 # C5: the hooks read moves AFTER the errors_count re-read (a fault surfacing during the read is no longer covered)
 mutant_row m-hk-read-after-errors-recheck '    if [ "$HAS_HOOKS" = 1 ]; then
@@ -1675,6 +1715,19 @@ if ! line34_ok "$_g34h digest=0f0f"; then ok "H3: a token after hooks_other_n is
 if ! line34_ok "${_g34h/hooks_other_n=3/hooks_other_n=x}"; then ok "H3: a non-digit hooks_other_n is rejected"; else no "H3: a non-digit hooks_other_n was accepted"; fi
 if ! line34_ok "${_g34h/has_hooks_d=1/has_hooks_d=0}"; then ok "H3: hooks_pre_receive_f=1 with has_hooks_d=0 is rejected (constant 0 without a hooks directory)"; else no "H3: a fence flag without a hooks directory was accepted"; fi
 if ! line34_ok "${_g34h/has_hooks_d=1/has_hooks_d=0}" && ! line34_ok "${_g34/hooks_other_n=0/hooks_other_n=1}"; then ok "H3: hooks_other_n>=1 with has_hooks_d=0 is rejected"; else no "H3: a hooks count without a hooks directory was accepted"; fi
+if ! line34_ok "${_g34/hooks_pre_receive_f=0/hooks_pre_receive_f=1}"; then ok "H3: hooks_pre_receive_f=1 with has_hooks_d=0 and hooks_other_n=0 is rejected (the flag half of the constant-0 rule)"; else no "H3: a fence flag without a hooks directory was accepted when hooks_other_n=0"; fi
+if ! line34_ok "x$_g34"; then ok "H3: a token before the line is rejected (RE_34 is anchored at the start)"; else no "H3: a leading token was accepted"; fi
+if line34_ok "${_g34h/hooks_other_n=3/hooks_other_n=12}"; then ok "H3: a two-digit hooks_other_n is accepted"; else no "H3: hooks_other_n=12 was rejected"; fi
+# the hooks helpers are not neutered: each is driven with an input that MUST be refused (and one that must pass)
+_tf="$T/touch-good"; printf 'find\t/x/mnt/hooks\t-xdev\t-mindepth\t1\t-maxdepth\t1\t-name\tpre-receive\t-type\tf\t-printf\tx\nfind\t/x/mnt/hooks\t-xdev\t-mindepth\t1\t-printf\tx\n' > "$_tf"
+if hk_touch_ok "$_tf"; then ok "H4: hk_touch_ok accepts the two ruled finds"; else no "H4: hk_touch_ok rejected the two ruled finds"; fi
+_tb="$T/touch-bad"
+sed 's/-xdev/-L/' "$_tf" > "$_tb"; if ! hk_touch_ok "$_tb"; then ok "H4: hk_touch_ok rejects a find that lost -xdev and gained -L"; else no "H4: a changed flag was accepted"; fi
+{ cat "$_tf"; printf 'cat\t/x/mnt/hooks/pre-receive\n'; } > "$_tb"; if ! hk_touch_ok "$_tb"; then ok "H4: hk_touch_ok rejects a third call (a content read) that names the hooks subtree"; else no "H4: an extra cat was accepted"; fi
+{ sed -n 1p "$_tf"; printf 'head\t-c\t4\t/x/mnt/hooks/pre-receive\n'; } > "$_tb"; if ! hk_touch_ok "$_tb"; then ok "H4: hk_touch_ok rejects a head call standing in for the total find"; else no "H4: a head call was accepted"; fi
+sed -n 1p "$_tf" > "$_tb"; if ! hk_touch_ok "$_tb"; then ok "H4: hk_touch_ok rejects a record with one call"; else no "H4: a single-call record was accepted"; fi
+if ! hk_touch_ok "$T/touch-absent"; then ok "H4: hk_touch_ok rejects a missing record"; else no "H4: a missing record was accepted"; fi
+if hk_no_field "wipe-assert: rc=33 reason=hooks_count_failed" && ! hk_no_field "x hooks_other_n=1" && ! hk_no_field "x hooks_pre_receive_f=0"; then ok "H4: hk_no_field refuses a line carrying either field and accepts a reason word that merely starts with hooks_"; else no "H4: hk_no_field is neutered"; fi
 
 # ══════════════════════════════════════════════════════════════════════════════════════════
 # TIER B — the cutover verb
@@ -1926,13 +1979,16 @@ print("POST", f_post)
 print("BUL", bul)
 print("N", len(f_re))
 print("ALL_EQ", f_re == f_say == hdr == f_gram == f_post)
-print("BUL_TAIL", bul == f_re[-len(bul):] and f_re[-5:] == ["has_hooks_d", "lf_entries", "offlist_n", "hooks_pre_receive_f", "hooks_other_n"])
+print("BUL_TAIL", bul == f_re[-5:] == ["has_hooks_d", "lf_entries", "offlist_n", "hooks_pre_receive_f", "hooks_other_n"])
 PY
 if [ "$(sed -n 's/^ALL_EQ //p' "$T/p8.out")" = True ]; then ok "P8 RE_34, the script's rc=34 line, the script header list, the runbook grammar line and the runbook posting list name the same fields in the same order"
 else no "P8 the rc=34 field list differs between its five places: $(tr '\n' '|' < "$T/p8.out" | cut -c1-900) $(cat "$T/p8.err")"; fi
-if [ "$(sed -n 's/^BUL_TAIL //p' "$T/p8.out")" = True ]; then ok "P8 the runbook defines has_hooks_d, lf_entries, offlist_n, hooks_pre_receive_f and hooks_other_n, in that order, as the last five fields"
+if [ "$(sed -n 's/^BUL_TAIL //p' "$T/p8.out")" = True ]; then ok "P8 the runbook defines exactly has_hooks_d, lf_entries, offlist_n, hooks_pre_receive_f and hooks_other_n, in that order, as the last five fields"
 else no "P8 the runbook's definition bullets differ from the last five fields: $(grep -E '^(BUL|RE34) ' "$T/p8.out" | tr '\n' '|')"; fi
 if [ "$(sed -n 's/^N //p' "$T/p8.out")" = 10 ]; then ok "P8 floor: ten fields on the rc=34 line"; else no "P8 floor: the field list is not ten long: $(grep '^N ' "$T/p8.out")"; fi
+# P9 (#10476, CLO C4): both hooks finds stay bounded. The shim answers rc 124 itself, so only the source can pin the `timeout 30`.
+_tc="$(sed 's/^[[:space:]]*#.*//' "$SCRIPT" | grep -cF 'timeout 30 find "$WA_MNT/hooks"' || true)"
+if [ "$_tc" = 2 ]; then ok "P9 both finds over the hooks subtree run under timeout 30 (comment-stripped source)"; else no "P9 the hooks finds are not both bounded: $_tc of 2 carry timeout 30"; fi
 # no test seam (ADR-214): neither file reads an env name that exists only for a test
 seams="$(grep -nE 'WIPE_ASSERT_(SEAM|TEST|ROOT|FAKE|SKIP)|_TEST_PIN' "$SCRIPT" "$CUTOVER" || true)"
 if [ -z "$seams" ]; then ok "P6 no test seam in the host script or the verb (ADR-214)"; else no "P6 a seam exists: $seams"; fi
@@ -2192,20 +2248,20 @@ fi
 # FLOOR — self-contained: bash builtins and this suite's own counters, reported by printf + exit and
 # never through ok()/no() (ADR-193). Each bound is a literal on the line directly above its `if`.
 # ══════════════════════════════════════════════════════════════════════════════════════════
-# 41 = 23 (the 2026-10-18 rows) + 16 hooks-field worlds HK01-HK16 + the symlinkfull and upperfull variants (measured, unprivileged, loopback skipped)
-EXPECTED_RC34_LINES=41
+# 43 = 23 (the 2026-10-18 rows) + 17 hooks-field worlds (HK01-HK16, HK18) + the symlinkfull and upperfull variants + HKF12 (measured, unprivileged, loopback skipped)
+EXPECTED_RC34_LINES=43
 if [ "$RC34_LINES_CHECKED" -lt "$EXPECTED_RC34_LINES" ]; then
   printf '[FATAL] anti-vacuity floor: only %s rc=34 lines were checked for the strict shape, floor is %s\n' "$RC34_LINES_CHECKED" "$EXPECTED_RC34_LINES" >&2
   exit 1
 fi
-# 156 = 129 + the 18 rc=34 worlds above that are new runs + HK17 (no hooks directory) + the 9 rc=33 worlds HKF1-HKF9 (measured, unprivileged, loopback skipped)
-EXPECTED_INVARIANT_RUNS=156
+# 162 = 129 + the 20 new rc=34 runs counted above + HK17 (a clean run) + the 12 rc=33 runs HKF1-HKF11 and HKF9b (HKF13 is not invariant-checked; measured, unprivileged, loopback skipped)
+EXPECTED_INVARIANT_RUNS=162
 if [ "$INVARIANT_RUNS" -lt "$EXPECTED_INVARIANT_RUNS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s host-script runs were checked for the output invariants, floor is %s\n' "$INVARIANT_RUNS" "$EXPECTED_INVARIANT_RUNS" >&2
   exit 1
 fi
-# 1079 = executed assertions of an unprivileged run with the loopback tier skipped (the way the local gate runs)
-MIN_ASSERTIONS=1079
+# 1109 = executed assertions of an unprivileged run with the loopback tier skipped (the way the local gate runs)
+MIN_ASSERTIONS=1109
 if [ "$executed" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s — rows were deleted, skipped, or the suite exited early\n' "$executed" "$MIN_ASSERTIONS" >&2
   exit 1

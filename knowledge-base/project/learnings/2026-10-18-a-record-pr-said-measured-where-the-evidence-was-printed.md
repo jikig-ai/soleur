@@ -62,6 +62,8 @@ items; no single seat found more than six, and only the accuracy seat found the 
 7. **`git fetch` from the bare repo root failed ("must be run in a work tree")** — Recovery: ran from the worktree —
    **Prevention:** chain `cd <worktree> && ...` in one call.
 
+> **Superseded 2026-10-19 (#6897), as to "contents unread" for a line that carries `hooks_pre_receive_f` and `hooks_other_n`:** entry names and types under `hooks` were counted on the host and no file content was read; owner, mode and content remain unread.
+
 ## Tags
 
 category: workflow-issues

@@ -425,10 +425,13 @@ wa_main() {
       LF_ENTRIES="$ln"   # keep after the digit check above: only a validated count is ever printed
       [ "$ln" -eq 0 ] || OFFLIST=1
     fi
-    # What the top-level hooks directory holds (rc=34 diagnostic, #10476): two COUNTS taken by find predicates against
-    # constants, inside the snapshot window and before the errors_count re-read below. A top-level directory named hooks
+    # What the top-level hooks directory holds (rc=34 diagnostic, #10476): one 0/1 flag and one COUNT, both taken by find
+    # predicates against constants, inside the snapshot window and before the errors_count re-read below. A top-level directory named hooks
     # is always off the list, so HAS_HOOKS=1 is always the rc=34 verdict and these are never printed on any other line.
     # No -L/-H/-follow (links are never followed), -xdev, no name in a variable, nothing read but a count of x characters.
+    # (-xdev is hooks-only on purpose: the finds over repositories/ and lost+found above predate it and are not changed here.)
+    # The `|| die` after each pipe needs `set -o pipefail` (file top level, outside this unit): without it a find that fails
+    # after printing would count as a number. The suite kills the `set -uo pipefail` -> `set -u` edit.
     # ht counts every entry at any depth; hp is the regular file named pre-receive directly inside, so the OTHER count
     # is ht - hp. A failed or timed-out find, or a non-digit answer, is rc 33 and never a 0.
     if [ "$HAS_HOOKS" = 1 ]; then
@@ -438,7 +441,7 @@ wa_main() {
       [[ "$ht" =~ ^[0-9]+$ ]] || die 33 hooks_count_unparseable
       [ "$ht" -ge "$hp" ] || die 33 hooks_count_inconsistent
       HOOKS_PRE_RECEIVE_F="$hp"
-      HOOKS_OTHER_N=$((ht - hp))   # keep after the checks above: only validated digits are ever printed
+      HOOKS_OTHER_N=$((10#$ht - 10#$hp))   # 10#: a leading zero is a count, never octal; keep after the checks above: only validated digits are ever printed
     fi
     e1="$(wl_errs "$dm")" || die 33 errors_count_unreadable
     [ "$e1" = "$e0" ] || die 33 errors_count_changed_by_listing
@@ -453,7 +456,7 @@ wa_main() {
     [ -z "$hold_after" ] || die 25 holders_after
     ro_after="$(blockdev --getro "$DEV")" || die 16 getro_failed_after
     [ "$ro_after" = 1 ] || die 30 ro_flag_lost_after
-    # Verdicts: off-list beats not-empty (the counts on stderr are digits only; has_hooks_d is a single 0 or 1).
+    # Verdicts: off-list beats not-empty (the counts on stderr are digits only; has_hooks_d and hooks_pre_receive_f are each a single 0 or 1).
     if [ "$OFFLIST" = 1 ]; then
       say "wipe-assert: rc=34 reason=offlist top_d=$TOP_D top_f=$TOP_F top_l=$TOP_L top_o=$TOP_O repos=$REPOS has_hooks_d=$HAS_HOOKS lf_entries=$LF_ENTRIES offlist_n=$OFFLIST_N hooks_pre_receive_f=$HOOKS_PRE_RECEIVE_F hooks_other_n=$HOOKS_OTHER_N"
       exit 34
