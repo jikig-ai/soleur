@@ -43,3 +43,8 @@
 - DEFER: peer-gate test sed scoping hygiene; unsigned reason sub-field
 ### Next
 fix batch → re-run suites → commit+push → fix-round review on fix range → QA → compound → ship → postmerge → DONE
+
+## Compound Phase (pipeline position)
+- Compound ran 2026-10-19: three learnings under `knowledge-base/project/learnings/` (docker-cp client-side untar + mount shape guard; 202-accept-vs-verdict + transport/credential taxonomy; sink admission rules — journald PRIORITY, `::error::` alphabet, job ceiling), plus one Architecture>Always constitution promotion (async accept ≠ verdict → persist expected peers, fail-closed per-peer gate).
+- KB archival DEFERRED to `soleur:ship` Phase 6.45 by design: Phase 6 step 2.5 reads `decision-challenges.md` live from this spec dir for the Model Dissents render (and step 5 reads the plan's `## Operator Holds`); archive-kb.sh runs after those last live reads so the `git mv` rides this same PR (#7490 class — do not archive early).
+- Route-to-definition proposals recorded inside the learnings' "Route to definition" sections (plugin edits were outside this run's knowledge-base-only write boundary).
