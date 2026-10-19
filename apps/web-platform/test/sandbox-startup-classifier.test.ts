@@ -441,9 +441,12 @@ describe("apply-seccomp helper steps — census against the vendored binary (Gua
   const PINS = { classified: HELPER_STEPS, excluded: HELPER_NON_STEP_LINES, minStrings: 17 };
   let realRowsRun = 0;
 
+  // Independent of SKIP_REAL (a floor that reads the skip flag would be satisfied by the very skip it guards).
+  const MUST_RUN_REAL = (process.platform === "linux" && process.arch === "x64") || Boolean(process.env.CI);
+
   afterAll(() => {
     // A skip must not pass vacuously: on linux-x64, or under CI, at least one real-binary row has to have run.
-    if (!SKIP_REAL) expect(realRowsRun, "no real-binary helper-step row ran").toBeGreaterThanOrEqual(1);
+    if (MUST_RUN_REAL) expect(realRowsRun, "no real-binary helper-step row ran").toBeGreaterThanOrEqual(1);
   });
 
   it.skipIf(SKIP_REAL)(
