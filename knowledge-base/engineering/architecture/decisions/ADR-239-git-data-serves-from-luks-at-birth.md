@@ -376,7 +376,7 @@ Plan: `knowledge-base/project/plans/archive/20261003-090828-2026-10-02-feat-git-
   the ledger `expires_on` for this store and two days before the 2026-10-24 date in the issue. Hetzner-side
   snapshot retention of the volume remains unmeasured (Art. 30 PA-36 (f)), so this records an end for the
   device and claims nothing about copies of it.
-  > **Superseded 2026-10-12 (#6897), as to "Target: 2026-10-22": see Amendment 2026-10-12 below; the outer date is 2026-11-12. Pointer added 2026-10-19, fires on the merge of the draft PR carrying it.**
+  > **Superseded 2026-10-12 (#6897), as to "Target: 2026-10-22": see Amendment 2026-10-12 below; the outer date is 2026-11-12. Pointer added 2026-10-19.**
 - **A second id-bearing file the repo-root check cannot see: the gc cursor.** `git-data-gc.sh` writes the
   basename of the last repo it completed (`<id>.git`) to `.gc-cursor` at the mount root, one level above the
   repo root, and a later run that completes a repo overwrites it. The timer is nominally weekly (Sunday 03:20), but a
@@ -394,6 +394,8 @@ Plan: `knowledge-base/project/plans/archive/20261003-090828-2026-10-02-feat-git-
   quietly.** Until the volume is deleted, the files remain readable to anyone holding the volume or a snapshot of
   it. The lint warns inside 14 days of `expires_on` and fails CI after it.
 
+> **Superseded 2026-10-12 (#6897), as to "before 2026-10-23, the first day the ledger lint fails": that date followed from the 2026-10-22 target, the re-opening it describes is Amendment 2026-10-12 below, and the outer date is 2026-11-12. Pointer added 2026-10-19.**
+>
 > **Superseded 2026-10-15 (#6897): "it is gated by the flip chain" no longer holds for the separated wipe variant; see Amendment 2026-10-15 below. The flip chain still gates the flip-chained variant.**
 
 - **Inputs for the CLO re-ruling.** The issue sets the trigger: if the fix and the served-store purge slip past
@@ -457,6 +459,8 @@ The 2026-10-09 amendment set 2026-10-22 as the target for destroying `hcloud_vol
 
 **New date: 2026-11-12, at the latest.** The ledger row `hcloud_volume.git_data` is renewed to that date (tracking #6897). The date is bound to the flip chain, not to a calendar: a second slip past it re-opens this ADR again and goes back to the CLO. It is not rolled quietly. The CLO's final re-ruling is due 2026-10-24; this amendment is provisional until then. No published legal wording changes in this PR (the hold on privacy-policy and DPD wording stays).
 
+> **Superseded 2026-10-19 (#10138; fires on the merge of PR #10528), as to "the hold on privacy-policy and DPD wording stays": it stays for every passage except DPD section 10.3(b) and T&C section 14.1b, whose interim wording the CLO ruling of 2026-10-19 allows ahead of the 2026-10-24 re-ruling. The Privacy Policy and GDPR Policy holds are unchanged.**
+>
 > **Superseded 2026-10-15 (#6897): "bound to the flip chain" no longer holds for the separated wipe variant; the 2026-11-12 date is unchanged. See Amendment 2026-10-15 below.**
 
 **State as measured (Hetzner API read-only and Better Stack, 2026-10-12; none of it read from a host):**

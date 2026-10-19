@@ -48,6 +48,6 @@ export const TC_DOCUMENT_SHA =
  */
 export const TC_BUMP_METADATA = {
   lastUpdated: "October 19, 2026",
-  substantiveChange: "Account deletion: some files linked to your account may remain on retired storage after deletion, as described in the Data Protection Disclosure",
+  substantiveChange: "Account deletion: files linked to some accounts deleted since September 14, 2026 may remain on our storage, as described in the Data Protection Disclosure",
   fullTermsUrl: "https://soleur.ai/pages/legal/terms-and-conditions.html",
 } as const;
