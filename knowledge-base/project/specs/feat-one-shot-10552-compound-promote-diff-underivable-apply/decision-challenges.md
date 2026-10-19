@@ -1,0 +1,17 @@
+# Decision challenges - feat-one-shot-10552-compound-promote-diff-underivable-apply
+
+Persisted by the headless planning phase. Technical forks were delegated to
+`soleur:engineering:cto` (no operator question). Rows classed `technical` carry the CTO
+ruling; no row below is waiting on the operator.
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|---|---|---|
+| F1 - how to stop `diff-underivable-apply`: (A) keep the model-authored unified diff and add `--recount` plus prompt/file context, (B) two-step structured insertion with a server-derived diff, (C) restrict targets to `AGENTS.rules.md` | technical | Ruled by CTO agent, 2026-10-19: Option B - the model is asked for line-numbered output about a file it was never shown (prompt shows only learnings summaries and a byte count), so no per-mode repair can work and the SKILL.md target is unknown before the call; the server validates a unique anchor and derives the diff with git, so every downstream gate is unchanged. A rejected (repairs one of three observed modes, cannot fix context mismatch); C rejected (scope cut, still model-authored hunks). |
+| F1 correction - SKILL.md input size (CTO assumed at most about 104 KB) | technical | Plan-time measurement, not a new fork: `plugins/soleur/skills/review/SKILL.md` is 475,873 bytes; 4 of 104 exceed 120,000 bytes (`wc -c plugins/soleur/skills/*/SKILL.md`). Plan adds a named `edit-target-too-large` refusal at 120,000 bytes; the oversized files are already tracked by #10551. |
+| F2 - marker observability: add `apply_error_class` enum, and/or take #8443 UC-1 (collapse `diff_*` to one `diff_kind`) | technical | Ruled by CTO agent, 2026-10-19: neither. After F1 none of the three observed modes can reach `diff-underivable-apply`; the new `edit-*` reasons already discriminate the remaining failures, so a git-stderr classifier would diagnose a class the fix removes. #8443 UC-1/UC-2 stay open and untouched (telemetry-schema decision reserved for the operator). Trigger to revisit: `diff-underivable-apply` appears on a server-derived diff. |
+| F3 - ADR/C4 under plan Phase 2.10 | technical | Ruled by CTO agent, 2026-10-19: amend ADR-092 with a dated Amendment (who authors the diff, additive by construction, new refusal members); no new ADR; no C4 change (same Inngest function calling the same external systems). |
+| F4 - verification without a production mutation | technical | Ruled by CTO agent, 2026-10-19: tests in a real throwaway git repo plus a post-merge follow-through probe keyed on the next scheduled run (2026-10-25); no manual `trigger-cron` in the plan. A quiet week must stay NOT YET, never PASS. A manual run is an optional shortcut that needs the operator's authorization for that exact production action. |
+| Brief's "likely candidates" (empty / fenced / hunk-less) as the cause | technical | Not adopted: measured rows show none empty, none fenced; only 2026-09-24/09-27 are hunk-less. Three different malformed-diff modes in three weeks (M1 no `@@`, M2 `corrupt patch`, M3 unparseable `@@`). |
+| Whether to close or touch #8443 | taste | Brief says read it, do not close it. Honoured: plan neither edits nor closes it. |
