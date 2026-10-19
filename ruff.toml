@@ -1,4 +1,4 @@
-# Ruff configuration for the shrink-only lint ratchet (scripts/lint-ratchet.py, ADR-290).
+# Ruff configuration for the shrink-only lint ratchet (plugins/soleur/scripts/lint-ratchet.py, ADR-290).
 # Narrow on purpose: five rules, no formatter. Weakening anything here is stopped only by the
 # pin test in tests/scripts/test_lint_ratchet.py and by human PR review.
 target-version = "py311"
