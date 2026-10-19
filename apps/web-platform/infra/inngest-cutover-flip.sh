@@ -564,8 +564,13 @@ emit_state() {
     # documented unreliable, and the two channels are independent at the credential level.
     local nft_raw
     local nft_sha256
+    local nft_flat
     local nft_emit
     nft_raw="$(nft_cmd list chain inet soleur_inngest input 2>/dev/null)" || nft_raw=""
+    nft_flat="$(printf '%s' "$nft_raw" | tr '\n' ' ')"
+    # Bounded detail: ~230 B measured today, 4000 is ~17x — a pathological ruleset is cut
+    # LOUDLY (+TRUNCATED) rather than pushing the row past a transport field cap.
+    if [[ ${#nft_flat} -gt 4000 ]]; then nft_flat="${nft_flat:0:4000}+TRUNCATED"; fi
     nft_sha256=""
     if [[ -n "$nft_raw" ]]; then
       nft_sha256="$(printf '%s' "$nft_raw" | sha256sum 2>/dev/null | awk '{print $1}')" || nft_sha256=""
@@ -574,12 +579,15 @@ emit_state() {
     # the liveness witness and must never be lost to a missing nft binary.
     [[ -n "$nft_sha256" ]] || nft_sha256="unavailable"
     nft_emit="$(jq -nc --argjson base "$json" \
-      --arg nft "$(printf '%s' "$nft_raw" | tr '\n' ' ')" \
+      --arg nft "$nft_flat" \
       --arg sha "$nft_sha256" \
       '$base + {nft: $nft, nft_sha256: $sha}' 2>/dev/null)" || nft_emit="$json"
     "${CUTOVER_LOGGER_CMD:-logger}" -t "$LOG_TAG" "$nft_emit" 2>/dev/null || true
+    # Marker arg 3: SOLEUR_INNGEST_NOOP keeps ~288 daily liveness rows out of the
+    # BOOT_STAGE channel whose consumers fetch newest-first under fixed limits (#10382
+    # review — 288/day evicts 30d boot evidence inside ~7d at --limit 2000).
     "${CUTOVER_PHONE_HOME_CMD:-/usr/local/bin/inngest-boot-phone-home.sh}" "cutover-flip-${reason}" \
-      "flag=${flag} nft=[$(printf '%s' "$nft_raw" | tr '\n' ' ')] nft_sha256=${nft_sha256}" 2>/dev/null || true
+      "flag=${flag} nft=[${nft_flat}] nft_sha256=${nft_sha256}" SOLEUR_INNGEST_NOOP 2>/dev/null || true
     : > "$NOOP_EMIT_STAMP" 2>/dev/null || true
     return 0
   fi

@@ -650,6 +650,8 @@ jobs:
       # later, but this step makes a leaked host fail loudly in the run that leaked it.
       # Query by LABEL (the sweep's axis), and the trailing hyphen prefix by name.
       - name: Assert no rehearsal orphans remain (Hetzner API)
+        # always() — a failed destroy above is the partial-teardown case this step exists for.
+        if: always()
         timeout-minutes: 8
         run: |
           set -euo pipefail
@@ -679,6 +681,9 @@ jobs:
       # authenticates with (DOPPLER_TOKEN_TF, exported by infra-credentials; the
       # prd_terraform read is the same fallback the R2-credentials step above uses).
       - name: Assert no scratch Doppler environment remains (Doppler API)
+        # always() — a failed destroy or Hetzner assert above is the partial-teardown case
+        # this check exists for; default success() would skip it exactly then.
+        if: always()
         timeout-minutes: 3
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -689,8 +694,12 @@ jobs:
           ENV_FLOOR: 1
         run: |
           set -euo pipefail
-          ENV_TOKEN="${DOPPLER_TOKEN_TF:-$(doppler secrets get DOPPLER_TOKEN_TF -p soleur -c prd_terraform --plain)}"
-          [[ -n "$ENV_TOKEN" ]] || { echo "::error::no Doppler provider token resolvable — the scratch-environment check has no verdict."; exit 1; }
+          env_tok_rc=0
+          ENV_TOKEN="${DOPPLER_TOKEN_TF:-}"
+          if [[ -z "$ENV_TOKEN" ]]; then
+            ENV_TOKEN="$(doppler secrets get DOPPLER_TOKEN_TF -p soleur -c prd_terraform --plain)" || env_tok_rc=$?
+          fi
+          [[ "$env_tok_rc" -eq 0 && -n "$ENV_TOKEN" ]] || { echo "::error::no Doppler provider token resolvable (rc=${env_tok_rc}) — the scratch-environment check has no verdict."; exit 1; }
           printf '::add-mask::%s\n' "$ENV_TOKEN"
           env_rc=0
           env_raw="$(DOPPLER_TOKEN="$ENV_TOKEN" doppler environments -p soleur-inngest --json)" || env_rc=$?
@@ -707,9 +716,9 @@ jobs:
             echo "::error::doppler listed ${env_total} soleur-inngest environment(s), below the declared floor of ${ENV_FLOOR} (prd must exist) — the token cannot see what the rehearsal created; the check measured nothing."
             exit 1
           fi
-          env_left="$(printf '%s' "$env_raw" | jq -r '[.[]? | (.slug // .name) | select(startswith("rehearsal_"))] | .[]')"
+          env_left="$(printf '%s' "$env_raw" | jq -r '[.[]? | (.slug // .name) | select(type == "string" and startswith("rehearsal_"))] | .[]')"
           if [[ -n "$env_left" ]]; then
-            echo "::error::scratch Doppler environment(s) remain in soleur-inngest after destroy: $(printf '%s\n' "$env_left" | paste -sd' ' -). Reclaim per the inngest-provision-rehearsal runbook."
+            echo "::error::scratch Doppler environment(s) remain in soleur-inngest after destroy: $(printf '%s\n' "$env_left" | paste -sd' ' - | tr -d '\r' | tr '%' '_'). Reclaim per the inngest-provision-rehearsal runbook."
             exit 1
           fi
           echo "no scratch rehearsal_* Doppler environments remain (${env_total} listed)"

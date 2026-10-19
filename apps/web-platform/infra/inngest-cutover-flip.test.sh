@@ -134,11 +134,14 @@ EOF
 printf '%s\n' "\$*" >> "$LOGTRACE"
 EOF
   # --- #10382: the noop-emit nft read + phone-home dual channel -------------------------------
-  # Canned chain output — the nft stub answers the SAME fixed ruleset regardless of argv so
-  # the assertions below recompute the expected digest from the same bytes the script saw.
+  # Canned chain output — the nft stub answers the SAME fixed ruleset, and REFUSES any argv
+  # other than the production read (`list chain inet soleur_inngest input`) so a selector
+  # mutation on the call site reds here rather than silently reading a fake that ignores
+  # selectors.
   NFTSTUB="$WORK/nft.sh"
   cat > "$NFTSTUB" <<'EOF'
 #!/usr/bin/env bash
+[ "$*" = "list chain inet soleur_inngest input" ] || exit 3
 printf 'table inet soleur_inngest {\n  chain input {\n    type filter hook input priority -10; policy accept;\n    tcp dport { 8288, 8289 } ip saddr { 10.0.1.10, 10.0.1.11 } accept\n    tcp dport { 8288, 8289 } drop\n  }\n}\n'
 EOF
   PHONETRACE="$WORK/phonetrace"
@@ -512,8 +515,8 @@ echo "TEST: #10382 the emitted noop row carries the full nft chain + sha256 on b
 setup_case
 rc=$(run_flip "")
 assert_eq "exit 0 on the noop fire" "0" "$rc"
-NFT_FLAT="$(printf '%s' "$("$NFTSTUB")" | tr '\n' ' ')"
-NFT_SHA="$(printf '%s' "$("$NFTSTUB")" | sha256sum | awk '{print $1}')"
+NFT_FLAT="$(printf '%s' "$("$NFTSTUB" list chain inet soleur_inngest input)" | tr '\n' ' ')"
+NFT_SHA="$(printf '%s' "$("$NFTSTUB" list chain inet soleur_inngest input)" | sha256sum | awk '{print $1}')"
 assert_contains "the logger row carries the UNTRUNCATED nft chain inside the JSON" \
   "$(cat "$LOGTRACE")" "\"nft\":\"$NFT_FLAT\""
 assert_contains "the logger row carries \"nft_sha256\":\"<digest of the nft output>\"" \
@@ -527,6 +530,8 @@ assert_contains "the phone-home row carries the same nft_sha256=" \
   "$(cat "$PHONETRACE")" "nft_sha256=$NFT_SHA"
 assert_contains "the phone-home stage names the noop arm (cutover-flip-<reason>)" \
   "$(cat "$PHONETRACE")" "cutover-flip-noop-unset"
+assert_contains "the dual emit rides SOLEUR_INNGEST_NOOP, off the BOOT_STAGE channel" \
+  "$(cat "$PHONETRACE")" "SOLEUR_INNGEST_NOOP"
 # The throttle gates BOTH channels — an in-window fire emits neither.
 rc=$(run_flip "" CUTOVER_NOOP_THROTTLE_S=3600)
 assert_eq "the in-window second fire dual-emits nothing (throttle gates both channels)" \
@@ -544,6 +549,8 @@ rc=$(run_flip "")
 assert_eq "exit 0 on the noop fire with a failing nft read" "0" "$rc"
 assert_contains "the row still ships with nft_sha256=unavailable" \
   "$(cat "$PHONETRACE")" "nft_sha256=unavailable"
+assert_contains "the logger row carries \"nft_sha256\":\"unavailable\" too (both channels)" \
+  "$(cat "$LOGTRACE")" '"nft_sha256":"unavailable"'
 teardown_case
 
 # --- Test 6: the script NEVER disables the flip timer (P0-1, static guard) ---
@@ -1337,7 +1344,9 @@ fi
 # interval-0 seam case (2), and the non-numeric-interval fallback case (2).
 # 177 -> 187: +10 for the #10382 measured-nft-on-noop block — the dual-channel case (8)
 # and the nft-read-failure case (2).
-MIN_ASSERTIONS=187
+# 187 -> 189: +2 for review fixes — the SOLEUR_INNGEST_NOOP marker pin and the logger-side
+# `unavailable` assert on the failure arm.
+MIN_ASSERTIONS=189
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
   # printf + exit, NOT fail() (ADR-193): routing the floor through the counter it exists to
   # protect means one edit disarms both. See the instrument self-test at the top.

@@ -599,6 +599,8 @@ def cmd_static(render):
         "emit=%s" % (nh[0][:100] if nh else "<none>"))
     chk("#10382: nft_sha256 is computed from the captured nft output (sha256sum reads $nft_raw, not a re-list)",
         any(re.search(r'nft_sha256="\$\(', s) and "sha256sum" in s and "$nft_raw" in s for _, s in L))
+    chk("#10382: a failed nft read emits nft_sha256=unavailable (never sha256-of-empty e3b0c44)",
+        any('nft_sha256="unavailable"' in s for _, s in L))
     chk("#10382: every line of the nft capture/emit keeps the || true failure-isolation",
         all(s.rstrip().endswith("|| true") for s in nft_reads + nh),
         "offenders=%s" % [s[:60] for s in nft_reads + nh if not s.rstrip().endswith("|| true")])
@@ -1046,7 +1048,7 @@ echo "  C0: $C0_PASS assertions, all PASS"
 # EXACT, not a floor with slack: the control's assertion inventory is fixed by this file, so a
 # count that drifts (an assertion deleted, a scenario silently not run) is itself a RED. Bump it in
 # the same edit that adds an assertion.
-C0_EXPECTED=167
+C0_EXPECTED=168
 [ "$C0_PASS" -eq "$C0_EXPECTED" ] || { echo "  FAIL: C0 anti-vacuity — $C0_PASS assertions ran, the inventory is exactly $C0_EXPECTED"; exit 1; }
 
 # =================================================================================================
@@ -1389,7 +1391,7 @@ ins_after("attempt=0", [": $(( 1 << 2 ))", ": # a trailing comment that names <<
 row NFT-r1 RED "#10382: the nft capture is NOT truncated" '
 rep_line("nft_raw=\"$(nft list chain inet soleur_inngest input 2>/dev/null)\" || true", "nft_raw=\"$(nft list chain inet soleur_inngest input 2>/dev/null | head -c 160)\" || true"); save()'
 row NFT-r2 RED "#10382: nft_sha256 is computed from the captured nft output" '
-rep_line("nft_sha256=\"$(printf \x27%s\x27 \"$nft_raw\" | sha256sum | awk \x27{print $1}\x27)\" || true", "nft_sha256=deadbeef || true"); save()'
+rep_line("nft_sha256=\"$(printf \x27%s\x27 \"$nft_raw\" | sha256sum | awk \x27{print $1}\x27)\" || nft_sha256=\"unavailable\"", "nft_sha256=deadbeef"); save()'
 
 # ---- execute (bounded parallelism; each row owns its directory) --------------------------------
 echo ""

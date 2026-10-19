@@ -251,17 +251,23 @@ yes "the drift sweep knows the rehearsal label" \
 # Comment lines are stripped first — the sweep's own run-block comments NAME the moved arm
 # (cq-assert-anchor-not-bare-token).
 SWEEP_JOB="$(awk '/^  inngest-rehearsal-orphan-sweep:/{f=1} f' "$DRIFT_WF" | sed -E 's/^[[:space:]]*#.*$//')"
+yes "the sweep-job extraction is non-empty (else the 'no' rows below are vacuous)" \
+  'test -n "$SWEEP_JOB"'
 no "the orphan sweep no longer probes scratch Doppler environments (#9919 — moved to teardown)" \
   'grep -q "doppler environments" <<<"$SWEEP_JOB"'
 no "the sweep publishes no scratch_env_* outputs and keeps no blind-probe issue filer" \
   'grep -q "scratch_env" <<<"$SWEEP_JOB"'
-TEARDOWN_STEP="$(awk '/- name: Assert no scratch Doppler environment remains/{f=1} f' "$WF")"
+TEARDOWN_STEP="$(awk '/- name: Assert no scratch Doppler environment remains/{f=1} f' "$WF" | sed -E 's/^[[:space:]]*#.*$//')"
+yes "the teardown-step extraction is non-empty (presence pin)" \
+  'test -n "$TEARDOWN_STEP"'
 yes "the rehearsal teardown asserts on the Doppler environments listing (#9919)" \
   'grep -qF "doppler environments -p soleur-inngest --json" <<<"$TEARDOWN_STEP"'
 yes "the teardown check fails on a surviving rehearsal_* environment (slug-or-name prefix match)" \
   'grep -qF "startswith(\"rehearsal_\")" <<<"$TEARDOWN_STEP" && grep -qF "::error::" <<<"$TEARDOWN_STEP"'
-yes "the teardown check demands a declared floor (>=1 env listed — prd — or the verdict measured nothing)" \
-  'grep -qF "ENV_FLOOR:" <<<"$TEARDOWN_STEP" && grep -qE "env_total.*-lt.*ENV_FLOOR" <<<"$TEARDOWN_STEP"'
+yes "the teardown check runs under always() — a failed destroy/assert must not skip it" \
+  'grep -qE "if: always\(\)" <<<"$TEARDOWN_STEP"'
+yes "the teardown check demands a declared NON-ZERO floor (>=1 env listed — prd — or the verdict measured nothing)" \
+  'grep -qE "ENV_FLOOR: [1-9][0-9]*" <<<"$TEARDOWN_STEP" && grep -qE "env_total.*-lt.*ENV_FLOOR" <<<"$TEARDOWN_STEP"'
 
 # ── Cross-checks on the sibling artifacts ─────────────────────────────────────
 yes "the capture script is executable and bash-syntax-clean" \
