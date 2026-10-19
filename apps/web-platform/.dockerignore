@@ -37,6 +37,7 @@ infra/
 # mock-supabase note below) — work two levels deep, so no bare
 # `!infra/bwrap-shim/` directory bang (which would re-include siblings).
 !infra/bwrap-userns-clone3-deny.bpf
+!infra/bwrap-userns-clone3-unixdeny.bpf
 !infra/bwrap-shim/bwrap
 # Same three-surface rule for the #10453 deploy-time SDK Bash smoke probe: the runner stage bakes
 # `infra/lib/sdk-bash-probe.mjs` (`COPY --from=builder`) so ci-deploy.sh can `docker exec` it in the canary. Exact path

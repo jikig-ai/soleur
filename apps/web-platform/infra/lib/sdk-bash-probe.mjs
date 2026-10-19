@@ -36,17 +36,22 @@ export const SMOKE_COVERAGE_REPLAY_ONLY = "replay_only";
 /** Decoy credential handed to the SDK child: the real key must never be reachable from the probe. */
 export const SMOKE_DECOY_API_KEY = "decoy-api-key-sentinel";
 
-/** The seccomp artifact the SMOKE runs under, by artifact name. Pinned to what the production env selects TODAY: the
- *  base artifact, which is the shim's own default (`BPF=${SOLEUR_BWRAP_SECCOMP_BPF:-...}` in infra/bwrap-shim/bwrap)
- *  and `buildAgentEnv` passes no override. test/sdk-bash-probe-parity.test.ts pins this path to both. A later variant
- *  artifact is one more entry here plus a selector in smokeSelectorPath(), never an edit of the base path. */
+/** The seccomp artifacts, by name. `base` is pinned to what the production env selects when nothing overrides the selector: the
+ *  shim's own default (`BPF=${SOLEUR_BWRAP_SECCOMP_BPF:-...}` in infra/bwrap-shim/bwrap), the Dockerfile COPY and the
+ *  self-probe default. It is never edited by the variant work. `unixdeny` (#10455 a) is the AF_UNIX-deny variant that
+ *  `buildAgentEnv` selects for a NO-EGRESS session while the runtime flag `agent-sandbox-unix-deny` is ON.
+ *  test/sdk-bash-probe-parity.test.ts pins both paths to the builders, the Dockerfile and the self-probe. */
 export const SMOKE_SELECTOR_PATHS = Object.freeze({
   base: "/app/infra/bwrap-userns-clone3-deny.bpf",
+  unixdeny: "/app/infra/bwrap-userns-clone3-unixdeny.bpf",
 });
 
-/** The artifact path the smoke sets as SOLEUR_BWRAP_SECCOMP_BPF for the SDK child. */
+/** The artifact path the smoke sets as SOLEUR_BWRAP_SECCOMP_BPF for the SDK child. The smoke tuple is the NO-EGRESS tuple, so it
+ *  runs under the unixdeny selector: a variant that breaks Bash start is reported (sdk_bash_smoke_failed) on the deploy that
+ *  carries it, BEFORE the flag is ever turned on. The variant is a strict superset of the base program (same rules plus the
+ *  socket(AF_UNIX) deny), so a base artifact that cannot start Bash would fail this run too. */
 export function smokeSelectorPath() {
-  return SMOKE_SELECTOR_PATHS.base;
+  return SMOKE_SELECTOR_PATHS.unixdeny;
 }
 
 /** The per-session masked dirs of the production config for a container env with no XDG_RUNTIME_DIR /
@@ -186,7 +191,7 @@ export function measureShimAndFilter(pathEnv, bpfPath) {
 
 /** `sdk_wrapper_shim_prodtuple` only when the command went through the real shim under the pinned artifact. */
 export function smokeCoverage({ shim, filter, bpfPath }) {
-  return shim && filter && bpfPath === SMOKE_SELECTOR_PATHS.base ? SMOKE_COVERAGE_FULL : SMOKE_COVERAGE_REPLAY_ONLY;
+  return shim && filter && bpfPath === smokeSelectorPath() ? SMOKE_COVERAGE_FULL : SMOKE_COVERAGE_REPLAY_ONLY;
 }
 
 // ---- Entry point -------------------------------------------------------------------------------------------------

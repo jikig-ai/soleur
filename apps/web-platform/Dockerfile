@@ -297,6 +297,8 @@ COPY --from=builder /app/scripts/tenant-isolation-inner-probe.sh ./scripts/tenan
 # wrappers) defaults to the /app/infra path baked here; overriding it to a
 # stale/wrong artifact is a deliberate escape hatch for diagnosis only.
 COPY --from=builder /app/infra/bwrap-userns-clone3-deny.bpf ./infra/bwrap-userns-clone3-deny.bpf
+# #10455 (a): the AF_UNIX-deny variant, selected per no-egress session (runtime flag agent-sandbox-unix-deny) via SOLEUR_BWRAP_SECCOMP_BPF.
+COPY --from=builder /app/infra/bwrap-userns-clone3-unixdeny.bpf ./infra/bwrap-userns-clone3-unixdeny.bpf
 COPY --from=builder --chmod=0755 /app/infra/bwrap-shim/bwrap /usr/local/bin/bwrap
 
 # Deploy-time SDK Bash smoke probe (#10453, ADR-079 addendum 2026-10-19). ci-deploy.sh `docker exec`s it in the CANARY

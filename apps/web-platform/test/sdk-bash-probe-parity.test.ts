@@ -5,7 +5,9 @@
 // Guard 4 of the plan (knowledge-base/project/plans/2026-10-19-fix-sandbox-incident-followups-plan.md):
 //   (a) smokeSandboxConfig() deep-equals buildAgentSandboxConfig() for the no-egress shape; a failure prints the diff and
 //       the exact line to change in the probe, so the test is a prompt rather than a puzzle;
-//   (b) the selector path equals what buildAgentEnv produces TODAY (nothing: the shim default, the base artifact);
+//   (b) the BASE selector path stays pinned to today's value (the shim default), and the smoke tuple runs with the
+//       unixdeny selector, equal to what buildAgentEnv emits for a no-egress session with the runtime flag ON (so a variant
+//       that breaks Bash start is reported on the deploy that carries it, BEFORE the flag is ever turned on);
 //   (c) the verdict table classifies every known outcome, including "Bash dispatched but no nonce" and "dispatched and hung".
 //
 // The egress shape is exercised pre-merge by the real-SDK egress arm (sandbox-wrapped-command-runtime.test.ts), not by the
@@ -100,7 +102,8 @@ describe("the smoke probe's literal sandbox config tracks buildAgentSandboxConfi
 
 describe("the smoke probe's seccomp selector path equals what the production env selects today", () => {
   it("is the base artifact: the shim default, the hardening self-probe default, the Dockerfile COPY", () => {
-    const selected = probe.smokeSelectorPath();
+    const selected = probe.SMOKE_SELECTOR_PATHS.base;
+    expect(selected).toBe("/app/infra/bwrap-userns-clone3-deny.bpf"); // today's value, never edited by the variant work
     const shim = read("infra", "bwrap-shim", "bwrap");
     expect(shim).toContain(`BPF=\${SOLEUR_BWRAP_SECCOMP_BPF:-${selected}}`);
     // The server-side default (what probeAgentSandboxHardening certifies when nothing overrides the selector).
@@ -116,6 +119,36 @@ describe("the smoke probe's seccomp selector path equals what the production env
     }
     const dockerfile = read("Dockerfile");
     expect(dockerfile).toContain(`COPY --from=builder /app/infra/bwrap-userns-clone3-deny.bpf .${selected.replace("/app", "")}`);
+  });
+
+  it("the smoke tuple runs with the unixdeny selector: equal to buildAgentEnv for a no-egress session with the flag ON, baked in the image, certified by the self-probe", () => {
+    const selected = probe.smokeSelectorPath();
+    expect(selected).toBe(probe.SMOKE_SELECTOR_PATHS.unixdeny);
+    expect(selected).toBe("/app/infra/bwrap-userns-clone3-unixdeny.bpf");
+    vi.stubEnv("SOLEUR_BWRAP_SECCOMP_BPF", undefined as unknown as string);
+    vi.stubEnv("SOLEUR_BWRAP_SECCOMP_BPF_UNIXDENY", undefined as unknown as string);
+    try {
+      const env = buildAgentEnv({ value: "decoy", scheme: "api_key" }, undefined, {
+        pluginPath: "/app/shared/plugins/soleur",
+        sandboxUnixDeny: true,
+      });
+      expect(env.SOLEUR_BWRAP_SECCOMP_BPF).toBe(selected);
+      // an EGRESS session with the flag ON does not get it
+      const egress = buildAgentEnv({ value: "decoy", scheme: "api_key" }, undefined, {
+        pluginPath: "/app/shared/plugins/soleur",
+        ghToken: "ghs_decoy",
+        sandboxUnixDeny: true,
+      });
+      expect(egress.SOLEUR_BWRAP_SECCOMP_BPF).toBeUndefined();
+      expect(probeAgentSandboxHardening({}).unixdenyPath).toBe(selected);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(read("Dockerfile")).toContain(
+      `COPY --from=builder /app/infra/bwrap-userns-clone3-unixdeny.bpf .${selected.replace("/app", "")}`,
+    );
+    expect(read(".dockerignore")).toMatch(/^!infra\/bwrap-userns-clone3-unixdeny\.bpf$/m);
+    expect(read("infra", "lib", "sdk-bash-probe.mjs")).toContain("smokeSelectorPath");
   });
 
   it("an ambient override reaches the SDK child through buildAgentEnv unchanged (the incident-time override the smoke must not mask)", () => {
@@ -208,8 +241,11 @@ describe("smokeVerdict classifies every known outcome", () => {
 });
 
 describe("coverage is the shim-and-wrapper tuple only under the pinned artifact", () => {
-  it("full only with the shim on PATH, a sock_filter-sized artifact and the pinned path", () => {
+  it("full only with the shim on PATH, a sock_filter-sized artifact and the pinned (unixdeny) path; the base path alone is not the smoke tuple", () => {
     const pinned = probe.smokeSelectorPath();
+    expect(probe.smokeCoverage({ shim: true, filter: true, bpfPath: probe.SMOKE_SELECTOR_PATHS.base })).toBe(
+      probe.SMOKE_COVERAGE_REPLAY_ONLY,
+    );
     expect(probe.smokeCoverage({ shim: true, filter: true, bpfPath: pinned })).toBe(probe.SMOKE_COVERAGE_FULL);
     expect(probe.smokeCoverage({ shim: false, filter: true, bpfPath: pinned })).toBe(probe.SMOKE_COVERAGE_REPLAY_ONLY);
     expect(probe.smokeCoverage({ shim: true, filter: false, bpfPath: pinned })).toBe(probe.SMOKE_COVERAGE_REPLAY_ONLY);

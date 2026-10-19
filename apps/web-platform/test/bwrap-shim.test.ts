@@ -1378,6 +1378,13 @@ describe("runner-image wiring (#8752)", () => {
     );
   });
 
+  it("the Dockerfile bakes the AF_UNIX-deny variant next to the base artifact and .dockerignore re-includes it (#10455 a)", () => {
+    expect(dockerfile).toContain(
+      "COPY --from=builder /app/infra/bwrap-userns-clone3-unixdeny.bpf ./infra/bwrap-userns-clone3-unixdeny.bpf",
+    );
+    expect(readFileSync(join(APP_ROOT, ".dockerignore"), "utf8")).toMatch(/^!infra\/bwrap-userns-clone3-unixdeny\.bpf$/m);
+  });
+
   it("the Dockerfile installs the shim onto PATH ahead of /usr/bin", () => {
     expect(dockerfile).toMatch(
       /COPY --from=builder --chmod=0755 \/app\/infra\/bwrap-shim\/bwrap \/usr\/local\/bin\/bwrap/,
@@ -1606,6 +1613,7 @@ describe.skipIf(!BWRAP_OK)("canary hardening probes end-to-end (real bwrap + thi
     vi.stubEnv("PATH", `${dir}:${process.env.PATH ?? "/usr/bin:/bin"}`);
     vi.stubEnv("SOLEUR_BWRAP_REAL", "/usr/bin/bwrap");
     vi.stubEnv("SOLEUR_BWRAP_SECCOMP_BPF", BPF);
+    vi.stubEnv("SOLEUR_BWRAP_SECCOMP_BPF_UNIXDENY", BPF_UNIXDENY);
     try {
       const canary = await import("../scripts/sandbox-canary.mjs");
       // Same shape as the committed fixture: root ro-bind + proc + pidns.
@@ -1616,6 +1624,20 @@ describe.skipIf(!BWRAP_OK)("canary hardening probes end-to-end (real bwrap + thi
       ];
       expect(canary.runHardeningProbes(setupArgv)).toBeNull();
       expect(canary.runArgsFdTransportProbe(setupArgv)).toBeNull();
+      // MUTATION (#10455 a): point the "variant" at the BASE bytes - the probe must see the AF_UNIX socket get created
+      // and report the variant as not live. Proves the probe discriminates (not a vacuous null).
+      vi.stubEnv("SOLEUR_BWRAP_SECCOMP_BPF_UNIXDENY", BPF);
+      expect(canary.runHardeningProbes(setupArgv)).toMatchObject({
+        verdict: "sandbox_broken",
+        reason: "unixdeny_filter_bypass",
+        probe: "unixdeny_filter",
+      });
+      // and an unreadable variant is reported as an unusable artifact, not a pass
+      vi.stubEnv("SOLEUR_BWRAP_SECCOMP_BPF_UNIXDENY", join(dir, "no-such-variant.bpf"));
+      expect(canary.runHardeningProbes(setupArgv)).toMatchObject({
+        verdict: "sandbox_broken",
+        reason: "unixdeny_artifact_unusable",
+      });
     } finally {
       vi.unstubAllEnvs();
       if (saved.PATH !== undefined) vi.stubEnv("PATH", saved.PATH);
