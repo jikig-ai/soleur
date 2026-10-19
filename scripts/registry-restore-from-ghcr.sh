@@ -92,8 +92,9 @@
 
 set -uo pipefail
 
-# Refuse to run traced while a credential the engine or its children could see is in the environment:
-# `bash -x` would print the token (or any expansion of it) into the CI log. This precedes every other command on
+# Refuse to run traced while a credential this engine expands is in the environment (the three names below;
+# GH_TOKEN_FOR_ENGINE is only unset later, never expanded): `bash -x` would print the token (or any expansion
+# of it) into the CI log. This precedes every other command on
 # purpose (the credential-trace lint's Rule A). Multi-line `case` on purpose: the lint's regexes
 # are line-anchored and the one-line spelling fails it.
 case "$-" in

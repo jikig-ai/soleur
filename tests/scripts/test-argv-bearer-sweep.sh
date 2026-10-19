@@ -7612,11 +7612,13 @@ ctl_row "evaluate_body: a compliant row is green, and each of its clauses (at le
 # `crane` sees ZERO engine sites and stays green over the file this stage exists for; the floor row and mutation 8 exist for that.
 #
 # DERIVATION. One python3 pass (scan.py) over `git ls-files --cached --others --exclude-standard` of a root, minus `*.test.*`, any path with a
-# `test`, `tests` or `fixtures` directory, and `knowledge-base/`; `.md` joins only under `plugins/` (stage S7 treats agent-run markdown as a
+# `test`, `tests` or `fixtures` directory, and `knowledge-base/` (the exclusion is by path component at ANY depth: a production script under a directory
+# named `test` is invisible); `.md` joins only under `plugins/` (stage S7 treats agent-run markdown as a
 # surface). Backslash-continuation lines are joined (a comment line is never continued). Each logical line is TOKENISED with a quote-,
 # `$(...)`-, backtick- and `${{ ... }}`-aware splitter: operators (`&&`, `||`, `;`, `|`, `&`, redirections, `)`) end an invocation, a `#` at a word
 # start ends the line, and a quoted string is one token, so a prose `docker login` inside an echo, a grep pattern or an alias is not a command. A
-# login found INSIDE a `$(...)` span, or inside the quoted payload of `bash -c` / `eval`, is scanned recursively. An invocation is a verb, optional
+# login found INSIDE a `$(...)` or backtick span, or inside a quoted payload that a shell runs (`bash -c`/`-lc`, `eval`, a YAML `run:`/`command:`
+# value, `ssh host "..."`, an `exec`-style call), is scanned recursively; any other quoted string is prose. An invocation is a verb, optional
 # global flags, an optional `auth`, `login`, then its arguments: it is BAD when any argument is a password option (whatever the host count), and it
 # is a SITE (counted against the floor) when it has exactly one host and at least one option. The scan is a FUNCTION OF A ROOT, so the mutation
 # rows run the same text on a scratch repository.
@@ -7624,7 +7626,7 @@ ctl_row "evaluate_body: a compliant row is green, and each of its clauses (at le
 # NAMED BLIND SPOTS (stated, not hidden): clients that are not crane/docker/podman or a variable named for them (skopeo, oras, regctl, buildah,
 # nerdctl, cosign, `helm registry login`; no site exists today), a variable verb with none of those names (`$ENGINE`, `$CTR`), arguments held in a
 # variable or array (`"${LOGIN_ARGS[@]}"`), a flag-variable (`$SINK_TLS_FLAG`, anything ending FLAG, FLAGS, OPTS or OPTIONS) that itself carries
-# `-p`, a command built by concatenation or an `eval`ed string, a payload inside `ssh host "..."`, a YAML folded `>` block, a backslash followed by
+# `-p`, a command built by concatenation or an `eval`ed string, a payload inside any other quoted string (e.g. a YAML list item), a YAML folded `>` block, a backslash followed by
 # a space or CRLF, a FEEDER that itself carries the token on argv (`/usr/bin/printf '%s' "$T" |`), and the excluded trees. S8 selects on the FULL run only: the affected-test array does not name its population, and editing
 # it would arm every PR-gated battery (CTO ruling D1).
 #
@@ -7645,6 +7647,11 @@ VERB = re.compile(
 VALUED = {"-u", "--username", "-p", "--password", "--config", "--authfile", "--cert-dir", "--registry-config", "-e", "--email"}
 # A bare flag-variable (`$SINK_TLS_FLAG`) expands to an option or to nothing: neither the host nor a visible option.
 NEUTRAL = re.compile(r'^"?\$\{?[A-Za-z_]*(?:FLAG|FLAGS|OPTS|OPTIONS)\}?"?$', re.I)
+PLACEHOLDER = re.compile(r"<[A-Za-z][\w.\-]*>")
+CLUSTER_C = re.compile(r"^-[A-Za-z]*c$")
+PAYLOAD_KEYS = ("run:", "command:", "script:", "cmd:", "entrypoint:")
+EXEC_CALLS = re.compile(r"^(?:exec|execSync|execFile|system|popen|run|call|check_output|check_call|Popen|Command)$")
+REDIRS = {"\0>", "\0>>", "\0<", "\0<<", "\0<<<", "\0&>", "\0>&"}
 OPS = ("&&", "||", "<<<", "<<", ">>", "&>", ">&", ";", "|", ">", "<", "&", ")", "(")
 
 
@@ -7700,7 +7707,7 @@ def tokens(s):
             continue
         if c == "#" and not cur:
             break
-        if c == "<" and not cur and i + 1 < n and s[i + 1].isalpha():
+        if c == "<" and not cur and PLACEHOLDER.match(s, i):
             angle = True  # a `<placeholder>` in a doc, not a redirection
         if angle:
             cur.append(c)
@@ -7728,8 +7735,8 @@ def unq(t):
 
 
 def subs(t):
-    """The bodies of every balanced $( ... ) span inside one token."""
-    out, i = [], 0
+    """The bodies of every balanced $( ... ) span, and every backtick span, inside one token."""
+    out, i = [x[1:-1] for x in re.findall(r"`[^`]*`", t)], 0
     while True:
         i = t.find("$(", i)
         if i < 0:
@@ -7742,15 +7749,27 @@ def subs(t):
         i = j
 
 
+def payload_context(toks, i):
+    """Is toks[i] (a quoted string) code that a shell will run, rather than prose?"""
+    prev = toks[i - 1] if i else ""
+    if prev == "--" and i > 1:
+        prev = toks[i - 2]
+    if CLUSTER_C.match(prev) or prev == "eval" or prev in PAYLOAD_KEYS:
+        return True
+    if i > 1 and toks[i - 2] == "ssh" and not prev.startswith(("-", "\0")):
+        return True
+    return prev == "\0(" and i > 1 and bool(EXEC_CALLS.match(toks[i - 2]))
+
+
 def scan_line(code, depth=0):
     toks, recs, i = tokens(code), [], 0
     while i < len(toks):
         t = toks[i]
-        if depth < 3 and t[:1] != "\0" and "$(" in t:
+        if depth < 3 and t[:1] != "\0" and ("$(" in t or "`" in t):
             for inner in subs(t):
                 recs += scan_line(inner, depth + 1)  # a login inside a command substitution
-        if depth < 2 and t[:1] in "\"'" and i and toks[i - 1] in ("-c", "eval"):
-            recs += scan_line(unq(t), depth + 1)  # bash -c "docker login ..." / eval "..."
+        if depth < 2 and t[:1] in "\"'" and payload_context(toks, i):
+            recs += scan_line(unq(t), depth + 1)  # bash -lc "docker login ..." / eval "..." / run: '...' / ssh host "..." / execSync("...")
         if t[:1] == "\0" or not VERB.match(unq(t)):
             i += 1
             continue
@@ -7777,11 +7796,17 @@ def scan_line(code, depth=0):
             i += 1
             continue
         j, opts, hosts, bad = k + 1, [], 0, False
-        while j < len(toks) and toks[j][:1] != "\0":
+        while j < len(toks):
+            if toks[j][:1] == "\0":
+                if toks[j] in REDIRS:  # a redirection may sit anywhere in the argument list: skip it and its target
+                    j += 2
+                    continue
+                break
             u = unq(toks[j])
             if u.startswith("-"):
                 opts.append(u)
-                if u in ("-p", "--password") or u.startswith("--password=") or re.match(r"^-[A-Za-z]*p", u) and not u.startswith("--"):
+                glued_user = u.startswith("-u") and not u.startswith("--") and len(u) > 3  # -ujpierre is a username, -up is a cluster
+                if u in ("-p", "--password") or u.startswith("--password=") or (re.match(r"^-[A-Za-z]*p", u) and not u.startswith("--") and not glued_user):
                     bad = True
                 if u in VALUED or (u == "--tls-verify" and j + 1 < len(toks) and unq(toks[j + 1]) in ("true", "false")):
                     j += 1
@@ -7897,20 +7922,23 @@ if [[ "$S8_J_REASONS" == "bad:scripts/extra-b.sh" && "$S8_J_SITES" -eq $((S8_REA
 else row "S8 mutation 7: the second member of a new file was not judged bad, or the compliant first was not counted" fail "reasons='$S8_J_REASONS' sites=$S8_J_SITES want=$((S8_REAL_SITES + 2))"; fi
 m7b=""; n7=0
 for v in 'printf %s "$A" | docker login h1.example -u u --password-stdin && docker login h2.example -u u -p "$B"' 'docker login h1.example -u u --password-stdin; docker login h2.example -u u -p "$B"' 'echo "step #1"; docker login h.example -u u -p "$B"'; do
-  n7=$((n7 + 1)); d="$(s8_fresh m7b-$n7)"; s8_put "$d" scripts/extra-d.sh "$v"; s8_judge "$d"; [[ "$S8_J_REASONS" == "bad:scripts/extra-d.sh" ]] || m7b+=" [$v => $S8_J_REASONS]"
+  n7=$((n7 + 1)); d="$(s8_fresh m7b-$n7)"; s8_put "$d" scripts/extra-d.sh "$v"; s8_judge "$d"
+  [[ "$S8_J_REASONS" == "bad:scripts/extra-d.sh" && "$(s8_recs "$d" scripts/extra-d.sh "")" -ge 1 && "$(s8_recs "$d" scripts/extra-d.sh 1)" -eq 1 ]] || m7b+=" [$v => $S8_J_REASONS]"
+  case "$n7" in 1|2) [[ "$(s8_recs "$d" scripts/extra-d.sh "")" -eq 2 ]] || m7b+=" [$v => the compliant first login was not split off and counted]" ;; esac
 done
 if [[ -z "$m7b" ]]; then row "S8 mutation 7b: a -p login AFTER a compliant one on the same line (&&, ;) and after a quoted '#' earlier on the line is RED" ok
 else row "S8 mutation 7b: a same-line second invocation hid a -p login" fail "$m7b"; fi
 
 # --- evasion shapes the review found: each is a password on argv that a looser scanner reads as clean or as nothing -----------------
 m_ev=""; n_ev=0
-for v in 'docker login ghcr.io -u u -p "$(cat /run/secrets/x)"' 'crane auth login ghcr.io -u u -p "$(< f)"' 'docker login -u u -p "$X"' 'docker login -u u --password "$X"' \
-         'docker login ghcr.io -u ${{ github.actor }} -p ${{ secrets.T }}' 'docker login -u "a;b" -p "$X" host' 'docker login host -p "$X"> /tmp/o' 'docker login host -p "$X" &>/dev/null' \
-         'podman login --authfile /x -p "$X" host' 'bash -c "docker login -u u -p $X host"' '/usr/bin/docker login -u u -p "$X" host' 'crane_capture o e auth login host -u u -p "$X"' \
-         'X="$(printf %s "$T" | docker login host -u u -p "$T")"'; do
+for v in 'docker login ghcr.io -u $(id -un) -p "$X"' 'crane auth login ghcr.io -u $(< f) -p "$X"' 'docker login ghcr.io -u u -p "$(cat /run/secrets/x)"' 'docker login -u u -p "$X"' 'docker login -u u --password "$X"' \
+         'docker login ghcr.io -u ${{ github.actor }} -p "$X"' 'docker login -u "a;b" -p "$X" host' 'docker login host >/tmp/o -p "$X"' 'docker login host &>/dev/null -p "$X"' 'docker login host 2>&1 -p "$X"' \
+         'podman login --authfile /x -p "$X" host' 'bash -c "docker login -u u -p $X host"' 'bash -lc "docker login -u u -p $X host"' 'eval "docker login -u u -p $X host"' \
+         'ssh h "docker login -u u -p $X host"' "run: 'docker login -u u -p \"\$X\" host'" 'OUT=`docker login -u u -p "$X" host`' 'execSync(`docker login -u u -p ${t} host`)' \
+         '/usr/bin/docker login -u u -p "$X" host' 'crane_capture o e auth login host -u u -p "$X"' 'X="$(printf %s "$T" | docker login host -u u -p "$T")"'; do
   n_ev=$((n_ev + 1)); d="$(s8_fresh ev-$n_ev)"; s8_put "$d" scripts/extra-e.sh "$v"; s8_judge "$d"; [[ "$S8_J_REASONS" == "bad:scripts/extra-e.sh" ]] || m_ev+=" [$v => $S8_J_REASONS]"
 done
-if [[ -z "$m_ev" ]]; then row "S8 evasion shapes: a command-substitution password, a host-less login, a GitHub Actions \${{ }} expression, a quoted ; before -p, a glued or &> redirection, a valued option, bash -c, a path verb, a wrapper and a login inside \$( ) are each RED" ok
+if [[ -z "$m_ev" ]]; then row "S8 evasion shapes: each construct sits BEFORE the -p so a mis-tokenised tail loses it: a \$( ) user, a command-substitution password, a host-less login, a \${{ }} expression, a quoted ;, a redirection (>, &>, 2>&1) before -p, a valued option, bash -c and -lc, eval, ssh, a YAML run: value, a backtick span, an exec call, a path verb, a wrapper and a login inside \$( ) are each RED" ok
 else row "S8 evasion shapes: a password on argv was judged clean or unseen" fail "$m_ev"; fi
 
 # --- mutation 8: dispatch and floor (scan roots broken, the verb renamed, one site file removed) ------------------------------------
@@ -7947,13 +7975,23 @@ m_ok=""; n_ok=0
 for v in 'printf %s "$T" | docker login --insecure -u u h.example.test:5000 --password-stdin' 'printf %s "$T" | docker login h.example.test:5000 -u u --password-stdin && mkdir -p x' \
          'printf %s "$T" | docker login --password-stdin -u u h.example.test:5000' 'printf %s "$T" | docker login h.example.test:5000 -u ${{ github.actor }} --password-stdin' \
          'printf %s "$T" | docker login h.example.test:5000 -u u --password-stdin &>/dev/null' 'printf %s "$T" | docker login h.example.test:5000 -u u --password-stdin 2>&1 | tee x' \
-         'aws ecr get-login-password | docker login --username AWS --password-stdin r.io'; do
+         'aws ecr get-login-password | docker login --username AWS --password-stdin r.io' \
+         'podman login --authfile /x -u u --password-stdin h.example.test:5000 < tok.txt' 'podman login --tls-verify false -u u --password-stdin h.example.test:5000' \
+         'docker login h.example.test:5000 -u u --password-stdin <tok.txt && mkdir -p out' 'docker login h.example.test:5000 -ujpierre --password-stdin'; do
   n_ok=$((n_ok + 1)); d="$(s8_fresh pass2-$n_ok)"; s8_put "$d" scripts/extra-c.sh "$v"
   n="$(s8_recs "$d" scripts/extra-c.sh "")"; b="$(s8_recs "$d" scripts/extra-c.sh 1)"
   [[ "$n" -eq 1 && "$b" -eq 0 ]] || m_ok+=" [$v => sites=$n bad=$b]"
 done
-if [[ -z "$m_ok" ]]; then row "S8 must-pass: compliant variants (an extra --insecure, a trailing && mkdir -p x, --password-stdin before the host, a \${{ }} user, &>, 2>&1 | tee, an ECR password feeder) are each counted once and judged GREEN" ok
+if [[ -z "$m_ok" ]]; then row "S8 must-pass: compliant variants (an extra --insecure, a trailing && mkdir -p x, --password-stdin before the host, a \${{ }} user, &>, 2>&1 | tee, an ECR password feeder, a valued --authfile, --tls-verify false, a <file redirect and a glued -ujpierre username) are each counted once and judged GREEN" ok
 else row "S8 must-pass: a compliant --password-stdin variant was mis-counted or judged bad" fail "$m_ok"; fi
+# --- exclusion rules: a -p login under each excluded path is not judged; under a similarly named non-excluded path it IS -------------
+m_x=""; n_x=0
+for pair in 'x/test/a.sh:0' 'x/tests/a.sh:0' 'x/fixtures/a.sh:0' 'a.test.ts:0' 'knowledge-base/a.sh:0' 'docs/a.md:0' 'plugins/a.md:1' 'scripts/testing/a.sh:1' 'apps/web-platform/a.ts:1'; do
+  n_x=$((n_x + 1)); d="$(s8_fresh excl-$n_x)"; s8_put "$d" "${pair%%:*}" 'docker login -u u -p "$X" host'
+  [[ "$(s8_recs "$d" "${pair%%:*}" 1)" -eq "${pair##*:}" ]] || m_x+=" [${pair%%:*} => want ${pair##*:} bad]"
+done
+if [[ -z "$m_x" ]]; then row "S8 exclusions: a -p login under test/, tests/, fixtures/, *.test.*, knowledge-base/ or a .md outside plugins/ is not scanned, and the same login under plugins/*.md, scripts/testing/ and apps/ is" ok
+else row "S8 exclusions: an exclusion rule hid a login it should not, or missed one it should" fail "$m_x"; fi
 echo "=== stage S8: Guard 3 rows (registry login password off argv: tokenised derived census, floor, mutations, evasion shapes, must-pass inputs) done ==="
 
 # =====================================================================================
@@ -7994,8 +8032,8 @@ SELFTEST_PASSES=0
 # 802 -> 808 at PR B (#10119, registry template): S6 registry site rows now identity rows, the ceiling row also judges a grow-by-one allowlist, mutation 8 (each registry site back to argv) and the S6-REG heartbeat scan (real tree, three mutations, one must-pass): measured (808 passed, 0 failed). 808 -> 811 at review (S6-REG mutations 5-7: comment-backslash, absolute curl path, continuation split).
 # 811 -> 819 at PR C (#10120, probe scripts of #10093): four converted-script rows (the inngest body and the three probes join S6H_CONVERTED), mutations 1b (inngest body), 1c (the three probes), 3c (a probe) and the inngest guard-class mutation; the stale and growth mutations are re-anchored, the ceiling row is 0 == 0: measured (819 passed, 0 failed).
 # 819 -> 823 at the PR C review round: the guard-copy parity row and its mutation row, and two scanner-reach rows (bare HEARTBEAT_URL; path-prefixed, backslashed and backtick curl): measured (823 passed, 0 failed).
-# 823 -> 839 at #9757 (stage S8, Guard 3: registry login password off argv, tokenised derived census): the 14 S8 rows. The tree measured 825 before S8 (the floor had 2 rows of slack), so the new floor is the measured total (839 passed, 0 failed).
-EXPECTED_TESTS=839
+# 823 -> 840 at #9757 (stage S8, Guard 3: registry login password off argv, tokenised derived census): the 15 S8 rows. The tree measured 825 before S8 (the floor had 2 rows of slack), so the new floor is the measured total (840 passed, 0 failed).
+EXPECTED_TESTS=840
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2

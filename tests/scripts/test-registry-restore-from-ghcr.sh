@@ -565,7 +565,7 @@ fx="$TMP/fx-crsink"; calls="$TMP/calls-crsink"; : > "$calls"; rm -f "$calls.stdi
 ok_fixtures "$fx" "$TARGET"
 out="$(STUB_LOGIN_CR="$TARGET" run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
 if [[ "$rc" -eq 5 && "$out" == *"::add-mask::x"* && "$out" != *$'\r'* ]]; then
-  pass "sink login-failure tail: a CR in the registry's stderr is flattened (no CR in the ::error:: line)"
+  pass "end-to-end: a CR in the sink login's stderr leaves no CR in the ::error:: line (die() is the decisive flattener)"
 else
   fail "the sink login-failure message must carry no CR" "$rc" "$(printf '%s' "$out" | od -c | head -5)"
 fi
@@ -575,7 +575,7 @@ ok_fixtures "$fx" "$TARGET"
 out="$(GHCR_USER=ghuser GHCR_TOKEN=gtok-ghcr-1 STUB_LOGIN_CR=ghcr.io \
   run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
 if [[ "$rc" -eq 2 && "$out" == *"::add-mask::x"* && "$out" != *$'\r'* ]]; then
-  pass "GHCR login-failure tail: a CR in the registry's stderr is flattened (no CR in the ::error:: line)"
+  pass "end-to-end: a CR in the GHCR login's stderr leaves no CR in the ::error:: line (die() is the decisive flattener)"
 else
   fail "the GHCR login-failure message must carry no CR" "$rc" "$(printf '%s' "$out" | od -c | head -5)"
 fi
@@ -587,15 +587,15 @@ ok_fixtures "$fx" "$TARGET"
 fixture "$fx" "ghcr.io/${WP}:v0.249.4" 1 "" $'Error: boom\r::add-mask::x'
 out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
 if [[ "$rc" -ne 0 && "$out" == *"::add-mask::x"* && "$out" != *$'\r'* ]]; then
-  pass "last_err: a CR in a digest call's stderr is flattened (no CR in the ::error:: line)"
+  pass "end-to-end: a CR in a digest call's stderr leaves no CR in the ::error:: line (die() is the decisive flattener; last_err's own tr is pinned structurally)"
 else
   fail "a CR in registry stderr must not survive into a die message" "$rc" "$(printf '%s' "$out" | od -c | head -5)"
 fi
 
 # die() flattens CR/LF centrally: a newline inside ANY interpolated value must not start a second log line.
-out="$(run_engine "$TMP/unused" "$TMP/calls-diecr" $'--bogus\n::error::injected')"; rc=$?
-if [[ "$rc" -eq 1 && "$(printf '%s\n' "$out" | wc -l)" -eq 1 && "$out" == *"injected"* ]]; then
-  pass "die(): an interpolated value holding a newline stays on ONE log line (central CR/LF flattening)"
+out="$(run_engine "$TMP/unused" "$TMP/calls-diecr" $'--bogus\r\n::error::injected')"; rc=$?
+if [[ "$rc" -eq 1 && "$(printf '%s\n' "$out" | wc -l)" -eq 1 && "$out" == *"injected"* && "$out" != *$'\r'* ]]; then
+  pass "die(): an interpolated value holding CR and LF stays on ONE log line with no CR (central flattening; E43 pins it)"
 else
   fail "die() must flatten CR/LF in its message" "$rc" "$(printf '%s' "$out" | od -c | head -5)"
 fi
