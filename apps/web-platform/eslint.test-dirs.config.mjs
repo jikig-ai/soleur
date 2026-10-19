@@ -1,7 +1,7 @@
 // ESLint 9 flat config for the shrink-only unused-binding ratchet over the test and fixture
 // directories apps/web-platform's own run never reaches (#10331, PR3a).
 //
-// Run from the REPO ROOT by `python3 scripts/lint-ratchet.py eslint-test-dirs`, which owns the
+// Run from the REPO ROOT by `python3 plugins/soleur/scripts/lint-ratchet.py eslint-test-dirs`, which owns the
 // scope globs (test/**, plugins/soleur/test/**, plugins/soleur/skills/*/test/**,
 // scripts/*.test.mjs) and the baseline. This file is deliberately separate from
 // eslint.config.mjs: folding these directories into that run would re-pin the 192-count ratchet
