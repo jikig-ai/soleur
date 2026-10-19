@@ -1966,7 +1966,7 @@ check("WF-flagmark: the flag-write step touches flag_write_attempted once, after
       and fwcode.count("flag_write_attempted") == 1,
       [_xt, _ma, _pc, _wr])
 # #10297: the rollback arm's stamp clear lives in git-data-flag-precheck.sh and is keyed on FLAG_MODE=rollback + FLAG_WRITE_VALUE=false
-# (git-data-flag-precheck.test.sh RB1-RB11 run it). This step is the only caller that can reach it, so its binding is pinned here: a dropped
+# (git-data-flag-precheck.test.sh RB1-RB14 run it). This step is the only caller that can reach it, so its binding is pinned here: a dropped
 # FLAG_MODE falls to the script's `proof` default and the clear silently never runs; an inverted FLAG_WRITE_VALUE writes the wrong flag.
 # The `if:` is pinned whole, including `nothing_to_rollback != '1'` (a rollback that finds the flag already off ran no flip and clears nothing).
 check("WF-rbclear: the flag_write step binds exactly {DOPPLER_TOKEN_GIT_DATA_FLAG, FLAG_MODE=the mode, FLAG_WRITE_VALUE=true on flip else false}, keeps its two-arm `if:` (flip not resuming arm B, or rollback; never nothing_to_rollback), and calls the precheck once with the stamp clear living in the script, not in a second workflow step",

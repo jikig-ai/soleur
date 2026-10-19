@@ -418,7 +418,7 @@ case_rb_value_true() { # a rollback-mode TRUE write (never dispatched) must not 
   case_rb rb-vtrue false true "${RB_WRITE[@]}" SANDBOX_SRC_DIR="$T/deny-present" \
     && [ "$RC" = 0 ] && [ -z "$(grep -F GIT_DATA_LUKS_CUTOVER_AT "$DLOG")" ] && [ -e "$RB_STORE/soleur/prd/GIT_DATA_LUKS_CUTOVER_AT" ]
 }
-case_rb_other_modes() { # <mode> — only rollback clears: unfreeze/proof/wipe-class FALSE writes leave the stamp
+case_rb_other_modes() { # <mode> — only rollback clears: unfreeze/proof FALSE writes leave the stamp
   case_rb "rb-mode-$1" true false DOPPLER_TOKEN_GIT_DATA_FLAG=fixture-prd-write FLAG_MODE="$1" \
     && [ "$RC" = 0 ] && [ -z "$(grep -F GIT_DATA_LUKS_CUTOVER_AT "$DLOG")" ] && [ -e "$RB_STORE/soleur/prd/GIT_DATA_LUKS_CUTOVER_AT" ]
 }
@@ -464,7 +464,7 @@ if CASE_STAMP=' ' case_rb_delete_refused rb-ws-noop 'step=readback reason=still_
 else fail "RB13: a residual whitespace-only stamp was accepted as cleared" "$(detail)"; fi
 # RB14: with the write credential absent, a rollback refuses BEFORE any doppler call (the clear must not run on an empty or ambient token).
 if case_rb rb-nocred true false DOPPLER_TOKEN_GIT_DATA_FLAG= FLAG_MODE=rollback && [ "$RC" = 5 ] && grep -qF 'verdict=flag_write_credential_absent' "$OUT" && [ ! -s "$DLOG" ]; then
-  pass "RB14: a rollback flag-off write without DOPPLER_TOKEN_GIT_DATA_FLAG -> verdict=flag_write_credential_absent, exit 5, doppler never called (the clear sits below the credential guard)"
+  pass "RB14: a rollback flag-off write without DOPPLER_TOKEN_GIT_DATA_FLAG -> verdict=flag_write_credential_absent, exit 5, doppler never called (the credential guard sits before the clear)"
 else fail "RB14: the clear ran without the write credential" "$(detail) dlog=[$(tr '\n' '|' < "$DLOG")]"; fi
 
 if case_absent; then pass "P1: an absent flag (exit 0, empty stdout WITH the flag) prints exactly the TOFU_ARM line, the pin fingerprint and flag=unset, exit 0"
@@ -1151,7 +1151,7 @@ fi
 if mutate rb-trimmed-readback "$PRECHECK" 2 's#^      \[ -z "\$cur" \] \|\| clear_fail readback still_present$#      [ -z "${cur//[[:space:]]/}" ] || clear_fail readback still_present#'; then
   CASE_SCRIPT="$MUTANT" mutant_red rb-trimmed-readback rb_ws_noop_refused
 fi
-# M-rb-clear-before-credential-guard: the clear block moves above the write-credential guard. RB14 goes RED.
+# M-rb-clear-before-credential-guard: the clear block moves above the write-credential guard. RB14 goes RED (here on the verdict word: ERRF is not yet created at that point, so the moved block dies before any doppler call; the row pins the guard order, not the ambient-token behaviour).
 cat > "$T/mut/rb-before-cred.py" <<'PY'
 import sys
 p = sys.argv[1]
