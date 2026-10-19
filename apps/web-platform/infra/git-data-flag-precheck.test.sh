@@ -84,11 +84,38 @@ printf '\n=== git-data flag precheck (Guard 1, #8189) ===\n\n'
 # SHIM_ERR forces one error class, with a canary in its text so a printed stderr is visible.
 cat > "$BIN/doppler" <<'SHIM'
 #!/usr/bin/env bash
-printf 'doppler %s\n' "$*" >> "$DOPPLER_LOG"
+printf 'doppler %s\n' "$*" >> "$DOPPLER_LOG"; printf '%s %s %s\n' "${2:-}" "${3:-}" "${DOPPLER_TOKEN:-<none>}" >> "$DOPPLER_LOG.tok"
 [ "${1:-}" = secrets ] && { [ "${2:-}" = get ] || [ "${2:-}" = set ] || [ "${2:-}" = delete ]; } || { echo "doppler-shim: unsupported: $*" >&2; exit 64; }
-# One line per call naming the verb, the secret and WHICH token carried it (fixture tokens only), so a row can prove
-# the stamp delete rode DOPPLER_TOKEN_GIT_DATA_FLAG and not the read token. A separate file: DOPPLER_LOG stays argv-only.
-printf '%s %s %s\n' "${2:-}" "${3:-}" "${DOPPLER_TOKEN:-<none>}" >> "$DOPPLER_LOG.tok"
+if [ "${2:-}" = set ]; then
+  # secrets set NAME -p P -c C — value on stdin (the only supported form here; the caller
+  # must never pass a value on argv). SHIM_SET_ERR forces a classified failure;
+  # SHIM_WRITE_STORE redirects the store so the write lands where the case expects.
+  # The value is read FIRST (#9217): the caller pipes it in under pipefail, so an arm that exits on the
+  # missing token or a classified failure before reading would let the writer take SIGPIPE. Not a terminal only.
+  value=""; [ -t 0 ] || value="$(timeout 2 cat)"
+  name="${3:-}"; shift 3
+  proj=""; cfg=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -p|--project) proj="${2:-}"; shift 2 ;;
+      -c|--config) cfg="${2:-}"; shift 2 ;;
+      *) echo "doppler-shim: unknown argument $1" >&2; exit 64 ;;
+    esac
+  done
+  [ -n "${DOPPLER_TOKEN:-}" ] || { echo "Doppler Error: you must provide a token" >&2; exit 1; }
+  case "${SHIM_SET_ERR:-}" in
+    auth)    echo "Doppler Error: Invalid Auth token STDERR-CANARY-3b" >&2; exit 1 ;;
+    network) echo "Doppler Error: dial tcp: i/o timeout STDERR-CANARY-3b" >&2; exit 3 ;;
+  esac
+  d="$DOPPLER_STORE/$proj/$cfg"
+  [ -d "$d" ] || { echo "Doppler Error: Could not find requested config '$cfg'" >&2; exit 1; }
+  printf '%s' "$value" > "$d/$name"
+  # the real CLI prints the whole config on set; the shim prints nothing (the caller
+  # discards stdout anyway — what matters is that nothing the caller needs is on stdout).
+  exit 0
+fi
+# One token-log line per call (first code line above): the verb, the secret and WHICH token carried it (fixture tokens only), so a row
+# can prove the stamp delete rode DOPPLER_TOKEN_GIT_DATA_FLAG and not the read token. A separate file: DOPPLER_LOG stays argv-only.
 if [ "${2:-}" = delete ]; then
   # secrets delete NAME -p P -c C --yes (#10297). SHIM_DELETE_ERR forces a classified failure (forbidden = the token lacks
   # DELETE on prd, the unverified permission); SHIM_DELETE_NOOP models a delete that exits 0 and leaves the value.
@@ -116,34 +143,6 @@ if [ "${2:-}" = delete ]; then
   # reason; the repo hook doppler-secrets-delete-redirect refuses one without the redirect). The canary stands for that table,
   # so a caller that stops discarding stdout puts it in the run log and RB1 goes RED.
   echo "STDOUT-CANARY-DELETE GIT_DATA_SSH_HOST_KEY=fixture-remaining-secret"
-  exit 0
-fi
-if [ "${2:-}" = set ]; then
-  # secrets set NAME -p P -c C — value on stdin (the only supported form here; the caller
-  # must never pass a value on argv). SHIM_SET_ERR forces a classified failure;
-  # SHIM_WRITE_STORE redirects the store so the write lands where the case expects.
-  # The value is read FIRST (#9217): the caller pipes it in under pipefail, so an arm that exits on the
-  # missing token or a classified failure before reading would let the writer take SIGPIPE. Not a terminal only.
-  value=""; [ -t 0 ] || value="$(timeout 2 cat)"
-  name="${3:-}"; shift 3
-  proj=""; cfg=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      -p|--project) proj="${2:-}"; shift 2 ;;
-      -c|--config) cfg="${2:-}"; shift 2 ;;
-      *) echo "doppler-shim: unknown argument $1" >&2; exit 64 ;;
-    esac
-  done
-  [ -n "${DOPPLER_TOKEN:-}" ] || { echo "Doppler Error: you must provide a token" >&2; exit 1; }
-  case "${SHIM_SET_ERR:-}" in
-    auth)    echo "Doppler Error: Invalid Auth token STDERR-CANARY-3b" >&2; exit 1 ;;
-    network) echo "Doppler Error: dial tcp: i/o timeout STDERR-CANARY-3b" >&2; exit 3 ;;
-  esac
-  d="$DOPPLER_STORE/$proj/$cfg"
-  [ -d "$d" ] || { echo "Doppler Error: Could not find requested config '$cfg'" >&2; exit 1; }
-  printf '%s' "$value" > "$d/$name"
-  # the real CLI prints the whole config on set; the shim prints nothing (the caller
-  # discards stdout anyway — what matters is that nothing the caller needs is on stdout).
   exit 0
 fi
 name="${3:-}"; shift 3
