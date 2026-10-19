@@ -759,3 +759,57 @@ and fresh exact-command approval. All historical evidence and broader holds
 remain. Dissent: this compatibility change may not resolve the observed refusal
 if the response contained duplicate Content-Length; synthetic tests cannot
 establish the historical framing or destination authority.
+
+### Reviewed redirect evidence and next boundary — 2026-10-20
+
+The freshly approved bounded diagnostic at `7764f6c91e` completed once with
+two requests: token HTTP 200 and pinned Config endpoint HTTP 307. Separate
+security evidence review passed receipt self-hash
+`4a4d754d0ac5d0da89d9a4c8895d831064b08498b22db23863f9685ff79fdc32`.
+Exact bindings, hashes and limitations are recorded in
+`redirect-framing-manifest-review-7764f6c9-2026-10-20.md`. The marker and
+approval are consumed. The sanitized routing projection identifies HTTPS
+`production.cloudfront.docker.com:443`; a query is present and the literal
+expected Config digest is absent from its path. Raw Location/query/path/token
+and response bodies were not retained. No destination or layer was requested.
+
+Ruled by CTO agent, 2026-10-20: close the approved diagnostic as a successful,
+separately reviewed routing observation. All destination requests and Config
+body acquisition remain held. The next engineering gate is a source-only
+proposal for separately authorized Config-only acquisition; the ruling grants
+neither implementation nor execution authority. Registry routing alone does
+not establish destination ownership, publisher authenticity or authority.
+The discarded capability cannot be reconstructed or replayed from hashes.
+
+The future proposal must resolve each boundary before implementation/approval:
+
+- Establish the registry-to-destination relationship using primary evidence
+  and obtain independent engineering/security acceptance of the exact hostname.
+  A familiar name or suffix match is insufficient; provenance remains separate.
+- Acquire a fresh Location only from the same pinned Config endpoint in a new
+  finite action. Permit at most one destination GET to the reviewed exact host,
+  HTTPS port 443. Refuse other hosts/schemes, userinfo/fragments, malformed
+  authority, further redirect, challenge or retry. Do not replay this attempt.
+- Confine the anonymous bearer to the registry. Forward no Authorization,
+  cookies, credentials or Referer. Keep query capability only in memory, never
+  in command arguments, logs, exceptions or files. Require pinned CA bytes,
+  certificate/hostname verification, exact SNI, explicit DNS/address/connected-
+  peer checks rejecting private/loopback/link-local/reserved addresses, and no
+  ambient proxy substitution.
+- Read only the pinned OCI Config under framing/body/deadline bounds. Before
+  admission, require exactly 2646 decoded bytes and SHA-256
+  `3f56e44ddc1a5655b8f288a2aa812db567b2f5f0b8bc18ef3da63b94a95608d5`,
+  then validate its schema. No layers, manifest expansion or recursive fetch.
+- Write boundary tests first; independently review transport/security source;
+  regenerate source/input/CA/platform/private-output bindings; review the unused
+  actual manifest; obtain fresh approval of the fully expanded bounded command.
+  Define minimal sanitized outputs with raw URL, bearer, query and Config bytes
+  unretained. Review resulting evidence separately before admission/qualification.
+
+Rejected: automatic redirect following, current-attempt retry, hostname-based
+trust, RC0-based permission, or treating digest integrity as profile provenance,
+hosted-auth clearance or qualification. Dissent: this may require a materially
+different acquisition design and primary evidence may not justify this host;
+that uncertainty keeps acquisition held. Resync/full CI and all broader build,
+Docker/SQL/provider/browser/account, recovery, qualification, Web/CLO, promotion
+and ship gates remain unchanged. No new transport has been implemented.

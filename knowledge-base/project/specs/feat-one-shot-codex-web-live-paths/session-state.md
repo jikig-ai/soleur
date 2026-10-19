@@ -2317,3 +2317,33 @@
 - Both prior diagnostic approvals are consumed. Build, Docker/SQL, provider/
   browser/account, recovery, qualification, Web/CLO, promotion and ship remain
   held; hosted auth BLOCKED, alternate route PENDING, PR draft and disarmed.
+
+### Reviewed redirect observation — 2026-10-20
+
+- Parser/fixture source reviews, CTO conformance and fresh actual-manifest
+  review passed pinned source `7764f6c91e`. Its 329 offline tests passed.
+  After fresh approval, the exact `timeout -k 5 90` diagnostic ran once, exited
+  0 and consumed its marker. Separate security evidence review passed receipt
+  `4a4d754d0ac5d0da89d9a4c8895d831064b08498b22db23863f9685ff79fdc32`.
+- Two requests completed: token HTTP 200, pinned Config HTTP 307. Sanitized
+  routing identifies HTTPS `production.cloudfront.docker.com:443`, query
+  present, userinfo/fragment absent, literal expected Config digest in path
+  false. No destination, Config body or layer request occurred. Only the
+  permitted sanitized projection was retained. This does not establish
+  destination ownership, provenance or Config contents/integrity.
+- Exact binding and evidence hashes, source review results and limitations
+  are in `redirect-framing-manifest-review-7764f6c9-2026-10-20.md`. All three
+  historical approvals are spent. A separate engineering/security ruling
+  must precede any constrained destination-acquisition proposal.
+- Live PR remains OPEN/draft/disarmed and DIRTY/CONFLICTING. Six reported
+  checks passed, not a full CI verdict. CTO permitted only this pinned
+  diagnostic before resync; resync and full CI remain required before later
+  integrated qualification/shipping. All broader operational and ship holds
+  persist. Hosted auth BLOCKED; alternate route PENDING.
+- Separate CTO ruling closes the approved diagnostic as routing observation
+  only. The next gate is a source-only Config-acquisition proposal resolving
+  primary origin evidence, exact-host security acceptance, credential/network
+  isolation, exact Config length/digest/schema, tests and fresh review/approval.
+  It authorizes neither implementation nor execution. Full constraints and
+  dissent are in `prebuild-acquisition-2026-10-16.md`, “Reviewed redirect evidence
+  and next boundary”. No new transport or destination request was made.
