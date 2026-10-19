@@ -1646,3 +1646,99 @@ resource "logtail_exploration_alert" "registry_zot_log_credential_shape" {
     team_name = var.betterstack_paid_tier ? null : "Your team"
   }
 }
+
+# ── #10445: a live agent Bash call hit the SDK apply-seccomp helper's EPERM ─────────────────────
+# WHAT IT DETECTS. A hosted agent's Bash tool_result carried the SDK command-side helper's own line
+#   apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted
+# (the shim's seccomp filter is inherited by the helper, which then cannot create its user namespace; every
+# Bash call in the session fails). server/cc-dispatcher.ts `mirrorBashSandboxFailure` classifies the output
+# (server/sandbox-startup-classifier.ts `classifyBashSandboxFailure`, errorCode `helper_userns_eperm`) and
+# mirrors ONE pino row per user per debounce window: feature `agent-sandbox`, op `bash-tool-result`, with the
+# code in `extra.sandboxErrorCode`. The row lands in this same prd Logs source under the app container.
+#
+# ROW SHAPE (verified on sibling pino rows that reach this source, 2026-10-16; no row of THIS emitter had ever arrived, so
+# its first real hit is its positive control): `raw.CONTAINER_NAME` is
+# `soleur-web-platform`; `raw.message` is an OBJECT (not a string) whose top-level keys are `feature`, `op`,
+# `level`, `msg` plus the `extra` keys, so the three message conjuncts use the nested form
+# `JSONExtractString(raw, 'message', '<key>')`.
+# NO host_name conjunct, on purpose: the container name is `soleur-web-platform` on web-1 and web-2 alike, and the
+# signal belongs to every web host (the same divergence the bwrap_probe_rollback alert records above).
+#
+# WHAT IT DELIBERATELY DOES NOT DETECT: a session whose Bash output never reaches the dispatcher's tool_result
+# observer (the legacy agent-runner loop has none), and a dropped Vector/journald path (a silent row is silence,
+# not health). The deploy-time canary covers the container (and was blind to this class: its replay never ran the
+# command-side wrapper); this covers a live tenant session on the cc-soleur-go path only.
+#
+# Paging semantics are bwrap_probe_rollback's (ADR-218): any one matching row in the 5-min window alerts,
+# treat_as_zero so the open incident observes recovery; on the free tier the channel is team email only.
+# Both -target= lines are enforced by apps/web-platform/test/infra/sandbox-alerts.test.sh.
+locals {
+  agent_sandbox_bash_denial_sql = <<-SQL
+    SELECT {{time}} AS time, count(*) AS value
+    FROM {{source}}
+    WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, 'CONTAINER_NAME') = 'soleur-web-platform'
+      AND JSONExtractString(raw, 'message', 'feature') = 'agent-sandbox'
+      AND JSONExtractString(raw, 'message', 'op') = 'bash-tool-result'
+      AND JSONExtractString(raw, 'message', 'sandboxErrorCode') = 'helper_userns_eperm'
+    GROUP BY time
+  SQL
+
+  agent_sandbox_bash_denial_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/betterstack-log-query.md#standing-alarms-over-this-source-log-content-recurrence-alarms"
+}
+
+resource "logtail_exploration" "agent_sandbox_bash_denial" {
+  name      = "soleur-agent-sandbox-bash-denial-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.agent_sandbox_bash_denial_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "agent_sandbox_bash_denial" {
+  exploration_id = logtail_exploration.agent_sandbox_bash_denial.id
+  name           = "soleur-agent-sandbox-bash-denial-prd"
+
+  # bwrap_probe_rollback's values: one row alerts within about a minute, the 5-min window holds ONE incident
+  # across a burst of denials, and 10 quiet minutes auto-resolve it.
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 60
+  query_period        = 300
+  confirmation_period = 0
+  recovery_period     = 600
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "A live hosted-agent Bash call failed in the SDK apply-seccomp helper (apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted), so Bash is unavailable to the affected tenant session(s). The row is the app container's op=bash-tool-result mirror with sandboxErrorCode=helper_userns_eperm; it carries only the scrubbed matched line, so read the count and timestamps via the runbook Query block without SSH. This incident auto-resolves after 10 quiet minutes; resolution does NOT mean the cause was fixed. Runbook: ${local.agent_sandbox_bash_denial_runbook_url}"
+  metadata = {
+    runbook = local.agent_sandbox_bash_denial_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}

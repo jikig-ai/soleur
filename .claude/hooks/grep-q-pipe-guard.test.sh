@@ -2044,7 +2044,7 @@ eqv_sh="$(_eqv "$EQV_SH")"
 # the port drifting, and only a person who runs it will see one.
 PJ_DRAIN_WINDOW=4
 PJ_ALL="$(git ls-files)"
-PJ_TRIPLES=275   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples
+PJ_TRIPLES=277   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples
 PJ_VOCAB=' not-a-command text-only unverified helper-built-stub variable-named-verb pass-through deliberate-fault arm-drain fenced '
 PJ_FENCED_RE='^fenced[[:space:]]+#[0-9]+[[:space:]]+[^[:space:]]'   # the one word that carries a tracker link (pj_judge)
 PRODUCER_JOIN=(
@@ -2167,6 +2167,8 @@ PRODUCER_JOIN=(
   'plugins/soleur/test/operator-stage-approval-hook.test.sh | gh | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T1; t1:rc0/12s; hits 0 (stdin-flag))'
   'plugins/soleur/test/operator-stage-approval-hook.test.sh | jq | exempt | text-only no piped call observed (rc0 12s); stub-world jq is a pass-through exec'
   'plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh | sha256sum | drains | 1 | -c -'
+  'plugins/soleur/test/sole-copy-drift-check.test.sh | curl | exempt | arm-drain the curl stub reads its config from stdin (`cat > "$rec.$n.stdin"`) after argument parsing, so a refusal arm exits before the read; the only producer is bearer-curl.sh feeding one header line, far under any pipe buffer'
+  'plugins/soleur/test/sole-copy-drift-check.test.sh | doppler | exempt | text-only the apply-web-platform-infra.yml mention is a forbidden-vocabulary string in the issue-body check, never executed; the job under test calls doppler without a pipe into it'
   'plugins/soleur/test/ship-followthrough-directive.test.sh | parse_directive | exempt | not-a-command shell function in scripts/sweep-followthroughs.sh'
   'plugins/soleur/test/technical-ruling-gate.test.sh | gh | exempt | text-only the derived site is not a pipe into gh: plugins/soleur/scripts/delegation-verify.sh:363 is a case-pattern alternation of quoted allowlist strings (`"gh run view"*|"gh run list"*|...`) that the line scanner reads as `| gh`; the file never pipes text into the gh stub (its two `printf | grep` pipes were rewritten to here-strings and process substitutions)'
   'scripts/check-cloudflare-token-drift.test.sh | curl | exempt | arm-drain all-arms-keyed: def 237 drains `_stdin_cfg=$(cat)` in the `--config -` arm at opener+10, before any decision or exit (reach T1; t1:rc0/90s; hits 299 (stdin-flag))'

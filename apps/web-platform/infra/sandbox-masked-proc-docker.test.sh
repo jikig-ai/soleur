@@ -27,6 +27,13 @@
 #   recorder   the argv the REAL bwrap receives from the shim carries no argv-requested procfs mount at /proc and
 #              exactly one `--tmpfs /proc`: the shim DROPS the vendor bind, it does not cover it.
 #   c4 replay  the C4 render sandbox argv (it bypasses the shim, /usr/bin/bwrap absolute) runs under the masks.
+#   wrapped    (#10445) a scripted Bash call through the REAL Agent SDK (infra/lib/sdk-bash-probe.mjs) under the same
+#              posture. CONTROL (network.allowAllUnixSockets unset): the SDK wraps the command in its `apply-seccomp`
+#              helper, whose unshare(CLONE_NEWUSER) our shim filter denies, and the tool_result is
+#              `apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted` (the committed RCA reproduction).
+#              TREATMENT (knob set, as the production config sets it): the command's own stdout comes back.
+#   census     (#10445) every pathname socket visible from inside that sandbox is one of the SDK's own proxy bridge
+#              sockets under /tmp; a host runtime socket (docker, dbus) or any other path is a red.
 #
 # WHAT THE BEHAVIORAL ARMS CANNOT SEPARATE (measured, #10065 measurements.md M3). A cover (`--tmpfs /proc` over the
 # kept vendor bind) and a drop give the SAME observations here: the vendor argv starts with a recursive `--ro-bind / /`,
@@ -57,7 +64,7 @@
 #
 # MUTATION SEAMS (battery only; each must drive the suite RED):
 #   SANDBOX_MASKED_PROC_MUTATE =
-#     shim-splice | shim-bypass | shim-cover | shim-path | control-unmasked | sleeper-after | no-replay
+#     shim-splice | shim-bypass | shim-cover | shim-path | control-unmasked | sleeper-after | no-replay | knob-off
 #   SANDBOX_MASKED_PROC_SRC_ROOT = a COPY of apps/web-platform whose Dockerfile, canary fixture and docker run tuples
 #     the static arms read (refused when CI is set). The mounted /app, shim and seccomp profile stay the real ones.
 set -uo pipefail
@@ -70,7 +77,7 @@ APPARMOR_PROFILE="$SCRIPT_DIR/apparmor-soleur-bwrap.profile"
 TUPLE_PY="$SCRIPT_DIR/lib/docker-run-tuple.py"
 MUTATE="${SANDBOX_MASKED_PROC_MUTATE:-}"
 case "$MUTATE" in
-  ""|shim-splice|shim-bypass|shim-cover|shim-path|control-unmasked|sleeper-after|no-replay) : ;;
+  ""|shim-splice|shim-bypass|shim-cover|shim-path|control-unmasked|sleeper-after|no-replay|knob-off) : ;;
   *) echo "FAIL: MUTATION_UNKNOWN: SANDBOX_MASKED_PROC_MUTATE='$MUTATE' is not a seam of this suite (a typo would otherwise run the unmutated baseline and read as a surviving mutant)"; exit 1 ;;
 esac
 IMG="soleur-masked-proc-regression:$$"
@@ -457,7 +464,7 @@ gd_apt_state_arm "$WORK/aptstate" "$APT_BUDGET_S" || { echo "IMAGE_BUILD_FAILED:
 docker run --name "$CTR-build" -e "APP_UID=$APP_UID" -v "$GD_APT_STATE:/work/apt" "$BASE" bash -c '
   export DEBIAN_FRONTEND=noninteractive
   . /work/apt/apt-bounded.sh || exit 97
-  gd_apt_install_bounded --no-install-recommends bubblewrap procps jq openssh-client || exit $?
+  gd_apt_install_bounded --no-install-recommends bubblewrap procps jq openssh-client socat || exit $?
   useradd -m -u "$APP_UID" soleur
 ' >"$WORK/build.out" 2>&1
 BUILD_RC=$?
@@ -729,10 +736,69 @@ else
   fail "c4 replay: the C4 argv fixture yielded ${#C4_ARGV[@]} tokens or lacks --seccomp 9 / --json-status-fd 3 ($C4_FIXTURE)"
 fi
 
+# Wrapped-command arms (#10445). The probe drives the real Agent SDK against a local stand-in for the Messages API with
+# the PATH-resolved shim, so what comes back is what a hosted Bash call returns under this posture. CONTROL leaves the
+# knob unset: the SDK wraps the command in `apply-seccomp`, which our own filter then kills. TREATMENT sets it. The
+# MUTATE=knob-off seam runs the treatment with the knob unset, which must turn the suite RED.
+sdk_bash() { # <KNOB 0|1> <command> -> the single SDK_BASH_RESULT line
+  docker exec -e APP=/app -e KNOB="$1" -e CMD="$2" -e HOME=/home/soleur "$CTR" node /app/infra/lib/sdk-bash-probe.mjs 2>"$WORK/sdkbash.err" \
+    | grep -a '^SDK_BASH_RESULT ' | tail -1
+}
+WRAP_CMD='echo WRAPCMD_OK_10445'
+CTRL_WRAP="$(sdk_bash 0 "$WRAP_CMD")"
+if [[ "$CTRL_WRAP" == *'"isError":true'* && "$CTRL_WRAP" == *'apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted'* ]]; then
+  pass "wrapped control: with the knob unset the SDK's apply-seccomp helper dies with EPERM under the shim filter (the #10445 outage, reproduced)"
+else
+  fail "wrapped control: the knob-unset arm did not reproduce the helper EPERM, so the treatment below cannot discriminate (out=$(printf '%s' "$CTRL_WRAP" | head -c 300) err=$(head -c 200 "$WORK/sdkbash.err"))"
+fi
+TREAT_KNOB=1
+[[ "$MUTATE" == "knob-off" ]] && TREAT_KNOB=0
+TREAT_WRAP="$(sdk_bash "$TREAT_KNOB" "$WRAP_CMD")"
+if [[ "$TREAT_WRAP" == *'"isError":false'* && "$TREAT_WRAP" == *'WRAPCMD_OK_10445'* && "$TREAT_WRAP" != *'apply-seccomp'* ]]; then
+  pass "wrapped treatment: with the knob set a hosted Bash call returns the command's own stdout through the shim and the production masks"
+else
+  fail "wrapped treatment: the knob-set Bash call did not return the command's stdout (out=$(printf '%s' "$TREAT_WRAP" | head -c 300) err=$(head -c 200 "$WORK/sdkbash.err"))"
+fi
+
+# Census: with AF_UNIX no longer blocked inside the inner sandbox, list every pathname socket visible from it. Only the
+# SDK's own proxy bridge sockets under /tmp are expected (peer-messaging and transcript dirs are masked). Two
+# instrument checks keep a silent census from passing: the listing must END with its sentinel (a failed `find` prints
+# nothing and would otherwise read as "no sockets"), and it must contain at least one socket (the current session's
+# own bridge socket is among them, so zero means the census did not see the session it ran in). The scan skips only
+# /proc and /sys rather than using -xdev, so a socket on a bind mount is listed; abstract-namespace sockets cannot be
+# listed from here and are bounded by the per-command --unshare-net (asserted in test/sandbox-wrapped-command-runtime.test.ts).
+CENSUS_OUT="$(sdk_bash 1 'find / \( -path /proc -o -path /sys \) -prune -o -type s -print 2>/dev/null; echo CENSUS_END')"
+CENSUS_PATHS="$(printf '%s' "$CENSUS_OUT" | sed 's/^SDK_BASH_RESULT //' | jq -r '.content // ""' 2>/dev/null | grep -a '^/' | sort -u)"
+CENSUS_N=0
+CENSUS_BAD=""
+while IFS= read -r cpath; do
+  [[ -n "$cpath" ]] || continue
+  CENSUS_N=$((CENSUS_N + 1))
+  [[ "$cpath" =~ ^/tmp/(claude-http-[0-9a-f]+|claude-socks-[0-9a-f]+|srt-mux-[0-9]+-[0-9a-z]+)\.sock$ ]] || CENSUS_BAD+="$cpath "
+done <<<"$CENSUS_PATHS"
+if [[ "$CENSUS_OUT" == *CENSUS_END* && "$CENSUS_N" -ge 1 && -z "$CENSUS_BAD" ]]; then
+  pass "census: every pathname socket visible from the inner sandbox ($CENSUS_N) is an SDK proxy bridge socket under /tmp (no host runtime or peer-messaging socket)"
+else
+  fail "census: bad or missing socket listing from the inner sandbox: unexpected='${CENSUS_BAD}' n=$CENSUS_N complete=$([[ "$CENSUS_OUT" == *CENSUS_END* ]] && echo yes || echo no) (a host runtime or peer-messaging socket reachable from a tenant sandbox is the residual ADR-075's 2026-10-16 addendum bounds; n=0 means the census did not see its own session)"
+fi
+
+# Environ scan (W1, ADR-272): with the knob set, can a hosted Bash call read ANY process environ carrying the owner's key?
+# The probe puts a decoy ANTHROPIC_API_KEY in the CLI's (outside-the-sandbox) environment. The `[i]` keeps the scan's own
+# command line from matching its pattern. Non-vacuity: the counters must PRINT (a command that never ran prints none, and
+# the empty comparison below would then fail); the matching positive control, a scan that does find the decoy when
+# /proc is open, is test/sandbox-credential-deny-runtime.test.ts's shim-less CONTROL arm.
+ENV_OUT="$(sdk_bash 1 'echo PIDDIRS=$(ls -d /proc/[0-9]* 2>/dev/null | wc -l); n=0; f=0; for p in /proc/[0-9]*; do if cat $p/environ >/dev/null 2>&1; then n=$((n+1)); grep -qa decoy-api-key-sent[i]nel $p/environ 2>/dev/null && f=$((f+1)); fi; done; echo READABLE=$n; echo DECOY=$f; echo SCAN_END')"
+ENV_TXT="$(printf '%s' "$ENV_OUT" | sed 's/^SDK_BASH_RESULT //' | jq -r '.content // ""' 2>/dev/null)"
+if [[ "$ENV_TXT" == *SCAN_END* && "$ENV_TXT" == *PIDDIRS=0* && "$ENV_TXT" == *READABLE=0* && "$ENV_TXT" == *DECOY=0* ]]; then
+  pass "environ scan: with the knob set no process environ is readable from a hosted Bash call and none carries the decoy (empty /proc)"
+else
+  fail "environ scan: a process environ is readable from the sandbox or the scan did not run (a W1 regression, ADR-272): $(printf '%s' "$ENV_TXT" | tr '\n' ' ' | head -c 300)"
+fi
+
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 # Anti-vacuity floor: a literal adjacent to its use (guard-vacuity-floor shape).
-MIN_ASSERTIONS=48
+MIN_ASSERTIONS=52
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   echo "FAIL: only $((PASS + FAIL)) assertions ran (floor $MIN_ASSERTIONS) — the suite did not exercise its arms"
   exit 1

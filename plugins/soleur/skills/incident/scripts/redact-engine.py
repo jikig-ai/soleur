@@ -14,6 +14,7 @@
 # place and no consumer parses the offset, so there is no offset-map back to the original.
 import base64
 import binascii
+import contextlib
 import os
 import re
 import sys
@@ -230,9 +231,11 @@ def _b64_decode(s):
     for alt in (s, s.replace("-", "+").replace("_", "/")):
         body = alt.rstrip("=")
         try:
-            return base64.b64decode(body + "=" * ((-len(body)) % 4), validate=True)
+            decoded = base64.b64decode(body + "=" * ((-len(body)) % 4), validate=True)
         except (binascii.Error, ValueError):
-            continue  # a per-candidate decode probe: most candidates are not base64 (ADR-095, 2026-07-06 amendment item 2: decode errors are swallowed, never bubble to exit 2)
+            decoded = None  # a per-candidate decode probe: most candidates are not base64 (ADR-095, 2026-07-06 amendment item 2: decode errors are swallowed, never bubble to exit 2)
+        if decoded is not None:
+            return decoded
     return None
 
 
@@ -336,7 +339,9 @@ def _scan_encoded(norm, seen):
         try:
             raw = bytes.fromhex(blob)
         except ValueError:
-            continue  # defensive: the regex and the parity filter above leave only valid even-length hex, so this does not fire today (ADR-095, 2026-07-06 amendment item 2: decode errors never bubble to exit 2)
+            raw = None  # defensive: the regex and the parity filter above leave only valid even-length hex, so this does not fire today (ADR-095, 2026-07-06 amendment item 2: decode errors never bubble to exit 2)
+        if raw is None:
+            continue
         if _mostly_text(raw):
             hits += _scan_text(raw.decode("utf-8", "replace"), m.start(), "decoded hex", seen)
     # percent-encoding: unquote once over the normalized text (bounded like the base64/hex paths; a
@@ -397,10 +402,9 @@ def main():
         tb = own or last
         where = "" if tb is None else " at %s:%s" % (tb.tb_frame.f_code.co_name, tb.tb_lineno)
         # class name and innermost frame in this file only: exception text can carry scanned content (mirrors founder-check _locator)
-        try:
+        # a closed stderr (None when fd 2 is closed) must not turn the fail-closed rc 2 into an uncaught crash (rc 1 reads as "redaction needed")
+        with contextlib.suppress(OSError, ValueError, AttributeError):
             sys.stderr.write(f"redact-engine: internal error: {type(e).__name__}{where}\n")
-        except (OSError, ValueError, AttributeError):
-            pass  # a closed stderr (None when fd 2 is closed) must not turn the fail-closed rc 2 into an uncaught crash (rc 1 reads as "redaction needed")
         return 2
 
 

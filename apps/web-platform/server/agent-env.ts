@@ -185,6 +185,8 @@ export interface BuildAgentEnvOptions {
    * Omission is tolerated ONLY under the VITEST/NODE_ENV=test bypass.
    */
   pluginPath?: string;
+  /** Per-tenant CLI temp base (`agentSessionTmpDir(workspaceId)`), injected as `CLAUDE_CODE_TMPDIR`. */
+  claudeTmpDir?: string;
 }
 
 export function buildAgentEnv(
@@ -317,6 +319,8 @@ export function buildAgentEnv(
       "[plugin-path] CLAUDE_PLUGIN_ROOT export required for agent dispatch — pluginPath was empty/undefined",
     );
   }
+
+  if (opts?.claudeTmpDir) env.CLAUDE_CODE_TMPDIR = opts.claudeTmpDir;
 
   // Auth var LAST and mutually exclusive: the credential branch is
   // authoritative over any ambient/service value, and the NON-selected auth
