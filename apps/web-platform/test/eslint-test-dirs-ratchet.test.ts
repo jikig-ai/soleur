@@ -14,6 +14,8 @@ import { describe, expect, it } from "vitest";
  */
 
 const REPO_ROOT = resolve(__dirname, "..", "..", "..");
+// One name drives both the case count and the class that is run, so they cannot drift apart.
+const ESLINT_CLASS = "TestEslintConfigBehaviour";
 
 describe("eslint test-dirs ratchet", () => {
   it("the live tree equals the committed baseline and never grows past the merge base", () => {
@@ -33,12 +35,12 @@ describe("eslint test-dirs ratchet", () => {
     // TestEslintConfigBehaviour is skipUnless(node_modules), and the `test-scripts` shard has no
     // npm ci, so it ran in no CI shard. This shard has node_modules: run it and prove it RAN.
     const source = readFileSync(resolve(REPO_ROOT, "tests/scripts/test_lint_ratchet.py"), "utf8");
-    const cls = source.split(/^class TestEslintConfigBehaviour\b/m)[1]?.split(/^class /m)[0] ?? "";
+    const cls = source.split(new RegExp(`^class ${ESLINT_CLASS}\\b`, "m"))[1]?.split(/^class /m)[0] ?? "";
     const cases = (cls.match(/^\s+def test_/gm) ?? []).length;
     expect(cases).toBeGreaterThan(0);
     const result = spawnSync(
       "python3",
-      ["-m", "unittest", "tests.scripts.test_lint_ratchet.TestEslintConfigBehaviour", "-v"],
+      ["-m", "unittest", `tests.scripts.test_lint_ratchet.${ESLINT_CLASS}`, "-v"],
       { cwd: REPO_ROOT, encoding: "utf8", timeout: 110_000 },
     );
     const output = `${result.stdout}${result.stderr}`;
@@ -46,6 +48,8 @@ describe("eslint test-dirs ratchet", () => {
     const ran = /Ran (\d+) tests?/.exec(output);
     expect(ran, output).not.toBeNull();
     expect(Number(ran![1])).toBeGreaterThanOrEqual(cases);
-    expect(output).not.toMatch(/skipped/i);
+    // unittest -v marks a skipped case "... skipped '<reason>'"; a bare word match would also trip on a test name.
+    expect(output).not.toMatch(/\.\.\. skipped /);
+    expect(output).toContain(ESLINT_CLASS);
   }, 120_000);
 });

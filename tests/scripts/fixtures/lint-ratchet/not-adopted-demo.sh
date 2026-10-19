@@ -8,8 +8,8 @@
 #   2. a committed baseline that is then deleted from the working tree blocks (exit 1).
 set -euo pipefail
 
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-engine="$(cd "$here/../../../../plugins/soleur/scripts" && pwd)/lint-ratchet.py"
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+engine="$(cd "$here/../../../../plugins/soleur/scripts" && pwd -P)/lint-ratchet.py"
 [[ -f "$engine" ]] || { echo "lint-ratchet engine not found at $engine" >&2; exit 2; }
 
 assert_fixture_dir() {
@@ -26,7 +26,7 @@ assert_fixture_dir() {
 work="$(mktemp -d "${TMPDIR:-/var/tmp}/lint-ratchet-probe.XXXXXXXX")"
 assert_fixture_dir "$work"
 trap 'rm -rf "$work"' EXIT
-mkdir "$work/home" "$work/repo"
+mkdir "$work/home" "$work/tmp" "$work/repo"
 cd "$work/repo"
 
 g() {
@@ -34,7 +34,9 @@ g() {
     -c commit.gpgsign=false "$@"
 }
 run() {
-  env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE -u CI HOME="$work/home" python3 "$engine" "$@"
+  # No inherited cache location: a provisioned ruff must land under $work or the probe cannot see it.
+  env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE -u CI -u XDG_CACHE_HOME HOME="$work/home" TMPDIR="$work/tmp" \
+    python3 "$engine" "$@"
 }
 
 g init -q -b main
@@ -43,13 +45,20 @@ printf 'x = 1\n' >demo.py
 g add -A
 g commit -q -m "demo"
 
-# Stage 1: not adopted.
+# Stage 1: not adopted, asked from a subdirectory (the engine must find the repository root itself).
+mkdir -p sub/inner
+printf 'y = 2\n' >sub/inner/mod.py
+g add -A
+g commit -q -m "sub"
+cd sub/inner
 rc=0
 out="$(run auto 2>/dev/null)" || rc=$?
-expected="lint-ratchet(user-ruff): not adopted. Ask the user whether to adopt; if yes, run: python3 $engine user-ruff --update"
+cd "$work/repo"
 [[ "$rc" -eq 0 ]] || { echo "stage 1: expected exit 0, got $rc" >&2; exit 1; }
-[[ "$out" == *"$expected"* ]] || { echo "stage 1: missing the not-adopted line; got: $out" >&2; exit 1; }
-[[ ! -e "$work/home/.cache" ]] || { echo "stage 1: a cache directory was created for a repository that did not opt in" >&2; exit 1; }
+[[ "$out" == *"not adopted. Ask the user whether to adopt"* && "$out" == *"run: python3 $engine user-ruff --update"* ]] \
+  || { echo "stage 1: missing the not-adopted line; got: $out" >&2; exit 1; }
+written="$(find "$work/home" "$work/tmp" -mindepth 1 | head -n 3)"
+[[ -z "$written" ]] || { echo "stage 1: something was written for a repository that did not opt in: $written" >&2; exit 1; }
 
 # Stage 2: a committed baseline deleted from the working tree.
 mkdir .lint-ratchet

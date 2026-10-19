@@ -38,6 +38,21 @@ Plan: `knowledge-base/project/plans/2026-10-18-feat-plugin-detect-and-run-lint-r
 | 31. Third CTO pass E11: architecture record | technical | Ruled by CTO agent, 2026-10-18: EDIT the platform.plugin description in model.c4 with one sentence naming the lint-ratchet user mode (ADR-290; writes tracked files, PyPI egress, executes a downloaded binary), no new element and PyPI deliberately not modelled, run the C4 tests and regenerate model.likec4.json (amends row 19 no C4 impact); edit ADR-290 Decision and Consequences sentences that become conditional and add dated Amendment 1 listing the residuals (config-edit-then-update, stale header, extend/exclude outside the fingerprint, cwd-dependent root, in-flight window for residual 3, CI-dark guard, notebooks, deletion dodge with an unresolvable base) and the tension with the rejected self-certifying-header alternative - rationale: the description already records earlier narrower wording being falsified by new capabilities. |
 | 32. Third CTO pass E12: mutation-row cap | technical | Ruled by CTO agent, 2026-10-18: keep four mutation rows (upholds rows 8 and 20); a swallowed Skip or InfraError in auto is an ordinary unit row with an injected raising stub - rationale: deterministic unit assertion needs no mutation harness. |
 
+## Review-round amendments (2026-10-19)
+
+The 11-seat review panel measured defects that the fixes below correct. Each reverses or extends a ruling above; all were ruled by the CTO agent on 2026-10-19 (CONFIRM unless noted).
+
+| Item | Class | Ruling |
+|---|---|---|
+| 33. A1: fingerprint covers every tracked ruff config (amends rows 21, 30) | technical | CONFIRM. Ruff applies the nearest config per file; a nested `ignore=["ALL"]` produced `OK` with no sentinel. Untracked configs are no longer hashed. Adoption is still judged at the root. |
+| 34. A2: unsafe root config or symlinked `.lint-ratchet` is exit 2 only once a baseline exists anywhere (amends rows 22, 25) | technical | CONFIRM. A repository that never adopted pays nothing; the reason goes to stderr. |
+| 35. A3: under CI, a tracked ruff config, no baseline anywhere and no resolvable merge base exits 2 (amends rows 15, 22) | technical | CONFIRM, with a flip condition: downgrade to a CI-only WARN if dogfood shows many never-adopted CI repositories hitting it. A depth-1 checkout of a PR that deletes the baseline is otherwise a measured false green. |
+| 36. A4: `check` and `update` share one exemption predicate; an older plugin never earns it; a stale header prints WARN first (amends rows 12, 21) | technical | CONFIRM. `update` with a plugin older than the baseline's ruff exits 2 instead of rewriting the header downward. |
+| 37. A5: ladder refs fully qualified, first rung with the baseline wins, explicit `--base` at its merge base, HEAD baseline as the `update` reference when no base resolves (amends row 29) | technical | CONFIRM. Closes tag hijack, a stale `origin/HEAD` hiding growth, and delete-then-update. |
+| 38. A6: totality extended (null rule code as REPO-CONTENT, non-UTF-8 names fail closed, chunked launches), scan notices, and the pointers' unset-safe `if ...; then ...; fi` form, review pointer outside the SAST conditional (amends rows 18, 5, 26) | technical | CONFIRM. Byte ceilings hold: work -13 B and review +15 B against the merge base, after trimming one historical sentence in each file. |
+| 39. A7: hosted image has no python3, so the call is a silent skip there (amends rows 10, 19) | technical | CONFIRM, on condition that nothing claims hosted enforcement; python3-in-image stays a tracked issue. |
+| 40. A8: deferrals to #10515 and one addition | technical | AMEND: add a total monotonic deadline (1800 s) over the chunked ruff launches (done: `TOTAL_RUN_BUDGET`). Still deferred to #10515: user-mode JS/TS, monorepo adoption, json-lines streaming of very large reports, a shared deadline for all of `auto`, the hostile `filter.*.clean` git config on rename detection, a hosted per-tenant cache. |
+
 ## Not Yet Specified candidates
 
 None.
