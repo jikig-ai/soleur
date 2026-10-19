@@ -40,10 +40,21 @@
 # repositories/ the lock-name exclusion applies to regular files only). Anything else is off the list.
 #
 # NO NAME LEAVES THE HOST. The output is one fixed-shape line of per-type COUNTS (no digest, no name,
-# no per-name hash, nothing from inside repositories/ but a count). The off-list refusal adds exactly one
-# bit, whether a top-level directory is named hooks (the name git-data-bootstrap.sh uses for its hooks
-# directory; the bit proves the name only, not who made the directory or what it holds), and two counts;
-# the compared name is one constant in this file, and no listed name is printed, hashed or stored.
+# no per-name hash, nothing from inside repositories/ but a count). The off-list refusal adds exactly two
+# bits and three counts. The first bit, has_hooks_d, is whether a top-level directory is named hooks (the name
+# git-data-bootstrap.sh uses for its hooks directory; the bit proves the name only, not who made the directory
+# or what it holds); the counts are lf_entries and offlist_n, then hooks_other_n below. CTO/CLO ruling,
+# 2026-10-19 (#10476): two further fixed fields say what that top-level directory holds. hooks_pre_receive_f
+# (0|1) is 1 iff it holds an entry named exactly pre-receive that is a regular file (a link, directory or
+# other type reads 0); hooks_other_n is the recursive count of every other entry under it, links not followed,
+# one filesystem only. Both are derived by find predicates against constants in this file and counted with
+# `-printf x | wc -c`: no name under hooks enters a shell variable, no content, size, mode or owner is read,
+# and both are constant 0 when there is no top-level hooks directory. A failed find is rc 33 with a fixed
+# word, never a 0. Neither field feeds the classifier: a hooks directory stays off the list and rc 34 stays.
+# The rc=34 line is exactly these fields, in this order (the suite pins this list, its RE_34, the line below
+# and the runbook's closed list equal; a change to one moves all of them):
+# rc34-fields: top_d top_f top_l top_o repos has_hooks_d lf_entries offlist_n hooks_pre_receive_f hooks_other_n
+# No listed name is printed, hashed or stored.
 # Names are read into shell variables for classification only: stdout is held back until the final
 # line, stderr of every command is
 # discarded, and the only stderr this file writes is a fixed reason word and digits (gd_capture prints
@@ -305,7 +316,8 @@ wa_main() {
 
   # ---- BEGIN wipe-listing unit ----
   # Inputs: DEV MM SYS BYID W0 (set by the identity stages). Outputs: J (dirty|clean), TOP_D TOP_F TOP_L
-  # TOP_O REPOS, and for the off-list refusal HAS_HOOKS (0|1), LF_ENTRIES and OFFLIST_N (counts). The
+  # TOP_O REPOS, and for the off-list refusal HAS_HOOKS (0|1), LF_ENTRIES and OFFLIST_N (counts), and
+  # HOOKS_PRE_RECEIVE_F (0|1) and HOOKS_OTHER_N (a count; both 0 without a top-level hooks directory). The
   # loopback suite extracts this unit (and the core above) by their sentinels and drives them on real
   # loop devices.
   wl_has_nr() { awk_hit "$1" '/^Filesystem features:/ && / needs_recovery( |$)/ { f = 1 } END { exit !f }'; }
@@ -320,7 +332,7 @@ wa_main() {
   # body and never written anywhere. A name that cannot be classified is "unparseable", not skipped.
   wl_classify() {
     local rec t n saw_end=0
-    TOP_D=0 TOP_F=0 TOP_L=0 TOP_O=0 HAS_REPOS=no HAS_LF=no OFFLIST=0 LOCKS_TOP=0 HAS_HOOKS=0 OFFLIST_N=0 LF_ENTRIES=0
+    TOP_D=0 TOP_F=0 TOP_L=0 TOP_O=0 HAS_REPOS=no HAS_LF=no OFFLIST=0 LOCKS_TOP=0 HAS_HOOKS=0 OFFLIST_N=0 LF_ENTRIES=0 HOOKS_PRE_RECEIVE_F=0 HOOKS_OTHER_N=0
     while IFS= read -r -d '' rec; do
       t="${rec%%$'\t'*}"
       n="${rec#*$'\t'}"
@@ -344,7 +356,7 @@ wa_main() {
     [ "$saw_end" = 1 ] || die 33 listing_failed
   }
   wipe_listing() {
-    local sb jb bs cow_bytes eh sz deps src got want ssb dm e0 e1 rn ln lk names_after hold_after w_after ro_after
+    local sb jb bs cow_bytes eh sz deps src got want ssb dm e0 e1 rn ln lk hp ht names_after hold_after w_after ro_after
     wl_same
     sb="$(timeout 20 dumpe2fs -h "$DEV")" || die 33 dumpe2fs_failed
     if wl_has_nr "$sb"; then J=dirty; else J=clean; fi
@@ -413,6 +425,21 @@ wa_main() {
       LF_ENTRIES="$ln"   # keep after the digit check above: only a validated count is ever printed
       [ "$ln" -eq 0 ] || OFFLIST=1
     fi
+    # What the top-level hooks directory holds (rc=34 diagnostic, #10476): two COUNTS taken by find predicates against
+    # constants, inside the snapshot window and before the errors_count re-read below. A top-level directory named hooks
+    # is always off the list, so HAS_HOOKS=1 is always the rc=34 verdict and these are never printed on any other line.
+    # No -L/-H/-follow (links are never followed), -xdev, no name in a variable, nothing read but a count of x characters.
+    # ht counts every entry at any depth; hp is the regular file named pre-receive directly inside, so the OTHER count
+    # is ht - hp. A failed or timed-out find, or a non-digit answer, is rc 33 and never a 0.
+    if [ "$HAS_HOOKS" = 1 ]; then
+      hp="$(timeout 30 find "$WA_MNT/hooks" -xdev -mindepth 1 -maxdepth 1 -name pre-receive -type f -printf x | wc -c)" || die 33 hooks_file_count_failed
+      [[ "$hp" =~ ^[01]$ ]] || die 33 hooks_file_count_unparseable
+      ht="$(timeout 30 find "$WA_MNT/hooks" -xdev -mindepth 1 -printf x | wc -c)" || die 33 hooks_count_failed
+      [[ "$ht" =~ ^[0-9]+$ ]] || die 33 hooks_count_unparseable
+      [ "$ht" -ge "$hp" ] || die 33 hooks_count_inconsistent
+      HOOKS_PRE_RECEIVE_F="$hp"
+      HOOKS_OTHER_N=$((ht - hp))   # keep after the checks above: only validated digits are ever printed
+    fi
     e1="$(wl_errs "$dm")" || die 33 errors_count_unreadable
     [ "$e1" = "$e0" ] || die 33 errors_count_changed_by_listing
     wl_valid
@@ -428,7 +455,7 @@ wa_main() {
     [ "$ro_after" = 1 ] || die 30 ro_flag_lost_after
     # Verdicts: off-list beats not-empty (the counts on stderr are digits only; has_hooks_d is a single 0 or 1).
     if [ "$OFFLIST" = 1 ]; then
-      say "wipe-assert: rc=34 reason=offlist top_d=$TOP_D top_f=$TOP_F top_l=$TOP_L top_o=$TOP_O repos=$REPOS has_hooks_d=$HAS_HOOKS lf_entries=$LF_ENTRIES offlist_n=$OFFLIST_N"
+      say "wipe-assert: rc=34 reason=offlist top_d=$TOP_D top_f=$TOP_F top_l=$TOP_L top_o=$TOP_O repos=$REPOS has_hooks_d=$HAS_HOOKS lf_entries=$LF_ENTRIES offlist_n=$OFFLIST_N hooks_pre_receive_f=$HOOKS_PRE_RECEIVE_F hooks_other_n=$HOOKS_OTHER_N"
       exit 34
     fi
     [ "$REPOS" -eq 0 ] || die 37 repositories_not_empty "repos=$REPOS"

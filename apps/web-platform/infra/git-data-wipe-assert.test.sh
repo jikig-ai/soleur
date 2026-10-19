@@ -41,6 +41,7 @@ export TMPDIR="${TMPDIR:-/var/tmp}"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT="$DIR/git-data-wipe-assert.sh"
 CUTOVER="$DIR/git-data-cutover.sh"
+RUNBOOK="$DIR/../../../knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md"
 
 pass=0
 fail=0
@@ -73,6 +74,7 @@ instrument() { echo "INSTRUMENT: $*" >&2; exit 2; }
 
 [ -f "$SCRIPT" ] || instrument "missing $SCRIPT"
 [ -f "$CUTOVER" ] || instrument "missing $CUTOVER"
+[ -f "$RUNBOOK" ] || instrument "missing $RUNBOOK (the closed field list of 'Reading the exit-34 line' is pinned to RE_34)"
 for b in python3 awk sed find mkfifo cp cmp timeout mktemp truncate; do
   command -v "$b" >/dev/null 2>&1 || instrument "required binary '$b' not found on PATH"
 done
@@ -99,8 +101,14 @@ CORPUS_TOP_DIR="tenant-4b8e0d-initech"
 CORPUS_TOP_FILE="user_c0ffee_billing.json"
 CORPUS_NL_A="NLA-9c1e-split"
 CORPUS_NL_B="NLB-9c1e-name"
+# Names UNDER the top-level hooks directory (CLO condition C9): none may reach any output, and a name with a space or a
+# control character counts exactly once.
+CORPUS_HK_A="hk-aa11-canary-hook.sample"
+CORPUS_HK_DIR="hk-bb22-canary-subdir"
+CORPUS_HK_SP="hk cc33 canary spaced"
+CORPUS_HK_CTL="hk-dd44-canary"$'\001'"ctl"
 PATS="$T/corpus.pats"
-printf '%s\n' "$CORPUS_REPO_A" "$CORPUS_REPO_B" "$CORPUS_TOP_DIR" "$CORPUS_TOP_FILE" "$CORPUS_NL_A" "$CORPUS_NL_B" > "$PATS" || instrument "corpus write failed"
+printf '%s\n' "$CORPUS_REPO_A" "$CORPUS_REPO_B" "$CORPUS_TOP_DIR" "$CORPUS_TOP_FILE" "$CORPUS_NL_A" "$CORPUS_NL_B" "$CORPUS_HK_A" "$CORPUS_HK_DIR" "$CORPUS_HK_SP" "$CORPUS_HK_CTL" > "$PATS" || instrument "corpus write failed"
 CORPUS_N=$(wc -l < "$PATS")
 
 # ══════════════════════════════════════════════════════════════════════════════════════════
@@ -265,7 +273,21 @@ case "$n" in
     fi
     case "$*" in *"-printf %y"*) if flag fail_find_listing; then exit 3; fi ;; esac
     case "$*" in *"-name .cutover-freeze"*) if flag fail_find_freeze; then exit 1; fi ;; esac
+    # the two finds over the top-level hooks directory (#10476): fail_find_hooks_f / fail_find_hooks_t hold the rc the
+    # named find exits with (a failure, or 124 for a timeout); bump_errors_on_hooks moves the ext4 error counter while
+    # the total-count find runs (a filesystem fault that surfaces DURING the hooks read)
+    case "$*" in *"/hooks -xdev -mindepth 1 -maxdepth 1 -name pre-receive "*) if flag fail_find_hooks_f; then exit "$(cat "$W/fail_find_hooks_f")"; fi ;; esac
+    case "$*" in *"/hooks -xdev -mindepth 1 -printf x"*)
+      if flag fail_find_hooks_t; then exit "$(cat "$W/fail_find_hooks_t")"; fi
+      if flag bump_errors_on_hooks; then printf '1\n' > "$W/files/sys/fs/ext4/dm-3/errors_count"; fi ;; esac
     exec find "$@" ;;
+  wc)
+    # wc_override_<n> holds what the n-th wc call of the run prints instead (it must still drain its stdin, or the
+    # producer dies of SIGPIPE under pipefail): a non-digit or an impossible count from the instrument
+    k=0; [ -f "$ST/wc_calls" ] && k="$(cat "$ST/wc_calls")"
+    k=$((k + 1)); printf '%s' "$k" > "$ST/wc_calls"
+    if [ -f "$W/wc_override_$k" ]; then cat > /dev/null; cat "$W/wc_override_$k"; exit 0; fi
+    exec wc "$@" ;;
   dd) flag fail_dd && exit 1; exit 0 ;;
   dumpe2fs)
     if [ "$last" = "/dev/mapper/git-data-pt-snap" ]; then cat "$W/sb_snap"; else flag fail_dumpe2fs && exit 1; cat "$W/sb_origin"; fi
@@ -322,7 +344,7 @@ echo "shim: no arm for $n" >&2
 exit 99
 SHIM
 chmod +x "$SH/_shim" || instrument "chmod shim failed"
-for _n in awk cat date sleep udevadm stat realpath findmnt cryptsetup blockdev ls find dd dumpe2fs losetup dmsetup mount umount mktemp truncate; do
+for _n in awk cat date sleep udevadm stat realpath findmnt cryptsetup blockdev ls find dd dumpe2fs losetup dmsetup mount umount mktemp truncate wc; do
   ln -s _shim "$SH/$_n" || instrument "ln shim $_n failed"
 done
 
@@ -384,18 +406,21 @@ run_script() {
 RE_PRE='^wipe_assert pre ok layout_signal=(ok|not_run) journal=(dirty|clean|na) top_d=([0-9]+|na) top_f=([0-9]+|na) top_l=([0-9]+|na) top_o=([0-9]+|na) repos=([0-9]+|na) boot_to_row_s=[0-9]+ lock_residue=([0-9]+|na) store_root_repos=[0-9]+$'
 RE_POST='^wipe_assert (post_detach|finish) ok byid=gone mapper_read=ok store_root=ok$'
 RE_ERR='^wipe-assert: rc=[0-9]+ reason=[a-z_0-9]+( [a-z_]+=[0-9]+)*$'
-RE_34='^wipe-assert: rc=34 reason=offlist top_d=[0-9]+ top_f=[0-9]+ top_l=[0-9]+ top_o=[0-9]+ repos=[0-9]+ has_hooks_d=[01] lf_entries=[0-9]+ offlist_n=[0-9]+$'
+RE_34='^wipe-assert: rc=34 reason=offlist top_d=[0-9]+ top_f=[0-9]+ top_l=[0-9]+ top_o=[0-9]+ repos=[0-9]+ has_hooks_d=[01] lf_entries=[0-9]+ offlist_n=[0-9]+ hooks_pre_receive_f=[01] hooks_other_n=[0-9]+$'
 INVARIANT_RUNS=0
 NAMES_SEEN_RUNS=0
 RC34_LINES_CHECKED=0
 # line34_ok <line> — the strict rc=34 grammar, and a refusal must be explainable: some top-level entry was off the
 # list, or the top-level lost+found held something (an all-zero pair cannot occur with rc 34). Two derived
 # invariants as well: the hooks bit implies an off-list entry (the bit never feeds the allowlist), and the off-list
-# count cannot exceed the top-level entries counted by type.
+# count cannot exceed the top-level entries counted by type. The two hooks fields are constant 0 without a hooks
+# directory (hooks_pre_receive_f=1 or hooks_other_n>=1 with has_hooks_d=0 is an instrument fault).
 line34_ok() {
-  local l="$1" n lf hk tops _k _v
+  local l="$1" n lf hk tops _k _v hf ho
   [[ "$l" =~ $RE_34 ]] || return 1
-  n="${l##*offlist_n=}"; lf="${l##*lf_entries=}"; lf="${lf%% *}"; hk="${l##*has_hooks_d=}"; hk="${hk%% *}"
+  ho="${l##*hooks_other_n=}"; hf="${l##*hooks_pre_receive_f=}"; hf="${hf%% *}"
+  n="${l##*offlist_n=}"; n="${n%% *}"; lf="${l##*lf_entries=}"; lf="${lf%% *}"; hk="${l##*has_hooks_d=}"; hk="${hk%% *}"
+  { [ "$hk" = 1 ] || { [ "$hf" = 0 ] && [ "$ho" = 0 ]; }; } || return 1
   tops=0
   for _k in top_d top_f top_l top_o; do _v="${l##*"$_k"=}"; tops=$((tops + 10#${_v%% *})); done
   { [ "$n" -gt 0 ] || [ "$lf" -gt 0 ]; } && { [ "$hk" = 0 ] || [ "$n" -ge 1 ]; } && [ "$n" -le "$tops" ]
@@ -629,15 +654,15 @@ expect_line "A03 (must-PASS) lock dotfiles and lost+found are not repositories" 
 world a-lfcontent
 : > "$W/tree/lost+found/$CORPUS_TOP_FILE"
 run_script pre
-expect_refuse "A06 a top-level lost+found that holds a file is off the allowlist (its contents are opened)" 34 offlist "top_d=2 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=1 offlist_n=0"
+expect_refuse "A06 a top-level lost+found that holds a file is off the allowlist (its contents are opened)" 34 offlist "top_d=2 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=1 offlist_n=0 hooks_pre_receive_f=0 hooks_other_n=0"
 world a-lfdeep
 mkdir -p "$W/tree/lost+found/$CORPUS_TOP_DIR"
 run_script pre
-expect_refuse "A07 a top-level lost+found that holds a directory is off the allowlist" 34 offlist "top_d=2 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=1 offlist_n=0"
+expect_refuse "A07 a top-level lost+found that holds a directory is off the allowlist" 34 offlist "top_d=2 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=1 offlist_n=0 hooks_pre_receive_f=0 hooks_other_n=0"
 world a-lockdir-top
 mkdir -p "$W/tree/.init.lock"
 run_script pre
-expect_refuse "A08 a top-level DIRECTORY named like the lock file is off the allowlist (the lock exclusion is for regular files)" 34 offlist "top_d=3 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"
+expect_refuse "A08 a top-level DIRECTORY named like the lock file is off the allowlist (the lock exclusion is for regular files)" 34 offlist "top_d=3 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1 hooks_pre_receive_f=0 hooks_other_n=0"
 world a-lockdir-repos
 mkdir -p "$W/tree/repositories/.ws-9.init.lock/$CORPUS_REPO_A"
 run_script pre
@@ -821,69 +846,72 @@ clear_expect_refuse "C16 an origin whose kernel read-only flag is not 1 is wipe_
 world a-offdir
 mkdir -p "$W/tree/$CORPUS_TOP_DIR"
 run_script pre
-expect_refuse "A10 an extra top-level directory: the refusal carries COUNTS and fixed fields only" 34 offlist "top_d=3 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"
+expect_refuse "A10 an extra top-level directory: the refusal carries COUNTS and fixed fields only" 34 offlist "top_d=3 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1 hooks_pre_receive_f=0 hooks_other_n=0"
 
 world a-offfile
 : > "$W/tree/$CORPUS_TOP_FILE"
 run_script pre
-expect_refuse "A11 an extra top-level file" 34 offlist "top_d=2 top_f=2 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"
+expect_refuse "A11 an extra top-level file" 34 offlist "top_d=2 top_f=2 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1 hooks_pre_receive_f=0 hooks_other_n=0"
 
 world a-reposlink
 tree_reset; mkdir -p "$W/tree/lost+found" "$W/outside/$CORPUS_REPO_A"; ln -s "$W/outside" "$W/tree/repositories"
 run_script pre
-expect_refuse "A12 repositories is a SYMLINK: never followed, off the allowlist" 34 offlist "top_d=1 top_f=0 top_l=1 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"
+expect_refuse "A12 repositories is a SYMLINK: never followed, off the allowlist" 34 offlist "top_d=1 top_f=0 top_l=1 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1 hooks_pre_receive_f=0 hooks_other_n=0"
 
 world a-reposfile
 tree_reset; mkdir -p "$W/tree/lost+found"; : > "$W/tree/repositories"
 run_script pre
-expect_refuse "A13 repositories is a regular file" 34 offlist "top_d=1 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"
+expect_refuse "A13 repositories is a regular file" 34 offlist "top_d=1 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1 hooks_pre_receive_f=0 hooks_other_n=0"
 
 world a-fifo
 mkfifo "$W/tree/$CORPUS_TOP_FILE" || instrument "mkfifo failed"
 run_script pre
-expect_refuse "A14 a FIFO at the top level counts as other and is off the allowlist" 34 offlist "top_d=2 top_f=1 top_l=0 top_o=1 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"
+expect_refuse "A14 a FIFO at the top level counts as other and is off the allowlist" 34 offlist "top_d=2 top_f=1 top_l=0 top_o=1 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1 hooks_pre_receive_f=0 hooks_other_n=0"
 if grep -q 'top_o=1' "$W/err"; then ok "A14 the FIFO is counted under top_o"; else no "A14 the FIFO was not counted as other: $(cat "$W/err")"; fi
 
 world a-gclink
 rm -f "$W/tree/.gc-cursor"; ln -s /etc/hostname "$W/tree/.gc-cursor"
 run_script pre
-expect_refuse "A15 .gc-cursor as a symlink is off the allowlist (path-typed, not name-only)" 34 offlist "top_d=2 top_f=0 top_l=1 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"
+expect_refuse "A15 .gc-cursor as a symlink is off the allowlist (path-typed, not name-only)" 34 offlist "top_d=2 top_f=0 top_l=1 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1 hooks_pre_receive_f=0 hooks_other_n=0"
 
 world a-lostfile
 rmdir "$W/tree/lost+found" && : > "$W/tree/lost+found" || instrument "A16 setup failed"
 run_script pre
-expect_refuse "A16 lost+found as a file is off the allowlist" 34 offlist "top_d=1 top_f=2 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"
+expect_refuse "A16 lost+found as a file is off the allowlist" 34 offlist "top_d=1 top_f=2 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1 hooks_pre_receive_f=0 hooks_other_n=0"
 
 world a-absent-beside
 tree_reset; mkdir -p "$W/tree/$CORPUS_TOP_DIR"
 run_script pre
-expect_refuse "A17 no repositories directory beside a non-allowlisted entry" 34 offlist "top_d=1 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"
+expect_refuse "A17 no repositories directory beside a non-allowlisted entry" 34 offlist "top_d=1 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1 hooks_pre_receive_f=0 hooks_other_n=0"
 
 world a-nonempty
 mkdir -p "$W/tree/repositories/$CORPUS_REPO_A" "$W/tree/repositories/$CORPUS_REPO_B"
 run_script pre
 expect_refuse "A20 repositories/ holds entries after the replay" 37 repositories_not_empty
 if grep -q 'repos=2' "$W/err"; then ok "A20 the refusal carries a COUNT (repos=2) and no name"; else no "A20 count missing: $(cat "$W/err")"; fi
-if [[ "$(tail -n 1 "$W/err")" != *has_hooks_d* ]]; then ok "A20 an rc 37 refusal carries no rc=34 diagnostic field"; else no "A20 an rc 37 line carries has_hooks_d: $(tail -n 1 "$W/err")"; fi
+if [[ "$(tail -n 1 "$W/err")" != *has_hooks_d* && "$(tail -n 1 "$W/err")" != *hooks_pre_receive_f* && "$(tail -n 1 "$W/err")" != *hooks_other_n* ]]; then ok "A20 an rc 37 refusal carries no rc=34 diagnostic field"; else no "A20 an rc 37 line carries an rc=34 field: $(tail -n 1 "$W/err")"; fi
 
 # ── rc=34 diagnostic fields (2026-10-18): a fixed-vocabulary bit for the system directory and two counts ──────
 world a120-incident
 tree_reset; mkdir -p "$W/tree/repositories" "$W/tree/lost+found" "$W/tree/hooks"
 run_script pre
-expect_refuse "A120 incident replay: repositories, lost+found and hooks (directories) only" 34 offlist "top_d=3 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=1"
+expect_refuse "A120 incident replay: repositories, lost+found and hooks (directories) only" 34 offlist "top_d=3 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=1 hooks_pre_receive_f=0 hooks_other_n=0"
 world a122-hooks-and-tenant
 mkdir -p "$W/tree/hooks" "$W/tree/$CORPUS_TOP_DIR"; : > "$W/tree/$CORPUS_TOP_FILE"
 run_script pre
-expect_refuse "A122 hooks beside a tenant-shaped directory and file in one listing: only the bit and the counts leave" 34 offlist "top_d=4 top_f=2 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=3"
-for v in symlink file dotd upper fifo suffix; do
+expect_refuse "A122 hooks beside a tenant-shaped directory and file in one listing: only the bit and the counts leave" 34 offlist "top_d=4 top_f=2 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=3 hooks_pre_receive_f=0 hooks_other_n=0"
+for v in symlink file dotd upper fifo suffix symlinkfull upperfull; do
   world "a123-$v"
   case "$v" in
-    symlink) ln -s repositories "$W/tree/hooks"; ex="top_d=2 top_f=1 top_l=1 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1" ;;
-    file)    : > "$W/tree/hooks"; ex="top_d=2 top_f=2 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1" ;;
-    dotd)    mkdir -p "$W/tree/hooks.d"; ex="top_d=3 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1" ;;
-    upper)   mkdir -p "$W/tree/Hooks"; ex="top_d=3 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1" ;;
-    fifo)    mkfifo "$W/tree/hooks" || instrument "mkfifo failed"; ex="top_d=2 top_f=1 top_l=0 top_o=1 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1" ;;
-    suffix)  mkdir -p "$W/tree/old-hooks"; ex="top_d=3 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1" ;;
+    symlink) ln -s repositories "$W/tree/hooks"; ex="top_d=2 top_f=1 top_l=1 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1 hooks_pre_receive_f=0 hooks_other_n=0" ;;
+    file)    : > "$W/tree/hooks"; ex="top_d=2 top_f=2 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1 hooks_pre_receive_f=0 hooks_other_n=0" ;;
+    dotd)    mkdir -p "$W/tree/hooks.d"; ex="top_d=3 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1 hooks_pre_receive_f=0 hooks_other_n=0" ;;
+    upper)   mkdir -p "$W/tree/Hooks"; ex="top_d=3 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1 hooks_pre_receive_f=0 hooks_other_n=0" ;;
+    fifo)    mkfifo "$W/tree/hooks" || instrument "mkfifo failed"; ex="top_d=2 top_f=1 top_l=0 top_o=1 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1 hooks_pre_receive_f=0 hooks_other_n=0" ;;
+    suffix)  mkdir -p "$W/tree/old-hooks"; ex="top_d=3 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1 hooks_pre_receive_f=0 hooks_other_n=0" ;;
+    # content a find would count if the name were taken as the hooks directory: the two new fields stay constant 0
+    symlinkfull) mkdir -p "$W/outside/full"; touch "$W/outside/full/pre-receive" "$W/outside/full/$CORPUS_HK_A"; ln -s "$W/outside/full" "$W/tree/hooks"; ex="top_d=2 top_f=1 top_l=1 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1 hooks_pre_receive_f=0 hooks_other_n=0" ;;
+    upperfull)   mkdir -p "$W/tree/Hooks"; touch "$W/tree/Hooks/pre-receive" "$W/tree/Hooks/$CORPUS_HK_A"; ex="top_d=3 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1 hooks_pre_receive_f=0 hooks_other_n=0" ;;
   esac
   run_script pre
   expect_refuse "A123 hooks variant ($v): only an exact, case-sensitive DIRECTORY named hooks sets the bit" 34 offlist "$ex"
@@ -891,24 +919,118 @@ done
 world a124-nested-hooks
 mkdir -p "$W/tree/lost+found/hooks"
 run_script pre
-expect_refuse "A124 a nested lost+found/hooks directory: the top-level bit reads 0 and the entry is counted under lost+found" 34 offlist "top_d=2 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=1 offlist_n=0"
+expect_refuse "A124 a nested lost+found/hooks directory: the top-level bit reads 0 and the entry is counted under lost+found" 34 offlist "top_d=2 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=1 offlist_n=0 hooks_pre_receive_f=0 hooks_other_n=0"
 world a125-locks-and-offdir
 touch "$W/tree/.init.lock" "$W/tree/.5.init.lock"; mkdir -p "$W/tree/$CORPUS_TOP_DIR"
 run_script pre
-expect_refuse "A125 allowlisted lock files beside one off-list directory: the locks are not counted as off-list" 34 offlist "top_d=3 top_f=3 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"
+expect_refuse "A125 allowlisted lock files beside one off-list directory: the locks are not counted as off-list" 34 offlist "top_d=3 top_f=3 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1 hooks_pre_receive_f=0 hooks_other_n=0"
 world a126-lf-many
 mkdir -p "$W/tree/lost+found/d"; touch "$W/tree/lost+found/a" "$W/tree/lost+found/d/b"
 run_script pre
-expect_refuse "A126 lost+found holding two entries (one nested deeper): lf_entries is a non-recursive COUNT, not a flag" 34 offlist "top_d=2 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=2 offlist_n=0"
+expect_refuse "A126 lost+found holding two entries (one nested deeper): lf_entries is a non-recursive COUNT, not a flag" 34 offlist "top_d=2 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=2 offlist_n=0 hooks_pre_receive_f=0 hooks_other_n=0"
 world a129-offdir-and-lf
 mkdir -p "$W/tree/$CORPUS_TOP_DIR"; : > "$W/tree/lost+found/$CORPUS_TOP_FILE"
 run_script pre
-expect_refuse "A129 an off-list directory AND an entry inside lost+found: both counters move" 34 offlist "top_d=3 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=1 offlist_n=1"
+expect_refuse "A129 an off-list directory AND an entry inside lost+found: both counters move" 34 offlist "top_d=3 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=1 offlist_n=1 hooks_pre_receive_f=0 hooks_other_n=0"
 world a132-hooks-and-control
 mkdir -p "$W/tree/hooks"; : > "$W/tree/bad"$'\001'"name"
 run_script pre
 expect_refuse "A132 a valid hooks directory AND a control-character name: rc 35, the refusal precedes any bit" 35 record_control
 if [[ "$(tail -n 1 "$W/err")" != *has_hooks_d* ]]; then ok "A132 the rc 35 line carries no has_hooks_d field"; else no "A132 an rc 35 line carries has_hooks_d: $(tail -n 1 "$W/err")"; fi
+
+# ── hooks_pre_receive_f / hooks_other_n (2026-10-19, #10476; CTO T3, CLO C1-C9): worlds in which the count is NOT a flag ──
+# A refusal row owes the whole line (so each field AND its order), the canary names under hooks never leaving the host,
+# and an argv record in which every call that touches the hooks subtree is one of the two predicate-only finds.
+HK_BASE="top_d=3 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=1"
+HK_TAB=$'\t'
+hk_world() { world "$1"; tree_reset; mkdir -p "$W/tree/repositories" "$W/tree/lost+found" "$W/tree/hooks"; }
+hk_argv_ok() { # <label> — C2/C3: every call that names the hooks subtree is one of the two finds, flags exactly as ruled
+  local f="$W/state/argv" re1 re2 touching matching
+  re1="^find${HK_TAB}[^${HK_TAB}]*/mnt/hooks${HK_TAB}-xdev${HK_TAB}-mindepth${HK_TAB}1${HK_TAB}-maxdepth${HK_TAB}1${HK_TAB}-name${HK_TAB}pre-receive${HK_TAB}-type${HK_TAB}f${HK_TAB}-printf${HK_TAB}x\$"
+  re2="^find${HK_TAB}[^${HK_TAB}]*/mnt/hooks${HK_TAB}-xdev${HK_TAB}-mindepth${HK_TAB}1${HK_TAB}-printf${HK_TAB}x\$"
+  touching="$(grep -cF '/mnt/hooks' "$f")"
+  matching="$(grep -cE -e "$re1" -e "$re2" "$f")"
+  if [ "$touching" = 2 ] && [ "$matching" = 2 ] && [ "$(grep -cE -e "$re1" "$f")" = 1 ] && [ "$(grep -cE -e "$re2" "$f")" = 1 ]; then
+    ok "$1: exactly two calls touch the hooks subtree, both predicate-only finds (-xdev, no -L/-H/-follow, -printf x, no cat/head/stat/hash)"
+  else no "$1: argv over the hooks subtree differs (touching=$touching matching=$matching): $(grep -F '/mnt/hooks' "$f" | tr '\t' ' ' | head -4 | cut -c1-240)"; fi
+}
+hk_canary() { # <label> — C9: no fixture name from under hooks in captured stdout or stderr
+  if [ -z "$(grep -lF -f "$PATS" "$W/out" "$W/err" || true)" ]; then ok "$1: no canary name from under hooks in stdout or stderr"
+  else no "$1: a canary name reached stdout or stderr"; fi
+}
+# hk_row <label> <f> <other_n> — run the hooks world just built and pin the whole line
+hk_row() {
+  run_script pre
+  expect_refuse "$1" 34 offlist "$HK_BASE hooks_pre_receive_f=$2 hooks_other_n=$3"
+  hk_argv_ok "$1"; hk_canary "$1"
+}
+hk_world hk01-fence-only;            touch "$W/tree/hooks/pre-receive"
+hk_row "HK01 hooks holds exactly one regular file named pre-receive" 1 0
+hk_world hk02-fence-one-file;        touch "$W/tree/hooks/pre-receive" "$W/tree/hooks/$CORPUS_HK_A"
+hk_row "HK02 pre-receive plus one other file: the count is 1, the flag is 1" 1 1
+hk_world hk03-fence-nested;          touch "$W/tree/hooks/pre-receive"; mkdir -p "$W/tree/hooks/$CORPUS_HK_DIR"; touch "$W/tree/hooks/$CORPUS_HK_DIR/$CORPUS_HK_A"
+hk_row "HK03 pre-receive plus a nested directory holding a file: recursive, the directory and its file are two" 1 2
+hk_world hk04-fence-symlink;         ln -s /etc/hostname "$W/tree/hooks/pre-receive"
+hk_row "HK04 pre-receive as a symbolic link reads 0 and counts once" 0 1
+hk_world hk05-fence-dir;             mkdir -p "$W/tree/hooks/pre-receive"
+hk_row "HK05 pre-receive as a directory reads 0 and counts once" 0 1
+hk_world hk06-fence-dir-with-file;   mkdir -p "$W/tree/hooks/pre-receive"; touch "$W/tree/hooks/pre-receive/pre-receive"
+hk_row "HK06 a regular file named pre-receive one level too deep is not the flag (the directory and the file are two)" 0 2
+hk_world hk07-empty
+hk_row "HK07 an empty hooks directory reads 0 0" 0 0
+hk_world hk08-fence-three;           touch "$W/tree/hooks/pre-receive" "$W/tree/hooks/a1" "$W/tree/hooks/a2" "$W/tree/hooks/a3"
+hk_row "HK08 pre-receive plus three files: hooks_other_n is 3, so it cannot be a flag" 1 3
+hk_world hk09-three-no-fence;        touch "$W/tree/hooks/a1" "$W/tree/hooks/a2" "$W/tree/hooks/a3"
+hk_row "HK09 three files and no pre-receive: 0 and 3" 0 3
+hk_world hk10-names;                 touch "$W/tree/hooks/pre-receive" "$W/tree/hooks/$CORPUS_HK_SP" "$W/tree/hooks/$CORPUS_HK_CTL"
+hk_row "HK10 a name with a space and a name with a control character each count once and neither leaves the host" 1 2
+hk_world hk11-near-misses;           touch "$W/tree/hooks/pre-receive" "$W/tree/hooks/Pre-Receive" "$W/tree/hooks/pre-receive.sample" "$W/tree/hooks/xpre-receive" "$W/tree/hooks/.hidden"
+hk_row "HK11 near-miss names (case, suffix, prefix, dotfile) beside the real file are four others, not the flag" 1 4
+hk_world hk12-upper-only;            touch "$W/tree/hooks/Pre-Receive"
+hk_row "HK12 only Pre-Receive: the name is case-sensitive" 0 1
+hk_world hk13-fifo;                  mkfifo "$W/tree/hooks/pre-receive" || instrument "mkfifo failed"
+hk_row "HK13 pre-receive as a FIFO reads 0 and counts once" 0 1
+hk_world hk14-link-out;              mkdir -p "$W/outside/big"; touch "$W/outside/big/b1" "$W/outside/big/b2" "$W/outside/big/b3"; touch "$W/tree/hooks/pre-receive"; ln -s "$W/outside/big" "$W/tree/hooks/lnk"
+hk_row "HK14 a symbolic link inside hooks to a populated directory counts once: links are not followed" 1 1
+hk_world hk15-dangling;              ln -s /nonexistent-target "$W/tree/hooks/pre-receive"
+hk_row "HK15 a dangling symbolic link named pre-receive reads 0 and counts once" 0 1
+hk_world hk16-deep;                  mkdir -p "$W/tree/hooks/d1/d2/d3"; touch "$W/tree/hooks/d1/d2/d3/f"
+hk_row "HK16 a file three directories down is counted: four entries, no depth bound" 0 4
+
+# the fields exist only on the rc=34 line: a clean run (stdout) and an rc 33 refusal carry none of them
+hk_world hk17-clean-has-none;        rmdir "$W/tree/hooks"
+run_script pre
+if [ "$RC" = 0 ] && [[ "$(cat "$W/out")" != *hooks_* ]] && [[ "$(cat "$W/err")" != *hooks_* ]]; then ok "HK17 a run with no hooks directory prints neither field, on any stream"
+else no "HK17 a hooks field appeared on a run that is not an rc=34 refusal: rc=$RC out=[$(cut -c1-120 "$W/out")]"; fi
+
+# C4: a failed or timed-out find, or a non-digit or impossible answer, is rc 33 with a fixed word and no field, never a 0
+hk_fail() { # <label> <reason> — the last stderr line is the fixed reason line and carries no hooks field
+  expect_refuse "$1" 33 "$2"
+  if [[ "$(tail -n 1 "$W/err")" != *hooks_pre_receive_f* && "$(tail -n 1 "$W/err")" != *hooks_other_n* ]]; then ok "$1: the rc 33 line carries no hooks field"
+  else no "$1: an rc 33 line carries a hooks field: $(tail -n 1 "$W/err")"; fi
+  hk_canary "$1"
+}
+hk_world hkf1-find-file-fails;       touch "$W/tree/hooks/pre-receive"; printf '3' > "$W/fail_find_hooks_f"
+run_script pre; hk_fail "HKF1 the pre-receive find fails" hooks_file_count_failed
+hk_world hkf2-find-total-fails;      touch "$W/tree/hooks/pre-receive"; printf '3' > "$W/fail_find_hooks_t"
+run_script pre; hk_fail "HKF2 the total-count find fails" hooks_count_failed
+hk_world hkf3-find-total-timeout;    touch "$W/tree/hooks/pre-receive"; printf '124' > "$W/fail_find_hooks_t"
+run_script pre; hk_fail "HKF3 the total-count find times out (rc 124)" hooks_count_failed
+hk_world hkf4-find-file-timeout;     touch "$W/tree/hooks/pre-receive"; printf '124' > "$W/fail_find_hooks_f"
+run_script pre; hk_fail "HKF4 the pre-receive find times out (rc 124)" hooks_file_count_failed
+# the wc overrides count the run's wc calls: a tree holding ONLY hooks has exactly two (the pre-receive count, then the total)
+hk_only() { world "$1"; tree_reset; mkdir -p "$W/tree/hooks"; touch "$W/tree/hooks/pre-receive"; }
+hk_only hkf5-file-nondigit;          printf 'x' > "$W/wc_override_1"
+run_script pre; hk_fail "HKF5 a non-digit pre-receive answer" hooks_file_count_unparseable
+hk_only hkf6-file-two;               printf '2\n' > "$W/wc_override_1"
+run_script pre; hk_fail "HKF6 a pre-receive count of 2 cannot be a flag" hooks_file_count_unparseable
+hk_only hkf7-total-nondigit;         printf 'x' > "$W/wc_override_2"
+run_script pre; hk_fail "HKF7 a non-digit total answer" hooks_count_unparseable
+hk_only hkf8-total-below-flag;       printf '0\n' > "$W/wc_override_2"
+run_script pre; hk_fail "HKF8 a total below the flag is an impossible count, never a negative other-count" hooks_count_inconsistent
+# C5: the reads sit inside the snapshot window, BEFORE the errors_count re-read: a fault that surfaces during the hooks read is caught
+hk_world hkf9-errors-during-read;    touch "$W/tree/hooks/pre-receive"; touch "$W/bump_errors_on_hooks"
+run_script pre; hk_fail "HKF9 the ext4 error counter moves while the hooks subtree is read" errors_count_changed_by_listing
 
 world a-newline
 tree_reset; mkdir -p "$W/tree/repositories" "$W/tree/${CORPUS_NL_A}"$'\n'"${CORPUS_NL_B}"
@@ -1379,11 +1501,11 @@ set_hooksdotd()  { mkdir -p "$W/tree/hooks.d"; }
 set_hooksdir()   { tree_reset; mkdir -p "$W/tree/repositories" "$W/tree/lost+found" "$W/tree/hooks"; }
 set_hookstenant() { mkdir -p "$W/tree/hooks" "$W/tree/$CORPUS_TOP_DIR"; : > "$W/tree/$CORPUS_TOP_FILE"; }
 line34_is() { [ "$RC" = 34 ] && [ "$(tail -n 1 "$W/err")" = "wipe-assert: rc=34 reason=offlist $1" ]; }
-caught_hooksfile()   { line34_is "top_d=2 top_f=2 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"; }
-caught_hooksdotd()   { line34_is "top_d=3 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"; }
-caught_lfentries()   { line34_is "top_d=2 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=1 offlist_n=0"; }
-caught_hookstenant() { line34_is "top_d=4 top_f=2 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=3"; }
-caught_hooksdir()    { line34_is "top_d=3 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=1"; }
+caught_hooksfile()   { line34_is "top_d=2 top_f=2 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1 hooks_pre_receive_f=0 hooks_other_n=0"; }
+caught_hooksdotd()   { line34_is "top_d=3 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1 hooks_pre_receive_f=0 hooks_other_n=0"; }
+caught_lfentries()   { line34_is "top_d=2 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=1 offlist_n=0 hooks_pre_receive_f=0 hooks_other_n=0"; }
+caught_hookstenant() { line34_is "top_d=4 top_f=2 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=3 hooks_pre_receive_f=0 hooks_other_n=0"; }
+caught_hooksdir()    { line34_is "top_d=3 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=1 hooks_pre_receive_f=0 hooks_other_n=0"; }
 mutant_row m-hooks-name-only 'if [ "$n" = hooks ] && [ "$t" = d ]; then HAS_HOOKS=1; fi' 'if [ "$n" = hooks ]; then HAS_HOOKS=1; fi' set_hooksfile pre caught_hooksfile
 mutant_row m-hooks-glob 'if [ "$n" = hooks ] && [ "$t" = d ]; then HAS_HOOKS=1; fi' 'if [[ "$n" == hooks* ]] && [ "$t" = d ]; then HAS_HOOKS=1; fi' set_hooksdotd pre caught_hooksdotd
 mutant_row m-lf-entries-zero '      LF_ENTRIES="$ln"' '      LF_ENTRIES=0' set_lfcontent pre caught_lfentries
@@ -1392,7 +1514,81 @@ mutant_row m-hooks-allowlisted '        .gc-cursor:f | .init.lock:f) : ;;' '    
         hooks:d) : ;;' set_hooksdir pre caught_hooksdir
 mutant_row m-line-leaks-name '      case "$n" in *[[:cntrl:]]*) die 35 record_control ;; esac' '      case "$n" in *[[:cntrl:]]*) die 35 record_control ;; esac
       LEAK="$n"' set_hookstenant pre caught_hookstenant \
-  ' offlist_n=$OFFLIST_N"' ' offlist_n=$OFFLIST_N x=$LEAK"'
+  ' hooks_other_n=$HOOKS_OTHER_N"' ' hooks_other_n=$HOOKS_OTHER_N x=$LEAK"'
+# #10476: the two hooks fields. Each guard is mutated out; the named case is TRUE only on the pristine whole line (or reason) of its world.
+set_hk01() { tree_reset; mkdir -p "$W/tree/repositories" "$W/tree/lost+found" "$W/tree/hooks"; touch "$W/tree/hooks/pre-receive"; }
+set_hk02() { set_hk01; touch "$W/tree/hooks/$CORPUS_HK_A"; }
+set_hk03() { set_hk01; mkdir -p "$W/tree/hooks/$CORPUS_HK_DIR"; touch "$W/tree/hooks/$CORPUS_HK_DIR/$CORPUS_HK_A"; }
+set_hk05() { tree_reset; mkdir -p "$W/tree/repositories" "$W/tree/lost+found" "$W/tree/hooks/pre-receive"; }
+set_hk06() { set_hk05; touch "$W/tree/hooks/pre-receive/pre-receive"; }
+set_hk08() { set_hk01; touch "$W/tree/hooks/a1" "$W/tree/hooks/a2" "$W/tree/hooks/a3"; }
+set_hk11() { set_hk01; touch "$W/tree/hooks/Pre-Receive" "$W/tree/hooks/pre-receive.sample" "$W/tree/hooks/xpre-receive" "$W/tree/hooks/.hidden"; }
+set_hk12() { tree_reset; mkdir -p "$W/tree/repositories" "$W/tree/lost+found" "$W/tree/hooks"; touch "$W/tree/hooks/Pre-Receive"; }
+set_hk14() { set_hk01; mkdir -p "$W/outside/big"; touch "$W/outside/big/b1" "$W/outside/big/b2" "$W/outside/big/b3"; ln -s "$W/outside/big" "$W/tree/hooks/lnk"; }
+set_hkf1() { set_hk01; printf '3' > "$W/fail_find_hooks_f"; }
+set_hkf2() { set_hk01; printf '3' > "$W/fail_find_hooks_t"; }
+set_hkonly() { tree_reset; mkdir -p "$W/tree/hooks"; touch "$W/tree/hooks/pre-receive"; }
+set_hkf5() { set_hkonly; printf 'x' > "$W/wc_override_1"; }
+set_hkf6() { set_hkonly; printf '2\n' > "$W/wc_override_1"; }
+set_hkf7() { set_hkonly; printf 'x' > "$W/wc_override_2"; }
+set_hkf8() { set_hkonly; printf '0\n' > "$W/wc_override_2"; }
+set_hkf9() { set_hk01; touch "$W/bump_errors_on_hooks"; }
+hk_line_is() { line34_is "$HK_BASE hooks_pre_receive_f=$1 hooks_other_n=$2"; }
+caught_hk01() { hk_line_is 1 0; }
+caught_hk02() { hk_line_is 1 1; }
+caught_hk03() { hk_line_is 1 2; }
+caught_hk05() { hk_line_is 0 1; }
+caught_hk06() { hk_line_is 0 2; }
+caught_hk08() { hk_line_is 1 3; }
+caught_hk11() { hk_line_is 1 4; }
+caught_hk12() { hk_line_is 0 1; }
+caught_hk14() { hk_line_is 1 1; }
+caught_reason() { # <reason> — rc 33, nothing on stdout, the last stderr line is exactly that fixed reason line
+  [ "$RC" = 33 ] && [ ! -s "$W/out" ] && [ "$(tail -n 1 "$W/err")" = "wipe-assert: rc=33 reason=$1" ]
+}
+caught_hkf1() { caught_reason hooks_file_count_failed; }
+caught_hkf2() { caught_reason hooks_count_failed; }
+caught_hkf5() { caught_reason hooks_file_count_unparseable; }
+caught_hkf7() { caught_reason hooks_count_unparseable; }
+caught_hkf8() { caught_reason hooks_count_inconsistent; }
+caught_hkf9() { caught_reason errors_count_changed_by_listing; }
+caught_hk_argv() { # the argv record over the hooks subtree is exactly the two ruled finds
+  local f="$W/state/argv" t="$HK_TAB" re1 re2
+  re1="^find${t}[^${t}]*/mnt/hooks${t}-xdev${t}-mindepth${t}1${t}-maxdepth${t}1${t}-name${t}pre-receive${t}-type${t}f${t}-printf${t}x\$"
+  re2="^find${t}[^${t}]*/mnt/hooks${t}-xdev${t}-mindepth${t}1${t}-printf${t}x\$"
+  [ "$(grep -cF '/mnt/hooks' "$f")" = 2 ] && [ "$(grep -cE -e "$re1" "$f")" = 1 ] && [ "$(grep -cE -e "$re2" "$f")" = 1 ]
+}
+HK_F='find "$WA_MNT/hooks" -xdev -mindepth 1 -maxdepth 1 -name pre-receive -type f -printf x'
+HK_T='find "$WA_MNT/hooks" -xdev -mindepth 1 -printf x'
+mutant_row m-hk-name-glob "$HK_F" 'find "$WA_MNT/hooks" -xdev -mindepth 1 -maxdepth 1 -name '"'"'pre-receive*'"'"' -type f -printf x' set_hk11 pre caught_hk11
+mutant_row m-hk-name-caseless "$HK_F" 'find "$WA_MNT/hooks" -xdev -mindepth 1 -maxdepth 1 -iname pre-receive -type f -printf x' set_hk12 pre caught_hk12
+mutant_row m-hk-type-dropped "$HK_F" 'find "$WA_MNT/hooks" -xdev -mindepth 1 -maxdepth 1 -name pre-receive -printf x' set_hk05 pre caught_hk05
+mutant_row m-hk-depth-unbounded "$HK_F" 'find "$WA_MNT/hooks" -xdev -mindepth 1 -name pre-receive -type f -printf x' set_hk06 pre caught_hk06
+mutant_row m-hk-other-includes-fence 'HOOKS_OTHER_N=$((ht - hp))' 'HOOKS_OTHER_N="$ht"' set_hk02 pre caught_hk02
+mutant_row m-hk-other-is-flag 'HOOKS_OTHER_N=$((ht - hp))' 'HOOKS_OTHER_N=$(( (ht - hp) > 0 ))' set_hk08 pre caught_hk08
+mutant_row m-hk-total-not-recursive "$HK_T" 'find "$WA_MNT/hooks" -xdev -mindepth 1 -maxdepth 1 -printf x' set_hk03 pre caught_hk03
+mutant_row m-hk-total-follows-links "$HK_T" 'find -L "$WA_MNT/hooks" -xdev -mindepth 1 -printf x' set_hk14 pre caught_hk14
+mutant_row m-hk-flag-find-no-xdev "$HK_F" 'find "$WA_MNT/hooks" -mindepth 1 -maxdepth 1 -name pre-receive -type f -printf x' set_hk01 pre caught_hk_argv
+mutant_row m-hk-total-find-no-xdev "$HK_T" 'find "$WA_MNT/hooks" -mindepth 1 -printf x' set_hk01 pre caught_hk_argv
+mutant_row m-hk-find-prints-names "$HK_T" 'find "$WA_MNT/hooks" -xdev -mindepth 1 -printf '"'"'%f'"'"'' set_hk01 pre caught_hk_argv
+mutant_row m-hk-flag-find-failure-is-zero '-printf x | wc -c)" || die 33 hooks_file_count_failed' '-printf x | wc -c)" || true' set_hkf1 pre caught_hkf1
+mutant_row m-hk-total-find-failure-is-zero '-printf x | wc -c)" || die 33 hooks_count_failed' '-printf x | wc -c)" || true' set_hkf2 pre caught_hkf2
+mutant_row m-hk-flag-digit-check-dropped '      [[ "$hp" =~ ^[01]$ ]] || die 33 hooks_file_count_unparseable' '      :' set_hkf5 pre caught_hkf5
+mutant_row m-hk-flag-may-exceed-one '[[ "$hp" =~ ^[01]$ ]] ||' '[[ "$hp" =~ ^[0-9]+$ ]] ||' set_hkf6 pre caught_hkf5
+mutant_row m-hk-total-digit-check-dropped '      [[ "$ht" =~ ^[0-9]+$ ]] || die 33 hooks_count_unparseable' '      :' set_hkf7 pre caught_hkf7
+mutant_row m-hk-inconsistent-total-accepted '      [ "$ht" -ge "$hp" ] || die 33 hooks_count_inconsistent' '      :' set_hkf8 pre caught_hkf8
+# C5: the hooks read moves AFTER the errors_count re-read (a fault surfacing during the read is no longer covered)
+mutant_row m-hk-read-after-errors-recheck '    if [ "$HAS_HOOKS" = 1 ]; then
+      hp="$(' '    e1="$(wl_errs "$dm")" || die 33 errors_count_unreadable
+    [ "$e1" = "$e0" ] || die 33 errors_count_changed_by_listing
+    if [ "$HAS_HOOKS" = 1 ]; then
+      hp="$(' set_hkf9 pre caught_hkf9 \
+  '    e1="$(wl_errs "$dm")" || die 33 errors_count_unreadable
+    [ "$e1" = "$e0" ] || die 33 errors_count_changed_by_listing
+    wl_valid' '    wl_valid'
+mutant_row m-hk-fields-swapped ' hooks_pre_receive_f=$HOOKS_PRE_RECEIVE_F hooks_other_n=$HOOKS_OTHER_N"' ' hooks_other_n=$HOOKS_OTHER_N hooks_pre_receive_f=$HOOKS_PRE_RECEIVE_F"' set_hk02 pre caught_hk02
+mutant_row m-hk-flag-never-set 'HOOKS_PRE_RECEIVE_F="$hp"' ':' set_hk01 pre caught_hk01
+mutant_row m-hk-other-field-dropped ' hooks_other_n=$HOOKS_OTHER_N"' '"' set_hk08 pre caught_hk08
 mutant_row m18-lock-excluded-by-name '"$WA_MNT/repositories" -mindepth 1 -maxdepth 1 ! \( -type f \( -name '"'"'.*.init.lock'"'"' -o -name '"'"'.init.lock'"'"' \) \)' '"$WA_MNT/repositories" -mindepth 1 -maxdepth 1 ! -name '"'"'.*.init.lock'"'"' ! -name '"'"'.init.lock'"'"'' set_lockdir pre caught_37
 mutant_row m19-lostfound-repos-excluded-by-name '! \( -type d -name lost+found -empty \) -printf x | wc -c)" || die 33 repos_count_failed' '! -name lost+found -printf x | wc -c)" || die 33 repos_count_failed' set_lfrepos pre caught_37
 # A1 (2026-10-15): the store-root count and the id-bearing lock count.
@@ -1462,13 +1658,23 @@ if [ "$fail" -gt "$_pf" ]; then ok "H2: a refusal row against a clean host goes 
 else no "H2: a refusal row against a clean host stayed green"; fi
 
 # The strict-line helper itself is not neutered (a loosened regex or a dropped predicate goes RED here).
-_g34='wipe-assert: rc=34 reason=offlist top_d=3 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=7 offlist_n=0'
+_g34='wipe-assert: rc=34 reason=offlist top_d=3 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=7 offlist_n=0 hooks_pre_receive_f=0 hooks_other_n=0'
 if line34_ok "$_g34"; then ok "H3: a non-canonical good rc=34 line (lf_entries=7 offlist_n=0) is accepted"; else no "H3: a good rc=34 line was rejected"; fi
 if ! line34_ok "${_g34/has_hooks_d=0/has_hooks_d=2}"; then ok "H3: has_hooks_d=2 is rejected (the bit is 0 or 1)"; else no "H3: has_hooks_d=2 was accepted"; fi
 if ! line34_ok "$_g34 digest=0f0f"; then ok "H3: a trailing token is rejected"; else no "H3: a trailing token was accepted"; fi
 if ! line34_ok "${_g34/lf_entries=7/lf_entries=0}"; then ok "H3: offlist_n=0 with lf_entries=0 is rejected (nothing explains the refusal)"; else no "H3: an unexplained rc=34 line was accepted"; fi
 if ! line34_ok "${_g34/has_hooks_d=0/has_hooks_d=1}"; then ok "H3: has_hooks_d=1 with offlist_n=0 is rejected (the bit implies an off-list entry)"; else no "H3: a hooks bit without an off-list entry was accepted"; fi
 if ! line34_ok "${_g34/offlist_n=0/offlist_n=9}"; then ok "H3: offlist_n above the top-level entry count is rejected"; else no "H3: an impossible offlist_n was accepted"; fi
+_g34h='wipe-assert: rc=34 reason=offlist top_d=3 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=1 hooks_pre_receive_f=1 hooks_other_n=3'
+if line34_ok "$_g34h"; then ok "H3: a good hooks line (has_hooks_d=1, hooks_pre_receive_f=1, hooks_other_n=3) is accepted"; else no "H3: a good hooks line was rejected"; fi
+if ! line34_ok "${_g34h/hooks_pre_receive_f=1/hooks_pre_receive_f=2}"; then ok "H3: hooks_pre_receive_f=2 is rejected (0 or 1)"; else no "H3: hooks_pre_receive_f=2 was accepted"; fi
+if ! line34_ok "${_g34h% hooks_other_n=3}"; then ok "H3: a line missing hooks_other_n is rejected (exactly one of the two is no match)"; else no "H3: a line with one hooks field was accepted"; fi
+if ! line34_ok "${_g34h/ hooks_pre_receive_f=1/}"; then ok "H3: a line missing hooks_pre_receive_f is rejected"; else no "H3: a line missing hooks_pre_receive_f was accepted"; fi
+if ! line34_ok "${_g34h/ hooks_pre_receive_f=1 hooks_other_n=3/ hooks_other_n=3 hooks_pre_receive_f=1}"; then ok "H3: the two hooks fields out of order are rejected"; else no "H3: reordered hooks fields were accepted"; fi
+if ! line34_ok "$_g34h digest=0f0f"; then ok "H3: a token after hooks_other_n is rejected"; else no "H3: a trailing token after the hooks fields was accepted"; fi
+if ! line34_ok "${_g34h/hooks_other_n=3/hooks_other_n=x}"; then ok "H3: a non-digit hooks_other_n is rejected"; else no "H3: a non-digit hooks_other_n was accepted"; fi
+if ! line34_ok "${_g34h/has_hooks_d=1/has_hooks_d=0}"; then ok "H3: hooks_pre_receive_f=1 with has_hooks_d=0 is rejected (constant 0 without a hooks directory)"; else no "H3: a fence flag without a hooks directory was accepted"; fi
+if ! line34_ok "${_g34h/has_hooks_d=1/has_hooks_d=0}" && ! line34_ok "${_g34/hooks_other_n=0/hooks_other_n=1}"; then ok "H3: hooks_other_n>=1 with has_hooks_d=0 is rejected"; else no "H3: a hooks count without a hooks directory was accepted"; fi
 
 # ══════════════════════════════════════════════════════════════════════════════════════════
 # TIER B — the cutover verb
@@ -1537,7 +1743,7 @@ else no "B04 bounds differ: [$(paste -sd' ' "$TL/timeouts")]"; fi
 
 # rc 34: the host's last stderr line is relayed by the verb as one probe-stderr line, whole (this row guards the
 # passthrough filter in the verb, not the host script; the line is far below the 8192-byte cap, so it does not guard that).
-L34='wipe-assert: rc=34 reason=offlist top_d=3 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=1'
+L34='wipe-assert: rc=34 reason=offlist top_d=3 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=1 hooks_pre_receive_f=1 hooks_other_n=0'
 run_verb b34 - 34 "${V_PRE[@]}" SHIM_ERR="$L34"
 if grep -qxF "[git-data-cutover] probe-stderr: $L34" "$TL/out"; then ok "B04b the rc=34 diagnostic line survives the verb's stderr filter whole, behind one probe-stderr prefix"
 else no "B04b the rc=34 line did not pass through the verb: $(tr '\n' '|' < "$TL/out" | cut -c1-300)"; fi
@@ -1692,6 +1898,41 @@ if [ "${_narms:-0}" -ge 25 ]; then ok "P4 floor: the verb maps ${_narms} script 
 _covered=$(( ${#WORD[@]} + 3 ))
 if [ "$_covered" = "$_narms" ]; then ok "P5 the rc -> word rows cover every arm of the verb ($_covered of $_narms)"
 else no "P5 the verb has $_narms arms but $_covered rows"; fi
+# P8 (#10476, CLO C9): the rc=34 field list is ONE list in five places: RE_34 in this suite, the `say` line of the script,
+# the script header's `rc34-fields:` line, the runbook's grammar line, and the runbook's posting list; the runbook's definition
+# bullets name the last five. A change to one that is not made to the others goes red here.
+python3 - "$SCRIPT" "${BASH_SOURCE[0]}" "$RUNBOOK" > "$T/p8.out" 2> "$T/p8.err" <<'PY'
+import re, sys
+script = open(sys.argv[1]).read()
+suite = open(sys.argv[2]).read()
+rb = open(sys.argv[3]).read()
+def keys(txt, pat): return re.findall(pat, txt)
+re34 = re.search(r"^RE_34='([^']*)'$", suite, re.M).group(1)
+f_re = [k for k in keys(re34, r"\b([a-z_]+)=") if k not in ("rc", "reason")]
+say = re.search(r'say "wipe-assert: rc=34 reason=offlist ([^"]*)"', script).group(1)
+f_say = keys(say, r"([a-z_]+)=\$")
+hdr = re.search(r"^# rc34-fields: (.*)$", script, re.M).group(1).split()
+sec = rb.split("### Reading the exit-34 line", 1)[1].split("\n### ", 1)[0]
+gram = re.search(r"reads `wipe-assert: rc=34 reason=offlist ([^`]*)`", sec).group(1)
+f_gram = keys(gram, r"([a-z_]+)=<")
+post = re.search(r"copied verbatim from the `wipe-assert: rc=34` line, only these fixed fields: (.*?)\. These are counts", rb).group(1)
+f_post = keys(post, r"`([a-z_]+)`")
+bul = re.findall(r"^- `([a-z_]+)`:", sec, re.M)
+print("RE34", f_re)
+print("SAY", f_say)
+print("HDR", hdr)
+print("GRAM", f_gram)
+print("POST", f_post)
+print("BUL", bul)
+print("N", len(f_re))
+print("ALL_EQ", f_re == f_say == hdr == f_gram == f_post)
+print("BUL_TAIL", bul == f_re[-len(bul):] and f_re[-5:] == ["has_hooks_d", "lf_entries", "offlist_n", "hooks_pre_receive_f", "hooks_other_n"])
+PY
+if [ "$(sed -n 's/^ALL_EQ //p' "$T/p8.out")" = True ]; then ok "P8 RE_34, the script's rc=34 line, the script header list, the runbook grammar line and the runbook posting list name the same fields in the same order"
+else no "P8 the rc=34 field list differs between its five places: $(tr '\n' '|' < "$T/p8.out" | cut -c1-900) $(cat "$T/p8.err")"; fi
+if [ "$(sed -n 's/^BUL_TAIL //p' "$T/p8.out")" = True ]; then ok "P8 the runbook defines has_hooks_d, lf_entries, offlist_n, hooks_pre_receive_f and hooks_other_n, in that order, as the last five fields"
+else no "P8 the runbook's definition bullets differ from the last five fields: $(grep -E '^(BUL|RE34) ' "$T/p8.out" | tr '\n' '|')"; fi
+if [ "$(sed -n 's/^N //p' "$T/p8.out")" = 10 ]; then ok "P8 floor: ten fields on the rc=34 line"; else no "P8 floor: the field list is not ten long: $(grep '^N ' "$T/p8.out")"; fi
 # no test seam (ADR-214): neither file reads an env name that exists only for a test
 seams="$(grep -nE 'WIPE_ASSERT_(SEAM|TEST|ROOT|FAKE|SKIP)|_TEST_PIN' "$SCRIPT" "$CUTOVER" || true)"
 if [ -z "$seams" ]; then ok "P6 no test seam in the host script or the verb (ADR-214)"; else no "P6 a seam exists: $seams"; fi
@@ -1911,10 +2152,26 @@ DRVEOF
   lb_populate "$H_LOOP" 'mkdir -p repositories hooks && : > hooks/pre-receive'
   lb_run H "$H_LOOP"
   lb_expect H 34 'reason=offlist'
-  if [ "$(tail -n 1 "$LB/H.err")" = 'wipe-assert: rc=34 reason=offlist top_d=3 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=1' ]; then ok "C H the whole rc=34 line names the hooks directory and one off-list entry on a real image"
+  if [ "$(tail -n 1 "$LB/H.err")" = 'wipe-assert: rc=34 reason=offlist top_d=3 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=1 hooks_pre_receive_f=1 hooks_other_n=0' ]; then ok "C H the whole rc=34 line names the hooks directory, one off-list entry and a hooks directory holding exactly one regular file named pre-receive, on a real image"
   else no "C H the rc=34 line differs: [$(tail -n 1 "$LB/H.err")]"; fi
+  # I: a populated hooks directory on a real image: the flag, a nested directory, a file with a space in its name
+  ARMS_C=$((ARMS_C + 1))
+  lb_image i; I_LOOP="$LOOP"
+  lb_populate "$I_LOOP" 'mkdir -p repositories hooks/sub && : > hooks/pre-receive && : > "hooks/'"$CORPUS_HK_SP"'" && : > hooks/sub/f'
+  lb_run I "$I_LOOP"
+  lb_expect I 34 'reason=offlist'
+  if [ "$(tail -n 1 "$LB/I.err")" = 'wipe-assert: rc=34 reason=offlist top_d=3 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=1 hooks_pre_receive_f=1 hooks_other_n=3' ]; then ok "C I the whole rc=34 line counts pre-receive once and a nested directory, its file and a spaced name as three others on a real image"
+  else no "C I the rc=34 line differs: [$(tail -n 1 "$LB/I.err")]"; fi
+  # J: pre-receive as a symbolic link and a link out of hooks: neither is the flag, neither is followed
+  ARMS_C=$((ARMS_C + 1))
+  lb_image j; J_LOOP="$LOOP"
+  lb_populate "$J_LOOP" 'mkdir -p repositories hooks && ln -s /etc/hostname hooks/pre-receive && ln -s ../repositories hooks/lnk'
+  lb_run J "$J_LOOP"
+  lb_expect J 34 'reason=offlist'
+  if [ "$(tail -n 1 "$LB/J.err")" = 'wipe-assert: rc=34 reason=offlist top_d=3 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=1 hooks_pre_receive_f=0 hooks_other_n=2' ]; then ok "C J the whole rc=34 line reads 0 and 2 for two symbolic links on a real image"
+  else no "C J the rc=34 line differs: [$(tail -n 1 "$LB/J.err")]"; fi
   # floor
-  EXPECTED_ARMS_C=8
+  EXPECTED_ARMS_C=10
   if [ "$ARMS_C" -ne "$EXPECTED_ARMS_C" ]; then
     printf '[FATAL] anti-vacuity floor: %s loopback arms ran, expected exactly %s\n' "$ARMS_C" "$EXPECTED_ARMS_C" >&2; exit 1
   fi
@@ -1935,20 +2192,20 @@ fi
 # FLOOR — self-contained: bash builtins and this suite's own counters, reported by printf + exit and
 # never through ok()/no() (ADR-193). Each bound is a literal on the line directly above its `if`.
 # ══════════════════════════════════════════════════════════════════════════════════════════
-# 23 = the 19 reviewed rows + A125, A126 + the fifo and suffix hooks variants (measured, unprivileged, loopback skipped)
-EXPECTED_RC34_LINES=23
+# 41 = 23 (the 2026-10-18 rows) + 16 hooks-field worlds HK01-HK16 + the symlinkfull and upperfull variants (measured, unprivileged, loopback skipped)
+EXPECTED_RC34_LINES=41
 if [ "$RC34_LINES_CHECKED" -lt "$EXPECTED_RC34_LINES" ]; then
   printf '[FATAL] anti-vacuity floor: only %s rc=34 lines were checked for the strict shape, floor is %s\n' "$RC34_LINES_CHECKED" "$EXPECTED_RC34_LINES" >&2
   exit 1
 fi
-# 129 = 125 + the same 4 new refusal runs (measured, unprivileged, loopback skipped)
-EXPECTED_INVARIANT_RUNS=129
+# 156 = 129 + the 18 rc=34 worlds above that are new runs + HK17 (no hooks directory) + the 9 rc=33 worlds HKF1-HKF9 (measured, unprivileged, loopback skipped)
+EXPECTED_INVARIANT_RUNS=156
 if [ "$INVARIANT_RUNS" -lt "$EXPECTED_INVARIANT_RUNS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s host-script runs were checked for the output invariants, floor is %s\n' "$INVARIANT_RUNS" "$EXPECTED_INVARIANT_RUNS" >&2
   exit 1
 fi
-# 824 = executed assertions of an unprivileged run with the loopback tier skipped (the way the local gate runs)
-MIN_ASSERTIONS=824
+# 1079 = executed assertions of an unprivileged run with the loopback tier skipped (the way the local gate runs)
+MIN_ASSERTIONS=1079
 if [ "$executed" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s — rows were deleted, skipped, or the suite exited early\n' "$executed" "$MIN_ASSERTIONS" >&2
   exit 1
