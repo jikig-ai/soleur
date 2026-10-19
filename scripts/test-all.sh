@@ -5605,6 +5605,9 @@ if want_scripts; then
   # thresholds). Registered explicitly: scripts/followthroughs/*.test.sh is not in SUITE_GLOBS. A vacuous PASS
   # would let the soak window read clean on an unmeasured stream.
   run_suite "scripts/hosted-destroy-ask-window-9776" bash scripts/followthroughs/hosted-destroy-ask-window-9776.test.sh
+  # #7432 (Item I of #9217): exit-code harness for the JOBS-pin soak probe. Registered explicitly:
+  # scripts/followthroughs/*.test.sh is not in SUITE_GLOBS. A vacuous PASS would close #7432, and through it #7376.
+  run_suite "scripts/jobs1-stopgap-7432" bash scripts/followthroughs/jobs1-stopgap-7432.test.sh
   # #5863: exit-code harness for the outer-wrap soak follow-through (stub-curl
   # arms for verdict binding, freshness window, and HTTP classes). Registered
   # explicitly (orphan-suite class above) — its PASS authorizes promoting the
