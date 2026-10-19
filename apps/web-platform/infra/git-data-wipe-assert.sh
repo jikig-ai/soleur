@@ -378,7 +378,7 @@ wa_main() {
   wipe_listing() {
     local sb jb bs cow_bytes eh sz deps src got want ssb dm e0 e1 rn ln lk names_after hold_after w_after ro_after
     # HK_PR_F and HK_PR_SMALL are upper-case locals on purpose: the emitted fields are written from exactly these names,
-    # a spelling the suite's rows HK7 (the one say line) and HK8 (the closed set, which holds the literal hk_pr_small=$HK_PR_SMALL) pin.
+    # a spelling the suite's rows HK7 (the one say line) and HK8 (the closed set, which holds the HK_TAIL assignment line) pin.
     local ht nf al pr HK_PR_F HK_PR_SMALL
     wl_same
     sb="$(timeout 20 dumpe2fs -h "$DEV")" || die 33 dumpe2fs_failed

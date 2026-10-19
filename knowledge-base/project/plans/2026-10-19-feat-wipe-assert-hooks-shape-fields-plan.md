@@ -395,7 +395,7 @@ logs:
   where: GitHub Actions run log of the cutover workflow (gh run view <run> --log)
   retention: GitHub Actions log retention as configured for the repository; the setting was not read in this plan
 discoverability_test:
-  command: grep -cF 'hk_pr_small=$HK_PR_SMALL' apps/web-platform/infra/git-data-wipe-assert.sh
+  command: grep -c 'hk_pr_small=.HK_PR_SMALL' apps/web-platform/infra/git-data-wipe-assert.sh
   expected_output: 1
 ```
 
