@@ -199,6 +199,36 @@ class RegistryMetadata(unittest.TestCase):
                 adapter.request('https://foreign.invalid/secret', {'Authorization': TOKEN}, timeout=10, maximum_bytes=1)
             self.assertEqual(connections.call_count, before)
 
+    def test_bound_ca_preserves_all_certificates_and_ignores_only_valid_comments(self):
+        second = CA.replace(b'SYNTHESIZED-CA-FIXTURE', b'SYNTHESIZED-SECOND-CA')
+        annotated = b'# synthetic caf\xc3\xa9 comment\n\n' + CA + b'# another comment\n' + second + CA
+        for raw, projected in ((annotated, CA + second + CA),
+                               (annotated.replace(b'\n', b'\r\n'), (CA + second + CA).replace(b'\n', b'\r\n'))):
+            context = {**self.context, 'ca_sha256': sha(raw)}
+            manifest = metadata.action_manifest(retained_image=IMAGE, **context)
+            with self.subTest(crlf=b'\r\n' in raw), patch.object(metadata.ssl, 'SSLContext') as contexts, \
+                    patch.object(metadata.http.client, 'HTTPSConnection') as connections:
+                metadata.HTTPSAdapter(manifest, raw, manifest_sha256=sha(canonical(manifest)))
+                contexts.return_value.load_verify_locations.assert_called_once_with(cadata=projected.decode('ascii'))
+                contexts.return_value.load_default_certs.assert_not_called()
+                contexts.return_value.set_default_verify_paths.assert_not_called()
+                connections.assert_not_called()
+        malformed = [b'# no certificates\n', b'outside payload\n' + CA,
+                     b'# invalid utf8 \xff\n' + CA, CA.replace(b'CA-FIXTURE', b'CA-\xc3\xa9'),
+                     CA.replace(b'-----END CERTIFICATE-----', b''),
+                     CA.replace(b'SYNTHESIZED-CA-FIXTURE', b'-----BEGIN CERTIFICATE-----'),
+                     b'-----END CERTIFICATE-----\n' + CA,
+                     CA.replace(b'BEGIN CERTIFICATE', b'BEGIN TRUSTED CERTIFICATE')]
+        for raw in malformed:
+            manifest = metadata.action_manifest(retained_image=IMAGE, **{**self.context, 'ca_sha256': sha(raw)})
+            with self.subTest(raw_sha256=sha(raw)), patch.object(metadata.ssl, 'SSLContext'), \
+                    patch.object(metadata.http.client, 'HTTPSConnection') as connections, self.assertRaises(Refused):
+                metadata.HTTPSAdapter(manifest, raw, manifest_sha256=sha(canonical(manifest)))
+            connections.assert_not_called()
+        with patch.object(metadata.ssl, 'SSLContext') as contexts, self.assertRaises(Refused):
+            metadata.HTTPSAdapter(self.manifest, annotated, manifest_sha256=sha(canonical(self.manifest)))
+        contexts.assert_not_called()
+
     def test_https_adapter_never_reads_redirect_body_and_refuses_encoding_or_size(self):
         for status, pairs, chunks, reason in (
                 (307, [('Location', 'https://unapproved.invalid/private')], [], None),

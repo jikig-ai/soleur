@@ -508,3 +508,52 @@ supported CLI flags before constructing log commands. The executed aggregate
 log confirms DRAFT_LIGHT and its intentional full-battery-owed failure.
 A source search guessed `test_prepare.py`, which does not exist; scoped file
 discovery identified `test_preparation.py`. Use discovered test filenames.
+
+### Registry setup refusal and CA projection correction — 2026-10-19
+
+CTO and security independently closed the P1/P2 publication findings at
+`8ff7ad82c2db45c14255d20edb4c3d77f5006bc4`. The CTO reviewed the actual
+registry manifest `42d1b2dbba51d0daaf6ab4f7873f1d3646278bf9e1b6a1cb047f01013b4d99a7`,
+and the exact bounded command received fresh approval and ran once. It
+returned the fixed incomplete refusal during setup. Its marker, receipt,
+platform manifest and Config files remain absent; do not manufacture an
+action receipt or reuse that approval. The runner digest was
+`59590c5331e1d45f8cce05d8776e0537f9106ba4afc609f1f55f979f7b832950`.
+
+A separate file-only diagnostic reproduced `UnicodeDecodeError` at the
+constructor's whole-bundle ASCII decode. The bound 185,311-byte public CA
+bundle has 121 certificate blocks and eight non-ASCII bytes in a UTF-8
+comment, with no non-ASCII certificate content. Source/dependency/manifest/
+output checks passed before TLS construction; no request method, marker or
+collector ran in this setup path. Its raw CA hash remains
+`8c97794a899a32666593979dc7adfaec8bda2b420eb092ff0d987e44ad0bf6ea`.
+
+Ruled by CTO agent: preserve the entire raw-byte hash and project every
+certificate block in order, including duplicates. Outside blocks accept only
+ASCII blank lines and valid UTF-8 `#` comments; reject other payload, malformed
+or nested delimiters and non-ASCII certificate content. The explicit TLS
+context loads only this ASCII PEM projection and still delegates certificate
+encoding validation to SSL. No CAfile copy, ambient trust or trust-policy
+change is introduced. The new synthetic discriminator first failed with
+six failures and four errors on the original source. The corrected registry
+suite passes all 14 methods, covering LF/CRLF, ordered duplicates, malformed
+input, full raw-hash binding and absence of default-trust/connection calls.
+A separate local construction check loads all 121 original certificates,
+preserves every block and opens zero connections. Canonical Ruff passes with
+44 baseline findings and 113 scanned files. Pushed focused review and new
+source/export/action bindings are still required before fresh exact-action
+approval. All operational and shipping holds persist.
+
+The settled `8ff7ad82c2` CI additionally reports an `e2e` failure: 51 cases
+failed after localhost:3100 refused connections; 48 passed and one skipped.
+The root cause is not yet established, and it is not classified as intentional
+or pre-existing. The separate aggregate `test` draft gate remains expected.
+No workflow rerun or local browser/build was authorized. Read the existing
+job log and inspect source; keep the failure open until attributed.
+Log retrieval initially emitted a truncated result; capture large logs to a
+private local file and print bounded matching excerpts. A guessed ratchet
+shell filename failed; scoped discovery found `scripts/lint-ratchet.py`.
+The log CLI required its advertised escape-sequence option, and sandboxed
+mise refused a later invocation; the exact approved read-only retrieval
+succeeded. A dependent search against the failed producer's empty file had
+no evidentiary value. Inspect each producer status before reading its output.

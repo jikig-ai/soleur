@@ -113,18 +113,49 @@ class BoundaryFailure(Refused):
         self.status = status if type(status) is int and 100 <= status <= 599 else None
 
 
+def _certificate_pem(raw):
+    """Preserve ordered PEM blocks; exclude only blank lines and UTF-8 comments."""
+    begin, end = b'-----BEGIN CERTIFICATE-----', b'-----END CERTIFICATE-----'
+    selected, inside, count = [], False, 0
+    try:
+        for line in raw.splitlines(keepends=True):
+            content = line[:-2] if line.endswith(b'\r\n') else line[:-1] if line.endswith(b'\n') else line
+            if not inside:
+                if content == begin:
+                    inside = True
+                    selected.append(line)
+                elif not content.strip(b' \t'):
+                    continue
+                elif content.startswith(b'#'):
+                    content.decode('utf-8')
+                else:
+                    raise Refused(ERROR)
+            else:
+                content.decode('ascii')
+                require(content == end or b'-----' not in content, ERROR)
+                selected.append(line)
+                if content == end:
+                    inside = False
+                    count += 1
+        require(not inside and count > 0, ERROR)
+        return b''.join(selected).decode('ascii')
+    except UnicodeError:
+        raise Refused(ERROR) from None
+
+
 class HTTPSAdapter:
     """No ambient trust, proxy, account credentials or connections at construction."""
     def __init__(self, manifest, ca_bytes, *, manifest_sha256, clock=time.monotonic):
         checked_manifest(manifest, manifest_sha256)
         require(type(ca_bytes) is bytes and 0 < len(ca_bytes) <= 1024**2 and
                 sha(ca_bytes) == manifest['context']['ca_sha256'], 'Exact CA bundle bytes required')
+        certificates = _certificate_pem(ca_bytes)
         self.plan, self.clock = copy.deepcopy(manifest['actions']), clock
         self.context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         self.context.check_hostname = True
         self.context.verify_mode = ssl.CERT_REQUIRED
         self.context.minimum_version = ssl.TLSVersion.TLSv1_2
-        self.context.load_verify_locations(cadata=ca_bytes.decode('ascii'))
+        self.context.load_verify_locations(cadata=certificates)
         self.context.set_alpn_protocols(['http/1.1'])
 
     def request(self, url, headers, *, timeout, maximum_bytes):

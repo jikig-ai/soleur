@@ -2130,3 +2130,22 @@
   13 registry methods pass; canonical Ruff passes against main's 44-finding
   baseline/113-file census. Pushed independent recheck remains required.
   No registry action manifest, network operation or new approval exists.
+- At pushed `8ff7ad82c2db45c14255d20edb4c3d77f5006bc4`, both focused
+  reviewers closed P1/P2. CTO reviewed the actual registry manifest
+  `42d1b2dbba51d0daaf6ab4f7873f1d3646278bf9e1b6a1cb047f01013b4d99a7`;
+  its exact command was approved once and stopped during TLS setup with the
+  fixed incomplete refusal. Marker, receipt and metadata files remain absent.
+  That approval is consumed. File-only reproduction identified whole-CA ASCII
+  decoding of a UTF-8 comment, before any network request or collector call.
+- CTO ruled strict PEM projection after hashing the entire original bundle.
+  Preserve all blocks/order/duplicates, ignore only ASCII blank lines and
+  valid UTF-8 comments outside blocks, refuse other/malformed content and
+  keep explicit trust. The synthetic case ran RED (six failures/four errors);
+  all 14 registry methods now pass. Local TLS construction loaded all 121
+  original certificates with zero connections. Ruff passes with 44 existing
+  baseline findings/113 files. New pushed review, source/export bindings,
+  actual manifest review and fresh exact-action approval remain required.
+- Settled CI at `8ff7ad82c2` has 82 passes, 14 skips and two failures:
+  expected draft `test` plus unattributed `e2e` (51 connection-refused cases,
+  48 passes, one skip). No rerun or local browser/build occurred. Canonical
+  monitor also reports BEHIND; sync after committing the current correction.

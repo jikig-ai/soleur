@@ -33,7 +33,7 @@ defines local `jwt_secret`, `anon_key` and `service_role_key` fields;
 the [pinned service launcher](https://github.com/supabase/cli/blob/v2.84.2/internal/start/start.go)
 composes that local configuration. This source evidence does not establish an
 executed stack, a TLS proxy, or successful login. Fixture material expires on
-October 19, 2026; a later attempt requires a freshly reviewed contract.
+October 26, 2026; a later attempt requires a freshly reviewed contract.
 
 The API policy and Unix proxy are testable boundary components. Resource names
 are reservations. Container and network operations resolve successfully returned
@@ -245,6 +245,11 @@ Its explicit execution requires fresh approval for the reviewed exact command.
 Three fixed GETs acquire one anonymous bearer token in memory, then the retained
 platform manifest and Config blob. URLs, headers, scope, CA-bundle bytes,
 source/components and private outputs are bound in a file-only manifest.
+Hash the entire original CA bundle before projecting its certificate blocks
+for TLS loading. Preserve their bytes, order and duplicates; outside blocks
+accept only ASCII blank lines and valid UTF-8 `#` comments. Other payload,
+malformed delimiters and non-ASCII certificate content refuse. The explicit
+TLS context loads only that projection, with no ambient trust fallback.
 There is no Docker socket/executable, credential/config lookup, shared cache,
 layer fetch, unpacking or import. Redirects, challenges, retries and alternate
 hosts are unavailable. Verify raw content digests before interpretation;
