@@ -1290,9 +1290,9 @@ here, and #10136 stays open. **No step below uses SSH**: every read is the Bette
 |---|---|---|
 | TLS listener | `soleur-inngest-tls.service` on the Inngest host (stunnel4) | `10.0.1.40:8443` forwards to `127.0.0.1:8288`; TLS 1.2 or higher. `inngest-server` does **not** depend on it, so a dead listener never takes the scheduler down. |
 | Certificate | `apps/web-platform/infra/inngest-tls.tf` | One Terraform cert (ECDSA P-256, 10 years, `CA:FALSE`, SAN `IP:10.0.1.40` only, `prevent_destroy`) feeds three Doppler copies: `INNGEST_TLS_KEY` and `INNGEST_TLS_CERT` in `soleur-inngest/prd`, `INNGEST_TLS_CA` (base64) in `soleur/prd`. |
-| CA on web hosts | `/etc/soleur/inngest-ca.pem` | Written and validated by `ci-deploy.sh` before every `docker run`; mounted read-only with `NODE_EXTRA_CA_CERTS`. `NODE_TLS_REJECT_UNAUTHORIZED` is pinned **absent** everywhere. `/etc/soleur` is `root:deploy 1775` and in the webhook unit's `ReadWritePaths` (`-/etc/soleur`), so the deploy user can write here but not replace root's files. If a deploy reports `ca_unwritable` or `write_failed`, the directory mode or the unit's path list has drifted from what `terraform_data.infra_config_handler_bootstrap` (web-1) and `terraform_data.deploy_pipeline_fix_web2` (web-2) set. |
+| CA on web hosts | `/mnt/data/inngest-link/inngest-ca.pem` (bind-mounted at `/etc/soleur/inngest-ca.pem` in the container) | Written and validated by `ci-deploy.sh` before every `docker run`; mounted read-only with `NODE_EXTRA_CA_CERTS`. `NODE_TLS_REJECT_UNAUTHORIZED` is pinned **absent** everywhere. `/mnt/data` is in the webhook unit's `ReadWritePaths` and deploy-owned; `ci-deploy.sh` creates `/mnt/data/inngest-link` (and cloud-init does on a fresh host). If a deploy reports `ca_unwritable` or `write_failed`, check ownership of `/mnt/data` on that host. |
 | Flag | Doppler `soleur/prd` `INNGEST_LINK_TLS` | Terraform-managed (`doppler_secret.inngest_link_tls`, count-gated, absent by default). Absent = legacy http. `1` = https, fail-closed. `pending:<epoch>` = https inside a 30-minute lease, then http. Any other value fails the deploy. |
-| Resolver | `resolve_inngest_link` in `ci-deploy.sh` | The single place the scheme is chosen. Writes `/etc/soleur/inngest-link.env` for the probes. |
+| Resolver | `resolve_inngest_link` in `ci-deploy.sh` | The single place the scheme is chosen. Writes `/mnt/data/inngest-link/inngest-link.env` for the probes. |
 | Flip workflow | `.github/workflows/inngest-link-flip.yml` | Dispatch-only; `action=flip` or `action=off`. |
 | Counters | nft `legacy_8288` and `tls_8443` in `table inet soleur_inngest` | `legacy_8288` counts packets on the plaintext listener (cumulative since boot, legitimately non-zero before the flip); `tls_8443` is the positive control. |
 | Telemetry | stage `tls-health`, every 5 minutes | Read it with the Better Stack query script (below). |
@@ -1326,9 +1326,12 @@ gh workflow run inngest-link-flip.yml -f action=off
 ([canary-probe-set.md](canary-probe-set.md), Layer 5) and both prod swaps, then applies `1`. Each flag change is a Tier-B
 `apply_target` job under `environment: infra-privileged` (about 2 minutes each, three per flip), because the flag is a Terraform-managed
 secret and no narrower Doppler write credential exists for `soleur/prd`. The `confirm` input is a typo-guard, **not** the
-authorization: the authorization for a flag write is the owner's own dated go (act A3 below). If the run fails or is cancelled, a
-best-effort step applies the flag-absent baseline and redeploys; if `infra-privileged` ever requires a reviewer who is not there, that
-step blocks, and the **30-minute lease is the real control**.
+authorization: the authorization for a flag write is the owner's own dated go (act A3 below). If the run fails or is cancelled
+after the first flag write, a best-effort step applies the flag-absent baseline and redeploys (a typo-guard or idle-guard refusal
+never reaches it); if `infra-privileged` ever requires a reviewer who is not there, that step blocks. The 30-minute lease bounds only
+how long a stuck `pending` can make NEW deploys resolve https: a running container keeps the `INNGEST_BASE_URL` it was started with
+until it is redeployed. The redeploy is tracked through `dispatch-web-redeploy/track.sh`, which reads web-1 frames only, so web-2's
+swap and the scheme it resolved are **not verified from CI**; the script's last line says so.
 
 ### Rollback
 
@@ -1432,7 +1435,6 @@ than a few hours pass `--limit 1000` or more; the default of 100 silently keeps 
 | `bind`, `listener` | `listener=0` means nothing is bound on `:8443`; this also emits the crit marker `SOLEUR_INNGEST_TLS_REFUSED` (reasons `listener_down`, `cert_expiring`), which the existing `monitor_send_failed` alert pages on |
 | `served_sha256`, `cert_sha256` | the fingerprint the live handshake returns and the one on disk; they must be equal, and equal to the Terraform certificate (A1 compares them) |
 | `notafter_days` | days to expiry; about 3650 after the host replace; under 90 pages |
-| `hs_fail_15m` | stunnel handshake failures in the last 15 minutes: the only host-side signal that a web client rejects the CA |
 | `legacy_8288_packets`, `tls_8443_packets` | cumulative nft packet counters **since boot**. Only the **delta from the baseline row** means anything; a non-zero legacy value before the flip is normal |
 | `nft8443_sha256`, `nft_rules` | fingerprint of the `8443` lines and a rule count, used as the measured nftables re-read |
 | `boot_id` | first 8 characters of the kernel boot id; a change means a reboot, the counters reset and the soak clock restarts |
@@ -1445,9 +1447,10 @@ days-left follow-through. Nothing pages on a missing row by ruling.
 The certificate is valid for 10 years with no rotation cron; the warning is `notafter_days < 90`. **Re-minting forces two things**:
 every web host must redeploy (the CA file comes from `INNGEST_TLS_CA` at deploy time, and `NODE_EXTRA_CA_CERTS` is read once at
 process start, so a CA change needs a container restart, not a reload), and the Inngest host must be replaced (the key and
-certificate are fetched at the unit's start from a template that is replace-only). The CA file may hold **two certificates**
-(the validator accepts one or two blocks), so the safe order is: publish the old and new certificates together in the CA file,
-redeploy every web host, replace the Inngest host, then drop the old certificate at the next deploy. Do not use `early_renewal_hours`:
+certificate are fetched at the unit's start from a template that is replace-only). The CA file holds **exactly one certificate**
+(the validator refuses a bundle, because every certificate in `NODE_EXTRA_CA_CERTS` is trusted for all outbound TLS), so there is no
+overlap window: the safe order is to run `inngest-link-flip.yml -f action=off`, publish the new certificate, replace the Inngest host,
+redeploy every web host, then flip again. Between the host replace and the web redeploy an https fleet would fail closed. Do not use `early_renewal_hours`:
 it would plan a replace that `prevent_destroy` blocks and fail every later merge apply once inside the window.
 
 ### Key rotation order (A5)

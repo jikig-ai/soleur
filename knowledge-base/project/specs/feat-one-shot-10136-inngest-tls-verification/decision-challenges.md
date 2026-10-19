@@ -52,3 +52,7 @@ authorised; none of them is a technical question.
   (placeholder file); no Inngest host replace, no `:8288` change.
 - Operator rows O1-O5 are the only owner-facing items; none asks the owner a technical question.
 - No Not Yet Specified (fog) candidates.
+
+## Addendum 2026-10-19 (#10136)
+
+Superseding D3's path: CTO design-pass ruling moved the CA file and link env from `/etc/soleur` to `/mnt/data/inngest-link/` (deploy-writable without touching `webhook.service`, the installer pin or the host provisioners), simplified the CA validator to one certificate, not expired, no `CA:TRUE`, and removed the post-write re-hash. The in-container path and `NODE_EXTRA_CA_CERTS` are unchanged.

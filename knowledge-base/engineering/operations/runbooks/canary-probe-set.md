@@ -120,7 +120,7 @@ chose the legacy link (flag absent): the default path is the old `http://10.0.1.
 4. **Counters are read only after both prod swaps complete.** Until the old prod container is drained it still dials `:8288`,
    so a `legacy_8288` read taken earlier is contaminated. T for the soak is the last prod swap plus the old-container drain.
 5. **Failure reads (no SSH):** the failed release run's log carries the `::error::` line with the failing check; the host-side
-   `tls-health` row shows `hs_fail_15m` rising when a client rejects the CA. See
+   `tls-health` row carries no handshake-failure counter; a rejected CA shows as the canary check failing. See
    [inngest-server.md](inngest-server.md) section "Link TLS (#10136)".
 6. **A broken gate blocks ordinary releases while the flag is on** (the resolver fails the deploy rather than downgrade to http).
    Rollback: `inngest-link-flip.yml` with `action=off`, then a redeploy.
