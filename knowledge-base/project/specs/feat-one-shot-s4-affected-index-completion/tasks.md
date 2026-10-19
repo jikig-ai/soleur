@@ -18,6 +18,27 @@ Every PR body ends `Ref #9729` and `Ref #10448` (never a closing keyword) and qu
 - 1.7 Raise the "human-written" wording on #10448 in the PR text (agent-drafted reasons, line anchors, reviewed as diff lines)
 - 1.8 Carry this plan, `tasks.md` and `decision-challenges.md` in PR1; run the replay suite and `bash scripts/lint-orphan-test-suites.sh`
 
+### PR1 review round 1 (CTO rulings 29-34, applied on this branch before merge)
+
+- R1.1 `normalise()` single boundary definition (row 33); regex, `boundary()` and the test share it; fixtures for `\0`, `\x09`, `\011`, `\u0009`, `\a`, `\e`, `\033[0m<path>` (declared drop)
+- R1.2 `git ls-files -z`; remove `len(f) > 6`; `BUN_TEST` superset (mjs, cjs, mts, cts) and bunfig `pathIgnorePatterns`; negatives (`x.test.ts.snap`, `latest.ts`)
+- R1.3 `not-a-gap` stale rows (row 30); unreadable directory-suite member is `unaudited` with the file named (row 31)
+- R1.4 extract `audit_census` and `load_rows`; keep line numbers (blank-replace comments, split on newline only); `--all-refs` prints `ref<TAB>suite<TAB>path<TAB>file:line<TAB>anchor/ordinal<TAB>text`
+- R1.5 tests: an independent operation-count instrument (a floor and an upper bound, widths 40 versus 4000 top-level names), a preceding-character table, `boundary()` mutants, `mutant_outcome` crash-is-not-a-kill, empty-reason and comment-line accept fixtures, an old-scan oracle fixture asserting new is a subset of old
+- R1.6 error text: name the field, say the 3-column format is retired; OSError to ReadError; stderr note for a missing `--accept` path
+- R1.7 commit `receipts/audit-differential.py` (the regenerator) and regenerate the receipt per occurrence
+- R1.8 runbook note for the new 5-column accept grammar, `plugins/soleur` audited, `stale=`; spike.md arithmetic; row 7 numbers
+
+## Phase 1b: PR1b - audit reach (mandatory, before PR2 and PR3; rulings 29, 33)
+
+- 1b.1 Failing tests first (Guard 2 rows for each item below, mutation-proven, with negative controls for the declared limits)
+- 1b.2 Scan every existing tracked file listed in the row `pats` (files only, memoised per file), plus the suite inputs
+- 1b.3 Comment stripping by extension, blanks replace stripped lines, newline-only splitting
+- 1b.4 Resolve `$(dirname "$0")/`, `$SCRIPT_DIR/`, `$DIR/` source operands against the including file for any extension, depth 8 as the selector
+- 1b.5 Credit an edge only if `_diff_edge_hit` would: parity fixture per edge kind (exact, dir, well-formed glob, malformed glob, raw non-caret entry)
+- 1b.6 Report the new `SOLEUR_PR_AFFECTED_AUDIT` line; if PR1b adds more than 622 pairs re-split PR4 and PR5 by gap class; more than 1,244 stops the series for a re-ruling
+- 1b.7 Reach is frozen from PR3 to PR5; open a deferral issue for the declared limits that need an owner (RUNNER_TRIGGERS premise, runner-declined suites, directory reads)
+
 ## Phase 2: PR2 (conditional) - boundary precision
 
 - 2.1 Must land BEFORE PR3. Open only if memoisation alone met the 30 s target AND the dry run shows the rule drops at least 30 gap pairs; otherwise handle those pairs as accept rows in Phase 4/5
@@ -55,3 +76,4 @@ Every PR body ends `Ref #9729` and `Ref #10448` (never a closing keyword) and qu
 - No edit to `scripts/ci-pr-selection.sh`, `scripts/required-checks.txt`, `.github/workflows/ci.yml`, the `CI_PR_AFFECTED` variable or PR D files (`git diff origin/main...HEAD --stat -- <paths>` prints nothing)
 - No commit identity `s@example.invalid`; `scripts/test-all-orphan-log-retention` red alone is the known flake, re-run it
 - Re-check `gh pr view 10389 --json files` for overlap at the start of each PR
+- 3.9 (review round 1, rulings 29 and 32) PR3 floors: rows printed equal `AFFECTED_SUMMARY of=`; malformed or space-prefixed rows are counted, not skipped; a fixture pinning what a registration-only diff selects; a non-blocking `oracle-inputs-changed:` line; every input from the PR tree and only the baseline growth rule reads the merge base; the ADR-276 amendment lists the declared limits (dynamic names, directory reads, ADR-262-gated suites, registration-only and staged diffs, bun helpers and bunfig preload, `\033` drops, block-comment over-report) and calls the audit necessary but not sufficient

@@ -34,8 +34,8 @@ one-hop library texts read once. Timed over the audit's 526 file-backed suites (
 | old scan inside the differential runs (heavier load) | 76.7 s to 86.6 s |
 | refs found | prototype 2,173 (word-character rule only) versus 2,176 old; the 3 missing were printf `\t` escapes, kept in the committed rule, which then matches the old scan exactly (receipts/audit-differential.tsv) |
 
-Target: 30 s or less. Met with a factor of about 17 to 30. Implication: memoisation plus the component index alone meets the target, so
-the left/right boundary rule is NOT needed for speed and moves to the conditional precision PR (PR2). The PR1 dry run of PR2's right
+Target: 30 s or less. Met with a factor of about 17 to 21 (target over new); the old scan was about 29 to 38 times slower than the new one. Implication: memoisation plus the component index alone meets the target, so
+the left/right boundary rule is NOT needed for speed and is, apart from the left boundary this PR already ships, the conditional precision PR (PR2, right boundary only). The PR1 dry run of PR2's right
 boundary (next character not `[A-Za-z0-9_-]`) on the new gap pairs drops 4 pairs (2 of them only because the dry run ignores the printf
 escape rule), against the threshold of 30: PR2 is not opened; those pairs become declared edges or accept rows in PR4 and PR5.
 

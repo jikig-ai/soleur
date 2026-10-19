@@ -68,8 +68,13 @@ a re-run on a later tree will not print 190). The receipts are in the PR C spec 
 All of these, in this order:
 
 1. The audit exits 0: `gap_suites=0` and `unaudited=0` after the human exemptions in an `--accept` file (one row per exempted name,
-   `suite<TAB>path-or-*<TAB>false-positive: <reason>`, the reason mandatory; the one directory suite `plugins/soleur` is `unaudited` until
-   the audit reads it or a `*` row accepts it). `unaudited` rows must be READ or accepted by a human, never argued away.
+   `suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason>`, or `suite<TAB>*<TAB>-<TAB>-<TAB>false-positive: <reason>` for a
+   suite the audit cannot read at all; the reason is mandatory. The anchor is the first 12 hex of sha256 over the source line with its
+   whitespace collapsed (`" ".join(line.split())`), the ordinal counts the lines of that normalised text in the suite file then its
+   sourced libraries; `--all-refs` prints both. A row whose anchor matches no live line, or whose pair is no longer a gap, is `stale` and
+   fails the audit. The 3-column row of earlier revisions is retired and exits 2. The directory suite `plugins/soleur` is now audited
+   (its bun-discoverable test files are scanned); a tracked file that cannot be read makes its suite `unaudited` and no `*` row accepts
+   it). `unaudited` rows must be READ or accepted by a human, never argued away.
 2. A ratchet that fails on any suite naming an undeclared tracked path is a **required** CI check.
 3. The escape replay, the saving and the reader audit are re-run on a fresh window (section 4) and the go/no-go is re-ruled.
 
@@ -87,8 +92,8 @@ python3 -I scripts/ci-pr-affected-replay.py audit --root /var/tmp/s4-audit --all
 git worktree remove --force /var/tmp/s4-audit
 ```
 
-`audit` prints `gap` and `unaudited` lines and `SOLEUR_PR_AFFECTED_AUDIT suites=… always_on=… audited=… unaudited=… gap_suites=…
-gap_refs=… accepted=…`. It exits 0 only when no gap and no unaudited suite remain; `gap_suites=0` beside `unaudited>0` is not a clean
+`audit` prints `gap`, `unaudited` and `stale` lines and `SOLEUR_PR_AFFECTED_AUDIT suites=… always_on=… audited=… unaudited=… gap_suites=…
+gap_refs=… accepted=… stale=…` (a stale row also exits 1). It exits 0 only when no gap and no unaudited suite remain; `gap_suites=0` beside `unaudited>0` is not a clean
 audit (a suite the audit never read is not a suite with no gaps). `always_on` suites run on every diff and are exempt. The audit sees literal path names only: a path assembled from a variable, or read through a helper the audit does not follow, is invisible to it, so `gap_suites=0` is a lower bound, never proof of completeness. Edges are read with
 the selector's own grammar (`^dir/` prefix, `^file` exact, `^glob:` bash glob), not as regexes. Tally the most frequent undeclared paths
 from the `--all-refs` output (the default prints only the first six per suite).

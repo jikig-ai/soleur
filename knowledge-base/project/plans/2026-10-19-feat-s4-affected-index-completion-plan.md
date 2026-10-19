@@ -65,7 +65,7 @@ heavy tail `scripts/test-affected-derive` 483, `.claude/hooks/grep-q-pipe-guard.
 611 refs in five suites). Most frequent paths: `README.md` 40 suites, `AGENTS.md` 16, `AGENTS.rules.md` 14,
 `.claude/settings.json` 14, `package.json` 13, `.gitignore` 12, `.github/workflows/ci.yml` 12,
 `scripts/betterstack-query.sh` 10. The one unaudited suite is the directory suite `plugins/soleur` (`^plugins/soleur/`);
-the 1,108 figure EXCLUDES the references the directory-suite scan will add (about 315 test files), so PR1 reports the
+the 1,108 figure EXCLUDES the references the directory-suite scan will add (about 100 bun-discoverable test files; row 31), so PR1 reports the
 new total and a re-split trigger (see PR1 step 4).
 
 ## Research Reconciliation: Spec vs. Codebase
@@ -132,6 +132,7 @@ All technical forks were ruled by the CTO agent on 2026-10-19 in two rounds (eac
 6. Floors are structural: the selector's `AFFECTED_SUMMARY` total equals the count of rows it printed, `fallback=none`, suite / audited-suite / tracked-file counts nonzero, tracked-file count equals `git ls-files`, and a planted control suite is flagged. Exit codes: 0 clean, 1 drift or vacuity, 2 infrastructure (a `ReadError` and any unexpected error map to 2 inside `ratchet`, never 3 or 4).
 7. `plugins/soleur`: audit its test files; the ratchet rejects `*` rows (an unaudited suite is always a failure).
 8. ADR: a dated `## Amendment` to ADR-276 in the ratchet PR (non-activating; supersedes by subject the item 5 clause that `plugins/soleur` "needs a `*` row"), a Stage-status line, and a closing dated line in the last PR; no new ADR.
+9. Review round 1 (rows 29-34): a new mandatory PR1b carries the audit-reach fixes (selector `pats` closure, comment stripping by extension, dirname/SCRIPT_DIR hops, edge-parity with `_diff_edge_hit`); reach is frozen from PR3 to PR5; the declared limits (runner-declined suites, directory reads, variable-built names, bun helpers and preload, registration-only and staged diffs) go in the ADR-276 amendment and the audit is described as literal-name completeness over the selector closure, necessary but not sufficient. The boundary is one `normalise()` plus previous-character-not-a-word-character; stale accept rows include `not-a-gap`; an unreadable directory-suite member is `unaudited` naming the file (exit 1); PR3 reads every oracle input from the PR tree and prints `oracle-inputs-changed:`.
 
 ## Implementation Phases
 
@@ -143,9 +144,13 @@ Every PR is a normal feature PR off `main` (never stack unmerged), PR text ends 
 1. In `scripts/ci-pr-affected-replay.py` replace the `f in blob` scan in `suite_refs` with the ruling-3 match: path-component-boundary starts only, extended component by component against a prefix set of the tracked paths (stop at the first absent prefix), per-file memoisation across suites, the one-hop library reads cached per run. Keep `edge_hit` unchanged. Commit `receipts/audit-differential.tsv` (old versus new refs on a pinned tree, every dropped ref listed with its line) and run the recorder over the dropped refs of the heavy-tail suites; the PR fails if an observed open sits in the dropped set. The old scan is NOT kept in the suite (a pinned-tree differential is the proof; the 39 s scan stays out of CI).
 2. Directory suites: when the first pattern is a `dir/` prefix, scan the tracked bun-discoverable test files under it (`*.test.ts`, `*.test.tsx`, `*.test.js`, `*.spec.*` per bun's discovery) and union their refs; references inside the directory are covered by the `^dir/` edge. `*` accept rows are rejected by the audit when they name a readable suite.
 3. Accept-row validation in `load_accept`/`cmd_audit`, built here with unit fixtures before any row exists: the anchor column, the `false-positive: <non-empty>` reason (the shape check already exists; the anchor and staleness are new), a (suite, path) pair accepted only when every boundary-match line is accepted, and a stale row (path untracked, suite unregistered, or anchor matching no live line) fails. The tokeniser records line numbers only for pairs that appear in the accept file. A missing accept file means no exemptions.
-4. Report the new live total after the directory-suite scan (`SOLEUR_PR_AFFECTED_AUDIT` line) in the PR body and on #10448; if the added references exceed the 1,108 figure by more than half, PR4/PR5 are re-split by directory before work starts.
+4. Report the new live total after the directory-suite scan (`SOLEUR_PR_AFFECTED_AUDIT` line) in the PR body and on #10448; if the added references exceed the 1,108 figure by more than half, PR4/PR5 are re-split by directory before work (superseded by row 29: the trigger is rebased on PR1b, which adds 622 pairs at most before a re-split) starts.
 5. Raise the "human-written" wording on #10448 in the PR text: reasons are agent-drafted from line context, cite line kind and number, and are reviewed as diff lines (decision-challenges.md row 9).
 6. Extend `plugins/soleur/test/ci-pr-affected-replay.test.sh` with the Guard 2 rows below.
+
+### PR1b (mandatory, review round 1) - audit reach
+
+Must land BEFORE PR2 and PR3 and freezes the audit definition: a reach change after PR3 would red every PR or force baseline growth. Items (rows 29, 33): scan every existing tracked file listed in the selector row `pats` (files only) plus the suite inputs, memoised per file; strip comments by file extension (blanks replace stripped lines, split on newline only); resolve `$(dirname "$0")/`, `$SCRIPT_DIR/` and `$DIR/` source operands against the including file for any extension to the selector depth of 8; credit an edge only if `_diff_edge_hit` would, with one parity fixture per edge kind. Report the new `SOLEUR_PR_AFFECTED_AUDIT` line; PR1b adding more than 622 pairs (50 percent of 1,244) re-splits PR4 and PR5 by gap class, and more than 1,244 stops the series for a re-ruling. The declared limits stay declared and are pinned by negative controls.
 
 ### PR2 (conditional) - boundary precision
 
