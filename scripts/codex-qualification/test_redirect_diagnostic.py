@@ -119,6 +119,7 @@ class RedirectDiagnostic(unittest.TestCase):
         self.assertEqual(self.manifest['actions'][1]['permitted_status'], 307)
         self.assertEqual(self.manifest['actions'][1]['response_body'], 'never-read')
         self.assertEqual(receipt['status'], 'redirect-headers-observed')
+        self.assertTrue(all('token_header_failure' not in action for action in receipt['actions']))
         projected = receipt['routing']
         self.assertEqual(set(projected), {'scheme', 'hostname', 'port', 'location_sha256',
             'location_bytes', 'path_sha256', 'query_present', 'fragment_or_userinfo_present',
@@ -191,6 +192,10 @@ class RedirectDiagnostic(unittest.TestCase):
         cases = (
             (307, [('Location', LOCATION)], b'SYNTHETIC_PRIVATE_BODY', 1, None),
             (200, [('Content-Type', 'application/json'), ('Content-Length', '2')], b'{}', 0, None),
+            (200, [('Content-Type', 'application/json; charset=utf-8'), ('Content-Length', '2'),
+                   ('Content-Encoding', 'identity')], b'{}', 0, None),
+            (200, [('Content-Type', 'text/plain'), ('Content-Length', '16385')],
+             b'SYNTHETIC_PRIVATE_BODY', 0, 'body_size'),
             (200, [('Content-Type', 'application/json'), ('Content-Length', '23')],
              b'SYNTHETIC_PRIVATE_BODY', 1, 'body_size'),
             (307, [('Location', LOCATION), ('Location', LOCATION)], b'', 1, 'header_shape'),
@@ -217,12 +222,14 @@ class RedirectDiagnostic(unittest.TestCase):
                     with self.assertRaises(diagnostic.metadata.BoundaryFailure) as raised:
                         adapter.request(*arguments, timeout=10, maximum_bytes=action['maximum_bytes'])
                     self.assertEqual(raised.exception.reason, reason)
-                    if action_index == 1 and status == 200:
+                    if status == 200:
                         self.assertEqual(wire.payload.tobytes(), body)
+                        if reason == 'body_size':
+                            self.assertNotIsInstance(raised.exception, diagnostic.TokenHeaderFailure)
                 else:
                     returned = adapter.request(*arguments, timeout=10, maximum_bytes=action['maximum_bytes'])
                     expected = ((status, [('Location', LOCATION)], b'') if status == 307 else
-                                (status, 'application/json', b'{}') if action_index == 0 else
+                                (status, dict(headers)['Content-Type'], b'{}') if action_index == 0 else
                                 (status, [], b''))
                     self.assertEqual(returned, expected)
                 resolver.assert_called_once_with('registry-1.docker.io' if action_index else 'auth.docker.io',
@@ -288,10 +295,19 @@ class RedirectDiagnostic(unittest.TestCase):
                 self.assertTrue(wire.closed)
 
     def test_token_header_category_cannot_forward_free_text_or_classify_config(self):
-        for value, action_index in [('SYNTHESIZED_PRIVATE', 0), ('content_type_count', 1)]:
+        cases = [('SYNTHESIZED_PRIVATE', 0, 200, 'header_shape', True),
+                 ('content_type_count', 1, 200, 'header_shape', True),
+                 ('content_type_count', 0, 401, 'header_shape', True),
+                 ('content_type_count', 0, 200, 'body_size', True),
+                 (None, 0, 200, 'header_shape', True),
+                 ([], 0, 200, 'header_shape', True),
+                 ('content_type_count', 0, 200, 'header_shape', False)]
+        for value, action_index, status, reason, token_error in cases:
             self.setUp()
-            error = diagnostic.TokenHeaderFailure('content_type_count')
+            error = (diagnostic.TokenHeaderFailure('content_type_count') if token_error else
+                     diagnostic.metadata.BoundaryFailure('header_shape', 200))
             error.category = value
+            error.status, error.reason = status, reason
             self.transport.request.side_effect = ([error] if action_index == 0 else [self.responses[0], error])
             with self.assertRaises(diagnostic.DiagnosticFailure) as raised:
                 self.collector().collect()

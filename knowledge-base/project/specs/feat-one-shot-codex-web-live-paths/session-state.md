@@ -2279,3 +2279,13 @@
   required. Approval of the original diagnostic is spent. All build, Docker,
   SQL, provider/browser/account, recovery, qualification, Web/CLO, promotion and
   ship holds persist. Hosted auth BLOCKED, alternate route PENDING.
+
+- Targeted security, code-quality and test-design reviews passed pushed source
+  `674b28a93f`. Security independently compared 5,760 synthesized header cases
+  against the old predicate with identical acceptance/refusal results. Added
+  the test reviewer's optional assertions for size-before-media precedence,
+  successful-receipt category absence and each category boundary restriction;
+  focused tests remain 12/12. Semgrep completed with one worker: 200 applicable
+  rules, two Python files, zero findings and no JSON errors. Its earlier parallel
+  engine failed allocating io_uring memory; `--jobs 1` is the verified workaround.
+  Final test refinement review and replacement-manifest review remain pending.

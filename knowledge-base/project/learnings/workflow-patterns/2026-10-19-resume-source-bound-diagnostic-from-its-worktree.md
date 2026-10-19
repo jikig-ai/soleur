@@ -43,3 +43,18 @@ runner file to belong to the checkout. Use the exact CI/lefthook-configured
 Ruff command for this repository; it passed the existing 44-finding baseline.
 The installed work reference for CI-only hook exclusions was absent; the
 worktree's version exists. No hook exclusion or new lint adoption was applied.
+
+The shell's configured hook path was `/dev/null` and `lefthook` was unavailable.
+Ran applicable checks directly: existing Ruff baseline, staged secret scan and
+Markdown selector (all four KB paths excluded by project configuration).
+A commit command without an explicit Git target was rejected by the main-branch
+guard despite the shell tool's workdir; `git -C <absolute-worktree> commit`
+resolved the intended feature branch and succeeded. Read the guard's referenced
+`precommit-guard.sh` rather than guessing a helper filename.
+
+Semgrep first hit its read-only settings directory, then its escaped parallel
+engine failed allocating io_uring memory. A single-worker escaped scan completed
+successfully: 200 applicable rules, both Python files, no findings or JSON errors.
+This concrete workaround resolves the scanner failure for this run.
+The bounded CI monitor also needed an escaped retry for its GitHub CLI shim;
+an unavailable probe is unknown CI state, not a failure or a passing verdict.
