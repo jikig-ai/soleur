@@ -12,6 +12,18 @@ requires_cpo_signoff: true
 
 # fix(legal): interim wording for DPD section 10.3(b) and the pointer in T&C section 14.1b
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-19. **Method:** the generic 40-agent fan-out was not run: the plan edits one CLO-ruled bullet, one pointer paragraph, a version literal and register markers, and it already carries two CLO rulings, a CPO advisory, a five-seat plan-review panel (simplicity, DHH, Kieran, architecture, spec-flow), a learnings sweep and a worked precedent (PR #10326). Deepening is therefore gate verification plus live re-verification of every cited artifact (the #10326 precedent method).
+
+**Gates (deepen-plan Phase 4.6-4.12):** 4.6 User-Brand Impact present, threshold `single-user incident`, concrete artifact and vector, pass. 4.7 Observability: skipped under the plan Phase 2.9 trigger set (no file under `apps/*/server`, `apps/*/src`, `apps/*/infra` or `plugins/*/scripts`; the touched code files are a version literal, a hash literal and two QA seed scripts), same reading as the #10326 precedent; the plan's skip section is headed `Gates Not Applicable` so a heading grep for an Observability section cannot mistake it for an unfilled one. 4.8 PAT grep: no hit. 4.9 UI wireframe: no UI-surface file (no component, page, layout, `*.njk` or `*.html`); the banner label is a copy string on an existing banner. 4.10 Encryption posture: no `.tf`, migration, cloud-init or compose file and no store or connection. 4.11 Guard contract: the deliverable is wording and pins, not a guard; the ACs are verification of the change. 4.12 Scope check: exactly 1 unfenced `## Scope Check`; 13 asks mapped, provenance rows carry justifications for every `inferred` item, `Recommendation: single PR`.
+
+**Re-verified live in this pass (2026-10-19):** the 2026-10-22 census in the register (14 occurrences; the six `hcloud_volume.git_data` mentions are one in PA-2 (g), three in PA-36 (g), two in PA-36 (f); `(#6897, expires 2026-10-22)` occurs 4 times, so the anchors need leftward extension); the four `Last Updated` openings each occur exactly once; the PA-36 Status anchor occurs once; ADR-239 carries `**Target: 2026-10-22**` once; cited PRs and issues exist with the states claimed (#10132, #10326, #9226, #9839 merged; #10138, #6897, #9066, #7465, #8626, #9051, #10291, #10528 open; #8285 closed and only mentioned as an out-of-scope register cell); cited AGENTS rule ids exist; flip run 39225916196 failed with `flag=unset` (read from the run log); the run list shows no wipe-family run; the posture-register T&C row and the three `TC_VERSION` replicas were found by plan review and added.
+
+**Key improvements carried in from review:** stop mechanism is a plan-level `## Operator Holds` section (ship Phase 6 step 5), not prose; the posture-register T&C row is a fifth `TC_VERSION` replica; AC2 runs word-level over the published surfaces only (CLO ruling B), with internal records allowed three negated phrases; the register ACs compare old spans rather than a file-wide count; HOLD has an exit and artifact; the run list uses a 1000 limit; pins are provisional until Phase 5; any later byte change re-spawns the CLO; `mergeQueueEntry` is read through GraphQL.
+
+**New considerations:** the CLO's own first-round draft contained two negated mentions its second-round rule bans in published text; resolved by ruling B (two replacement sentences). The CLO's round-2 default on publishing the 12 November date differs from round 1; recorded as an owner row, with the date clause cut-able together with its ACs and markers. ADR-239's `Target: 2026-10-22` is bold-wrapped inside a multi-line list item, so the blockquote pointer goes after the whole bullet, indented to stay inside the list item or placed after the list (run markdownlint).
+
 **DRAFT legal wording. Owner review is required before merge. No agent marks this PR ready, enqueues it or merges it.**
 
 Spec lacks valid lane: no `spec.md` exists for this branch, so `lane:` defaulted to `cross-domain` (TR2 fail-closed).
@@ -351,9 +363,9 @@ Rule: whichever PR merges second runs one `git merge origin/main`, keeps every L
 
 Skipped: the change makes no architectural decision (no ownership boundary, substrate, trust boundary or ADR reversal); it qualifies published wording. The ADR-239 edit is a one-line stale-date pointer, not an amendment. C4: no actor, system, container or relationship changes (the T&C bump touches the existing web app and the Supabase `tc_acceptances` ledger only through existing behavior); `c4-count-parity` is unaffected because no count in `model.c4` moves.
 
-## Observability
+## Gates Not Applicable (observability, encryption posture, IaC, guard)
 
-Skipped: the Files to Edit contain no file under `apps/*/server/`, `apps/*/src/`, `apps/*/infra/` or `plugins/*/scripts/` (the two seed scripts and `tc-version.ts` are under `apps/web-platform/scripts/` and `lib/legal/`), and no new infrastructure surface is introduced. Encryption posture (Phase 2.11), IaC routing (2.8) and Guard Contract (2.12): skipped, no store, connection, infrastructure or new guard is introduced.
+Observability (plan Phase 2.9) skipped: the Files to Edit contain no file under `apps/*/server/`, `apps/*/src/`, `apps/*/infra/` or `plugins/*/scripts/` (the two seed scripts and `tc-version.ts` are under `apps/web-platform/scripts/` and `lib/legal/`), and no new infrastructure surface is introduced. Encryption posture (Phase 2.11), IaC routing (2.8) and Guard Contract (2.12): skipped, no store, connection, infrastructure or new guard is introduced.
 
 ## Test Scenarios
 
@@ -371,6 +383,7 @@ Skipped: the Files to Edit contain no file under `apps/*/server/`, `apps/*/src/`
 - The DPD bullet contains the original sentence twice by design (live prefix and the `*(Amended ...)*` quotation). A "replace once" script or a file-wide count will mis-handle it; use the AC1 line-scoped count.
 - `grep -c` counts lines, not occurrences; on these single-line bullets and cells use `grep -o | wc -l` or the `python3 -I` span check.
 - The `ADDED` word-diff filter needs `--word-diff=porcelain`; a whole-line diff returns every pre-existing token on the 1 to 70 KB lines.
+- ADR-239's `**Target: 2026-10-22**,` sits inside an indented multi-line list item; place the blockquote pointer after that whole bullet and run markdownlint.
 - Registers: three `tracking_issue: "#6897"` ledger rows (`workspaces`, `git_data`, rehearsal) share the issue; a census keyed on the issue number mislabels `hcloud_volume.workspaces` cells. Key on the store name.
 - `TC_VERSION` is mirrored in two shell scripts; a bump that misses them reds a required check only in CI.
 - Do not quote private chat or attribute any comment by account name in committed files or the PR body (learning 2026-10-18). Do not name the `hooks` directory, a run's counts, or any listing in the published text.
