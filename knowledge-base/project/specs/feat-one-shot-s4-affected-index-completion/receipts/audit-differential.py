@@ -23,7 +23,9 @@ Every occurrence of every old ref is classified, and the ones that are not a pla
 An occurrence at a plain boundary is not listed. The `pair` column says whether the (suite, path) pair `vanished` from the new refs
 (every occurrence dropped) or `survives` (another occurrence is a boundary). In the header and on stdout `dropped` counts the PAIRS
 that vanished (old refs minus new refs, computed from the two sets, not from the rows) and `dropped_occurrences` the listed
-`dropped` rows; a vanished pair without a row is an error (exit 1: scan_text and boundary() disagree). `loc` is `line:col` (1-based line of the file `source`,
+`dropped` rows; a vanished pair without a row is an error (exit 1: scan_text and boundary() disagree). The suite, path and source columns are written through the SUT's quote_field (a backslash, a control character or a bidi/zero-width
+character becomes \\xHH or \\uXXXX); `line_text` has every control character, separator and bidi/zero-width character replaced by one space, so `col` stays valid
+and the file holds no raw control byte. `loc` is `line:col` (1-based line of the file `source`,
 0-based column of the path in `line_text`), so a reader or the test can check one occurrence against its line.
 The test (plugins/soleur/test/ci-pr-affected-replay.test.sh) judges the stored rows with the SUT's own views() and boundary(), and runs
 this script on a small scratch repo; it does NOT regenerate the pinned-tree receipt, so completeness of the stored rows is attested by
@@ -36,6 +38,12 @@ import subprocess
 import sys
 
 COLOUR = re.compile(r"(?:\\0[0-7]{1,3}|\\e|\\x1[bB]|\x1b)\[[0-9;]*m$")
+
+
+def flat(sut, text):
+    """The stored line text: a control character (C0, DEL, C1), a separator or a bidi/zero-width character becomes one space (offsets do
+    not move; none of them is a word character, so the boundary of every occurrence is unchanged)."""
+    return "".join(" " if ord(c) < 0x20 or c == "\x7f" or sut.QUOTE_U.match(c) else c for c in text)
 
 
 def find_sut(here):
@@ -72,12 +80,14 @@ def main(argv):
     spec.loader.exec_module(sut)
 
     rows = []
-    with open(rows_file, encoding="utf-8", errors="replace") as fh:
+    with open(rows_file, encoding="utf-8", errors="replace", newline="") as fh:
         rows_text = fh.read()
     for line in rows_text.split("\n"):
         f = line.rstrip("\r").split("\t")
         if f[0] == "AFFECTED_SELECTED" and len(f) >= 5 and f[3] != "always_on":
             rows.append((f[1], f[4].split("|")))
+    q = sut.quote_field   # every name that is printed or tabbed goes through the SUT's own quoting
+    top = os.path.realpath(root)
     tracked = sut.tracked_files(root)
     index = sut.PathIndex(tracked)
     old_refs, new_refs, texts_of, pats_of = {}, {}, {}, {}
@@ -97,7 +107,7 @@ def main(argv):
     for suite in sorted(old_refs):
         extra = new_refs[suite] - old_refs[suite]
         if extra:
-            print("NEW SCAN FOUND WHAT THE OLD ONE DID NOT: %s %s" % (suite, sorted(extra)[:5]))
+            print("NEW SCAN FOUND WHAT THE OLD ONE DID NOT: %s %s" % (q(suite), [q(x) for x in sorted(extra)[:5]]))
             bad += 1
 
     vanished = {(s, r) for s in old_refs for r in old_refs[s] - new_refs[s]}
@@ -105,7 +115,7 @@ def main(argv):
     for suite in sorted(old_refs):
         for rel in sorted(old_refs[suite]):
             pair = "vanished" if (suite, rel) in vanished else "survives"
-            for q, tn, tl, tr in texts_of[suite]:
+            for qpath, tn, tl, tr in texts_of[suite]:
                 if rel not in tr:
                     continue
                 norm_lines, light_lines, raw_lines = tn.split("\n"), tl.split("\n"), tr.split("\n")
@@ -114,19 +124,20 @@ def main(argv):
                     while col >= 0:
                         norm_ok = sut.boundary(norm_lines[no - 1], col) or sut.boundary(light_lines[no - 1], col)
                         raw_ok = col == 0 or sut.WORD.match(raw[col - 1]) is None
+                        shown = flat(sut, raw)
                         if norm_ok and not raw_ok:
                             verdict = "kept-escape"
                         elif not norm_ok:
-                            verdict = "declared-drop" if COLOUR.search(raw[:col]) else "dropped"
+                            verdict = "declared-drop" if COLOUR.search(shown[:col]) else "dropped"
                         else:
                             verdict = ""
                         if verdict:
-                            out_rows.append((verdict, suite, rel, pair, os.path.relpath(q, root), "%d:%d" % (no, col), raw.replace("\t", " ")))
+                            out_rows.append((verdict, q(suite), q(rel), pair, q(os.path.relpath(qpath, top)), "%d:%d" % (no, col), shown))
                         col = raw.find(rel, col + 1)
     rowed = {(r[1], r[2]) for r in out_rows if r[3] == "vanished"}
     for suite, rel in sorted(vanished):
-        if (suite, rel) not in rowed:
-            print("VANISHED PAIR WITHOUT A ROW: %s %s" % (suite, rel))
+        if (q(suite), q(rel)) not in rowed:
+            print("VANISHED PAIR WITHOUT A ROW: %s %s" % (q(suite), q(rel)))
             bad += 1
 
     def gaps(refs):
