@@ -101,7 +101,7 @@ WIN="$(printf '%s' "$NORM" | tail -c 1500)"
 [[ -n "${WIN//[[:space:]]/}" ]] || exit 0
 # Cheap pre-filter, on the NORMALISED window (a raw-byte test missed "your<NBSP>call", review of PR #10547): without a `?` only a
 # declarative hand-off (CL4) can hit, and its candidate alternation is the lib's own, so the two cannot drift.
-# The sentence split mirrors the awk's, so a `^`-anchored alternative reads a sentence start in both. Captured, not `| grep -q`.
+# The sentence split mirrors the awk's, so a `^`-anchored alternative reads a sentence start in both. Captured into a variable and tested, never piped into a quiet grep.
 if [[ "$WIN" != *"?"* ]]; then
   CAND_HIT="$(sed -E 's/([.!]) /\1\n/g' <<<"$WIN" | grep -E "$TFC_CL4_CANDIDATE_ERE" || true)"
   [[ -n "$CAND_HIT" ]] || exit 0
