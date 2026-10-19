@@ -80,9 +80,11 @@ count() { grep -cE "$2" "$1" || true; }
 # polarity as count() so adjacent assertions read consistently. The `&& ||`
 # list keeps a no-match grep from tripping `set -e` in the substitution.
 found() { grep -qE "$2" "$1" && printf '1' || printf '0'; }
-# Positive ROLE signals must live in ADDED CODE, not `+#` prose about the
-# fixture: extract `^+` lines, drop `+`-anchored comment lines, then match.
-found_code() { grep -E '^\+' "$1" | grep -vE '^\+ *#' | grep -qE "$2" && printf '1' || printf '0'; }
+# Positive ROLE signals must live in ADDED CODE, not `+#`/`+//` prose about
+# the fixture: extract `^+` lines, drop the `+++` header and `+`-anchored
+# comment lines (any whitespace indent, `#`, `//`, or `/*` comment openers),
+# then match.
+found_code() { grep -E '^\+' "$1" | grep -vE '^\+\+\+' | grep -vE '^\+[[:space:]]*(#|//|/\*)' | grep -qE "$2" && printf '1' || printf '0'; }
 
 # ---------------------------------------------------------------------------
 # CENSUS — glob count over ALL entries AND over `*.diff`, not a name list.
@@ -125,8 +127,8 @@ cases=$((cases + 1)); assert_eq "1" "$(count "$NOWARN_FIX" '^@@ ')" "pure-sh fix
 # `^\+`-anchored: they must appear in ADDED code, not prose about the fixture.
 # ---------------------------------------------------------------------------
 cases=$((cases + 1)); assert_eq "1" "$(count "$E2E_FIX" '^\+\+\+ b/apps/web-platform/e2e/checkout-flow\.e2e\.ts')" "e2e fixture: adds apps/web-platform/e2e/checkout-flow.e2e.ts"
-cases=$((cases + 1)); assert_eq "1" "$(count "$E2E_FIX" '^\+.*@playwright/test')" "e2e fixture: @playwright/test import signal"
-cases=$((cases + 1)); assert_eq "1" "$(count "$E2E_FIX" '^\+.*waitForTimeout\(')" "e2e fixture: slow-cost signal (waitForTimeout call)"
+cases=$((cases + 1)); assert_eq "1" "$(found_code "$E2E_FIX" '@playwright/test')" "e2e fixture: @playwright/test import signal"
+cases=$((cases + 1)); assert_eq "1" "$(found_code "$E2E_FIX" 'waitForTimeout\(')" "e2e fixture: slow-cost signal (waitForTimeout call)"
 cases=$((cases + 1)); assert_eq "0" "$(count "$E2E_FIX" 'pyramid-justified')" "e2e fixture: NO pyramid-justified marker (must exercise FAIL path)"
 cases=$((cases + 1)); assert_eq "0" "$(count "$E2E_FIX" '## Test Pyramid')" "e2e fixture: NO PR-body justification block"
 
@@ -136,8 +138,8 @@ cases=$((cases + 1)); assert_eq "0" "$(count "$E2E_FIX" '## Test Pyramid')" "e2e
 # is what the checklist keys on).
 # ---------------------------------------------------------------------------
 cases=$((cases + 1)); assert_eq "1" "$(count "$UNIT_FIX" '^\+\+\+ b/apps/web-platform/test/order-total\.test\.ts')" "unit fixture: adds apps/web-platform/test/order-total.test.ts"
-cases=$((cases + 1)); assert_eq "1" "$(count "$UNIT_FIX" '^\+.*from "vitest"')" "unit fixture: vitest import present (positive unit signal)"
-cases=$((cases + 1)); assert_eq "1" "$(found "$UNIT_FIX" '^\+.*(describe|test)\(')" "unit fixture: describe()/test() case present"
+cases=$((cases + 1)); assert_eq "1" "$(found_code "$UNIT_FIX" 'from "vitest"')" "unit fixture: vitest import present (positive unit signal)"
+cases=$((cases + 1)); assert_eq "1" "$(found_code "$UNIT_FIX" '(describe|test)\(')" "unit fixture: describe()/test() case present"
 cases=$((cases + 1)); assert_eq "0" "$(count "$UNIT_FIX" '^\+.*(playwright|cypress|puppeteer|webdriverio|selenium)')" "unit fixture: no e2e-framework signal"
 cases=$((cases + 1)); assert_eq "0" "$(count "$UNIT_FIX" '^\+.*(waitForTimeout|cy\.wait|browser\.pause|sleep)\s*\(')" "unit fixture: no slow-cost call"
 cases=$((cases + 1)); assert_eq "0" "$(count "$UNIT_FIX" 'pyramid-justified')" "unit fixture: no justification marker needed or present"
@@ -150,10 +152,10 @@ cases=$((cases + 1)); assert_eq "0" "$(count "$UNIT_FIX" 'pyramid-justified')" "
 # file's spawn signals, all `^\+`-anchored: they must appear in ADDED code.
 # ---------------------------------------------------------------------------
 cases=$((cases + 1)); assert_eq "1" "$(count "$WARN_FIX" '^\+\+\+ b/.*\.test\.sh')" "subprocess-fanout fixture: adds a *.test.sh file"
-cases=$((cases + 1)); assert_eq "1" "$(found "$WARN_FIX" '^\+ *[^# ].* &\s*$')" "subprocess-fanout fixture: background & proc signal"
+cases=$((cases + 1)); assert_eq "1" "$(found_code "$WARN_FIX" ' &\s*$')" "subprocess-fanout fixture: background & proc signal"
 cases=$((cases + 1)); assert_eq "1" "$(found_code "$WARN_FIX" 'kill -- -')" "subprocess-fanout fixture: pgid reaper signal"
-cases=$((cases + 1)); assert_eq "1" "$(found "$WARN_FIX" '^\+ *[^# ].*(PORT=[0-9]|--bind|nc -l)')" "subprocess-fanout fixture: bound-port signal"
-cases=$((cases + 1)); assert_eq "1" "$(found "$WARN_FIX" '^\+ *[^# ].*(setsid|http\.server)')" "subprocess-fanout fixture: spawned server signal"
+cases=$((cases + 1)); assert_eq "1" "$(found_code "$WARN_FIX" '(PORT=[0-9]|--bind|nc -l)')" "subprocess-fanout fixture: bound-port signal"
+cases=$((cases + 1)); assert_eq "1" "$(found_code "$WARN_FIX" '(setsid|http\.server)')" "subprocess-fanout fixture: spawned server signal"
 cases=$((cases + 1)); assert_eq "0" "$(count "$WARN_FIX" 'suite-durations')" "subprocess-fanout fixture: no weight row referenced (new suite is unweighed)"
 cases=$((cases + 1)); assert_eq "0" "$(cat "$REPO_ROOT"/scripts/suite-durations.tsv "$REPO_ROOT"/scripts/suite-durations-heavy.tsv "$REPO_ROOT"/apps/web-platform/infra/suite-durations.tsv 2>/dev/null | grep -c 'stub-proxy-fanout' || true)" "subprocess-fanout fixture SUT absent from all three duration tables"
 
@@ -195,6 +197,7 @@ cases=$((cases + 1)); assert_eq "1" "$(found "$AGENT" 'subprocess fan-out')" "ag
 cases=$((cases + 1)); assert_eq "1" "$(found "$AGENT" 'suite-durations-heavy')" "agent: WARN rule names the group durations tables (light+heavy+infra)"
 cases=$((cases + 1)); assert_eq "1" "$(found "$AGENT" 'registered label')" "agent: WARN rule greps the registered label, not the file path"
 cases=$((cases + 1)); assert_eq "1" "$(found "$AGENT" 'default-weight-ms')" "agent: WARN rule pins the default-floor non-satisfier"
+cases=$((cases + 1)); assert_eq "1" "$(found "$AGENT" 'WARN.*test_\*\.sh')" "agent: WARN trigger file set includes test_*.sh (#9771 fix-round)"
 cases=$((cases + 1)); assert_eq "1" "$(found "$AGENT" 'duration alone')" "agent: declared-exception boundary wording present (WARN never fires on duration alone)"
 
 # ---------------------------------------------------------------------------
@@ -229,7 +232,7 @@ fi
 
 # ANTI-VACUITY FLOOR. Set AT the running count, never below it; reads `cases`,
 # the counter no helper can move.
-MIN_ASSERTIONS=80
+MIN_ASSERTIONS=81
 if [[ "$cases" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$cases" "$MIN_ASSERTIONS" >&2
