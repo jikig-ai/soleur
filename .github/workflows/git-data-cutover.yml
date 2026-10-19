@@ -280,7 +280,7 @@ jobs:
           # `alert-rules/<id>/` path answers 404 for it and a workflow carries `enabled`, not `status`. SENTRY_API_HOST is a
           # scheme-less org-subdomain (`jikigai-eu.sentry.io`), so the scheme is added here: without it curl goes out over
           # http and Sentry answers 301 (the first live flip dispatch, 2026-10-19, refused with HTTP 301 before any write).
-          host="https://${SENTRY_API_HOST:-jikigai-eu.sentry.io}"
+          host="${SENTRY_API_HOST:-jikigai-eu.sentry.io}"; host="https://${host#https://}"   # tolerate a secret stored with or without the scheme
           # The read token reaches curl on its stdin config (ADR-280). The old `2>/dev/null` is gone on
           # purpose: it would hide the refusal marker. A refusal (rc 2) lands in `|| echo 000`, the same
           # fail-closed `pin_fault_paging_absent` verdict an unusable token produced before.

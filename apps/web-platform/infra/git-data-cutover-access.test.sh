@@ -1888,7 +1888,7 @@ def step(k):
 # a workflow carries `enabled`, not `status`). Anchored on the call forms, comment-stripped, within the one step.
 _fp = step("flip_preconditions"); _fpcode = "\n".join(l for l in (_fp.get("run") or "").splitlines() if not l.lstrip().startswith("#"))
 check("WF-pinfault: the pin-fault read adds the https scheme to SENTRY_API_HOST, GETs organizations/jikigai-eu/workflows/1310055/ (never alert-rules), and requires enabled == true",
-      'host="https://${SENTRY_API_HOST:-jikigai-eu.sentry.io}"' in _fpcode
+      'host="${SENTRY_API_HOST:-jikigai-eu.sentry.io}"; host="https://${host#https://}"' in _fpcode
       and _fpcode.count('"${host}/api/0/organizations/jikigai-eu/workflows/1310055/"') == 1
       and "alert-rules" not in _fpcode and "https://sentry.io" not in _fpcode
       and """jq -r '.enabled' "$RUNNER_TEMP/rule.json" """.strip() in _fpcode and '[[ "$enabled" == "true" ]]' in _fpcode,
