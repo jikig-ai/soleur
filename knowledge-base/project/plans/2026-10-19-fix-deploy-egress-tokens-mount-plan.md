@@ -130,7 +130,9 @@ In `docker-run-tuple.py`:
 - Add one separate function `check_declared(app_sites)` returning
   `FAIL MISSING_DECLARED: <kind> <member> missing from <file> <tuple> (declared in TUPLES)` for
   every declared `volumes`, `env` name and `ports` member not seen. Skip a site whose tokenization
-  failed (`UNPARSEABLE_OPTION` already reds it; a second line would only be noise).
+  failed OR whose `option_viols` already contain an `UNPARSEABLE_OPTION` (K12's comment-mid-tuple
+  loses the options after the comment without a tokenization failure; a second block of lines would
+  only be noise). Record the env name before the value check so K07f stays one line.
 - Phase 2 is GREEN for the K24 rows only; the real tree stays green until Phase 3 changes the spec.
 - Register it in `run_checks` with one line; add a `HINTS["MISSING_DECLARED"]` entry; add the token
   to the module docstring token list.
@@ -154,7 +156,7 @@ In `ci-deploy.sh`, prod `docker run` only, add two lines beside the existing `-e
         -v /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens \
 ```
 
-Add a short comment above them: the host dir is owned 1001:1001 0711 by server.tf; the REAPER flag
+Put the short comment ABOVE the `if docker run -d \` line (as the existing tmpfs comment is), never between the continued option lines: a comment line inside a backslash-continued tuple ends the bash command (that is exactly what K12 asserts). The comment says: the host dir is owned 1001:1001 0711 by server.tf; the REAPER flag
 is prod-only (ADR-278 canary isolation), the canary run gets neither. Do not touch the canary run.
 
 ### Phase 5 - remaining battery rows (GREEN)
@@ -449,8 +451,7 @@ The ADR sentence is authored now (describes the state this PR ships); nothing is
   against the current tree that every tuple already carries its full declared set (prod and canary
   carry all of `_COMMON_ENV` plus `NODE_OPTIONS`; first-boot declares two env names), so the new arm
   is green before the spec change.
-- Rows that deliberately break tokenization (K08, K12) will also emit extra lines unless the arm
-  skips failed-tokenization sites; keep the skip, or `#N` exact-count needles (K02, K06) break.
+- Rows that lose options without failing tokenization (K12) or leave a bare duplicate site (K13n) emit extra `MISSING_DECLARED` lines; harmless for positive-only needles (verified by prototype: full battery passes), but keep the skip on `UNPARSEABLE_OPTION` sites. Select the `ci-deploy.test.sh` prod line with the trailing-space `--name soleur-web-platform ` and assert the selection is non-empty. Prototype-measured `MIN_ROWS` was 223 for the earlier, larger row set; re-measure after the cuts. P12 is three chained mutators (`m_del` the mount, `m_ins_at` it before the workspaces volume, `m_repl` REAPER to `--env`).
 - Do not make the new tuple lines depend on a shell variable: the checker rejects expansions in
   option position (`UNPARSEABLE_OPTION`); use the literal strings.
 - Never read the real prod env-file or Doppler values while verifying; the absence assertion needs
