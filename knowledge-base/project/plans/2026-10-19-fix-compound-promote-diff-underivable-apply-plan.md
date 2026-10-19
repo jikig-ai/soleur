@@ -627,6 +627,13 @@ comment. Both triggers count (a manual fire is legitimate evidence); the trigger
 | F (defect) | any `diff-underivable-*`; `git-apply-check-failed` (a derived diff that passed `--cached` but failed the real apply is a server bug); `edit-derive-failed` | exit 1 |
 | N (no proof) | `edit-target-unreadable`, `edit-target-too-large`, `edit-invalid`, `edit-anchor-not-found`, `edit-anchor-ambiguous`, `edit-target-duplicate`; `skill-conflict-guard`, `target-path-refused`, `target-missing`, `branch-name-shape-failed`, `diff-size-exceeded`; statuses `no-qualifying-clusters`, `week-cap-reached`, `deduped`, `disabled`, `empty-corpus`, `anthropic-truncated`, `error` | exit 2, printed |
 
+> **Superseded 2026-10-19 (review fork 2, CTO ruling in `decision-challenges.md`):** `diff-path-off-target`,
+> `corpus-shrink-refused` and `agents-core-hr-rule-edit-refused` moved from class P to class F, because a
+> server-derived additive single-target diff cannot legitimately trigger them. Class P is now
+> `clusters_opened >= 1`, `byte-budget-overflow` and `not-committed-*`. The floor is also derived from git
+> (committer time of the commit that added the probe, plus 3h) when `FT10552_DEPLOY_FLOOR` is unset, because
+> the sweeper's `env -i` cannot forward it.
+
 Precedence over the post-floor runs: any P row -> PASS; else the LATEST post-floor run decides
 (F -> FAIL, N -> NOT YET). If the probe is still NOT YET `35` days after the floor it exits 5
 (ACTION REQUIRED, never 0 or 1) so a permanent `edit-*` or skill-conflict streak surfaces instead
@@ -839,33 +846,33 @@ and UC-2 - already tracked by #8443, no new issue; (3) `edit-target-too-large` c
 
 ### Pre-merge (PR)
 
-- [ ] AC1. A failing test existed first: the Phase-0 RED commit (or recorded output) shows T1/T15
+- [x] AC1. A failing test existed first: the Phase-0 RED commit (or recorded output) shows T1/T15
   failing for an assertion reason before any production edit.
-- [ ] AC2. `CLUSTER_OUTPUT_SCHEMA` contains neither `proposed_diff_unified` nor `byte_impact`, and
+- [x] AC2. `CLUSTER_OUTPUT_SCHEMA` contains neither `proposed_diff_unified` nor `byte_impact`, and
   the phase-1 prompt text mentions neither (`cron-compound-promote.ts`, `anthropic-cluster` step).
-- [ ] AC3. `buildAdditiveEditDiff` is the only code that assigns `proposed_diff_unified`; its
+- [x] AC3. `buildAdditiveEditDiff` is the only code that assigns `proposed_diff_unified`; its
   output for every successful splice (T1, T2, T4) passes `git apply --cached` and
   `checkDiffPaths` inside the same row.
-- [ ] AC4. The derived diff header is `diff --git a/<path> b/<path>` (no `a/a/` doubling), and a
+- [x] AC4. The derived diff header is `diff --git a/<path> b/<path>` (no `a/a/` doubling), and a
   row fails if `--no-prefix` is removed (M-4).
-- [ ] AC5. The seven `edit-*` reasons each have exactly one emit site and one behavioural row; the
+- [x] AC5. The seven `edit-*` reasons each have exactly one emit site and one behavioural row; the
   reason-attribution census covers them; `diff-underivable-apply` is retained and T14 still
   passes.
-- [ ] AC6. The `draft-edit-<hash8>` step returns only `{kind, diff}` or `{kind, reason}`; no
+- [x] AC6. The `draft-edit-<hash8>` step returns only `{kind, diff}` or `{kind, reason}`; no
   target-file text is in a step return value.
-- [ ] AC7. `target-path-refused` still fires before any `git show`, and the model is not called on
+- [x] AC7. `target-path-refused` still fires before any `git show`, and the model is not called on
   a disallowed path (T12) or an oversized base (T11).
-- [ ] AC8. Anthropic API errors in phase 2 propagate (T16), and so does an infra fault on the
+- [x] AC8. Anthropic API errors in phase 2 propagate (T16), and so does an infra fault on the
   pre-call git reads (T10b); neither is converted into a refusal.
-- [ ] AC8b. The content constraints (T7, T8, T8b), the symlink and size pre-checks (T10, T11), the
+- [x] AC8b. The content constraints (T7, T8, T8b), the symlink and size pre-checks (T10, T11), the
   source-learning `Map` lookup (T20), the timeout and max-token constants (T22) and the
   duplicate-target refusal (T19) each have a behavioural row.
 - [ ] AC8c. The PR body records the real-model evidence run (anchor hit-rate and refusal causes) or
   "not run: no dev key".
-- [ ] AC9. The marker field set is unchanged: `git diff --quiet origin/main...HEAD -- apps/web-platform/server/compound-promote-marker.ts` exits 0 (merge-base form, so a sibling merge to main cannot redden it).
-- [ ] AC10. The runbook refusal table lists the seven new reasons; ADR-092 carries a dated
+- [x] AC9. The marker field set is unchanged: `git diff --quiet origin/main...HEAD -- apps/web-platform/server/compound-promote-marker.ts` exits 0 (merge-base form, so a sibling merge to main cannot redden it).
+- [x] AC10. The runbook refusal table lists the seven new reasons; ADR-092 carries a dated
   Amendment; `plugins/soleur/test/c4-count-parity.test.sh` passes.
-- [ ] AC11. `scripts/followthroughs/compound-promote-draft-edit-10552.test.sh` passes and covers
+- [x] AC11. `scripts/followthroughs/compound-promote-draft-edit-10552.test.sh` passes and covers
   P-1 through P-10; `python3 scripts/lint-guard-contract.py` passes on this plan (2 entries).
 - [ ] AC12. The four vitest files pass, `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` is clean (the root `package.json` declares no `workspaces`, so the `-w` form aborts), and the
   PR body says `Ref #10552`.
