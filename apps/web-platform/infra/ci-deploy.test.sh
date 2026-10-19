@@ -3050,10 +3050,10 @@ assert_prod_egress_tokens() {
   fi
 
   local missing=""
-  if ! printf '%s\n' "$prod_line" | grep -qF -- "-v /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens"; then
+  if ! grep -qF -- "-v /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens" <<<"$prod_line"; then
     missing="${missing} egress-tokens mount"
   fi
-  if ! printf '%s\n' "$prod_line" | grep -qF -- "-e SOLEUR_EGRESS_REAPER=1"; then
+  if ! grep -qF -- "-e SOLEUR_EGRESS_REAPER=1" <<<"$prod_line"; then
     missing="${missing} SOLEUR_EGRESS_REAPER=1"
   fi
 
