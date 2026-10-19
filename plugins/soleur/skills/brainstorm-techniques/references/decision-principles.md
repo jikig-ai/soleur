@@ -68,7 +68,7 @@ It is not a User-Challenge even when user-visible or consequential. The four NEV
 whether the session model may **auto-decide**; they never decide **who rules**. This taxonomy governs product / scope /
 preference decisions only, never *how* to build. The closed operator-only list, the delegation step, the recording
 format and the override for a "surface it" brief live in
-[technical-ruling-delegation.md](./technical-ruling-delegation.md).
+`technical-ruling-delegation.md` (the `brainstorm-techniques` skill's references).
 
 ## Mode-branched resolution (keyed on execution context, not skill name)
 
@@ -110,7 +110,7 @@ operator-class challenge.
 
 **The artifact carries a `## Decision Classes` table** (columns `Item | Class | Ruling`, one row per persisted decision,
 whatever shape the free-form body uses; `Class` is `technical`, `taste` or `operator (<category>)`). The schema, the closed
-category list and a canonical example are in [technical-ruling-delegation.md](./technical-ruling-delegation.md)
+category list and a canonical example are in `technical-ruling-delegation.md` (the `brainstorm-techniques` skill's references)
 (section 6); `ship`'s Technical-Ruling Gate scans every such table (plus a file-wide placeholder and label lint).
 
 ### User-Challenge 5-line frame

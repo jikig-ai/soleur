@@ -1821,11 +1821,11 @@ iv = yaml.safe_load(open(iv_path)); ap = yaml.safe_load(open(apply_path))
 on = wf.get(True) or wf.get("on") or {}
 check("WF-on: the only trigger is workflow_dispatch (on: read through the True-key lookup)", isinstance(on, dict) and list(on.keys()) == ["workflow_dispatch"], on if not isinstance(on, dict) else list(on.keys()))
 inputs = ((on.get("workflow_dispatch") or {}).get("inputs") or {}) if isinstance(on, dict) else {}
-check("G7/AC9: workflow_dispatch inputs are exactly {confirm, lineage, mode, origin_run, volume_id} (mode selects the eight modes; lineage is the stranded-sentinel lever for unfreeze; volume_id and origin_run are read by the wipe modes only, #10138)", sorted(inputs.keys()) == ["confirm", "lineage", "mode", "origin_run", "volume_id"], sorted(inputs.keys()))
-check("AC9: the mode input is a closed choice of exactly proof|flip|rollback|unfreeze|redeploy|wipe|wipe_finish|wipe_check",
-      sorted((inputs.get("mode") or {}).get("options") or []) == ["flip", "proof", "redeploy", "rollback", "unfreeze", "wipe", "wipe_check", "wipe_finish"],
+check("G7/AC9: workflow_dispatch inputs are exactly {confirm, lineage, mode, origin_run, volume_id} (mode selects the nine modes; lineage is the stranded-sentinel lever for unfreeze; volume_id and origin_run are read by the wipe modes only, #10138)", sorted(inputs.keys()) == ["confirm", "lineage", "mode", "origin_run", "volume_id"], sorted(inputs.keys()))
+check("AC9: the mode input is a closed choice of exactly proof|flip|rollback|unfreeze|redeploy|wipe|wipe_finish|wipe_check|snapshot_clear",
+      sorted((inputs.get("mode") or {}).get("options") or []) == ["flip", "proof", "redeploy", "rollback", "snapshot_clear", "unfreeze", "wipe", "wipe_check", "wipe_finish"],
       (inputs.get("mode") or {}).get("options"))
-RUN_NAME = "${{ (inputs.mode == 'wipe' || inputs.mode == 'wipe_finish' || inputs.mode == 'wipe_check') && format('git-data {0} {1}', inputs.mode, inputs.volume_id) || format('git-data {0}', inputs.mode) }}"
+RUN_NAME = "${{ (inputs.mode == 'wipe' || inputs.mode == 'wipe_finish' || inputs.mode == 'wipe_check' || inputs.mode == 'snapshot_clear') && format('git-data {0} {1}', inputs.mode, inputs.volume_id) || format('git-data {0}', inputs.mode) }}"
 check("WF-runname: run-name is EXACTLY the pinned closed pattern (the wipe family carries the typed volume id, every other mode is `git-data <mode>`; the wipe preconditions parse it, scripts/lib/git-data-wipe-runs.sh)",
       wf.get("run-name") == RUN_NAME, wf.get("run-name"))
 check("WF-perm: permissions are exactly {contents: read, actions: read} (actions:read is the precondition run-state reads)",
@@ -1840,9 +1840,9 @@ check("G6: workflow-level cancel-in-progress is False", isinstance(conc, dict) a
 jobs = wf.get("jobs") or {}
 check("WF-jobs: exactly three jobs, cutover, wipe and notify-failure (the notify job is separate so it still runs when either gated job is cancelled, times out or loses its runner)", sorted(jobs.keys()) == ["cutover", "notify-failure", "wipe"], list(jobs.keys()))
 job = jobs.get("cutover") or {}
-CUTOVER_IF = "inputs.mode != 'wipe' && inputs.mode != 'wipe_finish' && inputs.mode != 'wipe_check'"
-WIPE_IF = "inputs.mode == 'wipe' || inputs.mode == 'wipe_finish' || inputs.mode == 'wipe_check'"
-check("WF-cutover-if: the cutover job's if: is EXACTLY the three-way exclusion of the wipe modes (a wipe dispatch can never start it), and the wipe job's if: is EXACTLY the three-way inclusion (no other mode can start it)",
+CUTOVER_IF = "inputs.mode != 'wipe' && inputs.mode != 'wipe_finish' && inputs.mode != 'wipe_check' && inputs.mode != 'snapshot_clear'"
+WIPE_IF = "inputs.mode == 'wipe' || inputs.mode == 'wipe_finish' || inputs.mode == 'wipe_check' || inputs.mode == 'snapshot_clear'"
+check("WF-cutover-if: the cutover job's if: is EXACTLY the four-way exclusion of the wipe-family modes (a wipe-family dispatch can never start it), and the wipe job's if: is EXACTLY the four-way inclusion (no other mode can start it)",
       " ".join(str(job.get("if") or "").split()) == CUTOVER_IF and " ".join(str((jobs.get("wipe") or {}).get("if") or "").split()) == WIPE_IF,
       (job.get("if"), (jobs.get("wipe") or {}).get("if")))
 envname = job.get("environment")
@@ -1883,6 +1883,14 @@ check("D-6: each step exists exactly once, in order confirm < checkout < doppler
       single and [pos[k][0] for k in order] == sorted(pos[k][0] for k in order), {k: v for k, v in pos.items()})
 def step(k):
     return steps[pos[k][0]] if len(pos[k]) == 1 else {}
+# 2026-10-19: the first live flip dispatch refused with HTTP 301 from the pin-fault read (scheme-less SENTRY_API_HOST, and 1310055 is a Sentry
+# WORKFLOW id, not a legacy alert-rule id). The behaviour is pinned by the EXECUTED FP rows below; this row only pins the endpoint literal, once,
+# in the comment-stripped step, and that the legacy path and the global control host stay absent.
+_fp = step("flip_preconditions"); _fpcode = "\n".join(l for l in (_fp.get("run") or "").splitlines() if not l.lstrip().startswith("#"))
+check("WF-pinfault: the pin-fault read GETs organizations/jikigai-eu/workflows/1310055/ exactly once and never the legacy alert-rules path or the global sentry.io host",
+      _fpcode.count('"${host}/api/0/organizations/jikigai-eu/workflows/1310055/"') == 1
+      and "alert-rules" not in _fpcode and "https://sentry.io" not in _fpcode,
+      [_fpcode.count("workflows/1310055"), "alert-rules" in _fpcode, "https://sentry.io" in _fpcode])
 b = step("bridge")
 check("WF3: bridge passes server-ip from env.WEB_HOST_PRIVATE_IP", (b.get("with") or {}).get("server-ip") == "${{ env.WEB_HOST_PRIVATE_IP }}", (b.get("with") or {}).get("server-ip"))
 check("WF4: the bridge is gated to the host-touching modes (not redeploy; not a nothing-rollback)",
@@ -2009,7 +2017,7 @@ check("AC9: DOPPLER_TOKEN_PRD is named only by the three flag reads (cutover.fla
       and all(((s.get("env") or {}).get("DOPPLER_TOKEN")) == "${{ secrets.DOPPLER_TOKEN_PRD }}" for s in _prd_steps.values())
       and set(((_prd_steps.get("cutover.flag_precheck") or {}).get("env") or {})) == {"DOPPLER_TOKEN", "FLAG_MODE"}
       and set(((_prd_steps.get("wipe.wipe_flag_precheck") or {}).get("env") or {})) == {"DOPPLER_TOKEN", "FLAG_MODE", "GH_TOKEN", "WIPE_MODE"}
-      and set(((_prd_steps.get("wipe.wipe_flag_reread") or {}).get("env") or {})) == {"DOPPLER_TOKEN", "FLAG_MODE"}, prd_sites)
+      and set(((_prd_steps.get("wipe.wipe_flag_reread") or {}).get("env") or {})) == {"DOPPLER_TOKEN", "FLAG_MODE", "WIPE_VARIANT"}, prd_sites)
 # The write-seam token census: bound ONLY on the steps that write prd — flag_write, the
 # cutover-stamp step and the finalizer's unwind. secrets_check's presence probe
 # (FLAG_WRITE_TOKEN_PRESENT, a boolean) is a name-reference, not a binding — exempt.
@@ -2124,7 +2132,7 @@ _nbstep = next((x for x in nsteps if x.get("id") == "body"), {}); _nbcode = _nbs
 check("WF-notify-plain: the notify body step's source has no backtick and no command substitution (a backtick in its double-quoted verdict strings would run as a command under set -e and kill the one job that must not fail)",
       bool(_nbcode) and "`" not in _nbcode and "$(" not in _nbcode, [("`" in _nbcode), ("$(" in _nbcode)])
 # Step bodies for the executed rows.
-for k in ("key_fetch", "ssh_config", "secrets_check", "teardown", "finalizer", "flag_write", "unfreeze"):
+for k in ("key_fetch", "ssh_config", "secrets_check", "teardown", "finalizer", "flag_write", "unfreeze", "flip_preconditions"):
     s = step(k)
     if isinstance(s.get("run"), str):
         open("%s/%s.sh" % (steps_dir, k), "w").write(s["run"])
@@ -2152,7 +2160,7 @@ while IFS=$'\t' read -r v name detail; do
   _wf_n=$((_wf_n + 1))
   if [ "$v" = ok ]; then pass "$name"; else fail "$name" "$detail"; fi
 done < "$T/wf.tsv"
-[ "$_wf_n" -eq 56 ] || fail "WF: $_wf_n workflow verdicts were produced (expected exactly 56) — the YAML leg crashed, or a row was added or deleted without restating the count" "$(head -c 300 "$T/wf.err")"
+[ "$_wf_n" -eq 57 ] || fail "WF: $_wf_n workflow verdicts were produced (expected exactly 57) — the YAML leg crashed, or a row was added or deleted without restating the count" "$(head -c 300 "$T/wf.err")"
 
 # ── WORKFLOW STEPS, EXECUTED ──────────────────────────────────────────────────────────
 # Per-name Doppler shim: answers per project/config/secret AND per flag presence, mirroring the
@@ -2184,6 +2192,75 @@ if [ "$noexit" = 1 ] && [ "${SHIM_DOPPLER_IGNORE_FLAG:-0}" != 1 ]; then exit 0; 
 echo "Doppler Error: Could not find requested secret: $name" >&2; exit 1
 SHIM
 chmod +x "$T/kbin/doppler"
+
+# Pin-fault read (#8211): EXECUTE the real `Flip preconditions` bytes up to the d6 scan under a bc_curl shim. The first live flip dispatch
+# refused with HTTP 301 here (scheme-less SENTRY_API_HOST; 1310055 is a Sentry workflow id), and the static suite could not see it.
+FPD="$T/fp"; assert_fixture_dir "$FPD"; rm -rf "$FPD"; mkdir -p "$FPD/ws/scripts/lib" || { printf 'FAIL SETUP: mkdir fp\n' >&2; exit 1; }
+if [ ! -s "$T/steps/flip_preconditions.sh" ] || ! grep -q 'd6_replace_stale (#10166)' "$T/steps/flip_preconditions.sh"; then
+  fail "FP0: the flip preconditions step body (or its d6 slice marker) was not extracted" "never a pass on zero"
+else
+  sed '/^[[:space:]]*# d6_replace_stale (#10166)/,$d' "$T/steps/flip_preconditions.sh" > "$FPD/slice.sh"
+  printf '\necho FP_REACHED_END\n' >> "$FPD/slice.sh"
+  cat > "$FPD/ws/scripts/lib/bearer-curl.sh" <<'SHIM'
+bc_curl() {
+  printf '%s\n' "$*" >> "$FP_LOG"
+  local out="" prev="" a=""
+  for a in "$@"; do [ "$prev" = -o ] && out="$a"; prev="$a"; done
+  [ -n "$out" ] && printf '%s' "${FP_BODY-}" > "$out"
+  printf '%s' "${FP_CODE-}"
+  return "${FP_RC:-0}"
+}
+SHIM
+  FP_GOOD='{"id":"1310055","name":"git-data-host-key-pin-fault","enabled":true}'
+  FP_URL='https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/workflows/1310055/'
+  _fp_run() { # <host|UNSET> <body> <code> <bc_curl-rc>
+    : > "$FPD/log"; rm -f "$FPD/rule.json"
+    local -a hostenv=(); [ "$1" = UNSET ] || hostenv=(SENTRY_API_HOST="$1")
+    env -i PATH=/usr/bin:/bin RUNNER_TEMP="$FPD" GITHUB_WORKSPACE="$FPD/ws" INFRA_PRIVILEGED_PRESENT=true FP_LOG="$FPD/log" \
+      FP_BODY="$2" FP_CODE="$3" FP_RC="$4" "${hostenv[@]}" bash --noprofile --norc -eo pipefail "$FPD/slice.sh" > "$FPD/out" 2>&1
+    FP_RCODE=$?
+  }
+  _fp_bad=""
+  for h in UNSET jikigai-eu.sentry.io https://jikigai-eu.sentry.io; do
+    _fp_run "$h" "$FP_GOOD" 200 0
+    [ "$FP_RCODE" = 0 ] && grep -q '^FP_REACHED_END$' "$FPD/out" && [ "$(wc -l < "$FPD/log")" = 1 ] \
+      && grep -qF -- "git-data-cutover Authorization:Bearer :SENTRY_ACTIONS_RO_TOKEN -- -s -o $FPD/rule.json -w %{http_code} --max-time 20 $FP_URL" "$FPD/log" \
+      || _fp_bad="$_fp_bad [pass:$h rc=$FP_RCODE log=$(tr '\n' '|' < "$FPD/log")]"
+  done
+  if [ -z "$_fp_bad" ]; then pass "FP1: an enabled pin-fault workflow passes, and the read goes to exactly $FP_URL with the read token and --max-time 20, whether SENTRY_API_HOST is unset, scheme-less or https-prefixed"
+  else fail "FP1: the enabled-workflow pass path or its request differs" "$_fp_bad"; fi
+  _fp_bad=""
+  while IFS='|' read -r label body code rc; do
+    [ -n "$label" ] || continue
+    _fp_run jikigai-eu.sentry.io "$body" "$code" "$rc"
+    [ "$FP_RCODE" = 1 ] && grep -q 'verdict=pin_fault_paging_absent' "$FPD/out" && ! grep -q 'FP_REACHED_END' "$FPD/out" \
+      || _fp_bad="$_fp_bad [refuse:$label rc=$FP_RCODE]"
+  done <<FPCASES
+disabled|{"id":"1310055","name":"git-data-host-key-pin-fault","enabled":false}|200|0
+empty-object|{}|200|0
+enabled-null|{"id":"1310055","name":"git-data-host-key-pin-fault","enabled":null}|200|0
+enabled-string|{"id":"1310055","name":"git-data-host-key-pin-fault","enabled":"true"}|200|0
+other-id|{"id":"1310056","name":"git-data-host-key-pin-fault","enabled":true}|200|0
+other-name|{"id":"1310055","name":"some-other-rule","enabled":true}|200|0
+not-json|<html>ok</html>|200|0
+empty-body||200|0
+redirect|$FP_GOOD|301|0
+not-found|$FP_GOOD|404|0
+forbidden|$FP_GOOD|403|0
+no-code|$FP_GOOD||0
+transport-failure|$FP_GOOD||2
+FPCASES
+  if [ -z "$_fp_bad" ]; then pass "FP2: every non-live reading refuses with verdict=pin_fault_paging_absent and never reaches the d6 scan (disabled, {}, null, string \"true\", other id, other name, non-JSON, empty body, 301, 404, 403, no code, transport failure)"
+  else fail "FP2: a non-live pin-fault reading did not refuse" "$_fp_bad"; fi
+  _fp_bad=""
+  for h in evil.example 'evil.example#' 'evil.example/x?' 'a@evil.example' 'http://jikigai-eu.sentry.io' 'HTTPS://jikigai-eu.sentry.io' 'jikigai-eu.sentry.io/' 'jikigai-eu.sentry.io:8443'; do
+    _fp_run "$h" "$FP_GOOD" 200 0
+    [ "$FP_RCODE" = 1 ] && grep -q 'verdict=pin_fault_paging_absent' "$FPD/out" && [ ! -s "$FPD/log" ] \
+      || _fp_bad="$_fp_bad [pin:$h rc=$FP_RCODE sent=$(wc -l < "$FPD/log")]"
+  done
+  if [ -z "$_fp_bad" ]; then pass "FP3: a SENTRY_API_HOST other than the pinned org host refuses before any request, so the read token is never sent elsewhere"
+  else fail "FP3: an unpinned SENTRY_API_HOST reached the network or did not refuse" "$_fp_bad"; fi
+fi
 
 # Key fetch.
 if [ ! -s "$T/steps/key_fetch.sh" ]; then
@@ -2848,9 +2925,9 @@ g2n_row g2n-9-started-clause-dropped 2 "s# \\&\\& needs\\.cutover\\.outputs\\.st
 # 9b — the wipe clause loses its own started pairing (a skipped or refused wipe run, whose empty outputs satisfy '' != 'false', would email).
 g2n_row g2n-9w-wipe-started-clause-dropped 2 "s# \\&\\& needs\\.wipe\\.outputs\\.started != 'false'\\)#)#" "N-if:"
 # 9c — the cutover job loses the wipe_check exclusion (a read-only wipe_check dispatch would start the cutover job as well as the wipe job).
-g2n_row g4-1-cutover-if-wipe-check-dropped 2 "s# \\&\\& inputs\\.mode != 'wipe_check'\$##" "WF-cutover-if:"
-# 9d — the wipe job's if: gains a fifth mode (a mode that is not a wipe word would start the wipe job).
-g2n_row g4-2-wipe-if-widened 2 "s#^(    if: inputs\\.mode == 'wipe' \\|\\| inputs\\.mode == 'wipe_finish' \\|\\| inputs\\.mode == 'wipe_check')\$#\\1 || inputs.mode == 'redeploy'#" "WF-cutover-if:"
+g2n_row g4-1-cutover-if-wipe-check-dropped 2 "s# \\&\\& inputs\\.mode != 'snapshot_clear'\$##" "WF-cutover-if:"
+# 9d — the wipe job's if: gains a mode (a mode that is not a wipe word would start the wipe job).
+g2n_row g4-2-wipe-if-widened 2 "s#^(    if: inputs\\.mode == 'wipe' \\|\\| inputs\\.mode == 'wipe_finish' \\|\\| inputs\\.mode == 'wipe_check' \\|\\| inputs\\.mode == 'snapshot_clear')\$#\\1 || inputs.mode == 'redeploy'#" "WF-cutover-if:"
 # 9e — the run-name expression gains a trailing id for a non-wipe mode (a rollback title would carry a volume id).
 g2n_row g4-5-run-name-trailing-id 2 "s#format\\('git-data \\{0\\}', inputs\\.mode\\) \\}\\}\$#format('git-data {0} {1}', inputs.mode, inputs.volume_id) }}#" "WF-runname:"
 g2n_row g2n-10-workflow-env-secret 1 's#^env:$#&\n  LEAK: ${{ secrets.RESEND_API_KEY }}#' "N-secrets-form:"
@@ -3582,7 +3659,8 @@ fi
 # Ship: 139 mutants x 2 = 278 (+2); FZ22 and the MZ-VO failing-member loops sit inside case_fz / the existing rows and add none: 615.
 # Wipe body (#10138): 143 mutants x 2 = 286 (+8 over 139 x 2); two new standalone workflow verdicts (WF-runname, WF-cutover-if), which also move the workflow verdict count 54 -> 56: 625.
 # Review round 2 (#10138): 148 mutants x 2 = 296 (+10 over 143 x 2); no new standalone row (the G5 census, N-body and N-exprs were restated in place): 635.
-FLOOR=635
+# Pin-fault read (#8211): WF-pinfault (1) and the executed FP1-FP3 rows (3): 636 -> 639 (the workflow verdict count 56 -> 57 moves with WF-pinfault).
+FLOOR=639
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -ne "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: %s assertions ran/declared, the floor is exactly %s — cases were deleted, added without restating the floor, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2

@@ -490,7 +490,7 @@ existing alert covers it.
   20 minutes late, sampled over shipped rows only (the shipper rate-caps ordinary rows). The channel is
   the sibling's: email on the free tier, no escalation policy. **Delivery state: the alert exists only
   after the merge's push apply creates it, and it is not treated as an enforced invariant until the #7530
-  follow-through probe has graded the new boot's window.**
+  follow-through probe has graded the new boot's window.** **[Amendment 2026-10-16: In force, graded 2026-10-15 (#7530): PR #10320 merged 2026-10-15T17:57Z, its push apply created the alert (2 added, 0 changed, 0 destroyed), and the #7530 follow-through probe passed over the running registry boot (46f08985, which postdates the host template's last delivery, PR #10322): 1152 clientIP-bearing shipper rows over 660 minutes, 0 outside RFC1918, the private-flagged control 1152, 16 of 16 classification literals correct (counts only). The measured population is the `SOLEUR_ZOT_LOG` shipper arm only; the disk-heartbeat arm is not graded. Detection, not prevention: monitored and alerted by email. The Better Stack Vendor DPA remains PENDING (#7529).]**
 - **Consumed contract.** The grade depends on zot writing `clientIP` before `method`, `path` and
   `headers` and on the field name; `treat_as_zero` reads a renamed field as healthy forever, so the
   drift guard (`apps/web-platform/test/infra/registry-clientip-not-rfc1918-alert.test.sh`) pins the
@@ -502,3 +502,21 @@ existing alert covers it.
   set; the guard carries mutation and must-pass rows run on copies. Runbook:
   `knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-7530.md` (the alert is the
   observable signature of the public-ingress re-evaluation trigger; the legal steps live there).
+
+## Amendment — 2026-10-16 (#10445): the sixteenth Logs alert (nested `message.*` keys)
+
+Appended, not edited. `agent_sandbox_bash_denial` (`soleur-agent-sandbox-bash-denial-prd`) brings the Terraform-managed
+Logs alert count from 15 to **16** once the post-merge apply has run (re-derive if another alert lands first).
+
+- **Signal class: a stateless per-bucket count over app-container pino rows.** It counts rows from
+  `CONTAINER_NAME = 'soleur-web-platform'` whose `op` is `bash-tool-result` and whose `sandboxErrorCode` is
+  `helper_userns_eperm`, written by the cc-dispatcher `onToolResult` mirror. No sibling covers it: the existing alerts
+  read journald marker text or producer envelopes, and none reads user-visible Bash failures. It reads **nested `message.*` keys**
+  (`JSONExtractString(raw, 'message', 'op')`), as `claude_cost_daily_burn` and `inngest_step_524` already do.
+- **Parameters.** `higher_than 0`, `check_period 60`, `query_period 300`, `confirmation_period 0`,
+  `recovery_period 600`, `on_missing_data treat_as_zero`, email only (the `bwrap_probe_rollback` values). Auto-resolution
+  after 10 quiet minutes does not mean the cause was fixed.
+- **Limits.** `treat_as_zero` reads a dead log path as healthy, the mirror covers the cc-soleur-go path only (the legacy
+  agent-runner loop has no tool_result observer), and the classifier matches only the exact helper line. A forged row
+  can keep one incident open and suppress new pages; accepted at current scale, mitigation tracked in #10455.
+  Runbook: `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`.

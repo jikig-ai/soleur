@@ -32,6 +32,10 @@ MCP-browser dependency), asserting a fresh conversation appears in the rail, the
 tears it down. It is wired into `/soleur:postmerge` as a **path-triggered,
 report-only** gate (Phase 5.5).
 
+> **Superseded 2026-06-18 (#5463, PR #5576) for the gate posture:** the gate is BLOCKING, enforced by the
+> `live-verify` job in `web-platform-release.yml`. The "report-only" wording in this section and
+> in §Substrate records the v1 stage and is kept as history. See the 2026-10-18 amendment below.
+
 ### Partial-supersession of ADR-049 (load-bearing)
 
 ADR-049 (Headless Visual-Regression Gate) mandates "runs with zero credentials,"
@@ -277,3 +281,97 @@ This **more completely satisfies ADR-044** (which defines `current_workspace_id`
 `user_session_state` as THE active-workspace binding) for the synthetic principal; it
 does not introduce or reverse any decision. Tracked by #5501; the live `RESULT: PASS`
 de-risks #5463 item 4 (report-only → blocking flip).
+
+## Amendment 2026-10-18 — the prod gate refuses to run when the principal holds a decryptable credential
+
+**Status: Accepted (extends the invariants; reverses nothing).** Issue #10449.
+
+An agent must not hand live verification to the operator ("start a Concierge session in the
+web app"). The harness can verify LLM-free behaviour in prod through the blocking gate, but
+only if the synthetic principal provably holds no credential that could spend. Three
+invariants make that checkable and bound what a PASS means.
+
+- **I-cannot-spend:** at launch, every `api_keys` row for the principal (any provider the
+  table's CHECK allows) equals the seed's decrypt-poisoned sentinel (`encrypted_key`, `iv`,
+  `auth_tag` exactly as `seed-live-verify-user.sh` inserts them, exported as `SENTINEL_KEY`
+  and pinned against the seed by `gate.test.ts`), and no un-revoked `byok_delegations` row is
+  visible to the principal.
+  - **Delegation filter.** `revoked_at IS NULL` only: deliberately a SUPERSET of what
+    `resolve_byok_key_owner` (migrations 083/084) treats as active, which also needs an
+    unexpired, accepted delegation, so an expired or unaccepted row still counts (the safe
+    direction). Revoked rows are excluded because the table is append-only and could never
+    be cleared otherwise.
+  - **Visibility.** The read uses the principal's own RLS session, never the service role, so
+    "no delegation" means "none the principal can see". A delegation for a principal that is
+    no longer a workspace member is invisible but unreachable: the resolver consults the
+    caller's own key first, and this gate forces that key to exist and to be the poisoned
+    sentinel.
+  - **Where.** Inside `verifyPrincipal`, the only constructor of `VerifiedPrincipal` by
+    convention (the type is structural), so the browser launch is unreachable without it. It
+    runs under `--dry-run` because `main()` calls it first (pinned by a source-order test).
+  - **Two failure classes (CTO ruling).** `cannot-spend-violated` (`api_keys-non-sentinel-row`,
+    `byok_delegations-present`) means the principal holds spend authority: BLOCK=1 in the
+    release workflow, `::error`. `cannot-spend-unverified` (`api_keys-unreadable`,
+    `api_keys-empty`, `byok_delegations-unreadable`) means the check could not be performed:
+    the throw still stops the launch, which is what delivers the safety property, so the
+    classifier keeps BLOCK=0 (a red run adds no safety and would gate prod on an infra blip,
+    per the CTO ruling and AP-021; the flip commit 2686235be9 likewise keeps pre-harness infra
+    failures non-blocking while an unverifiable triggered run, `no-result-line`, stays
+    BLOCK=1). A violation outranks "could not check": both reads happen unless a violating
+    key row is already certain, so an empty or unreadable `api_keys` cannot mask a visible
+    delegation. The BLOCK=0 on unverified is a deliberate fail-open of the red run only,
+    never of the safety property. `CANT-TEARDOWN-has-action-sends` and the allowlist (wrong
+    UID or email) throws stay BLOCK=0, unchanged.
+  - **Visibility today.** The `::error` annotation on the run page and the job summary, plus
+    the Sentry event (level `error`, tag `reason=<token>:<class>`, a closed vocabulary set
+    only for the five real classes). Nothing alerts: no Sentry alert rule covers
+    `gate=live-verify` at all (the older CANT-RUN classes are equally un-alerted), and the
+    `reason` tag is the hook for one. Adding it is not a one-block change in this root (a
+    unique `frequency_minutes`, the README and alert-reference counts, the live-fidelity and
+    destroy guards, and an auto-apply to the production Sentry org on merge), so this change
+    does not provide one. While `unverified` persists no release is live-verified.
+  - Row contents are never logged; messages carry a class only, and `redact.ts` scrubs the
+    ciphertext keys (JSON, `util.inspect` and query-string forms) as a backstop.
+  - **Recovery.** `cannot-spend-unverified`: check the seed step ("live-verify principal may be
+    stale"), the RLS and jti-deny state of the principal's session, and PostgREST health, then
+    re-run the release job. `cannot-spend-violated`, with the service role from the local
+    bootstrap path and the principal UID from Doppler `LIVE_VERIFY_EXPECTED_UID`:
+    - delete the principal's non-sentinel `api_keys` rows (the seed never repairs an existing
+      row). Deleting the sentinel row too is harmless: the next triggered release's seed step
+      re-inserts it, and until then the gate reports `api_keys-empty` (BLOCK=0);
+    - revoke any un-revoked delegation with `revoke_byok_delegation(p_delegation_id,
+      p_actor_user_id, p_reason)`, where the actor must be the row's grantor, grantee or
+      creator and the reason one of `grantor_revoke`, `grantee_decline`, `admin_revoke`.
+  - **What the assembly covers.** The BYOK key chain (`api_keys` plus delegations), which is
+    the chain `resolve_byok_key_owner` consults. It does not cover other tables a future
+    feature could attach spend to (for example `email_inbox_routes`, `scope_grants`), and it
+    attests stored state at launch, per triggered release, not continuously.
+- **I-no-model-turn-in-prod:** the prod gate does not verify any outcome that needs a model
+  turn. The non-dry-run path does send one message; the turn fails inside the app because the
+  stored key cannot decrypt, and only that poisoned row stops a model call. Where a check
+  needs traffic the gate cannot lawfully generate, the agent files a tracker naming the
+  missing capability and never asks the operator to start a session (#10460 funded key,
+  #10461 passive path).
+- **I-egress-not-attested-by-gate:** a PASS does not attest Squid `%un` egress attribution or
+  the real CONNECT path.
+- **I-service-role-bootstrap-only, restated precisely:** it holds for `run.ts`, which never
+  references the service role. It does not hold for the release job as a whole: the "Refresh
+  the synthetic principal" seed step runs with the service role, and the harness step runs
+  under `doppler run -c prd`, so the job environment carries the same config. This
+  amendment does not widen that, and I-cannot-spend attests the principal's rows, not the
+  job's environment.
+
+**`qa-fixtures` contract (sketch, build deferred to #10450).** Extra personas exist only in
+non-prod environments, with fresh orgs. `I-allowlist` stays exactly one prod principal.
+
+**An agent-filed tracker is a repo write, not a prod write.** It needs no operator
+authorisation and does not widen I-blast-radius. The flag flip and rollback stay operator-typed
+([ADR-249](./ADR-249-operator-prod-writes-need-a-tty-ack-layered-with-credential-custody.md),
+partly superseded by [ADR-264](./ADR-264-generated-operator-scripts-are-agent-run-in-stages.md)
+for generated operator scripts only; `flag-create`, `flag-delete` and `flag-set-role` remain
+TTY-gated, migration tracked #9387).
+
+**Residual "report-only" mentions in this ADR** (Decision, §Substrate, the 2026-06-17
+runner-browser section and amendment) were each reviewed and describe the v1 stage; they are
+history, superseded for posture by the blockquote under §Decision. The flip to blocking is
+PR #5576 (commit 2686235be9); run 27786435514 was the first real PASS that unblocked it.

@@ -102,6 +102,47 @@ cd <WORKTREE> && bash <WORKTREE>/plugins/soleur/skills/flag-set-role/scripts/fli
 The operator types `yes` at the prompt. Any other answer stops the script with exit
 `1` and `SOLEUR_BOOTSTRAP_ABORTED stage=ack`, before anything is written.
 
+## Verifying a flip
+
+After the operator reports the flip ran, verify it without asking them to open a session in
+the web app. Walk the ladder in order; rungs 0 to 2 each end in an action you take, and rung 3
+is the closed operator-only list:
+
+0. **Read the flip back.** For a prd role flip, run `soleur:flag-list` (`--json`) and confirm
+   Flagsmith, `server.ts` and Doppler agree on the new state. A Doppler-only flip does not
+   reach the running container until a redeploy (the "Doppler env values on prd" bullet under
+   `postmerge` Production Debugging); do not smoke-test before it. An `--org` flip and a
+   non-prd flip have no Doppler mirror: their read-back is `flip.sh`'s own eval re-verify plus
+   the `<flag>-orgs` segment membership in `flag-list --json`.
+1. **LLM-free behaviour in trigger paths** (the conversation-in-rail flow): run the harness
+   yourself with the `postmerge` Phase 5.5 step 2 command. Or read CI's verdict, but only from
+   a run created AFTER the flip: `bash plugins/soleur/scripts/deploy-arm.sh find --wait
+   <full-merge-sha>` prints `ARM=<digits>` (`ARM=none` or a skipped deploy means nothing ran),
+   then `gh run view <digits> --json jobs,createdAt` for the `live-verify` job and `gh run view
+   --job <id> --log` for its `RESULT:` line. **Only `RESULT: PASS` counts.** A green job is not
+   a PASS: SKIPPED (no triggering paths) and every environmental `CANT-RUN` also leave the job
+   green, so treat them as UNVERIFIED. The job runs after each successful deploy and its
+   harness step is diff-gated, so a flip never starts it; a PASS from a deploy that predates
+   the flip says nothing about the flipped state. The harness asserts one flow (a fresh
+   conversation appears in the rail); a flag outside that flow is UNVERIFIED by it, however
+   green it is.
+2. **Traffic-dependent behaviour** (anything that needs a real model turn, such as a Concierge
+   fetch): the gate cannot lawfully generate it (the synthetic principal holds no decryptable
+   key, ADR-064 `I-cannot-spend`). First read the passive evidence you can already reach: real
+   traffic after the flip in Better Stack `SOLEUR_*` markers
+   ([betterstack-query.sh](../../../../scripts/betterstack-query.sh); invocation in `one-shot`
+   Step 5.5) and in Sentry. With no such signal the check is
+   UNVERIFIED: record `Live verification: UNVERIFIED:<capability missing>` in the `postmerge`
+   Phase 7 summary, or in your reply and on the feature issue when no postmerge run exists,
+   and reference the existing trackers (#10460 funded-key authorisation, #10461 passive
+   verification path) rather than filing a new issue per flip. Do not ask the operator to
+   start a session.
+3. **Operator-only, and only these:** CAPTCHA, credential entry, 2FA, payment, an
+   admin-scoped mint, and the typed-`yes` flip and rollback commands themselves.
+
+The gate does not attest the real CONNECT path or Squid `%un` egress attribution
+(`I-egress-not-attested-by-gate`); a PASS says nothing about either.
+
 ## Incident rollback (the operator, in their own terminal)
 
 When a flip has to be undone during an incident, skip the preview: give the

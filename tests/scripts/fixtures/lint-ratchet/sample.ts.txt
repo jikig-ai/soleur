@@ -1,0 +1,5 @@
+const unusedLocal = 1;
+
+export function pick(a: number, b: number) {
+  return a;
+}

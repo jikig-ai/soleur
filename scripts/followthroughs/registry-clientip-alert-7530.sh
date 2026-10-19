@@ -19,13 +19,14 @@
 #      (cancelled): a descendant's successful run counts. A failed apply with nothing running is exit 3
 #      naming what clears it (a push-event apply that succeeds; a workflow_dispatch re-fire is NOT counted),
 #      never an endless 2.
-#   3. The newest SOLEUR_ZOT_DISK boot began AFTER the merge (the registry host was replaced) and has
+#   3. The newest SOLEUR_ZOT_DISK boot began AFTER the host template's delivery (PR 10322's merge; this PR
+#      changes no host bytes, so no boot follows ITS merge) and has
 #      at least 30 minutes of rows (a window to grade), and its newest row is not older than 30 minutes.
 #   4. The alert's SQL is extracted from betterstack-logs-alerts.tf (the local
 #      `registry_clientip_not_rfc1918_sql`; precedent: luks-monitor-host-timer-8706.sh). Absent while the
 #      checkout does not yet contain the merge: exit 2; absent after: exit 3.
 # Then four engine reads, all through scripts/betterstack-query.sh in raw-SQL mode over the hot window
-# plus the archive, from the newest post-merge boot's first row to now:
+# plus the archive, from the newest current boot's first row to now:
 #   (a) the 16-LITERAL CLASSIFICATION TABLE through the extracted lambda, with synthetic literals only
 #       (engine semantics: 10/8, 172.16/12, 192.168/16 and IPv4-mapped private values quiet; public,
 #       loopback, link-local, CGNAT and IPv6 values flagged). A wrong classification is a measured
@@ -62,7 +63,7 @@
 #   78                     refused to run traced with a credential set.
 #
 # WHAT A PASS DOES AND DOES NOT PROVE (documented limits):
-#   * "The newest boot began AFTER the merge" (gate 3) is satisfied by a plain REBOOT of the old registry
+#   * "The newest boot began AFTER the anchor" (gate 3) is satisfied by a plain REBOOT of the old registry
 #     host as well as by a replace. The gate proves a host is reporting a fresh boot, not which template
 #     built it.
 #   * PASS grades the predicate as COMMITTED in the checkout (the extracted local) over the new window; it
@@ -74,10 +75,14 @@
 #     has to update LOCAL here in the same change.
 #   * The measured population is the SHIPPER arm only: the disk arm (SOLEUR_ZOT_DISK) has no live positive
 #     control: 0 SOLEUR_ZOT_DISK rows with a clientIP at the time of writing, so a PASS does not evidence that arm.
+#   * TEMPLATE_PR_NUMBER=10322 is hard-coded (the PR that last delivered the registry host template): if the host
+#     template changes again, advance it, or a boot that predates the new template would be graded as current.
+#     The anchor is that PR's MERGE time, not the time its apply replaced the host, so a reboot of the old host in
+#     between is accepted (the same documented limit as a plain reboot, below). c_template_pr_unmerged covers a wrong constant.
 #   * PR_NUMBER=10320 is hard-coded: if the PR is closed and replaced by another number this probe stays at
 #     exit 2 (n_pr_unmerged) forever; re-point PR_NUMBER (and the suite's gh row) or retire it.
-#   * PRE_MERGE_LOOKBACK_SECS=7200: the boot read starts 2 hours before the merge. If the old host was silent
-#     for longer than that before the merge there is no producer row to read and the probe sits at exit 3
+#   * PRE_MERGE_LOOKBACK_SECS=7200: the boot read starts 2 hours before the anchor. If the old host was silent
+#     for longer than that before the anchor there is no producer row to read and the probe sits at exit 3
 #     (c_channel_dark) until a new boot reports.
 #   * APPLY_WF is restated here with no parity check against the workflow YAML: a rename makes the run
 #     listing unreadable or empty, so the probe cannot reach PASS (exit 3 or 2).
@@ -115,15 +120,19 @@ export LC_ALL=C
 
 REPO="jikig-ai/soleur"
 PR_NUMBER=10320
+# The PR that last changed the registry host template (cloud-init-registry.yml) and ran its host replace.
+# PR 10320 changes no host bytes, so no boot ever follows ITS merge: the boot gate anchors on the EARLIER of
+# the template's delivery (gate 3), so a boot that began after it is the current host.
+TEMPLATE_PR_NUMBER=10322
 APPLY_WF="apply-web-platform-infra.yml"
 TF_REL="apps/web-platform/infra/betterstack-logs-alerts.tf"
 EXPECTED_HOST="soleur-registry"
 MARKER="SOLEUR_ZOT_DISK"
-# At least 30 minutes of rows from the newest post-merge boot before the window is graded.
+# At least 30 minutes of rows from the newest current boot before the window is graded.
 MIN_SPAN_SECS=1800
 # A newest row older than this is a silent producer (six missed */5 ticks), not a current window.
 SILENT_SECS=1800
-# The boot read starts this far before the merge so a pre-merge boot is visible as pre-merge.
+# The boot read starts this far before the anchor so a boot that predates the template is visible as such.
 PRE_MERGE_LOOKBACK_SECS=7200
 # The classification table has exactly this many literals.
 TABLE_ROWS=16
@@ -187,6 +196,30 @@ if ! [[ "$MERGE_EPOCH" =~ $INT_RE ]]; then
   say "verdict=c_merge_time_unreadable" "CANNOT ESTABLISH: PR $PR_NUMBER is merged but its merge time is unreadable."
   exit 3
 fi
+rc=0
+TEMPLATE_JSON="$(gh pr view "$TEMPLATE_PR_NUMBER" -R "$REPO" --json state,mergedAt 2>/dev/null)" || rc=$?
+TEMPLATE_STATE=""
+if [[ "$rc" -eq 0 ]]; then
+  TEMPLATE_STATE="$(jq -r '.state // ""' <<<"$TEMPLATE_JSON" 2>/dev/null)" || TEMPLATE_STATE=""
+fi
+if [[ "$rc" -ne 0 || -z "$TEMPLATE_STATE" ]]; then
+  say "verdict=c_template_pr_unreadable rc=$rc" "CANNOT ESTABLISH: the registry-template PR $TEMPLATE_PR_NUMBER (the boot anchor) could not be read."
+  exit 3
+fi
+if [[ "$TEMPLATE_STATE" != "MERGED" ]]; then
+  say "verdict=c_template_pr_unmerged state=$TEMPLATE_STATE" "CANNOT ESTABLISH: the registry-template PR $TEMPLATE_PR_NUMBER is not merged, so the boot anchor constant is wrong."
+  exit 3
+fi
+TEMPLATE_MERGED_AT="$(jq -r '.mergedAt // ""' <<<"$TEMPLATE_JSON" 2>/dev/null)" || TEMPLATE_MERGED_AT=""
+TEMPLATE_EPOCH=""
+if [[ "$TEMPLATE_MERGED_AT" =~ $ISO_RE ]]; then
+  TEMPLATE_EPOCH="$(date -u -d "$TEMPLATE_MERGED_AT" +%s 2>/dev/null)" || TEMPLATE_EPOCH=""
+fi
+if ! [[ "$TEMPLATE_EPOCH" =~ $INT_RE ]]; then
+  say "verdict=c_template_time_unreadable" "CANNOT ESTABLISH: the registry-template PR $TEMPLATE_PR_NUMBER is merged but its merge time is unreadable."
+  exit 3
+fi
+ANCHOR_EPOCH="$TEMPLATE_EPOCH"
 if ! git -C "$ROOT" cat-file -e "${MERGE_SHA}^{commit}" 2>/dev/null; then
   say "verdict=c_history_unreadable which=merge" "CANNOT ESTABLISH: the merge commit is not in this checkout (a shallow clone cannot order runs)."
   exit 3
@@ -263,7 +296,7 @@ if (( APPLY_OK == 0 )); then
   exit 2
 fi
 
-# ── 3. the post-merge boot ────────────────────────────────────────────────────────────────────
+# ── 3. the current boot ───────────────────────────────────────────────────────────────────────
 for v in BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_QUERY_PASSWORD; do
   if [[ -z "${!v:-}" ]]; then
     say "verdict=c_bs_creds_unset secret=$v" "CANNOT ESTABLISH: $v is not set (the tracker directive must list it in secrets=)."
@@ -304,7 +337,7 @@ parse_rows() {
     }'
 }
 
-BOOT_SINCE="$(date -u -d "@$(( MERGE_EPOCH - PRE_MERGE_LOOKBACK_SECS ))" '+%Y-%m-%dT%H:%M:%SZ')"
+BOOT_SINCE="$(date -u -d "@$(( ANCHOR_EPOCH - PRE_MERGE_LOOKBACK_SECS ))" '+%Y-%m-%dT%H:%M:%SZ')"
 rc=0
 BOOT_RAW="$("$BQ" --since "$BOOT_SINCE" --grep "$MARKER" --limit "$WINDOW_LIMIT" 2>/dev/null)" || rc=$?
 if [[ "$rc" -ne 0 ]]; then
@@ -313,7 +346,7 @@ if [[ "$rc" -ne 0 ]]; then
 fi
 BOOT_ROWS="$(printf '%s\n' "$BOOT_RAW" | decode_rows | parse_rows)"
 if [[ -z "$BOOT_ROWS" ]]; then
-  say "verdict=c_channel_dark" "CANNOT ESTABLISH: no producer row from host=$EXPECTED_HOST since before the merge; absence of rows is not evidence about the alert."
+  say "verdict=c_channel_dark" "CANNOT ESTABLISH: no producer row from host=$EXPECTED_HOST since before the template's delivery; absence of rows is not evidence about the alert."
   exit 3
 fi
 
@@ -326,28 +359,28 @@ while IFS=$'\t' read -r dt boot; do
   N_BOOT_ROWS=$((N_BOOT_ROWS + 1))
 done <<<"$BOOT_ROWS"
 
-MERGE_STR="$(date -u -d "@$MERGE_EPOCH" '+%Y-%m-%d %H:%M:%S')"
-if ! [[ "$MERGE_STR" < "$FIRST_DT" ]]; then
-  say "verdict=n_no_post_merge_boot boot=${NEWEST_BOOT:0:8}" "NOT YET: the newest registry boot began before the merge, so the replaced host has not reported."
+ANCHOR_STR="$(date -u -d "@$ANCHOR_EPOCH" '+%Y-%m-%d %H:%M:%S')"
+if ! [[ "$ANCHOR_STR" < "$FIRST_DT" ]]; then
+  say "verdict=n_no_post_merge_boot boot=${NEWEST_BOOT:0:8}" "NOT YET: the newest registry boot began before the host template's delivery (PR $TEMPLATE_PR_NUMBER) or this merge, so the current host has not reported."
   exit 2
 fi
 
 FIRST_EPOCH="$(date -u -d "$FIRST_DT UTC" +%s 2>/dev/null)" || FIRST_EPOCH=""
 LAST_EPOCH="$(date -u -d "$LAST_DT UTC" +%s 2>/dev/null)" || LAST_EPOCH=""
 if ! [[ "$FIRST_EPOCH" =~ $INT_RE && "$LAST_EPOCH" =~ $INT_RE ]]; then
-  say "verdict=c_boot_time_unparsable" "CANNOT ESTABLISH: the post-merge boot's row times do not parse."
+  say "verdict=c_boot_time_unparsable" "CANNOT ESTABLISH: the current boot's row times do not parse."
   exit 3
 fi
 NOW_EPOCH="$(date -u +%s)"
 if (( NOW_EPOCH - LAST_EPOCH > SILENT_SECS )); then
   say "verdict=c_producer_silent boot=${NEWEST_BOOT:0:8} last_row_age_min=$(( (NOW_EPOCH - LAST_EPOCH) / 60 ))" \
-    "CANNOT ESTABLISH: the post-merge boot's newest row is more than 30 minutes old; the host stopped reporting, so a window ending now describes nothing."
+    "CANNOT ESTABLISH: the current boot's newest row is more than 30 minutes old; the host stopped reporting, so a window ending now describes nothing."
   exit 3
 fi
 SPAN_SECS=$(( LAST_EPOCH - FIRST_EPOCH ))
 if (( SPAN_SECS < MIN_SPAN_SECS )); then
   say "verdict=n_boot_too_young boot=${NEWEST_BOOT:0:8} span_min=$(( SPAN_SECS / 60 )) rows=$N_BOOT_ROWS" \
-    "NOT YET: the post-merge boot has $(( SPAN_SECS / 60 )) minute(s) of rows; at least 30 are needed to grade a window."
+    "NOT YET: the current boot has $(( SPAN_SECS / 60 )) minute(s) of rows; at least 30 are needed to grade a window."
   exit 2
 fi
 START_ISO="$(date -u -d "@$FIRST_EPOCH" '+%Y-%m-%dT%H:%M:%SZ')"
@@ -519,7 +552,7 @@ run_q control "$CTL_SQL";    read_count control n_control;       CONTROL="$COUNT
 # ── 6. the verdict ────────────────────────────────────────────────────────────────────────────
 if (( AS_WRITTEN > 0 )); then
   say "verdict=f_non_rfc1918 as_written=$AS_WRITTEN population=$POPULATION control=$CONTROL boot=${NEWEST_BOOT:0:8} span_min=$(( SPAN_SECS / 60 ))" \
-    "FAIL: the predicate as written counts $AS_WRITTEN row(s) with a non-RFC1918 clientIP over the post-merge window." \
+    "FAIL: the predicate as written counts $AS_WRITTEN row(s) with a non-RFC1918 clientIP over the current boot's window." \
     "No value is shown here (this comment is public). Follow the runbook registry-clientip-rfc1918-7530.md: fix the ingress cause first, count the exposure, never paste an address."
   exit 1
 fi
@@ -539,6 +572,6 @@ if (( CONTROL == 0 )); then
 fi
 say "verdict=p_pass population=$POPULATION as_written=$AS_WRITTEN control=$CONTROL table_mismatches=0 boot=${NEWEST_BOOT:0:8} span_min=$(( SPAN_SECS / 60 ))" \
   "PASS: the push apply succeeded; the classification table matches on all $TABLE_ROWS synthetic literals; the predicate as written counts 0 non-private clientIP rows" \
-  "over $(( SPAN_SECS / 60 )) minute(s) of the post-merge boot ($POPULATION clientIP-bearing rows); the private-flagged control counts $CONTROL." \
+  "over $(( SPAN_SECS / 60 )) minute(s) of the current boot ($POPULATION clientIP-bearing rows); the private-flagged control counts $CONTROL." \
   "register PA-8 (c)/(g) brackets, counsel-review-7440 addendum + frontmatter clientip_monitoring_pointer, ADR-211 and ADR-218 delivery-state lines say NOT in force / not treated as an enforced invariant until this PASS: re-date them per knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-7530.md section 'After the first graded PASS'"
 exit 0
