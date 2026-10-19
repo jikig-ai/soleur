@@ -127,7 +127,7 @@ def main():
         t2 = time.monotonic() + o["timeout"]
         while child_pgid and n > 0 and time.monotonic() < t2:
             time.sleep(0.2); n = group_members(child_pgid)
-        with open(os.path.join(o["out"], "stdout.bin"), "wb") as fh: fh.write(bytes(raw))
+        Path(o["out"], "stdout.bin").write_bytes(bytes(raw))
         Path(o["out"], "responses.json").write_text(json.dumps(objs, indent=1, ensure_ascii=False))
         for name, val in (("rc", rc), ("child_pgid", child_pgid), ("group_after", n)):
             Path(o["out"], name).write_text(str(val) + "\n")

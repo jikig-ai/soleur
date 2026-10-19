@@ -41,7 +41,7 @@ Registration: a `run_suite` pair (`tests/scripts/lint-ratchet`, `scripts/lint-ra
 
 ## Consequences
 
-A new unclosed file, empty handler, unused import or unused binding in tracked Python, or an unused binding in the scoped test and fixture directories, now fails `lefthook` and the required `test` context. The 62 ruff and 20 eslint findings that exist today are baselined and tracked for drawdown in #10433; none is fixed here. A Dependabot eslint bump that moves findings fails the vitest arm and is fixed or held (no escape hatch is built until one is first needed).
+A new unclosed file, empty handler, unused import or unused binding in tracked Python, or an unused binding in the scoped test and fixture directories, now fails `lefthook` and the required `test` context. The 62 ruff and 20 eslint findings that exist today are baselined and tracked for drawdown in #10433; none is fixed here (both baselines were later drawn down to empty, see Amendment 2). A Dependabot eslint bump that moves findings fails the vitest arm and is fixed or held (no escape hatch is built until one is first needed).
 
 Accepted residuals, none of which the check can see:
 
@@ -84,6 +84,6 @@ Tracker: Ref #10331. Drawdown: #10433.
 
 ## Amendment 2 (2026-10-19, slice 3 of #10331: baselines drawn down to empty)
 
-Both Soleur baselines, `scripts/lint-ratchet-ruff.baseline.txt` (44 entries) and `scripts/lint-ratchet-eslint-test-dirs.baseline.txt` (20), now hold no entries, so the two scopes behave as plain zero-findings gates. The fixes preserve behaviour: silenced handlers use `contextlib.suppress` or a sentinel assignment, file handles use `with` or `Path.read_text`, and dead bindings are deleted. The engine and its suite are untouched. Removing the `DRAWDOWN` constant and the baseline header lines is tracked in #10583.
+Both Soleur baselines, `scripts/lint-ratchet-ruff.baseline.txt` (44 entries, 49 findings) and `scripts/lint-ratchet-eslint-test-dirs.baseline.txt` (20 entries, 27 findings), now hold no entries, so the two scopes behave as plain zero-findings gates. The fixes preserve behaviour: silenced handlers use `contextlib.suppress` or a sentinel assignment, file handles use `with` or `Path.read_text`, and dead bindings are deleted. The engine and its suite are untouched. Removing the `DRAWDOWN` constant and the baseline header lines is tracked in #10583.
 
 Tracker: Ref #10331. Drawdown: #10433 (closed by this change).

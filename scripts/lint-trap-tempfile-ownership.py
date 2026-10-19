@@ -1563,7 +1563,7 @@ def main() -> int:
         try:
             text = p.read_text(encoding="utf-8", errors="replace")
         except OSError:
-            text = None
+            text = None  # unreadable: skipped below
         if text is None:
             continue
         lines = text.splitlines()

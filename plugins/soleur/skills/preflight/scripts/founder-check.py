@@ -826,7 +826,6 @@ def _tasks_plan(top, branch):
     if not _safe_branch(branch):
         return None
     for d in _spec_dirs(top, branch):
-        text = ""
         p = os.path.join(d, "tasks.md")
         if os.path.isfile(p) and not os.path.islink(p) and os.path.getsize(p) <= MAX_PLAN_BYTES:
             with open(p, encoding="utf-8", errors="replace") as fh:

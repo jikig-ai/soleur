@@ -184,7 +184,7 @@ def process_file_no_frontmatter(filepath, filename):
     new_content = fm_str + "\n\n" + content
 
     # Verify body is unchanged
-    # The body is everything after frontmatter in the new content
+    # Parsing the new content raises on malformed frontmatter; the hash below guards `content` only
     _, new_body, _ = parse_frontmatter(new_content)
     content_stripped = content.lstrip("\n")
     new_body_hash = hashlib.md5(content_stripped.encode()).hexdigest()
