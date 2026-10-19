@@ -664,12 +664,15 @@ Reading it:
   not here. **Where the cause is readable (no SSH):** each refused draft emits a Sentry MESSAGE event
   (feature `cron-compound-promote`, op `draft-edit-refused`) tagged `reason` and `cause` with `cluster_hash` in
   `extra`; a derivation fault emits op `draft-edit-error` tagged `cause` (`bad-base`, `git-exit`, `non-additive`,
-  `error`). The same pino line reaches Better Stack under the message `draft-edit-refused`, keyed `hash` (NOT
-  `cluster_hash`; only the Sentry event and the marker's `refusal_detail[]` use `cluster_hash`). To attribute a
-  marker row, take its `refusal_detail[].cluster_hash`, then search Sentry for op `draft-edit-refused` with that
-  `cluster_hash`, or Better Stack for the `draft-edit-refused` line whose `hash` equals it. The events are MESSAGE
-  events on purpose: on the Error path the pino mirror captures the same Error first and Sentry drops the tagged
-  capture (#8629).
+  `error`). `cluster_hash` sits in the event's `extra`, which Sentry does NOT index: search Sentry by the
+  `reason` / `cause` / `op` tags, then read `cluster_hash` off the matching event. Better Stack carries the same
+  value in two shapes: the pino `draft-edit-refused` warn line keys it `hash`, and the error row mirrored by
+  `reportSilentFallback` keys it `cluster_hash`; the marker's `refusal_detail[].cluster_hash` is the join key
+  to either. Example, no SSH (one marker row to its cause):
+  `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 8d --grep draft-edit-refused`,
+  then decode each row and select the one whose `hash` or `cluster_hash` equals the marker's. The `diff-path-refused`
+  site is on the same message path with a `reason` tag. The events are MESSAGE events on purpose: on the Error path
+  the pino mirror captures the same Error first and Sentry drops the tagged capture (#8629).
 - **Do not write `.diff_fenced // "-"` in a jq projection.** jq's `//` yields
   its right-hand side when the left is `null` **or `false`**, so every `false`
   renders identically to an absent field — and `false` is a meaningful value for

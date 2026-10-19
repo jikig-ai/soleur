@@ -312,7 +312,8 @@ describe("handler-side persistence (#5111)", () => {
       .map((l) => l.replace(/^\s*\/\/.*$/, ""))
       .join("\n");
     expect(body).toMatch(/child\.on\("close",/);
-    expect(body).not.toMatch(/child\.on\("exit",/);
+    // Neither spelling of an `exit` listener may resolve the capture (on/once/addListener).
+    expect(body).not.toMatch(/\.(?:on|once|addListener)\(\s*"exit"/);
   });
 
   it("inlines stripFrontmatter — does NOT cross-root-import repo-root scripts/ (#6794/#6860)", () => {

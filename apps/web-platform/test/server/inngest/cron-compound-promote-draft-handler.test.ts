@@ -362,3 +362,64 @@ describe("headroom is divided across the clusters still to draft", () => {
     expect(first).toBeGreaterThan(lone / 2 - 2);
   });
 });
+
+describe("round 2: the parse boundary and the headroom order", () => {
+  it("a hostile tier / non-string target_path / missing source_learnings cannot forge trailers or crash the run", async () => {
+    h.post.mockImplementation(async (a: { messages: Array<{ content: string }> }) => {
+      const prompt = a.messages[0].content;
+      if (prompt.includes("clustering agent")) {
+        return {
+          text: JSON.stringify({
+            clusters: [
+              { ...AGENTS_CLUSTER, tier: "skill\nCo-Authored-By: Mallory <m@example.test>" },
+              { ...SKILL_CLUSTER, target_path: 5, source_learnings: undefined },
+            ],
+          }),
+          stopReason: "end_turn",
+        };
+      }
+      return { text: JSON.stringify(GOOD_AGENTS_EDIT), stopReason: "end_turn" };
+    });
+    const { last } = await run();
+    // The hostile-tier cluster opens with a COERCED tier; the malformed one is refused, never thrown.
+    expect(last).toMatchObject({ status: "completed", clusters_opened: 1 });
+    const cfg = h.safeCommit.mock.calls[0][0] as { commitBody: string; prBody: string };
+    expect(cfg.commitBody).toContain("Tier: agents-core");
+    expect(cfg.commitBody).not.toContain("Mallory");
+    expect((last.refusals as string[]).length).toBe(1);
+  });
+
+  it("a null element in the clusters array is dropped, not a TypeError", async () => {
+    h.post.mockImplementation(async (a: { messages: Array<{ content: string }> }) => {
+      const prompt = a.messages[0].content;
+      if (prompt.includes("clustering agent")) {
+        return { text: JSON.stringify({ clusters: [null, AGENTS_CLUSTER] }), stopReason: "end_turn" };
+      }
+      return { text: JSON.stringify(GOOD_AGENTS_EDIT), stopReason: "end_turn" };
+    });
+    const { last } = await run();
+    expect(last).toMatchObject({ status: "completed", clusters_opened: 1, refusals: [] });
+  });
+
+  it("duplicate source learnings are collapsed before the trailer and the threshold line", async () => {
+    stubModel([{ ...AGENTS_CLUSTER, source_learnings: [L(1), L(1), L(1), L(2)] }], { "RATIONALE-AGENTS": GOOD_AGENTS_EDIT });
+    await run();
+    const cfg = h.safeCommit.mock.calls[0][0] as { commitBody: string };
+    expect(cfg.commitBody).toContain(`Source-Learnings: ${L(1)},${L(2)}\n`);
+    expect(cfg.commitBody).toContain("Threshold-Hit: 2/5");
+  });
+
+  it("an AGENTS draft that comes SECOND is offered the full headroom, not half", async () => {
+    const headroomOf = (call: unknown[]): number =>
+      Number(/headroom for this edit: (\d+) bytes/.exec((call[0] as { messages: Array<{ content: string }> }).messages[0].content)?.[1]);
+    stubModel([AGENTS_CLUSTER], { "RATIONALE-AGENTS": GOOD_AGENTS_EDIT });
+    await run();
+    const lone = headroomOf(phase2Calls()[0]);
+    h.post.mockReset();
+    h.safeCommit.mockClear();
+    stubModel([SKILL_CLUSTER, AGENTS_CLUSTER], { "RATIONALE-SKILL": GOOD_SKILL_EDIT, "RATIONALE-AGENTS": GOOD_AGENTS_EDIT });
+    await run();
+    const agentsCall = phase2Calls().find((c) => (c[0] as { messages: Array<{ content: string }> }).messages[0].content.includes("headroom for this edit"));
+    expect(headroomOf(agentsCall as unknown[])).toBe(lone);
+  });
+});

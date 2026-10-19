@@ -671,7 +671,7 @@ error_reporting:
   fail_loud: a refused cluster logs a pino warn row and mirrors to Sentry as a MESSAGE event (err = null: on the Error path the pino mirror captures the Error first and Sentry drops the tagged capture, #8629) tagged with the closed `reason` and `cause` vocabularies, with `cluster_hash` in extra (shipped: tags `reason`, `cause`; the other tag names this plan first listed were not built); the marker refusals[] names the reason; status error carries error_class and error_message
 failure_modes:
   - mode: phase-2 anchor does not match the real file, or occurs more than once
-    detection: marker refusals[] contains edit-anchor-not-found or edit-anchor-ambiguous (layer 2 pino to Sentry breadcrumb mirror; layer 3 Vector journald shipper to Better Stack); Sentry op draft-edit-refused with anchor_match_count
+    detection: marker refusals[] contains edit-anchor-not-found or edit-anchor-ambiguous (layer 2 pino to Sentry breadcrumb mirror; layer 3 Vector journald shipper to Better Stack); Sentry op draft-edit-refused tagged reason and cause
     alert_route: follow-through probe prints the reasons (exit 2); Sentry issue; the open tracker
   - mode: model output unusable (schema, charset, credential-shaped, shape, frontmatter or fence anchor, max_tokens)
     detection: marker refusals[] contains edit-invalid and the Sentry cause tag names which (layer 2; layer 3 Vector to Better Stack)

@@ -32,6 +32,8 @@ import {
   CREDENTIAL_RE,
   EDIT_TARGET_MAX_BYTES,
   PII_REGEX,
+  agentsPointerNote,
+  skillConflictDiffBody,
   buildAdditiveEditDiff,
   checkDiffPaths,
   draftAdditiveEdit,
@@ -663,5 +665,183 @@ describe("draftAdditiveEdit -- the model call", () => {
   it("the model's own wrong anchor is a refusal (the real file decides, not the model)", async () => {
     const r = await draftAdditiveEdit(args(answer({ insert_after_line: "- Not in the file", new_lines: [RULE_LINE] })));
     expect(r).toMatchObject({ ok: false, reason: "edit-anchor-not-found" });
+  });
+});
+
+describe("round 2: grammar boundaries, content classes and the PR/comment sinks", () => {
+  const agentsLine = (id: string, prose = "Prefer the boring option here.") => `- ${prose} [id: ${id}]`;
+  const forAgents = (lines: string[]) =>
+    derive(AGENTS, { insert_after_line: "- Keep it small [id: cq-keep-small]. Because.", new_lines: lines });
+
+  describe("rule-bullet grammar", () => {
+    it.each([
+      ["a line without the '- ' bullet prefix", ["Rule text here. [id: cq-fresh-bare]"]],
+      ["a bare pointer-shaped line with no rule text", ["- [id: cq-fresh-pointer]"]],
+      ["the same fresh id on two lines", [agentsLine("cq-dup-twice"), agentsLine("cq-dup-twice")]],
+      ["an upper-case id tag", ["- Rule text here. [Id: cq-fresh-upper]"]],
+      ["a [mandates-filing] tag (grants a different gate an exemption)", [agentsLine("cq-fresh-tag") + " [mandates-filing]"]],
+      ["a [hook-enforced] claim", [agentsLine("cq-fresh-hook") + " [hook-enforced: x]"]],
+      ["an hr- id in backticks", ["- See `hr-never-x` before this. [id: cq-fresh-tick]"]],
+      ["an hr- id in parentheses", ["- Rule text (hr-never-x) applies. [id: cq-fresh-paren]"]],
+      ["an upper-case HR- id", ["- Overrides HR-NEVER-X now. [id: cq-fresh-caps]"]],
+      ["an hr- id that starts with a digit", ["- Overrides hr-9x now. [id: cq-fresh-digit]"]],
+      ["a link", ["- See [the doc](https://example.test/x) first. [id: cq-fresh-link]"]],
+    ])("%s -> edit-invalid/shape", async (_label, lines) => {
+      const r = await forAgents(lines);
+      expect(r).toMatchObject({ ok: false, reason: "edit-invalid", cause: "shape" });
+    });
+
+    it("id length bounds: 3 and 60 characters after the class prefix pass, 61 and 2 are refused", async () => {
+      const ok3 = await forAgents([agentsLine("cq-abc")]);
+      const ok60 = await forAgents([agentsLine("cq-" + "a".repeat(60))]);
+      const bad61 = await forAgents([agentsLine("cq-" + "a".repeat(61))]);
+      const bad2 = await forAgents([agentsLine("cq-ab")]);
+      expect(ok3.ok).toBe(true);
+      expect(ok60.ok).toBe(true);
+      expect(bad61).toMatchObject({ ok: false, cause: "shape" });
+      expect(bad2).toMatchObject({ ok: false, cause: "shape" });
+    });
+
+    it.each(["cq", "rf", "pdr", "cm"])("the %s- class is accepted", async (cls) => {
+      const r = await forAgents([agentsLine(`${cls}-fresh-class`)]);
+      expect(r.ok).toBe(true);
+    });
+
+    it("render hazards are refused on the rules corpus too, not only on skills", async () => {
+      const r = await forAgents(["- Run `!`id`` now. [id: cq-fresh-haz]"]);
+      expect(r).toMatchObject({ ok: false, cause: "shape" });
+    });
+  });
+
+  describe("skill content classes: links, URLs and command substitution", () => {
+    it.each([
+      ["an image", "see ![b](x)"],
+      ["a bare URL", "see https://evil.example/x"],
+      ["command substitution", "run $(id) now"],
+    ])("%s -> edit-invalid/shape", async (_label, line) => {
+      const r = await derive(SKILL_ALPHA, { insert_after_line: "## Steps", new_lines: [line] });
+      expect(r).toMatchObject({ ok: false, reason: "edit-invalid", cause: "shape" });
+    });
+  });
+
+  describe("credential shapes: boundaries", () => {
+    it("a PKCS#8 private-key header (no algorithm word) is refused", async () => {
+      const r = await derive(SKILL_ALPHA, {
+        insert_after_line: "## Steps",
+        new_lines: ["- k " + "-----" + "BEGIN PRIVATE KEY" + "-----"],
+      });
+      expect(r).toMatchObject({ ok: false, cause: "credential" });
+    });
+    it("a bearer credential separated by a TAB is refused", async () => {
+      const r = await derive(SKILL_ALPHA, {
+        insert_after_line: "## Steps",
+        new_lines: ["- h Bearer\t" + "a".repeat(30)],
+      });
+      expect(r).toMatchObject({ ok: false });
+    });
+  });
+
+  describe("agentsPointerNote lists exactly the ids the diff ADDS", () => {
+    const diff = [
+      "diff --git a/AGENTS.rules.md b/AGENTS.rules.md",
+      "--- a/AGENTS.rules.md",
+      "+++ b/AGENTS.rules.md",
+      "@@ -1,2 +1,4 @@",
+      " - Keep it small [id: cq-keep-small]. Because.",
+      "+- First added rule. [id: cq-added-one]",
+      "+- Second added rule. [id: cq-added-two]",
+      " - context [id: cq-context-only]",
+      "",
+    ].join("\n");
+    it("names both added ids in order and never a context id", () => {
+      const note = agentsPointerNote("AGENTS.rules.md", diff);
+      expect(note).toContain("`- [id: cq-added-one]`, `- [id: cq-added-two]`");
+      expect(note).not.toContain("cq-keep-small");
+      expect(note).not.toContain("cq-context-only");
+    });
+    it("is empty for a skill target", () => {
+      expect(agentsPointerNote("plugins/soleur/skills/alpha/SKILL.md", diff)).toBe("");
+    });
+  });
+
+  describe("skillConflictDiffBody: the comment fence cannot be closed by the diff", () => {
+    it("is longer than any backtick run in the diff, so a context line cannot close it", () => {
+      const diff = ["diff --git a/x b/x", "@@ -1 +1,2 @@", " ```", "+@someone hi", ""].join("\n");
+      const body = skillConflictDiffBody(diff);
+      const lines = body.split("\n");
+      const open = /^(`+)diff$/.exec(lines[0]);
+      expect(open).not.toBeNull();
+      const n = open![1].length;
+      expect(n).toBeGreaterThanOrEqual(4);
+      const closeRe = new RegExp("^ {0,3}`{" + n + ",}\\s*$");
+      const inner = lines.slice(1, -1);
+      expect(inner.some((l) => closeRe.test(l))).toBe(false);
+      expect(closeRe.test(lines[lines.length - 1])).toBe(true);
+    });
+    it("redacts the diff entirely when a PII pattern is present", () => {
+      const body = skillConflictDiffBody("+" + "AK" + "IA" + "ABCDEFGHIJKLMNOP");
+      expect(body).toContain("redacted");
+      expect(body).not.toContain("AKIA");
+    });
+  });
+
+  describe("derivation faults are reported with their cause and exit code", () => {
+    it("a git that cannot run is edit-derive-failed/git-exit with the exit code in extra", async () => {
+      const savedPath = process.env.PATH;
+      const base = await baseOf(SKILL_ALPHA);
+      process.env.PATH = "/nonexistent-compound-path";
+      try {
+        const r = await buildAdditiveEditDiff({
+          targetPath: SKILL_ALPHA,
+          base,
+          edit: { insert_after_line: "## Steps", new_lines: ["- x"] },
+        });
+        expect(r).toMatchObject({ ok: false, reason: "edit-derive-failed", cause: "git-exit" });
+        expect(reportSilentFallback).toHaveBeenCalledWith(
+          null,
+          expect.objectContaining({
+            op: "draft-edit-error",
+            tags: { cause: "git-exit" },
+            extra: { git_exit: -1 },
+          }),
+        );
+      } finally {
+        process.env.PATH = savedPath;
+      }
+    });
+    it("a thrown fault carries the errno code, not only the class", async () => {
+      const saved = process.env.TMPDIR;
+      process.env.TMPDIR = "/nonexistent-compound-tmpdir";
+      try {
+        await derive(SKILL_ALPHA, { insert_after_line: "## Steps", new_lines: ["- x"] });
+        expect(reportSilentFallback).toHaveBeenCalledWith(
+          null,
+          expect.objectContaining({ extra: expect.objectContaining({ error_code: "ENOENT" }) }),
+        );
+      } finally {
+        if (saved === undefined) delete process.env.TMPDIR;
+        else process.env.TMPDIR = saved;
+      }
+    });
+  });
+
+  it("the phase-2 prompt states the REAL id grammar the gate enforces", async () => {
+    const post = vi.fn(async (..._a: unknown[]) => ({
+      text: JSON.stringify({ insert_after_line: "- Keep it small [id: cq-keep-small]. Because.", new_lines: [RULE_LINE] }),
+      stopReason: "end_turn",
+    }));
+    await draftAdditiveEdit({
+      cluster: { target_path: AGENTS, rationale: "r", source_learnings: ["knowledge-base/project/learnings/a.md"] },
+      repoRoot,
+      apiKey: "k",
+      runId: "R",
+      corpusSummaries: new Map([["knowledge-base/project/learnings/a.md", "S"]]),
+      headroomBytes: 10,
+      post: post as unknown as Parameters<typeof draftAdditiveEdit>[0]["post"],
+    });
+    const prompt = (post.mock.calls[0][0] as { messages: Array<{ content: string }> }).messages[0].content;
+    expect(prompt).toMatch(/cq-, rf-, pdr- or cm-/);
+    expect(prompt).toMatch(/exactly one \[id: \.\.\.\] per line/);
+    expect(prompt).toMatch(/no mention of any hr- or wg-/);
   });
 });

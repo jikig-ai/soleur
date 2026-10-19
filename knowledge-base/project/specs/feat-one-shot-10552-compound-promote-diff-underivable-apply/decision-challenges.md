@@ -21,3 +21,15 @@ ruling; no row below is waiting on the operator.
 | Skill-conflict guard reachability and comment spam | taste | Not folded in. Recorded as a deferral: move the open-PR check ahead of the draft step and reconsider the weekly diff comment on an unrelated PR. Skill clusters are effectively blocked while any open PR mentions `plugins/soleur/skills`; `AGENTS.rules.md` clusters are unaffected. |
 | Review fork 1 - AGENTS.rules.md drafts fail `lint-rule-ids` (no `AGENTS.md` pointer) | technical | Ruled by CTO agent, 2026-10-19: keep the cron single-file and carry the pointer instruction in the draft PR body (names each new slug), with one runbook sentence; extending the cron to write `AGENTS.md` would widen the write boundary (`TARGET_ALLOW_RE`, `allowedPaths`, the one-file diff check, byte and shrink measurement). Neither the probe nor the census counts the red lint as a failure. |
 | Review fork 2 - probe class of `diff-path-off-target`, `corpus-shrink-refused`, `agents-core-hr-rule-edit-refused` | technical | Ruled by CTO agent, 2026-10-19: move these three from class P to class F (exit 1) because a server-derived additive single-target diff cannot legitimately trigger them, so a PASS would certify a server defect; `byte-budget-overflow` and `not-committed-*` stay P; `skill-conflict-guard`, `target-missing` and `branch-name-shape-failed` stay N. |
+
+## Review round 2 dispositions (mechanical, no fork)
+
+These are dispositions of review findings, not decisions between options, so they carry no ruling row.
+
+- **Server-side quorum of 5 source learnings: unchanged (pre-existing).** The threshold lives only in the
+  phase-1 prompt. This round closes the amplification instead: source learnings are deduplicated and
+  corpus-filtered, so `Threshold-Hit` reports the true count. Revisit with the pattern-layer work (#8293).
+- **SKILL.md and rule content classes: implemented as the security seat asked.** `](`, `://` and `$(` join the
+  render-hazard refusals for every target, and enforcement tags (`[mandates-filing]` and the `[*-enforced]`
+  family) are refused on rule bullets. Prose that tells a reader to ignore a gate is not mechanically
+  detectable and stays with the human reviewer of the draft PR.

@@ -82,7 +82,7 @@ pat=""
 printf '%s\n' "$*" >> "$(dirname "$0")/../argv.log"
 while [ $# -gt 0 ]; do case "$1" in --grep) pat="$2"; shift 2;; *) shift;; esac; done
 [ -n "${STUB_EXIT3:-}" ] && { printf '%s' "${STUB_MSG:-You are NOT missing Better Stack access}" >&2; exit 3; }
-[ -n "${STUB_EXIT7:-}" ] && { echo "clickhouse exploded" >&2; exit 7; }
+[ -n "${STUB_EXIT7:-}" ] && { printf '%s' "${STUB_MSG:-clickhouse exploded}" >&2; exit 7; }
 grep -F -- "$pat" "$(dirname "$0")/../rows.jsonl" || true
 STUB
   chmod +x "$d/scripts/betterstack-query.sh"
@@ -217,6 +217,11 @@ expect_rc "P-7 (xtrace refusal)" 78 "$rc"
 if grep -q 'sentinel-secret' "$d/err" "$d/out"; then fail "P-7: the credential leaked under xtrace"; else pass "P-7: the credential is not echoed under xtrace"; fi
 probe_rows STUB_EXIT7=1 -- "$C"
 expect_rc "P-7 (query helper transient failure is NOT YET, not a verdict)" 2 "$PROBE_RC"
+# Hygiene on the OTHER failure path: hostile helper stderr (ANSI, newline-led forged verdict) at rc 7.
+probe_rows STUB_EXIT7=1 "STUB_MSG=$(printf '\033[31mFORGED\nINJECTED: all clear')" -- "$C"
+expect_rc "P-7 (hostile helper stderr at rc 7 is still NOT YET)" 2 "$PROBE_RC"
+if grep -q -P '\x1b' "$PROBE_DIR/err" "$PROBE_DIR/out"; then fail "P-7: an ESC byte from the helper reached the output"; else pass "P-7: no ESC byte from the helper in the output"; fi
+if grep -q '^INJECTED' "$PROBE_DIR/err" "$PROBE_DIR/out"; then fail "P-7: a newline-led forged line reached the output"; else pass "P-7: no forged line reached the output"; fi
 # A floor in the future cannot grade anything.
 probe_rows FT10552_DEPLOY_FLOOR="$(floor_iso $((NOW_S + 86400)))" -- "$C" "$(row "$(marker cron completed 1 '[]')" "$D1")"
 expect_rc "P-7 (floor in the future)" 2 "$PROBE_RC"
@@ -342,7 +347,7 @@ fx_git() { # fx_git <date> <dir> <git args...>
   env -i HOME="$FXHOME" PATH="$PATH" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
     GIT_CEILING_DIRECTORIES="$TMP_ROOT" \
     GIT_AUTHOR_NAME=fx GIT_AUTHOR_EMAIL=fx@invalid GIT_COMMITTER_NAME=fx GIT_COMMITTER_EMAIL=fx@invalid \
-    GIT_AUTHOR_DATE="$at" GIT_COMMITTER_DATE="$at" \
+    GIT_AUTHOR_DATE="${FX_AUTHOR_AT:-$at}" GIT_COMMITTER_DATE="$at" \
     git -C "$d" -c init.defaultBranch=main -c commit.gpgsign=false -c core.hooksPath=/dev/null "$@"
 }
 # mk_repo <dir> <epoch> [tz]: <dir> becomes a repo whose single commit ADDS the probe path
@@ -454,6 +459,11 @@ SC_DIR=$(make_sandbox "$(fx "$C" "$(PROOF_ROW "$D2")")"); mk_repo "$SC_DIR" "$FL
 SC_RC=$(run_bare "$SC_DIR")
 expect_rc "F-3 (+0530)" 0 "$SC_RC"
 if grep -q -F -- "since $FLOOR_DERIVED_ISO" "$SC_DIR/err"; then pass "F-3: same derived floor as UTC"; else fail "F-3: floor differs: $(cat "$SC_DIR/err")"; fi
+
+echo "F-6. the floor reads the COMMITTER date, not the author date (a rebase-merge keeps an older author date)"
+SC_DIR=$(make_sandbox "$(fx "$C" "$(F_ROW "$(dt_at "$FLOOR_S" 2)")")"); FX_AUTHOR_AT="$((FLOOR_S - 2592000)) +0000" mk_repo "$SC_DIR" "$FLOOR_S"
+SC_RC=$(run_bare "$SC_DIR")
+expect_rc "F-6 (author date 30d older; a row 2h after the committer date is inside the lag, ungraded)" 2 "$SC_RC"
 
 echo "F-4. the OLDEST adding commit is the floor (the file was removed and re-added later)"
 sc_oldest "$PROBE_SRC"
@@ -636,7 +646,7 @@ mut_row M-13 "rc-3 path echoes the helper's raw output again" \
 
 
 # --- verdict: floor + conservation reported DIRECTLY, never via pass()/fail() --
-MIN_CASES=171
+MIN_CASES=175
 total=$((passes + fails))
 if (( total < MIN_CASES )); then
   printf 'FATAL: only %d case(s) ran; floor is %d - the suite asserted nothing\n' "$total" "$MIN_CASES" >&2

@@ -970,12 +970,19 @@ const PRINTABLE_ASCII_RE = /^[\x20-\x7e]*$/;
 // One `[id: ...]` per line, and a class prefix the corpus lint (scripts/lint-rule-ids.py RID_RE)
 // accepts. `hr-` and `wg-` are deliberately absent: ADR-092 gates those bodies for human review,
 // so the cron may only mint the ordinary rule classes.
-const AGENTS_ID_TOKEN_RE = /\[id:[^\]]*\]/g;
+const AGENTS_ID_TOKEN_RE = /\[id\s*:[^\]]*\]/gi;
 const AGENTS_NEW_ID_RE = /^\[id: ((?:cq|rf|pdr|cm)-[a-z0-9-]{3,60})\]$/;
 // A hard-rule id named anywhere in the line (prose, a second token) is refused too.
 const HARD_RULE_TOKEN_RE = /(?:^|[^a-z0-9])hr-[a-z0-9]/i;
 // Text that changes how the harness or a markdown renderer reads what follows it.
-const RENDER_HAZARD_RE = /```|~~~|<!--|-->|!`/;
+// Also links and images (`](`), URLs (`://`) and command substitution (`$(`): none belongs in a
+// one-line rule or skill bullet, and each is an active-content or exfiltration carrier.
+const RENDER_HAZARD_RE = /```|~~~|<!--|-->|!`|\]\(|:\/\/|\$\(/;
+// A rule-class or enforcement tag the model must not assert (`[mandates-filing]` grants a
+// different gate an exemption; the others claim an enforcement that does not exist).
+const AGENTS_TAG_RE = /\[(?:mandates-filing|compliance-tier|hook-enforced|skill-enforced|scanner-enforced)/i;
+// A bullet must carry real rule text, not just a pointer-shaped `- [id: x]`.
+const AGENTS_MIN_RULE_TEXT = 6;
 
 function assertAllowedTarget(targetPath: string): EditRefusal | null {
   // A future caller or test helper must not get traversal on `join(tmp, "a", path)`,
@@ -1079,8 +1086,11 @@ function newLinesCause(lines: string[], targetPath: string, base: string): strin
     const seen = new Set<string>();
     for (const l of lines) {
       const tokens = l.match(AGENTS_ID_TOKEN_RE) ?? [];
-      const id = tokens.length === 1 ? AGENTS_NEW_ID_RE.exec(tokens[0])?.[1] : undefined;
+      const token = tokens[0] ?? "";
+      const id = tokens.length === 1 ? AGENTS_NEW_ID_RE.exec(token)?.[1] : undefined;
       if (!l.startsWith("- ") || id === undefined || HARD_RULE_TOKEN_RE.test(l)) return "shape";
+      if (AGENTS_TAG_RE.test(l)) return "shape";
+      if (l.slice(2).replace(token, "").trim().length < AGENTS_MIN_RULE_TEXT) return "shape";
       if (base.includes(`[id: ${id}]`) || seen.has(id)) return "shape";
       seen.add(id);
     }
@@ -1161,7 +1171,11 @@ async function deriveDiff(
       op: "draft-edit-error",
       message: "additive edit derivation threw",
       tags: { cause: "error" },
-      extra: { error_class: err instanceof Error ? err.name : typeof err },
+      extra: {
+        error_class: err instanceof Error ? err.name : typeof err,
+        // The errno code (ENOSPC / EACCES / ENOENT) is the diagnosis; the class is just "Error".
+        error_code: (err as NodeJS.ErrnoException | null)?.code,
+      },
     });
     return { failure: "error" };
   } finally {
@@ -1268,7 +1282,7 @@ export async function draftAdditiveEdit(args: {
     `Contract: return insert_after_line and new_lines. insert_after_line MUST be copied verbatim from the target file and appear in it exactly once (use "" to append at the end of the file). new_lines are the lines to insert after it. Append new lines only; never restate, edit or delete an existing line.`,
     `Each new line is printable ASCII, at most ${EDIT_LINE_MAX_CHARS} characters; at most ${EDIT_NEW_LINES_MAX} lines.`,
     cluster.target_path === "AGENTS.rules.md"
-      ? `Every new line must be a rule bullet of the form "- <text> [id: <new-id>]" with an id that is not already in the file and does not start with hr-. Always-loaded byte headroom for this edit: ${headroomBytes} bytes.`
+      ? `Every new line must be one rule bullet of the form "- <rule text> [id: <new-id>]" with exactly one [id: ...] per line, an id of class cq-, rf-, pdr- or cm- (3-60 lowercase letters, digits or hyphens after the prefix) that is not already in the file, and no mention of any hr- or wg- rule anywhere in the line. No links, URLs, code fences or HTML comments. Always-loaded byte headroom for this edit: ${headroomBytes} bytes.`
       : `Do not insert inside the frontmatter or inside a fenced code block.`,
     `Target path: ${cluster.target_path}`,
     block("rationale", cluster.rationale.slice(0, 2000)),
@@ -1307,6 +1321,20 @@ export async function draftAdditiveEdit(args: {
 }
 
 /**
+ * The diff block of the skill-conflict comment the App posts on an unrelated open PR. The fence is
+ * sized from the content: a context line of the diff can be a bare closing fence (a base file that
+ * contains a fenced block), and CommonMark lets a fence of equal or greater length close the block,
+ * so a fixed three-backtick fence let the rest of the diff render as live markdown (@mentions,
+ * links, image beacons) from the bot account.
+ */
+export function skillConflictDiffBody(diff: string): string {
+  if (PII_REGEX.test(diff)) return "[diff redacted — PII pattern detected in LLM output]";
+  const longestRun = Math.max(0, ...(diff.match(/`+/g) ?? []).map((r) => r.length));
+  const fence = "`".repeat(Math.max(4, longestRun + 1));
+  return `${fence}diff\n${diff}\n${fence}`;
+}
+
+/**
  * The draft PR body line for an `AGENTS.rules.md` proposal. The cron edits exactly one file, but
  * `scripts/lint-rule-ids.py` requires every rule body to have a pointer line in `AGENTS.md`, so
  * the draft's CI is red until a reviewer adds it. Say so at the point of action and name each
@@ -1337,7 +1365,8 @@ async function listEligibleTargets(repoRoot: string): Promise<string> {
       const size = (await stat(join(repoRoot, rel))).size;
       if (size <= EDIT_TARGET_MAX_BYTES) out.push(`${rel} (${size})`);
     } catch {
-      // absent in this clone: not eligible
+      // review: swallowed -- an absent target is simply not eligible; phase 2 re-reads HEAD and
+      // refuses (edit-target-unreadable/absent) if a model names it anyway.
     }
   };
   await consider("AGENTS.rules.md");
@@ -1351,7 +1380,10 @@ async function listEligibleTargets(repoRoot: string): Promise<string> {
       feature: "cron-compound-promote",
       op: "eligible-targets-unreadable",
       message: "could not list plugins/soleur/skills for the eligible-target list",
-      extra: { error_class: err instanceof Error ? err.name : typeof err },
+      extra: {
+        error_class: err instanceof Error ? err.name : typeof err,
+        error_code: (err as NodeJS.ErrnoException | null)?.code,
+      },
     });
   }
   for (const name of skills) {
@@ -1674,14 +1706,21 @@ export async function cronCompoundPromoteHandler({
     // only source learnings that are keys of the collected corpus: they flow into the cluster
     // hash, the commit trailers and the PR body, where a newline in a model-invented path would
     // forge a trailer. A cluster left with none is refused `edit-invalid` (no-source).
-    const proposals: ProposedCluster[] = clusterResult.clusters.map((c) => ({
+    const proposals: ProposedCluster[] = clusterResult.clusters
+      .filter((c) => typeof c === "object" && c !== null)
+      .map((c) => ({
       cluster_hash: typeof c.cluster_hash === "string" ? c.cluster_hash : "",
       tier: c.tier === "skill" ? "skill" : "agents-core",
       target_path: typeof c.target_path === "string" ? c.target_path : "",
       rationale: typeof c.rationale === "string" ? c.rationale : "",
-      source_learnings: (Array.isArray(c.source_learnings) ? c.source_learnings : []).filter(
-        (p): p is string => typeof p === "string" && corpusSummaries.has(p),
-      ),
+      // Deduped: five copies of one path must not read as five learnings (`Threshold-Hit`).
+      source_learnings: [
+        ...new Set(
+          (Array.isArray(c.source_learnings) ? c.source_learnings : []).filter(
+            (p): p is string => typeof p === "string" && corpusSummaries.has(p),
+          ),
+        ),
+      ],
     }));
 
     for (const [clusterIndex, proposed] of proposals.entries()) {
@@ -1814,9 +1853,13 @@ export async function cronCompoundPromoteHandler({
             { fn: "cron-compound-promote", hash: clusterHash, reason, ...shape },
             "diff-path-refused",
           );
-          reportSilentFallback(new Error(`diff refused: ${pathVerdict.reason}`), {
+          // MESSAGE path with TAGS (see draft-edit-refused above): on the Error path the `op` that
+          // tells `diff-underivable-apply` from `edit-derive-failed` never reaches Sentry.
+          reportSilentFallback(null, {
             feature: "cron-compound-promote",
             op: "diff-path-refused",
+            message: `diff refused: ${pathVerdict.reason}`,
+            tags: { reason },
             // safeDetail, not the bare value: Sentry keeps the FULL path for
             // forensics but still gets the control-strip and the 200-char cap.
             extra: {
@@ -1850,9 +1893,7 @@ export async function cronCompoundPromoteHandler({
           });
           if (openPRs.total_count > 0) {
             const firstPR = openPRs.items[0];
-            const diffBody = PII_REGEX.test(cluster.proposed_diff_unified)
-              ? "[diff redacted — PII pattern detected in LLM output]"
-              : `\`\`\`diff\n${cluster.proposed_diff_unified}\n\`\`\``;
+            const diffBody = skillConflictDiffBody(cluster.proposed_diff_unified);
             await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/comments", {
               owner: REPO_OWNER, repo: REPO_NAME, issue_number: firstPR.number,
               body: `Compound-promote cluster \`${clusterHash}\` proposes edits to \`${cluster.target_path}\` but this PR already touches skill files. Posting diff here instead of opening a conflicting branch.\n\n${diffBody}`,
