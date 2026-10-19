@@ -149,13 +149,17 @@ Live standing alarms over this source:
   every 60 s, missing data counts as zero): `soleur-agent-sandbox-bash-denial-prd`. **What it matches:** one row
   from the app container (`CONTAINER_NAME = 'soleur-web-platform'`, no `host_name` conjunct: the name is the
   same on web-1 and web-2) with `message.feature = 'agent-sandbox'`, `message.op = 'bash-tool-result'` AND
-  `message.sandboxErrorCode = 'helper_userns_eperm'`. That is the live-session mirror of a hosted agent's Bash
-  `tool_result` whose line is exactly `apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted` (line-anchored,
-  nothing trailing): the SDK's command-side helper could not create its user namespace, so EVERY Bash call in that
-  session fails. Other helper-step EPERMs are NOT matched (tracked in #10455). **Coverage:** the legacy agent-runner
-  loop has no tool_result observer, so the alert covers the cc-soleur-go path only. It filters on the new
-  code, not on the whole `op`, so an older `bwrap_eperm` / `proc_mount_eperm` row never pages it. The row carries
-  only the scrubbed matched line and counts, never the command or the output. **First move (no SSH):** (1) read
+  `message.sandboxErrorCode IN ('helper_userns_eperm', 'helper_step_eperm')`. That is the live-session mirror of a
+  hosted agent's Bash `tool_result` whose line is exactly `apply-seccomp: <step>: Operation not permitted` (or the
+  `EPERM` spelling; line-anchored, nothing trailing) for one of the 16 step strings of the SDK's command-side helper
+  (exact allowlist read from the vendored binary, `HELPER_STEPS` in `server/sandbox-startup-classifier.ts`).
+  `helper_userns_eperm` is the `unshare(CLONE_NEWUSER)` step (the helper could not create its user namespace, so EVERY
+  Bash call in that session fails); `helper_step_eperm` is any other step (the #10455 e regression net: while
+  `allowAllUnixSockets` is set the helper is skipped, so these lines only appear if that knob regresses). EACCES and
+  EINVAL helper failures are NOT matched (a recorded residual). **Coverage:** the legacy agent-runner
+  loop has no tool_result observer, so the alert covers the cc-soleur-go path only. It filters on these two
+  codes, not on the whole `op`, so an older `bwrap_eperm` / `proc_mount_eperm` row never pages it. The row carries
+  only the matched line (a fixed string for the helper codes) and counts, never the command or the output. **First move (no SSH):** (1) read
   the count and first timestamp with the SQL below; (2) pull `/hooks/deploy-status` (call pattern in
   `plugins/soleur/skills/postmerge/references/deploy-status-debugging.md`) and read `sandbox_canary` (green
   throughout the original outage, so a pass does not clear the alert) and the `seccomp_profile_*` fields; (3) if the
@@ -178,7 +182,8 @@ Live standing alarms over this source:
 
   ```bash
   # Count, distinct users (userIdHash) and first/last time of helper denials over the last day (hot window plus
-  # archive); rows is not users: the mirror is per-user debounced.
+  # archive); rows is not users: the mirror is per-user debounced. Add sandboxErrorCode and sandboxStderr to the
+  # SELECT to see WHICH helper step failed.
   doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
     "SELECT count() AS rows, uniqExact(JSONExtractString(raw,'message','userIdHash')) AS users,
             min(dt) AS first, max(dt) AS last
@@ -188,7 +193,7 @@ Live standing alarms over this source:
        AND JSONExtractString(raw,'CONTAINER_NAME') = 'soleur-web-platform'
        AND JSONExtractString(raw,'message','feature') = 'agent-sandbox'
        AND JSONExtractString(raw,'message','op') = 'bash-tool-result'
-       AND JSONExtractString(raw,'message','sandboxErrorCode') = 'helper_userns_eperm'
+       AND JSONExtractString(raw,'message','sandboxErrorCode') IN ('helper_userns_eperm', 'helper_step_eperm')
      FORMAT JSONEachRow"
   ```
 

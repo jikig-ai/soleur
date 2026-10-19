@@ -1651,10 +1651,13 @@ resource "logtail_exploration_alert" "registry_zot_log_credential_shape" {
 # WHAT IT DETECTS. A hosted agent's Bash tool_result carried the SDK command-side helper's own line
 #   apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted
 # (the shim's seccomp filter is inherited by the helper, which then cannot create its user namespace; every
-# Bash call in the session fails). server/cc-dispatcher.ts `mirrorBashSandboxFailure` classifies the output
-# (server/sandbox-startup-classifier.ts `classifyBashSandboxFailure`, errorCode `helper_userns_eperm`) and
-# mirrors ONE pino row per user per debounce window: feature `agent-sandbox`, op `bash-tool-result`, with the
-# code in `extra.sandboxErrorCode`. The row lands in this same prd Logs source under the app container.
+# Bash call in the session fails), or the same helper failing with EPERM at ANY other of its steps (#10455 e: an exact
+# allowlist of the 16 step strings in the vendored binary). server/cc-dispatcher.ts `mirrorBashSandboxFailure`
+# classifies the output (server/sandbox-startup-classifier.ts `classifyBashSandboxFailure`; errorCode
+# `helper_userns_eperm` for the userns step, `helper_step_eperm` for every other step, and the predicate below pages on
+# BOTH) and mirrors ONE pino row per user per debounce window per code: feature `agent-sandbox`, op
+# `bash-tool-result`, with the code in `extra.sandboxErrorCode`. The row lands in this same prd Logs source under the
+# app container.
 #
 # ROW SHAPE (verified on sibling pino rows that reach this source, 2026-10-16; no row of THIS emitter had ever arrived, so
 # its first real hit is its positive control): `raw.CONTAINER_NAME` is
@@ -1680,7 +1683,7 @@ locals {
       AND JSONExtractString(raw, 'CONTAINER_NAME') = 'soleur-web-platform'
       AND JSONExtractString(raw, 'message', 'feature') = 'agent-sandbox'
       AND JSONExtractString(raw, 'message', 'op') = 'bash-tool-result'
-      AND JSONExtractString(raw, 'message', 'sandboxErrorCode') = 'helper_userns_eperm'
+      AND JSONExtractString(raw, 'message', 'sandboxErrorCode') IN ('helper_userns_eperm', 'helper_step_eperm')
     GROUP BY time
   SQL
 
@@ -1732,7 +1735,7 @@ resource "logtail_exploration_alert" "agent_sandbox_bash_denial" {
   sms            = false
   critical_alert = false
 
-  incident_cause = "A live hosted-agent Bash call failed in the SDK apply-seccomp helper (apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted), so Bash is unavailable to the affected tenant session(s). The row is the app container's op=bash-tool-result mirror with sandboxErrorCode=helper_userns_eperm; it carries only the scrubbed matched line, so read the count and timestamps via the runbook Query block without SSH. This incident auto-resolves after 10 quiet minutes; resolution does NOT mean the cause was fixed. Runbook: ${local.agent_sandbox_bash_denial_runbook_url}"
+  incident_cause = "A live hosted-agent Bash call failed in a step of the SDK apply-seccomp helper (for example apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted), so Bash is unavailable to the affected tenant session(s). The row is the app container's op=bash-tool-result mirror with sandboxErrorCode=helper_userns_eperm (the user-namespace step) or helper_step_eperm (any other helper step); it carries only the matched line, so read the count and timestamps via the runbook Query block without SSH. This incident auto-resolves after 10 quiet minutes; resolution does NOT mean the cause was fixed. Runbook: ${local.agent_sandbox_bash_denial_runbook_url}"
   metadata = {
     runbook = local.agent_sandbox_bash_denial_runbook_url
   }
