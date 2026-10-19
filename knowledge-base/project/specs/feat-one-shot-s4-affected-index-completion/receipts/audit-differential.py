@@ -14,16 +14,20 @@ the old one did not is a bug in one of them), 2 on usage.
 THE COMPARISON. For every audited suite (the same inputs, the same hop, the same comment stripping, the same exclusions of the
 suite itself and of the runner triggers on BOTH sides, so the only thing that differs is the match rule):
   old   a tracked path is named when it occurs ANYWHERE in the suite's text as a substring (the pre-PR1 scan: `f in blob`)
-  new   a tracked path is named when it occurs at a boundary of the normalised text (the SUT's scan_text)
+  new   a tracked path is named when it occurs at a boundary of either view of the text (the SUT's views(): full and light)
 Every occurrence of every old ref is classified, and the ones that are not a plain boundary are LISTED with their source line:
-  dropped        starts mid-component in the normalised line (a word character in front of it): the new scan ignores this occurrence
+  dropped        starts mid-component in BOTH views of the line (a word character in front of it): the new scan ignores this occurrence
   declared-drop  the same, and the path is glued to the tail of an ANSI colour code (`\\033[0m<path>`): display text, a declared limit
   kept-escape    a word character in front of it in the text as written, but a printf escape or an attached short option makes it a
-                 boundary once normalised: the new scan keeps it
+                 boundary in a view: the new scan keeps it
 An occurrence at a plain boundary is not listed. The `pair` column says whether the (suite, path) pair `vanished` from the new refs
-(every occurrence dropped) or `survives` (another occurrence is a boundary). `loc` is `line:col` (1-based line of the file `source`,
+(every occurrence dropped) or `survives` (another occurrence is a boundary). In the header and on stdout `dropped` counts the PAIRS
+that vanished (old refs minus new refs, computed from the two sets, not from the rows) and `dropped_occurrences` the listed
+`dropped` rows; a vanished pair without a row is an error (exit 1: scan_text and boundary() disagree). `loc` is `line:col` (1-based line of the file `source`,
 0-based column of the path in `line_text`), so a reader or the test can check one occurrence against its line.
-The test (plugins/soleur/test/ci-pr-affected-replay.test.sh) judges the stored rows with the SUT's own normalise() and boundary().
+The test (plugins/soleur/test/ci-pr-affected-replay.test.sh) judges the stored rows with the SUT's own views() and boundary(), and runs
+this script on a small scratch repo; it does NOT regenerate the pinned-tree receipt, so completeness of the stored rows is attested by
+re-running this script on the pinned tree and diffing.
 """
 import importlib.util
 import os
@@ -68,8 +72,10 @@ def main(argv):
     spec.loader.exec_module(sut)
 
     rows = []
-    for line in open(rows_file, errors="replace").read().split("\n"):
-        f = line.split("\t")
+    with open(rows_file, encoding="utf-8", errors="replace") as fh:
+        rows_text = fh.read()
+    for line in rows_text.split("\n"):
+        f = line.rstrip("\r").split("\t")
         if f[0] == "AFFECTED_SELECTED" and len(f) >= 5 and f[3] != "always_on":
             rows.append((f[1], f[4].split("|")))
     tracked = sut.tracked_files(root)
@@ -81,7 +87,7 @@ def main(argv):
             continue
         texts = sut.suite_texts(root, inputs, index, [])
         own = {os.path.relpath(p, root) for p in inputs}
-        blob = "\n".join(tr for _, _, tr in texts)
+        blob = "\n".join(tr for _, _, _, tr in texts)
         keep = lambda f: f != suite and f not in own and f not in sut.RUNNER_TRIGGERS  # noqa: E731
         old_refs[suite] = {f for f in tracked if keep(f) and f in blob}
         new_refs[suite] = set(sut.suite_refs(root, suite, inputs, index, texts))
@@ -94,18 +100,19 @@ def main(argv):
             print("NEW SCAN FOUND WHAT THE OLD ONE DID NOT: %s %s" % (suite, sorted(extra)[:5]))
             bad += 1
 
-    out_rows, vanished = [], set()
+    vanished = {(s, r) for s in old_refs for r in old_refs[s] - new_refs[s]}
+    out_rows = []
     for suite in sorted(old_refs):
         for rel in sorted(old_refs[suite]):
-            pair = "survives" if rel in new_refs[suite] else "vanished"
-            for q, tn, tr in texts_of[suite]:
+            pair = "vanished" if (suite, rel) in vanished else "survives"
+            for q, tn, tl, tr in texts_of[suite]:
                 if rel not in tr:
                     continue
-                norm_lines, raw_lines = tn.split("\n"), tr.split("\n")
+                norm_lines, light_lines, raw_lines = tn.split("\n"), tl.split("\n"), tr.split("\n")
                 for no, raw in enumerate(raw_lines, 1):
                     col = raw.find(rel)
                     while col >= 0:
-                        norm_ok = sut.boundary(norm_lines[no - 1], col)
+                        norm_ok = sut.boundary(norm_lines[no - 1], col) or sut.boundary(light_lines[no - 1], col)
                         raw_ok = col == 0 or sut.WORD.match(raw[col - 1]) is None
                         if norm_ok and not raw_ok:
                             verdict = "kept-escape"
@@ -115,11 +122,10 @@ def main(argv):
                             verdict = ""
                         if verdict:
                             out_rows.append((verdict, suite, rel, pair, os.path.relpath(q, root), "%d:%d" % (no, col), raw.replace("\t", " ")))
-                            if pair == "vanished":
-                                vanished.add((suite, rel))
                         col = raw.find(rel, col + 1)
-    for suite, rel in vanished:
-        if not any(r[1] == suite and r[2] == rel and r[3] == "vanished" for r in out_rows):
+    rowed = {(r[1], r[2]) for r in out_rows if r[3] == "vanished"}
+    for suite, rel in sorted(vanished):
+        if (suite, rel) not in rowed:
             print("VANISHED PAIR WITHOUT A ROW: %s %s" % (suite, rel))
             bad += 1
 
@@ -138,7 +144,7 @@ def main(argv):
         fh.write("verdict\tsuite\tpath\tpair\tsource\tloc\tline_text\n")
         for r in out_rows:
             fh.write("\t".join(r) + "\n")
-    print("suites=%d old_refs=%d new_refs=%d vanished_pairs=%d dropped=%d declared_drop=%d kept_escape=%d old_gap_pairs=%d new_gap_pairs=%d bad=%d" % (
+    print("suites=%d old_refs=%d new_refs=%d dropped=%d dropped_occurrences=%d declared_drop=%d kept_escape=%d old_gap_pairs=%d new_gap_pairs=%d bad=%d" % (
         len(old_refs), sum(map(len, old_refs.values())), sum(map(len, new_refs.values())), len(vanished), count["dropped"],
         count["declared-drop"], count["kept-escape"], len(gaps(old_refs)), len(gaps(new_refs)), bad))
     return 1 if bad else 0
