@@ -291,6 +291,13 @@ eq "a path containing a newline still detects" "1" "$(count_marker "$OUT")"
 injected=$(sed -n '2,$p' <<<"$OUT" | grep -cv '^\[bare-root-cwd\] ' || true)
 eq "the newline in the path cannot inject an unprefixed line" "0" "$injected"
 
+begin G14
+d="$SANDBOX/g14-dir$(printf '\xe2\x80\xa8')sep$(printf '\x7f')x"; mk_bare_root "$d" || bad "fixture"
+run_helper "$d"
+eq "a path containing U+2028 + DEL still detects" "1" "$(count_marker "$OUT")"
+seps=$(printf '%s' "$OUT" | LC_ALL=C grep -cP '[\x00-\x08\x0b-\x1f\x7f]|\xc2\x85|\xe2\x80\xa8|\xe2\x80\xa9' || true)
+eq "DEL/U+2028 bytes cannot survive into the emitted block" "0" "$seps"
+
 # --- parity anchor ----------------------------------------------------------------------------
 # The SAME three-term predicate is inlined in git-repo-readiness-diag.sh (the plugin script
 # cannot depend on a repo hook). This row pins the two copies' observable agreement: every

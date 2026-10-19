@@ -8,7 +8,7 @@ Issues: closes #10392, #10395.
 - [ ] 0.1 Write `.claude/hooks/lib/context-sanitize.test.sh` — byte-contract fixtures (DEL, NEL, U+2028, U+2029, ESC stripped; `\t`/`\n` per-variant), copy-parity `cmp`, and the drift-sentinel enumeration with disposition list.
 - [ ] 0.2 Write `plugins/soleur/test/bare-root-cwd-plugin-guard.test.sh` — 8 fixture classes (bare fires; plain/masked/wtmask/sym/truebare/imposter/nonrepo silent), dedup fixture, no-jq arm, GIT_DIR env-injection arm, envelope-shape assertions.
 - [ ] 0.3 Add separator-laden fixtures to `session-rules-loader.test.sh` (BARE_CWD_BLOCK + WS_WORKTREE carry no DEL/U+2028/U+2029) and `bare-root-cwd-guard.test.sh`.
-- [ ] 0.4 Add non-worktree/bare-root rows to `scripts/ensure-kb-index.test.sh`.
+- [x] 0.4 Add non-worktree/bare-root rows to `scripts/ensure-kb-index.test.sh`.
 - [ ] 0.5 Extend `plugins/soleur/test/git-repo-readiness-diag.test.sh` D5 parity loop 2-way → 3-way (repo guard + diag + plugin arm).
 
 ## Phase 1 — Shared lib + probe
@@ -39,9 +39,9 @@ Per site: source-if-readable block + `declare -F` fallback carrying the site's p
 
 ## Phase 4 — Audit fixes (#10392 item 2)
 
-- [ ] 4.1 `scripts/ensure-kb-index.sh` — skip regen when `git -C "$KB_DIR" rev-parse --is-inside-work-tree` is not `true`; header comment records the overlay-materialization rationale.
-- [ ] 4.2 `plugins/soleur/hooks/devin-session-start.sh` — skip the sentinel write when `_sentinel_root` is empty or non-absolute.
-- [ ] 4.3 Audit dispositions verified: session-manifests keep (standing ruling), supabase-loopback clean, backstop ledger keep (decision-challenges row), codex-session-start clean.
+- [x] 4.1 `scripts/ensure-kb-index.sh` — skip regen when `git -C "$KB_DIR" rev-parse --is-inside-work-tree` is not `true`; header comment records the overlay-materialization rationale.
+- [x] 4.2 `plugins/soleur/hooks/devin-session-start.sh` — skip the sentinel write when `_sentinel_root` is empty or non-absolute.
+- [x] 4.3 Audit dispositions verified: session-manifests keep (standing ruling), supabase-loopback clean, backstop ledger keep (decision-challenges row), codex-session-start clean.
 
 ## Phase 5 — Docs & model
 
