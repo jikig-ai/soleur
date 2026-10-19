@@ -11,6 +11,51 @@ lane: cross-domain
 
 # feat(machinery): plugin-level bare-root SessionStart arm + shared context sanitizer
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-19
+**Sections enhanced:** all halt gates re-verified; Technical Considerations,
+Strip-Site Census, Observability, Guard Contract, Sharp Edges.
+**Research agents used:** none — sequential-fallback (no Task/run_subagent
+spawn surface on this harness); every gate, sweep, and review lens executed
+inline. `Reviewed-Coverage: sequential-fallback`.
+
+### Deepen gate results
+
+| Gate | Result |
+|---|---|
+| 4.4 Precedent-diff | No novel pattern: sourced-lib shape follows `strip-log-injection.sh`/`strip.sh`; dual-home byte-equal follows `backstop-parity.test.ts`; predicate follows 3 pinned copies |
+| 4.5 Network-outage | Not triggered (no SSH/firewall/timeout patterns) |
+| 4.55 Downtime & Cutover | Not triggered (no downtime-inducing operation) |
+| 4.6 User-Brand Impact | PASS — `none` + scope-out reason; 0 sensitive-path matches |
+| 4.7 Observability | PASS — all 5 fields; `bash scripts/bare-root-cwd-guard-probe.sh` (allowlisted verb, <15s) → `sanitizer-ok` |
+| 4.8 PAT-shaped vars | PASS — no hits |
+| 4.9 UI wireframe | Skipped — no UI-surface files |
+| 4.10 Encryption Posture | Skipped — no store/connection |
+| 4.11 Guard Contract | PASS — `lint-guard-contract.py` rc=0, 4 guard entries |
+| 4.12 Scope Check | PASS — 1 unfenced section, all subsections, no unmapped/inferred-without-justification/BLOCKED |
+
+### Key improvements from the deepen pass
+
+1. **BSD/macOS sed portability pin** — the lib's `sed` patterns must use
+   `$'…'` ANSI-C quoting (bash expands `\xHH`), never bare `'s/\x…'` —
+   BSD sed silently strips nothing. This also means the lib consolidation
+   fixes a latent portability bug at sites that already use the bare-quoted
+   form (`agent-token-tee.sh:97`, `domain-model-drift.sh:321`).
+2. **jq gsub adoption form pinned** — `gsub("\\u2028|\\u2029";"")` (jq decodes
+   `\u` escapes inside program string literals) at loader:371-373.
+3. **All cited issue/PR numbers verified live** — #10392/#10395 OPEN,
+   #10386 MERGED, #10383 CLOSED, #10391/#3206 OPEN (non-goals); overlap
+   dispositions #7208/#7218/#8659 confirmed OPEN.
+
+### New considerations discovered
+
+- The plugin hook will also load (and silently self-scope) in hosted Concierge
+  web sessions — recorded in the model.c4 fix task; no `SOLEUR_DISABLE_*`
+  override needed because the predicate only matches row-3 roots.
+- The `""` matcher in `devin-dispositions.tsv` is the two-character sentinel,
+  byte-exact per `devin-matcher-parity.test.sh` — noted in Sharp Edges.
+
 ## Overview
 
 Two deferred follow-ups from the session-start bare-root CWD detection that
