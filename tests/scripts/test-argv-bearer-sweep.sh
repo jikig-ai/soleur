@@ -7941,7 +7941,7 @@ m_ev=""; n_ev=0
 for v in 'docker login ghcr.io -u $(id -un) -p "$X"' 'crane auth login ghcr.io -u $(< f) -p "$X"' 'docker login ghcr.io -u u -p "$(cat /run/secrets/x)"' 'docker login -u u -p "$X"' 'docker login -u u --password "$X"' \
          'docker login ghcr.io -u ${{ github.actor }} -p "$X"' 'docker login -u "a;b" -p "$X" host' 'docker login host >/tmp/o -p "$X"' 'docker login host &>/dev/null -p "$X"' 'docker login host 2>&1 -p "$X"' \
          'podman login --authfile /x -p "$X" host' 'bash -c "docker login -u u -p $X host"' 'bash -lc "docker login -u u -p $X host"' 'eval "docker login -u u -p $X host"' \
-         'ssh h "docker login -u u -p $X host"' 'ssh -o StrictHostKeyChecking=no root@h "docker login -u u -p $X host"' 'os.system("docker login -u u -p x host")' 'docker login <your registry> -p "$X" host' "run: 'docker login -u u -p \"\$X\" host'" 'OUT=`docker login -u u -p "$X" host`' 'execSync(`docker login -u u -p ${t} host`)' \
+         'ssh h "docker login -u u -p $X host"' 'ssh -o BatchMode=yes root@h "docker login -u u -p $X host"' 'os.system("docker login -u u -p x host")' 'docker login <your registry> -p "$X" host' "run: 'docker login -u u -p \"\$X\" host'" 'OUT=`docker login -u u -p "$X" host`' 'execSync(`docker login -u u -p ${t} host`)' \
          '/usr/bin/docker login -u u -p "$X" host' 'crane_capture o e auth login host -u u -p "$X"' 'X="$(printf %s "$T" | docker login host -u u -p "$T")"'; do
   n_ev=$((n_ev + 1)); d="$(s8_fresh ev-$n_ev)"; s8_put "$d" scripts/extra-e.sh "$v"; s8_judge "$d"; [[ "$S8_J_REASONS" == "bad:scripts/extra-e.sh" ]] || m_ev+=" [$v => $S8_J_REASONS]"
 done
