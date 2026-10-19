@@ -69,7 +69,10 @@ MSG="$(jq -r '.last_assistant_message' 2>/dev/null <<<"$INPUT")" || { _note "SKI
 [[ -n "$MSG" ]] || exit 0
 # Cheap pre-filter (performance seat): only a `?`-terminated unit can ever hit, and stripping can only REMOVE a `?`,
 # so a raw message without one cannot change a verdict; this skips ~14 of ~20 forks on the common turn end.
-[[ "$MSG" == *"?"* ]] || exit 0
+# CL4 (2026-10-19) judges declarative hand-offs, so a message carrying one of its phrases is also scanned.
+if [[ "$MSG" != *"?"* ]]; then
+  grep -qiE 'your call|up to you|(tell|ask) me to|say the word|let me know|want me to|like me to|prefer me to|(you|owner) (decide|choose|pick)' <<<"$MSG" || exit 0
+fi
 
 # One path variable, one place to edit when the pair graduates to the plugin.
 TFC_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/technical-fork-cues.sh"
@@ -117,7 +120,10 @@ UNITS="$(printf '%s\n' "$WIN" | awk -v cut="$CUT" '
   function islabel(s) { return (s ~ /^[ *_>-]*operator-only \((money|scope|priority|schedule|irreversible|production-mutating|legal-risk|brand)\): *[^ ]/) }
   function note_sentences(pre,   n, a, i) {
     n = split(pre, a, /[.!] /)
-    for (i = 1; i <= n; i++) if (islabel(a[i])) esc = 1
+    for (i = 1; i <= n; i++) {
+      if (islabel(a[i])) esc = 1
+      else if (a[i] ~ /(your call|up to you|(tell|ask) me to|say the word|let me know|want me to|like me to|prefer me to|(you|owner) (decide|choose|pick))/) print "U" esc "\t" a[i]
+    }
   }
   BEGIN { esc = 0; last_line = "" }
   {

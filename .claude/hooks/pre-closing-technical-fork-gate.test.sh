@@ -166,6 +166,11 @@ row "B5b B2 then a courtesy closer" block "$B2 Let me know what you think."
 row "B5c B3 then a courtesy closer" block "$B3 Let me know what you think."
 row "B6 the founder-observed phrase (CL2b)" block "$STATUS do you want a migration design?"
 row "B7 a SHARED cue through the closing hook" block "$STATUS how strict should the evidence bar be?"
+row "B8a CL4 the 2026-10-19 closing: a declarative hand-off of a technical step, no question mark" block "$STATUS Next step: your call. Tell me to build #10297, the stamp-clearing rollback arm."
+row "B8b CL4 hand-off phrase on its own, technical noun in the same sentence" block "$STATUS The sequencing is your call."
+row "A8a CL4 yields to an authorization verb (a real production hand-off stays allowed)" pass "$STATUS Say the word and I will dispatch the flip."
+row "A8b CL4 yields to BUSINESS vocabulary" pass "$STATUS Let me know if you want me to change the pricing page design."
+row "A8c CL4 needs a technical noun: a courtesy closer on a status report passes" pass "$STATUS Heartbeats are up. Let me know if anything looks off."
 row "U1 an authorization first, a technical unit second" block "Do you authorize the rotation? Also, what is the best design for the migration?"
 
 # --- MUST PASS --------------------------------------------------------------------------------------
@@ -582,6 +587,10 @@ mut_row "G1-16 never reset the Operator-only cover on a blank line" hook '    if
 $B1"
 # G1-12: delete the closing-only permission exemption (Q4): an authorization shape the shared vocabulary does not name must flip pass -> block.
 mut_row "G1-12 delete the closing-only permission exemption" lib '[[ "$closing" -eq 1 ]] && grep -qE "$TFC_CLOSING_PERM_RE" <<<"$unit" && return 1' ':' pass "can i merge pr 123 now, is the evidence enough?"
+# G1-17..19 (CL4, 2026-10-19): the authorization veto, the awk emission of declarative sentences and the `?` pre-filter bypass each carry a row.
+mut_row "G1-17 delete the CL4 authorization veto" lib ' && ! grep -qE "$TFC_CL4_AUTH_RE" <<<"$unit"' '' pass "say the word and i will dispatch the fix."
+mut_row "G1-18 the hook no longer emits declarative hand-off sentences" hook 'else if (a[i] ~ /(your call' 'else if (0 && a[i] ~ /(your call' block "next step: your call. tell me to build #10297, the stamp-clearing rollback arm."
+mut_row "G1-19 the pre-filter ignores a message with no question mark" hook "grep -qiE 'your call|up to you" "grep -qiE 'zzznever|up to you" block "the sequencing is your call."
 
 # G2-1: a second RULING_*_RE definition in the closing hook must make the census report two sites.
 TOTAL=$((TOTAL+1))
@@ -678,13 +687,13 @@ if [[ -z "$d_missing" && "$RAN" -eq "$SPAWNS" && "$SPAWNS" -ge 70 ]]; then
   printf '  PASS: V5 all %s named must-block rows were blocked by this hook'"'"'s reason; the SUT ran %s of %s spawns\n' "$(wc -w <<<"$D_NAMES" | tr -d ' ')" "$RAN" "$SPAWNS"; PASS=$((PASS+1))
 else printf '  FAIL: V5 missing=[%s] SUT markers=%s harness spawns=%s (want equal and >= 70)\n' "$d_missing" "$RAN" "$SPAWNS" >&2; FAIL=$((FAIL+1)); fi
 TOTAL=$((TOTAL+1))
-if [[ "$KILLED" -ge 29 ]]; then printf '  PASS: V6 %s mutants killed (floor 29)\n' "$KILLED"; PASS=$((PASS+1))
-else printf '  FAIL: V6 only %s mutants killed (floor 29)\n' "$KILLED" >&2; FAIL=$((FAIL+1)); fi
+if [[ "$KILLED" -ge 32 ]]; then printf '  PASS: V6 %s mutants killed (floor 32)\n' "$KILLED"; PASS=$((PASS+1))
+else printf '  FAIL: V6 only %s mutants killed (floor 32)\n' "$KILLED" >&2; FAIL=$((FAIL+1)); fi
 
 # --- inventory, accounting conservation and the assertion floor ---------------------------------------
 TOTAL=$((TOTAL+1))
-if [[ "$TOTAL" -eq 136 ]]; then echo "  PASS: V1 full inventory ran (136 cases)"; PASS=$((PASS+1))
-else echo "  FAIL: V1 expected 136 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
+if [[ "$TOTAL" -eq 144 ]]; then echo "  PASS: V1 full inventory ran (144 cases)"; PASS=$((PASS+1))
+else echo "  FAIL: V1 expected 144 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
 
 # Reported with printf + exit 1, never through a verdict helper: a floor routed through the machinery it backstops
 # is disarmed by the same edit it exists to catch (ADR-193).
@@ -693,7 +702,7 @@ if (( PASS + FAIL != TOTAL )); then
     "$PASS" "$FAIL" "$TOTAL" >&2
   exit 1
 fi
-MIN_CASES=136
+MIN_CASES=144
 if (( TOTAL < MIN_CASES )); then
   printf '\nFATAL: anti-vacuity: %d case(s) ran, floor is %d. The suite shrank rather than the hook improving.\n' \
     "$TOTAL" "$MIN_CASES" >&2

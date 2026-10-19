@@ -79,6 +79,13 @@ TFC_CL2B_RE='\bdo you want (a|an|the) ([a-z -]{0,20} )?(migration|rotation|stora
 TFC_CL3_ORDER_RE='\b(in what|what|which) (order|sequence)\b'
 TFC_CL3_NOUN_RE='\b(credentials?|tokens?|secrets?|keys?|configs?|configuration|storage|migrations?|cutover|pipelines?|schema|hosts?|rotat[a-z]*)\b'
 TFC_BUSINESS_RE='\b('"${TFC_BUSINESS_WORDS}"')\b'
+# CL4 declarative hand-off (2026-10-19, miss, cue, fixture): a closing that makes the operator the decider of a technical
+# step WITHOUT a question mark ("Next step: your call. Tell me to build #10297.") was invisible to CL1-CL3, which all read `?`
+# units. CL4 reads one SENTENCE, needs a hand-off phrase AND a technical-work noun, and yields to BUSINESS and to any
+# production/authorization verb, so "say the word and I will dispatch the flip" (a real authorization) stays allowed.
+TFC_CL4_RE='\b(your call|up to you|(tell|ask) me to (build|start|implement|write|fix|open|draft|proceed)|say the word|let me know (if|whether|which) you|if you (would |.d )?(want|like|prefer) me to|(you|the owner) (decide|choose|pick))\b'
+TFC_CL4_TECH_RE='\b(build|builds|pr|prs|sequenc[a-z]*|order|ordering|design|ruling|approach|fix|rehearsal|diagnostic|collector|refactor|implement[a-z]*|next step)\b|#[0-9]+'
+TFC_CL4_AUTH_RE='\b(flip|dispatch|rotate|rotation|wipe|delete|revoke|deploy|apply|force-push|arm (the|auto|it)|ack-destroy|go-ahead|authori[sz]e[a-z]*|approve[ds]?)\b'
 # A seed list tuned by the false-positive sample; applies to EVERY cue in the closing group (SHARED
 # ones included) and to no cue in the pre-ask group.
 TFC_CLOSING_EXTRA_RE='\b(prioriti[sz]\w*|publish\w*|announce\w*|auditors?|accountants?|lawyers?|investors?|customers?|features?|roadmap|milestones?)\b'
@@ -162,6 +169,11 @@ tfc_is_fork() {
     if [[ -z "$hit" ]] && grep -qE "$TFC_CL2A_RE" <<<"$unit"; then hit="cl2a"; fi
     if [[ -z "$hit" ]] && grep -qE "$TFC_CL2B_RE" <<<"$unit"; then hit="cl2b"; fi
     if [[ -z "$hit" ]] && grep -qE "$TFC_CL3_ORDER_RE" <<<"$unit" && grep -qE "$TFC_CL3_NOUN_RE" <<<"$unit"; then hit="cl3"; fi
+  fi
+
+  # CL4: declarative, so it does not need a `?`; BUSINESS and authorization verbs silence it.
+  if [[ -z "$hit" && "$closing" -eq 1 ]] && ! grep -qE "$TFC_BUSINESS_RE" <<<"$unit" && ! grep -qE "$TFC_CL4_AUTH_RE" <<<"$unit"; then
+    if grep -qE "$TFC_CL4_RE" <<<"$unit" && grep -qE "$TFC_CL4_TECH_RE" <<<"$unit"; then hit="cl4"; fi
   fi
 
   [[ -n "$hit" ]] || return 1
