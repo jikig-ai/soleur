@@ -42,6 +42,7 @@ its qualified ID (`soleur:engineering:review:security-sentinel` maps to
 Read the definition before delegation.
 
 In Antigravity CLI, domain specialists are spawned dynamically:
+
 1. Read the agent's markdown definition at its absolute path.
 2. If the subagent role is not yet registered in this session, call `define_subagent` with:
    - `name`: the normalized identifier (e.g., `soleur-engineering-cto` or `security-sentinel`).
@@ -58,6 +59,7 @@ with the result.
 ## Polling and watches
 
 Antigravity CLI provides native reactive wakeup for background tasks and timers:
+
 - For background checks (CI settling, PR merge status, release workflows), launch `run_command` with `IsDaemon: false` and adequate `WaitMsBeforeAsync` or schedule wakeups using `schedule` (`DurationSeconds` with `TimerCondition: 'never'` or task ID).
 - Do NOT run blocking `sleep` loops or busy-polling bash scripts in the foreground.
 - Poll PR state + `mergeStateStatus` on every tick; resync on `BEHIND` before watching checks (except when `main` has a merge queue and the PR is armed).
