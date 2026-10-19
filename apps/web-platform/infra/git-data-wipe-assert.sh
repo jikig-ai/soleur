@@ -52,12 +52,12 @@
 #   hk_nonfile    how many of them are not regular files, from the same walk (never above hk_entries)
 #   hk_pr_f       1 if an entry named exactly pre-receive (case-sensitive) is a regular file directly inside it,
 #                 no link followed; 0 otherwise
-#   hk_pr_small   1 if that same file is at most 4096 bytes (WA_HK_PR_MAX); never above hk_pr_f
+#   hk_pr_small   1 if that same file is at most 4096 bytes (WA_HK_PR_MAX; a zero-byte file reads 1, there is no lower
+#                 bound); never above hk_pr_f
 # The group is absent when the bit is 0: an absent group reads "not measured", and a printed 0 never stands in for
 # it. The size comes from inode metadata, the file's content is never opened, and no size, letter or listing name
-# is printed. A read that
-# fails or answers off-shape is rc 33 (hooks_shape_failed, hooks_shape_unparseable, hooks_pr_failed,
-# hooks_pr_unparseable), never a default 0 and never a partial line.
+# is printed. A read that fails or answers off-shape is rc 33 (hooks_shape_failed, hooks_shape_unparseable,
+# hooks_pr_failed, hooks_pr_unparseable), never a default 0 and never a partial line.
 # Names are read into shell variables for classification only: stdout is held back until the final
 # line, stderr of every command is
 # discarded, and the only stderr this file writes is a fixed reason word and digits (gd_capture prints
@@ -112,13 +112,15 @@ wa_main() {
   # for its hooks directory and fence hook (a suite row compares them).
   readonly WA_HK_DIR=hooks
   readonly WA_HK_PR=pre-receive
-  # WA_HK_PR_MAX is a coarse plausibility bound on the size of that file, not an identity test. It is read off what Terraform
-  # rendered into cloud-init as the pre-receive hook: the placeholder file, 997 bytes unstripped from 2026-07-01 and 197 bytes
-  # once the comment strip was added (34654d7ab1, 2026-07-29) until 2026-09-29, then the real script, stripped, 2784 bytes
-  # from 2026-09-30 (a96d123938). The real script's six source commits strip to 1870 to 2784 bytes. 4096 clears all of these.
-  # A size at or under it says nothing about provenance or content; a size over it is not evidence of foreign content (an
-  # unstripped copy of the real script, raw 6170 to 9325 bytes, reads over it). Which of these renders the retired volume's
-  # pre-receive file came from is not established in the repo. A change of the value returns to the CLO.
+  # WA_HK_PR_MAX is a coarse plausibility bound on the size of that file, not an identity test. It is read off the pre-receive
+  # file Terraform delivered to a host: the placeholder file (base64-delivered at first; decoded size 997 bytes unstripped from
+  # 2026-07-01, 197 bytes stripped once the comment strip was added, 34654d7ab1, 2026-07-29, until 2026-09-29), then the real
+  # script, stripped, 2784 bytes from 2026-09-30 (a96d123938). Only 2784 (the real script) and 197 (the placeholder) were ever
+  # rendered to a host. The real script's six source commits strip to 1870 to 2784 bytes. 4096 clears all of these. A size at or
+  # under it says nothing about provenance or content (a zero-byte file reads 1; there is no lower bound); a size over it is not
+  # evidence of foreign content (an unstripped copy of the real script, raw 6170 to 9325 bytes, reads over it). Which of these
+  # renders the retired volume's pre-receive file came from (the era of that file) is not established in the repo. A change of
+  # the value returns to the CLO.
   readonly WA_HK_PR_MAX=4096
   readonly WA_ROW_WINDOW_S=3600      # max seconds from host boot to the boot_complete row (UNMEASURED: wipe_check prints boot_to_row_s)
   readonly WA_BUDGET_S=240           # self-imposed ceiling; the ssh bound in git-data-cutover.sh is longer
@@ -376,7 +378,7 @@ wa_main() {
   wipe_listing() {
     local sb jb bs cow_bytes eh sz deps src got want ssb dm e0 e1 rn ln lk names_after hold_after w_after ro_after
     # HK_PR_F and HK_PR_SMALL are upper-case locals on purpose: the emitted fields are written from exactly these names,
-    # a spelling the suite's closed-set row and the plan's acceptance grep pin.
+    # a spelling the suite's rows HK7 (the one say line) and HK8 (the closed set, which holds the literal hk_pr_small=$HK_PR_SMALL) pin.
     local ht nf al pr HK_PR_F HK_PR_SMALL
     wl_same
     sb="$(timeout 20 dumpe2fs -h "$DEV")" || die 33 dumpe2fs_failed
