@@ -121,6 +121,11 @@ chk() {
   cases=$((cases + 1))
   if "$@"; then pass; else fail "$name"; fi
 }
+child_handoff_ok() {
+  [ -z "$SCRATCH_OVERRIDE" ] && return 0
+  [ -s "${SCRATCH_OVERRIDE}.value" ] || return 1
+  case "$SCR" in "$SCRATCH_OVERRIDE"/*) return 0 ;; *) return 1 ;; esac
+}
 dchk() {
   dyn_cases=$((dyn_cases + 1))
   chk "$@"
@@ -412,6 +417,9 @@ SHIM
   VALUE="$(<"$SCR/value")"
   # A battery child leaves its value where the parent can scan that child's own output for it.
   if [ -n "$SCRATCH_OVERRIDE" ]; then cp "$SCR/value" "${SCRATCH_OVERRIDE}.value"; fi
+  # Without these two rows the leak scan and the leftover check can go inert while every row stays green.
+  dchk "secret: the in-memory value is 40 characters (the withholding funnel has something to withhold)" [ "${#VALUE}" = 40 ]
+  dchk "secret: a battery child handed its value to the parent and scratched under the parent's directory" child_handoff_ok
   dchk "dynamic: the minted value is 40 alphanumerics" grep -Eq '^[A-Za-z0-9]{40}$' "$SCR/value"
   PRE_DIGEST="$(digest_of_state "$SCR/w")"
 
@@ -637,8 +645,14 @@ HCL
   timeout -k 5 120 bash -x "$SELF" --child --plugin-dir "$RESOLVED_PLUGIN" >"$SCR/mut/xtrace.out" 2>&1
   xrc=$?
   # The child must refuse BEFORE minting: no RAN line and no traced assignment of a 40-character value.
+  # It must be the xtrace guard that stopped it, not the _emit self-test tripping over a traced value.
   if [ "$xrc" = 1 ] && grep -qF -- 'FAIL: secret: xtrace is off' "$SCR/mut/xtrace.out" \
+    && ! grep -qF -- 'INSTRUMENT FAIL' "$SCR/mut/xtrace.out" \
     && ! grep -qE '^RAN [0-9]+ dynamic|VALUE=[A-Za-z0-9]{40}' "$SCR/mut/xtrace.out"; then pass; else fail "battery xtrace: want exit 1 with FAIL: secret: xtrace is off (got rc=$xrc)"; fi
+
+  # Positive control for the child-leak scan: the same grep must fire on a planted copy of the value.
+  printf 'planted %s\n' "$(<"$SCR/value")" >"$SCR/mut/planted.out"
+  chk "battery: the child-leak scan detects a planted value (positive control)" grep -qF -f "$SCR/value" "$SCR/mut/planted.out"
 
   cases=$((cases + 1))
   if pristine_ok after; then pass; else fail "battery: the closing pristine control child did not exit 0 (rc=$CHILD_RC)"; fi
@@ -677,7 +691,7 @@ if [ $((passes + fails)) -ne "$cases" ]; then
   exit 1
 fi
 # The dynamic assertion count is pinned exactly: a deleted dynamic row must not read as a healthy run.
-DYN_EXPECTED=39
+DYN_EXPECTED=41
 if [ "$RAN_DYNAMIC" = 1 ] && [ "$dyn_cases" -ne "$DYN_EXPECTED" ]; then
   printf '[FATAL] dynamic count drift: %s dynamic assertions ran but DYN_EXPECTED is %s\n' "$dyn_cases" "$DYN_EXPECTED" >&2
   exit 1
@@ -685,7 +699,7 @@ fi
 
 # Floor, pinned EXACTLY to the measured count of the parent run (a loose floor is attack budget).
 if [ "$CHILD" = 0 ] && [ "$RAN_DYNAMIC" = 1 ]; then
-  MIN_CASES=78
+  MIN_CASES=81
   if [ "$cases" -ne "$MIN_CASES" ]; then
     printf '[FATAL] floor drift: %s cases ran but MIN_CASES is %s - re-measure and set MIN_CASES=%s\n' "$cases" "$MIN_CASES" "$cases" >&2
     exit 1
