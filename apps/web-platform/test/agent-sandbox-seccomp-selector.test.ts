@@ -5,7 +5,7 @@
 // every direct caller of the two builders is accounted for.
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -265,7 +265,10 @@ describe("spawn-time agreement is fail-safe (F1: mirror to Sentry, correct towar
       expect(agreementWarnings().length).toBe(1);
     });
     it("a `..` alias of the unixdeny artifact is recognised too", () => {
-      process.env[SEL] = join(dir, "sub", "..", "unixdeny.bpf");
+      // Built by concatenation: path.join would normalise the `..` away and the row would test nothing.
+      mkdirSync(join(dir, "sub"));
+      process.env[SEL] = `${dir}/sub/../unixdeny.bpf`;
+      expect(process.env[SEL]).toContain("/sub/../");
       const opts = buildAgentQueryOptions({ ...args, ghToken: "ghs_x", sandboxUnixDeny: false });
       expect(opts.env?.[SEL]).toBe(SECCOMP_BASE_ARTIFACT);
       expect(agreementWarnings().length).toBe(1);

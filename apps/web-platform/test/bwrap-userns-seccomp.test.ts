@@ -250,6 +250,142 @@ describe("unixdeny variant filter semantics", () => {
   });
 });
 
+// A6(f): a DIFFERENTIAL, not a table. The rows above prove the variant denies socket(AF_UNIX) and keeps the base rules for the
+// inputs someone thought of; they cannot see an ADDED deny on an input nobody listed (connect, bind, accept, an extra family).
+// This derives both programs from the generator's own builders and proves the variant differs from the base ONLY by the
+// socket(AF_UNIX) rule, two ways: structurally (the multiset of instructions gained is exactly the added rules, nothing is lost)
+// and behaviourally (identical action over a dense grid of syscalls x argument shapes, except socket(AF_UNIX)).
+const generator = await import(/* @vite-ignore */ GEN);
+
+/** `run` without per-step assertions: the differential below evaluates ~170k inputs through two programs. */
+function runFast(insns: Insn[], input: SeccompInput): number {
+  let pc = 0;
+  let a = 0;
+  for (let steps = 0; steps < 64; steps++) {
+    const ins = insns[pc];
+    if (!ins) throw new Error(`pc ${pc} out of bounds`);
+    switch (ins.code) {
+      case BPF_LD_W_ABS:
+        a = ins.k === 0 ? input.nr : ins.k === 4 ? input.arch : ins.k === 16 ? input.arg0lo : (input.arg0hi ?? 0);
+        pc += 1;
+        break;
+      case BPF_JMP_JA:
+        pc += 1 + ins.k;
+        break;
+      case BPF_JMP_JEQ:
+        pc += 1 + (a === ins.k ? ins.jt : ins.jf);
+        break;
+      case BPF_JMP_JSET:
+        pc += 1 + ((a & ins.k) !== 0 ? ins.jt : ins.jf);
+        break;
+      case BPF_RET_K:
+        return ins.k;
+      default:
+        throw new Error(`unexpected opcode 0x${ins.code.toString(16)} at pc ${pc}`);
+    }
+  }
+  throw new Error("program did not terminate within 64 steps");
+}
+
+describe("the unixdeny variant differs from the base ONLY by the socket(AF_UNIX) rule (differential)", () => {
+  const base: Insn[] = generator.VARIANTS.base.build();
+  const variant: Insn[] = generator.VARIANTS.unixdeny.build();
+  // jump offsets move when rows are inserted: jt/jf are ignored, and for JA (whose offset IS k) only the opcode counts
+  const key = (i: Insn) => (i.code === BPF_JMP_JA ? `${i.code}:*` : `${i.code}:${i.k}`);
+  const bag = (p: Insn[]) => {
+    const m = new Map<string, number>();
+    for (const i of p) m.set(key(i), (m.get(key(i)) ?? 0) + 1);
+    return m;
+  };
+  const diff = (a: Map<string, number>, b: Map<string, number>) => {
+    const out: string[] = [];
+    for (const [k, n] of a) for (let c = 0; c < n - (b.get(k) ?? 0); c++) out.push(k);
+    return out.sort();
+  };
+
+  it("the builders are the committed bytes (the differential is over the real artifacts)", () => {
+    const enc = (p: Insn[]) => {
+      const b = Buffer.alloc(p.length * 8);
+      p.forEach((i, n) => {
+        b.writeUInt16LE(i.code, n * 8);
+        b.writeUInt8(i.jt, n * 8 + 2);
+        b.writeUInt8(i.jf, n * 8 + 3);
+        b.writeUInt32LE(i.k >>> 0, n * 8 + 4);
+      });
+      return b;
+    };
+    expect(enc(base).equals(readFileSync(BPF_PATH))).toBe(true);
+    expect(enc(variant).equals(readFileSync(UNIXDENY_PATH))).toBe(true);
+  });
+
+  it("structural: the variant gains exactly four instructions (the two socket dispatch rows, the arg0 load, the AF_UNIX test) and loses none", () => {
+    const gained = diff(bag(variant), bag(base));
+    const lost = diff(bag(base), bag(variant));
+    expect(variant.length - base.length).toBe(4);
+    expect(lost).toEqual([]);
+    expect(gained).toEqual(
+      [`${BPF_JMP_JEQ}:${NR_SOCKET}`, `${BPF_JMP_JEQ}:${NR_SOCKET | X32_SYSCALL_BIT}`, `${BPF_LD_W_ABS}:16`, `${BPF_JMP_JEQ}:${AF_UNIX}`].sort(),
+    );
+  });
+
+  it("behavioural: identical action for every (arch, syscall, arg0) in the grid except socket(AF_UNIX), where the variant denies and the base allows", () => {
+    const archs = [AUDIT_ARCH_X86_64, AUDIT_ARCH_AARCH64];
+    const args = [0, 1, 2, 3, 10, 16, 17, 40, CLONE_NEWNS, CLONE_NEWNET, CLONE_NEWUSER, CLONE_NEWUSER | CLONE_NEWNS, 0xffffffff];
+    const his = [0, 1, 0xdeadbeef];
+    let cells = 0;
+    let differing = 0;
+    for (const arch of archs) {
+      for (let nr = 0; nr <= 1100; nr++) {
+        for (const x32 of [0, X32_SYSCALL_BIT]) {
+          for (const arg0lo of args) {
+            for (const arg0hi of his) {
+              const input = { arch, nr: (nr | x32) >>> 0, arg0lo, arg0hi };
+              const b = runFast(base, input);
+              const v = runFast(variant, input);
+              cells++;
+              if (b === v) continue;
+              differing++;
+              const isUnixSocket = arch === AUDIT_ARCH_X86_64 && nr === NR_SOCKET && arg0lo === AF_UNIX;
+              expect(isUnixSocket, `an unexpected difference: arch=${arch} nr=${input.nr} arg0lo=${arg0lo} arg0hi=${arg0hi} base=${b} variant=${v}`).toBe(true);
+              expect(b).toBe(SECCOMP_RET_ALLOW);
+              expect(v).toBe(SECCOMP_RET_ERRNO | EPERM);
+            }
+          }
+        }
+      }
+    }
+    expect(cells).toBeGreaterThan(100_000); // floor: a grid that shrank to nothing proves nothing
+    // socket(AF_UNIX) differs for both nr spellings (plain and x32) and every upper-word shape.
+    expect(differing).toBe(2 * his.length);
+  });
+
+  it("mutation-sensitivity: a variant that ALSO denies connect(2) or bind(49) would be caught by the grid above", () => {
+    // Simulate the regression by rewriting the variant's socket rows to a different syscall number and re-running the same oracle.
+    for (const bad of [42 /* connect */, 49 /* bind */]) {
+      const mutated = variant.map((i) => (i.code === BPF_JMP_JEQ && i.k === NR_SOCKET ? { ...i, k: bad } : i));
+      const input = { arch: AUDIT_ARCH_X86_64, nr: bad, arg0lo: AF_UNIX };
+      expect(run(base, input)).toBe(SECCOMP_RET_ALLOW);
+      expect(run(mutated, input), `a deny on syscall ${bad} must differ from the base`).toBe(SECCOMP_RET_ERRNO | EPERM);
+    }
+  });
+});
+
+describe("generator CLI hygiene (A15)", () => {
+  it("an unknown --flag is refused with exit 2 and writes nothing (never taken for an output path)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "gen-flag-"));
+    try {
+      for (const args of [["--chek"], ["--check", "--bogus"], ["--variant", "unixdeny", "--nope", join(dir, "out.bpf")]]) {
+        const r = spawnSync(process.execPath, [GEN, ...args], { cwd: dir, encoding: "utf8" });
+        expect(r.status, args.join(" ")).toBe(2);
+        expect(r.stderr).toContain("unknown argument");
+      }
+      expect(spawnSync("ls", ["-A", dir], { encoding: "utf8" }).stdout.trim()).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("base artifact golden bytes (the variant work must not move it)", () => {
   it("the committed base artifact has the pinned sha256", () => {
     const sha = createHash("sha256").update(readFileSync(BPF_PATH)).digest("hex");

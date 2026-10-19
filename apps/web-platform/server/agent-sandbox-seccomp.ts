@@ -25,7 +25,7 @@ export const SECCOMP_UNIXDENY_ARTIFACT = "/app/infra/bwrap-userns-clone3-unixden
 /** The env var the shim (and the C4 prelude) reads to pick the artifact. */
 export const SECCOMP_SELECTOR_ENV = "SOLEUR_BWRAP_SECCOMP_BPF";
 /** Test/incident override for the variant path (the probe and the dev box have no /app). */
-export const SECCOMP_UNIXDENY_OVERRIDE_ENV = "SOLEUR_BWRAP_SECCOMP_BPF_UNIXDENY";
+const SECCOMP_UNIXDENY_OVERRIDE_ENV = "SOLEUR_BWRAP_SECCOMP_BPF_UNIXDENY";
 
 type Env = Record<string, string | undefined>;
 

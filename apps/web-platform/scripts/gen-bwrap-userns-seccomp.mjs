@@ -4,9 +4,12 @@
 // (bwrap's seccomp_program_new does `len % 8 != 0 -> die; len / 8` — the fd
 // carries instructions ONLY, no sock_fprog header; same serialization as
 // libseccomp's seccomp_export_bpf).
-// One artifact, both sandbox insertion points: the C4 render argv
-// (apps/web-platform/server/c4-render.ts › buildLikeC4SandboxArgv) and the
-// agent-SDK PATH shim (apps/web-platform/infra/bwrap-shim/bwrap).
+// TWO committed artifacts (variants), one program family:
+//   base      infra/bwrap-userns-clone3-deny.bpf       serves BOTH sandbox insertion points: the C4 render argv
+//             (apps/web-platform/server/c4-render.ts › buildLikeC4SandboxArgv) and the agent-SDK PATH shim
+//             (apps/web-platform/infra/bwrap-shim/bwrap). Byte-identical to the artifact that predates the variant.
+//   unixdeny  infra/bwrap-userns-clone3-unixdeny.bpf   base + the socket(AF_UNIX) deny; selected ONLY by the agent-SDK shim
+//             (via SOLEUR_BWRAP_SECCOMP_BPF) for no-egress sessions while the runtime flag is on. The C4 render never uses it.
 //
 //   node gen-bwrap-userns-seccomp.mjs                       # write BOTH committed artifacts
 //   node gen-bwrap-userns-seccomp.mjs [--variant V] [path]  # write one variant (V: base | unixdeny)
@@ -174,7 +177,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   for (let n = 0; n < argv.length; n++) {
     if (argv[n] === "--check") check = true;
     else if (argv[n] === "--variant") variant = argv[++n] ?? "";
-    else positional.push(argv[n]);
+    else if (argv[n].startsWith("--")) {
+      // An unknown flag must not be taken for a path: `--chek` would WRITE an artifact file named "--chek" and exit 0.
+      console.error(`gen-bwrap-userns-seccomp: unknown argument: ${argv[n]}`);
+      process.exit(2);
+    } else positional.push(argv[n]);
   }
   if (variant !== null && !VARIANTS[variant]) {
     console.error(`gen-bwrap-userns-seccomp: unknown variant: ${variant}`);
