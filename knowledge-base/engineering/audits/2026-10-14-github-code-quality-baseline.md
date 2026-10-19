@@ -180,3 +180,13 @@ Read from the repository's Code Quality alert list (Standard findings, filter `i
 The AI-findings panel read 0 findings. The alert list is UI-only (the REST API does not return these alerts), so this table is the last record of it before the feature is switched off.
 
 Code scanning state captured before the disable, to be compared after it: `GET repos/jikig-ai/soleur/code-scanning/default-setup` returned `state: configured`, languages `actions, javascript, javascript-typescript, python, typescript`, `query_suite: extended`, `threat_model: remote`, `schedule: weekly`, `runner_type: standard`, `updated_at: 2026-07-20T10:09:47Z`. Workflow `CodeQL - Code Quality` (id 343194280) was `active`. Every push to the PR branch started both a `PR #N` run (code scanning) and a `Code Quality: PR #N` run (Code Quality), for example head `54d6948` of the slice-4 PR.
+
+## Disable result (2026-10-19, slice 4 of #10331)
+
+Code Quality was turned off on 2026-10-19 around 20:51 local (18:51Z) through the repository settings page (Settings, Security and quality, Code quality, "Code Quality analysis" toggle). The AI findings "Scans" toggle on the same page was already Off, and was left as it was. A reload showed the page offering "Enable code quality" (the off state).
+
+Checks after the change:
+
+- Runs: heads pushed before the change (`f5c0d9f`, `7f60e4d`, `54d6948` of the slice-4 PR) each started both a `PR #10605` run and a `Code Quality: PR #10605` run. Head `79ff915`, pushed after the change, started only `PR #10605` (code scanning). A second PR's push at 18:52:52Z (`4df7c14`, `PR #10525`) also started no `Code Quality: PR` run.
+- Code scanning default setup is identical to the capture above (`state: configured`, same languages, `extended` suite, `weekly` schedule).
+- Caveat: `GET repos/jikig-ai/soleur/actions/workflows/343194280` still returns `state: active` (`updated_at` 2026-09-03) after the change. The dynamic workflow object stays listed; the absence of new `Code Quality: PR` runs is the evidence that it is off, and it is re-read at the postmerge step.
