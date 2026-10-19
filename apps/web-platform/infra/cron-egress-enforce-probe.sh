@@ -36,8 +36,8 @@ case "$-" in
     ;;
 esac
 
-# Refuse to run under xtrace (#7797): emit_fail ACQUIRES credentials at runtime (the deploy-owned
-# /etc/default/webhook-deploy it sources, a Doppler token, and the Sentry DSN from `doppler secrets
+# Refuse to run under xtrace (#7797): emit_fail ACQUIRES credentials at runtime (the Doppler token it
+# reads from the deploy-owned /etc/default/webhook-deploy, and the Sentry DSN from `doppler secrets
 # get`), so tracing would print them into whatever captures stderr. Unconditional on purpose: a
 # `${VAR:+x}` escape hatch would be open by construction, since the credential is not in the
 # environment at launch. It tests the STATE (`$-`), so `bash -x`, SHELLOPTS=xtrace and a BASH_ENV
@@ -46,8 +46,9 @@ esac
 # SILENT (no Sentry event: emitting needs the DSN, which is what is being protected); the caller
 # (cloud-init.yml) powers the host off on any non-zero exit, so a traced fresh-host boot fails closed and
 # is observable only by that host's absence (the refusal text reaches stderr only; tracked as #9639).
-# LIMIT: emit_fail sources a deploy-owned file as root; a `set -x` planted there is not caught by this
-# entry check (tracked as #9639).
+# emit_fail READS the one DOPPLER_TOKEN line of that deploy-owned file with sed and never sources it
+# (#9639 F5), so a `set -x` or any code planted there is data, not executed. The terminal block of
+# cloud-init.yml still sources the same file earlier in the boot (recorded on #9639, blocked on #10501).
 case "$-" in
   *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
 esac
@@ -72,8 +73,9 @@ emit_fail() {
   trap - EXIT
   ( set +e
     # Read the one token; never source it (the file is deploy-owned and this runs as root, #9639 F5).
+    # Matches the canonical unquoted KEY=VALUE line only (its sole writer is cloud-init.yml); the last one wins, as under sourcing.
     _t=$(sed -n 's/^DOPPLER_TOKEN=//p' /etc/default/webhook-deploy 2>/dev/null | tail -n 1)
-    # shellcheck disable=SC2034  # DOPPLER_TOKEN is consumed by the doppler CLI below, not read by this shell
+    # shellcheck disable=SC2034  # no export on purpose (parity with the old `.`): the doppler child inherits it only when the caller already exported one
     [ -z "$_t" ] || DOPPLER_TOKEN=$_t
     DSN=$(timeout 15 doppler secrets get SENTRY_DSN --plain --project soleur --config prd 2>/dev/null \
           || timeout 15 doppler secrets get NEXT_PUBLIC_SENTRY_DSN --plain --project soleur --config prd 2>/dev/null \

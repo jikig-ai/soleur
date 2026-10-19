@@ -22,5 +22,5 @@ PR body: `Ref #9639`, `Part of tracker #9217` (no closing keyword). Do NOT touch
 
 ## Phase 4 - Sweep and wrap
 - [x] 4.1 `git grep -n "\. /etc/default/webhook-deploy" -- apps/web-platform/infra`: only the cloud-init terminal block may remain.
-- [x] 4.2 File a deferred-scope-out tracking issue for that remaining site (blocked on #10501), with milestone from roadmap.md.
+- [x] 4.2 Record the remaining site (`cloud-init.yml:772`, blocked on #10501) on #9639 and #9217 instead of filing a new issue (net issue flow); named in the PR body.
 - [x] 4.3 Run cron-egress-firewall.test.sh and cloud-init-web-zot-seed.test.sh to confirm no other pin moved.
