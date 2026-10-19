@@ -9,7 +9,7 @@ Every PR body ends `Ref #9729` and `Ref #10448` (never a closing keyword) and qu
 - 1.0 Spike (results in the PR body, before any tokeniser code)
   - 1.0.1 Measure the cold cost of a nested `--print-selection` walk from inside a `test-all.sh` suite on a fresh clone; compare with the ceiling (180 s billed per full-battery run, 300 s suite timeout); if over, plan the `--rows FILE` fallback.
   - 1.0.2 Prototype timing of the component-boundary match with per-file memoisation on the pinned tree (target 30 s or less); if it misses, memoisation alone is the fallback and boundary precision becomes the conditional PR2.
-- 1.1 Write failing tests first in `plugins/soleur/test/ci-pr-affected-replay.test.sh` (Guard 2 rows M1-M5, harness rows, must-PASS suffix-path and tab-preceded fixtures; operation-count fixture, not wall clock)
+- 1.1 Write failing tests first (Guard 2 also: M5 basename-collision and cache-poisoning rows, M6 comment/heredoc/CRLF fixtures, no-trailing-newline fixture, extra out-of-charset shapes; receipt check reads stored line text) in `plugins/soleur/test/ci-pr-affected-replay.test.sh` (Guard 2 rows M1-M5, harness rows, must-PASS suffix-path and tab-preceded fixtures; operation-count fixture, not wall clock)
 - 1.2 Replace the `f in blob` scan in `suite_refs` (`scripts/ci-pr-affected-replay.py`) with the component-boundary scan, prefix set, per-file memoisation, cached one-hop library reads; leave `edge_hit` unchanged
 - 1.3 Commit `receipts/audit-differential.tsv` (old versus new refs on a pinned tree); mechanically check every dropped ref has a mid-component start; run `scripts/audit-suite-reads.sh record --mode check --cover-from-selection` over the dropped refs of the heavy-tail suites and fail if any is observed opened
 - 1.4 Directory-suite scan (bun-discoverable test files under a `dir/` pattern); reject `*` accept rows that name a readable suite
@@ -20,20 +20,22 @@ Every PR body ends `Ref #9729` and `Ref #10448` (never a closing keyword) and qu
 
 ## Phase 2: PR2 (conditional) - boundary precision
 
-- 2.1 Open only if memoisation alone met the 30 s target AND the dry run shows the rule drops at least 30 gap pairs; otherwise handle those pairs as accept rows in Phase 4/5
+- 2.1 Must land BEFORE PR3. Open only if memoisation alone met the 30 s target AND the dry run shows the rule drops at least 30 gap pairs; otherwise handle those pairs as accept rows in Phase 4/5
 - 2.2 Failing tests first (Guard 3 rows M1-M4, harness rows); denylist left boundary, right boundary `[A-Za-z0-9_-]`
 - 2.3 Commit `receipts/boundary-differential.tsv`; recorder must observe none of the dropped refs opened
 
 ## Phase 3: PR3 - the ratchet, the baseline, the ADR-276 amendment
 
-- 3.1 Failing tests first in `scripts/ci-pr-affected-index-ratchet.test.sh` (Guard 1 rows M1-M11, harness rows, failure-text contract; controls from `--list` fixtures and scratch `git init` repos with `GIT_CEILING_DIRECTORIES`; one real selector walk)
+- 3.1 Failing tests first in `scripts/ci-pr-affected-index-ratchet.test.sh` (Guard 1 rows M1-M14 each with a pristine control and a distinct failure token, harness rows, declared-limit negative controls for variable-built paths / hop-2 libs / non-literal `source`, failure-text contract; controls from `--list` fixtures and scratch `git init` repos with `GIT_CEILING_DIRECTORIES`; one real selector walk)
 - 3.2 `ratchet` subcommand in `scripts/ci-pr-affected-replay.py`: structural floors, exit codes 0/1/2 (ReadError and unexpected errors map to 2), baseline equals live gap set, merge-base growth rule via `resolve_base`/`baseline_at` from `scripts/lint-ratchet.py` keyed on `RATCHET_BASELINE`, duplicate and unsorted refusal, absent baseline is strict zero except at the bootstrap PR, failure text with suite/path/line and both remedies
 - 3.3 Create `scripts/ci-pr-affected-audit.baseline.tsv` (sorted, regenerated on the rebased tree just before merge)
-- 3.4 Register by exact file at the END of the block in `scripts/test-all.sh`; add the label to `ALWAYS_ON_SUITES` in `scripts/lib/test-affected-paths.sh`; add its own leg to `scripts/suite-shard-legs.tsv` and a row to `scripts/suite-durations.tsv` (registration-only runner diff)
+- 3.3b `ratchet --print-baseline` (stdout only); failure text separates edited-suite / added-file / stale-row causes and prints the file and line to delete
+- 3.3c Load `resolve_base`/`baseline_at` from `scripts/lint-ratchet.py` with `importlib.util.spec_from_file_location`; fixture proves the load
+- 3.4 Register by exact file at the END of the block in `scripts/test-all.sh`; add the label to `ALWAYS_ON_SUITES` in `scripts/lib/test-affected-paths.sh`; add its own leg to `scripts/suite-shard-legs.tsv` and a row to `scripts/suite-durations.tsv` (registration-only runner diff); generate the leg and duration rows with `scripts/regenerate-shard-manifest.py`, do not hand-edit; add a real-registration test running `_aff_classify_runner_diff` on the PR3 diff (expects `registration-only`)
 - 3.5 Measure and state the ratchet's cost cold and with a restored cache in the PR body; confirm it fits the ceiling or stop and re-rule
 - 3.6 Run `bash scripts/lint-orphan-test-suites.sh`, the shard-totality census and `bash plugins/soleur/test/c4-count-parity.test.sh`
 - 3.7 Append ADR-276 `## Amendment <date> (S4 index completion ratchet, #10448)` and a Stage-status line (non-activating; supersedes the `plugins/soleur` `*`-row clause by subject; residuals stated; append-only)
-- 3.8 Update `knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md` sections 2 and 3 (ratchet, baseline path, drain a row, contributor how-to, rollback recipe); simulate the revert in a scratch detached worktree and record what it needed
+- 3.8 Update `knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md` sections 2 and 3 (ratchet, baseline path, drain a row, contributor how-to, rollback recipe) plus sections "ratchet red on main", "bot PRs", "one drain PR at a time"; verify `grep -c '^test$' scripts/required-checks.txt` is 1 and the queue run executes the suite; simulate the revert in a scratch detached worktree and record what it needed
 
 ## Phase 4: PR4 - heavy-tail suites (about 611 of 1,108 refs)
 
