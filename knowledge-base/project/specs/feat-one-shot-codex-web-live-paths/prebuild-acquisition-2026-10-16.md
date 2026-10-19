@@ -466,6 +466,24 @@ the surviving private file is not admitted. Exact expiry-minus-one acceptance
 and expiry/expiry-plus-one refusal pass. Ruff remains clean against the
 existing 62-finding baseline, with 112 files scanned. No network action ran.
 
+Canonical sync pushed `213826863942ca1cf5c194010b3c282d4695e65b`, including
+main `65c0ad6fb9f38e01edbe4ff20d5e4615d12ef602`, and resolved BEHIND.
+Qualification components, Dockerfile and migrations were unchanged by main;
+runtime sandbox sources changed and require fresh production input bindings.
+Both reviewers accepted the fixture refresh. Security closed the original
+P1 publication timing gap but identified P2: device/inode numbers alone do not
+prevent reuse after an unlinked created file is closed. The correction now
+holds the created regular-file descriptor until final acceptance or rollback.
+Both paths consume and close it exactly once; rollback compares names while
+the inode is pinned. A deterministic test first failed with EBADF on both
+paths, then all 13 registry methods passed. It checks the descriptor remains
+open after unlink, a replacement cannot reuse that inode, foreign bytes
+survive rollback, and acceptance/rollback each close once. A failed release
+never retries its descriptor close or deletes a potentially reused inode.
+Focused pushed recheck remains required. Current main's Ruff baseline has
+44 existing findings; the 113-file scan passes without a baseline edit here.
+No actual registry manifest, network request or authorization exists.
+
 The initial evidence search used the retired rollout directory rather than
 the live-paths directory. Discover current filenames before following older
 slugs. GitHub CLI subprocesses in this worktree encountered a sandboxed mise

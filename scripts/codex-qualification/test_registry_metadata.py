@@ -1,5 +1,6 @@
 """Public metadata protocol with synthesized bytes and injected transports only."""
 import copy
+import errno
 from argparse import Namespace
 import json
 import multiprocessing
@@ -68,6 +69,7 @@ class RegistryMetadata(unittest.TestCase):
         def rollback():
             if self.published.get(name) is raw:
                 del self.published[name]
+        rollback.accept = lambda: None
         return rollback
 
     def collector(self):
@@ -278,7 +280,8 @@ class RegistryMetadata(unittest.TestCase):
                 self.assertEqual(other.read_bytes(), b'foreign prior bytes')
                 self.assertFalse((root / metadata.STAGING[metadata.CONFIG_FILE]).exists())
                 other.unlink()
-                metadata.publish_artifact(directory, metadata.CONFIG_FILE, CONFIG, lambda: None)
+                accepted = metadata.publish_artifact(directory, metadata.CONFIG_FILE, CONFIG, lambda: None)
+                accepted.accept()
                 self.assertEqual(other.read_bytes(), CONFIG)
                 self.assertEqual(other.stat().st_mode & 0o777, 0o600)
                 with self.assertRaises(Refused):
@@ -332,6 +335,61 @@ class RegistryMetadata(unittest.TestCase):
                     finally:
                         os.close(directory)
 
+    def test_publication_pins_created_inode_until_acceptance_or_rollback(self):
+        for outcome in ('accept', 'rollback', 'close-error'):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                root.chmod(0o700)
+                directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+                handle = None
+                try:
+                    opened = []
+                    real_open, real_close = os.open, os.close
+                    def record_open(name, *args, **kwargs):
+                        descriptor = real_open(name, *args, **kwargs)
+                        if name == metadata.STAGING[metadata.CONFIG_FILE]:
+                            opened.append(descriptor)
+                        return descriptor
+                    def close_then_maybe_fail(descriptor):
+                        real_close(descriptor)
+                        if outcome == 'close-error' and descriptor == opened[0]:
+                            raise OSError('synthetic private close failure')
+                    with patch.object(metadata.os, 'open', side_effect=record_open), \
+                            patch.object(metadata.os, 'close', side_effect=close_then_maybe_fail) as closes:
+                        handle = metadata.publish_artifact(directory, metadata.CONFIG_FILE, CONFIG, lambda: None)
+                        self.assertEqual(len(opened), 1)
+                        descriptor = opened[0]
+                        held = os.fstat(descriptor)
+                        path = root / metadata.CONFIG_FILE
+                        self.assertEqual((held.st_dev, held.st_ino), (path.stat().st_dev, path.stat().st_ino))
+                        if outcome == 'accept':
+                            handle.accept()
+                            self.assertEqual(path.read_bytes(), CONFIG)
+                        elif outcome == 'rollback':
+                            path.unlink()
+                            self.assertEqual(os.fstat(descriptor).st_ino, held.st_ino)
+                            path.write_bytes(b'foreign replacement')
+                            self.assertNotEqual(path.stat().st_ino, held.st_ino)
+                            handle()
+                            self.assertEqual(path.read_bytes(), b'foreign replacement')
+                        else:
+                            with self.assertRaises(metadata.BoundaryFailure) as caught:
+                                handle.accept()
+                            self.assertEqual(caught.exception.reason, 'publication_cleanup')
+                            path.unlink()
+                            path.write_bytes(b'foreign after close failure')
+                            with self.assertRaises(metadata.BoundaryFailure):
+                                handle()
+                            self.assertEqual(path.read_bytes(), b'foreign after close failure')
+                        self.assertEqual(sum(call.args[0] == descriptor for call in closes.call_args_list), 1)
+                        with self.assertRaises(OSError) as caught:
+                            os.fstat(descriptor)
+                        self.assertEqual(caught.exception.errno, errno.EBADF)
+                finally:
+                    if callable(getattr(handle, 'accept', None)):
+                        handle.accept()
+                    os.close(directory)
+
     def test_failed_post_publish_cleanup_is_sanitized_and_never_accepts_config(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -347,6 +405,7 @@ class RegistryMetadata(unittest.TestCase):
                     def blocked_rollback():
                         with patch.object(metadata, '_remove_owned', return_value=False):
                             rollback()
+                    blocked_rollback.accept = rollback.accept
                     return blocked_rollback
                 collector.publish = publish_then_block_cleanup
                 with self.assertRaises(metadata.MetadataFailure) as raised:

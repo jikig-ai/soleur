@@ -272,13 +272,15 @@ class RegistryMetadata:
                 remaining()
             def publish_projection(name, raw, key, projected):
                 rollback = self.publish(name, raw, publication_checks)
-                require(callable(rollback), ERROR)
                 try:
+                    require(callable(rollback) and callable(getattr(rollback, 'accept', None)), ERROR)
                     publication_checks()
                     result['metadata'][key] = projected
+                    rollback.accept()
                 except Exception:
                     result['metadata'].pop(key, None)
-                    rollback()
+                    if callable(rollback):
+                        rollback()
                     raise
             enter('consume_gate', 'output_binding')
             self.output_binding()
@@ -383,21 +385,35 @@ def _remove_owned(directory, name, identity):
 
 def publish_artifact(directory, name, raw, validate):
     require(name in STAGING and type(raw) is bytes and len(raw) <= 1024**2, ERROR)
-    stage, identity, published = STAGING[name], None, False
+    stage, identity, published, descriptor = STAGING[name], None, False, None
+    def release():
+        nonlocal descriptor
+        closing, descriptor = descriptor, None
+        if closing is not None:
+            try:
+                os.close(closing)
+            except Exception:
+                raise BoundaryFailure('publication_cleanup') from None
     def rollback():
-        if identity is None:
+        if identity is None and descriptor is None:
             return
         try:
+            require(descriptor is not None and identity is not None, ERROR)
+            held = os.fstat(descriptor)
+            require((held.st_dev, held.st_ino) == identity, ERROR)
             candidates = (stage, name) if published else (stage,)
             outcomes = [_remove_owned(directory, candidate, identity) for candidate in candidates]
             os.fsync(directory)
             require(all(outcomes), ERROR)
         except Exception:
             raise BoundaryFailure('publication_cleanup') from None
+        finally:
+            release()
+    rollback.accept = release
     try:
         validate()
         descriptor = os.open(stage, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory)
-        with os.fdopen(descriptor, 'wb') as stream:
+        with os.fdopen(descriptor, 'wb', closefd=False) as stream:
             observed = os.fstat(stream.fileno())
             identity = (observed.st_dev, observed.st_ino)
             require(stream.write(raw) == len(raw), ERROR)

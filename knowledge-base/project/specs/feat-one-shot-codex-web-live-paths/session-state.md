@@ -2120,3 +2120,13 @@
   failure and exact expiry boundary controls. A cleanup-failure survivor stays
   private and absent from accepted Config evidence. Ruff passes against the
   existing baseline. No registry network operation or action approval ran.
+- Canonical sync resolved BEHIND at `213826863942ca1cf5c194010b3c282d4695e65b`,
+  including main `65c0ad6fb9f38e01edbe4ff20d5e4615d12ef602`. Main changed
+  runtime sandbox source, not qualification/Dockerfile/migration components.
+  Security closed P1 but found a remaining inode-reuse hazard. The new
+  correction holds the created file descriptor through acceptance/rollback,
+  closes once on either path and never deletes a foreign replacement after
+  release. The descriptor-retention regression ran RED (EBADF), then all
+  13 registry methods pass; canonical Ruff passes against main's 44-finding
+  baseline/113-file census. Pushed independent recheck remains required.
+  No registry action manifest, network operation or new approval exists.
