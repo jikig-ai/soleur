@@ -562,6 +562,14 @@ if [ "$CHILD" = 0 ] && [ "$RAN_DYNAMIC" = 1 ]; then
     shift
     timeout -k 5 240 bash "$SELF" --child --plugin-dir "$RESOLVED_PLUGIN" --scratch-parent "$SCR/c" "$@" >"$out" 2>&1
     CHILD_RC=$?
+    # A healthy-control child that fails must say why: its output is already scanned for the value and withheld by _emit.
+    case "$out" in
+      */pristine-*.out|*/reordered.out)
+        if [ "$CHILD_RC" != 0 ]; then
+          printf 'child diagnostic (%s, rc=%s):\n' "${out##*/}" "$CHILD_RC" >&2
+          head -n 12 "$out" | cut -c1-240 >&2
+        fi ;;
+    esac
     if [ -n "$(ls -A "$SCR/c" 2>/dev/null)" ]; then CHILD_LEFTOVER=1; fi
     if [ -s "$SCR/c.value" ]; then
       if grep -qF -f "$SCR/c.value" "$out"; then CHILD_LEAK=1; fi
