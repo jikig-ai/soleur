@@ -1883,6 +1883,16 @@ check("D-6: each step exists exactly once, in order confirm < checkout < doppler
       single and [pos[k][0] for k in order] == sorted(pos[k][0] for k in order), {k: v for k, v in pos.items()})
 def step(k):
     return steps[pos[k][0]] if len(pos[k]) == 1 else {}
+# 2026-10-19: the first live flip dispatch refused with HTTP 301 from the pin-fault read. Two defects, one step: SENTRY_API_HOST is a
+# scheme-less org-subdomain (curl then went out over http), and 1310055 is a Sentry WORKFLOW id (the legacy alert-rules path answers 404 and
+# a workflow carries `enabled`, not `status`). Anchored on the call forms, comment-stripped, within the one step.
+_fp = step("flip_preconditions"); _fpcode = "\n".join(l for l in (_fp.get("run") or "").splitlines() if not l.lstrip().startswith("#"))
+check("WF-pinfault: the pin-fault read adds the https scheme to SENTRY_API_HOST, GETs organizations/jikigai-eu/workflows/1310055/ (never alert-rules), and requires enabled == true",
+      'host="https://${SENTRY_API_HOST:-jikigai-eu.sentry.io}"' in _fpcode
+      and _fpcode.count('"${host}/api/0/organizations/jikigai-eu/workflows/1310055/"') == 1
+      and "alert-rules" not in _fpcode and "https://sentry.io" not in _fpcode
+      and """jq -r '.enabled' "$RUNNER_TEMP/rule.json" """.strip() in _fpcode and '[[ "$enabled" == "true" ]]' in _fpcode,
+      None)
 b = step("bridge")
 check("WF3: bridge passes server-ip from env.WEB_HOST_PRIVATE_IP", (b.get("with") or {}).get("server-ip") == "${{ env.WEB_HOST_PRIVATE_IP }}", (b.get("with") or {}).get("server-ip"))
 check("WF4: the bridge is gated to the host-touching modes (not redeploy; not a nothing-rollback)",
@@ -2152,7 +2162,7 @@ while IFS=$'\t' read -r v name detail; do
   _wf_n=$((_wf_n + 1))
   if [ "$v" = ok ]; then pass "$name"; else fail "$name" "$detail"; fi
 done < "$T/wf.tsv"
-[ "$_wf_n" -eq 56 ] || fail "WF: $_wf_n workflow verdicts were produced (expected exactly 56) — the YAML leg crashed, or a row was added or deleted without restating the count" "$(head -c 300 "$T/wf.err")"
+[ "$_wf_n" -eq 57 ] || fail "WF: $_wf_n workflow verdicts were produced (expected exactly 57) — the YAML leg crashed, or a row was added or deleted without restating the count" "$(head -c 300 "$T/wf.err")"
 
 # ── WORKFLOW STEPS, EXECUTED ──────────────────────────────────────────────────────────
 # Per-name Doppler shim: answers per project/config/secret AND per flag presence, mirroring the
@@ -3582,7 +3592,7 @@ fi
 # Ship: 139 mutants x 2 = 278 (+2); FZ22 and the MZ-VO failing-member loops sit inside case_fz / the existing rows and add none: 615.
 # Wipe body (#10138): 143 mutants x 2 = 286 (+8 over 139 x 2); two new standalone workflow verdicts (WF-runname, WF-cutover-if), which also move the workflow verdict count 54 -> 56: 625.
 # Review round 2 (#10138): 148 mutants x 2 = 296 (+10 over 143 x 2); no new standalone row (the G5 census, N-body and N-exprs were restated in place): 635.
-FLOOR=635
+FLOOR=636
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -ne "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: %s assertions ran/declared, the floor is exactly %s — cases were deleted, added without restating the floor, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2
