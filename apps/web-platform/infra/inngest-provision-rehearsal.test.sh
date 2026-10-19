@@ -244,10 +244,10 @@ yes "the drift sweep knows this prefix" \
 yes "the drift sweep knows the rehearsal label" \
   "grep -qF 'soleur-inngest-provision-rehearsal' '$DRIFT_WF'"
 # #9919: the scratch-environment check MOVED to this workflow's always() teardown — the
-# sweep job's token is config-scoped and could never enumerate soleur-inngest (every run
-# was `unsatisfiable`). Both halves of the move are pinned: the sweep carries no Doppler
-# probe arm at all, and the teardown job runs the environments listing with a floor and a
-# rehearsal_* prefix assert.
+# sweep job's token is config-scoped and could never enumerate soleur-inngest (#9919
+# recorded the probe arm failing there, not merely unrun). Both halves of the move are
+# pinned: the sweep carries no Doppler probe arm at all, and the teardown job runs the
+# environments listing with a floor and a rehearsal_* prefix assert.
 # Comment lines are stripped first — the sweep's own run-block comments NAME the moved arm
 # (cq-assert-anchor-not-bare-token).
 SWEEP_JOB="$(awk '/^  inngest-rehearsal-orphan-sweep:/{f=1} f' "$DRIFT_WF" | sed -E 's/^[[:space:]]*#.*$//')"
@@ -266,8 +266,13 @@ yes "the teardown check fails on a surviving rehearsal_* environment (slug-or-na
   'grep -qF "startswith(\"rehearsal_\")" <<<"$TEARDOWN_STEP" && grep -qF "::error::" <<<"$TEARDOWN_STEP"'
 yes "the teardown check runs under always() — a failed destroy/assert must not skip it" \
   'grep -qE "if: always\(\)" <<<"$TEARDOWN_STEP"'
+HETZ_STEP="$(awk '/- name: Assert no rehearsal orphans remain/{f=1} f&&/- name: Assert no scratch Doppler/{exit} f' "$WF" | sed -E 's/^[[:space:]]*#.*$//')"
+yes "the Hetzner-step extraction is non-empty (presence pin)" \
+  'test -n "$HETZ_STEP"'
+yes "the Hetzner orphan assert also runs under always() — a failed destroy is exactly the case it exists for" \
+  'grep -qE "if: always\(\)" <<<"$HETZ_STEP"'
 yes "the teardown check demands a declared NON-ZERO floor (>=1 env listed — prd — or the verdict measured nothing)" \
-  'grep -qE "ENV_FLOOR: [1-9][0-9]*" <<<"$TEARDOWN_STEP" && grep -qE "env_total.*-lt.*ENV_FLOOR" <<<"$TEARDOWN_STEP"'
+  'grep -qE "ENV_FLOOR: [1-9][0-9]*$" <<<"$TEARDOWN_STEP" && grep -qE "env_total.*-lt.*ENV_FLOOR" <<<"$TEARDOWN_STEP"'
 
 # ── Cross-checks on the sibling artifacts ─────────────────────────────────────
 yes "the capture script is executable and bash-syntax-clean" \

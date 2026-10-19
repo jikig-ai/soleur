@@ -567,7 +567,7 @@ emit_state() {
     local nft_flat
     local nft_emit
     nft_raw="$(nft_cmd list chain inet soleur_inngest input 2>/dev/null)" || nft_raw=""
-    nft_flat="$(printf '%s' "$nft_raw" | tr '\n' ' ')"
+    nft_flat="$(printf '%s' "$nft_raw" | tr '\n' ' ')" || nft_flat=""
     # Bounded detail: ~230 B measured today, 4000 is ~17x — a pathological ruleset is cut
     # LOUDLY (+TRUNCATED) rather than pushing the row past a transport field cap.
     if [[ ${#nft_flat} -gt 4000 ]]; then nft_flat="${nft_flat:0:4000}+TRUNCATED"; fi

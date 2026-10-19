@@ -716,9 +716,11 @@ jobs:
             echo "::error::doppler listed ${env_total} soleur-inngest environment(s), below the declared floor of ${ENV_FLOOR} (prd must exist) — the token cannot see what the rehearsal created; the check measured nothing."
             exit 1
           fi
-          env_left="$(printf '%s' "$env_raw" | jq -r '[.[]? | (.slug // .name) | select(type == "string" and startswith("rehearsal_"))] | .[]')"
+          # Either field can carry the prefix — `.slug // .name` alone would miss a
+          # rehearsal_ NAME under a non-matching slug, so both are probed independently.
+          env_left="$(printf '%s' "$env_raw" | jq -r '[.[]? | select(((.slug? // "") | tostring | startswith("rehearsal_")) or ((.name? // "") | tostring | startswith("rehearsal_"))) | (.slug? // .name? // "")] | .[]')"
           if [[ -n "$env_left" ]]; then
-            echo "::error::scratch Doppler environment(s) remain in soleur-inngest after destroy: $(printf '%s\n' "$env_left" | paste -sd' ' - | tr -d '\r' | tr '%' '_'). Reclaim per the inngest-provision-rehearsal runbook."
+            echo "::error::scratch Doppler environment(s) remain in soleur-inngest after destroy: $(printf '%s\n' "$env_left" | paste -sd' ' - | tr -d '\000-\037\177' | tr '%' '_'). Reclaim per the inngest-provision-rehearsal runbook."
             exit 1
           fi
           echo "no scratch rehearsal_* Doppler environments remain (${env_total} listed)"

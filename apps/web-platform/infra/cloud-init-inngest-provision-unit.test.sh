@@ -59,8 +59,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UBUNTU_BASE="$(sed -nE "s/^UBUNTU_BASE='(ubuntu:24\.04@sha256:[0-9a-f]{64})'\$/\1/p" "${SCRIPT_DIR}/git-data-runcmd-rehearsal.test.sh" 2>/dev/null | head -1)"
 [ -n "$UBUNTU_BASE" ] || { echo "FAIL SETUP: no UBUNTU_BASE pin readable from git-data-runcmd-rehearsal.test.sh" >&2; exit 1; }
 BUDGET="$SCRIPT_DIR/inngest-userdata-budget.sh"
-EXPECTED_ROWS=85
-EXPECTED_RED=76
+EXPECTED_ROWS=88
+EXPECTED_RED=79
 EXPECTED_MUSTPASS=9
 
 die() { printf 'INSTRUMENT FAULT: %s\n' "$*" >&2; exit 2; }
@@ -369,6 +369,9 @@ def cmd_static(render):
     env = resolve_vars(L)
     ssec, tsec = unit_parse(svc), unit_parse(tmr)
     others = [(p, str(w.get("content", ""))) for p, ws in wf.items() if p != SCRIPT_PATH for w in ws]
+    # The phone-home script is a separate write_files entry — its marker-arg plumbing is
+    # asserted against ITS lines, not the provision script's.
+    ph = code_lines(next((c for p, c in others if "inngest-boot-phone-home" in p), ""))
 
     # ---- dispatch -------------------------------------------------------------------------------
     chk("dispatch: runcmd has items", len(its) > 0, "items=%d" % len(its))
@@ -604,6 +607,18 @@ def cmd_static(render):
     chk("#10382: every line of the nft capture/emit keeps the || true failure-isolation",
         all(s.rstrip().endswith("|| true") for s in nft_reads + nh),
         "offenders=%s" % [s[:60] for s in nft_reads + nh if not s.rstrip().endswith("|| true")])
+    chk("#10382: the digest computation is gated on non-empty nft_raw (if [ -n \"$nft_raw\" ])",
+        any('if [ -n "$nft_raw" ]' in s for _, s in L))
+    chk("#10382: a failed digest arm still emits unavailable (post-guard, matching inngest-cutover-flip.sh)",
+        any('[ -n "$nft_sha256" ] || nft_sha256="unavailable"' in s for _, s in L))
+    chk("#10382: the nft field is bounded at 4000 chars with a loud +TRUNCATED suffix",
+        any('cut -c1-4000' in s for _, s in L) and any('+TRUNCATED' in s for _, s in L))
+    chk("#10382: the phone-home script reads an optional marker arg (marker=\"$3\")",
+        len(ph) > 0 and any('marker="$3"' in s for _, s in ph))
+    chk("#10382: the marker arg defaults to SOLEUR_INNGEST_BOOT_STAGE (2-arg callers unchanged)",
+        any('[ -z "$marker" ]' in s and 'marker=SOLEUR_INNGEST_BOOT_STAGE' in s for _, s in ph))
+    chk("#10382: the marker feeds the emitted JSON object (--arg m \"$marker\")",
+        any('--arg m "$marker"' in s for _, s in ph))
 
     for st, name in R:
         print("  %s: %s" % (st, name))
@@ -1048,7 +1063,7 @@ echo "  C0: $C0_PASS assertions, all PASS"
 # EXACT, not a floor with slack: the control's assertion inventory is fixed by this file, so a
 # count that drifts (an assertion deleted, a scenario silently not run) is itself a RED. Bump it in
 # the same edit that adds an assertion.
-C0_EXPECTED=168
+C0_EXPECTED=174
 [ "$C0_PASS" -eq "$C0_EXPECTED" ] || { echo "  FAIL: C0 anti-vacuity — $C0_PASS assertions ran, the inventory is exactly $C0_EXPECTED"; exit 1; }
 
 # =================================================================================================
@@ -1392,6 +1407,12 @@ row NFT-r1 RED "#10382: the nft capture is NOT truncated" '
 rep_line("nft_raw=\"$(nft list chain inet soleur_inngest input 2>/dev/null)\" || true", "nft_raw=\"$(nft list chain inet soleur_inngest input 2>/dev/null | head -c 160)\" || true"); save()'
 row NFT-r2 RED "#10382: nft_sha256 is computed from the captured nft output" '
 rep_line("nft_sha256=\"$(printf \x27%s\x27 \"$nft_raw\" | sha256sum | awk \x27{print $1}\x27)\" || nft_sha256=\"unavailable\"", "nft_sha256=deadbeef"); save()'
+row NFT-r3 RED "#10382: the digest computation is gated on non-empty nft_raw" '
+rep_line("if [ -n \"$nft_raw\" ]; then", "if true; then"); save()'
+row NFT-r4 RED "#10382: a failed digest arm still emits unavailable" '
+del_line("[ -n \"$nft_sha256\" ] || nft_sha256=\"unavailable\""); save()'
+row MRK-r1 RED "#10382: the phone-home script reads an optional marker arg" '
+rep_line("stage=\"$1\"; detail=\"$2\"; marker=\"$3\"; [ -z \"$marker\" ] && marker=SOLEUR_INNGEST_BOOT_STAGE", "stage=\"$1\"; detail=\"$2\"; marker=SOLEUR_INNGEST_BOOT_STAGE"); save()'
 
 # ---- execute (bounded parallelism; each row owns its directory) --------------------------------
 echo ""

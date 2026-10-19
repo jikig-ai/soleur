@@ -149,7 +149,7 @@ EOF
   PHONE="$WORK/phone-home.sh"
   cat > "$PHONE" <<EOF
 #!/usr/bin/env bash
-printf '%s\n' "\$*" >> "$PHONETRACE"
+printf 'argc=%s argv3=%s :: %s\n' "\$#" "\${3:-}" "\$*" >> "$PHONETRACE"
 EOF
   # --- #7228: the serving-verification seam ---------------------------------------------
   # `done` is now PROBE-DERIVED: the FSM will not record it until a bounded-window /health
@@ -530,12 +530,37 @@ assert_contains "the phone-home row carries the same nft_sha256=" \
   "$(cat "$PHONETRACE")" "nft_sha256=$NFT_SHA"
 assert_contains "the phone-home stage names the noop arm (cutover-flip-<reason>)" \
   "$(cat "$PHONETRACE")" "cutover-flip-noop-unset"
-assert_contains "the dual emit rides SOLEUR_INNGEST_NOOP, off the BOOT_STAGE channel" \
-  "$(cat "$PHONETRACE")" "SOLEUR_INNGEST_NOOP"
+assert_contains "the dual emit passes SOLEUR_INNGEST_NOOP as argv 3 (marker position, not payload text)" \
+  "$(cat "$PHONETRACE")" "argc=3 argv3=SOLEUR_INNGEST_NOOP"
 # The throttle gates BOTH channels — an in-window fire emits neither.
 rc=$(run_flip "" CUTOVER_NOOP_THROTTLE_S=3600)
 assert_eq "the in-window second fire dual-emits nothing (throttle gates both channels)" \
   "1" "$(wc -l < "$PHONETRACE" | tr -d ' ')"
+teardown_case
+
+# --- Test 5o (#10382): a pathological >4000-char chain is cut LOUDLY (+TRUNCATED) while
+# the digest still fingerprints the RAW unbounded output — the bound exists so one row
+# never pushes past a transport field cap, and a silent cut would read as a healthy one.
+echo "TEST: #10382 a >4000-char chain truncates loudly and the digest covers raw output"
+setup_case
+cat > "$NFTSTUB" <<'EOF'
+#!/usr/bin/env bash
+[ "$*" = "list chain inet soleur_inngest input" ] || exit 3
+printf 'table inet soleur_inngest {\n  chain input {\n'
+i=0; while [ "$i" -lt 200 ]; do printf '    tcp dport %s accept # padding-padding-padding-padding\n' "$i"; i=$((i+1)); done
+printf '  }\n}\n'
+EOF
+LONG_RAW="$("$NFTSTUB" list chain inet soleur_inngest input)"
+LONG_FLAT="$(printf '%s' "$LONG_RAW" | tr '\n' ' ')"
+LONG_SHA="$(printf '%s' "$LONG_RAW" | sha256sum | awk '{print $1}')"
+assert_eq "the fixture chain actually exceeds the 4000-char bound" \
+  "1" "$([ "${#LONG_FLAT}" -gt 4000 ] && echo 1 || echo 0)"
+rc=$(run_flip "")
+assert_eq "exit 0 on the noop fire (long chain)" "0" "$rc"
+assert_contains "the bounded nft field ends loudly and the digest still covers RAW output" \
+  "$(cat "$PHONETRACE")" "+TRUNCATED] nft_sha256=$LONG_SHA"
+assert_contains "the logger row's nft field is bounded too (JSON stays inside the field cap)" \
+  "$(cat "$LOGTRACE")" "+TRUNCATED"
 teardown_case
 
 echo "TEST: #10382 a missing/failed nft read still emits, marked unavailable (never silent)"
@@ -1344,14 +1369,18 @@ fi
 # interval-0 seam case (2), and the non-numeric-interval fallback case (2).
 # 177 -> 187: +10 for the #10382 measured-nft-on-noop block — the dual-channel case (8)
 # and the nft-read-failure case (2).
-# 187 -> 189: +2 for review fixes — the SOLEUR_INNGEST_NOOP marker pin and the logger-side
-# `unavailable` assert on the failure arm.
-MIN_ASSERTIONS=189
-if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
-  # printf + exit, NOT fail() (ADR-193): routing the floor through the counter it exists to
+# 187 -> 190: +3 for review fixes — the positional argv3 marker pin, the logger-side
+# `unavailable` assert on the failure arm, and a miscount corrected.
+# 190 -> 194: +4 for the >4000-char bound fixture (Test 5o).
+# EXACT, not a floor with slack (the cloud-init suite's C0 convention): the assertion
+# inventory is fixed by this file, so a count that drifts — an assertion deleted, a block
+# silently skipped — is itself a RED. Bump it in the same edit that adds an assertion.
+EXPECTED_ASSERTIONS=194
+if [[ "$PASS" -ne "$EXPECTED_ASSERTIONS" ]]; then
+  # printf + exit, NOT fail() (ADR-193): routing the count through the counter it exists to
   # protect means one edit disarms both. See the instrument self-test at the top.
-  printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \
-    "$PASS" "$MIN_ASSERTIONS" >&2
+  printf 'FAIL: assertion-count mismatch: %s assertions ran, expected exactly %s — a block was added without updating this pin, or silently dropped.\n' \
+    "$PASS" "$EXPECTED_ASSERTIONS" >&2
   exit 1
 fi
 
