@@ -2,7 +2,7 @@
 upstream: github.com/General-Legal/legal-templates
 license: CC0-1.0
 pinned-commit: 6d6805425eabd41bed86fc1e2ec51612760f716c
-last-verified: 2026-09-28
+last-verified: 2026-10-19
 registry: knowledge-base/engineering/policies/content-vendoring.md
 lifted-files:
   # Each entry pins TWO blob SHAs:

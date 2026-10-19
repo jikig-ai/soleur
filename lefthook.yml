@@ -234,9 +234,10 @@ pre-commit:
         - "*.pyw"
         - "**/*.pyw"
         - "ruff.toml"
-        - "scripts/ruff-requirements.txt"
+        - "plugins/soleur/scripts/ruff-requirements.txt"
+        - "plugins/soleur/scripts/lint-ratchet.py"
         - "scripts/lint-ratchet-ruff.baseline.txt"
-      run: python3 scripts/lint-ratchet.py ruff --check
+      run: python3 plugins/soleur/scripts/lint-ratchet.py ruff --check
     eslint-test-dirs-ratchet:
       priority: 5
       # Same shrink-only rule for unused bindings in the test and fixture directories the
@@ -253,9 +254,9 @@ pre-commit:
         - "apps/web-platform/eslint.test-dirs.config.mjs"
         - "apps/web-platform/package.json"
         - "apps/web-platform/package-lock.json"
-        - "scripts/lint-ratchet.py"
+        - "plugins/soleur/scripts/lint-ratchet.py"
         - "scripts/lint-ratchet-eslint-test-dirs.baseline.txt"
-      run: python3 scripts/lint-ratchet.py eslint-test-dirs --check
+      run: python3 plugins/soleur/scripts/lint-ratchet.py eslint-test-dirs --check
     conversations-update-callsites:
       priority: 5
       # Run target is the whole repo (not `{staged_files}`) because the

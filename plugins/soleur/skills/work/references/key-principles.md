@@ -57,7 +57,7 @@ Before entering Phase 4, verify these Phase 2-3 items are complete:
 - [ ] All TodoWrite tasks marked completed
 - [ ] Tests pass (run project's test command)
 - [ ] New source files have corresponding test files
-- [ ] Linting passes (use linting-agent)
+- [ ] Linting passes (the project linter, plus the lint-ratchet call in Phase 3 when the repo opted in)
 - [ ] Code follows existing patterns
 - [ ] Figma designs match implementation (if applicable)
 
