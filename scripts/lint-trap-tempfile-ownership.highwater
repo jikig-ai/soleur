@@ -1,4 +1,4 @@
-36  # class-b accept (ADR-129): tracked *.sh calling mktemp with ZERO trap...EXIT.
+35  # class-b accept (ADR-129): tracked *.sh calling mktemp with ZERO trap...EXIT.
 # 70 -> 36 (2026-10-12, #10017 / tmpfs-guard count-shaped-leak incident): the
 # mktemp census sweep. 34 files left the population — 23 test suites gained a
 # SUITE_TMP root + owning EXIT trap (the #7490 pattern), 4 community setup
@@ -8,7 +8,9 @@
 # the rung2-archive RETURN trap, scripts-shard-totality-mutations.sh's
 # multi-line trap was flattened to the line-scoped predicate's shape, and
 # rclone check_setup.sh's echo'd `mktemp` (a DATA mention) went single-quoted.
-# The remaining 36 are annotate-bounded (sourced libs where an EXIT trap would
+# 36 -> 35 (2026-10-19, #9639 F5): soleur-host-bootstrap-observability.test.sh's F5 block
+# temp dir is owned by that suite's existing EXIT trap.
+# The remaining 35 are annotate-bounded (sourced libs where an EXIT trap would
 # clobber the caller's, deliverable dirs) and out-of-enumeration members under
 # apps/, .github/, tests/ — dispositioned in
 # knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-10017-mktemp-tmp-leak/mktemp-census.md.

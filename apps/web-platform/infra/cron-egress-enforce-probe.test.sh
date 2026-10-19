@@ -388,6 +388,8 @@ rm -f "$F5_FIX"
 run_probe_copy "$F5_COPY"
 check "F5-P2 an absent fixture keeps the inherited token and still reaches the doppler call" \
   '[[ "$(f5_last_tok)" == inherited-tok && "$RC" -eq 1 ]]'
+check "F5-P2 an absent fixture leaves no sed error on stderr (the read's 2>/dev/null is load-bearing)" \
+  '[[ "$ERR" != *"No such file"* ]]'
 printf '%s\n' 'DOPPLER_TOKEN=exported-check' > "$F5_FIX"
 run_probe_copy "$F5_COPY"
 check "F5-P3 when the caller already exported a token, the file token replaces it for the doppler child (assigned inside the emit subshell)" \
@@ -410,20 +412,27 @@ check "F5-H3 a backtick substitution on the token line is data, not executed" '[
 printf '%s\n' "DOPPLER_TOKEN=\$(touch $F5_PLANT)" > "$F5_FIX"
 run_probe_copy "$F5_CTRL"
 check "F5-H4 negative control: the sourcing variant DOES execute a command substitution on the token line" '[[ -e "$F5_PLANT" ]]'
+# a value with backslash escapes arrives literally (not re-parsed by printf %b / echo -e / eval)
+printf '%s\n' 'DOPPLER_TOKEN=a\nb\tc' > "$F5_FIX"
+run_probe_copy "$F5_COPY"
+check "F5-H5 a token value carrying backslash escapes reaches the doppler child literally (no printf %b / echo -e re-parse)" \
+  '[[ "$(f5_last_tok)" == "a\\nb\\tc" ]]'
 # no inherited token: the file token is assigned but not exported, so the doppler child must NOT see it
 printf '%s\n' 'DOPPLER_TOKEN=tok-not-exported' > "$F5_FIX"
 run_probe_copy "$F5_COPY" noinherit
 check "F5-P5 with no token exported by the caller, the read stays unexported: the doppler stub sees UNSET (plain assignment, not export)" \
   '[[ "$(f5_last_tok)" == UNSET ]]'
+# shellcheck disable=SC2034  # consumed by the check() conditions below via eval
+F5_SRC_RE='(^|[:;&(]|[[:space:]])(\.|source)[[:space:]]+[^[:alnum:][:space:]/]?/etc/default/webhook-deploy'
 check "F5-S1 neither the probe nor the bootstrap sources webhook-deploy on a code line" \
-  '[[ "$(grep -vE "^[[:space:]]*#" "$PROBE" "$BOOTSTRAP" | grep -cE "(^|[:;&(]|[[:space:]])(\\.|source)[[:space:]]+[^[:alnum:][:space:]/]?/etc/default/webhook-deploy" || true)" -eq 0 ]]'
+  '[[ "$(grep -vE "^[[:space:]]*#" "$PROBE" "$BOOTSTRAP" | grep -cE "$F5_SRC_RE" || true)" -eq 0 ]]'
 check "F5-S1 non-vacuity: the same pattern matches the pre-fix sourcing line" \
-  '[[ "$(printf "%s\n" "    . /etc/default/webhook-deploy 2>/dev/null || true" | grep -vE "^[[:space:]]*#" | grep -cE "(^|[:;&(]|[[:space:]])(\\.|source)[[:space:]]+[^[:alnum:][:space:]/]?/etc/default/webhook-deploy" || true)" -eq 1 ]]'
+  '[[ "$(printf "%s\n" "    . /etc/default/webhook-deploy 2>/dev/null || true" | grep -vE "^[[:space:]]*#" | grep -cE "$F5_SRC_RE" || true)" -eq 1 ]]'
 
 # shellcheck disable=SC2034  # consumed by the check() condition below via eval
 F5_QSAMPLE=$'  . "/etc/default/webhook-deploy"\n  source \'/etc/default/webhook-deploy\''
 check "F5-S1 non-vacuity: the pattern also matches the double- and single-quoted sourcing spellings" \
-  '[[ "$(printf "%s\n" "$F5_QSAMPLE" | grep -cE "(^|[:;&(]|[[:space:]])(\\.|source)[[:space:]]+[^[:alnum:][:space:]/]?/etc/default/webhook-deploy" || true)" -eq 2 ]]'
+  '[[ "$(printf "%s\n" "$F5_QSAMPLE" | grep -cE "$F5_SRC_RE" || true)" -eq 2 ]]'
 check "F5-S1 neither script evals or cats webhook-deploy into the shell on a code line" \
   '[[ "$(grep -vE "^[[:space:]]*#" "$PROBE" "$BOOTSTRAP" | grep -cE "eval[^#]*webhook-deploy" || true)" -eq 0 ]]'
 
@@ -438,7 +447,7 @@ if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
   printf '\n[FATAL] accounting identity: PASS(%d) + FAIL(%d) != CASES(%d). A call site recorded no verdict or more than one.\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
-MIN_CASES=93
+MIN_CASES=95
 if [[ "$CASES" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity floor: only %d assertions ran; floor is %d\n' "$CASES" "$MIN_CASES" >&2
   exit 1

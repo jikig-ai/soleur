@@ -1261,13 +1261,20 @@ if [ "$(f5_tok)" = prod-order-tok ] && [ "$(wc -l < "$F5_TOK")" -eq "$(grep -c .
 else
   no "F5: production-order fixture read '$(f5_tok)' over $(wc -l < "$F5_TOK") line(s)"
 fi
+F5_IND='(^|[;&(]|[[:space:]])(\.|source|eval|export)[[:space:]]+.*\$\{?WEBHOOK_ENV_FILE|cat[[:space:]]+"?\$\{?WEBHOOK_ENV_FILE'
+if [ "$(printf '%s\n' '. "$WEBHOOK_ENV_FILE"' 'eval "$(cat "$WEBHOOK_ENV_FILE")"' | grep -cE "$F5_IND")" -eq 2 ] \
+   && [ "$(grep -vE '^[[:space:]]*#' "$BOOT" | grep -cE "$F5_IND")" -eq 0 ]; then
+  ok "F5: no code line sources, evals or cats the WEBHOOK_ENV_FILE variable (the pattern matches both indirect spellings, the bootstrap has none)"
+else
+  no "F5: the bootstrap reads the webhook-deploy file through a variable indirection, or the indirection pattern is vacuous"
+fi
 rm -rf "$F5_D"
 
 # ADR-193 floor at the MEASURED green count (124 after #9639 F5; 113 on 2026-09-11, #7946 review): a lower bound,
 # so adding rows never trips it, and a gutted suite (a deleted block, an extraction that
 # matched nothing and skipped every row inside its `if`) cannot report 0 failed over nothing.
 # Reported with printf + exit 1 DIRECTLY, never through ok()/no() -- the floor polices those.
-MIN_ASSERTIONS=130
+MIN_ASSERTIONS=131
 if (( pass + fail < MIN_ASSERTIONS )); then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
   exit 1
