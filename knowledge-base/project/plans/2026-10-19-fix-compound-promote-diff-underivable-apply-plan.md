@@ -903,7 +903,9 @@ Applied (all Mechanical, one right answer): a base without a trailing newline ca
 additive append (reproduced: it rewrites the last line), so the base must end with LF and
 contain no CR - the earlier "add a newline" branch and CRLF handling are gone; `edit-empty` and
 `edit-schema-invalid` merged into `edit-invalid` (five reasons at that point; the deepen pass below made it seven); a non-additive derived diff is a
-server bug and maps to the retained `diff-underivable-apply`, not to a model-side reason; the
+server bug and maps to the retained `diff-underivable-apply`, not to a model-side reason
+(**superseded by the deepen pass: it now maps to `edit-derive-failed`, and there are seven
+reasons, not five**); the
 probe closes only on a draft PR or a downstream-gate refusal; test rows T13 and T19 and mutation
 rows M-8 and P-7/P-8 folded or cut; `byte_impact` confirmed unread downstream. Kept
 deliberately: the git-derived diff (hand-computing hunk counts is the failure class removed) and
