@@ -134,3 +134,8 @@ PENDING seats: pattern-recognition (391b64d9), test-design (f947202a).
 - main prior runs green; newest main commit (dc97003281) run still in-flight — cannot yet attribute to our diff vs main breakage
 - logs unavailable until run completes; watcher ba681fd9 exits on completion with --log-failed tail
 - next: diagnose failures → fix or attribute → re-run → merge --squash --auto → postmerge → DONE
+
+## CI failure set (run 39258834326, cancelled-by-supersession; real pre-cancel failures are ours to fix)
+- orphan-suite lint: affected-tests.test.sh needs classification declaration
+- stale pins to update: review/SKILL.md must still name TEST_GROUP=affected; grok-pre-push-gate pins (test-all.sh + --affected); fanout T16b/T16c (--full/--affected arms); plugin-root-anchoring.test.ts (resolver deleted); eval site; corpus baseline SITES 1502->1538; pipe-into-early-exit-grep 2 sites; rule-body-lint + byte ratchet on new base
+- fix agent 463978e0 in flight; after it lands: commit+push (fresh CI run), watch to green, merge --squash --auto, postmerge, DONE
