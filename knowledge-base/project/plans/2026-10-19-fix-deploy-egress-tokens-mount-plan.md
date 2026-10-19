@@ -255,7 +255,7 @@ in `agent-runner-sandbox-config.ts` (untouched; it only becomes effective once t
 the container, so this change turns it live). The first-boot tuple already runs this same
 configuration.
 
-**Brand-survival threshold:** single-user incident (Ruled by CTO agent, 2026-10-19: the mount makes
+- **Brand-survival threshold:** `single-user incident` — Ruled by CTO agent, 2026-10-19: the mount makes
 live per-session gateway bearer credentials visible inside the multi-tenant agent container; the only
 barriers are the 0711 mode and the `denyRead` in `agent-runner-sandbox-config.ts`, which has never
 been live because the path did not exist in the container. A cross-tenant read hits exactly one named
