@@ -20,3 +20,11 @@
 - `soleur:deepen-plan` (halt gates 4.4–4.12 executed mechanically, all green; conditional gates 4.5 and 4.55 fired and were satisfied with `## Network-Outage Note` and `## Downtime & Cutover` sections)
 - Live probes: `gh issue/pr/run` reads, `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh` (read-only Better Stack queries), repo `git grep`/`read` grounding
 - Commits: `docs: create plan and tasks…` (plan + tasks.md) and `docs: deepen plan and record decision rulings…` (plan + decision-challenges.md) — local only, not pushed
+
+## Work Phase (pipeline position)
+- Implementation commit: c304a16acb (16 files); design-pass fix commit: 97a6dc0b07 (PANEL_SHA)
+- Draft PR: #10577, pushed to origin
+- Design-validity pass DONE: code-simplicity + architecture seats both APPROVE (findings applied: transport-class peer errors poll-not-terminal, stale EXEMPT_CREATE dropped, peers slot preservation)
+- REMAINING SEATS (11, spawning): git-history-analyzer, pattern-recognition-specialist, security-sentinel, performance-oracle, data-integrity-guardian, agent-native-reviewer, code-quality-analyst, test-design-reviewer, structural-enumeration, semgrep-sast, user-impact-reviewer
+- AFTER PANEL: synthesize → fix findings → fix-round → soleur:qa → soleur:compound → soleur:ship → postmerge → DONE
+- Follow-ups filed: #10584 (alert on plugin_seed_copy_failed), #10585 (web-host-replace first-deploy verify); #8743 enrolled (follow-through label + directive earliest=2026-10-21)
