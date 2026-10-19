@@ -1,0 +1,7 @@
+# old f-in-blob scan versus the component-boundary scan, pinned tree 89d2b7799970fa09b79799569f3b5c1f5ea45768
+# old_gap_pairs=1108 new_gap_pairs=1108
+# old_refs=2176 new_refs=2176 dropped=0 kept_escape=3
+verdict	suite	path	source	line_no	line_text
+kept-escape	.claude/hooks/devin-matcher-parity.test.sh	plugins/soleur/hooks/stop-hook.sh	.claude/hooks/devin-matcher-parity.test.sh	419	printf 'Stop\tplugins/soleur/hooks/stop-hook.sh\tdup\nStop\tplugins/soleur/hooks/stop-hook.sh\tdup2\n' \
+kept-escape	scripts/ci-pr-selection	scripts/lib/frontmatter-strip.test.sh	scripts/ci-pr-selection.test.sh	555	  printf 'SUITE_COMMAND\tscripts/frontmatter-strip-parity\tbash\tscripts/lib/frontmatter-strip.test.sh\n'
+kept-escape	scripts/ci-pr-selection	scripts/validate-blog-links.sh	scripts/ci-pr-selection.test.sh	554	  printf 'SUITE_COMMAND\tblog-link-validation\tbash\tscripts/validate-blog-links.sh\n'
