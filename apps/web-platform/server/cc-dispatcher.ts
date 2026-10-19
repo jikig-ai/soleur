@@ -202,6 +202,7 @@ import {
   resolveC4FlagEnabled,
 } from "./resolve-c4-eligible";
 import { resolveUntrustedContentFlags } from "./resolve-untrusted-content-flags";
+import { resolveSandboxUnixDeny } from "./resolve-sandbox-unix-deny";
 import { parseConnectedRepo } from "./github-repo-parse";
 import { createProtectedBranchResolver } from "./resolve-protected-branches";
 import { emitDebugEvent } from "./debug-event";
@@ -3088,9 +3089,14 @@ export const realSdkQueryFactory: QueryFactory = async (
       ? await resolveUntrustedContentFlags(args.userId)
       : { classify: false, wrap: false };
 
+    // #10455 (a): runtime flag for the AF_UNIX-deny seccomp artifact; applies to no-egress sessions only
+    // (buildAgentEnv/buildAgentSandboxConfig read ghToken/webEgress from this same call). OFF on any error.
+    const sandboxUnixDeny = await resolveSandboxUnixDeny();
+
     return sdkQuery({
       prompt: args.prompt,
       options: buildAgentQueryOptions({
+        sandboxUnixDeny,
         // ADR-113 — agentWorkspacePath = pluginPath for support (sandbox +
         // file-tool containment target the corpus root), the user's workspace for
         // Command Center. `mode` drives cwd + the sandbox write-set from the same

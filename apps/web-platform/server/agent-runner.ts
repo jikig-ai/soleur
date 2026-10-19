@@ -99,6 +99,7 @@ import { applyPrefillGuard } from "./agent-prefill-guard";
 import { updateConversationFor } from "./conversation-writer";
 import { releaseSlot, SLOT_STALENESS_THRESHOLD_SECONDS } from "./concurrency";
 import { buildAgentQueryOptions } from "./agent-runner-query-options";
+import { resolveSandboxUnixDeny } from "./resolve-sandbox-unix-deny";
 import {
   CREDENTIALS_PROMPT_DIRECTIVE,
   READ_TOOL_PDF_CAPABILITY_DIRECTIVE,
@@ -2110,9 +2111,13 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       ? `${systemPrompt}\n\n${contextResetNotice}`
       : systemPrompt;
 
+    // #10455 (a): runtime flag for the AF_UNIX-deny seccomp artifact (no-egress sessions only; the legacy
+    // runner never passes ghToken or webEgress, so every legacy session is no-egress). OFF on any error.
+    const sandboxUnixDeny = await resolveSandboxUnixDeny();
     const q = query({
       prompt,
       options: buildAgentQueryOptions({
+        sandboxUnixDeny,
         workspacePath,
         // Outer-wrap cohort + log-correlation fields (#5863) — same identity
         // pair cc-dispatcher passes; the flag's workspace allowlist keys off

@@ -1,6 +1,7 @@
 import { PROVIDER_CONFIG } from "./providers";
 import { assertTrustedPluginPath, isPluginPathTestEnv } from "./plugin-path";
 import { API_KEY_ENV_VAR, OAUTH_ENV_VAR } from "./agent-auth-env-vars";
+import { SECCOMP_SELECTOR_ENV, seccompArtifactFor, usesUnixDenyArtifact } from "./agent-sandbox-seccomp";
 
 /**
  * The auth scheme an agent run is funded by. `api_key` feeds the raw
@@ -187,6 +188,13 @@ export interface BuildAgentEnvOptions {
   pluginPath?: string;
   /** Per-tenant CLI temp base (`agentSessionTmpDir(workspaceId)`), injected as `CLAUDE_CODE_TMPDIR`. */
   claudeTmpDir?: string;
+  /**
+   * #10455 (a) — the resolved runtime flag `agent-sandbox-unix-deny` (default OFF). With it ON a session
+   * that has NO egress (no `ghToken`, no `egressProxy`) is spawned with the AF_UNIX-deny seccomp artifact
+   * via `SOLEUR_BWRAP_SECCOMP_BPF`; every other session keeps the ambient value unchanged. The decision is
+   * `seccompArtifactFor` in agent-sandbox-seccomp.ts, shared with `buildAgentSandboxConfig`.
+   */
+  sandboxUnixDeny?: boolean;
 }
 
 export function buildAgentEnv(
@@ -321,6 +329,15 @@ export function buildAgentEnv(
   }
 
   if (opts?.claudeTmpDir) env.CLAUDE_CODE_TMPDIR = opts.claudeTmpDir;
+
+  // #10455 (a): per-session seccomp artifact. Egress is read from the SAME handles that set the egress
+  // env above (`ghToken` -> GH_TOKEN, `egressProxy` -> HTTPS_PROXY). Only a no-egress session with the
+  // runtime flag ON gets the variant; every other session keeps the ambient allowlist copy (the ADR-075
+  // #8752 incident-time override). `assertSeccompAgreement` re-checks this against the sandbox config.
+  const hasEgress = Boolean(opts?.ghToken) || Boolean(opts?.egressProxy);
+  if (usesUnixDenyArtifact(hasEgress, opts?.sandboxUnixDeny)) {
+    env[SECCOMP_SELECTOR_ENV] = seccompArtifactFor(hasEgress, opts?.sandboxUnixDeny);
+  }
 
   // Auth var LAST and mutually exclusive: the credential branch is
   // authoritative over any ambient/service value, and the NON-selected auth

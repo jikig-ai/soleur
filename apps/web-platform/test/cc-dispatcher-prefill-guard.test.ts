@@ -57,6 +57,13 @@ vi.mock("@/server/agent-runner", () => ({
   patchWorkspacePermissions: mockPatchWorkspacePermissions,
 }));
 
+// #10455 (a): these suites replace both builders with mocks, so the spawn-time seccomp agreement
+// assertion (which reads the posture the REAL buildAgentSandboxConfig records) is a no-op here. The
+// real pairing is pinned by test/agent-sandbox-seccomp-selector.test.ts.
+vi.mock("@/server/agent-sandbox-seccomp", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/agent-sandbox-seccomp")>()),
+  assertSeccompAgreement: vi.fn(),
+}));
 vi.mock("@/server/agent-runner-sandbox-config", () => ({
   buildAgentSandboxConfig: mockBuildAgentSandboxConfig,
 }));

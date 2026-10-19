@@ -39,6 +39,7 @@ import { resolveWorkspaceMode, type WorkspaceMode } from "./workspace-mode";
 import { assertTrustedPluginPath, getPluginPath } from "./plugin-path";
 import { warnSilentFallback } from "./observability";
 import { buildAgentSandboxConfig } from "./agent-runner-sandbox-config";
+import { assertSeccompAgreement } from "./agent-sandbox-seccomp";
 import { createSandboxHook } from "./sandbox-hook";
 import { createContextQueriesHook } from "./context-queries-hook";
 import { createPhaseSurfaceHook } from "./phase-surface-hook";
@@ -128,6 +129,13 @@ export interface AgentQueryOptionsArgs {
    *    honors process-env proxy). `WebSearch` stays disallowed in Phase A.
    */
   webEgress?: { workspaceId: string; token: string; port: number };
+  /**
+   * #10455 (a) — the resolved runtime flag `agent-sandbox-unix-deny` (`resolveSandboxUnixDeny()`,
+   * default and fail-closed value OFF). With it ON, a session that has no egress at all is spawned
+   * with the AF_UNIX-deny seccomp artifact. Both runners resolve it once per query, just before this
+   * builder; an omitted value is OFF (today's posture).
+   */
+  sandboxUnixDeny?: boolean;
   systemPrompt: string;
   /** SDK chain step 5 — the canUseTool callback. Required. */
   // biome-ignore lint/suspicious/noExplicitAny: SDK CanUseTool is a typed callable; helper accepts the SDK's type
@@ -319,6 +327,9 @@ export function buildAgentQueryOptions(
     egressProxy: args.webEgress,
     // #10445: per-tenant CLI temp base; the sandbox config denies its shared root.
     claudeTmpDir: agentSessionTmpDir(args.workspaceId ?? path.basename(args.workspacePath)),
+    // #10455 (a): the resolved `agent-sandbox-unix-deny` flag (default OFF). The SAME value feeds the
+    // sandbox config below, and `assertSeccompAgreement` checks the pair before the query is built.
+    sandboxUnixDeny: args.sandboxUnixDeny,
   });
   const buildAgentEnvHome = agentEnv.HOME ?? "/home/soleur";
 
@@ -364,6 +375,7 @@ export function buildAgentQueryOptions(
     // startAgentSession never passes ghToken → its sandbox stays fully
     // closed (fail-closed, zero behavior change).
     sandbox: buildAgentSandboxConfig(args.workspacePath, {
+      sandboxUnixDeny: args.sandboxUnixDeny,
       allowGithubEgress: Boolean(args.ghToken),
       // ADR-113 — support persona runs read-only (allowWrite:[]) so a
       // cwd=pluginPath session cannot write into the shared platform plugin root.
@@ -496,6 +508,10 @@ export function buildAgentQueryOptions(
   if (args.maxBudgetUsd !== undefined) opts.maxBudgetUsd = args.maxBudgetUsd;
   if (args.abortController !== undefined) opts.abortController = args.abortController;
 
+  // #10455 (a): spawn-time agreement. The selector in `env` and the posture recorded on `sandbox` were
+  // derived from the same arguments a few lines above; a refactor that lets one drift throws here
+  // (the query is never started) instead of silently shipping the weaker or the bridge-breaking artifact.
+  assertSeccompAgreement(opts.env, opts.sandbox);
   return opts;
 }
 

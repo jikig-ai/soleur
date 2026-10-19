@@ -100,6 +100,13 @@ const RUNTIME_FLAGS = {
   // A); external orgs stay OFF until PR2 ships. Read ONLY through the ingest module.
   // Fail-closed: FLAG_EGRESS_AUDIT_COLLECTION=0 mirror.
   "egress-audit-collection": "FLAG_EGRESS_AUDIT_COLLECTION",
+  // #10455 (a) / ADR-075 addendum 2026-10-19 — selects the AF_UNIX-deny seccomp artifact for NO-EGRESS
+  // agent sessions (egress sessions always stay on the base artifact). Default OFF = today's posture.
+  // Read ONLY through `isAgentSandboxUnixDenyEnabled` (via server/resolve-sandbox-unix-deny.ts, which
+  // resolves any error or timeout to OFF). The flag is global (anonymous identity). Turning it ON is a
+  // production write that waits for a green deploy SDK Bash smoke (tracker #10548). Fail-closed:
+  // FLAG_AGENT_SANDBOX_UNIX_DENY=0 mirror.
+  "agent-sandbox-unix-deny": "FLAG_AGENT_SANDBOX_UNIX_DENY",
 } as const;
 
 export type EnvFlagName = keyof typeof ENV_FLAGS;
@@ -305,6 +312,11 @@ export async function isUntrustedContentClassifyEnabled(identity: Identity): Pro
 /** #4671 / ADR-287 — rewrite flagged WebFetch results into the data-only envelope. Subordinate to classify. */
 export async function isUntrustedContentWrapEnabled(identity: Identity): Promise<boolean> {
   return getRuntimeFlag("untrusted-content-wrap", identity);
+}
+
+/** #10455 (a) — AF_UNIX-deny seccomp artifact for no-egress sessions. Global flag: resolve with the anonymous identity. */
+export async function isAgentSandboxUnixDenyEnabled(identity: Identity = ANON_IDENTITY): Promise<boolean> {
+  return getRuntimeFlag("agent-sandbox-unix-deny", identity);
 }
 
 export function __resetFeatureFlagsForTests(): void {

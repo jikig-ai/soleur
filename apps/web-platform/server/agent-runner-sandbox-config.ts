@@ -12,6 +12,12 @@ import { homedir } from "os";
 import * as Sentry from "@sentry/nextjs";
 
 import { ALLOWED_SERVICE_ENV_VARS } from "./agent-env";
+import {
+  SECCOMP_BASE_ARTIFACT,
+  SECCOMP_SELECTOR_ENV,
+  recordSandboxPosture,
+  unixdenyArtifactPath,
+} from "./agent-sandbox-seccomp";
 import { AGENT_SESSION_TMP_ROOT } from "./agent-session-tmp";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback, warnSilentFallback } from "./observability";
@@ -452,6 +458,9 @@ export function buildAgentSandboxConfig(
      *  CLI's env proxy URL already steers both the in-process and the
      *  SRT-chained sandboxed paths (Phase-0 spike, spec TR7). */
     allowWebEgress?: boolean;
+    /** #10455 (a) — the resolved runtime flag `agent-sandbox-unix-deny` (default OFF). Recorded with the
+     *  session's egress so `assertSeccompAgreement` can check it against `buildAgentEnv`'s selector. */
+    sandboxUnixDeny?: boolean;
   },
 ): AgentSandboxConfig {
   // ADR-113 — support-persona containment: additional absolute paths to obscure
@@ -636,7 +645,7 @@ export function buildAgentSandboxConfig(
     },
     "agent-sandbox: computed tenant denyRead",
   );
-  return {
+  const config: AgentSandboxConfig = {
     enabled: true,
     // Refuse to start if sandbox deps (bubblewrap, socat) are missing.
     // Without this flag, the SDK silently runs unsandboxed on dependency
@@ -733,6 +742,13 @@ export function buildAgentSandboxConfig(
       ),
     },
   };
+  // #10455 (a): record which seccomp posture this config pairs with. Egress is the union of the two
+  // egress widenings (GitHub hosts, web egress); `buildAgentEnv` derives the same bit from the
+  // `ghToken` / `egressProxy` handles and `assertSeccompAgreement` compares them at spawn time.
+  return recordSandboxPosture(config, {
+    hasEgress: Boolean(opts?.allowGithubEgress) || Boolean(opts?.allowWebEgress),
+    unixDenyFlag: opts?.sandboxUnixDeny === true,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -742,7 +758,7 @@ export function buildAgentSandboxConfig(
 /** Default path of the committed nested-userns filter artifact inside the
  *  runner image (Dockerfile COPY) — the same default the C4 close-fds prelude
  *  and the bwrap PATH shim resolve via `SOLEUR_BWRAP_SECCOMP_BPF`. */
-const BWRAP_SECCOMP_BPF_DEFAULT = "/app/infra/bwrap-userns-clone3-deny.bpf";
+const BWRAP_SECCOMP_BPF_DEFAULT = SECCOMP_BASE_ARTIFACT;
 
 /** PATH resolution for `name`; returns the first executable hit or null. */
 function resolveOnPath(name: string, env: Record<string, string | undefined>): string | null {
@@ -768,6 +784,11 @@ export interface AgentSandboxHardeningProbe {
   bpfBytes: number;
   /** Readable, non-empty, raw-sock_filter-sized (multiple of 8 bytes). */
   filter: boolean;
+  /** #10455 (a): the AF_UNIX-deny variant artifact, measured the same way. A missing variant is
+   *  reported even while the runtime flag is OFF, so the first flag flip cannot be the first time it is found. */
+  unixdenyPath: string;
+  unixdenyBytes: number;
+  unixdenyFilter: boolean;
   ok: boolean;
 }
 
@@ -790,15 +811,30 @@ export function probeAgentSandboxHardening(
       shim = false;
     }
   }
-  const bpfPath = env.SOLEUR_BWRAP_SECCOMP_BPF || BWRAP_SECCOMP_BPF_DEFAULT;
-  let bpfBytes = 0;
-  try {
-    bpfBytes = statSync(bpfPath).size;
-  } catch {
-    // artifact absent
-  }
+  const sizeOf = (path: string): number => {
+    try {
+      return statSync(path).size;
+    } catch {
+      return 0; // artifact absent
+    }
+  };
+  const bpfPath = env[SECCOMP_SELECTOR_ENV] || BWRAP_SECCOMP_BPF_DEFAULT;
+  const bpfBytes = sizeOf(bpfPath);
   const filter = bpfBytes > 0 && bpfBytes % 8 === 0;
-  return { bwrapPath, shim, bpfPath, bpfBytes, filter, ok: shim && filter };
+  const unixdenyPath = unixdenyArtifactPath(env);
+  const unixdenyBytes = sizeOf(unixdenyPath);
+  const unixdenyFilter = unixdenyBytes > 0 && unixdenyBytes % 8 === 0;
+  return {
+    bwrapPath,
+    shim,
+    bpfPath,
+    bpfBytes,
+    filter,
+    unixdenyPath,
+    unixdenyBytes,
+    unixdenyFilter,
+    ok: shim && filter && unixdenyFilter,
+  };
 }
 
 /**

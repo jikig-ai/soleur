@@ -29,6 +29,7 @@ import { fileURLToPath } from "node:url";
 const APP_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SHIM = join(APP_ROOT, "infra/bwrap-shim/bwrap");
 const BPF = join(APP_ROOT, "infra/bwrap-userns-clone3-deny.bpf");
+const BPF_UNIXDENY = join(APP_ROOT, "infra/bwrap-userns-clone3-unixdeny.bpf");
 
 // Sinks for the boot-probe emit fork (verifyAgentSandboxHardening) — the
 // probe itself is pure+tested below; these mocks pin WHICH surface each
@@ -1119,6 +1120,42 @@ describe("bwrap PATH shim (#8752)", () => {
     }
   });
 
+  it("loads the ALTERNATE (unixdeny) artifact the selector names: the add-seccomp fd resolves to it", () => {
+    const r = root();
+    try {
+      const res = spawnSync(SHIM, ["--unshare-user", "--unshare-pid", "--", "/usr/bin/true"], {
+        env: r.env({ SOLEUR_BWRAP_SECCOMP_BPF: BPF_UNIXDENY }),
+        encoding: "utf8",
+      });
+      expect(res.status, res.stderr).toBe(0);
+      const { args, fds } = r.read();
+      const i = args.indexOf("--add-seccomp-fd");
+      expect(i).toBe(0);
+      expect(fds.get(args[i + 1])).toBe(BPF_UNIXDENY);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("exits 65 with the bwrap-shim marker when the ALTERNATE (unixdeny) artifact is unreadable (never a silent fallback to the base)", () => {
+    const r = root();
+    try {
+      // The selector names the variant's basename in a directory where it does not exist.
+      const unreadable = join(r.root, "bwrap-userns-clone3-unixdeny.bpf");
+      const res = spawnSync(SHIM, ["--unshare-user", "--unshare-pid", "--", "/usr/bin/true"], {
+        env: r.env({ SOLEUR_BWRAP_SECCOMP_BPF: unreadable }),
+        encoding: "utf8",
+      });
+      expect(res.status).toBe(65);
+      expect(res.stderr).toContain("bwrap-shim:");
+      expect(res.stderr).toContain(unreadable);
+      // and the real bwrap stub never ran (no spawn without the filter)
+      expect(() => r.read()).toThrow();
+    } finally {
+      cleanup();
+    }
+  });
+
   it("fails closed with a marker when the real bwrap is missing", () => {
     const r = root();
     try {
@@ -1390,8 +1427,12 @@ describe("probeAgentSandboxHardening — boot self-check verdicts", () => {
   it("shim on PATH + shaped artifact ⇒ ok", async () => {
     const { probeAgentSandboxHardening } = await load();
     const dir = fakePathDir("shim");
-    const p = probeAgentSandboxHardening({ PATH: dir, SOLEUR_BWRAP_SECCOMP_BPF: BPF });
-    expect(p).toMatchObject({ shim: true, filter: true, ok: true, bpfBytes: 128 });
+    const p = probeAgentSandboxHardening({
+      PATH: dir,
+      SOLEUR_BWRAP_SECCOMP_BPF: BPF,
+      SOLEUR_BWRAP_SECCOMP_BPF_UNIXDENY: BPF_UNIXDENY,
+    });
+    expect(p).toMatchObject({ shim: true, filter: true, unixdenyFilter: true, ok: true, bpfBytes: 128 });
     expect(p.bwrapPath).toBe(join(dir, "bwrap"));
   });
 
@@ -1432,6 +1473,7 @@ describe("verifyAgentSandboxHardening — emit fork", () => {
     const { verifyAgentSandboxHardening } = await import("@/server/agent-runner-sandbox-config");
     vi.stubEnv("PATH", fakePathDir("shim"));
     vi.stubEnv("SOLEUR_BWRAP_SECCOMP_BPF", BPF);
+    vi.stubEnv("SOLEUR_BWRAP_SECCOMP_BPF_UNIXDENY", BPF_UNIXDENY);
     verifyAgentSandboxHardening();
     expect(childLog.info).toHaveBeenCalledWith(
       expect.objectContaining({ feature: "agent-sandbox", op: "sandbox-hardening-selfprobe" }),
