@@ -3,7 +3,7 @@ new file mode 100644
 index 0000000..2b3c4d5
 --- /dev/null
 +++ b/.github/scripts/test/test-check-skill-frontmatter-name.sh
-@@ -0,0 +1,20 @@
+@@ -0,0 +1,16 @@
 +#!/usr/bin/env bash
 +# Fixture: a NEW test-*.sh of pure greps and assertions — the no-WARN role
 +# (#9771). No subprocess fan-out: it only reads files and asserts.

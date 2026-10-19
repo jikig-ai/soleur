@@ -3,7 +3,7 @@ new file mode 100644
 index 0000000..1a2b3c4
 --- /dev/null
 +++ b/plugins/soleur/test/stub-proxy-fanout.test.sh
-@@ -0,0 +1,30 @@
+@@ -0,0 +1,31 @@
 +#!/usr/bin/env bash
 +# Fixture: a NEW *.test.sh that boots a stub HTTP server with real subprocess
 +# fan-out — the unweighed-new-suite WARN role (#9771). It carries spawn

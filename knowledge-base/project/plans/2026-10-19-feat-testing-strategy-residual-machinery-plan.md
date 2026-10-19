@@ -53,12 +53,15 @@ The residual asks that DO remain (all quoted from issue comments):
 
 - A new `*.test.sh`/`test-*.sh` spawning real subprocesses classifies unit
   forever ("one-way ratchet"); `regenerate-shard-manifest.py` auto-tables absent
-  suites at the floor weight (~1.2 s), so a 155 s proxy suite is silently
+  suites at the floor weight (~1.2 s), so a ~154 s proxy suite is silently
   mispriced until measured runs accumulate. A review-time WARN is the cheapest
   signal that fits the #9763 boundary (no measured runtime at review).
-- The `test/app/` namespaced route-test shape the parallel branch introduced is
-  now dominant practice (617 subdir files vs ~238 flat under
-  `apps/web-platform/test/`) but no written convention canonizes it.
+- The `test/app/` namespaced route-test shape exists but is NOT dominant —
+  flat still leads ~825 `*.test.*` at `test/` root vs ~540 in subdirs
+  (re-censused at work time; the plan's earlier "617 vs ~238" inverted the
+  direction and `test/app/` predates the parallel branch). No written
+  convention prescribes it — FR-2 canonizes namespacing as the forward
+  direction while grandfathering flat.
 - No written flaky-test policy exists, though the machinery pieces do
   (Playwright `retries: 1` on CI; scheduled-leg red → `ci/integration-suites`
   auto-filing).
@@ -155,7 +158,7 @@ candidate → skipped.
 | "mu1-integration.test.ts hyphen escape" | Fixed — renamed `mu1.integration.test.ts` on main | Adopted |
 | "e2e/vitest/bun layers carry no committed weight" | Resolved — "formally stays #9763's boundary; no action" per issue comment; adjudicated (decision item 2) | No action |
 | "dormant env-gated integration suites… testing-strategy scope" | Already shipped — `scheduled-integration-suites.yml` + `lint-integration-env-gates.sh` on main | No action; stale deferral |
-| "`test/app/` vs flat — worth canonizing one shape" | Subdirs dominate 617:238 in practice; no written convention | FR-2 README convention |
+| "`test/app/` vs flat — worth canonizing one shape" | Flat still leads (~825 flat vs ~540 subdir `*.test.*`); no written convention — FR-2 prescribes namespacing forward, flat grandfathered | FR-2 README convention |
 | "flaky-test policy" (skill contents) | Machinery exists (CI retries=1, auto-filing); no written policy | FR-3 README policy |
 
 ## Proposed Solution
