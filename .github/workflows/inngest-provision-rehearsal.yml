@@ -678,8 +678,9 @@ jobs:
       # sweep's own probe arm could never enumerate the project (#9919: that arm is deleted;
       # this check moved to the one job that holds a credential able to see what it created).
       # The credential here is the Doppler provider token the rehearsal root itself
-      # authenticates with (DOPPLER_TOKEN_TF, exported by infra-credentials; the
-      # prd_terraform read is the same fallback the R2-credentials step above uses).
+      # authenticates with (DOPPLER_TOKEN_TF, exported by the infra-credentials loader
+      # — a tier_b_names entry the census requires to arrive through the loader, so
+      # this step reads the exported var ONLY, fail-closed on empty).
       - name: Assert no scratch Doppler environment remains (Doppler API)
         # always() — a failed destroy or Hetzner assert above is the partial-teardown case
         # this check exists for; default success() would skip it exactly then.
@@ -694,12 +695,8 @@ jobs:
           ENV_FLOOR: 1
         run: |
           set -euo pipefail
-          env_tok_rc=0
           ENV_TOKEN="${DOPPLER_TOKEN_TF:-}"
-          if [[ -z "$ENV_TOKEN" ]]; then
-            ENV_TOKEN="$(doppler secrets get DOPPLER_TOKEN_TF -p soleur -c prd_terraform --plain)" || env_tok_rc=$?
-          fi
-          [[ "$env_tok_rc" -eq 0 && -n "$ENV_TOKEN" ]] || { echo "::error::no Doppler provider token resolvable (rc=${env_tok_rc}) — the scratch-environment check has no verdict."; exit 1; }
+          [[ -n "$ENV_TOKEN" ]] || { echo "::error::DOPPLER_TOKEN_TF is empty — the infra-credentials loader exported no provider token, so the scratch-environment check has no verdict. Fail-closed."; exit 1; }
           printf '::add-mask::%s\n' "$ENV_TOKEN"
           env_rc=0
           env_raw="$(DOPPLER_TOKEN="$ENV_TOKEN" doppler environments -p soleur-inngest --json)" || env_rc=$?
