@@ -434,7 +434,7 @@ describe("draftAdditiveEdit -- the model call", () => {
     source_learnings: ["knowledge-base/project/learnings/a.md", "knowledge-base/project/learnings/b.md"],
   };
   const answer = (obj: unknown, stopReason = "end_turn") =>
-    vi.fn(async () => ({ text: JSON.stringify(obj), stopReason }));
+    vi.fn(async (..._a: unknown[]) => ({ text: JSON.stringify(obj), stopReason }));
   const good = { insert_after_line: "- Keep it small [id: cq-keep-small]. Because.", new_lines: [RULE_LINE] };
   const args = (post: ReturnType<typeof vi.fn>, over: Record<string, unknown> = {}) =>
     ({
@@ -538,7 +538,7 @@ describe("draftAdditiveEdit -- the model call", () => {
   });
 
   it("T16: an Anthropic API error PROPAGATES -- it is not converted into a refusal", async () => {
-    const post = vi.fn(async () => {
+    const post = vi.fn(async (..._a: unknown[]) => {
       throw new Error("Anthropic API 500");
     });
     await expect(draftAdditiveEdit(args(post))).rejects.toThrow("Anthropic API 500");
@@ -556,8 +556,8 @@ describe("draftAdditiveEdit -- the model call", () => {
   });
 
   it("empty text and malformed JSON are edit-invalid/schema", async () => {
-    const empty = await draftAdditiveEdit(args(vi.fn(async () => ({ text: "", stopReason: "end_turn" }))));
-    const bad = await draftAdditiveEdit(args(vi.fn(async () => ({ text: "{not json", stopReason: "end_turn" }))));
+    const empty = await draftAdditiveEdit(args(vi.fn(async (..._a: unknown[]) => ({ text: "", stopReason: "end_turn" }))));
+    const bad = await draftAdditiveEdit(args(vi.fn(async (..._a: unknown[]) => ({ text: "{not json", stopReason: "end_turn" }))));
     expect(empty).toMatchObject({ ok: false, reason: "edit-invalid", cause: "schema" });
     expect(bad).toMatchObject({ ok: false, reason: "edit-invalid", cause: "schema" });
   });

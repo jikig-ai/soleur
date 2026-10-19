@@ -764,7 +764,10 @@ describe("Guard 1c (#10552) -- proposed_diff_unified comes from the derived diff
 
   it("is assigned exactly once, from the draft's derived diff", () => {
     const assigns = censusDiffAssignments(readFileSync(SRC_PATH, "utf-8"));
-    expect(assigns).toEqual(["draft.diff"]);
+    expect(assigns).toHaveLength(1);
+    // Derived from the draft's diff, and from no model-authored value.
+    expect(assigns[0]).toMatch(/\bdraft\.diff\b/);
+    expect(assigns[0]).not.toMatch(/proposed|cluster/);
   });
 
   it("mutation: re-adding it to CLUSTER_OUTPUT_SCHEMA is RED", () => {
@@ -776,11 +779,14 @@ describe("Guard 1c (#10552) -- proposed_diff_unified comes from the derived diff
   });
 
   it("mutation: assigning it from the model response in the handler is RED", () => {
-    const src = readFileSync(SRC_PATH, "utf-8").replace(
-      "proposed_diff_unified: draft.diff",
-      "proposed_diff_unified: (cluster as { proposed_diff_unified?: string }).proposed_diff_unified ?? draft.diff",
+    const original = readFileSync(SRC_PATH, "utf-8");
+    const src = original.replace(
+      'proposed_diff_unified: draft.kind === "drafted" ? draft.diff : ""',
+      "proposed_diff_unified: (proposed as unknown as { proposed_diff_unified: string }).proposed_diff_unified",
     );
-    expect(censusDiffAssignments(src)).not.toEqual(["draft.diff"]);
+    expect(src).not.toBe(original); // the mutation must LAND, or the row is vacuous
+    const a = censusDiffAssignments(src);
+    expect(a.length === 1 && /\bdraft\.diff\b/.test(a[0]) && !/proposed|cluster/.test(a[0])).toBe(false);
   });
 
   it("the handler consults TARGET_ALLOW_RE at exactly two sites: the draft step and the apply step", () => {
