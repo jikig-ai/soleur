@@ -24,7 +24,7 @@ ADR-288. ADR-289 and ADR-290 are taken, so this record does not reuse them; no c
 exists in the corpus.
 
 Every OpenCode fact below is measured in
-`knowledge-base/project/specs/feat-opencode-harness/measurements.md` and cited by anchor. Do not
+`knowledge-base/project/specs/archive/20261019-180200-feat-opencode-harness/measurements.md` and cited by anchor. Do not
 restate its numbers here.
 
 ## Context
