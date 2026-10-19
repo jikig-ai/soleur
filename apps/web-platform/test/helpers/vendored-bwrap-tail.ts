@@ -515,3 +515,60 @@ export function assertHelperSelection(
       "(infra/sandbox-masked-proc-docker.test.sh wrapped-command arm) before updating the pins (#10445).",
   );
 }
+
+// ---------------------------------------------------------------------------------------------
+// `apply-seccomp:` helper step strings (#10455 e, Guard 2).
+//
+// The SDK's command-side helper (the multicall embedded in the same `claude` binary) prints
+// `apply-seccomp: <step>: <strerror>` for each failing step. The step literal sits in the binary's string
+// pool as `apply-seccomp: <step>` followed by NUL. Measured on claude-agent-sdk 0.3.284 (and identical in
+// claude-code 2.1.293): 17 distinct strings, one occurrence each. 16 are `<step>` literals that take a
+// `: <strerror>` suffix; `observe sendmsg failed` is a fixed message with no errno.
+
+export const HELPER_STEP_PREFIX = "apply-seccomp: ";
+/** A step literal is short printable ASCII; the longest measured is ~110 bytes. Bounded read, no regex on the binary. */
+const HELPER_STEP_READ_BYTES = 200;
+
+/** Every distinct `apply-seccomp: ...` string in the source, prefix stripped, sorted. */
+export function scanHelperStepStrings(src: ByteSource, opts: ScanOptions = {}): string[] {
+  const hits = scanNeedles(src, { step: Buffer.from(HELPER_STEP_PREFIX, "latin1") }, opts).step;
+  const found = new Set<string>();
+  for (const at of hits) {
+    const buf = src.read(at + HELPER_STEP_PREFIX.length, HELPER_STEP_READ_BYTES);
+    let end = 0;
+    while (end < buf.length && buf[end] >= 0x20 && buf[end] <= 0x7e) end += 1;
+    if (end > 0) found.add(buf.subarray(0, end).toString("latin1"));
+  }
+  return [...found].sort();
+}
+
+export interface HelperStepPins {
+  /** Steps the classifier allowlists (take a `: <strerror>` suffix). */
+  classified: readonly string[];
+  /** Strings the binary carries that are deliberately NOT classified (no errno suffix). */
+  excluded: readonly string[];
+  /** Floor on the number of distinct strings read: a scan that reads nothing must red, never pass. */
+  minStrings: number;
+}
+
+/** Census: binary strings === classified ∪ excluded, both directions, with a floor. */
+export function assertHelperStepCensus(found: readonly string[], pins: HelperStepPins, label: string): void {
+  const known = new Set([...pins.classified, ...pins.excluded]);
+  const seen = new Set(found);
+  const problems: string[] = [];
+  if (found.length < pins.minStrings) {
+    problems.push(`HELPER_STEP_FLOOR want >= ${pins.minStrings} strings got ${found.length}`);
+  }
+  for (const s of pins.classified) {
+    if (!seen.has(s)) problems.push(`HELPER_STEP_ABSENT allowlisted ${JSON.stringify(s)} is not in the binary`);
+  }
+  for (const s of found) {
+    if (!known.has(s)) problems.push(`HELPER_STEP_NEW the binary carries ${JSON.stringify(s)}, neither classified nor excluded`);
+  }
+  if (problems.length === 0) return;
+  throw new Error(
+    `[${label}] ${problems.join("; ")}. The vendored apply-seccomp helper's step list moved: decide whether each new ` +
+      "step is a pre-worker-fork step (can show the platform notice) or a post-fork one, then update HELPER_STEPS / " +
+      "HELPER_STEPS_PRE_WORKER_FORK / HELPER_NON_STEP_LINES in server/sandbox-startup-classifier.ts (#10455 e).",
+  );
+}
