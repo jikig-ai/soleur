@@ -139,6 +139,8 @@ evaluate() { # <go.md> <base> [check|skip]   skip = the merge-base anchor is not
   [[ -n "$para" ]]                         || emit paragraph-missing
   [[ "$para" == *'`HOLDS:`'* ]]            || emit token-HOLDS
   [[ "$para" == *'`#N`'* ]]                || emit token-epic-ref
+  [[ "$para" == *'`OWNER-GATED`'* ]]       || emit token-OWNER-GATED
+  [[ "$para" == *'does not by itself make a hold list'* ]] || emit standing-line-not-a-trigger
   [[ "$para" == *'only when'* && "$para" == *'BOTH'* ]] || emit routing-requires-both
   [[ "$para" == *'`ask the operator`'* && "$para" == *'ordinary message'* ]] || emit ask-the-operator-not-a-trigger
   [[ "$para" == *'fail closed'* || "$para" == *'Fail closed'* ]] || emit wording-fail-closed
@@ -213,7 +215,7 @@ if [[ -n "$HEAD_SHA" && "$BASE_REF" == "$HEAD_SHA" ]]; then
   ANCHOR_MODE=skip; ANCHOR_REASON="merge base == HEAD (this change is merged): the comparison would be self-identity; the invariants are PR-time checks"
 fi
 REAL_OUT="$(evaluate "$GO_MD" "$BASE_REF" "$ANCHOR_MODE")"; REAL_RC=$?
-ALL_PROPS="paragraph-missing token-HOLDS token-epic-ref routing-requires-both ask-the-operator-not-a-trigger wording-fail-closed wording-ask-once owner-cto-own-the-epic gate-handoff container-link delegation-render render-text headless plugin-root-paths repo-relative-path receipt-wiring no-askuserquestion-for-technical-hold newest-decides stop-sequence anchors-missing paragraph-inside-block paragraph-misplaced base-unresolvable base-degenerate block-hash-differs"
+ALL_PROPS="paragraph-missing token-HOLDS token-epic-ref token-OWNER-GATED standing-line-not-a-trigger routing-requires-both ask-the-operator-not-a-trigger wording-fail-closed wording-ask-once owner-cto-own-the-epic gate-handoff container-link delegation-render render-text headless plugin-root-paths repo-relative-path receipt-wiring no-askuserquestion-for-technical-hold newest-decides stop-sequence anchors-missing paragraph-inside-block paragraph-misplaced base-unresolvable base-degenerate block-hash-differs"
 for p in $ALL_PROPS; do
   ck
   case "$p" in base-unresolvable|base-degenerate|block-hash-differs)
@@ -314,6 +316,12 @@ row "M4 remove the 'ask the operator' token, keep HOLDS" "$M/m4.md" "$BASE_REF" 
 # M5 remove the HOLDS token while `ask the operator` stays
 para_awk sub "$GO_MD" '`HOLDS:`' '`HOLD:`' > "$M/m5.md"
 row "M5 remove the HOLDS: token, keep 'ask the operator'" "$M/m5.md" "$BASE_REF" token-HOLDS; nrows=$((nrows + 1))
+
+# M5b / M5c the 2026-10-19 widening: an OWNER-GATED brief routes, and a standing CTO line is a modifier, not a trigger
+para_awk sub "$GO_MD" '`OWNER-GATED`' '`GATED`' > "$M/m5b.md"
+row "M5b remove the OWNER-GATED token, keep HOLDS" "$M/m5b.md" "$BASE_REF" token-OWNER-GATED; nrows=$((nrows + 1))
+para_awk sub "$GO_MD" 'does not by itself make a hold list' 'makes a hold list' > "$M/m5c.md"
+row "M5c let a standing CTO line make a hold list by itself" "$M/m5c.md" "$BASE_REF" standing-line-not-a-trigger; nrows=$((nrows + 1))
 
 # M6 / M7 the fail-closed and ask-once wording (both spellings are accepted, so both are neutralised)
 para_awk sub "$GO_MD" 'fail closed' 'fail open' > "$M/m6.md"
@@ -417,7 +425,7 @@ ctl_passes row "ctl-late" "$GO_MD" "$BASE_REF" none                      || { pr
 #     the same commit that adds rows, never ahead of them.
 nprops=0; for _p in $ALL_PROPS; do nprops=$((nprops + 1)); done
 EXPECTED_ASSERTIONS=$(( nprops + 1 + 1 + 1 + 3 + nrows + 1 + 6 ))
-ABSOLUTE_FLOOR=71
+ABSOLUTE_FLOOR=75
 MIN_ASSERTIONS=$(( EXPECTED_ASSERTIONS > ABSOLUTE_FLOOR ? EXPECTED_ASSERTIONS : ABSOLUTE_FLOOR ))
 if [[ "$asserted" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\nFATAL: anti-vacuity: %d assertion(s) executed, floor is %d. The battery ran but did not assert.\n' \
