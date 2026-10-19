@@ -139,3 +139,8 @@ PENDING seats: pattern-recognition (391b64d9), test-design (f947202a).
 - orphan-suite lint: affected-tests.test.sh needs classification declaration
 - stale pins to update: review/SKILL.md must still name TEST_GROUP=affected; grok-pre-push-gate pins (test-all.sh + --affected); fanout T16b/T16c (--full/--affected arms); plugin-root-anchoring.test.ts (resolver deleted); eval site; corpus baseline SITES 1502->1538; pipe-into-early-exit-grep 2 sites; rule-body-lint + byte ratchet on new base
 - fix agent 463978e0 in flight; after it lands: commit+push (fresh CI run), watch to green, merge --squash --auto, postmerge, DONE
+
+## CI fix round pushed (2026-10-19)
+- All CI failures fixed by agent 463978e0 + pushed (commit "fix(gate): CI failure round"); fresh CI run in flight, watcher 74558531 polls to terminal
+- Next: if green → gh pr merge 10389 --squash --auto → poll MERGED → postmerge verify (release workflows green, read merged files via git show main:<path>) → cleanup-merged → <promise>DONE</promise>
+- If red again: diagnose --log-failed, fix, repeat
