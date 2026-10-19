@@ -1327,7 +1327,7 @@ s = u.spec_from_file_location('m', sys.argv[1]); m = u.module_from_spec(s); s.lo
 q = m.quote_field
 ok = (q("a\nb\tc\rd\x1b\x7f\\e") == "a\\x0ab\\x09c\\x0dd\\x1b\\x7f\\x5ce" and q("x,y") == "x,y" and q("x,y", True) == "x\\x2cy" and q("plain/path.sh") == "plain/path.sh"
       and q("caf\u00e9") == "caf\u00e9")
-for ch in ("\u0085", "\u009b", "\u2028", "\u2029", "\u202e", "\u2066", "\u200b", "\ufeff"):   # C1, NEL/CSI, separators, bidi, zero-width
+for ch in ("\u0085", "\u009b", "\u2028", "\u2029", "\u202e", "\u2066", "\u200b", "\ufeff", "\u00ad", "\u061c", "\u180e", "\u2060", "\u2064"):   # C1, NEL/CSI, separators, bidi, zero-width
     ok = ok and q("a" + ch + "b") == "a\\u%04xb" % ord(ch)
 sys.exit(0 if ok else 1)
 PYQ
@@ -1415,6 +1415,15 @@ row_ctl_bytes && pass "no raw control byte reaches the gap, ref, stale and unaud
 srow bnd1 > "$SANDBOX/s-bnd1.rows"; arow scripts/bnd1 docs/b1.md "$(anchor_of 'docs/b1.md')" 1 > "$SANDBOX/a-bnd1.tsv"
 row_bnd_two() { saudit "$SANDBOX/s-bnd1.rows" --accept "$SANDBOX/a-bnd1.tsv"; [[ "$RC" -eq 0 ]] && grep -q 'accepted=1 stale=0' <<<"$AOUT"; }
 row_bnd_two && pass "a path at the FIRST character of a line is a boundary line, the same path at the SECOND character (xdocs/b1.md: behind a word character) is not: one accept row for the first exempts the pair" || fail "offset 0 versus offset 1 (rc=$RC): $AOUT"
+{ printf 'AFFECTED_SELECTED\tscripts/neg\t0\tedge:derived\n'; printf 'AFFECTED_SELECTED\tscripts/neg\t1\talways_on\t^scripts/neg.test.sh\n'; } > "$SANDBOX/s-neg.rows"
+row_audited_floor() { saudit "$SANDBOX/s-neg.rows"; [[ "$RC" -eq 1 ]] && grep -q 'suites=2 always_on=1 audited=0 unaudited=1 ' <<<"$AOUT"; }
+row_audited_floor && pass "audited= is never negative: one label that is both unaudited (a short row) and always_on is subtracted once (audited=0)" || fail "audited for a label in two states (rc=$RC): $AOUT"
+row_help_text() {
+  local top sub
+  top="$(python3 "$SUT" --help 2>&1)"; sub="$(python3 "$SUT" audit --help 2>&1)"
+  grep -q 'UNITS: `suites` counts selector ROWS' <<<"$top" && grep -q 'DECLARED LIMITS' <<<"$top" && grep -q 'ACCEPT FILE (--accept FILE' <<<"$top" && grep -q 'top-level --help' <<<"$sub" && ! grep -q 'section above' <<<"$sub"
+}
+row_help_text && pass "--help documents the units of every counter and the declared limits, and audit --help points at the top-level --help (which holds the ACCEPT FILE section), not at a section 'above'" || fail "help text"
 
 echo "== audit scan: a library read once is scanned once, however many suites source it"
 MEMODIR="$SANDBOX/memo"; assert_fixture_dir "$MEMODIR"; mkdir -p "$MEMODIR"
@@ -1693,7 +1702,7 @@ mutate ejections-manifest-optional '        if not os.path.exists(meta_path):' '
             return
         if False:' row_agg_no_meta
 mutate ejections-count-unchecked '        if have != meta["refused"]:' '        if False:' row_agg_short
-mutate accepted-unread-counted-audited 'len(self.labels) - self.always_on - self.unaudited_labels - self.accepted_unread' 'len(self.labels) - self.always_on - self.unaudited_labels' row_accept_dir
+mutate accepted-unread-counted-audited 'return len(self.labels - self.always_on_labels - {u[0] for u in self.unaudited} - self.accepted_unread_labels)' 'return len(self.labels - self.always_on_labels - {u[0] for u in self.unaudited})' row_accept_dir
 mutate accept-ignored '        if lines and all((a[0], a[1]) in want for a in lines):' '        if False:' row_accept_ok
 mutate accept-without-reason '        if not re.match(r"^false-positive: \S", f[4]):' '        if False:' row_accept_badreason
 mutate cleared-by-failed-run 'if o["created_at"] > r["created_at"] and o["conclusion"] == "success":' 'if o["created_at"] > r["created_at"]:' row_cleared_by_failed
@@ -1887,6 +1896,7 @@ mutate boundary-twin-rejects-after-single-quote '    return i == 0 or WORD.match
 mutate boundary-twin-ignores-digits '    return i == 0 or WORD.match(text[i - 1]) is None' '    return i == 0 or re.match(r"[A-Za-z_]", text[i - 1]) is None' row_bnd_mid
 
 # review round 3
+mutate audited-subtracts-each-state-separately 'return len(self.labels - self.always_on_labels - {u[0] for u in self.unaudited} - self.accepted_unread_labels)' 'return len(self.labels) - len(self.always_on_labels) - self.unaudited_labels - len(self.accepted_unread_labels)' row_audited_floor
 mutate boundary-twin-offset-one-is-a-start '    return i == 0 or WORD.match(text[i - 1]) is None' '    return i <= 1 or WORD.match(text[i - 1]) is None' row_bnd_two
 mutate star-row-accepts-a-tracked-suite '            tracked_suite = any(has_tracked_input(index, d) for d in dead)' '            tracked_suite = False' row_star_tracked
 mutate sourced-untracked-file-is-read 'if os.path.relpath(q, root) in index.tracked:' 'if os.path.relpath(q, root) in index.tracked or os.path.isfile(q):' row_hop_untracked
@@ -1912,6 +1922,10 @@ mutate quote-zero-width-raw '\u200b-\u200f' '' row_quote
 mutate quote-separators-raw '\u2028-\u202e' '' row_quote
 mutate quote-bidi-isolates-raw '\u2066-\u2069' '' row_quote
 mutate quote-bom-raw '\ufeff]")' ']")' row_quote
+mutate quote-soft-hyphen-raw '\u00ad' '' row_quote
+mutate quote-arabic-letter-mark-raw '\u061c' '' row_quote
+mutate quote-mongolian-vowel-separator-raw '\u180e' '' row_quote
+mutate quote-word-joiners-raw '\u2060-\u2064' '' row_quote
 mutate tracked-names-carriage-return-folded 'return {f.decode("utf-8", errors="replace")' 'return {f.decode("utf-8", errors="replace").replace("\r", "\n")' row_quote
 mutate scan-per-length-loop-restored '    for m in index.start.finditer(text):' '    _lens = sorted({len(x) for x in index.paths})
     for m in index.start.finditer(text):
@@ -2008,12 +2022,12 @@ if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_
 # earlier one (same edit, same row), so a renamed duplicate adds no kill.
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
-FLOOR_ASSERTIONS=476   # base 432 (review rounds 1-2: 369 + 63) + 44 added by review round 3 (measured)
+FLOOR_ASSERTIONS=483   # base 476 (review rounds 1-3) + 7 added by review round 4 (measured)
 total=$((passes + fails))
 if [[ "$total" -lt "$FLOOR_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$total" "$FLOOR_ASSERTIONS" >&2; exit 1
 fi
-FLOOR_MUTANTS=220   # base 190 (review rounds 1-2: 152 + 38) + 30 added by review round 3, net of the mutants it retired (measured)
+FLOOR_MUTANTS=225   # base 220 (review rounds 1-3) + 5 added by review round 4 (measured)
 if [[ "$MUT_RUN" -lt "$FLOOR_MUTANTS" ]]; then
   printf '[FATAL] mutation floor: only %s mutants ran, floor is %s\n' "$MUT_RUN" "$FLOOR_MUTANTS" >&2; exit 1
 fi
