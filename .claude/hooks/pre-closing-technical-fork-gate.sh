@@ -67,13 +67,6 @@ jq -e '(.last_assistant_message | type) == "string"' >/dev/null 2>&1 <<<"$INPUT"
   || { _note "SKIPPED — last_assistant_message absent or not a string"; exit 0; }
 MSG="$(jq -r '.last_assistant_message' 2>/dev/null <<<"$INPUT")" || { _note "SKIPPED — message unreadable"; exit 0; }
 [[ -n "$MSG" ]] || exit 0
-# Cheap pre-filter (performance seat): only a `?`-terminated unit can ever hit, and stripping can only REMOVE a `?`,
-# so a raw message without one cannot change a verdict; this skips ~14 of ~20 forks on the common turn end.
-# CL4 (2026-10-19) judges declarative hand-offs, so a message carrying one of its phrases is also scanned.
-if [[ "$MSG" != *"?"* ]]; then
-  grep -qiE 'your call|up to you|(tell|ask) me to|say the word|let me know|want me to|like me to|prefer me to|(you|owner) (decide|choose|pick)' <<<"$MSG" || exit 0
-fi
-
 # One path variable, one place to edit when the pair graduates to the plugin.
 TFC_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/technical-fork-cues.sh"
 if [[ -s "$TFC_LIB" ]]; then
@@ -106,23 +99,31 @@ CUT=0
 (( ${#NORM} > 1500 )) && CUT=1
 WIN="$(printf '%s' "$NORM" | tail -c 1500)"
 [[ -n "${WIN//[[:space:]]/}" ]] || exit 0
+# Cheap pre-filter, on the NORMALISED window (a raw-byte test missed "your<NBSP>call", review of PR #10547): without a `?` only a
+# declarative hand-off (CL4) can hit, and its candidate alternation is the lib's own, so the two cannot drift.
+# The sentence split mirrors the awk's, so a `^`-anchored alternative reads a sentence start in both. Captured, not `| grep -q`.
+if [[ "$WIN" != *"?"* ]]; then
+  CAND_HIT="$(sed -E 's/([.!]) /\1\n/g' <<<"$WIN" | grep -E "$TFC_CL4_CANDIDATE_ERE" || true)"
+  [[ -n "$CAND_HIT" ]] || exit 0
+fi
 
 # --- whole-window escapes ---------------------------------------------------------------------------
 if grep -qE '<stop>(operator-gate|blocked):[[:space:]]*[^<[:space:]][^<]*</stop>' <<<"$WIN"; then exit 0; fi
 
-# --- units: the `?`-terminated sentences, each with its own escape flag, plus the final sentence --------
+# --- units: the `?`-terminated sentences (rows U), each with its own escape flag; the declarative hand-off candidates (rows D,
+# CL4, judged apart); plus the final sentence (row F) ---------------------------------------------------
 # A `?` ends a unit only before whitespace, end of line or closing punctuation, so a URL query string is
 # not a boundary. `esc` is set by a sentence-initial `Operator-only (category):` label and covers exactly
 # one unit (its own sentence if that is a unit, else the next one) and never crosses a blank line.
 # awk program text: no apostrophe may appear (single-quoted); \047 is used where one is needed.
-UNITS="$(printf '%s\n' "$WIN" | awk -v cut="$CUT" '
+UNITS="$(printf '%s\n' "$WIN" | awk -v cut="$CUT" -v cand="$TFC_CL4_CANDIDATE_ERE" '
   function isclose(c) { return (c == "" || c == " " || c == ")" || c == "]" || c == "\"" || c == "\047" || c == "*" || c == "_" || c == "`") }
   function islabel(s) { return (s ~ /^[ *_>-]*operator-only \((money|scope|priority|schedule|irreversible|production-mutating|legal-risk|brand)\): *[^ ]/) }
   function note_sentences(pre,   n, a, i) {
     n = split(pre, a, /[.!] /)
     for (i = 1; i <= n; i++) {
       if (islabel(a[i])) esc = 1
-      else if (a[i] ~ /(your call|up to you|(tell|ask) me to|say the word|let me know|want me to|like me to|prefer me to|(you|owner) (decide|choose|pick))/) print "U" esc "\t" a[i]
+      else if (a[i] ~ cand) print "D" esc "\t" a[i]
     }
   }
   BEGIN { esc = 0; last_line = "" }
@@ -185,8 +186,23 @@ COUNT=${#JUDGE[@]}
 START=0
 if (( COUNT > 12 )); then START=$((COUNT - 12)); _note "NOTE — $COUNT question units, judging the last 12"; fi
 
+# Declarative sentences (rows `D0`) are judged ONLY by tfc_is_handoff (CL4): they never reach the `?` cues and never spend the
+# 12-unit `?` budget above, so a run of courtesy closers cannot push a real fork out of the window. They have their own cap.
+declare -a JUDGE_D=()
+while IFS= read -r row; do
+  [[ "$row" == "D0${TAB}"* ]] && JUDGE_D+=("${row#"D0${TAB}"}")
+done <<<"$UNITS"
+COUNT_D=${#JUDGE_D[@]}
+START_D=0
+if (( COUNT_D > 12 )); then START_D=$((COUNT_D - 12)); _note "NOTE — $COUNT_D declarative hand-off candidates, judging the last 12"; fi
+
 HIT_UNIT=""; HIT_CUE=""
+for (( k = START_D; k < COUNT_D; k++ )); do
+  u="${JUDGE_D[$k]}"
+  if tfc_is_handoff "$u"; then HIT_UNIT="$u"; HIT_CUE="$TFC_HIT"; break; fi
+done
 for (( k = START; k < COUNT; k++ )); do
+  [[ -z "$HIT_UNIT" ]] || break
   u="${JUDGE[$k]}"
   # No per-unit size cap (Ruled by CTO agent, 2026-10-12 review): the 1500-byte window already bounds a unit, the
   # regexes are linear (bounded gaps), and a cap would turn any long run-on question into an unjudged bypass.
