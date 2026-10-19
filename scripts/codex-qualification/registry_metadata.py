@@ -211,6 +211,8 @@ class HTTPSAdapter:
                     raise BoundaryFailure('header_shape', status)
                 chunks, count = [], 0
                 while True:
+                    if length is not None and count == int(length):
+                        break
                     stream.settimeout(remaining())
                     chunk = response.read1(min(65536, maximum_bytes + 1 - count))
                     remaining()

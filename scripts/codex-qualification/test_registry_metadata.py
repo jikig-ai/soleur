@@ -2,6 +2,7 @@
 import copy
 import errno
 from argparse import Namespace
+import io
 import json
 import multiprocessing
 import os
@@ -198,6 +199,66 @@ class RegistryMetadata(unittest.TestCase):
             with self.assertRaises(Refused):
                 adapter.request('https://foreign.invalid/secret', {'Authorization': TOKEN}, timeout=10, maximum_bytes=1)
             self.assertEqual(connections.call_count, before)
+
+    def test_real_http_response_framing_never_touches_released_completed_socket(self):
+        cases = [('length', b'Content-Length: 5\r\n', b'abcde', None),
+                 ('empty', b'Content-Length: 0\r\n', b'', None),
+                 ('truncated', b'Content-Length: 6\r\n', b'abcde', 'body_size'),
+                 ('chunked', b'Transfer-Encoding: chunked\r\n', b'5\r\nabcde\r\n0\r\n\r\n', None),
+                 ('close-delimited', b'', b'abcde', None),
+                 ('oversize', b'Content-Length: 16385\r\n', b'', 'body_size'),
+                 ('late', b'Content-Length: 5\r\n', b'abcde', 'deadline')]
+        for name, framing, body, failure in cases:
+            now = [10.0]
+            class Fragmented(io.BytesIO):
+                def read1(self, maximum=-1):
+                    chunk = super().read1(min(maximum, 3))
+                    if name == 'late' and chunk:
+                        now[0] = 21.0
+                    return chunk
+            class Wire:
+                def __init__(self):
+                    self.file = Fragmented(b'HTTP/1.1 200 OK\r\nConnection: close\r\n' +
+                        b'Content-Type: application/json\r\n' + framing + b'\r\n' + body)
+                    self.released = False
+                def makefile(self, mode):
+                    self.assert_mode = mode
+                    return self.file
+                def close(self):
+                    self.released = True
+                def settimeout(self, timeout):
+                    if self.released and self.file.closed:
+                        raise OSError(errno.EBADF, 'synthetic released socket')
+            wire = Wire()
+            with self.subTest(framing=name), patch.object(metadata.ssl, 'SSLContext'), \
+                    patch.object(metadata.http.client, 'HTTPSConnection') as connections:
+                connection = connections.return_value
+                connection.sock = wire
+                response = metadata.http.client.HTTPResponse(wire, method='GET')
+                def getresponse():
+                    response.begin()
+                    if response.will_close:
+                        wire.close()
+                        connection.sock = None
+                    return response
+                connection.getresponse.side_effect = getresponse
+                adapter = metadata.HTTPSAdapter(self.manifest, CA,
+                    manifest_sha256=sha(canonical(self.manifest)), clock=lambda: now[0])
+                action = self.manifest['actions'][0]
+                if failure is None:
+                    result = adapter.request(action['url'], action['headers'], timeout=10,
+                                             maximum_bytes=action['maximum_bytes'])
+                    self.assertEqual(result, (200, 'application/json', b'' if name == 'empty' else b'abcde'))
+                else:
+                    with self.assertRaises(metadata.BoundaryFailure) as raised:
+                        adapter.request(action['url'], action['headers'], timeout=10,
+                                        maximum_bytes=action['maximum_bytes'])
+                    self.assertEqual((raised.exception.reason, raised.exception.status), (failure, 200))
+                connection.close.assert_called_once_with()
+                self.assertTrue(response.isclosed())
+                self.assertTrue(wire.file.closed)
+                self.assertTrue(wire.released)
+                self.assertEqual(wire.assert_mode, 'rb')
 
     def test_bound_ca_preserves_all_certificates_and_ignores_only_valid_comments(self):
         second = CA.replace(b'SYNTHESIZED-CA-FIXTURE', b'SYNTHESIZED-SECOND-CA')

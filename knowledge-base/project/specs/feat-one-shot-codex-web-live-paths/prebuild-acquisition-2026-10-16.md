@@ -557,3 +557,68 @@ The log CLI required its advertised escape-sequence option, and sandboxed
 mise refused a later invocation; the exact approved read-only retrieval
 succeeded. A dependent search against the failed producer's empty file had
 no evidentiary value. Inspect each producer status before reading its output.
+
+### Registry transport refusal and framed-response correction — 2026-10-19
+
+Canonical sync pushed `9d24f8f256a92075ab0917de6738d1676535fd34`, including
+main `310eab957ff57a475e4a5a979f42af87b664edcc` (community digest only).
+CTO and security cleared the CA correction. Exact-head file-only preview and
+export match: 5,163 inputs, 191 migrations, 57 components, 1,773 vendored
+inputs and 6,938 source leaves plus three metadata leaves. Pairing is
+`6f6d5907b9cb80f8694b70dd29b5d76de241137ef57833df82c46d29d555d572`;
+operational hash is
+`eed995f99d777262a8654859ef7fa0466a0689713a027e5465ccbb5cad941e1e`.
+Image ID remains null, authority false and exporter operation counts zero.
+CTO independently reviewed replacement manifest
+`f57a8892b64a512b7b4ad59d9c13d74c66c63ba1a08252c28aac3d7cf7eba92c`,
+runner `d546eda51e1081538984d5dcf0a63ce08ffb0e5553a71a21a491fee948464336`,
+all source/helper/CA/retained/private-output bindings and three fixed routes.
+Separate file-only preflight passed and loaded 121 CAs without connections.
+
+The exact command was freshly approved and executed once. It stopped
+incomplete after two requests: anonymous token observed HTTP 200; platform
+request observed HTTP 200 then transport `unexpected_failure`; Config was
+not attempted. No platform or Config bytes were accepted or retained. Marker
+is spent. Receipt checksum is
+`49bedd650a8ddda6fff8484f844a780f9c99425d1e8dc0733fe7e4dcb0a801d0`;
+receipt file SHA-256 is
+`d3cdbd7fb5bcd1bc7f42635b168aa1426fa7e121ca93d84846227d6c43e2df19`.
+Both verify; every admission/ownership/authentication field stays false or
+pending. Keep this receipt unchanged. No exception text or failed body was
+retained, so the actual transport cause remains unknown. No retry follows.
+
+CTO and security independently identified a concrete source defect from local
+Python 3.14 implementation: `HTTPResponse.read1()` closes its file when the
+remaining Content-Length reaches zero, while returning final nonempty bytes.
+For `Connection: close`, `HTTPConnection.getresponse()` has already released
+the connection's socket ownership. The next adapter iteration can therefore
+call `settimeout()` on a released socket. This is consistent with the receipt
+but does not prove that attempt's cause.
+
+Ruled by CTO agent: once a validated Content-Length's exact count is reached,
+stop before another socket access. Keep post-read deadline checks, bounds and
+final exact-length validation; chunked/close-delimited bodies remain EOF-driven.
+An in-memory fake socket/file with actual stdlib HTTPResponse parsing first
+reproduced `unexpected_failure` on a valid fragmented closing response. The
+minimal loop correction passes all 15 registry methods, including seven
+framing schedules: fragmented complete length, zero length, truncation,
+chunked, close-delimited, oversize and late response. Cleanup runs once and
+negative cases preserve sanitized reason/status. No real socket, TLS request,
+Docker or runtime operation is used by this regression. Ruff passes with
+44 baseline findings/113 files. Pushed focused review and new source/action
+bindings remain required before fresh approval.
+
+The earlier E2E artifact (12174025076, exact `8ff7ad82`) was downloaded for
+bounded JSON trace inspection only. The first failed case's retry has four
+refused network resources/status -1 and no console or process explanation.
+No browser or images were opened. CTO rules listener loss with unattributed
+cause. Live check found historical Ref #8785 CLOSED, describing a different
+font-resolution failure; do not substitute it as current tracking. E2E passes
+on `9d24f8f256`'s automatic CI, which settles at 83 passes/14 skips and only
+aggregate `test` red. The exact run's executed log confirms DRAFT_LIGHT and
+`draft: full battery owed at ready`. Infra/tenant and description guards pass.
+No workflow rerun occurred. Full runtime/legal/review/QA/ship gates stay held.
+Sandbox process-name checks returned no matching process and add no evidence
+about the independently managed export session; its own completed result and
+verified files establish successful file-only preparation. Artifact retrieval
+also needed exact read-only approval after a sandbox mise refusal.

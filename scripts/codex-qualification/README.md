@@ -250,6 +250,10 @@ for TLS loading. Preserve their bytes, order and duplicates; outside blocks
 accept only ASCII blank lines and valid UTF-8 `#` comments. Other payload,
 malformed delimiters and non-ASCII certificate content refuse. The explicit
 TLS context loads only that projection, with no ambient trust fallback.
+For a validated Content-Length, stop at its exact byte count before another
+socket access; Python may already have released a completed closing response.
+Chunked and close-delimited responses still read to EOF. Size, deadline and
+exact declared-length checks remain required.
 There is no Docker socket/executable, credential/config lookup, shared cache,
 layer fetch, unpacking or import. Redirects, challenges, retries and alternate
 hosts are unavailable. Verify raw content digests before interpretation;

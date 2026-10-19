@@ -2149,3 +2149,30 @@
   expected draft `test` plus unattributed `e2e` (51 connection-refused cases,
   48 passes, one skip). No rerun or local browser/build occurred. Canonical
   monitor also reports BEHIND; sync after committing the current correction.
+- Canonical sync pushed `9d24f8f256a92075ab0917de6738d1676535fd34`, including
+  main `310eab957ff57a475e4a5a979f42af87b664edcc`. CTO/security cleared CA
+  projection; exact-head file-only preview/export match (5,163 inputs,
+  191 migrations, 57 components, 6,938 source leaves plus three metadata).
+  Pairing `6f6d5907b9cb80f8694b70dd29b5d76de241137ef57833df82c46d29d555d572`,
+  operational `eed995f99d777262a8654859ef7fa0466a0689713a027e5465ccbb5cad941e1e`.
+- CTO reviewed actual replacement manifest
+  `f57a8892b64a512b7b4ad59d9c13d74c66c63ba1a08252c28aac3d7cf7eba92c`.
+  Freshly approved command ran once: token HTTP 200, platform HTTP 200 then
+  transport unexpected_failure, Config not attempted; zero retained metadata.
+  Marker spent; receipt checksum
+  `49bedd650a8ddda6fff8484f844a780f9c99425d1e8dc0733fe7e4dcb0a801d0`
+  and file SHA `d3cdbd7fb5bcd1bc7f42635b168aa1426fa7e121ca93d84846227d6c43e2df19`
+  verify. Original cause remains unknown; no retry or follow-on authorization.
+- Independent CTO/security inspection found a source fixed-length close
+  defect: final read1 can release a closing socket before the next settimeout.
+  The CTO's minimal stop-at-exact-length correction preserves EOF handling
+  for other framing, deadlines, caps and truncation checks. Actual stdlib
+  in-memory framing regression ran RED; all 15 registry methods now pass,
+  including seven success/refusal schedules and once-only cleanup. Ruff
+  remains green (44 baseline findings/113 files). Pushed focused review and
+  new source/action bindings are still required; the live cause is unproven.
+- E2E passed on automatic `9d24f8f256` CI; complete counts 83 pass/14 skip,
+  only intentional DRAFT_LIGHT aggregate test red, verified from executed log.
+  Earlier existing trace JSON confirms connection refusals without process
+  cause; no browser/images opened or workflow rerun. Ref #8785 is CLOSED and
+  describes a different failure. All runtime/legal/shipping holds persist.
