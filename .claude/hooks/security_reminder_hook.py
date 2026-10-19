@@ -17,6 +17,7 @@
 # Dependencies: Python 3 stdlib only (re, json, sys, fnmatch). If python3 is
 # missing at runtime the hook exits 127 which Claude Code treats as a no-op.
 
+import contextlib
 import json
 import os
 import re
@@ -68,6 +69,57 @@ def _incidents_repo_root() -> str:
     return os.path.realpath(os.path.join(_HOOK_DIR, "..", ".."))
 
 
+def _write_incident(rule_id: str, event_type: str, prefix: str, cmd: str) -> None:
+    """Body of emit_incident; raises on failure so the caller can suppress it."""
+    repo_root = _incidents_repo_root()
+    path = os.path.join(repo_root, ".claude", ".rule-incidents.jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    # Rotate before writing — shell out to the shared bash helper so the
+    # rotation policy stays single-source-of-truth. Suppressed via
+    # DEVNULL to keep stderr clean; failure leaves the file unrotated and
+    # the next call retries. Skipped silently if the helper is missing
+    # (e.g., partial checkout) or bash is unavailable.
+    rotator = os.path.join(repo_root, ".claude", "hooks", "lib", "log-rotation.sh")
+    if os.path.isfile(path) and os.path.isfile(rotator):
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            subprocess.run(
+                ["bash", "-c", f'source "$1" && rotate_if_needed "$2"', "_", rotator, path],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+    record = {
+        "schema": SCHEMA_VERSION,
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "rule_id": rule_id,
+        "event_type": event_type,
+        "rule_text_prefix": prefix,
+        "command_snippet": (cmd or "")[:1024],
+    }
+    line = (json.dumps(record, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")
+    # Mode 0o600 (owner rw only): command_snippet can carry PR body text
+    # or gh invocation arguments — operator-only readable avoids leaking
+    # those into shared-host scenarios. CodeQL py/overly-permissive-file.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        if fcntl is not None:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            # Short-write defense: loop until the whole payload lands.
+            view = memoryview(line)
+            while view:
+                n = os.write(fd, bytes(view))
+                if n <= 0:
+                    break
+                view = view[n:]
+        finally:
+            if fcntl is not None:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
 def emit_incident(rule_id: str, event_type: str, prefix: str, cmd: str = "") -> None:
     """Append one JSONL rule-incident line; fire-and-forget.
 
@@ -81,59 +133,9 @@ def emit_incident(rule_id: str, event_type: str, prefix: str, cmd: str = "") -> 
     """
     if not rule_id or not event_type:
         return
-    try:
-        repo_root = _incidents_repo_root()
-        path = os.path.join(repo_root, ".claude", ".rule-incidents.jsonl")
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        # Rotate before writing — shell out to the shared bash helper so the
-        # rotation policy stays single-source-of-truth. Suppressed via
-        # DEVNULL to keep stderr clean; failure leaves the file unrotated and
-        # the next call retries. Skipped silently if the helper is missing
-        # (e.g., partial checkout) or bash is unavailable.
-        rotator = os.path.join(repo_root, ".claude", "hooks", "lib", "log-rotation.sh")
-        if os.path.isfile(path) and os.path.isfile(rotator):
-            try:
-                subprocess.run(
-                    ["bash", "-c", f'source "$1" && rotate_if_needed "$2"', "_", rotator, path],
-                    check=False,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=10,
-                )
-            except (OSError, subprocess.SubprocessError):
-                pass
-        record = {
-            "schema": SCHEMA_VERSION,
-            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "rule_id": rule_id,
-            "event_type": event_type,
-            "rule_text_prefix": prefix,
-            "command_snippet": (cmd or "")[:1024],
-        }
-        line = (json.dumps(record, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")
-        # Mode 0o600 (owner rw only): command_snippet can carry PR body text
-        # or gh invocation arguments — operator-only readable avoids leaking
-        # those into shared-host scenarios. CodeQL py/overly-permissive-file.
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-        try:
-            if fcntl is not None:
-                fcntl.flock(fd, fcntl.LOCK_EX)
-            try:
-                # Short-write defense: loop until the whole payload lands.
-                view = memoryview(line)
-                while view:
-                    n = os.write(fd, bytes(view))
-                    if n <= 0:
-                        break
-                    view = view[n:]
-            finally:
-                if fcntl is not None:
-                    fcntl.flock(fd, fcntl.LOCK_UN)
-        finally:
-            os.close(fd)
-    except Exception:
-        # Fire-and-forget: never let a telemetry failure block the hook.
-        pass
+    # Fire-and-forget: never let a telemetry failure block the hook.
+    with contextlib.suppress(Exception):
+        _write_incident(rule_id, event_type, prefix, cmd)
 
 # Literal sink strings that must trigger the advisory when present alongside a
 # `run:` directive in the same new_string.

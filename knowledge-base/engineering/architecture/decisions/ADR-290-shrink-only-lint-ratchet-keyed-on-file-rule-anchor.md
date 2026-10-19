@@ -41,7 +41,7 @@ Registration: a `run_suite` pair (`tests/scripts/lint-ratchet`, `scripts/lint-ra
 
 ## Consequences
 
-A new unclosed file, empty handler, unused import or unused binding in tracked Python, or an unused binding in the scoped test and fixture directories, now fails `lefthook` and the required `test` context. The 62 ruff and 20 eslint findings that exist today are baselined and tracked for drawdown in #10433; none is fixed here. A Dependabot eslint bump that moves findings fails the vitest arm and is fixed or held (no escape hatch is built until one is first needed).
+A new unclosed file, empty handler, unused import or unused binding in tracked Python, or an unused binding in the scoped test and fixture directories, now fails `lefthook` and the required `test` context. The 62 ruff and 20 eslint findings that exist today are baselined and tracked for drawdown in #10433; none is fixed here (both baselines were later drawn down to empty, see Amendment 2). A Dependabot eslint bump that moves findings fails the vitest arm and is fixed or held (no escape hatch is built until one is first needed).
 
 Accepted residuals, none of which the check can see:
 
@@ -81,3 +81,9 @@ Realizes the PR3b contract. The engine and its pinned ruff now ship in the plugi
 **Accepted residuals (new).** The cwd-dependent root (a repository nested in another resolves its own toplevel); `extend` targets, `requires-python` (ruff infers `target-version` from it) and a user-global ruff config sit outside the fingerprint, and dotted-key spellings of the ruff table (`tool.ruff.x = 1` outside a table header) are not detected; the in-flight-PR window for residual 3 (`config["script"]` changed path, so a PR whose merge base predates the move sees no script at the old path); the guard is dark in cloud runs and in the hosted image (see above); `.ipynb` files and any `extend-include` extension are outside the scan (the pathspec is `*.py`, `*.pyi`, `*.pyw`); a deletion is not detectable when the base is unresolvable outside CI (the `base unresolvable` line says so); native Windows (no `os.getuid`) is reported as an unsupported platform; the same-user trust in an existing cache `bin/ruff`; `git diff` for rename detection reads the working tree, so a hostile `.git/config` `filter.*.clean` command can run (`core.fsmonitor` is blocked; a clone does not carry `.git/config`); a fork PR can make a reviewing machine fetch the pinned wheel and run ruff for up to two 900 s runs by committing a config and a baseline. The pinned wheel is fetched from PyPI over TLS and verified by sha256 for each of the 17 wheels; a TLS-intercepting proxy is trusted by the user. Precedents for a shipped user-machine surface: ADR-178 and ADR-254. Without Soleur a team can run the same ratchet in CI with `python3 <plugin>/scripts/lint-ratchet.py user-ruff --check` and `fetch-depth: 0`. Deferred follow-ups (JS/TS, monorepo, telemetry, streaming of very large reports, a shared deadline for `auto`) are tracked in #10515.
 
 Tracker: Ref #10331. Drawdown: #10433.
+
+## Amendment 2 (2026-10-19, slice 3 of #10331: baselines drawn down to empty)
+
+Both Soleur baselines, `scripts/lint-ratchet-ruff.baseline.txt` (44 entries, 49 findings) and `scripts/lint-ratchet-eslint-test-dirs.baseline.txt` (20 entries, 27 findings), now hold no entries, so the two scopes behave as plain zero-findings gates. The fixes preserve behaviour: silenced handlers use `contextlib.suppress` or a sentinel assignment, file handles use `with` or `Path.read_text`, and dead bindings are deleted. The engine and its suite are untouched. Removing the `DRAWDOWN` constant and the baseline header lines is tracked in #10583.
+
+Tracker: Ref #10331. Drawdown: #10433 (closed by this change).

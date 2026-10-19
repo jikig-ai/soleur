@@ -546,23 +546,6 @@ function applyTemplateVars(
   });
 }
 
-// Model rendered `user_data` byte-length: substitute modeled values into the cloud-init
-// template, honoring terraform's `$${` -> `${` escape (those are shell vars, not template
-// interpolations, and must NOT be modeled).
-function renderedSize(cloudInitFile: string, vars: Record<string, number>): number {
-  const src = readFileSync(join(INFRA, cloudInitFile), "utf8");
-  const ESC = "__SOLEUR_ESC__";
-  let s = src.split("$${").join(ESC);
-  s = applyTemplateVars(cloudInitFile, s, (name) => {
-    if (!(name in vars)) {
-      throw new Error(`${cloudInitFile} references un-provided template var \${${name}}`);
-    }
-    return "x".repeat(vars[name]);
-  });
-  s = s.split(ESC).join("${");
-  return Buffer.byteLength(s, "utf8");
-}
-
 // #6780 — file()-backed map vars land their real text in the template. Two sanctioned
 // shapes, both single-source (git-data's `${indent(6, …)}` convention):
 //   file("${path.module}/X")                                   — verbatim text
@@ -585,13 +568,6 @@ function resolveFileBackedValue(
   const rawMatch = /^file\("\$\{path\.module\}\/((?:\.\.\/)*)([^"]+)"\)$/.exec(expr);
   if (rawMatch) return readFileSync(join(INFRA, rawMatch[2]), "utf8");
   return null;
-}
-
-function varLengths(tfSrc: string, cloudInitFile: string): Record<string, number> {
-  const map = parseVarMap(extractTemplatefileMap(tfSrc, cloudInitFile));
-  const out: Record<string, number> = {};
-  for (const [name, expr] of Object.entries(map)) out[name] = modeledLen(name, expr, tfSrc);
-  return out;
 }
 
 // The REAL string value terraform would substitute for a templatefile var — needed for the

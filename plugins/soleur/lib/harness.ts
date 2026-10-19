@@ -21,7 +21,14 @@ import { cursorAgentSlash, cursorSkillSlash } from "../scripts/sync-cursor-name-
 import { behindSyncInstructions } from "./pr-merge-poll";
 import { pipelineInvocationSuffix, workflowFidelityInstructions } from "./workflow-fidelity";
 
-export type Harness = "claude" | "grok" | "codex" | "devin" | "cursor" | "unknown";
+export type Harness = "claude" | "grok" | "codex" | "devin" | "cursor" | "antigravity" | "unknown";
+
+/** Env vars set by Antigravity CLI / Google Gemini CLI. */
+const ANTIGRAVITY_ENV_MARKERS = [
+  "ANTIGRAVITY_CLI",
+  "AGY_VERSION",
+  "GEMINI_CLI",
+] as const;
 
 /** Env vars set by Grok Build (see https://docs.x.ai/build/settings/reference). */
 const GROK_ENV_MARKERS = [
@@ -47,7 +54,7 @@ export interface SkillInvocation {
 
 export interface AgentSpawn {
   harness: Harness;
-  tool: "Task" | "spawn_subagent" | "spawn_agent" | "run_subagent";
+  tool: "Task" | "spawn_subagent" | "spawn_agent" | "run_subagent" | "invoke_subagent";
   agent: string;
   prompt: string;
   instruction: string;
@@ -84,6 +91,12 @@ export function detectHarness(env: NodeJS.ProcessEnv = process.env): Harness {
     return "claude";
   }
 
+  for (const key of ANTIGRAVITY_ENV_MARKERS) {
+    if (env[key]) {
+      return "antigravity";
+    }
+  }
+
   for (const key of GROK_ENV_MARKERS) {
     if (env[key]) {
       return "grok";
@@ -105,6 +118,9 @@ export function detectHarness(env: NodeJS.ProcessEnv = process.env): Harness {
   if (env === process.env && typeof process !== "undefined") {
     const title = (process.title ?? "").toLowerCase();
     const argv = process.argv.join(" ").toLowerCase();
+    if (title.includes("antigravity") || /\b(antigravity|agy)\b/.test(argv)) {
+      return "antigravity";
+    }
     if (title.includes("grok") || /\bgrok\b/.test(argv)) {
       return "grok";
     }
@@ -133,6 +149,11 @@ export function formatSkillInvocation(skill: string, args?: string): string {
   }
 
   if (harness === "devin") {
+    const command = trimmedArgs ? `/soleur:${name} ${trimmedArgs}` : `/soleur:${name}`;
+    return command;
+  }
+
+  if (harness === "antigravity") {
     const command = trimmedArgs ? `/soleur:${name} ${trimmedArgs}` : `/soleur:${name}`;
     return command;
   }
@@ -199,6 +220,20 @@ export function invokeSkill(skill: string, args?: string): SkillInvocation {
     };
   }
 
+  if (harness === "antigravity") {
+    const command = trimmedArgs ? `/soleur:${name} ${trimmedArgs}` : `/soleur:${name}`;
+    return {
+      harness,
+      tool: "slash_command",
+      command,
+      args: trimmedArgs,
+      instruction:
+        `Read \`plugins/soleur/skills/${name}/SKILL.md\` using \`view_file\` (or invoke slash command \`${command}\`) and run it to completion. ` +
+        "Do NOT improvise workflow steps — follow all required phases and decision gates." +
+        pipelineSuffix,
+    };
+  }
+
   const command = `soleur:${name}`;
   return {
     harness: harness === "claude" ? "claude" : harness,
@@ -238,6 +273,12 @@ export function formatAgentSpawn(agent: string, prompt: string): string {
   if (harness === "devin") {
     return (
       `Use the **run_subagent** tool with agent \`${agentId}\` and this prompt:\n\n${prompt}`
+    );
+  }
+
+  if (harness === "antigravity") {
+    return (
+      `Use **invoke_subagent** with agent \`${agentId}\` (or register dynamically via **define_subagent**) and this prompt:\n\n${prompt}`
     );
   }
 
@@ -303,6 +344,26 @@ export function spawnAgent(agent: string, prompt: string): AgentSpawn {
       instruction:
         `Spawn via **run_subagent** with agent \`${entry.id}\`. ` +
         "Inherit the session model and permissions. " +
+        "Pass the prompt verbatim — do NOT substitute a manual workflow.",
+    };
+  }
+
+  if (harness === "antigravity") {
+    const entries = discoverAgentEntries().filter(
+      (entry) => entry.id === agentId || entry.name === agentId,
+    );
+    if (entries.length !== 1) {
+      throw new Error(`Unknown or ambiguous Soleur agent: ${agent}`);
+    }
+    const entry = entries[0];
+    return {
+      harness,
+      tool: "invoke_subagent",
+      agent: entry.id,
+      prompt: `Read and follow the Soleur agent definition at ${resolve(PLUGIN_ROOT, entry.path)}.\nApply the Antigravity compatibility instructions at ${resolve(PLUGIN_ROOT, "antigravity/INSTRUCTIONS.md")}.\n\n${prompt}`,
+      instruction:
+        `Spawn via **invoke_subagent** with agent \`${entry.id}\` (define dynamically via \`define_subagent\` if not already registered in this session). ` +
+        "Set Workspace: 'inherit' and Model: 'inherit'. " +
         "Pass the prompt verbatim — do NOT substitute a manual workflow.",
     };
   }
@@ -431,6 +492,19 @@ export function pollInstructions(harness: Harness): string {
         behind,
       ].join("\n");
 
+    case "antigravity":
+      return [
+        "**Merge/deploy polling (Antigravity CLI)**",
+        "- Poll `gh pr view --json state,mergeStateStatus` on every tick — **pending checks alone miss BEHIND**.",
+        "- Launch background status checks via **run_command** (with `IsDaemon: false` and check progress via **manage_task**) or schedule wakeups using the **schedule** tool (`DurationSeconds` with `TimerCondition: 'never'` or task ID).",
+        "- Antigravity provides native reactive wakeup on background task or subagent completion; NEVER run blocking sleep loops in the foreground.",
+        "- NEVER ask the operator to monitor merge, CI, or deploy — you own the wait.",
+        "- After `/soleur:ship` merge: poll release workflows, invoke `/soleur:postmerge <PR>`, then emit `<promise>DONE</promise>`.",
+        "- FORBIDDEN: heartbeating on CI while `mergeStateStatus` is `BEHIND` — except when `main` has a merge queue and the PR is armed (the Phase 7 poll prints `[ship.phase7.queue_wait]`: GitHub enqueues it; never sync it by hand until `[ship.phase7.queue_wait_expired]`, a push line, MERGED, a dequeue or any poll exit).",
+        "",
+        behind,
+      ].join("\n");
+
     default:
       return [
         "**Merge/deploy polling**",
@@ -509,6 +583,21 @@ export function routingInstructions(harness: Harness): string {
         "- Read the canonical file the stub names, relative to the plugin root.",
         "- Read cursor/INSTRUCTIONS.md in the installed plugin.",
         "- Slice 1 does not classify the session as cursor, does not run hooks, and does not block a commit.",
+        "",
+        fidelity,
+        "",
+        polling,
+      ].join("\n");
+
+    case "antigravity":
+      return [
+        "**Harness: Antigravity CLI (`agy`)**",
+        "- Entry points: `/soleur:go`, `/soleur:sync`, `/soleur:help`.",
+        "- Skills: Progressive disclosure via `.agents/skills/` or read `plugins/soleur/skills/<name>/SKILL.md` using `view_file` and execute all required phases. Do not invent a synthetic nested tool.",
+        "- Agents: Invoke subagents using `invoke_subagent` (specifying `TypeName`, `Role`, `Prompt`, and `Workspace: 'inherit'`). For custom Soleur domain leaders (`soleur:engineering:cto`, `review-agent`), use `define_subagent` if not pre-registered.",
+        "- Subagent Communication: Use `send_message` with subagent conversation IDs. Do not poll in a loop; wait for reactive message delivery.",
+        "- Questions: Use `ask_question` for decisions and forks instead of freeform chat whenever structured options exist.",
+        "- Read antigravity/INSTRUCTIONS.md in the installed plugin for tool and path mappings.",
         "",
         fidelity,
         "",

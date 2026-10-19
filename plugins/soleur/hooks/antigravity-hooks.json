@@ -1,0 +1,84 @@
+{
+  "description": "Soleur plugin hooks for Antigravity CLI",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^(run_command|Bash|exec)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${SOLEUR_PLUGIN_ROOT}/hooks/browser-snapshot-credential-guard.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "^(run_command|write_to_file|replace_file_content|Bash|Monitor|Write|Edit|MultiEdit|NotebookEdit)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${SOLEUR_PLUGIN_ROOT}/hooks/operator-stage-approval.sh\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "^(run_command|Bash)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${SOLEUR_PLUGIN_ROOT}/hooks/destructive-command-guard.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${SOLEUR_PLUGIN_ROOT}/hooks/antigravity-session-start.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${SOLEUR_PLUGIN_ROOT}/hooks/welcome-hook.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${SOLEUR_PLUGIN_ROOT}/hooks/version-banner.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${SOLEUR_PLUGIN_ROOT}/hooks/stop-hook.sh\""
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${SOLEUR_PLUGIN_ROOT}/hooks/unkept-promise-hook.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}
