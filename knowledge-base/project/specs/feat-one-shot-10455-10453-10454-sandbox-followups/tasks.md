@@ -14,12 +14,12 @@ Write each phase's RED tests before its code. Commit order: Phase 1 first, Phase
 
 ## Phase 1: Demote the outer-wrap canary (#10454)
 
-- [ ] 1.1 RED: absence rows in `ci-deploy.test.sh` and `cat-deploy-state.test.sh`; repo-wide `git grep` absence row
-- [ ] 1.2 `ci-deploy.sh`: delete `run_outer_wrap_canary`, its call, state-file and alias blocks; leave the retirement comment
-- [ ] 1.3 `cat-deploy-state.sh`: delete `outer_wrap_canary_json` and the merge key; update `sandbox-canary-soak.test.sh`
-- [ ] 1.4 Delete `tenant-outer-wrap-soak-5863.sh` and `.test.sh` with their `test-all.sh`, bearer-sweep and both shard-TSV-pair entries in the same commit
-- [ ] 1.5 Keep `--replay-outer`, fixture, classifier, docker-suite arm, `--smoke-outer`; name each kept piece's consumer
-- [ ] 1.6 `canary-probe-set.md` retirement note (dated re-evaluate trigger 2026-12-19 or #9773 Stage 1); `workspace-isolation-canary-probe.md`; ADR-079 addendum (`Ruled by CTO agent, 2026-10-19: DEMOTE`)
+- [x] 1.1 RED: absence rows in `ci-deploy.test.sh` and `cat-deploy-state.test.sh`; repo-wide `git grep` absence row
+- [x] 1.2 `ci-deploy.sh`: delete `run_outer_wrap_canary`, its call, state-file and alias blocks; leave the retirement comment
+- [x] 1.3 `cat-deploy-state.sh`: delete `outer_wrap_canary_json` and the merge key; update `sandbox-canary-soak.test.sh`
+- [x] 1.4 Delete `tenant-outer-wrap-soak-5863.sh` and `.test.sh` with their `test-all.sh`, bearer-sweep and both shard-TSV-pair entries in the same commit
+- [x] 1.5 Keep `--replay-outer`, fixture, classifier, docker-suite arm, `--smoke-outer`; name each kept piece's consumer
+- [x] 1.6 `canary-probe-set.md` retirement note (dated re-evaluate trigger 2026-12-19 or #9773 Stage 1); `workspace-isolation-canary-probe.md`; ADR-079 addendum (`Ruled by CTO agent, 2026-10-19: DEMOTE`)
 - [ ] 1.7 Agent-executed at ship: close #9797 (won't-fix), resolve Sentry issue 152662657, comment on #9773
 
 ## Phase 2: Classifier, notice, directive (#10455 c, e)
