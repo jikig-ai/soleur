@@ -1954,6 +1954,7 @@ AFFECTED_TESTS_SCRIPTS_TRIO_BASELINE_CENSUS_PATHS=(
   "package.json"
   "plugins/"
   "pricing-wireframe.pen"
+  "ruff.toml"
   "scripts/"
   "spike/"
   "test/"

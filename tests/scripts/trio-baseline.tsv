@@ -186,6 +186,9 @@ scripts/followthroughs/infra-config-fatal-channel-7220.sh	WEBHOOK_DEPLOY_SECRET	
 scripts/followthroughs/inngest-soak-6178.sh	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-4
 scripts/followthroughs/inngest-soak-6178.sh	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-4
 scripts/followthroughs/inngest-soak-6178.sh	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-4
+scripts/followthroughs/sandbox-readback-10445.sh	CF_ACCESS_CLIENT_ID	sink	-	#9294:PR-4
+scripts/followthroughs/sandbox-readback-10445.sh	CF_ACCESS_CLIENT_SECRET	sink	-	#9294:PR-4
+scripts/followthroughs/sandbox-readback-10445.sh	WEBHOOK_DEPLOY_SECRET	sink	-	#9294:PR-4
 scripts/followthroughs/tenant-outer-wrap-soak-5863.sh	CF_ACCESS_CLIENT_ID	sink	-	#9294:PR-4
 scripts/followthroughs/tenant-outer-wrap-soak-5863.sh	CF_ACCESS_CLIENT_SECRET	sink	-	#9294:PR-4
 scripts/followthroughs/tenant-outer-wrap-soak-5863.sh	WEBHOOK_DEPLOY_SECRET	sink	-	#9294:PR-4
