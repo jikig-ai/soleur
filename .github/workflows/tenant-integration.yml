@@ -651,7 +651,7 @@ jobs:
             bash scripts/run-migrations.sh --bootstrap=skip
 
       # WORM-vs-cascade contradiction gate (#5372). Scans the LIVE post-apply
-      # schema for tables with an ON DELETE SET NULL/CASCADE FK to public.users
+      # schema for tables whose FKs point into the erasure delete-cone (any parent reachable from auth.users via CASCADE — users roots included)
       # that ALSO carry a raising BEFORE UPDATE/DELETE trigger — the class that
       # aborts the Art-17 account-delete cascade as an opaque GoTrue 500
       # (routine_runs / #5342). STATEMENT-level → ::error:: + exit 1 (breaks

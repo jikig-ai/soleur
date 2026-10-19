@@ -188,8 +188,22 @@ WHERE con.contype = 'f'
   -- WORM-gated tables only: a raising UPDATE/DELETE trigger exists. The
   -- event match fires for write actions; 'r'/'a' rows match any raising
   -- UPDATE/DELETE trigger on the table (marker, not event).
+  -- Column-scoping is load-bearing: a BEFORE UPDATE OF <cols> trigger
+  -- fires only when a listed column changes, and the RI SET NULL/SET
+  -- DEFAULT write touches only the FK columns (con.conkey). Empty tgattr
+  -- = unscoped trigger (fires on every column). Without this clause the
+  -- mig-162 residue (action_sends.message_id SET NULL, whose statement
+  -- trigger lists 11 columns EXCLUDING message_id) false-flags
+  -- cone-write-stmt — caught by the live census before merge.
   AND (
-        (con.confdeltype IN ('n','d') AND (tg.tgtype & 16) = 16)
+        (con.confdeltype IN ('n','d') AND (tg.tgtype & 16) = 16
+         AND (
+           tg.tgattr = ''::int2vector
+           OR EXISTS (
+             SELECT 1 FROM unnest(con.conkey) AS ck(attnum)
+             WHERE ck.attnum::text = ANY (string_to_array(tg.tgattr::text, ' '))
+           )
+         ))
      OR (con.confdeltype = 'c'        AND (tg.tgtype & 8)  = 8)
      OR (con.confdeltype IN ('r','a') AND (tg.tgtype & 24) <> 0)
       )

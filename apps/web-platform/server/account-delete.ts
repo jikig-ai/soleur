@@ -408,10 +408,10 @@ export async function deleteAccount(
 
   // 3.82 Anonymise action_sends rows for this user BEFORE anonymise_scope_grants
   //      (migration 052, PR-H #4077). FK action_sends.user_id → users.id is ON
-  //      DELETE RESTRICT, AND action_sends.grant_id → scope_grants.id is also
-  //      RESTRICT — so anonymise_action_sends MUST land BEFORE anonymise_scope_grants
-  //      (which we keep below) and BEFORE auth.admin.deleteUser. The RPC bypasses
-  //      the action_sends WORM trigger via SET LOCAL session_replication_role.
+  //      DELETE RESTRICT, AND action_sends.grant_id → scope_grants.id is a bare
+  //      REFERENCES (NO ACTION) — so anonymise_action_sends MUST land BEFORE
+  //      anonymise_scope_grants (which we keep below) and BEFORE auth.admin.deleteUser.
+  //      The RPC bypasses the action_sends WORM trigger via SET LOCAL app.worm_bypass.
   //      Failure here is FATAL on the same reasoning as 3.85: skipping it
   //      guarantees auth-delete fails, leaving a half-deleted user (GDPR Art. 17
   //      violation). Idempotent.

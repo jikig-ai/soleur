@@ -20,3 +20,14 @@
 - DONE: test.sh rewritten (12 tests, 9-col class|tbl|trg|fn|fk|action|level|timing|parent schema) + gate rewritten (del CTE, 4 classes, DISTINCT ON dedup, silent r/a-to-roots carve, per-class copy). Fixture: 26/26 GREEN.
 - TODO: (a) live dev census via extended query vs audit set; (b) file 2 dormant-anchor issues + all-tables follow-up, link in warning copy? (warning text says "file a tracking issue" generically — plan 2.2 wanted links); (c) ride-along account-delete.ts:411 RESTRICT→NO ACTION comment; (d) tenant-integration.yml ~654 comment wording; (e) CODEOWNERS pin if approved (CPO recommended yes); (f) commit+push → review panel → fix-round → ship → merge → postmerge → DONE.
 - Pins: error copy "users with rows" + transitive remediation (done); action↔event match preserved (done); DISTINCT ON per-FK dedup (done); dormant warns r/a subclass emphasis (done via copy).
+
+### Column-scoping fix (post-compaction anchor)
+- Live census caught cone-write-stmt FALSE-POSITIVE on action_sends.message_id (mig-162 residue: statement trigger excludes message_id). Fixed: 'n'/'d' event match now requires `tg.tgattr = ''::int2vector OR conkey ∩ tgattr` — column-scoped UPDATE OF triggers only match when they cover the FK column.
+- NEXT: re-run /tmp/extended-census.sql regenerated from the script + fixture suite; expect cone-write-row for message_id via the row guard, ZERO cone-refuse/cone-write-stmt. Then: file 3 issues (dsar job_id anchor, action_sends.grant_id anchor, all-tables cone-scan follow-up), ride-alongs (account-delete.ts:411 comment, tenant-integration.yml:654 wording), CODEOWNERS pin (CPO rec'd yes — needs operator-scope ruling, default YES per recommendation), commit+push → 3-seat review → fix-round → ship/merge → postmerge → DONE.
+
+### Pre-review state (commit-ready)
+- Gate + test GREEN (26/26), tgattr column-scoping fix verified vs dev census (0 blocking rows, 19 dormant, 4 cone-write-row residue).
+- Issues filed: #10573 (dsar job_id), #10574 (action_sends.grant_id), #10575 (all-tables scan — CPO-conditional-unconditional).
+- Ride-alongs done: account-delete.ts:410-414 (grant_id NO ACTION + app.worm_bypass), tenant-integration.yml:654 wording.
+- CODEOWNERS pin: deferred (operator-scope row — CPO recommended; noted for PR body).
+- NEXT: commit+push → 3-seat review → ADR-267 fix-round → ship (PR body w/ census output + changelog + Closes #10379, semver:patch) → ready → merge-queue → postmerge verify → DONE.
