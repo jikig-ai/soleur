@@ -5430,12 +5430,14 @@ s4_b7_step() { # <tag> <body> <mode> <said> <NAME=value>...: one of the eight ex
   else row "S4 inline trim $tag: the call-site trim, an interior/non-ASCII refusal or the untrimmed key" fail "$S4_B7_BAD"; fi
 }
 S4_B7_REL=("${S4_WH_BASE[@]}" "${S4_REL_ENV[@]}")
+mapfile -t S4_PEER_JOBENV < <(s4_jobenv "$REPO_ROOT/$S4_WFR" verify-peer-deploy)
+S4_B7_PEERREL=("${S4_WH_BASE[@]}" "${S4_PEER_JOBENV[@]}" VERSION=1.2.3)
 S4_B7_BASE_DEPLOY=("${S4_B7_REL[@]}" WEB_HOST_PRIVATE_IPS=10.0.1.10,10.0.1.11)
 S4_B7_BASE_FAILMAIL=(MIRROR_VERIFIED=true RUN_URL=https://example.invalid/run VERSION=1.2.3 SHIM_PROFILE=generic)
 s4_b7_step release-lock-probe "$S4/b-r8.sh" wh-empty 'Pre-rerun probe: no in-flight deploy (exit_code=0)' "${S4_WH_BASE[@]}" "${S4_REL_JOBENV[@]}" 'SHIM_STATUS_BODY={"exit_code":0}'
 s4_b7_step release-deploy "$S4/b-r9.sh" wh-post 'Deploy initiated (HTTP 202)' "${S4_B7_BASE_DEPLOY[@]}"
 s4_b7_step release-verify "$S4/b-r10.sh" wh-empty 'ci-deploy.sh completed successfully for v1.2.3' "${S4_B7_REL[@]}" STATUS_POLL_MAX_ATTEMPTS=3 STATUS_POLL_INTERVAL_S=0 'SHIM_STATUS_BODY={"exit_code":0,"reason":"ok","tag":"v1.2.3"}'
-s4_b7_step release-peer-verify "$S4/b-r10p.sh" wh-empty 'All expected peers reported v1.2.3 deploy completion' "${S4_B7_REL[@]}" STATUS_POLL_MAX_ATTEMPTS=3 STATUS_POLL_INTERVAL_S=0 'SHIM_STATUS_BODY={"exit_code":0,"reason":"ok","tag":"v1.2.3","peers":{"10.0.1.11":{"exit_code":0,"reason":"ok","tag":"v1.2.3"}}}'
+s4_b7_step release-peer-verify "$S4/b-r10p.sh" wh-empty 'All expected peers reported v1.2.3 deploy completion' "${S4_B7_PEERREL[@]}" STATUS_POLL_MAX_ATTEMPTS=3 STATUS_POLL_INTERVAL_S=0 'SHIM_STATUS_BODY={"exit_code":0,"reason":"ok","tag":"v1.2.3","peers":{"10.0.1.11":{"exit_code":0,"reason":"ok","tag":"v1.2.3"}}}'
 s4_b7_step release-deploy-failed-email "$S4/b-r11.sh" resend-hdr 'Deploy-failure email sent to ops@jikigai.com (HTTP 200)' "${S4_B7_BASE_FAILMAIL[@]}"
 s4_b7_step release-outcome-email "$S4/b-r12.sh" resend-gho '' CLASSIFIER=failure FAILED=live-verify 'FAILED_HTML=<li>live-verify</li>' R_DEPLOY=failure TAG=v1.2.3 VERSION=1.2.3 RUN_URL=https://example.invalid/run SHIM_PROFILE=generic
 s4_b7_step deploy-inngest-trigger "$S4/b-r3t.sh" wh-post 'initiated (HTTP 202)' "${S4_WH_BASE[@]}" TAG=v1.2.3
