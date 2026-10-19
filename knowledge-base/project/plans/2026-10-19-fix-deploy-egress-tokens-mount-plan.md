@@ -502,7 +502,7 @@ lands and the pre-merge proofs below are recorded.
 8. **Flipped inline after the second-reviewer gate DISSENTed (cost-of-filing, 1 file each):** `.gw-target` is ignored
    unless its host is in 172.31.100-103.0/24 (`GW_SUBNET_RE` in `egress-forwarder.ts`), and token-file paths are scrubbed
    from the three `rmSync` error reports (`withoutTokenPath`), each with a RED-first test in `web-egress.test.ts`.
-9. **Deferred (one checklist tracker, R14, date trigger):** the agent-visible 'web access enabled but unavailable'
+9. **Deferred (one checklist tracker #10586, R14, date trigger 2026-11-02; closure means re-evaluate, not done):** the agent-visible 'web access enabled but unavailable'
    addendum, the missing Sentry alert rule for `web-egress-forwarder-spawn`, the toggle's missing runtime state, hashed
    token file names together with the stale `egress-gateway-bootstrap.sh` comment (gateway artifact hash), and extending
    the checker's CENSUS gaps (control flow, `docker rename|start|restart|update` verbs, indirect docker word, start
