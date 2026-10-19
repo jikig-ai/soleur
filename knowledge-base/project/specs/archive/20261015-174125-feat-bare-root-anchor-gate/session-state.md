@@ -58,3 +58,9 @@
 - Semver label to set: semver:patch (machinery fix, no new user-facing component? — new hook+marker is a feature-ish addition; plan title says chore(machinery); choose semver:patch).
 - Remaining: ship phases (PR body/changelog, ready, CI watch, squash auto-merge, postmerge) then <promise>DONE</promise>.
 - Test-design seat b880e82a still running — fold findings if it lands pre-merge.
+
+## Ship Phase (merge poll)
+- HEAD bf33cc6be8 (merged origin/main — fixes stale-test flake: my old action-sends-worm test vs deployed mig 162). tenant-integration now SUCCESS.
+- Only remaining red: test-scripts (3/8) flake `test-all-orphan-log-retention` (reap timing) — rerun requested.
+- Auto-merge armed; awaiting shard rerun + `test` aggregate, then MERGED → postmerge → DONE.
+- Issues filed: #10391 #10392 #10395 #10407 (tenant break root-caused to #10385 mig-162 deploy lag; resolved by main sync).
