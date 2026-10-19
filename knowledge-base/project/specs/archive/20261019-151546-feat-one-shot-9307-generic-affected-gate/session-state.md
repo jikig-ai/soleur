@@ -128,3 +128,9 @@ PENDING seats: pattern-recognition (391b64d9), test-design (f947202a).
 - compound: 2 learnings committed (hook-workdir false-positive, literal-NUL fail-open)
 - gate3 log /tmp/soleur-9307/gate3.log — was queued pos 2; check GATE_RC at ship
 - NEXT: soleur:ship — ready PR, wait CI, merge (auto-close scan: body uses Ref #9307), postmerge verify, cleanup-merged, then <promise>DONE</promise>
+
+## CI state (2026-10-19 ~15:25)
+- Run 39258834326: FAILING checks = lint-bot-statuses, rule-body-lint (green locally w/ --base origin/main), test-scripts 2-7/8, test-webplat 2/2; `test` aggregate still pending at snapshot
+- main prior runs green; newest main commit (dc97003281) run still in-flight — cannot yet attribute to our diff vs main breakage
+- logs unavailable until run completes; watcher ba681fd9 exits on completion with --log-failed tail
+- next: diagnose failures → fix or attribute → re-run → merge --squash --auto → postmerge → DONE
