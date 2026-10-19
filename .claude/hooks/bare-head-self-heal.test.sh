@@ -454,8 +454,12 @@ case "$line3" in
   *) bad "branch line reads [$line3]" ;;
 esac
 eq "marker present exactly once" "1" "$(count_marker "$CTX")"
-last=$(tail -n 1 <<<"$CTX")
-eq "marker is the trailing line" "$MARKER_GONE" "$last"
+# #10383: the bare-root CWD block now trails the heal marker in this envelope (the
+# fixture's root is a bare root, so both arms fire). The ordering contract that
+# matters here is marker-after-alarm-block, so strip the CWD block lines before
+# taking the tail.
+last=$(printf '%s\n' "$CTX" | grep -v '^SOLEUR_BARE_ROOT_CWD \|^\[bare-root-cwd\] ' | tail -n 1)
+eq "marker is the trailing line before the CWD block" "$MARKER_GONE" "$last"
 case "$CTX" in
   *"[tmpfs-guard] /tmp alarm, most recent: 2026-01-01T00:00:00Z fixture alarm"*) ok "the alarm block is present, so the marker's position AFTER it is observable" ;;
   *) bad "the alarm block is missing: the ordering assertion above is vacuous" ;;
