@@ -192,3 +192,34 @@ compensating proof (the committed manifest covers only the 74 `^(hr|wg)-` bodies
 so it could not have proven the other 27 unchanged). Splitting the file move and
 the constant into separate commits would have been worse: every gated body would
 read as DELETED and demand ~74 WORM acks.
+
+## Amendment — server-derived additive edit (2026-10-19, #10552)
+
+**Who authors the diff changed.** The compound-promote proposer used to ask the model for a
+unified diff. Three consecutive weekly runs each failed `git apply` in a different way (no hunk,
+wrong hunk counts, unparseable hunk header) because the model was asked for line-numbered output
+about a file it was never shown, so no proposal ever reached the additive-boundary gates this ADR
+defines. The model now returns an anchor line and the lines to insert; the server splices them into
+the HEAD text of an allowlisted target and derives the diff with git. The additive boundary is
+therefore **additive by construction at the point the diff is authored**, and is still asserted in
+code (`isAdditiveDiff` refuses any removed line as `edit-derive-failed`) and, unchanged, by
+`diffRemovesHardRule` and the shrink floor downstream.
+
+**Two granularities, stated so they are not confused.** The boundary this ADR gates is at the
+rule-set level (no existing rule body is weakened or removed). The new construction is at the line
+level (nothing but insertions can be produced). The line-level property implies the rule-set one for
+the edits the cron can now make; it does not replace the body-weakening gate for human edits.
+
+**Compensating controls on model-authored text.** Because the inserted text lands in the
+always-loaded corpus, it is constrained in code rather than by prompt: printable ASCII only,
+caps of 20 lines and 500 characters, no credential-shaped substring, no bare `---`, rule bullets
+only for `AGENTS.rules.md`, a model cannot mint an `hr-` rule, and an id must be new. A `SKILL.md`
+anchor inside the frontmatter or a fenced block is refused.
+
+**New refusal members** (`EDIT_REFUSAL_REASONS`, seven): `edit-target-unreadable`,
+`edit-target-too-large`, `edit-invalid`, `edit-anchor-not-found`, `edit-anchor-ambiguous`,
+`edit-target-duplicate`, `edit-derive-failed`. `diff-underivable-apply` is retained for a derived
+diff that git then rejects, which is a server defect. The marker field set is unchanged.
+
+**C4.** No change: the same Inngest function calls the same external systems. The "C4 views
+deferred" bullet above stays accurate.

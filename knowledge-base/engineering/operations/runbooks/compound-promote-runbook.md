@@ -122,6 +122,31 @@ Removing the body from `AGENTS.rules.md` (and its pointer from `AGENTS.md`) is a
 human edit in the same PR — `scripts/rule-prune.sh` never edits the corpus — and
 the linter rejects any future reintroduction of the retired ID.
 
+## How a proposal is drafted (#10552)
+
+The weekly run is two model calls per cluster, not one. Phase 1 clusters the learnings and names a
+`target_path` (and is told which targets are small enough to edit). Phase 2 shows the model the REAL
+target file and asks for an anchor line plus the lines to insert after it. The SERVER validates the
+answer, splices it into the HEAD text and derives the unified diff with git, so the model never writes
+a hunk header. Everything after that (`checkDiffPaths`, the hard-rule and byte-budget gates, the shrink
+floor, the draft PR) is unchanged.
+
+Before this change three consecutive weekly runs each failed `git apply` in a different way and no PR
+was ever opened; the refusal enum is in `betterstack-log-query.md` (seven `edit-*` reasons).
+
+What a streak means when you read the weekly marker:
+
+- **`edit-anchor-not-found` / `edit-anchor-ambiguous` / `edit-invalid`** every week: the model is not
+  copying an anchor verbatim or is producing unusable lines. Model-side, not a server fault; the probe
+  keeps the tracker open. Read the Sentry `cause` tag before touching the prompt.
+- **`edit-target-too-large`**: the target exceeds 120,000 bytes. It clears as the largest skills are
+  shortened (#10551).
+- **`skill-conflict-guard`** every week: any open PR that mentions `plugins/soleur/skills` blocks a
+  skill-targeting cluster, and the guard posts the proposed diff as a comment on that PR. `AGENTS.rules.md`
+  clusters are unaffected. This guard had never run in production before this change.
+- **`edit-derive-failed` or `diff-underivable-apply`**: a SERVER defect (a derived diff is additive by
+  construction). Both go to Sentry; the follow-through probe exits 1.
+
 ## Sharp edges
 
 - **`.claude/.rule-incidents.jsonl` is gitignored.** The cron CANNOT read it.
