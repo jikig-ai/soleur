@@ -9,8 +9,8 @@ Write each phase's RED tests before its code. Commit order: Phase 1 first, Phase
 - [ ] 0.2 `io_uring_setup` blocked by the container profile? If not, can ENOSYS be added to the variant cheaply? (Phase 4 go/no-go)
 - [ ] 0.3 Logs-alert count and free-tier cap; is there a Sentry rule on `op=sandbox-canary`? (Phase 3 fallback decision)
 - [ ] 0.4 Heartbeat period floor (`/fail` support is CONFIRMED by the vendor docs, 2026-10-19; append `/fail` to the host's own heartbeat URL); prod container memory headroom for one SDK CLI spawn; `cloud-init.yml` user_data size headroom (Phase 5 go/no-go)
-- [ ] 0.5 Does the tool_result observer's `block` carry an error flag? Helper step order: which of the 14 steps run before the worker fork (Phase 2)
-- [ ] 0.6 `bash plugins/soleur/test/c4-count-parity.test.sh` green baseline; list the five callers of `buildAgentSandboxConfig`/`buildAgentEnv`
+- [x] 0.5 Does the tool_result observer's `block` carry an error flag? Helper step order: which of the 14 steps run before the worker fork (Phase 2)
+- [x] 0.6 `bash plugins/soleur/test/c4-count-parity.test.sh` green baseline; list the five callers of `buildAgentSandboxConfig`/`buildAgentEnv`
 
 ## Phase 1: Demote the outer-wrap canary (#10454)
 
@@ -24,10 +24,10 @@ Write each phase's RED tests before its code. Commit order: Phase 1 first, Phase
 
 ## Phase 2: Classifier, notice, directive (#10455 c, e)
 
-- [ ] 2.1 RED tests: classifier (13 steps + userns, EACCES/EINVAL unclassified, tail unclassified, mixed/multi-line/non-error/`waitpid` no notice, allowlist subset of vendored binary with non-skipped floor)
-- [ ] 2.2 `sandbox-startup-classifier.ts`: `HELPER_STEPS`, `helper_step_eperm`, `isPreExecSandboxDenialOutput`
-- [ ] 2.3 `cc-dispatcher.ts`: mirror first, then notice rewrite behind the autonomous gate; `BASH_UNAVAILABLE_PROMPT_DIRECTIVE` (raw-line keyed, idempotent-only retry once, 403 carve-out)
-- [ ] 2.4 `betterstack-logs-alerts.tf` IN list; `sandbox-alerts.test.sh` both code needles; `betterstack-log-query.md` row
+- [x] 2.1 RED tests: classifier (15 steps + userns [16 measured, not 14], EACCES/EINVAL unclassified, tail unclassified, mixed/multi-line/non-error/`waitpid` no notice, allowlist subset of vendored binary with non-skipped floor)
+- [x] 2.2 `sandbox-startup-classifier.ts`: `HELPER_STEPS`, `helper_step_eperm`, `isPreExecSandboxDenialOutput`
+- [x] 2.3 `cc-dispatcher.ts`: mirror first, then notice rewrite behind the autonomous gate; `BASH_UNAVAILABLE_PROMPT_DIRECTIVE` (raw-line keyed, idempotent-only retry once, 403 carve-out)
+- [x] 2.4 `betterstack-logs-alerts.tf` IN list; `sandbox-alerts.test.sh` both code needles; `betterstack-log-query.md` row
 
 ## Phase 3: Deploy-time SDK Bash smoke (#10453)
 

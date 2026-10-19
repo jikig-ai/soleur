@@ -118,6 +118,33 @@ header prescribes.
 - **Halts 4.6 to 4.12.** User-Brand Impact valid (`single-user incident`); Observability fields present, probe verb allowlisted, literal expected output, credential-declared; no PAT-shaped variable; no UI-surface file (so no `.pen` is required); Encryption Posture present with an exception block carrying `tracking_issue` and `expires_on`; Guard Contract lint green (5 guards); Scope Check has exactly one live section and no BLOCKED marker.
 - **Propagation.** `tasks.md` carries the 900/900 heartbeat, the flag, the cut trigger and the `/fail` resolution.
 
+### Work-phase measurements: Phase 0.5 and 0.6 (2026-10-19)
+
+- **Observer error flag.** The dispatcher's `onToolResult` block was `{ toolUseId, command, output }`: `extractBashToolResults`
+  in `soleur-go-runner.ts` dropped the SDK's `tool_result.is_error`. The real SDK does set it for the helper failure
+  (`sandbox-wrapped-command-runtime.test.ts` CONTROL row asserts `isError === true` on the real tool_result). Resolution: the
+  runner now forwards `isError` (additive, optional field; `false` when absent) and the notice predicate requires it, so the
+  "limit to the single-line match" fallback was NOT needed and a non-error result is never rewritten.
+- **Helper step census (corrects "14 steps").** The vendored `claude` binary (claude-agent-sdk 0.3.284; identical in claude-code
+  2.1.293) carries 17 `apply-seccomp: ...` strings: 16 `<step>` literals that take `: <strerror>`, plus the errno-less
+  `observe sendmsg failed`. The plan's list wrongly included `seccomp(unix-block)` (an SDK log label, not a helper line) and
+  missed `fork`, `unshare(CLONE_NEWPID|CLONE_NEWNS)` and `write /proc/self/setgroups (nested userns is capability-restricted; caller
+  must provide CAP_SYS_ADMIN)`. Format confirmed by forcing each step to fail with EPERM under an `LD_PRELOAD` interposer:
+  `apply-seccomp: <step>: Operation not permitted`.
+- **Runtime order (interposer log, not source recall).** helper: `unshare(NEWPID|NEWNS)` attempt, `unshare(NEWUSER)`, writes
+  (setgroups, uid_map, gid_map), `unshare(NEWPID|NEWNS)` after userns, `fork`; PID-ns init: `prctl(PR_SET_DUMPABLE)`,
+  `mount(MS_PRIVATE)`, `mount(/proc)`, `prctl(PR_CAP_AMBIENT_CLEAR_ALL)`, `fork(worker)`; worker: `prctl(PR_SET_NO_NEW_PRIVS)`,
+  `prctl(PR_SET_SECCOMP)`, `execvp`; both waiters print `waitpid` after the command ran. Pre-fork subset = the 11 steps before
+  `fork(worker)`; the other 5 (`fork(worker)`, NO_NEW_PRIVS, SET_SECCOMP, `execvp`, `waitpid`) are classified (they page) but never
+  rewritten. Guard 2 floors therefore use 16/17, not 14/15.
+- **Callers (corrects "five callers").** Direct call sites of `buildAgentSandboxConfig`/`buildAgentEnv` in `server/`: only
+  `agent-runner-query-options.ts` (`buildAgentEnv` L302, `buildAgentSandboxConfig` L366), reached through
+  `buildAgentQueryOptions` from `agent-runner.ts` (L2115) and `cc-dispatcher.ts` (L3093), plus the dev script
+  `scripts/dev-probe-destroy-ask.ts`. Direct builder callers outside `server/`: `scripts/sandbox-canary.mjs` (config, L1614) and
+  `scripts/plugin-root-sandbox-propagation-probe.mjs` (both). `soleur-go-runner.ts` and `agent-outer-wrap.ts` only mention them in
+  comments or types. Phase 4's call-site census should assert these, not the plan's five names.
+- **Baseline.** `bash plugins/soleur/test/c4-count-parity.test.sh` passes (`Failed: 0`).
+
 ## Research Reconciliation — Spec vs. Codebase
 
 | Brief claim | Reality (checked 2026-10-19) | Plan response |
