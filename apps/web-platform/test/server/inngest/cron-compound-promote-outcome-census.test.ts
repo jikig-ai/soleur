@@ -670,7 +670,7 @@ describe("Guard 3b (#10552) -- replay safety of the draft step", () => {
   beforeEach(() => {
     expect.hasAssertions();
   });
-  const FORBIDDEN = ["refusals.push(", "refusalDetail.push(", "clustersOpened++"];
+  const FORBIDDEN = ["refusals.push(", "refusalDetail.push(", "clustersOpened++", "draftedTargets.add("];
 
   it("no handler-scope accumulator is mutated INSIDE the memoized draft callback", () => {
     const inside = draftStepWindow(readFileSync(SRC_PATH, "utf-8"));
@@ -692,13 +692,22 @@ describe("Guard 3b (#10552) -- replay safety of the draft step", () => {
     expect(FORBIDDEN.some((m) => draftStepWindow(mutated).includes(m))).toBe(true);
   });
 
+  it("mutation row: `draftedTargets.add` moved INTO the draft callback is caught (it would not replay)", () => {
+    const src = readFileSync(SRC_PATH, "utf-8");
+    const anchor = 'return { kind: "drafted", diff: result.diff };';
+    expect(src).toContain(anchor);
+    const mutated = src.replace(anchor, `draftedTargets.add(proposed.target_path);\n        ${anchor}`);
+    expect(mutated).not.toBe(src);
+    expect(FORBIDDEN.some((m) => draftStepWindow(mutated).includes(m))).toBe(true);
+  });
+
   it("every exit of the draft callback returns a DraftOutcome carrying only kind + diff/reason (AC6)", () => {
     const inside = draftStepWindow(readFileSync(SRC_PATH, "utf-8"));
     expect(inside).not.toMatch(/\breturn;\s*$/m);
     const returns = inside.match(/\breturn \{[^}]*\}/g) ?? [];
     expect(returns.length).toBeGreaterThanOrEqual(2);
     for (const r of returns) {
-      expect(r, r).toMatch(/^return \{ kind: "(drafted", diff: [A-Za-z_.]+|refused", reason: [A-Za-z_."-]+) \}$/);
+      expect(r, r).toMatch(/^return \{ kind: "(drafted", diff: result\.diff|refused", reason: (result\.reason|"[a-z-]+")) \}$/);
     }
     // No target-file text in a step return value (it would be persisted step state).
     expect(inside).not.toMatch(/\breturn \{[^}]*\b(base|text)\b[^}]*\}/);

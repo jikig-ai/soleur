@@ -8,6 +8,7 @@
 // replaces `_cron-shared` and `@octokit/core` wholesale, which would clobber the real
 // imports the pure-function suites rely on (vitest hoists every vi.mock to file scope).
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -53,7 +54,7 @@ vi.mock("@/server/compound-promote-marker", async (importOriginal) => ({
 
 import { reportSilentFallback } from "@/server/observability";
 import { cronCompoundPromoteHandler } from "@/server/inngest/functions/cron-compound-promote";
-import { gitFixture } from "../../../../../plugins/soleur/test/lib/git-fixture-env";
+import { gitFixture, gitFixtureEnv } from "../../../../../plugins/soleur/test/lib/git-fixture-env";
 
 const L = (n: number) => `knowledge-base/project/learnings/l${n}.md`;
 const SKILL = "plugins/soleur/skills/alpha/SKILL.md";
@@ -121,7 +122,14 @@ beforeEach(() => {
   h.safeCommit.mockResolvedValue({ status: "committed" });
 });
 
-type Cl = { tier: "skill" | "agents-core"; target_path: string; source_learnings: string[]; rationale: string };
+type Cl = {
+  tier: "skill" | "agents-core";
+  target_path: string;
+  source_learnings: string[];
+  rationale: string;
+  /** A model-supplied field the schema no longer offers; the server must ignore it. */
+  proposed_diff_unified?: string;
+};
 const AGENTS_CLUSTER: Cl = {
   tier: "agents-core",
   target_path: "AGENTS.rules.md",
@@ -155,12 +163,16 @@ function stubModel(clusters: Cl[], edits: Record<string, unknown>) {
   });
 }
 
-async function run() {
+async function run(memo?: Map<string, unknown>) {
   const names: string[] = [];
   const step = {
     run: async <T,>(name: string, cb: () => Promise<T>): Promise<T> => {
       names.push(name);
-      return cb();
+      // Inngest serves a completed step from memo WITHOUT re-entering its callback.
+      if (memo?.has(name)) return memo.get(name) as T;
+      const v = await cb();
+      memo?.set(name, v);
+      return v;
     },
   };
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -197,12 +209,23 @@ describe("T15 (#10552): the reported bug -- a proposal now reaches the apply ste
       expect(names.indexOf(`apply-and-pr-${hash8}`)).toBeGreaterThan(names.indexOf(hashStep));
     }
     expect(names.filter((n) => n.startsWith("draft-edit-"))).toHaveLength(2);
+    // CTO ruling (Fork 1): an AGENTS.rules.md draft is single-file, so the corpus lint
+    // (lint-rule-ids: every body needs an AGENTS.md pointer) is red until a reviewer adds it.
+    // The PR body is where the reviewer acts, so it names the exact slug to add. A skill draft
+    // carries no such line.
+    const bodies = h.safeCommit.mock.calls.map((c) => (c[0] as { prBody: string }).prBody);
+    const agentsBody = bodies.find((b) => b.includes("cq-small-diffs"));
+    const skillBody = bodies.find((b) => !b.includes("cq-small-diffs"));
+    expect(agentsBody).toContain("lint-rule-ids");
+    expect(agentsBody).toContain("`- [id: cq-small-diffs]`");
+    expect(skillBody).toBeDefined();
+    expect(skillBody).not.toContain("lint-rule-ids");
   });
 });
 
 describe("a refused draft is a counted, named refusal that skips the apply step", () => {
   it("a model anchor that is not in the file -> edit-anchor-not-found, no commit, no apply step, mirrored to Sentry", async () => {
-    stubModel([AGENTS_CLUSTER], { "RATIONALE-AGENTS": { insert_after_line: "- Not in the file", new_lines: ["- Rule [id: cq-r]. x"] } });
+    stubModel([AGENTS_CLUSTER], { "RATIONALE-AGENTS": { insert_after_line: "- Not in the file", new_lines: ["- Rule [id: cq-rule-x]. x"] } });
     const { last, names } = await run();
     expect(last).toMatchObject({ status: "completed", clusters_proposed: 1, clusters_opened: 0, refusals: ["edit-anchor-not-found"] });
     expect(h.safeCommit).not.toHaveBeenCalled();
@@ -211,10 +234,26 @@ describe("a refused draft is a counted, named refusal that skips the apply step"
     expect(detail).toHaveLength(1);
     expect(detail[0].reason).toBe("edit-anchor-not-found");
     expect(detail[0].cluster_hash).toMatch(/^[0-9a-f]{64}$/);
+    // MESSAGE path with TAGS: on the Error path the pino mirror captures the same Error first
+    // and Sentry drops the tagged capture, so `op`/`cause` never arrive (see anthropic-credit.ts).
     expect(reportSilentFallback).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ op: "draft-edit-refused" }),
+      null,
+      expect.objectContaining({
+        op: "draft-edit-refused",
+        tags: { reason: "edit-anchor-not-found", cause: "absent" },
+      }),
     );
+  });
+
+  it("refused-then-good: a REFUSED first draft does not block a later valid cluster on the same target", async () => {
+    const second: Cl = { ...AGENTS_CLUSTER, source_learnings: [L(5), L(6)], rationale: "RATIONALE-AGENTS-2" };
+    stubModel([AGENTS_CLUSTER, second], {
+      "RATIONALE-AGENTS-2": GOOD_AGENTS_EDIT,
+      "RATIONALE-AGENTS": { insert_after_line: "- Not in the file", new_lines: ["- Rule [id: cq-rule-x]. x"] },
+    });
+    const { last } = await run();
+    expect(last).toMatchObject({ clusters_proposed: 2, clusters_opened: 1, refusals: ["edit-anchor-not-found"] });
+    expect(h.safeCommit).toHaveBeenCalledTimes(1);
   });
 
   it("T19: a second cluster on an already-drafted target is edit-target-duplicate and the model is NOT called for it", async () => {
@@ -246,5 +285,80 @@ describe("T16 (#10552): a phase-2 API error is a loud run error, not a refusal",
     const { last } = await run();
     expect(last).toMatchObject({ status: "error" });
     expect(h.safeCommit).not.toHaveBeenCalled();
+  });
+});
+
+describe("the derived diff is the ONLY diff (a model-supplied proposed_diff_unified is ignored)", () => {
+  it("a hostile diff in the phase-1 answer neither applies nor changes the outcome", async () => {
+    // Valid against the fixture and DESTRUCTIVE: it deletes a rule line. If it won, the shrink
+    // floor would refuse (`corpus-shrink-refused`); the derived additive diff opens cleanly.
+    const remoteGit = gitFixture(remoteDir);
+    writeFileSync(join(remoteDir, "AGENTS.rules.md"), AGENTS_RULES.replace("- Keep it small [id: cq-keep-small]. Because.\n", ""));
+    const hostile = remoteGit(["diff"]);
+    remoteGit(["checkout", "--", "."]);
+    expect(hostile).toContain("-- Keep it small");
+    execFileSync("git", ["apply", "--check"], { cwd: remoteDir, input: hostile, env: gitFixtureEnv(remoteDir) });
+    stubModel([{ ...AGENTS_CLUSTER, proposed_diff_unified: hostile }], { "RATIONALE-AGENTS": GOOD_AGENTS_EDIT });
+    const { last } = await run();
+    expect(last).toMatchObject({ clusters_opened: 1, refusals: [] });
+  });
+});
+
+describe("model-supplied source_learnings never reach the commit trailers or PR body unless they are corpus paths", () => {
+  it("a newline-bearing / unknown path is dropped before the cluster hash, the trailer and the PR body", async () => {
+    const evil = "knowledge-base/project/learnings/x.md\nCo-Authored-By: Mallory <m@example.test>";
+    stubModel([{ ...AGENTS_CLUSTER, source_learnings: [L(1), evil, "../../etc/passwd", L(2)] }], {
+      "RATIONALE-AGENTS": GOOD_AGENTS_EDIT,
+    });
+    const { last } = await run();
+    expect(last).toMatchObject({ clusters_opened: 1, refusals: [] });
+    const cfg = h.safeCommit.mock.calls[0][0] as { commitBody: string; prBody: string };
+    expect(cfg.commitBody).toContain(`Source-Learnings: ${L(1)},${L(2)}\n`);
+    expect(cfg.commitBody).not.toContain("Mallory");
+    expect(cfg.prBody).not.toContain("Mallory");
+    expect(cfg.prBody).not.toContain("etc/passwd");
+  });
+
+  it("a cluster whose every source learning is unknown is refused edit-invalid and never calls the model", async () => {
+    stubModel([{ ...AGENTS_CLUSTER, source_learnings: ["../../a", "../../b"] }], { "RATIONALE-AGENTS": GOOD_AGENTS_EDIT });
+    const { last } = await run();
+    expect(last).toMatchObject({ clusters_opened: 0, refusals: ["edit-invalid"] });
+    expect(phase2Calls()).toHaveLength(0);
+  });
+});
+
+describe("replay: a resumed run reproduces the same marker from memoized steps", () => {
+  it("the duplicate-target refusal survives a full replay and the model is not called again", async () => {
+    const second: Cl = { ...AGENTS_CLUSTER, source_learnings: [L(5), L(6)], rationale: "RATIONALE-AGENTS-2" };
+    stubModel([AGENTS_CLUSTER, second], { "RATIONALE-AGENTS-2": GOOD_AGENTS_EDIT, "RATIONALE-AGENTS": GOOD_AGENTS_EDIT });
+    const memo = new Map<string, unknown>();
+    const first = await run(memo);
+    const callsAfterFirst = h.post.mock.calls.length;
+    const again = await run(memo);
+    expect(first.last).toMatchObject({ clusters_opened: 1, refusals: ["edit-target-duplicate"] });
+    // Same accumulators from memoized returns only: draftedTargets was rebuilt in the handler body.
+    expect(again.last).toMatchObject({ clusters_opened: 1, refusals: ["edit-target-duplicate"] });
+    expect(h.post.mock.calls.length).toBe(callsAfterFirst);
+    expect(h.safeCommit).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("headroom is divided across the clusters still to draft", () => {
+  const headroomOf = (call: unknown[]): number =>
+    Number(/headroom for this edit: (\d+) bytes/.exec((call[0] as { messages: Array<{ content: string }> }).messages[0].content)?.[1]);
+
+  it("the first of two AGENTS-targeted drafts is offered about half of what a lone draft is", async () => {
+    stubModel([AGENTS_CLUSTER], { "RATIONALE-AGENTS": GOOD_AGENTS_EDIT });
+    await run();
+    const lone = headroomOf(phase2Calls()[0]);
+    h.post.mockReset();
+    h.safeCommit.mockClear();
+    const second: Cl = { ...AGENTS_CLUSTER, source_learnings: [L(5), L(6)], rationale: "RATIONALE-AGENTS-2" };
+    stubModel([AGENTS_CLUSTER, second], { "RATIONALE-AGENTS-2": GOOD_AGENTS_EDIT, "RATIONALE-AGENTS": GOOD_AGENTS_EDIT });
+    await run();
+    const first = headroomOf(phase2Calls()[0]);
+    expect(lone).toBeGreaterThan(1000);
+    expect(first).toBeLessThanOrEqual(Math.ceil(lone / 2));
+    expect(first).toBeGreaterThan(lone / 2 - 2);
   });
 });

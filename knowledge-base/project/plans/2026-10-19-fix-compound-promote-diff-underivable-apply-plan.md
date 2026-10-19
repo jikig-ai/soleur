@@ -263,7 +263,7 @@ All four forks were delegated to `soleur:engineering:cto` (no AskUserQuestion). 
 3. **Cost markers.** `postAnthropicMessage` derives the marker `source` from `markerSource`
    (`cron:<markerSource>`, `_cron-shared.ts`) and the `id` from `markerRunId`. Keep
    `markerSource: "cron-compound-promote"` and pass the run's `runId` UNCHANGED: `id` is the run
-   correlation id (#8392 added it so a cost row joins to its `reportSilentFallback` by run id), so
+   correlation id (#8392 is the issue, PR #8394 added it, so a cost row joins to its `reportSilentFallback` by run id), so
    a suffixed id would break that join and the per-run sum. Nothing flags two cron markers under
    one id (the double-bill detector is leader-loop only). Per-phase spend is therefore not
    separable; accept that rather than widen `ClaudeCostMarker`.
@@ -668,7 +668,7 @@ liveness_signal:
   configured_in: apps/web-platform/server/inngest/functions/cron-compound-promote.ts (emitOutcomeMarker calls; SENTRY_MONITOR_SLUG) and apps/web-platform/server/compound-promote-marker.ts
 error_reporting:
   destination: Sentry web-platform via reportSilentFallback (feature cron-compound-promote; ops draft-edit-refused, draft-edit-error, diff-path-refused, handler-top-level) and Better Stack Logs via the marker
-  fail_loud: a refused cluster logs a pino warn row and mirrors to Sentry with the reason in the Error message and in tags (cause, stop_reason, new_lines_count, anchor_empty, anchor_match_count, base_bytes), so five reasons do not collapse into one Sentry issue; the marker refusals[] names the reason; status error carries error_class and error_message
+  fail_loud: a refused cluster logs a pino warn row and mirrors to Sentry as a MESSAGE event (err = null: on the Error path the pino mirror captures the Error first and Sentry drops the tagged capture, #8629) tagged with the closed `reason` and `cause` vocabularies, with `cluster_hash` in extra (shipped: tags `reason`, `cause`; the other tag names this plan first listed were not built); the marker refusals[] names the reason; status error carries error_class and error_message
 failure_modes:
   - mode: phase-2 anchor does not match the real file, or occurs more than once
     detection: marker refusals[] contains edit-anchor-not-found or edit-anchor-ambiguous (layer 2 pino to Sentry breadcrumb mirror; layer 3 Vector journald shipper to Better Stack); Sentry op draft-edit-refused with anchor_match_count

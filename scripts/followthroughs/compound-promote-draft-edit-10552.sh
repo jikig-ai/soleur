@@ -12,9 +12,12 @@
 # PASS (stdout literal `PASS`, exit 0) needs POSITIVE evidence that a derived diff
 # was consumed, from an ALLOWLIST:
 #   - `clusters_opened >= 1` (a draft PR was opened), or
-#   - a refusal that can occur only AFTER `checkDiffPaths` accepted the derived diff:
-#     `diff-path-off-target`, `byte-budget-overflow`, `corpus-shrink-refused`,
-#     `agents-core-hr-rule-edit-refused`, `not-committed-*`.
+#   - a refusal that a CORRECT server-derived additive diff can legitimately cause, after
+#     `checkDiffPaths` accepted it: `byte-budget-overflow` (additive text can push the corpus
+#     over the cap), `not-committed-*`.
+# `diff-path-off-target`, `corpus-shrink-refused` and `agents-core-hr-rule-edit-refused` are NOT
+# proof: a derived diff touches only the declared target, removes nothing and cannot mint an
+# `hr-` id, so one of them firing means the SERVER derivation is defective (class F; CTO ruling).
 # The PASS set is NOT the complement of the failure set: a complement would pass
 # `target-path-refused`, `skill-conflict-guard`, `diff-size-exceeded`,
 # `branch-name-shape-failed`, `target-missing` and any forged unknown string, none of
@@ -36,7 +39,8 @@
 #   0 = PASS
 #   1 = FAIL              (the derived diff is being refused by our own code)
 #   2 = NOT YET           (no proof yet - still soaking)
-#   3 = CANNOT ESTABLISH  (credential, floor, or positive control missing)
+#   3 = CANNOT ESTABLISH  (credential, floor, or positive control missing; the message
+#                          carries a closed-vocabulary cause, never raw helper output)
 #   5 = ACTION REQUIRED   (still NOT YET 35 days after the floor: a permanent
 #                          `edit-*` or skill-conflict streak must surface, not leave
 #                          a silently open tracker)
@@ -49,12 +53,25 @@
 #  2. DARK CHANNEL. Zero decoded rows is evidence only if the pipeline is known live.
 #     `SOLEUR_CLAUDE_COST` rides the same pino WARN -> Vector -> Better Stack path and
 #     is the positive control; without control rows we refuse to grade (exit 3).
-#  3. SLIDING WINDOW / STALE ROWS. The floor is the DEPLOY completion time of the fix
-#     (`FT10552_DEPLOY_FLOOR`, required, never defaulted): old code keeps running until
-#     the image deploys, so a fire in that gap writes `diff-underivable-apply` rows that
-#     must not be graded. Rows dated before the floor are dropped inside jq, so
-#     editing the floor earlier is the only way to grade them - and an unset or
-#     unparsable floor is exit 3.
+#  3. SLIDING WINDOW / STALE ROWS. The floor is the DEPLOY completion time of the fix:
+#     old code keeps running until the image deploys, so a fire in that gap writes
+#     `diff-underivable-apply` rows that must not be graded. Rows dated before the
+#     floor are dropped inside jq.
+#     The sweeper runs probes under `env -i` and forwards ONLY the names in the
+#     directive's `secrets=` that the workflow binds (the three BETTERSTACK_QUERY_*
+#     names), so an env-supplied floor can never reach the probe in production. The
+#     floor is therefore DERIVED from git: the committer time of the OLDEST commit that
+#     ADDED this script on the checked-out history (the sweeper job checks out with
+#     fetch-depth: 0), plus a 3-hour deploy-lag allowance (the release deploy completes
+#     after the merge; an old-code run in that gap must not be graded).
+#     `FT10552_DEPLOY_FLOOR` (YYYY-MM-DDTHH:MM:SSZ) remains an optional OVERRIDE, used
+#     verbatim with no lag added. `FT10552_REPO_DIR` (default: this script's own
+#     directory) is a test seam that points the git lookup elsewhere.
+#     There is NO default date. When the floor cannot be established the probe exits 3
+#     and names which of a closed set of causes it was: git-unavailable,
+#     not-a-repository, shallow-history, git-log-failed, adding-commit-not-in-history,
+#     date-unparsable. A shallow clone is refused outright: its boundary commit is
+#     reported as "adding" every file, which would silently move the floor later.
 #
 # Output hygiene: the sweeper posts this output as a GitHub comment, and the marker
 # carries strings an attacker can influence indirectly. Only values matching the
@@ -62,7 +79,8 @@
 # [a-z0-9-]) are printed; everything else is bucketed `unknown`.
 #
 # Directive on #10552 (set `earliest` to one day after the first `0 0 * * 0` fire that
-# follows the deploy, and FT10552_DEPLOY_FLOOR to the deploy completion timestamp):
+# follows the deploy; `secrets=` needs ONLY the three BETTERSTACK_QUERY names - the
+# floor is derived from git, nothing else has to be forwarded):
 #   <!-- soleur:followthrough script=scripts/followthroughs/compound-promote-draft-edit-10552.sh earliest=<first-sunday-fire-after-deploy+1d> secrets=BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -->
 set -uo pipefail
 
@@ -96,13 +114,59 @@ QUERY_SH="$REPO_ROOT/scripts/betterstack-query.sh"
 
 numeric() { [[ "$1" =~ ^[0-9]+$ ]]; }
 
-# The floor is REQUIRED and strictly shaped. `date -d` also accepts "yesterday" and
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The release deploy completes after the merge; a fire in that gap runs OLD code. Fixed,
+# not overridable by env (an override is a way to pull the floor earlier).
+DEPLOY_LAG_S=10800
+PROBE_REL="scripts/followthroughs/compound-promote-draft-edit-10552.sh"
+
+# No floor: say WHICH closed-vocabulary cause it was, then exit 3. Called as a plain
+# statement (never inside `$(...)`), so the exit ends the probe.
+no_floor() { # no_floor <cause> <fixed explanation>
+  printf 'CANNOT ESTABLISH: FT10552_DEPLOY_FLOOR is not set and the deploy floor could not be derived from git history (%s): %s There is no default date: a default would grade pre-fix rows.\n' "$1" "$2" >&2
+  exit 3
+}
+
+# Sets DEPLOY_FLOOR from git: committer time of the OLDEST commit that added this script,
+# plus DEPLOY_LAG_S, as an absolute UTC timestamp.
+derive_deploy_floor() {
+  local repo_dir="${FT10552_REPO_DIR:-$SELF_DIR}" shallow log_out rc iso commit_s
+  command -v git >/dev/null 2>&1 \
+    || no_floor git-unavailable "git is not on PATH."
+  if [ ! -d "$repo_dir" ] || ! GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$repo_dir" rev-parse --git-dir >/dev/null 2>&1; then
+    no_floor not-a-repository "the probe directory is not inside a git repository."
+  fi
+  shallow="$(GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$repo_dir" rev-parse --is-shallow-repository 2>/dev/null || true)"
+  if [ "$shallow" = "true" ]; then
+    no_floor shallow-history "the checkout is shallow, so the commit that added this script is not provably in it (check out with fetch-depth: 0)."
+  fi
+  log_out="$(GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$repo_dir" log --no-renames --diff-filter=A --format=%cI -- ":(top)$PROBE_REL" 2>/dev/null)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    no_floor git-log-failed "git log exited non-zero."
+  fi
+  # git prints newest first; the OLDEST adding commit is the last line.
+  iso="$(printf '%s\n' "$log_out" | tail -n 1)"
+  if [ -z "$iso" ]; then
+    no_floor adding-commit-not-in-history "no commit that added this script is in the checked-out history."
+  fi
+  if ! [[ "$iso" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$ ]]; then
+    no_floor date-unparsable "the adding commit's date is not an ISO-8601 timestamp."
+  fi
+  commit_s="$(date -u -d "$iso" +%s 2>/dev/null || true)"
+  if ! numeric "$commit_s"; then
+    no_floor date-unparsable "the adding commit's date does not parse."
+  fi
+  DEPLOY_FLOOR="$(date -u -d "@$((commit_s + DEPLOY_LAG_S))" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || true)"
+}
+
+# The override, when set, is used verbatim; otherwise the floor is derived. EITHER WAY the
+# result goes through the same strict check below: `date -d` also accepts "yesterday" and
 # "2 days ago", which would slide the window every run; only an absolute UTC ISO
 # timestamp is accepted.
 DEPLOY_FLOOR="${FT10552_DEPLOY_FLOOR:-}"
 if [ -z "$DEPLOY_FLOOR" ]; then
-  printf 'CANNOT ESTABLISH: FT10552_DEPLOY_FLOOR is not set (the deploy completion time of the fix, e.g. 2026-10-20T08:15:00Z). There is no default: a default would grade pre-fix rows.\n' >&2
-  exit 3
+  derive_deploy_floor
 fi
 if ! [[ "$DEPLOY_FLOOR" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
   printf 'CANNOT ESTABLISH: FT10552_DEPLOY_FLOOR is not an absolute UTC timestamp (YYYY-MM-DDTHH:MM:SSZ): %s\n' "${DEPLOY_FLOOR:0:40}" >&2
@@ -161,7 +225,10 @@ run_query() {
   bash "$QUERY_SH" --since "$WINDOW" --grep "$pattern" --limit "$lim" > "$QOUT" 2>&1
   rc=$?
   if [ "$rc" -eq 3 ]; then
-    printf 'CANNOT ESTABLISH: betterstack-query.sh could not query (%s): %s\n' "$label" "$(head -c 400 "$QOUT")" >&2
+    # Closed vocabulary only: the sweeper posts this line to a public tracker comment, and
+    # the helper's own output is not ours to publish. Exit 3 from the helper means one
+    # thing: the query never ran because credentials were not injected.
+    printf 'CANNOT ESTABLISH: betterstack-query.sh exited 3 (%s): the query never ran (credentials not injected into the helper).\n' "$label" >&2
     exit 3
   fi
   if [ "$rc" -ne 0 ]; then
@@ -182,8 +249,9 @@ CONTROL_JQ='fromjson? | .raw? | fromjson? | .message?
 # decoded message, never on `raw`.
 # shellcheck disable=SC2016  # a jq program: `$m`, `$floor` are jq variables, not shell expansions
 GRADE_JQ='
-def pset: ["diff-path-off-target","byte-budget-overflow","corpus-shrink-refused","agents-core-hr-rule-edit-refused"];
-def fset: ["git-apply-check-failed","edit-derive-failed"];
+def pset: ["byte-budget-overflow"];
+def fset: ["git-apply-check-failed","edit-derive-failed","diff-path-off-target","corpus-shrink-refused",
+             "agents-core-hr-rule-edit-refused"];
 def nset: ["edit-target-unreadable","edit-target-too-large","edit-invalid","edit-anchor-not-found",
            "edit-anchor-ambiguous","edit-target-duplicate","skill-conflict-guard","target-path-refused",
            "target-missing","branch-name-shape-failed","diff-size-exceeded"];

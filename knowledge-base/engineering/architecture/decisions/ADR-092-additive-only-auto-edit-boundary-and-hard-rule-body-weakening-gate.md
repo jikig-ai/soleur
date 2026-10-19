@@ -212,9 +212,19 @@ the edits the cron can now make; it does not replace the body-weakening gate for
 
 **Compensating controls on model-authored text.** Because the inserted text lands in the
 always-loaded corpus, it is constrained in code rather than by prompt: printable ASCII only,
-caps of 20 lines and 500 characters, no credential-shaped substring, no bare `---`, rule bullets
-only for `AGENTS.rules.md`, a model cannot mint an `hr-` rule, and an id must be new. A `SKILL.md`
-anchor inside the frontmatter or a fenced block is refused.
+caps of 20 lines and 500 characters, no credential-shaped substring (the credential tail of
+`PII_REGEX`, parity-pinned by a test, plus a private-key header and a bearer credential), no bare
+`---`, and no code fence, HTML comment or harness preprocessing marker. For `AGENTS.rules.md` every
+line is exactly one rule bullet with ONE new id of class `cq-`, `rf-`, `pdr-` or `cm-` (the grammar
+`scripts/lint-rule-ids.py` accepts, minus the classes this ADR reserves for human review): a model
+cannot mint an `hr-` or `wg-` rule, and no `hr-` token may appear anywhere in an inserted line. A
+`SKILL.md` anchor inside the frontmatter or a fenced block is refused.
+
+**The draft is single-file, so its CI starts red.** `lint-rule-ids` requires an `AGENTS.md` pointer
+for every rule body, and the cron edits one file only. The draft PR body names the exact
+`- [id: <slug>]` line for the reviewer to add; extending the cron to write `AGENTS.md` was considered
+and rejected because it would widen the write boundary this ADR keeps narrow (CTO ruling,
+2026-10-19).
 
 **New refusal members** (`EDIT_REFUSAL_REASONS`, seven): `edit-target-unreadable`,
 `edit-target-too-large`, `edit-invalid`, `edit-anchor-not-found`, `edit-anchor-ambiguous`,

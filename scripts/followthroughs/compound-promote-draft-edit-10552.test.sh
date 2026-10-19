@@ -13,8 +13,18 @@
 # with printf+exit (never through pass()/fail()), an instrument self-test, and
 # must-PASS inputs that are NOT the canonical happy path (a manual-trigger row, two
 # runs where one is class P and one quiet, an unknown reason that carries ANSI
-# escapes and must be printed as `unknown`). Two probe MUTATIONS prove the field
+# escapes and must be printed as `unknown`). Probe MUTATIONS prove the field
 # isolation and the floor filter are load-bearing.
+#
+# Floor rows (F-*, U-*, V-*, Q-*, B-*, X-*): the sweeper runs the probe under `env -i`
+# with only the three BETTERSTACK_QUERY_* names, so the deploy floor is DERIVED from git
+# (oldest commit that added the script + 3h). Those rows build throwaway git repos
+# (scrubbed env, fixed identity and dates), run the probe with ONLY PATH and the three
+# credential names, pin the closed cause vocabulary of every unresolvable floor, record
+# the query helper's argv (the --since window and both --limit values), freeze the
+# probe's clock with a PATH-shimmed `date` for the 35-day boundary pair, and prove
+# nothing raw from the query helper's stderr reaches the output. Mutation rows M-5 ..
+# M-13 prove each of those guards is load-bearing.
 #
 # All fixtures are synthesized. Nothing here talks to a network or reads a secret.
 set -uo pipefail
@@ -64,11 +74,14 @@ make_sandbox() { # make_sandbox <fixture-file> [probe]
   cat > "$d/scripts/betterstack-query.sh" <<'STUB'
 #!/usr/bin/env bash
 # Simulated betterstack-query.sh: honours --grep as a substring over raw rows (the
-# real helper compiles it to `raw LIKE '%...%'`), ignores --since (the probe's own
-# floor filter is what is under test). Exit 3 when asked to.
+# real helper compiles it to `raw LIKE '%...%'`), ignores --since for FILTERING (the
+# probe's own floor filter is what is under test) but RECORDS its whole argv, one line
+# per call, in ../argv.log so the suite can pin the --since window and --limit values.
+# Exit 3 when asked to; STUB_MSG is the (possibly hostile) stderr it prints.
 pat=""
+printf '%s\n' "$*" >> "$(dirname "$0")/../argv.log"
 while [ $# -gt 0 ]; do case "$1" in --grep) pat="$2"; shift 2;; *) shift;; esac; done
-[ -n "${STUB_EXIT3:-}" ] && { echo "You are NOT missing Better Stack access" >&2; exit 3; }
+[ -n "${STUB_EXIT3:-}" ] && { printf '%s' "${STUB_MSG:-You are NOT missing Better Stack access}" >&2; exit 3; }
 [ -n "${STUB_EXIT7:-}" ] && { echo "clickhouse exploded" >&2; exit 7; }
 grep -F -- "$pat" "$(dirname "$0")/../rows.jsonl" || true
 STUB
@@ -96,7 +109,7 @@ fx() { f=$(mktemp -t ft.XXXXXXXX); printf '%s\n' "$@" > "$f"; echo "$f"; }
 # run_probe <dir> [env...] -> echoes the rc; stdout/stderr land in $dir/out and $dir/err.
 run_probe() {
   local dir="$1"; shift
-  ( cd "$dir" && env -i PATH="$PATH" HOME="$HOME" TMPDIR="$TMPDIR" \
+  ( cd "$dir" && env -i PATH="$PATH" HOME="$HOME" TMPDIR="$TMPDIR" GIT_CEILING_DIRECTORIES="$TMP_ROOT" \
       BETTERSTACK_QUERY_HOST=h BETTERSTACK_QUERY_USERNAME=u BETTERSTACK_QUERY_PASSWORD=p \
       FT10552_DEPLOY_FLOOR="$FLOOR_ISO" "$@" \
       bash "$PROBE_REL" >"$dir/out" 2>"$dir/err" )
@@ -150,10 +163,17 @@ for r in edit-anchor-not-found edit-invalid edit-anchor-ambiguous edit-target-un
 done
 
 echo "P-5. a class-P refusal and no class-F refusal -> exit 0"
-for r in diff-path-off-target byte-budget-overflow corpus-shrink-refused agents-core-hr-rule-edit-refused not-committed-pr-create; do
+for r in byte-budget-overflow not-committed-pr-create; do
   probe_rows -- "$C" "$(row "$(marker cron completed 0 "[\"$r\"]")" "$D1")"
   expect_rc "P-5 ($r)" 0 "$PROBE_RC"
   if [[ "$(out_of)" == "PASS" ]]; then pass "P-5 ($r): stdout is exactly PASS"; else fail "P-5 ($r): stdout '$(out_of)'"; fi
+done
+
+echo "P-5b. a refusal only a DEFECTIVE derivation can cause is class F -> exit 1, never 0 (CTO ruling)"
+for r in diff-path-off-target corpus-shrink-refused agents-core-hr-rule-edit-refused; do
+  probe_rows -- "$C" "$(row "$(marker cron completed 0 "[\"$r\"]")" "$D1")"
+  expect_rc "P-5b ($r)" 1 "$PROBE_RC"
+  if [[ "$(out_of)" != "PASS" ]]; then pass "P-5b ($r): stdout is not PASS"; else fail "P-5b ($r): printed PASS"; fi
 done
 
 echo "P-6. only skill-conflict-guard / target-path-refused (and the other N-class reasons) -> exit 2, never 0"
@@ -169,10 +189,10 @@ done
 
 echo "P-7. floor unset or unparsable, or no positive-control rows -> exit 3, never 0 or 1"
 d=$(make_sandbox "$(fx "$C" "$(row "$(marker cron completed 1 '[]')" "$D1")")")
-rc=$( cd "$d" && env -i PATH="$PATH" HOME="$HOME" TMPDIR="$TMPDIR" \
+rc=$( cd "$d" && env -i PATH="$PATH" HOME="$HOME" TMPDIR="$TMPDIR" GIT_CEILING_DIRECTORIES="$TMP_ROOT" \
         BETTERSTACK_QUERY_HOST=h BETTERSTACK_QUERY_USERNAME=u BETTERSTACK_QUERY_PASSWORD=p \
         bash "$PROBE_REL" >/dev/null 2>"$d/err"; echo $? )
-expect_rc "P-7 (floor unset: no default)" 3 "$rc"
+expect_rc "P-7 (floor unset, not a repository: no default)" 3 "$rc"
 for bad in not-a-date yesterday "2026-13-45T99:99:99Z" "2026-09-18" ""; do
   d=$(make_sandbox "$(fx "$C" "$(row "$(marker cron completed 1 '[]')" "$D1")")")
   rc=$(run_probe "$d" FT10552_DEPLOY_FLOOR="$bad")
@@ -289,11 +309,11 @@ if [[ "$(out_of)" == "PASS" ]]; then pass "H-2: stdout is exactly PASS"; else fa
 if grep -q 'manual' "$PROBE_DIR/err"; then pass "H-2: the trigger is printed"; else fail "H-2: trigger not printed: $(err_of)"; fi
 
 echo "H-3. must-PASS, non-canonical: two runs, one class P and one quiet"
-probe_rows -- "$C" "$(row "$(marker cron completed 0 '["corpus-shrink-refused"]')" "$D1")" \
+probe_rows -- "$C" "$(row "$(marker cron completed 0 '["byte-budget-overflow"]')" "$D1")" \
   "$(row "$(marker cron no-qualifying-clusters 0 '[]')" "$D3")"
 expect_rc "H-3 P then quiet" 0 "$PROBE_RC"
 probe_rows -- "$C" "$(row "$(marker cron no-qualifying-clusters 0 '[]')" "$D1")" \
-  "$(row "$(marker cron completed 0 '["corpus-shrink-refused"]')" "$D3")"
+  "$(row "$(marker cron completed 0 '["byte-budget-overflow"]')" "$D3")"
 expect_rc "H-3 quiet then P" 0 "$PROBE_RC"
 
 echo "H-4. must-PASS, non-canonical: an unknown reason with ANSI escapes is printed as 'unknown'"
@@ -311,6 +331,217 @@ inner="$(jq -c -n --arg t $'cron\x1b[2J' --arg s $'completed\x1b[31m' \
 probe_rows -- "$C" "$(row "$inner" "$D1")"
 expect_rc "H-4 hostile trigger and status" 2 "$PROBE_RC"
 if grep -q -P '\x1b' "$PROBE_DIR/err" "$PROBE_DIR/out"; then fail "H-4: an ESC byte reached the output via status/trigger"; else pass "H-4: status/trigger are sanitized too"; fi
+
+# --- derived-floor rows -----------------------------------------------------------
+# Hermetic git for the fixtures: env -i scrubs every GIT_* name (so a surrounding hook or
+# worktree cannot redirect the repo), system/global config are off, identity and both
+# dates are fixed. $1 is the git date ("<epoch> <tz>").
+FXHOME="$TMP_ROOT/fxhome"; mkdir -p "$FXHOME"
+fx_git() { # fx_git <date> <dir> <git args...>
+  local at="$1" d="$2"; shift 2
+  env -i HOME="$FXHOME" PATH="$PATH" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_CEILING_DIRECTORIES="$TMP_ROOT" \
+    GIT_AUTHOR_NAME=fx GIT_AUTHOR_EMAIL=fx@invalid GIT_COMMITTER_NAME=fx GIT_COMMITTER_EMAIL=fx@invalid \
+    GIT_AUTHOR_DATE="$at" GIT_COMMITTER_DATE="$at" \
+    git -C "$d" -c init.defaultBranch=main -c commit.gpgsign=false -c core.hooksPath=/dev/null "$@"
+}
+# mk_repo <dir> <epoch> [tz]: <dir> becomes a repo whose single commit ADDS the probe path
+# (a copy of the shipped probe unless the sandbox already holds one) at <epoch>.
+mk_repo() {
+  local d="$1" at="$2 ${3:-+0000}"
+  mkdir -p "$d/$(dirname "$PROBE_REL")"
+  [[ -f "$d/$PROBE_REL" ]] || cp "$PROBE_SRC" "$d/$PROBE_REL"
+  fx_git "$at" "$d" init -q >/dev/null
+  fx_git "$at" "$d" add -- "$PROBE_REL" >/dev/null
+  fx_git "$at" "$d" commit -q -m "add probe" >/dev/null
+}
+# Probe under the SWEEPER's env: env -i, PATH and the three credential names, nothing else
+# (no HOME, no TMPDIR, no floor, no repo-dir seam).
+run_bare() { # run_bare <dir> [env...] -> rc; out/err in <dir>
+  local dir="$1"; shift
+  ( cd "$dir" && env -i PATH="$PATH" \
+      BETTERSTACK_QUERY_HOST=h BETTERSTACK_QUERY_USERNAME=u BETTERSTACK_QUERY_PASSWORD=p "$@" \
+      bash "$PROBE_REL" >"$dir/out" 2>"$dir/err" )
+  echo $?
+}
+# A PATH-shimmed `date` that freezes ONLY the probe's `date -u +%s` (its "now") and
+# delegates everything else, so boundary rows are exact rather than racing the wall clock.
+add_date_shim() { # add_date_shim <dir> <now-epoch>
+  mkdir -p "$1/bin"
+  printf '#!/usr/bin/env bash\nif [ "$#" -eq 2 ] && [ "$1" = "-u" ] && [ "$2" = "+%%s" ]; then echo %s; exit 0; fi\nexec %s "$@"\n' \
+    "$2" "$(command -v date)" > "$1/bin/date"
+  chmod +x "$1/bin/date"
+}
+# add_git_shim <dir> <date|fail>: `git log` prints $FAKE_GIT_DATE (date) or fails (fail);
+# every other git command is delegated.
+add_git_shim() {
+  mkdir -p "$1/bin"
+  local body='echo "$FAKE_GIT_DATE"; exit 0'
+  [[ "$2" == fail ]] && body='exit 1'
+  printf '#!/usr/bin/env bash\nfor a in "$@"; do [ "$a" = log ] && { %s; }; done\nexec %s "$@"\n' \
+    "$body" "$(command -v git)" > "$1/bin/git"
+  chmod +x "$1/bin/git"
+}
+win_for() { echo "$(( ($1 - $2) / 86400 + 2 ))d"; }   # win_for <now> <floor>
+# argv_is <dir> <window> <outcome-limit>: the recorded query calls are exactly the two the
+# probe must make.
+argv_is() {
+  local want
+  want="--since $2 --grep SOLEUR_CLAUDE_COST --limit 5"$'\n'"--since $2 --grep SOLEUR_COMPOUND_PROMOTE_OUTCOME --limit $3"
+  [[ "$(cat "$1/argv.log" 2>/dev/null)" == "$want" ]]
+}
+
+PROOF_ROW() { row "$(marker cron completed 0 '["byte-budget-overflow"]')" "$1"; }
+F_ROW() { row "$(marker cron completed 0 '["diff-underivable-apply"]')" "$1"; }
+FLOOR_DERIVED_S=$((FLOOR_S + 10800))           # commit time + the 3h deploy-lag allowance
+FLOOR_DERIVED_ISO="$(floor_iso "$FLOOR_DERIVED_S")"
+
+# Scenarios (shared by the assertion rows and the mutation rows). Each takes the probe to
+# run and leaves its rc in SC_RC and its sandbox in SC_DIR.
+sc_derive() { # sweeper env, repo sandbox whose adding commit is 10 days old, one proof row
+  SC_DIR=$(make_sandbox "$(fx "$C" "$(PROOF_ROW "$D2")")" "$1"); mk_repo "$SC_DIR" "$FLOOR_S"
+  SC_RC=$(run_bare "$SC_DIR")
+}
+sc_lag() { # sc_lag <probe> <hours-after-commit>: one class-F row at that offset
+  SC_DIR=$(make_sandbox "$(fx "$C" "$(F_ROW "$(dt_at "$FLOOR_S" "$2")")")" "$1"); mk_repo "$SC_DIR" "$FLOOR_S"
+  SC_RC=$(run_bare "$SC_DIR")
+}
+sc_oldest() { # two ADDING commits (the file is removed and re-added 5 days later)
+  SC_DIR=$(make_sandbox "$(fx "$C" "$(F_ROW "$(dt_at "$FLOOR_S" 4)")")" "$1"); mk_repo "$SC_DIR" "$FLOOR_S"
+  cp "$SC_DIR/$PROBE_REL" "$SC_DIR/probe.keep"   # the probe under test (a mutant in M-7), restored below
+  fx_git "$((FLOOR_S + 86400)) +0000" "$SC_DIR" rm -q -- "$PROBE_REL" >/dev/null
+  fx_git "$((FLOOR_S + 86400)) +0000" "$SC_DIR" commit -q -m "remove probe" >/dev/null
+  mkdir -p "$SC_DIR/$(dirname "$PROBE_REL")"   # git rm pruned the emptied directory
+  cp "$SC_DIR/probe.keep" "$SC_DIR/$PROBE_REL"
+  fx_git "$((FLOOR_S + 5 * 86400)) +0000" "$SC_DIR" add -- "$PROBE_REL" >/dev/null
+  fx_git "$((FLOOR_S + 5 * 86400)) +0000" "$SC_DIR" commit -q -m "re-add probe" >/dev/null
+  SC_RC=$(run_bare "$SC_DIR")
+}
+sc_argv() { # sc_argv <probe> [env...]: frozen clock = NOW_S; derived floor = FLOOR_S + 3h
+  local probe="$1"; shift
+  SC_DIR=$(make_sandbox "$(fx "$C" "$(PROOF_ROW "$D2")")" "$probe"); mk_repo "$SC_DIR" "$FLOOR_S"
+  add_date_shim "$SC_DIR" "$NOW_S"
+  SC_RC=$(run_bare "$SC_DIR" PATH="$SC_DIR/bin:$PATH" "$@")
+}
+# The boundary pair: adding commit E_C; clock frozen at derived floor + <offset> seconds.
+E_C=$((NOW_S - 60 * 86400)); E_F=$((E_C + 10800))
+sc_boundary() { # sc_boundary <probe> <seconds-after-derived-floor>
+  local ed; ed="$(dt_at "$E_F" 24)"
+  SC_DIR=$(make_sandbox "$(fx "$(row "$CONTROL" "$ed")" "$(row "$(marker cron completed 0 '["edit-invalid"]')" "$ed")")" "$1"); mk_repo "$SC_DIR" "$E_C"
+  add_date_shim "$SC_DIR" "$((E_F + $2))"
+  SC_RC=$(run_bare "$SC_DIR" PATH="$SC_DIR/bin:$PATH")
+}
+HOSTILE=$'\x1b[31mRAW-HELPER-LEAK-d41d8\x1b[0m\nINJECTED: all clear'
+sc_hygiene() {
+  SC_DIR=$(make_sandbox "$(fx "$C" "$(PROOF_ROW "$D2")")" "$1")
+  SC_RC=$(run_probe "$SC_DIR" STUB_EXIT3=1 "STUB_MSG=$HOSTILE")
+}
+
+echo "F-1. sweeper env (env -i, PATH + the three BETTERSTACK_QUERY names only): the floor is DERIVED from git -> exit 0, never 3"
+sc_derive "$PROBE_SRC"
+expect_rc "F-1" 0 "$SC_RC"
+if [[ "$(cat "$SC_DIR/out")" == "PASS" ]]; then pass "F-1: stdout is exactly PASS"; else fail "F-1: stdout '$(cat "$SC_DIR/out")'"; fi
+if grep -q -F -- "since $FLOOR_DERIVED_ISO" "$SC_DIR/err"; then pass "F-1: the derived floor is commit time + 3h ($FLOOR_DERIVED_ISO)"; else fail "F-1: derived floor not reported: $(cat "$SC_DIR/err")"; fi
+
+echo "F-2. the 3h deploy-lag allowance: an old-code run inside the lag is not graded, one after it is"
+sc_lag "$PROBE_SRC" 2
+expect_rc "F-2 (class-F row 2h after the adding commit: inside the lag, ungraded)" 2 "$SC_RC"
+sc_lag "$PROBE_SRC" 4
+expect_rc "F-2 (class-F row 4h after the adding commit: graded)" 1 "$SC_RC"
+
+echo "F-3. a non-UTC committer offset is the same instant"
+SC_DIR=$(make_sandbox "$(fx "$C" "$(PROOF_ROW "$D2")")"); mk_repo "$SC_DIR" "$FLOOR_S" +0530
+SC_RC=$(run_bare "$SC_DIR")
+expect_rc "F-3 (+0530)" 0 "$SC_RC"
+if grep -q -F -- "since $FLOOR_DERIVED_ISO" "$SC_DIR/err"; then pass "F-3: same derived floor as UTC"; else fail "F-3: floor differs: $(cat "$SC_DIR/err")"; fi
+
+echo "F-4. the OLDEST adding commit is the floor (the file was removed and re-added later)"
+sc_oldest "$PROBE_SRC"
+expect_rc "F-4" 1 "$SC_RC"
+
+echo "F-5. FT10552_DEPLOY_FLOOR stays an OVERRIDE, used verbatim (no lag, no git)"
+SC_DIR=$(make_sandbox "$(fx "$C" "$(F_ROW "$(dt_at "$FLOOR_S" 24)")")"); mk_repo "$SC_DIR" "$FLOOR_S"
+SC_RC=$(run_bare "$SC_DIR" "FT10552_DEPLOY_FLOOR=$(floor_iso $((FLOOR_S + 2 * 86400)))")
+expect_rc "F-5 (override later than every row: nothing graded)" 2 "$SC_RC"
+SC_RC=$(run_bare "$SC_DIR" "FT10552_DEPLOY_FLOOR=$(floor_iso $((FLOOR_S + 3600)))")
+expect_rc "F-5 (override 1h after the commit: no lag added, row graded)" 1 "$SC_RC"
+
+echo "U-1. unresolvable floor -> exit 3 naming a closed-vocabulary cause, never 0 or 1"
+unres() { # unres <label> <cause> <dir> [env...]
+  local label="$1" cause="$2" d="$3" rc; shift 3
+  rc=$(run_probe "$d" FT10552_DEPLOY_FLOOR= "$@")
+  expect_rc "U-1 ($label)" 3 "$rc"
+  if grep -q -F -- "($cause)" "$d/err"; then pass "U-1 ($label): names $cause"; else fail "U-1 ($label): cause '$cause' missing from: $(cat "$d/err")"; fi
+  if [[ "$(cat "$d/out")" != "PASS" ]]; then pass "U-1 ($label): stdout is not PASS"; else fail "U-1 ($label): PASS on an unresolvable floor"; fi
+}
+BASE_FX="$(fx "$C" "$(PROOF_ROW "$D2")")"
+mkdir -p "$TMP_ROOT/nonrepo"
+d=$(make_sandbox "$BASE_FX"); unres "not a repository" not-a-repository "$d" "FT10552_REPO_DIR=$TMP_ROOT/nonrepo"
+d=$(make_sandbox "$BASE_FX"); unres "repo dir does not exist" not-a-repository "$d" "FT10552_REPO_DIR=$TMP_ROOT/no-such-dir"
+# A repo that never contained the probe path.
+mkdir -p "$TMP_ROOT/norecord"; echo x > "$TMP_ROOT/norecord/README"
+fx_git "$FLOOR_S +0000" "$TMP_ROOT/norecord" init -q >/dev/null
+fx_git "$FLOOR_S +0000" "$TMP_ROOT/norecord" add -- README >/dev/null
+fx_git "$FLOOR_S +0000" "$TMP_ROOT/norecord" commit -q -m unrelated >/dev/null
+d=$(make_sandbox "$BASE_FX"); unres "history lacks the adding commit" adding-commit-not-in-history "$d" "FT10552_REPO_DIR=$TMP_ROOT/norecord"
+# A SHALLOW clone: the boundary commit looks like it added every file, so it must be refused.
+mk_repo "$TMP_ROOT/origin" "$FLOOR_S"
+echo more > "$TMP_ROOT/origin/README"
+fx_git "$((FLOOR_S + 86400)) +0000" "$TMP_ROOT/origin" add -- README >/dev/null
+fx_git "$((FLOOR_S + 86400)) +0000" "$TMP_ROOT/origin" commit -q -m later >/dev/null
+fx_git "$FLOOR_S +0000" "$TMP_ROOT" clone -q --depth 1 "file://$TMP_ROOT/origin" "$TMP_ROOT/shallow" >/dev/null 2>&1
+if [[ "$(fx_git "$FLOOR_S +0000" "$TMP_ROOT/shallow" rev-parse --is-shallow-repository)" == "true" ]]; then pass "U-1: the shallow fixture is shallow"; else fail "U-1: shallow fixture is not shallow"; fi
+d=$(make_sandbox "$BASE_FX"); unres "shallow history" shallow-history "$d" "FT10552_REPO_DIR=$TMP_ROOT/shallow"
+# Unparsable adding-commit dates (a git shim prints them) and a failing git log.
+mk_repo "$TMP_ROOT/shimrepo" "$FLOOR_S"
+for bad in not-a-date "2026-13-45T99:99:99+00:00"; do
+  d=$(make_sandbox "$BASE_FX"); add_git_shim "$d" date
+  unres "unparsable date '$bad'" date-unparsable "$d" "FT10552_REPO_DIR=$TMP_ROOT/shimrepo" "PATH=$d/bin:$PATH" "FAKE_GIT_DATE=$bad"
+done
+d=$(make_sandbox "$BASE_FX"); add_git_shim "$d" fail
+unres "git log fails" git-log-failed "$d" "FT10552_REPO_DIR=$TMP_ROOT/shimrepo" "PATH=$d/bin:$PATH"
+# git unavailable: a PATH that has the probe's tools but no git.
+TOOLBIN="$TMP_ROOT/toolbin"; mkdir -p "$TOOLBIN"
+for t in bash dirname date mktemp rm head tail tr grep sort awk cat jq; do ln -sf "$(command -v "$t")" "$TOOLBIN/$t"; done
+d=$(make_sandbox "$BASE_FX"); unres "git unavailable" git-unavailable "$d" "PATH=$TOOLBIN"
+# The unset-floor default (the script directory, a sandbox that is no repository) is also exit 3.
+d=$(make_sandbox "$BASE_FX"); unres "default repo dir is not a repository" not-a-repository "$d"
+
+echo "Q-1. the query helper's argv: the --since window and both --limit values are pinned"
+sc_argv "$PROBE_SRC"
+expect_rc "Q-1" 0 "$SC_RC"
+want_win="$(win_for "$NOW_S" "$FLOOR_DERIVED_S")"
+if argv_is "$SC_DIR" "$want_win" 200; then pass "Q-1: --since $want_win, control --limit 5, outcome --limit 200"; else fail "Q-1: argv was: $(cat "$SC_DIR/argv.log")"; fi
+sc_argv "$PROBE_SRC" FT10552_LIMIT=77
+if argv_is "$SC_DIR" "$want_win" 77; then pass "Q-1: FT10552_LIMIT reaches the outcome query only"; else fail "Q-1 (limit 77): argv was: $(cat "$SC_DIR/argv.log")"; fi
+
+echo "B-1. the 35-day boundary (clock frozen, derived floor): 34d23h -> NOT YET (2), exactly 35d -> ACTION REQUIRED (5)"
+sc_boundary "$PROBE_SRC" $((35 * 86400 - 3600))
+expect_rc "B-1 (floor + 34d23h)" 2 "$SC_RC"
+if grep -q 'NOT YET' "$SC_DIR/err" && ! grep -q 'ACTION REQUIRED' "$SC_DIR/err"; then pass "B-1: 34d23h says NOT YET"; else fail "B-1: 34d23h message: $(cat "$SC_DIR/err")"; fi
+sc_boundary "$PROBE_SRC" $((35 * 86400))
+expect_rc "B-1 (floor + exactly 35d)" 5 "$SC_RC"
+if grep -q 'ACTION REQUIRED' "$SC_DIR/err"; then pass "B-1: 35d says ACTION REQUIRED"; else fail "B-1: 35d message: $(cat "$SC_DIR/err")"; fi
+if argv_is "$SC_DIR" "37d" 200; then pass "B-1: the window follows the frozen clock (37d)"; else fail "B-1: argv was: $(cat "$SC_DIR/argv.log")"; fi
+
+echo "X-1. a MIXED run (class-P and class-F reasons in ONE run) -> exit 0 with the F reasons in the stderr NOTE; class P outranks class F"
+probe_rows -- "$C" "$(row "$(marker cron completed 0 '["byte-budget-overflow","git-apply-check-failed"]')" "$D1")"
+expect_rc "X-1 (P reason + F reason)" 0 "$PROBE_RC"
+if [[ "$(out_of)" == "PASS" ]]; then pass "X-1: stdout is exactly PASS"; else fail "X-1: stdout '$(out_of)'"; fi
+if grep -q 'NOTE:.*git-apply-check-failed' "$PROBE_DIR/err"; then pass "X-1: the F reason is in the NOTE"; else fail "X-1: NOTE missing the F reason: $(err_of)"; fi
+probe_rows -- "$C" "$(row "$(marker cron completed 1 '["diff-underivable-apply"]')" "$D1")"
+expect_rc "X-1 (PR opened + F reason in the same run)" 0 "$PROBE_RC"
+if grep -q 'NOTE:.*diff-underivable-apply' "$PROBE_DIR/err"; then pass "X-1: the F reason is in the NOTE (opened run)"; else fail "X-1: NOTE missing: $(err_of)"; fi
+probe_rows -- "$C" "$(row "$(marker cron completed 1 '[]')" "$D1")"
+if ! grep -q 'NOTE:' "$PROBE_DIR/err"; then pass "X-1: no NOTE without a class-F reason"; else fail "X-1: spurious NOTE: $(err_of)"; fi
+
+echo "Y-1. hygiene: the query helper's raw stderr (ANSI, newlines) never reaches the output on the rc-3 path"
+sc_hygiene "$PROBE_SRC"
+expect_rc "Y-1" 3 "$SC_RC"
+if grep -q 'CANNOT ESTABLISH: betterstack-query.sh exited 3' "$SC_DIR/err"; then pass "Y-1: a closed-vocabulary classification is printed"; else fail "Y-1: no classification: $(cat "$SC_DIR/err")"; fi
+if grep -q -P '\x1b' "$SC_DIR/err" "$SC_DIR/out"; then fail "Y-1: an ESC byte reached the output"; else pass "Y-1: no ESC byte in the output"; fi
+if grep -q 'RAW-HELPER-LEAK\|INJECTED' "$SC_DIR/err" "$SC_DIR/out"; then fail "Y-1: raw helper text reached the output"; else pass "Y-1: nothing raw from the helper was echoed"; fi
+if [[ "$(grep -c . "$SC_DIR/err")" == 1 ]]; then pass "Y-1: the message is a single line"; else fail "Y-1: multi-line message: $(cat "$SC_DIR/err")"; fi
 
 # --- mutation arms: the guards must be LOAD-BEARING --------------------------
 # shellcheck disable=SC2016  # the mutate anchors are literal source text of the probe, never expanded
@@ -360,8 +591,52 @@ if [[ -z "$m" ]]; then fail "M-4 did not land (anchor drifted)"; else
   rc=$(run_probe "$d"); if [[ "$rc" == 0 ]]; then pass "the control is load-bearing (mutant PASSes through a dark channel)"; else fail "mutant did not flip (rc=$rc)"; fi
 fi
 
+# --- mutation arms for the floor / argv / boundary / hygiene guards ------------------
+# Each healthy predicate returns 0 only when EVERY expectation of its scenario holds, so a
+# mutant is "caught" exactly when the predicate turns false. The unmutated control runs
+# first and must be healthy, and the mutation must have landed (single anchor, file differs).
+h_derive() { sc_derive "$1"; [[ "$SC_RC" == 0 && "$(cat "$SC_DIR/out")" == "PASS" ]]; }
+h_lag() { sc_lag "$1" 2; [[ "$SC_RC" == 2 ]]; }
+h_oldest() { sc_oldest "$1"; [[ "$SC_RC" == 1 ]]; }
+h_argv() { sc_argv "$1"; [[ "$SC_RC" == 0 ]] && argv_is "$SC_DIR" "$(win_for "$NOW_S" "$FLOOR_DERIVED_S")" 200; }
+h_exact35() { sc_boundary "$1" $((35 * 86400)); [[ "$SC_RC" == 5 ]]; }
+h_not_yet34() { sc_boundary "$1" $((35 * 86400 - 3600)); [[ "$SC_RC" == 2 ]]; }
+h_hygiene() { sc_hygiene "$1"; [[ "$SC_RC" == 3 ]] && ! grep -q 'RAW-HELPER-LEAK\|INJECTED' "$SC_DIR/err"; }
+
+mut_row() { # mut_row <id> <description> <old> <new> <healthy-predicate>
+  local id="$1" desc="$2" m
+  echo "$id. MUTATION: $desc"
+  m="$(mutate "$id" "$3" "$4")"
+  if [[ -z "$m" ]]; then fail "$id did not land (anchor drifted or not unique)"; return; fi
+  if "$5" "$PROBE_SRC"; then pass "$id: the unmutated control is green"; else fail "$id: the unmutated control is NOT green - the row proves nothing"; return; fi
+  if "$5" "$m"; then fail "$id: the mutant SURVIVED - no row pins this guard"; else pass "$id: the mutant is caught"; fi
+}
+# shellcheck disable=SC2016  # the anchors are literal probe source text, never expanded
+{
+mut_row M-5 "derivation removed -> the sweeper-env run must stop being exit 0" \
+  $'  derive_deploy_floor\nfi' $'  no_floor mutant "derivation removed."\nfi' h_derive
+mut_row M-6 "deploy-lag allowance dropped (3h -> 0) -> a run inside the lag gets graded" \
+  'DEPLOY_LAG_S=10800' 'DEPLOY_LAG_S=0' h_lag
+mut_row M-7 "newest adding commit instead of the oldest" \
+  '| tail -n 1)"' '| head -n 1)"' h_oldest
+mut_row M-8 "--since window slack +2d -> +3d" \
+  '/ 86400 + 2 ))d"' '/ 86400 + 3 ))d"' h_argv
+mut_row M-9 "control query --limit 5 -> 6" \
+  'run_query control SOLEUR_CLAUDE_COST 5' 'run_query control SOLEUR_CLAUDE_COST 6' h_argv
+mut_row M-10 "outcome query default --limit 200 -> 201" \
+  'LIMIT="${FT10552_LIMIT:-200}"' 'LIMIT="${FT10552_LIMIT:-201}"' h_argv
+mut_row M-11 "escalation comparison >= -> > (exactly 35d stops being exit 5)" \
+  'if (( age_s >= ESCALATE_AFTER_DAYS * 86400 )); then' 'if (( age_s > ESCALATE_AFTER_DAYS * 86400 )); then' h_exact35
+mut_row M-12 "escalation budget 35 -> 34 days (34d23h stops being NOT YET)" \
+  'ESCALATE_AFTER_DAYS=35' 'ESCALATE_AFTER_DAYS=34' h_not_yet34
+mut_row M-13 "rc-3 path echoes the helper's raw output again" \
+  $'exited 3 (%s): the query never ran (credentials not injected into the helper).\\n\' "$label" >&2' \
+  $'exited 3 (%s): %s\\n\' "$label" "$(head -c 400 "$QOUT")" >&2' h_hygiene
+}
+
+
 # --- verdict: floor + conservation reported DIRECTLY, never via pass()/fail() --
-MIN_CASES=90
+MIN_CASES=171
 total=$((passes + fails))
 if (( total < MIN_CASES )); then
   printf 'FATAL: only %d case(s) ran; floor is %d - the suite asserted nothing\n' "$total" "$MIN_CASES" >&2

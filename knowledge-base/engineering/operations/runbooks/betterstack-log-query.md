@@ -654,12 +654,22 @@ Reading it:
   | `edit-target-duplicate` | a second cluster on a target already drafted this run (both PRs would fork from one base) | N |
   | `edit-derive-failed` | a SERVER defect: the derived diff was not additive, or the derivation itself failed (Sentry op `draft-edit-error`) | F (defect) |
 
+  `diff-path-off-target`, `corpus-shrink-refused` and `agents-core-hr-rule-edit-refused` can no longer fire
+  for a correct server derivation (the diff touches only the declared target, removes nothing, and cannot mint
+  an `hr-` id), so the follow-through probe grades them as server defects (class F), not as proof.
+
   `diff-underivable-apply` is retained for the residual case (a derived diff that git then rejects) and is
   also a server defect; `edit-derive-failed` and `diff-underivable-apply` are told apart by the Sentry op
   (`draft-edit-error` vs `diff-path-refused`). The marker field set is unchanged: the cause lives in Sentry,
-  not here. **Join used to attribute these runs (no SSH):** the marker row's `refusal_detail[].cluster_hash`
-  joins to the pino `draft-edit-refused` / `diff-path-refused` row on `cluster_hash`; the pino row carries
-  the `cause`.
+  not here. **Where the cause is readable (no SSH):** each refused draft emits a Sentry MESSAGE event
+  (feature `cron-compound-promote`, op `draft-edit-refused`) tagged `reason` and `cause` with `cluster_hash` in
+  `extra`; a derivation fault emits op `draft-edit-error` tagged `cause` (`bad-base`, `git-exit`, `non-additive`,
+  `error`). The same pino line reaches Better Stack under the message `draft-edit-refused`, keyed `hash` (NOT
+  `cluster_hash`; only the Sentry event and the marker's `refusal_detail[]` use `cluster_hash`). To attribute a
+  marker row, take its `refusal_detail[].cluster_hash`, then search Sentry for op `draft-edit-refused` with that
+  `cluster_hash`, or Better Stack for the `draft-edit-refused` line whose `hash` equals it. The events are MESSAGE
+  events on purpose: on the Error path the pino mirror captures the same Error first and Sentry drops the tagged
+  capture (#8629).
 - **Do not write `.diff_fenced // "-"` in a jq projection.** jq's `//` yields
   its right-hand side when the left is `null` **or `false`**, so every `false`
   renders identically to an absent field — and `false` is a meaningful value for

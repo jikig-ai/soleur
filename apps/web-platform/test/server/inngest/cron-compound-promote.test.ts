@@ -304,6 +304,17 @@ describe("handler-side persistence (#5111)", () => {
     expect(SUT_SOURCE).not.toContain("spawnGitChecked");
   });
 
+  it("spawnGitCapture resolves on `close`, not `exit` (a successful git read must never resolve with undelivered stdout)", () => {
+    const start = SUT_SOURCE.indexOf("function spawnGitCapture(");
+    expect(start).toBeGreaterThan(-1);
+    const body = SUT_SOURCE.slice(start, SUT_SOURCE.indexOf("\n}\n", start))
+      .split("\n")
+      .map((l) => l.replace(/^\s*\/\/.*$/, ""))
+      .join("\n");
+    expect(body).toMatch(/child\.on\("close",/);
+    expect(body).not.toMatch(/child\.on\("exit",/);
+  });
+
   it("inlines stripFrontmatter — does NOT cross-root-import repo-root scripts/ (#6794/#6860)", () => {
     // The Next.js Docker build context copies only apps/web-platform/ (+ the
     // vendored plugin), NOT repo-root scripts/. A `../../../../../scripts/…`

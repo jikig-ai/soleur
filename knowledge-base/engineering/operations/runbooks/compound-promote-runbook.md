@@ -138,7 +138,11 @@ What a streak means when you read the weekly marker:
 
 - **`edit-anchor-not-found` / `edit-anchor-ambiguous` / `edit-invalid`** every week: the model is not
   copying an anchor verbatim or is producing unusable lines. Model-side, not a server fault; the probe
-  keeps the tracker open. Read the Sentry `cause` tag before touching the prompt.
+  keeps the tracker open. Read the Sentry `cause` tag (op `draft-edit-refused`) before touching the prompt.
+- **A red `lint-rule-ids` on an `AGENTS.rules.md` draft is expected, not a defect.** The cron edits one
+  file; the corpus lint requires an `AGENTS.md` pointer line for every rule body. The draft PR body names
+  the exact `- [id: <slug>]` line for the reviewer to add. Neither the follow-through probe nor the census
+  counts this red check as a failure.
 - **`edit-target-too-large`**: the target exceeds 120,000 bytes. It clears as the largest skills are
   shortened (#10551).
 - **`skill-conflict-guard`** every week: any open PR that mentions `plugins/soleur/skills` blocks a

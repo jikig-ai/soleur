@@ -23,3 +23,7 @@ soleur:plan, soleur:deepen-plan, security-sentinel, architecture-strategist, spe
 ## Work Phase
 - Status: complete (GREEN, probe, docs committed; affected gate NOT run locally: machine contended, load ~72; CI owns the full battery per ADR-183)
 - Real-model evidence run: not run: no dev key
+
+## Review fix round (2026-10-19)
+- Panel: 9 seats at e64d0e14ec; fixes in the commit after it. CTO spawns: 2 of 2 used.
+- Fixed: hr-/wg- mint bypass and id grammar, content classes, credential shapes, Sentry delivery (message path + tags), spawnGitCapture close event, explicit Cluster construction, source_learnings filter, probe floor derivation + F reclassification, exact-text and replay rows.

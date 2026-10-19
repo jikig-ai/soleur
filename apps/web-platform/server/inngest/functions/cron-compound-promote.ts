@@ -737,7 +737,10 @@ function spawnGitCapture(
       if (stderr.length >= 4096) return;
       stderr = (stderr + chunk).slice(0, 4096);
     });
-    child.on("exit", (exitCode) => resolve({ exitCode, stdout, stderr }));
+    // `close`, not `exit`: `exit` can fire before the child's stdout/stderr have been fully
+    // delivered, so under load a successful command resolved with a TRUNCATED or EMPTY stdout
+    // (observed: `git ls-tree` reading as "path absent"). `close` fires after the streams end.
+    child.on("close", (exitCode) => resolve({ exitCode, stdout, stderr }));
     child.on("error", (err) => resolve({ exitCode: -1, stdout: "", stderr: String(err) }));
     child.stdin?.on("error", () => {
       // A diff large enough to trip EPIPE must not crash the handler; the
@@ -948,20 +951,31 @@ export const EDIT_OUTPUT_SCHEMA = {
 // The credential alternatives of PII_REGEX only (Anthropic key, JWT, GitHub tokens, AWS,
 // Stripe, Slack). The email / IPv4 / IBAN alternatives over-match rule prose, and the
 // committed text goes to a public repo, so the credential shapes are the ones that matter.
-const CREDENTIAL_RE = new RegExp(
+export const CREDENTIAL_RE = new RegExp(
   "(eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+)" +
     "|(sk-ant-[A-Za-z0-9_-]{20,})" +
     "|(gh[pousr]_[A-Za-z0-9._~+/=-]{20,})|(github_pat_[A-Za-z0-9._~+/=-]{20,})" +
     "|(AKIA[0-9A-Z]{16})" +
     "|((sk|pk)_(live|test)_[A-Za-z0-9]{20,})" +
-    "|(xox[baprs]-[A-Za-z0-9-]{10,})",
+    "|(xox[baprs]-[A-Za-z0-9-]{10,})" +
+    // Not in PII_REGEX (its job is to keep personal data out of a prompt), but a private-key
+    // header or a bearer credential in text bound for a public repo is the same class.
+    "|(-----BEGIN [A-Z ]*PRIVATE KEY-----)|(Bearer[ \\t]+[A-Za-z0-9._~+/=-]{20,})",
 );
 // Printable ASCII only. The TS gate counts rule lines with split("\n") while
 // scripts/lint-agents-rule-budget.py uses splitlines(), so U+2028 / U+0085 would count
 // as one line in one and two in the other; zero-width, tag-block and bidi characters are
 // invisible to a PR reviewer.
 const PRINTABLE_ASCII_RE = /^[\x20-\x7e]*$/;
-const AGENTS_RULE_BULLET_RE = /^- .*\[id: (?!hr-)([a-z0-9-]+)\]/;
+// One `[id: ...]` per line, and a class prefix the corpus lint (scripts/lint-rule-ids.py RID_RE)
+// accepts. `hr-` and `wg-` are deliberately absent: ADR-092 gates those bodies for human review,
+// so the cron may only mint the ordinary rule classes.
+const AGENTS_ID_TOKEN_RE = /\[id:[^\]]*\]/g;
+const AGENTS_NEW_ID_RE = /^\[id: ((?:cq|rf|pdr|cm)-[a-z0-9-]{3,60})\]$/;
+// A hard-rule id named anywhere in the line (prose, a second token) is refused too.
+const HARD_RULE_TOKEN_RE = /(?:^|[^a-z0-9])hr-[a-z0-9]/i;
+// Text that changes how the harness or a markdown renderer reads what follows it.
+const RENDER_HAZARD_RE = /```|~~~|<!--|-->|!`/;
 
 function assertAllowedTarget(targetPath: string): EditRefusal | null {
   // A future caller or test helper must not get traversal on `join(tmp, "a", path)`,
@@ -1056,13 +1070,18 @@ function newLinesCause(lines: string[], targetPath: string, base: string): strin
   // A bare `---` would open or close a frontmatter block.
   if (lines.some((l) => l === "---")) return "shape";
   if (lines.some((l) => CREDENTIAL_RE.test(l))) return "credential";
+  // A fence, comment or preprocessing marker would change how the rest of the file (or the
+  // skill-conflict comment that quotes the diff) is read.
+  if (lines.some((l) => RENDER_HAZARD_RE.test(l))) return "shape";
   if (targetPath === "AGENTS.rules.md") {
-    // A model cannot mint an `hr-` rule (ADR-092 reserves those for human review), and a
-    // rule id must be new.
+    // A model cannot mint an `hr-` or `wg-` rule (ADR-092 reserves those for human review);
+    // every line is exactly one rule bullet with ONE new id of an accepted class.
     const seen = new Set<string>();
     for (const l of lines) {
-      const id = AGENTS_RULE_BULLET_RE.exec(l)?.[1];
-      if (id === undefined || base.includes(`[id: ${id}]`) || seen.has(id)) return "shape";
+      const tokens = l.match(AGENTS_ID_TOKEN_RE) ?? [];
+      const id = tokens.length === 1 ? AGENTS_NEW_ID_RE.exec(tokens[0])?.[1] : undefined;
+      if (!l.startsWith("- ") || id === undefined || HARD_RULE_TOKEN_RE.test(l)) return "shape";
+      if (base.includes(`[id: ${id}]`) || seen.has(id)) return "shape";
       seen.add(id);
     }
   }
@@ -1094,11 +1113,16 @@ async function deriveDiff(
   at: number,
   newLines: string[],
 ): Promise<{ diff: string } | { failure: string }> {
-  const fail = (cause: string): { failure: string } => {
-    reportSilentFallback(new Error(`additive edit derivation failed: ${cause}`), {
+  const fail = (cause: string, extra?: Record<string, unknown>): { failure: string } => {
+    // MESSAGE path (err = null) with TAGS, on purpose: on the Error path the pino mirror
+    // captures the same Error first and Sentry drops the tagged capture, so `op` and the cause
+    // never arrive (see server/anthropic-credit.ts, #8629).
+    reportSilentFallback(null, {
       feature: "cron-compound-promote",
       op: "draft-edit-error",
-      extra: { cause },
+      message: `additive edit derivation failed: ${cause}`,
+      tags: { cause },
+      extra,
     });
     return { failure: cause };
   };
@@ -1127,15 +1151,17 @@ async function deriveDiff(
       dir,
       "",
     );
-    if (r.exitCode !== 1) return fail("git-exit");
+    if (r.exitCode !== 1) return fail("git-exit", { git_exit: r.exitCode });
     // Splicing only inserts, so a removed line is a server bug.
     if (!isAdditiveDiff(r.stdout)) return fail("non-additive");
     return { diff: r.stdout };
   } catch (err) {
-    reportSilentFallback(err, {
+    reportSilentFallback(null, {
       feature: "cron-compound-promote",
       op: "draft-edit-error",
       message: "additive edit derivation threw",
+      tags: { cause: "error" },
+      extra: { error_class: err instanceof Error ? err.name : typeof err },
     });
     return { failure: "error" };
   } finally {
@@ -1152,7 +1178,7 @@ export async function buildAdditiveEditDiff(input: {
   targetPath: string;
   base: string;
   edit: unknown;
-}): Promise<{ ok: true; diff: string } | EditRefusal> {
+}): Promise<DraftEditResult> {
   const refused = assertAllowedTarget(input.targetPath);
   if (refused) return refused;
   const { targetPath, base, edit } = input;
@@ -1208,7 +1234,7 @@ export async function draftAdditiveEdit(args: {
   cluster: { target_path: string; rationale: string; source_learnings: string[] };
   repoRoot: string;
   apiKey: string;
-  runId: string;
+  runId?: string;
   corpusSummaries: Map<string, string>;
   /** Always-loaded byte headroom for THIS cluster (already divided across the clusters left). */
   headroomBytes: number;
@@ -1281,8 +1307,26 @@ export async function draftAdditiveEdit(args: {
 }
 
 /**
+ * The draft PR body line for an `AGENTS.rules.md` proposal. The cron edits exactly one file, but
+ * `scripts/lint-rule-ids.py` requires every rule body to have a pointer line in `AGENTS.md`, so
+ * the draft's CI is red until a reviewer adds it. Say so at the point of action and name each
+ * slug, so the red check reads as expected rather than as a defect (CTO ruling, #10552).
+ */
+export function agentsPointerNote(targetPath: string, diff: string): string {
+  if (targetPath !== "AGENTS.rules.md") return "";
+  const added = diff.split("\n").filter((l) => l.startsWith("+") && !l.startsWith("+++"));
+  const slugs = [...added.join("\n").matchAll(/\[id: ([a-z0-9-]+)\]/g)].map((m) => m[1]);
+  if (slugs.length === 0) return "";
+  const list = slugs.map((id) => `\`- [id: ${id}]\``).join(", ");
+  return (
+    `\n\nCI \`lint-rule-ids\` will fail until a reviewer adds ${list} to \`AGENTS.md\`. ` +
+    `This is expected: the cron edits a single file (ADR-092).`
+  );
+}
+
+/**
  * The targets phase 2 can actually edit, with their sizes, computed from the clone so
- * phase 1 does not pick a file that is certain to be refused (`review`, `work` and `ship`
+ * phase 1 does not pick a file that is certain to be refused (`review`, `work`, `ship` and `brainstorm`
  * SKILL.md exceed the cap). The refusal stays as the fallback for a model that picks an
  * ineligible path anyway.
  */
@@ -1300,8 +1344,15 @@ async function listEligibleTargets(repoRoot: string): Promise<string> {
   let skills: string[] = [];
   try {
     skills = (await readdir(join(repoRoot, "plugins", "soleur", "skills"))).sort();
-  } catch {
-    // no skills directory: only AGENTS.rules.md is eligible
+  } catch (err) {
+    // No skills directory (or it is unreadable): phase 1 is then offered AGENTS.rules.md alone.
+    // Loud, because a silently narrowed target list reads as "nothing to promote".
+    reportSilentFallback(null, {
+      feature: "cron-compound-promote",
+      op: "eligible-targets-unreadable",
+      message: "could not list plugins/soleur/skills for the eligible-target list",
+      extra: { error_class: err instanceof Error ? err.name : typeof err },
+    });
   }
   for (const name of skills) {
     const rel = `plugins/soleur/skills/${name}/SKILL.md`;
@@ -1543,6 +1594,7 @@ export async function cronCompoundPromoteHandler({
         `Current always-loaded payload (AGENTS.md + AGENTS.rules.md) is ${alwaysLoadedNow} bytes; propose against a budget of ${PROPOSE_ALWAYS_LOADED_BUDGET} bytes (the warn floor — leave headroom, do not aim for the hard ceiling).`,
         `target_path MUST be one of: AGENTS.rules.md, plugins/soleur/skills/<skill-name>/SKILL.md. The workflow refuses any other path. cluster_hash is ignored (the workflow computes it).`,
         `Eligible targets with their byte sizes (a larger file is refused): ${eligibleTargets}.`,
+        `Each cluster must name a DIFFERENT target_path: a second cluster on a file already chosen in this answer is refused.`,
         `Output ONLY a JSON object with a "clusters" key, nothing else.`,
       ].join("\n");
 
@@ -1618,7 +1670,21 @@ export async function cronCompoundPromoteHandler({
     const corpusSummaries = new Map(corpus.entries.map((e) => [e.path, e.summary] as const));
     const draftedTargets = new Set<string>();
 
-    for (const [clusterIndex, proposed] of clusterResult.clusters.entries()) {
+    // The parse above is a cast of model output. Rebuild each proposal field by field and keep
+    // only source learnings that are keys of the collected corpus: they flow into the cluster
+    // hash, the commit trailers and the PR body, where a newline in a model-invented path would
+    // forge a trailer. A cluster left with none is refused `edit-invalid` (no-source).
+    const proposals: ProposedCluster[] = clusterResult.clusters.map((c) => ({
+      cluster_hash: typeof c.cluster_hash === "string" ? c.cluster_hash : "",
+      tier: c.tier === "skill" ? "skill" : "agents-core",
+      target_path: typeof c.target_path === "string" ? c.target_path : "",
+      rationale: typeof c.rationale === "string" ? c.rationale : "",
+      source_learnings: (Array.isArray(c.source_learnings) ? c.source_learnings : []).filter(
+        (p): p is string => typeof p === "string" && corpusSummaries.has(p),
+      ),
+    }));
+
+    for (const [clusterIndex, proposed] of proposals.entries()) {
       const clusterHash = computeClusterHash(proposed.source_learnings);
       // Derived from the MEMOIZED run start, never a fresh Date — the branch
       // name embeds this suffix and the helper's replay-resume is keyed on
@@ -1657,21 +1723,25 @@ export async function cronCompoundPromoteHandler({
         // pass could together exceed the ceiling: divide the headroom by the clusters left.
         const headroomBytes = Math.floor(
           Math.max(0, PROPOSE_ALWAYS_LOADED_BUDGET - measureAlwaysLoadedBytes(indexText, corpusText)) /
-            (clusterResult.clusters.length - clusterIndex),
+            (proposals.length - clusterIndex),
         );
         const result = await draftAdditiveEdit({
-          cluster: proposed, repoRoot, apiKey, runId: runId ?? "", corpusSummaries, headroomBytes,
+          cluster: proposed, repoRoot, apiKey, runId, corpusSummaries, headroomBytes,
         });
         if (!result.ok) {
           logger.warn(
             { fn: "cron-compound-promote", hash: clusterHash, reason: result.reason, cause: result.cause },
             "draft-edit-refused",
           );
-          // A reason-specific Error message: reportSilentFallback logs the Error first, so
-          // a fixed message would merge seven reasons into one Sentry issue.
-          reportSilentFallback(new Error(`draft edit refused: ${result.reason} (${result.cause})`), {
+          // MESSAGE path (err = null) with TAGS, on purpose: on the Error path the pino mirror
+          // captures the same Error first and Sentry drops the tagged capture, so `op`, the
+          // reason and the cause never arrive (server/anthropic-credit.ts, #8629). `reason` and
+          // `cause` are closed vocabularies, so they are safe as low-cardinality tags.
+          reportSilentFallback(null, {
             feature: "cron-compound-promote", op: "draft-edit-refused",
-            extra: { cluster_hash: clusterHash, reason: result.reason, cause: result.cause },
+            message: `draft edit refused: ${result.reason} (${result.cause})`,
+            tags: { reason: result.reason, cause: result.cause },
+            extra: { cluster_hash: clusterHash },
           });
           return { kind: "refused", reason: result.reason };
         }
@@ -1680,8 +1750,15 @@ export async function cronCompoundPromoteHandler({
       );
       if (draft.kind === "drafted") draftedTargets.add(proposed.target_path);
       // The ONLY assignment of `proposed_diff_unified`: it comes from the derived diff.
+      // Built field by field, never with a spread: a model-supplied extra property (the phase-1
+      // schema no longer offers `proposed_diff_unified`, but the parse is a cast) must not be
+      // able to ride into the apply step and override the derived diff.
       const cluster: Cluster = {
-        ...proposed,
+        cluster_hash: proposed.cluster_hash,
+        tier: proposed.tier,
+        target_path: proposed.target_path,
+        source_learnings: proposed.source_learnings,
+        rationale: proposed.rationale,
         proposed_diff_unified: draft.kind === "drafted" ? draft.diff : "",
       };
 
@@ -1926,7 +2003,8 @@ export async function cronCompoundPromoteHandler({
           `Promoted by compound-promotion-loop. Source learnings: ${cluster.source_learnings.join(" ")}. ` +
           `Tier: ${cluster.tier}. Cluster-Hash: ${clusterHash}. ` +
           `Reviewer: verify the diff respects cq-agents-md-tier-gate and cq-agents-md-why-single-line; ` +
-          `merge to apply, close to reject.\n\nhuman review required`;
+          `merge to apply, close to reject.\n\nhuman review required` +
+          agentsPointerNote(cluster.target_path, cluster.proposed_diff_unified);
 
         const result = await safeCommitAndPr({
           spawnCwd: repoRoot,
