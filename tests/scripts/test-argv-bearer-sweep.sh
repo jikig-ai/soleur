@@ -7647,7 +7647,7 @@ VERB = re.compile(
 VALUED = {"-u", "--username", "-p", "--password", "--config", "--authfile", "--cert-dir", "--registry-config", "-e", "--email"}
 # A bare flag-variable (`$SINK_TLS_FLAG`) expands to an option or to nothing: neither the host nor a visible option.
 NEUTRAL = re.compile(r'^"?\$\{?[A-Za-z_]*(?:FLAG|FLAGS|OPTS|OPTIONS)\}?"?$', re.I)
-PLACEHOLDER = re.compile(r"<[A-Za-z][\w.\-]*>")
+PLACEHOLDER = re.compile(r"<[A-Za-z][\w.\- ]*>")
 CLUSTER_C = re.compile(r"^-[A-Za-z]*c$")
 PAYLOAD_KEYS = ("run:", "command:", "script:", "cmd:", "entrypoint:")
 EXEC_CALLS = re.compile(r"^(?:exec|execSync|execFile|system|popen|run|call|check_output|check_call|Popen|Command)$")
@@ -7734,9 +7734,12 @@ def unq(t):
     return t[1:-1] if len(t) > 1 and t[0] in "\"'" and t[-1] == t[0] else t
 
 
-def subs(t):
-    """The bodies of every balanced $( ... ) span, and every backtick span, inside one token."""
-    out, i = [x[1:-1] for x in re.findall(r"`[^`]*`", t)], 0
+SHELLS = {"sh", "bash", "zsh", "dash", "ksh", "su"}
+
+
+def subs(t, md=False):
+    """The bodies of every balanced $( ... ) span inside one token, and its backtick spans (never in markdown inline code or single quotes)."""
+    out, i = ([] if md or t[:1] == "'" else [x[1:-1] for x in re.findall(r"`[^`]*`", t)]), 0
     while True:
         i = t.find("$(", i)
         if i < 0:
@@ -7754,22 +7757,26 @@ def payload_context(toks, i):
     prev = toks[i - 1] if i else ""
     if prev == "--" and i > 1:
         prev = toks[i - 2]
-    if CLUSTER_C.match(prev) or prev == "eval" or prev in PAYLOAD_KEYS:
+    start = i
+    while start and toks[start - 1][:1] != "\0":
+        start -= 1  # the first token of the command this string belongs to
+    words = [unq(x) for x in toks[start:i]]
+    if CLUSTER_C.match(prev) and any(w in SHELLS for w in words):
         return True
-    if i > 1 and toks[i - 2] == "ssh" and not prev.startswith(("-", "\0")):
+    if prev == "eval" or prev in PAYLOAD_KEYS or ("ssh" in words and not prev.startswith("-")):
         return True
-    return prev == "\0(" and i > 1 and bool(EXEC_CALLS.match(toks[i - 2]))
+    return prev == "\0(" and i > 1 and bool(EXEC_CALLS.match(toks[i - 2].split(".")[-1]))
 
 
-def scan_line(code, depth=0):
+def scan_line(code, depth=0, md=False):
     toks, recs, i = tokens(code), [], 0
     while i < len(toks):
         t = toks[i]
         if depth < 3 and t[:1] != "\0" and ("$(" in t or "`" in t):
-            for inner in subs(t):
-                recs += scan_line(inner, depth + 1)  # a login inside a command substitution
+            for inner in subs(t, md):
+                recs += scan_line(inner, depth + 1, md)  # a login inside a command substitution
         if depth < 2 and t[:1] in "\"'" and payload_context(toks, i):
-            recs += scan_line(unq(t), depth + 1)  # bash -lc "docker login ..." / eval "..." / run: '...' / ssh host "..." / execSync("...")
+            recs += scan_line(unq(t), depth + 1, md)  # bash -lc "docker login ..." / eval "..." / run: '...' / ssh host "..." / execSync("...")
         if t[:1] == "\0" or not VERB.match(unq(t)):
             i += 1
             continue
@@ -7798,14 +7805,14 @@ def scan_line(code, depth=0):
         j, opts, hosts, bad = k + 1, [], 0, False
         while j < len(toks):
             if toks[j][:1] == "\0":
-                if toks[j] in REDIRS:  # a redirection may sit anywhere in the argument list: skip it and its target
-                    j += 2
+                if toks[j] in REDIRS:  # a redirection may sit anywhere in the argument list: skip it and its target (never an option)
+                    j += 2 if j + 1 < len(toks) and not unq(toks[j + 1]).startswith("-") else 1
                     continue
                 break
             u = unq(toks[j])
             if u.startswith("-"):
                 opts.append(u)
-                glued_user = u.startswith("-u") and not u.startswith("--") and len(u) > 3  # -ujpierre is a username, -up is a cluster
+                glued_user = u.startswith("-u") and not u.startswith("--") and len(u) > 3  # -ujpierre is a username; -up is treated as a cluster (conservative)
                 if u in ("-p", "--password") or u.startswith("--password=") or (re.match(r"^-[A-Za-z]*p", u) and not u.startswith("--") and not glued_user):
                     bad = True
                 if u in VALUED or (u == "--tls-verify" and j + 1 < len(toks) and unq(toks[j + 1]) in ("true", "false")):
@@ -7844,7 +7851,7 @@ for rel in out.stdout.decode("utf-8", "replace").split("\0"):
         i += 1
         if "login" not in cur.lower():
             continue
-        for opts, bad in scan_line(cur.strip()):
+        for opts, bad in scan_line(cur.strip(), 0, rel.endswith(".md")):
             print("\t".join([rel, str(start), opts, bad, cur.strip()]))
 S8PY
 s8_scan() { python3 -I "$S8/scan.py" "$1"; } # <root>: one TSV record per invocation: file, line, options, bad(0|1), code
@@ -7934,7 +7941,7 @@ m_ev=""; n_ev=0
 for v in 'docker login ghcr.io -u $(id -un) -p "$X"' 'crane auth login ghcr.io -u $(< f) -p "$X"' 'docker login ghcr.io -u u -p "$(cat /run/secrets/x)"' 'docker login -u u -p "$X"' 'docker login -u u --password "$X"' \
          'docker login ghcr.io -u ${{ github.actor }} -p "$X"' 'docker login -u "a;b" -p "$X" host' 'docker login host >/tmp/o -p "$X"' 'docker login host &>/dev/null -p "$X"' 'docker login host 2>&1 -p "$X"' \
          'podman login --authfile /x -p "$X" host' 'bash -c "docker login -u u -p $X host"' 'bash -lc "docker login -u u -p $X host"' 'eval "docker login -u u -p $X host"' \
-         'ssh h "docker login -u u -p $X host"' "run: 'docker login -u u -p \"\$X\" host'" 'OUT=`docker login -u u -p "$X" host`' 'execSync(`docker login -u u -p ${t} host`)' \
+         'ssh h "docker login -u u -p $X host"' 'ssh -o StrictHostKeyChecking=no root@h "docker login -u u -p $X host"' 'os.system("docker login -u u -p x host")' 'docker login <your registry> -p "$X" host' "run: 'docker login -u u -p \"\$X\" host'" 'OUT=`docker login -u u -p "$X" host`' 'execSync(`docker login -u u -p ${t} host`)' \
          '/usr/bin/docker login -u u -p "$X" host' 'crane_capture o e auth login host -u u -p "$X"' 'X="$(printf %s "$T" | docker login host -u u -p "$T")"'; do
   n_ev=$((n_ev + 1)); d="$(s8_fresh ev-$n_ev)"; s8_put "$d" scripts/extra-e.sh "$v"; s8_judge "$d"; [[ "$S8_J_REASONS" == "bad:scripts/extra-e.sh" ]] || m_ev+=" [$v => $S8_J_REASONS]"
 done
@@ -7964,12 +7971,15 @@ echo "Use docker login registry -u me -p secret"
 printf 'docker login -u u -p pw r.io\n'
 grep -q "docker login -p" file
 alias dl='docker login r.io -u u -p t'
+echo 'Run `docker login -p x` to see'
+grep -qc "docker login -p" file
 # docker login r.io -u u -p t
 docker login --help
 docker logout r.io
 S8PASS
 )"
-if [[ "$(s8_recs "$d" scripts/prose.sh 1)" -eq 0 ]]; then row "S8 must-pass: prose and pattern lines that merely MENTION docker login (the action description, an ::error:: echo, the ci-deploy logger lines, a grep pattern, a token-list loop, an echo, a printf, an alias, a comment, --help, logout) are not invocations, so none is judged bad" ok
+s8_put "$d" plugins/prose.md 'Never write `docker login -u u -p "$T"`; use `--password-stdin`'
+if [[ "$(s8_recs "$d" scripts/prose.sh 1)" -eq 0 && "$(s8_recs "$d" plugins/prose.md 1)" -eq 0 ]]; then row "S8 must-pass: prose and pattern lines that merely MENTION docker login (the action description, an ::error:: echo, the ci-deploy logger lines, a grep pattern, a token-list loop, an echo, a printf, an alias, a single-quoted backtick, grep -qc, a markdown inline-code warning, a comment, --help, logout) are not invocations, so none is judged bad" ok
 else row "S8 must-pass: a prose or pattern mention of docker login was judged a password-on-argv login" fail "$(s8_scan "$d" | awk -F'\t' '$1 == "scripts/prose.sh" && $4 == 1 { print $2 }' | tr '\n' ' ')"; fi
 m_ok=""; n_ok=0
 for v in 'printf %s "$T" | docker login --insecure -u u h.example.test:5000 --password-stdin' 'printf %s "$T" | docker login h.example.test:5000 -u u --password-stdin && mkdir -p x' \
