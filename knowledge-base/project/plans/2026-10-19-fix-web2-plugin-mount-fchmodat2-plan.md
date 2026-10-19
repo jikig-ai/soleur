@@ -6,12 +6,22 @@ slug: web2-plugin-mount-fchmodat2
 branch: feat-one-shot-8743-web2-plugin-mount-fchmodat2
 issue: 8743
 lane: cross-domain
-brand_survival_threshold: aggregate-pattern
+brand_survival_threshold: aggregate pattern
 ---
 
 <!-- iac-routing-ack: plan-phase-2-8-reviewed -->
 
 ## Overview
+
+**Deepened:** 2026-10-19 via `soleur:deepen-plan` (sequential fallback — no
+Task fan-out on this harness; halt gates 4.4–4.12 executed mechanically, all
+green; verify-the-negative and self-audit passes run inline). Gate outcomes:
+4.4 precedent-diff — `fan_out_to_peers` is the canonical HMAC/stdin-`--config`
+precedent the `peers` merge mirrors; 4.45 — negative claims (`no re-fan`,
+`no new privilege surface`, merge cannot recurse) grep-verified; 4.5 —
+fired on token `unreachable` (error-slot label only), cleared per the
+Network-Outage Note; 4.55 — `## Downtime & Cutover` added (zero-downtime by
+construction); 4.6/4.7/4.10/4.11/4.12 — sections present and compliant.
 
 Every web-platform deploy delivered to web-2 (soleur-web-2, 10.0.1.11) via the
 `/hooks/deploy-peer` fan-out aborts in `apps/web-platform/infra/ci-deploy.sh`'s
@@ -287,6 +297,34 @@ completion` step AFTER `Verify deploy script completion`:
 - `knowledge-base/engineering/operations/post-mortems/2026-10-19-web2-plugin-mount-fchmodat2-postmortem.md` — PIR.
 - `scripts/followthroughs/web2-plugin-seed-8743.sh` + `scripts/followthroughs/web2-plugin-seed-8743.test.sh` — soak probe.
 
+## Downtime & Cutover
+
+Offline-inducing operation: none on the serving path. The `ci-deploy.sh` /
+`cat-deploy-state.sh` changes ride the existing infra-config delivery channel
+(`apply-deploy-pipeline-fix.yml` push arm + `deploy_pipeline_fix_web2` bastion
+sibling) — file replacement only, no host replace, no container swap induced by
+this change itself. The `docker run` seed runs inside the already-gated
+canary→swap sequence on each host's own deploy; a broken seed aborts before
+the swap, so the OLD container keeps serving (the existing downtime-safe abort
+shape, `final_write_state 1` + exit 1, is preserved). Residual risk: the new
+release-workflow peer gate FAILS future release runs until every expected peer
+verifies — a deliberate gate, not downtime: serving is unaffected while the
+run reports red. Rollback path: revert the two files and re-dispatch the same
+apply workflow (the channel is self-describing; no host state to unwind).
+
+## Network-Outage Note (gate 4.5 — fired on token `unreachable`)
+
+Fired only on the error-slot label, not on a connectivity symptom — this is an
+ownership/observability defect, not an SSH/network diagnosis. Layer status for
+completeness: L3 firewall — `hcloud_firewall.web` default-denies :9000 public
+(`firewall-9000-deny.test.sh` pins; private-net only by design, unchanged by
+this plan); L3 DNS/routing — the peer GET uses literal private IPs, no DNS;
+L7 TLS — n/a (plain HTTP + HMAC on private net, same as the existing POST);
+L7 application — webhook already serves `deploy-status` on both hosts. No
+network remediation is proposed or needed; nothing in this plan requires an
+SSH-capable egress allowlist check. SOLEUR_RULE_APPLIED
+rule=hr-ssh-diagnosis-verify-firewall — fired on label, cleared on inspection.
+
 ## User-Brand Impact
 
 - **If this lands broken, the user experiences:** the deploy path wedges on
@@ -468,6 +506,22 @@ operations — no vendor/procurement change; product — no UI.
 **Tier:** none — Files-to-Edit/Create contain no UI-surface path (mechanical
 scan of `components/**`, `app/**/page.tsx`, `*.njk`, `*.html` → zero matches).
 **Pencil available:** N/A (no UI surface)
+
+## Enhancement Summary
+
+Deepen-plan (sequential fallback) added: `## Downtime & Cutover` (gate 4.55),
+`## Network-Outage Note` (gate 4.5 label-fire), the Deepened provenance line,
+and frontmatter threshold normalization to the `aggregate pattern` enum.
+
+### Key Improvements
+
+- Live-confirmed the incident is still firing (Better Stack rows through
+  2026-10-19T13:25Z) — elevated from "historic report" to chronic outage.
+- Identified the systemic root cause (root-run cloud-init seed → uid-1001
+  tree vs uid-1000 deploy) and chose the self-healing container-side seed
+  over a new sudoers grant (no new privilege surface).
+- Grounded ask #2 in ADR-068 constraint (c) — the recorded-but-unbuilt
+  private-net peer verification — rather than inventing a new channel.
 
 ## Non-Goals / Deferred
 
