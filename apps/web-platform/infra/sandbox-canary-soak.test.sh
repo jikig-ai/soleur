@@ -124,8 +124,10 @@ assert "no live reference to the retired outer-wrap canary outside the historica
 # 7e. Positive controls for the grep above: the pattern matches the retired symbol (so an empty result is not a
 # dead regex), and the KEPT pieces still exist (the retirement removed the deploy arm, not the replay mode).
 assert "7d pattern is live: it matches a retired symbol name" "printf 'run_outer_wrap_canary' | grep -qE \"$OUTER_RE\""
-assert "sandbox-canary.mjs still implements --replay-outer (kept for #9773 and the masked-proc docker suite)" \
-  "grep -q 'replay-outer' \"$SCRIPT_DIR/../scripts/sandbox-canary.mjs\""
+# The kept unit tests (test/sandbox-canary.test.ts) import classifyOuterWrapReplayVerdict directly, so they do
+# NOT notice a deleted CLI mode: pin the dispatch arm here (the masked-proc docker suite does not run it either).
+assert "sandbox-canary.mjs still dispatches --replay-outer to runOuterReplay (kept for the #9773 re-introduction path)" \
+  "grep -qE 'case \"replay-outer\":' \"$SCRIPT_DIR/../scripts/sandbox-canary.mjs\" && grep -qE 'return runOuterReplay\\(' \"$SCRIPT_DIR/../scripts/sandbox-canary.mjs\""
 
 # 8. Capability parity (review ask — static check, no docker needed): the
 # reverted arm-F posture has THREE pins that must never drift —
