@@ -258,15 +258,15 @@ Skipped by the Phase 2.9 rule: the diff edits only knowledge-base documents (no 
 
 ## Acceptance Criteria
 
-- [ ] `knowledge-base/operations/expenses.md` has one new row for GitHub Code Quality, status `retired`, with Amount equal to the measured meter sum recomputed at write time (254.96 at plan time), the source, and the phrase `Re-evaluation by 2026-11-14`; `last_updated` is 2026-10-19; the row has no `estimate` marker and no pipe inside the Notes cell.
-- [ ] `bash scripts/expenses-verify-by-check.sh` reports `anomalies=0` and `expired=22` (unchanged from before this PR).
-- [ ] ADR-276 diff is append-only: `git diff origin/main -- <ADR-276 file>` shows only added lines (zero `-` lines other than the diff header), and the new heading is `## Amendment 2026-10-19 (S5 Code Quality decision, #9730; Ref #10331)`; `status:` and the Stage status list are unchanged.
-- [ ] The ADR addendum and the ledger Notes both contain `2026-11-14` (grep both files).
-- [ ] Code Quality is actually off: the settings page reads off after a reload, workflow 343194280 is no longer `active` (or 404), a head pushed after the disable has a `PR #N` code-scanning run and no `Code Quality: PR #N` run, and `default-setup` equals the Phase 1 capture.
-- [ ] The audit file has the appended snapshot section (rule table, total, scan SHA and the five-file `py/empty-except` count, or the explicit empty-view note) and #10381 is settled with that snapshot only after the disable was verified.
-- [ ] PR body contains the standalone issue-closing line for #10331 exactly as the brief spells it, states the disable is a repository setting applied by the agent (no in-repo change, no operator step), and contains no other close keyword followed by an issue number.
-- [ ] `git diff origin/main --stat` lists only the three edited files, the two spec files and this plan; `plugins/soleur/skills/work/SKILL.md` is not in it.
-- [ ] `bash plugins/soleur/test/c4-count-parity.test.sh` still passes.
+- [x] `knowledge-base/operations/expenses.md` has one new row for GitHub Code Quality, status `retired`, with Amount equal to the measured meter sum recomputed at write time (254.96 at plan time), the source, and the phrase `Re-evaluation by 2026-11-14`; `last_updated` is 2026-10-19; the row has no `estimate` marker and no pipe inside the Notes cell.
+- [x] `bash scripts/expenses-verify-by-check.sh` reports `anomalies=0` and `expired=22` (unchanged from before this PR).
+- [x] ADR-276 diff is append-only: `git diff origin/main -- <ADR-276 file>` shows only added lines (zero `-` lines other than the diff header), and the new heading is `## Amendment 2026-10-19 (S5 Code Quality decision, #9730; Ref #10331)`; `status:` and the Stage status list are unchanged.
+- [x] The ADR addendum and the ledger Notes both contain `2026-11-14` (grep both files).
+- [x] Code Quality is actually off: the settings page reads off after a reload, workflow 343194280 is no longer `active` (or 404), a head pushed after the disable has a `PR #N` code-scanning run and no `Code Quality: PR #N` run, and `default-setup` equals the Phase 1 capture.
+- [x] The audit file has the appended snapshot section (rule table, total, scan SHA and the five-file `py/empty-except` count, or the explicit empty-view note) and #10381 is settled with that snapshot only after the disable was verified.
+- [x] PR body contains the standalone issue-closing line for #10331 exactly as the brief spells it, states the disable is a repository setting applied by the agent (no in-repo change, no operator step), and contains no other close keyword followed by an issue number.
+- [x] `git diff origin/main --stat` lists only the three edited files, the two spec files and this plan; `plugins/soleur/skills/work/SKILL.md` is not in it.
+- [x] `bash plugins/soleur/test/c4-count-parity.test.sh` still passes.
 
 ## Test Scenarios
 
