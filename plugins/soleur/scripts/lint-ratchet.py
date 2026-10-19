@@ -34,8 +34,8 @@ output, hash mismatch, baseline absent or unsafe, no merge base under ``CI``, an
 In the user scopes a content-caused exit 2 carries the stable prefix ``REPO-CONTENT:`` so a caller can
 tell a defect in the repository from a defect in the toolchain.
 
-Counting is waiver-proof (ruff ``--ignore-noqa``, eslint ``--no-inline-config``) and no tool is
-ever run in a fix mode: the files under scan include test fixtures that are test INPUT.
+Counting is waiver-proof in the Soleur scopes (ruff ``--ignore-noqa``, eslint ``--no-inline-config``; the
+user scopes honour the user's own ``# noqa``) and no tool is ever run in a fix mode: the files under scan include test fixtures that are test INPUT.
 
 Library contract (PR3b): ``check(config, root, base, env)`` takes a plain dict with ``name``,
 ``baseline``, ``floor``, ``run`` (``run(root) -> (findings, file_count)``, may raise ``Vacuous``,
@@ -102,13 +102,15 @@ USER_PYPROJECT = "pyproject.toml"
 MAX_CONFIG_BYTES = 1 << 20
 REPO_CONTENT = "REPO-CONTENT: "
 HEADER_PREFIX = "# toolchain: "
+CONFIG_CHANGED = "CONFIG CHANGED vs merge base"
 # Fully qualified: a bare ``origin/main`` is resolved by git as a tag first, and tags travel with a clone.
 BASE_LADDER = ("refs/remotes/origin/HEAD", "refs/remotes/origin/main", "refs/remotes/origin/master",
                "refs/remotes/upstream/main", "refs/remotes/upstream/master", "refs/heads/main", "refs/heads/master")
 # The only ruff failures where the pinned version is a plausible cause.
-PIN_HINT_RE = re.compile(r"(?i)(required-version|unknown rule selector|unknown (field|key|variant|option))")
+PIN_HINT_RE = re.compile(r"(?i)(required[- ]version|unknown rule selector|unknown (field|key|variant|option))")
 MAX_BASELINE_BYTES = 16 << 20
-ARGV_BUDGET = 24000
+# Per launch; Windows' command line is the tight limit, POSIX has 1 MiB (macOS) or more.
+ARGV_BUDGET = 24000 if sys.platform == "win32" else 150000
 TOTAL_RUN_BUDGET = 1800  # seconds across every chunked ruff launch of one run
 NOTICE_LIMIT = 25
 LINE_LIMIT = 600
@@ -117,7 +119,7 @@ FIELD_LIMIT = 200
 GIT_SCRUB = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
              "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_PREFIX", "GIT_LITERAL_PATHSPECS",
              "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS", "GIT_QUARANTINE_PATH",
-             "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_GRAFT_FILE", "GIT_SHALLOW_FILE")
+             "GIT_REPLACE_REF_BASE", "GIT_GRAFT_FILE", "GIT_SHALLOW_FILE")
 RULE_PIN_RE = re.compile(r"ruff ([0-9][0-9A-Za-z.]*)")
 GIT_TIMEOUT = 120
 RUN_TIMEOUT = 900
@@ -133,7 +135,9 @@ INVISIBLE_CODEPOINTS = (0x00ad, 0x034f, 0x061c, 0x115f, 0x1160, 0x180e, 0x2028, 
                         0x2063, 0x2064, 0x206a, 0x206b, 0x206c, 0x206d, 0x206e, 0x206f, 0x2800, 0x3164, 0xfeff,
                         0xffa0) + tuple(range(0x200b, 0x2010)) + tuple(range(0x202a, 0x202f)) \
     + tuple(range(0x2066, 0x206a)) + tuple(range(0xfe00, 0xfe10)) + tuple(range(0xfff9, 0xfffd)) \
-    + tuple(range(0xe0000, 0xe0080)) + tuple(range(0xe0100, 0xe01f0))
+    + tuple(range(0xe0000, 0xe0080)) + tuple(range(0xe0100, 0xe01f0)) \
+    + (0x17b4, 0x17b5, 0x2065) + tuple(range(0x180b, 0x180e)) + tuple(range(0x1bca0, 0x1bca4)) \
+    + tuple(range(0x1d173, 0x1d17b))
 CONTROL_RE = re.compile("[\x00-\x1f\x7f-\x9f" + "".join(chr(c) for c in INVISIBLE_CODEPOINTS) + "]")
 # pip output that means the REQUIREMENTS are wrong or the wheel does not match its hash: never a
 # skip, because a skipped integrity failure is exactly how a poisoned index would get through.
@@ -167,8 +171,8 @@ REMEDY_RUFF = (
     "fix the code: SIM115 use a context manager (with open(...)), S110/S112 handle or log the "
     "exception instead of passing, F401 remove the import, F841 use the value or prefix it with _"
 )
-REMEDY_USER = ("fix the finding, or change your own ruff configuration if the rule is not wanted; the baseline "
-               "is yours and may only shrink")
+REMEDY_USER = ("fix the finding; changing your ruff configuration or running --update to make this pass needs the "
+               "user's explicit OK; the baseline is yours and may only shrink")
 WAIVER_NOTE_SOLEUR = ("inline waivers (# noqa, eslint-disable) are NOT honoured here, and --update must not be used "
                       "to admit a new finding")
 WAIVER_NOTE_USER = "inline waivers (# noqa) are honoured here, and --update must not be used to admit a new finding"
@@ -469,8 +473,11 @@ def resolve_base_ladder(root, ref, env=None, baseline=None) -> tuple:
             return None, []
         merged = _git(root, ["merge-base", tip, "HEAD"], env)
         return (merged.stdout.strip() if merged.returncode == 0 else tip), []
-    first = None
+    first, carrying = None, []
     for rung in BASE_LADDER:
+        # The exact ref: git falls back to a TAG named like a missing ref, and tags travel with a clone.
+        if _git(root, ["show-ref", "--verify", "--quiet", rung], env).returncode != 0:
+            continue
         verified = _git(root, ["rev-parse", "--verify", "--quiet", "--end-of-options", rung + "^{commit}"], env)
         if verified.returncode != 0:
             continue
@@ -481,9 +488,21 @@ def resolve_base_ladder(root, ref, env=None, baseline=None) -> tuple:
         notes = []
         if rung.startswith("refs/heads/"):
             notes.append("WARN: using local {} as merge base".format(rung.rsplit("/", 1)[-1]))
-        if baseline is None or baseline_at(root, sha, baseline, env) is not None:
+        if baseline is None:
             return sha, notes
-        first = first or (sha, notes)
+        if baseline_at(root, sha, baseline, env) is not None:
+            carrying.append((sha, notes))
+        else:
+            first = first or (sha, notes)
+    if carrying:
+        # Rungs can disagree (a stale origin/HEAD next to a current origin/main): judge growth against the
+        # NEWEST merge base that carries the baseline, the strictest reference.
+        best = carrying[0]
+        for candidate in carrying[1:]:
+            if candidate[0] != best[0] and _git(root, ["merge-base", "--is-ancestor", best[0], candidate[0]],
+                                                  env).returncode == 0:
+                best = candidate
+        return best
     if first is not None:
         return first
     shallow = _git(root, ["rev-parse", "--is-shallow-repository"], env)
@@ -658,7 +677,7 @@ def _delta(config, root, head_entries, head_text, base, env, out: list) -> tuple
         return 0, "introduced"
     if config.get("header"):
         if _exempt(header_of(base_text), header_of(head_text), config["header"](root)):
-            out.append(pre + "CONFIG CHANGED vs merge base: shrink-only not enforced; review the config diff")
+            out.append(pre + CONFIG_CHANGED + ": shrink-only not enforced; review the config diff")
             return 0, "config-changed"
     grew = growth(head_entries, parse_baseline(base_text), rename_map(root, sha, env))
     for path, rule, now, before in grew[:NOTICE_LIMIT]:
@@ -668,16 +687,19 @@ def _delta(config, root, head_entries, head_text, base, env, out: list) -> tuple
         out.append(pre + "... and {} more (path, rule) pairs grew".format(len(grew) - NOTICE_LIMIT))
     if grew:
         out.append(pre + "the baseline may only shrink; fix the finding instead of admitting it")
+        if config.get("header") and _older(config["header"](root), header_of(base_text)):
+            out.append(pre + "the baseline was written by a newer ruff ({}) than this plugin carries: update the "
+                       "plugin before judging growth".format(_pin_of(header_of(base_text))))
         return 1, "compared"
     return 0, "compared"
 
 
-def _capped(pre: str, lines: list, label: str, config: dict) -> list:
-    """Bound a class of report lines: an unbounded NEW/STALE flood is read in full by the calling agent."""
-    if len(lines) <= NOTICE_LIMIT:
-        return lines
-    return lines[:NOTICE_LIMIT] + [pre + "... and {} more {} (the full list: `{} --list`)".format(
-        len(lines) - NOTICE_LIMIT, label, _recovery(config))]
+def _more(pre: str, total: int, label: str, config: dict) -> list:
+    """The pointer line after a capped class of report lines (an unbounded flood is read in full by the agent)."""
+    if total <= NOTICE_LIMIT:
+        return []
+    return [pre + "... and {} more {} (the full list: `{} --list`)".format(
+        total - NOTICE_LIMIT, label, _recovery(config))]
 
 
 def check(config: dict, root, base=None, env=None) -> tuple:
@@ -692,6 +714,12 @@ def check(config: dict, root, base=None, env=None) -> tuple:
         return 2, [pre + "baseline {} is missing; create it with {} --update".format(
             config["baseline"], _recovery(config))]
     try:
+        # A baseline the repository cannot be judged against is decided before any tool is provisioned or run.
+        baseline_text = _read_baseline(baseline_path)
+        baseline_entries = parse_baseline(baseline_text)
+    except InfraError as exc:
+        return 2, [_content_prefix(config, exc) + str(exc)]
+    try:
         findings, file_count = config["run"](root)
     except Vacuous as exc:
         return 1, [pre + "vacuous scan: {}".format(exc)]
@@ -702,8 +730,6 @@ def check(config: dict, root, base=None, env=None) -> tuple:
                    "cannot report green".format(file_count, config["floor"])]
     try:
         pairs = census_pairs(findings, root)
-        baseline_text = _read_baseline(baseline_path)
-        baseline_entries = parse_baseline(baseline_text)
     except InfraError as exc:
         return 2, [_content_prefix(config, exc) + str(exc)]
     live = {entry: finding for entry, finding in pairs}
@@ -712,11 +738,11 @@ def check(config: dict, root, base=None, env=None) -> tuple:
     stale = [entry for entry in sorted(known) if entry not in live]
     changed_keys = {(e[0], e[1]) for e in new} & {(e[0], e[1]) for e in stale}
     new_lines, stale_lines = [], []
-    for entry in new:
+    for entry in new[:NOTICE_LIMIT]:
         finding = live[entry]
         new_lines.append(pre + "NEW {}:{} {} {}".format(_clip(finding.path), finding.row, _clip(finding.rule, 60),
                                                          _clip(finding.message)))
-    for entry in stale:
+    for entry in stale[:NOTICE_LIMIT]:
         text = _clean(format_entry(_clip(entry[0]), _clip(entry[1], 60), entry[2], entry[3]))
         if (entry[0], entry[1]) in changed_keys:
             stale_lines.append(pre + "STALE {} -- a line carrying this finding changed; if the finding itself is "
@@ -725,8 +751,8 @@ def check(config: dict, root, base=None, env=None) -> tuple:
             stale_lines.append(pre + "STALE {} -- fixed: run `{} --update` and commit the baseline. After a merge "
                                "conflict take the base branch's copy of the baseline and re-run --update.".format(
                                    text, _recovery(config)))
-    out.extend(_capped(pre, new_lines, "NEW findings", config))
-    out.extend(_capped(pre, stale_lines, "STALE entries", config))
+    out.extend(new_lines + _more(pre, len(new), "NEW findings", config))
+    out.extend(stale_lines + _more(pre, len(stale), "STALE entries", config))
     if new or stale:
         if new:
             out.append(pre + "remedy: " + config["remedy"])
@@ -745,7 +771,8 @@ def check(config: dict, root, base=None, env=None) -> tuple:
 
 
 def _user_verdict(config, root, out, baseline_text, findings, file_count, reason) -> tuple:
-    """User-mode green path: never a plain OK when a guard did not run or the toolchain moved."""
+    """User-mode green path: a WARN, never an OK, when the census was not compared or the toolchain moved. A
+    baseline introduced by this diff is an OK whose second line says the shrink-only comparison starts at merge."""
     pre = _prefix(config)
     if reason == "config-changed":
         return 0, out
@@ -755,7 +782,7 @@ def _user_verdict(config, root, out, baseline_text, findings, file_count, reason
         if _older(live_header, stored):
             out.append(pre + "plugin older than the baseline's ruff {}: update the plugin".format(_pin_of(stored)))
         else:
-            out.append(pre + "fingerprint stale: run --update to refresh")
+            out.append(pre + "fingerprint stale: run --update to refresh (ask the user first)")
     if file_count == 0:
         out.insert(0, "WARN " + pre + "no Python files were scanned (0 files in ruff's listing); nothing to ratchet. "
                    "If that is unexpected, check the exclude settings of your ruff configuration")
@@ -994,7 +1021,8 @@ def ensure_ruff(requirements, env, run=subprocess.run, cache_root=None, fallback
         stamp = base / OFFLINE_STAMP
         if not _is_ci(env) and stamp.exists() and time.time() - stamp.stat().st_mtime < OFFLINE_WINDOW:
             raise Skip("ruff could not be installed (the package index was unreachable moments ago; not retrying "
-                       "for {} minutes); recover with: {}".format(OFFLINE_WINDOW // 60, recovery))
+                       "for {} minutes, or delete {} to retry now); recover with: {}".format(
+                           OFFLINE_WINDOW // 60, shlex.quote(str(stamp)), recovery))
         _sweep_installs(base)
         print("lint-ratchet: installing ruff {} (first run only)".format(version), file=sys.stderr)
         target = Path(tempfile.mkdtemp(prefix="install-", dir=str(base)))
@@ -1055,6 +1083,7 @@ def user_env(env) -> dict:
     cleaned = {k: v for k, v in dict(env).items() if k not in GIT_SCRUB}
     cleaned["LC_ALL"] = "C"
     cleaned["LANGUAGE"] = "C"
+    cleaned["GIT_NO_REPLACE_OBJECTS"] = "1"  # refs/replace/* is repository content; never let it rewrite history we judge
     return cleaned
 
 
@@ -1144,13 +1173,15 @@ def _tracked_configs(root, env=None) -> dict:
             if not nested:
                 raise ContentError("{} is a symlink or not a regular file; refusing to run ruff against it".format(
                     name))
-            configs[name] = "symlink:" + os.readlink(str(path))
+            content = "symlink:" + os.readlink(str(path))
+            # A dangling or oversized target contributes its link text only; ruff would fail on it and say so.
+            if os.path.isfile(str(path)) and os.path.getsize(str(path)) <= MAX_CONFIG_BYTES:
+                content += "\0" + Path(os.path.realpath(str(path))).read_text(encoding="utf-8", errors="replace")
+            configs[name] = content
             continue
         if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_CONFIG_BYTES:
-            if not nested:
-                raise ContentError("{} is not a regular file under 1 MiB; refusing to run ruff against it".format(
-                    name))
-            continue
+            raise ContentError("{} is not a regular file under 1 MiB; refusing to run ruff against it".format(
+                _clip(name)))
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
@@ -1196,12 +1227,18 @@ def _scan_notices(root, env, pre) -> list:
     if links:
         notices.append(pre + "WARN: {} tracked .py symlink(s) are not scanned: {}".format(
             len(links), ", ".join(_clip(n, 80) for n in links[:3])))
-    others = _git(root, ["ls-files", "-z", "--others", "--exclude-standard", "--"] + list(USER_PY_PATHSPECS), env)
+    others = _git(root, ["ls-files", "-z", "--others", "--exclude-standard", "--"] + list(USER_PY_PATHSPECS)
+                  + list(CONFIG_GLOBS), env)
     if others.returncode == 0:
         names = [n for n in others.stdout.split("\0") if n]
-        if names:
+        configs = [n for n in names if n.rsplit("/", 1)[-1] in USER_RUFF_CONFIGS + (USER_PYPROJECT,)]
+        python = [n for n in names if n not in configs]
+        if python:
             notices.append(pre + "WARN: {} untracked .py file(s) are not scanned until they are added to git: "
-                           "{}".format(len(names), ", ".join(_clip(n, 80) for n in names[:3])))
+                           "{}".format(len(python), ", ".join(_clip(n, 80) for n in python[:3])))
+        if configs:
+            notices.append(pre + "WARN: {} untracked ruff config(s) apply here but not in CI or in the fingerprint: "
+                           "{}".format(len(configs), ", ".join(_clip(n, 80) for n in configs[:3])))
     return notices
 
 
@@ -1235,7 +1272,7 @@ def classify_user(root, base, env) -> UserState:
     anywhere = in_tree or head_text is not None or base_text is not None
     # A repository that never opted in pays nothing, so an unsafe file only matters once a baseline exists
     # (or a config is in play): then it is a defect of the repository, exit 2.
-    if unsafe_baseline is not None and (has_config or anywhere):
+    if unsafe_baseline is not None and anywhere:
         raise unsafe_baseline
     if problems and anywhere:
         raise ContentError(problems[0])
@@ -1265,12 +1302,17 @@ def classify_user(root, base, env) -> UserState:
                 pre + "no merge base could be resolved under CI, so a repository that never adopted cannot be told "
                 "from one whose baseline this change deleted: fetch more history (fetch-depth: 0)"], list(notes))
         warnings = list(notes) + [pre + problem for problem in problems]
+        if unsafe_baseline is not None:
+            warnings.append(pre + str(unsafe_baseline))
         if sha is None:
             warnings.append(pre + "base unresolvable: baseline-deletion check not performed")
         return UserState("NOT_ADOPTED", 0, [pre + "not adopted. Ask the user whether to adopt (it installs a pinned "
                                             "ruff, writes .lint-ratchet/ruff.baseline.txt for the current findings, "
                                             "and new findings then block; do not adopt in an unattended run); if "
                                             "yes, run: " + _script_cmd("user-ruff", "--update")], warnings)
+    if sha is None and _is_ci(env):
+        return UserState("UNVERIFIED", 2, [pre + "no merge base could be resolved under CI; refusing to skip the "
+                                           "shrink-only comparison"], list(notes))
     warnings = []
     if _git(root, ["ls-files", "--error-unmatch", "--", USER_BASELINE], env).returncode != 0:
         if _git(root, ["check-ignore", "-q", "--", USER_BASELINE], env).returncode == 0:
@@ -1282,13 +1324,13 @@ def classify_user(root, base, env) -> UserState:
 
 
 def _ruff_failure(label: str, result, exe=None) -> ContentError:
-    """A ruff exit 2 in user mode. Only the first stderr line is echoed (always the literal ``ruff failed``):
+    """A ruff exit 2 in user mode. Only the first stderr line is echoed (normally the literal ``ruff failed``):
     the lines after it quote the failing file, and an ``extend`` can point anywhere on the machine."""
     first = next((line.strip() for line in result.stderr.splitlines() if line.strip()), "")
     text = "{} exited {}: {}".format(label, result.returncode, _clip(first) or "(no message)")
     if first.lower().startswith("ruff failed"):
         text += "; the detail lines are not echoed (an extend can point at any file): run `{} check --no-cache " \
-                "--show-settings` in the repository to see them".format(exe or "ruff")
+                "--show-settings` in the repository to see them".format(shlex.quote(str(exe)) if exe else "ruff")
     if PIN_HINT_RE.search(result.stderr):
         text += ("; pinned ruff is {}: this is a typo in your config, or a setting newer than the pin".format(
             requirements_pin(RUFF_REQUIREMENTS)))

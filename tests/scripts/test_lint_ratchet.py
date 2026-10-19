@@ -41,18 +41,40 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "plugins" / "soleur" / "scripts" / "lint-ratchet.py"
 REQUIREMENTS = REPO_ROOT / "plugins" / "soleur" / "scripts" / "ruff-requirements.txt"
 FIXTURES = REPO_ROOT / "tests" / "scripts" / "fixtures" / "lint-ratchet"
-MIN_CASES = 283
+MIN_CASES = 317
 # Per-class lower bounds (the count when they were set): renaming or deleting a test of a guard class turns this
 # red instead of leaving the total above MIN_CASES. Lowering one is a deliberate, reviewed act.
 CLASS_FLOORS = {
-    "TestEntries": 20, "TestHelpers": 8, "TestAdapters": 9, "TestCheckVerdicts": 14, "TestFloors": 3,
-    "TestGrowthArithmetic": 4, "TestMergeBaseDelta": 22, "TestToolFailures": 4, "TestRunRuff": 13,
-    "TestRunEslint": 7, "TestScopePins": 2, "TestConfigPins": 7, "TestRegistration": 6,
-    "TestEslintConfigBehaviour": 1, "TestPipArgvAndRequirements": 5, "TestEnsureRuff": 27, "TestMain": 12,
-    "TestUserModeStates": 18, "TestUserModeTotality": 5, "TestUserModeSafety": 9, "TestUserModeFingerprint": 8,
-    "TestUserModeUpdateAndLadder": 5, "TestUserModeWaiversAndSoleurIsolation": 2, "TestUserModeGuards": 34,
-    "TestUserModeReviewFixes": 27, "TestSoleurOutputIsUnchanged": 1, "TestCarryIns": 2, "TestSkillPointers": 4,
+    "TestAdapters": 9,
+    "TestCarryIns": 2,
+    "TestCheckVerdicts": 14,
+    "TestConfigPins": 7,
     "TestDiscoverabilityProbe": 1,
+    "TestEnsureRuff": 27,
+    "TestEntries": 20,
+    "TestEslintConfigBehaviour": 1,
+    "TestFloors": 3,
+    "TestGrowthArithmetic": 4,
+    "TestHelpers": 8,
+    "TestMain": 12,
+    "TestMergeBaseDelta": 22,
+    "TestPipArgvAndRequirements": 5,
+    "TestRegistration": 6,
+    "TestRunEslint": 7,
+    "TestRunRuff": 13,
+    "TestScopePins": 2,
+    "TestSkillPointers": 4,
+    "TestSoleurOutputIsUnchanged": 1,
+    "TestToolFailures": 4,
+    "TestUserModeFingerprint": 8,
+    "TestUserModeFixRound": 33,
+    "TestUserModeGuards": 34,
+    "TestUserModeReviewFixes": 27,
+    "TestUserModeSafety": 10,
+    "TestUserModeStates": 18,
+    "TestUserModeTotality": 5,
+    "TestUserModeUpdateAndLadder": 5,
+    "TestUserModeWaiversAndSoleurIsolation": 2,
 }
 
 # The synthetic sample and the rule rows its captured report holds (row numbers are 1-based).
@@ -2062,6 +2084,17 @@ class TestUserModeSafety(UserModeBase):
         self.assertEqual(code, 0, (out, err))
         self.repo.write("pyproject.toml", PYPROJECT_RUFF)
         self.repo.commit("config")
+        code, out, err = self.cli("auto")
+        self.assertEqual(code, 0, "no baseline exists anywhere: a never-adopted repository pays nothing")
+        self.assertIn("not adopted", out)
+        self.assertIn("symlink", err, "the reason is still told, on stderr")
+
+    def test_a_baseline_replaced_by_a_symlink_after_adoption_is_repo_content(self):
+        self.adopt()
+        shutil.rmtree(str(self.repo.root / ".lint-ratchet"))
+        real = Path(self.fake_home.name) / "real2"
+        real.mkdir()
+        (self.repo.root / ".lint-ratchet").symlink_to(real)
         code, _, err = self.cli("auto")
         self.assertEqual(code, 2)
         self.assertIn("REPO-CONTENT", err)
@@ -2707,6 +2740,15 @@ class TestUserModeReviewFixes(UserModeBase):
         path = self.repo.root / USER_BASELINE
         path.unlink()
         os.mkfifo(str(path))
+        import signal
+
+        def hung(signum, frame):
+            raise AssertionError("reading a FIFO baseline hung the tool")
+
+        old = signal.signal(signal.SIGALRM, hung)
+        self.addCleanup(signal.signal, signal.SIGALRM, old)
+        signal.alarm(30)
+        self.addCleanup(signal.alarm, 0)
         code, _, err = self.cli("auto")
         self.assertEqual(code, 2)
         self.assertIn("not a regular file", err)
@@ -2871,6 +2913,9 @@ class TestUserModeReviewFixes(UserModeBase):
             self.assertEqual(env.get("LC_ALL"), "C")
             for name in lr.GIT_SCRUB:
                 self.assertNotIn(name, env)
+        previous = os.getcwd()
+        self.addCleanup(os.chdir, previous)
+        os.chdir(str(self.repo.root))  # the process cwd is the repository resolve_root asks about
         with mock.patch.object(subprocess, "run", spy):
             lr.resolve_root(dict(self.repo.env))
         self.assertEqual(seen[-1][1].get("LC_ALL"), "C")
@@ -2915,8 +2960,385 @@ class TestUserModeReviewFixes(UserModeBase):
         self.assertIn("OK", out)
 
 
+
+def tree(root):
+    """Every file under ``root`` except .git, as {relative path: bytes}; a symlink reads as b"link"."""
+    out = {}
+    for base, dirs, files in os.walk(str(root)):
+        dirs[:] = [d for d in dirs if d != ".git"]
+        for name in files:
+            path = os.path.join(base, name)
+            out[os.path.relpath(path, str(root))] = b"link" if os.path.islink(path) else Path(path).read_bytes()
+    return out
+
+
+class TestUserModeFixRound(UserModeBase):
+    """Pins for the fix round: caps, deadline, ladder reference, scrub, pointers (test-design seat killers)."""
+
+    def grown(self):
+        findings, _ = lr.run_user_ruff(self.repo.root, dict(self.repo.env), ruff_path=self.fake_ruff)
+        (self.repo.root / USER_BASELINE).write_text(lr.render_baseline(
+            "user-ruff", lr.census(findings, self.repo.root), None, None, header=lr.toolchain_header(self.repo.root)))
+
+    def many(self, n):
+        return "import os\n" + "".join("    h{} = open(p)\n".format(i) for i in range(n))
+
+    # K1: F4a -- check() must not exempt growth when the merge-base baseline came from a NEWER ruff
+    def test_K1_exempt_is_refused_when_the_merge_base_baseline_is_from_a_newer_ruff(self):
+        self.adopt()
+        path = self.repo.root / USER_BASELINE
+        path.write_text(path.read_text().replace("ruff " + lr.requirements_pin(REQUIREMENTS), "ruff 99.0.0"))
+        self.repo.git("update-ref", "refs/remotes/origin/main", self.repo.commit("a newer ruff wrote this"))
+        self.repo.git("checkout", "-q", "-b", "feature")
+        self.repo.write("pyproject.toml", PYPROJECT_RUFF.replace("100", "88"))
+        self.repo.write("a.py", "import os\n" + VIOLATION + "    again = open(other)\n")
+        self.grown()   # hand-written: header == live, entries grown
+        code, out, err = self.cli("auto")
+        self.assertEqual(code, 1, (out, err))
+        self.assertIn("baseline grew", err)
+
+    # K2: F6c -- the findings launch is chunked as well as the listing
+    def test_K2_the_check_launch_is_split_like_the_listing(self):
+        self.adopt_files()
+        for i in range(6):
+            self.repo.write("m{}.py".format(i), "x = {}\n".format(i))
+        self.repo.commit()
+        env = dict(self.repo.env, FAKE_RUFF_LOG=str(self.log))
+        with mock.patch.object(lr, "ARGV_BUDGET", 12):
+            lr.run_user_ruff(self.repo.root, env, ruff_path=self.fake_ruff)
+        checks = [c for c in self.calls() if "--show-files" not in c["argv"]]
+        self.assertGreater(len(checks), 1)
+
+    # K3: F6d/F6e -- the budget is one deadline across launches and bounds each launch's timeout
+    def test_K3_launch_timeouts_shrink_with_the_shared_deadline(self):
+        self.adopt_files()
+        for i in range(6):
+            self.repo.write("m{}.py".format(i), "x = {}\n".format(i))
+        self.repo.commit()
+        timeouts, real = [], subprocess.run
+
+        def spy(argv, **kw):
+            timeouts.append(kw["timeout"])
+            return real(argv, **kw)
+
+        env = dict(self.repo.env, FAKE_RUFF_LOG=str(self.log))
+        with mock.patch.object(lr, "ARGV_BUDGET", 12), mock.patch.object(lr, "TOTAL_RUN_BUDGET", 100):
+            lr.run_user_ruff(self.repo.root, env, ruff_path=self.fake_ruff, run=spy)
+        self.assertTrue(timeouts and max(timeouts) <= 100, timeouts)
+        self.assertGreater(timeouts[0], timeouts[-1], timeouts)
+
+    def test_K3b_a_slow_chunk_uses_up_the_budget_for_the_next(self):
+        self.adopt_files()
+        for i in range(6):
+            self.repo.write("m{}.py".format(i), "x = {}\n".format(i))
+        self.repo.commit()
+        clock = iter(range(0, 1000, 2))
+        env = dict(self.repo.env, FAKE_RUFF_LOG=str(self.log))
+        with mock.patch.object(lr, "ARGV_BUDGET", 12), mock.patch.object(lr, "TOTAL_RUN_BUDGET", 5), \
+                mock.patch.object(lr.time, "monotonic", lambda: next(clock)):
+            with self.assertRaises(lr.InfraError) as ctx:
+                lr.run_user_ruff(self.repo.root, env, ruff_path=self.fake_ruff)
+        self.assertIn("total budget", str(ctx.exception))
+
+    # K4: F7a -- STALE flood is capped
+    def test_K4_a_flood_of_stale_entries_is_capped(self):
+        self.adopt_files()
+        self.repo.write("a.py", self.many(40))
+        self.repo.git("update-ref", "refs/remotes/origin/main", self.repo.commit("code"))
+        self.assertEqual(self.cli("user-ruff", "--update")[0], 0)
+        self.repo.git("update-ref", "refs/remotes/origin/main", self.repo.commit("adopt"))
+        self.repo.write("a.py", "import os\n")
+        code, _, err = self.cli("auto")
+        self.assertEqual(code, 1)
+        shown = [l for l in err.splitlines() if "STALE " in l and "more" not in l]
+        self.assertEqual(len(shown), lr.NOTICE_LIMIT)
+        self.assertIn("... and 15 more STALE entries", err)
+
+    def test_K4b_exactly_the_limit_has_no_summary_line(self):
+        self.adopt()
+        self.repo.write("a.py", self.many(lr.NOTICE_LIMIT))
+        code, _, err = self.cli("auto")
+        self.assertEqual(code, 1)
+        self.assertNotIn("more NEW findings", err)
+
+    # K5: F2e -- a poisoned GIT_DIR / GIT_INDEX_FILE / GIT_WORK_TREE must not change the verdict; the set is a literal
+    def test_K5_git_location_variables_do_not_redirect_user_mode(self):
+        self.assertTrue({"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
+                         "GIT_LITERAL_PATHSPECS", "GIT_NAMESPACE", "GIT_PREFIX"} <= set(lr.GIT_SCRUB))
+        self.adopt()
+        clean = self.cli("auto")
+        decoy = Repo(self)
+        decoy.write("z.py", "x = 1\n")
+        decoy.commit()
+        for name, value in (("GIT_DIR", str(decoy.root / ".git")), ("GIT_WORK_TREE", str(decoy.root)),
+                            ("GIT_INDEX_FILE", str(decoy.root / ".git" / "index"))):
+            with self.subTest(name):
+                self.assertEqual(self.cli("auto", env={name: value}), clean)
+
+    # K6: F3d -- an explicit --base is compared at its MERGE BASE with HEAD, not at its tip
+    def test_K6_explicit_base_ref_is_compared_at_the_merge_base(self):
+        self.adopt()
+        adopted = self.repo.git("rev-parse", "HEAD").stdout.strip()
+        self.repo.git("checkout", "-q", "-b", "other")
+        self.repo.write("a.py", "import os\n")
+        self.assertEqual(self.cli("user-ruff", "--update")[0], 0)
+        tip = self.repo.commit("someone fixed it on main")
+        self.repo.git("checkout", "-q", "-b", "feature", adopted)
+        self.repo.write("unrelated.txt", "x\n")
+        self.repo.commit("unrelated")
+        code, out, err = self.cli("auto", "--base", tip)
+        self.assertEqual(code, 0, (out, err))
+
+    # K7: F10a -- git-ignored .py files (a virtualenv) are not "untracked .py files"
+    def test_K7_ignored_python_is_not_reported_as_untracked(self):
+        self.adopt_files()
+        self.repo.write(".gitignore", ".venv/\n")
+        self.repo.git("update-ref", "refs/remotes/origin/main", self.repo.commit("code"))
+        self.assertEqual(self.cli("user-ruff", "--update")[0], 0)
+        self.repo.git("update-ref", "refs/remotes/origin/main", self.repo.commit("adopt"))
+        self.repo.write(".venv/lib/x.py", "x = 1\n")
+        code, out, err = self.cli("auto")
+        self.assertEqual(code, 0, (out, err))
+        self.assertNotIn("untracked", out + err)
+
+    def test_K7b_untracked_names_are_bounded_to_three(self):
+        self.adopt()
+        for i in range(6):
+            self.repo.write("n{}.py".format(i), "x = 1\n")
+        code, out, err = self.cli("auto")
+        self.assertIn("6 untracked .py file(s)", err)
+        self.assertNotIn("n5.py", err)
+
+    # K8: F11g -- --update on a repo that has not adopted but holds an unsafe sibling config is refused before ruff
+    def test_K8_update_refuses_an_unsafe_config_before_provisioning_ruff(self):
+        self.repo.write("ruff.toml", "line-length = 100\n")
+        self.repo.write("a.py", "import os\n" + VIOLATION)
+        outside = Path(self.fake_home.name) / "outside.toml"
+        outside.write_text("[tool.ruff]\nline-length = 1\n")
+        (self.repo.root / "pyproject.toml").symlink_to(outside)
+        self.repo.commit()
+        code, out, err = self.cli("user-ruff", "--update")
+        self.assertEqual(code, 2, (out, err))
+        self.assertIn("REPO-CONTENT", err)
+        self.assertEqual(self.provisioned, 0)
+        self.assertFalse((self.repo.root / USER_BASELINE).exists())
+
+    # K9: D9 -- auto never updates (and the refusal is the argparse one, not "no linter")
+    def test_K9_auto_update_is_refused_by_the_parser_and_writes_nothing(self):
+        self.adopt()
+        self.repo.write("a.py", "import os\n")
+        mid = tree(self.repo.root)
+        code, out, err = self.cli("auto", "--update")
+        self.assertEqual(code, 2)
+        self.assertIn("auto accepts only", err)
+        self.assertEqual(tree(self.repo.root), mid)
+
+    # K10: U1 -- the fake must reject the Soleur-only flags in user mode
+    def test_K10_user_mode_never_passes_config_or_ignore_noqa_to_any_ruff_launch(self):
+        self.fake_ruff.write_text(FAKE_RUFF.format(python=sys.executable).replace(
+            '"--show-files", "--config", "ruff.toml", "--ignore-noqa"}', '"--show-files"}'))
+        self.adopt()
+        code, out, err = self.cli("auto")
+        self.assertEqual((code, err), (0, ""), out)
+
+    # K12: F8f/F8j -- a hostile tracked path never reaches the terminal raw in user mode
+    def test_K12_a_control_character_in_a_tracked_path_is_not_echoed(self):
+        self.adopt()
+        self.repo.write("bad\x1b]0;pwn\x07name.py", "import os\n" + VIOLATION)
+        self.repo.commit("hostile name")
+        code, out, err = self.cli("auto")
+        self.assertEqual(code, 1, (out, err))
+        self.assertIn("NEW ", err)
+        self.assertNotIn("\x1b", out + err)
+        self.assertNotIn("\x07", out + err)
+
+    # K13: Pb -- a check / list never writes into the customer's tree
+    def test_K13a_check_and_list_leave_a_non_adopted_tree_untouched(self):
+        self.adopt_files()
+        self.repo.commit("c")
+        before = tree(self.repo.root)
+        self.cli("auto")
+        self.cli("user-ruff", "--list")
+        self.assertEqual(tree(self.repo.root), before)
+
+    def test_K13b_check_and_list_leave_an_adopted_tree_untouched(self):
+        self.adopt()
+        before = tree(self.repo.root)
+        self.cli("auto")
+        self.cli("user-ruff", "--list")
+        self.assertEqual(tree(self.repo.root), before)
+
+    # K14: F8a/F8d -- every invisible range is stripped
+    def test_K14_invisible_ranges_are_stripped_at_both_ends(self):
+        for cp in (0xE0000, 0xE007F, 0xE0100, 0xE01EF, 0xFFF9, 0xFFFC, 0xFE00, 0xFE0F, 0x202A, 0x202E, 0x2066, 0x2069,
+                   0x200B, 0x200F, 0x2060, 0xFEFF, 0x3164, 0xFFA0):
+            with self.subTest(hex(cp)):
+                self.assertEqual(lr._clean("a" + chr(cp) + "b"), "a b")
+
+    # K16: F7d/F7e -- growth notices are capped in check and in the update refusal
+    def test_K16_growth_notices_are_capped(self):
+        self.adopt()
+        self.repo.git("checkout", "-q", "-b", "feature")
+        for i in range(30):
+            self.repo.write("g{}.py".format(i), "import os\n" + VIOLATION)
+        self.repo.git("add", "-A")
+        code, _, err = self.cli("user-ruff", "--update")
+        self.assertEqual(code, 1)
+        self.assertLessEqual(len([l for l in err.splitlines() if "refusing to write" in l]), lr.NOTICE_LIMIT)
+        self.grown()
+        code, _, err = self.cli("auto")
+        self.assertEqual(code, 1)
+        self.assertLessEqual(len([l for l in err.splitlines() if "baseline grew for" in l]), lr.NOTICE_LIMIT)
+        self.assertIn("more (path, rule) pairs grew", err)
+
+    # K17/K18: constants that bound output and argv are pinned to a literal bound
+    def test_K17_constants_have_literal_bounds(self):
+        self.assertLessEqual(lr.OFFLINE_WINDOW, 900)
+        self.assertLessEqual(lr.ARGV_BUDGET, 200000)
+        self.assertLessEqual(lr.TOTAL_RUN_BUDGET, 3600)
+        self.assertLessEqual(lr.LINE_LIMIT, 2000)
+        self.assertLessEqual(lr.NOTICE_LIMIT, 50)
+
+    # K19: the skill lines
+    def test_K19_skill_line_tails_and_single_call(self):
+        self.assertEqual(TestSkillPointers.CALL.count("auto"), 1)
+
+    # Z1: update zero-listing guard (previous finding 1)
+    def test_Z1_zero_listing_update_guard_is_pinned(self):
+        self.adopt()
+        code, out, err = self.cli("user-ruff", "--update", env={"FAKE_RUFF_MODE": "nolist"})
+        self.assertEqual(code, 1)
+        self.assertIn("ruff listed no files", err)
+
+
+    # ---- fix-round review findings (security, data-integrity, quality, agent-native, user-impact)
+
+    def test_a_tag_named_like_a_missing_ladder_ref_does_not_stand_in_for_it(self):
+        sha = self.adopt()
+        self.repo.git("checkout", "-q", "-b", "feature")
+        self.repo.write("a.py", "import os\n" + VIOLATION + "    again = open(other)\n")
+        self.grown()
+        grown = self.repo.commit("grow")
+        self.repo.git("update-ref", "-d", "refs/remotes/origin/main")
+        self.repo.git("update-ref", "refs/remotes/upstream/main", sha)
+        self.repo.git("tag", "refs/remotes/origin/HEAD", sha)
+        self.repo.git("tag", "refs/remotes/origin/master", grown)
+        resolved, _ = lr.resolve_base_ladder(self.repo.root, None, dict(self.repo.env), baseline=USER_BASELINE)
+        self.assertEqual(resolved, sha, "only the exact refs are rungs; a tag spelled like one is not")
+
+    def test_rungs_that_disagree_are_judged_against_the_newest_baseline(self):
+        self.adopt_files()
+        self.repo.commit("config")
+        self.repo.write("a.py", self.many_findings(2))
+        self.assertEqual(self.cli("user-ruff", "--update")[0], 0)
+        stale = self.repo.commit("old baseline with two entries")
+        self.repo.write("a.py", self.many_findings(1))
+        code, out, err = self.cli("user-ruff", "--update")
+        self.assertEqual(code, 0, (out, err))
+        current = self.repo.commit("current baseline with one entry")
+        self.repo.git("update-ref", "refs/remotes/origin/master", stale)
+        self.repo.git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master")
+        self.repo.git("update-ref", "refs/remotes/origin/main", current)
+        self.repo.git("checkout", "-q", "-b", "feature")
+        self.repo.write("a.py", self.many_findings(2))
+        code, _, err = self.cli("user-ruff", "--update")
+        self.assertEqual(code, 1, "two entries are growth against the current baseline, not against the stale one")
+        self.assertIn("refusing to write", err)
+
+    def many_findings(self, n):
+        return "import os\n" + "".join("    h{} = open(p)\n".format(i) for i in range(n))
+
+    def test_a_growth_failure_caused_by_an_older_plugin_names_the_cause(self):
+        self.adopt()
+        path = self.repo.root / USER_BASELINE
+        path.write_text(path.read_text().replace("ruff " + lr.requirements_pin(REQUIREMENTS), "ruff 99.0.0"))
+        self.repo.git("update-ref", "refs/remotes/origin/main", self.repo.commit("a newer ruff wrote this"))
+        self.repo.git("checkout", "-q", "-b", "feature")
+        self.repo.write("a.py", "import os\n" + VIOLATION + "    again = open(other)\n")
+        self.grown()
+        code, _, err = self.cli("auto")
+        self.assertEqual(code, 1)
+        self.assertIn("written by a newer ruff (99.0.0)", err)
+
+    def test_the_remedy_does_not_invite_a_config_edit_or_an_unprompted_update(self):
+        self.adopt()
+        self.repo.write("a.py", "import os\n" + VIOLATION + "    again = open(other)\n")
+        code, _, err = self.cli("auto")
+        self.assertIn("needs the user's explicit OK", err)
+        self.assertNotIn("change your own ruff configuration if", err)
+
+    def test_an_oversized_nested_config_fails_closed_and_a_nested_symlink_hashes_its_target(self):
+        self.adopt_files()
+        self.repo.commit()
+        before = lr.toolchain_header(self.repo.root)
+        self.repo.write("cfg/shared.toml", "[lint]\nselect = ['E']\n")
+        (self.repo.root / "pkg").mkdir()
+        (self.repo.root / "pkg" / "ruff.toml").symlink_to("../cfg/shared.toml")
+        self.repo.git("add", "-A")
+        linked = lr.toolchain_header(self.repo.root)
+        self.assertNotEqual(linked, before)
+        self.repo.write("cfg/shared.toml", "[lint]\nignore = ['ALL']\n")
+        self.assertNotEqual(lr.toolchain_header(self.repo.root), linked, "editing the link TARGET moves the hash")
+        (self.repo.root / "pkg" / "ruff.toml").unlink()
+        self.repo.write("pkg/ruff.toml", "# " + "x" * (1 << 20) + "\n")
+        self.repo.git("add", "-A")
+        with self.assertRaises(lr.ContentError):
+            lr.toolchain_header(self.repo.root)
+
+    def test_an_untracked_nested_config_is_reported(self):
+        self.adopt()
+        self.repo.write("pkg/ruff.toml", "[lint]\nignore = ['ALL']\n")
+        code, out, err = self.cli("auto")
+        self.assertEqual(code, 0, (out, err))
+        self.assertIn("1 untracked ruff config(s) apply here but not in CI", err)
+
+    def test_an_adopted_repository_with_no_merge_base_under_ci_exits_2_before_ruff_is_provisioned(self):
+        self.adopt()
+        self.repo.git("update-ref", "-d", "refs/remotes/origin/main")
+        self.repo.git("branch", "-m", "work")
+        before = self.provisioned
+        code, _, err = self.cli("auto", env={"CI": "true"})
+        self.assertEqual(code, 2)
+        self.assertIn("under CI", err)
+        self.assertEqual(self.provisioned, before, "the verdict needs no ruff, so none is provisioned")
+
+    def test_a_conflict_marker_in_the_baseline_is_decided_before_ruff_is_provisioned(self):
+        self.adopt()
+        path = self.repo.root / USER_BASELINE
+        path.write_text(path.read_text() + "<<<<<<< ours\n")
+
+        def skip(requirements, env, **kwargs):
+            raise lr.Skip("offline")
+
+        self.ensure = skip
+        code, _, err = self.cli("auto")
+        self.assertEqual(code, 2, "a broken baseline is REPO-CONTENT even when ruff could not be installed")
+        self.assertIn("REPO-CONTENT", err)
+
+    def test_a_pin_error_in_the_ruff_output_gets_the_pin_hint(self):
+        self.assertTrue(lr.PIN_HINT_RE.search("Required version `>=99` does not match the running version 0.16.10"))
+        self.assertFalse(lr.PIN_HINT_RE.search("some unrelated configuration problem"))
+
+    def test_git_never_replaces_objects_from_the_repository(self):
+        self.assertEqual(lr.user_env({"GIT_NO_REPLACE_OBJECTS": "0"})["GIT_NO_REPLACE_OBJECTS"], "1")
+
+    def test_the_wider_invisible_ranges_are_stripped(self):
+        for cp in (0x180b, 0x180d, 0x17b4, 0x2065, 0x1bca0, 0x1d173, 0x1d17a):
+            self.assertEqual(lr._clean("a" + chr(cp) + "b"), "a b", hex(cp))
+
+    def test_the_offline_message_says_how_to_retry_now(self):
+        cache = Path(self.fake_home.name) / "cache"
+        pip = FakePip(fail_text="Could not fetch URL https://pypi.org/simple/ruff/")
+        with self.assertRaises(lr.Skip):
+            lr.ensure_ruff(REQUIREMENTS, env={}, run=pip, cache_root=cache, fallback_root=Path(self.fake_home.name) / "fb")
+        with self.assertRaises(lr.Skip) as ctx:
+            lr.ensure_ruff(REQUIREMENTS, env={}, run=pip, cache_root=cache, fallback_root=Path(self.fake_home.name) / "fb")
+        self.assertIn("delete {} to retry now".format(cache / lr.OFFLINE_STAMP), str(ctx.exception))
+
+
 class TestSoleurOutputIsUnchanged(ScrubbedEnv):
-    """The Soleur scopes print what they printed at the fork point; only the script path moved.
+    """The Soleur scopes print what they printed at the fork point; only the script path moved (and a class of
+    more than 25 NEW or STALE lines is capped with a pointer to --list).
 
     The expected lines were captured by running the fork-point script and this one over the same scenario
     (plan row 24, CTO ruling: byte-identical Soleur output), so a change to a shared string fails here.
@@ -3023,8 +3445,8 @@ class TestSkillPointers(unittest.TestCase):
     """The work and review skills carry the guarded call; deleting or weakening it must fail loudly."""
 
     CALL = 'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lint-ratchet.py" auto'
-    GUARD = re.compile(r'if \[ -n "\$\{CLAUDE_PLUGIN_ROOT\}" \] && command -v python3 >/dev/null; then '
-                       r'python3 "\$\{CLAUDE_PLUGIN_ROOT\}/scripts/lint-ratchet\.py" auto; fi')
+    GUARD = re.compile(r'if \[ -n "\$\{CLAUDE_PLUGIN_ROOT:-\}" \] && command -v python3 >/dev/null; then '
+                       r'python3 "\$\{CLAUDE_PLUGIN_ROOT\}/scripts/lint-ratchet\.py" auto; else echo SKIP lint-ratchet; fi')
 
     @staticmethod
     def read(rel):
@@ -3048,8 +3470,8 @@ class TestSkillPointers(unittest.TestCase):
             with self.subTest(skill=rel):
                 snippet = self.snippet(self.read(rel))
                 result = self.run_snippet(snippet)
-                self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""),
-                                 "an unset CLAUDE_PLUGIN_ROOT is a skip, never an exit 1")
+                self.assertEqual((result.returncode, result.stdout.strip(), result.stderr), (0, "SKIP lint-ratchet", ""),
+                                 "an unset CLAUDE_PLUGIN_ROOT is a visible skip, never an exit 1")
                 plugin = tempfile.TemporaryDirectory()
                 self.addCleanup(plugin.cleanup)
                 (Path(plugin.name) / "scripts").mkdir()
@@ -3061,7 +3483,8 @@ class TestSkillPointers(unittest.TestCase):
                 empty = tempfile.TemporaryDirectory()
                 self.addCleanup(empty.cleanup)
                 result = self.run_snippet(snippet, root=plugin.name, path=empty.name)
-                self.assertEqual((result.returncode, result.stdout), (0, ""), "no python3 on PATH is a skip")
+                self.assertEqual((result.returncode, result.stdout.strip()), (0, "SKIP lint-ratchet"),
+                                 "no python3 on PATH is a visible skip")
 
     def test_the_call_cannot_be_weakened_or_made_to_write(self):
         for rel in ("work", "review"):
@@ -3069,6 +3492,14 @@ class TestSkillPointers(unittest.TestCase):
                 snippet = self.snippet(self.read(rel))
                 for forbidden in ("|| true", "--update", "--list", "2>/dev/null", "|| echo"):
                     self.assertNotIn(forbidden, snippet)
+                text = self.read(rel)
+                self.assertEqual(text.count("lint-ratchet.py"), 1, "no second engine invocation anywhere in the skill")
+                line = [l for l in text.splitlines() if self.CALL in l][0]
+                tail = line.split(snippet, 1)[1]
+                self.assertRegex(tail, r"^\s+# " if rel == "work" else r"^`; ")
+                self.assertNotRegex(tail.split("#")[0] if rel == "work" else "", r"(\|\||;|&)\s*\S")
+                for token in (lr.REPO_CONTENT.strip(" :"), lr.CONFIG_CHANGED.split(" vs ")[0]):
+                    self.assertIn(token, line, "the pointer names the token the engine emits")
 
     def test_work_runs_it_in_phase_3_and_tells_the_agent_what_each_outcome_means(self):
         text = self.read("work")
