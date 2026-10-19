@@ -112,3 +112,12 @@ PENDING seats: pattern-recognition (391b64d9), test-design (f947202a).
 ## test-design seat (f947202a) — TQS 8.1/10 (B), pyramid PASS (no e2e rows, no marker needed)
 - P2: D11 testmon assertion non-discriminating — `grep testmon` matches the import-probe ledger line; pin `pytest\t.*--testmon`/`python3\t-m pytest.*--testmon` instead.
 - P3: D4 want_rc_in 4 7 hedges deterministic contract (rc7 is only for no-suite); delegated-runner rc2→4 arm untested; D19a admits ran=- on a counted path; X1 misses explain/selfcheck finish paths; pm arms (pnpm/yarn/bun) unexercised — add lockfile fixtures; FAKE_PYTEST_SLEEP dead knob; A1 vitest stub counts 2 passed for 1 file; self-check test name vs ~80s bound margin note.
+
+## Post-review state (2026-10-19)
+- 3 design-pass + 7 panel seats + fix-round reviewer done; 3 fix agents + coordinator fixes landed; suite 268/0, lint-body-budget OK, components/workflow-fidelity/fullsuite-merge-gate all green
+- Rebased onto origin/main (was 47 ahead); ADR renumbered 288→292 (main carries 288-291 from concurrent PRs)
+- Fix-round findings fixed: on: col-0 anchor, signal-safe traps, mktemp-via-finish, explain sanitize — pushed
+- Ship conditions done: #8231 comment posted, #8621 + #10333 disposition notes posted, PR #10389 body updated
+- gate3 run backgrounded at /tmp/soleur-9307/gate3.log (check GATE_RC)
+- REMAINING: soleur:qa → soleur:compound → soleur:ship (merge + postmerge) → DONE
+- Findings synthesis: all P1/P2 fixed inline; P3s fixed or documented SKIPPED; no deferred issue filings needed beyond existing issues
