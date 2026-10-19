@@ -213,6 +213,8 @@ class DeadlineWire:
             if len(raw) >= self.maximum_header_bytes:
                 raise metadata.BoundaryFailure('header_shape')
             raw.extend(self.receive(1))
+            if not raw.endswith(b'\r\n\r\n') and raw.count(b'\r\n') > MAX_HEADER_COUNT + 1:
+                raise metadata.BoundaryFailure('header_shape')
         lines = bytes(raw[:-4]).split(b'\r\n')
         status_line = re.fullmatch(rb'HTTP/1\.[01] ([1-5][0-9]{2})(?: [\x20-\x7e]*)?', lines[0])
         if status_line is None or len(lines) - 1 > MAX_HEADER_COUNT:
