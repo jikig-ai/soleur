@@ -153,7 +153,7 @@ describe("harness-parity fixtures — index and policy plumbing", () => {
     ].sort();
     const here = readFileSync(import.meta.path, "utf-8");
     for (const f of onDisk) {
-      const [dir, name] = f.split("/");
+      const [, name] = f.split("/");
       expect(here).toContain(name);
     }
     expect(onDisk.length).toBeGreaterThanOrEqual(30); // the plan's Phase 2 table has 28 file rows

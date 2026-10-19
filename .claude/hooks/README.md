@@ -617,6 +617,36 @@ tokens and always exits 0.
   Only then is a guardrail blocking `git symbolic-ref HEAD` / `git branch -m` at the bare root
   worth filing. It is deliberately not built now.
 
+### Bare-root CWD marker
+
+A session anchored at the bare repo root is a valid maintenance context (`cleanup-merged`,
+`sync-bare-files`, the `.mcp.json` restore all legitimately run there) but the wrong place for
+file-touching work — `go.md`'s Step 1 guard only reaches sessions routed through `/soleur:go`,
+so every other misanchored session had no signal at all (#10383).
+
+`session-rules-loader.sh` calls `bare-root-cwd-guard.sh` as a time-boxed child process (5 s
+where `timeout` exists; `SOLEUR_BARE_CWD_TIMEOUT_S` for tests), after the corpus read. The
+helper applies the same three-term config-FILE predicate as `bare-head-self-heal.sh` —
+`<dir>/.git` real non-symlink dir, `core.bare=true` read from the config FILE (never
+`--is-bare-repository`, ADR-173), `--absolute-git-dir` identity — so a plain clone, a linked
+worktree, a true-bare repo, a masked config, and a symlinked `.git` all stay silent.
+
+- **Marker:** one line `SOLEUR_BARE_ROOT_CWD source=session-start` plus a bounded
+  `[bare-root-cwd]` block, appended LAST in `additionalContext` (after the heal marker). The
+  block redirects file-touching work to `worktree-manager.sh --yes create <name>`, names the
+  legitimate bare-root maintenance commands, and warns that a `.env` at the root is not
+  project configuration. It is advisory — SessionStart can only emit context; the hard
+  PreToolUse deny is #3206's scope. `git-repo-readiness-diag.sh` emits the sibling
+  `source=readiness-diag` variant under the same predicate, and `SOLEUR_BARE_ROOT_CWD` is
+  registered in MARKER_RE (`apps/web-platform/server/git-lock-marker-telemetry.ts`) as
+  MIRRORED-NOT-PAGED.
+- **Fail-open:** the loader accepts only the documented shape (marker first line +
+  `[bare-root-cwd]` lines, control chars stripped, capped at 12 lines); a missing, failing,
+  noisy or hung helper cannot inject anything or fail the hook.
+- **Scope:** fires only when the session's cwd IS the bare root — a bare-root subdirectory
+  does not match the gitdir-identity term (tracked as a #10392 candidate). Legitimate
+  maintenance sessions see the block on every start; that is the disclosure, not a refusal.
+
 ### Sharp Edges (SessionStart hook design)
 
 - **`set -e` between classifier and emit is a `single-user incident` vector.**

@@ -116,7 +116,6 @@ const TF_STMT_RE = new RegExp(String.raw`${NOT_WORD_BEFORE}${TF_BIN}\s+(?:-[^\s]
 
 /** A shell text with backslash-newline continuations joined (so `terraform \` + newline + `apply` reads as one command). */
 const joinCont = (t: string): string => t.replace(/\\\n[ \t]*/g, " ");
-const logicalLines = (t: string): string[] => joinCont(t).split("\n");
 
 /**
  * For each index of `t`, whether it sits inside a quoted string (double or single; a `$( )` inside double quotes is code

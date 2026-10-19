@@ -33,6 +33,12 @@
 #      repaired HEAD. It repairs a dangling `.git/HEAD` at a bare repo root and emits one
 #      SOLEUR_BARE_HEAD_HEALED line (appended last, after the tmpfs alarm block), and
 #      nothing on a healthy session. See .claude/hooks/README.md "Bare-root HEAD self-heal".
+#  11. the bare-root CWD marker: a child-process call to bare-root-cwd-guard.sh (#10383).
+#      When the session's resolved root is a bare repo ROOT in this layout it emits one
+#      SOLEUR_BARE_ROOT_CWD line plus a bounded [bare-root-cwd] redirect block (appended
+#      last, after the heal marker), and nothing on a worktree session. Advisory only —
+#      it routes file-touching work to a worktree; it cannot refuse anything. See
+#      .claude/hooks/README.md "Bare-root CWD marker".
 #
 # WHAT MUST NOT BE "SIMPLIFIED": do not merge AGENTS.rules.md into AGENTS.md.
 # The index is re-rendered every turn and the corpus is injected once per
@@ -317,6 +323,28 @@ if command -v timeout >/dev/null 2>&1; then BARE_HEAL_TO=(timeout -k 1 "${SOLEUR
 BARE_HEAL_OUT=$("${BARE_HEAL_TO[@]+"${BARE_HEAL_TO[@]}"}" bash "$(dirname "${BASH_SOURCE[0]}")/bare-head-self-heal.sh" "$REPO_ROOT" 2>/dev/null || true)
 BARE_HEAL_MARKER="${BARE_HEAL_OUT%%$'\n'*}"
 [[ "$BARE_HEAL_MARKER" == "SOLEUR_BARE_HEAD_HEALED "* ]] || BARE_HEAL_MARKER=""
+
+# Bare-root CWD marker (job 11 in the header; #10383). Same child-process contract as the
+# heal call: `|| true` keeps the ERR trap quiet, a missing helper (a stale bare-root copy of
+# this file) is the same fail-open path, and the call is time-boxed. Accept ONLY the helper's
+# documented shape — a SOLEUR_BARE_ROOT_CWD first line followed by [bare-root-cwd] lines —
+# and strip control chars while preserving newline/tab, the same clamp posture as the MCP
+# roster and the worktree path. SOLEUR_BARE_CWD_TIMEOUT_S exists for tests.
+BARE_CWD_TO=()
+if command -v timeout >/dev/null 2>&1; then BARE_CWD_TO=(timeout -k 1 "${SOLEUR_BARE_CWD_TIMEOUT_S:-5}"); fi
+BARE_CWD_OUT=$("${BARE_CWD_TO[@]+"${BARE_CWD_TO[@]}"}" bash "$(dirname "${BASH_SOURCE[0]}")/bare-root-cwd-guard.sh" "$REPO_ROOT" 2>/dev/null || true)
+if [[ "${BARE_CWD_OUT%%$'\n'*}" == "SOLEUR_BARE_ROOT_CWD "* ]]; then
+  # Lines after the marker must carry the [bare-root-cwd] prefix — forwarding
+  # arbitrary helper stdout would let a future noisy line inside the helper
+  # reach context unfiltered (#10386 review, P3). Keep the marker, keep only
+  # prefixed lines, strip control chars (preserving newline/tab), cap at 12.
+  BARE_CWD_BLOCK=$(printf '%s\n' "$BARE_CWD_OUT" \
+    | tr -d '\000-\010\013-\037' \
+    | sed -n '1p;/^\[bare-root-cwd\] /p' \
+    | sed -n '1,12p')
+else
+  BARE_CWD_BLOCK=""
+fi
 WS_BRANCH=$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "(unknown)")
 # Guard git's non-zero exit INSIDE the pipe, not after it. `… | wc -l || echo 0`
 # is a double-output bug under pipefail: when git fails, `wc -l` already emits
@@ -464,6 +492,6 @@ fi
 # bodies. It was lines 4-6 until ADR-151 removed the HINT line; the loader tests
 # assert these offsets positionally, so any future line added to the header must
 # move them again in the same commit. The alarm block, then the heal marker, trail everything.
-OUT_BODY="${STAMP}"$'\n'"[rules-loader] manifest: ${MANIFEST}"$'\n'"${SESSION_CONTEXT}"$'\n'"${CONTEXT}${TMPFS_ALARM_BLOCK}${BARE_HEAL_MARKER:+$'\n'$BARE_HEAL_MARKER}"
+OUT_BODY="${STAMP}"$'\n'"[rules-loader] manifest: ${MANIFEST}"$'\n'"${SESSION_CONTEXT}"$'\n'"${CONTEXT}${TMPFS_ALARM_BLOCK}${BARE_HEAL_MARKER:+$'\n'$BARE_HEAL_MARKER}${BARE_CWD_BLOCK:+$'\n'$BARE_CWD_BLOCK}"
 jq -nc --arg out "$OUT_BODY" '{ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: $out } }'
 exit 0

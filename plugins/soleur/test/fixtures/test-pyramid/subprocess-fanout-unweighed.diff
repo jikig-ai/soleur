@@ -1,0 +1,37 @@
+diff --git a/plugins/soleur/test/stub-proxy-fanout.test.sh b/plugins/soleur/test/stub-proxy-fanout.test.sh
+new file mode 100644
+index 0000000..1a2b3c4
+--- /dev/null
++++ b/plugins/soleur/test/stub-proxy-fanout.test.sh
+@@ -0,0 +1,31 @@
++#!/usr/bin/env bash
++# Fixture: a NEW *.test.sh that boots a stub HTTP server with real subprocess
++# fan-out — the unweighed-new-suite WARN role (#9771). It carries spawn
++# signals and, being new, has no committed weight row.
++set -euo pipefail
++
++STUB_PORT=19217
++STUB_LOG="$(mktemp)"
++
++# Boot the stub in its own process group so the reaper takes the whole tree.
++setsid python3 -m http.server "$STUB_PORT" --bind 127.0.0.1 >"$STUB_LOG" 2>&1 &
++STUB_PID=$!
++STUB_PGID="$(ps -o pgid= -p "$STUB_PID" | tr -d ' ')"
++
++cleanup() {
++  kill -- -"$STUB_PGID" 2>/dev/null || true
++  wait "$STUB_PID" 2>/dev/null || true
++  rm -f "$STUB_LOG"
++}
++trap cleanup EXIT
++
++# Wait for the bound port, then assert on the served response.
++for _ in $(seq 50); do
++  curl -sf "http://127.0.0.1:$STUB_PORT/" >/dev/null && break
++  sleep 0.1
++done
++out="$(curl -sf "http://127.0.0.1:$STUB_PORT/")"
++case "$out" in
++  *Directory*listing*) echo "PASS stub served a listing" ;;
++  *) echo "FAIL stub did not respond"; exit 1 ;;
++esac
