@@ -172,22 +172,22 @@ and a `routingInstructions` arm.
 
 ### 6.1 Population globs
 
-- [ ] 6.1.1 Add the OpenCode front-door globs to `POPULATION_GLOBS` in `plugins/soleur/lib/harness-parity.ts` (`opencode/agents/**/*.md`, `opencode/commands/*.md`), matching the Codex/Devin front-door rows.
-- [ ] 6.1.2 RED then GREEN `plugins/soleur/test/harness-parity.test.ts`.
+- [x] 6.1.1 Add the OpenCode front-door globs to `POPULATION_GLOBS` in `plugins/soleur/lib/harness-parity.ts` (`opencode/agents/**/*.md` policy `agent`, `opencode/commands/*.md` policy `command`), beside the Codex/Devin rows. They are front doors for a different reason: Codex/Devin re-use the skill tree, OpenCode's shims ARE those globs (the canonical `skills/` dir registers through a config key), so this is the only place the generated prose was outside the census.
+- [x] 6.1.2 RED then GREEN `plugins/soleur/test/harness-parity.test.ts`. RED was the tree test's population pin (`Expected: 323 / Received: 394`); after the count and floor updates, 474 pass / 0 fail across the pair, and the census reports **394 docs, 0 non-canonical**. `opencode/INSTRUCTIONS.md` stays out for the same measured reason as the Codex and Devin one: each carries the *typed* slash form as its subject (`/go`, `/soleur:go`), the ADR-226 §4 human-typed entry-point class.
 
 ### 6.2 Tree test
 
-- [ ] 6.2.1 Update `plugins/soleur/test/harness-parity-tree.test.ts` so the generated OpenCode tree is pinned to the registry (a missing or extra stub reds).
+- [x] 6.2.1 Update `plugins/soleur/test/harness-parity-tree.test.ts` so the generated OpenCode tree is pinned to the registry. Counts alone admit the drift that matters (a stub for a RETIRED agent, or one agent's stub overwritten by another's); a second test compares the path SETS by prefix swap, non-vacuously, so both a missing and an extra stub red.
 
 ### 6.3 BOUNDARY re-read record
 
-- [ ] 6.3.1 Record in the ADR (already drafted) that the ADR-226 §Consequences re-read was performed and `BOUNDARY` is unchanged; no code change.
-- [ ] 6.3.2 Grep the generated OpenCode docs for `@`-mention sites; for each, either canonicalise or wrap in a `harness-forms` region so the census does not report a bare sigil.
+- [x] 6.3.1 Record in the ADR that the ADR-226 §Consequences re-read was performed and `BOUNDARY` is unchanged; no code change. `@`, `/` and `$` were already sigils, so the re-read admits nothing new — and the sentence now says why that is a decision rather than a deferral.
+- [x] 6.3.2 Grep the generated OpenCode docs for `@`-mention sites. Measured: `grep -rn "@" plugins/soleur/opencode/{agents,commands}` is **empty**, so there is no site to canonicalise or wrap. Recorded in the ADR beside the re-read, because "0 sites" is the measurement that makes the unchanged `BOUNDARY` a decision.
 
 ### 6.4 Docs + counts
 
 - [ ] 6.4.1 Update `plugins/soleur/README.md` component counts and the harness table only if the support bar is met (Phase 7).
-- [ ] 6.4.2 Run `bun test plugins/soleur/test/components.test.ts`.
+- [x] 6.4.2 Run `bun test plugins/soleur/test/components.test.ts` — 1423 pass. The adapter adds no canonical component, so the README tables are unchanged; the harness *table* row waits on Phase 7.
 
 ## Phase 7 — Support bar + ship
 

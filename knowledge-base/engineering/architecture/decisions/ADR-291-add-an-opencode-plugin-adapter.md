@@ -156,9 +156,22 @@ words, and each guard fires (ADR-274's bar).
 
 `BOUNDARY` in `harness-parity.ts` is **unchanged**. ADR-226 §Consequences makes re-reading it an
 obligation as harnesses land; the re-read was performed for OpenCode and admits no new character —
-`@`, `/`, and `$` are already named as sigils. The consequence is recorded rather than fixed here:
-OpenCode invokes agents by `@`-mention, so an `@…` reference site is classified as a sigil and needs
-either canonical rewriting or a `harness-forms` region.
+`@`, `/`, and `$` are already named as sigils. The re-read's other half is a measurement rather than
+a judgment: the generated tree was grepped for `@`-mention sites and **carries none** (`grep -rn "@"
+plugins/soleur/opencode/{agents,commands}` is empty), which is what makes the unchanged set a
+decision rather than a deferral. Were a site to appear, OpenCode invokes agents by `@`-mention and
+the site would classify as a sigil, needing either canonical rewriting or a `harness-forms` region.
+
+Two globs join the population: `opencode/agents/**/*.md` (policy `agent`) and
+`opencode/commands/*.md` (policy `command`). They are the OpenCode *front doors* — the only harness
+whose shims are generated prose rather than a copy of the skill tree, because OpenCode registers the
+canonical `skills/` directory through a config key. Leaving them out is the shape of gap that reads
+as coverage: the generator could emit a non-canonical id and every gate would stay green while the
+spawn failed in a live session. `opencode/INSTRUCTIONS.md` stays OUT deliberately and for the same
+reason `codex/INSTRUCTIONS.md` and `devin/INSTRUCTIONS.md` do — measured, all three carry the
+*typed* slash form as their subject (`/go`, `/soleur:go`), which is the "human-typed entry point"
+class ADR-226 §4 exempts per harness. The tree test pins the generated set to the registry **by
+path**, not only by count, so a stale stub for a renamed agent reds.
 
 ## Consequences
 

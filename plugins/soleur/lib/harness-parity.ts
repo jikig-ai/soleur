@@ -101,6 +101,14 @@ export const POPULATION_GLOBS: readonly PopulationGlob[] = [
   // The Codex and Devin front doors: the same routing prose one harness over (arch F6).
   { pathspec: ":(glob)plugins/soleur/codex/skills/*/SKILL.md", regionPolicy: "skill" },
   { pathspec: ":(glob)plugins/soleur/devin/skills/*/SKILL.md", regionPolicy: "skill" },
+  // The OpenCode front doors. They are the ONLY harness whose shims are prose rather
+  // than a copy of this skill tree: OpenCode registers the canonical `skills/` directory
+  // through a config key (ADR-291), so the component references an OpenCode session
+  // meets are the ones in the GENERATED agent stubs and commands. Both were outside the
+  // census before this row, which is the whole reason a wrong id could ship from the
+  // generator and only show up as a failed spawn in a live session.
+  { pathspec: ":(glob)plugins/soleur/opencode/agents/**/*.md", regionPolicy: "agent" },
+  { pathspec: ":(glob)plugins/soleur/opencode/commands/*.md", regionPolicy: "command" },
   // The references half of NG-P (#8317). These are agent-read on every harness —
   // `plan-sharp-edges.md` alone is loaded by plan Phase 6.5 — so their component
   // references carry the same obligation as the entry files', and they were outside
