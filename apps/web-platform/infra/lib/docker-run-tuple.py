@@ -103,7 +103,6 @@ EXEMPT_RUN = {("ci-deploy.sh", "image", "$COSIGN_IMAGE")}      # the cosign veri
 # — a container-side root seed, not an app tuple.
 EXEMPT_RUN_NAMED = {("ci-deploy.sh", "soleur-plugin-seed")}
 EXEMPT_CREATE = {
-    ("ci-deploy.sh", "soleur-plugin-seed"),
     ("ci-deploy.sh", "$INNGEST_EXTRACT_CONTAINER"),
     ("cloud-init.yml", "soleur-hostscript-seed"),
     ("cloud-init.yml", "soleur-plugin-seed"),

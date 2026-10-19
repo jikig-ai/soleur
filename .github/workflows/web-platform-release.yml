@@ -1764,9 +1764,22 @@ jobs:
               fi
               PEER_ERROR=$(echo "$PEER_JSON" | jq -r '.error // ""')
               if [ -n "$PEER_ERROR" ]; then
-                echo "::error::peer $PEER_IP deploy failed (reason=$PEER_ERROR)"
-                echo "$PEER_JSON" | jq .
-                exit 1
+                # `unsigned` is terminal: web-1 could not sign the peer read —
+                # a credential/hooks.json defect that cannot heal inside this
+                # poll budget. Transport classes (unreachable|http_<code>|
+                # not_json) are web-1's observation of the channel, not the
+                # peer's verdict — a slow-but-healthy peer answering inside
+                # `curl --max-time 3` mid-deploy would burn a good release on a
+                # first-glance transient, so they read as UNRESOLVED and still
+                # fail closed at the budget below (design-pass finding, #8743).
+                if [ "$PEER_ERROR" = "unsigned" ]; then
+                  echo "::error::peer $PEER_IP deploy failed (reason=$PEER_ERROR)"
+                  echo "$PEER_JSON" | jq .
+                  exit 1
+                fi
+                UNRESOLVED="${UNRESOLVED}${UNRESOLVED:+ }${PEER_IP}"
+                echo "Attempt $i/$STATUS_POLL_MAX_ATTEMPTS: peer $PEER_IP slot error=$PEER_ERROR (transport-class — polling)"
+                continue
               fi
               PEER_EXIT=$(echo "$PEER_JSON" | jq -r '.exit_code // -99')
               PEER_TAG=$(echo "$PEER_JSON" | jq -r '.tag // ""')

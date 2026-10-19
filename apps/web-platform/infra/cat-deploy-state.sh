@@ -841,7 +841,7 @@ peers_json() {
     fi
     # A jq failure here must not propagate under set -e — keep the slots
     # collected so far and let the malformed peer simply be absent.
-    result=$(printf '%s' "$result" | jq --arg p "$peer" --argjson s "$slot" '. + {($p): $s}' 2>/dev/null) || true
+    merged=$(printf '%s' "$result" | jq --arg p "$peer" --argjson s "$slot" '. + {($p): $s}' 2>/dev/null) && result="$merged" || true
   done
   printf '%s' "$result"
 }
