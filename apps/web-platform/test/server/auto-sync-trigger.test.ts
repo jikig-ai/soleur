@@ -72,6 +72,7 @@ function baseSeams(startAgentSession: ReturnType<typeof vi.fn>) {
     serviceClient: serviceClient as never,
     resolveWorkspaceId: vi.fn().mockResolvedValue(WORKSPACE_ID),
     userHasEffectiveByokKey: vi.fn().mockResolvedValue(true),
+    newAgentSessionsRefused: vi.fn().mockResolvedValue(false),
   };
   return { inserts, seams };
 }
@@ -131,7 +132,7 @@ describe("triggerHeadlessSync — lease/auth retry resilience (AC3)", () => {
     // Must NOT reject into the setup `.then()` — resolves cleanly.
     const p = triggerHeadlessSync(USER_ID, REPO_URL, seams);
     await vi.runAllTimersAsync();
-    await expect(p).resolves.toBeUndefined();
+    await expect(p).resolves.toBe("failed");
 
     // 1 initial + 3 retries = 4 attempts (bounded).
     expect(startAgentSession).toHaveBeenCalledTimes(4);
@@ -148,7 +149,7 @@ describe("triggerHeadlessSync — lease/auth retry resilience (AC3)", () => {
 
     const p = triggerHeadlessSync(USER_ID, REPO_URL, seams);
     await vi.runAllTimersAsync();
-    await expect(p).resolves.toBeUndefined();
+    await expect(p).resolves.toBe("failed");
 
     expect(startAgentSession).toHaveBeenCalledTimes(1);
     expect(inserts).toHaveLength(1);
@@ -221,5 +222,49 @@ describe("triggerHeadlessSync — gating", () => {
     const promptArg = startAgentSession.mock.calls[0][4];
     expect(promptArg).toContain("/soleur:sync");
     expect(promptArg).toContain("--headless");
+  });
+});
+
+describe("triggerHeadlessSync — quiet-window kill-switch (#8211, CTO ruling: refuse)", () => {
+  test("refused: returns skipped-quiet-window, no BYOK read, no INSERT, no session, no Sentry", async () => {
+    const startAgentSession = vi.fn().mockResolvedValue(undefined);
+    const { inserts, seams } = baseSeams(startAgentSession);
+    seams.newAgentSessionsRefused = vi.fn().mockResolvedValue(true);
+
+    const outcome = await triggerHeadlessSync(USER_ID, REPO_URL, seams);
+
+    expect(outcome).toBe("skipped-quiet-window");
+    expect(seams.userHasEffectiveByokKey).not.toHaveBeenCalled();
+    expect(seams.resolveWorkspaceId).not.toHaveBeenCalled();
+    expect(inserts).toHaveLength(0);
+    expect(startAgentSession).not.toHaveBeenCalled();
+    expect(mockReportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  test("not refused: unchanged, returns started after exactly one INSERT and one session start", async () => {
+    const startAgentSession = vi.fn().mockResolvedValue(undefined);
+    const { inserts, seams } = baseSeams(startAgentSession);
+
+    const outcome = await triggerHeadlessSync(USER_ID, REPO_URL, seams);
+
+    expect(outcome).toBe("started");
+    expect(inserts).toHaveLength(1);
+    expect(startAgentSession).toHaveBeenCalledTimes(1);
+  });
+
+  test("keyless user stays distinct from quiet-window: skipped-keyless", async () => {
+    const startAgentSession = vi.fn();
+    const { seams } = baseSeams(startAgentSession);
+    seams.userHasEffectiveByokKey = vi.fn().mockResolvedValue(false);
+
+    expect(await triggerHeadlessSync(USER_ID, REPO_URL, seams)).toBe("skipped-keyless");
+  });
+
+  test("exhausted retries return failed", async () => {
+    vi.useRealTimers();
+    const startAgentSession = vi.fn().mockRejectedValue(new Error("boom"));
+    const { seams } = baseSeams(startAgentSession);
+
+    expect(await triggerHeadlessSync(USER_ID, REPO_URL, seams)).toBe("failed");
   });
 });

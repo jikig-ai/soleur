@@ -217,6 +217,7 @@ import {
   hasLiveAgentLoop,
 } from "./agent-session-registry";
 import { classifyAbortReason, SessionAbortError } from "./abort-classifier";
+import { newAgentSessionsRefused, QUIET_WINDOW_MESSAGE } from "./quiet-window";
 import { classifySandboxStartupError } from "./sandbox-startup-classifier";
 import { checkpointInflightWorkForConversation } from "./inflight-checkpoint";
 import { resolveWorkspaceMode } from "./workspace-mode";
@@ -919,6 +920,26 @@ export async function startAgentSession(
    *  session_ended after all leaders finish (see #2428). */
   skipSessionEnded?: boolean,
 ): Promise<void> {
+  // #8211 quiet-window — refuse a NEW agent session while the kill-switch is on.
+  // MUST be the first statement, ABOVE the repo-readiness read and the
+  // supersede-abort below: a refusal never aborts the user's in-flight prior
+  // session and never registers a dangling one. No lease, no clone, no spawn.
+  // Info breadcrumb only (an owner-set window is not an incident); hashed user
+  // id, no conversation id.
+  if (await newAgentSessionsRefused()) {
+    log.info(
+      {
+        feature: "quiet-window",
+        op: "refuse-new-session",
+        surface: "agent-runner",
+        userIdHash: hashUserId(userId),
+      },
+      "quiet-window: refused a new agent session (new-sessions-paused)",
+    );
+    sendToClient(userId, { type: "error", message: QUIET_WINDOW_MESSAGE });
+    return;
+  }
+
   // #5399 — legacy-leader repo-readiness gate (AC10 follow-up to #5395).
   //
   // This MUST be the FIRST statement of startAgentSession — ABOVE the

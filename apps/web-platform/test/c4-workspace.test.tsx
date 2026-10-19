@@ -27,6 +27,7 @@ function flagSnapshot(c4Edit: boolean): Record<FlagName, boolean> {
     "untrusted-content-classify": false,
     "untrusted-content-wrap": false,
     "egress-audit-collection": false,
+    "new-sessions-paused": false,
   };
 }
 

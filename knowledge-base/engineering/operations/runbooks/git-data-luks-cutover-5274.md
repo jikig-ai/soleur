@@ -194,6 +194,22 @@ held sentinel (its step says so; `mode=proof` reads it, and the `cutover_frozen`
 it fails itself (no `RESEND_API_KEY`, an issues API error), the email step records its outcome in the issue, and a
 failed `notify-failure` job shows red on the run's own summary, which is then the only signal.
 
+### Quiet window before the flip (#8211, CTO ruling 2026-10-19)
+
+The flip's flag-on window can strand a working tree under `WORKTREE_ROOT` that is a user's only copy, and web-2 has no SSH ingress, so no read can show it there. The control is a runtime kill-switch that refuses NEW agent sessions, plus a counts-only read of live sessions per host. Both ship with the flag `new-sessions-paused` **absent**, which means sessions are allowed; creating and flipping it are production writes and stay owner acts.
+
+Owner commands (each needs a TTY and a typed `yes`, run from a worktree that holds the merged change):
+
+```bash
+bash plugins/soleur/skills/flag-create/scripts/create.sh new-sessions-paused --flagsmith-only
+bash plugins/soleur/skills/flag-set-role/scripts/flip.sh new-sessions-paused prd on
+bash plugins/soleur/skills/flag-set-role/scripts/flip.sh new-sessions-paused prd off
+```
+
+What it covers: a new session in `dispatchSoleurGo` (a conversation with no live Query), `startAgentSession`, `POST /api/repo/setup` (503 with `Retry-After: 300`) and the auto-sync agent. A warm turn on a live session is never refused. Not covered: sessions started from the Inngest cron paths. A refused first message is not persisted, so the user resends it after the window.
+
+Before dispatching `mode=flip`, read BOTH hosts in Better Stack, by `host_name`, for the line `agent_sessions_live=<n> cc_queries=<n> legacy_sessions=<n> new_sessions_paused=<0|1>` (one per minute per host; same query shape as the `git_data_store=` read-back in `.github/workflows/git-data-cutover.yml`). Proceed only when both hosts show `new_sessions_paused=1` AND `agent_sessions_live=0`. Refusal reaches a host within the 30 s flag cache TTL. The control fails open: on a Flagsmith outage the env mirror is 0 and sessions are allowed again, which is why the read-back line, not the flag value, is the proof. Turn it off after the exit read (`mode=proof`) or the rollback has completed.
+
 ### Before the first `flip`: the rollback rehearsal
 
 The first `flip` is not authorized until a flip-then-rollback rehearsal has run once with the erasure

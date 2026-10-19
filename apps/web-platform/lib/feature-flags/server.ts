@@ -100,6 +100,16 @@ const RUNTIME_FLAGS = {
   // A); external orgs stay OFF until PR2 ships. Read ONLY through the ingest module.
   // Fail-closed: FLAG_EGRESS_AUDIT_COLLECTION=0 mirror.
   "egress-audit-collection": "FLAG_EGRESS_AUDIT_COLLECTION",
+  // #8211 T2 build 1 — quiet-window kill-switch. ON refuses NEW agent sessions
+  // on every web host with a maintenance message (server/quiet-window.ts); a
+  // session already running is never touched. Default OFF, and ABSENT (no
+  // Flagsmith feature, no env mirror) means sessions are allowed. Global, never
+  // per-org: read ONLY through `isNewAgentSessionsPaused` with the anonymous
+  // identity so a segment override cannot split the fleet. The owner creates the
+  // Flagsmith feature (flag-create --flagsmith-only) and mirrors Doppler; the
+  // code ships dark. Fail-OPEN on a Flagsmith outage: FLAG_NEW_SESSIONS_PAUSED=0
+  // mirror, so the live read-back line (new_sessions_paused=) is the proof.
+  "new-sessions-paused": "FLAG_NEW_SESSIONS_PAUSED",
 } as const;
 
 export type EnvFlagName = keyof typeof ENV_FLAGS;
@@ -305,6 +315,17 @@ export async function isUntrustedContentClassifyEnabled(identity: Identity): Pro
 /** #4671 / ADR-287 — rewrite flagged WebFetch results into the data-only envelope. Subordinate to classify. */
 export async function isUntrustedContentWrapEnabled(identity: Identity): Promise<boolean> {
   return getRuntimeFlag("untrusted-content-wrap", identity);
+}
+
+/**
+ * #8211 T2 build 1 — the quiet-window kill-switch. Global by construction: the
+ * anonymous identity means the same answer on every host and for every user, and
+ * an absent feature reads `false` (the SDK reports an unknown feature disabled),
+ * so the default is "sessions allowed". The 30 s snapshot cache bounds how long
+ * a flip takes to reach a host.
+ */
+export async function isNewAgentSessionsPaused(): Promise<boolean> {
+  return getRuntimeFlag("new-sessions-paused", ANON_IDENTITY);
 }
 
 export function __resetFeatureFlagsForTests(): void {
