@@ -24,3 +24,9 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan, soleur:legal:clo, soleur:pr
 - Volume read (Doppler prd_terraform read-only token, value never printed): exactly one volume named soleur-git-data-store, id 106867358, attached to a server, protection.delete=false. Latest 5 actions: attach_volume success 2026-10-14T14:51:37Z, detach_volume success 2026-10-14T14:51:01Z, attach 14:34:09Z, detach 14:33:05Z, attach 2026-10-13T10:36:14Z; none running; the latest command is neither a detach nor a delete.
 - Run list (gh run list --workflow git-data-cutover.yml --limit 1000): total 14 (< 1000); no non-completed run; zero wipe, wipe_finish or snapshot_clear titles; no wipe_check with conclusion success; newest = run 39225916196 "git-data flip" 2026-10-19T08:52:48Z, conclusion failure.
 - Flag and stamp (Doppler prd): GIT_DATA_STORE_ENABLED exit 0, value empty; GIT_DATA_LUKS_CUTOVER_AT exit 0, value empty. No HOLD condition is true.
+
+## Work Phase 2-6 complete
+- cto_spawns=0 (no technical question arose; CLO spawned for the final-diff attestation, verdict SIGNED-OFF WITH CONDITIONS C1-C3; C1 applied).
+- Gates green: check-tc-document-sha, lint-legal-mirror-drift-baseline, lint-legal-registers, lint-legal-scope-block-placement, probe-legal-corpus-truth, technical-ruling-gate, 4 vitest files (64 tests), markdownlint.
+- Known plan-vs-reality notes: AC4's no-"2.6.0" grep still matches two dated historical statements in compliance-posture.md (append-only, left as is); AC6's 450-character proximity does not hold for the PA-36 (f) "Target: 2026-10-22" mention, which is governed by the end-of-cell marker (CLO ruled acceptable).
+- Stop rule: Operator Holds in the plan make ship stop at the draft PR; no DONE promise.
