@@ -130,8 +130,6 @@ def project_location(value, expected_digest):
             'Unsupported Location route')
     suffix_start = value.find('://') + 3 + len(parsed.netloc)
     return {'scheme': 'https', 'hostname': normalized,
-            'route_class': 'same-registry-host' if normalized == 'registry-1.docker.io'
-                           else 'other-dns-host',
             'port': 443, 'location_sha256': sha(value.encode('ascii')),
             'location_bytes': len(value), 'path_sha256': sha(parsed.path.encode('ascii')),
             'query_present': '?' in value[suffix_start:], 'fragment_or_userinfo_present': False,

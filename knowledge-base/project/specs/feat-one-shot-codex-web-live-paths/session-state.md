@@ -2199,3 +2199,38 @@
   independent source and actual-manifest reviews and fresh exact-action
   approval remain pending. No CDN host or permission is inferred. All hosted-
   auth, runtime, profile, legal and shipping holds persist at phase boundary.
+
+### Redirect diagnostic source and manifest — 2026-10-19
+
+- Pushed `043776242618daf4e6a3c32fe234adf0f428449f` after fixing the
+  incremental response-header count cap and adding synthetic regressions for
+  early refusal and Config-200 body non-consumption. The focused diagnostic
+  suite passes 10/10; full offline Codex-qualification discovery passes
+  318/318 with `RC=0`; Ruff ratchet passes (44 findings baselined, 115 files).
+- Targeted security, code-quality and test-design reviews concur on the latest
+  source. CTO ruled DNS cooperative under the spec-required 90-second outer
+  timeout plus five-second kill grace; the eventual exact-action command must
+  include that wrapper. Semgrep ran 324 rules on both changed Python files and
+  found zero findings; its JSON reported one non-blocking taint-analysis
+  fixpoint timeout at the collector entrypoint.
+- Prepared a new file-only manifest bound to exact source `0437762…`, a fresh
+  attempt, current CA hash, the retained 864-byte platform bytes and exact
+  Config descriptor, and a private output directory. Canonical manifest SHA
+  `391151cab47b60ae1e263013aa2168397fae7e9c96d1d737c2d304ce04ffbaed`;
+  directory/file modes are 0700/0600. Only the anonymous token GET and pinned
+  Config GET are listed; Config response maximum is zero and permitted status
+  is 307. All authority flags remain false/pending.
+- The first preparation invocation used relative paths and was refused before
+  creating an output directory; the absolute-path file-only preparation then
+  succeeded. No diagnostic request, redirect follow, destination request or
+  layer fetch occurred. Independent review of this actual manifest is pending;
+  no exact-action approval has been requested or granted. PR #9051 remains
+  open/draft, disarmed and customer-blocked; fresh CI is pending on this head.
+- Independent actual-manifest review found `route_class` exceeded the exact
+  projection fields allowed by the spec, so that manifest is superseded and
+  cannot be approved. Added a test asserting the exact nine permitted fields;
+  it failed on `route_class` before the source removed it. The 10 focused and
+  318 offline qualification tests now pass on the corrected worktree, with
+  Ruff/compile/diff checks green. Fresh source review, new manifest binding
+  and independent actual-manifest review are required before requesting any
+  exact-action approval. No diagnostic request or follow-on action occurred.

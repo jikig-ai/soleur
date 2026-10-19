@@ -120,9 +120,11 @@ class RedirectDiagnostic(unittest.TestCase):
         self.assertEqual(self.manifest['actions'][1]['response_body'], 'never-read')
         self.assertEqual(receipt['status'], 'redirect-headers-observed')
         projected = receipt['routing']
+        self.assertEqual(set(projected), {'scheme', 'hostname', 'port', 'location_sha256',
+            'location_bytes', 'path_sha256', 'query_present', 'fragment_or_userinfo_present',
+            'expected_config_digest_in_path'})
         self.assertEqual(projected['scheme'], 'https')
         self.assertEqual(projected['hostname'], 'unreviewed.invalid')
-        self.assertEqual(projected['route_class'], 'other-dns-host')
         self.assertEqual(projected['location_sha256'], sha(LOCATION.encode()))
         self.assertEqual(projected['location_bytes'], len(LOCATION.encode()))
         self.assertEqual(projected['path_sha256'], sha(('/private/' + fixtures.IMAGE['image_id']).encode()))
@@ -155,7 +157,9 @@ class RedirectDiagnostic(unittest.TestCase):
                 diagnostic.project_location(value, fixtures.IMAGE['image_id'])
         projected = diagnostic.project_location('https://REGISTRY-1.DOCKER.IO./path', fixtures.IMAGE['image_id'])
         self.assertEqual(projected['hostname'], 'registry-1.docker.io')
-        self.assertEqual(projected['route_class'], 'same-registry-host')
+        self.assertEqual(set(projected), {'scheme', 'hostname', 'port', 'location_sha256',
+            'location_bytes', 'path_sha256', 'query_present', 'fragment_or_userinfo_present',
+            'expected_config_digest_in_path'})
         self.assertFalse(projected['query_present'])
         self.assertFalse(projected['expected_config_digest_in_path'])
         empty_query = diagnostic.project_location('https://example.invalid/path?', fixtures.IMAGE['image_id'])
