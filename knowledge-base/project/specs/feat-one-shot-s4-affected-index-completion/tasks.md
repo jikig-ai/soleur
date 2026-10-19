@@ -26,8 +26,8 @@ Every PR body ends `Ref #9729` and `Ref #10448` (never a closing keyword) and qu
 
 ## Phase 3: PR3 - the ratchet, the baseline, the ADR-276 amendment
 
-- 3.1 Failing tests first in `scripts/ci-pr-affected-index-ratchet.test.sh` (Guard 1 rows M1-M14 each with a pristine control and a distinct failure token, harness rows, declared-limit negative controls for variable-built paths / hop-2 libs / non-literal `source`, failure-text contract; controls from `--list` fixtures and scratch `git init` repos with `GIT_CEILING_DIRECTORIES`; one real selector walk)
-- 3.2 `ratchet` subcommand in `scripts/ci-pr-affected-replay.py`: structural floors, exit codes 0/1/2 (ReadError and unexpected errors map to 2), baseline equals live gap set, merge-base growth rule via `resolve_base`/`baseline_at` from `scripts/lint-ratchet.py` keyed on `RATCHET_BASELINE`, duplicate and unsorted refusal, absent baseline is strict zero except at the bootstrap PR, failure text with suite/path/line and both remedies
+- 3.1 Failing tests first in `scripts/ci-pr-affected-index-ratchet.test.sh` (Guard 1 rows M1-M14 plus M5b (same-suite pair swap) each with a pristine control and a distinct failure token, harness rows, declared-limit negative controls for variable-built paths / hop-2 libs / non-literal `source`, failure-text contract; controls from `--list` fixtures and scratch `git init` repos with `GIT_CEILING_DIRECTORIES`; one real selector walk)
+- 3.2 `ratchet` subcommand in `scripts/ci-pr-affected-replay.py`: structural floors, exit codes 0/1/2 (ReadError and unexpected errors map to 2), baseline equals live gap set, merge-base growth rule as a pair-set subset check (not a count check) via `resolve_base`/`baseline_at` from `scripts/lint-ratchet.py` keyed on `RATCHET_BASELINE`, duplicate and unsorted refusal, absent baseline is strict zero except at the bootstrap PR, failure text with suite/path/line and both remedies
 - 3.3 Create `scripts/ci-pr-affected-audit.baseline.tsv` (sorted, regenerated on the rebased tree just before merge)
 - 3.3b `ratchet --print-baseline` (stdout only); failure text separates edited-suite / added-file / stale-row causes and prints the file and line to delete
 - 3.3c Load `resolve_base`/`baseline_at` from `scripts/lint-ratchet.py` with `importlib.util.spec_from_file_location`; fixture proves the load
@@ -35,7 +35,7 @@ Every PR body ends `Ref #9729` and `Ref #10448` (never a closing keyword) and qu
 - 3.5 Measure and state the ratchet's cost cold and with a restored cache in the PR body; confirm it fits the ceiling or stop and re-rule
 - 3.6 Run `bash scripts/lint-orphan-test-suites.sh`, the shard-totality census and `bash plugins/soleur/test/c4-count-parity.test.sh`
 - 3.7 Append ADR-276 `## Amendment <date> (S4 index completion ratchet, #10448)` and a Stage-status line (non-activating; supersedes the `plugins/soleur` `*`-row clause by subject; residuals stated; append-only)
-- 3.8 Update `knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md` sections 2 and 3 (ratchet, baseline path, drain a row, contributor how-to, rollback recipe) plus sections "ratchet red on main", "bot PRs", "one drain PR at a time"; verify `grep -c '^test$' scripts/required-checks.txt` is 1 and the queue run executes the suite; simulate the revert in a scratch detached worktree and record what it needed
+- 3.8 Update `knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md` sections 2 and 3 (ratchet, baseline path, drain a row, contributor how-to, rollback recipe) plus sections "ratchet red on main" (fix forward leaving the ratchet green, no bypass, or revert), "bot PRs", "one drain PR at a time"; verify `grep -c '^test$' scripts/required-checks.txt` is 1 and the queue run executes the suite; simulate the revert in a scratch detached worktree and record what it needed
 
 ## Phase 4: PR4 - heavy-tail suites (about 611 of 1,108 refs)
 
