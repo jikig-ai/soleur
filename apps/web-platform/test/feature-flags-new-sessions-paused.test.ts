@@ -83,3 +83,70 @@ describe("isNewAgentSessionsPaused", () => {
     expect(mockGetIdentityFlags.mock.calls[0][0]).toBe("role:prd");
   });
 });
+
+describe("isNewAgentSessionsPaused: a failing Flagsmith never re-opens the gate (review P1)", () => {
+  const live = (on: boolean) => ({ isFeatureEnabled: (n: string) => n === "new-sessions-paused" && on });
+
+  it("a 200 ms timeout AFTER Flagsmith said ON keeps the gate ON despite a mirror of 0", async () => {
+    vi.useFakeTimers();
+    try {
+      process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
+      process.env.FLAG_NEW_SESSIONS_PAUSED = "0";
+      mockGetIdentityFlags.mockResolvedValueOnce(live(true));
+      await expect(isNewAgentSessionsPaused()).resolves.toBe(true);
+      // The 30 s snapshot cache expires and the next fetch times out: the env-mirror snapshot is built.
+      vi.advanceTimersByTime(31_000);
+      mockGetIdentityFlags.mockRejectedValueOnce(new Error("timeout"));
+      await expect(isNewAgentSessionsPaused()).resolves.toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the held value expires after 10 minutes of continuous failure, then the mirror decides", async () => {
+    vi.useFakeTimers();
+    try {
+      process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
+      process.env.FLAG_NEW_SESSIONS_PAUSED = "0";
+      mockGetIdentityFlags.mockResolvedValueOnce(live(true));
+      await isNewAgentSessionsPaused();
+      mockGetIdentityFlags.mockRejectedValue(new Error("down"));
+      vi.advanceTimersByTime(31_000);
+      await expect(isNewAgentSessionsPaused()).resolves.toBe(true);
+      vi.advanceTimersByTime(11 * 60_000);
+      await expect(isNewAgentSessionsPaused()).resolves.toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the mirror can turn the gate ON during a failure but a held OFF never wins over a mirror of 1", async () => {
+    vi.useFakeTimers();
+    try {
+      process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
+      process.env.FLAG_NEW_SESSIONS_PAUSED = "0";
+      mockGetIdentityFlags.mockResolvedValueOnce(live(false));
+      await expect(isNewAgentSessionsPaused()).resolves.toBe(false);
+      process.env.FLAG_NEW_SESSIONS_PAUSED = "1";
+      vi.advanceTimersByTime(31_000);
+      mockGetIdentityFlags.mockRejectedValueOnce(new Error("timeout"));
+      await expect(isNewAgentSessionsPaused()).resolves.toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("when Flagsmith answers OFF after having said ON, OFF wins (the owner turned it off)", async () => {
+    vi.useFakeTimers();
+    try {
+      process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
+      mockGetIdentityFlags.mockResolvedValueOnce(live(true));
+      await expect(isNewAgentSessionsPaused()).resolves.toBe(true);
+      vi.advanceTimersByTime(31_000);
+      mockGetIdentityFlags.mockResolvedValueOnce(live(false));
+      await expect(isNewAgentSessionsPaused()).resolves.toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

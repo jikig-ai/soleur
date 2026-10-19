@@ -128,7 +128,15 @@ export async function triggerHeadlessSync(
   const refused =
     seams.newAgentSessionsRefused ??
     (async () => (await import("@/server/quiet-window")).newAgentSessionsRefused());
-  if (await refused()) {
+  // Fail OPEN: a rejected dynamic import or a throwing flag read must never reject the helper (the
+  // route's catch would mark repo_status='error' after a successful clone). Allowed means proceed.
+  let isRefused = false;
+  try {
+    isRefused = await refused();
+  } catch {
+    isRefused = false;
+  }
+  if (isRefused) {
     logger.info(
       {
         feature: "quiet-window",

@@ -217,7 +217,7 @@ import {
   hasLiveAgentLoop,
 } from "./agent-session-registry";
 import { classifyAbortReason, SessionAbortError } from "./abort-classifier";
-import { newAgentSessionsRefused, QUIET_WINDOW_MESSAGE } from "./quiet-window";
+import { newAgentSessionsRefused, QUIET_WINDOW_MESSAGE, trackSessionStart } from "./quiet-window";
 import { classifySandboxStartupError } from "./sandbox-startup-classifier";
 import { checkpointInflightWorkForConversation } from "./inflight-checkpoint";
 import { resolveWorkspaceMode } from "./workspace-mode";
@@ -908,6 +908,18 @@ export function startStuckActiveReaper(): NodeJS.Timeout {
 // Start agent session
 // ---------------------------------------------------------------------------
 export async function startAgentSession(
+  ...args: Parameters<typeof startAgentSessionInner>
+): Promise<void> {
+  // #8211 quiet-window: in flight until this entry returns (see trackSessionStart).
+  const releaseStart = trackSessionStart();
+  try {
+    return await startAgentSessionInner(...args);
+  } finally {
+    releaseStart();
+  }
+}
+
+async function startAgentSessionInner(
   userId: string,
   conversationId: string,
   leaderId?: DomainLeaderId,
@@ -2979,12 +2991,44 @@ async function dispatchToLeaders(
 // Send user message into running session
 // ---------------------------------------------------------------------------
 export async function sendUserMessage(
+  ...args: Parameters<typeof sendUserMessageInner>
+): Promise<void> {
+  const releaseStart = trackSessionStart();
+  try {
+    return await sendUserMessageInner(...args);
+  } finally {
+    releaseStart();
+  }
+}
+
+async function sendUserMessageInner(
   userId: string,
   conversationId: string,
   content: string,
   conversationContext?: import("@/lib/types").ConversationContext,
   attachments?: AttachmentRef[],
 ): Promise<void> {
+  // #8211 quiet-window (review P2): refuse BEFORE this function's own writes. The gate in
+  // startAgentSession sits after the messages INSERT, the attachment download into the user's
+  // working tree, the BYOK routing call and the status flip to active, so gating only there left a
+  // stored message, written files and a conversation stuck "active" with no session. No warm
+  // exemption: every message here ends in startAgentSession, whose gate refuses unconditionally, so
+  // an exemption would only move the refusal back below the writes. The prior session is never
+  // touched (nothing below runs), so it stays alive and registered.
+  if (await newAgentSessionsRefused()) {
+    log.info(
+      {
+        feature: "quiet-window",
+        op: "refuse-new-session",
+        surface: "agent-runner-send",
+        userIdHash: hashUserId(userId),
+      },
+      "quiet-window: refused a message before any write (new-sessions-paused)",
+    );
+    sendToClient(userId, { type: "error", message: QUIET_WINDOW_MESSAGE });
+    return;
+  }
+
   // feat-stream-since-disconnect (#5273) — turn boundary. Clear the prior
   // turn's replay frames (keeping the monotonic seq counter) so a new turn's
   // buffer starts fresh and a long, never-disconnected conversation doesn't

@@ -1,5 +1,6 @@
 "use client";
 
+import { QUIET_WINDOW_CODE } from "@/lib/repo-connect-codes";
 import { XCircleIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -48,6 +49,16 @@ export const CREATE_FAILED_ERROR_CODE = "CREATE_FAILED" as const;
 // Partial because CLONE_UNKNOWN intentionally falls through to the
 // generic copy (same shape as legacy plain-stderr rows).
 const ERROR_COPY: Record<string, ErrorCopy> = {
+  // #8211 quiet-window: a planned, short maintenance window — not a failure of the user's project.
+  [QUIET_WINDOW_CODE]: {
+    headline: "Soleur is briefly paused for maintenance",
+    body: "We're not starting new projects for a few minutes. Nothing was created or changed, and your existing work is safe.",
+    steps: [
+      "Wait a few minutes.",
+      "Then click Try Again.",
+    ],
+    primaryCta: { label: "Try Again", action: "retry" },
+  },
   // STATE 1 — switch: the caller's OWN (ready) workspace already owns this repo,
   // reached while connecting from a different active workspace.
   [WORKSPACE_SWITCH_REQUIRED_CODE]: {

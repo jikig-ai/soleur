@@ -159,7 +159,7 @@ describe("POST /api/repo/setup — quiet-window kill-switch (#8211)", () => {
 
     expect(res.status).toBe(503);
     expect(res.headers.get("Retry-After")).toBe("300");
-    expect(await res.json()).toEqual({ error: QUIET_WINDOW_MESSAGE });
+    expect(await res.json()).toEqual({ error: QUIET_WINDOW_MESSAGE, code: "quiet_window" });
     expect(mockResolveActiveWorkspace).not.toHaveBeenCalled();
     expect(cloningFlipCalled).toBe(false);
     expect(mockProvisionWorkspaceWithRepo).not.toHaveBeenCalled();

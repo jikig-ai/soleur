@@ -188,7 +188,7 @@ vi.mock("../server/cc-effective-installation", () => ({
   resolveEffectiveInstallationId: mockResolveEffectiveInstallationId,
 }));
 
-import { startAgentSession } from "../server/agent-runner";
+import { startAgentSession, sendUserMessage } from "../server/agent-runner";
 import { createApiKeysMock, createQueryMock } from "./helpers/agent-runner-mocks";
 
 const MEMBER_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -369,5 +369,40 @@ describe("agent-runner leader — quiet-window kill-switch (#8211)", () => {
     expect(activeLegacySessionCount()).toBe(before + 1);
     unregisterSession(MEMBER_ID, "conv-count");
     expect(activeLegacySessionCount()).toBe(before);
+  });
+});
+
+// Last on purpose: the flag-absent case lets sendUserMessage run past its gate, and the async tail it starts
+// must not leak into a neighbouring test's mock-call assertions.
+describe("sendUserMessage — refuses before ITS OWN writes (review P2)", () => {
+  test("flag ON: no conversation read, no message INSERT, no status flip, no spawn; the prior session survives", async () => {
+    setupSupabaseMock();
+    createQueryMock(mockQuery);
+    const prior = new AbortController();
+    registerSession(MEMBER_ID, "conv-send", {
+      abort: prior,
+      reviewGateResolvers: new Map(),
+      sessionId: null,
+    }, "cpo");
+    process.env.FLAG_NEW_SESSIONS_PAUSED = "1";
+    __resetFeatureFlagsForTests();
+
+    await sendUserMessage(MEMBER_ID, "conv-send", "hello");
+
+    expect(quietWindowEmits()).toHaveLength(1);
+    expect(mockFrom).not.toHaveBeenCalled();
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(mockQuery).not.toHaveBeenCalled();
+    expect(prior.signal.aborted).toBe(false);
+    expect(getSession(MEMBER_ID, "conv-send", "cpo")?.abort).toBe(prior);
+    unregisterSession(MEMBER_ID, "conv-send", "cpo");
+  });
+
+  test("flag absent: the message path reaches its conversation read as before", async () => {
+    setupSupabaseMock();
+    createQueryMock(mockQuery);
+    await sendUserMessage(MEMBER_ID, "conv-send2", "hello").catch(() => undefined);
+    expect(quietWindowEmits()).toHaveLength(0);
+    expect(mockFrom).toHaveBeenCalled();
   });
 });

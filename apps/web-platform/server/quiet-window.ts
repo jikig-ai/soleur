@@ -28,15 +28,22 @@ const FEATURE = "quiet-window";
 
 /** Shown to the user whose NEW session was refused. No ids, no internals. */
 export const QUIET_WINDOW_MESSAGE =
-  "Soleur is in a short maintenance window and is not starting new sessions right now. Your existing work is safe. Please try again in a few minutes.";
+  "Soleur is in a short maintenance window and is not starting new sessions right now. Your existing work is safe, but this message was not sent. Please try again in a few minutes.";
 
 /**
  * True when a NEW agent session must be refused. Anything other than a strict
  * `true` from the flag read (absent, off, a thrown read) allows the session.
  */
-export async function newAgentSessionsRefused(): Promise<boolean> {
+export async function newAgentSessionsRefused(
+  opts: { observe?: boolean } = {},
+): Promise<boolean> {
   try {
-    return (await isNewAgentSessionsPaused()) === true;
+    const refused = (await isNewAgentSessionsPaused()) === true;
+    // Each REAL refusal is counted so the per-minute line proves off-box that the gates fired (the
+    // refusal log itself is info level and never leaves the container). The reporter's own read
+    // passes observe:true and is not a refusal.
+    if (refused && opts.observe !== true) refusedSinceLastEmit += 1;
+    return refused;
   } catch (err) {
     warnSilentFallback(err, {
       feature: FEATURE,
@@ -47,21 +54,59 @@ export async function newAgentSessionsRefused(): Promise<boolean> {
   }
 }
 
+let refusedSinceLastEmit = 0;
+let inFlightStarts = 0;
+
+/**
+ * Mark an agent-session entry call (dispatch / start / send) as in flight until the returned
+ * release function runs. A start that passed the gate before the flip registers its Query only after
+ * the workspace resolve, clone and lease, so a count of registered sessions alone can read 0 while a
+ * clone is mid-flight (review P2). Held for the WHOLE call, so the figure is an UPPER BOUND on live
+ * work: it can over-count a running session (counted again as cc_queries/legacy_sessions) and never
+ * under-counts, which is the safe direction for a "live = 0" proof. Idempotent release.
+ */
+export function trackSessionStart(): () => void {
+  inFlightStarts += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    inFlightStarts = Math.max(0, inFlightStarts - 1);
+  };
+}
+
+export function inFlightStartCount(): number {
+  return inFlightStarts;
+}
+
+/** Test seam: module-level counters would otherwise leak between cases. */
+export function __resetQuietWindowCountersForTests(): void {
+  inFlightStarts = 0;
+  refusedSinceLastEmit = 0;
+}
+
 export interface LiveAgentSessionCounts {
   /** Live cc-soleur-go Queries (the Concierge / Command Center path). */
   ccQueries: number;
   /** In-flight legacy-leader sessions (agent-session-registry). */
   legacySessions: number;
+  /** Entry calls in flight (passed or about to pass the gate, not yet finished). Optional: 0 if absent. */
+  startingSessions?: number;
+  /** Real refusals since the previous emit. Optional: 0 if absent. */
+  refusedSinceLast?: number;
 }
 
+// Capped so no reading can ever render in exponent form ("1e+21"), which would break the closed grammar.
+const MAX_REPORTED_COUNT = 1_000_000_000;
+
 function safeCount(n: number): number {
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+  return Number.isFinite(n) && n > 0 ? Math.min(Math.floor(n), MAX_REPORTED_COUNT) : 0;
 }
 
 /**
  * The closed-grammar line the owner (and the evidence collector) reads:
- * `agent_sessions_live=<n> cc_queries=<n> legacy_sessions=<n> new_sessions_paused=<0|1>`.
- * Integers and one bit only.
+ * `agent_sessions_live=<n> cc_queries=<n> legacy_sessions=<n> starting=<n> new_sessions_paused=<0|1>
+ * refused_since_last=<n>`. Integers and one bit only; live = cc + legacy + starting (an upper bound).
  */
 export function formatLiveSessionsLine(
   counts: LiveAgentSessionCounts,
@@ -69,7 +114,9 @@ export function formatLiveSessionsLine(
 ): string {
   const cc = safeCount(counts.ccQueries);
   const legacy = safeCount(counts.legacySessions);
-  return `agent_sessions_live=${cc + legacy} cc_queries=${cc} legacy_sessions=${legacy} new_sessions_paused=${paused ? 1 : 0}`;
+  const starting = safeCount(counts.startingSessions ?? 0);
+  const refused = safeCount(counts.refusedSinceLast ?? 0);
+  return `agent_sessions_live=${cc + legacy + starting} cc_queries=${cc} legacy_sessions=${legacy} starting=${starting} new_sessions_paused=${paused ? 1 : 0} refused_since_last=${refused}`;
 }
 
 export const DEFAULT_REPORT_INTERVAL_MS = 60_000;
@@ -91,20 +138,31 @@ async function emitOnce(readCounts: () => LiveAgentSessionCounts): Promise<void>
     });
     return;
   }
-  // Same resolution path as the gate (fail-open to false on a throw).
-  const paused = await newAgentSessionsRefused();
+  // Same resolution path as the gate (fail-open to false on a throw); observe:true so the read is not
+  // counted as a refusal.
+  const paused = await newAgentSessionsRefused({ observe: true });
+  const withTotals: LiveAgentSessionCounts = {
+    ...counts,
+    startingSessions: inFlightStarts,
+    refusedSinceLast: refusedSinceLastEmit,
+  };
+  refusedSinceLastEmit = 0;
+  counts = withTotals;
   const cc = safeCount(counts.ccQueries);
   const legacy = safeCount(counts.legacySessions);
+  const starting = safeCount(counts.startingSessions ?? 0);
   // warn level on purpose: it is the level the git_data_store= readback line
   // ships at, and Vector's host_name field keys the per-host read. The child
   // logger is created here, not at module load, so importing this module for the
   // flag gate alone (the /api/repo/setup route graph) never touches the logger.
   createChildLogger("quiet-window").warn(
     {
-      agentSessionsLive: cc + legacy,
+      agentSessionsLive: cc + legacy + starting,
       ccQueries: cc,
       legacySessions: legacy,
+      startingSessions: starting,
       newSessionsPaused: paused,
+      refusedSinceLast: safeCount(counts.refusedSinceLast ?? 0),
     },
     formatLiveSessionsLine(counts, paused),
   );

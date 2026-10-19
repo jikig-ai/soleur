@@ -37,6 +37,9 @@ import {
   newAgentSessionsRefused,
   formatLiveSessionsLine,
   startQuietWindowReporter,
+  trackSessionStart,
+  inFlightStartCount,
+  __resetQuietWindowCountersForTests,
 } from "@/server/quiet-window";
 
 describe("newAgentSessionsRefused", () => {
@@ -83,7 +86,7 @@ describe("formatLiveSessionsLine (counts only)", () => {
       false,
     );
     expect(line).toBe(
-      "agent_sessions_live=3 cc_queries=2 legacy_sessions=1 new_sessions_paused=0",
+      "agent_sessions_live=3 cc_queries=2 legacy_sessions=1 starting=0 new_sessions_paused=0 refused_since_last=0",
     );
   });
 
@@ -91,7 +94,7 @@ describe("formatLiveSessionsLine (counts only)", () => {
     expect(
       formatLiveSessionsLine({ ccQueries: 0, legacySessions: 0 }, true),
     ).toBe(
-      "agent_sessions_live=0 cc_queries=0 legacy_sessions=0 new_sessions_paused=1",
+      "agent_sessions_live=0 cc_queries=0 legacy_sessions=0 starting=0 new_sessions_paused=1 refused_since_last=0",
     );
   });
 
@@ -101,7 +104,7 @@ describe("formatLiveSessionsLine (counts only)", () => {
       false,
     );
     expect(line).toBe(
-      "agent_sessions_live=0 cc_queries=0 legacy_sessions=0 new_sessions_paused=0",
+      "agent_sessions_live=0 cc_queries=0 legacy_sessions=0 starting=0 new_sessions_paused=0 refused_since_last=0",
     );
   });
 
@@ -111,7 +114,7 @@ describe("formatLiveSessionsLine (counts only)", () => {
       true,
     );
     expect(line).toMatch(
-      /^agent_sessions_live=\d+ cc_queries=\d+ legacy_sessions=\d+ new_sessions_paused=[01]$/,
+      /^agent_sessions_live=\d+ cc_queries=\d+ legacy_sessions=\d+ starting=\d+ new_sessions_paused=[01] refused_since_last=\d+$/,
     );
   });
 });
@@ -119,6 +122,7 @@ describe("formatLiveSessionsLine (counts only)", () => {
 describe("startQuietWindowReporter", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    __resetQuietWindowCountersForTests();
     vi.useFakeTimers();
   });
   afterEach(() => {
@@ -133,7 +137,7 @@ describe("startQuietWindowReporter", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(mockLogWarn).toHaveBeenCalledTimes(1);
     expect(mockLogWarn.mock.calls[0][1]).toBe(
-      "agent_sessions_live=1 cc_queries=1 legacy_sessions=0 new_sessions_paused=1",
+      "agent_sessions_live=1 cc_queries=1 legacy_sessions=0 starting=0 new_sessions_paused=1 refused_since_last=0",
     );
 
     await vi.advanceTimersByTimeAsync(2000);
@@ -154,6 +158,8 @@ describe("startQuietWindowReporter", () => {
       "ccQueries",
       "legacySessions",
       "newSessionsPaused",
+      "refusedSinceLast",
+      "startingSessions",
     ]);
     for (const v of Object.values(payload)) {
       expect(["number", "boolean"]).toContain(typeof v);
@@ -198,3 +204,108 @@ describe("startQuietWindowReporter", () => {
     clearInterval(timer);
   });
 });
+
+describe("in-flight starts and refusal counts (review P2)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    __resetQuietWindowCountersForTests();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("trackSessionStart counts until released; release is idempotent and never goes negative", () => {
+    const base = inFlightStartCount();
+    const r1 = trackSessionStart();
+    const r2 = trackSessionStart();
+    expect(inFlightStartCount()).toBe(base + 2);
+    r1();
+    r1();
+    expect(inFlightStartCount()).toBe(base + 1);
+    r2();
+    expect(inFlightStartCount()).toBe(base);
+  });
+
+  it("a start that passed the gate but has not registered keeps agent_sessions_live above 0 in the emitted line", async () => {
+    mockIsPaused.mockResolvedValue(true);
+    const release = trackSessionStart();
+    const timer = startQuietWindowReporter({
+      readCounts: () => ({ ccQueries: 0, legacySessions: 0 }),
+      intervalMs: 1000,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(String(mockLogWarn.mock.calls[0][1])).toMatch(/^agent_sessions_live=[1-9]\d* cc_queries=0 legacy_sessions=0 starting=[1-9]\d* /);
+    release();
+    clearInterval(timer);
+  });
+
+  it("refused_since_last counts real refusals, resets on each emit, and the reporter's own read is not a refusal", async () => {
+    mockIsPaused.mockResolvedValue(true);
+    await newAgentSessionsRefused();
+    await newAgentSessionsRefused();
+    const timer = startQuietWindowReporter({
+      readCounts: () => ({ ccQueries: 0, legacySessions: 0 }),
+      intervalMs: 1000,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(String(mockLogWarn.mock.calls[0][1])).toMatch(/refused_since_last=2$/);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(String(mockLogWarn.mock.calls[1][1])).toMatch(/refused_since_last=0$/);
+    clearInterval(timer);
+  });
+});
+
+describe("payload values and line grammar (review P2)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    __resetQuietWindowCountersForTests();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("the structured payload carries the SAME values as the message line (sum, paused bit, starting)", async () => {
+    mockIsPaused.mockResolvedValue(true);
+    const release = trackSessionStart();
+    const timer = startQuietWindowReporter({
+      readCounts: () => ({ ccQueries: 2, legacySessions: 1 }),
+      intervalMs: 1000,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockLogWarn.mock.calls[0][0]).toEqual({
+      agentSessionsLive: 4,
+      ccQueries: 2,
+      legacySessions: 1,
+      startingSessions: 1,
+      newSessionsPaused: true,
+      refusedSinceLast: 0,
+    });
+    expect(mockLogWarn.mock.calls[0][1]).toBe(
+      "agent_sessions_live=4 cc_queries=2 legacy_sessions=1 starting=1 new_sessions_paused=1 refused_since_last=0",
+    );
+    release();
+    clearInterval(timer);
+  });
+
+  it("every hostile numeric reading renders as a plain non-negative integer (grammar table)", () => {
+    const grammar =
+      /^agent_sessions_live=\d+ cc_queries=\d+ legacy_sessions=\d+ starting=\d+ new_sessions_paused=[01] refused_since_last=\d+$/;
+    const hostile: unknown[] = [1.5, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.MAX_SAFE_INTEGER + 2, "7", null, undefined, -0, 1e21];
+    for (const v of hostile) {
+      const line = formatLiveSessionsLine(
+        {
+          ccQueries: v as number,
+          legacySessions: v as number,
+          startingSessions: v as number,
+          refusedSinceLast: v as number,
+        },
+        false,
+      );
+      expect(line, `input ${String(v)}`).toMatch(grammar);
+      expect(line).not.toMatch(/Infinity|NaN|\.|e\+|-/);
+    }
+  });
+});
+

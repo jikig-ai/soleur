@@ -19,7 +19,7 @@ import { hashUserIdValue } from "@/server/userid-pseudonymize";
 import { triggerHeadlessSync } from "@/server/auto-sync-trigger";
 import { evaluateRepoConnect } from "@/server/repo-connect-guard";
 import { boundedAuthGetUser } from "@/server/request-auth";
-import { newAgentSessionsRefused, QUIET_WINDOW_MESSAGE } from "@/server/quiet-window";
+import { quietWindowRefusal } from "@/server/quiet-window-http";
 
 /**
  * POST /api/repo/setup
@@ -41,25 +41,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // #8211 quiet-window (CTO ruling): connecting a repo clones a working tree onto
-  // the web host, so it is a NEW-session-class write and is refused while the
-  // kill-switch is on. Placed after auth and BEFORE any resolution, lock flip or
-  // clone: a refusal leaves repo_status and the filesystem untouched. 503 +
-  // Retry-After; the client already treats 503 on this route as retryable.
-  if (await newAgentSessionsRefused()) {
-    logger.info(
-      {
-        feature: "quiet-window",
-        op: "refuse-repo-setup",
-        userIdHash: hashUserIdValue(user.id),
-      },
-      "quiet-window: refused a repo setup (new-sessions-paused)",
-    );
-    return NextResponse.json(
-      { error: QUIET_WINDOW_MESSAGE },
-      { status: 503, headers: { "Retry-After": "300" } },
-    );
-  }
+  // #8211 quiet-window (CTO ruling): connecting a repo clones a working tree onto the web host, so
+  // it is a NEW-session-class write and is refused while the kill-switch is on. After auth and BEFORE
+  // any resolution, lock flip or clone: a refusal leaves repo_status and the filesystem untouched.
+  const quietWindow = await quietWindowRefusal("repo-setup", hashUserIdValue(user.id));
+  if (quietWindow) return quietWindow;
 
   // ADR-044 PR-2 team write-cutover (#5462): resolve the target workspace id
   // server-side via the MEMBERSHIP-VERIFIED resolver. `resolveActiveWorkspace`

@@ -119,7 +119,7 @@ import {
 import { buildCrmTools } from "@/server/crm/crm-tools";
 import { updateConversationFor } from "./conversation-writer";
 import { registerLiveLoopProbe } from "./agent-session-registry";
-import { newAgentSessionsRefused, QUIET_WINDOW_MESSAGE } from "./quiet-window";
+import { newAgentSessionsRefused, QUIET_WINDOW_MESSAGE, trackSessionStart } from "./quiet-window";
 import {
   getUserServiceTokens,
   patchWorkspacePermissions,
@@ -3832,6 +3832,19 @@ async function reportDispatchSoleurGoError(
  * events).
  */
 export async function dispatchSoleurGo(
+  args: DispatchSoleurGoArgs,
+): Promise<void> {
+  // #8211 quiet-window: held for the whole call so the live-session line cannot read 0 while a start
+  // that passed the gate is still resolving its workspace / cloning / leasing (its Query registers late).
+  const releaseStart = trackSessionStart();
+  try {
+    return await dispatchSoleurGoInner(args);
+  } finally {
+    releaseStart();
+  }
+}
+
+async function dispatchSoleurGoInner(
   args: DispatchSoleurGoArgs,
 ): Promise<void> {
   const {

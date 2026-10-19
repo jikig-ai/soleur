@@ -241,6 +241,55 @@ describe("triggerHeadlessSync — quiet-window kill-switch (#8211, CTO ruling: r
     expect(mockReportSilentFallback).not.toHaveBeenCalled();
   });
 
+  test("DEFAULT binding (no seam, production shape): flag ON through the real flag module skips; absent starts", async () => {
+    // The only production caller passes no newAgentSessionsRefused seam, so production always runs the
+    // dynamic-import default. Injecting a seam (every other case) cannot tell that default from
+    // `async () => false`; this case exercises it end to end through the REAL feature-flag module
+    // (env-mirror path: no FLAGSMITH_ENVIRONMENT_KEY).
+    const { __resetFeatureFlagsForTests } = await import("@/lib/feature-flags/server");
+    const prevKey = process.env.FLAGSMITH_ENVIRONMENT_KEY;
+    const prevFlag = process.env.FLAG_NEW_SESSIONS_PAUSED;
+    delete process.env.FLAGSMITH_ENVIRONMENT_KEY;
+    try {
+      process.env.FLAG_NEW_SESSIONS_PAUSED = "1";
+      __resetFeatureFlagsForTests();
+      const startOn = vi.fn().mockResolvedValue(undefined);
+      const on = baseSeams(startOn);
+      delete (on.seams as { newAgentSessionsRefused?: unknown }).newAgentSessionsRefused;
+      const outcomeOn = await triggerHeadlessSync(USER_ID, REPO_URL, on.seams);
+      expect(outcomeOn).toBe("skipped-quiet-window");
+      expect(on.inserts).toHaveLength(0);
+      expect(startOn).not.toHaveBeenCalled();
+
+      delete process.env.FLAG_NEW_SESSIONS_PAUSED;
+      __resetFeatureFlagsForTests();
+      const startOff = vi.fn().mockResolvedValue(undefined);
+      const off = baseSeams(startOff);
+      delete (off.seams as { newAgentSessionsRefused?: unknown }).newAgentSessionsRefused;
+      const outcomeOff = await triggerHeadlessSync(USER_ID, REPO_URL, off.seams);
+      expect(outcomeOff).toBe("started");
+      expect(off.inserts).toHaveLength(1);
+    } finally {
+      if (prevKey === undefined) delete process.env.FLAGSMITH_ENVIRONMENT_KEY;
+      else process.env.FLAGSMITH_ENVIRONMENT_KEY = prevKey;
+      if (prevFlag === undefined) delete process.env.FLAG_NEW_SESSIONS_PAUSED;
+      else process.env.FLAG_NEW_SESSIONS_PAUSED = prevFlag;
+      __resetFeatureFlagsForTests();
+    }
+  });
+
+  test("a throwing flag read fails OPEN: the sync proceeds and the helper never rejects (review P3)", async () => {
+    const startAgentSession = vi.fn().mockResolvedValue(undefined);
+    const { inserts, seams } = baseSeams(startAgentSession);
+    seams.newAgentSessionsRefused = vi.fn().mockRejectedValue(new Error("dynamic import failed"));
+
+    const outcome = await triggerHeadlessSync(USER_ID, REPO_URL, seams);
+
+    expect(outcome).toBe("started");
+    expect(inserts).toHaveLength(1);
+    expect(startAgentSession).toHaveBeenCalledTimes(1);
+  });
+
   test("not refused: unchanged, returns started after exactly one INSERT and one session start", async () => {
     const startAgentSession = vi.fn().mockResolvedValue(undefined);
     const { inserts, seams } = baseSeams(startAgentSession);
