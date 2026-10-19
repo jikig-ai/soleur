@@ -228,10 +228,9 @@ Rule for every row: behaviour byte-identical, no new log line, no `# noqa` (the 
 | File | Remedy |
 |---|---|
 | `apps/web-platform/infra/doppler-download-error-channel.mutation.py` | `s = Path(dst).read_text()` and `Path(dst).write_text(s.replace(old, new, 1))`; the harness stays byte-for-byte equivalent in what it mutates. Add `from pathlib import Path`. |
-| `fake-playwright-mcp.py` | `Path(p).write_text(...)` (L33, L119); `json.loads(Path(p).read_text())` (L81, L105). Add `from pathlib import Path` if absent. Add `from pathlib import Path` if absent. |
+| `fake-playwright-mcp.py` | `Path(p).write_text(...)` (L33, L119); `json.loads(Path(p).read_text())` (L81, L105). Add `from pathlib import Path` if absent. |
 | `make-proxy-mutant.py` | `src = Path(src_path).read_text(encoding="utf-8")`; `Path(out_path).write_text(mutated, encoding="utf-8")`. Add `from pathlib import Path`. |
-| `proxy-session-driver.py` | L59 stderr handle `err`: the `Popen` child writes to it, so it must outlive the child: `with open(err_path, "wb") as err:` over the rest of `main()` (re-indent; delete the trailing `err.close()`, keep the earlier `err.flush()`), so the handle closes at the same point or earlier on an exception. L100 `Path(err_path).read_bytes()`; L130 `json.dump(objs, open(...))` -> `with open(...) as fh: json.dump(objs, fh, indent=1, ensure_ascii=False)`; L132 `Path(...).write_text(str(val) + "
-")`. Add `from pathlib import Path`. Read with `git diff -w`. |
+| `proxy-session-driver.py` | L59 stderr handle `err`: the `Popen` child writes to it, so it must outlive the child: `with open(err_path, "wb") as err:` over the rest of `main()` (re-indent; delete the trailing `err.close()`, keep the earlier `err.flush()`), so the handle closes at the same point or earlier on an exception. L100 `Path(err_path).read_bytes()`; L130 `json.dump(objs, open(...))` -> `with open(...) as fh: json.dump(objs, fh, indent=1, ensure_ascii=False)`; L132 `Path(...).write_text(str(val) + "\n")`. Add `from pathlib import Path`. Read with `git diff -w`. |
 | `session-facts.py` | `Path(...).read_bytes()` / `json.loads(Path(argv[3]).read_text())`. Add `from pathlib import Path`. |
 | `wiring_facts.py` | `text = Path(path).read_text(encoding="utf-8")` inside the existing `try/except OSError`. |
 
