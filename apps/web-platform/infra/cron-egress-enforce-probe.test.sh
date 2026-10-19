@@ -231,6 +231,7 @@ mk_stub systemctl "$LOGLINE
 exit 0"
 mk_stub sleep "exit 0"
 mk_stub doppler "$LOGLINE
+printf '%s\n' \"\${DOPPLER_TOKEN-UNSET}\" >> \"$STUBS/doppler-tok\"
 echo 'https://synthetickey@o0.ingest.invalid/42'"
 mk_stub curl "$LOGLINE
 exit 0"
@@ -335,6 +336,64 @@ check "P4-6 healthy run inspects the gw and runs the metadata deny leg once" \
 check "P4-6 non-vacuity: that healthy run printed both gw legs before egress-enforce-ok" \
   '[[ "$OUT" == *egress-gw-allow-ok* && "$OUT" == *egress-gw-deny-ok* && "$OUT" == *egress-enforce-ok* ]]'
 
+# --- #9639 F5: the failure emitters READ the webhook-deploy token; they never source it as root ------------
+# /etc/default/webhook-deploy is chowned to the deploy user, so `. file` in a root context executes whatever the
+# deploy user planted there (including `set -x`). The fix reads the one token with sed. The rows drive a COPY of
+# the real probe with the path rewritten to a fixture (no production seam), down the container_absent branch so the
+# EXIT trap's emit_fail runs; a negative control restores `. fixture` and must execute the planted code.
+echo "-- F5 (#9639): emit_fail reads the token, never sources the deploy-owned file --"
+F5_DIR="$STUBS/f5"; mkdir -p "$F5_DIR"
+F5_FIX="$F5_DIR/webhook-deploy"; F5_PLANT="$F5_DIR/planted"; F5_TOK="$STUBS/doppler-tok"
+make_probe_copy() { # <dest> [control]: copy of the real probe with the env path rewritten to the fixture
+  sed "s#/etc/default/webhook-deploy#$F5_FIX#g" "$PROBE" > "$1"
+  if [[ "${2:-}" == control ]]; then
+    sed -E -i -e "s#^( *)_t=.*#\\1. $F5_FIX#" -e '/^ *\[ -z "\$_t" \] \|\| DOPPLER_TOKEN=\$_t$/d' "$1"
+  fi
+}
+run_probe_copy() { # <copy> : drive container_absent with DOPPLER_TOKEN=inherited-tok exported
+  : > "$STUB_CALLS"; : > "$F5_TOK"; rm -f "$F5_PLANT"; RC=0
+  # shellcheck disable=SC2034  # OUT is consumed by check() conditions via eval
+  OUT="$("$ENV_BIN" -u BASH_ENV -u SHELLOPTS PATH="$STUBS:$PATH" STUB_CALLS="$STUB_CALLS" EGRESS_GW_TOKEN_DIR="$GWTOK_DIR" \
+    STUB_PS_NAMES=none DOPPLER_TOKEN=inherited-tok "$TIMEOUT_BIN" 30 "$BASH_BIN" "$1" 2>"$STUBS/err")" || RC=$?
+  ERR="$(cat "$STUBS/err" 2>/dev/null || true)"
+}
+f5_last_tok() { tail -n 1 "$F5_TOK" 2>/dev/null || true; }
+F5_COPY="$F5_DIR/probe-copy.sh"; F5_CTRL="$F5_DIR/probe-ctrl.sh"
+make_probe_copy "$F5_COPY"; make_probe_copy "$F5_CTRL" control
+check "F5-A the path rewrite hit the code line (anti-vacuity: the copy reads the fixture, the real path is gone)" \
+  '[[ "$(grep -cF "$F5_FIX" "$F5_COPY" || true)" -ge 1 && "$(grep -cF "/etc/default/webhook-deploy" "$F5_COPY" || true)" -eq 0 ]]'
+check "F5-A the control copy sources the fixture (the injected variant is real, not a no-op rewrite)" \
+  '[[ "$(grep -cE "^ *\\. $F5_FIX" "$F5_CTRL" || true)" -eq 1 ]]'
+printf '%s\n' 'set -x' "touch $F5_PLANT" 'DOPPLER_TOKEN=tok-from-file' > "$F5_FIX"
+run_probe_copy "$F5_COPY"
+check "F5-H1 baseline: the driven branch is container_absent and emit_fail ran (doppler stub was called)" \
+  '[[ "$RC" -eq 1 && "$OUT" == *"ASSERT-FAILED: container-absent"* && "$(grep -c "^doppler" "$STUB_CALLS" || true)" -ge 1 ]]'
+check "F5-H1 a hostile fixture (set -x + planted write) does NOT execute under the fixed probe" \
+  '[[ ! -e "$F5_PLANT" && "$ERR" != *"+ touch"* ]]'
+check "F5-H1 the token line was still read: doppler saw tok-from-file" '[[ "$(f5_last_tok)" == tok-from-file ]]'
+run_probe_copy "$F5_CTRL"
+check "F5-H2 negative control: the SAME fixture under a sourcing variant DOES execute (the harness can see the bug)" \
+  '[[ -e "$F5_PLANT" ]]'
+printf '%s\n' '# DOPPLER_TOKEN=commented' 'export OTHER=1' 'DOPPLER_CONFIG_DIR=/tmp/.doppler' 'DOPPLER_TOKEN=first-tok' 'DOPPLER_TOKEN=last-tok' > "$F5_FIX"
+run_probe_copy "$F5_COPY"
+check "F5-P1 non-canonical fixture (comment, export, other keys, duplicate key) reads the LAST uncommented token, as sourcing would" \
+  '[[ "$(f5_last_tok)" == last-tok ]]'
+: > "$F5_FIX"
+run_probe_copy "$F5_COPY"
+check "F5-P2 an empty fixture keeps the inherited token (parity with sourcing an empty file)" '[[ "$(f5_last_tok)" == inherited-tok ]]'
+rm -f "$F5_FIX"
+run_probe_copy "$F5_COPY"
+check "F5-P2 an absent fixture keeps the inherited token and still reaches the doppler call" \
+  '[[ "$(f5_last_tok)" == inherited-tok && "$RC" -eq 1 ]]'
+printf '%s\n' 'DOPPLER_TOKEN=exported-check' > "$F5_FIX"
+run_probe_copy "$F5_COPY"
+check "F5-P3 the read token is a plain assignment: the doppler stub sees it (assigned inside the emit subshell)" \
+  '[[ "$(f5_last_tok)" == exported-check ]]'
+check "F5-S1 neither the probe nor the bootstrap sources webhook-deploy on a code line" \
+  '[[ "$(grep -vE "^[[:space:]]*#" "$PROBE" "$BOOTSTRAP" | grep -cE "(^|[:;&(]|[[:space:]])(\\.|source)[[:space:]]+/etc/default/webhook-deploy" || true)" -eq 0 ]]'
+check "F5-S1 non-vacuity: the same pattern matches the pre-fix sourcing line" \
+  '[[ "$(printf "%s\n" "    . /etc/default/webhook-deploy 2>/dev/null || true" | grep -vE "^[[:space:]]*#" | grep -cE "(^|[:;&(]|[[:space:]])(\\.|source)[[:space:]]+/etc/default/webhook-deploy" || true)" -eq 1 ]]'
+
 echo "-- drawdown (#7797): not grandfathered in the credential-refusal baseline --"
 check "P-L the probe's repo path is absent from the A/B/C baseline" \
   '[[ "$(grep -cxF "apps/web-platform/infra/cron-egress-enforce-probe.sh" "$REPO_ROOT/scripts/lint-shell-trace-credential-refusal.baseline.txt")" -eq 0 ]]'
@@ -346,7 +405,7 @@ if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
   printf '\n[FATAL] accounting identity: PASS(%d) + FAIL(%d) != CASES(%d). A call site recorded no verdict or more than one.\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
-MIN_CASES=65
+MIN_CASES=84
 if [[ "$CASES" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity floor: only %d assertions ran; floor is %d\n' "$CASES" "$MIN_CASES" >&2
   exit 1

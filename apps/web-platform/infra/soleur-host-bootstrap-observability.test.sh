@@ -1158,11 +1158,73 @@ else
   no "AC23: 'hostscripts_incomplete' must be a real soleur-boot-emit call (not comment prose)"
 fi
 
-# ADR-193 floor at the MEASURED green count (113 on 2026-09-11, #7946 review): a lower bound,
+# ── #9639 F5: _sentry_emit READS the webhook-deploy token; it never sources the deploy-owned file as root ──
+# Behavioural, under dash (the interpreter the bootstrap runs under): extract the REAL function, rewrite the env
+# path to a fixture, run it with doppler/curl stubs on PATH. A negative control swaps the read for `. fixture` and
+# must execute the planted code, so the harness can see the defect.
+F5_D="$(mktemp -d)"; F5_FIX="$F5_D/webhook-deploy"; F5_PLANT="$F5_D/planted"; F5_TOK="$F5_D/doppler-tok"
+mkdir -p "$F5_D/bin"
+awk '/^_sentry_emit\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$BOOT" > "$F5_D/fn.sh"
+sed "s#/etc/default/webhook-deploy#$F5_FIX#g" "$F5_D/fn.sh" > "$F5_D/fn-fixed.sh"
+sed -E -e "s#^( *)_t=.*#\\1. $F5_FIX#" -e '/^ *\[ -z "\$_t" \] \|\| DOPPLER_TOKEN=\$_t$/d' "$F5_D/fn-fixed.sh" > "$F5_D/fn-ctrl.sh"
+printf '#!/bin/sh\nprintf "%%s\\n" "${DOPPLER_TOKEN-UNSET}" >> "%s"\necho "https://k@o0.ingest.invalid/42"\n' "$F5_TOK" > "$F5_D/bin/doppler"
+printf '#!/bin/sh\nexit 0\n' > "$F5_D/bin/curl"; chmod +x "$F5_D/bin/doppler" "$F5_D/bin/curl"
+f5_run() { # <fn file> [env words...]: run the extracted function under dash with a clean env
+  local fnf="$1"; shift
+  : > "$F5_TOK"; rm -f "$F5_PLANT"
+  { cat "$fnf"; printf '%s\n' "_sentry_emit '{}'"; } > "$F5_D/run.sh"
+  env -i PATH="$F5_D/bin:/usr/bin:/bin" "$@" "$(command -v dash || command -v sh)" "$F5_D/run.sh" >/dev/null 2>&1
+}
+f5_tok() { tail -n 1 "$F5_TOK" 2>/dev/null || true; }
+if [ -s "$F5_D/fn.sh" ] && [ "$(grep -c '_sentry_emit' "$F5_D/fn.sh")" -ge 1 ]; then
+  ok "F5: the real _sentry_emit body was extracted (non-vacuity for the rows below)"
+else
+  no "F5: _sentry_emit extraction produced nothing (the rows below would be vacuous)"
+fi
+if [ "$(grep -cF "$F5_FIX" "$F5_D/fn-fixed.sh")" -ge 1 ] && [ "$(grep -cF '/etc/default/webhook-deploy' "$F5_D/fn-fixed.sh")" -eq 0 ] \
+   && [ "$(grep -cE "^ *\. $F5_FIX" "$F5_D/fn-ctrl.sh")" -eq 1 ]; then
+  ok "F5: the path rewrite hit and the control variant sources the fixture (injection is real)"
+else
+  no "F5: path rewrite or control injection did not land"
+fi
+printf '%s\n' 'set -x' "touch $F5_PLANT" 'DOPPLER_TOKEN=tok-from-file' > "$F5_FIX"
+f5_run "$F5_D/fn-fixed.sh"
+if [ ! -e "$F5_PLANT" ] && [ -s "$F5_TOK" ]; then
+  ok "F5: a hostile webhook-deploy fixture (set -x + planted write) does not execute in _sentry_emit"
+else
+  no "F5: a hostile webhook-deploy fixture executed in _sentry_emit (planted=$([ -e "$F5_PLANT" ] && echo yes || echo no))"
+fi
+f5_run "$F5_D/fn-ctrl.sh"
+if [ -e "$F5_PLANT" ]; then
+  ok "F5: negative control — the sourcing variant DOES execute the same fixture (the harness can see the defect)"
+else
+  no "F5: negative control did not execute the planted write — the hostile row above is vacuous"
+fi
+printf '%s\n' '# DOPPLER_TOKEN=commented' 'DOPPLER_TOKEN=first' 'DOPPLER_TOKEN=last-tok' > "$F5_FIX"
+f5_run "$F5_D/fn-fixed.sh" DOPPLER_TOKEN=inherited-tok
+if [ "$(f5_tok)" = last-tok ]; then
+  ok "F5: a non-canonical fixture (comment, duplicate key) reads the last uncommented token when the parent exported one"
+else
+  no "F5: expected last-tok in the doppler stub, got '$(f5_tok)'"
+fi
+f5_run "$F5_D/fn-fixed.sh"
+if [ "$(f5_tok)" = UNSET ]; then
+  ok "F5: with no exported parent token the read stays unexported (same as sourcing a plain KEY=VALUE file)"
+else
+  no "F5: the read token leaked into the doppler child env without an export (got '$(f5_tok)')"
+fi
+if [ "$(grep -vE '^[[:space:]]*#' "$BOOT" | grep -cE '(^|[:;&(]|[[:space:]])(\.|source)[[:space:]]+/etc/default/webhook-deploy')" -eq 0 ]; then
+  ok "F5: soleur-host-bootstrap.sh sources webhook-deploy on no code line"
+else
+  no "F5: soleur-host-bootstrap.sh still sources /etc/default/webhook-deploy on a code line"
+fi
+rm -rf "$F5_D"
+
+# ADR-193 floor at the MEASURED green count (124 after #9639 F5; 113 on 2026-09-11, #7946 review): a lower bound,
 # so adding rows never trips it, and a gutted suite (a deleted block, an extraction that
 # matched nothing and skipped every row inside its `if`) cannot report 0 failed over nothing.
 # Reported with printf + exit 1 DIRECTLY, never through ok()/no() -- the floor polices those.
-MIN_ASSERTIONS=113
+MIN_ASSERTIONS=124
 if (( pass + fail < MIN_ASSERTIONS )); then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
   exit 1
