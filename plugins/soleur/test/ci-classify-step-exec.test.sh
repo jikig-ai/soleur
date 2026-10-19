@@ -5,7 +5,10 @@
 # PROPERTY. The run: block of each `Classify … applicability` step, extracted from ci.yml and executed under the
 # shell Actions uses (`bash --noprofile --norc -eo pipefail`) against a real git fixture, (1) emits `applicable=false`
 # for a markdown-only pull request whose base ref carries the classifier, (2) emits `applicable=true` for a code
-# diff, and (3) when the diff cannot be resolved (no `origin/<base>` ref, i.e. a shallow clone) falls back to
+# diff, (2b) emits `applicable=true` when the markdown is not an ordinary file (an added symlinked `.md`, an added
+# exec-bit `.md`, an exec-bit flip on a tracked `.md`: #10416, the modes come from REAL `git diff --raw` output), and
+# (2c) emits `applicable=true` when the BASE ref still carries the pre-change (name-status) classifier and so cannot
+# read the new raw feed (the self-judging transition of the PR that introduced the feed), and (3) when the diff cannot be resolved (no `origin/<base>` ref, i.e. a shallow clone) falls back to
 # `applicable=true` AND names the measured cause in its warning instead of discarding git's stderr.
 #
 # WHY EXECUTED. A text pin certified `fetch-depth: ... && 0 || 1` for weeks while the expression evaluated to 1 and
@@ -64,6 +67,50 @@ sys.exit(3)
 PY
 }
 
+# FROZEN copy of the PRE-change (#10416) classifier parse: the first whitespace token of a row is the status. It is the
+# base-ref copy the `transition` mode plants, so the test never depends on what origin/main holds today. Fed the new raw rows
+# its status token is `:100644`, which is neither M nor A, so it fails closed. `arm` is the one allowlist arm that differs.
+frozen_classifier() { # <job: e2e|shard>
+  local arm='knowledge-base/*) ;;'
+  [ "$1" = shard ] && arm='knowledge-base/*.md) ;;'
+  cat <<EOF
+#!/usr/bin/env bash
+set -uo pipefail
+emit() { printf '%s\n' "\$1"; exit 0; }
+event="\${1:-}"
+case "\$event" in
+  --enum-failed) emit true ;;
+  pull_request) ;;
+  *) emit true ;;
+esac
+saw_any=0
+while IFS= read -r line || [ -n "\$line" ]; do
+  [ -z "\$line" ] && continue
+  saw_any=1
+  if [[ "\$line" == *[[:space:]]* ]]; then
+    status="\${line%%[[:space:]]*}"
+    rest="\${line#"\$status"}"
+    path="\${rest#"\${rest%%[![:space:]]*}"}"
+  else
+    status="M"
+    path="\$line"
+  fi
+  case "\$status" in
+    M|A) ;;
+    *) emit true ;;
+  esac
+  case "\$path" in
+    $arm
+    *.md)
+      case "\$path" in */*) emit true ;; esac ;;
+    *) emit true ;;
+  esac
+done
+[ "\$saw_any" -eq 1 ] || emit true
+emit false
+EOF
+}
+
 # run_case <job> <step-prefix> <classifier-relpath> <mode> <expect-verdict> [warn-needle...]
 #   mode = md      : markdown-only PR diff, base ref carries the classifier
 #          code    : app-code PR diff, base ref carries the classifier
@@ -71,6 +118,12 @@ PY
 #          weak    : code diff, and the CHECKED-OUT classifier is replaced by one that always says false (uncommitted, so it is
 #                    not in the diff): the step must judge by the BASE ref's copy, so the verdict stays true
 #          mixed   : a markdown row sorted BEFORE a code row in one diff: every row must be read, not only the first
+#          symlink : an ADDED symlinked `.md` (git mode 120000) under knowledge-base/: not markdown, so the job runs
+#          execbit : an ADDED executable `.md` (git mode 100755)
+#          modeflip: an exec-bit flip (100644 -> 100755) on a tracked root README.md
+#          typechg : a tracked root README.md replaced by a symlink (git T row, 100644 -> 120000)
+#          delete  : a tracked root README.md deleted (git D row)
+#          transition: a markdown-only diff, but the BASE ref carries the FROZEN pre-change classifier, which cannot read raw rows
 #          big     : a code row first, then ~1500 markdown rows (> 64 KB listing): the early-exit classifier must not
 #                    SIGPIPE the producer and red the step
 run_case() {
@@ -93,8 +146,13 @@ run_case() {
            GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t git -C "$work")
   "${g[@]}" init -q -b main
   mkdir -p "$work/scripts" "$work/knowledge-base"
-  cp "$REPO_ROOT/$classifier" "$work/$classifier"
+  if [ "$mode" = "transition" ]; then
+    case "$job" in shard-totality-mutations) frozen_classifier shard ;; *) frozen_classifier e2e ;; esac > "$work/$classifier"
+  else
+    cp "$REPO_ROOT/$classifier" "$work/$classifier"
+  fi
   printf 'x\n' > "$work/knowledge-base/a.md"
+  printf 'readme\n' > "$work/README.md"
   "${g[@]}" add -A
   "${g[@]}" commit -q -m base
   if [ "$mode" != "shallow" ]; then
@@ -109,6 +167,17 @@ run_case() {
       mkdir -p "$work/zz"
       printf 'z\n' > "$work/knowledge-base/a.md"
       printf 'y\n' > "$work/zz/x.ts" ;;
+    symlink)
+      ln -s ../README.md "$work/knowledge-base/link.md" ;;
+    execbit)
+      printf 'z\n' > "$work/knowledge-base/exec.md" ;;
+    modeflip)
+      : ;;
+    typechg)
+      rm -f "$work/README.md"
+      ln -s knowledge-base/a.md "$work/README.md" ;;
+    delete)
+      rm -f "$work/README.md" ;;
     big)
       mkdir -p "$work/aa" "$work/knowledge-base/big"
       printf 'y\n' > "$work/aa/x.ts"
@@ -121,6 +190,10 @@ run_case() {
       printf 'z\n' > "$work/knowledge-base/a.md" ;;
   esac
   "${g[@]}" add -A
+  case "$mode" in
+    execbit)  "${g[@]}" update-index --chmod=+x knowledge-base/exec.md ;;
+    modeflip) "${g[@]}" update-index --chmod=+x README.md ;;
+  esac
   "${g[@]}" commit -q -m change
   if [ "$mode" = "weak" ]; then
     printf '#!/usr/bin/env bash\nprintf "false\\n"\n' > "$work/$classifier"
@@ -144,6 +217,16 @@ run_case() {
   else
     fail "$job/$mode: want applicable=$expect got='${got}' rc=$rc ($(tr '\n' ' ' < "$warn" | cut -c1-200))"
   fi
+  # A true verdict must come from the classifier refusing the rows, not from the enum-failed fallback (a broken diff feed also
+  # prints true): the fallback's warning must be absent for every mode that reaches the classifier with a real diff.
+  case "$mode" in
+    symlink|execbit|modeflip|typechg|delete|transition)
+      if grep -qF 'fell back to enum-failed' "$warn"; then
+        fail "$job/$mode: true came from the enum-failed fallback, not the classifier ($(tr '\n' ' ' < "$warn" | cut -c1-200))"
+      else
+        pass "$job/$mode: verdict came from the classifier, not the enum-failed fallback"
+      fi ;;
+  esac
   local needle
   for needle in "$@"; do
     if grep -qF -e "$needle" "$warn"; then
@@ -154,6 +237,16 @@ run_case() {
   done
   rm -rf "$root"
 }
+
+# Control on the transition instrument: the frozen pre-change classifier must say false on a legacy name-status markdown row,
+# otherwise a heredoc that always fails closed would keep the `transition` case green for the wrong reason.
+for _arm in e2e shard; do
+  _fz="$WORK_ROOT/frozen-$_arm.sh"
+  frozen_classifier "$_arm" > "$_fz"
+  _fv="$(printf 'M\tknowledge-base/a.md\n' | bash "$_fz" pull_request 2>&1)"
+  if [ "$_fv" = false ]; then pass "frozen $_arm classifier reads a name-status markdown row as false (control)"
+  else fail "frozen $_arm classifier control: want false got '$_fv'"; fi
+done
 
 for spec in \
   "e2e|Classify e2e applicability|scripts/ci-e2e-classify.sh" \
@@ -166,11 +259,17 @@ for spec in \
   run_case "$job" "$prefix" "$classifier" weak    true
   run_case "$job" "$prefix" "$classifier" mixed   true
   run_case "$job" "$prefix" "$classifier" big     true
+  run_case "$job" "$prefix" "$classifier" symlink    true
+  run_case "$job" "$prefix" "$classifier" execbit    true
+  run_case "$job" "$prefix" "$classifier" modeflip   true
+  run_case "$job" "$prefix" "$classifier" typechg    true
+  run_case "$job" "$prefix" "$classifier" delete     true
+  run_case "$job" "$prefix" "$classifier" transition true
 done
 
 total=$((PASS + FAIL))
-if [ "$total" -lt 16 ]; then
-  printf '[FATAL] assertion floor: only %s assertions ran, want >=16\n' "$total" >&2
+if [ "$total" -lt 42 ]; then
+  printf '[FATAL] assertion floor: only %s assertions ran, want >=42\n' "$total" >&2
   exit 1
 fi
 echo
