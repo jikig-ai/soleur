@@ -61,6 +61,7 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/kb-serve.test.ts",
   "test/kb-upload.test.ts",
   "test/leader-document-resolver.test.ts",
+  "test/live-verify/gate.test.ts",
   "test/legal-doc-consistency.test.ts",
   "test/legal-doc-shas-guard.test.ts",
   "test/no-network-fonts.test.ts",
