@@ -2,19 +2,24 @@
 # Pin suite for the test-pyramid review mechanism (#9762).
 #
 # What this pins (plan Guard Contract, Guard 1):
-#   - CENSUS: `plugins/soleur/test/fixtures/test-pyramid/` holds EXACTLY the
-#     fixture pair — glob census over ALL entries (not only `*.diff`), so a
-#     third fixture landing unclassified under any name reds the suite.
+#   - CENSUS: `plugins/soleur/test/fixtures/test-pyramid/` holds EXACTLY four
+#     classified fixtures — glob census over ALL entries (not only `*.diff`),
+#     so a fifth fixture landing unclassified under any name reds the suite.
 #   - PARSE: each fixture parses as a unified diff ADDING one test file
 #     (`+++ b/` header, `@@` hunk, `--- /dev/null`).
 #   - ROLE: the e2e fixture still exercises the FAIL path (adds an e2e-layer
 #     test carrying slow-cost signals and NO `pyramid-justified:` marker); the
 #     unit fixture still exercises the PASS path (positive unit signals, no
-#     e2e or slow-cost signals).
+#     e2e or slow-cost signals); the subprocess-fanout fixture exercises the
+#     unweighed-new-suite WARN path (#9771 — a NEW `*.test.sh` with spawn
+#     signals and no `suite-durations.tsv` weight row); the pure-sh fixture
+#     exercises the no-WARN path (a `test-*.sh` of pure greps/assertions, the
+#     must-PASS input).
 #   - DRIFT: `test-design-reviewer.md` still defines the marker token, the
-#     layer/verdict vocabulary, and the FAIL rule the fixtures key on — and
-#     the four restatement sites (review/SKILL.md, review.workflow.js,
-#     plan-issue-templates.md, work/SKILL.md) still carry the contract.
+#     layer/verdict vocabulary, the FAIL rule and the subprocess-fan-out WARN
+#     rule the fixtures key on — and the four restatement sites
+#     (review/SKILL.md, review.workflow.js, plan-issue-templates.md,
+#     work/SKILL.md) still carry the contract.
 #
 # Chokepoint: every assertion flows through the helpers in test-helpers.sh.
 # `cases` is the INDEPENDENT counter, incremented at every assertion CALL SITE
@@ -40,6 +45,8 @@ PLAN_TPL="$REPO_ROOT/plugins/soleur/skills/plan/references/plan-issue-templates.
 WORK_SKILL="$REPO_ROOT/plugins/soleur/skills/work/SKILL.md"
 E2E_FIX="$FIX_DIR/slow-e2e-no-justification.diff"
 UNIT_FIX="$FIX_DIR/fast-unit.diff"
+WARN_FIX="$FIX_DIR/subprocess-fanout-unweighed.diff"
+NOWARN_FIX="$FIX_DIR/pure-sh-assertions.diff"
 
 cases=0
 
@@ -83,22 +90,26 @@ all_entries=( "$FIX_DIR"/* )
 diff_entries=( "$FIX_DIR"/*.diff )
 hidden_entries=( "$FIX_DIR"/.[!.]* "$FIX_DIR"/..?* )
 shopt -u nullglob
-cases=$((cases + 1)); assert_eq "2" "${#all_entries[@]}" "fixture census: exactly 2 entries under fixtures/test-pyramid/"
-cases=$((cases + 1)); assert_eq "2" "${#diff_entries[@]}" "fixture census: exactly 2 .diff files under fixtures/test-pyramid/"
+cases=$((cases + 1)); assert_eq "4" "${#all_entries[@]}" "fixture census: exactly 4 entries under fixtures/test-pyramid/"
+cases=$((cases + 1)); assert_eq "4" "${#diff_entries[@]}" "fixture census: exactly 4 .diff files under fixtures/test-pyramid/"
 cases=$((cases + 1)); assert_eq "0" "${#hidden_entries[@]}" "fixture census: no hidden entries under fixtures/test-pyramid/"
 
 cases=$((cases + 1)); assert_file_exists "$E2E_FIX" "slow-e2e fixture exists"
 cases=$((cases + 1)); assert_file_exists "$UNIT_FIX" "fast-unit fixture exists"
+cases=$((cases + 1)); assert_file_exists "$WARN_FIX" "subprocess-fanout-unweighed fixture exists"
+cases=$((cases + 1)); assert_file_exists "$NOWARN_FIX" "pure-sh-assertions fixture exists"
 
 # ---------------------------------------------------------------------------
 # PARSE — each fixture is a unified diff ADDING exactly one test file.
 # ---------------------------------------------------------------------------
-for f in "$E2E_FIX" "$UNIT_FIX"; do
+for f in "$E2E_FIX" "$UNIT_FIX" "$WARN_FIX" "$NOWARN_FIX"; do
   cases=$((cases + 1)); assert_eq "1" "$(count "$f" '^\+\+\+ b/')" "$(basename "$f"): exactly one +++ b/ header"
   cases=$((cases + 1)); assert_eq "1" "$(count "$f" '^--- /dev/null$')" "$(basename "$f"): adds a new file (--- /dev/null)"
 done
 cases=$((cases + 1)); assert_eq "1" "$(count "$E2E_FIX" '^@@ ')" "e2e fixture: hunk present"
 cases=$((cases + 1)); assert_eq "1" "$(count "$UNIT_FIX" '^@@ ')" "unit fixture: hunk present"
+cases=$((cases + 1)); assert_eq "1" "$(count "$WARN_FIX" '^@@ ')" "subprocess-fanout fixture: hunk present"
+cases=$((cases + 1)); assert_eq "1" "$(count "$NOWARN_FIX" '^@@ ')" "pure-sh fixture: hunk present"
 
 # ---------------------------------------------------------------------------
 # ROLE — the e2e fixture exercises the FAIL path. Positive signals are
@@ -123,6 +134,30 @@ cases=$((cases + 1)); assert_eq "0" "$(count "$UNIT_FIX" '^\+.*(waitForTimeout|c
 cases=$((cases + 1)); assert_eq "0" "$(count "$UNIT_FIX" 'pyramid-justified')" "unit fixture: no justification marker needed or present"
 
 # ---------------------------------------------------------------------------
+# ROLE — the subprocess-fanout fixture exercises the WARN path (#9771): a NEW
+# `*.test.sh` carrying spawn signals (background `&` proc, pgid reaper, bound
+# port). The third WARN trigger — absent `suite-durations.tsv` weight row — is
+# structural (a new file has no row by construction), so the role pins the
+# file's spawn signals, all `^\+`-anchored: they must appear in ADDED code.
+# ---------------------------------------------------------------------------
+cases=$((cases + 1)); assert_eq "1" "$(count "$WARN_FIX" '^\+\+\+ b/.*\.test\.sh')" "subprocess-fanout fixture: adds a *.test.sh file"
+cases=$((cases + 1)); assert_eq "1" "$(found "$WARN_FIX" '^\+.* &\s*$')" "subprocess-fanout fixture: background & proc signal"
+cases=$((cases + 1)); assert_eq "1" "$(found "$WARN_FIX" '^\+.*kill -- -')" "subprocess-fanout fixture: pgid reaper signal"
+cases=$((cases + 1)); assert_eq "1" "$(found "$WARN_FIX" '^\+.*(PORT=[0-9]|--bind|-l )')" "subprocess-fanout fixture: bound-port signal"
+cases=$((cases + 1)); assert_eq "1" "$(found "$WARN_FIX" '^\+.*(http\.server|spawn|server)')" "subprocess-fanout fixture: spawned server signal"
+cases=$((cases + 1)); assert_eq "0" "$(count "$WARN_FIX" 'suite-durations')" "subprocess-fanout fixture: no weight row referenced (new suite is unweighed)"
+
+# ---------------------------------------------------------------------------
+# ROLE — the pure-sh fixture is the must-PASS input: a NEW `test-*.sh` of pure
+# greps/assertions carrying NONE of the spawn signals the WARN keys on.
+# ---------------------------------------------------------------------------
+cases=$((cases + 1)); assert_eq "1" "$(count "$NOWARN_FIX" '^\+\+\+ b/.*test-[^/]*\.sh')" "pure-sh fixture: adds a test-*.sh file"
+cases=$((cases + 1)); assert_eq "1" "$(found "$NOWARN_FIX" '^\+.*grep')" "pure-sh fixture: grep/assertion content present"
+cases=$((cases + 1)); assert_eq "0" "$(count "$NOWARN_FIX" '^\+.* &\s*$')" "pure-sh fixture: no background & proc"
+cases=$((cases + 1)); assert_eq "0" "$(count "$NOWARN_FIX" '^\+.*(nohup|kill -- -|setsid)')" "pure-sh fixture: no spawn/reaper plumbing"
+cases=$((cases + 1)); assert_eq "0" "$(count "$NOWARN_FIX" '^\+.*(PORT=[0-9]|--bind|nc -l|http\.server)')" "pure-sh fixture: no bound port or server boot"
+
+# ---------------------------------------------------------------------------
 # DRIFT PIN — the agent still defines the vocabulary the fixtures key on:
 # section headings, marker token+definition shape, layer cells, the FAIL rule
 # itself, and the review-time boundary line. Anchored where the token is
@@ -145,6 +180,10 @@ cases=$((cases + 1)); assert_eq "1" "$(found "$AGENT" 'gh pr view <N> --json bod
 cases=$((cases + 1)); assert_eq "1" "$(found "$AGENT" 'waitForTimeout')" "agent: cost-signal vocabulary (waitForTimeout) present"
 cases=$((cases + 1)); assert_eq "1" "$(found "$AGENT" 'PASS \(justified\)')" "agent: 'PASS (justified)' verdict token present (exempted files stay visible)"
 cases=$((cases + 1)); assert_eq "1" "$(found "$AGENT" 'no added test files')" "agent: no-added-files emission string present"
+cases=$((cases + 1)); assert_eq "4" "$(count "$AGENT" '^\s*-\s*\*\*WARN\*\*')" "agent: exactly 4 WARN verdict rules (a deleted WARN row reds)"
+cases=$((cases + 1)); assert_eq "1" "$(found "$AGENT" 'subprocess fan-out')" "agent: subprocess fan-out WARN vocabulary present (#9771)"
+cases=$((cases + 1)); assert_eq "1" "$(found "$AGENT" 'floor[^.]*suite-durations\.tsv|suite-durations\.tsv[^.]*floor')" "agent: WARN rule carries the suite-durations.tsv floor anchor"
+cases=$((cases + 1)); assert_eq "1" "$(found "$AGENT" 'duration alone')" "agent: declared-exception boundary wording present (WARN never fires on duration alone)"
 
 # ---------------------------------------------------------------------------
 # DRIFT PIN — restatement + instruction surfaces still carry the contract:
@@ -178,7 +217,7 @@ fi
 
 # ANTI-VACUITY FLOOR. Set AT the running count, never below it; reads `cases`,
 # the counter no helper can move.
-MIN_ASSERTIONS=50
+MIN_ASSERTIONS=73
 if [[ "$cases" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$cases" "$MIN_ASSERTIONS" >&2

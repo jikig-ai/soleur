@@ -1,0 +1,22 @@
+diff --git a/.github/scripts/test/test-check-skill-frontmatter-name.sh b/.github/scripts/test/test-check-skill-frontmatter-name.sh
+new file mode 100644
+index 0000000..2b3c4d5
+--- /dev/null
++++ b/.github/scripts/test/test-check-skill-frontmatter-name.sh
+@@ -0,0 +1,20 @@
++#!/usr/bin/env bash
++# Fixture: a NEW test-*.sh of pure greps and assertions — the no-WARN role
++# (#9771). No subprocess fan-out: it only reads files and asserts.
++set -euo pipefail
++
++REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
++fails=0
++
++for f in "$REPO_ROOT"/plugins/soleur/skills/*/SKILL.md; do
++  grep -q '^name: ' "$f" || { echo "FAIL: $f missing name:"; fails=$((fails + 1)); }
++done
++
++if [[ "$fails" -gt 0 ]]; then
++  exit 1
++fi
++echo "PASS: every SKILL.md carries a name: field"
