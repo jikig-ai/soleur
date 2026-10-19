@@ -43,6 +43,19 @@ PROBE_SRC="$REPO_ROOT/scripts/followthroughs/compound-promote-draft-edit-10552.s
 PROBE_REL="scripts/followthroughs/compound-promote-draft-edit-10552.sh"
 [[ -f "$PROBE_SRC" ]] || { echo "FATAL: probe not found at $PROBE_SRC" >&2; exit 1; }
 
+# Refuses an empty, relative, root or synthetic-fs fixture dir (byte-identical copy; the
+# fixture-dir-operand-assert suite pins every tracked copy).
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 passes=0; fails=0
 # Append-only ledger: the verdict below reads THIS, not the counter, so a redirected
 # counter increment cannot silence a real failure.
@@ -109,6 +122,7 @@ fx() { f=$(mktemp -t ft.XXXXXXXX); printf '%s\n' "$@" > "$f"; echo "$f"; }
 # run_probe <dir> [env...] -> echoes the rc; stdout/stderr land in $dir/out and $dir/err.
 run_probe() {
   local dir="$1"; shift
+  assert_fixture_dir "$dir"
   ( cd "$dir" && env -i PATH="$PATH" HOME="$HOME" TMPDIR="$TMPDIR" GIT_CEILING_DIRECTORIES="$TMP_ROOT" \
       BETTERSTACK_QUERY_HOST=h BETTERSTACK_QUERY_USERNAME=u BETTERSTACK_QUERY_PASSWORD=p \
       FT10552_DEPLOY_FLOOR="$FLOOR_ISO" "$@" \
@@ -210,6 +224,7 @@ rc=$( cd "$d" && env -i PATH="$PATH" HOME="$HOME" TMPDIR="$TMPDIR" BETTERSTACK_Q
 expect_rc "P-7 (missing credential)" 3 "$rc"
 # xtrace with a live credential must refuse (#7797), before any query.
 d=$(make_sandbox "$(fx "$C" "$(row "$(marker cron completed 1 '[]')" "$D1")")")
+assert_fixture_dir "$d"
 rc=$( cd "$d" && env -i PATH="$PATH" HOME="$HOME" TMPDIR="$TMPDIR" \
         BETTERSTACK_QUERY_HOST=h BETTERSTACK_QUERY_USERNAME=u BETTERSTACK_QUERY_PASSWORD=sentinel-secret \
         FT10552_DEPLOY_FLOOR="$FLOOR_ISO" bash -x "$PROBE_REL" >"$d/out" 2>"$d/err"; echo $? )
@@ -354,6 +369,7 @@ fx_git() { # fx_git <date> <dir> <git args...>
 # (a copy of the shipped probe unless the sandbox already holds one) at <epoch>.
 mk_repo() {
   local d="$1" at="$2 ${3:-+0000}"
+  assert_fixture_dir "$d"
   mkdir -p "$d/$(dirname "$PROBE_REL")"
   [[ -f "$d/$PROBE_REL" ]] || cp "$PROBE_SRC" "$d/$PROBE_REL"
   fx_git "$at" "$d" init -q >/dev/null
@@ -364,6 +380,7 @@ mk_repo() {
 # (no HOME, no TMPDIR, no floor, no repo-dir seam).
 run_bare() { # run_bare <dir> [env...] -> rc; out/err in <dir>
   local dir="$1"; shift
+  assert_fixture_dir "$dir"
   ( cd "$dir" && env -i PATH="$PATH" \
       BETTERSTACK_QUERY_HOST=h BETTERSTACK_QUERY_USERNAME=u BETTERSTACK_QUERY_PASSWORD=p "$@" \
       bash "$PROBE_REL" >"$dir/out" 2>"$dir/err" )
@@ -413,10 +430,12 @@ sc_lag() { # sc_lag <probe> <hours-after-commit>: one class-F row at that offset
 }
 sc_oldest() { # two ADDING commits (the file is removed and re-added 5 days later)
   SC_DIR=$(make_sandbox "$(fx "$C" "$(F_ROW "$(dt_at "$FLOOR_S" 4)")")" "$1"); mk_repo "$SC_DIR" "$FLOOR_S"
+  assert_fixture_dir "$SC_DIR"
   cp "$SC_DIR/$PROBE_REL" "$SC_DIR/probe.keep"   # the probe under test (a mutant in M-7), restored below
   fx_git "$((FLOOR_S + 86400)) +0000" "$SC_DIR" rm -q -- "$PROBE_REL" >/dev/null
   fx_git "$((FLOOR_S + 86400)) +0000" "$SC_DIR" commit -q -m "remove probe" >/dev/null
   mkdir -p "$SC_DIR/$(dirname "$PROBE_REL")"   # git rm pruned the emptied directory
+  assert_fixture_dir "$SC_DIR"
   cp "$SC_DIR/probe.keep" "$SC_DIR/$PROBE_REL"
   fx_git "$((FLOOR_S + 5 * 86400)) +0000" "$SC_DIR" add -- "$PROBE_REL" >/dev/null
   fx_git "$((FLOOR_S + 5 * 86400)) +0000" "$SC_DIR" commit -q -m "re-add probe" >/dev/null
