@@ -4560,14 +4560,14 @@ else row "S4 track.sh vocabulary: a verdict word was added or removed" fail "got
 echo "=== stage S4: Guard 1 census, populations and structure done ==="
 
 # =====================================================================================
-# GUARD 1 (d): the inline-wrapper copies, judged by the S2 PARITY AUDIT (hm_audit above, which reads any indentation). S4 adds seven
-# copies of the canonical python3 HMAC snippet to the 19 of the cutover script: web-platform-release.yml 3 and deploy-inngest-image.yml
+# GUARD 1 (d): the inline-wrapper copies, judged by the S2 PARITY AUDIT (hm_audit above, which reads any indentation). S4 adds eight
+# copies of the canonical python3 HMAC snippet to the 19 of the cutover script: web-platform-release.yml 4 and deploy-inngest-image.yml
 # 2 (workflow steps, 10-space YAML indentation, signing through the inline `_sig_curl`), infra-config-verify.sh 1 and
 # verify-tunnel-ingress-origin.sh 1 (scripts at column 0 that print their own header directives; both sign a status GET).
 # The cutover script holds all 19 copies (no -hmac operand is left). The inline wrappers are the exception ADR-280 allows only where a
 # pinned property of the job or its suite rules out sourcing a repo file; this audit is the mechanical bound on that exception.
 # =====================================================================================
-S4_HM_SPEC=".github/workflows/web-platform-release.yml:3: .github/workflows/deploy-inngest-image.yml:2: apps/web-platform/infra/infra-config-verify.sh:1:empty apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh:1:empty"
+S4_HM_SPEC=".github/workflows/web-platform-release.yml:4: .github/workflows/deploy-inngest-image.yml:2: apps/web-platform/infra/infra-config-verify.sh:1:empty apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh:1:empty"
 S4_HM_TOTAL=0; S4_HM_ALLBAD=""
 for spec in $S4_HM_SPEC; do
   IFS=: read -r hf hn hd <<< "$spec"
@@ -4580,10 +4580,10 @@ for spec in $S4_HM_SPEC; do
   done
 done
 hm_audit "$CUT"; S4_HM_CUT="$HM_NCOPY"; S4_HM_HELD="$HM_NOLD"
-# BOTH operands are literals on the lines IMMEDIATELY above the `if`: 19 cutover copies + 7 S4 copies, and no -hmac operand left in the cutover script.
-S4_HM_COPIES_WANT=26
+# BOTH operands are literals on the lines IMMEDIATELY above the `if`: 19 cutover copies + 8 S4 copies, and no -hmac operand left in the cutover script.
+S4_HM_COPIES_WANT=27
 if [[ $((S4_HM_CUT + S4_HM_TOTAL)) -eq "$S4_HM_COPIES_WANT" && -z "$S4_HM_ALLBAD" && "$S4_HM_HELD" == 0 ]]; then
-  row "S4 parity audit: $S4_HM_COPIES_WANT converted copies in all (19 cutover + 7 inline: release 3, deploy-inngest-image 2, infra-config-verify 1, verify-tunnel 1), no -hmac operand left in the cutover script" ok
+  row "S4 parity audit: $S4_HM_COPIES_WANT converted copies in all (19 cutover + 8 inline: release 4, deploy-inngest-image 2, infra-config-verify 1, verify-tunnel 1), no -hmac operand left in the cutover script" ok
 else row "S4 parity audit: the converted-copy count moved or a -hmac operand is back" fail "cutover=$S4_HM_CUT inline=$S4_HM_TOTAL want=$S4_HM_COPIES_WANT hmac=$S4_HM_HELD bad:$S4_HM_ALLBAD"; fi
 # Mutants of the parity audit on the S4 copies: ONE byte (-I dropped) in ONE inline copy is caught as exactly that copy, touching exactly that line.
 for spec in $S4_HM_SPEC; do
@@ -4668,10 +4668,10 @@ for f in files:
 print(n_ok, n_sig, n_brr, ",".join(bad))
 '
 read -r S4_G_OK S4_G_SIG S4_G_BRR S4_G_BAD < <(cd "$REPO_ROOT" && python3 -I -c "$s4_guard_py" "$BEARER_FN" "$CUT" $S4_OK_DERIVED)
-# BOTH operands are literals above the `if`: 74 `_bearer_ok` definitions outside the cutover script (the four S4 inline-wrapper files hold 9 of them: release 5,
-# deploy-inngest-image 2, luks 1, verify-tunnel 1; the rest are the ops scripts and followthrough probes converted by S1 to S3), 5 `_sig_curl`, 2 `_bearer_curl`.
-S4_GUARD_FLOOR=74
-if [[ -z "$S4_G_BAD" && "$S4_G_OK" -ge "$S4_GUARD_FLOOR" && "$S4_G_OK" == "$S4_OK_DEFS" && "$S4_G_SIG" == 5 && "$S4_G_BRR" == 2 ]]; then
+# BOTH operands are literals above the `if`: 77 `_bearer_ok` definitions outside the cutover script (the four S4 inline-wrapper files hold 10 of them: release 6,
+# deploy-inngest-image 2, luks 1, verify-tunnel 1; the rest are the ops scripts and followthrough probes converted by S1 to S3), 6 `_sig_curl`, 2 `_bearer_curl`.
+S4_GUARD_FLOOR=77
+if [[ -z "$S4_G_BAD" && "$S4_G_OK" -ge "$S4_GUARD_FLOOR" && "$S4_G_OK" == "$S4_OK_DEFS" && "$S4_G_SIG" == 6 && "$S4_G_BRR" == 2 ]]; then
   row "S4 inline guard pin: all $S4_G_OK _bearer_ok definitions of the $(printf '%s\n' "$S4_OK_DERIVED" | grep -c .) tracked files that define one equal the canonical text byte for byte (the count equals git grep's), and the $S4_G_SIG _sig_curl and $S4_G_BRR _bearer_curl wrappers equal the cutover script's (marker name and its --max-time normalized); floor $S4_GUARD_FLOOR"  ok
 else row "S4 inline guard pin: an inline guard or wrapper differs from the canonical text" fail "ok=$S4_G_OK defs=$S4_OK_DEFS sig=$S4_G_SIG brr=$S4_G_BRR bad=$S4_G_BAD"; fi
 # The pinned file sets are populations, so they are judged by SET IDENTITY: the files defining a wrapper are exactly the explicit set, and the four
@@ -4863,6 +4863,7 @@ mapfile -t S4_REL_JOBENV < <(s4_jobenv "$REPO_ROOT/$S4_WFR" deploy)
 s4_body "$REPO_ROOT/$S4_WFR" "Pre-rerun lock probe" "$S4/b-r8.sh"
 s4_body "$REPO_ROOT/$S4_WFR" "Deploy via webhook" "$S4/b-r9.sh"
 s4_body "$REPO_ROOT/$S4_WFR" "Verify deploy script completion" "$S4/b-r10.sh"
+s4_body "$REPO_ROOT/$S4_WFR" "Verify peer deploy completion" "$S4/b-r10p.sh"
 s4_body "$REPO_ROOT/$S4_WFR" "Email notification (deploy FAILED)" "$S4/b-r11.sh"
 s4_body "$REPO_ROOT/$S4_WFR" "email" "$S4/b-r12.sh"
 # Each step gets ONLY what its YAML declares (s4_run drops the rest and the final "declared environment" row asserts nothing was dropped):
@@ -5286,7 +5287,7 @@ s4_mutant_red "S4 row 3 deploy-inngest-image verify control: a refused status re
 # secret (the two email steps: of RESEND_API_KEY). The HMAC key is never trimmed. A stored value with a trailing newline or space is the commonest storage accident, and the old
 # argv form tolerated a leading blank too (curl sent it and the edge discards leading whitespace of a field value). The loop's text is the CANONICAL spelling below; what the
 # battery asserts about it is (a) a DERIVED population row (every step that defines the inline `_bearer_ok() {` and declares a GitHub `secrets.` value for one of the three names
-# carries exactly that loop for exactly those names BEFORE the definition, and the seven hand-listed executed steps are that population), and (b) executed rows that DISCRIMINATE the
+# carries exactly that loop for exactly those names BEFORE the definition, and the eight hand-listed executed steps are that population), and (b) executed rows that DISCRIMINATE the
 # shape: leading and trailing mixed whitespace trimmed and the clean value sent; interior space or LF refused (strip-all would send a different credential); an interior control
 # byte, all-whitespace and U+2003 (leading, trailing, under a UTF-8 locale so a `[[:space:]]` implementation is seen) refused; the HMAC key untrimmed.
 IFS= read -r -d '' s4_trim_py <<'PY' || true
@@ -5420,7 +5421,7 @@ s4_b7_bad() {
 }
 S4_B7_ID_MIX_ALL=$' \t\r\n\v\f'
 S4_B7_RS_MIX=$'\t '"${S4_RESEND}"$' \r\n'
-s4_b7_step() { # <tag> <body> <mode> <said> <NAME=value>...: one of the seven executed inline steps, every scenario
+s4_b7_step() { # <tag> <body> <mode> <said> <NAME=value>...: one of the eight executed inline steps, every scenario
   local tag="$1" body="$2" mode="$3" said="$4" scen="$S4_B7_SCEN_WH"; shift 4
   [[ "$mode" == resend-* ]] && scen="$S4_B7_SCEN_RS"
   S4_B7_N=$((S4_B7_N + 1)); printf '%s\n' "${S4_BODY_SRC[$body]:-unbuilt|$body}" >> "$S4_B7_COVERED"
@@ -5434,6 +5435,7 @@ S4_B7_BASE_FAILMAIL=(MIRROR_VERIFIED=true RUN_URL=https://example.invalid/run VE
 s4_b7_step release-lock-probe "$S4/b-r8.sh" wh-empty 'Pre-rerun probe: no in-flight deploy (exit_code=0)' "${S4_WH_BASE[@]}" "${S4_REL_JOBENV[@]}" 'SHIM_STATUS_BODY={"exit_code":0}'
 s4_b7_step release-deploy "$S4/b-r9.sh" wh-post 'Deploy initiated (HTTP 202)' "${S4_B7_BASE_DEPLOY[@]}"
 s4_b7_step release-verify "$S4/b-r10.sh" wh-empty 'ci-deploy.sh completed successfully for v1.2.3' "${S4_B7_REL[@]}" STATUS_POLL_MAX_ATTEMPTS=3 STATUS_POLL_INTERVAL_S=0 'SHIM_STATUS_BODY={"exit_code":0,"reason":"ok","tag":"v1.2.3"}'
+s4_b7_step release-peer-verify "$S4/b-r10p.sh" wh-empty 'All expected peers reported v1.2.3 deploy completion' "${S4_B7_REL[@]}" STATUS_POLL_MAX_ATTEMPTS=3 STATUS_POLL_INTERVAL_S=0 'SHIM_STATUS_BODY={"exit_code":0,"reason":"ok","tag":"v1.2.3","peers":{"10.0.1.11":{"exit_code":0,"reason":"ok","tag":"v1.2.3"}}}'
 s4_b7_step release-deploy-failed-email "$S4/b-r11.sh" resend-hdr 'Deploy-failure email sent to ops@jikigai.com (HTTP 200)' "${S4_B7_BASE_FAILMAIL[@]}"
 s4_b7_step release-outcome-email "$S4/b-r12.sh" resend-gho '' CLASSIFIER=failure FAILED=live-verify 'FAILED_HTML=<li>live-verify</li>' R_DEPLOY=failure TAG=v1.2.3 VERSION=1.2.3 RUN_URL=https://example.invalid/run SHIM_PROFILE=generic
 s4_b7_step deploy-inngest-trigger "$S4/b-r3t.sh" wh-post 'initiated (HTTP 202)' "${S4_WH_BASE[@]}" TAG=v1.2.3
@@ -5445,7 +5447,7 @@ s4_b7_step deploy-inngest-verify "$S4/b-r3v.sh" wh-empty 'Inngest deploy v1.2.3 
 S4_B7_DERIVED="$(cd "$REPO_ROOT" && python3 -I -c "$s4_b7_py" scan "$REPO_ROOT")"
 S4_B7_DERIVED_N="$(grep -c . <<<"$S4_B7_DERIVED" || true)"; S4_B7_BADN="$(grep -c $'\tBAD$' <<<"$S4_B7_DERIVED" || true)"
 S4_B7_COVER="$(cd "$REPO_ROOT" && python3 -I -c "$s4_b7_py" cover "$REPO_ROOT" "$S4_B7_COVERED")"
-S4_B7_FLOOR=7
+S4_B7_FLOOR=8
 if [[ "$S4_B7_BADN" == 0 && -z "$S4_B7_COVER" && "$S4_B7_DERIVED_N" == "$S4_B7_N" && "$S4_B7_DERIVED_N" -ge "$S4_B7_FLOOR" ]]; then
   row "S4 inline trim population: every workflow step that defines the inline _bearer_ok and declares a secrets.* value for CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET or RESEND_API_KEY carries exactly the canonical trim loop for exactly those names before the definition, and the $S4_B7_N executed rows are exactly that derived population ($S4_B7_DERIVED_N steps; floor $S4_B7_FLOOR)" ok
 else row "S4 inline trim population: a derived step lacks the canonical trim, no executed row covers it, or the population is below its floor" fail "bad=$S4_B7_BADN derived=$S4_B7_DERIVED_N executed=$S4_B7_N floor=$S4_B7_FLOOR cover='${S4_B7_COVER//$'\n'/;}' bad-steps='$(grep $'\tBAD$' <<<"$S4_B7_DERIVED" | cut -f1,3 | tr '\t\n' ': ;')'"; fi

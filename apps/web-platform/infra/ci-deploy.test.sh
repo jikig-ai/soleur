@@ -1077,6 +1077,27 @@ if [[ "${1:-}" == "inspect" && "$*" == *".Config.Env"* && "$*" != *inngest* ]]; 
   exit 0
 fi
 
+# #8743: the plugin-mount seed — `docker run --rm --name soleur-plugin-seed -u 0
+# --entrypoint /bin/sh -v <PLUGIN_MOUNT_DIR>:/plugin-mount -e SEED_TAG=<tag> <ref> -c <script>`.
+# Answered BEFORE the mode case so the recorder + failure arm work in EVERY
+# mode; keyed on the container-side mount target (`:/plugin-mount`), which no
+# other docker run in the script carries. Falls through on success so trace
+# mode still emits its DOCKER_TRACE:run marker for the ordering rows.
+#   MOCK_SEED_ARGV_LOG          append the seed run's raw argv, one space-joined
+#                               line — the `-u 0` / `--entrypoint /bin/sh` /
+#                               `-v <dir>:/plugin-mount` assertions read it.
+#   MOCK_DOCKER_SEED_RUN_FAIL=1 exit 1 — drives the plugin_seed_copy_failed abort.
+if [[ "${1:-}" == "run" && "$*" == *":/plugin-mount"* ]]; then
+  if [[ -n "${MOCK_SEED_ARGV_LOG:-}" ]]; then printf '%s\n' "$*" >> "$MOCK_SEED_ARGV_LOG"; fi
+  if [[ "${MOCK_DOCKER_SEED_RUN_FAIL:-}" == "1" ]]; then
+    # Emit the trace marker BEFORE failing — the run DID happen; a failure row
+    # that omits it would let a reorder read as "seed never ran".
+    [[ "${MOCK_DOCKER_MODE:-}" == "trace" ]] && echo "DOCKER_TRACE:run"
+    echo "docker: seed container exited non-zero (mock)" >&2
+    exit 1
+  fi
+fi
+
 case "$mode" in
   trace)
     # `ps` is read by the ADR-027 pre-run assertion; the script greps stdout
@@ -1317,6 +1338,13 @@ case "$URL" in
     # Default: middleware-redirected unauthenticated request.
     write_body ""
     if [[ "$WANT_HTTP_CODE" == "1" ]]; then echo "307"; fi
+    exit 0
+    ;;
+  *":9000/hooks/deploy-peer"*)
+    # #8743: the fan-out POST target. 202 = the peer ACCEPTED the trigger (the
+    # contract fan_out_to_peers reads). MOCK_CURL_DEPLOY_PEER_CODE overrides for
+    # the degraded arm (e.g. 500 → ok_peer_fanout_degraded).
+    if [[ "$WANT_HTTP_CODE" == "1" ]]; then printf '%s' "${MOCK_CURL_DEPLOY_PEER_CODE:-202}"; fi
     exit 0
     ;;
 esac
@@ -1861,15 +1889,18 @@ assert_canary_trace_order() {
   fi
 }
 
-# Canary success: prune → pull → stop(stale canary) → rm(stale canary) → run(canary) →
+# Canary success: prune → pull → stop(stale canary) → rm(stale canary) →
+#   run(#8743 plugin-mount seed, container-side) → run(canary) →
 #   bwrap sandbox check (docker exec) → stop(canary) → rm(canary) [#5669 memory-dwell:
 #   torn down BEFORE the drain] → stop(old) → rm(old) →
 #   ps(ADR-027 single-replica assertion) → run(prod)
 # (#5669/ADR-078: the post-success canary teardown was removed — the canary is now
-#  torn down before the cron drain gate, so it no longer appears after run(prod).)
+#  torn down before the cron drain gate, so it no longer appears after run(prod).
+#  #8743: the seed is ONE `docker run -u 0` — its DOCKER_TRACE:run marker IS
+#  visible because the run's stdout carries PLUGIN_SEED_PROBE to journald.)
 assert_canary_trace_order "canary success: correct docker trace order" \
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
-  "image|pull|stop|rm|run|exec|stop|rm|stop|rm|ps|run"
+  "image|pull|stop|rm|run|run|exec|stop|rm|stop|rm|ps|run"
 
 # Canary failure / rollback: prune → pull → stop(stale) → rm(stale) → run(canary) →
 #   logs(canary) → stop(canary) → rm(canary)
@@ -1889,11 +1920,11 @@ assert_canary_rollback() {
   local traces
   traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')
 
-  # Expected: system|pull|stop|rm|run|stop|rm
-  # (prune, pull, stale canary cleanup [stop, rm], canary run, canary stop, canary rm)
+  # Expected: system|pull|stop|rm|run|run|stop|rm
+  # (prune, pull, stale canary cleanup [stop, rm], #8743 seed run, canary run, canary stop, canary rm)
   # Note: docker logs is piped to logger so its trace marker is consumed.
   # Crucially: only 2 stop/rm pairs (stale cleanup + canary cleanup), NOT 3 (no old production stop/rm)
-  local expected="image|pull|stop|rm|run|stop|rm"
+  local expected="image|pull|stop|rm|run|run|stop|rm"
 
   if [[ "$actual_exit" -eq 1 ]] && [[ "$traces" == "$expected" ]]; then
     PASS=$((PASS + 1))
@@ -1928,8 +1959,9 @@ assert_canary_layered_rollback() {
   traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')
 
   # Expected on rollback (CANARY_HEALTHY=false): no swap to prod.
-  # image|pull|stop|rm|run|stop|rm — same shape as the existing rollback test.
-  local expected="image|pull|stop|rm|run|stop|rm"
+  # image|pull|stop|rm|run|run|stop|rm — same shape as the existing rollback
+  # test plus the #8743 container-side seed run before the canary run.
+  local expected="image|pull|stop|rm|run|run|stop|rm"
 
   if [[ "$actual_exit" -eq 1 ]] && [[ "$traces" == "$expected" ]]; then
     PASS=$((PASS + 1))
@@ -2050,8 +2082,9 @@ assert_canary_crash() {
   local traces
   traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')
 
-  # prune, pull, stale cleanup (stop, rm), canary run (fails) → script exits via set -e
-  local expected="image|pull|stop|rm|run"
+  # prune, pull, stale cleanup (stop, rm), #8743 seed run, canary run (fails)
+  # → script exits via set -e
+  local expected="image|pull|stop|rm|run|run"
 
   if [[ "$actual_exit" -ne 0 ]] && [[ "$traces" == "$expected" ]]; then
     PASS=$((PASS + 1))
@@ -2079,11 +2112,12 @@ assert_prod_start_failure() {
   local traces
   traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')
 
-  # prune, pull, stale cleanup (stop, rm), canary run (ok), canary health ok,
+  # prune, pull, stale cleanup (stop, rm), #8743 seed run, canary run (ok),
+  # canary health ok,
   # bwrap sandbox check, #5669 pre-drain canary teardown (stop, rm), old stop,
   # old rm, ADR-027 ps assertion (empty in this mock mode), prod run (fails),
   # production_start_failed defensive canary teardown (stop, rm)
-  local expected="image|pull|stop|rm|run|exec|stop|rm|stop|rm|ps|run|stop|rm"
+  local expected="image|pull|stop|rm|run|run|exec|stop|rm|stop|rm|ps|run|stop|rm"
 
   if [[ "$actual_exit" -ne 0 ]] && [[ "$traces" == "$expected" ]]; then
     PASS=$((PASS + 1))
@@ -2097,6 +2131,171 @@ assert_prod_start_failure() {
 }
 
 assert_prod_start_failure
+
+echo ""
+echo "--- #8743: container-side plugin-mount seed ---"
+# #8743 (fchmodat2 EPERM on a foreign-uid mount tree): the seed is ONE
+# container-side `docker run --rm --name soleur-plugin-seed -u 0 --entrypoint /bin/sh -v <mount>:/plugin-mount`
+# that probes, clears, `cp -a`s and writes .seed-complete INSIDE the image —
+# replacing the host-side `docker create` + `docker cp` + `docker rm` whose
+# deploy-uid untar could not touch a root/1001-owned tree. These rows pin the
+# argv shape (root user, pinned interpreter, the mount binding, SEED_TAG env),
+# the probe-before-mutate order, the absence of every remnant of the old
+# three-call form, and the unchanged plugin_seed_copy_failed abort contract.
+
+assert_seed_run_argv() {
+  TOTAL=$((TOTAL + 1))
+  local d output actual_exit argv
+  d=$(mktemp -d)
+  output=$(
+    export MOCK_SEED_ARGV_LOG="$d/seed-argv"
+    run_deploy_traced "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+  argv="$(cat "$d/seed-argv" 2>/dev/null || true)"
+  rm -rf "$d"
+  if [[ "$actual_exit" -eq 0 && "$(printf '%s\n' "$argv" | wc -l)" -eq 1 ]] \
+     && printf '%s\n' "$argv" | grep -qF 'run --rm --name soleur-plugin-seed -u 0 --entrypoint /bin/sh -v ' \
+     && printf '%s\n' "$argv" | grep -qF ':/plugin-mount -e SEED_TAG=v1.0.0 ' \
+     && printf '%s\n' "$argv" | grep -qF '@sha256:' \
+     && printf '%s\n' "$argv" | grep -qF ' -c ' \
+     && printf '%s\n' "$argv" | grep -qF 'PLUGIN_SEED_PROBE' \
+     && printf '%s\n' "$argv" | grep -qF 'find "$DST" -mindepth 1 -delete' \
+     && printf '%s\n' "$argv" | grep -qF 'cp -a /opt/soleur/plugin/. "$DST"/' \
+     && printf '%s\n' "$argv" | grep -qF '.seed-complete'; then
+    PASS=$((PASS + 1))
+    echo "  PASS: seed is one container-side docker run: --rm --name soleur-plugin-seed -u 0 --entrypoint /bin/sh, -v <mount>:/plugin-mount, -e SEED_TAG, verified-digest ref, probe→clear→cp -a→sentinel argv (#8743)"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: seed docker run argv wrong (exit=$actual_exit)"
+    echo "        argv: $argv"
+  fi
+}
+assert_seed_run_argv
+
+# The probe must precede the mutation inside the -c script — an in-surface
+# discriminator emitted into journald (→ Better Stack) BEFORE the tree is
+# touched, because web-2's true mount ownership cannot be read off-box.
+assert_seed_probe_order() {
+  TOTAL=$((TOTAL + 1))
+  local probe_before
+  # The -c script is one physical line (the docker-run-tuple census cannot
+  # tokenize a quote spanning continuation lines), so order is pinned
+  # INTRA-line: PLUGIN_SEED_PROBE must appear before the find -delete on it.
+  probe_before=$(grep -cE 'PLUGIN_SEED_PROBE dst_owner=.*find "\$DST" -mindepth 1 -delete' "$DEPLOY_SCRIPT" || true)
+  if [[ "$probe_before" == "1" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: PLUGIN_SEED_PROBE emits before the find -delete inside the seed container script"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: PLUGIN_SEED_PROBE must precede the find -delete in the seed -c line (matches=$probe_before)"
+  fi
+}
+assert_seed_probe_order
+
+# No remnant of the old host-side extract survives in the deploy path — the
+# `docker cp`/`docker create` on soleur-plugin-seed and the host-side
+# .seed-complete write are all gone (cloud-init.yml keeps its own root seed;
+# that file is out of scope here).
+assert_no_host_side_seed() {
+  TOTAL=$((TOTAL + 1))
+  local body
+  body=$(grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT")
+  if ! printf '%s\n' "$body" | grep -qF 'docker cp soleur-plugin-seed' \
+     && ! printf '%s\n' "$body" | grep -qF 'docker create --name soleur-plugin-seed' \
+     && ! printf '%s\n' "$body" | grep -qF 'find "$PLUGIN_MOUNT_DIR" -mindepth 1 -delete' \
+     && ! printf '%s\n' "$body" | grep -qF '"$PLUGIN_MOUNT_DIR/.seed-complete"'; then
+    PASS=$((PASS + 1))
+    echo "  PASS: no host-side docker cp/create/-delete/.seed-complete remnant survives on soleur-plugin-seed (#8743)"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: a host-side seed remnant survives in ci-deploy.sh"
+  fi
+}
+assert_no_host_side_seed
+
+# Failure path: a seed run that exits non-zero aborts the deploy with the SAME
+# reason the docker cp failure used — plugin_seed_copy_failed — and the canary
+# never runs.
+assert_seed_failure_aborts() {
+  TOTAL=$((TOTAL + 1))
+  local d output actual_exit reason exitc
+  d=$(mktemp -d)
+  output=$(
+    export MOCK_DOCKER_SEED_RUN_FAIL=1
+    export CI_DEPLOY_STATE="$d/ci-deploy.state"
+    run_deploy_traced "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+  read_state_reason_and_exit "$d/ci-deploy.state" reason exitc
+  local seed_seen canary_after=0
+  seed_seen=$(printf '%s\n' "$output" | grep -c '^DOCKER_TRACE:run$' || true)
+  rm -rf "$d"
+  # exit 1, reason=plugin_seed_copy_failed, and exactly the ONE seed run marker
+  # (the canary `run` must never appear after the abort).
+  if [[ "$actual_exit" -ne 0 && "$reason" == "plugin_seed_copy_failed" && "$exitc" == "1" && "$seed_seen" == "1" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: seed run failure aborts with plugin_seed_copy_failed and never reaches the canary (#8743)"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: seed failure path (exit=$actual_exit reason=$reason state_exit=$exitc seed_runs=$seed_seen)"
+    echo "        output: $output"
+  fi
+}
+assert_seed_failure_aborts
+
+echo ""
+echo "--- #8743 Phase 2: write_state persists fanout_peers ---"
+# The peers map on /hooks/deploy-status (cat-deploy-state.sh peers_json) reads
+# `fanout_peers` off this state file, so write_state must persist the EFFECTIVE
+# fan-out set: SOLEUR_DEPLOY_PEERS minus self, blank entries stripped — the same
+# filter fan_out_to_peers applies. A deploy-peer-received run carries no
+# SOLEUR_DEPLOY_PEERS, so the key must be ABSENT there (the merge stays inert —
+# no recursion). The 202 arm in the curl mock makes the peer-accept leg reach
+# `ok` rather than `ok_peer_fanout_degraded`.
+
+FPEERS_DIR="$(mktemp -d)"
+jq -n '[{id:"deploy-peer","trigger-rule":{match:{type:"payload-hmac-sha256",secret:"fixture-fanout-secret",parameter:{source:"header",name:"X-Signature-256"}}}}]' \
+  > "$FPEERS_DIR/hooks.json"
+
+assert_fanout_peers_state() {
+  local description="$1" peers_val="$2" want="$3"
+  TOTAL=$((TOTAL + 1))
+  local d out rc
+  d=$(mktemp -d)
+  out=$(
+    export SOLEUR_DEPLOY_PEERS="$peers_val" SOLEUR_HOOKS_JSON="$FPEERS_DIR/hooks.json" \
+      CI_DEPLOY_STATE="$d/state"
+    run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" >/dev/null 2>&1
+  ) && rc=0 || rc=$?
+  local got absent
+  got="$(jq -r '.fanout_peers // "<absent>"' "$d/state" 2>/dev/null || echo "<absent>")"
+  rm -rf "$d"
+  if [[ "$want" == "<absent>" ]]; then
+    absent=0; [[ "$got" == "<absent>" ]] && absent=1
+    if [[ "$absent" == "1" ]]; then
+      PASS=$((PASS + 1)); echo "  PASS: $description"
+    else
+      FAIL=$((FAIL + 1)); echo "  FAIL: $description (fanout_peers should be ABSENT, got '$got')"
+    fi
+  elif [[ "$got" == "$want" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: $description"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $description (want fanout_peers='$want', got '$got')"
+  fi
+}
+
+assert_fanout_peers_state \
+  "fanout_peers persisted for a fan-out deploy (reason ok on a 202 accept)" \
+  "10.9.9.9" "10.9.9.9"
+assert_fanout_peers_state \
+  "fanout_peers drops self (127.0.0.1) and blank entries" \
+  "127.0.0.1, 10.9.9.9,," "10.9.9.9"
+assert_fanout_peers_state \
+  "fanout_peers ABSENT on a no-peers run (the deploy-peer-received shape)" \
+  "" "<absent>"
+assert_fanout_peers_state \
+  "fanout_peers ABSENT when every peer filtered to self" \
+  "127.0.0.1" "<absent>"
+rm -rf "$FPEERS_DIR"
 
 # Flock rejects concurrent deploy
 assert_flock_rejection() {
@@ -2816,7 +3015,7 @@ assert_apparmor_profile() {
 
   # Check that all DOCKER_RUN_ARGS lines contain apparmor=soleur-bwrap
   local run_lines
-  run_lines=$(printf '%s\n' "$output" | grep "^DOCKER_RUN_ARGS:" || true)
+  run_lines=$(printf '%s\n' "$output" | grep "^DOCKER_RUN_ARGS:" | grep -v ':/plugin-mount' || true)
 
   if [[ -z "$run_lines" ]]; then
     FAIL=$((FAIL + 1))
@@ -2869,7 +3068,7 @@ assert_tmpfs_flag() {
   ) && actual_exit=0 || actual_exit=$?
 
   local run_lines
-  run_lines=$(printf '%s\n' "$output" | grep "^DOCKER_RUN_ARGS:" || true)
+  run_lines=$(printf '%s\n' "$output" | grep "^DOCKER_RUN_ARGS:" | grep -v ':/plugin-mount' || true)
 
   if [[ -z "$run_lines" ]]; then
     FAIL=$((FAIL + 1))
@@ -2935,7 +3134,7 @@ assert_cron_workspace_root() {
   ) && actual_exit=0 || actual_exit=$?
 
   local run_lines
-  run_lines=$(printf '%s\n' "$output" | grep "^DOCKER_RUN_ARGS:" || true)
+  run_lines=$(printf '%s\n' "$output" | grep "^DOCKER_RUN_ARGS:" | grep -v ':/plugin-mount' || true)
 
   if [[ -z "$run_lines" ]]; then
     FAIL=$((FAIL + 1))
@@ -2990,7 +3189,7 @@ assert_soleur_host_id() {
   ) || true
 
   local run_lines
-  run_lines=$(printf '%s\n' "$output" | grep "^DOCKER_RUN_ARGS:" || true)
+  run_lines=$(printf '%s\n' "$output" | grep "^DOCKER_RUN_ARGS:" | grep -v ':/plugin-mount' || true)
 
   if [[ -z "$run_lines" ]]; then
     FAIL=$((FAIL + 1))
@@ -9988,9 +10187,10 @@ run_6428() {
   printf '%s\n' "$rc" > "$d/rc"
 }
 # _6428_started <workdir>: 1 when the deploy touched ANY app container: the canary/production `run`
-# (traced), or the plugin seed (its `docker create` is redirected to /dev/null, so it is witnessed by
-# the plugin mount directory the seed creates and fills). The cosign verify `run` is answered before
-# the mock's mode case and never traces.
+# (traced), or the plugin seed — since #8743 the seed IS a `docker run` whose stdout is not
+# redirected (it carries PLUGIN_SEED_PROBE to journald), so its DOCKER_TRACE:run marker lands in
+# out.txt; the plugin-mount mkdir the seed block performs is the second witness. The cosign verify
+# `run` is answered before the mock's mode case and never traces.
 _6428_started() { if grep -qE '^DOCKER_TRACE:(run|create)$' "$1/out.txt" || [[ -e "$1/plugin-mount" ]]; then echo 1; else echo 0; fi; }
 # _6428_event <workdir> <field>: a field of the captured op=image-freshness Sentry event ("" if none).
 _6428_event() { jq -rs --arg f "$2" '[.[] | select(.tags.op=="image-freshness")][0] | if . == null then "" elif $f == "level" then .level else .tags[$f] end' "$1/sentry.txt" 2>/dev/null; }
@@ -10075,7 +10275,7 @@ rm -rf "$T6428"; unset _f11_reason _f11_exit
 TOTAL=$((TOTAL + 1)); T6428="$(mktemp -d)"
 run_6428 "$T6428"
 _f2_traces=$(sed -n 's/^DOCKER_TRACE://p' "$T6428/out.txt" | tr '\n' '|' | sed 's/|$//')
-if [[ "$(cat "$T6428/rc")" == "0" && "$_f2_traces" == "image|pull|stop|rm|run|exec|stop|rm|stop|rm|ps|run" ]] \
+if [[ "$(cat "$T6428/rc")" == "0" && "$_f2_traces" == "image|pull|stop|rm|run|run|exec|stop|rm|stop|rm|ps|run" ]] \
    && grep -q 'IMAGE_FRESHNESS: ok ref=.* expected=1.0.0 actual=1.0.0$' "$T6428/logger.txt" \
    && [[ -z "$(_6428_event "$T6428" level)" ]]; then
   PASS=$((PASS + 1)); echo "  PASS: F2 a self-consistent image deploys with the unchanged canary trace and logs IMAGE_FRESHNESS: ok, no freshness event (#6428)"
@@ -10523,9 +10723,12 @@ _gak_chk_cache() {  # the local-cache reload arm (#6512) → no key for a never-
   _gak_unverified_core "$1" "$2" mismatch || return 1
   grep -q 'reused_local_reload' "$2/sentry.txt" || { GAK_WHY="the local-cache arm did not fire"; return 1; }
 }
-_gak_chk_hijack() {  # a runtime-hijack class in prd → refuse before any container (7.15*)
+_gak_chk_hijack() {  # a runtime-hijack class in prd → refuse before any KEY-CARRYING container (7.15*; the
+  # pre-overlay `run:soleur-plugin-seed` is the sanctioned #8743 seed — it holds no key, so it is the ONE
+  # tolerated run line and must itself read env_token=0)
   if [[ "$1" == ci ]]; then
-    [[ "$(cat "$2/rc")" != 0 && "$(_gak_st "$2" reason)" == github_app_key_env_hijack && "$(_gak_st "$2" github_app_key_fetch)" == env_hijack ]] && ! grep -q '^run:' "$2/gak.log" \
+    [[ "$(cat "$2/rc")" != 0 && "$(_gak_st "$2" reason)" == github_app_key_env_hijack && "$(_gak_st "$2" github_app_key_fetch)" == env_hijack ]] \
+      && ! grep '^run:' "$2/gak.log" | grep -vqxF 'run:soleur-plugin-seed env_token=0' \
       || { GAK_WHY="rc=$(cat "$2/rc") reason=$(_gak_st "$2" reason) runs=$(grep -c '^run:' "$2/gak.log")"; return 1; }
   else
     [[ "$(cat "$2/rc")" == 72 ]] && grep -qF 'cond=github_app_key_env_hijack attempt=1/1' "$2/detail/doppler_download" 2>/dev/null \
@@ -10533,9 +10736,11 @@ _gak_chk_hijack() {  # a runtime-hijack class in prd → refuse before any conta
   fi
   [[ "$(_gak_appcalls "$2")" == 0 ]] || { GAK_WHY="isolated project fetched for a hijacked env"; return 1; }
 }
-_gak_chk_mergefail() {  # the atomic rename fails → abort (ci refuses, boot exits 72), env-file untouched (7.m*)
+_gak_chk_mergefail() {  # the atomic rename fails → abort (ci refuses, boot exits 72), env-file untouched (7.m*; the
+  # pre-overlay `run:soleur-plugin-seed` is the sanctioned #8743 seed — tolerated, env_token=0, see _gak_chk_hijack)
   if [[ "$1" == ci ]]; then
-    [[ "$(cat "$2/rc")" != 0 && "$(_gak_st "$2" reason)" == github_app_key_merge_failed && "$(_gak_st "$2" github_app_key_fetch)" == merge_failed ]] && ! grep -q '^run:' "$2/gak.log" \
+    [[ "$(cat "$2/rc")" != 0 && "$(_gak_st "$2" reason)" == github_app_key_merge_failed && "$(_gak_st "$2" github_app_key_fetch)" == merge_failed ]] \
+      && ! grep '^run:' "$2/gak.log" | grep -vqxF 'run:soleur-plugin-seed env_token=0' \
       || { GAK_WHY="rc=$(cat "$2/rc") reason=$(_gak_st "$2" reason) runs=$(grep -c '^run:' "$2/gak.log")"; return 1; }
   else
     [[ "$(cat "$2/rc")" == 72 ]] && grep -qF 'cond=github_app_key_merge_failed' "$2/detail/doppler_download" 2>/dev/null \

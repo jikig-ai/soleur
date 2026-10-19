@@ -56,6 +56,8 @@ The `soleur:ship` Phase 5.5 "Deploy Pipeline Fix Drift Gate" surfaces this contr
 | `canary_sandbox_failed` | 1 | stderr `/usr/local/bin/bwrap: line 424: /usr/bin/bwrap: Operation not permitted` (the shim's final `exec`; inner rc 126; read `bwrap_err=` on the `DEPLOY_ROLLBACK: bwrap sandbox non-functional` journald row, Better Stack tag `ci-deploy`) — execve EPERM: file caps on the real binary not covered by the container bounding set (capped image + clean container, no `--cap-add`) | Deploy the cap-free image tag (post-#9874 build — in #9871 the fix landed as `v0.334.1` after a rerun of the upstream flaked `test-scripts` job re-armed the `ci_not_green`-skipped deploy). If the image is clean but `--cap-add` symptoms persist, the host script is stale: merged is not delivered — the installed `ci-deploy.sh` runs until `apply-deploy-pipeline-fix.yml` delivers it; verify `.ci_deploy_sha256` in the deploy-status hook's JSON body vs `git show origin/main:apps/web-platform/infra/ci-deploy.sh \| sha256sum` (or `scripts/check-deploy-script-parity.sh`) and re-dispatch the apply on drift |
 | `canary_failed` | 1 | Canary health-check failed 10x | Roll back; inspect canary container logs |
 | `production_start_failed` | 1 | Production container didn't start post-swap | Check docker state; consider manual rollback |
+| `plugin_seed_copy_failed` | 1 | The plugin-mount seed failed. Post-#8743 the seed is container-side (`docker run --rm -u 0 --entrypoint /bin/sh -v $PLUGIN_MOUNT_DIR:/plugin-mount`: clear → `cp -a` → `.seed-complete`, all inside the image), so a foreign-uid or root-seeded tree CANNOT wedge it the way the pre-#8743 deploy-uid `docker cp` did (the `fchmodat2 .claude-plugin: operation not permitted` EPERM that killed every web-2 deploy for 25 days — cloud-init's root-run seed produces a uid-1001 tree that uid-1000's client-side untar cannot chmod/delete) | Read the `PLUGIN_SEED_PROBE dst_owner=<u>:<g> marker=<u>:<g>\|absent findmnt=<src>` journald row emitted immediately before the mutation (Better Stack — ships only when the probe line reaches stderr/PRIORITY 3, the arm that admitted the fchmodat2 rows; discriminating uid/gid/mount-source probe — the facts the fchmodat2 root cause needed and could not get off-box). A post-#8743 `plugin_seed_copy_failed` with a seed that is ownership-agnostic means the mount itself is broken (read-only remount, missing dir, image missing `/opt/soleur/plugin`), not ownership — grep Better Stack for the container's stderr around the timestamp. Do NOT SSH the host. |
+| `ok_peer_fanout_degraded` | 0 | Deploy SUCCEEDED locally, but a PEER web host did not ACCEPT the fan-out (missing 202: unreachable / HMAC-rejected / secret unreadable / signature uncomputable). Non-ACCEPTANCE, NOT peer-failed — the peer's own async verdict is the `.peers["<ip>"]` slot (see below) | Deploy is live on this host; the peer is the problem. Grep Better Stack (tag `ci-deploy`) for `FANOUT: peer <ip> NOT accepted`, `FANOUT: webhook secret unavailable`, `FANOUT: could not compute the request signature`. Check the peer's webhook on the private net (`:9000` firewall is private-only). Do NOT SSH the host. |
 | `inngest_restart_failed` | 1 | `systemctl restart inngest-server.service` itself exited non-zero (restart path, before any health probe) | Check Sentry + Better Stack for OOM/unit errors around the timestamp; re-dispatch `restart-inngest-server.yml` once — repeated failures mean a unit/host problem, not a transient |
 | `inngest_health_failed` | 1 | `/health` unreachable after the verify budget (`verify_inngest_health`) | **Post-#5159 the verify gates on `/health` (process liveness) only; a missing cron-plan is ADVISORY** (the cron-plan loop polls `/v1/functions` best-effort and returns success even with no cron re-armed) — so this reason now means the `inngest-server` process itself never came back healthy, NOT a de-planned registry. A standalone restart de-plans crons and CANNOT re-arm them (a loopback `PUT /api/inngest` returns `modified:false`, proven #5159), so do NOT re-dispatch `restart-inngest-server.yml` to fix missing crons. For a genuinely dead process: check Sentry + Better Stack for OOM/unit errors around the timestamp, then recover by **redeploying / restarting web-platform** (restarting the app container makes it reconnect; the inngest-server re-discovers it and re-arms crons — reconnection-driven, the SDK sets no `appVersion`. Re-run the latest **deploy-arm** `web-platform-release` run — `gh run rerun "$(gh run list --workflow=web-platform-release.yml --event workflow_run -L1 --json databaseId -q '.[0].databaseId')"`; `--event workflow_run` is required because since #5806/ADR-217 every merge also produces a push-arm run that only builds and publishes and restarts NOTHING — or `docker restart soleur-web-platform`). If the Sentry cron monitors (monitors API curl in postmerge SKILL.md) show persistent missed check-ins, that is real H9b — recover the same way (redeploy web-platform, immediate; or wait for the `--poll-interval` self-heal). Confirm host delivery the no-SSH way before re-dispatch (`apply-deploy-pipeline-fix.yml` run green for the merge SHA + infra-config-status per-file sha256 match, per the soleur:ship Deploy Pipeline Fix Drift Gate — NOT the SSH post-apply contract above) |
 | `quiesced` | 0 | `quiesce inngest _ _` (op=quiesce-web, #6178) succeeded — inngest is not-serving AND unit-inactive AND not-enabled on this host, and (where the unit exists) the quiesce marker `/var/lib/inngest/quiesced-by-op` attributes it, so the tri-state reads `quiesced` (#6921) | None (the no-SSH web-host scheduler quiesce for the dedicated-host cutover 2.2 gap). Re-run `op=execute`. |
@@ -81,6 +83,32 @@ The `soleur:ship` Phase 5.5 "Deploy Pipeline Fix Drift Gate" surfaces this contr
 | `unhandled` | 1 | EXIT trap fired; specific reason not instrumented | Check journalctl; consider adding explicit final_write_state call |
 | `timeout` | 124 | Wall-clock cap (`ci-deploy-wrapper.sh` 1800s, raised from 900s in #5061) sent SIGTERM and `ci-deploy.sh`'s TERM trap fired before bash exited (#3704) | SSH and run `journalctl -u webhook -t ci-deploy --since '-15m'` for the last successful step before silence; likely culprit is hung `docker pull`, `docker exec bwrap`, or canary probe. |
 | `corrupt_state` | -3 | State file is unparseable JSON | Server-side disk issue; SSH to investigate |
+
+## Response fields: `.peers` (per-fan-out-peer verdict merge)
+
+`cat-deploy-state.sh` merges a top-level `peers` object when the state file
+carries `fanout_peers` — written by the deploy arm when it fanned out. A
+`deploy-peer`-received run writes no `fanout_peers` (no re-fan), so the merge is
+inert on a peer and cannot recurse.
+
+Each key is a peer private IP (`10.0.1.x`); each value is that peer's **whole**
+deploy-status JSON, fetched `GET http://<ip>:9000/hooks/deploy-status` over the
+private net with the shared `webhook_deploy_secret` HMAC (`curl --max-time 3`,
+stdin `--config` — the `fan_out_to_peers` pattern). An unreadable peer fills its
+slot with `{"error":"unreachable"|"http_<code>"|"not_json"}` — the merge never
+fails the hook; the release workflow owns the verdict.
+
+The release workflow's `Verify peer deploy completion` step grades each expected
+peer (every `WEB_HOST_PRIVATE_IPS` member except the `deploy.` ingress host):
+`exit_code==0 && tag=="v$VERSION"` passes; `exit_code` in `-1/-2/-3` or a missing
+slot keeps polling (the peer's deploy starts when web-1's ends — async by
+design); any other `exit_code` or an `error` slot fails the run **fail-closed** —
+a peer deploy failure now reaches the run result instead of hiding behind
+web-1's `/health` (the gap that let #8743 burn 25 days).
+
+Because the slot embeds the peer's own JSON, `.peers["10.0.1.11"].ci_deploy_sha256`
+also answers "is web-2's installed script current" — the parity read
+`scripts/check-deploy-script-parity.sh` formalizes.
 
 ## When NOT to SSH
 
