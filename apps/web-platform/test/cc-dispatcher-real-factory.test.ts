@@ -51,7 +51,9 @@ const {
   mockResolveC4FlagEnabled,
   mockWriteC4Diagram,
   mockGetSessionMessages,
+  mockResolveSandboxUnixDeny,
 } = vi.hoisted(() => ({
+  mockResolveSandboxUnixDeny: vi.fn(async () => false),
   mockResolveC4FlagEnabled: vi.fn(async () => false),
   mockWriteC4Diagram: vi.fn(),
   mockLogInfo: vi.fn(),
@@ -131,8 +133,10 @@ vi.mock("@/server/agent-runner-sandbox-config", () => ({
   buildAgentSandboxConfig: mockBuildAgentSandboxConfig,
 }));
 
-vi.mock("@/server/agent-env", () => ({
+vi.mock("@/server/agent-env", async (importOriginal) => ({
   buildAgentEnv: mockBuildAgentEnv,
+  // The egress predicate is the real one (the dispatcher skips the flag read for an egress session with it).
+  sessionHasEgress: (await importOriginal<typeof import("@/server/agent-env")>()).sessionHasEgress,
   // feat-open-web-egress (#9534): the sandbox-config deny census derives
   // from this set at module load — keep it non-empty.
   ALLOWED_SERVICE_ENV_VARS: new Set(["GITHUB_TOKEN", "STRIPE_SECRET_KEY"]),
@@ -182,6 +186,11 @@ vi.mock("@/server/git-auth", async () => {
 // tests dispatch with the review-gate intact.
 vi.mock("@/server/resolve-bash-autonomous", () => ({
   resolveBashAutonomous: mockResolveBashAutonomous,
+}));
+
+// #10455 (a) / A4 — the AF_UNIX-deny flag resolver. Default OFF; the wiring rows below flip it.
+vi.mock("@/server/resolve-sandbox-unix-deny", () => ({
+  resolveSandboxUnixDeny: mockResolveSandboxUnixDeny,
 }));
 
 // feat-open-web-egress (#9534) — default off (false): entitlement
@@ -472,6 +481,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     mockResolveInstallationId.mockResolvedValue(null);
     mockGenerateInstallationToken.mockResolvedValue("ghs_default_test_token");
     mockResolveBashAutonomous.mockResolvedValue(false);
+    mockResolveSandboxUnixDeny.mockResolvedValue(false);
     mockResolveWebEgress.mockResolvedValue(false);
     mockResolveAutonomousAck.mockResolvedValue(null);
     mockResolveIsWorkspaceOwner.mockResolvedValue(false);
@@ -879,6 +889,61 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
         claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/), sandboxUnixDeny: false,
       },
     );
+  });
+
+  // -------------------------------------------------------------------------
+  // #10455 (a) / A4 — the AF_UNIX-deny flag reaches BOTH builders through buildAgentQueryOptions, and an egress session
+  // never waits on the flag (the variant is no-egress only, so the answer cannot change its artifact).
+  // -------------------------------------------------------------------------
+  describe("AF_UNIX-deny flag wiring (A4)", () => {
+    const envOpts = () => mockBuildAgentEnv.mock.calls[0][2];
+    const sandboxOpts = () => mockBuildAgentSandboxConfig.mock.calls[0][1];
+
+    it("no-egress dispatch + flag ON → sandboxUnixDeny:true reaches buildAgentEnv AND buildAgentSandboxConfig", async () => {
+      mockResolveSandboxUnixDeny.mockResolvedValue(true);
+      await realSdkQueryFactory(makeArgs());
+      expect(mockResolveSandboxUnixDeny).toHaveBeenCalledTimes(1);
+      expect(envOpts().sandboxUnixDeny).toBe(true);
+      expect(sandboxOpts().sandboxUnixDeny).toBe(true);
+    });
+
+    it("no-egress dispatch + flag OFF → false in both", async () => {
+      mockResolveSandboxUnixDeny.mockResolvedValue(false);
+      await realSdkQueryFactory(makeArgs());
+      expect(envOpts().sandboxUnixDeny).toBe(false);
+      expect(sandboxOpts().sandboxUnixDeny).toBe(false);
+    });
+
+    it("GitHub-egress dispatch (minted token) → false in both, and the resolver is NEVER called", async () => {
+      mockResolveSandboxUnixDeny.mockResolvedValue(true);
+      mockResolveInstallationId.mockResolvedValueOnce(987654);
+      mockGenerateInstallationToken.mockResolvedValueOnce("ghs_minted_xyz");
+      await realSdkQueryFactory(makeArgs());
+      expect(envOpts().ghToken).toBe("ghs_minted_xyz");
+      expect(envOpts().sandboxUnixDeny).toBe(false);
+      expect(sandboxOpts().sandboxUnixDeny).toBe(false);
+      expect(mockResolveSandboxUnixDeny).not.toHaveBeenCalled();
+    });
+
+    it("web-egress dispatch (forwarder handle) → false in both, and the resolver is NEVER called", async () => {
+      mockResolveSandboxUnixDeny.mockResolvedValue(true);
+      mockResolveWebEgress.mockResolvedValue(true);
+      mockSpawnEgressForwarder.mockResolvedValue({ port: 28711, token: "tok-abc", pid: 4242 });
+      await realSdkQueryFactory(makeArgs());
+      expect(envOpts().egressProxy).toMatchObject({ token: "tok-abc" });
+      expect(envOpts().sandboxUnixDeny).toBe(false);
+      expect(sandboxOpts().sandboxUnixDeny).toBe(false);
+      expect(mockResolveSandboxUnixDeny).not.toHaveBeenCalled();
+    });
+
+    it("a degraded-to-zero-egress web dispatch (forwarder spawn failed) is a no-egress session and DOES read the flag", async () => {
+      mockResolveSandboxUnixDeny.mockResolvedValue(true);
+      mockResolveWebEgress.mockResolvedValue(true);
+      mockSpawnEgressForwarder.mockRejectedValue(new Error("bind boom"));
+      await realSdkQueryFactory(makeArgs());
+      expect(mockResolveSandboxUnixDeny).toHaveBeenCalledTimes(1);
+      expect(envOpts().sandboxUnixDeny).toBe(true);
+    });
   });
 
   // -------------------------------------------------------------------------

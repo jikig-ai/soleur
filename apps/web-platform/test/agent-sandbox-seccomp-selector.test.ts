@@ -340,31 +340,8 @@ describe("the runtime flag agent-sandbox-unix-deny", () => {
   });
 });
 
-describe("resolveSandboxUnixDeny fails closed to OFF", () => {
-  const flagMock = vi.hoisted(() => ({ isAgentSandboxUnixDenyEnabled: vi.fn() }));
-  vi.mock("@/lib/feature-flags/server", async (importOriginal) => ({
-    ...(await importOriginal<typeof import("@/lib/feature-flags/server")>()),
-    isAgentSandboxUnixDenyEnabled: flagMock.isAgentSandboxUnixDenyEnabled,
-  }));
-  it("true only when the flag service answers exactly true", async () => {
-    const { resolveSandboxUnixDeny } = await import("@/server/resolve-sandbox-unix-deny");
-    flagMock.isAgentSandboxUnixDenyEnabled.mockResolvedValueOnce(true);
-    expect(await resolveSandboxUnixDeny()).toBe(true);
-    flagMock.isAgentSandboxUnixDenyEnabled.mockResolvedValueOnce(false);
-    expect(await resolveSandboxUnixDeny()).toBe(false);
-    flagMock.isAgentSandboxUnixDenyEnabled.mockResolvedValueOnce(undefined);
-    expect(await resolveSandboxUnixDeny()).toBe(false);
-    flagMock.isAgentSandboxUnixDenyEnabled.mockResolvedValueOnce("true");
-    expect(await resolveSandboxUnixDeny()).toBe(false);
-  });
-  it("an unreachable flag service (throw) or a hang (timeout) resolves OFF", async () => {
-    const { resolveSandboxUnixDeny } = await import("@/server/resolve-sandbox-unix-deny");
-    flagMock.isAgentSandboxUnixDenyEnabled.mockRejectedValueOnce(new Error("flagsmith down"));
-    expect(await resolveSandboxUnixDeny()).toBe(false);
-    flagMock.isAgentSandboxUnixDenyEnabled.mockImplementationOnce(() => new Promise(() => {}));
-    expect(await resolveSandboxUnixDeny(25)).toBe(false);
-  });
-});
+// resolveSandboxUnixDeny (fail-closed, memo, single-flight, bound) is pinned by test/resolve-sandbox-unix-deny.test.ts, and its
+// wiring into both runners by test/agent-runner-unix-deny-wire.test.ts and test/cc-dispatcher-real-factory.test.ts.
 
 // ---- call-site census (Guard 3 row 9) ---------------------------------------
 // Re-derived with git grep: every file that CALLS (not merely mentions) a builder.
@@ -393,21 +370,12 @@ describe("call-site census", () => {
     ]);
     expect(f.length).toBe(3); // floor: an empty grep must not pass
   });
-  it("buildAgentQueryOptions is called from the two runners and the dev probe, and the runners pass the resolved flag", () => {
+  it("buildAgentQueryOptions is called from the two runners and the dev probe", () => {
     const lines = grep("\\bbuildAgentQueryOptions\\(", ["server", "scripts"]);
     const f = files(lines).filter((x) => !/\.test\./.test(x));
     expect(f).toEqual(["scripts/dev-probe-destroy-ask.ts", "server/agent-runner.ts", "server/cc-dispatcher.ts"]);
-    for (const runner of ["server/agent-runner.ts", "server/cc-dispatcher.ts"]) {
-      const src = readFileSync(join(APP_ROOT, runner), "utf8");
-      expect(src, runner).toMatch(/resolveSandboxUnixDeny\(\)/);
-      expect(src, runner).toMatch(/sandboxUnixDeny/);
-    }
-  });
-  it("query-options derives both builders' egress from the same session handles and runs the spawn-time assertion", () => {
-    const src = readFileSync(join(APP_ROOT, "server/agent-runner-query-options.ts"), "utf8");
-    expect(src).toContain("sandboxUnixDeny: args.sandboxUnixDeny");
-    expect((src.match(/sandboxUnixDeny: args\.sandboxUnixDeny/g) ?? []).length).toBe(2);
-    expect(src).toContain("checkSeccompAgreement(");
+    expect(f.length).toBe(3);
+    // That both runners pass the RESOLVED flag is driven behaviourally (agent-runner-unix-deny-wire / cc-dispatcher-real-factory).
   });
   it("A6(a): the artifact filenames are named only by the known modules, across the whole app tree", () => {
     // server/ lib/ scripts/ app/ infra/ minus the generator (which defines them) and tests. Every consumer here either

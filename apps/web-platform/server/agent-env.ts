@@ -197,6 +197,16 @@ export interface BuildAgentEnvOptions {
   sandboxUnixDeny?: boolean;
 }
 
+/**
+ * Does a session carry egress of any kind? The ONE definition: `buildAgentEnv` (the seccomp selector) and the
+ * dispatcher (which skips the flag read for an egress session, since the flag cannot change its artifact) both call it,
+ * so the two cannot drift. Egress = a minted GitHub token (`ghToken` -> GH_TOKEN) or a web-egress proxy handle
+ * (`egressProxy` -> HTTPS_PROXY).
+ */
+export function sessionHasEgress(ghToken: string | undefined, egressProxy: unknown): boolean {
+  return Boolean(ghToken) || Boolean(egressProxy);
+}
+
 export function buildAgentEnv(
   credential: AgentCredential,
   serviceTokens?: Record<string, string>,
@@ -334,7 +344,7 @@ export function buildAgentEnv(
   // env above (`ghToken` -> GH_TOKEN, `egressProxy` -> HTTPS_PROXY). Only a no-egress session with the
   // runtime flag ON gets the variant; every other session keeps the ambient allowlist copy (the ADR-075
   // #8752 incident-time override). `checkSeccompAgreement` re-checks this against the sandbox config.
-  const hasEgress = Boolean(opts?.ghToken) || Boolean(opts?.egressProxy);
+  const hasEgress = sessionHasEgress(opts?.ghToken, opts?.egressProxy);
   if (usesUnixDenyArtifact(hasEgress, opts?.sandboxUnixDeny)) {
     env[SECCOMP_SELECTOR_ENV] = seccompArtifactFor(hasEgress, opts?.sandboxUnixDeny);
   }

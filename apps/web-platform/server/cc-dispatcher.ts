@@ -203,6 +203,7 @@ import {
 } from "./resolve-c4-eligible";
 import { resolveUntrustedContentFlags } from "./resolve-untrusted-content-flags";
 import { resolveSandboxUnixDeny } from "./resolve-sandbox-unix-deny";
+import { sessionHasEgress } from "./agent-env";
 import { parseConnectedRepo } from "./github-repo-parse";
 import { createProtectedBranchResolver } from "./resolve-protected-branches";
 import { emitDebugEvent } from "./debug-event";
@@ -3092,7 +3093,9 @@ export const realSdkQueryFactory: QueryFactory = async (
 
     // #10455 (a): runtime flag for the AF_UNIX-deny seccomp artifact; applies to no-egress sessions only
     // (buildAgentEnv/buildAgentSandboxConfig read ghToken/webEgress from this same call). OFF on any error.
-    const sandboxUnixDeny = await resolveSandboxUnixDeny();
+    // An egress session never uses the variant whatever the flag says, so its turn does not wait on the flag at all
+    // (`sessionHasEgress` is the same predicate buildAgentEnv uses).
+    const sandboxUnixDeny = sessionHasEgress(ghToken, webEgress) ? false : await resolveSandboxUnixDeny();
 
     return sdkQuery({
       prompt: args.prompt,
