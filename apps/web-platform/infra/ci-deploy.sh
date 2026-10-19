@@ -3426,7 +3426,9 @@ github_app_key_canary_check() {
 # TRUST-ANCHOR ORDERING (security F1/F2): the CA (INNGEST_TLS_CA, base64) is touched ONLY when https is resolved. With the
 # flag absent (or a lapsed lease) nothing is read from Doppler or validated: the docker bind source is only ensured to exist as an
 # EMPTY placeholder FILE (created if missing; an empty directory docker made there is removed; a NON-empty regular file left by
-# an earlier https deploy is atomically replaced by an empty one - a new inode, so a running container keeps its own), so a bad
+# an earlier https deploy is replaced by an empty one only AFTER the new container started - staged here, done atomically (new inode)
+# by inngest_link_commit_scheme, because the old https container stays live through the canary and the cron drain and a restart of
+# it re-mounts the path), so a bad
 # or substituted secret can neither fail a flag-off deploy nor become a trust anchor in a non-strict state. With https resolved the CA is
 # read (from the snapshot, else Doppler with retries), VALIDATED, proven by the host-side `curl --cacert <CANDIDATE>` self-gate
 # against the real listener, and only THEN installed (mktemp + rename under $INNGEST_LINK_DIR, /mnt/data/inngest-link, deploy-owned,
@@ -3454,6 +3456,7 @@ INNGEST_LINK_STATE=""
 INNGEST_LINK_REASON=""
 INNGEST_LINK_CA_STRICT=0
 INNGEST_LINK_PENDING_SCHEME=""
+INNGEST_LINK_PENDING_CA_RESET=0
 
 inngest_link_event() { # <class> <level> [detail]: journald always, Sentry for warning/error (best effort)
   local cls="$1" level="$2" detail="${3:-}" payload
@@ -3581,7 +3584,7 @@ _inngest_link_last_scheme() {
 resolve_inngest_link() {
   local snap="${1:-}" flag="" now epoch ca_dest ca_env_dest b64="" cand="" try=1 scheme url cacert
   local proj_n proj_v cfg_n cfg_v scope_verified=1
-  INNGEST_BASE_URL_RESOLVED=""; INNGEST_LINK_STATE=""; INNGEST_LINK_REASON=""; INNGEST_LINK_CA_STRICT=0; INNGEST_LINK_PENDING_SCHEME=""
+  INNGEST_BASE_URL_RESOLVED=""; INNGEST_LINK_STATE=""; INNGEST_LINK_REASON=""; INNGEST_LINK_CA_STRICT=0; INNGEST_LINK_PENDING_SCHEME=""; INNGEST_LINK_PENDING_CA_RESET=0
   ca_dest="$INNGEST_LINK_DIR/inngest-ca.pem"
   ca_env_dest="$INNGEST_LINK_DIR/inngest-link.env"
 
@@ -3633,9 +3636,15 @@ resolve_inngest_link() {
   if [[ "$INNGEST_LINK_CA_STRICT" != 1 ]]; then
     if [[ -f "$ca_dest" && ! -L "$ca_dest" && ! -s "$ca_dest" ]]; then
       :   # already an empty regular file (an earlier placeholder): left as it is
+    elif [[ -f "$ca_dest" && ! -L "$ca_dest" ]]; then
+      # a NON-empty regular file: the pinned CA of an earlier https deploy, now off. It is NOT touched here: the previous https
+      # container is still the live one (through the canary and the cron drain) and a bind mount of a host path is re-resolved on
+      # every container restart, so an empty file now would break an OOM/crash restart of it. The reset is staged (verified
+      # scope only) and performed by inngest_link_commit_scheme once the new container started.
+      if [[ "$scope_verified" == 1 ]]; then INNGEST_LINK_PENDING_CA_RESET=1; fi
     elif [[ -z "$cand" ]] || ! _inngest_link_install "$cand" "$ca_dest" 0644; then
-      # missing, a symlink, an empty directory, or a NON-empty regular file (the pinned CA of an earlier https deploy, now off):
-      # replaced by the empty placeholder through a new inode, so a still-running container keeps the bytes it mounted
+      # missing, a symlink or an empty directory: none of these can hold a trust anchor (installers never create a symlink; an
+      # empty directory has no bytes), so the empty placeholder replaces them right away - docker must find a FILE at the path
       inngest_link_event ca_unwritable warning "dir=$INNGEST_LINK_DIR action=continue"
     fi
     rm -f "$cand"
@@ -3709,6 +3718,16 @@ resolve_inngest_link() {
 # scope-unverified run leaves the file untouched. Best effort: never fails the deploy.
 inngest_link_commit_scheme() {
   local cand=""
+  # the staged on->off reset of the stale pinned CA (http arm, verified scope): atomic, a new inode, so the container that just
+  # started keeps the bytes it mounted (harmless in http mode) while every FUTURE container start mounts the empty file
+  if [[ "$INNGEST_LINK_PENDING_CA_RESET" == 1 ]]; then
+    INNGEST_LINK_PENDING_CA_RESET=0
+    cand="$(mktemp /tmp/inngest-ca-reset.XXXXXX 2>/dev/null)" || cand=""  # lint-trap-ownership: ok rm -f on every path below; PrivateTmp bounds an abort leak
+    if [[ -z "$cand" ]] || ! _inngest_link_install "$cand" "$INNGEST_LINK_DIR/inngest-ca.pem" 0644; then
+      inngest_link_event ca_reset_failed warning "dir=$INNGEST_LINK_DIR action=continue"
+    fi
+    rm -f "$cand"
+  fi
   [[ "$INNGEST_LINK_PENDING_SCHEME" == https || "$INNGEST_LINK_PENDING_SCHEME" == http ]] || return 0
   cand="$(mktemp /tmp/inngest-link-scheme.XXXXXX 2>/dev/null)" || cand=""  # lint-trap-ownership: ok rm -f on every path below; PrivateTmp bounds an abort leak
   if [[ -z "$cand" ]] || ! printf '%s\n' "$INNGEST_LINK_PENDING_SCHEME" > "$cand" || ! _inngest_link_install "$cand" "$INNGEST_LINK_DIR/last-scheme" 0644; then

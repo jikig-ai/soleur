@@ -125,9 +125,11 @@ resource "doppler_secret" "inngest_tls_ca" {
 #   1               https, fail-closed: a failed self-gate, a CA read error or an invalid CA fails the deploy
 #
 # SOURCE OF TRUTH: the prd_terraform key INNGEST_LINK_TLS (TF_VAR_inngest_link_tls through `--name-transformer tf-var`),
-# written FIRST by the Tier-B `inngest_link_flag` job of apply-web-platform-infra.yml (apply_target=inngest-link-flag,
-# environment infra-privileged), driven by .github/workflows/inngest-link-flip.yml: set for `pending:<epoch>` and `1`,
-# deleted (and verified gone) for `off`. The job then plans and applies only this resource.
+# written by the Tier-B `inngest_link_flag` job of apply-web-platform-infra.yml (apply_target=inngest-link-flag,
+# environment infra-privileged), driven by .github/workflows/inngest-link-flip.yml, AFTER the plan gate passed and just
+# before the apply: set for `pending:<epoch>` and `1`, deleted for `off`, then verified. The job plans and applies only
+# this resource. If the apply fails or is cancelled the key is restored to its prior state (re-check prd after a cancel;
+# action=off is the idempotent rollback).
 #
 # WHY THE KEY MUST EXIST. MEASURED 2026-10-19 (a names-only listing of Doppler soleur/prd_terraform, 170 names): the
 # branch config prd_terraform does NOT inherit a Terraform-written prd key created after the branch;

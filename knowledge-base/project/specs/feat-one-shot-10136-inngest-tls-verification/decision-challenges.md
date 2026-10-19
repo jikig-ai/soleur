@@ -63,9 +63,11 @@ The rows above are the 2026-10-18 rulings as given and are not edited. Where the
 says so; nothing here is a new ruling.
 
 - **G1 (flip actuator), upheld, with one correction.** The ruling named "the `prd_terraform` key as source of truth" and that is what
-  ships: the Tier-B `inngest_link_flag` job (it holds `DOPPLER_TOKEN_WRITE`) writes the source key `INNGEST_LINK_TLS` in `soleur/prd_terraform`
-  first (set and read back for `pending`/`1`; deleted, verified gone, and re-checked after the apply for `off`), then plans and applies
-  the flag resource, and also passes `TF_VAR_inngest_link_tls` to that plan as belt and braces. The key is required because
+  ships. The Tier-B `inngest_link_flag` job plans and gates the flag resource first (the explicit `TF_VAR_inngest_link_tls` drives the
+  plan, empty for `off`), then, holding `DOPPLER_TOKEN_WRITE`, records the key's prior state and writes the source key `INNGEST_LINK_TLS`
+  in `soleur/prd_terraform` after the gate and just before the apply (set and read back for `pending`/`1`, deleted for `off`), applies,
+  verifies the key matches the applied state, and restores the prior key state if the apply failed or was cancelled (a cancel mid-apply
+  can leave `prd` applied while the key is restored; `action=off` is the idempotent rollback). The key is required because
   `prd_terraform` does not inherit a Terraform-written `prd` key created after the branch (names-only listing, 2026-10-19, 170 names:
   `REGISTRY_PUSH_ACCESS_TOKEN_ID`/`_SECRET` are in `prd`, absent from `prd_terraform`); without it every untargeted plan plans a destroy
   of the live flag. A mid-review draft that dropped the key was reversed on that evidence. The correction is the second half of G1: "the

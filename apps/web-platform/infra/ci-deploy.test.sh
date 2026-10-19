@@ -3211,6 +3211,7 @@ IL_GOOD_FP="$(openssl x509 -in "$IL_DIR/good.pem" -noout -fingerprint -sha256 2>
 il_deploy() {
   local label="$1" flag="$2" ca="$3"; shift 3
   rm -rf "$INNGEST_LINK_DIR"
+  if [[ -n "${IL_PRESEED_CA:-}" ]]; then mkdir -p "$INNGEST_LINK_DIR"; cp "$IL_PRESEED_CA" "$INNGEST_LINK_DIR/inngest-ca.pem"; fi
   IL_STATE="$IL_DIR/$label.state"; IL_RUNLOG="$IL_DIR/$label.runs"; IL_LOG="$IL_DIR/$label.log"
   : > "$IL_RUNLOG"; : > "$IL_LOG"
   {
@@ -3320,6 +3321,23 @@ else
     PASS=$((PASS + 1)); echo "  PASS: snapshot without DOPPLER_PROJECT/CONFIG lines + flag absent: the deploy proceeds on http with a scope_unverified warning"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: a metadata-less snapshot broke the flag-absent deploy (rc=$IL_RC)"
+  fi
+
+  # on->off: the stale pinned CA is emptied only AFTER the new container started. A canary that fails (the old https container is still
+  # the live one) leaves the OLD bytes at the path, so a restart of that container still mounts the pin; a successful deploy empties it.
+  TOTAL=$((TOTAL + 1))
+  IL_PRESEED_CA="$IL_DIR/good.pem" il_deploy stale-fail "" "" MOCK_CURL_CANARY_FAIL=1
+  if [[ "$IL_RC" -ne 0 && "$(il_runs)" -eq 1 ]] && [[ "$(openssl x509 -in "$INNGEST_LINK_DIR/inngest-ca.pem" -noout -fingerprint -sha256 2>/dev/null)" == "$IL_GOOD_FP" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: flag off + canary fails: the previously pinned CA is still at the bind-source path (the live https container's restart keeps its trust anchor)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: the stale pinned CA was reset before the production container started (rc=$IL_RC runs=$(il_runs) size=$(wc -c < "$INNGEST_LINK_DIR/inngest-ca.pem" 2>/dev/null))"
+  fi
+  TOTAL=$((TOTAL + 1))
+  IL_PRESEED_CA="$IL_DIR/good.pem" il_deploy stale-ok "" ""
+  if [[ "$IL_RC" -eq 0 && "$(il_runs)" -eq 2 && -f "$INNGEST_LINK_DIR/inngest-ca.pem" && ! -s "$INNGEST_LINK_DIR/inngest-ca.pem" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: flag off + successful deploy: the stale pinned CA is replaced by the empty placeholder after the production container started"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: the stale pinned CA survived a successful flag-off deploy (rc=$IL_RC runs=$(il_runs) size=$(wc -c < "$INNGEST_LINK_DIR/inngest-ca.pem" 2>/dev/null))"
   fi
 
   # security P2: a metadata-less snapshot with the flag absent on a host that last ran https is a wrong-token/partial download,
@@ -12007,7 +12025,7 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # D10k7 (warning + silent failure is no masquerading denial).
 # #9294 PR-1: raised 618 -> 622 (619 measured on main, which carried one slack row, plus 3 new rows) with T-9294-1..3 (fan-out
 # under an `or` trigger-rule: first-HMAC-secret signing over four shapes, six fail-closed shapes, and the source census).
-CI_DEPLOY_ASSERT_FLOOR=636
+CI_DEPLOY_ASSERT_FLOOR=638
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"

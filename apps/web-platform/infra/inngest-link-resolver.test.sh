@@ -270,7 +270,9 @@ scenario() { # <block file> <run id>
     resolve_inngest_link "$snap" || rc=$?
     # the deploy records the scheme only once the production container started (ci-deploy.sh calls inngest_link_commit_scheme there);
     # NO_COMMIT=1 models a deploy that died before that point (failed canary, aborted swap)
+    if [ "$rc" = 0 ] && [ "${COMMIT_CHMOD:-}" = 1 ]; then chmod 0555 "$INNGEST_LINK_DIR"; fi
     if [ "$rc" = 0 ] && [ "${NO_COMMIT:-}" != 1 ]; then inngest_link_commit_scheme; fi
+    if [ "${COMMIT_CHMOD:-}" = 1 ]; then chmod 0755 "$INNGEST_LINK_DIR"; fi
     {
       printf 'rc=%s\n' "$rc"
       printf 'url=%s\n' "${INNGEST_BASE_URL_RESOLVED-<unset>}"
@@ -608,18 +610,39 @@ row_C9_flag_off_never_reads_or_installs_ca() {
     need "$v: a ca_invalid event was emitted with the flag off" "$(log_has 'class=ca_invalid' && echo 1 || echo 0)" || return 1
   done
 }
-row_C9b_flag_off_replaces_a_stale_pinned_ca_through_a_new_inode() {
-  # on->off: the pinned CA of an earlier https deploy must not stay mounted in the http state. It is replaced by the empty
-  # placeholder through a NEW inode (a hard link outside the dir stands for the still-running container's bind mount: it must keep
-  # the bytes it mounted). An already-empty placeholder is left alone.
+row_C9b_flag_off_replaces_a_stale_pinned_ca_only_after_the_container_started() {
+  # on->off: the pinned CA of an earlier https deploy must not stay mounted in the http state - but the reset happens only once the new
+  # container started (inngest_link_commit_scheme), because the OLD https container is live through the canary and the cron drain and a
+  # restart of it re-mounts the path. A hard link outside the dir stands for the running container's bind mount.
+  # (a) a deploy that dies before the prod start (NO_COMMIT=1): the OLD bytes are still at the path, same inode
+  PRE='cp "$FX/good.crt" inngest-ca.pem && ln inngest-ca.pem "../held.pem"' NO_COMMIT=1 SNAP_EXTRA='' CA_MODE=absent scenario "$1" "$ROW_ID-aborted"
+  need "rc=$(val rc)" "$([ "$(val rc)" = 0 ] && echo 0 || echo 1)" || return 1
+  need "the pinned CA was emptied at RESOLVE time (an aborted deploy would leave the live https container's restart mounting nothing)" "$([ "$(ca_fp)" = "$GOOD_FP" ] && echo 0 || echo 1)" || return 1
+  need "the CA path got a new inode at resolve time" "$([ "$(stat -c %i "$(caf)")" = "$(stat -c %i "$RUN/held.pem")" ] && echo 0 || echo 1)" || return 1
+  # (b) after the production container started: replaced through a NEW inode; the old inode keeps its bytes
   PRE='cp "$FX/good.crt" inngest-ca.pem && ln inngest-ca.pem "../held.pem"' SNAP_EXTRA='' CA_MODE=absent scenario "$1" "$ROW_ID"
   need "rc=$(val rc)" "$([ "$(val rc)" = 0 ] && echo 0 || echo 1)" || return 1
-  need "a non-empty pinned CA survived a flag-off resolve" "$([ -f "$(caf)" ] && [ ! -s "$(caf)" ] && echo 0 || echo 1)" || return 1
+  need "a non-empty pinned CA survived the commit of a flag-off deploy" "$([ -f "$(caf)" ] && [ ! -s "$(caf)" ] && echo 0 || echo 1)" || return 1
   need "the CA path was truncated IN PLACE (the running container's inode lost its bytes)" "$([ "$(fp "$RUN/held.pem")" = "$GOOD_FP" ] && echo 0 || echo 1)" || return 1
   need "the CA path still shares the old inode" "$([ "$(stat -c %i "$(caf)")" != "$(stat -c %i "$RUN/held.pem")" ] && echo 0 || echo 1)" || return 1
   need "Doppler was asked for the CA" "$([ "$(doppler_calls)" = 0 ] && echo 0 || echo 1)" || return 1
+  need "a temp file was left behind: $(leftovers)" "$([ -z "$(leftovers)" ] && echo 0 || echo 1)" || return 1
+  # (c) an already-empty placeholder is left alone (same inode) and nothing is staged
   PRE=': > inngest-ca.pem && ln inngest-ca.pem "../held.pem"' SNAP_EXTRA='' CA_MODE=absent scenario "$1" "$ROW_ID-empty"
-  need "an already-empty placeholder was replaced (inode changed)" "$([ "$(stat -c %i "$(caf)")" = "$(stat -c %i "$RUN/held.pem")" ] && echo 0 || echo 1)" || return 1
+  need "an already-empty placeholder was replaced (its inode changed)" "$([ "$(stat -c %i "$(caf)")" = "$(stat -c %i "$RUN/held.pem")" ] && echo 0 || echo 1)" || return 1
+  # (d) a failing reset never fails the deploy and is reported: the directory is made unwritable AFTER the resolve (the commit runs last)
+  PRE='cp "$FX/good.crt" inngest-ca.pem' COMMIT_CHMOD=1 SNAP_EXTRA='' CA_MODE=absent scenario "$1" "$ROW_ID-unwritable"
+  if [ "$(id -u)" != 0 ]; then
+    need "rc=$(val rc): an unwritable dir at commit time failed the deploy" "$([ "$(val rc)" = 0 ] && echo 0 || echo 1)" || return 1
+    need "no ca_reset_failed warning" "$(log_has 'class=ca_reset_failed level=warning' && echo 0 || echo 1)" || return 1
+    need "the old bytes were lost although the reset failed" "$([ "$(ca_fp)" = "$GOOD_FP" ] && echo 0 || echo 1)" || return 1
+  fi
+}
+row_C9d_unverified_scope_never_resets_the_pinned_ca() {
+  # a snapshot whose scope cannot be verified (and no https memory) continues on http but must not touch a pinned CA, before or after commit
+  PRE='cp "$FX/good.crt" inngest-ca.pem' SNAP_SCOPE='' SNAP_EXTRA='' CA_MODE=absent scenario "$1" "$ROW_ID"
+  need "rc=$(val rc)" "$([ "$(val rc)" = 0 ] && echo 0 || echo 1)" || return 1
+  need "an unverified-scope run reset the pinned CA" "$([ "$(ca_fp)" = "$GOOD_FP" ] && echo 0 || echo 1)" || return 1
 }
 row_C9c_flag_off_lapsed_lease_never_installs_ca() {
   SNAP_EXTRA="INNGEST_LINK_TLS=pending:$((NOW - 1900))\n" CA_MODE=ok CA_FILE="$FX/v-good.pem" scenario "$1" "$ROW_ID"
@@ -917,7 +940,7 @@ ROW_IDS=(
   F2_selfgate_failure_leaves_previous_ca F2b_selfgate_failure_installs_nothing_when_no_previous F1_kcs_without_basicconstraints_rejected F1b_kcs_with_ca_false_rejected F1c_terraform_profile_accepted F1d_kcs_with_crl_sign_rejected F1e_kcs_mid_list_rejected
   B1_lease_expired_http B2_pending_too_far_ahead_fails B3_non_allowlisted_fail B4_snapshot_unreadable_fails B5_scope_guard_present_and_wrong_fails B5b_scope_lines_absent_flag_absent_warns_and_continues B5c_scope_lines_absent_flag_set_fails_closed B6_duplicate_flag_fails
   C_privkey_concat C_privkey_prefixed C_privkey_only C_catrue C_expired C_three C_two C_garbage C_oversize C_tool_missing_fails_closed C_empty_value C_bad_base64 C_huge_base64
-  C9_flag_off_never_reads_or_installs_ca C9b_flag_off_replaces_a_stale_pinned_ca_through_a_new_inode C9c_flag_off_lapsed_lease_never_installs_ca
+  C9_flag_off_never_reads_or_installs_ca C9b_flag_off_replaces_a_stale_pinned_ca_only_after_the_container_started C9c_flag_off_lapsed_lease_never_installs_ca C9d_unverified_scope_never_resets_the_pinned_ca
   H2_noncanonical_passes H2b_unset_and_valid_pass
   D1_link_env_not_derived_from_text D3_dest_is_directory D4_install_failure_fails_strict D5_missing_dir_is_created
   G1_https_to_http_emits G2_no_event_without_a_downgrade G3_corrupt_last_scheme_reads_as_unknown G4_last_scheme_is_atomic_and_world_readable G5_downgrade_event_reaches_sentry
@@ -1257,7 +1280,7 @@ kill_mut M12b-strict-install-failure-ignored "D3_dest_is_directory" \
 kill_mut M12e-empty-directory-not-removed "D3_dest_is_directory" \
   '  if [[ -d "$2" && ! -L "$2" ]]; then rmdir "$2" 2>/dev/null || true; fi
 ' ''
-kill_mut M12f-stale-pinned-ca-left-mounted-with-flag-off "C9b_flag_off_replaces_a_stale_pinned_ca_through_a_new_inode" \
+kill_mut M12f-stale-pinned-ca-left-mounted-with-flag-off "C9b_flag_off_replaces_a_stale_pinned_ca_only_after_the_container_started" \
   'if [[ -f "$ca_dest" && ! -L "$ca_dest" && ! -s "$ca_dest" ]]; then' 'if [[ -f "$ca_dest" && ! -L "$ca_dest" ]]; then'
 kill_mut M14a-selfgate-on-the-installed-path "A2_flag_on_https F2_selfgate_failure_leaves_previous_ca" \
   'if ! _inngest_link_selfgate "$cand"; then' 'if ! _inngest_link_selfgate "$ca_dest"; then'
@@ -1310,6 +1333,14 @@ kill_mut M18j-snapshot-takes-the-last-duplicate-ca "A6d_duplicate_snapshot_ca_li
   'if [[ "$_IL_N" == 1 && -n "$_IL_VAL" ]]; then' 'if [[ "$_IL_N" -ge 1 && -n "$_IL_VAL" ]]; then'
 kill_mut M18k-negative-control-cause-unbounded "E7_canary_event_carries_check_and_cause" \
   '"$cause" =~ ^[a-z_]{1,20}$' '"$cause" =~ ^.*$'
+kill_mut M19a-ca-reset-at-resolve-time "C9b_flag_off_replaces_a_stale_pinned_ca_only_after_the_container_started" \
+  'if [[ "$scope_verified" == 1 ]]; then INNGEST_LINK_PENDING_CA_RESET=1; fi' 'if [[ "$scope_verified" == 1 ]]; then INNGEST_LINK_PENDING_CA_RESET=1; inngest_link_commit_scheme; fi'
+kill_mut M19b-unverified-scope-resets-the-ca "C9d_unverified_scope_never_resets_the_pinned_ca" \
+  'if [[ "$scope_verified" == 1 ]]; then INNGEST_LINK_PENDING_CA_RESET=1; fi' 'INNGEST_LINK_PENDING_CA_RESET=1'
+kill_mut M19c-commit-never-resets-the-ca "C9b_flag_off_replaces_a_stale_pinned_ca_only_after_the_container_started" \
+  'if [[ "$INNGEST_LINK_PENDING_CA_RESET" == 1 ]]; then' 'if false; then'
+kill_mut M19d-ca-reset-failure-is-silent "C9b_flag_off_replaces_a_stale_pinned_ca_only_after_the_container_started" \
+  'inngest_link_event ca_reset_failed warning "dir=$INNGEST_LINK_DIR action=continue"' ':'
 kill_mut M16a-link-dir-default-moved "K1_default_dir_matches_docker_bind_source_and_probes" \
   'INNGEST_LINK_DIR="${INNGEST_LINK_DIR:-/mnt/data/inngest-link}"' 'INNGEST_LINK_DIR="${INNGEST_LINK_DIR:-/mnt/data/inngest-link2}"'
 
@@ -1320,7 +1351,7 @@ kill_mut M16a-link-dir-default-moved "K1_default_dir_matches_docker_bind_source_
 printf '\n=== inngest-link-resolver: %d passed, %d failed, %d skipped (%d rows) ===\n' "$PASS" "$FAIL" "$SKIP" "$ROWS"
 # The anti-vacuity floor comes FIRST: scripts/guard-vacuity-floor.test.sh neuters every counter and runs the first floor it
 # finds, which must be this one (the accounting identity below holds trivially at zero).
-MIN_ROWS=163
+MIN_ROWS=168
 if [ "$ROWS" -lt "$MIN_ROWS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s rows ran, floor is %s\n' "$ROWS" "$MIN_ROWS" >&2
   exit 1

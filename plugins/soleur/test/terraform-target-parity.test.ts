@@ -8275,9 +8275,10 @@ echo "gh stub refused: $*" >&2; exit 64`;
 //      scheduler), and nothing else in the root references them (a templatefile variable that did would put
 //      the cert into hcloud_server.inngest's user_data and into the inngest-host-replace closure);
 //   4. the flag resource is count-gated, outside the per-merge view, and reachable from exactly ONE job;
-//   5. that job writes the source key BEFORE it plans (prd_terraform does not inherit the Terraform-written prd key,
-//      measured 2026-10-19), hands its plan an explicit TF_VAR, applies only the saved flag plan, and its plan gate
-//      rejects every other shape (the gate's jq is executed here, not just grepped).
+//   5. that job plans and gates with an explicit TF_VAR, writes the source key AFTER the gate and just before the apply
+//      (prd_terraform does not carry the Terraform-written prd key, measured 2026-10-19; a failed apply is reconciled to
+//      the PRIOR key state), applies only the saved flag plan, and its plan gate rejects every other shape (the gate's jq
+//      is executed here, not just grepped).
 const TLS_FIVE = [
   "tls_private_key.inngest_link",
   "tls_self_signed_cert.inngest_link",
@@ -8468,7 +8469,7 @@ describe("#10136 inngest link TLS: key material, merge targets, flag actuator", 
     expect(sites).toEqual(["apply-web-platform-infra.yml|inngest_link_flag"]);
   });
 
-  test("the flag job: Tier-B environment, dispatch-gated on its own option, writes the source key BEFORE it plans, hands the plan an explicit variable, applies only the saved flag plan", () => {
+  test("the flag job: Tier-B environment, dispatch-gated on its own option, plans with an explicit variable, writes the source key AFTER the gate and BEFORE the apply, reconciles it on failure, applies only the saved flag plan", () => {
     expect(flagJob).not.toBe("");
     expect(flagJob).toMatch(/^\s+environment:\s*infra-privileged\s*$/m);
     expect(flagJob).toContain("if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'inngest-link-flag'");
@@ -8476,16 +8477,23 @@ describe("#10136 inngest link TLS: key material, merge targets, flag actuator", 
     expect(flagJob).toContain("uses: ./.github/actions/infra-credentials");
     const code = stripShellLineComments(flagJob);
     // MEASURED 2026-10-19: prd_terraform does NOT inherit a Terraform-written prd key created after the branch, so the
-    // source key must be written (and, for `off`, deleted and verified gone) BEFORE the plan, or every untargeted plan
-    // proposes to destroy the live flag. The write-scoped token is therefore held by this job.
+    // source key must exist for every untargeted plan, but it is written only AFTER init, plan and the gate passed and just
+    // BEFORE the apply (every earlier failure leaves key and prd consistent), and a failed/cancelled apply restores it.
     const iSet = code.indexOf("doppler secrets set INNGEST_LINK_TLS");
     const iDel = code.indexOf("doppler secrets delete INNGEST_LINK_TLS");
     const iPlan = code.indexOf("terraform plan");
     const iApply = code.indexOf("terraform apply");
     expect(iSet).toBeGreaterThan(-1);
     expect(iDel).toBeGreaterThan(-1);
-    expect(Math.max(iSet, iDel)).toBeLessThan(iPlan);
-    expect(iPlan).toBeLessThan(iApply);
+    expect(iPlan).toBeLessThan(Math.min(iSet, iDel));
+    expect(Math.max(iSet, iDel)).toBeLessThan(iApply);
+    const doc0 = parseYaml(wfText) as { jobs: Record<string, { steps: Array<Record<string, unknown>> }> };
+    const steps0 = doc0.jobs.inngest_link_flag.steps;
+    const iRec = steps0.findIndex((st) => String(st.name ?? "").startsWith("Reconcile the source key"));
+    const iAp = steps0.findIndex((st) => st.id === "apply");
+    expect(iRec).toBeGreaterThan(iAp);
+    expect(steps0[iRec].if).toBe("failure() || cancelled()");
+    expect((steps0[iRec].env as Record<string, string>).APPLY_OUTCOME).toBe("${{ steps.apply.outcome }}");
     // The delete is never swallowed (no `|| true` on it) and the absence is verified from a names listing.
     expect(code.replace(/\\\n\s*/g, " ")).not.toMatch(/INNGEST_LINK_TLS --yes[^\n]*\|\| true/);
     expect(code).toContain("secrets --only-names -p soleur -c prd_terraform");

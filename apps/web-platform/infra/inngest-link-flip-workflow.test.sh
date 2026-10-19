@@ -246,12 +246,12 @@ order() { if [[ -f "$1/order.log" ]]; then tr '\n' ' ' < "$1/order.log"; fi; }
 
 printf '\n=== A. the Tier-B flag job (its real steps executed against stateful fake doppler/terraform) ===\n'
 # ---- Tier-B job (apply-web-platform-infra.yml::inngest_link_flag) ----------------------------------------------------
-# The job writes the SOURCE KEY INNGEST_LINK_TLS in soleur/prd_terraform FIRST (set for pending/1, deleted and verified gone
-# for off), because MEASURED 2026-10-19 prd_terraform does NOT inherit a Terraform-written prd key created after the branch:
-# without the key every UNTARGETED plan (drift detector, infra-validation, a full apply) sees var "" and proposes to DESTROY the
-# live flag. It also hands its own plan TF_VAR_inngest_link_tls as an explicit `env` after `doppler run`, so it converges
-# whether or not Doppler inherits. The fakes below model BOTH worlds (DOPPLER_INHERIT=0|1); the gate's jq is also run on
-# synthesized plans (A26-A30).
+# The job plans and gates with the requested value as an explicit TF_VAR, THEN writes the SOURCE KEY INNGEST_LINK_TLS in
+# soleur/prd_terraform (set for pending/1, deleted for off) immediately before the apply, then verifies it; a failed or cancelled
+# apply restores the key to its PRIOR state (reconcile step). The key must exist because MEASURED 2026-10-19 prd_terraform does
+# NOT carry a Terraform-written prd key created after the branch: without it every UNTARGETED plan sees var "" and proposes to
+# DESTROY the live flag. Writing it after the gate means init/plan/gate failures leave key and prd consistent. The fakes below
+# model BOTH worlds (DOPPLER_INHERIT=0|1); the gate's jq is also run on synthesized plans (A26-A30).
 python3 - "$APPLY_WF" "$TMP" <<'PY'
 import sys, yaml, json
 d = yaml.safe_load(open(sys.argv[1]))
@@ -261,12 +261,16 @@ steps = job["steps"]
 names = [s.get("name", "") for s in steps]
 plan = next(s for s in steps if "Terraform plan" in s.get("name", ""))
 apply_ = next(s for s in steps if s.get("name") == "Terraform apply")
-write = next(s for s in steps if "Validate" in s.get("name", ""))
-open(tmp + "/tierb-plan.sh", "w").write(plan["run"])
-open(tmp + "/tierb-apply.sh", "w").write(apply_["run"])
-open(tmp + "/tierb-write.sh", "w").write(write["run"])
-json.dump({"checkout": steps[0], "all_text": yaml.safe_dump(job), "write_env": write.get("env", {}),
-           "order_ok": names.index(write["name"]) < names.index(plan["name"]) < names.index(apply_["name"]),
+validate = next(s for s in steps if s.get("name", "").startswith("Validate"))
+write = next(s for s in steps if s.get("name", "").startswith("Write the source key"))
+verify = next(s for s in steps if s.get("name", "").startswith("Verify the source key"))
+reconcile = next(s for s in steps if s.get("name", "").startswith("Reconcile the source key"))
+for nm, st in (("plan", plan), ("apply", apply_), ("write", write), ("validate", validate), ("verify", verify), ("reconcile", reconcile)):
+    open(tmp + "/tierb-" + nm + ".sh", "w").write(st["run"])
+order = [validate, plan, write, apply_, verify, reconcile]
+json.dump({"checkout": steps[0], "all_text": yaml.safe_dump(job), "write_env": write.get("env", {}), "rec_env": reconcile.get("env", {}),
+           "order_ok": [names.index(x["name"]) for x in order] == sorted(names.index(x["name"]) for x in order),
+           "rec_if": reconcile.get("if"), "apply_id": apply_.get("id"),
            "timeout": job["timeout-minutes"]}, open(tmp + "/tierb.json", "w"))
 PY
 tb() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))' "$TMP/tierb.json" "$1"; }
@@ -302,8 +306,9 @@ FLAG='doppler_secret.inngest_link_tls[0]'
 
 # A31-A33: static pins on the job.
 [[ "$(tb 'd["order_ok"] and d["write_env"].get("DOPPLER_TOKEN") == "${{ secrets.DOPPLER_TOKEN_WRITE }}"')" == True ]] && grep -q 'secrets set INNGEST_LINK_TLS' "$TMP/tierb-write.sh" && grep -q 'secrets delete INNGEST_LINK_TLS' "$TMP/tierb-write.sh" \
-  && ok "A31 the source-key step runs BEFORE the plan and the apply and holds the write-scoped token (DOPPLER_TOKEN_WRITE)" || bad "A31 source-key step"
-python3 -c 'import re,sys; s=re.sub(r"\\\n\s*", " ", open(sys.argv[1]).read()); sys.exit(1 if re.search(r"secrets delete INNGEST_LINK_TLS[^\n]*\|\| true", s) else 0)' "$TMP/tierb-write.sh" && ok "A31b the source-key delete is never swallowed (no || true on it)" || bad "A31b a swallowed delete"
+  && ok "A31 the source-key step runs AFTER the plan/gate and BEFORE the apply (validate, plan, write, apply, verify, reconcile) and holds the write-scoped token" || bad "A31 source-key step"
+[[ "$(tb 'd["rec_if"] == "failure() || cancelled()" and d["apply_id"] == "apply" and d["rec_env"].get("APPLY_OUTCOME") == "${{ steps.apply.outcome }}" and d["rec_env"].get("DOPPLER_TOKEN") == "${{ secrets.DOPPLER_TOKEN_WRITE }}"')" == True ]] && ok "A31c the reconcile step runs on failure() || cancelled(), reads the apply step's own outcome and holds the write-scoped token" || bad "A31c reconcile wiring"
+python3 -c 'import re,sys; s=re.sub(r"\\\n\s*", " ", open(sys.argv[1]).read()); sys.exit(1 if re.search(r"secrets delete INNGEST_LINK_TLS[^\n]*\|\| true", s) else 0)' "$TMP/tierb-write.sh" && python3 -c 'import re,sys; s=re.sub(r"\\\n\s*", " ", open(sys.argv[1]).read()); sys.exit(1 if re.search(r"secrets (delete|set) INNGEST_LINK_TLS[^\n]*\|\| true", s) else 0)' "$TMP/tierb-reconcile.sh" && ok "A31b neither the source-key write nor the reconcile swallows a failed delete or set (no || true)" || bad "A31b a swallowed delete"
 [[ "$(tb 'd["checkout"].get("with", {}).get("persist-credentials")')" == False ]] && ok "A32 the job's checkout sets persist-credentials: false (the Doppler write token is not a git credential; nothing in the job pushes or fetches over git)" || bad "A32 checkout credentials"
 APPLY_LINE="$(grep -E '^[[:space:]]*terraform apply ' "$TMP/tierb-apply.sh" | sed 's/^[[:space:]]*//')"
 [[ "$APPLY_LINE" == "terraform apply -no-color -input=false -auto-approve tfplan" ]] && ok "A33 the apply argv is exactly '-auto-approve tfplan': only the gated, saved plan is applied (no -target, -replace, -var, no re-plan)" || bad "A33 apply argv: '$APPLY_LINE'"
@@ -327,7 +332,8 @@ while (( i < ${#args[@]} )); do [[ "${args[i]}" == -c ]] && cfg="${args[i+1]}"; 
 view() { { ls "$STUB/dop/$cfg" 2>/dev/null; [[ "$cfg" == prd_terraform && "${DOPPLER_INHERIT:-0}" == 1 ]] && ls "$STUB/dop/prd" 2>/dev/null; } | sort -u; }
 val() { if [[ -f "$STUB/dop/$cfg/$1" ]]; then cat "$STUB/dop/$cfg/$1"; elif [[ "$cfg" == prd_terraform && "${DOPPLER_INHERIT:-0}" == 1 && -f "$STUB/dop/prd/$1" ]]; then cat "$STUB/dop/prd/$1"; else return 1; fi; }
 case "$1 $2" in
-  "secrets --only-names") [[ "${DOPPLER_LIST_FAIL:-0}" == 1 ]] && exit 1; view ;;
+  "secrets --only-names") n=$(( $(cat "$STUB/listn" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$STUB/listn"
+    [[ "${DOPPLER_LIST_FAIL:-0}" == 1 || "${DOPPLER_LIST_FAIL_NTH:-0}" == "$n" ]] && exit 1; view ;;
   "secrets get") val "$3" ;;
   "secrets set") [[ "${DOPPLER_SET_FAIL:-0}" == 1 ]] && exit 1; printf '%s' "$in" > "$STUB/dop/$cfg/$3" ;;
   "secrets delete") [[ "${DOPPLER_DELETE_FAIL:-0}" == 1 ]] && exit 1; [[ "${DOPPLER_DELETE_NOOP:-0}" == 1 ]] || rm -f "$STUB/dop/$cfg/$3" ;;
@@ -343,6 +349,7 @@ SH
 echo "terraform $*" >> "$STUB/tf.log"
 case "$1" in
   plan)
+    [[ "${TF_PLAN_FAIL:-0}" == 1 ]] && exit 1
     var="${TF_VAR_inngest_link_tls-}"; cur=""; [[ -f "$STUB/tfstate" ]] && cur="$(cat "$STUB/tfstate")"; act=""
     if [[ -z "$var" ]]; then [[ -f "$STUB/tfstate" ]] && act=delete
     elif [[ ! -f "$STUB/tfstate" ]]; then act=create
@@ -353,6 +360,7 @@ case "$1" in
     : > tfplan ;;
   show) cat "$STUB/plan.json" ;;
   apply)
+    [[ "${TF_APPLY_FAIL:-0}" == 1 ]] && exit 1
     act="$(jq -r '.resource_changes[0].change.actions[0] // ""' "$STUB/plan.json")"
     case "$act" in
       create|update) cp "$STUB/plan.value" "$STUB/tfstate"; cp "$STUB/plan.value" "$STUB/dop/prd/INNGEST_LINK_TLS" ;;
@@ -367,17 +375,24 @@ tb_env() { # dir -> runs "$@" with the job's environment in dir
   ( cd "$d" && env -i PATH="$d/bin:/usr/local/bin:/usr/bin:/bin" HOME="$d" STUB="$d" RUNNER_TEMP="$d" CI_SSH_PUB=/x/key.pub REASON_RAW="flip test" DOPPLER_TOKEN=tok \
       GITHUB_SERVER_URL=https://example.invalid GITHUB_REPOSITORY=o/r GITHUB_RUN_ID=1 GITHUB_OUTPUT="$d/out" GITHUB_STEP_SUMMARY="$d/summary" "$@" 2>&1 )
 }
-run_tb_job() { # dir value [write-script] [plan-script] [apply-script] [env assignments...] -> TB_RC, TB_OUT, TB_STAGE; stops at the first failing step like Actions
+run_tb_job() { # dir value [write-script] [plan-script] [apply-script] [env assignments...] -> TB_RC, TB_OUT, TB_STAGE, TB_REC_RC; stops at the first failing step like Actions, then runs the reconcile step (failure() || cancelled())
   local d="$1" value="$2" ws="${3:-$TMP/tierb-write.sh}" ps="${4:-$TMP/tierb-plan.sh}" as="${5:-$TMP/tierb-apply.sh}"; shift 5 2>/dev/null || shift $#
-  assert_fixture_dir "$d"; : > "$d/out"; : > "$d/summary"; TB_OUT=""; TB_RC=0; TB_STAGE=done
-  local stage script o
-  for stage in write plan apply; do
-    case "$stage" in write) script="$ws" ;; plan) script="$ps" ;; apply) script="$as" ;; esac
+  assert_fixture_dir "$d"; : > "$d/out"; : > "$d/summary"; rm -f "$d/flag-key-prior" "$d/listn"; TB_OUT=""; TB_RC=0; TB_STAGE=done; TB_REC_RC=-
+  local stage script o apply_out=skipped
+  for stage in ${TB_ORDER:-validate plan write apply verify}; do
+    if [[ "$stage" == plan && "${TB_FAIL_AT:-}" == init ]]; then TB_RC=1; TB_STAGE=init; break; fi
+    case "$stage" in validate) script="$TMP/tierb-validate.sh" ;; write) script="$ws" ;; plan) script="$ps" ;; apply) script="$as" ;; verify) script="$TMP/tierb-verify.sh" ;; esac
     o="$(tb_env "$d" LINK_VALUE="$value" DOPPLER_INHERIT="${DOPPLER_INHERIT:-0}" "$@" bash "$script")"; TB_RC=$?
     TB_OUT+="$o"$'\n'
-    if (( TB_RC != 0 )); then TB_STAGE=$stage; return 0; fi
+    if [[ "$stage" == apply ]]; then if (( TB_RC == 0 )); then apply_out=success; else apply_out=failure; fi; fi
+    if (( TB_RC != 0 )); then TB_STAGE=$stage; break; fi
   done
+  if (( TB_RC != 0 )); then
+    o="$(tb_env "$d" LINK_VALUE="$value" APPLY_OUTCOME="$apply_out" DOPPLER_INHERIT="${DOPPLER_INHERIT:-0}" "$@" bash "${TB_RECONCILE:-$TMP/tierb-reconcile.sh}")"; TB_REC_RC=$?
+    TB_OUT+="$o"$'\n'
+  fi
 }
+keymut() { if [[ -f "$1/doppler.log" ]]; then grep -cE '^doppler secrets (set|delete) ' "$1/doppler.log" || true; else echo 0; fi; }
 untargeted_changes() { # dir -> the number of changes an UNTARGETED plan (drift detector, full apply) would see; reads the config as prd_terraform
   local d="$1"
   tb_env "$d" DOPPLER_INHERIT="${DOPPLER_INHERIT:-0}" "$d/bin/doppler" run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- terraform plan -out=tfplan-full >/dev/null
@@ -409,27 +424,27 @@ run_tb_job "$D" "$PEND"
 
 D="$(fresh tb-delfail)"; make_tb_fakes "$D"; printf '1' > "$D/dop/prd_terraform/INNGEST_LINK_TLS"; printf '1' > "$D/tfstate"; printf '1' > "$D/dop/prd/INNGEST_LINK_TLS"
 run_tb_job "$D" off "" "" "" DOPPLER_DELETE_FAIL=1
-[[ "$TB_RC" != 0 && "$TB_STAGE" == write && ! -f "$D/tf.log" && "$(prdv "$D")" == 1 && "$TB_OUT" == *"failed"* ]] && ok "A39 off whose key delete FAILS stops at the write step: no plan, the prd secret untouched, a named error (not swallowed)" || bad "A39 rc=$TB_RC stage=$TB_STAGE" "$TB_OUT"
+[[ "$TB_RC" != 0 && "$TB_STAGE" == write && ! "$(cat "$D/tf.log")" == *"terraform apply"* && "$(prdv "$D")" == 1 && "$(prdt "$D")" == 1 && "$TB_OUT" == *"failed"* ]] && ok "A39 off whose key delete FAILS stops at the write step: the apply never runs, key and prd secret both still 1, a named error (not swallowed)" || bad "A39 rc=$TB_RC stage=$TB_STAGE" "$TB_OUT"
 D="$(fresh tb-listfail)"; make_tb_fakes "$D"; printf '1' > "$D/dop/prd_terraform/INNGEST_LINK_TLS"
 run_tb_job "$D" off "" "" "" DOPPLER_LIST_FAIL=1
-[[ "$TB_RC" != 0 && "$TB_STAGE" == write && ! -f "$D/tf.log" ]] && ok "A40 off when the key listing itself fails refuses to guess (a failed listing is never read as absence)" || bad "A40 rc=$TB_RC stage=$TB_STAGE" "$TB_OUT"
+[[ "$TB_RC" != 0 && "$TB_STAGE" == write && ! "$(cat "$D/tf.log")" == *"terraform apply"* && "$(keymut "$D")" == 0 && "$(prdt "$D")" == 1 ]] && ok "A40 off when the key listing itself fails refuses to guess (a failed listing is never read as absence): no key mutation, no apply" || bad "A40 rc=$TB_RC stage=$TB_STAGE" "$TB_OUT"
 D="$(fresh tb-setfail)"; make_tb_fakes "$D"
 run_tb_job "$D" 1 "" "" "" DOPPLER_SET_FAIL=1
-[[ "$TB_RC" != 0 && "$TB_STAGE" == write && ! -f "$D/tf.log" ]] && ok "A41 a value whose source-key write fails stops before any plan" || bad "A41 rc=$TB_RC stage=$TB_STAGE" "$TB_OUT"
+[[ "$TB_RC" != 0 && "$TB_STAGE" == write && ! "$(cat "$D/tf.log")" == *"terraform apply"* && "$(prdt "$D")" == ABSENT && "$(prdv "$D")" == ABSENT ]] && ok "A41 a value whose source-key write fails stops before the apply; key and prd secret both stay absent" || bad "A41 rc=$TB_RC stage=$TB_STAGE" "$TB_OUT"
 
 # --- the world the repo once assumed: prd_terraform INHERITS prd ---
 export DOPPLER_INHERIT=1
 D="$(fresh tb-inh)"; make_tb_fakes "$D"
 run_tb_job "$D" 1
 run_tb_job "$D" off
-[[ "$TB_RC" == 0 && "$(prdt "$D")" == ABSENT && "$(prdv "$D")" == ABSENT && "$(untargeted_changes "$D")" == 0 ]] && grep -q 'TFVAR=\[\]' "$D/tf.log" && [[ "$TB_OUT" == *"still visible"* ]] && ok "A42 inheritance, off after 1: the delete leaves the key visible (inherited), the explicit empty variable still plans the delete, and the apply converges both copies to absent" || bad "A42 rc=$TB_RC stage=$TB_STAGE prdt=$(prdt "$D") prd=$(prdv "$D")" "$TB_OUT"
+[[ "$TB_RC" == 0 && "$(prdt "$D")" == ABSENT && "$(prdv "$D")" == ABSENT && "$(untargeted_changes "$D")" == 0 ]] && grep -q 'TFVAR=\[\]' "$D/tf.log" && [[ "$TB_OUT" == *"still listed after a successful delete"* ]] && ok "A42 inheritance, off after 1: the delete leaves the key visible (inherited), the explicit empty variable still plans the delete, and the apply converges both copies to absent" || bad "A42 rc=$TB_RC stage=$TB_STAGE prdt=$(prdt "$D") prd=$(prdv "$D")" "$TB_OUT"
 D="$(fresh tb-inh-only)"; make_tb_fakes "$D"; printf '1' > "$D/tfstate"; printf '1' > "$D/dop/prd/INNGEST_LINK_TLS"
 run_tb_job "$D" off
-[[ "$TB_RC" == 0 && "$TB_OUT" == *"still visible"* && "$(prdv "$D")" == ABSENT && "$(untargeted_changes "$D")" == 0 ]] && ok "A43 inheritance with NO own key (prd only, value 1): off warns that the key stays visible, plans the delete from the explicit empty variable and converges" || bad "A43 rc=$TB_RC stage=$TB_STAGE prd=$(prdv "$D")" "$TB_OUT"
+[[ "$TB_RC" == 0 && "$TB_OUT" == *"still listed after a successful delete"* && "$(prdv "$D")" == ABSENT && "$(untargeted_changes "$D")" == 0 ]] && ok "A43 inheritance with NO own key (prd only, value 1): off warns that the key stays visible, plans the delete from the explicit empty variable and converges" || bad "A43 rc=$TB_RC stage=$TB_STAGE prd=$(prdv "$D")" "$TB_OUT"
 export DOPPLER_INHERIT=0
 D="$(fresh tb-leftover)"; make_tb_fakes "$D"; printf '1' > "$D/dop/prd_terraform/INNGEST_LINK_TLS"; printf '1' > "$D/tfstate"; printf '1' > "$D/dop/prd/INNGEST_LINK_TLS"
 run_tb_job "$D" off "" "" "" DOPPLER_DELETE_NOOP=1
-[[ "$TB_RC" != 0 && "$TB_STAGE" == apply && "$TB_OUT" == *"still present in soleur/prd_terraform after the apply"* ]] && ok "A44 a delete that was accepted but left the key behind fails the job AFTER the apply (untargeted plans would re-create the flag), loudly" || bad "A44 rc=$TB_RC stage=$TB_STAGE" "$TB_OUT"
+[[ "$TB_RC" != 0 && "$TB_STAGE" == verify && "$TB_OUT" == *"still present in soleur/prd_terraform after the apply"* && "$TB_OUT" == *"stays matching the applied state"* && "$(prdv "$D")" == ABSENT ]] && ok "A44 a delete that was accepted but left the key behind fails the VERIFY step after a successful apply (untargeted plans would re-create the flag), loudly, and the reconcile leaves it alone" || bad "A44 rc=$TB_RC stage=$TB_STAGE" "$TB_OUT"
 
 # --- mutations of the job's steps ---
 mut_step() { # name python-replace-expr-file-script -> $TMP/tierb-<name>.sh ; asserts it landed
@@ -458,49 +473,79 @@ else bad "A47m the transformer mutation matched nothing"; fi
 NOW="$(date +%s)"
 vrc() { # value reason [script] -> rc of the write step (its validation; the fakes accept the key write that follows)
   local d="$TMP/tb-val"; assert_fixture_dir "$d"; rm -rf "$d"; make_stubs "$d"; make_tb_fakes "$d"
-  tb_env "$d" LINK_VALUE="$1" REASON_RAW="$2" DOPPLER_INHERIT=0 bash "${3:-$TMP/tierb-write.sh}" >/dev/null; echo $?
+  tb_env "$d" LINK_VALUE="$1" REASON_RAW="$2" DOPPLER_INHERIT=0 bash "${3:-$TMP/tierb-validate.sh}" >/dev/null; echo $?
 }
 [[ "$(vrc on 'r')" != 0 && "$(vrc pending:123 'r')" != 0 && "$(vrc "pending:$((NOW - 700))" 'r')" != 0 && "$(vrc "pending:$((NOW + 90))" 'r')" != 0 && "$(vrc 2 'r')" != 0 && "$(vrc ' 1' 'r')" != 0 ]] \
   && ok "A49 the validate step, executed, refuses 'on', a short epoch, an epoch 700 s old, an epoch 90 s ahead and other junk" || bad "A49 refusals"
 [[ "$(vrc 1 '')" != 0 && "$(vrc 1 '   ')" != 0 ]] && ok "A49b an empty or blank reason is refused" || bad "A49b reason"
 [[ "$(vrc 1 'r')" == 0 && "$(vrc "pending:$NOW" 'r')" == 0 && "$(vrc "pending:$((NOW - 500))" 'r')" == 0 && "$(vrc off 'r')" == 0 ]] && ok "A49c valid values pass (non-vacuity of A49): 1, pending:<now>, pending:<now-500>, off" || bad "A49c"
-if mut_step "$TMP/tierb-write.sh" "$TMP/tierb-write-m7.sh" 'if [[ ! "$LINK_VALUE" =~ ^(off|1|pending:[0-9]{10})$ ]]; then' 'if false; then'; then
+if mut_step "$TMP/tierb-validate.sh" "$TMP/tierb-write-m7.sh" 'if [[ ! "$LINK_VALUE" =~ ^(off|1|pending:[0-9]{10})$ ]]; then' 'if false; then'; then
   [[ "$(vrc on 'r' "$TMP/tierb-write-m7.sh")" == 0 ]] && ok "A50m with the allowlist regex deleted a typo like 'on' is accepted and WRITTEN as the flag (so A49 can see the regex)" || bad "A50m regex"
 else bad "A50m the regex mutation matched nothing"; fi
-if mut_step "$TMP/tierb-write.sh" "$TMP/tierb-write-m8.sh" 'if (( 10#$ep > now + 60 || 10#$ep < now - 600 )); then' 'if false; then'; then
+if mut_step "$TMP/tierb-validate.sh" "$TMP/tierb-write-m8.sh" 'if (( 10#$ep > now + 60 || 10#$ep < now - 600 )); then' 'if false; then'; then
   [[ "$(vrc "pending:$((NOW - 700))" 'r' "$TMP/tierb-write-m8.sh")" == 0 && "$(vrc "pending:$((NOW + 90))" 'r' "$TMP/tierb-write-m8.sh")" == 0 ]] && ok "A50m2 with the epoch window deleted a stale or future epoch is accepted (so A49 can see the window)" || bad "A50m2 window"
 else bad "A50m2 the window mutation matched nothing"; fi
-if mut_step "$TMP/tierb-write.sh" "$TMP/tierb-write-m9.sh" 'if [[ -z "${REASON_RAW// /}" || -z "${DOPPLER_TOKEN:-}" ]]; then' 'if false; then'; then
+if mut_step "$TMP/tierb-validate.sh" "$TMP/tierb-write-m9.sh" 'if [[ -z "${REASON_RAW// /}" || -z "${DOPPLER_TOKEN:-}" ]]; then' 'if false; then'; then
   [[ "$(vrc 1 '' "$TMP/tierb-write-m9.sh")" == 0 ]] && ok "A50m3 with the reason check deleted an empty reason is accepted (so A49b can see the check)" || bad "A50m3 reason"
 else bad "A50m3 the reason mutation matched nothing"; fi
 
+# A51-A60: failure at init, plan, gate and apply for pending / 1 / off. The key is written only after the gate, so init/plan/gate
+# failures leave key AND prd secret at their prior state with ZERO key mutations; an apply failure is reconciled to the prior state;
+# an apply that succeeded followed by a failed check is NOT restored (the key must match the applied state).
+seed() { # dir prior(ABSENT|value): a world in which the flag (prd_terraform key, state and prd secret) already holds <prior>
+  make_tb_fakes "$1"
+  if [[ "$2" != ABSENT ]]; then printf '%s' "$2" > "$1/dop/prd_terraform/INNGEST_LINK_TLS"; printf '%s' "$2" > "$1/tfstate"; printf '%s' "$2" > "$1/dop/prd/INNGEST_LINK_TLS"; fi
+}
+consistent() { [[ "$(prdt "$1")" == "$2" && "$(prdv "$1")" == "$2" ]]; } # dir expected: key and prd secret both read <expected>
+export DOPPLER_INHERIT=0
+D="$(fresh tb-f-init)"; seed "$D" ABSENT; TB_FAIL_AT=init run_tb_job "$D" "$PEND"
+[[ "$TB_STAGE" == init && "$(keymut "$D")" == 0 ]] && consistent "$D" ABSENT && ok "A51 pending, terraform init fails: key and prd secret both stay absent, no key mutation" || bad "A51 stage=$TB_STAGE mut=$(keymut "$D") key=$(prdt "$D") prd=$(prdv "$D")"
+D="$(fresh tb-f-plan1)"; seed "$D" "$PEND"; run_tb_job "$D" 1 "" "" "" TF_PLAN_FAIL=1
+[[ "$TB_STAGE" == plan && "$(keymut "$D")" == 0 && "$TB_OUT" == *"nothing to reconcile"* ]] && consistent "$D" "$PEND" && ok "A52 1 over a pending flag, plan fails: key and prd secret both stay pending, no key mutation, the reconcile has nothing to do" || bad "A52 stage=$TB_STAGE mut=$(keymut "$D") key=$(prdt "$D") prd=$(prdv "$D")" "$TB_OUT"
+D="$(fresh tb-f-gate1)"; seed "$D" 1; run_tb_job "$D" 1
+[[ "$TB_STAGE" == plan && "$TB_OUT" == *"blast-radius gate"* && "$(keymut "$D")" == 0 ]] && consistent "$D" 1 && ok "A53 1 over a flag that is already 1, the gate refuses the zero-change plan: key and prd secret stay 1, no key mutation" || bad "A53 stage=$TB_STAGE mut=$(keymut "$D")" "$TB_OUT"
+D="$(fresh tb-f-planoff)"; seed "$D" 1; run_tb_job "$D" off "" "" "" TF_PLAN_FAIL=1
+[[ "$TB_STAGE" == plan && "$(keymut "$D")" == 0 ]] && consistent "$D" 1 && ok "A54 off over 1, plan fails: the flag is untouched in both places (no silent downgrade), no key mutation" || bad "A54 stage=$TB_STAGE mut=$(keymut "$D") key=$(prdt "$D") prd=$(prdv "$D")" "$TB_OUT"
+D="$(fresh tb-f-applyoff)"; seed "$D" 1; run_tb_job "$D" off "" "" "" TF_APPLY_FAIL=1
+[[ "$TB_STAGE" == apply && "$TB_REC_RC" == 0 && "$(keymut "$D")" -ge 2 && "$TB_OUT" == *"restored to prior (present)"* ]] && consistent "$D" 1 && ok "A55 off over 1, the apply fails after the key was deleted: the reconcile puts the key back to 1, so key and prd secret agree again" || bad "A55 stage=$TB_STAGE rec=$TB_REC_RC key=$(prdt "$D") prd=$(prdv "$D")" "$TB_OUT"
+D="$(fresh tb-f-apply1)"; seed "$D" "$PEND"; run_tb_job "$D" 1 "" "" "" TF_APPLY_FAIL=1
+[[ "$TB_STAGE" == apply && "$TB_REC_RC" == 0 ]] && consistent "$D" "$PEND" && ok "A56 1 over a pending flag, the apply fails: the key goes back to the pending value (prior), matching the unchanged prd secret" || bad "A56 stage=$TB_STAGE rec=$TB_REC_RC key=$(prdt "$D") prd=$(prdv "$D")" "$TB_OUT"
+D="$(fresh tb-f-applypend)"; seed "$D" ABSENT; run_tb_job "$D" "$PEND" "" "" "" TF_APPLY_FAIL=1
+[[ "$TB_STAGE" == apply && "$TB_REC_RC" == 0 && "$TB_OUT" == *"restored to prior (absent)"* ]] && consistent "$D" ABSENT && ok "A57 pending over an absent flag, the apply fails: the key written for it is deleted again (prior absent)" || bad "A57 stage=$TB_STAGE rec=$TB_REC_RC key=$(prdt "$D") prd=$(prdv "$D")" "$TB_OUT"
+D="$(fresh tb-f-verify)"; seed "$D" "$PEND"; run_tb_job "$D" 1 "" "" "" DOPPLER_LIST_FAIL_NTH=3
+[[ "$TB_STAGE" == verify && "$TB_OUT" == *"stays matching the applied state"* ]] && consistent "$D" 1 && ok "A58 the apply SUCCEEDED and the verify step failed: no restore, the key stays at the applied 1 (a restore to the pending value would disagree with prd)" || bad "A58 stage=$TB_STAGE key=$(prdt "$D") prd=$(prdv "$D")" "$TB_OUT"
+D="$(fresh tb-f-recfail)"; seed "$D" 1; run_tb_job "$D" off "" "" "" TF_APPLY_FAIL=1 DOPPLER_SET_FAIL=1
+[[ "$TB_STAGE" == apply && "$TB_REC_RC" != 0 && "$TB_OUT" == *"fix soleur/prd_terraform INNGEST_LINK_TLS by hand"* && "$(grep -c 'DISAGREE' "$D/summary")" -ge 1 ]] && ok "A59 a restore that itself fails is loud: the step fails and the summary names the key/prd disagreement" || bad "A59 stage=$TB_STAGE rec=$TB_REC_RC" "$TB_OUT"
+# Mutations: drop the reconcile; restore after a successful apply; write the key before the plan.
+printf 'exit 0\n' > "$TMP/tierb-reconcile-m1.sh"
+D="$(fresh tb-f-m1)"; seed "$D" 1; TB_RECONCILE="$TMP/tierb-reconcile-m1.sh" run_tb_job "$D" off "" "" "" TF_APPLY_FAIL=1
+consistent "$D" 1 && bad "A59m1 with the reconcile dropped the off-then-apply-failure still looks consistent" || ok "A59m1 without the reconcile a failed apply leaves the key deleted while the prd secret is still 1 (so A55 can see the reconcile)"
+if mut_step "$TMP/tierb-reconcile.sh" "$TMP/tierb-reconcile-m2.sh" 'if [[ "$APPLY_OUTCOME" == success ]]; then' 'if false; then'; then
+  D="$(fresh tb-f-m2)"; seed "$D" "$PEND"; TB_RECONCILE="$TMP/tierb-reconcile-m2.sh" run_tb_job "$D" 1 "" "" "" DOPPLER_LIST_FAIL_NTH=3
+  consistent "$D" 1 && bad "A59m2 a reconcile that ignores the apply outcome was not caught" || ok "A59m2 a reconcile that restores after a SUCCESSFUL apply puts the stale pending value over the applied 1 (so A58 can see the outcome check)"
+else bad "A59m2 the outcome mutation matched nothing"; fi
+D="$(fresh tb-f-m3)"; seed "$D" 1; TB_ORDER="validate write plan apply verify" run_tb_job "$D" off "" "" "" TF_PLAN_FAIL=1
+[[ "$(keymut "$D")" -ge 1 ]] && ok "A59m3 with the key written BEFORE the plan, a failing plan has already mutated the key (so A52/A54 can see the order)" || bad "A59m3 mut=$(keymut "$D")"
+
 # M1: the delete failure is swallowed -> A39 must go red.
-if mut_step "$TMP/tierb-write.sh" "$TMP/tierb-write-m1.sh" '|| { echo "::error::deleting the source key INNGEST_LINK_TLS from soleur/prd_terraform failed. Nothing was planned or applied."; exit 1; }' '|| true'; then
+if mut_step "$TMP/tierb-write.sh" "$TMP/tierb-write-m1.sh" '|| { echo "::error::deleting the source key INNGEST_LINK_TLS from soleur/prd_terraform failed. The apply will not run."; exit 1; }' '|| true'; then
   D="$(fresh tb-m1)"; make_tb_fakes "$D"; printf '1' > "$D/dop/prd_terraform/INNGEST_LINK_TLS"; printf '1' > "$D/tfstate"; printf '1' > "$D/dop/prd/INNGEST_LINK_TLS"
   run_tb_job "$D" off "$TMP/tierb-write-m1.sh" "" "" DOPPLER_DELETE_FAIL=1
   [[ "$TB_STAGE" != write ]] && ok "A45m1 with the delete failure swallowed the job runs on past the write step (so A39 can see the guard)" || bad "A45m1 stage=$TB_STAGE"
 else bad "A45m1 the swallow mutation matched nothing (the write step's shape drifted)"; fi
 # M2: the source key is never written (the round-4 design) -> the untargeted view sees a DESTROY.
-python3 - "$TMP/tierb-write.sh" "$TMP/tierb-write-m2.sh" <<'PY'
-import sys
-s = open(sys.argv[1]).read()
-a = s.index("# The source key is written FIRST")
-b = s.index("{\n  echo \"### inngest-link-flag dispatch\"")
-open(sys.argv[2], "w").write(s[:a] + s[b:])
-PY
+printf 'exit 0\n' > "$TMP/tierb-write-m2.sh"
 D="$(fresh tb-m2)"; make_tb_fakes "$D"
 run_tb_job "$D" "$PEND" "$TMP/tierb-write-m2.sh"
-[[ "$TB_RC" == 0 && "$(untargeted_changes "$D")" != 0 ]] && ok "A45m2 without the source-key write an untargeted plan sees var '' against live state and proposes a change (the destroy this design exists to prevent), so A34 can see the write" || bad "A45m2 rc=$TB_RC changes=$(untargeted_changes "$D")" "$TB_OUT"
-# M3: the post-apply absence check removed -> A44 must go red.
-python3 - "$TMP/tierb-apply.sh" "$TMP/tierb-apply-m3.sh" <<'PY'
-import sys
-s = open(sys.argv[1]).read()
-a = s.index("# `off` must leave NO source key behind")
-open(sys.argv[2], "w").write(s[:a])
-PY
-D="$(fresh tb-m3)"; make_tb_fakes "$D"; printf '1' > "$D/dop/prd_terraform/INNGEST_LINK_TLS"; printf '1' > "$D/tfstate"; printf '1' > "$D/dop/prd/INNGEST_LINK_TLS"
-run_tb_job "$D" off "" "" "$TMP/tierb-apply-m3.sh" DOPPLER_DELETE_NOOP=1
-[[ "$TB_RC" == 0 ]] && ok "A45m3 without the post-apply check a leftover source key passes the job (so A44 can see the check)" || bad "A45m3 rc=$TB_RC stage=$TB_STAGE" "$TB_OUT"
+[[ "$(untargeted_changes "$D")" != 0 && ( "$TB_RC" == 0 || "$TB_STAGE" == verify ) ]] && ok "A45m2 without the source-key write an untargeted plan sees var '' against live state and proposes a change (the destroy this design exists to prevent); only the verify step still catches it (so A34 can see the write)" || bad "A45m2 rc=$TB_RC changes=$(untargeted_changes "$D")" "$TB_OUT"
+# M3: the post-apply verification removed -> A44 must go red.
+if mut_step "$TMP/tierb-verify.sh" "$TMP/tierb-verify-m3.sh" 'if [[ "$LINK_VALUE" == off && "$listed" == 1 ]]; then' 'if false; then'; then
+  D="$(fresh tb-m3)"; make_tb_fakes "$D"; printf '1' > "$D/dop/prd_terraform/INNGEST_LINK_TLS"; printf '1' > "$D/tfstate"; printf '1' > "$D/dop/prd/INNGEST_LINK_TLS"
+  cp "$TMP/tierb-verify.sh" "$TMP/tierb-verify.orig"; cp "$TMP/tierb-verify-m3.sh" "$TMP/tierb-verify.sh"
+  run_tb_job "$D" off "" "" "" DOPPLER_DELETE_NOOP=1
+  cp "$TMP/tierb-verify.orig" "$TMP/tierb-verify.sh"
+  [[ "$TB_RC" == 0 ]] && ok "A45m3 without the post-apply verification a leftover source key passes the job (so A44 can see the check)" || bad "A45m3 rc=$TB_RC stage=$TB_STAGE" "$TB_OUT"
+else bad "A45m3 the verify mutation matched nothing"; fi
 # M4: the explicit env removed -> with an inherited-only key, off plans no delete and the prd secret survives (A43 must go red).
 if mut_step "$TMP/tierb-plan.sh" "$TMP/tierb-plan-m4.sh" 'env "TF_VAR_inngest_link_tls=${TF_LINK}" \' 'env \'; then
   export DOPPLER_INHERIT=1
@@ -698,7 +743,7 @@ if mutate offguard 's/^  flip_load_bearer; flip_require_peers$/  flip_load_beare
 fi
 
 printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
-FLOOR=140
+FLOOR=153
 if (( PASS + FAIL < FLOOR )); then
   printf 'FAIL ANTI-VACUITY: %d assertions ran, floor is %d\n' $((PASS + FAIL)) "$FLOOR" >&2
   exit 1
