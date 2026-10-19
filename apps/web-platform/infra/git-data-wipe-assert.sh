@@ -106,15 +106,15 @@ wa_main() {
 
   # ---- BEGIN wipe-core ----
   readonly WA_SNAP=git-data-pt-snap
-  # Beyond the allowlist arms on the retired volume's snapshot, the hooks directory and the pre-receive file are the two names
+  # Beyond the allowlist arms on the retired volume's host-local device-mapper snapshot, the hooks directory and the pre-receive file are the two names
   # probed by the hk_ reads, both constants (a third name, a list or a configurable name needs a new ruling): the top-level
   # directory WA_HK_DIR and, as a regular file directly inside it, WA_HK_PR. They are the names git-data-bootstrap.sh uses
   # for its hooks directory and fence hook (a suite row compares them).
   readonly WA_HK_DIR=hooks
   readonly WA_HK_PR=pre-receive
   # WA_HK_PR_MAX is a coarse plausibility bound on the size of that file, not an identity test. It is read off the pre-receive
-  # file Terraform delivered into cloud-init. The sizes delivered were 997 bytes (the placeholder, unstripped, base64-delivered
-  # at first; 2026-07-01 to 2026-07-28), 197 bytes (the stripped placeholder, once the comment strip was added, 34654d7ab1;
+  # file Terraform delivered into cloud-init. By commit date the sizes delivered were 997 bytes (the placeholder, unstripped, base64-delivered
+  # at first; 2026-06-30 to 2026-07-28), 197 bytes (the stripped placeholder, once the comment strip was added, 34654d7ab1;
   # 2026-07-29 to 2026-09-29) and 2784 bytes (the real script, stripped, from 2026-09-30, a96d123938). Which of them reached the
   # retired volume is not established. 4096 is above all three. The real script's six source commits strip to 1870 to 2784
   # bytes. A size at or under the bound says nothing about provenance or content (a zero-byte file reads 1; there is no lower
