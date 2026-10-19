@@ -583,7 +583,7 @@ expect_survive "E34 signature-index child-count equality weakened to a lower bou
   '      (( n_children >= 0 )) || \' \
   'UNREACHABLE BY CONSTRUCTION on the index branches, and measured: the `// "-"` sentinel makes `@tsv` emit exactly one NON-EMPTY row per declared element, and `@tsv` escapes an embedded newline or tab rather than splitting on it (verified against jq for both) — so the row count and `.manifests | length` cannot disagree through any manifest a fixture can express. The guard is kept as defense-in-depth against a future edit that DECOUPLES the stream from the count, which is not hypothetical: #7410 shipped exactly that divergence in the sibling manifest branch, where an unconditional config slot emitted a row the conditional count did not include. PROMOTE THIS BACK TO `mutate` the moment the enumeration and the count stop being derived from the same array — that is the condition, not a vague 'if it becomes testable'.'
 
-# ── E35-E40: the registry credentials ride STDIN, never argv (#9757). ────────────────────────
+# ── E35-E44: the registry credentials ride STDIN, never argv (#9757). ────────────────────────
 # E01 above skips the sink login; these pin HOW the credential is presented. The crane stub
 # refuses (exit 64) any password flag and records the stdin value per login, so a regression to
 # `-p` argv, a dropped or wrong-variable feeder, or a weakened xtrace refusal must turn the
@@ -613,6 +613,22 @@ mutate "E40 xtrace refusal no longer covers the GHCR token (a GHCR-only traced r
   '"${DOPPLER_TOKEN:+x}${GHCR_TOKEN:+x}${ZOT_PUSH_TOKEN:+x}"' \
   '"${DOPPLER_TOKEN:+x}${ZOT_PUSH_TOKEN:+x}"'
 
+mutate "E41 xtrace refusal no longer covers the Doppler token (a Doppler-only traced run proceeds)" engine \
+  '"${DOPPLER_TOKEN:+x}${GHCR_TOKEN:+x}' \
+  '"${GHCR_TOKEN:+x}'
+
+mutate "E42 credential names no longer unset after login (the crane children inherit them)" engine \
+  'unset ZOT_PUSH_TOKEN GHCR_TOKEN DOPPLER_TOKEN GH_TOKEN_FOR_ENGINE' \
+  ': # unset'
+
+mutate "E43 die() no longer flattens CR/LF (registry- or manifest-derived text can start a workflow-command line)" engine \
+  'msg="${msg//[$'\''\r\n'\'']/ }"' \
+  ': # msg'
+
+mutate "E44 GHCR login feeder dropped (stdin is empty, the GHCR login has no password)" engine \
+  'if ! printf '\''%s'\'' "$GHCR_TOKEN" | $CRANE auth login ghcr.io' \
+  'if ! $CRANE auth login ghcr.io'
+
 restore_pristine
 
 echo
@@ -624,8 +640,8 @@ echo
 # equality: the count is developer-incremented, so `-eq` would turn every added mutation into a
 # spurious failure. Derived from a green run, not from an expected number.
 dispatched=$(( caught + survived + expected ))
-if (( dispatched < 62 )); then
-  echo "harness: only ${dispatched} mutations were dispatched, floor is 62. Either mutations were removed without lowering this floor deliberately, or the dispatch itself is broken — in both cases the verdict below is not reportable." >&2
+if (( dispatched < 66 )); then
+  echo "harness: only ${dispatched} mutations were dispatched, floor is 66. Either mutations were removed without lowering this floor deliberately, or the dispatch itself is broken — in both cases the verdict below is not reportable." >&2
   exit 2
 fi
 

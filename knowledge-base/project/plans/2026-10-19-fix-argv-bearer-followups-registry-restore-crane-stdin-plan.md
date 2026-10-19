@@ -296,6 +296,7 @@ heartbeat slug). The work phase re-runs `plugins/soleur/test/c4-count-parity.tes
 - **If this lands broken, the user experiences:** a registry recut (the post-destroy restore of the pinned image set into zot) failing at login with exit 5 or 2, so a host replace or recut stalls; a downtime-adjacent operator event, not a user-data event. A crane without `--password-stdin`, or an unwritable `DOCKER_CONFIG`, fails closed at login rather than restoring anonymously (a merely wrong credential is rejected later, at `digest`/`copy`).
 - **If this leaks, the user's workflow is exposed via:** the zot push token or GHCR token sitting on `crane`'s argv (`/proc/<pid>/cmdline`) and in `bash -x` traces on a CI runner, readable by co-tenant processes or captured in logs. The tokens guard the platform's own image registry, not customer data.
 - **Brand-survival threshold:** `aggregate pattern`
+- **Second-order surfaces, scoped out (review 2026-10-19):** the new exit 78 is a fail-closed abort path (only on a traced run, which the apply workflow never does); the credentials still rest base64 in `$DOCKER_CONFIG/config.json` until the EXIT trap and remain in the engine's own initial `/proc/<pid>/environ`; and `${ZOT_PUSH_USER}`, `${GHCR_USER}`, `${TARGET}` are non-secret values now flattened centrally by `die()`.
 - **Threshold decision (challengeable):** aggregate pattern, not single-user incident: the credentials are platform registry tokens on an ephemeral runner, and the change removes an exposure rather than adding a data path; it is the same tier the sibling combined plan (2026-10-12) used.
 
 ## Observability
@@ -348,7 +349,7 @@ then at least one option token; the option span is cut at the first `|`, `&&`, `
 `-p<non-dash>`, **in any order relative to the host** (`login -p "$X" -u u host` is bad); `--password-stdin` never matches.
 The strict host-token rule matters: a loose "any later token starting with `-`" also matches
 `scripts/followthroughs/zot-login-gate-erofs-repaired-6565.sh:156` (a `grep -qE` pattern) and reads 12 sites in 7 files.
-Measured at plan time on the real tree with the strict rule over `scripts apps .github plugins`: **11 sites in 6 files**, 9
+Measured at plan time on the real tree with the strict rule over `scripts apps .github plugins`: **11 sites in 6 files** (re-measured at work time with the tokenising scanner: **12 sites in 7 files**, the plan-time count having missed `plugins/soleur/skills/deploy/references/hetzner-setup.md:37`), 9
 already `--password-stdin` (action.yml:372; `apply-web-platform-infra.yml` 2804, 3550, 4894, 5331; `ci-deploy.sh:1377`;
 `cloud-init-inngest.yml` 971 and 1878; `cloud-init.yml:522`) and the engine's 2 `$CRANE` lines. The work phase re-measures
 both numbers with the scan itself over the final root set and pins them as the floor (sites AND files). Named blind spots

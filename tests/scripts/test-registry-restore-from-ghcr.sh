@@ -499,7 +499,7 @@ fx="$TMP/fx-badlogin"; calls="$TMP/calls-badlogin"; : > "$calls"
 ok_fixtures "$fx" "$TARGET"
 out="$(ZOT_PUSH_TOKEN="REJECT_ME" run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
 if [[ "$rc" -eq 5 ]] && ! grep -qE '^copy ' "$calls"; then
-  pass "a REJECTED sink login => exit 5 before any copy is attempted"
+  pass "a FAILING sink login command (the stub models a local failure; real crane rejects a credential later, at digest/copy) => exit 5 before any copy"
 else
   fail "a rejected login must exit 5 and copy nothing" "$rc" "$out ||| $(cat "$calls")"
 fi
@@ -531,8 +531,10 @@ else
 fi
 
 if grep -E '^auth ' "$calls.env" 2>/dev/null | grep -cF 'ZOT_PUSH_TOKEN' >/dev/null \
-   && grep -E '^auth ' "$calls.env" | grep -cF 'GHCR_TOKEN' >/dev/null; then
-  pass "environment probe is live: the credential names ARE in the environment at login"
+   && grep -E '^auth ' "$calls.env" | grep -cF 'GHCR_TOKEN' >/dev/null \
+   && grep -E '^auth ' "$calls.env" | grep -cF 'DOPPLER_TOKEN' >/dev/null \
+   && grep -E '^auth ' "$calls.env" | grep -cF 'GH_TOKEN_FOR_ENGINE' >/dev/null; then
+  pass "environment probe is live: all four credential names ARE in the environment at login"
 else
   fail "positive control: the login stub must see the credential names in its environment" "$rc" \
     "$(cat "$calls.env" 2>/dev/null)"
@@ -552,7 +554,7 @@ fx="$TMP/fx-badghcr"; calls="$TMP/calls-badghcr"; : > "$calls"; rm -f "$calls.st
 ok_fixtures "$fx" "$TARGET"
 out="$(GHCR_USER=ghuser GHCR_TOKEN=REJECT_ME run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
 if [[ "$rc" -eq 2 ]] && ! grep -qE '^copy ' "$calls"; then
-  pass "a REJECTED GHCR login => exit 2 before any copy is attempted"
+  pass "a FAILING GHCR login command (the stub models a local failure) => exit 2 before any copy is attempted"
 else
   fail "a rejected GHCR credential must exit 2 and copy nothing" "$rc" "$out ||| $(cat "$calls")"
 fi
@@ -578,6 +580,26 @@ else
   fail "the GHCR login-failure message must carry no CR" "$rc" "$(printf '%s' "$out" | od -c | head -5)"
 fi
 
+# CR-bearing registry stderr on a NON-login call: last_err (shared by every digest/copy/validate/signature die site)
+# must flatten CR as well, so a bare-CR runner cannot start a workflow-command line out of registry text.
+fx="$TMP/fx-crdigest"; calls="$TMP/calls-crdigest"; : > "$calls"; rm -f "$calls.stdin" "$calls.env"
+ok_fixtures "$fx" "$TARGET"
+fixture "$fx" "ghcr.io/${WP}:v0.249.4" 1 "" $'Error: boom\r::add-mask::x'
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -ne 0 && "$out" == *"::add-mask::x"* && "$out" != *$'\r'* ]]; then
+  pass "last_err: a CR in a digest call's stderr is flattened (no CR in the ::error:: line)"
+else
+  fail "a CR in registry stderr must not survive into a die message" "$rc" "$(printf '%s' "$out" | od -c | head -5)"
+fi
+
+# die() flattens CR/LF centrally: a newline inside ANY interpolated value must not start a second log line.
+out="$(run_engine "$TMP/unused" "$TMP/calls-diecr" $'--bogus\n::error::injected')"; rc=$?
+if [[ "$rc" -eq 1 && "$(printf '%s\n' "$out" | wc -l)" -eq 1 && "$out" == *"injected"* ]]; then
+  pass "die(): an interpolated value holding a newline stays on ONE log line (central CR/LF flattening)"
+else
+  fail "die() must flatten CR/LF in its message" "$rc" "$(printf '%s' "$out" | od -c | head -5)"
+fi
+
 # xtrace refusal (#7797 class): a traced run with a live registry credential would print the
 # token in the trace. Credentials are set or unset EXPLICITLY per row (an ambient one in a
 # runner shell must not flip a row). The refusal precedes every command, so the token is
@@ -585,7 +607,7 @@ fi
 fx="$TMP/fx-xtrace"; calls="$TMP/calls-xtrace"; : > "$calls"
 ok_fixtures "$fx" "$TARGET"
 xtrace_run() { # <env-assignments...> -- runs the engine under bash -x with the named env only
-  env -u GHCR_TOKEN -u ZOT_PUSH_TOKEN -u GHCR_USER -u ZOT_PUSH_USER \
+  env -u GHCR_TOKEN -u ZOT_PUSH_TOKEN -u GHCR_USER -u ZOT_PUSH_USER -u DOPPLER_TOKEN -u GH_TOKEN_FOR_ENGINE \
     FX="$fx" CALLS="$calls" REGISTRY_RESTORE_CRANE_CMD="$CRANE_STUB" "$@" \
     bash -x "$ENGINE" --target "$TARGET" --tags-from "$MANIFEST" 2>&1 </dev/null
 }
@@ -603,8 +625,15 @@ else
   fail "a traced run with GHCR_TOKEN set must refuse (78) without printing it" "$rc" \
     "$(printf '%s' "$out" | sed 's/gtok-xtrace-2/<tok>/g' | head -8)"
 fi
+out="$(xtrace_run DOPPLER_TOKEN=dtok-xtrace-3)"; rc=$?
+if [[ "$rc" -eq 78 && "$out" != *dtok-xtrace-3* ]]; then
+  pass "bash -x with ONLY a Doppler token => exit 78, token absent from the trace"
+else
+  fail "a traced run with DOPPLER_TOKEN set must refuse (78) without printing it" "$rc" \
+    "$(printf '%s' "$out" | sed 's/dtok-xtrace-3/<tok>/g' | head -8)"
+fi
 out="$(xtrace_run)"; rc=$?
-if [[ "$rc" -eq 1 && "$out" == *"--target"* ]] || [[ "$rc" -eq 5 && "$out" == *"ZOT_PUSH_USER is unset"* ]]; then
+if [[ "$rc" -eq 5 && "$out" == *"ZOT_PUSH_USER is unset"* ]]; then
   pass "bash -x with NO registry credential is not refused: the traced run reaches the engine's own checks"
 else
   fail "a traced run without a credential must not hit the xtrace refusal" "$rc" "$(printf '%s' "$out" | head -8)"
@@ -1535,7 +1564,7 @@ fi
 # Deleting the entire new assertion block left the suite green at 43/0, exit 0 — `fails -eq 0` is
 # satisfied by asserting nothing. A floor (never `-eq`, which would make every added assertion a
 # spurious failure) makes that deletion loud. Derived from a green run, ratchet upward only.
-MIN_ASSERTIONS=95
+MIN_ASSERTIONS=98
 if (( passes + fails < MIN_ASSERTIONS )); then
   printf '  FAIL harness: %d assertions ran, floor is %d — assertions were deleted or skipped\n' \
     "$((passes + fails))" "$MIN_ASSERTIONS"
