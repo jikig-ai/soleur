@@ -54,16 +54,26 @@ AUDIT OUTPUT. `gap<TAB>suite<TAB>N<TAB>paths` (the first six, all with --all-ref
 is written from); `unaudited<TAB>suite<TAB>why` (why: short-row, the first pattern when the suite has no readable input, or
 `unreadable:<relpath>[,<relpath>]` when a tracked test file of a directory suite cannot be read; its readable files are still
 scanned); `stale<TAB>suite<TAB>path<TAB>anchor/ordinal<TAB>why`; then one SOLEUR_PR_AFFECTED_AUDIT summary line:
-`suites= always_on= audited= unaudited= gap_suites= gap_refs= accepted= stale= refs= files_read=`. UNITS: `suites` counts selector ROWS;
-every other count is per suite LABEL (rows that share a label are one suite: always_on if any of its rows is, its gaps and accept rows
-merged, each gap attributed to the rows whose text names it); `refs` counts distinct (label, path) PAIRS the audited suites name before
-any exemption, and `files_read` the distinct real files read, so a change of the audit's REACH shows in these two numbers even when
-the gaps do not move. Every path printed has a backslash, a control character and, inside a comma-joined list, the comma written as
-\\xHH, and a C1 control, zero-width character, U+2028/2029 or bidi control written as \\uXXXX, so a tracked name cannot add a line or a
-column or reorder the text. A suite or library is read only when it is a regular file of at most
+`suites= always_on= audited= unaudited= gap_suites= gap_refs= accepted= stale= refs= files_read=`. UNITS: `suites` counts selector ROWS.
+Per suite LABEL (rows that share a label are one suite: always_on if any of its rows is, its gaps and accept rows merged, each gap
+attributed to the rows whose text names it): `always_on`, `audited` (labels that are none of always_on, unaudited or accepted
+unread: never negative), `unaudited` and `gap_suites`. Per (label, path) PAIR: `gap_refs` (after the exemptions), `refs` (before any
+exemption) and `accepted` (pairs exempted, plus one per suite accepted whole by a `*` row). Per accept-row entry: `stale`. Distinct
+real files read: `files_read`. A change of the audit's REACH shows in `refs` and `files_read` even when the gaps do not move. The SET
+of gaps does not depend on the order of the selector rows; the printed ORDER of the gap paths (and so which six `gap` shows) follows it.
+Every path printed has a backslash, a control character and, inside a comma-joined list, the comma written as
+\\xHH, and a C1 control, soft hyphen, zero-width or joiner character, U+2028/2029 or bidi control (the classes are listed on quote_field)
+written as \\uXXXX, so a tracked name cannot add a line or a column or reorder the text. A suite or library is read only when it is a regular file of at most
 8 MiB inside the tree (a symlink is followed only to a regular file inside the tree); anything else is `unreadable:`, including a
 `source`d tracked file that is a dangling symlink, a directory or deleted from the work tree. While a suite has an unreadable member
 its accept rows are not judged by their text (only `*` rows and untracked paths are stale).
+
+DECLARED LIMITS. The walk costs the text length times the longest tracked component name when both are adversarial: a tracked 255-character
+name such as 'a-a-...' against a suite that repeats it took 2.7 s at 100 KB and 11.5 s at 400 KB (about 230 s per view at the 8 MiB read cap);
+real names and real suites are far below this, and it needs a hostile tracked name plus a hostile suite on the pinned tree. A tracked path
+that contains a newline is found by the scan (it is reported as a gap) but lines are split on newline, so it has no `ref` line and no accept
+row can exempt it: fail-closed, and no such name is tracked. The audit sees literal names only (see the runbook); `source` hops are one
+level; a path glued to the tail of an ANSI colour code is display text and is not a read.
 
 ACCEPT FILE (--accept FILE; tab-separated, `#` lines and blank lines skipped; a missing file exempts nothing and says so on stderr):
   suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason>     one row per source line that names the path
@@ -907,23 +917,16 @@ def views(text):
     return (text, text) if full == text else (full, text)
 
 
-def normalise(text):
-    """The full view of `text` (see views)."""
-    return views(text)[0]
-
-
 def boundary(text, i):
     """True when a match at offset i of ONE view of the text starts a path component (see WORD_CHARS)."""
     return i == 0 or WORD.match(text[i - 1]) is None
 
 
-QUOTE_U = re.compile("[\u0080-\u009f\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]")   # C1, zero-width, line/paragraph separators, bidi controls
+QUOTE_U = re.compile("[\u0080-\u009f\u00ad\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u2064\u2066-\u2069\ufeff]")   # C1, soft hyphen, Arabic letter mark, Mongolian vowel separator, zero-width/word joiners, separators, bidi controls
 
 
 def quote_field(s, comma=False):
-    """`s` for a line of audit output: a backslash, a C0 control, DEL and, in a comma-joined list, the comma become \\xHH; a C1 control,
-    a zero-width character, U+2028/2029 and a bidi control become \\uXXXX. No tracked name can add a line, a column or a list member to
-    the output, hide text from a reader or reorder it, and the escape is injective (the backslash itself is escaped)."""
+    """`s` for a line of audit output. A backslash, a C0 control, DEL and, in a comma-joined list, the comma become \\xHH. These become \\uXXXX: a C1 control (U+0080-009F), U+00AD, U+061C, U+180E, the zero-width and joiner characters (U+200B-200F, U+2060-2064, U+FEFF), U+2028/2029 and the bidi controls (U+202A-202E, U+2066-2069). No tracked name can add a line, a column or a list member to the output or reorder it, and the escape is injective (the backslash itself is escaped). Other invisible or look-alike Unicode is printed as is."""
     return "".join("\\x%02x" % ord(c) if ord(c) < 0x20 or c == "\x7f" or c == "\\" or (comma and c == ",")
                    else "\\u%04x" % ord(c) if QUOTE_U.match(c) else c for c in s)
 
@@ -1257,9 +1260,9 @@ class Census:
 
     def __init__(self, root, index):
         self.root, self.index = root, index
-        self.suites = self.always_on = self.accepted = self.accepted_unread = self.refs = 0
+        self.suites = self.accepted = self.refs = 0
         self.gaps, self.miss, self.registered, self.pair_texts = {}, {}, {}, {}
-        self.labels, self.short_rows = set(), set()
+        self.labels, self.short_rows, self.always_on_labels, self.accepted_unread_labels = set(), set(), set(), set()
         self.unaudited, self.stale, self.extra = [], [], []
 
     @property
@@ -1271,12 +1274,18 @@ class Census:
         return len(self.index.raws)
 
     @property
+    def always_on(self):
+        return len(self.always_on_labels)
+
+    @property
     def unaudited_labels(self):
         return len({u[0] for u in self.unaudited})
 
     @property
     def audited(self):
-        return len(self.labels) - self.always_on - self.unaudited_labels - self.accepted_unread
+        """Labels that are none of always_on, unaudited or accepted-without-reading: a set difference, so a label in two states (a short
+        row beside an always_on row) is subtracted once and the count cannot go negative."""
+        return len(self.labels - self.always_on_labels - {u[0] for u in self.unaudited} - self.accepted_unread_labels)
 
     def add_unaudited(self, label, why, quoted=False):
         if (label, why, quoted) not in self.unaudited:
@@ -1325,11 +1334,6 @@ def judge_rules(suite, rules, miss, texts_of, tracked, star_why, partial=False):
     return stale, accepted, kept
 
 
-def merge_unique(into, items):
-    seen = set(into)
-    into.extend(i for i in items if i not in seen and not seen.add(i))
-
-
 def has_tracked_input(index, pattern):
     """True when git tracks the suite's input(s) for the first selector pattern: the file itself, or a bun-discoverable test file
     under a directory pattern (whatever the work tree holds)."""
@@ -1344,7 +1348,7 @@ def has_tracked_input(index, pattern):
 def audit_census(root, rows, accept):
     """Index-completeness census over the selector's own rows (`rows`: every line the selector printed): the tracked paths each
     registered suite names that none of its declared/derived edges cover. One pass groups the rows by label; the second judges each
-    label once, so nothing depends on row order: a label is always_on if any of its rows is; a path is a gap of the label when
+    label once, so the SET of results does not depend on row order (the printed order of paths does): a label is always_on if any of its rows is; a path is a gap of the label when
     some row's text names it and that row's edges do not cover it, and its anchors come from the texts of those rows only."""
     index = PathIndex(tracked_files(root))
     c = Census(root, index)
@@ -1370,7 +1374,7 @@ def audit_census(root, rows, accept):
     for label, g in groups.items():
         c.registered[label] = "always_on" if g["always_on"] else g["reason"]
         if g["always_on"]:
-            c.always_on += 1
+            c.always_on_labels.add(label)
             continue
         rules = accept.get(label, {})
         bad, dead, ok, found = [], [], [], set()
@@ -1388,7 +1392,7 @@ def audit_census(root, rows, accept):
             tracked_suite = any(has_tracked_input(index, d) for d in dead)
             if "*" in rules and not tracked_suite:
                 c.accepted += 1
-                c.accepted_unread += 1
+                c.accepted_unread_labels.add(label)
             else:
                 for d in dead:
                     c.add_unaudited(label, d)
@@ -1526,7 +1530,7 @@ def main(argv):
     u.add_argument("--list", default="", help="read AFFECTED_SELECTED rows from FILE instead of running the selector")
     u.add_argument("--accept", default="", help="TSV of exemptions: suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason>, or suite<TAB>*<TAB>-<TAB>-<TAB>false-positive: <reason> for a suite with no inputs; "
                   "anchor = first 12 hex of sha256(\" \".join(line.split())) of the comment-stripped line; ordinal = the Nth identical line (suite file, then sourced libraries in hop order); "
-                  "a missing file exempts nothing (see the ACCEPT FILE section above)")
+                  "a missing file exempts nothing; the full format and the stale reasons are in the ACCEPT FILE section of the top-level --help)")
     u.add_argument("--all-refs", action="store_true", dest="all_refs", help="print every undeclared path, not the first six, and a ref line (file:line, anchor/ordinal, text) per boundary line")
     a = ap.parse_args(argv)
     if a.cmd == "collect" and not re.match(r"^[1-9][0-9]*/[1-9][0-9]*$", a.chunk):
