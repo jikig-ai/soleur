@@ -376,6 +376,7 @@ Plan: `knowledge-base/project/plans/archive/20261003-090828-2026-10-02-feat-git-
   the ledger `expires_on` for this store and two days before the 2026-10-24 date in the issue. Hetzner-side
   snapshot retention of the volume remains unmeasured (Art. 30 PA-36 (f)), so this records an end for the
   device and claims nothing about copies of it.
+  > **Superseded 2026-10-12 (#6897), as to "Target: 2026-10-22": see Amendment 2026-10-12 below; the outer date is 2026-11-12. Pointer added 2026-10-19, fires on the merge of the draft PR carrying it.**
 - **A second id-bearing file the repo-root check cannot see: the gc cursor.** `git-data-gc.sh` writes the
   basename of the last repo it completed (`<id>.git`) to `.gc-cursor` at the mount root, one level above the
   repo root, and a later run that completes a repo overwrites it. The timer is nominally weekly (Sunday 03:20), but a
