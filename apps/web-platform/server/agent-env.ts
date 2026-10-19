@@ -198,10 +198,14 @@ export interface BuildAgentEnvOptions {
 }
 
 /**
- * Does a session carry egress of any kind? The ONE definition: `buildAgentEnv` (the seccomp selector) and the
- * dispatcher (which skips the flag read for an egress session, since the flag cannot change its artifact) both call it,
- * so the two cannot drift. Egress = a minted GitHub token (`ghToken` -> GH_TOKEN) or a web-egress proxy handle
- * (`egressProxy` -> HTTPS_PROXY).
+ * Does a session carry egress of any kind? `buildAgentEnv` (the seccomp selector) and the dispatcher (which skips the
+ * flag read for an egress session, since the flag cannot change its artifact) both call this function. Egress = a
+ * minted GitHub token (`ghToken` -> GH_TOKEN) or a web-egress proxy handle (`egressProxy` -> HTTPS_PROXY).
+ * It is NOT the only spelling of the predicate: the same rule is written over the other handles at
+ *   - `buildAgentSandboxConfig` (agent-runner-sandbox-config.ts, `posture.hasEgress`: `allowGithubEgress || allowWebEgress`),
+ *   - `checkSeccompAgreement` (agent-sandbox-seccomp.ts, `env.GH_TOKEN || env.HTTPS_PROXY`).
+ * `checkSeccompAgreement` re-checks them against each other at spawn time, which is what catches drift between the
+ * three spellings; a fourth spelling must be added to that check.
  */
 export function sessionHasEgress(ghToken: string | undefined, egressProxy: unknown): boolean {
   return Boolean(ghToken) || Boolean(egressProxy);

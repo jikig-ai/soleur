@@ -19,7 +19,7 @@ vi.mock("@/server/observability", async (importOriginal) => ({
 import {
   MEMO_TTL_MS,
   RESOLVE_TIMEOUT_MS,
-  __resetResolveMemoForTest,
+  __resetResolveMemoForTests,
   resolveSandboxUnixDeny,
 } from "@/server/resolve-sandbox-unix-deny";
 
@@ -29,7 +29,7 @@ describe("resolveSandboxUnixDeny", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000_000);
-    __resetResolveMemoForTest();
+    __resetResolveMemoForTests();
     flag.isAgentSandboxUnixDenyEnabled.mockReset();
     obs.mirrorWarnWithDebounce.mockReset();
   });
@@ -50,7 +50,7 @@ describe("resolveSandboxUnixDeny", () => {
       ["true", false],
       [1, false],
     ] as const) {
-      __resetResolveMemoForTest();
+      __resetResolveMemoForTests();
       flag.isAgentSandboxUnixDenyEnabled.mockResolvedValueOnce(answer);
       expect(await resolveSandboxUnixDeny(), String(answer)).toBe(want);
     }
@@ -95,11 +95,22 @@ describe("resolveSandboxUnixDeny", () => {
 
   it("healthy path: after the first read the memo answers without touching the flag service or any timer", async () => {
     flag.isAgentSandboxUnixDenyEnabled.mockResolvedValue(true);
+    // Baseline BEFORE the first call: the race timer must be cleared once the read settles (removing clearTimeout reds).
+    const timersBaseline = vi.getTimerCount();
     expect(await resolveSandboxUnixDeny()).toBe(true);
-    const timersBefore = vi.getTimerCount();
+    expect(vi.getTimerCount()).toBe(timersBaseline);
     for (let i = 0; i < 50; i++) expect(await resolveSandboxUnixDeny()).toBe(true);
     expect(flag.isAgentSandboxUnixDenyEnabled).toHaveBeenCalledTimes(1);
-    expect(vi.getTimerCount()).toBe(timersBefore);
+    expect(vi.getTimerCount()).toBe(timersBaseline);
+  });
+
+  it("a backward wall-clock step does not hold an ON memo past its TTL window (age >= 0 guard)", async () => {
+    flag.isAgentSandboxUnixDenyEnabled.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    expect(await resolveSandboxUnixDeny()).toBe(true);
+    // Clock steps back 1 h: age is negative; the memo must be treated as expired and the flag re-read.
+    vi.setSystemTime(1_000_000 - 3_600_000);
+    expect(await resolveSandboxUnixDeny()).toBe(false);
+    expect(flag.isAgentSandboxUnixDenyEnabled).toHaveBeenCalledTimes(2);
   });
 
   it("the memo expires after MEMO_TTL_MS and the next call re-reads (a flip reaches new queries)", async () => {
@@ -141,7 +152,7 @@ describe("resolveSandboxUnixDeny", () => {
     expect(await Promise.all(calls)).toEqual(Array(8).fill(true));
     expect(flag.isAgentSandboxUnixDenyEnabled).toHaveBeenCalledTimes(1);
 
-    __resetResolveMemoForTest();
+    __resetResolveMemoForTests();
     flag.isAgentSandboxUnixDenyEnabled.mockReset();
     flag.isAgentSandboxUnixDenyEnabled.mockImplementation(HANG);
     const degraded = Array.from({ length: 8 }, () => resolveSandboxUnixDeny());

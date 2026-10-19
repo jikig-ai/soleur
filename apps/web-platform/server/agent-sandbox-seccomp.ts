@@ -45,6 +45,8 @@ function canonicalArtifactPath(p: string): string {
   try {
     return realpathSync(resolved);
   } catch {
+    // review: swallowed on purpose - realpath needs the file to exist; a missing artifact (the baked /app path on a dev
+    // box, or a mistyped override) falls back to the lexical path, and the comparison stays well-defined.
     return resolved;
   }
 }

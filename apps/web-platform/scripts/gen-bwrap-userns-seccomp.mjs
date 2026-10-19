@@ -187,6 +187,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     console.error(`gen-bwrap-userns-seccomp: unknown variant: ${variant}`);
     process.exit(2);
   }
+  if (positional.length > 1) {
+    // A second path would be silently ignored (the first is used): refuse rather than write somewhere the caller did not mean.
+    console.error(`gen-bwrap-userns-seccomp: at most one output path is accepted (got ${positional.length})`);
+    process.exit(2);
+  }
   const verify = (name, path) => {
     const want = emit(name);
     let got;

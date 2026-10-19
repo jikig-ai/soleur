@@ -3,6 +3,8 @@
 // buildAgentEnv sets SOLEUR_BWRAP_SECCOMP_BPF to the unixdeny artifact only for NO-EGRESS
 // sessions while the runtime flag is ON; the flag defaults OFF and fails closed to OFF;
 // every direct caller of the two builders is accounted for.
+// Census residual (accepted, A6a): the spawn-site scan finds `query({` / `sdkQuery({` object literals. A site written as
+// `sdkQuery(variable)`, where the variable carries its own `env`, is not caught.
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -272,6 +274,20 @@ describe("spawn-time agreement is fail-safe (F1: mirror to Sentry, correct towar
       const opts = buildAgentQueryOptions({ ...args, ghToken: "ghs_x", sandboxUnixDeny: false });
       expect(opts.env?.[SEL]).toBe(SECCOMP_BASE_ARTIFACT);
       expect(agreementWarnings().length).toBe(1);
+    });
+    it("lexical fallback: when the unixdeny override does not exist (realpath throws) a `..` alias still compares equal", () => {
+      // Neither path exists, so realpathSync throws for both and the lexically resolved paths are compared.
+      process.env[UNIXDENY_OVERRIDE] = `${dir}/missing.bpf`;
+      process.env[SEL] = `${dir}/sub/../missing.bpf`;
+      expect(process.env[SEL]).toContain("/sub/../");
+      const opts = buildAgentQueryOptions({ ...args, ghToken: "ghs_x", sandboxUnixDeny: false });
+      expect(opts.env?.[SEL]).toBe(SECCOMP_BASE_ARTIFACT);
+      expect(agreementWarnings().length).toBe(1);
+      // control: a different missing file is not the variant
+      process.env[SEL] = `${dir}/sub/../other-missing.bpf`;
+      expect(buildAgentQueryOptions({ ...args, ghToken: "ghs_x", sandboxUnixDeny: false }).env?.[SEL]).toBe(
+        `${dir}/sub/../other-missing.bpf`,
+      );
     });
     it("checkSeccompAgreement itself reports the alias (the selector names the unixdeny file on an egress session)", () => {
       const alias = join(dir, "alias.bpf");

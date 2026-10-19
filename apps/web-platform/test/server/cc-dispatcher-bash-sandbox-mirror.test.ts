@@ -17,9 +17,12 @@ vi.mock("@/server/observability", async (importOriginal) => ({
 
 import {
   mirrorBashSandboxFailure,
+  recordCcSeccompArtifact,
   selectCommandStreamOutput,
   BASH_UNAVAILABLE_PROMPT_DIRECTIVE,
+  __resetDispatcherForTests,
 } from "@/server/cc-dispatcher";
+import { recordSandboxPosture } from "@/server/agent-sandbox-seccomp";
 import { BASH_UNAVAILABLE_NOTICE } from "@/server/sandbox-startup-classifier";
 
 const USER = "754ee124-706a-4f21-a4f4-e828257b0380";
@@ -121,6 +124,35 @@ describe("mirrorBashSandboxFailure — helper_step_eperm (#10455 e)", () => {
     ]);
   });
 
+  it("C3: the event carries the seccomp artifact the conversation's sandbox config is paired with (unixdeny / base); absent when unregistered", () => {
+    const HELPER = "apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted";
+    mirrorBashSandboxFailure(HELPER, USER, CONV);
+    expect(mirrorSpy.mock.calls[0][1].extra).not.toHaveProperty("seccompArtifact");
+
+    const variant = recordSandboxPosture({}, { hasEgress: false, unixDenyFlag: true });
+    recordCcSeccompArtifact(USER, CONV, { sandbox: variant });
+    mirrorBashSandboxFailure(HELPER, USER, CONV);
+    expect(mirrorSpy.mock.calls[1][1].extra.seccompArtifact).toBe("unixdeny");
+
+    // An egress session never uses the variant whatever the flag says.
+    const egress = recordSandboxPosture({}, { hasEgress: true, unixDenyFlag: true });
+    recordCcSeccompArtifact(USER, CONV, { sandbox: egress });
+    mirrorBashSandboxFailure(HELPER, USER, CONV);
+    expect(mirrorSpy.mock.calls[2][1].extra.seccompArtifact).toBe("base");
+
+    // A config with no recorded posture leaves the previous entry untouched (never throws).
+    expect(() => recordCcSeccompArtifact(USER, CONV, { sandbox: {} })).not.toThrow();
+    __resetDispatcherForTests();
+    mirrorBashSandboxFailure(HELPER, USER, CONV);
+    expect(mirrorSpy.mock.calls[3][1].extra).not.toHaveProperty("seccompArtifact");
+  });
+
+  it("C3 wiring: the factory records the posture of the options it hands to the SDK, and the close paths drain the registry", () => {
+    const src = readFileSync(resolve(__dirname, "../../server/cc-dispatcher.ts"), "utf8");
+    expect(src).toMatch(/options: recordCcSeccompArtifact\(args\.userId, args\.conversationId, buildAgentQueryOptions\(/);
+    expect(src.match(/_ccSeccompArtifact\.delete\(/g)?.length).toBeGreaterThanOrEqual(2);
+  });
+
   it("the mirror still fires for a post-fork step line (it pages) even though the notice never rewrites it", () => {
     mirrorBashSandboxFailure("apply-seccomp: waitpid: Operation not permitted", USER, CONV);
     expect(mirrorSpy).toHaveBeenCalledTimes(1);
@@ -138,7 +170,7 @@ describe("selectCommandStreamOutput — the streamed text (#10455 c)", () => {
     expect(selectCommandStreamOutput("bwrap: Can't mount proc on /newroot/proc: Operation not permitted", true)).toBe(
       BASH_UNAVAILABLE_NOTICE,
     );
-    // CTO ruling F2: the worker-side steps that run before the tenant command are in the subset too.
+    // 2026-10-19 review ruling (rationale: ADR-079 addendum): the worker-side steps that run before the tenant command are in the subset too.
     for (const step of ["fork(worker)", "prctl(PR_SET_NO_NEW_PRIVS)", "prctl(PR_SET_SECCOMP)", "execvp"]) {
       expect(selectCommandStreamOutput(`apply-seccomp: ${step}: Operation not permitted`, true), step).toBe(BASH_UNAVAILABLE_NOTICE);
     }
@@ -196,9 +228,9 @@ describe("BASH_UNAVAILABLE_PROMPT_DIRECTIVE (#10455 c)", () => {
     );
   });
 
-  it("A2: the trigger is a FAILED Bash call whose whole output is one apply-seccomp:/bwrap: line ending in Operation not permitted", () => {
+  it("A2: the trigger is a FAILED Bash call whose whole output is one apply-seccomp:/bwrap: line ending in Operation not permitted (or EPERM), and not a waitpid line", () => {
     expect(d).toContain(
-      "If a Bash call FAILED (its result is marked as an error) and its whole output is a single line starting with `apply-seccomp:` or `bwrap:` and ending in `Operation not permitted`",
+      "If a Bash call FAILED (its result is marked as an error) and its whole output is a single line starting with `apply-seccomp:` or `bwrap:` and ending in `Operation not permitted` (or `EPERM`), and it is not an `apply-seccomp: waitpid:` line",
     );
     // The loose old trigger ("output is a single sandbox error line") must be gone.
     expect(d).not.toContain("If a Bash call's output is a single sandbox error line");

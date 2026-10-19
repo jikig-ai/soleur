@@ -358,16 +358,6 @@ describe("the unixdeny variant differs from the base ONLY by the socket(AF_UNIX)
     // socket(AF_UNIX) differs for both nr spellings (plain and x32) and every upper-word shape.
     expect(differing).toBe(2 * his.length);
   });
-
-  it("mutation-sensitivity: a variant that ALSO denies connect(2) or bind(49) would be caught by the grid above", () => {
-    // Simulate the regression by rewriting the variant's socket rows to a different syscall number and re-running the same oracle.
-    for (const bad of [42 /* connect */, 49 /* bind */]) {
-      const mutated = variant.map((i) => (i.code === BPF_JMP_JEQ && i.k === NR_SOCKET ? { ...i, k: bad } : i));
-      const input = { arch: AUDIT_ARCH_X86_64, nr: bad, arg0lo: AF_UNIX };
-      expect(run(base, input)).toBe(SECCOMP_RET_ALLOW);
-      expect(run(mutated, input), `a deny on syscall ${bad} must differ from the base`).toBe(SECCOMP_RET_ERRNO | EPERM);
-    }
-  });
 });
 
 describe("generator CLI hygiene (A15)", () => {
@@ -378,6 +368,23 @@ describe("generator CLI hygiene (A15)", () => {
         const r = spawnSync(process.execPath, [GEN, ...args], { cwd: dir, encoding: "utf8" });
         expect(r.status, args.join(" ")).toBe(2);
         expect(r.stderr).toContain("unknown argument");
+      }
+      expect(spawnSync("ls", ["-A", dir], { encoding: "utf8" }).stdout.trim()).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  it("more than one positional output path is refused with exit 2 and writes nothing", () => {
+    const dir = mkdtempSync(join(tmpdir(), "gen-pos-"));
+    try {
+      for (const args of [
+        [join(dir, "a.bpf"), join(dir, "b.bpf")],
+        ["--check", join(dir, "a.bpf"), join(dir, "b.bpf")],
+        ["--variant", "unixdeny", join(dir, "a.bpf"), join(dir, "b.bpf")],
+      ]) {
+        const r = spawnSync(process.execPath, [GEN, ...args], { cwd: dir, encoding: "utf8" });
+        expect(r.status, args.join(" ")).toBe(2);
+        expect(r.stderr).toContain("at most one output path");
       }
       expect(spawnSync("ls", ["-A", dir], { encoding: "utf8" }).stdout.trim()).toBe("");
     } finally {

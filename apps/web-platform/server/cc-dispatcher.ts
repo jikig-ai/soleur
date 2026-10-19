@@ -204,6 +204,7 @@ import {
 import { resolveUntrustedContentFlags } from "./resolve-untrusted-content-flags";
 import { resolveSandboxUnixDeny } from "./resolve-sandbox-unix-deny";
 import { sessionHasEgress } from "./agent-env";
+import { sandboxPostureOf, usesUnixDenyArtifact } from "./agent-sandbox-seccomp";
 import { parseConnectedRepo } from "./github-repo-parse";
 import { createProtectedBranchResolver } from "./resolve-protected-branches";
 import { emitDebugEvent } from "./debug-event";
@@ -363,6 +364,10 @@ export function mirrorBashSandboxFailure(
   userId: string,
   conversationId: string,
 ): void {
+  // The artifact the conversation's sandbox config was PAIRED with at build time (undefined when the registry has no
+  // entry, e.g. a unit-test call). A plain socket EPERM is unclassified, so this field is the only artifact context
+  // a classified helper-line event carries.
+  const seccompArtifact = _ccSeccompArtifact.get(makeAckPostureKey(userId, conversationId));
   const failure = classifyBashSandboxFailure(output);
   if (!failure) return;
   // null first arg, never a real Error — the pino mirror captures a passed Error first as
@@ -384,6 +389,7 @@ export function mirrorBashSandboxFailure(
         conversationId,
         sandboxErrorCode: failure.errorCode,
         sandboxStderr: failure.matchedLine,
+        ...(seccompArtifact ? { seccompArtifact } : {}),
       },
     },
     userId,
@@ -396,7 +402,7 @@ export function mirrorBashSandboxFailure(
 /**
  * #10455 c — the text streamed into the chat as a Bash block's output. A Bash tool_result that is, as a whole, ONE
  * pre-exec platform denial (error-flagged, single non-blank line, any classified helper step except `waitpid` (all run before
- * the tenant command) or a bwrap EPERM line) is replaced by the fixed platform notice; everything else is returned unchanged. Applies to
+ * the tenant command) or a line starting `bwrap: ` that carries EPERM) is replaced by the fixed platform notice; everything else is returned unchanged. Applies to
  * the streamed `command_stream` text only, in autonomous sessions only: the SDK-visible tool_result is not
  * rewritable (no hook), so the model still sees the raw line and `BASH_UNAVAILABLE_PROMPT_DIRECTIVE` keys on it.
  * The mirror event is emitted BEFORE this and reads the raw output, so the rewrite never removes the page.
@@ -467,7 +473,8 @@ const GH_403_PROMPT_DIRECTIVE =
 export const BASH_UNAVAILABLE_PROMPT_DIRECTIVE =
   "## Command execution unavailable\n" +
   "If a Bash call FAILED (its result is marked as an error) and its whole output is a single line starting with " +
-  "`apply-seccomp:` or `bwrap:` and ending in `Operation not permitted` " +
+  "`apply-seccomp:` or `bwrap:` and ending in `Operation not permitted` (or `EPERM`), and it is not an " +
+  "`apply-seccomp: waitpid:` line " +
   "(for example `apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted`), the platform's command " +
   "sandbox failed to start. That is a platform problem, not a problem with the user's project or command. " +
   "This takes precedence over the rule above to report literal command output verbatim, for these sandbox " +
@@ -1345,6 +1352,29 @@ function makeAckPostureKey(userId: string, conversationId: string): string {
   return `${userId}:${conversationId}`;
 }
 
+// #10455 (a) — which seccomp artifact each live conversation's sandbox config is PAIRED with, so the classified
+// bash-tool-result mirror event can carry it (the only seccompArtifact surface that reaches Sentry / Better Stack).
+// The factory (`realSdkQueryFactory`) and the tool_result observer (`dispatchSoleurGo`) are different scopes, hence a
+// registry keyed like `_ccAutonomousAckPosture` and drained with it.
+type CcSeccompArtifact = "base" | "unixdeny";
+const _ccSeccompArtifact = new Map<string, CcSeccompArtifact>();
+
+/** Exported for unit testability. */
+export function recordCcSeccompArtifact<T extends { sandbox?: object }>(
+  userId: string,
+  conversationId: string,
+  opts: T,
+): T {
+  const posture = opts.sandbox ? sandboxPostureOf(opts.sandbox) : undefined;
+  if (posture) {
+    _ccSeccompArtifact.set(
+      makeAckPostureKey(userId, conversationId),
+      usesUnixDenyArtifact(posture.hasEgress, posture.unixDenyFlag) ? "unixdeny" : "base",
+    );
+  }
+  return opts;
+}
+
 /**
  * Register the per-conversation mutable ack-posture cell. Called from the
  * dispatch scope (per cold conversation). Idempotent overwrite — a warm-query
@@ -1703,6 +1733,7 @@ export function cleanupCcBashGatesForConversation(
   // P1 — drain the in-session ack-posture cell so it does not leak past the
   // conversation (and a reused conversationId can't inherit a prior ack).
   _ccAutonomousAckPosture.delete(makeAckPostureKey(userId, conversationId));
+  _ccSeccompArtifact.delete(makeAckPostureKey(userId, conversationId));
 }
 
 /**
@@ -3099,7 +3130,7 @@ export const realSdkQueryFactory: QueryFactory = async (
 
     return sdkQuery({
       prompt: args.prompt,
-      options: buildAgentQueryOptions({
+      options: recordCcSeccompArtifact(args.userId, args.conversationId, buildAgentQueryOptions({
         sandboxUnixDeny,
         // ADR-113 — agentWorkspacePath = pluginPath for support (sandbox +
         // file-tool containment target the corpus root), the user's workspace for
@@ -3238,7 +3269,7 @@ export const realSdkQueryFactory: QueryFactory = async (
         // as a separate matcher-less PreToolUse entry (full-surface capture).
         // Flushed once at `handleCcCloseQuery`. Observe-only + fail-open.
         toolAttemptPreToolUseHook: toolAttemptCollector.preToolUseHook,
-      }),
+      })),
     });
   } catch (err) {
     // #5274 PR B — release the write-lease if it was acquired just above before
@@ -3264,6 +3295,7 @@ export const realSdkQueryFactory: QueryFactory = async (
     // never runs → the cell leaks. Fold its cleanup into this same F1 cleanup path.
     // No-op when the ack posture was never registered (e.g. threw before line ~1734).
     _ccAutonomousAckPosture.delete(makeAckPostureKey(args.userId, args.conversationId));
+    _ccSeccompArtifact.delete(makeAckPostureKey(args.userId, args.conversationId));
     // No askpass cleanup needed here: the helper is a fixed-name, token-free
     // file reused per workspace (written into `.git/`), so a startup throw
     // leaves nothing to leak (item 1).
@@ -5257,6 +5289,7 @@ export function __resetDispatcherForTests(): void {
   _runnerSendToClient = null;
   _ccBashGates.clear();
   _ccAutonomousAckPosture.clear();
+  _ccSeccompArtifact.clear();
   // Held worktree-lease records registered via the
   // `__registerCcWorktreeLeaseForTests` seam must not leak across tests.
   _ccWorktreeLeases.clear();

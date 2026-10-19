@@ -1,7 +1,9 @@
 // #10455 (a) / A4 — the legacy runner threads the RESOLVED flag into the builders. A regex over the source cannot see a
 // dropped or misplaced argument; this drives startAgentSession with the resolver mocked and reads what the real
-// buildAgentQueryOptions hands to buildAgentEnv and buildAgentSandboxConfig. Every legacy session is no-egress, so the
-// resolver is always consulted here (the cc-dispatcher counterpart pins the egress short-circuit).
+// buildAgentQueryOptions hands to buildAgentEnv (the ONLY builder observed here: buildAgentEnv is the mocked seam). The
+// sandbox-config side of the same argument is pinned in agent-sandbox-seccomp-selector.test.ts, which drives
+// buildAgentQueryOptions end to end. Every legacy session is no-egress, so the resolver is always consulted here (the
+// cc-dispatcher counterpart pins the egress short-circuit).
 
 import { describe, test, expect, vi, beforeEach } from "vitest";
 

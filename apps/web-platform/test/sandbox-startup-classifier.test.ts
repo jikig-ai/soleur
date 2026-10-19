@@ -8,7 +8,7 @@
 // (plain Error, no `.stderr`/`.cause`). These tests use a SYNTHESIZED signal
 // in that exact shape (cq-test-fixtures-synthesized-only) — no LLM in the
 // assertion path.
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll } from "vitest";
@@ -434,6 +434,10 @@ describe("isPreExecSandboxDenialOutput — the notice predicate (#10455 c, Guard
       "chmod: changing permissions of 'bwrap-notes.md': Operation not permitted",
       "bubblewrap: setting up uid map: Operation not permitted",
       "echo bwrap: Operation not permitted",
+      // `bwrap-notes:` carries the bwrap token (so it classifies) but does not START with `bwrap: `: the `/^\s*bwrap/`
+      // mutant of the own-line anchor would rewrite it. `bwrapper:` is a different word (no token at all).
+      "bwrap-notes: x: Operation not permitted",
+      "bwrapper: y: Operation not permitted",
     ]) {
       expect(isPreExecSandboxDenialOutput(l, true), l).toBe(false);
     }
@@ -453,12 +457,24 @@ describe("isPreExecSandboxDenialOutput — the notice predicate (#10455 c, Guard
   it("A6(e): an 8 MB multi-line string is rejected by the length bound BEFORE any split", () => {
     const eightMb = "x\n".repeat(4 * 1024 * 1024);
     expect(eightMb.length).toBe(8 * 1024 * 1024);
-    const t0 = Date.now();
-    expect(isPreExecSandboxDenialOutput(eightMb, true)).toBe(false);
-    // The real denial line buried in a huge multi-line payload is still not a lone denial.
-    expect(isPreExecSandboxDenialOutput(`${HELPER}\n${eightMb}`, true)).toBe(false);
-    expect(isPreExecSandboxDenialOutput(`${eightMb}${HELPER}`, true)).toBe(false);
-    expect(Date.now() - t0).toBeLessThan(200);
+    // Structural, not wall-clock: no split may be performed on an over-bound string (a timing bound flakes on a loaded runner).
+    const split = vi.spyOn(String.prototype, "split");
+    let results: boolean[];
+    let splitLengths: number[];
+    try {
+      results = [
+        isPreExecSandboxDenialOutput(eightMb, true),
+        // The real denial line buried in a huge multi-line payload is still not a lone denial.
+        isPreExecSandboxDenialOutput(`${HELPER}\n${eightMb}`, true),
+        isPreExecSandboxDenialOutput(`${eightMb}${HELPER}`, true),
+      ];
+      // Read BEFORE restore: mockRestore clears the recorded contexts.
+      splitLengths = split.mock.contexts.map((c) => String(c).length);
+    } finally {
+      split.mockRestore();
+    }
+    expect(results).toEqual([false, false, false]);
+    expect(splitLengths.filter((n) => n > 4000)).toEqual([]);
   });
 
   it("a 5000-character slash-heavy single line is rejected without a long scan", () => {

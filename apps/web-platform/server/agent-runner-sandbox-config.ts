@@ -622,8 +622,11 @@ export function buildAgentSandboxConfig(
     {
       feature: "agent-sandbox",
       op: "tenant-deny",
-      // #10455 A7: which seccomp artifact this session is paired with, so a Better Stack / Sentry reader can tell
-      // a session that ran the AF_UNIX-deny variant from a base one without SSH (same predicate as the selector).
+      // #10455 A7: the seccomp artifact this config is PAIRED with at build time (same predicate as the selector),
+      // not necessarily the one the session ran: the spawn-time correction toward the base artifact and an ambient
+      // override are applied later in buildAgentQueryOptions. This info line is host-local (the log pipeline keeps
+      // level>=40); the same field is on the classified bash-tool-result mirror event (cc-dispatcher.ts), which is the
+      // surface that reaches Sentry / Better Stack.
       seccompArtifact: usesUnixDenyArtifact(posture.hasEgress, posture.unixDenyFlag) ? "unixdeny" : "base",
       // Self-describing per-root rows (not parallel arrays) — a Sentry query
       // reads root+existence as one record, no positional correlation.
