@@ -578,3 +578,218 @@ describe("Guard 1 (#8427) — checkDiffPaths reason attribution", () => {
     expect(censusDiffReasons(src).declared).toEqual(["only-one"]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// #10552 -- the draft step, its reasons, and the single source of the diff.
+//
+// The model no longer authors `proposed_diff_unified`. Three properties keep that
+// true, and each is read from the parse tree or a delimited window, never from a
+// literal list of today's call sites:
+//
+//   Guard 3b  the `draft-edit-*` memoized callback mutates no handler-scope
+//             accumulator (same replay hazard as the apply callback), and returns
+//             only `{kind, diff}` / `{kind, reason}` -- never target-file text.
+//   Guard 1b  every `edit-*` reason is declared once and emitted from exactly one
+//             site; none is folded into `DiffPathVerdict` (that census owns
+//             `checkDiffPaths` alone).
+//   Guard 1c  `proposed_diff_unified` is assigned from the derived diff in exactly
+//             one place and is offered to the model nowhere.
+// ---------------------------------------------------------------------------
+
+// window-assembly: draftStepWindow -- complete against the single
+// `async (): Promise<DraftOutcome> => {` callback in the handler. The function
+// asserts that opener occurs EXACTLY once, for the same reason applyStepWindow does:
+// a second draft-shaped step must throw here, not leave the guard covering only the
+// first. It is a SEPARATE window from the apply step's because that function hard-codes
+// `Promise<ClusterOutcome>` and its own closer.
+export function draftStepWindow(src: string): string {
+  const opener = "async (): Promise<DraftOutcome> => {";
+  const starts = src.split(opener).length - 1;
+  if (starts !== 1) throw new Error(`expected exactly 1 draft step callback, found ${starts}`);
+  const from = src.indexOf(opener) + opener.length;
+  const closer = "\n        },\n      );";
+  const to = src.indexOf(closer, from);
+  if (to === -1) throw new Error("draft step callback close not found");
+  return src
+    .slice(from, to)
+    .split("\n")
+    .map((l) => l.replace(/^\s*\/\/.*$/, ""))
+    .join("\n");
+}
+
+/**
+ * Declared = the members of `EDIT_REFUSAL_REASONS`; emitted = every `reason: "edit-*"`
+ * property assignment in the module. Throws when either side is empty so a census that
+ * found nothing can never read as clean.
+ */
+export function censusEditReasons(src: string): { declared: string[]; emitted: string[] } {
+  const sf = ts.createSourceFile("t.ts", src, ts.ScriptTarget.Latest, true);
+  const declared: string[] = [];
+  const emitted: string[] = [];
+  const visit = (n: ts.Node): void => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === "EDIT_REFUSAL_REASONS" && n.initializer) {
+      const walk = (m: ts.Node): void => {
+        if (ts.isStringLiteral(m)) declared.push(m.text);
+        m.forEachChild(walk);
+      };
+      walk(n.initializer);
+    }
+    if (
+      ts.isPropertyAssignment(n) &&
+      ts.isIdentifier(n.name) &&
+      n.name.text === "reason" &&
+      (ts.isStringLiteral(n.initializer) || ts.isNoSubstitutionTemplateLiteral(n.initializer)) &&
+      n.initializer.text.startsWith("edit-")
+    ) {
+      emitted.push(n.initializer.text);
+    }
+    n.forEachChild(visit);
+  };
+  visit(sf);
+  if (declared.length === 0) throw new Error("census found no declared edit reasons");
+  if (emitted.length === 0) throw new Error("census found no emitted edit reasons");
+  return { declared, emitted };
+}
+
+/** Every property assignment named `proposed_diff_unified`, with its initializer's source text. */
+export function censusDiffAssignments(src: string): string[] {
+  const sf = ts.createSourceFile("t.ts", src, ts.ScriptTarget.Latest, true);
+  const out: string[] = [];
+  const visit = (n: ts.Node): void => {
+    if (ts.isPropertyAssignment(n) && (ts.isIdentifier(n.name) || ts.isStringLiteral(n.name)) && n.name.text === "proposed_diff_unified") {
+      out.push(n.initializer.getText(sf));
+    }
+    if (ts.isShorthandPropertyAssignment(n) && n.name.text === "proposed_diff_unified") out.push("<shorthand>");
+    n.forEachChild(visit);
+  };
+  visit(sf);
+  return out;
+}
+
+describe("Guard 3b (#10552) -- replay safety of the draft step", () => {
+  beforeEach(() => {
+    expect.hasAssertions();
+  });
+  const FORBIDDEN = ["refusals.push(", "refusalDetail.push(", "clustersOpened++"];
+
+  it("no handler-scope accumulator is mutated INSIDE the memoized draft callback", () => {
+    const inside = draftStepWindow(readFileSync(SRC_PATH, "utf-8"));
+    expect(FORBIDDEN.filter((m) => inside.includes(m))).toEqual([]);
+  });
+
+  it("non-vacuity: the window is the draft callback (it calls the drafter) and is not empty", () => {
+    const inside = draftStepWindow(readFileSync(SRC_PATH, "utf-8"));
+    expect(inside).toContain("draftAdditiveEdit(");
+    expect(inside.length).toBeGreaterThan(200);
+  });
+
+  it("mutation row: a push moved into the draft callback is caught", () => {
+    const src = readFileSync(SRC_PATH, "utf-8");
+    const anchor = 'return { kind: "refused", reason: "target-path-refused" };';
+    expect(src).toContain(anchor); // the anchor must LAND, or the row is vacuous
+    const mutated = src.replace(anchor, `refusals.push("target-path-refused");\n          ${anchor}`);
+    expect(mutated).not.toBe(src);
+    expect(FORBIDDEN.some((m) => draftStepWindow(mutated).includes(m))).toBe(true);
+  });
+
+  it("every exit of the draft callback returns a DraftOutcome carrying only kind + diff/reason (AC6)", () => {
+    const inside = draftStepWindow(readFileSync(SRC_PATH, "utf-8"));
+    expect(inside).not.toMatch(/\breturn;\s*$/m);
+    const returns = inside.match(/\breturn \{[^}]*\}/g) ?? [];
+    expect(returns.length).toBeGreaterThanOrEqual(2);
+    for (const r of returns) {
+      expect(r, r).toMatch(/^return \{ kind: "(drafted", diff: [A-Za-z_.]+|refused", reason: [A-Za-z_."-]+) \}$/);
+    }
+    // No target-file text in a step return value (it would be persisted step state).
+    expect(inside).not.toMatch(/\breturn \{[^}]*\b(base|text)\b[^}]*\}/);
+  });
+
+  it("dispatch: a source with no / two draft callbacks THROWS, never reads clean", () => {
+    expect(() => draftStepWindow("const x = 1;")).toThrow(/found 0/);
+    const one = "async (): Promise<DraftOutcome> => {\n  a\n        },\n      );";
+    expect(() => draftStepWindow(one + one)).toThrow(/found 2/);
+  });
+});
+
+describe("Guard 1b (#10552) -- every edit-* reason is declared once and emitted from exactly one site", () => {
+  beforeEach(() => {
+    expect.hasAssertions();
+  });
+
+  it("declared and emitted sets are identical, and no reason has two emit sites", () => {
+    const { declared, emitted } = censusEditReasons(readFileSync(SRC_PATH, "utf-8"));
+    expect(declared).toHaveLength(7);
+    expect(sortedUnique(emitted)).toEqual(sortedUnique(declared));
+    const counts: Record<string, number> = {};
+    for (const r of emitted) counts[r] = (counts[r] ?? 0) + 1;
+    expect(counts).toEqual(Object.fromEntries(declared.map((d) => [d, 1])));
+  });
+
+  it("the edit reasons are NOT folded into DiffPathVerdict (that census owns checkDiffPaths alone)", () => {
+    const { declared } = censusDiffReasons(readFileSync(SRC_PATH, "utf-8"));
+    expect(declared.filter((r) => r.startsWith("edit-"))).toEqual([]);
+  });
+
+  it("mutation: a second emit site for one reason is RED", () => {
+    const src = readFileSync(SRC_PATH, "utf-8");
+    const anchor = 'reason: "edit-anchor-not-found"';
+    expect(src).toContain(anchor);
+    const mutated = src.replace(anchor, `reason: "edit-anchor-ambiguous"`);
+    const { emitted } = censusEditReasons(mutated);
+    const counts: Record<string, number> = {};
+    for (const r of emitted) counts[r] = (counts[r] ?? 0) + 1;
+    expect(counts["edit-anchor-ambiguous"]).toBe(2);
+    expect(counts["edit-anchor-not-found"]).toBeUndefined();
+  });
+
+  it("mutation: a declared-but-unemitted member is RED", () => {
+    const src = readFileSync(SRC_PATH, "utf-8").replace(
+      '"edit-derive-failed",\n] as const;',
+      '"edit-derive-failed",\n  "edit-never-emitted",\n] as const;',
+    );
+    const { declared, emitted } = censusEditReasons(src);
+    expect(sortedUnique(emitted)).not.toEqual(sortedUnique(declared));
+  });
+
+  it("dispatch: a census finding nothing THROWS", () => {
+    expect(() => censusEditReasons("export const x = 1;")).toThrow(/no declared/);
+    expect(() => censusEditReasons('export const EDIT_REFUSAL_REASONS = ["edit-a"] as const;')).toThrow(/no emitted/);
+  });
+});
+
+describe("Guard 1c (#10552) -- proposed_diff_unified comes from the derived diff and nowhere else", () => {
+  beforeEach(() => {
+    expect.hasAssertions();
+  });
+
+  it("is assigned exactly once, from the draft's derived diff", () => {
+    const assigns = censusDiffAssignments(readFileSync(SRC_PATH, "utf-8"));
+    expect(assigns).toEqual(["draft.diff"]);
+  });
+
+  it("mutation: re-adding it to CLUSTER_OUTPUT_SCHEMA is RED", () => {
+    const src = readFileSync(SRC_PATH, "utf-8").replace(
+      "rationale: { type: \"string\" },",
+      'rationale: { type: "string" },\n          proposed_diff_unified: { type: "string" },',
+    );
+    expect(censusDiffAssignments(src).length).toBeGreaterThan(1);
+  });
+
+  it("mutation: assigning it from the model response in the handler is RED", () => {
+    const src = readFileSync(SRC_PATH, "utf-8").replace(
+      "proposed_diff_unified: draft.diff",
+      "proposed_diff_unified: (cluster as { proposed_diff_unified?: string }).proposed_diff_unified ?? draft.diff",
+    );
+    expect(censusDiffAssignments(src)).not.toEqual(["draft.diff"]);
+  });
+
+  it("the handler consults TARGET_ALLOW_RE at exactly two sites: the draft step and the apply step", () => {
+    const src = readFileSync(SRC_PATH, "utf-8");
+    const handler = src.slice(src.indexOf("export async function cronCompoundPromoteHandler"));
+    const stripped = handler
+      .split("\n")
+      .map((l) => l.replace(/^\s*\/\/.*$/, ""))
+      .join("\n");
+    expect(stripped.split("TARGET_ALLOW_RE.test(").length - 1).toBe(2);
+  });
+});

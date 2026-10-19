@@ -579,7 +579,7 @@ export const ANTHROPIC_MAX_TOKENS = 16384;
 // object needs `additionalProperties: false`; numeric/array constraints are
 // NOT supported by the API — the slice(0, remaining) cap stays a post-parse TS
 // slice. The prompt and the parse-site read are kept in lockstep with this wrapper.
-const CLUSTER_OUTPUT_SCHEMA = {
+export const CLUSTER_OUTPUT_SCHEMA = {
   type: "object",
   additionalProperties: false,
   required: ["clusters"],
@@ -887,6 +887,61 @@ async function applyDiffToWorkspace(
   } finally {
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+// =============================================================================
+// Additive edit drafting (#10552) -- RED STUBS, replaced by the real code below
+// =============================================================================
+
+export const DRAFT_EDIT_TIMEOUT_MS = 120_000;
+export const DRAFT_EDIT_MAX_TOKENS = 4_096;
+export const EDIT_TARGET_MAX_BYTES = 120_000;
+export const EDIT_REFUSAL_REASONS = [
+  "edit-target-unreadable",
+  "edit-target-too-large",
+  "edit-invalid",
+  "edit-anchor-not-found",
+  "edit-anchor-ambiguous",
+  "edit-target-duplicate",
+  "edit-derive-failed",
+] as const;
+export type EditRefusalReason = (typeof EDIT_REFUSAL_REASONS)[number];
+export type EditRefusal = {
+  ok: false;
+  reason: EditRefusalReason | "target-path-refused";
+  cause: string;
+};
+export const EDIT_OUTPUT_SCHEMA = {} as const;
+
+export function isAdditiveDiff(_diff: string): boolean {
+  throw new Error("isAdditiveDiff: RED stub");
+}
+
+export async function readEditTarget(
+  _repoRoot: string,
+  _targetPath: string,
+): Promise<{ ok: true; base: string } | EditRefusal> {
+  throw new Error("readEditTarget: RED stub");
+}
+
+export async function buildAdditiveEditDiff(_input: {
+  targetPath: string;
+  base: string;
+  edit: unknown;
+}): Promise<{ ok: true; diff: string } | EditRefusal> {
+  throw new Error("buildAdditiveEditDiff: RED stub");
+}
+
+export async function draftAdditiveEdit(_args: {
+  cluster: { target_path: string; rationale: string; source_learnings: string[] };
+  repoRoot: string;
+  apiKey: string;
+  runId: string;
+  corpusSummaries: Map<string, string>;
+  headroomBytes: number;
+  post?: typeof postAnthropicMessage;
+}): Promise<{ ok: true; diff: string } | EditRefusal> {
+  throw new Error("draftAdditiveEdit: RED stub");
 }
 
 // =============================================================================

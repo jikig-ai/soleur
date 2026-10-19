@@ -18,6 +18,8 @@ import { stripFrontmatter } from "../../../../../scripts/lib/frontmatter-strip/s
 import {
   ANTHROPIC_MAX_TOKENS,
   ANTHROPIC_MODEL,
+  CLUSTER_OUTPUT_SCHEMA,
+  EDIT_OUTPUT_SCHEMA,
   MAX_DIFF_BYTES,
   PII_REGEX,
   TARGET_ALLOW_RE,
@@ -210,6 +212,58 @@ describe("synthetic checks (AC18)", () => {
       "cla-check",
       "cla-evidence",
     ]);
+  });
+});
+
+// =============================================================================
+// T17 (#10552): the model contract
+// =============================================================================
+
+describe("model contract (#10552)", () => {
+  /** Every object-typed node in a JSON schema. */
+  function objectNodes(node: unknown, out: Array<Record<string, unknown>> = []): Array<Record<string, unknown>> {
+    if (node && typeof node === "object") {
+      const o = node as Record<string, unknown>;
+      if (o.type === "object") out.push(o);
+      for (const v of Object.values(o)) objectNodes(v, out);
+    }
+    return out;
+  }
+
+  it("the phase-1 schema offers the model neither a diff field nor a byte_impact field", () => {
+    const text = JSON.stringify(CLUSTER_OUTPUT_SCHEMA);
+    expect(text).not.toContain("proposed_diff_unified");
+    expect(text).not.toContain("byte_impact");
+    // ...and keeps the fields the clustering call genuinely owns.
+    for (const key of ["cluster_hash", "tier", "target_path", "source_learnings", "rationale"]) {
+      expect(text).toContain(key);
+    }
+  });
+
+  it("the phase-2 schema asks for exactly an anchor and the lines, closed at every object level", () => {
+    const root = EDIT_OUTPUT_SCHEMA as unknown as {
+      required?: string[];
+      properties?: Record<string, { type?: string; items?: { type?: string } }>;
+    };
+    expect([...(root.required ?? [])].sort()).toEqual(["insert_after_line", "new_lines"]);
+    expect(root.properties?.insert_after_line?.type).toBe("string");
+    expect(root.properties?.new_lines?.type).toBe("array");
+    expect(root.properties?.new_lines?.items?.type).toBe("string");
+    const nodes = objectNodes(EDIT_OUTPUT_SCHEMA);
+    expect(nodes.length).toBeGreaterThan(0);
+    for (const n of nodes) expect(n.additionalProperties).toBe(false);
+  });
+
+  it("the phase-1 prompt no longer names a diff or a byte impact", () => {
+    const src = readFileSync(
+      join(__dirname, "../../../server/inngest/functions/cron-compound-promote.ts"),
+      "utf-8",
+    );
+    const start = src.indexOf("You are a clustering agent");
+    expect(start).toBeGreaterThan(-1);
+    const prompt = src.slice(start, src.indexOf("].join(", start));
+    expect(prompt).not.toContain("proposed_diff_unified");
+    expect(prompt).not.toContain("byte_impact");
   });
 });
 
