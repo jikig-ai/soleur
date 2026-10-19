@@ -54,19 +54,20 @@ no check.
 
 ## Vendor-CLI pins
 
-`harness-discovery` (Codex, Devin) and `grok-fidelity` (Grok) drive third-party
-CLIs, pinned exactly and asserted at install time (ADR-245):
+`harness-discovery` (Codex, Devin, OpenCode) and `grok-fidelity` (Grok) drive
+third-party CLIs, pinned exactly and asserted at install time (ADR-245):
 
 | CLI | Pin | Install path | Depth of the pin |
 |---|---|---|---|
 | Codex | `0.156.1` | `npm i -g @openai/codex@<pin>` | npm resolves the version to immutable published bytes |
 | Devin | `3000.11.1` | `https://static.devin.ai/cli/<pin>/setup.sh` — the top-level `install.sh` leaves `PINNED_VERSION` empty and installs latest | A version in a URL is a NAME the vendor can re-serve, so the job also pins the fetched script by `sha256sum -c` and refuses to execute a changed one |
+| OpenCode | `2.0.32` | `npm i -g @opencode/cli@<pin>` | npm resolves the version to immutable published bytes. The package is `@opencode/cli`; `opencode-ai` is the previous API generation (1.19.3) and the 2.x runtime rejects its plugin module shape (ADR-291) |
 | Grok | `1.0.41` | `https://x.ai/cli/grok-<pin>-linux-x86_64` | xAI publishes no versioned installer URL and no checksum, so the job content-pins the binary itself by `sha256sum -c` (either source) and never runs `install.sh` |
 
 Every arm then asserts the installed binary reports the pin, exiting 3 on drift.
 
 The pins are declared ONCE each, as job-level `env` (`CODEX_PIN`, `DEVIN_PIN`,
-`DEVIN_SETUP_SHA256`, `GROK_PIN`, `GROK_SHA256`) — a `--pin` lagging its own install step silently turns the
+`DEVIN_SETUP_SHA256`, `OPENCODE_PIN`, `GROK_PIN`, `GROK_SHA256`) — a `--pin` lagging its own install step silently turns the
 script's version check into a no-op.
 
 A pin is stale the day the vendor ships. **#8574 owns the freshness criterion**: a

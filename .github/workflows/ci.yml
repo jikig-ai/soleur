@@ -1855,6 +1855,10 @@ jobs:
       # check into a no-op (#8574 bumps these monthly).
       CODEX_PIN: "0.156.1"
       DEVIN_PIN: "3000.11.1"
+      # OpenCode's V2 CLI. NOT `opencode-ai` — that package's latest is 1.19.3, the
+      # previous API generation, and the 2.x runtime rejects its plugin module shape.
+      # `npm:@opencode/cli` is what the `opencode` version-manager entry resolves to.
+      OPENCODE_PIN: "2.0.32"
       # sha256 of the pinned Devin setup script, measured 2026-09-23. A version
       # in a URL is a NAME, not a content pin; this is the content pin.
       DEVIN_SETUP_SHA256: "bff4e02d0297ba5494d2cd1a8314b9c48ebd237f37f22438e83d60e09f3b72c7"
@@ -1931,6 +1935,30 @@ jobs:
       - name: Devin discovers every declared skill
         if: '!cancelled()'
         run: bun plugins/soleur/scripts/harness-discovery-smoke.ts --harness devin --pin "$DEVIN_PIN"
+
+      - name: Install OpenCode CLI (exact pin)
+        # `!cancelled()` for the same reason as the Devin half: three independent
+        # vendors drive this job and one outage must not cost the other two their
+        # signal. The npm package is `@opencode/cli`, not `opencode-ai` — see the
+        # pin comment above.
+        if: '!cancelled()'
+        run: |
+          set -uo pipefail
+          npm i -g "@opencode/cli@${OPENCODE_PIN}"
+          # Same `linux-x64` optional dependency the release ships, so the binary
+          # that lands on PATH is the one the pin names. `|| true` everywhere the
+          # version is parsed: under `bash -e` an unparsed banner must fall through
+          # to the assertion below, not kill the step before it can explain itself.
+          raw="$(opencode --version 2>&1 || true)"
+          got="$(printf '%s' "${raw//[$'\r\n']/ }" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+          [ "$got" = "$OPENCODE_PIN" ] || {
+            echo "::error::harness-discovery[opencode] version-mismatch:${got:-<unparsed>}!=${OPENCODE_PIN} raw=${raw:0:200}"
+            exit 3
+          }
+
+      - name: OpenCode discovers every declared skill
+        if: '!cancelled()'
+        run: bun plugins/soleur/scripts/harness-discovery-smoke.ts --harness opencode --pin "$OPENCODE_PIN"
 
   # Synthetic aggregator.
   #
