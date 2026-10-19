@@ -15,6 +15,28 @@ lane: single-domain
 
 Adopt property-based testing in the soleur monorepo (Epic #10397 child 1, issue #10398). Add `fast-check` to `apps/web-platform` devDependencies, ship four property suites covering the round-trip, invariant, and idempotency classes against existing pure functions, land a seeded generated-input harness for the `.test.sh` shell corpus with one reference suite and a documented pattern, and verify the new suites are reached by the repo's affected-suite selection machinery. Scope is deliberately small per the issue ("start small — do not boil the ocean"): no mass rollout, no SUT changes, no CI workflow edits.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-19
+**Sections enhanced:** Research Insights (verification notes), Technical Approach, Acceptance Criteria
+**Research agents used:** in-process deepen gates (Devin harness — no Task fan-out): verify-the-negative pass, precedent-diff pass, per-gate mechanical verification
+
+### Key Improvements
+
+1. **Guard Contract verified mechanically** — `python3 scripts/lint-guard-contract.py` → green, 2 guard entries, ≥3 mutation rows each including own-dispatch, second-member, harness, and must-PASS rows.
+2. **Affected-selection claim verified against the derive implementation** — `_affected_derive` (`scripts/test-all.sh:3263-3391`) confirmed: glob-registered suites derive `edge:` class from argv literals + name-stem + `source`/import closure; `source "$(dirname "${BASH_SOURCE[0]}")/legal-normalise.sh"` in the reference suite resolves to `scripts/lib/legal-normalise.sh` via the dirname substitution at lines 3219-3225. AC9/AC15 are therefore assertions about verified mechanism, not hope.
+3. **fast-check API surface pinned** — `npm view fast-check` → 4.10.2, node >=12.17, zero peer deps; cited API (`fc.assert`, `fc.property`, `fc.pre`, `fc.jsonObject`, `fc.webUrl`, `fc.oneof`, `fc.constant`, `fc.record`, `fc.array`, `fc.string`, `fc.integer`; `{seed, path, numRuns}` params) is stable across the 4.x line.
+
+### New Considerations Discovered
+
+- `$RANDOM` seed streams are bash-version-specific → `PROP_SEED` replay claims are scoped to same host/bash (AC7 wording).
+- `PROP_RUNS` env knob: CI default 100 iterations keeps the shell suite ~seconds; operators can deep-run locally (`PROP_RUNS=1000`) without editing the suite.
+- `fc.jsonObject()` output is strictly JSON-compatible, so the codex round-trip needs no `fc.pre` filtering — but the size bound still applies (kept bounded in Phase 2).
+
+### Deepen-Gate Verdicts (all pass)
+
+User-Brand Impact §4.6: PASS (threshold `none`, no sensitive-path files). Observability §4.7: PASS (5 fields non-placeholder; `grep` allowlisted verb; literal expected_output; <15s probe). PAT §4.8: PASS (no token vars). UI-wireframe §4.9: SKIP (no UI surface). Encryption §4.10: SKIP (no store/connection). Guard Contract §4.11: PASS (lint green; assemblies name chokepoints). Scope Check §4.12: PASS (1 live section; all asks mapped; `Recommendation:` present). Downtime §4.55: SKIP. Network-outage §4.5: SKIP. Precedent-diff §4.4: `property-harness.sh` mirrors `legal-normalise.sh` sourced-lib conventions line-for-line (direct-exec guard, double-source guard, `LC_ALL=C`, bash-3.2); vitest suites mirror the `mulberry32` seeded-fuzz precedent (`test/server/inngest/cron-community-publication.test.ts:373`). Verify-the-negative §4.45: all negative claims confirmed against tree (`git grep fast-check` = 0; `test-all.sh:6707`; classify rungs ~2711-2735).
+
 ## Research Insights
 
 ### Premise Validation (Phase 0.6)
