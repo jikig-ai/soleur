@@ -52,7 +52,7 @@ Write each phase's RED tests before its code. Commit order: Phase 1 first, Phase
 
 ## Phase 5: Runtime synthetic (#10455 b), objective cut line
 
-- [ ] 5.1 Apply the cut trigger (over 100 files or more than three parity suites red after one CI cycle moves this phase to a stacked PR)
+- [x] 5.1 CUT APPLIED 2026-10-19 (Phases 1-4, 6 and 7 are done and the branch already differs from main by 125 files, past the 100-file trigger): Phases 5.2-5.7 move to a stacked second PR and #10455 stays open (`Ref`). Apply the cut trigger (over 100 files or more than three parity suites red after one CI cycle moves this phase to a stacked PR)
 - [ ] 5.2 RED: `web-bash-synthetic.test.sh` (lock held, container not Running, race with `docker stop`, failed run never pings success URL, nonce mismatch)
 - [ ] 5.3 `web-bash-synthetic.{sh,service,timer}`; `OnBootSec=90s`; Source 4 retag in `vector.toml`
 - [ ] 5.4 `web-probe.tf` heartbeat (period 900, grace 900) and Doppler secret; `server.tf` provisioner pair; `cloud-init.yml`; `soleur-host-bootstrap.sh`; `web-probe-envwrite.sh`; `web-probe-read-token.tf`
