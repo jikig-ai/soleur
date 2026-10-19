@@ -45,5 +45,6 @@ rows written for the new version are shaped by what the new version already does
 6. **`/tmp` was swept on a session restart** and a gate log was lost. Recovery: `/var/tmp`. **Prevention:** already covered.
 
 ## Tags
+
 category: best-practices
 module: tests/scripts/test-argv-bearer-sweep.sh
