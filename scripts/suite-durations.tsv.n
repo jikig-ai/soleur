@@ -342,6 +342,7 @@ scripts/followthroughs/ci-draft-light-soak-9728	104456	measured
 scripts/followthroughs/ci-push-dedupe-soak-9512	87919	measured
 scripts/followthroughs/inngest-provision-rehearsal-capture	1223	measured
 scripts/followthroughs/pr-battery-gate-saving-9323	11826	measured
+scripts/followthroughs/sdk-bash-smoke-verdict-10548	1194	floor
 scripts/followthroughs/t5-skip-persistence-bound-7510	9027	measured
 scripts/followthroughs/tty-ack-migration-9387	3438	measured
 scripts/generate-kb-index-live	2444	measured

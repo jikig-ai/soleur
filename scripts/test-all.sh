@@ -5592,6 +5592,10 @@ if want_scripts; then
   # is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes the PIR-flip tracker, so "PASS only when the
   # fix PR's merge commit is contained in the deployed tag" must redden CI if it regresses to a bare canary-green exit 0.
   run_suite "scripts/sandbox-readback-10445" bash scripts/followthroughs/sandbox-readback-10445.test.sh
+  # #10548: exit-code harness for the SDK Bash smoke promotion soak (5 greens over 3 days with full coverage). Registered EXPLICITLY
+  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). A vacuous PASS (replay_only coverage, a held counter under an infra
+  # error, 4 greens) would close the promotion tracker on a smoke that proved nothing, so it must redden CI.
+  run_suite "scripts/followthroughs/sdk-bash-smoke-verdict-10548" bash scripts/followthroughs/sdk-bash-smoke-verdict-10548.test.sh
   # #10119: exit-code + branch harness for the registry htpasswd-stdin delivery probe. Registered explicitly
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes
   # #10119 after the unattended registry host replace, so a vacuous PASS (old-host rows, forged tails, quoted
