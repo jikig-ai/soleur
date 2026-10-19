@@ -48,9 +48,18 @@ root=$(pwd -P) || exit 0
 git_dir=$(git rev-parse --absolute-git-dir 2>/dev/null) || exit 0
 [[ "$git_dir" == "$root/.git" ]] || exit 0
 
+# Shared context-sanitize lib (#10395). When it is unreadable the same-name
+# fallback carries this site's pre-change strip set (the C0 range) — never
+# weaker than today.
+_ctx_lib="$(dirname "${BASH_SOURCE[0]}")/lib/context-sanitize.sh"
+# shellcheck source=/dev/null
+[[ -r "$_ctx_lib" ]] && . "$_ctx_lib" || true
+declare -F soleur_ctx_sanitize >/dev/null 2>&1 \
+  || soleur_ctx_sanitize() { LC_ALL=C tr -d '\000-\037'; }
+
 # Sanitize the path for display: it enters agent context via the loader, so strip control
 # characters (incl. embedded newlines, which would inject lines into the block) and cap it.
-safe_root=$(printf '%s' "$root" | tr -d '\000-\037' | cut -c1-200)
+safe_root=$(printf '%s' "$root" | soleur_ctx_sanitize | cut -c1-200)
 
 printf 'SOLEUR_BARE_ROOT_CWD source=session-start\n'
 cat <<EOF

@@ -42,6 +42,12 @@ assert_fixture_dir() {
 }
 {
   _sentinel_root="$(git rev-parse --show-toplevel 2>/dev/null)" && \
+  # VERIFIED BUG CLOSED HERE: `$( )` assignment exits 0 even when git fails, so an
+  # unresolvable toplevel (bare root, non-repo cwd, detached GIT_DIR) left
+  # _sentinel_root EMPTY and the `&&` chain proceeded to `mkdir -p /.devin` — on
+  # a uid-0 host a write at the filesystem root. Require a non-empty ABSOLUTE
+  # path before any write; a bare-root session emits context only (#10392 audit).
+  [[ -n "$_sentinel_root" && "$_sentinel_root" == /* ]] && \
   _sentinel_source="${SOLEUR_HOOK_SOURCE:-}" && \
   if [[ -z "$_sentinel_source" ]]; then
     _sentinel_source="repo"

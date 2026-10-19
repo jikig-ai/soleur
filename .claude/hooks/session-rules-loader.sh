@@ -80,6 +80,20 @@ _strip_lib="$(dirname "${BASH_SOURCE[0]}")/../../scripts/lib/frontmatter-strip/s
 # shellcheck source=/dev/null
 if [[ -r "$_strip_lib" ]]; then source "$_strip_lib" 2>/dev/null || true; fi
 
+# context-sanitize lib (#10395): one canonical boundary strip for every byte
+# stream that flows into additionalContext — C0 controls, DEL, NEL, and the
+# U+2028/U+2029 line separators the C0 range alone misses. Sourced hook-relative
+# like strip.sh above. When the lib is unreadable the same-name fallbacks carry
+# each site's pre-change strip set — never weaker than today, so an absent lib
+# degrades to status quo rather than to zero protection or a hook crash.
+_ctx_lib="$(dirname "${BASH_SOURCE[0]}")/lib/context-sanitize.sh"
+# shellcheck source=/dev/null
+[[ -r "$_ctx_lib" ]] && . "$_ctx_lib" || true
+declare -F soleur_ctx_sanitize >/dev/null 2>&1 \
+  || soleur_ctx_sanitize() { LC_ALL=C tr -d '\000-\037'; }
+declare -F soleur_ctx_sanitize_lines >/dev/null 2>&1 \
+  || soleur_ctx_sanitize_lines() { LC_ALL=C tr -d '\000-\010\013-\037'; }
+
 # strip_sidecar_into_global <file> [sentinel_rule_id] — set STRIPPED_OUT to the
 # frontmatter-stripped sidecar. OVER-STRIP GUARD (obs P1): if the strip drops
 # any `- …[id: …]` rule line (malformed/greedy frontmatter — the governance-
@@ -339,7 +353,7 @@ if [[ "${BARE_CWD_OUT%%$'\n'*}" == "SOLEUR_BARE_ROOT_CWD "* ]]; then
   # reach context unfiltered (#10386 review, P3). Keep the marker, keep only
   # prefixed lines, strip control chars (preserving newline/tab), cap at 12.
   BARE_CWD_BLOCK=$(printf '%s\n' "$BARE_CWD_OUT" \
-    | tr -d '\000-\010\013-\037' \
+    | soleur_ctx_sanitize_lines \
     | sed -n '1p;/^\[bare-root-cwd\] /p' \
     | sed -n '1,12p')
 else
@@ -363,14 +377,17 @@ WS_DIRTY=$( { git -C "$REPO_ROOT" status --porcelain --ignore-submodules=all 2>/
 # `gsub("[[:cntrl:]]";"")` strips control chars (incl. embedded newlines) from each
 # server-name key BEFORE the line-oriented sort/paste — a JSON key may legally
 # contain a newline, which would otherwise split one server into two roster
-# entries. Sanitizing per-key (not on the whole stream) preserves the inter-key
-# newlines sort/paste rely on. Mirrors the file's symlink-rejection posture:
+# entries. `gsub("\u2028|\u2029";"")` adds the two Unicode line/paragraph
+# separators, which are NOT in [[:cntrl:]] but inject display lines the same way
+# (#10395 — jq decodes the \u escapes inside the program literal). Sanitizing
+# per-key (not on the whole stream) preserves the inter-key newlines sort/paste
+# rely on. Mirrors the file's symlink-rejection posture:
 # committed config is a content surface that flows into agent context, so clamp it.
 MCP_SERVERS=$(
   {
-    jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"")' "$REPO_ROOT/.mcp.json" 2>/dev/null || true
-    jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"")' "$REPO_ROOT/plugins/soleur/.claude-plugin/plugin.json" 2>/dev/null || true
-    jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"")' "$REPO_ROOT/plugins/soleur/.mcp.json" 2>/dev/null || true
+    jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"") | gsub("\u2028|\u2029";"")' "$REPO_ROOT/.mcp.json" 2>/dev/null || true
+    jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"") | gsub("\u2028|\u2029";"")' "$REPO_ROOT/plugins/soleur/.claude-plugin/plugin.json" 2>/dev/null || true
+    jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"") | gsub("\u2028|\u2029";"")' "$REPO_ROOT/plugins/soleur/.mcp.json" 2>/dev/null || true
   } | sort -u | paste -sd, - || true
 )
 [[ -z "$MCP_SERVERS" ]] && MCP_SERVERS="(none)"
@@ -380,7 +397,7 @@ MCP_SERVERS=$(
 # path would otherwise inject a physical line into the block below, shifting the
 # rule bodies and breaking the lines-4-6 invariant. Near-impossible (the path is a
 # validated git worktree, lines 81-84), but the strip is one cheap defense-in-depth.
-WS_WORKTREE=$(printf '%s' "$REPO_ROOT" | tr -d '\000-\037')
+WS_WORKTREE=$(printf '%s' "$REPO_ROOT" | soleur_ctx_sanitize)
 
 # Line-1 field order (branch | dirty) is LOAD-BEARING for the AC1 grep
 # `^\[session-context\] branch: … | dirty: N files`. Worktree path and roster
@@ -471,7 +488,7 @@ if [[ -s "$TMPFS_ALARM_FILE" ]]; then
   # Report the most recent alarm, not a count of cron ticks: the guard appends
   # every 5 minutes while the condition holds (288/day against a 200-line cap),
   # so a count saturates within hours and carries no severity information.
-  _alarm_last=$(tail -1 "$TMPFS_ALARM_FILE" 2>/dev/null | tr -d '\000-\037' | cut -c1-400 || true)
+  _alarm_last=$(tail -1 "$TMPFS_ALARM_FILE" 2>/dev/null | soleur_ctx_sanitize | cut -c1-400 || true)
   if [[ -n "$_alarm_last" ]]; then
     TMPFS_ALARM_BLOCK=$'\n'"[tmpfs-guard] /tmp alarm, most recent: ${_alarm_last}"
   fi

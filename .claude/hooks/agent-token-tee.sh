@@ -91,11 +91,19 @@ IFS=$'\t' read -r TOOL_NAME SESSION_ID SUBAGENT_TYPE TOTAL_TOKENS TOOL_USES DURA
 # see cq-regex-unicode-separators-escape-only) and cap at 64 chars to prevent
 # log-viewer-rendered phantom JSONL entries if this telemetry is ever piped
 # to a UI/Sentry surface.
+#
+# Shared context-sanitize lib (#10395). When it is unreadable the same-name
+# fallback carries this site's pre-change strip set (C0+DEL plus the LS/PS sed)
+# — never weaker than today.
+_ctx_lib="$(dirname "${BASH_SOURCE[0]}")/lib/context-sanitize.sh"
+# shellcheck source=/dev/null
+[[ -r "$_ctx_lib" ]] && . "$_ctx_lib" || true
+declare -F soleur_ctx_sanitize >/dev/null 2>&1 \
+  || soleur_ctx_sanitize() { LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C sed 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g'; }
+
 sanitize_field() {
   local v
-  v="$(printf '%s' "$1" \
-    | tr -d '\000-\037\177' \
-    | sed 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g')"
+  v="$(printf '%s' "$1" | soleur_ctx_sanitize)"
   printf '%s' "${v:0:64}"
 }
 

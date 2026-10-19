@@ -26,6 +26,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=plugins/soleur/scripts/lib/domain-model-lib.sh
 source "$SCRIPT_DIR/lib/domain-model-lib.sh"
 
+# Shared context-sanitize lib (#10395), beside this script under lib/. When it
+# is unreadable the same-name fallback carries this site's pre-change strip set
+# (C0 minus \t\n, DEL, plus the NEL/LS/PS sed) — never weaker than today.
+_ctx_lib="$SCRIPT_DIR/lib/context-sanitize.sh"
+# shellcheck source=/dev/null
+[[ -r "$_ctx_lib" ]] && . "$_ctx_lib" || true
+declare -F soleur_ctx_sanitize_lines >/dev/null 2>&1 \
+  || soleur_ctx_sanitize_lines() { LC_ALL=C tr -d '\000-\010\013-\037\177' | LC_ALL=C sed 's/\xc2\x85//g; s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g'; }
+
 SCHEMA_VERSION=1
 DISCLAIMER="Best-effort structural extraction from migrations/RLS/types; NOT a security audit or access-control attestation. Absence from this report does not imply an invariant is unenforced, and presence does not imply it is correctly enforced. Dynamic SQL and function-body logic are disclosed as blind_spots, not analyzed."
 
@@ -318,8 +327,8 @@ write_row() {
   # newline \012 already rejected above), DEL, and unicode line separators
   # U+0085/U+2028/U+2029 (security P2 — full control-char class).
   local esc_anchor esc_stmt
-  esc_anchor="$(printf '%s' "$ANCHOR"    | tr -d '\000-\010\013-\037\177' | sed 's/|/\\|/g; s/\xc2\x85//g; s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g')"
-  esc_stmt="$(printf '%s' "$STATEMENT"   | tr -d '\000-\010\013-\037\177' | sed 's/|/\\|/g; s/\xc2\x85//g; s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g')"
+  esc_anchor="$(printf '%s' "$ANCHOR"    | soleur_ctx_sanitize_lines | sed 's/|/\\|/g')"
+  esc_stmt="$(printf '%s' "$STATEMENT"   | soleur_ctx_sanitize_lines | sed 's/|/\\|/g')"
   # neutralize a forged row/heading marker at the START of EITHER field — the anchor
   # is column 1, exactly where curated `BR-NNN` IDs live (security P2).
   esc_anchor="${esc_anchor/#BR-/BR‑}"; esc_anchor="${esc_anchor/#\#\#/\\#\\#}"

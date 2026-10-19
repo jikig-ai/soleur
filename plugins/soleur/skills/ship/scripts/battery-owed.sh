@@ -50,7 +50,16 @@ VERDICT_UNDECIDABLE=2
 # `battery-owed: …` line in the transcript, and the obvious thing to forge is a
 # SKIPPABLE verdict. The exit code is unaffected (and SKILL.md branches on it),
 # but a forged line sitting beside the caller's own echo is worth denying.
-_sanitize() { printf '%s' "$*" | LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C sed $'s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g'; }
+#
+# Shared context-sanitize lib (#10395), three levels up at scripts/lib/. When it
+# is unreadable the same-name fallback carries this site's pre-change strip set
+# (C0+DEL plus the LS/PS sed) — never weaker than today.
+_ctx_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)/../../../scripts/lib/context-sanitize.sh"
+# shellcheck source=/dev/null
+[[ -r "$_ctx_lib" ]] && . "$_ctx_lib" || true
+declare -F soleur_ctx_sanitize >/dev/null 2>&1 \
+  || soleur_ctx_sanitize() { LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C sed $'s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g'; }
+_sanitize() { printf '%s' "$*" | soleur_ctx_sanitize; }
 say() { printf 'battery-owed: %s\n' "$(_sanitize "$*")"; }
 
 owed()        { say "OWED — $1";        exit "$VERDICT_OWED"; }

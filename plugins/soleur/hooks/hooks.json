@@ -52,6 +52,16 @@
         ]
       },
       {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/bare-root-cwd-guard.sh\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
         "matcher": "startup",
         "hooks": [
           {
