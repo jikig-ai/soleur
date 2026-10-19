@@ -417,7 +417,7 @@ Low-priority improvements deferred until after validation. Revisit when the plat
 | L10 | Add explicit AI-crawler allow rules to robots.txt (GPTBot, ClaudeBot, PerplexityBot, Google-Extended — defensive) | P3 | [#2558](https://github.com/jikig-ai/soleur/issues/2558) | Not started |
 | L11 | Rewrite /agents/ meta description with concrete number + outcome | P2 | [#2667](https://github.com/jikig-ai/soleur/issues/2667) | Not started |
 | L12 | Add shared hub + sibling back-links for /blog/soleur-vs-*/ comparison cluster | P2 | [#2668](https://github.com/jikig-ai/soleur/issues/2668) | Not started |
-| L13 | Split /getting-started/ intent — "Two ways to start" pattern | P2 | [#2669](https://github.com/jikig-ai/soleur/issues/2669) | Not started |
+| L13 | Split /getting-started/ intent — "Two ways to start" pattern. Raised to P1 by growth audit 2026-10-19 ([#10516](https://github.com/jikig-ai/soleur/issues/10516)): the homepage self-host CTA now lands visitors here | P1 | [#2669](https://github.com/jikig-ai/soleur/issues/2669) | Not started |
 | L14 | Rename "Uncategorized" H2 on /skills/ + add inline definition of "agentic engineering" | P2 | [#2670](https://github.com/jikig-ai/soleur/issues/2670) | Done |
 | L15 | Add FAQ blocks to /getting-started/ and /vision/ | P2 | [#2671](https://github.com/jikig-ai/soleur/issues/2671) | Not started |
 | L16 | Add "This week in Soleur" weekly summary lede to /changelog/ | P2 | [#2672](https://github.com/jikig-ai/soleur/issues/2672) | Not started |
@@ -447,7 +447,7 @@ Surfaced 2026-05-30 from benchmarking against **Viktor** (multi-player enterpris
 
 | # | Bet | Priority | ICP fit | Issue | Status |
 |---|-----|----------|---------|-------|--------|
-| CP1 | Runtime untrusted-data classification (indirect prompt-injection defense) — LLM-classify external content before agents act on it | P1 | Near-term (current ICP) | [#4671](https://github.com/jikig-ai/soleur/issues/4671) | Not started |
+| CP1 | Runtime untrusted-data classification (indirect prompt-injection defense) — heuristic annotation of fetched web content (WebFetch only, ADR-287); not yet a defense: flags off in prd, no out-of-sample numbers; LLM tier conditional on measured recall | P1 | Near-term (current ICP) | [#4671](https://github.com/jikig-ai/soleur/issues/4671) | In progress (WebFetch slice, flags off in prd) |
 | CP2 | Structured human-in-the-loop approval queue for write/send actions (batched, reviewable — better than per-call CLI prompts for non-technical operators) | P2 | Near-term (current ICP) | [#4672](https://github.com/jikig-ai/soleur/issues/4672) | Not started |
 | CP3 | Cross-system scheduled business automations (business-process crons beyond infra/dev) | P2 | Unlocks with CP4 | [#4674](https://github.com/jikig-ai/soleur/issues/4674) | Not started |
 | CP4 | Business-SaaS integration breadth (Slack/Gmail/Asana-class MCP connectors for cross-silo orchestration) | P3 | Strategic (up-market) | [#4673](https://github.com/jikig-ai/soleur/issues/4673) | Not started |

@@ -239,6 +239,26 @@ echo "--- credential channel: argv clean, stdin exact; unsafe values refused ---
 mkdir -p "$TMP/stubbin"
 cat > "$TMP/stubbin/curl" <<'STUBCURL'
 #!/usr/bin/env bash
+# Heartbeat call (#9757): `-o /dev/null` and NO `-w`. It prints nothing, honours -f against STUB_HB_CODE, fails on
+# demand (STUB_HB_RC for every attempt, STUB_HB_FAIL_FIRST=1 for the first attempt only), and is recorded to its OWN
+# files (STUB_HB_ARGV / STUB_HB_STDIN) so the registry request's `user = "..."` stdin in STUB_STDIN is never confused
+# with the heartbeat's `url = "..."` stdin. STUB_HB_NOSTDIN=1 makes it ignore its stdin (the instrument control).
+hb=0; hbw=0; hbcfg=0; hbprev=""
+for a in "$@"; do
+  [[ "$a" == -w ]] && hbw=1
+  [[ "$hbprev" == -o && "$a" == /dev/null ]] && hb=1
+  [[ "$a" == --config ]] && hbcfg=1
+  hbprev="$a"
+done
+if [[ "$hb" == 1 && "$hbw" == 0 ]]; then
+  printf '%s\n' "$*" >> "${STUB_HB_ARGV:-/dev/null}"
+  [[ "$hbcfg" == 1 && "${STUB_HB_NOSTDIN:-}" != 1 ]] && cat >> "${STUB_HB_STDIN:-/dev/null}"
+  hbn=$(wc -l < "${STUB_HB_ARGV:-/dev/null}")
+  [[ "${STUB_HB_FAIL_FIRST:-}" == 1 && "$hbn" -eq 1 ]] && exit 7
+  hbforce=0; for a in "$@"; do case "$a" in --*) ;; -*f*) hbforce=1 ;; esac; done
+  [[ "$hbforce" == 1 && "$((10#${STUB_HB_CODE:-200}))" -ge 400 ]] && exit 22
+  exit "${STUB_HB_RC:-0}"
+fi
 printf '%s\n' "$*" >> "$STUB_ARGV"
 cfg=0; for a in "$@"; do [[ "$a" == "--config" ]] && cfg=1; done
 [[ "$cfg" == 1 ]] && cat >> "$STUB_STDIN"
@@ -303,6 +323,237 @@ sed 's| --config - "http| -u "$ZUSER:$ZTOK" "http|; s|< <(printf .user = "%s:%s"
 SUT_REAL="$SUT"; SUT="$ARGV_MUT"; run_stub zuser synthetic-fixture-token-0001; SUT="$SUT_REAL"
 assert "(h) mutation check: the argv form of the probe IS caught by the (f) argv assertion" \
   "grep -qF -e synthetic-fixture-token-0001 '$SARGV'"
+
+# --- heartbeat channel (#9757): the heartbeat URL reaches curl on its stdin config, never on argv --------------
+# Every row above uses the ping-log seam, which returns BEFORE the transport, so none of them ever executed the
+# heartbeat curl. These rows run with NO SOLEUR_ZOT_PROBE_PING_LOG: the stub answers the registry request 200 (the
+# probe reaches _ping) and records each heartbeat call to its own files. The URL is judged BEFORE any request: a
+# scheme other than https://, an empty rest, or any byte outside the allowed class is refused with ZERO heartbeat
+# requests, one value-free SOLEUR_CREDENTIAL_REFUSED marker per hour (its OWN refusal stamp, never the canary's or
+# the per-repo marker's; CTO ruling 2026-10-15) and the unchanged fail-soft exit status.
+echo "--- heartbeat channel: stdin config, per-attempt, shape guard, refusal limiter (#9757) ---"
+HB_GOOD='https://uptime.betterstack.test/api/v1/heartbeat/synthetic-zot-token'
+HB_OTHER='https://uptime.betterstack.test/api/v1/heartbeat/A.b_c~d:9?x=1&y=%2B+z-Q'
+HB_ARGV_FORM='--disable --noproxy * -gfsS -m 10 -o /dev/null --config -'
+HB_MARKER_HEAD='SOLEUR_CREDENTIAL_REFUSED script=web-zot-consumer-probe'
+# HEC / HB_ARGV / HB_STDIN / HB_REGARGV / HOUT (files) / HOUTTXT / N_HB (heartbeat curls) / N_MARK / N_WARN.
+run_hb() {  # <WEB_ZOT_CONSUMER_URL value> [extra env assignments, applied last so they win]
+  local url="$1" ec=0; shift
+  MARKER_N=$((MARKER_N + 1))
+  HB_ARGV="$(mktemp "$TMP/hbargv.XXXXXX")"; HB_STDIN="$(mktemp "$TMP/hbstdin.XXXXXX")"
+  HB_REGARGV="$TMP/hbreg.argv.$MARKER_N"; HOUT="$(mktemp "$TMP/hbout.XXXXXX")"
+  env -u SOLEUR_ZOT_PROBE_PING_LOG -u SOLEUR_ZOT_PROBE_STATUS_OVERRIDE \
+    STUB_ARGV="$HB_REGARGV" STUB_STDIN="$TMP/hbreg.stdin.$MARKER_N" STUB_HB_ARGV="$HB_ARGV" STUB_HB_STDIN="$HB_STDIN" \
+    PATH="$TMP/stubbin:$PATH" SOLEUR_PROBE_REPOS_MARKER="$TMP/repos.$MARKER_N" SOLEUR_PROBE_CANARY_MARKER="$TMP/canary.$MARKER_N" \
+    SOLEUR_PROBE_REFUSAL_MARKER="$TMP/refusal.$MARKER_N" \
+    ZOT_ENDPOINT=127.0.0.1:9 ZOT_PROBE_REPO=known/repo ZUSER=zuser ZTOK=ztok "WEB_ZOT_CONSUMER_URL=$url" "$@" \
+    timeout 20 bash "$SUT" >"$HOUT" 2>&1 || ec=$?
+  HEC=$ec
+  # shellcheck disable=SC2034  # read by NAME inside the assert() eval strings
+  HOUTTXT="$(cat "$HOUT")"
+  N_HB="$(wc -l < "$HB_ARGV" | tr -d ' ')"
+  N_MARK="$(grep -c 'SOLEUR_CREDENTIAL_REFUSED' "$HOUT" || true)"
+  N_WARN="$(grep -c 'heartbeat URL refused' "$HOUT" || true)"
+}
+hb_stdin_all_are() {  # <url>: at least one stdin line was recorded and every one is exactly url = "<url>"
+  local want; want="$(printf 'url = "%s"' "$1")"
+  [[ -s "$HB_STDIN" && "$(sort -u "$HB_STDIN")" == "$want" ]]
+}
+hb_stdin_lines() { wc -l < "$HB_STDIN" | tr -d ' '; }
+hb_epoch_age() {  # <file> -> seconds since the epoch value it holds (empty when unreadable)
+  local v; v="$(cat "$1" 2>/dev/null)" || return 0; [[ "$v" =~ ^[0-9]+$ ]] && printf '%s' "$(( $(date +%s) - v ))"
+}
+
+# (a) a well-formed https canary with a DIFFERENT token than the fixture, using every allowed punctuation class
+run_hb "$HB_OTHER"
+HB_BASE_EC="$HEC"
+assert "(hb-a) well-formed https URL: exactly one heartbeat curl, exit 0" "[[ '$N_HB' -eq 1 && '$HEC' -eq 0 ]]"
+assert "(hb-a) the heartbeat argv is exactly the --disable --noproxy * -gfsS -m 10 -o /dev/null --config - form (no URL word)" \
+  "[[ -s '$HB_ARGV' ]] && grep -qxF -e '$HB_ARGV_FORM' '$HB_ARGV'"
+assert "(hb-a) the URL is on no argv at all (neither the heartbeat's nor the registry request's)" \
+  "[[ -s '$HB_REGARGV' ]] && ! grep -qF -e uptime -e betterstack -e heartbeat -e 'A.b_c' '$HB_ARGV' '$HB_REGARGV'"
+assert "(hb-a) the heartbeat stdin is exactly one url = \"...\" line carrying the stored URL" \
+  "[[ \"\$(hb_stdin_lines)\" -eq 1 ]] && hb_stdin_all_are '$HB_OTHER'"
+assert "(hb-a) no marker and no WARN on a healthy ping" "[[ '$N_MARK' -eq 0 && '$N_WARN' -eq 0 ]] && ! grep -q 'WARN' <<<\"\$HOUTTXT\""
+
+# (b) per-attempt stdin: a process substitution is consumed once, so attempt 2 needs its OWN fresh url line
+run_hb "$HB_GOOD" STUB_HB_FAIL_FIRST=1
+assert "(hb-b) first attempt fails => two attempts, two identical recorded url lines (the second did not read EOF)" \
+  "[[ '$N_HB' -eq 2 && \"\$(hb_stdin_lines)\" -eq 2 ]] && hb_stdin_all_are '$HB_GOOD'"
+assert "(hb-b) the second attempt succeeded: exit 0 and no FAILED warning" "[[ '$HEC' -eq 0 ]] && ! grep -q 'ping FAILED' <<<\"\$HOUTTXT\""
+run_hb "$HB_GOOD" STUB_HB_RC=7
+assert "(hb-b) both attempts fail => two curls, one FAILED warning, still fail-soft exit 0" \
+  "[[ '$N_HB' -eq 2 && '$HEC' -eq 0 ]] && grep -q 'heartbeat ping FAILED' <<<\"\$HOUTTXT\""
+# instrument control: a stub that ignores stdin records no url line, so the per-attempt row's predicate must be able to say NO
+run_hb "$HB_GOOD" STUB_HB_FAIL_FIRST=1 STUB_HB_NOSTDIN=1
+assert "(hb-b) instrument: a stub that ignores stdin makes the per-attempt predicate FAIL (two attempts, zero recorded lines)" \
+  "[[ '$N_HB' -eq 2 ]] && ! hb_stdin_all_are '$HB_GOOD'"
+run_hb "$HB_GOOD" STUB_HB_CODE=404
+assert "(hb-b) the stub honours -f: a 404 heartbeat answer fails both attempts (curl exit 22) and the probe stays fail-soft" \
+  "[[ '$N_HB' -eq 2 && '$HEC' -eq 0 ]] && grep -q 'heartbeat ping FAILED' <<<\"\$HOUTTXT\""
+
+# (c) hostile and malformed values: ONE defect per row (a good URL plus one bad thing), defined ONCE as parallel arrays
+HB_BAD_LABEL=(); HB_BAD_REASON=(); HB_BAD_VAL=()
+hb_bad() { HB_BAD_LABEL+=("$1"); HB_BAD_REASON+=("$2"); HB_BAD_VAL+=("$3"); }
+hb_bad 'an empty rest (https://)'                token_shape 'https://'
+hb_bad 'a scheme other than https (http://)'     token_shape "http://${HB_GOOD#https://}"
+hb_bad 'an uppercase scheme (HTTPS://)'          token_shape "HTTPS://${HB_GOOD#https://}"
+hb_bad 'a leading space'                         token_shape " ${HB_GOOD}"
+hb_bad 'a trailing space'                        token_shape "${HB_GOOD} "
+hb_bad 'a double quote'                          token_shape "${HB_GOOD}\""
+hb_bad 'a single quote'                          token_shape "${HB_GOOD}'"
+hb_bad 'a backslash'                             token_shape "${HB_GOOD}\\x"
+hb_bad 'a newline then a smuggled url = directive' control_char "${HB_GOOD}"$'\n''url = "http://203.0.113.1/smuggled"'
+hb_bad 'a carriage return'                       control_char "${HB_GOOD}"$'\r'
+hb_bad 'a tab'                                   control_char "${HB_GOOD}"$'\t'
+hb_bad 'a semicolon'                             token_shape "${HB_GOOD};x"
+hb_bad 'a dollar sign'                           token_shape "${HB_GOOD}\$x"
+hb_bad 'a backtick'                              token_shape "${HB_GOOD}\`x"
+hb_bad 'an at sign (userinfo)'                   token_shape "https://u@${HB_GOOD#https://}"
+hb_bad 'a hash'                                  token_shape "${HB_GOOD}#x"
+HB_BAD_N=16
+hb_bad_distinct() { printf '%s\0' "${HB_BAD_VAL[@]}" | sort -zu | tr -cd '\0' | wc -c | tr -d ' '; }
+hb_bad_with_token() { local v n=0; for v in "${HB_BAD_VAL[@]}"; do [[ "$v" == *synthetic-zot-token* ]] && n=$((n + 1)); done; printf '%s' "$n"; }
+hb_bad_cntrl_vals() { local v n=0; for v in "${HB_BAD_VAL[@]}"; do [[ "$v" == *[[:cntrl:]]* ]] && n=$((n + 1)); done; printf '%s' "$n"; }
+hb_bad_cntrl_reasons() { local r n=0; for r in "${HB_BAD_REASON[@]}"; do [[ "$r" == control_char ]] && n=$((n + 1)); done; printf '%s' "$n"; }
+hb_bad_equals_good() { local v; for v in "${HB_BAD_VAL[@]}"; do [[ "$v" == "$HB_GOOD" ]] && return 0; done; return 1; }
+assert "(hb-c) the hostile-value array holds exactly $HB_BAD_N rows (labels, reasons and values in step)" \
+  "[[ '${#HB_BAD_VAL[@]}' -eq $HB_BAD_N && '${#HB_BAD_LABEL[@]}' -eq $HB_BAD_N && '${#HB_BAD_REASON[@]}' -eq $HB_BAD_N ]]"
+assert "(hb-c) the rows are content-asserted: all $HB_BAD_N values distinct, none equals the good URL, all but the empty rest carry the good token" \
+  "[[ \"\$(hb_bad_distinct)\" -eq $HB_BAD_N && \"\$(hb_bad_with_token)\" -eq $((HB_BAD_N - 1)) ]] && ! hb_bad_equals_good"
+assert "(hb-c) exactly the control-character rows (newline, CR, tab) carry a control char and a control_char reason" \
+  "[[ \"\$(hb_bad_cntrl_vals)\" -eq 3 && \"\$(hb_bad_cntrl_reasons)\" -eq 3 ]]"
+for _i in "${!HB_BAD_VAL[@]}"; do
+  run_hb "${HB_BAD_VAL[$_i]}"
+  assert "(hb-c) refuses ${HB_BAD_LABEL[$_i]}: zero heartbeat curls (the registry request still ran), exactly one marker, exit status unchanged" \
+    "[[ '$N_HB' -eq 0 && '$N_MARK' -eq 1 && '$HEC' -eq '$HB_BASE_EC' && -s '$HB_REGARGV' ]]"
+  assert "(hb-c) refuses ${HB_BAD_LABEL[$_i]}: marker names reason=${HB_BAD_REASON[$_i]} and the variable, and no URL text is echoed" \
+    "grep -qxF -e '$HB_MARKER_HEAD reason=${HB_BAD_REASON[$_i]} var=WEB_ZOT_CONSUMER_URL' '$HOUT' && ! grep -qF -e betterstack -e synthetic-zot-token -e 203.0.113.1 -e 'https://' '$HOUT'"
+done
+# unset URL is the pre-existing WARN arm (not a refusal): zero heartbeat curls, no marker, same exit
+run_hb ""
+assert "(hb-c) an empty URL keeps the existing WARN arm: zero heartbeat curls, no marker, exit 0" \
+  "[[ '$N_HB' -eq 0 && '$N_MARK' -eq 0 && '$HEC' -eq 0 ]] && grep -qF 'WEB_ZOT_CONSUMER_URL unset' <<<\"\$HOUTTXT\""
+
+# (d) the refusal limiter: its OWN stamp, 3600 s, future-dated or garbage reads as emit, unwritable fails OPEN
+RS="$TMP/refusal.window"; rm -f "$RS"
+hb_sum_mark=0; hb_sum_warn=0; hb_sum_hb=0; hb_sum_badec=0
+for _ in 1 2 3 4; do
+  run_hb "${HB_GOOD}\"" SOLEUR_PROBE_REFUSAL_MARKER="$RS"
+  hb_sum_mark=$((hb_sum_mark + N_MARK)); hb_sum_warn=$((hb_sum_warn + N_WARN)); hb_sum_hb=$((hb_sum_hb + N_HB))
+  [[ "$HEC" -eq "$HB_BASE_EC" ]] || hb_sum_badec=$((hb_sum_badec + 1))
+done
+assert "(hb-d) four refused runs inside one window log ONE marker and ONE WARN, make zero heartbeat curls, and EVERY run keeps the baseline exit status" \
+  "[[ '$hb_sum_mark' -eq 1 && '$hb_sum_warn' -eq 1 && '$hb_sum_hb' -eq 0 && '$hb_sum_badec' -eq 0 ]]"
+assert "(hb-d) the emit wrote the refusal stamp (a current epoch)" "[[ -n \"\$(hb_epoch_age '$RS')\" && \"\$(hb_epoch_age '$RS')\" -ge 0 && \"\$(hb_epoch_age '$RS')\" -lt 120 ]]"
+
+hb_aged_row() {  # <label> <seed: age in seconds | @future | @garbage | @empty> <expected markers> <stamp: rewritten|unchanged>
+  local seed="$2" want="$3" kind="$4" before
+  case "$seed" in
+    @future)  printf '%s\n' "$(( $(date +%s) + 99999 ))" > "$RS" ;;
+    @garbage) printf 'not-an-epoch\n' > "$RS" ;;
+    @text:*)  printf '%s\n' "${seed#@text:}" > "$RS" ;;
+    @empty)   : > "$RS" ;;
+    *)        printf '%s\n' "$(( $(date +%s) - seed ))" > "$RS" ;;
+  esac
+  before="$(cat "$RS")"
+  run_hb "${HB_GOOD}\"" SOLEUR_PROBE_REFUSAL_MARKER="$RS"
+  assert "(hb-d) $1 => $want marker(s), zero heartbeat curls" "[[ '$N_MARK' -eq $want && '$N_HB' -eq 0 ]]"
+  if [[ "$kind" == rewritten ]]; then
+    assert "(hb-d) $1 => the stamp was rewritten to the current epoch" "[[ \"\$(cat '$RS')\" != '$before' && \"\$(hb_epoch_age '$RS')\" -ge 0 && \"\$(hb_epoch_age '$RS')\" -lt 120 ]]"
+  else
+    assert "(hb-d) $1 => the stamp was left alone" "[[ \"\$(cat '$RS')\" == '$before' ]]"
+  fi
+}
+hb_aged_row 'a stamp aged 2000 s still suppresses (the window is 3600 s, not the shared 1800 s)' 2000 0 unchanged
+hb_aged_row 'a stamp aged 3700 s re-emits' 3700 1 rewritten
+hb_aged_row 'a future-dated stamp emits' @future 1 rewritten
+hb_aged_row 'a garbage stamp emits' @garbage 1 rewritten
+# Short stamps: shorter than the 10-character cap, so only the numeric guard (and the base-10 coercion) can judge them.
+hb_aged_row 'a 3-character non-numeric stamp (abc) emits' @text:abc 1 rewritten
+hb_aged_row 'a 4-character mixed stamp (12ab) emits' @text:12ab 1 rewritten
+hb_aged_row 'a leading-zero 9 stamp (0000000009, an invalid octal) is read as base 10 and emits' @text:0000000009 1 rewritten
+hb_aged_row 'a leading-zero 8 stamp (0000000008) is read as base 10 and emits' @text:0000000008 1 rewritten
+hb_aged_row 'an 11-digit stamp (longer than any epoch) emits' @text:12345678901 1 rewritten
+hb_aged_row 'an empty stamp emits' @empty 1 rewritten
+hb_aged_row 'a fresh stamp (control for the rows above) suppresses' 5 0 unchanged
+# Boundary rows at the exact edge of the 3600 s window. A run that straddles a clock-second tick would age the stamp by one
+# more second and move the edge under the assertion, so the helper re-seeds until a run began and ended inside one second.
+hb_exact_age_run() {  # <age seconds> -> a refused run against a stamp of exactly that age; HB_T0 = that second; rc 1 if no tick-free run in 5 tries
+  local age="$1" t0 t1
+  for _ in 1 2 3 4 5; do
+    t0="$(date +%s)"; printf '%s\n' "$((t0 - age))" > "$RS"
+    run_hb "${HB_GOOD}\"" SOLEUR_PROBE_REFUSAL_MARKER="$RS"
+    t1="$(date +%s)"; HB_T0="$t0"; [[ "$t0" == "$t1" ]] && return 0
+  done
+  return 1
+}
+hb_exact_age_run 3599; HB_EXACT_OK=$?
+assert "(hb-d) a stamp aged exactly 3599 s suppresses (one second inside the window): no marker, no WARN, zero heartbeat curls, stamp left alone" \
+  "[[ '$HB_EXACT_OK' -eq 0 && '$N_MARK' -eq 0 && '$N_WARN' -eq 0 && '$N_HB' -eq 0 && \"\$(cat '$RS')\" -eq '$((HB_T0 - 3599))' ]]"
+hb_exact_age_run 3600; HB_EXACT_OK=$?
+assert "(hb-d) a stamp aged exactly 3600 s emits (the window is closed at 3600: age < 3600 suppresses) and the stamp is rewritten to now" \
+  "[[ '$HB_EXACT_OK' -eq 0 && '$N_MARK' -eq 1 && '$N_WARN' -eq 1 && '$N_HB' -eq 0 && \"\$(cat '$RS')\" -eq '$HB_T0' ]]"
+
+# the refusal stamp is its OWN file: a fresh canary/per-repo stamp must not suppress the refusal marker, and vice versa
+HB_CAN="$TMP/canary.own"; HB_REP="$TMP/repos.own"; HB_REF="$TMP/refusal.own"; rm -f "$HB_REF"
+HB_SEED=$(( $(date +%s) - 100 )); printf '%s\n' "$HB_SEED" > "$HB_CAN"; printf '%s\n' "$HB_SEED" > "$HB_REP"
+run_hb "${HB_GOOD}\"" SOLEUR_PROBE_CANARY_MARKER="$HB_CAN" SOLEUR_PROBE_REPOS_MARKER="$HB_REP" SOLEUR_PROBE_REFUSAL_MARKER="$HB_REF"
+assert "(hb-d) fresh canary AND per-repo stamps do not suppress the refusal marker (own stamp)" "[[ '$N_MARK' -eq 1 ]] && ! grep -q 'SOLEUR_PROBE_CANARY' '$HOUT'"
+assert "(hb-d) the refusal emit did not touch the canary or per-repo stamps" "[[ \"\$(cat '$HB_CAN')\" == '$HB_SEED' && \"\$(cat '$HB_REP')\" == '$HB_SEED' && -s '$HB_REF' ]]"
+rm -f "$HB_CAN" "$HB_REP"; printf '%s\n' "$(date +%s)" > "$HB_REF"
+run_hb "${HB_GOOD}\"" SOLEUR_PROBE_CANARY_MARKER="$HB_CAN" SOLEUR_PROBE_REPOS_MARKER="$HB_REP" SOLEUR_PROBE_REFUSAL_MARKER="$HB_REF"
+assert "(hb-d) a fresh refusal stamp does not suppress the canary or the per-repo markers (and the refusal itself stays suppressed)" \
+  "[[ '$N_MARK' -eq 0 ]] && grep -q 'SOLEUR_PROBE_CANARY' '$HOUT' && grep -q 'SOLEUR_ZOT_PROBE_VERDICT' '$HOUT'"
+
+# an UNWRITABLE stamp path fails OPEN: the marker is emitted on every tick (loud, never silent)
+HB_UNW="$TMP/no-such-dir/refusal.stamp"; hb_unw_mark=0
+for _ in 1 2; do run_hb "${HB_GOOD}\"" SOLEUR_PROBE_REFUSAL_MARKER="$HB_UNW"; hb_unw_mark=$((hb_unw_mark + N_MARK)); done
+assert "(hb-d) an unwritable stamp path fails OPEN: two refused runs, two markers, exit status unchanged, nothing created" \
+  "[[ '$hb_unw_mark' -eq 2 && '$HEC' -eq '$HB_BASE_EC' && ! -e '$HB_UNW' ]]"
+
+# regression: the shared window helper keeps its 1800 s window for its existing callers (canary, per-repo markers)
+hb_win_row() {  # <label> <env var holding the stamp path> <age> <expected: emit|suppress> <marker text>
+  local stamp="$TMP/win.$MARKER_N.stamp"
+  printf '%s\n' "$(( $(date +%s) - $3 ))" > "$stamp"
+  run_hb "$HB_GOOD" "$2=$stamp"
+  if [[ "$4" == emit ]]; then assert "(hb-d) $1 aged $3 s emits" "grep -q '$5' '$HOUT'"
+  else assert "(hb-d) $1 aged $3 s suppresses" "! grep -q '$5' '$HOUT'"; fi
+}
+hb_win_row 'a canary stamp' SOLEUR_PROBE_CANARY_MARKER 1700 suppress SOLEUR_PROBE_CANARY
+hb_win_row 'a canary stamp' SOLEUR_PROBE_CANARY_MARKER 1900 emit SOLEUR_PROBE_CANARY
+hb_win_row 'a per-repo stamp' SOLEUR_PROBE_REPOS_MARKER 1700 suppress SOLEUR_ZOT_PROBE_VERDICT
+hb_win_row 'a per-repo stamp' SOLEUR_PROBE_REPOS_MARKER 1900 emit SOLEUR_ZOT_PROBE_VERDICT
+
+# static shape (the S6-HB identity checks, restated so this suite fails on its own): one guard-class literal on a
+# non-comment line BEFORE the single stdin url line, one per-attempt _hb_curl called twice, -g kept
+HB_CLASS='[!A-Za-z0-9._~:/?\&=%+-]'
+hb_code() { sed 's/^[[:space:]]*#.*//' "$SUT"; }
+HB_CODE_TXT="$(hb_code)"
+hb_line_of() { grep -nF -e "$1" <<<"$HB_CODE_TXT" | head -1 | cut -d: -f1; }
+assert "(hb-s) the guard-class literal is DEFINED (source order) before the single stdin url line, exactly once on a non-comment line" \
+  "[[ \"\$(grep -cF -e '$HB_CLASS' <<<\"\$HB_CODE_TXT\")\" -eq 1 && \"\$(grep -cF -e 'url = \"' <<<\"\$HB_CODE_TXT\")\" -eq 1 && -n \"\$(hb_line_of '$HB_CLASS')\" && \"\$(hb_line_of '$HB_CLASS')\" -lt \"\$(hb_line_of 'url = \"')\" ]]"
+assert "(hb-s) _hb_curl is defined once and called twice (one fresh process substitution per attempt)" "[[ \"\$(hb_code | grep -oE '_hb_curl' | wc -l)\" -eq 3 ]]"
+assert "(hb-s) the heartbeat curl keeps -g and the --disable --noproxy '*' confinement" \
+  "[[ \"\$(grep -cF -e \"curl --disable --noproxy '*' -gfsS -m 10 -o /dev/null --config -\" <<<\"\$HB_CODE_TXT\")\" -eq 1 ]]"
+
+# REAL-curl smoke. Every row above runs a stub curl, which accepts any argv, so a flag the real curl rejects (exit 2,
+# "curl: option ...") would pass them all. Extract the SUT's own _hb_curl definition and run it against the real curl at a
+# closed port: a well-formed argv gets as far as the connect and fails with rc 7; a rejected option gives rc 2. The
+# definition silences curl's stderr, so a second copy with that redirect removed shows the text itself.
+HB_DEF="$TMP/hb_curl.def"; HB_DEF_LOUD="$TMP/hb_curl_loud.def"
+sed -n '/^_hb_curl()/p' "$SUT" > "$HB_DEF"
+sed 's| 2>/dev/null||' "$HB_DEF" > "$HB_DEF_LOUD"
+SMOKE_RC="$(env URL='https://127.0.0.1:9/p' bash -c ". \"\$1\"; _hb_curl; echo \$?" _ "$HB_DEF" 2>&1)"
+# shellcheck disable=SC2034  # read by NAME inside the assert() eval strings below
+SMOKE_TXT="$(env URL='https://127.0.0.1:9/p' bash -c ". \"\$1\"; _hb_curl; echo \"rc=\$?\"" _ "$HB_DEF_LOUD" 2>&1)"
+assert "(hb-smoke) the extracted _hb_curl definition is one non-empty line and the stderr-visible copy differs from it" \
+  "[[ \"\$(wc -l < '$HB_DEF')\" -eq 1 && -s '$HB_DEF' ]] && ! cmp -s '$HB_DEF' '$HB_DEF_LOUD'"
+assert "(hb-smoke) the curl on the test shell's PATH is the real one, not the stub" \
+  "[[ \"\$(command -v curl)\" != '$TMP/stubbin/curl' && -x \"\$(command -v curl)\" ]]"
+assert "(hb-smoke) the real curl accepts the argv: exit 7 (connection refused), never 2 (option rejected)" "[[ '$SMOKE_RC' == 7 ]]"
+assert "(hb-smoke) the real curl's own message is a connect failure, with no 'curl: option' and no '(2)' text" \
+  "grep -qF '(7)' <<<\"\$SMOKE_TXT\" && ! grep -qF -e 'curl: option' -e '(2)' <<<\"\$SMOKE_TXT\""
 
 # --- static drift-guard: doppler-auth unit-start contract + observability delivery --------
 # (#6438 §1 unit-start fix.) The unit runs `doppler run` as ROOT. Without Environment=HOME=/root
@@ -546,11 +797,18 @@ pin_rows() {  # <file...> -> the repository path of every NAME*REF="$<var>/path[
          -e 's|.*docker pull "[$]*[$A-Za-z0-9_{}]*/\([^:@"]*\)[:@"].*|\1|p' "$@"
 }
 all_pins() { pin_rows "$@" | sort -u; }
-assert "T7 every registry-prefixed pin in both cloud-init files names the one bootstrap repository (a third pin fails here)" \
-  "[[ \"\$(all_pins '$CLOUD_INIT_WEB' '$CLOUD_INIT_INNGEST')\" == '$TF_BOOT' ]]"
-# The pin set is also counted: exactly the two ZIREF pins exist today (one per host class).
-assert "T7 exactly two registry-prefixed pins exist across both cloud-init files (one per host class)" \
-  "[[ \"\$(pin_rows '$CLOUD_INIT_WEB' '$CLOUD_INIT_INNGEST' | wc -l)\" -eq 2 ]]"
+# #6780 widened the registry-ref set: the refresh consumer's BREF
+# ("$${ZOT_EP}/$${BUNDLE_REPO}@sha256:<pointer>") is a third registry-prefixed
+# pin by design — the signed config-bundle channel pulls a SECOND repository
+# (jikig-ai/soleur-inngest-config via the BUNDLE_REPO var literal) that the
+# zot consumer probe deliberately does not cover. The contract is now: every
+# pin names the bootstrap repo OR the BUNDLE_REPO form, and the bootstrap
+# repo still gets exactly its two pins.
+assert "T7 every registry-prefixed pin in both cloud-init files names the bootstrap repository or the #6780 BUNDLE_REPO form (a fourth pin fails here)" \
+  "[[ -z \"\$(all_pins '$CLOUD_INIT_WEB' '$CLOUD_INIT_INNGEST' | grep -vxF 'jikig-ai/soleur-inngest-bootstrap' | grep -v 'BUNDLE_REPO')\" ]]"
+# The pin set is also counted: exactly the two ZIREF bootstrap pins exist today (one per host class).
+assert "T7 exactly two registry-prefixed BOOTSTRAP pins exist across both cloud-init files (one per host class)" \
+  "[[ \"\$(pin_rows '$CLOUD_INIT_WEB' '$CLOUD_INIT_INNGEST' | grep -cxF 'jikig-ai/soleur-inngest-bootstrap')\" -eq 2 ]]"
 ALLOWED_PATHS="$(sed -n '/^declare -A ALLOWED_IMAGES=(/,/^)/p' "$SCRIPT_DIR/ci-deploy.sh" | sed 's/^[[:space:]]*#.*//' | sed -n 's|.*="ghcr\.io/\([^"]*\)".*|\1|p' | LC_ALL=C sort)"
 # The web image's path as web-probe.tf derives it: the var.image_name default minus registry and tag.
 IMG_WEB="$(sed -n '/^variable "image_name"/,/^}/p' "$SCRIPT_DIR/variables.tf" | sed -n 's|^[[:space:]]*default[[:space:]]*=[[:space:]]*"ghcr\.io/\([^:@"]*\)[:@"].*|\1|p')"
@@ -703,6 +961,9 @@ DEF_REPOS="$(def_of SOLEUR_PROBE_REPOS_MARKER)"
 assert "T15 both default marker paths were extracted, one assignment each (non-empty, single line)" \
   "[[ -n '$DEF_CANARY' && -n '$DEF_REPOS' && \"\$(wc -l <<<'$DEF_CANARY')\" -eq 1 && \"\$(wc -l <<<'$DEF_REPOS')\" -eq 1 ]]"
 assert "T15 the canary and per-repo marker default paths DIFFER" "[[ '$DEF_CANARY' != '$DEF_REPOS' ]]"
+DEF_REFUSAL="$(def_of SOLEUR_PROBE_REFUSAL_MARKER)"
+assert "T15 the refusal marker (#9757) has its own default path under /run, distinct from the canary's and the per-repo marker's" \
+  "[[ -n '$DEF_REFUSAL' && \"\$(wc -l <<<'$DEF_REFUSAL')\" -eq 1 && '$DEF_REFUSAL' == /run/* && '$DEF_REFUSAL' != '$DEF_CANARY' && '$DEF_REFUSAL' != '$DEF_REPOS' ]]"
 
 # T16 — instrument controls. has_marker must be able to FAIL (a stub that always returned true would
 # otherwise pass every positive row), and the run must have executed at least the floor of assertions.
@@ -856,7 +1117,7 @@ sed 's/|\*\[\[:cntrl:\]\]\*)/)/' "$SUT" > "$MUT_NOCNTRL"
 sed 's/|\*\\\\\*|/|/' "$SUT" > "$MUT_NOBSL"
 sed 's/\*\[\[:space:\]\]\*)/*__never_matches__*)/' "$SUT" > "$MUT_NOWS"
 assert "P11 each guard-arm mutant landed (cmp -s) and the targeted text is gone" \
-  "! cmp -s '$SUT' '$MUT_NOCNTRL' && ! grep -qF '[[:cntrl:]]' '$MUT_NOCNTRL' && ! cmp -s '$SUT' '$MUT_NOBSL' && ! grep -qF '|*\\\\*|' '$MUT_NOBSL' && ! cmp -s '$SUT' '$MUT_NOWS' && grep -qF '__never_matches__' '$MUT_NOWS'"
+  "! cmp -s '$SUT' '$MUT_NOCNTRL' && ! grep -qF '|*[[:cntrl:]]*)' '$MUT_NOCNTRL' && ! cmp -s '$SUT' '$MUT_NOBSL' && ! grep -qF '|*\\\\*|' '$MUT_NOBSL' && ! cmp -s '$SUT' '$MUT_NOWS' && grep -qF '__never_matches__' '$MUT_NOWS'"
 unsafe_holds() { [[ "$EC" -eq 1 && ! -s "$SARGV" && ! -s "$SSTDIN" ]]; }  # the refusal contract of an unsafe credential
 SUT_REAL="$SUT"
 SUT="$MUT_NOCNTRL"; run_stub zuser $'synthetic\tfixture'; TOKTAB_HOLDS=no; unsafe_holds && TOKTAB_HOLDS=yes
@@ -904,13 +1165,14 @@ assert "T16 out_marker is strict: a pin-missing run is not pinned, and a wrong c
 probe_code() { sed 's/^[[:space:]]*#.*//' "$SUT"; }
 # shellcheck disable=SC2016  # the literal $URL is the probe source text under test
 # `_ping` appears twice in the comment-stripped probe: its definition and the single aggregation call. `curl` followed by
-# a flag, a quote, a dollar or a continuation appears three times: two in the heartbeat ping's fallback chain and one in
-# the single request function. Counting TOKENS (not lines) sees a second call on a line that already holds one.
+# a flag, a quote, a dollar or a continuation appears twice: one in the per-attempt `_hb_curl` (called twice by `_ping`, and
+# `_hb_curl` is not a `curl` word) and one in the single request function. Counting TOKENS (not lines) sees a second call
+# on a line that already holds one.
 ping_words() { local n; n=$(probe_code | grep -oE '(^|[^[:alnum:]_])_ping([^[:alnum:]_]|$)' | wc -l); printf '%s' "$n" | tr -d ' '; }
 curl_words() { local n; n=$(probe_code | grep -oE '(^|[^[:alnum:]_/])curl[[:space:]]+[-"$'"'"'\\]' | wc -l); printf '%s' "$n" | tr -d ' '; }
 other_fetchers() { local n; n=$(probe_code | grep -cE '(/usr/bin/curl|\bwget\b|\bnc\b|/dev/tcp/)' || true); printf '%s' "$n"; }
 assert "P13 _ping is defined once and called once (a second call, in any spelling, would bypass the aggregation chokepoint)" "[[ \"\$(ping_words)\" -eq 2 ]]"
-assert "P13 curl appears exactly 3 times (two in the ping fallback chain, one in the single request function)" "[[ \"\$(curl_words)\" -eq 3 ]]"
+assert "P13 curl appears exactly 2 times (one in the per-attempt _hb_curl, one in the single request function)" "[[ \"\$(curl_words)\" -eq 2 ]]"
 assert "P13 no other network client (/usr/bin/curl, wget, nc, /dev/tcp) appears in the probe" "[[ \"\$(other_fetchers)\" -eq 0 ]]"
 # Guard 2 reach: no other infra .tf reads the pinned local, and web-1's provisioner writes the env file exactly once.
 tf_files() { grep -rlF "$1" "$SCRIPT_DIR" --include='*.tf' --include='*.tf.json' --include='*.hcl' --include='*.tftest.hcl' | xargs -n1 basename | sort | tr '\n' ' '; }
@@ -1005,11 +1267,11 @@ echo
 echo "=== $PASS passed, $FAIL failed ==="
 # Anti-vacuity floor (ADR-193): a disarmed assert() or a skipped block must not read as green. Raise it in
 # the SAME edit that adds rows; it is reported with printf, never through assert().
-# 303 assertions run with terraform installed; the 3 terraform-console rows are gated and a skip never counts, so
-# a box without terraform floors at the count WITHOUT them (300) and must not read as a disarmed suite. The threshold
+# 391 assertions run with terraform installed; the 3 terraform-console rows are gated and a skip never counts, so
+# a box without terraform floors at the count WITHOUT them (388) and must not read as a disarmed suite. The threshold
 # literal sits directly above the `if` (scripts/guard-vacuity-floor.test.sh builds its mutant from that adjacency);
 # the stricter full count applies in a SECOND check wherever terraform ran, so no row can be deleted behind slack.
-MIN_ASSERTS=300
+MIN_ASSERTS=388
 if [[ "$((PASS + FAIL))" -lt "$MIN_ASSERTS" ]]; then
   printf 'FAIL: only %s assertions ran (floor %s) — a block was skipped or assert() was disarmed\n' "$((PASS + FAIL))" "$MIN_ASSERTS"
   exit 1

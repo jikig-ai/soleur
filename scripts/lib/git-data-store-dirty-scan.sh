@@ -2,7 +2,7 @@
 # git-data-store-dirty-scan.sh — has the LUKS store ever been offered a write? (#10175)
 #
 # SOURCED by .github/workflows/apply-web-platform-infra.yml (job git_data_host_replace, step "Rotate
-# precondition — store never written (cutover run records)"), never executed. A git-data-host-rotate
+# precondition — store never written (cutover run records)") and by git-data-cutover.yml (the wipe job's W3 step, separated variant, with GDSD_SELF_RUN_ID), never executed. A git-data-host-rotate
 # destroys the LUKS volume. After the first real flip that volume may hold the ONLY copy of replicated
 # repositories, and the old emptiness check (one boot-time row, served_repos=0) cannot see them. This
 # library answers the question from the cutover workflow's own run records, so no prd credential is needed
@@ -23,6 +23,8 @@
 #       PINS is a space-separated run-id list that must all be listed as completed; omitted OR EMPTY, it is
 #       GDSD_PINNED_RUNS (the workflow passes nothing, and a test pins that), and a test passes the literal
 #       --no-pins to model an arbitrary history without the completeness proof.
+#       GDSD_SELF_RUN_ID (optional, numeric) names the CALLER'S OWN run: it is excluded for its current attempt only
+#       (earlier attempts are still read), so a scan run from inside a wipe-family dispatch does not block itself.
 #       Returns 0 iff store_clean. Every attempt of every run is read: `gh run view` lists only the latest
 #       attempt, and a re-run that skips the write step must not hide the first attempt's write.
 #
@@ -127,6 +129,12 @@ git_data_store_dirty_scan() {
   [[ -n "${pins//[[:space:]]/}" ]] || pins="$GDSD_PINNED_RUNS"
   [[ "${1-}" == --no-pins ]] && pins=""
   local rid status attempt created n last body tok rc expect="" seen=0 pre
+  # The caller's OWN run id, opt-in (A1, ADR-239 Amendment 2026-10-15): the separated wipe scans from inside a run of
+  # this workflow, which is in_progress by construction and would read as cutover_in_flight on every dispatch. Only
+  # that run's CURRENT attempt is skipped. No validation of the value is needed: the comparison is against a run id the
+  # loop below proves numeric, so a non-numeric value can never match (a mutant that removed such a check survived,
+  # and was EQUIVALENT).
+  local self="${GDSD_SELF_RUN_ID-}"
   local -a lines=()
   while IFS=$'\t' read -r rid status attempt created; do
     [[ -n "$rid" ]] || continue
@@ -164,7 +172,11 @@ git_data_store_dirty_scan() {
     if [[ "$created" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ && "$created" < "$GDSD_SEAM_ADDED_AT" ]]; then pre=preseam; fi
     seen=$((seen + 1))
     case "$status" in
-      in_progress) echo "cutover_in_flight $rid"; return 1 ;;
+      in_progress)
+        # The caller's own run: its `cutover` job is skipped for the wipe family, so only its EARLIER attempts
+        # (a re-run keeps the id) can hold a write. Any other in-progress run still blocks.
+        if [[ -n "$self" && "$rid" == "$self" ]]; then last=$((attempt - 1))
+        else echo "cutover_in_flight $rid"; return 1; fi ;;
       completed) last="$attempt" ;;
       # queued/waiting/pending/requested: the latest attempt executed nothing yet (the shared
       # git-data-state group means it cannot overlap this job), but earlier attempts of a re-run did run.

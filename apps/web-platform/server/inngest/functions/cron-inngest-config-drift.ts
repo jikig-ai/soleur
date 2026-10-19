@@ -5,8 +5,9 @@
  *
  * DISPATCH HYBRID (same shape as cron-terraform-drift): this function is the SCHEDULER only. It
  * triggers `.github/workflows/inngest-config-drift.yml`; the GHA workflow is the
- * EXECUTOR. Why dispatch-hybrid: the comparison reads the LATEST SOLEUR_INFRA_PULL_APPLIED marker
- * from Better Stack via scripts/betterstack-query.sh, whose ClickHouse credentials
+ * EXECUTOR. Why dispatch-hybrid: the comparison reads the LATEST SOLEUR_INFRA_PULL_ family
+ * state row (APPLIED / NOOP / FLOOR) from Better Stack via scripts/betterstack-query.sh, whose
+ * ClickHouse credentials
  * (BETTERSTACK_QUERY_*) live in Doppler soleur/prd_terraform — deliberately NOT on the app/Inngest
  * server (parking query creds + the isolated soleur-inngest pointer-read token on the prod host is
  * a security regression, exactly the terraform-drift rationale). So execution belongs in the
@@ -14,8 +15,9 @@
  * App installation token.
  *
  * DORMANT UNTIL THE #6178 CUTOVER (HARD-11 — the channel is not live pre-cutover). This function
- * ships EVENT-ONLY (a manual-trigger event, NO `{ cron: }` schedule) because the marker it compares
- * against (SOLEUR_INFRA_PULL_APPLIED) only flows once the host-side consumer bake rides the #6178
+ * ships EVENT-ONLY (a manual-trigger event, NO `{ cron: }` schedule) because the markers it
+ * compares against (the SOLEUR_INFRA_PULL_ family) only flow once the host-side consumer bake
+ * rides the #6178
  * cutover, and the promoted pointer's TF applies at that cutover too. Auto-firing a comparator
  * against a channel that is not yet live would manufacture the #6536 false-alarm class the channel
  * exists to kill. The cutover adds the recurring schedule trigger + the isolated pointer-read token

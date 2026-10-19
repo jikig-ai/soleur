@@ -122,6 +122,13 @@ check_scan() { # LABEL EXPECTED-REGEX EXPECTED-RC
   if [[ "$out" =~ ^$2$ && "$rc" -eq "$3" ]]; then pass "$1 -> $out (rc $rc)"
   else fail "$1: got '$out' rc=$rc, expected /$2/ rc=$3"; fi
 }
+# check_scan_self: the same composition with the caller's own run id opted in (GDSD_SELF_RUN_ID, A1 2026-10-15).
+check_scan_self() { # LABEL SELF-ID EXPECTED-REGEX EXPECTED-RC
+  local out rc=0
+  out="$(git_data_store_dirty_list | GDSD_SELF_RUN_ID="$2" scan_nopins)" || rc=$?
+  if [[ "$out" =~ ^$3$ && "$rc" -eq "$4" ]]; then pass "$1 -> $out (rc $rc)"
+  else fail "$1: got '$out' rc=$rc, expected /$3/ rc=$4"; fi
+}
 check_verdict() { # LABEL EXPECTED-TOKEN BODY [preseam]
   local out rc=0 want_rc=1
   [[ "$2" == clean ]] && want_rc=0
@@ -163,6 +170,15 @@ if [[ "${1-}" == "--mutant-run" ]]; then
   [[ "$(git_data_store_dirty_list | scan_nopins)" == "store_clean" ]] || killed=1
   newfx; addrun 13 completed 1 "1:$(fx "${JOB}_x" success "$(steps "$WRITE|success")")"; settotal 1
   [[ "$(git_data_store_dirty_list | scan_nopins)" == "scan_unreadable 13" ]] || killed=1
+  newfx; addrun 1001 in_progress 1 "1:$(clean_body)"; settotal 1
+  [[ "$(git_data_store_dirty_list | GDSD_SELF_RUN_ID=1001 scan_nopins)" == "store_clean" ]] || killed=1
+  newfx; addrun 1011 in_progress 1 "1:$(clean_body)"; addrun 1010 in_progress 1 "1:$(clean_body)"; settotal 2
+  [[ "$(git_data_store_dirty_list | GDSD_SELF_RUN_ID=1011 scan_nopins)" == "cutover_in_flight 1010" ]] || killed=1
+  newfx; addrun 1021 in_progress 2 "1:$(dirty_body success)" "2:$(clean_body)"; settotal 1
+  [[ "$(git_data_store_dirty_list | GDSD_SELF_RUN_ID=1021 scan_nopins)" == "store_dirty 1021" ]] || killed=1
+  newfx; addrun 1051 in_progress 1 "1:$(clean_body)"; settotal 1
+  [[ "$(git_data_store_dirty_list | GDSD_SELF_RUN_ID=9999 scan_nopins)" == "cutover_in_flight 1051" ]] || killed=1
+  [[ "$(git_data_store_dirty_list | GDSD_SELF_RUN_ID='1051;x' scan_nopins)" == "cutover_in_flight 1051" ]] || killed=1
   [[ "$killed" -eq 1 ]] && echo "MUTANT-KILLED" || echo "MUTANT-SURVIVED"
   exit 0
 fi
@@ -195,10 +211,25 @@ check_verdict "C14 null steps on a job that ran" unreadable "$(jq -cn --arg n "$
 check_verdict "C15 two jobs, the second is cutover and dirty (first decoy is clean)" dirty \
   "$(jq -cn --arg n "$JOB" --arg w "$WRITE" '{jobs:[{name:"notify",conclusion:"success",steps:[]},{name:$n,conclusion:"success",steps:[{name:$w,conclusion:"success"}]}]}')"
 
+# (#10138) A wipe-family run (mode wipe / wipe_finish / wipe_check) lists the `cutover` job as SKIPPED with no steps
+# and a separate `wipe` job that ran. It reads clean ONLY because the skipped `cutover` job stays listed (row 3 of the
+# classifier); the `wipe` job's steps are never consulted, so no wipe step can read as the flag write. Synthesized.
+wipe_family_body() { # CUTOVER-LISTED(yes|no) [WIPE-STEP-NAME]
+  jq -cn --arg c "$JOB" --arg w "${2:-$WRITE}" --arg listed "$1" \
+    '{jobs: ((if $listed == "yes" then [{name:$c, conclusion:"skipped", steps:[]}] else [] end)
+             + [{name:"wipe", conclusion:"success", steps:[{name:"Checkout",conclusion:"success"},{name:$w,conclusion:"success"}]},
+                {name:"notify-failure", conclusion:"skipped", steps:[]}])}'
+}
+check_verdict "C16 a wipe-family run (cutover job skipped and listed, wipe job ran) is clean" clean "$(wipe_family_body yes 'wipe_detach_gate')"
+check_verdict "C16b the same run with the cutover job NOT listed is unreadable (it is the listed skipped job that keeps it clean)" unreadable "$(wipe_family_body no 'wipe_detach_gate')"
+check_verdict "C16c a step of the wipe job that happens to carry the write step's name is never read as the flag write" clean "$(wipe_family_body yes)"
+
 # ---------------------------------------------------------------------------------------------------
 echo "== scan (list | scan, gh shim)"
 newfx; addrun 101 completed 1 "1:$(clean_body)"; settotal 1
 check_scan "S1 one clean run" 'store_clean' 0
+newfx; addrun 102 completed 1 "1:$(wipe_family_body yes wipe_detach_gate)"; settotal 1
+check_scan "S1b a listed wipe-family run reads clean through the whole list | scan composition" 'store_clean' 0
 newfx; settotal 0
 check_scan "S2 never-flipped history: zero runs and total_count 0" 'store_clean' 0
 # --- proof the history is complete: the pinned runs must still be listed, completed (default pins = GDSD_PINNED_RUNS)
@@ -322,6 +353,26 @@ if [[ ! -s "$GH_REFUSED" ]]; then pass "H1 gh shim refused nothing the library i
 else fail "H1 gh shim refused: $(head -3 "$GH_REFUSED" | tr '\n' ';')"; fi
 # H2: the shim DOES refuse an unexpected shape (it is not a catch-all).
 if ! gh run list --workflow x >/dev/null 2>&1 && [[ -s "$GH_REFUSED" ]]; then pass "H2 gh shim refuses an unexpected argv"; else fail "H2 gh shim is a catch-all"; fi
+# A1 (2026-10-15) self-exclusion. The separated wipe runs INSIDE a run of the cutover workflow, so that run is
+# in_progress when it scans. The caller opts in with GDSD_SELF_RUN_ID; only that id, and only its CURRENT attempt, is
+# excluded (a re-run keeps the id, and its earlier attempts are still read).
+newfx; addrun 1001 in_progress 1 "1:$(clean_body)"; settotal 1
+check_scan_self "SX1 the caller's own in-progress run is excluded: store clean" 1001 'store_clean' 0
+check_scan "SX2 without GDSD_SELF_RUN_ID the same in-progress run is cutover_in_flight (no accidental exclusion)" 'cutover_in_flight 1001' 1
+newfx; addrun 1011 in_progress 1 "1:$(clean_body)"; addrun 1010 in_progress 1 "1:$(clean_body)"; settotal 2
+check_scan_self "SX3 a SECOND in-progress run still blocks" 1011 'cutover_in_flight 1010' 1
+newfx; addrun 1021 in_progress 2 "1:$(dirty_body success)" "2:$(clean_body)"; settotal 1
+check_scan_self "SX4 an earlier DIRTY attempt of the caller's own run is still read" 1021 'store_dirty 1021' 1
+newfx; addrun 1031 in_progress 2 "1:$(clean_body)" "2:$(clean_body)"; settotal 1
+check_scan_self "SX5 earlier clean attempts of the caller's own run, current attempt skipped: store clean" 1031 'store_clean' 0
+newfx; addrun 1041 in_progress 1 "1:$(clean_body)"; addrun 1040 completed 1 "1:$(dirty_body success)"; settotal 2
+check_scan_self "SX6 the exclusion does not hide an older dirty run" 1041 'store_dirty 1040' 1
+newfx; addrun 1051 in_progress 1 "1:$(clean_body)"; settotal 1
+check_scan_self "SX7 a DIFFERENT self id excludes nothing" 9999 'cutover_in_flight 1051' 1
+for badself in '1051;x' ' 1051' '1051 ' 'abc' '-1051' '0x41b'; do
+  check_scan_self "SX8 a non-numeric GDSD_SELF_RUN_ID [$badself] is ignored" "$badself" 'cutover_in_flight 1051' 1
+done
+
 : > "$GH_REFUSED"
 # H3: the library never calls a gh subcommand other than `api`.
 non_api_calls="$(grep -vE '^api ' "$GH_CALLS" | grep -vE '^run list --workflow x$' || true)"
@@ -357,7 +408,9 @@ mutate "count cross-check dropped"          's/\[\[ "\$\{#lines\[@\]\}" -ne "\$e
 mutate "absent step reads as clean"         's/\(if \$preseam then "clean" else "unreadable" end\)/(if $preseam then "clean" else "clean" end)/'
 mutate "seam cutoff dropped (every run pre-seam)" 's/ && "\$created" < "\$GDSD_SEAM_ADDED_AT"//'
 mutate "cancelled write step reads as clean" 's/elif \(\$w.conclusion \/\/ ""\) == "skipped" then "clean"/elif ($w.conclusion \/\/ "") != "success" then "clean"/'
-mutate "in_progress run skipped"            's/in_progress\) echo "cutover_in_flight \$rid"; return 1 ;;/in_progress) continue ;;/'
+mutate "in_progress run skipped"            's/else echo "cutover_in_flight \$rid"; return 1; fi ;;/else continue; fi ;;/'
+mutate "self exclusion matches any in-progress run" 's/\[\[ -n "\$self" && "\$rid" == "\$self" \]\]/[[ -n "$self" ]]/'
+mutate "self exclusion reads no earlier attempt"    's/if \[\[ -n "\$self" && "\$rid" == "\$self" \]\]; then last=\$\(\(attempt - 1\)\)/if [[ -n "$self" \&\& "$rid" == "$self" ]]; then last=0/'
 mutate "queued re-run attempts skipped"     's/last=\$\(\(attempt - 1\)\)/last=0/'
 mutate "pinned-run proof dropped"            's/\[\[ -n "\$pre" \]\] \|\| \{ echo "scan_unreadable pinned_run_missing"; return 1; \}/true/'
 mutate "a missing cutover job reads clean"   's/if \$j == null then \(if \$preseam then "clean" else "unreadable" end\)/if $j == null then "clean"/'
@@ -383,7 +436,7 @@ printf '== %d passed, %d failed\n' "$PASS" "$FAIL"
 # PASS==1 at that point, which proves the literal.
 SELFTEST_PASSES=1
 REAL=$(( PASS - SELFTEST_PASSES ))
-MIN_ASSERTIONS=95
+MIN_ASSERTIONS=114
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity assertion floor: only %d real assertion(s) ran (PASS=%d minus %d self-test), expected >= %d.\n' \
     "$REAL" "$PASS" "$SELFTEST_PASSES" "$MIN_ASSERTIONS" >&2

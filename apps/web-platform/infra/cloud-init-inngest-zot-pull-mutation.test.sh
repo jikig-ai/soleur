@@ -92,6 +92,13 @@ cp -a "$REPO_ROOT/.github/scripts/validate-infra-templates.sh" "$SANDBOX_ROOT/.g
 cp -a "$REPO_ROOT/.github/workflows/build-inngest-bootstrap-image.yml" "$SANDBOX_ROOT/.github/workflows/" \
   || die "could not copy build-inngest-bootstrap-image.yml into the sandbox"
 
+# #4699: the AC6d wiring pins read the reconciler workflow + comparator script
+# — same relocation rule as the Guard A files above.
+cp -a "$REPO_ROOT/.github/workflows/scheduled-vinngest-digest-freshness.yml" "$SANDBOX_ROOT/.github/workflows/" \
+  || die "could not copy scheduled-vinngest-digest-freshness.yml into the sandbox"
+cp -a "$REPO_ROOT/.github/scripts/vinngest-digest-freshness.sh" "$SANDBOX_ROOT/.github/scripts/" \
+  || die "could not copy vinngest-digest-freshness.sh into the sandbox"
+
 # A throwaway repo whose tag points at the PRISTINE tree, so Guard A's comparison is meaningful
 # rather than skipped: on the unmutated sandbox the tag's tree IS the working tree, and a case
 # that mutates a carrier reds it for real. The tag name is derived from the pin literal exactly

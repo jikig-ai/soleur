@@ -44,8 +44,9 @@ Live standing alarms over this source:
   over a 5400 s window) — `soleur-inngest-luks-wrong-volume-prd`. Pages when the dedicated Inngest
   host's hourly `SOLEUR_INNGEST_SERVER_PROBE` row reports `/mnt/data` backed by a by-id alias that
   is **not** the encrypted volume's — i.e. Redis is writing unencrypted again after the cutover
-  (an on-host rollback, a reboot that took the pre-cutover arm, or a replace whose first boot
-  resolved the plaintext volume). Nothing else notices: the scheduler is healthy in all three.
+  (an on-host rollback, or a boot that mounted a device other than the additive volume; the
+  plaintext volume is destroyed and the template has no arm for it since #9786, so this is the
+  tripwire for a regression of that). Nothing else notices: the scheduler is healthy in both.
   **Armed.** It shipped paused, because before the cutover the plaintext alias was the CORRECT
   value and an armed rule would have paged continuously. Since #8296 the variable's declared
   default is `true`, so every apply arms it: the push apply of `b53173a04` did so, and the alert
@@ -144,6 +145,69 @@ Live standing alarms over this source:
   `apps/web-platform/test/infra/bwrap-probe-rollback-alert.test.sh` (mutation rows). It auto-resolves
   after 10 quiet minutes, which does not mean the cause was found. Runbook and no-SSH decode:
   [`canary-probe-set.md`](./canary-probe-set.md#blocking-bwrap-sandbox-probe--reading-its-self-report-8016-pr-8026).
+- **`logtail_exploration_alert.agent_sandbox_bash_denial`** (#10445, `higher_than 0` over 300 s, evaluated
+  every 60 s, missing data counts as zero): `soleur-agent-sandbox-bash-denial-prd`. **What it matches:** one row
+  from the app container (`CONTAINER_NAME = 'soleur-web-platform'`, no `host_name` conjunct: the name is the
+  same on web-1 and web-2) with `message.feature = 'agent-sandbox'`, `message.op = 'bash-tool-result'` AND
+  `message.sandboxErrorCode = 'helper_userns_eperm'`. That is the live-session mirror of a hosted agent's Bash
+  `tool_result` whose line is exactly `apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted` (line-anchored,
+  nothing trailing): the SDK's command-side helper could not create its user namespace, so EVERY Bash call in that
+  session fails. Other helper-step EPERMs are NOT matched (tracked in #10455). **Coverage:** the legacy agent-runner
+  loop has no tool_result observer, so the alert covers the cc-soleur-go path only. It filters on the new
+  code, not on the whole `op`, so an older `bwrap_eperm` / `proc_mount_eperm` row never pages it. The row carries
+  only the scrubbed matched line and counts, never the command or the output. **First move (no SSH):** (1) read
+  the count and first timestamp with the SQL below; (2) pull `/hooks/deploy-status` (call pattern in
+  `plugins/soleur/skills/postmerge/references/deploy-status-debugging.md`) and read `sandbox_canary` (green
+  throughout the original outage, so a pass does not clear the alert) and the `seccomp_profile_*` fields; (3) if the
+  `users` count is more than one, treat it as the shim-filter-versus-SDK-helper collision of
+  [the 2026-10-16 PIR](../post-mortems/hosted-agent-bash-apply-seccomp-userns-eperm-postmortem.md): check whether
+  `network.allowAllUnixSockets` is still set in `agent-runner-sandbox-config.ts` and whether an SDK bump changed
+  the helper-selection condition; do NOT loosen the seccomp filter to unblock (a filter cannot key on the
+  caller). A single row from a single user is either a forged line (the limitation below) or a real regression seen by the only active tenant: make a real hosted Bash call and read the result (step 4 of `canary-probe-set.md`) before dismissing it. **Wake path: email
+  only.** On the free tier the alert emails the team and nothing else; the Slack wake of
+  [ADR-260](../../architecture/decisions/ADR-260-db-outage-paging-and-bounded-auto-restart.md) is a
+  dashboard-side integration that has NOT been verified for this alert, so do not assume a Slack message
+  accompanies the email until that verification is recorded. **Accepted limitation:** a tenant (or a
+  prompt-injected agent) printing the exact helper line every few minutes can keep ONE incident open and suppress new
+  pages for everyone (`recovery_period 600`, `treat_as_zero`, per-user 5-minute debounce). Accepted at current scale;
+  mitigation (page on at least 2 distinct users, or verify server-side) is tracked in #10455. It auto-resolves after 10 quiet minutes,
+  which does not mean the cause was found. Defined in `apps/web-platform/infra/betterstack-logs-alerts.tf`;
+  drift guard `apps/web-platform/test/infra/sandbox-alerts.test.sh` (mutation rows plus a fixture row shaped like
+  a production row). Decode and the deploy-time companion:
+  [`canary-probe-set.md`](./canary-probe-set.md#sdk-bash-smoke-and-the-helper_userns_eperm-denial-10445).
+
+  ```bash
+  # Count, distinct users (userIdHash) and first/last time of helper denials over the last day (hot window plus
+  # archive); rows is not users: the mirror is per-user debounced.
+  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+    "SELECT count() AS rows, uniqExact(JSONExtractString(raw,'message','userIdHash')) AS users,
+            min(dt) AS first, max(dt) AS last
+     FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
+           UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
+     WHERE dt > now() - INTERVAL 1 DAY
+       AND JSONExtractString(raw,'CONTAINER_NAME') = 'soleur-web-platform'
+       AND JSONExtractString(raw,'message','feature') = 'agent-sandbox'
+       AND JSONExtractString(raw,'message','op') = 'bash-tool-result'
+       AND JSONExtractString(raw,'message','sandboxErrorCode') = 'helper_userns_eperm'
+     FORMAT JSONEachRow"
+  ```
+
+  A zero here is only meaningful with a delivery check: before 2026-10-16 no `feature = 'agent-sandbox'` row of
+  any op had reached this source from the app container in 12 days. Run this positive control (counts only); a nonzero
+  `rows` shows the app-container WARN+ path delivers, so a zero above reads as "no denials" rather than "dead log
+  path". If it is also zero, the Vector or journald path is down and the alert is blind:
+
+  ```bash
+  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+    "SELECT count() AS rows, max(dt) AS last
+     FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
+           UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
+     WHERE dt > now() - INTERVAL 1 HOUR
+       AND JSONExtractString(raw,'CONTAINER_NAME') = 'soleur-web-platform'
+       AND JSONExtractInt(raw,'message','level') >= 40
+     FORMAT JSONEachRow"
+  ```
+
 - **`logtail_exploration_alert.ghcr_hostsfile_deny_lost`** (#9391, `higher_than 0`, missing data counts as zero):
   `soleur-ghcr-hostsfile-deny-lost-prd`. It emails (team email on the free tier) when a host's hosts-file GHCR
   deny is no longer in force: a `ci-deploy` row whose whole message is `GHCR_DENY ghcr_blocked=0`, or a
@@ -172,6 +236,27 @@ Live standing alarms over this source:
   destination) or `reason=gw_absent` (the gateway container is missing). Previously Sentry-only
   (`op=egress_gw_probe_fail`), which paged nobody. Decode + per-host repair:
   [`cron-egress-blocked.md`](./cron-egress-blocked.md#egress-gateway-better-stack-alerts).
+- **`logtail_exploration_alert.registry_zot_log_credential_shape`** (#10321, `higher_than 0`
+  over 900 s, missing data counts as zero): `soleur-registry-zot-log-credential-shape-prd`.
+  Pages on ANY `SOLEUR_ZOT_LOG` envelope row carrying a credential shape — an unmasked
+  `Authorization` value, a `dp.(pt|st|sa|ct).` Doppler prefix with a ≥16 non-separator run,
+  or a bcrypt `$2[aby]$` hash — the standing vehicle for the check the now-dormant
+  `zot-log-channel-7440.sh` probe's exit-1 arm performed. One row is an incident; rotate the
+  affected credential FIRST, counts-only (never echo the value). Runbook:
+  [`registry-zot-credential-shape-10321.md`](./registry-zot-credential-shape-10321.md).
+
+- **`logtail_exploration_alert.registry_clientip_not_rfc1918`** (#7530, `higher_than 0` over 900 s,
+  checked every 300 s, missing data counts as zero): `soleur-registry-clientip-not-rfc1918-prd`. Emails
+  (team email on the free tier) when a registry-plane row shipped to this source carries a FIRST `clientIP`
+  that is address-shaped and outside 10/8, 172.16/12 and 192.168/16: a `SOLEUR_ZOT_LOG shipper=zot-log-shipper
+  host=soleur-registry` envelope row (trailing space included) or a `SOLEUR_ZOT_DISK` row, each anchored at offset 0 of the stored row.
+  It is the enforcement of the CLO's "every observable clientIP is RFC1918" condition (ADR-211): a
+  topology change that exposes a public address emails the team here (free tier: email only, no escalation)
+  instead of silently turning a log field into personal data. Detection, not prevention: sampled over SHIPPED rows (the shipper rate-caps ordinary rows
+  to 17 per tick), up to about 20 minutes late. Defined in `apps/web-platform/infra/betterstack-logs-alerts.tf`;
+  drift guard `apps/web-platform/test/infra/registry-clientip-not-rfc1918-alert.test.sh`. Triage, legal
+  consequence and the counts-only readback (never paste an address):
+  [`registry-clientip-rfc1918-7530.md`](./registry-clientip-rfc1918-7530.md).
 - **`scheduled-zot-restart-loop.yml`** (#6291; hourly, dispatched by the web-server watchdog clock since #8495 with a GHA-cron fallback — see `inngest-server.md` "How the external watchdogs are triggered") — the zot registry restart-loop
   recurrence alarm. Reads the `SOLEUR_ZOT_DISK` marker, fires a deduped `[ci/zot-restart-loop]`
   issue on a newest-`boot_id` OOM/crash-loop and a `[ci/zot-telemetry-silent]` issue if the
@@ -227,7 +312,38 @@ not):
 The query creds are a ClickHouse HTTP *connection* — a username/password pair
 Basic-auth'd against a regional ClickHouse endpoint, separate from both tokens.
 
-## Connection details (provisioned 2026-06-01)
+## Connection details (re-provisioned 2026-09-09)
+
+> **A SQL API CONNECTION DOES NOT SEE SOURCES CREATED AFTER IT — and the error looks exactly
+> like a missing table. This cost five days (#7855, #7867); read it before diagnosing any
+> "the source is not storing" symptom.**
+>
+> The connection provisioned 2026-06-01 could not see source `2734275`, created 2026-09-03.
+> Every read against the newer source returned:
+>
+> ```
+> Code: 701. DB::Exception: Requested cluster 't520508_soleur_git_data_prd_logs' not found. (CLUSTER_DOESNT_EXIST)
+> ```
+>
+> **That message says `cluster`, not `table`.** It means *this connection does not know that
+> cluster*. It was read instead as "Better Stack creates a table lazily on the first stored row,
+> so nothing has ever been stored" — which is a coherent reading, is wrong, and is
+> indistinguishable from the real thing without a second connection to compare against.
+>
+> Everything downstream of that misreading was self-consistent and false: writes were being
+> acknowledged with `202` and **were being stored**; a disposable `platform=vector` test source
+> read as empty for the same connection-scope reason; and a rung-2 rehearsal that had actually
+> PASSED reported `TRANSIENT` twenty times. The control source kept querying fine throughout —
+> because it predated the connection — which made the failure look source-specific.
+>
+> **Rule: adding a Better Stack source is not complete until the SQL API connection is
+> re-provisioned.** Create the new connection FIRST and verify the new table reads, then rotate
+> the Doppler values — additively, so working queries never break (`POST /api/v1/connections`
+> is non-destructive; deleting the old one first is not).
+>
+> **Diagnostic that separates the two states in one call:** query the NEW table and a KNOWN-OLD
+> table through the same connection. If the old one answers and the new one raises
+> `CLUSTER_DOESNT_EXIST`, the connection is stale — not the source.
 
 - Source: `soleur-inngest-vector-prd` — id **2457081**, team **520508**, table_name `soleur_inngest_vector_prd_3`, `data_region` `eu-central-1a`, **90-day log retention**.
   **(#7772) CORRECTED 2026-09-04 — this line read `region eu-fsn-3, 3-day log retention` and both halves were wrong.** The region is a vendor RENAME, not a move (see the naming note below). The retention was a FREE-TIER value that predates the 2026-08-16 move to a paid plan; measured twice on two endpoint shapes (`GET /api/v2/sources` and `GET /api/v2/sources/<id>`), this source reports `logs_retention=90` and `metrics_retention=90`. The stale figure had propagated into the Art. 30 register and both published legal documents, all corrected in the same change. `logs_retention` is a PER-SOURCE attribute, not a billing field — so read it here rather than inferring it from the account tier, which genuinely cannot be pulled (`/sources/<id>/usage`, `/usage`, `/billing` all 404).
@@ -235,6 +351,8 @@ Basic-auth'd against a regional ClickHouse endpoint, separate from both tokens.
 - **Region naming, so nobody re-derives it:** `eu-fsn-3` and `eu-central-1a` are the SAME cluster — the former is the vendor's earlier name, CNAMEs to the latter, and both resolve to an identical five-address A set (`195.63.225.49/.50/.53/.70/.72`, measured 2026-09-04). Query creds are region-scoped, not source-scoped, so ONE connection reaches BOTH sources.
 - Query host: `eu-central-1a-connect.betterstackdata.com` (region-scoped — creds fail against other clusters).
   **(#7898) CORRECTED 2026-09-09 — this line named the stale `eu-fsn-3` connect hostname, with an explicit `:443`.** (The dead string is not reproduced here: a grep for it is an acceptance criterion, and a corrective note that keeps the token alive defeats the check.) Pulled read-only from the config the workflows actually inject (`doppler secrets get BETTERSTACK_QUERY_HOST -p soleur -c prd_terraform --plain`), the live value is `eu-central-1a-connect.betterstackdata.com`, with no explicit `:443`. This is a stale NAME, not a wrong cluster — per the naming note above, `eu-fsn-3` and `eu-central-1a` are the same cluster and the old name still resolves. Both values share the `betterstackdata.com` apex, which is what `scripts/betterstack-query.sh`'s allowlist pins.
+  **(#7867) The connection itself was re-provisioned the same day** (id `424104`, `client_type=clickhouse`, `team_ids=[520508]`) so it covers source `2734275`, and `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}` in `soleur/prd_terraform` were rotated to it. The previous connection was left in place rather than deleted, so any consumer still holding the previous credentials keeps working against the sources it could already see.
+- **Hot vs archive.** Rows age out of `remote(<table>)` into the S3 archive quickly — measured 2026-09-09, a row posted seconds earlier is in `remote()` within ~75 s, while rows five days old are readable ONLY via `s3Cluster(primary, <table>_s3)`. Any query over historical data must `UNION ALL` both arms; `git-data-rung2-evidence-capture.sh` already does.
 - `remote()` table identifier: **`t<TEAM_ID>_<table_name>_logs`** → `t520508_soleur_inngest_vector_prd_3_logs`. The docs' `t123456_...` placeholder is the **team id**, not the source id. (Suffixes: `_logs`, `_metrics`, `_spans`.)
 
 ## Re-minting the query connection (if creds are lost/rotated)
@@ -308,13 +426,11 @@ Two deliberate trade-offs:
   `extra.stdoutTail` (#4773 PR-A), alongside `extra.stderrTail`/`extra.exitCode`.
 - **Container log retention moved to journald.** Switching off `json-file`
   dropped its `max-size 10m/max-file 3` rotation; the container's `docker logs`
-  and retention are now governed by journald — at its **default** `SystemMaxUse`
-  (min(10% of /var, 4 GB)) unless an explicit bound is provisioned. Explicitly
-  sizing `SystemMaxUse` + ensuring `Storage=persistent` (so the journal survives
-  reboot and the redirected container volume can't evict the supervisor/system
-  journal Sources 1/2 depend on) is tracked as a follow-up infra task — the
-  journald storage config predates #4773 and applies equally to the two
-  pre-existing journald sources.
+  and retention are now governed by journald. The host provisions an explicit
+  bound (`journald-soleur.conf`: `Storage=persistent`, `SystemMaxUse=1G`,
+  `SystemKeepFree=2G`), so the journal survives reboot and the redirected
+  container volume cannot evict the supervisor/system journal that Sources 1/2
+  depend on.
 - **Rollout on existing hosts (non-load-bearing order).** PR-C is fully active
   only after BOTH (a) an inngest-bootstrap deploy ships the new `vector.toml`,
   AND (b) a web-platform deploy re-creates the `soleur-web-platform` container
@@ -955,7 +1071,9 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3
 ```
 
 `unpinned_url`, `bad_token` or `WARN: BETTERSTACK_LOGS_TOKEN/BETTERSTACK_INGEST_URL unset` means the guard refused to
-ship (fix the Doppler value or the pin); a `SOLEUR_PRIVATE_NIC ... nic_ok=false` row means the private NIC is
+ship (fix the Doppler value or the pin); `SOLEUR_CREDENTIAL_REFUSED script=web-private-nic-guard reason=…
+var=WEB_NIC_GUARD_URL` (or a `heartbeat URL refused|unset` WARN) means the beat URL itself was refused or unset,
+hourly-limited, so search at least 70 minutes (ADR-280, PR C follow-ups); a `SOLEUR_PRIVATE_NIC ... nic_ok=false` row means the private NIC is
 really absent. A malformed token can blind Vector too (it reads the same secret), in which case the absence of
 rows is the only off-box signal. The monitor alerts only once the arm step has un-paused it.
 
@@ -1129,3 +1247,33 @@ Swap `load%` for the `name` filter (and `maxIf(v,n='load15')`) to read sustained
 CPU pressure. After web-2 is born, re-run with `tags.host='soleur-web-2'` to
 confirm it emits metrics and to drive the resize-or-keep-`cx23` decision
 (ADR-143 D1). Serves `hr-no-dashboard-eyeball-pull-data-yourself`.
+
+## `op:"untrusted-classify"` (WebFetch injection scan, ADR-287 / #4671)
+
+One WARN line per WebFetch result in sessions with web egress and the `untrusted-content-classify` flag on. The pino payload sits under
+`.message` in the stored row (see the extraction note above), with fields `op`, `source`, `score`, `flagged`, `reasonCodes`,
+`contentLength`, `truncated`, `unscored`, `unscoredReason`, `scorerMs`, `mode`, `rewriteEmitted`, `workspaceIdHash`, `sessionId`. Never
+content, URLs or addresses. `rewriteEmitted` means the hook returned a rewrite, not that the model saw it.
+
+Soak/liveness read: `doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 7d --grep untrusted-classify`
+(counts only). Zero lines for 24 h while web-egress sessions exist is an alert, not a quiet window; with the flag off (the default) zero
+lines is the expected state. The alerts themselves are tracked on #10195.
+
+## Egress audit rollup markers (#9545, ADR-288)
+
+The egress gateway's decision log is also rolled up in Vector into per-workspace 15-minute buckets and posted to the app (dark until the
+`egress-audit-collection` flag is on for the workspace's organisation). One marker reaches Better Stack, through the PII-scrub chain:
+
+- `SOLEUR_EGRESS_AUDIT_THROTTLED workspace_id=<uuid> discarded_total=<n>`: the workspace exceeded
+  1,000 gateway events in 15 minutes and Vector discarded the excess from the rollup (the raw gateway log is unaffected). `<n>` is Vector's
+  lifetime counter since its last restart. Query it with
+  `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep SOLEUR_EGRESS_AUDIT_THROTTLED`.
+  Above the cap the rollup's host set is incomplete by design. The marker comes from Vector's per-key counter `events_discarded_total`
+  (the component-wide `component_discarded_events_total` has no workspace key). A second, keyless cap of 10,000 events per 15 minutes bounds the
+  whole pipeline; discards at that cap raise `SOLEUR_EGRESS_AUDIT_THROTTLED_GLOBAL discarded_total=<n>` (same identifier, no workspace id). For a solo workspace the `workspace_id` equals the owner's user id (migration 053), so
+  treat the marker as personal data under the same access rules as the raw gateway log.
+
+Table freshness and retention are checked without SSH by `bash scripts/egress-audit-retention-check.sh` (needs the Supabase prd service-role read).
+With `EGRESS_AUDIT_EXPECT_COLLECTION=1` it also needs `EGRESS_AUDIT_CANARY_WORKSPACES` (comma-separated ids of the enabled canary workspaces) and
+the Better Stack query credential. It is not scheduled anywhere yet: until it is, it is a manual probe, and scheduling it is a precondition of
+enabling collection (ADR-288).

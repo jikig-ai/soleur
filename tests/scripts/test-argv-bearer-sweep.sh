@@ -929,7 +929,8 @@ workspace-isolation-verdict-2640|dynamic|deploy\.soleur\.ai|1|workspace_isolatio
 infra-config-fatal-channel-7220|dynamic|deploy\.soleur\.ai|1|fatal_frame|
 infra-config-activation-7220|delegated|||activation_frame|scripts/followthroughs/infra-config-activation-7220.test.sh
 inngest-soak-6178|delegated|||none|scripts/followthroughs/inngest-soak-6178.test.sh
-tenant-outer-wrap-soak-5863|delegated|||none|scripts/followthroughs/tenant-outer-wrap-soak-5863.test.sh'
+tenant-outer-wrap-soak-5863|delegated|||none|scripts/followthroughs/tenant-outer-wrap-soak-5863.test.sh
+sandbox-readback-10445|delegated|||none|scripts/followthroughs/sandbox-readback-10445.test.sh'
 
 # --- the DERIVED population: tracked followthrough probes holding a credentialed curl ---------
 derive_population() {
@@ -4491,7 +4492,7 @@ else row "S4 parity population: a Markdown file teaches a divergent or unlisted 
 # first bc_* use; no credential header literal inside a bc_curl statement; no stderr discard on one; no branch on rc == 2; the marker
 # names the file).
 # =====================================================================================
-S4_SCRIPT_MANIFEST="$(printf '%s\n' .github/actions/dispatch-web-redeploy/track.sh apps/web-platform/infra/push-infra-config.sh apps/web-platform/scripts/github-app-key-status.sh scripts/probe-github-app-mint.sh | sort)"
+S4_SCRIPT_MANIFEST="$(printf '%s\n' .github/actions/dispatch-web-redeploy/track.sh apps/web-platform/infra/push-infra-config.sh apps/web-platform/scripts/github-app-key-status.sh scripts/probe-github-app-mint.sh apps/web-platform/infra/git-data-wipe.sh | sort)"
 S4_SCRIPT_POP="$(cd "$REPO_ROOT" && git grep -lE '^[[:space:]]*(source|\.)[[:space:]].*scripts/lib/bearer-curl\.sh' -- '*.sh' ':!*.test.sh' ':!tests' ':!scripts/lib' | sort)"
 S4_SU="$(comm -23 <(printf '%s\n' "$S4_SCRIPT_POP" | grep .) <(printf '%s\n' "$S4_SCRIPT_MANIFEST"))"
 S4_SS="$(comm -13 <(printf '%s\n' "$S4_SCRIPT_POP" | grep .) <(printf '%s\n' "$S4_SCRIPT_MANIFEST"))"
@@ -4502,7 +4503,7 @@ S4_YML_NEW=".github/actions/mint-infra-app-token/action.yml .github/workflows/ap
 S4_YML_MISS=""; for f in $S4_YML_NEW; do grep -qxF -- "$f" <<<"$S3_POP" || S4_YML_MISS+=" $f"; done
 [[ -z "$S4_YML_MISS" ]] && row "S4 population: the five newly converted YAML files and the converted inngest-health probe are all in the derived library-user set ($(printf '%s\n' "$S3_POP" | grep -c .) YAML members in all, judged by the S3 structure rows)" ok || row "S4 population: a converted YAML file is not a derived library user" fail "$S4_YML_MISS"
 # Anti-vacuity floor on the two derived populations (BOTH operands are literals on the lines IMMEDIATELY above the `if`).
-S4_POP_FLOOR=21
+S4_POP_FLOOR=23
 S4_POP_N=$(( $(printf '%s\n' "$S3_POP" | grep -c .) + $(printf '%s\n' "$S4_SCRIPT_POP" | grep -c .) ))
 if [[ "$S4_POP_N" -ge "$S4_POP_FLOOR" ]]; then row "S4 population: the derived library-user population holds $S4_POP_N members (anti-vacuity floor $S4_POP_FLOOR)" ok
 else row "S4 population: the derived library-user population is below its anti-vacuity floor" fail "n=$S4_POP_N floor=$S4_POP_FLOOR"; fi
@@ -4529,20 +4530,20 @@ done
 [[ -z "$S4_RC2_BAD" ]] && row "S4 structure: no script branches on rc == 2 (the marker is the discriminator)" ok || row "S4 structure: a script branches on rc 2" fail "$S4_RC2_BAD"
 [[ -z "$S4_NAME_BAD" ]] && row "S4 structure: every bc_curl / bc_refuse in a script names its own file in the marker" ok || row "S4 structure: a script's marker names another file" fail "$S4_NAME_BAD"
 [[ -z "$S4_HMAC_SCRIPT_BAD" ]] && row "S4 structure: no library-user script computes an HMAC with the key on openssl's argv" ok || row "S4 structure: openssl -hmac in a library-user script" fail "$S4_HMAC_SCRIPT_BAD"
-# The floor is the realized count (4 bc_curl statements: track.sh x2, push-infra-config x1, github-app-key-status x1). BOTH operands are literals above the `if`.
-S4_SCALLS_FLOOR=4
+# The floor is the realized count (7 bc_curl statements: track.sh x2, push-infra-config x1, github-app-key-status x1, probe-github-app-mint x1, git-data-wipe x2 (the read and the write wrapper)). BOTH operands are literals above the `if`.
+S4_SCALLS_FLOOR=7
 if [[ "$S4_SCALLS" -ge "$S4_SCALLS_FLOOR" ]]; then row "S4 structure: the library-user scripts hold $S4_SCALLS bc_curl statements (anti-vacuity floor $S4_SCALLS_FLOOR)" ok
 else row "S4 structure: the script population floor" fail "only $S4_SCALLS bc_curl statements derived (floor $S4_SCALLS_FLOOR)"; fi
 # The lint's SCRIPT-CONSUMER derivation (scripts/lint-workflow-local-action-checkout.py, SCRIPT CONSUMERS) runs its `git ls-files` arm on the REAL tree only here
 # and in one fixture of its suite; the fixtures of the suite have no `.git`. A pathspec that stopped matching (`*.sh` -> `*.shx`) leaves that suite green, the lint at
 # rc 0 and the line at `0 derived, 0 step(s)`, so every script consumer would silently stop being checked for a checkout, `pull_request_target` and an untrusted ref.
-# The lint runs on the live tree and BOTH numbers of its `script-consumers:` line are held to floors (the REALIZED counts: 10 derived scripts, of which
-# 4 are run by a workflow step; a floor below the realized count lets one script consumer drop out of the derivation without a red row), and the arm must be the git one.
+# The lint runs on the live tree and BOTH numbers of its `script-consumers:` line are held to floors (the REALIZED counts: 23 derived scripts, of which
+# 23 are run by a workflow step; a floor below the realized count lets one script consumer drop out of the derivation without a red row), and the arm must be the git one.
 S4_LINT_OUT="$(cd "$REPO_ROOT" && python3 scripts/lint-workflow-local-action-checkout.py 2>&1)"; S4_LINT_RC=$?
 S4_LINT_N="$(sed -nE 's/^lint-workflow-local-action-checkout: script-consumers: ([0-9]+) derived \(git ls-files\), ([0-9]+) step\(s\) run one$/\1/p' <<<"$S4_LINT_OUT")"
 S4_LINT_M="$(sed -nE 's/^lint-workflow-local-action-checkout: script-consumers: ([0-9]+) derived \(git ls-files\), ([0-9]+) step\(s\) run one$/\2/p' <<<"$S4_LINT_OUT")"
-S4_LINT_N_FLOOR=10
-S4_LINT_M_FLOOR=4
+S4_LINT_N_FLOOR=23
+S4_LINT_M_FLOOR=23
 if [[ "$S4_LINT_RC" == 0 && "$S4_LINT_N" =~ ^[0-9]+$ && "$S4_LINT_M" =~ ^[0-9]+$ && "$S4_LINT_N" -ge "$S4_LINT_N_FLOOR" && "$S4_LINT_M" -ge "$S4_LINT_M_FLOOR" ]]; then
   row "S4 lint: the checkout lint run on the real tree is clean and its script-consumer derivation (git ls-files arm) finds $S4_LINT_N scripts and $S4_LINT_M steps that run one (floors $S4_LINT_N_FLOOR and $S4_LINT_M_FLOOR)" ok
 else row "S4 lint: the script-consumer derivation of the checkout lint is empty, below its floors, or not on the git arm" fail "rc=$S4_LINT_RC derived='${S4_LINT_N:-<unparsed>}' steps='${S4_LINT_M:-<unparsed>}' floors=$S4_LINT_N_FLOOR/$S4_LINT_M_FLOOR last='$(tail -1 <<<"$S4_LINT_OUT")'"; fi
@@ -6350,15 +6351,14 @@ echo "=== stage S5: Guard 1 and Guard 2 rows for the apply workflow and the regi
 # through a variable, an `eval` or a `bash -c` string whose `htpasswd` is not followed by an option on the same line, and an invocation hidden
 # behind ` # ` inside a quoted string earlier on the same line.
 #
-# THE ONE-PR-LATER RESIDUAL. This PR converts only the registry-luks-recut rehearsal step (one site). The registry template
-# (apps/web-platform/infra/cloud-init-registry.yml: the `_htp_verify` probe and the two boot-step htpasswd lines) ships as its own follow-up PR
-# because merging that file replaces the production registry host unattended, so its three invocations stay argv-form here and are carried as an
-# EXPLICIT RESIDUAL ALLOWLIST (S6_ALLOW below, named by file and the whole stripped line). THE ALLOWLIST SHRINKS BY DELETION ONLY: the follow-up
-# registry PR deletes it, and an entry the scan no longer sees is itself RED ("stale-allowlist"), so converting a site without deleting its entry
-# fails here. The ceiling row pins the entry count, so growing the allowlist is an edit to a literal this stage asserts, never a quiet addition.
+# NO RESIDUAL. The registry template (apps/web-platform/infra/cloud-init-registry.yml: the `_htp_verify` probe and the two boot-step htpasswd lines)
+# was carried here as an explicit residual allowlist (S6_ALLOW) while its conversion waited for its own PR, because merging that file replaces the
+# production registry host unattended. #10119 converted all three sites and DELETED the allowlist: S6_ALLOW is empty and S6_ALLOW_CEIL is 0, so a site
+# that goes back to argv form is `bad:<file>` with no entry to hide behind. The allowlist machinery stays (an entry the scan no longer sees is RED,
+# "stale-allowlist"; the ceiling row pins the entry count) so growing it again is an edit to literals this stage asserts, never a quiet addition.
 #
-# FLOOR. The scan saw 4 invocations in 2 files on the real tree: 1 in the workflow + 3 residual in the registry template. The floor is 4 sites
-# in 2 files; it is also the count after the follow-up (workflow 1 + boot step 2 + probe 1), so it does not move when the allowlist is deleted.
+# FLOOR. The scan sees 4 invocations in 2 files on the real tree: 1 in the workflow + 3 in the registry template (the boot step's two entries and the
+# probe), all stdin form. The floor is 4 sites in 2 files; it did not move when the allowlist was deleted.
 # A scan that sees fewer (renamed binary, moved roots, a broken regex) is RED, never a clean bill.
 #
 # The executable rows run the REAL step text (PyYAML-extracted from the workflow, up to and including the htpasswd line) under
@@ -6369,17 +6369,17 @@ echo "=== stage S5: Guard 1 and Guard 2 rows for the apply workflow and the regi
 # =====================================================================================
 S6_WF=".github/workflows/apply-web-platform-infra.yml"
 S6_REG="apps/web-platform/infra/cloud-init-registry.yml"
-S6_SITE_FLOOR=4; S6_FILE_FLOOR=2; S6_ALLOW_CEIL=3
+S6_SITE_FLOOR=4; S6_FILE_FLOOR=2; S6_ALLOW_CEIL=0
 S6_WF_LINE="$(cat <<'S6EOF'
 printf '%s' "$RP" | docker run --rm -i httpd:2.4-alpine htpasswd -Bin "$RU" > "${RUNNER_TEMP}/zot/htpasswd"
 S6EOF
 )"
-# The residual allowlist: <file><TAB><the whole stripped line>. The follow-up registry PR deletes every entry.
-S6_ALLOW=(
-"$S6_REG	htpasswd -vb /etc/zot/htpasswd \"\$1\" \"\$2\" >/dev/null 2>&1"
-"$S6_REG	htpasswd -Bbn '\${zot_pull_user}' \"\$ZOT_PULL_TOKEN\"  > /etc/zot/htpasswd"
-"$S6_REG	htpasswd -Bbn '\${zot_push_user}' \"\$ZOT_PUSH_TOKEN\" >> /etc/zot/htpasswd"
-)
+# The residual allowlist: <file><TAB><the whole stripped line>. EMPTY since #10119 deleted the three registry entries; it shrinks by deletion only.
+S6_ALLOW=()
+# The three registry-template sites, by identity (file and the whole stripped line), all stdin form.
+S6_REG_PROBE="printf '%s' \"\$2\" | htpasswd -vi /etc/zot/htpasswd \"\$1\" >/dev/null 2>&1"
+S6_REG_PULL="printf '%s' \"\$ZOT_PULL_TOKEN\" | htpasswd -Bin '\${zot_pull_user}'  > /etc/zot/htpasswd"
+S6_REG_PUSH="printf '%s' \"\$ZOT_PUSH_TOKEN\" | htpasswd -Bin '\${zot_push_user}' >> /etc/zot/htpasswd"
 S6_ERE='(^|[^[:alnum:]_./-])htpasswd[[:space:]]+-[A-Za-z]'
 S6_ERE_INV='(^|[^[:alnum:]_./-])htpasswd([[:space:]]+-[A-Za-z]+)+'
 
@@ -6445,8 +6445,8 @@ S6_REAL_REASONS="$S6_J_REASONS"; S6_REAL_SITES="$S6_J_SITES"; S6_REAL_FILES="$S6
 S6_REAL_SCAN="$(s6_scan "$REPO_ROOT")"
 if [[ -z "$S6_REAL_REASONS" ]]; then row "S6 Guard 3: no tracked htpasswd invocation outside the residual allowlist carries a password on argv ($S6_REAL_SITES invocations in $S6_REAL_FILES files, derived by git grep over apps/ scripts/ .github/)" ok
 else row "S6 Guard 3: an htpasswd invocation carries a password on argv outside the residual allowlist, or the workflow site or an allowlist entry drifted" fail "reasons='$S6_REAL_REASONS' sites=$S6_REAL_SITES files=$S6_REAL_FILES"; fi
-if [[ "$S6_REAL_SITES" -ge "$S6_SITE_FLOOR" && "$S6_REAL_FILES" -ge "$S6_FILE_FLOOR" && "$S6_REAL_SITES" -eq 4 && "$S6_REAL_FILES" -eq 2 ]]; then row "S6 floor: the scan saw $S6_REAL_SITES invocations in $S6_REAL_FILES files (workflow 1 + registry template 3: the floor is $S6_SITE_FLOOR sites in $S6_FILE_FLOOR files, and is the same after the follow-up converts the registry sites)" ok
-else row "S6 floor: the scan saw an unexpected population (the floor is $S6_SITE_FLOOR sites in $S6_FILE_FLOOR files; exactly 4 in 2 are expected until the follow-up registry PR)" fail "sites=$S6_REAL_SITES files=$S6_REAL_FILES"; fi
+if [[ "$S6_REAL_SITES" -ge "$S6_SITE_FLOOR" && "$S6_REAL_FILES" -ge "$S6_FILE_FLOOR" && "$S6_REAL_SITES" -eq 4 && "$S6_REAL_FILES" -eq 2 ]]; then row "S6 floor: the scan saw $S6_REAL_SITES invocations in $S6_REAL_FILES files (workflow 1 + registry template 3: the floor is $S6_SITE_FLOOR sites in $S6_FILE_FLOOR files)" ok
+else row "S6 floor: the scan saw an unexpected population (the floor is $S6_SITE_FLOOR sites in $S6_FILE_FLOOR files; exactly 4 in 2 are expected)" fail "sites=$S6_REAL_SITES files=$S6_REAL_FILES"; fi
 # One anchored row per site: identity (file and the whole stripped line), never only a count.
 s6_site_is() { # <file> <whole line> <expect-b: 0|1>: exactly one record of <file> has that line, and its options hold a lowercase b iff <expect-b>
   awk -F'\t' -v f="$1" -v c="$2" -v b="$3" '$1 == f { n++; if ($4 == c && (($3 ~ /b/) ? 1 : 0) == b) ok++ } END { exit !(n == 1 && ok == 1) }' <<<"$S6_REAL_SCAN"
@@ -6456,16 +6456,17 @@ s6_site_in_file_is() { # <file> <whole line> <expect-b>: the file holds exactly 
 }
 if s6_site_is "$S6_WF" "$S6_WF_LINE" 0; then row "S6 site (workflow): the registry-luks-recut rehearsal step's single htpasswd invocation is exactly the stdin form with docker's own -i, and its options hold no b" ok
 else row "S6 site (workflow): the rehearsal step's htpasswd line is not the exact stdin form (printf '%s' \"\$RP\" | docker run --rm -i httpd:2.4-alpine htpasswd -Bin \"\$RU\" > ...)" fail "records=$(awk -F'\t' -v f="$S6_WF" '$1 == f' <<<"$S6_REAL_SCAN" | cut -f2,3 | tr '\t\n' ' :')"; fi
-S6_ALLOW_I=0
-for a in "${S6_ALLOW[@]}"; do
-  S6_ALLOW_I=$((S6_ALLOW_I + 1)); a_file="${a%%$'\t'*}"; a_line="${a#*$'\t'}"
-  case "$S6_ALLOW_I" in 1) a_name="the _htp_verify probe (htpasswd -vb)" ;; 2) a_name="the boot step's pull entry (htpasswd -Bbn)" ;; *) a_name="the boot step's push entry (htpasswd -Bbn)" ;; esac
-  if s6_site_in_file_is "$a_file" "$a_line" 1; then row "S6 residual site $S6_ALLOW_I (cloud-init-registry.yml): $a_name is still argv-form, present exactly once, and named by the allowlist (the follow-up registry PR converts it and deletes the entry)" ok
-  else row "S6 residual site $S6_ALLOW_I (cloud-init-registry.yml): $a_name is not present exactly once in its allowlisted form (converted without deleting its allowlist entry, or moved)" fail "line=$(cut -c1-60 <<<"$a_line")"; fi
+S6_SITE_I=0
+for a_line in "$S6_REG_PROBE" "$S6_REG_PULL" "$S6_REG_PUSH"; do
+  S6_SITE_I=$((S6_SITE_I + 1))
+  case "$S6_SITE_I" in 1) a_name="the _htp_verify probe (htpasswd -vi, password piped from printf)" ;; 2) a_name="the boot step's pull entry (htpasswd -Bin, creates the file)" ;; *) a_name="the boot step's push entry (htpasswd -Bin, appends)" ;; esac
+  if s6_site_in_file_is "$S6_REG" "$a_line" 0; then row "S6 registry site $S6_SITE_I (cloud-init-registry.yml): $a_name is the stdin form, present exactly once, and its options hold no b" ok
+  else row "S6 registry site $S6_SITE_I (cloud-init-registry.yml): $a_name is not present exactly once in its stdin form" fail "line=$(cut -c1-70 <<<"$a_line")"; fi
 done
-S6_ALLOW_FILES="$(for a in "${S6_ALLOW[@]}"; do printf '%s\n' "${a%%$'\t'*}"; done | sort -u)"
-if [[ "${#S6_ALLOW[@]}" -eq "$S6_ALLOW_CEIL" && "$S6_ALLOW_FILES" == "$S6_REG" ]]; then row "S6 allowlist ceiling: exactly $S6_ALLOW_CEIL residual entries, all in $S6_REG (it shrinks by deletion only; the follow-up registry PR deletes it)" ok
-else row "S6 allowlist ceiling: the residual allowlist grew or spread beyond the three registry-template entries" fail "entries=${#S6_ALLOW[@]} files='${S6_ALLOW_FILES//$'\n'/,}'"; fi
+# The ceiling is a predicate over a count so a grow-by-one mutant can be judged by the SAME function: 0 passes, 1 must not.
+s6_ceiling_ok() { [[ "$1" -eq "$S6_ALLOW_CEIL" && "$S6_ALLOW_CEIL" -eq 0 ]]; }
+if s6_ceiling_ok "${#S6_ALLOW[@]}" && ! s6_ceiling_ok $((${#S6_ALLOW[@]} + 1)); then row "S6 allowlist ceiling: the residual allowlist is EMPTY (ceiling $S6_ALLOW_CEIL; #10119 deleted the three registry entries), and a grow-by-one allowlist is judged RED by the same predicate" ok
+else row "S6 allowlist ceiling: the residual allowlist is not empty, or the ceiling predicate accepts a grown allowlist" fail "entries=${#S6_ALLOW[@]} ceiling=$S6_ALLOW_CEIL"; fi
 
 # --- mutations, on a scratch repository ----------------------------------------------------
 # M1 reintroduce the argv form in the workflow site.
@@ -6488,7 +6489,7 @@ else row "S6 mutation 2: the fifth/sixth-site pair is judged wrong" fail "fifth=
 S6_M3="$(s6_fresh m3)"; assert_fixture_dir "$S6_M3"
 printf '%s\n' "    htpasswd -Bbn 'extra' \"\$EXTRA_TOKEN\" >> /etc/zot/htpasswd" >> "$S6_M3/$S6_REG"
 s6_judge "$S6_M3"
-if [[ "$S6_J_REASONS" == *"bad:$S6_REG"* && "$S6_J_SITES" -eq $((S6_REAL_SITES + 1)) ]]; then row "S6 mutation 3: a fourth argv htpasswd line added to the allowlisted registry file is RED (the allowlist names lines, not the file)" ok
+if [[ "$S6_J_REASONS" == *"bad:$S6_REG"* && "$S6_J_SITES" -eq $((S6_REAL_SITES + 1)) ]]; then row "S6 mutation 3: a fourth argv htpasswd line added to the registry file is RED (a site is judged by its line, never by its file)" ok
 else row "S6 mutation 3: an extra argv line in the allowlisted file slips through" fail "reasons='$S6_J_REASONS' sites=$S6_J_SITES"; fi
 # M4 every spelling of the password-on-argv option cluster is RED, in any order and combination.
 S6_M4="$(s6_fresh m4)"; assert_fixture_dir "$S6_M4"; mkdir -p "$S6_M4/scripts"; S6_M4_MISS=""
@@ -6504,14 +6505,29 @@ for f in "$S6_WF" "$S6_REG"; do sed -i -E 's/htpasswd([[:space:]]+-)/htpassw0\1/
 s6_judge "$S6_M5"
 if [[ "$S6_J_SITES" -eq 0 && "$S6_J_REASONS" == *floor* ]]; then row "S6 mutation 5: with the scanned binary renamed the scan sees 0 sites and the floor is RED" ok
 else row "S6 mutation 5: a scan that sees nothing is not RED" fail "sites=$S6_J_SITES reasons='$S6_J_REASONS'"; fi
-# M6 an allowlist entry the scan no longer sees is RED (the follow-up PR must delete the allowlist when it converts the sites). A compliant site is added so the floor is not what trips.
+# M6 an allowlist entry the scan no longer sees is RED. The real allowlist is empty now, so the mutant INJECTS an entry for a line the scan cannot see (the
+# retired argv probe line); a compliant extra site keeps the floor from being what trips.
 S6_M6="$(s6_fresh m6)"; assert_fixture_dir "$S6_M6"; mkdir -p "$S6_M6/scripts"
 printf '%s\n' "printf '%s' \"\$p\" | htpasswd -Bin svc > \"\$out\"" > "$S6_M6/scripts/zz-ok.sh"
-if s6_edit "$S6_M6/$S6_REG" '        htpasswd -vb /etc/zot/htpasswd "$1" "$2" >/dev/null 2>&1' '        printf '"'"'%s'"'"' "$2" | htpasswd -vi /etc/zot/htpasswd "$1" >/dev/null 2>&1'; then
-  s6_judge "$S6_M6"
-  if [[ "$S6_J_REASONS" == "stale-allowlist" ]]; then row "S6 mutation 6: converting a residual site without deleting its allowlist entry is RED (stale-allowlist, and nothing else)" ok
-  else row "S6 mutation 6: a stale allowlist entry is not (only) reported" fail "reasons='$S6_J_REASONS'"; fi
-else row "S6 mutation 6: the _htp_verify line was not found once with its exact text (re-anchor this row with the registry template)" fail "edit did not land"; fi
+S6_ALLOW_SAVE=("${S6_ALLOW[@]}")
+S6_ALLOW+=("$S6_REG	htpasswd -vb /etc/zot/htpasswd \"\$1\" \"\$2\" >/dev/null 2>&1")
+s6_judge "$S6_M6"; S6_M6_R="$S6_J_REASONS"
+S6_ALLOW=("${S6_ALLOW_SAVE[@]}")
+if [[ "$S6_M6_R" == "stale-allowlist" ]]; then row "S6 mutation 6: an allowlist entry for a site that is gone (the retired -vb probe line) is RED (stale-allowlist, and nothing else)" ok
+else row "S6 mutation 6: a stale allowlist entry is not (only) reported" fail "reasons='$S6_M6_R'"; fi
+# M8 reintroduce each of the three registry sites in argv form, one at a time, with NO allowlist to hide behind: each is RED by its own identity.
+S6_M8_MISS=""; S6_M8_I=0
+for old_new in \
+  "$S6_REG_PROBE"$'\x1f'"htpasswd -vb /etc/zot/htpasswd \"\$1\" \"\$2\" >/dev/null 2>&1" \
+  "$S6_REG_PULL"$'\x1f'"htpasswd -Bbn '\${zot_pull_user}' \"\$ZOT_PULL_TOKEN\"  > /etc/zot/htpasswd" \
+  "$S6_REG_PUSH"$'\x1f'"htpasswd -Bbn '\${zot_push_user}' \"\$ZOT_PUSH_TOKEN\" >> /etc/zot/htpasswd"; do
+  S6_M8_I=$((S6_M8_I + 1)); S6_M8="$(s6_fresh "m8-$S6_M8_I")"
+  if s6_edit "$S6_M8/$S6_REG" "${old_new%%$'\x1f'*}" "${old_new##*$'\x1f'}"; then
+    s6_judge "$S6_M8"; [[ "$S6_J_REASONS" == *"bad:$S6_REG"* ]] || S6_M8_MISS+=" site$S6_M8_I(not-red:$S6_J_REASONS)"
+  else S6_M8_MISS+=" site$S6_M8_I(edit-missed)"; fi
+done
+if [[ -z "$S6_M8_MISS" ]]; then row "S6 mutation 8: reintroducing the argv form at the probe, the pull entry or the push entry of the registry template is RED each time (the allowlist is empty, so nothing hides it)" ok
+else row "S6 mutation 8: an argv registry site is not caught" fail "missed:$S6_M8_MISS"; fi
 # Must-PASS: other order/case (-iB, -iBn, -vi, -Bin, -Bn), `-vb` only in comments (a whole-line comment, a trailing YAML comment), and files outside the population.
 S6_M7="$(s6_fresh m7)"; assert_fixture_dir "$S6_M7"; mkdir -p "$S6_M7/scripts" "$S6_M7/.github/workflows" "$S6_M7/apps/web-platform/infra" "$S6_M7/knowledge-base"
 { printf '%s\n' "printf '%s' \"\$p\" | htpasswd -iB svc > \"\$out\""
@@ -6526,6 +6542,95 @@ printf '%s\n' 'htpasswd -Bbn svc "$p"' > "$S6_M7/knowledge-base/zz-notes.sh"    
 s6_judge "$S6_M7"
 if [[ -z "$S6_J_REASONS" && "$S6_J_SITES" -eq $((S6_REAL_SITES + 3)) ]]; then row "S6 must-pass: other option orders and cases (-iB, -iBn, -vi), -vb only inside whole-line and trailing YAML comments, and a test file, a markdown file and a path outside the roots are GREEN (the three compliant sites are seen)" ok
 else row "S6 must-pass: a compliant or excluded form is flagged, or the compliant sites were not seen" fail "reasons='$S6_J_REASONS' sites=$S6_J_SITES want=$((S6_REAL_SITES + 3))"; fi
+
+# --- the registry template's two heartbeat curls (#10093): the URL is a stdin config line, never an argument ----------------------------------------------
+# PROPERTY. In cloud-init-registry.yml no `curl` argument holds a `*_heartbeat_url` interpolation: the URL's path is the secret, argv is readable by every local
+# user. DERIVATION: every LOGICAL line of the YAML (backslash continuations joined), whole-line comments dropped, with a `curl` command word AND `heartbeat_url`
+# is a heartbeat site; with the stdin feed `< <(printf 'url = "%s"\n' '<literal>')` removed, a site that still holds `heartbeat_url` is VIOLATING. The two converted
+# sites (disk, liveness) are asserted by IDENTITY. A comment line is never continued by a trailing backslash (bash does not continue it either), and an absolute
+# path (`/usr/bin/curl`) is a curl command word. NOT COVERED, named: a URL carried through a variable or an `eval`, another HTTP client (wget, python), a
+# template variable of another name, and any file other than the registry template.
+S6R_PY="$S6/regheartbeat.py"
+cat > "$S6R_PY" <<'S6RPY'
+import re, sys
+lines = open(sys.argv[1], encoding="utf-8").read().split("\n")
+i, out = 0, []
+while i < len(lines):
+    ln = i + 1
+    t = lines[i]
+    while not t.lstrip().startswith("#") and t.rstrip().endswith("\\") and i + 1 < len(lines):
+        i += 1
+        t = t.rstrip()[:-1] + " " + lines[i].strip()
+    i += 1
+    s = t.strip()
+    if s.startswith("#"):
+        continue
+    if not re.search(r"(^|[^A-Za-z0-9_.-])curl([^A-Za-z0-9_-]|$)", s) or "heartbeat_url" not in s:
+        continue
+    feed = re.sub(r"< <\(printf 'url = \"%s\"\\n' '[^']*'\)", "", s)
+    out.append(("V" if "heartbeat_url" in feed else "S", ln, s))
+for k, ln, s in out:
+    print("%s\t%d\t%s" % (k, ln, s))
+S6RPY
+S6R_DISK="curl --disable --noproxy '*' -g -fsS -m 10 --config - >/dev/null 2>&1 < <(printf 'url = \"%s\"\\n' '\${disk_heartbeat_url}') || PING_RC=\$?"
+S6R_LIVE="if curl --disable --noproxy '*' -g -fsS -m 10 -o /dev/null --config - < <(printf 'url = \"%s\"\\n' '\${liveness_heartbeat_url}'); then PING=ok; else PING=fail; fi"
+S6R_REAL_SCAN="" ; S6R_J_REASONS="unscanned"   # non-empty until s6r_judge has actually run: deleting the real-tree call must not read as GREEN
+s6r_judge() { # <root>: sets S6R_J_REASONS (empty = GREEN) and S6R_REAL_SCAN. Reasons: floor, argv, disk-identity, liveness-identity.
+  local scan sites
+  scan="$(python3 -I "$S6R_PY" "$1/$S6_REG" 2>/dev/null)" || { S6R_J_REASONS="scan-failed"; return 0; }
+  S6R_REAL_SCAN="$scan"; S6R_J_REASONS=""
+  sites="$(grep -c . <<<"$scan" || true)"
+  [[ "$sites" -ge 2 ]] || S6R_J_REASONS+=" floor"
+  grep -q $'^V\t' <<<"$scan" && S6R_J_REASONS+=" argv"
+  # ENVIRON, not -v: awk -v interprets backslash escapes, and these lines carry a literal \n inside the printf format.
+  [[ "$(S6R_C="$S6R_DISK" awk -F'\t' '$1 == "S" && $3 == ENVIRON["S6R_C"] { n++ } END { print n + 0 }' <<<"$scan")" == 1 ]] || S6R_J_REASONS+=" disk-identity"
+  [[ "$(S6R_C="$S6R_LIVE" awk -F'\t' '$1 == "S" && $3 == ENVIRON["S6R_C"] { n++ } END { print n + 0 }' <<<"$scan")" == 1 ]] || S6R_J_REASONS+=" liveness-identity"
+  S6R_J_REASONS="${S6R_J_REASONS# }"
+}
+s6r_judge "$REPO_ROOT"; S6R_REAL="$S6R_J_REASONS"
+if [[ -z "$S6R_REAL" ]]; then row "S6-REG heartbeat: the registry template's two heartbeat curls (disk, liveness) carry their URL only in the stdin config feed, never on curl argv, each by exact identity ($(grep -c . <<<"$S6R_REAL_SCAN") sites seen)" ok
+else row "S6-REG heartbeat: a registry heartbeat URL is on curl argv, or a converted site drifted from its exact stdin form" fail "reasons='$S6R_REAL'"; fi
+# M-R1 put the URL back on the curl argument list (disk): RED by the derived scan, not only by the identity row.
+S6R_M1="$(s6_fresh r1)"
+if s6_edit "$S6R_M1/$S6_REG" "curl --disable --noproxy '*' -g -fsS -m 10 --config - >/dev/null 2>&1 < <(printf 'url = \"%s\"\\n' '\${disk_heartbeat_url}') || PING_RC=\$?" "curl -fsS -m 10 \"\${disk_heartbeat_url}\" >/dev/null 2>&1 || PING_RC=\$?"; then
+  s6r_judge "$S6R_M1"
+  if [[ "$S6R_J_REASONS" == *argv* && "$S6R_J_REASONS" == *disk-identity* ]]; then row "S6-REG mutation 1: the disk heartbeat URL back on curl argv is RED (the derived scan and the site's identity)" ok
+  else row "S6-REG mutation 1: an argv heartbeat URL in the registry template is not caught" fail "reasons='$S6R_J_REASONS'"; fi
+else row "S6-REG mutation 1: the argv edit did not land on the disk heartbeat curl (re-anchor with the template)" fail "the converted disk curl was not found once"; fi
+# M-R2 argv URL on the liveness curl too, as a SECOND site, while the first stays compliant: identity per site, not a count.
+S6R_M2="$(s6_fresh r2)"
+printf '%s\n' "      curl -fsS -m 10 -o /dev/null \"\${liveness_heartbeat_url}\"" >> "$S6R_M2/$S6_REG"
+s6r_judge "$S6R_M2"
+if [[ "$S6R_J_REASONS" == *argv* ]]; then row "S6-REG mutation 2: an extra argv heartbeat curl appended after the compliant two is RED (a violating logical line, not a count)" ok
+else row "S6-REG mutation 2: an extra argv heartbeat curl slips through" fail "reasons='$S6R_J_REASONS'"; fi
+# M-R3 the scanned word renamed everywhere: the scan sees 0 sites and must be RED (floor), never a clean bill.
+S6R_M3="$(s6_fresh r3)"; sed -i 's/heartbeat_url/hb_url/g' "$S6R_M3/$S6_REG"
+s6r_judge "$S6R_M3"
+if [[ "$S6R_J_REASONS" == *floor* ]]; then row "S6-REG mutation 3: with the scanned variable renamed the scan sees no heartbeat site and the floor is RED" ok
+else row "S6-REG mutation 3: a scan that sees nothing is not RED" fail "reasons='$S6R_J_REASONS'"; fi
+# Must-pass: a whole-line comment naming curl and the variable is not a violation.
+S6R_M4="$(s6_fresh r4)"
+printf '%s\n' "      # curl -fsS -m 10 \"\${disk_heartbeat_url}\" would carry the URL on argv" >> "$S6R_M4/$S6_REG"
+s6r_judge "$S6R_M4"
+if [[ -z "$S6R_J_REASONS" ]]; then row "S6-REG must-pass: a whole-line comment that names curl and the heartbeat variable is not a violation" ok
+else row "S6-REG must-pass: a comment line is flagged" fail "reasons='$S6R_J_REASONS'"; fi
+
+# Evasions the first scanner missed: a comment line ending in a backslash swallowed the live line under it; an absolute curl path was not a command word.
+S6R_M5="$(s6_fresh r5)"
+printf '%s\n' "      # a note that ends in a backslash \\" "      curl -fsS -m 10 \"\${disk_heartbeat_url}\"" >> "$S6R_M5/$S6_REG"
+s6r_judge "$S6R_M5"
+if [[ "$S6R_J_REASONS" == *argv* ]]; then row "S6-REG mutation 5: a live argv curl under a comment line that ends in a backslash is RED (a comment is never continued)" ok
+else row "S6-REG mutation 5: a comment ending in a backslash hides the live line under it" fail "reasons='$S6R_J_REASONS'"; fi
+S6R_M6="$(s6_fresh r6)"
+printf '%s\n' "      /usr/bin/curl -fsS -m 10 \"\${liveness_heartbeat_url}\"" >> "$S6R_M6/$S6_REG"
+s6r_judge "$S6R_M6"
+if [[ "$S6R_J_REASONS" == *argv* ]]; then row "S6-REG mutation 6: an argv heartbeat curl spelled with an absolute path is RED" ok
+else row "S6-REG mutation 6: /usr/bin/curl is not seen as a curl command word" fail "reasons='$S6R_J_REASONS'"; fi
+S6R_M7="$(s6_fresh r7)"
+printf '%s\n' "      curl -fsS -m 10 \\" "        \"\${disk_heartbeat_url}\"" >> "$S6R_M7/$S6_REG"
+s6r_judge "$S6R_M7"
+if [[ "$S6R_J_REASONS" == *argv* ]]; then row "S6-REG mutation 7: an argv heartbeat curl split across two physical lines by a backslash continuation is RED (the logical line is joined)" ok
+else row "S6-REG mutation 7: a continuation-split argv heartbeat curl slips through" fail "reasons='$S6R_J_REASONS'"; fi
 
 # --- the executable rows: the REAL workflow step under a refusing stub docker -----------------
 # The step is extracted with PyYAML (job registry_pull_path_gate, step id `throwaway`) and cut at the htpasswd line: everything before it (the zot pin
@@ -6622,24 +6727,23 @@ echo "=== stage S6: Guard 3 rows (htpasswd password off argv: workflow site, res
 # file that names no heartbeat, e.g. a Pages probe whose own variable is also called URL, is outside the population). In such a file every logical line
 # (continuations joined, whole-line comments dropped) has its `< <(...)` stdin feed removed, is split into segments on `||`, `&&`, `;` and `|`, and every
 # segment holding a `curl` command word whose remaining text names `$URL`, `$hb_url` or a `*HEARTBEAT_URL` variable is a VIOLATION: the URL is on argv.
-# (`$INNGEST_HEALTH_URL`, the local health probe in the same file as the heartbeat, is not a heartbeat variable.) NOT COVERED, named: a URL carried in a
-# variable that is none of those names, an `eval`, and the registry template's own heartbeat curls (cloud-init-registry.yml, tracked in #10093).
+# (`$INNGEST_HEALTH_URL`, the local health probe in the same file as the heartbeat, is not a heartbeat variable.) The curl word may carry a path prefix
+# (`/usr/local/bin/curl`), a leading backslash (`\curl`) or a backtick. NOT COVERED, named (a text heuristic, not exhaustive; these pre-date PR C, see ADR-280 PR C
+# follow-up): a URL carried in a variable that is none of those names, an `eval`, curl inside a quoted string, producer and consumer split across segments,
+# other HTTP clients, a quoted metacharacter before the URL, files in subdirectories or not named *.sh, and units. The registry template's own heartbeat curls
+# are S6-REG's (above).
 #
-# EXPLICIT RESIDUAL ALLOWLIST (S6H_ALLOW: file, the segment text, the exact number of occurrences): the same-class probe scripts that still carry the
-# URL on argv, tracked in #10093. THE ALLOWLIST SHRINKS BY DELETION ONLY: an entry the scan no longer sees, or a count that moved, is RED.
+# EXPLICIT RESIDUAL ALLOWLIST (S6H_ALLOW: file, the segment text, the exact number of occurrences): EMPTY since PR C (#10120 converted the inngest heartbeat
+# body, #10093 the three probe scripts), so every heartbeat curl carries its URL on stdin and any argv URL is a plain violation. The mechanism stays: an entry
+# the scan no longer sees, or a count that moved, is RED, and the ceiling is 0 (a grown allowlist is RED by the same predicate).
 # CONVERTED SCRIPTS (S6H_CONVERTED): exactly one stdin config line (`url = "..."`) each, and exactly one copy of the shape-guard class, on a line BEFORE it.
 # =====================================================================================
 S6H_DIR="apps/web-platform/infra"
-S6H_CONVERTED=(luks-monitor.sh web-git-data-probe.sh)
+S6H_CONVERTED=(luks-monitor.sh web-git-data-probe.sh inngest-bootstrap.sh web-zot-consumer-probe.sh inngest-consumer-probe.sh web-private-nic-guard.sh)
 S6H_FILE_FLOOR=7
-S6H_ALLOW_CEIL=4
+S6H_ALLOW_CEIL=0
 S6H_CLASS='[!A-Za-z0-9._~:/?\&=%+-]'
-S6H_ALLOW=(
-"$S6H_DIR/web-zot-consumer-probe.sh	curl -fsS -m 10 -o /dev/null \"\$URL\" 2>/dev/null	2"
-"$S6H_DIR/inngest-consumer-probe.sh	curl -fsS -m 10 -o /dev/null \"\$URL\" 2>/dev/null	2"
-"$S6H_DIR/web-private-nic-guard.sh	beat() { curl --disable --noproxy '*' -fsS -m 10 -o /dev/null \"\$URL\" 2>/dev/null	1"
-"$S6H_DIR/inngest-bootstrap.sh	exec /usr/bin/curl -gfsS --max-time 10 \"\$INNGEST_HEARTBEAT_URL\" >/dev/null	1"
-)
+S6H_ALLOW=()
 # One TSV record per finding. V: a violating segment (file, segment). C: a stdin config line (file, line number). G: a guard class literal (file, line
 # number). P: a heartbeat-population file (file).
 s6h_scan() { # <root>
@@ -6648,8 +6752,8 @@ import re, subprocess, sys
 root = sys.argv[1]
 files = subprocess.run(["git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"], capture_output=True, check=True).stdout.decode().split("\0")
 pat = re.compile(r"^apps/web-platform/infra/[^/]+\.sh$")
-cmd = re.compile(r"(?:^|[\s({;|&])(?:/usr/bin/)?curl(?=\s|$)")
-var = re.compile(r"\$\{?(?:URL|hb_url|[A-Z][A-Z0-9_]*HEARTBEAT_URL)(?![A-Za-z0-9_])")
+cmd = re.compile(r"(?:^|[\s({;|&`\\])(?:/(?:[A-Za-z0-9_.-]+/)*)?curl(?=\s|$)")
+var = re.compile(r"\$\{?(?:URL|hb_url|[A-Z0-9_]*HEARTBEAT_URL)(?![A-Za-z0-9_])")
 cfg = re.compile(r"url = \"(?:%s|\$\{?[A-Za-z_]*HEARTBEAT_URL)")
 cls = sys.argv[2]
 for f in sorted(set(files)):
@@ -6708,9 +6812,9 @@ S6H="$TMPD/s6h"; assert_fixture_dir "$S6H"; mkdir -p "$S6H/base" "$S6H/mut"
 ( source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh" && git_fixture_env "$S6H/base" || exit 1; git -C "$S6H/base" init -q ) \
   || fatal "S6-HB could not create the scratch repository"
 mkdir -p "$S6H/base/$S6H_DIR"
-# The scratch tree holds every script the real verdict names, plus two controls: a non-heartbeat probe whose own variable is also called URL (outside the
+# The scratch tree holds every converted script the real verdict names, plus two controls: a non-heartbeat probe whose own variable is also called URL (outside the
 # population: it must NOT be flagged) and the already-converted git-data-liveness.sh (a stdin-form heartbeat script that is not in S6H_CONVERTED).
-for f in "${S6H_CONVERTED[@]}" web-zot-consumer-probe.sh inngest-consumer-probe.sh web-private-nic-guard.sh inngest-bootstrap.sh pages-build-identity-probe.sh git-data-liveness.sh; do
+for f in "${S6H_CONVERTED[@]}" pages-build-identity-probe.sh git-data-liveness.sh; do
   cp "$REPO_ROOT/$S6H_DIR/$f" "$S6H/base/$S6H_DIR/$f"
 done
 s6h_fresh() { local d="$S6H/mut/$1"; assert_fixture_dir "$d"; rm -rf "$d"; cp -a "$S6H/base" "$d" && printf '%s' "$d"; }
@@ -6727,8 +6831,9 @@ for f in "${S6H_CONVERTED[@]}"; do
   else row "S6-HB converted $f: not in the population, or not exactly one stdin config line" fail "cfg=$(s6h_ncfg "$f") inpop=$(s6h_inpop "$f")"; fi
 done
 S6H_ALLOW_FILES="$(for a in "${S6H_ALLOW[@]}"; do printf '%s\n' "${a%%$'\t'*}"; done | sort -u | grep -c . || true)"
-if [[ "${#S6H_ALLOW[@]}" -eq "$S6H_ALLOW_CEIL" && "$S6H_ALLOW_FILES" -eq "$S6H_ALLOW_CEIL" ]]; then row "S6-HB allowlist ceiling: exactly $S6H_ALLOW_CEIL residual entries in $S6H_ALLOW_FILES distinct files (it shrinks by deletion only; #10093 converts the three probe scripts)" ok
-else row "S6-HB allowlist ceiling: the residual allowlist grew or repeats a file" fail "entries=${#S6H_ALLOW[@]} files=$S6H_ALLOW_FILES want=$S6H_ALLOW_CEIL"; fi
+s6h_ceiling_ok() { [[ "$1" -eq "$S6H_ALLOW_CEIL" && "$S6H_ALLOW_CEIL" -eq 0 ]]; }
+if s6h_ceiling_ok "${#S6H_ALLOW[@]}" && ! s6h_ceiling_ok $((${#S6H_ALLOW[@]} + 1)); then row "S6-HB allowlist ceiling: the residual allowlist is EMPTY (ceiling $S6H_ALLOW_CEIL; PR C deleted the four residual entries of #10120 and #10093), and a grow-by-one allowlist is judged RED by the same predicate" ok
+else row "S6-HB allowlist ceiling: the residual allowlist is not empty, or the ceiling predicate accepts a grown allowlist" fail "entries=${#S6H_ALLOW[@]} files=$S6H_ALLOW_FILES want=$S6H_ALLOW_CEIL"; fi
 
 # --- mutation rows (the SAME scan over a scratch tree) ------------------------------------
 # M1 (Guard 2 row 1): the URL back on argv in a converted script.
@@ -6738,6 +6843,71 @@ if s6_edit "$S6H_M1/$S6H_DIR/web-git-data-probe.sh" '--config - 2>/dev/null < <(
   if [[ "$S6H_J_REASONS" == *"argv:$S6H_DIR/web-git-data-probe.sh"* && "$S6H_J_REASONS" == *"cfg:$S6H_DIR/web-git-data-probe.sh"* ]]; then row "S6-HB mutation 1: the URL back on curl argv in a converted script is RED (an argv violation, and the script's stdin config line is gone)" ok
   else row "S6-HB mutation 1: an argv heartbeat URL in a converted script is not caught" fail "reasons='$S6H_J_REASONS'"; fi
 else row "S6-HB mutation 1: the argv edit did not land (re-anchor with web-git-data-probe.sh)" fail "no transport line once in the scratch copy"; fi
+# Guard-copy parity (Guard 2): the shape guard and the per-attempt curl are four byte-identical inline copies (checkout-less hosts cannot source a library), so
+# one drift between them is a silent fork of the credential gate. Extract both definitions from each bash copy and require ONE distinct digest.
+s6h_guard_digest() { # <file> -> md5 of the _hb_url_ok function and the _hb_curl line, empty when either is missing
+  python3 -I -c '
+import hashlib, sys
+src = open(sys.argv[1], encoding="utf-8", errors="replace").read().split("\n")
+out, i = [], 0
+while i < len(src):
+    if src[i].startswith("_hb_url_ok() {"):
+        j = i
+        while j < len(src) and src[j] != "}": j += 1
+        out.extend(src[i:j + 1]); i = j
+    elif src[i].startswith("_hb_curl() {"):
+        out.append(src[i])
+    i += 1
+if len([l for l in out if l.startswith("_hb_url_ok() {")]) != 1 or len([l for l in out if l.startswith("_hb_curl() {")]) != 1: sys.exit(0)
+print(hashlib.md5("\n".join(out).encode()).hexdigest())
+' "$1"
+}
+S6H_PARITY_FILES=(web-git-data-probe.sh web-zot-consumer-probe.sh inngest-consumer-probe.sh web-private-nic-guard.sh)
+S6H_PARITY_SET=""; S6H_PARITY_EMPTY=0
+for f in "${S6H_PARITY_FILES[@]}"; do
+  S6H_D="$(s6h_guard_digest "$REPO_ROOT/$S6H_DIR/$f")"
+  if [[ -z "$S6H_D" ]]; then S6H_PARITY_EMPTY=$((S6H_PARITY_EMPTY + 1)); else S6H_PARITY_SET+="$S6H_D"$'\n'; fi
+done
+S6H_PARITY_N="$(printf '%s' "$S6H_PARITY_SET" | sort -u | grep -c . || true)"
+if [[ "$S6H_PARITY_EMPTY" -eq 0 && "$S6H_PARITY_N" -eq 1 ]]; then row "S6-HB guard-copy parity: _hb_url_ok and _hb_curl are byte-identical across the ${#S6H_PARITY_FILES[@]} bash copies (one digest, none missing a definition)" ok
+else row "S6-HB guard-copy parity: the inline guard copies drifted or one lost a definition" fail "distinct=$S6H_PARITY_N missing=$S6H_PARITY_EMPTY"; fi
+S6H_MPA="$(s6h_fresh mpa)"
+if s6_edit "$S6H_MPA/$S6H_DIR/web-zot-consumer-probe.sh" '  case "$1" in https://*) ;; *) return 1 ;; esac' '  case "$1" in http*://*) ;; *) return 1 ;; esac'; then
+  S6H_DA="$(s6h_guard_digest "$S6H_MPA/$S6H_DIR/web-zot-consumer-probe.sh")"; S6H_DB="$(s6h_guard_digest "$S6H_MPA/$S6H_DIR/web-git-data-probe.sh")"
+  if [[ -n "$S6H_DA" && -n "$S6H_DB" && "$S6H_DA" != "$S6H_DB" ]]; then row "S6-HB guard-copy parity mutation: loosening the scheme test in ONE copy changes its digest (the parity row would be RED)" ok
+  else row "S6-HB guard-copy parity mutation: a one-copy edit of the guard is not visible to the digest" fail "a=$S6H_DA b=$S6H_DB"; fi
+else row "S6-HB guard-copy parity mutation: the edit did not land (re-anchor with the scheme case line)" fail "no scheme case line once in the scratch copy"; fi
+# M-var/M-curl (scanner reach, CTO-ruled 2026-10-15): the stage contract says *HEARTBEAT_URL, which includes the bare name, and the curl word may be path-prefixed,
+# backslashed or inside backticks. Each spelling is appended to a converted script (no allowlist to hide behind) and must be an argv violation.
+S6H_MV="$(s6h_fresh mv)"; assert_fixture_dir "$S6H_MV"; printf '%s\n' 'curl -fsS "$HEARTBEAT_URL" >/dev/null' >> "$S6H_MV/$S6H_DIR/luks-monitor.sh"
+s6h_judge "$S6H_MV"
+if [[ "$S6H_J_REASONS" == *"argv:$S6H_DIR/luks-monitor.sh"* ]]; then row "S6-HB scanner reach: a curl carrying the bare \$HEARTBEAT_URL (the stage contract's *HEARTBEAT_URL includes it) is an argv violation" ok
+else row "S6-HB scanner reach: the bare HEARTBEAT_URL variable is not matched" fail "reasons='$S6H_J_REASONS'"; fi
+S6H_MC_BAD=""; S6H_MC_I=0
+for S6H_SP in '/usr/local/bin/curl -fsS "$URL" >/dev/null' '\curl -fsS "$URL" >/dev/null' 'x=`curl -fsS "$URL"`'; do
+  S6H_MC_I=$((S6H_MC_I + 1)); S6H_MC="$(s6h_fresh "mc$S6H_MC_I")"; assert_fixture_dir "$S6H_MC"; printf '%s\n' "$S6H_SP" >> "$S6H_MC/$S6H_DIR/luks-monitor.sh"
+  s6h_judge "$S6H_MC"; [[ "$S6H_J_REASONS" == *"argv:$S6H_DIR/luks-monitor.sh"* ]] || S6H_MC_BAD+=" [$S6H_SP]"
+done
+if [[ -z "$S6H_MC_BAD" ]]; then row "S6-HB scanner reach: a path-prefixed curl, a backslashed curl and a backtick-substituted curl carrying \$URL are each an argv violation" ok
+else row "S6-HB scanner reach: a curl spelling is not matched" fail "missed:$S6H_MC_BAD"; fi
+# M1b (Guard 2 row 1, the POSIX heredoc script): the URL back on argv in the heartbeat-body curl. The mutant is built from the real transport line.
+S6H_M1B="$(s6h_fresh m1b)"
+if s6_edit "$S6H_M1B/$S6H_DIR/inngest-bootstrap.sh" 'printf '"'"'url = "%s"\n'"'"' "$INNGEST_HEARTBEAT_URL" | /usr/bin/curl --disable --noproxy '"'"'*'"'"' -gfsS --max-time 10 --config - >/dev/null' '/usr/bin/curl --disable --noproxy '"'"'*'"'"' -gfsS --max-time 10 "$INNGEST_HEARTBEAT_URL" >/dev/null'; then
+  s6h_judge "$S6H_M1B"
+  if [[ "$S6H_J_REASONS" == *"argv:$S6H_DIR/inngest-bootstrap.sh"* && "$S6H_J_REASONS" == *"cfg:$S6H_DIR/inngest-bootstrap.sh"* ]]; then row "S6-HB mutation 1 (POSIX sh script): the URL back on curl argv in the inngest heartbeat body is RED (an argv violation, and its stdin config line is gone)" ok
+  else row "S6-HB mutation 1 (POSIX sh script): an argv heartbeat URL in the inngest heartbeat body is not caught" fail "reasons='$S6H_J_REASONS'"; fi
+else row "S6-HB mutation 1 (POSIX sh script): the argv edit did not land (re-anchor with the printf-piped curl line in inngest-bootstrap.sh)" fail "no printf-piped curl transport line once in the scratch copy"; fi
+# M1c (Guard 2 row 1, the three probes): the URL back on argv in each probe's per-attempt curl, one scratch copy per probe.
+S6H_M1C_BAD=""
+for S6H_PF in web-zot-consumer-probe.sh inngest-consumer-probe.sh web-private-nic-guard.sh; do
+  S6H_M1C="$(s6h_fresh "m1c-${S6H_PF%.sh}")"
+  if s6_edit "$S6H_M1C/$S6H_DIR/$S6H_PF" '--config - 2>/dev/null < <(printf '"'"'url = "%s"\n'"'"' "$URL"); }' '"$URL" 2>/dev/null; }'; then
+    s6h_judge "$S6H_M1C"
+    [[ "$S6H_J_REASONS" == *"argv:$S6H_DIR/$S6H_PF"* && "$S6H_J_REASONS" == *"cfg:$S6H_DIR/$S6H_PF"* ]] || S6H_M1C_BAD+=" $S6H_PF(reasons=$S6H_J_REASONS)"
+  else S6H_M1C_BAD+=" $S6H_PF(edit-missed)"; fi
+done
+if [[ -z "$S6H_M1C_BAD" ]]; then row "S6-HB mutation 1 (the three probes): the URL back on curl argv in the web-zot-consumer, inngest-consumer or private-NIC probe is RED (an argv violation, and its stdin config line is gone)" ok
+else row "S6-HB mutation 1 (the three probes): an argv heartbeat URL in a converted probe is not caught, or the edit did not land" fail "bad='$S6H_M1C_BAD'"; fi
 # M3 (Guard 2 row 3): a second heartbeat curl outside the guarded line after a compliant first. Both spellings: URL on argv, and an unguarded second stdin config line.
 S6H_M3="$(s6h_fresh m3)"; assert_fixture_dir "$S6H_M3"; printf '%s\n' '[ -n "$hb_url" ] && curl -fsS "$hb_url" >/dev/null 2>&1' >> "$S6H_M3/$S6H_DIR/luks-monitor.sh"
 s6h_judge "$S6H_M3"; S6H_M3A="$S6H_J_REASONS"
@@ -6746,23 +6916,38 @@ s6h_judge "$S6H_M3B"; S6H_M3BR="$S6H_J_REASONS"
 if [[ "$S6H_M3A" == *"argv:$S6H_DIR/luks-monitor.sh"* && "$S6H_M3BR" == *"cfg:$S6H_DIR/luks-monitor.sh"* ]]; then row "S6-HB mutation 3: a second heartbeat curl after the compliant one is RED, both as an argv URL and as a second (unguarded) stdin config line" ok
 else row "S6-HB mutation 3: a second heartbeat curl in a converted script is not caught" fail "argv='$S6H_M3A' cfg='$S6H_M3BR'"; fi
 # M-guard: the shape-guard class altered or missing in a converted script.
+# M3c (Guard 2 row 3, a probe): a second heartbeat curl after the compliant first. Both spellings: URL on argv, and an unguarded second stdin config line.
+S6H_M3C="$(s6h_fresh m3c)"; assert_fixture_dir "$S6H_M3C"; printf '%s\n' '[ -n "$URL" ] && curl -fsS -m 10 -o /dev/null "$URL" 2>/dev/null' >> "$S6H_M3C/$S6H_DIR/web-private-nic-guard.sh"
+s6h_judge "$S6H_M3C"; S6H_M3CA="$S6H_J_REASONS"
+S6H_M3D="$(s6h_fresh m3d)"; assert_fixture_dir "$S6H_M3D"; printf '%s\n' "curl --disable --noproxy '*' -gfsS --config - >/dev/null < <(printf 'url = \"%s\"\\n' \"\$URL\")" >> "$S6H_M3D/$S6H_DIR/web-private-nic-guard.sh"
+s6h_judge "$S6H_M3D"; S6H_M3DR="$S6H_J_REASONS"
+if [[ "$S6H_M3CA" == *"argv:$S6H_DIR/web-private-nic-guard.sh"* && "$S6H_M3DR" == *"cfg:$S6H_DIR/web-private-nic-guard.sh"* ]]; then row "S6-HB mutation 3 (a probe): a second heartbeat curl after the compliant first is RED, both as an argv URL and as a second unguarded stdin config line" ok
+else row "S6-HB mutation 3 (a probe): a second heartbeat curl in a converted probe is not caught" fail "argv='$S6H_M3CA' cfg='$S6H_M3DR'"; fi
+# MGb (Guard 2 row 3, the POSIX script): any edit of the shape-guard class literal in inngest-bootstrap.sh is RED by identity. The dangerous direction (a class that
+# ADMITS a quote) is caught only by the runtime hostile-value rows of inngest.test.sh, not by this identity check.
+S6H_MGB="$(s6h_fresh mgb)"
+if s6_edit "$S6H_MGB/$S6H_DIR/inngest-bootstrap.sh" "$S6H_CLASS" '[!A-Za-z0-9]'; then s6h_judge "$S6H_MGB"; S6H_MGBR="$S6H_J_REASONS"; else S6H_MGBR="edit-missed"; fi
+if [[ "$S6H_MGBR" == *"guard:$S6H_DIR/inngest-bootstrap.sh"* ]]; then row "S6-HB mutation (guard, POSIX sh script): an altered shape-guard class in inngest-bootstrap.sh is RED" ok
+else row "S6-HB mutation (guard, POSIX sh script): an altered shape-guard class in inngest-bootstrap.sh is not caught" fail "reasons='$S6H_MGBR'"; fi
 S6H_MG="$(s6h_fresh mg)"
 if s6_edit "$S6H_MG/$S6H_DIR/luks-monitor.sh" "$S6H_CLASS" '[!A-Za-z0-9]'; then s6h_judge "$S6H_MG"; S6H_MGR="$S6H_J_REASONS"; else S6H_MGR="edit-missed"; fi
 if [[ "$S6H_MGR" == *"guard:$S6H_DIR/luks-monitor.sh"* ]]; then row "S6-HB mutation (guard): a converted script without the exact shape-guard class is RED" ok
 else row "S6-HB mutation (guard): a missing or altered shape-guard class is not caught" fail "reasons='$S6H_MGR'"; fi
-# M-stale: converting a residual site without deleting its allowlist entry is RED (and nothing else: the converted site is compliant).
+# M-stale: an allowlist entry that the scan does not see is RED (and nothing else). The real allowlist is empty, so the mutant INJECTS an entry for a
+# converted script whose line is gone (the retired argv beat line of the NIC guard); the array is saved and restored around the judge call (as stage S6 does).
 S6H_MS="$(s6h_fresh ms)"
-if s6_edit "$S6H_MS/$S6H_DIR/web-private-nic-guard.sh" '-o /dev/null "$URL" 2>/dev/null; }' '-o /dev/null --config - 2>/dev/null < <(printf '"'"'url = "%s"\n'"'"' "$URL"); }'; then
-  s6h_judge "$S6H_MS"
-  if [[ "$S6H_J_REASONS" == "stale-allowlist" ]]; then row "S6-HB mutation (stale): converting a residual probe script without deleting its allowlist entry is RED (stale-allowlist, and nothing else)" ok
-  else row "S6-HB mutation (stale): a stale allowlist entry is not (only) reported" fail "reasons='$S6H_J_REASONS'"; fi
-else row "S6-HB mutation (stale): the residual edit did not land (re-anchor with web-private-nic-guard.sh)" fail "no argv beat line once"; fi
-# M-grow: a new argv heartbeat curl in a file outside the allowlist, and one more occurrence inside an allowlisted file (the allowlist names counts).
+S6H_ALLOW_SAVE=("${S6H_ALLOW[@]}")
+S6H_ALLOW+=("$S6H_DIR/web-private-nic-guard.sh	beat() { curl --disable --noproxy '*' -fsS -m 10 -o /dev/null \"\$URL\" 2>/dev/null	1")
+s6h_judge "$S6H_MS"; S6H_MS_R="$S6H_J_REASONS"
+S6H_ALLOW=("${S6H_ALLOW_SAVE[@]}")
+if [[ "$S6H_MS_R" == "stale-allowlist" ]]; then row "S6-HB mutation (stale): an allowlist entry for an already-converted script is RED (stale-allowlist, and nothing else)" ok
+else row "S6-HB mutation (stale): a stale allowlist entry is not (only) reported" fail "reasons='$S6H_MS_R'"; fi
+# M-grow: a new argv heartbeat curl in a new file, and one in a converted probe script (the allowlist is empty, so any argv URL is a violation).
 S6H_MN="$(s6h_fresh mn)"; assert_fixture_dir "$S6H_MN"; printf '%s\n' 'NOTE=heartbeat' 'curl -fsS "$HB_HEARTBEAT_URL" >/dev/null' > "$S6H_MN/$S6H_DIR/zz-new-heartbeat.sh"
 s6h_judge "$S6H_MN"; S6H_MNA="$S6H_J_REASONS"
 S6H_MN2="$(s6h_fresh mn2)"; assert_fixture_dir "$S6H_MN2"; printf '%s\n' '  curl -fsS -m 10 -o /dev/null "$URL" 2>/dev/null' >> "$S6H_MN2/$S6H_DIR/web-zot-consumer-probe.sh"
 s6h_judge "$S6H_MN2"; S6H_MNB="$S6H_J_REASONS"
-if [[ "$S6H_MNA" == *"argv:$S6H_DIR/zz-new-heartbeat.sh"* && "$S6H_MNB" == *"argv:$S6H_DIR/web-zot-consumer-probe.sh"* ]]; then row "S6-HB mutation (growth): a new heartbeat script with its URL on argv is RED, and so is one more occurrence inside an allowlisted file" ok
+if [[ "$S6H_MNA" == *"argv:$S6H_DIR/zz-new-heartbeat.sh"* && "$S6H_MNB" == *"argv:$S6H_DIR/web-zot-consumer-probe.sh"* ]]; then row "S6-HB mutation (growth): a new heartbeat script with its URL on argv is RED, and so is a violating curl appended to a converted probe (no allowlist to hide behind)" ok
 else row "S6-HB mutation (growth): the residual allowlist can grow silently" fail "new='$S6H_MNA' extra='$S6H_MNB'"; fi
 # M-floor: the scanned population renamed away: 0 heartbeat scripts must be RED, never a clean bill.
 S6H_MF="$(s6h_fresh mf)"; sed -i -E 's/[Hh][Ee][Aa][Rr][Tt][Bb][Ee][Aa][Tt]/hrtbt/g' "$S6H_MF/$S6H_DIR"/*.sh
@@ -6779,6 +6964,423 @@ s6h_judge "$S6H_MP"
 if [[ -z "$S6H_BASE_REASONS" && -z "$S6H_J_REASONS" && "$S6H_J_FILES" -eq $((S6H_BASE_FILES + 1)) ]]; then row "S6-HB must-pass: a local health curl beside a heartbeat, and a non-heartbeat probe whose variable is also named URL, are GREEN (only the first joins the population)" ok
 else row "S6-HB must-pass: a control probe is flagged, or the population moved unexpectedly" fail "base='$S6H_BASE_REASONS' reasons='$S6H_J_REASONS' files=$S6H_J_FILES base_files=$S6H_BASE_FILES"; fi
 echo "=== stage S6-HB: Guard 2 rows (heartbeat URL off curl argv: derived population, residual allowlist, converted-script identity) done ==="
+
+# =====================================================================================
+# STAGE S7 (argv-bearer sweep, Guard 3 for markdown, #10093): no tracked agent-run markdown teaches a bearer, apikey or webhook-signature header on curl argv.
+#
+# PROPERTY. No tracked `plugins/**/*.md` carries a `curl` command word together with a `-H`/`--header` whose header name is one of NINE names, outside
+# the residual allowlist: Authorization, apikey, X-Api-Key, Private-Token, Api-Key, plus the four more that Rule E of
+# scripts/lint-shell-trace-credential-refusal.py names (CF-Access-Client-Id, CF-Access-Client-Secret, X-Signature-256, X-Soleur-KB-Drift-Signature).
+# An agent copies a snippet verbatim, and argv shows in /proc/<pid>/cmdline; the compliant form puts the header on curl's stdin config (`--config -`).
+# Rule E does not read markdown, so for the nine names in plugin markdown this stage is the only recurrence guard.
+#
+# SCOPE, STATED PLAINLY. S7 is the guard for those nine header names, on a curl command word, in `plugins/**/*.md`, and for nothing wider. A green S7 does
+# NOT mean "no secret reaches argv anywhere in the repo or in anything an agent reads". The classes below are outside it.
+#
+# DERIVATION. ONE scan over `git ls-files` (tracked and untracked) `plugins/**/*.md`, excluding the plugin docs site (plugins/soleur/docs/) and any
+# `knowledge-base/` tree (an exclusion of convenience, NOT a claim that those files are history: see NOT COVERED). It runs over LOGICAL lines: backslash
+# continuations are joined (the `-H` is usually on the second line) and the join STOPS at a code-fence boundary (a continuation ending a line before the
+# closing fence is flushed, never glued to the prose after it). A table cell is one physical line and is never split on pipe, semicolon or
+# double-ampersand. Matches are pattern-anchored, not line-anchored: `-H`, `--header`, `--header=`, `-H"Authorization` with no space, `-H $'Authorization`
+# and `-H $"Authorization` (ANSI-C and locale quoting), a lowercase header name, a short-option cluster ending in H. The curl command word is `curl`,
+# `/usr/bin/curl`, `/usr/local/bin/curl`, `./curl` or `\curl`. A `curl` command word must be present, so prose that names `-H` without it, the argv-safe
+# `-H @<(printf ...)` form (the header name is inside the process substitution), and the compliant `header = "Authorization: Bearer %s"` on `--config -`
+# are all outside the pattern.
+# A second rule (reason stdin:<file>): a logical line that holds `curl ... --config -` AND a second stdin consumer (`-d @-`, `--data-binary @-`,
+# `-T -`, `-H @-`, a heredoc, or a pipe into curl beside the `< <(...)` feed) is RED, because both consume stdin and the config would be eaten.
+#
+# EXECUTED ROWS. The scan proves the BAD shape is absent; it never proves the converted snippet works. Three converted blocks (postmerge Phase 3.5,
+# preflight Step 1.4, ship's infra-config-status probe) are therefore EXTRACTED from the real files and RUN under bash against a PATH stub `curl` (records
+# argv and stdin), a stub `doppler` and `jq`, with a synthesized token: the token must be absent from every recorded argv and present on the recorded stdin
+# config, a refused token (a space in it) must make ZERO curl calls, and a control proves the judge goes RED when a block puts the token on argv.
+#
+# EXPLICIT RESIDUAL ALLOWLIST (S7_ALLOW: file, the exact number of hits): skill-creator/references/api-security.md documents the chat-visibility threat
+# model with BAD examples. THE ALLOWLIST IS PINNED, NOT "SHRINK ONLY": the judge's ceiling constant caps the entry count (-le), a count that moved is RED,
+# the hit floor (the measured allowlisted count) makes a scan that sees nothing RED, and the ceiling ROW pins the entry and its measured count EXACTLY (-eq,
+# as S6's row does), so deleting the entry is a deliberate edit of that row, the floor and the entry together.
+#
+# NOT COVERED, named (each was measured outside the scan; none is a claim that it is safe):
+#   - clients other than curl: wget --header, httpie, `gh api -H`;
+#   - credential spellings other than the nine header names on `-H`: `-u/--user user:secret`, `--oauth2-bearer`, `-b/--cookie` and a Cookie header,
+#     Proxy-Authorization, X-Auth-Key, X-Auth-Token and any other header name, a token in a URL (`?access_token=`) or in `-d`/`-F` (api-security.md carries one
+#     such line, `-F access_token=`, inside the allowlisted file, so it is neither counted nor flagged);
+#   - a header carried in a variable (`-H "$AUTH_HEADER"`, `ARGS+=(-H ...)` on a prior line), an `eval`, and the spellings `curl.exe` and `**curl**`;
+#   - a second stdin consumer spelled `-F f=@-`, `--form`, `-d @/dev/stdin`, `-T /dev/stdin`, `--data-ascii @-`, `-K-`;
+#   - files that are not markdown (scripts are Guards 1 and 2; Rule E covers them), and markdown the scan does not walk: plugins/soleur/docs/, EVERY
+#     knowledge-base/ tree (including knowledge-base/engineering/operations/runbooks/*.md, which agents DO read and which hold argv-bearer lines),
+#     .github/PULL_REQUEST_TEMPLATE.md (converted by hand, but unscanned), apps/web-platform/infra/sentry/README.md (NOT converted: a path under apps/web-platform/infra/ fires the infra apply workflows on merge, so it waits for a PR that already owns an apply), apps/web-platform/infra/egress-gw-image.provenance.md;
+#   - credential text echoed by workflows (`.github/workflows/scheduled-terraform-drift.yml` prints runbook commands).
+# =====================================================================================
+S7_ALLOW_CEIL=1; S7_HIT_FLOOR=5
+S7_ALLOW=(
+"plugins/soleur/skills/skill-creator/references/api-security.md	5"
+)
+# One TSV record per finding. V: a violating logical line (file, start line, text). Q: a curl that reads stdin twice (file, start line).
+s7_scan() { # <root>
+  python3 -I -c '
+import re, subprocess, sys
+root = sys.argv[1]
+files = subprocess.run(["git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "plugins"], capture_output=True, check=True).stdout.decode().split("\0")
+cmd = re.compile(r"(?:^|[\s({;|&`\x27\"=])(?:\\|/usr/bin/|/usr/local/bin/|\./)?curl(?=\s|$)")
+hdr = re.compile(r"(?<![\w-])(?:-[A-Za-z]*H|--header)(?:\s*=\s*|\s*)\$?[\"\x27]?\s*(?i:Authorization|apikey|X-Api-Key|Private-Token|Api-Key|CF-Access-Client-Id|CF-Access-Client-Secret|X-Signature-256|X-Soleur-KB-Drift-Signature)(?![\w-])")
+cfg = re.compile(r"(?<![\w-])(?:--config|-K)(?:\s+|=)-(?=\s|$|[\"\x27])")
+two = re.compile(r"(?<![\w-])(?:-[A-Za-z]*d|--data|--data-binary|--data-raw|--data-urlencode|--json)(?:\s*|=)[\"\x27]?@-(?=\s|$|[\"\x27])"
+                 r"|(?<![\w-])(?:-[A-Za-z]*T|--upload-file)(?:\s+|=)[\"\x27]?-(?=\s|$|[\"\x27])"
+                 r"|(?<![\w-])-H\s+@-(?=\s|$)|<<")
+pipe = re.compile(r"\|\s*(?:\\|/usr/bin/|/usr/local/bin/|\./)?curl(?=\s|$)")
+feed = re.compile(r"<\s*<\(")
+for f in sorted(set(files)):
+    if not re.match(r"^plugins/.*\.md$", f) or f.startswith("plugins/soleur/docs/") or "/knowledge-base/" in "/" + f: continue
+    try: raw = open(root + "/" + f, encoding="utf-8", errors="replace").read().split("\n")
+    except OSError: continue
+    logical, cur, start = [], "", 0
+    for i, l in enumerate(raw, 1):
+        s = l.strip()
+        if s.startswith("```") or s.startswith("~~~"):
+            if cur: logical.append((start, cur)); cur = ""
+            logical.append((i, s)); continue
+        if not cur: start = i
+        if s.endswith("\\"): cur += s[:-1] + " "; continue
+        logical.append((start, cur + s)); cur = ""
+    if cur: logical.append((start, cur))
+    for n, t in logical:
+        if not cmd.search(t): continue
+        if hdr.search(t): print("V\t%s\t%d\t%s" % (f, n, " ".join(t.split())[:80]))
+        if cfg.search(t) and (two.search(t) or (pipe.search(t) and feed.search(t))): print("Q\t%s\t%d" % (f, n))
+' "$1"
+}
+# The verdict over a root. Sets S7_J_REASONS (empty = GREEN) and S7_J_HITS. Reasons: floor, argv:<file>, allow-count:<file>, ceiling, stdin:<file>.
+S7_J_REASONS=""; S7_J_HITS=0
+s7_judge() { # <root>
+  local root="$1" scan a file want got f
+  scan="$(s7_scan "$root")"; S7_J_REASONS=""
+  S7_J_HITS="$(grep -c '^V	' <<<"$scan" || true)"
+  [[ "$S7_J_HITS" -ge "$S7_HIT_FLOOR" ]] || S7_J_REASONS+=" floor"
+  [[ "${#S7_ALLOW[@]}" -le "$S7_ALLOW_CEIL" ]] || S7_J_REASONS+=" ceiling"
+  # every file with a violating line must be allowlisted with exactly its count
+  while IFS=$'\t' read -r got file; do
+    [[ -n "$file" ]] || continue
+    want=""; for a in "${S7_ALLOW[@]}"; do [[ "$a" == "$file"$'\t'* ]] && want="${a##*$'\t'}"; done
+    if [[ -z "$want" ]]; then S7_J_REASONS+=" argv:$file"; elif [[ "$want" != "$got" ]]; then S7_J_REASONS+=" allow-count:$file"; fi
+  done < <(awk -F'\t' '$1 == "V" { n[$2]++ } END { for (k in n) print n[k] "\t" k }' <<<"$scan")
+  # an allowlist entry whose file no longer carries a hit is stale (delete the entry and lower the floor together)
+  for a in "${S7_ALLOW[@]}"; do
+    file="${a%%$'\t'*}"
+    got="$(awk -F'\t' -v f="$file" '$1 == "V" && $2 == f { n++ } END { print n + 0 }' <<<"$scan")"
+    [[ "$got" -gt 0 ]] || S7_J_REASONS+=" allow-count:$file"
+  done
+  while IFS= read -r f; do [[ -n "$f" ]] && S7_J_REASONS+=" stdin:$f"; done < <(awk -F'\t' '$1 == "Q" { print $2 }' <<<"$scan" | sort -u)
+  S7_J_REASONS="${S7_J_REASONS# }"
+}
+S7="$TMPD/s7"; assert_fixture_dir "$S7"; mkdir -p "$S7/base" "$S7/mut"
+( source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh" && git_fixture_env "$S7/base" || exit 1; git -C "$S7/base" init -q ) \
+  || fatal "S7 could not create the scratch repository"
+S7_CONVERTED=(
+  plugins/soleur/skills/postmerge/SKILL.md
+  plugins/soleur/skills/postmerge/references/sentry-error-count-delta.md
+  plugins/soleur/skills/postmerge/references/deploy-status-debugging.md
+  plugins/soleur/skills/reproduce-bug/SKILL.md
+  plugins/soleur/skills/preflight/SKILL.md
+  plugins/soleur/skills/ship/SKILL.md
+  plugins/soleur/agents/engineering/infra/infra-security.md
+  plugins/soleur/agents/engineering/review/deployment-verification-agent.md
+  plugins/soleur/skills/flag-delete/SKILL.md
+  plugins/soleur/skills/flag-list/SKILL.md
+)
+S7_APIDOC="plugins/soleur/skills/skill-creator/references/api-security.md"
+S7_SAFE=(plugins/soleur/skills/cf-token-scope/references/widen-playbook.md plugins/soleur/skills/trigger-cron/SKILL.md)
+for f in "${S7_CONVERTED[@]}" "$S7_APIDOC" "${S7_SAFE[@]}"; do
+  [[ -f "$REPO_ROOT/$f" ]] || fatal "S7 fixture source $f is missing"
+  mkdir -p "$S7/base/$(dirname "$f")"; cp "$REPO_ROOT/$f" "$S7/base/$f"
+done
+s7_fresh() { local d="$S7/mut/$1"; assert_fixture_dir "$d"; rm -rf "$d"; cp -a "$S7/base" "$d" && printf '%s' "$d"; }
+# A mini tree: the allowlisted documentation file (so the floor is met) plus ONE variant file zz.md holding the text under test.
+S7_MINI="$S7/mini"; mkdir -p "$S7_MINI"
+( source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh" && git_fixture_env "$S7_MINI" || exit 1; git -C "$S7_MINI" init -q ) || fatal "S7 could not create the mini repository"
+mkdir -p "$S7_MINI/$(dirname "$S7_APIDOC")" "$S7_MINI/plugins/zz"; cp "$S7/base/$S7_APIDOC" "$S7_MINI/$S7_APIDOC"
+s7_variant() { # <name> <text, printf-%b escapes honoured> -> S7_J_REASONS for a mini tree whose zz.md holds exactly the text
+  local d="$S7/mut/v-$1"; assert_fixture_dir "$d"; rm -rf "$d"; cp -a "$S7_MINI" "$d" || fatal "S7 variant copy"
+  printf '%b\n' "$2" > "$d/plugins/zz/zz.md"; s7_judge "$d"
+}
+S7_Q="'" # a literal single quote for the variant texts
+S7_PRINTF="< <(printf ${S7_Q}header = \"Authorization: Bearer %s\"\\\\n${S7_Q} \"\$T\")"
+
+# --- the real tree ---------------------------------------------------------------------
+s7_judge "$REPO_ROOT"; S7_REAL_REASONS="$S7_J_REASONS"; S7_REAL_HITS="$S7_J_HITS"
+if [[ -z "$S7_REAL_REASONS" ]]; then row "S7 Guard 3: no tracked plugins/**/*.md puts an Authorization, apikey, X-Api-Key, Private-Token, Api-Key, CF-Access-Client-Id, CF-Access-Client-Secret, X-Signature-256 or X-Soleur-KB-Drift-Signature header on curl argv outside the residual allowlist, and none reads stdin twice ($S7_REAL_HITS hits, all in the allowlisted documentation file)" ok
+else row "S7 Guard 3: a markdown snippet puts a credential or signature header on curl argv, or reads stdin twice, outside the residual allowlist" fail "reasons='$S7_REAL_REASONS' hits=$S7_REAL_HITS"; fi
+S7_ALLOW_N=0; for a in "${S7_ALLOW[@]}"; do S7_ALLOW_N=$((S7_ALLOW_N + 1)); done
+if [[ "$S7_ALLOW_N" -eq "$S7_ALLOW_CEIL" && "$S7_ALLOW_N" -eq 1 && "${S7_ALLOW[0]}" == "$S7_APIDOC"$'\t'"$S7_HIT_FLOOR" ]]; then row "S7 allowlist ceiling: exactly $S7_ALLOW_CEIL residual entry ($S7_APIDOC, $S7_HIT_FLOOR measured hits; pinned exactly, so removing it edits this pin and the hit floor together)" ok
+else row "S7 allowlist ceiling: the residual allowlist grew or its measured count moved" fail "entries=$S7_ALLOW_N ceiling=$S7_ALLOW_CEIL"; fi
+# The unmodified scratch tree is GREEN first, so every mutation row below changes exactly one thing against a known-good tree.
+s7_judge "$S7/base"; S7_BASE_REASONS="$S7_J_REASONS"
+if [[ -z "$S7_BASE_REASONS" ]]; then row "S7 control: the unmutated scratch tree (the ten converted files, the documentation file and the argv-safe controls) is GREEN" ok
+else row "S7 control: the unmutated scratch tree is not GREEN" fail "reasons='$S7_BASE_REASONS'"; fi
+
+# --- mutation rows (the SAME scan over a scratch tree) ----------------------------------------
+# M1: a violating header re-added to a converted file.
+S7_M1="$(s7_fresh m1)"; S7_M1F="plugins/soleur/skills/reproduce-bug/SKILL.md"
+assert_fixture_dir "$S7_M1"
+printf '%s\n' '```bash' 'curl -s -H "Authorization: Bearer $TOK" "https://x.example/api"' '```' >> "$S7_M1/$S7_M1F"
+s7_judge "$S7_M1"
+if [[ "$S7_J_REASONS" == "argv:$S7_M1F" ]]; then row "S7 mutation 1: the argv bearer header re-added to a converted file is RED, by file identity and nothing else" ok
+else row "S7 mutation 1: a re-added argv header in a converted file is not caught" fail "reasons='$S7_J_REASONS'"; fi
+# M2: a compliant converted snippet in one file, then a violating one in a different file: only the second is named.
+S7_M2="$(s7_fresh m2)"
+assert_fixture_dir "$S7_M2"
+printf '%s\n' '```bash' "curl --disable --proto '=https' -m 30 -fsS --config - \"\$URL\" $S7_PRINTF" '```' >> "$S7_M2/plugins/soleur/skills/postmerge/SKILL.md"
+printf '%s\n' '```bash' 'curl -fsS -H "apikey: $K" "$URL"' '```' >> "$S7_M2/plugins/soleur/skills/preflight/SKILL.md"
+s7_judge "$S7_M2"
+if [[ "$S7_J_REASONS" == "argv:plugins/soleur/skills/preflight/SKILL.md" ]]; then row "S7 mutation 2: a compliant snippet then a violating one in another file is RED for the second file only (identity, not a count)" ok
+else row "S7 mutation 2: the second file's violation is not named, or the compliant snippet is flagged" fail "reasons='$S7_J_REASONS'"; fi
+# M3: the allowlist grows by one entry (a new file with a hit, allowlisted with its count): the ceiling is RED.
+S7_M3="$(s7_fresh m3)"; assert_fixture_dir "$S7_M3"
+printf '%s\n' '`curl -H "Authorization: Bearer $T" "$U"`' > "$S7_M3/plugins/soleur/skills/zz-new.md"
+S7_ALLOW_SAVE=("${S7_ALLOW[@]}"); S7_ALLOW+=("plugins/soleur/skills/zz-new.md	1")
+s7_judge "$S7_M3"; S7_M3R="$S7_J_REASONS"; S7_ALLOW=("${S7_ALLOW_SAVE[@]}")
+if [[ "$S7_M3R" == "ceiling" ]]; then row "S7 mutation 3: the allowlist growing by one entry is RED on the ceiling (and the new entry's own hit is the only thing it hides)" ok
+else row "S7 mutation 3: the residual allowlist can grow silently" fail "reasons='$S7_M3R'"; fi
+# M3b: one more hit inside the allowlisted documentation file (the entry names a count, not a licence). M3c: an entry whose file carries no hit (stale).
+S7_M3B="$(s7_fresh m3b)"; assert_fixture_dir "$S7_M3B"
+printf '%s\n' 'curl -sS -H "Authorization: Bearer $T" "$U"' >> "$S7_M3B/$S7_APIDOC"
+s7_judge "$S7_M3B"; S7_M3BR="$S7_J_REASONS"
+S7_M3C="$(s7_fresh m3c)"; S7_ALLOW_SAVE=("${S7_ALLOW[@]}"); S7_ALLOW=("plugins/soleur/skills/zz-gone.md	1")
+s7_judge "$S7_M3C"; S7_M3CR="$S7_J_REASONS"; S7_ALLOW=("${S7_ALLOW_SAVE[@]}")
+if [[ "$S7_M3BR" == "allow-count:$S7_APIDOC" && "$S7_M3CR" == *"allow-count:plugins/soleur/skills/zz-gone.md"* ]]; then row "S7 mutation 3 (count, stale): one more hit inside the allowlisted file is RED on its count, and an entry whose file has no hit is RED as stale" ok
+else row "S7 mutation 3 (count, stale): the allowlisted count can move, or a stale entry survives" fail "extra-hit='$S7_M3BR' stale='$S7_M3CR'"; fi
+# M4: every scanned header word renamed in a scratch tree: the scan sees 0 hits and the floor is RED, never a clean bill.
+S7_M4="$(s7_fresh m4)"; find "$S7_M4/plugins" -name '*.md' -exec sed -i -E 's/[Aa]uthorization/Authz/g; s/apikey/apik/g; s/[Xx]-[Aa]pi-[Kk]ey/x-k/g; s/[Pp]rivate-[Tt]oken/priv/g; s/[Aa]pi-[Kk]ey/ak/g; s/[Cc][Ff]-[Aa]ccess-[Cc]lient-/cfx-/g; s/[Xx]-[Ss]ignature-256/xs/g; s/[Xx]-[Ss]oleur-[Kk][Bb]-[Dd]rift-[Ss]ignature/xd/g' {} +
+s7_judge "$S7_M4"
+if [[ "$S7_J_HITS" -eq 0 && "$S7_J_REASONS" == *floor* ]]; then row "S7 mutation 4: with every scanned header word renamed the scan sees 0 hits and the floor is RED" ok
+else row "S7 mutation 4: a scan that sees nothing is not RED" fail "hits=$S7_J_HITS reasons='$S7_J_REASONS'"; fi
+# M5: the header on a backslash-continuation line of an otherwise converted snippet (a per-line scan is green over it).
+s7_variant m5 "\`\`\`bash\ncurl --disable --proto '=https' -m 30 -fsS --config - \\\\\n  -H \"Authorization: Bearer \$T\" \"\$U\" $S7_PRINTF\n\`\`\`"
+S7_M5R="$S7_J_REASONS"
+s7_variant m5b "\`\`\`bash\ncurl -fsS \"\$U\" \\\\\n  -H \"\$EXTRA\" \\\\\n  --header 'apikey: x'\n\`\`\`"
+if [[ "$S7_M5R" == "argv:plugins/zz/zz.md" && "$S7_J_REASONS" == "argv:plugins/zz/zz.md" ]]; then row "S7 mutation 5: the header on a continuation line (also two joins deep) is RED through the logical-line join" ok
+else row "S7 mutation 5: a header on a continuation line is not caught" fail "one-join='$S7_M5R' two-join='$S7_J_REASONS'"; fi
+# M6: shape variants, one per spelling, each RED: --header=, lowercase name, -H"Authorization with no space, a table cell, a short-option cluster.
+S7_M6BAD=""
+s7_variant m6a 'curl -sS --header=Authorization:Bearer-x "$U"'; [[ "$S7_J_REASONS" == "argv:plugins/zz/zz.md" ]] || S7_M6BAD+=" --header="
+s7_variant m6b 'curl -sS -H "authorization: Bearer $T" "$U"'; [[ "$S7_J_REASONS" == "argv:plugins/zz/zz.md" ]] || S7_M6BAD+=" lowercase"
+s7_variant m6c 'curl -sS -H"Authorization: Bearer $T" "$U"'; [[ "$S7_J_REASONS" == "argv:plugins/zz/zz.md" ]] || S7_M6BAD+=" -H-nospace"
+s7_variant m6d '| Error rate | `curl -sS -H "Authorization: Bearer $T" "$U"` divided by x | error_rate > 0.01 |'; [[ "$S7_J_REASONS" == "argv:plugins/zz/zz.md" ]] || S7_M6BAD+=" table-cell"
+s7_variant m6e 'curl -sSH "Authorization: Bearer $T" "$U"'; [[ "$S7_J_REASONS" == "argv:plugins/zz/zz.md" ]] || S7_M6BAD+=" cluster"
+s7_variant m6f '$ curl --header "Authorization: Bearer $T" "$U"'; [[ "$S7_J_REASONS" == "argv:plugins/zz/zz.md" ]] || S7_M6BAD+=" --header-space"
+s7_variant m6g "curl -sS -H \$'Authorization: Bearer \$T' \"\$U\""; [[ "$S7_J_REASONS" == "argv:plugins/zz/zz.md" ]] || S7_M6BAD+=" ansi-c-quote"
+s7_variant m6h "curl -sS -H \$\"Authorization: Bearer \$T\" \"\$U\""; [[ "$S7_J_REASONS" == "argv:plugins/zz/zz.md" ]] || S7_M6BAD+=" locale-quote"
+if [[ -z "$S7_M6BAD" ]]; then row "S7 mutation 6: --header=, a lowercase header name, -H\"Authorization with no space, a table cell, a short-option cluster, --header and an ANSI-C or locale quote (-H \$'Authorization, -H \$\"Authorization) are each RED" ok
+else row "S7 mutation 6: a header spelling slips through" fail "missed=$S7_M6BAD"; fi
+# M6-lead: the curl command word is recognised after each lead-in (command substitution, list operators, a pipe, a backtick span, a path).
+S7_M6LBAD=""
+for lead in '$(' '{' 'a;' 'a|' 'a&&' '`' "'" '"' '=' '/usr/bin/' '/usr/local/bin/' './' "\\\\"; do
+  s7_variant "m6l" "x=${lead}curl -sS -H \"Authorization: Bearer \$T\" \"\$U\")"; [[ "$S7_J_REASONS" == "argv:plugins/zz/zz.md" ]] || S7_M6LBAD+=" [$lead]"
+done
+if [[ -z "$S7_M6LBAD" ]]; then row "S7 mutation 6 (lead): a curl directly after \$(, {, ;, |, &&, a backtick, a quote, = and as /usr/bin/curl, /usr/local/bin/curl, ./curl and \\curl is found, each RED" ok
+else row "S7 mutation 6 (lead): a curl lead-in slips through" fail "missed=$S7_M6LBAD"; fi
+# M6-names: one variant per header-name alternative of the pattern (a control that drives one arm lets the others be deleted unseen).
+S7_M6NBAD=""
+for nm in Authorization apikey X-Api-Key Private-Token Api-Key; do
+  s7_variant "m6n-$nm" "curl -sS -H \"$nm: \$T\" \"\$U\""; [[ "$S7_J_REASONS" == "argv:plugins/zz/zz.md" ]] || S7_M6NBAD+=" $nm"
+done
+if [[ -z "$S7_M6NBAD" ]]; then row "S7 mutation 6 (names): each of Authorization, apikey, X-Api-Key, Private-Token and Api-Key on curl argv is RED (the Rule E four follow)" ok
+else row "S7 mutation 6 (names): a header name of the pattern is not caught" fail "missed=$S7_M6NBAD"; fi
+# M6-names-2: the four Rule E names beyond the original five (the deploy webhook triple and the KB drift signature), each in the spellings the
+# first five are proven in: plain, lowercase, no-space after -H, --header=, a table cell and a backslash continuation (the shape tolerance is the same).
+S7_M6N2BAD=""
+for nm in CF-Access-Client-Id CF-Access-Client-Secret X-Signature-256 X-Soleur-KB-Drift-Signature; do
+  lnm="${nm,,}"
+  s7_variant "m6p" "curl -sS -H \"$nm: \$T\" \"\$U\""; [[ "$S7_J_REASONS" == "argv:plugins/zz/zz.md" ]] || S7_M6N2BAD+=" $nm"
+  s7_variant "m6p" "curl -sS -H \"$lnm: \$T\" \"\$U\""; [[ "$S7_J_REASONS" == "argv:plugins/zz/zz.md" ]] || S7_M6N2BAD+=" $nm(lowercase)"
+  s7_variant "m6p" "curl -sS -H\"$nm: \$T\" \"\$U\""; [[ "$S7_J_REASONS" == "argv:plugins/zz/zz.md" ]] || S7_M6N2BAD+=" $nm(-H-nospace)"
+  s7_variant "m6p" "curl -sS --header=\"$nm: \$T\" \"\$U\""; [[ "$S7_J_REASONS" == "argv:plugins/zz/zz.md" ]] || S7_M6N2BAD+=" $nm(--header=)"
+  s7_variant "m6p" "| Probe | \`curl -sS -H \"$nm: \$T\" \"\$U\"\` | status 200 |"; [[ "$S7_J_REASONS" == "argv:plugins/zz/zz.md" ]] || S7_M6N2BAD+=" $nm(table-cell)"
+  s7_variant "m6p" "curl --disable -fsS --config - \"\$U\" \\\\\n  -H \"$nm: \$T\" $S7_PRINTF"; [[ "$S7_J_REASONS" == "argv:plugins/zz/zz.md" ]] || S7_M6N2BAD+=" $nm(continuation)"
+done
+if [[ -z "$S7_M6N2BAD" ]]; then row "S7 mutation 6 (names, Rule E set): CF-Access-Client-Id, CF-Access-Client-Secret, X-Signature-256 and X-Soleur-KB-Drift-Signature on curl argv are each RED in the plain, lowercase, -H-no-space, --header=, table-cell and continuation-line spellings" ok
+else row "S7 mutation 6 (names, Rule E set): a Rule E header name or spelling slips through" fail "missed=$S7_M6N2BAD"; fi
+# M7: a continuation ending a line just before the closing fence: no false positive (the join stops at the fence), and a real violation on that
+# last line is not hidden.
+s7_variant m7a "\`\`\`bash\ncurl --disable --proto '=https' -m 30 -fsS --config - \"\$U\" \\\\\n\`\`\`\nSend -H \"Authorization: Bearer \$T\" with it."; S7_M7A="$S7_J_REASONS"
+s7_variant m7b "\`\`\`bash\ncurl -fsS -H \"Authorization: Bearer \$T\" \\\\\n\`\`\`\nProse after the fence."; S7_M7B="$S7_J_REASONS"
+s7_variant m7c "curl -sS \"\$U\" \\\\\n\`\`\`\\\\\n-H \"Authorization: Bearer \$T\""; S7_M7C="$S7_J_REASONS"
+s7_variant m7d "curl -sS \"\$U\" \\\\\n~~~\\\\\n-H \"Authorization: Bearer \$T\""; S7_M7D="$S7_J_REASONS"
+if [[ -z "$S7_M7A" && "$S7_M7B" == "argv:plugins/zz/zz.md" && -z "$S7_M7C" && -z "$S7_M7D" ]]; then row "S7 mutation 7: a continuation ending just before the closing fence is no false positive (the join stops at the fence) and hides no curl" ok
+else row "S7 mutation 7: the logical-line join crosses a fence boundary, or hides a curl before it" fail "false-positive='$S7_M7A' hidden='$S7_M7B' glued-backtick-fence='$S7_M7C' glued-tilde-fence='$S7_M7D'"; fi
+# M8: a second stdin consumer beside --config -: each is RED; a plain -d body beside --config - is not.
+S7_M8BAD=""
+s7_variant m8a "curl --disable -fsS --config - -d @- \"\$U\" $S7_PRINTF"; [[ "$S7_J_REASONS" == "stdin:plugins/zz/zz.md" ]] || S7_M8BAD+=" -d@-"
+s7_variant m8b "curl --disable -fsS --config - --data-binary @- \"\$U\" $S7_PRINTF"; [[ "$S7_J_REASONS" == "stdin:plugins/zz/zz.md" ]] || S7_M8BAD+=" --data-binary"
+s7_variant m8c "curl --disable -fsS --config - -T - \"\$U\" $S7_PRINTF"; [[ "$S7_J_REASONS" == "stdin:plugins/zz/zz.md" ]] || S7_M8BAD+=" -T"
+s7_variant m8d "curl --disable -fsS --config - \"\$U\" <<EOF"; [[ "$S7_J_REASONS" == "stdin:plugins/zz/zz.md" ]] || S7_M8BAD+=" heredoc"
+s7_variant m8e "echo x | curl --disable -fsS --config - \"\$U\" $S7_PRINTF"; [[ "$S7_J_REASONS" == "stdin:plugins/zz/zz.md" ]] || S7_M8BAD+=" pipe-into-curl"
+for sc in "-H @-" "--data @-" "--data-raw @-" "--json @-" "--data-urlencode @-" "--upload-file -" "-d@-"; do
+  s7_variant "m8x" "curl --disable -fsS --config - $sc \"\$U\" $S7_PRINTF"; [[ "$S7_J_REASONS" == "stdin:plugins/zz/zz.md" ]] || S7_M8BAD+=" [$sc]"
+done
+s7_variant m8k "curl --disable -fsS -K - -d @- \"\$U\" $S7_PRINTF"; [[ "$S7_J_REASONS" == "stdin:plugins/zz/zz.md" ]] || S7_M8BAD+=" -K"
+s7_variant m8f "curl --disable -fsS --config - -d '{\"a\":1}' \"\$U\" $S7_PRINTF"; [[ -z "$S7_J_REASONS" ]] || S7_M8BAD+=" plain--d-flagged"
+if [[ -z "$S7_M8BAD" ]]; then row "S7 mutation 8: every second stdin consumer (-d @-, --data(-binary|-raw|-urlencode) @-, --json @-, -T -, --upload-file -, -H @-, a heredoc, a pipe into curl, and -K - as the config) beside --config - is RED; an inline -d body beside it is GREEN" ok
+else row "S7 mutation 8: a second stdin consumer beside --config - is not caught (or a plain -d body is)" fail "wrong=$S7_M8BAD"; fi
+# Must-PASS: the compliant stdin-config form, the argv-safe -H @<(printf ...) form, prose naming -H with no curl command word, curl's own -H of a
+# non-credential header, and the two excluded trees (the plugin docs site and a knowledge-base tree hold no agent-run snippet).
+S7_MPBAD=""
+s7_variant mp1 "(LC_ALL=C; case \"\$T\" in ''|*[!A-Za-z0-9._~+/=-]*) exit 1;; esac) || { echo \"token refused\" >&2; exit 1; }\ncurl --disable --proto '=https' -m 30 -fsS --config - \"\$U\" $S7_PRINTF"; [[ -z "$S7_J_REASONS" ]] || S7_MPBAD+=" stdin-config"
+s7_variant mp2 "curl -H @<(printf 'Authorization: Bearer %s' \"\$TOK\") https://api.cloudflare.com/client/v4/user/tokens/verify"; [[ -z "$S7_J_REASONS" ]] || S7_MPBAD+=" argv-safe-H@"
+s7_variant mp3 'Pass the token with `-H` and an Authorization header on the request, never on the command line.'; [[ -z "$S7_J_REASONS" ]] || S7_MPBAD+=" prose-no-curl"
+s7_variant mp4 'curl -sS -H "Content-Type: application/json" -d "{}" "$U"'; [[ -z "$S7_J_REASONS" ]] || S7_MPBAD+=" non-credential-H"
+s7_variant mp6 'curl -sS -H "Authorizations: x" -H "Api-Keyed: y" -H "apikeys: z" -H "X-Api-Key-Version: 2" "$U"'; [[ -z "$S7_J_REASONS" ]] || S7_MPBAD+=" longer-header-names"
+s7_variant mp7 "curl --disable --proto '=https' -m 30 -fsS --config - \"\$U\" < <(printf 'header = \"X-Signature-256: sha256=%s\"\\\\nheader = \"CF-Access-Client-Id: %s\"\\\\nheader = \"CF-Access-Client-Secret: %s\"\\\\nheader = \"X-Soleur-KB-Drift-Signature: %s\"\\\\n' \"\$S\" \"\$I\" \"\$C\" \"\$D\")"; [[ -z "$S7_J_REASONS" ]] || S7_MPBAD+=" rule-e-names-on-stdin-config"
+s7_variant mp8 "curl -sS -H \"CF-Access-Client-Id-Hint: x\" -H \"CF-Access-Client-Secretary: y\" -H \"X-Signature-2560: z\" -H \"X-Signature-256-Version: 2\" -H \"X-Soleur-KB-Drift-Signatures: w\" \"\$U\""; [[ -z "$S7_J_REASONS" ]] || S7_MPBAD+=" longer-rule-e-names"
+S7_MPD="$S7/mut/v-mp5"; assert_fixture_dir "$S7_MPD"; rm -rf "$S7_MPD"; cp -a "$S7_MINI" "$S7_MPD"; mkdir -p "$S7_MPD/plugins/soleur/docs" "$S7_MPD/plugins/soleur/knowledge-base/x"
+printf '%s\n' 'curl -H "Authorization: Bearer $T" "$U"' > "$S7_MPD/plugins/zz/zz.txt"
+printf '%s\n' 'curl -H "Authorization: Bearer $T" "$U"' > "$S7_MPD/plugins/soleur/docs/zz.md"; printf '%s\n' 'curl -H "Authorization: Bearer $T" "$U"' > "$S7_MPD/plugins/soleur/knowledge-base/x/zz.md"
+s7_judge "$S7_MPD"; [[ -z "$S7_J_REASONS" ]] || S7_MPBAD+=" excluded-trees"
+if [[ -z "$S7_MPBAD" ]]; then row "S7 must-pass: the stdin-config form, the argv-safe -H @<(printf ...) form, prose with -H and no curl, non-credential -H headers (including names that only start like a credential name), and the docs site, a knowledge-base tree and a non-markdown file are GREEN" ok
+else row "S7 must-pass: a compliant form is flagged" fail "flagged=$S7_MPBAD"; fi
+# --- EXECUTED rows: the converted blocks are extracted from the real files and RUN, not only scanned ---------------------------------------
+S7_X="$S7/exec"; assert_fixture_dir "$S7_X"; mkdir -p "$S7_X/bin"
+cat > "$S7_X/bin/curl" <<'S7X_STUB'
+#!/usr/bin/env bash
+# Recording stub: argv one per line, stdin only when the call carries `--config -` (as curl would), a canned body.
+d="${S7X_REC:?}"; n=0; [[ -r "$d/n" ]] && read -r n < "$d/n"; n=$((n + 1)); printf '%s\n' "$n" > "$d/n"
+printf '%s\n' "$@" > "$d/argv.$n"
+cfg=0; prev=""; for a in "$@"; do [[ "$prev" == "--config" && "$a" == "-" ]] && cfg=1; prev="$a"; done
+if [[ "$cfg" == 1 ]]; then cat > "$d/stdin.$n"; else : > "$d/stdin.$n"; fi
+printf '[]\n'
+S7X_STUB
+cat > "$S7_X/bin/doppler" <<'S7X_STUB'
+#!/usr/bin/env bash
+# `doppler secrets get NAME ...`: a synthesized value, distinct per NAME so a mix-up between secrets is visible; NAME == S7X_BADNAME gets a
+# value with a space in it (a refused shape), so ONE secret at a time can be made bad.
+[[ -n "${S7X_BADNAME:-}" && "${3:-}" == "$S7X_BADNAME" ]] && { printf 'bad val'; exit 0; }
+case "${3:-}" in
+  SENTRY_ORG) printf 'synthorg' ;;
+  NEXT_PUBLIC_SUPABASE_URL) printf 'https://sup.example.invalid' ;;
+  APP_DOMAIN_BASE) printf 'example.invalid' ;;
+  *) printf '%s-%s' "${S7X_TOKEN:-}" "${3:-}" ;;
+esac
+S7X_STUB
+printf '#!/usr/bin/env bash\ncat\n' > "$S7_X/bin/jq"
+chmod +x "$S7_X/bin/curl" "$S7_X/bin/doppler" "$S7_X/bin/jq"
+S7X_GOOD="synthtok0123.ab_c~d+e/f=g-h"; S7X_BAD="bad val"
+S7X_PYDIR="$(dirname "$(type -P python3)")"
+# s7x_block <file> <marker>... -> the ONE fenced block of that file holding `--config -` and every marker (a count other than 1 is a failure, never a pass)
+s7x_block() {
+  python3 -I -c '
+import sys
+f, marks = sys.argv[1], sys.argv[2:]
+blocks, cur = [], None
+for l in open(f, encoding="utf-8").read().split("\n"):
+    if l.strip().startswith("```"):
+        if cur is None: cur = []
+        else: blocks.append("\n".join(cur)); cur = None
+        continue
+    if cur is not None: cur.append(l)
+hit = [b for b in blocks if "--config -" in b and all(m in b for m in marks)]
+if len(hit) != 1: sys.exit(3)
+print(hit[0])
+' "$REPO_ROOT/$1" "${@:2}"
+}
+# s7x_run <row> <block file> [secret NAME made bad]: runs the block under bash in a scrubbed environment; sets S7X_RC, S7X_OUT (stdout+stderr), S7X_N (curl calls), S7X_REC
+S7X_RC=0; S7X_OUT=""; S7X_N=0; S7X_REC=""
+s7x_run() {
+  S7X_REC="$S7_X/rec-$1"; assert_fixture_dir "$S7X_REC"; rm -rf "$S7X_REC"; mkdir -p "$S7X_REC"
+  S7X_RC=0; S7X_OUT="$(cd "$S7_X" && env -i PATH="$S7_X/bin:$S7X_PYDIR:/usr/bin:/bin" HOME="$S7_X" S7X_REC="$S7X_REC" S7X_TOKEN="$S7X_GOOD" S7X_BADNAME="${3:-}" bash "$2" < /dev/null 2>&1)" || S7X_RC=$?
+  S7X_N=0; [[ -r "$S7X_REC/n" ]] && read -r S7X_N < "$S7X_REC/n"; return 0
+}
+# s7x_argv_has <needle>: 0 when any recorded argv holds the needle
+s7x_argv_has() { local i; for ((i = 1; i <= S7X_N; i++)); do grep -qF -- "$1" "$S7X_REC/argv.$i" && return 0; done; return 1; }
+# s7x_good <expected stdin config> <secret>...: reasons (empty = good) for a run on a GOOD token: rc 0, exactly one call, no secret on argv, the config on stdin
+s7x_good() {
+  local want="$1" r="" nd got; shift
+  [[ "$S7X_RC" -eq 0 ]] || r+=" rc=$S7X_RC"
+  [[ "$S7X_N" -eq 1 ]] || r+=" calls=$S7X_N"
+  for nd in "$@"; do ! s7x_argv_has "$nd" || r+=" argv-has-secret"; done
+  got=""; [[ -r "$S7X_REC/stdin.1" ]] && got="$(< "$S7X_REC/stdin.1")"
+  [[ "$got" == "$want" ]] || r+=" stdin-differs"
+  printf '%s' "${r# }"
+}
+S7X_PM="$S7_X/blk-pm.sh"; S7X_PF="$S7_X/blk-pf.sh"; S7X_SH="$S7_X/blk-sh.sh"; S7X_DS="$S7_X/blk-ds.sh"
+s7x_block plugins/soleur/skills/postmerge/references/deploy-status-debugging.md "hooks/deploy-status" > "$S7X_DS" || { rm -f "$S7X_DS"; }
+s7x_block plugins/soleur/skills/postmerge/SKILL.md "monitors/" > "$S7X_PM" || { rm -f "$S7X_PM"; }
+s7x_block plugins/soleur/skills/preflight/SKILL.md "rest/v1/" > "$S7X_PF" || { rm -f "$S7X_PF"; }
+s7x_block plugins/soleur/skills/ship/SKILL.md "infra-config-status" > "$S7X_SH" || { rm -f "$S7X_SH"; }
+
+# postmerge Phase 3.5 (advisory): good token -> one call, token on stdin only; a refused token -> ZERO calls, a SKIPPED line, exit 0
+S7X_BAD_REASONS=""
+if [[ -s "$S7X_PM" ]]; then
+  s7x_run pm-good "$S7X_PM"; S7X_R1="$(s7x_good "header = \"Authorization: Bearer $S7X_GOOD-SENTRY_AUTH_TOKEN\"" "$S7X_GOOD")"; [[ -z "$S7X_R1" ]] || S7X_BAD_REASONS+=" good:$S7X_R1"
+  s7x_run pm-bad "$S7X_PM" SENTRY_AUTH_TOKEN
+  [[ "$S7X_N" -eq 0 ]] || S7X_BAD_REASONS+=" refused-made-$S7X_N-calls"
+  [[ "$S7X_RC" -eq 0 && "$S7X_OUT" == *"SKIPPED"* && "$S7X_OUT" == *"SENTRY_TOKEN"* && "$S7X_OUT" != *"$S7X_BAD"* ]] || S7X_BAD_REASONS+=" refused-not-a-named-skip(rc=$S7X_RC)"
+else S7X_BAD_REASONS+=" block-not-found-exactly-once"; fi
+if [[ -z "$S7X_BAD_REASONS" ]]; then row "S7 executed (postmerge Phase 3.5): the block run under bash puts the token on curl's stdin config only (none on the recorded argv, exactly one call, so the control saw a call), and a token with a space in it makes zero calls, prints a SKIPPED line naming the variable and exits 0 (advisory phase)" ok
+else row "S7 executed (postmerge Phase 3.5): the converted block does not behave as documented" fail "reasons='${S7X_BAD_REASONS# }'"; fi
+
+# preflight Step 1.4: the block is self-sufficient in ONE call (it fetches its own URL and key), sends both headers on stdin, refuses a bad key with zero calls and a message naming the variable
+S7X_BAD_REASONS=""
+if [[ -s "$S7X_PF" ]]; then
+  s7x_run pf-good "$S7X_PF"
+  S7X_R1="$(s7x_good "$(printf 'header = "apikey: %s"\nheader = "Authorization: Bearer %s"' "$S7X_GOOD-SUPABASE_SERVICE_ROLE_KEY" "$S7X_GOOD-SUPABASE_SERVICE_ROLE_KEY")" "$S7X_GOOD")"; [[ -z "$S7X_R1" ]] || S7X_BAD_REASONS+=" good:$S7X_R1"
+  s7x_argv_has "https://sup.example.invalid/rest/v1/" || S7X_BAD_REASONS+=" url-not-fetched-in-block"
+  s7x_run pf-bad "$S7X_PF" SUPABASE_SERVICE_ROLE_KEY
+  [[ "$S7X_N" -eq 0 ]] || S7X_BAD_REASONS+=" refused-made-$S7X_N-calls"
+  [[ "$S7X_RC" -ne 0 && "$S7X_OUT" == *"SERVICE_ROLE_KEY unset or not"* && "$S7X_OUT" != *"$S7X_BAD"* ]] || S7X_BAD_REASONS+=" refused-message(rc=$S7X_RC)"
+else S7X_BAD_REASONS+=" block-not-found-exactly-once"; fi
+if [[ -z "$S7X_BAD_REASONS" ]]; then row "S7 executed (preflight Step 1.4): the block run under bash in one call fetches its own URL and key, sends both headers on curl's stdin config only, and a key with a space makes zero calls and a nonzero exit naming SERVICE_ROLE_KEY" ok
+else row "S7 executed (preflight Step 1.4): the converted block does not behave as documented" fail "reasons='${S7X_BAD_REASONS# }'"; fi
+
+# ship infra-config-status: the signature and the Access pair (the Rule E names) all ride stdin; any one of them refused -> zero calls
+S7X_BAD_REASONS=""
+if [[ -s "$S7X_SH" ]]; then
+  s7x_run sh-good "$S7X_SH"
+  S7X_SIG=""; [[ -r "$S7X_REC/stdin.1" ]] && S7X_SIG="$(sed -n '1s/^header = "X-Signature-256: sha256=\([0-9a-f]\{64\}\)"$/\1/p' "$S7X_REC/stdin.1")"
+  S7X_R1="$(s7x_good "$(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"' "$S7X_SIG" "$S7X_GOOD-CF_ACCESS_CLIENT_ID" "$S7X_GOOD-CF_ACCESS_CLIENT_SECRET")" "$S7X_GOOD" "$S7X_SIG")"
+  [[ -z "$S7X_R1" && -n "$S7X_SIG" ]] || S7X_BAD_REASONS+=" good:${S7X_R1:-no-signature-line}"
+  for S7X_NM in CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET APP_DOMAIN_BASE; do
+    s7x_run "sh-bad-$S7X_NM" "$S7X_SH" "$S7X_NM"
+    S7X_VAR="${S7X_NM/CF_ACCESS_CLIENT_/CF_ACCESS_}"
+    [[ "$S7X_N" -eq 0 ]] || S7X_BAD_REASONS+=" $S7X_NM-refused-made-$S7X_N-calls"
+    [[ "$S7X_RC" -ne 0 && "$S7X_OUT" == *"$S7X_VAR unset or not [A-Za-z0-9._~+/=-]"* && "$S7X_OUT" != *"$S7X_BAD"* ]] || S7X_BAD_REASONS+=" $S7X_NM-refused-message-not-naming-$S7X_VAR(rc=$S7X_RC)"
+  done
+else S7X_BAD_REASONS+=" block-not-found-exactly-once"; fi
+if [[ -z "$S7X_BAD_REASONS" ]]; then row "S7 executed (ship infra-config-status): the block run under bash sends X-Signature-256, CF-Access-Client-Id and CF-Access-Client-Secret on curl's stdin config only (none on the recorded argv), and a refused Access id or secret (each made bad alone) makes zero calls and a nonzero exit" ok
+else row "S7 executed (ship infra-config-status): the converted block does not behave as documented" fail "reasons='${S7X_BAD_REASONS# }'"; fi
+
+# postmerge deploy-status-debugging: the signature and the Access pair ride stdin, and a refused id or secret (each alone) makes zero calls and names that variable
+S7X_BAD_REASONS=""
+if [[ -s "$S7X_DS" ]]; then
+  s7x_run ds-good "$S7X_DS"
+  S7X_SIG=""; [[ -r "$S7X_REC/stdin.1" ]] && S7X_SIG="$(sed -n '1s/^header = "X-Signature-256: sha256=\([0-9a-f]\{64\}\)"$/\1/p' "$S7X_REC/stdin.1")"
+  S7X_R1="$(s7x_good "$(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"' "$S7X_SIG" "$S7X_GOOD-CF_ACCESS_CLIENT_ID" "$S7X_GOOD-CF_ACCESS_CLIENT_SECRET")" "$S7X_GOOD" "$S7X_SIG")"
+  [[ -z "$S7X_R1" && -n "$S7X_SIG" ]] || S7X_BAD_REASONS+=" good:${S7X_R1:-no-signature-line}"
+  s7x_argv_has "https://deploy.soleur.ai/hooks/deploy-status" || S7X_BAD_REASONS+=" url-not-called"
+  for S7X_NM in CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do
+    s7x_run "ds-bad-$S7X_NM" "$S7X_DS" "$S7X_NM"
+    [[ "$S7X_N" -eq 0 ]] || S7X_BAD_REASONS+=" $S7X_NM-refused-made-$S7X_N-calls"
+    [[ "$S7X_RC" -ne 0 && "$S7X_OUT" == *"$S7X_NM unset or not [A-Za-z0-9._~+/=-]"* && "$S7X_OUT" != *"$S7X_BAD"* ]] || S7X_BAD_REASONS+=" $S7X_NM-refused-message(rc=$S7X_RC)"
+  done
+else S7X_BAD_REASONS+=" block-not-found-exactly-once"; fi
+if [[ -z "$S7X_BAD_REASONS" ]]; then row "S7 executed (postmerge deploy-status-debugging): the block run under bash sends X-Signature-256, CF-Access-Client-Id and CF-Access-Client-Secret on curl's stdin config only (so a dropped --config - or a swapped id and secret is RED), and a refused Access id or secret makes zero calls and a nonzero exit naming that variable" ok
+else row "S7 executed (postmerge deploy-status-debugging): the converted block does not behave as documented" fail "reasons='${S7X_BAD_REASONS# }'"; fi
+
+# CONTROL: the judge must go RED on a block that puts the token on argv, and a block whose shape guard is neutralised must make a call for a refused token
+S7X_BAD_REASONS=""
+if [[ -s "$S7X_PM" ]]; then
+  S7X_BLK="$(< "$S7X_PM")"
+  S7X_MUT_ARGV="${S7X_BLK//--config - /-H \"Authorization: Bearer \$SENTRY_TOKEN\" }"
+  S7X_G="''|*[!A-Za-z0-9._~+/=-]*"; S7X_Q="''"; S7X_MUT_GUARD="${S7X_BLK//"$S7X_G"/$S7X_Q}"
+  [[ "$S7X_MUT_ARGV" != "$S7X_BLK" ]] || S7X_BAD_REASONS+=" argv-mutation-did-not-land"
+  [[ "$S7X_MUT_GUARD" != "$S7X_BLK" ]] || S7X_BAD_REASONS+=" guard-mutation-did-not-land"
+  printf '%s\n' "$S7X_MUT_ARGV" > "$S7_X/blk-mut-argv.sh"; printf '%s\n' "$S7X_MUT_GUARD" > "$S7_X/blk-mut-guard.sh"
+  s7x_run mut-argv "$S7_X/blk-mut-argv.sh"; S7X_R1="$(s7x_good "header = \"Authorization: Bearer $S7X_GOOD-SENTRY_AUTH_TOKEN\"" "$S7X_GOOD")"
+  [[ "$S7X_R1" == *argv-has-secret* && "$S7X_R1" == *stdin-differs* ]] || S7X_BAD_REASONS+=" argv-token-not-RED('$S7X_R1')"
+  s7x_run mut-guard "$S7_X/blk-mut-guard.sh" SENTRY_AUTH_TOKEN
+  [[ "$S7X_N" -ge 1 ]] || S7X_BAD_REASONS+=" neutralised-guard-still-made-no-call"
+else S7X_BAD_REASONS+=" block-not-found-exactly-once"; fi
+if [[ -z "$S7X_BAD_REASONS" ]]; then row "S7 executed control: the judge is RED when the block puts the token on argv (token on argv, nothing on stdin), and a block with the shape guard neutralised makes a curl call for a refused token (so the zero-call assertions can fail)" ok
+else row "S7 executed control: the executed rows cannot go RED" fail "reasons='${S7X_BAD_REASONS# }'"; fi
+echo "=== stage S7: Guard 3 rows (markdown bearer headers off curl argv: derived census, residual allowlist, logical-line join, stdin conflict) done ==="
 
 # =====================================================================================
 # CONTROLS FOR THE VERDICT-OWNING HELPERS. Every helper that names failed checks (bk_check, bs_refusal, bs_ok_call, hmx_refused, evaluate_hmac,
@@ -7031,7 +7633,13 @@ SELFTEST_PASSES=0
 # retracted, so SELFTEST_PASSES stays 0). Derived from the run, never estimated.
 # 752 -> 770 at #9757 (stage S6, Guard 3: htpasswd password off argv): the 18 S6 rows, measured (770 passed, 0 failed).
 # 770 -> 781 at #9757 (stage S6-HB, Guard 2: heartbeat URL off curl argv, derived population): the 11 S6-HB rows, measured (781 passed, 0 failed).
-EXPECTED_TESTS=781
+# 781 -> 796 at #10093 (stage S7, Guard 3 for markdown: bearer and apikey headers off curl argv in plugins/**/*.md): the 15 S7 rows, measured (796 passed, 0 failed).
+# 796 -> 801 at the PR #10185 fix round (S7: the Rule E header names, the executed-snippet rows and their control): 5 more S7 rows, measured (801 passed, 0 failed).
+# 801 -> 802 at the fix-round batch (S7: an executed row for the deploy-status-debugging snippet; the ship row also covers APP_DOMAIN_BASE): measured (802 passed, 0 failed).
+# 802 -> 808 at PR B (#10119, registry template): S6 registry site rows now identity rows, the ceiling row also judges a grow-by-one allowlist, mutation 8 (each registry site back to argv) and the S6-REG heartbeat scan (real tree, three mutations, one must-pass): measured (808 passed, 0 failed). 808 -> 811 at review (S6-REG mutations 5-7: comment-backslash, absolute curl path, continuation split).
+# 811 -> 819 at PR C (#10120, probe scripts of #10093): four converted-script rows (the inngest body and the three probes join S6H_CONVERTED), mutations 1b (inngest body), 1c (the three probes), 3c (a probe) and the inngest guard-class mutation; the stale and growth mutations are re-anchored, the ceiling row is 0 == 0: measured (819 passed, 0 failed).
+# 819 -> 823 at the PR C review round: the guard-copy parity row and its mutation row, and two scanner-reach rows (bare HEARTBEAT_URL; path-prefixed, backslashed and backtick curl): measured (823 passed, 0 failed).
+EXPECTED_TESTS=823
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2

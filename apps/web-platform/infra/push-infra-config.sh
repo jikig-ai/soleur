@@ -89,6 +89,15 @@ trap 'rm -f "$PAYLOAD_FILE"' EXIT
 # body-only edit to any one re-fires the apply and reaches /usr/local/bin
 # (#5492: an earlier "transient, don't register" decision blocked the enumerate
 # fix from deploying — no hashed file had changed).
+#
+# #6780 — the five dedicated-host carriers below (inngest-redis-bootstrap,
+# inngest-cutover-flip, inngest-server-flip-guard, cat-inngest-cutover-state,
+# inngest-luks-cutover) keep this payload aligned with FILE_MAP: a FILE_MAP row
+# with no payload field fails every apply on missing_env. Their REAL delivery
+# channel is the signed bundle pull on the dedicated host (ADR-135); on web
+# hosts they land as inert /usr/local/bin files. Registered in
+# deploy_pipeline_fix's triggers_replace + the ship DEPLOY_PIPELINE_FIX_TRIGGERS
+# array like their siblings.
 cat > "$PAYLOAD_FILE" <<PAYLOAD
 {
   "ci_deploy_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/ci-deploy.sh")",
@@ -106,6 +115,11 @@ cat > "$PAYLOAD_FILE" <<PAYLOAD
   "git_lock_chardevice_sweep_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/git-lock-chardevice-sweep.sh")",
   "inngest_registry_probe_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/inngest-registry-probe.sh")",
   "inngest_doublefire_probe_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/inngest-doublefire-probe.sh")",
+  "inngest_redis_bootstrap_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/inngest-redis-bootstrap.sh")",
+  "inngest_cutover_flip_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/inngest-cutover-flip.sh")",
+  "inngest_server_flip_guard_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/inngest-server-flip-guard.sh")",
+  "cat_inngest_cutover_state_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/cat-inngest-cutover-state.sh")",
+  "inngest_luks_cutover_sh_b64": "$(base64 -w0 < "${INFRA_DIR}/inngest-luks-cutover.sh")",
   "soleur_doppler_token_b64": "${SOLEUR_DOPPLER_TOKEN_B64}",
   "vector_doppler_token_conf_b64": "$(base64 -w0 < "${INFRA_DIR}/10-vector-doppler-token.conf")",
   "inngest_heartbeat_doppler_token_conf_b64": "$(base64 -w0 < "${INFRA_DIR}/10-inngest-heartbeat-doppler-token.conf")",

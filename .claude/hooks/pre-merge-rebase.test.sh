@@ -529,6 +529,27 @@ t7_wrapped_merge_fires() {
   rm -rf "$tmp"
 }
 
+# T7b: `rtk`-prefixed merge fires (#10248) — the wrapper-boundary fragment
+# interpolates between the chain boundary and `gh pr merge`; an rtk spelling on
+# an unreviewed branch must deny identically to the bare spelling.
+t7b_rtk_prefixed_merge_fires() {
+  local tmp; tmp=$(mktemp -d)
+  local work="$tmp/work" incidents="$tmp/incidents"
+  mkdir -p "$work" "$incidents"
+  init_git_repo "$work"
+  git -C "$work" commit -q --allow-empty -m "init"
+  git -C "$work" checkout -q -b feat-t7b
+  git -C "$work" commit -q --allow-empty -m "feature work"
+
+  local payload out exit_code=0
+  payload=$(make_payload "$work" "rtk gh pr merge 99 --squash")
+  out=$(printf '%s' "$payload" | INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>/dev/null) || exit_code=$?
+  exit_code=${exit_code:-0}
+  assert_deny "T7b rtk-prefixed merge fires (#10248)" "$incidents" "$out" "$exit_code" \
+    "rf-never-skip-qa-review-before-merging"
+  rm -rf "$tmp"
+}
+
 # T8: a REAL `gh pr merge` chained AFTER a heredoc terminator must still fire.
 # Guards against the heredoc-body strip over-blanking past the closing
 # delimiter (which would silently bypass the review-evidence gate).
@@ -2334,6 +2355,7 @@ for _case in \
   t5_bare_merge_fires \
   t6_chained_after_commit_fires \
   t7_wrapped_merge_fires \
+  t7b_rtk_prefixed_merge_fires \
   t8_merge_after_heredoc_fires \
   t_mj1_malformed_json_failopen \
   t_pr1_root_session_trailer \

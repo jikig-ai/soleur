@@ -411,6 +411,8 @@ export function infoSilentFallback(
  *   op-slug emit sites in `cc-dispatcher.ts` reference
  *   `CC_OP_SLUGS.*` (e.g., `CC_OP_SLUGS.saveAssistant`,
  *   `CC_OP_SLUGS.persistUserMessage`) — see #3642 F7.
+ * - `agent-sandbox-bash-tool-result:<errorCode>` (cc-dispatcher `onToolResult` Bash denial mirror; one slot per
+ *   classified code, so a code that fires does not mask another one for the same user, #10445).
  * - `kb-document-resolver` family: PDF text-extraction failure classes
  *   (e.g., `extract-pdf:empty-text`, `extract-pdf:oversized-buffer`).
  * - `soleur-go-runner` family: `notify-awaiting-no-active-query`.
@@ -438,6 +440,11 @@ export function infoSilentFallback(
  *   `${activeWorkspaceId}:${modelPath}`, NOT a userId — the permanent
  *   read-side detector for a committed model with elements but no views, from
  *   any writer; see #8740, #8861).
+ *
+ * - `untrusted-content` family (#4671, ADR-287): `untrusted-content-scorer-error`,
+ *   `untrusted-content-shape`, `untrusted-content-hook-error` (dedup key is the
+ *   `workspaceId` (or "unknown"), an in-process token, NOT a userId; metadata-only
+ *   `extra`), and `untrusted-content-flag-unresolved` (dedup key is the userId).
  *
  * Each feature picks a distinct `errorClass` so the per-key TTL bucket
  * cannot collide across features for the same user.

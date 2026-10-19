@@ -162,9 +162,16 @@ SENTRY_TOKEN=$(doppler secrets get SENTRY_AUTH_TOKEN -p soleur -c prd --plain 2>
 SENTRY_ORG=$(doppler secrets get SENTRY_ORG -p soleur -c prd --plain 2>/dev/null || echo "jikigai")
 API_HOST="${SENTRY_ORG}.sentry.io"
 
-curl -sfS -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "https://${API_HOST}/api/0/organizations/${SENTRY_ORG}/monitors/?per_page=100" \
-  | jq '[.[] | {slug: .slug, status: .status}] | map(select(.status != "ok" and .status != "active"))'
+# argv shows in /proc/<pid>/cmdline, so the token rides curl's stdin config. Bash only; `bash -x` would print the token.
+# Advisory phase: a missing or malformed token SKIPS (exit 0), it never fails the run.
+if ! (LC_ALL=C; case "$SENTRY_TOKEN" in ''|*[!A-Za-z0-9._~+/=-]*) exit 1;; esac); then
+  echo "WARNING: SENTRY_TOKEN (Doppler prd SENTRY_AUTH_TOKEN or SENTRY_API_TOKEN) unset or not [A-Za-z0-9._~+/=-] (refused, not sent). Sentry cron monitor health: SKIPPED."
+else
+  curl --disable --proto '=https' -m 30 -fsS --config - \
+    "https://${API_HOST}/api/0/organizations/${SENTRY_ORG}/monitors/?per_page=100" \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_TOKEN") \
+    | jq '[.[] | {slug: .slug, status: .status}] | map(select(.status != "ok" and .status != "active"))'
+fi
 ```
 
 - If all monitors report `ok` or `active`: "Sentry cron monitors: all healthy"
@@ -366,7 +373,7 @@ chromium bundled in `@playwright/test` with no MCP-browser dependency. The
 warn-and-skip punt is exactly what let the #5391/#5421/#5436 broken fixes pass
 green. Record `Browser verification: DELEGATED-TO-LIVE-VERIFY` and proceed.
 
-## Phase 5.5: Live Verification (path-triggered, REPORT-ONLY)
+## Phase 5.5: Live Verification (path-triggered; BLOCKING in CI)
 
 Verifies the **deployed artifact** for the PR classes where the mock-hermetic e2e
 suite structurally lies (realtime / server-commit-timing / session-auth /
@@ -376,13 +383,9 @@ dedicated **synthetic prod principal** (never an operator/real-user session),
 drives the deployed UI, and asserts a freshly-started conversation appears in the
 Recent Conversations rail.
 
-**Dark-launch posture (`wg-dark-launch-deploy-gates`):** this gate ships
-**REPORT-ONLY**. It records and surfaces a tri-state result but does **NOT** block
-"done". The empty→FAIL-closed + FAIL-blocks-done flip is tracked in **#5463**, and
-that flip **also requires re-homing the harness into a GitHub Action /
-`workflow_dispatch` with a Sentry-observable result** (ADR-033 Option C) — a
-boolean flip inside this agent-driven skill is NOT acceptable for a blocking gate
-(it would recreate the #4932 non-deterministic-blocking-gate class).
+**Gate posture: BLOCKING, enforced in CI (#5463, PR #5576).** The authority is the `live-verify` job in `.github/workflows/web-platform-release.yml`: its "Enforce live-verify gate" step fails the release run when the emit step computes `BLOCK=1` (a `FAIL`, an empty result line, or `CANT-RUN:cannot-spend-violated`). `CANT-RUN:cannot-spend-unverified` (the I-cannot-spend check could not read its inputs) is annotated `::error` but BLOCK=0, because the throw before the browser launch already delivers the safety property. Re-derive gate state from that workflow, not from this prose. This skill's own harness run (below) is separate evidence for the report and does not decide the release; a boolean flip inside this skill is NOT the gate (the #4932 non-deterministic-blocking-gate class).
+
+**What a PASS does and does not prove.** The harness refuses to run unless the synthetic principal holds no decryptable credential (ADR-064 `I-cannot-spend`, in `verifyPrincipal`, also under `--dry-run`). `RESULT: PASS` means ONE flow worked against the deployed app: a fresh conversation appeared in the Recent Conversations rail. It does not attest the real CONNECT path or Squid `%un` egress attribution (`I-egress-not-attested-by-gate`) and generates no Concierge traffic. **A green `live-verify` job is not a PASS:** SKIPPED and every environmental `CANT-RUN` leave it green, so only the `RESULT: PASS` line counts and anything else is UNVERIFIED. When a check needs traffic the gate cannot generate, do not ask the operator to start a session: record `Live verification: UNVERIFIED:<capability>` and reference #10460 / #10461 (see `flag-set-role` §"Verifying a flip"). The job runs after each successful deploy (`workflow_run`) but its harness step is diff-gated on `trigger-paths.txt`, and a flag flip is not a commit, so a flip starts nothing; the flip and rollback stay operator-typed (ADR-249).
 
 **1. Path trigger (FR7).** The trigger set is the committed source-of-truth
 `apps/web-platform/scripts/live-verify/trigger-paths.txt` (not SKILL.md prose).
@@ -403,7 +406,7 @@ fi
 If `TRIGGERED=0`: record `Live verification: SKIPPED (no triggering paths)` and
 continue to Phase 6.
 
-**2. Run the harness (report-only).** The harness needs Doppler `prd` secrets
+**2. Run the harness.** The harness needs Doppler `prd` secrets
 (`LIVE_VERIFY_USER_PASSWORD`, `LIVE_VERIFY_EXPECTED_UID/REF`, the Supabase
 anon-key, `PRODUCTION_URL`). It is service-role-free (AC2b) and message-minimal
 (I-action-send-free). Run from the app dir under `prd`:
@@ -419,13 +422,13 @@ cd apps/web-platform && \
 prepend a system-browser override — `LIVE_VERIFY_BROWSER_CHANNEL=chrome` (or
 `LIVE_VERIFY_BROWSER_PATH=/path/to/chrome`) — to the `doppler run` line. Unset on
 ubuntu-latest (bundled chromium works); see ADR-064 §"Runner browser + cookie
-shape". The terminal substrate for the blocking flip is the GH-Action re-home
-(#5463 item 3), not this override.
+shape". The blocking substrate is the GitHub Actions job (#5463 item 3), not this
+override.
 
 The harness emits exactly one structured line: `RESULT: PASS`,
 `RESULT: FAIL — <redacted detail>`, or `RESULT: CANT-RUN:<reason>`. Empty output
 is treated as `CANT-RUN:no-result-line` (fail-closed semantics for the result
-*recording*, even though the gate is report-only for "done"). If the harness
+*recording*; CI independently blocks on a missing result line). If the harness
 cannot bootstrap (synthetic principal not yet seeded — see
 `apps/web-platform/scripts/bootstrap-live-verify.sh`), expect `CANT-RUN:CONFIG:…`.
 
@@ -434,8 +437,11 @@ drop it:
 
 - `PASS` → record `Live verification: PASS`.
 - `FAIL` → record `Live verification: FAIL — <detail>` and **surface prominently**
-  (this is the regression the gate exists to catch). Report-only: it does not
-  block "done" on this PR, but it is the signal the #5463 flip will gate on.
+  (this is the regression the gate exists to catch). The CI job has already
+  blocked the release run on a FAIL; report what it concluded.
+- `UNVERIFIED:<capability>` is not a harness result: record it when a check needs traffic the
+  gate cannot generate, or when CI's verdict is SKIPPED or a `CANT-RUN` (see the PASS caveat
+  above). It reuses #10460 / #10461; a failed LOCAL harness run below still files its own issue.
 - `CANT-RUN:<reason>` → record `Live verification: CANT-RUN:<reason>` and
   **auto-file a tracking issue** (`wg-when-deferring-a-capability-create-a`):
 
@@ -445,7 +451,7 @@ gh issue create --label type/chore \
   --body "deferred-automation backlog item; the live-verify harness could not complete.
 reason: <reason>
 re-evaluate when: synthetic principal seeded / deploy URL reachable / teardown invariant restored.
-Tracks the #5463 blocking-flip precondition."
+Tracks the live-verify gate (blocking in CI since #5463)."
 ```
 
 A `CANT-RUN:CANT-TEARDOWN-has-action-sends` reason is an invariant breach (the
@@ -531,7 +537,7 @@ gh issue create --label type/chore --milestone "Post-MVP / Later" \
 ```
 
 A failed or unrun read-back is a **red post-merge status**: report it verbatim as `Sole-copy read-back: <word>` in the Phase 6
-comment and the Phase 7 summary. It does not itself block "done" (report-only, like Phases 5.5 and 5.6).
+comment and the Phase 7 summary. It does not itself block "done" (report-only, like Phase 5.6; Phase 5.5 is blocking in CI).
 
 ## Phase 5.8: KB archival read-back (REPORT-ONLY)
 
@@ -567,8 +573,8 @@ git mv <row-path> knowledge-base/project/<root>/archive/$(date +%Y%m%d-%H%M%S)-<
 
 then open a follow-up PR — archival cannot ride a PR that already merged. **M-row caveat:** an `M` on `specs/<dir>/` can be a
 drive-by edit to a SIBLING feature's in-flight spec — verify the dir belongs to the merged feature first; if not, revert the
-edit (`git checkout origin/main -- <path>` then commit) rather than `git mv`-ing another feature's dir. Like Phases 5.5/5.6/5.7
-it is REPORT-ONLY: it never blocks the "done" verdict; the signal is for immediate operator attention, not rollback.
+edit (`git checkout origin/main -- <path>` then commit) rather than `git mv`-ing another feature's dir. Like Phases 5.6/5.7
+it is REPORT-ONLY (Phase 5.5 is blocking in CI): it never blocks the "done" verdict; the signal is for immediate operator attention, not rollback.
 
 ## Phase 6: Update Issue and Compound
 
@@ -583,7 +589,7 @@ gh issue comment <issue-number> --body "Post-merge verification complete for PR 
 - Sentry error-count delta: <AUTO-RESOLVED/STOPPED/STILL-FIRING/SKIPPED>
 - File freshness: <PASSED/N files checked>
 - Browser verification: <PASSED/SKIPPED/DELEGATED-TO-LIVE-VERIFY>
-- Live verification: <PASS/FAIL/CANT-RUN:reason/SKIPPED> (report-only, #5463)
+- Live verification: <PASS/FAIL/CANT-RUN:reason/SKIPPED/UNVERIFIED:capability> (blocking in CI, #5463)
 - Sole-copy read-back: <protected/not-protected/volume-gone/read-failed/missing-token/no word/SKIPPED> (report-only, #9879)
 - KB archival read-back: <clean/verbatim rows> (report-only)
 "
@@ -610,7 +616,7 @@ Sentry monitors: <HEALTHY/WARNING/SKIPPED>
 Sentry error-count delta: <AUTO-RESOLVED/STOPPED/STILL-FIRING/SKIPPED>
 File freshness: <N files verified>
 Browser verification: <PASSED/SKIPPED/DELEGATED-TO-LIVE-VERIFY>
-Live verification: <PASS/FAIL/CANT-RUN:reason/SKIPPED> (report-only, #5463)
+Live verification: <PASS/FAIL/CANT-RUN:reason/SKIPPED/UNVERIFIED:capability> (blocking in CI, #5463)
 Sole-copy read-back: <protected/not-protected/volume-gone/read-failed/missing-token/no word/SKIPPED> (report-only, #9879)
 KB archival read-back: <clean/verbatim rows> (report-only)
 Feature-tweet draft: <path + "flip publish_date + status: scheduled to publish" / CATCH-UP: run soleur:feature-tweet #N / NONE — ineligible>
@@ -632,5 +638,5 @@ per-prerequisite behaviour (skip / warn / poll).
 
 - **A deploy-arm database step failing on an auth/connect timeout is a production database signal, not an isolated flake: read readiness before rerunning.** `/health` returns HTTP 200 `status: ok` whatever the database state (only `.supabase` flips to `error`), the Management API project `status` can read `ACTIVE_HEALTHY` while Postgres is down, and a rerun's `migrate` can go green through the pooler. Read `curl -sS <prod>/health | jq -r .supabase` and `GET /v1/projects/<ref>/health?services=db&services=auth&services=rest&services=pooler` first — the latter carries the account-level admin PAT, so call it the way [supabase-logs-query.sh](../../../../scripts/supabase-logs-query.sh) does (header on stdin via `--header @-`, `--disable --noproxy '*'`, under `doppler run`), never with the token in argv. **Why:** 2026-09-15 — prd Postgres was unreachable 89 min; a rerun looped on health verification and `/health` was read directly only ~16 min later (post-mortem `prd-supabase-database-unreachable-2026-09-15-postmortem.md`).
 - For production debugging use Sentry API (`SENTRY_API_TOKEN` in Doppler `prd`), Better Stack, or `/health` — never SSH for logs. SSH is for infra provisioning only. (ex-`cq-for-production-debugging-use`) To read a Sentry issue/event by id inline, use `doppler run -p soleur -c prd -- scripts/sentry-issue.sh <id>` (runbook `knowledge-base/engineering/operations/runbooks/sentry-issue-read.md`); for host/app logs use [betterstack-query.sh](../../../../scripts/betterstack-query.sh) (runbook `betterstack-log-query.md`).
-- For deploy webhook debugging, fetch `WEBHOOK_DEPLOY_SECRET`/`CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET` from Doppler `prd_terraform` (not `prd`). GET `https://deploy.soleur.ai/hooks/deploy-status` with CF Access headers + HMAC-sha256 over empty body. Full runbook: [deploy-status-debugging.md](./references/deploy-status-debugging.md). (ex-`cq-deploy-webhook-observability-debug`)
+- For deploy webhook debugging, fetch `WEBHOOK_DEPLOY_SECRET`/`CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET` from Doppler `prd_terraform` (not `prd`). GET `https://deploy.soleur.ai/hooks/deploy-status` with CF Access headers + HMAC-sha256 over empty body, all on curl's stdin config. Full runbook: [deploy-status-debugging.md](./references/deploy-status-debugging.md). (ex-`cq-deploy-webhook-observability-debug`)
 - Doppler env values on prd are baked into the container at start via `--env-file` (cloud-init.yml). Flipping a flag in Doppler does NOT affect the running container — POST-X gates that depend on a freshly-flipped flag must redeploy the current image tag (POST to `/hooks/deploy`) between the flip and the verification smoke. Full context: [2026-05-19-doppler-env-hot-reload-limitation.md](../../../../knowledge-base/project/learnings/2026-05-19-doppler-env-hot-reload-limitation.md).

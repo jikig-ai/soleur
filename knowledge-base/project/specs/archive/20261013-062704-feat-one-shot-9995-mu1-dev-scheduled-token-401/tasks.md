@@ -98,3 +98,13 @@ fingerprint match.
 Probe + audit + manifest + workflow wiring merged; #10058 filed as the
 deferred-automation track with the staged bootstrap.sh; mu1's named-failure
 probe demonstrated. The issue's leg-green AC moves to #10058's closure.
+
+## Run ledger (#10058)
+
+`bootstrap-runs-10058.jsonl` beside this file is the ledger of the live run
+(2026-10-13 to 2026-10-14): 82 rows, 71 events plus 11 env-note rows (no `event`
+key), 22 runs. Names, outcomes and hashes only, never values. Failed `install-app`
+at line 51 (retried green), failed `verify` at lines 67 and 70, then `verify` ok
+from line 73 on; those later passes predate the #10273 merge. Approval rows are
+`harness-receipt` records, not evidence of approval (ADR-264). Line 28 is an
+`env_reset` written before the run id was assigned, so its `run_id` is a bare PID.

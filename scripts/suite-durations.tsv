@@ -1,8 +1,8 @@
 # suite-durations.tsv — aggregated per-suite durations (ADR-240 amd.)
 # group=light
 # generated-from-runs=38090871167,38088705648,38086978176,38085840669,38055372785
-# default-weight-ms=1180
-# generated-at=2026-10-14T11:19:17Z
+# default-weight-ms=1184
+# generated-at=2026-10-18T01:51:18Z
 # generator=regenerate-shard-manifest.py v3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	777	measured
@@ -91,6 +91,7 @@ apps/web-platform/scripts/supabase-local.test.sh	400	measured
 apps/web-platform/test/parse-gitleaks-allowlists	300	measured
 plugins/soleur/scripts/admin-merge-ready.test.sh	12147	measured
 plugins/soleur/scripts/alpha-metrics.test.sh	611	measured
+plugins/soleur/scripts/delegation-verify.test.sh	131500	measured
 plugins/soleur/scripts/emit-decision.test.sh	424	measured
 plugins/soleur/scripts/pipeline-tally.test.sh	5462	measured
 plugins/soleur/scripts/precommit-guard.test.sh	796	measured
@@ -144,6 +145,7 @@ plugins/soleur/test/_base-notice-frontmatter.test.sh	7093	measured
 plugins/soleur/test/admin-merge-ready-wiring.test.sh	10959	measured
 plugins/soleur/test/audit-flag-flip.test.sh	152	measured
 plugins/soleur/test/auto-close-scanner.test.sh	271	measured
+plugins/soleur/test/boundary-prefix.test.sh	1184	floor
 plugins/soleur/test/brand-workshop-pen-commit-after-save.test.sh	13	measured
 plugins/soleur/test/c4-count-parity.test.sh	1120	measured
 plugins/soleur/test/c4-from-components.test.sh	14478	measured
@@ -156,6 +158,8 @@ plugins/soleur/test/ci-concurrency-key.test.sh	2117	measured
 plugins/soleur/test/ci-e2e-skip-anchors.test.sh	111	measured
 plugins/soleur/test/ci-head-verdict.test.sh	33987	measured
 plugins/soleur/test/ci-path-gating.test.sh	205	measured
+plugins/soleur/test/ci-pr-affected-preactivation.test.sh	1184	floor
+plugins/soleur/test/ci-pr-affected-replay.test.sh	1184	floor
 plugins/soleur/test/ci-shard-totality-skip.test.sh	1180	floor
 plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh	948	measured
 plugins/soleur/test/claude-code-action-auth.test.sh	1132	measured
@@ -164,6 +168,7 @@ plugins/soleur/test/codeql-main-alert-gate-workflow-wiring.test.sh	6759	measured
 plugins/soleur/test/codeql-main-alert-gate.test.sh	30628	measured
 plugins/soleur/test/compaction-state-hook.test.sh	11636	measured
 plugins/soleur/test/concurrent-ship.test.sh	2487	measured
+plugins/soleur/test/cto-interface-selector.test.sh	7400	measured
 plugins/soleur/test/debug-probe-residue.test.sh	3140	measured
 plugins/soleur/test/deploy-arm.test.sh	11666	measured
 plugins/soleur/test/deploy-script-tests-aggregator-diagnosis.test.sh	295	measured
@@ -174,6 +179,7 @@ plugins/soleur/test/domain-model-headless-append.test.sh	418	measured
 plugins/soleur/test/domain-model-init.test.sh	108	measured
 plugins/soleur/test/drain-labeled-backlog.test.sh	250	measured
 plugins/soleur/test/drain-prs.test.sh	464	measured
+plugins/soleur/test/ext-filter-detect-hook.test.sh	1184	floor
 plugins/soleur/test/fanout-suite-scope.test.sh	20207	measured
 plugins/soleur/test/fixture-cd-containment.test.sh	1272	measured
 plugins/soleur/test/fixture-dir-operand-assert.test.sh	11922	measured
@@ -182,6 +188,7 @@ plugins/soleur/test/fixture-relative-assert.test.sh	16702	measured
 plugins/soleur/test/flag-detach-shared.test.sh	8189	measured
 plugins/soleur/test/flag-org-scoping-pr2.test.sh	4625	measured
 plugins/soleur/test/flagsmith-stdin-config.test.sh	227	measured
+plugins/soleur/test/flip-flag-map-parity.test.sh	1184	floor
 plugins/soleur/test/gdpr-gate-glob-liveness.test.sh	9	measured
 plugins/soleur/test/gdpr-gate-self-test.test.sh	386	measured
 plugins/soleur/test/generate-kb-index.test.sh	718	measured
@@ -191,15 +198,18 @@ plugins/soleur/test/git-fixture-env-shell.test.sh	381	measured
 plugins/soleur/test/git-tripwire.test.sh	309	measured
 plugins/soleur/test/gitleaks-merge-commit.test.sh	5441	measured
 plugins/soleur/test/gitleaks-rules.test.sh	13942	measured
+plugins/soleur/test/go-hold-routing.test.sh	3800	measured
 plugins/soleur/test/go-routing-table-parity.test.sh	60	measured
 plugins/soleur/test/go-session-gates.test.sh	3013	measured
 plugins/soleur/test/harvest-debt.test.sh	141	measured
 plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh	6566	measured
+plugins/soleur/test/hold-gate-eval.test.sh	175700	measured
 plugins/soleur/test/hook-git-env-coverage.test.sh	202	measured
 plugins/soleur/test/hook-git-env-receipt.test.sh	222	measured
 plugins/soleur/test/hook-input-classification-mutation.test.sh	66094	measured
 plugins/soleur/test/hosted-ship-shallow-merge-base.test.sh	112	measured
 plugins/soleur/test/infra-validation-detect.test.sh	53	measured
+plugins/soleur/test/inngest-config-bundle-mirror.test.sh	1180	floor
 plugins/soleur/test/issue-flow-measure.test.sh	87	measured
 plugins/soleur/test/kb-caches-untracked.test.sh	45	measured
 plugins/soleur/test/kb-search-lockstep.test.sh	9	measured
@@ -233,6 +243,7 @@ plugins/soleur/test/pencil-adapter-auth-hard-fail.test.sh	44	measured
 plugins/soleur/test/pencil-setup-skill-cli-form.test.sh	13	measured
 plugins/soleur/test/plugin-version.test.sh	1194	floor
 plugins/soleur/test/pr-fanout-ledger.test.sh	56062	measured
+plugins/soleur/test/pr-overlap-preflight.test.sh	94900	measured
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	36705	measured
 plugins/soleur/test/proc.test.sh	2698	measured
 plugins/soleur/test/ralph-loop.test.sh	5125	measured
@@ -250,6 +261,7 @@ plugins/soleur/test/reusable-release-degraded-pointer.test.sh	178	measured
 plugins/soleur/test/reusable-release-idempotency.test.sh	2754	measured
 plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh	974	measured
 plugins/soleur/test/roadmap-reconcile.test.sh	6496	measured
+plugins/soleur/test/rtk-grammar-parity.test.sh	1184	floor
 plugins/soleur/test/schedule-skill-once.test.sh	96	measured
 plugins/soleur/test/scripts-shard-manifest.test.sh	608	measured
 plugins/soleur/test/scripts-shard-runtime-coverage.test.sh	3708	measured
@@ -260,6 +272,7 @@ plugins/soleur/test/ship-battery-owed.test.sh	17960	measured
 plugins/soleur/test/ship-followthrough-directive.test.sh	447	measured
 plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh	124725	measured
 plugins/soleur/test/ship-pir-action-items-gate.test.sh	2569	measured
+plugins/soleur/test/sole-copy-drift-check.test.sh	1180	floor
 plugins/soleur/test/sync-pr-behind.test.sh	32366	measured
 plugins/soleur/test/technical-ruling-gate.test.sh	1194	floor
 plugins/soleur/test/terraform-drift-sentry-leg.test.sh	543	measured
@@ -324,6 +337,7 @@ scripts/ci-deploy-sentry-post-fail-6475	122	measured
 scripts/ci-draft-light	87009	measured
 scripts/ci-draft-push-census	2079	measured
 scripts/ci-leg-balance-9232	6184	measured
+scripts/ci-pr-selection	1180	floor
 scripts/ci-push-dedupe	92114	measured
 scripts/classify-workflow-transitions	2409	measured
 scripts/compound-promote	1076	measured
@@ -342,6 +356,7 @@ scripts/digest-oracle-guard	314	measured
 scripts/dogfood/grok-gpu-bootstrap	54	measured
 scripts/dogfood/grok-measure	36	measured
 scripts/domain-model-drift	1066	measured
+scripts/egress-audit-retention-check	1184	floor
 scripts/ensure-doppler	103	measured
 scripts/ensure-kb-index	1753	measured
 scripts/expenses-verify-by-check	257	measured
@@ -355,6 +370,7 @@ scripts/followthroughs/ci-draft-light-soak-9728	104456	measured
 scripts/followthroughs/ci-push-dedupe-soak-9512	87919	measured
 scripts/followthroughs/inngest-provision-rehearsal-capture	1223	measured
 scripts/followthroughs/pr-battery-gate-saving-9323	11826	measured
+scripts/followthroughs/registry-clientip-alert-7530	1180	floor
 scripts/followthroughs/t5-skip-persistence-bound-7510	9027	measured
 scripts/followthroughs/tty-ack-migration-9387	3438	measured
 scripts/generate-kb-index-live	2444	measured
@@ -385,6 +401,8 @@ scripts/learning-retrieval-bench	922	measured
 scripts/lib/bearer-curl.test.sh	3576	measured
 scripts/lib/frontmatter-strip.test.sh	197	measured
 scripts/lib/git-data-rotate-stamp.test.sh	1177	floor
+scripts/lib/git-data-store-dirty-scan.test.sh	1184	floor
+scripts/lib/git-data-wipe-runs.test.sh	1180	floor
 scripts/lib/incidents-roots.test.sh	177	measured
 scripts/lib/inngest-probe-row.test.sh	11441	measured
 scripts/lib/legal-base-ref.test.sh	324	measured
@@ -429,6 +447,7 @@ scripts/lint-migrated-rule-ids-unit	3884	measured
 scripts/lint-orphan-test-suites	27207	measured
 scripts/lint-orphan-test-suites-mutations-a	112147	measured
 scripts/lint-orphan-test-suites-mutations-b	127716	measured
+scripts/lint-ratchet-ruff-live	1180	floor
 scripts/lint-rule-bodies-live	61	measured
 scripts/lint-rule-ids-live	45	measured
 scripts/lint-shell-capture-exit	6308	measured
@@ -451,7 +470,6 @@ scripts/lint-workflow-local-action-checkout-live	1453	measured
 scripts/lint-workflow-run-body-syntax	2746	measured
 scripts/lint-workflow-step-env-refs	2729	measured
 scripts/lint-workflow-step-env-refs-live	2301	measured
-scripts/luks-monitor-host-timer-8706	504	measured
 scripts/marketplace-drift-check	1808	measured
 scripts/marketplace-manifest-validate	804	measured
 scripts/md-to-mrkdwn	218	measured
@@ -466,6 +484,7 @@ scripts/probe-github-app-mint	1180	floor
 scripts/probe-legal-corpus-truth-live	131	measured
 scripts/prod-version-drift-check	22764	measured
 scripts/raise-tmp-tmpfs-ceiling	1186	measured
+scripts/registry-htpasswd-stdin-10119	4200	measured
 scripts/registry-luks-live-8386	2717	measured
 scripts/rename-guard	3196	measured
 scripts/review-reminder-liveness	127	measured
@@ -518,6 +537,7 @@ scripts/web-host-escrow-preflight	870	measured
 scripts/web2-luks-live-6931	23754	measured
 scripts/workspaces-plaintext-hold-9348	825	measured
 scripts/zot-fill-rate-7341	2822	measured
+scripts/zot-fill-rate-standing-wiring	77000	floor
 scripts/zot-last-err-redact-7500	1183	measured
 scripts/zot-mirror-diagnosis	490	measured
 scripts/zot-restart-loop-alarm	5516	measured
@@ -558,6 +578,7 @@ tests/scripts/git-data-root-key-arm	5960	measured
 tests/scripts/git-data-root-token-census	22452	measured
 tests/scripts/git-data-rung2-evidence-capture	14744	measured
 tests/scripts/git-data-rung2-plan-shape	884	measured
+tests/scripts/git-data-wipe-wedge	1180	floor
 tests/scripts/host-image-coherence-preflight	47	measured
 tests/scripts/infra-privileged-tier-census	16830	measured
 tests/scripts/inngest-host-dark-gate	16167	measured
@@ -565,6 +586,7 @@ tests/scripts/inngest-host-replace-gate	1533	measured
 tests/scripts/inngest-host-shape-gate	3811	measured
 tests/scripts/inngest-provision-plan-shape	1177	measured
 tests/scripts/kb-drift-walker	68	measured
+tests/scripts/lint-ratchet	1180	floor
 tests/scripts/lint-rule-bodies	4936	measured
 tests/scripts/lint-rule-ids	1098	measured
 tests/scripts/main-duplicate-skip	717	measured

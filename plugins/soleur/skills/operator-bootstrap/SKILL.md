@@ -124,6 +124,8 @@ One stage per step. For each, write down five things before writing any code:
 Copy [`template.sh`](./template.sh) to the location in §Where, keep everything above the `STAGES`
 banner, and replace the example stages. Rules:
 
+- **Repo-relative paths.** Never compute the repo root as a fixed `../` count from `SCRIPT_DIR`: the
+  script moves one directory deeper when `archive-kb` archives its spec directory (see §Where).
 - **Stage lines.** Declare each stage once, in the table near the top of the script, as a comment
   line of the form `# SOLEUR-STAGE name|class|impact|rollback` (class is `read` or `write`). One plain
   sentence each for impact and rollback, no `|` inside them. `--list`, the dispatcher and the approval
@@ -311,13 +313,23 @@ prints its marker **and** one plain sentence, and writes a `run_halt` ledger lin
 ## Where the artifact lives
 
 **One location:** `knowledge-base/project/specs/feat-<name>/bootstrap.sh`, with the run ledger
-beside it as `knowledge-base/project/specs/feat-<name>/bootstrap-runs.jsonl`.
+beside it as `knowledge-base/project/specs/feat-<name>/bootstrap-runs.jsonl`. The live ledger
+keeps that fixed name and is gitignored (re-runs would conflict on it); to keep a finished run's
+record, copy it to `bootstrap-runs-<issue>.jsonl` beside the archived script, a name the ignore
+rule does not match, and point to it from the spec's `tasks.md`.
 
 That is the rule's own `<feature>/` prefix (`hr-multi-step-post-merge-bootstrap-script` names
 `<feature>/bootstrap.sh`, and the feature's tracked artifact home is its spec directory); it is
 tracked, so the script survives `ship` reaping the worktree and is visible to the credential linter
 and to review; and a gitignored path (`provisioning/`, `.soleur/` — both are) would leave the
 follow-through issue's `auto_command:` pointing at a file that stops existing at ship Phase 7.
+
+The script does not stay at that depth: `archive-kb` later moves the spec directory one level deeper
+(`specs/archive/<ts>-feat-<name>/`). A repo root computed as a fixed `../` count from `SCRIPT_DIR`
+then points at the wrong directory without any error at generation time. Resolve it with
+`git -C "$SCRIPT_DIR" rev-parse --show-toplevel`, and refuse a root that does not track the file a
+stage is about to run under credentials. **Why:** #10058 — `verify` changed into `knowledge-base/`
+after archival and could not find its probe script.
 
 A tracked home has one consequence the founder must not discover from a pushed token: the `.env`
 beside the script — and the `.env.tmp.XXXXXX` sibling the upsert creates — must be covered by the
@@ -341,7 +353,8 @@ machine, and routing it anywhere else is a data-controller event, not an observa
   stage's precondition makes the next run skip what is already done.
 - **Delete:** when the follow-through issue that points at the script closes, remove the script,
   the ledger (`bootstrap-runs.jsonl`) and the `.env` together — the `.env` holds live credentials
-  and has no reason to outlive the procedure that needed them. The
+  and has no reason to outlive the procedure that needed them. A kept `bootstrap-runs-<issue>.jsonl`
+  copy is a record, not live state, and stays. The
   `SOLEUR-GENERATED-OPERATOR-SCRIPT v2` header line is what the approval hook and the guard use to
   find every generated script by one grep.
 

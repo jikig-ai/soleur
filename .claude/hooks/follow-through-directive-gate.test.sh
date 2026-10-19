@@ -147,6 +147,19 @@ run "T3: directive missing — deny" "$INPUT"
 assert_deny "requires a"
 rm -rf "$TMP"
 
+# === T3b: rtk-prefixed create reaches the gate identically (#10248) ===
+TMP=$(mktemp -d -p "$SUITE_TMP")
+make_work_dir "$TMP" > /dev/null
+cat > "$TMP/body.md" <<'EOF'
+## Follow-Through
+
+Some text. No directive.
+EOF
+INPUT=$(make_input "rtk gh issue create --title 'test' --label follow-through --body-file $TMP/body.md" "$TMP")
+run "T3b: rtk-prefixed create, directive missing — deny (#10248)" "$INPUT"
+assert_deny "requires a"
+rm -rf "$TMP"
+
 # === T4: deny when directive open marker present but no closing --> ===
 TMP=$(mktemp -d -p "$SUITE_TMP")
 make_work_dir "$TMP" > /dev/null

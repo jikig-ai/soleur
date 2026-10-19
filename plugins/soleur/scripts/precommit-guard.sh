@@ -11,9 +11,12 @@
 # it reads hook-stdin transcript data a standalone script cannot see; it stays
 # prose + the plugin Stop hook.
 #
-# Self-contained by design: no jq, no lib vendoring (.claude/hooks/lib paths
+# Self-contained by design: no jq, no .claude/hooks/lib vendoring (those paths
 # resolve relative to the repo, which is wrong when this script runs from the
 # plugin install cache), no emit_incident — callers log their own incidents.
+# ONE sibling dependency: scripts/lib/wrapper-boundary.sh ships beside this
+# script in the plugin cache, so $(dirname)/lib/… resolves in both contexts
+# (#10248 — the canonical wrapper-prefix grammar the COMMIT_RE below consumes).
 #
 # Usage:
 #   precommit-guard.sh "COMMAND"        check a shell command string
@@ -46,7 +49,25 @@ done
 # `-C`/`cd` paths containing spaces, `git -c <cfg> commit` side effects beyond
 # detection, and commits created without `git commit` (merge/pull/cherry-pick/
 # rebase/continue) are out of this guard's declared scope — commit-on-main ONLY.
-COMMIT_RE='^[[:space:]]*([A-Za-z_][A-Za-z_0-9]*=[^[:space:]]+[[:space:]]+)*((sudo|command|nice|env|xargs)[[:space:]]+)?([A-Za-z_][A-Za-z_0-9]*=[^[:space:]]+[[:space:]]+)*git([[:space:]]+(-C[[:space:]]+[^[:space:]]+|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--git-dir[[:space:]]+[^[:space:]]+|-[A-Za-z]))*[[:space:]]+commit([[:space:]]|$)'
+# Opaque string payloads (`rtk run -c '…'`, `rtk summary --shell '…'`) join that
+# same declared class — the boundary fragment deliberately excludes the
+# -c/--command/--shell atoms so they cannot match here.
+_PC_GUARD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+unset SOLEUR_ENV_ASN_RE SOLEUR_LAUNCHER_RE SOLEUR_RTK_RE SOLEUR_BOUNDARY_PFX SOLEUR_BOUNDARY_PFX_LOADED
+if [[ -f "$_PC_GUARD_DIR/lib/wrapper-boundary.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "$_PC_GUARD_DIR/lib/wrapper-boundary.sh" 2>/dev/null || true
+fi
+if [[ "${SOLEUR_BOUNDARY_PFX_LOADED:-0}" != 1 ]]; then
+  unset SOLEUR_ENV_ASN_RE SOLEUR_LAUNCHER_RE SOLEUR_RTK_RE SOLEUR_BOUNDARY_PFX
+  echo "precommit-guard.sh: wrapper-boundary.sh unavailable at $_PC_GUARD_DIR/lib — commit gate runs pre-#10248 matching" >&2
+fi
+unset _PC_GUARD_DIR
+# #10248: the shared fragment replaces the inline env-asn/launcher alternation —
+# one canonical atom set for every boundary-anchored gate. The :- fallback is
+# the PRE-FIX atom set (env + launcher) — a superset of this file's prior
+# env*/launcher?/env* sandwich, which is the safe direction for a deny gate.
+COMMIT_RE='^[[:space:]]*('"${SOLEUR_BOUNDARY_PFX:-([A-Za-z_][A-Za-z_0-9]*=[^[:space:]]+|sudo|command|nice|env|xargs)}"'[[:space:]]+)*git([[:space:]]+(-C[[:space:]]+[^[:space:]]+|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--git-dir[[:space:]]+[^[:space:]]+|-[A-Za-z]))*[[:space:]]+commit([[:space:]]|$)'
 
 last_cd=""
 while IFS= read -r seg; do

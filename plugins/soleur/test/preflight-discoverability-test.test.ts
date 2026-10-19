@@ -2951,7 +2951,34 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // TRUTH: the soak probe reads stored Better Stack rows through the ClickHouse HTTP connection credential (Doppler
   // prd_terraform); the warehouse has no unauthenticated read path. NO SUBSTITUTE: the decode and isolation are pinned
   // offline by the probe's own fixture suite, but that verifies code, not the stored stream. Genuine.
-  const BASELINE_DECLARED_PROBES = 66;
+  // #9545 (2026-10-15): +1 (67 -> 68, after #7530's 66 -> 67 below) for `2026-10-15-feat-workspace-egress-audit-log-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: `scripts/egress-audit-retention-check.sh` reads the rollup table through the Supabase PostgREST path with the
+  // prd service-role key (Doppler soleur/prd): RLS is on with no member policy and every privilege is revoked from
+  // anon/authenticated, so the table has no unauthenticated read path. NO SUBSTITUTE: the migration's verify SQL and the
+  // live-database harness prove the schema, grants and sweep, but not that rows are fresh or that old rows are gone in
+  // the stored data. Genuine.
+  // #7530 (2026-10-15): +1 (66 -> 67) for `2026-10-14-fix-registry-phase2-batch-htpasswd-stdin-clientip-alert-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash scripts/followthroughs/registry-clientip-alert-7530.sh`) reads Better Stack through the
+  // ClickHouse HTTP connection credential (BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}, Doppler soleur/prd_terraform) and
+  // grades the stored registry log stream and the live alert predicate. NO SUBSTITUTE: the warehouse has no
+  // unauthenticated read path and the registry host is no-SSH; the offline suites verify the code and the SQL text,
+  // not the stored stream or the engine. Genuine.
+  // #7521 (2026-10-16): +1 (68 -> 69) for `2026-10-16-feat-standing-registry-fill-rate-alarm-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`doppler run -p soleur -c prd_terraform -- bash scripts/followthroughs/zot-fill-rate-7341.sh`)
+  // reads Better Stack through the ClickHouse HTTP connection credential (BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD},
+  // Doppler soleur/prd_terraform) and grades the stored SOLEUR_ZOT_DISK fill series. NO SUBSTITUTE: the warehouse has no
+  // unauthenticated read path and the registry host is no-SSH; the offline suites verify the code and the verdict
+  // classification, not the stored stream. Genuine.
+  // #10445 (2026-10-18): +1 (69 -> 70) for `2026-10-16-fix-hosted-agent-bash-apply-seccomp-userns-eperm-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash scripts/followthroughs/sandbox-readback-10445.sh`) reads the host's /hooks/deploy-status
+  // through the deploy-webhook HMAC (Doppler soleur/prd_terraform) plus the Cloudflare Access service token, and `gh api`
+  // compare with GH_TOKEN. NO SUBSTITUTE: the deploy-status hook has no unauthenticated read path and the host is no-SSH;
+  // the offline suite drives the script against stubs and proves the verdict logic, not the live deployed state. Genuine.
+  const BASELINE_DECLARED_PROBES = 70;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

@@ -92,7 +92,8 @@ esac
 # NON-EMPTY repo elements in order; a missing position reads 000; pin HEADs are NOT seamed, the suite drives
 # them through a mock registry and a stub curl) so the classification branches are
 # unit-testable without a live registry; SOLEUR_ZOT_PROBE_PING_LOG re-routes the heartbeat ping to
-# a file so a test can assert ping/no-ping. Neither is ever set in production. The auth/-f behavioral
+# a file so a test can assert ping/no-ping; SOLEUR_PROBE_REFUSAL_MARKER relocates the heartbeat-URL refusal's own
+# stamp (default /run/web-zot-consumer-probe.refusal, like this file's other marker seams). None is ever set in production. The auth/-f behavioral
 # properties are covered by a separate mock-HTTP-server test (web-zot-consumer-probe.test.sh).
 
 ENDPOINT="${ZOT_ENDPOINT:-10.0.1.30:5000}"
@@ -106,6 +107,23 @@ URL="${WEB_ZOT_CONSUMER_URL:-}"
 # fault classifications below always emit. Set SOLEUR_PROBE_VERBOSE=1 in /etc/default for on-host debug.
 VERBOSE="${SOLEUR_PROBE_VERBOSE:-}"
 
+# The heartbeat URL's PATH is the credential, so it must not ride curl's argument list (readable by every local
+# user in /proc/<pid>/cmdline; ADR-280, #9757): it reaches curl on the stdin config (`--config -`), `--disable`
+# (first, so no ~/.curlrc is read as root) and `--noproxy '*'` confine the transport (lint Rule D); `-g` stops a URL
+# with [ ] or { } from printing itself in curl's glob-parse error. This host has no checkout, so this is the inline
+# form of the library. The value is judged BEFORE any request, with no trimming: a scheme other than https://, an
+# empty rest, or any byte outside [A-Za-z0-9._~:/?&=%+-] (a quote, backslash or newline would add directives to the
+# config grammar) is refused, with zero requests, one value-free marker on stderr per hour (see _refused) and the
+# same fail-soft exit as every other arm.
+_hb_url_ok() {
+  local LC_ALL=C
+  case "$1" in https://*) ;; *) return 1 ;; esac
+  case "${1#https://}" in ''|*[!A-Za-z0-9._~:/?\&=%+-]*) return 1 ;; esac
+}
+# One call = one attempt = one fresh process substitution (a substitution is consumed once, so a second attempt
+# sharing the first one's would read EOF and send no URL).
+_hb_curl() { curl --disable --noproxy '*' -gfsS -m 10 -o /dev/null --config - 2>/dev/null < <(printf 'url = "%s"\n' "$URL"); }
+
 _ping() {
   # Route to the test log if seamed; else fire the real heartbeat ping (two attempts).
   if [ -n "${SOLEUR_ZOT_PROBE_PING_LOG:-}" ]; then
@@ -113,7 +131,29 @@ _ping() {
     return 0
   fi
   [ -n "$URL" ] || { echo "[zot-probe] WARN: WEB_ZOT_CONSUMER_URL unset — servable but cannot ping." >&2; return 0; }
-  curl -fsS -m 10 -o /dev/null "$URL" 2>/dev/null || curl -fsS -m 10 -o /dev/null "$URL" 2>/dev/null || echo "[zot-probe] WARN: heartbeat ping FAILED (servable=200, url_present=yes)" >&2
+  if ! _hb_url_ok "$URL"; then
+    _refused
+    return 0
+  fi
+  _hb_curl || _hb_curl || echo "[zot-probe] WARN: heartbeat ping FAILED (servable=200, url_present=yes)" >&2
+}
+
+# A refused heartbeat URL (#9757): fail-soft, never an argv fallback (no ping, the caller's exit status is
+# unchanged), and loud but bounded. Ruled (ADR-280 PR C follow-up): the refusal has its OWN stamp (never the
+# canary's or the per-repo marker's, which a healthy tick refreshes), a 3600 s window, and fails OPEN when the
+# stamp cannot be written (emit on every tick: loud, never silent). The marker and the WARN both sit inside the
+# limiter. The reason is control_char when the value holds a control character, else token_shape; the value is
+# never echoed.
+_refused() {
+  local LC_ALL=C
+  local m="${SOLEUR_PROBE_REFUSAL_MARKER:-/run/web-zot-consumer-probe.refusal}" now reason
+  _window_open "$m" 3600 || return 0
+  now=$(date +%s 2>/dev/null || echo 0)
+  reason=token_shape
+  case "$URL" in *[[:cntrl:]]*) reason=control_char ;; esac
+  echo "SOLEUR_CREDENTIAL_REFUSED script=web-zot-consumer-probe reason=$reason var=WEB_ZOT_CONSUMER_URL" >&2
+  echo "[zot-probe] WARN: heartbeat URL refused (servable, no ping sent)" >&2
+  _stamp "$m" "$now"
 }
 
 _canary() {
@@ -138,22 +178,23 @@ _canary() {
   _stamp "$m" "$now"
 }
 
-# The ONE write of a rate-limit marker (canary and per-repo markers share it). Best-effort: a /run that
+# The ONE write of a rate-limit marker (canary, per-repo and refusal markers share it). Best-effort: a /run that
 # cannot be written must never fail the probe, and the unwritten marker only makes the next run emit again.
 _stamp() {  # <marker-file> <epoch>
   printf '%s\n' "$2" > "$1" 2>/dev/null || true
 }
 
-# One rate-limit window shared by the canary and the per-repo markers (#7258): true (return 0) when a
+# One rate-limit helper shared by the canary, the per-repo markers (#7258) and the heartbeat-URL refusal: true (return 0) when a
 # new emit is due, i.e. the marker file is missing, empty, non-numeric, wider than 10 digits (not a
-# plausible epoch, and a guard against integer overflow), DATED IN THE FUTURE, or older than 1800 s, or
+# plausible epoch, and a guard against integer overflow), DATED IN THE FUTURE, or older than the window
+# (1800 s unless the caller passes a second argument; the heartbeat refusal passes 3600), or
 # the clock is unreadable. Every doubtful state fails toward EMITTING. The future-dated case is a
 # deliberate change from the canary's old inline test, where `now - last` went negative and the canary
 # stayed silent until the clock caught up (a latent silent-canary defect; the sibling
 # inngest-consumer-probe.sh `_fault` still has that shape and is a separate script on a separate host,
 # deliberately not touched here). The marker lives in /run (tmpfs), so a reboot resets it, which is
 # intended.
-_window_open() {  # <marker-file>
+_window_open() {  # <marker-file> [window seconds, default 1800]
   local m="$1" now last
   now=$(date +%s 2>/dev/null || echo 0)
   [ "$now" -gt 0 ] 2>/dev/null || return 0
@@ -163,7 +204,7 @@ _window_open() {  # <marker-file>
   [ "${#last}" -le 10 ] || return 0
   last=$((10#$last))
   [ "$last" -gt "$now" ] && return 0
-  [ $((now - last)) -ge 1800 ]
+  [ $((now - last)) -ge "${2:-1800}" ]
 }
 
 # Per-repo marker: one row per repo per window, whatever the verdict, so "both repos healthy" is a

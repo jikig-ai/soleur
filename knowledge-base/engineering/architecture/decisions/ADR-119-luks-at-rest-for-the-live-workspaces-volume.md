@@ -1573,3 +1573,9 @@ volume and its passphrase pair) to the Inngest sole-copy volume `hcloud_volume.i
 difference: its attachment stays unpinned because the sanctioned `inngest-host-replace` replaces it. This ADR's D1 and
 `apps/web-platform/infra/workspaces-luks.tf` remain the source of the web-1 attachment pin. Nothing about web-1 or this
 decision changes. It takes effect on the merge of PR #9925 (adopting until that merge's apply and read-back, per ADR-282).
+
+> **Superseded 2026-10-15 (#10018), as to "adopting":** ADR-282 is `accepted` (its post-apply read-back returned `protected` on 2026-10-15, a point-in-time check of the flag only; evidence in ADR-282's addendum of that date). The paragraph above is kept as the dated record.
+
+## Addendum — 2026-10-14 (#10138, pointer to the git-data wipe)
+
+Appended; nothing above is edited. The 2026-09-28 addendum ("The delete→PR-B window is closed by a pause, not a new guard") describes the retired workspaces wipe job, which refused unless both push-apply workflows read `disabled_manually`; that job and its pause are retired (2026-10-08 addendum). The git-data wipe (`git-data-cutover.yml` `wipe`, ADR-239 DL-2) does NOT pause or check either workflow. Its control over the same kind of window (after the delete, before the record PR removes `hcloud_volume.git_data` from HCL and state) is the pair of plan-time gates `git_data_host_replace_gate` (job `git_data_host_replace`) and `git_data_host_birth_gate` (job `git_data_host_create`) in `apply-web-platform-infra.yml`, whose refusal of the post-delete and detached-not-deleted plans `tests/scripts/test-git-data-wipe-wedge.sh` derives and pins. The cost is that those two jobs refuse every apply that would plan a replace of `hcloud_server.git_data` or a create of `hcloud_volume.git_data` until the record PR merges, security fixes to the host's rendered `user_data` included; targeted apply jobs keep running. Nothing about the workspaces volume or this ADR's decision changes.

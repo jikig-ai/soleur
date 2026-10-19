@@ -38,6 +38,12 @@
 //                          stamps a queryable marker so a crashed run is reaped.
 //   I-ephemerality         session + raw captures are destroyed at end of run;
 //                          only a redacted RESULT summary is emitted.
+//   I-cannot-spend         every api_keys row is the seed's decrypt-poisoned sentinel
+//                          and no active byok_delegations row is visible, checked
+//                          inside verifyPrincipal (also under --dry-run). A breach
+//                          is BLOCK=1 in the release workflow; "could not check"
+//                          still stops the launch but is not a breach (ADR-064
+//                          amendment 2026-10-18).
 
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import {
@@ -334,7 +340,115 @@ export async function verifyPrincipal(
       `allowlist gate: session email "${email ?? ""}" != "${EXPECTED_EMAIL}" — aborting before launch`,
     );
   }
+  await assertCannotSpend(supabase);
   return { __brand: "verified-live-verify-principal", uid: id };
+}
+
+// ---------------------------------------------------------------------------
+// I-cannot-spend (ADR-064): the principal must hold no decryptable credential
+// ---------------------------------------------------------------------------
+
+/**
+ * The decrypt-poisoned dummy `seed-live-verify-user.sh` inserts. A real
+ * encrypted key can never equal this plaintext literal, so weakening the stored
+ * value cannot make a funded key pass; only removing the compare can.
+ * `gate.test.ts` pins THIS constant (imported, not a copy) against the seed script.
+ */
+export const SENTINEL_KEY = {
+  encrypted_key: "live-verify-dummy-not-real",
+  iv: "bGl2ZS12ZXJpZnktaXY=",
+  auth_tag: "bGl2ZS12ZXJpZnktdGFn",
+} as const;
+
+/**
+ * The two reason prefixes `assertCannotSpend` throws, shared with the release
+ * workflow's emit-step classifier (`web-platform-release.yml`, `case` ladder):
+ *
+ * - VIOLATED: the principal holds spend authority (a non-sentinel key row or a
+ *   live delegation). A safety breach: the classifier maps it to BLOCK=1.
+ * - UNVERIFIED: the check could not be performed (read error, non-array body,
+ *   zero rows visible). The throw still stops the browser launch, which is what
+ *   delivers the safety property; the classifier keeps BLOCK=0 and annotates
+ *   `::error` so a permanently unverifiable gate is not invisible (CTO ruling,
+ *   #10449: "could not check" must never be reported as "bad", AP-021).
+ *
+ * `gate.test.ts` drives the REAL thrown message through `emitLine` into the
+ * executed classifier, so renaming either prefix reds the suite.
+ */
+export const CANNOT_SPEND_VIOLATED = "cannot-spend-violated";
+export const CANNOT_SPEND_UNVERIFIED = "cannot-spend-unverified";
+
+/** Columns read from `api_keys`; pinned by `gate.test.ts` (the client is untyped). */
+const KEY_COLUMNS = "encrypted_key, iv, auth_tag";
+
+/**
+ * Refuse to proceed unless the principal holds no DECRYPTABLE credential:
+ * EVERY `api_keys` row (all providers; the set drifts, the all-rows read does
+ * not) equals the sentinel, and no un-revoked `byok_delegations` row is
+ * visible.
+ *
+ * The delegation filter is `revoked_at IS NULL` ONLY, deliberately a SUPERSET
+ * of what the runtime resolver (`resolve_byok_key_owner`, migration 083/084)
+ * treats as active: that RPC also requires an unexpired delegation and a
+ * current-version acceptance, so an expired or unaccepted row still counts as a
+ * violation here. Over-counting is the safe direction; revoked rows are
+ * excluded because the table is append-only and a revoked row could otherwise
+ * never be cleared.
+ *
+ * Reads go through the principal's OWN RLS session, never the service role, so
+ * "no delegation" means "none the principal can see". A delegation for a
+ * principal that is no longer a workspace member is invisible but unreachable
+ * anyway: the resolver consults the caller's own key first, and this gate
+ * forces that key to exist and to be the poisoned sentinel.
+ *
+ * Classification (CTO ruling, #10449): a VIOLATION (non-sentinel key row, or an
+ * un-revoked delegation) outranks "could not check". Both reads happen unless a
+ * violation is already certain, so an unreadable or empty `api_keys` never
+ * masks a visible delegation. Messages carry a failure CLASS only, never row
+ * contents. Runs under `--dry-run` too: `main()` calls `verifyPrincipal`
+ * before the dry-run branch.
+ *
+ * This attests stored credential state at launch. It does not attest egress
+ * (Squid `%un` attribution / the real CONNECT path), nor that the app keeps
+ * refusing to decrypt: the non-dry-run path sends one message, and only the
+ * poisoned row stops a model call (ADR-064 I-egress-not-attested-by-gate).
+ */
+async function assertCannotSpend(
+  supabase: ReturnType<typeof createServerClient>,
+): Promise<void> {
+  let unverified: string | null = null;
+
+  const keys = await supabase.from("api_keys").select(KEY_COLUMNS);
+  if (keys.error || !Array.isArray(keys.data)) {
+    unverified = "api_keys-unreadable";
+  } else if (keys.data.length === 0) {
+    unverified = "api_keys-empty";
+  } else {
+    const keyRows: Array<Record<string, unknown>> = keys.data;
+    for (const row of keyRows) {
+      const sentinel =
+        row.encrypted_key === SENTINEL_KEY.encrypted_key &&
+        row.iv === SENTINEL_KEY.iv &&
+        row.auth_tag === SENTINEL_KEY.auth_tag;
+      if (!sentinel) {
+        throw new Error(`${CANNOT_SPEND_VIOLATED}: api_keys-non-sentinel-row`);
+      }
+    }
+  }
+
+  const delegations = await supabase
+    .from("byok_delegations")
+    .select("id")
+    .is("revoked_at", null);
+  if (delegations.error || !Array.isArray(delegations.data)) {
+    unverified ??= "byok_delegations-unreadable";
+  } else if (delegations.data.length > 0) {
+    throw new Error(`${CANNOT_SPEND_VIOLATED}: byok_delegations-present`);
+  }
+
+  if (unverified !== null) {
+    throw new Error(`${CANNOT_SPEND_UNVERIFIED}: ${unverified}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1053,7 +1167,8 @@ export async function assertRailRowVisible(
  * Map a rail verdict onto the Result union. Pure — the wire prefixes are
  * authored here and here alone, so the workflow's `case "${RESULT_LINE}"`
  * classifier (`RESULT: PASS*` -> info, `RESULT: FAIL*` -> BLOCK=1,
- * `RESULT: CANT-RUN*` -> warning) needs zero YAML changes.
+ * `RESULT: CANT-RUN*` -> warning) needs zero YAML changes for the verdicts THIS
+ * function produces; the cannot-spend prefixes are classified by their own arm.
  */
 export function railVerdictToResult(verdict: RailVerdict, convId: string): Result {
   switch (verdict.kind) {
@@ -1567,6 +1682,17 @@ export function emitLine(result: Result): string {
     : `RESULT: ${result.kind} — ${redact(result.detail)}`;
 }
 
+/**
+ * The Result a pre-launch failure becomes. Exported so the tests drive the SAME
+ * conversion `main()`'s catch performs (a hand-copied `redact(err.message)` in
+ * the suite would leave this hop unpinned): the workflow classifier matches the
+ * resulting line by prefix, so wrapping or re-prefixing the message here would
+ * silently turn a BLOCK=1 breach into a BLOCK=0 CANT-RUN.
+ */
+export function failureResult(err: unknown): Result {
+  return { kind: "CANT-RUN", reason: redact((err as Error).message) };
+}
+
 function emit(result: Result): void {
   // Delegates to emitLine: the wire format lives in exactly ONE place —
   // the exported, test-pinned builder. An inline copy here would let the
@@ -1590,9 +1716,10 @@ async function main(): Promise<void> {
   }
 
   const jar = makeJar();
+  let supabase: Awaited<ReturnType<typeof mintSession>> | undefined;
   try {
     bindProject(cfg); // hard-fail before sign-in
-    const supabase = await mintSession(cfg, jar);
+    supabase = await mintSession(cfg, jar);
     const verified = await verifyPrincipal(supabase, cfg); // before launch
 
     if (!cfg.dryRun) {
@@ -1607,10 +1734,24 @@ async function main(): Promise<void> {
     emit(result);
     if (result.kind === "FAIL") process.exitCode = 1;
   } catch (err) {
-    // Any pre-launch gate failure (project-bind, mint, allowlist) lands here as
-    // CANT-RUN — the harness never reached a verifiable state. redact the
-    // message defensively in case a captured value leaked into it.
-    emit({ kind: "CANT-RUN", reason: redact((err as Error).message) });
+    // Any pre-launch gate failure (project-bind, mint, allowlist, cannot-spend)
+    // lands here as CANT-RUN — the harness never reached a verifiable state.
+    // redact the message defensively in case a captured value leaked into it.
+    // The workflow classifier BLOCKs only on the `cannot-spend-violated` prefix
+    // (CANNOT_SPEND_VIOLATED); every other class here is non-blocking.
+    emit(failureResult(err));
+    // I-ephemerality: the session is destroyed on this path too. Local scope so a
+    // sibling run's session is not invalidated. `bounded` bounds the AWAIT only: a
+    // fetch that never answers can still hold its socket (and so the process) open
+    // after the verdict is emitted, as on the success path below; the job timeout is
+    // the backstop for that pre-existing hazard.
+    await bounded(
+      async () => {
+        await supabase?.auth.signOut({ scope: "local" });
+      },
+      undefined,
+      5_000,
+    );
     process.exitCode = 1;
   } finally {
     jar.cookies.clear();

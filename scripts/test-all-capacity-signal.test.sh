@@ -981,9 +981,14 @@ else
   fail "AC12: the heartbeat does not name the lock; got: $ACQ_HB_OUT"
 fi
 
+# Holder identity now comes from the marker file, not a /proc guess: this
+# stub fixture never reaches the marker machinery (acquire_lock is stubbed),
+# so no beat may carry holder_pid= either. A beat naming a holder here could
+# only be a fabricated one. markerless-holder=none is pinned by
+# test-contention.test.sh H5.
 cases=$((cases + 1))
-if [[ "$(grep -cE 'LOCK_WAIT_HEARTBEAT.*(holder pid=|worktree=)' <<<"$ACQ_HB_OUT" || true)" -eq 0 ]]; then
-  pass "AC12: the heartbeat claims NO holder identity (it cannot know it)"
+if [[ "$(grep -cE 'LOCK_WAIT_HEARTBEAT.*(holder[ _]pid=|worktree=)' <<<"$ACQ_HB_OUT" || true)" -eq 0 ]]; then
+  pass "AC12: no holder identity on a beat that could only fabricate it"
 else
   fail "AC12: the heartbeat asserts a holder it cannot know; got: $ACQ_HB_OUT"
 fi

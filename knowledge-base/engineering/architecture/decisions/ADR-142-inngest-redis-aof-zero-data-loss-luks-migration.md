@@ -396,6 +396,9 @@ plans no change. The pin also removes the only graph edge between the server and
 makes a targeted destroy of the volume safe. The dead plaintext resolver arm stays in `user_data`
 until the next replace that is already scheduled for another reason (#9786).
 
+> **Resolved by #9786, adopting:** the dead arm and the input are removed at the next replace — see the
+> 2026-10-12 addendum. D1's byte-identical `user_data` principle is knowingly given up at that window.
+
 **D2. Erasure runs on a short-lived throwaway server, not on the Inngest host.**
 The detached volume is attached to a Terraform-managed, count-gated, deny-all-inbound Hetzner server
 that zeroes it with `blkdiscard -z`, reads it back with O_DIRECT and posts a
@@ -693,6 +696,8 @@ that replaces them. Ref #9879.
 apply has landed the one in-place update on `hcloud_volume.inngest_redis_luks`, and the post-apply read-back returns
 `protection.delete=true` (ADR-282, Status). Until then each mark below describes the target state, not a fact.
 
+> **Superseded 2026-10-15 (#10018), as to "adopting":** ADR-282 is `accepted` (its post-apply read-back returned `protected` on 2026-10-15, a point-in-time check of the flag only; evidence in ADR-282's addendum of that date). The paragraph above is kept as the dated record.
+
 > **Superseded 2026-10-10 (#9879), in part:** the "No key escrow (git-data-lean shape)" rationale in the Decision section
 > ("The AOF is transient and self-healing ... its total-loss recovery is already built and proven ... the sole-copy reminder
 > subset can be enumerated/re-armed"). The 2026-10-08 addendum had already sharpened it; ADR-282 now carries the key-loss
@@ -722,3 +727,36 @@ Appended; nothing above is edited. Records the failure measured on production re
 - The reopen contract is extended to "**opens, then completes the mount for the arm it verified — never formats, never mkfs**" (CTO ruling D8): `ensure_mount` writes the fstab line (`ext4 defaults,nofail 0 2`) and mounts it on every verified arm, including the already-open noop path — the incident's exact post-state. `inngest-luks-open.service` gains `After=systemd-remount-fs.service` so the fstab write cannot race a read-only root (CTO ruling D2).
 
 **What this addendum does NOT change.** The decision, its encryption mechanism, the additive-cutover design, or any earlier amendment or addendum. The pre-cutover/staging arms are unchanged in meaning; they get the same bound only because the two readers share one `wait_dev` body and the bound must not drift (D5).
+
+## Addendum — 2026-10-12 (#9786, strip the dead plaintext resolver)
+
+Appended; nothing above is edited beyond the one pointer under D1. Ref #9786, Ref #8285.
+
+**Status of this addendum: adopting.** The change is prepared and parked as a draft PR; it takes effect
+only when `hcloud_server.inngest` is next replaced (`apply_target=inngest-host-replace`), which is not
+scheduled. Until then the live host still runs the template D1 left in place.
+
+**Decision.** The cloud-init template stops reading `inngest_volume_id` and the pin local is deleted. The
+first-boot stage and the boot-reopen script resolve ONE volume, `inngest_luks_volume_id`. ARM 1 (ext4
+mount), the staging block and the `expect_luks` branches are removed. The pointer arm is unchanged. With no
+pointer the one candidate is resolved by signature (`crypto_LUKS` opens, anything else except blank
+refuses): there is no choice to make, so the 2026-09-18 amendment's "a pointer, never a signature" (its section 2) still holds wherever a
+choice exists. The telemetry `mode` value for that world is `unpointed` (was `plaintext_canonical`). The
+no-pointer arm may `luksFormat` ONLY when the rendered Doppler config starts `rehearsal_` (an allowlist: `prd`
+and any other value refuse as `unpointed_raw_refused`, with that as the failure row's stage), so a lost pointer on a
+damaged-header volume cannot reformat the sole copy; a brand-new blank `prd` volume has no automated bring-up path
+and needs a written disaster-recovery procedure when it is ever needed.
+
+**Consequences recorded at review.** (1) A lost pointer over an INTACT LUKS volume now boots: the unpointed arm
+opens and mounts it rather than refusing, and the only marker is `pointer=absent` on the `stage=resolve` row (no
+alert keys on it). (2) The image-baked `inngest-luks-cutover.sh` reads the plaintext id from the volumes file,
+which the stage no longer writes, so it refuses `volume-ids-unreadable` on every FLAGGED run (`armed`, `copying`,
+`copied`, `swapped`, `rollback`) and a refusal at that point writes the terminal flag `aborted` (nothing had been
+stopped, so nothing is restarted unless a crash left a freeze record); at flag `done` it is a no-op, so the replace
+window must confirm `flag=done` first. (3) `inngest_expect_luks` was retired in the same change (the Terraform
+variable, the template key and the `expect_luks=` field on the LUKS stage rows): nothing in the repo read the field, and
+leaving an inert rendered key would have made its later removal a second `user_data` change, i.e. a second replace of
+the sole scheduler.
+
+**What this addendum does NOT change.** The pointer arm, the encryption mechanism, or the image-baked
+`inngest-luks-cutover.sh` (its `rollback)` arm needs an image release and pin bump).

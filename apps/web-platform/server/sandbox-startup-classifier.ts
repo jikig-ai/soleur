@@ -167,7 +167,7 @@ export function classifySandboxStartupError(
 
 /** A sandbox denial found in a Bash `tool_result`'s output (#10032 follow-up). */
 export interface BashSandboxFailure {
-  errorCode: "proc_mount_eperm" | "bwrap_eperm";
+  errorCode: "proc_mount_eperm" | "bwrap_eperm" | "helper_userns_eperm";
   /** ONLY the matched line, scrubbed and capped — never the surrounding tool output. */
   matchedLine: string;
   sdkVersion: string | null;
@@ -181,6 +181,12 @@ const BASH_MATCHED_LINE_CAP = 300;
  */
 const BASH_LINE_SCAN_CAP = 2000;
 const BASH_BWRAP_TOKEN = /\b(?:bwrap|bubblewrap)\b/i;
+// The SDK's command-side `apply-seccomp` helper (#10445) prints its own `apply-seccomp: <step>: <errno>` line with no
+// bwrap token. Matched as the WHOLE line, and only for the `unshare(CLONE_NEWUSER)` step this code is named for:
+// (a) another helper step failing with EPERM is a different fault that must not page with this name (residual,
+// tracked in #10455), and (b) a line that must match end to end carries no tenant-chosen tail, so the emitted
+// `matchedLine` is a fixed string a forged line cannot extend.
+const BASH_APPLY_SECCOMP_LINE = /^[ \t]*apply-seccomp: unshare\(CLONE_NEWUSER\): (?:Operation not permitted|EPERM)[ \t]*$/;
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 // EVERY absolute path token (a solo workspace's id IS the user id, and /home, /var/lib, /tmp paths are tenant-adjacent
 // too) except bwrap's own `/newroot/{proc,dev,sys,tmp}` targets, which carry the diagnostic. Linear: it only starts at
@@ -203,7 +209,8 @@ const CONTROL_RE = /[\p{Cc}\u2028\u2029]/gu;
  * contents next to the bwrap line. The result carries ONLY the single matched line — scrubbed of paths, uuids,
  * opaque tokens and control characters, capped at 300 chars — never the surrounding output and never the command.
  *
- * A line matches only when ONE line carries both a sandbox namespace token and a denial (`Operation not
+ * A line matches only when ONE line carries both a sandbox namespace token (or starts with the SDK helper's
+ * `apply-seccomp:` prefix, #10445) and a denial (`Operation not
  * permitted` / `EPERM`): a command that merely prints "bwrap", or an unrelated EPERM, never matches.
  */
 export function classifyBashSandboxFailure(
@@ -213,9 +220,10 @@ export function classifyBashSandboxFailure(
   if (output.length === 0) return null;
   for (const full of output.split(/\r?\n/)) {
     const raw = full.slice(0, BASH_LINE_SCAN_CAP);
-    // `bwrap`/`bubblewrap` only: a bare `unshare` or `seccomp` line is what an agent's OWN `unshare -U` under the
-    // sandbox prints (the canary expects that EPERM), not a sandbox failure.
-    if (!BASH_BWRAP_TOKEN.test(raw)) continue;
+    // `bwrap`/`bubblewrap` or the line-anchored `apply-seccomp:` helper only: a bare `unshare` or `seccomp` line is
+    // what an agent's OWN `unshare -U` under the sandbox prints (the canary expects that EPERM), not a sandbox failure.
+    const isHelperLine = BASH_APPLY_SECCOMP_LINE.test(raw);
+    if (!isHelperLine && !BASH_BWRAP_TOKEN.test(raw)) continue;
     if (!OPERATION_NOT_PERMITTED.test(raw)) continue;
     const matchedLine = raw
       .replace(CONTROL_RE, " ")
@@ -225,7 +233,11 @@ export function classifyBashSandboxFailure(
       .trim()
       .slice(0, BASH_MATCHED_LINE_CAP);
     return {
-      errorCode: /can't mount proc/i.test(raw) ? "proc_mount_eperm" : "bwrap_eperm",
+      errorCode: isHelperLine
+        ? "helper_userns_eperm"
+        : /can't mount proc/i.test(raw)
+          ? "proc_mount_eperm"
+          : "bwrap_eperm",
       matchedLine,
       sdkVersion,
     };

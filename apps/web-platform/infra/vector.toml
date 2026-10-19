@@ -129,6 +129,7 @@ exclude_matches.SYSLOG_IDENTIFIER = [
   "inngest-luks-cutover",
   "inngest-boot-phone-home",
   "inngest-bs-token-restage",
+  "inngest-config-refresh",
   "inngest-heartbeat",
   "luks-monitor",
   "workspaces-luks-reopen",
@@ -196,6 +197,7 @@ exclude_matches.SYSLOG_IDENTIFIER = [
   "inngest-luks-cutover",
   "inngest-boot-phone-home",
   "inngest-bs-token-restage",
+  "inngest-config-refresh",
   "inngest-heartbeat",
   "luks-monitor",
   "workspaces-luks-reopen",
@@ -427,6 +429,19 @@ include_matches.SYSLOG_IDENTIFIER = [
   # reboot), because without a positive control a healthy host and a host whose unit never ran
   # are the same observation — the ADR-117 shape this PR exists to close.
   "inngest-bs-token-restage",
+  # #6780 (ADR-135 amendment): the config-bundle consumer's refresh oneshot
+  # (inngest-config-refresh.service → inngest-config-refresh.sh, SyslogIdentifier=
+  # inngest-config-refresh). Every SOLEUR_INFRA_PULL_* marker — APPLIED, the
+  # verify/pull/install failure classes, FLOOR, the throttled NOOP — is emitted via
+  # `logger -t inngest-config-refresh`, i.e. PRIORITY-5/6 journald rows this source is
+  # the ONLY shipper for. Without this entry the entire refresh channel's off-box
+  # evidence is silently dropped and inngest-config-drift would read the whole consumer
+  # as absent (the dead-probe-shape the dedicated host cannot afford). The same tag also
+  # ships the unit's raw stderr so a fault-classification line reaches Better Stack.
+  # Bounded: refresh runs every 60 s but NOOP/FLOOR rows are throttle-stamped, so a
+  # healthy host emits ~1 row/5 min and a rejecting host ~1 failure row/5 min per
+  # distinct reason (the verify_fail throttle).
+  "inngest-config-refresh",
   # #6536: inngest-heartbeat.service exited non-zero every 60s for 3 days (3,724 fires) and
   # the stderr proving why never left the host — the unit set no SyslogIdentifier=, so systemd
   # tagged it with the ExecStart basename (`doppler`), which matches no source here. The
@@ -569,7 +584,7 @@ type = "remap"
 # app_container_warn_filter (#4773) is wired here, NOT direct to the sink, so
 # the app container's pino lines traverse the full 3-stage redaction (Art-9 key
 # drop → userId HMAC → string backstop) like every other source.
-inputs = ["inngest_journald", "system_journald", "app_container_warn_filter", "host_scripts_journald", "egress_gw_journald"]
+inputs = ["inngest_journald", "system_journald", "app_container_warn_filter", "host_scripts_journald", "egress_gw_journald", "egress_audit_throttled_dedupe"]
 source = '''
 .pii_scrub_applied = ""
 parsed, parse_err = parse_json(.message)
@@ -794,6 +809,202 @@ timeout_secs = 10
 retry_attempts = 2
 retry_initial_backoff_secs = 1
 retry_max_duration_secs = 30
+
+# ---------------- Egress audit rollup: gateway log -> app database (#9545, ADR-288) ----------------
+# Reads sources.egress_gw_journald DIRECTLY (a second consumer of the same source; the
+# raw log keeps shipping to Better Stack through the PII-scrub chain above, unchanged) and
+# rolls the gateway's CONNECT decisions up into 15-minute buckets per workspace x host x
+# decision x source host. Closed buckets are POSTed to the app on the same host, which
+# writes them through ingest_egress_audit_rollup. Dark by default: the app drops every
+# batch until the runtime flag is on for the workspace's organisation.
+#
+# Attribution hardening. Squid's %un logs the PRESENTED username even when authentication
+# fails, so a bad-credential attempt naming another workspace id would otherwise be
+# attributed to that workspace. egress_audit_prep therefore: keeps only rows whose status is a
+# positive allowlist (200 tunnel, 403 denied, 502/503/504 upstream; so 407, an aborted
+# connection's 000, an older gateway with no status field and anything new all fail closed),
+# requires the workspace to be a UUID (the gateway's own `probe` username and the
+# unauthenticated `-` fall out here and write nothing), allowlists the host characters
+# and normalises the decision. Measured on Squid 6.13 (plan Phase 0.6).
+#
+# Counts are best-effort lower bounds: a Vector restart loses partial buckets and the app
+# keeps the larger value per column. The reduce expires 15 minutes after a group's last
+# event, so one row is emitted per key per bucket in the normal case.
+[transforms.egress_audit_prep]
+type = "remap"
+inputs = ["egress_gw_journald"]
+drop_on_abort = true
+drop_on_error = true
+source = '''
+parsed, perr = parse_json(string(.message) ?? "")
+if perr != null || !is_object(parsed) { abort }
+row = object!(parsed)
+status = string(row.status) ?? ""
+if !match(status, r'^(200|403|502|503|504)$') { abort }
+ws = downcase(string(row.workspace) ?? "")
+if !match(ws, r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') { abort }
+host = downcase(string(row.requested_host) ?? "")
+if !match(host, r'^[a-z0-9._:\[\]-]{1,253}$') { abort }
+decision_raw = string(row.decision) ?? ""
+decision = "other"
+if contains(decision_raw, "DENIED") {
+  decision = "denied"
+} else if starts_with(decision_raw, "TCP_TUNNEL") {
+  decision = "allowed"
+}
+tsf, ts_err = to_float(row.ts)
+if ts_err != null { abort }
+bucket_epoch = to_int(floor(tsf / 900.0) * 900.0)
+src = downcase(string(.host) ?? "")
+src = string(split(src, ".")[0]) ?? ""
+if !match(src, r'^[a-z0-9][a-z0-9-]{0,62}$') { src = "unknown" }
+bytes = to_int(row.bytes_out) ?? 0
+if bytes < 0 { bytes = 0 }
+. = {
+  "workspace_id": ws,
+  "bucket_start": format_timestamp!(from_unix_timestamp!(bucket_epoch), "%Y-%m-%dT%H:%M:%SZ"),
+  "requested_host": host,
+  "decision": decision,
+  "source_host": src,
+  "request_count": 1,
+  "bytes_out": bytes,
+  "first_seen": tsf,
+  "last_seen": tsf,
+}
+'''
+
+# Memory bound. The reduce holds about 3.7 KB per distinct (workspace, bucket, host, decision,
+# source host) key and requested_host is agent-controlled, so the event rate per workspace is
+# capped upstream of it. Measured (plan Phase 0.6): one workspace x 100,000 unique hosts is
+# 426 MiB without the cap; ten workspaces flooding at once peak at 162 MiB with this cap and
+# 270 MiB at 2,000, over the unit's MemoryMax=256M. Events above the cap are discarded, so the
+# host set is exact only below 1,000 events per workspace per 15 minutes. This Vector
+# version cannot reroute discarded events, so the per-key discard counter is turned into a
+# marker line below, which makes a flood visible in Better Stack without SSH.
+#
+# The per-workspace cap alone does not bound memory: 19 workspaces at the cap already exceed
+# the unit limit. The second, keyless throttle bounds the TOTAL. A Vector throttle is a leaky
+# bucket, not a fixed window (measured on 0.43.1-alpine, threshold 100 / window 10 s over a 20 s
+# flood: 299 events passed): it admits `threshold` at once and refills `threshold` per window, so
+# up to 2 x threshold events, and about as many reduce keys (a key lives 15 minutes after its last
+# event), can be alive at once. 5,000 therefore bounds the keys at about 10,000, the case the
+# ten-workspace flood measurement above covers (162 MiB). The cap is shared with workspaces whose
+# flag is off, because the app gates after this point; the global marker shows when it is hit.
+[transforms.egress_audit_throttle]
+type = "throttle"
+inputs = ["egress_audit_prep"]
+threshold = 1000
+window_secs = 900
+key_field = "{{ workspace_id }}"
+internal_metrics.emit_events_discarded_per_key = true
+
+[transforms.egress_audit_throttle_global]
+type = "throttle"
+inputs = ["egress_audit_throttle"]
+threshold = 5000
+window_secs = 900
+
+[transforms.egress_audit_reduce]
+type = "reduce"
+inputs = ["egress_audit_throttle_global"]
+group_by = ["workspace_id", "bucket_start", "requested_host", "decision", "source_host"]
+expire_after_ms = 900000
+flush_period_ms = 30000
+merge_strategies.request_count = "sum"
+merge_strategies.bytes_out = "sum"
+merge_strategies.first_seen = "min"
+merge_strategies.last_seen = "max"
+
+[transforms.egress_audit_shape]
+type = "remap"
+inputs = ["egress_audit_reduce"]
+source = '''
+.first_seen = format_timestamp!(from_unix_timestamp!(to_int(floor(to_float!(.first_seen)))), "%Y-%m-%dT%H:%M:%SZ")
+.last_seen = format_timestamp!(from_unix_timestamp!(to_int(floor(to_float!(.last_seen)))), "%Y-%m-%dT%H:%M:%SZ")
+del(.timestamp)
+'''
+
+# Throttle discards -> one marker line per workspace, through the PII-scrub chain into Better
+# Stack. The source is Vector's own PER-KEY discard counter, `events_discarded_total` (it carries
+# the `key` tag; `component_discarded_events_total` is the component-wide one and has no key),
+# a lifetime counter since the last restart scraped every 60 s, so `dedupe` keeps one line per
+# change rather than one per scrape. Shape captured from a real 0.43.1 run. No host value is
+# involved.
+# VRL cannot read a metric's VALUE, and a remap cannot turn a metric into a log, so convert
+# first and filter the resulting log.
+[transforms.egress_audit_throttled_log]
+type = "metric_to_log"
+inputs = ["vector_internal"]
+
+[transforms.egress_audit_throttled_filter]
+type = "filter"
+inputs = ["egress_audit_throttled_log"]
+condition = '.name == "events_discarded_total" && .tags.component_id == "egress_audit_throttle" && exists(.tags.key) && (to_float(.counter.value) ?? 0.0) > 0.0'
+
+[transforms.egress_audit_throttled_marker]
+type = "remap"
+inputs = ["egress_audit_throttled_filter"]
+source = '''
+ws = string(.tags.key) ?? "unknown"
+n = to_int(.counter.value) ?? 0
+. = {
+  "message": "SOLEUR_EGRESS_AUDIT_THROTTLED workspace_id=" + ws + " discarded_total=" + to_string(n),
+  "PRIORITY": "4"
+}
+'''
+
+# The keyless global cap has no per-key counter; its component-wide counter (real 0.43.1 shape:
+# `component_discarded_events_total`, tags component_id/component_kind/component_type/intentional)
+# becomes one global marker, so a legitimate burst that hits the cap is not dropped silently.
+[transforms.egress_audit_throttled_global_filter]
+type = "filter"
+inputs = ["egress_audit_throttled_log"]
+condition = '.name == "component_discarded_events_total" && .tags.component_id == "egress_audit_throttle_global" && (to_float(.counter.value) ?? 0.0) > 0.0'
+
+[transforms.egress_audit_throttled_global_marker]
+type = "remap"
+inputs = ["egress_audit_throttled_global_filter"]
+source = '''
+n = to_int(.counter.value) ?? 0
+. = {
+  "message": "SOLEUR_EGRESS_AUDIT_THROTTLED_GLOBAL discarded_total=" + to_string(n),
+  "PRIORITY": "4"
+}
+'''
+
+[transforms.egress_audit_throttled_dedupe]
+type = "dedupe"
+inputs = ["egress_audit_throttled_marker", "egress_audit_throttled_global_marker"]
+fields.match = ["message"]
+cache.num_events = 5000
+
+# Token read through the DEFAULT-VALUE form only. This one file is also rendered onto the
+# dedicated inngest host, which has no gateway (the sink never fires) and no copy of the
+# secret; the strict form of this reference (no default) would stop Vector there at startup. Vector
+# interpolates inside COMMENTS too, so never write the dollar-brace form of a variable name in a comment. Verified
+# with `vector validate` under strict env mode with the variable unset and set (Phase 0.6).
+# Same-host plain HTTP: authenticity rests on the bearer token, recorded in ADR-288.
+# The app answers 202 for a flag-off or fully-filtered batch and 401/400/413 for a rejected one;
+# the http sink retries 5xx and 429 and drops other 4xx, so a rejected batch is dropped rather
+# than filling the buffer. Ten attempts with the sink's backoff (about two and a half minutes)
+# outlast an app restart or deploy; the disk buffer drops NEWEST events when full.
+[sinks.egress_audit_ingest]
+type = "http"
+inputs = ["egress_audit_shape"]
+uri = "http://127.0.0.1:3000/api/internal/egress-audit-ingest"
+method = "post"
+encoding.codec = "json"
+batch.max_events = 200
+batch.timeout_secs = 30
+auth.strategy = "bearer"
+auth.token = "${EGRESS_AUDIT_INGEST_TOKEN:-}"
+request.timeout_secs = 10
+request.retry_attempts = 10
+request.retry_initial_backoff_secs = 1
+request.retry_max_duration_secs = 120
+buffer.type = "disk"
+buffer.max_size = 268435488
+buffer.when_full = "drop_newest"
 
 # ---------------- Internal liveness sink (stdout → journald) ----------------
 # Vector emits its own internal_metrics every 60s so `cat-deploy-state.sh`'s

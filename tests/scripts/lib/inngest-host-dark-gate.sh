@@ -1,80 +1,31 @@
 # shellcheck shell=bash
-# inngest_host_dark_gate — "Guard 2" of the RETIRED inngest-volume-recut apply_target (#7695), the
-# fifth authorization layer of that dispatch and the only one that checked the WORLD rather than an
-# intent. (#8285 PR A converted that job into `inngest-backstop-retire`, whose own, separate guards
-# lived in a gate library deleted by #8285 PR B with that job; the "Guard N" numbers in this file and
-# in that one were unrelated.) Since then NO workflow calls `inngest_host_dark_gate`: it is kept, with
-# its suite, only while the retire-or-keep decision for the dormant recut target (#8316) is open.
+# inngest-host-dark-gate.sh — the probe-row gate library for scripts/cutover-inngest.sh.
 #
-# TWO ENTRY POINTS, ONE LIVE CONSUMER — EDITING A SHARED HELPER EDITS BOTH:
-#   inngest_host_dark_gate         no production caller since #8285 PR A (suite only; was the recut's Guard 2)
+# ONE LIVE ENTRY POINT, PLUS SHARED HELPERS:
 #   inngest_execute_registry_gate  scripts/cutover-inngest.sh op=execute step 2.0 and its registry-probe arm (P0 cutover, #8054)
-# `_IHDG_IDENT` / `_IHDG_SELECT` and every `_ihdg_*` helper are SHARED; `_ihdg_graded_row` is the
-# shared prelude (G1-G6 plus the boot_id shape check == E1-E7; the execute gate's E8 is the same
-# predicate as G7). Helpers prefixed `_erg_` are consumed by the EXECUTE gate only. The execute
-# gate is documented at the bottom of this file, E-table included.
+# `_IHDG_IDENT` / `_IHDG_SELECT` and every `_ihdg_*` helper select, parse and grade the hourly
+# `SOLEUR_INNGEST_SERVER_PROBE` row; `_ihdg_graded_row` is the shared prelude (E1-E7 below). Helpers
+# prefixed `_erg_` are consumed by the execute gate only. The gate itself is documented where it is
+# defined, further down this file, E-table included.
 #
-# Layers 1-4 authorize by intent: a human approved the environment, a confirm literal was typed, a
-# volume id was pinned, a plan document matched a shape. Every one of them can be fully satisfied
-# while the host is serving live traffic and the store holds armed reminders. This gate is the one
-# that measures.
+# RETIRED 2026-10-14 (#8316). This file used to carry a second entry point, `inngest_host_dark_gate`
+# ("Guard 2" of the long-gone `inngest-volume-recut` apply_target, #7695), with twenty predicates
+# G1-G20. #8285 PR A (#9784) removed its only caller and PR B (#9877) the target itself; the entry
+# point and its one private helper (`_ihdg_finished_count`) were deleted under #8316. The full
+# design — the monotonicity argument for why a <=90-minute-old row is sound evidence of an emptiness
+# that holds at apply time, and the G1-G20 predicate table — is recoverable with:
+#   git show b6d745fe78:tests/scripts/lib/inngest-host-dark-gate.sh   (header and function)
+# and the retirement is recorded in the 2026-10-14 addendum of ADR-199.
 #
-# PROPERTY. The recut cannot be dispatched unless, on ONE SINGLE probe row from the CURRENT boot of
-# the DEDICATED host, the store is measured empty and the host measured dark — and, at dispatch
-# time, four live re-reads still agree.
-#
-# ── WHY A ≤90-MINUTE-OLD ROW IS SOUND EVIDENCE OF AN EMPTINESS THAT HOLDS AT APPLY TIME ─────────
-#
-# The obvious objection to authorizing an irreversible destroy on a log row is that the row is a
-# snapshot: `inngest-server-probe.timer` fires hourly, so the chosen row can be up to ~90 minutes
-# old, and "the store was empty then" is not "the store is empty now". The argument that closes the
-# gap is a MONOTONICITY argument, and it lives here rather than in the plan because a reader of the
-# gate is exactly the person who needs it:
-#
-#   1. inngest-server is the only writer that can INCREASE the key count. It is not the only
-#      writer full stop — an earlier revision of this comment said it was, and that was false and
-#      is corrected here rather than quietly reworded. Measured: `redis-cli` has THREE in-repo
-#      callers against this instance. `inngest-cutover-flip.sh` issues `FLUSHALL` (a writer, and
-#      the one condition 3 below exists to exclude); `inngest-bootstrap.sh`'s probe issues
-#      `INFO keyspace` (a reader); the third is a test. The mechanism is also not the one that
-#      sentence named: the loopback bind comes from `inngest-redis.conf` (`bind 127.0.0.1 -::1`,
-#      `protected-mode yes`), not from the unit, and the unit contributes `--requirepass`. So
-#      Redis is unreachable OFF the box and credential-gated ON it — which is a different and
-#      weaker statement than "reachable from nothing else", and the argument below only needs the
-#      weaker one.
-#
-#      The corrected form is a MONOTONICITY claim over all three callers, and it is strictly
-#      stronger than the false one: the only non-server writer decreases the count, and the reader
-#      does not write at all.
-#   2. G8 ∧ G9 prove inngest-server was NOT BOUND on the newest row — `server_active` present,
-#      non-empty, != `unknown`, != `active` (#8078: `activating`/`failed` are non-serving systemd
-#      states the P1-5 refuse loop legitimately produces, and `unknown`/empty are readability
-#      failures, not claims) AND a non-200 loopback `http_code`. A process that is not running
-#      and not answering cannot have written a key since that row was emitted — and a unit that
-#      is `activating` under the P1-5 refuse loop cannot have reached `active`, because the guard
-#      refuses the start from ExecStartPre while the flag is outside its allowlist, which G19
-#      re-reads synchronously below.
-#   3. G19 proves no concurrent FLUSHALL can be AUTHORIZED: the cutover flip FSM only writes to
-#      this Redis under `INNGEST_CUTOVER_FLIP` ∈ {arm, execute}, and G19 re-reads the flag
-#      SYNCHRONOUSLY at dispatch time (not from the row) and refuses anything but
-#      `rolled-back`/`aborted`. The row is a ≤90-minute-old snapshot; the flag is the thing that
-#      actually authorizes a write, and it is readable in real time.
-#   4. Armed reminders, if any survived, only CONSUME keys when they fire — a `BRPOP`-shaped
-#      dequeue removes, it does not add.
-#   5. The flip FSM's `FLUSHALL` sets the count to 0 — but it is NOT harmless on a race, and an
-#      earlier revision of this comment said it was. `run_preflush_flip` in
-#      inngest-cutover-flip.sh runs stop -> FLUSHALL -> assert -> record_flush_latch ->
-#      **start_server**, and the `flushed` resume arm calls start_server with no flush at all. So
-#      the raced transition's LAST act starts the only writer that can increase the count. Its
-#      trigger is also outside GitHub's reach: inngest-cutover-flip.timer is OnBootSec=30s /
-#      OnUnitActiveSec=30s, ships enabled for the host's life, and polls a Doppler flag — so the
-#      `deploy-inngest-restart` concurrency group, which serialises WORKFLOW JOBS, cannot serialise
-#      it. G19 therefore SAMPLES the flag; it does not hold it. That residual window (G19's read to
-#      the apply) is real and is recorded here rather than argued away.
-#
-# So between the chosen row and the apply the key count cannot INCREASE. A count of 0 at t-90min
-# under (1)-(4) is a count of 0 at t. The claim being made is bounded and checkable, which is the
-# point: the alternative is an operator asserting from memory that nothing is running.
+# G-NUMBERS THAT REMAIN. The retired gate's G1-G6 plus the boot_id shape check are what are now E1-E7
+# of the execute gate (the shared prelude); G7 is E8, G9 is E9 and G8 is E10 (the surviving form of the
+# `server_active` predicate, #8078). G10-G20 have no executable form any more. The G-numbers survive
+# as names inside the kept helpers' and the execute gate's comments and are NOT edited, because those
+# functions are byte-identical to base on purpose. Read every such comment as history: besides the
+# G-numbers (G0-G6, "G20 in this file", "Born as G10's"), the kept function bodies and the
+# comments around them still say "both entry points", "the sibling", "shared with
+# inngest_host_dark_gate", "the recut gate", "Guard 2" and "Row 7 of the suite". The list is
+# illustrative, not exhaustive: a rewrite of the kept bodies is deliberately out of scope.
 #
 # ── WHY THIS IS NOT scripts/inngest-dedicated-host-classify.sh ──────────────────────────────────
 #
@@ -89,93 +40,18 @@
 #                   replace the host first WITH A PIN THAT CARRIES THE EMITTER -- a replace on an
 #                   unbumped pin re-delivers the same bytes, because the emitter is baked into the
 #                   OCI image and reaches the host via the digest literal in user_data, not via
-#                   cloud-init (#7695; ADR-199 amendment 2026-09-07). This is the EXPECTED verdict
-#                   for every dispatch until
-#                   the host is replaced, and collapsing it into `unreadable` would tell the
-#                   operator to retry forever against a host that can never satisfy the gate.
+#                   cloud-init (#7695; ADR-199 amendment 2026-09-07). Collapsing it into
+#                   `unreadable` would tell the operator to retry forever against a host that can
+#                   never satisfy the gate.
 # This gate therefore reuses that script's host-conjunction QUERY FILTER (the two-field envelope
 # identity, #7674 / #6616) and its R_SPOOF fixture shape — not its function.
 #
 # ── POSITIVE ALLOWLIST ──────────────────────────────────────────────────────────────────────────
 #
 # The decision function proceeds ONLY on the literal `dark`. Every other token aborts, `unreadable`
-# included. This deliberately INVERTS the posture of the G3.7 pre-filter, which may only ADD a
-# refusal and so degrades safely to the on-host latch when a read fails. Here the gate is
-# authorizing an irreversible destroy: a gate that cannot see the host must never conclude the host
-# is dark.
+# included. A gate that cannot see the host must never conclude the host is dark: silence is not
+# darkness.
 #
-# ── THE TWENTY PREDICATES ───────────────────────────────────────────────────────────────────────
-#
-# ONE PER PREDICATE, NOT ONE PER TOKEN. Several predicates share a verdict token (three map to
-# `wrong_host`, two to `host_serving`, four to `unreadable`), so a drop-one battery keyed on TOKENS
-# needs only ~10 cases and silently under-covers: dropping G12 and dropping G15 both still emit
-# `unreadable`, so a token-keyed battery cannot tell that one of them was deleted. AC B11's battery
-# is keyed on PREDICATES — one case per Gn — and tests/scripts/test-inngest-host-dark-gate.sh
-# asserts a floor of 20 such cases.
-#
-#   Row selection
-#     G1  the probe query returned rc 0 AND the row count parses as ^[0-9]+$   -> unreadable
-#     G2  the row count is >= 1                                                -> silent
-#     G3  the chosen row IS the newest, and its age is within --max-row-age     -> stale_row
-#     G4  probe_schema == "8", EXACT equality (not >=)                         -> stale_schema
-#     G14 redis_keys==0 implies redis_key_patterns==__NONE__ (coherence)        -> unreadable
-#   Identity  (inngest-bootstrap.sh is the SHARED renderer for both hosts)
-#     G5  envelope host      == soleur-inngest                                 -> wrong_host
-#     G6  envelope host_name == soleur-inngest-prd                             -> wrong_host
-#     G7  message host_role  == dedicated                                      -> wrong_host
-#   Not serving
-#     G8  server_active present, non-empty, != unknown; != active              -> host_serving / unreadable
-#     G9  http_code parses as ^[0-9]+$ AND != 200                              -> host_serving
-#     G10 zero function.finished rows attributable to this host                -> host_executing
-#   Store empty
-#     G11 redis_active == active                                               -> redis_down
-#     G12 redis_keys parses as ^[0-9]+$                                        -> unreadable
-#     G13 redis_keys == 0                                                      -> store_populated
-#     G14 data_mount_devid == the pinned volume alias (#8017)                 -> mount_mismatch
-#     G15 data_bytes parses as ^[0-9]+$  (READABILITY ONLY — no ceiling)       -> unreadable
-#   Read proof
-#     G16 flush_latched ∈ {true,false}   (READABILITY ONLY)                    -> unreadable
-#   Dispatch-time live re-reads (NOT from the row)
-#     G17 the live Hetzner volume (BY NAME) id == the operator's pin           -> id_pin_mismatch
-#     G18 scripts/followthroughs/inngest-host-not-serving-7674.sh reads PASS   -> followthrough_7674
-#     G19 INNGEST_CUTOVER_FLIP (synchronous) ∈ {rolled-back, aborted}          -> flag_unsafe
-#     G20 INNGEST_DIAGNOSTIC_BOOT (synchronous) is unset or 0                  -> diagnostic_boot
-#
-# ⚠️ G12 AND G13 ARE SEPARATE PREDICATES AND SEPARATE CASES, AND MERGING THEM REOPENS THE PLAN'S
-# OWN MUTATION ROW 12. `[[ "__UNREADABLE__" -eq 0 ]]` is TRUE under bash arithmetic coercion — a
-# non-numeric operand evaluates to 0 — so a single merged `redis_keys == 0` check treats "the
-# emitter could not read the keyspace" as "the keyspace is empty", which is the exact fail-open the
-# `__UNREADABLE__` sentinel exists to prevent. G12 establishes the operand is a number BEFORE G13
-# compares it.
-#
-# ⚠️ G1 IS EVALUATED BEFORE G2, AND THE ORDER IS LOAD-BEARING FOR THE DIAGNOSIS, NOT THE VERDICT.
-# A 503 from the read path yields zero rows. Evaluating G2 first would refuse — correctly — with
-# `silent`, telling the operator the host emits nothing when in fact the operator's own read path
-# is down. Both orders are safe; only one is honest.
-#
-# ⚠️ ONE READING ONLY, AND IT IS `redis_keys`. That field is summed by the emitter from
-# `INFO keyspace` across EVERY database. The single-database size command reads db-0 only, while
-# `FLUSHALL` spans every db — so a store holding keys in db-1 reports zero under it, which is a
-# false `dark` authorizing a destroy. A historical probe field carried exactly that asymmetry and
-# sits one field name away from this one. This gate reads NEITHER the single-db command nor that
-# field, and AC B13 pins the absence of both by name against this file — which is why neither
-# literal appears anywhere above: a body-grep sees comments too, so a file that documents the
-# forbidden token cannot also assert it is absent. tests/scripts/test-inngest-host-dark-gate.sh
-# names them explicitly and greps for them here.
-#
-# Usage:
-#   source tests/scripts/lib/inngest-host-dark-gate.sh
-#   inngest_host_dark_gate \
-#     --rows-file <probe rows: betterstack-query.sh JSONEachRow output> \
-#     --query-rc <n> \
-#     --finished-file <function.finished rows, same shape> \
-#     --finished-rc <n> \
-#     --expected-volume-id <id> \
-#     --live-attachment-id <id> \
-#     --followthrough-rc <n> \
-#     --cutover-flag <value> \
-#     --diagnostic-boot <value>
-#   # echoes exactly one verdict token; rc 0 ONLY for `dark`.
 
 # THE PROBE-ROW SELECTOR, DEFINED ONCE. This identity conjunction and marker filter were
 # replicated verbatim across four jq programs — `_ihdg_rows`, `_ihdg_row_count`,
@@ -205,7 +81,7 @@
 #
 # RESOLVED FROM THIS FILE'S OWN LOCATION, with an override for test sandboxes that run a COPY of
 # this lib from a temp dir (INNGEST_PROBE_ROW_LIB). A failed load is NOT silence: it sets
-# `_IHDG_PROBE_LIB_OK=0`, and both entry points refuse `unreadable` on that before anything else.
+# `_IHDG_PROBE_LIB_OK=0`, and the execute gate refuses `unreadable` on that before anything else.
 # The `|| true` keeps a failed `cd` from aborting a `set -e` caller at the assignment — the path is
 # then `/scripts/lib/…`, the source fails, and the flag carries the refusal instead.
 #
@@ -244,11 +120,11 @@ _IHDG_IDENT='
 _IHDG_PROBE='| select($d | inngest_probe_row)'
 _IHDG_SELECT="$_IHDG_IDENT$_IHDG_PROBE"
 
-# THE EXPECTED PROBE SCHEMA, DEFINED ONCE. Both entry points default `--expected-schema` to this
-# and the execute gate's caller interpolates it into the `stale_schema` remedy. The emitter's
-# schema has bumped 3 -> 4 -> 7 -> 8 and a bump that lands on one consumer and not the other would
-# make the two gates disagree about the same row forever (the suite asserts the literal appears
-# here and nowhere else in this file).
+# THE EXPECTED PROBE SCHEMA, DEFINED ONCE. The execute gate defaults `--expected-schema` to this
+# and its caller interpolates it into the `stale_schema` remedy. The emitter's schema has bumped
+# 3 -> 4 -> 7 -> 8 and a bump that lands on one consumer and not the other would make the gate and
+# its caller disagree about the same row forever (the suite asserts the literal appears here and
+# nowhere else in this file).
 _IHDG_EXPECTED_SCHEMA="8"
 
 # _ihdg_field <message> <field-name>
@@ -384,32 +260,6 @@ _ihdg_tied_newest() {
   printf '%s' "${out:-0}"
 }
 
-# _ihdg_finished_count <rows-file> <host> <host_name>
-#
-# Count function.finished rows ATTRIBUTABLE to the dedicated host. The identity test is an OR
-# rather than the probe rows' AND, and the asymmetry is deliberate: for the probe we are granting
-# authority to a row and must be certain it is the right host, so we require both fields; here we
-# are looking for a REASON TO REFUSE, so any single hint that this host executed a function is
-# enough. Requiring the conjunction would let a row with one spoofed field slip past.
-_ihdg_finished_count() {
-  local rows_file="$1" host="$2" host_name="$3"
-  jq -Rn --arg h "$host" --arg hn "$host_name" '
-      [ inputs
-        | fromjson?
-        | select(type == "object")
-        | ((.raw? // empty) | fromjson?) as $d
-        | select(($d | type) == "object")
-        | select((($d.message? // "") | contains("function.finished")))
-        | select(
-            $d.host == $h
-            or $d.host_name == $hn
-            or (($d.message? // "") | contains("host_name=" + $hn))
-            or (($d.message? // "") | contains("host_name=" + $h))
-          )
-      ] | length
-    ' < "$rows_file" 2>/dev/null
-}
-
 # _ihdg_decoded_rows <rows-file>
 #
 # Counts rows that DECODE — regardless of host or marker — so "zero rows attributable to this
@@ -433,7 +283,7 @@ _ihdg_decoded_rows() {
 
 # _ihdg_undecodable <rows-file> — rc 0 when the file carries at least one NON-EMPTY line and NONE
 # of its lines decodes; rc 1 otherwise. No token, no policy: the caller names the refusal (E2 says
-# `unreadable`, E13 says `fsm_unreadable`). ONE definition for both consumers (#8054 review: the
+# `unreadable`, E13 says `fsm_unreadable`). ONE definition for its two consumers, E2 and E13 (#8054 review: the
 # two inline copies had already drifted from G10's idiom).
 #
 # NON-EMPTY lines (`grep -c .`), not physical lines (`grep -c ''`), and that distinction is what
@@ -453,8 +303,8 @@ _ihdg_undecodable() {
 }
 
 # _ihdg_refuse <token> — print a refusal token for the CALLER to dispatch, rc 1. Shared helpers
-# name the refusal; only the two entry points turn a token into an exit code (via _ihdg_verdict),
-# so policy cannot leak into a helper both of them trust. The test suite asserts no `_ihdg_*`
+# name the refusal; only the entry point turns a token into an exit code (via _ihdg_verdict),
+# so policy cannot leak into a helper it trusts. The test suite asserts no `_ihdg_*`
 # helper body calls _ihdg_verdict.
 _ihdg_refuse() {
   printf '%s\n' "$1"
@@ -480,7 +330,7 @@ _ihdg_epoch_from_dt() {
 # recut gate and E1-E7 of the execute gate are the same seven predicates; until #8054 they were
 # ~110 lines inlined in `inngest_host_dark_gate` and the execute gate would have had to carry a
 # second copy — the exact "two readers that disagree" class this family of defects keeps producing.
-# Both entry points call this and then grade the CONTENT of the row they get back.
+# The execute gate calls this and then grades the CONTENT of the row they get back.
 #
 # On success prints TWO lines — the graded row's age in seconds, then its message — and returns
 # 0. On refusal prints the refusal token alone and returns 1; the caller dispatches it through
@@ -722,344 +572,8 @@ _ihdg_verdict() {
   [[ "$1" == "dark" ]]
 }
 
-inngest_host_dark_gate() {
-  # ── G0 — the probe-row selector is LOADED (#8846) ───────────────────────────────
-  # FIRST, before argument parsing, G1 and every dispatch-time predicate (G18's
-  # `followthrough_7674` included): without the selector no row was measured, and any later token
-  # would name a host-side remedy for a reader-side defect. The path goes to STDERR; stdout stays
-  # the bare token, because the caller reads it with `$(…)`.
-  if [[ "${_IHDG_PROBE_LIB_OK:-0}" != "1" ]]; then
-    _ihdg_selector_unavailable
-    _ihdg_verdict "unreadable"; return $?
-  fi
-  local rows_file="" query_rc="" finished_file="" finished_rc=""
-  local expected_volume_id="" live_attachment_id="" followthrough_rc=""
-  local cutover_flag="" diagnostic_boot=""
-  local host="soleur-inngest" host_name="soleur-inngest-prd" expected_schema="$_IHDG_EXPECTED_SCHEMA"
-  # G3's recency bound. `now_epoch` is injectable so the suite can pin a clock; the default is the
-  # real one. 5400s = 90 minutes, the window the monotonicity argument in this file's header
-  # assumes — it was, until this revision, assumed and enforced nowhere.
-  local now_epoch="" max_row_age="5400"
-
-  while [[ $# -gt 0 ]]; do
-    # A trailing flag with no value made `shift 2` a no-op (it returns non-zero and shifts
-    # nothing), so the loop spun until the job timeout — and because the workflow calls the gate
-    # under `if !`, the inherited `-e` is suppressed and nothing aborted. A hang is not a verdict.
-    if [[ "$1" == --* && $# -lt 2 ]]; then _ihdg_verdict "unreadable"; return $?; fi
-    case "$1" in
-      --rows-file)           rows_file="${2-}";           shift 2 ;;
-      --query-rc)            query_rc="${2-}";            shift 2 ;;
-      --finished-file)       finished_file="${2-}";       shift 2 ;;
-      --finished-rc)         finished_rc="${2-}";         shift 2 ;;
-      --expected-volume-id)  expected_volume_id="${2-}";  shift 2 ;;
-      --live-attachment-id)  live_attachment_id="${2-}";  shift 2 ;;
-      --followthrough-rc)    followthrough_rc="${2-}";    shift 2 ;;
-      --cutover-flag)        cutover_flag="${2-}";        shift 2 ;;
-      --diagnostic-boot)     diagnostic_boot="${2-}";     shift 2 ;;
-      --host)                host="${2-}";                shift 2 ;;
-      --host-name)           host_name="${2-}";           shift 2 ;;
-      --expected-schema)     expected_schema="${2-}";     shift 2 ;;
-      --now-epoch)           now_epoch="${2-}";           shift 2 ;;
-      --max-row-age)         max_row_age="${2-}";         shift 2 ;;
-      *) echo "inngest_host_dark_gate: unknown argument '$1'" >&2; _ihdg_verdict "unreadable"; return $? ;;
-    esac
-  done
-
-  # ── G1..G7 — the graded row: read answered, decoded, populated, newest, tie-free, recent,
-  # schema-exact, boot_id well-formed. ONE helper, shared with the execute gate (#8054); the G-table
-  # in this file's header still names each predicate, and the suite still mutates each line.
-  local graded row_age chosen_msg
-  if ! graded="$(_ihdg_graded_row "$rows_file" "$query_rc" "$host" "$host_name" "$expected_schema" "$now_epoch" "$max_row_age")"; then
-    # LITERAL tokens only, by whitelist. The helper's stdout is what it printed — and if a helper
-    # ever leaked something that is not a token, dispatching `$graded` would put it on THIS gate's
-    # stdout, which the caller prints. Anything unrecognised is `unreadable`. This block is
-    # DELIBERATELY duplicated in the other entry point rather than hoisted: a shared dispatcher
-    # would be a `_ihdg_*` helper calling `_ihdg_verdict` (policy in a helper — the suite forbids
-    # it), and `_ihdg_verdict "$graded"` would put a variable where the suite requires a literal.
-    case "$graded" in
-      silent)       _ihdg_verdict "silent";       return $? ;;
-      wrong_host)   _ihdg_verdict "wrong_host";   return $? ;;
-      stale_row)    _ihdg_verdict "stale_row";    return $? ;;
-      stale_schema) _ihdg_verdict "stale_schema"; return $? ;;
-      *)            _ihdg_verdict "unreadable";   return $? ;;
-    esac
-  fi
-  row_age="${graded%%$'\n'*}"; chosen_msg="${graded#*$'\n'}"
-  [[ "$row_age" =~ ^[0-9]+$ && -n "$chosen_msg" ]] || { _ihdg_verdict "unreadable"; return $?; }
-
-  # ── G14 — the two store fields must AGREE ───────────────────────────────────────
-  # `redis_keys` is the field this destroy is authorized against, and until schema 4 nothing could
-  # cross-check it. Now something can: the emitter derives `redis_key_patterns` from a `--scan` of
-  # the SAME keyspace `INFO keyspace` summed, so `redis_keys=0` and a pattern list naming live keys
-  # cannot both be true. Disagreement means one reader is wrong, and since one of them is the
-  # clearing value, the safe reading is neither — refuse rather than prefer the permissive one.
-  #
-  # Deliberately NOT `stale_schema`: the schema is current, the row is incoherent. And deliberately
-  # only in the `keys==0` direction — a populated store already fails G13, so the sole reading this
-  # guard must catch is the one that would AUTHORIZE the destroy.
-  local keypat
-  keypat="$(_ihdg_field "$chosen_msg" redis_key_patterns)" || { _ihdg_verdict "unreadable"; return $?; }
-  if [[ "$(_ihdg_field "$chosen_msg" redis_keys)" == "0" && "$keypat" != "__NONE__" ]]; then
-    _ihdg_verdict "unreadable"; return $?
-  fi
-
-  # ── G7 — the row says it is the dedicated host ──────────────────────────────────
-  # host_role is derived on-host from DOPPLER_PROJECT (§D1), this codebase's canonical
-  # dedicated-vs-web discriminator. The earlier attempt gated on "is /mnt/data a mountpoint", which
-  # is TRUE on the co-located web host too — cloud-init.yml mounts the workspaces volume there — so
-  # a web-host row could have carried a store measurement into this gate's clearance condition. An
-  # emitted positive identity is what replaced an inferred one.
-  local host_role
-  host_role="$(_ihdg_field "$chosen_msg" host_role)" || { _ihdg_verdict "wrong_host"; return $?; }
-  [[ "$host_role" == "dedicated" ]]                  || { _ihdg_verdict "wrong_host"; return $?; }
-
-  # ── G8 — systemd does not say the unit is active ────────────────────────────────
-  # `!= active`, not `== inactive` (#8078): identical to the execute gate's E10. The P1-5
-  # flip-guard refuse loop leaves the unit in `activating` indefinitely (measured 2026-09-11
-  # on the live host — 25/25 probe rows `activating`, `http_code=000`), and `failed` is where a
-  # start-limit-latched unit lands. Neither serves, so `== inactive` graded the exact host this
-  # gate exists to authorise a recut on as `host_serving`. The safety argument for the WIDER
-  # predicate is carried by the gates around it, not by this line: G9 (`http_code != 200`)
-  # excludes a bound listener, and G19 re-reads the cutover flag SYNCHRONOUSLY and refuses
-  # anything but rolled-back/aborted — under the P1-5 refusal `activating` cannot progress to
-  # `active` without the flag leaving the pre-arm set, which G19 already refuses.
-  local server_active
-  server_active="$(_ihdg_field "$chosen_msg" server_active)" || { _ihdg_verdict "unreadable"; return $?; }
-  # `unknown` is the emitter's read-failed sentinel and a blank is a shape change; neither is a
-  # claim about the unit — both are `unreadable`, never a non-serving reading.
-  [[ -n "$server_active" && "$server_active" != "unknown" ]] || { _ihdg_verdict "unreadable"; return $?; }
-  [[ "$server_active" != "active" ]]                        || { _ihdg_verdict "host_serving"; return $?; }
-
-  # ── G9 — and the loopback agrees ────────────────────────────────────────────────
-  # `server_active` alone is a systemd CLAIM; `http_code` is the claim that matters. This host has
-  # already been observed reporting a started unit that had failed to bind its port, so the two
-  # signals must agree. An ABSENT http_code must not read as "non-200" — hence the presence check
-  # and the ^[0-9]+$ predicate before the comparison.
-  local http_code
-  http_code="$(_ihdg_field "$chosen_msg" http_code)" || { _ihdg_verdict "unreadable"; return $?; }
-  [[ "$http_code" =~ ^[0-9]+$ ]]                     || { _ihdg_verdict "unreadable"; return $?; }
-  [[ "$http_code" != "200" ]]                        || { _ihdg_verdict "host_serving"; return $?; }
-
-  # ── G10 — and nothing executed a function on it ─────────────────────────────────
-  # Independent of what the probe says: a host can be executing functions while its own liveness
-  # marker reports whatever it reports. An unreadable function.finished query is `unreadable`, never
-  # "zero rows, therefore none".
-  [[ "$finished_rc" =~ ^[0-9]+$ ]] || { _ihdg_verdict "unreadable"; return $?; }
-  [[ "$finished_rc" -eq 0 ]]       || { _ihdg_verdict "unreadable"; return $?; }
-  [[ -n "$finished_file" && -f "$finished_file" ]] || { _ihdg_verdict "unreadable"; return $?; }
-  # A POSITIVE CONTROL, because zero is G10's CLEARING value and every way the query can be wrong
-  # also produces zero. G1/G2 give the probe query one (`rows_count >= 1`, else `silent`); this
-  # query had none, so an undecodable envelope, a mis-targeted query, or a `function.finished`
-  # channel that never reaches this Logs source all read as "no functions ran". Note the polarity
-  # difference that made it dangerous: in `_ihdg_rows` a dropped row pushes toward `silent`, a
-  # refusal; here a dropped row pushes toward `dark`.
-  # THE CONTROL COMPARES BYTES TO DECODES, NOT DECODES TO ZERO. An earlier revision required
-  # `finished_total >= 1` — at least one decodable row — and that was self-defeating: the CALLER
-  # queries `--grep 'function.finished'` (apply-web-platform-infra.yml), so the file handed to us
-  # is ALREADY marker-filtered. "No rows" therefore means "this fleet ran no functions in the
-  # window", which is the NORMAL state whenever a recut is attempted — so the gate refused
-  # `unreadable` on its own precondition and could never pass. The control's comment claimed it
-  # "deliberately does NOT filter on the marker": true of the control, false of its INPUT, which
-  # is the half that decides what it can see.
-  #
-  # The failure it exists to catch is an UNDECODABLE envelope — bytes arrived and the parser
-  # understood none of them. That is exactly `raw_lines > 0 && decoded == 0`, and it is
-  # distinguishable from a legitimately empty window without requiring the fleet to be busy.
-  local finished_raw finished_total finished_count
-  finished_raw="$(grep -c . "$finished_file" 2>/dev/null || true)"
-  [[ "$finished_raw" =~ ^[0-9]+$ ]]   || { _ihdg_verdict "unreadable"; return $?; }
-  finished_total="$(_ihdg_decoded_rows "$finished_file")"
-  [[ "$finished_total" =~ ^[0-9]+$ ]] || { _ihdg_verdict "unreadable"; return $?; }
-  finished_count="$(_ihdg_finished_count "$finished_file" "$host" "$host_name")"
-  [[ "$finished_count" =~ ^[0-9]+$ ]] || { _ihdg_verdict "unreadable"; return $?; }
-  if [[ "$finished_raw" -ge 1 && "$finished_total" -eq 0 ]]; then
-    _ihdg_verdict "unreadable"; return $?
-  fi
-  [[ "$finished_count" -eq 0 ]]       || { _ihdg_verdict "host_executing"; return $?; }
-
-  # ── G11 — Redis is UP, so its keyspace answer means something ───────────────────
-  # Without this the gate authorizes destruction on an ambiguity: a host where Redis failed to start
-  # emits a redis_keys derived from a failed `INFO keyspace`, and "Redis is down" becomes
-  # indistinguishable from "the store is empty". Same fail-open shape as reading silence as
-  # darkness, applied to the field the whole decision rests on.
-  local redis_active
-  redis_active="$(_ihdg_field "$chosen_msg" redis_active)" || { _ihdg_verdict "unreadable"; return $?; }
-  [[ "$redis_active" == "active" ]]                        || { _ihdg_verdict "redis_down"; return $?; }
-
-  # ── G12 — the key count is a NUMBER ─────────────────────────────────────────────
-  # SEPARATE FROM G13, AND THE SEPARATION IS THE WHOLE GUARD. `[[ "__UNREADABLE__" -eq 0 ]]` is TRUE
-  # under bash arithmetic coercion, so a merged check reads the emitter's "I could not measure this"
-  # sentinel as the clearing value. The emitter's own awk was found summing `keys=abc` to 0 for the
-  # same reason and was corrected to match `keys=[0-9]+` and exit non-zero otherwise.
-  local redis_keys
-  redis_keys="$(_ihdg_field "$chosen_msg" redis_keys)" || { _ihdg_verdict "unreadable"; return $?; }
-  # WIDTH-BOUNDED, not merely numeric. `[[ "18446744073709551616" -eq 0 ]]` is TRUE in bash — the
-  # value wraps at 2^64 — so an unbounded ^[0-9]+$ lets a sufficiently large count reach G13 and
-  # coerce to the clearing value. Twelve digits is far above any reachable keyspace and far below
-  # the wrap.
-  [[ "$redis_keys" =~ ^[0-9]{1,12}$ ]]                 || { _ihdg_verdict "unreadable"; return $?; }
-
-  # ── G13 — and it is zero ────────────────────────────────────────────────────────
-  # If redis_keys > 0 the destructive path is REFUSED OUTRIGHT, no exceptions — and note that
-  # enumeration is then unavailable, because inngest-enumerate-reminders.sh queries 127.0.0.1:8288,
-  # which is not bound on a dark host. Non-empty AND non-enumerable means ADR-142's preserve-and-copy
-  # is the only lawful path and the dispatch must route there.
-  [[ "$redis_keys" -eq 0 ]] || { _ihdg_verdict "store_populated"; return $?; }
-
-  # ── G14 — the store we measured is ON THE DEVICE BEING DESTROYED ────────────────
-  # THIS IS THE CONDITION THAT MAKES THE WHOLE GATE MEAN WHAT IT CLAIMS. `redis_keys` is a statement
-  # about a Redis PROCESS; the recut destroys a BLOCK DEVICE. Today's mount is `mount … || true`
-  # with `nofail`, so a failed mount leaves /mnt/data on the ephemeral root disk and Redis reports
-  # an empty store WHILE THE VOLUME HOLDS A POPULATED AOF — every other condition satisfied,
-  # destruction unsafe. The flip FSM already carries a `latch-unrecordable detail=not-a-mountpoint`
-  # abort for precisely this shape, so the repo has been bitten by it before.
-  #
-  # PINNED ON DEVICE IDENTITY, NOT ON STRING FORM (#8017, probe_schema=8). The previous form
-  # compared `data_mount_src` -- which is `findmnt -no SOURCE`, i.e. the KERNEL device name --
-  # against a /dev/disk/by-id/... path. /proc/self/mountinfo stores the RESOLVED target and never
-  # the symlink, so the by-id arm was UNREACHABLE CODE: only the /dev/mapper/inngest-redis arm
-  # could ever match, and that device does not exist until the LUKS cut this gate authorizes.
-  # Net effect: every recut dispatch returned `mount_mismatch`, whose documented remediation
-  # ("the mount failed open and Redis is on the root disk") was actively misleading, because the
-  # mount was healthy and on the right device -- the COMPARISON could not match.
-  #
-  # The gate runs off-host and cannot readlink the host's /dev, so the host resolves and emits
-  # `data_mount_devid` (the scsi-0HC_Volume_<id> alias basename) and the gate compares THAT to
-  # the id the dispatch named. `data_mount_src` is still emitted and still read, but its role
-  # moves from PREDICATE to AUDIT RECORD -- the role `data_bytes` already has under G15. That
-  # opens no hole: the mountpoint duty stays fail-closed through G15, because the emitter binds
-  # `data_bytes=__UNREADABLE__` on the same unreadable-mount branch and G15 requires it numeric.
-  #
-  # This is a strict strengthening in BOTH eras. Pre-recut the predicate becomes satisfiable at
-  # all; post-recut the mapper arm stops being a bare string match on a name any local cryptsetup
-  # could create and becomes a claim about which volume backs the mapper.
-  #
-  # Every value that is not the expected alias refuses: the field absent entirely (a host still
-  # on the old image -- the realistic partial-bump failure, where _ihdg_field returns non-zero
-  # and the verdict is a refusing token rather than a skipped predicate), the empty string, `n/a`
-  # (the emitter took the WEB arm on a dedicated host), __NOMATCH__, __AMBIGUOUS__,
-  # __UNREADABLE__, and any other volume's alias.
-  local data_mount_devid expected_devid
-  data_mount_devid="$(_ihdg_field "$chosen_msg" data_mount_devid)" || { _ihdg_verdict "unreadable"; return $?; }
-  # KEPT, NOT DELETED: this is the only thing constraining a raw workflow_dispatch string before
-  # it is interpolated into the comparand. Nothing between the input and this line bounds its
-  # charset.
-  [[ "$expected_volume_id" =~ ^[0-9]+$ ]] || { _ihdg_verdict "id_pin_mismatch"; return $?; }
-  expected_devid="scsi-0HC_Volume_${expected_volume_id}"
-  # Explicit empty-operand guard so the predicate does not depend on the caller's shell options.
-  # Measured: `bash -c [[ "$a" == "$b" ]]` with both unbound SUCCEEDS, while `set -u` aborts --
-  # and the two contexts that matter disagree, since the dispatch step runs `set -uo pipefail`.
-  # A stale `expected_dev` left by this rewrite, or a data_mount_devid/data_mount_dev_id typo,
-  # would be [[ "" == "" ]] -> PASS in a lax harness and an abort in production.
-  [[ -n "$data_mount_devid" && -n "$expected_devid" ]] || { _ihdg_verdict "mount_mismatch"; return $?; }
-  # "COULD NOT MEASURE" IS NOT "MISMATCH", and the emitter already ships the field that separates
-  # them. `__UNREADABLE__` on devid has exactly two producers, and they are not the same claim:
-  #   - data_mount_src=__UNREADABLE__  -> findmnt reported NO MOUNT. That IS a measurement, and it
-  #     is the root-disk fallback this predicate exists to catch -> mount_mismatch.
-  #   - data_mount_src is a real path  -> the lsblk/readlink resolution itself broke. Nothing was
-  #     learned about the backing device -> `unreadable`, matching G12/G15/G16, which route every
-  #     readability failure there.
-  # Collapsing both into mount_mismatch asserts a mismatch that was never measured, and this file's
-  # own "WHY THIS IS NOT inngest-dedicated-host-classify.sh" section is several paragraphs on why
-  # that collapse is wrong: the two states have DIFFERENT remedies (fix the mount vs fix the device
-  # resolution), and a verdict token that conflates them sends the operator at the wrong one.
-  if [[ "$data_mount_devid" == "__UNREADABLE__" ]]; then
-    local _dmsrc
-    _dmsrc="$(_ihdg_field "$chosen_msg" data_mount_src)" || { _ihdg_verdict "unreadable"; return $?; }
-    if [[ "$_dmsrc" == "__UNREADABLE__" ]]; then
-      _ihdg_verdict "mount_mismatch"; return $?
-    fi
-    _ihdg_verdict "unreadable"; return $?
-  fi
-  # THE RHS STAYS QUOTED. Measured on bash 5.3.9: [[ ]]'s right-hand side is a GLOB by default,
-  # so with an unquoted RHS a dispatch of --expected-volume-id '*' matches ANY Hetzner volume
-  # alias. G17 would still refuse today, but relying on a sibling predicate is exactly what
-  # ADR-199 forbids when it refuses to merge G12 and G13.
-  [[ "$data_mount_devid" == "$expected_devid" ]] || { _ihdg_verdict "mount_mismatch"; return $?; }
-
-  # ── G15 — data_bytes is READABLE (readability only, no ceiling) ─────────────────
-  # An AUDIT field, not a threshold. An empty Redis on a volume holding megabytes is a state a human
-  # should see before it is erased — but a size CEILING here would be a made-up number, and the
-  # honest guard is that the figure was actually measured. `__UNREADABLE__` means the emitter could
-  # not walk the mount, which means the only surviving record of what is about to be destroyed does
-  # not exist.
-  local data_bytes
-  data_bytes="$(_ihdg_field "$chosen_msg" data_bytes)" || { _ihdg_verdict "unreadable"; return $?; }
-  [[ "$data_bytes" =~ ^[0-9]+$ ]]                      || { _ihdg_verdict "unreadable"; return $?; }
-
-  # ── G16 — flush_latched is READABLE (readability only) ──────────────────────────
-  # Neither polarity blocks: a latched flush and an un-latched one are both legitimate states at
-  # this point. What is NOT legitimate is `__UNREADABLE__`, which the emitter emits when it could
-  # not read the latch directory — and `[ -f ]` cannot distinguish "no latch" from "cannot read", so
-  # a gate accepting `false` without this check would accept a positive claim about a store that was
-  # never read.
-  local flush_latched
-  flush_latched="$(_ihdg_field "$chosen_msg" flush_latched)" || { _ihdg_verdict "unreadable"; return $?; }
-  case "$flush_latched" in
-    true|false) : ;;
-    *) _ihdg_verdict "unreadable"; return $? ;;
-  esac
-
-  # ── G17 — the LIVE volume is the one the operator pinned ────────────────────────
-  # The recut gate's Guard 1 ID-PIN (a plan-shape gate that no longer exists; its successor is the
-  # `before.id` pin in the since-deleted inngest-backstop-retire gate library) read `.change.before.id` from a plan document. This one reads LIVE Hetzner
-  # state at dispatch time. They can disagree — a plan is a projection of state, and state can be
-  # wrong about the world — and it is the world that gets destroyed.
-  #
-  # WHAT THE CALLER ACTUALLY READS — and this comment has now overstated it in BOTH directions.
-  # The workflow does `curl .../volumes?name=soleur-inngest-redis-store | jq -r '.volumes[0].id'`
-  # and NOTHING ELSE: there is no `.server` read and no attachment assertion anywhere in the job.
-  # A previous revision said it "reads the live ATTACHMENT" (too strong); the revision correcting
-  # THAT then added "and asserts the volume is attached to the inngest server", which is equally
-  # false. G17 proves exactly one thing: the volume carrying this NAME has the id the operator
-  # pinned. The attachment property is carried by G14's `data_mount_src` — a fact about what the
-  # host actually mounted — and the terraform ADDRESS question by the plan-shape gate's `before.id` pin (the recut gate's Guard 1,
-  # now the retire gate's). That pin is the counter that answers the address
-  # question; the two are complementary and neither subsumes the other.
-  #
-  # An unreadable live id lands here rather than on `unreadable`: the pin could not be confirmed,
-  # and this token names the thing the operator must go check.
-  [[ "$live_attachment_id" =~ ^[0-9]+$ ]]             || { _ihdg_verdict "id_pin_mismatch"; return $?; }
-  [[ "$live_attachment_id" == "$expected_volume_id" ]] || { _ihdg_verdict "id_pin_mismatch"; return $?; }
-
-  # ── G18 — #7674 reads PASS ──────────────────────────────────────────────────────
-  # Without this the recut is strictly COUNTERPRODUCTIVE rather than merely premature: the first
-  # `arm` after a recut would write a fresh latch, fail `verify_or_abort` against a host that cannot
-  # serve, and land the FSM in terminal `aborted` — with the latch burned and the store gone.
-  [[ "$followthrough_rc" =~ ^[0-9]+$ ]] || { _ihdg_verdict "followthrough_7674"; return $?; }
-  [[ "$followthrough_rc" -eq 0 ]]       || { _ihdg_verdict "followthrough_7674"; return $?; }
-
-  # ── G19 — the cutover flag, RE-READ SYNCHRONOUSLY ───────────────────────────────
-  # NOT from the probe row. The row is a ≤90-minute-old snapshot; the flag is readable in real time
-  # and is the thing that actually authorizes a concurrent FLUSHALL. This is also step (3) of the
-  # monotonicity argument at the top of this file — without it, "the count cannot increase between
-  # the row and the apply" is not established.
-  case "$cutover_flag" in
-    rolled-back|aborted) : ;;
-    *) _ihdg_verdict "flag_unsafe"; return $? ;;
-  esac
-
-  # ── G20 — diagnostic boot is off ────────────────────────────────────────────────
-  # ALSO a synchronous read: INNGEST_DIAGNOSTIC_BOOT is not an emitted probe field, and §D2 did not
-  # catch that the plan's condition 11 had no input at all. If it is still set, the flip reaches
-  # `done` against a SQLite-only non-durable scheduler — #7228's defect reproduced one layer over,
-  # now with the latch burned.
-  # THE EMPTY STRING IS NOT AN ACCEPTING VALUE, and it was. G20 was the only predicate in the gate
-  # whose clearing value was `""`, which made it the only one that failed OPEN when its flag was
-  # omitted from the call entirely — measured: dropping `--diagnostic-boot` returned `dark`. The
-  # caller must now say what it measured, using the literal `unset` for a key it positively
-  # established is absent. An empty value reaching here means the caller did not decide, and a
-  # gate authorizing an irreversible destroy must not decide for it.
-  case "$diagnostic_boot" in
-    0|unset) : ;;
-    *) _ihdg_verdict "diagnostic_boot"; return $? ;;
-  esac
-
-  _ihdg_verdict "dark"
-}
-
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
-# inngest_execute_registry_gate — `op=execute` step 2.0 (#8054). The SECOND entry point of this lib.
+# inngest_execute_registry_gate — `op=execute` step 2.0 (#8054). The lib's one live entry point.
 #
 # PROPERTY. `scripts/cutover-inngest.sh op=execute` (the P0 cutover step) proceeds past 2.0 only
 # when the dedicated inngest host is established, from evidence the host itself emitted, to be
@@ -1081,16 +595,14 @@ inngest_host_dark_gate() {
 # hourly row, `rolled-back` on the minute-old heartbeat) — only the NEWEST same-boot heartbeat is
 # graded, never "any arm-set flag in the window".
 #
-# THE RESOLVED DIVERGENCE FROM G8 (#8078). G8 once required `server_active == "inactive"`, and
-# the P1-5 refuse loop leaves the unit in `activating` indefinitely (measured 2026-09-11 on the
-# live host), so G8 refused today's host as `host_serving` — the same class of defect as this
-# file's reason for existing. G8 now shares THIS gate's E10 predicate verbatim: `server_active`
-# present, non-empty, `!= "unknown"`, `!= "active"`. The divergence was safe to close because the
-# narrow reading was never load-bearing: G9 (`http_code != 200`) excludes a bound listener and
-# G19 re-reads the cutover flag synchronously, refusing anything but rolled-back/aborted —
-# `activating` under the P1-5 refusal cannot progress to `active` without the flag leaving the
-# pre-arm set, which G19 already refuses. `activating`, `failed`, `inactive` are all
-# not-serving; `active` alone is serving.
+# HISTORY OF THE `server_active` PREDICATE (#8078). The retired recut gate's G8 once required
+# `server_active == "inactive"`, and the P1-5 refuse loop leaves the unit in `activating`
+# indefinitely (measured 2026-09-11 on the live host), so that gate refused today's host as
+# `host_serving`. E10 below is the surviving form: `server_active` present, non-empty,
+# `!= "unknown"`, `!= "active"`. `activating`, `failed`, `inactive` are all not-serving; `active`
+# alone is serving. The wide reading is safe for the execute gate because E9 (`http_code != 200`)
+# excludes a bound listener and E11/E13 refuse any cutover flag outside the pre-arm set, so
+# `activating` under the P1-5 refusal cannot progress to `active` without leaving that set.
 #
 # E-TABLE (evaluation order; population before silence, identity before content):
 #   E1  probe --query-rc numeric and 0                                      unreadable
@@ -1116,11 +628,11 @@ inngest_host_dark_gate() {
 # non-200 must carry the web-host probe's own fetch-failure signature (HTTP 500 + __FETCH_FAILED__)
 # or the script refuses without reading Better Stack at all. It is a script token, not a lib one.
 #
-# E1-E7 ARE `_ihdg_graded_row`, shared byte-for-byte with G1-G6 plus the boot_id shape check (which
-# the recut gate inherits — see the ADR-100 2026-09-11 addendum §7). E8/E9 are the same predicate
-# lines as G7/G9. The suite's mutation harness scopes per-consumer rows to the function and runs
-# helper rows against BOTH entry points — a helper tightening that reddens only one suite is a
-# copy, and copies are how this family of defects recurs.
+# E1-E7 ARE `_ihdg_graded_row` (historically G1-G6 of the retired recut gate, plus the boot_id shape
+# check — see the ADR-100 2026-09-11 addendum §7). E8/E9 are the same predicate lines as the retired
+# gate's G7/G9. With one entry point the suite's mutation harness runs every row against it; a
+# helper tightening that reddens only one place is a copy, and copies are how this family of
+# defects recurs.
 #
 # Usage:
 #   source tests/scripts/lib/inngest-host-dark-gate.sh

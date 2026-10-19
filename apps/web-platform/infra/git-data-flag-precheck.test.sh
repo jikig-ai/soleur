@@ -133,6 +133,13 @@ if [ "$name" = GIT_DATA_SSH_HOST_KEY ]; then
     network) echo "Doppler Error: dial tcp: lookup api.doppler.com: i/o timeout STDERR-CANARY-3b" >&2; exit 3 ;;
   esac
 fi
+# SHIM_STAMP_ERR forces one error class on the GIT_DATA_LUKS_CUTOVER_AT read ONLY (wipe modes).
+if [ "$name" = GIT_DATA_LUKS_CUTOVER_AT ]; then
+  case "${SHIM_STAMP_ERR:-}" in
+    auth)    echo "Doppler Error: Invalid Auth token STDERR-CANARY-3b" >&2; exit 1 ;;
+    network) echo "Doppler Error: dial tcp: lookup api.doppler.com: i/o timeout STDERR-CANARY-3b" >&2; exit 3 ;;
+  esac
+fi
 [ "${SHIM_SCOPE_ERROR:-0}" = 1 ] && { echo "Doppler Error: This token does not have access to requested config '$cfg' STDERR-CANARY-3b" >&2; exit 1; }
 case "${SHIM_ERR:-}" in
   auth)    echo "Doppler Error: Invalid Auth token STDERR-CANARY-3b" >&2; exit 1 ;;
@@ -212,6 +219,7 @@ run_case() {
   rm -rf "$store"; mkdir -p "$store/soleur/prd" "$store/soleur/prd_terraform" "$store/other-project/prd" || { printf 'FAIL SETUP: store\n' >&2; exit 1; }
   [ "$value" = ABSENT ] || printf '%s' "$value" > "$store/soleur/prd/GIT_DATA_STORE_ENABLED"
   [ "$pin" = ABSENT ] || printf '%s' "$pin" > "$store/soleur/prd/GIT_DATA_SSH_HOST_KEY"
+  [ "${CASE_STAMP-ABSENT}" = ABSENT ] || printf '%s' "$CASE_STAMP" > "$store/soleur/prd/GIT_DATA_LUKS_CUTOVER_AT"
   CTMP="$T/tmp-$name"; RT="$T/rt-$name"
   assert_fixture_dir "$CTMP"
   assert_fixture_dir "$RT"
@@ -473,6 +481,160 @@ RC=$?
 if [ "$RC" = 78 ] && [ ! -s "$DLOG" ]; then pass "P7: under bash -x the precheck exits 78 before calling doppler"
 else fail "P7: the xtrace refusal did not fire first" "rc=$RC"; fi
 
+# ── wipe modes (#10138, W3 / W7b): three separate predicates, one pinned floor ─────────────────────
+# Stamps are relative to the real clock with +-1 day margins (the script has no clock hook by design).
+ST8="$(date -u -d '8 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+ST6="$(date -u -d '6 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+STFUT="$(date -u -d '1 day' +%Y-%m-%dT%H:%M:%SZ)"
+ST8_EPOCH="$(date -u -d "$ST8" +%s)"
+WIPE_ARGV='doppler secrets get GIT_DATA_STORE_ENABLED --plain --no-exit-on-missing-secret -p soleur -c prd
+doppler secrets get DOPPLER_PROJECT --plain -p soleur -c prd
+doppler secrets get DOPPLER_CONFIG --plain -p soleur -c prd
+doppler secrets get GIT_DATA_LUKS_CUTOVER_AT --plain --no-exit-on-missing-secret -p soleur -c prd
+doppler secrets get GIT_DATA_SSH_HOST_KEY --plain --no-exit-on-missing-secret -p soleur -c prd'
+# wipe_run <label> <flag> <stamp|ABSENT> <mode> [VAR=value ...]
+wipe_run() {
+  local label="$1" flagv="$2" stamp="$3" mode="$4"; shift 4
+  CASE_STAMP="$stamp" run_case "wipe-$label" "$flagv" FLAG_MODE="$mode" "$@"
+}
+case_wipe_ok() { # flag true + an 8-day stamp: passes, prints the mode line first and the soak line second
+  wipe_run ok true "$ST8" wipe
+  [ "$RC" = 0 ] && [ "$(sed -n 1p "$OUT")" = "wipe_variant=flip_chained" ] && [ "$(sed -n 2p "$OUT")" = "flag=true mode=wipe" ] \
+    && [ "$(sed -n 3p "$OUT" | sed -E 's/elapsed_s=[0-9]+$/elapsed_s=N/')" = "wipe_soak floor_days=7 stamp_epoch=${ST8_EPOCH} elapsed_s=N" ] \
+    && [ "$(cat "$DLOG")" = "$WIPE_ARGV" ] && ! grep -qF 'flag_already_true' "$OUT"
+}
+case_wipe_refuses() { # <label> <flag> <stamp> <expected-verdict-prefix> [VAR=value ...]
+  local label="$1" flagv="$2" stamp="$3" want="$4"; shift 4
+  wipe_run "$label" "$flagv" "$stamp" wipe "$@"
+  [ "$RC" = 5 ] && grep -qE "^\[git-data-flag-precheck\] verdict=${want}( |$)" "$OUT" && ! grep -qF 'git_data_pin=' "$OUT"
+}
+case_wipe_flag() { case_wipe_refuses flag-off false "$ST8" wipe_precondition_flag_not_true && grep -qxF 'wipe_variant=flip_chained' "$OUT" && grep -qF GIT_DATA_LUKS_CUTOVER_AT "$DLOG"; }
+case_wipe_stamp_absent() { case_wipe_refuses stamp-absent true ABSENT wipe_precondition_stamp_absent; }
+case_wipe_soak() { case_wipe_refuses soak6 true "$ST6" wipe_precondition_soak_not_elapsed && grep -qE 'floor_days=7 elapsed_s=[0-9]+' "$OUT"; }
+case_wipe_soak_env0() { case_wipe_refuses soak6-env0 true "$ST6" wipe_precondition_soak_not_elapsed WIPE_SOAK_FLOOR_SECONDS=0; }
+
+if case_wipe_ok; then pass "WP1: mode=wipe, flag true, an 8-day-old stamp -> 'wipe_variant=flip_chained', 'flag=true mode=wipe' then 'wipe_soak floor_days=7 stamp_epoch=<n> elapsed_s=<n>', exit 0; doppler called 5 times (flag, project, config, stamp with --no-exit-on-missing-secret, pin)"
+else fail "WP1: the passing wipe precheck output differs" "$(detail) dlog=[$(tr '\n' '|' < "$DLOG")]"; fi
+if case_wipe_flag; then pass "WP2: mode=wipe with the flag false and a stamp present -> wipe_variant=flip_chained (a stamp never reaches the separated variant), verdict=wipe_precondition_flag_not_true, exit 5, no pin work"
+else fail "WP2: wipe over a false flag was not refused" "$(detail)"; fi
+if wipe_run unset ABSENT "$ST8" wipe && [ "$RC" = 5 ] && grep -qF 'verdict=wipe_precondition_flag_not_true' "$OUT"; then pass "WP2b: an UNSET flag under wipe refuses too (the final case no longer falls through to flag=unset exit 0)"
+else fail "WP2b: wipe over an unset flag was not refused" "$(detail)"; fi
+if wipe_run upper TRUE "$ST8" wipe && [ "$RC" = 5 ] && grep -qF 'verdict=wipe_precondition_flag_not_true' "$OUT"; then pass "WP2c: 'TRUE' is not true under wipe either (exact compare)"
+else fail "WP2c: TRUE passed the wipe flag predicate" "$(detail)"; fi
+if case_wipe_stamp_absent; then pass "WP3: flag true and no GIT_DATA_LUKS_CUTOVER_AT -> verdict=wipe_precondition_stamp_absent, exit 5"
+else fail "WP3: an absent stamp was not refused as stamp_absent" "$(detail)"; fi
+_stn=0
+for bad in '2026-10-07' '2026-10-07T00:00:00+00:00' '2026-13-45T99:99:99Z' '2026-02-30T00:00:00Z' 'not-a-timestamp' ' 2026-10-01T00:00:00Z' '2026-10-01T00:00:00Z extra' '2026-10-01 00:00:00Z' '@1700000000'; do
+  if case_wipe_refuses "stamp-bad-$_stn" true "$bad" wipe_precondition_stamp_malformed; then :; else fail "WP4: malformed stamp [$bad] was not refused as stamp_malformed" "$(detail)"; fi
+  _stn=$((_stn + 1))
+done
+if [ "$_stn" = 9 ]; then pass "WP4: 9 malformed or unparseable stamps (date-only, offset form, impossible month, 30 Feb, words, leading space, trailing text, no T, @epoch) each refuse as stamp_malformed (a non-empty stamp is PRESENT: never the separated variant)"
+else fail "WP4: stamp loop ran $_stn rows, expected 9"; fi
+if case_wipe_soak; then pass "WP5: a 6-day-old stamp -> verdict=wipe_precondition_soak_not_elapsed floor_days=7 elapsed_s=<n>, exit 5"
+else fail "WP5: a 6-day stamp was not refused as soak_not_elapsed" "$(detail)"; fi
+if case_wipe_refuses stamp-future true "$STFUT" wipe_precondition_soak_not_elapsed; then pass "WP5b: a stamp in the FUTURE is not elapsed time (soak_not_elapsed)"
+else fail "WP5b: a future stamp was not refused" "$(detail)"; fi
+if case_wipe_soak_env0; then pass "WP6: WIPE_SOAK_FLOOR_SECONDS=0 exported in the environment still refuses a 6-day stamp (no env path relaxes the floor)"
+else fail "WP6: an exported zero floor relaxed the soak" "$(detail)"; fi
+if case_wipe_refuses stamp-absent-env0 true ABSENT wipe_precondition_stamp_absent WIPE_SOAK_FLOOR_SECONDS=0; then pass "WP6b: with the floor env at 0 an absent stamp still refuses stamp_absent"
+else fail "WP6b: a zero floor env let an absent stamp through" "$(detail)"; fi
+if [ "$(grep -c '^readonly WIPE_SOAK_FLOOR_SECONDS=604800$' "$PRECHECK")" = 1 ] && ! grep -qF 'WIPE_SOAK_FLOOR_SECONDS:-' "$PRECHECK" && ! grep -qF 'WIPE_SOAK_FLOOR_SECONDS-' "$PRECHECK"; then pass "WP7: the floor is the unconditional constant 'readonly WIPE_SOAK_FLOOR_SECONDS=604800' (7 days), with no default-expansion form anywhere"
+else fail "WP7: the soak floor line is not exactly the pinned constant"; fi
+if wipe_run nl true "$ST8"$'\n' wipe && [ "$RC" = 0 ]; then pass "WP8 (must-PASS): a stamp with the trailing newline --plain prints is accepted"
+else fail "WP8: a stamp with a trailing newline was refused" "$(detail)"; fi
+wipe_run nostamp-probe true ABSENT wipe
+if [ "$RC" = 5 ]; then pass "WP8b (harness): removing the stamp fixture turns the passing row RED (the soak rows are not vacuous)"
+else fail "WP8b: the passing wipe row survived without a stamp fixture" "$(detail)"; fi
+if wipe_run stamp-auth true "$ST8" wipe SHIM_STAMP_ERR=auth && [ "$RC" = 5 ] && grep -qF 'verdict=wipe_stamp_read_failed reason=auth_invalid rc=1' "$OUT" && ! grep -q CANARY "$OUT"; then pass "WP9: an unreadable stamp -> verdict=wipe_stamp_read_failed reason=auth_invalid rc=1 (never stamp_absent), stderr not printed"
+else fail "WP9: a failed stamp read was not wipe_stamp_read_failed" "$(detail)"; fi
+
+# wipe_check: report-only. Every would-be refusal prints would_refuse=<word> and exits 0; the pin work still runs.
+case_check() { # <label> <flag> <stamp> <expected-word>
+  wipe_run "chk-$1" "$2" "$3" wipe_check
+  [ "$RC" = 0 ] && [ "$(sed -n 1p "$OUT" | cut -d' ' -f1)" != "[git-data-flag-precheck]" ] && grep -qxF "would_refuse=$4" "$OUT" \
+    && ! grep -qF 'verdict=' "$OUT" && grep -qF 'git_data_pin=present' "$OUT" && grep -qF GIT_DATA_LUKS_CUTOVER_AT "$DLOG"
+}
+if case_check off false "$ST8" wipe_precondition_flag_not_true; then pass "WC1: wipe_check with the flag false -> would_refuse=wipe_precondition_flag_not_true, exit 0, no verdict= line, the stamp read and the pin work still run"
+else fail "WC1: wipe_check flag-off report differs" "$(detail)"; fi
+if case_check stamp true ABSENT wipe_precondition_stamp_absent; then pass "WC2: wipe_check with no stamp -> would_refuse=wipe_precondition_stamp_absent, exit 0"
+else fail "WC2: wipe_check stamp-absent report differs" "$(detail)"; fi
+if case_check soak true "$ST6" wipe_precondition_soak_not_elapsed; then pass "WC3: wipe_check with a 6-day stamp -> would_refuse=wipe_precondition_soak_not_elapsed, exit 0"
+else fail "WC3: wipe_check soak report differs" "$(detail)"; fi
+if case_check ok true "$ST8" none && [ "$(sed -n 1p "$OUT")" = "wipe_variant=flip_chained" ] && [ "$(sed -n 2p "$OUT")" = "flag=true mode=wipe_check" ]; then pass "WC4: wipe_check with every predicate satisfied -> wipe_variant=flip_chained, flag=true mode=wipe_check, would_refuse=none, exit 0"
+else fail "WC4: wipe_check pass report differs" "$(detail)"; fi
+if wipe_run chk-stamp-auth true "$ST8" wipe_check SHIM_STAMP_ERR=network && [ "$RC" = 5 ] && grep -qF 'verdict=wipe_stamp_read_failed reason=network rc=3' "$OUT"; then pass "WC5: an unreadable stamp is a read failure (exit 5) even in report-only mode, not a would_refuse"
+else fail "WC5: wipe_check swallowed a stamp read failure" "$(detail)"; fi
+if wipe_run chk-env0 true "$ST6" wipe_check WIPE_SOAK_FLOOR_SECONDS=0 && grep -qxF 'would_refuse=wipe_precondition_soak_not_elapsed' "$OUT"; then pass "WC6: the exported zero floor does not relax wipe_check's report either"
+else fail "WC6: the zero floor env changed wipe_check's report" "$(detail)"; fi
+
+# wipe_reread (W7b): flag only. No stamp, no pin, no TOFU, no deny-roots probe.
+case_reread_ok() {
+  wipe_run reread-ok true ABSENT wipe_reread WIPE_VARIANT=flip_chained
+  [ "$RC" = 0 ] && [ "$(cat "$OUT")" = "flag=true mode=wipe_reread" ] \
+    && [ "$(cat "$DLOG")" = "$(printf '%s\n%s\n%s' 'doppler secrets get GIT_DATA_STORE_ENABLED --plain --no-exit-on-missing-secret -p soleur -c prd' 'doppler secrets get DOPPLER_PROJECT --plain -p soleur -c prd' 'doppler secrets get DOPPLER_CONFIG --plain -p soleur -c prd')" ] \
+    && [ ! -e "$RT/git-data.pin" ]
+}
+if case_reread_ok; then pass "WR1: wipe_reread with the flag true -> exactly 'flag=true mode=wipe_reread', exit 0; 3 doppler calls (flag, project, config); no stamp read, no pin file, no TOFU or deny-roots line"
+else fail "WR1: wipe_reread output or side effects differ" "$(detail) dlog=[$(tr '\n' '|' < "$DLOG")]"; fi
+if wipe_run reread-off false ABSENT wipe_reread WIPE_VARIANT=flip_chained && [ "$RC" = 5 ] && grep -qF 'verdict=wipe_precondition_flag_not_true' "$OUT" && [ ! -e "$RT/git-data.pin" ]; then pass "WR2: wipe_reread with the flag no longer true -> verdict=wipe_precondition_flag_not_true, exit 5"
+else fail "WR2: wipe_reread over a false flag was not refused" "$(detail)"; fi
+if wipe_run reread-unset ABSENT ABSENT wipe_reread WIPE_VARIANT=flip_chained && [ "$RC" = 5 ] && grep -qF 'verdict=wipe_precondition_flag_not_true' "$OUT"; then pass "WR3: wipe_reread over an unset flag refuses"
+else fail "WR3: wipe_reread over an unset flag was not refused" "$(detail)"; fi
+if wipe_run reread-scope ABSENT ABSENT wipe_reread SHIM_BOUND_CONFIG=prd_terraform && [ "$RC" = 5 ] && grep -qF 'verdict=flag_read_failed reason=scope_mismatch' "$OUT"; then pass "WR4: wipe_reread keeps the scope check (a token bound to another config is scope_mismatch)"
+else fail "WR4: wipe_reread dropped the scope check" "$(detail)"; fi
+if wipe_run reread-notoken true ABSENT wipe_reread DOPPLER_TOKEN= && [ "$RC" = 5 ] && grep -qF 'verdict=flag_token_absent' "$OUT" && [ ! -s "$DLOG" ]; then pass "WR5: wipe_reread without DOPPLER_TOKEN -> flag_token_absent, doppler never called"
+else fail "WR5: wipe_reread ran without a token" "$(detail)"; fi
+if wipe_run bogus true ABSENT wipe_bogus && [ "$RC" = 2 ] && grep -qF 'verdict=flag_mode_invalid' "$OUT"; then pass "WM1: the FLAG_MODE set stays closed (wipe_bogus -> flag_mode_invalid, exit 2)"
+else fail "WM1: an unknown wipe-ish mode was accepted" "$(detail)"; fi
+
+case_env_cannot_select() { wipe_run env-sep true "$ST8" wipe WIPE_VARIANT=separated && [ "$RC" = 0 ] && [ "$(sed -n 1p "$OUT")" = "wipe_variant=flip_chained" ] && wipe_run env-flip false ABSENT wipe WIPE_VARIANT=flip_chained && [ "$RC" = 0 ] && [ "$(sed -n 1p "$OUT")" = "wipe_variant=separated" ]; }
+case_stamp_forces_flip_chained() { wipe_run stampbad-flagfalse false 'not-a-timestamp' wipe && [ "$RC" = 5 ] && grep -qxF 'wipe_variant=flip_chained' "$OUT" && grep -qF 'verdict=wipe_precondition_flag_not_true' "$OUT"; }
+case_flag_out_of_set() { wipe_run flag-bad-m off ABSENT wipe && [ "$RC" = 5 ] && grep -qF 'verdict=wipe_precondition_flag_unreadable' "$OUT" && ! grep -qxF 'wipe_variant=separated' "$OUT"; }
+case_reread_no_expectation() { wipe_run rr-novar-m false ABSENT wipe_reread WIPE_VARIANT= && [ "$RC" = 5 ] && grep -qF 'verdict=wipe_precondition_variant_changed expected=none' "$OUT"; }
+case_reread_sep_stamp_appeared() { wipe_run rr-sep-stamp-m false "$ST8" wipe_reread WIPE_VARIANT=separated && [ "$RC" = 5 ] && grep -qF 'verdict=wipe_precondition_variant_changed expected=separated got=flip_chained' "$OUT"; }
+# ── A1 (2026-10-15): the separated variant. Chosen ONLY from in-session reads (flag, stamp); never from an input. ──
+# Guard 6 rows 6a-6g (plan Amendment A1.2). The scan and boot_complete predicates run in a later workflow step.
+if wipe_run sep-false false ABSENT wipe && [ "$RC" = 0 ] && [ "$(sed -n 1p "$OUT")" = "wipe_variant=separated" ] && grep -qF 'git_data_pin=present' "$OUT" && [ "$(tail -n 1 "$OUT")" = "flag=off" ] && ! grep -qF 'verdict=' "$OUT"; then pass "WV1: flag false and no stamp -> wipe_variant=separated as the FIRST line, exit 0, the pin work still runs"
+else fail "WV1: the separated variant (flag false, no stamp) was not selected" "$(detail)"; fi
+if wipe_run sep-unset ABSENT ABSENT wipe && [ "$RC" = 0 ] && [ "$(sed -n 1p "$OUT")" = "wipe_variant=separated" ] && [ "$(tail -n 1 "$OUT")" = "flag=unset" ]; then pass "WV2: an UNSET flag and no stamp -> wipe_variant=separated, exit 0"
+else fail "WV2: the separated variant (flag unset, no stamp) was not selected" "$(detail)"; fi
+_vn=0
+for badflag in off disabled FALSE True 0 1 ' false' 'false ' yes; do
+  if wipe_run "flag-bad-$_vn" "$badflag" ABSENT wipe && [ "$RC" = 5 ] && grep -qF 'verdict=wipe_precondition_flag_unreadable' "$OUT" && ! grep -qxF 'wipe_variant=separated' "$OUT" && ! grep -qF 'git_data_pin=' "$OUT"; then :; else fail "WV3: flag value [$badflag] with no stamp was not refused as flag_unreadable" "$(detail)"; fi
+  _vn=$((_vn + 1))
+done
+if [ "$_vn" = 9 ]; then pass "WV3: 9 flag values outside the closed set (true|false|unset) with no stamp each refuse wipe_precondition_flag_unreadable and never select the separated variant"
+else fail "WV3: flag loop ran $_vn rows, expected 9"; fi
+if wipe_run flag-error false ABSENT wipe SHIM_ERR=network && [ "$RC" = 5 ] && grep -qF 'verdict=flag_read_failed' "$OUT" && ! grep -qF 'wipe_variant=separated' "$OUT"; then pass "WV4: a flag READ error stays flag_read_failed (exit 5) and never selects a variant"
+else fail "WV4: a flag read error selected or masked a variant" "$(detail)"; fi
+if wipe_run stampbad-flagfalse false 'not-a-timestamp' wipe && [ "$RC" = 5 ] && grep -qxF 'wipe_variant=flip_chained' "$OUT" && grep -qF 'verdict=wipe_precondition_flag_not_true' "$OUT"; then pass "WV5: a garbage stamp with the flag false is PRESENT: flip_chained, never separated (flag_not_true fires first)"
+else fail "WV5: a garbage stamp reached the separated variant" "$(detail)"; fi
+if wipe_run env-sep true "$ST8" wipe WIPE_VARIANT=separated && [ "$RC" = 0 ] && [ "$(sed -n 1p "$OUT")" = "wipe_variant=flip_chained" ]; then pass "WV6: an exported WIPE_VARIANT=separated does not select the variant: flag true and a stamp are still flip_chained"
+else fail "WV6: an environment value selected the variant" "$(detail)"; fi
+if wipe_run env-flip false ABSENT wipe WIPE_VARIANT=flip_chained && [ "$RC" = 0 ] && [ "$(sed -n 1p "$OUT")" = "wipe_variant=separated" ]; then pass "WV7: an exported WIPE_VARIANT=flip_chained does not select the variant either: flag false and no stamp are still separated"
+else fail "WV7: an environment value selected the variant" "$(detail)"; fi
+if wipe_run chk-sep false ABSENT wipe_check && [ "$RC" = 0 ] && [ "$(sed -n 1p "$OUT")" = "wipe_variant=separated" ] && grep -qxF 'would_refuse=none' "$OUT"; then pass "WV8: wipe_check in the separated state -> wipe_variant=separated, would_refuse=none, exit 0"
+else fail "WV8: wipe_check did not report the separated variant" "$(detail)"; fi
+if wipe_run chk-badflag off ABSENT wipe_check && [ "$RC" = 0 ] && grep -qxF 'would_refuse=wipe_precondition_flag_unreadable' "$OUT" && grep -qxF 'wipe_variant=none' "$OUT"; then pass "WV9: wipe_check over an out-of-set flag value -> wipe_variant=none, would_refuse=wipe_precondition_flag_unreadable, exit 0"
+else fail "WV9: wipe_check over an out-of-set flag differs" "$(detail)"; fi
+# wipe_reread: the variant W3 printed is passed back as WIPE_VARIANT (an EXPECTATION, compared, never a selector).
+if wipe_run rr-sep false ABSENT wipe_reread WIPE_VARIANT=separated && [ "$RC" = 0 ] && [ "$(cat "$OUT")" = "wipe_variant=separated mode=wipe_reread" ] \
+   && [ "$(wc -l < "$DLOG")" = 4 ] && grep -qF GIT_DATA_LUKS_CUTOVER_AT "$DLOG" && [ ! -e "$RT/git-data.pin" ]; then pass "WV10: wipe_reread expecting separated, flag still false and no stamp -> 'wipe_variant=separated mode=wipe_reread', exit 0; 4 doppler calls (flag, project, config, stamp); no pin file"
+else fail "WV10: wipe_reread did not re-confirm the separated variant" "$(detail) dlog=[$(tr '\n' '|' < "$DLOG")]"; fi
+if wipe_run rr-sep-stamp false "$ST8" wipe_reread WIPE_VARIANT=separated && [ "$RC" = 5 ] && grep -qF 'verdict=wipe_precondition_variant_changed expected=separated got=flip_chained' "$OUT"; then pass "WV11: wipe_reread expecting separated but a stamp appeared -> wipe_precondition_variant_changed expected=separated got=flip_chained"
+else fail "WV11: a stamp appearing between W3 and W7b was not refused" "$(detail)"; fi
+if wipe_run rr-sep-flagtrue true ABSENT wipe_reread WIPE_VARIANT=separated && [ "$RC" = 5 ] && grep -qF 'verdict=wipe_precondition_variant_changed expected=separated got=flip_chained' "$OUT"; then pass "WV12: wipe_reread expecting separated but the flag turned true -> wipe_precondition_variant_changed (a flip began in between)"
+else fail "WV12: a flag flip between W3 and W7b was not refused" "$(detail)"; fi
+if wipe_run rr-sep-badflag off ABSENT wipe_reread WIPE_VARIANT=separated && [ "$RC" = 5 ] && grep -qF 'verdict=wipe_precondition_flag_unreadable' "$OUT"; then pass "WV13: wipe_reread expecting separated over an out-of-set flag value -> wipe_precondition_flag_unreadable"
+else fail "WV13: wipe_reread accepted an out-of-set flag value" "$(detail)"; fi
+_wn=0
+for badvar in '' none 'separated ' SEPARATED flip_chained2 sep; do
+  if wipe_run "rr-novar-$_wn" false ABSENT wipe_reread WIPE_VARIANT="$badvar" && [ "$RC" = 5 ] && grep -qF 'verdict=wipe_precondition_variant_changed expected=none' "$OUT"; then :; else fail "WV14: wipe_reread with WIPE_VARIANT=[$badvar] was not refused as expected=none" "$(detail)"; fi
+  _wn=$((_wn + 1))
+done
+if [ "$_wn" = 6 ]; then pass "WV14: wipe_reread with an empty or off-set WIPE_VARIANT refuses wipe_precondition_variant_changed expected=none (fail closed: the expectation is required)"
+else fail "WV14: expectation loop ran $_wn rows, expected 6"; fi
+
 # ── workflow rows ─────────────────────────────────────────────────────────────────────
 cat > "$T/wf.py" <<'PY'
 import sys, yaml, json
@@ -505,9 +667,21 @@ sites = [("step", s.get("id") or s.get("name")) for s in steps if "DOPPLER_TOKEN
 job = (wf.get("jobs") or {}).get("cutover") or {}
 sites += [("job", k) for k, v in job.items() if k != "steps" and "DOPPLER_TOKEN_PRD" in json.dumps(v, default=str)]
 sites += [("top", k) for k, v in wf.items() if k != "jobs" and "DOPPLER_TOKEN_PRD" in json.dumps(v, default=str)]
-sites += [("job", j) for j, b in (wf.get("jobs") or {}).items() if j != "cutover" and "DOPPLER_TOKEN_PRD" in json.dumps(b, default=str)]
-check("G1-census: DOPPLER_TOKEN_PRD is named only by the flag precheck step (%d steps scanned)" % len(steps),
-      len(steps) >= 1 and sites == [("step", "flag_precheck")], sites)
+# The wipe job (#10138) legitimately reads the prd flag in exactly two steps (the W3 precheck and the W7b
+# re-read); every OTHER job, and every other wipe-job site, is still a violation.
+wipe = (wf.get("jobs") or {}).get("wipe") or {}
+wsteps = wipe.get("steps") or []
+wsites = [("step", s.get("id") or s.get("name")) for s in wsteps if "DOPPLER_TOKEN_PRD" in json.dumps(s)]
+wsites += [("job", k) for k, v in wipe.items() if k != "steps" and "DOPPLER_TOKEN_PRD" in json.dumps(v, default=str)]
+sites += [("job", j) for j, b in (wf.get("jobs") or {}).items() if j not in ("cutover", "wipe") and "DOPPLER_TOKEN_PRD" in json.dumps(b, default=str)]
+# The exact shape of each allowed site: the secret is named ONCE, as env.DOPPLER_TOKEN of the step, nowhere in its run text.
+def prd_once_as_env(s):
+    return (json.dumps(s).count("DOPPLER_TOKEN_PRD") == 1 and (s.get("env") or {}).get("DOPPLER_TOKEN") == "${{ secrets.DOPPLER_TOKEN_PRD }}")
+allowed = [s for s in steps if s.get("id") == "flag_precheck"] + [s for s in wsteps if s.get("id") in ("wipe_flag_precheck", "wipe_flag_reread")]
+check("G1-census: DOPPLER_TOKEN_PRD is named only by cutover.flag_precheck, wipe.wipe_flag_precheck and wipe.wipe_flag_reread, once each, as the step's env DOPPLER_TOKEN (%d + %d steps scanned)" % (len(steps), len(wsteps)),
+      len(steps) >= 1 and len(wsteps) >= 1 and sites == [("step", "flag_precheck")]
+      and wsites == [("step", "wipe_flag_precheck"), ("step", "wipe_flag_reread")]
+      and len(allowed) == 3 and all(prd_once_as_env(s) for s in allowed), (sites, wsites))
 # #9725: the flip must also require the SERVED image to carry the dual-root
 # tenant deny — the GIT_DATA_DENY_FLOOR arm (env bound, refusal emitted).
 fp = [s for s in steps if s.get("id") == "flip_preconditions"]
@@ -601,6 +775,18 @@ if mutate prd-in-script-step "$WF" 1 's#^          MODE: proof$#&\n          DOP
   python3 "$T/wf.py" "$MUTANT" "$IV" > "$T/mut/wf-census.tsv" 2>&1
   mutant_red prd-in-script-step wf_row "$T/mut/wf-census.tsv" "G1-census:"
 fi
+# Row 3b — the wipe job's root-key fetch step is re-pointed at the prd flag token: a third wipe site.
+# shellcheck disable=SC2016
+if mutate prd-in-wipe-key-fetch "$WF" 2 '/id: wipe_key_fetch/,/^        run:/ s#DOPPLER_TOKEN_GIT_DATA_ROOT#DOPPLER_TOKEN_PRD#'; then
+  python3 "$T/wf.py" "$MUTANT" "$IV" > "$T/mut/wf-census-wipe.tsv" 2>&1
+  mutant_red prd-in-wipe-key-fetch wf_row "$T/mut/wf-census-wipe.tsv" "G1-census:"
+fi
+# Row 3c — a fourth job (not cutover, not wipe) binds the prd flag token: the per-job allow-list is closed.
+# shellcheck disable=SC2016
+if mutate prd-in-notify-job "$WF" 2 '/^  notify-failure:/,/^    steps:/ s#^    steps:$#    env:\n      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}\n    steps:#'; then
+  python3 "$T/wf.py" "$MUTANT" "$IV" > "$T/mut/wf-census-job.tsv" 2>&1
+  mutant_red prd-in-notify-job wf_row "$T/mut/wf-census-job.tsv" "G1-census:"
+fi
 # Row 4 — compare `true` case-insensitively.
 # shellcheck disable=SC2016
 if mutate true-case-insensitive "$PRECHECK" 2 's#^if \[ "\$flag" = true \]; then$#if [ "${flag,,}" = true ]; then#'; then
@@ -681,6 +867,72 @@ if mutate deny-write-gate "$PRECHECK" 2 's#"\$FLAG_WRITE_VALUE" = true#"\$FLAG_W
   CASE_SCRIPT="$MUTANT" mutant_red deny-write-gate case_write_deny_absent_true_refused
 fi
 
+# ── Guard 6 mutation rows (#10138): the soak floor is one pinned constant ──────────────────────────
+# M-wipe-floor-zero: the constant at zero. A 6-day stamp then passes (the soak row goes RED); an absent stamp must
+# STILL refuse stamp_absent (the predicates are separate), checked against the same mutant copy.
+# shellcheck disable=SC2016
+if mutate wipe-floor-zero "$PRECHECK" 2 's#^readonly WIPE_SOAK_FLOOR_SECONDS=604800$#readonly WIPE_SOAK_FLOOR_SECONDS=0#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red wipe-floor-zero case_wipe_soak
+  if CASE_SCRIPT="$MUTANT" case_wipe_stamp_absent; then pass "M-wipe-floor-zero (must-refuse): with the floor at zero an absent stamp STILL refuses stamp_absent"
+  else fail "M-wipe-floor-zero: a zero floor let an absent stamp through" "$(detail)"; fi
+fi
+# M-wipe-floor-default-form: the constant becomes `${VAR:-604800}`; an exported 0 then relaxes it.
+# shellcheck disable=SC2016
+if mutate wipe-floor-default-form "$PRECHECK" 2 's#^readonly WIPE_SOAK_FLOOR_SECONDS=604800$#readonly WIPE_SOAK_FLOOR_SECONDS="${WIPE_SOAK_FLOOR_SECONDS:-604800}"#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red wipe-floor-default-form case_wipe_soak_env0
+fi
+# M-wipe-flag-predicate: drop the flag-true predicate. A false flag then passes under wipe.
+if mutate wipe-flag-predicate "$PRECHECK" 2 's#wipe_word=wipe_precondition_flag_not_true$#wipe_word=#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red wipe-flag-predicate case_wipe_flag
+fi
+# M-wipe-stamp-predicate: drop the stamp-present predicate.
+# shellcheck disable=SC2016
+if mutate wipe-stamp-predicate "$PRECHECK" 2 's#^          absent\)    wipe_word=wipe_precondition_stamp_absent ;;$#          absent)    : ;;#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red wipe-stamp-predicate case_wipe_stamp_absent
+fi
+# M-wipe-soak-predicate: drop the elapsed-time comparison.
+# shellcheck disable=SC2016
+if mutate wipe-soak-predicate "$PRECHECK" 2 's#elapsed_s" -lt "\$WIPE_SOAK_FLOOR_SECONDS" \]; then$#elapsed_s" -lt 0 ]; then#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red wipe-soak-predicate case_wipe_soak
+fi
+# M-wipe-reread-gone: wipe_reread falls into the generic path (stamp-free, but pin + TOFU + deny lines appear).
+# shellcheck disable=SC2016
+if mutate wipe-reread-gone "$PRECHECK" 2 's#^if \[ "\$FLAG_MODE" = wipe_reread \]; then$#if [ "$FLAG_MODE" = wipe_reread_never ]; then#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red wipe-reread-gone case_reread_ok
+fi
+# M-wipe-check-refuses: the report-only mode refuses like wipe.
+# shellcheck disable=SC2016
+if mutate wipe-check-refuses "$PRECHECK" 2 's#^  if \[ "\$FLAG_MODE" = wipe \]; then$#  if [ "$FLAG_MODE" = wipe ] || [ "$FLAG_MODE" = wipe_check ]; then#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red wipe-check-refuses case_check soak true "$ST6" wipe_precondition_soak_not_elapsed
+fi
+
+# ── A1 mutants (Guard 6 rows 6a-6g): the separated variant is reachable only from in-session reads ──────────
+# M-sep-from-env: the variant honours an exported WIPE_VARIANT. WV6 goes RED.
+# shellcheck disable=SC2016
+if mutate sep-from-env "$PRECHECK" 2 's#^  wipe_variant="\$\(select_variant "\$flag" "\$CLS_STAMP_STATE"\)"$#  wipe_variant="${WIPE_VARIANT:-$(select_variant "$flag" "$CLS_STAMP_STATE")}"#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red sep-from-env case_env_cannot_select
+fi
+# M-sep-ignores-stamp: a present stamp no longer forces flip_chained. WV5 (garbage stamp, flag false) goes RED.
+# shellcheck disable=SC2016
+if mutate sep-ignores-stamp "$PRECHECK" 2 's#^  if \[ "\$1" = true \] \|\| \[ "\$2" != absent \]; then echo flip_chained$#  if [ "$1" = true ]; then echo flip_chained#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red sep-ignores-stamp case_stamp_forces_flip_chained
+fi
+# M-sep-open-set: any flag value outside true|false|unset still selects separated. WV3 goes RED.
+# shellcheck disable=SC2016
+if mutate sep-open-set "$PRECHECK" 2 's#^  elif \[ -z "\$1" \] \|\| \[ "\$1" = false \]; then echo separated$#  elif true; then echo separated#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red sep-open-set case_flag_out_of_set
+fi
+# M-reread-no-expect: wipe_reread without a valid expectation exits 0 instead of refusing. WV14 goes RED.
+# shellcheck disable=SC2016
+if mutate reread-no-expect "$PRECHECK" 2 's#^      refuse "wipe_precondition_variant_changed expected=none"$#      echo ok; exit 0#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red reread-no-expect case_reread_no_expectation
+fi
+# M-reread-sep-no-compare: the separated re-read stops comparing the recomputed variant. WV11 goes RED.
+# shellcheck disable=SC2016
+if mutate reread-sep-no-compare "$PRECHECK" 2 's#^      if \[ "\$got" != separated \]; then$#      if false; then#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red reread-sep-no-compare case_reread_sep_stamp_appeared
+fi
+
 # ── SANDBOX_DENY_ROOTS arm (#9725) ────────────────────────────────────────────────
 if case_deny absent "$T/deny-absent" proof   && [ "$RC" = 0 ] && grep -qF 'SANDBOX_DENY_ROOTS absent' "$OUT"; then
   pass "D1: source without the deny-root markers under proof -> SANDBOX_DENY_ROOTS absent, informational only (exit 0)"
@@ -704,13 +956,31 @@ if case_deny collapsed-flip "$T/deny-collapsed" flip   && [ "$RC" = 5 ] && grep 
   pass "D7: the flag-COLLAPSED helper shape (env read outside the deny fn) -> sandbox_deny_coverage_absent — the function-scope needle catches the #9725 form"
 else fail "D7: flag-collapsed helper shape was not detected as absent" "$(detail)"; fi
 
+# ── pin_only (review of #10352): snapshot_clear needs the host-key pin and nothing else from this script ────────────
+# The REAL script, a doppler shim for the store: the pin is written and fingerprinted, no variant line, no flag verdict.
+case_pin_only_ok() { # <flag value>
+  wipe_run "po-$1" "$1" ABSENT pin_only && [ "$RC" = 0 ] && grep -qF 'git_data_pin=present fp=SHA256:' "$OUT" \
+    && ! grep -qF 'wipe_variant=' "$OUT" && ! grep -qF 'verdict=' "$OUT" && [ -s "$RT/git-data.pin" ] && [ "$(stat -c %a "$RT/git-data.pin")" = 444 ]
+}
+if case_pin_only_ok false && case_pin_only_ok true; then pass "PO1: pin_only writes the 0444 host-key pin and prints git_data_pin=present with NO wipe_variant line and NO verdict, whether the flag is false or true (the flag value is irrelevant to it)"
+else fail "PO1: pin_only did not write the pin cleanly" "$(detail)"; fi
+CASE_PIN=ABSENT wipe_run po-pinabsent false ABSENT pin_only
+if [ "$RC" = 5 ] && grep -qF 'verdict=git_data_host_key_unavailable reason=absent' "$OUT" && [ ! -e "$RT/git-data.pin" ]; then pass "PO2: pin_only with the pin ABSENT still refuses git_data_host_key_unavailable reason=absent and writes no pin file"
+else fail "PO2: pin_only accepted an absent pin" "$(detail)"; fi
+if wipe_run po-badmode false ABSENT pin_only_x && [ "$RC" = 2 ] && grep -qF 'verdict=flag_mode_invalid' "$OUT"; then pass "PO3: a near-miss mode name is still refused flag_mode_invalid (pin_only is an exact member of the closed set)"
+else fail "PO3: an unknown mode was accepted" "$(detail)"; fi
+# shellcheck disable=SC2016  # sed programs are data
+if mutate pin-only-dropped "$PRECHECK" 2 's#\|wipe_reread\|pin_only\) : ;;#|wipe_reread) : ;;#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red pin-only-dropped case_pin_only_ok false
+fi
+
 # ── FLOOR + LEDGER ────────────────────────────────────────────────────────────────────
-MUTANT_FLOOR=19  # Guard 1 matrix rows 1-8, pin rows 9-16 (with 10b), deny-refusal 17
+MUTANT_FLOOR=34  # Guard 1 matrix rows 1-8, pin rows 9-16 (with 10b), deny-refusal 17, wipe Guard 6 rows (7), census rows 3b and 3c, A1 variant rows (5)
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2; exit 1
 fi
-# Assertion FLOOR: script cases 33 + pin/TOFU_ARM cases 15 (K1-K11 with K3b/K3c/K10b/K10c) + workflow rows 8 + deny-arm rows 7 + mutants 19 x 2 = 101 (exact).
-FLOOR=101
+# Assertion FLOOR: script cases 33 + pin/TOFU_ARM cases 15 (K1-K11 with K3b/K3c/K10b/K10c) + workflow rows 8 + deny-arm rows 7 + mutants 19 x 2 + census mutants 2 x 2 + wipe rows 26 + wipe mutants 7 x 2 + 1 must-refuse row = 146, plus the A1 (2026-10-15) variant rows WV1-WV14 (14) and 5 A1 mutants x 2 (10) = 170 (exact).
+FLOOR=175
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s\n' "$_ran" "$FLOOR" >&2; exit 1

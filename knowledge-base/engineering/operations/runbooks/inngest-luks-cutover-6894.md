@@ -117,7 +117,7 @@ Refusal reasons, and what each one is telling you:
 
 | `reason=` | Meaning |
 | --- | --- |
-| `luks-key-absent` / `redis-password-absent` / `volume-ids-unreadable` | The unit's own inputs did not arrive — a Doppler name is missing, or the first-boot stage did not write `/etc/default/inngest-luks-volumes`. Nothing was stopped. |
+| `luks-key-absent` / `redis-password-absent` / `volume-ids-unreadable` | The unit's own inputs did not arrive — a Doppler name is missing, or the first-boot stage did not write `/etc/default/inngest-luks-volumes`. Nothing was stopped. **After the host replace that carries #9786 this is the EXPECTED answer to any flagged run** (flag `armed`/`copying`/`copied`/`swapped`/`rollback`): the stage no longer writes the plaintext id the image-baked script reads, the cutover is complete, and at flag `done` the unit is a no-op. Such a refusal writes the terminal flag `aborted`, so do not dispatch a flagged run on a host in that state. |
 | `pointer-already-set` | This host is already past the cutover. There is no verb to go back (§5a); nothing to do. |
 | `canonical-not-plaintext` / `staging-not-mapper` / `staging-wrong-backing` / `canonical-mapper-open` | The pre-cutover topology is not what the FSM requires. The host is not in the state this dispatch acts on; read the probe row before doing anything. |
 | `envfile-key-absent` | `/etc/default/inngest-luks` carries no passphrase, so the boot-reopen unit could not open the store on the next boot. Refused before anything stopped. |
@@ -263,9 +263,9 @@ copy has nowhere to land. The dated history of the verb stays in ADR-142.
 **The live LUKS volume `hcloud_volume.inngest_redis_luks` (id 106903269) is now the only copy of the Inngest queue and run
 state, and `INNGEST_REDIS_LUKS_KEY` in Doppler `soleur-inngest/prd` is the only opener the host reads; an independent
 copy of the passphrase exists in Terraform state.** Losing the volume, or both copies of the passphrase, is data loss with
-nothing to restore from. Protection for that (delete protection, edge pins, key-loss posture) is built by
-#9879 (PR #9925, ADR-282) and described in §5c; it is in force only once that PR is merged, its apply has landed and the
-§5c read-back returns `protected`, so do not assume it exists before then.
+nothing to restore from. Protection for that (delete protection, edge pins, key-loss posture) was built by
+#9879 (PR #9925, ADR-282, accepted 2026-10-15) and is described in §5c. It is a point-in-time flag that a holder of the
+read/write Hetzner token can lift: re-read it per §5c before relying on it.
 
 **Signals that used to mean "the store went back to plaintext" are now incidents, not rollbacks.** The wrong-volume
 alert (`logtail_exploration_alert.inngest_luks_wrong_volume`), a probe row whose `data_mount_src` is not
@@ -327,8 +327,7 @@ Expect `404`. The same token form reads `GET /v1/servers/169426216` (`.server.vo
 
 - After retirement the live LUKS volume is the only copy of the store and `INNGEST_REDIS_LUKS_KEY` in Doppler
   `soleur-inngest/prd` is the only opener the host reads; an independent copy of the passphrase exists in Terraform state
-  (ADR-142 addendum 2026-10-08; protection is described in §5c and ADR-282 and takes
-  effect on the merge of PR #9925 and its apply).
+  (ADR-142 addendum 2026-10-08; protection is described in §5c and ADR-282 (accepted 2026-10-15)).
 - The dead on-host `rollback)` arm in `inngest-luks-cutover.sh`, its FSM comments and fixtures, and the dead
   plaintext-resolver arm in `cloud-init-inngest.yml` leave at the next planned Inngest host replace (#9786).
 
@@ -336,9 +335,10 @@ Expect `404`. The same token form reads `GET /v1/servers/169426216` (`.server.vo
 
 ## 5c. Sole-copy protection and key loss
 
-**Status: adopting (#9879, PR #9925, ADR-282).** Everything below that says a protection "is in force" becomes true only
-when the PR is merged, the merge's per-merge apply has landed one in-place update on `hcloud_volume.inngest_redis_luks`,
-and the read-back below has returned `protected`. Until then treat the live volume as unprotected (as §5a said).
+**Status: accepted 2026-10-15 (#10018, ADR-282).** The read-back below returned protected on 2026-10-15 (evidence: ADR-282,
+Addendum 2026-10-15). It is a point-in-time check of the delete-protection flag; re-run it after any merge that touches
+`apps/web-platform/infra/inngest-redis-luks.tf` (`soleur:postmerge` Phase 5.7 does) and after a sanctioned lift (each step below
+says what it expects).
 
 **What is pinned, and what is not.** The volume, the passphrase pair and the two Doppler cascade parents carry
 `prevent_destroy`; the volume also carries Hetzner delete protection. The attachment is deliberately NOT pinned, because
@@ -392,11 +392,12 @@ asserts presence of the read-only token; its scope is not verified here. The tok
 there is no `-v` and no `set -x`. A JSON string `"true"` reads as `read-failed`, not as `protected`. This read is a proxy
 for "Hetzner refuses a delete"; the refusal itself is not exercised. The command was exercised against a stubbed `doppler`
 and `curl` (fake token, no network) for protected, not-protected, HTTP 401, HTTP 404, network failure, non-JSON, a missing
-field, a missing token, an empty token and a failing `doppler` (no word); it has not been run against the real API.
+field, a missing token, an empty token and a failing `doppler` (no word). It was then run once against the real API, on
+2026-10-15, and printed `protected` (exit 0; ADR-282, Addendum 2026-10-15).
 
 **No drift check by log search.** The scheduled drift workflow does not print its plan to the job log (the plan goes to a
 file and, when drift is found, to the body or a comment of the open `infra-drift` issue, titled `infra: drift detected in
-<stack>`), so a log search would pass vacuously. Drift plans surface as comments on that issue; the read-back is the arbiter.
+<stack>`), so a log search would pass vacuously. Drift plans surface as comments on that issue; the read-back is the arbiter. The drift workflow's `sole-copy-protection-check` job (#9927 item 9) is the recurring distinct signal: it compares the live protection flag with the Terraform declaration and files its own issue titled `infra: Inngest store volume delete protection differs from Terraform (...)` when they differ (a sanctioned lift is quiet by design; see ADR-282, Addendum 2026-10-16).
 
 ### Delivery route and ordering
 
@@ -428,8 +429,8 @@ file and, when drift is found, to the body or a comment of the open `infra-drift
   means applying locally to update state. For the sole-copy addresses that is wrong: never apply locally, never untargeted,
   and there is no SSH step anywhere on this path (`hr-no-ssh-fallback-in-runbooks`). A drift reason at a sole-copy address
   is read from the plan text for that address and resolved through a reviewed change or the `manual-rerun` route.
-- The drift workflow's own output prints runnable `DELETE` recipes for other resources. Those recipes must never be pointed
-  at this volume or its Doppler secret.
+- The drift workflow's issue bodies print no `DELETE` recipe (removed by #9927 item 8c). Any reclaim of a rehearsal
+  survivor is a separately authorized call and must never be pointed at this volume or its Doppler secret.
 
 ### Per-loss-mode owner and procedure
 
@@ -602,6 +603,14 @@ and no `BASELINE_DECLARED_PROBES` bump were created.
   not a reason to open a shell.
 - **Rolling back later, on purpose.** There is no rollback: `op=luks-rollback` was retired by #8285 PR B and the
   plaintext volume it would have copied back to was destroyed on 2026-10-09 (§5a, §5b).
+- **After the host replace that carries #9786 (parked; not yet in force).** The template resolves the one LUKS volume.
+  An unpointed boot-reopen of a non-LUKS volume now FAILS `reopen_not_luks` (it used to skip with exit 0), and the
+  first-boot stage row for the no-pointer world reads `mode=unpointed` (was `plaintext_canonical`). A blank volume is
+  formatted only on a `rehearsal_*` config; on any other config the stage fails with `stage=unpointed_raw_refused`
+  (`inngest-luks-FAILED` phone-home carries the same stage), and there is no automated bring-up for a brand-new blank
+  `prd` volume, so that case needs a disaster-recovery procedure written when it is ever needed (ADR-142, addendum
+  2026-10-12). A lost pointer over an INTACT LUKS volume boots (opened and mounted) and is visible only as
+  `pointer=absent` on the `stage=resolve` row.
 
 ---
 

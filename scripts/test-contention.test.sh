@@ -705,12 +705,33 @@ fi
 # --- Arm 15: no stale-holder detection code exists (Phase 3.6) -------------
 # Anchored on the syntactic shapes a hand-rolled scheme needs, over CODE only
 # (this suite's own prose names them). A match means dead code crept in.
-lib_code="$(grep -vE '^[[:space:]]*#' "$LIB")"
+#
+# #7697 exception, deliberate: _tc_wait_heartbeat reads the holder marker and
+# kill -0's the holder pid for the holder_alive= report field — report-only
+# observability, not detection. The forbidden-token grep runs over the lib
+# MINUS that function's body, and the heartbeat itself is asserted to never
+# signal the holder (every `kill` in it targets its own sleep child).
+_hb_body="$(awk '/^_tc_wait_heartbeat\(\) \{/{f=1} f{print} f && /^\}/{exit}' "$LIB")"
+_hb_code="$(grep -vE '^[[:space:]]*#' <<<"$_hb_body" || true)"
+lib_code="$(awk '/^_tc_wait_heartbeat\(\) \{/{skip=1; next} skip && /^}/{skip=0; next} !skip' "$LIB" \
+  | grep -vE '^[[:space:]]*#' || true)"
 cases=$((cases + 1))
 if [[ "$(grep -cE 'kill -0|/proc/[^/]*holder|stale_pid|holder_pid' <<<"$lib_code" || true)" -eq 0 ]]; then
-  pass "Phase 3.6: the lib contains no stale-holder detection path"
+  pass "Phase 3.6: the lib contains no stale-holder detection path (heartbeat reader excluded)"
 else
   fail "the lib appears to implement stale-holder detection (dead code per AC5b)"
+fi
+# The heartbeat's holder read is REPORT-ONLY: it may kill -0 for liveness but
+# must never SIGNAL the holder — every kill in its body names either its own
+# sleep child or is the signal-free `kill -0` probe.
+cases=$((cases + 1))
+if [[ -n "$_hb_code" ]] \
+   && [[ "$(grep -cE '\bkill\b' <<<"$_hb_code" || true)" -ge 1 ]] \
+   && [[ "$(grep -E '\bkill\b' <<<"$_hb_code" | grep -vE '_hb_sleep|kill -0' | grep -cE '\bkill\b' || true)" -eq 0 ]] \
+   && grep -qE 'holder_pid=' <<<"$_hb_code"; then
+  pass "the heartbeat's holder read never signals the holder (kill targets _hb_sleep or is kill -0)"
+else
+  fail "heartbeat holder read is not report-only, or the reader vanished: $(grep -nE '\bkill\b|holder' <<<"$_hb_code" | head -5)"
 fi
 # POSITIVE CONTROL for the negative grep above: the SAME extraction+pattern must
 # be able to MATCH when the shape IS present, or a typo'd regex reads "clean
@@ -2330,7 +2351,247 @@ else
   fail "Q14: garbage knobs not sanitized; got '$_knobs'"
 fi
 
-MIN_CASES=160
+# ===========================================================================
+# Phase 3c: the holder progress marker (#7697, Guard 2). A waiter staring at
+# a held lock could not distinguish "holder is working" from "holder wedged
+# four days ago". The holder mints <name>.holder beside the lock; the waiter
+# heartbeat READS it — report-only, never an abort, never a kill.
+# ===========================================================================
+
+echo "=== Phase 3c: holder progress marker (#7697) ==="
+
+SS_LIB="$REPO_ROOT/plugins/soleur/scripts/lib/session-state.sh"
+
+# --- H1: mint on acquire, fields present, removal on release ----------------
+out="$(env -u CI SOLEUR_SESSION_STATE_ROOT="$SS_ROOT" bash -c "
+  source '$SS_LIB'
+  acquire_lock hm1 5 || { echo ACQUIRE_FAILED; exit 1; }
+  cat '$SS_ROOT/locks/hm1.holder'
+  release_lock hm1
+  if [[ -f '$SS_ROOT/locks/hm1.holder' ]]; then echo POST_RELEASE_PRESENT; else echo POST_RELEASE_GONE; fi
+" 2>&1 || true)"
+cases=$((cases + 1))
+if grep -qE '^pid=[0-9]+$' <<<"$out" \
+   && grep -qE '^acquired_epoch=[0-9]+$' <<<"$out" \
+   && grep -qE '^progress_epoch=[0-9]+$' <<<"$out"; then
+  pass "H1: acquire mints <name>.holder with pid/acquired_epoch/progress_epoch"
+else
+  fail "H1: marker mint missing or malformed; got: $out"
+fi
+cases=$((cases + 1))
+# Requires the mint evidence too: with mint broken the file is absent at BOTH
+# reads and a bare POST_RELEASE_GONE check would pass vacuously.
+if grep -qE '^pid=[0-9]+$' <<<"$out" && grep -qF 'POST_RELEASE_GONE' <<<"$out"; then
+  pass "H1: release_lock removes the marker (minted above, gone after release)"
+else
+  fail "H1: marker survived release_lock (or never minted); got: $out"
+fi
+
+# --- H2: stamp updates progress fields without clobbering identity ---------
+out="$(env -u CI SOLEUR_SESSION_STATE_ROOT="$SS_ROOT" bash -c "
+  source '$SS_LIB'
+  acquire_lock hm2 5 || { echo ACQUIRE_FAILED; exit 1; }
+  stamp_lock_holder hm2 last_suite=alpha suites_done=3
+  echo MARKER_BEGIN
+  cat '$SS_ROOT/locks/hm2.holder'
+  echo MARKER_END
+  release_lock hm2
+" 2>&1 || true)"
+cases=$((cases + 1))
+if grep -qF 'last_suite=alpha' <<<"$out" \
+   && grep -qF 'suites_done=3' <<<"$out" \
+   && grep -qE '^pid=[0-9]+$' <<<"$out"; then
+  pass "H2: stamp_lock_holder writes last_suite/suites_done, keeps pid"
+else
+  fail "H2: stamp did not land; got: $out"
+fi
+cases=$((cases + 1))
+# Shape pin: every marker line is key=value. The missing-shift regression
+# wrote the lock NAME as a bare line — greps for the named kvs stayed green.
+# Scoped to the marker itself (sentinel-bounded) so unrelated subprocess
+# stderr can't false-fail it.
+_marker_body="$(awk '/^MARKER_BEGIN$/{f=1;next}/^MARKER_END$/{f=0}f' <<<"$out" || true)"
+_nonkv="$(grep -cvE '^[a-z_]+=' <<<"$_marker_body" || true)"
+if [[ -n "$_marker_body" && "$_nonkv" == "0" ]]; then
+  pass "H2b: every marker line is key=value (no stray bare lines)"
+else
+  fail "H2b: marker carried a non-kv line; got: $out"
+fi
+cases=$((cases + 1))
+# The stamp must advance progress_epoch — a stamp that rewrites kvs but
+# keeps the mint's progress stamp fabricates the frozen-age wedge signal
+# on a healthy holder. Stamp twice across a second boundary and compare.
+out="$(env -u CI SOLEUR_SESSION_STATE_ROOT="$SS_ROOT" bash -c "
+  source '$SS_LIB'
+  acquire_lock hm2b 5 || exit 1
+  stamp_lock_holder hm2b
+  e1=\$(awk -F= '/^progress_epoch=/{print \$2; exit}' '$SS_ROOT/locks/hm2b.holder')
+  sleep 1.1
+  stamp_lock_holder hm2b
+  e2=\$(awk -F= '/^progress_epoch=/{print \$2; exit}' '$SS_ROOT/locks/hm2b.holder')
+  echo first=\$e1 second=\$e2
+  release_lock hm2b
+" 2>&1 || true)"
+_e1="$(grep -oE 'first=[0-9]+' <<<"$out" | cut -d= -f2 || true)"
+_e2="$(grep -oE 'second=[0-9]+' <<<"$out" | cut -d= -f2 || true)"
+if [[ -n "$_e1" && -n "$_e2" && "$_e2" -gt "$_e1" ]]; then
+  pass "H2c: a stamp advances progress_epoch ($_e1 -> $_e2 — a healthy holder looks live)"
+else
+  fail "H2c: stamp did not advance progress_epoch; got: $out"
+fi
+
+# --- H3: the stamp NEVER mints — a non-holder's stamp is a no-op ------------
+out="$(env -u CI SOLEUR_SESSION_STATE_ROOT="$SS_ROOT" bash -c "
+  source '$SS_LIB'
+  stamp_lock_holder hm3 last_suite=x suites_done=0; echo stamp_rc=\$?
+  if [[ -f '$SS_ROOT/locks/hm3.holder' ]]; then echo MINTED; else echo CLEAN; fi
+" 2>&1 || true)"
+cases=$((cases + 1))
+# stamp_rc pins against a command-not-found reading as CLEAN — an absent
+# function would report the same file absence as a correct no-op.
+if grep -qF 'stamp_rc=0' <<<"$out" && grep -qF 'CLEAN' <<<"$out"; then
+  pass "H3: stamping a lock this process does not hold creates no marker (rc=0)"
+else
+  fail "H3: stamp minted a marker for a non-holder or errored; got: $out"
+fi
+
+# --- H4: the waiter's heartbeat reports the live holder --------------------
+env -u CI SOLEUR_SESSION_STATE_ROOT="$SS_ROOT" \
+  bash -c "source '$SS_LIB'; acquire_lock hm4 60; sleep 60" &
+HBM_PID=$!
+for _ in {1..200}; do [[ -f "$SS_ROOT/locks/hm4.holder" ]] && break; sleep 0.05; done
+lock_env env TC_WAIT_HEARTBEAT_S=1 \
+  bash -c "source '$LIB'; tc_acquire hm4 3; echo RC=\$?" \
+  > "$TESTROOT/hm4.log" 2>&1 || true
+kill "$HBM_PID" 2>/dev/null || true; wait "$HBM_PID" 2>/dev/null || true
+cases=$((cases + 1))
+if grep -qE "holder_pid=$HBM_PID holder_alive=1 holder_progress_age=[0-9]+s" "$TESTROOT/hm4.log"; then
+  pass "H4: heartbeat reports holder_pid/holder_alive=1/holder_progress_age for a live marker-holding holder"
+else
+  fail "H4: heartbeat lacks holder fields; got: $(grep HEARTBEAT "$TESTROOT/hm4.log" | head -3)"
+fi
+cases=$((cases + 1))
+if grep -qE 'RC=0' "$TESTROOT/hm4.log"; then
+  pass "H4: the read was observe-only — the wait still proceeded (rc=0)"
+else
+  fail "H4: holder-read broke the wait path; got: $(cat "$TESTROOT/hm4.log")"
+fi
+
+# --- H5: a marker-less holder reads holder=none ------------------------------
+# A holder that went through plain `flock` (or pre-marker code) leaves no
+# marker — the beat must say so, not fabricate a pid.
+bash -c 'exec 9>"'"$SS_ROOT/locks/hm5.lock"'"; flock -x 9; exec sleep 30' &
+H5_PID=$!
+await_held "$SS_ROOT/locks/hm5.lock" || { cases=$((cases + 1)); fail "H5 fixture: holder never took hm5"; }
+lock_env env TC_WAIT_HEARTBEAT_S=1 \
+  bash -c "source '$LIB'; tc_acquire hm5 3; echo RC=\$?" \
+  > "$TESTROOT/hm5.log" 2>&1 || true
+kill "$H5_PID" 2>/dev/null || true; wait "$H5_PID" 2>/dev/null || true
+cases=$((cases + 1))
+if grep -q 'holder=none' "$TESTROOT/hm5.log"; then
+  pass "H5: a marker-less holder reads holder=none"
+else
+  fail "H5: no holder=none beat; got: $(grep HEARTBEAT "$TESTROOT/hm5.log" | head -3)"
+fi
+
+# --- H6: an unreadable/garbage marker is holder=unreadable, never an error --
+bash -c 'exec 9>"'"$SS_ROOT/locks/hm6.lock"'"; flock -x 9; exec sleep 30' &
+H6_PID=$!
+await_held "$SS_ROOT/locks/hm6.lock" || { cases=$((cases + 1)); fail "H6 fixture: holder never took hm6"; }
+printf 'this is not a holder marker\n' > "$SS_ROOT/locks/hm6.holder"
+lock_env env TC_WAIT_HEARTBEAT_S=1 \
+  bash -c "source '$LIB'; tc_acquire hm6 3; echo RC=\$?" \
+  > "$TESTROOT/hm6.log" 2>&1 || true
+kill "$H6_PID" 2>/dev/null || true; wait "$H6_PID" 2>/dev/null || true
+rm -f "$SS_ROOT/locks/hm6.holder"
+cases=$((cases + 1))
+if grep -q 'holder=unreadable' "$TESTROOT/hm6.log"; then
+  pass "H6: a garbage marker reads holder=unreadable"
+else
+  fail "H6: no holder=unreadable beat; got: $(grep HEARTBEAT "$TESTROOT/hm6.log" | head -3)"
+fi
+cases=$((cases + 1))
+if grep -qE 'RC=0' "$TESTROOT/hm6.log"; then
+  pass "H6: an unreadable marker did not disturb the wait (rc=0, report-only)"
+else
+  fail "H6: unreadable marker aborted the wait; got: $(cat "$TESTROOT/hm6.log")"
+fi
+
+# --- H7: no stamp means progress_age grows (the wedge signature) ------------
+# Guard-2 mutation 1's behavioural pin: a holder that mints and then never
+# stamps — the wedged case — must read as a RISING progress_age across beats.
+env -u CI SOLEUR_SESSION_STATE_ROOT="$SS_ROOT" \
+  bash -c "source '$SS_LIB'; acquire_lock hm7 60; sleep 60" &
+H7_PID=$!
+for _ in {1..200}; do [[ -f "$SS_ROOT/locks/hm7.holder" ]] && break; sleep 0.05; done
+lock_env env TC_WAIT_HEARTBEAT_S=1 \
+  bash -c "source '$LIB'; tc_acquire hm7 4; echo RC=\$?" \
+  > "$TESTROOT/hm7.log" 2>&1 || true
+kill "$H7_PID" 2>/dev/null || true; wait "$H7_PID" 2>/dev/null || true
+ages="$(grep -oE 'holder_progress_age=[0-9]+s' "$TESTROOT/hm7.log" | grep -oE '[0-9]+' || true)"
+cases=$((cases + 1))
+if [[ "$(wc -l <<<"$ages" | tr -d ' ')" -ge 2 ]] \
+   && [[ "$(tail -1 <<<"$ages")" -gt "$(head -1 <<<"$ages")" ]]; then
+  pass "H7: an unstamped holder's progress_age grows beat over beat ($(head -1 <<<"$ages")s -> $(tail -1 <<<"$ages")s — the wedge signature)"
+else
+  fail "H7: progress_age did not grow or fewer than 2 beats; ages: $(tr '\n' ' ' <<<"$ages")"
+fi
+
+# --- H7b: a marker whose pid is dead reads holder_alive=0 (corpse signal) ----
+# The wedge-diagnosis pair H7 doesn't reach: a STALE marker left by a holder
+# that died without release — the beat should name it a corpse, never silent.
+bash -c 'exec 9>"'"$SS_ROOT/locks/hm7b.lock"'"; flock -x 9; exec sleep 30' &
+H7B_PID=$!
+await_held "$SS_ROOT/locks/hm7b.lock" || { cases=$((cases + 1)); fail "H7b fixture: holder never took hm7b"; }
+_dead_pid=999999
+while kill -0 "$_dead_pid" 2>/dev/null; do _dead_pid=$((_dead_pid + 1)); done
+{ printf 'pid=%s\n' "$_dead_pid"
+  printf 'ppid=1\n'
+  printf 'acquired_epoch=1\n'
+  printf 'progress_epoch=1\n'
+} > "$SS_ROOT/locks/hm7b.holder"
+lock_env env TC_WAIT_HEARTBEAT_S=1 \
+  bash -c "source '$LIB'; tc_acquire hm7b 3; echo RC=\$?" \
+  > "$TESTROOT/hm7b.log" 2>&1 || true
+kill "$H7B_PID" 2>/dev/null || true; wait "$H7B_PID" 2>/dev/null || true
+rm -f "$SS_ROOT/locks/hm7b.holder"
+cases=$((cases + 1))
+if grep -qE "holder_pid=$_dead_pid holder_alive=0" "$TESTROOT/hm7b.log"; then
+  pass "H7b: a marker whose recorded pid is dead reads holder_alive=0 (corpse)"
+else
+  fail "H7b: no corpse read; got: $(grep HEARTBEAT "$TESTROOT/hm7b.log" | head -3)"
+fi
+
+# --- H7c: a shared (-s) acquire mints no holder marker -----------------------
+# Shared holders have no single holder identity — the mint is skipped, and
+# the heartbeat reads holder=none rather than misattributing one of N holders.
+out="$(env -u CI SOLEUR_SESSION_STATE_ROOT="$SS_ROOT" bash -c "
+  source '$SS_LIB'
+  acquire_lock_shared hm7c 5 || exit 1
+  [[ -f '$SS_ROOT/locks/hm7c.holder' ]] && echo MINTED || echo CLEAN
+  release_lock hm7c
+" 2>&1 || true)"
+cases=$((cases + 1))
+if grep -qF 'CLEAN' <<<"$out" && ! grep -qF 'MINTED' <<<"$out"; then
+  pass "H7c: a shared-mode acquire mints no .holder (no single holder identity)"
+else
+  fail "H7c: shared-mode mint behavior wrong; got: $out"
+fi
+
+# --- H8: run_suite stamps the holder marker once per suite boundary ---------
+# The stamp's wiring is structural: deleting the call must red HERE rather
+# than wait for an operator to notice silent heartbeats mid-incident.
+rs_body="$(awk '/^run_suite\(\) \{/{f=1} f{print} f && /^\}/{exit}' "$REPO_ROOT/scripts/test-all.sh")"
+cases=$((cases + 1))
+if [[ "$(grep -cE 'stamp_lock_holder test-all' <<<"$rs_body" || true)" -ge 1 ]] \
+   && grep -q 'suites_done=' <<<"$rs_body" \
+   && grep -q 'last_suite=' <<<"$rs_body"; then
+  pass "H8: run_suite stamps the test-all holder marker (last_suite + suites_done)"
+else
+  fail "H8: no holder stamp inside run_suite — waiters cannot see holder progress"
+fi
+
+MIN_CASES=174
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$cases" "$MIN_CASES" >&2

@@ -1,7 +1,8 @@
 # git-data cutover — reviewer-gated modes (epic #5274 / ADR-068 / ADR-220 / ADR-239).
 #
-# workflow_dispatch-only, five modes on one reviewer-gated job (`cutover`) plus a separate
-# `notify-failure` job that reports a failed, stranded or cancelled run:
+# workflow_dispatch-only, five modes on one reviewer-gated job (`cutover`), four wipe-family modes on a second
+# reviewer-gated job (`wipe`, #10138; header at the job), plus a separate `notify-failure` job that reports
+# a failed, stranded or cancelled run of either:
 #
 #   proof     (was the whole workflow): flag+pin read, root-key access through the web-1
 #             jump, the store probes (mapper-served, marker-bound, unfrozen, empty) and
@@ -22,6 +23,11 @@
 #   unfreeze  clears a freeze sentinel ONLY when its writer lineage is this run's
 #             CUTOVER_LINEAGE (github.run_id); foreign/unattributed sentinels refuse.
 #   redeploy  the same-version redeploy lever alone (manual recovery for pin loads etc.).
+#   wipe / wipe_finish / wipe_check  (job `wipe`; the `cutover` job is skipped for them): retire the plaintext
+#             rollback volume. Owner-gated; see the runbook section "The wipe".
+#   snapshot_clear  (job `wipe`, no loader, no Hetzner write): remove a LEFTOVER throwaway device-mapper snapshot of the
+#             plaintext volume that a killed wipe_check/wipe listing left on the git-data host. Owner-gated; it never
+#             detaches or deletes a volume. See the runbook section "A leftover snapshot".
 #
 # Failure semantics (the failure-state matrix):
 #   flag==true + flip     -> resume arm B: the write is skipped; redeploy+assert run.
@@ -46,10 +52,11 @@
 # (knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md).
 #
 # Credentials, each bound in exactly one step's env (the credential census suite pins this):
-#   - secrets.DOPPLER_TOKEN_PRD             `prd` read — the flag precheck ONLY
+#   - secrets.DOPPLER_TOKEN_PRD             `prd` read — the flag precheck steps (the cutover job's; the wipe job's precheck and flag re-read)
 #   - secrets.DOPPLER_TOKEN_GIT_DATA_FLAG   `prd` write — the flag WRITE steps ONLY (#8573)
 #   - secrets.DOPPLER_TOKEN                 prd_terraform read — bridge + webhook creds
 #   - secrets.DOPPLER_TOKEN_GIT_DATA_ROOT   soleur-git-data-root/prd read — the key fetch
+#   - secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED the Tier-B read token — the `wipe` job's loader step (the Hetzner write token), and the cutover flip's reachability check
 #   - secrets.SENTRY_ACTIONS_RO_TOKEN       read-only Sentry — the live pin-fault rule check
 #   - secrets.RESEND_API_KEY                send-only ops email — the notify-failure job ONLY (ADR-241, Tier A)
 #   - secrets.GITHUB_TOKEN                  notify-failure: issues:write; the precondition step: actions:read
@@ -69,21 +76,35 @@
 
 name: git-data cutover (#5274 / ADR-220 / ADR-239)
 
+# The run title is a closed pattern the wipe preconditions parse (scripts/lib/git-data-wipe-runs.sh): the wipe
+# family carries the typed volume id, every other mode is `git-data <mode>`.
+run-name: ${{ (inputs.mode == 'wipe' || inputs.mode == 'wipe_finish' || inputs.mode == 'wipe_check' || inputs.mode == 'snapshot_clear') && format('git-data {0} {1}', inputs.mode, inputs.volume_id) || format('git-data {0}', inputs.mode) }}
+
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "proof | flip | rollback | unfreeze | redeploy"
+        description: "proof | flip | rollback | unfreeze | redeploy | wipe | wipe_finish | wipe_check | snapshot_clear"
         required: true
         type: choice
         default: proof
-        options: [proof, flip, rollback, unfreeze, redeploy]
+        options: [proof, flip, rollback, unfreeze, redeploy, wipe, wipe_finish, wipe_check, snapshot_clear]
       confirm:
-        description: "Typed token matching the mode: proof=CUTOVER-GIT-DATA flip=FLIP-GIT-DATA rollback=ROLLBACK-GIT-DATA unfreeze=UNFREEZE-GIT-DATA redeploy=REDEPLOY-GIT-DATA (typo-guard; the environment reviewer is the authorization)."
+        description: "Typed token matching the mode: proof=CUTOVER-GIT-DATA flip=FLIP-GIT-DATA rollback=ROLLBACK-GIT-DATA unfreeze=UNFREEZE-GIT-DATA redeploy=REDEPLOY-GIT-DATA wipe=WIPE-GIT-DATA wipe_finish=WIPE-FINISH-GIT-DATA wipe_check=WIPE-CHECK-GIT-DATA snapshot_clear=CLEAR-SNAPSHOT-GIT-DATA (typo-guard; the environment reviewer is the authorization)."
         required: true
         type: string
       lineage:
         description: "unfreeze only: the freeze sentinel's writer lineage to clear (cutover-<dead run id>, read off the dead run's URL or its FREEZE output). Empty = this run's own lineage (the in-window unfreeze of a live flip/rollback)."
+        required: false
+        type: string
+        default: ""
+      volume_id:
+        description: "wipe modes only: the id of the plaintext volume named soleur-git-data-store (1 to 12 digits; the run refuses unless Hetzner names exactly this volume)."
+        required: false
+        type: string
+        default: ""
+      origin_run:
+        description: "wipe_finish only: the run id of the wipe run that detached the volume."
         required: false
         type: string
         default: ""
@@ -107,6 +128,7 @@ env:
 
 jobs:
   cutover:
+    if: inputs.mode != 'wipe' && inputs.mode != 'wipe_finish' && inputs.mode != 'wipe_check' && inputs.mode != 'snapshot_clear'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     environment: web-platform-infra-apply
@@ -133,6 +155,8 @@ jobs:
           MODE: ${{ inputs.mode }}
           CONFIRM: ${{ inputs.confirm }}
           LINEAGE: ${{ inputs.lineage }}
+          VOLUME_ID: ${{ inputs.volume_id }}
+          ORIGIN_RUN: ${{ inputs.origin_run }}
         run: |
           set -euo pipefail
           case "$MODE" in
@@ -151,6 +175,11 @@ jobs:
           # silently ignored — refuse so a mistaken input cannot pretend it applied.
           if [[ -n "${LINEAGE:-}" && "$MODE" != "unfreeze" ]]; then
             echo "::error::lineage is only valid with mode=unfreeze (it names the stranded sentinel's writer)."
+            exit 1
+          fi
+          # volume_id and origin_run belong to the wipe job; here they would be silently ignored.
+          if [[ -n "${VOLUME_ID:-}" || -n "${ORIGIN_RUN:-}" ]]; then
+            echo "::error::volume_id and origin_run are only valid with the wipe modes."
             exit 1
           fi
           echo "mode=$MODE"
@@ -788,6 +817,779 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # The wipe family (#10138 / #6897 / ADR-239 DL-2 / ADR-241): retire the plaintext rollback volume.
+  # mode=wipe        detach then delete the plaintext volume the owner NAMES BY ID (volume_id).
+  # mode=wipe_finish the tail of a wipe that died between its detach and its delete (origin_run names the
+  #                  wipe run that detached); it makes ZERO detach calls.
+  # mode=wipe_check  the front of `wipe` (W1-W7 and teardown) including the counts-only layout listing: no loader, no detach,
+  #                  no delete. No volume or provider state changes; a killed listing can leave a throwaway snapshot.
+  # mode=snapshot_clear removes such a LEFTOVER snapshot (pin-only precheck, identity read, bridge, host verb phase clear): no
+  #                  loader, no volume operation, no provider write.
+  # The owner-gated dispatch, the preconditions and the S-table are the runbook's section "The wipe".
+  # NOT valid for any wipe mode: the headless `pending_deployments` approval form.
+  #
+  # Order (every adjacent pair is pinned by the census): identity read < boot read < host assertion < flag
+  # re-read < credential loader < detach marker < detach < post-detach host read < Hetzner re-read < delete
+  # marker < delete < read-back. The loader runs ONCE, with ONLY the Tier-B token; every step after it begins
+  # with `exec env -i` so the loader's whole-project environment never reaches a child, and a credential
+  # reaches a child on STDIN (here-string), never as `NAME=value` on an env -i line.
+  wipe:
+    if: inputs.mode == 'wipe' || inputs.mode == 'wipe_finish' || inputs.mode == 'wipe_check' || inputs.mode == 'snapshot_clear'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: web-platform-infra-apply
+    concurrency:
+      group: web-1-swap
+      cancel-in-progress: false
+    env:
+      VOLUME_ID: ${{ inputs.volume_id }}
+    # Read by notify-failure. `phase` is the latest marker that was committed (a before-call marker is its own
+    # step, written before the call; an after-success marker is written by the step that made the call).
+    # `refusal` is a closed vocabulary. On a runner loss, a timeout or a rejected approval these are absent and
+    # the notify job reads "no output" as WIPE_STATE_UNKNOWN.
+    outputs:
+      mode: ${{ steps.wipe_confirm.outputs.mode }}
+      started: ${{ steps.wipe_confirm.outputs.mode != '' }}
+      phase: ${{ steps.wipe_readback.outputs.phase || steps.wipe_delete.outputs.phase || steps.wipe_delete_gate.outputs.phase || steps.wipe_detach.outputs.phase || steps.wipe_detach_gate.outputs.phase }}
+      refusal: ${{ steps.wipe_identity.outputs.refusal || steps.wipe_post_detach_read.outputs.refusal }}
+    steps:
+      - name: Validate mode, confirm token and ids (W1)
+        id: wipe_confirm
+        env:
+          MODE: ${{ inputs.mode }}
+          CONFIRM: ${{ inputs.confirm }}
+          LINEAGE: ${{ inputs.lineage }}
+          ORIGIN_RUN: ${{ inputs.origin_run }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          case "$MODE" in
+            wipe)        want="WIPE-GIT-DATA" ;;
+            wipe_finish) want="WIPE-FINISH-GIT-DATA" ;;
+            wipe_check)  want="WIPE-CHECK-GIT-DATA" ;;
+            snapshot_clear) want="CLEAR-SNAPSHOT-GIT-DATA" ;;
+            *) echo "::error::unknown mode '$MODE'"; exit 1 ;;
+          esac
+          if [[ "$CONFIRM" != "$want" ]]; then
+            echo "::error::confirm token mismatch — mode $MODE requires exactly $want."
+            exit 1
+          fi
+          if [[ -n "${LINEAGE:-}" ]]; then
+            echo "::error::lineage is only valid with mode=unfreeze."
+            exit 1
+          fi
+          if ! [[ "$VOLUME_ID" =~ ^[0-9]{1,12}$ ]]; then
+            echo "::error::volume_id must be 1 to 12 digits (the id of the plaintext volume named soleur-git-data-store)."
+            exit 1
+          fi
+          if [[ "$MODE" == "wipe_finish" ]]; then
+            if ! [[ "$ORIGIN_RUN" =~ ^[0-9]{1,15}$ ]]; then
+              echo "::error::origin_run must be the numeric id of the wipe run that detached the volume."
+              exit 1
+            fi
+          elif [[ -n "${ORIGIN_RUN:-}" ]]; then
+            echo "::error::origin_run is only valid with mode=wipe_finish."
+            exit 1
+          fi
+          # A re-run (attempt 2+) re-reads nothing the first attempt proved: refuse it, silently for the notifier.
+          if [[ "$RUN_ATTEMPT" != "1" ]]; then
+            echo "::error::a wipe-family run cannot be re-run (attempt $RUN_ATTEMPT): dispatch a new run."
+            exit 1
+          fi
+          # mode= is written LAST, after every refusal: a refused input leaves it empty, so started reads false
+          # and the notifier stays quiet for a typo.
+          echo "mode=$MODE"
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # The pinned CLI install, inline: the job may not use a remote action after the checkout (the census pins
+      # the job's uses: set), and these two literals are asserted equal to the credential loader's.
+      - name: Install Doppler CLI (pinned; same release and sha256 as the credential loader)
+        id: wipe_doppler_install
+        env:
+          DOPPLER_CLI_VERSION: "3.75.3"
+          DOPPLER_CLI_SHA256: "9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db"
+        run: |
+          set -euo pipefail
+          d="${RUNNER_TEMP}/doppler-cli"
+          mkdir -p "$d"
+          curl -fsSL --retry 3 --connect-timeout 20 --max-time 120 -o "$d/doppler.tar.gz" \
+            "https://github.com/DopplerHQ/cli/releases/download/${DOPPLER_CLI_VERSION}/doppler_${DOPPLER_CLI_VERSION}_linux_amd64.tar.gz"
+          echo "${DOPPLER_CLI_SHA256}  $d/doppler.tar.gz" | sha256sum -c -
+          tar xzf "$d/doppler.tar.gz" -C "$d" doppler
+          rm -f "$d/doppler.tar.gz"
+          echo "$d" >> "$GITHUB_PATH"
+
+      # W3 has two variants (ADR-239 Amendment 2026-10-15), chosen by the precheck from the flag and the stamp only.
+      # flip_chained: the flag is exactly true, the stamp is present, the 7-day soak has elapsed (one pinned constant in
+      # the script), and no rollback ran after the stamp (the interim guard; #10297 retires it).
+      # separated: the flag is exactly false/unset and there is no stamp; the run-record scan below must read store_clean.
+      # wipe_check reports the verdict it WOULD have returned and exits 0. snapshot_clear runs this step in pin_only mode
+      # ONLY to write the git-data host-key pin the ssh_config step requires; it evaluates no predicate.
+      - name: Flag, soak and rollback-recency precheck (W3)
+        id: wipe_flag_precheck
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
+          FLAG_MODE: ${{ steps.wipe_confirm.outputs.mode == 'snapshot_clear' && 'pin_only' || steps.wipe_confirm.outputs.mode == 'wipe_check' && 'wipe_check' || 'wipe' }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WIPE_MODE: ${{ steps.wipe_confirm.outputs.mode }}
+        run: |
+          set -euo pipefail
+          case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
+          rc=0
+          bash apps/web-platform/infra/git-data-flag-precheck.sh > "$RUNNER_TEMP/precheck.out" || rc=$?
+          cat "$RUNNER_TEMP/precheck.out"
+          if [[ "$rc" -ne 0 ]]; then exit "$rc"; fi
+          if [[ "$WIPE_MODE" == "snapshot_clear" ]]; then
+            # pin_only: no variant and no predicate. The ssh_config step below refuses without the pin, so prove it was written.
+            if ! grep -qE '^git_data_pin=present fp=SHA256:' "$RUNNER_TEMP/precheck.out"; then
+              echo "::error title=git-data-wipe::verdict=git_data_host_key_unavailable reason=pin_not_written"
+              exit 5
+            fi
+            exit 0
+          fi
+          variant="$(sed -n 's/^wipe_variant=//p' "$RUNNER_TEMP/precheck.out" | head -n 1)"
+          case "$variant" in
+            flip_chained|separated|none) : ;;
+            *)
+              echo "::error title=git-data-wipe::verdict=wipe_precondition_variant_unreadable"
+              exit 5
+              ;;
+          esac
+          would="$(sed -n 's/^would_refuse=//p' "$RUNNER_TEMP/precheck.out")"
+          stamp_epoch="$(sed -n 's/^wipe_soak .*stamp_epoch=\([0-9][0-9]*\).*/\1/p' "$RUNNER_TEMP/precheck.out")"
+          if [[ -z "$would" ]]; then would=none; fi
+          if [[ "$variant" == "separated" ]]; then
+            # The separated variant (ADR-239 Amendment 2026-10-15): no flip and no soak, so the run-record scan is the
+            # barrier that a flip never ran. GDSD_SELF_RUN_ID excludes THIS run's current attempt only; the boot_complete
+            # predicates are W5 (both variants) and the on-host store-root count is W7.
+            if ! source "${GITHUB_WORKSPACE:?}/scripts/lib/git-data-store-dirty-scan.sh"; then
+              echo "::error title=git-data-wipe::verdict=wipe_separated_scan_unreadable reason=library"
+              exit 5
+            fi
+            sv=""
+            svrc=0
+            # Bounded at 5 minutes (about N+3 sequential gh calls for N recorded runs): a hang reads as unreadable, never as clean.
+            sv="$(timeout 300 bash -c 'set -uo pipefail; source "$1"; git_data_store_dirty_list | GDSD_SELF_RUN_ID="$2" git_data_store_dirty_scan' _ "${GITHUB_WORKSPACE:?}/scripts/lib/git-data-store-dirty-scan.sh" "$GITHUB_RUN_ID")" || svrc=$?
+            sw=""
+            case "$sv" in
+              # The word AND the scan's own status must agree: a clean word with a non-zero status is a broken scan.
+              store_clean) if [[ "$svrc" -ne 0 ]]; then sw=wipe_separated_scan_unreadable; fi ;;
+              "store_dirty "*) sw=wipe_separated_store_dirty ;;
+              "cutover_in_flight "*) sw=wipe_separated_cutover_in_flight ;;
+              *) sw=wipe_separated_scan_unreadable ;;
+            esac
+            # The verdict is the scan library's fixed vocabulary plus a numeric run id or a fixed reason word; print it whole so the
+            # refusal names the run that wrote the store (shape-checked first, so nothing else can reach the log).
+            if [[ "$sv" =~ ^[a-z_]+(\ [0-9a-z_]+)?$ ]]; then echo "separated run-record scan: ${sv} (status ${svrc})"; else echo "separated run-record scan: unprintable verdict (status ${svrc})"; fi
+            if [[ -n "$sw" ]]; then
+              if [[ "$WIPE_MODE" == "wipe_check" ]]; then
+                if [[ "$would" == "none" ]]; then would="$sw"; fi
+              else
+                case "$sw" in
+                  wipe_separated_store_dirty) echo "::error title=git-data-wipe::verdict=wipe_separated_store_dirty" ;;
+                  wipe_separated_cutover_in_flight) echo "::error title=git-data-wipe::verdict=wipe_separated_cutover_in_flight" ;;
+                  *) echo "::error title=git-data-wipe::verdict=wipe_separated_scan_unreadable" ;;
+                esac
+                exit 5
+              fi
+            fi
+          elif [[ -n "$stamp_epoch" ]]; then
+            if ! source "${GITHUB_WORKSPACE:?}/scripts/lib/git-data-wipe-runs.sh"; then
+              echo "::error title=git-data-wipe::verdict=wipe_precondition_run_list_unreadable reason=library"
+              exit 5
+            fi
+            runs=""
+            if ! runs="$(timeout 60 gh run list --workflow git-data-cutover.yml --limit "${WIPE_RUNS_LIST_LIMIT:-100}" --json databaseId,displayTitle,createdAt,conclusion,headBranch,event)"; then
+              runs=""
+            fi
+            grc=0
+            gv="$(wipe_last_rollback_epoch "$runs" "$stamp_epoch")" || grc=$?
+            if [[ "$grc" -ne 0 ]]; then
+              if [[ "$WIPE_MODE" == "wipe_check" ]]; then
+                if [[ "$would" == "none" ]]; then would="$gv"; fi
+              else
+                echo "::error title=git-data-wipe::verdict=${gv//[^a-z_]/?}"
+                exit 5
+              fi
+            fi
+          elif [[ "$WIPE_MODE" != "wipe_check" ]]; then
+            echo "::error title=git-data-wipe::verdict=wipe_precondition_stamp_absent"
+            exit 5
+          fi
+          echo "variant=$variant" >> "$GITHUB_OUTPUT"
+          echo "would_refuse=$would" >> "$GITHUB_OUTPUT"
+
+      - name: Origin run check (the detaching wipe run)
+        id: wipe_origin_check
+        if: steps.wipe_confirm.outputs.mode == 'wipe_finish'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ORIGIN_RUN: ${{ inputs.origin_run }}
+        run: |
+          set -euo pipefail
+          if ! source "${GITHUB_WORKSPACE:?}/scripts/lib/git-data-wipe-runs.sh"; then
+            echo "::error title=git-data-wipe::verdict=wipe_origin_run_unreadable reason=library"
+            exit 5
+          fi
+          j=""
+          if ! j="$(timeout 60 gh run view "$ORIGIN_RUN" --json displayTitle,headBranch,event,createdAt,workflowName,jobs)"; then
+            echo "::error title=git-data-wipe::verdict=wipe_origin_run_unreadable"
+            exit 5
+          fi
+          rc=0
+          v="$(wipe_origin_run_ok "$j" "$VOLUME_ID" detach)" || rc=$?
+          if [[ "$rc" -ne 0 ]]; then
+            # A volume already deleted by the origin run: its delete gate is the evidence instead.
+            rc2=0
+            wipe_origin_run_ok "$j" "$VOLUME_ID" delete >/dev/null || rc2=$?
+            if [[ "$rc2" -ne 0 ]]; then
+              echo "::error title=git-data-wipe::verdict=${v//[^a-z_]/?}"
+              exit 5
+            fi
+          fi
+          created="$(jq -r '.createdAt // empty' <<<"$j")"
+          origin_epoch=""
+          if [[ "$created" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then origin_epoch="$(date -u -d "$created" +%s)"; fi
+          if ! [[ "$origin_epoch" =~ ^[0-9]{9,11}$ ]]; then
+            echo "::error title=git-data-wipe::verdict=wipe_origin_run_unreadable reason=created_at"
+            exit 5
+          fi
+          echo "origin_epoch=$origin_epoch" >> "$GITHUB_OUTPUT"
+          echo "origin run ok."
+
+      # W4: the Hetzner identity read, with the READ-ONLY token fetched into a masked variable BEFORE any step
+      # writes $GITHUB_ENV (the bridge and the loader come later). An absent token refuses; nothing falls back
+      # to the write token. The token reaches the helper on stdin.
+      - name: Hetzner identity read (W4)
+        id: wipe_identity
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          WIPE_MODE: ${{ steps.wipe_confirm.outputs.mode }}
+          ORIGIN_EPOCH: ${{ steps.wipe_origin_check.outputs.origin_epoch }}
+        run: |
+          set -euo pipefail
+          case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
+          tok=""
+          tok="$(timeout 60 doppler secrets get HCLOUD_TOKEN_READONLY --plain -p soleur -c prd_terraform 2>/dev/null)" || tok=""
+          if [[ -n "$tok" ]]; then printf '::add-mask::%s\n' "$tok"; fi
+          helper() {
+            env -i PATH="$PATH" HOME="$HOME" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" GITHUB_OUTPUT="$GITHUB_OUTPUT" \
+              bash "$GITHUB_WORKSPACE/apps/web-platform/infra/git-data-wipe.sh" "$@" <<<"$tok"
+          }
+          case "$WIPE_MODE" in
+            wipe)
+              helper identity --expect attached --volume-id "$VOLUME_ID" --record write
+              helper actions --volume-id "$VOLUME_ID" ;;
+            wipe_check)
+              helper state
+              helper identity --expect attached --volume-id "$VOLUME_ID" --record write --show-ids
+              helper actions --volume-id "$VOLUME_ID" ;;
+            snapshot_clear)
+              helper identity --expect attached --volume-id "$VOLUME_ID" --record write ;;
+            wipe_finish)
+              helper identity --expect detached --volume-id "$VOLUME_ID" --record write
+              vs="$(sed -n 's/^volume_state=//p' "$GITHUB_OUTPUT" | tail -n 1)"
+              if [[ "$vs" == "detached" ]]; then
+                helper actions --volume-id "$VOLUME_ID" --since "$ORIGIN_EPOCH"
+              fi ;;
+          esac
+
+      # W5: the newest boot_complete row of THIS server. Strictly newer than the server's creation (another
+      # host's row is not evidence), every judged field as required, an ABSENT row distinct from a failed read.
+      # A non-empty store is a STOP that routes to the CLO, never a retry.
+      - name: Boot-signal read (W5)
+        id: wipe_boot_read
+        if: steps.wipe_confirm.outputs.mode != 'wipe_finish' && steps.wipe_confirm.outputs.mode != 'snapshot_clear'
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
+          if ! source "${GITHUB_WORKSPACE:?}/scripts/lib/git-data-boot-signal-poll.sh"; then
+            echo "::error title=git-data-wipe::verdict=wipe_boot_unreadable reason=library"
+            exit 5
+          fi
+          rec="$RUNNER_TEMP/git-data-wipe-record"
+          created_ts="$(sed -n 's/^server_created=//p' "$rec")"
+          created=""
+          if ! created="$(date -u -d "$created_ts" +%s)"; then
+            echo "::error title=git-data-wipe::verdict=wipe_boot_unreadable reason=created"
+            exit 5
+          fi
+          rows_f="$RUNNER_TEMP/wipe-boot.rows"
+          err_f="$RUNNER_TEMP/wipe-boot.err"
+          rrc=0
+          git_data_boot_fields_read "$rows_f" "$err_f" || rrc=$?
+          rows="$(cat "$rows_f")"
+          vrc=0
+          v="$(git_data_boot_fields_verdict "$rrc" "$rows" "$created")" || vrc=$?
+          if [[ "$vrc" -ne 0 ]]; then
+            if [[ "$rrc" -ne 0 ]] && declare -F bs_read_classify >/dev/null 2>&1; then
+              cls="$(bs_read_classify "$rrc" "$rows_f" || true)"
+              echo "wipe boot read failed: rc=${rrc} class=${cls//[^a-z_-]/?}"
+            fi
+            echo "::error title=git-data-wipe::verdict=${v//[^a-z_]/?}"
+            echo "verdict=${v//[^a-z_]/?}" >> "$GITHUB_OUTPUT"
+            exit 5
+          fi
+          first="$(head -n 1 "$rows_f")"
+          row_epoch="$(jq -r '.epoch | tostring' <<<"$first")"
+          if ! [[ "$row_epoch" =~ ^[0-9]{9,11}$ ]]; then
+            echo "::error title=git-data-wipe::verdict=wipe_boot_unreadable reason=epoch"
+            exit 5
+          fi
+          echo "row_epoch=$row_epoch" >> "$GITHUB_OUTPUT"
+          echo "boot read ok: $v"
+
+      # --- SSH access path (the same three steps as the cutover job; wipe_finish needs it only when the volume is detached) ---
+      - name: CF Tunnel SSH bridge
+        id: wipe_bridge
+        if: steps.wipe_confirm.outputs.mode != 'wipe_finish' || steps.wipe_identity.outputs.volume_state == 'detached'
+        uses: ./.github/actions/cf-tunnel-ssh-bridge
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN }}
+          infra-dir: ${{ env.INFRA_DIR }}
+          cloudflared-version: ${{ env.CLOUDFLARED_VERSION }}
+          cloudflared-sha256: ${{ env.CLOUDFLARED_SHA256 }}
+          server-ip: ${{ env.WEB_HOST_PRIVATE_IP }}
+
+      - name: Fetch git-data root key
+        id: wipe_key_fetch
+        if: steps.wipe_confirm.outputs.mode != 'wipe_finish' || steps.wipe_identity.outputs.volume_state == 'detached'
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_GIT_DATA_ROOT }}
+        run: |
+          set -euo pipefail
+          case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
+          umask 077
+          keyfile="$RUNNER_TEMP/gd-root-key"
+          rc=0
+          doppler secrets get GIT_DATA_ROOT_SSH_PRIVATE_KEY --plain -p soleur-git-data-root -c prd > "$keyfile" 2>/dev/null || rc=$?
+          while IFS= read -r line || [[ -n "$line" ]]; do
+            if [[ -n "$line" ]]; then printf '::add-mask::%s\n' "$line"; fi
+          done < "$keyfile"
+          if [[ -s "$keyfile" && -n "$(tail -c 1 "$keyfile")" ]]; then
+            printf '\n' >> "$keyfile"
+          fi
+          reason=""
+          if [[ "$rc" -ne 0 ]]; then
+            reason=rc_nonzero
+          elif [[ ! -s "$keyfile" ]]; then
+            reason=empty
+          else
+            pub="$(ssh-keygen -y -f "$keyfile" </dev/null 2>/dev/null)" || pub=""
+            [[ "$pub" == ssh-* ]] || reason=not_openssh_key
+          fi
+          if [[ -n "$reason" ]]; then
+            echo "::error title=git-data-wipe key::verdict=git_data_root_key_fetch_failed reason=${reason}"
+            exit 1
+          fi
+          echo "git-data root key fetched."
+
+      - name: Write git-data ssh_config
+        id: wipe_ssh_config
+        if: steps.wipe_confirm.outputs.mode != 'wipe_finish' || steps.wipe_identity.outputs.volume_state == 'detached'
+        run: |
+          set -euo pipefail
+          cfg="$RUNNER_TEMP/gd-ssh-config"
+          key="$RUNNER_TEMP/gd-root-key"
+          kh="$RUNNER_TEMP/gd-known-hosts"
+          gd_pin="$RUNNER_TEMP/git-data.pin"
+          web_pin="$GITHUB_WORKSPACE/apps/web-platform/infra/web-1-ssh-host-key.pub"
+          writer="$GITHUB_WORKSPACE/.github/actions/cf-tunnel-ssh-bridge/write-known-hosts.sh"
+          if [[ -z "${CI_SSH_KEYFILE:-}" || ! -s "$CI_SSH_KEYFILE" || ! -s "$key" ]]; then
+            echo "::error title=git-data-wipe ssh_config::verdict=ssh_config_key_absent"
+            exit 1
+          fi
+          if [[ ! -s "$gd_pin" ]]; then
+            echo "::error title=git-data-wipe ssh_config::verdict=git_data_host_key_unavailable reason=absent"
+            exit 1
+          fi
+          for p in "$cfg" "$key" "$CI_SSH_KEYFILE" "$kh"; do
+            if ! [[ "$p" =~ ^/[A-Za-z0-9/_.-]+$ ]]; then
+              echo "::error title=git-data-wipe ssh_config::verdict=ssh_config_path_unsafe"
+              exit 1
+            fi
+          done
+          rm -f "$kh"
+          if ! bash "$writer" web-1 "$web_pin" "$kh"; then
+            echo "::error title=git-data-wipe ssh_config::verdict=web_1_host_key_invalid"
+            exit 1
+          fi
+          if ! bash "$writer" git-data "$gd_pin" "$kh"; then
+            echo "::error title=git-data-wipe ssh_config::verdict=git_data_host_key_unavailable reason=invalid"
+            exit 1
+          fi
+          if [[ ! -s "$kh" ]]; then
+            echo "::error title=git-data-wipe ssh_config::verdict=known_hosts_empty"
+            exit 1
+          fi
+          umask 077
+          cat > "$cfg" <<EOF
+          Host 10.0.1.10
+            User root
+            IdentityFile ${CI_SSH_KEYFILE}
+            IdentitiesOnly yes
+            BatchMode yes
+            ConnectTimeout 10
+            LogLevel INFO
+            ForwardAgent no
+            ClearAllForwardings yes
+            PermitLocalCommand no
+            ControlPath none
+            UpdateHostKeys no
+            StrictHostKeyChecking yes
+            UserKnownHostsFile ${kh}
+            GlobalKnownHostsFile /dev/null
+            HostKeyAlias web-1
+            HostKeyAlgorithms ecdsa-sha2-nistp256
+
+          Host 10.0.1.20
+            User root
+            IdentityFile ${key}
+            ProxyCommand ssh -F ${cfg} -W 10.0.1.20:22 10.0.1.10
+            IdentitiesOnly yes
+            BatchMode yes
+            ConnectTimeout 20
+            LogLevel INFO
+            ForwardAgent no
+            ClearAllForwardings yes
+            PermitLocalCommand no
+            ControlPath none
+            UpdateHostKeys no
+            StrictHostKeyChecking yes
+            UserKnownHostsFile ${kh}
+            GlobalKnownHostsFile /dev/null
+            HostKeyAlias git-data
+            HostKeyAlgorithms ssh-ed25519
+          EOF
+          echo "ssh_config written."
+
+      # snapshot_clear: ONE ssh session that removes a LEFTOVER throwaway snapshot (A1, 2026-10-15; CTO follow-up ruling).
+      # It runs for no other mode, needs no Tier-B credential and makes no provider WRITE (the W4 identity step reads the provider with the read-only token): the host verb proves the
+      # leftover is the one the listing makes (origin = the typed device, a loop-backed COW and a mount under the pinned
+      # /dev/shm directory) and refuses (wipe_snapshot_not_ours) otherwise. It never detaches or deletes a volume.
+      - name: Clear a leftover transient snapshot (snapshot_clear)
+        id: wipe_snapshot_clear
+        if: steps.wipe_confirm.outputs.mode == 'snapshot_clear'
+        env:
+          WEB_HOSTS: ${{ env.WEB_HOST_PRIVATE_IP }}
+          GIT_DATA_SSH: ssh -F ${{ runner.temp }}/gd-ssh-config
+          MODE: wipe_assert
+          WIPE_PHASE: clear
+        run: |
+          set -euo pipefail
+          rec="$RUNNER_TEMP/git-data-wipe-record"
+          WIPE_VOLUME_ID="$(sed -n 's/^plaintext_id=//p' "$rec")"
+          WIPE_SERVER_ID="$(sed -n 's/^server_id=//p' "$rec")"
+          WIPE_LUKS_VOLUME_ID="$(sed -n 's/^luks_id=//p' "$rec")"
+          export WIPE_VOLUME_ID WIPE_SERVER_ID WIPE_LUKS_VOLUME_ID
+          bash apps/web-platform/infra/git-data-cutover.sh
+          {
+            echo "### git-data snapshot_clear"
+            echo "- This run removed only a transient local snapshot, or found none. It detached and deleted no volume and made no provider write."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # W7: ONE ssh session, read-only toward the store and the volume. The typed id, the LUKS id and the
+      # server id come from the verdict record W4 wrote (Hetzner's answer, not an input). Stamps the W7 epoch.
+      - name: Host-side wipe assertion (W7)
+        id: wipe_host_assert
+        if: steps.wipe_confirm.outputs.mode != 'snapshot_clear' && (steps.wipe_confirm.outputs.mode != 'wipe_finish' || steps.wipe_identity.outputs.volume_state == 'detached')
+        env:
+          WEB_HOSTS: ${{ env.WEB_HOST_PRIVATE_IP }}
+          GIT_DATA_SSH: ssh -F ${{ runner.temp }}/gd-ssh-config
+          MODE: wipe_assert
+          WIPE_PHASE: ${{ steps.wipe_confirm.outputs.mode == 'wipe_finish' && 'finish' || 'pre' }}
+          WIPE_LISTING: ${{ steps.wipe_confirm.outputs.mode != 'wipe_finish' && 'run' || 'skip' }}
+          WIPE_ROW_EPOCH: ${{ steps.wipe_boot_read.outputs.row_epoch }}
+          WIPE_RUN_MODE: ${{ steps.wipe_confirm.outputs.mode }}
+          W3_WOULD: ${{ steps.wipe_flag_precheck.outputs.would_refuse }}
+          W3_VARIANT: ${{ steps.wipe_flag_precheck.outputs.variant }}
+        run: |
+          set -euo pipefail
+          rec="$RUNNER_TEMP/git-data-wipe-record"
+          WIPE_VOLUME_ID="$(sed -n 's/^plaintext_id=//p' "$rec")"
+          WIPE_SERVER_ID="$(sed -n 's/^server_id=//p' "$rec")"
+          WIPE_LUKS_VOLUME_ID="$(sed -n 's/^luks_id=//p' "$rec")"
+          export WIPE_VOLUME_ID WIPE_SERVER_ID WIPE_LUKS_VOLUME_ID
+          if [[ "$WIPE_PHASE" == "pre" ]]; then
+            WIPE_ROW_DT="$WIPE_ROW_EPOCH"
+            export WIPE_ROW_DT
+          else
+            unset WIPE_LISTING
+          fi
+          bash apps/web-platform/infra/git-data-cutover.sh
+          # The W7 stamp is the token the detach chokepoint consumes, so it is written AFTER the separated variant's own
+          # store-root refusal below: a refusal exits before any token exists.
+          srr_word=""
+          if [[ "$WIPE_PHASE" == "pre" ]]; then
+            ans="$(sed -n 's/^wipe_assert=//p' "$GITHUB_OUTPUT" | tail -n 1)"
+            srr="$(sed -n 's/.* store_root_repos=\([0-9][0-9]*\)$/\1/p' <<<"$ans")"
+            # The on-host store-root count is the separated variant's second, independent barrier (the host is not told
+            # the variant): anything but the canonical integer 0 refuses (a string compare, never arithmetic: 08 and 2^64 are
+            # not zero). Every variant but flip_chained is held to it, so an empty variant cannot skip it. wipe_check reports it.
+            if [[ "$W3_VARIANT" != "flip_chained" ]]; then
+              if ! [[ "$srr" =~ ^(0|[1-9][0-9]*)$ ]]; then
+                srr_word=wipe_separated_store_root_unreadable
+              elif [[ "$srr" != 0 ]]; then
+                srr_word=wipe_separated_store_root_populated
+              fi
+            fi
+            if [[ -n "$srr_word" && "$WIPE_RUN_MODE" != "wipe_check" ]]; then
+              case "$srr_word" in
+                wipe_separated_store_root_populated) echo "::error title=git-data-wipe::verdict=wipe_separated_store_root_populated" ;;
+                *) echo "::error title=git-data-wipe::verdict=wipe_separated_store_root_unreadable" ;;
+              esac
+              exit 5
+            fi
+            srv_created="$(sed -n 's/^server_created=//p' "$rec")"
+            row_at="$(TZ=UTC0 printf '%(%Y-%m-%dT%H:%M:%SZ)T' "${WIPE_ROW_EPOCH:-0}")"
+            # Evidence record (CLO, ADR-239 Amendment 2026-10-15): every line says measured, policy or inherited. Counts
+            # only: the host line carries no name and no id.
+            {
+              echo "### git-data wipe evidence, pre-state"
+              echo "- measured, this run: plaintext volume ${WIPE_VOLUME_ID}, server ${WIPE_SERVER_ID}, LUKS volume ${WIPE_LUKS_VOLUME_ID}; server created ${srv_created}"
+              echo "- measured, this run: variant ${W3_VARIANT:-none}; W3 would be ${W3_WOULD:-none}; store-root entries ${srr:-unreadable}"
+              echo "- measured, Better Stack, boot time only: newest boot_complete row at ${row_at}; this is no repository entry at boot, not no residue"
+              echo "- measured, this run, counts only: ${ans}"
+              echo "- inherited, ADR-239 Amendment 2026-10-09: before 2026-09-24 the plaintext volume may hold regular files named for a workspace id (.<id>.init.lock). lock_residue counts those files only. It does not say whose they are or whether that workspace was ever removed, and it does not count .gc-cursor. A number is a measurement of those lock files; lock_residue=na means the listing did not run and they are unmeasured. Provider snapshots, backups and copies of the volume are unmeasured."
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          env -i PATH="$PATH" HOME="$HOME" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
+            bash apps/web-platform/infra/git-data-wipe.sh stamp --epoch w7
+          if [[ "$WIPE_RUN_MODE" == "wipe_check" ]]; then
+            w4="$(sed -n 's/^w4_epoch=//p' "$rec")"
+            w7="$(sed -n 's/^w7_epoch=//p' "$rec")"
+            echo "wipe_check elapsed_s=$(( w7 - w4 ))"
+            verdict="${W3_WOULD:-none}"
+            if [[ "$verdict" == "none" && -n "$srr_word" ]]; then verdict="$srr_word"; fi
+            line="NOT authorization; W3 would be ${W3_VARIANT:-none}/${verdict}; layout listing exercised: counts only"
+            echo "$line"
+            printf -- '- %s\n' "$line" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Flag re-read (W7b)
+        id: wipe_flag_reread
+        if: steps.wipe_confirm.outputs.mode != 'wipe_check' && steps.wipe_confirm.outputs.mode != 'snapshot_clear'
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
+          FLAG_MODE: wipe_reread
+          WIPE_VARIANT: ${{ steps.wipe_flag_precheck.outputs.variant }}
+        run: |
+          case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
+          exec env -i PATH="$PATH" HOME="$HOME" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" GITHUB_OUTPUT="$GITHUB_OUTPUT" FLAG_MODE="$FLAG_MODE" WIPE_VARIANT="$WIPE_VARIANT" \
+            bash -c 'set -euo pipefail
+          IFS= read -r dt
+          DOPPLER_TOKEN="$dt" bash "$GITHUB_WORKSPACE/apps/web-platform/infra/git-data-flag-precheck.sh"' <<<"$DOPPLER_TOKEN"
+
+      # W8: the ONLY loader call. Only the Tier-B token is passed (no legacy fallback): a missing Tier-B token
+      # fails closed here. After this step the job environment holds the whole privileged project.
+      - name: Load Tier-B credentials (W8)
+        id: wipe_loader
+        if: steps.wipe_confirm.outputs.mode == 'wipe' || (steps.wipe_confirm.outputs.mode == 'wipe_finish' && steps.wipe_identity.outputs.volume_state == 'detached')
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+
+      # W9a: the before-call marker is its OWN step. The checks come first, THEN the marker is written, so a
+      # step that refused wrote nothing. The W7-epoch bound and the tier_b source are both asserted here.
+      # The step NAME is read by the run lib (wipe_origin_run_ok matches `gh run view` steps by name, not id).
+      - name: wipe_detach_gate
+        id: wipe_detach_gate
+        if: steps.wipe_confirm.outputs.mode == 'wipe'
+        env:
+          LOADER_SOURCE: ${{ steps.wipe_loader.outputs.source }}
+        run: |
+          case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
+          exec env -i PATH="$PATH" HOME="$HOME" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" GITHUB_OUTPUT="$GITHUB_OUTPUT" VOLUME_ID="$VOLUME_ID" LOADER_SOURCE="$LOADER_SOURCE" \
+            bash -c 'set -euo pipefail
+          bash "$GITHUB_WORKSPACE/apps/web-platform/infra/git-data-wipe.sh" record_check --epoch w7 --volume-id "$VOLUME_ID"
+          if [[ "$LOADER_SOURCE" != "tier_b" ]]; then
+            echo "::error title=git-data-wipe::verdict=wipe_loader_not_tier_b"
+            exit 5
+          fi
+          echo "phase=detach_attempted" >> "$GITHUB_OUTPUT"'
+
+      # W9: the single detach POST. The helper re-checks the W7 bound right before the POST, polls the SAME
+      # action, never re-sends, and writes phase=detached the moment the action is confirmed.
+      - name: Detach the plaintext volume (W9)
+        id: wipe_detach
+        if: steps.wipe_confirm.outputs.mode == 'wipe'
+        run: |
+          case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
+          exec env -i PATH="$PATH" HOME="$HOME" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" GITHUB_OUTPUT="$GITHUB_OUTPUT" GITHUB_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" VOLUME_ID="$VOLUME_ID" \
+            bash -c 'set -euo pipefail
+          IFS= read -r tok
+          bash "$GITHUB_WORKSPACE/apps/web-platform/infra/git-data-wipe.sh" detach --volume-id "$VOLUME_ID" <<<"$tok"
+          {
+            echo "## git-data wipe: the plaintext volume is DETACHED, not yet deleted"
+            echo ""
+            echo "The provider API confirmed the detach action. The volume still exists. If this run does not finish, read the volume first; if it is detached, the notification carries the wipe_finish command."
+          } >> "$GITHUB_STEP_SUMMARY"' <<<"${HCLOUD_TOKEN:-}"
+
+      # W10: the mapper still serves with the plaintext volume gone (wipe: post_detach; wipe_finish: finish).
+      # A failure sets refusal=store_not_serving, which the notifier turns into DO-NOT-FINISH.
+      - name: Post-detach host read (W10)
+        id: wipe_post_detach_read
+        if: steps.wipe_confirm.outputs.mode == 'wipe' || (steps.wipe_confirm.outputs.mode == 'wipe_finish' && steps.wipe_identity.outputs.volume_state == 'detached')
+        env:
+          WEB_HOSTS: ${{ env.WEB_HOST_PRIVATE_IP }}
+          GIT_DATA_SSH: ssh -F ${{ runner.temp }}/gd-ssh-config
+          WIPE_PHASE: ${{ steps.wipe_confirm.outputs.mode == 'wipe_finish' && 'finish' || 'post_detach' }}
+        run: |
+          case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
+          exec env -i PATH="$PATH" HOME="$HOME" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" GITHUB_OUTPUT="$GITHUB_OUTPUT" GITHUB_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" VOLUME_ID="$VOLUME_ID" \
+            MODE=wipe_assert WEB_HOSTS="$WEB_HOSTS" GIT_DATA_SSH="$GIT_DATA_SSH" WEB_HOST_SSH="${WEB_HOST_SSH:-}" WIPE_PHASE="$WIPE_PHASE" \
+            bash -c 'set -euo pipefail
+          rec="$RUNNER_TEMP/git-data-wipe-record"
+          WIPE_VOLUME_ID="$(sed -n "s/^plaintext_id=//p" "$rec")"
+          export WIPE_VOLUME_ID
+          WIPE_SERVER_ID="$(sed -n "s/^server_id=//p" "$rec")"
+          WIPE_LUKS_VOLUME_ID="$(sed -n "s/^luks_id=//p" "$rec")"
+          export WIPE_SERVER_ID WIPE_LUKS_VOLUME_ID
+          rc=0
+          out="$RUNNER_TEMP/wipe-w10.out"
+          # The host read did not answer: the access gate refused (3) or the verb exited 5 with verdict=probe_failed.
+          unanswered() {
+            [[ "$rc" -eq 3 ]] && return 0
+            [[ "$rc" -eq 5 ]] && grep -qE "^\[git-data-cutover\] STORE probe=[a-z-]+ verdict=probe_failed" "$out" && return 0
+            return 1
+          }
+          bash "$GITHUB_WORKSPACE/apps/web-platform/infra/git-data-cutover.sh" > "$out" || rc=$?
+          cat "$out"
+          # One retry, after 10 s, of this READ-ONLY check when the first attempt did not answer (a transient ssh or
+          # tunnel fault); a store verdict is never retried, and the second attempt decides.
+          if [[ "$rc" -ne 0 ]] && unanswered; then
+            sleep 10
+            rc=0
+            bash "$GITHUB_WORKSPACE/apps/web-platform/infra/git-data-cutover.sh" > "$out" || rc=$?
+            cat "$out"
+          fi
+          if [[ "$rc" -ne 0 ]]; then
+            # Only a host VERDICT says the store is not serving. The host verb also exits 5 with verdict=probe_failed
+            # when the read did not answer (ssh transport, timeout, a malformed argument) and exits 3 when the access
+            # gate refuses: neither is that claim. phase=detached already reads as VOLUME_DETACHED with the finish
+            # command, and the finish repeats this same read before any delete.
+            if [[ "$rc" -eq 5 ]] && ! grep -qE "^\[git-data-cutover\] STORE probe=[a-z-]+ verdict=probe_failed" "$out"; then echo "refusal=store_not_serving" >> "$GITHUB_OUTPUT"; fi
+            exit "$rc"
+          fi'
+
+      # W10b: the second Hetzner read of the target, with the read-only token fetched in the child (the
+      # Doppler token reaches it on stdin). Stamps the W10b epoch the delete is bounded from.
+      - name: Hetzner re-read of the target (W10b)
+        id: wipe_reread
+        if: steps.wipe_confirm.outputs.mode == 'wipe' || (steps.wipe_confirm.outputs.mode == 'wipe_finish' && steps.wipe_identity.outputs.volume_state == 'detached')
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
+          exec env -i PATH="$PATH" HOME="$HOME" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" GITHUB_OUTPUT="$GITHUB_OUTPUT" VOLUME_ID="$VOLUME_ID" \
+            bash -c 'set -euo pipefail
+          IFS= read -r dt
+          tok=""
+          tok="$(DOPPLER_TOKEN="$dt" timeout 60 doppler secrets get HCLOUD_TOKEN_READONLY --plain -p soleur -c prd_terraform 2>/dev/null)" || tok=""
+          if [[ -n "$tok" ]]; then printf "::add-mask::%s\n" "$tok"; fi
+          bash "$GITHUB_WORKSPACE/apps/web-platform/infra/git-data-wipe.sh" identity --expect detached --volume-id "$VOLUME_ID" --record check <<<"$tok"' <<<"$DOPPLER_TOKEN"
+
+      # W11a: the before-call marker for the delete, its own step. The W10b bound (about 60 s) is checked
+      # first; a stale record refuses and nothing is written.
+      # Name read by wipe_origin_run_ok, as for the detach gate.
+      - name: wipe_delete_gate
+        id: wipe_delete_gate
+        if: steps.wipe_confirm.outputs.mode == 'wipe' || (steps.wipe_confirm.outputs.mode == 'wipe_finish' && steps.wipe_identity.outputs.volume_state == 'detached')
+        run: |
+          case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
+          exec env -i PATH="$PATH" HOME="$HOME" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" GITHUB_OUTPUT="$GITHUB_OUTPUT" VOLUME_ID="$VOLUME_ID" \
+            bash -c 'set -euo pipefail
+          bash "$GITHUB_WORKSPACE/apps/web-platform/infra/git-data-wipe.sh" record_check --epoch w10b --volume-id "$VOLUME_ID"
+          echo "phase=delete_attempted" >> "$GITHUB_OUTPUT"'
+
+      # W11: the single delete. phase=delete_sent is written by the helper on the 204.
+      - name: Delete the plaintext volume (W11)
+        id: wipe_delete
+        if: steps.wipe_confirm.outputs.mode == 'wipe' || (steps.wipe_confirm.outputs.mode == 'wipe_finish' && steps.wipe_identity.outputs.volume_state == 'detached')
+        run: |
+          case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
+          exec env -i PATH="$PATH" HOME="$HOME" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" GITHUB_OUTPUT="$GITHUB_OUTPUT" VOLUME_ID="$VOLUME_ID" \
+            bash -c 'set -euo pipefail
+          IFS= read -r tok
+          bash "$GITHUB_WORKSPACE/apps/web-platform/infra/git-data-wipe.sh" delete --volume-id "$VOLUME_ID" <<<"$tok"' <<<"${HCLOUD_TOKEN:-}"
+
+      # W12: the read-back. The id answers 404, the name lists nothing, and the LUKS volume is still the one
+      # attached. For a volume that was already absent (wipe_finish) this is the only step after the front.
+      # The success summary is the tail of this step; it claims only that the DEVICE was deleted at the
+      # provider API (CLO wording).
+      - name: Read-back (W12)
+        id: wipe_readback
+        if: steps.wipe_confirm.outputs.mode == 'wipe' || steps.wipe_confirm.outputs.mode == 'wipe_finish'
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DELETE_PHASE: ${{ steps.wipe_delete.outputs.phase }}
+          ORIGIN_RUN: ${{ inputs.origin_run }}
+          RECORD_RUN_ID: ${{ github.run_id }}
+          RECORD_ACTOR: ${{ github.actor }}
+        run: |
+          case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
+          exec env -i PATH="$PATH" HOME="$HOME" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" GITHUB_OUTPUT="$GITHUB_OUTPUT" GITHUB_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" VOLUME_ID="$VOLUME_ID" DELETE_PHASE="$DELETE_PHASE" ORIGIN_RUN="$ORIGIN_RUN" RECORD_RUN_ID="$RECORD_RUN_ID" RECORD_ACTOR="$RECORD_ACTOR" \
+            bash -c 'set -euo pipefail
+          IFS= read -r dt
+          tok=""
+          tok="$(DOPPLER_TOKEN="$dt" timeout 60 doppler secrets get HCLOUD_TOKEN_READONLY --plain -p soleur -c prd_terraform 2>/dev/null)" || tok=""
+          if [[ -n "$tok" ]]; then printf "::add-mask::%s\n" "$tok"; fi
+          bash "$GITHUB_WORKSPACE/apps/web-platform/infra/git-data-wipe.sh" readback --volume-id "$VOLUME_ID" <<<"$tok"
+          # This run made a delete call only when the delete step wrote its marker. A wipe_finish that found the
+          # volume already absent observed the end state and made no call, so it must not claim a delete.
+          if [[ "$DELETE_PHASE" == "delete_sent" ]]; then
+            {
+              echo "## git-data wipe: the plaintext volume was deleted at the provider API"
+              echo ""
+              echo "The provider API no longer lists the volume (404 by id, nothing by name) and the LUKS volume is still the one attached to the git-data server."
+              echo "This states only that the device was deleted at the provider API. It does not state that the volume was empty or held no personal data; the entry-type counts above are a pre-detach listing read at the time of that line, not a statement about any copy."
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "## git-data wipe: the plaintext volume is absent at the provider API"
+              echo ""
+              echo "The provider API does not list the volume (404 by id, nothing by name) and the LUKS volume is still the one attached to the git-data server."
+              echo "This run made no delete call. The delete outcome is in the origin run (run id ${ORIGIN_RUN:-unknown})."
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          {
+            echo "### git-data wipe evidence, run record"
+            echo "- measured, this run: run id ${RECORD_RUN_ID:-unknown}, dispatched by ${RECORD_ACTOR:-unknown}; the typed volume id was checked against the id the provider API names (W4); the environment approval is recorded by GitHub on this run and is not read here"
+            echo "- measured, this run: the provider API read-back above was recorded at epoch second ${EPOCHSECONDS:-unknown}"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "This run does not address provider-side snapshot or backup retention of the volume (Art. 30 PA-36(f), not measured), residue on the served store, or any copy held by someone with prior access." >> "$GITHUB_STEP_SUMMARY"' <<<"$DOPPLER_TOKEN"
+
+      # W13: teardown, always. The whole body runs under env -i with every variable written NAME="${NAME:-}",
+      # so an early refusal (the bridge never ran) cannot add a second red step or turn a green delete into
+      # VOLUME_DELETED_TEARDOWN_FAILED.
+      - name: Tear down the SSH bridge and scratch (W13)
+        id: wipe_teardown
+        if: always()
+        run: |
+          exec env -i PATH="$PATH" HOME="$HOME" RUNNER_TEMP="${RUNNER_TEMP:-}" SERVER_IP="${SERVER_IP:-}" CLOUDFLARED_PID="${CLOUDFLARED_PID:-}" CI_SSH_KEYFILE="${CI_SSH_KEYFILE:-}" \
+            bash -c 'set +e
+          if [[ -n "${SERVER_IP:-}" ]]; then
+            sudo iptables -t nat -D OUTPUT -d "$SERVER_IP" -p tcp --dport 22 -j REDIRECT --to-ports 2222 2>/dev/null || true
+          fi
+          if [[ -n "${CLOUDFLARED_PID:-}" ]]; then
+            kill "$CLOUDFLARED_PID" 2>/dev/null || true
+          fi
+          if [[ -n "${CI_SSH_KEYFILE:-}" && -f "$CI_SSH_KEYFILE" ]]; then
+            shred -u "$CI_SSH_KEYFILE" 2>/dev/null || true
+          fi
+          for f in "$RUNNER_TEMP/gd-root-key" "$RUNNER_TEMP/gd-ssh-config" "$RUNNER_TEMP/gd-known-hosts" "$RUNNER_TEMP/git-data.pin" "$RUNNER_TEMP/git-data-wipe-record" "$RUNNER_TEMP/wipe-boot.rows" "$RUNNER_TEMP/wipe-boot.err" "$RUNNER_TEMP/wipe-w10.out"; do
+            if [[ -f "$f" ]]; then
+              chmod u+w "$f" 2>/dev/null || true
+              shred -u "$f" 2>/dev/null || true
+            fi
+          done
+          if [[ -f /tmp/cloudflared.log ]]; then tail -n 200 /tmp/cloudflared.log || true; fi
+          exit 0'
+
   # A failed, stranded or cancelled cutover must reach a human even when the cutover job itself
   # could not (runner loss, the 120-minute timeout, a cancelled run): this is a SEPARATE job, so it
   # is the case an in-job step cannot cover. It deliberately has no environment: and no
@@ -802,9 +1604,13 @@ jobs:
   # pages, because "no output" is exactly the state this job exists to report. Not covered, by
   # platform design: a force-cancel (skips always()) and a pending run replaced by a newer dispatch
   # in the git-data-state group before any job exists (runbook, "When a cutover run fails").
+  #
+  # It reports BOTH jobs (#10138). The if: is two OR-ed clauses, each pairing its own result check with its own
+  # `started != 'false'`: a skipped job's outputs are empty strings, which satisfy `'' != 'false'`, so an unpaired
+  # result check would email on the skipped half of every run.
   notify-failure:
-    needs: cutover
-    if: always() && (needs.cutover.result == 'failure' || needs.cutover.result == 'cancelled') && needs.cutover.outputs.started != 'false'
+    needs: [cutover, wipe]
+    if: always() && (((needs.cutover.result == 'failure' || needs.cutover.result == 'cancelled') && needs.cutover.outputs.started != 'false') || ((needs.wipe.result == 'failure' || needs.wipe.result == 'cancelled') && needs.wipe.outputs.started != 'false'))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -818,8 +1624,13 @@ jobs:
       - name: Build the notification (verdict words and run URL only)
         id: body
         env:
-          MODE: ${{ needs.cutover.outputs.mode }}
-          RESULT: ${{ needs.cutover.result }}
+          MODE: ${{ needs.cutover.outputs.mode || needs.wipe.outputs.mode }}
+          RESULT: ${{ needs.cutover.result == 'skipped' && needs.wipe.result || needs.cutover.result }}
+          CUTOVER_RESULT: ${{ needs.cutover.result }}
+          WIPE_STARTED: ${{ needs.wipe.outputs.started }}
+          WIPE_PHASE: ${{ needs.wipe.outputs.phase }}
+          WIPE_REFUSAL: ${{ needs.wipe.outputs.refusal }}
+          WIPE_VOLUME_ID: ${{ inputs.volume_id }}
           FINALIZER_RAN: ${{ needs.cutover.outputs.finalizer_ran }}
           FREEZE_HELD: ${{ needs.cutover.outputs.freeze_held }}
           RECOVERY_FAILED: ${{ needs.cutover.outputs.recovery_failed }}
@@ -829,15 +1640,66 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          case "$MODE" in proof|flip|rollback|unfreeze|redeploy) ;; *) MODE=unknown ;; esac
+          # A wipe job that published no outputs (lost runner, rejected approval) leaves MODE empty while the
+          # cutover job was skipped: that is a wipe-family failure of unknown mode, never a cutover one.
+          if [ -z "$MODE" ] && [ "${CUTOVER_RESULT:-}" = skipped ]; then MODE=wipe_unknown; fi
+          case "$MODE" in proof|flip|rollback|unfreeze|redeploy|wipe|wipe_finish|wipe_check|snapshot_clear|wipe_unknown) ;; *) MODE=unknown ;; esac
           case "$RESULT" in failure|cancelled|success|skipped) ;; *) RESULT=unknown ;; esac
           case "$RUN_ID" in ''|*[!0-9]*) echo "::error::run id is not numeric"; exit 1 ;; esac
-          words=""; swords=""; remedy_needed=0
+          words=""; swords=""; remedy_needed=0; wipe_family=0
+          # The wipe family (#10138) has its own words, chosen BEFORE the generic logic below. No wipe word ever
+          # carries the unfreeze remedy: a wipe run never froze anything. An ABSENT phase is read as "this run made
+          # no irreversible call" only when the started output proves the job published outputs.
+          case "$MODE" in wipe|wipe_finish|wipe_check|snapshot_clear|wipe_unknown)
+            wipe_family=1
+            case "${WIPE_PHASE:-}" in ''|detach_attempted|detached|delete_attempted|delete_sent|deleted) ;; *) WIPE_PHASE=unknown ;; esac
+            case "${WIPE_REFUSAL:-}" in ''|volume_already_detached|store_not_serving) ;; *) WIPE_REFUSAL=unknown ;; esac
+            # The placeholders are plain words, never angle brackets: the body is HTML and the issue is markdown, and
+            # either swallows <text> as a tag. The volume id is filled only from a 1-12 digit input (the free-text
+            # input never reaches the body otherwise); only a mode=wipe run can be the origin (a wipe_finish run is
+            # refused as one), so its own run id is filled in for a wipe run and a wipe_finish run keeps ORIGIN_RUN_ID.
+            vid=VOLUME_ID
+            case "${WIPE_VOLUME_ID:-}" in ''|*[!0-9]*) ;; *) if [ "${#WIPE_VOLUME_ID}" -le 12 ]; then vid="$WIPE_VOLUME_ID"; fi ;; esac
+            orig=ORIGIN_RUN_ID
+            if [ "$MODE" = wipe ]; then orig="$RUN_ID"; fi
+            finish_cmd_origin="gh workflow run git-data-cutover.yml --ref main -f mode=wipe_finish -f confirm=WIPE-FINISH-GIT-DATA -f volume_id=${vid} -f origin_run=ORIGIN_RUN_ID"
+            finish_cmd_here="gh workflow run git-data-cutover.yml --ref main -f mode=wipe_finish -f confirm=WIPE-FINISH-GIT-DATA -f volume_id=${vid} -f origin_run=${orig}"
+            if [ "$MODE" = snapshot_clear ]; then
+              words=" SNAPSHOT_CLEAR_FAILED (mode=snapshot_clear removes only a transient local snapshot: no volume was detached or deleted. If the failing step is the snapshot clear, a leftover may still be present: read the run log, then the runbook section A leftover snapshot: gh run view ${RUN_ID} --log)"
+              swords=" SNAPSHOT_CLEAR_FAILED"
+            elif [ "$MODE" = wipe_check ]; then
+              words=" WIPE_CHECK_FAILED (mode=wipe_check changes no volume or provider state, but a killed or failed listing can leave a throwaway snapshot on the git-data host: if the next run refuses wipe_snapshot_present, read the runbook section A leftover snapshot. Read the failing step in the run log: gh run view ${RUN_ID} --log)"
+              swords=" WIPE_CHECK_FAILED"
+            elif [ "${WIPE_REFUSAL:-}" = volume_already_detached ]; then
+              words=" VOLUME_ALREADY_DETACHED (the volume is already detached, so this run detached nothing. If a wipe run detached it, finish with: ${finish_cmd_origin}, replacing ORIGIN_RUN_ID by the id of the wipe run that detached it; this run refused and is not that run)"
+              swords=" VOLUME_ALREADY_DETACHED"
+            elif [ "${WIPE_REFUSAL:-}" = store_not_serving ]; then
+              words=" STORE_NOT_SERVING_DO_NOT_FINISH (after the detach the git-data host did not read as serving from the encrypted store. Do NOT dispatch wipe_finish and do not delete anything: read the run log and the runbook first)"
+              swords=" STORE_NOT_SERVING_DO_NOT_FINISH"
+            else
+              case "${WIPE_PHASE:-}" in
+                deleted) words=" VOLUME_DELETED_TEARDOWN_FAILED (the provider API read-back confirmed the volume is no longer listed; only the runner teardown failed afterwards)"; swords=" VOLUME_DELETED_TEARDOWN_FAILED" ;;
+                delete_sent) words=" DELETE_SENT_UNCONFIRMED (the delete was sent and the read-back did not confirm it: read the volume at the provider first. If it is no longer listed, or is listed and detached, finish with: ${finish_cmd_here}; the finish records the read-back and makes no delete call when the volume is no longer listed)"; swords=" DELETE_SENT_UNCONFIRMED" ;;
+                delete_attempted) words=" DELETE_ATTEMPTED_UNCONFIRMED (the run reached the delete and did not confirm it: read the volume at the provider first. If it is listed and detached, or no longer listed, finish with: ${finish_cmd_here}; if it is still attached, nothing was deleted)"; swords=" DELETE_ATTEMPTED_UNCONFIRMED" ;;
+                detached) words=" VOLUME_DETACHED (the volume is detached and not deleted. Finish with: ${finish_cmd_here})"; swords=" VOLUME_DETACHED" ;;
+                detach_attempted) words=" DETACH_ATTEMPTED_UNCONFIRMED (the detach may have been sent and was not confirmed: read the volume first. If it is detached, finish with: ${finish_cmd_here})"; swords=" DETACH_ATTEMPTED_UNCONFIRMED" ;;
+                unknown) words=" WIPE_STATE_UNKNOWN (an unrecognised phase value was published: read the volume first, then the run log)"; swords=" WIPE_STATE_UNKNOWN" ;;
+                *)
+                  if [ "${WIPE_STARTED:-}" = true ]; then
+                    words=" WIPE_REFUSED_BEFORE_ANY_CALL (this run made no irreversible call. It says nothing about earlier runs. Read the failing step: gh run view ${RUN_ID} --log)"
+                    swords=" WIPE_REFUSED_BEFORE_ANY_CALL"
+                  else
+                    words=" WIPE_STATE_UNKNOWN (no output was published: the run was cancelled, timed out, lost its runner, or its environment approval was rejected or expired. Read the plaintext volume at the provider first, then the run log)"
+                    swords=" WIPE_STATE_UNKNOWN"
+                  fi ;;
+              esac
+            fi ;;
+          esac
           if [ "${FREEZE_HELD:-}" = 1 ]; then words="$words FREEZE_HELD"; swords="$swords FREEZE_HELD"; remedy_needed=1; fi
           if [ "${GC_TIMER_STOPPED:-}" = 1 ]; then words="$words GC_TIMER_STOPPED (the freeze sentinel is clear and only git-data-gc.timer would not start, verdict gc_timer_restart_failed in the unfreeze step or finalizer log; if the run also reports another failure, read that failing step first because the finalizer may have unwound the flip. Gc stays stopped until it is started, so the weekly pack and prune is skipped: re-dispatch gh workflow run git-data-cutover.yml --ref main -f mode=unfreeze -f confirm=UNFREEZE-GIT-DATA, no lineage input needed because the sentinel is already cleared. A second consecutive failure is a host incident: read the host events in Better Stack before re-dispatching again)"; swords="$swords GC_TIMER_STOPPED"; fi
           if [ "${RECOVERY_FAILED:-}" = 1 ]; then words="$words RECOVERY_FAILED"; swords="$swords RECOVERY_FAILED"; remedy_needed=1; fi
           if [ "${PROBE_FAILED:-}" = 1 ]; then words="$words PROBE_FAILED (erasure probe; the probe step log names the verdict. old_store_unmounted, store_not_on_mapper or store_unverified mean the host store was not verifiable and the push and remove were not attempted: see the runbook Verdict map row for that verdict and do not re-dispatch a replace. cutover_frozen means a freeze sentinel is held: clear it with mode=unfreeze and the lineage of the run that wrote it. residue_left means a synthetic repository survived. No mode re-runs the erasure probe, so a green mode=proof is not evidence that erasure works)"; swords="$swords PROBE_FAILED"; fi
-          if [ -z "$words" ]; then
+          if [ -z "$words" ] && [ "$wipe_family" != 1 ]; then
             if [ "$RESULT" = failure ] && [ "${FINALIZER_RAN:-}" = 1 ]; then
               words=" the run failed and its finalizer ran: it reported no stranded freeze and no partial unwind. Read the failing step in the run log (gh run view ${RUN_ID} --log)."
               swords=" FAILED"

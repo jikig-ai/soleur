@@ -247,6 +247,13 @@ OPT_REASON=$'prose-embedded\na commit message: the follow-through sweeper closes
 run_case "T2 commit prose-embedded closes → deny" deny \
   "gh pr merge 1 --squash --auto" $'fix: thing\n\nthe follow-through sweeper closes #5887 post-merge.' ""
 
+# T2b — the same deny under the rtk-prefixed spelling (#10248): the boundary
+# anchor gains the shared wrapper-prefix atom, so `rtk gh pr merge` must reach
+# the auto-close scan identically.
+OPT_REASON=$'prose-embedded\na commit message: the follow-through sweeper closes' \
+run_case "T2b rtk-prefixed merge + commit prose-embedded closes → deny (#10248)" deny \
+  "rtk gh pr merge 1 --squash --auto" $'fix: thing\n\nthe follow-through sweeper closes #5887 post-merge.' ""
+
 # T1 — prose-embedded close in the PR BODY → DENY (the #5955 vector).
 # RED before the D1 repair: the stub rejects the malformed --repo, so the body
 # never reaches the corpus. The T2 case above must stay green in the same run —

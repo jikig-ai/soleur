@@ -1,0 +1,27 @@
+# Decision Challenges — feat-one-shot-10321-10136-dormant-probe-ledger
+
+Session: one-shot planning subagent (2026-10-15). This harness cannot spawn Task
+subagents, so technical forks were recorded `pending - assumed:` per the
+technical-ruling-delegation rule — the main-context gate spawns
+`soleur:engineering:cto` for any row the pipeline wants bound before work.
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|---|---|---|
+| Standing vehicle for the credential-shape check (Better Stack alert vs scheduled workflow vs sweeper read-surface with open-ended closed set) | technical | Ruled by CTO agent, 2026-10-15: standing Terraform-managed Better Stack Logs alert `registry_zot_log_credential_shape` - the sweeper's read surface (open issues + `closed:>=` inside `CLOSED_LOOKBACK_DAYS=14`, `sweep-followthroughs.sh`) structurally cannot host a check meant to outlive its tracker; the ADR-218 substrate already carries 13 `logtail_exploration_alert` pairs on `local.vector_prd_source_id` (2457081), the #7530/A2 ruling set this exact precedent, and the scheduled-workflow and sweeper-widening alternatives were correctly cut (duplicate credential plumbing for a weaker signal vs re-opening the bounded-lookback hazard in 1097 lines of shared machinery). |
+| Raw signing key remedy for `list-runs.ts` (hash bearer vs TLS) | technical | Ruled by CTO agent, 2026-10-15: hash the bearer client-side to `signkey-prod-<sha256>` - verified in the vendored SDK (`node_modules/inngest/helpers/strings.js` `hashSigningKey`: strips `signkey-[\w]+-`, sha256s the hex-decoded body, re-appends; `InngestCommHandler.js` already sends `authToken: this.hashedSigningKey` on server-bound calls), so the hashed form is the SDK's own wire shape; source-verified dual-acceptance at `pkg/authn/signing_key_strategy.go` `HandleSigningKey` v1.45.1 makes this zero auth-behavior change; TLS stays the CLO-gated 2026-10-24 residual. The replica MUST fail closed on non-hex input exactly as `update(key, "hex")` does, and the test must pin that. |
+| Step-outputs wording in the ledger's Inngest row (reconcile vs mark not-asserted) | technical | Ruled by CTO agent, 2026-10-15: narrow `does_not_defend` to event payloads + mark step-output transport "not asserted on this link (#9139)" - the row currently claims "the hashed signing key… event payloads and step outputs… The raw signing key never crosses the wire", doubly false today (`list-runs.ts` sends `Bearer ${signingKey}` raw on both fetches) and broader than the code read supports on step outputs (attributed to the Cloudflare serve-URL leg); a posture ledger asserting an unevidenced payload class is the same defect class as the false raw-key claim it sits beside. |
+| Disposition of the audit-found dormant probes (`#3950`/`#6407`/`#6459`/`#8978` header notes; `#8706` delete-per-RETIREMENT) | technical | Ruled by CTO agent, 2026-10-15: as listed - dated header status notes for #3950/#6407/#6459/#8978, no change to #6500 (verified honest, the correct pattern to cite), delete `luks-monitor-host-timer-8706.{sh,test.sh}` + drop the `follow-through` label on #8706 per the file's own `RETIREMENT:` directive; no new standing alerts for the other four — their regression arms were soak-scoped or superseded, and minting alerts nobody asked for is scope creep on a vendor-capped resource. |
+| Alert coverage semantics: boot-scoped vs all-rows grading for the credential-shape alert | technical | Ruled by CTO agent, 2026-10-15: all matching rows fire regardless of boot generation - the probe's newest-boot scoping (the #8278 split-span fix) existed to attribute the *delivery* verdict to the correct host generation; a standing detector has no delivery to attribute, and boot-scoping a leak check would recreate the exact blind spot this PR exists to remove — a credential-shaped row on a superseded boot is still a supply-chain incident. |
+| Alert count vs Better Stack tier cap (15th managed Logs alert) | technical | Ruled by CTO agent, 2026-10-15: ship the resource and let the push-triggered apply measure the cap - counted 13 `logtail_exploration_alert` resources in `betterstack-logs-alerts.tf`, so #10320's is 14th and this is 15th; the apply is the cheapest possible cap measurement with a two-object blast radius, and shrinking the predicate against an unmeasured cap would weaken the check on speculation — on refusal, surface on #10321 with paid-tier routed as an operator money call and predicate-shrink/sweeper-route as a CTO re-ruling. |
+| `INNGEST_SIGNING_KEY` rotation for the already-flown raw key | operator (production-mutating) | pending - not decided: rotation is a Doppler/infra write and a legal-risk call for the 2026-10-24 CLO re-ruling; recorded as an explicit residual on #10136, NOT a plan task. |
+| The measured nftables re-read the CLO conditioned acceptance on | operator (production-mutating) | pending - not decided: proposed as verification evidence in the plan; execution is operator-gated (no SSH/terraform/dispatch rights in this pipeline). |
+
+## Notes for ship-time rendering
+
+- This PR does NOT close #10136 (`Ref` only): the issue's done-when is "each link has TLS with
+  certificate verification on, or a ruled written decision that private-network plaintext is
+  accepted with a dated owner" — TLS remediation is operator/infra-gated and the CLO re-ruling is
+  2026-10-24; both postdate this PR.
+- #10321 CAN close: header corrected, standing check lands as the alert, audit dispositions land.

@@ -141,17 +141,33 @@ const log = createChildLogger("git-lock-marker-telemetry");
 // decision — the bug they exist to prevent was an INVISIBLE mutation, so the
 // marker is the observability contract, not an error.
 // MIRRORED-NOT-PAGED (#9597): SOLEUR_CREDENTIAL_REFUSED script=<name> reason=<token_shape|control_char>.
-// Emitted by the community skill scripts (discord-community.sh, discord-setup.sh, bsky-community.sh,
-// bsky-setup.sh) when a credential fails its shape guard BEFORE it reaches curl's stdin config
-// stream (a quote/newline could append a `url =` directive). The line is value-free by
+// Emitted by the six community skill scripts (discord-community.sh, discord-setup.sh,
+// bsky-community.sh, bsky-setup.sh, x-setup.sh, linkedin-setup.sh) when a credential fails its
+// shape guard BEFORE it reaches curl's stdin config stream (a quote/newline could append a
+// `url =` directive). The setup scripts' write-env refusals carry the shape
+// `var=<NAME> phase=write-env`. Two reason classes share the marker: `token_shape|control_char`
+// (a malformed credential) and `env_*` with `var=ENV_FILE` (an operational write-env fault: lock
+// timeout, unreadable, unresolvable, dangling or non-regular `.env`, unwritable directory, failed
+// write). Consumers branch on the reason prefix; both are mirrored here and neither is paged.
+// Every host-side emitter outside
+// plugins/soleur/skills/community/scripts (the registry host scripts, luks-monitor,
+// web-git-data-probe, the heartbeat probes, the inngest bootstrap, infra-config-verify) never
+// reaches this extractor: it only runs on agent Bash output. The line is value-free by
 // construction (script name and a fixed reason, never the credential). NOT paged: the refusal is
 // the safe outcome and a user-visible one. It is mirrored when a refusal is printed inside an
 // agent Bash call (the only place this extractor is wired: the PostToolUse hook in
 // agent-runner-query-options.ts). A hosted `bsky-community.sh post` run from
 // scripts/content-publisher.sh does NOT pass through it: that refusal reaches the operator
 // through the content-publisher fallback issue body (head -c 1000 of stderr), not telemetry.
+// MIRRORED-NOT-PAGED: SOLEUR_OVERLAP exit=<code> prs=<n,n|none> vehicle=<n|this|none>[ deadline=hit].
+// Emitted once, as the last line, by plugins/soleur/skills/ship/scripts/pr-overlap-preflight.sh
+// (the ship-time check for open PRs that touch the same files). The line carries only an exit
+// code, PR numbers and a vehicle word, no path and no credential. Not a wedge: exit codes
+// report an overlap decision, and the dominant non-zero cause is a real overlap the operator
+// is told about on the terminal. The drift guard in test/git-lock-marker-telemetry.test.ts
+// walks skills/*/scripts/*.sh and found it unmirrored.
 const MARKER_RE =
-  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_BARE_(?:POISON|SELFHEAL|SEED)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE|SKIP_DESCENDANT)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|SOLEUR_SESSION_STATE_UNAVAILABLE\b.*|SOLEUR_WORKTREE_REAPER_ARMED\b.*|SOLEUR_WORKTREE_REAPED\b.*|SOLEUR_WORKTREE_REAP_PARTIAL\b.*|SOLEUR_CLEANUP_GH_QUERY_FAILED\b.*|SOLEUR_WORKTREE_SLUG_COLLISION\b.*|SOLEUR_WORKTREE_INSTALL_(?:SKIPPED|UNBOUNDED)\b.*|SOLEUR_REAP_ARCHIVE_(?:COMMITTED|STAGED|DEFERRED)\b.*|SOLEUR_(?:FLAG_LIST|INCIDENT|LEGAL_GENERATE|LINEAR_FETCH|PRECOMMIT_GUARD|QUESTIONNAIRE|SHIP_PIR_GATE|SNAPSHOT|TRIGGER_CRON)_HALT\b.*|SOLEUR_TMP_SWEEP\b.*|SOLEUR_CLEANUP_SPACE\b.*|SOLEUR_DOCKER_PRUNE\b.*|SOLEUR_TRANSPORT_DIAG\b.*|SOLEUR_CREDENTIAL_REFUSED\b.*|SOLEUR_BOOTSTRAP_[A-Z_]+\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
+  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_BARE_(?:POISON|SELFHEAL|SEED)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE|SKIP_DESCENDANT)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|SOLEUR_SESSION_STATE_UNAVAILABLE\b.*|SOLEUR_WORKTREE_REAPER_ARMED\b.*|SOLEUR_WORKTREE_REAPED\b.*|SOLEUR_WORKTREE_REAP_PARTIAL\b.*|SOLEUR_CLEANUP_GH_QUERY_FAILED\b.*|SOLEUR_WORKTREE_SLUG_COLLISION\b.*|SOLEUR_WORKTREE_INSTALL_(?:SKIPPED|UNBOUNDED)\b.*|SOLEUR_REAP_ARCHIVE_(?:COMMITTED|STAGED|DEFERRED)\b.*|SOLEUR_(?:FLAG_LIST|INCIDENT|LEGAL_GENERATE|LINEAR_FETCH|PRECOMMIT_GUARD|QUESTIONNAIRE|SHIP_PIR_GATE|SNAPSHOT|TRIGGER_CRON)_HALT\b.*|SOLEUR_TMP_SWEEP\b.*|SOLEUR_CLEANUP_SPACE\b.*|SOLEUR_DOCKER_PRUNE\b.*|SOLEUR_OVERLAP\b.*|SOLEUR_TRANSPORT_DIAG\b.*|SOLEUR_CREDENTIAL_REFUSED\b.*|SOLEUR_BOOTSTRAP_[A-Z_]+\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
 
 // MIRRORED-NOT-PAGED (#9269): SOLEUR_WORKTREE_INSTALL_SKIPPED. Emitted by
 // worktree-manager.sh's install_deps when a dependency-install arm is skipped

@@ -1,0 +1,34 @@
+# Canonical external-filter wrapper grammar (#10230). ONE canonical copy — every unwrap site
+# (destructive-command-guard.sh wrap_skip arm + header prose, pkill-self-match-guard.sh
+# stage_word, proc.sh _PROC_WRAPPERS walk, the hook suite's python oracle,
+# known-external-tools.md table) restates or extracts from THIS list, and
+# plugins/soleur/test/rtk-grammar-parity.test.sh asserts set equality by extraction.
+# Verified 2026-10-13 against rtk-ai/rtk src/lib.rs + src/core/constants.rs on develop.
+#
+# columns: subcommand<TAB>class<TAB>payload<TAB>note
+#   class:   exec        = executes the words after it as a command (unwrap to them)
+#            meta        = rtk-native, never executes external argv (falls through to argv0 verdict)
+#            flag-global = inert option legal before AND after an exec subcommand (clap global=true)
+#            flag-string = option whose next word (or =value) is an opaque shell string — never a
+#                          boundary-prefix atom (#10248); payload is unparsed-wrapper ask territory
+#   payload: argv        = the trailing words ARE the argv (rtk run rm -rf ~ runs rm)
+#            string-flag = -c/--command/--shell make a word a shell string (ask unparsed-wrapper)
+run	exec	argv+string-flag	-c|--command|--shell make the payload a shell string
+err	exec	argv+string-flag	--shell makes the positional a script; upstream may join args to sh -c
+test	exec	argv+string-flag	--shell same as err
+proxy	exec	argv	deprecated alias of bypass; raw passthrough
+bypass	exec	argv	raw passthrough, no filtering
+summary	exec	argv+string-flag	--shell same as err
+-v	flag-global	-	verbose count 1; clap global=true, legal either side of the exec subcommand
+-vv	flag-global	-	verbose count 2; same
+-vvv	flag-global	-	verbose count 3; same
+--verbose	flag-global	-	verbose long form; same
+--skip-env	flag-global	-	optional =value form also accepted by the unwrap SUT; same
+--	flag-global	-	clap end-of-options marker; inert anywhere in the wrapper span
+-c	flag-string	string	payload becomes a shell string -> unparsed-wrapper ask; NOT a boundary atom
+--command	flag-string	string	same as -c
+--shell	flag-string	string	same as -c
+# Global flags: -v/-vv/-vvv/--verbose (count) and --skip-env — both clap global=true, legal
+# before AND after the exec subcommand. Any other option word -> unparsed-wrapper ask.
+# Everything else after `rtk` (git, gh, ls, rm, task names, ...) lands as the command word:
+# rtk's own filtered subcommands and the run_fallback raw exec both run it.

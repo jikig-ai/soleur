@@ -92,6 +92,8 @@ export const EXCLUDED_ISOLATION: Record<string, string> = {
     "inbound email routing table (mig 155, ADR-269): RLS ENABLED with ZERO policies and ALL privileges revoked from anon/authenticated (service-role-only) → every authenticated read or write is denied for every tenant, so a co-member positive control is schema-impossible; the grant-level denial is asserted by supabase/verify/155_email_inbox_routes.sql and scripts/check-tom4-rls-posture.sh",
   dsar_export_jobs:
     "GDPR DSAR export jobs, user-keyed (auth.uid()=user_id), SELECT-only policy → now fuzzed on SELECT-USING (owner sees, co-member denied) in rls-excluded-deepened; INSERT default-denied (no INSERT policy) so no write-forge",
+  workspace_egress_audit_rollup:
+    "egress audit rollup (mig 162, #9545 PR1): RLS ENABLED with ZERO policies and ALL privileges revoked from anon/authenticated (service-role RPC writes only, nothing reads in PR1) -> every authenticated read or write is denied by grant, fuzzed in egress-audit-rollup.integration.test.ts (members of both workspaces denied 42501 with a service-role positive control). PR2 adds the is_workspace_member SELECT policy and converts this to a base-matrix target.",
   workspace_member_actions:
     "member-action audit; authenticated has NO table grant at all (SELECT+INSERT both revoked) → direct base-table access is grant-blocked for every tenant; cross-tenant read is fuzzed via the list_workspace_member_actions RPC attack (AC8)",
   action_sends:

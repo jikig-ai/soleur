@@ -378,6 +378,24 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "email_triage_items, which is itself exported under Art. 15. Retention " +
     "is a 90-day sweep (purge_statutory_repin_send), not the Art. 17 " +
     "cascade — statutory parent rows are evidence and are never purged.",
+  // #9545 PR1 (ADR-288). Workspace-keyed 15-minute aggregates of destination
+  // host, allowed/denied, best-effort counts and timestamps: no user_id,
+  // session, IP or path, and the pipeline ships DARK (collection is off for
+  // every external workspace, so no external subject has rows yet).
+  //
+  // EXCLUSION for PR1, not a permanent ruling: for a solo workspace
+  // (workspace id = user id) these rows are arguably Art. 15 data. Until
+  // collection is enabled an explicit request is served by the guarded
+  // runbook export (knowledge-base/engineering/operations/runbooks/
+  // egress-audit-dsar.md) and Art. 17 by the erase RPCs (saga step 5.15).
+  // Moving this table into DSAR_TABLE_ALLOWLIST is an unchecked
+  // precondition of enabling collection for any external workspace
+  // (runbooks/egress-audit-enable.md).
+  workspace_egress_audit_rollup:
+    "Workspace-keyed aggregate (no user_id, IP, session or path); dark in " +
+    "PR1 with no external rows. Art. 15 is served by the DSAR runbook export " +
+    "and Art. 17 by erase_egress_audit_rollup (saga step 5.15) until the " +
+    "table moves to the allowlist before collection is enabled (ADR-288).",
   // DSAR meta — including would be recursive (a bundle containing
   // metadata about prior bundles' issuance). PII is in
   // dsar_export_audit_pii which is handled by the Art. 17 cascade,

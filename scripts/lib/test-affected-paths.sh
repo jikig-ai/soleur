@@ -131,6 +131,8 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-workflow-install-sites-live"
   "scripts/lint-workflow-issue-write-scope-live"
   "scripts/lint-workflow-step-env-refs-live"
+  "scripts/lint-ratchet-ruff-live"
+  "tests/scripts/lint-ratchet"
   "scripts/review-reminder-liveness"
   "scripts/watch-live-verify-pass"
   # live-scanner batteries named for the gates they probe (#8384 landed these)
@@ -896,6 +898,17 @@ AFFECTED_TESTS_SCRIPTS_GIT_DATA_RUNG2_EVIDENCE_CAPTURE_PATHS=(
   "tests/scripts/test-git-data-rung2-evidence-capture.sh"
 )
 
+# tests/scripts/git-data-wipe-wedge — derived edges could not reach its subject; the population is DERIVED at run time
+# (git ls-files .github/workflows filtered to the workflows that plan or apply the web-platform root, plus the root's HCL
+# for the -target dependency closure and the gate libraries those workflows source).
+AFFECTED_TESTS_SCRIPTS_GIT_DATA_WIPE_WEDGE_PATHS=(
+  ".github/workflows/"
+  "glob:apps/web-platform/infra/*.tf"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/lib/"
+  "tests/scripts/test-git-data-wipe-wedge.sh"
+)
+
 # tests/scripts/eu-location-allowset-parity — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_TESTS_SCRIPTS_EU_LOCATION_ALLOWSET_PARITY_PATHS=(
@@ -1227,11 +1240,15 @@ AFFECTED_SCRIPTS_LEARNING_RETRIEVAL_BENCH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
-# scripts/ci-push-dedupe (#9512, ADR-276 S2) — the suite extracts the push-dedupe proof step from ci.yml and executes it,
-# parses the eight gated conditions and pins the test aggregator; the only repo file it reads is the workflow. Declared
-# from the repo paths its suite file names (guard-vacuity-floor.test.sh is the meta-guard that drives its floor).
+# scripts/ci-push-dedupe (#9512, ADR-276 S2; S4 PR B) — the suite extracts the push-dedupe proof step from ci.yml and executes it,
+# parses the eight gated conditions and pins the test aggregator. It reads two further repo files: the release workflow (it EXTRACTS
+# and EXECUTES that workflow's declared-path budget function against ci.yml) and the pr-selection driver (the leg-parity row reads its
+# gateable-leg list and its final-block regex). Declared from the repo paths its suite file names (guard-vacuity-floor.test.sh is the
+# meta-guard that drives its floor).
 AFFECTED_SCRIPTS_CI_PUSH_DEDUPE_PATHS=(
   ".github/workflows/ci.yml"
+  ".github/workflows/web-platform-release.yml"
+  "scripts/ci-pr-selection.sh"
   "scripts/ci-push-dedupe.test.sh"
   "scripts/guard-vacuity-floor.test.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -1250,6 +1267,19 @@ AFFECTED_SCRIPTS_CI_DRAFT_LIGHT_PATHS=(
   "scripts/guard-vacuity-floor.test.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/required-checks.txt"
+)
+
+# scripts/ci-pr-selection (#9729, ADR-276 S4) — the suite EXECUTES the pr-selection driver against throwaway git fixtures and a stub
+# runner, derives the trigger list from what scripts/test-all.sh sources and the --pr-gated decline labels from its text, and reads
+# the git-fixture env library. Declared from the repo paths its suite file names (guard-vacuity-floor.test.sh is the meta-guard that
+# drives its floor).
+AFFECTED_SCRIPTS_CI_PR_SELECTION_PATHS=(
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "scripts/ci-pr-selection.sh"
+  "scripts/ci-pr-selection.test.sh"
+  "scripts/guard-vacuity-floor.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/test-all.sh"
 )
 
 # plugins/soleur/test/ci-shard-totality-skip (#9729, ADR-276 amendment) — the suite pins the shard-totality classify step in
@@ -1374,6 +1404,23 @@ AFFECTED_PLUGINS_SOLEUR_TEST_HEARTBEAT_RECONCILE_ISSUE_STEP_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# plugins/soleur/test/sole-copy-drift-check.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_SOLE_COPY_DRIFT_CHECK_TEST_SH_PATHS=(
+  ".github/actions/infra-credentials/action.yml"
+  ".github/actions/notify-ops-email/action.yml"
+  ".github/workflows/scheduled-terraform-drift.yml"
+  "apps/web-platform/infra/inngest-redis-luks.tf"
+  "knowledge-base/engineering/architecture/decisions/ADR-282-sole-copy-luks-volume-protection-set.md"
+  "knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md"
+  "knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md"
+  "plugins/soleur/skills/postmerge/SKILL.md"
+  "plugins/soleur/test/lib/gha-expr.py"
+  "plugins/soleur/test/sole-copy-drift-check.test.sh"
+  "scripts/lib/bearer-curl.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/test/hosted-ship-shallow-merge-base.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_HOSTED_SHIP_SHALLOW_MERGE_BASE_TEST_SH_PATHS=(
@@ -1474,6 +1521,14 @@ AFFECTED_PLUGINS_SOLEUR_TEST_REUSABLE_RELEASE_ZOT_MIRROR_RETRY_TEST_SH_PATHS=(
   "scripts/betterstack-query.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/zot-mirror-diagnosis.test.sh"
+)
+
+# plugins/soleur/test/inngest-config-bundle-mirror.test.sh — executes the mirror step body extracted from the bundle
+# workflow, so a workflow-only diff must select it; derived edges cannot reach a YAML subject.
+AFFECTED_PLUGINS_SOLEUR_TEST_INNGEST_CONFIG_BUNDLE_MIRROR_TEST_SH_PATHS=(
+  ".github/workflows/build-inngest-config-bundle.yml"
+  "plugins/soleur/test/inngest-config-bundle-mirror.test.sh"
+  "scripts/lib/test-affected-paths.sh"
 )
 
 # plugins/soleur/test/unkept-promise-hook.test.sh — derived edges could not reach its subject; declared from the
@@ -2081,6 +2136,8 @@ AFFECTED_SCRIPTS_LINT_TRAP_TEMPFILE_OWNERSHIP_PATHS=(
 AFFECTED_SCRIPTS_CHECK_CLOUDFLARE_TOKEN_DRIFT_PATHS=(
   ".github/"
   "infra/"
+  # token-drift-workflow-causes.test.sh (R4) pins that the drift filers' pointer resolves to this heading.
+  "knowledge-base/engineering/operations/runbooks/inngest-provision-rehearsal.md"
   "scripts/check-cloudflare-token-drift.sh"
   "scripts/check-cloudflare-token-drift.test.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -2262,4 +2319,24 @@ AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
   "scripts/lint-betterstack-emitter-read.sh"
   "scripts/lint-betterstack-emitter-read.test.sh"
   "scripts/test-all.sh"
+)
+
+# scripts/followthroughs/registry-clientip-alert-7530.test.sh — the #7530 post-merge probe's
+# exit-code battery. Beyond the probe itself it READS the committed alert file at runtime (the suite
+# compares the SQL the probe sends against that text, and the probe extracts its predicate from it),
+# a read the name-stem convention cannot reach. Its retirement-header row also READS the alert drift
+# guard (apps/web-platform/test/infra/registry-clientip-not-rfc1918-alert.test.sh, the rename cross-reference),
+# the two suite-registration tables and the preflight-discoverability baseline. Its case_refire_parity
+# row also READS the apply workflow (the printed re-fire command is compared with the workflow's own comment).
+AFFECTED_SCRIPTS_FOLLOWTHROUGHS_REGISTRY_CLIENTIP_ALERT_7530_PATHS=(
+  ".github/workflows/apply-web-platform-infra.yml"
+  "apps/web-platform/infra/betterstack-logs-alerts.tf"
+  "apps/web-platform/test/infra/registry-clientip-not-rfc1918-alert.test.sh"
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "plugins/soleur/test/preflight-discoverability-test.test.ts"
+  "scripts/followthroughs/registry-clientip-alert-7530.sh"
+  "scripts/followthroughs/registry-clientip-alert-7530.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/suite-durations.tsv"
+  "scripts/suite-shard-legs.tsv"
 )

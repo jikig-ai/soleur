@@ -1796,6 +1796,13 @@ run_suite() {
   # per-suite git snapshots would narrow it further and cost ~660 extra process spawns, which is
   # not worth it for a strictly-narrower answer.
   _repo_last_suite="$label"
+  # #7697 — one holder-marker stamp per suite boundary. A waiter staring at
+  # the held lock then sees last_suite/progress_epoch advancing (or NOT, which
+  # is the wedge signature the heartbeat's holder_progress_age names).
+  # Advisory only: silent no-op when the lib is absent or the lock isn't ours.
+  if declare -F stamp_lock_holder >/dev/null 2>&1; then
+    stamp_lock_holder test-all "last_suite=$label" "suites_done=$_suites_completed"
+  fi
   local start="${EPOCHREALTIME:-}"
   echo "--- $label ---"
   # #8940 — tee every suite's combined output into a per-suite file inside the
@@ -1939,6 +1946,7 @@ run_suite() {
       printf '%s\t%d\tFAIL%s\n' "$label" "$elapsed_ms" "$tmp_field" >> "${TEST_TIMING_LOG:-/dev/null}"
     fi
   fi
+  _suites_completed=$(( _suites_completed + 1 ))
 }
 
 # A DECLINE IS A VERDICT, NOT AN ABSENCE (ADR-181).
@@ -3795,7 +3803,8 @@ _aff_runner_banner() {
 # reserved for a suite TERMINATED mid-coverage.
 # #9763: 38 heavy/stale labels withdrawn to edge-selection; the floor pins count-5.
 # #8875: +1 always-on (emitter census is repo-global by construction); re-pinned at 114-5.
-_MIN_ALWAYS_ON_DECLARED=109
+# #10331: +2 always-on (the lint-ratchet pair); re-pinned at 116-5.
+_MIN_ALWAYS_ON_DECLARED=111
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -4220,7 +4229,7 @@ tc_capacity_line >&2
 #
 # It fires HERE, AFTER tc_preamble (which computes the count) and BEFORE tc_acquire, deliberately.
 # Refusing after tc_acquire would make a run that should never have started wait up to
-# TC_LOCK_TIMEOUT (900 s) to be told so, and take the advisory lock a legitimate sibling is queued
+# TC_LOCK_TIMEOUT (3600 s) to be told so, and take the advisory lock a legitimate sibling is queued
 # on. A refused run must cost nothing.
 #
 # ADDITIVE, not a replacement: the SOLEUR_SUBAGENT arm above is untouched and still exits 4.
@@ -4333,6 +4342,9 @@ fi
 _RUN_START_EPOCH="${EPOCHSECONDS:-0}"
 _ceiling_tripped=0
 _ceiling_declined=0
+# Suites this run has completed — stamped into the holder marker (#7697) once
+# per run_suite call. Same splice-window constraint as the ceiling state.
+_suites_completed=0
 
 # --- #8940 / #8993 state ---------------------------------------------------
 # Declared HERE, at top level, for the same splice-window reason as the
@@ -4611,7 +4623,15 @@ _run_log_retain() {
   fi
   return 0
 }
-trap '_repo_boundary_exit_note; _run_log_retain; _soleur_refguard_cleanup; _soleur_inc_cleanup; _soleur_scratch_cleanup || true; _enum_wd_disarm; _run_wd_disarm' EXIT
+# #7697: test-all never calls release_lock — the fd dies with the process —
+# so the holder marker minted at acquire needs an explicit removal or every
+# completed run reads as a wedged holder to the next waiter. declare -F
+# guarded: sandbox splices of this file may never source session-state.sh.
+_lock_holder_cleanup() {
+  declare -F release_lock >/dev/null 2>&1 || return 0
+  release_lock test-all 2>/dev/null || true
+}
+trap '_repo_boundary_exit_note; _run_log_retain; _soleur_refguard_cleanup; _soleur_inc_cleanup; _soleur_scratch_cleanup || true; _enum_wd_disarm; _run_wd_disarm; _lock_holder_cleanup' EXIT
 
 # NOT under --enumerate. The shard-totality guard runs this path from inside a gate run that
 # already holds this lock; blocking here would deadlock the gate on itself. An enumerate pass
@@ -5066,6 +5086,9 @@ if want_scripts; then
   # Image CVE scan (W3, epic #9601): hermetic suite (stub Grype/curl, file:// /health); scripts/*.test.sh is
   # not in SUITE_GLOBS, so it is registered explicitly.
   run_suite "scripts/image-cve-scan" bash scripts/image-cve-scan.test.sh
+  # Egress audit rollup retention/freshness probe (#9545, ADR-288): hermetic (curl PATH shim, stub gateway
+  # query); scripts/*.test.sh is not in SUITE_GLOBS, so it is registered explicitly.
+  run_suite "scripts/egress-audit-retention-check" bash scripts/egress-audit-retention-check.test.sh
   # Doppler's API caps a doppler_* `description` at 255; the provider schema and `terraform plan`
   # do not, so a 273-char doppler_project.infra_privileged reddened every push apply after the
   # credential-tiering merge. -live asserts the real tree; -unit is the mutation matrix.
@@ -5118,6 +5141,13 @@ if want_scripts; then
   # alert path that had never once delivered, because `set -u` killed it before the curl.
   run_suite "scripts/lint-workflow-step-env-refs" bash scripts/lint-workflow-step-env-refs.test.sh
   run_suite "scripts/lint-workflow-step-env-refs-live" python3 scripts/lint-workflow-step-env-refs.py
+  # #10331 PR3a, ADR-290. Same both-halves shape: the unit suite proves the shrink-only RULE (and
+  # pins ruff.toml, the scope tuple and the floors); the live run proves the TREE equals its
+  # baseline. The eslint-test-dirs live arm runs as a vitest file in `test-webplat` (it needs
+  # apps/web-platform/node_modules, which this shard does not have). The live ruff run installs a
+  # hash-pinned ruff on first use; under CI an unobtainable ruff is exit 2, never a skip.
+  run_suite "tests/scripts/lint-ratchet" python3 -m unittest tests.scripts.test_lint_ratchet
+  run_suite "scripts/lint-ratchet-ruff-live" python3 scripts/lint-ratchet.py ruff --check
   # ADR-170. Both halves are required: the unit suite proves the RULE is right (its fixtures are
   # the executable spec), the live scan proves the TREE is clean. Either alone is satisfiable by
   # a detector that has stopped detecting -- a broken linter and a clean repo emit identical
@@ -5558,6 +5588,15 @@ if want_scripts; then
   # sweeper closes issue 8651 as completed — the observed-evidence condition zot-soak-6122.sh's
   # WEB_BLOCKER arm requires — so every sweeper exit code is driven by a fixture.
   run_suite "scripts/web-fresh-boot-zot-8651" bash scripts/followthroughs/web-fresh-boot-zot-8651.test.sh
+  # #10445: exit-code harness for the hosted-Bash-outage readback. Registered EXPLICITLY (scripts/followthroughs/*.test.sh
+  # is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes the PIR-flip tracker, so "PASS only when the
+  # fix PR's merge commit is contained in the deployed tag" must redden CI if it regresses to a bare canary-green exit 0.
+  run_suite "scripts/sandbox-readback-10445" bash scripts/followthroughs/sandbox-readback-10445.test.sh
+  # #10119: exit-code + branch harness for the registry htpasswd-stdin delivery probe. Registered explicitly
+  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes
+  # #10119 after the unattended registry host replace, so a vacuous PASS (old-host rows, forged tails, quoted
+  # markers) must redden CI.
+  run_suite "scripts/registry-htpasswd-stdin-10119" bash scripts/followthroughs/registry-htpasswd-stdin-10119.test.sh
   # #9826 (W3, epic #9601): exit-code harness for the image-CVE-scan dark-launch window probe. Registered
   # explicitly — scripts/followthroughs/*.test.sh is not in SUITE_GLOBS. A vacuous PASS would close the
   # tracker on an unmeasured window.
@@ -5667,12 +5706,6 @@ if want_scripts; then
   # 2026-10-15, forget >48 h old, or closed unmerged; 2 = NOT YET; 3 = gh failed). Registered
   # explicitly (orphan-suite class above): a false 0 would close the tracker on a live hold.
   run_suite "scripts/workspaces-plaintext-hold-9348" bash scripts/followthroughs/workspaces-plaintext-hold-9348.test.sh
-  # #8706: exit-code harness for the luks-monitor host-timer closure probe. Registered explicitly
-  # (orphan-suite class above). Its exit 0 closes #8706, so the suite pins that PASS needs three
-  # CONSECUTIVE UTC nights (two, or three with gaps, is FAIL), that a dark channel (zero
-  # luks-monitor rows) is exit 2 and never FAIL/PASS, and that an empty result is a real zero
-  # while a failed query is exit 2.
-  run_suite "scripts/luks-monitor-host-timer-8706" bash scripts/followthroughs/luks-monitor-host-timer-8706.test.sh
   # #6931: exit-code harness for the web-2 live-LUKS soak-gated closure probe. Registered explicitly
   # (orphan-suite class above). Its exit 0 closes #6931, so the suite pins the arms that must NOT reach
   # it: a young marker, a red probe row since the marker (and that a FAIL row from BEFORE the marker is
@@ -5870,6 +5903,10 @@ if want_scripts; then
   # exists to report. Static gate over both alarm workflows — the condition is evaluated by
   # GitHub, so the YAML is the only artifact there is to test.
   run_suite "scripts/alarm-issue-filing-guard" bash scripts/alarm-issue-filing-guard.test.sh
+  # #7521: the standing registry fill-rate leg lives in YAML (four steps after the Sentry check-in of
+  # scheduled-zot-restart-loop.yml); this suite parses it and EXECUTES the probe and filing bodies, so
+  # its Sentry isolation, ordering, classification, filing and close rules are pinned by a test.
+  run_suite "scripts/zot-fill-rate-standing-wiring" bash scripts/zot-fill-rate-standing-wiring.test.sh
   # A workflow that writes to the issue tracker must hold `issues: write`. Registered beside the
   # alarm guard because they are the same class one layer apart: that one checks an alarm step CAN
   # RUN, this one checks it CAN WRITE. The dispatcher's refusal artifact satisfied the first and
@@ -6152,6 +6189,7 @@ if want_scripts; then
   run_suite "tests/scripts/zot-log-channel-probe" bash tests/scripts/test-zot-log-channel-probe.sh
   # git-data-host-replace scoped-recreate destroy-guard (#6242; 5-target, preserves BOTH data volumes + LUKS passphrase by omission).
   run_suite "tests/scripts/git-data-host-replace-gate" bash tests/scripts/test-git-data-host-replace-gate.sh
+  run_suite "tests/scripts/git-data-wipe-wedge" bash tests/scripts/test-git-data-wipe-wedge.sh
   # git-data root-key create-gate arm (#8189, ADR-220, Guard 4), sourced by the replace and birth gates.
   run_suite "tests/scripts/git-data-root-key-arm" bash tests/scripts/test-git-data-root-key-arm.sh
   run_suite "tests/scripts/git-data-root-token-census" bash tests/scripts/test-git-data-root-token-census.sh
@@ -6363,6 +6401,14 @@ if want_scripts; then
   # run_suite for the same no-`scripts/*.test.sh`-glob reason; appended LAST in the block so no
   # earlier registration's positional-shard ordinal moves. Declared edge set, not always-on.
   run_suite "scripts/test-affected-derive-cache" bash scripts/test-affected-derive-cache.test.sh
+  # #9729 (ADR-276 S4, PR B): the pr-selection driver EXECUTED (real merge-commit fixture repos, a stub test-all.sh replaying
+  # the measured record shapes, a restricted PATH, and a mutant per guard row). Same explicit-registration and LAST-in-block
+  # reasons as above. Declared edge set, not always-on.
+  run_suite "scripts/ci-pr-selection" bash scripts/ci-pr-selection.test.sh
+  # #7530 (PR 10320): the clientIP-alert post-merge probe's exit-code contract (same stubs, plus the SQL the
+  # probe sends compared against the committed betterstack-logs-alerts.tf text, and a no-address-in-output
+  # assertion on every run). Same explicit-registration and LAST-in-block reasons as above.
+  run_suite "scripts/followthroughs/registry-clientip-alert-7530" bash scripts/followthroughs/registry-clientip-alert-7530.test.sh
 fi
 
 # Named bun-test entries — bun shard.

@@ -58,7 +58,8 @@ set -u
 #
 # TEST SEAMS (never set in production): INNGEST_PROBE_FUNCTIONS_FIXTURE is inherited from the
 # sourced script; SOLEUR_INNGEST_CONSUMER_PING_LOG re-routes the heartbeat ping to a file;
-# SOLEUR_INNGEST_CONSUMER_FAULT_MARKER / _FAULT_INTERVAL parameterise the rate-limit.
+# SOLEUR_INNGEST_CONSUMER_FAULT_MARKER / _FAULT_INTERVAL parameterise the rate-limit;
+# SOLEUR_INNGEST_CONSUMER_REFUSAL_MARKER relocates the refused-URL marker's own stamp.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -82,6 +83,47 @@ set +e +o pipefail
 URL="${INNGEST_CONSUMER_URL:-}"
 FAULT_MARKER="${SOLEUR_INNGEST_CONSUMER_FAULT_MARKER:-/run/inngest-consumer-probe.fault}"
 FAULT_INTERVAL="${SOLEUR_INNGEST_CONSUMER_FAULT_INTERVAL:-1800}"
+REFUSAL_MARKER="${SOLEUR_INNGEST_CONSUMER_REFUSAL_MARKER:-/run/inngest-consumer-probe.refusal}"
+REFUSAL_INTERVAL=3600
+
+# The heartbeat URL's PATH is the credential, so it must not ride curl's argument list (readable by every
+# local user in /proc/<pid>/cmdline; ADR-280, #9757): it reaches curl on the stdin config (`--config -`),
+# `--disable` (first, so no ~/.curlrc is read as root) and `--noproxy '*'` confine the transport (lint Rule D),
+# and `-g` keeps a URL with [ ] or { } from printing itself in curl's glob-parse error. This host has no
+# checkout, so this is the inline form of the library. The value is judged BEFORE any request, with no
+# trimming: a scheme other than https://, an empty rest, or any byte outside the class below (a quote,
+# backslash or newline would add directives to the config grammar) is refused with zero requests, one
+# value-free marker on stderr (the unit's SyslogIdentifier ships it) and the same fail-soft exit as every
+# other arm. The marker is rate-limited on its OWN stamp (ADR-280, PR C follow-up): never _fault, whose
+# stamp is shared by every fault class and must not be masked by a refusal.
+_hb_url_ok() {
+  local LC_ALL=C
+  case "$1" in https://*) ;; *) return 1 ;; esac
+  case "${1#https://}" in ''|*[!A-Za-z0-9._~:/?\&=%+-]*) return 1 ;; esac
+}
+# One call = one attempt = one fresh process substitution (a substitution is consumed once, so a second
+# attempt sharing the first one's would read EOF and send no URL).
+_hb_curl() { curl --disable --noproxy '*' -gfsS -m 10 -o /dev/null --config - 2>/dev/null < <(printf 'url = "%s"\n' "$URL"); }
+
+_refusal_due() {
+  # Hourly limiter for the refusal marker. A future-dated or garbage stamp reads as "emit" (a negative age
+  # must never suppress forever), the stamp is rewritten on emit, and an unwritable stamp fails OPEN
+  # (loud on every tick rather than silent).
+  local now last
+  now=$(date +%s 2>/dev/null || echo 0)
+  last=0
+  [ -f "$REFUSAL_MARKER" ] && last=$(cat "$REFUSAL_MARKER" 2>/dev/null || echo 0)
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  [ "${#last}" -le 10 ] || last=0
+  last=$((10#$last))
+  if [ "$now" -gt 0 ] && [ "$last" -le "$now" ] && [ $((now - last)) -lt "$REFUSAL_INTERVAL" ]; then
+    return 1
+  fi
+  # tee, not a redirect: an unwritable /run fails open here exactly as a redirect would, and the write site stays out of
+  # the fixture-relative-assert ratchet, which counts quoted-variable redirect targets (the path is absolute or a test seam).
+  printf '%s\n' "$now" | tee "$REFUSAL_MARKER" >/dev/null 2>&1 || true
+  return 0
+}
 
 _ping() {
   # Route to the test log if seamed; else fire the real heartbeat ping (two attempts, mirroring
@@ -91,8 +133,16 @@ _ping() {
     return 0
   fi
   [ -n "$URL" ] || { echo "[inngest-consumer-probe] WARN: INNGEST_CONSUMER_URL unset — the registry is servable but the beat cannot be sent, so the monitor will alarm on a HEALTHY host. Check /etc/default/inngest-consumer-probe." >&2; return 0; }
-  curl -fsS -m 10 -o /dev/null "$URL" 2>/dev/null \
-    || curl -fsS -m 10 -o /dev/null "$URL" 2>/dev/null \
+  if ! _hb_url_ok "$URL"; then
+    local reason=token_shape LC_ALL=C
+    case "$URL" in *[[:cntrl:]]*) reason=control_char ;; esac
+    if _refusal_due; then
+      echo "SOLEUR_CREDENTIAL_REFUSED script=inngest-consumer-probe reason=$reason var=INNGEST_CONSUMER_URL" >&2
+      echo "[inngest-consumer-probe] WARN: heartbeat URL refused (registry servable, no ping sent) — the monitor will alarm on a healthy host." >&2
+    fi
+    return 0
+  fi
+  _hb_curl || _hb_curl \
     || echo "[inngest-consumer-probe] WARN: heartbeat ping FAILED (registry servable, url_present=yes) — the monitor will alarm on a healthy host." >&2
 }
 
@@ -106,6 +156,8 @@ _fault() {
   last=0
   [ -f "$FAULT_MARKER" ] && last=$(cat "$FAULT_MARKER" 2>/dev/null || echo 0)
   case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  [ "${#last}" -le 10 ] || last=0
+  last=$((10#$last))
   if [ $((now - last)) -ge "$FAULT_INTERVAL" ]; then
     echo "[inngest-consumer-probe] $1" >&2
     printf '%s\n' "$now" > "$FAULT_MARKER" 2>/dev/null || true
