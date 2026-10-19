@@ -16,6 +16,41 @@ lane: cross-domain
 
 Ref #9757 (the umbrella stays OPEN: this plan and its PR use "Ref", never a closing keyword).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-19 (after plan-review by DHH, Kieran and code-simplicity; then security-sentinel,
+test-design-reviewer, observability-coverage-reviewer and spec-flow-analyzer; a CTO ruling on six forks; gates 4.5-4.12
+run: user-brand, observability, PAT, UI, encryption, guard-contract lint, scope check).
+
+### Key improvements
+
+1. **The scanner would have missed the file it exists for.** The engine spells the converted lines `$CRANE auth login`
+   (a variable); a literal `crane` pattern finds zero sites. S8 now carries a variable-aware verb alternation, a strict
+   invocation rule (host token, option span cut at the first shell operator, flags-before-host covered), a per-file
+   continuation join, and a floor measured at 11 sites in 6 files.
+2. **The xtrace refusal must be the multi-line `case` block.** The lint's regexes are line-anchored; the one-line form
+   fails it (verified on a scratch copy of the engine; the multi-line form reports 0 violations).
+3. **The suite could not tell a wrong feeder from a right one.** The stub now records the stdin value it read to a side
+   file (`$CALLS.stdin`, host/user/password with distinct synthetic tokens per login) and the suite asserts the exact
+   token reached each login; the GHCR login, previously unexercised, gets new rows; a wrong-variable feeder mutation is
+   added.
+4. **First live use is the pre-destroy D10 rehearsal, not the recut.** `registry-pull-path-health.sh:570` runs this engine
+   (invoked from `apply-web-platform-infra.yml` ~2845 and ~3051) before any destroy, so a login failure aborts the gate
+   and destroys nothing.
+5. **Small hardening on lines this PR already edits** (CTO ruling): `unset` of the four credential names after login,
+   `tr '\r\n'` in the login-failure tails, truthful `die` wording plus two runbook rows.
+
+### New considerations discovered
+
+- The stale ADR-280 sentence (line ~466) that says the engine "sits outside every corpus" is false after this PR and is
+  edited, not just supplemented.
+- `plugins/soleur/test/fixture-relative-assert.baseline.txt` pins per-file counts for the engine, the restore suite and
+  the sweep suite; the new code can move them.
+- The battery's pre-flight anchor audit aborts (rc 2) when an anchor does not resolve, so its RED proof is that abort;
+  Phases 1 and 2 land in one push.
+- S8 is full-run-only on future PRs (CTO D1): the affected-test array does not name its population and editing it would arm
+  every PR-gated battery.
+
 ## Overview
 
 Umbrella #9757 tracks the leftovers of the argv-credential sweep. The brief listed five unticked items. A re-read of
@@ -30,7 +65,9 @@ deferred to a tracked issue with a re-evaluation trigger.
 (`apply-web-platform-infra.yml` `on.push.paths`), so merging does not fire the production apply. The brief's warning
 about item 1 is moot because item 1 is already done. The pipeline still stops at a ready PR: no merge and no dispatch
 of anything production-facing without the operator's per-command go-ahead. The first live use of the new login form is
-the next registry recut dispatch (`apply-web-platform-infra.yml:3642` calls the engine).
+the D10 VERDICT rehearsal, which runs this engine against a throwaway zot **before** any destroy
+(`registry-pull-path-health.sh:570`, reached from `apply-web-platform-infra.yml` ~2845 and ~3051); the recut restore step
+(`apply-web-platform-infra.yml` ~3642) is the second caller. A login failure in the rehearsal aborts the gate and destroys nothing.
 
 ## Research Reconciliation: brief vs. codebase
 
@@ -64,7 +101,7 @@ rule to `crane` and adds nothing architectural. No ADR rejects `--password-stdin
 1. No registry login command (`crane auth login`, `$CRANE auth login`, `docker login`, `$DOCKER_BIN login`, `podman login`) in tracked non-test code carries a password in its argument list.
 2. The engine's login still fails closed: any non-zero login (a crane without the flag, an unwritable config) takes the die arm (exit 5 for the sink, 2 for GHCR). Real credential rejection is classified downstream at `digest`/`copy`; the stub's `REJECT_ME` rows prove the die arm, not the registry.
 3. The suite proves property 1 against the real login call, and fails if the token ever reaches the recorded argv.
-4. The engine refuses to run traced while a registry credential is in the environment.
+4. The engine refuses to run traced while a registry credential is in the environment, and drops the credential names from its environment after login (children inherit nothing). Stated limit: credentials still rest base64 in `$WORK/dockercfg/config.json` until the EXIT trap's `rm -rf`.
 5. The umbrella accurately shows what is done, and each deferred lead has an owner and a trigger.
 
 **Cut List.** (mechanism -> property -> what already covers it)
@@ -76,6 +113,9 @@ rule to `crane` and adds nothing architectural. No ADR rejects `--password-stdin
 - Widening scanner S6 (htpasswd) to cover login commands -> property 1 -> S6 is bound to htpasswd, its workflow identity and allowlist; a separate stage S8 buys the same property without distorting S6 (CTO ruling).
 - A permanent opt-in real-binary crane row -> property 3 -> never runs in CI and gates nothing; replaced by a one-off pinned-binary check in the work phase, output pasted in the PR body (plan-review ruling: mechanical).
 - A long ADR-280 addendum restating deferrals and umbrella status -> property 5 -> the four issues and #9757 own those; a 3-5 line addendum records S8 only.
+- An engine-side control-character guard on the tokens -> none -> deferred to #10530 (CTO D2: tokens arrive single-line via `doppler --plain` inside `$(...)` or workflow env; the guard would run after the destroy and could turn a working recut into exit 5).
+- Editing `scripts/lib/test-affected-paths.sh` so S8 selects on PRs -> none -> not adopted (CTO D1): it arms every PR-gated battery; S8 rides the full run on main.
+- An S8 clause for a `/usr/bin/printf` or `echo` feeder -> none -> not adopted; stated as a named limit (the feeder could itself carry the token on argv).
 - An opt-in whole-line identity pin, an allowlist and an `echo`-feeder clause in S8 -> property 1 -> the derived scan with a measured floor plus the stub's exit 64 already cover them; they would turn S8 red on harmless edits.
 
 **Institutional learnings applied** (`knowledge-base/project/learnings/`):
@@ -103,32 +143,57 @@ different concern, stays open).
 ### Phase 1 (RED first): tests and the scanner stage, failing against today's engine
 
 1. **Stub redesign** (`tests/scripts/test-registry-restore-from-ghcr.sh` ~241-260). `auth login` accepts only a host,
-   `-u <user>`, `--insecure` and `--password-stdin`. It exits 64 (with a stderr line naming the refused shape, not the
+   `-u <user>`, `--insecure` and `--password-stdin`. It exits 64 (with a stderr line naming the refused shape, never the
    value) on `-p`, `--password`, `--password=*` or a glued `-p*`, and when `--password-stdin` is absent. It reads the
-   password with `pw=$(cat)` from stdin (only in this arm). **`run_engine` (and the battery's `run_suite`/`mutate` runner)
-   must redirect the engine's own stdin from `/dev/null`:** in the pipeline form the stub's stdin is the `printf` pipe, but
-   a mutation that drops the feeder leaves the stub inheriting the harness stdin, and `cat` would block on an open CI
-   stdin instead of seeing EOF. The `REJECT_ME` sentinel check stays, on the stdin value. The
-   `printf '%s\n' "$*" >> "$CALLS"` line is unchanged: with no password on argv it can no longer record one.
-2. **New suite rows:** (a) one row: the token value appears nowhere in the CALLS log, `login.err` or the engine's
-   combined output, for both the sink and GHCR logins (synthetic tokens only, per `cq-test-fixtures-synthesized-only`);
-   (b) the existing `REJECT_ME` rows re-pointed at stdin (a sink login the stub rejects exits 5, a GHCR login exits 2);
-   (c) xtrace: `bash -x` with only `ZOT_PUSH_TOKEN` set exits 78 before any network call and prints no token; the same
-   with only `GHCR_TOKEN` set; one `env SHELLOPTS=xtrace` row; and with neither set the traced run still reaches the usage
-   error (the lint's own "unset case still runs" rule). No separate `BASH_ENV` row (same `case "$-"` line).
-   There is **no permanent real-binary row**: it would be opt-in, never run in CI and gate nothing. Instead, in the work
-   phase, fetch the pinned crane `v0.20.2` release into the scratchpad once and run
-   `printf '%s' <synthetic> | crane auth login 127.0.0.1:5000 -u <user> --password-stdin --insecure` against a temp
-   `DOCKER_CONFIG`; check `config.json` decodes to `user:password` byte for byte and record the output in the PR body.
-   That settles "the flag exists in the pinned version" before the first live recut.
-3. **Mutation battery** (`tests/scripts/test-registry-gate-mutation-battery.sh`): rewrite the E01 anchor (~429) and the
-   explanatory comment (~349) to the new pipeline line (E01 must still be killed); add three engine mutations: E-new-A
-   (revert to `-p "$X"` / drop `--password-stdin`, one mutation: both are killed by the same stub arm), E-new-B (drop the
-   `printf` feeder, so the stub reads EOF and the sentinel path breaks), E-new-C (delete the xtrace refusal). Each must
-   be killed. The added runtime is noted in the PR body (the battery is the repo's most expensive suite).
-4. **Scanner stage S8** in `tests/scripts/test-argv-bearer-sweep.sh` (after S7, same skeleton as S6): see Guard Contract.
-   The new rows and the `EXPECTED_TESTS` bump (currently 823, `tests/scripts/test-argv-bearer-sweep.sh` ~7642) are
-   **measured from the run after the final row set is fixed**, with a history comment line in the existing ledger style.
+   password with `pw=$(cat)` from stdin, trims one trailing `\n` then one `\r` as real crane does, and appends one line
+   `host<TAB>user<TAB>password` to a side file `$CALLS.stdin` (synthetic tokens only; the stub never prints the password
+   on any path). The `REJECT_ME` sentinel check stays, on the stdin value. **`run_engine` (and the battery's runner)
+   must redirect the engine's own stdin from `/dev/null`:** in the pipeline form the stub's stdin is the `printf` pipe,
+   but a mutation that drops the feeder leaves the stub inheriting the harness stdin and `cat` would block on an open CI
+   stdin instead of seeing EOF. The `printf '%s\n' "$*" >> "$CALLS"` line is unchanged: with no password on argv it can
+   no longer record one.
+2. **New suite rows** (all unconditional, so the row total is environment-independent):
+   - (a) positive control: with distinct tokens per login (`ZOT_PUSH_TOKEN` and `GHCR_TOKEN` differ and neither equals the
+     user), `$CALLS.stdin` holds exactly `<target>\t<zot user>\t<zot token>` and `ghcr.io\t<ghcr user>\t<ghcr token>`.
+     This is what kills a wrong-variable feeder; the old stub only checked "non-empty";
+   - (b) the token values appear nowhere in the CALLS log, `login.err` or the engine's combined output;
+   - (c) **new** GHCR rows (the suite never set `GHCR_USER`/`GHCR_TOKEN` before): a happy path and a rejected GHCR
+     credential that exits 2; the existing sink `REJECT_ME` row stays and exits 5;
+   - (d) a CR-in-stderr fixture: a stub login that emits `\r::add-mask::x` on stderr produces a `die` message with no CR
+     (the `tr '\r\n'` change);
+   - (e) post-login environment: the stub, when handling a post-login `copy`, records whether any of
+     `ZOT_PUSH_TOKEN GHCR_TOKEN DOPPLER_TOKEN GH_TOKEN_FOR_ENGINE` is set; the row asserts none is (the `unset`);
+   - (f) xtrace, with `GHCR_USER=`, `GHCR_TOKEN=`, `ZOT_PUSH_TOKEN=` set or unset **explicitly** per row (an ambient
+     `GHCR_TOKEN` in a runner shell must not flip a row), a distinctive token such as `ztok-xtrace-1`, stdin from
+     `/dev/null`: `bash -x` with only `ZOT_PUSH_TOKEN` exits 78 before any network call; the same with only `GHCR_TOKEN`;
+     neither set, the traced run reaches the usage error; the token is absent from combined output. No separate
+     `SHELLOPTS` or `BASH_ENV` row: they resolve to the same `$-` test.
+   There is **no permanent real-binary row** (opt-in, never run in CI, gates nothing). Instead the work phase fetches the
+   pinned crane `v0.20.2` release into the scratchpad and runs, against a temp `DOCKER_CONFIG`: the happy path
+   (`printf '%s' <synthetic> | crane auth login 127.0.0.1:5000 -u <user> --password-stdin --insecure`; `config.json`
+   decodes to `user:password`, mode recorded with `stat -c %a`, and it sits under the scratch dir), plus three failure
+   shapes with a sentinel token (unwritable `DOCKER_CONFIG`, empty stdin, missing username), grepping each stderr for the
+   sentinel. This also settles whether real login contacts the registry (the `die` wording below depends on it). The
+   output goes in the PR body.
+3. **Mutation battery** (`tests/scripts/test-registry-gate-mutation-battery.sh`). Anchors must use the single-quoted
+   `'\''%s'\''` form (the battery's pre-flight anchor audit only reads single-quoted anchors and aborts the whole run with
+   rc 2 on a stale one). Re-anchor E01 on the whole login head (`if ! printf '%s' "$ZOT_PUSH_TOKEN" | $CRANE auth login
+   "$TARGET"` replaced by `if ! true "$TARGET"`, so "auth skipped" is deterministic and not a SIGPIPE race) and fix the
+   comment at ~349. Add engine mutations, each of which must be killed: E-new-A1 (sink line reverted to `-p "$X"`),
+   E-new-A2 (GHCR line reverted to `-p "$X"`), E-new-B (drop the `printf` feeder; stdin is `/dev/null`, the sentinel path
+   breaks), E-new-D (wrong-variable feeder: `$ZOT_PUSH_USER` into the sink login; killed by row (a)), E-new-C1 (the xtrace
+   condition line `if [ -n "${GHCR_TOKEN:+x}${ZOT_PUSH_TOKEN:+x}" ]; then` mutated to `if false; then`), E-new-C2 (the
+   GHCR operand dropped from that condition; killed by the GHCR-only row). **The battery's RED proof is its pre-flight abort
+   against the unmodified engine, run locally; Phases 1 and 2 therefore land in ONE push** (a Phase-1-only push sends a red
+   full CI run including the heavy battery). Added runtime: each mutation re-runs the restore suite (measured ~67 s here;
+   the committed weight in `scripts/suite-durations.tsv` is 12 s, `suite-durations-heavy.tsv` has the battery at 491 s):
+   reconcile the two figures before writing the PR-body note.
+4. **Scanner stage S8** in `tests/scripts/test-argv-bearer-sweep.sh` (after S7, S6's skeleton but a per-file pass for the
+   continuation join, not S6's per-line loop): see Guard Contract. Its mutation base repo copies **all** files the floor
+   counts (a partial base trips the floor and makes every mutation RED for the wrong reason); reasons are asserted by
+   string (`bad:<file>`, `floor`), as S6 does. Procedure for `EXPECTED_TESTS` (currently 823, ~7642): run once with the
+   final row set (rows are unconditional), require 823 plus the S8 row count to equal the measured total, add a
+   `823 -> N at #9757 (stage S8 ...): measured (N passed, 0 failed)` history line.
 
 ### Phase 2 (GREEN): the engine
 
@@ -136,8 +201,8 @@ different concern, stays open).
 
 1. Immediately after `set -uo pipefail` (Rule A: before any command other than `set`/`shopt`), add the refusal in the
    **multi-line** form the lint accepts. The lint's regexes are line-anchored (`XTRACE_ARM` needs `*x*)` at the start of its
-   own line), and the one-line `case "$-" in *x*) ...` spelling fails it (measured by the Kieran seat on a scratch copy).
-   Model it on `scripts/registry-pull-path-health.sh` (~112):
+   own line), and the one-line `case "$-" in *x*) ...` spelling fails it (measured on a scratch copy; the multi-line form
+   reports 0 violations). Model it on `scripts/registry-pull-path-health.sh` (~112):
 
    ```bash
    case "$-" in
@@ -150,34 +215,52 @@ different concern, stays open).
    esac
    ```
 
-   Then run
-   `python3 scripts/lint-shell-trace-credential-refusal.py scripts/registry-restore-from-ghcr.sh` and require 0 violations.
-   Document exit 78 in the header exit table (lines ~62-75) as "traced invocation only": the apply workflow's restore step
-   (`apply-web-platform-infra.yml` ~3672) has no arm for 78, so it would land in the loud `*)` "unenumerated exit" arm; that
-   is acceptable (nothing traces the step today, and the workflow cannot be edited without firing the production apply).
+   Then run `python3 scripts/lint-shell-trace-credential-refusal.py scripts/registry-restore-from-ghcr.sh` and require 0
+   violations. Document exit 78 in the header exit table (lines ~62-75) as "traced invocation only": the apply workflow's
+   restore step (`apply-web-platform-infra.yml` ~3672) has no arm for 78, so it would land in the loud `*)` "unenumerated
+   exit" arm after the engine's own `[FATAL]` line; acceptable (nothing traces the step today, and the workflow cannot be
+   edited without firing the production apply).
 2. Replace both logins (lines 558 and 567):
    `if ! printf '%s' "$ZOT_PUSH_TOKEN" | $CRANE auth login "$TARGET" -u "$ZOT_PUSH_USER" --password-stdin $SINK_TLS_FLAG \`
    (the existing continuation with the `>"$WORK/login.out" 2>"$WORK/login.err"` redirects stays) `; then die 5 ...` and the
    GHCR equivalent keeping `die 2`. `printf` is a builtin, so the token never reaches any argv. Not a here-string and not
    process substitution (a here-string is a temp file on bash < 5.1, which would put the secret on disk). The engine runs
    `set -uo pipefail` without `-e` and the pipeline is inside `if !`, so a failed or SIGPIPE'd (141) login still takes the
-   die arm; no `|| true`. Honest scope of those die arms: real `crane auth login` only stores credentials and never
-   contacts the registry, so they fire for a crane without the flag or an unwritable `DOCKER_CONFIG`; a rejected credential
-   surfaces later as DENIED at `digest`/`copy` and is classified to exit 5 by the existing `classify()`.
-3. Update the stale comment block above (~529-545) so it no longer describes `-p`.
-4. Delete line 40 (`scripts/registry-restore-from-ghcr.sh`) from
+   die arm; no `|| true`. **Reword both `die` texts** to say the login command itself failed locally (a crane without
+   `--password-stdin`, or an unwritable `DOCKER_CONFIG`), not a registry verdict, because the workflow's exit-5/2
+   annotations point the operator at credential-rotation and `packages: read` runbooks that do not apply; word it
+   conditionally until the one-off pinned-crane run confirms that real `crane auth login` never contacts the registry, and
+   confirm the suite's `REJECT_ME` stub text does not assert the old wording. Use `tr '\r\n' '  '` (not `tr '\n' ' '`) in
+   `last_err` and in both login-failure tails.
+3. **After the GHCR login block** (~line 571) add `unset ZOT_PUSH_TOKEN GHCR_TOKEN DOPPLER_TOKEN GH_TOKEN_FOR_ENGINE` so the
+   dozens of `crane` children do not inherit them (CTO D3). Verified: the engine reads `ZOT_PUSH_TOKEN` only at ~137 and
+   ~558 and `GHCR_TOKEN` only at ~566-567; the other two names are step env that the engine never references; `unset` of an
+   unset name is safe under `set -u`; the workflow's exit-3 retry loop starts a fresh process each time. Stated limit: the
+   engine's own initial `/proc/<pid>/environ` still holds them.
+4. Update the stale comment block above (~529-545) so it no longer describes `-p`.
+5. Delete line 40 (`scripts/registry-restore-from-ghcr.sh`) from
    `scripts/lint-shell-trace-credential-refusal.baseline.txt` in the same commit, so the baseline drawdown is real.
 
 ### Phase 3: bookkeeping and the decision record
 
-1. `knowledge-base/engineering/architecture/decisions/ADR-280-credentials-reach-curl-on-stdin-config-through-one-shared-library.md`: a 3-5 line addendum: the stdin rule now covers
-   registry login verbs and stage S8 enforces it; link the four deferral issues once (#10529-#10532). Do not restate
-   umbrella status or triggers there (the issues and #9757 own them). No new decision, so no new ADR and no C4 change.
-2. Umbrella #9757: **re-fetch the body immediately before editing**, then one edit by line (never a blind whole-body
+1. `knowledge-base/engineering/architecture/decisions/ADR-280-credentials-reach-curl-on-stdin-config-through-one-shared-library.md`:
+   **edit the false sentence at ~line 466** (it says the engine "sits outside every corpus ... tracked on #9757") and add a
+   3-5 line addendum: the stdin rule now covers registry login verbs; stage S8 enforces it, with its corpus (whole tracked
+   tree minus the named exclusions) and its named blind spots (a feeder that itself carries the token on argv, command
+   names carrying none of CRANE/DOCKER/PODMAN, concatenated commands); S8 selects on the full run only, not on PRs (the
+   affected-test array does not name its population and editing it arms every PR-gated battery); link the four deferral
+   issues once (#10529-#10532). No new decision, so no new ADR and no C4 change.
+2. `knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md` (not under the apply workflow's push paths):
+   add two rows to the "Restore exit codes" table (~484-495): exit 5/2 carrying the new "login failed locally" text, and
+   exit 78 (traced invocation only; remove `-x`/`SHELLOPTS`/`BASH_ENV`).
+3. Umbrella #9757: **re-fetch the body immediately before editing**, then one edit by line (never a blind whole-body
    replace) with `gh issue edit`: tick items 1, 2 and 4; split the "Found by the S2 review" bullet so (a)-(e) are ticked
-   and (f), (g), (h) point at #10531, #10529, #10532, and (b)'s repo-wide remainder at #10530; tick item 5 now as
-   "PR #<N> (pending merge)". The line-level evidence lives in the PR body (it says "Ref #9757"), not in a separate
-   comment. The issue stays open: closing it is the operator's call.
+   and (f), (g), (h) point at #10531, #10529, #10532, and (b)'s repo-wide remainder at #10530; annotate item 5 "in progress:
+   PR #<N>" **unticked**, and tick it only after the merge is verified (the ship post-merge step does it with
+   `gh issue edit`). The remaining unticked items are why the issue stays open. The line-level evidence lives in the PR
+   body (it says "Ref #9757"), not in a separate comment. Closing the issue is the operator's call. Also comment once on
+   #10530 that the engine's two token sites were reviewed and left out of this PR (tokens arrive single-line; control-char
+   guard deferred there).
 
 ### Files to Edit
 
@@ -187,6 +270,8 @@ different concern, stays open).
 - `tests/scripts/test-argv-bearer-sweep.sh`
 - `scripts/lint-shell-trace-credential-refusal.baseline.txt`
 - `knowledge-base/engineering/architecture/decisions/ADR-280-credentials-reach-curl-on-stdin-config-through-one-shared-library.md`
+- `knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md` (two exit-code rows)
+- `plugins/soleur/test/fixture-relative-assert.baseline.txt` (only if the per-file counts for the engine, the restore suite or the sweep suite move; regenerate deliberately with that suite's `--write-baseline`)
 
 ### Files to Create
 
@@ -217,30 +302,30 @@ heartbeat slug). The work phase re-runs `plugins/soleur/test/c4-count-parity.tes
 
 ```yaml
 liveness_signal:
-  what: the apply workflow's registry restore step reports its exit code and a ::error:: line per classified failure (exit 5 credential unusable, exit 2 source unavailable)
-  cadence: per registry recut dispatch
-  alert_target: the dispatching operator's workflow run page and the restore step summary
-  configured_in: .github/workflows/apply-web-platform-infra.yml:3672 (exit-code case) and scripts/registry-restore-from-ghcr.sh die()
+  what: the restore callers report the engine exit code with a ::error:: line per classified failure (exit 5, exit 2, and the traced-run [FATAL] line with exit 78)
+  cadence: per D10 rehearsal and per registry recut dispatch
+  alert_target: the dispatching operator's workflow run page (workflow run log, layer 6) and the restore step summary
+  configured_in: .github/workflows/apply-web-platform-infra.yml (rehearsal ~2845 and ~3051 via scripts/registry-pull-path-health.sh:570; restore step exit-code case ~3636-3700) and die() in scripts/registry-restore-from-ghcr.sh
 error_reporting:
-  destination: GitHub Actions run log via ::error:: annotation
-  fail_loud: "::error::registry-restore-from-ghcr: could not authenticate to the sink ..." with exit 5; "... ghcr.io ..." with exit 2; the xtrace refusal prints "[FATAL] refusing to trace with a live credential set" with exit 78
+  destination: GitHub Actions run log via ::error:: annotation (workflow run log, layer 6)
+  fail_loud: "::error::registry-restore-from-ghcr: ... login failed locally ..." with exit 5 (sink) or 2 (GHCR); the xtrace refusal prints "[FATAL] refusing to trace with a live credential set" and exits 78, landing in the workflow's unenumerated-exit arm
 failure_modes:
-  - mode: a crane without --password-stdin is pinned or fetched
-    detection: login exits non-zero, the die arm prints the last 300 bytes of login.err (value-free) and exits 5 or 2
-    alert_route: failed workflow step annotation
+  - mode: a crane without --password-stdin is pinned or fetched, or DOCKER_CONFIG is unwritable
+    detection: the login exits non-zero, the die arm prints the last 300 bytes of login.err (CR/LF flattened, value-free) as an ::error:: line in the workflow run log (layer 6) and exits 5 or 2
+    alert_route: failed workflow step annotation in the workflow run log (layer 6); runbook registry-luks-recut-6929.md exit-code table
   - mode: the token reaches argv again (a later edit reintroduces -p)
-    detection: stage S8 of tests/scripts/test-argv-bearer-sweep.sh turns RED in CI, and the suite row asserting the token is absent from the recorded argv
-    alert_route: failed required CI check on the PR
+    detection: stage S8 of tests/scripts/test-argv-bearer-sweep.sh turns RED on the full CI run on main (it does not select on PRs), and the suite row asserting the stdin value and the argv log
+    alert_route: failed CI job in the workflow run log (layer 6)
   - mode: the engine is run traced with a credential
-    detection: exit 78 with a value-free message
-    alert_route: failed workflow step annotation
+    detection: exit 78 with a value-free [FATAL] line in the workflow run log (layer 6), then the unenumerated-exit ::error:: arm
+    alert_route: failed workflow step annotation in the workflow run log (layer 6); runbook exit-78 row
 logs:
-  where: GitHub Actions run log (the restore step); the engine writes no file outside its private scratch dir, removed on exit
+  where: GitHub Actions run log (the rehearsal and restore steps); the engine writes no file outside its private scratch dir, removed by the EXIT trap
   retention: GitHub Actions log retention
 discoverability_test:
-  command: grep -c -e 'CRANE auth login .* --password-stdin' scripts/registry-restore-from-ghcr.sh
+  command: grep -c -e '^ *if ! printf .*CRANE auth login .* --password-stdin' scripts/registry-restore-from-ghcr.sh
   expected_output: 2
-  # A source-text smoke check only (0 before this change, 1 after a sink-only edit, 2 after both). The absence of -p on argv is S8's verdict, not this grep's.
+  # A source-text smoke check only, anchored to code lines (comments cannot match): 0 before this change, 2 after both edits. The absence of -p on argv is S8's verdict, not this grep's.
 ```
 
 ## Guard Contract
@@ -250,40 +335,50 @@ discoverability_test:
 **Property.** No tracked, non-test, non-comment registry login invocation (`crane auth login`, `$CRANE auth login`,
 `docker login`, `$DOCKER_BIN login`, `podman login`) passes a password as an argument.
 
-**Assembly.** The population is **derived**, not listed. The verb alternation must match the engine's own spelling, which
-is a variable: `(crane|docker|podman|\$\{?[A-Z_]*(CRANE|DOCKER|PODMAN)[A-Z_]*\}?"?)([[:space:]]+auth)?[[:space:]]+login` (a
-literal `crane auth login` pattern finds zero sites in the engine, measured: both converted lines read `$CRANE auth login`).
-`git grep -nIE --untracked` over `scripts apps .github plugins`, minus `*.test.sh` and `*.md`; backslash-continuation lines
-are joined before testing (the real tree has one: `apps/web-platform/infra/cloud-init-inngest.yml:1878-1879`, where
-`"$DOCKER_BIN" login "$ZOT_EP" \` is followed by `-u ... --password-stdin`); comment text is dropped. An *invocation* is
-the verb followed by a host token and at least one option, which excludes log strings such as `docker login <url> ok`. A
-site is bad if its options hold `-p`, `--password` (any spelling: space, `=`, glued `-p"$X"`). The scan is a function of a
-root, so mutation rows run the same text on a scratch repository. Measured at plan time on the real tree: **11 invocation
-sites in 6 files**, 9 already `--password-stdin` (action.yml:372; `apply-web-platform-infra.yml` 2804, 3550, 4894, 5331;
-`ci-deploy.sh:1377`; `cloud-init-inngest.yml` 971 and 1878; `cloud-init.yml:522`) and the engine's 2 `$CRANE` lines. The work
-phase re-measures both numbers with the scan itself and pins them as the floor (sites AND files), not a remembered figure.
-Named blind spots (stated, not hidden): a login through a variable whose name carries none of CRANE/DOCKER/PODMAN, `eval`
-or a `bash -c` string, and `tests/` (outside the scan roots on purpose, so the stub and the battery do not self-flag). No
-allowlist: there is no residual to carry, so none is built.
+**Assembly.** The population is **derived** by exclusion over the whole tracked tree, not listed by root: `git ls-files`
+minus `*.test.sh`, `tests/` and `knowledge-base/`; `.md` joins only under `plugins/` (S7 treats agent-run markdown as a
+surface; CTO D5). A per-file pass joins backslash-continuation lines (the real tree has one, `cloud-init-inngest.yml:1878-1879`:
+`"$DOCKER_BIN" login "$ZOT_EP" \` then `-u ... --password-stdin`), drops comment text, then matches:
+verb = `(crane|docker|podman|\$\{?[A-Za-z_]*(crane|docker|podman)[A-Za-z_]*(\[[@*]\])?\}?"?)` case-insensitively, optional
+global flags between the binary and the subcommand (`docker --config "$D" login`, `crane --insecure auth login`), then
+`([[:space:]]+auth)?[[:space:]]+login`. A literal `crane` pattern finds zero sites in the engine (measured: both converted
+lines read `$CRANE auth login`). An *invocation* is the verb, **exactly one host token** (bare, or single/double-quoted),
+then at least one option token; the option span is cut at the first `|`, `&&`, `||`, `;`, `>` or `)` so a trailing
+`mkdir -p` cannot trip it. A site is **bad** when any option token is `-p`, `--password`, `--password=<v>` or a glued
+`-p<non-dash>`, **in any order relative to the host** (`login -p "$X" -u u host` is bad); `--password-stdin` never matches.
+The strict host-token rule matters: a loose "any later token starting with `-`" also matches
+`scripts/followthroughs/zot-login-gate-erofs-repaired-6565.sh:156` (a `grep -qE` pattern) and reads 12 sites in 7 files.
+Measured at plan time on the real tree with the strict rule over `scripts apps .github plugins`: **11 sites in 6 files**, 9
+already `--password-stdin` (action.yml:372; `apply-web-platform-infra.yml` 2804, 3550, 4894, 5331; `ci-deploy.sh:1377`;
+`cloud-init-inngest.yml` 971 and 1878; `cloud-init.yml:522`) and the engine's 2 `$CRANE` lines. The work phase re-measures
+both numbers with the scan itself over the final root set and pins them as the floor (sites AND files). Named blind spots
+(stated, not hidden): a command whose name carries none of crane/docker/podman (skopeo, oras, regctl, buildah, nerdctl,
+cosign are not in the alternation: no site exists today), a command built by concatenation or `eval`, a **feeder that
+itself carries the token on argv** (`/usr/bin/printf '%s' "$T" |`, `echo "$T" |` stay green), and the excluded trees.
+No allowlist: there is no residual to carry, so none is built. S8 selects on the full run only (CTO D1).
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Engine site reverted to `-p "$X"` | RED |
-| 2 | `--password "$X"` and `--password=$X` (long forms) | RED |
-| 3 | glued `-p"$X"` | RED |
-| 4 | `-p` on a backslash-continuation line (the `$DOCKER_BIN` shape) | RED |
-| 5 | `--password-stdin` present together with `-p` (precondition met, property fails) | RED |
-| 6 | A SECOND member after a compliant first: a new scratch file holding `docker login -p` | RED |
-| 7 | Dispatch: scan roots broken or the verb renamed so fewer sites than the measured floor are seen (including 0) | RED (a scan that reports "0 checked" is never green) |
-| 8 | Verb-regex blindness: rename `$CRANE` in the engine to a name the alternation does not carry | RED (the floor sees 9, not 11) |
+| 1 | Engine site reverted to `-p "$X"` | RED, reason `bad:scripts/registry-restore-from-ghcr.sh` |
+| 2 | `--password "$X"` and `--password=$X` (long forms), one loop row | RED, `bad:` |
+| 3 | glued `-p"$X"` and `-pXYZ` before the host | RED, `bad:` |
+| 4 | `-p` on a backslash-continuation line (the `$DOCKER_BIN` shape) | RED, `bad:` |
+| 5 | `--password-stdin` present together with `-p` (precondition met, property fails) | RED, `bad:` |
+| 6 | flags before the host: `login -p "$X" -u u host`; and global flags before the subcommand: `docker --config d login -p ...` | RED, `bad:` |
+| 7 | A SECOND member after a compliant first: a new scratch file holding a compliant `docker login` plus one with `-p` | the compliant one GREEN and counted, the `-p` one RED |
+| 8 | Dispatch/floor, one parameterised loop: scan roots broken; the verb renamed (`$CRANE` to a name the alternation misses); one site file removed | RED, reason `floor` with the exact site count (including 0) |
 
 **Harness rows.** One edit to the SUITE that must drive it RED: narrow the verb alternation in the stage to the literal
-`crane|docker|podman` (no variable form); the floor row must then go RED, proving the floor is live against exactly the
-miss the review found. Must-PASS inputs that are not the canonical: a comment-only mention of `crane auth login -p`; a
-compliant site with the flags in a different order and an extra `--insecure`; the real-tree continuation shape
-(`"$DOCKER_BIN" login "$H" \` then `-u u --password-stdin`); and a log string `docker login $URL ok` (not an invocation).
+`crane|docker|podman` (no variable form, case-sensitive); the floor row must go RED at 8 of 11 sites, proving the floor is
+live against exactly the miss the review found. A **baseline-GREEN control row** (reasons empty, 11 sites in 6 files on the
+post-fix tree). Must-PASS inputs that are not the canonical, **drawn from real-tree lines**: the `action.yml:91`
+description and `:397` `::error::docker login to zot ...` echo; the `ci-deploy.sh:2440`/`:2451` logger lines
+(`docker login $URL ok` / `FAILED class=...`); the `followthroughs` grep pattern at `:156`; the `zot-registry.tf:162`
+comment (`docker login -p ... / htpasswd`); the quoted token list at
+`.github/scripts/test/test-check-inngest-bootstrap-build.sh:143`; a compliant site with the flags reordered and an extra
+`--insecure`; a compliant `--password-stdin` with `&& mkdir -p x` after it; `--password-stdin` placed before the host.
 
 **Anchor.** The stored values are the floor (sites and files). They live in the same test file, so one diff can edit both
 the value and the thing it protects; the stage proves consistency, not integrity. What must also move for a weakening to
@@ -316,33 +411,35 @@ weakening the engine (re-adding `-p`) is caught without touching any stored valu
 | `tests/scripts/test-registry-gate-mutation-battery.sh` E01 anchor and new mutations | "so the gate arrives green" | inferred: the battery anchors the literal old login line, so the change turns it red unless re-anchored |
 | xtrace refusal in the engine + `scripts/lint-shell-trace-credential-refusal.baseline.txt` line 40 | "so the gate arrives green" | inferred: the baseline lists the engine and CI runs the lint with `--changed`, so editing the file requires the refusal |
 | one-off pinned-crane check (work phase, output in the PR body) | "`crane auth login --password-stdin`" | inferred: the first live use is a rarely-run production recut; a single run retires the flag-exists risk before it |
+| runbook exit-code rows, `unset` after login, `tr '\r\n'`, truthful `die` wording | "widen the scanner corpus (or add a stage) in the same change so the gate arrives green" | inferred: small hardening on lines this PR already edits, CTO-ruled (D3, D4, D6) 2026-10-19; each is independently revertable |
 | ADR-280 addendum (3-5 lines) | "widen the scanner corpus (or add a stage) in the same change so the gate arrives green" | inferred: the new stage extends a documented rule, and the ADR's scanner description would otherwise go stale |
 | #9757 body edit and comment | "Umbrella #9757 ... must STAY OPEN" | inferred: the body's checklist is the ledger; evidence must be recorded or the next reader repeats this premise check |
 | deferral issues #10529-#10532 | "file a tracked deferral issue for anything that is not (with a re-evaluation trigger)" | asked |
 
 ### Split Assessment
 
-- Subsystems touched: 3 (scripts, tests, knowledge-base)
-- Planned files: 6 | Estimated changed lines: ~250 (engine ~30, stub+suite ~70, battery ~30, S8 ~110, baseline 1, ADR addendum ~5)
+- Subsystems touched: 3 (scripts, tests, knowledge-base; the conditional fixture baseline is under plugins/ and only if counts move)
+- Planned files: 7 (+1 conditional baseline) | Estimated changed lines: ~330 (engine ~40, stub+suite ~100, battery ~45, S8 ~130, baseline 1, ADR ~8, runbook ~4)
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR
 
 ## Acceptance Criteria
 
-- [ ] The S8 scan (run by `tests/scripts/test-argv-bearer-sweep.sh`) reports no login invocation with `-p`/`--password`; both engine sites carry `--password-stdin` fed by `printf '%s' "$..." |` (the scan, not a hand grep, is the verdict, per the sharp edge on scanner-scope parity).
-- [ ] `bash tests/scripts/test-registry-restore-from-ghcr.sh` passes (baseline measured: 85 passed, 0 failed, ~67 s) with the new rows added; the token value is absent from the CALLS log and `login.err`.
-- [ ] `bash tests/scripts/test-registry-gate-mutation-battery.sh` kills the re-anchored E01 and the three new engine mutations (E-new-A, E-new-B, E-new-C), with the runner's stdin from `/dev/null`.
-- [ ] `bash tests/scripts/test-argv-bearer-sweep.sh` passes with stage S8 and a measured, history-commented `EXPECTED_TESTS` increase; all 8 mutation rows are RED, the harness row (verb alternation narrowed) turns the floor RED, and the must-pass rows are GREEN; the floor is the re-measured pair (sites AND files) from the scan, expected 11 sites in 6 files unless main moved.
-- [ ] `python3 scripts/lint-shell-trace-credential-refusal.py --changed --base origin/main` is clean and the full-repo run still passes with the baseline line removed.
-- [ ] `bash -x scripts/registry-restore-from-ghcr.sh ...` with `ZOT_PUSH_TOKEN` set exits 78 and prints no token; the refusal is the multi-line form and `python3 scripts/lint-shell-trace-credential-refusal.py scripts/registry-restore-from-ghcr.sh` reports 0 violations.
-- [ ] The invoking step (`apply-web-platform-infra.yml` ~3642) and its environment set neither `SHELLOPTS` nor `BASH_ENV` nor `-x` (read the step; a traced run would now exit 78 where it used to proceed).
-- [ ] A one-off run of the pinned crane `v0.20.2` (`printf '%s' <synthetic> | crane auth login ... --password-stdin --insecure` against a temp `DOCKER_CONFIG`) stored `user:password`; the output is pasted in the PR body.
-- [ ] `git diff --name-only origin/main...HEAD` (merge-base form) contains no path under `apps/web-platform/infra/` and not `.github/workflows/apply-web-platform-infra.yml` or `tests/scripts/lib/destroy-guard-filter-web-platform.jq` (the apply workflow's whole push-path list), so the merge fires no production apply. The pipeline-written files (the generated knowledge-base index if regenerated, `specs/<branch>/session-state.md`, this plan and `tasks.md`) are the only other allowed paths beyond Files to Edit.
-- [ ] New bash code was run once in an `ubuntu:24.04` container (CI parity) before the first push.
-- [ ] #9757 stays open: items 1, 2, 4 and leads (a)-(e) ticked in one re-fetched, line-level body edit; (f), (g), (h) and (b)-wide point at #10531, #10529, #10532, #10530; item 5 ticked as "PR #<N> (pending merge)"; the line-level evidence is in the PR body.
-- [ ] The PR body says "Ref #9757" and contains no closing keyword for it.
+- [ ] The S8 scan (run by `tests/scripts/test-argv-bearer-sweep.sh`) reports no login invocation with `-p`/`--password`; both engine sites carry `--password-stdin` fed by `printf '%s' "$..." |`. The scan, not a hand grep, is the verdict; its floor is the re-measured pair (expected 11 sites in 6 files unless main moved).
+- [ ] `bash tests/scripts/test-registry-restore-from-ghcr.sh` passes (baseline measured: 85 passed, 0 failed) with the new rows (a)-(f): exact stdin value per login, token absent from argv log/`login.err`/output, new GHCR rows, CR fixture, post-login environment, xtrace rows.
+- [ ] `bash tests/scripts/test-registry-gate-mutation-battery.sh` passes with E01 re-anchored in single-quoted form and E-new-A1, A2, B, C1, C2, D all killed, the runner's stdin from `/dev/null`, and its pre-flight anchor audit reporting M/M with the larger M.
+- [ ] `bash tests/scripts/test-argv-bearer-sweep.sh` passes with stage S8: mutations 1-8 RED with their asserted reasons, the harness row turns the floor RED, the baseline-GREEN control and the real-tree must-pass rows are GREEN; `EXPECTED_TESTS` equals 823 plus the S8 row count and the measured total, with a history line.
+- [ ] `python3 scripts/lint-shell-trace-credential-refusal.py --changed --base origin/main` is clean, the full-repo run still passes with the baseline line removed, and the engine alone reports 0 violations (multi-line refusal form).
+- [ ] `bash -x scripts/registry-restore-from-ghcr.sh ...` with `ZOT_PUSH_TOKEN` set exits 78 and prints no token.
+- [ ] Every caller of the engine was read for `-x`/`SHELLOPTS`/`BASH_ENV`: the rehearsal path (`registry-pull-path-health.sh:570`, invoked at `apply-web-platform-infra.yml` ~2845 and ~3051) and the restore step (~3642). None sets them.
+- [ ] A one-off run of the pinned crane `v0.20.2` against a temp `DOCKER_CONFIG` stored `user:password` (file mode recorded, under the scratch dir), three failure shapes with a sentinel token leaked nothing to stderr, and whether real login contacts the registry is recorded; the output is pasted in the PR body.
+- [ ] `git diff --name-only origin/main...HEAD` (merge-base form) contains no path under `apps/web-platform/infra/` and not `.github/workflows/apply-web-platform-infra.yml` or `tests/scripts/lib/destroy-guard-filter-web-platform.jq` (the apply workflow's whole push-path list), so the merge fires no production apply. The only paths beyond Files to Edit are the pipeline-written ones (the generated knowledge-base index if regenerated, `specs/<branch>/session-state.md`, this plan and `tasks.md`).
+- [ ] `bash plugins/soleur/test/fixture-relative-assert.test.sh` is green (baseline regenerated deliberately and listed in Files to Edit only if counts moved).
+- [ ] New bash code was run once in an `ubuntu:24.04` container (CI parity) before the first push; Phases 1 and 2 land in one push.
+- [ ] #9757 stays open: items 1, 2, 4 and leads (a)-(e) ticked in one re-fetched, line-level body edit; (f), (g), (h) and (b)-wide point at #10531, #10529, #10532, #10530; item 5 annotated "in progress: PR #<N>" unticked and ticked only after the merge is verified; the line-level evidence is in the PR body.
+- [ ] The PR body says "Ref #9757", contains no closing keyword for it, states that S8 selects on the full run only, and notes the added battery runtime.
 - [ ] `plugins/soleur/test/c4-count-parity.test.sh` is green (backs the "no C4 impact" claim).
-- [ ] Ship stops at a ready PR; the CI verdict for the ready head is read with `ci-head-verdict.sh` (a red `test` row can belong to the draft run, ADR-276); merge only through the queue on the operator's go-ahead.
+- [ ] Ship stops at a ready PR; the CI verdict for the ready head is read with `ci-head-verdict.sh` (a red `test` row can belong to the draft run, ADR-276); merge only through the queue on the operator's go-ahead. After the operator-approved merge, the next D10 rehearsal log (agent-read, no SSH) shows no `[FATAL]`, a green step and `restored=N`.
 
 ## Domain Review
 
@@ -355,12 +452,14 @@ weakening the engine (re-adding `-p`) is caught without touching any stored valu
 
 ## Test Scenarios
 
-- Given the sink credential `REJECT_ME`, when the engine logs in (token on stdin), then it exits 5 and never copies (this proves the engine's die arm against the stub; real crane rejects a bad credential later, at `digest`/`copy`). (integration)
-- Given a GHCR credential the stub rejects, when the engine logs in, then it exits 2. (integration)
+- Given distinct synthetic tokens for the sink and GHCR, when the engine logs in, then the stub's stdin side file holds exactly each host, user and token (a wrong-variable feeder fails). (integration)
+- Given the sink credential `REJECT_ME`, when the engine logs in (token on stdin), then it exits 5 and never copies; given a GHCR credential the stub rejects, it exits 2. These prove the engine's die arms against the stub; real crane rejects a bad credential later, at `digest`/`copy`. (integration)
 - Given a synthetic token, when the engine runs to completion, then the token string is absent from the CALLS log, `login.err` and the engine output. (integration)
-- Given `bash -x` (or `env SHELLOPTS=xtrace`) and `ZOT_PUSH_TOKEN` set, when the engine starts, then it exits 78 with no token in the output; given only `GHCR_TOKEN`, the same; given neither token set, the traced run reaches the usage error. (integration)
+- Given `bash -x` and only `ZOT_PUSH_TOKEN` set (explicit env), it exits 78 with no token in the output; given only `GHCR_TOKEN`, the same; given neither, the traced run reaches the usage error. (integration)
+- Given a stub login that emits `\r::add-mask::x` on stderr, the `die` message contains no CR. (integration)
+- Given a post-login `copy`, the stub's environment holds none of `ZOT_PUSH_TOKEN GHCR_TOKEN DOPPLER_TOKEN GH_TOKEN_FOR_ENGINE`. (integration)
 - Given an engine that regresses to `-p "$TOKEN"`, when the stub runs, then it exits 64 and the suite fails. (regression)
-- Given each S8 mutation 1-8, when the scan runs on a scratch repo, then it is RED; given the must-pass inputs, then GREEN. (unit)
+- Given each S8 mutation 1-8 on the all-files scratch base, when the scan runs, then it is RED with the asserted reason; given the baseline-GREEN control and the real-tree must-pass inputs, then GREEN. (unit)
 
 ## Sharp Edges
 
