@@ -165,6 +165,23 @@ header prescribes.
   verdict=sandbox_broken` with `(op=sandbox-canary-outer-wrap;`; 45 in 30 days carry `(op=sandbox-canary;`; the full predicate matches
   0 of them.
 
+### Work-phase measurements: Phase 0.2 item 1 (io_uring_setup go/no-go for the AF_UNIX variant), 2026-10-19
+
+- **Result: GO, no ENOSYS rule needed in the variant.** The container seccomp profile the production run tuple loads
+  (`apps/web-platform/infra/seccomp-bwrap.json`, `--security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json`, pinned by
+  `infra/lib/docker-run-tuple.py` `SECCOMP`) is a default-deny allowlist (`defaultAction SCMP_ACT_ERRNO`, errno 1) and names no
+  `io_uring_*` syscall in any rule (`grep -c io_uring` is 0; 427 allowlisted names), so `io_uring_setup`, `io_uring_enter` and
+  `io_uring_register` return EPERM in the container. A seccomp filter is inherited by every descendant and cannot be removed, so the bwrap
+  child and the SDK's helpers sit under it; `IORING_OP_SOCKET` needs a ring, and a ring needs `io_uring_setup`.
+- **Live measurement (docker 29.9.1, kernel 7.2.8, `perl -e syscall(425, 4, <120 zero bytes>)`, image `ubuntu:24.04`):**
+  `--security-opt seccomp=unconfined` (positive control) rc=3 (a ring fd: the kernel supports io_uring);
+  `--security-opt seccomp=<the committed seccomp-bwrap.json>` rc=-1 errno=1 EPERM; docker's built-in default profile rc=-1 errno=1 EPERM.
+  The AppArmor leg of the run tuple (`soleur-bwrap`) needs sudo and was not exercised; it is not part of this question.
+- **Consequence.** The bypass is closed by the profile, so the variant stays a pure `socket(AF_UNIX)` deny. A JSON-level pin in
+  `test/bwrap-userns-seccomp.test.ts` fails if the profile ever allowlists an `io_uring_*` name (that is the moment the variant would
+  need its own ENOSYS rule). The host-side AppArmor and the `docker run` tuple stay the production authority; this measurement is the
+  workstation reproduction of the profile's behavior, not a production read.
+
 ## Research Reconciliation — Spec vs. Codebase
 
 | Brief claim | Reality (checked 2026-10-19) | Plan response |

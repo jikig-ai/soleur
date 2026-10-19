@@ -6,7 +6,7 @@ Write each phase's RED tests before its code. Commit order: Phase 1 first, Phase
 ## Phase 0: Go/no-go measurements (before editing)
 
 - [ ] 0.1 Re-read the CTO rulings in `decision-challenges.md`
-- [ ] 0.2 `io_uring_setup` blocked by the container profile? If not, can ENOSYS be added to the variant cheaply? (Phase 4 go/no-go)
+- [x] 0.2 `io_uring_setup` blocked by the container profile? If not, can ENOSYS be added to the variant cheaply? (Phase 4 go/no-go) - GO: the committed run-tuple profile (default-deny allowlist, no io_uring_* name) returns EPERM; live docker measurement with an unconfined positive control; no ENOSYS rule needed; recorded in the plan's Work-phase measurements
 - [x] 0.3 Logs-alert count and free-tier cap; is there a Sentry rule on `op=sandbox-canary`? (Phase 3 fallback decision) - live read 2026-10-19: 17 alerts apply (16 managed + 1 hand-made), cap undocumented and at least 17, so no fallback trigger; no Sentry rule on `op=sandbox-canary` in IaC (live rules unreadable with the read-only tokens); recorded in the plan's Work-phase measurements and ADR-218
 - [ ] 0.4 Heartbeat period floor (`/fail` support is CONFIRMED by the vendor docs, 2026-10-19; append `/fail` to the host's own heartbeat URL); prod container memory headroom for one SDK CLI spawn; `cloud-init.yml` user_data size headroom (Phase 5 go/no-go)
 - [x] 0.5 Does the tool_result observer's `block` carry an error flag? Helper step order: which of the 14 steps run before the worker fork (Phase 2)
