@@ -1932,6 +1932,7 @@ AFFECTED_TESTS_SCRIPTS_TRIO_BASELINE_CENSUS_PATHS=(
   ".markdownlintignore"
   ".mcp.json"
   ".nvmrc"
+  ".soleur-test-gate.json"
   "AGENTS.md"
   "AGENTS.rules.md"
   "CLAUDE.md"
