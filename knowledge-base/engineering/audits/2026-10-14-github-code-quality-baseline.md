@@ -144,3 +144,39 @@ Both findings were located through the repository's Code Quality alert list (the
 No GDPR-sensitive behavior changed, so no Art. 33 assessment was needed.
 
 Observation, not changed here: this stage interpolates the raw RPC error message into the `result.error` that the account-delete route returns to the client, while the sibling anonymise stages return a generic message. That was added deliberately in #4553 and the same error is mirrored to Sentry; changing what a user sees on a failed erasure is a product decision outside PR1.
+
+## Final snapshot before disable (2026-10-19, slice 4 of #10331)
+
+Read from the repository's Code Quality alert list (Standard findings, filter `is:open`) at about 20:50 local on 2026-10-19, with no new scan triggered. Python findings were last seen at 18:38Z and JavaScript findings at 18:41Z, both on `main` at `b3dca43` (the head of `main` at that moment, so the scan includes the handler fixes of #10375 and #10503 and the baseline drawdown of #10579). Totals: 112 open findings (Maintainability 70 "Fair", Reliability 42 "Poor") across 23 rules, against 22 rules on 2026-10-14.
+
+| Rule | Open | Severity | Language | Change since 2026-10-14 |
+|---|---|---|---|---|
+| js/unused-local-variable | 47 | Note | JavaScript | 60 to 47 |
+| py/file-not-closed | 18 | Warning | Python | 36 to 18 |
+| js/trivial-conditional | 8 | Warning | JavaScript | 8 |
+| js/useless-assignment-to-local | 8 | Warning | JavaScript | 8 |
+| js/superfluous-trailing-arguments | 7 | Warning | JavaScript | 7 |
+| py/unused-global-variable | 5 | Note | Python | 4 to 5 |
+| js/overwritten-property | 2 | Error | JavaScript | 2 |
+| py/unused-import | 2 | Note | Python | 5 to 2 |
+| js/comparison-between-incompatible-types | 1 | Warning | JavaScript | 2 to 1 (one fixed, one dismissed false positive, see above) |
+| js/regex/duplicate-in-character-class | 1 | Warning | JavaScript | |
+| js/regex/unmatchable-caret | 1 | Error | JavaScript | |
+| js/string-instead-of-regex | 1 | Warning | JavaScript | |
+| js/useless-assignment-to-property | 1 | Warning | JavaScript | |
+| js/useless-comparison-test | 1 | Warning | JavaScript | |
+| py/catch-base-exception | 1 | Note | Python | 5 to 1 |
+| py/comparison-of-identical-expressions | 1 | Warning | Python | |
+| py/implicit-string-concatenation-in-list | 1 | Warning | Python | |
+| py/import-and-import-from | 1 | Note | Python | |
+| py/imprecise-assert | 1 | Note | Python | |
+| py/mixed-returns | 1 | Note | Python | |
+| py/procedure-return-value-used | 1 | Warning | Python | |
+| py/regex/duplicate-in-character-class | 1 | Warning | Python | |
+| rb/useless-assignment-to-local | 1 | Warning | Ruby | |
+
+`py/empty-except` (20 findings on 2026-10-14) is absent from the open list, and its rule page returns 404. This is the verification issue #10381 asked for: a scan of the current head of `main`, taken after the handler PRs merged, shows no open `py/empty-except` finding in any file, including the five that issue names.
+
+The AI-findings panel read 0 findings. The alert list is UI-only (the REST API does not return these alerts), so this table is the last record of it before the feature is switched off.
+
+Code scanning state captured before the disable, to be compared after it: `GET repos/jikig-ai/soleur/code-scanning/default-setup` returned `state: configured`, languages `actions, javascript, javascript-typescript, python, typescript`, `query_suite: extended`, `threat_model: remote`, `schedule: weekly`, `runner_type: standard`, `updated_at: 2026-07-20T10:09:47Z`. Workflow `CodeQL - Code Quality` (id 343194280) was `active`. Every push to the PR branch started both a `PR #N` run (code scanning) and a `Code Quality: PR #N` run (Code Quality), for example head `54d6948` of the slice-4 PR.
