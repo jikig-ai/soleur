@@ -30,7 +30,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { Octokit } from "@octokit/core";
 import { inngest } from "@/server/inngest/client";
 import {
@@ -978,7 +978,7 @@ const HARD_RULE_TOKEN_RE = /(?:^|[^a-z0-9])(?:hr|wg)-[a-z0-9]/i;
 // Also links and images other than RELATIVE ones (`](./x`, `](../x` are ordinary skill reference
 // links), URLs (`://`) and command substitution (`$(`): each is an active-content or exfiltration
 // carrier in a one-line rule or skill bullet.
-const RENDER_HAZARD_RE = /```|~~~|<!--|-->|!`|\]\((?!\.{1,2}\/)|:\/\/|\$\(/;
+const RENDER_HAZARD_RE = /```|~~~|<!--|--!?>|!`|\]\((?!\.{1,2}\/)|:\/\/|\$\(/;
 // A rule-class or enforcement tag the model must not assert (`[mandates-filing]` grants a
 // different gate an exemption; the others claim an enforcement that does not exist).
 const AGENTS_TAG_RE = /\[(?:mandates-filing|compliance-tier|hook-enforced|skill-enforced|scanner-enforced)/i;
@@ -1155,7 +1155,10 @@ async function deriveDiff(
       ["a", base],
       ["b", after],
     ] as const) {
-      const p = join(dir, side, targetPath);
+      const p = resolve(dir, side, targetPath);
+      // Defense in depth: the allowlist already admits only repo-relative paths, but a write
+      // outside the scratch directory must be impossible rather than merely unexpected.
+      if (!p.startsWith(resolve(dir, side) + sep)) return fail("bad-base");
       await mkdir(dirname(p), { recursive: true });
       await writeFile(p, text);
     }

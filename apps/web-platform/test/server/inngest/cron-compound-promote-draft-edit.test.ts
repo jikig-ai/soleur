@@ -380,6 +380,7 @@ describe("buildAdditiveEditDiff -- the chokepoint that authors proposed_diff_uni
       ["a tilde fence", "~~~"],
       ["an HTML comment opener", "text <!-- hidden"],
       ["an HTML comment closer", "hidden --> text"],
+      ["an HTML comment closer with a bang (--!>)", "hidden --!> text"],
       ["a harness preprocessing marker", "run !`id` now"],
     ])("%s -> edit-invalid/shape", async (_label, line) => {
       const r = await derive(SKILL_ALPHA, { insert_after_line: "## Steps", new_lines: [line] });
