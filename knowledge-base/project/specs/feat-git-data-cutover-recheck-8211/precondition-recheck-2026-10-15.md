@@ -46,3 +46,16 @@
 - The pinned host key's value against the live host key (value read; skipped).
 - Active agent-session count (no verified metric exists; design-rollback-rehearsal section 3).
 - Org-level GitHub variables.
+
+## Addendum 2026-10-19 (read from GitHub only; no Hetzner, Better Stack or Doppler read today)
+
+Appended; nothing above is edited. It cites the 2026-10-15 reading and says what has moved since.
+
+- **Wipe mechanism is on `main`.** PR #10294 (the wipe body, merged 2026-10-15), PR #10384 (ship skill: a CTO ruling clears an ask-before-push instruction for technical fixes, merged 2026-10-15) and PR #10352 (the separated wipe, `snapshot_clear` and the run-record evidence, merged 2026-10-16) are all merged. Row 14 of `owner-command-chain.md` ("No dispatch string exists on `main`") is superseded by the addendum there.
+- **Three read-only `git-data-cutover` runs were dispatched by the owner since 2026-10-15** (all `main`, actor `deruelle`; none changes a volume or the flag):
+  - `39081408368` (2026-10-18 00:04Z, `wipe_check`, volume 106867358): refused at the host assertion (W7) with `wipe_boot_layout_signal_offlist`, `rc=34 top_d=3 top_f=0 top_l=0 top_o=0 repos=0`.
+  - `39136900735` (2026-10-18 14:38Z, `wipe_check`): the same refusal with the cause fields added by #10480 (`has_hooks_d=1 lf_entries=0 offlist_n=1`). Issue #10476 is open for it; the runbook records both refusals (#10506).
+  - `39225306395` (2026-10-19 08:47Z, `proof`): success. Access gate `ok` on all three roles; `store-mounted`, `store-on-mapper`, `store-verified`, `store-empty` and `fence-shape` all `ok`. The served LUKS store is still empty, so row 11 of the flip proof is currently satisfied.
+- **The host did not change.** Both `wipe_check` runs read server `170370833`, plaintext volume `106867358` and LUKS volume `107140231`, all attached, `protection_delete=false`: the same ids as the 2026-10-15 reading. No rotate has run since `38583657167`.
+- **Still true from the 2026-10-15 reading, not re-read today:** the three refusals in "Findings the brief does not carry" (repo variables `GIT_DATA_EMITTER_FLOOR` and `GIT_DATA_DENY_FLOOR`, the absent `DOPPLER_TOKEN_GIT_DATA_FLAG`, the unverified Sentry rule). Heartbeats were not re-read; the owner's re-read is still the control (#9943 deferred).
+- **New blocker for the wipe, not the flip:** the plaintext volume has one top-level directory the layout classifier cannot place (`offlist_n=1` beside the known `hooks` directory). `wipe_check` and `wipe` refuse until that is explained. The assertion prints counts, never names, so naming the directory needs an owner decision under the CLO's hold on C1.

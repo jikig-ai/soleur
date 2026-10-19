@@ -60,3 +60,10 @@ Each rotation is four owner-named sub-steps; they are separate commands and are 
 ## E. Dates
 
 CLO re-ruling 2026-10-24. Plaintext-volume outer date 2026-11-12: a flip stamped after 2026-11-04 cannot finish the 7-day soak in time, so steps 2 to 11 must all complete by 2026-11-04, 20 days from today. The credential chain is serial (one credential per session, one canary each) and steps 5, 6, 7 and the rehearsal builds have no command or PR yet, so this deadline is at risk, not met. The schedule and legal-risk call is the owner's and the CLO's.
+
+## Update 2026-10-19 (appended; nothing above is edited)
+
+- **Step 14 is now defined on `main`** (#10294 merged 2026-10-15, #10352 merged 2026-10-16). The modes and their typed tokens, from `git-data-cutover.yml`: `wipe_check` with `WIPE-CHECK-GIT-DATA`, `wipe` with `WIPE-GIT-DATA`, `wipe_finish` with `WIPE-FINISH-GIT-DATA` (plus `volume_id` and `origin_run`), and `snapshot_clear` with `CLEAR-SNAPSHOT-GIT-DATA`. The owner still names each exact command; the headless `pending_deployments` approval form is never valid for any wipe mode.
+- **`wipe_check` has been dispatched twice by the owner and refused both times** at the host assertion (`wipe_boot_layout_signal_offlist`, runs `39081408368` and `39136900735`; issue #10476). It is therefore a step that needs a decision before the next dispatch: what the third top-level directory on the plaintext volume is. See the 2026-10-19 addendum in `precondition-recheck-2026-10-15.md`.
+- **A `proof` dispatch on 2026-10-19 (run `39225306395`) succeeded**: the served store is on the LUKS mapper and empty. Step 10c's exit read has been exercised once on the live host.
+- Steps 0 to 11 and the dates in section E are unchanged by this update: the 2026-11-04 latest flip stamp still stands, and 16 days remain from 2026-10-19.
