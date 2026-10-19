@@ -27,6 +27,7 @@
 #   G1-10 Operator-only escapes the whole window                    E4 flips block -> pass
 #   G1-11 remove the 12-unit judging cap                               U3 exceeds its time bound
 #   G1-12 delete the closing-only permission exemption              Q4a flips pass -> block
+#   G1-17..22 CL4: authorization veto, awk emission, pre-filter, decision-noun gate, BUSINESS veto, EXTRA veto   A8a-rotation / B8b / B8b / A8c / A8b / A8e
 #   G1-13..16 leading-fragment drop, window size, first-12 judging, blank-line reset   W1b / W1d / L12b / E4b
 #   G2-1  re-add a local RULING_PERM_RE to the closing hook         the definition-site census reports two
 #   G2-2  the pre-ask group (`shared+ask`) also sets closing=1       a pre-ask row (NR2a) flips allow -> deny
@@ -166,6 +167,34 @@ row "B5b B2 then a courtesy closer" block "$B2 Let me know what you think."
 row "B5c B3 then a courtesy closer" block "$B3 Let me know what you think."
 row "B6 the founder-observed phrase (CL2b)" block "$STATUS do you want a migration design?"
 row "B7 a SHARED cue through the closing hook" block "$STATUS how strict should the evidence bar be?"
+# --- CL4 (2026-10-19): a declarative hand-off of a technical step. judged by tfc_is_handoff, apart from the `?` cues ---
+PADLM=" Let me know. Let me know. Let me know. Let me know. Let me know. Let me know. Let me know. Let me know. Let me know. Let me know. Let me know. Let me know. Let me know."
+row "B8a CL4 the 2026-10-19 closing: a declarative hand-off of a technical step, no question mark" block "$STATUS Next step: your call. Tell me to build #10297, the stamp-clearing rollback arm."
+row "B8b CL4 hand-off phrase plus a decision noun in the same sentence" block "$STATUS The sequencing is your call."
+row "B8c CL4 up-to-you form" block "$STATUS The design is up to you."
+row "B8d CL4 sentence-initial you-decide form" block "$STATUS You decide on the ordering."
+row "B8e CL4 NBSP inside the phrase does not defeat it (the pre-filter reads the normalised window)" block "$STATUS The sequencing is your"$'\xc2\xa0'"call."
+row "B8f CL4 zero-width character inside the phrase does not defeat it" block "$STATUS Your"$'\xe2\x80\x8b'" call: the sequencing."
+row "L12c a question followed by 13 courtesy closers still blocks: declaratives do not spend the 12-unit question budget" block "$STATUS $B3$PADLM"
+row "L12d a CL4 hand-off followed by 13 courtesy closers still blocks" block "$STATUS The sequencing is your call.$PADLM"
+for cl4v in merge ship release push rollback revert migration cutover cancel production deploy apply rotation; do
+  row "A8a-$cl4v CL4 yields to the authorization verb $cl4v (an operator-class ask stays allowed)" pass "$STATUS The $cl4v order is your call."
+done
+row "A8a2 a tell-me-to merge is an authorization, not a technical fork" pass "$STATUS Say the word and I will merge #123."
+row "A8b CL4 yields to BUSINESS vocabulary" pass "$STATUS The pricing design is your call."
+row "A8c CL4 needs a DECISION noun: a hand-off phrase without one passes" pass "$STATUS The summary format is your call."
+row "A8d the permission exemption still applies to a CL4 hit" pass "$STATUS Next step: your call, may i build #5."
+row "A8e the closing EXTRA veto still applies to a CL4 hit" pass "$STATUS Tell me to implement the export feature."
+row "A8i a final Paused: sentence ends the check for a CL4 hit" pass "$STATUS The sequencing is your call. Paused: waiting on the rehearsal window."
+for cl4c in \
+  "Let me know if you want any changes to the PR." \
+  "Let me know if you have feedback on the design doc." \
+  "As you decide, the build is green." \
+  "If you choose the build in the dropdown, the PR updates." \
+  "Let me know if you want me to open a PR." \
+  "Heartbeats are up. Let me know if anything looks off."; do
+  row "A8f courtesy closer passes: ${cl4c:0:48}" pass "$STATUS $cl4c"
+done
 row "U1 an authorization first, a technical unit second" block "Do you authorize the rotation? Also, what is the best design for the migration?"
 
 # --- MUST PASS --------------------------------------------------------------------------------------
@@ -582,6 +611,13 @@ mut_row "G1-16 never reset the Operator-only cover on a blank line" hook '    if
 $B1"
 # G1-12: delete the closing-only permission exemption (Q4): an authorization shape the shared vocabulary does not name must flip pass -> block.
 mut_row "G1-12 delete the closing-only permission exemption" lib '[[ "$closing" -eq 1 ]] && grep -qE "$TFC_CLOSING_PERM_RE" <<<"$unit" && return 1' ':' pass "can i merge pr 123 now, is the evidence enough?"
+# G1-17..22 (CL4, 2026-10-19): the authorization veto, the awk emission, the pre-filter, the decision-noun gate, the BUSINESS veto and the EXTRA veto each carry a row.
+mut_row "G1-17 delete the CL4 authorization veto" lib 'grep -qE "$TFC_CL4_AUTH_RE" <<<"$unit" && return 1' ':' pass "the rotation order is your call."
+mut_row "G1-18 the hook no longer emits declarative hand-off sentences" hook 'else if (a[i] ~ cand) print "D"' 'else if (0 && a[i] ~ cand) print "D"' block "the sequencing is your call."
+mut_row "G1-19 the pre-filter ignores a message with no question mark" hook '[[ -n "$CAND_HIT" ]] || exit 0' 'exit 0' block "the sequencing is your call."
+mut_row "G1-20 drop the CL4 decision-noun gate" lib 'grep -qE "$TFC_CL4_NOUN_RE" <<<"$unit" || return 1' ':' pass "the summary format is your call."
+mut_row "G1-21 drop the CL4 BUSINESS veto" lib 'grep -qE "$TFC_BUSINESS_RE" <<<"$unit" && return 1' ':' pass "the pricing design is your call."
+mut_row "G1-22 drop the CL4 closing EXTRA veto" lib 'grep -qE "$TFC_CLOSING_EXTRA_RE" <<<"$unit" && return 1' ':' pass "tell me to implement the export feature."
 
 # G2-1: a second RULING_*_RE definition in the closing hook must make the census report two sites.
 TOTAL=$((TOTAL+1))
@@ -678,13 +714,13 @@ if [[ -z "$d_missing" && "$RAN" -eq "$SPAWNS" && "$SPAWNS" -ge 70 ]]; then
   printf '  PASS: V5 all %s named must-block rows were blocked by this hook'"'"'s reason; the SUT ran %s of %s spawns\n' "$(wc -w <<<"$D_NAMES" | tr -d ' ')" "$RAN" "$SPAWNS"; PASS=$((PASS+1))
 else printf '  FAIL: V5 missing=[%s] SUT markers=%s harness spawns=%s (want equal and >= 70)\n' "$d_missing" "$RAN" "$SPAWNS" >&2; FAIL=$((FAIL+1)); fi
 TOTAL=$((TOTAL+1))
-if [[ "$KILLED" -ge 29 ]]; then printf '  PASS: V6 %s mutants killed (floor 29)\n' "$KILLED"; PASS=$((PASS+1))
-else printf '  FAIL: V6 only %s mutants killed (floor 29)\n' "$KILLED" >&2; FAIL=$((FAIL+1)); fi
+if [[ "$KILLED" -ge 35 ]]; then printf '  PASS: V6 %s mutants killed (floor 35)\n' "$KILLED"; PASS=$((PASS+1))
+else printf '  FAIL: V6 only %s mutants killed (floor 35)\n' "$KILLED" >&2; FAIL=$((FAIL+1)); fi
 
 # --- inventory, accounting conservation and the assertion floor ---------------------------------------
 TOTAL=$((TOTAL+1))
-if [[ "$TOTAL" -eq 136 ]]; then echo "  PASS: V1 full inventory ran (136 cases)"; PASS=$((PASS+1))
-else echo "  FAIL: V1 expected 136 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
+if [[ "$TOTAL" -eq 175 ]]; then echo "  PASS: V1 full inventory ran (175 cases)"; PASS=$((PASS+1))
+else echo "  FAIL: V1 expected 175 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
 
 # Reported with printf + exit 1, never through a verdict helper: a floor routed through the machinery it backstops
 # is disarmed by the same edit it exists to catch (ADR-193).
@@ -693,7 +729,7 @@ if (( PASS + FAIL != TOTAL )); then
     "$PASS" "$FAIL" "$TOTAL" >&2
   exit 1
 fi
-MIN_CASES=136
+MIN_CASES=175
 if (( TOTAL < MIN_CASES )); then
   printf '\nFATAL: anti-vacuity: %d case(s) ran, floor is %d. The suite shrank rather than the hook improving.\n' \
     "$TOTAL" "$MIN_CASES" >&2
