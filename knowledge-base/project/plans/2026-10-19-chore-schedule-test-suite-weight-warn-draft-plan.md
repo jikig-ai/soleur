@@ -20,6 +20,32 @@ state so the daily `cron-content-publisher` Inngest function posts it on the nex
 
 Spec lacks valid `lane:` — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-19
+**Sections enhanced:** Research Insights, Test Scenarios
+**Research agents used:** none — no Task/Agent tool in this planning subagent; all
+verification ran inline (gate checks, corpus greps, both linters, `gh` PR/issue probes,
+skill-convention cross-checks).
+
+### Key Improvements
+
+1. Executed both linters at plan time (`validate-tweet-draft.sh` rc=0, `lint-distribution-content.sh` rc=0)
+   and recorded that the validator's post-edit exit-1 is by design (it asserts `status: draft`).
+2. Confirmed the draft matches the `feature-tweet` SKILL.md template verbatim and the
+   `social-distribute` scheduling procedure (set `publish_date`, flip `status` to `scheduled`).
+3. Verified cited provenance live: PR #10578 (`feat(test-review): unweighed subprocess-fan-out
+   WARN rule…`) is MERGED — the tweet's "Just shipped" claim is accurate; issue #9771 is CLOSED.
+4. Surfaced the merge-timing caveat: the file must reach `main` before 2026-10-20 14:00 UTC
+   or the next run stale-flips it.
+
+### New Considerations Discovered
+
+- Deepen-plan halt gates 4.6–4.12 all pass: User-Brand Impact present with `none` threshold
+  (non-sensitive path), pure-docs file set (Observability skipped), no PAT-shaped tokens,
+  no UI surface, no store/connection, no guard deliverable, Scope Check compliant (1 unfenced
+  section, all rows mapped, `Recommendation: single PR`).
+
 ## Overview
 
 Set two frontmatter fields in the existing draft:
