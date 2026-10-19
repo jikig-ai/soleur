@@ -131,14 +131,16 @@ rec() { { printf '%s' "$n"; local a; for a in "$@"; do printf '\t%s' "$a"; done;
 case "$n" in
   blockdev|cryptsetup|dd|dumpe2fs|findmnt|find|losetup|mount|umount|dmsetup|sleep|udevadm|realpath|stat|mktemp|truncate) rec "$@" ;;
 esac
-# tree_read — a content-reader command handed an operand UNDER the mounted tree ($W/shm/<tmp>/mnt/<something>; an `if=` prefix is
-# looked through) is a READ of the world's tree and is recorded in state/reads. Scoped to the tree on purpose: the script's own
-# pipeline use of wc, sed, awk, grep and dd (stdin, sysfs text, the device) names no such operand and records nothing.
-# cat, head and the checksum/dump tools record in their own arms below.
+# tree_read — a content-reader command handed an operand UNDER the mounted tree ($W/shm/<tmp>/mnt/<something>, or the mount root
+# $W/shm/<tmp>/mnt itself; an `if=` prefix is looked through) is a READ of the world's tree and is recorded in state/reads. Scoped
+# to the tree on purpose: the script's own pipeline use of wc, sed, awk, grep and dd (stdin, sysfs text, the device) names no
+# such operand and records nothing. cat, head and the checksum/dump tools record in their own arms below. The recorder sees ONLY
+# the commands shimmed here (a name list); a reader outside it (tee, uniq, paste, rev, file, tar ...) or a relative operand after a
+# cd is invisible to it, and the static layer (hk_outside_closed, hk_no_file_redirect) is the backstop for those.
 case "$n" in
   tail|sed|grep|cut|awk|wc|dd|python3|perl|diff|cmp|sort)
     for _a in "$@"; do
-      case "${_a#if=}" in "$W"/shm/*/mnt/*) printf '%s\t%s\n' "$n" "$*" >> "$ST/reads"; break ;; esac
+      case "${_a#if=}" in "$W"/shm/*/mnt|"$W"/shm/*/mnt/*) printf '%s\t%s\n' "$n" "$*" >> "$ST/reads"; break ;; esac
     done ;;
 esac
 case "$n" in
@@ -427,7 +429,8 @@ run_script() {
   rm -f "$W/out" "$W/err"
   RC=0
   # bounded: a content read of a FIFO named pre-receive (world a149) blocks forever, and a hung run must read as RED (rc 124), not stall the suite
-  timeout -k 5 30 env -i PATH="$SH:/usr/bin:/bin" WORLD="$W" \
+  # (RUN_TIMEOUT is 30 s; only the harness row H6 lowers it, to prove the bound itself)
+  timeout -k 5 "${RUN_TIMEOUT:-30}" env -i PATH="$SH:/usr/bin:/bin" WORLD="$W" \
     WIPE_PHASE="$phase" WIPE_TYPED_ID="$ID_T" WIPE_LUKS_ID="$ID_L" WIPE_SERVER_ID="$ID_S" \
     WIPE_OLD_ROOT="$W/root" WIPE_LUKS_MAPPER=/dev/mapper/git-data WIPE_STORE_VERIFIED="$W/marker" \
     "${extra[@]}" "$@" \
@@ -509,6 +512,9 @@ invariants() {
   else no "$label: a write-shaped argv was recorded: $(tr '\t' ' ' < "$W/state/argv" | grep -E ' of=| rw|snapshot' | head -3 | cut -c1-200)"; fi
   if [ -s "$W/state/corpus_seen" ] && [ "$(cat "$W/state/corpus_seen")" -gt 0 ]; then NAMES_SEEN_RUNS=$((NAMES_SEEN_RUNS + 1)); fi
 }
+# rc34_once — exactly ONE stderr line carries the rc=34 prefix (a second `say wipe-assert: rc=34 reason=offlist_x sz=N` before the real
+# one would pass a last-line-only check and RE_ERR alike). A grep error reads as "not once".
+rc34_once() { [ "$(grep -c '^wipe-assert: rc=34 ' "$W/err" 2>/dev/null)" = 1 ]; }
 # expect_refuse <label> <rc> <reason-prefix> [<exact tail of an rc=34 line, from top_d= onward>] — a refusal: nothing
 # on stdout, the rc and a fixed reason on stderr. When the expected AND the actual rc are 34 the last stderr line must
 # also be the strict fixed shape, and with a tail it must equal the whole expected line (a substring match would
@@ -522,8 +528,8 @@ expect_refuse() {
   if [ "$rc" = 34 ] && [ "$RC" = 34 ]; then
     RC34_LINES_CHECKED=$((RC34_LINES_CHECKED + 1))
     case "$last" in *" hk_entries="*) HK_GROUP_LINES_CHECKED=$((HK_GROUP_LINES_CHECKED + 1)) ;; esac
-    if line34_ok "$last"; then ok "$label: the rc=34 line is the strict fixed shape (digits and 0/1 bits only; the hk_ group iff has_hooks_d=1)"
-    else no "$label: the rc=34 line is not the strict fixed shape: [$last]"; fi
+    if line34_ok "$last" && rc34_once; then ok "$label: the rc=34 line is the strict fixed shape (digits and 0/1 bits only; the hk_ group iff has_hooks_d=1) and the only rc=34 line"
+    else no "$label: the rc=34 line is not the strict fixed shape, or it is not the only rc=34 line: [$last]"; fi
     if [ -n "$tail34" ]; then
       if [ "$last" = "wipe-assert: rc=34 reason=offlist $tail34" ]; then ok "$label: the whole rc=34 line equals the expected one"
       else no "$label: the rc=34 line differs: got [$last], want [wipe-assert: rc=34 reason=offlist $tail34]"; fi
@@ -995,7 +1001,7 @@ if [[ "$(tail -n 1 "$W/err")" != *has_hooks_d* ]]; then ok "A132 the rc 35 line 
 HK_HEAD="top_d=3 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=1"
 hk_tree() { tree_reset; mkdir -p "$W/tree/repositories" "$W/tree/lost+found" "$W/tree/hooks"; }
 hk_clean() { # <label> — no reader was called on a tree path (the reads file exists and is empty) and neither a name nor a size bound reached an output
-  if [ -e "$W/state/reads" ] && [ ! -s "$W/state/reads" ]; then ok "$1: no reader was called on a tree path (cat, head, a checksum or dump tool, tail, sed, grep, cut, awk, wc, dd, python3, perl, diff, cmp, sort): no read was recorded"
+  if [ -e "$W/state/reads" ] && [ ! -s "$W/state/reads" ]; then ok "$1: no shimmed reader was called on a tree path (cat, head, a checksum or dump tool, tail, sed, grep, cut, awk, wc, dd, python3, perl, diff, cmp, sort): no read was recorded; a reader outside that list is covered by the static layer (HK8, HK10-HK11), not by this row"
   else no "$1: a reader was called, or the recorder file is missing: $(tr '\t' ' ' < "$W/state/reads" | head -3 | cut -c1-200)"; fi
   if grep_none -F -e pre-receive -e 4096 -e 4097 "$W/out" "$W/err"; then ok "$1: neither the probed name nor a size bound reached stdout or stderr"
   else no "$1: the probed name or a size bound reached an output (or the probe itself failed)"; fi
@@ -1485,6 +1491,8 @@ if [ "$RC" = 16 ] && [ ! -s "$W/out" ] && [ "$(grep -c 'refusing to run under xt
 else no "A116 xtrace was not refused: rc=$RC"; fi
 
 # ── the corpus is real: the names were on the mounted tree, in a representative number of runs ───
+# 15 = the corpus-on-the-tree runs and 7 = the corpus patterns, each measured unprivileged, loopback skipped, 2026-10-19 (CORPUS_N is the
+# line count of the pattern file above; NAMES_SEEN_RUNS is read after the Tier-A rows, before the mutation matrix)
 # shellcheck disable=SC2015  # ok()/no() cannot fail, so this is a true if/else
 [ "$NAMES_SEEN_RUNS" -ge 15 ] && ok "GN: the corpus really was on the mounted tree in $NAMES_SEEN_RUNS runs (the no-names rows are not vacuous)" \
   || no "GN: the corpus reached the mounted tree in only $NAMES_SEEN_RUNS runs"
@@ -1523,10 +1531,13 @@ mutant_row() {
   local name="$1"
   mutate_script "$name" "$2" "$3" ${7:+"$7" "$8"} || { no "M-$name: the mutation anchor is not unique, or the edit is neutral"; return 0; }
   MUT_ROWS=$((MUT_ROWS + 1))
-  world "m-$name"
-  "$4"
-  if [ "$5" = pre-skip ]; then RUN_SCRIPT="$MUTANT" run_script pre WIPE_LISTING=skip; else RUN_SCRIPT="$MUTANT" run_script "$5"; fi
-  RUN_SCRIPT=""
+  # a STATIC case reads only the mutant's TEXT ($MUTANT), never a world or a run: running the mutant first would change nothing
+  if [[ " ${STATIC_CASES:-} " != *" $6 "* ]]; then
+    world "m-$name"
+    "$4"
+    if [ "$5" = pre-skip ]; then RUN_SCRIPT="$MUTANT" run_script pre WIPE_LISTING=skip; else RUN_SCRIPT="$MUTANT" run_script "$5"; fi
+    RUN_SCRIPT=""
+  fi
   if "$6"; then no "M-$name: the mutant is still accepted by the original's case (the row is vacuous or the mutation was neutral)"
   else ok "M-$name: the named case goes RED against the mutant"; fi
 }
@@ -1563,7 +1574,7 @@ caught_grammar() { # the output is ONE line of the fixed pre grammar and nothing
   local got; got="$(cat "$W/out")"; [ "$(wc -l < "$W/out")" = 1 ] && [[ "$got" =~ $RE_PRE ]] && [ ! -s "$W/err" ]
 }
 caught_no_leak() { # no synthesized name in stdout/stderr (the mutant prints one)
-  [ -z "$(grep -rlF -f "$PATS" "$W/out" "$W/err" || true)" ]
+  grep_none -rlF -f "$PATS" "$W/out" "$W/err"
 }
 
 # M1 (Guard 8 row 1): the classifier prints one synthesized name
@@ -1614,11 +1625,11 @@ set_hooksfile()  { : > "$W/tree/hooks"; }
 set_hooksdotd()  { mkdir -p "$W/tree/hooks.d"; }
 set_hooksdir()   { tree_reset; mkdir -p "$W/tree/repositories" "$W/tree/lost+found" "$W/tree/hooks"; }
 set_hookstenant() { mkdir -p "$W/tree/hooks" "$W/tree/$CORPUS_TOP_DIR"; : > "$W/tree/$CORPUS_TOP_FILE"; }
-# line34_is <tail> — rc 34, the LAST stderr line equals the whole expected one, EVERY stderr line is a fixed reason line and no
-# corpus name reached stdout or stderr (a mutant that emits an earlier named line must not pass on its last line alone)
+# line34_is <tail> — rc 34, the LAST stderr line equals the whole expected one and is the ONLY rc=34 line, EVERY stderr line is a
+# fixed reason line and no corpus name reached stdout or stderr (a mutant that emits an earlier line must not pass on its last line alone)
 line34_is() {
   local l
-  [ "$RC" = 34 ] && [ "$(tail -n 1 "$W/err")" = "wipe-assert: rc=34 reason=offlist $1" ] || return 1
+  [ "$RC" = 34 ] && [ "$(tail -n 1 "$W/err")" = "wipe-assert: rc=34 reason=offlist $1" ] && rc34_once || return 1
   while IFS= read -r l; do [[ "$l" =~ $RE_ERR ]] || return 1; done < "$W/err"
   grep_none -rlF -f "$PATS" "$W/out" "$W/err"
 }
@@ -1713,27 +1724,37 @@ cat > "$HK_ALLOWED" <<'HKEOF'
 HKEOF
 # hk_block <script> — the lines between the two hooks sentinels. hk_block_closed <script> — a STRUCTURAL check (this is not a
 # syscall trace: the suite has no strace, A116 refuses xtrace, and a shim sees only argv): the non-comment lines of the hooks
-# block are EXACTLY the reviewed literals above, each as many times as it is listed (multiset equality: a dropped, an added, a
-# duplicated or a swapped line fails), so a content read written as a command, a builtin ($(<f), read <f, mapfile) or an extra
-# find fails here whatever it is called. Outside the block three further rules hold (hk_outside_closed, hk_no_file_redirect,
-# hk_budget_first below), and the reader shims (a content reader handed a tree operand) are a separate, independent layer.
+# block are EXACTLY the reviewed literals above, in the reviewed ORDER (a SEQUENCE compare, no sort: a dropped, an added, a
+# duplicated, a replaced or a reordered line fails; the heredoc above is in block order and is green on the unmodified script), so
+# a content read written as a command, a builtin ($(<f), read <f, mapfile) or an extra find fails here whatever it is called.
+# Outside the block three further rules hold (hk_outside_closed, hk_no_file_redirect, hk_budget_first below), and the reader shims
+# (a content reader handed a tree operand) are a separate, independent layer.
 hk_block() { awk '/# ---- BEGIN wipe-hooks reads ----/{f=1;next} /# ---- END wipe-hooks reads ----/{f=0} f' "$1"; }
 hk_code() { grep -vE '^[[:space:]]*(#.*)?$' "$1" || true; }   # the non-comment, non-blank lines of a file
 hk_block_closed() {
   local got want
-  got="$(hk_block "$1" | grep -vE '^[[:space:]]*(#.*)?$' | LC_ALL=C sort)"
-  want="$(hk_code "$HK_ALLOWED" | LC_ALL=C sort)"
+  got="$(hk_block "$1" | hk_code /dev/stdin)"
+  want="$(hk_code "$HK_ALLOWED")"
   [ -n "$want" ] && [ "$got" = "$want" ]
 }
 # hk_budget_first <script> — inside the hooks block the one `budget` line precedes the first timeout-30 find (a budget that runs
 # after the finds no longer bounds the two 30 s reads; no cheap clock world exists because budget reads the SECONDS builtin).
 hk_budget_first() { hk_block "$1" | awk '/^      budget$/ { b = NR } /timeout 30 find/ { if (!f) f = NR } END { exit !(b && f && b < f) }'; }
-# The lines OUTSIDE the block that name the hooks directory, the pre-receive file, a hook constant, the mounted tree or its mount
-# point are exactly these (every one reviewed: a constant, the classifier bit, a release or mount line, a listing find that
-# names no hooks entry, the one say line). A new line that touches the tree, or names a hooks entry, must come back here.
-HK_TOUCH_RE='WA_HK|pre-receive|hooks|HK_|WA_MNT|/mnt'
+# The lines OUTSIDE the block that name the hooks directory, the pre-receive file, a hook constant, the mounted tree, its mount
+# point or the directory that holds it ($WA_DIR: a path built from it plus a glob reaches the tree) are exactly these, as a
+# MULTISET (every one reviewed: a constant, the classifier bit, a release or mount line, a listing find that names no hooks entry,
+# the one say line; a line dropped and masked by a duplicate of another fails). A new line that touches the tree, or names a hooks
+# entry, must come back here. The /mnt term is load-bearing (the mount root and every path under it); do not narrow this.
+HK_TOUCH_RE='WA_HK|pre-receive|hooks|HK_|WA_MNT|/mnt|WA_DIR'
 HK_OUT_ALLOWED="$T/hk-out-allowed.lines"
 cat > "$HK_OUT_ALLOWED" <<'HKEOF'
+    if [ "$WA_MOUNTED" != 1 ] && [ -n "$WA_DIR" ]; then
+      if rm -f -- "$WA_DIR/cow"; then
+        WA_DIR=""
+    if [ -n "$WA_DIR$WA_LOOP" ] || [ "$WA_SNAP_UP" = 1 ] || [ "$WA_MOUNTED" = 1 ]; then
+    WA_DIR="$(mktemp -d -p /dev/shm)" || { WA_DIR=""; die 33 mktemp_failed; }
+    truncate -s "$cow_bytes" -- "$WA_DIR/cow" || die 33 cow_failed
+    WA_LOOP="$(losetup --find --show -- "$WA_DIR/cow")" || { WA_LOOP=""; die 33 losetup_failed; }
   readonly WA_HK_DIR=hooks
   readonly WA_HK_PR=pre-receive
   readonly WA_HK_PR_MAX=4096
@@ -1755,26 +1776,40 @@ cat > "$HK_OUT_ALLOWED" <<'HKEOF'
     WA_DIR="$cowdir"; WA_MNT="$cowdir/mnt"; WA_LOOP="$lk"; WA_SNAP_UP=1
 HKEOF
 hk_outside() { awk '/# ---- BEGIN wipe-hooks reads ----/{f=1;next} /# ---- END wipe-hooks reads ----/{f=0;next} !f' "$1"; }
+# hk_outside_closed <script> — the touching lines outside the block, sorted, equal the reviewed list, sorted (multiset equality, as
+# hk_block_closed). HK_FIRST_BAD is set to the first line that differs (an unreviewed line, or a reviewed one that went missing, with
+# comm's `<TAB>` marking a line only in the reviewed list), so a failure names its offender.
 hk_outside_closed() {
-  local l n=0 want
-  while IFS= read -r l; do
+  local l got want
+  HK_FIRST_BAD=""
+  got="$(while IFS= read -r l; do
     [[ "$l" =~ ^[[:space:]]*# ]] && continue
     [[ "$l" =~ $HK_TOUCH_RE ]] || continue
-    grep -qxF -- "$l" "$HK_OUT_ALLOWED" || return 1
-    n=$((n + 1))
-  done < <(hk_outside "$1")
-  want="$(wc -l < "$HK_OUT_ALLOWED")"
-  [ "$n" -eq "$((want))" ]
+    printf '%s\n' "$l"
+  done < <(hk_outside "$1") | LC_ALL=C sort)"
+  want="$(LC_ALL=C sort "$HK_OUT_ALLOWED")"
+  [ -n "$want" ] && [ "$got" = "$want" ] && return 0
+  HK_FIRST_BAD="$(comm -3 <(printf '%s\n' "$got") <(printf '%s\n' "$want") | head -n 1 | cut -c1-200)"
+  return 1
 }
 # hk_no_file_redirect <script> — no non-comment line of the script reads a file by redirection or by the $(<f) builtin: the only
-# input redirections are /dev/null, here-strings and process substitutions (a `read < path` or `exec 5<path` is flagged).
+# input redirections are /dev/null, here-strings, heredocs and process substitutions (a `read < path`, `exec 5<path` or a
+# subshell `(<path cmd)` is flagged). A `<` that is a COMPARISON is not a redirection and is not flagged inside `[[ ... ]]`, an
+# arithmetic `(( ... ))` / `$(( ... ))` or an awk single-quoted program: those three are blanked before the redirect test, only
+# when they hold no command substitution or backtick (so `[[ -n "$(cat <f)" ]]` is still flagged), one level only. The `$(<f)`
+# builtin is tested on the UNBLANKED line. The harness rows H6 pin both directions; the live script has none of the three with a
+# `<`, and elsewhere a compare is written -lt. An unreadable or empty file is a failure, never a clean pass. HK_FIRST_BAD is set to
+# the first offending line.
 hk_no_file_redirect() {
-  local l re_redir='(^|[^<>&(])<[[:space:]]*[^<(&[:space:]=]' re_builtin='\$\([[:space:]]*<'
-  while IFS= read -r l; do
-    [[ "$l" =~ ^[[:space:]]*# ]] && continue
-    l="${l//< \/dev\/null/}"; l="${l//<\/dev\/null/}"
-    if [[ "$l" =~ $re_builtin ]] || [[ "$l" =~ $re_redir ]]; then return 1; fi
-  done < "$1"
+  local l raw re_redir='(^|[^<>&])<[[:space:]]*[^<(&[:space:]=]' re_builtin='\$\([[:space:]]*<'
+  HK_FIRST_BAD=""
+  [ -s "$1" ] || { HK_FIRST_BAD="(unreadable or empty: $1)"; return 1; }
+  # fd 3 = the raw lines, stdin = the same lines with the comparison contexts blanked (sed keeps the line count, so the two stay aligned)
+  while IFS= read -r raw <&3 && IFS= read -r l; do
+    [[ "$raw" =~ ^[[:space:]]*# ]] && continue
+    raw="${raw//< \/dev\/null/}"; raw="${raw//<\/dev\/null/}"; l="${l//< \/dev\/null/}"; l="${l//<\/dev\/null/}"
+    if [[ "$raw" =~ $re_builtin ]] || [[ "$l" =~ $re_redir ]]; then HK_FIRST_BAD="$(printf '%s' "$raw" | cut -c1-200)"; return 1; fi
+  done 3< "$1" < <(sed -E -e 's/\$?\(\([^()`]*\)\)/ /g' -e 's/\[\[([^]$`(]|\$[^(])*\]\]/ /g' -e "s/awk [^']*'[^']*'/ /g" "$1")
   return 0
 }
 # hk_die_args_plain <script> — no die or say call hands a command substitution (or a backtick) to its argument slot: RE_ERR admits
@@ -1817,15 +1852,43 @@ caught_outside_closed() { hk_outside_closed "$MUTANT" && hk_no_file_redirect "$M
 caught_no_open() { caught_recorder_quiet && hk_block_closed "$MUTANT" && caught_outside_closed; }
 caught_budget_first() { hk_budget_first "$MUTANT"; }
 caught_die_args_plain() { hk_die_args_plain "$MUTANT"; }
+# hk_emit_sites_pinned <script> — the number of places the script can write to the two original fds is pinned: `say` call sites (the
+# die body, the teardown line, the one rc=34 line), writes to fd 3 (the say body) and writes to fd 4 (the three stdout lines). A fourth
+# `say` or any further `>&3`/`>&4` is a new channel off the host and returns to review. Named literals, measured on the unmodified
+# script (non-comment lines only) on 2026-10-19; a count is not an identity test, it is the tripwire for an added write site.
+HK_SAY_SITES=3
+HK_FD3_WRITES=1
+HK_FD4_WRITES=3
+hk_emit_sites_pinned() {
+  local code say3 fd3 fd4
+  code="$(hk_code "$1")"
+  [ -n "$code" ] || return 1
+  say3="$(printf '%s\n' "$code" | grep -cE '(^|[[:space:];{(|&])say[[:space:]]')"
+  fd3="$(printf '%s\n' "$code" | grep -oE '>&3' | wc -l)"
+  fd4="$(printf '%s\n' "$code" | grep -oE '>&4' | wc -l)"
+  [ "$say3" = "$HK_SAY_SITES" ] && [ "$((fd3))" = "$HK_FD3_WRITES" ] && [ "$((fd4))" = "$HK_FD4_WRITES" ]
+}
+caught_emit_pinned() { hk_emit_sites_pinned "$MUTANT"; }
 caught_hk_pr_nonfile() { hk_is "hk_entries=1 hk_nonfile=1 hk_pr_f=0 hk_pr_small=0"; }
+# The cases that read only the script text: no world and no run is needed for them (mutant_row and the control below skip both).
+STATIC_CASES=" caught_outside_closed caught_budget_first caught_die_args_plain caught_emit_pinned "
 # hk_mutant <name> <setup> <case> <old> <new> [<old2> <new2>]
+# The control (the case against the UNMUTATED script, in a world built by <setup>) depends only on (setup, case, script), so the
+# run is done once per such triple and its VERDICT is cached; every row still asserts its own control line from the cached verdict,
+# so a failing control fails every row that uses it (the cache can only skip an identical re-run, never hide a failure). The key
+# carries the script's checksum, so a different script text is a different key.
+declare -A HK_CTRL=()
+HK_SIG="$(cksum < "$SCRIPT")"
 hk_mutant() {
-  local name="$1" set="$2" case_="$3"
+  local name="$1" set="$2" case_="$3" key
   shift 3
-  world "c-$name"; "$set"
-  run_script pre
-  MUTANT="$SCRIPT"
-  if "$case_"; then ok "M-$name control: the unmutated script satisfies the case"
+  key="$set|$case_|$HK_SIG|${RUN_SCRIPT:-}"
+  if [ -z "${HK_CTRL[$key]+x}" ]; then
+    if [[ "$STATIC_CASES" != *" $case_ "* ]]; then world "c-$name"; "$set"; run_script pre; fi
+    MUTANT="$SCRIPT"
+    if "$case_"; then HK_CTRL[$key]=ok; else HK_CTRL[$key]=bad; fi
+  fi
+  if [ "${HK_CTRL[$key]}" = ok ]; then ok "M-$name control: the unmutated script satisfies the case"
   else no "M-$name control: the unmutated script does NOT satisfy the case (the mutant row would be vacuous)"; fi
   mutant_row "$name" "$1" "$2" "$set" pre "$case_" ${3:+"$3" "$4"}
 }
@@ -1874,8 +1937,9 @@ hk_mutant m-hk-after-e1 set_hk_errbump caught_hk33_errcount \
     [ "$e1" = "$e0" ] || die 33 errors_count_changed_by_listing
     # ---- BEGIN wipe-hooks reads ----
 '
-# 12. a content read of pre-receive: a command in the block (reader shim AND closed set), a builtin (closed set only), and a
-# command placed OUTSIDE the block (reader shim only)
+# 12. a content read of pre-receive: a command in the block, a builtin in the block, and a command placed OUTSIDE the block. Each case
+# below is the UNION (reader recorder + closed block + outside static rules, caught_no_open); 12b splits the three layers and proves
+# each on its own.
 hk_mutant m-hk-read-cat set_hk_pronly caught_no_open '      HK_PR_F=0' '      x="$(cat "$WA_MNT/$WA_HK_DIR/$WA_HK_PR")"
       HK_PR_F=0'
 hk_mutant m-hk-read-sha256sum set_hk_pronly caught_no_open '      HK_PR_F=0' '      sha256sum "$WA_MNT/$WA_HK_DIR/$WA_HK_PR"
@@ -1891,7 +1955,9 @@ hk_mutant m-hk-read-cat-outside-block set_hk_pronly caught_no_open '    # ---- B
 # 12b. A content read placed OUTSIDE the block, one row per reader family, each inserted just above the BEGIN sentinel. The insert is
 # guarded by HAS_HOOKS=1 and reads the real path under the mounted tree. Three independent layers, each proven on its own:
 #   -union   the combined case (recorder, closed block, outside rules) must go RED for EVERY family
-#   -rec     the reader shim recorder ALONE must see it (a reader handed a tree operand lands in state/reads)
+#   -rec     the reader shim recorder ALONE must see it (a reader handed a tree operand lands in state/reads). A recorder that is not
+#            proven live proves nothing, so these rows are its per-reader controls (a known reader on a tree path must leave
+#            state/reads non-empty) and every control arm requires it empty (caught_recorder_quiet, both directions)
 #   -static  the outside-block static rules ALONE must see it (hk_outside_closed + hk_no_file_redirect)
 # A builtin ($(<f), read < f) is invisible to a shim by nature: only the static layer can see it, so those families have no -rec row.
 HK_BEGIN='    # ---- BEGIN wipe-hooks reads ----
@@ -1919,6 +1985,12 @@ hk_outside_read perl 1 "x_hk=\"\$(perl -ne 'print; last' $HK_PRP)\""
 hk_outside_read head 1 "x_hk=\"\$(head -c 16 $HK_PRP)\""
 hk_outside_read sha256sum 1 "x_hk=\"\$(sha256sum $HK_PRP)\""
 hk_outside_read cat 1 "x_hk=\"\$(cat $HK_PRP)\""
+hk_outside_read diff 1 "x_hk=\"\$(diff $HK_PRP /dev/null)\""
+hk_outside_read cmp 1 "x_hk=\"\$(cmp $HK_PRP /dev/null)\""
+hk_outside_read sort 1 "x_hk=\"\$(sort $HK_PRP)\""
+# the bare mount root as the operand (no trailing slash, no file under it): a recursive read of the whole tree
+HK_MNTP='"$WA_MNT"'
+hk_outside_read mntroot 1 "x_hk=\"\$(grep -rc x $HK_MNTP)\""
 # the path built in two steps (no literal hooks path on the reading line): the recorder sees the operand, the static rule sees both lines
 hk_mutant m-hk-rd-indirect-union set_hk_pronly caught_no_open "$HK_BEGIN" '    hk_d="$WA_MNT/$WA_HK_DIR"
     [ "$HAS_HOOKS" = 1 ] && x_hk="$(tail -c 16 "$hk_d/$WA_HK_PR")"
@@ -1931,11 +2003,15 @@ hk_mutant m-hk-rd-tail-static set_hk_pronly caught_outside_closed "$HK_BEGIN" ' 
 '"$HK_BEGIN"
 hk_mutant m-hk-rd-builtin-static set_hk_pronly caught_outside_closed "$HK_BEGIN" '    [ "$HAS_HOOKS" = 1 ] && x_hk="$(<"$WA_MNT/$WA_HK_DIR/$WA_HK_PR")"
 '"$HK_BEGIN"
-# a redirect from a path that names neither hooks nor the mounted tree: only the redirect rule sees it (the touch rule cannot)
-hk_mutant m-hk-rd-redirect-static set_hk_pronly caught_outside_closed "$HK_BEGIN" '    [ "$HAS_HOOKS" = 1 ] && read -r x_hk < "$WA_DIR/cow"
+# a redirect from a path that names none of the touch words (hooks, pre-receive, HK_, WA_MNT, /mnt, WA_DIR): only the redirect rule
+# sees it, in its plain form and in the subshell form `(<f cmd)` (the first character class once excluded the opening parenthesis)
+hk_mutant m-hk-rd-redirect-static set_hk_pronly caught_outside_closed "$HK_BEGIN" '    [ "$HAS_HOOKS" = 1 ] && read -r x_hk < "/dev/mapper/$WA_SNAP"
 '"$HK_BEGIN"
-# 13. a recorder that is not proven live proves nothing: a known reader on a tree path must leave state/reads non-empty, and the
-# unmutated run must leave it empty (the two directions of caught_recorder_quiet; the -rec rows above are the per-reader controls)
+hk_mutant m-hk-rd-subshell-static set_hk_pronly caught_outside_closed "$HK_BEGIN" '    [ "$HAS_HOOKS" = 1 ] && (<"/dev/mapper/$WA_SNAP" wc -c)
+'"$HK_BEGIN"
+# a path built from $WA_DIR plus a glob names no hooks word and no /mnt on its line: only the WA_DIR term of the touch rule sees it
+hk_mutant m-hk-rd-wadir-glob-static set_hk_pronly caught_outside_closed "$HK_BEGIN" '    [ "$HAS_HOOKS" = 1 ] && x_hk="$(uniq "$WA_DIR"/mn?/h*/pre-r*)"
+'"$HK_BEGIN"
 # 14. ORDER: the budget call moved from before the finds to after them (still one budget line, still the same set of lines)
 hk_mutant m-hk-budget-after-finds set_hk_pronly caught_budget_first '      budget
       ht=' '      ht=' \
@@ -1949,6 +2025,14 @@ hk_mutant m-hk-pr-nontype-dir set_hk_prdir caught_hk_pr_nonfile '-type f \( -siz
 hk_mutant m-hk-pr-nontype-fifo set_hk_prfifo caught_hk_pr_nonfile '-type f \( -size' '! -type l \( -size'
 # 16. no die or say argument carries a command substitution (a size, uid or mode read from the tree on a fixed-word line)
 hk_mutant m-hk-die-arg-substitution set_hk_pronly caught_die_args_plain '    [ "$e1" = "$e0" ] || die 33 errors_count_changed_by_listing' '    [ "$e1" = "$e0" ] || die 33 errors_count_changed_by_listing "sz=$(printf 1)"'
+# 17. the emit channel: a second rc=34-prefixed line before the real one (the whole-line and last-line checks alone pass it; the one-line check and
+# the site count each see it), and a further write to the original stderr (only the count sees it)
+hk_mutant m-hk-second-say set_hooksdir caught_hooksdir '      say "wipe-assert: rc=34 reason=offlist top_d=$TOP_D' '      say "wipe-assert: rc=34 reason=offlist_x sz=$OFFLIST_N"
+      say "wipe-assert: rc=34 reason=offlist top_d=$TOP_D'
+hk_mutant m-hk-second-say-pinned set_hooksdir caught_emit_pinned '      say "wipe-assert: rc=34 reason=offlist top_d=$TOP_D' '      say "wipe-assert: rc=34 reason=offlist_x sz=$OFFLIST_N"
+      say "wipe-assert: rc=34 reason=offlist top_d=$TOP_D'
+hk_mutant m-hk-extra-fd3-write set_hooksdir caught_emit_pinned "  say() { printf '%s\\n' \"\$*\" >&3; }" "  say() { printf '%s\\n' \"\$*\" >&3; }
+  say2() { printf '%s\\n' \"\$*\" >&3; }"
 echo "    ($MUT_ROWS mutation rows run)"
 
 # Harness rows (the mutation machinery itself is not neutered)
@@ -1963,6 +2047,22 @@ _pf=$fail; _pp=$pass
 expect_refuse "H2-probe (EXPECTED TO FAIL: a clean host does not refuse)" 34 offlist >/dev/null
 if [ "$fail" -gt "$_pf" ]; then ok "H2: a refusal row against a clean host goes RED (the assertion machinery can fail)"; fail=$_pf; pass=$_pp; executed=$((executed - 4))
 else no "H2: a refusal row against a clean host stayed green"; fi
+
+# The one-rc=34-line rule of expect_refuse is not neutered: a script that prints a SECOND rc=34-prefixed line before the real one (the last line
+# is still the expected one and still the strict shape) must make expect_refuse FAIL, and the real script must pass. The probe's counters
+# are restored (it must not move a floor).
+if mutate_script h8-second-say '      say "wipe-assert: rc=34 reason=offlist top_d=$TOP_D' '      say "wipe-assert: rc=34 reason=offlist_x sz=$OFFLIST_N"
+      say "wipe-assert: rc=34 reason=offlist top_d=$TOP_D'; then
+  world h8; set_hooksdir
+  RUN_SCRIPT="$MUTANT" run_script pre; RUN_SCRIPT=""
+  _pf=$fail; _pp=$pass; _pe=$executed; _pr=$RC34_LINES_CHECKED; _pg=$HK_GROUP_LINES_CHECKED; _pi=$INVARIANT_RUNS; _pn=$NAMES_SEEN_RUNS
+  expect_refuse "H8-probe (EXPECTED TO FAIL: two rc=34 lines)" 34 offlist "$HK_HEAD hk_entries=0 hk_nonfile=0 hk_pr_f=0 hk_pr_small=0" >/dev/null
+  _h8_failed=$((fail - _pf))
+  fail=$_pf; pass=$_pp; executed=$_pe; RC34_LINES_CHECKED=$_pr; HK_GROUP_LINES_CHECKED=$_pg; INVARIANT_RUNS=$_pi; NAMES_SEEN_RUNS=$_pn
+  world h8b; set_hooksdir; run_script pre
+  if [ "$_h8_failed" = 1 ] && rc34_once; then ok "H8: a second rc=34-prefixed stderr line makes expect_refuse fail (exactly the one-line check), and the real script prints exactly one"
+  else no "H8: expect_refuse accepted two rc=34 lines ($_h8_failed failing checks), or the real script printed other than one"; fi
+else no "H8: the second-say mutation did not land"; fi
 
 # The strict-line helpers themselves are not neutered (a loosened regex or a dropped predicate goes RED here).
 _g34='wipe-assert: rc=34 reason=offlist top_d=3 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=7 offlist_n=0'
@@ -2006,6 +2106,37 @@ else no "H4: the closed-set check accepted a block with a line missing"; fi
 _gn_f="$T/grep-none.txt"; printf 'alpha\n' > "$_gn_f"
 if grep_none -F beta "$_gn_f" && ! grep_none -F alpha "$_gn_f" && ! grep_none -F alpha "$T/no-such-file"; then ok "H5: grep_none is true only on exit 1 (a match and an unreadable file are both refused)"
 else no "H5: grep_none accepts a match or a grep error as an absence"; fi
+# the closed-set helpers are exact: a REORDER of the block fails (sequence compare), and a reviewed outside line dropped and masked by a
+# duplicate of another fails (multiset compare); the failure names the first differing line
+_nf_l="$(sed -n '/^      nf=/p' "$HK_ALLOWED")"; _al_l="$(sed -n '/^      al=/p' "$HK_ALLOWED")"
+if [ -n "$_nf_l" ] && [ -n "$_al_l" ] && mutate_script h4-swap "$_nf_l"$'\n'"$_al_l" "$_al_l"$'\n'"$_nf_l" && ! hk_block_closed "$MUTANT" && hk_block_closed "$SCRIPT"; then ok "H4: two block lines swapped (nf= and al=) are refused by the closed-set check (a sequence compare, not a sort)"
+else no "H4: the closed-set check accepted a reordered block, or refused the real block"; fi
+if mutate_script h4-outside-dupdrop '    mkdir -- "$WA_MNT" || die 33 mkdir_failed
+' '    mkdir -- "$WA_MNT" || die 33 mkdir_failed
+    mkdir -- "$WA_MNT" || die 33 mkdir_failed
+' '      [[ "$tgt" =~ ^(/dev/shm/tmp\.[A-Za-z0-9]{6,12})/mnt$ ]] || die 43 snapshot_not_ours
+' '' && ! hk_outside_closed "$MUTANT" && [ -n "$HK_FIRST_BAD" ] && hk_outside_closed "$SCRIPT"; then ok "H4: an outside line duplicated while a reviewed guard line is dropped (same count, every line reviewed) is refused by the outside check, which names the first difference (the real script is accepted)"
+else no "H4: the outside check accepted a duplicate-and-drop, or named no line, or refused the real script"; fi
+# hk_no_file_redirect: a comparison is not a redirection, a real read still is (also when a comparison shares the line), and an unreadable
+# file is a failure, never a clean pass
+_rd="$T/redir-probe.sh"
+_k=0
+for _l in '  [[ "$a" < "$b" ]]' "  awk 'NR < 3' \"\$f\"" '  x=$((a < b))' '  x=$(( n <5 ))' '  (( a < b )) && echo y' '  cat < /dev/null' '  read -r a <<< "$x"' '  wl_classify < <(find . -print)'; do
+  _k=$((_k + 1)); printf '%s\n' "$_l" > "$_rd"
+  if hk_no_file_redirect "$_rd"; then ok "H6: a comparison or an allowed redirection is not flagged (case $_k)"; else no "H6: a comparison or allowed form was flagged (case $_k): [$_l]"; fi
+done
+_k=0
+for _l in '  read -r x < "$f"' '  exec 5<"$f"' '  (<"$f" wc -c)' '  ( <"$f" wc -c)' '  x=$(<"$f")' '  x=$(( $(<"$f") + 1 ))' '  [[ -n "$(cat <"$f")" ]]' '  (( n++ )); read -r x < "$f"' '  [[ a < b ]] && read -r x < "$f"' "  awk 'NR < 3' < \"\$f\""; do
+  _k=$((_k + 1)); printf '%s\n' "$_l" > "$_rd"
+  if ! hk_no_file_redirect "$_rd" && [ "$HK_FIRST_BAD" = "$_l" ]; then ok "H6: a file read by redirection or builtin is flagged and the line is named (case $_k)"; else no "H6: a file read was not flagged, or the line was not named (case $_k): [$_l]"; fi
+done
+if ! hk_no_file_redirect "$T/no-such-file-probe"; then ok "H6: an unreadable file is a failure of the redirect rule, never a clean pass"; else no "H6: the redirect rule passed an unreadable file"; fi
+# the run bound itself: a script that would run for 8 s is cut at the 2 s bound and the run reads rc 124 (without the bound it would end rc 0)
+world h6
+printf 'while [ "$SECONDS" -lt 8 ]; do :; done\n' > "$T/hang.sh"
+RUN_TIMEOUT=2 RUN_SCRIPT="$T/hang.sh" run_script pre
+RUN_SCRIPT=""
+if [ "$RC" = 124 ]; then ok "H6: a hung run returns rc 124 through the run_script timeout (a blocked read reads as RED, not as a stall)"; else no "H6: the run_script timeout did not bound a long run (rc=$RC)"; fi
 
 # ══════════════════════════════════════════════════════════════════════════════════════════
 # TIER B — the cutover verb
@@ -2262,15 +2393,34 @@ if [ "$(grep -cE '^ +exit 34$' "$SCRIPT")" = 1 ] && [ "$(grep -cF 'offlist_n=$OF
 else no "HK7 the exit-34 site or the say line differs"; fi
 if hk_block_closed "$SCRIPT" && [ "$(grep -cE '^      budget$' < <(hk_block "$SCRIPT"))" = 1 ] && hk_budget_first "$SCRIPT"; then ok "HK8 the non-comment lines of the hooks block are exactly the reviewed literals, each once (structural, not a syscall trace), and budget is called once, before the first find"
 else no "HK8 the hooks block is not the reviewed one, or budget does not precede the finds"; fi
-if hk_outside_closed "$SCRIPT"; then ok "HK10 outside the hooks block only the $(wc -l < "$HK_OUT_ALLOWED" | tr -d ' ') reviewed lines name the hooks directory, the pre-receive file, a hook constant or the mounted tree"
-else no "HK10 a line outside the hooks block names the hooks directory, the pre-receive file, a hook constant or the mounted tree and is not a reviewed one"; fi
+if hk_outside_closed "$SCRIPT"; then ok "HK10 outside the hooks block only the $(wc -l < "$HK_OUT_ALLOWED" | tr -d ' ') reviewed lines (a multiset) name the hooks directory, the pre-receive file, a hook constant, the mounted tree or its directory"
+else no "HK10 the touching lines outside the hooks block are not the reviewed ones; first difference: [$HK_FIRST_BAD]"; fi
 if hk_no_file_redirect "$SCRIPT"; then ok "HK11 no line of the script reads a file by redirection or by the builtin (only /dev/null, here-strings and process substitutions)"
-else no "HK11 the script reads a file by redirection or by the builtin"; fi
+else no "HK11 the script reads a file by redirection or by the builtin; first offending line: [$HK_FIRST_BAD]"; fi
 if hk_die_args_plain "$SCRIPT"; then ok "HK12 no die or say call passes a command substitution in its arguments (a value read from the tree cannot ride a fixed-word line)"
 else no "HK12 a die or say call carries a command substitution in its arguments"; fi
-_hk_bad="$(hk_block "$SCRIPT" | grep -E -e '(^| )-L( |$)' -e '(^| )-H( |$)' -e '-iname' -e '%f' -e '%p' -e '2>&1' -e '<<' -e 'mapfile' -e 'readarray' -e 'exec ' || true)"
-if [ -z "$_hk_bad" ]; then ok "HK9 the hooks block has no -L, -H, -iname, %f, %p, 2>&1, here-string, mapfile or exec"
-else no "HK9 a forbidden construct is in the hooks block: $_hk_bad"; fi
+_hk_forbid=(-e '(^| )-L( |$)' -e '(^| )-H( |$)' -e '-iname' -e '%f' -e '%p' -e '2>&1' -e '<<' -e 'mapfile' -e 'readarray' -e 'exec ')
+# grep_none: only an exit 1 (no match) is clean; a grep error reads as not clean, never as an absence
+if hk_block "$SCRIPT" | grep_none -E "${_hk_forbid[@]}"; then ok "HK9 the hooks block has no -L, -H, -iname, %f, %p, 2>&1, here-string, mapfile or exec"
+else no "HK9 a forbidden construct is in the hooks block (or the probe itself failed): $(hk_block "$SCRIPT" | grep -E "${_hk_forbid[@]}" | head -n 1 | cut -c1-200)"; fi
+if hk_emit_sites_pinned "$SCRIPT"; then ok "HK13 the script has exactly $HK_SAY_SITES say call sites, $HK_FD3_WRITES write to fd 3 and $HK_FD4_WRITES writes to fd 4 (measured 2026-10-19; a further channel off the host returns to review)"
+else no "HK13 the say call sites or the fd 3 / fd 4 writes are not the pinned $HK_SAY_SITES / $HK_FD3_WRITES / $HK_FD4_WRITES"; fi
+# HK14 the literal ERE in the runbook (the fenced block under the "Literal pattern (" paragraph) equals RE_34 byte for byte. Anchored
+# on the paragraph, so a commented or quoted copy elsewhere cannot be picked up; the paragraph must be unique and the block exactly one
+# non-empty line. hk_runbook_re_equals takes the candidate, so the harness can prove a one-character edit goes RED.
+RB="$(cd "$DIR/../../.." && pwd)/knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md"
+hk_runbook_re() {
+  [ -s "$1" ] && [ "$(grep -c '^Literal pattern (' "$1")" = 1 ] || return 1
+  awk '/^Literal pattern \(/ { a = 1; next } a && !f && /^```text$/ { f = 1; next } f && /^```$/ { exit } f { print }' "$1"
+}
+hk_runbook_re_equals() { # <candidate> — the runbook's block is one non-empty line equal to the candidate
+  local got; got="$(hk_runbook_re "$RB")" || return 1
+  [ -n "$got" ] && [ "$(printf '%s\n' "$got" | wc -l)" = 1 ] && [ "$got" = "$1" ]
+}
+if hk_runbook_re_equals "$RE_34"; then ok "HK14 the literal ERE in the runbook (the fenced block under 'Literal pattern (') equals RE_34 byte for byte"
+else no "HK14 the runbook's literal ERE is missing, not unique, not one line, or differs from RE_34"; fi
+if ! hk_runbook_re_equals "${RE_34/rc=34/rc=35}" && ! hk_runbook_re_equals "${RE_34%\$}" && ! hk_runbook_re_equals ""; then ok "H7: the runbook-parity helper goes RED on a one-character edit of RE_34, a dropped anchor and an empty candidate"
+else no "H7: the runbook-parity helper accepted an edited or empty RE_34"; fi
 
 # ══════════════════════════════════════════════════════════════════════════════════════════
 # TIER C — the listing unit on real loop devices
@@ -2527,8 +2677,10 @@ if [ "$INVARIANT_RUNS" -lt "$EXPECTED_INVARIANT_RUNS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s host-script runs were checked for the output invariants, floor is %s\n' "$INVARIANT_RUNS" "$EXPECTED_INVARIANT_RUNS" >&2
   exit 1
 fi
-# 1135 = executed assertions of an unprivileged run with the loopback tier skipped (the way the local gate runs): measured unprivileged, loopback skipped, 2026-10-19
-MIN_ASSERTIONS=1240
+# 1292 = executed assertions of an unprivileged run with the loopback tier skipped (the way the local gate runs): measured unprivileged, loopback skipped, 2026-10-19
+# (1240 before the review round: +52 = the HK13/HK14 and H4/H6/H7/H8 rows and the 12b families diff, cmp, sort and mntroot with the emit-channel rows). Equal to the
+# executed count of that run, so the merge gate relies on the CI run in which tier C executes and lifts `executed`.
+MIN_ASSERTIONS=1292
 if [ "$executed" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s — rows were deleted, skipped, or the suite exited early\n' "$executed" "$MIN_ASSERTIONS" >&2
   exit 1
