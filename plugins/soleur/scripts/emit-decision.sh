@@ -69,6 +69,8 @@ elif [ -n "${CODEX_THREAD_ID:-}" ]; then
   harness="codex"
 elif [ -n "${DEVIN:-}" ] || [ -n "${DEVIN_HOME:-}" ]; then
   harness="devin"
+elif [ -n "${CURSOR_INVOKED_AS:-}" ]; then
+  harness="cursor"
 fi
 
 session_id="${CLAUDE_SESSION_ID:-${DEVIN_SESSION_ID:-${CODEX_THREAD_ID:-${GROK_SESSION_ID:-}}}}"

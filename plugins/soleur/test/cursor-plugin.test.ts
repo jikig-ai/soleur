@@ -21,8 +21,20 @@ describe("Cursor CLI plugin package", () => {
     );
     const instructions = readFileSync(join(pluginRoot, "cursor/INSTRUCTIONS.md"), "utf8");
     expect(instructions).toContain("registers no hook events");
-    expect(instructions).toContain("does not classify the session as `cursor`");
-    expect(instructions).toContain("`.claude/settings.json` is unmeasured");
+    expect(instructions).toContain("classifies the session as `cursor`");
+    expect(instructions).not.toContain("does not classify");
+    expect(instructions).toContain("SessionStart commands and Bash matchers already fire");
+    expect(instructions).toContain(
+      "The PreToolUse `Edit` matcher on `security_reminder_hook.py` already fires",
+    );
+    expect(instructions).toContain(
+      "`Write` and `Write|Edit` matchers rewrite to tool name `Write` and already fire",
+    );
+    expect(instructions).toContain(
+      "A preserved `^write$` matcher does not match tool name `Write`",
+    );
+    expect(instructions).toContain("This session did not meet the support bar.");
+    expect(instructions).not.toContain("`.claude/settings.json` is unmeasured");
     expect(instructions).not.toContain("## Tools");
     expect(instructions).toContain("If a canonical file tells you to call those tools, stop.");
     expect(instructions).toContain(
@@ -47,7 +59,7 @@ describe("Cursor CLI plugin package", () => {
       "/review",
       "/shell",
       "does not run hooks",
-      "does not classify the session as cursor",
+      "classifies the session as cursor",
       "Skill tool",
       "Task tool",
       "run_subagent",
@@ -82,7 +94,7 @@ describe("Cursor CLI plugin package", () => {
     expect(cursor).not.toMatch(/^ {2}\/help /m);
     expect(cursor).not.toMatch(/^ {2}\/review /m);
     expect(cursor).not.toMatch(/^ {2}\/shell /m);
-    expect(cursor).toContain("does not classify the session as cursor");
+    expect(cursor).toContain("classifies the session as cursor");
   });
 
   test("commands directory keeps the default command scan from registering bare names", () => {
@@ -129,7 +141,7 @@ describe("Cursor CLI plugin package", () => {
       expect(present.exitCode).toBe(0);
       const stdout = present.stdout.toString();
       expect(stdout).toContain(`agent --plugin-dir ${pluginRoot}`);
-      expect(stdout).toContain("does not classify the session as cursor");
+      expect(stdout).toContain("classifies the session as cursor");
       expect(stdout).toContain("does not run hooks");
       expect(stdout).not.toContain("marketplace");
     } finally {
