@@ -77,16 +77,17 @@ gen_cert catrue "IP:10.0.1.40"           "CA:TRUE"  "serverAuth"
 gen_cert loop  "IP:127.0.0.1"            "CA:FALSE" "serverAuth" "/CN=loopback-anchor"
 
 # An expired self-signed certificate (openssl ca -selfsign with an explicit validity window).
-make_expired() {
-  local d="$FX/exp"; mkdir -p "$d"
+make_expired() { # [name] [IP SAN]: FX/<name>.crt + .key, an expired self-signed CA:FALSE certificate
+  local name="${1:-expired}" ip="${2:-10.0.1.40}" d="$FX/exp-${1:-expired}"; mkdir -p "$d"
   ( cd "$d" || exit 1
     openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout k.pem -out r.csr -subj /CN=soleur-inngest-link >/dev/null 2>&1 || exit 1
-    printf '[ca]\ndefault_ca=c\n[c]\ndatabase=idx\nserial=serial\nnew_certs_dir=.\ndefault_md=sha256\npolicy=p\nunique_subject=no\n[p]\ncommonName=supplied\n[ext]\nsubjectAltName=IP:10.0.1.40\nbasicConstraints=critical,CA:FALSE\nextendedKeyUsage=serverAuth\n' > ca.cnf
+    printf '[ca]\ndefault_ca=c\n[c]\ndatabase=idx\nserial=serial\nnew_certs_dir=.\ndefault_md=sha256\npolicy=p\nunique_subject=no\n[p]\ncommonName=supplied\n[ext]\nsubjectAltName=IP:%s\nbasicConstraints=critical,CA:FALSE\nextendedKeyUsage=serverAuth\n' "$ip" > ca.cnf
     : > idx; echo 01 > serial
     openssl ca -batch -selfsign -config ca.cnf -keyfile k.pem -in r.csr -out out.pem -startdate 20200101000000Z -enddate 20200102000000Z -extensions ext -notext >/dev/null 2>&1 || exit 1
-    openssl x509 -in out.pem -outform PEM > "$FX/expired.crt" ) || die "could not synthesize the expired certificate"
+    openssl x509 -in out.pem -outform PEM > "$FX/$name.crt" && cp k.pem "$FX/$name.key" ) || die "could not synthesize the expired certificate"
 }
 make_expired
+make_expired expired-loop 127.0.0.1
 
 # Certificates whose PROFILE the deny-list must judge (security F1): a v3 certificate WITHOUT basicConstraints and with
 # keyUsage=keyCertSign is a working issuing CA; the real terraform profile (CA:FALSE, digitalSignature+keyEncipherment,
@@ -101,6 +102,13 @@ subjectAltName=IP:10.0.1.40"
 gen_cert_ext kcsfalse "basicConstraints=critical,CA:FALSE
 keyUsage=digitalSignature,keyCertSign
 subjectAltName=IP:10.0.1.40"
+# the conventional CA profile prints "Certificate Sign, CRL Sign" (the deny-list must not be anchored at the end of the line) and a
+# mid-list form "Digital Signature, Certificate Sign, CRL Sign"
+gen_cert_ext kcscrl "keyUsage=keyCertSign,cRLSign
+subjectAltName=IP:10.0.1.40"
+gen_cert_ext kcsmid "basicConstraints=critical,CA:FALSE
+keyUsage=digitalSignature,keyCertSign,cRLSign
+subjectAltName=IP:10.0.1.40"
 gen_cert_ext tfprofile "basicConstraints=critical,CA:FALSE
 keyUsage=critical,digitalSignature,keyEncipherment
 extendedKeyUsage=serverAuth
@@ -114,6 +122,8 @@ cp "$FX/catrue.crt" "$FX/v-catrue.pem"
 cp "$FX/expired.crt" "$FX/v-expired.pem"
 cp "$FX/kcsnobc.crt" "$FX/v-kcsnobc.pem"
 cp "$FX/kcsfalse.crt" "$FX/v-kcsfalse.pem"
+cp "$FX/kcscrl.crt" "$FX/v-kcscrl.pem"
+cp "$FX/kcsmid.crt" "$FX/v-kcsmid.pem"
 cp "$FX/tfprofile.crt" "$FX/v-tfprofile.pem"
 cat "$FX/good.crt" "$FX/good.crt" "$FX/good.crt" > "$FX/v-three.pem"
 cat "$FX/good.crt" "$FX/other.crt" > "$FX/v-two.pem"
@@ -146,7 +156,10 @@ cat > "$BIN/curl" <<'STUB'
 #   --cacert F, F fingerprint match  -> 200
 #   no --cacert / mismatch / no PEM  -> exit 60 (certificate verification failed)
 printf '%s\n' "$*" >> "${RUN_DIR:?}/curl.argv"
-if [ "${FX_CURL_ALWAYS_OK:-}" = 1 ]; then printf '200'; exit 0; fi
+n=$(( $(cat "$RUN_DIR/curl.count" 2>/dev/null || echo 0) + 1 )); printf '%s' "$n" > "$RUN_DIR/curl.count"
+# FX_CURL_FAIL_FIRST=N: the first N calls fail verification (exit 60); FX_CURL_CODE: the HTTP code a TLS-verified call reports
+if [ -n "${FX_CURL_FAIL_FIRST:-}" ] && [ "$n" -le "$FX_CURL_FAIL_FIRST" ]; then exit 60; fi
+if [ "${FX_CURL_ALWAYS_OK:-}" = 1 ]; then printf '%s' "${FX_CURL_CODE:-200}"; exit 0; fi
 cacert=""; insecure=0; prev=""
 for a in "$@"; do
   case "$a" in -k|--insecure|-sk|-ks) insecure=1 ;; esac
@@ -157,11 +170,12 @@ if [ "$insecure" = 1 ]; then printf '200'; exit 0; fi
 [ -n "$cacert" ] || exit 60
 want="$(openssl x509 -in "$FX_SERVER_CERT" -noout -fingerprint -sha256 2>/dev/null)"
 got="$(openssl x509 -in "$cacert" -noout -fingerprint -sha256 2>/dev/null)"
-if [ -n "$got" ] && [ "$got" = "$want" ]; then printf '200'; exit 0; fi
+if [ -n "$got" ] && [ "$got" = "$want" ]; then printf '%s' "${FX_CURL_CODE:-200}"; exit 0; fi
 exit 60
 STUB
 cat > "$BIN/sleep" <<'STUB'
 #!/bin/bash
+printf '%s\n' "$*" >> "${RUN_DIR:?}/sleep.log"
 exit 0
 STUB
 cat > "$BIN/date" <<'STUB'
@@ -223,7 +237,7 @@ scenario() { # <block file> <run id>
   RUN="$RUNS/$id"; LINKDIR="$RUN/linkdir"
   assert_fixture_dir "$RUN"
   rm -rf "$RUN"; mkdir -p "$LINKDIR" || die "mkdir $LINKDIR"
-  : > "$RUN/logger.log"; : > "$RUN/curl.argv"; : > "$RUN/doppler.calls"
+  : > "$RUN/logger.log"; : > "$RUN/curl.argv"; : > "$RUN/doppler.calls"; : > "$RUN/sleep.log"
   snap="$RUN/snapshot.env"
   { printf '%b' "${SNAP_SCOPE-DOPPLER_PROJECT=soleur\nDOPPLER_CONFIG=prd\nDOPPLER_ENVIRONMENT=prd\n}"
     printf 'KEY=value\nGITHUB_APP_ID=4242\n'
@@ -232,7 +246,7 @@ scenario() { # <block file> <run id>
   [ -n "${PRE:-}" ] && ( cd "$LINKDIR" && eval "$PRE" )
   (
     export FX_NOW="$NOW"
-    export RUN_DIR="$RUN" FX_SERVER_CERT="${SERVER_CERT:-$FX/good.crt}" FX_CURL_ALWAYS_OK="${CURL_ALWAYS_OK:-}"
+    export RUN_DIR="$RUN" FX_SERVER_CERT="${SERVER_CERT:-$FX/good.crt}" FX_CURL_ALWAYS_OK="${CURL_ALWAYS_OK:-}" FX_CURL_FAIL_FIRST="${CURL_FAIL_FIRST:-}" FX_CURL_CODE="${CURL_CODE:-}"
     export PATH="$BIN:${PATH_OVERRIDE:-$PATH}"
     LOG_TAG=ci-deploy
     unset SENTRY_INGEST_DOMAIN SENTRY_PROJECT_ID SENTRY_PUBLIC_KEY
@@ -240,7 +254,7 @@ scenario() { # <block file> <run id>
     # shellcheck disable=SC1090
     source "$block" || exit 99
     INNGEST_LINK_DIR="$LINKDIR${LINK_SUBDIR:+/$LINK_SUBDIR}"
-    INNGEST_LINK_SELFGATE_ATTEMPTS=2
+    if [ "${SG_ATTEMPTS-2}" = unset ]; then unset INNGEST_LINK_SELFGATE_ATTEMPTS; else INNGEST_LINK_SELFGATE_ATTEMPTS="${SG_ATTEMPTS-2}"; fi
     _doppler_get_observed() { # <NAME> <DEST_VAR>: the real contract, driven by CA_MODE
       printf '%s\n' "$1" >> "$RUN/doppler.calls"
       CRED_RC=0; CRED_EMPTY=0; CRED_ERR=""
@@ -254,6 +268,9 @@ scenario() { # <block file> <run id>
     }
     rc=0
     resolve_inngest_link "$snap" || rc=$?
+    # the deploy records the scheme only once the production container started (ci-deploy.sh calls inngest_link_commit_scheme there);
+    # NO_COMMIT=1 models a deploy that died before that point (failed canary, aborted swap)
+    if [ "$rc" = 0 ] && [ "${NO_COMMIT:-}" != 1 ]; then inngest_link_commit_scheme; fi
     {
       printf 'rc=%s\n' "$rc"
       printf 'url=%s\n' "${INNGEST_BASE_URL_RESOLVED-<unset>}"
@@ -268,6 +285,8 @@ caf() { printf '%s/inngest-ca.pem' "$LINKDIR"; }
 envf() { printf '%s/inngest-link.env' "$LINKDIR"; }
 ca_fp() { fp "$(caf)"; }
 leftovers() { ls -A "$LINKDIR" 2>/dev/null | grep -vxE 'inngest-ca\.pem|inngest-link\.env|last-scheme' || true; }
+curl_calls() { cat "$RUN/curl.count" 2>/dev/null || echo 0; }
+sleep_calls() { wc -l < "$RUN/sleep.log" | tr -d ' '; }
 doppler_calls() { wc -l < "$RUN/doppler.calls" | tr -d ' '; }
 b64f() { base64 -w0 < "$1"; }
 log_has() { grep -qF -- "$1" "$RUN/logger.log"; }
@@ -347,12 +366,15 @@ row_A3_pending_live_https() {
   ok_https || return 1
   need "state=$(val state)" "$([ "$(val state)" = https_pending ] && echo 0 || echo 1)" || return 1
 }
-row_A3b_pending_upper_boundaries() {
-  # epoch exactly now+1860 (the 31-minute skew bound) is honoured; now-1799 is still inside the lease
-  SNAP_EXTRA="INNGEST_LINK_TLS=pending:$((NOW + 1800))\n" CA_MODE=ok scenario "$1" "$ROW_ID-a"
-  ok_https || return 1
-  SNAP_EXTRA="INNGEST_LINK_TLS=pending:$((NOW - 1790))\n" CA_MODE=ok scenario "$1" "$ROW_ID-b"
-  ok_https || return 1
+row_A3b_pending_honoured_boundaries() {
+  # the pinned clock makes the boundaries exact: epoch == now+1860 (the 31-minute skew bound) is honoured, and so is now-1799
+  # (one second before the 30-minute lease ends); now+1861 is refused in B2 and now-1800 is expired in B1
+  local d
+  for d in 1860 -1799; do
+    SNAP_EXTRA="INNGEST_LINK_TLS=pending:$((NOW + d))\n" CA_MODE=ok scenario "$1" "$ROW_ID$d"
+    ok_https || return 1
+    need "epoch now${d/#[0-9]/+}: state=$(val state)" "$([ "$(val state)" = https_pending ] && echo 0 || echo 1)" || return 1
+  done
 }
 
 # --- Guard 1 row 5: the self-gate ---------------------------------------------------------------
@@ -392,6 +414,47 @@ row_A6c_strict_falls_back_to_doppler_when_snapshot_lacks_ca() {
   need "Doppler was not asked for the CA" "$([ "$(doppler_calls)" = 1 ] && echo 0 || echo 1)" || return 1
 }
 
+# --- the self-gate itself: --disable leads, a verified non-200 fails, and the retry loop retries ---------------------------------
+row_A7_selfgate_leads_with_disable_and_requires_200() {
+  SNAP_EXTRA="$ONFLAG" CA_MODE=ok scenario "$1" "$ROW_ID-a"
+  ok_https || return 1
+  need "the self-gate curl does not lead with --disable (a ~/.curlrc could void the verdict): $(head -n1 "$RUN/curl.argv")" \
+    "$(case "$(head -n1 "$RUN/curl.argv")" in "--disable "*) echo 0 ;; *) echo 1 ;; esac)" || return 1
+  # a TLS-verified answer that is not 200 (a terminator answering 502 with a valid certificate) is not a pass
+  CURL_CODE=502 SNAP_EXTRA="$ONFLAG" CA_MODE=ok scenario "$1" "$ROW_ID-502"
+  fails_closed || return 1
+  need "reason=$(val reason)" "$([ "$(val reason)" = inngest_link_selfgate_failed ] && echo 0 || echo 1)" || return 1
+  need "the selfgate_failed event does not carry rc=0 http=502: $(grep selfgate_failed "$RUN/logger.log")" "$(log_has 'class=selfgate_failed level=error rc=0 http=502' && echo 0 || echo 1)" || return 1
+  need "a 502 answer installed a CA" "$([ ! -s "$(caf)" ] && echo 0 || echo 1)" || return 1
+}
+row_A8_selfgate_retries_with_a_pause() {
+  # fails once, then verifies: resolves https after exactly two calls and one sleep
+  CURL_FAIL_FIRST=1 SNAP_EXTRA="$ONFLAG" CA_MODE=ok scenario "$1" "$ROW_ID-once"
+  ok_https || return 1
+  need "calls=$(curl_calls), want 2 (one failure, one success)" "$([ "$(curl_calls)" = 2 ] && echo 0 || echo 1)" || return 1
+  need "sleeps=$(sleep_calls), want 1 between the two tries" "$([ "$(sleep_calls)" = 1 ] && echo 0 || echo 1)" || return 1
+  # fails every attempt (ATTEMPTS=2): exactly 2 calls, 1 sleep, then the deploy fails
+  CURL_FAIL_FIRST=99 SNAP_EXTRA="$ONFLAG" CA_MODE=ok scenario "$1" "$ROW_ID-all"
+  fails_closed || return 1
+  need "reason=$(val reason)" "$([ "$(val reason)" = inngest_link_selfgate_failed ] && echo 0 || echo 1)" || return 1
+  need "calls=$(curl_calls), want 2 attempts" "$([ "$(curl_calls)" = 2 ] && echo 0 || echo 1)" || return 1
+  need "sleeps=$(sleep_calls), want 1" "$([ "$(sleep_calls)" = 1 ] && echo 0 || echo 1)" || return 1
+  need "no sleep of 2 seconds was requested: $(cat "$RUN/sleep.log")" "$([ "$(head -n1 "$RUN/sleep.log")" = 2 ] && echo 0 || echo 1)" || return 1
+  # the production default (INNGEST_LINK_SELFGATE_ATTEMPTS unset) is 3 attempts
+  SG_ATTEMPTS=unset CURL_FAIL_FIRST=99 SNAP_EXTRA="$ONFLAG" CA_MODE=ok scenario "$1" "$ROW_ID-default"
+  need "default attempts: calls=$(curl_calls), want 3" "$([ "$(curl_calls)" = 3 ] && echo 0 || echo 1)" || return 1
+  need "default attempts: sleeps=$(sleep_calls), want 2" "$([ "$(sleep_calls)" = 2 ] && echo 0 || echo 1)" || return 1
+}
+row_A6d_duplicate_snapshot_ca_lines_are_not_trusted() {
+  # two INNGEST_TLS_CA lines are ambiguous: neither is taken (the last one here is hostile); the resolver asks Doppler instead
+  SNAP_EXTRA="${ONFLAG}INNGEST_TLS_CA=$(b64f "$FX/v-good.pem")\nINNGEST_TLS_CA=$(b64f "$FX/v-kcsnobc.pem")\n" CA_MODE=ok CA_FILE="$FX/v-good.pem" scenario "$1" "$ROW_ID"
+  ok_https || return 1
+  need "the snapshot CA was used despite two lines (doppler calls=$(doppler_calls))" "$([ "$(doppler_calls)" = 1 ] && echo 0 || echo 1)" || return 1
+  SNAP_EXTRA="${ONFLAG}INNGEST_TLS_CA=$(b64f "$FX/v-good.pem")\nINNGEST_TLS_CA=$(b64f "$FX/v-good.pem")\n" CA_MODE=absent scenario "$1" "$ROW_ID-absent"
+  fails_closed || return 1
+  need "reason=$(val reason)" "$([ "$(val reason)" = inngest_link_ca_unavailable ] && echo 0 || echo 1)" || return 1
+}
+
 # --- security F2: the self-gate runs on the candidate, install is last, a failed gate leaves the previous file alone ----
 row_F2_selfgate_failure_leaves_previous_ca() {
   PRE='cp "$FX/other.crt" inngest-ca.pem' SNAP_EXTRA="$ONFLAG" CA_MODE=ok CA_FILE="$FX/v-good.pem" SERVER_CERT="$FX/other.crt" scenario "$1" "$ROW_ID"
@@ -410,6 +473,8 @@ row_F2b_selfgate_failure_installs_nothing_when_no_previous() {
 # --- security F1(c): the issuing-CA shapes the old CA:TRUE-only deny-list let through ------------------------------------
 row_F1_kcs_without_basicconstraints_rejected() { BLK="$1" ca_rejected "$FX/v-kcsnobc.pem" "keyCertSign with NO basicConstraints (a working issuing CA)" "ca"; }
 row_F1b_kcs_with_ca_false_rejected() { BLK="$1" ca_rejected "$FX/v-kcsfalse.pem" "CA:FALSE but keyUsage Certificate Sign" "ca"; }
+row_F1d_kcs_with_crl_sign_rejected() { BLK="$1" ca_rejected "$FX/v-kcscrl.pem" "keyUsage 'Certificate Sign, CRL Sign' (the conventional CA profile; Certificate Sign is NOT the end of the line)" "ca"; }
+row_F1e_kcs_mid_list_rejected() { BLK="$1" ca_rejected "$FX/v-kcsmid.pem" "keyUsage 'Digital Signature, Certificate Sign, CRL Sign'" "ca"; }
 row_F1c_terraform_profile_accepted() {
   # the real inngest-tls.tf profile (CA:FALSE, digitalSignature+keyEncipherment, serverAuth, IP SAN) must stay accepted
   SNAP_EXTRA="$ONFLAG" CA_MODE=ok CA_FILE="$FX/v-tfprofile.pem" SERVER_CERT="$FX/tfprofile.crt" scenario "$1" "$ROW_ID"
@@ -430,9 +495,12 @@ row_B1_lease_expired_http() {
   need "the boundary now==epoch+1800 must be expired (state=$(val state))" "$([ "$(val state)" = http_lease_expired ] && echo 0 || echo 1)" || return 1
 }
 row_B2_pending_too_far_ahead_fails() {
-  SNAP_EXTRA="INNGEST_LINK_TLS=pending:$((NOW + 1900))\n" CA_MODE=ok scenario "$1" "$ROW_ID"
-  fails_closed || return 1
-  need "reason=$(val reason)" "$([ "$(val reason)" = inngest_link_flag_invalid ] && echo 0 || echo 1)" || return 1
+  local d
+  for d in 1900 1861; do   # 1861 is the first second past the 31-minute skew bound
+    SNAP_EXTRA="INNGEST_LINK_TLS=pending:$((NOW + d))\n" CA_MODE=ok scenario "$1" "$ROW_ID$d"
+    fails_closed || return 1
+    need "now+$d: reason=$(val reason)" "$([ "$(val reason)" = inngest_link_flag_invalid ] && echo 0 || echo 1)" || return 1
+  done
 }
 row_B3_non_allowlisted_fail() {
   local v
@@ -540,12 +608,18 @@ row_C9_flag_off_never_reads_or_installs_ca() {
     need "$v: a ca_invalid event was emitted with the flag off" "$(log_has 'class=ca_invalid' && echo 1 || echo 0)" || return 1
   done
 }
-row_C9b_flag_off_existing_file_untouched() {
-  # the placeholder is created only if MISSING: a regular file already there (an earlier placeholder, or the CA an https deploy
-  # installed) is left exactly as it is
-  PRE='cp "$FX/good.crt" inngest-ca.pem' SNAP_EXTRA='' CA_MODE=absent scenario "$1" "$ROW_ID"
+row_C9b_flag_off_replaces_a_stale_pinned_ca_through_a_new_inode() {
+  # on->off: the pinned CA of an earlier https deploy must not stay mounted in the http state. It is replaced by the empty
+  # placeholder through a NEW inode (a hard link outside the dir stands for the still-running container's bind mount: it must keep
+  # the bytes it mounted). An already-empty placeholder is left alone.
+  PRE='cp "$FX/good.crt" inngest-ca.pem && ln inngest-ca.pem "../held.pem"' SNAP_EXTRA='' CA_MODE=absent scenario "$1" "$ROW_ID"
   need "rc=$(val rc)" "$([ "$(val rc)" = 0 ] && echo 0 || echo 1)" || return 1
-  need "an existing CA file was rewritten by a flag-off resolve" "$([ "$(ca_fp)" = "$GOOD_FP" ] && echo 0 || echo 1)" || return 1
+  need "a non-empty pinned CA survived a flag-off resolve" "$([ -f "$(caf)" ] && [ ! -s "$(caf)" ] && echo 0 || echo 1)" || return 1
+  need "the CA path was truncated IN PLACE (the running container's inode lost its bytes)" "$([ "$(fp "$RUN/held.pem")" = "$GOOD_FP" ] && echo 0 || echo 1)" || return 1
+  need "the CA path still shares the old inode" "$([ "$(stat -c %i "$(caf)")" != "$(stat -c %i "$RUN/held.pem")" ] && echo 0 || echo 1)" || return 1
+  need "Doppler was asked for the CA" "$([ "$(doppler_calls)" = 0 ] && echo 0 || echo 1)" || return 1
+  PRE=': > inngest-ca.pem && ln inngest-ca.pem "../held.pem"' SNAP_EXTRA='' CA_MODE=absent scenario "$1" "$ROW_ID-empty"
+  need "an already-empty placeholder was replaced (inode changed)" "$([ "$(stat -c %i "$(caf)")" = "$(stat -c %i "$RUN/held.pem")" ] && echo 0 || echo 1)" || return 1
 }
 row_C9c_flag_off_lapsed_lease_never_installs_ca() {
   SNAP_EXTRA="INNGEST_LINK_TLS=pending:$((NOW - 1900))\n" CA_MODE=ok CA_FILE="$FX/v-good.pem" scenario "$1" "$ROW_ID"
@@ -668,8 +742,51 @@ row_G5_downgrade_event_reaches_sentry() {
   # the cq-silent-fallback mirror: a warning is POSTed to Sentry (store endpoint, classification tag), the info `resolved` row is not
   PRE='printf "https\n" > last-scheme' KEEP_SENTRY=1 SNAP_EXTRA='' CA_MODE=absent scenario "$1" "$ROW_ID"
   need "no POST to the Sentry store endpoint for https_to_http: $(cat "$RUN/curl.argv")" "$(grep -q 'https://sentry.invalid/api/7/store/' "$RUN/curl.argv" && echo 0 || echo 1)" || return 1
+  need "the Sentry POST does not lead with --disable: $(grep 'store/' "$RUN/curl.argv" | head -n1 | cut -c1-60)" "$(case "$(grep 'store/' "$RUN/curl.argv" | head -n1)" in "--disable "*) echo 0 ;; *) echo 1 ;; esac)" || return 1
   need "the Sentry body does not carry the https_to_http classification" "$(grep -q 'https_to_http' "$RUN/curl.argv" && echo 0 || echo 1)" || return 1
   need "exactly one Sentry POST expected (the info resolved row must stay off Sentry): $(grep -c 'store/' "$RUN/curl.argv")" "$([ "$(grep -c 'store/' "$RUN/curl.argv")" = 1 ] && echo 0 || echo 1)" || return 1
+}
+
+row_G6_scheme_is_recorded_only_after_the_container_started() {
+  # a flip whose canary failed (the deploy died before the production start) must leave the memory alone, so the revert's
+  # flag-off deploy is not a spurious https->http downgrade
+  NO_COMMIT=1 SNAP_EXTRA="$ONFLAG" CA_MODE=ok scenario "$1" "$ROW_ID-a"
+  need "rc=$(val rc)" "$([ "$(val rc)" = 0 ] && echo 0 || echo 1)" || return 1
+  need "last-scheme was written at resolve time: [$(last)]" "$([ ! -e "$LINKDIR/last-scheme" ] && echo 0 || echo 1)" || return 1
+  PRE='printf "http\n" > last-scheme' NO_COMMIT=1 SNAP_EXTRA="$ONFLAG" CA_MODE=ok scenario "$1" "$ROW_ID-b"
+  need "an aborted https deploy flipped last-scheme to [$(last)]" "$([ "$(last)" = http ] && echo 0 || echo 1)" || return 1
+  # ...and the revert (flag off) that follows is then NOT a downgrade
+  PRE='printf "http\n" > last-scheme' SNAP_EXTRA='' CA_MODE=absent scenario "$1" "$ROW_ID-revert"
+  need "a revert after a never-started https deploy emitted https_to_http" "$(log_has 'class=https_to_http' && echo 1 || echo 0)" || return 1
+}
+row_H5_unverified_scope_after_https_fails_closed() {
+  local s
+  for s in '' 'DOPPLER_PROJECT=soleur\n' 'DOPPLER_CONFIG=prd\n'; do
+    PRE='printf "https\n" > last-scheme' SNAP_SCOPE="$s" SNAP_EXTRA='' CA_MODE=absent scenario "$1" "$ROW_ID"
+    fails_closed || return 1
+    need "scope [$s]: reason=$(val reason)" "$([ "$(val reason)" = inngest_link_scope_mismatch ] && echo 0 || echo 1)" || return 1
+    need "scope [$s]: the event does not read field=unverified previous=https" "$(log_has 'class=scope_mismatch level=error field=unverified previous=https' && echo 0 || echo 1)" || return 1
+    need "scope [$s]: last-scheme was overwritten: [$(last)]" "$([ "$(last)" = https ] && echo 0 || echo 1)" || return 1
+    need "scope [$s]: the deploy would have started on cleartext (url=$(val url))" "$([ -z "$(val url)" ] && echo 0 || echo 1)" || return 1
+  done
+}
+row_H5b_unverified_scope_without_https_memory_continues_and_records_nothing() {
+  local m
+  SNAP_SCOPE='' SNAP_EXTRA='' CA_MODE=absent scenario "$1" "$ROW_ID-none"
+  need "no memory: rc=$(val rc) reason=$(val reason)" "$([ "$(val rc)" = 0 ] && [ "$(val url)" = http://10.0.1.40:8288 ] && echo 0 || echo 1)" || return 1
+  need "an unverified-scope run recorded a scheme: [$(last)]" "$([ ! -e "$LINKDIR/last-scheme" ] && echo 0 || echo 1)" || return 1
+  for m in http 'garbage'; do
+    PRE="printf '$m\\n' > last-scheme" SNAP_SCOPE='DOPPLER_CONFIG=prd\n' SNAP_EXTRA='' CA_MODE=absent scenario "$1" "$ROW_ID-$m"
+    need "memory [$m]: rc=$(val rc) reason=$(val reason)" "$([ "$(val rc)" = 0 ] && echo 0 || echo 1)" || return 1
+    need "memory [$m]: the scope_unverified warning is missing" "$(log_has 'class=scope_unverified level=warning' && echo 0 || echo 1)" || return 1
+    need "memory [$m]: an unverified run rewrote last-scheme to [$(last)]" "$([ "$(last)" = "$m" ] && echo 0 || echo 1)" || return 1
+  done
+}
+row_H5c_verified_scope_off_after_https_warns_and_proceeds() {
+  PRE='printf "https\n" > last-scheme' SNAP_EXTRA='' CA_MODE=absent scenario "$1" "$ROW_ID"
+  need "rc=$(val rc) reason=$(val reason)" "$([ "$(val rc)" = 0 ] && [ "$(val url)" = http://10.0.1.40:8288 ] && echo 0 || echo 1)" || return 1
+  need "no https_to_http warning" "$(log_has 'class=https_to_http level=warning' && echo 0 || echo 1)" || return 1
+  need "the verified off was not recorded: [$(last)]" "$([ "$(last)" = http ] && echo 0 || echo 1)" || return 1
 }
 
 # --- one directory: the resolver default, the docker bind sources and the probes' defaults are the same literal --------------
@@ -768,6 +885,12 @@ row_E7_canary_event_carries_check_and_cause() {
   done
   FX_NEG='inngest_link_canary_neg=accepted' canary "$1" "$ROW_ID"
   need "negative control accepted: the event does not read 'check=negative_control cause=accepted'" "$(log_has 'class=canary_failed level=error check=negative_control cause=accepted' && echo 0 || echo 1)" || return 1
+  for t in 'inngest_link_canary_neg=a;rm -rf' 'inngest_link_canary_neg=aaaaaaaaaaaaaaaaaaaaaaaaa' 'inngest_link_canary_neg=ACCEPTED' 'inngest_link_canary_neg=other
+class=forged level=info'; do
+    FX_NEG="$t" canary "$1" "$ROW_ID"
+    need "hostile negative-control token [$t] did not read cause=no_verdict: $(grep canary_failed "$RUN/logger.log")" "$(log_has 'class=canary_failed level=error check=negative_control cause=no_verdict' && echo 0 || echo 1)" || return 1
+    need "hostile negative-control token [$t] forged a second event line" "$([ "$(grep -c 'class=forged' "$RUN/logger.log")" = 0 ] && echo 0 || echo 1)" || return 1
+  done
   FX_INSPECT=http canary "$1" "$ROW_ID"
   need "inspect failure: the event does not read 'check=inspect cause=none'" "$(log_has 'class=canary_failed level=error check=inspect cause=none' && echo 0 || echo 1)" || return 1
   FX_POS='garbage' canary "$1" "$ROW_ID"
@@ -787,16 +910,18 @@ row_E6_canary_unparseable_output_is_a_failure() {
 
 ROW_IDS=(
   A1_unset_http A1b_unset_with_ca_never_installed A1c_unset_empty_value_is_absent
-  A2_flag_on_https A3_pending_live_https A3b_pending_upper_boundaries
+  A2_flag_on_https A3_pending_live_https A3b_pending_honoured_boundaries
   A4_wrong_server_fails_closed A4b_pending_wrong_server_fails_closed A5_ca_absent_fails A5b_ca_read_error_fails A5c_ca_empty_fails A5d_pending_ca_absent_fails
-  A6_strict_reads_ca_from_snapshot A6b_snapshot_ca_invalid_fails_without_fallback A6c_strict_falls_back_to_doppler_when_snapshot_lacks_ca
-  F2_selfgate_failure_leaves_previous_ca F2b_selfgate_failure_installs_nothing_when_no_previous F1_kcs_without_basicconstraints_rejected F1b_kcs_with_ca_false_rejected F1c_terraform_profile_accepted
+  A6_strict_reads_ca_from_snapshot A6b_snapshot_ca_invalid_fails_without_fallback A6c_strict_falls_back_to_doppler_when_snapshot_lacks_ca A6d_duplicate_snapshot_ca_lines_are_not_trusted
+  A7_selfgate_leads_with_disable_and_requires_200 A8_selfgate_retries_with_a_pause
+  F2_selfgate_failure_leaves_previous_ca F2b_selfgate_failure_installs_nothing_when_no_previous F1_kcs_without_basicconstraints_rejected F1b_kcs_with_ca_false_rejected F1c_terraform_profile_accepted F1d_kcs_with_crl_sign_rejected F1e_kcs_mid_list_rejected
   B1_lease_expired_http B2_pending_too_far_ahead_fails B3_non_allowlisted_fail B4_snapshot_unreadable_fails B5_scope_guard_present_and_wrong_fails B5b_scope_lines_absent_flag_absent_warns_and_continues B5c_scope_lines_absent_flag_set_fails_closed B6_duplicate_flag_fails
   C_privkey_concat C_privkey_prefixed C_privkey_only C_catrue C_expired C_three C_two C_garbage C_oversize C_tool_missing_fails_closed C_empty_value C_bad_base64 C_huge_base64
-  C9_flag_off_never_reads_or_installs_ca C9b_flag_off_existing_file_untouched C9c_flag_off_lapsed_lease_never_installs_ca
+  C9_flag_off_never_reads_or_installs_ca C9b_flag_off_replaces_a_stale_pinned_ca_through_a_new_inode C9c_flag_off_lapsed_lease_never_installs_ca
   H2_noncanonical_passes H2b_unset_and_valid_pass
   D1_link_env_not_derived_from_text D3_dest_is_directory D4_install_failure_fails_strict D5_missing_dir_is_created
   G1_https_to_http_emits G2_no_event_without_a_downgrade G3_corrupt_last_scheme_reads_as_unknown G4_last_scheme_is_atomic_and_world_readable G5_downgrade_event_reaches_sentry
+  G6_scheme_is_recorded_only_after_the_container_started H5_unverified_scope_after_https_fails_closed H5b_unverified_scope_without_https_memory_continues_and_records_nothing H5c_verified_scope_off_after_https_warns_and_proceeds
   K1_default_dir_matches_docker_bind_source_and_probes
   E1_canary_flag_off_is_a_noop E2_canary_all_good E3_canary_inspect_must_show_https E4_canary_each_positive_check_gates
   E5_canary_negative_control_must_fail_verification E6_canary_unparseable_output_is_a_failure E7_canary_event_carries_check_and_cause
@@ -910,7 +1035,7 @@ if command -v node >/dev/null 2>&1; then
   ( source "$BLOCK_REAL" >/dev/null 2>&1; printf '%s' "$INNGEST_LINK_CANARY_NEG" ) > "$WORK/canary-neg.js"
   cat > "$WORK/canary-harness.cjs" <<'JS'
 const https = require("https"), fs = require("fs"), crypto = require("crypto"), { spawn } = require("child_process");
-const [cert, key, posf, negf] = process.argv.slice(2);
+const [cert, key, posf, negf, xcert, xkey] = process.argv.slice(2);
 const POS = fs.readFileSync(posf, "utf8"), NEG = fs.readFileSync(negf, "utf8");
 const HEX = "ab".repeat(32), SK = "signkey-prod-" + HEX, EK = "evkey123";
 let mode = "ok", auth = "", sendBody = "", sendPath = "";
@@ -919,6 +1044,7 @@ const srv = https.createServer({ cert: fs.readFileSync(cert), key: fs.readFileSy
   q.on("end", () => {
     const u = q.url.split("?")[0];
     const reply = (code, obj) => { r.statusCode = code; r.setHeader("content-type", "application/json"); r.end(JSON.stringify(obj)); };
+    if (u === "/health" && mode === "garbage") { q.socket.write("THIS IS NOT HTTP\r\n\r\n"); return setTimeout(() => q.socket.destroy(), 200); }
     if (u === "/health") return reply(mode === "health503" ? 503 : 200, {});
     if (u === "/v1/events") { auth = q.headers.authorization || ""; return reply(mode === "events401" ? 401 : 200, { data: [] }); }
     if (u.startsWith("/e/")) { sendBody = body; sendPath = u; return reply(200, { ids: ["x"] }); }
@@ -945,6 +1071,17 @@ srv.listen(0, "127.0.0.1", async () => {
   mode = "ok"; out.push(["pos_noca", await run(POS, NOCA)]);
   out.push(["neg_withca", await run(NEG, E)]);
   out.push(["neg_noca", await run(NEG, NOCA)]);
+  mode = "garbage"; out.push(["pos_unmapped", await run(POS, E)]);
+  // an EXPIRED (but pinned) certificate: a second listener presenting it, trusted through NODE_EXTRA_CA_CERTS
+  await new Promise((res) => {
+    const xsrv = https.createServer({ cert: fs.readFileSync(xcert), key: fs.readFileSync(xkey) }, (q, r) => { r.end("{}"); });
+    xsrv.listen(0, "127.0.0.1", async () => {
+      const XE = Object.assign({}, E, { INNGEST_BASE_URL: "https://127.0.0.1:" + xsrv.address().port, NODE_EXTRA_CA_CERTS: xcert });
+      out.push(["pos_expired", await run(POS, XE)]);
+      out.push(["neg_expired", await run(NEG, XE)]);
+      xsrv.close(); res();
+    });
+  });
   srv.close();
   out.push(["pos_refused", await run(POS, E)]);
   out.push(["neg_refused", await run(NEG, E)]);
@@ -952,7 +1089,7 @@ srv.listen(0, "127.0.0.1", async () => {
   process.exit(0);
 });
 JS
-  H4="$(timeout 120 node "$WORK/canary-harness.cjs" "$FX/loop.crt" "$FX/loop.key" "$WORK/canary-pos.js" "$WORK/canary-neg.js" 2>&1)"
+  H4="$(timeout 120 node "$WORK/canary-harness.cjs" "$FX/loop.crt" "$FX/loop.key" "$WORK/canary-pos.js" "$WORK/canary-neg.js" "$FX/expired-loop.crt" "$FX/expired-loop.key" 2>&1)"
   h4() { grep -m1 "^$1|" <<< "$H4" | cut -d'|' -f2-; }
   h4_expect() { # <name> <expected>
     ROWS=$((ROWS + 1))
@@ -966,6 +1103,9 @@ JS
   h4_expect pos_events401 "inngest_link_canary health=ok events=fail:HTTP_401 send=ok registry=ok"
   h4_expect pos_emptyreg "inngest_link_canary health=ok events=ok send=ok registry=fail:EMPTY"
   h4_expect pos_noca "inngest_link_canary health=fail:$CAUSE_NOCA events=fail:$CAUSE_NOCA send=fail:$CAUSE_NOCA registry=fail:$CAUSE_NOCA"
+  h4_expect pos_unmapped "inngest_link_canary health=fail:other events=ok send=ok registry=ok"
+  h4_expect pos_expired "inngest_link_canary health=fail:CERT_HAS_EXPIRED events=fail:CERT_HAS_EXPIRED send=fail:CERT_HAS_EXPIRED registry=fail:CERT_HAS_EXPIRED"
+  h4_expect neg_expired "inngest_link_canary_neg=other"
   h4_expect pos_refused "inngest_link_canary health=fail:ECONNREFUSED events=fail:ECONNREFUSED send=fail:ECONNREFUSED registry=fail:ECONNREFUSED"
   h4_expect neg_withca "inngest_link_canary_neg=accepted"
   h4_expect neg_noca "inngest_link_canary_neg=verify_error"
@@ -977,7 +1117,7 @@ JS
     ok "H4 every positive-script line fits the host grammar"
   else bad "H4 a positive-script line does not fit the host grammar: $H4"; fi
 else
-  ROWS=$((ROWS + 11)); SKIP=$((SKIP + 11)); printf '[skip] H4 node is not installed: the canary scripts were not executed\n'
+  ROWS=$((ROWS + 14)); SKIP=$((SKIP + 14)); printf '[skip] H4 node is not installed: the canary scripts were not executed\n'
 fi
 
 # ---------------------------------------------------------------------------------------
@@ -1003,7 +1143,9 @@ PY
 kill_mut() { # <mutation id> "<row id> ..." <old> <new> [<old> <new>]...   (every named row must go RED)
   local mid="$1" rows="$2" blk id killed=0 total=0
   shift 2
-  blk="$(mut_block "$mid" "$@")" || exit 2
+  # an anchor that no longer matches is reported as its OWN [FAIL] and the battery continues (a nearby legitimate edit must not
+  # hide which behaviour rows still pass or fail behind a HARNESS ABORT)
+  blk="$(mut_block "$mid" "$@")" || { ROWS=$((ROWS + 1)); bad "mutation $mid: its anchor was not found in the block (or the edit changed nothing): the mutation did not land, update the anchor"; return 0; }
   for id in $rows; do
     total=$((total + 1))
     unset "RES[$id]"; run_rows "$blk" "$id"
@@ -1115,8 +1257,8 @@ kill_mut M12b-strict-install-failure-ignored "D3_dest_is_directory" \
 kill_mut M12e-empty-directory-not-removed "D3_dest_is_directory" \
   '  if [[ -d "$2" && ! -L "$2" ]]; then rmdir "$2" 2>/dev/null || true; fi
 ' ''
-kill_mut M12f-existing-file-overwritten-with-flag-off "C9b_flag_off_existing_file_untouched" \
-  'if [[ -f "$ca_dest" && ! -L "$ca_dest" ]]; then' 'if false; then'
+kill_mut M12f-stale-pinned-ca-left-mounted-with-flag-off "C9b_flag_off_replaces_a_stale_pinned_ca_through_a_new_inode" \
+  'if [[ -f "$ca_dest" && ! -L "$ca_dest" && ! -s "$ca_dest" ]]; then' 'if [[ -f "$ca_dest" && ! -L "$ca_dest" ]]; then'
 kill_mut M14a-selfgate-on-the-installed-path "A2_flag_on_https F2_selfgate_failure_leaves_previous_ca" \
   'if ! _inngest_link_selfgate "$cand"; then' 'if ! _inngest_link_selfgate "$ca_dest"; then'
 kill_mut M14b-install-before-gate "F2_selfgate_failure_leaves_previous_ca F2b_selfgate_failure_installs_nothing_when_no_previous A2_flag_on_https" \
@@ -1133,6 +1275,41 @@ kill_mut M15e-last-scheme-never-persisted "G1_https_to_http_emits G2_no_event_wi
   '"$INNGEST_LINK_DIR/last-scheme" 0644' '"$INNGEST_LINK_DIR/.last-scheme.x" 0644'
 kill_mut M15f-downgrade-fails-the-deploy "G1_https_to_http_emits" \
   'inngest_link_event https_to_http warning "state=$INNGEST_LINK_STATE previous=https"' 'inngest_link_event https_to_http warning "state=$INNGEST_LINK_STATE previous=https"; return 1'
+kill_mut M17a-unverified-scope-after-https-passes "H5_unverified_scope_after_https_fails_closed" \
+  'if [[ "$_IL_PREV" == https ]]; then INNGEST_LINK_REASON=inngest_link_scope_mismatch;' 'if false; then INNGEST_LINK_REASON=inngest_link_scope_mismatch;'
+kill_mut M17b-unverified-run-records-the-scheme "H5b_unverified_scope_without_https_memory_continues_and_records_nothing" \
+  'if [[ "$scope_verified" == 1 ]]; then INNGEST_LINK_PENDING_SCHEME="$scheme"; fi' 'INNGEST_LINK_PENDING_SCHEME="$scheme"'
+kill_mut M17c-scheme-recorded-at-resolve "G6_scheme_is_recorded_only_after_the_container_started" \
+  'if [[ "$scope_verified" == 1 ]]; then INNGEST_LINK_PENDING_SCHEME="$scheme"; fi' 'if [[ "$scope_verified" == 1 ]]; then INNGEST_LINK_PENDING_SCHEME="$scheme"; inngest_link_commit_scheme; fi'
+kill_mut M17d-unverified-scope-fails-every-flag-off-deploy "H5b_unverified_scope_without_https_memory_continues_and_records_nothing" \
+  '    scope_verified=0
+' '    scope_verified=0; INNGEST_LINK_REASON=inngest_link_scope_mismatch; return 1
+'
+kill_mut M17e-commit-never-records "G1_https_to_http_emits G4_last_scheme_is_atomic_and_world_readable" \
+  '  [[ "$INNGEST_LINK_PENDING_SCHEME" == https || "$INNGEST_LINK_PENDING_SCHEME" == http ]] || return 0' '  return 0'
+kill_mut M18a-selfgate-curl-without-disable "A7_selfgate_leads_with_disable_and_requires_200" \
+  'code="$(timeout 20 curl --disable --noproxy' 'code="$(timeout 20 curl --noproxy'
+kill_mut M18b-selfgate-accepts-any-http-code "A7_selfgate_leads_with_disable_and_requires_200" \
+  'if [[ "$rc" -eq 0 && "$code" == 200 ]]; then return 0; fi' 'if [[ "$rc" -eq 0 ]]; then return 0; fi'
+kill_mut M18c-selfgate-never-retries "A8_selfgate_retries_with_a_pause" \
+  'if [[ "$i" -ge "$max" ]]; then break; fi' 'break'
+kill_mut M18d-selfgate-retries-without-pause "A8_selfgate_retries_with_a_pause" \
+  '    sleep 2
+    i=$((i + 1))' '    i=$((i + 1))'
+kill_mut M18e-selfgate-default-one-attempt "A8_selfgate_retries_with_a_pause" \
+  'max="${INNGEST_LINK_SELFGATE_ATTEMPTS:-3}"' 'max="${INNGEST_LINK_SELFGATE_ATTEMPTS:-1}"'
+kill_mut M18f-future-bound-one-second-late "B2_pending_too_far_ahead_fails" \
+  'if (( epoch > now + 1860 )); then' 'if (( epoch > now + 1861 )); then'
+kill_mut M18g-future-bound-one-second-early "A3b_pending_honoured_boundaries" \
+  'if (( epoch > now + 1860 )); then' 'if (( epoch > now + 1859 )); then'
+kill_mut M18h-lease-ends-early "A3b_pending_honoured_boundaries" \
+  'elif (( now >= epoch + 1800 )); then' 'elif (( now >= epoch + 1795 )); then'
+kill_mut M18i-certificate-sign-anchored-at-line-end "F1d_kcs_with_crl_sign_rejected F1e_kcs_mid_list_rejected" \
+  "'CA:TRUE|Certificate Sign'" "'CA:TRUE|Certificate Sign\$'"
+kill_mut M18j-snapshot-takes-the-last-duplicate-ca "A6d_duplicate_snapshot_ca_lines_are_not_trusted" \
+  'if [[ "$_IL_N" == 1 && -n "$_IL_VAL" ]]; then' 'if [[ "$_IL_N" -ge 1 && -n "$_IL_VAL" ]]; then'
+kill_mut M18k-negative-control-cause-unbounded "E7_canary_event_carries_check_and_cause" \
+  '"$cause" =~ ^[a-z_]{1,20}$' '"$cause" =~ ^.*$'
 kill_mut M16a-link-dir-default-moved "K1_default_dir_matches_docker_bind_source_and_probes" \
   'INNGEST_LINK_DIR="${INNGEST_LINK_DIR:-/mnt/data/inngest-link}"' 'INNGEST_LINK_DIR="${INNGEST_LINK_DIR:-/mnt/data/inngest-link2}"'
 
@@ -1143,7 +1320,7 @@ kill_mut M16a-link-dir-default-moved "K1_default_dir_matches_docker_bind_source_
 printf '\n=== inngest-link-resolver: %d passed, %d failed, %d skipped (%d rows) ===\n' "$PASS" "$FAIL" "$SKIP" "$ROWS"
 # The anti-vacuity floor comes FIRST: scripts/guard-vacuity-floor.test.sh neuters every counter and runs the first floor it
 # finds, which must be this one (the accounting identity below holds trivially at zero).
-MIN_ROWS=135
+MIN_ROWS=163
 if [ "$ROWS" -lt "$MIN_ROWS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s rows ran, floor is %s\n' "$ROWS" "$MIN_ROWS" >&2
   exit 1

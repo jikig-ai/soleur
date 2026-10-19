@@ -611,6 +611,8 @@ test_rp_tls_handshake_mode() {
   case "$argv" in *"--cacert $LINK_TMP/ca.pem"*) echo "  PASS: (a) uses --cacert on the CA file"; PASS=$((PASS + 1)) ;; *) echo "  FAIL: (a) did not use --cacert (argv: $argv)"; FAIL=$((FAIL + 1)) ;; esac
   assert_eq "exactly two curl calls (verified, unverified)" "2" "$(wc -l < "$LINK_TMP/curl.argv" | tr -d ' ')"
   assert_eq "exactly one of the two carries --cacert" "1" "$(grep -c -- '--cacert' "$LINK_TMP/curl.argv")"
+  # --disable (skip ~/.curlrc) only works as curl's FIRST argument: BOTH legs must lead with it, or a curlrc `insecure`/`cacert` voids the proof
+  assert_eq "both handshake curls lead with --disable" "2" "$(grep -c '^--disable ' "$LINK_TMP/curl.argv")"
   case " $argv " in *" -k "*|*"--insecure"*|*"--capath"*) echo "  FAIL: handshake mode weakens verification"; FAIL=$((FAIL + 1)) ;; *) echo "  PASS: no -k/--insecure/--capath"; PASS=$((PASS + 1)) ;; esac
   case "$argv" in *"https://10.0.1.40:8443/health"*) echo "  PASS: probes https://10.0.1.40:8443/health"; PASS=$((PASS + 1)) ;; *) echo "  FAIL: wrong URL"; FAIL=$((FAIL + 1)) ;; esac
   # the verified leg fails -> non-zero
@@ -717,4 +719,24 @@ test_rp_no_verification_bypass_in_source
 test_rp_handshake_hook_wire
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
+
+# ANTI-VACUITY FLOOR (exact count). Reported by printf + exit, never through assert_eq/the counters it backstops (ADR-193): deleting
+# a block of rows (or neutering assert_eq so it stops counting) must be visible. First an instrument self-test: a subshell drives the
+# suite's own assert_eq once with a comparison that MUST fail and requires the FAIL counter, not PASS, to have moved.
+ST_GOT="$( PASS=0; FAIL=0; assert_eq selftest-must-fail 1 2 >/dev/null; printf '%s/%s' "$PASS" "$FAIL" )"
+if [[ "$ST_GOT" != "0/1" ]]; then
+  printf 'INSTRUMENT FAIL - %s: assert_eq self-test got pass/fail %s, want 0/1\n' "$(basename "${BASH_SOURCE[0]}")" "$ST_GOT" >&2
+  exit 2
+fi
+SELFTEST_PASSES=0
+REAL_PASSES=$((PASS - SELFTEST_PASSES))
+MIN_PASSES=128
+if [[ "$FAIL" -eq 0 && "$REAL_PASSES" -lt "$MIN_PASSES" ]]; then
+  printf 'FATAL: anti-vacuity floor - %s assertions passed, expected exactly %s (a block of rows was deleted or skipped)\n' "$REAL_PASSES" "$MIN_PASSES" >&2
+  exit 1
+fi
+if [[ "$FAIL" -eq 0 && "$REAL_PASSES" -gt "$MIN_PASSES" ]]; then
+  printf 'FATAL: floor drift - %s assertions passed but MIN_PASSES is %s - set MIN_PASSES=%s\n' "$REAL_PASSES" "$MIN_PASSES" "$REAL_PASSES" >&2
+  exit 1
+fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

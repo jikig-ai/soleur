@@ -274,8 +274,10 @@ describe("POST /api/internal/schedule-reminder — timeout and TLS-verification 
   });
 
   // One list, two consumers: the host canary's negative control (INNGEST_LINK_CANARY_NEG in ci-deploy.sh) accepts a fixed set of codes as
-  // "certificate verification failed". The route must answer every one of them with the retryable 503, derived from the SOURCE here so
-  // a code added to the canary but not to the route (or the reverse) turns this red.
+  // "certificate verification failed". Two directions are pinned, both derived from SOURCE: (1) the route answers every one of those
+  // codes with the retryable 503 (below), and (2) the route's own retryable set is EXACTLY (the canary's codes that are not ERR_TLS_*,
+  // which the route covers by prefix) + the listed transport codes + CERT_HAS_EXPIRED, so a code added to the route alone, or dropped
+  // from either side, turns this red.
   const CI_DEPLOY = resolve(__dirname, "../../../../../apps/web-platform/infra/ci-deploy.sh");
   const canaryVerifyCodes = (): string[] => {
     const line = readFileSync(CI_DEPLOY, "utf8")
@@ -289,6 +291,15 @@ describe("POST /api/internal/schedule-reminder — timeout and TLS-verification 
     expect(codes.length).toBeGreaterThanOrEqual(5);
     expect(codes).toContain("DEPTH_ZERO_SELF_SIGNED_CERT");
     expect(codes).toContain("ERR_TLS_CERT_ALTNAME_INVALID");
+  });
+  it("the route's retryable set equals the canary verification codes (minus the ERR_TLS_ prefix family) plus the transport codes", () => {
+    const src = readFileSync(resolve(__dirname, "../../../app/api/internal/schedule-reminder/route.ts"), "utf8");
+    const block = src.match(/const UNAVAILABLE_CAUSE_CODES = new Set\(\[([^\]]*)\]\)/)?.[1] ?? "";
+    const routeCodes = [...block.matchAll(/"([A-Z0-9_]+)"/g)].map((m) => m[1]).sort();
+    const TRANSPORT = ["ECONNREFUSED", "ETIMEDOUT", "ECONNRESET", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_SOCKET", "EHOSTUNREACH", "ENETUNREACH", "CERT_HAS_EXPIRED"];
+    const expected = [...new Set([...canaryVerifyCodes().filter((c) => !c.startsWith("ERR_TLS_")), ...TRANSPORT])].sort();
+    expect(routeCodes.length).toBeGreaterThanOrEqual(10);
+    expect(routeCodes).toEqual(expected);
   });
   it.each(canaryVerifyCodes())("canary verification code %s -> the route answers the retryable 503", async (code) => {
     mockSendInngestWithRetry.mockRejectedValueOnce(fetchFailedWith(code));

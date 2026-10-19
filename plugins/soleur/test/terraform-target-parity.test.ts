@@ -8275,8 +8275,9 @@ echo "gh stub refused: $*" >&2; exit 64`;
 //      scheduler), and nothing else in the root references them (a templatefile variable that did would put
 //      the cert into hcloud_server.inngest's user_data and into the inngest-host-replace closure);
 //   4. the flag resource is count-gated, outside the per-merge view, and reachable from exactly ONE job;
-//   5. that job writes the source key BEFORE it plans, applies only the flag, and its plan gate rejects
-//      every other shape (the gate's jq is executed here, not just grepped).
+//   5. that job writes the source key BEFORE it plans (prd_terraform does not inherit the Terraform-written prd key,
+//      measured 2026-10-19), hands its plan an explicit TF_VAR, applies only the saved flag plan, and its plan gate
+//      rejects every other shape (the gate's jq is executed here, not just grepped).
 const TLS_FIVE = [
   "tls_private_key.inngest_link",
   "tls_self_signed_cert.inngest_link",
@@ -8467,22 +8468,28 @@ describe("#10136 inngest link TLS: key material, merge targets, flag actuator", 
     expect(sites).toEqual(["apply-web-platform-infra.yml|inngest_link_flag"]);
   });
 
-  test("the flag job: Tier-B environment, dispatch-gated on its own option, passes the value in the plan's own environment (no Doppler key write), applies only the saved flag plan", () => {
+  test("the flag job: Tier-B environment, dispatch-gated on its own option, writes the source key BEFORE it plans, hands the plan an explicit variable, applies only the saved flag plan", () => {
     expect(flagJob).not.toBe("");
     expect(flagJob).toMatch(/^\s+environment:\s*infra-privileged\s*$/m);
     expect(flagJob).toContain("if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'inngest-link-flag'");
     expect(Number(/timeout-minutes:\s*(\d+)/.exec(flagJob)?.[1])).toBeLessThanOrEqual(15);
     expect(flagJob).toContain("uses: ./.github/actions/infra-credentials");
     const code = stripShellLineComments(flagJob);
-    // prd_terraform INHERITS prd (where the Terraform-managed secret lives), so a key written/deleted there cannot
-    // empty the variable: the job writes NO Doppler key and holds no write-scoped token. The requested value rides the
-    // terraform process environment, set by `env` AFTER `doppler run` injected its own variables.
-    expect(code).not.toMatch(/doppler secrets (set|delete|upload)/);
-    expect(code).not.toContain("DOPPLER_TOKEN_WRITE");
+    // MEASURED 2026-10-19: prd_terraform does NOT inherit a Terraform-written prd key created after the branch, so the
+    // source key must be written (and, for `off`, deleted and verified gone) BEFORE the plan, or every untargeted plan
+    // proposes to destroy the live flag. The write-scoped token is therefore held by this job.
+    const iSet = code.indexOf("doppler secrets set INNGEST_LINK_TLS");
+    const iDel = code.indexOf("doppler secrets delete INNGEST_LINK_TLS");
     const iPlan = code.indexOf("terraform plan");
     const iApply = code.indexOf("terraform apply");
-    expect(iPlan).toBeGreaterThan(-1);
+    expect(iSet).toBeGreaterThan(-1);
+    expect(iDel).toBeGreaterThan(-1);
+    expect(Math.max(iSet, iDel)).toBeLessThan(iPlan);
     expect(iPlan).toBeLessThan(iApply);
+    // The delete is never swallowed (no `|| true` on it) and the absence is verified from a names listing.
+    expect(code.replace(/\\\n\s*/g, " ")).not.toMatch(/INNGEST_LINK_TLS --yes[^\n]*\|\| true/);
+    expect(code).toContain("secrets --only-names -p soleur -c prd_terraform");
+    expect(code).toContain("secrets.DOPPLER_TOKEN_WRITE");
     expect(code).toMatch(/--name-transformer tf-var -- \\\n\s+env "TF_VAR_inngest_link_tls=\$\{TF_LINK\}" \\\n\s+terraform plan/);
     // The apply consumes ONLY the saved, gated plan: no -target/-replace/-var, ends in tfplan.
     expect(/^\s*terraform apply (.*)$/m.exec(code)![1]).toBe("-no-color -input=false -auto-approve tfplan");

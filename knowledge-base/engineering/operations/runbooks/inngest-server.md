@@ -1282,7 +1282,7 @@ Status: **adopting** ([ADR-292](../architecture/decisions/ADR-292-inngest-link-t
 **inert at merge**: the resolver's default is still `http://10.0.1.40:8288`, nothing reads the new secrets until the host is replaced,
 and the flag does not exist until the owner-gated flip. This section covers **leg 1 only** (the web app's sends and reads to the
 scheduler on `:8288`). The `sdk_url` poll (dated disposition to 2026-12-10, tracked as #10538) and the Cloudflare step-call leg (#10479) are not fixed
-here, and #10136 stays open. **No step below uses SSH**: every read is the Better Stack query script, a hook, or a workflow run. One failure has no no-SSH remedy at all and is escalated instead of improvised: a non-empty or root-owned `/mnt/data/inngest-link` (see "CA on web hosts").
+here, and #10136 stays open. **No step below uses SSH**: every read is the Better Stack query script, a hook, or a workflow run. One failure has no no-SSH remedy at all and is escalated instead of improvised: a non-empty directory or a root-owned `/mnt/data/inngest-link` (see "CA on web hosts", #10557).
 
 ### What the pieces are
 
@@ -1290,7 +1290,7 @@ here, and #10136 stays open. **No step below uses SSH**: every read is the Bette
 |---|---|---|
 | TLS listener | `soleur-inngest-tls.service` on the Inngest host (stunnel4) | `10.0.1.40:8443` forwards to `127.0.0.1:8288`; TLS 1.2 or higher. `inngest-server` does **not** depend on it, so a dead listener never takes the scheduler down. |
 | Certificate | `apps/web-platform/infra/inngest-tls.tf` | One Terraform cert (ECDSA P-256, 10 years, `CA:FALSE`, SAN `IP:10.0.1.40` only, `prevent_destroy`) feeds three Doppler copies: `INNGEST_TLS_KEY` and `INNGEST_TLS_CERT` in `soleur-inngest/prd`, `INNGEST_TLS_CA` (base64) in `soleur/prd`. |
-| CA on web hosts | `/mnt/data/inngest-link/inngest-ca.pem` (bind-mounted read-only at `/etc/soleur/inngest-ca.pem` in the container, with `NODE_EXTRA_CA_CERTS`). The same directory holds `inngest-link.env` (read by the probes) and `last-scheme` (the downgrade memory). | **Only an https resolution touches the CA.** With the flag absent or a lapsed lease, `ci-deploy.sh` never reads `INNGEST_TLS_CA`, never validates it and never installs it: it only ensures the bind source exists as a file (an empty placeholder is created if the file is missing; an empty directory docker left at the path is removed), so a bad or substituted `INNGEST_TLS_CA` cannot fail a flag-off deploy. With https (`pending:` or `1`) the CA is read from the deploy's env snapshot, else from Doppler (three tries), then validated (at most 4 KiB, no private key, exactly one CERTIFICATE block, parses, not expired, rejects `CA:TRUE` and a `Certificate Sign` key usage), then proven by the host-side `curl --cacert <candidate>` self-gate against the live listener, and only then installed with `mv -fT`. A failed gate leaves the previous file in place. `NODE_TLS_REJECT_UNAUTHORIZED` is pinned **absent** everywhere. `/mnt/data` is in the webhook unit's `ReadWritePaths` and deploy-owned; `ci-deploy.sh` creates `/mnt/data/inngest-link` (and cloud-init does on a fresh host). Two install failures are distinguished: `ca_unwritable` (warning, flag **off**: the deploy continues) and `write_failed` (error, https: the deploy fails and the old container keeps serving). An **empty directory** at the CA path heals itself on the next deploy (the installer removes it first). A **non-empty** directory, or a path the deploy user cannot write, has **no no-SSH remedy**: no hook or workflow in this repository repairs files under `/mnt/data/inngest-link`, and the event carries only `dir=` or `file=`, not the cause. Do not improvise; stop and hand it to the owner (SSH on the host is a last resort and the owner's decision, `hr-no-ssh-fallback-in-runbooks`). |
+| CA on web hosts | `/mnt/data/inngest-link/inngest-ca.pem` (bind-mounted read-only at `/etc/soleur/inngest-ca.pem` in the container, with `NODE_EXTRA_CA_CERTS`). The same directory holds `inngest-link.env` (read by the probes) and `last-scheme` (the downgrade memory). | **Only an https resolution touches the CA.** With the flag absent or a lapsed lease, `ci-deploy.sh` never reads `INNGEST_TLS_CA`, never validates it and never installs it: it only makes the bind source an empty placeholder file (created if missing; an empty directory docker left at the path is replaced; a **non-empty** regular file, the pinned CA of an earlier https deploy, is replaced atomically through a new inode, so a still-running container keeps the bytes it mounted; an already-empty file is left), so a bad or substituted `INNGEST_TLS_CA` cannot fail a flag-off deploy. With https (`pending:` or `1`) the CA is read from the deploy's env snapshot, else from Doppler (three tries), then validated (at most 4 KiB, no private key, exactly one CERTIFICATE block, parses, not expired, rejects `CA:TRUE` and a `Certificate Sign` key usage), then proven by the host-side `curl --cacert <candidate>` self-gate against the live listener, and only then installed with `mv -fT`. A failed gate leaves the previous file in place. `NODE_TLS_REJECT_UNAUTHORIZED` is pinned **absent** everywhere. `/mnt/data` is in the webhook unit's `ReadWritePaths` and deploy-owned; `ci-deploy.sh` creates `/mnt/data/inngest-link` (and cloud-init does on a fresh host). Two install failures are distinguished: `ca_unwritable` (warning, flag **off**: the deploy continues) and `write_failed` (error, https: the deploy fails and the old container keeps serving). An **empty directory** at the CA path heals itself on the next deploy (the installer removes it first). A **non-empty** directory, or a path the deploy user cannot write, has **no no-SSH remedy** (tracked as #10557): no hook or workflow in this repository repairs files under `/mnt/data/inngest-link`, and the event carries only `dir=` or `file=`, not the cause. Do not improvise; stop and hand it to the owner (SSH on the host is a last resort and the owner's decision, `hr-no-ssh-fallback-in-runbooks`). |
 | Flag | Doppler `soleur/prd` `INNGEST_LINK_TLS` | Terraform-managed (`doppler_secret.inngest_link_tls`, count-gated, absent by default). Absent = legacy http. `1` = https, fail-closed. `pending:<epoch>` = https inside a 30-minute lease, then http. Any other value fails the deploy. |
 | Resolver | `resolve_inngest_link` in `ci-deploy.sh` | The single place the scheme is chosen. Writes `/mnt/data/inngest-link/inngest-link.env` for the probes. |
 | Flip workflow | `.github/workflows/inngest-link-flip.yml` | Dispatch-only; `action=flip` or `action=off`. |
@@ -1303,8 +1303,11 @@ here, and #10136 stays open. **No step below uses SSH**: every read is the Bette
 States of `INNGEST_LINK_TLS`, as read by the resolver from the full-config snapshot (a missing key is authoritative absence).
 **Scope guard.** The snapshot's two metadata lines `DOPPLER_PROJECT` and `DOPPLER_CONFIG` must name `soleur` and `prd` when they are
 present: a line that is present and wrong (or repeated) always fails the deploy (`inngest_link_scope_mismatch`), so a mis-bound token
-can never read "absent". A snapshot that lacks the lines cannot be judged wrong: with the flag absent it resolves http and logs a
-`scope_unverified` warning (the deploy continues); with the flag set it fails closed (`scope_mismatch field=unverified`):
+can never read "absent". A snapshot that lacks the lines cannot be judged wrong, so: with the flag **set** it fails closed
+(`scope_mismatch field=unverified`); with the flag **absent** and a host whose `last-scheme` file says https it also fails closed
+(`scope_mismatch field=unverified previous=https`, reason `inngest_link_scope_mismatch`; a real `off` always has a verified scope, so
+the recovery is to re-run with a correctly bound token); with the flag absent and no https memory (no file, `http`, or garbage) it
+resolves http, logs a `scope_unverified` warning, continues, and records no scheme:
 
 | Value | Resolver output | Notes |
 |---|---|---|
@@ -1323,7 +1326,7 @@ event for that reason (next subsection) and either fix the cause or roll back, t
 **Resolver events.** Every decision is one journald line `INNGEST_LINK: class=<class> level=<level> <detail>` under tag `ci-deploy`,
 shipped to Better Stack (Vector Source 4). `warning` and `error` classes are also sent to Sentry (tags `feature=ci-deploy`,
 `op=inngest-link`, `classification=<class>`). **No Sentry alert rule routes `op=inngest-link` today** (`grep` over
-`apps/web-platform/infra/sentry/` finds none), so a Sentry event here notifies nobody: the read below is the detection. The failed
+`apps/web-platform/infra/sentry/` finds none; tracked as #10556), so a Sentry event here notifies nobody: the read below is the detection. The failed
 release run's `::error::` / `reason=` line carries only the constant `inngest_link_*` reason (and, for the canary, the constant
 `canary_inngest_link_failed`); the discriminating fields are in the event.
 
@@ -1338,17 +1341,17 @@ is printed beside it). `--grep` is an unanchored substring match on the double-e
 | `class=` | Level | Meaning and what to do |
 |---|---|---|
 | `resolved` | info | `state=<http_default\|http_lease_expired\|https_flag\|https_pending> scheme=<http\|https>`: the scheme this host's resolver handed the container. The one row per host that closes the "web-2 is not verified from CI" gap. |
-| `scope_unverified` | warning | The snapshot lacked the `DOPPLER_PROJECT` / `DOPPLER_CONFIG` lines and the flag was absent: resolved http, deploy continued. Investigate why the snapshot lost its metadata lines before relying on "absent". |
-| `scope_mismatch` | error | `field=project\|config` (present and wrong) or `field=unverified` (lines absent while the flag is set). The deploy fails. Fix the token binding. |
+| `scope_unverified` | warning | The snapshot lacked the `DOPPLER_PROJECT` / `DOPPLER_CONFIG` lines, the flag was absent and the host had no https memory: resolved http, deploy continued, no scheme recorded. Investigate why the snapshot lost its metadata lines before relying on "absent". |
+| `scope_mismatch` | error | `field=project\|config` (present and wrong), `field=unverified` (lines absent while the flag is set) or `field=unverified previous=https` (lines absent, flag absent, and this host last ran https). The deploy fails. Fix the token binding and re-run. |
 | `snapshot_unreadable` | error | The env snapshot could not be read. The deploy fails. |
 | `flag_invalid` | error | `lines=<n>` (the key appears more than once), `len=<n>` (value outside the allowlist) or `pending_epoch=future`. The deploy fails. The value itself is never logged. |
 | `lease_expired` | warning | A `pending:` lease lapsed (`age_secs=`): resolved http. Expected when a flip died after `pending`; the revert or `action=off` is the follow-up. |
-| `https_to_http` | warning | This host's `last-scheme` memory said https and it now resolves http. Expected after an intentional `off` or a lapsed lease; otherwise the flag disappeared (hand delete, Doppler restore) and the fleet is on plaintext. It never fails the deploy. **No alert rule routes it**, so read it after every `off` and on a routine schedule while the flag is on. |
+| `https_to_http` | warning | Emitted at resolve time when this host's `last-scheme` file says its last deploy started https and it now resolves http **with a verified scope**. Expected after an intentional `off` or a lapsed lease; otherwise the flag disappeared (hand delete, Doppler restore) and the fleet is moving to plaintext. It never fails the deploy, and an intentional `off` is a warning event only, not a page. **No alert rule routes it** (#10556), so read it after every `off` and on a routine schedule while the flag is on. `last-scheme` is written only after the **production** `docker run` succeeds, never at resolve time, so a failed flip canary and its revert leave it alone, and a scope-unverified run never records one. |
 | `ca_unavailable` | error | https resolved but the CA could not be read from the snapshot or Doppler after three tries. The deploy fails. |
 | `ca_invalid` | error | `why=<tool\|decode\|size\|empty\|key\|count\|parse\|expired\|ca>` names the first failed validator check. The deploy fails. |
 | `selfgate_failed` | error | `rc=` and `http=` of the last of three host-side `curl --cacert <candidate>` attempts. The listener is down, the CA does not match the served certificate, or the host-to-host path is blocked. The deploy fails; the old CA file is untouched. |
 | `write_failed` | error | `file=ca_candidate\|ca\|link_env`: installing under `/mnt/data/inngest-link` failed with https. See "CA on web hosts" for what can and cannot be repaired. |
-| `ca_unwritable`, `link_env_unwritable`, `last_scheme_unwritable` | warning | The same directory was not writable on a flag-**off** deploy (or for the downgrade memory): the deploy continues. |
+| `ca_unwritable`, `link_env_unwritable`, `last_scheme_unwritable` | warning | The same directory was not writable on a flag-**off** deploy (the placeholder could not be installed, including replacing a non-empty CA file) or for the downgrade memory: the deploy continues. |
 | `canary_failed` | error | `check=<inspect\|health\|events\|send\|registry\|negative_control\|no_verdict> cause=<token>`; the cause is mapped inside the container from a fixed allowlist (`ECONNREFUSED`, `ETIMEDOUT`, `DEPTH_ZERO_SELF_SIGNED_CERT`, `HTTP_<status>`, `EMPTY`, else `other`). Egress dropped reads as `ETIMEDOUT` or `ECONNREFUSED`; Node not trusting the pinned file reads as a certificate code; the listener answering badly reads `HTTP_5xx`. See [canary-probe-set.md](canary-probe-set.md), Layer 5. |
 | `canary_ok` | info | `checks=inspect,health,events,send,registry,negative_control`. |
 
@@ -1367,15 +1370,20 @@ that the redeploy finished inside the lease margin and that the handshake hook a
 layer is [canary-probe-set.md](canary-probe-set.md), Layer 5.
 
 **How the flag is written.** Each flag change is a Tier-B `apply_target=inngest-link-flag` job (`inngest_link_flag`) under
-`environment: infra-privileged`. The job writes **no Doppler key** and holds **no `DOPPLER_TOKEN_WRITE`**: it passes the requested
-value to its Terraform plan as `env TF_VAR_inngest_link_tls=<value>` (empty for `off`), set after `doppler run` injected its own
-variables, and applies only `doppler_secret.inngest_link_tls` (the Terraform doppler provider's own credential writes the secret,
-as in every apply). The reason is inheritance: `prd_terraform` is a Doppler branch config of `prd`, and the Terraform-managed secret
-lives in `prd`, so a key *deleted* from `prd_terraform` is simply re-exposed from `prd` and never empties the variable (a data-integrity
-finding of the PR review). **Never create an `INNGEST_LINK_TLS` key in `prd_terraform`**: it would shadow `prd` and make every
-untargeted plan (the drift detector) propose a change. A flip is **two** Tier-B applies (`pending:<epoch>`, then `1`), **three** if the
-revert fires. Each can queue behind the shared Terraform mutex; the script budgets up to 35 minutes per apply (10 minutes for the run
-to appear, 25 to finish).
+`environment: infra-privileged`. The job holds `DOPPLER_TOKEN_WRITE` and writes the **source key** `INNGEST_LINK_TLS` in Doppler
+`soleur/prd_terraform` **first**, before the plan: for `pending:<epoch>` and `1` it sets the key and reads it back; for `off` it lists
+the names (a failed or empty listing refuses the run rather than reading as absence), deletes the key only if it is present (a failed
+delete is not swallowed), lists again, and after the apply fails the job if the key is still in `prd_terraform`. It then plans and
+applies only `doppler_secret.inngest_link_tls`, and also hands the value to that plan as `env TF_VAR_inngest_link_tls=<value>` (empty
+for `off`) after `doppler run`, as belt and braces. The source key is what every **untargeted** plan reads (the drift detector,
+infra-validation, a full untargeted apply). The reason it must exist: measured 2026-10-19 with a names-only listing, `prd_terraform`
+(170 names) does **not** carry `REGISTRY_PUSH_ACCESS_TOKEN_ID` / `_SECRET`, which Terraform writes into `prd`, so a *new* `prd` key is
+not inherited by `prd_terraform` (see also `tunnel.tf` ~276-281, ADR-164 and `scheduled-terraform-drift.yml`; older notes that say the branch config inherits `prd`
+predate this measurement and, at most, hold for keys that existed when the branch was made). Without the source key, every untargeted plan would see the variable unset and plan a
+**destroy of the live flag**. A key in `prd_terraform` is therefore the **normal** state while the flag is on; **never create or
+delete it by hand**. A flip is **two** Tier-B applies (`pending:<epoch>`, then `1`), **three** if the revert fires. Each can queue
+behind the shared Terraform mutex; the script budgets up to 35 minutes per apply (10 minutes for the run to appear, 25 to finish).
+The gate result (`applied`, `removed` or `already_absent`) is in the apply run's step summary only, not in an output.
 
 **The authorization is procedural.** The `confirm` input is a typo-guard, **not** the authorization: the authorization for a flag
 write is the owner's own dated go (act A3 below). `infra-privileged` has the `main` branch policy and **no required reviewer**
@@ -1384,7 +1392,7 @@ write is the owner's own dated go (act A3 below). `infra-privileged` has the `ma
 
 **Time budget** (the BUDGET TABLE at the top of `scripts/inngest-link-flip.sh`; `inngest-link-flip-workflow.test.sh` pins the workflow
 to it). The redeploy is bounded at 4800 s, which equals the pipeline's own hard kill of `ci-deploy.sh` (cron drain 4200 s plus swap
-overhead), so the flip never gives up on a deploy that is still running. The job allows 268 minutes and the revert step 115. A
+overhead), so the flip never gives up on a deploy that is still running. The flip step allows 153 minutes, the revert step 115, and the job 283 (the two plus 15 minutes of slack, so the job ceiling never fires before the step timeouts). A
 redeploy must finish by `T0 + 1800 - 600` s (the lease minus 600 s kept for web-2, whose deploy starts after web-1's), or `flip`
 refuses to promote and the revert runs.
 
@@ -1408,8 +1416,9 @@ after the flip sends plaintext (counted by `legacy_8288`) until that first deplo
 
 ### Rollback
 
-1. Run `gh workflow run inngest-link-flip.yml -f action=off`. `off` is **idempotent and convergent**: it plans at most one delete of
-   the flag (a flag that is already absent plans no change and the job reports `result=already_absent`), and it **always redeploys**
+1. Run `gh workflow run inngest-link-flip.yml -f action=off`. `off` is **idempotent and convergent**: it removes the source key from
+   `prd_terraform` if present (verified, and the job fails if the key is still there after the apply), plans at most one delete of
+   the flag (a flag that is already absent plans no change; the gate reports `already_absent` in the apply run's step summary), and it **always redeploys**
    the running image so the resolver re-reads the flag. Re-run it freely after a failed or half-finished attempt. No host change is
    needed: `:8288` is still serving.
 2. Confirm with the `class=resolved` row of **each** host (the query under "Resolver events"; expect `state=http_default scheme=http`
@@ -1596,9 +1605,11 @@ window.
 | #10543 | the dashboard send archives the draft on a failed enqueue |
 | #10544 | `inngest-host-replace` has no confirm or id-pin input |
 | #10545 | the Inngest host's nft loader is not idempotent |
+| #10556 | a Sentry alert rule for `op=inngest-link` events (`https_to_http`, `scope_unverified`, `canary_failed`, `selfgate_failed`) |
+| #10557 | no no-SSH repair path for a non-empty or root-owned `/mnt/data/inngest-link` on a web host |
 
-Not filed, so nothing tracks them: a no-SSH repair verb for a wedged `/mnt/data/inngest-link`, and a Sentry alert rule for
-`op=inngest-link` (the `https_to_http` and `lease_expired` warnings notify nobody today).
+The `https_to_http`, `lease_expired` and `canary_failed` events notify nobody today (#10556), and a wedged `/mnt/data/inngest-link` has no
+no-SSH repair (#10557).
 
 ## Key rotation
 

@@ -3259,8 +3259,9 @@ else
   [[ "$(il_runs)" -eq 1 ]] || IL_OK=0   # the canary only: no production container was started
   grep -qF 'class=canary_failed level=error check=negative_control cause=accepted' "$IL_LOG" || IL_OK=0
   [[ "$(jq -r '.reason' "$IL_STATE" 2>/dev/null)" == canary_inngest_link_failed ]] || IL_OK=0
+  [[ ! -e "$INNGEST_LINK_DIR/last-scheme" ]] || IL_OK=0   # the scheme is recorded only after the production container started
   if [[ "$IL_OK" -eq 1 ]]; then
-    PASS=$((PASS + 1)); echo "  PASS: flag on + negative control accepted: deploy fails (reason=canary_inngest_link_failed), only the canary was started, event carries check=negative_control cause=accepted"
+    PASS=$((PASS + 1)); echo "  PASS: flag on + negative control accepted: deploy fails (reason=canary_inngest_link_failed), only the canary was started, last-scheme not recorded, event carries check=negative_control cause=accepted"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: canary result not honoured (rc=$IL_RC runs=$(il_runs) reason=$(jq -r '.reason' "$IL_STATE" 2>/dev/null))"
   fi
@@ -3319,6 +3320,22 @@ else
     PASS=$((PASS + 1)); echo "  PASS: snapshot without DOPPLER_PROJECT/CONFIG lines + flag absent: the deploy proceeds on http with a scope_unverified warning"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: a metadata-less snapshot broke the flag-absent deploy (rc=$IL_RC)"
+  fi
+
+  # security P2: a metadata-less snapshot with the flag absent on a host that last ran https is a wrong-token/partial download,
+  # not an `off`: the deploy FAILS CLOSED (no container started) and the evidence in last-scheme survives
+  TOTAL=$((TOTAL + 1))
+  printf 'KEY=value\nGITHUB_APP_ID=4242\nGITHUB_APP_PRIVATE_KEY=mock-prd-app-key\n' > "$IL_DIR/partial.env"
+  rm -rf "$INNGEST_LINK_DIR"; mkdir -p "$INNGEST_LINK_DIR"; printf 'https\n' > "$INNGEST_LINK_DIR/last-scheme"
+  : > "$IL_DIR/partial.runs"; : > "$IL_DIR/partial.log"
+  IL_OUT=$( ( export MOCK_DOCKER_MODE="apparmor-trace" MOCK_IL_RUN_LOG="$IL_DIR/partial.runs" MOCK_GAK_PRD_BODY="$IL_DIR/partial.env" CI_DEPLOY_STATE="$IL_DIR/partial.state" MOCK_LOGGER_CAPTURE_FILE="$IL_DIR/partial.log"
+      run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1 ) ) && IL_RC=0 || IL_RC=$?
+  if [[ "$IL_RC" -ne 0 && "$(printf '%s\n' "$IL_OUT" | grep -c '^DOCKER_RUN_ARGS:' || true)" -eq 0 \
+        && "$(jq -r '.reason' "$IL_DIR/partial.state" 2>/dev/null)" == inngest_link_scope_mismatch \
+        && "$(cat "$INNGEST_LINK_DIR/last-scheme" 2>/dev/null)" == https ]] && grep -qF 'field=unverified previous=https' "$IL_DIR/partial.log"; then
+    PASS=$((PASS + 1)); echo "  PASS: unverifiable scope + flag absent + last-scheme=https: the deploy fails closed (inngest_link_scope_mismatch), no container started, last-scheme untouched"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: unverified scope after https did not fail closed (rc=$IL_RC reason=$(jq -r '.reason' "$IL_DIR/partial.state" 2>/dev/null))"
   fi
 
   # security F4: https -> http is signalled through the real flow (first run and http->http are covered by the unit suite)
@@ -11990,7 +12007,7 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # D10k7 (warning + silent failure is no masquerading denial).
 # #9294 PR-1: raised 618 -> 622 (619 measured on main, which carried one slack row, plus 3 new rows) with T-9294-1..3 (fan-out
 # under an `or` trigger-rule: first-HMAC-secret signing over four shapes, six fail-closed shapes, and the source census).
-CI_DEPLOY_ASSERT_FLOOR=635
+CI_DEPLOY_ASSERT_FLOOR=636
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"

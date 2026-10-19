@@ -5,9 +5,9 @@
 # Doppler flag (INNGEST_LINK_TLS in soleur/prd) and redeploying the running web image so ci-deploy.sh's
 # resolve_inngest_link re-reads it. Nothing here writes Doppler or Terraform state itself: the flag is changed
 # only by the Tier-B `inngest_link_flag` job of apply-web-platform-infra.yml (apply_target=inngest-link-flag),
-# which this script dispatches and waits for. That job passes the requested value to terraform through the PROCESS
-# ENVIRONMENT (`off` = empty), never through a Doppler key, because prd_terraform inherits prd and a key deleted there
-# would reappear from prd. Every network call is bounded.
+# which this script dispatches and waits for. That job writes the SOURCE KEY INNGEST_LINK_TLS in soleur/prd_terraform first
+# (what every untargeted plan reads; prd_terraform does NOT inherit a post-branch Terraform-written prd key, measured
+# 2026-10-19) and also hands the value to its plan as an explicit environment variable. Every network call is bounded.
 #
 #   inngest-link-flip.sh flip     pending:<epoch> -> redeploy (canary, then prod) -> verify -> flag 1
 #   inngest-link-flip.sh off      flag absent -> redeploy -> verify (the rollback; also run by hand; idempotent: a flag
@@ -83,9 +83,11 @@ FLIP_STEP_BUDGET_S=$((FLIP_GUARD_S + 2 * FLIP_APPLY_BUDGET_S + FLIP_REDEPLOY_TIM
 #   cancel request (docs.github.com "Workflow cancellation reference"), whatever timeout-minutes says: `action=off` is the
 #   real rollback for that case, which is why it is idempotent.
 FLIP_REVERT_BUDGET_S=$((FLIP_APPLY_BUDGET_S + FLIP_REDEPLOY_TIMEOUT_S))
-#   job         = a flip that fails at its last stage plus the revert that follows it
+#   job         = a flip that fails at its last stage plus the revert that follows it, plus slack for checkout and runner
+#                 start so the job ceiling never fires before the revert step's own timeout does
+FLIP_JOB_SLACK_S=900
 # shellcheck disable=SC2034  # read by the workflow test, which sources this file (A40-A42)
-FLIP_JOB_BUDGET_S=$((FLIP_STEP_BUDGET_S + FLIP_REVERT_BUDGET_S))
+FLIP_JOB_BUDGET_S=$((FLIP_STEP_BUDGET_S + FLIP_REVERT_BUDGET_S + FLIP_JOB_SLACK_S))
 
 FLIP_APPLY_WORKFLOW="apply-web-platform-infra.yml"
 FLIP_STATUS_URL="https://deploy.soleur.ai/hooks/deploy-status"

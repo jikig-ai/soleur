@@ -4195,9 +4195,8 @@ fi
 }
 
 # ── D8 row for the Inngest link flag actuator (#10136, CTO G1) ───────────────────────
-# `apply-web-platform-infra.yml::inngest_link_flag` applies a prd secret (passing the requested value in its terraform
-# process environment; it writes no Doppler key and holds no write-scoped token), so it is a Tier-B job by every rule
-# above: it must declare a Tier-B environment, its `doppler run` must keep `--preserve-env`, and the runbook inventory
+# `apply-web-platform-infra.yml::inngest_link_flag` writes the prd_terraform source key with the write-scoped Doppler
+# token and applies a prd secret, so it is a Tier-B job by every rule above: it must declare a Tier-B environment, its `doppler run` must keep `--preserve-env`, and the runbook inventory
 # must carry its row. G1b/G1c already census it generically
 # (they are keyed on what a job references); this row pins the NAMED job so a rename or a dropped `environment:` cannot
 # slip through as "the job no longer exists", and the self-check proves the predicate can see a missing environment.
@@ -4211,9 +4210,9 @@ if not job:
 if job.get("environment") not in ("infra-privileged", "web-platform-infra-apply", "inngest-cutover", "workspaces-luks-cutover"):
     sys.exit(1)
 text = yaml.safe_dump(job)
-# The job passes the requested value in its own terraform environment and writes NO Doppler key, so it must hold no
-# write-scoped token (prd_terraform inherits prd: a key there could never be emptied).
-if "DOPPLER_TOKEN_WRITE" in text or "doppler secrets set" in text or "doppler secrets delete" in text:
+# The job writes the source key in prd_terraform (set / delete) with the write-scoped token before it plans:
+# prd_terraform does not inherit a Terraform-written prd key (measured 2026-10-19), so untargeted plans need it.
+if "secrets.DOPPLER_TOKEN_WRITE" not in text:
     sys.exit(1)
 runs = [l for s in job.get("steps", []) for l in str(s.get("run", "")).splitlines() if "doppler run" in l and not l.lstrip().startswith("#")]
 if len(runs) < 2 or any("--preserve-env" not in l for l in runs):
@@ -4225,9 +4224,9 @@ PYD
 _d8_wf="$GHDIR/workflows/apply-web-platform-infra.yml"
 _d8_doc="$REPODIR/knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md"
 if d8_flag_job_ok "$_d8_wf" "$_d8_doc"; then
-  pass "D8-flag: inngest_link_flag declares a Tier-B environment, holds NO write-scoped Doppler token and writes no Doppler key, keeps --preserve-env, and has its runbook inventory row"
+  pass "D8-flag: inngest_link_flag declares a Tier-B environment, holds DOPPLER_TOKEN_WRITE under --preserve-env, and has its runbook inventory row"
 else
-  fail "D8-flag: inngest_link_flag is missing, not on a Tier-B environment, holds a write-scoped Doppler token or writes a key, drops --preserve-env, or has no row in infra-credential-tiers-8209.md"
+  fail "D8-flag: inngest_link_flag is missing, not on a Tier-B environment, drops DOPPLER_TOKEN_WRITE, drops --preserve-env, or has no row in infra-credential-tiers-8209.md"
 fi
 mkdir -p "$T/mut"
 sed '/^  inngest_link_flag:/,/^    if:/ s/^    environment: infra-privileged$/    # environment removed/' "$_d8_wf" > "$T/mut/d8-noenv.yml"
@@ -4246,13 +4245,13 @@ elif d8_flag_job_ok "$T/mut/d8-nopreserve.yml" "$_d8_doc"; then
 else
   pass "D8-flag-m2: dropping --preserve-env from the flag job's doppler run turns the D8 predicate RED"
 fi
-sed '/^  inngest_link_flag:/,/^  vector_redeliver:/ s/^    timeout-minutes: 15$/    timeout-minutes: 15\n    env:\n      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_WRITE }}/' "$_d8_wf" > "$T/mut/d8-writetoken.yml"
+sed '/^  inngest_link_flag:/,/^  vector_redeliver:/ s/secrets\.DOPPLER_TOKEN_WRITE/secrets.DOPPLER_TOKEN/' "$_d8_wf" > "$T/mut/d8-writetoken.yml"
 if cmp -s "$T/mut/d8-writetoken.yml" "$_d8_wf"; then
-  fail "D8-flag-m3: the write-token injection matched nothing"
+  fail "D8-flag-m3: the write-token removal matched nothing"
 elif d8_flag_job_ok "$T/mut/d8-writetoken.yml" "$_d8_doc"; then
-  fail "D8-flag-m3: a flag job holding DOPPLER_TOKEN_WRITE still passes the D8 predicate (vacuous)"
+  fail "D8-flag-m3: a flag job without DOPPLER_TOKEN_WRITE still passes the D8 predicate (vacuous)"
 else
-  pass "D8-flag-m3: giving the flag job a write-scoped Doppler token turns the D8 predicate RED"
+  pass "D8-flag-m3: taking the write-scoped Doppler token off the flag job (it could no longer write the source key) turns the D8 predicate RED"
 fi
 
 # ── FLOOR + LEDGER (ADR-193: printf + exit, never through pass()/fail()) ─────────────
@@ -4329,7 +4328,7 @@ _ran=$((passes + fails))
 # 364 -> 365 (#9956 review round 2 fixes): G4c-b9d — the floor arm reaches the row as
 #   'base unavailable' end-to-end. Measured: 365 ran.
 # 365 -> 368 (#10136): D8-flag (live) and D8-flag-m1/m2 (environment and --preserve-env mutants; 1 verdict each). Measured: 368 ran.
-# 368 -> 369 (#10136 round 4): D8-flag-m3 (a write-scoped Doppler token on the flag job; the job now writes no Doppler key). Measured: 369 ran.
+# 368 -> 369 (#10136 round 4): D8-flag-m3 (the flag job without its write-scoped Doppler token). Measured: 369 ran.
 FLOOR=369
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2

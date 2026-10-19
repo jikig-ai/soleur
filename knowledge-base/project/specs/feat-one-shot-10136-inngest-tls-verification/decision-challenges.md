@@ -62,13 +62,16 @@ Superseding D3's path: CTO design-pass ruling moved the CA file and link env fro
 The rows above are the 2026-10-18 rulings as given and are not edited. Where the shipped code differs from a ruling, this addendum
 says so; nothing here is a new ruling.
 
-- **G1 (flip actuator), superseded in part.** The ruling named "the `prd_terraform` key as source of truth" and called the 30-minute
-  lease "the real control". The data-integrity review of the PR showed the first cannot work: `prd_terraform` is a branch config that
-  inherits `prd`, and the Terraform-managed secret lives in `prd`, so a key deleted from `prd_terraform` is re-exposed from `prd` and
-  the variable never empties. The Tier-B `inngest_link_flag` job now passes the value as `TF_VAR_inngest_link_tls` in the process
-  environment of its plan (empty for `off`), writes no Doppler key and holds no `DOPPLER_TOKEN_WRITE`. The second is also corrected:
-  the lease is read only by the deploy-time resolver, so it bounds how long a stuck `pending` can make NEW deploys resolve https and
-  does not touch a running container; `action=off` and the best-effort revert step are what move a running fleet back.
+- **G1 (flip actuator), upheld, with one correction.** The ruling named "the `prd_terraform` key as source of truth" and that is what
+  ships: the Tier-B `inngest_link_flag` job (it holds `DOPPLER_TOKEN_WRITE`) writes the source key `INNGEST_LINK_TLS` in `soleur/prd_terraform`
+  first (set and read back for `pending`/`1`; deleted, verified gone, and re-checked after the apply for `off`), then plans and applies
+  the flag resource, and also passes `TF_VAR_inngest_link_tls` to that plan as belt and braces. The key is required because
+  `prd_terraform` does not inherit a Terraform-written `prd` key created after the branch (names-only listing, 2026-10-19, 170 names:
+  `REGISTRY_PUSH_ACCESS_TOKEN_ID`/`_SECRET` are in `prd`, absent from `prd_terraform`); without it every untargeted plan plans a destroy
+  of the live flag. A mid-review draft that dropped the key was reversed on that evidence. The correction is the second half of G1: "the
+  30-minute lease is the real control" does not hold. The lease is read only by the deploy-time resolver, so it bounds how long a stuck
+  `pending` can make NEW deploys resolve https and does not touch a running container; `action=off` (idempotent) and the best-effort
+  revert step are what move a running fleet back.
 - **G3 (CA file hygiene), superseded in part** (continuing Addendum 2026-10-19 above). The shipped validator is one certificate, at most
   4 KiB, no private key, parses, not expired, no `CA:TRUE`, no `Certificate Sign`; the "SAN exactly the IP, serverAuth only, 1-2
   certificates, re-check before `docker run`" parts of the ruling are not implemented. The host-side `curl --cacert` self-gate on the

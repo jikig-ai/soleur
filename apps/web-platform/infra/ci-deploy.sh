@@ -3419,11 +3419,15 @@ github_app_key_canary_check() {
 # metadata lines of the snapshot (`doppler secrets download` always injects DOPPLER_PROJECT/DOPPLER_CONFIG, see
 # .github/actions/infra-credentials/action.yml) must name soleur/prd when PRESENT (a mis-bound token must never read
 # "absent"); a snapshot that lacks them cannot be judged wrong, so with the flag ABSENT it resolves http with a
-# `scope_unverified` warning, and with the flag set it fails closed.
+# `scope_unverified` warning UNLESS this host last ran https (last-scheme, below): a legitimate `off` always has a verified scope
+# (Doppler injects the lines), so an unverifiable snapshot on a host that was https is a wrong-token or partial download and
+# fails closed (scope_mismatch field=unverified previous=https). With the flag set it always fails closed. A run whose scope
+# was unverified never records a scheme (it must not erase the evidence).
 # TRUST-ANCHOR ORDERING (security F1/F2): the CA (INNGEST_TLS_CA, base64) is touched ONLY when https is resolved. With the
 # flag absent (or a lapsed lease) nothing is read from Doppler or validated: the docker bind source is only ensured to exist as an
-# EMPTY placeholder FILE (created if missing; an empty directory docker made there is removed), so a bad or substituted
-# secret can neither fail a flag-off deploy nor become a trust anchor in a non-strict state. With https resolved the CA is
+# EMPTY placeholder FILE (created if missing; an empty directory docker made there is removed; a NON-empty regular file left by
+# an earlier https deploy is atomically replaced by an empty one - a new inode, so a running container keeps its own), so a bad
+# or substituted secret can neither fail a flag-off deploy nor become a trust anchor in a non-strict state. With https resolved the CA is
 # read (from the snapshot, else Doppler with retries), VALIDATED, proven by the host-side `curl --cacert <CANDIDATE>` self-gate
 # against the real listener, and only THEN installed (mktemp + rename under $INNGEST_LINK_DIR, /mnt/data/inngest-link, deploy-owned,
 # created here with mkdir -p; the docker bind source is the FILE, so it must exist before `docker run`). A gate failure leaves
@@ -3432,9 +3436,11 @@ github_app_key_canary_check() {
 # working issuing CA). Any of {CA read error, CA empty/invalid, self-gate failure, install failure} fails the strict deploy. The
 # self-gate proves only the host OUTPUT path and the pinned bytes, not container egress or Node trust (the canary does); a
 # substituted CA fails against the real host, so it denies service rather than enabling a MITM.
-# DOWNGRADE MEMORY (security F4): $INNGEST_LINK_DIR/last-scheme (https|http, atomic, validated on read) remembers the last
-# resolved scheme; a host that last resolved https and now resolves http emits a Sentry warning `https_to_http` (an intentional
-# `off` pages once; it never fails the deploy).
+# DOWNGRADE MEMORY (security F4): $INNGEST_LINK_DIR/last-scheme (https|http, atomic, validated on read) remembers the scheme
+# the last deploy actually STARTED (recorded by inngest_link_commit_scheme after the production container started, never at
+# resolve time, so a failed flip canary plus its revert leaves it alone). A host that last ran https and now resolves http with a
+# VERIFIED scope emits a warning event `https_to_http` (Sentry level warning; no alert rule routes it yet, tracked in #10556,
+# so it is journald/Sentry-issue evidence only) and proceeds; with an UNVERIFIED scope it fails closed (above).
 # $INNGEST_LINK_DIR/inngest-link.env is written from enum branches and constants ONLY, never from flag or CA text; the
 # probes parse it with a key allowlist and never source it. Sets: INNGEST_BASE_URL_RESOLVED, INNGEST_LINK_STATE
 # (http_default|http_lease_expired|https_flag|https_pending), INNGEST_LINK_REASON (a fixed token on failure),
@@ -3447,6 +3453,7 @@ INNGEST_BASE_URL_RESOLVED=""
 INNGEST_LINK_STATE=""
 INNGEST_LINK_REASON=""
 INNGEST_LINK_CA_STRICT=0
+INNGEST_LINK_PENDING_SCHEME=""
 
 inngest_link_event() { # <class> <level> [detail]: journald always, Sentry for warning/error (best effort)
   local cls="$1" level="$2" detail="${3:-}" payload
@@ -3573,8 +3580,8 @@ _inngest_link_last_scheme() {
 
 resolve_inngest_link() {
   local snap="${1:-}" flag="" now epoch ca_dest ca_env_dest b64="" cand="" try=1 scheme url cacert
-  local proj_n proj_v cfg_n cfg_v
-  INNGEST_BASE_URL_RESOLVED=""; INNGEST_LINK_STATE=""; INNGEST_LINK_REASON=""; INNGEST_LINK_CA_STRICT=0
+  local proj_n proj_v cfg_n cfg_v scope_verified=1
+  INNGEST_BASE_URL_RESOLVED=""; INNGEST_LINK_STATE=""; INNGEST_LINK_REASON=""; INNGEST_LINK_CA_STRICT=0; INNGEST_LINK_PENDING_SCHEME=""
   ca_dest="$INNGEST_LINK_DIR/inngest-ca.pem"
   ca_env_dest="$INNGEST_LINK_DIR/inngest-link.env"
 
@@ -3592,6 +3599,10 @@ resolve_inngest_link() {
   # a line that is ABSENT cannot be judged: with the flag set the scope is unverifiable, so a flagged fleet fails closed
   if [[ "$proj_n" == 0 || "$cfg_n" == 0 ]]; then
     if [[ -n "$flag" ]]; then INNGEST_LINK_REASON=inngest_link_scope_mismatch; inngest_link_event scope_mismatch error "field=unverified"; return 1; fi
+    # flag absent: indistinguishable from "never flipped" unless the host remembers it ran https (a legitimate off has a verified scope)
+    _inngest_link_last_scheme
+    if [[ "$_IL_PREV" == https ]]; then INNGEST_LINK_REASON=inngest_link_scope_mismatch; inngest_link_event scope_mismatch error "field=unverified previous=https"; return 1; fi
+    scope_verified=0
     inngest_link_event scope_unverified warning "project_lines=$proj_n config_lines=$cfg_n action=http_default"
   fi
 
@@ -3620,9 +3631,11 @@ resolve_inngest_link() {
   #    CANDIDATE, install last.
   cand="$(mktemp /tmp/inngest-ca-cand.XXXXXX 2>/dev/null)" || cand=""  # lint-trap-ownership: ok rm -f on every path below; PrivateTmp bounds an abort leak
   if [[ "$INNGEST_LINK_CA_STRICT" != 1 ]]; then
-    if [[ -f "$ca_dest" && ! -L "$ca_dest" ]]; then
-      :   # already a regular file (an earlier placeholder, or a CA an https deploy installed): left exactly as it is
+    if [[ -f "$ca_dest" && ! -L "$ca_dest" && ! -s "$ca_dest" ]]; then
+      :   # already an empty regular file (an earlier placeholder): left as it is
     elif [[ -z "$cand" ]] || ! _inngest_link_install "$cand" "$ca_dest" 0644; then
+      # missing, a symlink, an empty directory, or a NON-empty regular file (the pinned CA of an earlier https deploy, now off):
+      # replaced by the empty placeholder through a new inode, so a still-running container keeps the bytes it mounted
       inngest_link_event ca_unwritable warning "dir=$INNGEST_LINK_DIR action=continue"
     fi
     rm -f "$cand"
@@ -3678,18 +3691,31 @@ resolve_inngest_link() {
   fi
   rm -f "$cand"
 
-  # 6. the downgrade memory: a host that last resolved https and now resolves http is signalled (never failed), then the scheme is persisted
+  # 6. the downgrade memory: a host that last ran https and now resolves http (verified scope) is signalled, never failed here.
+  #    The scheme is only STAGED (INNGEST_LINK_PENDING_SCHEME): inngest_link_commit_scheme records it once the container started,
+  #    and never on a run whose scope was unverified.
   _inngest_link_last_scheme
   if [[ "$scheme" == http && "$_IL_PREV" == https ]]; then
     inngest_link_event https_to_http warning "state=$INNGEST_LINK_STATE previous=https"
   fi
+  if [[ "$scope_verified" == 1 ]]; then INNGEST_LINK_PENDING_SCHEME="$scheme"; fi
+  INNGEST_BASE_URL_RESOLVED="$url"
+  inngest_link_event resolved info "state=$INNGEST_LINK_STATE scheme=$scheme"
+  return 0
+}
+
+# inngest_link_commit_scheme: record the staged scheme in $INNGEST_LINK_DIR/last-scheme (atomic). Called once, right after the
+# production container started (the point where the scheme was actually deployed); a failed canary, an aborted deploy or a
+# scope-unverified run leaves the file untouched. Best effort: never fails the deploy.
+inngest_link_commit_scheme() {
+  local cand=""
+  [[ "$INNGEST_LINK_PENDING_SCHEME" == https || "$INNGEST_LINK_PENDING_SCHEME" == http ]] || return 0
   cand="$(mktemp /tmp/inngest-link-scheme.XXXXXX 2>/dev/null)" || cand=""  # lint-trap-ownership: ok rm -f on every path below; PrivateTmp bounds an abort leak
-  if [[ -z "$cand" ]] || ! printf '%s\n' "$scheme" > "$cand" || ! _inngest_link_install "$cand" "$INNGEST_LINK_DIR/last-scheme" 0644; then
+  if [[ -z "$cand" ]] || ! printf '%s\n' "$INNGEST_LINK_PENDING_SCHEME" > "$cand" || ! _inngest_link_install "$cand" "$INNGEST_LINK_DIR/last-scheme" 0644; then
     inngest_link_event last_scheme_unwritable warning "dir=$INNGEST_LINK_DIR action=continue"
   fi
   rm -f "$cand"
-  INNGEST_BASE_URL_RESOLVED="$url"
-  inngest_link_event resolved info "state=$INNGEST_LINK_STATE scheme=$scheme"
+  INNGEST_LINK_PENDING_SCHEME=""
   return 0
 }
 
@@ -5117,6 +5143,9 @@ case "$COMPONENT" in
         # apply-deploy-pipeline-fix.yml asserts this == sha256(committed) with no
         # SSH — the "applied ≠ loaded" gap closer. Best-effort; never gates.
         write_seccomp_profile_hash
+
+        # #10136: the production container is up on the resolved Inngest link - only now record the scheme (downgrade memory).
+        inngest_link_commit_scheme
 
         # Clear the deploy lease so the new container's crons resume immediately
         # (#5669 / ADR-078). Best-effort: the substrate's TTL fail-open is the

@@ -124,23 +124,26 @@ resource "doppler_secret" "inngest_tls_ca" {
 #   pending:<epoch> https only while now <= epoch + 30 min (a lease; a lapse resolves to http plus an event)
 #   1               https, fail-closed: a failed self-gate, a CA read error or an invalid CA fails the deploy
 #
-# SOURCE OF TRUTH: the Tier-B `inngest_link_flag` job of apply-web-platform-infra.yml (apply_target=inngest-link-flag,
-# environment infra-privileged), driven by .github/workflows/inngest-link-flip.yml, passes the requested value as
-# TF_VAR_inngest_link_tls in the environment of its terraform plan (empty for `off`), set AFTER `doppler run` injected
-# its own variables, and applies only this resource. It writes and deletes NO Doppler key. That is deliberate:
-# prd_terraform is a Doppler BRANCH config that INHERITS prd, and this resource writes the secret into prd, so the value
-# a prd_terraform key delete would have "removed" reappears by inheritance and the plan would carry no delete.
-# This resource is DELIBERATELY OUT of the per-merge `-target` list (CTO G1): a merge must never flip the production
-# URL, and a prd-write credential is not minted for this. It is classified in OPERATOR_APPLIED_EXCLUSIONS and stripped
-# from the per-merge view in terraform-target-parity.test.ts, with a row asserting the flip job is its only targeting site.
+# SOURCE OF TRUTH: the prd_terraform key INNGEST_LINK_TLS (TF_VAR_inngest_link_tls through `--name-transformer tf-var`),
+# written FIRST by the Tier-B `inngest_link_flag` job of apply-web-platform-infra.yml (apply_target=inngest-link-flag,
+# environment infra-privileged), driven by .github/workflows/inngest-link-flip.yml: set for `pending:<epoch>` and `1`,
+# deleted (and verified gone) for `off`. The job then plans and applies only this resource.
 #
-# A full untargeted plan (the drift detector, infra-validation) sees the resource consistently WITHOUT the job's override:
-# `doppler run -c prd_terraform --name-transformer tf-var` resolves INNGEST_LINK_TLS through prd_terraform's inheritance of
-# prd, which holds exactly the secret this resource manages, so var.inngest_link_tls equals state (both empty while the
-# secret does not exist). The one way to break that is a hand-made INNGEST_LINK_TLS override KEY IN prd_terraform: it would
-# shadow prd and make every untargeted plan propose a change. None is created by this repo. The variable's validation
-# rejects any value outside the resolver's allowlist before a plan can carry it; the resolver re-checks, since the value
-# is read from Doppler on the host.
+# WHY THE KEY MUST EXIST. MEASURED 2026-10-19 (a names-only listing of Doppler soleur/prd_terraform, 170 names): the
+# branch config prd_terraform does NOT inherit a Terraform-written prd key created after the branch;
+# REGISTRY_PUSH_ACCESS_TOKEN_ID/_SECRET are in prd and absent from prd_terraform (same fact: tunnel.tf:276-281, ADR-164,
+# scheduled-terraform-drift.yml). This resource writes its secret into prd, so without the prd_terraform key every
+# UNTARGETED plan (the drift detector, infra-validation, an operator full apply) sees var.inngest_link_tls unset ("" ->
+# count 0) and proposes to DESTROY the live flag; a full apply would silently downgrade the link to http. The key keeps
+# those plans consistent with state, and `off` removes both copies so they agree on absent. The job additionally passes
+# TF_VAR_inngest_link_tls to its own plan as an explicit `env` AFTER `doppler run` (empty for `off`), so it is correct
+# whether or not Doppler inherits (an inherited copy of the prd value would otherwise defeat a delete of the key).
+#
+# This resource is DELIBERATELY OUT of the per-merge `-target` list (CTO G1): a merge must never flip the production
+# URL. It is classified in OPERATOR_APPLIED_EXCLUSIONS and stripped from the per-merge view in
+# terraform-target-parity.test.ts, with a row asserting the flip job is its only targeting site. The variable's
+# validation rejects any value outside the resolver's allowlist before a plan can carry it; the resolver re-checks,
+# since the value is read from Doppler on the host.
 resource "doppler_secret" "inngest_link_tls" {
   count = var.inngest_link_tls == "" ? 0 : 1
 

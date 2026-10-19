@@ -860,4 +860,24 @@ test_df_link_env
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
+
+# ANTI-VACUITY FLOOR (exact count). Reported by printf + exit, never through assert_eq/the counters it backstops (ADR-193): deleting
+# a block of rows (or neutering assert_eq so it stops counting) must be visible. First an instrument self-test: a subshell drives the
+# suite's own assert_eq once with a comparison that MUST fail and requires the FAIL counter, not PASS, to have moved.
+ST_GOT="$( PASS=0; FAIL=0; assert_eq selftest-must-fail 1 2 >/dev/null; printf '%s/%s' "$PASS" "$FAIL" )"
+if [[ "$ST_GOT" != "0/1" ]]; then
+  printf 'INSTRUMENT FAIL - %s: assert_eq self-test got pass/fail %s, want 0/1\n' "$(basename "${BASH_SOURCE[0]}")" "$ST_GOT" >&2
+  exit 2
+fi
+SELFTEST_PASSES=0
+REAL_PASSES=$((PASS - SELFTEST_PASSES))
+MIN_PASSES=113
+if [[ "$FAIL" -eq 0 && "$REAL_PASSES" -lt "$MIN_PASSES" ]]; then
+  printf 'FATAL: anti-vacuity floor - %s assertions passed, expected exactly %s (a block of rows was deleted or skipped)\n' "$REAL_PASSES" "$MIN_PASSES" >&2
+  exit 1
+fi
+if [[ "$FAIL" -eq 0 && "$REAL_PASSES" -gt "$MIN_PASSES" ]]; then
+  printf 'FATAL: floor drift - %s assertions passed but MIN_PASSES is %s - set MIN_PASSES=%s\n' "$REAL_PASSES" "$MIN_PASSES" "$REAL_PASSES" >&2
+  exit 1
+fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

@@ -2095,7 +2095,7 @@ PRODUCER_JOIN=(
   'apps/web-platform/infra/inngest-dedicated-host-classify.test.sh | jq | drains | 1 | -R'
   'apps/web-platform/infra/inngest-host.test.sh | openssl | drains | 1 | s_client'
   'apps/web-platform/infra/inngest-inventory.test.sh | logger | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T2; t2:rc0/27s; hits 0)'
-  'apps/web-platform/infra/inngest-link-flip-workflow.test.sh | doppler | exempt | text-only the suite parses the Tier-B job of apply-web-platform-infra.yml as data and runs only its plan step against a fake that ignores stdin (the piped sites of that workflow lie in other jobs and are never executed here)'
+  'apps/web-platform/infra/inngest-link-flip-workflow.test.sh | doppler | drains | 1 | *'
   'apps/web-platform/infra/inngest-link-resolver.test.sh | docker | exempt | text-only the suite sources only the inngest-link-resolver block of ci-deploy.sh (no pipe into docker inside it); the derived producer sites (the printf-to-docker-login --password-stdin pipe, the canary layer 3 pipe into logger and the docker logs pipe into logger) lie outside the block and are never executed here'
   'apps/web-platform/infra/inngest-link-resolver.test.sh | logger | exempt | text-only the suite sources only the inngest-link-resolver block of ci-deploy.sh, whose logger calls are plain calls or after a || (no pipe into logger); the derived producer sites (canary layer 3 and docker logs piped into logger) lie outside the block and are never executed here'
   'apps/web-platform/infra/inngest.test.sh | curl | exempt | text-only the probe body under test never pipes into curl; both stubs ignore stdin'

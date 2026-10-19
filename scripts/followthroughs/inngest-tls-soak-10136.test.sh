@@ -144,10 +144,12 @@ chmod +x "$TMP/bin/bq"
 #                ship (marker+stage right, shipper `vector` / absent, host `decoy-host`), marker (stage+shipper right, marker
 #                SOLEUR_INNGEST_TLS_REFUSED) or stage (marker+shipper right, stage `boot-complete`): each differs from a real row
 #                in EXACTLY one isolation field, so each kills only its own clause
+#   hostname=S   every row's host (default soleur-inngest)    bootid=S  every row's boot_id (default ab12cd34)
+#   innerdt=1    the INNER (emitter-clock) dt of every row is 2001-01-01T00:00:00Z while the OUTER (Better Stack) dt stays in the window
 #   pre=2 / post=2  the out-of-window rows come from another host (they must not count toward the single-host check)
 build_series() {
   local out="$1"; shift
-  local leg=0 tls=1000 tlsstep=30 jit=20 n=-1 gapat=-1 gaplen=0 legbump=-1 legdec=-1 reboot=-1 samets=0 badrow=-1 badboot=0 pre=0 decoy=0 lateleg=-1 post=0 bootonly=-1 tlsdec=-1 onesided=0 hostat=-1 nohost=0 nohostrow=-1 foreign=none kv
+  local leg=0 tls=1000 tlsstep=30 jit=20 n=-1 gapat=-1 gaplen=0 legbump=-1 legdec=-1 reboot=-1 samets=0 badrow=-1 badboot=0 pre=0 decoy=0 lateleg=-1 post=0 bootonly=-1 tlsdec=-1 onesided=0 hostat=-1 nohost=0 nohostrow=-1 foreign=none hostname=soleur-inngest bootid=ab12cd34 innerdt=0 kv
   for kv in "$@"; do
     case "$kv" in
       leg=*) leg="${kv#*=}" ;; tls=*) tls="${kv#*=}" ;; tlsstep=*) tlsstep="${kv#*=}" ;; jit=*) jit="${kv#*=}" ;; n=*) n="${kv#*=}" ;;
@@ -155,6 +157,7 @@ build_series() {
       reboot=*) reboot="${kv#*=}" ;; samets=*) samets="${kv#*=}" ;; badrow=*) badrow="${kv#*=}" ;; badboot=*) badboot="${kv#*=}" ;;
       pre=*) pre="${kv#*=}" ;; decoy=*) decoy="${kv#*=}" ;; lateleg=*) lateleg="${kv#*=}" ;; post=*) post="${kv#*=}" ;; bootonly=*) bootonly="${kv#*=}" ;; tlsdec=*) tlsdec="${kv#*=}" ;; onesided=*) onesided="${kv#*=}" ;;
       hostat=*) hostat="${kv#*=}" ;; nohost=*) nohost="${kv#*=}" ;; nohostrow=*) nohostrow="${kv#*=}" ;; foreign=*) foreign="${kv#*=}" ;;
+      hostname=*) hostname="${kv#*=}" ;; bootid=*) bootid="${kv#*=}" ;; innerdt=*) innerdt="${kv#*=}" ;;
     esac
   done
   assert_fixture_dir "$out"
@@ -164,12 +167,13 @@ build_series() {
     --argjson reboot "$reboot" --argjson samets "$samets" --argjson badrow "$badrow" --argjson badboot "$badboot" \
     --argjson pre "$pre" --argjson decoy "$decoy" --argjson lateleg "$lateleg" --argjson post "$post" \
     --argjson bootonly "$bootonly" --argjson tlsdec "$tlsdec" --argjson onesided "$onesided" \
-    --argjson hostat "$hostat" --argjson nohost "$nohost" --argjson nohostrow "$nohostrow" --arg foreign "$foreign" '
+    --argjson hostat "$hostat" --argjson nohost "$nohost" --argjson nohostrow "$nohostrow" --arg foreign "$foreign" \
+    --arg hn "$hostname" --arg bootid "$bootid" --argjson innerdt "$innerdt" '
     def h: "a" * 64;
     def ts($e): ($e | strftime("%Y-%m-%d %H:%M:%S"));
     def detail($l; $t; $boot): "unit=active nrestarts=0 fetch_rc=0 bind=10.0.1.40:8443 listener=1 served_sha256=\(h) cert_sha256=\(h) notafter_days=3649 legacy_8288_packets=\($l) tls_8443_packets=\($t) nft8443_sha256=\(h) nft_rules=9 boot_id=\($boot)";
     # the emitter (inngest-boot-phone-home.sh) POSTs {message, marker, stage, detail, host, dt, shipper:"cloud-init-phone-home"}
-    def rowx($e; $d; $h; $m; $s; $sh): {dt: ts($e), raw: ({message: ($m + " stage=" + $s + " " + $d), marker: $m, stage: $s, detail: $d, host: $h, dt: ($e | todate), shipper: $sh} | tostring)};
+    def rowx($e; $d; $h; $m; $s; $sh): {dt: ts($e), raw: ({message: ($m + " stage=" + $s + " " + $d), marker: $m, stage: $s, detail: $d, host: $h, dt: (if $innerdt == 1 then "2001-01-01T00:00:00Z" else ($e | todate) end), shipper: $sh} | tostring)};
     def rowh($e; $d; $h): rowx($e; $d; $h; "SOLEUR_INNGEST_BOOT_STAGE"; "tls-health"; "cloud-init-phone-home");
     def row($e; $d): rowh($e; $d; "soleur-inngest");
     # deterministic jitter that visits both extremes: -j, +j, 0, +j, -j ... so consecutive gaps reach 300+2j
@@ -181,12 +185,12 @@ build_series() {
       ( range(0; $cnt) as $i
         | epoch($i) as $e
         | select(($gapat < 0) or ($e < $t0 + $gapat * 3600) or ($e >= $t0 + ($gapat + $gaplen) * 3600))
-        | (if ($reboot >= 0 and $i >= $reboot) or ($bootonly >= 0 and $i >= $bootonly) then "cd56ef78" else (if $badboot == 1 then "--------" else "ab12cd34" end) end) as $boot
+        | (if ($reboot >= 0 and $i >= $reboot) or ($bootonly >= 0 and $i >= $bootonly) then "cd56ef78" else (if $badboot == 1 then "--------" else $bootid end) end) as $boot
         | (if $reboot >= 0 and $i >= $reboot then ($i - $reboot) else $i end) as $k
         | (if $reboot >= 0 and $i >= $reboot then 0 else $leg end) as $lbase
         | ($lbase + (if $legbump >= 0 and $i >= $legbump then 5 else 0 end) + (if $lateleg >= 0 and $i == $lateleg then 5 else 0 end) - (if $legdec >= 0 and $i >= $legdec then 1 else 0 end)) as $l
         | (if $reboot >= 0 and $i >= $reboot then (10 + $k * $tlsstep) else ($tls + $i * $tlsstep - (if $tlsdec >= 0 and $i >= $tlsdec then 100 else 0 end)) end) as $t
-        | (if $nohost == 1 or $i == $nohostrow then "" elif $hostat >= 0 and $i >= $hostat then "soleur-inngest-b" else "soleur-inngest" end) as $h
+        | (if $nohost == 1 or $i == $nohostrow then "" elif $hostat >= 0 and $i >= $hostat then "soleur-inngest-b" else $hn end) as $h
         | if $i == $badrow then rowh($e; "unit=active listener=1 boot_id=ab12cd34"; $h) else rowh($e; detail($l; $t; $boot); $h) end ),
       ( if $foreign == "ship" then
           rowx($base + 7200; detail(777777; 1; "ab12cd34"); "decoy-host"; "SOLEUR_INNGEST_BOOT_STAGE"; "tls-health"; "vector"),
@@ -488,6 +492,34 @@ expect "HS5 SOAK_EXPECT_HOST different from the series' host => exit 3 naming th
 SOAK_EXPECT_HOST='bad host;' run_probe "$FXG" "$TMP/good.jsonl"
 expect "HS6 a SOAK_EXPECT_HOST that is not a hostname => exit 3" 3 "SOAK_EXPECT_HOST"
 
+# hostile / prefix / projection-field rows (review survivors S2, S5, S8)
+build_series "$TMP/hostile.jsonl" hostname='a b;c'
+run_probe "$FXG" "$TMP/hostile.jsonl"
+expect "HS7 a hostile host string ('a b;c') is not a hostname => exit 3, never a PASS" 3 "no usable host"
+if grep -qF 'b;c' <<<"$OUT"; then fail "HS7b the hostile host text reached the verdict output: $(printf '%s' "$OUT" | head -2 | tr '\n' '|')"; else pass "HS7b the hostile host text never reaches the verdict output"; fi
+build_series "$TMP/hostb.jsonl" hostname=soleur-inngest-b
+SOAK_EXPECT_HOST=soleur-inngest run_probe "$FXG" "$TMP/hostb.jsonl"
+expect "HS8 SOAK_EXPECT_HOST that is only a PREFIX of the series' host (soleur-inngest vs soleur-inngest-b) => exit 3" 3 "not the expected host"
+SOAK_EXPECT_HOST=soleur-inngest-b run_probe "$FXG" "$TMP/hostb.jsonl"
+expect "HS8b SOAK_EXPECT_HOST equal to that longer host => PASS" 0 "PASS:"
+build_series "$TMP/innerdt.jsonl" innerdt=1
+run_probe "$FXG" "$TMP/innerdt.jsonl"
+expect "D1 the OUTER (query) dt places the rows: an inner emitter-clock dt far outside the window changes nothing => PASS" 0 "PASS:"
+
+# boot_id length: the 8-character minimum matches the anchor regex ({8,36}); shorter ids are unparseable rows
+build_series "$TMP/boot1.jsonl" bootid=a
+run_probe "$FXG" "$TMP/boot1.jsonl"
+expect "B1 a 1-character boot_id is an unparseable row => FAIL" 1 "unparseable"
+build_series "$TMP/boot7.jsonl" bootid=ab12cd3
+run_probe "$FXG" "$TMP/boot7.jsonl"
+expect "B2 a 7-character boot_id (one under the minimum) is an unparseable row => FAIL" 1 "unparseable"
+
+# the baseline window is 400 s (MAX_GAP_SEC): 3000 s after T is far inside any 'hours' tolerance but still a hole
+BASE3000_ISO="$(date -u -d "@$((T_EPOCH + 3000))" +%Y-%m-%dT%H:%M:%SZ)"
+FX3000="$TMP/fx-base3000"; build_fx "$FX3000" "base=S1-SOAK-BASELINE: dt=$BASE3000_ISO boot_id=ab12cd34 legacy_8288_packets=0 tls_8443_packets=1000"
+run_probe "$FX3000" "$TMP/good.jsonl"
+expect "A16 a baseline 3000 s after T leaves an unmeasured hole => exit 3" 3 "malformed anchor"
+
 # --- row isolation: each foreign row differs from a real tls-health row in EXACTLY ONE field, so each fixture kills one clause ---
 build_series "$TMP/f-ship.jsonl" foreign=ship
 run_probe "$FXG" "$TMP/f-ship.jsonl"
@@ -575,6 +607,25 @@ if [[ -z "$m" ]]; then fail "MUT-MAX_GAP_SEC=300: the substitution did not land"
   else fail "MUT-MAX_GAP_SEC=300: H2b exits $RC (want 1) with the limit tightened -- it does not pin the limit :: $(printf '%s' "$OUT" | head -2 | tr '\n' '|')"; fi
 fi
 
+# Constant/shape mutations whose fixtures keep the SAME exit code under the mutant and differ only in the decisive text, so the
+# row asserts the token is ABSENT from the mutant's output (the mutant no longer takes the guarded branch).
+mut_notok() { # mut_notok <label> <sed-expr> <fx> <rows> <token> <what> [VAR=value]
+  local label="$1" expr="$2" fx="$3" rows="$4" token="$5" what="$6" envkv="${7:-}" m
+  m="$(mutant_sub "$label" "$expr")"
+  if [[ -z "$m" ]]; then fail "MUT-$label: the substitution did not land"; return; fi
+  if [[ -n "$envkv" ]]; then declare -gx "$envkv"; fi
+  PROBE_UNDER_TEST="$m" run_probe "$fx" "$rows"
+  if [[ -n "$envkv" ]]; then unset "${envkv%%=*}"; fi
+  if grep -qF -- "$token" <<<"$OUT"; then fail "MUT-$label: $what still says '$token' under the mutant -- the fixture does not reach the mutated line :: $(printf '%s' "$OUT" | head -2 | tr '\n' '|')"
+  else pass "MUT-$label: under the mutant $what no longer says '$token' (rc=$RC), so the fixture pins that line"; fi
+}
+mut_notok host-regex-any 's/test\("\^\[A-Za-z0-9\._-\]\{1,253\}\$"\)/test(".")/' "$FXG" "$TMP/hostile.jsonl" "no usable host" "the hostile-host series (HS7)"
+mut_notok expect-prefix 's/\[ "\$hosts" != "\$EXPECT_HOST" \]/[[ "$hosts" != "$EXPECT_HOST"* ]]/' "$FXG" "$TMP/hostb.jsonl" "not the expected host" "the prefix-host series (HS8)" "SOAK_EXPECT_HOST=soleur-inngest"
+mut_notok inner-dt 's/\$o\.dt/$r.dt/' "$FXG" "$TMP/innerdt.jsonl" "PASS:" "the inner-dt series (D1)"
+mut_notok boot-min-1 's/length\(boot\) < 8/length(boot) < 1/' "$FXG" "$TMP/boot1.jsonl" "unparseable" "the 1-character boot_id series (B1)"
+mut_notok boot-min-7 's/length\(boot\) < 8/length(boot) < 7/' "$FXG" "$TMP/boot7.jsonl" "unparseable" "the 7-character boot_id series (B2)"
+mut_notok base-window-4000 's/^MAX_GAP_SEC=400 /MAX_GAP_SEC=4000/' "$FX3000" "$TMP/good.jsonl" "malformed anchor" "the baseline-at-T+3000 s anchor (A16)"
+
 # --- no case may have been answered by a REFUSED fake-gh argv (the lib maps any gh failure to rc 2/3, which would let an
 # rc-2/rc-3 row pass for the wrong reason) ---
 refused="$(cat "$TMP"/fx-*/refused.log 2>/dev/null | head -3)"
@@ -584,7 +635,7 @@ if [[ -z "$refused" ]]; then pass "the fake gh refused no argv in any case"; els
 # Equal to the count measured on the green run, so deleting any case reds the suite. Reported with printf + exit, never
 # through the helpers it backstops (ADR-193): a floor dispatched through fail() is disarmed by the same one-line edit that
 # disarms every assertion it protects.
-FLOOR=74
+FLOOR=88
 if [[ "$passes" -lt "$FLOOR" ]]; then
   printf '  FAIL ANTI-VACUITY: only %s PASSES recorded, floor is %s -- cases were deleted, skipped, or a helper stopped counting.\n' "$passes" "$FLOOR" >&2
   exit 1
