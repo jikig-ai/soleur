@@ -38,6 +38,10 @@ infra/
 # `!infra/bwrap-shim/` directory bang (which would re-include siblings).
 !infra/bwrap-userns-clone3-deny.bpf
 !infra/bwrap-shim/bwrap
+# Same three-surface rule for the #10453 deploy-time SDK Bash smoke probe: the runner stage bakes
+# `infra/lib/sdk-bash-probe.mjs` (`COPY --from=builder`) so ci-deploy.sh can `docker exec` it in the canary. Exact path
+# only: a `!infra/lib/` directory bang would re-include the lib siblings (shell helpers, tests).
+!infra/lib/sdk-bash-probe.mjs
 # Re-include the host-bootstrap scripts baked into the image (#5921 / ADR-080).
 # The Dockerfile runner stage bakes these into /opt/soleur/host-scripts/ via
 # `COPY --from=builder /app/infra/<file>` so cloud-init can `docker cp` the set

@@ -373,6 +373,30 @@ workspace_isolation_json() {
   canary_state_json "${WORKSPACE_ISOLATION_STATE_FILE:-/mnt/data/ci-deploy-workspace-isolation.json}" "workspace-isolation"
 }
 
+# Deploy-time SDK Bash smoke verdict (#10453, ADR-079 addendum 2026-10-19). The no-SSH surface for the dark-launched
+# smoke: the last deploy's verdict (pass | sdk_bash_smoke_failed | smoke_infra_error), its reason, the soak
+# accumulators the promotion follow-through reads (scripts/followthroughs/sdk-bash-smoke-verdict-10548.sh), plus the two
+# fields the shared ledger shape does not carry: `coverage` (sdk_wrapper_shim_prodtuple | replay_only: a replay-only pass
+# never counts toward promotion) and `consecutive_infra_error` (the stale-probe counter, three in a row warn). The shared
+# reader supplies the base fields and the foreign-ledger refusal; the two extras are read only from a file whose stamp is
+# absent or its own, so a foreign ledger leaks neither. Safe sentinel (verdict "unknown", coverage "", counter 0) when the
+# file is absent: an old script with a new image, or a deploy that never reached the smoke. Best-effort + read-only.
+# DURABLE path, MUST match ci-deploy.sh SDK_BASH_SMOKE_STATE_FILE.
+sdk_bash_smoke_json() {
+  local f="${SDK_BASH_SMOKE_STATE_FILE:-/mnt/data/ci-deploy-sdk-bash-smoke.json}" base cov="" cie=0 stamp
+  base="$(canary_state_json "$f" "sdk-bash-smoke")"
+  if [[ -f "$f" ]]; then
+    stamp="$(jq -r '.ledger // ""' "$f" 2>/dev/null || echo '')"
+    if [[ -z "$stamp" || "$stamp" == "sdk-bash-smoke" ]]; then
+      cov="$(jq -r '.coverage // ""' "$f" 2>/dev/null || echo '')"
+      cie="$(jq -r '.consecutive_infra_error // 0' "$f" 2>/dev/null || echo 0)"
+    fi
+  fi
+  [[ "$cov" == "sdk_wrapper_shim_prodtuple" || "$cov" == "replay_only" ]] || cov=""
+  [[ "$cie" =~ ^[0-9]+$ ]] || cie=0
+  jq -nc --argjson b "$base" --arg cov "$cov" --argjson cie "$cie" '$b + {coverage: $cov, consecutive_infra_error: $cie}'
+}
+
 # The canary-promotion follow-through
 # (scripts/followthroughs/canary-promotion-5875.sh) reads this field.
 sandbox_canary_json() {
@@ -768,6 +792,7 @@ CONTAINER_RESTART="$(container_restart_json)"
 CRON_DRAIN="$(cron_drain_json)"
 SANDBOX_CANARY="$(sandbox_canary_json)"
 WORKSPACE_ISOLATION="$(workspace_isolation_json)"
+SDK_BASH_SMOKE="$(sdk_bash_smoke_json)"
 SECCOMP_PROFILE_SHA256="$(seccomp_profile_sha256_value)"
 SECCOMP_LIVE="$(seccomp_live_json)"
 
@@ -799,6 +824,7 @@ jq -nc \
   --argjson cd "$CRON_DRAIN" \
   --argjson sc "$SANDBOX_CANARY" \
   --argjson wi "$WORKSPACE_ISOLATION" \
+  --argjson sb "$SDK_BASH_SMOKE" \
   --arg sps "$SECCOMP_PROFILE_SHA256" \
   --argjson sl "$SECCOMP_LIVE" \
   --arg hid "$HOST_ID" \
@@ -812,7 +838,7 @@ jq -nc \
   --arg rb "$INNGEST_REDIS_BINARY" \
   --arg rts "$INNGEST_REDIS_TAIL_STATUS" \
   --arg vci "$VECTOR_CONFIG_IDENTITY" \
-  '$base + $cr + $cd + $sl + {host_id: $hid, ci_deploy_sha256: $cds, sandbox_canary: $sc, workspace_isolation: $wi, seccomp_profile_sha256: $sps, journald_storage: $js, services: (($base.services // {}) + {
+  '$base + $cr + $cd + $sl + {host_id: $hid, ci_deploy_sha256: $cds, sandbox_canary: $sc, workspace_isolation: $wi, sdk_bash_smoke: $sb, seccomp_profile_sha256: $sps, journald_storage: $js, services: (($base.services // {}) + {
     inngest_heartbeat: $hb,
     inngest_heartbeat_journal_tail: $hbj,
     inngest_heartbeat_dark_arm: $hbd,

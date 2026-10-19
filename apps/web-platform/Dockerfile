@@ -299,6 +299,14 @@ COPY --from=builder /app/scripts/tenant-isolation-inner-probe.sh ./scripts/tenan
 COPY --from=builder /app/infra/bwrap-userns-clone3-deny.bpf ./infra/bwrap-userns-clone3-deny.bpf
 COPY --from=builder --chmod=0755 /app/infra/bwrap-shim/bwrap /usr/local/bin/bwrap
 
+# Deploy-time SDK Bash smoke probe (#10453, ADR-079 addendum 2026-10-19). ci-deploy.sh `docker exec`s it in the CANARY
+# container (SMOKE=1, under `env -i`) to run one real wrapped Bash call through the real Agent SDK, the shim above and the
+# production sandbox config. Plain ESM with no build step; it needs only the SDK already in node_modules. An image that
+# predates this line is reported as `smoke_infra_error reason=probe_absent` (never a rollback). Its literal sandbox config
+# is pinned to the production builder by test/sdk-bash-probe-parity.test.ts. The exact-path bang in .dockerignore is the
+# second half of this line.
+COPY --from=builder /app/infra/lib/sdk-bash-probe.mjs ./infra/lib/sdk-bash-probe.mjs
+
 # Config file (compiled from .ts to .mjs to avoid TypeScript dep at runtime)
 COPY --from=builder /app/next.config.mjs ./next.config.mjs
 

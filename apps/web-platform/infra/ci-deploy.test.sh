@@ -697,6 +697,40 @@ if [[ "${1:-}" == "exec" && "$*" == *vitest.canary.config.ts* ]]; then
   exit "$_cwi_rc"
 fi
 
+# #10453 SDK Bash smoke (run_sdk_bash_smoke), BEFORE the mode case so it works in every mode. Three execs are answered here:
+#   `exec <ctr> test -f <probe>`                  presence: rc 0, or rc 1 + docker's own stderr under MOCK_SMOKE_PROBE_ABSENT=1
+#                                                 (MOCK_SMOKE_ABSENT_ERR overrides the stderr line)
+#   `exec <ctr> /bin/sh -c ... soleur-smoke-home` the container HOME: MOCK_SMOKE_HOME (default /home/soleur), rc MOCK_SMOKE_HOME_RC
+#   `exec ... node <probe>`                       the probe: stdout MOCK_SMOKE_OUT (default: a full-coverage pass line), stderr
+#                                                 MOCK_SMOKE_ERR, exit MOCK_SMOKE_RC (default 0)
+# Every one of them appends its raw argv (space-joined) to MOCK_SMOKE_LOG so a row can assert the target container, the
+# envelope and the count. A second recorder, MOCK_EXEC_ALL_LOG, sees EVERY docker exec (to prove the live prod container is
+# never exec'd by the smoke).
+if [[ "${1:-}" == "exec" && -n "${MOCK_EXEC_ALL_LOG:-}" ]]; then printf '%s\n' "$*" >> "$MOCK_EXEC_ALL_LOG"; fi
+if [[ "${1:-}" == "exec" && "$*" == *soleur-smoke-home* ]]; then
+  if [[ -n "${MOCK_SMOKE_LOG:-}" ]]; then printf '%s\n' "$*" >> "$MOCK_SMOKE_LOG"; fi
+  printf '%s' "${MOCK_SMOKE_HOME-/home/soleur}"
+  exit "${MOCK_SMOKE_HOME_RC:-0}"
+fi
+if [[ "${1:-}" == "exec" && "$*" == *" test -f "*sdk-bash-probe.mjs* ]]; then
+  if [[ -n "${MOCK_SMOKE_LOG:-}" ]]; then printf '%s\n' "$*" >> "$MOCK_SMOKE_LOG"; fi
+  if [[ "${MOCK_SMOKE_PROBE_ABSENT:-}" == "1" ]]; then
+    printf '%s\n' "${MOCK_SMOKE_ABSENT_ERR:-OCI runtime exec failed: exec failed: unable to start container process: exec: \"test\": executable file not found in \$PATH: unknown}" >&2
+    exit 1
+  fi
+  exit 0
+fi
+if [[ "${1:-}" == "exec" && "$*" == *"node /app/infra/lib/sdk-bash-probe.mjs"* ]]; then
+  if [[ -n "${MOCK_SMOKE_LOG:-}" ]]; then printf '%s\n' "$*" >> "$MOCK_SMOKE_LOG"; fi
+  if [[ -n "${MOCK_SMOKE_ERR+x}" ]]; then printf '%s\n' "$MOCK_SMOKE_ERR" >&2; fi
+  if [[ -n "${MOCK_SMOKE_OUT+x}" ]]; then
+    printf '%s\n' "$MOCK_SMOKE_OUT"
+  else
+    printf 'SDK_BASH_RESULT {"verdict":"pass","reason":"ok","coverage":"sdk_wrapper_shim_prodtuple"}\n'
+  fi
+  exit "${MOCK_SMOKE_RC:-0}"
+fi
+
 # #5933 Item 4 image-verify handlers, BEFORE the mode case so they work in every
 # mode and the app-run failure arming (canary/prod) cannot misfire on them.
 #
@@ -3579,6 +3613,239 @@ assert_cross_workspace_isolation() {
 }
 
 assert_cross_workspace_isolation
+
+echo ""
+echo "--- #10453: deploy-time SDK Bash smoke (report-only dark-launch, canary container only) ---"
+
+# run_sbs_deploy [extra_env]: one web-platform deploy with every observation channel pinned under a fresh mktemp dir created
+# INSIDE the function (so every artifact path is provably absolute for the fixture-relative ratchet). The dir is reported on the
+# LAST stdout line as `SBS_ARTIFACT_DIR=<path>`. extra_env is eval'd inside the subshell AFTER the defaults (so a row can re-pin
+# SDK_BASH_SMOKE_STATE_FILE for multi-run soak rows or arm MOCK_SMOKE_*). The SENTRY_* triple is armed so the page arm is reachable.
+run_sbs_deploy() {
+  local extra_env="${1:-}"
+  local d src
+  d=$(mktemp -d)
+  (
+    export SDK_BASH_SMOKE_STATE_FILE="$d/sb-state.json"
+    export MOCK_SMOKE_LOG="$d/smoke-argv.log"; : > "$d/smoke-argv.log"
+    export MOCK_EXEC_ALL_LOG="$d/exec-all.log"; : > "$d/exec-all.log"
+    export MOCK_LOGGER_CAPTURE_FILE="$d/logger.txt"; : > "$d/logger.txt"
+    export MOCK_SENTRY_CAPTURE_FILE="$d/sentry.txt"; : > "$d/sentry.txt"
+    export MOCK_CANARY_DIAG_LOG="$d/diag.log"; : > "$d/diag.log"
+    export SENTRY_INGEST_DOMAIN="sentry.invalid" SENTRY_PROJECT_ID="1" SENTRY_PUBLIC_KEY="sbs-mock-key"
+    eval "$extra_env"
+    run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
+  ) && src=0 || src=$?
+  printf 'SBS_ARTIFACT_DIR=%s\n' "$d"
+  return "$src"
+}
+
+# sbs_check <id> <description> <0|1 condition-rc> [detail]: one counted row.
+sbs_check() {
+  TOTAL=$((TOTAL + 1))
+  if [[ "$3" == "0" ]]; then PASS=$((PASS + 1)); echo "  PASS: $1 $2"
+  else FAIL=$((FAIL + 1)); echo "  FAIL: $1 $2"; [[ -n "${4:-}" ]] && printf '        %s\n' "$4"; fi
+  return 0
+}
+sbs_dir() { printf '%s\n' "$1" | sed -n 's/^SBS_ARTIFACT_DIR=//p' | tail -1; }
+sbs_jq() { jq -r "$2" "$1" 2>/dev/null || echo "<unreadable>"; }
+# Count the Sentry events in a capture file (a stream of pretty-printed JSON objects) matching a jq select expression.
+sbs_sentry_events() { jq -s "[.[] | select($2)] | length" "$1" 2>/dev/null || echo "<unreadable>"; }
+# Count lines of a file matching a fixed string (0 when the file is empty).
+sbs_count() { local n; n=$({ grep -cF -- "$2" "$1" 2>/dev/null || true; }); printf '%s' "${n:-0}"; }
+
+assert_sdk_bash_smoke() {
+  local out rc d verdict
+  local swap_msg="Canary passed, swapping to production"
+
+  # SBS-1: green path. The probe runs ONCE with the pinned envelope; the ledger carries verdict, coverage and the soak
+  # accumulators in ONE record; one SDK_BASH_SMOKE row; no page, no Sentry event; the deploy continues to the swap.
+  out=$(run_sbs_deploy "") && rc=0 || rc=$?
+  d=$(sbs_dir "$out")
+  local probe_lines exec_line expected_re
+  probe_lines=$(grep -c 'node /app/infra/lib/sdk-bash-probe.mjs' "$d/smoke-argv.log" || true)
+  exec_line=$({ grep 'node /app/infra/lib/sdk-bash-probe.mjs' "$d/smoke-argv.log" || true; } | head -n 1)
+  expected_re='^exec -w /app soleur-web-platform-canary /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/home/soleur APP=/app SMOKE=1 NONCE=[0-9a-f]{32} ANTHROPIC_API_KEY=decoy-api-key-sentinel node /app/infra/lib/sdk-bash-probe.mjs$'
+  sbs_check "SBS-1a" "the probe is exec'd once in the canary under env -i with the pinned allowlist, decoy key, real HOME and a 32-hex nonce (no -u, no -e)" \
+    "$([[ "$rc" -eq 0 && "$probe_lines" -eq 1 && "$exec_line" =~ $expected_re ]] && echo 0 || echo 1)" "rc=$rc lines=$probe_lines argv: $exec_line"
+  sbs_check "SBS-1b" "a green smoke records verdict=pass, coverage, the soak accumulators and the ledger stamp in one record; one SDK_BASH_SMOKE row; no page" \
+    "$([[ "$(sbs_jq "$d/sb-state.json" '[.verdict,.coverage,.consecutive_pass,(.first_pass_at>0),.consecutive_infra_error,.ledger]|@tsv')" == $'pass\tsdk_wrapper_shim_prodtuple\t1\ttrue\t0\tsdk-bash-smoke' \
+        && "$(sbs_count "$d/logger.txt" 'SDK_BASH_SMOKE: verdict=pass')" == 1 && "$(sbs_count "$d/logger.txt" 'SANDBOX_CANARY_FAIL')" == 0 && "$(sbs_sentry_events "$d/sentry.txt" '.tags.op == "sandbox-canary"')" == 0 ]] && echo 0 || echo 1)" \
+    "state: $(cat "$d/sb-state.json" 2>/dev/null)"
+  local smoke_line swap_line faith_line
+  smoke_line=$(printf '%s\n' "$out" | { grep -n "SDK Bash smoke (non-blocking)" || true; } | sed -n '1p' | cut -d: -f1)
+  swap_line=$(printf '%s\n' "$out" | { grep -n "$swap_msg" || true; } | sed -n '1p' | cut -d: -f1)
+  faith_line=$(printf '%s\n' "$out" | { grep -n "Faithful sandbox canary (non-blocking)" || true; } | sed -n '1p' | cut -d: -f1)
+  sbs_check "SBS-1c" "the smoke runs after the faithful canary and before the prod swap" \
+    "$([[ -n "$smoke_line" && -n "$swap_line" && -n "$faith_line" && "$faith_line" -lt "$smoke_line" && "$smoke_line" -lt "$swap_line" ]] && echo 0 || echo 1)" \
+    "faithful=$faith_line smoke=$smoke_line swap=$swap_line"
+  sbs_check "SBS-1d" "only the CANARY container is exec'd for the smoke (the live prod container, present in the mock, is never exec'd with the probe or the presence/HOME reads)" \
+    "$([[ -s "$d/smoke-argv.log" ]] && ! grep -qE 'exec (-w /app )?soleur-web-platform( |$)' "$d/smoke-argv.log" && [[ "$(grep -cE 'exec (-w /app )?soleur-web-platform-canary ' "$d/smoke-argv.log" || true)" -eq 3 ]] && echo 0 || echo 1)" \
+    "$(tr '\n' '|' < "$d/smoke-argv.log")"
+  sbs_check "SBS-1e" "no -u, -e or --env-file reaches the probe exec (the envelope is env -i only)" \
+    "$([[ "$(grep 'node /app/infra/lib/sdk-bash-probe.mjs' "$d/smoke-argv.log" | grep -cE ' (-u|-e|--env-file|--user)[ =]' || true)" == 0 ]] && echo 0 || echo 1)"
+
+  # SBS-2: a sandbox failure pages (ONE journald row in the alert's shape), resets the soak, never rolls back, then the DIAG bundle.
+  local d2 s2 cp2 fail_line
+  d2=$(mktemp -d)
+  run_sbs_deploy "export SDK_BASH_SMOKE_STATE_FILE=\"$d2/sb.json\"" >/dev/null 2>&1 || true
+  run_sbs_deploy "export SDK_BASH_SMOKE_STATE_FILE=\"$d2/sb.json\"" >/dev/null 2>&1 || true
+  out=$(run_sbs_deploy "export SDK_BASH_SMOKE_STATE_FILE=\"$d2/sb.json\"; export MOCK_SMOKE_OUT='SDK_BASH_RESULT {\"verdict\":\"sdk_bash_smoke_failed\",\"reason\":\"apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted\",\"coverage\":\"sdk_wrapper_shim_prodtuple\"}'") && rc=0 || rc=$?
+  d=$(sbs_dir "$out")
+  fail_line=$({ grep -F 'SANDBOX_CANARY_FAIL:' "$d/logger.txt" || true; } | head -n 1)
+  sbs_check "SBS-2a" "a failed smoke exits 0 (no rollback), the deploy still swaps, and the verdict is recorded with the soak reset" \
+    "$([[ "$rc" -eq 0 && "$out" == *"$swap_msg"* && "$(sbs_jq "$d2/sb.json" '[.verdict,.consecutive_pass,.first_pass_at,.consecutive_infra_error]|@tsv')" == $'sdk_bash_smoke_failed\t0\t0\t0' ]] && echo 0 || echo 1)" \
+    "rc=$rc state: $(cat "$d2/sb.json" 2>/dev/null)"
+  sbs_check "SBS-2b" "the page is ONE journald row: SANDBOX_CANARY_FAIL: verdict=sandbox_broken reason=sdk_bash_smoke_failed: <detail> ... (op=sandbox-canary;" \
+    "$([[ "$(sbs_count "$d/logger.txt" 'SANDBOX_CANARY_FAIL:')" == 1 && "$fail_line" == *'SANDBOX_CANARY_FAIL: verdict=sandbox_broken reason=sdk_bash_smoke_failed: apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted sdk= (op=sandbox-canary; report-only canary, never gated)'* ]] && echo 0 || echo 1)" \
+    "row: $fail_line"
+  s2=$(sbs_sentry_events "$d/sentry.txt" '.tags.op == "sandbox-canary"')
+  sbs_check "SBS-2c" "the Sentry event is posted with op=sandbox-canary and verdict=sandbox_broken, level error" \
+    "$([[ "$s2" == 1 && "$(jq -s -r '[.[] | select(.tags.op == "sandbox-canary")][0] | [.level,.tags.op,.tags.verdict,.tags.feature] | @tsv' "$d/sentry.txt" 2>/dev/null)" == $'error\tsandbox-canary\tsandbox_broken\tagent-sandbox' ]] && echo 0 || echo 1)" \
+    "$(head -c 300 "$d/sentry.txt")"
+  local pg dg
+  pg=$({ grep -n 'SANDBOX_CANARY_FAIL:' "$d/logger.txt" || true; } | head -n 1 | cut -d: -f1); dg=$({ grep -n 'SOLEUR_CANARY_SANDBOX_DIAG:' "$d/logger.txt" || true; } | head -n 1 | cut -d: -f1)
+  sbs_check "SBS-2d" "the bounded DIAG bundle follows the page (every row carries trigger=sdk_smoke)" \
+    "$([[ -n "$pg" && -n "$dg" && "$pg" -lt "$dg" && "$(grep -F 'SOLEUR_CANARY_SANDBOX_DIAG:' "$d/logger.txt" | grep -vc 'trigger=sdk_smoke' || true)" == 0 ]] && echo 0 || echo 1)" "page=$pg diag=$dg"
+  cp2=$(sbs_jq "$d2/sb.json" '.consecutive_pass')
+  # SBS-3: a host-timeout (rc 124) is a failed verdict (a wedged probe), signature-independent.
+  out=$(run_sbs_deploy "export MOCK_SMOKE_RC=124; export MOCK_SMOKE_OUT=''") && rc=0 || rc=$?
+  d=$(sbs_dir "$out")
+  sbs_check "SBS-3" "docker exec rc 124 (the host cap fired on a wedged probe) is sdk_bash_smoke_failed host_timeout_150s, pages once, deploy continues" \
+    "$([[ "$rc" -eq 0 && "$out" == *"$swap_msg"* && "$(sbs_jq "$d/sb-state.json" '.verdict + " " + .reason')" == "sdk_bash_smoke_failed host_timeout_150s" && "$(sbs_count "$d/logger.txt" 'reason=sdk_bash_smoke_failed: host_timeout_150s')" == 1 ]] && echo 0 || echo 1)" \
+    "rc=$rc state: $(cat "$d/sb-state.json" 2>/dev/null)"
+
+  # SBS-4: infra classes never page and never roll back: docker rc 125/126/127, any other probe rc, rc 0 without a result line.
+  local rcv
+  for rcv in 125 126 127; do
+    out=$(run_sbs_deploy "export MOCK_SMOKE_RC=$rcv; export MOCK_SMOKE_OUT=''; export MOCK_SMOKE_ERR='docker: Error response from daemon: marker-cause-$rcv'") && rc=0 || rc=$?
+    d=$(sbs_dir "$out")
+    sbs_check "SBS-4/$rcv" "docker exec rc $rcv is smoke_infra_error docker_exec_rc_$rcv carrying docker's first stderr line; no page, no Sentry event, deploy continues" \
+      "$([[ "$rc" -eq 0 && "$out" == *"$swap_msg"* && "$(sbs_jq "$d/sb-state.json" '.verdict')" == smoke_infra_error && "$(sbs_jq "$d/sb-state.json" '.reason')" == "docker_exec_rc_${rcv}: docker: Error response from daemon: marker-cause-$rcv" \
+          && "$(sbs_count "$d/logger.txt" 'SANDBOX_CANARY_FAIL')" == 0 && "$(sbs_sentry_events "$d/sentry.txt" '.tags.op == "sandbox-canary"')" == 0 ]] && echo 0 || echo 1)" \
+      "rc=$rc state: $(cat "$d/sb-state.json" 2>/dev/null)"
+  done
+  out=$(run_sbs_deploy "export MOCK_SMOKE_RC=1; export MOCK_SMOKE_OUT=''; export MOCK_SMOKE_ERR='node: bad things happened'") && rc=0 || rc=$?
+  d=$(sbs_dir "$out")
+  sbs_check "SBS-4/probe-crash" "a probe that crashed (rc 1, no result line) is smoke_infra_error probe_rc_1, not a Bash verdict" \
+    "$([[ "$rc" -eq 0 && "$(sbs_jq "$d/sb-state.json" '.verdict + " " + .reason')" == "smoke_infra_error probe_rc_1: node: bad things happened" && "$(sbs_count "$d/logger.txt" 'SANDBOX_CANARY_FAIL')" == 0 ]] && echo 0 || echo 1)"
+  out=$(run_sbs_deploy "export MOCK_SMOKE_OUT='no result here'") && rc=0 || rc=$?
+  d=$(sbs_dir "$out")
+  sbs_check "SBS-4/no-line" "rc 0 without a SDK_BASH_RESULT line is smoke_infra_error no_result_line (never a pass)" \
+    "$([[ "$rc" -eq 0 && "$(sbs_jq "$d/sb-state.json" '.verdict + " " + .reason')" == "smoke_infra_error no_result_line" ]] && echo 0 || echo 1)"
+  out=$(run_sbs_deploy "export MOCK_SMOKE_OUT='SDK_BASH_RESULT {\"verdict\":\"surprise\",\"reason\":\"x\"}'") && rc=0 || rc=$?
+  d=$(sbs_dir "$out")
+  sbs_check "SBS-4/unknown-verdict" "a verdict outside the three known values is smoke_infra_error, not a pass or a page" \
+    "$([[ "$rc" -eq 0 && "$(sbs_jq "$d/sb-state.json" '.verdict')" == smoke_infra_error && "$(sbs_count "$d/logger.txt" 'SANDBOX_CANARY_FAIL')" == 0 ]] && echo 0 || echo 1)"
+
+  # SBS-5: image/script ordering. New script + old image: the probe file is absent -> probe_absent (never failed, never a rollback).
+  out=$(run_sbs_deploy "export MOCK_SMOKE_PROBE_ABSENT=1") && rc=0 || rc=$?
+  d=$(sbs_dir "$out")
+  sbs_check "SBS-5a" "new script + old image: probe_absent, no probe exec, no page, deploy continues" \
+    "$([[ "$rc" -eq 0 && "$out" == *"$swap_msg"* && "$(sbs_jq "$d/sb-state.json" '.verdict')" == smoke_infra_error && "$(sbs_jq "$d/sb-state.json" '.reason')" == probe_absent* \
+        && "$(grep -c 'node /app/infra/lib/sdk-bash-probe.mjs' "$d/smoke-argv.log" || true)" == 0 && "$(sbs_count "$d/logger.txt" 'SANDBOX_CANARY_FAIL')" == 0 ]] && echo 0 || echo 1)" \
+    "state: $(cat "$d/sb-state.json" 2>/dev/null)"
+  out=$(run_sbs_deploy "export MOCK_SMOKE_PROBE_ABSENT=1; export MOCK_SMOKE_ABSENT_ERR='Error response from daemon: No such container: soleur-web-platform-canary'") && rc=0 || rc=$?
+  d=$(sbs_dir "$out")
+  sbs_check "SBS-5b" "prod container present, canary absent: the smoke records probe_absent with docker's cause and never execs the live prod container" \
+    "$([[ "$rc" -eq 0 && "$(sbs_jq "$d/sb-state.json" '.reason')" == "probe_absent: Error response from daemon: No such container: soleur-web-platform-canary" ]] && ! grep -qE 'exec (-w /app )?soleur-web-platform ' "$d/smoke-argv.log" && echo 0 || echo 1)" \
+    "$(tr '\n' '|' < "$d/smoke-argv.log")"
+  out=$(run_sbs_deploy "export MOCK_SMOKE_HOME=''") && rc=0 || rc=$?
+  d=$(sbs_dir "$out")
+  sbs_check "SBS-5c" "an unresolvable container HOME is smoke_infra_error container_home_unresolved (the probe is not exec'd with a guessed HOME)" \
+    "$([[ "$rc" -eq 0 && "$(sbs_jq "$d/sb-state.json" '.reason')" == container_home_unresolved && "$(grep -c 'node /app/infra/lib/sdk-bash-probe.mjs' "$d/smoke-argv.log" || true)" == 0 ]] && echo 0 || echo 1)"
+
+  # SBS-6: coverage. A pass-shaped result with replay_only (or no) coverage is a HOLD: the counter does not move.
+  local d6 cp6 fp6 fp6_first
+  d6=$(mktemp -d)
+  run_sbs_deploy "export SDK_BASH_SMOKE_STATE_FILE=\"$d6/sb.json\"" >/dev/null 2>&1 || true
+  fp6_first=$(sbs_jq "$d6/sb.json" '.first_pass_at')
+  run_sbs_deploy "export SDK_BASH_SMOKE_STATE_FILE=\"$d6/sb.json\"" >/dev/null 2>&1 || true
+  run_sbs_deploy "export SDK_BASH_SMOKE_STATE_FILE=\"$d6/sb.json\"; export MOCK_SMOKE_OUT='SDK_BASH_RESULT {\"verdict\":\"pass\",\"reason\":\"ok\",\"coverage\":\"replay_only\"}'" >/dev/null 2>&1 || true
+  cp6=$(sbs_jq "$d6/sb.json" '.consecutive_pass'); fp6=$(sbs_jq "$d6/sb.json" '.first_pass_at')
+  sbs_check "SBS-6a" "a replay_only pass after two greens HOLDS the counter (smoke_infra_error coverage_replay_only, consecutive_pass stays 2, first_pass_at unchanged)" \
+    "$([[ "$cp6" == 2 && "$fp6" == "$fp6_first" && "$(sbs_jq "$d6/sb.json" '[.verdict,.reason,.coverage,.consecutive_infra_error]|@tsv')" == $'smoke_infra_error\tcoverage_replay_only\treplay_only\t1' ]] && echo 0 || echo 1)" \
+    "state: $(cat "$d6/sb.json" 2>/dev/null)"
+  run_sbs_deploy "export SDK_BASH_SMOKE_STATE_FILE=\"$d6/sb.json\"; export MOCK_SMOKE_OUT='SDK_BASH_RESULT {\"verdict\":\"pass\",\"reason\":\"ok\"}'" >/dev/null 2>&1 || true
+  sbs_check "SBS-6b" "a pass line with NO coverage field is also a hold (consecutive_pass stays 2), and the infra counter keeps counting (2)" \
+    "$([[ "$(sbs_jq "$d6/sb.json" '[.consecutive_pass,.consecutive_infra_error,.reason]|@tsv')" == $'2\t2\tcoverage_replay_only' ]] && echo 0 || echo 1)" "state: $(cat "$d6/sb.json" 2>/dev/null)"
+  run_sbs_deploy "export SDK_BASH_SMOKE_STATE_FILE=\"$d6/sb.json\"" >/dev/null 2>&1 || true
+  sbs_check "SBS-6c" "a green after the holds resumes the soak (consecutive_pass 3, first_pass_at unchanged) and resets the infra counter" \
+    "$([[ "$(sbs_jq "$d6/sb.json" '[.consecutive_pass,.consecutive_infra_error,.first_pass_at]|@tsv')" == "3"$'\t'"0"$'\t'"$fp6_first" ]] && echo 0 || echo 1)" "state: $(cat "$d6/sb.json" 2>/dev/null)"
+
+  # SBS-7: the stale warning at 3 consecutive infra errors: a journald row and a Sentry WARNING, never the page marker.
+  local d7 st1 st2 st3
+  d7=$(mktemp -d)
+  out=$(run_sbs_deploy "export SDK_BASH_SMOKE_STATE_FILE=\"$d7/sb.json\"; export MOCK_SMOKE_PROBE_ABSENT=1") && rc=0 || rc=$?
+  d=$(sbs_dir "$out"); st1=$(sbs_count "$d/logger.txt" 'SDK_BASH_SMOKE_STALE')
+  out=$(run_sbs_deploy "export SDK_BASH_SMOKE_STATE_FILE=\"$d7/sb.json\"; export MOCK_SMOKE_PROBE_ABSENT=1") && rc=0 || rc=$?
+  d=$(sbs_dir "$out"); st2=$(sbs_count "$d/logger.txt" 'SDK_BASH_SMOKE_STALE')
+  out=$(run_sbs_deploy "export SDK_BASH_SMOKE_STATE_FILE=\"$d7/sb.json\"; export MOCK_SMOKE_PROBE_ABSENT=1") && rc=0 || rc=$?
+  d=$(sbs_dir "$out"); st3=$(sbs_count "$d/logger.txt" 'SDK_BASH_SMOKE_STALE')
+  sbs_check "SBS-7a" "no stale warning at 1 or 2 consecutive infra errors; the third emits SDK_BASH_SMOKE_STALE and a Sentry event at level warning" \
+    "$([[ "$st1" == 0 && "$st2" == 0 && "$st3" == 1 && "$rc" -eq 0 && "$(sbs_jq "$d7/sb.json" '.consecutive_infra_error')" == 3 \
+        && "$(jq -s -r '[.[] | select(.tags.event == "sdk_bash_smoke_stale")] | if length == 1 then (.[0] | [.level,.tags.op,.tags.event] | @tsv) else "n=" + (length|tostring) end' "$d/sentry.txt" 2>/dev/null)" == $'warning\tsandbox-canary\tsdk_bash_smoke_stale' ]] && echo 0 || echo 1)" \
+    "stale rows: $st1/$st2/$st3 sentry: $(head -c 300 "$d/sentry.txt")"
+  sbs_check "SBS-7b" "the stale warning is never the page: no SANDBOX_CANARY_FAIL row, no level-error event" \
+    "$([[ "$(sbs_count "$d/logger.txt" 'SANDBOX_CANARY_FAIL')" == 0 && "$(sbs_sentry_events "$d/sentry.txt" '.tags.op == "sandbox-canary" and .level == "error"')" == 0 ]] && echo 0 || echo 1)"
+  run_sbs_deploy "export SDK_BASH_SMOKE_STATE_FILE=\"$d7/sb.json\"" >/dev/null 2>&1 || true
+  sbs_check "SBS-7c" "a verdict after the infra errors resets consecutive_infra_error to 0 and starts the soak at 1" \
+    "$([[ "$(sbs_jq "$d7/sb.json" '[.consecutive_infra_error,.consecutive_pass]|@tsv')" == $'0\t1' ]] && echo 0 || echo 1)"
+
+  # SBS-8: ledger atomicity. A failed write can never leave (or report) a coverage-less pass.
+  out=$(run_sbs_deploy "export SDK_BASH_SMOKE_STATE_FILE=/nonexistent-sbs-dir/sb.json") && rc=0 || rc=$?
+  d=$(sbs_dir "$out")
+  sbs_check "SBS-8a" "an unwritable ledger reports smoke_infra_error ledger_write_failed (never a pass), writes no file, logs the failure, and the deploy continues" \
+    "$([[ "$rc" -eq 0 && "$out" == *"$swap_msg"* && "$out" == *"SDK Bash smoke (non-blocking): verdict=smoke_infra_error reason=ledger_write_failed"* && ! -e /nonexistent-sbs-dir/sb.json \
+        && "$(sbs_count "$d/logger.txt" 'SDK_BASH_SMOKE: ledger_write_failed')" == 1 ]] && echo 0 || echo 1)"
+  out=$(run_sbs_deploy "export SDK_BASH_SMOKE_STATE_FILE=/nonexistent-sbs-dir/sb.json; export MOCK_SMOKE_OUT='SDK_BASH_RESULT {\"verdict\":\"sdk_bash_smoke_failed\",\"reason\":\"boom\",\"coverage\":\"sdk_wrapper_shim_prodtuple\"}'") && rc=0 || rc=$?
+  d=$(sbs_dir "$out")
+  sbs_check "SBS-8b" "a ledger write failure does NOT silence a real failure: the page row is still emitted" \
+    "$([[ "$rc" -eq 0 && "$(sbs_count "$d/logger.txt" 'reason=sdk_bash_smoke_failed: boom')" == 1 ]] && echo 0 || echo 1)"
+  # The write is ONE record: the extra fields and the verdict land together (a reader never sees a verdict without coverage).
+  sbs_check "SBS-8c" "the atomic write is a single write_sandbox_canary_state call carrying the extra-JSON argument (no second patch of the ledger)" \
+    "$([[ "$(grep -cE 'write_sandbox_canary_state "\$verdict" "\$reason" "" "\$SDK_BASH_SMOKE_STATE_FILE" .sdk_bash_smoke_failed. .sdk-bash-smoke. "\$extra"' "$DEPLOY_SCRIPT" || true)" == 1 \
+        && "$(awk '/^run_sdk_bash_smoke\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$DEPLOY_SCRIPT" | grep -vE '^[[:space:]]*#' | grep -cE '>[[:space:]]*"?\$SDK_BASH_SMOKE_STATE_FILE|(^|[[:space:]])mv[[:space:]]' || true)" == 0 ]] && echo 0 || echo 1)"
+
+  # SBS-9: scrubbing. A credential-shaped string in the probe's reason never reaches the ledger or journald (synthesized by concatenation).
+  local fake_dp="dp.""st.""prd.""abcdefghijklmnop1234567890"
+  out=$(run_sbs_deploy "export MOCK_SMOKE_OUT='SDK_BASH_RESULT {\"verdict\":\"sdk_bash_smoke_failed\",\"reason\":\"leak $fake_dp end\",\"coverage\":\"sdk_wrapper_shim_prodtuple\"}'") && rc=0 || rc=$?
+  d=$(sbs_dir "$out")
+  sbs_check "SBS-9" "a credential-shaped token in the reason is redacted before the ledger, the journald page and the Sentry event" \
+    "$([[ "$rc" -eq 0 && "$(sbs_jq "$d/sb-state.json" '.reason')" == *"dp.REDACTED"* ]] && ! grep -qF "$fake_dp" "$d/sb-state.json" "$d/logger.txt" "$d/sentry.txt" && echo 0 || echo 1)" \
+    "reason: $(sbs_jq "$d/sb-state.json" '.reason')"
+
+  # SBS-10: a fresh nonce per run.
+  local n1 n2
+  out=$(run_sbs_deploy "") && rc=0 || rc=$?; d=$(sbs_dir "$out")
+  n1=$({ sed -n 's/.* NONCE=\([0-9a-f]*\) .*/\1/p' "$d/smoke-argv.log" || true; } | head -n 1)
+  out=$(run_sbs_deploy "") && rc=0 || rc=$?; d=$(sbs_dir "$out")
+  n2=$(sed -n 's/.* NONCE=\([0-9a-f]*\) .*/\1/p' "$d/smoke-argv.log" | head -n 1)
+  sbs_check "SBS-10" "the nonce is fresh per run (two runs, two different 32-hex values)" \
+    "$([[ "$n1" =~ ^[0-9a-f]{32}$ && "$n2" =~ ^[0-9a-f]{32}$ && "$n1" != "$n2" ]] && echo 0 || echo 1)" "n1=$n1 n2=$n2"
+
+  # SBS-11: ledger-aliasing guard. Pointing the smoke ledger at another canary ledger skips the smoke entirely.
+  local d11
+  d11=$(mktemp -d)
+  out=$(run_sbs_deploy "export SANDBOX_CANARY_STATE_FILE=\"$d11/shared.json\"; export SDK_BASH_SMOKE_STATE_FILE=\"$d11/shared.json\"") && rc=0 || rc=$?
+  d=$(sbs_dir "$out")
+  sbs_check "SBS-11" "an aliased SDK_BASH_SMOKE_STATE_FILE skips the smoke (no exec, warning logged, nothing written, deploy continues)" \
+    "$([[ "$rc" -eq 0 && ! -s "$d/smoke-argv.log" && "$(sbs_count "$d/logger.txt" 'SDK_BASH_SMOKE_STATE_FILE aliases another canary ledger')" == 1 ]] && ! grep -q sdk-bash-smoke "$d11/shared.json" 2>/dev/null && echo 0 || echo 1)"
+
+  # SBS-12: static source pins (the host-side timeout cannot be seen through the mock; the call site and wiring are census-checked).
+  sbs_check "SBS-12a" "the host-side timeout wraps the probe's docker exec in SOURCE (SDK_BASH_SMOKE_TIMEOUT, default 150, above the probe's 120 s internal cap)" \
+    "$(grep -qF 'timeout "$SDK_BASH_SMOKE_TIMEOUT" docker exec -w /app "$ctr" /usr/bin/env -i' "$DEPLOY_SCRIPT" && grep -qF 'SDK_BASH_SMOKE_TIMEOUT="${SDK_BASH_SMOKE_TIMEOUT:-150}"' "$DEPLOY_SCRIPT" && echo 0 || echo 1)"
+  sbs_check "SBS-12b" "the call site is exactly one 'run_sdk_bash_smoke || true' (no verdict may abort a deploy under set -e)" \
+    "$([[ "$(grep -cE '^[[:space:]]*run_sdk_bash_smoke( \|\| true)?[[:space:]]*(#.*)?$' "$DEPLOY_SCRIPT" || true)" == 1 && "$(grep -cE '^[[:space:]]*run_sdk_bash_smoke \|\| true[[:space:]]*$' "$DEPLOY_SCRIPT" || true)" == 1 ]] && echo 0 || echo 1)"
+  sbs_check "SBS-12c" "the smoke never targets the live prod container: every docker exec in run_sdk_bash_smoke names \$ctr (the canary) and nothing else" \
+    "$([[ "$(awk '/^run_sdk_bash_smoke\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$DEPLOY_SCRIPT" | grep -vE '^[[:space:]]*#' | grep -E 'docker exec' | grep -vc '"\$ctr"' || true)" == 0 \
+        && "$(awk '/^run_sdk_bash_smoke\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$DEPLOY_SCRIPT" | grep -c 'ctr="soleur-web-platform-canary"' || true)" == 1 ]] && echo 0 || echo 1)"
+  sbs_check "SBS-12d" "the smoke function never calls final_write_state, exit, or rollback (no verdict changes the deploy outcome)" \
+    "$([[ "$(awk '/^run_sdk_bash_smoke\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$DEPLOY_SCRIPT" | grep -vE '^[[:space:]]*#' | grep -cE 'final_write_state|(^|[^a-z_])exit([^a-z_]|$)|rollback|docker (stop|rm)' || true)" == 0 ]] && echo 0 || echo 1)"
+  rm -rf "$d2" "$d6" "$d7" "$d11"
+}
+
+assert_sdk_bash_smoke
 
 echo ""
 echo "--- Bwrap userns sysctl drift detector (non-blocking) ---"
@@ -11455,7 +11722,12 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # D10k7 (warning + silent failure is no masquerading denial).
 # #9294 PR-1: raised 618 -> 622 (619 measured on main, which carried one slack row, plus 3 new rows) with T-9294-1..3 (fan-out
 # under an `or` trigger-rule: first-HMAC-secret signing over four shapes, six fail-closed shapes, and the source census).
-CI_DEPLOY_ASSERT_FLOOR=622
+# #10453: raised 622 -> 659 (measured 659/659 on the live tree) with the 35 SDK Bash smoke rows: SBS-1a-e (pinned envelope, ledger record,
+# ordering, canary-only targeting, no -u/-e), SBS-2a-d (failed verdict: no rollback, page row shape, Sentry event, DIAG after the page),
+# SBS-3 (rc 124), SBS-4 x6 (rc 125/126/127, probe crash, no result line, unknown verdict), SBS-5a-c (old image, canary absent, HOME
+# unresolved), SBS-6a-c (replay_only and coverage-less holds, resume), SBS-7a-c (stale warning at 3), SBS-8a-c (ledger write failure,
+# page survives it, single atomic write), SBS-9 (scrubbing), SBS-10 (fresh nonce), SBS-11 (alias skip), SBS-12a-d (static pins).
+CI_DEPLOY_ASSERT_FLOOR=659
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"

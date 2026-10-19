@@ -132,15 +132,21 @@ async function runBash(opts: {
 // the census arm is only meaningful if the probe masks what production masks.
 describe("the docker suite's probe literal tracks the production config (#10445)", () => {
   const probeSrc = readFileSync(join(APP_ROOT, "infra", "lib", "sdk-bash-probe.mjs"), "utf8");
+  // The docker-suite (default) mode's literal only: the file also carries the deploy smoke's production-equal literal, which
+  // test/sdk-bash-probe-parity.test.ts pins separately (there autoAllowBashIfSandboxed is false, as in production).
+  const defaultModeSrc = probeSrc.slice(probeSrc.indexOf("async function runDefault"), probeSrc.indexOf("const SMOKE_INTERNAL_CAP_MS"));
   const literalOf = (key: string): string => {
-    const m = new RegExp(`\\b${key}:\\s*([^,}\\n]+)`).exec(probeSrc);
+    const m = new RegExp(`\\b${key}:\\s*([^,}\\n]+)`).exec(defaultModeSrc);
     expect(m, `the probe no longer carries ${key}`).not.toBeNull();
     return m![1].trim();
   };
 
   it("the probe masks exactly what the production builder masks in the suite container's env (no XDG/TMPDIR, uid, HOME)", () => {
     // The probe derives these from its own process (uid, HOME); the production functions get the same inputs here.
-    expect(probeSrc).toContain('const MASKED_DIRS = ["/tmp/cc-socks", `/tmp/cc-socks-${uid}`, `${HOME}/.claude/projects`];');
+    // The derivation lives in the probe's exported maskedDirs() (also used by the smoke mode); the probe's own parity suite
+    // (test/sdk-bash-probe-parity.test.ts) pins its output to the production functions. Here: the default mode uses it.
+    expect(probeSrc).toContain("const MASKED_DIRS = maskedDirs(uid, HOME);");
+    expect(probeSrc).toContain('return ["/tmp/cc-socks", `/tmp/cc-socks-${uid}`, `${home}/.claude/projects`];');
     expect(probeSrc).toContain("const HOME = process.env.HOME;");
     expect(peerMessagingSocketDirs({}, 1001)).toEqual(["/tmp/cc-socks", "/tmp/cc-socks-1001"]);
     expect(sessionTranscriptDirs({ HOME: "/home/soleur" })).toEqual(["/home/soleur/.claude/projects"]);
