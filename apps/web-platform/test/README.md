@@ -65,6 +65,14 @@ Every suite that creates synthetic auth users MUST tear them down through `tearD
 
 `test/server/teardown-deleteuser-sentinel.test.ts` censuses every `.ts` file under `test/` for deleteUser call shapes: any carrier outside the canonical helper, the reviewed `MANUAL_TEARDOWN_ALLOWLIST`, or the #10096 legacy drain set fails the always-on shard — and the per-file call counts are pinned, so adding a raw call inside an allowlisted file fails too.
 
+## Test file placement
+
+New tests live under `test/<area>/`, namespaced after the subsystem under test — `test/app/` for `app/` routes and pages, `test/server/` for `server/` modules, `test/api/` for API handlers — mirroring the SUT path rather than collecting flat at the `test/` root. Flat `test/*.test.ts` files are grandfathered: do not mass-move them, but do not add new ones. A `*.integration.test.*` file keeps its suffix and its env-gate table row above wherever it lands.
+
+## Flaky-test policy
+
+Retries exist to absorb infrastructure flake, never to mask a product or test defect: the cap is CI-only (`playwright.config.ts` `retries: process.env.CI ? 1 : 0`) and is never raised per-suite to buy a green. A flaky test gets a filed GitHub issue; `fixme`/`skip` is allowed only with the issue ref inline, so a silenced test is always tracked. The nightly leg in `scheduled-integration-suites.yml` auto-files a `ci/integration-suites` issue on red and auto-closes it on green — a flake that only appears on the schedule is still tracked there.
+
 ## Engine-floor guard (pdfjs-dist)
 
 Three suites — `pdf-text-extract.test.ts`, `pdf-text-extract.bundled-server.test.ts`, and `kb-preview-metadata.bundled-server.test.ts` — use the shared helper `helpers/engines-floor.ts` to short-circuit on Node <22.3 (the pdfjs-dist@5 floor enforced by `process.getBuiltinModule`). Dev path: `describe.skipIf(BELOW_PDFJS_ENGINES_FLOOR)` + a single stderr diagnostic per file (yellow skip, never silent). CI path: the helper throws at module init when `process.env.CI` is set, so a misconfigured runner cannot ship a vacuous green. The lazy_import_failed test sits OUTSIDE the skipIf block — `vi.doMock` short-circuits the real pdfjs import so it runs on all Node versions.
