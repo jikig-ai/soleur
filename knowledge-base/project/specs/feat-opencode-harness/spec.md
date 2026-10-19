@@ -133,14 +133,14 @@ non-zero on drift. Its scope is set by measurement §10.0 item 7:
 ### TR3: Tool-translation table
 
 `plugins/soleur/opencode/INSTRUCTIONS.md` carries a `## Tools` table covering the closed
-`CLAUDE_CODE_TOOLS` vocabulary (measurement §5.0 for the OpenCode side). Rows with no OpenCode
+`CLAUDE_CODE_TOOLS` vocabulary (measurement §12.8 for the OpenCode side; §5.0 read the V1 doc tree, whose tool names V2 changed). Rows with no OpenCode
 equivalent are stated as unsupported — the record shows no `todo`, `Monitor`/`AwaitShell`, or
 `Cron*`/`PushNotification`/`RemoteTrigger` (measurement §5.4).
 
 ### TR4: Model tier map
 
 `harness-model-map.ts` gains an `opencode` entry mapping `cheap` / `standard` / `strong` /
-`advisor` to OpenCode `provider/model#variant` slugs. Slug choices follow ADR-110's
+`advisor` to `opencode/<model>` ids (measurement §12.7: the keyless catalog is ten Zen models, the API exposes no cost or capability metadata, and the tier order comes from the catalog's published prices). No `#variant` is used — the flag supports one, none of these ids carries one. Slug choices follow ADR-110's
 bump-one-table rule; `inherit` stays a passthrough — it is a source-form value, not a semantic
 tier, and it is never written into a generated agent stub (measurement §11.2).
 

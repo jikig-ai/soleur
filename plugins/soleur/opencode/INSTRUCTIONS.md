@@ -17,14 +17,43 @@ keeps the canonical form; an operator-typed or tool-invoked reference is bare.
 An agent id is derived from its file path, not from frontmatter `name:`, so
 `soleur:engineering:cto` is spawned as `engineering/cto` (measurement §3.0). Every
 Soleur agent is generated with `mode: subagent`; without that field an agent registers
-as primary and the Task tool cannot reach it.
+as primary and the `subagent` tool cannot reach it.
 
-Spawn subagents through the **Task** tool.
+Spawn subagents through the **`subagent`** tool, with the path-derived id and a
+complete prompt. Foreground waits for the result; `background: true` returns
+immediately and notifies the parent when the child finishes. Nesting depth is one.
 
 ## Commands
 
 `/go`, `/help`, `/sync` and `/version` register from `opencode/commands/` and take their
 arguments as `$ARGUMENTS` (measurement §4.0).
+
+## Tools
+
+Canonical Soleur prose names Claude Code tools. This table is the translation, and the
+property it is held to is that **every** name Soleur's agent-read corpus uses has a row
+here (`test/harness-tool-map.test.ts`). The OpenCode side is the V2 built-in set
+(measurement §12.8); V1 called the shell tool `bash` and V2 calls it `shell`.
+
+| Soleur instruction | OpenCode execution |
+| --- | --- |
+| Read / Glob / Grep | `read`, `glob`, `grep` |
+| Write / Edit / MultiEdit | `write` for a new file, `edit` for a change (`replaceAll` replaces every match, which is all `MultiEdit` ever was); `patch` adds, moves or deletes several files in one call on the models that expose it |
+| Bash / Shell | `shell`. Set `workdir` instead of putting `cd` in the command, `timeout` in milliseconds, and `background: true` for a long-running process |
+| Skill `soleur:<name>` | The `skill` tool with the **bare** id: load `soleur:plan` as `plan`. The id must be in the advertised set, so a wrong one fails loudly instead of silently loading nothing |
+| Task / Agent / spawn_subagent | The `subagent` tool with the path-derived id (`engineering/cto`) |
+| AskUserQuestion | `question` — a real blocking prompt with a free-form answer always available |
+| TodoWrite / TodoRead | No `todo` tool exists. Track the steps in the skill's own Markdown, or in a scratch file in the project |
+| Monitor / AwaitShell / TaskOutput | `shell` with `background: true` returns immediately and notifies the session when the process finishes, retaining the full output in a managed file. There is no await/poll primitive and no background output reader; for a wait-until-event watch, run a bounded `shell` poll loop and keep progress visible |
+| WebSearch / WebFetch / ToolSearch | `websearch`, `webfetch`. No tool-search tool exists: the built-in set is advertised up front, so name the tool the step wants |
+| SendMessage / ListAgents | No equivalent. `subagent` starts a child and, in the background form, notifies on completion — there is no message-without-a-turn and no enumeration. Pass the returned `sessionID` to continue that same child |
+| TaskCreate / TaskGet / TaskList / TaskUpdate / TaskStop | No equivalent, and no inventory of running children exists. Track steps in the skill's own Markdown or a project file |
+| RemoteTrigger / PushNotification / ScheduleWakeup / CronCreate / CronDelete / CronList | No equivalent. Report the unsupported gate rather than simulating it — a scheduled or push-triggered step that silently does not fire is worse than one that refuses |
+| NotebookEdit | No equivalent; edit the file with `edit` |
+| Workflow scripts | Translate the orchestration into `subagent` calls; do not execute Claude tool calls as shell JavaScript |
+
+A gate with no OpenCode equivalent is stated as unsupported above, never silently
+skipped — the same posture the hook ledger takes. A step that cannot fire must say so.
 
 ## Hooks and completion
 

@@ -144,7 +144,7 @@ and a `routingInstructions` arm.
 
 ### 4.3 CI job
 
-- [ ] 4.3.1 Add the OpenCode arm to the `harness-discovery` CI job, non-required, matching the Codex/Devin arms.
+- [x] 4.3.1 Add the OpenCode arm to the `harness-discovery` CI job, non-required, matching the Codex/Devin arms. `@opencode/cli@2.0.32` installed by npm with the version asserted before the arm runs (the version-mismatch guard mirrors the Codex arm); `OPENCODE_PIN` is job-level `env` declared once, and `--pin` is passed to the script so a lagging pin cannot turn the check into a no-op. The package is `@opencode/cli`, **not** `opencode-ai` — the latter's latest is 1.19.3, the previous API generation. `if: '!cancelled()'` on both steps: three vendors now drive the job and one npm outage must not cost the other two their signal. Commit `3fc7d3ece3`. The README's vendor-pin table gained the OpenCode row.
 
 ### 4.4 Gate: hermetic install fixture
 
@@ -154,19 +154,19 @@ and a `routingInstructions` arm.
 
 ### 5.1 RED: model map
 
-- [ ] 5.1.1 Extend `plugins/soleur/test/harness-model-map.test.ts` with the `opencode` entry: each semantic tier resolves to a `provider/model#variant`; `inherit` passes through null.
+- [x] 5.1.1 Extend `plugins/soleur/test/harness-model-map.test.ts` with the `opencode` entry: each semantic tier resolves to a `provider/model` id, `cheap` is never the flagship, no tier names a trial-terms model, `inherit` passes through, `detectHarness(OPENCODE)` reaches the same map, and the inlined fence is pinned at **four** literals (grok, claude, opencode, all-inherit) with `OPENCODE` added to the fence-execution `envCases` in its three load-bearing orderings.
 
 ### 5.2 GREEN: tier map
 
-- [ ] 5.2.1 Add the `opencode` entry to `TIER_MAPS` in `plugins/soleur/lib/harness-model-map.ts` following ADR-110's bump-one-table rule.
-- [ ] 5.2.2 Update each inlined `TIER_MAPS` copy inside `skills/*/workflows/*.workflow.js` behind the `<!-- harness-model-map:start/end -->` markers so the inlined copies match this file.
-- [ ] 5.2.3 GREEN `harness-model-map.test.ts`.
+- [x] 5.2.1 Add the `opencode` entry to `TIER_MAPS` in `plugins/soleur/lib/harness-model-map.ts` following ADR-110's bump-one-table rule. `cheap` → `opencode/glm-5.3-flash-free`; `standard`/`strong`/`advisor` → `opencode/big-pickle`; `inherit` → `inherit`. Basis and the rejected candidates (NVIDIA trial rows, paid Zen SKUs) are in measurement §12.7 and in the file docblock.
+- [x] 5.2.2 Update each inlined `TIER_MAPS` copy inside `skills/*/workflows/*.workflow.js` behind the `<!-- harness-model-map:start/end -->` markers so the inlined copies match this file. Seven files, byte-identical fences; the `var claude` / `var opencode` / `var grok` declaration order now mirrors `detectHarness`'s precedence (CLAUDECODE → OPENCODE → GROK).
+- [x] 5.2.3 GREEN `harness-model-map.test.ts` — 17 pass. Commit `fad0d3c7e4`.
 
 ### 5.3 Tool map
 
-- [ ] 5.3.1 Add the OpenCode column/rows to `plugins/soleur/lib/harness-tool-map.ts` coverage: every `CLAUDE_CODE_TOOLS` name resolves or is stated as unsupported.
-- [ ] 5.3.2 Add the `## Tools` table to the generated `opencode/INSTRUCTIONS.md` covering the closed vocabulary; state the absent set (`todo`, `Monitor`/`AwaitShell`, `Cron*`/`PushNotification`/`RemoteTrigger`/`ScheduleWakeup`) as unsupported, and map `TodoWrite` the way Codex does.
-- [ ] 5.3.3 GREEN `harness-tool-map.test.ts`.
+- [x] 5.3.1 Add the OpenCode rows to the `harness-tool-map.ts` coverage: `OPENCODE_INSTRUCTIONS` exported alongside the Codex and Devin paths, and the coverage property generalised from "BOTH tables" to a `TABLES` list so a new harness cannot join the corpus without joining the gate. Non-vacuity proven by mutation: renaming the `SendMessage` row, and blanking the `Bash` translation, each red with the exact skill path and line that uses the name.
+- [x] 5.3.2 Add the `## Tools` table to the generated `opencode/INSTRUCTIONS.md` (source: the generator's `instructions()` template) covering the closed vocabulary; the absent set (`TodoWrite`/`TodoRead` — no `todo` tool; `Monitor`/`AwaitShell`/`TaskOutput` — no await primitive; `Cron*`/`PushNotification`/`RemoteTrigger`/`ScheduleWakeup`; `TaskCreate`/`TaskGet`/`TaskList`/`TaskUpdate`/`TaskStop`; `NotebookEdit`) is stated as unsupported rather than omitted. 36 rows parse, no blank translation. Measurement §12.8 also corrected the Agents section's "Task tool" to V2's `subagent`.
+- [x] 5.3.3 GREEN `harness-tool-map.test.ts` — 7 pass.
 
 ## Phase 6 — Parity census + docs
 

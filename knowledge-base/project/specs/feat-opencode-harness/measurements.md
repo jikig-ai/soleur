@@ -708,3 +708,75 @@ and correct.
 (4 Soleur), `GET /api/skill` = **105** (103 Soleur) — §11.4 exactly. A first read before settlement
 returned `agent: 0`, then `command: 2`, then `skill: 105` on three consecutive calls, which is the
 §11.6 async-scan behavior seen from the other side: **read order, not discovery, decides the count.**
+
+### 12.7 — The model catalog a keyless install advertises (bases the `TIER_MAPS.opencode` row)
+
+`opencode models` under a hermetic `HOME` (§11.6 recipe) prints **exactly ten** ids, all from
+OpenCode's own `opencode` provider:
+
+```
+opencode/beam-free                        opencode/nemotron-3-ultra-free
+opencode/big-pickle                       opencode/nemotron-3.5-lightning-free
+opencode/deepseek-v4.1-flash-free         opencode/nemotron-3.5-super-vl-free
+opencode/glm-5.3-flash-free               opencode/space-bunny-free
+opencode/longcat-2.5-preview-free         opencode/mimo-v2.6-flash-free
+```
+
+- **The keyless provider is the ONLY provider.** No Anthropic, OpenAI or xAI row appears until a
+  Console key or `/connect` exists, so a keyless default map can only name `opencode/...` ids.
+- **All ten complete a minimal turn.** `opencode run -m <id> --format json "Reply with the single
+  word: ok"` returned `ok` for every one of the ten, so none is a dead entry. (A probe whose loop
+  read the model list from a PIPE reported only the first model — `opencode run` consumes stdin;
+  reading the list from a file fixed it. Recorded because the first result looked like a finding.)
+- **`GET /api/provider` carries no model metadata.** The `opencode` provider entry has `models` of
+  length **0**, and its keys are `id`, `name`, `models` — no cost, context or capability field to
+  order the slugs by. The tier ORDER therefore comes from the Zen catalog's published price table
+  for the slugs whose names name a lineage with a paid sibling, not from a benchmark.
+- **The catalog's own data-policy column rules out the obvious `strong` candidates.** The NVIDIA
+  `nemotron-*` free endpoints are labelled trial use with logging ("do not submit personal or
+  confidential data"); `big-pickle` is a stealth model whose collected data "may be used to improve
+  the model" for its limited-time free period; `beam-free` retains 30 days for safety; the `glm`,
+  `deepseek`, `longcat` and `space-bunny` free rows state zero retention.
+- **Every free row is vendor-declared "for a limited time"**, so this table is expected to need
+  bumping. That is ADR-110's stated purpose for `TIER_MAPS`, not a defect in the row.
+
+Consequence (`lib/harness-model-map.ts`): `cheap` → `opencode/glm-5.3-flash-free` (zero retention, a
+flash-tier lineage whose paid sibling sits in the catalog's cheap band), and
+`standard`/`strong`/`advisor` → `opencode/big-pickle`, the id this harness session itself runs on.
+The upper three collapse exactly as the Grok map's do. Paid Zen SKUs were rejected not on price but
+on **availability**: an absolute pin is only correct where its SKU is always present (ADR-053 tier
+2), and a paid row is not present without a Console key.
+
+### 12.8 — The V2 built-in tool inventory (bases the generated `## Tools` table)
+
+`https://opencode.ai/v2/docs/tools/` enumerates the built-ins with the resource each is permitted
+on, and `https://opencode.ai/v2/docs/permissions/` gives the matching permission key:
+
+| Tool | Permission resource |
+|---|---|
+| `read` | the normalized path |
+| `glob` | the requested pattern |
+| `grep` | the requested pattern (not the search path) |
+| `edit` | the target path |
+| `write` | the target path |
+| `patch` | every affected path (only exposed to supported GPT models; others get `edit`/`write`) |
+| `shell` | each scanner-produced command |
+| `webfetch` | the requested URL |
+| `websearch` | the query |
+| `question` | `*` |
+| `skill` | the skill ID |
+| `subagent` | the selected agent ID (only `mode: subagent` agents; default nesting depth one) |
+| `execute` | (code mode; no permission resource listed) |
+
+Three consequences, each of which changed a deliverable:
+
+1. **`shell`, not `bash`, at every layer of V2** — the tool name, the permission key, and the hook
+   event's `action`. §12.1 measured the hook surface; this confirms the docs agree, so the plugin's
+   two-spelling map covers the *V1* spelling as well, rather than working around a docs bug.
+2. **The mis-citation in §5.0/§5.1/§5.2 is now explained, not just refuted:** `/docs/*` is the V1
+   doc tree and `/v2/docs/*` is V2's. Both are live; only the V1 tree says `bash`.
+3. **Agent spawning is the `subagent` tool.** The generated `opencode/INSTRUCTIONS.md` said "spawn
+   subagents through the **Task** tool", which is Claude Code's name and exists on no OpenCode
+   surface. Corrected to `subagent` with the path-derived agent id, and the same correction landed in
+   the Agents section's "the Task tool cannot reach it".
+

@@ -127,11 +127,28 @@ carrying the reason, and `ask` holds it open for a person (both measured live, �
 implementation bound `tool.execute.before` and delivered `ask` as a refusal-with-reason; it is
 withdrawn as measured-false, because that surface fires *before* `permission.evaluate` and can only
 refuse by throwing, so it would preempt the true ask behind it. Two corrections arrived with it
-(§12.1): the shell tool's wire name is **`shell`**, not the docs' `bash` — a map keyed on `bash`
+(§12.1): the shell tool's wire name is **`shell`**, not `bash` — a map keyed on `bash`
 alone never matches and the guards decline silently — and code-mode `execute` calls carry JavaScript
-rather than a command, so the Bash guards do not reach them. `operator-stage-approval.sh` still
+rather than a command, so the Bash guards do not reach them. (`bash` was not a mistake in the docs:
+§12.8 measures `/docs/*` as the V1 tree and `/v2/docs/*` as V2's, and only the V1 tree says `bash`.
+The plugin maps both spellings, which is a V1-compatibility shim rather than a docs workaround.)
+`operator-stage-approval.sh` still
 cannot be bound: it needs a rewritten command and an ask in the same decision, and
 `permission.evaluate` types `resources` as readonly while `tool.execute.before` cannot prompt.
+
+Two generated surfaces carry the harness translation, and both are pinned against the corpus rather
+than against their generator. `opencode/INSTRUCTIONS.md` gains a `## Tools` table over the closed
+`CLAUDE_CODE_TOOLS` vocabulary, and `test/harness-tool-map.test.ts` now asks its completeness
+question of **every** adapter table instead of two — so a name the corpus uses with no OpenCode row
+reds, naming the skill and line. The OpenCode side is the measured V2 built-in set, including
+`subagent` for agent spawning, `skill` keyed on the bare id, and the absent set (`todo`, an await
+primitive, the cron/push/schedule family) stated as unsupported rather than omitted (§12.8).
+`TIER_MAPS` gains an `opencode` row: `cheap` → `opencode/glm-5.3-flash-free` and
+`standard`/`strong`/`advisor` → `opencode/big-pickle`, the id this measurement session itself runs
+on. The binding constraint is availability, not price — a keyless install advertises only the Zen
+free set, and ADR-053's absolute-pin rule is satisfiable only where the SKU is always present — so
+the paid Zen rows and the NVIDIA trial endpoints (logged, trial-use only) are rejected on the record
+(§12.7). The row is expected to need bumping, which is what the table is for.
 
 The adapter is supported only when a committed shape note quotes all four of: `/go` classifies the
 session as `opencode`, one pipeline skill finishes its gates, one agent spawn runs or is refused in

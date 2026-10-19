@@ -8,6 +8,7 @@ import {
   CLAUDE_CODE_TOOLS,
   CODEX_INSTRUCTIONS,
   DEVIN_INSTRUCTIONS,
+  OPENCODE_INSTRUCTIONS,
   isEmptyTranslation,
   parseToolsTable,
   readToolsTable,
@@ -20,19 +21,28 @@ import {
   MIN_TRACKED_SKILLS,
 } from "./lib/population-floors";
 
-// Guard 3 of the harness-parity hardening bundle (#8318, ADR-245).
+// Guard 3 of the harness-parity hardening bundle (#8318, ADR-245, ADR-291).
 //
-// PROPERTY: every Claude Code tool name used in an agent-read doc has a row in BOTH
-// the Codex and the Devin `## Tools` table.
+// PROPERTY: every Claude Code tool name used in an agent-read doc has a row in ALL
+// the adapter `## Tools` tables (Codex, Devin, OpenCode).
 //
-// ANCHOR (what can move together, and what cannot). The vocabulary and the two tables
-// live in this repo and one diff can edit all three, so the pin is consistency. The
+// ANCHOR (what can move together, and what cannot). The vocabulary and the tables
+// live in this repo and one diff can edit all of them, so the pin is consistency. The
 // anchor OUTSIDE the diff is the Claude Code tools reference, cited with its retrieval
 // date in `harness-tool-map.ts` — a name removed from the vocabulary is checkable
-// against it.
+// against it. The OpenCode table has a SECOND anchor: it is generated, so the pin also
+// catches a regeneration that drops a row.
 
 const codex = readToolsTable(CODEX_INSTRUCTIONS);
 const devin = readToolsTable(DEVIN_INSTRUCTIONS);
+const opencode = readToolsTable(OPENCODE_INSTRUCTIONS);
+
+/** Every adapter table, in one place, so a new harness cannot be added without joining the gate. */
+const TABLES: ReadonlyArray<{ harness: string; table: Map<string, string> }> = [
+  { harness: "codex", table: codex },
+  { harness: "devin", table: devin },
+  { harness: "opencode", table: opencode },
+];
 
 /** The agent-read corpus is the census population (skills, commands, shims, references, agent bodies). */
 function corpus(): { path: string; text: string }[] {
@@ -52,21 +62,37 @@ function lsFiles(pathspec: string): number {
 describe("harness tool-map coverage", () => {
   const docs = corpus();
 
-  test("both tables parse to a non-empty vocabulary", () => {
+  test("every table parses to a non-empty vocabulary", () => {
     // The previous form here compared an object to ITSELF
     // (`toEqual({codex: codex.size, …})` against the same literal) under this
     // message — an assertion that cannot fail, carrying a load-bearing claim.
-    // A dead assertion is worse than none: it reads as coverage. The two floors
+    // A dead assertion is worse than none: it reads as coverage. The floors
     // below are what actually catch a renamed heading, so the message lives on
-    // them. Measured 2026-09-23: codex 36, devin 35.
-    expect(
-      codex.size,
-      "the Codex ## Tools table parsed to nothing — the heading was renamed or the " +
-        "table shape changed, and every coverage assertion below would pass vacuously",
-    ).toBeGreaterThanOrEqual(30);
-    expect(devin.size, "the Devin ## Tools table parsed to nothing — same failure mode").toBeGreaterThanOrEqual(
-      30,
-    );
+    // them. Measured 2026-09-23: codex 36, devin 35; 2026-10-19: opencode 36.
+    for (const { harness, table } of TABLES) {
+      expect(
+        table.size,
+        `the ${harness} ## Tools table parsed to nothing — the heading was renamed or the ` +
+          `table shape changed, and every coverage assertion below would pass vacuously`,
+      ).toBeGreaterThanOrEqual(30);
+    }
+  });
+
+  test("the OpenCode table is the generated tree's (regeneration cannot drop a row silently)", () => {
+    // The other two tables are hand-written source; this one is emitted by
+    // `scripts/sync-opencode-adapter.ts` into a tree the generator owns and `--check`
+    // byte-compares. So the failure this names is a REGENERATION that drops a row:
+    // without a floor, the edit lands, `--check` stays green (generator and tree agree),
+    // and the gate below is the only thing that would notice — against the corpus, which
+    // is exactly the right anchor.
+    expect(OPENCODE_INSTRUCTIONS).toContain("plugins/soleur/opencode/INSTRUCTIONS.md");
+    expect(opencode.size).toBeGreaterThanOrEqual(30);
+    // The row #8318 was filed about, and the ones that name a mechanism this harness
+    // genuinely lacks: each must be present AND carry a translation, not a blank cell.
+    for (const name of ["SendMessage", "ListAgents", "Skill", "Task", "Bash", "TodoWrite"]) {
+      expect(opencode.has(name), `opencode ## Tools has no row for ${name}`).toBe(true);
+      expect(isEmptyTranslation(opencode.get(name))).toBe(false);
+    }
   });
 
   test("the corpus is the agent-read population, floored per source", () => {
@@ -112,22 +138,20 @@ describe("harness tool-map coverage", () => {
     ).toBeGreaterThanOrEqual(15);
   });
 
-  test("every used Claude tool name is translated by BOTH tables", () => {
+  test("every used Claude tool name is translated by ALL tables", () => {
     const problems: string[] = [];
     for (const tool of CLAUDE_CODE_TOOLS) {
       const user = docs.find((d) => usesTool(d.text, tool));
       if (!user) continue;
       // A row must carry a TRANSLATION, not merely the name. A present row with an
       // empty second cell resolves nothing for the session that meets the tool.
-      const missing: string[] = [];
-      if (!codex.has(tool) || isEmptyTranslation(codex.get(tool)))
-        missing.push("plugins/soleur/codex/INSTRUCTIONS.md");
-      if (!devin.has(tool) || isEmptyTranslation(devin.get(tool)))
-        missing.push("plugins/soleur/devin/INSTRUCTIONS.md");
+      const missing = TABLES.filter(
+        ({ table }) => !table.has(tool) || isEmptyTranslation(table.get(tool)),
+      ).map(({ harness }) => harness);
       if (missing.length === 0) continue;
       const lineIdx = user.text.split("\n").findIndex((l) => usesTool(l, tool));
       problems.push(
-        `${tool} — used at ${user.path}:${lineIdx + 1}, missing a row in ${missing.join(" and ")}. ` +
+        `${tool} — used at ${user.path}:${lineIdx + 1}, missing a row in ${missing.join(", ")}. ` +
           `Add:  | ${tool} | <the harness's equivalent, or "no equivalent; report the unsupported gate"> |`,
       );
     }
@@ -155,13 +179,7 @@ describe("harness tool-map coverage", () => {
     const used = CLAUDE_CODE_TOOLS.filter((t) => usesTool(block, t));
     expect(used.length).toBeGreaterThan(0);
     expect(
-      used.filter(
-        (t) =>
-          !codex.has(t) ||
-          !devin.has(t) ||
-          isEmptyTranslation(codex.get(t)) ||
-          isEmptyTranslation(devin.get(t)),
-      ),
+      used.filter((t) => TABLES.some(({ table }) => !table.has(t) || isEmptyTranslation(table.get(t)))),
     ).toEqual([]);
   });
 
