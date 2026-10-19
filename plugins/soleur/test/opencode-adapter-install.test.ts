@@ -1,14 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { join, resolve } from "path";
+import { join } from "path";
 import {
   PLUGIN_ROOT_TOKEN,
   writeOpenCodeAdapter,
 } from "../scripts/sync-opencode-adapter";
 import { installOpenCodeAdapter, installProblems } from "../scripts/install-opencode-adapter";
-
-const pluginRoot = resolve(import.meta.dir, "..");
 
 function workspace(): { target: string; checkout: string } {
   const base = mkdtempSync(join(tmpdir(), "soleur-opencode-install-"));

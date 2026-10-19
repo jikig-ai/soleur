@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 import {
@@ -189,7 +189,7 @@ describe("opencode adapter drift", () => {
     try {
       expect(writeOpenCodeAdapter(root)).toEqual([]);
       const first = new Map(
-        [...expectedOpenCodeAdapter(root)].map(([key, value]) => [key, readFileSync(join(root, key), "utf8") as string]),
+        [...expectedOpenCodeAdapter(root)].map(([key]) => [key, readFileSync(join(root, key), "utf8") as string]),
       );
       expect(writeOpenCodeAdapter(root)).toEqual([]);
       for (const [key, expected] of first) {

@@ -955,6 +955,14 @@ When a canonical skill or agent file in this repository changes, regenerate the 
 
 Running bun "${CLAUDE_PLUGIN_ROOT}/scripts/sync-cursor-name-map.ts" --check prints cursor-name-map ok when the committed stubs match that walk. This command does not run as part of `all`.
 
+## OpenCode adapter tree
+
+The `opencode/` front door — routing instructions, the agent and command stubs, and the `opencode.json` config fragment — is generated from the canonical tree. When a canonical agent, command, or the routing prose changes, regenerate it by running bun "${CLAUDE_PLUGIN_ROOT}/scripts/sync-opencode-adapter.ts".
+
+Running bun "${CLAUDE_PLUGIN_ROOT}/scripts/sync-opencode-adapter.ts" --check exits non-zero when the committed tree drifts from the canonical one. Like the Cursor walk above, this does not run as part of `all`.
+
+Generated files carry `__SOLEUR_PLUGIN_ROOT__` rather than an absolute path, so the committed tree is machine-independent. Resolve that token once per machine with bun "${CLAUDE_PLUGIN_ROOT}/scripts/install-opencode-adapter.ts" — it merges the config fragment into `~/.config/opencode/opencode.json` without touching an operator's other keys, copies the stubs and the hook module there, and `--target DIR` installs into a project `.opencode` instead. `--check` reports a torn or stale install without writing. Skills are deliberately not copied: they register from the canonical tree through the config's `skills` key, so a second skill tree is never created to drift.
+
 ## Limitations
 
 - No PR analysis (requires GitHub token - deferred)
