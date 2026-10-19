@@ -347,7 +347,14 @@ fan_out_to_peers() {
 
   local hooks_file="${SOLEUR_HOOKS_JSON:-/etc/webhook/hooks.json}"
   local secret
-  secret=$(jq -r '.[] | select(.id=="deploy-peer") | .["trigger-rule"].match.secret' \
+  # Sign with the secret of the FIRST `payload-hmac-sha256` match under the deploy-peer rule's trigger-rule. A
+  # single `match` carries one; the rotation's two-secret window will render an `or` of two such matches (the
+  # current secret first, the next second: an ordering the template slice must pin with a render test), so a read
+  # of `.match.secret` alone would return null there and fan-out would refuse to forward. Only that first HMAC
+  # match decides: if its secret is empty, null, absent or not a string the function refuses below, and a later
+  # match is never a fallback. Matches of any other type are ignored even if they carry a `secret` key, and the
+  # read is scoped to id=="deploy-peer" (another hook's secret is never read).
+  secret=$(jq -r '[.[] | select(.id=="deploy-peer") | .["trigger-rule"] | .. | objects | select(.type=="payload-hmac-sha256")] | first | .secret | select(type=="string")' \
     "$hooks_file" 2>/dev/null || true)
   if [[ -z "$secret" || "$secret" == "null" ]]; then
     logger -t "$LOG_TAG" "FANOUT: webhook secret unavailable ($hooks_file) — cannot forward to peers"

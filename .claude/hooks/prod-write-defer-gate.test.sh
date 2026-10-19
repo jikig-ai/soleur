@@ -194,6 +194,12 @@ echo "--- Tier A: canonical matches (dry-run) ---"
 assert_match_dry "A1 git push origin main"            "git push origin main"                                         "prod-write-defer-git-push-main"
 assert_match_dry "A2 terraform apply"                 "terraform apply"                                              "prod-write-defer-terraform-apply"
 assert_match_dry "A3 doppler -c prd_terraform set"    "doppler secrets set FOO=bar --config prd_terraform"           "prod-write-defer-doppler-secrets-stdout"
+# #10248 — wrapper-prefixed spellings reach the same defer rules via the shared
+# boundary fragment.
+assert_match_dry "A1b rtk git push origin main"       "rtk git push origin main"                                     "prod-write-defer-git-push-main"
+assert_match_dry "A2b rtk terraform apply"            "rtk terraform apply"                                          "prod-write-defer-terraform-apply"
+assert_match_dry "A3b rtk doppler secrets set"        "rtk doppler secrets set FOO=bar --config prd_terraform"       "prod-write-defer-doppler-secrets-stdout"
+assert_nomatch "A1c rtk-foo git push (glued suffix is not rtk)" "rtk-foo git push origin main"
 
 # ============================================================
 # Tier B: form variations (the wrapped-invocation class)

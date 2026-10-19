@@ -478,6 +478,8 @@ jobs:
               -target=doppler_secret.github_app_private_key \
               -target=random_id.github_webhook_secret \
               -target=doppler_secret.github_app_webhook_secret \
+              -target=random_id.egress_audit_ingest_token \
+              -target=doppler_secret.egress_audit_ingest_token \
               -target=cloudflare_bot_management.soleur_ai \
               -target=cloudflare_ruleset.seo_page_redirects \
               -target=cloudflare_ruleset.seo_response_headers \
@@ -642,6 +644,8 @@ jobs:
               -target=logtail_exploration_alert.inngest_luks_wrong_volume \
               -target=logtail_exploration.registry_store_not_luks \
               -target=logtail_exploration_alert.registry_store_not_luks \
+              -target=logtail_exploration.registry_clientip_not_rfc1918 \
+              -target=logtail_exploration_alert.registry_clientip_not_rfc1918 \
               -target=logtail_exploration.inngest_step_524 \
               -target=logtail_exploration_alert.inngest_step_524 \
               -target=logtail_exploration.claude_cost_daily_burn \
@@ -654,6 +658,8 @@ jobs:
               -target=logtail_exploration_alert.workspaces_luks_deadman_fired \
               -target=logtail_exploration.bwrap_probe_rollback \
               -target=logtail_exploration_alert.bwrap_probe_rollback \
+              -target=logtail_exploration.agent_sandbox_bash_denial \
+              -target=logtail_exploration_alert.agent_sandbox_bash_denial \
               -target=logtail_exploration.ghcr_hostsfile_deny_lost \
               -target=logtail_exploration_alert.ghcr_hostsfile_deny_lost \
               -target=logtail_exploration.egress_gw_deny_spike \
@@ -662,6 +668,8 @@ jobs:
               -target=logtail_exploration_alert.egress_gw_probe_silent \
               -target=logtail_exploration.egress_gw_probe_fail \
               -target=logtail_exploration_alert.egress_gw_probe_fail \
+              -target=logtail_exploration.registry_zot_log_credential_shape \
+              -target=logtail_exploration_alert.registry_zot_log_credential_shape \
               -target=random_password.inngest_redis_luks \
               -target=doppler_secret.inngest_redis_luks_key \
               -target=supabase_project.prd

@@ -112,18 +112,30 @@ canonical set lives in <code>plugins/soleur/scripts/lib/ext-filter-grammar.tsv</
 
 <pre>exec subcommands:  run|err|test|proxy|bypass|summary
 string payloads:   -c | --command | --shell  →  unparsed-wrapper ask, never silent allow
-globals:           -v/-vv/-vvv/--verbose, --skip-env (either position — clap global=true)</pre>
+globals:           -v/-vv/-vvv/--verbose, --skip-env, -- (either position — clap global=true; -- is end-of-options)</pre>
 
 <p><strong>Coverage caveat:</strong> rtk's rewrite hook only intercepts <em>Bash</em> tool
 calls. <code>Read</code>, <code>Grep</code>, and <code>Glob</code> results are not filtered —
 savings claims like "90%" are scoped to terminal-output tokens, not your bill.</p>
 
-<p><strong>Boundary-anchor gap:</strong> the unwrap above covers Soleur's
-<em>destructive-command</em> guard (and the pkill/proc siblings). Boundary-anchored gates —
-the <code>gh pr merge</code> review-evidence gate, <code>git commit</code> guards — do not
-yet unwrap <code>rtk</code>-prefixed forms, so <code>rtk gh pr merge</code> still reaches
-them unjudged until <a href="https://github.com/jikig-ai/soleur/issues/10248">#10248</a>
-lands.</p>
+<p><strong>Boundary-anchor coverage:</strong> since
+<a href="https://github.com/jikig-ai/soleur/issues/10248">#10248</a>, boundary-anchored
+gates — the <code>gh pr merge</code> review-evidence gate, <code>git commit</code> guards,
+<code>git stash</code>, <code>gh issue create</code>, prod-write defers — interpolate the
+shared wrapper-prefix fragment (<code>plugins/soleur/scripts/lib/wrapper-boundary.sh</code>),
+so <code>rtk gh pr merge</code>, <code>sudo rtk git commit</code>,
+<code>X=1 rtk gh pr merge</code> and <code>… -- rtk gh pr merge</code> reach them judged.
+Three residual classes remain BY DESIGN: (1) wrappers and wrapper operands outside the
+closed atom grammar are not unwrapped — that includes <em>known</em> launchers whose
+operand words are unmodeled (<code>sudo -u root …</code>, <code>env -C dir …</code>,
+<code>nice -n N …</code>, <code>timeout N …</code>): the prefix stops at the flag word and
+the gated command is not reached; (2) opaque string payloads —
+<code>rtk run -c '…'</code>, <code>rtk summary --shell '…'</code> — join the hooks' existing
+declared-lexical-limit class (alongside <code>bash -c '…'</code>, subshells and eval): they
+are not matchable without parsing a string as shell, which the gates deliberately never do;
+and (3) sites whose boundary alternation itself differs (e.g. the <code>with_lock … --
+</code> member) — prefix tolerance is shared, boundary shape is per-site, tracked at
+<a href="https://github.com/jikig-ai/soleur/issues/10315">#10315</a>.</p>
 
 <h2>Three-rung diagnosis</h2>
 

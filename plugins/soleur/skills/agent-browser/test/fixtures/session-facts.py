@@ -38,7 +38,7 @@ def main(argv):
         try:
             o = json.loads(l.decode("utf-8", "replace"))
         except ValueError:
-            continue
+            o = None  # a non-JSON line: skipped by the isinstance check below, as a JSON null already is
         if isinstance(o, dict) and ("result" in o or "error" in o) and o.get("id") == rid and type(o.get("id")) is type(rid):
             hits.append((l, o))
     if field == "found":

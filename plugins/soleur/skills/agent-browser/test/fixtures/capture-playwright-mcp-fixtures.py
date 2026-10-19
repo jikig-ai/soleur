@@ -25,6 +25,7 @@ stdlib only. Exit 0 on a complete capture, 1 on a framing violation, 2 on usage.
 """
 from __future__ import annotations
 
+import contextlib
 import http.server
 import json
 import os
@@ -149,10 +150,8 @@ class Driver:
         return self.wait_response(rid, name)
 
     def finish(self):
-        try:
+        with contextlib.suppress(OSError):
             self.child.stdin.close()
-        except OSError:
-            pass
         try:
             self.child.wait(timeout=30)
         except subprocess.TimeoutExpired:

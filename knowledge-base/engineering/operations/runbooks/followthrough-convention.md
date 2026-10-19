@@ -303,6 +303,14 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
 
 - **A decoded warehouse line is not necessarily ONE row from ONE emitter — pin each signal to its emitter at offset 0 AND to its row shape, decode to exactly one line per row, and count server fields once (#7556).** The source is shared with webhook receipts that quote attacker-influenceable text; `jq -r` re-emits an embedded newline as a row break (one message can forge a whole sample floor), a client-controlled `User-Agent`/`path`/`username` inside a correctly-pinned row can quote the signal or carry a second `statusCode:`/`latency:`, and a read whose empty answer reads as "none" (a drop guard) must account for every row it fetched. Reference implementation: `scripts/followthroughs/zot-upload-ceiling-7556.sh` (`DECODE_PY`, `CONFIG_PY`, `CLASSIFIER_PY`) and its forgery rows in the `.test.sh`.
 
+- **A tracker closed on PASS drops its probe out of the sweep after `CLOSED_LOOKBACK_DAYS`
+  (14) days — a check meant to outlive its tracker is NOT a follow-through probe.** Enroll it as
+  a standing alert (the ADR-218 `logtail_exploration_alert` pattern) and say so in the probe's
+  header; a probe whose header claims post-close regression detection while its tracker is
+  closed is a defect class (#10321 — `zot-log-channel-7440.sh` claimed "enrolled as a REGRESSION
+  detector" for ~7 dormant weeks). When closing such a tracker, land the standing vehicle in the
+  same or a linked PR and correct the probe header's enrollment claim.
+
 ## What the sweeper does NOT cover
 
 - **One-shot scheduling**: every sweep checks every open follow-through. If you want a script to run exactly once at a specific timestamp, that's a regular scheduled workflow, not a follow-through.

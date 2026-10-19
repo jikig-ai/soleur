@@ -1,0 +1,17 @@
+# Decision Challenges — fix-10248-boundary-wrapper-prefix
+
+Headless pipeline record per ADR-084 + technical-ruling-delegation. No Agent tool was available in the
+planning subagent, so technical rows originally carried `pending - assumed:` rulings; all seven were
+resolved by a single batched `soleur:engineering:cto` consult on 2026-10-14 (parent-context spawn).
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|---|---|---|
+| Shared fragment home — `plugins/soleur/scripts/lib/wrapper-boundary.sh` (new) vs the issue's suggested `.claude/hooks/lib/` constant / `lib/incidents.sh` helper | technical | Ruled by CTO agent, 2026-10-14: plugin-scripts lib confirmed - `precommit-guard.sh` runs from the plugin install cache where `.claude/` does not exist (header :14-16); `lib/` ships beside it and `incidents.sh` already cross-sources that dir (:19), reaching all 11 hook files with one nested source. |
+| `rtk run -c '…'` / `rtk summary --shell '…'` opaque string-payload escalation to `unparsed-wrapper` ask verdicts at boundary sites | technical | Ruled by CTO agent, 2026-10-14: out of scope confirmed - `unparsed-wrapper` machinery lives only in the argv[0]-unwrap class (`destructive-command-guard.sh`); a boundary grep cannot parse an opaque payload, and it is the declared `bash -c '…'` lexical-limit class; benign `-c` uses would false-ask. |
+| Launcher arg-grammars (`sudo -u root`, `env -C dir`, `timeout 5`, `nice -n N`) in the shared fragment | technical | Ruled by CTO agent, 2026-10-14: correctly deferred - `sudo -u root git commit` bypasses today's bare-word launcher alternation (`precommit-guard.sh:51`, `guardrails.sh:145`), a gap predating rtk; the one-word-atom shape admits arg-grammar atoms later without redesign. |
+| TSV machine-readable flag rows (`flag-global`, `flag-string` classes) so globals/string-flags get parity extraction, not just exec-subs | technical | Ruled by CTO agent, 2026-10-14: adopt confirmed - both TSV consumers (`rtk-grammar-parity.test.sh`, `ext-filter-divergence.sh`) extract only `class == "exec"` rows, so flag rows are strictly additive and give new parity arms a pin for both include- and exclude-sets; `known-external-tools.md` restates the TSV so the doc table gains the flag rows too. |
+| pkill `PFX` consolidation into the shared fragment | technical | Ruled by CTO agent, 2026-10-14: rejected confirmed - `PFX`'s arg-word tail is required for `ps` detection but would make `rtk unknown gh pr merge` match at a gated-command site (a must-not-match row); grammars differ by design and the parent-landed code is pinned by parity arm 4. |
+| `brand_survival_threshold: aggregate pattern` (vs `none` vs `single-user incident`) | taste | Ruled by CTO agent, 2026-10-14: aggregate pattern confirmed - the failure mode is a class, not an instance: one defect in the shared fragment fans out across all 18 evidence surfaces; `none` is wrong because `precommit-guard.sh` ships to end users via the plugin; conservative direction triggers the design-validity pass, structural-enumeration seat, and SKEPTICS=3 a guard-substrate rewrite warrants. |
+| Census guard as `plugins/soleur/test/*.test.sh` vs new `scripts/lint-*.py` | technical | Ruled by CTO agent, 2026-10-14: test suite confirmed - `plugins/soleur/test/*.test.sh` is auto-discovered by `SUITE_GLOBS` (`test-all.sh`), same dir/idiom/helpers as the parity suite it extends; every `lint-*.py` needs an explicit `run_suite` line and the lint convention is static checks, not the behavioral regex assertions the census needs. |

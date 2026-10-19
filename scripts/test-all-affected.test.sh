@@ -2613,10 +2613,10 @@ cases=$((cases + 1))
 _f1_floor=$(sed -n 's/^_MIN_ALWAYS_ON_DECLARED=\([0-9][0-9]*\)$/\1/p' "$RUNNER")
 # shellcheck source=/dev/null
 _f1_count=$( ( source "$AFF_LIB" >/dev/null 2>&1; echo "${#ALWAYS_ON_SUITES[@]}" ) )
-if [[ "$_f1_floor" == "109" && "$_f1_count" =~ ^[0-9]+$ ]] && (( _f1_count >= _f1_floor && _f1_count - _f1_floor <= 5 )); then
-  pass "f1: _MIN_ALWAYS_ON_DECLARED is pinned at 109 (#9763 + #9947 + #9814 + #8875 registrations: 114-count minus the slack of 5) and ALWAYS_ON_SUITES ($_f1_count) meets it"
+if [[ "$_f1_floor" == "111" && "$_f1_count" =~ ^[0-9]+$ ]] && (( _f1_count >= _f1_floor && _f1_count - _f1_floor <= 5 )); then
+  pass "f1: _MIN_ALWAYS_ON_DECLARED is pinned at 111 (#9763 + #9947 + #9814 + #8875 + #10331 registrations: 116-count minus the slack of 5) and ALWAYS_ON_SUITES ($_f1_count) meets it"
 else
-  fail "f1: floor='${_f1_floor}' (want 109) always-on count='${_f1_count}' (need floor <= count <= floor + 5; move the floor to count - 5 here and in the runner together)"
+  fail "f1: floor='${_f1_floor}' (want 111) always-on count='${_f1_count}' (need floor <= count <= floor + 5; move the floor to count - 5 here and in the runner together)"
 fi
 
 # --- Rows p1-p6 + m4: --print-selection (#9307) -------------------------------------

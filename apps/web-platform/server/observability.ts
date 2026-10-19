@@ -411,6 +411,8 @@ export function infoSilentFallback(
  *   op-slug emit sites in `cc-dispatcher.ts` reference
  *   `CC_OP_SLUGS.*` (e.g., `CC_OP_SLUGS.saveAssistant`,
  *   `CC_OP_SLUGS.persistUserMessage`) — see #3642 F7.
+ * - `agent-sandbox-bash-tool-result:<errorCode>` (cc-dispatcher `onToolResult` Bash denial mirror; one slot per
+ *   classified code, so a code that fires does not mask another one for the same user, #10445).
  * - `kb-document-resolver` family: PDF text-extraction failure classes
  *   (e.g., `extract-pdf:empty-text`, `extract-pdf:oversized-buffer`).
  * - `soleur-go-runner` family: `notify-awaiting-no-active-query`.

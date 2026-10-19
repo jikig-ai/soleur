@@ -412,7 +412,7 @@ Per-process env overrides:
 On archive-write failure (disk full, permission denied), the helper preserves
 the active file, removes the partial archive, and emits ONE stderr warning
 per process — `[log-rotation] warning: failed to archive <path> ...`. Mirrors
-the warn-once pattern at `incidents.sh:130-138`.
+the warn-once pattern in incidents.sh's detect_bypass/log-rotation block.
 
 ### Aggregator rotator (defense-in-depth)
 
@@ -593,9 +593,15 @@ tokens and always exits 0.
 - **Scope of the trigger:** the heal runs when the session's cwd IS the bare root. A session
   started inside a linked worktree never reaches the root's HEAD, so nothing is repaired until a
   session starts at the root. The same loader is bound for Devin (`devin-dispositions.tsv`), so it
-  heals there too. Codex binds the loader from `.codex/config.toml` through
-  `git rev-parse --show-toplevel`, which fails at a bare root, so it never reaches the heal there;
-  Grok and Cursor sessions do not run this loader and get no heal.
+  heals there too. Codex's `.codex/config.toml` and Devin's Git fallback first resolve the active
+  worktree, then use the absolute Git directory only after Git reports a bare repository,
+  stripping a terminal `/.git` for this layout. Failed discovery stops before hook dispatch.
+  Devin retains `CLAUDE_PROJECT_DIR` then `DEVIN_PROJECT_DIR` precedence; Claude uses its
+  project-directory variable, and Grok's configuration documents Claude-settings compatibility.
+  `plugins/soleur/test/repo-hook-launchers.test.ts` executes these registered command strings
+  across synthetic checkout and bare layouts, including paths with spaces, and checks invocation
+  semantics. These are command-level tests; they do not certify native lifecycle behavior in
+  every harness. Cursor's current slice has no hook execution support.
 - **Fail-open:** the loader takes only the helper's first line and only if it starts with the
   marker prefix, so a missing, failing, noisy or hung helper cannot inject anything or fail the
   hook.

@@ -375,6 +375,58 @@ rows "$TMP/r-jlembedded.json" "$NOW" \
 run "phase-a PASS: a BOOT_STAGE row embedding journalctl 'Failed to start' text is not a violation" 0 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-jlembedded.json" -- "${BASE_ARGS[@]}" --mode phase-a
 
+# ── #9786: `stage=unpointed_raw_refused` on a rehearsal host is a VIOLATION in every mode ──
+# The rehearsal host is the one place the unpointed arm is allowed to format; the refusal there means the
+# allowlist and the rehearsal config drifted apart. The row is the luks_emit shape the template really writes
+# (stage=<name> rc=<n> blkid_type=<t> ... — a blank device reads BLK_TYPE empty, which luks_err emits as
+# `unknown`). One arm per mode: the check is wired at three call sites and each needs its own proof.
+REFUSED_ROW="SOLEUR_INNGEST_LUKS_STAGE stage=unpointed_raw_refused rc=1 blkid_type=unknown detail=FATAL \"host\":\"${HOST}\""
+rows "$TMP/r-unprefused-a.json" "$NOW" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=1 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=2 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout detail=boot=deadbee1.waited_s=150 \"host\":\"${HOST}\"" \
+  "$REFUSED_ROW"
+run "phase-a FAIL: a stage=unpointed_raw_refused row is a violation" 1 \
+  "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-unprefused-a.json" -- "${BASE_ARGS[@]}" --mode phase-a
+
+rows "$TMP/r-unprefused-b.json" "$NOW" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=bootstrap-done detail=iid=abc123 \"host\":\"${HOST}\"" \
+  "$REFUSED_ROW"
+run "phase-b FAIL: a stage=unpointed_raw_refused row is a violation even beside bootstrap-done" 1 \
+  "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-unprefused-b.json" -- "${BASE_ARGS[@]}" --mode phase-b
+
+rows "$TMP/r-unprefused-post.json" "$NOW" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=bs-token-restaged detail=ok=1 \"host\":\"${HOST}\"" \
+  "$REFUSED_ROW"
+run "post-reboot FAIL: a stage=unpointed_raw_refused row after the boundary is a violation" 1 \
+  "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-unprefused-post.json" -- "${BASE_ARGS[@]}" --mode post-reboot --reboot-since "$PRE_REBOOT"
+
+# The second needle alternative: the inngest-luks-FAILED phone-home carries the failing stage in its detail
+# (`stage=inngest-luks-FAILED stage=<name> rc=<n>`). Without an arm of its own, deleting that alternative leaves the
+# suite green, and a drift in the phone-home row shape would then go unnoticed.
+rows "$TMP/r-unprefused-ph.json" "$NOW" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=1 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=2 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout detail=boot=deadbee1.waited_s=150 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=inngest-luks-FAILED stage=unpointed_raw_refused rc=1 \"host\":\"${HOST}\""
+run "phase-a FAIL: the inngest-luks-FAILED phone-home row naming the refusal is a violation too" 1 \
+  "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-unprefused-ph.json" -- "${BASE_ARGS[@]}" --mode phase-a
+
+# NEGATIVE CONTROL: the bare stage name inside a NON-journal row (a webhook payload quoting #9786's text) is not a
+# refusal. The needle is anchored on the row shape, so a doppler-tagged body carrying the token must PASS.
+rows "$TMP/r-unprefused-fp.json" "$NOW" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=1 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=2 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout detail=boot=deadbee1.waited_s=150 \"host\":\"${HOST}\"" \
+  "$CTRL_ROW" \
+  "{\"SYSLOG_IDENTIFIER\":\"doppler\",\"_COMM\":\"inngest\",\"_SYSTEMD_UNIT\":\"inngest-server.service\",\"message\":\"githubEvent=issues title=strip the plaintext arm stage=unpointed_raw_refused is the new refusal\",\"host\":\"${HOST}\"}"
+run "phase-a PASS: the bare stage name inside a non-journal (webhook) row is not a refusal" 0 \
+  "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-unprefused-fp.json" -- "${BASE_ARGS[@]}" --mode phase-a
+
 # --since IS THE SAME-RUN-ID RE-RUN GATE (the workflow passes it on every capture call): a
 # prior life's bootstrap-done inside the window would trip the no-done check, but the bound
 # excludes it — this arm proves the bound is wired, not just parsed.
@@ -543,7 +595,7 @@ grep -qF 'systemd-path control row absent' < <(printf '%s' "$LAST_OUT") && \
 # initializes counters (`X=$((X+1))` increments) but not the FAILURES array — a floor on
 # `${#FAILURES[@]}` dies unbound under set -u and scores CONSTRUCTION, not FIRES. And MIN
 # must sit ADJACENT to the `if` — the mutant builder's walk-back stops at any comment.
-MIN=50
+MIN=55
 if (( passes + fails < MIN )); then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$((passes + fails))" "$MIN" >&2
   exit 1
