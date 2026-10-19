@@ -29,6 +29,7 @@ fixes the bytes of the script a command names, never what that script loads. `ha
 identity shown in the log; the freeze-commit comparison is the integrity control.
 """
 import argparse
+import contextlib
 import datetime
 import hashlib
 import json
@@ -1577,11 +1578,10 @@ _OUTPUT_FLAGS = ("--out", "--command-out", "--display-out")
 def _note(exc, site):
     # Class name and a static site label only. Never str(exc)/repr(exc): exception text can carry a path or
     # the founder's command. `site` is a string literal at every call site.
-    try:
+    # A closed, full or missing stderr (None when fd 2 is closed) must not turn a swallowed error into a crash.
+    with contextlib.suppress(OSError, ValueError, AttributeError):
         sys.stderr.write("founder-check: swallowed %s at %s\n" % (type(exc).__name__, site))
         sys.stderr.flush()
-    except (OSError, ValueError, AttributeError):
-        pass  # a closed, full or missing stderr (None when fd 2 is closed) must not turn a swallowed error into a crash
 
 
 def _locator(exc):

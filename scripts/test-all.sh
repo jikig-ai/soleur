@@ -3803,7 +3803,8 @@ _aff_runner_banner() {
 # reserved for a suite TERMINATED mid-coverage.
 # #9763: 38 heavy/stale labels withdrawn to edge-selection; the floor pins count-5.
 # #8875: +1 always-on (emitter census is repo-global by construction); re-pinned at 114-5.
-_MIN_ALWAYS_ON_DECLARED=109
+# #10331: +2 always-on (the lint-ratchet pair); re-pinned at 116-5.
+_MIN_ALWAYS_ON_DECLARED=111
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -5140,6 +5141,13 @@ if want_scripts; then
   # alert path that had never once delivered, because `set -u` killed it before the curl.
   run_suite "scripts/lint-workflow-step-env-refs" bash scripts/lint-workflow-step-env-refs.test.sh
   run_suite "scripts/lint-workflow-step-env-refs-live" python3 scripts/lint-workflow-step-env-refs.py
+  # #10331 PR3a, ADR-290. Same both-halves shape: the unit suite proves the shrink-only RULE (and
+  # pins ruff.toml, the scope tuple and the floors); the live run proves the TREE equals its
+  # baseline. The eslint-test-dirs live arm runs as a vitest file in `test-webplat` (it needs
+  # apps/web-platform/node_modules, which this shard does not have). The live ruff run installs a
+  # hash-pinned ruff on first use; under CI an unobtainable ruff is exit 2, never a skip.
+  run_suite "tests/scripts/lint-ratchet" python3 -m unittest tests.scripts.test_lint_ratchet
+  run_suite "scripts/lint-ratchet-ruff-live" python3 plugins/soleur/scripts/lint-ratchet.py ruff --check
   # ADR-170. Both halves are required: the unit suite proves the RULE is right (its fixtures are
   # the executable spec), the live scan proves the TREE is clean. Either alone is satisfiable by
   # a detector that has stopped detecting -- a broken linter and a clean repo emit identical
@@ -5580,6 +5588,10 @@ if want_scripts; then
   # sweeper closes issue 8651 as completed — the observed-evidence condition zot-soak-6122.sh's
   # WEB_BLOCKER arm requires — so every sweeper exit code is driven by a fixture.
   run_suite "scripts/web-fresh-boot-zot-8651" bash scripts/followthroughs/web-fresh-boot-zot-8651.test.sh
+  # #10445: exit-code harness for the hosted-Bash-outage readback. Registered EXPLICITLY (scripts/followthroughs/*.test.sh
+  # is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes the PIR-flip tracker, so "PASS only when the
+  # fix PR's merge commit is contained in the deployed tag" must redden CI if it regresses to a bare canary-green exit 0.
+  run_suite "scripts/sandbox-readback-10445" bash scripts/followthroughs/sandbox-readback-10445.test.sh
   # #10119: exit-code + branch harness for the registry htpasswd-stdin delivery probe. Registered explicitly
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes
   # #10119 after the unattended registry host replace, so a vacuous PASS (old-host rows, forged tails, quoted
@@ -5593,6 +5605,9 @@ if want_scripts; then
   # thresholds). Registered explicitly: scripts/followthroughs/*.test.sh is not in SUITE_GLOBS. A vacuous PASS
   # would let the soak window read clean on an unmeasured stream.
   run_suite "scripts/hosted-destroy-ask-window-9776" bash scripts/followthroughs/hosted-destroy-ask-window-9776.test.sh
+  # #7432 (Item I of #9217): exit-code harness for the JOBS-pin soak probe. Registered explicitly:
+  # scripts/followthroughs/*.test.sh is not in SUITE_GLOBS. A vacuous PASS would close #7432, and through it #7376.
+  run_suite "scripts/jobs1-stopgap-7432" bash scripts/followthroughs/jobs1-stopgap-7432.test.sh
   # #5863: exit-code harness for the outer-wrap soak follow-through (stub-curl
   # arms for verdict binding, freshness window, and HTTP classes). Registered
   # explicitly (orphan-suite class above) — its PASS authorizes promoting the
@@ -5891,6 +5906,10 @@ if want_scripts; then
   # exists to report. Static gate over both alarm workflows — the condition is evaluated by
   # GitHub, so the YAML is the only artifact there is to test.
   run_suite "scripts/alarm-issue-filing-guard" bash scripts/alarm-issue-filing-guard.test.sh
+  # #7521: the standing registry fill-rate leg lives in YAML (four steps after the Sentry check-in of
+  # scheduled-zot-restart-loop.yml); this suite parses it and EXECUTES the probe and filing bodies, so
+  # its Sentry isolation, ordering, classification, filing and close rules are pinned by a test.
+  run_suite "scripts/zot-fill-rate-standing-wiring" bash scripts/zot-fill-rate-standing-wiring.test.sh
   # A workflow that writes to the issue tracker must hold `issues: write`. Registered beside the
   # alarm guard because they are the same class one layer apart: that one checks an alarm step CAN
   # RUN, this one checks it CAN WRITE. The dispatcher's refusal artifact satisfied the first and

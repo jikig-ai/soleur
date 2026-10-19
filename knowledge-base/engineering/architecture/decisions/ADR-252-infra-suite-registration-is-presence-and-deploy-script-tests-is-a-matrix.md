@@ -72,6 +72,12 @@ was the objection any infra sharding had to answer *with numbers*.
    because its failure mode is a spurious P1 page, which is worse than a
    slow leg here.
 
+   > **Superseded (#7432, Item I of #9217):** for the monitor's infra step
+   > only. The infra-step pin is removed; the tests step keeps its pin (it
+   > nests the runner on a branch diff touching `apps/web-platform/infra/`).
+   > Figures: the JOBS note in `main-health-monitor.yml`. Revert trigger: the
+   > header of `scripts/followthroughs/jobs1-stopgap-7432.sh`.
+
 3. **Attribution moved from step count to verdict lines + artifacts.**
    Per-suite `PASS`/`RED` lines and `::error` annotations name the suite;
    per-suite stdout/stderr logs upload as a leg artifact on failure;

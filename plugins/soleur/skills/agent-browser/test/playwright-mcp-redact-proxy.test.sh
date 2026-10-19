@@ -709,6 +709,31 @@ assert_rc 'FR7: the session ended cleanly after the withhold' "$r" 0
 mk_variant "$WORK/v-rename" "$PROXY" 'def main() -> None:' 'del looks_like_a11y_tree\n\n\ndef main() -> None:'
 r="$(session v-rename "$WORK/v-rename/proxy.py" --send "$INIT" --end eof --timeout 3)"
 assert_refused_start 'B2: a redactor missing one of the four names → refuse (not a per-result withhold)' "$r" 'does not export looks_like_a11y_tree'
+# Startup refusal (slice 1 of #10331): the startup handlers catch (Exception, SystemExit, KeyboardInterrupt), not BaseException. Each excluded
+# class must still refuse with rc 2 and the unchanged reason line, at every member: the import, the redact_text call and the
+# looks_like_a11y_tree call in the self-test (a case for one member does not cover the other).
+for cls in SystemExit KeyboardInterrupt; do
+  mk_variant "$WORK/v-load-$cls" "$PROXY" 'def main() -> None:' "raise $cls()\n\n\ndef main() -> None:"
+  r="$(session "v-load-$cls" "$WORK/v-load-$cls/proxy.py" --send "$INIT" --end eof --timeout 3)"
+  assert_refused_start "G1: a redactor raising $cls at import → refuse to start (rc 2), class named" "$r" "cannot load redact-a11y-snapshot.py: $cls"
+done
+mk_variant "$WORK/v-st-redact" "$PROXY" 'def redact_text(text: str) -> str:' 'def redact_text(text: str) -> str:\n    raise KeyboardInterrupt()\n\ndef _unused_redact_text(text: str) -> str:'
+r="$(session v-st-redact "$WORK/v-st-redact/proxy.py" --send "$INIT" --end eof --timeout 3)"
+assert_refused_start 'G1: redact_text raising KeyboardInterrupt in the self-test → refuse (rc 2), class named' "$r" 'redactor self-test raised KeyboardInterrupt'
+mk_variant "$WORK/v-st-redact-exit" "$PROXY" 'def redact_text(text: str) -> str:' 'def redact_text(text: str) -> str:\n    raise SystemExit(3)\n\ndef _unused_redact_text(text: str) -> str:'
+r="$(session v-st-redact-exit "$WORK/v-st-redact-exit/proxy.py" --send "$INIT" --end eof --timeout 3)"
+assert_refused_start 'G1: redact_text raising SystemExit in the self-test → refuse (rc 2), class named' "$r" 'redactor self-test raised SystemExit'
+mk_variant "$WORK/v-st-looks" "$PROXY" 'def looks_like_a11y_tree(value: str) -> bool:' 'def looks_like_a11y_tree(value: str) -> bool:\n    raise KeyboardInterrupt()\n\ndef _unused_looks(value: str) -> bool:'
+r="$(session v-st-looks "$WORK/v-st-looks/proxy.py" --send "$INIT" --end eof --timeout 3)"
+assert_refused_start 'G1: looks_like_a11y_tree raising KeyboardInterrupt in the self-test → refuse (rc 2), class named' "$r" 'looks_like_a11y_tree raised KeyboardInterrupt'
+mk_variant "$WORK/v-st-looks-exit" "$PROXY" 'def looks_like_a11y_tree(value: str) -> bool:' 'def looks_like_a11y_tree(value: str) -> bool:\n    raise SystemExit(3)\n\ndef _unused_looks(value: str) -> bool:'
+r="$(session v-st-looks-exit "$WORK/v-st-looks-exit/proxy.py" --send "$INIT" --end eof --timeout 3)"
+assert_refused_start 'G1: looks_like_a11y_tree raising SystemExit in the self-test → refuse (rc 2), class named' "$r" 'looks_like_a11y_tree raised SystemExit'
+# The narrowing is deliberate: a BaseException subclass outside (Exception, SystemExit, KeyboardInterrupt) is not caught, so the proxy
+# dies with rc 1 and a traceback. Still fail-closed (no stdout line, no child) -- pinned so widening back to BaseException (rc 2) is a decision.
+mk_variant "$WORK/v-load-outside" "$PROXY" 'def main() -> None:' "class _OutsideBase(BaseException):\n    pass\n\n\nraise _OutsideBase()\n\n\ndef main() -> None:"
+r="$(session v-load-outside "$WORK/v-load-outside/proxy.py" --send "$INIT" --end eof --timeout 3)"
+assert_true 'G1: a BaseException subclass outside the narrowed tuple at import → rc 1, nothing relayed, no child spawned' bash -c '[[ "$(rcof "$1")" == "1" && "$(fact "$1" 0 lines)" == "0" && -z "$(cat "$1/child_pgid" 2>/dev/null)" ]] && stderr_has "$1" "_OutsideBase"' _ "$r"
 # FR13 behavioural: a SPY redactor tags every string it is handed. Every text block
 # the proxy delivers must carry the tag — a proxy-side predicate that skips some
 # text (a literal, a tool-name allowlist, any spelling of either) cannot hide.
@@ -938,7 +963,7 @@ assert_true 'NFR1/NFR3: stdlib-only imports, no threading' python3 - "$PROXY" <<
 import ast, sys
 t = ast.parse(open(sys.argv[1]).read())
 mods = {(n.names[0].name if isinstance(n, ast.Import) else n.module).split(".")[0] for n in ast.walk(t) if isinstance(n, (ast.Import, ast.ImportFrom))}
-allowed = {"__future__", "importlib", "json", "os", "selectors", "signal", "subprocess", "sys", "time", "typing"}
+allowed = {"__future__", "contextlib", "importlib", "json", "os", "selectors", "signal", "subprocess", "sys", "time", "typing"}
 sys.exit(0 if mods <= allowed and "threading" not in mods else 1)
 PY
 
@@ -1365,7 +1390,8 @@ assert_true 'Guard 3 mutant 5: renaming the server key fails the lookup loudly' 
 
 # PR2 (#10331): the swallowed-error note carries a class name and a literal site label only, never raises,
 # and runs after the group kill. The probe text is shared with the other suites except its census and the teardown case.
-note_probe="$(python3 -I - "$PROXY_SHIPPED" reply-unrelayed-request,teardown-stdin-close,teardown-sigkill,teardown-final-wait,teardown-flush 2>&1 <<'PY' || true
+# $PROXY, not $PROXY_SHIPPED: the probe must exercise the proxy under test so a mutated copy (PROXY_UNDER_TEST) is actually driven.
+note_probe="$(python3 -I - "$PROXY" reply-unrelayed-request,teardown-stdin-close,teardown-sigkill,teardown-final-wait,teardown-flush 2>&1 <<'PY' || true
 import ast, importlib.util, io, os, signal, sys
 spec = importlib.util.spec_from_file_location("note_target", sys.argv[1])
 mod = importlib.util.module_from_spec(spec)
@@ -1514,9 +1540,37 @@ finally:
     os._exit, os.killpg, sys.stderr = real_exit, real_killpg, real_err
 say(code == 0 and attempts == [[signal.SIGTERM]] and "child exited rc=0" in captured, "teardown-note-after-kill")
 say(texts == [mod.PREFIX + " swallowed OSError at teardown-stdin-close\n"], "teardown-note-text")
+
+# Teardown narrowness (slice 1 of #10331): the SIGTERM step suppresses ProcessLookupError ONLY. A PermissionError from os.killpg is not
+# "the group is already empty" and must surface; widening the suppress to Exception would swallow it.
+def fake_killpg_denied(pg, sig):
+    if sig == 0:
+        raise ProcessLookupError
+    raise PermissionError("denied")
+
+proxy2 = mod.Proxy.__new__(mod.Proxy)
+proxy2.out = io.BytesIO()
+proxy2.tearing_down = False
+proxy2.grace = 0.2
+proxy2.pgid = 4242425
+proxy2.child = FakeChild()
+real_exit, real_killpg, real_err = os._exit, os.killpg, sys.stderr
+os._exit, os.killpg, sys.stderr = fake_exit, fake_killpg_denied, io.StringIO()
+outcome = "returned"
+try:
+    proxy2.teardown("probe-denied")
+except Exit:
+    outcome = "exit"
+except PermissionError:
+    outcome = "PermissionError"
+except BaseException:
+    outcome = "other"
+finally:
+    os._exit, os.killpg, sys.stderr = real_exit, real_killpg, real_err
+say(outcome == "PermissionError", "teardown-permerror-surfaces")
 PY
 )"
-for tok in line-shape canary-absent oserror-stderr valueerror-stderr runtimeerror-stderr none-stderr closed-stderr census-literal-labels census-label-set census-rejects-keyword census-rejects-computed census-accepts-literal census-accepts-pending-literal census-rejects-pending-computed teardown-note-after-kill teardown-note-text; do
+for tok in line-shape canary-absent oserror-stderr valueerror-stderr runtimeerror-stderr none-stderr closed-stderr census-literal-labels census-label-set census-rejects-keyword census-rejects-computed census-accepts-literal census-accepts-pending-literal census-rejects-pending-computed teardown-note-after-kill teardown-note-text teardown-permerror-surfaces; do
   assert_true "PR2 note probe: $tok" grep -qxF "OK $tok" <<<"$note_probe"
 done
 
@@ -1536,7 +1590,7 @@ if [[ $mutants_declared -ne $EXPECTED_MUTANTS || $red_rows -ne $EXPECTED_RED_ROW
   printf '[FATAL] mutation matrix: %d mutants / %d mutation rows ran, expected %d / %d — a row vanished\n' "$mutants_declared" "$red_rows" "$EXPECTED_MUTANTS" "$EXPECTED_RED_ROWS" >&2
   exit 1
 fi
-MIN_ASSERTIONS=491
+MIN_ASSERTIONS=499
 if [[ $cases -lt $MIN_ASSERTIONS ]]; then
   printf '[FATAL] vacuity floor: only %d cases executed, expected at least %d\n' "$cases" "$MIN_ASSERTIONS" >&2
   exit 1

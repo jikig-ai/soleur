@@ -417,7 +417,7 @@ Low-priority improvements deferred until after validation. Revisit when the plat
 | L10 | Add explicit AI-crawler allow rules to robots.txt (GPTBot, ClaudeBot, PerplexityBot, Google-Extended — defensive) | P3 | [#2558](https://github.com/jikig-ai/soleur/issues/2558) | Not started |
 | L11 | Rewrite /agents/ meta description with concrete number + outcome | P2 | [#2667](https://github.com/jikig-ai/soleur/issues/2667) | Not started |
 | L12 | Add shared hub + sibling back-links for /blog/soleur-vs-*/ comparison cluster | P2 | [#2668](https://github.com/jikig-ai/soleur/issues/2668) | Not started |
-| L13 | Split /getting-started/ intent — "Two ways to start" pattern | P2 | [#2669](https://github.com/jikig-ai/soleur/issues/2669) | Not started |
+| L13 | Split /getting-started/ intent — "Two ways to start" pattern. Raised to P1 by growth audit 2026-10-19 ([#10516](https://github.com/jikig-ai/soleur/issues/10516)): the homepage self-host CTA now lands visitors here | P1 | [#2669](https://github.com/jikig-ai/soleur/issues/2669) | Not started |
 | L14 | Rename "Uncategorized" H2 on /skills/ + add inline definition of "agentic engineering" | P2 | [#2670](https://github.com/jikig-ai/soleur/issues/2670) | Done |
 | L15 | Add FAQ blocks to /getting-started/ and /vision/ | P2 | [#2671](https://github.com/jikig-ai/soleur/issues/2671) | Not started |
 | L16 | Add "This week in Soleur" weekly summary lede to /changelog/ | P2 | [#2672](https://github.com/jikig-ai/soleur/issues/2672) | Not started |

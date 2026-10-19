@@ -350,7 +350,8 @@ export function shouldMirrorUnregisteredPlatformToolUse(
  * #10032 follow-up — mirror a Bash `tool_result` that carries a sandbox denial to Sentry.
  * Exported for unit testability. Per-user debounced; the event carries ONLY the scrubbed, capped matched
  * line (never the tool output, the command, or workspace paths) and the Error message is the classifier's
- * code, never the output. Detection only: no alert pages on this op until #10052 (blocked on #7985).
+ * code, never the output. `helper_userns_eperm` pages through the Better Stack alert `agent_sandbox_bash_denial`
+ * (betterstack-logs-alerts.tf); the other codes stay Sentry-only until #10052 (blocked on #7985).
  */
 export function mirrorBashSandboxFailure(
   output: string,
@@ -381,7 +382,9 @@ export function mirrorBashSandboxFailure(
       },
     },
     userId,
-    "agent-sandbox-bash-tool-result",
+    // Per error code: a row of another code (including a tenant-forged bwrap line) must not consume the slot of the
+    // `helper_userns_eperm` row that pages.
+    `agent-sandbox-bash-tool-result:${failure.errorCode}`,
   );
 }
 
