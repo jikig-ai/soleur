@@ -2,7 +2,7 @@
 // has no TypeScript sources, so it carries a LITERAL sandbox config and a literal seccomp-selector path. This suite pins
 // both to what the production builders emit, and unit-tests the probe's own verdict function.
 //
-// Guard 4 of the plan (knowledge-base/project/plans/2026-10-19-fix-sandbox-incident-followups-plan.md):
+// Guard 4 of the plan (knowledge-base/project/plans/archive/20261019-203025-2026-10-19-fix-sandbox-incident-followups-plan.md):
 //   (a) smokeSandboxConfig() deep-equals buildAgentSandboxConfig() for the no-egress shape; a failure prints the diff and
 //       the exact line to change in the probe, so the test is a prompt rather than a puzzle;
 //   (b) the BASE selector path stays pinned to today's value (the shim default), and the smoke tuple runs with the

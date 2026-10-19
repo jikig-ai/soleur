@@ -2,7 +2,7 @@
 #
 # Drift guard for the "deploy-time SDK Bash smoke failed" Better Stack Logs alert
 # (apps/web-platform/infra/betterstack-logs-alerts.tf, logtail_exploration_alert.faithful_canary_sandbox_broken; #10453).
-# Plan: knowledge-base/project/plans/2026-10-19-fix-sandbox-incident-followups-plan.md, Guard 1.
+# Plan: knowledge-base/project/plans/archive/20261019-203025-2026-10-19-fix-sandbox-incident-followups-plan.md, Guard 1.
 #
 # WHAT THE ALERT IS FOR. ci-deploy.sh `run_sdk_bash_smoke` (non-blocking) runs one real wrapped Bash call through the real
 # Agent SDK in the canary container. A `sdk_bash_smoke_failed` verdict is paged through `sandbox_canary_sentry_event`, which
