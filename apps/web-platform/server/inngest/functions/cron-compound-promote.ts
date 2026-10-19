@@ -972,17 +972,24 @@ const PRINTABLE_ASCII_RE = /^[\x20-\x7e]*$/;
 // so the cron may only mint the ordinary rule classes.
 const AGENTS_ID_TOKEN_RE = /\[id\s*:[^\]]*\]/gi;
 const AGENTS_NEW_ID_RE = /^\[id: ((?:cq|rf|pdr|cm)-[a-z0-9-]{3,60})\]$/;
-// A hard-rule id named anywhere in the line (prose, a second token) is refused too.
-const HARD_RULE_TOKEN_RE = /(?:^|[^a-z0-9])hr-[a-z0-9]/i;
+// A hard-rule or workflow-gate id named anywhere in the line (prose, a second token) is refused too.
+const HARD_RULE_TOKEN_RE = /(?:^|[^a-z0-9])(?:hr|wg)-[a-z0-9]/i;
 // Text that changes how the harness or a markdown renderer reads what follows it.
-// Also links and images (`](`), URLs (`://`) and command substitution (`$(`): none belongs in a
-// one-line rule or skill bullet, and each is an active-content or exfiltration carrier.
-const RENDER_HAZARD_RE = /```|~~~|<!--|-->|!`|\]\(|:\/\/|\$\(/;
+// Also links and images other than RELATIVE ones (`](./x`, `](../x` are ordinary skill reference
+// links), URLs (`://`) and command substitution (`$(`): each is an active-content or exfiltration
+// carrier in a one-line rule or skill bullet.
+const RENDER_HAZARD_RE = /```|~~~|<!--|-->|!`|\]\((?!\.{1,2}\/)|:\/\/|\$\(/;
 // A rule-class or enforcement tag the model must not assert (`[mandates-filing]` grants a
 // different gate an exemption; the others claim an enforcement that does not exist).
 const AGENTS_TAG_RE = /\[(?:mandates-filing|compliance-tier|hook-enforced|skill-enforced|scanner-enforced)/i;
 // A bullet must carry real rule text, not just a pointer-shaped `- [id: x]`.
 const AGENTS_MIN_RULE_TEXT = 6;
+
+/** An errno code (ENOSPC, EACCES, ...) for diagnostics: a short string or nothing, never free text. */
+function errnoCode(err: unknown): string | undefined {
+  const code = (err as NodeJS.ErrnoException | null)?.code;
+  return typeof code === "string" && /^[A-Z0-9_]{1,32}$/.test(code) ? code : undefined;
+}
 
 function assertAllowedTarget(targetPath: string): EditRefusal | null {
   // A future caller or test helper must not get traversal on `join(tmp, "a", path)`,
@@ -1174,7 +1181,7 @@ async function deriveDiff(
       extra: {
         error_class: err instanceof Error ? err.name : typeof err,
         // The errno code (ENOSPC / EACCES / ENOENT) is the diagnosis; the class is just "Error".
-        error_code: (err as NodeJS.ErrnoException | null)?.code,
+        error_code: errnoCode(err),
       },
     });
     return { failure: "error" };
@@ -1282,8 +1289,8 @@ export async function draftAdditiveEdit(args: {
     `Contract: return insert_after_line and new_lines. insert_after_line MUST be copied verbatim from the target file and appear in it exactly once (use "" to append at the end of the file). new_lines are the lines to insert after it. Append new lines only; never restate, edit or delete an existing line.`,
     `Each new line is printable ASCII, at most ${EDIT_LINE_MAX_CHARS} characters; at most ${EDIT_NEW_LINES_MAX} lines.`,
     cluster.target_path === "AGENTS.rules.md"
-      ? `Every new line must be one rule bullet of the form "- <rule text> [id: <new-id>]" with exactly one [id: ...] per line, an id of class cq-, rf-, pdr- or cm- (3-60 lowercase letters, digits or hyphens after the prefix) that is not already in the file, and no mention of any hr- or wg- rule anywhere in the line. No links, URLs, code fences or HTML comments. Always-loaded byte headroom for this edit: ${headroomBytes} bytes.`
-      : `Do not insert inside the frontmatter or inside a fenced code block.`,
+      ? `Every new line must be one rule bullet of the form "- <rule text> [id: <new-id>]" with exactly one [id: ...] per line, an id of class cq-, rf-, pdr- or cm- (3-60 lowercase letters, digits or hyphens after the prefix) that is not already in the file, and no mention of any hr- or wg- rule anywhere in the line, and no enforcement tags such as [skill-enforced] or [mandates-filing]. No links, URLs, code fences or HTML comments. Always-loaded byte headroom for this edit: ${headroomBytes} bytes.`
+      : `Do not insert inside the frontmatter or inside a fenced code block. Links must be relative (starting ./ or ../); no URLs, no $( command substitution, no code fences or HTML comments.`,
     `Target path: ${cluster.target_path}`,
     block("rationale", cluster.rationale.slice(0, 2000)),
     ...sources.map((s) => block(`learning ${s.path}`, s.summary)),
@@ -1382,7 +1389,7 @@ async function listEligibleTargets(repoRoot: string): Promise<string> {
       message: "could not list plugins/soleur/skills for the eligible-target list",
       extra: {
         error_class: err instanceof Error ? err.name : typeof err,
-        error_code: (err as NodeJS.ErrnoException | null)?.code,
+        error_code: errnoCode(err),
       },
     });
   }

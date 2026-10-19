@@ -214,12 +214,12 @@ the edits the cron can now make; it does not replace the body-weakening gate for
 always-loaded corpus, it is constrained in code rather than by prompt: printable ASCII only,
 caps of 20 lines and 500 characters, no credential-shaped substring (the credential tail of
 `PII_REGEX`, parity-pinned by a test, plus a private-key header and a bearer credential), no bare
-`---`, and no code fence, HTML comment, harness preprocessing marker, link or image (`](`), URL (`://`)
-or command substitution (`$(`), and no `[mandates-filing]`-style enforcement tag. Source learnings are
+`---`, and no code fence, HTML comment, harness preprocessing marker, link or image other than a relative
+`./` / `../` one, URL (`://`) or command substitution (`$(`), and no `[mandates-filing]`-style enforcement tag. Source learnings are
 deduplicated and restricted to corpus paths before the cluster hash, the commit trailers and the PR body. For `AGENTS.rules.md` every
 line is exactly one rule bullet with ONE new id of class `cq-`, `rf-`, `pdr-` or `cm-` (the grammar
 `scripts/lint-rule-ids.py` accepts, minus the classes this ADR reserves for human review): a model
-cannot mint an `hr-` or `wg-` rule, and no `hr-` token may appear anywhere in an inserted line. A
+cannot mint an `hr-` or `wg-` rule, and no `hr-` or `wg-` token may appear anywhere in an inserted line. A
 `SKILL.md` anchor inside the frontmatter or a fenced block is refused.
 
 **The draft is single-file, so its CI starts red.** `lint-rule-ids` requires an `AGENTS.md` pointer

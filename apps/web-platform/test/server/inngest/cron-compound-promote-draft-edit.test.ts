@@ -685,6 +685,7 @@ describe("round 2: grammar boundaries, content classes and the PR/comment sinks"
       ["an hr- id in parentheses", ["- Rule text (hr-never-x) applies. [id: cq-fresh-paren]"]],
       ["an upper-case HR- id", ["- Overrides HR-NEVER-X now. [id: cq-fresh-caps]"]],
       ["an hr- id that starts with a digit", ["- Overrides hr-9x now. [id: cq-fresh-digit]"]],
+      ["a wg- id named in prose (the prompt promises this is refused)", ["- Per wg-verified-work-ships-without-asking do x. [id: cq-fresh-wgprose]"]],
       ["a link", ["- See [the doc](https://example.test/x) first. [id: cq-fresh-link]"]],
     ])("%s -> edit-invalid/shape", async (_label, lines) => {
       const r = await forAgents(lines);
@@ -710,6 +711,21 @@ describe("round 2: grammar boundaries, content classes and the PR/comment sinks"
     it("render hazards are refused on the rules corpus too, not only on skills", async () => {
       const r = await forAgents(["- Run `!`id`` now. [id: cq-fresh-haz]"]);
       expect(r).toMatchObject({ ok: false, cause: "shape" });
+    });
+  });
+
+  describe("relative links are legitimate skill content; anything else is refused", () => {
+    it("a relative reference link is accepted", async () => {
+      const r = await derive(SKILL_ALPHA, { insert_after_line: "## Steps", new_lines: ["- See [a](./references/a.md) and [b](../beta/SKILL.md)."] });
+      expect(r.ok).toBe(true);
+    });
+    it.each([
+      ["a root-relative web path", "- See [a](/etc/x) now."],
+      ["a javascript: link", "- See [a](javascript:alert) now."],
+      ["a protocol-relative link", "- See [a](//evil.example/x) now."],
+    ])("%s -> edit-invalid/shape", async (_label, line) => {
+      const r = await derive(SKILL_ALPHA, { insert_after_line: "## Steps", new_lines: [line] });
+      expect(r).toMatchObject({ ok: false, reason: "edit-invalid", cause: "shape" });
     });
   });
 
@@ -843,5 +859,6 @@ describe("round 2: grammar boundaries, content classes and the PR/comment sinks"
     expect(prompt).toMatch(/cq-, rf-, pdr- or cm-/);
     expect(prompt).toMatch(/exactly one \[id: \.\.\.\] per line/);
     expect(prompt).toMatch(/no mention of any hr- or wg-/);
+    expect(prompt).toMatch(/enforcement tags/);
   });
 });
