@@ -30,7 +30,7 @@ mkdir "$work/home" "$work/tmp" "$work/repo"
 cd "$work/repo"
 
 g() {
-  env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE git -c user.name=probe -c user.email=probe@example.invalid \
+  env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE git -c user.name=probe -c user.email=probe@example.com \
     -c commit.gpgsign=false "$@"
 }
 run() {

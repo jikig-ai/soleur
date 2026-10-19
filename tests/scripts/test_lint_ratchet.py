@@ -117,7 +117,7 @@ class Repo:
     def git(self, *args: str, check: bool = True) -> subprocess.CompletedProcess:
         cmd = [
             "git", "-C", str(self.root),
-            "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid",
+            "-c", "user.name=fixture", "-c", "user.email=fixture@example.com",
             "-c", "commit.gpgsign=false", *args,
         ]
         return subprocess.run(cmd, env=self.env, check=check, capture_output=True, text=True)
@@ -2296,7 +2296,7 @@ class TestUserModeUpdateAndLadder(UserModeBase):
         env = dict(self.repo.env)
         subprocess.run(["git", "clone", "-q", "--depth", "1", "file://" + str(self.repo.root), clone.name],
                        env=env, check=True, capture_output=True)
-        base = ["git", "-C", clone.name, "-c", "user.name=f", "-c", "user.email=f@example.invalid",
+        base = ["git", "-C", clone.name, "-c", "user.name=f", "-c", "user.email=f@example.com",
                 "-c", "commit.gpgsign=false"]
         subprocess.run(base + ["checkout", "-q", "--orphan", "x"], env=env, check=True, capture_output=True)
         subprocess.run(base + ["commit", "-q", "--allow-empty", "-m", "orphan"], env=env, check=True,
