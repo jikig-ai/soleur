@@ -31,3 +31,9 @@
 - Ride-alongs done: account-delete.ts:410-414 (grant_id NO ACTION + app.worm_bypass), tenant-integration.yml:654 wording.
 - CODEOWNERS pin: deferred (operator-scope row — CPO recommended; noted for PR body).
 - NEXT: commit+push → 3-seat review → ADR-267 fix-round → ship (PR body w/ census output + changelog + Closes #10379, semver:patch) → ready → merge-queue → postmerge verify → DONE.
+
+### Review fix-round landed
+- 2-seat review: gate-SQL seat live-verified the query on PG17.6 (0 P1); disposition seat found fail-open `*)` arm + missing issue links.
+- Fixed: `confdelsetcols` scope (PG15 subset-FK false-flag), `cns.nspname='public'` child bound (kills storage.objects + cross-schema owned_by_ref false-red), `tgenabled NOT IN ('D','R')`, stable DISTINCT-ON tie-break, fail-loud `*)` arm, issue links (#10573/10574/10575) in dormant copy, yml severity sentence, header over-inclusion note, test-3 comment.
+- Live census post-fix: 0 blocking, 18 dormant, 4 cone-write-row — fixture 26/26.
+- NEXT: ADR-267 fix-round seat → ship (PR body + Changelog + semver:patch + Closes #10379) → ready → merge → postmerge.

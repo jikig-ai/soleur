@@ -211,6 +211,18 @@ else
   fail "row-level cone-refuse must error naming public.conversations; got: $GATE_OUT"
 fi
 
+# ---- Test 13: unrecognised census class → fail-loud exit 1 + ::error::
+# (guards a future SQL edit adding a 5th class without a disposition arm)
+ROW_BOGUS=$'mystery-class|routine_runs|t|f|k|SET NULL|ROW|BEFORE|public.users\n'
+rc=0
+run_gate "$ROW_BOGUS" "$owned_dir" || rc=$?
+if [[ "$rc" == "1" ]]; then pass "unknown census class exits 1 (fail-loud)"; else fail "unknown class should exit 1 (got $rc)"; fi
+if grep -q "::error::" <<<"$GATE_OUT" && grep -q "mystery-class" <<<"$GATE_OUT"; then
+  pass "unknown class emits ::error:: naming it"
+else
+  fail "unknown class must emit ::error:: naming the class; got: $GATE_OUT"
+fi
+
 echo ""
 echo "preflight-worm-cascade-contradiction: $PASS passed, $FAIL failed"
 [[ "$FAIL" == "0" ]]
