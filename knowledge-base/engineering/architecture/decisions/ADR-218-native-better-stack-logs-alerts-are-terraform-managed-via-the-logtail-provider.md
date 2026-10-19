@@ -543,7 +543,10 @@ event for the deploy signal; the refusal would fail the whole push apply, so it 
   `startsWith(message, 'SANDBOX_CANARY_FAIL: verdict=sandbox_broken reason=sdk_bash_smoke_failed')` and
   `position(message, '(op=sandbox-canary;') > 0`. The `reason=` needle is mandatory (the inner canary's `bwrap_*` rows and the retired
   outer-wrap rows share the `verdict=sandbox_broken` prefix); the `;` terminator keeps `op=sandbox-canary-outer-wrap` out. No
-  `host_name` conjunct (web-2 must page). `smoke_infra_error` does not page.
+  `host_name` conjunct (web-2 must page). `smoke_infra_error` does not page by email (three in a row are recorded in journald and
+  Sentry and flagged on the #10548 tracker by the follow-through, not emailed). The alert's `incident_cause` says the deploy was NOT
+  rolled back and the build WAS promoted to production in the same run, so hosted Bash must be treated as failing in production until
+  the reason is read and cleared; the count text above (16 to 17 managed, 18 live) is unchanged by that wording.
 - **Live probe (2026-10-19, 30 days, hot UNION archive, counts only).** 167 `ci-deploy` rows start with `SANDBOX_CANARY_FAIL:
   verdict=sandbox_broken` and carry `(op=sandbox-canary-outer-wrap;` (14 days; the retired arm), 45 carry `(op=sandbox-canary;` (the
   inner canary's other reasons), and the full predicate matches 0 of them: the discrimination holds on real rows. The alert has no

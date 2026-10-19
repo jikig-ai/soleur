@@ -581,7 +581,7 @@ rejected: it would turn the canary green on the mechanism its own code comment c
 | Kept piece | Live consumer |
 |---|---|
 | `sandbox-canary.mjs --replay-outer` and `classifyOuterWrapReplayVerdict` | test-only (re-introduction path, #9773): `test/sandbox-canary.test.ts` (fixture validation, `{{ROOT}}` substitution, verdict classifier); no production caller remains; the masked-proc docker suite deliberately does NOT run it (its header says so) |
-| `infra/agent-outer-wrap-argv.json` fixture and its Dockerfile/`.dockerignore` bakes | Read by `test/agent-outer-wrap.test.ts`, `test/c4-render-argv-fixture.test.ts` and `apps/web-platform/scripts/sdk-bump-sandbox-gate.sh`, plus `test/sandbox-canary.test.ts` and `sandbox-canary-soak.test.sh` fixture checks |
+| `infra/agent-outer-wrap-argv.json` fixture and its Dockerfile/`.dockerignore` bakes | Read by `test/agent-outer-wrap.test.ts` and `test/c4-render-argv-fixture.test.ts`, by `scripts/sandbox-canary.mjs` (the default fixture path of `--replay-outer` / `--smoke-outer`) and by the `sandbox-canary-soak.test.sh` fixture checks. `apps/web-platform/scripts/sdk-bump-sandbox-gate.sh` only NAMES the file (in its trigger regex and its error text); it does not read it |
 | `scripts/tenant-isolation-inner-probe.sh` shared payload | `agent-outer-wrap.ts` (opt-in boot self-probe), `test/agent-outer-wrap.test.ts`, and `sandbox-canary.mjs --replay-outer` (`test/sandbox-canary.test.ts`) |
 | `agent-outer-wrap.ts` | the `AGENT_OUTER_WRAP` flag path (off in production) |
 | `sandbox-canary.mjs --smoke-outer` | `sandbox-canary-verify-in-image.sh`, the CI capture-gate job that guards the fixture |

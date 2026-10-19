@@ -668,7 +668,7 @@ ADR-075.
 | Kept piece | Live consumer |
 |---|---|
 | `sandbox-canary.mjs --replay-outer`, `classifyOuterWrapReplayVerdict` | test-only (re-introduction path, #9773): `test/sandbox-canary.test.ts`; no production caller remains |
-| `infra/agent-outer-wrap-argv.json` fixture and its Dockerfile/`.dockerignore` bakes | `test/agent-outer-wrap.test.ts`, `test/c4-render-argv-fixture.test.ts` and `apps/web-platform/scripts/sdk-bump-sandbox-gate.sh` read it; `sandbox-canary-soak.test.sh` fixture checks |
+| `infra/agent-outer-wrap-argv.json` fixture and its Dockerfile/`.dockerignore` bakes | Read by `test/agent-outer-wrap.test.ts` and `test/c4-render-argv-fixture.test.ts`, by `scripts/sandbox-canary.mjs` (the default fixture path of `--replay-outer` / `--smoke-outer`) and by the `sandbox-canary-soak.test.sh` fixture checks. `apps/web-platform/scripts/sdk-bump-sandbox-gate.sh` only NAMES the file (in its trigger regex and its error text); it does not read it |
 | `scripts/tenant-isolation-inner-probe.sh` payload | `agent-outer-wrap.ts` boot self-probe, `test/agent-outer-wrap.test.ts` |
 | `agent-outer-wrap.ts` | the `AGENT_OUTER_WRAP` flag path (off in production) |
 | `sandbox-canary.mjs --smoke-outer` | `sandbox-canary-verify-in-image.sh`, the CI capture-gate job |
@@ -679,6 +679,9 @@ The masked-proc docker suite does not run `--replay-outer` (its header records w
 dropped on purpose and the wrap is flag-off. Cross-workspace read/write isolation is still measured per deploy by
 `run_workspace_isolation_probe`. The outer-wrap realized mount table is no longer replayed per deploy; only the static
 pins (`test/agent-outer-wrap.test.ts`, `test/c4-render-argv-fixture.test.ts`) cover it until the arm returns.
+
+**Inert ledger.** `/mnt/data/ci-deploy-outer-wrap-canary.json` remains on every host, inert (nothing reads or writes it any more). A
+re-introduction of the arm must use a new ledger name or delete that file first, otherwise it would inherit the old soak counters.
 
 **Re-evaluate or delete.** On 2026-12-19, or when #9773 Stage 1 (the executor topology) ships, whichever comes first:
 bring the arm back with a pass criterion defined by that topology (own ledger, deploy-state key, soak script and a new
@@ -703,11 +706,15 @@ through the real Agent SDK, the shipped shim and the production sandbox config, 
 allowlist, a decoy `ANTHROPIC_API_KEY`, the container's real `HOME` and a 150 s host `timeout`. The call site is
 `run_sdk_bash_smoke || true`: no verdict rolls back, aborts or changes the deploy's exit code (`wg-dark-launch-deploy-gates`).
 
-**Verdicts (computed by the probe in JavaScript, unit-tested under node).** `pass` only when the per-run random nonce the wrapped
-command echoed comes back in the real tool_result, the result is not error-flagged, and the `coverage` field is
+**Verdicts (computed by the probe in JavaScript, unit-tested under node).** The smoke makes two canary `docker exec`s under the host cap:
+one pre-exec (`test -f <probe> || exit 66; printf %s "$HOME"`, rc 66 = `probe_absent`, a 124 there = `smoke_infra_error`
+`host_timeout_before_dispatch: preflight`) and the probe run. The Bash command is `echo SDK_SMOKE_$(printf %s '<nonce>' | tr 0-9a-f a-f0-9)`,
+so `pass` needs the TRANSFORMED per-run nonce back in the real tool_result (a result that only quotes the command text cannot pass), the
+result not error-flagged, and the `coverage` field equal to
 `sdk_wrapper_shim_prodtuple` (the shim is the `bwrap` on `PATH` and the artifact at the pinned path is sock_filter-sized).
-`sdk_bash_smoke_failed` when Bash was dispatched and no verified nonce came back (an error result, a clean result without the
-nonce, a thrown SDK error, a hang, or the 150 s host cap firing AFTER the probe printed `SDK_BASH_DISPATCHED`), independent of any error signature, so a new wording of a failure cannot go silent; a sandbox
+The verdict is `sdk_bash_smoke_failed` when Bash was dispatched and no verified nonce came back (an error result, a clean result without the
+nonce, a thrown SDK error, a hang, or ANY non-zero `docker exec` rc, the 150 s host cap's 124 included, whose output already carries the
+`SDK_BASH_DISPATCHED` marker: `host_timeout_<N>s` for 124, `probe_rc_<N>_after_dispatch` otherwise), independent of any error signature, so a new wording of a failure cannot go silent; a sandbox
 that cannot start (`sandbox required but unavailable`) is also a failure, not an infra hiccup. `smoke_infra_error` only when Bash
 was never dispatched (probe absent in an old image, docker rc 125/126/127, a crashed probe, stub or ledger failure, no usable
 `/dev/urandom` nonce, or a host-cap timeout that fired BEFORE the probe printed `SDK_BASH_DISPATCHED`: `host_timeout_before_dispatch`, a daemon
@@ -718,7 +725,10 @@ never counts toward promotion.
 
 **Ledger and surfaces.** Its own durable ledger (`/mnt/data/ci-deploy-sdk-bash-smoke.json`, ledger stamp `sdk-bash-smoke`), written
 in ONE atomic write through `write_sandbox_canary_state` (the verdict, `coverage` and `consecutive_infra_error` land together; a
-failed write is reported `smoke_infra_error reason=ledger_write_failed`, never a coverage-less pass), surfaced as
+failed write, detected by reading the ledger back, is reported `smoke_infra_error reason=ledger_write_failed`, never a coverage-less
+pass, ALSO emits the stale warning at once (prior counter + 1: a ledger that cannot be written cannot accumulate the counter that would
+otherwise raise it), and, for a `sdk_bash_smoke_failed` verdict whose write failed, deletes the stale ledger so an old `consecutive_pass`
+cannot keep reading as a soak the failure should have reset), surfaced as
 `sdk_bash_smoke` on `/hooks/deploy-status`. The smoke reads and writes only this ledger, never the shared deploy frame. A failure
 pages through the unchanged `sandbox_canary_sentry_event` journald format
 (`SANDBOX_CANARY_FAIL: verdict=sandbox_broken reason=sdk_bash_smoke_failed: ... (op=sandbox-canary; ...)`) into the new Better Stack
@@ -733,8 +743,13 @@ literal seccomp-selector path, pinned to `buildAgentSandboxConfig` / the shim de
 config with a parity test rather than a second esbuild bundle of the builder.
 
 **Promotion (unchanged and still this ADR's).** 5 green verdicts over at least 3 days with the coverage field present, tracked in
-#10548 and enrolled in the sweeper through `scripts/followthroughs/sdk-bash-smoke-verdict-10548.sh` (exit 0 only at
-`consecutive_pass >= 5`, span >= 3 days, coverage `sdk_wrapper_shim_prodtuple`; exit 1 on a recorded `sdk_bash_smoke_failed`).
+#10548 and enrolled in the sweeper through `scripts/followthroughs/sdk-bash-smoke-verdict-10548.sh`, which NEVER exits 0 (the sweeper
+closes a tracker on exit 0, and #10548 also tracks the promotion and the operator-authorized flag decision, which no script can observe).
+It exits 5 (ACTION REQUIRED, notify-only: `scripts/sweep-followthroughs.sh` comments and leaves the issue open) on a complete soak
+(`consecutive_pass >= 5`, span >= 3 days, latest verdict `pass`, coverage `sdk_wrapper_shim_prodtuple`), so the tracker stays open until the
+promotion and the flag decision are done; 1 (FAIL) on a recorded `sdk_bash_smoke_failed` OR `consecutive_infra_error >= 3` (the stale
+escalation); 2 (TRANSIENT) otherwise. The directive's `earliest=2026-10-26T00:00:00Z` means the sweeper does not run it for the first
+~7 days, during which a blind probe is visible only in journald and Sentry.
 This addendum introduces no new soak number. The promotion itself is a code change (a red-verdict-to-rollback path and dropping the
 call-site `|| true`), not a flag flip.
 
@@ -743,3 +758,9 @@ emitter format are unchanged (the new alert's drift guard reads them). Status st
 The operator-facing decode lives in `knowledge-base/engineering/operations/runbooks/canary-probe-set.md`.
 
 **Coverage of the smoke (what it does and does not run).** The deploy smoke runs the VARIANT (unixdeny) artifact under the NO-EGRESS shape only. It does not run the base artifact that production uses while the flag is OFF, and it does not run the egress shape. Those are covered, respectively, by the blocking legacy sandbox probe plus the canary `base_af_unix_control` probe, and by the pre-merge egress arm of `test/sandbox-wrapped-command-runtime.test.ts`.
+
+Coverage means the shim on PATH, the pinned `buildAgentSandboxConfig` literal and the variant artifact under the no-egress shape. It does not cover the SDK child env, query options, the outer-wrap spawn, or the flag-OFF base. The smoke workspace is also a `mkdtemp` under `/tmp` (`infra/lib/sdk-bash-probe.mjs`), not a path under the denied `/workspaces` root that `buildAgentSandboxConfig` masks, so the production mount shape (a tmpfs mask of the denied workspaces root, then a re-bind of the session's own workspace) is not exercised by the smoke; the real-bwrap tests exercise it (`test/sandbox-isolation.test.ts` direct tier and `test/sandbox-wrapped-command-runtime.test.ts`, which points `WORKSPACES_ROOT` at a temp root and places the own workspace under it).
+
+**Scope of the runtime signal (CTO ruling E, 2026-10-19).** The agent_sandbox_bash_denial alert and the notice rewrite cover cc-soleur-go sessions only. The legacy runner has no tool_result observer, so a helper EPERM there is neither mirrored nor paged. A variant-induced AF_UNIX EPERM has no signal on either runner. The #10455 open item "Legacy agent-runner loop has no tool_result observer" stays open and gains "variant-EPERM signal".
+
+**Flag rollout (CTO ruling G, 2026-10-19).** The `agent-sandbox-unix-deny` flag stays global; enabling it follows the staged, operator-attended procedure in `canary-probe-set.md` ("Enable request must contain"). A per-organisation cohort was deferred, not built.
