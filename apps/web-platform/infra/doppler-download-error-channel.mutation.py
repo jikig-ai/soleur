@@ -36,6 +36,8 @@ REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")
 BOOT = "apps/web-platform/infra/soleur-host-bootstrap.sh"
 CI = "apps/web-platform/infra/cloud-init.yml"
 WF = ".github/workflows/apply-web-platform-infra.yml"
+# the boot-trail reader was extracted out of the workflow; its rows target this file
+TRAIL = "apps/web-platform/infra/scripts/fresh-host-boot-trail.sh"
 SUITE = "apps/web-platform/infra/doppler-download-error-channel.test.sh"
 
 MUTATIONS = [
@@ -72,9 +74,9 @@ MUTATIONS = [
     ("empty-payload guard", BOOT,
      'if [ "$rc" = 0 ] && [ ! -s "$OUT" ]; then', "if false; then"),
     ("stdout injection into $OUT", BOOT,
-     '  [ "$rc" = 0 ] && exit 0',
-     '  printf \'SOLEUR_INJECTED=pwn\\n\' >> "$OUT"\n  [ "$rc" = 0 ] && exit 0'),
-    ("EXIT-trap cleanup", BOOT, "trap 'rm -f \"$ERRF\"' EXIT INT TERM HUP", "true"),
+     '  [ "$rc" = 0 ] && github_app_key_boot_finish',
+     '  printf \'SOLEUR_INJECTED=pwn\\n\' >> "$OUT"\n  [ "$rc" = 0 ] && github_app_key_boot_finish'),
+    ("EXIT-trap cleanup", BOOT, "trap 'rm -f \"$ERRF\" ${_gak_tmp:+\"$_gak_tmp\"}' EXIT INT TERM HUP", "true"),
     # ── bake-time wiring ─────────────────────────────────────────────────────────────────
     ("host_name sentinel splice", BOOT,
      'sed -i "s|@@SOLEUR_HOST_NAME@@|${SOLEUR_HOST_NAME:-}|" /usr/local/bin/soleur-boot-emit',
@@ -95,17 +97,17 @@ MUTATIONS = [
      '      -p 0.0.0.0:3000:3000 \\\n      "$(cat /run/soleur-image-ref',
      '      -p 0.0.0.0:3000:3000 \\\n      2>/run/soleur-stage-detail.d/docker_run \\\n      "$(cat /run/soleur-image-ref'),
     # ── birth-path gate ──────────────────────────────────────────────────────────────────
-    ("gate host-scoping", WF,
+    ("gate host-scoping", TRAIL,
      '($hn == null or $hn == "" or $hn == $eh)', '($hn == null or $hn != null)'),
-    ("::error:: detail interpolation", WF,
+    ("::error:: detail interpolation", TRAIL,
      "booted DARK at stage ${FATAL_STAGE:-${LAST_STAGE:-unknown}}: ${FATAL_DETAIL",
      "booted DARK at stage ${FATAL_STAGE:-${LAST_STAGE:-unknown}}: ${NOTHING"),
-    ("QUERY message literals", WF,
+    ("QUERY message literals", TRAIL,
      'message:"soleur-cloud-init boot stage"', 'message:"soleur-cloud-init boot stages"'),
-    ("green-run retry selector", WF,
-     '| select(hostok($eh))\n                    | select([ (.tags // [])[]? | select(.key=="stage") | .value ][0] == "doppler_retry") ] | length > 0',
-     '| select(hostok($eh))\n                    | select(false) ] | length > 0'),
-    ("RETRY_DETAIL capture", WF, 'RETRIED a boot stage (stage=doppler_retry observed). The host is healthy; the underlying fault is not. Detail: ${RETRY_DETAIL:-<none captured>}', 'RETRIED a boot stage (stage=doppler_retry observed). The host is healthy; the underlying fault is not. Detail: ${LAST_DETAIL:-<none>}'),
+    ("green-run retry selector", TRAIL,
+     '| select(sincok($since))\n          | select([ (.tags // [])[]? | select(.key=="stage") | .value ][0] == "doppler_retry") ] | length > 0',
+     '| select(sincok($since))\n          | select(false) ] | length > 0'),
+    ("RETRY_DETAIL capture", TRAIL, 'RETRIED a boot stage (stage=doppler_retry observed). The host is healthy; the underlying fault is not. Detail: ${RETRY_DETAIL:-<none captured>}', 'RETRIED a boot stage (stage=doppler_retry observed). The host is healthy; the underlying fault is not. Detail: ${LAST_DETAIL:-<none>}'),
 ]
 
 
@@ -124,8 +126,12 @@ def main():
             dst = os.path.join(sb, rel)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.copy(os.path.join(REPO, rel), dst)
-        # the suite reads sibling infra files via $DIR
-        for extra in ("sentry/issue-alerts.tf",):
+        # the suite reads sibling infra files via $DIR: the Sentry alert rules, the boot-trail
+        # reader (AC-M0) and every systemd unit (the AC-HOME6 doppler-HOME sweep)
+        infra = Path(REPO, "apps/web-platform/infra")
+        extras = ["sentry/issue-alerts.tf", "scripts/fresh-host-boot-trail.sh"]
+        extras += [u.name for u in sorted(infra.glob("*.service"))]
+        for extra in extras:
             src = os.path.join(REPO, "apps/web-platform/infra", extra)
             dst = os.path.join(sb, "apps/web-platform/infra", extra)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
