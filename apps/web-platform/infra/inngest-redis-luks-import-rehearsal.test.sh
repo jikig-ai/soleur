@@ -565,7 +565,7 @@ if [ "$CHILD" = 0 ] && [ "$RAN_DYNAMIC" = 1 ]; then
   mkdir -p "$SCR/mut"
   # A child nests its own scratch tree, and the provider's unix socket under it is limited to about 108 bytes, so
   # the children get a short root outside the (possibly long) parent scratch path.
-  CHILD_ROOT="$(mktemp -d /tmp/irl-c.XXXXXX)"
+  CHILD_ROOT="$(mktemp -d /tmp/irl-c.XXXXXX)"  # lint-trap-ownership: ok short root by design (provider unix socket path limit); removed by cleanup()
   assert_fixture_dir "$CHILD_ROOT"
   CHILD_LEFTOVER=0
   CHILD_LEAK=0
