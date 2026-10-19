@@ -202,7 +202,7 @@ assert "positive control: a git grep ERROR (no repository) is exit >1, which the
 # 7e. Positive controls for the grep above: the pattern matches the retired symbol (so an empty result is not a
 # dead regex), and the KEPT pieces still exist (the retirement removed the deploy arm, not the replay mode).
 assert "7d pattern is live: it matches a retired symbol name, and the hyphenated and op forms are covered by their own patterns" \
-  "printf 'run_outer_wrap_canary' | grep -qE \"$OUTER_RE\" && printf 'outer-wrap-canary' | grep -qE \"$OUTER_RE\" && printf 'op=sandbox-canary-outer-wrap' | grep -qE \"$OUTER_OP_RE\""
+  "grep -qE \"$OUTER_RE\" <<<'run_outer_wrap_canary' && grep -qE \"$OUTER_RE\" <<<'outer-wrap-canary' && grep -qE \"$OUTER_OP_RE\" <<<'op=sandbox-canary-outer-wrap'"
 # The kept unit tests (test/sandbox-canary.test.ts) import classifyOuterWrapReplayVerdict directly, so they do
 # NOT notice a deleted CLI mode: pin the dispatch arm here (the masked-proc docker suite does not run it either).
 assert "sandbox-canary.mjs still dispatches --replay-outer to runOuterReplay (kept for the #9773 re-introduction path)" \
