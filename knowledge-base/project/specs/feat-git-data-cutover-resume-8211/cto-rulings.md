@@ -268,5 +268,6 @@ Nothing here dispatched a workflow, applied terraform or wrote production state.
   per-id path unbuilt on three conditions (the built control holds, shown per host before R1 and before R4; R7 reads `clear`; the runbook carries the
   carve-out wording), a request received in the window is recorded as "received in window, bounded by R4, not observed erased", any failed read opens a
   `clo-attestation` issue with the Art. 12(3) deadline in its title, and the owner's acceptance covers the production-flip risk, not an Art. 17
-  shortfall. The CLO suggested an audit record under `knowledge-base/legal/audits/` (`2026-10-19-clo-ruling-8211-rehearsal-art17-window.md`); this PR
+  shortfall. The CLO also ruled that the host-key step 5 emptiness discharge stays available after a rehearsal whose R7 read `clear`, with the flag
+  off and no store-enabled window since, until the real flip, although "`GIT_DATA_STORE_ENABLED` has never been on" is then no longer literally true. The CLO suggested an audit record under `knowledge-base/legal/audits/` (`2026-10-19-clo-ruling-8211-rehearsal-art17-window.md`); this PR
   edits no legal document, so that record is left to the owner to request.

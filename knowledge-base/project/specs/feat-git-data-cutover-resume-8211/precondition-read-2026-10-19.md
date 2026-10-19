@@ -1,6 +1,6 @@
 # Flip preconditions: by-hand live read (git-data LUKS cutover, #8211)
 
-- Read at: 2026-10-19, 11:53Z to 12:00Z (UTC), by an agent in a worktree at `origin/main` `652690531b`.
+- Read at: 2026-10-19, 11:53Z to 12:00Z (UTC; two later re-reads, labelled in row 1, at 12:19Z), by an agent in a worktree at `origin/main` `652690531b`.
 - Scope: read-only. No workflow dispatch, no terraform apply, no production write. No secret value printed: the Better Stack
   and Hetzner read tokens were used as bearer credentials inside `doppler run` (never echoed); every other Doppler read was a
   name listing, except row 13, a value-printing `get` of a non-secret flag name that printed nothing because the name is absent
