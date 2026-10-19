@@ -341,11 +341,11 @@ describe("spawnAgent", () => {
     const spawn = spawnAgent("soleur:engineering:cto", "Plan the migration");
 
     expect(spawn.harness).toBe("opencode");
-    expect(spawn.tool).toBe("Task");
+    expect(spawn.tool).toBe("subagent");
     // The id IS the path: OpenCode ignores frontmatter `name:` (measurements §3.0). This field is
     // the actual spawn argument, so it is the guard that matters.
     expect(spawn.agent).toBe("engineering/cto");
-    expect(spawn.instruction).toContain("Task");
+    expect(spawn.instruction).toContain("subagent");
     expect(spawn.instruction).toContain("engineering/cto");
     expect(spawn.prompt).toContain("Plan the migration");
   });
@@ -381,7 +381,7 @@ describe("formatAgentSpawn", () => {
     process.env.OPENCODE = "1";
     delete process.env.CLAUDECODE;
     const text = formatAgentSpawn("soleur:engineering:cto", "prompt body");
-    expect(text).toContain("Task tool");
+    expect(text).toContain("subagent");
     // The spawn ARGUMENT is the path form; the canonical id is named only for traceability,
     // mirroring the Grok arm's "spawn key; canonical id" shape.
     expect(text).toMatch(/subagent_type `engineering\/cto`/);

@@ -334,7 +334,7 @@ export function formatAgentSpawn(agent: string, prompt: string): string {
     // (measurements §3.0), so the registry's colon id does not resolve — the path form does.
     const pathId = agentIdToPath(agentId);
     return (
-      `Use the **Task tool** with subagent_type \`${pathId}\` ` +
+      `Use the **subagent** tool with subagent_type \`${pathId}\` ` +
       `(OpenCode's path-derived id; canonical id \`${agentId}\`) and this prompt:\n\n${prompt}`
     );
   }
@@ -436,11 +436,11 @@ export function spawnAgent(agent: string, prompt: string): AgentSpawn {
     const pathId = agentIdToPath(entry.id);
     return {
       harness,
-      tool: "Task",
+      tool: "subagent",
       agent: pathId,
       prompt: `Read and follow the Soleur agent definition at ${resolve(PLUGIN_ROOT, entry.path)}.\nApply the OpenCode compatibility instructions at ${resolve(PLUGIN_ROOT, "opencode/INSTRUCTIONS.md")}.\n\n${prompt}`,
       instruction:
-        `Spawn via the **Task tool** with subagent_type \`${pathId}\` ` +
+        `Spawn via the **subagent** tool with subagent_type \`${pathId}\` ` +
         `(OpenCode's path-derived id for \`${entry.id}\`; a path id needs \`mode: subagent\`, which ` +
         "the generated tree sets). Inherit the session model and permissions. " +
         "Pass the prompt verbatim — do NOT substitute a manual workflow.",
@@ -699,7 +699,7 @@ export function routingInstructions(harness: Harness): string {
       return [
         "**Harness: OpenCode**",
         "- Skills: the built-in **skill** tool, with the BARE id — `plan`, `one-shot`, `brainstorm`. The id is the skill's directory name; `soleur:<name>` is the canonical doc form and is not a registration key.",
-        "- Agents: the **Task tool** with the path-derived id (`engineering/cto`). Every generated agent carries `mode: subagent`; without it the agent registers as a primary and the Task tool cannot reach it.",
+        "- Agents: the **subagent** tool with the path-derived id (`engineering/cto`). Every generated agent carries `mode: subagent`; without it the agent registers as a primary and the subagent tool cannot reach it.",
         "- Commands: `/go`, `/sync`, `/help`, `/version`.",
         "- If a bare id is ambiguous, read `plugins/soleur/skills/<name>/SKILL.md` and follow it in full.",
         "- Read opencode/INSTRUCTIONS.md in the installed plugin for the tool and path mappings.",
@@ -713,7 +713,7 @@ export function routingInstructions(harness: Harness): string {
     default:
       return [
         "**Harness: unknown** — default to Claude conventions.",
-        "- Skills: Skill tool (`soleur:<skill>`). Agents: Task tool.",
+        "- Skills: Skill tool (`soleur:<skill>`). Agents: subagent.",
         "- If tools are missing, run `grok inspect` from repo root. Live CLI 1.0.29 has no `--trust` flag — do not invent one.",
         "",
         fidelity,
