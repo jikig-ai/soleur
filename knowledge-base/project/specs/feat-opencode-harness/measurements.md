@@ -780,3 +780,68 @@ Three consequences, each of which changed a deliverable:
    surface. Corrected to `subagent` with the path-derived agent id, and the same correction landed in
    the Agents section's "the Task tool cannot reach it".
 
+---
+
+## 13.0 — Legal gate (task 7.2.1): future-tense harness grep over `knowledge-base/legal`
+
+Run 2026-10-19 on this branch, 130 `*.md` files under `knowledge-base/legal`.
+
+**Commands and results**
+
+```bash
+grep -rn -i "opencode" knowledge-base/legal --include="*.md"
+#   knowledge-base/legal/drafts/2026-09-20-convergence-ccla-execution.md:88   (branch name only)
+#   knowledge-base/legal/drafts/2026-09-04-convergence-ccla-reply.md:50       (branch name only)
+#   → 2 matches, both under drafts/ (unsent), no support promise of any kind.
+
+grep -rnoiE "[^.]{0,120}\b(will (be )?(add|support|include|ship|work)|coming soon|planned support|is planned|roadmap)\b[^.]{0,120}" \
+  knowledge-base/legal --include="*.md" \
+  | grep -iE "harness|claude code|codex|devin|cursor|grok|cli|plugin"
+#   → 1 match: data-processing-agreement-template.md:376, a Supabase member-read policy
+#     ("a member read policy is planned for a later release") — unrelated to harnesses.
+```
+
+**Verdict: zero future-tense harness sentences.** Nothing in `knowledge-base/legal` promises
+OpenCode — or any fifth harness — so no hit was routed to the CLO and no public-page edit is gated
+by a promise this branch would be honoring.
+
+**The present-tense enumeration a *future* public-page edit would touch (not edited here).**
+`audits/2026-09-13-clo-attestation-8119-harness-neutral.md:109` reads "the four harnesses
+`plugins/soleur/lib/harness.ts` already names", and `:146` quotes the public Plugin-definition
+parenthetical as `including Claude Code, Grok Build, Codex, and Devin CLI` — "That list is the
+Harness union". Adding `opencode` to the union does not falsify either: the parenthetical is
+non-exhaustive (`including`), and the attestation is a dated record of what #8119 shipped. This PR
+makes **no** edit to a canonical legal page or to the README's public claim surface, so the
+"route hits to the CLO before any public page edit" condition is not triggered; the standing rule
+that such an edit routes to the CLO first is recorded in tasks.md 7.2.1.
+
+---
+
+## 14.0 — Open contradiction: a later probe did not observe `session.hook("context")`
+
+§12.3 records `session.hook("context")` **firing** once per model request, with a captured payload
+(`CONTEXT agent=build tools=12 sessionID=… systemParts=… systemHead=[{"type":"text","text":"You are
+an AI agent running in OpenCode, …"}]`).
+
+A later probe pair (`octools2`, `octoolnames` — tool-name probes, not context probes) did not show
+the `context` event firing in their sessions while `session.hook("model.request")` did. **The probe
+artifacts were cleaned before this section was written, so the negative is recorded from the session
+log and is not re-derivable from this file alone.** It is therefore logged as an open contradiction,
+not as a refutation: §12.3's positive capture is the measured record, and one observed fire with the
+exact payload shape the plugin consumes (`event.system` as `SystemPart[]`, plus `tools`, `agent`,
+`sessionID`) stands until a fresh reproduction says otherwise.
+
+**Why it matters and what it gates.** `plugin.ts` routes *both* of its injections through this one
+hook — the rules-corpus push (`rulesInjection`) and the post-compaction re-read directive
+(`compactionDirective`, D4). If `context` does not fire on some surface (agent type, config, session
+state), neither lands, and the adapter would silently deliver nothing on FR6 and on compaction.
+That is precisely the "support failure dressed as a feature" the spec names as its load-bearing risk.
+
+**Disposition:** no claim about OpenCode compaction behaviour is published from this record (the
+README's `### Harness support` table is left unchanged), and the reproduction — register only
+`session.hook("context")`, `session.hook("model.request")` and `session.hook("compaction")` on a
+known agent type, drive one real request, log which fire — is carried as a follow-up issue rather
+than silently closed. On a positive reproduction, §12.3 stands unamended and the README row can be
+added from it; on a negative one, this section is corrected by citation in a new section and
+`plugin.ts`'s injection point becomes a defect to fix before any compaction claim.
+

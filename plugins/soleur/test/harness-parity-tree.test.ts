@@ -194,7 +194,9 @@ describe("harness-parity tree census (Guard 3)", () => {
     const exemptDocs = result.docs.filter((d) => d.counts.EXEMPT > 0).map((d) => d.path);
     expect(exemptDocs).toEqual(["plugins/soleur/commands/go.md"]);
     // 2026-10-06: Cursor spellings inside the three existing regions move 21 to 44.
-    expect(result.totals.EXEMPT).toBe(44);
+    // 2026-10-19: OpenCode spellings inside the same three regions move 44 to 48 — one `soleur:`
+    // site per region plus the Step 2.0 table row; the region count and the file set are unchanged.
+    expect(result.totals.EXEMPT).toBe(48);
     const goMd = docs.find((d) => d.path === "plugins/soleur/commands/go.md");
     expect(goMd).toBeDefined();
     const starts = (goMd as { text: string }).text.match(/^<!-- harness-forms:start -->$/gm) ?? [];

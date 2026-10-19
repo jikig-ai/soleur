@@ -559,6 +559,7 @@ Before applying the routing table, detect the active harness and use the correct
 | Codex | Load `$soleur:<skill>` through `skills.read` or the installed SKILL.md | **spawn_agent** with canonical instructions | `$soleur:go` |
 | Devin CLI | **Slash command** — `/soleur:<skill>` | **run_subagent** with agent id | `/soleur:go` |
 | Cursor CLI | Read the canonical file the stub names. Soleur names are `/go`, `/sync`, `/soleur-plan`, `/soleur-help`, and `/soleur-review` | Prefixed stem, for example `/soleur-engineering-cto` | `/go` |
+| OpenCode | **skill** tool with the **bare id** — `plan`, never `soleur:plan` (the id must equal its directory name) | **subagent** tool with the **path-derived id**, for example `engineering/cto` | `/go` |
 
 **Codex harness:** read [Codex compatibility instructions](../codex/INSTRUCTIONS.md).
 Use the installed plugin root for plugin-owned paths. Reading the full named
@@ -576,9 +577,11 @@ Devin exposes Soleur skills as slash commands: `/soleur:<skill>` (e.g. `/soleur:
 
 **Cursor CLI harness:** Cursor's `/plan`, `/help`, `/review`, and `/shell` are built-ins, not Soleur. Do not call the Skill tool, the Task tool, `run_subagent`, or AwaitShell. Slice 1 does not run hooks and does not classify the session as cursor. A Cursor CLI session uses this row. The unknown-harness stop below is a different case. Read [Cursor compatibility instructions](../cursor/INSTRUCTIONS.md).
 
+**OpenCode harness:** entry is `/go`. Skills are invoked through the **skill** tool with a bare id (`plan`); OpenCode keys a skill by its directory name, so `soleur:plan` never resolves. Agents are spawned through the **subagent** tool with the path-derived id (`engineering/cto`) — a path id needs the generated `mode: subagent`, which the adapter tree carries. Guards are live: `deny`/`ask` are delivered with a message by the plugin's `permission.evaluate` hook. Read [OpenCode compatibility instructions](../opencode/INSTRUCTIONS.md).
+
 **Self-reference (Phase C #6323 / epic #6320):** This document + the eval-harness Grok arm were produced and shipped by invoking `/go 6320 implement and ship the next open feature` (next open = Phase C #6323) inside worktree `feat-one-shot-6323-grok-phase-c` (draft PR #6329). The routing contract above is the enforceable spec exercised by this very run. Edits to the go-routing block are gated by eval-harness (see `gated-skills.json` + `eval-gate:block:go-routing`).
 
-If harness is unknown and Skill/slash tools are unavailable, STOP and suggest `grok inspect` (Grok), `claude --plugin-dir ./plugins/soleur` (Claude), or `devin plugins install ./plugins/soleur` (Devin). Live CLI 1.0.29 has no `grok --trust` — do not invent one.
+If harness is unknown and Skill/slash tools are unavailable, STOP and suggest `grok inspect` (Grok), `claude --plugin-dir ./plugins/soleur` (Claude), `devin plugins install ./plugins/soleur` (Devin), or `bun "${CLAUDE_PLUGIN_ROOT}/scripts/install-opencode-adapter.ts"` (OpenCode — resolves the generated tree's `__SOLEUR_PLUGIN_ROOT__` token and merges `opencode/opencode.json` into `~/.config/opencode/opencode.json`). Live CLI 1.0.29 has no `grok --trust` — do not invent one.
 <!-- harness-forms:end -->
 
 Analyze the user input and classify intent using semantic assessment:
@@ -624,6 +627,7 @@ If intent is clear, route without confirmation:
 - **Grok Build:** Read `plugins/soleur/skills/<skill>/SKILL.md` in this process and run it to completion (`/<skill>` names the skill; it is not a nested tool_use). Agents: **spawn_subagent** with the agent id and prompt = original user input.
 - **Devin CLI:** invoke via the **`/soleur:<skill>` slash command** with args = original user input. Agents: **run_subagent** with the agent id and prompt = original user input.
 - **Cursor CLI:** read the canonical file the stub names. `/go` and `/sync` stay bare. Every other skill uses the prefixed form, including `/soleur-plan`, `/soleur-help`, and `/soleur-review`. Do not call the Skill tool, the Task tool, `run_subagent`, or AwaitShell. Slice 1 does not run hooks and does not classify the session as cursor. A Cursor CLI session uses this bullet. The unknown-harness stop in Step 2.0 is not this bullet.
+- **OpenCode:** invoke via the **skill** tool with the bare skill id (`plan`, not `soleur:plan`) and args = original user input. Agents: **subagent** tool with the path id (`engineering/cto`) and prompt = original user input.
 <!-- harness-forms:end -->
 
 On Grok Build only. Map `soleur:<skill>` cells in the table to the Grok skill name `/<skill>` (strip the `soleur:` prefix) and Read that SKILL.md — do not nested-invoke slash. **Exception:** rows whose `Routes To` cell names an agent (e.g., `soleur:legal:clo`) instead of a `soleur:<skill>` skill spawn that agent — never substitute a manual workflow. On Cursor CLI, do not apply that Grok mapping and do not call the Task tool; use the prefixed stem from the Cursor CLI row. When extending this table, prefer routing to a skill when one exists; route to an agent only when no skill wraps the desired behavior.
@@ -644,6 +648,7 @@ If intent is truly ambiguous, use the **AskUserQuestion tool** with 4 options: B
 <!-- harness-forms:start -->
 - **Grok entry is `/go`, not `/soleur:go`.** If the operator typed `/soleur:go`, continue — that is Claude's slash; Grok's is `/go`. Do not refuse or re-prompt.
 - **Cursor CLI entry is `/go` and `/sync`.** Soleur plan, help, and review are `/soleur-plan`, `/soleur-help`, and `/soleur-review`. Cursor's `/plan`, `/help`, `/review`, and `/shell` are built-ins. Slice 1 does not run hooks and does not classify the session as cursor.
+- **OpenCode entry is `/go`; skill ids are bare.** The **skill** tool's key is `plan` — not `soleur:plan`, not `/soleur-plan` — and an agent takes its path id (`engineering/cto`), not the colon id. Do not call the Task tool or `run_subagent` here; OpenCode's spawn tool is **subagent**.
 <!-- harness-forms:end -->
 - **Grok Build bypass guard (#6325 class).** If you routed to `soleur:one-shot` and find yourself writing product code or running `git commit` before `soleur:review` and `soleur:ship` ran, STOP — you inlined the pipeline. Invoke `soleur:one-shot <args>` (or continue the active one-shot Steps 3–8), never "implement then report done."
 - **Brainstorm / plan / work bypass guard (#6320 lifecycle).** If you routed to `soleur:brainstorm` and wrote product code, or finished brainstorm/plan artifacts without invoking `soleur:plan` or `soleur:work`, or pushed from `soleur:work` without `soleur:review` → `soleur:ship`, STOP — invoke the mandated successor from `workflow-fidelity.ts` (`BRAINSTORM_CHILD_SKILLS`, `IMPLEMENTATION_TAIL`).

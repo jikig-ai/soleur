@@ -19,7 +19,7 @@ Phases 0 and 3.5 are measurement gates, not code — they gate the claim, not th
 - [x] 0.1.1 Run OpenCode in each non-CLI mode the install offers (desktop/app/headless `run`) and record whether `OPENCODE` / `OPENCODE_SESSION_ID` / `OPENCODE_TERMINAL` are set in `env`.
 - [x] 0.1.2 Record the probe command, version, and the observed variable set per mode in `measurements.md` under a new §1.1 (append-only; do not rewrite §1.0).
 - [x] 0.1.3 Decide: if the marker matches a non-CLI process, `detectHarness` does not grow the predicate and Phase 1.2 is dropped. If CLI-only, proceed.
-- [ ] 0.1.4 If the predicate is dropped, file a follow-up issue and stop Phase 1.2; FR1 and the ADR's detection clause move to a later slice.
+- [x] 0.1.4 If the predicate is dropped, file a follow-up issue and stop Phase 1.2; FR1 and the ADR's detection clause move to a later slice. **Moot — not applicable:** the predicate was retained (see the Outcome below), so no issue was filed and Phase 1.2 ran.
 
 Outcome (2026-10-18): **PASS — the predicate was retained**, so 0.1.4 is moot. Measured on
 `opencode v2.0.32`: `OPENCODE` is absent from a clean env, `serve`, `acp`, and the session runtime
@@ -186,22 +186,22 @@ and a `routingInstructions` arm.
 
 ### 6.4 Docs + counts
 
-- [ ] 6.4.1 Update `plugins/soleur/README.md` component counts and the harness table only if the support bar is met (Phase 7).
+- [x] 6.4.1 Update `plugins/soleur/README.md` component counts and the harness table only if the support bar is met (Phase 7). Support bar met (7.1.1–7.1.5, SHAPE-NOTE.md), so: **counts verified unchanged** — `bash scripts/sync-readme-counts.sh --check` → "All component counts are in sync" (67 agents / 4 commands / 103 skills), corroborated by 6.4.2's `components.test.ts` (1436 pass); **the harness-table row landed in the Step 2.0 harness table of `plugins/soleur/commands/go.md`** — the table 6.4.2's phrasing ("the README tables are unchanged; the harness *table* row waits on Phase 7") separates from them, and the one Cursor shipped a row into — as an OpenCode row plus one paragraph/bullet in each of the three `harness-forms` regions; census pin moved 44 → 48 with the dated note in `harness-parity-tree.test.ts` (still one file, three regions). The README's `### Harness support` (compaction) table is **deliberately not extended**: an OpenCode row there is a public compaction-support claim, and the hook the rules injection and the compaction re-read both ride (`session.hook("context")`) carries an unreconciled later non-fire (§12.3 vs. the later probe pair) — recorded as measurement §14, not claimed. Tracked for follow-up rather than deferred silently.
 - [x] 6.4.2 Run `bun test plugins/soleur/test/components.test.ts` — 1423 pass. The adapter adds no canonical component, so the README tables are unchanged; the harness *table* row waits on Phase 7.
 
 ## Phase 7 — Support bar + ship
 
 ### 7.1 Four-point support bar (ADR-274 shape)
 
-- [ ] 7.1.1 `/go` in a live OpenCode session classifies the intent (`opencode`, not `unknown`).
-- [ ] 7.1.2 One pipeline skill completes its gates end to end.
-- [ ] 7.1.3 One agent spawn runs, or is refused in words.
-- [ ] 7.1.4 Both guards fire (from 3.5).
-- [ ] 7.1.5 Commit a shape note quoting all four, with the captured evidence.
+- [x] 7.1.1 `/go` in a live OpenCode session classifies the intent (`opencode`, not `unknown`). — SHAPE-NOTE §7.1.1 (live session): `detectHarness(process.env)` → `"opencode"` (markers `OPENCODE=1`, `AI_AGENT=opencode`), `resolveGoRoute("plan")` → `{kind:"skill", skill:"brainstorm"}`, `dispatchGoRoute` → `{harness:"opencode", tool:"skill", command:"brainstorm"}`; §1.0/§7.0 record the predicate and marker precedence.
+- [x] 7.1.2 One pipeline skill completes its gates end to end. — SHAPE-NOTE §7.1.2, measuring §12.5: in a hermetic installed-adapter session a model met the credential guard's block (`agent-browser snapshot` → `permission.rejected`), read the message, ran the routed variant, and that call **completed** — the installed module, generated config, and canonical guard script were all on the path.
+- [x] 7.1.3 One agent spawn runs, or is refused in words. — SHAPE-NOTE §7.1.3: `spawnAgent(cto)` → `{tool:"subagent", agent:"engineering/cto"}` with the canonical agent path and `opencode/INSTRUCTIONS.md` in the prompt; generated stubs carry `mode: subagent`. Refusal-in-words was observed for unsafe actions (§12.5), never a silent absence.
+- [x] 7.1.4 Both guards fire (from 3.5). — SHAPE-NOTE §7.1.4, measuring §12.5: credential guard → `permission.rejected` on `shell`; destructive-command guard → `effect:"ask"` held open on `terraform destroy` (a real blocking prompt, not downgraded, per D10). Dispositions ledger: `.claude/hooks/opencode-dispositions.tsv`.
+- [x] 7.1.5 Commit a shape note quoting all four, with the captured evidence. — `knowledge-base/project/specs/feat-opencode-harness/SHAPE-NOTE.md` (committed), quoting all four points with the captures and naming its evidence sources (measurements §1.0, §6.6, §11.1–§11.6, §12.1–§12.8; the dispositions ledger; the in-session probe; 547 pass in the targeted parity/drift set).
 
 ### 7.2 Legal gate
 
-- [ ] 7.2.1 Grep `knowledge-base/legal` for future-tense harness sentences; route hits to the CLO before any public page edit.
+- [x] 7.2.1 Grep `knowledge-base/legal` for future-tense harness sentences; route hits to the CLO before any public page edit. — **Run 2026-10-19, 130 files, zero hits to route:** `grep -rn -i "opencode" knowledge-base/legal --include="*.md"` → **2 matches, both in `drafts/`** (unsent convergence-CCLA replies naming the branch `feat-opencode-harness`, carrying no support promise); the tight future-tense sweep `grep -rnoiE "[^.]{0,120}\b(will (be )?(add|support|include|ship|work)|coming soon|planned support|is planned|roadmap)\b[^.]{0,120}"` piped through harness/CLI/plugin terms → **1 match, unrelated** (a Supabase member-read policy in `data-processing-agreement-template.md`). No sentence in `knowledge-base/legal` promises harness support, so there is nothing to route to the CLO. One **present-tense** enumeration exists and is *not* touched by this PR: CLO attestation `audits/2026-09-13-clo-attestation-8119-harness-neutral.md` pins the union as four members and quotes the public parenthetical as `including Claude Code, Grok Build, Codex, and Devin CLI` — the parenthetical is non-exhaustive and the attestation is a dated record of #8119, so neither is falsified by adding a fifth union member; **any future edit to those canonical pages remains a public-page edit and routes to the CLO first.** Recorded as measurement §13.
 
 ### 7.3 PR finalization
 
