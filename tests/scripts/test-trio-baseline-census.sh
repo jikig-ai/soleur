@@ -1240,12 +1240,12 @@ eval_live() {
     [ -n "$_top" ] || continue
     if [ -d "$REPODIR/$_top" ]; then
       if [ "$_top" = "knowledge-base" ]; then
-        for _x in $ENUM_KBCODE; do printf '%s\n' "$_edge" | grep -qxF "glob:$KBN/**.$_x" || _edge_miss="$_edge_miss glob:$KBN/**.$_x"; done
-        for _x in $ENUM_KBNAMES; do printf '%s\n' "$_edge" | grep -qxF "glob:$KBN/**$_x" || _edge_miss="$_edge_miss glob:$KBN/**$_x"; done
-      else printf '%s\n' "$_edge" | grep -qxF "$_top/" || _edge_miss="$_edge_miss $_top/"; fi
-    else printf '%s\n' "$_edge" | grep -qxF "$_top" || _edge_miss="$_edge_miss $_top"; fi
+        for _x in $ENUM_KBCODE; do grep -qxF "glob:$KBN/**.$_x" <<<"$_edge" || _edge_miss="$_edge_miss glob:$KBN/**.$_x"; done
+        for _x in $ENUM_KBNAMES; do grep -qxF "glob:$KBN/**$_x" <<<"$_edge" || _edge_miss="$_edge_miss glob:$KBN/**$_x"; done
+      else grep -qxF "$_top/" <<<"$_edge" || _edge_miss="$_edge_miss $_top/"; fi
+    else grep -qxF "$_top" <<<"$_edge" || _edge_miss="$_edge_miss $_top"; fi
   done < <(GITQ -C "$REPODIR" ls-files -z | tr '\0' '\n' | awk -F/ '{print $1}' | LC_ALL=C sort -u)
-  printf '%s\n' "$_edge" | grep -qxF "$ADR_REL" || _edge_miss="$_edge_miss $ADR_REL"
+  grep -qxF "$ADR_REL" <<<"$_edge" || _edge_miss="$_edge_miss $ADR_REL"
   if [ -n "$_edge" ] && [ -z "$_edge_miss" ]; then pass "A5: $AFFECTED_ARRAY declares every tracked top-level entry, the knowledge-base code globs and ADR-241 (a new top-level entry needs a line)"
   else fail "A5: $AFFECTED_ARRAY declares every tracked top-level entry, the knowledge-base code globs and ADR-241" "missing:$_edge_miss"; fi
 }
