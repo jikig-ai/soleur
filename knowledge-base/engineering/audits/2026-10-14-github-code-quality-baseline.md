@@ -4,7 +4,7 @@ date: 2026-10-14
 type: audit
 issue: 10331
 status: baseline
-last_updated: 2026-10-14
+last_updated: 2026-10-19
 ---
 
 # GitHub Code Quality baseline, 2026-10-14
@@ -159,7 +159,7 @@ Read from the repository's Code Quality alert list (Standard findings, filter `i
 | py/unused-global-variable | 5 | Note | Python | 4 to 5 |
 | js/overwritten-property | 2 | Error | JavaScript | 2 |
 | py/unused-import | 2 | Note | Python | 5 to 2 |
-| js/comparison-between-incompatible-types | 1 | Warning | JavaScript | 2 to 1 (one fixed, one dismissed false positive, see above) |
+| js/comparison-between-incompatible-types | 1 | Warning | JavaScript | 2 to 1 (one was fixed and one dismissed as a false positive on 2026-10-15, see above; which alert is still open was not identified in this snapshot) |
 | js/regex/duplicate-in-character-class | 1 | Warning | JavaScript | |
 | js/regex/unmatchable-caret | 1 | Error | JavaScript | |
 | js/string-instead-of-regex | 1 | Warning | JavaScript | |
@@ -167,15 +167,15 @@ Read from the repository's Code Quality alert list (Standard findings, filter `i
 | js/useless-comparison-test | 1 | Warning | JavaScript | |
 | py/catch-base-exception | 1 | Note | Python | 5 to 1 |
 | py/comparison-of-identical-expressions | 1 | Warning | Python | |
-| py/implicit-string-concatenation-in-list | 1 | Warning | Python | |
-| py/import-and-import-from | 1 | Note | Python | |
-| py/imprecise-assert | 1 | Note | Python | |
+| py/implicit-string-concatenation-in-list | 1 | Warning | Python | new |
+| py/import-and-import-from | 1 | Note | Python | new |
+| py/imprecise-assert | 1 | Note | Python | new |
 | py/mixed-returns | 1 | Note | Python | |
 | py/procedure-return-value-used | 1 | Warning | Python | |
 | py/regex/duplicate-in-character-class | 1 | Warning | Python | |
 | rb/useless-assignment-to-local | 1 | Warning | Ruby | |
 
-`py/empty-except` (20 findings on 2026-10-14) is absent from the open list, and its rule page returns 404. This is the verification issue #10381 asked for: a scan of the current head of `main`, taken after the handler PRs merged, shows no open `py/empty-except` finding in any file, including the five that issue names.
+`py/empty-except` (20 findings on 2026-10-14) is absent from the open list, and its rule page returns 404. This is the verification issue #10381 asked for: a scan of the current head of `main`, taken after the handler PRs merged, shows no open `py/empty-except` finding in any file. The issue gives per-file counts (proxy 4, scan-ancestor 1, redact-engine 2) and does not name file paths; the five files in the plan are derived from those counts, and the rule is absent everywhere, so the derivation does not change the verdict. `py/unused-local-variable` (2 findings on 2026-10-14) is also absent from the open list now.
 
 The AI-findings panel read 0 findings. The alert list is UI-only (the REST API does not return these alerts), so this table is the last record of it before the feature is switched off.
 
@@ -189,4 +189,5 @@ Checks after the change:
 
 - Runs: heads pushed before the change (`f5c0d9f`, `7f60e4d`, `54d6948` of the slice-4 PR) each started both a `PR #10605` run and a `Code Quality: PR #10605` run. Head `79ff915`, pushed after the change, started only `PR #10605` (code scanning). A second PR's push at 18:52:52Z (`4df7c14`, `PR #10525`) also started no `Code Quality: PR` run.
 - Code scanning default setup is identical to the capture above (`state: configured`, same languages, `extended` suite, `weekly` schedule).
+- The 2026-10-14 sections above describe the operator re-enabling Code Quality that day; the usage meter shows daily charges continuously from 2026-09-22 (sporadic lines before that), so the feature was already billing before the 2026-10-14 re-toggle.
 - Caveat: `GET repos/jikig-ai/soleur/actions/workflows/343194280` still returns `state: active` (`updated_at` 2026-09-03) after the change. The dynamic workflow object stays listed; the absence of new `Code Quality: PR` runs is the evidence that it is off, and it is re-read at the postmerge step.

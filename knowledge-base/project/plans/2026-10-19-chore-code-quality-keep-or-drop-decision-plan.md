@@ -44,7 +44,7 @@ re-evaluation date (2026-11-14) that both can be found from.
 **The CTO ruled twice, and the second ruling is the one that stands.** The first ruling (keep, with a re-evaluation)
 rested on the brief's "$10 per active committer per month" framing. Reading the org billing API at plan time
 (read-only `GET orgs/jikig-ai/settings/billing/usage`) showed the real charge is a metered product `code_quality`,
-SKU "Code Quality AI Credits": $0.41 in August, $94.31 for 2026-09-22 to 30 (the first billing day was 2026-09-22), and
+SKU "Code Quality AI Credits": $0.41 in August, $94.31 for 2026-09-22 to 30 (daily charges from 2026-09-22; a $0.01 item on 2026-09-10 and $0.41 in August), and
 $160.65 for 2026-10-01 to 19 (about $254 a month at that pace). Gross equals net, so these are charges, and no
 per-committer SKU appears at all. Re-ruled with that evidence, the CTO tripped its own flip criterion (cost above
 $50 a month whatever the signal) and ruled **turn it OFF, after one bounded step that settles #10381**. The rulings
@@ -262,10 +262,10 @@ Skipped by the Phase 2.9 rule: the diff edits only knowledge-base documents (no 
 - [x] `bash scripts/expenses-verify-by-check.sh` reports `anomalies=0` and `expired=22` (unchanged from before this PR).
 - [x] ADR-276 diff is append-only: `git diff origin/main -- <ADR-276 file>` shows only added lines (zero `-` lines other than the diff header), and the new heading is `## Amendment 2026-10-19 (S5 Code Quality decision, #9730; Ref #10331)`; `status:` and the Stage status list are unchanged.
 - [x] The ADR addendum and the ledger Notes both contain `2026-11-14` (grep both files).
-- [x] Code Quality is actually off: the settings page reads off after a reload, workflow 343194280 is no longer `active` (or 404), a head pushed after the disable has a `PR #N` code-scanning run and no `Code Quality: PR #N` run, and `default-setup` equals the Phase 1 capture.
+- [x] Code Quality is actually off: the settings page reads off after a reload, a head pushed after the disable has a `PR #N` code-scanning run and no `Code Quality: PR #N` run (two PRs checked), and `default-setup` equals the Phase 1 capture. Workflow 343194280 still reads `active` after the disable; the dynamic workflow object stays listed, so the absence of new `Code Quality: PR` runs is the evidence (recorded in the audit file).
 - [x] The audit file has the appended snapshot section (rule table, total, scan SHA and the five-file `py/empty-except` count, or the explicit empty-view note) and #10381 is settled with that snapshot only after the disable was verified.
-- [x] PR body contains the standalone issue-closing line for #10331 exactly as the brief spells it, states the disable is a repository setting applied by the agent (no in-repo change, no operator step), and contains no other close keyword followed by an issue number.
-- [x] `git diff origin/main --stat` lists only the three edited files, the two spec files and this plan; `plugins/soleur/skills/work/SKILL.md` is not in it.
+- [ ] (set at ship) PR body contains the standalone issue-closing line for #10331 exactly as the brief spells it, states the disable is a repository setting applied by the agent (no in-repo change, no operator step), and contains no other close keyword followed by an issue number.
+- [x] `git diff origin/main --stat` lists only the three edited files, the three spec files and this plan; `plugins/soleur/skills/work/SKILL.md` is not in it.
 - [x] `bash plugins/soleur/test/c4-count-parity.test.sh` still passes.
 
 ## Test Scenarios

@@ -1,6 +1,6 @@
 # Decision challenges: feat-one-shot-10331-code-quality-decision
 
-Slice 4 of #10331. Every technical fork was ruled by the CTO agent at plan time; the operator was asked nothing technical. The CTO ruled twice: the first ruling (keep, 2026-10-19) rested on the brief's "$10 per active committer" framing; reading the org billing API then showed the real charge is a metered AI-credit line two orders of magnitude larger, and the CTO re-ruled (revised, below). Both rulings are kept so the reversal is auditable.
+Slice 4 of #10331. Every technical fork was ruled by the CTO agent at plan time; the operator was asked nothing technical. The CTO ruled twice: the first ruling (keep, 2026-10-19) rested on the brief's "$10 per active committer" framing; reading the org billing API then showed the real charge is a metered AI-credit line about 25 times larger, and the CTO re-ruled (revised, below). Both rulings are kept so the reversal is auditable. Review corrections (the ruling text in the rows is kept as ruled): daily charges began 2026-09-22 (the rows say billing began that day; the ADR lists the earlier small items); the recent pace is about $3 to $4 a day (roughly $100 a month), so the "about $254 a month" in the rows is the earlier-pace extrapolation and the over-$50 criterion still holds; "option C" means an AI-credits-only toggle.
 
 ## Decision Classes
 
