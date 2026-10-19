@@ -1281,8 +1281,8 @@ Read the last `OK`/`SUSPECT` line. On `SUSPECT`, treat the QUIESCED notice as un
 Status: **adopting** ([ADR-292](../architecture/decisions/ADR-292-inngest-link-tls-terminator-and-flagged-flip.md)). Everything below is
 **inert at merge**: the resolver's default is still `http://10.0.1.40:8288`, nothing reads the new secrets until the host is replaced,
 and the flag does not exist until the owner-gated flip. This section covers **leg 1 only** (the web app's sends and reads to the
-scheduler on `:8288`). The `sdk_url` poll (dated disposition to 2026-12-10) and the Cloudflare step-call leg (#10479) are not fixed
-here, and #10136 stays open. **No step below uses SSH**: every read is the Better Stack query script, a hook, or a workflow run.
+scheduler on `:8288`). The `sdk_url` poll (dated disposition to 2026-12-10, tracked as #10538) and the Cloudflare step-call leg (#10479) are not fixed
+here, and #10136 stays open. **No step below uses SSH**: every read is the Better Stack query script, a hook, or a workflow run. One failure has no no-SSH remedy at all and is escalated instead of improvised: a non-empty or root-owned `/mnt/data/inngest-link` (see "CA on web hosts").
 
 ### What the pieces are
 
@@ -1290,30 +1290,70 @@ here, and #10136 stays open. **No step below uses SSH**: every read is the Bette
 |---|---|---|
 | TLS listener | `soleur-inngest-tls.service` on the Inngest host (stunnel4) | `10.0.1.40:8443` forwards to `127.0.0.1:8288`; TLS 1.2 or higher. `inngest-server` does **not** depend on it, so a dead listener never takes the scheduler down. |
 | Certificate | `apps/web-platform/infra/inngest-tls.tf` | One Terraform cert (ECDSA P-256, 10 years, `CA:FALSE`, SAN `IP:10.0.1.40` only, `prevent_destroy`) feeds three Doppler copies: `INNGEST_TLS_KEY` and `INNGEST_TLS_CERT` in `soleur-inngest/prd`, `INNGEST_TLS_CA` (base64) in `soleur/prd`. |
-| CA on web hosts | `/mnt/data/inngest-link/inngest-ca.pem` (bind-mounted at `/etc/soleur/inngest-ca.pem` in the container) | Written and validated by `ci-deploy.sh` before every `docker run`; mounted read-only with `NODE_EXTRA_CA_CERTS`. `NODE_TLS_REJECT_UNAUTHORIZED` is pinned **absent** everywhere. `/mnt/data` is in the webhook unit's `ReadWritePaths` and deploy-owned; `ci-deploy.sh` creates `/mnt/data/inngest-link` (and cloud-init does on a fresh host). If a deploy reports `ca_unwritable` or `write_failed`, check ownership of `/mnt/data` on that host. |
+| CA on web hosts | `/mnt/data/inngest-link/inngest-ca.pem` (bind-mounted read-only at `/etc/soleur/inngest-ca.pem` in the container, with `NODE_EXTRA_CA_CERTS`). The same directory holds `inngest-link.env` (read by the probes) and `last-scheme` (the downgrade memory). | **Only an https resolution touches the CA.** With the flag absent or a lapsed lease, `ci-deploy.sh` never reads `INNGEST_TLS_CA`, never validates it and never installs it: it only ensures the bind source exists as a file (an empty placeholder is created if the file is missing; an empty directory docker left at the path is removed), so a bad or substituted `INNGEST_TLS_CA` cannot fail a flag-off deploy. With https (`pending:` or `1`) the CA is read from the deploy's env snapshot, else from Doppler (three tries), then validated (at most 4 KiB, no private key, exactly one CERTIFICATE block, parses, not expired, rejects `CA:TRUE` and a `Certificate Sign` key usage), then proven by the host-side `curl --cacert <candidate>` self-gate against the live listener, and only then installed with `mv -fT`. A failed gate leaves the previous file in place. `NODE_TLS_REJECT_UNAUTHORIZED` is pinned **absent** everywhere. `/mnt/data` is in the webhook unit's `ReadWritePaths` and deploy-owned; `ci-deploy.sh` creates `/mnt/data/inngest-link` (and cloud-init does on a fresh host). Two install failures are distinguished: `ca_unwritable` (warning, flag **off**: the deploy continues) and `write_failed` (error, https: the deploy fails and the old container keeps serving). An **empty directory** at the CA path heals itself on the next deploy (the installer removes it first). A **non-empty** directory, or a path the deploy user cannot write, has **no no-SSH remedy**: no hook or workflow in this repository repairs files under `/mnt/data/inngest-link`, and the event carries only `dir=` or `file=`, not the cause. Do not improvise; stop and hand it to the owner (SSH on the host is a last resort and the owner's decision, `hr-no-ssh-fallback-in-runbooks`). |
 | Flag | Doppler `soleur/prd` `INNGEST_LINK_TLS` | Terraform-managed (`doppler_secret.inngest_link_tls`, count-gated, absent by default). Absent = legacy http. `1` = https, fail-closed. `pending:<epoch>` = https inside a 30-minute lease, then http. Any other value fails the deploy. |
 | Resolver | `resolve_inngest_link` in `ci-deploy.sh` | The single place the scheme is chosen. Writes `/mnt/data/inngest-link/inngest-link.env` for the probes. |
 | Flip workflow | `.github/workflows/inngest-link-flip.yml` | Dispatch-only; `action=flip` or `action=off`. |
-| Counters | nft `legacy_8288` and `tls_8443` in `table inet soleur_inngest` | `legacy_8288` counts packets on the plaintext listener (cumulative since boot, legitimately non-zero before the flip); `tls_8443` is the positive control. |
-| Telemetry | stage `tls-health`, every 5 minutes | Read it with the Better Stack query script (below). |
+| Counters | nft `legacy_8288` and `tls_8443` in `table inet soleur_inngest` | `legacy_8288` counts packets on the plaintext listener (cumulative since boot, legitimately non-zero before the flip); `tls_8443` is the positive control. **Never restart or re-run `inngest-nftables.service` on the Inngest host**: its loader is not idempotent (`nft -f` merges into the existing table, so a second run in one boot duplicates the `8443` accept rules and double-counts both counters, #10545), and a re-run would poison the soak counters. A ruleset change reaches the host only through a replace. |
+| Telemetry | stage `tls-health`, every 5 minutes | A **direct phone-home POST** by `inngest-boot-phone-home.sh` to Better Stack source `2457081` (payload `{message, marker, stage, detail, host, dt, shipper}`), independent of the journald-to-Vector shipper; it has no `SYSLOG_IDENTIFIER`. Read it with the Better Stack query script (below). The crit refusal marker `SOLEUR_INNGEST_TLS_REFUSED` is a different path (`logger -p user.crit -t inngest-tls-health`, shipped by Vector Source 2). There is no handshake-failure counter in the row. |
 | Soak probe | `scripts/followthroughs/inngest-tls-soak-10136.sh` | Decides the 48 hour soak; anchor markers are read from trusted comments on #10136. |
 
 ### The flag and the flip workflow
 
-States of `INNGEST_LINK_TLS`, as read by the resolver from the full-config snapshot (a missing key is authoritative absence; the
-resolver also refuses to read unless `DOPPLER_PROJECT` is `soleur` and `DOPPLER_CONFIG` is `prd`, so a mis-bound token can never read
-"absent"):
+States of `INNGEST_LINK_TLS`, as read by the resolver from the full-config snapshot (a missing key is authoritative absence).
+**Scope guard.** The snapshot's two metadata lines `DOPPLER_PROJECT` and `DOPPLER_CONFIG` must name `soleur` and `prd` when they are
+present: a line that is present and wrong (or repeated) always fails the deploy (`inngest_link_scope_mismatch`), so a mis-bound token
+can never read "absent". A snapshot that lacks the lines cannot be judged wrong: with the flag absent it resolves http and logs a
+`scope_unverified` warning (the deploy continues); with the flag set it fails closed (`scope_mismatch field=unverified`):
 
 | Value | Resolver output | Notes |
 |---|---|---|
-| absent | `http://10.0.1.40:8288` | The default and the rollback state. The CA file is still written (an empty placeholder if the secret is absent) so a bind mount never creates a directory. |
-| `pending:<epoch>` | `https://10.0.1.40:8443` while `epoch <= now + 31 min` **and** inside the 30-minute lease; otherwise http plus a logged event | Written by the flip workflow before the canary. A lapsed lease is a deliberate rollback, not a downgrade. |
-| `1` | `https://10.0.1.40:8443`, **fail-closed** | A failed self-gate, an unreadable flag, or an empty or invalid CA fails the deploy and the old container keeps serving. The resolver never falls back to http with the flag on. |
+| absent | `http://10.0.1.40:8288` | The default and the rollback state. The CA secret is **not** read, validated or installed (see "CA on web hosts"). |
+| `pending:<epoch>` | `https://10.0.1.40:8443` while `epoch <= now + 31 min` **and** `now < epoch + 30 min` (the lease) | Written by the flip workflow before the canary. A **lapsed** lease (`now >= epoch + 30 min`) resolves http plus a `lease_expired` warning event: a deliberate rollback, not a downgrade. A **future** epoch (`epoch > now + 31 min`, e.g. a skewed or hand-typed value) is *not* a lapse: it fails the deploy with `inngest_link_flag_invalid`. |
+| `1` | `https://10.0.1.40:8443`, **fail-closed** | A failed self-gate, an unreadable flag, a failed CA read, or an empty or invalid CA fails the deploy and the old container keeps serving. The resolver never falls back to http with the flag on. |
 | anything else | deploy fails | Allowlist is `^(1|pending:[0-9]{1,10})$`. |
 
 **While the flag is on, a broken gate blocks ordinary releases.** That is accepted by design: the alternative is a silent downgrade to
-plaintext. If a release is refused with an `inngest_link_*` reason, either fix the cause (read the failed run's `::error::` line) or
-roll back with the workflow below, then redeploy.
+plaintext. The gate is not only the CA: every release, hotfix and web rollback now needs the Inngest host reachable on `:8443` with a
+healthy listener (the self-gate makes three attempts), so an Inngest host replace, a stunnel restart or a short network blip refuses
+the deploy with `inngest_link_selfgate_failed` and the old container keeps serving. The escape hatch is `action=off` below (it needs
+the Tier-B `inngest_link_flag` job to run, see the Rollback section). If a release is refused with an `inngest_link_*` reason, read the
+event for that reason (next subsection) and either fix the cause or roll back, then redeploy.
+
+**Resolver events.** Every decision is one journald line `INNGEST_LINK: class=<class> level=<level> <detail>` under tag `ci-deploy`,
+shipped to Better Stack (Vector Source 4). `warning` and `error` classes are also sent to Sentry (tags `feature=ci-deploy`,
+`op=inngest-link`, `classification=<class>`). **No Sentry alert rule routes `op=inngest-link` today** (`grep` over
+`apps/web-platform/infra/sentry/` finds none), so a Sentry event here notifies nobody: the read below is the detection. The failed
+release run's `::error::` / `reason=` line carries only the constant `inngest_link_*` reason (and, for the canary, the constant
+`canary_inngest_link_failed`); the discriminating fields are in the event.
+
+```
+doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep 'INNGEST_LINK: class=' \
+  | jq -R -r 'fromjson? | .raw? | fromjson? | select(.SYSLOG_IDENTIFIER == "ci-deploy") | "\(.host_name) \(.host) \(.message)"'
+```
+
+`host_name` is Vector's label (web-1 `soleur-web-platform`, web-2 `soleur-web-2`; it can be stale on a web-1 row, #6616, so the OS `host`
+is printed beside it). `--grep` is an unanchored substring match on the double-encoded `raw` column; the `select` is what isolates the tag.
+
+| `class=` | Level | Meaning and what to do |
+|---|---|---|
+| `resolved` | info | `state=<http_default\|http_lease_expired\|https_flag\|https_pending> scheme=<http\|https>`: the scheme this host's resolver handed the container. The one row per host that closes the "web-2 is not verified from CI" gap. |
+| `scope_unverified` | warning | The snapshot lacked the `DOPPLER_PROJECT` / `DOPPLER_CONFIG` lines and the flag was absent: resolved http, deploy continued. Investigate why the snapshot lost its metadata lines before relying on "absent". |
+| `scope_mismatch` | error | `field=project\|config` (present and wrong) or `field=unverified` (lines absent while the flag is set). The deploy fails. Fix the token binding. |
+| `snapshot_unreadable` | error | The env snapshot could not be read. The deploy fails. |
+| `flag_invalid` | error | `lines=<n>` (the key appears more than once), `len=<n>` (value outside the allowlist) or `pending_epoch=future`. The deploy fails. The value itself is never logged. |
+| `lease_expired` | warning | A `pending:` lease lapsed (`age_secs=`): resolved http. Expected when a flip died after `pending`; the revert or `action=off` is the follow-up. |
+| `https_to_http` | warning | This host's `last-scheme` memory said https and it now resolves http. Expected after an intentional `off` or a lapsed lease; otherwise the flag disappeared (hand delete, Doppler restore) and the fleet is on plaintext. It never fails the deploy. **No alert rule routes it**, so read it after every `off` and on a routine schedule while the flag is on. |
+| `ca_unavailable` | error | https resolved but the CA could not be read from the snapshot or Doppler after three tries. The deploy fails. |
+| `ca_invalid` | error | `why=<tool\|decode\|size\|empty\|key\|count\|parse\|expired\|ca>` names the first failed validator check. The deploy fails. |
+| `selfgate_failed` | error | `rc=` and `http=` of the last of three host-side `curl --cacert <candidate>` attempts. The listener is down, the CA does not match the served certificate, or the host-to-host path is blocked. The deploy fails; the old CA file is untouched. |
+| `write_failed` | error | `file=ca_candidate\|ca\|link_env`: installing under `/mnt/data/inngest-link` failed with https. See "CA on web hosts" for what can and cannot be repaired. |
+| `ca_unwritable`, `link_env_unwritable`, `last_scheme_unwritable` | warning | The same directory was not writable on a flag-**off** deploy (or for the downgrade memory): the deploy continues. |
+| `canary_failed` | error | `check=<inspect\|health\|events\|send\|registry\|negative_control\|no_verdict> cause=<token>`; the cause is mapped inside the container from a fixed allowlist (`ECONNREFUSED`, `ETIMEDOUT`, `DEPTH_ZERO_SELF_SIGNED_CERT`, `HTTP_<status>`, `EMPTY`, else `other`). Egress dropped reads as `ETIMEDOUT` or `ECONNREFUSED`; Node not trusting the pinned file reads as a certificate code; the listener answering badly reads `HTTP_5xx`. See [canary-probe-set.md](canary-probe-set.md), Layer 5. |
+| `canary_ok` | info | `checks=inspect,health,events,send,registry,negative_control`. |
+
+This query was not run against Better Stack by the session that wrote this section (the read needs `prd_terraform` credentials); its
+shape is the one `scripts/inngest-link-flip.sh` prints in its closing line (`flip_resolved_query`); `inngest-link-flip-workflow.test.sh` pins the `--since` / `--grep` part of that line, not the `jq` filter.
 
 `inngest-link-flip.yml` (dispatch-only):
 
@@ -1322,23 +1362,60 @@ gh workflow run inngest-link-flip.yml -f action=flip -f confirm=FLIP-INNGEST-LIN
 gh workflow run inngest-link-flip.yml -f action=off
 ```
 
-`flip` applies `pending:<epoch>`, dispatches the canary-then-prod release, verifies the canary layer
-([canary-probe-set.md](canary-probe-set.md), Layer 5) and both prod swaps, then applies `1`. Each flag change is a Tier-B
-`apply_target` job under `environment: infra-privileged` (about 2 minutes each, three per flip), because the flag is a Terraform-managed
-secret and no narrower Doppler write credential exists for `soleur/prd`. The `confirm` input is a typo-guard, **not** the
-authorization: the authorization for a flag write is the owner's own dated go (act A3 below). If the run fails or is cancelled
-after the first flag write, a best-effort step applies the flag-absent baseline and redeploys (a typo-guard or idle-guard refusal
-never reaches it); if `infra-privileged` ever requires a reviewer who is not there, that step blocks. The 30-minute lease bounds only
-how long a stuck `pending` can make NEW deploys resolve https: a running container keeps the `INNGEST_BASE_URL` it was started with
-until it is redeployed. The redeploy is tracked through `dispatch-web-redeploy/track.sh`, which reads web-1 frames only, so web-2's
-swap and the scheme it resolved are **not verified from CI**; the script's last line says so.
+`flip` applies `pending:<epoch>`, redeploys the running image through `dispatch-web-redeploy/track.sh` (canary, then prod swap), checks
+that the redeploy finished inside the lease margin and that the handshake hook answers `result=pass`, then applies `1`. The canary
+layer is [canary-probe-set.md](canary-probe-set.md), Layer 5.
+
+**How the flag is written.** Each flag change is a Tier-B `apply_target=inngest-link-flag` job (`inngest_link_flag`) under
+`environment: infra-privileged`. The job writes **no Doppler key** and holds **no `DOPPLER_TOKEN_WRITE`**: it passes the requested
+value to its Terraform plan as `env TF_VAR_inngest_link_tls=<value>` (empty for `off`), set after `doppler run` injected its own
+variables, and applies only `doppler_secret.inngest_link_tls` (the Terraform doppler provider's own credential writes the secret,
+as in every apply). The reason is inheritance: `prd_terraform` is a Doppler branch config of `prd`, and the Terraform-managed secret
+lives in `prd`, so a key *deleted* from `prd_terraform` is simply re-exposed from `prd` and never empties the variable (a data-integrity
+finding of the PR review). **Never create an `INNGEST_LINK_TLS` key in `prd_terraform`**: it would shadow `prd` and make every
+untargeted plan (the drift detector) propose a change. A flip is **two** Tier-B applies (`pending:<epoch>`, then `1`), **three** if the
+revert fires. Each can queue behind the shared Terraform mutex; the script budgets up to 35 minutes per apply (10 minutes for the run
+to appear, 25 to finish).
+
+**The authorization is procedural.** The `confirm` input is a typo-guard, **not** the authorization: the authorization for a flag
+write is the owner's own dated go (act A3 below). `infra-privileged` has the `main` branch policy and **no required reviewer**
+(ADR-241), so nothing technical stops another actor with `workflow_dispatch` rights from running `flip` or the unguarded `off`
+(the confidentiality-lowering direction): the go is a process control, and this runbook says so rather than implying a gate.
+
+**Time budget** (the BUDGET TABLE at the top of `scripts/inngest-link-flip.sh`; `inngest-link-flip-workflow.test.sh` pins the workflow
+to it). The redeploy is bounded at 4800 s, which equals the pipeline's own hard kill of `ci-deploy.sh` (cron drain 4200 s plus swap
+overhead), so the flip never gives up on a deploy that is still running. The job allows 268 minutes and the revert step 115. A
+redeploy must finish by `T0 + 1800 - 600` s (the lease minus 600 s kept for web-2, whose deploy starts after web-1's), or `flip`
+refuses to promote and the revert runs.
+
+**Flip only in a low-traffic window that is also cron-quiet.** Each flip is one extra full-fleet container swap per host (in-flight
+agent sessions are cut at each swap, as in any release); a rollback is another. A deploy waits in the cron drain (up to 4200 s)
+behind a claude cron in flight, and `/hooks/deploy-status` exposes only the *last* drain's outcome, not a live in-flight signal, so
+the script cannot refuse on it.
+
+**Failure and cancel.** If the run fails or is cancelled after the first flag write, a best-effort `revert` step applies the
+flag-absent baseline and redeploys (a typo-guard or idle-guard refusal never reaches it). GitHub force-terminates a `cancelled()`
+step five minutes after the cancel request whatever its `timeout-minutes` says, so after a *cancel* run `action=off` yourself.
+The 30-minute lease bounds only how long a stuck `pending` can make **new** deploys resolve https: a running container keeps the
+`INNGEST_BASE_URL` it was started with until it is redeployed, so the lease is not a rollback. The redeploy is tracked through
+`track.sh`, which reads web-1 frames only, so web-2's own canary and swap, and the scheme either host resolved, are **not verified
+from CI**; the `FLIPPED`, `OFF` and `REVERTED` lines print the Better Stack query for each host's `class=resolved` row (above).
+
+**First container on a new web host.** A fresh or replaced web host starts its first container from `cloud-init.yml` on the
+hardcoded `INNGEST_BASE_URL=http://10.0.1.40:8288`, whatever the flag says, until its first `ci-deploy` run resolves the flag.
+So a new web host needs one release (or `action=off`/`flip`'s redeploy) **before** `:8288` is ever closed, and a host replaced
+after the flip sends plaintext (counted by `legacy_8288`) until that first deploy.
 
 ### Rollback
 
-1. Run `gh workflow run inngest-link-flip.yml -f action=off`. It removes the flag and redeploys the running image so the resolver
-   re-reads it. No host change is needed: `:8288` is still serving.
-2. Confirm with the resolver's log line in the deploy run (`scheme=http`) and, once the old containers drain, the `legacy_8288`
-   counter moving again in `tls-health` (that is the expected signature of a rolled-back link).
+1. Run `gh workflow run inngest-link-flip.yml -f action=off`. `off` is **idempotent and convergent**: it plans at most one delete of
+   the flag (a flag that is already absent plans no change and the job reports `result=already_absent`), and it **always redeploys**
+   the running image so the resolver re-reads the flag. Re-run it freely after a failed or half-finished attempt. No host change is
+   needed: `:8288` is still serving.
+2. Confirm with the `class=resolved` row of **each** host (the query under "Resolver events"; expect `state=http_default scheme=http`
+   from `soleur-web-platform` and from `soleur-web-2`), and, once the old containers drain, the `legacy_8288` counter moving again in
+   `tls-health` (the expected signature of a rolled-back link). An `https_to_http` warning on each host is expected here.
+   The deploy run's own log does not carry the resolver line.
 3. **After the signing key rotation (act A5), a flag-off rollback sends the NEW key over `:8288` in plaintext again.** A rollback
    after A5 therefore needs a re-rotation once the cause is fixed, and closing the legacy listener gets a date.
 
@@ -1357,13 +1434,13 @@ first; the registry dispatcher has the same rule in `registry-host-replace-dispa
 
 | Act | Owner go and due date | Preconditions (evaluate, never assume) | Mechanism | Success evidence | Rollback |
 |---|---|---|---|---|---|
-| A0: merge the PR (inert) | normal merge queue after review and green CI | review done; `gh run list` shows no in-flight `apply-web-platform-infra.yml` or `registry-host-replace-dispatch.yml`; rebased on `origin/main` (never merge main) | single bare `gh pr merge 10501 --squash --auto`, then no sync pushes | `deploy-arm.sh find --wait <full-sha>` then `served <full-sha>` from a detached `origin/main` worktree; the merge apply created the three secrets (names only, never values); the egress assert is green on web-1 **and** web-2; the CA file on both web hosts equals the Doppler copy (re-check after the first post-merge release: the merge apply can race the first deploy and leave the empty placeholder) | revert the PR; nothing referenced the new resources |
-| A1: Inngest host replace (one disruption, bundled with #10405 unless it slips) | the recorded go, quoted above; due **2026-11-05** | #10501 merged; #10405 merged **or** the 2026-10-28 checkpoint passed without it (then the replace proceeds on this PR's own `nft8443_sha256` and `nft_rules` fields); web-1 and web-2 both report the CA fingerprint and the `:8443` egress rule; no in-flight `apply-web-platform-infra.yml`; `bash apps/web-platform/infra/inngest-userdata-budget.sh` green with at least 300 B margin on the trial merge of both branches; this runbook's "Replace triggers" and "Inherited `done`" sections re-read; stock preflight and destroy-guard pass; a low-traffic window chosen; the `cutover-inngest.yml` quiesce op set for the window (it covers reminder arming only); the host id recorded before and after | `gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f reason='PR 10501 inngest link TLS'` (one `reason` input; no confirm or id-pin input, a tracked follow-up) | the apply job succeeds **and** the scheduler serves: a boot event with the private NIC up (no `provision-nic-ABSENT`); `bootstrap-done` for the new `iid`; `tls-health` rows with `listener=1` and `served_sha256` = `cert_sha256` = the Terraform certificate fingerprint; `nft8443_sha256` and `nft_rules` showing the `8443` accept, drop and both counters; the `routine_runs` catch-up showing one run per missed tick | nothing points at `8443` yet, so the web side needs no rollback; for a failed replace see "Abort thresholds" below |
+| A0: merge the PR (inert) | normal merge queue after review and green CI | review done; `gh run list` shows no in-flight `apply-web-platform-infra.yml` or `registry-host-replace-dispatch.yml`; rebased on `origin/main` (never merge main) | single bare `gh pr merge 10501 --squash --auto`, then no sync pushes | `deploy-arm.sh find --wait <full-sha>` then `served <full-sha>` from a detached `origin/main` worktree; the merge apply created the three secrets (names only, never values); the egress assert is green on web-1 **and** web-2. No emitter reports the CA file's content or a fingerprint, so there is no pre-flip CA check to make here: with the flag absent a deploy never touches the CA, and the A3 canary (the host-side self-gate on the candidate, then the in-container checks) is the proof | revert the PR; nothing referenced the new resources |
+| A1: Inngest host replace (one disruption, bundled with #10405 unless it slips) | the recorded go, quoted above; due **2026-11-05** | #10501 merged; #10405 merged **or** the 2026-10-28 checkpoint passed without it (then the replace proceeds on this PR's own `nft8443_sha256` and `nft_rules` fields); web-1 and web-2 both show the `:8443` egress rule (the egress assert; no emitter reports a CA fingerprint, the A3 canary is the proof of the CA); no in-flight `apply-web-platform-infra.yml`; `bash apps/web-platform/infra/inngest-userdata-budget.sh` green with at least 300 B margin on the trial merge of both branches; this runbook's "Replace triggers" and "Inherited `done`" sections re-read; stock preflight and destroy-guard pass; the Stripe swallow #10542 fixed, or the window quiesced with the replay check (see "Replace duration"); a low-traffic window chosen; the `cutover-inngest.yml` quiesce op set for the window (it covers reminder arming only); the host id recorded before and after | `gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f reason='PR 10501 inngest link TLS'` (one `reason` input; no confirm or id-pin input, tracked as #10544) | the apply job succeeds **and** the scheduler serves: a boot event with the private NIC up (no `provision-nic-ABSENT`); `bootstrap-done` for the new `iid`; `tls-health` rows with `listener=1` and `served_sha256` = `cert_sha256` = the Terraform certificate fingerprint; `nft8443_sha256` and `nft_rules` showing the `8443` accept, drop and both counters; the `routine_runs` catch-up showing one run per missed tick | nothing points at `8443` yet, so the web side needs no rollback; for a failed replace see "Abort thresholds" below |
 | A1b: `cutover-inngest.yml -f op=resume` (inherited `done`, #7228) | a separate owner go that **names `op=resume`**: the `inngest-cutover` environment approval is a human gate no delegation can bypass and it authorizes a production scheduler start | A1 dispatched; `INNGEST_CUTOVER_FLIP=done` inherited so the new host refuses to start (journal line `BLOCK: cutover flag='done' but this host carries no done-owner marker`); `bootstrap-done` seen for the **current** `iid` | `gh workflow run cutover-inngest.yml -f op=resume` (waits in `Waiting` for the owner's approval) | the FSM returns to `noop-done`; `inngest-server` active with a stable `NRestarts`; expect a false DOUBLE-FIRE from the bucket proxy in `op=verify` and attribute it against `routine_runs`; do **not** re-fire missed ticks (each fired exactly once on the 2026-09-17 resume) | none: never re-dispatch the replace for an inherited `done` |
-| A2: handshake verification | part of the A1 go | A1 evidence | web-host hook `/hooks/inngest-tls-handshake` (web-1 only: the hook channel terminates there) | a verified request returns 200; the same request without the CA fails with a certificate-verification error (curl exit 60). web-2's container path is proven by its own `ci-deploy` canary at A3 | read-only, none |
-| A3: flip through `inngest-link-flip.yml` | **its own dated owner go naming the flag write**; the recorded go covers building the flip, not running it | A1 and A2 green; no in-flight release run; the flip date noted on the tracker | `gh workflow run inngest-link-flip.yml -f action=flip -f confirm=FLIP-INNGEST-LINK` | the canary layer passes (all five checks, including the real in-container send); both prod hosts swapped and healthy; the resolver log shows `https` on both; **T = last prod swap complete plus old-container drain**, with a baseline row sampled after the drain; post the two anchor lines (below) on #10136 | `gh workflow run inngest-link-flip.yml -f action=off` (the workflow's own failure step is best-effort; the 30-minute lease is the control) |
+| A2: handshake verification | part of the A1 go | A1 evidence | web-host hook `/hooks/inngest-tls-handshake` (web-1 only: the hook channel terminates there); GET recipe below | the body is one line, `inngest-tls-handshake verified=200 verified_rc=0 unverified=fail unverified_rc=60 result=pass`: a verified request returns 200, and the same request without the CA fails with a certificate-verification error (curl exit 60). web-2's container path is proven by its own `ci-deploy` canary at A3 | read-only, none |
+| A3: flip through `inngest-link-flip.yml` | **its own dated owner go naming the flag write**; the recorded go covers building the flip, not running it. The go is **procedural**: `infra-privileged` has no required reviewer (see "How the flag is written"), so no technical control enforces it | A1 and A2 green; no in-flight release run; a low-traffic window that is also cron-quiet (see above: the script cannot detect a cron in flight); the flip date noted on the tracker | `gh workflow run inngest-link-flip.yml -f action=flip -f confirm=FLIP-INNGEST-LINK` | the canary layer passes (all five checks, including the real in-container send; one fleet redeploy, i.e. one swap on each of the two hosts, and two such redeploys if the revert fires); the script's `FLIPPED` line is printed, which proves web-1's canary and swap and only that web-2 *accepted* the trigger; each host has a `class=resolved ... scheme=https` row (the query under "Resolver events"; web-2 is not verifiable from CI, this row is its only evidence); **T = the later of the two hosts' `CRON_DRAIN: waited` rows of that deploy (logged just before the host's prod stop; the `resolved` row is written at deploy start, before the canary, the cron drain and the swap, so it is a lower bound, not the swap time) plus 5 minutes**, with the baseline row read as `--since T --until T+400s` (below); post the two anchor lines on #10136 | `gh workflow run inngest-link-flip.yml -f action=off` (idempotent; the workflow's own failure step is best-effort and after a cancelled run, `off` must be dispatched again; the 30-minute lease only bounds new deploys) |
 | A4: 48 hour soak | n/a | A3 timestamp T and the baseline row | the follow-through sweeper runs `inngest-tls-soak-10136.sh` | gap-free `tls-health` series since T, one `boot_id`, `legacy_8288` delta exactly 0, `tls_8443` delta at least 90% of the expected probe cadence, for 48 hours. A reboot restarts the clock: re-anchor with a new pair of comments | any non-zero legacy delta: run `action=off` and find which caller still dials `8288` |
-| A5: `INNGEST_SIGNING_KEY` rotation (#10382 row 1), together with `INNGEST_EVENT_KEY` only if the owner extends the go | "INNGEST SIGNING KEY Rotation", recorded on #10382 | A4 passed (the new key must never ride plaintext); the rotation follow-up with a minimal `apply_target` has landed; the "Key rotation" section re-read; both copies identified (host: `random_id.inngest_signing_key_dedicated` in `soleur-inngest/prd`; app: `soleur/prd` `INNGEST_SIGNING_KEY`, copied out of band per `inngest.tf`); the Stripe-webhook and dashboard-send loss defects fixed first, or the rotation runs inside a quiesced window with the replay check | set both values, then restart `inngest-server` (`restart-inngest-server.yml`) and redeploy web (`web-platform-release.yml`) **back to back**. No host replace is forced (keys are read from Doppler at start). During the mismatch window step calls fail signature verification (Inngest retries them) and `inngest.send` fails with 401 if the event key rotates too | old-key rejection (status code only; keep the old value until it passes), new key accepted, `.services.inngest_server` active with a stable `NRestarts` | the "Key rotation" rollback; see the post-A5 rollback note above |
+| A5: `INNGEST_SIGNING_KEY` rotation (#10382 row 1), together with `INNGEST_EVENT_KEY` only if the owner extends the go | "INNGEST SIGNING KEY Rotation", recorded on #10382 | A4 passed (the new key must never ride plaintext); the rotation follow-up with a minimal `apply_target` has landed; the "Key rotation" section re-read; both copies identified (host: `random_id.inngest_signing_key_dedicated` in `soleur-inngest/prd`; app: `soleur/prd` `INNGEST_SIGNING_KEY`, copied out of band per `inngest.tf`); the Stripe-webhook (#10542) and dashboard-send (#10543) loss defects fixed first, or the rotation runs inside a quiesced window with the replay check | set both values, then restart `inngest-server` (`restart-inngest-server.yml`) and redeploy web (`web-platform-release.yml`) **back to back**. No host replace is forced (keys are read from Doppler at start). During the mismatch window step calls fail signature verification (Inngest retries them) and `inngest.send` fails with 401 if the event key rotates too | old-key rejection (status code only; keep the old value until it passes), new key accepted, `.services.inngest_server` active with a stable `NRestarts` | the "Key rotation" rollback; see the post-A5 rollback note above |
 | A6: "no known access" record | CLO condition; owner-signed | A5 complete; a measured re-read from the deployed #10405 emit; the Hetzner member list enumerated read-only | a record under `knowledge-base/legal/audits/`, linked from #10382 and #10136, written by the owner and attested separately by the CLO agent | the record exists and is linked | n/a (this PR does not write it) |
 | A7: leg-2 accepted-risk record (the `sdk_url` poll) | owner item, class `operator (legal-risk)` | the CLO conditions on the leg-2 row | an owner-typed record on #10136 beginning "SIGNED BY OWNER (human, not an agent)"; an agent-posted record does not satisfy it | the record exists before the poll row is relied on | n/a |
 
@@ -1381,7 +1458,30 @@ S1-SOAK-T: <UTC ISO time, last prod swap plus drain>
 S1-SOAK-BASELINE: dt=<UTC ISO> boot_id=<8 chars> legacy_8288_packets=<n> tls_8443_packets=<n>
 ```
 
-The baseline is the first `tls-health` row at or after T (use the query below). The latest pair wins, which is how a reboot is handled.
+The baseline is the first `tls-health` row at or after T, read with an explicit window so a late post cannot return the wrong rows (the query keeps the *newest* rows): `doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since <T> --until <T+400s> --grep stage=tls-health --limit 3` (ISO-8601 UTC). The soak refuses a baseline more than 400 s after T as a malformed anchor, and `--since <T> --until <T+400s>` is the documented form. The latest pair wins, which is how a reboot is handled.
+
+**Calling the handshake hook (A2)** reads from web-1 only. It is a signed GET with an empty body against the `inngest-tls-handshake`
+hook (HMAC-SHA256 of the empty body in `X-Signature-256`, plus the Cloudflare Access pair). The repository's credential-safe form is
+`scripts/lib/bearer-curl.sh` (ADR-280: the credentials ride curl's stdin config, never an argument list), the same call
+`scripts/inngest-link-flip.sh` makes. Run from the repository root; `-sS` without `-f` prints the body on a failing status too (the
+hook returns its line on error as well):
+
+```
+export WEBHOOK_DEPLOY_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET -p soleur -c prd_terraform --plain)
+export CF_ACCESS_CLIENT_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID -p soleur -c prd_terraform --plain)
+export CF_ACCESS_CLIENT_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET -p soleur -c prd_terraform --plain)
+source scripts/lib/bearer-curl.sh
+SIG="$(printf '' | bc_hmac_sha256_hex WEBHOOK_DEPLOY_SECRET)" || SIG=""
+bc_curl handshake 'X-Signature-256:sha256=:SIG' 'CF-Access-Client-Id::CF_ACCESS_CLIENT_ID' \
+  'CF-Access-Client-Secret::CF_ACCESS_CLIENT_SECRET' -- -sS --max-time 30 \
+  "https://deploy.soleur.ai/hooks/inngest-tls-handshake"
+```
+
+Expected: `inngest-tls-handshake verified=200 verified_rc=0 unverified=fail unverified_rc=60 result=pass`. Read a failure from the same line:
+`verified_rc=60` = the pinned CA was rejected; `28` or `7` = the listener is unreachable; `unverified=ACCEPTED` = the listener accepted a
+client that did not trust the CA (the MITM-relevant case: stop). The line holds fixed tokens and numeric exit codes only. The call
+shape was exercised against a local stub server that checks the three headers (it printed the expected line); the real hook was not
+called, because it answers meaningfully only after the A1 replace.
 
 ### Replace duration, and what happens to events during it
 
@@ -1406,8 +1506,7 @@ Measured from the repository's own records on 2026-10-18 (no estimate is used wh
   the retryable 503 only for connection refusal today (this PR extends it to timeouts and TLS causes), and otherwise 502, so the
   caller must re-arm; the dashboard send path archives the draft with `degraded=enqueue_failed` and does **not** retry (the approved
   action is lost until re-sent); the Stripe `invoice.payment_failed` route swallows the failure and returns 200, so that finance
-  event can be lost permanently. The last two are pre-existing, tracked, and should be fixed before the replace date or the replace
-  runs in a quiesced window.
+  event can be lost permanently. The last two are pre-existing and tracked: the Stripe swallow as #10542 (P1, it **blocks the A1 go**: fix it or run the replace in a quiesced window with the replay check) and the dashboard send as #10543.
 - **Window controls:** a low-traffic dispatch; the `cutover-inngest.yml` quiesce op; and a replay check afterwards (rows in
   `action_sends` without a spawn, Stripe dedup rows without a CFO draft). Whether the quiesce flag reaches the container without a
   redeploy is unverified, so use the existing op and do not assume a mechanism.
@@ -1442,16 +1541,34 @@ than a few hours pass `--limit 1000` or more; the default of 100 silently keeps 
 Dead-emitter detection is the soak probe's gap check (a stretch over 400 seconds without a row) and the monthly certificate
 days-left follow-through. Nothing pages on a missing row by ruling.
 
+Two reads the crit marker does not cover: a listener that is bound but not serving shows only in the periodic row (`listener=1` with an
+empty `served_sha256`, or `served_sha256` different from `cert_sha256`); and a **missing `cert.pem`** reads as `notafter_days=0` and
+`reason=cert_expiring` (the day count is computed from an empty date), so a page with `notafter_days=0` and `fetch_rc` other than `0`
+is a certificate that was never installed, not an expiry. The refusal-marker page route (`monitor_send_failed` reading Vector
+Source 2 on the Inngest host) is asserted by source-text guards only; no PRIORITY-2 row from that host has been read back, so treat
+the first one as the proof and read it after A1 (`JSONExtractString(raw,'PRIORITY') = '2'` for the Inngest host's `host`).
+
 ### Certificate expiry and rotation
 
 The certificate is valid for 10 years with no rotation cron; the warning is `notafter_days < 90`. **Re-minting forces two things**:
-every web host must redeploy (the CA file comes from `INNGEST_TLS_CA` at deploy time, and `NODE_EXTRA_CA_CERTS` is read once at
-process start, so a CA change needs a container restart, not a reload), and the Inngest host must be replaced (the key and
+the web hosts must pick up the new CA (the CA file comes from `INNGEST_TLS_CA` at deploy time, and `NODE_EXTRA_CA_CERTS` is read once
+at process start, so a CA change needs a new container, not a reload), and the Inngest host must be replaced (the key and
 certificate are fetched at the unit's start from a template that is replace-only). The CA file holds **exactly one certificate**
-(the validator refuses a bundle, because every certificate in `NODE_EXTRA_CA_CERTS` is trusted for all outbound TLS), so there is no
-overlap window: the safe order is to run `inngest-link-flip.yml -f action=off`, publish the new certificate, replace the Inngest host,
-redeploy every web host, then flip again. Between the host replace and the web redeploy an https fleet would fail closed. Do not use `early_renewal_hours`:
-it would plan a replace that `prevent_destroy` blocks and fail every later merge apply once inside the window.
+(the validator refuses a bundle, because every certificate in `NODE_EXTRA_CA_CERTS` is trusted for all outbound TLS), so there is
+**no overlap window**: an https fleet fails closed between the host replace and the web side picking up the new CA. The order that
+never lets the fleet dial a mismatched pair:
+
+1. `inngest-link-flip.yml -f action=off` (the fleet is back on `http://10.0.1.40:8288`, which stays open through the whole sequence).
+2. Publish the new certificate (the three Doppler copies change together, because they come from one Terraform resource). Both
+   resources carry `prevent_destroy`, so a re-mint is a reviewed code change that lifts the guard for one apply, not a dispatch; no
+   apply route exists for it (#10540 covers the signing and event keys only).
+3. Replace the Inngest host (act A1, with its own owner go). It now serves the new certificate.
+4. `inngest-link-flip.yml -f action=flip`. A separate "redeploy web" step is not needed and would not help: a deploy with the flag
+   **off** never reads or installs the CA, so only the flip's own `pending` redeploy installs the new one, and it does so only after the
+   host-side self-gate has proven the new bytes against the new listener (a mismatch fails the deploy and leaves the old file).
+
+Do not use `early_renewal_hours`: it would plan a replace that `prevent_destroy` blocks and fail every later merge apply once inside the
+window.
 
 ### Key rotation order (A5)
 
@@ -1463,8 +1580,25 @@ it would plan a replace that `prevent_destroy` blocks and fail every later merge
    changed on one side only.
 4. Check the old key is rejected (status code only), the new key is accepted, and `.services.inngest_server` is active with a stable
    `NRestarts` ([Reading host state without SSH](#reading-host-state-without-ssh)).
-5. Then the A6 record. The rotation apply route is a separate follow-up and A5 waits for it; until it lands the existing
-   [Key rotation](#key-rotation) procedure applies.
+5. Then the A6 record. The rotation apply route is a separate follow-up (#10540) and A5 waits for it; until it lands the existing
+   [Key rotation](#key-rotation) procedure applies. No command for the "old key is rejected" check exists yet either, so A5 is not
+   dispatchable by an agent today; keep it blocked in its follow-through issue until #10540 lands.
+
+### Tracked follow-ups (filed 2026-10-19)
+
+| Issue | What it tracks |
+|---|---|
+| #10538 | the `sdk_url` poll (leg 2): a web-side listener or poll removal, merge by 2026-11-12, accepted-risk row lapses 2026-12-10 |
+| #10539 | bind `:8288` to loopback and drop the legacy accept at the next unrelated replace (also restricts the Connect ports) |
+| #10540 | the signing-key and event-key rotation apply route (blocks A5) |
+| #10541 | keep `INNGEST_TLS_KEY` out of the `inngest-server` process environment (`--only-secrets` or a split config) |
+| #10542 | Stripe `invoice.payment_failed` swallows an Inngest send failure (P1, blocks the A1 go) |
+| #10543 | the dashboard send archives the draft on a failed enqueue |
+| #10544 | `inngest-host-replace` has no confirm or id-pin input |
+| #10545 | the Inngest host's nft loader is not idempotent |
+
+Not filed, so nothing tracks them: a no-SSH repair verb for a wedged `/mnt/data/inngest-link`, and a Sentry alert rule for
+`op=inngest-link` (the `https_to_http` and `lease_expired` warnings notify nobody today).
 
 ## Key rotation
 

@@ -56,3 +56,34 @@ authorised; none of them is a technical question.
 ## Addendum 2026-10-19 (#10136)
 
 Superseding D3's path: CTO design-pass ruling moved the CA file and link env from `/etc/soleur` to `/mnt/data/inngest-link/` (deploy-writable without touching `webhook.service`, the installer pin or the host provisioners), simplified the CA validator to one certificate, not expired, no `CA:TRUE`, and removed the post-write re-hash. The in-container path and `NODE_EXTRA_CA_CERTS` are unchanged.
+
+## Addendum 2 - 2026-10-19 (#10136, review round 5)
+
+The rows above are the 2026-10-18 rulings as given and are not edited. Where the shipped code differs from a ruling, this addendum
+says so; nothing here is a new ruling.
+
+- **G1 (flip actuator), superseded in part.** The ruling named "the `prd_terraform` key as source of truth" and called the 30-minute
+  lease "the real control". The data-integrity review of the PR showed the first cannot work: `prd_terraform` is a branch config that
+  inherits `prd`, and the Terraform-managed secret lives in `prd`, so a key deleted from `prd_terraform` is re-exposed from `prd` and
+  the variable never empties. The Tier-B `inngest_link_flag` job now passes the value as `TF_VAR_inngest_link_tls` in the process
+  environment of its plan (empty for `off`), writes no Doppler key and holds no `DOPPLER_TOKEN_WRITE`. The second is also corrected:
+  the lease is read only by the deploy-time resolver, so it bounds how long a stuck `pending` can make NEW deploys resolve https and
+  does not touch a running container; `action=off` and the best-effort revert step are what move a running fleet back.
+- **G3 (CA file hygiene), superseded in part** (continuing Addendum 2026-10-19 above). The shipped validator is one certificate, at most
+  4 KiB, no private key, parses, not expired, no `CA:TRUE`, no `Certificate Sign`; the "SAN exactly the IP, serverAuth only, 1-2
+  certificates, re-check before `docker run`" parts of the ruling are not implemented. The host-side `curl --cacert` self-gate on the
+  candidate and the canary's CA-withheld negative control carry the SAN and purpose checks. The CA is read, validated and installed
+  only when the flag resolves https.
+- **L1 (sdk_url poll), premise incomplete.** "The poll carries only an HMAC-signed request and public function metadata" does not hold
+  for the pinned SDK (`inngest` 3.54.2): the in-band sync response embeds an `inspection` object that, once the request signature
+  validates in cloud mode, includes `event_key_hash` (a hash of `INNGEST_EVENT_KEY`), `signing_key_hash` (the first 12 characters of the
+  hashed signing key), the app id, environment and origins (`components/InngestCommHandler.js`, `introspectionBody`). Not verified: which
+  sync kind Inngest server v1.45.1 sends on this poll. The owner-signed leg-2 record (O4, #10538) should list these fields.
+- **L1 / L2 (Cloudflare hop).** The Cloudflare-to-origin hop is established as plain for `app.soleur.ai` only (`seo-config-rules.tf`
+  sets `ssl = "flexible"` for `http.host eq "app.soleur.ai"`); a comment in that file records the zone default as strict, and the
+  zone-level SSL mode is not set in Terraform and was not read live.
+- **O3 (flag-write go) is procedural.** `infra-privileged` has no required reviewer (ADR-241), so nothing technical enforces the dated
+  go; the `confirm` typo-guard is not an authorization, and `off` (the confidentiality-lowering direction) is unguarded by design.
+- **Follow-ups now filed:** #10538 (sdk_url poll), #10539 (loopback bind), #10540 (rotation apply route and the event-key decision, due
+  2026-11-12), #10541 (TLS key out of the server environment), #10542 (Stripe send swallow, P1, blocks the A1 go), #10543 (dashboard
+  send), #10544 (`inngest-host-replace` confirm and id-pin), #10545 (nft loader idempotency).

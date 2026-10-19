@@ -33,15 +33,15 @@ Spec lacks a valid `lane:`; defaulted to cross-domain (fail-closed).
 
 ## Phase 3: Web side (inert)
 
-- 3.1 Failing tests first: `inngest-link-resolver.test.sh` (flag absent, `pending:<epoch>` in/out of lease and beyond now+31 min, `1` with good/bad CA, non-allowlisted values, snapshot read error, third resolver value, CA variants: PRIVATE KEY block, wrong SAN, `CA:TRUE`, more than 2 certs), tuple-gate K07/K10 rows, `NODE_*` env refusal rows
-- 3.2 `ci-deploy.sh` `resolve_inngest_link` (snapshot read, scope guard, validate-then-write CA, link env from constants only, host-side self-gate, re-check before `docker run`), both docker run sites
+- 3.1 Failing tests first: `inngest-link-resolver.test.sh` (flag absent, `pending:<epoch>` in/out of lease and beyond now+31 min, `1` with good/bad CA, non-allowlisted values, snapshot read error, third resolver value, CA variants as shipped: PRIVATE KEY block, `CA:TRUE`, `Certificate Sign`, expired, more than one certificate; the SAN check is carried by the self-gate, not the validator), tuple-gate K07/K10 rows, `NODE_*` env refusal rows
+- 3.2 `ci-deploy.sh` `resolve_inngest_link` (snapshot read, scope guard, link env from constants only; for https only: read CA, validate, self-gate the candidate, then install; the pre-`docker run` re-check was dropped by the 2026-10-19 design-pass ruling), both docker run sites
 - 3.3 `cloud-init.yml` first-boot site: mount, env, placeholder CA file
 - 3.4 `lib/docker-run-tuple.py`: resolver expansion, `NODE_EXTRA_CA_CERTS`, CA `-v`, pinned absence of `NODE_TLS_REJECT_UNAUTHORIZED`; no posture-literal edit
 - 3.5 `cron-egress-nftables.sh` `10.0.1.40 tcp dport 8443` accept; postapply assert greps the full `10.0.1.40 tcp dport 8443 accept` text (not a bare `dport 8443`); `cron-egress-firewall.test.sh`
 - 3.6 `inngest-registry-probe.sh`: link resolution (parse the env file with a key allowlist, never source; override inherited `INNGEST_REMOTE_GQL_URL`) and `--tls-handshake` mode; `inngest-doublefire-probe.sh`; suites updated; new `inngest-tls-handshake` hook in `hooks.json.tmpl`; the consumer probe, `server.tf` and `web-probe-envwrite.sh` are not edited
 - 3.7 Watchdog parity test to resolver-expansion membership; `INNGEST_HOST_FALLBACK` unchanged; test that the container always receives `INNGEST_BASE_URL`
 - 3.8 `schedule-reminder/route.ts`: 503 for timeout and TLS causes, with a test
-- 3.9 Flip actuator: flag `apply_target` job in `apply-web-platform-infra.yml` under `infra-privileged` (source key written first, then `-target` apply), `inngest-link-flip.yml` orchestrator (pending, canary, on, best-effort off + redeploy), D8 census row and `infra-credential-tiers-8209.md`
+- 3.9 Flip actuator: flag `apply_target` job in `apply-web-platform-infra.yml` under `infra-privileged` (as shipped: the value is passed as `TF_VAR_inngest_link_tls` in the job's process environment and no Doppler key is written, because `prd_terraform` inherits `prd`; then the `-target` apply), `inngest-link-flip.yml` orchestrator (pending, canary, on, best-effort off + redeploy), D8 census row and `infra-credential-tiers-8209.md`
 - 3.10 Canary layer in `canary-probe-set.md`: `docker inspect` https, in-container fetch of the handed URL, real `inngest.send` of `soleur.tls-canary.ping` (test that no function triggers on it), CA-withheld negative control, registry over https
 
 ## Phase 4: Observability, follow-through, docs

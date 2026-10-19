@@ -107,21 +107,30 @@ chose the legacy link (flag absent): the default path is the old `http://10.0.1.
    swap, so a failure refuses promotion and the old container keeps serving.
 2. **The five checks, all inside the canary container (the host's own `curl --cacert` self-gate proves the host OUTPUT path and
    the pinned bytes only, never container egress or Node trust):**
-   1. `docker inspect` shows the canary's `INNGEST_BASE_URL` is `https://10.0.1.40:8443`.
-   2. One in-container `fetch` of the URL the container was actually handed succeeds (`/health`, and `/v1/events?limit=1` with the
-      Bearer).
-   3. A real in-container `inngest.send` of the synthetic event `soleur.tls-canary.ping` is accepted. A test asserts no function
+   1. (`inspect`) `docker inspect` shows the canary's `INNGEST_BASE_URL` is exactly `https://10.0.1.40:8443` and its
+      `NODE_EXTRA_CA_CERTS` is `/etc/soleur/inngest-ca.pem`.
+   2. (`health`, `events`) In-container `fetch` of the URL the container was actually handed succeeds: `/health`, and
+      `/v1/events?limit=1` with the hashed-signing-key Bearer.
+   3. (`send`) A real in-container `inngest.send` of the synthetic event `soleur.tls-canary.ping` is accepted. A test asserts no function
       under `apps/web-platform/server/inngest/functions/` triggers on that name, so the event does no work.
-   4. A **negative control**: the same fetch with the CA withheld (`env -u NODE_EXTRA_CA_CERTS` in the same container) must FAIL
+   4. (`negative_control`) A **negative control**: the same fetch with the CA withheld (`env -u NODE_EXTRA_CA_CERTS` in the same container) must FAIL
       with a verification error. A canary that cannot see this fail would pass vacuously on a container that trusts everything.
-   5. The registry read over https is non-empty.
+   5. (`registry`) The registry read over https is non-empty.
 3. **What it does NOT prove:** the second prod host. web-1 and web-2 each run their own canary at their own deploy, so the per-host
    proof is each host's own canary; the web-host hook `inngest-tls-handshake` terminates on web-1 only.
 4. **Counters are read only after both prod swaps complete.** Until the old prod container is drained it still dials `:8288`,
-   so a `legacy_8288` read taken earlier is contaminated. T for the soak is the last prod swap plus the old-container drain.
-5. **Failure reads (no SSH):** the failed release run's log carries the `::error::` line with the failing check; the host-side
-   `tls-health` row carries no handshake-failure counter; a rejected CA shows as the canary check failing. See
-   [inngest-server.md](inngest-server.md) section "Link TLS (#10136)".
+   so a `legacy_8288` read taken earlier is contaminated. T for the soak is the last prod swap plus the old-container drain (how to
+   read it per host: [inngest-server.md](inngest-server.md), act A3).
+5. **Failure reads (no SSH):** the failed release run's log carries only the constant reason `canary_inngest_link_failed`, **not**
+   the failing check. The check name and its cause are in the event the resolver logs:
+   `INNGEST_LINK: class=canary_failed level=error check=<inspect|health|events|send|registry|negative_control|no_verdict>
+   cause=<token>` (Better Stack, journald tag `ci-deploy`; Sentry `op=inngest-link`, tag `classification=canary_failed`). The cause is
+   mapped inside the container from a fixed allowlist: `ECONNREFUSED`, `ECONNRESET`, `ETIMEDOUT`, `EHOSTUNREACH` and the like mean egress
+   or the listener (a missing `:8443` accept reads as a timeout), a certificate code such as `DEPTH_ZERO_SELF_SIGNED_CERT` means Node did
+   not trust the pinned file, `HTTP_<status>` means the listener answered badly, `EMPTY` means an empty registry, `other` is anything
+   outside the list. For `negative_control` the cause is `accepted` (the container trusted without the CA), `other` (it failed, but not with a certificate-verification error) or `no_verdict`. The exact query
+   is under "Resolver events" in [inngest-server.md](inngest-server.md) section "Link TLS (#10136)". The host-side `tls-health` row
+   carries no handshake-failure counter (it was removed by ruling; do not look for `hs_fail_15m`).
 6. **A broken gate blocks ordinary releases while the flag is on** (the resolver fails the deploy rather than downgrade to http).
    Rollback: `inngest-link-flip.yml` with `action=off`, then a redeploy.
 
