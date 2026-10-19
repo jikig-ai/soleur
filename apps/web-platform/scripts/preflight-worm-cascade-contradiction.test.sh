@@ -118,7 +118,8 @@ else
 fi
 if grep -q "::error::" <<<"$GATE_OUT"; then fail "leave-behind must NOT emit ::error::; got: $GATE_OUT"; else pass "leave-behind emits no ::error::"; fi
 
-# ---- Test 3: ROW-level write → exit 0 + ::warning:: regardless of ownership
+# ---- Test 3: ROW-level write → exit 0 + ::warning:: (unowned fixture; the
+# cone-write-row arm never consults ownership, so one variant suffices)
 rc=0
 run_gate "$ROW_ROW" "$owned_dir" || rc=$?
 if [[ "$rc" == "0" ]]; then pass "row-level latent contradiction exits 0"; else fail "row-level should exit 0 (got $rc)"; fi

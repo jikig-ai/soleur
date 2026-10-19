@@ -64,8 +64,11 @@
 # public.users. It computes the user-erasure DELETE CONE (a recursive CTE
 # rooted at auth.users + public.users, propagating through CASCADE edges
 # only — only CASCADE propagates row deletion; UNION dedup terminates FK
-# cycles) and classifies EVERY FK on EVERY WORM-gated table into four
-# classes:
+# cycles) and classifies every FK with a matching-event raising trigger on every
+# public-schema WORM-gated table into four classes (an 'r'/'a' row needs any
+# raising UPDATE/DELETE trigger as the WORM marker — deliberately
+# over-inclusive: every true refusal wedge also carries a DELETE raiser,
+# and nonstandard single-op shapes fail closed to a named warning):
 #   cone-refuse    RESTRICT/NO ACTION ('r'/'a') FK to an IN-CONE non-users
 #                  parent — the #10254 wedge class: the cascade delete of
 #                  the parent is REFUSED (23503) inside GoTrue's
@@ -82,7 +85,10 @@
 #                  but the anchor wedges the day the parent gains a delete
 #                  path (or joins the cone): ::warning:: naming the parent.
 # Silently excluded: confrelid ∈ {public.users, auth.users} with 'r'/'a'
-# — the sanctioned RESTRICT+pre-anonymise shape.
+# — the sanctioned RESTRICT+pre-anonymise shape. Residual: a NEW
+# unsanctioned RESTRICT->users FK also passes silently (the catalog cannot
+# verify app-side pre-anonymise); the cascade integration test is the
+# stated backstop for that hole.
 #
 # Run via:  doppler run -p soleur -c dev_scheduled -- bash apps/web-platform/scripts/preflight-worm-cascade-contradiction.sh
 # Requires: DATABASE_URL_POOLER (Doppler-injected). Runs after migrations are
@@ -180,9 +186,11 @@ SELECT DISTINCT ON (con.oid)
   ns.nspname || '.' || prel.relname AS parent
 FROM pg_constraint con
 JOIN pg_class rel ON rel.oid = con.conrelid
+JOIN pg_namespace cns ON cns.oid = rel.relnamespace AND cns.nspname = 'public'
 JOIN pg_class prel ON prel.oid = con.confrelid
 JOIN pg_namespace ns ON ns.oid = prel.relnamespace
 JOIN pg_trigger tg ON tg.tgrelid = con.conrelid AND NOT tg.tgisinternal
+  AND tg.tgenabled NOT IN ('D','R')
 JOIN pg_proc fn ON fn.oid = tg.tgfoid
 WHERE con.contype = 'f'
   -- WORM-gated tables only: a raising UPDATE/DELETE trigger exists. The
@@ -200,7 +208,7 @@ WHERE con.contype = 'f'
          AND (
            tg.tgattr = ''::int2vector
            OR EXISTS (
-             SELECT 1 FROM unnest(con.conkey) AS ck(attnum)
+             SELECT 1 FROM unnest(COALESCE(con.confdelsetcols, con.conkey)) AS ck(attnum)
              WHERE ck.attnum::text = ANY (string_to_array(tg.tgattr::text, ' '))
            )
          ))
@@ -212,7 +220,7 @@ WHERE con.contype = 'f'
   -- (pre-anonymise shape) is never a contradiction.
   AND NOT (con.confrelid IN ('public.users'::regclass, 'auth.users'::regclass)
            AND con.confdeltype IN ('r','a'))
-ORDER BY con.oid, (tg.tgtype & 1), 2, 5;
+ORDER BY con.oid, (tg.tgtype & 1), tg.tgname;
 EOSQL
 )
 
@@ -233,9 +241,13 @@ while IFS='|' read -r cls tbl trg fn fk action level timing parent; do
       line="public.$tbl — trigger $trg (fn $fn, $level $timing) raises on the $action cascade from FK $fk → $parent"
       ;;
     dormant)
-      line="public.$tbl — dormant anchor FK $fk → $parent ($action): no contradiction today, but the WORM gate ($trg / fn $fn) blocks the parent delete the day $parent gains a delete path or joins the erasure cone — file a tracking issue before adding one."
+      line="public.$tbl — dormant anchor FK $fk → $parent ($action): no contradiction today, but the WORM gate ($trg / fn $fn) blocks the parent delete the day $parent gains a delete path or joins the erasure cone — file a tracking issue before adding one (known anchors: #10573 dsar_export_audit_pii.job_id, #10574 action_sends.grant_id; all-tables scan: #10575)."
       ;;
-    *) continue ;;
+    *)
+      line="public.${tbl:-<unknown>} — unrecognised census class '$cls' — gate script drift; treat as blocking (fail-closed)"
+      errors+="$line"$'\n'
+      continue
+      ;;
   esac
   if [[ "$cls" == "cone-refuse" || "$cls" == "cone-write-stmt" ]]; then
     # Per-ref ownership gate: block only when THIS checkout owns the table.
