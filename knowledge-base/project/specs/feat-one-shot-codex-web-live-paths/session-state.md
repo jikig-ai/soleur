@@ -2234,3 +2234,23 @@
   Ruff/compile/diff checks green. Fresh source review, new manifest binding
   and independent actual-manifest review are required before requesting any
   exact-action approval. No diagnostic request or follow-on action occurred.
+
+### Projection allowlist correction — 2026-10-19
+
+- On pushed source `c16cc9dea7`, removed `route_class` so the projection has
+  only the nine spec-enumerated fields. The actual manifest from `0437762…`
+  remains superseded. Independent security and code-quality reviews concur;
+  the test reviewer requested explicit false assertions for the accepted
+  fragment/userinfo flag, now added to the tests.
+- Focused redirect tests pass 10/10. Ruff, compile and diff checks pass. Full
+  discovery first reported a synthetic Unix-socket `BrokenPipeError` in
+  `test_resource_transport` with an unclosed-socket warning; the isolated test
+  passed, then full discovery passed 318/318 (`RC=0`). Semgrep ran 324 rules
+  across the two Python files with zero findings and one taint fixpoint-timeout
+  warning. Current PR CI is pending with no failures observed at poll 33.
+- Regenerate all current-head source/input/CA/platform/output bindings after
+  the test-only refinement is pushed. Obtain final review of the corrected
+  tests and actual manifest; execution remains prohibited until a fresh exact-
+  action approval includes the 90-second timeout and five-second kill grace.
+  No diagnostic request, redirect follow, destination request or layer fetch
+  has occurred.

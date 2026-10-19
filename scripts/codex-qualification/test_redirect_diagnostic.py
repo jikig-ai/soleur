@@ -130,6 +130,7 @@ class RedirectDiagnostic(unittest.TestCase):
         self.assertEqual(projected['path_sha256'], sha(('/private/' + fixtures.IMAGE['image_id']).encode()))
         self.assertEqual(projected['port'], 443)
         self.assertTrue(projected['query_present'])
+        self.assertFalse(projected['fragment_or_userinfo_present'])
         self.assertTrue(projected['expected_config_digest_in_path'])
         for sentinel in (LOCATION, 'UNREVIEWED.invalid', 'private/', 'SYNTHESIZED_PRIVATE_QUERY', fixtures.TOKEN):
             self.assertNotIn(sentinel.encode(), canonical(receipt))
@@ -161,6 +162,7 @@ class RedirectDiagnostic(unittest.TestCase):
             'location_bytes', 'path_sha256', 'query_present', 'fragment_or_userinfo_present',
             'expected_config_digest_in_path'})
         self.assertFalse(projected['query_present'])
+        self.assertFalse(projected['fragment_or_userinfo_present'])
         self.assertFalse(projected['expected_config_digest_in_path'])
         empty_query = diagnostic.project_location('https://example.invalid/path?', fixtures.IMAGE['image_id'])
         self.assertTrue(empty_query['query_present'])
