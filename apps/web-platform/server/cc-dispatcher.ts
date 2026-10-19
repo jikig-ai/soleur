@@ -99,6 +99,8 @@ import {
 import {
   classifySandboxStartupError,
   classifyBashSandboxFailure,
+  isPreExecSandboxDenialOutput,
+  BASH_UNAVAILABLE_NOTICE,
 } from "./sandbox-startup-classifier";
 import { redactCommandForDisplay } from "../lib/safety/redaction-allowlist";
 import { CC_ROUTER_TIER3_DENYLIST } from "./tool-tiers";
@@ -350,8 +352,9 @@ export function shouldMirrorUnregisteredPlatformToolUse(
  * #10032 follow-up — mirror a Bash `tool_result` that carries a sandbox denial to Sentry.
  * Exported for unit testability. Per-user debounced; the event carries ONLY the scrubbed, capped matched
  * line (never the tool output, the command, or workspace paths) and the Error message is the classifier's
- * code, never the output. `helper_userns_eperm` pages through the Better Stack alert `agent_sandbox_bash_denial`
- * (betterstack-logs-alerts.tf); the other codes stay Sentry-only until #10052 (blocked on #7985).
+ * code, never the output. `helper_userns_eperm` and `helper_step_eperm` page through the Better Stack alert
+ * `agent_sandbox_bash_denial` (betterstack-logs-alerts.tf); the other codes stay Sentry-only until #10052 (blocked
+ * on #7985).
  */
 export function mirrorBashSandboxFailure(
   output: string,
@@ -386,6 +389,19 @@ export function mirrorBashSandboxFailure(
     // `helper_userns_eperm` row that pages.
     `agent-sandbox-bash-tool-result:${failure.errorCode}`,
   );
+}
+
+/**
+ * #10455 c — the text streamed into the chat as a Bash block's output. A Bash tool_result that is, as a whole, ONE
+ * pre-exec platform denial (error-flagged, single non-blank line, a helper step that runs before the worker fork or
+ * a bwrap EPERM line) is replaced by the fixed platform notice; everything else is returned unchanged. Applies to
+ * the streamed `command_stream` text only, in autonomous sessions only: the SDK-visible tool_result is not
+ * rewritable (no hook), so the model still sees the raw line and `BASH_UNAVAILABLE_PROMPT_DIRECTIVE` keys on it.
+ * The mirror event is emitted BEFORE this and reads the raw output, so the rewrite never removes the page.
+ * Exported for unit testability.
+ */
+export function selectCommandStreamOutput(output: string, isError: boolean | undefined): string {
+  return isPreExecSandboxDenialOutput(output, isError) ? BASH_UNAVAILABLE_NOTICE : output;
 }
 
 /**
@@ -439,6 +455,25 @@ const GH_403_PROMPT_DIRECTIVE =
   "re-consent — the Soleur platform diagnoses and repairs installation/" +
   "permission issues server-side and will retry with the correct installation " +
   "automatically. State only what the error literally says.";
+
+// #10455 c — a Bash call can fail because the platform's command sandbox did not start (the #10445 outage shape).
+// The model sees the RAW single-line error from the helper or bubblewrap (the SDK-visible tool_result cannot be
+// rewritten); only the user-facing stream is replaced by a plain notice. This directive keys on the raw line, keeps
+// the model from echoing it, and bounds the retry. It deliberately carves out the "report LITERAL output verbatim"
+// rule of GH_403_PROMPT_DIRECTIVE above, for these sandbox error lines only. It does not claim the command did not
+// run: a tenant or a prompt-injected file can print such a line after a command that ran.
+export const BASH_UNAVAILABLE_PROMPT_DIRECTIVE =
+  "## Command execution unavailable\n" +
+  "If a Bash call's output is a single sandbox error line starting with `apply-seccomp:` or `bwrap:` " +
+  "(for example `apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted`), the platform's command " +
+  "sandbox failed to start. That is a platform problem, not a problem with the user's project or command. " +
+  "This takes precedence over the rule above to report literal command output verbatim, for these sandbox " +
+  "error lines only: do NOT quote, repeat, or paraphrase the raw sandbox text to the user, and do not " +
+  "speculate about its cause or suggest fixes. Say that command execution is temporarily unavailable on our " +
+  "side and that this is a platform issue, not a problem with their project. You may retry the SAME command " +
+  "ONCE, and only if it is read-only or idempotent (it changes nothing, or running it twice is harmless); " +
+  "otherwise ask the user before running it again. After a second failure with a sandbox error line, stop " +
+  "running commands, do not try again, and tell the user to try again later.";
 
 // #5041 follow-up — when no entitled GitHub token was minted for this
 // dispatch, the sandbox network allowlist is empty and every gh/git network
@@ -2686,6 +2721,8 @@ export const realSdkQueryFactory: QueryFactory = async (
   // Always append the gh-403 honesty directive (feat-one-shot-concierge-gh-403)
   // — independent of repo/flag state, since any conversation can run `gh`.
   effectiveSystemPrompt += `\n\n${GH_403_PROMPT_DIRECTIVE}`;
+  // #10455 c — plain-language handling of a sandbox start failure (carves out the verbatim rule above).
+  effectiveSystemPrompt += `\n\n${BASH_UNAVAILABLE_PROMPT_DIRECTIVE}`;
   // feat-reasoning-chat-boxes (#5370) — narrate/summarize are always registered,
   // so the directive is appended unconditionally (mirrors GH_403's "always-on").
   effectiveSystemPrompt += `\n\n${NARRATION_PROMPT_DIRECTIVE}`;
@@ -4610,9 +4647,10 @@ export async function dispatchSoleurGo(
       // gate (TR4) with a fallthrough probe → Sentry. Emit failures mirror.
       if (!bashAutonomousPosture) return;
       try {
-        // 1) Per-chunk cap on the RAW output (caps regex back-tracking too).
+        // 1) Per-chunk cap on the RAW output (caps regex back-tracking too). #10455 c: a lone pre-exec platform
+        //    denial is swapped for the fixed notice first (the mirror above already read the raw output).
         const chunkCapped = capUtf8Bytes(
-          block.output,
+          selectCommandStreamOutput(block.output, block.isError),
           COMMAND_STREAM_CHUNK_CAP_BYTES,
         );
 
