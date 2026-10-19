@@ -24,7 +24,9 @@ USAGE
   * With --baseline the verdict is gated on classes W, P and G (below). Exit 0 clean, 1 findings,
     3 UNRESOLVED (empty population, failed git, unreadable or malformed baseline, a listed member that
     is missing or was skipped (symlink, special file, over 2 MB: an unread file is an unchecked file), or
-    ANY uncaught exception: a traceback can never read as rc 1 "findings"). A usage error is argparse's rc 2.
+    any uncaught Exception or KeyboardInterrupt: a traceback from those can never read as rc 1 "findings").
+    A BaseException subclass outside those (GeneratorExit, CancelledError) is unreachable from this synchronous,
+    stdlib-only scan and is deliberately not caught: it would exit 1 with a traceback. A usage error is argparse's rc 2.
   * --list prints `class TAB bounded TAB path TAB text` for every finding of every class (bounded is
     yes or no for W and a dash for the others); `--list PATH...` scopes it to the given files, which is
     how a mutation seat checks the one file it is about to mutate.
@@ -86,6 +88,7 @@ gated. The producer lists tracked files only: an untracked suite is not scanned 
 import argparse
 import bisect
 import collections
+import contextlib
 import os
 import re
 import stat
@@ -509,11 +512,10 @@ def run(argv):
 def _note(exc, site):
     # Class name and a static site label only. Never str(exc)/repr(exc)/input text: exception text can carry
     # scanned content. `site` is a string literal at every call site.
-    try:
+    # A closed, full or missing stderr (None when fd 2 is closed) must not turn a swallowed error into a crash.
+    with contextlib.suppress(OSError, ValueError, AttributeError):
         sys.stderr.write("ancestor-signal scan: swallowed %s at %s\n" % (type(exc).__name__, site))
         sys.stderr.flush()
-    except (OSError, ValueError, AttributeError):
-        pass  # a closed, full or missing stderr (None when fd 2 is closed) must not turn a swallowed error into a crash
 
 
 def flush_stdout():
@@ -525,11 +527,10 @@ def flush_stdout():
 
 def main():
     try:
-        try:
+        # A replaced stream without reconfigure(): a capability probe, the negative result is normal.
+        with contextlib.suppress(AttributeError):
             sys.stdout.reconfigure(errors="surrogateescape")
             sys.stderr.reconfigure(errors="surrogateescape")
-        except AttributeError:
-            pass  # a replaced stream without reconfigure(): a capability probe, the negative result is normal
         rc = run(sys.argv[1:])
         sys.stdout.flush()
         return rc
@@ -540,7 +541,7 @@ def main():
         sys.stderr.write("ancestor-signal scan: UNRESOLVED: %s\n" % exc)
         sys.stderr.flush()
         os._exit(3)
-    except BaseException as exc:  # an uncaught exception must read as rc 3, never as rc 1 "findings"
+    except (Exception, KeyboardInterrupt) as exc:  # an uncaught exception must read as rc 3, never as rc 1 "findings" (other BaseException subclasses: see the docstring)
         try:
             flush_stdout()
             import traceback

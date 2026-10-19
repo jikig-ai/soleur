@@ -1,4 +1,7 @@
-// AC2 / AC2d — the allowlist code-gate and teardown predicate guard.
+// AC2 / AC2d — the allowlist code-gate and teardown predicate guard, plus the
+// I-cannot-spend gate (assertCannotSpend inside verifyPrincipal) and the release
+// workflow's BLOCK classification, executed from the real step bodies (emit and
+// Enforce), including the Sentry payload behind a `curl` shim.
 //
 // These exercise the harness's pure gate functions WITHOUT launching a browser
 // (run.ts guards main() behind import.meta.main, so importing is side-effect
@@ -6,17 +9,29 @@
 // UID/email BEFORE the browser launch; teardown must never issue a DELETE with
 // an empty predicate.
 
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
+import { parse as parseYaml } from "yaml";
 
 import {
   bindProject,
   verifyPrincipal,
   teardownConversation,
   assertUrlHostAllowed,
+  emitLine,
+  failureResult,
+  CANNOT_SPEND_VIOLATED,
+  CANNOT_SPEND_UNVERIFIED,
   EXPECTED_EMAIL,
+  SENTINEL_KEY,
   type Config,
   type VerifiedPrincipal,
 } from "../../scripts/live-verify/run";
+
 
 // Build a syntactically-valid anon JWT whose payload carries the given ref.
 // Synthetic + short — never a real token (push-protection safe).
@@ -41,16 +56,79 @@ function baseConfig(over: Partial<Config> = {}): Config {
   };
 }
 
-// Minimal stub for supabase.auth.getUser().
-function stubUser(id: string, email: string | undefined) {
-  return {
+// The key row the seed inserts, built from the harness's OWN exported constant
+// (a copy here would pin the test against itself, not against run.ts).
+const SENTINEL = { ...SENTINEL_KEY };
+
+type KeyRow = { provider: string; encrypted_key: string; iv: string; auth_tag: string };
+type Rows = { data: unknown; error: { name: string } | null };
+type Tables = { api_keys: Rows; byok_delegations: Rows };
+type Call = { table: string; select: string; options: unknown; filters: string[] };
+
+const keyRow = (over: Partial<KeyRow> = {}): KeyRow => ({
+  provider: "anthropic",
+  ...SENTINEL,
+  ...over,
+});
+
+// A compliant principal: exactly the seed's anthropic dummy row, no delegation.
+const COMPLIANT: Tables = {
+  api_keys: { data: [keyRow()], error: null },
+  byok_delegations: { data: [], error: null },
+};
+
+const withKeysT = (data: unknown, error: Rows["error"] = null): Tables => ({
+  ...COMPLIANT,
+  api_keys: { data, error },
+});
+const withDelegationsT = (data: unknown, error: Rows["error"] = null): Tables => ({
+  ...COMPLIANT,
+  byok_delegations: { data, error },
+});
+
+// Stub for the principal's OWN RLS session: auth.getUser() plus the two reads
+// the I-cannot-spend check issues. It RECORDS the query shape (table, select
+// string, every filter) so a test can pin it: a stub that ignores select/eq
+// lets the SUT read the wrong columns, filter by provider, or skip a table and
+// still pass (and with the real UNTYPED client a wrong column is a runtime
+// 42703 that reddens every release).
+function stubUser(id: string, email: string | undefined, tables: Tables = COMPLIANT) {
+  const calls: Call[] = [];
+  const stub = {
     auth: {
       getUser: vi.fn().mockResolvedValue({
         data: { user: { id, email } },
         error: null,
       }),
     },
-  } as unknown as Parameters<typeof verifyPrincipal>[0];
+    from: (table: string) => {
+      const call: Call = { table, select: "", options: undefined, filters: [] };
+      calls.push(call);
+      const b: Record<string, unknown> = {};
+      Object.assign(b, {
+        select: (cols: string, options?: unknown) => {
+          call.select = cols;
+          call.options = options;
+          return b;
+        },
+        eq: (col: string, val: unknown) => {
+          call.filters.push(`eq:${col}=${String(val)}`);
+          return b;
+        },
+        is: (col: string, val: unknown) => {
+          call.filters.push(`is:${col}=${String(val)}`);
+          return b;
+        },
+        then: (resolve: (v: unknown) => unknown) =>
+          resolve(
+            tables[table as keyof Tables] ?? { data: null, error: { name: "unexpected-table" } },
+          ),
+      });
+      return b;
+    },
+    calls,
+  };
+  return stub as unknown as Parameters<typeof verifyPrincipal>[0] & { calls: Call[] };
 }
 
 describe("project-bind (AC2 — before sign-in)", () => {
@@ -102,6 +180,553 @@ describe("allowlist code-gate (AC2 — before launch)", () => {
     const supabase = stubUser(cfg.expectedUid, EXPECTED_EMAIL);
     const verified = await verifyPrincipal(supabase, cfg);
     expect(verified.uid).toBe(cfg.expectedUid);
+  });
+});
+
+describe("I-cannot-spend gate (before launch, also under --dry-run)", () => {
+  const cfg = baseConfig();
+  const violated = (cls: string) => new RegExp(`^${CANNOT_SPEND_VIOLATED}: ${cls}$`);
+  const unverified = (cls: string) => new RegExp(`^${CANNOT_SPEND_UNVERIFIED}: ${cls}$`);
+
+  async function verify(tables: Tables, c: Config = cfg) {
+    return verifyPrincipal(stubUser(c.expectedUid, EXPECTED_EMAIL, tables), c);
+  }
+  const withKeys = (data: unknown, error: Rows["error"] = null): Tables => ({
+    ...COMPLIANT,
+    api_keys: { data, error },
+  });
+  const withDelegations = (data: unknown, error: Rows["error"] = null): Tables => ({
+    ...COMPLIANT,
+    byok_delegations: { data, error },
+  });
+
+  it("passes the seed's sentinel row, regardless of row id or created_at", async () => {
+    // Must-PASS input that is NOT the canonical: extra columns a real read
+    // returns (id, created_at) differ per row and must not matter.
+    const row = { ...keyRow(), id: "any-id", created_at: "2030-01-01T00:00:00Z" };
+    const v = await verify(withKeys([row]));
+    expect(v.uid).toBe(cfg.expectedUid);
+  });
+
+  it("pins the QUERY SHAPE: exact columns, no provider filter, active delegations only", async () => {
+    // The real client is untyped, so tsc cannot catch a wrong column (42703 at
+    // runtime reddens every release) and a provider filter would turn "every
+    // row" into "anthropic only". Both reads must happen, in the shape below.
+    const supabase = stubUser(cfg.expectedUid, EXPECTED_EMAIL);
+    await verifyPrincipal(supabase, cfg);
+    expect(supabase.calls).toEqual([
+      { table: "api_keys", select: "encrypted_key, iv, auth_tag", options: undefined, filters: [] },
+      { table: "byok_delegations", select: "id", options: undefined, filters: ["is:revoked_at=null"] },
+    ]);
+  });
+
+  it("runs the allowlist checks FIRST (UID and email) and reads nothing for a wrong principal", async () => {
+    const bad = withKeys([keyRow({ encrypted_key: "real" })]);
+    const wrongEmail = stubUser(cfg.expectedUid, "attacker@example.com", bad);
+    await expect(verifyPrincipal(wrongEmail, cfg)).rejects.toThrow(/session email/);
+    expect(wrongEmail.calls).toEqual([]);
+  });
+
+  it.each([
+    ["empty api_keys", withKeys([])],
+    ["unreadable api_keys", withKeys(null, { name: "PostgrestError" })],
+  ])("a visible active delegation outranks %s (a breach is never masked as 'could not check')", async (_n, base) => {
+    // resolve_byok_key_owner takes the delegation branch exactly when the caller
+    // has zero own keys, so this is the state where the delegation read matters.
+    const tables = { ...base, byok_delegations: { data: [{ id: "d1" }], error: null } };
+    await expect(verify(tables)).rejects.toThrow(violated("byok_delegations-present"));
+  });
+
+  it("reports the FIRST could-not-check class when both reads fail", async () => {
+    await expect(
+      verify({
+        api_keys: { data: null, error: { name: "PostgrestError" } },
+        byok_delegations: { data: null, error: { name: "PostgrestError" } },
+      }),
+    ).rejects.toThrow(unverified("api_keys-unreadable"));
+  });
+
+  it("a non-sentinel key is a breach even when the delegation read would fail (no second read needed)", async () => {
+    const supabase = stubUser(cfg.expectedUid, EXPECTED_EMAIL, {
+      api_keys: { data: [keyRow({ encrypted_key: "real" })], error: null },
+      byok_delegations: { data: null, error: { name: "PostgrestError" } },
+    });
+    await expect(verifyPrincipal(supabase, cfg)).rejects.toThrow(violated("api_keys-non-sentinel-row"));
+  });
+
+  it("counts MORE than one active delegation as present (length > 0, not === 1)", async () => {
+    await expect(verify(withDelegations([{ id: "d1" }, { id: "d2" }]))).rejects.toThrow(
+      violated("byok_delegations-present"),
+    );
+  });
+
+  it("rejects a non-sentinel row of a provider no allowlist would know", async () => {
+    const bad = keyRow({ provider: "provider-added-next-year", encrypted_key: "real" });
+    await expect(verify(withKeys([keyRow(), bad]))).rejects.toThrow(
+      violated("api_keys-non-sentinel-row"),
+    );
+  });
+
+  it("puts nothing from the failing row on the error (no cause, no extra properties)", async () => {
+    const err = await verify(withKeys([keyRow({ encrypted_key: "real" })])).catch((e: Error) => e);
+    expect((err as Error).cause).toBeUndefined();
+    expect(Object.keys(err as object)).toEqual([]);
+  });
+
+  it("runs the allowlist checks FIRST and reads nothing for a wrong principal", async () => {
+    const supabase = stubUser(
+      "99999999-9999-9999-9999-999999999999",
+      EXPECTED_EMAIL,
+      withKeys([keyRow({ encrypted_key: "real" })]),
+    );
+    await expect(verifyPrincipal(supabase, cfg)).rejects.toThrow(/session UID/);
+    expect(supabase.calls).toEqual([]);
+  });
+
+  it.each([
+    ["encrypted_key", { encrypted_key: "a-real-looking-ciphertext" }],
+    ["iv", { iv: "AAAAAAAAAAAAAAAA" }],
+    ["auth_tag", { auth_tag: "BBBBBBBBBBBBBBBB" }],
+    ["encrypted_key (prefix of the sentinel)", { encrypted_key: `${SENTINEL.encrypted_key}x` }],
+    ["encrypted_key (case differs)", { encrypted_key: SENTINEL.encrypted_key.toUpperCase() }],
+    ["encrypted_key (padded)", { encrypted_key: ` ${SENTINEL.encrypted_key} ` }],
+    ["iv (missing)", { iv: undefined as unknown as string }],
+    ["auth_tag (null)", { auth_tag: null as unknown as string }],
+  ])("rejects an anthropic row whose %s is not the sentinel", async (_f, over) => {
+    await expect(verify(withKeys([keyRow(over)]))).rejects.toThrow(
+      violated("api_keys-non-sentinel-row"),
+    );
+  });
+
+  it.each(["openai", "anthropic_oauth", "bedrock", "vertex"])(
+    "rejects a non-sentinel %s row after a compliant anthropic row",
+    async (provider) => {
+      // A check that stops at the first (compliant) row passes this fixture.
+      const bad = keyRow({ provider, encrypted_key: "real-ciphertext" });
+      await expect(verify(withKeys([keyRow(), bad]))).rejects.toThrow(
+        violated("api_keys-non-sentinel-row"),
+      );
+    },
+  );
+
+  it.each([
+    ["first", (b: KeyRow) => [b, keyRow(), keyRow({ provider: "openai" })]],
+    ["middle", (b: KeyRow) => [keyRow(), b, keyRow({ provider: "openai" })]],
+    ["last", (b: KeyRow) => [keyRow(), keyRow({ provider: "openai" }), b]],
+  ])("rejects a bad row in the %s position of three", async (_pos, build) => {
+    const bad = keyRow({ provider: "bedrock", auth_tag: "real" });
+    await expect(verify(withKeys(build(bad)))).rejects.toThrow(
+      violated("api_keys-non-sentinel-row"),
+    );
+  });
+
+  it("accepts sentinel rows of other providers (every row equals the sentinel)", async () => {
+    const v = await verify(
+      withKeys([keyRow(), keyRow({ provider: "openai" }), keyRow({ provider: "vertex" })]),
+    );
+    expect(v.uid).toBe(cfg.expectedUid);
+  });
+
+  it("rejects when an active byok_delegations row is visible to the principal", async () => {
+    await expect(verify(withDelegations([{ id: "d1" }]))).rejects.toThrow(
+      violated("byok_delegations-present"),
+    );
+  });
+
+  it.each([
+    ["zero api_keys rows", withKeys([]), unverified("api_keys-empty")],
+    ["api_keys read error", withKeys(null, { name: "PostgrestError" }), unverified("api_keys-unreadable")],
+    [
+      "api_keys read error alongside plausible data",
+      withKeys([keyRow()], { name: "PostgrestError" }),
+      unverified("api_keys-unreadable"),
+    ],
+    ["api_keys null body", withKeys(null), unverified("api_keys-unreadable")],
+    ["api_keys non-array body", withKeys({}), unverified("api_keys-unreadable")],
+    [
+      "byok_delegations read error",
+      withDelegations(null, { name: "PostgrestError" }),
+      unverified("byok_delegations-unreadable"),
+    ],
+    [
+      "byok_delegations read error alongside empty data",
+      withDelegations([], { name: "PostgrestError" }),
+      unverified("byok_delegations-unreadable"),
+    ],
+    ["byok_delegations null body", withDelegations(null), unverified("byok_delegations-unreadable")],
+    ["byok_delegations non-array body", withDelegations({}), unverified("byok_delegations-unreadable")],
+  ])("fails closed (UNVERIFIED, not a breach) on %s", async (_name, tables, expected) => {
+    // "Could not check" still stops the launch (the throw), but must not carry
+    // the breach token: the workflow BLOCKs only the VIOLATED prefix (CTO
+    // ruling, #10449).
+    await expect(verify(tables)).rejects.toThrow(expected);
+  });
+
+  it("still checks under --dry-run (verifyPrincipal does not consult cfg.dryRun)", async () => {
+    await expect(
+      verify(withKeys([keyRow({ encrypted_key: "real" })]), baseConfig({ dryRun: true })),
+    ).rejects.toThrow(violated("api_keys-non-sentinel-row"));
+  });
+
+  it("main() runs verifyPrincipal before the dry-run branch and before the browser drive", () => {
+    // The unit above cannot see main(); pin the ORDER in the comment-stripped
+    // source so skipping the gate under --dry-run (or reordering) reds here.
+    const src = readFileSync(join(__dirname, "../../scripts/live-verify/run.ts"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    const main = src.slice(src.indexOf("async function main()"));
+    const verifyAt = main.indexOf("const verified = await verifyPrincipal(supabase, cfg);");
+    expect(verifyAt).toBeGreaterThan(0);
+    expect(main.indexOf("if (!cfg.dryRun)")).toBeGreaterThan(verifyAt);
+    expect(main.indexOf("driveAndVerify(verified")).toBeGreaterThan(verifyAt);
+    expect(main.slice(0, verifyAt)).not.toContain("dryRun");
+    // I-ephemerality: the throw path signs the session out, after emitting.
+    const catchAt = main.indexOf("} catch (err) {", verifyAt);
+    expect(catchAt).toBeGreaterThan(verifyAt);
+    // The catch converts through the SHARED failureResult (the same function the
+    // composition tests drive), then signs out.
+    const emitAt = main.indexOf("emit(failureResult(err));", catchAt);
+    expect(emitAt).toBeGreaterThan(catchAt);
+    expect(main.indexOf("supabase?.auth.signOut(", catchAt)).toBeGreaterThan(emitAt);
+    // Local scope (a sibling run's session survives) and bounded (a hung fetch
+    // cannot hold the process past the emitted verdict).
+    expect(main.slice(emitAt)).toContain('signOut({ scope: "local" })');
+    expect(main.slice(emitAt, main.indexOf("signOut(", emitAt))).toContain("bounded(");
+  });
+
+  it("never puts any row field in the error message", async () => {
+    const canary = (f: string) => `CANARY-${f}-MUST-NOT-LEAK`;
+    const row = {
+      provider: canary("provider"),
+      encrypted_key: canary("encrypted_key"),
+      iv: canary("iv"),
+      auth_tag: canary("auth_tag"),
+    };
+    const err = await verify(withKeys([row])).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    for (const f of Object.keys(row)) expect((err as Error).message).not.toContain(canary(f));
+  });
+
+  it("the SENTINEL_KEY constant equals what seed-live-verify-user.sh inserts", () => {
+    const seed = readFileSync(join(__dirname, "../../scripts/seed-live-verify-user.sh"), "utf8")
+      .split("\n")
+      .filter((l) => !l.trimStart().startsWith("#"))
+      .join("\n");
+    // Exactly one POST target, so a second (e.g. real-key) insert cannot hide
+    // behind the first; and the regex runs on comment-stripped text so a
+    // retained old shape in a comment cannot satisfy it.
+    // Closed set: EVERY non-comment line that addresses the api_keys REST
+    // endpoint must be one of the two reviewed shapes (the GET lookup and the one
+    // POST insert), so a second insert, a PATCH, or an `${SB_URL}`-spelled twin
+    // cannot hide beside them.
+    const apiKeyLines = seed.split("\n").filter((l) => l.includes("rest/v1/api_keys"));
+    expect(apiKeyLines).toHaveLength(2);
+    expect(apiKeyLines[0]).toContain('"$SB_URL/rest/v1/api_keys?user_id=eq.$user_id&provider=eq.anthropic&select=id"');
+    expect(apiKeyLines[1]).toContain('"$SB_URL/rest/v1/api_keys" \\');
+    const lines = seed.split("\n");
+    // Spelling-level pin, not a closed set of writes: the insert's option line is
+    // `-X POST`, and a second api_keys address (a PATCH/DELETE on a new line) breaks
+    // the count above. A write added to the lookup line's own continuation, or built
+    // from a variable URL, would escape it.
+    expect(lines[lines.indexOf(apiKeyLines[1]) + 1].trim()).toMatch(/^-X POST /);
+    const m = seed.match(
+      /provider: "anthropic", encrypted_key: "([^"]+)", iv: "([^"]+)", auth_tag: "([^"]+)"/,
+    );
+    expect(m).not.toBeNull();
+    expect({ encrypted_key: m![1], iv: m![2], auth_tag: m![3] }).toEqual(SENTINEL_KEY);
+  });
+});
+
+describe("release workflow: BLOCK classification (executed, not grepped)", () => {
+  // Runs the REAL `emit` and `Enforce` step bodies from the workflow file. The
+  // runner's default shell for a `run:` with no `shell:` key is `bash -e {0}`;
+  // `-o pipefail` is what the body's own `set -uo pipefail` adds, so running
+  // under `-eo pipefail` here is the same or stricter. A grep over the YAML
+  // would pin spelling, not decisions.
+  type Step = { id?: string; name?: string; run?: string; env?: Record<string, string> };
+  const wf = parseYaml(
+    readFileSync(join(__dirname, "../../../../.github/workflows/web-platform-release.yml"), "utf8"),
+  ) as { jobs: Record<string, { steps: Step[] }> };
+  const steps = wf.jobs["live-verify"].steps;
+  const emit = steps.find((st) => st.id === "emit");
+  const enforce = steps.find((st) => st.name?.startsWith("Enforce live-verify gate"));
+  const MARKER = "# Parse the public client DSN";
+  // Cut at the Sentry POST so no network is touched.
+  const cut = (emit?.run ?? "").split(MARKER)[0];
+
+  function run(body: string, env: Record<string, string | undefined>) {
+    const d = mkdtempSync(join(tmpdir(), "wf-step-"));
+    try {
+      const out = join(d, "out");
+      const sum = join(d, "sum");
+      writeFileSync(out, "");
+      writeFileSync(sum, "");
+      const clean = Object.fromEntries(
+        Object.entries({ PATH: process.env.PATH, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: sum, ...env }).filter(
+          ([, v]) => v !== undefined,
+        ),
+      );
+      const r = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", body], {
+        // hermetic: NODE_ENV (augmented as required in this repo) is deliberately absent
+        env: clean as unknown as NodeJS.ProcessEnv,
+        encoding: "utf8",
+        timeout: 20_000,
+      });
+      const kv = Object.fromEntries(
+        readFileSync(out, "utf8").split("\n").filter(Boolean).map((l) => l.split("=", 2) as [string, string]),
+      );
+      return { status: r.status, stdout: r.stdout ?? "", ...kv } as {
+        status: number | null;
+        stdout: string;
+      } & Record<string, string>;
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }
+  const classify = (resultLine: string | undefined, env: Record<string, string | undefined> = {}) =>
+    run(cut, {
+      TRIGGERED: "1",
+      GATE_FAILED: "0",
+      RESULT_LINE: resultLine,
+      HARNESS_OUTCOME: "failure",
+      RC: "1",
+      ...env,
+    });
+
+  it("extracted the real step bodies (instrument self-check)", () => {
+    expect(emit).toBeDefined();
+    expect(enforce).toBeDefined();
+    expect(emit!.run).toContain(MARKER);
+    expect(cut).toContain("BLOCK=0");
+    expect(cut.length).toBeGreaterThan(200);
+    // If the cut anchor moves, `split` returns the whole body, which reaches the
+    // Sentry curl: refuse that rather than rely on the env omitting the DSN.
+    expect(cut).not.toContain("curl");
+  });
+
+  it("no step is named report-only, and the watcher's substring match still resolves", () => {
+    expect(steps.filter((st) => /report-only/i.test(st.name ?? ""))).toEqual([]);
+    expect(steps.filter((st) => (st.name ?? "").includes("Run live-verify harness"))).toHaveLength(1);
+  });
+
+  it("a REAL thrown breach reaches BLOCK=1 through emitLine (composition, not a typed literal)", async () => {
+    const err = await verifyPrincipal(
+      stubUser(baseConfig().expectedUid, EXPECTED_EMAIL, {
+        ...COMPLIANT,
+        api_keys: { data: [keyRow({ encrypted_key: "real" })], error: null },
+      }),
+      baseConfig(),
+    ).catch((e: Error) => e);
+    const line = emitLine(failureResult(err));
+    expect(line).toMatch(/^RESULT: CANT-RUN:cannot-spend-violated: api_keys-non-sentinel-row$/);
+    const r = classify(line);
+    expect(r).toMatchObject({
+      status: 0,
+      result: "CANT-RUN",
+      level: "error",
+      block: "1",
+      reason: "cannot-spend-violated:api_keys-non-sentinel-row",
+    });
+    expect(r.stdout).toContain("::error title=live-verify cannot-spend check did not pass::");
+  });
+
+  it("a REAL could-not-check reaches BLOCK=0 with an ::error annotation (not a breach, not invisible)", async () => {
+    const err = await verifyPrincipal(
+      stubUser(baseConfig().expectedUid, EXPECTED_EMAIL, {
+        ...COMPLIANT,
+        api_keys: { data: [], error: null },
+      }),
+      baseConfig(),
+    ).catch((e: Error) => e);
+    const line = emitLine(failureResult(err));
+    expect(line).toMatch(/^RESULT: CANT-RUN:cannot-spend-unverified: api_keys-empty$/);
+    const r = classify(line);
+    expect(r).toMatchObject({
+      status: 0,
+      result: "CANT-RUN",
+      level: "error",
+      block: "0",
+      reason: "cannot-spend-unverified:api_keys-empty",
+    });
+    expect(r.stdout).toContain("::error title=live-verify cannot-spend check did not pass::");
+  });
+
+  it.each([
+    ["api_keys-non-sentinel-row", withKeysT([keyRow({ encrypted_key: "real" })]), "cannot-spend-violated", "1"],
+    ["byok_delegations-present", withDelegationsT([{ id: "d1" }]), "cannot-spend-violated", "1"],
+    ["api_keys-unreadable", withKeysT(null, { name: "PostgrestError" }), "cannot-spend-unverified", "0"],
+    ["api_keys-empty", withKeysT([]), "cannot-spend-unverified", "0"],
+    ["byok_delegations-unreadable", withDelegationsT(null, { name: "PostgrestError" }), "cannot-spend-unverified", "0"],
+  ])("every REAL class %s reaches the right BLOCK and a Sentry reason via failureResult", async (cls, tables, token, block) => {
+    const err = await verifyPrincipal(
+      stubUser(baseConfig().expectedUid, EXPECTED_EMAIL, tables),
+      baseConfig(),
+    ).catch((e: Error) => e);
+    const r = classify(emitLine(failureResult(err)));
+    expect(r).toMatchObject({ status: 0, result: "CANT-RUN", level: "error", block, reason: `${token}:${cls}` });
+  });
+
+  it.each([
+    "RESULT: CANT-RUN:cannot-spend-violated: Click Here Now",
+    "RESULT: CANT-RUN:cannot-spend-violated: ",
+    "RESULT: CANT-RUN:cannot-spend-violated: api_keys-unknown-class",
+    "RESULT: CANT-RUN:cannot-spend-other: api_keys-empty",
+  ])("a forged or unknown class %j gets no reason tag (the vocabulary is closed)", (line) => {
+    expect(classify(line).reason).toBe("");
+  });
+
+  it("an unknown cannot-spend-* token is a plain CANT-RUN warning, not an ::error", () => {
+    const r = classify("RESULT: CANT-RUN:cannot-spend-other: api_keys-empty");
+    expect(r).toMatchObject({ status: 0, block: "0", reason: "" });
+    expect(r.stdout).not.toContain("::error title=");
+    expect(r.stdout).toContain("::warning title=live-verify could not reach a verdict::");
+  });
+
+  it("the live no-result-line shape the harness step fabricates is BLOCK=1", () => {
+    expect(
+      classify("RESULT: CANT-RUN:no-result-line:exit=137 — tail"),
+    ).toMatchObject({ status: 0, result: "CANT-RUN", block: "1" });
+  });
+
+  it.each([
+    "RESULT: CANT-RUN:cannot-spend",
+    "RESULT: CANT-RUN:cannot-spendXviolated: x",
+    " RESULT: CANT-RUN:cannot-spend-violated: x",
+    "RESULT: CANT-RUN:CONFIG:cannot-spend-violated",
+    "RESULT: PASS — cannot-spend-violated",
+  ])("near-miss %j does not BLOCK", (line) => {
+    expect(classify(line)).toMatchObject({ status: 0, block: "0", reason: "" });
+  });
+
+  it("the reason tag stays a closed vocabulary (page-controlled text never reaches it)", () => {
+    const forged = "RESULT: CANT-RUN:cannot-spend-violated: x; $(evil) ${IFS}";
+    expect(classify(forged)).toMatchObject({ status: 0, reason: "" });
+  });
+
+  it.each([
+    ["RESULT: PASS — fresh conversation persisted", { result: "PASS", block: "0" }],
+    ["RESULT: FAIL — rail did not show the conversation", { result: "FAIL", block: "1" }],
+    ["RESULT: CANT-RUN:session-rejected — rate_limited", { result: "CANT-RUN", block: "0" }],
+    ["RESULT: CANT-RUN:browser-launch:Error", { result: "CANT-RUN", block: "0" }],
+    ["", { result: "CANT-RUN:no-result-line", block: "1" }],
+  ])("%j keeps its existing classification", (line, expected) => {
+    expect(classify(line)).toMatchObject({ status: 0, ...expected });
+  });
+
+  it("pre-harness states keep their classification (SKIPPED, gate-diff-failed, setup-failed)", () => {
+    expect(classify("x", { TRIGGERED: "0" })).toMatchObject({ result: "SKIPPED", block: "0" });
+    expect(classify("x", { GATE_FAILED: "1" })).toMatchObject({ result: "CANT-RUN:gate-diff-failed", block: "0" });
+    expect(classify("x", { TRIGGERED: undefined, GATE_FAILED: undefined })).toMatchObject({
+      result: "CANT-RUN:setup-failed",
+      block: "0",
+    });
+  });
+
+  describe("the Sentry event (full emit body behind an argv-strict curl shim)", () => {
+    // The tags are built AFTER the cut the classifier tests use, so without this
+    // the `reason` tag could be deleted or renamed with the suite green.
+    function sentryPayload(resultLine: string): Record<string, unknown> | null {
+      const d = mkdtempSync(join(tmpdir(), "wf-sentry-"));
+      try {
+        const bin = join(d, "bin");
+        mkdirSync(bin);
+        const captured = join(d, "payload.json");
+        // Accepts exactly the modelled call (-X POST <store url> with X-Sentry-Auth and
+        // --data), records the body, answers 200; anything else exits 64.
+        writeFileSync(
+          join(bin, "curl"),
+          [
+            "#!/usr/bin/env bash",
+            "data=''; method=''; url=''; auth=''",
+            "while [ $# -gt 0 ]; do",
+            '  case "$1" in',
+            '    -X) method="$2"; shift 2 ;;',
+            '    --data) data="$2"; shift 2 ;;',
+            '    -H) case "$2" in X-Sentry-Auth:*) auth=1 ;; esac; shift 2 ;;',
+            '    --max-time) shift 2 ;;',
+            '    -o|-w) shift 2 ;;',
+            "    -sS) shift ;;",
+            '    https://*) url="$1"; shift ;;',
+            "    *) exit 64 ;;",
+            "  esac",
+            "done",
+            '[ "$method" = POST ] && [ -n "$auth" ] && [[ "$url" == https://o1.ingest.us.sentry.io/api/123/store/ ]] || exit 64',
+            `printf '%s' "$data" > '${captured}'`,
+            "printf 200",
+          ].join("\n"),
+          { mode: 0o755 },
+        );
+        const out = join(d, "out");
+        writeFileSync(out, "");
+        const r = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", emit!.run!], {
+          env: {
+            PATH: `${bin}:${process.env.PATH}`,
+            NEXT_PUBLIC_SENTRY_DSN: "https://pubkey@o1.ingest.us.sentry.io/123",
+            TRIGGERED: "1",
+            GATE_FAILED: "0",
+            RESULT_LINE: resultLine,
+            HARNESS_OUTCOME: "failure",
+            RC: "1",
+            GITHUB_SHA: "abc123",
+            GITHUB_OUTPUT: out,
+            GITHUB_STEP_SUMMARY: join(d, "sum"),
+          } as unknown as NodeJS.ProcessEnv,
+          encoding: "utf8",
+          timeout: 20_000,
+        });
+        expect(r.status).toBe(0);
+        return existsSync(captured) ? (JSON.parse(readFileSync(captured, "utf8")) as Record<string, unknown>) : null;
+      } finally {
+        rmSync(d, { recursive: true, force: true });
+      }
+    }
+    const tags = (p: Record<string, unknown> | null) => (p?.tags ?? {}) as Record<string, string>;
+
+    it.each([
+      ["RESULT: CANT-RUN:cannot-spend-violated: byok_delegations-present", "cannot-spend-violated:byok_delegations-present"],
+      ["RESULT: CANT-RUN:cannot-spend-unverified: api_keys-empty", "cannot-spend-unverified:api_keys-empty"],
+    ])("%s carries tags.reason=%s", (line, reason) => {
+      const payload = sentryPayload(line);
+      expect(payload).not.toBeNull();
+      expect(tags(payload)).toEqual({
+        gate: "live-verify",
+        component: "web-platform",
+        result: "CANT-RUN",
+        reason,
+      });
+      expect(payload).toMatchObject({ level: "error" });
+    });
+
+    it.each([
+      "RESULT: PASS — fresh conversation persisted",
+      "RESULT: CANT-RUN:session-rejected — rate_limited",
+      "RESULT: CANT-RUN:cannot-spend-violated: Click Here Now",
+    ])("%j carries NO reason tag", (line) => {
+      const payload = sentryPayload(line);
+      expect(payload).not.toBeNull();
+      expect(Object.keys(tags(payload)).sort()).toEqual(["component", "gate", "result"]);
+    });
+  });
+
+  it("the Enforce step reads the emit step's block output, and exits 1 only on BLOCK=1", () => {
+    // Wiring: renaming the output key silently fails the gate OPEN through
+    // `${BLOCK:-0}`, so pin the mapping and execute the body both ways.
+    expect(enforce!.env?.BLOCK).toBe("${{ steps.emit.outputs.block }}");
+    expect(enforce!.env?.RESULT).toBe("${{ steps.emit.outputs.result }}");
+    expect(enforce!.env?.REASON).toBe("${{ steps.emit.outputs.reason }}");
+    const red = run(enforce!.run!, {
+      BLOCK: "1",
+      RESULT: "CANT-RUN",
+      REASON: "cannot-spend-violated:api_keys-non-sentinel-row",
+    });
+    expect(red.status).toBe(1);
+    // The operator sees WHICH class tripped and where the recovery steps live.
+    expect(red.stdout).toMatch(
+      /::error::live-verify gate BLOCKED the release: result=CANT-RUN reason=cannot-spend-violated:api_keys-non-sentinel-row\./,
+    );
+    expect(red.stdout).toContain("ADR-064 (2026-10-18 amendment, Recovery)");
+    expect(run(enforce!.run!, { BLOCK: "0", RESULT: "PASS" }).status).toBe(0);
+    expect(run(enforce!.run!, { RESULT: "PASS" }).status).toBe(0);
   });
 });
 

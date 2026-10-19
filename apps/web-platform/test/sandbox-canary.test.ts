@@ -16,6 +16,7 @@ import {
   BWRAP_BIND_SRC_OPTS,
   BWRAP_ONE_ARG_PATH,
   CANARY_BRIDGE_SPAWN_PLACEHOLDER,
+  CANARY_TRANSCRIPTS_PLACEHOLDER,
   CANARY_C4_STAGING_PLACEHOLDER,
   CANARY_EMPTY_PLACEHOLDER,
   CANARY_WS_PLACEHOLDER,
@@ -586,11 +587,54 @@ describe("C4 staging root placeholder (#8623)", () => {
     expect(argv.some((t) => /^\/(root|home)(\/|$)/.test(t))).toBe(false);
     const tmpfsC4 = argv.filter((t, i) => t === CANARY_C4_STAGING_PLACEHOLDER && argv[i - 1] === "--tmpfs");
     expect(tmpfsC4).toHaveLength(1);
-    const known = [CANARY_WS_PLACEHOLDER, CANARY_EMPTY_PLACEHOLDER, CANARY_C4_STAGING_PLACEHOLDER, CANARY_BRIDGE_SPAWN_PLACEHOLDER];
+    const known = [CANARY_WS_PLACEHOLDER, CANARY_EMPTY_PLACEHOLDER, CANARY_C4_STAGING_PLACEHOLDER, CANARY_BRIDGE_SPAWN_PLACEHOLDER, CANARY_TRANSCRIPTS_PLACEHOLDER];
     for (const t of [...argv, ...fx.prepDirs]) {
       for (const m of t.match(/\$\{CANARY_[A-Z0-9_]*\}/g) ?? []) expect(known).toContain(m);
     }
     expect(fx.prepDirs).toContain(CANARY_C4_STAGING_PLACEHOLDER);
+  });
+});
+
+// #10445 — the session-transcript dir (`$HOME/.claude/projects`) is added to denyRead for every
+// session, and is HOME-based, so the host_path census needs a capture-computed placeholder.
+describe("transcripts placeholder (#10445)", () => {
+  const WS = "/tmp/soleur-sandbox-canary/00000000-0000-4000-8000-0000000000ca";
+  const TR = "/root/.claude/projects";
+  const RAW = ["--ro-bind", "/", "/", "--bind", WS, WS, "--tmpfs", "/proc", "--tmpfs", TR];
+
+  it("maps the transcripts root to ${CANARY_TRANSCRIPTS} and adds it to prepDirs", () => {
+    const { bwrapSetupArgv, prepDirs } = normalizeCapturedArgv(RAW, { wsRoot: WS, transcriptsRoot: TR });
+    expect(bwrapSetupArgv).toContain(CANARY_TRANSCRIPTS_PLACEHOLDER);
+    expect(bwrapSetupArgv.some((t: string) => t.includes(TR))).toBe(false);
+    expect(prepDirs).toContain(CANARY_TRANSCRIPTS_PLACEHOLDER);
+  });
+
+  it("does NOT add the placeholder to prepDirs when the argv never references it", () => {
+    const { prepDirs } = normalizeCapturedArgv(["--ro-bind", "/", "/", "--bind", WS, WS, "--tmpfs", "/proc"], {
+      wsRoot: WS,
+      transcriptsRoot: TR,
+    });
+    expect(prepDirs).not.toContain(CANARY_TRANSCRIPTS_PLACEHOLDER);
+  });
+
+  it("still throws host_path when transcriptsRoot is NOT supplied (fail-loud), and on look-alike HOME paths when it is", () => {
+    expect(() => normalizeCapturedArgv(RAW, { wsRoot: WS })).toThrow(/host_path/);
+    for (const bad of ["/root/.ssh", `${TR}-evil`, `${TR}x`]) {
+      expect(
+        () => normalizeCapturedArgv(["--ro-bind", "/", "/", "--bind", WS, WS, "--tmpfs", bad], { wsRoot: WS, transcriptsRoot: TR }),
+        `expected host_path throw for '${bad}'`,
+      ).toThrow(/host_path/);
+    }
+  });
+
+  it("substituteCanonicalArgv replaces the placeholder at replay and leaves none behind", () => {
+    const out = substituteCanonicalArgv(["--tmpfs", CANARY_TRANSCRIPTS_PLACEHOLDER], {
+      ws: "/w",
+      empty: "/e",
+      transcripts: "/t",
+    });
+    expect(out).toEqual(["--tmpfs", "/t"]);
+    expect(hasUnsubstitutedPlaceholder(out)).toBe(false);
   });
 });
 
