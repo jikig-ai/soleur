@@ -277,7 +277,7 @@ undeployable host.
 
 | Issue | Action | Status |
 |---|---|---|
-| this PR | Container-side `docker run -u 0` seed (root cause fix, self-healing); `PLUGIN_SEED_PROBE` in-surface emit; `fanout_peers`/`peers` status merge; fail-closed `Verify peer deploy completion` release step | this PR |
+| #10577 | Container-side `docker run -u 0` seed (root cause fix, self-healing); `PLUGIN_SEED_PROBE` in-surface emit; `fanout_peers`/`peers` status merge; fail-closed `Verify peer deploy completion` release step | this PR |
 | #8743 | Soak-graded closure: `scripts/followthroughs/web2-plugin-seed-8743.sh` enrolled via directive (`earliest=<merge+2d>`) | open, enrolled |
-| (follow-up) | Better Stack / Sentry alert on `plugin_seed_copy_failed` / deploy-peer abort signatures — the release gate catches failures only at release time; a fleet-level alert pages between releases | filed |
-| (follow-up) | `web-host-replace` verifies the replacement host's FIRST deploy — the defect recurred across two web-2 replacements (09-25, 09-30) unnoticed because nothing after boot checks the host's first deploy outcome | filed |
+| #10584 | Better Stack / Sentry alert on `plugin_seed_copy_failed` / deploy-peer abort signatures — the release gate catches failures only at release time; a fleet-level alert pages between releases | open |
+| #10585 | `web-host-replace` verifies the replacement host's FIRST deploy — the defect recurred across two web-2 replacements (09-25, 09-30) unnoticed because nothing after boot checks the host's first deploy outcome | open |
