@@ -2254,3 +2254,28 @@
   action approval includes the 90-second timeout and five-second kill grace.
   No diagnostic request, redirect follow, destination request or layer fetch
   has occurred.
+
+### Approved redirect diagnostic and classified-refusal preparation — 2026-10-19
+
+- Independent actual-manifest review passed for canonical manifest `9a23cd9c…`
+  at source `8f2700ed`. The operator freshly approved the exact command with
+  `timeout -k 5 90`; it ran once, exited 1, and consumed the attempt marker.
+- Separate evidence review passed integrity of the incomplete receipt
+  `834c8ba7b1d6f306511d2d05034c67031ac4fc28c4986d61fc89e3a2af71c550`.
+  It records one token request, HTTP 200, `transport/header_shape`; Config GET
+  was not attempted. No application token body, Config body, Location, destination
+  request or layer fetch occurred. The particular header predicate is unknown.
+  See `redirect-manifest-review-8f2700ed-2026-10-19.md` for exact bindings.
+- Ruled by CTO agent: fixed diagnostic-local classification only, preserving
+  framing acceptance and the shared failure vocabulary. Plan and rationale are
+  in `prebuild-acquisition-2026-10-16.md`, “Classified token-header refusal”.
+- Added synthesized tests first: 14 refusal cases failed on missing categories,
+  and the category-construction test errored on the missing class. After the
+  narrow implementation, focused tests pass 12/12; full offline discovery passes
+  320/320 (`RC=0`); Ruff passes (44 baselined findings, 115 scanned files).
+  Full discovery required an approved sandbox escape for local fixture sockets;
+  it ran no live registry diagnostic.
+- Independent source review and fresh bindings/actual-manifest review remain
+  required. Approval of the original diagnostic is spent. All build, Docker,
+  SQL, provider/browser/account, recovery, qualification, Web/CLO, promotion and
+  ship holds persist. Hosted auth BLOCKED, alternate route PENDING.

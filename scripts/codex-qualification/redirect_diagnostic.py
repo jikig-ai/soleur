@@ -26,6 +26,8 @@ REGISTRY = metadata.REGISTRY
 MAX_LOCATION = 8192
 MAX_HEADER_COUNT = 128
 MAX_HEADER_BYTES = 32768
+TOKEN_HEADER_FAILURES = ('content_type_count', 'content_length_count', 'transfer_encoding',
+                         'content_encoding', 'content_length_syntax', 'media_type')
 
 
 def verified_platform(raw, image):
@@ -242,6 +244,38 @@ class DeadlineWire:
         return b''.join(chunks)
 
 
+class TokenHeaderFailure(metadata.BoundaryFailure):
+    def __init__(self, category):
+        require(type(category) is str and category in TOKEN_HEADER_FAILURES, ERROR)
+        super().__init__('header_shape', 200)
+        self.category = category
+
+
+def checked_body_headers(names, maximum_bytes, *, classify_token):
+    def refuse(category):
+        if classify_token:
+            raise TokenHeaderFailure(category)
+        raise metadata.BoundaryFailure('header_shape', 200)
+
+    content_type, content_length = names.get('content-type', []), names.get('content-length', [])
+    if len(content_type) != 1:
+        refuse('content_type_count')
+    if len(content_length) != 1:
+        refuse('content_length_count')
+    if 'transfer-encoding' in names:
+        refuse('transfer_encoding')
+    if 'content-encoding' in names and names['content-encoding'] != ['identity']:
+        refuse('content_encoding')
+    if not re.fullmatch(r'[0-9]{1,8}', content_length[0]):
+        refuse('content_length_syntax')
+    size = int(content_length[0])
+    if size > maximum_bytes:
+        raise metadata.BoundaryFailure('body_size', 200)
+    if content_type[0].split(';', 1)[0].strip().lower() != 'application/json':
+        refuse('media_type')
+    return size, content_type[0]
+
+
 class HTTPSAdapter:
     """Explicit-CA adapter; Config response headers only, with no body read."""
     def __init__(self, manifest, ca_bytes, *, manifest_sha256, clock=time.monotonic):
@@ -320,18 +354,9 @@ class HTTPSAdapter:
                 if (len(locations) != 1 or len(locations[0].encode('utf-8')) > MAX_LOCATION):
                     raise metadata.BoundaryFailure('header_shape', status)
                 return status, [('Location', locations[0])], b''
-            content_type = names.get('content-type', [])
-            content_length = names.get('content-length', [])
-            if (len(content_type) != 1 or len(content_length) != 1 or 'transfer-encoding' in names or
-                    'content-encoding' in names and names['content-encoding'] != ['identity'] or
-                    not re.fullmatch(r'[0-9]{1,8}', content_length[0])):
-                raise metadata.BoundaryFailure('header_shape', status)
-            size = int(content_length[0])
-            if size > maximum_bytes:
-                raise metadata.BoundaryFailure('body_size', status)
-            if content_type[0].split(';', 1)[0].strip().lower() != 'application/json':
-                raise metadata.BoundaryFailure('header_shape', status)
-            return status, content_type[0], wire.read_exact(size)
+            size, content_type = checked_body_headers(names, maximum_bytes,
+                classify_token=url == TOKEN_URL)
+            return status, content_type, wire.read_exact(size)
         except metadata.BoundaryFailure:
             raise
         except Exception:
@@ -449,6 +474,10 @@ class RedirectDiagnostic:
                 current['reason'] = error.reason
                 if error.status is not None:
                     current['status_code'] = error.status
+                if (isinstance(error, TokenHeaderFailure) and current['action_index'] == 1 and
+                        error.reason == 'header_shape' and error.status == 200 and
+                        type(error.category) is str and error.category in TOKEN_HEADER_FAILURES):
+                    current['token_header_failure'] = error.category
             result['error'] = ERROR
             result['failure'] = copy.deepcopy(current)
             result.pop('routing', None)

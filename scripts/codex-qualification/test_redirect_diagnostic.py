@@ -241,6 +241,66 @@ class RedirectDiagnostic(unittest.TestCase):
                 if action_index == 1 and reason is None:
                     self.assertEqual(wire.payload.tobytes(), body)
 
+    def test_token_header_refusals_classify_constants_without_reading_body(self):
+        valid = [('Content-Type', 'application/json'), ('Content-Length', '2')]
+        cases = [
+            ([valid[1]], 'content_type_count'),
+            ([valid[0], *valid], 'content_type_count'),
+            ([valid[0]], 'content_length_count'),
+            ([*valid, valid[1]], 'content_length_count'),
+            ([*valid, ('Transfer-Encoding', 'chunked')], 'transfer_encoding'),
+            ([*valid, ('Content-Encoding', 'SYNTHESIZED_PRIVATE_ENCODING')], 'content_encoding'),
+            ([*valid, ('Content-Encoding', 'identity'), ('Content-Encoding', 'identity')], 'content_encoding'),
+            ([valid[0], ('Content-Length', 'SYNTHESIZED_PRIVATE_LENGTH')], 'content_length_syntax'),
+            ([valid[0], ('Content-Length', '123456789')], 'content_length_syntax'),
+            ([('Content-Type', 'text/SYNTHESIZED_PRIVATE_MEDIA'), valid[1]], 'media_type'),
+            ([], 'content_type_count'),
+            ([valid[0], ('Transfer-Encoding', 'chunked')], 'content_length_count'),
+            ([*valid, ('Transfer-Encoding', 'chunked'), ('Content-Encoding', 'gzip')], 'transfer_encoding'),
+            ([valid[0], ('Content-Length', 'bad'), ('Content-Encoding', 'gzip')], 'content_encoding')]
+        for headers, category in cases:
+            with self.subTest(category=category, headers_count=len(headers)), \
+                    patch.object(diagnostic.metadata.ssl, 'SSLContext') as contexts, \
+                    patch.object(diagnostic.socket, 'getaddrinfo', return_value=[
+                        (diagnostic.socket.AF_INET, diagnostic.socket.SOCK_STREAM, 6, '', ('203.0.113.9', 443))]), \
+                    patch.object(diagnostic.socket, 'socket') as sockets:
+                self.setUp()
+                body = b'SYNTHESIZED_PRIVATE_TOKEN_BODY'
+                wire = FakeTLSSocket(b'HTTP/1.1 200 Synthetic\r\n' +
+                    b''.join(key.encode() + b': ' + value.encode() + b'\r\n' for key, value in headers) +
+                    b'\r\n' + body)
+                contexts.return_value.wrap_socket.return_value = wire
+                sockets.return_value.connect_ex.return_value = 0
+                adapter = diagnostic.HTTPSAdapter(self.manifest, fixtures.CA,
+                    manifest_sha256=sha(canonical(self.manifest)))
+                self.transport.request.side_effect = adapter.request
+                with self.assertRaises(diagnostic.DiagnosticFailure) as raised:
+                    self.collector().collect()
+                receipt = raised.exception.receipt
+                self.assertEqual(receipt['failure']['reason'], 'header_shape')
+                self.assertEqual(receipt['failure'].get('token_header_failure'), category)
+                self.assertEqual(receipt['actions'][0].get('token_header_failure'), category)
+                self.assertEqual(receipt['request_count'], 1)
+                self.assertEqual(receipt['actions'][1]['reason'], 'not_attempted')
+                self.assertNotIn('routing', receipt)
+                self.assertNotIn(b'SYNTHESIZED_PRIVATE', canonical(receipt))
+                self.assertEqual(wire.payload.tobytes(), body)
+                self.assertTrue(wire.closed)
+
+    def test_token_header_category_cannot_forward_free_text_or_classify_config(self):
+        for value, action_index in [('SYNTHESIZED_PRIVATE', 0), ('content_type_count', 1)]:
+            self.setUp()
+            error = diagnostic.TokenHeaderFailure('content_type_count')
+            error.category = value
+            self.transport.request.side_effect = ([error] if action_index == 0 else [self.responses[0], error])
+            with self.assertRaises(diagnostic.DiagnosticFailure) as raised:
+                self.collector().collect()
+            receipt = raised.exception.receipt
+            self.assertNotIn('token_header_failure', receipt['failure'])
+            self.assertNotIn(b'SYNTHESIZED_PRIVATE', canonical(receipt))
+        with self.assertRaises(Refused):
+            diagnostic.TokenHeaderFailure('SYNTHESIZED_PRIVATE')
+
     def test_platform_bytes_require_raw_digest_and_exact_config_descriptor(self):
         self.assertEqual(diagnostic.verified_platform(fixtures.PLATFORM, fixtures.IMAGE),
                          {key: self.platform[key] for key in ('sha256', 'bytes', 'config_descriptor')})

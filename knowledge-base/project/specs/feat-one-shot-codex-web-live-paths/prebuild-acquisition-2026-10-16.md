@@ -687,3 +687,36 @@ Config acquisition and the full eleven-role gate still incomplete. Hosted
 authentication stays BLOCKED, alternate route PENDING, draft/disarmed/default-
 off/customer-blocked state and all build/recovery/routine/Web/CLO/ship holds
 remain. Historical source-bound receipts stay unchanged and attributable.
+
+### Classified token-header refusal — 2026-10-19
+
+The separately approved redirect diagnostic at source `8f2700ed` stopped on its
+first request: HTTP 200 with `transport/header_shape`. The Config request was
+not attempted. Independent review verified the incomplete receipt's integrity
+and exclusion of raw headers/body/Location. The precise failed predicate is
+unknown. Its one-use marker is consumed and authorizes no retry.
+
+Ruled by CTO agent, 2026-10-19: add diagnostic-local fixed failure classification
+only, retaining the generic `header_shape` reason and existing token framing
+acceptance. Do not expand the shared registry failure vocabulary or framing.
+Rationale: the sanitized evidence proves refusal, not which predicate failed.
+Dissent: reconsider broader framing only after classified evidence and separate
+engineering/security review of its bounded nonblocking parser.
+
+Source-only acceptance chain:
+
+- Write failing synthesized tests for each token header predicate, including
+  deterministic precedence when several predicates fail.
+- Add only a fixed allowlisted category for the first failed predicate; never
+  retain header names/values, raw headers, token body or exception text.
+- Preserve valid responses, header-refusal zero-body-read behavior, Config
+  response non-consumption, socket cleanup and absolute-deadline protections.
+- Validate the adapter-to-collector classification path and refuse non-allowlisted
+  classification values at the receipt boundary.
+- Run offline tests and independent source review. Any replacement attempt
+  requires fresh source/input/CA/platform/Config/output bindings, actual-manifest
+  review and fresh exact-action approval. Historical evidence remains unchanged.
+
+This source-only correction has no production observability surface: local fixed
+receipts report the failure. No network action, build, Docker/SQL/provider/browser/
+account operation, recovery, qualification, Web/CLO matrix or ship gate is released.
