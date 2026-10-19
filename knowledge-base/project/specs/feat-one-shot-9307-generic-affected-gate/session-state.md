@@ -11,7 +11,7 @@
 ### Decisions
 - Scope = deliverable 2 of #9307 only; deliverable 1 verified landed, deliverable 3 (#8231) is a documented non-goal (green-baseline precondition unmet).
 - Design carried forward from the reviewed umbrella plan: `affected-tests.sh` single entry point, capability-probe dispatch, exit contract 0/1/4/6/7, `.soleur-test-gate.json` fail-closed config, CI-gated 900 s budget, Guard 1/2/3.
-- Corrections: ADR ordinal ADR-288; vitest selector is `related`; `fullsuite-merge-gate.test.ts` pins ship Phase 4 dispatch; new suite uses name-stem edge only.
+- Corrections: ADR ordinal ADR-292; vitest selector is `related`; `fullsuite-merge-gate.test.ts` pins ship Phase 4 dispatch; new suite uses name-stem edge only.
 - Adjacent issues reconciled with explicit dispositions; decision-challenges.md carries 5 rows (2 inherited rulings, 3 pending-assumed technical rows).
 
 ### Components Invoked
@@ -19,7 +19,7 @@
 
 ## Work Phase
 - Status: implementation committed; verification in progress
-- Commits: d2ad5158e5 (impl: affected-tests.sh + 4 adapters + common.sh + suite + skill wiring + grok-pre-push-gate + ADR-288 + contract ref), 18c06049a7 (backtick→link fix)
+- Commits: d2ad5158e5 (impl: affected-tests.sh + 4 adapters + common.sh + suite + skill wiring + grok-pre-push-gate + ADR-292 + contract ref), 18c06049a7 (backtick→link fix)
 - Tier 0 used: Agent 1 code + Agent 2 tests; suite affected-tests.test.sh green 151/151 after 2 coordinator fixes (js.sh ADP_TOOL init; C5a fixture inert-only diff)
 - Ratchets green: fixture-relative-assert 63/0, fixture-dir-operand-assert 71/0, lint-shell-capture-exit 0 new
 - components.test.ts 1423/0; affected-tests.sh --self-check ok
@@ -84,7 +84,7 @@ THEN: spawn remaining 5 code-panel seats (correctness, security-sentinel, patter
 
 ## Panel round findings (4 of 7 seats in; pending: pattern-recognition, code-quality, test-design)
 
-P1: none new. git-history P2: ADR-288 ordinal contested by open PRs #10348 + #10349 (check-adr-ordinals is required CI — re-probe + renumber before merge); P3 PR body still placeholder (ship fills).
+P1: none new. git-history P2: ADR-292 ordinal contested by open PRs #10348 + #10349 (check-adr-ordinals is required CI — re-probe + renumber before merge); P3 PR body still placeholder (ship fills).
 
 ROUND-2 MUST-FIX:
 A. run_step rc6/7 arms apply to ALL ~10 steps (data-integrity + agent-native agree) → scope arms to the affected-gate step only (match $name or per-step rc map). grok-pre-push-gate.sh:96-113.

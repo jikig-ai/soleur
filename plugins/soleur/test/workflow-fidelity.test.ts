@@ -405,7 +405,7 @@ describe("workflow-fidelity sentinel markers in skills", () => {
 
     // affected-tests.sh's rc 6 (budget-deferred to a detected CI gate) and rc 7
     // (no suite detected) pass WITH a note — but ONLY on the affected-gate
-    // step; on any other step 6/7 is an ordinary failure (ADR-288 records the
+    // step; on any other step 6/7 is an ordinary failure (ADR-292 records the
     // block-vs-pass decision as pass-with-note, scoped).
     for (const code of [6, 7]) {
       const other = runStepWithExit(code);

@@ -25,7 +25,7 @@ This run is deliberately scoped to deliverable 2. Deliverable 1 (Soleur-repo ove
 ### Key Improvements
 
 1. Verified all cited issues/PRs live (`gh issue view`, `gh pr view 9306` → MERGED) and all cited rule IDs against `AGENTS.md`/`scripts/migrated-rule-ids.txt` — no stale or fabricated citations.
-2. Corrected the inherited plan's stale assumptions: ADR-262 is taken (next free on fresh `origin/main` = ADR-288); skill-body headroom shrank to 8–183 B; vitest selector is the `related` subcommand (#9815).
+2. Corrected the inherited plan's stale assumptions: ADR-262 is taken (next free on fresh `origin/main` = ADR-292); skill-body headroom shrank to 8–183 B; vitest selector is the `related` subcommand (#9815).
 3. Discovered the `fullsuite-merge-gate.test.ts` pin interaction — replacing the ship Phase 4 `test-all.sh --affected` dispatch without updating that test reds it; the re-pin is now an explicit Files-to-Edit entry.
 4. Deliverable-1 residual audit: pre-pass cache (#9824), edge-token `..` resolution (D1), subcommand skip, kb-consumers ratchet and shard-legs regen all landed; #9564/#9441 remain open and are recorded, not re-implemented.
 
@@ -86,7 +86,7 @@ This run is deliberately scoped to deliverable 2. Deliverable 1 (Soleur-repo ove
 |---|---|---|
 | "PR 2 … script under plugins/soleur/" | Absent — never built | This PR builds it |
 | "PR 1 = over-selection fix" | Merged (#9306) + derive cache (#9824) + edge fixes (#9945, #10088, #10117) | Residuals table below; no re-implementation |
-| "ADR-262 for PR 2" | Ordinal taken by PR-CI-path-gates ADR | Provisional ADR-288, re-probed at merge |
+| "ADR-262 for PR 2" | Ordinal taken by PR-CI-path-gates ADR | Provisional ADR-292, re-probed at merge |
 | "work has 21 B headroom" | 10 B now; review 8 B; ship 183 B | Net-negative pointer edits only |
 | "#8231 unblocked once green baseline holds" | Precondition fails today: #7376 open, #7454 deferral stands, 2026-10-09 comment: dominant local cost is now the pre-pass, "parallelism stays behind its green-baseline precondition" | Deliverable 3 = documented non-goal |
 | "dispatch probe: `grep -q -- '--print-affected-set'`" | Both flags exist; `--print-selection` is the #9307 interface marker | Probe for `--print-selection` (the newest capability) |

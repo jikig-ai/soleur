@@ -1,6 +1,6 @@
-# ADR-288: The plugin ships a stack-agnostic affected-test gate; the repo-local runner is the override
+# ADR-292: The plugin ships a stack-agnostic affected-test gate; the repo-local runner is the override
 
-- Status: adopting (provisional ordinal — re-probed across `origin/*` before merge)
+- Status: adopting (renumbered 288→292 at merge-time re-probe: origin/main now carries ADR-288..291 from concurrent PRs)
 - Date: 2026-10-15
 - Extends: ADR-242 (plugin payload boundary), ADR-183 (full-suite-at-ship ordering), ADR-179 (plugin-root identity resolution)
 - Issue: #9307 deliverable 2

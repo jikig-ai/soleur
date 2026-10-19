@@ -107,7 +107,7 @@ run_step() {
     exit 4
   elif (( rc == 6 || rc == 7 )) && (( _affected_step )); then
     # SCOPED to the affected-gate step: rc 6/7 are affected-tests.sh's
-    # pass-with-note verdicts (ADR-288, block-vs-pass decision). On any OTHER
+    # pass-with-note verdicts (ADR-292, block-vs-pass decision). On any OTHER
     # step 6/7 is an ordinary failure — a random suite exiting 6 must never
     # read as a CI deferral.
     if (( rc == 6 )); then
