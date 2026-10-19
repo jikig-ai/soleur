@@ -110,10 +110,10 @@ wa_main() {
   # git-data-bootstrap.sh uses for its hooks directory and fence hook (a suite row compares them).
   readonly WA_HK_DIR=hooks
   readonly WA_HK_PR=pre-receive
-  # WA_HK_PR_MAX is a coarse plausibility bound on the size of that file, derived from the comment-STRIPPED hook a host
+  # WA_HK_PR_MAX is a coarse plausibility bound on the size of that file, derived from the comment-STRIPPED shipped pre-receive script a host
   # receives (1870 to 2784 bytes over six versions; 197 for the placeholder), not an identity test. A size at or under it
   # says nothing about provenance or content; a size over it is not evidence of foreign content (an unstripped copy reads
-  # over it). That the retired volume's hook came from the same render is unverified. A change of the value returns to the CLO.
+  # over it). That the retired volume's pre-receive file came from the same render is unverified. A change of the value returns to the CLO.
   readonly WA_HK_PR_MAX=4096
   readonly WA_ROW_WINDOW_S=3600      # max seconds from host boot to the boot_complete row (UNMEASURED: wipe_check prints boot_to_row_s)
   readonly WA_BUDGET_S=240           # self-imposed ceiling; the ssh bound in git-data-cutover.sh is longer
