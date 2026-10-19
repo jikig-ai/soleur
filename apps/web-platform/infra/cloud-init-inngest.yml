@@ -1937,16 +1937,17 @@ write_files:
       [ -f "$STAGE/bundle/manifest.txt" ] || verify_fail manifest-absent
 
       # --- provenance: cosign verify-blob OFFLINE ---------------------------------------
-      # The .cert + .sig travel inside the bundle so nothing here touches Fulcio/Rekor; the
-      # trusted root is baked and mounted :ro. --network none: the verify needs no egress at
-      # all — the daemon-side implicit pull of the cosign image is unaffected by it.
+      # cosign v3.1.1 (the pinned verifier image) dropped the 2.x detached sig/cert flags —
+      # the single .sigstore.json bundle (sig + cert + chain) travels inside the tarball so
+      # nothing here touches Fulcio/Rekor; the trusted root is baked and mounted :ro.
+      # --network none: the verify needs no egress at all — the daemon-side implicit pull of
+      # the cosign image is unaffected by it.
       if ! timeout "$VERIFY_TIMEOUT_S" "$DOCKER_BIN" run --rm --network none \
           -v "$STAGE/bundle:/bundle:ro" \
           -v "$TRUSTED_ROOT:/etc/cosign/trusted_root.json:ro" \
           "$COSIGN_IMAGE" verify-blob \
           --trusted-root /etc/cosign/trusted_root.json \
-          --certificate /bundle/manifest.txt.cert \
-          --signature /bundle/manifest.txt.sig \
+          --bundle /bundle/manifest.txt.sigstore.json \
           --certificate-identity-regexp "$IDENTITY_REGEXP" \
           --certificate-oidc-issuer "$OIDC_ISSUER" \
           /bundle/manifest.txt >/dev/null 2>&1; then
