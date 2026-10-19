@@ -409,6 +409,18 @@ kill_row K23d-cosign-env-preload 'm_append "$CI_DEPLOY_REL" "docker run --rm -e 
 kill_row K23e-create-name-eq-other-image 'm_append "$CI_DEPLOY_REL" "docker create --name=soleur-plugin-seed evil/img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries words beyond'
 kill_row K23f-heredoc-in-bracket-arith 'm_append_lines "$CI_DEPLOY_REL" "x=\$[ 1 <""<ZZ ]" "docker run -d --privileged img" "ZZ"' 'UNPARSEABLE_OPTION: a heredoc opener inside'
 kill_row K23g-create-dash-image 'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed --privileged"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries words beyond'
+# --- a declared member that is MISSING from a tuple: the closed set only refused extras, so the prod start lost the egress-token
+# --- mount and nothing noticed. The ! needles prove the line names the right file and tuple, not a sibling.
+kill_row K24a-prod-no-workspaces-vol 'm_del prod "-v /mnt/data/workspaces:/workspaces"'   'MISSING_DECLARED: volume /mnt/data/workspaces:/workspaces missing from ci-deploy.sh prod' '!canary' '!cloud-init.yml' '#1'
+kill_row K24b-prod-no-plugin-vol     'm_del prod "/app/shared/plugins/soleur:ro"'         'MISSING_DECLARED: volume /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro missing from ci-deploy.sh prod' '!canary' '#1'
+kill_row K24c-prod-no-host-id-env    'm_del prod "-e SOLEUR_HOST_ID"'                     'MISSING_DECLARED: env SOLEUR_HOST_ID missing from ci-deploy.sh prod' '!canary' '#1'
+kill_row K24d-prod-no-second-port    'm_del prod "-p 0.0.0.0:3000:3000"'                  'MISSING_DECLARED: port 0.0.0.0:3000:3000 missing from ci-deploy.sh prod' '!canary' '#1'
+kill_row K25a-prod-no-token-mount    'm_del prod "-v /var/lib/soleur/egress-tokens"'      'MISSING_DECLARED: volume /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens missing from ci-deploy.sh prod' '!canary' '!cloud-init.yml' '#1'
+kill_row K25b-prod-no-reaper-env     'm_del prod "-e SOLEUR_EGRESS_REAPER"'               'MISSING_DECLARED: env SOLEUR_EGRESS_REAPER missing from ci-deploy.sh prod' '!canary' '!cloud-init.yml' '#1'
+kill_row K25c-first-boot-no-token-mount 'm_del first-boot "-v /var/lib/soleur/egress-tokens"' 'MISSING_DECLARED: volume /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens missing from cloud-init.yml first-boot' '!ci-deploy.sh' '#1'
+# the canary neither mounts the token dir nor reaps (ADR-278 canary isolation): a reaper on the canary would revoke live prod tokens
+kill_row K26a-canary-reaper-env      'm_ins canary "-e SOLEUR_EGRESS_REAPER=1"'           'ENV_NAME: SOLEUR_EGRESS_REAPER in ci-deploy.sh canary' '!prod' '!cloud-init.yml' '#1'
+kill_row K26b-canary-token-mount      'm_ins canary "-v /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens"' 'UNKNOWN_OPTION: -v /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens in ci-deploy.sh canary' '!prod' '!cloud-init.yml' '#1'
 kill_row K20i-memory-zero-unlimited 'm_repl prod "--memory \"\$PROD_MEMORY_CAP\"" "--memory 0"' 'POSTURE_VALUE: --memory 0 in ci-deploy.sh prod'
 kill_row K20h-main-file-symlink   'm_symlink "$CI_DEPLOY_REL" /dev/zero'                 'TUPLE_COUNT: cannot read ci-deploy.sh' 'not a regular file'
 
@@ -423,6 +435,7 @@ pass_row P7-comments-and-strings  'm_append "$CI_DEPLOY_REL" "# docker run -d --
 pass_row P8-exempt-create-site    'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed \"\$VERIFIED_REF\" >/dev/null"'
 pass_row P10-if-then-canary       'm_repl canary "docker run -d" "if docker run -d"; m_repl canary "\"\$VERIFIED_REF\"" "\"\$VERIFIED_REF\"; then"'
 pass_row P11-arithmetic-shift-no-docker 'm_append_lines "$CI_DEPLOY_REL" "x=\$(( 1 <<3 ))" "echo done"'
+pass_row P12-token-mount-first-env-long 'm_del prod "-v /var/lib/soleur/egress-tokens"; m_ins_at prod "-v /mnt/data/workspaces:/workspaces" "-v /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens \\"; m_repl prod "-e SOLEUR_EGRESS_REAPER=1" "--env SOLEUR_EGRESS_REAPER=1"'
 pass_row P9-trailing-comment      'm_repl prod "; then" "; then # trailing note"'
 
 # ---------------------------------------------------------------------------------------
@@ -601,6 +614,9 @@ h1_stub classify check_options '[]' \
   K01-prod-cap-add-space K02-first-boot-cap-add-eq K03a-canary-pid-eq K03b-canary-pid-space \
   K04a-prod-systempaths K04b-prod-systempaths-eq K07a-canary-env-path K07b-canary-env-ldpre \
   K08a-splat K10a-apparmor-unconfined K10b-seccomp-unconfined K10f-privileged K10r-volume-root K20i-memory-zero-unlimited
+h1_stub declared check_declared '[]' \
+  K24a-prod-no-workspaces-vol K24b-prod-no-plugin-vol K24c-prod-no-host-id-env K24d-prod-no-second-port \
+  K25a-prod-no-token-mount K25b-prod-no-reaper-env K25c-first-boot-no-token-mount
 h1_stub census check_count '[]' \
   K05-prod-renamed K06-fourth-site-dup K11-heredoc-all K16-missing-cloud-init K20h-main-file-symlink
 h1_stub projection check_projection '[]' \
@@ -624,7 +640,7 @@ if [ "$((PASS + FAIL))" -ne "$ROWS" ]; then
   printf '[FATAL] accounting identity: passes(%s) + fails(%s) != rows(%s) - a verdict was discarded\n' "$PASS" "$FAIL" "$ROWS" >&2
   exit 1
 fi
-MIN_ROWS=199
+MIN_ROWS=216
 if [ "$ROWS" -lt "$MIN_ROWS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s rows ran, floor is %s\n' "$ROWS" "$MIN_ROWS" >&2
   exit 1

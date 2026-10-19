@@ -134,7 +134,7 @@ vendored binary (full record: spec TR7):
 - **Helper cache:** `credentialsttl 30s` — the forwarder's death is the revocation mechanism; file deletion bounds the residual window.
 - **Ambient proxy vars removed from `AGENT_ENV_ALLOWLIST`:** an ambient `HTTP_PROXY` on the dispatcher would otherwise steer every session outside the guard. The `egressProxy` injection is the only sanctioned carrier.
 - **INPUT-side filtering for `soleur-egress0` is deliberately absent** — docker0 shares the same posture (host-local services reachable from containers); a Squid compromise would gain a host dialer on any port. Recorded acceptance, matching the standing container trust model.
-- **Canary isolation:** only the prod container sets `SOLEUR_EGRESS_REAPER=1`; a second consumer of the shared token dir (deploy canary) must never sweep tokens it did not mint — its `/proc` cannot see the prod forwarders.
+- **Canary isolation:** only the prod container sets `SOLEUR_EGRESS_REAPER=1`; the deploy canary neither mounts the shared token dir nor sets the flag, because it must never sweep tokens it did not mint — its `/proc` cannot see the prod forwarders. `lib/docker-run-tuple.py` pins both halves: the prod and first-boot starts must carry the mount and the flag, and the canary must carry neither.
 
 ## Scope notes (review amendments, PR-B)
 

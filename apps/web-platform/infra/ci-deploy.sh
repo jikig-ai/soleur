@@ -4637,6 +4637,15 @@ case "$COMPONENT" in
       # tmpfs /tmp (closes #2473): see canary block above for rationale.
       # Post-GIT_ASKPASS migration, git auth is in $HOME (git-auth.ts) so
       # /tmp no longer needs to be exec-able for git credential helpers.
+      #
+      # Egress session tokens: the host dir /var/lib/soleur/egress-tokens (server.tf
+      # owns it, 1001:1001 mode 0711) is bind-mounted so the per-session egress
+      # forwarder can create its token file; without the mount the forwarder's mkdir
+      # fails EACCES and an entitled web-egress session has zero egress. The fresh-host
+      # start in cloud-init.yml carries the same mount and flag. SOLEUR_EGRESS_REAPER=1
+      # is PROD ONLY (ADR-278 canary isolation): the canary above gets neither, because
+      # its /proc cannot see the prod forwarders and a canary reaper would revoke live
+      # tokens. lib/docker-run-tuple.py pins both halves.
       if docker run -d \
         --name soleur-web-platform \
         --log-driver journald \
@@ -4653,8 +4662,10 @@ case "$COMPONENT" in
         -e CRON_WORKSPACE_ROOT=/workspaces \
         -e SOLEUR_HOST_ID="$HOST_ID" \
         -e NODE_OPTIONS="$PROD_NODE_OPTIONS" \
+        -e SOLEUR_EGRESS_REAPER=1 \
         -v /mnt/data/workspaces:/workspaces \
         -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
+        -v /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens \
         -p 0.0.0.0:80:3000 \
         -p 0.0.0.0:3000:3000 \
         "$VERIFIED_REF"; then

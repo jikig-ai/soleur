@@ -23,7 +23,7 @@ optionally, .github/workflows). The layouts <root>/infra and <root> itself (the 
 too. It defaults to the repo root derived from this file's location.
 
 Tokens: UNKNOWN_OPTION, POSTURE_VALUE, TUPLE_COUNT, POSTURE_DIVERGENCE, ENV_NAME, UNPARSEABLE_OPTION,
-UNCLASSIFIED_DOCKER_RUN, TRAILING_ARGS, DUPLICATE_OPTION.
+UNCLASSIFIED_DOCKER_RUN, TRAILING_ARGS, DUPLICATE_OPTION, MISSING_DECLARED.
 
 What this proves and what it does not: the closed set lives here and the tuples live in the files this parses, and one
 diff can edit both, so a green check is CONSISTENCY between the two, not INTEGRITY of the posture. What outside the
@@ -70,6 +70,9 @@ _COMMON_ENV = {
     "SOLEUR_HOST_ID": {"$HOST_ID"},
 }
 _VOLS = {"/mnt/data/workspaces:/workspaces", "/mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro"}
+# The host session-token dir (server.tf: 1001:1001, 0711). Prod and first-boot mount it and set SOLEUR_EGRESS_REAPER;
+# the canary neither mounts it nor reaps (ADR-278 canary isolation: its /proc cannot see prod forwarders).
+_EGRESS_TOKENS_VOL = "/var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens"
 
 # tuple name -> declared spec. `file` is the basename of the file the tuple lives in.
 TUPLES = {
@@ -82,14 +85,14 @@ TUPLES = {
     "prod": {
         "file": "ci-deploy.sh", "name": "soleur-web-platform", "restart": {"unless-stopped"},
         "mem_exprs": {"$PROD_MEMORY_CAP"}, "env_files": {"$ENV_FILE"}, "images": {"$VERIFIED_REF"},
-        "env": dict(_COMMON_ENV, NODE_OPTIONS={"$PROD_NODE_OPTIONS"}),
-        "volumes": set(_VOLS), "ports": {"0.0.0.0:80:3000", "0.0.0.0:3000:3000"},
+        "env": dict(_COMMON_ENV, NODE_OPTIONS={"$PROD_NODE_OPTIONS"}, SOLEUR_EGRESS_REAPER={"1"}),
+        "volumes": _VOLS | {_EGRESS_TOKENS_VOL}, "ports": {"0.0.0.0:80:3000", "0.0.0.0:3000:3000"},
     },
     "first-boot": {
         "file": "cloud-init.yml", "name": "soleur-web-platform", "restart": {"unless-stopped"},
         "mem_exprs": set(), "env_files": {"$TMPENV"}, "images": {"$(cat /run/soleur-image-ref)"},
         "env": {"INNGEST_BASE_URL": {"http://10.0.1.40:8288"}, "SOLEUR_EGRESS_REAPER": {"1"}},
-        "volumes": _VOLS | {"/var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens"},
+        "volumes": _VOLS | {_EGRESS_TOKENS_VOL},
         "ports": {"0.0.0.0:80:3000", "0.0.0.0:3000:3000"},
     },
 }
@@ -433,6 +436,9 @@ class Record:
         self.seccomp = []
         self.tmpfs = []
         self.init = False
+        self.volumes = set()      # the -v, -e NAME and -p values the tuple actually carries (check_declared)
+        self.env = set()
+        self.ports = set()
 
 
 def walk_options(site, spec, tuple_name):
@@ -579,15 +585,18 @@ def check_value(name, val, spec, rec, seen, env_seen, v):
         if ename in env_seen:
             v("DUPLICATE_OPTION", "-e %s" % ename)
         env_seen.add(ename)
+        rec.env.add(ename)
         if evalue not in spec["env"][ename]:
             if has_exp(evalue):
                 v("UNPARSEABLE_OPTION", "-e %s=%s" % (ename, evalue))
             else:
                 v("ENV_NAME", "%s value '%s'" % (ename, evalue))
     elif name == "-v":
+        rec.volumes.add(val)
         if val not in spec["volumes"]:
             bad("UNKNOWN_OPTION", "-v %s" % val)
     elif name == "-p":
+        rec.ports.add(val)
         if val not in spec["ports"]:
             bad("UNKNOWN_OPTION", "-p %s" % val)
 
@@ -597,6 +606,22 @@ def check_options(app_sites):
     out = []
     for s in app_sites:
         out.extend(s.option_viols)
+    return out
+
+
+def check_declared(app_sites):
+    """Every volume, env name and port a tuple DECLARES must be present on its site. check_options only refuses
+    members outside the declared set, so a deleted member (the egress-token mount on the prod start) passed."""
+    out = []
+    for s in app_sites:
+        if s.toks is None:        # tokenization failed: UNPARSEABLE_OPTION already reds it, a second line is noise
+            continue
+        spec = TUPLES[s.tuple]
+        for kind, declared, got in (("volume", spec["volumes"], s.rec.volumes),
+                                    ("env", set(spec["env"]), s.rec.env),
+                                    ("port", spec["ports"], s.rec.ports)):
+            for member in sorted(declared - got):
+                out.append("FAIL MISSING_DECLARED: %s %s missing from %s %s (declared in TUPLES)" % (kind, member, s.file, s.tuple))
     return out
 
 
@@ -894,6 +919,7 @@ def run_checks(root):
     viols.extend(scan_viols)
     viols.extend(check_count(app_sites, unreadable))
     viols.extend(check_options(app_sites))
+    viols.extend(check_declared(app_sites))
     viols.extend(check_projection(app_sites))
     viols.extend(check_census_extra(extra))
     viols.extend(node_viols)
@@ -913,6 +939,7 @@ HINTS = {
     "TRAILING_ARGS": "nothing may follow the image except `; then`",
     "TUPLE_COUNT": "a start site was added, moved or renamed: declare it together with the site and keep the three-tuple expectation; never lower the count (when the line says `cannot read`, a scanned file is missing, unreadable or not a regular file: restore it)",
     "UNCLASSIFIED_DOCKER_RUN": "declare it as an app tuple, or add a NAMED non-app exemption (EXEMPT_RUN / EXEMPT_CREATE) ONLY with a security review: an exempt site is closed-world too (a create is exactly `--name NAME IMAGE`)",
+    "MISSING_DECLARED": "restore the named volume, env or port on the tuple, or remove it from TUPLES in the same commit with the reason (a tuple that drops a declared member silently loses that behaviour)",
     "POSTURE_DIVERGENCE": "restore the apparmor, seccomp and tmpfs options on the named tuple",
     "UNPARSEABLE_OPTION": "make the option literal; a variable, substitution or ambiguous heredoc opener is refused, and a file that cannot be read cannot be shown free of a start site",
 }
