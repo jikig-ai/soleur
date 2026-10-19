@@ -2289,3 +2289,31 @@
   rules, two Python files, zero findings and no JSON errors. Its earlier parallel
   engine failed allocating io_uring memory; `--jobs 1` is the verified workaround.
   Final test refinement review and replacement-manifest review remain pending.
+
+### Classified observation and bounded token framing — 2026-10-20
+
+- Final refined-test, CTO conformance and actual-manifest reviews passed source
+  `deb0f086bc`. The operator freshly approved its exact timeout-wrapped command;
+  it ran once and consumed the attempt. Separate evidence review passed receipt
+  `6d70e81f2b4e11a6d1c74dceb3063e3d274dce22a8281315291be5257b5c0ad8`.
+  One token HTTP-200 response failed `content_length_count`; absence versus
+  duplication is unknown. No application token body, Config request, Location,
+  destination request or layer fetch occurred. Exact evidence is recorded in
+  `redirect-classified-manifest-review-deb0f086-2026-10-19.md`.
+- Ruled by CTO agent: source-only bounded length/chunked/clean-TLS-EOF token
+  compatibility, with duplicate and ambiguous framing still refused. Complete
+  constraints, tests, references and dissent are in
+  `prebuild-acquisition-2026-10-16.md`, “Bounded token framing”.
+- Synthesized framing tests were written first: 20 failures and one error on
+  the old reader. Focused parser tests now pass 20/20. Full discovery initially
+  reproduced the resource-cleanup fixture's BrokenPipeError; tracked #10621
+  before repairing its bounded request coalescing and exception cleanup.
+  That fixture regression failed first, then its suite passed 13/13. Full offline
+  discovery now passes 329/329 (`RC=0`). Production proxy code is unchanged.
+- Ruff passes with 44 baselined findings across 115 files. Single-worker Semgrep
+  passes: 200 applicable rules, all three changed Python files, zero findings
+  and no JSON errors. Source parser/fixture reviews and fresh bindings plus
+  actual-manifest review remain required before another exact-action approval.
+- Both prior diagnostic approvals are consumed. Build, Docker/SQL, provider/
+  browser/account, recovery, qualification, Web/CLO, promotion and ship remain
+  held; hosted auth BLOCKED, alternate route PENDING, PR draft and disarmed.

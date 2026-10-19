@@ -26,6 +26,9 @@ REGISTRY = metadata.REGISTRY
 MAX_LOCATION = 8192
 MAX_HEADER_COUNT = 128
 MAX_HEADER_BYTES = 32768
+MAX_TOKEN_FRAMING_BYTES = 8192
+MAX_TOKEN_LINE_BYTES = 128
+MAX_TOKEN_CHUNKS = 128
 TOKEN_HEADER_FAILURES = ('content_type_count', 'content_length_count', 'transfer_encoding',
                          'content_encoding', 'content_length_syntax', 'media_type')
 
@@ -150,6 +153,7 @@ class DeadlineWire:
         self.connection, self.clock, self.deadline = connection, clock, deadline
         self.maximum_header_bytes = maximum_header_bytes
         self.last = clock()
+        self.http_version = None
 
     def remaining(self):
         now = self.clock()
@@ -189,7 +193,7 @@ class DeadlineWire:
                 raise metadata.BoundaryFailure('unexpected_failure')
             view = view[sent:]
 
-    def receive(self, amount):
+    def receive(self, amount, *, allow_eof=False):
         while True:
             self.remaining()
             try:
@@ -200,10 +204,12 @@ class DeadlineWire:
             except ssl.SSLWantWriteError:
                 self.wait(writing=True)
                 continue
+            except ssl.SSLZeroReturnError:
+                value = b''
             except Exception:
                 raise metadata.BoundaryFailure('unexpected_failure') from None
             self.remaining()
-            if type(value) is not bytes or not value:
+            if type(value) is not bytes or len(value) > amount or not value and not allow_eof:
                 raise metadata.BoundaryFailure('unexpected_failure')
             return value
 
@@ -219,6 +225,7 @@ class DeadlineWire:
         status_line = re.fullmatch(rb'HTTP/1\.[01] ([1-5][0-9]{2})(?: [\x20-\x7e]*)?', lines[0])
         if status_line is None or len(lines) - 1 > MAX_HEADER_COUNT:
             raise metadata.BoundaryFailure('header_shape')
+        self.http_version = lines[0].split(b' ', 1)[0]
         pairs = []
         for line in lines[1:]:
             name, separator, value = line.partition(b':')
@@ -243,6 +250,57 @@ class DeadlineWire:
             remaining -= len(value)
         return b''.join(chunks)
 
+    def read_to_eof(self, maximum_bytes):
+        chunks, count = [], 0
+        while True:
+            # One extra byte distinguishes an exact-limit clean EOF from overflow.
+            value = self.receive(min(8192, maximum_bytes + 1 - count), allow_eof=True)
+            if not value:
+                return b''.join(chunks)
+            count += len(value)
+            if count > maximum_bytes:
+                raise metadata.BoundaryFailure('body_size')
+            chunks.append(value)
+
+    def read_chunked(self, maximum_bytes):
+        framing_bytes = 0
+
+        def framing_exact(amount):
+            nonlocal framing_bytes
+            if framing_bytes + amount > MAX_TOKEN_FRAMING_BYTES:
+                raise metadata.BoundaryFailure('body_encoding')
+            value = self.read_exact(amount)
+            framing_bytes += amount
+            return value
+
+        def line():
+            value = bytearray()
+            while not value.endswith(b'\r\n'):
+                if len(value) >= MAX_TOKEN_LINE_BYTES:
+                    raise metadata.BoundaryFailure('body_encoding')
+                value.extend(framing_exact(1))
+            return bytes(value[:-2])
+
+        chunks, count, decoded_bytes = [], 0, 0
+        while True:
+            size_line = line()
+            if not re.fullmatch(rb'[0-9a-fA-F]{1,8}', size_line):
+                raise metadata.BoundaryFailure('body_encoding')
+            size = int(size_line, 16)
+            if size == 0:
+                if line() != b'':
+                    raise metadata.BoundaryFailure('body_encoding')
+                return b''.join(chunks)
+            count += 1
+            if count > MAX_TOKEN_CHUNKS:
+                raise metadata.BoundaryFailure('body_encoding')
+            if decoded_bytes + size > maximum_bytes:
+                raise metadata.BoundaryFailure('body_size')
+            chunks.append(self.read_exact(size))
+            decoded_bytes += size
+            if framing_exact(2) != b'\r\n':
+                raise metadata.BoundaryFailure('body_encoding')
+
 
 class TokenHeaderFailure(metadata.BoundaryFailure):
     def __init__(self, category):
@@ -260,20 +318,23 @@ def checked_body_headers(names, maximum_bytes, *, classify_token):
     content_type, content_length = names.get('content-type', []), names.get('content-length', [])
     if len(content_type) != 1:
         refuse('content_type_count')
-    if len(content_length) != 1:
+    if len(content_length) != 1 and not (classify_token and len(content_length) == 0):
         refuse('content_length_count')
-    if 'transfer-encoding' in names:
+    transfer = names.get('transfer-encoding', [])
+    if 'transfer-encoding' in names and (not classify_token or content_length or
+            len(transfer) != 1 or transfer[0].lower() != 'chunked'):
         refuse('transfer_encoding')
     if 'content-encoding' in names and names['content-encoding'] != ['identity']:
         refuse('content_encoding')
-    if not re.fullmatch(r'[0-9]{1,8}', content_length[0]):
+    if content_length and not re.fullmatch(r'[0-9]{1,8}', content_length[0]):
         refuse('content_length_syntax')
-    size = int(content_length[0])
-    if size > maximum_bytes:
+    size = int(content_length[0]) if content_length else None
+    if size is not None and size > maximum_bytes:
         raise metadata.BoundaryFailure('body_size', 200)
     if content_type[0].split(';', 1)[0].strip().lower() != 'application/json':
         refuse('media_type')
-    return size, content_type[0]
+    mode = 'chunked' if transfer else 'eof' if size is None else 'length'
+    return mode, size, content_type[0]
 
 
 class HTTPSAdapter:
@@ -325,7 +386,7 @@ class HTTPSAdapter:
                     raise metadata.BoundaryFailure('unexpected_failure')
             wire.remaining()
             tls = self.tls.context.wrap_socket(connection, server_hostname=target.hostname,
-                                               do_handshake_on_connect=False)
+                                               do_handshake_on_connect=False, suppress_ragged_eofs=False)
             tls.setblocking(False)
             wire.connection = tls
             while True:
@@ -354,9 +415,19 @@ class HTTPSAdapter:
                 if (len(locations) != 1 or len(locations[0].encode('utf-8')) > MAX_LOCATION):
                     raise metadata.BoundaryFailure('header_shape', status)
                 return status, [('Location', locations[0])], b''
-            size, content_type = checked_body_headers(names, maximum_bytes,
+            mode, size, content_type = checked_body_headers(names, maximum_bytes,
                 classify_token=url == TOKEN_URL)
-            return status, content_type, wire.read_exact(size)
+            if mode == 'length':
+                body = wire.read_exact(size)
+            else:
+                require(url == TOKEN_URL and status == 200, 'Only the token endpoint admits streamed bodies')
+                if mode == 'chunked':
+                    if wire.http_version != b'HTTP/1.1':
+                        raise TokenHeaderFailure('transfer_encoding')
+                    body = wire.read_chunked(maximum_bytes)
+                else:
+                    body = wire.read_to_eof(maximum_bytes)
+            return status, content_type, body
         except metadata.BoundaryFailure:
             raise
         except Exception:

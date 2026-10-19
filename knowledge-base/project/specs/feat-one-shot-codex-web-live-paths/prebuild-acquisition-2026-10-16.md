@@ -720,3 +720,42 @@ Source-only acceptance chain:
 This source-only correction has no production observability surface: local fixed
 receipts report the failure. No network action, build, Docker/SQL/provider/browser/
 account operation, recovery, qualification, Web/CLO matrix or ship gate is released.
+
+### Bounded token framing — 2026-10-20
+
+The separately approved classified attempt at `deb0f086` stopped before token
+body reading with `content_length_count`; Config GET was not attempted. This
+does not distinguish missing versus duplicate Content-Length or establish any
+Transfer-Encoding. Its marker and approval are consumed.
+
+Ruled by CTO agent, 2026-10-20: implement bounded framing solely for the fixed
+token endpoint's HTTP-200 response. Support a single valid Content-Length,
+one chunked Transfer-Encoding with no Content-Length, or clean TLS EOF when
+neither framing header exists. Continue rejecting duplicate Content-Length,
+combined framing headers, duplicate/unsupported transfer coding, invalid length,
+unsupported content encoding and non-JSON media before body reading. Preserve
+the 16,384-byte decoded-body ceiling and existing absolute deadlines. Config
+body reading must remain impossible in every status/framing combination.
+
+Bound chunk count, size-line length, aggregate framing bytes and trailers;
+reject extensions and nonempty trailers. Clean EOF completes only close-delimited
+mode; premature/ragged EOF must fail. Explicitly disable Python's ragged-EOF
+suppression. These modes and ambiguity handling follow
+[RFC 9112 framing](https://www.rfc-editor.org/rfc/rfc9112.html#section-6.3);
+the TLS setting follows the
+[Python SSL API](https://docs.python.org/3.14/library/ssl.html#ssl.SSLContext.wrap_socket).
+HTTP/1.0 responses carrying Transfer-Encoding remain refused.
+
+Acceptance tests, written before implementation: fragmented/empty and exact-limit
+bodies in all three modes; overflow; duplicate/ambiguous/unsupported framing;
+malformed/truncated/oversized chunks; extensions/trailers; premature and ragged
+EOF; never-ending/trickling reads; TLS read/write waits and absolute deadlines;
+socket cleanup; constant-only receipts; full adapter-to-collector success; and
+Config zero-body-read behavior across statuses and framing choices.
+
+After offline suites and independent engineering/security parser review, prepare
+fresh bindings and an unused manifest for independent actual-manifest review
+and fresh exact-command approval. All historical evidence and broader holds
+remain. Dissent: this compatibility change may not resolve the observed refusal
+if the response contained duplicate Content-Length; synthetic tests cannot
+establish the historical framing or destination authority.

@@ -2,6 +2,7 @@
 import copy
 import errno
 import select
+import ssl
 import unittest
 from unittest.mock import patch
 
@@ -106,6 +107,44 @@ class RedirectDiagnostic(unittest.TestCase):
         return diagnostic.RedirectDiagnostic(self.manifest, self.transport, self.gate,
             manifest_sha256=sha(canonical(self.manifest)), clock=lambda: self.now,
             output_binding=self.output)
+
+    def request_raw(self, raw, *, action_index=0, fragment=3, ragged=False, step=0):
+        class FramedSocket(FakeTLSSocket):
+            def recv(self, amount):
+                if ragged and not self.payload:
+                    raise ssl.SSLEOFError()
+                return super().recv(min(amount, fragment))
+        wire = FramedSocket(raw)
+        wire.step = step
+        with patch.object(diagnostic.metadata.ssl, 'SSLContext') as contexts, \
+                patch.object(diagnostic.socket, 'getaddrinfo', return_value=[
+                    (diagnostic.socket.AF_INET, diagnostic.socket.SOCK_STREAM, 6, '', ('203.0.113.9', 443))]), \
+                patch.object(diagnostic.socket, 'socket') as sockets:
+            contexts.return_value.wrap_socket.return_value = wire
+            sockets.return_value.connect_ex.return_value = 0
+            adapter = diagnostic.HTTPSAdapter(self.manifest, fixtures.CA,
+                manifest_sha256=sha(canonical(self.manifest)), clock=wire.clock)
+            action = self.manifest['actions'][action_index]
+            headers = dict(action['headers'])
+            if action['bearer']:
+                headers['Authorization'] = 'Bearer ' + fixtures.TOKEN
+            try:
+                returned = adapter.request(action['url'], headers, timeout=10,
+                    maximum_bytes=action['maximum_bytes'])
+                error = None
+            except diagnostic.metadata.BoundaryFailure as failure:
+                returned, error = None, failure
+            return wire, returned, error, contexts.return_value.wrap_socket.call_args.kwargs
+
+    @staticmethod
+    def token_wire(body, mode, *, declared=None):
+        headers = b'HTTP/1.1 200 Synthetic\r\nContent-Type: application/json\r\n'
+        if mode == 'length':
+            headers += b'Content-Length: ' + str(len(body) if declared is None else declared).encode() + b'\r\n'
+        elif mode == 'chunked':
+            headers += b'Transfer-Encoding: chunked\r\n'
+            body = ((format(len(body), 'x').encode() + b'\r\n' + body + b'\r\n') if body else b'') + b'0\r\n\r\n'
+        return headers + b'\r\n' + body
 
     def test_exact_two_requests_project_normalized_route_and_hashes_only(self):
         collector = self.collector()
@@ -253,7 +292,6 @@ class RedirectDiagnostic(unittest.TestCase):
         cases = [
             ([valid[1]], 'content_type_count'),
             ([valid[0], *valid], 'content_type_count'),
-            ([valid[0]], 'content_length_count'),
             ([*valid, valid[1]], 'content_length_count'),
             ([*valid, ('Transfer-Encoding', 'chunked')], 'transfer_encoding'),
             ([*valid, ('Content-Encoding', 'SYNTHESIZED_PRIVATE_ENCODING')], 'content_encoding'),
@@ -262,7 +300,6 @@ class RedirectDiagnostic(unittest.TestCase):
             ([valid[0], ('Content-Length', '123456789')], 'content_length_syntax'),
             ([('Content-Type', 'text/SYNTHESIZED_PRIVATE_MEDIA'), valid[1]], 'media_type'),
             ([], 'content_type_count'),
-            ([valid[0], ('Transfer-Encoding', 'chunked')], 'content_length_count'),
             ([*valid, ('Transfer-Encoding', 'chunked'), ('Content-Encoding', 'gzip')], 'transfer_encoding'),
             ([valid[0], ('Content-Length', 'bad'), ('Content-Encoding', 'gzip')], 'content_encoding')]
         for headers, category in cases:
@@ -316,6 +353,137 @@ class RedirectDiagnostic(unittest.TestCase):
             self.assertNotIn(b'SYNTHESIZED_PRIVATE', canonical(receipt))
         with self.assertRaises(Refused):
             diagnostic.TokenHeaderFailure('SYNTHESIZED_PRIVATE')
+
+    def test_token_framing_accepts_fragmented_empty_and_exact_limit_bodies(self):
+        for mode in ('length', 'chunked', 'eof'):
+            for body in (b'', b'{}', b'a' * 16384):
+                with self.subTest(mode=mode, size=len(body)):
+                    wire, returned, error, options = self.request_raw(self.token_wire(body, mode))
+                    self.assertIsNone(error)
+                    self.assertEqual(returned, (200, 'application/json', body))
+                    self.assertTrue(wire.closed)
+                    self.assertIs(options.get('suppress_ragged_eofs'), False)
+
+    def test_token_framing_overflow_and_premature_or_ragged_eof_are_refused(self):
+        for mode in ('length', 'chunked', 'eof'):
+            with self.subTest(mode=mode, case='overflow'):
+                wire, _, error, _ = self.request_raw(self.token_wire(b'a' * 16385, mode))
+                self.assertIsNotNone(error)
+                self.assertEqual(error.reason, 'body_size')
+                self.assertTrue(wire.closed)
+        for mode, body in [('length', self.token_wire(b'{}', 'length', declared=3)),
+                           ('chunked', self.token_wire(b'{}', 'chunked')[:-5]),
+                           ('eof', self.token_wire(b'{}', 'eof'))]:
+            for ragged in (False, True):
+                if mode == 'eof' and not ragged:
+                    continue
+                with self.subTest(mode=mode, ragged=ragged):
+                    wire, _, error, _ = self.request_raw(body, ragged=ragged)
+                    self.assertIsNotNone(error)
+                    self.assertTrue(wire.closed)
+
+    def test_chunk_framing_has_independent_size_line_count_and_trailer_bounds(self):
+        prefix = b'HTTP/1.1 200 Synthetic\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n'
+        invalid = [b'X\r\n', b'1;private=synthetic\r\na\r\n0\r\n\r\n',
+                   b'1\r\naXX0\r\n\r\n', b'0\r\nX-Private: synthetic\r\n\r\n',
+                   b'1' * 129 + b'\r\n', b'1\r\na\r\n' * 129 + b'0\r\n\r\n']
+        for framing in invalid:
+            with self.subTest(framing_bytes=len(framing)):
+                wire, _, error, _ = self.request_raw(prefix + framing)
+                self.assertIsNotNone(error)
+                self.assertEqual(error.reason, 'body_encoding')
+                self.assertTrue(wire.closed)
+                if framing == b'1' * 129 + b'\r\n':
+                    self.assertGreater(len(wire.payload), 0)
+        framing = b'00000001\r\na\r\n' * 4 + b'0\r\n\r\n'
+        with patch.object(diagnostic, 'MAX_TOKEN_FRAMING_BYTES', 32, create=True):
+            _, _, error, _ = self.request_raw(prefix + framing)
+        self.assertIsNotNone(error)
+        self.assertEqual(error.reason, 'body_encoding')
+
+    def test_token_framing_rejects_duplicate_ambiguous_or_unsupported_headers_before_body(self):
+        cases = [b'Content-Length: 2\r\nContent-Length: 2\r\n',
+                 b'Content-Length: 2\r\nTransfer-Encoding: chunked\r\n',
+                 b'Transfer-Encoding: chunked\r\nTransfer-Encoding: chunked\r\n',
+                 b'Transfer-Encoding: gzip\r\n', b'Transfer-Encoding: chunked, chunked\r\n',
+                 b'Content-Encoding: gzip\r\n', b'Content-Length: bad\r\n']
+        body = b'SYNTHESIZED_PRIVATE_TOKEN_BODY'
+        for headers in cases:
+            wire, _, error, _ = self.request_raw(
+                b'HTTP/1.1 200 Synthetic\r\nContent-Type: application/json\r\n' + headers + b'\r\n' + body)
+            self.assertIsNotNone(error)
+            self.assertEqual(error.reason, 'header_shape')
+            self.assertEqual(wire.payload.tobytes(), body)
+        wire, _, error, _ = self.request_raw(self.token_wire(b'{}', 'chunked').replace(b'HTTP/1.1', b'HTTP/1.0'))
+        self.assertIsNotNone(error)
+        self.assertEqual(error.category, 'transfer_encoding')
+        self.assertEqual(wire.payload.tobytes(), b'2\r\n{}\r\n0\r\n\r\n')
+
+    def test_config_status_and_framing_never_enable_body_reading(self):
+        body = b'SYNTHESIZED_PRIVATE_CONFIG_BODY'
+        for status in (200, 307, 302, 401, 500):
+            for framing in (b'Content-Length: 0\r\n', b'Transfer-Encoding: chunked\r\n', b'',
+                            b'Content-Length: 0\r\nContent-Length: 0\r\n', b'Transfer-Encoding: gzip\r\n',
+                            b'Content-Length: 2\r\nTransfer-Encoding: chunked\r\n'):
+                raw = (b'HTTP/1.1 ' + str(status).encode() + b' Synthetic\r\n' +
+                       b'Content-Type: application/json\r\nLocation: ' + LOCATION.encode() + b'\r\n' + framing + b'\r\n' + body)
+                with self.subTest(status=status, framing_bytes=len(framing)):
+                    wire, _, _, _ = self.request_raw(raw, action_index=1)
+                    self.assertEqual(wire.payload.tobytes(), body)
+                    self.assertTrue(wire.closed)
+
+    def test_body_readers_keep_absolute_deadlines_and_tls_wait_directions(self):
+        for mode in ('length', 'chunked', 'eof'):
+            wire, _, error, _ = self.request_raw(self.token_wire(b'a' * 1000, mode), step=0.04)
+            self.assertIsNotNone(error)
+            self.assertEqual(error.reason, 'deadline')
+            self.assertTrue(wire.closed)
+        for exception, writing in ((ssl.SSLWantReadError(), False), (ssl.SSLWantWriteError(), True)):
+            socket = FakeTLSSocket(b'a')
+            with patch.object(socket, 'recv', side_effect=[exception, b'a']), \
+                    patch.object(select, 'select', side_effect=lambda r, w, x, timeout: (r, w, [])) as waits:
+                wire = diagnostic.DeadlineWire(socket, clock=socket.clock, deadline=socket.clock.now + 10)
+                self.assertEqual(wire.read_exact(1), b'a')
+                self.assertEqual(bool(waits.call_args.args[1]), writing)
+
+    def test_nonterminating_eof_and_chunk_streams_hit_the_absolute_deadline(self):
+        for mode, pattern in [('eof', b'a'), ('chunked', b'1\r\na\r\n')]:
+            class EndlessSocket(FakeTLSSocket):
+                def recv(self, amount):
+                    if not self.payload:
+                        self.payload = memoryview(pattern)
+                    return super().recv(amount)
+            socket = EndlessSocket(pattern)
+            socket.step = 0.05
+            wire = diagnostic.DeadlineWire(socket, clock=socket.clock, deadline=socket.clock.now + 1)
+            with self.subTest(mode=mode), self.assertRaises(diagnostic.metadata.BoundaryFailure) as raised:
+                if mode == 'eof':
+                    wire.read_to_eof(16384)
+                else:
+                    wire.read_chunked(16384)
+            self.assertEqual(raised.exception.reason, 'deadline')
+
+    def test_chunked_token_reaches_collector_without_retaining_wire_values(self):
+        payload = canonical({'token': fixtures.TOKEN})
+        wires = [FakeTLSSocket(self.token_wire(payload, 'chunked')),
+                 FakeTLSSocket(b'HTTP/1.1 307 Synthetic\r\nLocation: ' + LOCATION.encode() +
+                               b'\r\n\r\nSYNTHESIZED_PRIVATE_CONFIG_BODY')]
+        with patch.object(diagnostic.metadata.ssl, 'SSLContext') as contexts, \
+                patch.object(diagnostic.socket, 'getaddrinfo', return_value=[
+                    (diagnostic.socket.AF_INET, diagnostic.socket.SOCK_STREAM, 6, '', ('203.0.113.9', 443))]), \
+                patch.object(diagnostic.socket, 'socket') as sockets:
+            contexts.return_value.wrap_socket.side_effect = wires
+            sockets.return_value.connect_ex.return_value = 0
+            adapter = diagnostic.HTTPSAdapter(self.manifest, fixtures.CA,
+                manifest_sha256=sha(canonical(self.manifest)))
+            self.transport.request.side_effect = adapter.request
+            receipt = self.collector().collect()
+        self.assertEqual(receipt['status'], 'redirect-headers-observed')
+        self.assertEqual(receipt['request_count'], 2)
+        self.assertNotIn(fixtures.TOKEN.encode(), canonical(receipt))
+        self.assertNotIn(b'SYNTHESIZED_PRIVATE', canonical(receipt))
+        self.assertEqual(wires[1].payload.tobytes(), b'SYNTHESIZED_PRIVATE_CONFIG_BODY')
+        self.assertTrue(all(wire.closed for wire in wires))
 
     def test_platform_bytes_require_raw_digest_and_exact_config_descriptor(self):
         self.assertEqual(diagnostic.verified_platform(fixtures.PLATFORM, fixtures.IMAGE),

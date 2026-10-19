@@ -1,10 +1,12 @@
 """Hostile resource ownership responses at a fake private Unix backend only."""
+import http.client
 import http.server
 import json
 from pathlib import Path
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from api_policy import Policy
 from fixture_roles import fixture_profiles, fixture_image
 from api_proxy import Proxy, UnixHTTPServer, UnixConnection
@@ -73,17 +75,54 @@ class ResourceTransport(unittest.TestCase):
 
     def request(self, method, path, body=None):
         connection = UnixConnection(self.proxy.path)
-        connection.request(method, path, json.dumps(body).encode() if body else None)
-        response = connection.getresponse()
-        status = response.status
-        response.read()
-        connection.close()
-        return status
+        response = None
+        try:
+            payload = json.dumps(body).encode() if body else b''
+            # api_proxy.py › Proxy.handle() can refuse before reading a denied body.
+            # Coalesce this small synthetic request so its body is already queued.
+            request = (method + ' ' + path + ' HTTP/1.1\r\nHost: fixture\r\nContent-Length: ' +
+                       str(len(payload)) + '\r\nConnection: close\r\n\r\n').encode() + payload
+            self.assertLessEqual(len(request), 4096)
+            connection.connect()
+            connection.sock.sendall(request)
+            response = http.client.HTTPResponse(connection.sock, method=method)
+            response.begin()
+            response.read()
+            return response.status
+        finally:
+            if response is not None:
+                response.close()
+            connection.close()
 
     def create(self, kind, name):
         return self.request('POST', '/' + kind + '/create', {
             'Name': name, 'Labels': {'com.supabase.cli.project': 'fixture'},
         })
+
+    def test_fixture_request_coalesces_body_and_closes_on_response_or_send_failure(self):
+        for failure_stage in (None, 'send', 'response'):
+            with self.subTest(failure_stage=failure_stage), patch(__name__ + '.UnixConnection') as connections, \
+                    patch('http.client.HTTPResponse') as responses:
+                connection = connections.return_value
+                connection.getresponse.return_value.status = 403
+                responses.return_value.status = 403
+                if failure_stage == 'send':
+                    connection.sock.sendall.side_effect = RuntimeError('synthetic send failure')
+                elif failure_stage == 'response':
+                    responses.return_value.begin.side_effect = RuntimeError('synthetic response failure')
+                if failure_stage:
+                    with self.assertRaises(RuntimeError):
+                        self.request('POST', '/networks/create', {'Name': 'fixture-internal'})
+                else:
+                    self.assertEqual(self.request('POST', '/networks/create', {'Name': 'fixture-internal'}), 403)
+                connection.sock.sendall.assert_called_once()
+                header, body = connection.sock.sendall.call_args.args[0].split(b'\r\n\r\n', 1)
+                self.assertEqual(json.loads(body), {'Name': 'fixture-internal'})
+                self.assertIn(b'Content-Length: ' + str(len(body)).encode(), header)
+                connection.close.assert_called_once()
+                connection.request.assert_not_called()
+                if failure_stage != 'send':
+                    responses.return_value.close.assert_called_once()
 
     def test_reserved_volume_delete_never_reaches_backend(self):
         self.assertEqual(self.request('DELETE', '/volumes/' + VOLUME), 403)
