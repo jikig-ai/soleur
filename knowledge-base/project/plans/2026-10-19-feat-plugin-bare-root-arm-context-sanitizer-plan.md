@@ -199,13 +199,19 @@ Three functions (pipe filters, stdin → stdout; all `LC_ALL=C`):
 
 | Function | `tr -d` set | Then | For sites that… |
 |---|---|---|---|
-| `soleur_ctx_sanitize` | `'\000-\037\177'` | `sed -e 's/\xc2\x85//g' -e 's/\xe2\x80\xa8//g' -e 's/\xe2\x80\xa9//g'` | single-line fields |
+| `soleur_ctx_sanitize` | `'\000-\037\177'` | `sed -e $'s/\xc2\x85//g' -e $'s/\xe2\x80\xa8//g' -e $'s/\xe2\x80\xa9//g'` | single-line fields |
 | `soleur_ctx_sanitize_lines` | `'\000-\010\013-\037\177'` | same sed | multi-line blocks (keep `\t` `\n`) |
 | `soleur_ctx_sanitize_nl` | `'\000-\011\013-\037\177'` | same sed | keep `\n` only (strips `\t` too) |
 
 NEL (`\xc2\x85`) is included because it is the same line-break class and two
 existing sites already strip it; adding it everywhere is strictly stronger.
-`\177` is octal — `tr` does not interpret `\xHH` (measured learning).
+`\177` is octal — `tr` does not interpret `\xHH` (measured learning). The sed
+patterns MUST use `$'…'` ANSI-C quoting (the `prod-write-defer-gate.sh:404`
+form), never a bare `'s/\x…'` — BSD sed on macOS does not interpret `\xHH`
+(a bare-quoted pattern silently matches literal characters and strips
+nothing), and this lib's consumers run on customer machines. The lib test's
+byte fixtures are what pin this; a grep-level pin (`grep -n "\$'s/"` on both
+copies) belongs in `context-sanitize.test.sh`.
 
 **Adoption mechanics per consumer:** source the copy if readable
 (`[[ -r "$_ctx_lib" ]] && . "$_ctx_lib"`); if the function is still undefined
@@ -313,8 +319,9 @@ Every `tr -d` site in `.claude/hooks/` and `plugins/soleur/` classified.
 **Adopt-equivalent (not a `tr` site, same boundary):**
 
 - `.claude/hooks/session-rules-loader.sh:371-373` — jq `gsub("[[:cntrl:]]";"")`
-  on MCP server-name keys: append `| gsub("[  ]";"")` so
-  committed-config JSON keys cannot smuggle a line break into the roster.
+  on MCP server-name keys: append `| gsub("\\u2028|\\u2029";"")` (jq decodes
+  `\u` escapes inside program string literals) so committed-config JSON keys
+  cannot smuggle a line break into the roster.
 
 **Already canonical — no code change, recorded:**
 
