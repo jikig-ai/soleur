@@ -144,3 +144,9 @@ PENDING seats: pattern-recognition (391b64d9), test-design (f947202a).
 - All CI failures fixed by agent 463978e0 + pushed (commit "fix(gate): CI failure round"); fresh CI run in flight, watcher 74558531 polls to terminal
 - Next: if green → gh pr merge 10389 --squash --auto → poll MERGED → postmerge verify (release workflows green, read merged files via git show main:<path>) → cleanup-merged → <promise>DONE</promise>
 - If red again: diagnose --log-failed, fix, repeat
+
+## Merge armed (2026-10-19 15:20)
+- Fresh CI run: 70 pass / 0 fail; last straggler test-scripts(3/8) pending (started late 14:50, still running — not hung)
+- All required checks green incl. previously-failing lint-bot-statuses + rule-body-lint + all test-scripts shards + test-webplat
+- `gh pr merge --squash --auto` ARMED at 15:14; mergeState=BEHIND is fine — merge queue enqueues when checks settle
+- watcher c74660.. polls for MERGED; then: postmerge (release workflows via `gh run list --branch main`), cleanup-merged, DONE
