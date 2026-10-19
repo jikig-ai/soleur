@@ -71,3 +71,4 @@ Write each phase's RED tests before its code. Commit order: Phase 1 first, Phase
 - [ ] 7.2 Comment on #10455 listing remaining open items and the new residuals
 - [x] 7.3 Open Code-Review Overlap re-check against the final file list
 - [x] 7.4 LAST commit: retire `sandbox-readback-10445.sh`, its test and its `test-all.sh` line
+- [x] 7.5 Fix round C (2026-10-19): review findings applied (memo clock-step guard, directive/predicate parity, `seccompArtifact` on the classified mirror event, smoke pre-exec rc matrix with its own 20 s cap, killed-probe mapping, guarded ledger removal, verdict-script `ledger_stale`, runbook/ADR corrections for rollback completeness, the image's real tool list and the no-telemetry soak); legacy-runner post-flip check is an open item on the #10548 enable request

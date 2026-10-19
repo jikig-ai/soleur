@@ -349,8 +349,10 @@ call pattern in `plugins/soleur/skills/postmerge/references/deploy-status-debugg
 only quotes the command text cannot pass) end to end through the SDK's own wrapper path and the shipped shim, inside the CANARY container
 (never the live prod container), under `/usr/bin/env -i` with an explicit allowlist, a decoy `ANTHROPIC_API_KEY` and the container's real
 `HOME`, under a 150 s host `timeout` (`SDK_BASH_SMOKE_TIMEOUT`) above the probe's 120 s internal cap. The smoke makes TWO canary
-`docker exec`s, each under that cap: one capped pre-exec (`test -f <probe> || exit 66; printf %s "$HOME"`) that checks the probe file
-and reads the container's real `HOME`, then the probe run itself. The probe (`infra/lib/sdk-bash-probe.mjs`, `SMOKE=1`)
+`docker exec`s, each under its OWN cap: one pre-exec (`test -f <probe> || exit 66; printf %s "$HOME"`) that checks the probe file
+and reads the container's real `HOME`, capped at 20 s (`SDK_BASH_SMOKE_PREEXEC_TIMEOUT`), then the probe run itself under the 150 s cap.
+The smoke's total time is therefore bounded by `SDK_BASH_SMOKE_PREEXEC_TIMEOUT` + `SDK_BASH_SMOKE_TIMEOUT` (170 s by default), plus the
+bounded DIAG bundle after a failure page. The probe (`infra/lib/sdk-bash-probe.mjs`, `SMOKE=1`)
 computes its own verdict: `pass` requires the transformed nonce echoed in the real tool_result, a non-error result and coverage
 `sdk_wrapper_shim_prodtuple` (the shim on `PATH`, a sock_filter-sized artifact at the pinned path). **Coverage means the shim on PATH,
 the pinned `buildAgentSandboxConfig` literal and the variant artifact under the no-egress shape. It does not cover the SDK child env,
@@ -366,11 +368,11 @@ runs in the canary as `run_workspace_isolation_probe`, and `test/sandbox-wrapped
 | `verdict` / `reason` | Meaning | First move |
 |---|---|---|
 | `pass` | A real wrapped Bash command ran green through the shim and its nonce came back. `coverage` is `sdk_wrapper_shim_prodtuple`: a verdict without that field certifies nothing about the wrapper | None. Promotion needs 5 green verdicts over at least 3 days (ADR-079, tracker #10548) |
-| `sdk_bash_smoke_failed` | Bash WAS dispatched and no verified nonce came back: an error result, a clean result without the nonce (`no_nonce`), a thrown SDK error (`dispatched_then_error`, or `sandbox required but unavailable` even before dispatch), no tool_result (`dispatched_no_tool_result`), a hang (`hung_after_dispatch`), the host cap firing AFTER the probe printed `SDK_BASH_DISPATCHED` (`host_timeout_150s`), or ANY other non-zero `docker exec` rc whose output already carries the `SDK_BASH_DISPATCHED` line (`probe_rc_<N>_after_dispatch`: Bash was handed to the SDK, so a death after that is the #10445 shape, not an infra hiccup; the marker, not the rc, decides for every non-zero rc, 124 included). Signature-independent: a new error wording cannot go silent. A journald row `SANDBOX_CANARY_FAIL: verdict=sandbox_broken reason=sdk_bash_smoke_failed: <detail> ... (op=sandbox-canary; ...)` pages `faithful_canary_sandbox_broken` (one row per failed deploy) and a Sentry event (`op=sandbox-canary`, level error) is posted | Read `reason` (the first sandbox error line, scrubbed) and the `SOLEUR_CANARY_SANDBOX_DIAG` rows with `trigger=sdk_smoke` that follow the page. `apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted` is this incident: confirm `network.allowAllUnixSockets` is still set and that no SDK bump changed the helper-selection condition (`vendored-bwrap-tail` tests). Do NOT carve a `CLONE_NEWUSER` exception in the filter: a seccomp filter cannot key on the caller, so it re-opens nested userns for every sandboxed process (undoes #8752) |
-| `smoke_infra_error` / `probe_absent[: <docker stderr>]` | The ONE capped pre-exec (`test -f <probe> \|\| exit 66; printf %s "$HOME"`) failed with a non-zero rc other than the host cap's 124: rc 66 is a bare `probe_absent` (the probe file is missing in the canary image: an image that predates the probe, or a Dockerfile/`.dockerignore` regression); any other rc (the canary container is absent, the daemon refused the exec) carries docker's first stderr line after the colon. A host-cap 124 in this pre-exec is NOT `probe_absent`: it is `smoke_infra_error` / `host_timeout_before_dispatch: preflight` (a wedged daemon, before Bash could be dispatched) | New script with an old image is expected once. Persistent: check the Dockerfile COPY of `infra/lib/sdk-bash-probe.mjs` and its `.dockerignore` bang (`test/sdk-bash-probe-parity.test.ts` pins both) |
-| `smoke_infra_error` / `docker_exec_rc_125\|126\|127`, `probe_rc_<n>`, `no_result_line`, `container_home_unresolved`, `nonce_unavailable`, `host_timeout_before_dispatch`, `sdk_module_unavailable`, `stub_server_failed`, `nonce_missing_or_malformed` | The smoke itself could not run or print a verdict (daemon trouble, node missing, the probe crashed BEFORE printing `SDK_BASH_DISPATCHED`, no `SDK_BASH_RESULT` line, no `/dev/urandom` nonce, or the 150 s host cap firing before the probe printed `SDK_BASH_DISPATCHED`). Bash was never dispatched (a non-zero rc AFTER that marker is `sdk_bash_smoke_failed`, above) | No signal; holds the soak and never pages. The reason carries docker's first stderr line |
+| `sdk_bash_smoke_failed` | Bash WAS dispatched and no verified nonce came back: an error result, a clean result without the nonce (`no_nonce`), a thrown SDK error (`dispatched_then_error`, or `sandbox required but unavailable` even before dispatch), no tool_result (`dispatched_no_tool_result`), a hang (`hung_after_dispatch`), the host cap firing AFTER the probe printed `SDK_BASH_DISPATCHED` (`host_timeout_150s`), or any other non-zero `docker exec` rc whose output already carries the `SDK_BASH_DISPATCHED` LINE (`probe_rc_<N>_after_dispatch`: Bash was handed to the SDK, so a death after that is the #10445 shape, not an infra hiccup; the marker, not the rc, decides, 124 included), EXCEPT rc 137 and 143 (SIGKILL / SIGTERM: the OOM killer, a container stop or a deploy-side signal), which are `smoke_infra_error` / `probe_killed_rc_<N>` (see the infra row). Signature-independent: a new error wording cannot go silent. A journald row `SANDBOX_CANARY_FAIL: verdict=sandbox_broken reason=sdk_bash_smoke_failed: <detail> ... (op=sandbox-canary; ...)` pages `faithful_canary_sandbox_broken` (one row per failed deploy) and a Sentry event (`op=sandbox-canary`, level error) is posted | Read `reason` (the first sandbox error line, scrubbed) and the `SOLEUR_CANARY_SANDBOX_DIAG` rows with `trigger=sdk_smoke` that follow the page. `apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted` is this incident: confirm `network.allowAllUnixSockets` is still set and that no SDK bump changed the helper-selection condition (`vendored-bwrap-tail` tests). Do NOT carve a `CLONE_NEWUSER` exception in the filter: a seccomp filter cannot key on the caller, so it re-opens nested userns for every sandboxed process (undoes #8752) |
+| `smoke_infra_error` / `probe_absent` | The ONE pre-exec (`test -f <probe> \|\| exit 66; printf %s "$HOME"`, capped at `SDK_BASH_SMOKE_PREEXEC_TIMEOUT`, 20 s) answered rc 66, and ONLY rc 66 is `probe_absent`: the probe file is missing in the canary image (an image that predates the probe, or a Dockerfile/`.dockerignore` regression). Every other non-zero pre-exec rc is a different row: `preflight_rc_<N>` (docker's own 125/126/127, a missing canary container answering 1, ...; docker's first scrubbed stderr line follows the colon), and the cap's 124 is `host_timeout_before_dispatch: preflight` (a wedged daemon, before Bash could be dispatched) | New script with an old image is expected once. Persistent: check the Dockerfile COPY of `infra/lib/sdk-bash-probe.mjs` and its `.dockerignore` bang (`test/sdk-bash-probe-parity.test.ts` pins both) |
+| `smoke_infra_error` / `preflight_rc_<n>`, `docker_exec_rc_125\|126\|127`, `probe_rc_<n>`, `probe_killed_rc_137\|143`, `no_result_line`, `container_home_unresolved`, `nonce_unavailable`, `host_timeout_before_dispatch`, `sdk_module_unavailable`, `stub_server_failed`, `nonce_missing_or_malformed` | The smoke itself could not run or print a verdict (daemon trouble, node missing, the pre-exec failing with a non-66 rc, the probe crashed BEFORE printing `SDK_BASH_DISPATCHED`, no `SDK_BASH_RESULT` line, no `/dev/urandom` nonce, or the 150 s host cap firing before the probe printed `SDK_BASH_DISPATCHED`). `probe_killed_rc_137\|143` is the one row where the marker WAS printed: the probe was SIGKILLed / SIGTERMed after dispatch (the OOM killer, a container stop, a deploy-side signal), which says nothing about Bash, so it holds the soak instead of paging. Otherwise Bash was never dispatched (any other non-zero rc AFTER that marker line is `sdk_bash_smoke_failed`, above) | No signal; holds the soak and never pages. The reason carries docker's first stderr line |
 | `smoke_infra_error` / `coverage_replay_only` | A pass-shaped result whose coverage was not the shim-and-wrapper tuple (the shim is not the `bwrap` on `PATH`, or the artifact is missing/unreadable). A HOLD: `consecutive_pass` does not move | Treat as not-yet-proven; inspect `probeAgentSandboxHardening` (`op=sandbox-hardening-selfprobe`) and the faithful canary's hardening verdicts |
-| `smoke_infra_error` / `ledger_write_failed` | The verdict could not be recorded (the `/mnt/data` ledger is unwritable, read-back mismatch). Never reported as a pass; a real FAILURE still pages. A failed write ALSO emits the stale warning at once (`SDK_BASH_SMOKE_STALE`, prior counter + 1), because a ledger that cannot be written cannot accumulate the counter that would otherwise raise it; and a `sdk_bash_smoke_failed` verdict whose write failed DELETES the stale ledger, so an old `consecutive_pass` can never keep reading as a soak this failure should have reset | Check `/mnt/data` space and ownership via the deploy-status fields; the journald row `SDK_BASH_SMOKE: ledger_write_failed` names the file |
+| `smoke_infra_error` / `ledger_write_failed` | The verdict could not be recorded (the `/mnt/data` ledger is unwritable, read-back mismatch). Never reported as a pass; a real FAILURE still pages. A failed write ALSO emits the stale warning at once (`SDK_BASH_SMOKE_STALE`, prior counter + 1) with its own wording, "SDK smoke ledger write failed (consecutive_infra_error not advanced)" (the counter did not advance in the ledger, so it is not reported as "N deploys in a row"), because a ledger that cannot be written cannot accumulate the counter that would otherwise raise it. A `sdk_bash_smoke_failed` verdict whose write failed tries to DELETE the stale ledger so an old `consecutive_pass` cannot keep reading as a soak this failure should have reset, but only a record that carries the smoke's own ledger stamp and is older than this run (`checked_at` < the run's start), and only when the ledger directory is writable: the `rm` needs the permission whose absence usually broke the write. When the directory is not writable the old record survives and the next pass can read its stale counters; the page and the stale warning still fire | Check `/mnt/data` space and ownership via the deploy-status fields; the journald row `SDK_BASH_SMOKE: ledger_write_failed` names the file |
 
 **The stale warning.** `smoke_infra_error` never pages by email, so a dead probe needs another consumer. At three consecutive infra
 errors (`consecutive_infra_error >= 3`) the deploy emits a journald row `SDK_BASH_SMOKE_STALE: consecutive_infra_error=<n> last_reason=...`
@@ -398,8 +400,12 @@ sweeper CLOSE the tracker and #10548 also tracks the promotion itself and the op
 `5` = ACTION REQUIRED (soak complete: at least 5 consecutive green verdicts over at least 3 days, latest verdict `pass`, coverage
 `sdk_wrapper_shim_prodtuple`; the sweeper treats 5 as notify-only: it comments, leaves the issue open, and on an already-closed issue
 comments without reopening), `1` = FAIL (a recorded `sdk_bash_smoke_failed`, OR `consecutive_infra_error >= 3`, the stale escalation above),
-`2` = TRANSIENT (unreachable endpoint, soak not complete, 1-2 infra errors, a pass without full coverage, a non-numeric counter). A human
-closes #10548 after the promotion change and the flag decision are done. The ledger is the smoke's OWN file: the deploy-status frame is
+`2` = TRANSIENT (unreachable endpoint, soak not complete, 1-2 infra errors, a pass without full coverage, a non-numeric counter, or a
+complete soak whose ledger `checked_at` is more than 3 days old: `reason=ledger_stale`, because a frozen ledger is not evidence). The script
+also exits `78` when it is run under `bash -x` with a live credential bound (declined before any request). A human
+closes #10548 after the promotion change and the flag decision are done, and REMOVES the `follow-through` label at that point: exit 5
+comments ACTION REQUIRED at every sweep on an open tracker (and on a closed one that still carries the label), so a finished soak with the
+label left on is a daily comment. The ledger is the smoke's OWN file: the deploy-status frame is
 shared by every component's deploy, so soak accounting never reads it.
 
 **Config parity.** The probe carries a literal sandbox config and seccomp-selector path (the production image has no TypeScript).
@@ -494,9 +500,21 @@ property of the dashboard integration settings, not of anything this repository 
 **State (2026-10-19): the flag is OFF; nothing changes for tenants until it is turned on.** Enabling is a production write that needs a
 green deploy `sdk_bash_smoke` (the smoke runs the no-egress tuple with the unixdeny artifact selected, so a variant that breaks Bash start
 shows as `sdk_bash_smoke_failed` on the deploy that carries it) and the operator's explicit authorization at that time (#10548). Rollback is
-flipping the flag OFF. Flipping the flag OFF takes effect on new queries after up to about 60 s (the 30 s resolver memo in
-`server/resolve-sandbox-unix-deny.ts` on top of the 30 s flag cache in `lib/feature-flags/server.ts`; each read is bounded at 300 ms and a
-failed read resolves OFF). An active cc-soleur-go conversation keeps the artifact it started with until it idles out (10 min of inactivity) or the container restarts; the legacy runner picks it up on the next message after that window. A restart is the only way to force it, and it is not routine. The rollback latency to state in the #10548 enable request: new queries about 60 s; up to about 10 minutes after each open conversation's last activity.
+flipping the flag OFF. **Rollback is complete only when BOTH hold:** (a) `soleur:flag-list` shows Flagsmith OFF AND the Doppler mirror
+`FLAG_AGENT_SANDBOX_UNIX_DENY=0` (the flip writes Flagsmith first and the Doppler `dev` and `prd` mirrors after it; an ON flip writes the mirror to
+`1`), and (b) the container has restarted since, because the container environment IS the Flagsmith-failure fallback (`runtimeEnvFallback` in
+`lib/feature-flags/server.ts` answers from `FLAG_AGENT_SANDBOX_UNIX_DENY` when the Flagsmith read fails). If Flagsmith is down during the
+incident the OFF write cannot land (the flip exits before the Doppler mirror), and a failed read falls back to the container's mirror, which stays
+`1` until a redeploy with Doppler at `0`: a failed Flagsmith read does NOT by itself resolve OFF. Only the resolver's own failures (a throw or its 300 ms
+timeout) resolve OFF. With a healthy Flagsmith, flipping the flag OFF takes effect on new queries after up to about 60 s (the 30 s resolver memo in
+`server/resolve-sandbox-unix-deny.ts` on top of the 30 s flag cache in `lib/feature-flags/server.ts`); a slow or failed read can hold the previous or OFF answer
+for up to 30 s more, so re-check after 60 s before concluding the flip failed. An active cc-soleur-go conversation keeps the artifact it started with
+until the idle reaper closes it: the reaper runs every 300 s and closes a conversation after 10 min of inactivity, so an idle conversation is
+reaped 10 to 15 minutes after its last activity (a conversation parked on a prompt, `awaitingUser`, is skipped), while a conversation in ACTIVE use
+reuses its warm query and never idles, so a user who hits `Operation not permitted` stays on the variant until they start a NEW conversation. The legacy
+runner picks it up on the next message after the flip window. A restart is the only way to force it, and it is not routine. The rollback latency to state in the #10548
+enable request: new queries about 60 s (healthy Flagsmith); an open conversation up to 10 to 15 minutes after its last activity, or never while it stays in use (tell
+the user to start a new conversation).
 
 **Enable request must contain** (CTO ruling G, 2026-10-19: the flag stays GLOBAL and the enable is a staged, operator-attended
 procedure; a per-organisation cohort was deferred, not built). The #10548 request is incomplete without every item:
@@ -506,18 +524,26 @@ procedure; a per-organisation cohort was deferred, not built). The #10548 reques
    repo-less or no-web cc-soleur-go session. There is no partial rollout.
 2. **A named rollback owner and the exact rollback command** (the owner types the OFF write of `soleur:flag-set-role`: flag
    `agent-sandbox-unix-deny`, role `prd`, `off`; the agent prepares its `--dry-run` preview).
-3. **Rollback latency:** new queries about 60 s; each open cc-soleur-go conversation up to about 10 minutes after its last activity.
-4. **An operator-attended soak of at least 30 minutes after the flip**, watching Sentry for `socket: Operation not permitted`,
-   `PermissionError` and `agent_sandbox_bash_denial`.
+3. **Rollback latency:** new queries about 60 s (healthy Flagsmith; the rollback is complete only with the Doppler mirror at `0` and a container
+   restart, see the State paragraph above); each open cc-soleur-go conversation 10 to 15 minutes after its last activity, or until the user starts a
+   NEW conversation if it stays in use.
+4. **An operator-attended soak of at least 30 minutes after the flip.** The variant has NO telemetry of its own: nothing emits
+   `socket: Operation not permitted` or `PermissionError` to Sentry (`classifyBashSandboxFailure` returns null for a plain socket EPERM, and the
+   legacy loop has no tool_result observer), so there is nothing to watch for those strings. The soak is the per-runner manual probes in item 5
+   plus support intake (user reports tied to the flip time). Keep watching `agent_sandbox_bash_denial`, which covers the `apply-seccomp:` helper
+   lines only.
 5. **A post-flip smoke of real tenant-style Bash from a NEW conversation on EACH runner path** (an open session never exercises the new
-   posture): `echo ok`; `git status`; `node -e 1`; `python3 -c 'import multiprocessing as m; m.Pool(1).map(abs,[1])'`, which is EXPECTED to
-   FAIL under the variant (the known shape, see the tenant-visible list below); and a localhost AF_UNIX connect, EXPECTED to fail with
-   EPERM. Run a real Bash plus AF_UNIX call on EACH runner path. The alert is not the check.
+   posture): `echo ok`; `git status`; `node -e 1`; and the AF_UNIX connect below, run on each runner path:
+   `node -e "require('net').connect('/tmp/soleur-no-such.sock').on('error',e=>console.log(e.code))"`, which prints `EPERM` under the variant
+   and `ENOENT` under the base artifact (the image is `node:22-slim` and its `Dockerfile` installs `ca-certificates git bubblewrap socat qpdf jq openssh-client libcap2-bin`
+   (plus `curl` and `gh` in a later layer) and installs no `python3`, `psql`, `gpg` or `tmux`, so a Python probe cannot run there). A tenant who
+   installs other runtimes into their workspace is affected the same way (see the tenant-visible list below). The alert is not the check.
    Routing (`server/conversation-routing.ts`, `server/ws-handler.ts`): a conversation whose `active_workflow` is NULL (routing `legacy`) runs
    on the legacy runner (`agent-runner.ts`); one with `soleur_go_pending` / `soleur_go_active` routing runs on cc-soleur-go
-   (`cc-dispatcher.ts`), so use one conversation of each kind. The author of the enable request must confirm how to start a `legacy`-routed conversation in
-   the product UI (for example a domain-leader conversation) before the request is sent; this runbook established the routing rule from the
-   code, not the UI path.
+   (`cc-dispatcher.ts`). **Open item (tracked on the #10548 enable request, not executable today):** a new conversation is routed as
+   `soleur_go_pending` at the three routing sites in `ws-handler.ts`, so the legacy-runner check needs a conversation with a NULL `active_workflow`
+   that may not be creatable from the product UI; the author of the enable request must establish how to obtain one (or record that the legacy
+   runner cannot be exercised) before the request is sent. This runbook established the routing rule from the code, not a UI path.
 6. **Abort criteria:** any non-AF_UNIX command failing, or any tenant report, means roll back first and diagnose after.
 7. **The enable sequence:** (a) run `soleur:flag-list` first (it shows code wiring and the live Doppler dev/prd values with drift
    detection; the Doppler mirror `FLAG_AGENT_SANDBOX_UNIX_DENY` is not verified by this runbook). (b) Create the Flagsmith feature with the
@@ -536,26 +562,32 @@ procedure; a per-organisation cohort was deferred, not built). The #10548 reques
    no-egress sessions (the selector is assigned after the allowlist copy in `buildAgentEnv`), so to use that override flip the flag OFF first.
    (b) Variant assignment can differ per conversation, because egress is derived from best-effort handles: a GitHub installation-token mint
    failure is non-fatal (`cc-dispatcher.ts`, `op=mint-gh-token`) and a web-egress forwarder spawn failure proceeds zero-egress, so an
-   entitled tenant can get the AF_UNIX-deny artifact for one conversation and working AF_UNIX in the next. To tie a user report to the flag,
-   read the per-session `tenant-deny` log line (`feature=agent-sandbox`, `op=tenant-deny`): it carries `seccompArtifact: base|unixdeny`
-   for that session.
+   entitled tenant can get the AF_UNIX-deny artifact for one conversation and working AF_UNIX in the next. The `seccompArtifact: base|unixdeny`
+   field (the artifact the session's sandbox config is PAIRED with at build time; a spawn-time correction toward base or an ambient override
+   is applied later) appears in exactly two places: (1) the host-local per-dispatch `tenant-deny` info log line (`feature=agent-sandbox`,
+   `op=tenant-deny`), which needs host log access and is not queryable in Better Stack or Sentry (the log pipeline keeps level 40 and above);
+   and (2) the `extra` of the classified `bash-tool-result` mirror event (Sentry and Better Stack), which exists only when a classified
+   `apply-seccomp:` / `bwrap:` denial line was mirrored. A plain socket EPERM is NOT classified, so no event is emitted for the failure this
+   flag causes: tie a user report to the flag-flip time and the session's egress state, not to a log field.
 
 **Release-notes line (dated, for the release that turns the flag ON).** `2026-10-19 - Sandbox: shell commands in projects without outbound
-network access can no longer open Unix-domain sockets (for example a local Postgres or Redis socket path, Python multiprocessing
+network access can no longer open Unix-domain sockets (for example a local Postgres or Redis socket path, Node or other
+runtimes' local IPC listeners, ssh-agent or SSH ControlMaster; and, if you install them in your workspace, Python multiprocessing
 Manager, Pool or ProcessPoolExecutor on Python 3.14 and later where the default start method is forkserver, gpg-agent for
-signed git commits, ssh-agent or SSH ControlMaster, tmux or screen). Pipes, socketpair and normal networking checks are unchanged;
+signed git commits, tmux or screen). Pipes, socketpair and normal networking checks are unchanged;
 sessions with GitHub or web access are not affected.` (GitHub
 release bodies are generated from the merged PR text and the in-app Releases page sanitizes security wording, so the line is carried in the
 PR body, which is the release-notes source of record; there is no committed changelog file.)
 
 **Support runbook line.** A user report of `Operation not permitted` from a Unix-socket workload (`psycopg2` to a local socket,
-`redis-cli -s`, `multiprocessing.Manager()`, `multiprocessing.Pool` or `ProcessPoolExecutor` on Python 3.14 and later (the default
-forkserver start method talks over a Unix socket), `git commit -S` through `gpg-agent`, `ssh-agent` or SSH ControlMaster, `tmux` or `screen`, a D-Bus
+`redis-cli -s`, a Node or other local IPC listener, `ssh-agent` or SSH ControlMaster (`openssh-client` is in the image); and, only when the tenant
+installs them into their workspace, `multiprocessing.Manager()`, `multiprocessing.Pool` or `ProcessPoolExecutor` on Python 3.14 and later (the default
+forkserver start method talks over a Unix socket), `git commit -S` through `gpg-agent`, `tmux` or `screen`, a D-Bus
 client) in a session with no GitHub token and no web access, dated after the flag was
 turned on, is this change, not a bug: tell the user the workload needs a TCP address on loopback (works inside the per-command network
 namespace) or a session with outbound access; engineering confirms with `soleur:flag-list` (flag `agent-sandbox-unix-deny` ON) and by the
 absence of `apply-seccomp:` helper rows for that user (those are a different failure). To roll back for everyone, set the flag OFF (`soleur:flag-set-role
-agent-sandbox-unix-deny prd off`, operator-authorized). The flip reaches new queries after up to about 60 s (30 s resolver memo plus the 30 s flag cache); an active cc-soleur-go conversation keeps the artifact it started with until it idles out (10 min of inactivity) or the container restarts, so the support answer is "fixed for new conversations; an open one may stay affected for up to about 10 minutes after its last activity". After the flip, confirm with a real hosted Bash call from a NEW conversation; an open session never exercises the new posture. To tell whether a given session ran the variant, read its `tenant-deny` log line: `seccompArtifact: base|unixdeny`. **Incident-time seccomp override:** with the flag ON, an ambient `SOLEUR_BWRAP_SECCOMP_BPF` is ignored for no-egress sessions (the selector is set after the allowlist copy), so flip the flag OFF FIRST, then apply the override; an override equal to the unixdeny path on an egress session is reset to the base artifact with a Sentry warning (`op=seccomp-agreement`).
+agent-sandbox-unix-deny prd off`, operator-authorized). The flip reaches new queries after up to about 60 s (30 s resolver memo plus the 30 s flag cache) with a healthy Flagsmith (see the State paragraph for the Doppler-mirror and restart conditions of a complete rollback); an active cc-soleur-go conversation keeps the artifact it started with until the idle reaper closes it (10 to 15 minutes after its last activity) or the container restarts, and a conversation in active use never idles, so the support answer is "fixed for NEW conversations: ask the user to start a new conversation; an open one may stay affected". After the flip, confirm with a real hosted Bash call from a NEW conversation; an open session never exercises the new posture. A plain socket EPERM is not classified or mirrored, so the `seccompArtifact: base|unixdeny` field cannot confirm a user report (see item 9 above for where it does appear); tie the report to the flag-flip time and the session's egress state. **Incident-time seccomp override:** with the flag ON, an ambient `SOLEUR_BWRAP_SECCOMP_BPF` is ignored for no-egress sessions (the selector is set after the allowlist copy), so flip the flag OFF FIRST, then apply the override; an override equal to the unixdeny path on an egress session is reset to the base artifact with a Sentry warning (`op=seccomp-agreement`).
 
 **Reading the probes.** Boot: `op=sandbox-hardening-selfprobe` now carries `unixdenyFilter` beside `filter`; an `ok: false` with
 `unixdenyFilter: false` means the image lacks the variant artifact (flag must stay OFF). Deploy: the three hardening reasons above.

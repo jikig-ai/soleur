@@ -703,18 +703,20 @@ probe still running after a host-cap timeout must not be able to fail the last p
 workspace-isolation probe still runs before that gate and is out of scope here) and executes the baked probe
 (`/app/infra/lib/sdk-bash-probe.mjs`, `SMOKE=1`) inside the CANARY container (never the live prod container): one real Bash call
 through the real Agent SDK, the shipped shim and the production sandbox config, under `/usr/bin/env -i` with an explicit
-allowlist, a decoy `ANTHROPIC_API_KEY`, the container's real `HOME` and a 150 s host `timeout`. The call site is
+allowlist, a decoy `ANTHROPIC_API_KEY`, the container's real `HOME` and a 150 s host `timeout` (`SDK_BASH_SMOKE_TIMEOUT`; the pre-exec has its own
+20 s cap, `SDK_BASH_SMOKE_PREEXEC_TIMEOUT`, so the smoke's total is bounded by the two caps summed, 170 s, plus the bounded DIAG bundle). The call site is
 `run_sdk_bash_smoke || true`: no verdict rolls back, aborts or changes the deploy's exit code (`wg-dark-launch-deploy-gates`).
 
-**Verdicts (computed by the probe in JavaScript, unit-tested under node).** The smoke makes two canary `docker exec`s under the host cap:
-one pre-exec (`test -f <probe> || exit 66; printf %s "$HOME"`, rc 66 = `probe_absent`, a 124 there = `smoke_infra_error`
-`host_timeout_before_dispatch: preflight`) and the probe run. The Bash command is `echo SDK_SMOKE_$(printf %s '<nonce>' | tr 0-9a-f a-f0-9)`,
+**Verdicts (computed by the probe in JavaScript, unit-tested under node).** The smoke makes two canary `docker exec`s, each under its own host cap:
+one pre-exec (`test -f <probe> || exit 66; printf %s "$HOME"`; ONLY rc 66 = `probe_absent`, a 124 there = `smoke_infra_error`
+`host_timeout_before_dispatch: preflight`, any other non-zero rc = `smoke_infra_error` `preflight_rc_<N>`) and the probe run. The Bash command is `echo SDK_SMOKE_$(printf %s '<nonce>' | tr 0-9a-f a-f0-9)`,
 so `pass` needs the TRANSFORMED per-run nonce back in the real tool_result (a result that only quotes the command text cannot pass), the
 result not error-flagged, and the `coverage` field equal to
 `sdk_wrapper_shim_prodtuple` (the shim is the `bwrap` on `PATH` and the artifact at the pinned path is sock_filter-sized).
 The verdict is `sdk_bash_smoke_failed` when Bash was dispatched and no verified nonce came back (an error result, a clean result without the
 nonce, a thrown SDK error, a hang, or ANY non-zero `docker exec` rc, the 150 s host cap's 124 included, whose output already carries the
-`SDK_BASH_DISPATCHED` marker: `host_timeout_<N>s` for 124, `probe_rc_<N>_after_dispatch` otherwise), independent of any error signature, so a new wording of a failure cannot go silent; a sandbox
+`SDK_BASH_DISPATCHED` marker line: `host_timeout_<N>s` for 124, `probe_rc_<N>_after_dispatch` otherwise, except rc 137 and 143, SIGKILL / SIGTERM (the OOM
+killer, a container stop), which are `smoke_infra_error` `probe_killed_rc_<N>`), independent of any error signature, so a new wording of a failure cannot go silent; a sandbox
 that cannot start (`sandbox required but unavailable`) is also a failure, not an infra hiccup. `smoke_infra_error` only when Bash
 was never dispatched (probe absent in an old image, docker rc 125/126/127, a crashed probe, stub or ledger failure, no usable
 `/dev/urandom` nonce, or a host-cap timeout that fired BEFORE the probe printed `SDK_BASH_DISPATCHED`: `host_timeout_before_dispatch`, a daemon
@@ -726,9 +728,12 @@ never counts toward promotion.
 **Ledger and surfaces.** Its own durable ledger (`/mnt/data/ci-deploy-sdk-bash-smoke.json`, ledger stamp `sdk-bash-smoke`), written
 in ONE atomic write through `write_sandbox_canary_state` (the verdict, `coverage` and `consecutive_infra_error` land together; a
 failed write, detected by reading the ledger back, is reported `smoke_infra_error reason=ledger_write_failed`, never a coverage-less
-pass, ALSO emits the stale warning at once (prior counter + 1: a ledger that cannot be written cannot accumulate the counter that would
-otherwise raise it), and, for a `sdk_bash_smoke_failed` verdict whose write failed, deletes the stale ledger so an old `consecutive_pass`
-cannot keep reading as a soak the failure should have reset), surfaced as
+pass, ALSO emits the stale warning at once with its own wording, "SDK smoke ledger write failed (consecutive_infra_error not advanced)" (prior counter + 1: a
+ledger that cannot be written cannot accumulate the counter that would otherwise raise it), and, for a `sdk_bash_smoke_failed` verdict whose
+write failed, tries to delete the stale ledger so an old `consecutive_pass` cannot keep reading as a soak the failure should have reset. The
+deletion needs the directory permission whose absence usually broke the write and only removes a record that carries this ledger's stamp and is older
+than the run; when the directory is not writable the old record survives and the next pass can read its stale counters, while the page and the
+stale warning still fire), surfaced as
 `sdk_bash_smoke` on `/hooks/deploy-status`. The smoke reads and writes only this ledger, never the shared deploy frame. A failure
 pages through the unchanged `sandbox_canary_sentry_event` journald format
 (`SANDBOX_CANARY_FAIL: verdict=sandbox_broken reason=sdk_bash_smoke_failed: ... (op=sandbox-canary; ...)`) into the new Better Stack

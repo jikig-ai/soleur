@@ -501,10 +501,16 @@ bytes pinned by sha256 and compared with `origin/main`), so egress sessions and 
   throw at query start would turn defense-in-depth into a total tenant outage. The only correction is toward the base artifact: an unixdeny
   selector on a session that is not variant-eligible, e.g. an ambient `SOLEUR_BWRAP_SECCOMP_BPF` incident override equal to the unixdeny path
   on an egress session, is reset to the base artifact). Both runners resolve the flag once per query.
-- **Kill switch.** The flag defaults OFF and fails closed to OFF (a throw, a read that exceeds its 300 ms per-read bound, an absent flag
-  service or a missing flag all resolve OFF with one debounced warning; the resolved value, including a failed read's OFF, is memoised for
-  30 s in `server/resolve-sandbox-unix-deny.ts`). Flipping it OFF takes effect on new queries after up to about 60 s (that 30 s memo on top of
-  the 30 s flag cache); an active cc-soleur-go conversation keeps the artifact it started with until it idles out (10 min of inactivity) or the container restarts, and the legacy runner picks it up on the next message; a restart is the only way to force it and it is not routine. The post-flip check is a real hosted Bash call from a NEW conversation. Turning it ON is a production write, taken only after the deploy SDK Bash smoke has been
+- **Kill switch.** The flag defaults OFF. The resolver (`server/resolve-sandbox-unix-deny.ts`) is fail-closed only for its OWN failures: a throw or a
+  read that exceeds its 300 ms per-read bound resolves OFF with one debounced warning, and that answer is memoised for 30 s. It is NOT true that a
+  failed Flagsmith read resolves OFF: `isAgentSandboxUnixDenyEnabled` falls back to the container's `FLAG_AGENT_SANDBOX_UNIX_DENY` mirror
+  (`runtimeEnvFallback` in `lib/feature-flags/server.ts`), which is `1` after an ON flip. **A rollback is therefore complete only when the Flagsmith flag
+  is OFF, the Doppler mirror is `0` AND the container has restarted** (the flip writes Flagsmith first and exits before the Doppler mirror if that
+  write fails, so with Flagsmith down the mirror stays `1` and the fallback stays ON until a redeploy with Doppler at `0`). With a healthy Flagsmith,
+  flipping it OFF takes effect on new queries after up to about 60 s (that 30 s memo on top of the 30 s flag cache; re-check after 60 s before
+  concluding the flip failed). An active cc-soleur-go conversation keeps the artifact it started with until the idle reaper closes it (the reaper runs every 300 s and
+  closes after 10 min of inactivity, so 10 to 15 minutes after the last activity; a conversation parked on a prompt is skipped), and a conversation
+  in active use never idles, so the user must start a NEW conversation; the legacy runner picks it up on the next message; a restart is the only way to force it and it is not routine. The post-flip check is a real hosted Bash call from a NEW conversation. Turning it ON is a production write, taken only after the deploy SDK Bash smoke has been
   green on a real deploy and with the operator's explicit authorization at that time (tracker #10548). The deploy smoke runs the
   no-egress tuple **with the variant selected**, so a variant that breaks Bash start is reported on the deploy that carries it before
   the flag is ever on. The variant is a strict superset of the base program for FILTER semantics, but the smoke runs the variant artifact under the no-egress shape only: it does not exercise the base file itself (the flag-OFF production artifact; covered by the blocking legacy probe and the canary `base_af_unix_control`) nor the egress shape (pre-merge arm only).
@@ -524,9 +530,11 @@ them needs a per-command wrapper, tracked in #10549. Pre-existing weaker-than-ba
 addendum.
 
 **Tenant-visible effect (flag on).** A no-egress session can no longer create AF_UNIX sockets: a local Postgres or Redis socket path,
-Python `multiprocessing` Manager/Listener (and `Pool` / `ProcessPoolExecutor` on Python 3.14 and later, whose default start method is
-forkserver), `gpg-agent` (`git commit -S`), `ssh-agent` or SSH ControlMaster, `tmux` / `screen` sockets and D-Bus clients fail with
-"Operation not permitted". Node IPC and libuv child processes (`socketpair`) are unaffected. Variant assignment can differ per
+Node or other runtimes' local IPC listeners and `ssh-agent` or SSH ControlMaster (`openssh-client` is in the image) fail with
+"Operation not permitted". The runner image (`node:22-slim` plus `ca-certificates git bubblewrap socat qpdf jq openssh-client libcap2-bin`, `curl`
+and `gh`) installs no Python, `gpg` or `tmux`; a tenant who installs them into their workspace is affected the same way: Python `multiprocessing`
+Manager/Listener (and `Pool` / `ProcessPoolExecutor` on Python 3.14 and later, whose default start method is forkserver), `gpg-agent`
+(`git commit -S`), `tmux` / `screen` sockets and D-Bus clients. Child processes spawned with `socketpair` (libuv, Node `child_process` IPC) are unaffected. Variant assignment can differ per
 conversation: egress is derived from best-effort handles (a GitHub token mint failure is non-fatal and a web-egress forwarder spawn failure
 proceeds zero-egress), so an entitled tenant can get the AF_UNIX-deny artifact for one conversation and working AF_UNIX in the next. Release-notes and support lines: `knowledge-base/engineering/operations/runbooks/canary-probe-set.md`
 ("Tenant-visible: no-egress AF_UNIX deny").
@@ -537,4 +545,4 @@ enable it through the staged, operator-attended procedure in `canary-probe-set.m
 anonymous identity resolves to the `prd` segment, so a dev-only flip is a no-op and flag writes touch both Flagsmith environments. The
 `agent_sandbox_bash_denial` alert and the notice rewrite cover cc-soleur-go sessions only; the legacy runner has no tool_result observer, so a
 variant-induced AF_UNIX EPERM has no signal on either runner (CTO ruling E, 2026-10-19). The Flagsmith outage fallback is the
-`FLAG_AGENT_SANDBOX_UNIX_DENY` env mirror (default `0`, so an outage resolves OFF unless an operator set the mirror to `1`).
+`FLAG_AGENT_SANDBOX_UNIX_DENY` env mirror (default `0`, so an outage resolves OFF unless an operator set the mirror to `1`; the ON flip does set it to `1`, so after the enable an outage resolves ON until the mirror is set back to `0` and the container restarts, see the Kill switch bullet).

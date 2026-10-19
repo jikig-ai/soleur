@@ -183,7 +183,7 @@ Two ordering/ledger facts worth knowing before triaging a soak anomaly:
   later gate rolls that canary back for unrelated reasons. This ordering is a
   known, pre-existing hazard that the SDK Bash smoke (#10453) deliberately does
   NOT share: the smoke runs AFTER the key gate under its own `CANARY_HEALTHY`
-  check (CTO ruling F4, 2026-10-19; the canary has `--memory 1536m` and hosts the
+  check (2026-10-19 review ruling, rationale: ADR-079 addendum; the canary has `--memory 1536m` and hosts the
   Next server), whereas this probe, run before the gate, could in principle OOM
   the canary or linger after a host-cap timeout and fail that gate. Moving it is
   out of scope for #10453.
