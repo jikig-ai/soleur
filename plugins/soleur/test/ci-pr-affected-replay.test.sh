@@ -611,7 +611,7 @@ sp = importlib.util.spec_from_file_location('m', sys.argv[1]); m = importlib.uti
 print("\n".join(sorted(m.ALWAYS_RUN_JOBS | {"test-webplat", "test-bun", "test-scripts", "test-scripts-heavy"})))
 PY
 )"
-[[ -n "$ci_jobs" && "$ci_jobs" = "$py_jobs" ]] && pass "the always-run job set plus the four shard families is exactly ci.yml's job list (a new job there must be classified here)" || fail "job parity: ci-only='$(comm -23 <(echo "$ci_jobs") <(echo "$py_jobs") | tr '\n' ' ')' tool-only='$(comm -13 <(echo "$ci_jobs") <(echo "$py_jobs") | tr '\n' ' ')'"
+[[ -n "$ci_jobs" && "$ci_jobs" = "$py_jobs" ]] && pass "the always-run job set plus the four shard families is exactly ci.yml's job list (a new job there must be classified here)" || fail "job parity: ci-only='$(LC_ALL=C comm -23 <(echo "$ci_jobs") <(echo "$py_jobs") | tr '\n' ' ')' tool-only='$(LC_ALL=C comm -13 <(echo "$ci_jobs") <(echo "$py_jobs") | tr '\n' ' ')'"
 gate_git="$(awk '/^git_ro\(\)/,/^}/' "$SCRIPT_DIR/../../../scripts/ci-pr-affected-preactivation.sh" | grep -o 'GIT_[A-Z_]*' | sort -u)"
 lib_git="$(printf '%s\n' "${GIT_LOCATION_VARS[@]}" | sort -u)"
 py_git="$(python3 - "$SUT" <<'PY'
