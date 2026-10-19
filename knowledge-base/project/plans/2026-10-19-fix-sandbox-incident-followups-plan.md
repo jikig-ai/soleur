@@ -327,6 +327,10 @@ retirement of the red canary is recorded in the ADR). CLO advisory 2026-10-19: l
 
 ## Observability
 
+> **Scope banner (review round, 2026-10-19).** The runtime synthetic, heartbeat and vector-retag rows below (liveness_signal 2,
+> failure_mode 2, the `web-bash-synthetic` unit journal in `logs.where`, and any in_transit rows for them) land in the stacked PR
+> (#10455 b) and are NOT in this PR, so failure mode 2 is uncovered here. Layer cites for failure modes 3, 5, 6 and 7 follow below.
+
 ```yaml
 liveness_signal:
   what: >-
@@ -351,19 +355,19 @@ failure_modes:
     alert_route: "Better Stack heartbeat web_bash_synthetic (per host) email on a missed beat (layer 3 vendor heartbeat; independent of Vector)"
   - mode: "The smoke never dispatched Bash (probe absent in an old image, docker exec rc 125/126/127, stub server failure, ledger write failure, replay-only coverage)"
     detection: "verdict smoke_infra_error with the first docker stderr line in reason; holds the soak, never pages, never rolls back; three in a row (consecutive_infra_error) emit a SDK_BASH_SMOKE_STALE journald row and a Sentry warning so a dead probe cannot stay silent"
-    alert_route: "deploy-status field and journald row; the stale warning goes to Sentry (op=sandbox-canary, level warning), deliberately not an email page"
+    alert_route: "deploy-status field and journald row (observability layer 3, the Vector journald shipper carries the SDK_BASH_SMOKE and SDK_BASH_SMOKE_STALE rows to Better Stack); the stale warning also goes to Sentry (op=sandbox-canary, level warning, posted directly from ci-deploy.sh), deliberately not an email page; flagged on the #10548 tracker by the follow-through at 3 consecutive infra errors"
   - mode: "A helper step other than unshare(CLONE_NEWUSER) fails with EPERM in a live tenant session"
     detection: "classifyBashSandboxFailure returns helper_step_eperm for a whole-line exact-step match; the dispatcher mirror emits one pino row per user per debounce window with sandboxErrorCode"
     alert_route: "agent_sandbox_bash_denial (IN list of both codes), email"
   - mode: "The AF_UNIX selector and the sandbox config disagree (an egress session on the deny artifact, or a no-egress session on the base artifact)"
     detection: "dispatcher unit test asserts env and config agree for both egress values; probeAgentSandboxHardening and the canary verify both artifacts are present and sock_filter-shaped; the deploy smoke runs the no-egress tuple with the selector set, so a variant that breaks Bash start is a sdk_bash_smoke_failed row"
-    alert_route: "faithful_canary_sandbox_broken for a broken variant; CI for the disagreement"
+    alert_route: "faithful_canary_sandbox_broken for a broken variant. The spawn-time disagreement is fail-safe since CTO ruling F1 (2026-10-19): checkSeccompAgreement returns the text, buildAgentQueryOptions mirrors it as a Sentry warning through the pino mirror (observability layer 2; feature=agent-sandbox op=seccomp-agreement, debounced) and corrects toward the base artifact. No alert rule keys on it, so it is visible only (Sentry, and the pino row shipped by vector to Better Stack), never a page; CI covers the construction-time agreement"
   - mode: "The user-facing notice is shown for output that is not a pre-exec denial (a false 'did not run')"
     detection: "whole-output predicate unit tests including mixed-output negatives; the mirror event still carries the scrubbed matched line, so the rewrite never removes the page"
-    alert_route: "CI; agent_sandbox_bash_denial still pages on the underlying code"
+    alert_route: "CI; the mirror event is a pino row shipped by vector to Better Stack (observability layers 2 and 3), so agent_sandbox_bash_denial still pages on the underlying code (cc-soleur-go sessions only)"
   - mode: "A tenant forges the exact helper line"
     detection: "accepted limitation (recorded in the runbook): whole-line exact match, per-user per-code debounce; the deploy smoke and the runtime synthetic are the authoritative signals, not tenant text"
-    alert_route: "agent_sandbox_bash_denial email only prompts the check"
+    alert_route: "the pino mirror row shipped by vector to Better Stack (observability layers 2 and 3) feeds agent_sandbox_bash_denial, whose email only prompts the check"
 
 logs:
   where: "journald ci-deploy tag on web hosts (SANDBOX_CANARY_FAIL, SDK_BASH_SMOKE rows) shipped by Vector to Better Stack source 2457081; unit journal web-bash-synthetic (SyslogIdentifier retag, shipped by vector.toml Source 4); app container pino rows for the tenant mirror"

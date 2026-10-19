@@ -103,7 +103,8 @@ const RUNTIME_FLAGS = {
   // #10455 (a) / ADR-075 addendum 2026-10-19 — selects the AF_UNIX-deny seccomp artifact for NO-EGRESS
   // agent sessions (egress sessions always stay on the base artifact). Default OFF = today's posture.
   // Read ONLY through `isAgentSandboxUnixDenyEnabled` (via server/resolve-sandbox-unix-deny.ts, which
-  // resolves any error or timeout to OFF). The flag is global (anonymous identity). Turning it ON is a
+  // resolves any error or timeout to OFF). The flag is global (anonymous identity; the anonymous identity
+  // resolves to the prd segment, so a dev-only flip does nothing). Turning it ON is a
   // production write that waits for a green deploy SDK Bash smoke (tracker #10548). Fail-closed:
   // FLAG_AGENT_SANDBOX_UNIX_DENY=0 mirror.
   "agent-sandbox-unix-deny": "FLAG_AGENT_SANDBOX_UNIX_DENY",
