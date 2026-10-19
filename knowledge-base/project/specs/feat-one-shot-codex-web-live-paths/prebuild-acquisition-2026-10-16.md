@@ -622,3 +622,68 @@ Sandbox process-name checks returned no matching process and add no evidence
 about the independently managed export session; its own completed result and
 verified files establish successful file-only preparation. Artifact retrieval
 also needed exact read-only approval after a sandbox mise refusal.
+
+### Verified platform and Config redirect boundary — 2026-10-19
+
+CTO and security closed the framed-response correction at pushed
+`74da79933c3dd081de71b0f0026935cf21150684`. Canonical sync resolved BEHIND
+at `960d04e249a2711081fb4f5021b784c2814a1abb`, including main
+`cb8423745d9035e3990229d9b12930a96fda1571` (KB postmortem only).
+Exact-head file-only preview/export match the same 5,163 runtime inputs,
+191 migrations, 57 components and 6,938 source leaves plus metadata.
+Pairing `eefcc1a3b78370d204c4e1fb6552f64e78556411bcd2ea130dd7115136aaad7b`;
+operational `92c124b00880ba443366e39ffb59668a4a5f59153c705ab1ce5a19056968c783`.
+CTO independently reviewed actual manifest
+`bdbbca6cd97413b8003a39b752274d2a582ea7d242a206a62e022d828f29fdd5`
+and runner `2d186348c8c187d471fe7931f49774435fa41cf73c78710ad5657d82f7f0d2d9`.
+File-only source/helper/input/CA/output preflight passed, with 121 loaded
+certificates and zero connections before fresh exact-action approval.
+
+The exact command was freshly approved and executed once, observing
+200/200/307. It retained the 864-byte platform manifest at raw SHA-256
+`168f762c218e167ba88ae7e48194126eb5ba5e99ef652063e3f14f9c4f0ee70f`.
+The exact Config descriptor specifies OCI image-config media, 2,646 bytes
+and digest `sha256:3f56e44ddc1a5655b8f288a2aa812db567b2f5f0b8bc18ef3da63b94a95608d5`.
+Config returned HTTP 307; the response body and Location were not retained,
+no redirect was followed, and no Config or layers were downloaded. Declared
+layer entries are inert manifest data and establish no image-store presence.
+The exclusive marker is spent. Receipt checksum
+`75f22c9010fd371939ec4afc0aca40d710651c2429f51d43cb126a0f86427c37`
+and file SHA-256
+`7a3c40e1a55cbeadc8c9f5310140a22310bfa554a1b5604faf3bb16940f84e81`
+verify. Private directory/file modes remain 0700/0600, owner matches, retained
+raw bytes/digest/descriptor match the receipt, and Config is absent.
+CTO independently verified this actual evidence. Publisher/issuer/ownership/
+profile/runtime authority remains false or pending. No follow-on action or
+reuse of saved command approval is permitted.
+
+Ruled by CTO agent: the next source-only boundary is a **separate redirect-
+header diagnostic**, not an inferred CDN route or a destination download.
+Permit exactly two fixed HTTPS GETs: the existing anonymous token request
+with unchanged repository scope, then the exact pinned Config endpoint on
+`registry-1.docker.io`. Inspect only Config status and bounded headers;
+require HTTP 307 and exactly one bounded Location. Read no redirect body,
+contact no destination and download no Config. Unexpected status, duplicate/
+malformed Location or transport/binding/deadline failure terminates.
+
+Location may carry a sensitive capability. Parse in memory and retain only
+HTTPS scheme, normalized DNS hostname, allowed/default port, complete Location
+hash/byte length, path hash, query-present and fragment/userinfo-present flags,
+and whether the path contains the expected Config digest. Reject credentials/
+userinfo, fragments, controls, unsupported scheme and malformed authority.
+Never retain the full URL, query values, raw headers, bearer or exception text.
+Observed routing information does not authenticate or authorize a destination.
+Bind verified platform bytes/descriptor, exact source/helpers/executables,
+CA/input/output identities and both request URLs. Preserve private outputs,
+one-use consumption, fixed diagnostics, 60-second overall/requested 10-second
+limits and independently approved outer timeout. No challenge, retry, layers,
+daemon/account config or automatic follow-on. Source implementation, synthetic
+tests, independent source review, fresh actual manifest review and fresh exact-
+action approval remain pending. Actual header evidence must precede a separate
+engineering/security ruling about any constrained destination request.
+
+This closes the current metadata evidence phase at a partial result, with
+Config acquisition and the full eleven-role gate still incomplete. Hosted
+authentication stays BLOCKED, alternate route PENDING, draft/disarmed/default-
+off/customer-blocked state and all build/recovery/routine/Web/CLO/ship holds
+remain. Historical source-bound receipts stay unchanged and attributable.

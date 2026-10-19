@@ -2176,3 +2176,26 @@
   Earlier existing trace JSON confirms connection refusals without process
   cause; no browser/images opened or workflow rerun. Ref #8785 is CLOSED and
   describes a different failure. All runtime/legal/shipping holds persist.
+- CTO/security cleared framing at `74da79933c3dd081de71b0f0026935cf21150684`.
+  Canonical sync resolved BEHIND at `960d04e249a2711081fb4f5021b784c2814a1abb`,
+  including main `cb8423745d9035e3990229d9b12930a96fda1571` (KB-only).
+  Fresh file-only preview/export match; CTO reviewed actual replacement
+  manifest `bdbbca6cd97413b8003a39b752274d2a582ea7d242a206a62e022d828f29fdd5`.
+- One freshly approved exact command observed 200/200/307 and retained the
+  pinned 864-byte platform manifest. Config descriptor is OCI, 2,646 bytes,
+  digest `sha256:3f56e44ddc1a5655b8f288a2aa812db567b2f5f0b8bc18ef3da63b94a95608d5`.
+  No Location/body retained, redirect followed, Config/layer download or local
+  image observation. Marker spent. Receipt checksum
+  `75f22c9010fd371939ec4afc0aca40d710651c2429f51d43cb126a0f86427c37`
+  and file SHA `7a3c40e1a55cbeadc8c9f5310140a22310bfa554a1b5604faf3bb16940f84e81`
+  verify, as do actual raw platform bytes/descriptor/private modes. CTO
+  independently verified actual evidence; all admission remains pending.
+- CTO ruled separate two-GET redirect-header diagnostic as the next source-
+  only phase: unchanged anonymous token and pinned Config endpoint only;
+  require 307/one bounded Location, reject malformed/capability-bearing unsafe
+  shapes, retain only safe routing/hash projection, no body/full URL/query/
+  bearer/destination fetch. Detailed fields/bindings/limits are recorded in
+  `prebuild-acquisition-2026-10-16.md`. Implementation, synthetic verification,
+  independent source and actual-manifest reviews and fresh exact-action
+  approval remain pending. No CDN host or permission is inferred. All hosted-
+  auth, runtime, profile, legal and shipping holds persist at phase boundary.
