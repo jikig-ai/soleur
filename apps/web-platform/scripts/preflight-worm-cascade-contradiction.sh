@@ -54,15 +54,35 @@
 # CASCADE — OR the second sanctioned pattern: ON DELETE SET NULL plus a
 # row-level `col NOT NULL -> NULL` carve-out inside the WORM trigger
 # (the audit_byok_use founder_id shape, mig 066; dsar_export_audit_pii
-# user_id, mig 160 — 160 additionally binds the transition to a deleted
-# parent via NOT EXISTS, 066 does not). Two honest limits: (a) this
-# gate's `prosrc ILIKE '%RAISE EXCEPTION%'` heuristic cannot distinguish
-# the carved-out form, so it emits a permanent ::warning:: for
-# audit_byok_use — expected residue, not a live contradiction; (b) the
-# census scans only FKs referencing public.users — auth.users-referencing
-# WORM tables (dsar_export_audit_pii.user_id) are outside this gate's
-# envelope entirely, which is exactly how #9994's contradiction escaped
-# detection (tracked for a gate-extension follow-up).
+# user_id, mig 160; action_sends.message_id, mig 162 — the last two
+# additionally bind the transition to a deleted parent via NOT EXISTS).
+# Honest limit: this gate's `prosrc ILIKE '%RAISE EXCEPTION%'` heuristic
+# cannot distinguish the carved-out form, so it emits a permanent
+# ::warning:: for those rows — expected residue, not a live contradiction.
+#
+# #10379 ENVELOPE EXTENSION — the census no longer scans only FKs to
+# public.users. It computes the user-erasure DELETE CONE (a recursive CTE
+# rooted at auth.users + public.users, propagating through CASCADE edges
+# only — only CASCADE propagates row deletion; UNION dedup terminates FK
+# cycles) and classifies EVERY FK on EVERY WORM-gated table into four
+# classes:
+#   cone-refuse    RESTRICT/NO ACTION ('r'/'a') FK to an IN-CONE non-users
+#                  parent — the #10254 wedge class: the cascade delete of
+#                  the parent is REFUSED (23503) inside GoTrue's
+#                  transaction. No in-schema carve-out exists for an FK
+#                  refusal (no child mutation is attempted), so this is
+#                  ::error:: when owned — at ANY trigger level.
+#   cone-write-stmt write-firing ('n'/'c'/'d') FK to an in-cone parent
+#                  with a STATEMENT-level raising trigger matched on the
+#                  event — ::error:: when owned (today's hard class).
+#   cone-write-row write-firing FK to an in-cone parent with a ROW-level
+#                  raising trigger — ::warning:: (carve-out residue can be
+#                  legitimate; the heuristic cannot see it).
+#   dormant        FK to an OUT-OF-CONE parent — no contradiction today,
+#                  but the anchor wedges the day the parent gains a delete
+#                  path (or joins the cone): ::warning:: naming the parent.
+# Silently excluded: confrelid ∈ {public.users, auth.users} with 'r'/'a'
+# — the sanctioned RESTRICT+pre-anonymise shape.
 #
 # Run via:  doppler run -p soleur -c dev_scheduled -- bash apps/web-platform/scripts/preflight-worm-cascade-contradiction.sh
 # Requires: DATABASE_URL_POOLER (Doppler-injected). Runs after migrations are
@@ -103,45 +123,82 @@ owned_by_ref() {
   grep -qE "\b${tbl}\b" "$MIGRATIONS_DIR"/*.sql 2>/dev/null
 }
 
-# One query, pipe-delimited: severity|table|trigger|fn|fk|fk_action|level|timing.
-# - confdeltype: 'n' = SET NULL (fires child UPDATE), 'c' = CASCADE (fires
-#   child DELETE). 'r'/'a'/'d' (RESTRICT/NO ACTION/SET DEFAULT) do not fire a
-#   blockable child mutation in the cascade and are intentionally excluded.
+# One query, pipe-delimited: class|table|trigger|fn|fk|fk_action|level|timing|parent.
+# - confdeltype: 'n' = SET NULL and 'd' = SET DEFAULT (both fire child
+#   UPDATE), 'c' = CASCADE (fires child DELETE), 'r'/'a' = RESTRICT /
+#   NO ACTION (refuse the parent delete — no child mutation is attempted,
+#   so no trigger-level carve-out can ever admit them: ruled fail-closed
+#   per CTO 2026-10-19). 'd' groups with the write-firing actions — it is
+#   a real child write, not a refusal (the prior comment lumped it with
+#   'r'/'a' was wrong).
 # - tgtype bits: &16 = UPDATE, &8 = DELETE, &1 = ROW (else STATEMENT),
-#   &2 = BEFORE (else AFTER). BEFORE *and* AFTER raising triggers both abort the
-#   cascade transaction, so timing is NOT filtered — only reported.
-# - Match the trigger event to the cascade's child operation: SET NULL→UPDATE,
-#   CASCADE→DELETE.
-# - prosrc heuristic: an unconditional or conditional RAISE EXCEPTION / ASSERT
-#   in the trigger body. A trigger that never aborts (pure audit/log via
-#   RAISE LOG/NOTICE) does not block the cascade and is not flagged.
+#   &2 = BEFORE (else AFTER). BEFORE *and* AFTER raising triggers both abort
+#   the cascade transaction, so timing is NOT filtered — only reported.
+# - Action↔event matching is load-bearing: 'n'/'d'→UPDATE (&16),
+#   'c'→DELETE (&8). 'r'/'a' need no event match — the refusal aborts on
+#   the PARENT delete regardless of trigger; the trigger's presence just
+#   marks the table WORM-gated.
+# - DISTINCT ON (con.oid) dedupes per-FK across multi-trigger tables,
+#   preferring STATEMENT rows (worst-case severity wins).
+# - prosrc heuristic: an unconditional or conditional RAISE EXCEPTION /
+#   ASSERT in the trigger body. A trigger that never aborts (pure
+#   audit/log via RAISE LOG/NOTICE) does not block and is not flagged.
 SQL=$(cat <<'EOSQL'
-SELECT
-  -- No ELSE branch on the CASE below: confdeltype is type "char", so an
-  -- `ELSE con.confdeltype` would unify the CASE result to "char" and truncate
-  -- 'SET NULL'->'S'. The WHERE clause constrains confdeltype to ('n','c'), so
-  -- ELSE is dead.
-  CASE WHEN (tg.tgtype & 1) = 0 THEN 'error' ELSE 'warning' END,
+WITH RECURSIVE del(rel) AS (
+  SELECT 'auth.users'::regclass
+  UNION SELECT 'public.users'::regclass
+  UNION
+  SELECT con.conrelid
+  FROM pg_constraint con
+  JOIN del ON con.confrelid = del.rel
+  WHERE con.confdeltype = 'c'
+)
+SELECT DISTINCT ON (con.oid)
+  CASE
+    WHEN con.confdeltype IN ('r','a') AND prel.oid IN (SELECT rel FROM del)
+      THEN 'cone-refuse'
+    WHEN con.confdeltype IN ('n','c','d') AND prel.oid IN (SELECT rel FROM del)
+         AND (tg.tgtype & 1) = 0
+      THEN 'cone-write-stmt'
+    WHEN con.confdeltype IN ('n','c','d') AND prel.oid IN (SELECT rel FROM del)
+      THEN 'cone-write-row'
+    ELSE 'dormant'
+  END AS class,
   rel.relname,
   tg.tgname,
   fn.proname,
   con.conname,
-  CASE con.confdeltype WHEN 'n' THEN 'SET NULL' WHEN 'c' THEN 'CASCADE' END,
-  CASE WHEN (tg.tgtype & 1) = 0 THEN 'STATEMENT' ELSE 'ROW' END,
-  CASE WHEN (tg.tgtype & 2) = 2 THEN 'BEFORE' ELSE 'AFTER' END
+  CASE con.confdeltype
+    WHEN 'n' THEN 'SET NULL'
+    WHEN 'c' THEN 'CASCADE'
+    WHEN 'd' THEN 'SET DEFAULT'
+    WHEN 'r' THEN 'RESTRICT'
+    WHEN 'a' THEN 'NO ACTION'
+  END AS action,
+  CASE WHEN (tg.tgtype & 1) = 0 THEN 'STATEMENT' ELSE 'ROW' END AS level,
+  CASE WHEN (tg.tgtype & 2) = 2 THEN 'BEFORE' ELSE 'AFTER' END AS timing,
+  ns.nspname || '.' || prel.relname AS parent
 FROM pg_constraint con
 JOIN pg_class rel ON rel.oid = con.conrelid
+JOIN pg_class prel ON prel.oid = con.confrelid
+JOIN pg_namespace ns ON ns.oid = prel.relnamespace
 JOIN pg_trigger tg ON tg.tgrelid = con.conrelid AND NOT tg.tgisinternal
 JOIN pg_proc fn ON fn.oid = tg.tgfoid
 WHERE con.contype = 'f'
-  AND con.confrelid = 'public.users'::regclass
-  AND con.confdeltype IN ('n', 'c')
+  -- WORM-gated tables only: a raising UPDATE/DELETE trigger exists. The
+  -- event match fires for write actions; 'r'/'a' rows match any raising
+  -- UPDATE/DELETE trigger on the table (marker, not event).
   AND (
-        (con.confdeltype = 'n' AND (tg.tgtype & 16) = 16)
-     OR (con.confdeltype = 'c' AND (tg.tgtype & 8)  = 8)
+        (con.confdeltype IN ('n','d') AND (tg.tgtype & 16) = 16)
+     OR (con.confdeltype = 'c'        AND (tg.tgtype & 8)  = 8)
+     OR (con.confdeltype IN ('r','a') AND (tg.tgtype & 24) <> 0)
       )
   AND (fn.prosrc ILIKE '%RAISE EXCEPTION%' OR fn.prosrc ILIKE '%ASSERT %')
-ORDER BY 1, 2, 3;
+  -- Silent carve: sanctioned RESTRICT/NO ACTION to the users roots
+  -- (pre-anonymise shape) is never a contradiction.
+  AND NOT (con.confrelid IN ('public.users'::regclass, 'auth.users'::regclass)
+           AND con.confdeltype IN ('r','a'))
+ORDER BY con.oid, (tg.tgtype & 1), 2, 5;
 EOSQL
 )
 
@@ -152,10 +209,21 @@ fi
 
 errors=""
 warnings=""
-while IFS='|' read -r severity tbl trg fn fk action level timing; do
-  [[ -z "$severity" ]] && continue
-  line="public.$tbl — trigger $trg (fn $fn, $level $timing) raises on the $action cascade from FK $fk → public.users"
-  if [[ "$severity" == "error" ]]; then
+while IFS='|' read -r cls tbl trg fn fk action level timing parent; do
+  [[ -z "$cls" ]] && continue
+  case "$cls" in
+    cone-refuse)
+      line="public.$tbl — FK $fk → $parent is $action: the erasure cascade's delete of $parent rows is REFUSED (23503) for any user with rows in $tbl. No in-schema carve-out exists for an FK refusal (WORM-gated via $trg / fn $fn, $level $timing)."
+      ;;
+    cone-write-stmt|cone-write-row)
+      line="public.$tbl — trigger $trg (fn $fn, $level $timing) raises on the $action cascade from FK $fk → $parent"
+      ;;
+    dormant)
+      line="public.$tbl — dormant anchor FK $fk → $parent ($action): no contradiction today, but the WORM gate ($trg / fn $fn) blocks the parent delete the day $parent gains a delete path or joins the erasure cone — file a tracking issue before adding one."
+      ;;
+    *) continue ;;
+  esac
+  if [[ "$cls" == "cone-refuse" || "$cls" == "cone-write-stmt" ]]; then
     # Per-ref ownership gate: block only when THIS checkout owns the table.
     if owned_by_ref "$tbl"; then
       errors+="$line"$'\n'
@@ -168,16 +236,16 @@ while IFS='|' read -r severity tbl trg fn fk action level timing; do
 done <<<"$rows"
 
 if [[ -n "$warnings" ]]; then
-  echo "::warning::Latent or out-of-ref WORM-vs-cascade contradiction(s) — deletion breaks only when the user has rows in these tables, or the table belongs to another open migration-PR (ensure account-delete.ts pre-anonymises before auth-delete; the owning PR must fix its migration):"
+  echo "::warning::Latent, out-of-ref, or dormant WORM-vs-cascade contradiction(s) — deletion breaks only when the user has rows in these tables, the table belongs to another open migration-PR, or the out-of-cone parent gains a delete path (ensure account-delete.ts pre-anonymises before auth-delete; the owning PR must fix its migration):"
   while IFS= read -r l; do [[ -z "$l" ]] && continue; echo "::warning::  - $l"; done <<<"$warnings"
 fi
 
 if [[ -n "$errors" ]]; then
-  echo "::error::WORM-vs-cascade contradiction breaks GDPR Art-17 account deletion for ALL users (#5372):"
+  echo "::error::WORM-vs-cascade contradiction breaks GDPR Art-17 account deletion for users with rows in these tables (#5372, extended #10379):"
   while IFS= read -r l; do [[ -z "$l" ]] && continue; echo "::error::  - $l"; done <<<"$errors"
-  echo "::error::A STATEMENT-level WORM trigger fires on the FK cascade even against 0 rows, aborting auth.admin.deleteUser as a GoTrue 500."
-  echo "::error::Fix: use ON DELETE RESTRICT + pre-anonymise in account-delete.ts (the workspace_member_actions pattern), or a SET NULL FK + row-level WORM carve-out (the audit_byok_use founder_id pattern, mig 066) — see issue #5372."
+  echo "::error::Two shapes abort auth.admin.deleteUser inside GoTrue's transaction: a write-firing FK (SET NULL/CASCADE/SET DEFAULT) whose cascade UPDATE/DELETE fires a STATEMENT-level raising trigger — even against 0 rows — and a RESTRICT/NO ACTION FK to an in-cone parent whose delete is REFUSED (23503)."
+  echo "::error::Fix: for a refusal shape use ON DELETE SET NULL + a row-level WORM carve-out admitting the cascade transition (the mig 160/162 pattern), or repoint the FK to an out-of-cone parent; for a write shape use ON DELETE RESTRICT + pre-anonymise in account-delete.ts (the workspace_member_actions pattern) or SET NULL + row-level carve-out (mig 066) — see issues #5372 and #10379."
   exit 1
 fi
 
-echo "Preflight: WORM-vs-cascade contradiction check passed (no deletion-blocking triggers owned by this ref on users-cascade FKs)."
+echo "Preflight: WORM-vs-cascade contradiction check passed (no deletion-blocking FK shapes owned by this ref in the erasure cone)."

@@ -14,3 +14,9 @@
 - Tally: 1 gate pass (agent_rounds) before CTO batch.
 - Next: collect 3 agents → record rulings → technical-ruling gate → Phase 0.2 baseline → implement per plan → review → ship → merge.
 - Plan disposition matrix (§lines 179-200): cone-refuse+owned → ::error::; cone-write-stmt+owned → ::error::; cone-write-row → ::warning::; dormant → ::warning:: naming parent.
+
+### Work Phase (in-flight, post-compaction resume point)
+- Rulings: CTO confirmed all 3 (fail-closed cone-refuse; WORM-only census + all-tables follow-up; 'd' in write classes w/ UPDATE match). CPO APPROVE (2 blocking: rulings hold + live census cited; 3 non-blocking incl. unconditional all-tables issue). User-impact REJECT→RESOLVED via new ## User-Brand Impact section.
+- DONE: test.sh rewritten (12 tests, 9-col class|tbl|trg|fn|fk|action|level|timing|parent schema) + gate rewritten (del CTE, 4 classes, DISTINCT ON dedup, silent r/a-to-roots carve, per-class copy). Fixture: 26/26 GREEN.
+- TODO: (a) live dev census via extended query vs audit set; (b) file 2 dormant-anchor issues + all-tables follow-up, link in warning copy? (warning text says "file a tracking issue" generically — plan 2.2 wanted links); (c) ride-along account-delete.ts:411 RESTRICT→NO ACTION comment; (d) tenant-integration.yml ~654 comment wording; (e) CODEOWNERS pin if approved (CPO recommended yes); (f) commit+push → review panel → fix-round → ship → merge → postmerge → DONE.
+- Pins: error copy "users with rows" + transitive remediation (done); action↔event match preserved (done); DISTINCT ON per-FK dedup (done); dormant warns r/a subclass emphasis (done via copy).
