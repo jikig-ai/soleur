@@ -13,7 +13,7 @@ const h = vi.hoisted(() => ({
   listen: vi.fn(),
   startClock: vi.fn(),
   stopClock: vi.fn(),
-  startQuietWindow: vi.fn(),
+  reporterStartMock: vi.fn(),
 }));
 
 vi.mock("../sentry.server.config", () => ({}));
@@ -56,7 +56,7 @@ vi.mock("../server/cc-dispatcher", () => ({
 // #8211 — the counts-only live-session reporter is armed once at boot.
 vi.mock("../server/quiet-window", () => ({
   startQuietWindowReporter: (...a: unknown[]) => {
-    h.startQuietWindow(...a);
+    h.reporterStartMock(...a);
     return setTimeout(() => {}, 0);
   },
 }));
@@ -128,8 +128,8 @@ describe("server/index.ts boot — git-data host-key pin line (#7226 AC16)", () 
     expect(h.logPin).toHaveBeenCalledTimes(1);
 
     // #8211 — the quiet-window reporter is armed exactly once, with both count sources.
-    expect(h.startQuietWindow).toHaveBeenCalledTimes(1);
-    const reporterDeps = h.startQuietWindow.mock.calls[0][0] as {
+    expect(h.reporterStartMock).toHaveBeenCalledTimes(1);
+    const reporterDeps = h.reporterStartMock.mock.calls[0][0] as {
       readCounts: () => { ccQueries: number; legacySessions: number };
     };
     expect(reporterDeps.readCounts()).toEqual({ ccQueries: 0, legacySessions: expect.any(Number) });
