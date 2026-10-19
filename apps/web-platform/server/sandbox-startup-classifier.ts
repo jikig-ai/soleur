@@ -195,7 +195,7 @@ const BASH_BWRAP_TOKEN = /\b(?:bwrap|bubblewrap)\b/i;
 const HELPER_USERNS_STEP = "unshare(CLONE_NEWUSER)";
 
 /**
- * Steps that run BEFORE the tenant command starts (2026-10-19 review ruling; rationale: ADR-079 addendum). Measured runtime order (helper
+ * Steps that run BEFORE the tenant command starts (2026-10-19 review ruling; rationale: canary-probe-set.md, the helper-step list under "SDK Bash smoke and the helper_userns_eperm denial"). Measured runtime order (helper
  * process, then the PID-namespace init it forks): unshare(NEWPID|NEWNS) attempt, unshare(CLONE_NEWUSER), write
  * setgroups / uid_map / gid_map, unshare(NEWPID|NEWNS) after userns, `fork` (the init), then in the init
  * prctl(PR_SET_DUMPABLE), mount(MS_PRIVATE), mount(/proc), prctl(PR_CAP_AMBIENT_CLEAR_ALL), `fork(worker)`, and in

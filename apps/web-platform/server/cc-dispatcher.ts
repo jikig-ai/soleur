@@ -364,12 +364,13 @@ export function mirrorBashSandboxFailure(
   userId: string,
   conversationId: string,
 ): void {
-  // The artifact the conversation's sandbox config was PAIRED with at build time (undefined when the registry has no
-  // entry, e.g. a unit-test call). A plain socket EPERM is unclassified, so this field is the only artifact context
-  // a classified helper-line event carries.
-  const seccompArtifact = _ccSeccompArtifact.get(makeAckPostureKey(userId, conversationId));
   const failure = classifyBashSandboxFailure(output);
   if (!failure) return;
+  // The artifact the conversation's sandbox config was PAIRED with at build time (undefined when the registry has no
+  // entry, e.g. a unit-test call). A plain socket EPERM is unclassified, so this field is the only artifact context
+  // a classified helper-line event carries. Looked up after the classify guard so the common unclassified result
+  // pays no registry lookup.
+  const seccompArtifact = _ccSeccompArtifact.get(makeAckPostureKey(userId, conversationId));
   // null first arg, never a real Error — the pino mirror captures a passed Error first as
   // `feature=pino-mirror` with no user and Sentry drops the tagged second capture (#8629). The code lives in
   // `message` and `extra`. Sibling emitters of this failure: the deploy canary's `SANDBOX_CANARY_FAIL` /

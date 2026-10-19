@@ -170,7 +170,7 @@ describe("selectCommandStreamOutput — the streamed text (#10455 c)", () => {
     expect(selectCommandStreamOutput("bwrap: Can't mount proc on /newroot/proc: Operation not permitted", true)).toBe(
       BASH_UNAVAILABLE_NOTICE,
     );
-    // 2026-10-19 review ruling (rationale: ADR-079 addendum): the worker-side steps that run before the tenant command are in the subset too.
+    // 2026-10-19 review ruling (rationale: canary-probe-set.md, the helper-step list under "SDK Bash smoke and the helper_userns_eperm denial"): the worker-side steps that run before the tenant command are in the subset too.
     for (const step of ["fork(worker)", "prctl(PR_SET_NO_NEW_PRIVS)", "prctl(PR_SET_SECCOMP)", "execvp"]) {
       expect(selectCommandStreamOutput(`apply-seccomp: ${step}: Operation not permitted`, true), step).toBe(BASH_UNAVAILABLE_NOTICE);
     }

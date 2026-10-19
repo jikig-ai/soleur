@@ -500,7 +500,7 @@ property of the dashboard integration settings, not of anything this repository 
 **State (2026-10-19): the flag is OFF; nothing changes for tenants until it is turned on.** Enabling is a production write that needs a
 green deploy `sdk_bash_smoke` (the smoke runs the no-egress tuple with the unixdeny artifact selected, so a variant that breaks Bash start
 shows as `sdk_bash_smoke_failed` on the deploy that carries it) and the operator's explicit authorization at that time (#10548). Rollback is
-flipping the flag OFF. **Rollback is complete only when BOTH hold:** (a) `soleur:flag-list` shows Flagsmith OFF AND the Doppler mirror
+flipping the flag OFF. With a healthy Flagsmith an OFF flip reaches new queries in about 60 s with no restart; to be safe against a Flagsmith outage the **rollback is complete only when BOTH hold:** (a) `soleur:flag-list` shows Flagsmith OFF AND the Doppler mirror
 `FLAG_AGENT_SANDBOX_UNIX_DENY=0` (the flip writes Flagsmith first and the Doppler `dev` and `prd` mirrors after it; an ON flip writes the mirror to
 `1`), and (b) the container has restarted since, because the container environment IS the Flagsmith-failure fallback (`runtimeEnvFallback` in
 `lib/feature-flags/server.ts` answers from `FLAG_AGENT_SANDBOX_UNIX_DENY` when the Flagsmith read fails). If Flagsmith is down during the
@@ -541,9 +541,9 @@ procedure; a per-organisation cohort was deferred, not built). The #10548 reques
    Routing (`server/conversation-routing.ts`, `server/ws-handler.ts`): a conversation whose `active_workflow` is NULL (routing `legacy`) runs
    on the legacy runner (`agent-runner.ts`); one with `soleur_go_pending` / `soleur_go_active` routing runs on cc-soleur-go
    (`cc-dispatcher.ts`). **Open item (tracked on the #10548 enable request, not executable today):** a new conversation is routed as
-   `soleur_go_pending` at the three routing sites in `ws-handler.ts`, so the legacy-runner check needs a conversation with a NULL `active_workflow`
+   `soleur_go_pending` (`ws-handler.ts` creates the routing at ~:1850; ~:1284 and ~:1315 only map a NULL value to pending when persisting), so the legacy-runner check needs a conversation with a NULL `active_workflow`
    that may not be creatable from the product UI; the author of the enable request must establish how to obtain one (or record that the legacy
-   runner cannot be exercised) before the request is sent. This runbook established the routing rule from the code, not a UI path.
+   runner cannot be exercised) before the request is sent. This runbook established the routing rule from the code, not a UI path. The cohort stage for the flag and a variant-EPERM signal are deferred to #10604.
 6. **Abort criteria:** any non-AF_UNIX command failing, or any tenant report, means roll back first and diagnose after.
 7. **The enable sequence:** (a) run `soleur:flag-list` first (it shows code wiring and the live Doppler dev/prd values with drift
    detection; the Doppler mirror `FLAG_AGENT_SANDBOX_UNIX_DENY` is not verified by this runbook). (b) Create the Flagsmith feature with the
