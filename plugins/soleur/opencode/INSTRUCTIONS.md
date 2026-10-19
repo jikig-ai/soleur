@@ -33,10 +33,9 @@ that finds it needs a specialist reports back instead of delegating.
 `/go`, `/help`, `/sync` and `/version` register from the **config directory's** `commands/`
 (`install-opencode-adapter.ts` copies `opencode/commands/*.md` there). The committed tree's
 `opencode/commands/` is the source the installer copies, not a discovery root. If `/go` is
-absent, the adapter is not installed: with `CLAUDE_PLUGIN_ROOT` exported (see *Paths and
-entry points* below), `bun
-"$CLAUDE_PLUGIN_ROOT/scripts/install-opencode-adapter.ts" --check` names what is missing
-(measurement §4.0).
+absent, the adapter is not installed: run
+`bun "${CLAUDE_PLUGIN_ROOT}/scripts/install-opencode-adapter.ts" --check` (see *Paths and
+entry points* below for the token) — it names what is missing (measurement §4.0).
 
 A stub's body carries the literal text `$ARGUMENTS`. OpenCode's docs say the token is
 replaced with the invocation's arguments (§4.0 is docs-sourced, not measured); the stub is
@@ -45,19 +44,23 @@ arguments you were given — the stub's job is to route you, not to parse them.
 
 ## Paths and entry points
 
-Soleur's canonical prose calls scripts as `bash "${CLAUDE_PLUGIN_ROOT}/<path>"`. **Nothing on
-this harness exports `CLAUDE_PLUGIN_ROOT`** — there is no plugin loader to set it — so such a
-call collapses to a workdir-relative path and fails, usually as `source=none verified=false`
-in the `go` gate rather than as anything that looks like a missing variable. Export it first:
+Soleur's canonical prose calls scripts as `bash "${CLAUDE_PLUGIN_ROOT}/<path>"`, with the
+token substituted at delivery time on Claude Code. **Nothing on this harness substitutes
+it**, so a copied call reaches the shell with the token expanded to nothing, collapses to a
+workdir-relative path, and surfaces as `source=none verified=false` in the `go` gate rather
+than as anything that looks like a missing variable.
 
-    export CLAUDE_PLUGIN_ROOT="__SOLEUR_PLUGIN_ROOT__"
+The resolved root for this install is the line below — the installer rewrites it when it
+copies this file:
 
-The installed copy of this file carries that token **resolved**, so the line above is the
-real checkout path and can be used verbatim. It is the prefix for every path in the plugin
-(`skills/`, `agents/`, `commands/`, `hooks/`, `scripts/`), and it is also the prefix of the
-`skills` entry in `opencode.json` — if the line is ambiguous, read that entry instead of
-guessing. A `subagent` child does not inherit your shell environment: export the variable in
-the shell call you hand it, or pass the absolute path.
+    __SOLEUR_PLUGIN_ROOT__
+
+Before running any canonical `bash` call, type that absolute path in place of the token. It
+is the prefix for every path in the plugin (`skills/`, `agents/`, `commands/`, `hooks/`,
+`scripts/`) and the prefix of the `skills` entry in `opencode.json`, so either source
+disambiguates the other. Do not export or default a variable for it: the value is a literal
+path here. A `subagent` child does not inherit your shell environment, so hand it the
+absolute path in its prompt rather than assuming a variable exists.
 
 ## Tools
 
