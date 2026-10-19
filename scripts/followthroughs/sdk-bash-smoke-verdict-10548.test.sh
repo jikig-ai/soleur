@@ -48,7 +48,7 @@ printf '%s\nHTTP_STATUS:%s' "${STUB_BODY:-}" "${STUB_HTTP:-200}"
 STUB
 chmod +x "$STUBS/curl"
 
-WH_SECRET="whsec-synth-0123456789"
+WH_SECRET="whsec-synth-0123456789" # gitleaks:allow # issue:#10546 synthetic webhook-secret stub literal, not a credential
 CF_ID="cfid-synth-abc"
 CF_SECRET="cfsec-synth-xyz"
 DAY=86400
