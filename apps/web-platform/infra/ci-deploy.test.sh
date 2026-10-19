@@ -527,12 +527,17 @@ if [[ "${1:-}" == "exec" ]]; then
     fi
   done
 fi
-# The faithful / outer-wrap replays (`node sandbox-canary.mjs --replay|--replay-outer`) answer from env so a
-# row can drive a sandbox_broken verdict through run_canary_replay. Unset => fall through (old behaviour).
+# The faithful replay (`node sandbox-canary.mjs --replay`) answers from env so a row can drive a sandbox_broken
+# verdict through run_canary_replay. Unset => fall through (old behaviour). `--replay-outer` is a TRIPWIRE: the
+# outer-wrap deploy call is retired (#10454, ADR-079 addendum 2026-10-19), so any exec carrying it is recorded
+# in the sequence log and the D6d absence row fails.
 if [[ "${1:-}" == "exec" ]]; then
   for _a in "$@"; do
     if [[ "$_a" == "--replay" && -n "${MOCK_CANARY_REPLAY_OUT:-}" ]]; then printf '%s' "$MOCK_CANARY_REPLAY_OUT"; exit 0; fi
-    if [[ "$_a" == "--replay-outer" && -n "${MOCK_CANARY_REPLAY_OUTER_OUT:-}" ]]; then printf '%s' "$MOCK_CANARY_REPLAY_OUTER_OUT"; exit 0; fi
+    if [[ "$_a" == "--replay-outer" ]]; then
+      printf '%s\n' "replay-outer" >> "${MOCK_CANARY_SEQ_LOG:-/dev/null}"
+      if [[ -n "${MOCK_CANARY_REPLAY_OUTER_OUT:-}" ]]; then printf '%s' "$MOCK_CANARY_REPLAY_OUTER_OUT"; exit 0; fi
+    fi
   done
 fi
 # Teardown order: stop/rm append to the same sequence log, then fall through to the mode arms.
@@ -4310,9 +4315,17 @@ run_diag_case "$DIAGD" MOCK_BWRAP_FAIL_RC=0 MOCK_BWRAP_FAIL_STDERR= 'MOCK_CANARY
 diag_check "#9871 D6c: a faithful canary_infra_error verdict emits no bundle (no exec into a container that may not exist)" \
   "$([[ ! -s "$DIAGD/diaglog" && "$(diag_line_count "$DIAGD/logger")" == 0 ]] && echo 0 || echo 1)"
 run_diag_case "$DIAGD" MOCK_BWRAP_FAIL_RC=0 MOCK_BWRAP_FAIL_STDERR= 'MOCK_CANARY_REPLAY_OUT={"verdict":"ok","reason":"ok"}' "MOCK_CANARY_REPLAY_OUTER_OUT=$D6_BROKEN"
-diag_check "#9871 D6d: an outer-wrap sandbox_broken verdict (the expected report-only state) emits no bundle, and the verdict WAS processed (positive control)" \
-  "$([[ ! -s "$DIAGD/diaglog" && "$(diag_line_count "$DIAGD/logger")" == 0 ]] && has_f 'Outer-wrap canary (report-only): verdict=sandbox_broken' "$DC_OUT" && echo 0 || echo 1)" \
-  "$(printf '%s' "$DC_OUT" | grep -aE 'canary.*verdict=' | head -n 4)"
+diag_check "#10454 D6d: the outer-wrap canary is retired - no --replay-outer exec, no outer-wrap verdict line, no bundle; the faithful verdict WAS processed (positive control)" \
+  "$([[ ! -s "$DIAGD/diaglog" && "$(diag_line_count "$DIAGD/logger")" == 0 && "$(grep -c '^replay-outer$' "$DIAGD/seq" || true)" == 0 ]] \
+      && ! has_f 'Outer-wrap canary' "$DC_OUT" && has_f 'Faithful sandbox canary (non-blocking): verdict=ok' "$DC_OUT" && echo 0 || echo 1)" \
+  "$(printf '%s' "$DC_OUT" | grep -aE 'canary.*verdict=' | head -n 4); seq: $(tr '\n' ' ' < "$DIAGD/seq")"
+# D6f -- #10454 absence rows (ADR-079 addendum 2026-10-19): the outer-wrap function, call, ledger variables and
+# alias block are gone from the deploy script, and the retirement comment names the reason at the former call site.
+diag_check "#10454 D6f: ci-deploy.sh has no run_outer_wrap_canary, OUTER_WRAP_CANARY, OUTER_LEDGER_ALIAS or --replay-outer reference" \
+  "$(grep -qE 'run_outer_wrap_canary|OUTER_WRAP_CANARY|OUTER_LEDGER_ALIAS|--replay-outer|sandbox-canary-outer-wrap' "$DEPLOY_SCRIPT" && echo 1 || echo 0)" \
+  "$(grep -nE 'run_outer_wrap_canary|OUTER_WRAP_CANARY|OUTER_LEDGER_ALIAS|--replay-outer|sandbox-canary-outer-wrap' "$DEPLOY_SCRIPT" | head -n 5)"
+diag_check "#10454 D6g: the former call site carries the retirement comment (no outer-wrap verdict: retired, see ADR-079 addendum 2026-10-19)" \
+  "$(grep -qF 'no outer-wrap verdict: retired, see ADR-079 addendum 2026-10-19' "$DEPLOY_SCRIPT" && echo 0 || echo 1)"
 # D6e -- the faithful bundle runs AFTER the Sentry page, so a slow bundle never delays it.
 _d6_pg=$(grep -nF 'sandbox_canary_sentry_event "$verdict" "$reason" "$sdk_version" "$sentry_op" || true' "$DEPLOY_SCRIPT" | cut -d: -f1) || true
 _d6_dg=$(grep -nE '^[[:space:]]*emit_canary_sandbox_diag faithful' "$DEPLOY_SCRIPT" | cut -d: -f1) || true

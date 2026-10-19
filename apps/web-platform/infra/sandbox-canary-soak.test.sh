@@ -78,17 +78,11 @@ assert "writer default is NOT /var/run tmpfs" "[[ \"$WRITER_DEFAULT\" != /var/ru
 assert "reader default is NOT /var/run tmpfs" "[[ \"$READER_DEFAULT\" != /var/run/* ]]"
 assert "writer + reader defaults MATCH" "[[ \"$WRITER_DEFAULT\" == \"$READER_DEFAULT\" ]]"
 
-# 7. The #5863 OUTER-wrap ledger — same durability contract, distinct var
-# (SANDBOX_OUTER_WRAP_CANARY_STATE_FILE). Same #5889 failure shape: a drifted
-# default would silently TRANSIENT the #9797 soak followthrough forever.
-OWRITER_DEFAULT="$(grep -oE 'SANDBOX_OUTER_WRAP_CANARY_STATE_FILE:-[^}]+' "$TARGET" | head -1 | sed 's/.*:-//')"
-OREADER_DEFAULT="$(grep -oE 'SANDBOX_OUTER_WRAP_CANARY_STATE_FILE:-[^}]+' "$CAT_TARGET" | head -1 | sed 's/.*:-//')"
-assert "outer writer default is durable (/mnt/data), not tmpfs" "[[ \"$OWRITER_DEFAULT\" == /mnt/data/* ]]"
-assert "outer reader default is durable (/mnt/data), not tmpfs" "[[ \"$OREADER_DEFAULT\" == /mnt/data/* ]]"
-assert "outer writer default is NOT /var/run tmpfs" "[[ \"$OWRITER_DEFAULT\" != /var/run/* ]]"
-assert "outer reader default is NOT /var/run tmpfs" "[[ \"$OREADER_DEFAULT\" != /var/run/* ]]"
-assert "outer writer + reader defaults MATCH" "[[ \"$OWRITER_DEFAULT\" == \"$OREADER_DEFAULT\" ]]"
-assert "outer ledger aliases the inner ledger" "[[ \"$OWRITER_DEFAULT\" != \"$WRITER_DEFAULT\" ]]"
+# 7. The #5863 OUTER-wrap ledger is RETIRED (#10454, ADR-079 addendum 2026-10-19): neither the writer nor the
+# reader may carry its state-file variable or its ledger stamp any more (a surviving reader would serve a frozen
+# 'pass' soak to nobody; a surviving writer would keep a dead ledger alive).
+assert "outer-wrap ledger variable is gone from the writer and the reader" \
+  "! grep -q 'SANDBOX_OUTER_WRAP_CANARY_STATE_FILE' \"$TARGET\" \"$CAT_TARGET\""
 
 # 7b. The #2640 WORKSPACE-ISOLATION ledger — third ledger, same #5889
 # durability/parity contract (WORKSPACE_ISOLATION_STATE_FILE). A drifted
@@ -98,16 +92,40 @@ WIREADER_DEFAULT="$(grep -oE 'WORKSPACE_ISOLATION_STATE_FILE:-[^}]+' "$CAT_TARGE
 assert "WI writer default is durable (/mnt/data), not tmpfs" "[[ \"$WIWRITER_DEFAULT\" == /mnt/data/* ]]"
 assert "WI reader default is durable (/mnt/data), not tmpfs" "[[ \"$WIREADER_DEFAULT\" == /mnt/data/* ]]"
 assert "WI writer + reader defaults MATCH" "[[ \"$WIWRITER_DEFAULT\" == \"$WIREADER_DEFAULT\" ]]"
-assert "WI ledger aliases neither canary ledger" "[[ \"$WIWRITER_DEFAULT\" != \"$WRITER_DEFAULT\" && \"$WIWRITER_DEFAULT\" != \"$OWRITER_DEFAULT\" ]]"
+assert "WI ledger does not alias the canary ledger" "[[ \"$WIWRITER_DEFAULT\" != \"$WRITER_DEFAULT\" ]]"
 
 # 7c. Ledger-stamp vocabulary pairing: the writer's `ledger` field must name a
 # stamp the readers' expected-ledger arguments accept — a drift between the
 # two restatements makes every ledger read `foreign_ledger_stamp` (all three
 # deploy-status keys permanently 'unknown'). Pin the pairs on BOTH sides.
-assert "writer stamps sandbox-canary / outer-wrap / workspace-isolation" \
-  "grep -q '\"sandbox_broken\" \"\$sentry_op\"' \"$TARGET\" && grep -q \"'workspace-isolation'\" \"$TARGET\" && grep -q '\"sandbox-canary\"' \"$TARGET\" && grep -q '\"sandbox-canary-outer-wrap\"' \"$TARGET\""
-assert "readers expect the same three stamps" \
-  "grep -q '\"sandbox-canary\"' \"$CAT_TARGET\" && grep -q '\"sandbox-canary-outer-wrap\"' \"$CAT_TARGET\" && grep -q '\"workspace-isolation\"' \"$CAT_TARGET\""
+assert "writer stamps sandbox-canary / workspace-isolation and no longer outer-wrap" \
+  "grep -q '\"sandbox_broken\" \"\$sentry_op\"' \"$TARGET\" && grep -q \"'workspace-isolation'\" \"$TARGET\" && grep -q '\"sandbox-canary\"' \"$TARGET\" && ! grep -q 'sandbox-canary-outer-wrap' \"$TARGET\""
+assert "readers expect the same two stamps and no longer outer-wrap" \
+  "grep -q '\"sandbox-canary\"' \"$CAT_TARGET\" && grep -q '\"workspace-isolation\"' \"$CAT_TARGET\" && ! grep -q 'sandbox-canary-outer-wrap' \"$CAT_TARGET\""
+
+# 7d. Guard 5 (#10454): the outer-wrap deploy call, ledger and soak script are retired, so NO live reader or writer
+# may remain anywhere in the repo. Historical records (the PIR, plans/specs/learnings archives), the ADR-079
+# addendum and the runbook retirement note are the only allowed mentions; the three infra tests that carry the
+# absence assertions are excluded by name. A surviving `.outer_wrap_canary` reader in a workflow or a skill would
+# poll a key deploy-status no longer emits and sit TRANSIENT forever.
+REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
+OUTER_RE='outer_wrap_canary|OUTER_WRAP_CANARY|run_outer_wrap_canary|OUTER_LEDGER_ALIAS|tenant-outer-wrap-soak|ci-deploy-outer-wrap-canary'
+OUTER_HITS="$(git -C "$REPO_ROOT" grep -nE "$OUTER_RE" -- . \
+  ':(exclude)knowledge-base/project/plans' ':(exclude)knowledge-base/project/specs' ':(exclude)knowledge-base/project/learnings' \
+  ':(exclude)knowledge-base/engineering/operations/post-mortems' \
+  ':(exclude)knowledge-base/engineering/architecture/decisions/ADR-079*' \
+  ':(exclude)knowledge-base/engineering/operations/runbooks/canary-probe-set.md' \
+  ':(exclude)apps/web-platform/infra/ci-deploy.test.sh' ':(exclude)apps/web-platform/infra/cat-deploy-state.test.sh' \
+  ':(exclude)apps/web-platform/infra/sandbox-canary-soak.test.sh' || true)"
+assert "no live reference to the retired outer-wrap canary outside the historical record" \
+  "[[ -z \"\$OUTER_HITS\" ]]"
+[[ -z "$OUTER_HITS" ]] || printf '%s\n' "$OUTER_HITS" | head -n 20 | sed 's/^/        hit: /'
+
+# 7e. Positive controls for the grep above: the pattern matches the retired symbol (so an empty result is not a
+# dead regex), and the KEPT pieces still exist (the retirement removed the deploy arm, not the replay mode).
+assert "7d pattern is live: it matches a retired symbol name" "printf 'run_outer_wrap_canary' | grep -qE \"$OUTER_RE\""
+assert "sandbox-canary.mjs still implements --replay-outer (kept for #9773 and the masked-proc docker suite)" \
+  "grep -q 'replay-outer' \"$SCRIPT_DIR/../scripts/sandbox-canary.mjs\""
 
 # 8. Capability parity (review ask — static check, no docker needed): the
 # reverted arm-F posture has THREE pins that must never drift —

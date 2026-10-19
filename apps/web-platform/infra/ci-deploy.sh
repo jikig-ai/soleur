@@ -430,21 +430,6 @@ CRON_DRAIN_STATE_FILE="${CRON_DRAIN_STATE_FILE:-/var/run/ci-deploy-cron-drain.js
 # durability tier as CRON_DEPLOY_LEASE_FILE. Reader default MUST match
 # cat-deploy-state.sh sandbox_canary_json().
 SANDBOX_CANARY_STATE_FILE="${SANDBOX_CANARY_STATE_FILE:-/mnt/data/ci-deploy-sandbox-canary.json}"
-# #5863 arm F: the outer-wrap canary gets its OWN durable soak state — same
-# cross-deploy accumulator shape as the inner canary but a separate ledger so
-# the two arms' soak windows never alias. Report-only at first deploy
-# (wg-dark-launch-deploy-gates); the #5863 follow-through script reads this
-# file via /hooks/deploy-status's outer_wrap_canary field.
-SANDBOX_OUTER_WRAP_CANARY_STATE_FILE="${SANDBOX_OUTER_WRAP_CANARY_STATE_FILE:-/mnt/data/ci-deploy-outer-wrap-canary.json}"
-# Aliasing guard: an env override pointing the outer ledger at the inner file
-# would let the #5863 soak read the #8752 arm's state (wrong mechanism's
-# greens counting toward promotion). Warn AND skip the outer arm entirely —
-# interleaved writes under one file is worse than a missing arm.
-OUTER_LEDGER_ALIAS=0
-if [[ "$SANDBOX_OUTER_WRAP_CANARY_STATE_FILE" == "$SANDBOX_CANARY_STATE_FILE" ]]; then
-  OUTER_LEDGER_ALIAS=1
-  logger -t "$LOG_TAG" "SANDBOX_OUTER_WRAP_CANARY_STATE_FILE == SANDBOX_CANARY_STATE_FILE ($SANDBOX_OUTER_WRAP_CANARY_STATE_FILE) — outer canary SKIPPED: aliasing would let the inner ledger's greens count toward the #5863 soak; fix the env override"
-fi
 # Where the canary payload + fixture live INSIDE the image (Dockerfile COPY).
 SANDBOX_CANARY_MJS="${SANDBOX_CANARY_MJS:-/app/scripts/sandbox-canary.mjs}"
 # Cross-workspace isolation probe verdict (#2640). Written per deploy by
@@ -464,13 +449,12 @@ WORKSPACE_ISOLATION_TIMEOUT="${WORKSPACE_ISOLATION_TIMEOUT:-300}"
 # 0/non-numeric would DISABLE the cap (timeout(1) treats 0 as unbounded) —
 # that is the opposite of the knob's contract; fail-safe back to the default.
 [[ "$WORKSPACE_ISOLATION_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || WORKSPACE_ISOLATION_TIMEOUT=300
-# Same aliasing failure class as OUTER_LEDGER_ALIAS above: an env override
-# pointing the #2640 ledger at either canary ledger would interleave verdict
-# vocabularies (sandbox_broken vs workspace_isolation_*) and corrupt both
-# soaks. Warn AND skip the probe entirely — a missing arm beats a wrong file.
+# Aliasing guard: an env override pointing the #2640 ledger at the canary
+# ledger would interleave verdict vocabularies (sandbox_broken vs
+# workspace_isolation_*) and corrupt both soaks. Warn AND skip the probe
+# entirely — a missing arm beats a wrong file.
 WORKSPACE_ISOLATION_LEDGER_ALIAS=0
-if [[ "$WORKSPACE_ISOLATION_STATE_FILE" == "$SANDBOX_CANARY_STATE_FILE" \
-   || "$WORKSPACE_ISOLATION_STATE_FILE" == "$SANDBOX_OUTER_WRAP_CANARY_STATE_FILE" ]]; then
+if [[ "$WORKSPACE_ISOLATION_STATE_FILE" == "$SANDBOX_CANARY_STATE_FILE" ]]; then
   WORKSPACE_ISOLATION_LEDGER_ALIAS=1
   logger -t "$LOG_TAG" "WORKSPACE_ISOLATION_STATE_FILE aliases a canary ledger ($WORKSPACE_ISOLATION_STATE_FILE) — workspace-isolation probe SKIPPED: interleaved writes would corrupt both soaks; fix the env override" || true
 fi
@@ -695,13 +679,13 @@ write_cron_drain_state() {
 #                       deploy — no operator timestamp to hand-pin).
 #   - `sandbox_broken`→ reset both to 0 (a faithful FAIL restarts the soak).
 #     (reset set is actually $5 reset_re — `sandbox_broken` is just the
-#     default for the faithful/outer-wrap callers; the #2640 probe passes its
+#     default for the faithful caller; the #2640 probe passes its
 #     own RED classes.)
 #   - infra_error/*   → HOLD prior counters (a docker/exec hiccup or the
 #                       dark-launch `fixture_uncaptured` state is a non-signal).
 # $6 ledger: an identity stamp naming WHICH mechanism's ledger this write
-# belongs to (the Sentry-op vocabulary: sandbox-canary / sandbox-canary-
-# outer-wrap / workspace-isolation). The readers in cat-deploy-state.sh refuse
+# belongs to (the Sentry-op vocabulary: sandbox-canary / workspace-isolation).
+# The readers in cat-deploy-state.sh refuse
 # a file whose stamp is present-but-foreign — closing the env-alias blind spot
 # where an override points a canary ledger AT another ledger's path and foreign
 # `pass` verdicts would otherwise inflate the wrong soak.
@@ -2935,7 +2919,7 @@ run_canary_replay() {
   if [[ "$verdict" == "sandbox_broken" ]]; then
     # #9860: this verdict has been recorded since 2026-10-09 with no cause beyond
     # bwrap_operation_not_permitted. Only the inner faithful canary (sentry_op sandbox-canary) is
-    # diagnosed: the outer-wrap arm's sandbox_broken is the expected report-only state.
+    # diagnosed (the retired outer-wrap arm never was; see ADR-079 addendum 2026-10-19).
     sandbox_canary_sentry_event "$verdict" "$reason" "$sdk_version" "$sentry_op" || true
     # After the page, so a slow bundle never delays it.
     if [[ "$sentry_op" == "sandbox-canary" ]]; then
@@ -2951,21 +2935,6 @@ run_faithful_sandbox_canary() {
   # (that gap is why #5849 shipped green).
   run_canary_replay "--replay" "$SANDBOX_CANARY_STATE_FILE" "sandbox-canary" \
     "Faithful sandbox canary (non-blocking)"
-}
-
-# run_outer_wrap_canary: the #5863 outer-wrap arm — NON-BLOCKING report-only.
-# Replays the SELF-AUTHORED outer mount-table fixture inside the canary
-# container (the elevation posture the prod wrap depends on)
-# and runs the shared isolation payload in the resulting namespace. Its
-# verdict accumulates in SANDBOX_OUTER_WRAP_CANARY_STATE_FILE for the
-# #5863 soak follow-through; promotion to gating is a separate change after
-# a green soak.
-run_outer_wrap_canary() {
-  if [[ "$OUTER_LEDGER_ALIAS" == "1" ]]; then
-    return 0 # aliased ledger: refuse to write into the inner ledger
-  fi
-  run_canary_replay "--replay-outer" "$SANDBOX_OUTER_WRAP_CANARY_STATE_FILE" \
-    "sandbox-canary-outer-wrap" "Outer-wrap canary (report-only)"
 }
 
 # run_workspace_isolation_probe: NON-BLOCKING dark-launch (#2640; the
@@ -4551,8 +4520,8 @@ case "$COMPONENT" in
       # on a faithful FAIL, but never gates/rolls back this deploy. `|| true`
       # keeps a canary hiccup from aborting the deploy under set -e.
       run_faithful_sandbox_canary || true
-      # Outer-wrap canary (#5863) — report-only, same non-blocking posture.
-      run_outer_wrap_canary || true
+      # no outer-wrap verdict: retired, see ADR-079 addendum 2026-10-19 (#10454). Its pass condition
+      # (privileged elevation) was dropped on purpose by ADR-075's 2026-10-09 addendum, so it could never go green.
 
       # Cross-workspace isolation probe (#2640) — NON-BLOCKING dark-launch
       # (wg-dark-launch-deploy-gates). Runs the direct tier of the cross-workspace

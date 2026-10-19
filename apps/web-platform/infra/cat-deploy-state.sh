@@ -379,12 +379,6 @@ sandbox_canary_json() {
   canary_state_json "${SANDBOX_CANARY_STATE_FILE:-/mnt/data/ci-deploy-sandbox-canary.json}" "sandbox-canary"
 }
 
-# Same shape, separate ledger (#5863): the outer-wrap canary's report-only
-# soak state. Read by the #5863 follow-through via /hooks/deploy-status.
-outer_wrap_canary_json() {
-  canary_state_json "${SANDBOX_OUTER_WRAP_CANARY_STATE_FILE:-/mnt/data/ci-deploy-outer-wrap-canary.json}" "sandbox-canary-outer-wrap"
-}
-
 # Loaded seccomp profile hash (#5875 item 4 / ADR-079). The no-SSH surface for
 # the "applied ≠ loaded" gap: the sha256 of the seccomp profile the RUNNING prod
 # container actually started with (--security-opt seccomp=<file>), recorded by
@@ -773,7 +767,6 @@ JOURNALD_STORAGE="$(journald_storage_json)"
 CONTAINER_RESTART="$(container_restart_json)"
 CRON_DRAIN="$(cron_drain_json)"
 SANDBOX_CANARY="$(sandbox_canary_json)"
-OUTER_WRAP_CANARY="$(outer_wrap_canary_json)"
 WORKSPACE_ISOLATION="$(workspace_isolation_json)"
 SECCOMP_PROFILE_SHA256="$(seccomp_profile_sha256_value)"
 SECCOMP_LIVE="$(seccomp_live_json)"
@@ -805,7 +798,6 @@ jq -nc \
   --argjson cr "$CONTAINER_RESTART" \
   --argjson cd "$CRON_DRAIN" \
   --argjson sc "$SANDBOX_CANARY" \
-  --argjson owc "$OUTER_WRAP_CANARY" \
   --argjson wi "$WORKSPACE_ISOLATION" \
   --arg sps "$SECCOMP_PROFILE_SHA256" \
   --argjson sl "$SECCOMP_LIVE" \
@@ -820,7 +812,7 @@ jq -nc \
   --arg rb "$INNGEST_REDIS_BINARY" \
   --arg rts "$INNGEST_REDIS_TAIL_STATUS" \
   --arg vci "$VECTOR_CONFIG_IDENTITY" \
-  '$base + $cr + $cd + $sl + {host_id: $hid, ci_deploy_sha256: $cds, sandbox_canary: $sc, outer_wrap_canary: $owc, workspace_isolation: $wi, seccomp_profile_sha256: $sps, journald_storage: $js, services: (($base.services // {}) + {
+  '$base + $cr + $cd + $sl + {host_id: $hid, ci_deploy_sha256: $cds, sandbox_canary: $sc, workspace_isolation: $wi, seccomp_profile_sha256: $sps, journald_storage: $js, services: (($base.services // {}) + {
     inngest_heartbeat: $hb,
     inngest_heartbeat_journal_tail: $hbj,
     inngest_heartbeat_dark_arm: $hbd,

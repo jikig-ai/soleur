@@ -509,7 +509,6 @@ scripts/supabase-watchdog-classify	5
 scripts/sweep-followthroughs	8
 scripts/tenant-dpa-register-guard-live	2
 scripts/tenant-dpa-register-guard-unit	1
-scripts/tenant-outer-wrap-soak-5863	3
 scripts/test-affected-derive	2
 scripts/test-affected-derive-cache	2
 scripts/test-affected-kb-consumers	4

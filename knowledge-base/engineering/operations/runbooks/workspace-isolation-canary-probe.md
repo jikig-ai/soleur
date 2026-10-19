@@ -146,8 +146,9 @@ the resilience arm: an ANSI-colored pass summary must still read
 ## Gate vs report — report-only (chosen)
 
 The probe ships **report-only**: it is invoked `|| true` inside the
-`CANARY_HEALTHY` block after `run_faithful_sandbox_canary` and
-`run_outer_wrap_canary` (and before the GitHub App key check + swap), so it
+`CANARY_HEALTHY` block after `run_faithful_sandbox_canary` (the outer-wrap arm
+that used to sit between them is retired, ADR-079 addendum 2026-10-19) and
+before the GitHub App key check + swap, so it
 runs, classifies, records and pages — but no verdict rolls the deploy back.
 
 Rationale: `wg-dark-launch-deploy-gates` — never validate a gate change with the
@@ -180,10 +181,9 @@ Two ordering/ledger facts worth knowing before triaging a soak anomaly:
 - The probe runs (and records `pass`) **before** `github_app_key_canary_check` —
   a verdict is about the image's isolation property, and still stands even if a
   later gate rolls that canary back for unrelated reasons.
-- `WORKSPACE_ISOLATION_STATE_FILE` is alias-guarded against both canary ledgers
-  (`WORKSPACE_ISOLATION_LEDGER_ALIAS`, same failure class as
-  `OUTER_LEDGER_ALIAS`): an env override that aliases it logs a warn and skips
-  the probe entirely — verdict vocabularies must never interleave in one file.
+- `WORKSPACE_ISOLATION_STATE_FILE` is alias-guarded against the canary ledger
+  (`WORKSPACE_ISOLATION_LEDGER_ALIAS`): an env override that aliases it logs a
+  warn and skips the probe entirely — verdict vocabularies must never interleave in one file.
 
 ## Tier scoping — `SOLEUR_ISOLATION_TIERS=direct`
 

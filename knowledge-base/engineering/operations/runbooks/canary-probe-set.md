@@ -348,26 +348,41 @@ in #10455). Once the deploy-time smoke ships (#10453) it, not tenant text, becom
 the email only prompts the check above. The wake path for both alerts is email-only on
 the Better Stack free tier until the ADR-260 Slack integration is verified.
 
-## Outer-wrap canary — #5863 arm-F verdicts
+## Outer-wrap canary - RETIRED 2026-10-19 (#10454)
 
-`outer_wrap_canary.verdict` in deploy-state (Sentry `op=sandbox-canary-outer-wrap`) covers the
-tenant filesystem isolation arm — the mountns-only outer bwrap built from
-`infra/agent-outer-wrap-argv.json` inside the canary container (file-cap'd `/usr/bin/bwrap` +
-`--cap-add SYS_ADMIN` on the docker run). Report-only during dark launch; the soak lives in
-`/mnt/data/ci-deploy-outer-wrap-canary.json` and promotion is tracked by #9797.
-`canary_infra_error` rows hold the soak; `sandbox_broken` resets + pages.
+The deploy-time outer-wrap arm (`run_outer_wrap_canary`, deploy-state key `outer_wrap_canary`, ledger
+`/mnt/data/ci-deploy-outer-wrap-canary.json`, Sentry `op=sandbox-canary-outer-wrap`, soak script
+`tenant-outer-wrap-soak-5863.sh`, promotion tracker #9797) is retired. Ruled by CTO agent, 2026-10-19: DEMOTE
+(ADR-079 addendum 2026-10-19). Do not look for an `outer_wrap_canary` key on `/hooks/deploy-status` any more.
 
-| `reason` | Meaning | First move |
-|---|---|---|
-| `isolation_probe_failed` | The shared payload saw the synthetic sibling or another `FAIL:` inside the realized wrap — the mount table LEAKS | The table is unsound — do not promote; diff `buildOuterWrapArgv` against the fixture; rerun `bash apps/web-platform/scripts/agent-outer-wrap-debug.sh <ws>` locally |
-| `wrong_elevation_userns` | `isolation_ok` but `elevation=userns` — bwrap took the implicit-userns fallback, NOT the file-cap'd mountns the arm requires (fatal to the inner sandbox, Phase 0) | Check `getcap /usr/bin/bwrap` in the image + `--cap-add SYS_ADMIN` on the docker run; the Dockerfile's end-stage audit should have caught a missing cap |
-| `wrong_elevation_unreported` | `isolation_ok` but no `elevation=` marker — a drifted payload cannot green | `scripts/tenant-isolation-inner-probe.sh` must print `elevation=<privileged\|userns>` before the verdict line |
-| `bwrap_operation_not_permitted` | bwrap could not build the mountns (EPERM on mount/userns) — file-cap posture regressed or the seccomp/AppArmor profile denies it | Check the loaded seccomp profile (`seccomp_profile_loaded_matches_host` on deploy-state) and AppArmor `soleur-bwrap` |
-| `bwrap_shim_refused` | The #8752 PATH shim rejected the replay (should never run — the replay pins `/usr/bin/bwrap`) | A PATH-resolved `bwrap` leaked into the replay path — check `sandbox-canary.mjs` for a non-absolute spawn |
-| `isolation_probe_failed` on `ptrace_scope` | `/proc/sys/kernel/yama/ptrace_scope` was 0 — shared `/proc` becomes a full mountns oracle for sibling sessions | Re-pin `kernel.yama.ptrace_scope=1` on the host (the #9723 residual only holds while yama restricts ptrace) |
-| `probe_output_missing` | The payload ran but printed no verdict — an empty/truncated payload file | Confirm `COPY --from=builder /app/scripts/tenant-isolation-inner-probe.sh` + the `.dockerignore` re-include |
-| `bwrap_spawn_enoent` / `bwrap_spawn_*` / `bwrap_exit_*` / `docker_exec_rc_*` | Infra flake, never sandbox signal — the soak holds | Transient; if persistent check `sandbox-canary.mjs` is baked in the image |
-| `fixture_missing` / `fixture_invalid` | `infra/agent-outer-wrap-argv.json` absent or schema-rejected (incl. `{{ROOT}}`-confinement violations on prep entries) | Regenerate via `test/agent-outer-wrap.test.ts` Guard 2; schema is `outer-bwrap-v1` |
+**Why.** Its pass condition requires `elevation=privileged` (a file-cap'd `/usr/bin/bwrap` plus
+`--cap-add SYS_ADMIN`). ADR-075's 2026-10-09 addendum (#9874, operator-ratified) dropped that elevation on purpose,
+and `AGENT_OUTER_WRAP` is flag-off in production, so the arm reported `wrong_elevation_userns` on every deploy by
+design. A permanently red report-only signal teaches people to ignore report-only signals, and its first move
+("check `getcap` / `--cap-add SYS_ADMIN`") pointed away from the intended posture. Accepting `elevation=userns` was
+rejected: it would turn the canary green on the mechanism its own code comment calls wrong.
+
+**What stays, and who consumes it.**
+
+| Kept piece | Live consumer |
+|---|---|
+| `sandbox-canary.mjs --replay-outer` and `classifyOuterWrapReplayVerdict` | `test/sandbox-canary.test.ts` (the `--replay-outer` path: fixture validation, `{{ROOT}}` substitution, verdict classifier); the masked-proc docker suite deliberately does NOT run it (its header says so) |
+| `infra/agent-outer-wrap-argv.json` fixture and its Dockerfile/`.dockerignore` bakes | `test/sandbox-canary.test.ts`, `sandbox-canary-soak.test.sh` fixture checks, and the re-introduction path under #9773 |
+| `scripts/tenant-isolation-inner-probe.sh` shared payload | `agent-outer-wrap.ts` (opt-in boot self-probe), `test/agent-outer-wrap.test.ts`, and `sandbox-canary.mjs --replay-outer` (`test/sandbox-canary.test.ts`) |
+| `agent-outer-wrap.ts` | the `AGENT_OUTER_WRAP` flag path (off in production) |
+| `sandbox-canary.mjs --smoke-outer` | `sandbox-canary-verify-in-image.sh`, the CI capture-gate job that guards the fixture |
+
+**Property no longer measured at deploy.** The outer-wrap realized mount table (own workspace visible, sibling
+workspaces absent inside the wrap) is no longer replayed per deploy. Cross-workspace read/write isolation is still
+measured by `run_workspace_isolation_probe` (`test/sandbox-isolation.test.ts`, direct tier) in the canary; the
+outer-wrap table itself is covered only by the static pins (`test/agent-outer-wrap.test.ts`, `test/c4-render-argv-fixture.test.ts`) until the arm returns.
+That is acceptable because `AGENT_OUTER_WRAP` is flag-off in production.
+
+**Re-evaluate or delete.** On 2026-12-19, or when #9773 Stage 1 (the executor topology) ships, whichever comes first:
+either bring the arm back with a pass criterion defined by that topology (re-add a `run_canary_replay "--replay-outer"`
+call with its own ledger, deploy-state key and soak script, and a new ADR addendum), or delete the kept pieces above.
+
+The PIR keeps its historical sentence about the standing red rows untouched.
 
 ## Cross-workspace isolation canary — report-only soak (#2640)
 
@@ -386,7 +401,7 @@ timeout <cap> docker exec -w /app soleur-web-platform-canary \
 (`SOLEUR_ISOLATION_IN_IMAGE=1` self-skips FR7b — in-image PATH `bwrap` is the
 deployed shim and its control arm needs the real binary; see the design note.)
 
-It is called `|| true` after `run_faithful_sandbox_canary` and `run_outer_wrap_canary` inside the `CANARY_HEALTHY`
+It is called `|| true` after `run_faithful_sandbox_canary` inside the `CANARY_HEALTHY`
 block — **report-only** (dark-launch per `wg-dark-launch-deploy-gates`): it logs, writes state and
 pages Sentry on a red verdict, but a failing verdict never rolls back the deploy. Promotion to
 blocking is a tracked follow-up (see the design note,

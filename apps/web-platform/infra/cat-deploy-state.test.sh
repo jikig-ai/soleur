@@ -229,26 +229,17 @@ SC_BAD=$(CI_DEPLOY_STATE="$TMP/ok.state" SANDBOX_CANARY_STATE_FILE="$TMP/bad-can
 assert "malformed sandbox_canary.checked_at falls back to sentinel 0" \
   "[[ \$(printf '%s' '$SC_BAD' | jq -r .sandbox_canary.checked_at) == '0' ]]"
 
-# Outer-wrap canary verdict (#5863) surfaced under outer_wrap_canary — the
-# same canary_state_json shape on the separate
-# SANDBOX_OUTER_WRAP_CANARY_STATE_FILE ledger.
-OWC_ABSENT=$(CI_DEPLOY_STATE="$TMP/ok.state" SANDBOX_OUTER_WRAP_CANARY_STATE_FILE="$TMP/no-owc.json" bash "$TARGET")
-assert "outer_wrap_canary.verdict sentinel 'unknown' when no state file" \
-  "[[ \$(printf '%s' '$OWC_ABSENT' | jq -r .outer_wrap_canary.verdict) == 'unknown' ]]"
-assert "outer_wrap_canary.consecutive_pass sentinel 0 when no state file" \
-  "[[ \$(printf '%s' '$OWC_ABSENT' | jq -r .outer_wrap_canary.consecutive_pass) == '0' ]]"
-echo '{"verdict":"pass","reason":"ok","sdk_version":"0.3.197","checked_at":1751000600,"consecutive_pass":3,"first_pass_at":1750900000}' > "$TMP/owc.json"
-OWC_PRESENT=$(CI_DEPLOY_STATE="$TMP/ok.state" SANDBOX_OUTER_WRAP_CANARY_STATE_FILE="$TMP/owc.json" bash "$TARGET")
-assert "outer_wrap_canary.verdict read from state file (pass)" \
-  "[[ \$(printf '%s' '$OWC_PRESENT' | jq -r .outer_wrap_canary.verdict) == 'pass' ]]"
-assert "outer_wrap_canary.consecutive_pass surfaced (3)" \
-  "[[ \$(printf '%s' '$OWC_PRESENT' | jq -r .outer_wrap_canary.consecutive_pass) == '3' ]]"
-assert "outer_wrap_canary.first_pass_at surfaced" \
-  "[[ \$(printf '%s' '$OWC_PRESENT' | jq -r .outer_wrap_canary.first_pass_at) == '1750900000' ]]"
-echo '{"verdict":"pass","reason":"ok","sdk_version":"0.3.197","checked_at":"not-a-number"}' > "$TMP/owc-bad.json"
-OWC_BAD=$(CI_DEPLOY_STATE="$TMP/ok.state" SANDBOX_OUTER_WRAP_CANARY_STATE_FILE="$TMP/owc-bad.json" bash "$TARGET")
-assert "malformed outer_wrap_canary.checked_at falls back to sentinel 0" \
-  "[[ \$(printf '%s' '$OWC_BAD' | jq -r .outer_wrap_canary.checked_at) == '0' ]]"
+# Outer-wrap canary RETIRED (#10454, ADR-079 addendum 2026-10-19): deploy-status carries no outer_wrap_canary key
+# and the reader function is gone, even when a legacy ledger file is still on the host's /mnt/data volume or the
+# old env override is still exported. Positive control: the sibling sandbox_canary key IS still emitted.
+echo '{"verdict":"pass","reason":"ok","sdk_version":"0.3.197","checked_at":1751000600,"consecutive_pass":3,"first_pass_at":1750900000,"ledger":"sandbox-canary-outer-wrap"}' > "$TMP/owc.json"
+OWC_RETIRED=$(CI_DEPLOY_STATE="$TMP/ok.state" SANDBOX_OUTER_WRAP_CANARY_STATE_FILE="$TMP/owc.json" bash "$TARGET")
+assert "retired: deploy-status has no outer_wrap_canary key even with a legacy ledger present" \
+  "[[ \$(printf '%s' '$OWC_RETIRED' | jq 'has(\"outer_wrap_canary\")') == 'false' ]]"
+assert "retired positive control: sandbox_canary key is still emitted" \
+  "[[ \$(printf '%s' '$OWC_RETIRED' | jq 'has(\"sandbox_canary\")') == 'true' ]]"
+assert "retired: cat-deploy-state.sh has no outer_wrap_canary_json / OUTER_WRAP_CANARY / sandbox-canary-outer-wrap reference" \
+  "! grep -qE 'outer_wrap_canary|OUTER_WRAP_CANARY|sandbox-canary-outer-wrap' \"$TARGET\""
 
 # Workspace-isolation probe verdict (#2640) surfaced under workspace_isolation —
 # the same canary_state_json shape on the separate WORKSPACE_ISOLATION_STATE_FILE

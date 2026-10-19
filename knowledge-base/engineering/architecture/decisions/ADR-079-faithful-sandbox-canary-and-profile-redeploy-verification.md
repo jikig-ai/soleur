@@ -646,3 +646,45 @@ change the profile-to-redeploy coupling (section 3), the interim mechanism, or t
 Adopting to Accepted criteria. Status stays `adopting` (Deferral A).
 
 **Status.** The `sdk_bash_smoke` probe described above does not exist yet; it is deferred to #10453, the successor to #5941 (the earlier tracker of the nested-unshare-in-the-production-canary gap, still open) (time-boxed per the CTO's 2026-10-16 ruling). Until it ships, the wrapped-command guard is pre-merge only: `test/sandbox-wrapped-command-runtime.test.ts` (CI runner) and the wrapped-command control/treatment arms of `infra/sandbox-masked-proc-docker.test.sh` (production run tuple, driven by `infra/lib/sdk-bash-probe.mjs`). The faithful canary's replay is still blind to the command-side wrapper, which is exactly why the probe is required before this ADR's blocking promotion.
+
+## Addendum — 2026-10-19 (#10454): the outer-wrap canary is retired
+
+**Decision.** Ruled by CTO agent, 2026-10-19: DEMOTE. The deploy-time outer-wrap canary (`run_outer_wrap_canary`,
+the `outer_wrap_canary` key on `/hooks/deploy-status`, the `/mnt/data/ci-deploy-outer-wrap-canary.json` ledger,
+Sentry `op=sandbox-canary-outer-wrap`, and the `tenant-outer-wrap-soak-5863` follow-through with its tests and
+registrations) is removed. Tracker #9797 is closed as won't-fix and Sentry issue 152662657 is resolved with a link
+to this addendum.
+
+**Why.** The arm's pass condition requires `elevation=privileged`. ADR-075's 2026-10-09 addendum (#9874,
+operator-ratified) dropped that elevation for good, and `AGENT_OUTER_WRAP` is flag-off in production, so
+`wrong_elevation_userns` was the designed state of production on every deploy, not a regression, and a pass was
+unreachable by design. Relaxing the check to accept `elevation=userns` was rejected: it would turn the canary green on
+the mechanism its own code comment calls wrong. A permanently red report-only signal also trains the team to ignore
+report-only signals, and the runbook's first move for it ("check `getcap` / `--cap-add SYS_ADMIN`") contradicted
+ADR-075.
+
+**Kept, each with a live consumer.**
+
+| Kept piece | Live consumer |
+|---|---|
+| `sandbox-canary.mjs --replay-outer`, `classifyOuterWrapReplayVerdict` | `test/sandbox-canary.test.ts` and the re-introduction path under #9773 |
+| `infra/agent-outer-wrap-argv.json` fixture and its Dockerfile/`.dockerignore` bakes | `test/sandbox-canary.test.ts`, `sandbox-canary-soak.test.sh` fixture checks |
+| `scripts/tenant-isolation-inner-probe.sh` payload | `agent-outer-wrap.ts` boot self-probe, `test/agent-outer-wrap.test.ts` |
+| `agent-outer-wrap.ts` | the `AGENT_OUTER_WRAP` flag path (off in production) |
+| `sandbox-canary.mjs --smoke-outer` | `sandbox-canary-verify-in-image.sh`, the CI capture-gate job |
+
+The masked-proc docker suite does not run `--replay-outer` (its header records why), so it is not a consumer.
+
+**Defense removal.** The arm bounded one property: the privileged-elevation outer mount table. That elevation was
+dropped on purpose and the wrap is flag-off. Cross-workspace read/write isolation is still measured per deploy by
+`run_workspace_isolation_probe`. The outer-wrap realized mount table is no longer replayed per deploy; only the static
+pins (`test/agent-outer-wrap.test.ts`, `test/c4-render-argv-fixture.test.ts`) cover it until the arm returns.
+
+**Re-evaluate or delete.** On 2026-12-19, or when #9773 Stage 1 (the executor topology) ships, whichever comes first:
+bring the arm back with a pass criterion defined by that topology (own ledger, deploy-state key, soak script and a new
+addendum), or delete the kept pieces. Reverses sooner if `AGENT_OUTER_WRAP` is ever enabled in production.
+
+**Scope.** This amends the Decision's canary contract (section 2) only: the faithful inner canary
+(`run_faithful_sandbox_canary`), its `sandbox-canary` ledger and its journald emitter format are unchanged. Status
+stays `adopting` (Deferral A). The operator-facing note lives in
+`knowledge-base/engineering/operations/runbooks/canary-probe-set.md`.
