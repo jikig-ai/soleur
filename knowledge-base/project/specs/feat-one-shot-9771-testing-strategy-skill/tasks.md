@@ -44,5 +44,5 @@ Ruling record: `knowledge-base/project/specs/feat-one-shot-9771-testing-strategy
 - [x] 3.3 `grep -n 'flaky' apps/web-platform/test/README.md` hits (AC-3)
 - [x] 3.4 `git diff --name-only origin/main...HEAD | grep -c 'skills/testing-strategy'` → 0 (AC-7)
 - [x] 3.5 `npx markdownlint-cli2` on edited docs files
-- [ ] 3.6 `gh issue comment 9771` — post ruling + adjudications + re-open trigger;
+- [x] 3.6 `gh issue comment 9771` — post ruling + adjudications + re-open trigger;
       PR body carries `Closes #9771` (AC-6)
