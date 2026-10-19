@@ -85,7 +85,35 @@ printf '\n=== git-data flag precheck (Guard 1, #8189) ===\n\n'
 cat > "$BIN/doppler" <<'SHIM'
 #!/usr/bin/env bash
 printf 'doppler %s\n' "$*" >> "$DOPPLER_LOG"
-[ "${1:-}" = secrets ] && { [ "${2:-}" = get ] || [ "${2:-}" = set ]; } || { echo "doppler-shim: unsupported: $*" >&2; exit 64; }
+[ "${1:-}" = secrets ] && { [ "${2:-}" = get ] || [ "${2:-}" = set ] || [ "${2:-}" = delete ]; } || { echo "doppler-shim: unsupported: $*" >&2; exit 64; }
+# One line per call naming the verb, the secret and WHICH token carried it (fixture tokens only), so a row can prove
+# the stamp delete rode DOPPLER_TOKEN_GIT_DATA_FLAG and not the read token. A separate file: DOPPLER_LOG stays argv-only.
+printf '%s %s %s\n' "${2:-}" "${3:-}" "${DOPPLER_TOKEN:-<none>}" >> "$DOPPLER_LOG.tok"
+if [ "${2:-}" = delete ]; then
+  # secrets delete NAME -p P -c C --yes (#10297). SHIM_DELETE_ERR forces a classified failure (forbidden = the token lacks
+  # DELETE on prd, the unverified permission); SHIM_DELETE_NOOP models a delete that exits 0 and leaves the value.
+  name="${3:-}"; shift 3
+  proj=""; cfg=""; yes=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -p|--project) proj="${2:-}"; shift 2 ;;
+      -c|--config) cfg="${2:-}"; shift 2 ;;
+      -y|--yes) yes=1; shift ;;
+      *) echo "doppler-shim: unknown argument $1" >&2; exit 64 ;;
+    esac
+  done
+  [ "$yes" = 1 ] || { echo "doppler-shim: delete without --yes would prompt" >&2; exit 64; }
+  [ -n "${DOPPLER_TOKEN:-}" ] || { echo "Doppler Error: you must provide a token" >&2; exit 1; }
+  case "${SHIM_DELETE_ERR:-}" in
+    forbidden) echo "Doppler Error: This token does not have access to delete secrets STDERR-CANARY-3b" >&2; exit 1 ;;
+    network)   echo "Doppler Error: dial tcp: i/o timeout STDERR-CANARY-3b" >&2; exit 3 ;;
+    other)     echo "Doppler Error: something unforeseen STDERR-CANARY-3b" >&2; exit 2 ;;
+  esac
+  d="$DOPPLER_STORE/$proj/$cfg"
+  [ -d "$d" ] || { echo "Doppler Error: Could not find requested config '$cfg'" >&2; exit 1; }
+  if [ "${SHIM_DELETE_NOOP:-0}" != 1 ]; then rm -f "$d/$name"; : > "$DOPPLER_STORE/.deleted-$name"; fi
+  exit 0
+fi
 if [ "${2:-}" = set ]; then
   # secrets set NAME -p P -c C — value on stdin (the only supported form here; the caller
   # must never pass a value on argv). SHIM_SET_ERR forces a classified failure;
@@ -130,6 +158,12 @@ done
 if [ "$name" = GIT_DATA_SSH_HOST_KEY ]; then
   case "${SHIM_PIN_ERR:-}" in
     auth)    echo "Doppler Error: Invalid Auth token STDERR-CANARY-3b" >&2; exit 1 ;;
+    network) echo "Doppler Error: dial tcp: lookup api.doppler.com: i/o timeout STDERR-CANARY-3b" >&2; exit 3 ;;
+  esac
+fi
+# SHIM_STAMP_READBACK_ERR forces one error class on the stamp read that follows a delete ONLY (the delete's read-back).
+if [ "$name" = GIT_DATA_LUKS_CUTOVER_AT ] && [ -e "$DOPPLER_STORE/.deleted-$name" ]; then
+  case "${SHIM_STAMP_READBACK_ERR:-}" in
     network) echo "Doppler Error: dial tcp: lookup api.doppler.com: i/o timeout STDERR-CANARY-3b" >&2; exit 3 ;;
   esac
 fi
@@ -224,7 +258,7 @@ run_case() {
   assert_fixture_dir "$CTMP"
   assert_fixture_dir "$RT"
   rm -rf "$CTMP" "$RT"; mkdir -p "$CTMP" "$RT" || { printf 'FAIL SETUP: case tmp\n' >&2; exit 1; }
-  OUT="$T/$name.out"; DLOG="$T/$name.dlog"; : > "$DLOG"
+  OUT="$T/$name.out"; DLOG="$T/$name.dlog"; : > "$DLOG"; : > "$DLOG.tok"
   # CASE_DEFAULT_GIT_AUTH=1 leaves GIT_AUTH_TS_PATH genuinely UNSET (not empty).
   local gat=(GIT_AUTH_TS_PATH="$T/git-auth-tofu.ts")
   [ "${CASE_DEFAULT_GIT_AUTH:-0}" = 1 ] && gat=()
@@ -325,6 +359,92 @@ if case_write deny-absent-false ABSENT false DOPPLER_TOKEN_GIT_DATA_FLAG=fixture
   && [ "$(cat "$OUT")" = "flag_write=ok value=false" ]; then
   pass "W8: a `false` write proceeds WITHOUT deny coverage (rollback must never be blocked by it)"
 else fail "W8: a false write was incorrectly gated on deny coverage" "$(detail)"; fi
+
+# ── rollback arm clears GIT_DATA_LUKS_CUTOVER_AT (#10297, design-rollback-rehearsal section 6) ───────────────────
+# The stamp is the wipe's 7-day soak anchor, so a rollback that leaves it behind leaves a stale anchor. The delete rides the write
+# step's own token, runs BEFORE the flag-off write (a failed delete then leaves the flag true and the fleet unchanged, so the
+# rollback can be re-dispatched; a delete AFTER the flag-off write that failed would strand a fleet still running the store
+# against a flag that reads false, and a re-dispatch would then read nothing_to_rollback and never redeploy), and is read back.
+# The DELETE permission of that token on prd is UNVERIFIED: every row here runs against the shim, none proves the real API.
+RB_STAMP="2026-10-19T10:00:00Z"
+RB_WRITE=(DOPPLER_TOKEN_GIT_DATA_FLAG=fixture-prd-write FLAG_MODE=rollback)
+RB_STORE="$T/store-write-rb"
+case_rb() { # <label> <stored-flag> <write-value> [VAR=value ...] — a stamp is stored unless CASE_STAMP=ABSENT
+  local label="$1" stored="$2" wv="$3"; shift 3
+  CASE_STAMP="${CASE_STAMP-$RB_STAMP}" run_case "write-$label" "$stored" FLAG_WRITE_VALUE="$wv" "$@"
+  RB_STORE="$T/store-write-$label"
+}
+rb_flag() { cat "$RB_STORE/soleur/prd/GIT_DATA_STORE_ENABLED" 2>/dev/null; }
+RB_DLOG_OK="$(printf '%s\n' \
+  'doppler secrets get GIT_DATA_LUKS_CUTOVER_AT --plain --no-exit-on-missing-secret -p soleur -c prd' \
+  'doppler secrets delete GIT_DATA_LUKS_CUTOVER_AT -p soleur -c prd --yes' \
+  'doppler secrets get GIT_DATA_LUKS_CUTOVER_AT --plain --no-exit-on-missing-secret -p soleur -c prd' \
+  'doppler secrets set GIT_DATA_STORE_ENABLED -p soleur -c prd' \
+  'doppler secrets get GIT_DATA_STORE_ENABLED --plain --no-exit-on-missing-secret -p soleur -c prd')"
+case_rb_clears() {
+  case_rb rb-clear true false "${RB_WRITE[@]}" \
+    && [ "$RC" = 0 ] && [ "$(cat "$OUT")" = "$(printf 'cutover_at=cleared\nflag_write=ok value=false')" ] \
+    && [ "$(cat "$DLOG")" = "$RB_DLOG_OK" ] \
+    && [ ! -e "$RB_STORE/soleur/prd/GIT_DATA_LUKS_CUTOVER_AT" ] && [ "$(rb_flag)" = false ] \
+    && ! grep -qF "$RB_STAMP" "$OUT" "$DLOG"
+}
+case_rb_token() { # every call of the clear rode the write token
+  case_rb rb-token true false "${RB_WRITE[@]}" && [ "$RC" = 0 ] \
+    && [ "$(wc -l < "$DLOG.tok")" = 5 ] && [ -z "$(grep -vF ' fixture-prd-write' "$DLOG.tok")" ] \
+    && [ -n "$(grep -F 'delete GIT_DATA_LUKS_CUTOVER_AT fixture-prd-write' "$DLOG.tok")" ]
+}
+case_rb_absent() { # no stamp: nothing to delete, no delete call, still green
+  CASE_STAMP=ABSENT case_rb rb-absent true false "${RB_WRITE[@]}" \
+    && [ "$RC" = 0 ] && [ "$(cat "$OUT")" = "$(printf 'cutover_at=absent\nflag_write=ok value=false')" ] \
+    && [ -z "$(grep -F 'secrets delete' "$DLOG")" ] && [ "$(rb_flag)" = false ]
+}
+case_rb_delete_refused() { # <label> <expected-step-reason> [VAR=value ...] — a failed clear stops BEFORE the flag write
+  local label="$1" want="$2"; shift 2
+  case_rb "$label" true false "${RB_WRITE[@]}" "$@"
+  [ "$RC" = 5 ] && grep -qF "verdict=cutover_at_clear_failed ${want}" "$OUT" && ! grep -q 'CANARY' "$OUT" \
+    && grep -qF 'R8' "$OUT" && grep -qF 'owner-gated delete' "$OUT" && grep -qF 'mode=rollback' "$OUT" \
+    && [ "$(rb_flag)" = true ] && [ -z "$(grep -F 'secrets set' "$DLOG")" ] && ! grep -qF "$RB_STAMP" "$OUT"
+}
+case_rb_flip_untouched() { # the flip's own flag-on write never reads, deletes or sets the stamp
+  case_rb rb-flip true true DOPPLER_TOKEN_GIT_DATA_FLAG=fixture-prd-write FLAG_MODE=flip SANDBOX_SRC_DIR="$T/deny-present" \
+    && [ "$RC" = 0 ] && [ "$(cat "$OUT")" = "flag_write=ok value=true" ] && [ -z "$(grep -F GIT_DATA_LUKS_CUTOVER_AT "$DLOG")" ] \
+    && [ "$(cat "$RB_STORE/soleur/prd/GIT_DATA_LUKS_CUTOVER_AT")" = "$RB_STAMP" ] && [ "$(wc -l < "$DLOG")" = 2 ]
+}
+case_rb_value_true() { # a rollback-mode TRUE write (never dispatched) must not clear the anchor either
+  case_rb rb-vtrue false true "${RB_WRITE[@]}" SANDBOX_SRC_DIR="$T/deny-present" \
+    && [ "$RC" = 0 ] && [ -z "$(grep -F GIT_DATA_LUKS_CUTOVER_AT "$DLOG")" ] && [ -e "$RB_STORE/soleur/prd/GIT_DATA_LUKS_CUTOVER_AT" ]
+}
+case_rb_other_modes() { # <mode> — only rollback clears: unfreeze/proof/wipe-class FALSE writes leave the stamp
+  case_rb "rb-mode-$1" true false DOPPLER_TOKEN_GIT_DATA_FLAG=fixture-prd-write FLAG_MODE="$1" \
+    && [ "$RC" = 0 ] && [ -z "$(grep -F GIT_DATA_LUKS_CUTOVER_AT "$DLOG")" ] && [ -e "$RB_STORE/soleur/prd/GIT_DATA_LUKS_CUTOVER_AT" ]
+}
+if case_rb_clears; then pass "RB1: a rollback flag-off write reads the stamp, deletes it with --yes, reads it back absent, THEN sets the flag false and reads it back (exactly 5 doppler calls in that order); the stamp value is never printed"
+else fail "RB1: the rollback arm did not clear the stamp then write the flag" "$(detail) dlog=[$(tr '\n' '|' < "$DLOG")]"; fi
+if case_rb_token; then pass "RB2: all five calls of the clear (read, delete, read-back, set, read-back) ride DOPPLER_TOKEN_GIT_DATA_FLAG, never the read token"
+else fail "RB2: a clear call did not use the write token" "$(detail) tok=[$(tr '\n' '|' < "$DLOG.tok")]"; fi
+if case_rb_absent; then pass "RB3: no stamp present: cutover_at=absent, no delete call, the flag-off write still lands (a rollback that finds nothing to clear is green)"
+else fail "RB3: an absent stamp was not a green no-op" "$(detail) dlog=[$(tr '\n' '|' < "$DLOG")]"; fi
+if case_rb_delete_refused rb-forbidden 'step=delete reason=forbidden' SHIM_DELETE_ERR=forbidden; then
+  pass "RB4: a delete the token is not permitted to make -> verdict=cutover_at_clear_failed step=delete reason=forbidden, exit 5, the message names R8 (owner-gated delete with read-back) and the re-dispatch, stderr never printed, and the flag is NOT written"
+else fail "RB4: a refused delete was not a hard failure before the flag write" "$(detail) dlog=[$(tr '\n' '|' < "$DLOG")]"; fi
+if case_rb_delete_refused rb-noop 'step=readback reason=still_present' SHIM_DELETE_NOOP=1; then
+  pass "RB5: a delete that exits 0 but leaves the stamp -> verdict=cutover_at_clear_failed step=readback reason=still_present, exit 5, flag NOT written"
+else fail "RB5: a delete that did not take was accepted" "$(detail) dlog=[$(tr '\n' '|' < "$DLOG")]"; fi
+if case_rb_delete_refused rb-rbread 'step=readback reason=network' SHIM_STAMP_READBACK_ERR=network; then
+  pass "RB6: a read-back that cannot be read -> verdict=cutover_at_clear_failed step=readback reason=network, exit 5 (an unreadable stamp is never read as absent), flag NOT written"
+else fail "RB6: an unreadable read-back was accepted" "$(detail) dlog=[$(tr '\n' '|' < "$DLOG")]"; fi
+if case_rb_delete_refused rb-read 'step=read reason=network' SHIM_STAMP_ERR=network; then
+  pass "RB7: a stamp that cannot be read before the delete -> verdict=cutover_at_clear_failed step=read reason=network, exit 5, flag NOT written"
+else fail "RB7: an unreadable stamp was treated as absent" "$(detail) dlog=[$(tr '\n' '|' < "$DLOG")]"; fi
+if case_rb_delete_refused rb-other 'step=delete reason=unknown' SHIM_DELETE_ERR=other; then
+  pass "RB8: an unclassified delete failure -> step=delete reason=unknown, exit 5, flag NOT written"
+else fail "RB8: an unclassified delete failure was accepted" "$(detail)"; fi
+if case_rb_flip_untouched; then pass "RB9: the FLIP's flag-on write never reads, deletes or sets the stamp (2 doppler calls, the stamp value intact)"
+else fail "RB9: the flip write touched the stamp" "$(detail) dlog=[$(tr '\n' '|' < "$DLOG")]"; fi
+if case_rb_value_true; then pass "RB10: a TRUE write under rollback mode leaves the stamp alone (the clear is keyed on mode=rollback AND value=false)"
+else fail "RB10: a true write cleared the stamp" "$(detail)"; fi
+if case_rb_other_modes unfreeze && case_rb_other_modes proof; then pass "RB11: a FALSE write under unfreeze or proof mode leaves the stamp alone (only mode=rollback clears)"
+else fail "RB11: a non-rollback false write cleared the stamp" "$(detail)"; fi
 
 if case_absent; then pass "P1: an absent flag (exit 0, empty stdout WITH the flag) prints exactly the TOFU_ARM line, the pin fingerprint and flag=unset, exit 0"
 else fail "P1: an absent flag was not flag=unset" "$(detail)"; fi
@@ -933,6 +1053,63 @@ if mutate reread-sep-no-compare "$PRECHECK" 2 's#^      if \[ "\$got" != separat
   CASE_SCRIPT="$MUTANT" mutant_red reread-sep-no-compare case_reread_sep_stamp_appeared
 fi
 
+# ── Stamp-clear mutants (#10297): each guard of the rollback arm goes RED when removed ───────────────────────────
+# M-rb-no-delete: the delete call becomes a read (exit 0, nothing deleted). RB1 goes RED.
+if mutate rb-no-delete "$PRECHECK" 2 's#doppler secrets delete GIT_DATA_LUKS_CUTOVER_AT -p soleur -c prd --yes#doppler secrets get GIT_DATA_LUKS_CUTOVER_AT --plain -p soleur -c prd#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red rb-no-delete case_rb_clears
+fi
+# M-rb-no-readback: a delete that did not take is accepted. RB5 goes RED.
+# shellcheck disable=SC2016
+if mutate rb-no-readback "$PRECHECK" 2 's#^      \[ -z "\$cur" \] \|\| clear_fail readback still_present$#      :#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red rb-no-readback case_rb_delete_refused rb-noop 'step=readback reason=still_present' SHIM_DELETE_NOOP=1
+fi
+# M-rb-delete-failure-ignored: a refused delete no longer fails the step at the delete. RB4 goes RED.
+# shellcheck disable=SC2016
+if mutate rb-delete-failure-ignored "$PRECHECK" 2 's#^        clear_fail delete "\$\(reason_of "\$ERRF"\)"$#        :#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red rb-delete-failure-ignored case_rb_delete_refused rb-forbidden 'step=delete reason=forbidden' SHIM_DELETE_ERR=forbidden
+fi
+# M-rb-read-failure-as-absent: an unreadable stamp reads as absent and the flag is written. RB7 goes RED.
+# shellcheck disable=SC2016
+if mutate rb-read-failure-as-absent "$PRECHECK" 2 's#\|\| clear_fail read "#|| : "#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red rb-read-failure-as-absent case_rb_delete_refused rb-read 'step=read reason=network' SHIM_STAMP_ERR=network
+fi
+# M-rb-delete-without-yes: the delete would prompt on the real CLI (the shim refuses it). RB1 goes RED.
+# shellcheck disable=SC2016
+if mutate rb-delete-without-yes "$PRECHECK" 2 's#secrets delete GIT_DATA_LUKS_CUTOVER_AT -p soleur -c prd --yes >/dev/null#secrets delete GIT_DATA_LUKS_CUTOVER_AT -p soleur -c prd >/dev/null#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red rb-delete-without-yes case_rb_clears
+fi
+# M-rb-read-token: the delete rides the read token, not the write seam. RB2 goes RED.
+# shellcheck disable=SC2016
+if mutate rb-read-token "$PRECHECK" 2 's#DOPPLER_TOKEN="\$DOPPLER_TOKEN_GIT_DATA_FLAG" doppler secrets delete#doppler secrets delete#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red rb-read-token case_rb_token
+fi
+# M-rb-any-mode: the clear loses its mode key, so an unfreeze/proof false write clears the anchor. RB11 goes RED.
+# shellcheck disable=SC2016
+if mutate rb-any-mode "$PRECHECK" 2 's#^  if \[ "\$FLAG_MODE" = rollback \] && \[ "\$FLAG_WRITE_VALUE" = false \]; then$#  if [ "$FLAG_WRITE_VALUE" = false ]; then#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red rb-any-mode case_rb_other_modes unfreeze
+fi
+# M-rb-any-value: the clear loses its value key, so a true write under rollback mode clears the anchor. RB10 goes RED.
+# shellcheck disable=SC2016
+if mutate rb-any-value "$PRECHECK" 2 's#^  if \[ "\$FLAG_MODE" = rollback \] && \[ "\$FLAG_WRITE_VALUE" = false \]; then$#  if [ "$FLAG_MODE" = rollback ]; then#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red rb-any-value case_rb_value_true
+fi
+# M-rb-after-flag: the clear block moves AFTER the flag write and its read-back (the stranded-fleet order). RB4 goes RED
+# because the flag is then already written when the delete is refused.
+cat > "$T/mut/rb-after-flag.py" <<'PY'
+import sys
+p = sys.argv[1]
+src = open(p).read().split("\n")
+a = next(i for i, l in enumerate(src) if l.startswith("  # #10297: the rollback arm clears"))
+b = next(i for i, l in enumerate(src) if l.startswith("  # stdin carries the value (never argv)"))
+block = src[a:b]
+rest = src[:a] + src[b:]
+c = next(i for i, l in enumerate(rest) if l.startswith('  echo "flag_write=ok value='))
+open(p, "w").write("\n".join(rest[:c] + block + rest[c:]))
+PY
+if mutate rb-after-flag "$PRECHECK" 36 "python:$T/mut/rb-after-flag.py"; then
+  CASE_SCRIPT="$MUTANT" mutant_red rb-after-flag case_rb_delete_refused rb-forbidden 'step=delete reason=forbidden' SHIM_DELETE_ERR=forbidden
+fi
+
 # ── SANDBOX_DENY_ROOTS arm (#9725) ────────────────────────────────────────────────
 if case_deny absent "$T/deny-absent" proof   && [ "$RC" = 0 ] && grep -qF 'SANDBOX_DENY_ROOTS absent' "$OUT"; then
   pass "D1: source without the deny-root markers under proof -> SANDBOX_DENY_ROOTS absent, informational only (exit 0)"
@@ -975,12 +1152,13 @@ if mutate pin-only-dropped "$PRECHECK" 2 's#\|wipe_reread\|pin_only\) : ;;#|wipe
 fi
 
 # ── FLOOR + LEDGER ────────────────────────────────────────────────────────────────────
-MUTANT_FLOOR=34  # Guard 1 matrix rows 1-8, pin rows 9-16 (with 10b), deny-refusal 17, wipe Guard 6 rows (7), census rows 3b and 3c, A1 variant rows (5)
+MUTANT_FLOOR=43  # Guard 1 matrix rows 1-8, pin rows 9-16 (with 10b), deny-refusal 17, wipe Guard 6 rows (7), census rows 3b and 3c, A1 variant rows (5), stamp-clear rows (9, #10297)
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2; exit 1
 fi
 # Assertion FLOOR: script cases 33 + pin/TOFU_ARM cases 15 (K1-K11 with K3b/K3c/K10b/K10c) + workflow rows 8 + deny-arm rows 7 + mutants 19 x 2 + census mutants 2 x 2 + wipe rows 26 + wipe mutants 7 x 2 + 1 must-refuse row = 146, plus the A1 (2026-10-15) variant rows WV1-WV14 (14) and 5 A1 mutants x 2 (10) = 170 (exact).
-FLOOR=175
+# #10297 stamp-clear: RB1-RB11 (11) + 9 mutants x 2 (18) = 29 more, so the exact count is 175 + 29 = 204.
+FLOOR=204
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s\n' "$_ran" "$FLOOR" >&2; exit 1

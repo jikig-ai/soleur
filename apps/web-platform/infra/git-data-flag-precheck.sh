@@ -93,6 +93,19 @@
 #                 must return exactly the written value, else verdict=flag_write_readback_failed
 #   success     : flag_write=ok value=<written>
 #
+# STAMP CLEAR (#10297, design-rollback-rehearsal section 6). With FLAG_MODE=rollback and FLAG_WRITE_VALUE=false the write arm first
+# clears GIT_DATA_LUKS_CUTOVER_AT, the wipe's 7-day soak anchor, with the SAME write credential (no new binding site):
+#   read (--no-exit-on-missing-secret) -> delete (--yes, stdout discarded) -> read back -> then the flag write above.
+#   absent already            -> cutover_at=absent (no delete call)        cleared and read back absent -> cutover_at=cleared
+#   any step fails or the stamp is still present -> verdict=cutover_at_clear_failed step=<read|delete|readback> reason=<word>, exit 5.
+#   <word>: the flag read's classifier (auth_invalid | forbidden | config_not_found | network | unknown), or still_present.
+# It runs BEFORE the flag-off write on purpose: a failure then leaves the flag true and the fleet unchanged, so the rollback can be
+# re-dispatched. After the write a failure would skip the redeploy of a fleet still running the store, and the re-dispatch would read
+# flag!=true -> nothing_to_rollback and never redeploy. The FLIP's flag-on write, and every other mode, never touches the stamp.
+# UNVERIFIED: the DELETE permission of DOPPLER_TOKEN_GIT_DATA_FLAG on prd. Until it is read from a real run, the fallback (named in
+# the failure message) is R8, an owner-gated delete with a read-back, and a rollback of a STAMPED flip stops here until it is done.
+# The stamp value is never printed (it is a date, but the posture is counts and words only).
+#
 # SANDBOX DENY-ROOTS (#9725). The agent sandbox's tenant denyRead must cover the
 # worktree root BEFORE the flag flips — denying only WORKSPACES_ROOT when
 # workspacePathForWorkspaceId resolves under WORKTREE_ROOT masks an empty
@@ -223,6 +236,30 @@ if [ -n "${FLAG_WRITE_VALUE:-}" ]; then
   fi
   ERRF="$(mktemp)" || refuse "flag_write_failed reason=unknown rc=95"
   trap 'rm -f "$ERRF"' EXIT
+  # #10297: the rollback arm clears the wipe's soak anchor BEFORE it writes the flag off. See "STAMP CLEAR" in the header.
+  if [ "$FLAG_MODE" = rollback ] && [ "$FLAG_WRITE_VALUE" = false ]; then
+    clear_fail() { # <step> <reason>
+      echo "::error title=git-data-flag-precheck::verdict=cutover_at_clear_failed step=$1 reason=$2 - GIT_DATA_LUKS_CUTOVER_AT (the wipe soak anchor) is not confirmed cleared, so GIT_DATA_STORE_ENABLED was NOT written and the fleet is unchanged. Fallback R8: an owner-gated delete of GIT_DATA_LUKS_CUTOVER_AT with a read-back (design-rollback-rehearsal section 6; runbook \"Before the first flip: the rollback rehearsal\"), then re-dispatch mode=rollback. The DELETE permission of DOPPLER_TOKEN_GIT_DATA_FLAG on prd is unverified."
+      echo "[git-data-flag-precheck] verdict=cutover_at_clear_failed step=$1 reason=$2"
+      exit 5
+    }
+    # The stamp VALUE is never printed; every call below carries the write token and the values go to variables only.
+    cur_rc=0
+    cur="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_GIT_DATA_FLAG" doppler secrets get GIT_DATA_LUKS_CUTOVER_AT --plain --no-exit-on-missing-secret -p soleur -c prd 2>"$ERRF")" || cur_rc=$?
+    [ "$cur_rc" -eq 0 ] || clear_fail read "$(reason_of "$ERRF")"
+    if [ -n "$cur" ]; then
+      if ! DOPPLER_TOKEN="$DOPPLER_TOKEN_GIT_DATA_FLAG" doppler secrets delete GIT_DATA_LUKS_CUTOVER_AT -p soleur -c prd --yes >/dev/null 2>"$ERRF"; then
+        clear_fail delete "$(reason_of "$ERRF")"
+      fi
+      cur_rc=0
+      cur="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_GIT_DATA_FLAG" doppler secrets get GIT_DATA_LUKS_CUTOVER_AT --plain --no-exit-on-missing-secret -p soleur -c prd 2>"$ERRF")" || cur_rc=$?
+      [ "$cur_rc" -eq 0 ] || clear_fail readback "$(reason_of "$ERRF")"
+      [ -z "$cur" ] || clear_fail readback still_present
+      echo "cutover_at=cleared"
+    else
+      echo "cutover_at=absent"
+    fi
+  fi
   # stdin carries the value (never argv); stdout discarded (doppler echoes the config).
   if ! printf '%s' "$FLAG_WRITE_VALUE" | DOPPLER_TOKEN="$DOPPLER_TOKEN_GIT_DATA_FLAG" \
         doppler secrets set GIT_DATA_STORE_ENABLED -p soleur -c prd >/dev/null 2>"$ERRF"; then

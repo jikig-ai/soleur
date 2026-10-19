@@ -1965,6 +1965,16 @@ check("WF-flagmark: the flag-write step touches flag_write_attempted once, after
       0 <= _xt < _ma < _pc < _wr and re.findall(r'^\s*touch "\$RUNNER_TEMP/cutover-progress/(\w+)"$', fwcode, re.M) == ["flag_write_attempted", "flag_written"]
       and fwcode.count("flag_write_attempted") == 1,
       [_xt, _ma, _pc, _wr])
+# #10297: the rollback arm's stamp clear lives in git-data-flag-precheck.sh and is keyed on FLAG_MODE=rollback + FLAG_WRITE_VALUE=false
+# (git-data-flag-precheck.test.sh RB1-RB11 run it). This step is the only caller that can reach it, so its binding is pinned here: a dropped
+# FLAG_MODE falls to the script's `proof` default and the clear silently never runs; an inverted FLAG_WRITE_VALUE writes the wrong flag.
+# The `if:` is pinned whole, including `nothing_to_rollback != '1'` (a rollback that finds the flag already off ran no flip and clears nothing).
+check("WF-rbclear: the flag_write step binds exactly {DOPPLER_TOKEN_GIT_DATA_FLAG, FLAG_MODE=the mode, FLAG_WRITE_VALUE=true on flip else false}, keeps its two-arm `if:` (flip not resuming arm B, or rollback; never nothing_to_rollback), and calls the precheck once with the stamp clear living in the script, not in a second workflow step",
+      fw.get("env") == {"DOPPLER_TOKEN_GIT_DATA_FLAG": "${{ secrets.DOPPLER_TOKEN_GIT_DATA_FLAG }}", "FLAG_MODE": "${{ steps.confirm.outputs.mode }}",
+                        "FLAG_WRITE_VALUE": "${{ steps.confirm.outputs.mode == 'flip' && 'true' || 'false' }}"}
+      and str(fw.get("if")) == "((steps.confirm.outputs.mode == 'flip' && steps.flag_precheck.outputs.resume != 'arm_b') || steps.confirm.outputs.mode == 'rollback') && steps.flag_precheck.outputs.nothing_to_rollback != '1'"
+      and fwcode.count("bash apps/web-platform/infra/git-data-flag-precheck.sh") == 1 and "secrets delete" not in fwcode,
+      [fw.get("env"), fw.get("if")])
 # #9439 CTO ruling (item 8): a gc.timer that will not start (exit 6) fails the unfreeze step RED but publishes
 # gc_timer_failed, so the probe and the stamp (which run only on a CLEARED sentinel) are not skipped. Anchored on the
 # call forms, comment-stripped; the stamp must additionally require the probe's success explicitly.
@@ -2160,7 +2170,7 @@ while IFS=$'\t' read -r v name detail; do
   _wf_n=$((_wf_n + 1))
   if [ "$v" = ok ]; then pass "$name"; else fail "$name" "$detail"; fi
 done < "$T/wf.tsv"
-[ "$_wf_n" -eq 57 ] || fail "WF: $_wf_n workflow verdicts were produced (expected exactly 57) — the YAML leg crashed, or a row was added or deleted without restating the count" "$(head -c 300 "$T/wf.err")"
+[ "$_wf_n" -eq 58 ] || fail "WF: $_wf_n workflow verdicts were produced (expected exactly 58) — the YAML leg crashed, or a row was added or deleted without restating the count" "$(head -c 300 "$T/wf.err")"
 
 # ── WORKFLOW STEPS, EXECUTED ──────────────────────────────────────────────────────────
 # Per-name Doppler shim: answers per project/config/secret AND per flag presence, mirroring the
@@ -2983,6 +2993,9 @@ exec_row fz11-held-latch-dropped 2 's#\[\[ -z "\$\{heldseen:-\}" \]\] \|\| gcw="
 exec_row nb5-probe-text-drops-store-verdicts 2 's# or store_unverified mean# mean#' nb
 exec_row nb7-gc-word-dropped 1 '/if \[ "\$\{GC_TIMER_STOPPED:-\}" = 1 \]; then words=/d' nb
 # The attempted marker is written AFTER the precheck / never written under set -e: the EXECUTED body must still leave it.
+# #10297: the flag_write step loses FLAG_MODE (the precheck defaults to proof and never clears) / the flag value inverts.
+g2n_row wf-rbclear-no-flag-mode 1 '/^        id: flag_write$/,/^          FLAG_WRITE_VALUE:/{/^          FLAG_MODE:/d}' "WF-rbclear:"
+g2n_row wf-rbclear-value-inverted 2 "/^        id: flag_write\$/,/^        run:/ s#mode == 'flip' && 'true' \|\| 'false'#mode == 'rollback' \&\& 'true' || 'false'#" "WF-rbclear:"
 g2n_row wf-flagmark-after-precheck 2 '/touch .*flag_write_attempted"$/d;s#^( +)touch "\$RUNNER_TEMP/cutover-progress/flag_written"$#&\n\1touch "$RUNNER_TEMP/cutover-progress/flag_write_attempted"#' "WF-flagmark:"
 # The unfreeze step swallows the script's rc (it never goes red) — the EXECUTED step body must re-raise it.
 exec_row fu1-rc-swallowed 1 '/gc_timer_failed=1/{n;s#^( +)exit "\$rc"$#\1rc=0\n\1exit "$rc"#}' fu
@@ -3634,7 +3647,8 @@ fi
 # Review round 2 (#10138): plus g5-nested-subst, g5-if-form and g5-second-param-caller (a seventh gd_capture session in a non-line-leading
 # form, and a second caller of the stdin-file and bound parameters) and g2n-15-wipe-volume-from-lineage and g2n-16-second-input-bound (the
 # notify body's one inputs.volume_id binding) = 5, so exactly 148; the G5 census row and the N-body / N-exprs verdicts were restated in place.
-MUTANT_FLOOR=148
+# #10297: plus wf-rbclear-no-flag-mode and wf-rbclear-value-inverted (the flag_write binding the precheck's stamp clear depends on) = 2, so exactly 150.
+MUTANT_FLOOR=150
 if [ "$MUTANTS_RUN" -ne "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: %s mutants executed, the floor is exactly %s — a matrix row did not land, was deleted, or was added without restating the floor.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -3660,7 +3674,8 @@ fi
 # Wipe body (#10138): 143 mutants x 2 = 286 (+8 over 139 x 2); two new standalone workflow verdicts (WF-runname, WF-cutover-if), which also move the workflow verdict count 54 -> 56: 625.
 # Review round 2 (#10138): 148 mutants x 2 = 296 (+10 over 143 x 2); no new standalone row (the G5 census, N-body and N-exprs were restated in place): 635.
 # Pin-fault read (#8211): WF-pinfault (1) and the executed FP1-FP3 rows (3): 636 -> 639 (the workflow verdict count 56 -> 57 moves with WF-pinfault).
-FLOOR=639
+# #10297: 150 mutants x 2 = 300 (+4 over 148 x 2); one new standalone workflow verdict (WF-rbclear), which also moves the workflow verdict count 57 -> 58: 639 -> 644.
+FLOOR=644
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -ne "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: %s assertions ran/declared, the floor is exactly %s — cases were deleted, added without restating the floor, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2

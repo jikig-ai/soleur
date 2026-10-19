@@ -507,6 +507,9 @@ jobs:
           bash apps/web-platform/infra/git-data-cutover.sh
 
       # --- the flag write (flip writes true; rollback writes false) -------------------
+      #     A rollback also clears GIT_DATA_LUKS_CUTOVER_AT first, inside the precheck script (FLAG_MODE=rollback and
+      #     FLAG_WRITE_VALUE=false), with this step's own token and a read-back; a failure stops BEFORE the flag is
+      #     written (#10297). The flip's write and stamp step are unchanged.
       - name: Write GIT_DATA_STORE_ENABLED (via the #8573 seam)
         id: flag_write
         if: ((steps.confirm.outputs.mode == 'flip' && steps.flag_precheck.outputs.resume != 'arm_b') || steps.confirm.outputs.mode == 'rollback') && steps.flag_precheck.outputs.nothing_to_rollback != '1'
