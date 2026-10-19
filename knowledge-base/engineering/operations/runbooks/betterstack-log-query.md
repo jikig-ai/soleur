@@ -213,6 +213,45 @@ Live standing alarms over this source:
      FORMAT JSONEachRow"
   ```
 
+- **`logtail_exploration_alert.faithful_canary_sandbox_broken`** (#10453, `higher_than 0` over 300 s, evaluated every
+  60 s, missing data counts as zero): `soleur-faithful-canary-sandbox-broken-prd`. **What it matches:** one `ci-deploy`
+  row (`SYSLOG_IDENTIFIER = 'ci-deploy'`, no `host_name` conjunct: web-2 must page too) whose message STARTS with
+  `SANDBOX_CANARY_FAIL: verdict=sandbox_broken reason=sdk_bash_smoke_failed` AND contains `(op=sandbox-canary;`. That is
+  the deploy-time SDK Bash smoke (`run_sdk_bash_smoke` in `ci-deploy.sh`) reporting that a real wrapped Bash call through
+  the real Agent SDK, the shim and the production sandbox config failed in the canary image: the #10445 shape the faithful
+  canary's replay cannot see. The `reason=` needle is mandatory (the inner canary's `bwrap_*` rows and the standing
+  outer-wrap rows share the `verdict=sandbox_broken` prefix) and the `;` terminator keeps `op=sandbox-canary-outer-wrap`
+  out. `smoke_infra_error` does NOT page (three in a row warn through Sentry as `SDK_BASH_SMOKE_STALE`). The deploy is
+  NOT rolled back (report-only until #10548 promotes it), so production still runs the previous version; if the build is
+  promoted, every hosted Bash call fails. **First move (no SSH):** read `sdk_bash_smoke` from `/hooks/deploy-status` (call
+  pattern in `plugins/soleur/skills/postmerge/references/deploy-status-debugging.md`; `reason` carries the first sandbox error
+  line) and decode it with the table in
+  [`canary-probe-set.md`](./canary-probe-set.md#sdk-bash-smoke-and-the-helper_userns_eperm-denial-10445). **Wake path: email
+  only** (the same unverified Slack caveat as the siblings above). **Positive control (run 2026-10-19, counts only):** the
+  predicate's non-reason conjuncts match live rows: 167 `ci-deploy` rows in 14 days start `SANDBOX_CANARY_FAIL:
+  verdict=sandbox_broken` with `(op=sandbox-canary-outer-wrap;` (the retired arm), 45 more carry `(op=sandbox-canary;`
+  (inner `bwrap_*` reasons), and the full predicate matches 0 of them, which is the discrimination the alert depends on. The
+  first real hit is its own positive control; no deliberate failing deploy is run against production. Defined in
+  `apps/web-platform/infra/betterstack-logs-alerts.tf`; drift guard
+  `apps/web-platform/test/infra/faithful-canary-sandbox-alert.test.sh` (needles read from `ci-deploy.sh`, the predicate
+  evaluated against fixture rows, a `-target=` census, mutation rows). It auto-resolves after 10 quiet minutes, which does
+  not mean the cause was fixed.
+
+  ```bash
+  # Failed smoke rows over the last 30 days (hot window plus archive); expect 0 until a build actually breaks Bash.
+  # Swap the reason needle for the OTHER shapes to re-run the positive control: reason=bwrap_ (inner canary) or
+  # (op=sandbox-canary-outer-wrap; (retired arm, rows until ~2026-10-19 plus the retention window).
+  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+    "SELECT count() AS rows, min(dt) AS first, max(dt) AS last
+     FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
+           UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
+     WHERE dt > now() - INTERVAL 30 DAY
+       AND JSONExtractString(raw,'SYSLOG_IDENTIFIER') = 'ci-deploy'
+       AND startsWith(JSONExtractString(raw,'message'),'SANDBOX_CANARY_FAIL: verdict=sandbox_broken reason=sdk_bash_smoke_failed')
+       AND position(JSONExtractString(raw,'message'),'(op=sandbox-canary;') > 0
+     FORMAT JSONEachRow"
+  ```
+
 - **`logtail_exploration_alert.ghcr_hostsfile_deny_lost`** (#9391, `higher_than 0`, missing data counts as zero):
   `soleur-ghcr-hostsfile-deny-lost-prd`. It emails (team email on the free tier) when a host's hosts-file GHCR
   deny is no longer in force: a `ci-deploy` row whose whole message is `GHCR_DENY ghcr_blocked=0`, or a

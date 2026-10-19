@@ -1745,3 +1745,99 @@ resource "logtail_exploration_alert" "agent_sandbox_bash_denial" {
     team_name = var.betterstack_paid_tier ? null : "Your team"
   }
 }
+
+# ── #10453: the deploy-time SDK Bash smoke reported the build cannot run a real wrapped Bash call ──
+# WHAT IT DETECTS. ci-deploy.sh `run_sdk_bash_smoke` (non-blocking, ADR-079 addendum 2026-10-19) execs the baked
+# `infra/lib/sdk-bash-probe.mjs` in the CANARY container and runs ONE real Bash call through the real Agent SDK, the
+# shipped shim and the production sandbox config. When the probe's verdict is `sdk_bash_smoke_failed` (Bash was dispatched
+# and the per-run nonce did not come back, or the call hung, or the tool_result carries a sandbox error) the script writes
+# exactly one journald row under `logger -t ci-deploy` through `sandbox_canary_sentry_event`, whose message STARTS with
+#   SANDBOX_CANARY_FAIL: verdict=sandbox_broken reason=sdk_bash_smoke_failed: <detail> sdk= (op=sandbox-canary; report-only canary, never gated)
+# This is the #10445 shape the faithful canary was blind to (its replay ends in `-- true` and never runs the command-side
+# wrapper); the smoke closes it on the deploy that carries the break, with no tenant text and no Vector-side dependence
+# beyond the journald shipper every ci-deploy row already uses.
+#
+# THREE conjuncts, and each is load-bearing (CTO ruling 2026-10-19):
+#   * SYSLOG_IDENTIFIER = 'ci-deploy' — a row that merely QUOTES the marker (inngest ships GitHub-webhook logs quoting issue
+#     and PR bodies to this same source under another identifier) cannot alert;
+#   * startsWith(message, '…verdict=sandbox_broken reason=sdk_bash_smoke_failed') — the `reason=` needle is MANDATORY: the
+#     inner faithful canary's `bwrap_*` rows share the `verdict=sandbox_broken` prefix, and so did the standing outer-wrap rows
+#     (retired by #10454, still in the 90-day retention window);
+#   * position(message, '(op=sandbox-canary;') > 0 — the `;` terminator keeps `op=sandbox-canary-outer-wrap` out.
+# `smoke_infra_error` does NOT page (it is the smoke's own failure to run; three in a row warn through Sentry as
+# SDK_BASH_SMOKE_STALE). NO host_name conjunct, on purpose, the same divergence bwrap_probe_rollback records above: the
+# signal belongs to every deploy host and a host conjunct would silence web-2.
+#
+# Paging semantics are bwrap_probe_rollback's (ADR-218): one matching row in the 5-min window alerts, treat_as_zero so the
+# open incident observes recovery; on the free tier the channel is team email only. ONE row per failed deploy, so the alert
+# cannot flap. The drift guard (test/infra/faithful-canary-sandbox-alert.test.sh) reads all three needles FROM ci-deploy.sh.
+# Both -target= lines are enforced only by that guard (see header step 4).
+locals {
+  faithful_canary_sandbox_broken_sql = <<-SQL
+    SELECT {{time}} AS time, count(*) AS value
+    FROM {{source}}
+    WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'ci-deploy'
+      AND startsWith(JSONExtractString(raw, 'message'), 'SANDBOX_CANARY_FAIL: verdict=sandbox_broken reason=sdk_bash_smoke_failed')
+      AND position(JSONExtractString(raw, 'message'), '(op=sandbox-canary;') > 0
+    GROUP BY time
+  SQL
+
+  faithful_canary_sandbox_broken_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/canary-probe-set.md#sdk-bash-smoke-and-the-helper_userns_eperm-denial-10445"
+}
+
+resource "logtail_exploration" "faithful_canary_sandbox_broken" {
+  name      = "soleur-faithful-canary-sandbox-broken-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.faithful_canary_sandbox_broken_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "faithful_canary_sandbox_broken" {
+  exploration_id = logtail_exploration.faithful_canary_sandbox_broken.id
+  name           = "soleur-faithful-canary-sandbox-broken-prd"
+
+  # bwrap_probe_rollback's values: one row alerts within about a minute, the 5-min window holds ONE incident across a CI
+  # retry's repeated failed-smoke rows, and 10 quiet minutes auto-resolve it.
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 60
+  query_period        = 300
+  confirmation_period = 0
+  recovery_period     = 600
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "No user-facing outage by itself, and the deploy was NOT rolled back (the smoke is report-only): a canary build could not run one real wrapped Bash call through the real Agent SDK, the shim and the production sandbox config (reason sdk_bash_smoke_failed). If this build is promoted, every hosted Bash call fails (the 2026-10-06 incident shape, #10445). The email has no row body: read the failure detail without SSH from the deploy-status field sdk_bash_smoke (reason carries the first sandbox error line) or the runbook's Query block. This incident auto-resolves after 10 quiet minutes; resolution does NOT mean the cause was fixed. Runbook: ${local.faithful_canary_sandbox_broken_runbook_url}"
+  metadata = {
+    runbook = local.faithful_canary_sandbox_broken_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
