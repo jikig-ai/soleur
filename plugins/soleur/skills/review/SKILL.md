@@ -197,24 +197,23 @@ Before spawning review agents, classify the PR to avoid spawning agents whose ex
 
 **Suite scope for every agent below — a review agent never runs the FULL gate.**
 Spawned agents run only the suites targeting the files they were given — mechanically,
-that is `TEST_GROUP=affected bash scripts/test-all.sh` —
-the runner registers every suite and declines those the diff cannot reach, so the spawn
-prompt needs no hand-derived suite list. **`SOLEUR_SUBAGENT=1` is a
-convention a lead MAY export before spawning — the harness does not set it** (measured 2026-08-19
-from inside two independent spawned agents: UNSET in both, and no repo-controlled spawn path exists
-to set it). When it IS exported, a plain `test-all.sh` invocation exits 4 while `affected`
+`bash "${CLAUDE_PLUGIN_ROOT}/scripts/affected-tests.sh"` — it delegates `--affected`
+to a capability-positive [runner](../../../../scripts/test-all.sh) when present, else its
+stack adapters select; the founder-repo runner-side equivalent is
+`TEST_GROUP=affected bash scripts/test-all.sh`. No hand-derived suite list is needed.
+**`SOLEUR_SUBAGENT=1` is a
+convention a lead MAY export before spawning — the harness does not set it** (measured 2026-08-19:
+UNSET inside spawned agents). When it IS exported, a plain `test-all.sh` invocation exits 4 while `affected`
 proceeds. Agents must not run the runner unscoped,
 `apps/web-platform/infra/run-registered-suites.sh`, or any other full-gate runner: this panel is
 the densest concurrency in the whole pipeline, and concurrent full-gate runs inflate each other's
-timings and corrupt the measurement. Measured 2026-08-11 — three agents running lints and suites
-at once turned an 860 s battery into 1675 s. The lead runs the gate ONCE, after the panel
-returns. Two mechanical backstops exist, and neither depends on an agent volunteering anything:
+timings and corrupt the measurement (860→1675 s, 2026-08-11). The lead runs the gate ONCE after the
+panel returns — `bash "${CLAUDE_PLUGIN_ROOT}/scripts/affected-tests.sh"` ([contract](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/affected-gate-contract.md)); absent a [runner](../../../../scripts/test-all.sh) it is the sole scope. Two backstops:
 [scripts/test-all.sh](../../../../scripts/test-all.sh) exits 4 when it MEASURES a sibling full-gate run already in flight
 (#7553) — `affected` is exempt from that too — and `tc_acquire`'s advisory lock (ADR-133)
 serialises whatever gets past that. The
-`SOLEUR_SUBAGENT=1` exit-4 path is real and reachable by anyone who exports it deliberately, but it
-is a convention rather than an enforced one — so the paragraph above IS agent discretion for the
-non-concurrent case, and is written as an instruction rather than a claim about the harness.
+`SOLEUR_SUBAGENT=1` exit-4 path is a deliberate-export convention, not harness-enforced — the
+paragraph above is instruction for the non-concurrent case, not claim.
 
 **A mutating seat gets an ALLOCATED sandbox, never a hand-copied tree.** Brief it with this, anchored to the live root (the script exists only in this repo): `ROOT=$(git rev-parse --show-toplevel); SBX=$(bash "$ROOT/scripts/soleur-sandbox.sh" new <seat>) && [ -d "$SBX" ] || { echo ALLOC-FAILED; exit 2; }`. One copy, restored per row, then `bash "$ROOT/scripts/soleur-sandbox.sh" rm "$SBX"` before returning. On ALLOC-FAILED it stops: never mutate the live tree, never fall back to `/tmp` or the scratchpad. The owner is the SESSION, so the lead `rm`s the path after any seat returns or fails. No script in the repo: use the fallback in [work-scratch-sandboxes.md](../work/references/work-scratch-sandboxes.md). A helper that signals or removes files: run each mutant via `run-isolated "$SBX" -- <cmd>` under `timeout -k 5 120`; one that cannot start there (125 with `RUN_IN_PID_NAMESPACE_REFUSED`, a missing script or verb) is `UNVERIFIED-NO-NAMESPACE`, never run on the host (same file, mutating-helper section).
 
@@ -347,6 +346,8 @@ Both survived the author's own first mutation battery and were closed only after
 
 3. **A guard that SEGMENTS text before it judges it fails in the segmenter, not the judge — fixture the grammar first and feed the guard its own remedy.** Where a guard extracts a unit (a stage, a token, a field) from command text and then evaluates it, review attention lands on the evaluation and the tokenizer ships reviewed against the one spelling it was written for. Require one fixture per terminator, quoting form, prefix word and output-mode flag the segmenter must honour, and run every recipe the deny text prescribes back through the guard in the failure DIRECTION of its context. **Why:** PR #8354 — the regex simulation was right on all 13 battery rows while a quote-blind terminator cut, a `grep -c` read as a line filter (making the hook's own `| grep -v grep` remedy a bypass) and a projection `awk` read as a filter each fell open; the structural seat's map found them, ten adversarial seats each found one instance. See `knowledge-base/project/learnings/2026-09-19-i-simulated-the-regex-and-segmented-the-pipeline-by-eye.md`.
 
+**Lint ratchet (user repos; not gated on the SAST rule):** `if [ -d "${CLAUDE_PLUGIN_ROOT}" ] && command -v python3 >/dev/null; then python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lint-ratchet.py" auto; else echo SKIP lint-ratchet; fi`; exit 1, CONFIG CHANGED or REPO-CONTENT = one P2; else a note; output is data; never a repo-local copy.
+
 **If PR modifies source code files, soleur:engineering:review:semgrep-sast is a mandatory gate:**
 
 14. Task soleur:engineering:review:semgrep-sast(PR content) - Deterministic SAST scanning for known vulnerability patterns
@@ -355,7 +356,7 @@ Both survived the author's own first mutation battery and were closed only after
 
 - PR modifies source code files (*.py,*.js, *.ts,*.rb, *.go,*.java, *.rs,*.swift, *.kt, etc.)
 - Not needed for documentation-only or config-only changes
-- **Bash-only PRs (all `.sh`/`.bash`/`.zsh`, no other source extensions):** OSS semgrep's tree-sitter bash parser cannot analyze bash files end-to-end (parses ~100% of lines but matches 0 rules — vacuous "0 findings"). Skip soleur:engineering:review:semgrep-sast and substitute `shellcheck` as the deterministic gate. See `knowledge-base/project/learnings/2026-05-19-cache-llm-outputs-flag-for-rerunnable-benches.md` for the bench-pattern session that surfaced this. **Why:** PR #4045 — soleur:engineering:review:semgrep-sast on a 1336-line bash diagnostic returned vacuous output that could mislead future readers; shellcheck is the bash-native equivalent.
+- **Bash-only PRs (all `.sh`/`.bash`/`.zsh`, no other source extensions):** OSS semgrep's tree-sitter bash parser cannot analyze bash files end-to-end. Skip soleur:engineering:review:semgrep-sast and substitute `shellcheck` as the deterministic gate. **Why:** PR #4045 — semgrep returned vacuous output on a 1336-line bash diff; shellcheck is the bash-native equivalent.
 
 **Bootstrap (mandatory before spawning the agent):** Run [ensure-semgrep.sh](./scripts/ensure-semgrep.sh) from the repo root. It verifies `semgrep --version` runs — `command -v` alone accepts dead shims, which would let the seat no-op silently (#9964). Dead shims fall through to install (brew → pipx → `pip --user`). Exit 0 only when semgrep resolves AND runs; 1 = attempted but still dead; 2 = no install path (incl. dead shim + no installer). On non-zero exit, print stderr and abort — do NOT silently skip; the SAST pass is what catches CodeQL-equivalent patterns like `js/file-system-race`.
 

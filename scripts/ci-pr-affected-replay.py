@@ -230,12 +230,13 @@ def durations(root):
         p = os.path.join(root, "scripts", name)
         if not os.path.exists(p):
             continue
-        for line in open(p):
-            if line.startswith("#") or not line.strip():
-                continue
-            f = line.rstrip("\n").split("\t")
-            if len(f) >= 2 and f[1].isdigit():
-                d[f[0]] = int(f[1])
+        with open(p) as fh:
+            for line in fh:
+                if line.startswith("#") or not line.strip():
+                    continue
+                f = line.rstrip("\n").split("\t")
+                if len(f) >= 2 and f[1].isdigit():
+                    d[f[0]] = int(f[1])
     return d
 
 
@@ -518,36 +519,36 @@ def cmd_collect(a):
     path = os.path.join(a.out, "units-commits-%d-of-%d.jsonl" % (i_, k_))
     done = read_done(path, a.redo_unevaluable, a.reclassify)
     cache = os.path.join(a.out, "joblogs")
-    out = open(path, "a")
-    n = 0
-    for idx, sha in enumerate(shas):
-        if idx % k_ != i_ - 1 or ("commit", sha) in done:
-            continue
-        u = base_unit("commit", idx, sha)
-        try:
-            fill_selection(u, root, commit_files(root, sha), dur)
-        except ReadError as e:
-            u["sel_error"] = str(e)
-            u["fallback"] = "selection-error"
-        try:
-            runs = ci_runs(a.repo, sha)
-        except ReadError as e:
-            runs, u["reason"] = None, "runs-read: %s" % e
-        if runs is not None:
-            if runs:
-                ok = [r for r in runs if r["conclusion"] == "success"]
-                pick = ok[0] if ok else sorted(runs, key=lambda r: r["created_at"])[-1]
-                u["run"] = {"id": pick["id"], "event": pick["event"], "conclusion": pick["conclusion"],
-                            "attempt": pick["run_attempt"]}
-                u["runs_n"] = len(runs)
-                u["attempts_failed"] = pick["run_attempt"] if pick["conclusion"] != "success" else 0
-            # a success run is picked first and classes `clean`, so a failed commit unit never has a same-sha success to clear it
-            classify(u, a.repo, cache, lambda unit: False)
-        if u["cls"] == "not-evaluable" and not u["reason"]:
-            u["reason"] = "no-run"
-        out.write(json.dumps(u, sort_keys=True) + "\n")
-        out.flush()
-        n += 1
+    with open(path, "a") as out:
+        n = 0
+        for idx, sha in enumerate(shas):
+            if idx % k_ != i_ - 1 or ("commit", sha) in done:
+                continue
+            u = base_unit("commit", idx, sha)
+            try:
+                fill_selection(u, root, commit_files(root, sha), dur)
+            except ReadError as e:
+                u["sel_error"] = str(e)
+                u["fallback"] = "selection-error"
+            try:
+                runs = ci_runs(a.repo, sha)
+            except ReadError as e:
+                runs, u["reason"] = None, "runs-read: %s" % e
+            if runs is not None:
+                if runs:
+                    ok = [r for r in runs if r["conclusion"] == "success"]
+                    pick = ok[0] if ok else sorted(runs, key=lambda r: r["created_at"])[-1]
+                    u["run"] = {"id": pick["id"], "event": pick["event"], "conclusion": pick["conclusion"],
+                                "attempt": pick["run_attempt"]}
+                    u["runs_n"] = len(runs)
+                    u["attempts_failed"] = pick["run_attempt"] if pick["conclusion"] != "success" else 0
+                # a success run is picked first and classes `clean`, so a failed commit unit never has a same-sha success to clear it
+                classify(u, a.repo, cache, lambda unit: False)
+            if u["cls"] == "not-evaluable" and not u["reason"]:
+                u["reason"] = "no-run"
+            out.write(json.dumps(u, sort_keys=True) + "\n")
+            out.flush()
+            n += 1
     print("replay collect: chunk %s wrote %d units to %s" % (a.chunk, n, path))
     return 0
 
@@ -599,58 +600,58 @@ def cmd_ejections(a):
             files_of[r["head_sha"]] = api_commit_files(a.repo, r["head_sha"])
         return files_of[r["head_sha"]]
 
-    out = open(path, "a")
-    n = 0
-    # Every conclusion except `success` is a queue run the full battery REFUSED or could not finish (`failure`, `timed_out`,
-    # `startup_failure`, an unfinished run, and `cancelled`: a cancelled shard fails the aggregate `test`, so the run is
-    # classed from its jobs, where an unsettled shard makes it not-evaluable). None is dropped. The conclusion histogram
-    # below names the whole population.
-    fail_runs = sorted([r for r in runs if r["conclusion"] != "success"], key=lambda r: r["created_at"])
-    hist = {}
-    for r in runs:
-        k = r["conclusion"] or "in-progress"
-        hist[k] = hist.get(k, 0) + 1
-    for idx, r in enumerate(fail_runs):
-        if ("ejection", r["head_sha"]) in done:
-            continue
-        u = base_unit("ejection", idx, r["head_sha"])
-        u["run"] = {"id": r["id"], "event": "merge_group", "conclusion": r["conclusion"] or "in-progress",
-                    "attempt": r["run_attempt"]}
-        u["attempts_failed"] = r["run_attempt"]
-        u["pr"] = pr_of(r.get("head_branch"))
-        try:
-            pairs = files_for(r)
-            u["content_key"] = content_key(pairs)
-            fill_selection(u, root, [x[0] for x in pairs], dur)
-        except ReadError as e:
-            u["sel_error"] = str(e)
-            u["fallback"] = "selection-error"
-            u["reason"] = "files: %s" % e
-            if "selector" not in str(e):
-                u["cls"] = "not-evaluable"
-                out.write(json.dumps(u, sort_keys=True) + "\n")
-                out.flush()
-                n += 1
+    with open(path, "a") as out:
+        n = 0
+        # Every conclusion except `success` is a queue run the full battery REFUSED or could not finish (`failure`, `timed_out`,
+        # `startup_failure`, an unfinished run, and `cancelled`: a cancelled shard fails the aggregate `test`, so the run is
+        # classed from its jobs, where an unsettled shard makes it not-evaluable). None is dropped. The conclusion histogram
+        # below names the whole population.
+        fail_runs = sorted([r for r in runs if r["conclusion"] != "success"], key=lambda r: r["created_at"])
+        hist = {}
+        for r in runs:
+            k = r["conclusion"] or "in-progress"
+            hist[k] = hist.get(k, 0) + 1
+        for idx, r in enumerate(fail_runs):
+            if ("ejection", r["head_sha"]) in done:
                 continue
+            u = base_unit("ejection", idx, r["head_sha"])
+            u["run"] = {"id": r["id"], "event": "merge_group", "conclusion": r["conclusion"] or "in-progress",
+                        "attempt": r["run_attempt"]}
+            u["attempts_failed"] = r["run_attempt"]
+            u["pr"] = pr_of(r.get("head_branch"))
+            try:
+                pairs = files_for(r)
+                u["content_key"] = content_key(pairs)
+                fill_selection(u, root, [x[0] for x in pairs], dur)
+            except ReadError as e:
+                u["sel_error"] = str(e)
+                u["fallback"] = "selection-error"
+                u["reason"] = "files: %s" % e
+                if "selector" not in str(e):
+                    u["cls"] = "not-evaluable"
+                    out.write(json.dumps(u, sort_keys=True) + "\n")
+                    out.flush()
+                    n += 1
+                    continue
 
-        def cleared(unit, r=r):
-            # a LATER queue run of the SAME PR whose changed files are the identical (name, blob) set and succeeded.
-            # A run whose branch names no PR cannot be tied to one, so nothing clears it.
-            pr = pr_of(r.get("head_branch"))
-            if not pr or not unit.get("content_key"):
+            def cleared(unit, r=r):
+                # a LATER queue run of the SAME PR whose changed files are the identical (name, blob) set and succeeded.
+                # A run whose branch names no PR cannot be tied to one, so nothing clears it.
+                pr = pr_of(r.get("head_branch"))
+                if not pr or not unit.get("content_key"):
+                    return False
+                for o in by_pr.get(pr, []):
+                    if o["created_at"] > r["created_at"] and o["conclusion"] == "success":
+                        try:
+                            if content_key(files_for(o)) == unit["content_key"]:
+                                return True
+                        except ReadError:
+                            return False
                 return False
-            for o in by_pr.get(pr, []):
-                if o["created_at"] > r["created_at"] and o["conclusion"] == "success":
-                    try:
-                        if content_key(files_for(o)) == unit["content_key"]:
-                            return True
-                    except ReadError:
-                        return False
-            return False
-        classify(u, a.repo, cache, cleared)
-        out.write(json.dumps(u, sort_keys=True) + "\n")
-        out.flush()
-        n += 1
+            classify(u, a.repo, cache, cleared)
+            out.write(json.dumps(u, sort_keys=True) + "\n")
+            out.flush()
+            n += 1
     with open(os.path.join(a.out, "ejections-window.json"), "w") as fh:
         json.dump({"since": since, "until": until, "runs": len(runs), "refused": len(fail_runs), "conclusions": hist}, fh, sort_keys=True)
     print("replay ejections: wrote %d units to %s (window %s..%s, %d merge_group runs, %d failed)"

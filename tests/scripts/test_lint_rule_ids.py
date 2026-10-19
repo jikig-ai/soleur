@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Tests for scripts/lint-rule-ids.py."""
 
-import os
 import subprocess
 
 from tests.scripts._git_fixture_env import git_fixture_env

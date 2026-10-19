@@ -100,6 +100,7 @@ export const CLAUDE_CODE_TOOLS: readonly string[] = [
 
 export const CODEX_INSTRUCTIONS = resolve(PLUGIN_ROOT, "codex/INSTRUCTIONS.md");
 export const DEVIN_INSTRUCTIONS = resolve(PLUGIN_ROOT, "devin/INSTRUCTIONS.md");
+export const ANTIGRAVITY_INSTRUCTIONS = resolve(PLUGIN_ROOT, "antigravity/INSTRUCTIONS.md");
 
 /**
  * The names a `## Tools` table's FIRST column translates.
