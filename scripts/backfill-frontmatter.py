@@ -17,7 +17,7 @@ import yaml
 # Shared helpers — keep frontmatter parsing/serialization in a single source
 # of truth so callers don't fork a copy. See PR #3645 review.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from frontmatter_lib import parse_frontmatter, serialize_frontmatter, format_field  # noqa: E402
+from frontmatter_lib import parse_frontmatter, serialize_frontmatter  # noqa: E402
 
 LEARNINGS_DIR = "knowledge-base/project/learnings"
 
@@ -155,7 +155,7 @@ def tags_from_slug(filename):
 
 
 # --- Frontmatter parsing/serialization moved to scripts/frontmatter_lib.py ---
-# parse_frontmatter, serialize_frontmatter, format_field imported at module top.
+# parse_frontmatter, serialize_frontmatter imported at module top.
 
 
 # --- Processing ---
@@ -186,7 +186,6 @@ def process_file_no_frontmatter(filepath, filename):
     # Verify body is unchanged
     # The body is everything after frontmatter in the new content
     _, new_body, _ = parse_frontmatter(new_content)
-    new_body_stripped = new_body.lstrip("\n")
     content_stripped = content.lstrip("\n")
     new_body_hash = hashlib.md5(content_stripped.encode()).hexdigest()
     if body_hash != new_body_hash:
@@ -321,7 +320,7 @@ def main():
         sys.exit(1)
 
     # Step 1: Rename dateless file
-    renamed = rename_dateless_file()
+    rename_dateless_file()
 
     # Step 2: Process all files (recurse into taxonomy subdirs)
     for filepath in iter_learning_files():

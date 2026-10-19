@@ -29,6 +29,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 # Resolve the repo root from this file's location so the harness is portable.
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -142,14 +143,14 @@ def main():
         for name, rel, old, new in MUTATIONS:
             src, dst = os.path.join(REPO, rel), os.path.join(sb, rel)
             shutil.copy(src, dst)
-            s = open(dst).read()
+            s = Path(dst).read_text()
             n = s.count(old)
             if n != 1:
                 print(f"{name:34s} ANCHOR n={n} (need exactly 1)  <-- fix the harness")
                 survived.append(f"{name} (anchor n={n})")
                 shutil.copy(src, dst)
                 continue
-            open(dst, "w").write(s.replace(old, new, 1))
+            Path(dst).write_text(s.replace(old, new, 1))
             fails = run(sb)
             shutil.copy(src, dst)
             if fails:

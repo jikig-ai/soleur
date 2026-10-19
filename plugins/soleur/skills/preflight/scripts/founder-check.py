@@ -548,7 +548,6 @@ def _bash_differs(cmd):
     shlex saw is what bash runs.
     """
     quote, i, n = None, 0, len(cmd)
-    word_start = True
     while i < n:
         ch = cmd[i]
         if quote == "'":
@@ -558,7 +557,6 @@ def _bash_differs(cmd):
             continue
         if ch == "\\":
             i += 2
-            word_start = False
             continue
         if quote == '"':
             if ch == '"':
@@ -577,10 +575,8 @@ def _bash_differs(cmd):
             if "," in body or ".." in body or end == -1:
                 return True
         elif ch in " \t":
-            word_start = True
             i += 1
             continue
-        word_start = False
         i += 1
     return quote is not None
 
@@ -830,7 +826,7 @@ def _tasks_plan(top, branch):
     if not _safe_branch(branch):
         return None
     for d in _spec_dirs(top, branch):
-        status, text = "missing", ""
+        text = ""
         p = os.path.join(d, "tasks.md")
         if os.path.isfile(p) and not os.path.islink(p) and os.path.getsize(p) <= MAX_PLAN_BYTES:
             with open(p, encoding="utf-8", errors="replace") as fh:

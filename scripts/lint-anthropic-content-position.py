@@ -85,6 +85,8 @@ def main() -> int:
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
+            text = None
+        if text is None:
             continue
         if not IN_SCOPE.search(text):
             continue

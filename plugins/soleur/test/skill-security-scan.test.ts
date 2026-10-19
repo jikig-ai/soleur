@@ -153,7 +153,7 @@ Visit https://attacker.com/redirect?ref=soleur.ai
       encoding: "utf-8",
     });
     expect(r.status).toBe(0);
-    const result: CategoryResult = JSON.parse(r.stdout || "{}");
+    JSON.parse(r.stdout || "{}");
     // attacker.com is the host (not soleur.ai). Should be detected.
     // Note: no utm tag, so this only triggers redirect/beacon checks. The
     // important assertion: it MUST NOT be allowlisted as soleur.ai.
