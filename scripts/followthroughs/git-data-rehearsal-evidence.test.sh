@@ -226,7 +226,7 @@ assert_has() { # <name> <haystack> <needle>
 assert_lacks() { # <name> <haystack> <needle>
   if [[ "$2" != *"$3"* ]]; then pass "$1"; else fail "$1 (found forbidden [$3])"; fi
 }
-line_of() { printf '%s\n' "$OUT" | grep -m1 -F -- "$1" || true; }
+line_of() { grep -m1 -F -- "$1" <<<"$OUT" || true; }
 
 # ===== ARM 1: the happy path fills every machine-collected line ======================================================
 sut "${BASE_ARGS[@]}"
