@@ -115,6 +115,7 @@ declare -A FLAG_ENV_VARS=(
   ["untrusted-content-classify"]="FLAG_UNTRUSTED_CONTENT_CLASSIFY"
   ["untrusted-content-wrap"]="FLAG_UNTRUSTED_CONTENT_WRAP"
   ["egress-audit-collection"]="FLAG_EGRESS_AUDIT_COLLECTION"
+  ["agent-sandbox-unix-deny"]="FLAG_AGENT_SANDBOX_UNIX_DENY"
 )
 
 # --- arg parsing ------------------------------------------------------------

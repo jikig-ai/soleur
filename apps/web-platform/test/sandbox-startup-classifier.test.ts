@@ -427,11 +427,38 @@ describe("isPreExecSandboxDenialOutput — the notice predicate (#10455 c, Guard
     expect(isPreExecSandboxDenialOutput("unshare: unshare failed: Operation not permitted", true)).toBe(false);
   });
 
+  it("A2: a tenant line that merely CONTAINS bwrap/bubblewrap is never rewritten; only a line that starts with `bwrap: ` is", () => {
+    // Both still classify (and so still page): the paging classifier is unchanged.
+    for (const l of [
+      "rm: cannot remove 'bwrap': Operation not permitted",
+      "chmod: changing permissions of 'bwrap-notes.md': Operation not permitted",
+      "bubblewrap: setting up uid map: Operation not permitted",
+      "echo bwrap: Operation not permitted",
+    ]) {
+      expect(isPreExecSandboxDenialOutput(l, true), l).toBe(false);
+    }
+    expect(classifyBashSandboxFailure("rm: cannot remove 'bwrap': Operation not permitted", null)?.errorCode).toBe("bwrap_eperm");
+    // A real bwrap line (and indented / CRLF forms) is still rewritten.
+    expect(isPreExecSandboxDenialOutput("bwrap: setting up uid map: Operation not permitted", true)).toBe(true);
+    expect(isPreExecSandboxDenialOutput(`  ${BWRAP}\r\n`, true)).toBe(true);
+  });
+
   it("the notice is the agreed plain sentence and does NOT claim the command did not run", () => {
     expect(BASH_UNAVAILABLE_NOTICE).toBe(
       "Platform notice: command execution is temporarily unavailable on our side. This is a platform issue, not a problem with your project.",
     );
     expect(BASH_UNAVAILABLE_NOTICE).not.toMatch(/did not run|not run|never ran|apply-seccomp|bwrap/i);
+  });
+
+  it("A6(e): an 8 MB multi-line string is rejected by the length bound BEFORE any split", () => {
+    const eightMb = "x\n".repeat(4 * 1024 * 1024);
+    expect(eightMb.length).toBe(8 * 1024 * 1024);
+    const t0 = Date.now();
+    expect(isPreExecSandboxDenialOutput(eightMb, true)).toBe(false);
+    // The real denial line buried in a huge multi-line payload is still not a lone denial.
+    expect(isPreExecSandboxDenialOutput(`${HELPER}\n${eightMb}`, true)).toBe(false);
+    expect(isPreExecSandboxDenialOutput(`${eightMb}${HELPER}`, true)).toBe(false);
+    expect(Date.now() - t0).toBeLessThan(200);
   });
 
   it("a 5000-character slash-heavy single line is rejected without a long scan", () => {

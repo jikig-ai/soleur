@@ -5,17 +5,30 @@
 // every direct caller of the two builders is accounted for.
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const APP_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_ROOT = join(APP_ROOT, "..", "..");
 
+// mirrorWarnWithDebounce is modelled with the real helper's contract (one emission per key:errorClass per window, then
+// it calls warnSilentFallback), so "exactly one warning per window" is observable through warnSilentFallback.
+const obsMock = vi.hoisted(() => {
+  const claimed = new Set<string>();
+  const warn = vi.fn();
+  const debounce = vi.fn((err: unknown, ctx: unknown, key: string, errorClass: string) => {
+    if (claimed.has(`${key}:${errorClass}`)) return;
+    claimed.add(`${key}:${errorClass}`);
+    warn(err, ctx);
+  });
+  return { claimed, warn, debounce };
+});
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: vi.fn(),
-  warnSilentFallback: vi.fn(),
-  mirrorWarnWithDebounce: vi.fn(),
+  warnSilentFallback: obsMock.warn,
+  mirrorWarnWithDebounce: obsMock.debounce,
   mirrorWithDebounce: vi.fn(),
 }));
 const childLog = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
@@ -37,6 +50,7 @@ import { resolveWorkspaceMode } from "@/server/workspace-mode";
 
 const CRED = { value: "sk-test", scheme: "api_key" as const };
 const SEL = "SOLEUR_BWRAP_SECCOMP_BPF";
+const UNIXDENY_OVERRIDE = "SOLEUR_BWRAP_SECCOMP_BPF_UNIXDENY";
 
 describe("usesUnixDenyArtifact is the single predicate; seccompArtifactFor the single path resolver", () => {
   it("the table: variant only for no-egress with the flag ON", () => {
@@ -158,14 +172,22 @@ describe("spawn-time agreement is fail-safe (F1: mirror to Sentry, correct towar
     systemPrompt: "x",
     canUseTool: (async () => ({ behavior: "allow" as const, updatedInput: {} })) as never,
   };
+  const agreementWarnings = () =>
+    vi.mocked(warnSilentFallback).mock.calls.filter((c) => (c[1] as { op?: string })?.op === "seccomp-agreement");
   let ambient: string | undefined;
+  let ambientUnixdeny: string | undefined;
   beforeEach(() => {
     ambient = process.env[SEL];
+    ambientUnixdeny = process.env[UNIXDENY_OVERRIDE];
     vi.mocked(warnSilentFallback).mockClear();
+    obsMock.debounce.mockClear();
+    obsMock.claimed.clear();
   });
   afterEach(() => {
     if (ambient === undefined) delete process.env[SEL];
     else process.env[SEL] = ambient;
+    if (ambientUnixdeny === undefined) delete process.env[UNIXDENY_OVERRIDE];
+    else process.env[UNIXDENY_OVERRIDE] = ambientUnixdeny;
   });
 
   it("an egress session with the ambient selector set to the unixdeny path ends on base, warns once, does not throw", () => {
@@ -175,27 +197,120 @@ describe("spawn-time agreement is fail-safe (F1: mirror to Sentry, correct towar
       opts = buildAgentQueryOptions({ ...args, ghToken: "ghs_x", sandboxUnixDeny: false });
     }).not.toThrow();
     expect(opts!.env?.[SEL]).toBe(SECCOMP_BASE_ARTIFACT);
-    const calls = vi.mocked(warnSilentFallback).mock.calls.filter((c) => (c[1] as { op?: string })?.op === "seccomp-agreement");
+    const calls = agreementWarnings();
     expect(calls.length).toBe(1);
     expect(calls[0][1]).toMatchObject({ feature: "agent-sandbox", op: "seccomp-agreement" });
     expect((calls[0][1] as { message: string }).message).toMatch(/artifact disagreement/i);
+  });
+  it("A3: the warning is debounced under the registered errorClass, so repeated queries inside the window emit once", () => {
+    process.env[SEL] = unixdenyArtifactPath();
+    for (let i = 0; i < 5; i++) buildAgentQueryOptions({ ...args, ghToken: "ghs_x", sandboxUnixDeny: false });
+    expect(agreementWarnings().length).toBe(1);
+    expect(obsMock.debounce).toHaveBeenCalledTimes(5);
+    expect(obsMock.debounce.mock.calls[0]).toEqual([
+      null,
+      expect.objectContaining({ feature: "agent-sandbox", op: "seccomp-agreement" }),
+      "global",
+      "agent-sandbox-seccomp-agreement",
+    ]);
+    // ...but every query is still corrected, not only the first.
+    expect(buildAgentQueryOptions({ ...args, ghToken: "ghs_x", sandboxUnixDeny: false }).env?.[SEL]).toBe(SECCOMP_BASE_ARTIFACT);
+  });
+  it("A3: both errorClass strings are listed in the observability registry comment", () => {
+    const registry = readFileSync(join(APP_ROOT, "server/observability.ts"), "utf8");
+    expect(registry).toContain("agent-sandbox-seccomp-agreement");
+    expect(registry).toContain("agent-sandbox-unix-deny-unresolved");
   });
   it("a no-egress flag-OFF session with the ambient unixdeny selector is corrected to base too", () => {
     process.env[SEL] = unixdenyArtifactPath();
     const opts = buildAgentQueryOptions({ ...args, sandboxUnixDeny: false });
     expect(opts.env?.[SEL]).toBe(SECCOMP_BASE_ARTIFACT);
   });
+  it("F4: an egress session (ghToken) with the flag ON and the ambient unixdeny selector still ends on base", () => {
+    process.env[SEL] = unixdenyArtifactPath();
+    const opts = buildAgentQueryOptions({ ...args, ghToken: "ghs_x", sandboxUnixDeny: true });
+    expect(opts.env?.[SEL]).toBe(SECCOMP_BASE_ARTIFACT);
+    expect(agreementWarnings().length).toBe(1);
+  });
   it("never corrects in the other direction: a flag-ON no-egress session keeps the variant, with no warning", () => {
     delete process.env[SEL];
     const opts = buildAgentQueryOptions({ ...args, sandboxUnixDeny: true });
     expect(opts.env?.[SEL]).toBe(SECCOMP_UNIXDENY_ARTIFACT);
-    expect(vi.mocked(warnSilentFallback).mock.calls.filter((c) => (c[1] as { op?: string })?.op === "seccomp-agreement").length).toBe(0);
+    expect(agreementWarnings().length).toBe(0);
   });
   it("an unrelated ambient override (not the unixdeny path) is left untouched", () => {
     process.env[SEL] = OVERRIDE;
     const opts = buildAgentQueryOptions({ ...args, ghToken: "ghs_x", sandboxUnixDeny: false });
     expect(opts.env?.[SEL]).toBe(OVERRIDE);
-    expect(vi.mocked(warnSilentFallback).mock.calls.filter((c) => (c[1] as { op?: string })?.op === "seccomp-agreement").length).toBe(0);
+    expect(agreementWarnings().length).toBe(0);
+  });
+
+  describe("A5: the comparison is on resolved paths, not strings", () => {
+    let dir: string;
+    let artifact: string;
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), "seccomp-alias-"));
+      artifact = join(dir, "unixdeny.bpf");
+      writeFileSync(artifact, Buffer.alloc(160));
+      process.env[UNIXDENY_OVERRIDE] = artifact;
+    });
+    afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+    it("a symlink alias of the unixdeny artifact on an egress session is corrected to base and warned once", () => {
+      const alias = join(dir, "alias.bpf");
+      symlinkSync(artifact, alias);
+      process.env[SEL] = alias;
+      const opts = buildAgentQueryOptions({ ...args, ghToken: "ghs_x", sandboxUnixDeny: false });
+      expect(opts.env?.[SEL]).toBe(SECCOMP_BASE_ARTIFACT);
+      expect(agreementWarnings().length).toBe(1);
+    });
+    it("a `..` alias of the unixdeny artifact is recognised too", () => {
+      process.env[SEL] = join(dir, "sub", "..", "unixdeny.bpf");
+      const opts = buildAgentQueryOptions({ ...args, ghToken: "ghs_x", sandboxUnixDeny: false });
+      expect(opts.env?.[SEL]).toBe(SECCOMP_BASE_ARTIFACT);
+      expect(agreementWarnings().length).toBe(1);
+    });
+    it("checkSeccompAgreement itself reports the alias (the selector names the unixdeny file on an egress session)", () => {
+      const alias = join(dir, "alias.bpf");
+      symlinkSync(artifact, alias);
+      const egressCfg = buildAgentSandboxConfig("/workspaces/w", { allowGithubEgress: true, sandboxUnixDeny: false });
+      const env = buildAgentEnv(CRED, undefined, { ghToken: "ghs_x" });
+      env[SEL] = alias;
+      expect(checkSeccompAgreement(env, egressCfg)).toMatch(/artifact disagreement/i);
+      // control: a different file in the same directory is a legitimate base override
+      const other = join(dir, "other.bpf");
+      writeFileSync(other, Buffer.alloc(160));
+      env[SEL] = other;
+      expect(checkSeccompAgreement(env, egressCfg)).toBeNull();
+    });
+    it("a flag-ON no-egress session whose selector is an alias of the variant is in agreement (no false alarm)", () => {
+      const alias = join(dir, "alias.bpf");
+      symlinkSync(artifact, alias);
+      const cfg = buildAgentSandboxConfig("/workspaces/w", { sandboxUnixDeny: true });
+      const env = buildAgentEnv(CRED, undefined, { sandboxUnixDeny: true });
+      env[SEL] = alias;
+      expect(checkSeccompAgreement(env, cfg)).toBeNull();
+    });
+  });
+});
+
+describe("A7: the per-dispatch sandbox-config log records which seccomp artifact the session is paired with", () => {
+  const artifactOf = () => {
+    const row = childLog.info.mock.calls.map((c) => c[0]).filter((o) => o?.op === "tenant-deny").at(-1);
+    return row?.seccompArtifact;
+  };
+  beforeEach(() => childLog.info.mockClear());
+  it("unixdeny for a no-egress flag-ON session; base for every other posture", () => {
+    buildAgentSandboxConfig("/workspaces/w", { sandboxUnixDeny: true });
+    expect(artifactOf()).toBe("unixdeny");
+    buildAgentSandboxConfig("/workspaces/w", { sandboxUnixDeny: false });
+    expect(artifactOf()).toBe("base");
+    buildAgentSandboxConfig("/workspaces/w", { allowGithubEgress: true, sandboxUnixDeny: true });
+    expect(artifactOf()).toBe("base");
+    buildAgentSandboxConfig("/workspaces/w", { allowWebEgress: true, sandboxUnixDeny: true });
+    expect(artifactOf()).toBe("base");
+    buildAgentSandboxConfig("/workspaces/w");
+    expect(artifactOf()).toBe("base");
   });
 });
 
@@ -294,10 +409,100 @@ describe("call-site census", () => {
     expect((src.match(/sandboxUnixDeny: args\.sandboxUnixDeny/g) ?? []).length).toBe(2);
     expect(src).toContain("checkSeccompAgreement(");
   });
-  it("no module outside agent-sandbox-seccomp.ts names the artifact filenames inline", () => {
-    const lines = grep("bwrap-userns-clone3-(unix)?deny\\.bpf", ["server"]);
-    const f = files(lines).filter((x) => !/\.test\./.test(x));
-    expect(f).toEqual(["server/agent-sandbox-seccomp.ts", "server/c4-render.ts"]);
+  it("A6(a): the artifact filenames are named only by the known modules, across the whole app tree", () => {
+    // server/ lib/ scripts/ app/ infra/ minus the generator (which defines them) and tests. Every consumer here either
+    // is the single constant, a shell/JSON/MJS runtime that cannot import it (each pinned to the constant by its own
+    // parity row), or a generated fixture.
+    const lines = grep("bwrap-userns-clone3-(unix)?deny\\.bpf", ["server", "lib", "scripts", "app", "infra"]);
+    const f = files(lines).filter((x) => !/\.test\./.test(x) && x !== "scripts/gen-bwrap-userns-seccomp.mjs");
+    expect(f).toEqual([
+      "infra/bwrap-shim/bwrap",
+      "infra/c4-render-sandbox-argv.json",
+      "infra/lib/sdk-bash-probe.mjs",
+      "scripts/bwrap-userns-seccomp-probe.sh",
+      "scripts/sandbox-canary.mjs",
+      "server/agent-sandbox-seccomp.ts",
+      "server/c4-render.ts",
+    ]);
+    expect(f.length).toBe(7); // floor: an empty grep must not pass
+  });
+});
+
+// A6(a): the SDK `query()` spawn sites. A site that passes its OWN `env` (instead of the one buildAgentQueryOptions
+// derives, which carries the per-session seccomp selector) could spawn a session on an artifact nobody checked, so each
+// one must be either routed through the builder or listed here with a justification.
+describe("SDK query() spawn-site census (A6a)", () => {
+  const SPAWN_FILES = [
+    "scripts/dev-probe-destroy-ask.ts",
+    "scripts/plugin-root-sandbox-propagation-probe.mjs",
+    "scripts/sandbox-canary.mjs",
+    "scripts/spike/cache-control-forwarding.ts",
+    "server/agent-runner.ts",
+    "server/cc-dispatcher.ts",
+    "server/pdf-chapter-router.ts",
+  ];
+  // Spawn sites that build their OWN env, each with the reason that is acceptable.
+  const OWN_ENV_JUSTIFIED: Record<string, string> = {
+    "scripts/plugin-root-sandbox-propagation-probe.mjs": "dev probe: env from buildAgentEnv (base artifact), no tenant, no egress",
+  };
+
+  // Balanced-brace extraction of the object literal that follows `name(`; strings are skipped.
+  const literalAfter = (src: string, from: number): string => {
+    let depth = 0;
+    let i = src.indexOf("{", from);
+    const begin = i;
+    for (; i < src.length; i++) {
+      const c = src[i];
+      if (c === '"' || c === "'" || c === "`") {
+        const q = c;
+        for (i++; i < src.length && src[i] !== q; i++) if (src[i] === "\\") i++;
+        continue;
+      }
+      if (c === "{") depth++;
+      else if (c === "}" && --depth === 0) return src.slice(begin, i + 1);
+    }
+    throw new Error("unbalanced literal");
+  };
+  const stripComments = (t: string) => t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "").replace(/(\s)\/\/[^\n]*$/gm, "$1");
+
+  const sites = (() => {
+    const out: Array<{ file: string; routed: boolean; ownEnv: boolean }> = [];
+    const r = spawnSync("git", ["grep", "--untracked", "-lE", "@anthropic-ai/claude-agent-sdk", "--", "server", "lib", "scripts", "app"], {
+      cwd: APP_ROOT,
+      encoding: "utf8",
+    });
+    expect([0, 1]).toContain(r.status);
+    for (const file of r.stdout.split("\n").filter(Boolean)) {
+      if (/\.test\./.test(file) || /\.d\.ts$/.test(file)) continue;
+      const src = stripComments(readFileSync(join(APP_ROOT, file), "utf8"));
+      for (const m of src.matchAll(/(?<![\w.$])(?:query|sdkQuery)\(\s*\{/g)) {
+        const lit = literalAfter(src, m.index!);
+        const routed = /\bbuildAgentQueryOptions\(/.test(lit) || (/\.\.\.opts\b/.test(lit) && /\bbuildAgentQueryOptions\(/.test(src));
+        // an `env` KEY of the options object (`env,` / `env:`), not a nested mention
+        const ownEnv = /(^|[\s,{])env\s*[,:}]/.test(lit.replace(/\{[^{}]*\}/g, (x) => (/\benv\b/.test(x) ? x : "")));
+        out.push({ file, routed, ownEnv });
+      }
+    }
+    return out;
+  })();
+
+  it("the spawn sites are exactly the known files (floor: an empty scan must not pass)", () => {
+    expect([...new Set(sites.map((x) => x.file))].sort()).toEqual(SPAWN_FILES);
+    expect(sites.length).toBeGreaterThanOrEqual(SPAWN_FILES.length);
+  });
+  it("the production runners build their options through buildAgentQueryOptions and pass no env of their own", () => {
+    for (const file of ["server/agent-runner.ts", "server/cc-dispatcher.ts", "scripts/dev-probe-destroy-ask.ts"]) {
+      const mine = sites.filter((x) => x.file === file);
+      expect(mine.length, file).toBeGreaterThanOrEqual(1);
+      for (const x of mine) {
+        expect(x.routed, `${file} builds its options through buildAgentQueryOptions`).toBe(true);
+        expect(x.ownEnv, `${file} must not pass an env of its own`).toBe(false);
+      }
+    }
+  });
+  it("every site that passes its OWN env is listed with a justification (an unlisted one reds)", () => {
+    const own = [...new Set(sites.filter((x) => x.ownEnv).map((x) => x.file))].sort();
+    expect(own).toEqual(Object.keys(OWN_ENV_JUSTIFIED).sort());
   });
 });
 

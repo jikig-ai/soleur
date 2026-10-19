@@ -90,19 +90,7 @@ describe("mirrorBashSandboxFailure (#10032)", () => {
   });
 });
 
-// The wire between the helper and its only caller: a helper test cannot see a deleted or misplaced call.
-describe("onToolResult calls the mirror (call-site pin)", () => {
-  const src = readFileSync(resolve(__dirname, "../../server/cc-dispatcher.ts"), "utf8")
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^\s*\/\/.*$/gm, "");
-
-  it("calls mirrorBashSandboxFailure(block.output, …) exactly once, before the autonomous-posture gate", () => {
-    const calls = [...src.matchAll(/\bmirrorBashSandboxFailure\(block\.output,/g)];
-    expect(calls).toHaveLength(1);
-    const gate = src.indexOf("if (!bashAutonomousPosture) return;", calls[0].index);
-    expect(gate).toBeGreaterThan(calls[0].index!);
-  });
-});
+// The wire from onToolResult to the mirror is driven behaviourally in test/cc-dispatcher-bash-notice-wire.test.ts.
 
 // #10455 e — another helper step failing with EPERM is mirrored under its own code, and the alert pages on both.
 describe("mirrorBashSandboxFailure — helper_step_eperm (#10455 e)", () => {
@@ -176,27 +164,8 @@ describe("selectCommandStreamOutput — the streamed text (#10455 c)", () => {
   });
 });
 
-// The wire between the helpers and the observer: a helper test cannot see a deleted or misplaced call.
-describe("onToolResult streams through selectCommandStreamOutput (call-site pin)", () => {
-  const src = readFileSync(resolve(__dirname, "../../server/cc-dispatcher.ts"), "utf8")
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^\s*\/\/.*$/gm, "");
-
-  it("rewrites ONLY on the command_stream path: after the mirror call and after the autonomous-posture gate", () => {
-    const calls = [...src.matchAll(/\bselectCommandStreamOutput\(block\.output, block\.isError\)/g)];
-    expect(calls).toHaveLength(1);
-    const mirror = src.indexOf("mirrorBashSandboxFailure(block.output,");
-    const gate = src.indexOf("if (!bashAutonomousPosture) return;");
-    expect(mirror).toBeGreaterThan(-1);
-    expect(gate).toBeGreaterThan(mirror);
-    expect(calls[0].index).toBeGreaterThan(gate);
-  });
-
-  it("the mirror reads the RAW output, never the rewritten text", () => {
-    expect(src).toMatch(/mirrorBashSandboxFailure\(block\.output,/);
-    expect(src).not.toMatch(/mirrorBashSandboxFailure\(selectCommandStreamOutput/);
-  });
-});
+// The wire from onToolResult to the stream is driven behaviourally in test/cc-dispatcher-bash-notice-wire.test.ts
+// (a source regex cannot see a comma-operator mutant of the call).
 
 // The SDK-visible tool_result cannot be rewritten (no hook), so the model sees the RAW line: the directive keys on it.
 describe("BASH_UNAVAILABLE_PROMPT_DIRECTIVE (#10455 c)", () => {
@@ -215,16 +184,24 @@ describe("BASH_UNAVAILABLE_PROMPT_DIRECTIVE (#10455 c)", () => {
     expect(d).toMatch(/takes precedence|overrides|exception/i);
   });
 
-  it("allows ONE retry of the same command only when read-only or idempotent, else ask the user", () => {
-    expect(d).toMatch(/once/i);
-    expect(d).toMatch(/read-only|idempotent/i);
-    expect(d).toMatch(/ask the user/i);
+  it("allows ONE retry of the same command only when read-only or idempotent, else ask the user (full sentence pinned)", () => {
+    expect(d).toContain(
+      "You may retry the SAME command ONCE, and only if it is read-only or idempotent (it changes nothing, or running it twice is harmless); otherwise ask the user before running it again.",
+    );
   });
 
-  it("after a second failure: stop and tell the user to try again later", () => {
-    expect(d).toMatch(/second|again fails|fails again/i);
-    expect(d).toMatch(/stop/i);
-    expect(d).toMatch(/try again later/i);
+  it("after a second failure: stop and tell the user to try again later (full sentence pinned)", () => {
+    expect(d).toContain(
+      "After a second failure with a sandbox error line, stop running commands, do not try again, and tell the user to try again later.",
+    );
+  });
+
+  it("A2: the trigger is a FAILED Bash call whose whole output is one apply-seccomp:/bwrap: line ending in Operation not permitted", () => {
+    expect(d).toContain(
+      "If a Bash call FAILED (its result is marked as an error) and its whole output is a single line starting with `apply-seccomp:` or `bwrap:` and ending in `Operation not permitted`",
+    );
+    // The loose old trigger ("output is a single sandbox error line") must be gone.
+    expect(d).not.toContain("If a Bash call's output is a single sandbox error line");
   });
 
   it("never claims the command did not run", () => {

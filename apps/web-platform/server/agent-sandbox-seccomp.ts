@@ -15,6 +15,9 @@
 // artifact, see agent-runner-query-options.ts). It is a leaf module on purpose:
 // agent-env.ts cannot import agent-runner-sandbox-config.ts (that file imports agent-env.ts).
 
+import { realpathSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
+
 /** Baked default of the base artifact (Dockerfile COPY); the shim's own default is the same path. */
 export const SECCOMP_BASE_ARTIFACT = "/app/infra/bwrap-userns-clone3-deny.bpf";
 /** Baked path of the AF_UNIX-deny variant (Dockerfile COPY). */
@@ -25,6 +28,26 @@ export const SECCOMP_SELECTOR_ENV = "SOLEUR_BWRAP_SECCOMP_BPF";
 export const SECCOMP_UNIXDENY_OVERRIDE_ENV = "SOLEUR_BWRAP_SECCOMP_BPF_UNIXDENY";
 
 type Env = Record<string, string | undefined>;
+
+/**
+ * Do two selector values name the same artifact FILE? Compares resolved paths, not strings: an ambient override that
+ * names a symlink or a `..` alias of the unixdeny artifact must be recognised as the unixdeny artifact. `realpath`
+ * needs the file to exist; when it does not (the baked `/app/infra/...` path on a dev box) the lexically resolved
+ * path is compared instead. A byte-for-byte COPY at a different path is not detectable this way.
+ */
+export function isSameArtifactPath(a: string | undefined, b: string | undefined): boolean {
+  if (!a || !b) return false;
+  return canonicalArtifactPath(a) === canonicalArtifactPath(b);
+}
+
+function canonicalArtifactPath(p: string): string {
+  const resolved = resolvePath(p);
+  try {
+    return realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
+}
 
 export function unixdenyArtifactPath(env: Env = process.env): string {
   return env[SECCOMP_UNIXDENY_OVERRIDE_ENV] || SECCOMP_UNIXDENY_ARTIFACT;
@@ -91,7 +114,7 @@ export function checkSeccompAgreement(env: Env, sandbox: object, process_env: En
   const wantVariant = usesUnixDenyArtifact(posture.hasEgress, posture.unixDenyFlag);
   const selected = env[SECCOMP_SELECTOR_ENV];
   const variantPath = unixdenyArtifactPath(process_env);
-  const gotVariant = selected === variantPath;
+  const gotVariant = isSameArtifactPath(selected, variantPath);
   if (gotVariant !== wantVariant) {
     return (
       `agent-sandbox seccomp: artifact disagreement (selector=${selected ?? "<unset>"}, ` +

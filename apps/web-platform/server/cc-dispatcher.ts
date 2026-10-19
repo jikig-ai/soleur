@@ -465,7 +465,8 @@ const GH_403_PROMPT_DIRECTIVE =
 // run: a tenant or a prompt-injected file can print such a line after a command that ran.
 export const BASH_UNAVAILABLE_PROMPT_DIRECTIVE =
   "## Command execution unavailable\n" +
-  "If a Bash call's output is a single sandbox error line starting with `apply-seccomp:` or `bwrap:` " +
+  "If a Bash call FAILED (its result is marked as an error) and its whole output is a single line starting with " +
+  "`apply-seccomp:` or `bwrap:` and ending in `Operation not permitted` " +
   "(for example `apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted`), the platform's command " +
   "sandbox failed to start. That is a platform problem, not a problem with the user's project or command. " +
   "This takes precedence over the rule above to report literal command output verbatim, for these sandbox " +

@@ -236,6 +236,8 @@ const HELPER_STEP_SET: ReadonlySet<string> = new Set(HELPER_STEPS);
 const HELPER_PRE_COMMAND_SET: ReadonlySet<string> = new Set(HELPER_STEPS_PRE_COMMAND);
 // Captures the step; membership in HELPER_STEP_SET is the exact-match check, so no charset reasoning is needed.
 const BASH_APPLY_SECCOMP_LINE = /^[ \t]*apply-seccomp: (.{1,160}): (?:Operation not permitted|EPERM)[ \t]*$/;
+// bwrap prints its own diagnostics as `bwrap: <message>`; anything else that merely contains the token is tenant output.
+const BWRAP_OWN_LINE = /^\s*bwrap: /;
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 // EVERY absolute path token (a solo workspace's id IS the user id, and /home, /var/lib, /tmp paths are tenant-adjacent
 // too) except bwrap's own `/newroot/{proc,dev,sys,tmp}` targets, which carry the diagnostic. Linear: it only starts at
@@ -317,7 +319,7 @@ export const BASH_UNAVAILABLE_NOTICE =
  * True only when a Bash tool_result is, as a whole, ONE pre-exec platform denial the user should see as the notice:
  *   - the result is flagged as an error (`is_error`), so a command that exited 0 can never be rewritten,
  *   - the trimmed output is exactly ONE non-blank line (mixed or multi-line output falls through unchanged),
- *   - that line is a classified helper line from the PRE-command subset (every step but `waitpid`), or a bwrap-token EPERM line,
+ *   - that line is a classified helper line from the PRE-command subset (every step but `waitpid`), or a line that starts with `bwrap: ` and carries EPERM,
  *   - the line fits the scan cap (a longer line is never rewritten).
  * A forged single line from a command that ran and exited non-zero can still satisfy this: the residual is accepted
  * and recorded in the runbook, which is why the notice makes no claim about whether the command ran. The mirror event
@@ -331,7 +333,11 @@ export function isPreExecSandboxDenialOutput(output: string, isError: boolean | 
   if (lines.length !== 1 || lines[0].length > BASH_LINE_SCAN_CAP) return false;
   const failure = classifyBashSandboxFailure(lines[0], null);
   if (!failure) return false;
-  if (failure.errorCode === "proc_mount_eperm" || failure.errorCode === "bwrap_eperm") return true;
+  if (failure.errorCode === "proc_mount_eperm" || failure.errorCode === "bwrap_eperm") {
+    // The bwrap arm requires the line to START with bwrap's own `bwrap: ` prefix: a tenant command that merely names a
+    // file containing "bwrap" (`rm: cannot remove 'bwrap': Operation not permitted`) must never be rewritten.
+    return BWRAP_OWN_LINE.test(lines[0]);
+  }
   return failure.helperStep !== undefined && HELPER_PRE_COMMAND_SET.has(failure.helperStep);
 }
 

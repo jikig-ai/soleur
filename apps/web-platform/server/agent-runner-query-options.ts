@@ -37,10 +37,11 @@ import { agentSessionTmpDir } from "./agent-session-tmp";
 import { makeSandboxedSpawn, outerWrapEnabled } from "./agent-outer-wrap";
 import { resolveWorkspaceMode, type WorkspaceMode } from "./workspace-mode";
 import { assertTrustedPluginPath, getPluginPath } from "./plugin-path";
-import { warnSilentFallback } from "./observability";
+import { mirrorWarnWithDebounce, warnSilentFallback } from "./observability";
 import { buildAgentSandboxConfig } from "./agent-runner-sandbox-config";
 import {
   checkSeccompAgreement,
+  isSameArtifactPath,
   sandboxPostureOf,
   SECCOMP_BASE_ARTIFACT,
   SECCOMP_SELECTOR_ENV,
@@ -524,11 +525,18 @@ export function buildAgentQueryOptions(
   // socat UNIX-CONNECT bridges). Never the other direction.
   const disagreement = checkSeccompAgreement(opts.env, opts.sandbox);
   if (disagreement) {
-    warnSilentFallback(null, { feature: "agent-sandbox", op: "seccomp-agreement", message: disagreement });
+    // Debounced: a persistent disagreement (an ambient override on every egress session) would otherwise emit one
+    // warning per query for every tenant. `global` is an in-process dedup token, never emitted.
+    mirrorWarnWithDebounce(
+      null,
+      { feature: "agent-sandbox", op: "seccomp-agreement", message: disagreement },
+      "global",
+      "agent-sandbox-seccomp-agreement",
+    );
   }
   const posture = sandboxPostureOf(opts.sandbox);
   const variantEligible = posture !== undefined && usesUnixDenyArtifact(posture.hasEgress, posture.unixDenyFlag);
-  if (opts.env[SECCOMP_SELECTOR_ENV] === unixdenyArtifactPath() && !variantEligible) {
+  if (isSameArtifactPath(opts.env[SECCOMP_SELECTOR_ENV], unixdenyArtifactPath()) && !variantEligible) {
     opts.env[SECCOMP_SELECTOR_ENV] = SECCOMP_BASE_ARTIFACT;
   }
   return opts;

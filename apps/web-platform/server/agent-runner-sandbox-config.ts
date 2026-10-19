@@ -17,6 +17,7 @@ import {
   SECCOMP_SELECTOR_ENV,
   recordSandboxPosture,
   unixdenyArtifactPath,
+  usesUnixDenyArtifact,
 } from "./agent-sandbox-seccomp";
 import { AGENT_SESSION_TMP_ROOT } from "./agent-session-tmp";
 import { createChildLogger } from "./logger";
@@ -613,10 +614,17 @@ export function buildAgentSandboxConfig(
   // agent sandbox). `deniedCount` is config-derived (raw roots + c4 staging +
   // /proc + /sys + realpath aliases) per session — a drift in it is a config
   // diff, not live directory state.
+  const posture = {
+    hasEgress: Boolean(opts?.allowGithubEgress) || Boolean(opts?.allowWebEgress),
+    unixDenyFlag: opts?.sandboxUnixDeny === true,
+  };
   log.info(
     {
       feature: "agent-sandbox",
       op: "tenant-deny",
+      // #10455 A7: which seccomp artifact this session is paired with, so a Better Stack / Sentry reader can tell
+      // a session that ran the AF_UNIX-deny variant from a base one without SSH (same predicate as the selector).
+      seccompArtifact: usesUnixDenyArtifact(posture.hasEgress, posture.unixDenyFlag) ? "unixdeny" : "base",
       // Self-describing per-root rows (not parallel arrays) — a Sentry query
       // reads root+existence as one record, no positional correlation.
       tenantDenyRoots: denyRoots.map((root, i) => ({
@@ -745,10 +753,7 @@ export function buildAgentSandboxConfig(
   // #10455 (a): record which seccomp posture this config pairs with. Egress is the union of the two
   // egress widenings (GitHub hosts, web egress); `buildAgentEnv` derives the same bit from the
   // `ghToken` / `egressProxy` handles and `checkSeccompAgreement` compares them at spawn time.
-  return recordSandboxPosture(config, {
-    hasEgress: Boolean(opts?.allowGithubEgress) || Boolean(opts?.allowWebEgress),
-    unixDenyFlag: opts?.sandboxUnixDeny === true,
-  });
+  return recordSandboxPosture(config, posture);
 }
 
 // ---------------------------------------------------------------------------
