@@ -267,9 +267,11 @@ All four forks were delegated to `soleur:engineering:cto` (no AskUserQuestion). 
    a suffixed id would break that join and the per-run sum. Nothing flags two cron markers under
    one id (the double-bill detector is leader-loop only). Per-phase spend is therefore not
    separable; accept that rather than widen `ClaudeCostMarker`.
-4. **Inngest step state.** A `step.run` return value is persisted. The phase-2 step returns the
-   derived diff (<= 16,384 bytes by the existing cap) or a closed refusal reason - never the target
-   file text.
+4. **Inngest step state.** A `step.run` return value is persisted. The draft step returns the
+   derived diff or a closed refusal reason - never the target file text. The diff is bounded by
+   construction, not by the apply step's `MAX_DIFF_BYTES` check (which runs after the draft has
+   been persisted): at most 20 lines x 500 characters plus 3 context lines either side is well
+   under 16,384 bytes.
 5. **In-flight runs across the deploy.** The `anthropic-cluster` step's memoized return changes
    shape (clusters no longer carry `proposed_diff_unified` / `byte_impact`). A run memoized under
    the old code that resumes on the new code reads only the fields both shapes share
@@ -876,6 +878,22 @@ and UC-2 - already tracked by #8443, no new issue; (3) `edit-target-too-large` c
   completion time of the merged change. The sweeper closes the issue when a post-floor run opens a
   draft PR or hits a class-P refusal (Guard 2). A quiet week, model-side `edit-*` refusals, or a
   `skill-conflict-guard` streak leave it open (exit 2); 35 days of that exits 5.
+
+## Late review findings (Kieran seat, returned after the deepen pass)
+
+Already covered by the deepen edits: the no-trailing-newline append (base must end with LF and
+hold no CR; `\ No newline` context lines cannot then occur), the five-to-seven reason census
+(a second walker with its own count map; the `checkDiffPaths` map stays untouched), the Guard 3
+window coupling (`DraftOutcome` type), the deploy-time floor, and manual-run and non-`completed`
+status handling (Guard 2 classes). New and applied here: (a) `target-missing` and
+`diff-path-off-target` in the apply step become unreachable for derived diffs - they are KEPT as
+documented defence in depth, not removed, because the apply step also serves any future caller;
+(b) an old in-flight run whose `apply-and-pr-*` is already memoized `opened` must not be
+re-counted as a refused draft - the `record()` helper keys on the apply outcome when one is
+memoized, and a note in the code says so; (c) a base ending in a blank line gets a must-PASS row
+(T4 variant) because `insert_after_line === ""` appends and a trailing empty element in the split
+array must not be mistaken for an anchor; (d) the target count is 103 `SKILL.md` files plus
+`AGENTS.rules.md` (104 allowlisted targets, not 105 or 104 `SKILL.md`).
 
 ## Plan Review (2026-10-19)
 
