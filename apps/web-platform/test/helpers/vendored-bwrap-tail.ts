@@ -460,3 +460,58 @@ export function assertLiteralCensus(
       : "");
   throw new Error(`[${label}] (${context}) ${lines.join("; ")}.${steps}`);
 }
+
+// ---------------------------------------------------------------------------------------------
+// #10445 — helper-selection condition. The SDK wraps every Bash command in an `apply-seccomp`
+// helper UNLESS `sandbox.network.allowAllUnixSockets` is set; our config sets it so the helper
+// (whose first call, unshare(CLONE_NEWUSER), our shim filter denies) is never engaged. These
+// literals are the three log lines of that selection plus the settings->builder mapping; if a
+// bump removes or reshapes any of them the "knob skips the helper" premise is unproven and the
+// fix must be re-measured through the real SDK path (infra/sandbox-masked-proc-docker.test.sh
+// wrapped-command arm).
+
+export const HELPER_SELECTION_NEEDLES: Readonly<Record<string, string>> = Object.freeze({
+  skipLine: "Skipping seccomp filter - allowAllUnixSockets is enabled",
+  applyLine: "Applying seccomp filter for Unix socket blocking",
+  missingLine: "apply-seccomp binary not available - unix socket blocking disabled",
+  settingsMapping: "sandbox?.network?.allowAllUnixSockets",
+});
+
+export interface HelperSelectionPins {
+  skipLine: number;
+  applyLine: number;
+  missingLine: number;
+  /** 0 for the CLI package, which never reads the programmatic `sandbox` option. */
+  settingsMapping: number;
+}
+
+export function scanHelperSelection(src: ByteSource): Record<keyof HelperSelectionPins, number> {
+  const needles: Record<string, Buffer> = {};
+  for (const [k, v] of Object.entries(HELPER_SELECTION_NEEDLES)) needles[k] = Buffer.from(v);
+  const hits = scanNeedles(src, needles);
+  return {
+    skipLine: hits.skipLine.length,
+    applyLine: hits.applyLine.length,
+    missingLine: hits.missingLine.length,
+    settingsMapping: hits.settingsMapping.length,
+  };
+}
+
+export function assertHelperSelection(
+  counts: Record<keyof HelperSelectionPins, number>,
+  pins: HelperSelectionPins,
+  label: string,
+): void {
+  const lines: string[] = [];
+  for (const k of Object.keys(pins) as (keyof HelperSelectionPins)[]) {
+    if (counts[k] !== pins[k]) {
+      lines.push(`HELPER_SELECTION ${k} want ${pins[k]} got ${counts[k]} (${JSON.stringify(HELPER_SELECTION_NEEDLES[k])})`);
+    }
+  }
+  if (lines.length === 0) return;
+  throw new Error(
+    `[${label}] ${lines.join("; ")}. The vendored builder's unix-socket helper selection moved: re-prove that ` +
+      "`network.allowAllUnixSockets: true` still skips the `apply-seccomp` wrapper through the real SDK path " +
+      "(infra/sandbox-masked-proc-docker.test.sh wrapped-command arm) before updating the pins (#10445).",
+  );
+}

@@ -139,6 +139,15 @@ export interface DeleteAccountResult {
  *                             row is retained anonymised. Required:
  *                             routine_runs.actor_id / .delegating_principal
  *                             REFERENCE users(id) ON DELETE RESTRICT.
+ *   5.15 erase-egress-audit-rollup —
+ *                             erase_egress_audit_rollup RPC (migration 162,
+ *                             #9545). Deletes the solo workspace's egress
+ *                             audit rollup rows by workspace_id (= user id);
+ *                             the workspace row survives erasure (migration
+ *                             065), so the FK cascade does not cover it. Runs
+ *                             after the member-row anonymise step: the RPC only
+ *                             erases a workspace that has no member left, so a
+ *                             workspace that still has members keeps its history.
  *   6. auth             — auth.admin.deleteUser(); FK cascade handles
  *                         public.users and all children atomically.
  *
@@ -1177,6 +1186,42 @@ export async function deleteAccount(
       message: "anonymise_agent_engine_data threw — aborting deletion to avoid FK-block",
     });
     return { success: false, error: "Account deletion failed at anonymise-agent-engine-data. Please try again." };
+  }
+
+  // 3.997 Erase the egress audit rollup for the solo workspace (migration 162,
+  //       #9545, step 5.15). userId === workspaces.id for a sole-owned workspace
+  //       (migration 053 N2). The cascade does NOT cover this: the saga leaves the
+  //       orphan workspace row (migration 065), so ON DELETE CASCADE from
+  //       workspaces never fires on account erasure. Team workspaces the user
+  //       owned persist for the remaining members and keep their rows under the
+  //       30-day retention (the rows hold no per-user data). The RPC erases only a
+  //       workspace with NO member row left (anonymise_workspace_members has
+  //       already deleted this user's), so it cannot over-erase a team workspace
+  //       and the ingest RPC skips such an orphan afterwards. Required step:
+  //       a failure aborts before auth-delete like the other Art. 17 steps.
+  //       Idempotent (a re-run deletes nothing).
+  try {
+    const { error: eraseEgressErr } = await service.rpc(
+      "erase_egress_audit_rollup",
+      { p_workspace: userId },
+    );
+    if (eraseEgressErr) {
+      reportSilentFallback(eraseEgressErr, {
+        feature: "account-delete",
+        op: "erase-egress-audit-rollup",
+        extra: { userId },
+        message: "erase_egress_audit_rollup failed — aborting deletion (Art. 17)",
+      });
+      return { success: false, error: "Account deletion failed at erase-egress-audit-rollup. Please try again." };
+    }
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "account-delete",
+      op: "erase-egress-audit-rollup",
+      extra: { userId },
+      message: "erase_egress_audit_rollup threw — aborting deletion (Art. 17)",
+    });
+    return { success: false, error: "Account deletion failed at erase-egress-audit-rollup. Please try again." };
   }
 
   // 4. Delete auth record — FK cascade handles public.users and all children

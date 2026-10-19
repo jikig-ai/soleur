@@ -78,6 +78,9 @@ involved.
 - No process environment readable from inside the sandbox carries the key. With a positive control: with the deny entries
   emptied, the shell sees the decoy variable and its own and its parent's `/proc/<pid>/environ` carry it; with the production
   config the variable is absent and no readable `environ` carries it (3 pids visible; pid 1, bubblewrap's init, is unreadable).
+  Amended #10445: with `network.allowAllUnixSockets` set (no `apply-seccomp` helper, so no helper-created nested user namespace) a
+  plain-bubblewrap run can read the launcher's `environ`; the barrier is the bwrap shim's empty `/proc` (#10032), measured under
+  the production run tuple (0 pid dirs, 0 readable environs), so the CI test now runs its treatment arm through the shim.
   `ps eww` shows nothing either. This pins the OUTCOME, not a mechanism: hand-built bubblewrap runs by two reviewers, using the
   shipped argv shape without the SDK, saw host pids and reached different conclusions about which flag does the work, so no
   mechanism (PID namespace, user namespace, dumpability) is claimed, and `denyRead` is explicitly not the barrier. A change to

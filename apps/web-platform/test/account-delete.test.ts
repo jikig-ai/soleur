@@ -708,6 +708,89 @@ describe("deleteAccount", () => {
     expect(mockAuth.admin.deleteUser).not.toHaveBeenCalled();
   });
 
+  test("Art. 17 — erase_egress_audit_rollup runs for the solo workspace id, after the anonymise steps and before auth-delete (#9545, step 5.15)", async () => {
+    setupSupabaseMocks();
+    const callOrder: string[] = [];
+    let erasedWith: unknown;
+
+    mockRpc.mockImplementation(async (name: string, args?: unknown) => {
+      callOrder.push(`rpc:${name}`);
+      if (name === "erase_egress_audit_rollup") erasedWith = args;
+      return { data: 0, error: null };
+    });
+    mockAuth.admin.deleteUser.mockImplementation(async () => {
+      callOrder.push("auth.deleteUser");
+      return { data: {}, error: null };
+    });
+
+    const result = await deleteAccount("user-123", "test@example.com");
+
+    expect(result.success).toBe(true);
+    // The solo workspace id equals the user id (migration 053 N2), so the
+    // workspace argument is the user id.
+    expect(erasedWith).toEqual({ p_workspace: "user-123" });
+    const eraseIdx = callOrder.indexOf("rpc:erase_egress_audit_rollup");
+    const engineIdx = callOrder.indexOf("rpc:anonymise_agent_engine_data");
+    const membersIdx = callOrder.indexOf("rpc:anonymise_workspace_members");
+    const authIdx = callOrder.indexOf("auth.deleteUser");
+    expect(eraseIdx).toBeGreaterThanOrEqual(0);
+    expect(eraseIdx).toBeGreaterThan(engineIdx);
+    // The erase RPC only erases a workspace with no member row left, so it must run after the
+    // member rows are removed.
+    expect(membersIdx).toBeGreaterThanOrEqual(0);
+    expect(eraseIdx).toBeGreaterThan(membersIdx);
+    expect(eraseIdx).toBeLessThan(authIdx);
+  });
+
+  test("Art. 17 — erase_egress_audit_rollup failure aborts cascade BEFORE auth-delete (#9545)", async () => {
+    setupSupabaseMocks();
+
+    mockRpc.mockImplementation(async (name: string) => {
+      if (name === "erase_egress_audit_rollup") {
+        return { data: null, error: { message: "RPC unavailable" } };
+      }
+      return { data: 0, error: null };
+    });
+    mockAuth.admin.deleteUser.mockImplementation(async () => {
+      return { data: {}, error: null };
+    });
+
+    const result = await deleteAccount("user-123", "test@example.com");
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/erase-egress-audit-rollup/);
+    expect(mockAuth.admin.deleteUser).not.toHaveBeenCalled();
+    expect(mockReportSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        feature: "account-delete",
+        op: "erase-egress-audit-rollup",
+        extra: { userId: "user-123" },
+      }),
+    );
+  });
+
+  test("Art. 17 — erase_egress_audit_rollup throwing aborts cascade BEFORE auth-delete (#9545)", async () => {
+    setupSupabaseMocks();
+
+    mockRpc.mockImplementation(async (name: string) => {
+      if (name === "erase_egress_audit_rollup") throw new Error("network down");
+      return { data: 0, error: null };
+    });
+    mockAuth.admin.deleteUser.mockImplementation(async () => {
+      return { data: {}, error: null };
+    });
+
+    const result = await deleteAccount("user-123", "test@example.com");
+
+    expect(result.success).toBe(false);
+    expect(mockAuth.admin.deleteUser).not.toHaveBeenCalled();
+    expect(mockReportSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ feature: "account-delete", op: "erase-egress-audit-rollup" }),
+    );
+  });
+
   test("Art. 17 — anonymise_tc_acceptances precedes auth.admin.deleteUser (FK ON DELETE RESTRICT)", async () => {
     setupSupabaseMocks();
     const callOrder: string[] = [];

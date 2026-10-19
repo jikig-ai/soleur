@@ -220,6 +220,43 @@ pre-commit:
       # it can never become unbounded. It is a ceiling, not a reservation. It is appended after any
       # operator NODE_OPTIONS and, being the later flag, wins over an operator --max-old-space-size.
       run: cd apps/web-platform && { [ -x node_modules/.bin/tsc ] || { echo "web-platform-typecheck -- node_modules/.bin/tsc missing; recover with npm ci --ignore-scripts --prefix apps/web-platform" >&2; exit 2; }; } && NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=6144" ./node_modules/.bin/tsc --noEmit
+    ruff-ratchet:
+      priority: 5
+      # Shrink-only ruff ratchet (#10331 PR3a, ADR-290). The scan is whole-tree, so the globs only
+      # decide WHEN to run it. Dual globs: gobwas `**` needs one intermediate directory, so a
+      # root-level y.py is matched only by the bare `*.py` entry. The pinned ruff is installed
+      # on first use; with no network it prints a loud SKIP (CI is the backstop, and fails).
+      glob:
+        - "*.py"
+        - "**/*.py"
+        - "*.pyi"
+        - "**/*.pyi"
+        - "*.pyw"
+        - "**/*.pyw"
+        - "ruff.toml"
+        - "plugins/soleur/scripts/ruff-requirements.txt"
+        - "plugins/soleur/scripts/lint-ratchet.py"
+        - "scripts/lint-ratchet-ruff.baseline.txt"
+      run: python3 plugins/soleur/scripts/lint-ratchet.py ruff --check
+    eslint-test-dirs-ratchet:
+      priority: 5
+      # Same shrink-only rule for unused bindings in the test and fixture directories the
+      # web-platform eslint run never reaches. Pinned binary only, as the tsc entry above: a
+      # missing node_modules exits 2 naming the recovery.
+      glob:
+        - "test/*.{ts,tsx,js,jsx,mjs,cjs,mts,cts}"
+        - "test/**/*.{ts,tsx,js,jsx,mjs,cjs,mts,cts}"
+        - "plugins/soleur/test/*.{ts,tsx,js,jsx,mjs,cjs,mts,cts}"
+        - "plugins/soleur/test/**/*.{ts,tsx,js,jsx,mjs,cjs,mts,cts}"
+        - "plugins/soleur/skills/*/test/*.{ts,tsx,js,jsx,mjs,cjs,mts,cts}"
+        - "plugins/soleur/skills/*/test/**/*.{ts,tsx,js,jsx,mjs,cjs,mts,cts}"
+        - "scripts/*.test.mjs"
+        - "apps/web-platform/eslint.test-dirs.config.mjs"
+        - "apps/web-platform/package.json"
+        - "apps/web-platform/package-lock.json"
+        - "plugins/soleur/scripts/lint-ratchet.py"
+        - "scripts/lint-ratchet-eslint-test-dirs.baseline.txt"
+      run: python3 plugins/soleur/scripts/lint-ratchet.py eslint-test-dirs --check
     conversations-update-callsites:
       priority: 5
       # Run target is the whole repo (not `{staged_files}`) because the

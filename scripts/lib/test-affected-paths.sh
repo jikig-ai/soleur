@@ -131,6 +131,8 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-workflow-install-sites-live"
   "scripts/lint-workflow-issue-write-scope-live"
   "scripts/lint-workflow-step-env-refs-live"
+  "scripts/lint-ratchet-ruff-live"
+  "tests/scripts/lint-ratchet"
   "scripts/review-reminder-liveness"
   "scripts/watch-live-verify-pass"
   # live-scanner batteries named for the gates they probe (#8384 landed these)
@@ -1286,6 +1288,7 @@ AFFECTED_SCRIPTS_CI_PR_SELECTION_PATHS=(
 AFFECTED_PLUGINS_SOLEUR_TEST_CI_SHARD_TOTALITY_SKIP_TEST_SH_PATHS=(
   ".github/workflows"
   "plugins/soleur/test/ci-shard-totality-skip.test.sh"
+  "scripts/ci-e2e-classify.sh"
   "scripts/ci-shard-totality-classify.sh"
   "scripts/lib/test-affected-paths.sh"
 )
@@ -1398,6 +1401,23 @@ AFFECTED_PLUGINS_SOLEUR_TEST_HEARTBEAT_RECONCILE_ISSUE_STEP_TEST_SH_PATHS=(
   ".github/workflows/scheduled-terraform-drift.yml"
   "plugins/soleur/lib/heartbeat-live-reconcile.ts"
   "plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh"
+  "scripts/lib/bearer-curl.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/sole-copy-drift-check.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_SOLE_COPY_DRIFT_CHECK_TEST_SH_PATHS=(
+  ".github/actions/infra-credentials/action.yml"
+  ".github/actions/notify-ops-email/action.yml"
+  ".github/workflows/scheduled-terraform-drift.yml"
+  "apps/web-platform/infra/inngest-redis-luks.tf"
+  "knowledge-base/engineering/architecture/decisions/ADR-282-sole-copy-luks-volume-protection-set.md"
+  "knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md"
+  "knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md"
+  "plugins/soleur/skills/postmerge/SKILL.md"
+  "plugins/soleur/test/lib/gha-expr.py"
+  "plugins/soleur/test/sole-copy-drift-check.test.sh"
   "scripts/lib/bearer-curl.sh"
   "scripts/lib/test-affected-paths.sh"
 )
@@ -2300,4 +2320,24 @@ AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
   "scripts/lint-betterstack-emitter-read.sh"
   "scripts/lint-betterstack-emitter-read.test.sh"
   "scripts/test-all.sh"
+)
+
+# scripts/followthroughs/registry-clientip-alert-7530.test.sh — the #7530 post-merge probe's
+# exit-code battery. Beyond the probe itself it READS the committed alert file at runtime (the suite
+# compares the SQL the probe sends against that text, and the probe extracts its predicate from it),
+# a read the name-stem convention cannot reach. Its retirement-header row also READS the alert drift
+# guard (apps/web-platform/test/infra/registry-clientip-not-rfc1918-alert.test.sh, the rename cross-reference),
+# the two suite-registration tables and the preflight-discoverability baseline. Its case_refire_parity
+# row also READS the apply workflow (the printed re-fire command is compared with the workflow's own comment).
+AFFECTED_SCRIPTS_FOLLOWTHROUGHS_REGISTRY_CLIENTIP_ALERT_7530_PATHS=(
+  ".github/workflows/apply-web-platform-infra.yml"
+  "apps/web-platform/infra/betterstack-logs-alerts.tf"
+  "apps/web-platform/test/infra/registry-clientip-not-rfc1918-alert.test.sh"
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "plugins/soleur/test/preflight-discoverability-test.test.ts"
+  "scripts/followthroughs/registry-clientip-alert-7530.sh"
+  "scripts/followthroughs/registry-clientip-alert-7530.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/suite-durations.tsv"
+  "scripts/suite-shard-legs.tsv"
 )

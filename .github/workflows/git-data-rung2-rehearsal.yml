@@ -421,7 +421,7 @@ jobs:
             # clear that inherited -e -- so without an explicit `set +e` the TRANSIENT rc=2
             # that this poll EXISTS to retry killed the step on attempt 1, four seconds in,
             # and every line below this pipeline was dead code. Same bracket as
-            # web-platform-release.yml's "Run live-verify harness (report-only)" step.
+            # web-platform-release.yml's "Run live-verify harness (verdict enforced by the Enforce step)" step.
             #
             # ORDER IS LOAD-BEARING: `set -e` is a builtin, i.e. a PIPELINE, so bash RESETS
             # PIPESTATUS after it. Re-arming before the read makes rc always 0 -- a SILENT

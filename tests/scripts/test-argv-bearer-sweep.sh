@@ -929,7 +929,8 @@ workspace-isolation-verdict-2640|dynamic|deploy\.soleur\.ai|1|workspace_isolatio
 infra-config-fatal-channel-7220|dynamic|deploy\.soleur\.ai|1|fatal_frame|
 infra-config-activation-7220|delegated|||activation_frame|scripts/followthroughs/infra-config-activation-7220.test.sh
 inngest-soak-6178|delegated|||none|scripts/followthroughs/inngest-soak-6178.test.sh
-tenant-outer-wrap-soak-5863|delegated|||none|scripts/followthroughs/tenant-outer-wrap-soak-5863.test.sh'
+tenant-outer-wrap-soak-5863|delegated|||none|scripts/followthroughs/tenant-outer-wrap-soak-5863.test.sh
+sandbox-readback-10445|delegated|||none|scripts/followthroughs/sandbox-readback-10445.test.sh'
 
 # --- the DERIVED population: tracked followthrough probes holding a credentialed curl ---------
 derive_population() {
@@ -6726,24 +6727,23 @@ echo "=== stage S6: Guard 3 rows (htpasswd password off argv: workflow site, res
 # file that names no heartbeat, e.g. a Pages probe whose own variable is also called URL, is outside the population). In such a file every logical line
 # (continuations joined, whole-line comments dropped) has its `< <(...)` stdin feed removed, is split into segments on `||`, `&&`, `;` and `|`, and every
 # segment holding a `curl` command word whose remaining text names `$URL`, `$hb_url` or a `*HEARTBEAT_URL` variable is a VIOLATION: the URL is on argv.
-# (`$INNGEST_HEALTH_URL`, the local health probe in the same file as the heartbeat, is not a heartbeat variable.) NOT COVERED, named: a URL carried in a
-# variable that is none of those names, and an `eval`. The registry template's own heartbeat curls are S6-REG's (above).
+# (`$INNGEST_HEALTH_URL`, the local health probe in the same file as the heartbeat, is not a heartbeat variable.) The curl word may carry a path prefix
+# (`/usr/local/bin/curl`), a leading backslash (`\curl`) or a backtick. NOT COVERED, named (a text heuristic, not exhaustive; these pre-date PR C, see ADR-280 PR C
+# follow-up): a URL carried in a variable that is none of those names, an `eval`, curl inside a quoted string, producer and consumer split across segments,
+# other HTTP clients, a quoted metacharacter before the URL, files in subdirectories or not named *.sh, and units. The registry template's own heartbeat curls
+# are S6-REG's (above).
 #
-# EXPLICIT RESIDUAL ALLOWLIST (S6H_ALLOW: file, the segment text, the exact number of occurrences): the same-class probe scripts that still carry the
-# URL on argv, tracked in #10093. THE ALLOWLIST SHRINKS BY DELETION ONLY: an entry the scan no longer sees, or a count that moved, is RED.
+# EXPLICIT RESIDUAL ALLOWLIST (S6H_ALLOW: file, the segment text, the exact number of occurrences): EMPTY since PR C (#10120 converted the inngest heartbeat
+# body, #10093 the three probe scripts), so every heartbeat curl carries its URL on stdin and any argv URL is a plain violation. The mechanism stays: an entry
+# the scan no longer sees, or a count that moved, is RED, and the ceiling is 0 (a grown allowlist is RED by the same predicate).
 # CONVERTED SCRIPTS (S6H_CONVERTED): exactly one stdin config line (`url = "..."`) each, and exactly one copy of the shape-guard class, on a line BEFORE it.
 # =====================================================================================
 S6H_DIR="apps/web-platform/infra"
-S6H_CONVERTED=(luks-monitor.sh web-git-data-probe.sh)
+S6H_CONVERTED=(luks-monitor.sh web-git-data-probe.sh inngest-bootstrap.sh web-zot-consumer-probe.sh inngest-consumer-probe.sh web-private-nic-guard.sh)
 S6H_FILE_FLOOR=7
-S6H_ALLOW_CEIL=4
+S6H_ALLOW_CEIL=0
 S6H_CLASS='[!A-Za-z0-9._~:/?\&=%+-]'
-S6H_ALLOW=(
-"$S6H_DIR/web-zot-consumer-probe.sh	curl -fsS -m 10 -o /dev/null \"\$URL\" 2>/dev/null	2"
-"$S6H_DIR/inngest-consumer-probe.sh	curl -fsS -m 10 -o /dev/null \"\$URL\" 2>/dev/null	2"
-"$S6H_DIR/web-private-nic-guard.sh	beat() { curl --disable --noproxy '*' -fsS -m 10 -o /dev/null \"\$URL\" 2>/dev/null	1"
-"$S6H_DIR/inngest-bootstrap.sh	exec /usr/bin/curl -gfsS --max-time 10 \"\$INNGEST_HEARTBEAT_URL\" >/dev/null	1"
-)
+S6H_ALLOW=()
 # One TSV record per finding. V: a violating segment (file, segment). C: a stdin config line (file, line number). G: a guard class literal (file, line
 # number). P: a heartbeat-population file (file).
 s6h_scan() { # <root>
@@ -6752,8 +6752,8 @@ import re, subprocess, sys
 root = sys.argv[1]
 files = subprocess.run(["git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"], capture_output=True, check=True).stdout.decode().split("\0")
 pat = re.compile(r"^apps/web-platform/infra/[^/]+\.sh$")
-cmd = re.compile(r"(?:^|[\s({;|&])(?:/usr/bin/)?curl(?=\s|$)")
-var = re.compile(r"\$\{?(?:URL|hb_url|[A-Z][A-Z0-9_]*HEARTBEAT_URL)(?![A-Za-z0-9_])")
+cmd = re.compile(r"(?:^|[\s({;|&`\\])(?:/(?:[A-Za-z0-9_.-]+/)*)?curl(?=\s|$)")
+var = re.compile(r"\$\{?(?:URL|hb_url|[A-Z0-9_]*HEARTBEAT_URL)(?![A-Za-z0-9_])")
 cfg = re.compile(r"url = \"(?:%s|\$\{?[A-Za-z_]*HEARTBEAT_URL)")
 cls = sys.argv[2]
 for f in sorted(set(files)):
@@ -6812,9 +6812,9 @@ S6H="$TMPD/s6h"; assert_fixture_dir "$S6H"; mkdir -p "$S6H/base" "$S6H/mut"
 ( source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh" && git_fixture_env "$S6H/base" || exit 1; git -C "$S6H/base" init -q ) \
   || fatal "S6-HB could not create the scratch repository"
 mkdir -p "$S6H/base/$S6H_DIR"
-# The scratch tree holds every script the real verdict names, plus two controls: a non-heartbeat probe whose own variable is also called URL (outside the
+# The scratch tree holds every converted script the real verdict names, plus two controls: a non-heartbeat probe whose own variable is also called URL (outside the
 # population: it must NOT be flagged) and the already-converted git-data-liveness.sh (a stdin-form heartbeat script that is not in S6H_CONVERTED).
-for f in "${S6H_CONVERTED[@]}" web-zot-consumer-probe.sh inngest-consumer-probe.sh web-private-nic-guard.sh inngest-bootstrap.sh pages-build-identity-probe.sh git-data-liveness.sh; do
+for f in "${S6H_CONVERTED[@]}" pages-build-identity-probe.sh git-data-liveness.sh; do
   cp "$REPO_ROOT/$S6H_DIR/$f" "$S6H/base/$S6H_DIR/$f"
 done
 s6h_fresh() { local d="$S6H/mut/$1"; assert_fixture_dir "$d"; rm -rf "$d"; cp -a "$S6H/base" "$d" && printf '%s' "$d"; }
@@ -6831,8 +6831,9 @@ for f in "${S6H_CONVERTED[@]}"; do
   else row "S6-HB converted $f: not in the population, or not exactly one stdin config line" fail "cfg=$(s6h_ncfg "$f") inpop=$(s6h_inpop "$f")"; fi
 done
 S6H_ALLOW_FILES="$(for a in "${S6H_ALLOW[@]}"; do printf '%s\n' "${a%%$'\t'*}"; done | sort -u | grep -c . || true)"
-if [[ "${#S6H_ALLOW[@]}" -eq "$S6H_ALLOW_CEIL" && "$S6H_ALLOW_FILES" -eq "$S6H_ALLOW_CEIL" ]]; then row "S6-HB allowlist ceiling: exactly $S6H_ALLOW_CEIL residual entries in $S6H_ALLOW_FILES distinct files (it shrinks by deletion only; #10093 converts the three probe scripts)" ok
-else row "S6-HB allowlist ceiling: the residual allowlist grew or repeats a file" fail "entries=${#S6H_ALLOW[@]} files=$S6H_ALLOW_FILES want=$S6H_ALLOW_CEIL"; fi
+s6h_ceiling_ok() { [[ "$1" -eq "$S6H_ALLOW_CEIL" && "$S6H_ALLOW_CEIL" -eq 0 ]]; }
+if s6h_ceiling_ok "${#S6H_ALLOW[@]}" && ! s6h_ceiling_ok $((${#S6H_ALLOW[@]} + 1)); then row "S6-HB allowlist ceiling: the residual allowlist is EMPTY (ceiling $S6H_ALLOW_CEIL; PR C deleted the four residual entries of #10120 and #10093), and a grow-by-one allowlist is judged RED by the same predicate" ok
+else row "S6-HB allowlist ceiling: the residual allowlist is not empty, or the ceiling predicate accepts a grown allowlist" fail "entries=${#S6H_ALLOW[@]} files=$S6H_ALLOW_FILES want=$S6H_ALLOW_CEIL"; fi
 
 # --- mutation rows (the SAME scan over a scratch tree) ------------------------------------
 # M1 (Guard 2 row 1): the URL back on argv in a converted script.
@@ -6842,6 +6843,71 @@ if s6_edit "$S6H_M1/$S6H_DIR/web-git-data-probe.sh" '--config - 2>/dev/null < <(
   if [[ "$S6H_J_REASONS" == *"argv:$S6H_DIR/web-git-data-probe.sh"* && "$S6H_J_REASONS" == *"cfg:$S6H_DIR/web-git-data-probe.sh"* ]]; then row "S6-HB mutation 1: the URL back on curl argv in a converted script is RED (an argv violation, and the script's stdin config line is gone)" ok
   else row "S6-HB mutation 1: an argv heartbeat URL in a converted script is not caught" fail "reasons='$S6H_J_REASONS'"; fi
 else row "S6-HB mutation 1: the argv edit did not land (re-anchor with web-git-data-probe.sh)" fail "no transport line once in the scratch copy"; fi
+# Guard-copy parity (Guard 2): the shape guard and the per-attempt curl are four byte-identical inline copies (checkout-less hosts cannot source a library), so
+# one drift between them is a silent fork of the credential gate. Extract both definitions from each bash copy and require ONE distinct digest.
+s6h_guard_digest() { # <file> -> md5 of the _hb_url_ok function and the _hb_curl line, empty when either is missing
+  python3 -I -c '
+import hashlib, sys
+src = open(sys.argv[1], encoding="utf-8", errors="replace").read().split("\n")
+out, i = [], 0
+while i < len(src):
+    if src[i].startswith("_hb_url_ok() {"):
+        j = i
+        while j < len(src) and src[j] != "}": j += 1
+        out.extend(src[i:j + 1]); i = j
+    elif src[i].startswith("_hb_curl() {"):
+        out.append(src[i])
+    i += 1
+if len([l for l in out if l.startswith("_hb_url_ok() {")]) != 1 or len([l for l in out if l.startswith("_hb_curl() {")]) != 1: sys.exit(0)
+print(hashlib.md5("\n".join(out).encode()).hexdigest())
+' "$1"
+}
+S6H_PARITY_FILES=(web-git-data-probe.sh web-zot-consumer-probe.sh inngest-consumer-probe.sh web-private-nic-guard.sh)
+S6H_PARITY_SET=""; S6H_PARITY_EMPTY=0
+for f in "${S6H_PARITY_FILES[@]}"; do
+  S6H_D="$(s6h_guard_digest "$REPO_ROOT/$S6H_DIR/$f")"
+  if [[ -z "$S6H_D" ]]; then S6H_PARITY_EMPTY=$((S6H_PARITY_EMPTY + 1)); else S6H_PARITY_SET+="$S6H_D"$'\n'; fi
+done
+S6H_PARITY_N="$(printf '%s' "$S6H_PARITY_SET" | sort -u | grep -c . || true)"
+if [[ "$S6H_PARITY_EMPTY" -eq 0 && "$S6H_PARITY_N" -eq 1 ]]; then row "S6-HB guard-copy parity: _hb_url_ok and _hb_curl are byte-identical across the ${#S6H_PARITY_FILES[@]} bash copies (one digest, none missing a definition)" ok
+else row "S6-HB guard-copy parity: the inline guard copies drifted or one lost a definition" fail "distinct=$S6H_PARITY_N missing=$S6H_PARITY_EMPTY"; fi
+S6H_MPA="$(s6h_fresh mpa)"
+if s6_edit "$S6H_MPA/$S6H_DIR/web-zot-consumer-probe.sh" '  case "$1" in https://*) ;; *) return 1 ;; esac' '  case "$1" in http*://*) ;; *) return 1 ;; esac'; then
+  S6H_DA="$(s6h_guard_digest "$S6H_MPA/$S6H_DIR/web-zot-consumer-probe.sh")"; S6H_DB="$(s6h_guard_digest "$S6H_MPA/$S6H_DIR/web-git-data-probe.sh")"
+  if [[ -n "$S6H_DA" && -n "$S6H_DB" && "$S6H_DA" != "$S6H_DB" ]]; then row "S6-HB guard-copy parity mutation: loosening the scheme test in ONE copy changes its digest (the parity row would be RED)" ok
+  else row "S6-HB guard-copy parity mutation: a one-copy edit of the guard is not visible to the digest" fail "a=$S6H_DA b=$S6H_DB"; fi
+else row "S6-HB guard-copy parity mutation: the edit did not land (re-anchor with the scheme case line)" fail "no scheme case line once in the scratch copy"; fi
+# M-var/M-curl (scanner reach, CTO-ruled 2026-10-15): the stage contract says *HEARTBEAT_URL, which includes the bare name, and the curl word may be path-prefixed,
+# backslashed or inside backticks. Each spelling is appended to a converted script (no allowlist to hide behind) and must be an argv violation.
+S6H_MV="$(s6h_fresh mv)"; assert_fixture_dir "$S6H_MV"; printf '%s\n' 'curl -fsS "$HEARTBEAT_URL" >/dev/null' >> "$S6H_MV/$S6H_DIR/luks-monitor.sh"
+s6h_judge "$S6H_MV"
+if [[ "$S6H_J_REASONS" == *"argv:$S6H_DIR/luks-monitor.sh"* ]]; then row "S6-HB scanner reach: a curl carrying the bare \$HEARTBEAT_URL (the stage contract's *HEARTBEAT_URL includes it) is an argv violation" ok
+else row "S6-HB scanner reach: the bare HEARTBEAT_URL variable is not matched" fail "reasons='$S6H_J_REASONS'"; fi
+S6H_MC_BAD=""; S6H_MC_I=0
+for S6H_SP in '/usr/local/bin/curl -fsS "$URL" >/dev/null' '\curl -fsS "$URL" >/dev/null' 'x=`curl -fsS "$URL"`'; do
+  S6H_MC_I=$((S6H_MC_I + 1)); S6H_MC="$(s6h_fresh "mc$S6H_MC_I")"; assert_fixture_dir "$S6H_MC"; printf '%s\n' "$S6H_SP" >> "$S6H_MC/$S6H_DIR/luks-monitor.sh"
+  s6h_judge "$S6H_MC"; [[ "$S6H_J_REASONS" == *"argv:$S6H_DIR/luks-monitor.sh"* ]] || S6H_MC_BAD+=" [$S6H_SP]"
+done
+if [[ -z "$S6H_MC_BAD" ]]; then row "S6-HB scanner reach: a path-prefixed curl, a backslashed curl and a backtick-substituted curl carrying \$URL are each an argv violation" ok
+else row "S6-HB scanner reach: a curl spelling is not matched" fail "missed:$S6H_MC_BAD"; fi
+# M1b (Guard 2 row 1, the POSIX heredoc script): the URL back on argv in the heartbeat-body curl. The mutant is built from the real transport line.
+S6H_M1B="$(s6h_fresh m1b)"
+if s6_edit "$S6H_M1B/$S6H_DIR/inngest-bootstrap.sh" 'printf '"'"'url = "%s"\n'"'"' "$INNGEST_HEARTBEAT_URL" | /usr/bin/curl --disable --noproxy '"'"'*'"'"' -gfsS --max-time 10 --config - >/dev/null' '/usr/bin/curl --disable --noproxy '"'"'*'"'"' -gfsS --max-time 10 "$INNGEST_HEARTBEAT_URL" >/dev/null'; then
+  s6h_judge "$S6H_M1B"
+  if [[ "$S6H_J_REASONS" == *"argv:$S6H_DIR/inngest-bootstrap.sh"* && "$S6H_J_REASONS" == *"cfg:$S6H_DIR/inngest-bootstrap.sh"* ]]; then row "S6-HB mutation 1 (POSIX sh script): the URL back on curl argv in the inngest heartbeat body is RED (an argv violation, and its stdin config line is gone)" ok
+  else row "S6-HB mutation 1 (POSIX sh script): an argv heartbeat URL in the inngest heartbeat body is not caught" fail "reasons='$S6H_J_REASONS'"; fi
+else row "S6-HB mutation 1 (POSIX sh script): the argv edit did not land (re-anchor with the printf-piped curl line in inngest-bootstrap.sh)" fail "no printf-piped curl transport line once in the scratch copy"; fi
+# M1c (Guard 2 row 1, the three probes): the URL back on argv in each probe's per-attempt curl, one scratch copy per probe.
+S6H_M1C_BAD=""
+for S6H_PF in web-zot-consumer-probe.sh inngest-consumer-probe.sh web-private-nic-guard.sh; do
+  S6H_M1C="$(s6h_fresh "m1c-${S6H_PF%.sh}")"
+  if s6_edit "$S6H_M1C/$S6H_DIR/$S6H_PF" '--config - 2>/dev/null < <(printf '"'"'url = "%s"\n'"'"' "$URL"); }' '"$URL" 2>/dev/null; }'; then
+    s6h_judge "$S6H_M1C"
+    [[ "$S6H_J_REASONS" == *"argv:$S6H_DIR/$S6H_PF"* && "$S6H_J_REASONS" == *"cfg:$S6H_DIR/$S6H_PF"* ]] || S6H_M1C_BAD+=" $S6H_PF(reasons=$S6H_J_REASONS)"
+  else S6H_M1C_BAD+=" $S6H_PF(edit-missed)"; fi
+done
+if [[ -z "$S6H_M1C_BAD" ]]; then row "S6-HB mutation 1 (the three probes): the URL back on curl argv in the web-zot-consumer, inngest-consumer or private-NIC probe is RED (an argv violation, and its stdin config line is gone)" ok
+else row "S6-HB mutation 1 (the three probes): an argv heartbeat URL in a converted probe is not caught, or the edit did not land" fail "bad='$S6H_M1C_BAD'"; fi
 # M3 (Guard 2 row 3): a second heartbeat curl outside the guarded line after a compliant first. Both spellings: URL on argv, and an unguarded second stdin config line.
 S6H_M3="$(s6h_fresh m3)"; assert_fixture_dir "$S6H_M3"; printf '%s\n' '[ -n "$hb_url" ] && curl -fsS "$hb_url" >/dev/null 2>&1' >> "$S6H_M3/$S6H_DIR/luks-monitor.sh"
 s6h_judge "$S6H_M3"; S6H_M3A="$S6H_J_REASONS"
@@ -6850,23 +6916,38 @@ s6h_judge "$S6H_M3B"; S6H_M3BR="$S6H_J_REASONS"
 if [[ "$S6H_M3A" == *"argv:$S6H_DIR/luks-monitor.sh"* && "$S6H_M3BR" == *"cfg:$S6H_DIR/luks-monitor.sh"* ]]; then row "S6-HB mutation 3: a second heartbeat curl after the compliant one is RED, both as an argv URL and as a second (unguarded) stdin config line" ok
 else row "S6-HB mutation 3: a second heartbeat curl in a converted script is not caught" fail "argv='$S6H_M3A' cfg='$S6H_M3BR'"; fi
 # M-guard: the shape-guard class altered or missing in a converted script.
+# M3c (Guard 2 row 3, a probe): a second heartbeat curl after the compliant first. Both spellings: URL on argv, and an unguarded second stdin config line.
+S6H_M3C="$(s6h_fresh m3c)"; assert_fixture_dir "$S6H_M3C"; printf '%s\n' '[ -n "$URL" ] && curl -fsS -m 10 -o /dev/null "$URL" 2>/dev/null' >> "$S6H_M3C/$S6H_DIR/web-private-nic-guard.sh"
+s6h_judge "$S6H_M3C"; S6H_M3CA="$S6H_J_REASONS"
+S6H_M3D="$(s6h_fresh m3d)"; assert_fixture_dir "$S6H_M3D"; printf '%s\n' "curl --disable --noproxy '*' -gfsS --config - >/dev/null < <(printf 'url = \"%s\"\\n' \"\$URL\")" >> "$S6H_M3D/$S6H_DIR/web-private-nic-guard.sh"
+s6h_judge "$S6H_M3D"; S6H_M3DR="$S6H_J_REASONS"
+if [[ "$S6H_M3CA" == *"argv:$S6H_DIR/web-private-nic-guard.sh"* && "$S6H_M3DR" == *"cfg:$S6H_DIR/web-private-nic-guard.sh"* ]]; then row "S6-HB mutation 3 (a probe): a second heartbeat curl after the compliant first is RED, both as an argv URL and as a second unguarded stdin config line" ok
+else row "S6-HB mutation 3 (a probe): a second heartbeat curl in a converted probe is not caught" fail "argv='$S6H_M3CA' cfg='$S6H_M3DR'"; fi
+# MGb (Guard 2 row 3, the POSIX script): any edit of the shape-guard class literal in inngest-bootstrap.sh is RED by identity. The dangerous direction (a class that
+# ADMITS a quote) is caught only by the runtime hostile-value rows of inngest.test.sh, not by this identity check.
+S6H_MGB="$(s6h_fresh mgb)"
+if s6_edit "$S6H_MGB/$S6H_DIR/inngest-bootstrap.sh" "$S6H_CLASS" '[!A-Za-z0-9]'; then s6h_judge "$S6H_MGB"; S6H_MGBR="$S6H_J_REASONS"; else S6H_MGBR="edit-missed"; fi
+if [[ "$S6H_MGBR" == *"guard:$S6H_DIR/inngest-bootstrap.sh"* ]]; then row "S6-HB mutation (guard, POSIX sh script): an altered shape-guard class in inngest-bootstrap.sh is RED" ok
+else row "S6-HB mutation (guard, POSIX sh script): an altered shape-guard class in inngest-bootstrap.sh is not caught" fail "reasons='$S6H_MGBR'"; fi
 S6H_MG="$(s6h_fresh mg)"
 if s6_edit "$S6H_MG/$S6H_DIR/luks-monitor.sh" "$S6H_CLASS" '[!A-Za-z0-9]'; then s6h_judge "$S6H_MG"; S6H_MGR="$S6H_J_REASONS"; else S6H_MGR="edit-missed"; fi
 if [[ "$S6H_MGR" == *"guard:$S6H_DIR/luks-monitor.sh"* ]]; then row "S6-HB mutation (guard): a converted script without the exact shape-guard class is RED" ok
 else row "S6-HB mutation (guard): a missing or altered shape-guard class is not caught" fail "reasons='$S6H_MGR'"; fi
-# M-stale: converting a residual site without deleting its allowlist entry is RED (and nothing else: the converted site is compliant).
+# M-stale: an allowlist entry that the scan does not see is RED (and nothing else). The real allowlist is empty, so the mutant INJECTS an entry for a
+# converted script whose line is gone (the retired argv beat line of the NIC guard); the array is saved and restored around the judge call (as stage S6 does).
 S6H_MS="$(s6h_fresh ms)"
-if s6_edit "$S6H_MS/$S6H_DIR/web-private-nic-guard.sh" '-o /dev/null "$URL" 2>/dev/null; }' '-o /dev/null --config - 2>/dev/null < <(printf '"'"'url = "%s"\n'"'"' "$URL"); }'; then
-  s6h_judge "$S6H_MS"
-  if [[ "$S6H_J_REASONS" == "stale-allowlist" ]]; then row "S6-HB mutation (stale): converting a residual probe script without deleting its allowlist entry is RED (stale-allowlist, and nothing else)" ok
-  else row "S6-HB mutation (stale): a stale allowlist entry is not (only) reported" fail "reasons='$S6H_J_REASONS'"; fi
-else row "S6-HB mutation (stale): the residual edit did not land (re-anchor with web-private-nic-guard.sh)" fail "no argv beat line once"; fi
-# M-grow: a new argv heartbeat curl in a file outside the allowlist, and one more occurrence inside an allowlisted file (the allowlist names counts).
+S6H_ALLOW_SAVE=("${S6H_ALLOW[@]}")
+S6H_ALLOW+=("$S6H_DIR/web-private-nic-guard.sh	beat() { curl --disable --noproxy '*' -fsS -m 10 -o /dev/null \"\$URL\" 2>/dev/null	1")
+s6h_judge "$S6H_MS"; S6H_MS_R="$S6H_J_REASONS"
+S6H_ALLOW=("${S6H_ALLOW_SAVE[@]}")
+if [[ "$S6H_MS_R" == "stale-allowlist" ]]; then row "S6-HB mutation (stale): an allowlist entry for an already-converted script is RED (stale-allowlist, and nothing else)" ok
+else row "S6-HB mutation (stale): a stale allowlist entry is not (only) reported" fail "reasons='$S6H_MS_R'"; fi
+# M-grow: a new argv heartbeat curl in a new file, and one in a converted probe script (the allowlist is empty, so any argv URL is a violation).
 S6H_MN="$(s6h_fresh mn)"; assert_fixture_dir "$S6H_MN"; printf '%s\n' 'NOTE=heartbeat' 'curl -fsS "$HB_HEARTBEAT_URL" >/dev/null' > "$S6H_MN/$S6H_DIR/zz-new-heartbeat.sh"
 s6h_judge "$S6H_MN"; S6H_MNA="$S6H_J_REASONS"
 S6H_MN2="$(s6h_fresh mn2)"; assert_fixture_dir "$S6H_MN2"; printf '%s\n' '  curl -fsS -m 10 -o /dev/null "$URL" 2>/dev/null' >> "$S6H_MN2/$S6H_DIR/web-zot-consumer-probe.sh"
 s6h_judge "$S6H_MN2"; S6H_MNB="$S6H_J_REASONS"
-if [[ "$S6H_MNA" == *"argv:$S6H_DIR/zz-new-heartbeat.sh"* && "$S6H_MNB" == *"argv:$S6H_DIR/web-zot-consumer-probe.sh"* ]]; then row "S6-HB mutation (growth): a new heartbeat script with its URL on argv is RED, and so is one more occurrence inside an allowlisted file" ok
+if [[ "$S6H_MNA" == *"argv:$S6H_DIR/zz-new-heartbeat.sh"* && "$S6H_MNB" == *"argv:$S6H_DIR/web-zot-consumer-probe.sh"* ]]; then row "S6-HB mutation (growth): a new heartbeat script with its URL on argv is RED, and so is a violating curl appended to a converted probe (no allowlist to hide behind)" ok
 else row "S6-HB mutation (growth): the residual allowlist can grow silently" fail "new='$S6H_MNA' extra='$S6H_MNB'"; fi
 # M-floor: the scanned population renamed away: 0 heartbeat scripts must be RED, never a clean bill.
 S6H_MF="$(s6h_fresh mf)"; sed -i -E 's/[Hh][Ee][Aa][Rr][Tt][Bb][Ee][Aa][Tt]/hrtbt/g' "$S6H_MF/$S6H_DIR"/*.sh
@@ -7556,7 +7637,9 @@ SELFTEST_PASSES=0
 # 796 -> 801 at the PR #10185 fix round (S7: the Rule E header names, the executed-snippet rows and their control): 5 more S7 rows, measured (801 passed, 0 failed).
 # 801 -> 802 at the fix-round batch (S7: an executed row for the deploy-status-debugging snippet; the ship row also covers APP_DOMAIN_BASE): measured (802 passed, 0 failed).
 # 802 -> 808 at PR B (#10119, registry template): S6 registry site rows now identity rows, the ceiling row also judges a grow-by-one allowlist, mutation 8 (each registry site back to argv) and the S6-REG heartbeat scan (real tree, three mutations, one must-pass): measured (808 passed, 0 failed). 808 -> 811 at review (S6-REG mutations 5-7: comment-backslash, absolute curl path, continuation split).
-EXPECTED_TESTS=811
+# 811 -> 819 at PR C (#10120, probe scripts of #10093): four converted-script rows (the inngest body and the three probes join S6H_CONVERTED), mutations 1b (inngest body), 1c (the three probes), 3c (a probe) and the inngest guard-class mutation; the stale and growth mutations are re-anchored, the ceiling row is 0 == 0: measured (819 passed, 0 failed).
+# 819 -> 823 at the PR C review round: the guard-copy parity row and its mutation row, and two scanner-reach rows (bare HEARTBEAT_URL; path-prefixed, backslashed and backtick curl): measured (823 passed, 0 failed).
+EXPECTED_TESTS=823
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2

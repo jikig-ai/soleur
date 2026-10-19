@@ -712,6 +712,11 @@ export const CANARY_C4_STAGING_PLACEHOLDER = "${CANARY_C4_STAGING}";
 // SDK-internal HOME-derived dirs get named placeholders via a capture-computed
 // root). The dir is HOME-based, so without this the host_path census throws.
 export const CANARY_BRIDGE_SPAWN_PLACEHOLDER = "${CANARY_BRIDGE_SPAWN}";
+// #10445: the shared-HOME session-transcript dir (`$HOME/.claude/projects`),
+// which buildAgentSandboxConfig adds to denyRead for every session (a sibling's
+// proxy credential printed by `env` can land in a transcript). HOME-based like
+// the bridge-spawn dir, so without a placeholder the host_path census throws.
+export const CANARY_TRANSCRIPTS_PLACEHOLDER = "${CANARY_TRANSCRIPTS}";
 
 // bwrap option arities for the projection parser. `null` = classify as a
 // bind-like 2-arg (src, dest). An unrecognized `--option` throws (fail loud →
@@ -811,11 +816,11 @@ export function isDeterministicConstPath(p) {
  * against the pre-#5874 profile, ADR-079 §2d proof obligation).
  *
  * @param {string[]} rawArgv
- * @param {{ wsRoot: string, c4StagingRoot?: string, bridgeSpawnRoot?: string }} opts - the realpath'd hermetic own-workspace path, the capture's C4 staging root (#8623), and the capture's SDK-internal bridge-spawn root (#9614).
+ * @param {{ wsRoot: string, c4StagingRoot?: string, bridgeSpawnRoot?: string, transcriptsRoot?: string }} opts - the realpath'd hermetic own-workspace path, the capture's C4 staging root (#8623), and the capture's SDK-internal bridge-spawn root (#9614).
  * @returns {{ bwrapSetupArgv: string[], prepDirs: string[],
  *   dropped: { setenv: number, hostBind: number, randomSocket: number, randomEmptyDirBind: number } }}
  */
-export function normalizeCapturedArgv(rawArgv, { wsRoot, c4StagingRoot, bridgeSpawnRoot }) {
+export function normalizeCapturedArgv(rawArgv, { wsRoot, c4StagingRoot, bridgeSpawnRoot, transcriptsRoot }) {
   const norm = (p) => {
     if (typeof p !== "string") return p;
     // A `..` segment inside a mapped subpath would survive the host_path
@@ -838,6 +843,9 @@ export function normalizeCapturedArgv(rawArgv, { wsRoot, c4StagingRoot, bridgeSp
     }
     if (bridgeSpawnRoot && (p === bridgeSpawnRoot || p.startsWith(`${bridgeSpawnRoot}/`))) {
       return checkNoTraversal(CANARY_BRIDGE_SPAWN_PLACEHOLDER + p.slice(bridgeSpawnRoot.length));
+    }
+    if (transcriptsRoot && (p === transcriptsRoot || p.startsWith(`${transcriptsRoot}/`))) {
+      return checkNoTraversal(CANARY_TRANSCRIPTS_PLACEHOLDER + p.slice(transcriptsRoot.length));
     }
     return p;
   };
@@ -962,6 +970,10 @@ export function normalizeCapturedArgv(rawArgv, { wsRoot, c4StagingRoot, bridgeSp
     // bwrap cannot --tmpfs a path it cannot create under a read-only root.
     prepDirs.push(CANARY_BRIDGE_SPAWN_PLACEHOLDER);
   }
+  if (out.some((t) => typeof t === "string" && t.startsWith(CANARY_TRANSCRIPTS_PLACEHOLDER))) {
+    // The SDK skips a deny landing that does not exist; bwrap cannot --tmpfs a path it cannot create.
+    prepDirs.push(CANARY_TRANSCRIPTS_PLACEHOLDER);
+  }
   for (const d of subPrepDirs) prepDirs.push(d);
   for (const d of literalPrepDirs) prepDirs.push(d);
 
@@ -973,15 +985,16 @@ export function normalizeCapturedArgv(rawArgv, { wsRoot, c4StagingRoot, bridgeSp
  * Applied to `bwrapSetupArgv` AND `prepDirs` before the bwrap spawn.
  *
  * @param {string[]} argv
- * @param {{ ws: string, empty: string, c4Staging?: string, bridgeSpawn?: string }} paths
+ * @param {{ ws: string, empty: string, c4Staging?: string, bridgeSpawn?: string, transcripts?: string }} paths
  * @returns {string[]}
  */
-export function substituteCanonicalArgv(argv, { ws, empty, c4Staging, bridgeSpawn }) {
+export function substituteCanonicalArgv(argv, { ws, empty, c4Staging, bridgeSpawn, transcripts }) {
   return argv.map((t) => {
     if (typeof t !== "string") return t;
     let out = t.split(CANARY_WS_PLACEHOLDER).join(ws).split(CANARY_EMPTY_PLACEHOLDER).join(empty);
     if (c4Staging !== undefined) out = out.split(CANARY_C4_STAGING_PLACEHOLDER).join(c4Staging);
     if (bridgeSpawn !== undefined) out = out.split(CANARY_BRIDGE_SPAWN_PLACEHOLDER).join(bridgeSpawn);
+    if (transcripts !== undefined) out = out.split(CANARY_TRANSCRIPTS_PLACEHOLDER).join(transcripts);
     return out;
   });
 }
@@ -1067,6 +1080,7 @@ function runReplay(fixtureUrl) {
     const empty = mkdtempSync(join(tmpdir(), "canary-replay-empty-"));
     const c4Staging = mkdtempSync(join(tmpdir(), "canary-replay-c4-"));
     const bridgeSpawn = mkdtempSync(join(tmpdir(), "canary-replay-bridge-spawn-"));
+    const transcripts = mkdtempSync(join(tmpdir(), "canary-replay-transcripts-"));
     replayFixture = {
       ...fixture,
       bwrapSetupArgv: substituteCanonicalArgv(fixture.bwrapSetupArgv, {
@@ -1074,8 +1088,9 @@ function runReplay(fixtureUrl) {
         empty,
         c4Staging,
         bridgeSpawn,
+        transcripts,
       }),
-      prepDirs: substituteCanonicalArgv(fixture.prepDirs, { ws, empty, c4Staging, bridgeSpawn }),
+      prepDirs: substituteCanonicalArgv(fixture.prepDirs, { ws, empty, c4Staging, bridgeSpawn, transcripts }),
     };
     // A placeholder this replay does not know would reach bwrap as a literal
     // path — say so instead of spawning.
@@ -1525,7 +1540,7 @@ function readCapturedInvocations(captureFile) {
  * runs the secret-scrub then `normalizeCapturedArgv` (CTO Option A). The raw
  * argv is NOT written anywhere (it carries host paths + env forwarding).
  *
- * @returns {Promise<{ ok: true, rawSetupArgv: string[], wsRoot: string, c4StagingRoot: string, bridgeSpawnRoot: string, sdkVersion: string, sdkPackage: string }
+ * @returns {Promise<{ ok: true, rawSetupArgv: string[], wsRoot: string, c4StagingRoot: string, bridgeSpawnRoot: string, transcriptsRoot: string, sdkVersion: string, sdkPackage: string }
  *                  | { ok: false, reason: string }>}
  */
 export async function doCapture({
@@ -1573,6 +1588,8 @@ export async function doCapture({
   // SDK byte-for-byte) so the projection can map that token to
   // ${CANARY_BRIDGE_SPAWN}.
   const bridgeSpawnRoot = join(homedir(), ".claude", "bridge-spawn");
+  // #10445: buildAgentSandboxConfig denies `$HOME/.claude/projects` (session transcripts) for every session.
+  const transcriptsRoot = join(homedir(), ".claude", "projects");
 
   try {
     process.env.C4_RENDER_STAGING_ROOT = c4StagingDir;
@@ -1660,6 +1677,7 @@ export async function doCapture({
           wsRoot: resolvedOwn,
           c4StagingRoot: c4StagingDir,
           bridgeSpawnRoot,
+          transcriptsRoot,
           sdkVersion,
           sdkPackage: SDK_PACKAGE,
         };
@@ -1770,6 +1788,7 @@ async function runCapture(fixtureUrl, { verify = false } = {}) {
       wsRoot: result.wsRoot,
       c4StagingRoot: result.c4StagingRoot,
       bridgeSpawnRoot: result.bridgeSpawnRoot,
+      transcriptsRoot: result.transcriptsRoot,
     });
   } catch (err) {
     // Unrecognized bwrap option → SDK argv shape changed; fail loud (ack-fallback).

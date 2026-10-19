@@ -48,21 +48,34 @@
 #               leaves flag==true + freeze held, and unfreeze is exactly that recovery —
 #               so unfreeze never refuses on flag==true (reads like proof, prints the value).
 #
-# WIPE MODES (#10138, design W3 / W7b). Three more FLAG_MODE values, all for git-data-cutover.yml::wipe:
-#   wipe        -> three SEPARATE predicates, each with its own verdict word and exit 5, evaluated in order:
-#                    1 wipe_precondition_flag_not_true   the flag is not exactly `true` (unset and `off` refuse)
-#                    2 wipe_precondition_stamp_absent    GIT_DATA_LUKS_CUTOVER_AT (prd) is absent or not
-#                                                        ^YYYY-MM-DDTHH:MM:SSZ$ or not a real date
+# PIN_ONLY (review of #10352). snapshot_clear evaluates no wipe predicate but its ssh_config step needs $RUNNER_TEMP/git-data.pin, which only
+#   this script writes. pin_only runs the same scope check and the same pin read/validate/write as every other mode, refuses nothing on the
+#   flag's value, prints no wipe_variant line, and ends with `git_data_pin=present fp=...` like the others.
+#
+# WIPE MODES (#10138, design W3 / W7b; A1 2026-10-15). Three more FLAG_MODE values, all for git-data-cutover.yml::wipe.
+#   The first stdout line of `wipe` and `wipe_check` is `wipe_variant=flip_chained|separated|none`, chosen ONLY from
+#   the flag and the stamp (ADR-239 Amendment 2026-10-15): flip_chained = flag `true` OR a non-empty stamp;
+#   separated = flag exactly `false`/unset AND no stamp; none = flag outside the closed set (true|false|unset).
+#   wipe        -> flip_chained: three SEPARATE predicates, each with its own verdict word and exit 5, in order:
+#                    1 wipe_precondition_flag_not_true   the flag is not exactly `true` (a stamp is present, so `off`/unset refuse)
+#                    2 wipe_precondition_stamp_absent    GIT_DATA_LUKS_CUTOVER_AT (prd) is absent
+#                      wipe_precondition_stamp_malformed it is non-empty but not ^YYYY-MM-DDTHH:MM:SSZ$ or not a real date
 #                    3 wipe_precondition_soak_not_elapsed  now minus the stamp is below WIPE_SOAK_FLOOR_SECONDS
 #                                                        (prints floor_days=<n> elapsed_s=<n>)
-#                 an unreadable stamp is a READ failure, not a predicate: wipe_stamp_read_failed reason=<word> rc=<n>.
-#                 On a pass it prints `flag=true mode=wipe` then `wipe_soak floor_days=7 stamp_epoch=<n> elapsed_s=<n>`
-#                 and continues with the TOFU / deny-roots / pin work exactly as the other modes do.
-#   wipe_check  -> the same three predicates, REPORT ONLY: the first failing one prints `would_refuse=<word>` (or
+#                 separated: no predicate here (the run-record scan and the boot_complete predicates are a later step);
+#                 none: refuses wipe_precondition_flag_unreadable (a flag value outside true|false|unset is not "off").
+#                 an unreadable flag or stamp is a READ failure, not a predicate: flag_read_failed / wipe_stamp_read_failed
+#                 reason=<word> rc=<n>. On a flip_chained pass it prints `flag=true mode=wipe` then
+#                 `wipe_soak floor_days=7 stamp_epoch=<n> elapsed_s=<n>` and continues with the TOFU / deny-roots / pin work.
+#   wipe_check  -> the same, REPORT ONLY: the first failing predicate prints `would_refuse=<word>` (or
 #                 `would_refuse=none`) and the run continues and exits 0, so W4-W7 can be exercised before the flip
-#                 and the soak. A stamp READ failure still refuses (exit 5): a report must not hide a broken read.
-#   wipe_reread -> the W7b read: the flag only. Prints `flag=true mode=wipe_reread` or refuses
-#                 wipe_precondition_flag_not_true; no stamp read, no pin write, no TOFU, no deny-roots probe.
+#                 and the soak. A READ failure still refuses (exit 5): a report must not hide a broken read.
+#   wipe_reread -> the W7b read. WIPE_VARIANT (the variant W3 printed) is an EXPECTATION, compared and never a selector;
+#                 absent or off-set it refuses `wipe_precondition_variant_changed expected=none`. Expecting flip_chained:
+#                 the flag only (prints `flag=true mode=wipe_reread` or refuses wipe_precondition_flag_not_true; no stamp
+#                 read). Expecting separated: re-reads flag and stamp, prints `wipe_variant=separated mode=wipe_reread`,
+#                 refuses `wipe_precondition_variant_changed expected=separated got=<v>` or flag_unreadable. Never a pin
+#                 write, TOFU or deny-roots probe.
 # WIPE_SOAK_FLOOR_SECONDS is ONE unconditional constant (ADR-239, runbook "The wipe"): there is deliberately no
 # `${VAR:-...}` form, so no environment value, input or variable can lower it. Relaxing it is a reviewed diff of that
 # one line plus its pin test, the runbook number and an ADR-239 amendment with a CLO ruling.
@@ -151,7 +164,7 @@ reason_of() {
 
 FLAG_MODE="${FLAG_MODE:-proof}"
 case "$FLAG_MODE" in
-  proof|flip|rollback|unfreeze|wipe|wipe_check|wipe_reread) : ;;
+  proof|flip|rollback|unfreeze|wipe|wipe_check|wipe_reread|pin_only) : ;;
   *) echo "::error title=git-data-flag-precheck::verdict=flag_mode_invalid mode=${FLAG_MODE}"; exit 2 ;;
 esac
 
@@ -263,39 +276,93 @@ if [ "$project" != soleur ] || [ "$config" != prd ]; then
 fi
 
 # ---- Wipe modes (#10138): predicates before the generic mode-aware flag read ----------------------
-if [ "$FLAG_MODE" = wipe_reread ]; then
-  # W7b: the flag only. No stamp, no pin, no TOFU, no deny-roots probe.
-  if [ "$flag" != true ]; then
-    refuse wipe_precondition_flag_not_true
+# A1 (ADR-239 Amendment 2026-10-15): two variants, chosen ONLY from the two reads below (the flag and the stamp),
+# never from an input, an environment value or a flag of this script's own.
+#   flip_chained  the flag reads `true`, OR the stamp is non-empty (valid or malformed): the original gate.
+#   separated     the flag is read successfully as exactly `false` or unset, AND the stamp is absent.
+#   none          the flag is outside the closed set (true|false|unset) and the stamp is absent.
+# A garbage stamp counts as PRESENT, so it can never reach `separated`. The run-record scan and the boot_complete
+# predicates of `separated` live in a later workflow step (they need W4's server `created` and W5's row).
+CLS_STAMP_STATE=""; CLS_STAMP_EPOCH=""
+classify_stamp_state() { # sets CLS_STAMP_STATE=absent|valid|malformed and CLS_STAMP_EPOCH
+  CLS_STAMP_EPOCH=""
+  if [ -z "$1" ]; then
+    CLS_STAMP_STATE=absent
+  elif [[ $1 =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] \
+       && CLS_STAMP_EPOCH="$(date -u -d "$1" +%s 2>/dev/null)" && [[ $CLS_STAMP_EPOCH =~ ^[0-9]+$ ]]; then
+    CLS_STAMP_STATE=valid
+  else
+    CLS_STAMP_EPOCH=""; CLS_STAMP_STATE=malformed
   fi
-  echo "flag=true mode=wipe_reread"
-  exit 0
+}
+select_variant() { # <flag> <stamp-state> -> prints flip_chained|separated|none
+  if [ "$1" = true ] || [ "$2" != absent ]; then echo flip_chained
+  elif [ -z "$1" ] || [ "$1" = false ]; then echo separated
+  else echo none
+  fi
+}
+if [ "$FLAG_MODE" = wipe_reread ]; then
+  # W7b: re-assert the variant W3 printed. WIPE_VARIANT is an EXPECTATION that is compared, never a selector;
+  # an absent or off-set value refuses (fail closed).
+  case "${WIPE_VARIANT:-}" in
+    flip_chained)
+      # Unchanged contract: the flag only. No stamp read, no pin write, no TOFU, no deny-roots probe.
+      if [ "$flag" != true ]; then
+        refuse wipe_precondition_flag_not_true
+      fi
+      echo "flag=true mode=wipe_reread"
+      exit 0
+      ;;
+    separated)
+      read_secret GIT_DATA_LUKS_CUTOVER_AT wipe_stamp_read_failed --no-exit-on-missing-secret
+      classify_stamp_state "$VAL"
+      got="$(select_variant "$flag" "$CLS_STAMP_STATE")"
+      if [ "$got" = none ]; then
+        refuse wipe_precondition_flag_unreadable
+      fi
+      if [ "$got" != separated ]; then
+        refuse "wipe_precondition_variant_changed expected=separated got=${got}"
+      fi
+      echo "wipe_variant=separated mode=wipe_reread"
+      exit 0
+      ;;
+    *)
+      refuse "wipe_precondition_variant_changed expected=none"
+      ;;
+  esac
 fi
 if [ "$FLAG_MODE" = wipe ] || [ "$FLAG_MODE" = wipe_check ]; then
-  wipe_word=""
-  if [ "$flag" != true ]; then
-    wipe_word=wipe_precondition_flag_not_true
-  fi
-  stamp=""
-  # `wipe` stops reading at the first failing predicate; the report-only mode always reads the stamp so the read
-  # is exercised under real credentials before the flip.
-  if [ -z "$wipe_word" ] || [ "$FLAG_MODE" = wipe_check ]; then
-    read_secret GIT_DATA_LUKS_CUTOVER_AT wipe_stamp_read_failed --no-exit-on-missing-secret
-    stamp="$VAL"
-  fi
-  stamp_epoch=""; elapsed_s=""
-  if [ -z "$wipe_word" ] || [ "$FLAG_MODE" = wipe_check ]; then
-    if [[ $stamp =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] \
-       && stamp_epoch="$(date -u -d "$stamp" +%s 2>/dev/null)" && [[ $stamp_epoch =~ ^[0-9]+$ ]]; then
-      elapsed_s=$(( $(date -u +%s) - stamp_epoch ))
-    else
-      stamp_epoch=""
-      if [ -z "$wipe_word" ]; then wipe_word=wipe_precondition_stamp_absent; fi
-    fi
-    if [ -z "$wipe_word" ] && [ "$elapsed_s" -lt "$WIPE_SOAK_FLOOR_SECONDS" ]; then
-      wipe_word=wipe_precondition_soak_not_elapsed
-    fi
-  fi
+  # Both reads are UNCONDITIONAL: the variant is a function of the flag AND the stamp.
+  read_secret GIT_DATA_LUKS_CUTOVER_AT wipe_stamp_read_failed --no-exit-on-missing-secret
+  stamp="$VAL"
+  classify_stamp_state "$stamp"
+  stamp_epoch="$CLS_STAMP_EPOCH"
+  wipe_variant="$(select_variant "$flag" "$CLS_STAMP_STATE")"
+  echo "wipe_variant=${wipe_variant}"
+  wipe_word=""; elapsed_s=""
+  case "$wipe_variant" in
+    none)
+      wipe_word=wipe_precondition_flag_unreadable ;;
+    flip_chained)
+      # Three SEPARATE predicates, each with its own word (the original W3 gate, unchanged).
+      if [ "$flag" != true ]; then
+        wipe_word=wipe_precondition_flag_not_true
+      fi
+      if [ -z "$wipe_word" ]; then
+        case "$CLS_STAMP_STATE" in
+          absent)    wipe_word=wipe_precondition_stamp_absent ;;
+          malformed) wipe_word=wipe_precondition_stamp_malformed ;;
+        esac
+      fi
+      if [ "$CLS_STAMP_STATE" = valid ]; then
+        elapsed_s=$(( $(date -u +%s) - stamp_epoch ))
+        if [ -z "$wipe_word" ] && [ "$elapsed_s" -lt "$WIPE_SOAK_FLOOR_SECONDS" ]; then
+          wipe_word=wipe_precondition_soak_not_elapsed
+        fi
+      fi
+      ;;
+    separated) : ;;  # no precheck predicate: the scan and the boot_complete predicates are a later step
+  esac
   floor_days=$(( WIPE_SOAK_FLOOR_SECONDS / 86400 ))
   if [ "$FLAG_MODE" = wipe ]; then
     case "$wipe_word" in
@@ -327,6 +394,7 @@ if [ "$flag" = true ]; then
       echo "flag=true mode=${FLAG_MODE}"
       ;;
     wipe|wipe_check) : ;;  # the wipe block above already printed the mode line
+    pin_only) : ;;  # no predicate: the flag value is irrelevant, only the pin below is wanted
   esac
 fi
 

@@ -208,6 +208,11 @@ case "$n" in
       [ "$prev" = "-S" ] && src="$a"
       prev="$a"
     done
+    if [ "$src" = "/dev/mapper/git-data-pt-snap" ]; then
+      # the leftover snapshot's own mount (phase=clear): present only while the world says it is mounted
+      if [ -e "$ST/mounted" ] && [ -s "$W/clear_mnt" ]; then cat "$W/clear_mnt"; exit 0; fi
+      exit 1
+    fi
     if [ -n "$src" ]; then
       if [ -s "$W/findmnt_S" ]; then cat "$W/findmnt_S"; exit 0; fi
       exit 1
@@ -270,6 +275,7 @@ case "$n" in
     case "${1-}" in
       --find) flag fail_losetup && exit 1; : > "$ST/loop"; echo /dev/loop99; exit 0 ;;
       -d) flag fail_losetup_d && exit 1; rm -f "$ST/loop"; exit 0 ;;
+      -l) [ -e "$ST/loop" ] && [ -f "$W/losetup_l" ] && cat "$W/losetup_l"; exit 0 ;;
     esac
     exit 9 ;;
   dmsetup)
@@ -286,6 +292,9 @@ case "$n" in
         exit 1 ;;
       create) note create; flag fail_create && exit 1; : > "$ST/snap_up"; exit 0 ;;
       deps) cat "$W/deps"; exit 0 ;;
+      table) [ -e "$ST/snap_up" ] || exit 1
+        # dm_table2, when present, answers every read AFTER the first (a snapshot swapped in during the ownership proof)
+        if [ -e "$W/dm_table2" ] && [ -e "$ST/table_read1" ]; then cat "$W/dm_table2"; else : > "$ST/table_read1"; cat "$W/dm_table"; fi; exit 0 ;;
       remove) note remove; flag fail_remove && exit 1; rm -f "$ST/snap_up"; exit 0 ;;
       status) if flag snap_invalid; then echo "0 2097152 snapshot Invalid"; else echo "0 2097152 snapshot 16/1000000 16"; fi; exit 0 ;;
     esac
@@ -304,7 +313,7 @@ case "$n" in
     note umount
     mnt="$last"
     flag fail_umount && exit 32
-    find "$mnt" -mindepth 1 -delete
+    [ ! -d "$mnt" ] || find "$mnt" -mindepth 1 -delete
     rm -f "$ST/mounted"
     if flag written_on_umount; then cp "$W/written_on_umount" "$W/files/sys/dev/block/8:16/stat"; fi
     exit 0 ;;
@@ -372,11 +381,25 @@ run_script() {
     bash -s < "${RUN_SCRIPT:-$SCRIPT}" > "$W/out" 2> "$W/err" || RC=$?
 }
 
-RE_PRE='^wipe_assert pre ok layout_signal=(ok|not_run) journal=(dirty|clean|na) top_d=([0-9]+|na) top_f=([0-9]+|na) top_l=([0-9]+|na) top_o=([0-9]+|na) repos=([0-9]+|na) boot_to_row_s=[0-9]+$'
+RE_PRE='^wipe_assert pre ok layout_signal=(ok|not_run) journal=(dirty|clean|na) top_d=([0-9]+|na) top_f=([0-9]+|na) top_l=([0-9]+|na) top_o=([0-9]+|na) repos=([0-9]+|na) boot_to_row_s=[0-9]+ lock_residue=([0-9]+|na) store_root_repos=[0-9]+$'
 RE_POST='^wipe_assert (post_detach|finish) ok byid=gone mapper_read=ok store_root=ok$'
 RE_ERR='^wipe-assert: rc=[0-9]+ reason=[a-z_0-9]+( [a-z_]+=[0-9]+)*$'
+RE_34='^wipe-assert: rc=34 reason=offlist top_d=[0-9]+ top_f=[0-9]+ top_l=[0-9]+ top_o=[0-9]+ repos=[0-9]+ has_hooks_d=[01] lf_entries=[0-9]+ offlist_n=[0-9]+$'
 INVARIANT_RUNS=0
 NAMES_SEEN_RUNS=0
+RC34_LINES_CHECKED=0
+# line34_ok <line> — the strict rc=34 grammar, and a refusal must be explainable: some top-level entry was off the
+# list, or the top-level lost+found held something (an all-zero pair cannot occur with rc 34). Two derived
+# invariants as well: the hooks bit implies an off-list entry (the bit never feeds the allowlist), and the off-list
+# count cannot exceed the top-level entries counted by type.
+line34_ok() {
+  local l="$1" n lf hk tops _k _v
+  [[ "$l" =~ $RE_34 ]] || return 1
+  n="${l##*offlist_n=}"; lf="${l##*lf_entries=}"; lf="${lf%% *}"; hk="${l##*has_hooks_d=}"; hk="${hk%% *}"
+  tops=0
+  for _k in top_d top_f top_l top_o; do _v="${l##*"$_k"=}"; tops=$((tops + 10#${_v%% *})); done
+  { [ "$n" -gt 0 ] || [ "$lf" -gt 0 ]; } && { [ "$hk" = 0 ] || [ "$n" -ge 1 ]; } && [ "$n" -le "$tops" ]
+}
 # invariants <label> — what EVERY run owes, success or refusal.
 invariants() {
   local label="$1" leak bad lines left
@@ -409,13 +432,25 @@ invariants() {
   else no "$label: a write-shaped argv was recorded: $(tr '\t' ' ' < "$W/state/argv" | grep -E ' of=| rw|snapshot' | head -3 | cut -c1-200)"; fi
   if [ -s "$W/state/corpus_seen" ] && [ "$(cat "$W/state/corpus_seen")" -gt 0 ]; then NAMES_SEEN_RUNS=$((NAMES_SEEN_RUNS + 1)); fi
 }
-# expect_refuse <label> <rc> <reason-prefix> — a refusal: nothing on stdout, the rc and a fixed reason on stderr.
+# expect_refuse <label> <rc> <reason-prefix> [<exact tail of an rc=34 line, from top_d= onward>] — a refusal: nothing
+# on stdout, the rc and a fixed reason on stderr. When the expected AND the actual rc are 34 the last stderr line must
+# also be the strict fixed shape, and with a tail it must equal the whole expected line (a substring match would
+# accept offlist_n=10 or a trailing token).
 expect_refuse() {
-  local label="$1" rc="$2" reason="$3" last
+  local label="$1" rc="$2" reason="$3" tail34="${4:-}" last
   last="$(tail -n 1 "$W/err")"
   if [ "$RC" = "$rc" ] && [ ! -s "$W/out" ] && [[ "$last" == "wipe-assert: rc=$rc reason=$reason"* ]]; then
     ok "$label -> rc $rc reason=$reason, stdout empty"
   else no "$label: expected rc=$rc reason=$reason; got rc=$RC out=[$(cut -c1-80 "$W/out")] err=[$(tr '\n' '|' < "$W/err" | cut -c1-200)]"; fi
+  if [ "$rc" = 34 ] && [ "$RC" = 34 ]; then
+    RC34_LINES_CHECKED=$((RC34_LINES_CHECKED + 1))
+    if line34_ok "$last"; then ok "$label: the rc=34 line is the strict fixed shape (digits and one 0/1 bit only)"
+    else no "$label: the rc=34 line is not the strict fixed shape: [$last]"; fi
+    if [ -n "$tail34" ]; then
+      if [ "$last" = "wipe-assert: rc=34 reason=offlist $tail34" ]; then ok "$label: the whole rc=34 line equals the expected one"
+      else no "$label: the rc=34 line differs: got [$last], want [wipe-assert: rc=34 reason=offlist $tail34]"; fi
+    else no "$label: an rc=34 row must pin the whole expected line (no tail given)"; fi
+  elif [ -n "$tail34" ]; then no "$label: a tail was given for a row that is not an rc=34 refusal (want rc=$rc, got rc=$RC)"; fi
   invariants "$label"
 }
 # expect_line <label> <regex>
@@ -494,9 +529,11 @@ findmnt|-n|-o|UUID|--mountpoint|@W@/root
 findmnt|-n|-o|UUID|--mountpoint|@W@/root
 find|-H|@W@/root|-mindepth|1|-maxdepth|1|-name|.cutover-freeze|-print
 find|-H|@W@/root|-mindepth|1|-maxdepth|1|-name|.cutover-freeze|-print
+find|-H|@W@/root|-mindepth|1|-maxdepth|1|-name|repositories|-printf|T:%y
 find|/proc|-ignore_readdir_race|-maxdepth|3|-type|l|-regex|/proc/[0-9]+/fd/[0-9]+|-lname|/dev/sdb|-print|-quit
 find|@D@/mnt/lost+found|-mindepth|1|-maxdepth|1|-printf|x
 find|@D@/mnt/repositories|-mindepth|1|-maxdepth|1|!|(|-type|f|(|-name|.*.init.lock|-o|-name|.init.lock|)|)|!|(|-type|d|-name|lost+found|-empty|)|-printf|x
+find|@D@/mnt/repositories|-mindepth|1|-maxdepth|1|-type|f|-name|.?*.init.lock|-printf|x
 find|@D@/mnt|-mindepth|1|-maxdepth|1|-printf|%y\t%f\0
 losetup|--find|--show|--|@D@/cow
 losetup|-d|/dev/loop99
@@ -532,6 +569,7 @@ findmnt|-n|-o|UUID|--mountpoint|@W@/root
 findmnt|-n|-o|UUID|--mountpoint|@W@/root
 find|-H|@W@/root|-mindepth|1|-maxdepth|1|-name|.cutover-freeze|-print
 find|-H|@W@/root|-mindepth|1|-maxdepth|1|-name|.cutover-freeze|-print
+find|-H|@W@/root|-mindepth|1|-maxdepth|1|-name|repositories|-printf|T:%y
 find|/proc|-ignore_readdir_race|-maxdepth|3|-type|l|-regex|/proc/[0-9]+/fd/[0-9]+|-lname|/dev/sdb|-print|-quit
 realpath|-e|--|/dev/disk/by-id/scsi-0HC_Volume_111111111
 realpath|-e|--|/dev/sdc
@@ -564,7 +602,7 @@ echo "--- TIER A: the host script over a simulated host"
 # ── the clean host: skip (wipe_check) and run (wipe) ──────────────────────────────────────────
 world a-skip
 run_script pre WIPE_LISTING=skip
-expect_line "A01 clean host, listing skipped (wipe_check)" '^wipe_assert pre ok layout_signal=not_run journal=na top_d=na top_f=na top_l=na top_o=na repos=na boot_to_row_s=1200$'
+expect_line "A01 clean host, listing skipped (the finish-phase shape)" '^wipe_assert pre ok layout_signal=not_run journal=na top_d=na top_f=na top_l=na top_o=na repos=na boot_to_row_s=1200 lock_residue=na store_root_repos=0$'
 if [ "$(called dmsetup)" = 0 ] && [ "$(called mount)" = 0 ] && [ "$(called losetup)" = 0 ]; then ok "A01 skip: no snapshot was created, nothing mounted (wipe_check stays a metadata read)"
 else no "A01 skip: a snapshot call was made"; fi
 # the operand/flag contract: the record of every selector-bearing call equals the modelled argv (a wrong device, a
@@ -575,7 +613,7 @@ else no "A01 contract (skip): the recorded argv differs from the model: $(argv_n
 world a-run
 set_contract
 run_script pre
-expect_line "A02 clean host, listing run (dirty journal)" '^wipe_assert pre ok layout_signal=ok journal=dirty top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=1200$'
+expect_line "A02 clean host, listing run (dirty journal)" '^wipe_assert pre ok layout_signal=ok journal=dirty top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=1200 lock_residue=0 store_root_repos=0$'
 if caught_contract_pre; then ok "A02 contract (pre, listing): every operand and flag is the modelled one (typed device for getro/getsz/dumpe2fs/isLuks/findmnt -S/the /proc scan, iflag-free, if=/of= never the device, ro mount, table 0 <sectors> snapshot <origin> <cow> N 8, losetup on the COW file, 2 s quiescence)"
 else no "A02 contract (pre, listing): the recorded argv differs from the model: $(argv_norm "$W" | tr '\n' ';' | cut -c1-900)"; fi
 
@@ -585,21 +623,21 @@ tree_clean
 : > "$W/tree/.init.lock"; : > "$W/tree/.ws-9.init.lock"
 : > "$W/tree/repositories/.init.lock"; : > "$W/tree/repositories/.ws-9.init.lock"; mkdir -p "$W/tree/repositories/lost+found"
 run_script pre
-expect_line "A03 (must-PASS) lock dotfiles and lost+found are not repositories" '^wipe_assert pre ok layout_signal=ok journal=dirty top_d=2 top_f=3 top_l=0 top_o=0 repos=0 boot_to_row_s=1200$'
+expect_line "A03 (must-PASS) lock dotfiles and lost+found are not repositories" '^wipe_assert pre ok layout_signal=ok journal=dirty top_d=2 top_f=3 top_l=0 top_o=0 repos=0 boot_to_row_s=1200 lock_residue=2 store_root_repos=0$'
 
 # the exclusions are TYPED: a lock is a regular file, lost+found an empty directory
 world a-lfcontent
 : > "$W/tree/lost+found/$CORPUS_TOP_FILE"
 run_script pre
-expect_refuse "A06 a top-level lost+found that holds a file is off the allowlist (its contents are opened)" 34 offlist
+expect_refuse "A06 a top-level lost+found that holds a file is off the allowlist (its contents are opened)" 34 offlist "top_d=2 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=1 offlist_n=0"
 world a-lfdeep
 mkdir -p "$W/tree/lost+found/$CORPUS_TOP_DIR"
 run_script pre
-expect_refuse "A07 a top-level lost+found that holds a directory is off the allowlist" 34 offlist
+expect_refuse "A07 a top-level lost+found that holds a directory is off the allowlist" 34 offlist "top_d=2 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=1 offlist_n=0"
 world a-lockdir-top
 mkdir -p "$W/tree/.init.lock"
 run_script pre
-expect_refuse "A08 a top-level DIRECTORY named like the lock file is off the allowlist (the lock exclusion is for regular files)" 34 offlist
+expect_refuse "A08 a top-level DIRECTORY named like the lock file is off the allowlist (the lock exclusion is for regular files)" 34 offlist "top_d=3 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"
 world a-lockdir-repos
 mkdir -p "$W/tree/repositories/.ws-9.init.lock/$CORPUS_REPO_A"
 run_script pre
@@ -617,61 +655,260 @@ expect_refuse "A09c a repositories/lost+found that holds an entry counts (only a
 world a-clean-journal
 printf 'Filesystem features:      has_journal ext_attr resize_inode dir_index filetype extent\nFilesystem state:         clean\nTotal journal blocks:     16384\nBlock size:               4096\n' > "$W/sb_origin"
 run_script pre
-expect_line "A04 a clean journal reads journal=clean" '^wipe_assert pre ok layout_signal=ok journal=clean top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=1200$'
+expect_line "A04 a clean journal reads journal=clean" '^wipe_assert pre ok layout_signal=ok journal=clean top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=1200 lock_residue=0 store_root_repos=0$'
 
 world a-norepos
 tree_reset; mkdir -p "$W/tree/lost+found"
 run_script pre
-expect_line "A05 (must-PASS) a volume with no repositories directory and nothing else is empty" '^wipe_assert pre ok layout_signal=ok journal=dirty top_d=1 top_f=0 top_l=0 top_o=0 repos=0 boot_to_row_s=1200$'
+expect_line "A05 (must-PASS) a volume with no repositories directory and nothing else is empty" '^wipe_assert pre ok layout_signal=ok journal=dirty top_d=1 top_f=0 top_l=0 top_o=0 repos=0 boot_to_row_s=1200 lock_residue=0 store_root_repos=0$'
 
+# ── A1 (2026-10-15): store_root_repos (the LUKS store root: an independent barrier for the separated wipe) ──
+# A read-only count of $OLD_ROOT/repositories with the bootstrap exclusions; the host is NOT told the variant, the
+# runner refuses on a non-zero count. Counts only, never a name.
+world a-sr-repos
+mkdir -p "$W/root/repositories/$CORPUS_REPO_A" "$W/root/repositories/$CORPUS_TOP_DIR"; : > "$W/root/repositories/.ws-9.init.lock"; : > "$W/root/repositories/.init.lock"
+run_script pre
+expect_line "A95 two repositories under the store root (lock files excluded) -> store_root_repos=2, exit 0, no name" '^wipe_assert pre ok layout_signal=ok journal=dirty top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=1200 lock_residue=0 store_root_repos=2$'
+world a-sr-locksonly
+mkdir -p "$W/root/repositories/lost+found"; : > "$W/root/repositories/.ws-9.init.lock"
+run_script pre
+expect_line "A96 (must-PASS) only lock files and an empty lost+found under the store root -> store_root_repos=0" '^wipe_assert pre ok layout_signal=ok journal=dirty top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=1200 lock_residue=0 store_root_repos=0$'
+world a-sr-lfcontent
+mkdir -p "$W/root/repositories/lost+found/$CORPUS_REPO_A"
+run_script pre
+expect_line "A97 a store-root repositories/lost+found that holds an entry counts (only an EMPTY one is excluded)" '^wipe_assert pre ok layout_signal=ok journal=dirty top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=1200 lock_residue=0 store_root_repos=1$'
+world a-sr-symlink
+ln -s lost+found "$W/root/repositories"
+run_script pre
+expect_refuse "A98 a store-root repositories that is a SYMLINK is unreadable, never counted as empty" 42 store_root_unreadable
+world a-sr-skip
+mkdir -p "$W/root/repositories/$CORPUS_REPO_A"
+run_script pre WIPE_LISTING=skip
+expect_line "A99 the store-root count runs even when the snapshot listing is skipped (lock_residue=na)" '^wipe_assert pre ok layout_signal=not_run journal=na top_d=na top_f=na top_l=na top_o=na repos=na boot_to_row_s=1200 lock_residue=na store_root_repos=1$'
+
+# ── A1 (2026-10-15) phase=clear: clear a LEFTOVER git-data-pt-snap (CTO follow-up ruling) ───────────────────────────
+# A SIGKILL during the listing cannot be trapped, so the throwaway snapshot, its mount, its loop device and its COW file
+# can outlive the run. The clear proves the leftover is OURS before it touches it: the snapshot's origin is the typed
+# device, its COW is a loop device backed by a COW file inside the pinned /dev/shm directory that also holds the mount.
+RE_CLEAR='^wipe_assert clear ok snapshot=(cleared|absent)$'
+CLR_DIR=/dev/shm/tmp.AbCdEfGhIj
+clear_state() { # the state a SIGKILLed listing leaves behind, in the CURRENT world
+  : > "$W/state/snap_up"; : > "$W/state/mounted"; : > "$W/state/loop"
+  printf '0 2097152 snapshot 8:16 7:99 N 8\n' > "$W/dm_table"
+  printf '%s/mnt\n' "$CLR_DIR" > "$W/clear_mnt"
+  printf '/dev/loop99 %s/cow\n' "$CLR_DIR" > "$W/losetup_l"
+}
+clear_world() { world "$1"; clear_state; }
+clear_inv() { # <label> — the grammar, the name leak and the write-shape invariants of a clear run (the teardown one is the assertion itself)
+  local label="$1" bad=0 got lines leak
+  INVARIANT_RUNS=$((INVARIANT_RUNS + 1))
+  leak="$(grep -rlF -f "$PATS" "$W/out" "$W/err" "$W/state" || true)"
+  if [ -z "$leak" ]; then ok "$label: no synthesized tenant name in stdout, stderr or any state file"; else no "$label: a synthesized name reached: $leak"; fi
+  lines="$(wc -l < "$W/out")"; got="$(cat "$W/out")"
+  if [ "$lines" -gt 1 ]; then bad=1; fi
+  if [ "$lines" -eq 1 ] && ! [[ "$got" =~ $RE_CLEAR ]]; then bad=1; fi
+  while IFS= read -r l; do [[ "$l" =~ $RE_ERR ]] || bad=1; done < "$W/err"
+  if [ "$bad" = 0 ]; then ok "$label: stdout is empty or one fixed-shape clear line, every stderr line is a fixed reason line"; else no "$label: output grammar violated: out=[$got] err=[$(tr '\n' '|' < "$W/err" | cut -c1-200)]"; fi
+  if argv_safe "$W/state/argv"; then ok "$label: no write-shaped argv"; else no "$label: a write-shaped argv was recorded"; fi
+}
+clear_detaches() { grep -c "^losetup	-d	" "$W/state/argv" 2>/dev/null || true; }
+clear_removals() { grep -c "^dmsetup	remove	--retry	git-data-pt-snap$" "$W/state/argv" 2>/dev/null || true; }
+clear_expect_refuse() { # <label> <rc> <reason> — a refusal removes NOTHING
+  local label="$1" rc="$2" reason="$3" last
+  last="$(tail -n 1 "$W/err")"
+  if [ "$RC" = "$rc" ] && [ ! -s "$W/out" ] && [[ "$last" == "wipe-assert: rc=$rc reason=$reason"* ]] && [ "$(clear_removals)" = 0 ] && [ "$(called umount)" = 0 ] && [ "$(clear_detaches)" = 0 ] && [ -e "$W/state/snap_up" ]; then
+    ok "$label -> rc $rc reason=$reason, stdout empty, nothing removed (no remove, umount or loop detach; the snapshot is still up)"
+  else no "$label: expected rc=$rc reason=$reason with nothing removed; got rc=$RC removals=$(clear_removals) umount=$(called umount) out=[$(cut -c1-80 "$W/out")] err=[$(tr '\n' '|' < "$W/err" | cut -c1-200)]"; fi
+  clear_inv "$label"
+}
+clear_world c-ok
+run_script clear
+if [ "$RC" = 0 ] && [ "$(cat "$W/out")" = "wipe_assert clear ok snapshot=cleared" ] && [ ! -s "$W/err" ] && [ "$(clear_removals)" = 1 ] && [ "$(called umount)" = 1 ] && [ "$(clear_detaches)" = 1 ] \
+   && [ ! -e "$W/state/snap_up" ] && [ ! -e "$W/state/mounted" ] && [ ! -e "$W/state/loop" ]; then
+  ok "C01 a leftover snapshot of the typed device is cleared: ONE remove of the pinned name (--retry), ONE umount, ONE loop detach, nothing left -> rc 0, snapshot=cleared"
+else no "C01 clear failed: rc=$RC out=[$(cat "$W/out")] err=[$(tr '\n' '|' < "$W/err" | cut -c1-200)] removals=$(clear_removals) umount=$(called umount) detaches=$(clear_detaches)"; fi
+clear_inv "C01"
+if grep -qE "^dmsetup	remove	--retry	git-data-pt-snap$" "$W/state/argv" && ! grep -vq "git-data-pt-snap$" < <(grep -E "^dmsetup	remove" "$W/state/argv"); then
+  ok "C01 the only dmsetup remove ever sent names the pinned snapshot (git-data-pt-snap); no name comes from an input"
+else no "C01 a dmsetup remove named something else"; fi
+world c-absent
+run_script clear
+if [ "$RC" = 0 ] && [ "$(cat "$W/out")" = "wipe_assert clear ok snapshot=absent" ] && [ "$(clear_removals)" = 0 ] && [ "$(called umount)" = 0 ] && [ "$(clear_detaches)" = 0 ]; then
+  ok "C02 no leftover snapshot -> rc 0, snapshot=absent, nothing removed (idempotent)"
+else no "C02 absent case: rc=$RC out=[$(cat "$W/out")] removals=$(clear_removals)"; fi
+clear_inv "C02"
+clear_world c-origin-other
+printf '0 2097152 snapshot 8:32 7:99 N 8\n' > "$W/dm_table"
+run_script clear
+clear_expect_refuse "C03 a snapshot whose origin is another device is not ours" 43 snapshot_not_ours
+clear_world c-cow-notloop
+printf '0 2097152 snapshot 8:16 8:99 N 8\n' > "$W/dm_table"
+run_script clear
+clear_expect_refuse "C04 a snapshot whose COW is not a loop device (major 8, minor 99 = a LISTED /dev/loop99) is not ours: only major 7 is the loop driver" 43 snapshot_not_ours
+clear_world c-multiline
+printf '0 2097152 snapshot 8:16 7:99 N 8\n2097152 2097152 linear 8:16 2097152\n' > "$W/dm_table"
+run_script clear
+clear_expect_refuse "C04c a multi-segment table whose FIRST line looks right is not ours (one segment only)" 43 snapshot_not_ours
+clear_world c-swapped
+printf '0 2097152 snapshot 8:16 7:99 N 8\n' > "$W/dm_table"
+printf '0 2097152 snapshot 8:32 7:99 N 8\n' > "$W/dm_table2"
+run_script clear
+clear_expect_refuse "C04d a snapshot that changes between the proof and the removal (the table is re-read right before it) is not ours" 43 snapshot_not_ours
+clear_world c-persistent
+printf '0 2097152 snapshot 8:16 7:99 P 8\n' > "$W/dm_table"
+run_script clear
+clear_expect_refuse "C04b a PERSISTENT snapshot (P) is not ours: ours is always N" 43 snapshot_not_ours
+clear_world c-mnt-outside
+printf '/mnt/elsewhere/mnt\n' > "$W/clear_mnt"
+run_script clear
+clear_expect_refuse "C05 a mount outside the pinned /dev/shm/tmp.<id>/mnt shape is not ours" 43 snapshot_not_ours
+clear_world c-mnt-two
+printf '%s/mnt\n%s/mnt\n' "$CLR_DIR" "/dev/shm/tmp.ZyXwVuTsRq" > "$W/clear_mnt"
+run_script clear
+clear_expect_refuse "C06 two mounts of the snapshot are not ours" 43 snapshot_not_ours
+clear_world c-loop-backing
+printf '/dev/loop99 /var/tmp/cow\n' > "$W/losetup_l"
+run_script clear
+clear_expect_refuse "C07 a loop device backed by a file outside the pinned /dev/shm/tmp.<id>/cow is not ours" 43 snapshot_not_ours
+clear_world c-loop-absent
+printf '/dev/loop5 %s/cow\n' "$CLR_DIR" > "$W/losetup_l"
+run_script clear
+clear_expect_refuse "C08 a COW loop the loop listing does not show is not ours" 43 snapshot_not_ours
+clear_world c-dirs-differ
+printf '/dev/loop99 /dev/shm/tmp.ZyXwVuTsRq/cow\n' > "$W/losetup_l"
+run_script clear
+clear_expect_refuse "C09 a mount and a COW file in DIFFERENT directories are not ours" 43 snapshot_not_ours
+clear_world c-open
+printf '/proc/4242/fd/7\n' > "$W/open_handles"
+run_script clear
+clear_expect_refuse "C10 a process holding the snapshot open is never torn down underneath" 27 handle_open
+clear_world c-lname
+run_script clear
+if grep -q "^find	/proc	.*	-lname	/dev/dm-3	" "$W/state/argv"; then ok "C10b the open-handle scan names the snapshot's own device node (/dev/dm-N from the pinned name's blkdevname), not an input"
+else no "C10b the /proc scan did not name /dev/dm-3: $(grep '^find	/proc' "$W/state/argv" | tr '\t' ' ' | cut -c1-200)"; fi
+clear_world c-notluks-host
+printf '0\n' > "$W/isluks_rc"
+run_script clear
+clear_expect_refuse "C11 the typed device being LUKS (or unknown) stops a clear exactly as it stops a wipe" 23 luks_or_unknown
+clear_world c-args
+run_script clear WIPE_ROW_DT=1760000000
+if [ "$RC" = 16 ] && [[ "$(tail -n 1 "$W/err")" == "wipe-assert: rc=16 reason=arg_pre_only"* ]] && [ "$(clear_removals)" = 0 ]; then ok "C12 a clear that is handed a boot row date or a listing mode refuses (arg_pre_only), nothing removed"
+else no "C12 clear accepted pre-only inputs: rc=$RC"; fi
+clear_inv "C12"
+clear_world c-remove-fails
+touch "$W/fail_remove"
+run_script clear
+if [ "$RC" = 36 ] && [ ! -s "$W/out" ] && [[ "$(tail -n 1 "$W/err")" == "wipe-assert: rc=36 reason=teardown_failed"* ]]; then ok "C13 a remove that fails is wipe_snapshot_teardown_failed (rc 36), never a success"
+else no "C13 failed remove: rc=$RC out=[$(cat "$W/out")] err=[$(tr '\n' '|' < "$W/err" | cut -c1-200)]"; fi
+clear_inv "C13"
+clear_world c-umount-fails
+touch "$W/fail_umount"
+run_script clear
+if [ "$RC" = 36 ] && [ ! -s "$W/out" ] && [[ "$(tail -n 1 "$W/err")" == "wipe-assert: rc=36 reason=teardown_failed"* ]] && [ "$(clear_removals)" = 1 ]; then ok "C14 a failed umount is rc 36 and the remaining steps are still attempted (collect-then-continue)"
+else no "C14 failed umount: rc=$RC removals=$(clear_removals) err=[$(tr '\n' '|' < "$W/err" | cut -c1-200)]"; fi
+clear_inv "C14"
+clear_world c-written
+printf '0 0 0 0 0 0 8 0 0 0 0 0 0 0\n' > "$W/written_on_umount"
+run_script clear
+if [ "$RC" = 29 ] && [ ! -s "$W/out" ] && [[ "$(tail -n 1 "$W/err")" == "wipe-assert: rc=29 reason=sectors_written"* ]]; then ok "C15 origin write counters that moved during the clear are wipe_device_written (rc 29): the clear proves the origin untouched after the removal"
+else no "C15 written origin: rc=$RC err=[$(tr '\n' '|' < "$W/err" | cut -c1-200)]"; fi
+clear_inv "C15"
+clear_world c-ro-lost
+printf '0\n' > "$W/ro"
+run_script clear
+clear_expect_refuse "C16 an origin whose kernel read-only flag is not 1 is wipe_ro_flag_lost, nothing removed" 30 ro_flag_lost
 # ── the layout-independent signal: off-list, non-empty, unparseable ──────────────────────────────
 world a-offdir
 mkdir -p "$W/tree/$CORPUS_TOP_DIR"
 run_script pre
-expect_refuse "A10 an extra top-level directory" 34 offlist
-if grep -q 'top_d=3 top_f=1 top_l=0 top_o=0 repos=0' "$W/err"; then ok "A10 the refusal carries COUNTS only (top_d=3)"; else no "A10 counts missing from the refusal: $(cat "$W/err")"; fi
+expect_refuse "A10 an extra top-level directory: the refusal carries COUNTS and fixed fields only" 34 offlist "top_d=3 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"
 
 world a-offfile
 : > "$W/tree/$CORPUS_TOP_FILE"
 run_script pre
-expect_refuse "A11 an extra top-level file" 34 offlist
+expect_refuse "A11 an extra top-level file" 34 offlist "top_d=2 top_f=2 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"
 
 world a-reposlink
 tree_reset; mkdir -p "$W/tree/lost+found" "$W/outside/$CORPUS_REPO_A"; ln -s "$W/outside" "$W/tree/repositories"
 run_script pre
-expect_refuse "A12 repositories is a SYMLINK: never followed, off the allowlist" 34 offlist
+expect_refuse "A12 repositories is a SYMLINK: never followed, off the allowlist" 34 offlist "top_d=1 top_f=0 top_l=1 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"
 
 world a-reposfile
 tree_reset; mkdir -p "$W/tree/lost+found"; : > "$W/tree/repositories"
 run_script pre
-expect_refuse "A13 repositories is a regular file" 34 offlist
+expect_refuse "A13 repositories is a regular file" 34 offlist "top_d=1 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"
 
 world a-fifo
 mkfifo "$W/tree/$CORPUS_TOP_FILE" || instrument "mkfifo failed"
 run_script pre
-expect_refuse "A14 a FIFO at the top level counts as other and is off the allowlist" 34 offlist
+expect_refuse "A14 a FIFO at the top level counts as other and is off the allowlist" 34 offlist "top_d=2 top_f=1 top_l=0 top_o=1 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"
 if grep -q 'top_o=1' "$W/err"; then ok "A14 the FIFO is counted under top_o"; else no "A14 the FIFO was not counted as other: $(cat "$W/err")"; fi
 
 world a-gclink
 rm -f "$W/tree/.gc-cursor"; ln -s /etc/hostname "$W/tree/.gc-cursor"
 run_script pre
-expect_refuse "A15 .gc-cursor as a symlink is off the allowlist (path-typed, not name-only)" 34 offlist
+expect_refuse "A15 .gc-cursor as a symlink is off the allowlist (path-typed, not name-only)" 34 offlist "top_d=2 top_f=0 top_l=1 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"
 
 world a-lostfile
 rmdir "$W/tree/lost+found" && : > "$W/tree/lost+found" || instrument "A16 setup failed"
 run_script pre
-expect_refuse "A16 lost+found as a file is off the allowlist" 34 offlist
+expect_refuse "A16 lost+found as a file is off the allowlist" 34 offlist "top_d=1 top_f=2 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"
 
 world a-absent-beside
 tree_reset; mkdir -p "$W/tree/$CORPUS_TOP_DIR"
 run_script pre
-expect_refuse "A17 no repositories directory beside a non-allowlisted entry" 34 offlist
+expect_refuse "A17 no repositories directory beside a non-allowlisted entry" 34 offlist "top_d=1 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"
 
 world a-nonempty
 mkdir -p "$W/tree/repositories/$CORPUS_REPO_A" "$W/tree/repositories/$CORPUS_REPO_B"
 run_script pre
 expect_refuse "A20 repositories/ holds entries after the replay" 37 repositories_not_empty
 if grep -q 'repos=2' "$W/err"; then ok "A20 the refusal carries a COUNT (repos=2) and no name"; else no "A20 count missing: $(cat "$W/err")"; fi
+if [[ "$(tail -n 1 "$W/err")" != *has_hooks_d* ]]; then ok "A20 an rc 37 refusal carries no rc=34 diagnostic field"; else no "A20 an rc 37 line carries has_hooks_d: $(tail -n 1 "$W/err")"; fi
+
+# ── rc=34 diagnostic fields (2026-10-18): a fixed-vocabulary bit for the system directory and two counts ──────
+world a120-incident
+tree_reset; mkdir -p "$W/tree/repositories" "$W/tree/lost+found" "$W/tree/hooks"
+run_script pre
+expect_refuse "A120 incident replay: repositories, lost+found and hooks (directories) only" 34 offlist "top_d=3 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=1"
+world a122-hooks-and-tenant
+mkdir -p "$W/tree/hooks" "$W/tree/$CORPUS_TOP_DIR"; : > "$W/tree/$CORPUS_TOP_FILE"
+run_script pre
+expect_refuse "A122 hooks beside a tenant-shaped directory and file in one listing: only the bit and the counts leave" 34 offlist "top_d=4 top_f=2 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=3"
+for v in symlink file dotd upper fifo suffix; do
+  world "a123-$v"
+  case "$v" in
+    symlink) ln -s repositories "$W/tree/hooks"; ex="top_d=2 top_f=1 top_l=1 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1" ;;
+    file)    : > "$W/tree/hooks"; ex="top_d=2 top_f=2 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1" ;;
+    dotd)    mkdir -p "$W/tree/hooks.d"; ex="top_d=3 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1" ;;
+    upper)   mkdir -p "$W/tree/Hooks"; ex="top_d=3 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1" ;;
+    fifo)    mkfifo "$W/tree/hooks" || instrument "mkfifo failed"; ex="top_d=2 top_f=1 top_l=0 top_o=1 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1" ;;
+    suffix)  mkdir -p "$W/tree/old-hooks"; ex="top_d=3 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1" ;;
+  esac
+  run_script pre
+  expect_refuse "A123 hooks variant ($v): only an exact, case-sensitive DIRECTORY named hooks sets the bit" 34 offlist "$ex"
+done
+world a124-nested-hooks
+mkdir -p "$W/tree/lost+found/hooks"
+run_script pre
+expect_refuse "A124 a nested lost+found/hooks directory: the top-level bit reads 0 and the entry is counted under lost+found" 34 offlist "top_d=2 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=1 offlist_n=0"
+world a125-locks-and-offdir
+touch "$W/tree/.init.lock" "$W/tree/.5.init.lock"; mkdir -p "$W/tree/$CORPUS_TOP_DIR"
+run_script pre
+expect_refuse "A125 allowlisted lock files beside one off-list directory: the locks are not counted as off-list" 34 offlist "top_d=3 top_f=3 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"
+world a126-lf-many
+mkdir -p "$W/tree/lost+found/d"; touch "$W/tree/lost+found/a" "$W/tree/lost+found/d/b"
+run_script pre
+expect_refuse "A126 lost+found holding two entries (one nested deeper): lf_entries is a non-recursive COUNT, not a flag" 34 offlist "top_d=2 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=2 offlist_n=0"
+world a129-offdir-and-lf
+mkdir -p "$W/tree/$CORPUS_TOP_DIR"; : > "$W/tree/lost+found/$CORPUS_TOP_FILE"
+run_script pre
+expect_refuse "A129 an off-list directory AND an entry inside lost+found: both counters move" 34 offlist "top_d=3 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=1 offlist_n=1"
+world a132-hooks-and-control
+mkdir -p "$W/tree/hooks"; : > "$W/tree/bad"$'\001'"name"
+run_script pre
+expect_refuse "A132 a valid hooks directory AND a control-character name: rc 35, the refusal precedes any bit" 35 record_control
+if [[ "$(tail -n 1 "$W/err")" != *has_hooks_d* ]]; then ok "A132 the rc 35 line carries no has_hooks_d field"; else no "A132 an rc 35 line carries has_hooks_d: $(tail -n 1 "$W/err")"; fi
 
 world a-newline
 tree_reset; mkdir -p "$W/tree/repositories" "$W/tree/${CORPUS_NL_A}"$'\n'"${CORPUS_NL_B}"
@@ -934,7 +1171,7 @@ expect_refuse "A93 the row is further after the boot than the bounded window" 32
 if grep -q 'boot_to_row_s=4000' "$W/err"; then ok "A93 the measured boot-to-row seconds are on the refusal (digits)"; else no "A93 boot_to_row_s missing: $(cat "$W/err")"; fi
 world a-boundary
 run_script pre WIPE_ROW_DT=$((NOW - UPTIME_S + 3600))
-expect_line "A94 (must-PASS) a row exactly at the window bound passes" '^wipe_assert pre ok layout_signal=ok journal=dirty top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=3600$'
+expect_line "A94 (must-PASS) a row exactly at the window bound passes" '^wipe_assert pre ok layout_signal=ok journal=dirty top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=3600 lock_residue=0 store_root_repos=0$'
 
 # ── post_detach / finish ─────────────────────────────────────────────────────────────────────────
 world a-post
@@ -1077,6 +1314,7 @@ caught_rc()   { # <rc> — true when the run is refused with that rc and prints 
 caught_16() { caught_rc 16; }
 caught_34() { caught_rc 34; }
 caught_29() { caught_rc 29; }
+caught_30() { caught_rc 30; }
 caught_23() { caught_rc 23; }
 caught_33() { caught_rc 33; }
 caught_15() { caught_rc 15; }
@@ -1096,7 +1334,7 @@ caught_no_leak() { # no synthesized name in stdout/stderr (the mutant prints one
 mutant_row m1-prints-name '      [ -n "$n" ] || die 35 record_empty' '      [ -n "$n" ] || die 35 record_empty
       say "$n"' set_offdir pre caught_no_leak
 # M2 (Guard 8 row 4): a digest of the listing rides on the output line
-mutant_row m2-digest 'boot_to_row_s=%s\n'"'"' \' 'boot_to_row_s=%s digest=0f0f\n'"'"' \' set_clean pre caught_grammar
+mutant_row m2-digest 'store_root_repos=%s\n'"'"' \' 'store_root_repos=%s digest=0f0f\n'"'"' \' set_clean pre caught_grammar
 # M3: the path-typed allowlist is name-only (a symlinked repositories is accepted)
 mutant_row m3-name-only-allowlist '        repositories:d) HAS_REPOS=yes ;;' '        repositories:*) HAS_REPOS=yes ;;' set_reposlink pre caught_34
 # M4: the absolute-zero written counters check is dropped
@@ -1135,8 +1373,63 @@ set_noroot()      { rmdir "$W/root"; }
 caught_37() { caught_rc 37; }
 caught_40() { caught_rc 40; }
 mutant_row m17-lostfound-contents-unread '      [ "$ln" -eq 0 ] || OFFLIST=1' '      :' set_lfcontent pre caught_34
-mutant_row m18-lock-excluded-by-name '! \( -type f \( -name '"'"'.*.init.lock'"'"' -o -name '"'"'.init.lock'"'"' \) \)' "! -name '.*.init.lock' ! -name '.init.lock'" set_lockdir pre caught_37
-mutant_row m19-lostfound-repos-excluded-by-name '! \( -type d -name lost+found -empty \)' '! -name lost+found' set_lfrepos pre caught_37
+# rc=34 diagnostic fields: each case is TRUE only on the pristine whole line for its world, rc 34 included
+set_hooksfile()  { : > "$W/tree/hooks"; }
+set_hooksdotd()  { mkdir -p "$W/tree/hooks.d"; }
+set_hooksdir()   { tree_reset; mkdir -p "$W/tree/repositories" "$W/tree/lost+found" "$W/tree/hooks"; }
+set_hookstenant() { mkdir -p "$W/tree/hooks" "$W/tree/$CORPUS_TOP_DIR"; : > "$W/tree/$CORPUS_TOP_FILE"; }
+line34_is() { [ "$RC" = 34 ] && [ "$(tail -n 1 "$W/err")" = "wipe-assert: rc=34 reason=offlist $1" ]; }
+caught_hooksfile()   { line34_is "top_d=2 top_f=2 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"; }
+caught_hooksdotd()   { line34_is "top_d=3 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=0 offlist_n=1"; }
+caught_lfentries()   { line34_is "top_d=2 top_f=1 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=1 offlist_n=0"; }
+caught_hookstenant() { line34_is "top_d=4 top_f=2 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=3"; }
+caught_hooksdir()    { line34_is "top_d=3 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=1"; }
+mutant_row m-hooks-name-only 'if [ "$n" = hooks ] && [ "$t" = d ]; then HAS_HOOKS=1; fi' 'if [ "$n" = hooks ]; then HAS_HOOKS=1; fi' set_hooksfile pre caught_hooksfile
+mutant_row m-hooks-glob 'if [ "$n" = hooks ] && [ "$t" = d ]; then HAS_HOOKS=1; fi' 'if [[ "$n" == hooks* ]] && [ "$t" = d ]; then HAS_HOOKS=1; fi' set_hooksdotd pre caught_hooksdotd
+mutant_row m-lf-entries-zero '      LF_ENTRIES="$ln"' '      LF_ENTRIES=0' set_lfcontent pre caught_lfentries
+mutant_row m-offlist-n-flag '*) OFFLIST=1; OFFLIST_N=$((OFFLIST_N + 1)) ;;' '*) OFFLIST=1; OFFLIST_N=1 ;;' set_hookstenant pre caught_hookstenant
+mutant_row m-hooks-allowlisted '        .gc-cursor:f | .init.lock:f) : ;;' '        .gc-cursor:f | .init.lock:f) : ;;
+        hooks:d) : ;;' set_hooksdir pre caught_hooksdir
+mutant_row m-line-leaks-name '      case "$n" in *[[:cntrl:]]*) die 35 record_control ;; esac' '      case "$n" in *[[:cntrl:]]*) die 35 record_control ;; esac
+      LEAK="$n"' set_hookstenant pre caught_hookstenant \
+  ' offlist_n=$OFFLIST_N"' ' offlist_n=$OFFLIST_N x=$LEAK"'
+mutant_row m18-lock-excluded-by-name '"$WA_MNT/repositories" -mindepth 1 -maxdepth 1 ! \( -type f \( -name '"'"'.*.init.lock'"'"' -o -name '"'"'.init.lock'"'"' \) \)' '"$WA_MNT/repositories" -mindepth 1 -maxdepth 1 ! -name '"'"'.*.init.lock'"'"' ! -name '"'"'.init.lock'"'"'' set_lockdir pre caught_37
+mutant_row m19-lostfound-repos-excluded-by-name '! \( -type d -name lost+found -empty \) -printf x | wc -c)" || die 33 repos_count_failed' '! -name lost+found -printf x | wc -c)" || die 33 repos_count_failed' set_lfrepos pre caught_37
+# A1 (2026-10-15): the store-root count and the id-bearing lock count.
+set_srrepos()  { mkdir -p "$W/root/repositories/$CORPUS_REPO_A"; }
+set_srlocks()  { mkdir -p "$W/root/repositories"; : > "$W/root/repositories/.ws-9.init.lock"; }
+set_srsymlink() { ln -s lost+found "$W/root/repositories"; }
+set_lockres()  { tree_clean; : > "$W/tree/repositories/.ws-9.init.lock"; }
+caught_srr1()  { grep -qE ' store_root_repos=1$' "$W/out"; }
+caught_srr0()  { grep -qE ' store_root_repos=0$' "$W/out"; }
+caught_lockres1() { grep -qE ' lock_residue=1 ' "$W/out"; }
+caught_42()    { caught_rc 42; }
+mutant_row m24-store-root-count-hardcoded '        SRR="$n" ;;' '        SRR=0 ;;' set_srrepos pre caught_srr1
+mutant_row m25-store-root-lock-counted '! \( -type f \( -name '"'"'.*.init.lock'"'"' -o -name '"'"'.init.lock'"'"' \) \) ! \( -type d -name lost+found -empty \) -printf x | wc -c)" || die 42 store_root_unreadable' '-printf x | wc -c)" || die 42 store_root_unreadable' set_srlocks pre caught_srr0
+mutant_row m26-store-root-symlink-accepted '      *) die 42 store_root_unreadable ;;' '      *) SRR=0 ;;' set_srsymlink pre caught_42
+mutant_row m27-lock-residue-repos-dropped '      LOCKS=$((LOCKS + lk))' '      LOCKS="$LOCKS_TOP"' set_lockres pre caught_lockres1
+# A1 (2026-10-15): the clear phase (CTO follow-up ruling, Guard 9 rows 7-13). Each edit makes a leftover this file did not
+# make removable, or lets a touched origin / a failed removal pass; the named clear case must go RED against it.
+set_cl_ok()      { clear_state; }
+set_cl_origin()  { clear_state; printf '0 2097152 snapshot 8:32 7:99 N 8\n' > "$W/dm_table"; }
+set_cl_persist() { clear_state; printf '0 2097152 snapshot 8:16 7:99 P 8\n' > "$W/dm_table"; }
+set_cl_dirs()    { clear_state; printf '/dev/loop99 /dev/shm/tmp.ZyXwVuTsRq/cow\n' > "$W/losetup_l"; }
+set_cl_open()    { clear_state; printf '/proc/4242/fd/7\n' > "$W/open_handles"; }
+set_cl_written() { clear_state; printf '0 0 0 0 0 0 8 0 0 0 0 0 0 0\n' > "$W/written_on_umount"; }
+set_cl_ro()      { clear_state; printf '0\n' > "$W/ro"; }
+set_cl_rmfail()  { clear_state; touch "$W/fail_remove"; }
+caught_43() { caught_rc 43; }
+caught_27c() { caught_rc 27; }
+caught_lname() { [ "$RC" = 0 ] && grep -q "^find	/proc	.*	-lname	/dev/dm-3	" "$W/state/argv"; }
+caught_36td() { [ "$RC" = 36 ] && [ ! -s "$W/out" ] && [[ "$(head -n 1 "$W/err")" == "wipe-assert: rc=36 reason=teardown_failed"* ]]; }
+caught_clear_ok() { [ "$RC" = 0 ] && [ "$(cat "$W/out")" = "wipe_assert clear ok snapshot=cleared" ]; }
+mutant_row m50-clear-origin-unchecked '[ "$d" = "$(devno_dec "$MM")" ] && ' '' set_cl_origin clear caught_43
+mutant_row m52-clear-persistent-accepted ' [ "$f" = N ] &&' '' set_cl_persist clear caught_43
+mutant_row m53-clear-dirs-unchecked 'if [ -n "$mntdir" ] && [ "$mntdir" != "$cowdir" ]; then die 43 snapshot_not_ours; fi' ':' set_cl_dirs clear caught_43
+mutant_row m54-clear-handles-unchecked '-lname "/dev/$dmn" -print -quit)" || rc=$?' '-lname "/dev/never" -print -quit)" || rc=$?' set_cl_ok clear caught_lname
+mutant_row m55-clear-counters-unchecked 'case "$W0" in "0 0") : ;; *) die 29 sectors_written ;; esac' ':' set_cl_written clear caught_29
+mutant_row m56-clear-ro-unchecked 'case "$ro" in 1) : ;; *) die 30 ro_flag_lost ;; esac' ':' set_cl_ro clear caught_30
+mutant_row m57-clear-removal-swallowed 'if ! wa_release; then die 36 teardown_failed; fi' 'wa_release || true' set_cl_rmfail clear caught_36td
 mutant_row m20-byid-stat-fails-open '    while byid_present; do' '    while stat -- "$BYID"; do' set_stat_denied post_detach caught_40
 mutant_row m21-freeze-by-test-e '    fz="$(find -H "$OLD_ROOT" -mindepth 1 -maxdepth 1 -name .cutover-freeze -print)" || die 16 freeze_probe' '    fz=""; [ ! -e "$OLD_ROOT/.cutover-freeze" ] || fz=x' set_noroot pre caught_16
 # M22-M33: the selector mutants (each aims one call at the wrong operand or drops/adds one flag): the clean run's
@@ -1168,6 +1461,15 @@ expect_refuse "H2-probe (EXPECTED TO FAIL: a clean host does not refuse)" 34 off
 if [ "$fail" -gt "$_pf" ]; then ok "H2: a refusal row against a clean host goes RED (the assertion machinery can fail)"; fail=$_pf; pass=$_pp; executed=$((executed - 4))
 else no "H2: a refusal row against a clean host stayed green"; fi
 
+# The strict-line helper itself is not neutered (a loosened regex or a dropped predicate goes RED here).
+_g34='wipe-assert: rc=34 reason=offlist top_d=3 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=0 lf_entries=7 offlist_n=0'
+if line34_ok "$_g34"; then ok "H3: a non-canonical good rc=34 line (lf_entries=7 offlist_n=0) is accepted"; else no "H3: a good rc=34 line was rejected"; fi
+if ! line34_ok "${_g34/has_hooks_d=0/has_hooks_d=2}"; then ok "H3: has_hooks_d=2 is rejected (the bit is 0 or 1)"; else no "H3: has_hooks_d=2 was accepted"; fi
+if ! line34_ok "$_g34 digest=0f0f"; then ok "H3: a trailing token is rejected"; else no "H3: a trailing token was accepted"; fi
+if ! line34_ok "${_g34/lf_entries=7/lf_entries=0}"; then ok "H3: offlist_n=0 with lf_entries=0 is rejected (nothing explains the refusal)"; else no "H3: an unexplained rc=34 line was accepted"; fi
+if ! line34_ok "${_g34/has_hooks_d=0/has_hooks_d=1}"; then ok "H3: has_hooks_d=1 with offlist_n=0 is rejected (the bit implies an off-list entry)"; else no "H3: a hooks bit without an off-list entry was accepted"; fi
+if ! line34_ok "${_g34/offlist_n=0/offlist_n=9}"; then ok "H3: offlist_n above the top-level entry count is rejected"; else no "H3: an impossible offlist_n was accepted"; fi
+
 # ══════════════════════════════════════════════════════════════════════════════════════════
 # TIER B — the cutover verb
 # ══════════════════════════════════════════════════════════════════════════════════════════
@@ -1183,6 +1485,7 @@ printf '%s\n' "$last" > "$TL/cmd"
 cat > "$TL/stdin"
 [ -f "$TL/hang" ] && sleep 20
 [ -f "$TL/answer" ] && cat "$TL/answer"
+[ -z "${SHIM_ERR:-}" ] || printf '%s\n' "$SHIM_ERR" >&2
 exit "$(cat "$TL/rc")"
 SSHSHIM
 cat > "$SB/timeout" <<'TOSHIM'
@@ -1210,17 +1513,17 @@ run_verb() {
     GITHUB_OUTPUT="$TL/gh_output" GITHUB_STEP_SUMMARY="$TL/gh_summary" \
     "$@" bash "$CUTOVER" > "$TL/out" 2> "$TL/err" || VRC=$?
 }
-PRE_ANS='wipe_assert pre ok layout_signal=ok journal=dirty top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=1200'
+PRE_ANS='wipe_assert pre ok layout_signal=ok journal=dirty top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=1200 lock_residue=0 store_root_repos=0'
 V_PRE=(WIPE_PHASE=pre WIPE_VOLUME_ID="$ID_T" WIPE_LUKS_VOLUME_ID="$ID_L" WIPE_SERVER_ID="$ID_S" WIPE_ROW_DT="$ROWDT" WIPE_LISTING=run)
 V_POST=(WIPE_PHASE=post_detach WIPE_VOLUME_ID="$ID_T" WIPE_LUKS_VOLUME_ID="$ID_L" WIPE_SERVER_ID="$ID_S")
 has_store() { grep -qxF "[git-data-cutover] STORE probe=wipe-assert verdict=$1" "$TL/out"; }
 no_remote_call() { [ "$(wc -l < "$TL/calls")" = 0 ]; }
 
 run_verb b01 "$PRE_ANS" 0 "${V_PRE[@]}"
-if [ "$VRC" = 0 ] && grep -qxF "[git-data-cutover] WIPE_ASSERT pre ok layout_signal=ok journal=dirty top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=1200" "$TL/out" && has_store ok; then
+if [ "$VRC" = 0 ] && grep -qxF "[git-data-cutover] WIPE_ASSERT pre ok layout_signal=ok journal=dirty top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=1200 lock_residue=0 store_root_repos=0" "$TL/out" && has_store ok; then
   ok "B01 pre with the listing: exit 0, the fixed-shape line is logged (counts only)"
 else no "B01 pre did not pass: rc=$VRC out=[$(tr '\n' '|' < "$TL/out" | cut -c1-300)]"; fi
-if grep -qxF "wipe_assert=$PRE_ANS" "$TL/gh_output" && grep -qxF -- "- WIPE_ASSERT pre ok layout_signal=ok journal=dirty top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=1200" "$TL/gh_summary"; then
+if grep -qxF "wipe_assert=$PRE_ANS" "$TL/gh_output" && grep -qxF -- "- WIPE_ASSERT pre ok layout_signal=ok journal=dirty top_d=2 top_f=1 top_l=0 top_o=0 repos=0 boot_to_row_s=1200 lock_residue=0 store_root_repos=0" "$TL/gh_summary"; then
   ok "B01 the line is written to GITHUB_OUTPUT and the step summary, verbatim"
 else no "B01 output/summary missing the line"; fi
 if cmp -s "$SCRIPT" "$TL/stdin"; then ok "B02 the host script is sent on STDIN, byte for byte (the single ssh site, gd_capture)"
@@ -1231,6 +1534,13 @@ if [ "$CMD" = "$EXPECT_CMD" ]; then ok "B03 the remote command is exactly the %q
 else no "B03 remote command differs: [$CMD]"; fi
 if [ "$(paste -sd' ' "$TL/timeouts")" = "30 25 30 300" ]; then ok "B04 bounds: access gate 30/25/30, the listing session 300 s"
 else no "B04 bounds differ: [$(paste -sd' ' "$TL/timeouts")]"; fi
+
+# rc 34: the host's last stderr line is relayed by the verb as one probe-stderr line, whole (this row guards the
+# passthrough filter in the verb, not the host script; the line is far below the 8192-byte cap, so it does not guard that).
+L34='wipe-assert: rc=34 reason=offlist top_d=3 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=1'
+run_verb b34 - 34 "${V_PRE[@]}" SHIM_ERR="$L34"
+if grep -qxF "[git-data-cutover] probe-stderr: $L34" "$TL/out"; then ok "B04b the rc=34 diagnostic line survives the verb's stderr filter whole, behind one probe-stderr prefix"
+else no "B04b the rc=34 line did not pass through the verb: $(tr '\n' '|' < "$TL/out" | cut -c1-300)"; fi
 
 run_verb b05 "$PRE_ANS" 0 "${V_PRE[@]/WIPE_LISTING=run/WIPE_LISTING=skip}"
 if [ "$VRC" = 0 ] && [ "$(paste -sd' ' "$TL/timeouts")" = "30 25 30 90" ] && grep -q 'WIPE_LISTING=skip bash -s' "$TL/cmd"; then ok "B05 pre with WIPE_LISTING=skip (wipe_check): 90 s bound, skip is what is sent"
@@ -1243,6 +1553,24 @@ if [ "$VRC" = 0 ] && grep -qxF "[git-data-cutover] WIPE_ASSERT post_detach ok by
 else no "B06 post_detach: rc=$VRC"; fi
 run_verb b07 "wipe_assert finish ok byid=gone mapper_read=ok store_root=ok" 0 "${V_POST[@]/post_detach/finish}"
 if [ "$VRC" = 0 ]; then ok "B07 finish: exit 0"; else no "B07 finish: rc=$VRC"; fi
+
+# A1 (2026-10-15) phase=clear through the cutover verb: its own fixed answer shape, a 240 s bound (the host's own budget), no pre-only input
+V_CLEAR=(WIPE_PHASE=clear WIPE_VOLUME_ID="$ID_T" WIPE_LUKS_VOLUME_ID="$ID_L" WIPE_SERVER_ID="$ID_S")
+run_verb b20 "wipe_assert clear ok snapshot=cleared" 0 "${V_CLEAR[@]}"
+if [ "$VRC" = 0 ] && grep -qxF "[git-data-cutover] WIPE_ASSERT clear ok snapshot=cleared" "$TL/out" && has_store ok && [ "$(paste -sd' ' "$TL/timeouts" | awk '{print $NF}')" = 240 ] && ! grep -q 'WIPE_ROW_DT\|WIPE_LISTING' "$TL/cmd" \
+   && grep -qxF "wipe_assert=wipe_assert clear ok snapshot=cleared" "$TL/gh_output"; then
+  ok "B20 clear: exit 0, 240 s, the answer is logged and written to GITHUB_OUTPUT verbatim, no pre-only input is sent"
+else no "B20 clear: rc=$VRC out=[$(tr '\n' '|' < "$TL/out" | cut -c1-200)]"; fi
+run_verb b21 "wipe_assert clear ok snapshot=absent" 0 "${V_CLEAR[@]}"
+if [ "$VRC" = 0 ] && grep -qxF "[git-data-cutover] WIPE_ASSERT clear ok snapshot=absent" "$TL/out"; then ok "B21 clear with no leftover: exit 0, snapshot=absent"; else no "B21 clear absent: rc=$VRC"; fi
+run_verb b22 "wipe_assert clear ok snapshot=wiped" 0 "${V_CLEAR[@]}"
+if [ "$VRC" != 0 ] && ! grep -q "WIPE_ASSERT clear" "$TL/out"; then ok "B22 an answer outside the two fixed clear words is never accepted"; else no "B22 clear accepted an off-shape answer: rc=$VRC"; fi
+run_verb b23 "wipe_assert pre ok layout_signal=ok" 0 "${V_CLEAR[@]}"
+if [ "$VRC" != 0 ] && ! grep -q "WIPE_ASSERT" "$TL/out"; then ok "B23 a pre-shaped answer cannot satisfy a clear call"; else no "B23 a pre answer satisfied a clear call: rc=$VRC"; fi
+run_verb b24 - 43 "${V_CLEAR[@]}"
+if [ "$VRC" = 5 ] && has_store wipe_snapshot_not_ours; then ok "B24 clear: script rc 43 -> exit 5, verdict=wipe_snapshot_not_ours"; else no "B24 clear rc 43: rc=$VRC"; fi
+run_verb b25 "wipe_assert clear ok snapshot=cleared" 0 "${V_CLEAR[@]}" WIPE_LISTING=run
+if [ "$VRC" != 0 ] && grep -q "arg_pre_only" "$TL/out"; then ok "B25 clear refuses a listing mode input (arg_pre_only): the pre-only inputs are not accepted"; else no "B25 clear accepted WIPE_LISTING: rc=$VRC"; fi
 
 # row dt as the ISO form the Better Stack row carries
 run_verb b08 "$PRE_ANS" 0 "${V_PRE[@]/WIPE_ROW_DT=$ROWDT/WIPE_ROW_DT=2026-10-11 12:51:03}"
@@ -1260,6 +1588,7 @@ declare -A WORD=(
   [33]=wipe_boot_layout_signal_absent [34]=wipe_boot_layout_signal_offlist [35]=wipe_boot_layout_signal_unparseable
   [36]=wipe_snapshot_teardown_failed [37]=wipe_plaintext_not_empty [38]=wipe_luks_identity_mismatch
   [40]=wipe_device_still_attached [41]=wipe_mapper_read_failed [42]=wipe_store_root_unreadable
+  [43]=wipe_snapshot_not_ours
 )
 for rc in "${!WORD[@]}"; do
   run_verb "r$rc" - "$rc" "${V_PRE[@]}"
@@ -1576,8 +1905,16 @@ DRVEOF
   lb_populate "$G_LOOP" "mkdir -p repositories && : > $CORPUS_TOP_FILE"
   lb_run G "$G_LOOP"
   lb_expect G 34 'reason=offlist'
+  # H: the production layout the host script itself creates (repositories, hooks holding a pre-receive, lost+found)
+  ARMS_C=$((ARMS_C + 1))
+  lb_image h; H_LOOP="$LOOP"
+  lb_populate "$H_LOOP" 'mkdir -p repositories hooks && : > hooks/pre-receive'
+  lb_run H "$H_LOOP"
+  lb_expect H 34 'reason=offlist'
+  if [ "$(tail -n 1 "$LB/H.err")" = 'wipe-assert: rc=34 reason=offlist top_d=3 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=1' ]; then ok "C H the whole rc=34 line names the hooks directory and one off-list entry on a real image"
+  else no "C H the rc=34 line differs: [$(tail -n 1 "$LB/H.err")]"; fi
   # floor
-  EXPECTED_ARMS_C=7
+  EXPECTED_ARMS_C=8
   if [ "$ARMS_C" -ne "$EXPECTED_ARMS_C" ]; then
     printf '[FATAL] anti-vacuity floor: %s loopback arms ran, expected exactly %s\n' "$ARMS_C" "$EXPECTED_ARMS_C" >&2; exit 1
   fi
@@ -1598,17 +1935,25 @@ fi
 # FLOOR — self-contained: bash builtins and this suite's own counters, reported by printf + exit and
 # never through ok()/no() (ADR-193). Each bound is a literal on the line directly above its `if`.
 # ══════════════════════════════════════════════════════════════════════════════════════════
-EXPECTED_INVARIANT_RUNS=92
+# 23 = the 19 reviewed rows + A125, A126 + the fifo and suffix hooks variants (measured, unprivileged, loopback skipped)
+EXPECTED_RC34_LINES=23
+if [ "$RC34_LINES_CHECKED" -lt "$EXPECTED_RC34_LINES" ]; then
+  printf '[FATAL] anti-vacuity floor: only %s rc=34 lines were checked for the strict shape, floor is %s\n' "$RC34_LINES_CHECKED" "$EXPECTED_RC34_LINES" >&2
+  exit 1
+fi
+# 129 = 125 + the same 4 new refusal runs (measured, unprivileged, loopback skipped)
+EXPECTED_INVARIANT_RUNS=129
 if [ "$INVARIANT_RUNS" -lt "$EXPECTED_INVARIANT_RUNS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s host-script runs were checked for the output invariants, floor is %s\n' "$INVARIANT_RUNS" "$EXPECTED_INVARIANT_RUNS" >&2
   exit 1
 fi
-MIN_ASSERTIONS=570
+# 824 = executed assertions of an unprivileged run with the loopback tier skipped (the way the local gate runs)
+MIN_ASSERTIONS=824
 if [ "$executed" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s — rows were deleted, skipped, or the suite exited early\n' "$executed" "$MIN_ASSERTIONS" >&2
   exit 1
 fi
-printf 'ok   - anti-vacuity floor: %s assertions over %s invariant-checked runs (floors %s / %s)\n' "$executed" "$INVARIANT_RUNS" "$MIN_ASSERTIONS" "$EXPECTED_INVARIANT_RUNS"
+printf 'ok   - anti-vacuity floor: %s assertions over %s invariant-checked runs (floors %s / %s), %s rc=34 lines checked (floor %s)\n' "$executed" "$INVARIANT_RUNS" "$MIN_ASSERTIONS" "$EXPECTED_INVARIANT_RUNS" "$RC34_LINES_CHECKED" "$EXPECTED_RC34_LINES"
 
 echo ""
 if [ "$LOOPBACK_RAN" = 1 ]; then _lb="loopback tier RAN"; else _lb="loopback tier did NOT run (SKIPPED: see SKIP(LOOPBACK_UNAVAILABLE) above)"; fi

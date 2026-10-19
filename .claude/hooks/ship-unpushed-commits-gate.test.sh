@@ -276,6 +276,23 @@ t7_chained_command_deny() {
   rm -rf "$tmp"
 }
 
+# --- T7b: rtk-prefixed merge → DENY (#10248) --------------------------------
+t7b_rtk_prefixed_merge_deny() {
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_synced_branch "$tmp" "feat-rtk")
+  assert_fixture_dir "$work"
+  echo "fix" > "$work/fix.txt"
+  git -C "$work" add fix.txt
+  git -C "$work" commit -q -m "the fix"
+
+  local payload out exit_code=0
+  payload=$(make_payload "$work" "rtk gh pr merge 128 --squash --auto")
+  out=$(printf '%s' "$payload" | INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>/dev/null) || exit_code=$?
+  exit_code=${exit_code:-0}
+  assert_deny "T7b rtk gh pr merge denies (#10248)" "$incidents" "$out" "$exit_code"
+  rm -rf "$tmp"
+}
+
 # --- T8: substring false-positive in echo string → PASS ------------------
 t8_substring_false_positive_pass() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
@@ -509,6 +526,7 @@ t4_detached_head_pass
 t5_no_upstream_pass
 t6_non_merge_command_pass
 t7_chained_command_deny
+t7b_rtk_prefixed_merge_deny
 t8_substring_false_positive_pass
 t9_fetch_failure_deny
 t10_settings_json_valid

@@ -33,6 +33,7 @@ import path from "node:path";
 import * as Sentry from "@sentry/nextjs";
 
 import { buildAgentEnv, type AgentCredential } from "./agent-env";
+import { agentSessionTmpDir } from "./agent-session-tmp";
 import { makeSandboxedSpawn, outerWrapEnabled } from "./agent-outer-wrap";
 import { resolveWorkspaceMode, type WorkspaceMode } from "./workspace-mode";
 import { assertTrustedPluginPath, getPluginPath } from "./plugin-path";
@@ -316,6 +317,8 @@ export function buildAgentQueryOptions(
     // Set only for the entitled+verified dispatch (see field doc); beats
     // the ambient allowlist copy inside buildAgentEnv.
     egressProxy: args.webEgress,
+    // #10445: per-tenant CLI temp base; the sandbox config denies its shared root.
+    claudeTmpDir: agentSessionTmpDir(args.workspaceId ?? path.basename(args.workspacePath)),
   });
   const buildAgentEnvHome = agentEnv.HOME ?? "/home/soleur";
 
