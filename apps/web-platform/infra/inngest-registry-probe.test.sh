@@ -536,6 +536,8 @@ test_rp_link_https_env_file() {
   case "$argv" in *"--cacert /mnt/data/inngest-link/inngest-ca.pem"*) echo "  PASS: --cacert pins the host CA file"; PASS=$((PASS + 1)) ;; *) echo "  FAIL: no --cacert on the https query (argv: $argv)"; FAIL=$((FAIL + 1)) ;; esac
   case "$argv" in *"--noproxy"*) echo "  PASS: --noproxy on the https query"; PASS=$((PASS + 1)) ;; *) echo "  FAIL: no --noproxy on the https query"; FAIL=$((FAIL + 1)) ;; esac
   case " $argv " in *" -k "*|*"--insecure"*|*"--capath"*) echo "  FAIL: the probe disables or widens verification (argv: $argv)"; FAIL=$((FAIL + 1)) ;; *) echo "  PASS: no -k/--insecure/--capath"; PASS=$((PASS + 1)) ;; esac
+  # curl honours --disable (skip ~/.curlrc) only as its FIRST argument: the https data-path curl must lead with it
+  case "$(head -n1 "$LINK_TMP/curl.argv")" in "--disable "*) echo "  PASS: --disable is curl's FIRST argument on the https query"; PASS=$((PASS + 1)) ;; *) echo "  FAIL: --disable is not the first curl argument (argv: $argv)"; FAIL=$((FAIL + 1)) ;; esac
 }
 test_rp_link_env_beats_inherited_url() {
   echo "TEST: registry-probe — the link env OVERRIDES an inherited INNGEST_REMOTE_GQL_URL (server.tf writes an explicit http one)"
@@ -551,6 +553,8 @@ test_rp_link_http_env_file() {
   local argv; argv="$(cat "$LINK_TMP/curl.argv")"
   case "$argv" in *"http://10.0.1.40:8288/v0/gql"*) echo "  PASS: http endpoint"; PASS=$((PASS + 1)) ;; *) echo "  FAIL: wrong endpoint (argv: $argv)"; FAIL=$((FAIL + 1)) ;; esac
   case "$argv" in *"--cacert"*) echo "  FAIL: --cacert on a plain http query"; FAIL=$((FAIL + 1)) ;; *) echo "  PASS: no --cacert on http"; PASS=$((PASS + 1)) ;; esac
+  # the http arm is byte-unchanged: no --disable is added to it
+  case "$argv" in *"--disable"*) echo "  FAIL: --disable leaked into the http arm"; FAIL=$((FAIL + 1)) ;; *) echo "  PASS: the http arm carries no --disable"; PASS=$((PASS + 1)) ;; esac
 }
 test_rp_link_absent_defaults_http() {
   echo "TEST: registry-probe — no link env: default http; an inherited INNGEST_REMOTE_GQL_URL still applies"
@@ -631,6 +635,55 @@ test_rp_no_verification_bypass_in_source() {
   else echo "  PASS: no -k/--insecure/--capath"; PASS=$((PASS + 1)); fi
 }
 
+# The webhook wire between three literals: hooks.json.tmpl (the hook), scripts/inngest-link-flip.sh (FLIP_HANDSHAKE_URL, the caller)
+# and this script (`--tls-handshake`). Each end used to be pinned only by its own literal. The template is rendered with a stub
+# secret (the only interpolation it carries) and parsed, so a renamed id, another argument, a POST-able method or a dropped
+# HMAC rule is caught here. FLIP_SRC / HOOKS_SRC are overridable so a mutation can edit a COPY.
+test_rp_handshake_hook_wire() {
+  echo "TEST: registry-probe — the inngest-tls-handshake hook (id, argument, method, HMAC) matches the flip caller and this script"
+  local hooks="${HOOKS_SRC:-$SCRIPT_DIR/hooks.json.tmpl}" flip="${FLIP_SRC:-$SCRIPT_DIR/../../../scripts/inngest-link-flip.sh}" out rc=0
+  out="$(python3 -I - "$hooks" "$flip" "$TARGET" <<'PY' 2>&1
+import json, re, sys
+hooks, flip, probe = sys.argv[1:4]
+tmpl = open(hooks).read()
+rest = re.sub(r'\$\{jsonencode\(webhook_deploy_secret\)\}', '"stub-secret"', tmpl)
+if '${' in rest or '%{' in rest:
+    print("template carries an interpolation other than webhook_deploy_secret"); sys.exit(1)
+doc = json.loads(rest)
+hs = [h for h in doc if h.get("id") == "inngest-tls-handshake"]
+if len(hs) != 1:
+    print("expected exactly one inngest-tls-handshake hook, found %d" % len(hs)); sys.exit(1)
+h = hs[0]
+m = re.search(r'^FLIP_HANDSHAKE_URL="([^"]+)"', open(flip).read(), re.M)
+if not m:
+    print("FLIP_HANDSHAKE_URL not found in the flip script"); sys.exit(1)
+seg = m.group(1).rsplit("/", 1)[1]
+if seg != h["id"]:
+    print("flip calls /hooks/%s but the hook id is %s" % (seg, h["id"])); sys.exit(1)
+if "/hooks/" not in m.group(1):
+    print("FLIP_HANDSHAKE_URL does not use the /hooks/ path: %s" % m.group(1)); sys.exit(1)
+if h.get("execute-command") != "/usr/local/bin/inngest-registry-probe.sh":
+    print("execute-command is %r" % h.get("execute-command")); sys.exit(1)
+if h.get("pass-arguments-to-command") != [{"source": "string", "name": "--tls-handshake"}]:
+    print("pass-arguments-to-command is %r (must be the fixed, non-request-controlled --tls-handshake)" % h.get("pass-arguments-to-command")); sys.exit(1)
+if "--tls-handshake)" not in open(probe).read():
+    print("the probe does not accept --tls-handshake"); sys.exit(1)
+if h.get("http-methods") != ["GET"]:
+    print("http-methods is %r" % h.get("http-methods")); sys.exit(1)
+if h.get("include-command-output-in-response") is not True or h.get("include-command-output-in-response-on-error") is not True:
+    print("the hook must return the output body on success AND error (flip_verify prints it)"); sys.exit(1)
+mt = h.get("trigger-rule", {}).get("match", {})
+if mt.get("type") != "payload-hmac-sha256" or mt.get("parameter") != {"source": "header", "name": "X-Signature-256"} or mt.get("secret") != "stub-secret":
+    print("trigger-rule is not the HMAC rule over X-Signature-256: %r" % mt); sys.exit(1)
+if h.get("trigger-rule-mismatch-http-response-code") != 403:
+    print("mismatch code is not 403"); sys.exit(1)
+print("ok")
+PY
+)" || rc=$?
+  if [[ "$rc" -eq 0 && "$out" == "ok" ]]; then echo "  PASS: hook id == flip URL segment; fixed --tls-handshake argument; GET only; HMAC on X-Signature-256"; PASS=$((PASS + 1))
+  else echo "  FAIL: handshake hook wire: $out"; FAIL=$((FAIL + 1)); fi
+}
+
 echo "=== inngest-registry-probe.sh test suite ==="
 test_rp_query_carries_triggers
 test_rp_functions_field_cron
@@ -661,6 +714,7 @@ test_rp_link_absent_defaults_http
 test_rp_link_invalid_env_is_parsed_not_sourced
 test_rp_tls_handshake_mode
 test_rp_no_verification_bypass_in_source
+test_rp_handshake_hook_wire
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

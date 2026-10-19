@@ -329,8 +329,8 @@ fi
 # #10136 (Inngest TLS, Guard 1 row 2): the TLS listener on the dedicated host. The container's NODE_EXTRA_CA_CERTS path
 # dials 10.0.1.40:8443, so the egress chain needs ITS OWN accept (the egress gateway's `dport 8443` accept is a different
 # daddr and must not satisfy this). Anchored on the 10.0.1.40 form; the legacy :8288 accept above stays (counted, not removed).
-assert_grep "dedicated inngest host :8443 accept (#10136)" \
-  'ip daddr 10\.0\.1\.40 tcp dport 8443 accept comment "soleur-egress: dedicated inngest host tls' "$LOADER"
+PIN_8443='ip daddr 10\.0\.1\.40 tcp dport 8443 accept comment "soleur-egress: dedicated inngest host tls'
+assert_grep "dedicated inngest host :8443 accept (#10136)" "$PIN_8443" "$LOADER"
 DEDICATED_TLS_LINE="$(grep -n 'ip daddr 10\.0\.1\.40 tcp dport 8443 accept' "$LOADER" | sed -n '1p' | cut -d: -f1)"
 if [[ -n "$DEDICATED_TLS_LINE" && -n "$DROP_RULE_LINE" && "$DEDICATED_TLS_LINE" -lt "$DROP_RULE_LINE" ]]; then
   PASS=$((PASS + 1)); echo "  PASS: dedicated inngest host :8443 accept precedes the default drop (line $DEDICATED_TLS_LINE < $DROP_RULE_LINE)"
@@ -342,8 +342,10 @@ fi
 assert_fixture_dir "$SUITE_SCRATCH"
 LOADER_NO8443="$SUITE_SCRATCH/loader-no-8443.sh"
 grep -v 'ip daddr 10\.0\.1\.40 tcp dport 8443 accept' "$LOADER" > "$LOADER_NO8443"
+# the SAME pattern variable the pin above used: green on the real loader, red on the mutated copy (a pattern run against the text it
+# was just filtered out of would test grep, not the pin)
 if ! cmp -s "$LOADER" "$LOADER_NO8443" && grep -qE 'ip daddr \$\{EGRESS_GW_IP\} tcp dport 8443 accept' "$LOADER_NO8443" \
-   && ! grep -qE 'ip daddr 10\.0\.1\.40 tcp dport 8443 accept comment "soleur-egress: dedicated inngest host tls' "$LOADER_NO8443"; then
+   && grep -qE -- "$PIN_8443" "$LOADER" && ! grep -qE -- "$PIN_8443" "$LOADER_NO8443"; then
   PASS=$((PASS + 1)); echo "  PASS: mutation: deleting the 10.0.1.40:8443 accept is visible to the pin (the gateway's 8443 accept does not mask it)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: mutation: the 10.0.1.40:8443 pin cannot see its own deletion (vacuous)"

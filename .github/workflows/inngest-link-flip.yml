@@ -8,15 +8,26 @@
 #
 # WHY THE FLAG IS NOT WRITTEN HERE. This workflow holds no Doppler token and no Terraform credential. It dispatches
 # the Tier-B `inngest_link_flag` job of apply-web-platform-infra.yml (environment infra-privileged, ADR-241 D8), which
-# writes the prd_terraform source key and applies doppler_secret.inngest_link_tls, and then redeploys the RUNNING web
-# image through the signed deploy webhook so ci-deploy.sh's resolver re-reads the flag.
+# applies doppler_secret.inngest_link_tls with the requested value in its terraform process environment (no Doppler
+# key is written), and then redeploys the RUNNING web image through the signed deploy webhook so ci-deploy.sh's resolver
+# re-reads the flag.
 #
 # WHAT THE 30-MINUTE LEASE BOUNDS. `flip` first applies `pending:<epoch>`; the deploy-time resolver honours it only until
 # epoch + 30 min, then resolves http plus an event. That bounds how long a stuck `pending` can make NEW deploys resolve
 # https. It does not touch a RUNNING container (its INNGEST_BASE_URL is fixed at `docker run`), so a failed or cancelled
 # `flip` run is rolled back by the `revert` step below (flag-absent apply, then a redeploy), which is BEST EFFORT and
 # fires only once the flip step has attempted its first flag write (steps.flip.outputs.started). A refusal by the
-# typo-guard or the idle guard writes nothing and reverts nothing; a failed `off` run is not reverted (re-run it).
+# typo-guard or the idle guard writes nothing and reverts nothing; a failed `off` run is not reverted (re-run it: `off` is
+# idempotent, an already-absent flag is a green apply and the redeploy still follows).
+#
+# TIMEOUTS come from ONE table, the BUDGET TABLE in scripts/inngest-link-flip.sh, and inngest-link-flip-workflow.test.sh
+# (A40-A42) pins them: the revert step is sized for an off apply plus a redeploy bounded by the pipeline's 4800 s ceiling,
+# the job for a flip that fails at its last stage plus that revert. A CANCELLED run is different: GitHub force-terminates a
+# cancelled() step 5 minutes after the cancel request whatever timeout-minutes says (docs.github.com "Workflow cancellation
+# reference"), so after a cancel run action=off, the real rollback.
+#
+# FLIP ONLY IN A CRON-QUIET WINDOW: a deploy waits in the cron drain (up to 4200 s) behind a claude cron in flight, and
+# /hooks/deploy-status exposes no live in-flight signal to refuse on.
 name: Inngest Link Flip
 
 on:
@@ -52,8 +63,9 @@ jobs:
       # The fan-out roster for the redeploy (track.sh `peers`). Pinned to var.web_hosts by
       # apps/web-platform/infra/web-hosts-fanout-parity.test.sh; an empty value would redeploy web-1 alone.
       WEB_HOST_PRIVATE_IPS: "10.0.1.10,10.0.1.11"
-    # Worst case: flag apply (<=10 min to appear + 25 min), redeploy (<=40 min), verify, flag apply again (<=35 min).
-    timeout-minutes: 150
+    # FLIP_JOB_BUDGET_S / 60 rounded up (BUDGET TABLE): guards, flag apply (<=10 min to appear + 25 min), redeploy
+    # (<=80 min, the pipeline's 4800 s ceiling), handshake, flag apply again, then the revert step's own budget.
+    timeout-minutes: 268
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -86,7 +98,9 @@ jobs:
       # appends started=true to $GITHUB_OUTPUT immediately before it). Applies the flag-absent baseline and redeploys.
       - name: Revert to http (best effort)
         if: (failure() || cancelled()) && inputs.action == 'flip' && steps.flip.outputs.started == 'true'
-        timeout-minutes: 45
+        # FLIP_REVERT_BUDGET_S / 60 (BUDGET TABLE): off apply (<=35 min) + redeploy (<=80 min). Not the bound on a cancel
+        # (GitHub ends a cancelled() step 5 minutes after the request): action=off is the rollback then.
+        timeout-minutes: 115
         env:
           GH_TOKEN: ${{ github.token }}
           WEBHOOK_DEPLOY_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}

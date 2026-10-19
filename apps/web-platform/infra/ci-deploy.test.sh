@@ -1073,7 +1073,7 @@ fi
 # explicitly EMPTY value means "the image has no BUILD_VERSION line". MOCK_IMAGE_INSPECT_FAIL=1
 # fails the inspect. MOCK_FRESHNESS_INSPECT_FILE records the inspected ref (the LAST argument), so
 # a row can assert the check read the verified digest and not the mutable tag.
-if [[ "${1:-}" == "inspect" && "$*" == *".Config.Env"* && "$*" != *inngest* ]]; then
+if [[ "${1:-}" == "inspect" && "$*" == *".Config.Env"* && "$*" != *inngest* && ! ( "${MOCK_IL_CANARY:-}" == "1" && "$*" == *soleur-web-platform-canary* ) ]]; then
   [[ -n "${MOCK_FRESHNESS_INSPECT_FILE:-}" ]] && printf '%s\n' "${!#}" >> "$MOCK_FRESHNESS_INSPECT_FILE"
   if [[ "${MOCK_IMAGE_INSPECT_FAIL:-}" == "1" ]]; then
     printf 'Error: No such object: %s\n' "${!#}" >&2
@@ -1149,7 +1149,24 @@ case "$mode" in
   apparmor-trace)
     if [[ "${1:-}" == "run" ]]; then
       echo "DOCKER_RUN_ARGS:$*"
+      [[ -n "${MOCK_IL_RUN_LOG:-}" ]] && printf '%s\n' "$*" >> "$MOCK_IL_RUN_LOG"
       echo "abc123"
+    fi
+    # #10136 (MOCK_IL_CANARY=1): answer the Inngest-link canary layer like docker would. `inspect` reports the -e pairs of the
+    # CANARY run exactly as the deploy passed them (so a clobbered INNGEST_BASE_URL shows up there); the two in-container node
+    # scripts print MOCK_IL_POS / MOCK_IL_NEG. Every other exec keeps the trace line.
+    if [[ "${MOCK_IL_CANARY:-}" == "1" && "${1:-}" == "inspect" && "$*" == *".Config.Env"* && "$*" == *soleur-web-platform-canary* ]]; then
+      grep -F -- '--name soleur-web-platform-canary ' "${MOCK_IL_RUN_LOG:?}" | head -1 \
+        | awk '{for (i = 1; i < NF; i++) if ($i == "-e") print $(i + 1)}'
+      exit 0
+    fi
+    if [[ "${MOCK_IL_CANARY:-}" == "1" && "${1:-}" == "exec" && "$*" == *"inngest_link_canary"* ]]; then
+      if [[ "$*" == *"env -u NODE_EXTRA_CA_CERTS"* ]]; then
+        printf '%s\n' "${MOCK_IL_NEG-inngest_link_canary_neg=verify_error}"
+      else
+        printf '%s\n' "${MOCK_IL_POS-inngest_link_canary health=ok events=ok send=ok registry=ok}"
+      fi
+      exit 0
     fi
     if [[ "${1:-}" == "exec" ]]; then
       echo "DOCKER_EXEC_ARGS:$*"
@@ -3170,6 +3187,152 @@ if [[ "$IL_RC" -ne 0 && "$(jq -r '.reason' "$IL_DIR/state2.json" 2>/dev/null)" =
   PASS=$((PASS + 1)); echo "  PASS: a snapshot bound to another Doppler project fails the deploy (reason=inngest_link_scope_mismatch), no docker run"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: scope guard wiring (rc=$IL_RC reason=$(jq -r '.reason' "$IL_DIR/state2.json" 2>/dev/null))"
+fi
+rm -rf "$IL_DIR"
+
+# --- the flag-ON path and the new trust-anchor ordering through the REAL deploy flow (resolver + canary layer 5 + both docker runs) ---
+# A throwaway CA:FALSE certificate with the real profile (synthesized here, never committed; cq-test-fixtures-synthesized-only).
+IL_DIR=$(mktemp -d)
+IL_CERT_OK=0
+if command -v openssl >/dev/null 2>&1 \
+   && openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout "$IL_DIR/k.pem" -out "$IL_DIR/good.pem" -days 30 -subj /CN=il-test \
+        -addext subjectAltName=IP:10.0.1.40 -addext basicConstraints=critical,CA:FALSE -addext extendedKeyUsage=serverAuth >/dev/null 2>&1 \
+   && printf 'keyUsage=keyCertSign\n' > "$IL_DIR/kcs.ext" \
+   && openssl req -new -key "$IL_DIR/k.pem" -out "$IL_DIR/kcs.csr" -subj /CN=il-kcs >/dev/null 2>&1 \
+   && openssl x509 -req -in "$IL_DIR/kcs.csr" -signkey "$IL_DIR/k.pem" -out "$IL_DIR/kcs.pem" -days 30 -extfile "$IL_DIR/kcs.ext" >/dev/null 2>&1; then
+  IL_CERT_OK=1
+fi
+IL_GOOD_B64="$(base64 -w0 < "$IL_DIR/good.pem" 2>/dev/null)"
+IL_KCS_B64="$(base64 -w0 < "$IL_DIR/kcs.pem" 2>/dev/null)"
+IL_GOOD_FP="$(openssl x509 -in "$IL_DIR/good.pem" -noout -fingerprint -sha256 2>/dev/null)"
+
+# il_deploy <label> <flag line or ''> <ca b64 or ''> [extra KEY=VALUE env for the deploy subshell...]
+# Sets IL_OUT, IL_RC, IL_RUNLOG (the docker run lines), IL_LOG (logger capture), IL_STATE (state json path).
+il_deploy() {
+  local label="$1" flag="$2" ca="$3"; shift 3
+  rm -rf "$INNGEST_LINK_DIR"
+  IL_STATE="$IL_DIR/$label.state"; IL_RUNLOG="$IL_DIR/$label.runs"; IL_LOG="$IL_DIR/$label.log"
+  : > "$IL_RUNLOG"; : > "$IL_LOG"
+  {
+    printf 'KEY=value\nDOPPLER_PROJECT=soleur\nDOPPLER_CONFIG=prd\nDOPPLER_ENVIRONMENT=prd\nGITHUB_APP_ID=4242\nGITHUB_APP_PRIVATE_KEY=mock-prd-app-key\n'
+    [[ -n "$flag" ]] && printf '%s\n' "$flag"
+    [[ -n "$ca" ]] && printf 'INNGEST_TLS_CA=%s\n' "$ca"
+  } > "$IL_DIR/$label.env"
+  IL_OUT=$( ( export MOCK_DOCKER_MODE="apparmor-trace" MOCK_IL_CANARY=1 MOCK_IL_RUN_LOG="$IL_RUNLOG" MOCK_GAK_PRD_BODY="$IL_DIR/$label.env" \
+      CI_DEPLOY_STATE="$IL_STATE" MOCK_LOGGER_CAPTURE_FILE="$IL_LOG" "$@"
+      run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1 ) ) && IL_RC=0 || IL_RC=$?
+}
+il_runs() { grep -c '^' "$IL_RUNLOG" || true; }
+il_url_clean() { # <expected url>: every docker run line has EXACTLY ONE INNGEST_BASE_URL, equal to <expected>, and no other scheme survived
+  local n; n="$(il_runs)"
+  [[ "$n" -ge 1 ]] || return 1
+  [[ "$(grep -c -- "-e INNGEST_BASE_URL=$1 " "$IL_RUNLOG")" -eq "$n" ]] || return 1
+  [[ "$(grep -o -- 'INNGEST_BASE_URL=' "$IL_RUNLOG" | wc -l | tr -d ' ')" -eq "$n" ]] || return 1
+}
+
+TOTAL=$((TOTAL + 1))
+if [[ "$IL_CERT_OK" -ne 1 ]]; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: IL flag-on rows need openssl to synthesize the throwaway certificates"
+else
+  il_deploy on "INNGEST_LINK_TLS=1" "$IL_GOOD_B64"
+  IL_OK=1
+  [[ "$IL_RC" -eq 0 ]] || IL_OK=0
+  [[ "$(il_runs)" -eq 2 ]] || IL_OK=0
+  il_url_clean "https://10.0.1.40:8443" || IL_OK=0
+  grep -qF 'http://10.0.1.40:8288' "$IL_RUNLOG" && IL_OK=0
+  grep -qF 'class=canary_ok' "$IL_LOG" || IL_OK=0
+  grep -qF 'class=resolved level=info state=https_flag scheme=https' "$IL_LOG" || IL_OK=0
+  [[ "$(cat "$INNGEST_LINK_DIR/inngest-link.env" 2>/dev/null)" == "INNGEST_LINK_URL=https://10.0.1.40:8443"$'\n'"INNGEST_LINK_SCHEME=https"$'\n'"INNGEST_LINK_CACERT=$INNGEST_LINK_DIR/inngest-ca.pem" ]] || IL_OK=0
+  [[ "$(openssl x509 -in "$INNGEST_LINK_DIR/inngest-ca.pem" -noout -fingerprint -sha256 2>/dev/null)" == "$IL_GOOD_FP" ]] || IL_OK=0
+  [[ "$(cat "$INNGEST_LINK_DIR/last-scheme" 2>/dev/null)" == https ]] || IL_OK=0
+  if [[ "$IL_OK" -eq 1 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: flag on + valid CA: canary AND prod run with INNGEST_BASE_URL=https://10.0.1.40:8443 exactly once (not clobbered), canary layer 5 passed, CA installed, last-scheme=https"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: flag-on happy path (rc=$IL_RC runs=$(il_runs))"; grep -o -- '-e INNGEST_BASE_URL=[^ ]*' "$IL_RUNLOG" | head -4; grep -E 'INNGEST_LINK|DEPLOY_ABORT' "$IL_LOG" | head -6
+  fi
+
+  # the canary result is HONOURED: a negative control that is accepted (a container trusting everything) ends the deploy before the swap
+  TOTAL=$((TOTAL + 1))
+  il_deploy neg "INNGEST_LINK_TLS=1" "$IL_GOOD_B64" MOCK_IL_NEG=inngest_link_canary_neg=accepted
+  IL_OK=1
+  [[ "$IL_RC" -ne 0 ]] || IL_OK=0
+  [[ "$(il_runs)" -eq 1 ]] || IL_OK=0   # the canary only: no production container was started
+  grep -qF 'class=canary_failed level=error check=negative_control cause=accepted' "$IL_LOG" || IL_OK=0
+  [[ "$(jq -r '.reason' "$IL_STATE" 2>/dev/null)" == canary_inngest_link_failed ]] || IL_OK=0
+  if [[ "$IL_OK" -eq 1 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: flag on + negative control accepted: deploy fails (reason=canary_inngest_link_failed), only the canary was started, event carries check=negative_control cause=accepted"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: canary result not honoured (rc=$IL_RC runs=$(il_runs) reason=$(jq -r '.reason' "$IL_STATE" 2>/dev/null))"
+  fi
+
+  TOTAL=$((TOTAL + 1))
+  il_deploy pos "INNGEST_LINK_TLS=1" "$IL_GOOD_B64" "MOCK_IL_POS=inngest_link_canary health=fail:ECONNREFUSED events=ok send=ok registry=ok"
+  IL_OK=1
+  [[ "$IL_RC" -ne 0 && "$(il_runs)" -eq 1 ]] || IL_OK=0
+  grep -qF 'class=canary_failed level=error check=health cause=ECONNREFUSED' "$IL_LOG" || IL_OK=0
+  if [[ "$IL_OK" -eq 1 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: flag on + a failing in-container check: deploy fails before the swap, the event names check=health cause=ECONNREFUSED"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: failing positive check not honoured (rc=$IL_RC runs=$(il_runs))"
+  fi
+
+  # flag ABSENT: the canary layer is a no-op even when the container mock would fail every check, and the value stays http, once per run
+  TOTAL=$((TOTAL + 1))
+  il_deploy off "" "$IL_GOOD_B64" MOCK_IL_NEG=inngest_link_canary_neg=accepted "MOCK_IL_POS=garbage"
+  IL_OK=1
+  [[ "$IL_RC" -eq 0 && "$(il_runs)" -eq 2 ]] || IL_OK=0
+  il_url_clean "http://10.0.1.40:8288" || IL_OK=0
+  grep -qE 'class=canary_(ok|failed)' "$IL_LOG" && IL_OK=0
+  # security F1: the Doppler CA is neither read from the snapshot nor installed with the flag absent
+  [[ -f "$INNGEST_LINK_DIR/inngest-ca.pem" && ! -s "$INNGEST_LINK_DIR/inngest-ca.pem" ]] || IL_OK=0
+  if [[ "$IL_OK" -eq 1 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: flag absent: canary layer 5 does not run, both runs keep INNGEST_BASE_URL=http://10.0.1.40:8288 once, the snapshot CA is NOT installed (empty placeholder)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: flag-absent wiring with a hostile container mock (rc=$IL_RC runs=$(il_runs))"; grep -o -- '-e INNGEST_BASE_URL=[^ ]*' "$IL_RUNLOG" | head -4
+  fi
+
+  # a hostile CA in the snapshot (keyCertSign, no basicConstraints) cannot fail - or reach - a flag-absent deploy
+  TOTAL=$((TOTAL + 1))
+  il_deploy hostile "" "$IL_KCS_B64"
+  if [[ "$IL_RC" -eq 0 && "$(il_runs)" -eq 2 && ! -s "$INNGEST_LINK_DIR/inngest-ca.pem" ]] && ! grep -qF 'class=ca_invalid' "$IL_LOG"; then
+    PASS=$((PASS + 1)); echo "  PASS: flag absent + hostile snapshot CA: the deploy succeeds and nothing is installed or even validated"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: hostile CA touched a flag-absent deploy (rc=$IL_RC runs=$(il_runs))"
+  fi
+
+  # flag on + the same hostile CA: refused by the validator, nothing started
+  TOTAL=$((TOTAL + 1))
+  il_deploy hostile-on "INNGEST_LINK_TLS=1" "$IL_KCS_B64"
+  if [[ "$IL_RC" -ne 0 && "$(il_runs)" -eq 0 && "$(jq -r '.reason' "$IL_STATE" 2>/dev/null)" == inngest_link_ca_invalid ]] && grep -qF 'class=ca_invalid level=error' "$IL_LOG" && grep -qF 'why=ca' "$IL_LOG"; then
+    PASS=$((PASS + 1)); echo "  PASS: flag on + keyCertSign CA: refused (reason=inngest_link_ca_invalid why=ca), no container started"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: hostile CA with the flag on (rc=$IL_RC runs=$(il_runs) reason=$(jq -r '.reason' "$IL_STATE" 2>/dev/null))"
+  fi
+
+  # userimpact F1: a snapshot WITHOUT the Doppler metadata lines must not fail every deploy while the flag is absent
+  TOTAL=$((TOTAL + 1))
+  printf 'KEY=value\nGITHUB_APP_ID=4242\nGITHUB_APP_PRIVATE_KEY=mock-prd-app-key\n' > "$IL_DIR/nometa.env"
+  rm -rf "$INNGEST_LINK_DIR"; : > "$IL_DIR/nometa.runs"; : > "$IL_DIR/nometa.log"
+  IL_OUT=$( ( export MOCK_DOCKER_MODE="apparmor-trace" MOCK_IL_RUN_LOG="$IL_DIR/nometa.runs" MOCK_GAK_PRD_BODY="$IL_DIR/nometa.env" CI_DEPLOY_STATE="$IL_DIR/nometa.state" MOCK_LOGGER_CAPTURE_FILE="$IL_DIR/nometa.log"
+      run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1 ) ) && IL_RC=0 || IL_RC=$?
+  if [[ "$IL_RC" -eq 0 && "$(printf '%s\n' "$IL_OUT" | grep -c '^DOCKER_RUN_ARGS:' || true)" -eq 2 ]] && grep -qF 'class=scope_unverified level=warning' "$IL_DIR/nometa.log"; then
+    PASS=$((PASS + 1)); echo "  PASS: snapshot without DOPPLER_PROJECT/CONFIG lines + flag absent: the deploy proceeds on http with a scope_unverified warning"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: a metadata-less snapshot broke the flag-absent deploy (rc=$IL_RC)"
+  fi
+
+  # security F4: https -> http is signalled through the real flow (first run and http->http are covered by the unit suite)
+  TOTAL=$((TOTAL + 1))
+  il_deploy down "" ""
+  : > "$IL_DIR/down.log"; mkdir -p "$INNGEST_LINK_DIR"; printf 'https\n' > "$INNGEST_LINK_DIR/last-scheme"
+  IL_STATE="$IL_DIR/down.state"; IL_RUNLOG="$IL_DIR/down.runs"; IL_LOG="$IL_DIR/down.log"; : > "$IL_RUNLOG"
+  IL_OUT=$( ( export MOCK_DOCKER_MODE="apparmor-trace" MOCK_IL_RUN_LOG="$IL_RUNLOG" MOCK_GAK_PRD_BODY="$IL_DIR/down.env" CI_DEPLOY_STATE="$IL_STATE" MOCK_LOGGER_CAPTURE_FILE="$IL_LOG"
+      run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1 ) ) && IL_RC=0 || IL_RC=$?
+  if [[ "$IL_RC" -eq 0 ]] && grep -qF 'class=https_to_http level=warning' "$IL_LOG" && [[ "$(cat "$INNGEST_LINK_DIR/last-scheme" 2>/dev/null)" == http ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: a host that last resolved https and now resolves http emits https_to_http (warning) without failing the deploy"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: https->http not signalled through the deploy flow (rc=$IL_RC)"
+  fi
 fi
 rm -rf "$IL_DIR"
 
@@ -11827,7 +11990,7 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # D10k7 (warning + silent failure is no masquerading denial).
 # #9294 PR-1: raised 618 -> 622 (619 measured on main, which carried one slack row, plus 3 new rows) with T-9294-1..3 (fan-out
 # under an `or` trigger-rule: first-HMAC-secret signing over four shapes, six fail-closed shapes, and the source census).
-CI_DEPLOY_ASSERT_FLOOR=622
+CI_DEPLOY_ASSERT_FLOOR=635
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"

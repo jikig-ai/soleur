@@ -837,8 +837,11 @@ STUB
   local argv; argv="$(cat "$tmp/curl.argv")"
   case "$argv" in *"https://10.0.1.40:8443/v0/gql"*"--cacert"*|*"--cacert /mnt/data/inngest-link/inngest-ca.pem"*"https://10.0.1.40:8443/v0/gql"*) PASS=$((PASS+1)); echo "  PASS: https + --cacert, the inherited http URL did not win" ;; *) FAIL=$((FAIL+1)); echo "  FAIL: https env not honoured (argv: $argv)" ;; esac
   case " $argv " in *" -k "*|*"--insecure"*|*"--capath"*) FAIL=$((FAIL+1)); echo "  FAIL: verification weakened" ;; *) PASS=$((PASS+1)); echo "  PASS: no -k/--insecure/--capath" ;; esac
+  # curl honours --disable (skip ~/.curlrc) only as its FIRST argument: the https data-path curl must lead with it
+  case "$(head -n1 "$tmp/curl.argv")" in "--disable "*) PASS=$((PASS+1)); echo "  PASS: --disable is curl's FIRST argument on the https query" ;; *) FAIL=$((FAIL+1)); echo "  FAIL: --disable is not the first curl argument (argv: $argv)" ;; esac
   run_df "$tmp/http.env"
   argv="$(cat "$tmp/curl.argv")"
+  case "$argv" in *"--disable"*) FAIL=$((FAIL+1)); echo "  FAIL: --disable leaked into the http arm" ;; *) PASS=$((PASS+1)); echo "  PASS: the http arm carries no --disable" ;; esac
   case "$argv" in *"http://10.0.1.40:8288/v0/gql"*) PASS=$((PASS+1)); echo "  PASS: http env -> http endpoint" ;; *) FAIL=$((FAIL+1)); echo "  FAIL: http env not honoured (argv: $argv)" ;; esac
   case "$argv" in *"--cacert"*) FAIL=$((FAIL+1)); echo "  FAIL: --cacert on plain http" ;; *) PASS=$((PASS+1)); echo "  PASS: no --cacert on http" ;; esac
   run_df "$tmp/none.env"

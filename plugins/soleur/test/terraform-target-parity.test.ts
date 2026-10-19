@@ -8467,27 +8467,31 @@ describe("#10136 inngest link TLS: key material, merge targets, flag actuator", 
     expect(sites).toEqual(["apply-web-platform-infra.yml|inngest_link_flag"]);
   });
 
-  test("the flag job: Tier-B environment, dispatch-gated on its own option, writes the source key BEFORE it plans, applies only the flag", () => {
+  test("the flag job: Tier-B environment, dispatch-gated on its own option, passes the value in the plan's own environment (no Doppler key write), applies only the saved flag plan", () => {
     expect(flagJob).not.toBe("");
     expect(flagJob).toMatch(/^\s+environment:\s*infra-privileged\s*$/m);
     expect(flagJob).toContain("if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'inngest-link-flag'");
     expect(Number(/timeout-minutes:\s*(\d+)/.exec(flagJob)?.[1])).toBeLessThanOrEqual(15);
     expect(flagJob).toContain("uses: ./.github/actions/infra-credentials");
     const code = stripShellLineComments(flagJob);
-    const iSet = code.indexOf("doppler secrets set INNGEST_LINK_TLS");
-    const iDel = code.indexOf("doppler secrets delete INNGEST_LINK_TLS");
+    // prd_terraform INHERITS prd (where the Terraform-managed secret lives), so a key written/deleted there cannot
+    // empty the variable: the job writes NO Doppler key and holds no write-scoped token. The requested value rides the
+    // terraform process environment, set by `env` AFTER `doppler run` injected its own variables.
+    expect(code).not.toMatch(/doppler secrets (set|delete|upload)/);
+    expect(code).not.toContain("DOPPLER_TOKEN_WRITE");
     const iPlan = code.indexOf("terraform plan");
     const iApply = code.indexOf("terraform apply");
-    expect(iSet).toBeGreaterThan(-1);
-    expect(iDel).toBeGreaterThan(-1);
-    expect(Math.max(iSet, iDel)).toBeLessThan(iPlan);
+    expect(iPlan).toBeGreaterThan(-1);
     expect(iPlan).toBeLessThan(iApply);
+    expect(code).toMatch(/--name-transformer tf-var -- \\\n\s+env "TF_VAR_inngest_link_tls=\$\{TF_LINK\}" \\\n\s+terraform plan/);
+    // The apply consumes ONLY the saved, gated plan: no -target/-replace/-var, ends in tfplan.
+    expect(/^\s*terraform apply (.*)$/m.exec(code)![1]).toBe("-no-color -input=false -auto-approve tfplan");
     expect([...extractAllTargets(flagJob)]).toEqual([TLS_FLAG]);
     // Every `doppler run` in the job keeps the Tier-B precedence (ADR-241 D6).
     const runs = code.split("\n").filter((l) => /doppler run\b/.test(l));
     expect(runs.length).toBe(2);
     expect(runs.filter((l) => !l.includes("--preserve-env"))).toEqual([]);
-    expect(code).toContain("secrets.DOPPLER_TOKEN_WRITE");
+    expect(flagJob).toMatch(/uses: actions\/checkout@[0-9a-f]{40}[^\n]*\n\s+with:\n\s+persist-credentials: false/);
     // The option and the input exist; the new job is stripped from the per-merge view.
     const opts = /apply_target:[\s\S]*?options:([\s\S]*?)\n\nconcurrency:/.exec(wfText)![1];
     expect(opts).toMatch(/^\s*-\s+inngest-link-flag\s*$/m);
@@ -8509,7 +8513,12 @@ describe("#10136 inngest link TLS: key material, merge targets, flag actuator", 
     expect(run("1", [[F, ["create"]]])).toBe(0);
     expect(run("pending:1700000000", [[F, ["update"]]])).toBe(0);
     expect(run("off", [[F, ["delete"]]])).toBe(0);
-    expect(run("1", [[F, ["no-op"]]])).toBe(0); // already applied: nothing to do is not an error
+    expect(run("1", [[F, ["no-op"]]])).not.toBe(0); // a value that planned no change did not land: the job fails
+    expect(run("pending:1700000000", [])).not.toBe(0); // a zero-change plan for a value fails
+    expect(run("1", [])).not.toBe(0);
+    expect(run("off", [])).toBe(0); // already absent: idempotent, the caller still redeploys
+    expect(run("off", [[F, ["no-op"]]])).toBe(0);
+    expect(run("off", [[F, ["delete"]], ["doppler_secret.inngest_tls_ca", ["delete"]]])).not.toBe(0);
     expect(run("off", [[F, ["create"]]])).not.toBe(0); // `off` must never create
     expect(run("1", [[F, ["delete"]]])).not.toBe(0); // a value must never delete
     expect(run("1", [[F, ["create"]], ["hcloud_server.inngest", ["update"]]])).not.toBe(0);

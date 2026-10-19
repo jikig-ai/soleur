@@ -15,7 +15,9 @@
 #      once on an `ok_peer_fanout_degraded` frame); `started=true` is written only after the guards and before the first
 #      flag write; `off` takes no idle guard; revert always exits 0; the secret never reaches the output.
 #   C. MUTATIONS on copies of the script: each guard is deleted and the scenario that depends on it must turn from
-#      "stops" to "promotes" (a guard no scenario can see is not a guard).
+#      "stops" to "promotes" (a guard no scenario can see is not a guard). The Tier-B job gets the same treatment: its plan
+#      step is EXECUTED against stub doppler/terraform (the requested value must reach terraform through the process
+#      environment even when Doppler injects a different inherited one), and mutated copies of that step must turn red.
 # Fixtures are synthesized: the "secrets" below are throwaway alphanumerics that exist only in this process.
 
 set -uo pipefail
@@ -54,7 +56,7 @@ PY
 [[ "$(yq 'sorted(on.keys())')" == "['workflow_dispatch']" ]] && ok "A1 dispatch-only: no push, pull_request or schedule trigger" || bad "A1 triggers: $(yq 'sorted(on.keys())')"
 [[ "$(yq 'sorted(d["permissions"].items())')" == "[('actions', 'write'), ('contents', 'read')]" ]] && ok "A2 permissions are exactly contents:read + actions:write" || bad "A2 permissions: $(yq 'd["permissions"]')"
 [[ "$(yq 'd["concurrency"]["group"]+"|"+str(d["concurrency"]["cancel-in-progress"])')" == "inngest-link-flip|False" ]] && ok "A3 concurrency group inngest-link-flip, never cancel-in-progress" || bad "A3 concurrency"
-[[ "$(yq 'job["timeout-minutes"] <= 180')" == True ]] && ok "A4 the job has a bounded timeout-minutes" || bad "A4 timeout"
+[[ "$(yq 'job["timeout-minutes"] <= 360')" == True ]] && ok "A4 the job has a bounded timeout-minutes (below GitHub's 360 ceiling; A32 pins it to the script's budget table)" || bad "A4 timeout"
 WANT_A5="(failure() || cancelled()) && inputs.action == 'flip' && steps.flip.outputs.started == 'true'"
 [[ "$(yq 'next(s.get("if") for s in steps if "Revert" in s.get("name",""))')" == "$WANT_A5" ]] && ok "A5 the revert step runs on exactly (failure() || cancelled()) on a flip whose first flag write was attempted" || bad "A5 revert if: $(yq '[s.get("if") for s in steps]')"
 [[ "$(yq 'sum(1 for s in steps if "Revert" in s.get("name",""))')" == 1 ]] && ok "A6 exactly one revert step (a later same-named step cannot shadow it)" || bad "A6 revert count"
@@ -66,7 +68,21 @@ WANT_A10="['bash scripts/inngest-link-flip.sh \"\$ACTION\"']"
 [[ "$(yq '[s["run"].strip() for s in steps if "Revert" in s.get("name","")]')" == "['bash scripts/inngest-link-flip.sh revert']" ]] && ok "A11 the revert step calls the script's revert subcommand" || bad "A11 revert step"
 check "A12 no terraform, doppler or ssh command in the workflow text" bash -c "! grep -Eq '(^|[^-a-z_])(terraform|doppler|ssh) ' < <(grep -v '^ *#' '$WF')"
 [[ "$(yq 'on["workflow_dispatch"]["inputs"]["action"]["options"]')" == "['flip', 'off']" ]] && ok "A13 the action input is exactly {flip, off} (off quoted: YAML 1.1 reads a bare off as false)" || bad "A13 options"
-check "A14 the flip needs the FLIP-INNGEST-LINK typo-guard before any call" grep -q 'FLIP-INNGEST-LINK' "$WF"
+# A14 DRIVES the typo-guard step's shell (a grep for the token is satisfied by the input description and the header
+# comment, so the guard could be deleted with the row green).
+python3 - "$WF" "$TMP/typo-guard.sh" <<'PY'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+run = next(s["run"] for s in d["jobs"]["flip"]["steps"] if s.get("name") == "Typo-guard")
+open(sys.argv[2], "w").write(run)
+PY
+guard_rc() { ACTION="$1" CONFIRM="$2" bash "$TMP/typo-guard.sh" >/dev/null 2>&1; echo $?; }
+[[ -s "$TMP/typo-guard.sh" && "$(guard_rc flip FLIP-INNGEST-LINK)" == 0 && "$(guard_rc flip '')" != 0 && "$(guard_rc flip flip-inngest-link)" != 0 \
+   && "$(guard_rc off '')" == 0 && "$(guard_rc bogus '')" != 0 ]] \
+  && ok "A14 the typo-guard step, executed: flip needs exactly FLIP-INNGEST-LINK, off needs nothing, anything else is refused" || bad "A14 typo-guard behaviour"
+sed 's/\[\[ "\$CONFIRM" == "FLIP-INNGEST-LINK" \]\] ||/true ||/' "$TMP/typo-guard.sh" > "$TMP/typo-guard-mut.sh"
+if cmp -s "$TMP/typo-guard.sh" "$TMP/typo-guard-mut.sh"; then bad "A14m the typo-guard mutation matched nothing"
+else [[ "$(ACTION=flip CONFIRM= bash "$TMP/typo-guard-mut.sh" >/dev/null 2>&1; echo $?)" == 0 ]] && ok "A14m with the CONFIRM comparison removed the unconfirmed flip is accepted (so A14 can see the guard)" || bad "A14m"; fi
 [[ "$(yq '[s.get("id") for s in steps if "Run the flip" in s.get("name","")]')" == "['flip']" ]] && ok "A22 the flip step has id: flip (the revert step's gate reads steps.flip.outputs.started)" || bad "A22 flip step id"
 [[ "$(yq 'job.get("env", {}).get("WEB_HOST_PRIVATE_IPS")')" == "10.0.1.10,10.0.1.11" ]] && ok "A23 the job pins the fan-out roster WEB_HOST_PRIVATE_IPS (web-hosts-fanout-parity.test.sh compares it with var.web_hosts)" || bad "A23 roster: $(yq 'job.get("env")')"
 # A24 evaluates the revert step's `if:` for the cases that matter, so the string cannot be right and the gate wrong.
@@ -100,40 +116,19 @@ check "A17 the script's lease constant matches the resolver's 30 minutes" grep -
 check "A18 no eval, no insecure/-k curl, no credential in an argument list" bash -c "! grep -Eq '\\beval\\b|--insecure| -k |-H .?(Authorization|X-Signature)' < <(grep -v '^ *#' '$BODY')"
 check "A19 every network call is bounded: both webhook curls carry --max-time, gh run watch has a timeout, track.sh gets REDEPLOY_TIMEOUT_S" bash -c "[ \"\$(grep -v '^ *#' '$BODY' | grep -c -- '--max-time')\" -ge 2 ] && grep -q 'timeout \"\$FLIP_WATCH_TIMEOUT_S\" gh run watch' '$BODY' && grep -q 'REDEPLOY_TIMEOUT_S=\"\$FLIP_REDEPLOY_TIMEOUT_S\"' '$BODY'"
 check "A25 the redeploy is delegated to track.sh; no private deploy/poll loop and no peer literal remains in the script" bash -c "grep -q 'dispatch-web-redeploy/track.sh' '$BODY' && ! grep -Eq 'FLIP_PEERS|\bflip_redeploy\b|hooks/deploy\"|FLIP_POLL_MAX' < <(grep -v '^ *#' '$BODY')"
+# A40-A42: the budget table. One table in the script; the workflow's timeouts are derived from it and the redeploy budget
+# equals the pipeline's own ceiling (ci-deploy-wrapper.sh hard-kills ci-deploy.sh at 4800 s).
+BUD="$(env -i PATH="$PATH" bash -c 'source "$1"; echo "$FLIP_REDEPLOY_TIMEOUT_S $FLIP_IN_FLIGHT_CEILING_S $FLIP_REVERT_BUDGET_S $FLIP_JOB_BUDGET_S $FLIP_LEASE_MARGIN_S $FLIP_LEASE_S"' _ "$BODY")"
+read -r BUD_REDEPLOY BUD_CEILING BUD_REVERT BUD_JOB BUD_MARGIN BUD_LEASE <<<"$BUD"
+REVERT_MIN="$(yq 'next(s["timeout-minutes"] for s in steps if "Revert" in s.get("name",""))')"
+JOB_MIN="$(yq 'job["timeout-minutes"]')"
+[[ "$BUD_REDEPLOY" == 4800 && "$BUD_CEILING" == 4800 ]] && grep -Eq 'timeout --signal=TERM --kill-after=[0-9]+s 4800s ' "$REPO_ROOT/apps/web-platform/infra/ci-deploy-wrapper.sh" \
+  && ok "A40 the redeploy budget and the in-flight ceiling both equal the pipeline's 4800 s wall clock (ci-deploy-wrapper.sh)" || bad "A40 redeploy=$BUD_REDEPLOY ceiling=$BUD_CEILING"
+[[ "$REVERT_MIN" =~ ^[0-9]+$ && "$REVERT_MIN" == $(( (BUD_REVERT + 59) / 60 )) ]] && ok "A41 the revert step's timeout-minutes ($REVERT_MIN) is the budget table's FLIP_REVERT_BUDGET_S (${BUD_REVERT} s) rounded up: an off apply plus a redeploy bounded by the 4800 s ceiling" || bad "A41 revert minutes=$REVERT_MIN budget=$BUD_REVERT"
+[[ "$JOB_MIN" =~ ^[0-9]+$ && "$JOB_MIN" == $(( (BUD_JOB + 59) / 60 )) && "$JOB_MIN" -le 360 ]] && ok "A42 the job's timeout-minutes ($JOB_MIN) is FLIP_JOB_BUDGET_S (${BUD_JOB} s) rounded up (a flip failing at its last stage plus the revert) and under GitHub's 360" || bad "A42 job minutes=$JOB_MIN budget=$BUD_JOB"
+[[ "$BUD_MARGIN" -ge 600 && "$BUD_MARGIN" -lt "$BUD_LEASE" ]] && ok "A43 the web-2 lease margin is at least 600 s and below the lease" || bad "A43 margin=$BUD_MARGIN lease=$BUD_LEASE"
 check "A20 the script parses clean (bash -n)" bash -n "$BODY"
 if command -v shellcheck >/dev/null 2>&1; then check "A21 shellcheck is clean" shellcheck "$BODY"; else ok "A21 shellcheck not installed; skipped"; fi
-
-# A26-A31: the Tier-B job's blast-radius gate, run as jq against synthesized plan JSON. `off` must plan EXACTLY ONE delete of
-# the flag: a zero-change plan (the source-key delete failed silently and the flag is still live) must FAIL, or the flip
-# script would report "flag removed" over a live flag.
-GATE_JQ="$(python3 - "$APPLY_WF" <<'PY'
-import sys, yaml
-d = yaml.safe_load(open(sys.argv[1]))
-run = next(s["run"] for s in d["jobs"]["inngest_link_flag"]["steps"] if "blast-radius" in s.get("run", ""))
-a = run.index("jq -e --arg v \"$LINK_VALUE\" '") + len("jq -e --arg v \"$LINK_VALUE\" '")
-print(run[a:run.index("' >/dev/null", a)])
-PY
-)"
-plan() { # <action-json>... -> a plan whose resource_changes carry those (address:action) pairs
-  python3 - "$@" <<'PY'
-import json, sys
-rc = []
-for a in sys.argv[1:]:
-    addr, act = a.rsplit("=", 1)
-    rc.append({"address": addr, "change": {"actions": act.split(",")}})
-print(json.dumps({"resource_changes": rc}))
-PY
-}
-gate() { plan "${@:2}" | jq -e --arg v "$1" "$GATE_JQ" >/dev/null 2>&1; echo $?; }
-FLAG='doppler_secret.inngest_link_tls[0]'
-[[ -n "$GATE_JQ" ]] || bad "A26 could not extract the gate's jq program from the Tier-B job"
-[[ "$(gate off "$FLAG=delete")" == 0 ]] && ok "A26 gate: off with exactly one delete of the flag passes" || bad "A26"
-[[ "$(gate off)" == 1 ]] && ok "A27 gate: off with a ZERO-change plan FAILS (the silent-delete-failure case)" || bad "A27"
-[[ "$(gate off "$FLAG=no-op")" == 1 ]] && ok "A27b gate: off with a no-op flag resource FAILS" || bad "A27b"
-[[ "$(gate off "$FLAG=delete" "doppler_secret.other[0]=delete")" == 1 ]] && ok "A28 gate: off that also deletes another address FAILS" || bad "A28"
-[[ "$(gate off "$FLAG=create")" == 1 ]] && ok "A28b gate: off that plans a create FAILS" || bad "A28b"
-[[ "$(gate 1 "$FLAG=update")" == 0 && "$(gate pending:1000000000 "$FLAG=create")" == 0 ]] && ok "A29 gate: 1 and pending:<epoch> pass on update / create of the flag" || bad "A29"
-[[ "$(gate 1 "$FLAG=delete")" == 1 && "$(gate 1 "$FLAG=update" "doppler_secret.other[0]=update")" == 1 ]] && ok "A30 gate: a non-off value fails on a delete or on any other changed address" || bad "A30"
 
 printf '\n=== B. behaviour against stubs ===\n'
 assert_fixture_dir() {
@@ -169,10 +164,15 @@ case "$1 $2" in
   "run list")
     case "$*" in
       *"-q length"*) cat "$STUB/state/busy" 2>/dev/null || echo 0 ;;
-      *) echo "4242 $(date -u -d "@$(cat "$STUB/state/now")" +%Y-%m-%dT%H:%M:%SZ)" ;;
+      *)
+        # An EARLIER flip's green run (older than the dispatch) and/or a recent run whose flag job was skipped come first.
+        [[ -f "$STUB/state/stale_old" ]] && echo "4141 $(date -u -d "@$(( $(cat "$STUB/state/now") - 3600 ))" +%Y-%m-%dT%H:%M:%SZ)"
+        [[ -f "$STUB/state/first_recent" ]] && echo "4143 $(date -u -d "@$(cat "$STUB/state/now")" +%Y-%m-%dT%H:%M:%SZ)"
+        echo "4242 $(date -u -d "@$(cat "$STUB/state/now")" +%Y-%m-%dT%H:%M:%SZ)" ;;
     esac ;;
-  "run view") echo success ;;
+  "run view") if [[ "$3" == 4143 ]]; then cat "$STUB/state/first_recent"; else echo success; fi ;;
   "run watch")
+    echo "$3" >> "$STUB/watched.log"
     n=$(( $(cat "$STUB/state/watchn" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$STUB/state/watchn"
     rc="$(sed -n "${n}p" "$STUB/state/watch_rcs" 2>/dev/null)"; exit "${rc:-0}" ;;
 esac
@@ -203,7 +203,9 @@ case "$url" in
     else
       body="${IDLE_FRAME:-{\"component\":\"web-platform\",\"exit_code\":0,\"reason\":\"ok\",\"tag\":\"v1.2.2\",\"start_ts\":$((now - 90000))\}}"
     fi ;;
-  */hooks/inngest-tls-handshake) code="${HANDSHAKE_CODE:-200}"; body='{"verified":1}'; echo handshake >> "$STUB/order.log" ;;
+  */hooks/inngest-tls-handshake) code="${HANDSHAKE_CODE:-200}"; echo handshake >> "$STUB/order.log"
+    # The REAL body of inngest-registry-probe.sh tls_handshake (one line of fixed tokens and numeric curl exit codes).
+    body="${HANDSHAKE_BODY-inngest-tls-handshake verified=200 verified_rc=0 unverified=fail unverified_rc=60 result=pass}" ;;
 esac
 if [[ -n "$out" ]]; then printf '%s' "$body" > "$out"; else printf '%s' "$body"; fi
 [[ -n "$wfmt" ]] && printf '%s' "$code"
@@ -228,7 +230,7 @@ run_script() { # dir script mode [env assignments...] -> rc in $RC, output in $O
   OUT="$(env -i PATH="$d/bin:/usr/local/bin:/usr/bin:/bin" HOME="$d" TMPDIR="$d" RUNNER_TEMP="$d" STUB="$d" \
     GITHUB_WORKSPACE="$REPO_ROOT" GH_TOKEN=x GITHUB_RUN_ID=77 \
     WEBHOOK_DEPLOY_SECRET="$SECRET_W" CF_ACCESS_CLIENT_ID="$SECRET_ID" CF_ACCESS_CLIENT_SECRET="$SECRET_SECRET" \
-    WEB_HOST_PRIVATE_IPS="10.0.1.10,10.0.1.11" GITHUB_OUTPUT="$d/github_output" FLIP_TRACK="$d/bin/track-stub" \
+    WEB_HOST_PRIVATE_IPS="10.0.1.10,10.0.1.11" GITHUB_OUTPUT="$d/github_output" GITHUB_STEP_SUMMARY="$d/summary.md" FLIP_TRACK="$d/bin/track-stub" \
     FLIP_SLEEP="$d/bin/advance" FLIP_NOW="$d/bin/nowcmd" FLIP_WATCH_TIMEOUT_S=20 "$@" \
     bash "$script" "$mode" 2>&1)"; RC=$?
 }
@@ -239,20 +241,156 @@ tracked() { if [[ -f "$1/track.log" ]]; then grep -c '^track ' "$1/track.log" ||
 started() { if [[ -f "$1/github_output" ]]; then grep -c '^started=true$' "$1/github_output" || true; else echo 0; fi; }
 order() { if [[ -f "$1/order.log" ]]; then tr '\n' ' ' < "$1/order.log"; fi; }
 
+printf '\n=== A. the Tier-B flag job (executed against stub doppler/terraform) ===\n'
+# ---- Tier-B job (apply-web-platform-infra.yml::inngest_link_flag) ----------------------------------------------------
+# The job reads the requested value from its OWN process environment (never from a Doppler key: prd_terraform is a branch
+# config that INHERITS prd, where the Terraform-managed secret lives, so a prd_terraform delete cannot empty the variable
+# and `off` would never plan its delete). A26-A31 run the job's real steps; the gate's jq is also run on synthesized plans.
+python3 - "$APPLY_WF" "$TMP" <<'PY'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+job = d["jobs"]["inngest_link_flag"]
+tmp = sys.argv[2]
+steps = job["steps"]
+plan = next(s for s in steps if "Terraform plan" in s.get("name", ""))
+apply_ = next(s for s in steps if s.get("name") == "Terraform apply")
+validate = next(s for s in steps if "Validate" in s.get("name", ""))
+open(tmp + "/tierb-plan.sh", "w").write(plan["run"])
+open(tmp + "/tierb-apply.sh", "w").write(apply_["run"])
+open(tmp + "/tierb-validate.sh", "w").write(validate["run"])
+import json
+json.dump({"checkout": steps[0], "all_text": yaml.safe_dump(job), "plan_env": plan.get("env", {}), "validate_env": validate.get("env", {}),
+           "timeout": job["timeout-minutes"]}, open(tmp + "/tierb.json", "w"))
+PY
+tb() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))' "$TMP/tierb.json" "$1"; }
+GATE_JQ="$(python3 - "$TMP/tierb-plan.sh" <<'PY'
+import sys
+run = open(sys.argv[1]).read()
+k = "jq -e --arg v \"$LINK_VALUE\" '"
+a = run.index(k) + len(k)
+print(run[a:run.index("' >/dev/null", a)])
+PY
+)"
+plan() { # <address=action[,action]>... -> a plan whose resource_changes carry those (address:action) pairs
+  python3 - "$@" <<'PY'
+import json, sys
+rc = []
+for a in sys.argv[1:]:
+    addr, act = a.rsplit("=", 1)
+    rc.append({"address": addr, "change": {"actions": act.split(",")}})
+print(json.dumps({"resource_changes": rc}))
+PY
+}
+gate() { plan "${@:2}" | jq -e --arg v "$1" "$GATE_JQ" >/dev/null 2>&1; echo $?; }
+FLAG='doppler_secret.inngest_link_tls[0]'
+[[ -n "$GATE_JQ" ]] || bad "A26 could not extract the gate's jq program from the Tier-B job"
+[[ "$(gate off "$FLAG=delete")" == 0 ]] && ok "A26 gate: off with exactly one delete of the flag passes" || bad "A26"
+[[ "$(gate off)" == 0 ]] && ok "A27 gate: off with a ZERO-change plan PASSES (the flag is already absent: idempotent, the redeploy still follows)" || bad "A27"
+[[ "$(gate off "$FLAG=no-op")" == 0 ]] && ok "A27b gate: off with a no-op flag resource passes (no change is planned)" || bad "A27b"
+[[ "$(gate off "$FLAG=delete" "doppler_secret.other[0]=delete")" == 1 && "$(gate off "$FLAG=delete" "$FLAG=delete")" == 1 ]] && ok "A28 gate: off that also deletes another address, or deletes twice, FAILS" || bad "A28"
+[[ "$(gate off "$FLAG=create")" == 1 && "$(gate off "$FLAG=update")" == 1 && "$(gate off "$FLAG=create,delete")" == 1 ]] && ok "A28b gate: off that plans a create, an update or a replace FAILS (off never changes anything but a delete)" || bad "A28b"
+[[ "$(gate 1 "$FLAG=update")" == 0 && "$(gate 1 "$FLAG=create")" == 0 && "$(gate pending:1000000000 "$FLAG=create")" == 0 && "$(gate pending:1000000000 "$FLAG=update")" == 0 ]] && ok "A29 gate: 1 and pending:<epoch> pass on exactly one create or update of the flag" || bad "A29"
+[[ "$(gate 1)" == 1 && "$(gate pending:1000000000)" == 1 && "$(gate 1 "$FLAG=no-op")" == 1 && "$(gate pending:1000000000 "$FLAG=no-op")" == 1 ]] && ok "A29b gate: a value (1 or pending) with a ZERO-change or no-op plan FAILS (the value did not land; reporting success would print FLIPPED over an unchanged flag)" || bad "A29b"
+[[ "$(gate 1 "$FLAG=delete")" == 1 && "$(gate 1 "$FLAG=update" "doppler_secret.other[0]=update")" == 1 && "$(gate 1 "$FLAG=create,delete")" == 1 && "$(gate 1 "$FLAG=update" "$FLAG=update")" == 1 ]] && ok "A30 gate: a value fails on a delete, a replace, a second changed address or a duplicate" || bad "A30"
+
+# A31-A39: the job's steps, executed or parsed.
+[[ "$(tb '__import__("re").search(r"doppler secrets (set|delete|upload)|DOPPLER_TOKEN_WRITE", d["all_text"]) is not None')" == False ]] && ok "A31 the job writes or deletes NO Doppler key (reads of the backend credentials aside) and holds NO write-scoped token (the requested value rides the terraform process environment; the provider token already writes soleur/prd)" || bad "A31 the job still touches a Doppler key or DOPPLER_TOKEN_WRITE"
+[[ "$(tb 'd["checkout"].get("with", {}).get("persist-credentials")')" == False ]] && ok "A32 the job's checkout sets persist-credentials: false (nothing in the job pushes or fetches over git)" || bad "A32 checkout credentials"
+APPLY_LINE="$(grep -E '^[[:space:]]*terraform apply ' "$TMP/tierb-apply.sh" | sed 's/^[[:space:]]*//')"
+[[ "$APPLY_LINE" == "terraform apply -no-color -input=false -auto-approve tfplan" ]] && ok "A33 the apply argv is exactly '-auto-approve tfplan': only the gated, saved plan is applied (no -target, -replace, -var, no re-plan)" || bad "A33 apply argv: '$APPLY_LINE'"
+sed 's/ tfplan$//' "$TMP/tierb-apply.sh" > "$TMP/tierb-apply-mut.sh"
+APPLY_MUT="$(grep -E '^[[:space:]]*terraform apply ' "$TMP/tierb-apply-mut.sh" | sed 's/^[[:space:]]*//')"
+[[ "$APPLY_MUT" != "terraform apply -no-color -input=false -auto-approve tfplan" ]] && ok "A33m a mutated apply (the plan operand dropped, which re-plans untargeted and applies ALL drift) no longer equals the pinned argv" || bad "A33m"
+# The plan step, executed. doppler injects an INHERITED value (what prd_terraform really resolves once the flag exists in prd);
+# the requested value must still be what terraform sees.
+make_tb_stubs() { # dir
+  local d="$1"; assert_fixture_dir "$d"; mkdir -p "$d/bin"
+  cat > "$d/bin/doppler" <<'SH'
+#!/usr/bin/env bash
+echo "doppler $*" >> "$STUB/doppler.log"
+while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done
+shift
+export TF_VAR_inngest_link_tls="${DOPPLER_INHERITED:-}"
+exec "$@"
+SH
+  cat > "$d/bin/terraform" <<'SH'
+#!/usr/bin/env bash
+echo "terraform $*" >> "$STUB/tf.log"
+case "$1" in
+  plan) echo "TFVAR=[${TF_VAR_inngest_link_tls-unset}]" >> "$STUB/tf.log"; : > tfplan ;;
+  show) cat "$STUB/plan.json" ;;
+esac
+SH
+  chmod +x "$d/bin/"*
+}
+run_tb_plan() { # dir script value inherited plan-json -> TB_RC, TB_OUT
+  local d="$1" script="$2" value="$3" inh="$4"
+  assert_fixture_dir "$d"
+  printf '%s' "$5" > "$d/plan.json"; : > "$d/out"; : > "$d/summary"
+  TB_OUT="$(cd "$d" && env -i PATH="$d/bin:/usr/local/bin:/usr/bin:/bin" HOME="$d" STUB="$d" RUNNER_TEMP="$d" CI_SSH_PUB=/x/key.pub \
+    LINK_VALUE="$value" DOPPLER_INHERITED="$inh" GITHUB_OUTPUT="$d/out" GITHUB_STEP_SUMMARY="$d/summary" bash "$script" 2>&1)"; TB_RC=$?
+}
+tbres() { grep -o '^result=.*' "$1/out" 2>/dev/null | tail -1; }
+D="$(fresh tb-off-inherited)"; make_tb_stubs "$D"
+run_tb_plan "$D" "$TMP/tierb-plan.sh" off 1 "$(plan "$FLAG=delete")"
+[[ "$TB_RC" == 0 && "$(grep -c 'TFVAR=\[\]' "$D/tf.log")" == 1 && "$(tbres "$D")" == "result=removed" ]] && ok "A34 off while Doppler injects the inherited value 1: terraform sees an EMPTY var, the plan's single delete passes, result=removed" || bad "A34 rc=$TB_RC tf=$(cat "$D/tf.log" 2>/dev/null | tr '\n' '|') res=$(tbres "$D")" "$TB_OUT"
+D="$(fresh tb-off-absent)"; make_tb_stubs "$D"
+run_tb_plan "$D" "$TMP/tierb-plan.sh" off "" "$(plan)"
+[[ "$TB_RC" == 0 && "$(tbres "$D")" == "result=already_absent" ]] && ok "A35 off when the flag is already absent (zero-change plan): the job passes with result=already_absent (off after off)" || bad "A35 rc=$TB_RC res=$(tbres "$D")" "$TB_OUT"
+D="$(fresh tb-pending-zero)"; make_tb_stubs "$D"
+run_tb_plan "$D" "$TMP/tierb-plan.sh" pending:1000000000 "" "$(plan)"
+[[ "$TB_RC" != 0 && "$TB_OUT" == *"blast-radius gate"* ]] && ok "A36 pending:<epoch> with a ZERO-change plan fails the job (the value did not land)" || bad "A36 rc=$TB_RC" "$TB_OUT"
+D="$(fresh tb-one)"; make_tb_stubs "$D"
+run_tb_plan "$D" "$TMP/tierb-plan.sh" 1 pending:1000000000 "$(plan "$FLAG=update")"
+[[ "$TB_RC" == 0 && "$(grep -c 'TFVAR=\[1\]' "$D/tf.log")" == 1 && "$(tbres "$D")" == "result=applied" && "$(grep -c -- '-target=doppler_secret.inngest_link_tls' "$D/tf.log")" == 1 ]] && ok "A37 value 1: terraform sees exactly '1' (overriding the injected pending value), one update passes, plan is targeted at the flag only" || bad "A37 rc=$TB_RC tf=$(cat "$D/tf.log" 2>/dev/null | tr '\n' '|')" "$TB_OUT"
+D="$(fresh tb-off-other)"; make_tb_stubs "$D"
+run_tb_plan "$D" "$TMP/tierb-plan.sh" off 1 "$(plan "$FLAG=delete" "doppler_secret.inngest_tls_ca[0]=update")"
+[[ "$TB_RC" != 0 && "$TB_OUT" == *"blast-radius gate"* ]] && ok "A38 off whose plan also touches another address fails the job (nothing is applied)" || bad "A38 rc=$TB_RC" "$TB_OUT"
+# Mutation: the explicit environment wrapper removed -> the injected inherited value reaches terraform and `off` plans no delete.
+sed 's/ env "TF_VAR_inngest_link_tls=[^"]*"//' "$TMP/tierb-plan.sh" > "$TMP/tierb-plan-mut.sh"
+if cmp -s "$TMP/tierb-plan.sh" "$TMP/tierb-plan-mut.sh"; then bad "A39m the env-wrapper mutation matched nothing (the plan step's shape drifted)"
+else
+  D="$(fresh tb-mut-env)"; make_tb_stubs "$D"; run_tb_plan "$D" "$TMP/tierb-plan-mut.sh" off 1 "$(plan "$FLAG=delete")"
+  [[ "$(grep -c 'TFVAR=\[1\]' "$D/tf.log")" == 1 ]] && ok "A39m without the explicit environment the inherited value 1 reaches terraform for an off (so A34 can see the wrapper)" || bad "A39m tf=$(cat "$D/tf.log" 2>/dev/null | tr '\n' '|')"
+fi
+# Mutation: a zero-change tolerance for values -> A36 must go red.
+python3 - "$TMP/tierb-plan.sh" "$TMP/tierb-plan-mut2.sh" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+m = s.replace("(length == 1 and all(.[]; .change.actions == [\"create\"] or .change.actions == [\"update\"]))", "(length <= 1 and all(.[]; .change.actions == [\"create\"] or .change.actions == [\"update\"]))")
+open(sys.argv[2], "w").write(m)
+sys.exit(0 if m != s else 1)
+PY
+if [[ $? != 0 ]]; then bad "A39n the zero-change mutation matched nothing (the gate's shape drifted)"
+else
+  D="$(fresh tb-mut-zero)"; make_tb_stubs "$D"; run_tb_plan "$D" "$TMP/tierb-plan-mut2.sh" pending:1000000000 "" "$(plan)"
+  [[ "$TB_RC" == 0 ]] && ok "A39n if a value tolerated a zero-change plan it would pass (so A36 can see the gate)" || bad "A39n rc=$TB_RC"
+fi
+
+
 D="$(fresh happy)"; run_script "$D" "$BODY" flip
 [[ "$RC" == 0 ]] && ok "B1 happy path exits 0" || bad "B1 rc=$RC" "$OUT"
 [[ "$(values "$D")" == "pending 1 " ]] && ok "B2 the flag moves pending:<epoch> then 1, in that order, exactly twice" || bad "B2 values='$(values "$D")'"
 [[ "$(order "$D")" == "dispatch started=1 track handshake dispatch started=1 " ]] && ok "B3 order: pending dispatch, then the track.sh redeploy, then the handshake, then the promotion" || bad "B3 order='$(order "$D")'"
 [[ "$(started "$D")" == 1 ]] && ok "B4 started=true is written exactly once, and BEFORE the first flag dispatch (the stub gh saw it already set)" || bad "B4 started=$(started "$D") order='$(order "$D")'"
 grep -q 'inngest_link_value=pending:1000000' "$D/gh.log" && ok "B5 the lease epoch is the dispatch-time clock" || bad "B5 epoch" "$(cat "$D/gh.log")"
-[[ "$(cat "$D/track.log" 2>/dev/null)" == "track peers=10.0.1.10,10.0.1.11 timeout=2400 secret=set" ]] && ok "B6 track.sh is handed both peers, a bounded REDEPLOY_TIMEOUT_S and the secret under the name it reads (WEBHOOK_DEPLOY_SECRET)" || bad "B6 track env: $(cat "$D/track.log" 2>/dev/null)"
+[[ "$(cat "$D/track.log" 2>/dev/null)" == "track peers=10.0.1.10,10.0.1.11 timeout=4800 secret=set" ]] && ok "B6 track.sh is handed both peers, a bounded REDEPLOY_TIMEOUT_S and the secret under the name it reads (WEBHOOK_DEPLOY_SECRET)" || bad "B6 track env: $(cat "$D/track.log" 2>/dev/null)"
 [[ "$OUT" != *"$SECRET_W"* && "$OUT" != *"$SECRET_ID"* && "$OUT" != *"$SECRET_SECRET"* ]] && ok "B7 no credential reaches the output" || bad "B7 credential leaked"
 grep -rq "$SECRET_W" "$D/gh.log" "$D/curl.log" "$D/track.log" 2>/dev/null && bad "B8 a credential reached a logged argument list" || ok "B8 no credential on any gh, curl or track argument list or log"
 [[ "$OUT" == *"NOT VERIFIED"*"web-2"* && "$OUT" == *"resolved"* ]] && ok "B8b the final line states what was NOT verified (web-2's own swap, the resolved scheme)" || bad "B8b final line" "$OUT"
+FLIPPED_LINE="$(grep '^FLIPPED:' <<<"$OUT")"
+[[ "$FLIPPED_LINE" == *"scripts/betterstack-query.sh --since 2001-09-09T01:46:40Z --grep 'class=resolved'"* && "$FLIPPED_LINE" == *"soleur-web-platform"* && "$FLIPPED_LINE" == *"soleur-web-2"* \
+   && "$FLIPPED_LINE" == *"state=https_pending scheme=https"* && "$FLIPPED_LINE" == *'select(.SYSLOG_IDENTIFIER == "ci-deploy")'* ]] \
+  && ok "B8c the FLIPPED line prints the Better Stack query for the ci-deploy resolved row of EACH host (since the flip start, both host names, the https_pending state to expect)" || bad "B8c FLIPPED line" "$FLIPPED_LINE"
+grep -q '^verdict=flipped$' "$D/github_output" && grep -q '^t=10' "$D/github_output" && grep -q '^flag_run=4242$' "$D/github_output" && grep -q '^started=true$' "$D/github_output" \
+  && ok "B8d the run appends t=, flag_run= and verdict=flipped to \$GITHUB_OUTPUT (and started=true is still there)" || bad "B8d outputs" "$(cat "$D/github_output")"
+grep -q '| verdict | flipped |' "$D/summary.md" && grep -q 'NOT VERIFIED' "$D/summary.md" && grep -q 'pending=4242' "$D/summary.md" \
+  && ok "B8e the run writes a \$GITHUB_STEP_SUMMARY block (verdict, T, the flag apply run ids, NOT VERIFIED)" || bad "B8e summary" "$(cat "$D/summary.md" 2>/dev/null)"
 
 D="$(fresh canary-fail)"; run_script "$D" "$BODY" flip TRACK_RC=1 TRACK_VERDICT=redeploy_terminal_failure
 [[ "$RC" != 0 && "$(values "$D")" == "pending " && "$OUT" == *"did not confirm a clean swap"* ]] && ok "B9 a failed canary/swap (track.sh exit 1) stops the run, names the failure and the flag is NEVER promoted to 1" || bad "B9 rc=$RC values='$(values "$D")'" "$OUT"
 [[ "$(started "$D")" == 1 ]] && ok "B9b a failure AFTER the first flag write leaves started=true set (so the revert step runs)" || bad "B9b started=$(started "$D")"
+grep -q '^verdict=failed$' "$D/github_output" && ok "B9f a failed run emits verdict=failed (the EXIT hook runs on the failure path)" || bad "B9f verdict" "$(cat "$D/github_output")"
 
 D="$(fresh degraded)"; run_script "$D" "$BODY" flip TRACK_RC=1 TRACK_VERDICT=redeploy_peer_fanout_degraded
 [[ "$RC" != 0 && "$(values "$D")" == "pending " && "$(tracked "$D")" == 1 ]] && ok "B9c a DEGRADED fleet redeploy (web-2 did not take the swap; track.sh exits non-zero) never reaches flip_apply_flag 1" || bad "B9c rc=$RC values='$(values "$D")'" "$OUT"
@@ -266,8 +404,22 @@ D="$(fresh ok-real)"; run_script "$D" "$BODY" flip FLIP_TRACK="$REPO_ROOT/.githu
 D="$(fresh lease)"; run_script "$D" "$BODY" flip TRACK_ADVANCE=2000
 [[ "$RC" != 0 && "$(values "$D")" == "pending " && "$OUT" == *"lease"* ]] && ok "B10 a deploy that outlives the 30-minute lease is NOT promoted" || bad "B10 rc=$RC values='$(values "$D")'" "$OUT"
 
-D="$(fresh handshake)"; run_script "$D" "$BODY" flip HANDSHAKE_CODE=500
+D="$(fresh lease-margin)"; run_script "$D" "$BODY" flip TRACK_ADVANCE=1300
+[[ "$RC" != 0 && "$(values "$D")" == "pending " && "$OUT" == *"kept for web-2"* ]] && ok "B10b a redeploy finishing 1300 s into the 1800 s lease (inside the 600 s web-2 margin) is NOT promoted, and the message says why" || bad "B10b rc=$RC values='$(values "$D")'" "$OUT"
+D="$(fresh lease-inside)"; run_script "$D" "$BODY" flip TRACK_ADVANCE=1100
+[[ "$RC" == 0 && "$(values "$D")" == "pending 1 " ]] && ok "B10c a redeploy finishing 1100 s into the lease (outside the margin) IS promoted (non-vacuity of B10b)" || bad "B10c rc=$RC values='$(values "$D")'" "$OUT"
+
+D="$(fresh handshake)"; run_script "$D" "$BODY" flip HANDSHAKE_CODE=500 "HANDSHAKE_BODY=inngest-tls-handshake verified=fail verified_rc=60 unverified=fail unverified_rc=60 result=fail"
 [[ "$RC" != 0 && "$(values "$D")" == "pending " ]] && ok "B11 a failed handshake probe stops before the promotion" || bad "B11 rc=$RC values='$(values "$D")'"
+[[ "$OUT" == *"::error::"*"HTTP 500"*"verified_rc=60"*"result=fail"* ]] && ok "B11b the ::error:: on a non-200 carries the hook's body (the REAL one-line token format), so a CA rejection (verified_rc=60) is readable without the host" || bad "B11b" "$OUT"
+D="$(fresh handshake-fail200)"; run_script "$D" "$BODY" flip "HANDSHAKE_BODY=inngest-tls-handshake verified=200 verified_rc=0 unverified=ACCEPTED unverified_rc=0 result=fail"
+[[ "$RC" != 0 && "$(values "$D")" == "pending " && "$OUT" == *"unverified=ACCEPTED"* ]] && ok "B11c a 200 whose body says result=fail (the listener accepts an unverified client) is NOT a pass, and the body is printed" || bad "B11c rc=$RC values='$(values "$D")'" "$OUT"
+D="$(fresh handshake-foreign)"; run_script "$D" "$BODY" flip 'HANDSHAKE_BODY={"registry_empty":false}'
+[[ "$RC" != 0 && "$(values "$D")" == "pending " ]] && ok "B11d a 200 from a mis-routed hook (registry JSON, not the handshake line) is NOT a pass" || bad "B11d rc=$RC values='$(values "$D")'"
+INJ="inngest-tls-handshake verified=fail"$'\r\n'"::error::pwned $(printf 'x%.0s' $(seq 1 600))"
+D="$(fresh handshake-inject)"; run_script "$D" "$BODY" flip HANDSHAKE_CODE=500 "HANDSHAKE_BODY=$INJ"
+PW="$(grep -c '^::error::pwned' <<<"$OUT" || true)"; BODYLEN="$(grep -o 'body: .*' <<<"$OUT" | head -1 | wc -c)"
+[[ "$RC" != 0 && "$PW" == 0 && "$BODYLEN" -le 320 ]] && ok "B11e a hostile body cannot start a workflow command (no CR/LF, no colon) and is capped at 300 characters" || bad "B11e pw=$PW len=$BODYLEN" "$OUT"
 
 D="$(fresh deploy-busy)"; run_script "$D" "$BODY" flip IDLE_FRAME="{\"exit_code\":-1,\"reason\":\"running\",\"tag\":\"v1.2.3\",\"start_ts\":999999990}"
 [[ "$RC" != 0 && "$(dispatched "$D")" == 0 ]] && ok "B12 a deploy already running blocks the flip before any dispatch" || bad "B12 rc=$RC dispatched=$(dispatched "$D")"
@@ -287,18 +439,35 @@ D="$(fresh off)"; run_script "$D" "$BODY" off
 D="$(fresh off-busy)"; echo 1 > "$D/state/busy"
 run_script "$D" "$BODY" off IDLE_FRAME="{\"component\":\"web-platform\",\"exit_code\":-1,\"reason\":\"running\",\"tag\":\"v1.2.3\",\"start_ts\":999999990}"
 [[ "$RC" == 0 && "$(values "$D")" == "off " && "$(tracked "$D")" -ge 1 ]] && ok "B16c off proceeds with a deploy running AND an apply in flight (the release valve takes no idle guard)" || bad "B16c rc=$RC values='$(values "$D")'" "$OUT"
+D="$(fresh off-off)"; run_script "$D" "$BODY" off; run_script "$D" "$BODY" off
+[[ "$RC" == 0 && "$(values "$D")" == "off off " && "$(tracked "$D")" == 2 && "$OUT" == *"OFF: "* ]] && ok "B16e off after off: the second run applies the (idempotent) job again and STILL redeploys" || bad "B16e rc=$RC values='$(values "$D")' tracked=$(tracked "$D")" "$OUT"
+grep -q '^verdict=off$' "$D/github_output" && ok "B16f a finished off emits verdict=off" || bad "B16f"
+OFF_LINE="$(grep '^OFF:' <<<"$OUT")"
+[[ "$OFF_LINE" == *"already absent"* && "$OFF_LINE" == *"state=http_default scheme=http"* && "$OFF_LINE" == *"scripts/betterstack-query.sh --since "* && "$OFF_LINE" == *"soleur-web-2"* ]] && ok "B16g the OFF line names the already-absent case and prints the resolved-row query with the http state to expect" || bad "B16g" "$OFF_LINE"
 D="$(fresh off-fail)"; run_script "$D" "$BODY" off TRACK_RC=1
 [[ "$RC" != 0 && "$OUT" != *"OFF: "* ]] && ok "B16d a failed redeploy after off exits non-zero and never prints the OFF summary" || bad "B16d rc=$RC" "$OUT"
 
 D="$(fresh guard-refusal)"; run_script "$D" "$BODY" flip IDLE_FRAME="{\"component\":\"web-platform\",\"exit_code\":-1,\"reason\":\"running\",\"tag\":\"v1.2.3\",\"start_ts\":999999990}"
 [[ "$RC" != 0 && "$(started "$D")" == 0 && "$(dispatched "$D")" == 0 ]] && ok "B21 an idle-guard refusal writes no started output, so no revert (no off dispatch, no redeploy) can follow" || bad "B21 rc=$RC started=$(started "$D")"
+grep -q '^verdict=refused$' "$D/github_output" && ok "B21b a guard refusal emits verdict=refused (nothing was written)" || bad "B21b" "$(cat "$D/github_output" 2>/dev/null)"
 D="$(fresh no-peers)"; run_script "$D" "$BODY" flip WEB_HOST_PRIVATE_IPS=
 [[ "$RC" != 0 && "$(started "$D")" == 0 && "$(dispatched "$D")" == 0 && "$(tracked "$D")" == 0 ]] && ok "B22 an empty fan-out roster is refused before anything is written or dispatched (a one-host redeploy is a mixed fleet)" || bad "B22 rc=$RC"
 
 D="$(fresh revert)"; printf '1\n1\n' > "$D/state/watch_rcs"; run_script "$D" "$BODY" revert
 [[ "$RC" == 0 && "$(values "$D")" == "off " && "$(tracked "$D")" == 1 ]] && ok "B17 revert exits 0 even when its own flag job fails, and it did try off and the redeploy" || bad "B17 rc=$RC values='$(values "$D")'" "$OUT"
+[[ "$OUT" == *"REVERT-INCOMPLETE:"*"NOT VERIFIED"* ]] && grep -q '^verdict=revert_incomplete$' "$D/github_output" && ok "B17b a revert whose off apply failed ends with REVERT-INCOMPLETE, the NOT VERIFIED sentence and verdict=revert_incomplete" || bad "B17b" "$OUT"
+D="$(fresh revert-ok)"; run_script "$D" "$BODY" revert
+[[ "$RC" == 0 && "$OUT" == *"REVERTED:"* && "$OUT" != *"REVERT-INCOMPLETE"* && "$OUT" == *"NOT VERIFIED"*"web-2"* && "$OUT" == *"state=http_default scheme=http"* ]] && grep -q '^verdict=reverted$' "$D/github_output" \
+  && ok "B17c a clean revert ends with REVERTED, the NOT VERIFIED sentence, the resolved-row query and verdict=reverted" || bad "B17c rc=$RC" "$OUT"
 D="$(fresh revert-nogh)"; GH_RUN_RC=1 run_script "$D" "$BODY" revert GH_RUN_RC=1
-[[ "$RC" == 0 ]] && ok "B18 revert exits 0 when the dispatch itself is refused" || bad "B18 rc=$RC"
+[[ "$RC" == 0 && "$OUT" == *"REVERT-INCOMPLETE:"* ]] && ok "B18 revert exits 0 when the dispatch itself is refused (and says REVERT-INCOMPLETE)" || bad "B18 rc=$RC" "$OUT"
+
+D="$(fresh stale-run)"; : > "$D/state/stale_old"; run_script "$D" "$BODY" flip
+[[ "$RC" == 0 && "$(sort -u "$D/watched.log" | tr '\n' ' ')" == "4242 " ]] && ok "B23 a green run from an EARLIER flip inside the last 20 (created before the dispatch) is never watched: only OUR run is" || bad "B23 rc=$RC watched='$(tr '\n' ' ' < "$D/watched.log")'" "$OUT"
+D="$(fresh skipped-run)"; echo skipped > "$D/state/first_recent"; run_script "$D" "$BODY" flip
+[[ "$RC" == 0 && "$(sort -u "$D/watched.log" | tr '\n' ' ')" == "4242 " ]] && ok "B24 a recent run whose inngest_link_flag job was SKIPPED (another apply_target) is never watched" || bad "B24 rc=$RC watched='$(tr '\n' ' ' < "$D/watched.log")'" "$OUT"
+D="$(fresh none-run)"; echo none > "$D/state/first_recent"; run_script "$D" "$BODY" flip
+[[ "$RC" == 0 && "$(sort -u "$D/watched.log" | tr '\n' ' ')" == "4242 " ]] && ok "B24b a recent run with no inngest_link_flag job yet (queued behind the mutex) is not mistaken for ours" || bad "B24b rc=$RC" "$OUT"
 
 D="$(fresh badvalue)"; ( source "$BODY"; PATH="$D/bin:$PATH" STUB="$D"; flip_apply_flag 'pending:abc' ) >/dev/null 2>&1; rcv=$?
 [[ "$rcv" != 0 && "$(dispatched "$D")" == 0 ]] && ok "B19 a flag value outside {off, 1, pending:<epoch>} is refused before any call" || bad "B19 rc=$rcv"
@@ -310,9 +479,29 @@ mutate() { # name sed-expression -> $TMP/mut-<name>.sh ; asserts it landed
   sed "$2" "$BODY" > "$TMP/mut-$1.sh"
   if cmp -s "$TMP/mut-$1.sh" "$BODY"; then bad "C-$1 the mutation matched nothing (the script's shape drifted)"; return 1; fi
 }
-if mutate lease 's/  if (( done_at > t0 + FLIP_LEASE_S )); then/  if false; then/'; then
+if mutate lease 's/  if (( done_at > t0 + FLIP_LEASE_S - FLIP_LEASE_MARGIN_S )); then/  if false; then/'; then
   D="$(fresh m-lease)"; run_script "$D" "$TMP/mut-lease.sh" flip ADVANCE_EXTRA=900
   [[ "$RC" == 0 && "$(values "$D")" == "pending 1 " ]] && ok "C1 without the lease check a lapsed lease IS promoted (so B10 can see the guard)" || bad "C1 rc=$RC values='$(values "$D")'"
+fi
+if mutate margin 's/  if (( done_at > t0 + FLIP_LEASE_S - FLIP_LEASE_MARGIN_S )); then/  if (( done_at > t0 + FLIP_LEASE_S )); then/'; then
+  D="$(fresh m-margin)"; run_script "$D" "$TMP/mut-margin.sh" flip TRACK_ADVANCE=1300
+  [[ "$RC" == 0 && "$(values "$D")" == "pending 1 " ]] && ok "C10 without the web-2 margin a redeploy finishing inside it IS promoted (so B10b can see the margin)" || bad "C10 rc=$RC values='$(values "$D")'"
+fi
+if mutate stale 's/\[\[ "\$(date -u -d "\$created" +%s 2>\/dev\/null || echo 0)" -ge \$((t0 - 10)) \]\] || continue/:/'; then
+  D="$(fresh m-stale)"; : > "$D/state/stale_old"; run_script "$D" "$TMP/mut-stale.sh" flip
+  [[ "$(head -1 "$D/watched.log")" == 4141 ]] && ok "C11 without the creation-time filter the EARLIER flip's green run is the one watched (so B23 can see the filter)" || bad "C11 watched='$(tr '\n' ' ' < "$D/watched.log")'"
+fi
+if mutate skipped 's/\[\[ "\$cj" == none || "\$cj" == skipped \]\] \&\& continue/:/'; then
+  D="$(fresh m-skipped)"; echo skipped > "$D/state/first_recent"; run_script "$D" "$TMP/mut-skipped.sh" flip
+  [[ "$(head -1 "$D/watched.log")" == 4143 ]] && ok "C12 without the skipped/none filter a skipped run is the one watched (so B24 can see the filter)" || bad "C12 watched='$(tr '\n' ' ' < "$D/watched.log")'"
+fi
+if mutate hspass 's/ || "\$body" != \*" result=pass"\* \]\]; then/ ]]; then/'; then
+  D="$(fresh m-hspass)"; run_script "$D" "$TMP/mut-hspass.sh" flip "HANDSHAKE_BODY=inngest-tls-handshake verified=200 verified_rc=0 unverified=ACCEPTED unverified_rc=0 result=fail"
+  [[ "$RC" == 0 && "$(values "$D")" == "pending 1 " ]] && ok "C13 without the result=pass check a 200 whose body says result=fail IS promoted (so B11c can see the check)" || bad "C13 rc=$RC values='$(values "$D")'"
+fi
+if mutate final 's/^    FLIP_VERDICT=reverted$/    FLIP_VERDICT=revert_incomplete/'; then
+  D="$(fresh m-final)"; run_script "$D" "$TMP/mut-final.sh" revert
+  grep -q '^verdict=reverted$' "$D/github_output" && bad "C14 the revert verdict mutation did not change the output" || ok "C14 a revert that never reaches its REVERTED verdict is visible in the output (so B17c can see it)"
 fi
 if mutate verify 's/^  flip_verify "\$t0" "\$FLIP_DONE_AT"$/  :/'; then
   D="$(fresh m-verify)"; run_script "$D" "$TMP/mut-verify.sh" flip HANDSHAKE_CODE=500
@@ -344,9 +533,13 @@ if mutate offguard 's/^  flip_load_bearer; flip_require_peers$/  flip_load_beare
 fi
 
 printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
-FLOOR=68
+FLOOR=111
 if (( PASS + FAIL < FLOOR )); then
   printf 'FAIL ANTI-VACUITY: %d assertions ran, floor is %d\n' $((PASS + FAIL)) "$FLOOR" >&2
+  exit 1
+fi
+if (( PASS + FAIL > FLOOR )); then
+  printf 'FAIL FLOOR DRIFT: %d assertions ran but FLOOR is %d - set FLOOR=%d (the floor is the real count)\n' $((PASS + FAIL)) "$FLOOR" $((PASS + FAIL)) >&2
   exit 1
 fi
 exit $(( FAIL > 0 ))

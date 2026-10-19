@@ -87,10 +87,13 @@ _link_env_resolve() {
   return 0
 }
 _link_env_resolve
+# LINK_CURL_PRE leads the curl argv (curl honours --disable, "skip ~/.curlrc", only as its FIRST argument); LINK_CURL_TLS follows
+# the other options. Both are empty on http, so the http argv is byte-unchanged.
+LINK_CURL_PRE=()
 LINK_CURL_TLS=()
 case "$LINK_STATE" in
   http) GQL_URL="$LINK_BASE/v0/gql" ;;
-  https) GQL_URL="$LINK_BASE/v0/gql"; LINK_CURL_TLS=(--cacert "$LINK_CACERT" --noproxy '*') ;;
+  https) GQL_URL="$LINK_BASE/v0/gql"; LINK_CURL_PRE=(--disable); LINK_CURL_TLS=(--cacert "$LINK_CACERT" --noproxy '*') ;;
   invalid) logger -t "${LOG_TAG:-inngest-probe}" "SOLEUR_INNGEST_LINK_ENV_INVALID file=$INNGEST_LINK_ENV_FILE action=default_http" 2>/dev/null || true ;;
 esac
 # <<< inngest-link-env <<<
@@ -150,7 +153,7 @@ fetch_functions() {
   fi
   local body
   body=$(jq -nc --arg q "$FUNCTIONS_GQL_QUERY" '{query:$q}')
-  curl -s --max-time 15 --connect-timeout "$CONNECT_TIMEOUT" ${LINK_CURL_TLS[@]+"${LINK_CURL_TLS[@]}"} -X POST -H "Content-Type: application/json" \
+  curl ${LINK_CURL_PRE[@]+"${LINK_CURL_PRE[@]}"} -s --max-time 15 --connect-timeout "$CONNECT_TIMEOUT" ${LINK_CURL_TLS[@]+"${LINK_CURL_TLS[@]}"} -X POST -H "Content-Type: application/json" \
     --data-binary "$body" "$GQL_URL" \
     || echo '{"errors":[{"message":"__FETCH_FAILED__"}],"data":null}'
 }

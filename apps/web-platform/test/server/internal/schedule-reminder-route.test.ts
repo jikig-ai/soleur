@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // INNGEST_MANUAL_TRIGGER_SECRET is security-relevant — capture + restore so a
@@ -217,9 +219,10 @@ describe("POST /api/internal/schedule-reminder — backend refusing connections"
 });
 
 // #10136 (CTO G4): the verified-TLS link adds failure modes the refusal branch did not cover. Each of these is a
-// "scheduler unreachable or unverifiable right now, nothing persisted" outcome, so the caller (inngest-rearm-reminders.sh,
-// which aborts on X-Soleur-Unavailable: backend-refused) must see a retryable 503 rather than a terminal-looking 502 and
-// keep going past a lost arm. Error shapes are synthesized: TypeError("fetch failed") with the code on `cause`.
+// "scheduler unreachable or unverifiable right now" outcome, so the caller (inngest-rearm-reminders.sh, which aborts on
+// X-Soleur-Unavailable: backend-refused) must see a retryable 503 rather than a terminal-looking 502 and keep going past a lost
+// arm. The send may have been persisted (a reset after the request left is ambiguous): the event id is the reminder id, so the
+// re-arm is deduplicated. Error shapes are synthesized: TypeError("fetch failed") with the code on `cause`.
 function fetchFailedWith(code: string, message = `synthetic ${code}`): TypeError {
   return new TypeError("fetch failed", { cause: Object.assign(new Error(message), { code }) });
 }
@@ -235,6 +238,12 @@ describe("POST /api/internal/schedule-reminder — timeout and TLS-verification 
     "ERR_TLS_INVALID_PROTOCOL_VERSION",
     "DEPTH_ZERO_SELF_SIGNED_CERT",
     "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+    "SELF_SIGNED_CERT_IN_CHAIN",
+    "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+    "CERT_HAS_EXPIRED",
+    "UND_ERR_SOCKET",
+    "EHOSTUNREACH",
+    "ENETUNREACH",
   ])("%s -> 503 + Retry-After + X-Soleur-Unavailable: backend-refused, mirrored to Sentry", async (code) => {
     mockSendInngestWithRetry.mockRejectedValueOnce(fetchFailedWith(code));
     const res = await POST(makeRequest(validBody()));
@@ -244,7 +253,7 @@ describe("POST /api/internal/schedule-reminder — timeout and TLS-verification 
     expect(mockReportSilentFallback.mock.calls[0][1].op).toBe("dispatch");
   });
 
-  it.each(["ENOTFOUND", "EAI_AGAIN", "EPIPE", "ERR_TLSX", "ERR_TLS", "err_tls_cert", "CERT_HAS_EXPIRED", ""])(
+  it.each(["ENOTFOUND", "EAI_AGAIN", "EPIPE", "ERR_TLSX", "ERR_TLS", "err_tls_cert", "UND_ERR_BODY_TIMEOUT", ""])(
     "%s stays 502 (only the listed causes are retryable; ERR_TLS_ needs its underscore and exact case)",
     async (code) => {
       mockSendInngestWithRetry.mockRejectedValueOnce(fetchFailedWith(code));
@@ -262,6 +271,44 @@ describe("POST /api/internal/schedule-reminder — timeout and TLS-verification 
     expect((await POST(makeRequest(validBody()))).status).toBe(502);
     mockSendInngestWithRetry.mockRejectedValueOnce(new TypeError("fetch failed", { cause: "ETIMEDOUT" }));
     expect((await POST(makeRequest(validBody()))).status).toBe(502);
+  });
+
+  // One list, two consumers: the host canary's negative control (INNGEST_LINK_CANARY_NEG in ci-deploy.sh) accepts a fixed set of codes as
+  // "certificate verification failed". The route must answer every one of them with the retryable 503, derived from the SOURCE here so
+  // a code added to the canary but not to the route (or the reverse) turns this red.
+  const CI_DEPLOY = resolve(__dirname, "../../../../../apps/web-platform/infra/ci-deploy.sh");
+  const canaryVerifyCodes = (): string[] => {
+    const line = readFileSync(CI_DEPLOY, "utf8")
+      .split("\n")
+      .find((l) => l.startsWith("INNGEST_LINK_CANARY_NEG="));
+    const m = line?.match(/\/\^\(([A-Z_|]+)\)\$\/\.test\(c\)/);
+    return m ? m[1].split("|") : [];
+  };
+  it("derives a non-trivial verification-code list from the canary negative control (the parity test below is not vacuous)", () => {
+    const codes = canaryVerifyCodes();
+    expect(codes.length).toBeGreaterThanOrEqual(5);
+    expect(codes).toContain("DEPTH_ZERO_SELF_SIGNED_CERT");
+    expect(codes).toContain("ERR_TLS_CERT_ALTNAME_INVALID");
+  });
+  it.each(canaryVerifyCodes())("canary verification code %s -> the route answers the retryable 503", async (code) => {
+    mockSendInngestWithRetry.mockRejectedValueOnce(fetchFailedWith(code));
+    const res = await POST(makeRequest(validBody()));
+    expect(res.status).toBe(503);
+    expect(res.headers.get("X-Soleur-Unavailable")).toBe("backend-refused");
+  });
+
+  it("a re-arm after an ambiguous reset carries the SAME event id (= reminder_id), so Inngest deduplicates a send that did persist", async () => {
+    mockSendInngestWithRetry.mockImplementationOnce(async (fn: () => Promise<unknown>) => {
+      await fn();
+      throw fetchFailedWith("ECONNRESET");
+    });
+    const first = await POST(makeRequest(validBody()));
+    expect(first.status).toBe(503);
+    const second = await POST(makeRequest(validBody()));
+    expect(second.status).toBe(202);
+    expect(mockInngestSend).toHaveBeenCalledTimes(2);
+    const ids = mockInngestSend.mock.calls.map((c) => c[0].id);
+    expect(ids).toEqual(["r-123", "r-123"]);
   });
 
   it("a successful send is untouched (202, no Retry-After)", async () => {

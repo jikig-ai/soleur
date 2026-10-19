@@ -6476,10 +6476,14 @@ jobs:
           exit 1
 
   # ── #10136: the Inngest link flag (Tier-B actuator, ADR-241 D8; rationale in inngest-tls.tf) ──
-  # apply_target=inngest-link-flag, driven by inngest-link-flip.yml. Writes the prd_terraform source key
-  # INNGEST_LINK_TLS (or deletes it for `off`) FIRST, then plans and applies ONLY
-  # doppler_secret.inngest_link_tls. The resource is NOT in the per-merge -target list (a merge must never
-  # flip the URL). The gate below admits that one address and nothing else.
+  # apply_target=inngest-link-flag, driven by inngest-link-flip.yml. Plans and applies ONLY
+  # doppler_secret.inngest_link_tls with the requested value passed as TF_VAR_inngest_link_tls in the environment
+  # of the terraform process (empty for `off`), AFTER doppler injects its own. No Doppler key is written or
+  # deleted: prd_terraform is a branch config that INHERITS prd, where this Terraform-managed secret lives, so a
+  # prd_terraform key could not be emptied by deleting it (the inherited value reappears). The resource is NOT in
+  # the per-merge -target list (a merge must never flip the URL). The gate below admits that one address and
+  # nothing else: `off` = one delete, or no change when the flag is already absent (result=already_absent); any
+  # other value = exactly one create/update (a zero-change plan fails).
   inngest_link_flag:
     environment: infra-privileged
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'inngest-link-flag'
@@ -6489,6 +6493,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
 
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
@@ -6501,11 +6507,10 @@ jobs:
           doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
           doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
-      - name: Validate the value and write the source key
+      - name: Validate the value and record the audit trail
         env:
           LINK_VALUE: ${{ inputs.inngest_link_value }}
           REASON_RAW: ${{ inputs.reason }}
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_WRITE }}
         run: |
           set -euo pipefail
           # Input is compared as data (env:), never interpolated into the shell.
@@ -6518,15 +6523,8 @@ jobs:
               echo "::error::the pending epoch must be within [now-600s, now+60s]; the lease is 30 minutes from it and the resolver refuses an epoch more than 31 minutes ahead."; exit 1
             fi
           fi
-          if [[ -z "${REASON_RAW// /}" || -z "${DOPPLER_TOKEN:-}" ]]; then
-            echo "::error::reason and DOPPLER_TOKEN_WRITE are required."; exit 1
-          fi
-          # The source key is written FIRST (it is what the plan reads). A failure after this line leaves
-          # prd_terraform ahead of prd; nothing but Terraform reads the key, and a re-dispatch reconciles.
-          if [[ "$LINK_VALUE" == off ]]; then
-            doppler secrets delete INNGEST_LINK_TLS --yes --silent -p soleur -c prd_terraform >/dev/null 2>&1 || true
-          else
-            printf '%s' "$LINK_VALUE" | doppler secrets set INNGEST_LINK_TLS --silent --no-interactive -p soleur -c prd_terraform >/dev/null 2>&1
+          if [[ -z "${REASON_RAW// /}" ]]; then
+            echo "::error::reason is required."; exit 1
           fi
           {
             echo "### inngest-link-flag dispatch"
@@ -6560,26 +6558,41 @@ jobs:
         run: terraform init -input=false -lockfile=readonly
 
       - name: Terraform plan (the flag resource only) and gate
+        id: gate
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           LINK_VALUE: ${{ inputs.inngest_link_value }}
         run: |
           set -euo pipefail
+          # The requested value is the terraform process's OWN environment (`env` runs AFTER doppler injected the
+          # inherited prd value, so it wins): empty for `off`, which plans the count-gated resource away. A
+          # full untargeted plan (drift detector) later reads the same value through prd_terraform's inheritance
+          # of prd, which holds the secret this job just applied, so state and variable agree.
+          TF_LINK="$LINK_VALUE"
+          if [[ "$TF_LINK" == off ]]; then TF_LINK=""; fi
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            env "TF_VAR_inngest_link_tls=${TF_LINK}" \
             terraform plan -no-color -input=false -out=tfplan \
               -var="ssh_key_path=${CI_SSH_PUB}" \
               -target=doppler_secret.inngest_link_tls
-          # Blast-radius gate: read the PLAN. Only this address may change; `off` must plan EXACTLY ONE delete of it
-          # (a zero-change plan means the source-key delete above failed silently, or the flag was never set, and
-          # reporting success then would print "flag removed" while the flag is still live), any other value may
-          # only create or update it.
-          terraform show -json tfplan | jq -e --arg v "$LINK_VALUE" '
+          terraform show -json tfplan > "$RUNNER_TEMP/flag-plan.json"
+          # Blast-radius gate: read the PLAN. Only this address may change. `off` plans at most ONE delete of it
+          # (none = the flag is already absent: idempotent, and the caller still redeploys); any other value must
+          # plan EXACTLY ONE create or update (a zero-change plan means the value did not land, and reporting
+          # success then would print FLIPPED over an unchanged flag).
+          jq -e --arg v "$LINK_VALUE" '
             [.resource_changes[]? | select(.change.actions != ["no-op"] and .change.actions != ["read"])] as $c
             | ($c | all(.[]; .address == "doppler_secret.inngest_link_tls[0]"))
-              and (if $v == "off" then ($c | (length == 1 and all(.[]; .change.actions == ["delete"])))
-                   else ($c | all(.[]; .change.actions == ["create"] or .change.actions == ["update"])) end)' >/dev/null \
-            || { echo "::error::blast-radius gate: the plan must change only doppler_secret.inngest_link_tls, with exactly one delete for 'off' (a zero-change plan fails: the flag delete did not take effect, or the flag was already absent) or a create/update for any other value. Nothing was applied (value '${LINK_VALUE}')."; exit 1; }
+              and (if $v == "off" then ($c | (length <= 1 and all(.[]; .change.actions == ["delete"])))
+                   else ($c | (length == 1 and all(.[]; .change.actions == ["create"] or .change.actions == ["update"]))) end)' >/dev/null < "$RUNNER_TEMP/flag-plan.json" \
+            || { echo "::error::blast-radius gate: the plan must change only doppler_secret.inngest_link_tls: at most one delete for 'off' (no change = already absent), exactly one create/update for any other value (a zero-change plan fails: the value did not land). Nothing was applied (value '${LINK_VALUE}')."; exit 1; }
+          if [[ "$LINK_VALUE" != off ]]; then RESULT=applied
+          elif [[ "$(jq '[.resource_changes[]? | select(.change.actions == ["delete"])] | length' < "$RUNNER_TEMP/flag-plan.json")" == 0 ]]; then RESULT=already_absent
+          else RESULT=removed; fi
+          printf 'result=%s\n' "$RESULT" >> "$GITHUB_OUTPUT"
+          echo "- Flag result: ${RESULT}" >> "$GITHUB_STEP_SUMMARY"
+          echo "flag result: ${RESULT}"
 
       - name: Terraform apply
         working-directory: ${{ env.INFRA_DIR }}

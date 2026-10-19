@@ -13,8 +13,9 @@
 # docker-run tuple gate pins that). The certificate is therefore deliberately NOT a CA
 # (`is_ca_certificate = false`, basicConstraints CA:FALSE): a leaf signed with this key must not
 # validate, so a leaked key can impersonate THIS endpoint only, never mint certificates for another.
-# The only SAN is the private IP (no DNS name exists for the host); the resolver in ci-deploy.sh
-# refuses a CA file whose SAN is anything else.
+# The only SAN is the private IP (no DNS name exists for the host). The web-side resolver does NOT
+# re-check the SAN or purpose: the host-side `curl --cacert` self-gate and the canary's CA-withheld
+# negative control prove the pinned file against the real listener (ADR-292).
 #
 # FOUR PROPERTIES THAT ARE EASY TO "FIX" AND MUST NOT BE:
 #   1. NOT count-gated, unlike proxy-tls.tf. ADR-118 gated that quartet because the proxy SERVER logged
@@ -47,9 +48,9 @@
 # that terminates TLS reads it once into a tmpfs RuntimeDirectory (cloud-init-inngest.yml).
 #
 # INNGEST_TLS_CA IS BASE64. The PEM is multi-line and would otherwise reach the web container through
-# the docker env-file format; ci-deploy.sh decodes it, validates it (size, no PRIVATE KEY block, SAN
-# exactly IP:10.0.1.40, CA:FALSE, serverAuth only, not expired) and only then writes
-# /etc/soleur/inngest-ca.pem. It lives in `soleur`/`prd` (the web container's config), the key and cert
+# the docker env-file format; ci-deploy.sh decodes it and, only when the flag resolves https, validates it
+# (size, no PRIVATE KEY block, exactly one CERTIFICATE, parses, not expired, not a CA) and installs it at
+# /mnt/data/inngest-link/inngest-ca.pem after the self-gate passes. It lives in `soleur`/`prd` (the web container's config), the key and cert
 # in `soleur-inngest`/`prd` (the host's isolated project); literal "soleur"/"prd" as in proxy-tls.tf.
 
 resource "tls_private_key" "inngest_link" {
@@ -123,18 +124,23 @@ resource "doppler_secret" "inngest_tls_ca" {
 #   pending:<epoch> https only while now <= epoch + 30 min (a lease; a lapse resolves to http plus an event)
 #   1               https, fail-closed: a failed self-gate, a CA read error or an invalid CA fails the deploy
 #
-# SOURCE OF TRUTH is the prd_terraform key INNGEST_LINK_TLS (TF_VAR_inngest_link_tls through
-# `--name-transformer tf-var`), written and applied ONLY by the Tier-B `inngest_link_flag` job of
-# apply-web-platform-infra.yml (apply_target=inngest-link-flag, environment infra-privileged), driven by
-# .github/workflows/inngest-link-flip.yml. This resource is DELIBERATELY OUT of the per-merge `-target`
-# list (CTO G1): a merge must never flip the production URL, and a prd-write credential is not minted
-# for this. It is classified in OPERATOR_APPLIED_EXCLUSIONS and stripped from the per-merge view in
-# terraform-target-parity.test.ts, with a row asserting the flip job is its only targeting site.
+# SOURCE OF TRUTH: the Tier-B `inngest_link_flag` job of apply-web-platform-infra.yml (apply_target=inngest-link-flag,
+# environment infra-privileged), driven by .github/workflows/inngest-link-flip.yml, passes the requested value as
+# TF_VAR_inngest_link_tls in the environment of its terraform plan (empty for `off`), set AFTER `doppler run` injected
+# its own variables, and applies only this resource. It writes and deletes NO Doppler key. That is deliberate:
+# prd_terraform is a Doppler BRANCH config that INHERITS prd, and this resource writes the secret into prd, so the value
+# a prd_terraform key delete would have "removed" reappears by inheritance and the plan would carry no delete.
+# This resource is DELIBERATELY OUT of the per-merge `-target` list (CTO G1): a merge must never flip the production
+# URL, and a prd-write credential is not minted for this. It is classified in OPERATOR_APPLIED_EXCLUSIONS and stripped
+# from the per-merge view in terraform-target-parity.test.ts, with a row asserting the flip job is its only targeting site.
 #
-# A full untargeted plan (the drift detector, infra-validation) sees the resource consistently: the key
-# in prd_terraform and the secret in prd move together, because the job writes the key first and applies
-# second. The variable's validation rejects any value outside the resolver's allowlist before a plan can
-# carry it; the resolver re-checks, since the value is read from Doppler on the host.
+# A full untargeted plan (the drift detector, infra-validation) sees the resource consistently WITHOUT the job's override:
+# `doppler run -c prd_terraform --name-transformer tf-var` resolves INNGEST_LINK_TLS through prd_terraform's inheritance of
+# prd, which holds exactly the secret this resource manages, so var.inngest_link_tls equals state (both empty while the
+# secret does not exist). The one way to break that is a hand-made INNGEST_LINK_TLS override KEY IN prd_terraform: it would
+# shadow prd and make every untargeted plan propose a change. None is created by this repo. The variable's validation
+# rejects any value outside the resolver's allowlist before a plan can carry it; the resolver re-checks, since the value
+# is read from Doppler on the host.
 resource "doppler_secret" "inngest_link_tls" {
   count = var.inngest_link_tls == "" ? 0 : 1
 

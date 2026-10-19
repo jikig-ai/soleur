@@ -3416,14 +3416,25 @@ github_app_key_canary_check() {
 # The flag is INNGEST_LINK_TLS in the soleur/prd snapshot resolve_env_file already wrote (a missing key is
 # authoritative absence; stderr is never parsed): allowlist ^(1|pending:[0-9]{1,10})$, a `pending:<epoch>` is honoured
 # only while epoch <= now+31 min AND now < epoch+30 min, any other non-empty value fails the deploy. The two Doppler
-# metadata lines of the snapshot must name soleur/prd (a mis-bound token must never read "absent").
-# The CA (INNGEST_TLS_CA, base64) is validated BEFORE it is written: <= 4 KiB, no PRIVATE KEY, EXACTLY ONE CERTIFICATE block,
-# parses, not expired, not CA:TRUE; it is installed with mktemp + rename under $INNGEST_LINK_DIR (/mnt/data/inngest-link, deploy-owned,
-# created here with mkdir -p; the docker bind source is the FILE, so it must exist before `docker run`). With the flag ON any of
-# {CA read error, CA empty/invalid, install failure, the host-side `curl --cacert` self-gate failing} fails the deploy. The
+# metadata lines of the snapshot (`doppler secrets download` always injects DOPPLER_PROJECT/DOPPLER_CONFIG, see
+# .github/actions/infra-credentials/action.yml) must name soleur/prd when PRESENT (a mis-bound token must never read
+# "absent"); a snapshot that lacks them cannot be judged wrong, so with the flag ABSENT it resolves http with a
+# `scope_unverified` warning, and with the flag set it fails closed.
+# TRUST-ANCHOR ORDERING (security F1/F2): the CA (INNGEST_TLS_CA, base64) is touched ONLY when https is resolved. With the
+# flag absent (or a lapsed lease) nothing is read from Doppler or validated: the docker bind source is only ensured to exist as an
+# EMPTY placeholder FILE (created if missing; an empty directory docker made there is removed), so a bad or substituted
+# secret can neither fail a flag-off deploy nor become a trust anchor in a non-strict state. With https resolved the CA is
+# read (from the snapshot, else Doppler with retries), VALIDATED, proven by the host-side `curl --cacert <CANDIDATE>` self-gate
+# against the real listener, and only THEN installed (mktemp + rename under $INNGEST_LINK_DIR, /mnt/data/inngest-link, deploy-owned,
+# created here with mkdir -p; the docker bind source is the FILE, so it must exist before `docker run`). A gate failure leaves
+# the previously installed file untouched. The validator is a deny-list: <= 4 KiB, no PRIVATE KEY, EXACTLY ONE CERTIFICATE
+# block, parses, not expired, not CA:TRUE, keyUsage without Certificate Sign (a no-basicConstraints keyCertSign certificate is a
+# working issuing CA). Any of {CA read error, CA empty/invalid, self-gate failure, install failure} fails the strict deploy. The
 # self-gate proves only the host OUTPUT path and the pinned bytes, not container egress or Node trust (the canary does); a
-# substituted CA fails against the real host, so it denies service rather than enabling a MITM. With the flag OFF a failure to
-# read or validate the CA leaves an EMPTY placeholder (never an unvalidated file) and never fails the deploy.
+# substituted CA fails against the real host, so it denies service rather than enabling a MITM.
+# DOWNGRADE MEMORY (security F4): $INNGEST_LINK_DIR/last-scheme (https|http, atomic, validated on read) remembers the last
+# resolved scheme; a host that last resolved https and now resolves http emits a Sentry warning `https_to_http` (an intentional
+# `off` pages once; it never fails the deploy).
 # $INNGEST_LINK_DIR/inngest-link.env is written from enum branches and constants ONLY, never from flag or CA text; the
 # probes parse it with a key allowlist and never source it. Sets: INNGEST_BASE_URL_RESOLVED, INNGEST_LINK_STATE
 # (http_default|http_lease_expired|https_flag|https_pending), INNGEST_LINK_REASON (a fixed token on failure),
@@ -3468,17 +3479,19 @@ _inngest_link_snap_get() {
   return 0
 }
 
-# _inngest_link_validate_ca <base64> <out-file>: decode, validate, write the single certificate block to <out-file>.
-# Returns 0 valid, 1 invalid (nothing written) with _IL_WHY naming the first failed check (a fixed token, so the
-# ca_invalid event is diagnosable without SSH): tool|decode|size|empty|key|count|parse|expired|ca. Deliberately small: <= 4 KiB,
-# no PRIVATE KEY, EXACTLY ONE CERTIFICATE block (a second one would become a trust anchor for ALL outbound TLS of the
-# container), parses, not expired, not CA:TRUE. Name/SAN/EKU/self-signature are NOT re-checked here: the host-side
-# `curl --cacert ... https://10.0.1.40:8443/health` self-gate and the canary's CA-withheld negative control prove the pinned
-# file against the real listener. `openssl` is required (ca-certificates depends on it, so it is on every Ubuntu host):
-# without it a flag-on deploy fails closed with why=tool rather than trusting an unvalidated file.
+# _inngest_link_validate_ca <base64>: decode and validate; the single certificate block is left in _IL_CERT (the caller
+# writes it to its own mktemp file). Returns 0 valid, 1 invalid (_IL_CERT empty) with _IL_WHY naming the first failed check (a
+# fixed token, so the ca_invalid event is diagnosable without SSH): tool|decode|size|empty|key|count|parse|expired|ca. Deliberately
+# small: <= 4 KiB, no PRIVATE KEY, EXACTLY ONE CERTIFICATE block (a second one would become a trust anchor for ALL outbound TLS of
+# the container), parses, not expired, and ONE deny-list grep over the basicConstraints and keyUsage lines: no CA:TRUE and no
+# `Certificate Sign` (why=ca for both: a v3 certificate WITHOUT basicConstraints and keyUsage=keyCertSign is a working issuing CA).
+# Name/SAN/EKU/self-signature are NOT re-checked here: the host-side `curl --cacert ... https://10.0.1.40:8443/health` self-gate
+# and the canary's CA-withheld negative control prove the pinned file against the real listener. `openssl` is required
+# (ca-certificates depends on it, so it is on every Ubuntu host): without it a flag-on deploy fails closed with why=tool rather than
+# trusting an unvalidated file.
 _inngest_link_validate_ca() {
-  local b64="$1" out="$2" wd raw n_begin n_cert x509 rc=1
-  _IL_WHY=""
+  local b64="$1" wd raw n_begin n_cert x509 rc=1
+  _IL_WHY=""; _IL_CERT=""
   command -v openssl >/dev/null 2>&1 || { _IL_WHY=tool; return 1; }
   # at most 4 KiB decoded is <= 5462 base64 characters; refuse an oversize secret before decoding it
   if (( ${#b64} == 0 || ${#b64} > 6000 )); then _IL_WHY=size; return 1; fi
@@ -3497,15 +3510,16 @@ _inngest_link_validate_ca() {
       /^[[:space:]]*-----BEGIN CERTIFICATE-----[[:space:]]*$/ { inb = 1 }
       inb { sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, ""); print }
       /^[[:space:]]*-----END CERTIFICATE-----[[:space:]]*$/ { inb = 0 }' "$raw" > "$wd/cert.pem" || { _IL_WHY=parse; break; }
-    # ONE parse: -checkend prints "will not expire" (rc 0) or "will expire" (rc 1); -ext prints the basicConstraints line
-    x509="$(timeout 10 openssl x509 -in "$wd/cert.pem" -noout -checkend 0 -ext basicConstraints 2>/dev/null)" || true
+    # ONE parse: -checkend prints "will not expire" (rc 0) or "will expire" (rc 1); -ext prints the basicConstraints and keyUsage lines
+    x509="$(timeout 10 openssl x509 -in "$wd/cert.pem" -noout -checkend 0 -ext basicConstraints,keyUsage 2>/dev/null)" || true
     case "$x509" in
       *"will not expire"*) : ;;
       *"will expire"*) _IL_WHY=expired; break ;;
       *) _IL_WHY=parse; break ;;
     esac
-    if grep -q 'CA:TRUE' <<< "$x509"; then _IL_WHY=ca; break; fi
-    cp "$wd/cert.pem" "$out" 2>/dev/null || { _IL_WHY=parse; break; }
+    if grep -qE 'CA:TRUE|Certificate Sign' <<< "$x509"; then _IL_WHY=ca; break; fi
+    _IL_CERT="$(cat "$wd/cert.pem")"
+    [[ -n "$_IL_CERT" ]] || { _IL_WHY=parse; break; }
     rc=0
     break
   done
@@ -3513,13 +3527,16 @@ _inngest_link_validate_ca() {
   return "$rc"
 }
 
-# _inngest_link_install <content-file> <dest> <mode>: mkdir -p the (deploy-owned, under /mnt/data) directory, then a temp
-# file beside the target, renamed over it (mv -T never descends into a directory a bind-mount of a missing path may have created).
+# _inngest_link_install <content-file> <dest> <mode>: mkdir -p the (deploy-owned, under /mnt/data) directory, remove an EMPTY
+# directory sitting at <dest> (what docker creates for a missing bind source; the deploy owns the parent, so it can), then a temp
+# file beside the target (install copies the bytes and sets the mode in one step), renamed over it (mv -T never descends into
+# a directory). A NON-empty directory at <dest> stays and the rename fails.
 _inngest_link_install() {
   local tmp
   mkdir -p "$(dirname "$2")" 2>/dev/null || true
+  if [[ -d "$2" && ! -L "$2" ]]; then rmdir "$2" 2>/dev/null || true; fi
   tmp="$(mktemp "$(dirname "$2")/.$(basename "$2").XXXXXX" 2>/dev/null)" || return 1
-  if cat "$1" > "$tmp" 2>/dev/null && chmod "$3" "$tmp" 2>/dev/null && mv -fT "$tmp" "$2" 2>/dev/null; then
+  if install -m "$3" "$1" "$tmp" 2>/dev/null && mv -fT "$tmp" "$2" 2>/dev/null; then
     return 0
   fi
   rm -f "$tmp"
@@ -3542,20 +3559,41 @@ _inngest_link_selfgate() { # <cafile>: no -k, no --capath; success = TLS verifie
   return 1
 }
 
+# _inngest_link_last_scheme: sets _IL_PREV to https|http from $INNGEST_LINK_DIR/last-scheme, else empty. A regular file (never a
+# symlink), <= 16 bytes, whose WHOLE content is exactly one of the two tokens; anything else reads as "unknown" (no event).
+_inngest_link_last_scheme() {
+  local f="$INNGEST_LINK_DIR/last-scheme" content=""
+  _IL_PREV=""
+  [[ -f "$f" && ! -L "$f" && -r "$f" ]] || return 0
+  [[ "$(wc -c < "$f" 2>/dev/null | tr -d ' ')" -le 16 ]] || return 0
+  content="$(cat "$f" 2>/dev/null)" || return 0
+  case "$content" in https | http) _IL_PREV="$content" ;; esac
+  return 0
+}
+
 resolve_inngest_link() {
   local snap="${1:-}" flag="" now epoch ca_dest ca_env_dest b64="" cand="" try=1 scheme url cacert
+  local proj_n proj_v cfg_n cfg_v
   INNGEST_BASE_URL_RESOLVED=""; INNGEST_LINK_STATE=""; INNGEST_LINK_REASON=""; INNGEST_LINK_CA_STRICT=0
   ca_dest="$INNGEST_LINK_DIR/inngest-ca.pem"
   ca_env_dest="$INNGEST_LINK_DIR/inngest-link.env"
 
-  # 1. the snapshot: readable, bound to soleur/prd, and the flag read from it
-  _inngest_link_snap_get "$snap" DOPPLER_PROJECT || { INNGEST_LINK_REASON=inngest_link_snapshot_unreadable; inngest_link_event snapshot_unreadable error; return 1; }
-  if [[ "$_IL_N" != 1 || "$_IL_VAL" != soleur ]]; then INNGEST_LINK_REASON=inngest_link_scope_mismatch; inngest_link_event scope_mismatch error "field=project"; return 1; fi
-  _inngest_link_snap_get "$snap" DOPPLER_CONFIG || { INNGEST_LINK_REASON=inngest_link_snapshot_unreadable; inngest_link_event snapshot_unreadable error; return 1; }
-  if [[ "$_IL_N" != 1 || "$_IL_VAL" != prd ]]; then INNGEST_LINK_REASON=inngest_link_scope_mismatch; inngest_link_event scope_mismatch error "field=config"; return 1; fi
+  # 1. the snapshot: readable, the flag read from it, and its scope (when it names one) soleur/prd
   _inngest_link_snap_get "$snap" INNGEST_LINK_TLS || { INNGEST_LINK_REASON=inngest_link_snapshot_unreadable; inngest_link_event snapshot_unreadable error; return 1; }
   if [[ "$_IL_N" -gt 1 ]]; then INNGEST_LINK_REASON=inngest_link_flag_invalid; inngest_link_event flag_invalid error "lines=$_IL_N"; return 1; fi
   flag="$_IL_VAL"
+  _inngest_link_snap_get "$snap" DOPPLER_PROJECT || { INNGEST_LINK_REASON=inngest_link_snapshot_unreadable; inngest_link_event snapshot_unreadable error; return 1; }
+  proj_n="$_IL_N"; proj_v="$_IL_VAL"
+  _inngest_link_snap_get "$snap" DOPPLER_CONFIG || { INNGEST_LINK_REASON=inngest_link_snapshot_unreadable; inngest_link_event snapshot_unreadable error; return 1; }
+  cfg_n="$_IL_N"; cfg_v="$_IL_VAL"
+  # a line that is PRESENT and wrong (or repeated) is a mis-bound token: always a hard failure
+  if [[ "$proj_n" -gt 1 || ( "$proj_n" == 1 && "$proj_v" != soleur ) ]]; then INNGEST_LINK_REASON=inngest_link_scope_mismatch; inngest_link_event scope_mismatch error "field=project"; return 1; fi
+  if [[ "$cfg_n" -gt 1 || ( "$cfg_n" == 1 && "$cfg_v" != prd ) ]]; then INNGEST_LINK_REASON=inngest_link_scope_mismatch; inngest_link_event scope_mismatch error "field=config"; return 1; fi
+  # a line that is ABSENT cannot be judged: with the flag set the scope is unverifiable, so a flagged fleet fails closed
+  if [[ "$proj_n" == 0 || "$cfg_n" == 0 ]]; then
+    if [[ -n "$flag" ]]; then INNGEST_LINK_REASON=inngest_link_scope_mismatch; inngest_link_event scope_mismatch error "field=unverified"; return 1; fi
+    inngest_link_event scope_unverified warning "project_lines=$proj_n config_lines=$cfg_n action=http_default"
+  fi
 
   # 2. the flag -> a state (enum), never a value
   if [[ -z "$flag" ]]; then
@@ -3578,45 +3616,49 @@ resolve_inngest_link() {
   fi
   case "$INNGEST_LINK_STATE" in https_flag | https_pending) INNGEST_LINK_CA_STRICT=1 ;; esac
 
-  # 3. the CA: read, validate, install. Strict (flag on): any failure fails the deploy. Otherwise: placeholder.
-  if [[ "$INNGEST_LINK_CA_STRICT" == 1 ]]; then
-    while :; do
-      if _doppler_get_observed INNGEST_TLS_CA b64; then break; fi
-      b64=""
-      if [[ "$try" -ge 3 ]]; then break; fi
-      try=$((try + 1)); sleep 2
-    done
-    if [[ -z "$b64" ]]; then
-      INNGEST_LINK_REASON=inngest_link_ca_unavailable
-      inngest_link_event ca_unavailable error "rc=${CRED_RC:-?} empty=${CRED_EMPTY:-?} attempts=$try"
-      return 1
-    fi
-  else
-    _doppler_get_observed INNGEST_TLS_CA b64 || b64=""
-  fi
+  # 3. the CA file. http: only the bind-source placeholder, nothing read or validated. https: read, validate, self-gate the
+  #    CANDIDATE, install last.
   cand="$(mktemp /tmp/inngest-ca-cand.XXXXXX 2>/dev/null)" || cand=""  # lint-trap-ownership: ok rm -f on every path below; PrivateTmp bounds an abort leak
-  if [[ -n "$cand" ]] && [[ -n "$b64" ]] && _inngest_link_validate_ca "$b64" "$cand"; then
-    :
+  if [[ "$INNGEST_LINK_CA_STRICT" != 1 ]]; then
+    if [[ -f "$ca_dest" && ! -L "$ca_dest" ]]; then
+      :   # already a regular file (an earlier placeholder, or a CA an https deploy installed): left exactly as it is
+    elif [[ -z "$cand" ]] || ! _inngest_link_install "$cand" "$ca_dest" 0644; then
+      inngest_link_event ca_unwritable warning "dir=$INNGEST_LINK_DIR action=continue"
+    fi
+    rm -f "$cand"
   else
-    if [[ "$INNGEST_LINK_CA_STRICT" == 1 ]]; then
+    # the snapshot already carries INNGEST_TLS_CA (soleur/prd): no extra Doppler call; otherwise read it, retried
+    _inngest_link_snap_get "$snap" INNGEST_TLS_CA || true
+    if [[ "$_IL_N" == 1 && -n "$_IL_VAL" ]]; then
+      b64="$_IL_VAL"
+    else
+      while :; do
+        if _doppler_get_observed INNGEST_TLS_CA b64; then break; fi
+        b64=""
+        if [[ "$try" -ge 3 ]]; then break; fi
+        try=$((try + 1)); sleep 2
+      done
+      if [[ -z "$b64" ]]; then
+        rm -f "$cand"
+        INNGEST_LINK_REASON=inngest_link_ca_unavailable
+        inngest_link_event ca_unavailable error "rc=${CRED_RC:-?} empty=${CRED_EMPTY:-?} attempts=$try"
+        return 1
+      fi
+    fi
+    if [[ -z "$cand" ]]; then
+      INNGEST_LINK_REASON=inngest_link_write_failed; inngest_link_event write_failed error "file=ca_candidate"; return 1
+    fi
+    if ! _inngest_link_validate_ca "$b64" || ! printf '%s\n' "$_IL_CERT" > "$cand"; then
       rm -f "$cand"
       INNGEST_LINK_REASON=inngest_link_ca_invalid; inngest_link_event ca_invalid error "b64_len=${#b64} why=${_IL_WHY:-unknown}"; return 1
     fi
-    [[ -n "$b64" ]] && inngest_link_event ca_invalid warning "b64_len=${#b64} why=${_IL_WHY:-unknown} action=placeholder"
-    [[ -n "$cand" ]] && : > "$cand"
-  fi
-  if [[ -z "$cand" ]] || ! _inngest_link_install "$cand" "$ca_dest" 0644; then
-    rm -f "$cand"
-    if [[ "$INNGEST_LINK_CA_STRICT" == 1 ]]; then
+    # 4. the self-gate against the CANDIDATE (the pinned bytes against the real listener, from the host OUTPUT chain), BEFORE install
+    if ! _inngest_link_selfgate "$cand"; then rm -f "$cand"; INNGEST_LINK_REASON=inngest_link_selfgate_failed; return 1; fi
+    if ! _inngest_link_install "$cand" "$ca_dest" 0644; then
+      rm -f "$cand"
       INNGEST_LINK_REASON=inngest_link_write_failed; inngest_link_event write_failed error "file=ca"; return 1
     fi
-    inngest_link_event ca_unwritable warning "dir=$INNGEST_LINK_DIR action=continue"
-  fi
-  rm -f "$cand"
-
-  # 4. the self-gate (strict only): the pinned bytes against the real listener, from the host OUTPUT chain
-  if [[ "$INNGEST_LINK_CA_STRICT" == 1 ]]; then
-    if ! _inngest_link_selfgate "$ca_dest"; then INNGEST_LINK_REASON=inngest_link_selfgate_failed; return 1; fi
+    rm -f "$cand"
   fi
 
   # 5. the outputs: URL and link env from enum branches and constants only
@@ -3635,6 +3677,17 @@ resolve_inngest_link() {
     inngest_link_event link_env_unwritable warning "dir=$INNGEST_LINK_DIR action=continue"
   fi
   rm -f "$cand"
+
+  # 6. the downgrade memory: a host that last resolved https and now resolves http is signalled (never failed), then the scheme is persisted
+  _inngest_link_last_scheme
+  if [[ "$scheme" == http && "$_IL_PREV" == https ]]; then
+    inngest_link_event https_to_http warning "state=$INNGEST_LINK_STATE previous=https"
+  fi
+  cand="$(mktemp /tmp/inngest-link-scheme.XXXXXX 2>/dev/null)" || cand=""  # lint-trap-ownership: ok rm -f on every path below; PrivateTmp bounds an abort leak
+  if [[ -z "$cand" ]] || ! printf '%s\n' "$scheme" > "$cand" || ! _inngest_link_install "$cand" "$INNGEST_LINK_DIR/last-scheme" 0644; then
+    inngest_link_event last_scheme_unwritable warning "dir=$INNGEST_LINK_DIR action=continue"
+  fi
+  rm -f "$cand"
   INNGEST_BASE_URL_RESOLVED="$url"
   inngest_link_event resolved info "state=$INNGEST_LINK_STATE scheme=$scheme"
   return 0
@@ -3649,11 +3702,16 @@ resolve_inngest_link() {
 # through the event API the SDK posts to; (4) a NEGATIVE CONTROL in the same container with the CA withheld
 # (`env -u NODE_EXTRA_CA_CERTS`), which must fail with a certificate-verification error - a container that trusts everything would
 # otherwise pass every other check; (5) the registry read over https is non-empty. The scripts print fixed tokens only (never an
-# env value, a key or a response body) and the host parses them anchored, so anything else is a failure. Sets CANARY_FAIL_REASON.
-INNGEST_LINK_CANARY_POS='const c=require("crypto"),b=process.env.INNGEST_BASE_URL,o=[];const k=(n,v)=>o.push(n+"="+(v?"ok":"fail"));const hs=s=>{const p=(s.match(/^signkey-\w+-/)||[""])[0];return p+c.createHash("sha256").update(s.slice(p.length),"hex").digest("hex")};const t=(u,x)=>fetch(u,Object.assign({signal:AbortSignal.timeout(15000)},x));(async()=>{try{k("health",(await t(b+"/health")).status===200)}catch(e){k("health",0)}try{k("events",(await t(b+"/v1/events?limit=1",{headers:{Authorization:"Bearer "+hs(process.env.INNGEST_SIGNING_KEY||"")}})).status===200)}catch(e){k("events",0)}try{k("send",(await t(b+"/e/"+encodeURIComponent(process.env.INNGEST_EVENT_KEY||""),{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify([{name:"soleur.tls-canary.ping",data:{canary:true}}])})).status===200)}catch(e){k("send",0)}try{const j=await(await t(b+"/v0/gql",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({query:"query{functions{id}}"})})).json();k("registry",Array.isArray(j&&j.data&&j.data.functions)&&j.data.functions.length>0)}catch(e){k("registry",0)}console.log("inngest_link_canary "+o.join(" "))})()'
+# env value, a key or a response body) and the host parses them anchored, so anything else is a failure. Each positive check prints
+# `ok` or `fail[:<CAUSE>]` where CAUSE is mapped inside the container from a FIXED allowlist (errno / TLS-verification codes, `HTTP_<status>`,
+# `EMPTY`, else `other`; never raw error text), so the `canary_failed` event reads `check=<name> cause=<token>` and a failed check is not a
+# boolean (egress dropped = ETIMEDOUT/ECONNREFUSED, Node not trusting the pin = DEPTH_ZERO_SELF_SIGNED_CERT, the listener answering = HTTP_5xx).
+# Sets CANARY_FAIL_REASON (a constant: the cause lives in the event, Better Stack tag ci-deploy, Sentry op=inngest-link).
+INNGEST_LINK_CANARY_POS='const c=require("crypto"),b=process.env.INNGEST_BASE_URL,o=[];const g=v=>typeof v==="string"?v:"";const w=e=>{const x=g(e&&e.cause&&e.cause.code)||g(e&&e.code)||g(e&&e.name);return /^(ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|UND_ERR_[A-Z_]{1,30}|DEPTH_ZERO_SELF_SIGNED_CERT|SELF_SIGNED_CERT_IN_CHAIN|UNABLE_TO_VERIFY_LEAF_SIGNATURE|UNABLE_TO_GET_ISSUER_CERT_LOCALLY|CERT_HAS_EXPIRED|ERR_TLS_[A-Z_]{1,30}|TimeoutError|AbortError|SyntaxError)$/.test(x)?x:"other"};const k=(n,v)=>o.push(n+"="+(v?"fail:"+v:"ok"));const h=r=>r.status===200?"":"HTTP_"+r.status;const hs=s=>{const p=(s.match(/^signkey-\w+-/)||[""])[0];return p+c.createHash("sha256").update(s.slice(p.length),"hex").digest("hex")};const t=(u,x)=>fetch(u,Object.assign({signal:AbortSignal.timeout(15000)},x));(async()=>{try{k("health",h(await t(b+"/health")))}catch(e){k("health",w(e))}try{k("events",h(await t(b+"/v1/events?limit=1",{headers:{Authorization:"Bearer "+hs(process.env.INNGEST_SIGNING_KEY||"")}})))}catch(e){k("events",w(e))}try{k("send",h(await t(b+"/e/"+encodeURIComponent(process.env.INNGEST_EVENT_KEY||""),{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify([{name:"soleur.tls-canary.ping",data:{canary:true}}])})))}catch(e){k("send",w(e))}try{const r=await t(b+"/v0/gql",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({query:"query{functions{id}}"})});const j=await r.json();k("registry",r.status!==200?"HTTP_"+r.status:(Array.isArray(j&&j.data&&j.data.functions)&&j.data.functions.length>0?"":"EMPTY"))}catch(e){k("registry",w(e))}console.log("inngest_link_canary "+o.join(" "))})()'
 INNGEST_LINK_CANARY_NEG='fetch(process.env.INNGEST_BASE_URL+"/health",{signal:AbortSignal.timeout(15000)}).then(()=>console.log("inngest_link_canary_neg=accepted"),e=>{const c=(e&&e.cause&&e.cause.code)||"";console.log("inngest_link_canary_neg="+(/^(DEPTH_ZERO_SELF_SIGNED_CERT|SELF_SIGNED_CERT_IN_CHAIN|UNABLE_TO_VERIFY_LEAF_SIGNATURE|UNABLE_TO_GET_ISSUER_CERT_LOCALLY|ERR_TLS_CERT_ALTNAME_INVALID)$/.test(c)?"verify_error":"other"))})'
 inngest_link_canary_check() {
-  local cname="soleur-web-platform-canary" envs out="" rc=0 why=""
+  local cname="soleur-web-platform-canary" envs out="" rc=0 why="" cause="none" part name val
+  local -a parts
   [[ "$INNGEST_LINK_CA_STRICT" == 1 ]] || return 0
   envs="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$cname" 2>/dev/null)" || envs=""
   if [[ "$(printf '%s\n' "$envs" | grep -c '^INNGEST_BASE_URL=')" != 1 \
@@ -3663,21 +3721,30 @@ inngest_link_canary_check() {
   fi
   if [[ -z "$why" ]]; then
     out="$(timeout 90 docker exec "$cname" /usr/local/bin/node -e "$INNGEST_LINK_CANARY_POS" 2>/dev/null)" || rc=$?
-    if [[ "$rc" -ne 0 || ! "$out" =~ ^inngest_link_canary\ health=(ok|fail)\ events=(ok|fail)\ send=(ok|fail)\ registry=(ok|fail)$ ]]; then
+    # each check is `ok` or `fail[:<CAUSE>]` (a bounded [A-Za-z0-9_] token the in-container script maps from a fixed allowlist, else `other`)
+    if [[ "$rc" -ne 0 || ! "$out" =~ ^inngest_link_canary\ health=(ok|fail(:[A-Za-z0-9_]{1,40})?)\ events=(ok|fail(:[A-Za-z0-9_]{1,40})?)\ send=(ok|fail(:[A-Za-z0-9_]{1,40})?)\ registry=(ok|fail(:[A-Za-z0-9_]{1,40})?)$ ]]; then
       why="no_verdict"
-    elif [[ "${BASH_REMATCH[1]}" != ok ]]; then why="health"
-    elif [[ "${BASH_REMATCH[2]}" != ok ]]; then why="events"
-    elif [[ "${BASH_REMATCH[3]}" != ok ]]; then why="send"
-    elif [[ "${BASH_REMATCH[4]}" != ok ]]; then why="registry"
+    else
+      read -r -a parts <<< "${out#inngest_link_canary }"
+      for part in "${parts[@]}"; do
+        name="${part%%=*}"; val="${part#*=}"
+        if [[ "$val" != ok ]]; then
+          why="$name"; cause="${val#fail}"; cause="${cause#:}"; cause="${cause:-unknown}"
+          break
+        fi
+      done
     fi
   fi
   if [[ -z "$why" ]]; then
     rc=0
     out="$(timeout 90 docker exec "$cname" env -u NODE_EXTRA_CA_CERTS /usr/local/bin/node -e "$INNGEST_LINK_CANARY_NEG" 2>/dev/null)" || rc=$?
-    if [[ "$rc" -ne 0 || "$out" != "inngest_link_canary_neg=verify_error" ]]; then why="negative_control"; fi
+    if [[ "$rc" -ne 0 || "$out" != "inngest_link_canary_neg=verify_error" ]]; then
+      why="negative_control"
+      cause="${out#inngest_link_canary_neg=}"; [[ "$rc" -eq 0 && "$cause" =~ ^[a-z_]{1,20}$ ]] || cause="no_verdict"
+    fi
   fi
   if [[ -n "$why" ]]; then
-    inngest_link_event canary_failed error "check=$why"
+    inngest_link_event canary_failed error "check=$why cause=$cause"
     CANARY_FAIL_REASON="canary_inngest_link_failed"
     return 1
   fi
