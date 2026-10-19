@@ -385,13 +385,15 @@ recorded 2026-10-19 with an `LD_PRELOAD` interposer around the helper (not recal
 init), then in the init `prctl(PR_SET_DUMPABLE)`, `mount(MS_PRIVATE)`, `mount(/proc)`, `prctl(PR_CAP_AMBIENT_CLEAR_ALL)`,
 `fork(worker)`; the worker then runs `prctl(PR_SET_NO_NEW_PRIVS)`, `prctl(PR_SET_SECCOMP)`, `execvp`; both waiting
 processes print `waitpid` AFTER the tenant command ran. All 16 are classified (`helper_userns_eperm` for the userns step,
-`helper_step_eperm` for the rest) and page `agent_sandbox_bash_denial`. Only the 11 steps before `fork(worker)`
-(`HELPER_STEPS_PRE_WORKER_FORK`) can trigger the tenant notice; `fork(worker)`, the worker's three pre-exec steps and `waitpid`
-never do. A test re-reads the binary's strings and reds when this list and the binary disagree in either direction, so an SDK
+`helper_step_eperm` for the rest) and page `agent_sandbox_bash_denial`. The 15 steps before the tenant command
+(`HELPER_STEPS_PRE_COMMAND`: everything above up to and including `execvp`) can trigger the tenant notice; only `waitpid`
+(`HELPER_STEPS_POST_COMMAND`), which prints after the command ran, never does. (CTO ruling 2026-10-19: widened from the 11 steps
+before `fork(worker)`, because the measured order runs `fork(worker)`, both `prctl` steps and `execvp` before the tenant command;
+flip `execvp` out to make it 14 only if a measured argv shows the helper execs the tenant argv directly.) A test re-reads the binary's strings and reds when this list and the binary disagree in either direction, so an SDK
 bump that adds a step surfaces in CI rather than as an unclassified line.
 
 In autonomous sessions the streamed `command_stream` text of a Bash result that is, as a whole, ONE error-flagged
-pre-exec sandbox line (a pre-fork helper step or a `bwrap` EPERM line) is replaced by: "Platform notice: command execution
+pre-exec sandbox line (any classified helper step except `waitpid`, or a `bwrap` EPERM line) is replaced by: "Platform notice: command execution
 is temporarily unavailable on our side. This is a platform issue, not a problem with your project." The mirror event is
 emitted first from the raw output. The SDK-visible tool_result is not rewritable, so the model still sees the raw line and a
 system-prompt directive (`BASH_UNAVAILABLE_PROMPT_DIRECTIVE`) tells it not to echo it, to retry the same command ONCE only
@@ -404,7 +406,7 @@ line-anchored, nothing trailing), is debounced per user (keyed with the error co
 `sandboxErrorCode`s, so a tenant-printed `bwrap` line cannot reach it. A tenant CAN still print an exact helper line and
 keep one incident open, suppressing new pages (see the alert's entry in `betterstack-log-query.md`; mitigation tracked
 in #10455). The same forgery can reach the tenant notice: the notice requires the SDK's error flag, a single non-blank
-line and a pre-fork step, but a command that ran and exited non-zero can print that line. That residual is accepted, which
+line and a pre-command helper step, but a command that ran and exited non-zero can print that line. That residual is accepted, which
 is why the notice does not claim the command did not run. The deploy-time smoke (#10453), not tenant text, is the authoritative signal; the email only prompts the check above. The wake path for both alerts is email-only on
 the Better Stack free tier until the ADR-260 Slack integration is verified.
 

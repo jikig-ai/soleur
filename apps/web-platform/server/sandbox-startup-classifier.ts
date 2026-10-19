@@ -195,13 +195,15 @@ const BASH_BWRAP_TOKEN = /\b(?:bwrap|bubblewrap)\b/i;
 const HELPER_USERNS_STEP = "unshare(CLONE_NEWUSER)";
 
 /**
- * Steps that run strictly BEFORE the helper forks its worker (`fork(worker)`). Runtime order (helper process, then
- * the PID-namespace init it forks): unshare(NEWPID|NEWNS) attempt, unshare(CLONE_NEWUSER), write setgroups / uid_map /
- * gid_map, unshare(NEWPID|NEWNS) after userns, `fork` (the init), then in the init prctl(PR_SET_DUMPABLE),
- * mount(MS_PRIVATE), mount(/proc), prctl(PR_CAP_AMBIENT_CLEAR_ALL), and only then `fork(worker)`.
- * Only these may trigger the user-facing notice: every one of them fails before the tenant command could start.
+ * Steps that run BEFORE the tenant command starts (CTO ruling F2, 2026-10-19). Measured runtime order (helper
+ * process, then the PID-namespace init it forks): unshare(NEWPID|NEWNS) attempt, unshare(CLONE_NEWUSER), write
+ * setgroups / uid_map / gid_map, unshare(NEWPID|NEWNS) after userns, `fork` (the init), then in the init
+ * prctl(PR_SET_DUMPABLE), mount(MS_PRIVATE), mount(/proc), prctl(PR_CAP_AMBIENT_CLEAR_ALL), `fork(worker)`, and in
+ * the worker prctl(PR_SET_NO_NEW_PRIVS), prctl(PR_SET_SECCOMP) and execvp of the tenant command. Every one of these
+ * fails before the tenant command could have produced output, so only these may trigger the user-facing notice.
+ * Flip `execvp` out of this list only if a measured argv shows the helper execs the tenant argv directly.
  */
-export const HELPER_STEPS_PRE_WORKER_FORK: readonly string[] = [
+export const HELPER_STEPS_PRE_COMMAND: readonly string[] = [
   HELPER_USERNS_STEP,
   "write /proc/self/setgroups (nested userns is capability-restricted; caller must provide CAP_SYS_ADMIN)",
   "write /proc/self/uid_map",
@@ -213,30 +215,25 @@ export const HELPER_STEPS_PRE_WORKER_FORK: readonly string[] = [
   "mount(MS_PRIVATE)",
   "mount(/proc)",
   "prctl(PR_CAP_AMBIENT_CLEAR_ALL)",
-];
-
-/** Steps at or after the worker fork: the worker's pre-exec calls and the waiters. Classified (so they page) but
- *  never rewritten into the notice: `waitpid` is printed AFTER the tenant command ran, so its line can sit behind
- *  real command output and a forged copy proves nothing. */
-const HELPER_STEPS_AT_OR_AFTER_WORKER_FORK: readonly string[] = [
   "fork(worker)",
   "prctl(PR_SET_NO_NEW_PRIVS)",
   "prctl(PR_SET_SECCOMP)",
   "execvp",
-  "waitpid",
 ];
+
+/** Steps that run AFTER the tenant command: classified (so they page) but never rewritten into the notice.
+ *  `waitpid` is printed after the command ran, so its line can sit behind real command output and a forged copy
+ *  proves nothing. */
+export const HELPER_STEPS_POST_COMMAND: readonly string[] = ["waitpid"];
 
 /** Every helper step that takes a `: <strerror>` suffix: the exact-match allowlist. */
 export const HELPER_STEPS: readonly string[] = [
-  ...HELPER_STEPS_PRE_WORKER_FORK,
-  ...HELPER_STEPS_AT_OR_AFTER_WORKER_FORK,
+  ...HELPER_STEPS_PRE_COMMAND,
+  ...HELPER_STEPS_POST_COMMAND,
 ];
 
-/** Helper strings deliberately NOT classified: a fixed message with no errno suffix. */
-export const HELPER_NON_STEP_LINES: readonly string[] = ["observe sendmsg failed"];
-
 const HELPER_STEP_SET: ReadonlySet<string> = new Set(HELPER_STEPS);
-const HELPER_PRE_FORK_SET: ReadonlySet<string> = new Set(HELPER_STEPS_PRE_WORKER_FORK);
+const HELPER_PRE_COMMAND_SET: ReadonlySet<string> = new Set(HELPER_STEPS_PRE_COMMAND);
 // Captures the step; membership in HELPER_STEP_SET is the exact-match check, so no charset reasoning is needed.
 const BASH_APPLY_SECCOMP_LINE = /^[ \t]*apply-seccomp: (.{1,160}): (?:Operation not permitted|EPERM)[ \t]*$/;
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
@@ -320,7 +317,7 @@ export const BASH_UNAVAILABLE_NOTICE =
  * True only when a Bash tool_result is, as a whole, ONE pre-exec platform denial the user should see as the notice:
  *   - the result is flagged as an error (`is_error`), so a command that exited 0 can never be rewritten,
  *   - the trimmed output is exactly ONE non-blank line (mixed or multi-line output falls through unchanged),
- *   - that line is a classified helper line from the PRE-worker-fork subset, or a bwrap-token EPERM line,
+ *   - that line is a classified helper line from the PRE-command subset (every step but `waitpid`), or a bwrap-token EPERM line,
  *   - the line fits the scan cap (a longer line is never rewritten).
  * A forged single line from a command that ran and exited non-zero can still satisfy this: the residual is accepted
  * and recorded in the runbook, which is why the notice makes no claim about whether the command ran. The mirror event
@@ -335,7 +332,7 @@ export function isPreExecSandboxDenialOutput(output: string, isError: boolean | 
   const failure = classifyBashSandboxFailure(lines[0], null);
   if (!failure) return false;
   if (failure.errorCode === "proc_mount_eperm" || failure.errorCode === "bwrap_eperm") return true;
-  return failure.helperStep !== undefined && HELPER_PRE_FORK_SET.has(failure.helperStep);
+  return failure.helperStep !== undefined && HELPER_PRE_COMMAND_SET.has(failure.helperStep);
 }
 
 // NOTE (CTO ruling, ADR-079): there is deliberately NO stream-phase gate here.

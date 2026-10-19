@@ -394,8 +394,8 @@ export function mirrorBashSandboxFailure(
 
 /**
  * #10455 c — the text streamed into the chat as a Bash block's output. A Bash tool_result that is, as a whole, ONE
- * pre-exec platform denial (error-flagged, single non-blank line, a helper step that runs before the worker fork or
- * a bwrap EPERM line) is replaced by the fixed platform notice; everything else is returned unchanged. Applies to
+ * pre-exec platform denial (error-flagged, single non-blank line, any classified helper step except `waitpid` (all run before
+ * the tenant command) or a bwrap EPERM line) is replaced by the fixed platform notice; everything else is returned unchanged. Applies to
  * the streamed `command_stream` text only, in autonomous sessions only: the SDK-visible tool_result is not
  * rewritable (no hook), so the model still sees the raw line and `BASH_UNAVAILABLE_PROMPT_DIRECTIVE` keys on it.
  * The mirror event is emitted BEFORE this and reads the raw output, so the rewrite never removes the page.

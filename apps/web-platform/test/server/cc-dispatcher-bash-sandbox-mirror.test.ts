@@ -144,12 +144,16 @@ describe("mirrorBashSandboxFailure — helper_step_eperm (#10455 e)", () => {
 describe("selectCommandStreamOutput — the streamed text (#10455 c)", () => {
   const LINE = "apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted";
 
-  it("a single-line pre-fork denial with an error result streams the fixed platform notice", () => {
+  it("a single-line pre-command denial with an error result streams the fixed platform notice", () => {
     expect(selectCommandStreamOutput(LINE, true)).toBe(BASH_UNAVAILABLE_NOTICE);
     expect(selectCommandStreamOutput(`${LINE}\n`, true)).toBe(BASH_UNAVAILABLE_NOTICE);
     expect(selectCommandStreamOutput("bwrap: Can't mount proc on /newroot/proc: Operation not permitted", true)).toBe(
       BASH_UNAVAILABLE_NOTICE,
     );
+    // CTO ruling F2: the worker-side steps that run before the tenant command are in the subset too.
+    for (const step of ["fork(worker)", "prctl(PR_SET_NO_NEW_PRIVS)", "prctl(PR_SET_SECCOMP)", "execvp"]) {
+      expect(selectCommandStreamOutput(`apply-seccomp: ${step}: Operation not permitted`, true), step).toBe(BASH_UNAVAILABLE_NOTICE);
+    }
   });
 
   it("everything else passes through byte for byte: non-error, mixed, multi-line, post-fork, ordinary output", () => {
@@ -159,7 +163,6 @@ describe("selectCommandStreamOutput — the streamed text (#10455 c)", () => {
       [`hello\n${LINE}`, true],
       [`${LINE}\nhello`, true],
       ["apply-seccomp: waitpid: Operation not permitted", true],
-      ["apply-seccomp: fork(worker): Operation not permitted", true],
       ["On branch main\n", true],
       ["", true],
     ];

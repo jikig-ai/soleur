@@ -18,11 +18,12 @@ import {
   isPreExecSandboxDenialOutput,
   BASH_UNAVAILABLE_NOTICE,
   HELPER_STEPS,
-  HELPER_STEPS_PRE_WORKER_FORK,
-  HELPER_NON_STEP_LINES,
+  HELPER_STEPS_PRE_COMMAND,
+  HELPER_STEPS_POST_COMMAND,
 } from "@/server/sandbox-startup-classifier";
 import {
   assertHelperStepCensus,
+  HELPER_NON_STEP_LINES,
   bufferSource,
   fileSource,
   resolveVendoredBinary,
@@ -324,7 +325,7 @@ describe("classifyBashSandboxFailure — apply-seccomp helper arm (#10445, Guard
 describe("apply-seccomp helper steps — classification (#10455 e, Guard 2)", () => {
   const USERNS = "unshare(CLONE_NEWUSER)";
   const NON_USERNS = HELPER_STEPS.filter((s) => s !== USERNS);
-  const POST_FORK = ["fork(worker)", "prctl(PR_SET_NO_NEW_PRIVS)", "prctl(PR_SET_SECCOMP)", "execvp", "waitpid"];
+  const POST_COMMAND = ["waitpid"];
   const line = (step: string, errno = "Operation not permitted") => `apply-seccomp: ${step}: ${errno}`;
 
   it("floor: the allowlist is the 16 measured steps, userns among them, with no duplicates", () => {
@@ -363,14 +364,20 @@ describe("apply-seccomp helper steps — classification (#10455 e, Guard 2)", ()
     for (const x of HELPER_NON_STEP_LINES) expect(HELPER_STEPS).not.toContain(x);
   });
 
-  it("the pre-worker-fork subset is exactly the 11 steps that run before fork(worker); the 5 others never trigger the notice", () => {
-    expect(HELPER_STEPS_PRE_WORKER_FORK).toHaveLength(11);
-    for (const s of HELPER_STEPS_PRE_WORKER_FORK) expect(HELPER_STEPS).toContain(s);
-    expect([...HELPER_STEPS].filter((s) => !HELPER_STEPS_PRE_WORKER_FORK.includes(s)).sort()).toEqual([...POST_FORK].sort());
+  it("the notice subset is exactly the 15 steps that run before the tenant command; only waitpid is excluded", () => {
+    expect(HELPER_STEPS_PRE_COMMAND).toHaveLength(15);
+    expect(HELPER_STEPS_POST_COMMAND).toEqual(POST_COMMAND);
+    for (const s of HELPER_STEPS_PRE_COMMAND) expect(HELPER_STEPS).toContain(s);
+    for (const s of ["fork(worker)", "prctl(PR_SET_NO_NEW_PRIVS)", "prctl(PR_SET_SECCOMP)", "execvp"]) {
+      expect(HELPER_STEPS_PRE_COMMAND, s).toContain(s);
+    }
+    expect(HELPER_STEPS_PRE_COMMAND).not.toContain("waitpid");
+    expect([...HELPER_STEPS].filter((s) => !HELPER_STEPS_PRE_COMMAND.includes(s)).sort()).toEqual([...POST_COMMAND].sort());
+    expect(HELPER_STEPS_PRE_COMMAND.length + HELPER_STEPS_POST_COMMAND.length).toBe(HELPER_STEPS.length);
   });
 
-  it("Guard 2 row 5: a post-worker-fork line never triggers the notice, even as a single error line", () => {
-    for (const step of POST_FORK) {
+  it("Guard 2 row 5: a waitpid line (printed AFTER the tenant command ran) never triggers the notice, even as a single error line", () => {
+    for (const step of POST_COMMAND) {
       expect(isPreExecSandboxDenialOutput(line(step), true), step).toBe(false);
     }
     // ...while it is still classified, so the page still fires.
@@ -383,9 +390,9 @@ describe("isPreExecSandboxDenialOutput — the notice predicate (#10455 c, Guard
   const USERNS_LINE = "apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted";
   const BWRAP = "bwrap: Can't mount proc on /newroot/proc: Operation not permitted";
 
-  it("every pre-fork step line, alone and error-flagged, qualifies", () => {
-    expect(HELPER_STEPS_PRE_WORKER_FORK.length).toBeGreaterThan(0); // floor: an empty table must not pass vacuously
-    for (const step of HELPER_STEPS_PRE_WORKER_FORK) {
+  it("every pre-command step line, alone and error-flagged, qualifies", () => {
+    expect(HELPER_STEPS_PRE_COMMAND.length).toBeGreaterThan(0); // floor: an empty table must not pass vacuously
+    for (const step of HELPER_STEPS_PRE_COMMAND) {
       expect(isPreExecSandboxDenialOutput(`apply-seccomp: ${step}: Operation not permitted`, true), step).toBe(true);
     }
     expect(isPreExecSandboxDenialOutput(BWRAP, true)).toBe(true);

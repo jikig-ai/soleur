@@ -552,6 +552,10 @@ export interface HelperStepPins {
 }
 
 /** Census: binary strings === classified ∪ excluded, both directions, with a floor. */
+/** Helper strings deliberately NOT classified (a fixed message with no errno suffix). Test-only: the census needs
+ *  it to tell "known and excluded" from "new in the binary"; production never reads it. */
+export const HELPER_NON_STEP_LINES: readonly string[] = ["observe sendmsg failed"];
+
 export function assertHelperStepCensus(found: readonly string[], pins: HelperStepPins, label: string): void {
   const known = new Set([...pins.classified, ...pins.excluded]);
   const seen = new Set(found);
@@ -568,8 +572,9 @@ export function assertHelperStepCensus(found: readonly string[], pins: HelperSte
   if (problems.length === 0) return;
   throw new Error(
     `[${label}] ${problems.join("; ")}. The vendored apply-seccomp helper's step list moved: decide whether each new ` +
-      "step is a pre-worker-fork step (can show the platform notice) or a post-fork one, then update HELPER_STEPS / " +
-      "HELPER_STEPS_PRE_WORKER_FORK / HELPER_NON_STEP_LINES in server/sandbox-startup-classifier.ts (#10455 e).",
+      "step runs before the tenant command (can show the platform notice) or after it, then update HELPER_STEPS / " +
+      "HELPER_STEPS_PRE_COMMAND / HELPER_STEPS_POST_COMMAND in server/sandbox-startup-classifier.ts and " +
+      "HELPER_NON_STEP_LINES in test/helpers/vendored-bwrap-tail.ts (#10455 e).",
   );
 }
 
