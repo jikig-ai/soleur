@@ -109,7 +109,7 @@ affected_go_run() {
   ADP_OF="$(affected_go_total)"
   local -a cmd=("${ADP_TOOL[@]}" test -p "$width")
   local log rc=0
-  affected_mktemp go; log="$AFFECTED_TMP"
+  affected_mktemp go || return 4; log="$AFFECTED_TMP"
 
   if [[ "$mode" == selected ]]; then
     local pkgs

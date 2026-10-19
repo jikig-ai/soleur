@@ -122,7 +122,11 @@ source "$GATE_DIR/lib/affected-tests/go.sh"
 # Scratch files (config dump, changed-set census, adapter logs) are registered
 # in AFFECTED_SCRATCH by affected_mktemp — remove them on every exit shape,
 # including the early refusal paths that never reach an adapter's own rm.
-trap 'affected_scratch_clean' EXIT INT TERM
+# EXIT alone leaves signal semantics intact — trapping INT/TERM on the same
+# handler would swallow the signal and resume at the interrupted statement.
+trap 'affected_scratch_clean' EXIT
+trap 'affected_scratch_clean; exit 130' INT
+trap 'affected_scratch_clean; exit 143' TERM
 
 usage() {
   sed -n '1,20p' "$0" | grep -E '^#' | sed 's/^# \{0,1\}//'
@@ -184,11 +188,13 @@ affected_detect_ci() {
     #   on: push            on: [push, pull_request]      on: {push: …}
     #   on:\n  push:        on:\n  pull_request:          on:\n  - push
     sed 's/#.*//' "$f" | awk '
-      /^[[:space:]]*on[[:space:]]*:/ {
+      # `on:` is a TOP-LEVEL yaml key — column 0 only. An indented `on:` inside a
+      # `run: |` block scalar is script text, not a trigger declaration.
+      /^on[[:space:]]*:/ {
         rest = $0
-        sub(/^[[:space:]]*on[[:space:]]*:[[:space:]]*/, "", rest)
+        sub(/^on[[:space:]]*:[[:space:]]*/, "", rest)
         # Scalar / flow sequence / flow map on the on: line itself.
-        if (rest ~ /(^|[][{},[:space:]])(pull_request|push)([]},[:space:]]|$)/) found = 1
+        if (rest ~ /(^|[][{},[:space:]])(pull_request|push)([]},:[:space:]]|$)/) found = 1
         inon = 1
         next
       }
@@ -301,7 +307,7 @@ affected_load_config() {
   local cfg=".soleur-test-gate.json"
   [[ -f "$cfg" ]] || return 0
   local tmp rc=0
-  affected_mktemp cfg; tmp="$AFFECTED_TMP"
+  affected_mktemp cfg || finish 4 none mktemp-failed - "$CI_NAME" - - -; tmp="$AFFECTED_TMP"
   _affected_json_dump "$cfg" >"$tmp" || rc=$?
   if (( rc == 2 )); then
     finish 4 none "toolchain-missing" config "$CI_NAME" - - -
@@ -540,7 +546,7 @@ affected_resolve_base || {
 # fail-closed probe and its stdout the first leg of the union, so a bad --base
 # refuses rather than reading as an empty diff and no diff runs twice.
 AFFECTED_CHANGED=()
-affected_mktemp changed; CHANGED_TMP="$AFFECTED_TMP"
+affected_mktemp changed || finish 4 none mktemp-failed - "$CI_NAME" - - -; CHANGED_TMP="$AFFECTED_TMP"
 _base_rc=0
 # -c core.quotePath=false: without it git emits non-ASCII paths C-quoted
 # ("dir/\303\251.txt"), which never matches a glob and misses the file system.
@@ -664,7 +670,7 @@ if (( ARG_EXPLAIN )); then
         affected_glob_match "$_p" "$_i" && { _cls=inert; _rule="$_i"; break; }
       done
     fi
-    echo "PATH ${_p} class=${_cls} rule=$(affected_marker_field "$_rule")"
+    echo "PATH $(affected_marker_field "$_p") class=${_cls} rule=$(affected_marker_field "$_rule")"
   done
 fi
 
@@ -704,7 +710,7 @@ if [[ -n "$GLOBAL_HIT" && "$ARG_FULL" == 0 ]]; then
 fi
 
 if (( ARG_EXPLAIN )); then
-  echo "SELECTION mode=${MODE} reason=${REASON} global_hit=${GLOBAL_HIT:--} ci=${CI_NAME}"
+  echo "SELECTION mode=${MODE} reason=${REASON} global_hit=$(affected_marker_field "${GLOBAL_HIT:--}") ci=${CI_NAME}"
   finish 0 explain "$REASON" - "$CI_NAME" - - -
 fi
 

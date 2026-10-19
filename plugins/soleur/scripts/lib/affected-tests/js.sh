@@ -127,7 +127,7 @@ affected_js_run() {
   ADP_OF="$(affected_js_total)"
   local -a cmd=()
   local log rc=0 ran="-"
-  affected_mktemp js; log="$AFFECTED_TMP"
+  affected_mktemp js || return 4; log="$AFFECTED_TMP"
 
   if [[ "$mode" == selected && "$ADP_TOOL_KIND" == vitest ]]; then
     local -a files=()

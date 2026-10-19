@@ -51,7 +51,7 @@ affected_nxt_run() {
   ADP_OF="-"
   local -a cmd=()
   local log rc=0
-  affected_mktemp nxt; log="$AFFECTED_TMP"
+  affected_mktemp nxt || return 4; log="$AFFECTED_TMP"
 
   if [[ "$ADP_TOOL_KIND" == nx ]]; then
     if [[ "$mode" == selected ]]; then

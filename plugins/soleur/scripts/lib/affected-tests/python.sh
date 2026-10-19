@@ -117,7 +117,7 @@ affected_py_run() {
   # shellcheck disable=SC2206  # `affected_py_width` emits flag words only
   [[ -n "$w" ]] && width_args=($w)
   local log rc=0
-  affected_mktemp py; log="$AFFECTED_TMP"
+  affected_mktemp py || return 4; log="$AFFECTED_TMP"
 
   if [[ "$mode" == selected ]]; then
     # Partition the changed set: changed test files run directly; the presence
