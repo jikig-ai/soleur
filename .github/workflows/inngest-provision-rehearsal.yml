@@ -650,6 +650,8 @@ jobs:
       # later, but this step makes a leaked host fail loudly in the run that leaked it.
       # Query by LABEL (the sweep's axis), and the trailing hyphen prefix by name.
       - name: Assert no rehearsal orphans remain (Hetzner API)
+        # always() — a failed destroy above is the partial-teardown case this step exists for.
+        if: always()
         timeout-minutes: 8
         run: |
           set -euo pipefail
@@ -670,3 +672,52 @@ jobs:
             exit 1
           fi
           echo "no rehearsal orphans"
+
+      # The scratch Doppler environment is NOT a Hetzner object, so the assert above cannot
+      # see it — and the scheduled sweep's token is config-scoped by construction, so the
+      # sweep's own probe arm could never enumerate the project (#9919: that arm is deleted;
+      # this check moved to the one job that holds a credential able to see what it created).
+      # The credential here is the Doppler provider token the rehearsal root itself
+      # authenticates with (DOPPLER_TOKEN_TF, exported by the infra-credentials loader
+      # — a tier_b_names entry the census requires to arrive through the loader, so
+      # this step reads the exported var ONLY, fail-closed on empty).
+      - name: Assert no scratch Doppler environment remains (Doppler API)
+        # always() — a failed destroy or Hetzner assert above is the partial-teardown case
+        # this check exists for; default success() would skip it exactly then.
+        if: always()
+        timeout-minutes: 3
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          # Declared floor, mirroring the sweep's honest-verdict shape: the project must
+          # enumerate at least `prd` before a "no rehearsal_*" answer means anything. A
+          # token that cannot see the project returns zero and FAILS this check rather than
+          # reporting a clean verdict it never measured.
+          ENV_FLOOR: 1
+        run: |
+          set -euo pipefail
+          ENV_TOKEN="${DOPPLER_TOKEN_TF:-}"
+          [[ -n "$ENV_TOKEN" ]] || { echo "::error::DOPPLER_TOKEN_TF is empty — the infra-credentials loader exported no provider token, so the scratch-environment check has no verdict. Fail-closed."; exit 1; }
+          printf '::add-mask::%s\n' "$ENV_TOKEN"
+          env_rc=0
+          env_raw="$(DOPPLER_TOKEN="$ENV_TOKEN" doppler environments -p soleur-inngest --json)" || env_rc=$?
+          if [[ "$env_rc" -ne 0 ]]; then
+            echo "::error::doppler environments -p soleur-inngest failed (rc=${env_rc}) — the scratch-environment check has no verdict. Fail-closed."
+            exit 1
+          fi
+          env_total="$(printf '%s' "$env_raw" | jq -r 'if type == "array" then length else "notarray" end' 2>/dev/null)" || env_total=""
+          if [[ ! "$env_total" =~ ^[0-9]+$ ]]; then
+            echo "::error::could not parse the doppler environments listing as a JSON array — fail-closed rather than reporting a clean verdict on an unreadable listing."
+            exit 1
+          fi
+          if [[ "$env_total" -lt "$ENV_FLOOR" ]]; then
+            echo "::error::doppler listed ${env_total} soleur-inngest environment(s), below the declared floor of ${ENV_FLOOR} (prd must exist) — the token cannot see what the rehearsal created; the check measured nothing."
+            exit 1
+          fi
+          # Either field can carry the prefix — `.slug // .name` alone would miss a
+          # rehearsal_ NAME under a non-matching slug, so both are probed independently.
+          env_left="$(printf '%s' "$env_raw" | jq -r '[.[]? | select(((.slug? // "") | tostring | startswith("rehearsal_")) or ((.name? // "") | tostring | startswith("rehearsal_"))) | (.slug? // .name? // "")] | .[]')"
+          if [[ -n "$env_left" ]]; then
+            echo "::error::scratch Doppler environment(s) remain in soleur-inngest after destroy: $(printf '%s\n' "$env_left" | paste -sd' ' - | tr -d '\000-\037\177' | tr '%' '_'). Reclaim per the inngest-provision-rehearsal runbook."
+            exit 1
+          fi
+          echo "no scratch rehearsal_* Doppler environments remain (${env_total} listed)"

@@ -875,9 +875,9 @@ mutate accepted-unread-counted-audited 'suites - always_on - len(unaudited) - ac
 mutate accept-ignored '        kept = [r for r in miss if r not in ok]' '        kept = miss' row_accept_ok
 mutate accept-without-reason 'or not re.match(r"^false-positive: \S", f[2])' 'or False' row_accept_badreason
 mutate cleared-by-failed-run 'if o["created_at"] > r["created_at"] and o["conclusion"] == "success":' 'if o["created_at"] > r["created_at"]:' row_cleared_by_failed
-mutate cleared-read-error-as-cleared '                    except ReadError:
-                        return False' '                    except ReadError:
-                        return True' row_cleared_read_error
+mutate cleared-read-error-as-cleared '                        except ReadError:
+                            return False' '                        except ReadError:
+                            return True' row_cleared_read_error
 mutate suite-job-narrowed 'SUITE_JOB = re.compile(r"^test-(scripts|webplat|bun)( \(|$)|^test-scripts-heavy( \(|$)")' 'SUITE_JOB = re.compile(r"^test-scripts( \(|$)")' row_shard_families
 mutate pull-request-event-counted 'FULL_EVENTS = ("merge_group", "push")' 'FULL_EVENTS = ("merge_group", "push", "pull_request")' row_full_events
 mutate commit-files-first-page-only '    files = []

@@ -15,6 +15,7 @@ turns that into a RED, so an unreadable workflow can never read as green.
 import json
 import re
 import sys
+from pathlib import Path
 
 import yaml
 
@@ -188,7 +189,7 @@ def context(sc):
 def script_defaults(path):
     out = {"poll_interval": None, "max_polls": None, "settle_polls": None, "deadline_seconds": None}
     try:
-        text = open(path, encoding="utf-8").read()
+        text = Path(path).read_text(encoding="utf-8")
     except OSError:
         return out
     for key, var in (("poll_interval", "POLL_INTERVAL"), ("max_polls", "MAX_POLLS"),

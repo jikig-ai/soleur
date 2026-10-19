@@ -2427,3 +2427,22 @@ AFFECTED_SCRIPTS_FOLLOWTHROUGHS_REGISTRY_CLIENTIP_ALERT_7530_PATHS=(
   "scripts/suite-durations.tsv"
   "scripts/suite-shard-legs.tsv"
 )
+
+# plugins/soleur/scripts/affected-tests.test.sh — the #9307 plugin-gate contract suite. The
+# corpus-walk arm flagged its `find .` calls: those run INSIDE PATH-shim fixture binaries
+# (stub vitest/jest/pytest) executing under the suite's own mktemp world — a synthesized
+# corpus, not the tracked tree, so the scan is scoped and a declared edge is the right
+# classification. Declared from what the suite actually reads: the SUT and its sourced
+# libs, its own sourced helpers, and the two repo files its live-repo row (B7) observes
+# — .soleur-test-gate.json (parsed on --explain) and scripts/test-all.sh (the delegated
+# runner whose --print-selection capability it probes).
+AFFECTED_PLUGINS_SOLEUR_SCRIPTS_AFFECTED_TESTS_TEST_SH_PATHS=(
+  ".soleur-test-gate.json"
+  "plugins/soleur/scripts/affected-tests.sh"
+  "plugins/soleur/scripts/affected-tests.test.sh"
+  "plugins/soleur/scripts/lib/affected-tests/"
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "plugins/soleur/test/test-helpers.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+  "scripts/test-all.sh"
+)

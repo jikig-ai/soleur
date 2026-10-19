@@ -11,6 +11,7 @@ exit 4 if the hunk is outside the named function. Prints `MUTANT <function> line
 """
 import ast
 import sys
+from pathlib import Path
 
 
 def main(argv):
@@ -18,7 +19,7 @@ def main(argv):
         sys.stderr.write(__doc__)
         return 2
     src_path, out_path, func, old, new = argv
-    src = open(src_path, encoding="utf-8").read()
+    src = Path(src_path).read_text(encoding="utf-8")
     if src.count(old) != 1:
         sys.stderr.write(f"make-proxy-mutant: <old> occurs {src.count(old)} times, need exactly 1: {old!r}\n")
         return 3
@@ -38,7 +39,7 @@ def main(argv):
         return 4
     mutated = src.replace(old, new)
     ast.parse(mutated)  # a mutant must still be a program, not a syntax error
-    open(out_path, "w", encoding="utf-8").write(mutated)
+    Path(out_path).write_text(mutated, encoding="utf-8")
     print(f"MUTANT {func} line {line_no}")
     return 0
 

@@ -288,7 +288,8 @@ def read_ci_leg_count(job, workflow=None, key="shard"):
     """N of JOB's matrix — `test-scripts`/`test-scripts-heavy` in ci.yml (key
     `shard:`), or `deploy-script-tests` in infra-validation.yml (key `leg:`) —
     scoped to the named job block so leg counts can never be confused."""
-    txt = open(workflow or CI_YML, encoding="utf-8").read()
+    with open(workflow or CI_YML, encoding="utf-8") as fh:
+        txt = fh.read()
     # The continuation is bounded to lines indented >= 4 (or blank): a `shard:`/
     # `leg:` line absent from THIS job cannot silently match the NEXT job's — the
     # next `^  job:` key at indent 2 terminates the scan and the match fails.
@@ -335,16 +336,17 @@ def read_incumbent(path, strict=False):
     out = {}
     if not os.path.exists(path):
         return out
-    for lineno, raw in enumerate(open(path, encoding="utf-8"), 1):
-        if raw.startswith("#") or not raw.strip():
-            continue
-        parts = raw.rstrip("\n").split("\t")
-        if len(parts) == 2 and parts[1].isdigit():
-            out[parts[0]] = int(parts[1])
-        elif strict:
-            die(f"{path}:{lineno}: unparseable manifest row "
-                f"{raw.rstrip()!r} — refusing --incremental; fix the row or "
-                f"regenerate with a full --runs pass")
+    with open(path, encoding="utf-8") as fh:
+        for lineno, raw in enumerate(fh, 1):
+            if raw.startswith("#") or not raw.strip():
+                continue
+            parts = raw.rstrip("\n").split("\t")
+            if len(parts) == 2 and parts[1].isdigit():
+                out[parts[0]] = int(parts[1])
+            elif strict:
+                die(f"{path}:{lineno}: unparseable manifest row "
+                    f"{raw.rstrip()!r} — refusing --incremental; fix the row or "
+                    f"regenerate with a full --runs pass")
     return out
 
 
@@ -369,19 +371,20 @@ def read_durations(path):
     weights, floors = {}, set()
     if not os.path.exists(path):
         die(f"--durations file not found: {path}")
-    for lineno, raw in enumerate(open(path, encoding="utf-8"), 1):
-        line = raw.rstrip("\n")
-        if not line or line.startswith("#"):
-            continue
-        parts = line.split("\t")
-        if len(parts) != 3 or not parts[1].isdigit() \
-                or parts[2] not in ("measured", "floor"):
-            die(f"{path}:{lineno}: malformed durations row {line!r} — "
-                f"expected 'label<TAB>ms<TAB>src' with src in (measured|floor)")
-        if parts[2] == "measured":
-            weights[parts[0]] = int(parts[1])
-        else:
-            floors.add(parts[0])
+    with open(path, encoding="utf-8") as fh:
+        for lineno, raw in enumerate(fh, 1):
+            line = raw.rstrip("\n")
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) != 3 or not parts[1].isdigit() \
+                    or parts[2] not in ("measured", "floor"):
+                die(f"{path}:{lineno}: malformed durations row {line!r} — "
+                    f"expected 'label<TAB>ms<TAB>src' with src in (measured|floor)")
+            if parts[2] == "measured":
+                weights[parts[0]] = int(parts[1])
+            else:
+                floors.add(parts[0])
     return weights, floors
 
 
@@ -395,18 +398,19 @@ def read_durations_ms(path):
     all_ms, measured = {}, []
     if not os.path.exists(path):
         return all_ms, measured
-    for lineno, raw in enumerate(open(path, encoding="utf-8"), 1):
-        line = raw.rstrip("\n")
-        if not line or line.startswith("#"):
-            continue
-        parts = line.split("\t")
-        if len(parts) != 3 or not parts[1].isdigit() \
-                or parts[2] not in ("measured", "floor"):
-            die(f"{path}:{lineno}: malformed durations row {line!r} — "
-                f"expected 'label<TAB>ms<TAB>src' with src in (measured|floor)")
-        all_ms[parts[0]] = int(parts[1])
-        if parts[2] == "measured":
-            measured.append(int(parts[1]))
+    with open(path, encoding="utf-8") as fh:
+        for lineno, raw in enumerate(fh, 1):
+            line = raw.rstrip("\n")
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) != 3 or not parts[1].isdigit() \
+                    or parts[2] not in ("measured", "floor"):
+                die(f"{path}:{lineno}: malformed durations row {line!r} — "
+                    f"expected 'label<TAB>ms<TAB>src' with src in (measured|floor)")
+            all_ms[parts[0]] = int(parts[1])
+            if parts[2] == "measured":
+                measured.append(int(parts[1]))
     return all_ms, measured
 
 
