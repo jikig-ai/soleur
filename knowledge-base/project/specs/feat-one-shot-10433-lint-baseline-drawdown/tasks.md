@@ -23,7 +23,7 @@ Issue: Closes #10433, Ref #10331 (keep #10331 OPEN). Follow-up: #10583.
 ## Phase 2 - Group B (fixtures and mutation harness, 16 findings) - commit 2
 
 - [ ] 2.1 `doppler-download-error-channel.mutation.py` x2; `fake-playwright-mcp.py` x4; `make-proxy-mutant.py` x2; `session-facts.py` x3; `wiring_facts.py` x1 (add `Path` imports)
-- [ ] 2.2 `proxy-session-driver.py` x4 (stderr handle via `ExitStack`, closed where `err.close()` is today)
+- [ ] 2.2 `proxy-session-driver.py` x4 (`with open(err_path, "wb") as err:` over the rest of `main()`, re-indent, read with `git diff -w`; delete the trailing `err.close()`)
 - [ ] 2.3 Run the proxy suite and the wiring suite; run the mutation battery once, awaited with `Monitor`: expect `control: GREEN`, no `SURVIVED` (on any survivor take a before-run in a detached worktree and compare per-mutant counts)
 - [ ] 2.4 `ruff --update`, stage the baseline, commit
 
