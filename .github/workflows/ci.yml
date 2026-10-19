@@ -1715,7 +1715,7 @@ jobs:
             : > "$GIT_ERR"
             # Raw rows, not --name-status (#10416): the classifier gates on the file MODES a raw row carries, so an added
             # symlink or an exec-bit `.md` runs the battery. A base-ref classifier that predates this feed fails closed (true).
-            if CHANGED="$(git diff --raw --no-color --no-ext-diff "origin/${GITHUB_BASE_REF}...HEAD" 2>>"$GIT_ERR")" \
+            if CHANGED="$(git diff --raw --no-color --no-ext-diff --ignore-submodules=none "origin/${GITHUB_BASE_REF}...HEAD" 2>>"$GIT_ERR")" \
               && git show "origin/${GITHUB_BASE_REF}:scripts/ci-shard-totality-classify.sh" > "$RUNNER_TEMP/ci-shard-totality-classify.sh" 2>>"$GIT_ERR"; then
               # Here-string, not `printf | bash`: see the e2e classify step (SIGPIPE on a >64 KB listing).
               APPLICABLE="$(bash "$RUNNER_TEMP/ci-shard-totality-classify.sh" pull_request <<<"$CHANGED")"
@@ -2234,7 +2234,7 @@ jobs:
             : > "$GIT_ERR"
             # Raw rows, not --name-status (#10416): the classifier gates on the file MODES a raw row carries, so an added
             # symlink or an exec-bit `.md` runs the job. A base-ref classifier that predates this feed fails closed (true).
-            if CHANGED="$(git diff --raw --no-color --no-ext-diff "origin/${GITHUB_BASE_REF}...HEAD" 2>>"$GIT_ERR")" \
+            if CHANGED="$(git diff --raw --no-color --no-ext-diff --ignore-submodules=none "origin/${GITHUB_BASE_REF}...HEAD" 2>>"$GIT_ERR")" \
               && git show "origin/${GITHUB_BASE_REF}:scripts/ci-e2e-classify.sh" > "$RUNNER_TEMP/ci-e2e-classify.sh" 2>>"$GIT_ERR"; then
               # A here-string, not `printf | bash`: the classifier exits at the first non-allowlisted row without reading the
               # rest, so on a raw-row listing over the 64 KB pipe buffer the printf takes SIGPIPE and pipefail reds the step.

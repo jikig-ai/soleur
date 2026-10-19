@@ -21,11 +21,11 @@
 #     status (100755, 120000, 160000, a mode-changing M, an A with a non-null
 #     old mode) emits `true`. This is deliberately STRICTER than the PR B
 #     driver's allowlist in scripts/ci-pr-selection.sh, which also admits
-#     100755: the driver has later stages, a classifier skip has none, and the
-#     shard-totality battery's census reads shebang files, so an executable
-#     `.md` can be a subject. Revisit before any widening of a doc-only
-#     allowlist, or if this skip is ever used for a context other than `e2e`
-#     or a non-required job.
+#     100755: the driver has later stages and a classifier skip has none, so
+#     the skip admits only plain regular files (defence in depth: no consumer
+#     is known to execute an executable `.md`). Revisit before any widening of
+#     a doc-only allowlist, or if this skip is ever used for a context other
+#     than the required `e2e` job.
 #   * `docs/**` is deliberately NOT safe: the repo-root `docs/` tree is only
 #     `docs/legal/**`, which is app-coupled via the pinned document SHA-256s in
 #     apps/web-platform/lib/legal/legal-doc-shas.ts.

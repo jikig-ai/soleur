@@ -69,7 +69,7 @@ PY
 
 # FROZEN copy of the PRE-change (#10416) classifier parse: the first whitespace token of a row is the status. It is the
 # base-ref copy the `transition` mode plants, so the test never depends on what origin/main holds today. Fed the new raw rows
-# its status token is `:100644`, which is neither M nor A, so it fails closed. SHARD_ARM is the one allowlist arm that differs.
+# its status token is `:100644`, which is neither M nor A, so it fails closed. `arm` is the one allowlist arm that differs.
 frozen_classifier() { # <job: e2e|shard>
   local arm='knowledge-base/*) ;;'
   [ "$1" = shard ] && arm='knowledge-base/*.md) ;;'
@@ -121,6 +121,8 @@ EOF
 #          symlink : an ADDED symlinked `.md` (git mode 120000) under knowledge-base/: not markdown, so the job runs
 #          execbit : an ADDED executable `.md` (git mode 100755)
 #          modeflip: an exec-bit flip (100644 -> 100755) on a tracked root README.md
+#          typechg : a tracked root README.md replaced by a symlink (git T row, 100644 -> 120000)
+#          delete  : a tracked root README.md deleted (git D row)
 #          transition: a markdown-only diff, but the BASE ref carries the FROZEN pre-change classifier, which cannot read raw rows
 #          big     : a code row first, then ~1500 markdown rows (> 64 KB listing): the early-exit classifier must not
 #                    SIGPIPE the producer and red the step
@@ -171,6 +173,11 @@ run_case() {
       printf 'z\n' > "$work/knowledge-base/exec.md" ;;
     modeflip)
       : ;;
+    typechg)
+      rm -f "$work/README.md"
+      ln -s knowledge-base/a.md "$work/README.md" ;;
+    delete)
+      rm -f "$work/README.md" ;;
     big)
       mkdir -p "$work/aa" "$work/knowledge-base/big"
       printf 'y\n' > "$work/aa/x.ts"
@@ -210,6 +217,16 @@ run_case() {
   else
     fail "$job/$mode: want applicable=$expect got='${got}' rc=$rc ($(tr '\n' ' ' < "$warn" | cut -c1-200))"
   fi
+  # A true verdict must come from the classifier refusing the rows, not from the enum-failed fallback (a broken diff feed also
+  # prints true): the fallback's warning must be absent for every mode that reaches the classifier with a real diff.
+  case "$mode" in
+    symlink|execbit|modeflip|typechg|delete|transition)
+      if grep -qF 'fell back to enum-failed' "$warn"; then
+        fail "$job/$mode: true came from the enum-failed fallback, not the classifier ($(tr '\n' ' ' < "$warn" | cut -c1-200))"
+      else
+        pass "$job/$mode: verdict came from the classifier, not the enum-failed fallback"
+      fi ;;
+  esac
   local needle
   for needle in "$@"; do
     if grep -qF -e "$needle" "$warn"; then
@@ -220,6 +237,16 @@ run_case() {
   done
   rm -rf "$root"
 }
+
+# Control on the transition instrument: the frozen pre-change classifier must say false on a legacy name-status markdown row,
+# otherwise a heredoc that always fails closed would keep the `transition` case green for the wrong reason.
+for _arm in e2e shard; do
+  _fz="$WORK_ROOT/frozen-$_arm.sh"
+  frozen_classifier "$_arm" > "$_fz"
+  _fv="$(printf 'M\tknowledge-base/a.md\n' | bash "$_fz" pull_request 2>&1)"
+  if [ "$_fv" = false ]; then pass "frozen $_arm classifier reads a name-status markdown row as false (control)"
+  else fail "frozen $_arm classifier control: want false got '$_fv'"; fi
+done
 
 for spec in \
   "e2e|Classify e2e applicability|scripts/ci-e2e-classify.sh" \
@@ -235,12 +262,14 @@ for spec in \
   run_case "$job" "$prefix" "$classifier" symlink    true
   run_case "$job" "$prefix" "$classifier" execbit    true
   run_case "$job" "$prefix" "$classifier" modeflip   true
+  run_case "$job" "$prefix" "$classifier" typechg    true
+  run_case "$job" "$prefix" "$classifier" delete     true
   run_case "$job" "$prefix" "$classifier" transition true
 done
 
 total=$((PASS + FAIL))
-if [ "$total" -lt 24 ]; then
-  printf '[FATAL] assertion floor: only %s assertions ran, want >=24\n' "$total" >&2
+if [ "$total" -lt 42 ]; then
+  printf '[FATAL] assertion floor: only %s assertions ran, want >=42\n' "$total" >&2
   exit 1
 fi
 echo

@@ -132,6 +132,10 @@ expect_verdict "bare knowledge-base path runs"          true  pull_request "$(mr
 # git C-quotes control characters in diff output; the quoted row must
 # fail every allowlist arm (smuggled newline/tab payloads are unreachable).
 expect_verdict "C-quoted path runs"                     true  pull_request "$(mrow '"knowledge-base/x\ny.ts"')"
+# The row-grammar `^`/`$` anchors: a status-M row with a second tab field, and a row with junk before the colon, must not
+# be read as a well-formed row by prefix/suffix (a rename row alone cannot pin them: the STATUS guard masks it).
+expect_verdict "extra tab field after the path runs"    true  pull_request "$(raw_row M 100644 100644 $'README.md\tx.ts')"
+expect_verdict "junk before the row colon runs"         true  pull_request "junk$(mrow README.md)"
 # Editing the gate machinery itself always runs the gate — the rows below make
 # that an enforced invariant, not an accident of the current allowlist.
 expect_verdict "classifier edit runs e2e"               true  pull_request "$(mrow scripts/ci-e2e-classify.sh)"
@@ -234,7 +238,7 @@ anchor_in_e2e "classify fallback prints the git stderr"  'git stderr: ['
 
 # The diff range is load-bearing: a narrowed spec (HEAD~1, fixed base) hides
 # app changes in earlier commits of a multi-commit PR.
-anchor_in_e2e "diff range is the PR merge-base, as raw rows" 'git diff --raw --no-color --no-ext-diff "origin/${GITHUB_BASE_REF}...HEAD"'
+anchor_in_e2e "diff range is the PR merge-base, as raw rows" 'git diff --raw --no-color --no-ext-diff --ignore-submodules=none "origin/${GITHUB_BASE_REF}...HEAD" 2>>"$GIT_ERR")"'
 # The verdict-validation case converts a malformed verdict into a red job —
 # without it a classifier emitting garbage yields `applicable=`, every
 # `== 'true'` gate AND the `== 'false'` verdict step are false, and the job
@@ -317,8 +321,8 @@ fi
 # (ADR-193): a floor routed through fail()/FAIL++ is disarmed by the same
 # neutered machinery it exists to catch.
 total=$((PASS + FAIL))
-if [ "$total" -lt 68 ]; then
-  echo "[FATAL] assertion floor: only $total assertions ran, want >=68" >&2
+if [ "$total" -lt 70 ]; then
+  echo "[FATAL] assertion floor: only $total assertions ran, want >=70" >&2
   exit 1
 fi
 

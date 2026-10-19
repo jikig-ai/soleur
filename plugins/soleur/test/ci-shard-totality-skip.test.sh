@@ -94,6 +94,10 @@ expect_verdict "empty changeset runs"                    true  pull_request ''
 expect_verdict "subdir md outside kb runs"               true  pull_request "$(mrow plugins/soleur/README.md)"
 expect_verdict "knowledge-base-evil prefix runs"         true  pull_request "$(mrow knowledge-base-evil/x.md)"
 expect_verdict "C-quoted path runs"                      true  pull_request "$(mrow '"knowledge-base/x\ny.md"')"
+# The row-grammar `^`/`$` anchors: a status-M row with a second tab field, and a row with junk before the colon, must not
+# be read as a well-formed row by prefix/suffix (a rename row alone cannot pin them: the STATUS guard masks it).
+expect_verdict "extra tab field after the path runs"    true  pull_request "$(raw_row M 100644 100644 $'README.md\tx.ts')"
+expect_verdict "junk before the row colon runs"         true  pull_request "junk$(mrow README.md)"
 expect_verdict "second row after a compliant first runs" true  pull_request "$(mrow knowledge-base/a.md; mrow scripts/test-all.sh)"
 # A final row with no trailing newline must still be read (the `|| [ -n "$line" ]` limb); dropping it would skip the battery.
 expect_verdict "final row without trailing newline runs"  true  pull_request "$(mrow knowledge-base/a.md; printf '%s' "$(mrow scripts/x.sh)")"
@@ -141,7 +145,7 @@ in_section() { printf '%s\n' "$section" | grep -cF -e "$2" >/dev/null && pass "$
 if printf '%s\n' "$section" | grep -cE '^[[:space:]]+id: detect[[:space:]]*$' >/dev/null; then pass "classify step id: detect (line-anchored)"; else fail "classify step id: detect missing"; fi
 in_section "classifier invoked from the workflow"        "scripts/ci-shard-totality-classify.sh"
 in_section "base-ref classifier judged, not the PR's"    'git show "origin/${GITHUB_BASE_REF}:scripts/ci-shard-totality-classify.sh"'
-in_section "diff range is the PR merge-base, as raw rows" 'git diff --raw --no-color --no-ext-diff "origin/${GITHUB_BASE_REF}...HEAD"'
+in_section "diff range is the PR merge-base, as raw rows" 'git diff --raw --no-color --no-ext-diff --ignore-submodules=none "origin/${GITHUB_BASE_REF}...HEAD" 2>>"$GIT_ERR")"'
 in_section "invalid verdict is a red job"                '::error::shard-totality classifier emitted invalid verdict'
 in_section "verdict emitted to GITHUB_OUTPUT"            'applicable=$APPLICABLE" >> "$GITHUB_OUTPUT'
 in_section "enum-failure fallback is a literal true"     'APPLICABLE=true'
@@ -371,8 +375,8 @@ sed '2s/.*/# a header line that differs outside the markers/' "$PA" > "$SBX/par.
 if cmp -s "$PA" "$SBX/par.a5"; then fail "parity control did not land"; elif parity_ok "$SBX/par.a5" "$SBX/par.b"; then pass "parity control: a header differing OUTSIDE the markers still passes"; else fail "parity is over-strict: a header edit outside the markers failed it"; fi
 
 total=$((PASS + FAIL))
-if [ "$total" -lt 111 ]; then
-  printf '[FATAL] assertion floor: only %s assertions ran, want >=111\n' "$total" >&2
+if [ "$total" -lt 113 ]; then
+  printf '[FATAL] assertion floor: only %s assertions ran, want >=113\n' "$total" >&2
   exit 1
 fi
 echo

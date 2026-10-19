@@ -21,8 +21,8 @@
 # `true`. Missing or unknown argv exits NON-ZERO so a broken classifier reds the job instead of fabricating a skip.
 #
 # MODE GATE (#10416). `--name-status` carried no file mode, so an added symlink or an exec-bit flip on a `.md` read as
-# markdown. The battery's census reads `*.sh`/`*.bash` AND shebang files, so an executable `.md` can be a subject and the
-# old "accepted here" exposure was wrong for exec-bit rows. Only (A, 000000 -> 100644) and (M, 100644 -> 100644) may skip;
+# markdown, and the old "accepted here" exposure covered exec-bit rows too. The census reads `*.sh`/`*.bash` and extensionless
+# shebang files, never a dotted name such as `.md`, so the mode gate is defence in depth, not a closed census hole. Only (A, 000000 -> 100644) and (M, 100644 -> 100644) may skip;
 # 100755, 120000, 160000, a mode-changing M and an A with a non-null old mode all emit `true`. This is deliberately
 # STRICTER than the PR B driver's allowlist in scripts/ci-pr-selection.sh (which also admits 100755): the driver has later
 # stages, a classifier skip has none. A row that does not match the raw-row grammar (legacy `--name-status`, a bare path, a
