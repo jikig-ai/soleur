@@ -93,7 +93,7 @@ apps/web-platform/infra/inngest-luks-sole-copy.test.sh	1000	floor
 apps/web-platform/infra/inngest-nic-wait.test.sh	34500	measured
 apps/web-platform/infra/inngest-provision-rehearsal.test.sh	1000	floor
 apps/web-platform/infra/inngest-rearm-reminders.test.sh	4000	measured
-apps/web-platform/infra/inngest-redis-luks-import-rehearsal.test.sh	1000	floor
+apps/web-platform/infra/inngest-redis-luks-import-rehearsal.test.sh	130000	measured
 apps/web-platform/infra/inngest-redis-luks.test.sh	500	measured
 apps/web-platform/infra/inngest-registry-probe.test.sh	1500	measured
 apps/web-platform/infra/inngest-rls/apply-inngest-rls-workflow.test.sh	1000	measured

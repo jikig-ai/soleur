@@ -37,8 +37,10 @@
 # EXPECTED to turn the advisory leg that owns this suite red: re-review the recovery claim in ADR-282 and
 # the runbook row, do not just re-pin.
 #
-# Private argv (a leaked environment variable cannot select these): --child, --src-tf <file>,
-# --plugin-dir <dir>, --mut <name>. Anything else exits 2.
+# Private argv (selectable on the command line only, never by a leaked environment variable): --child,
+# --src-tf <file>, --plugin-dir <dir>, --scratch-parent <dir>, --mut <name>. Anything else exits 2. The provider
+# package directory may additionally come from SOLEUR_TF_PLUGIN_DIR / TF_PLUGIN_CACHE_DIR; that only chooses
+# where the locked provider is read from.
 
 set -uo pipefail
 umask 077
@@ -54,20 +56,27 @@ HCL_LIB="$REPO_ROOT/tests/scripts/lib/hcl-effective-text.sh"
 CHILD=0
 SRC_OVERRIDE=""
 PLUGIN_OVERRIDE=""
+SCRATCH_OVERRIDE=""
 MUT=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --child) CHILD=1; shift ;;
     --src-tf) [ $# -ge 2 ] || exit 2; SRC_OVERRIDE="$2"; shift 2 ;;
     --plugin-dir) [ $# -ge 2 ] || exit 2; PLUGIN_OVERRIDE="$2"; shift 2 ;;
+    --scratch-parent) [ $# -ge 2 ] || exit 2; SCRATCH_OVERRIDE="$2"; shift 2 ;;
     --mut) [ $# -ge 2 ] || exit 2; MUT="$2"; shift 2 ;;
     *) printf 'FATAL: unknown argument\n' >&2; exit 2 ;;
   esac
 done
-if [ "$CHILD" = 0 ] && { [ -n "$SRC_OVERRIDE" ] || [ -n "$PLUGIN_OVERRIDE" ] || [ -n "$MUT" ]; }; then
-  printf 'FATAL: --src-tf/--plugin-dir/--mut are child-only\n' >&2
+if [ "$CHILD" = 0 ] && { [ -n "$SRC_OVERRIDE" ] || [ -n "$PLUGIN_OVERRIDE" ] || [ -n "$SCRATCH_OVERRIDE" ] || [ -n "$MUT" ]; }; then
+  printf 'FATAL: --src-tf/--plugin-dir/--scratch-parent/--mut are child-only\n' >&2
   exit 2
 fi
+# An unknown mutation name would silently run as a pristine child, so the allowlist is closed.
+case "$MUT" in
+  ""|positional-import|no-shim|skip-repair|zero-match-selector|no-serial-bump|repaired-uses-loss-plan|no-canary) : ;;
+  *) printf 'FATAL: unknown --mut name\n' >&2; exit 2 ;;
+esac
 
 CI_MODE=0
 if [ "${CI:-}" = "true" ] || [ "${GITHUB_ACTIONS:-}" = "true" ]; then CI_MODE=1; fi
@@ -125,11 +134,30 @@ if [ "$selftest_got" != "1/1" ]; then
   exit 2
 fi
 
+# chk owns its own verdict, so the pass/fail control above cannot see it going silent: drive it once with a
+# command that must fail and once with one that must pass, and require both counters and the case tally to move.
+chk_got="$( passes=0; fails=0; cases=0; chk selftest false 2>/dev/null; chk selftest true; printf '%s/%s/%s' "$passes" "$fails" "$cases" )"
+if [ "$chk_got" != "1/1/2" ]; then
+  printf 'INSTRUMENT FAIL - %s: chk() self-test got passes/fails/cases=%s, want 1/1/2\n' "$SUITE_NAME" "$chk_got" >&2
+  exit 2
+fi
+
 # xtrace would write the synthetic value to stderr: refuse to go any further if it is on.
 case "$-" in
   *x*) fail "secret: xtrace is off"; exit 1 ;;
   *) chk "secret: xtrace is off" true ;;
 esac
+
+# _emit must withhold a message that contains the value: drive it once in a subshell (VALUE is set only there).
+emit_got="$( VALUE=selftestvalue; LEAKED=0; _emit 'prefix selftestvalue suffix' 2>&1; printf '|%s' "$LEAKED" )"
+case "$emit_got" in
+  *selftestvalue*) emit_bad=1 ;;
+  *) emit_bad=0 ;;
+esac
+if [ "$emit_bad" = 1 ] || [ "${emit_got##*|}" != "1" ]; then
+  printf 'INSTRUMENT FAIL - %s: _emit did not withhold a message carrying the value\n' "$SUITE_NAME" >&2
+  exit 2
+fi
 
 # A stray bare `terraform` call must fail loudly; the real binary is only reached by absolute path in tf().
 terraform() { printf 'FATAL: bare terraform call\n' >&2; return 97; }
@@ -161,6 +189,15 @@ chk "static: length = 40 inside the extracted block" grep -Eq "^[[:space:]]+leng
 chk "static: special = false inside the extracted block" grep -Eq "^[[:space:]]+special[[:space:]]*=[[:space:]]*false${B4_TAIL}" <<<"$block"
 chk "static: prevent_destroy = true inside the extracted block" grep -Eq "^[[:space:]]+prevent_destroy[[:space:]]*=[[:space:]]*true${B4_TAIL}" <<<"$block"
 
+# CLOSED SET: the rehearsal models exactly this attribute set imported with the provider's defaults, so any other
+# line (another attribute, create_before_destroy, ignore_changes, count/for_each, a heredoc, a second lifecycle
+# key) changes what the measurement means. If this fails, re-review the recovery claim in ADR-282 and the runbook row.
+shape_rx="^[[:space:]]*$|^resource[[:space:]]+\"random_password\"[[:space:]]+\"inngest_redis_luks\"[[:space:]]*\{${B4_TAIL}"
+shape_rx="$shape_rx|^[[:space:]]*length[[:space:]]*=[[:space:]]*40${B4_TAIL}|^[[:space:]]*special[[:space:]]*=[[:space:]]*false${B4_TAIL}"
+shape_rx="$shape_rx|^[[:space:]]*lifecycle[[:space:]]*\{${B4_TAIL}|^[[:space:]]*prevent_destroy[[:space:]]*=[[:space:]]*true${B4_TAIL}|^[[:space:]]*\}${B4_TAIL}"
+offshape="$(printf '%s\n' "$block" | grep -Ev -- "$shape_rx" || true)"
+chk "static: the extracted block holds only the rehearsed attributes" [ -z "$offshape" ]
+
 PARENT_LOCK="$DIR/.terraform.lock.hcl"
 lock_entry="$(awk '/^provider "registry.terraform.io\/hashicorp\/random"/{p=1} p{print} p&&/^}/{exit}' "$PARENT_LOCK")"
 LOCKED_VERSION="$(printf '%s\n' "$lock_entry" | sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\([0-9.]*\)".*/\1/p' | head -n 1)"
@@ -171,6 +208,13 @@ chk "static: main.tf constrains hashicorp/random" [ -n "$random_constraint" ]
 PIN_TF_VERSION="$(sed -n 's/^[[:space:]]*TERRAFORM_VERSION:[[:space:]]*"\([0-9.]*\)".*/\1/p' "$REPO_ROOT/.github/workflows/infra-validation.yml" | head -n 1)"
 chk "static: the terraform pin is readable from infra-validation.yml" [ -n "$PIN_TF_VERSION" ]
 
+adr_has_addendum() {
+  grep -qF -- '## Addendum — 2026-10-19 (#9927 item 5' "$REPO_ROOT/$ADR_REL" \
+    && grep -qF -- '**UNVERIFIED first.**' "$REPO_ROOT/$ADR_REL"
+}
+row_has_scope() { # ROW
+  grep -qiF -- 'rehearsed' <<<"$1" && grep -qF -- 'local state' <<<"$1" && grep -qF -- 'R2-backed state' <<<"$1"
+}
 if [ "$CHILD" = 0 ]; then
   # The claim names its evidence: the ADR row and the runbook row each cite this suite, and neither keeps
   # the sentences this suite falsified. Anchored on the row start, never a line number.
@@ -178,12 +222,14 @@ if [ "$CHILD" = 0 ]; then
     row="$(grep -F '| Terraform state entry lost |' "$REPO_ROOT/$doc" | head -n 1)"
     chk "doc: $(basename "$doc") loss-mode row exists" [ -n "$row" ]
     chk "doc: $(basename "$doc") row names $SUITE_NAME" grep -qF -- "$SUITE_NAME" <<<"$row"
-    if grep -Eqi -- 'State-loss recovery (is|remains) UNVERIFIED|CANDIDATE recipe|NOT rehearsed|passes the HALT' <<<"$row"; then
+    chk "doc: $(basename "$doc") row states its scope (rehearsed, local state, R2-backed state)" row_has_scope "$row"
+    if grep -Eqi -- 'State-loss recovery (is|remains) UNVERIFIED|CANDIDATE recipe|NOT rehearsed|passes the HALT|not (yet )?(been )?(rehearsed|verified)|still unverified' <<<"$row"; then
       cases=$((cases + 1)); fail "doc: $(basename "$doc") row no longer carries the falsified sentences"
     else
       chk "doc: $(basename "$doc") row no longer carries the falsified sentences" true
     fi
   done
+  chk "doc: the ADR carries the 2026-10-19 addendum with UNVERIFIED stated first" adr_has_addendum
 fi
 
 # ---------------------------------------------------------------------------------------------------
@@ -196,11 +242,17 @@ case "$TF_BIN" in /*) : ;; *) TF_BIN="$(PATH="$PATH" type -P terraform 2>/dev/nu
 JQ_BIN="$(type -P jq 2>/dev/null || true)"
 if [ -z "$TF_BIN" ] || [ -z "$JQ_BIN" ]; then
   SKIP_REASON="terraform or jq not found"
+else
+  for need in timeout sha256sum stat cut find; do
+    if ! type -P "$need" >/dev/null 2>&1; then SKIP_REASON="required tool not found: $need"; break; fi
+  done
 fi
 
 SCR=""
 cleanup() { [ -n "$SCR" ] && rm -rf -- "$SCR"; }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
 
 TF_VERSION=""
 PLATFORM=""
@@ -234,6 +286,11 @@ if [ -n "$SKIP_REASON" ] && [ "$CI_MODE" = 1 ]; then
   printf '[FATAL] %s and CI is set: refusing to skip the dynamic section silently\n' "$SKIP_REASON" >&2
   exit 1
 fi
+if [ -n "$SKIP_REASON" ] && [ "$CHILD" = 1 ]; then
+  # A skipped child exits 0 like a healthy one, which would void every battery row that reads its verdict.
+  printf '[FATAL] a child run cannot skip the dynamic section (%s)\n' "$SKIP_REASON" >&2
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------------------------------
 # DYNAMIC SECTION
@@ -243,16 +300,20 @@ RAN_DYNAMIC=0
 FILTER_LOSS=""
 FILTER_REPAIRED=""
 
-# tfd DIR ARGS...: run the shimmed terraform in DIR under a scrubbed environment with no network
-# proxy path, no color and a bound. Output is redirected by the caller into files that are never printed.
+# tf_env ARGS...: the one scrubbed environment every terraform-bearing process runs in (extra VAR=value
+# words and the command follow). TMPDIR is a short path: the provider's unix socket lives under it.
+tf_env() {
+  env -i PATH="$PATH" HOME="$SCR/home" TMPDIR="$SCR/t" TF_IN_AUTOMATION=1 CHECKPOINT_DISABLE=1 \
+    TF_LOG= TF_CLI_ARGS=-no-color SHIM_LOG="$SCR/argv.log" REAL_TF="$TF_BIN" "$@"
+}
+
+# tfd DIR ARGS...: run the shimmed terraform in DIR with a dead-port proxy (no network), no color and a bound.
+# Output is redirected by the caller into files that are never printed.
 tfd() {
   assert_fixture_dir "$SCR"
   local d="$1"
   shift
-  ( cd "$d" && env -i PATH="$PATH" HOME="$SCR/home" TMPDIR="$SCR/tmp" TF_IN_AUTOMATION=1 CHECKPOINT_DISABLE=1 \
-      TF_LOG= TF_CLI_ARGS=-no-color HTTPS_PROXY=http://127.0.0.1:9 \
-      SHIM_LOG="$SCR/argv.log" REAL_TF="$TF_BIN" \
-      timeout -k 5 120 "$TF_SHIM" "$@" )
+  ( cd "$d" && tf_env HTTPS_PROXY=http://127.0.0.1:9 timeout -k 5 120 "$TF_SHIM" "$@" )
 }
 tf() { tfd "$SCR/w" "$@"; }
 
@@ -268,12 +329,11 @@ build_root() { # DIR BLOCKTEXT
 init_root() { # DIR
   assert_fixture_dir "$SCR"
   if [ "$REGISTRY_INIT" = 1 ]; then
+    # The registry is the only network touch. Three bounded attempts (60 s each, a sleep only BETWEEN attempts).
     local i
     for i in 1 2 3; do
-      ( cd "$1" && env -i PATH="$PATH" HOME="$SCR/home" TMPDIR="$SCR/tmp" TF_IN_AUTOMATION=1 CHECKPOINT_DISABLE=1 \
-          TF_LOG= TF_CLI_ARGS=-no-color SHIM_LOG="$SCR/argv.log" REAL_TF="$TF_BIN" \
-          timeout -k 5 120 "$TF_SHIM" init -backend=false -input=false -lockfile=readonly ) >"$SCR/out/init-$(basename "$1").out" 2>&1 && return 0
-      sleep $((i * 3))
+      ( cd "$1" && tf_env timeout -k 5 60 "$TF_SHIM" init -backend=false -input=false -lockfile=readonly ) >"$SCR/out/init-$(basename "$1").out" 2>&1 && return 0
+      [ "$i" -lt 3 ] && sleep $((i * 3))
     done
     return 1
   fi
@@ -291,13 +351,11 @@ digest_of_state() { # DIR -> 12 hex of sha256(result), never the value
 do_import() { # DIR OUTFILE
   assert_fixture_dir "$SCR"
   if [ "$MUT" = "positional-import" ]; then
-    ( cd "$1" && env -i PATH="$PATH" HOME="$SCR/home" TMPDIR="$SCR/tmp" TF_IN_AUTOMATION=1 CHECKPOINT_DISABLE=1 \
-        TF_LOG= TF_CLI_ARGS=-no-color SHIM_LOG="$SCR/argv.log" REAL_TF="$TF_BIN" VF="$SCR/value" TF_SHIM="$TF_SHIM" \
+    ( cd "$1" && tf_env VF="$SCR/value" TF_SHIM="$TF_SHIM" \
         bash -c 'exec "$TF_SHIM" import -input=false random_password.inngest_redis_luks "$(<"$VF")"' ) >"$2" 2>&1
     return $?
   fi
-  ( cd "$1" && env -i PATH="$PATH" HOME="$SCR/home" TMPDIR="$SCR/tmp" TF_IN_AUTOMATION=1 CHECKPOINT_DISABLE=1 \
-      TF_LOG= TF_CLI_ARGS=-no-color SHIM_LOG="$SCR/argv.log" REAL_TF="$TF_BIN" VF="$SCR/value" TF_SHIM="$TF_SHIM" \
+  ( cd "$1" && tf_env VF="$SCR/value" TF_SHIM="$TF_SHIM" \
       bash -c 'TF_CLI_ARGS_import="-input=false random_password.inngest_redis_luks $(<"$VF")" exec "$TF_SHIM" import' ) >"$2" 2>&1
 }
 
@@ -313,9 +371,11 @@ repair_state() {
   tf state push "$SCR/fixed.json" >"$SCR/out/push.out" 2>&1
 }
 
+abs_paths() { [[ "$TF_BIN" == /* && "$TF_SHIM" == /* ]]; }
+
 dynamic_section() {
   assert_fixture_dir "$SCR"
-  mkdir -p "$SCR/w" "$SCR/out" "$SCR/shim" "$SCR/home" "$SCR/tmp"
+  mkdir -p "$SCR/w" "$SCR/out" "$SCR/shim" "$SCR/home" "$SCR/t"
   TF_SHIM="$SCR/shim/tfshim"
   if [ "$MUT" = "no-shim" ]; then
     TF_SHIM="$TF_BIN"
@@ -332,8 +392,13 @@ SHIM
   build_root "$SCR/w" "$block"
   init_root "$SCR/w"
   rc=$?
-  dchk "dynamic: provider installs from the lock without reaching the network" [ "$rc" = 0 ]
+  dchk "dynamic: the provider installs from the lock" [ "$rc" = 0 ]
   if [ "$rc" != 0 ]; then BLOCKED="init"; return; fi
+  if [ "$REGISTRY_INIT" = 1 ]; then
+    # The registry was reached once; every later root and every battery child reads the package it installed.
+    PLUGIN_DIR="$SCR/w/.terraform/providers"
+    REGISTRY_INIT=0
+  fi
   tf version >"$SCR/out/version.out" 2>&1
   dchk "dynamic: the resolved provider version equals the lock entry" grep -qF -- "v$LOCKED_VERSION" "$SCR/out/version.out"
 
@@ -345,7 +410,8 @@ SHIM
   tf state pull >"$SCR/pull.json" 2>/dev/null
   jq -r '.resources[] | select(.type == "random_password") | .instances[0].attributes.result' "$SCR/pull.json" >"$SCR/value"
   VALUE="$(<"$SCR/value")"
-  if [ "$CI_MODE" = 1 ]; then printf '::add-mask::%s\n' "$VALUE"; fi
+  # A battery child leaves its value where the parent can scan that child's own output for it.
+  if [ -n "$SCRATCH_OVERRIDE" ]; then cp "$SCR/value" "${SCRATCH_OVERRIDE}.value"; fi
   dchk "dynamic: the minted value is 40 alphanumerics" grep -Eq '^[A-Za-z0-9]{40}$' "$SCR/value"
   PRE_DIGEST="$(digest_of_state "$SCR/w")"
 
@@ -401,6 +467,7 @@ SHIM
   tf state push "$SCR/stale.json" >"$SCR/out/push-stale.out" 2>&1
   rc=$?
   dchk "dynamic: a stale-serial push is refused without -force" test "$rc" != 0
+  dchk "dynamic: the stale-serial refusal names the serial" grep -qiF -- 'serial' "$SCR/out/push-stale.out"
   tf plan -detailed-exitcode -input=false >"$SCR/out/plan-after-stale.out" 2>&1
   dchk "dynamic: the repaired state is intact after the refused stale push" test "$?" = 0
 
@@ -413,20 +480,25 @@ SHIM
   dchk "dynamic: the negative-control fixture is well formed" test "$?" = 0
   dchk "dynamic: the negative-control fixture has no prevent_destroy" test -z "$(printf '%s\n' "$nc_block" | grep -F prevent_destroy)"
   tfd "$SCR/nc" apply -auto-approve -input=false >"$SCR/out/nc-mint.out" 2>&1
-  NC_PRE="$(digest_of_state "$SCR/nc")"
+  rc=$?
+  dchk "dynamic: the negative-control fixture mints" [ "$rc" = 0 ]
   rm -f "$SCR"/nc/terraform.tfstate*
   do_import "$SCR/nc" "$SCR/out/nc-import.out"
+  rc=$?
+  dchk "dynamic: the negative-control import succeeds" [ "$rc" = 0 ]
+  # The fixture imports the value minted in the main root, so its imported key must equal PRE_DIGEST; without this
+  # the later "the key CHANGES" row would hold even if the apply did nothing.
+  dchk "dynamic: the negative-control import holds the imported key" [ "$(digest_of_state "$SCR/nc")" = "$PRE_DIGEST" ]
   tfd "$SCR/nc" apply -auto-approve -input=false >"$SCR/out/nc-apply.out" 2>&1
   rc=$?
   dchk "dynamic: without prevent_destroy the imported state applies" [ "$rc" = 0 ]
-  dchk "dynamic: without prevent_destroy the key CHANGES (prevent_destroy is the backstop)" test "$(digest_of_state "$SCR/nc")" != "$NC_PRE"
+  dchk "dynamic: without prevent_destroy the key CHANGES (prevent_destroy is the backstop)" test "$(digest_of_state "$SCR/nc")" != "$PRE_DIGEST"
 
   # --- import {} block route (characterization) ---------------------------------------------------
   ib_block="$(printf '%s\n\nvariable "recovery_passphrase" {\n  type      = string\n  sensitive = true\n}\n\nimport {\n  to = %s\n  id = var.recovery_passphrase\n}\n' "$block" "$ADDR")"
   build_root "$SCR/ib" "$ib_block"
   init_root "$SCR/ib"
-  ( cd "$SCR/ib" && env -i PATH="$PATH" HOME="$SCR/home" TMPDIR="$SCR/tmp" TF_IN_AUTOMATION=1 CHECKPOINT_DISABLE=1 \
-      TF_LOG= TF_CLI_ARGS=-no-color SHIM_LOG="$SCR/argv.log" REAL_TF="$TF_BIN" VF="$SCR/value" TF_SHIM="$TF_SHIM" \
+  ( cd "$SCR/ib" && tf_env VF="$SCR/value" TF_SHIM="$TF_SHIM" \
       bash -c 'TF_VAR_recovery_passphrase="$(<"$VF")" exec timeout -k 5 120 "$TF_SHIM" plan -input=false' ) >"$SCR/out/ib-plan.out" 2>&1
   rc=$?
   dchk "dynamic: an import block plans a replacement and errors (it does NOT plan as a no-op)" [ "$rc" = 1 ]
@@ -437,16 +509,12 @@ SHIM
   printf '%s' "canary-$$-$RANDOM" >"$SCR/canary.value"
   [ "$MUT" = "no-canary" ] || cp "$SCR/canary.value" "$SCR/out/canary.out"
   dchk "secret: the scan finds a known canary written through the same path (positive control)" grep -rqF -f "$SCR/canary.value" "$SCR/out"
-  if grep -rqF -f "$SCR/value" "$SCR/out/import.out" "$SCR/out/ib-plan.out"; then
-    say "note: terraform_output_echoes_the_value=yes (import and import-block output are never printed)"
-  else
-    say "note: terraform_output_echoes_the_value=no"
-  fi
-  if grep -qF -f "$SCR/value" "$SCR/out/ib-plan.out"; then
-    say "note: import_block_plan_prints_value=yes"
-  else
-    say "note: import_block_plan_prints_value=no"
-  fi
+  # Terraform echoes the id on import and an import block prints it in the plan: those captures hold the value by
+  # design and are never printed. Reported as observations on THIS terraform version, not asserted.
+  if grep -qF -f "$SCR/value" "$SCR/out/import.out"; then say "note: terraform_import_echoes_the_value=yes"; else say "note: terraform_import_echoes_the_value=no"; fi
+  if grep -qF -f "$SCR/value" "$SCR/out/ib-plan.out"; then say "note: import_block_plan_prints_value=yes"; else say "note: import_block_plan_prints_value=no"; fi
+  dchk "secret: no other terraform output capture contains the synthetic value" \
+    test "$(grep -rlF -f "$SCR/value" "$SCR/out" --exclude=import.out --exclude=nc-import.out --exclude=ib-plan.out | wc -l)" = "0"
   dchk "secret: the argv shim log exists and is non-empty" test -s "$SCR/argv.log"
   if [ -s "$SCR/argv.log" ]; then
     dchk "secret: shim argv log never contains the synthetic value" test "$(grep -cF -f "$SCR/value" "$SCR/argv.log")" = "0"
@@ -454,14 +522,19 @@ SHIM
     dchk "secret: shim argv log never contains the synthetic value" false
   fi
   dchk "secret: the value file is mode 0600" test "$(stat -c '%a' "$SCR/value")" = "600"
-  dchk "secret: no bare terraform call is possible (stub fails)" test "$(terraform >/dev/null 2>&1; echo $?)" = "97"
+  dchk "secret: terraform and the argv shim are reached by absolute path only" abs_paths
   RAN_DYNAMIC=1
 }
 
-SCR_PARENT="${TMPDIR:-/tmp}"
+SCR_PARENT="${SCRATCH_OVERRIDE:-${TMPDIR:-/tmp}}"
+# The provider's unix socket path lives under the scratch tree and is limited to about 108 bytes.
+if [ -z "$SCRATCH_OVERRIDE" ] && [ "${#SCR_PARENT}" -gt 40 ]; then SCR_PARENT=/tmp; fi
 if [ -z "$SKIP_REASON" ]; then
-  # sweep stale scratch of our own prefix (SIGKILL and timeout kills never run the trap)
-  find "$SCR_PARENT" -maxdepth 1 -type d -name 'inngest-luks-import-rehearsal.*' -mmin +30 -exec rm -rf {} + 2>/dev/null
+  assert_fixture_dir "$SCR_PARENT"
+  # sweep stale scratch of our own prefix (SIGKILL and timeout kills never run the trap); the parent only
+  if [ "$CHILD" = 0 ]; then
+    find "$SCR_PARENT" -maxdepth 1 -type d -name 'inngest-luks-import-rehearsal.*' -mmin +30 -exec rm -rf {} + 2>/dev/null
+  fi
   SCR="$(mktemp -d "$SCR_PARENT/inngest-luks-import-rehearsal.XXXXXXXX")"
   dynamic_section
 fi
@@ -471,14 +544,21 @@ fi
 # ---------------------------------------------------------------------------------------------------
 if [ "$CHILD" = 0 ] && [ "$RAN_DYNAMIC" = 1 ]; then
   RESOLVED_PLUGIN="$PLUGIN_DIR"
-  [ "$REGISTRY_INIT" = 1 ] && RESOLVED_PLUGIN="$SCR/w/.terraform/providers"
-  mkdir -p "$SCR/mut"
+  mkdir -p "$SCR/mut" "$SCR/c"
+  CHILD_LEFTOVER=0
+  CHILD_LEAK=0
 
+  # Every child scratches under $SCR/c, so a child that failed to clean up after itself is visible here.
   run_child() { # OUTNAME ARGS...
     local out="$SCR/mut/$1.out"
     shift
-    timeout -k 5 240 bash "$SELF" --child --plugin-dir "$RESOLVED_PLUGIN" "$@" >"$out" 2>&1
+    timeout -k 5 240 bash "$SELF" --child --plugin-dir "$RESOLVED_PLUGIN" --scratch-parent "$SCR/c" "$@" >"$out" 2>&1
     CHILD_RC=$?
+    if [ -n "$(ls -A "$SCR/c" 2>/dev/null)" ]; then CHILD_LEFTOVER=1; fi
+    if [ -s "$SCR/c.value" ]; then
+      if grep -qF -f "$SCR/c.value" "$out"; then CHILD_LEAK=1; fi
+      rm -f "$SCR/c.value"
+    fi
   }
   wellformed() { # FILE: the mutated block must still parse, or a RED is a syntax error, not evidence
     tfd "$SCR/w" fmt -write=false -list=false - <"$1" >/dev/null 2>&1
@@ -489,7 +569,21 @@ if [ "$CHILD" = 0 ] && [ "$RAN_DYNAMIC" = 1 ]; then
   pristine_ok() {
     run_child "pristine-$1"
     PRISTINE_STATE="$CHILD_RC"
-    [ "$CHILD_RC" = 0 ]
+    # rc 0 alone is not a control: it must also have RUN the whole dynamic section (a skipped child exits 0 too).
+    if [ "$CHILD_RC" = 0 ] && grep -qF -- "RAN $dyn_cases dynamic assertions" "$SCR/mut/pristine-$1.out"; then return 0; fi
+    PRISTINE_STATE=1
+    return 1
+  }
+  # The verdict a battery row turns on, kept pure so it can be driven with synthetic inputs below.
+  child_caught() { # RC OUTFILE WANT
+    [ "$1" = 1 ] && grep -qF -- "FAIL: $3" "$2"
+  }
+  probe_child_caught() {
+    printf 'FAIL: right name\n' >"$SCR/mut/probe.out"
+    child_caught 1 "$SCR/mut/probe.out" "right name" \
+      && ! child_caught 1 "$SCR/mut/probe.out" "other name" \
+      && ! child_caught 2 "$SCR/mut/probe.out" "right name" \
+      && ! child_caught 0 "$SCR/mut/probe.out" "right name"
   }
   # caught NAME EXPECTED_FAILING_ASSERTION ARGS...
   caught() {
@@ -498,11 +592,12 @@ if [ "$CHILD" = 0 ] && [ "$RAN_DYNAMIC" = 1 ]; then
     cases=$((cases + 1))
     if [ "$PRISTINE_STATE" != 0 ]; then fail "battery $name: the pristine control child did not exit 0"; return; fi
     run_child "$name" "$@"
-    if [ "$CHILD_RC" = 1 ] && grep -qF -- "FAIL: $want" "$SCR/mut/$name.out"; then pass; else fail "battery $name: want exit 1 with FAIL: $want (got rc=$CHILD_RC)"; fi
+    if child_caught "$CHILD_RC" "$SCR/mut/$name.out" "$want"; then pass; else fail "battery $name: want exit 1 with FAIL: $want (got rc=$CHILD_RC)"; fi
   }
 
   printf '%s\n' "$block" | sed '/prevent_destroy/d' >"$SCR/mut/no-pd.tf"
   printf '%s\n' "$block" | sed 's/special\([[:space:]]*\)=[[:space:]]*false/special\1= true/' >"$SCR/mut/special-true.tf"
+  { sed '$d' <<<"$block"; printf '  upper = true\n}\n'; } >"$SCR/mut/extra-attr.tf"
   cat >"$SCR/mut/reordered.tf" <<'HCL'
 resource "random_password" "inngest_redis_luks" {
   # reordered, commented and re-indented: the guard must not depend on the canonical text
@@ -514,7 +609,7 @@ resource "random_password" "inngest_redis_luks" {
   length  = 40
 }
 HCL
-  for f in no-pd special-true reordered; do
+  for f in no-pd special-true extra-attr reordered; do
     cases=$((cases + 1))
     if wellformed "$SCR/mut/$f.tf"; then pass; else fail "battery fixture $f is not well formed HCL"; fi
   done
@@ -523,6 +618,7 @@ HCL
   if pristine_ok before; then pass; else fail "battery: the opening pristine control child did not exit 0 (rc=$CHILD_RC)"; fi
   caught drop-prevent-destroy "static: prevent_destroy = true inside the extracted block" --src-tf "$SCR/mut/no-pd.tf"
   caught special-true "static: special = false inside the extracted block" --src-tf "$SCR/mut/special-true.tf"
+  caught extra-attribute "static: the extracted block holds only the rehearsed attributes" --src-tf "$SCR/mut/extra-attr.tf"
   caught skip-repair "dynamic: plan after the repair reports no changes" --mut skip-repair
   caught no-serial-bump "dynamic: the repaired state push is accepted" --mut no-serial-bump
   caught zero-match-selector "dynamic: the repair selector matches exactly one instance" --mut zero-match-selector
@@ -531,6 +627,8 @@ HCL
   caught no-shim "secret: the argv shim log exists and is non-empty" --mut no-shim
   caught repaired-uses-loss-plan "dynamic: the real destroy-guard filter scores the repaired plan 0" --mut repaired-uses-loss-plan
 
+  chk "battery: the caught verdict accepts only rc 1 with the named FAIL line" probe_child_caught
+
   cases=$((cases + 1))
   run_child reordered --src-tf "$SCR/mut/reordered.tf"
   if [ "$CHILD_RC" = 0 ]; then pass; else fail "battery reordered: the non-canonical but valid block must still pass (rc=$CHILD_RC)"; fi
@@ -538,13 +636,15 @@ HCL
   cases=$((cases + 1))
   timeout -k 5 120 bash -x "$SELF" --child --plugin-dir "$RESOLVED_PLUGIN" >"$SCR/mut/xtrace.out" 2>&1
   xrc=$?
-  if [ "$xrc" = 1 ] && grep -qF -- 'FAIL: secret: xtrace is off' "$SCR/mut/xtrace.out"; then pass; else fail "battery xtrace: want exit 1 with FAIL: secret: xtrace is off (got rc=$xrc)"; fi
+  # The child must refuse BEFORE minting: no RAN line and no traced assignment of a 40-character value.
+  if [ "$xrc" = 1 ] && grep -qF -- 'FAIL: secret: xtrace is off' "$SCR/mut/xtrace.out" \
+    && ! grep -qE '^RAN [0-9]+ dynamic|VALUE=[A-Za-z0-9]{40}' "$SCR/mut/xtrace.out"; then pass; else fail "battery xtrace: want exit 1 with FAIL: secret: xtrace is off (got rc=$xrc)"; fi
 
   cases=$((cases + 1))
   if pristine_ok after; then pass; else fail "battery: the closing pristine control child did not exit 0 (rc=$CHILD_RC)"; fi
 
-  cases=$((cases + 1))
-  if grep -rqF -- "$VALUE" "$SCR/mut" 2>/dev/null; then fail "secret: a battery child output contains the parent's value"; else pass; fi
+  chk "secret: no battery child left its scratch directory behind" [ "$CHILD_LEFTOVER" = "0" ]
+  chk "secret: no battery child printed its own synthetic value" [ "$CHILD_LEAK" = "0" ]
 fi
 
 # ---------------------------------------------------------------------------------------------------
@@ -562,16 +662,30 @@ if [ "$CI_MODE" = 1 ] && [ "$RAN_DYNAMIC" != 1 ]; then
 fi
 if [ -n "$BLOCKED" ]; then
   say "dynamic section blocked by: $BLOCKED"
+  cases=$((cases + 1))
   fails=$((fails + 1))
 fi
 if [ "$LEAKED" != 0 ]; then
   printf 'FAIL: the synthetic value reached this suite output\n' >&2
+  cases=$((cases + 1))
   fails=$((fails + 1))
+fi
+# Accounting identity, reported through printf + exit (never through fail): a verdict helper that drops a
+# verdict leaves passes + fails short of the independently counted cases.
+if [ $((passes + fails)) -ne "$cases" ]; then
+  printf '[FATAL] accounting: passes (%s) + fails (%s) != cases (%s): a verdict was dropped\n' "$passes" "$fails" "$cases" >&2
+  exit 1
+fi
+# The dynamic assertion count is pinned exactly: a deleted dynamic row must not read as a healthy run.
+DYN_EXPECTED=39
+if [ "$RAN_DYNAMIC" = 1 ] && [ "$dyn_cases" -ne "$DYN_EXPECTED" ]; then
+  printf '[FATAL] dynamic count drift: %s dynamic assertions ran but DYN_EXPECTED is %s\n' "$dyn_cases" "$DYN_EXPECTED" >&2
+  exit 1
 fi
 
 # Floor, pinned EXACTLY to the measured count of the parent run (a loose floor is attack budget).
 if [ "$CHILD" = 0 ] && [ "$RAN_DYNAMIC" = 1 ]; then
-  MIN_CASES=65
+  MIN_CASES=78
   if [ "$cases" -ne "$MIN_CASES" ]; then
     printf '[FATAL] floor drift: %s cases ran but MIN_CASES is %s - re-measure and set MIN_CASES=%s\n' "$cases" "$MIN_CASES" "$cases" >&2
     exit 1
