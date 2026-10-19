@@ -681,3 +681,18 @@ is not a completed lint check of those files.
   in the commit command itself with `git -C <worktree> commit ...`; this lets
   the guard inspect the same target that Git will modify without disabling or
   bypassing the branch check.
+
+## Redirect transport test escaped its HTTP mock — 2026-10-19
+
+- Replacing `http.client.HTTPSConnection` with direct socket/TLS operations
+  invalidated a test's patch boundary: the test mocked only
+  `HTTPSConnection`, then the new code resolved and opened a TCP connection to
+  the real registry host. The fake TLS context prevented an HTTP request from
+  being sent, but the external connection itself was unintended. Stop the
+  suite immediately, disclose the exact boundary reached, and patch DNS plus
+  socket construction before any further run. For transport rewrites, test
+  that every resolver/socket/TLS seam is injected; an old mock's name is not
+  evidence the new implementation remains offline.
+- A source edit landed while the full offline wrapper was still executing, so
+  its RC=0 did not verify one stable tree. Wait for every suite process to exit
+  before editing code, then rerun the full wrapper once on the settled tree.

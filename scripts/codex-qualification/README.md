@@ -270,7 +270,10 @@ Execution requires independent source and actual-manifest review followed by
 fresh approval for the exact command. An exclusive diagnostic marker prevents
 replay. The anonymous token remains in memory; the second request reads only
 headers from the pinned Config endpoint and requires 307 with one bounded
-Location. It reads no Config response body and contacts no redirect destination.
+Location. Nonblocking connect, TLS, request writes, and header reads share an
+absolute per-request deadline; header count and bytes are checked as they are
+read. A separately approved outer timeout is still required around cooperative
+DNS resolution. It reads no Config response body and contacts no redirect destination.
 Only validated HTTPS routing and hash/length/boolean fields are retained;
 full Location, query values, raw headers, bearer and exception text are excluded.
 Routing observations confer no destination authority. Any destination request

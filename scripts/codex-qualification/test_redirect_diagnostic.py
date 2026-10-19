@@ -1,7 +1,9 @@
 """Synthesized Location parsing and injected two-request transport only."""
 import copy
+import errno
+import select
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import redirect_diagnostic as diagnostic
 import test_registry_metadata as fixtures
@@ -9,6 +11,70 @@ from prepare import Refused, canonical, sha
 
 LOCATION = ('https://UNREVIEWED.invalid:443/private/' + fixtures.IMAGE['image_id'] +
             '?capability=SYNTHESIZED_PRIVATE_QUERY')
+
+
+class TrickleSocket:
+    def __init__(self, clock, payload, *, step=0.4):
+        self.clock = clock
+        self.payload = memoryview(payload)
+        self.step = step
+        self.blocked = False
+        self.closed = False
+
+    def setblocking(self, value):
+        self.blocking = value
+
+    def recv(self, amount):
+        if not self.blocked:
+            self.blocked = True
+            raise BlockingIOError(errno.EAGAIN, 'synthetic would block')
+        self.blocked = False
+        if not self.payload:
+            return b''
+        self.clock.now += self.step
+        result = bytes(self.payload[:min(1, amount)])
+        self.payload = self.payload[len(result):]
+        return result
+
+    def send(self, value):
+        self.clock.now += self.step
+        return min(1, len(value))
+
+    def close(self):
+        self.closed = True
+
+    def fileno(self):
+        return 15
+
+
+class Clock:
+    def __init__(self, now=100):
+        self.now = now
+
+    def __call__(self):
+        return self.now
+
+
+class FakeTLSSocket(TrickleSocket):
+    def __init__(self, response):
+        super().__init__(Clock(), response, step=0)
+        self.sent = bytearray()
+        self.handshakes = 0
+
+    def do_handshake(self):
+        self.handshakes += 1
+
+    def recv(self, amount):
+        if not self.payload:
+            return b''
+        self.clock.now += self.step
+        result = bytes(self.payload[:amount])
+        self.payload = self.payload[len(result):]
+        return result
+
+    def send(self, value):
+        self.sent.extend(value)
+        return len(value)
 
 
 class RedirectDiagnostic(unittest.TestCase):
@@ -116,34 +182,53 @@ class RedirectDiagnostic(unittest.TestCase):
             self.assertNotIn(LOCATION.encode(), canonical(receipt))
 
     def test_adapter_reads_no_config_body_and_rejects_duplicate_or_unbounded_headers(self):
-        for status, headers, reason in (
-                (307, [('Location', LOCATION)], None), (200, [('Location', LOCATION)], None),
-                (307, [('Location', LOCATION), ('Location', LOCATION)], 'header_shape'),
-                (307, [('Location', LOCATION), ('X-Secret', 'a' * 32768)], 'header_shape')):
-            with self.subTest(status=status, reason=reason), patch.object(diagnostic.metadata.ssl, 'SSLContext'), \
-                    patch.object(diagnostic.metadata.http.client, 'HTTPSConnection') as connections:
+        cases = (
+            (307, [('Location', LOCATION)], b'SYNTHETIC_PRIVATE_BODY', None),
+            (200, [('Content-Type', 'application/json'), ('Content-Length', '2')], b'{}', None),
+            (307, [('Location', LOCATION), ('Location', LOCATION)], b'', 'header_shape'),
+            (307, [('Location', LOCATION), ('X-Secret', 'a' * 32768)], b'', 'header_shape'))
+        for status, headers, body, reason in cases:
+            with self.subTest(status=status, reason=reason), patch.object(diagnostic.metadata.ssl, 'SSLContext') as contexts, \
+                    patch.object(diagnostic.socket, 'getaddrinfo', return_value=[
+                        (diagnostic.socket.AF_INET, diagnostic.socket.SOCK_STREAM, 6, '', ('203.0.113.9', 443))]) as resolver, \
+                    patch.object(diagnostic.socket, 'socket') as sockets:
+                wire = FakeTLSSocket(b'HTTP/1.1 ' + str(status).encode() + b' Synthetic\r\n' +
+                    b''.join(key.encode() + b': ' + value.encode('latin-1') + b'\r\n' for key, value in headers) +
+                    b'\r\n' + body)
+                contexts.return_value.wrap_socket.return_value = wire
                 adapter = diagnostic.HTTPSAdapter(self.manifest, fixtures.CA,
                     manifest_sha256=sha(canonical(self.manifest)))
-                connections.assert_not_called()
-                response = connections.return_value.getresponse.return_value
-                response.status, response.getheaders.return_value = status, headers
-                action = self.manifest['actions'][1]
-                arguments = (action['url'], {**action['headers'], 'Authorization': 'Bearer ' + fixtures.TOKEN})
+                raw_socket = sockets.return_value
+                raw_socket.connect_ex.return_value = 0
+                action_index = 1 if status == 307 else 0
+                action = self.manifest['actions'][action_index]
+                request_headers = dict(action['headers'])
+                if action['bearer']:
+                    request_headers['Authorization'] = 'Bearer ' + fixtures.TOKEN
+                arguments = (action['url'], request_headers)
                 if reason:
                     with self.assertRaises(diagnostic.metadata.BoundaryFailure) as raised:
                         adapter.request(*arguments, timeout=10, maximum_bytes=action['maximum_bytes'])
                     self.assertEqual(raised.exception.reason, reason)
                 else:
                     returned = adapter.request(*arguments, timeout=10, maximum_bytes=action['maximum_bytes'])
-                    self.assertEqual(returned, (status, headers if status == 307 else [], b''))
-                response.read.assert_not_called()
-                response.read1.assert_not_called()
-                response.close.assert_called_once()
-                connections.return_value.close.assert_called_once()
-                connections.assert_called_once()
-                connections.return_value.request.assert_called_once()
-                self.assertEqual(connections.call_args.args[:2], ('registry-1.docker.io', 443))
-                self.assertEqual(connections.return_value.request.call_args.args[0], 'GET')
+                    self.assertEqual(returned, (status, [('Location', LOCATION)], b'') if status == 307
+                                     else (status, 'application/json', b'{}'))
+                resolver.assert_called_once_with('registry-1.docker.io' if action_index else 'auth.docker.io',
+                                                  443, type=diagnostic.socket.SOCK_STREAM)
+                sockets.assert_called_once_with(diagnostic.socket.AF_INET, diagnostic.socket.SOCK_STREAM, 6)
+                raw_socket.connect_ex.assert_called_once_with(('203.0.113.9', 443))
+                raw_socket.close.assert_not_called()
+                self.assertTrue(wire.closed)
+                self.assertEqual(wire.handshakes, 1)
+                if action_index:
+                    self.assertTrue(bytes(wire.sent).startswith(b'GET /v2/axllent/mailpit/blobs/'))
+                    self.assertIn(b'Authorization: Bearer ' + fixtures.TOKEN.encode(), bytes(wire.sent))
+                else:
+                    self.assertIn(b'GET /token?service=', bytes(wire.sent))
+                    self.assertNotIn(b'Authorization:', bytes(wire.sent))
+                if status == 307 and reason is None:
+                    self.assertEqual(wire.payload.tobytes(), body)
 
     def test_platform_bytes_require_raw_digest_and_exact_config_descriptor(self):
         self.assertEqual(diagnostic.verified_platform(fixtures.PLATFORM, fixtures.IMAGE),
@@ -165,6 +250,37 @@ class RedirectDiagnostic(unittest.TestCase):
                 changed[field] += '-different'
             with self.subTest(field=field), self.assertRaises(Refused):
                 diagnostic.check_retained_bindings(self.manifest['context'], changed)
+
+    def test_https_header_reader_enforces_one_absolute_deadline_during_trickle(self):
+        clock = Clock()
+        deadline = clock.now + 1
+        wire = TrickleSocket(clock, b'HTTP/1.1 307 Temporary Redirect\r\nLocation: https://example.invalid/x\r\n\r\n')
+        with patch.object(select, 'select', side_effect=lambda r, w, x, timeout=None:
+                          (wire.clock.__setattr__('now', wire.clock.now + min(0.4, timeout)) or
+                           (list(r), list(w), []))):
+            stream = diagnostic.DeadlineWire(wire, clock=clock, deadline=deadline)
+            with self.assertRaises(diagnostic.metadata.BoundaryFailure) as raised:
+                stream.read_headers()
+        self.assertEqual(raised.exception.reason, 'deadline')
+
+    def test_https_header_reader_caps_bytes_before_complete_parse(self):
+        clock = Clock()
+        wire = TrickleSocket(clock, b'HTTP/1.1 307 Redirect\r\nX: ' + b'a' * 500 + b'\r\n\r\n', step=0)
+        with patch.object(select, 'select', side_effect=lambda r, w, x, timeout=None:
+                          (list(r), list(w), [])):
+            stream = diagnostic.DeadlineWire(wire, clock=clock, deadline=clock.now + 20,
+                                              maximum_header_bytes=64)
+            with self.assertRaises(diagnostic.metadata.BoundaryFailure) as raised:
+                stream.read_headers()
+        self.assertEqual(raised.exception.reason, 'header_shape')
+
+    def test_https_sender_enforces_deadline_during_partial_writes(self):
+        clock = Clock()
+        wire = TrickleSocket(clock, b'', step=0.4)
+        stream = diagnostic.DeadlineWire(wire, clock=clock, deadline=clock.now + 1)
+        with self.assertRaises(diagnostic.metadata.BoundaryFailure) as raised:
+            stream.send(b'GET /fixed HTTP/1.1\r\n' * 8)
+        self.assertEqual(raised.exception.reason, 'deadline')
 
 
 if __name__ == '__main__':

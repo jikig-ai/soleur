@@ -1,12 +1,14 @@
 """Two-request Mailpit redirect-header diagnostic; never contacts a Location."""
 import argparse
 import copy
-import http.client
+import errno
 import ipaddress
 import os
 from pathlib import Path
 import re
+import select
 import ssl
+import socket
 import stat
 import time
 import unicodedata
@@ -117,9 +119,11 @@ def project_location(value, expected_digest):
                 for label in normalized.split('.')), 'DNS hostname required')
     try:
         ipaddress.ip_address(normalized)
-        raise Refused(ERROR)
     except ValueError:
-        pass
+        is_ip_literal = False
+    else:
+        is_ip_literal = True
+    require(not is_ip_literal, 'DNS hostname required')
     require(port in (None, 443) and (parsed.path == '' or parsed.path.startswith('/')) and
             len(parsed.path) <= MAX_LOCATION and
             (not parsed.query or all(unicodedata.category(char) not in ('Cc', 'Cf') for char in parsed.query)),
@@ -138,6 +142,104 @@ class DiagnosticFailure(Refused):
     def __init__(self, receipt):
         super().__init__(ERROR)
         self.receipt = copy.deepcopy(receipt)
+
+
+class DeadlineWire:
+    """Nonblocking TLS socket operations and byte-at-a-time bounded headers."""
+    def __init__(self, connection, *, clock, deadline, maximum_header_bytes=MAX_HEADER_BYTES):
+        self.connection, self.clock, self.deadline = connection, clock, deadline
+        self.maximum_header_bytes = maximum_header_bytes
+        self.last = clock()
+
+    def remaining(self):
+        now = self.clock()
+        if (not metadata.base._finite(now) or now < self.last or now >= self.deadline):
+            raise metadata.BoundaryFailure('deadline')
+        self.last = now
+        return self.deadline - now
+
+    def wait(self, *, writing=False):
+        timeout = self.remaining()
+        try:
+            readable, writable, exceptional = select.select(
+                [] if writing else [self.connection], [self.connection] if writing else [],
+                [self.connection], timeout)
+        except Exception:
+            raise metadata.BoundaryFailure('unexpected_failure') from None
+        self.remaining()
+        if exceptional or not (writable if writing else readable):
+            raise metadata.BoundaryFailure('deadline')
+
+    def send(self, value):
+        view = memoryview(value)
+        while view:
+            self.remaining()
+            try:
+                sent = self.connection.send(view)
+            except (BlockingIOError, InterruptedError, ssl.SSLWantWriteError):
+                self.wait(writing=True)
+                continue
+            except ssl.SSLWantReadError:
+                self.wait()
+                continue
+            except Exception:
+                raise metadata.BoundaryFailure('unexpected_failure') from None
+            self.remaining()
+            if type(sent) is not int or sent <= 0 or sent > len(view):
+                raise metadata.BoundaryFailure('unexpected_failure')
+            view = view[sent:]
+
+    def receive(self, amount):
+        while True:
+            self.remaining()
+            try:
+                value = self.connection.recv(amount)
+            except (BlockingIOError, InterruptedError, ssl.SSLWantReadError):
+                self.wait()
+                continue
+            except ssl.SSLWantWriteError:
+                self.wait(writing=True)
+                continue
+            except Exception:
+                raise metadata.BoundaryFailure('unexpected_failure') from None
+            self.remaining()
+            if type(value) is not bytes or not value:
+                raise metadata.BoundaryFailure('unexpected_failure')
+            return value
+
+    def read_headers(self):
+        raw = bytearray()
+        while not raw.endswith(b'\r\n\r\n'):
+            if len(raw) >= self.maximum_header_bytes:
+                raise metadata.BoundaryFailure('header_shape')
+            raw.extend(self.receive(1))
+        lines = bytes(raw[:-4]).split(b'\r\n')
+        status_line = re.fullmatch(rb'HTTP/1\.[01] ([1-5][0-9]{2})(?: [\x20-\x7e]*)?', lines[0])
+        if status_line is None or len(lines) - 1 > MAX_HEADER_COUNT:
+            raise metadata.BoundaryFailure('header_shape')
+        pairs = []
+        for line in lines[1:]:
+            name, separator, value = line.partition(b':')
+            if (not separator or not re.fullmatch(rb"[!#$%&'*+.^_`|~0-9A-Za-z-]+", name) or
+                    line[:1] in (b' ', b'\t')):
+                raise metadata.BoundaryFailure('header_shape')
+            try:
+                pairs.append((name.decode('ascii'), value.strip(b' \t').decode('latin-1')))
+            except UnicodeError:
+                raise metadata.BoundaryFailure('header_shape') from None
+        return int(status_line.group(1)), pairs
+
+    def read_exact(self, size):
+        if type(size) is not int or size < 0:
+            raise metadata.BoundaryFailure('body_size')
+        chunks, remaining = [], size
+        while remaining:
+            value = self.receive(min(8192, remaining))
+            if len(value) > remaining:
+                raise metadata.BoundaryFailure('body_size')
+            chunks.append(value)
+            remaining -= len(value)
+        return b''.join(chunks)
 
 
 class HTTPSAdapter:
@@ -165,42 +267,79 @@ class HTTPSAdapter:
                     'Anonymous bearer required')
             expected['Authorization'] = bearer
         require(headers == expected, 'HTTPS headers differ')
-        if url == self.manifest['actions'][0]['url']:
-            return self.tls.request(url, headers, timeout=timeout, maximum_bytes=maximum_bytes)
-        start, status, response, connection = self.clock(), None, None, None
+        start, status, connection, tls = self.clock(), None, None, None
         try:
             target = urlsplit(url)
-            connection = http.client.HTTPSConnection(target.hostname, 443, context=self.tls.context,
-                                                       timeout=timeout)
-            connection.set_debuglevel(0)
-            connection.request('GET', target.path, body=None, headers=headers)
-            response = connection.getresponse()
-            status = response.status if type(response.status) is int and 100 <= response.status <= 599 else None
-            now = self.clock()
-            if status is None or now < start or now >= start + timeout:
-                raise metadata.BoundaryFailure('deadline', status)
-            if status != 307:
+            deadline = start + timeout
+            if not metadata.base._finite(start) or not metadata.base._finite(deadline) or deadline <= start:
+                raise metadata.BoundaryFailure('deadline')
+            wire = DeadlineWire(None, clock=self.clock, deadline=deadline)
+            addresses = socket.getaddrinfo(target.hostname, 443, type=socket.SOCK_STREAM)
+            wire.remaining()
+            if not addresses:
+                raise metadata.BoundaryFailure('unexpected_failure')
+            family, kind, protocol, _, address = addresses[0]
+            connection = socket.socket(family, kind, protocol)
+            connection.setblocking(False)
+            result = connection.connect_ex(address)
+            if result not in (0, errno.EINPROGRESS, errno.EWOULDBLOCK, errno.EALREADY, errno.EINTR):
+                raise metadata.BoundaryFailure('unexpected_failure')
+            wire.connection = connection
+            if result != 0:
+                wire.wait(writing=True)
+                if connection.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR) != 0:
+                    raise metadata.BoundaryFailure('unexpected_failure')
+            wire.remaining()
+            tls = self.tls.context.wrap_socket(connection, server_hostname=target.hostname,
+                                               do_handshake_on_connect=False)
+            tls.setblocking(False)
+            wire.connection = tls
+            while True:
+                wire.remaining()
+                try:
+                    tls.do_handshake()
+                    wire.remaining()
+                    break
+                except ssl.SSLWantReadError:
+                    wire.wait()
+                except ssl.SSLWantWriteError:
+                    wire.wait(writing=True)
+            request_target = target.path + ('?' + target.query if target.query else '')
+            request = ('GET ' + request_target + ' HTTP/1.1\r\n' +
+                       ''.join(name + ': ' + value + '\r\n' for name, value in headers.items()) +
+                       '\r\n').encode('ascii')
+            wire.send(request)
+            status, pairs = wire.read_headers()
+            if status != 200 and status != 307:
                 return status, [], b''
-            pairs = response.getheaders()
-            if len(pairs) > MAX_HEADER_COUNT or sum(len(k) + len(v) for k, v in pairs) > MAX_HEADER_BYTES:
-                raise metadata.BoundaryFailure('header_shape', status)
-            locations = []
+            names = {}
             for key, value in pairs:
-                if key.lower() == 'location':
-                    if type(value) is not str or len(value.encode('utf-8')) > MAX_LOCATION:
-                        raise metadata.BoundaryFailure('header_shape', status)
-                    locations.append(value)
-            if len(locations) != 1:
+                names.setdefault(key.lower(), []).append(value)
+            if status == 307:
+                locations = names.get('location', [])
+                if (len(locations) != 1 or len(locations[0].encode('utf-8')) > MAX_LOCATION):
+                    raise metadata.BoundaryFailure('header_shape', status)
+                return status, [('Location', locations[0])], b''
+            content_type = names.get('content-type', [])
+            content_length = names.get('content-length', [])
+            if (len(content_type) != 1 or len(content_length) != 1 or 'transfer-encoding' in names or
+                    'content-encoding' in names and names['content-encoding'] != ['identity'] or
+                    not re.fullmatch(r'[0-9]{1,8}', content_length[0])):
                 raise metadata.BoundaryFailure('header_shape', status)
-            return status, [('Location', value) for value in locations], b''
+            size = int(content_length[0])
+            if size > maximum_bytes:
+                raise metadata.BoundaryFailure('body_size', status)
+            if content_type[0].split(';', 1)[0].strip().lower() != 'application/json':
+                raise metadata.BoundaryFailure('header_shape', status)
+            return status, content_type[0], wire.read_exact(size)
         except metadata.BoundaryFailure:
             raise
         except Exception:
             raise metadata.BoundaryFailure('unexpected_failure', status) from None
         finally:
-            if response is not None:
-                response.close()
-            if connection is not None:
+            if tls is not None:
+                tls.close()
+            elif connection is not None:
                 connection.close()
 
 
