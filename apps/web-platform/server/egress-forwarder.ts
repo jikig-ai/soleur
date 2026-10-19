@@ -23,11 +23,13 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { connect as netConnect } from "node:net";
@@ -159,13 +161,19 @@ export async function spawnEgressForwarder(
   // filename on one side and a proxy-URL password on the other.
   const token = randomBytes(24).toString("base64url");
   mkdirSync(egressTokenDir(), { recursive: true, mode: 0o700 });
-  // The gateway's auth helper checks <dir>/<password> exists — the file's
-  // existence IS the credential validity window. Mode 0600: container-root
-  // only; the sandboxed agent reads neither the dir nor the file
-  // (denyRead covers the mount point on the entitled session).
-  writeFileSync(join(egressTokenDir(), token), `${workspaceId}\n`, {
-    mode: 0o600,
-  });
+  // The gateway's auth helper checks <dir>/<password> exists AND that the file's
+  // content equals the username — the file's existence IS the credential validity
+  // window. Mode 0644, NOT 0600: the helper runs as the squid `proxy` uid (13) in the
+  // gateway container and READS the file; measured against the pinned ubuntu/squid
+  // image, a 0600 uid-1001 file is `Permission denied` for it and every session token
+  // would be rejected. The content is only the workspace id. Unlistability comes from
+  // the 0711 dir plus the 192-bit name, and tenant sessions are kept out by denyRead
+  // (sandboxed Bash) and the sandbox hooks (in-process file tools) — NOT by file mode,
+  // since every tenant process shares uid 1001. chmod after the write so a restrictive
+  // umask cannot narrow the mode.
+  const tokenPath = join(egressTokenDir(), token);
+  writeFileSync(tokenPath, `${workspaceId}\n`, { mode: 0o644 });
+  chmodSync(tokenPath, 0o644);
 
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
@@ -336,6 +344,17 @@ export function teardownEgressForwarder(conversationId: string): void {
  * startup, when the registry is definitionally empty. Best-effort + never
  * throws.
  */
+/** A host-probe token younger than this is left alone by the boot sweep. */
+const PROBE_TOKEN_GRACE_MS = 10 * 60 * 1000;
+
+function isFreshProbeToken(path: string): boolean {
+  try {
+    return Date.now() - statSync(path).mtimeMs < PROBE_TOKEN_GRACE_MS;
+  } catch {
+    return false; // vanished or unreadable: treat as not fresh, the rmSync below is force
+  }
+}
+
 export function reapOrphanEgressForwarders(): void {
   const liveTokens = new Set(
     Array.from(egressForwarders.values(), (e) => e.token),
@@ -394,6 +413,12 @@ export function reapOrphanEgressForwarders(): void {
       // Dotfiles are not tokens — `.gw-target` is the bootstrap's published
       // gateway address and must survive the sweep.
       if (f.startsWith(".") || liveTokens.has(f)) continue;
+      // The host cron probes (cron-egress-resolve.sh / cron-egress-enforce-probe.sh)
+      // mint `probe-*` tokens in this same dir every ~5 min. A deploy-boot sweep that
+      // lands between a probe writing its file and its curl authenticating would 407
+      // a healthy gateway and page a false gw_allow_fail. Keep FRESH ones; a leaked
+      // (old) probe file is still swept.
+      if (f.startsWith("probe-") && isFreshProbeToken(join(egressTokenDir(), f))) continue;
       rmSync(join(egressTokenDir(), f), { force: true });
       log.info(
         { feature: "egress-forwarder", op: "reap-token", tokenFile: f.length },

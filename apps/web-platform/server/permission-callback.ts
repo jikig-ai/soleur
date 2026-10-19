@@ -41,6 +41,7 @@ import {
   extractToolPath,
   UNVERIFIED_PARAM_TOOLS,
 } from "./tool-path-checker";
+import { patternEscapesWorkspace } from "./tool-pattern-checker";
 import { isPathInWorkspace } from "./sandbox";
 import type { NotificationPayload } from "./notifications";
 import type { WSMessage } from "@/lib/types";
@@ -400,7 +401,10 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         });
       }
       const filePath = extractToolPath(toolInput);
-      if (filePath && !isPathInWorkspace(filePath, ctx.workspacePath)) {
+      if (
+        (filePath && !isPathInWorkspace(filePath, ctx.workspacePath)) ||
+        patternEscapesWorkspace(toolName, toolInput)
+      ) {
         if (ctx.persona === "support") {
           return deny({
             conversationId: ctx.conversationId,

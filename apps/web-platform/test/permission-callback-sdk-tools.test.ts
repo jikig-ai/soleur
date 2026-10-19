@@ -315,6 +315,38 @@ describe("Edit/Write/NotebookEdit workspace containment (Stage 2.11)", () => {
     assertAllow(result);
   });
 
+  test("Glob with an absolute pattern and no path → deny (pattern is a location)", async () => {
+    mockExtractToolPath.mockReturnValue("");
+    mockIsPathInWorkspace.mockReturnValue(true);
+    const canUseTool = createCanUseTool(buildContext());
+    const result = await canUseTool(
+      "Glob",
+      { pattern: "/var/lib/soleur/egress-tokens/*" },
+      sdkOptions(),
+    );
+    assertDeny(result);
+  });
+
+  test("Grep with an absolute glob → deny", async () => {
+    mockExtractToolPath.mockReturnValue("");
+    mockIsPathInWorkspace.mockReturnValue(true);
+    const canUseTool = createCanUseTool(buildContext());
+    const result = await canUseTool(
+      "Grep",
+      { pattern: "x", glob: "/var/lib/soleur/egress-tokens/*" },
+      sdkOptions(),
+    );
+    assertDeny(result);
+  });
+
+  test("Glob with a relative pattern and no path → allow", async () => {
+    mockExtractToolPath.mockReturnValue("");
+    mockIsPathInWorkspace.mockReturnValue(true);
+    const canUseTool = createCanUseTool(buildContext());
+    const result = await canUseTool("Glob", { pattern: "*.ts" }, sdkOptions());
+    assertAllow(result);
+  });
+
   test("Write outside workspace → deny", async () => {
     mockExtractToolPath.mockReturnValue("/etc/passwd");
     mockIsPathInWorkspace.mockReturnValue(false);

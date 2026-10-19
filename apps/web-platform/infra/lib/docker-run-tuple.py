@@ -6,7 +6,8 @@ in cloud-init.yml. Each carries the security posture that the /proc mask and the
 (the soleur-bwrap AppArmor profile, the seccomp profile, a bounded /tmp tmpfs, no added capability, no host
 namespace, no environment lever on PATH or the loader). A deny list of option spellings was bypassed every time
 a spelling was missed, so this is a CLOSED world: the tuples are tokenized with shlex and every option,
-environment name, volume, port and value outside the declared set is a violation, and every command-position
+environment name, volume, port and value outside the declared set is a violation, a declared volume, environment name
+or port that is ABSENT from its tuple is a violation too (MISSING_DECLARED), and every command-position
 `docker run|create|...` in the two files is censused so a fourth start site cannot hide.
 
 Usage (stdlib only, run as `python3 -I`):
@@ -35,8 +36,14 @@ and it reads the COMMITTED files only (a container started out of band on a host
 
 Stated residuals (outside the closed set by design, not claimed closed): the CONTENT of --env-file (Doppler prd;
 ci-deploy.sh overlay_github_app_key refuses runtime-hijack names such as PATH and LD_* only when that overlay
-runs) and the value of -e NODE_OPTIONS (pinned to the --max-old-space-size assignment lines, not to the flag set).
-Containers started on other hosts (the zot registry, the egress gateway) are not part of the closed set.
+runs; a prd secret SOLEUR_EGRESS_REAPER=1 would give the canary the reaper, and EGRESS_TOKEN_DIR can decouple the
+mount from the code, neither of which the argv shows) and the value of -e NODE_OPTIONS (pinned to the
+--max-old-space-size assignment lines, not to the flag set). Required-ness (MISSING_DECLARED) covers volumes,
+environment NAMES and ports only: the scalar posture flags (--restart, --memory, --memory-swap, --init,
+--log-driver, --add-host, --env-file) are allowed-sets, so deleting one of them passes. The scan is a text scan with
+no control-flow model: a tuple behind an `exit 0`, a start through an indirect docker word (`d=docker; $d run`), a
+`docker rename|start|restart|update` of an existing container, and an app start in a file outside the scanned set
+are not seen. Containers started on other hosts (the zot registry, the egress gateway) are not part of the closed set.
 """
 
 import argparse
@@ -614,13 +621,15 @@ def check_declared(app_sites):
     members outside the declared set, so a deleted member (the egress-token mount on the prod start) passed."""
     out = []
     for s in app_sites:
-        if s.toks is None:        # tokenization failed: UNPARSEABLE_OPTION already reds it, a second line is noise
+        # A site that already reds UNPARSEABLE_OPTION (tokenization failed, or the tuple is truncated so "no image")
+        # has an incomplete record: reporting every member after the cut as missing too is noise on top of that red.
+        if s.toks is None or any(v.startswith("FAIL UNPARSEABLE_OPTION") for v in s.option_viols):
             continue
         spec = TUPLES[s.tuple]
         for kind, declared, got in (("volume", spec["volumes"], s.rec.volumes),
                                     ("env", set(spec["env"]), s.rec.env),
                                     ("port", spec["ports"], s.rec.ports)):
-            for member in sorted(declared - got):
+            for member in sorted(declared - set(got)):
                 out.append("FAIL MISSING_DECLARED: %s %s missing from %s %s (declared in TUPLES)" % (kind, member, s.file, s.tuple))
     return out
 

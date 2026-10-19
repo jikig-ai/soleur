@@ -122,6 +122,24 @@ describe("createSandboxHook - file tools", () => {
     const result = await invokeHook("Grep", { pattern: "TODO" });
     expectExplicitAllow(result);
   });
+
+  // Glob `pattern` / Grep `glob` carry a location but no `path` param: an absolute one
+  // lists any directory in the container, including the egress token dir whose file
+  // NAMES are live gateway credentials (the dir is bind-mounted into the container).
+  test.each([
+    { tool: "Glob", input: { pattern: "/var/lib/soleur/egress-tokens/*" } },
+    { tool: "Glob", input: { pattern: "~/.claude/**" } },
+    { tool: "Glob", input: { pattern: "../user2/**" } },
+    { tool: "Grep", input: { pattern: "x", glob: "/var/lib/soleur/egress-tokens/*" } },
+  ])("denies $tool with an escaping pattern/glob ($input)", async ({ tool, input }) => {
+    const result = await invokeHook(tool, input);
+    expectDenied(result, "outside the workspace");
+  });
+
+  test("allows Grep whose regex pattern looks like a path (content, not a location)", async () => {
+    const result = await invokeHook("Grep", { pattern: "/etc/passwd", glob: "*.md" });
+    expectExplicitAllow(result);
+  });
 });
 
 describe("createSandboxHook - Bash env access", () => {

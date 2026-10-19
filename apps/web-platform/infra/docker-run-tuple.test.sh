@@ -2,7 +2,8 @@
 # Unit + mutation battery for lib/docker-run-tuple.py (Guard 1 of the #10065 plan: sandbox masked-/proc
 # suite parity). The helper parses the three docker run tuples that start the web-platform app container
 # (canary and prod in ci-deploy.sh, first boot in cloud-init.yml) CLOSED-WORLD: every option, environment
-# name, volume and port outside the declared set is a red, and the helper censuses every command-position
+# name, volume and port outside the declared set is a red, a declared volume, env name or port missing from its
+# tuple is a red too, and the helper censuses every command-position
 # docker run / create so a fourth start site cannot hide.
 #
 # CONTRACT. Every row mutates ONE COPY of the two real files inside $WORK (never the tree), proves the
@@ -12,8 +13,8 @@
 # not a kill. Must-PASS rows run the same way and require rc 0 plus the exact ok line with the pinned
 # posture digest, so a helper that rejects everything fails them.
 #
-# HARNESS ROWS. H1: the matrix is re-run against COPIES of the helper whose classification, census-count
-# and projection arms are stubbed (a redefinition spliced into the copy, never a seam in the shipped
+# HARNESS ROWS. H1: the matrix is re-run against COPIES of the helper whose classification, census-count,
+# projection, unclassified-census and declared-member arms are stubbed (a redefinition spliced into the copy, never a seam in the shipped
 # helper); the rows that arm owns must then be NOT KILLED, so a battery that stays green against a stubbed
 # arm is itself vacuous. H2: passes + fails == rows executed, and the row count is an exact literal beside
 # its use, reported by printf + exit 1 (never through ok()/bad()).
@@ -286,7 +287,7 @@ kill_row K06-fourth-site-dup      'm_dup canary'                                
 kill_row K06b-fourth-site-shadow  'm_dup canary; m_repl canary "--name soleur-web-platform-canary \\" "--name soleur-web-platform-shadow \\"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
 kill_row K11-heredoc-all          'm_heredoc canary; m_heredoc prod; m_heredoc first-boot' 'TUPLE_COUNT: want 3 got 0'
 kill_row K11b-heredoc-one         'm_heredoc prod'                                       'TUPLE_COUNT: want 3 got 2' 'UNCLASSIFIED_DOCKER_RUN'
-kill_row K12-comment-mid-tuple    'm_ins_at prod "--security-opt apparmor" "# a comment line ends the bash command here"' 'UNPARSEABLE_OPTION: no image in ci-deploy.sh prod'
+kill_row K12-comment-mid-tuple    'm_ins_at prod "--security-opt apparmor" "# a comment line ends the bash command here"' 'UNPARSEABLE_OPTION: no image in ci-deploy.sh prod' '!MISSING_DECLARED'
 # --- row 7: PATH and loader levers, other environment names ------------------------------
 kill_row K07a-canary-env-path     'm_ins canary "-e PATH=/usr/bin:/usr/local/bin"'       'ENV_NAME: PATH in ci-deploy.sh canary'
 kill_row K07b-canary-env-ldpre    'm_ins canary "-e LD_PRELOAD=/x"'                      'ENV_NAME: LD_PRELOAD in ci-deploy.sh canary'
@@ -421,6 +422,17 @@ kill_row K25c-first-boot-no-token-mount 'm_del first-boot "-v /var/lib/soleur/eg
 # the canary neither mounts the token dir nor reaps (ADR-278 canary isolation): a reaper on the canary would revoke live prod tokens
 kill_row K26a-canary-reaper-env      'm_ins canary "-e SOLEUR_EGRESS_REAPER=1"'           'ENV_NAME: SOLEUR_EGRESS_REAPER in ci-deploy.sh canary' '!prod' '!cloud-init.yml' '#1'
 kill_row K26b-canary-token-mount      'm_ins canary "-v /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens"' 'UNKNOWN_OPTION: -v /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens in ci-deploy.sh canary' '!prod' '!cloud-init.yml' '#1'
+# --- the arm covers EVERY tuple and EVERY kind, not just the prod rows above: a canary member, a first-boot env/port, two
+# --- members gone at once (a version reporting only the first missing member survives a single-deletion row), and a tuple
+# --- that already reds UNPARSEABLE_OPTION must not ALSO report every member as missing.
+kill_row K27a-canary-no-workspaces-vol 'm_del canary "-v /mnt/data/workspaces:/workspaces"' 'MISSING_DECLARED: volume /mnt/data/workspaces:/workspaces missing from ci-deploy.sh canary' '!prod' '!cloud-init.yml' '#1'
+kill_row K27b-canary-no-port          'm_del canary "-p 0.0.0.0:3001:3000"'                 'MISSING_DECLARED: port 0.0.0.0:3001:3000 missing from ci-deploy.sh canary' '!prod' '!cloud-init.yml' '#1'
+kill_row K27c-canary-no-host-id-env   'm_del canary "-e SOLEUR_HOST_ID"'                   'MISSING_DECLARED: env SOLEUR_HOST_ID missing from ci-deploy.sh canary' '!prod' '!cloud-init.yml' '#1'
+kill_row K27d-first-boot-no-reaper-env 'm_del first-boot "-e SOLEUR_EGRESS_REAPER"'         'MISSING_DECLARED: env SOLEUR_EGRESS_REAPER missing from cloud-init.yml first-boot' '!ci-deploy.sh' '#1'
+kill_row K27e-first-boot-no-inngest-env 'm_del first-boot "-e INNGEST_BASE_URL"'            'MISSING_DECLARED: env INNGEST_BASE_URL missing from cloud-init.yml first-boot' '!ci-deploy.sh' '#1'
+kill_row K27f-first-boot-no-port      'm_del first-boot "-p 0.0.0.0:3000:3000"'             'MISSING_DECLARED: port 0.0.0.0:3000:3000 missing from cloud-init.yml first-boot' '!ci-deploy.sh' '#1'
+kill_row K27g-prod-two-members-gone   'm_del prod "-v /mnt/data/workspaces:/workspaces"; m_del prod "-e SOLEUR_EGRESS_REAPER"' 'MISSING_DECLARED: volume /mnt/data/workspaces:/workspaces missing from ci-deploy.sh prod' 'MISSING_DECLARED: env SOLEUR_EGRESS_REAPER missing from ci-deploy.sh prod' '!canary' '#2'
+kill_row K27h-prod-unbalanced-quote   'm_repl prod "-e SOLEUR_HOST_ID=\"\$HOST_ID\"" "-e SOLEUR_HOST_ID=\"\$HOST_ID"' 'UNPARSEABLE_OPTION' 'ci-deploy.sh prod' '!MISSING_DECLARED'
 kill_row K20i-memory-zero-unlimited 'm_repl prod "--memory \"\$PROD_MEMORY_CAP\"" "--memory 0"' 'POSTURE_VALUE: --memory 0 in ci-deploy.sh prod'
 kill_row K20h-main-file-symlink   'm_symlink "$CI_DEPLOY_REL" /dev/zero'                 'TUPLE_COUNT: cannot read ci-deploy.sh' 'not a regular file'
 
@@ -613,10 +625,13 @@ h1_stub() { # <stub name> <function> <return expr> <row id>...
 h1_stub classify check_options '[]' \
   K01-prod-cap-add-space K02-first-boot-cap-add-eq K03a-canary-pid-eq K03b-canary-pid-space \
   K04a-prod-systempaths K04b-prod-systempaths-eq K07a-canary-env-path K07b-canary-env-ldpre \
-  K08a-splat K10a-apparmor-unconfined K10b-seccomp-unconfined K10f-privileged K10r-volume-root K20i-memory-zero-unlimited
+  K08a-splat K10a-apparmor-unconfined K10b-seccomp-unconfined K10f-privileged K10r-volume-root K20i-memory-zero-unlimited \
+  K26a-canary-reaper-env K26b-canary-token-mount
 h1_stub declared check_declared '[]' \
   K24a-prod-no-workspaces-vol K24b-prod-no-plugin-vol K24c-prod-no-host-id-env K24d-prod-no-second-port \
-  K25a-prod-no-token-mount K25b-prod-no-reaper-env K25c-first-boot-no-token-mount
+  K25a-prod-no-token-mount K25b-prod-no-reaper-env K25c-first-boot-no-token-mount \
+  K27a-canary-no-workspaces-vol K27b-canary-no-port K27c-canary-no-host-id-env K27d-first-boot-no-reaper-env \
+  K27e-first-boot-no-inngest-env K27f-first-boot-no-port K27g-prod-two-members-gone
 h1_stub census check_count '[]' \
   K05-prod-renamed K06-fourth-site-dup K11-heredoc-all K16-missing-cloud-init K20h-main-file-symlink
 h1_stub projection check_projection '[]' \
@@ -640,7 +655,7 @@ if [ "$((PASS + FAIL))" -ne "$ROWS" ]; then
   printf '[FATAL] accounting identity: passes(%s) + fails(%s) != rows(%s) - a verdict was discarded\n' "$PASS" "$FAIL" "$ROWS" >&2
   exit 1
 fi
-MIN_ROWS=216
+MIN_ROWS=233
 if [ "$ROWS" -lt "$MIN_ROWS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s rows ran, floor is %s\n' "$ROWS" "$MIN_ROWS" >&2
   exit 1

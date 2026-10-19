@@ -3027,7 +3027,7 @@ assert_prod_egress_tokens() {
   # SOLEUR_EGRESS_REAPER=1 (the fresh-host start in cloud-init.yml has both). Without the
   # mount the forwarder's mkdir fails EACCES inside the container and an entitled web-egress
   # session degrades to zero egress. The canary gets neither (ADR-278 canary isolation; pinned
-  # by docker-run-tuple.test.sh K26a). The prod line is told apart by its exact --name word with
+  # by docker-run-tuple.test.sh K26a-b). The prod line is told apart by its exact --name word with
   # a trailing space, because the canary name begins with the same text.
   local description="$1"
   local cmd="$2"
@@ -3050,10 +3050,10 @@ assert_prod_egress_tokens() {
   fi
 
   local missing=""
-  if ! grep -qF -- "-v /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens" <<<"$prod_line"; then
+  if ! grep -qF -- "-v /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens " <<<"$prod_line"; then
     missing="${missing} egress-tokens mount"
   fi
-  if ! grep -qF -- "-e SOLEUR_EGRESS_REAPER=1" <<<"$prod_line"; then
+  if ! grep -qF -- "-e SOLEUR_EGRESS_REAPER=1 " <<<"$prod_line"; then
     missing="${missing} SOLEUR_EGRESS_REAPER=1"
   fi
 

@@ -5,6 +5,7 @@ import type {
 import { isPathInWorkspace } from "./sandbox";
 import { containsSensitiveEnvAccess } from "./bash-sandbox";
 import { isFileTool, extractToolPath } from "./tool-path-checker";
+import { patternEscapesWorkspace } from "./tool-pattern-checker";
 import { logPermissionDecision } from "./permission-log";
 
 export function createSandboxHook(workspacePath: string): HookCallback {
@@ -21,7 +22,10 @@ export function createSandboxHook(workspacePath: string): HookCallback {
 
       // Empty path is allowed through -- Glob/Grep default to CWD (workspacePath),
       // and Read/Write/Edit require file_path so the SDK rejects empty values.
-      if (filePath && !isPathInWorkspace(filePath, workspacePath)) {
+      if (
+        (filePath && !isPathInWorkspace(filePath, workspacePath)) ||
+        patternEscapesWorkspace(toolName, toolInput ?? {})
+      ) {
         logPermissionDecision("sandbox-hook", toolName, "deny", "file path outside workspace");
         return {
           systemMessage:

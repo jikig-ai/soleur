@@ -4643,9 +4643,12 @@ case "$COMPONENT" in
       # forwarder can create its token file; without the mount the forwarder's mkdir
       # fails EACCES and an entitled web-egress session has zero egress. The fresh-host
       # start in cloud-init.yml carries the same mount and flag. SOLEUR_EGRESS_REAPER=1
-      # is PROD ONLY (ADR-278 canary isolation): the canary above gets neither, because
-      # its /proc cannot see the prod forwarders and a canary reaper would revoke live
-      # tokens. lib/docker-run-tuple.py pins both halves.
+      # is for the prod and first-boot starts only (ADR-278 canary isolation): the
+      # canary's argv above carries neither. Least privilege for the mount (the canary
+      # runs no egress sessions); for the flag, its /proc cannot see the prod forwarders
+      # and a canary reaper would revoke live tokens. lib/docker-run-tuple.py pins both
+      # halves of the ARGV; env injected through --env-file (Doppler prd) or
+      # EGRESS_TOKEN_DIR is a stated residual there.
       if docker run -d \
         --name soleur-web-platform \
         --log-driver journald \

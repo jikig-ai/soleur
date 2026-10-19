@@ -14,6 +14,8 @@ import {
   rmSync,
   existsSync,
   writeFileSync,
+  statSync,
+  utimesSync,
 } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -315,6 +317,29 @@ describe("egress-forwarder lifecycle (#9534)", () => {
     // inside the tunnel stream.
     expect(text).not.toContain("\r\n\r\n\r\n");
   }, 15000);
+
+  it("token file is world-readable (0644): the gateway's auth helper runs as the squid `proxy` uid and READS the file", async () => {
+    // Measured against the pinned ubuntu/squid image: the helper (uid 13) gets
+    // `Permission denied` on a 0600 uid-1001 file, so every session token would be
+    // rejected even with the dir mounted. Content is only the workspace id; the 0711
+    // dir (and the unguessable 192-bit name) keep it unlistable to other host uids.
+    const h = await spawnEgressForwarder("conv-1", "ws-123");
+    expect(statSync(join(tokenDir, h.token)).mode & 0o777).toBe(0o644);
+  }, 15000);
+
+  it("reaper keeps a FRESH probe-* token (a host cron probe mints these in the same dir) but sweeps a stale one", async () => {
+    // A boot-time sweep landing between the probe writing its file and its curl
+    // authenticating would 407 a healthy gateway and page a false gw_allow_fail.
+    writeFileSync(join(tokenDir, "probe-fresh0123456789"), "probe\n");
+    writeFileSync(join(tokenDir, "probe-stale0123456789"), "probe\n");
+    const old = new Date(Date.now() - 11 * 60 * 1000);
+    utimesSync(join(tokenDir, "probe-stale0123456789"), old, old);
+    writeFileSync(join(tokenDir, "stale-token-3"), "ws-z\n");
+    reapOrphanEgressForwarders();
+    expect(existsSync(join(tokenDir, "probe-fresh0123456789"))).toBe(true);
+    expect(existsSync(join(tokenDir, "probe-stale0123456789"))).toBe(false);
+    expect(existsSync(join(tokenDir, "stale-token-3"))).toBe(false);
+  });
 
   it("reaper removes stale token files (registry-empty boundary)", async () => {
     writeFileSync(join(tokenDir, "stale-token-1"), "ws-x\n");

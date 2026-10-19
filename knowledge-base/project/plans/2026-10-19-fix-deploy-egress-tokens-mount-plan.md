@@ -229,8 +229,10 @@ pipeline, and `cloud-init.yml` / `user_data` is untouched).
 3. Ordering risk, bounded: if the release deploy runs with the OLD `ci-deploy.sh` before the
    pipeline-fix apply lands, behavior is unchanged (still degraded, no regression); the next deploy
    (or a `workflow_dispatch` re-run of the release) carries the fix. Host dir presence: `server.tf`
-   already provisions it on web-1 and web-2 (and a missing dir that docker creates root-owned is
-   corrected by the same `chown` because ownership lives on the host inode).
+   already provisions it on web-1 and web-2. (Review correction: a dir that docker creates root-owned
+   because the provisioner never ran is NOT self-corrected by this PR - the `chown` lives in
+   `terraform_data.egress_gateway(_web2)`, which re-runs only when the gateway artifacts change. That case is
+   loud, not silent: the forwarder's write throws EACCES and it is mirrored to Sentry.)
 4. Post-deploy verification without SSH (`hr-no-dashboard-eyeball-pull-data-yourself`): use
    `scripts/betterstack-assert-absence.sh` (with its positive control) for the EACCES marker
    `permission denied, mkdir '/var/lib/soleur/egress-tokens'` over the window after the deploy, and
@@ -362,7 +364,7 @@ error_reporting:
 failure_modes:
   - mode: host token dir absent or wrong owner at deploy time (docker creates a missing bind source as root)
     detection: same Sentry op web-egress-forwarder-spawn EACCES event
-    alert_route: Sentry issue alert on cc-dispatcher feature
+    alert_route: none in code (review correction: no Sentry alert RULE for op web-egress-forwarder-spawn exists in the repo; the event is mirrored but not paged - tracked in the bundled follow-up)
   - mode: new ci-deploy.sh not yet on the host when the release deploys
     detection: the post-deploy absence assertion still reports the EACCES marker
     alert_route: follow-through step re-runs the release deploy
@@ -456,3 +458,49 @@ The ADR sentence is authored now (describes the state this PR ships); nothing is
   option position (`UNPARSEABLE_OPTION`); use the literal strings.
 - Never read the real prod env-file or Doppler values while verifying; the absence assertion needs
   only the query transport credentials injected by its own wrapper.
+
+## Review-Round Amendments (2026-10-19, 11-seat panel + CTO rulings R6-R15)
+
+Scope grew beyond the original "4 lines + tuple". Everything below was found by the review panel at `f3d0f70fb1`
+and ruled by the CTO agent (`decision-challenges.md` rows 6-15). The PR is HELD as draft until the merge-blocking set
+lands and the pre-merge proofs below are recorded.
+
+1. **In-process Glob/Grep gap (R6, P1, merge-blocking).** `extractToolPath` never saw Glob `pattern` / Grep `glob`, so
+   an absolute one listed the (now mounted) token dir with no `path`. A token FILE NAME is the credential. Fixed in this
+   PR: new `server/tool-pattern-checker.ts` (`patternEscapesWorkspace`, deny by syntax: absolute, `~`, `..` segment,
+   per brace/comma alternative; Grep regex `pattern` is content and is NOT checked), wired into `sandbox-hook.ts` and
+   `permission-callback.ts`; RED-first tests in `tool-pattern-checker.test.ts`, `sandbox-hook.test.ts`,
+   `permission-callback-sdk-tools.test.ts`. A new module (not a new export in `tool-path-checker.ts`) because 30+ test
+   files mock that module with closed factories. Hashed token file names stay a follow-up.
+2. **Token file mode (R8, P1, merge-blocking).** Measured against the pinned `ubuntu/squid@sha256:6a097f68...`: the auth
+   helper runs as `proxy` (uid 13) and gets `Permission denied` on a `0600` uid-1001 token file (OK on `0644`, OK as
+   root), so every session token would have been rejected even with the mount. Fixed: `egress-forwarder.ts` writes
+   `0644` + explicit `chmodSync`; RED-first test in `web-egress.test.ts`. The host cron probes had masked this (root
+   writes, default umask). `egress-gateway-bootstrap.sh` is NOT touched (gateway artifact hash).
+3. **Boot reaper vs host probe tokens (R10).** The reaper skips `probe-*` files younger than 10 minutes (stale ones are
+   still swept); test in `web-egress.test.ts`.
+4. **Mask under a real bind mount (R7).** Local docker repro (alpine + bubblewrap, `--security-opt seccomp=` the repo's
+   `seccomp-bwrap.json`, uid 1001, populated 0711 bind-mounted dir): the app-side process lists the token and
+   `.gw-target`; an UNMASKED bwrap sandbox still sees them (positive control); with `--tmpfs` over the mount the listing
+   is empty, reads are ENOENT, `.gw-target` is hidden, a write lands in the sandbox-private tmpfs and the host dir is
+   untouched. AppArmor was NOT enabled on the repro host: the AppArmor interaction is unverified locally. `/workspaces`
+   is already a bind mount that the same sandbox tmpfs-masks in production, which is the precedent that makes this
+   non-blocking by itself.
+5. **Wording (R12, R13).** The canary mount omission is least privilege, not a restoration (history: the original
+   design mounted it on the canary; a merge-conflict resolution deleted all of it). "Neither" is proven for the start
+   ARGV only; env-file injection and `EGRESS_TOKEN_DIR` are stated residuals in the checker docstring and ADR-278.
+6. **Checker tests (R15).** K27a-h (canary/first-boot members, two-members-at-once, tokenization failure), K26a-b into
+   the H1 stub, set-safe `declared - set(got)`, and `check_declared` no longer piles MISSING_DECLARED onto a tuple that
+   already reds UNPARSEABLE_OPTION. `MIN_ROWS=233`.
+7. **Post-deploy gate (R9), replaces tasks 7.5/7.6 as the ordering.** (a) `docker inspect` prod shows the mount and
+   `SOLEUR_EGRESS_REAPER=1`, canary shows neither. (b) From a NON-entitled test workspace, with a positive control that
+   a `probe-*` token exists host-side: sandboxed Bash `ls`/`cat`/`touch` in the dir, in-process Glob with an absolute
+   pattern, in-process Grep with an absolute `glob`, and Read/Write/Edit of `.gw-target` are all denied or empty.
+   (c) Only then enable the entitled dispatch and require the first `soleur-egress-gw` allow row. Mint NO real token and
+   do NOT run the egress-audit-enable runbook's first entitled dispatch until (b) is green. The Better Stack
+   absence check alone is vacuous when no entitled session dispatches.
+8. **Deferred (one bundled tracker, R14):** the agent-visible 'web access enabled but unavailable' addendum, the missing
+   Sentry alert rule for `web-egress-forwarder-spawn`, the toggle's missing runtime state, hashed token file names,
+   `.gw-target` subnet validation in the forwarder, the stale `egress-gateway-bootstrap.sh` comment, token-path
+   redaction in forwarder error reports, and extending the checker (posture-flag required-ness, control-flow/verb/
+   indirect-docker/other-file census gaps).
