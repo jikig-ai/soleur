@@ -671,3 +671,13 @@ is not a completed lint check of those files.
   the exact approved retry before interpreting the complete census. Default
   ShellCheck also returned nonzero: compare diagnostics against the unchanged
   source, retain the nonzero verdict, and do not let a trailing command mask it.
+
+## Worktree commit guard and Codex execution CWD — 2026-10-19
+
+- A commit from the feature worktree was refused as a commit on `main` because
+  the PreToolUse hook's `.cwd` referred to the session root while
+  `exec_command` ran with a worktree-specific `workdir`. The repository's
+  `precommit-guard.sh --cwd <worktree>` check passed. Pin the intended repository
+  in the commit command itself with `git -C <worktree> commit ...`; this lets
+  the guard inspect the same target that Git will modify without disabling or
+  bypassing the branch check.

@@ -4,6 +4,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 QUALIFICATION_DIR="${SCRIPT_DIR}/../codex-qualification"
 command -v timeout >/dev/null
-for module in api_policy test_ownership_exec test_resource_ownership test_name_collision_transport test_fixture_transport test_proxy test_proxy_stdin test_proxy_barrier test_resource_transport test_role_admission test_local_tls test_namespace test_rehearsal test_migration_ledger test_candidate test_preparation test_retained_files test_session_controller test_operational test_controller_inputs test_controller_adapters test_controller_transports test_image_observations test_prebuild_acquisition test_reference_diagnostic test_registry_metadata; do
+for module in api_policy test_ownership_exec test_resource_ownership test_name_collision_transport test_fixture_transport test_proxy test_proxy_stdin test_proxy_barrier test_resource_transport test_role_admission test_local_tls test_namespace test_rehearsal test_migration_ledger test_candidate test_preparation test_retained_files test_session_controller test_operational test_controller_inputs test_controller_adapters test_controller_transports test_image_observations test_prebuild_acquisition test_reference_diagnostic test_registry_metadata test_redirect_diagnostic; do
   timeout 120 python3 -E -B -W error "${QUALIFICATION_DIR}/${module}.py"
 done

@@ -262,3 +262,16 @@ A redirect can leave only private verified manifest evidence and grants no
 permission to contact its Location. Tokens and error/redirect bodies are never
 retained. Content-addressed consistency establishes no publisher authenticity,
 observed local Docker ID, executable profile or runtime permission.
+
+`redirect_diagnostic.py` is a separate two-GET header diagnostic. File-only
+preparation binds verified platform bytes and its Config descriptor, current
+source/helpers, both fixed request URLs, CA bytes and a fresh private output.
+Execution requires independent source and actual-manifest review followed by
+fresh approval for the exact command. An exclusive diagnostic marker prevents
+replay. The anonymous token remains in memory; the second request reads only
+headers from the pinned Config endpoint and requires 307 with one bounded
+Location. It reads no Config response body and contacts no redirect destination.
+Only validated HTTPS routing and hash/length/boolean fields are retained;
+full Location, query values, raw headers, bearer and exception text are excluded.
+Routing observations confer no destination authority. Any destination request
+requires a separate engineering/security ruling and fresh exact-action approval.

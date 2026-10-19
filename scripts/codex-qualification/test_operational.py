@@ -36,7 +36,8 @@ class Operational(unittest.TestCase):
                      'image_observations.py', 'test_image_observations.py',
                      'prebuild_acquisition.py', 'test_prebuild_acquisition.py',
                      'reference_diagnostic.py', 'test_reference_diagnostic.py',
-                     'registry_metadata.py', 'test_registry_metadata.py'):
+                     'registry_metadata.py', 'test_registry_metadata.py',
+                     'redirect_diagnostic.py', 'test_redirect_diagnostic.py'):
             (self.component.parent / name).write_bytes((Path(__file__).parent / name).read_bytes())
         for name in ('40_race_holder.sql', '41_race_waiter.sql', '42_race_observe.sql', '43_race_assert.sql'):
             path = self.component.parent / 'scenarios' / name
@@ -217,7 +218,8 @@ class Operational(unittest.TestCase):
                      'image_observations.py', 'test_image_observations.py',
                      'prebuild_acquisition.py', 'test_prebuild_acquisition.py',
                      'reference_diagnostic.py', 'test_reference_diagnostic.py',
-                     'registry_metadata.py', 'test_registry_metadata.py'):
+                     'registry_metadata.py', 'test_registry_metadata.py',
+                     'redirect_diagnostic.py', 'test_redirect_diagnostic.py'):
             component = self.component.parent / name
             original = component.read_bytes()
             component.unlink()
