@@ -4011,8 +4011,8 @@ assert_sdk_bash_smoke() {
   # `if [[ "$CANARY_HEALTHY" == "true" ]]` block (a rejected key must skip it).
   local key_src smoke_src prev_line want_if
   want_if='if [[ "$CANARY_HEALTHY" == "true" ]]; then'
-  key_src=$(grep -n '^[[:space:]]*if \[\[ "\$CANARY_HEALTHY" == "true" \]\] && ! github_app_key_canary_check' "$DEPLOY_SCRIPT" | head -n 1 | cut -d: -f1)
-  smoke_src=$(grep -nE '^[[:space:]]*run_sdk_bash_smoke \|\| true[[:space:]]*$' "$DEPLOY_SCRIPT" | head -n 1 | cut -d: -f1)
+  key_src=$({ grep -n '^[[:space:]]*if \[\[ "\$CANARY_HEALTHY" == "true" \]\] && ! github_app_key_canary_check' "$DEPLOY_SCRIPT" || true; } | head -n 1 | cut -d: -f1)
+  smoke_src=$({ grep -nE '^[[:space:]]*run_sdk_bash_smoke \|\| true[[:space:]]*$' "$DEPLOY_SCRIPT" || true; } | head -n 1 | cut -d: -f1)
   prev_line=$(sed -n "$((${smoke_src:-1} - 1))p" "$DEPLOY_SCRIPT" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
   sbs_check "SBS-12e" "the call site is after the GitHub App key gate, directly inside its own CANARY_HEALTHY check" \
     "$([[ -n "$key_src" && -n "$smoke_src" && "$key_src" -lt "$smoke_src" && "$prev_line" == "$want_if" ]] && echo 0 || echo 1)" \
