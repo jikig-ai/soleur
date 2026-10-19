@@ -38,7 +38,13 @@ import { dispatchGoRoute, expectedGrokSlashCommand, grokTestEnv } from "../lib/g
 
 const PLUGIN_ROOT = resolve(import.meta.dir, "..");
 
-/** Snapshot and isolate harness env — CLAUDECODE wins over GROK_* in detectHarness. */
+/**
+ * Snapshot and isolate harness env — CLAUDECODE wins over GROK_* in detectHarness.
+ *
+ * The OpenCode keys are here for the same reason the others are: this suite runs inside an
+ * OpenCode session, which injects them into every tool-spawned child (measurements.md §1.1).
+ * Without the sweep `detectHarness()` reads the live session and every arm below is misclassified.
+ */
 const HARNESS_ENV_KEYS = [
   "CLAUDECODE",
   "GROK_HOME",
@@ -46,6 +52,12 @@ const HARNESS_ENV_KEYS = [
   "GROK_DEFAULT_MODEL",
   "GROK_SUBAGENTS",
   "CODEX_THREAD_ID",
+  "DEVIN",
+  "DEVIN_HOME",
+  "OPENCODE",
+  "OPENCODE_SESSION_ID",
+  "OPENCODE_TERMINAL",
+  "AI_AGENT",
 ] as const;
 
 let savedHarnessEnv: Record<string, string | undefined>;
@@ -154,6 +166,25 @@ describe("workflow-fidelity contract", () => {
     expect(formatSkillRef("plan", "cursor")).toBe("/soleur-plan");
     expect(formatSkillRef("review", "cursor")).toBe("/soleur-review");
     expect(formatSkillRef("one-shot", "cursor")).toBe("/soleur-one-shot");
+  });
+
+  test("formatSkillRef renders opencode names bare — the id is the registration key", () => {
+    // OpenCode registers a skill under its directory name; `soleur:<name>` is not a valid key
+    // (measurements §2.3, ADR-291 D1). Every reference in the fidelity prose must be the bare id.
+    expect(formatSkillRef("go", "opencode")).toBe("go");
+    expect(formatSkillRef("plan", "opencode")).toBe("plan");
+    expect(formatSkillRef("one-shot", "opencode")).toBe("one-shot");
+    expect(formatSkillRef("postmerge", "opencode")).toBe("postmerge");
+  });
+
+  test("opencode workflow fidelity names the bare-id skill tool and never another harness's form", () => {
+    const md = workflowFidelityInstructions("opencode");
+    expect(md).toContain("skill** tool with the bare id");
+    // The skill references in the shared essay go through formatSkillRef, so they are bare.
+    expect(md).toContain("`plan`");
+    expect(md).toContain("`one-shot`");
+    expect(md).not.toContain("$soleur"); // codex form
+    expect(md).not.toContain("/soleur-"); // cursor form
   });
 
   test("cursor workflow fidelity reads the stub file and skips the shared essay", () => {
@@ -454,9 +485,10 @@ describe("workflow-fidelity sentinel markers in skills", () => {
   // channel and no other. An earlier revision shipped it as two exported const
   // arrays with zero importers plus three byte-identical SKILL.md paragraphs, one
   // of which no test read at all — a field the PR adds that nothing consumes.
-  // Asserted per harness because grok/codex/devin are the ones with no Stop hook,
-  // so for them this string IS the enforcement.
-  for (const harness of ["grok", "codex", "devin", "claude"] as const) {
+  // Asserted per harness because grok/codex/devin/opencode have no blocking Stop hook
+  // (OpenCode's `session.idle` is advisory — ADR-291 D3), so for them this string IS the
+  // enforcement; claude asserts the same block for parity.
+  for (const harness of ["grok", "codex", "devin", "claude", "opencode"] as const) {
     test(`${harness} instructions carry the parked-deliverable contract`, () => {
       const md = workflowFidelityInstructions(harness);
       expect(md).toMatch(/Parking finished work is not a hand-off/i);
