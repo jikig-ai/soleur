@@ -17,6 +17,21 @@ lane: single-domain
 
 # chore(quality): decide whether per-PR GitHub Code Quality stays on (slice 4 of #10331)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-19
+**Sections enhanced:** 3 (premise corrections, gates, verification)
+**Research agents used:** soleur:engineering:cto (two rulings), soleur:operations:coo, code-simplicity-reviewer, spec-flow-analyzer; deepen gates 4.6 to 4.12 run mechanically (full agent fan-out skipped: documentation-and-settings change with no code, no Rails, no UI, no infra)
+
+### Key Improvements
+1. The billing API showed the real Code Quality charge is a metered AI-credit line ($254.96 over 2026-09-22 to 2026-10-19), not $10 per committer; the CTO re-ruled from keep to off.
+2. Plan-review and spec-flow hardened the disable sequence: positive proof of the off state, code-scanning state captured before and compared after, #10381 settled only after the disable is verified, org-level lock handled by detaching the repository.
+3. The ledger Amount is a measured 28-day sum instead of a nine-day partial month.
+
+### New Considerations Discovered
+- The #10381 premise "PR2 merged" was imprecise: the handler PR (#10375) merged 2026-10-15 and a restructure (#10503) on 2026-10-18; the stale-scan test uses both.
+- The setting goes live before merge; the PR must merge straight after, and the re-evaluation has no machine trigger (carried by #9730, the ledger cell and the ADR).
+
 ## Overview
 
 Final slice of the code-quality arc. Slices 1 to 3 are merged: the two findings that looked like bugs were
@@ -96,7 +111,7 @@ ledger/ADR text is written after the disable so it states what happened, not wha
 ### Phase 1 - Snapshot and #10381 read (Playwright MCP, read-only)
 
 1. Open the repository's Code Quality alert list for `main` (the Standard findings view; the REST API does not return these). If the browser session is unauthenticated, see Risks.
-2. Record: total open findings, per-rule counts and severities (the same 22-rule table as the audit), the `py/empty-except` count for the five files #10381 names (`playwright-mcp-redact-proxy.py`, `scan-ancestor-signal-helpers.py`, `founder-check.py`, `resolve-debt.py`, `security_reminder_hook.py`), and the scan's commit SHA against the current `main` head. Do not trigger a new scan. **Empty or stale view:** if the list is empty, stale (the scan SHA predates PR2's merge on 2026-10-18) or shows no `py/empty-except` data, the verdict for #10381 is "unverifiable, feature disabled", never "verified".
+2. Record: total open findings, per-rule counts and severities (the same 22-rule table as the audit), the `py/empty-except` count for the five files #10381 names (`playwright-mcp-redact-proxy.py`, `scan-ancestor-signal-helpers.py`, `founder-check.py`, `resolve-debt.py`, `security_reminder_hook.py`), and the scan's commit SHA against the current `main` head. Do not trigger a new scan. **Empty or stale view:** if the list is empty, stale (the scan SHA predates the last handler change to those files: #10375 merged 2026-10-15 and the restructure #10503 merged 2026-10-18; verify with `git log --oneline -- <the five files>`) or shows no `py/empty-except` data, the verdict for #10381 is "unverifiable, feature disabled", never "verified".
 3. Capture the code-scanning state before touching anything: `gh api repos/jikig-ai/soleur/code-scanning/default-setup` (languages, query suite, schedule, state) and the last three `PR #N` code-scanning runs, so the Phase 2 comparison is against recorded values and not just the word `configured`.
 4. Append the snapshot to `knowledge-base/engineering/audits/2026-10-14-github-code-quality-baseline.md` as a new dated section ("Final snapshot before disable, 2026-10-19"). Earlier sections stay untouched.
 
