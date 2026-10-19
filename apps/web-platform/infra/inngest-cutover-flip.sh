@@ -66,9 +66,10 @@
 # path). Real sources: the env-delivered flag, `systemctl`, `redis-cli`, `doppler`.
 #
 # EVERY ONE OF THOSE IS INERT UNLESS THE SCRIPT IS INVOKED WITH `--fixture-seams` (#7761). The
-# gate below unsets all SEVENTEEN seam names — the seven listed above plus CUTOVER_BOOT_ID,
+# gate below unsets all NINETEEN seam names — the seven listed above plus CUTOVER_BOOT_ID,
 # CUTOVER_CURL_CMD, CUTOVER_DONE_OWNER_MARKER, CUTOVER_GQL_URL, CUTOVER_HEALTH_URL,
-# CUTOVER_NOOP_THROTTLE_S (#7696), CUTOVER_VERIFY_INTERVAL_S, CUTOVER_VERIFY_WINDOW_S,
+# CUTOVER_NFT_CMD and CUTOVER_PHONE_HOME_CMD (#10382), CUTOVER_NOOP_THROTTLE_S (#7696),
+# CUTOVER_VERIFY_INTERVAL_S, CUTOVER_VERIFY_WINDOW_S,
 # INNGEST_CUTOVER_LATCH and INNGEST_CUTOVER_LATCH_MOUNT — when the flag
 # is absent, which is how production always runs. This list is prose and the gate's list is the
 # contract: the suite derives the seam set from this file by shape and asserts it equals the
@@ -156,7 +157,9 @@ if [[ "${1:-}" != "--fixture-seams" ]]; then
     CUTOVER_GQL_URL \
     CUTOVER_HEALTH_URL \
     CUTOVER_LOGGER_CMD \
+    CUTOVER_NFT_CMD \
     CUTOVER_NOOP_THROTTLE_S \
+    CUTOVER_PHONE_HOME_CMD \
     CUTOVER_REDIS_CLI_CMD \
     CUTOVER_REDIS_DBSIZE \
     CUTOVER_SYSTEMCTL_CMD \
@@ -331,6 +334,23 @@ curl_cmd() {
     curl "$@"
   fi
 }
+
+# --- nft: fixture seam CUTOVER_NFT_CMD else the real binary (#10382 — the measured nftables
+# re-read attached to the throttled noop emit). Read-only `nft list chain` — the same bare-`nft`
+# convention as inngest-nftables.sh; the unit's default PATH resolves it under /usr/sbin.
+nft_cmd() {
+  if [[ -n "${CUTOVER_NFT_CMD:-}" ]]; then
+    "$CUTOVER_NFT_CMD" "$@"
+  else
+    nft "$@"
+  fi
+}
+
+# --- the curl-direct Better Stack channel (#10382). inngest-boot-phone-home.sh is delivered by
+# cloud-init-inngest.yml write_files and POSTs a SOLEUR_INNGEST_BOOT_STAGE row straight at the
+# ingest endpoint — independent of the journald->Vector path, which is documented unreliable on
+# this host. Seamed inline (the CUTOVER_LOGGER_CMD shape; same role as inngest-config-refresh's
+# REFRESH_PHONE_HOME_CMD) so the suite can record the payload instead of POSTing it.
 
 # Echoes a reason token on FAILURE and returns non-zero; silent + 0 when the host truly serves.
 # Reason tokens are stable short strings: scripts/cutover-inngest.sh greps the marker's literal
@@ -530,7 +550,44 @@ emit_state() {
   # form for the DRIFT_GREPS/probe parity extraction to keep seeing them.
   if [[ "$reason" == noop-* ]]; then
     noop_emit_due || return 0
-    "${CUTOVER_LOGGER_CMD:-logger}" -t "$LOG_TAG" "$json" 2>/dev/null || true
+    # #10382 (the measured nftables re-read): this throttled liveness row is the only
+    # periodic Better Stack channel the host owns, so the FULL `nft list chain` output plus
+    # its sha256 ride every emitted noop. The fields go INSIDE the JSON — _fsm_own_rows
+    # (scripts/cutover-inngest.sh) counts only rows whose .message parses to an OBJECT, so
+    # text appended after `}` would read the heartbeat as zero rows and G3.7's H signal
+    # would fail closed on a healthy host. The payload is table/chain/set structure and
+    # private IPs only — this file's emit contract is state + counts (P2-sec-a), and the
+    # chain contains no credential material, so there is no redaction path to run it
+    # through. nft_sha256 is sha256 of the RAW nft output, so a changed ruleset is
+    # detectable even inside a field budget. Dual-emit through the curl-direct phone-home
+    # (the inngest-config-refresh emit() shape): journald->Vector shipping on this host is
+    # documented unreliable, and the two channels are independent at the credential level.
+    local nft_raw
+    local nft_sha256
+    local nft_flat
+    local nft_emit
+    nft_raw="$(nft_cmd list chain inet soleur_inngest input 2>/dev/null)" || nft_raw=""
+    nft_flat="$(printf '%s' "$nft_raw" | tr '\n' ' ')" || nft_flat=""
+    # Bounded detail: ~230 B measured today, 4000 is ~17x — a pathological ruleset is cut
+    # LOUDLY (+TRUNCATED) rather than pushing the row past a transport field cap.
+    if [[ ${#nft_flat} -gt 4000 ]]; then nft_flat="${nft_flat:0:4000}+TRUNCATED"; fi
+    nft_sha256=""
+    if [[ -n "$nft_raw" ]]; then
+      nft_sha256="$(printf '%s' "$nft_raw" | sha256sum 2>/dev/null | awk '{print $1}')" || nft_sha256=""
+    fi
+    # A failed/absent read still emits, with a distinguishable token — the heartbeat is
+    # the liveness witness and must never be lost to a missing nft binary.
+    [[ -n "$nft_sha256" ]] || nft_sha256="unavailable"
+    nft_emit="$(jq -nc --argjson base "$json" \
+      --arg nft "$nft_flat" \
+      --arg sha "$nft_sha256" \
+      '$base + {nft: $nft, nft_sha256: $sha}' 2>/dev/null)" || nft_emit="$json"
+    "${CUTOVER_LOGGER_CMD:-logger}" -t "$LOG_TAG" "$nft_emit" 2>/dev/null || true
+    # Marker arg 3: SOLEUR_INNGEST_NOOP keeps ~288 daily liveness rows out of the
+    # BOOT_STAGE channel whose consumers fetch newest-first under fixed limits (#10382
+    # review — 288/day evicts 30d boot evidence inside ~7d at --limit 2000).
+    "${CUTOVER_PHONE_HOME_CMD:-/usr/local/bin/inngest-boot-phone-home.sh}" "cutover-flip-${reason}" \
+      "flag=${flag} nft=[${nft_flat}] nft_sha256=${nft_sha256}" SOLEUR_INNGEST_NOOP 2>/dev/null || true
     : > "$NOOP_EMIT_STAMP" 2>/dev/null || true
     return 0
   fi
