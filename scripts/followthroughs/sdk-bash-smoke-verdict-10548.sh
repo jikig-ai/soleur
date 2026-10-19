@@ -15,21 +15,25 @@
 # Every path prints ONE stdout line starting `sdk_bash_smoke` (the discoverability probe's expected output, and the sweeper's
 # summary), with the verdict values reduced to a safe charset (they come from a remote JSON body).
 #
-# Exit semantics (per scripts/sweep-followthroughs.sh contract):
-#   0 = PASS       (>= 5 consecutive green verdicts over >= 3 days, latest verdict `pass`, coverage sdk_wrapper_shim_prodtuple;
-#                   a follow-up PR promotes the smoke to blocking: a code change that adds a red-verdict->rollback path in
-#                   run_sdk_bash_smoke AND drops the call-site `|| true`. Enabling the agent-sandbox-unix-deny flag is a separate,
-#                   operator-authorized step tracked in #10548)
+# Exit semantics (per scripts/sweep-followthroughs.sh contract). NEVER exit 0: the sweeper CLOSES the tracker on exit 0, and #10548
+# also tracks the promotion itself and the operator-authorized agent-sandbox-unix-deny flag enablement, neither of which this script
+# can observe. A complete soak is therefore reported as ACTION REQUIRED (exit 5: the sweeper comments, leaves the issue open and,
+# on a closed issue, comments without reopening), and a human closes the tracker when promotion and the flag decision are done.
+#   5 = ACTION REQUIRED (soak complete: >= 5 consecutive green verdicts over >= 3 days, latest verdict `pass`, coverage
+#                   sdk_wrapper_shim_prodtuple. Promote the smoke to blocking (a code change that adds a red-verdict->rollback path in
+#                   run_sdk_bash_smoke AND drops the call-site `|| true`) and decide the agent-sandbox-unix-deny flag enablement, a
+#                   separate operator-authorized step. Status line: `status=PASS`; the exit code is what keeps the tracker open)
 #   1 = FAIL       (an `sdk_bash_smoke_failed` verdict is recorded: investigate before promoting; do NOT flip. Also: >= 3 consecutive
 #                   `smoke_infra_error` verdicts, `consecutive_infra_error` >= 3 -- the probe is blind and has not exercised Bash on the
 #                   last 3 deploys; flags the tracker. The host records the same condition as `SDK_BASH_SMOKE_STALE` in journald and
 #                   Sentry; nothing emails it)
-#   * = TRANSIENT  (endpoint unreachable / non-JSON / field absent / soak not complete / 1-2 `smoke_infra_error` / unknown / a pass whose
+#   2 = TRANSIENT  (endpoint unreachable / non-JSON / field absent / soak not complete / 1-2 `smoke_infra_error` / unknown / a pass whose
 #                   coverage is not the shim-and-wrapper tuple / a non-numeric counter; retry next sweep)
+#   (any other code is read by the sweeper as TRANSIENT; this script exits only 1, 2 or 5, and never 0)
 #
 # Required env (declared in the #10548 followthrough directive): WEBHOOK_DEPLOY_SECRET, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET.
 #
-# RETIREMENT: when #10548 closes (soak green and the smoke promoted) delete this file, its .test.sh, the `sdk-bash-smoke-verdict-10548`
+# RETIREMENT: when #10548 closes (soak green, the smoke promoted and the flag decision made) delete this file, its .test.sh, the `sdk-bash-smoke-verdict-10548`
 # line in scripts/test-all.sh, the shard-TSV rows and the bearer-sweep manifest row.
 
 # #7797: refuse to run under xtrace while a live credential is bound. `$-` is tested FIRST and the
@@ -132,8 +136,8 @@ esac
 # otherwise PASS while the current verdict is an infra flake), and the coverage must be the shim-and-wrapper tuple.
 if [[ "$VERDICT" == "pass" && "$COVERAGE" == "$FULL_COVERAGE" && "$CONSEC" -ge "$REQUIRED_GREENS" && "$FIRST" -gt 0 && "$SPAN" -ge "$MIN_SPAN_SECS" ]]; then
   _say "status=PASS $SUMMARY"
-  echo "PASS: $CONSEC consecutive green sdk_bash_smoke verdicts over $((SPAN / 86400))d (>= ${REQUIRED_GREENS} / >= 3d) with coverage $COVERAGE since first_pass_at=$FIRST. The smoke is proven; promote it in a follow-up PR (add the red-verdict->rollback path in run_sdk_bash_smoke AND drop the call-site '|| true'). Also review the alert rows against the real failed verdicts (no flap)." >&2
-  exit 0
+  echo "ACTION REQUIRED: soak complete: $CONSEC consecutive green sdk_bash_smoke verdicts over $((SPAN / 86400))d (>= ${REQUIRED_GREENS} / >= 3d) with coverage $COVERAGE since first_pass_at=$FIRST. The smoke is proven: promote it in a follow-up PR (add the red-verdict->rollback path in run_sdk_bash_smoke AND drop the call-site '|| true'), review the alert rows against the real failed verdicts (no flap), and decide the agent-sandbox-unix-deny flag enablement (operator-authorized). This tracker stays OPEN until both are done: this probe exits 5, never 0, so the sweeper cannot close it." >&2
+  exit 5
 fi
 
 # A dead probe must not stay silent (CTO ruling F3, 2026-10-19): >= 3 consecutive `smoke_infra_error` verdicts mean no deploy has

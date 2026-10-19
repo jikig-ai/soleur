@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Behavioural rows for sdk-bash-smoke-verdict-10548.sh (the #10548 promotion-soak follow-through) with `curl` stubbed on PATH
 # (no network, no credentials). The properties:
-#   * exit 0 ONLY when the latest verdict is `pass`, coverage is sdk_wrapper_shim_prodtuple, consecutive_pass >= 5 and the span
-#     since first_pass_at is >= 3 days (a replay_only/absent coverage, an infra error, 4 greens or 2 days each read TRANSIENT);
+#   * NEVER exit 0 (the sweeper closes the tracker on exit 0, and #10548 also tracks the promotion and the flag decision): a complete
+#     soak exits 5 (ACTION REQUIRED, status=PASS) ONLY when the latest verdict is `pass`, coverage is sdk_wrapper_shim_prodtuple,
+#     consecutive_pass >= 5 and the span since first_pass_at is >= 3 days (a replay_only/absent coverage, an infra error, 4 greens
+#     or 2 days each read TRANSIENT);
 #   * exit 1 ONLY for a recorded sdk_bash_smoke_failed or for >= 3 consecutive smoke_infra_error verdicts (the probe is blind);
 #   * EVERY path prints one stdout line starting `sdk_bash_smoke` (the discoverability probe's contract), with remote values
 #     reduced so a forged verdict cannot inject a second line or a workflow command;
@@ -78,8 +80,14 @@ body() { # <verdict> <consecutive_pass> <first_pass_at> <checked_at> <coverage> 
 }
 FULL=sdk_wrapper_shim_prodtuple
 
-run 0 PASS "5 greens over 4 days, latest pass, full coverage -> PASS" "$(body pass 5 "$FIRST" $((FIRST + 4 * DAY)) "$FULL")"
-run 0 PASS "exactly 5 greens over exactly 3 days -> PASS (the boundary)" "$(body pass 5 "$FIRST" $((FIRST + 3 * DAY)) "$FULL")"
+run 5 PASS "5 greens over 4 days, latest pass, full coverage -> PASS (exit 5, never 0)" "$(body pass 5 "$FIRST" $((FIRST + 4 * DAY)) "$FULL")"
+run 5 PASS "exactly 5 greens over exactly 3 days -> PASS (the boundary)" "$(body pass 5 "$FIRST" $((FIRST + 3 * DAY)) "$FULL")"
+run 5 PASS "a long soak (9 greens over 30 days) is still exit 5, not 0" "$(body pass 9 "$FIRST" $((FIRST + 30 * DAY)) "$FULL")"
+if grep -qF 'ACTION REQUIRED: soak complete' <<<"$LAST_ERR" && grep -qF 'decide the agent-sandbox-unix-deny flag enablement' <<<"$LAST_ERR" && grep -qF 'exits 5, never 0' <<<"$LAST_ERR"; then PASSES=$((PASSES + 1)); echo "  ok: the PASS path says ACTION REQUIRED on stderr (promote + decide the flag; the tracker stays open)"
+else FAIL_N=$((FAIL_N + 1)); FAILURES+=("PASS stderr lacks the ACTION REQUIRED text: $LAST_ERR"); echo "  FAIL: PASS stderr text"; fi
+# The script must have no path that exits 0 (a literal `exit 0` would let the sweeper close #10548 on a complete soak).
+if grep -vE '^[[:space:]]*#' "$SUT" | grep -qE '(^|[^A-Za-z0-9_])exit 0([^0-9]|$)'; then FAIL_N=$((FAIL_N + 1)); FAILURES+=("the probe contains an exit 0"); echo "  FAIL: no exit 0 in the probe"
+else PASSES=$((PASSES + 1)); echo "  ok: the probe has no exit 0 (it exits 1, 2 or 5 only)"; fi
 run 2 TRANSIENT "4 greens over 4 days -> TRANSIENT" "$(body pass 4 "$FIRST" $((FIRST + 4 * DAY)) "$FULL")"
 run 2 TRANSIENT "5 greens over 2d23h59m59s -> TRANSIENT (the span boundary)" "$(body pass 5 "$FIRST" $((FIRST + 3 * DAY - 1)) "$FULL")"
 run 2 TRANSIENT "5 greens, replay_only coverage -> TRANSIENT (a replay-only pass never counts)" "$(body pass 5 "$FIRST" $((FIRST + 4 * DAY)) replay_only)"
@@ -147,7 +155,7 @@ echo ""
 echo "=== sdk-bash-smoke-verdict-10548: $PASSES passed, ${#FAILURES[@]} failed ==="
 # Floor reported directly (not through the helper it backstops): both operands are literals on the lines immediately above the if.
 SELFTEST_ROWS=0
-MIN_ROWS=30
+MIN_ROWS=33
 REAL=$((PASSES + FAIL_N - SELFTEST_ROWS))
 if (( REAL < MIN_ROWS )); then
   printf 'FAIL: only %d rows ran (floor %d)\n' "$REAL" "$MIN_ROWS"

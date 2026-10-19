@@ -333,7 +333,7 @@ PY
 # OUTER RUN ONLY. Each row copies ONE source file (or this guard) into $MUT_DIR, mutates the copy, and re-runs the guard with
 # MUT_SKIP=1 and the matching FCSB_GUARD_* override pointing at the copy. SELF rows mutate a copy of THIS file.
 SELF="${BASH_SOURCE[0]}"
-PRESENCE_ROWS=27   # the 10 fixture rows are floored on their own (EVAL_MIN above), so an emptied loop fails THAT row, rc 1, not this floor
+PRESENCE_ROWS=37   # the real count of non-mutation assertions in a green run (47 total - 10 mutation rows); the 10 fixture rows are also floored on their own (EVAL_MIN above), so an emptied loop fails THAT row first
 MUT_ROWS=10
 if [ -z "${MUT_SKIP:-}" ]; then
   MUT_DIR="$(mktemp -d -t fcsbalert.XXXXXX)" || { printf '[FATAL] mktemp failed\n' >&2; exit 2; }

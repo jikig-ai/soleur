@@ -884,4 +884,11 @@ rm -rf "$ISV_DIR"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
+# Assertion floor (literal, read straight off the counter, derived from a green run): a suite that silently stops reaching its
+# assertions (an early return, a swallowed extraction failure, an emptied loop) must not pass on the strength of the few that ran.
+MIN_ASSERTIONS=151
+if (( TOTAL < MIN_ASSERTIONS )); then
+  printf 'FAIL: only %d assertions ran (floor %d)\n' "$TOTAL" "$MIN_ASSERTIONS"
+  exit 1
+fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
