@@ -268,6 +268,10 @@ yes "the plan-shape guard is executable and bash-syntax-clean" \
   "[[ -x '$SHAPE' ]] && bash -n '$SHAPE'"
 yes "the probe script exists and is executable" \
   "[[ -f '$PROBE' ]] && [[ -x '$PROBE' ]] && bash -n '$PROBE'"
+# The passphrase state-loss rehearsal lives in a sibling suite, not in this root (this root's file
+# inventory is closed and it is applied against real state); point at it so it cannot go missing.
+yes "the passphrase import-rehearsal sibling suite exists and is executable" \
+  "[[ -x '$DIR/inngest-redis-luks-import-rehearsal.test.sh' ]] && bash -n '$DIR/inngest-redis-luks-import-rehearsal.test.sh'"
 
 # ── floor (ADR-193) ───────────────────────────────────────────────────────────
 MIN=40
