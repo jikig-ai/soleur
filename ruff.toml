@@ -1,0 +1,12 @@
+# Ruff configuration for the shrink-only lint ratchet (scripts/lint-ratchet.py, ADR-290).
+# Narrow on purpose: five rules, no formatter. Weakening anything here is stopped only by the
+# pin test in tests/scripts/test_lint_ratchet.py and by human PR review.
+target-version = "py311"
+extend-exclude = ["knowledge-base"]
+
+[lint]
+select = ["SIM115", "S110", "S112", "F401", "F841"]
+
+[lint.flake8-bandit]
+# Without this S110/S112 see only untyped handlers; typed `except OSError: pass` is invisible.
+check-typed-exception = true

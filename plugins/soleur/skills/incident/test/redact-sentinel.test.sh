@@ -1375,6 +1375,22 @@ print("RC=%s" % rc)
 PY
 assert_grep "Test 25b: a crashing engine with stderr closed still exits 2" "^RC=2$" "${t25b_out}"
 
+# Test 26 — _b64_decode contract (slice 1 of #10331): a non-base64 candidate returns None (never raises), a valid one decodes,
+# the url-safe alphabet is tried second. Guards the sentinel form that replaced the per-candidate `continue`.
+t26_out="${TMP_DIR}/test26.out"
+python3 -I - "${SKILL_DIR}/scripts/redact-engine.py" >"${t26_out}" 2>&1 <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("redact_engine_under_test", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+print("NONB64=%r" % (mod._b64_decode("not base64 !!"),))
+print("STD=%r" % (mod._b64_decode("aGVsbG8="),))
+print("URL=%r" % (mod._b64_decode("--8_") == bytes([0xFB, 0xEF, 0x3F]),))
+PY
+assert_grep "Test 26: a non-base64 candidate returns None" "^NONB64=None$" "${t26_out}"
+assert_grep "Test 26: a standard-alphabet candidate decodes" "^STD=b'hello'$" "${t26_out}"
+assert_grep "Test 26: a url-safe candidate falls through to the second alphabet" "^URL=True$" "${t26_out}"
+
 echo "Total: ${PASS} pass, ${FAIL} fail"
 
 # ---------------------------------------------------------------------------
@@ -1394,7 +1410,7 @@ echo "Total: ${PASS} pass, ${FAIL} fail"
 # value from a green run and ratchet it UP when assertions are added — never down to make a
 # failure go away, which is how a floor becomes the thing it was built to prevent.
 # ---------------------------------------------------------------------------
-EXPECTED_MIN=100
+EXPECTED_MIN=103
 TOTAL_DISPATCHED=$(( PASS + FAIL ))
 if [[ "${TOTAL_DISPATCHED}" -lt "${EXPECTED_MIN}" ]]; then
   echo "FAIL: harness dispatched only ${TOTAL_DISPATCHED} assertions (expected >= ${EXPECTED_MIN}) — a vacuous run. Assertions were removed or the dispatch was neutered; a suite that asserts nothing exits 0 and reads as PASS." >&2

@@ -131,6 +131,8 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-workflow-install-sites-live"
   "scripts/lint-workflow-issue-write-scope-live"
   "scripts/lint-workflow-step-env-refs-live"
+  "scripts/lint-ratchet-ruff-live"
+  "tests/scripts/lint-ratchet"
   "scripts/review-reminder-liveness"
   "scripts/watch-live-verify-pass"
   # live-scanner batteries named for the gates they probe (#8384 landed these)
@@ -1398,6 +1400,23 @@ AFFECTED_PLUGINS_SOLEUR_TEST_HEARTBEAT_RECONCILE_ISSUE_STEP_TEST_SH_PATHS=(
   ".github/workflows/scheduled-terraform-drift.yml"
   "plugins/soleur/lib/heartbeat-live-reconcile.ts"
   "plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh"
+  "scripts/lib/bearer-curl.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/sole-copy-drift-check.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_SOLE_COPY_DRIFT_CHECK_TEST_SH_PATHS=(
+  ".github/actions/infra-credentials/action.yml"
+  ".github/actions/notify-ops-email/action.yml"
+  ".github/workflows/scheduled-terraform-drift.yml"
+  "apps/web-platform/infra/inngest-redis-luks.tf"
+  "knowledge-base/engineering/architecture/decisions/ADR-282-sole-copy-luks-volume-protection-set.md"
+  "knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md"
+  "knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md"
+  "plugins/soleur/skills/postmerge/SKILL.md"
+  "plugins/soleur/test/lib/gha-expr.py"
+  "plugins/soleur/test/sole-copy-drift-check.test.sh"
   "scripts/lib/bearer-curl.sh"
   "scripts/lib/test-affected-paths.sh"
 )

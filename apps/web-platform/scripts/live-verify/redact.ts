@@ -22,7 +22,50 @@ const PLACEHOLDER = "[REDACTED]";
 // Order matters: location-anchored rules run first (they preserve the
 // surrounding structure), then the generic JWT/email sweeps catch anything that
 // escaped a location rule.
-const RULES: Array<[RegExp, string]> = [
+const EMAIL_LOCAL = /[A-Za-z0-9._%+-]/;
+const EMAIL_DOMAIN = /[A-Za-z0-9.-]+\.[A-Za-z]{2,}/y;
+
+/**
+ * Replace email addresses, with EXACTLY the matches of the original regex
+ * `/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g`, in linear time.
+ *
+ * That regex rescans to the end of a long local-part-shaped run from every start
+ * position when no `@` follows (quadratic: 100k characters took ~23 s). Its local
+ * part must end at the first `@` after its start, so a match is determined by an
+ * `@`: the local part is the run of local characters immediately before it
+ * (clipped at the end of the previous match), and the domain is the same sticky
+ * pattern the regex used. A lookbehind variant of the regex was linear but NOT
+ * equivalent: it left the second of two back-to-back addresses unredacted
+ * (`a@b.com+c@d.org`). `redact.test.ts` fuzzes this function against the original.
+ */
+function redactEmails(input: string): string {
+  let out = "";
+  let pos = 0; // end of the previous match: no local part may reach back past it
+  let at = input.indexOf("@", pos);
+  while (at !== -1) {
+    let start = at;
+    while (start > pos && EMAIL_LOCAL.test(input[start - 1])) start--;
+    let end = -1;
+    if (start < at) {
+      EMAIL_DOMAIN.lastIndex = at + 1;
+      if (EMAIL_DOMAIN.test(input)) end = EMAIL_DOMAIN.lastIndex;
+    }
+    if (end !== -1) {
+      out += input.slice(pos, start) + PLACEHOLDER_EMAIL;
+      pos = end;
+      at = input.indexOf("@", pos);
+    } else {
+      at = input.indexOf("@", at + 1);
+    }
+  }
+  return out + input.slice(pos);
+}
+
+const PLACEHOLDER_EMAIL = "[REDACTED_EMAIL]";
+
+type Rule = [RegExp, string] | ((input: string) => string);
+
+const RULES: Rule[] = [
   // GitHub tokens (#5487): the trigger-gate step runs `gh api` with GH_TOKEN.
   // These arms run FIRST: a generic-shape arm matching mid-body on a rotated
   // token's punctuation would shatter the gh*_ run and leak the tail.
@@ -68,10 +111,25 @@ const RULES: Array<[RegExp, string]> = [
     /(["'](?:access_token|refresh_token|provider_token)["']\s*:\s*")[^"]+/gi,
     `$1${PLACEHOLDER}`,
   ],
+  // api_keys ciphertext columns (I-cannot-spend read in verifyPrincipal). The
+  // gate never logs row data; this is the backstop should a row ever reach a
+  // captured error, response body or console line. Two shapes: JSON
+  // (`"encrypted_key":"…"`) and unquoted/`util.inspect`/query-string
+  // (`encrypted_key: '…'`, `iv=…&`). The lookbehind keeps `iv` from matching
+  // inside other identifiers (`div=`, `device_iv:`); the lookahead keeps the
+  // rule idempotent on its own output.
+  [
+    /(["'](?:encrypted_key|iv|auth_tag)["']\s*:\s*")[^"]+/gi,
+    `$1${PLACEHOLDER}`,
+  ],
+  [
+    /((?<![A-Za-z0-9_])(?:encrypted_key|iv|auth_tag)["']?\s*[:=]\s*["']?)(?!\[REDACTED)[^\s"',&;)}\]]+/gi,
+    `$1${PLACEHOLDER}`,
+  ],
   // Generic JWT shape (3 base64url segments) — catches bare tokens in DOM/logs.
   [/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "[REDACTED_JWT]"],
-  // Email addresses.
-  [/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "[REDACTED_EMAIL]"],
+  // Email addresses: a linear scan, not a regex (see redactEmails).
+  redactEmails,
 ];
 
 /**
@@ -80,8 +138,8 @@ const RULES: Array<[RegExp, string]> = [
  */
 export function redact(input: string): string {
   let out = input;
-  for (const [pattern, replacement] of RULES) {
-    out = out.replace(pattern, replacement);
+  for (const rule of RULES) {
+    out = typeof rule === "function" ? rule(out) : out.replace(rule[0], rule[1]);
   }
   return out;
 }

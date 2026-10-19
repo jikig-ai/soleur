@@ -107,4 +107,107 @@ describe("redact", () => {
     expect(out).not.toContain(blob);
     expect(out).toContain("[REDACTED_SB_SESSION]");
   });
+
+  describe("email rule (linear time, output identical to the original regex)", () => {
+    // The ORIGINAL rule, kept here as the oracle. redact.ts replaced it with a
+    // linear scan because this one is quadratic on long local-part runs.
+    const ORIGINAL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+    const viaOriginal = (input: string) => input.replace(ORIGINAL, "[REDACTED_EMAIL]");
+    // Isolate the email rule: these inputs contain nothing the other rules match.
+    const E = "[REDACTED_EMAIL]";
+
+    it("redacts the shapes the original did", () => {
+      expect(redact("mail jean.deruelle+x@jikigai.com now")).toBe(`mail ${E} now`);
+      expect(redact("a@b.co")).toBe(E);
+      expect(redact("x_y.z%w+v@sub.example.org")).toBe(E);
+      expect(redact("no at sign here")).toBe("no at sign here");
+    });
+
+    it.each([
+      // Back-to-back addresses glued by a local-part character: a lookbehind
+      // variant of the regex left the second one in the log.
+      "a@b.com+c@d.org",
+      "a@b.com_c@d.org",
+      "a@b.com%x@y.org",
+      "a@b.com1x@y.org",
+      "a@b.com9@x.org",
+      "a@b.com-c@d.org",
+      "a@b.com.c@d.org",
+      "a@b.com_c_d@e.org",
+      "a@b.com_c@d.org_e@f.org_g@h.org",
+      // Failed first '@', then a match; empty local parts; unicode edges.
+      "a@b@c.com",
+      "@@a@b.com",
+      "a@b.comfoo@x.org",
+      "é@b.com",
+      "jéan@b.com",
+      "a@bé.com",
+    ])("matches the original on %j", (input) => {
+      expect(redact(input)).toBe(viaOriginal(input));
+    });
+
+    it("matches the original on 20k seeded random multi-address strings", () => {
+      // Small alphabet so addresses, near-misses and adjacent addresses are common.
+      const alphabet = ["a", "b", "1", ".", "-", "_", "+", "%", "@", "@", " ", "c", "o", "m"];
+      let seed = 0x9e3779b1;
+      const rnd = () => {
+        seed = (Math.imul(seed ^ (seed >>> 15), 0x2c1b3c6d) + 0x297a2d39) | 0;
+        return (seed >>> 0) / 0x100000000;
+      };
+      for (let i = 0; i < 20_000; i++) {
+        const len = 1 + Math.floor(rnd() * 40);
+        let input = "";
+        for (let j = 0; j < len; j++) input += alphabet[Math.floor(rnd() * alphabet.length)];
+        // Compare through redact() so interaction with the other rules is covered too.
+        const expected = viaOriginal(input);
+        if (redact(input) !== expected) throw new Error(`differs on ${JSON.stringify(input)}`);
+      }
+    });
+
+    it("does not go quadratic on a long local-part-shaped run with no @", () => {
+      // 100k chars took ~23 s with the original rule; linear is a few ms.
+      const t0 = performance.now();
+      redact("a".repeat(100_000));
+      redact(`${"a.".repeat(50_000)}@`);
+      redact("a@".repeat(50_000));
+      redact(`a@${"a.".repeat(50_000)}`);
+      expect(performance.now() - t0).toBeLessThan(2_000);
+    });
+  });
+
+  describe("api_keys ciphertext fields (I-cannot-spend backstop)", () => {
+    // Exact equality, not not.toContain: a rule that redacts one character, or
+    // all of the line, would satisfy an absence-only assertion.
+    it.each([
+      [
+        "JSON",
+        '{"provider":"anthropic","encrypted_key":"ct-secret-value","iv":"iv-secret-value","auth_tag":"tag-secret-value"}',
+        '{"provider":"anthropic","encrypted_key":"[REDACTED]","iv":"[REDACTED]","auth_tag":"[REDACTED]"}',
+      ],
+      [
+        "JSON, pretty-printed",
+        '{\n  "encrypted_key": "ct secret",\n  "iv": "x"\n}',
+        '{\n  "encrypted_key": "[REDACTED]",\n  "iv": "[REDACTED]"\n}',
+      ],
+      [
+        "util.inspect",
+        "{ provider: 'anthropic', encrypted_key: 'ct-secret', iv: 'iv-secret', auth_tag: 'tag-secret' }",
+        "{ provider: 'anthropic', encrypted_key: '[REDACTED]', iv: '[REDACTED]', auth_tag: '[REDACTED]' }",
+      ],
+      [
+        "query string",
+        "encrypted_key=ct-secret&iv=iv-secret&auth_tag=tag-secret",
+        "encrypted_key=[REDACTED]&iv=[REDACTED]&auth_tag=[REDACTED]",
+      ],
+    ])("redacts the %s form exactly", (_n, input, expected) => {
+      expect(redact(input)).toBe(expected);
+      expect(redact(expected)).toBe(expected); // idempotent
+    });
+
+    it("keeps diagnostic text that merely contains the key names (retention)", () => {
+      // Shaped like what an over-broad rule eats: identifiers, paths, filenames.
+      const keep = "div=keepme device_iv: keep /usr/lib/iv.so libkeyring.so.1 fetch failed: ENOENT";
+      expect(redact(keep)).toBe(keep);
+    });
+  });
 });
