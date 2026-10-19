@@ -16,6 +16,46 @@ requires_cpo_signoff: false
 > Spec lacks valid `lane:` (no `spec.md` exists for this one-shot branch) - defaulted to
 > `cross-domain` (fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-19. **Agents used:** security-sentinel, architecture-strategist,
+spec-flow-analyzer, observability-coverage-reviewer (plus the CTO rulings and the DHH and
+code-simplicity seats from plan review; the Kieran seat did not return). **Live checks:** the
+skill-conflict search returns 8 open PRs today; the sweeper already wires the three
+`BETTERSTACK_QUERY_*` secrets (lines 131-133); the `follow-through` label exists; #10551 is open;
+ADR ordinal not needed (amendment).
+
+### What the pass changed
+
+1. **The probe could false-PASS and close #10552 with no PR.** The skill-conflict guard (8 open
+   PRs) would refuse every skill-targeting cluster and a complement-set PASS rule would have read
+   it as proof. PASS is now an allowlist (Guard 2), the floor is deploy time, and a 35-day NOT YET
+   exits 5.
+2. **`new_lines` is model-authored text for the always-loaded corpus** and was validated only for
+   newlines. Now printable-ASCII only (a U+2028 or U+0085 splits differently in the TS gate and in
+   `lint-agents-rule-budget.py`), length caps, credential-shape refusal, `hr-` ids refused, and
+   frontmatter / fenced-block anchors refused.
+3. **Infra faults would have become weekly refusals.** Only "path not in HEAD" is a refusal now;
+   spawn errors and a lost workspace throw as before. The model call gets its own `AbortSignal`
+   timeout and a 4,096 max-tokens constant, and the builder never throws after a billed response.
+4. **Census mechanics.** The draft callback needs its own `DraftOutcome` type and Guard 3 window;
+   the `target-path-refused` check stays in the apply step as well as moving to the draft step.
+5. **Cost marker.** The earlier "distinct `markerRunId`" advice was wrong (`id` is the run
+   correlation id); `runId` is passed unchanged.
+6. **Observability.** The Sentry call sites pass reason-specific `Error` messages and `cause`
+   tags (otherwise five reasons collapse into one issue); layer citations are spelled out;
+   `expected_output` is the stdout literal `PASS`; a distinct `edit-derive-failed` separates a
+   server defect from a model fault.
+7. **Also added:** phase 1 is told which skill targets are eligible; one cluster per target per
+   run; a pre-merge real-model evidence run; a symlink and size pre-check; a `Map` lookup for
+   source learnings; the ADR-092 amendment now names the rule-set vs line-level distinction.
+
+### New considerations
+
+- Skill clusters are effectively blocked while any open PR mentions `plugins/soleur/skills`;
+  `AGENTS.rules.md` clusters are not. Recorded as a known consequence and a deferral.
+- Two clusters that each fit the byte budget can together exceed it (pre-existing, now reachable).
+
 ## Overview
 
 The weekly `cron-compound-promote` run has proposed two clusters on every scheduled run since
@@ -220,10 +260,13 @@ All four forks were delegated to `soleur:engineering:cto` (no AskUserQuestion). 
    against a throwaway index populated by `read-tree HEAD`, so HEAD is the base the derived diff
    must apply to. The target allowlist (`TARGET_ALLOW_RE`) must be checked **before** the path is
    put in any git argv.
-3. **Cost markers.** `postAnthropicMessage` derives the marker `source` from `markerSource` and the
-   `id` from `markerRunId`. Keep `markerSource: "cron-compound-promote"` (so per-cron spend sums
-   are unchanged) and pass a distinct `markerRunId` per phase-2 call; verify against
-   `apps/web-platform/server/claude-cost-marker.ts` and ADR-108 before relying on this.
+3. **Cost markers.** `postAnthropicMessage` derives the marker `source` from `markerSource`
+   (`cron:<markerSource>`, `_cron-shared.ts`) and the `id` from `markerRunId`. Keep
+   `markerSource: "cron-compound-promote"` and pass the run's `runId` UNCHANGED: `id` is the run
+   correlation id (#8392 added it so a cost row joins to its `reportSilentFallback` by run id), so
+   a suffixed id would break that join and the per-run sum. Nothing flags two cron markers under
+   one id (the double-bill detector is leader-loop only). Per-phase spend is therefore not
+   separable; accept that rather than widen `ClaudeCostMarker`.
 4. **Inngest step state.** A `step.run` return value is persisted. The phase-2 step returns the
    derived diff (<= 16,384 bytes by the existing cap) or a closed refusal reason - never the target
    file text.
@@ -248,12 +291,26 @@ All four forks were delegated to `soleur:engineering:cto` (no AskUserQuestion). 
 - New `EDIT_OUTPUT_SCHEMA` (phase 2), `additionalProperties: false`, required
   `insert_after_line` (string) and `new_lines` (array of string). `insert_after_line === ""` means
   "append at end of file".
+- Phase 1 additionally receives the list of ELIGIBLE skill targets with their byte sizes
+  (`plugins/soleur/skills/<name>/SKILL.md` <= 120,000 bytes, plus `AGENTS.rules.md`), computed
+  server-side from the clone, so it does not choose a file that is certain to be refused
+  (`review`, `work` and `ship` are 475,873 / 359,121 / 273,067 bytes). The refusal stays as the
+  fallback for a model that picks an ineligible path anyway.
 - Phase 2 prompt carries: the cluster `rationale`, the source-learning summaries for **that
-  cluster's** `source_learnings` only (taken from the already-collected corpus entries, not a new
-  read), the full target text from `git show HEAD:<target_path>`, the current always-loaded byte
-  headroom for `AGENTS.rules.md` targets, and the additive contract in words ("append new lines
-  only; never restate, edit or delete an existing line; `insert_after_line` must be copied
-  verbatim from the file and appear exactly once").
+  cluster's** `source_learnings` only, the full target text from `git show HEAD:<target_path>`,
+  the always-loaded byte headroom for `AGENTS.rules.md` targets divided by the clusters still to
+  draft (each cluster is measured independently against main, so two clusters that each pass can
+  together exceed the ceiling), and the additive contract in words ("append new lines only; never
+  restate, edit or delete an existing line; `insert_after_line` must be copied verbatim from the
+  file and appear exactly once"). Summaries are resolved through a `Map<path, summary>` built from
+  the already-collected corpus; a model-supplied path that is not a key is DROPPED, never read from
+  disk (`readFile(join(repoRoot, p))` on a model string would send an arbitrary file to Anthropic).
+  If none of the cluster's `source_learnings` resolves, the draft is refused `edit-invalid`.
+  The corpus summaries, `rationale` and target text are placed in explicitly delimited data blocks
+  under a system-level statement that they are DATA, not instructions - phase 1's `rationale` is
+  model-authored from third-party-influenced learnings and phase 2's output is exactly the text
+  that lands in the always-loaded corpus. Prompt hardening alone will not hold; the content
+  constraints below are the real control.
 - `proposed_diff_unified` becomes a server-derived value with the same name and meaning, so
   `checkDiffPaths`, `diffRemovesHardRule`, the `MAX_DIFF_BYTES` check, the PII-redaction branch of
   the skill-conflict comment, `applyDiffToWorkspace`, the byte budget and the shrink floor read it
@@ -261,59 +318,134 @@ All four forks were delegated to `soleur:engineering:cto` (no AskUserQuestion). 
 
 ### Server-side derivation (`buildAdditiveEditDiff`)
 
-Pure except for one git call, exported for tests:
+Exported for tests, placed ABOVE `cronCompoundPromoteHandler` (the terminal-return census slices
+from the handler's start, and its `RET` pattern matches `ok` anywhere in a `return {...}`).
 
-0. **Base preconditions.** The base must end with `\n` and contain no `\r`; otherwise
-   `edit-target-unreadable`. Measured on this tree: all 105 allowlisted targets
-   (`AGENTS.rules.md` and 104 `SKILL.md`) end with LF and none contains CR, so this refuses
-   nothing today. It exists because the alternative is wrong, not merely rare: appending to a
-   base with no trailing newline rewrites the last line (reproduced: `-two`, `\ No newline at
-   end of file`, `+two`, `+three`), so the diff is not additive and step 5 would fire.
-1. Validate `new_lines`: a non-empty array; every element a string with no `\n` or `\r`; at least
-   one element non-blank. Else `edit-invalid` (empty, blank, wrong type, embedded newline, or a
-   `max_tokens` stop).
-2. Split the base on `\n`. `insert_after_line === ""` -> append at end of file; otherwise count
+**Before the model call** (so an infra fault is loud and nothing is billed for it):
+
+- Re-assert `TARGET_ALLOW_RE` on the path (a future caller or test helper must not get traversal
+  on `join(tmp, "a", path)`); a violation is `target-path-refused`, the existing site.
+- `git ls-tree HEAD -- <path>`: absent -> `edit-target-unreadable`; mode other than `100644`
+  (a symlink returns its link text from `git show`) -> `edit-target-unreadable`.
+- `git cat-file -s HEAD:<path>` > 120,000 -> `edit-target-too-large`, before any bytes are
+  buffered (`spawnGitCapture` caps stderr, not stdout).
+- Only "path not in HEAD" maps to `edit-target-unreadable`. A spawn error / exit -1, a missing
+  `repoRoot` or any other non-zero git exit THROWS, so a lost workspace stays a loud run `error`
+  rather than becoming a weekly refusal that the probe reads as a model fault.
+- `git show HEAD:<path>`; the base must end with `\n` and contain no `\r`, else
+  `edit-target-unreadable`. Measured: all 105 allowlisted targets end with LF and none contains CR,
+  so this refuses nothing today; appending to a base with no trailing newline would rewrite the
+  last line (reproduced: `-two`, `\ No newline at end of file`, `+two`, `+three`).
+
+**After the model answers** (`buildAdditiveEditDiff` returns refusals and never throws, because a
+throw after a billed response re-bills on the Inngest retry):
+
+1. Validate `new_lines`. Non-empty array of strings; each line printable ASCII only
+   (`/^[\x20-\x7e]*$/`: no tab, NUL, C0/C1, U+0085, U+2028/U+2029, zero-width, tag-block or bidi
+   characters - the TS gate counts rule lines with `split("\n")` while
+   `scripts/lint-agents-rule-budget.py` uses `splitlines()`, so one invisible "line" could count
+   as 1 rule in one and 2 in the other, and hidden characters are invisible to a PR reviewer); a
+   per-line cap (500) and a line-count cap (20); at least one non-blank line; no line that is
+   exactly `---`; no credential-shaped substring (the credential alternatives of `PII_REGEX`: Anthropic
+   key, `gh[pousr]_`, `github_pat_`, `AKIA`, JWT, Stripe, Slack - the committed text goes to a
+   public repo and today only the skill-conflict COMMENT is PII-checked). Any failure ->
+   `edit-invalid` with a closed Sentry `cause` tag (`schema | empty | charset | too-long |
+   too-many | credential | shape | frontmatter | fence | no-source | max_tokens`).
+2. Target-specific shape. `AGENTS.rules.md`: every new line must be a rule bullet matching
+   `/^- .*\[id: (?!hr-)[a-z0-9-]+\]/` whose id is absent from the base (a model cannot mint an
+   `hr-` rule; ADR-092 reserves those for human review). `SKILL.md`: the anchor must lie after the
+   closing `---` of the frontmatter and outside a fenced block (computed by scanning the base);
+   an anchor inside either -> `edit-invalid` (`frontmatter` / `fence`).
+3. Split the base on `\n`. `insert_after_line === ""` -> append at end of file; otherwise count
    exact-equal lines: 0 -> `edit-anchor-not-found`, >1 -> `edit-anchor-ambiguous`. (A text anchor
-   rather than a returned line number is deliberate: it is self-verifying - a wrong copy refuses
-   - whereas an off-by-one number lands in the wrong place silently.)
-3. Splice the new lines after the anchor (or at the end).
-4. Write base and new text to `<tmp>/a/<path>` and `<tmp>/b/<path>`, run the `--no-prefix` form
-   above, clean the temp dir in `finally`. (Deriving the hunk by hand was considered and rejected:
-   hand-computed hunk counts are the failure class this plan removes.)
-5. **Assert additivity in code**: every content line of the derived diff after the first hunk
-   header starts with `+` or a space, never `-`. Splicing inserts only, so a `-` line is a server
-   bug, not a model fault: it is NOT mapped to an `edit-*` reason. The draft step returns the
-   retained `diff-underivable-apply` refusal and mirrors a `draft-edit-nonadditive` event to
-   Sentry. `diffRemovesHardRule` and the shrink floor stay as defence in depth.
+   rather than a returned line number is deliberate: it is self-verifying - a wrong copy refuses -
+   whereas an off-by-one number lands in the wrong place silently. Blank-line anchors are
+   inexpressible and fence/`---` anchors will often be ambiguous in `SKILL.md`; accepted.)
+4. Splice, then write base and new text under `mkdtemp(join(tmpdir(), "compound-edit-"))`
+   (0700, outside any repo, like `applyDiffToWorkspace`) as `a/<path>` and `b/<path>` and run
+   `git diff --no-index --no-color --no-prefix --no-ext-diff --no-textconv -- a/<path> b/<path>`
+   with that dir as cwd, via `spawnGitCapture`; exit 1 is success; clean up in `finally`.
+   (Deriving the hunk by hand was considered and rejected: hand-computed hunk counts are the
+   failure class this plan removes.)
+5. **Assert additivity in code**: every content line after the first hunk header starts with `+`
+   or a space, never `-`. Splicing only inserts, so a `-` line is a server bug: reason
+   `edit-derive-failed` (a distinct marker value the probe grades FAIL), plus a Sentry event. Any
+   unexpected failure in steps 4-5 (tmpdir, ENOSPC, git spawn) is caught, mirrored with
+   `reportSilentFallback` (op `draft-edit-error`) and returned as `edit-derive-failed`.
+   `diffRemovesHardRule` and the shrink floor stay as defence in depth.
 
 ### Handler wiring
 
-Per cluster, a new `step.run("draft-edit-<hash8>")` runs **before** the existing
-`apply-and-pr-<hash8>` step and returns `{ kind: "drafted", diff } | { kind: "refused", reason }`.
-It owns the `TARGET_ALLOW_RE` check (the existing `target-path-refused` site moves into it, with
-its logging and Sentry call unchanged, because the allowlist must precede any `git show`), the
-size check, the model call (wrapped in `withTimeout` and `postAnthropicMessage({ timeoutMs })`),
-and `buildAdditiveEditDiff`. A `refused` draft is accumulated by the same code that accumulates
-`apply-and-pr` refusals (outside the memoized callback, destructured, never spread) and the loop
-`continue`s. The apply step receives the derived diff and is otherwise unchanged. An Anthropic API
-error is **not** swallowed: it throws exactly as phase 1 does (transient retry; a 400 credit
-exhaustion lands the run as `status: "error"` with `error_class`, as on 2026-09-19).
+Helpers live above the handler. Per cluster, a new `step.run("draft-edit-<hash8>")` runs
+**before** `apply-and-pr-<hash8>` and returns a `DraftOutcome`: `{ kind: "drafted", diff } |
+{ kind: "refused", reason }` - a type of its own, NOT `ClusterOutcome`: the census's Guard 3
+window function requires `async (): Promise<ClusterOutcome> => {` to occur exactly once and
+hard-codes the apply step's 8-space closer, so the draft callback needs its own window function
+with its own uniqueness assertion, and that census must also forbid `refusals.push`,
+`refusalDetail.push` and `clustersOpened++` inside it.
 
-### Closed reason set (new refusals)
+- The draft step owns: the `TARGET_ALLOW_RE` check (the `target-path-refused` site MOVES here
+  with its logging and Sentry call unchanged, because the allowlist must precede any `git show`),
+  the pre-call git reads above, the model call, and `buildAdditiveEditDiff`. `MAX_DIFF_BYTES`
+  stays in the apply step (the Guard 3 mutation row anchors on that exact `return` inside the apply
+  window). The apply step KEEPS its own `TARGET_ALLOW_RE` check as well: `join(repoRoot,
+  cluster.target_path)` and `allowedPaths` consume the model string again there, and the draft
+  result is memoized separately. The census therefore counts two allowlist sites.
+- The model call uses `postAnthropicMessage({ timeoutMs: DRAFT_EDIT_TIMEOUT_MS (120_000),
+  maxTokens: DRAFT_EDIT_MAX_TOKENS (4_096), markerSource: "cron-compound-promote", markerRunId:
+  runId })`. `timeoutMs` is an `AbortSignal.timeout`; wrapping in `withTimeout` alone abandons the
+  fetch without cancelling it and leaves a billed zombie call. The reused 16,384 max-tokens would
+  allow a 16k-token insertion for a small edit.
+- Refused drafts and refused applies share ONE accumulation helper (`record(hash, outcome)`)
+  defined in the handler body OUTSIDE every step callback, called after both steps, so the
+  destructured (never spread) `refusalDetail.push` block is not duplicated and the apply step's
+  text and indentation stay untouched. A refused draft skips the apply step
+  (`draft.kind === "refused" ? draft : await step.run(apply...)`).
+- A second cluster naming a `target_path` already drafted in this run is refused
+  `edit-target-duplicate` (both PRs would fork from the same base, anchor the same line or append
+  the same place, and both append a `promotion-log.md` row, so the second PR conflicts).
+- The draft base is `HEAD`; the cluster loop's apply step ends with `reset --hard`, `clean` and
+  `checkout main` and THROWS if `main` is not restored, so HEAD is main at every draft. State this
+  invariant in a comment rather than re-asserting it.
+- An Anthropic API error is **not** swallowed: it throws exactly as phase 1 does (the function has
+  `retries: 1`; a timeout retries once then errors the run; a 400 credit exhaustion lands the run
+  as `status: "error"` with `error_class`, as on 2026-09-19, and fires
+  `reportAnthropicCreditExhausted` from the shared transport).
 
-Five: `edit-target-unreadable` (path absent at HEAD, `git show` failed, no trailing LF, or
-contains CR), `edit-target-too-large` (> 120,000 bytes; about 30k tokens, comfortably inside the
-model's context, and 4 of 104 SKILL.md files exceed it), `edit-invalid` (JSON/shape/empty/blank/
-embedded newline/`max_tokens` stop), `edit-anchor-not-found`, `edit-anchor-ambiguous`.
-`diff-underivable-apply` is retained for the residual case and is now a server-bug signal.
+### Closed reason set (new refusals) and probe classes
 
-Known consequence, stated here rather than only in Sharp Edges: the largest and most-edited
-skills (`review`, `work`, `ship`) are unreachable by this loop until #10551 shortens them; the
-cron will name that refusal each time a cluster targets one.
+Seven, each with exactly one emit site and one behavioural row. Probe class in the right column
+(Guard 2): P = proves the proposal now reaches the gates, N = model-side, no proof (NOT YET),
+F = server-side defect (FAIL).
 
-Verified, not assumed: nothing downstream reads the model's `byte_impact` (`git grep` shows it
-only in the schema, the `Cluster` type and the prompt line), so dropping it from the phase-1
-schema changes no gate's meaning; the byte budget and shrink floor measure the applied tree.
+| Reason | Meaning | Class |
+|---|---|---|
+| `edit-target-unreadable` | path not in HEAD, not a regular file, no trailing LF, or contains CR | N |
+| `edit-target-too-large` | base over 120,000 bytes (about 30k tokens; 4 of 104 SKILL.md files exceed it) | N |
+| `edit-invalid` | schema, empty/blank, charset, length, credential, shape, frontmatter/fence anchor, no resolvable source learning, `max_tokens` stop (cause in the Sentry tag) | N |
+| `edit-anchor-not-found` | anchor does not occur | N |
+| `edit-anchor-ambiguous` | anchor occurs more than once | N |
+| `edit-target-duplicate` | second cluster on a target already drafted this run | N |
+| `edit-derive-failed` | non-additive derived diff, or the derivation itself failed | F |
+
+`diff-underivable-apply` is retained for the residual case (a derived diff that git then rejects)
+and is class F.
+
+Known consequences, stated here rather than only in Sharp Edges:
+
+- The largest and most-edited skills (`review`, `work`, `ship`) are unreachable until #10551
+  shortens them; phase 1 is told which targets are eligible so this costs no wasted draft.
+- The skill-conflict guard (`is:pr is:open ... "plugins/soleur/skills" in:files`) currently
+  returns 8 open PRs (measured 2026-10-19), so every skill-targeting cluster that now passes
+  `checkDiffPaths` will be refused `skill-conflict-guard` while any open PR mentions that path -
+  and the guard posts the proposed diff as a comment on an unrelated PR each week. This guard has
+  never executed in production because no proposal ever reached it. `AGENTS.rules.md` targets are
+  unaffected. The probe grades `skill-conflict-guard` as N (no proof). Moving the open-PR check
+  ahead of the draft step (to save the model call) and reconsidering the comment are recorded as
+  a deferral, not folded in.
+- Verified, not assumed: nothing downstream reads the model's `byte_impact` (`git grep` shows it
+  only in the schema, the `Cluster` type and the prompt line), so dropping it changes no gate's
+  meaning; the byte budget and shrink floor measure the applied tree.
 
 ## Files to Edit
 
@@ -326,16 +458,19 @@ schema changes no gate's meaning; the byte budget and shrink floor measure the a
   Test Scenarios); keep every existing row (they exercise `checkDiffPaths` directly and still
   hold).
 - `apps/web-platform/test/server/inngest/cron-compound-promote-outcome-census.test.ts` - read it
-  fully first; extend the reason-attribution census to the new edit reasons and the Guard 3
-  "every exit of the memoized callback returns ..." census to the new draft step.
+  fully first; add an AST census over `buildAdditiveEditDiff`/`draftAdditiveEdit` for the seven
+  edit reasons (do NOT add them to `DiffPathVerdict`: the declared-vs-emitted identity census
+  would break), a second Guard 3 window function for the draft callback (own uniqueness
+  assertion and closer), and update the allowlist-site count to two.
 - `apps/web-platform/test/server/inngest/cron-compound-promote.test.ts` - schema/constant rows
   (no `proposed_diff_unified` / `byte_impact` in the phase-1 schema; `EDIT_OUTPUT_SCHEMA` shape).
 - `plugins/soleur/test/preflight-discoverability-test.test.ts` - bump `BASELINE_DECLARED_PROBES` 70 -> 71 with the PLACEMENT / TRUTH / NO SUBSTITUTE comment (this plan declares `credentials_required`; the G1 ratchet counts declaring plans repo-wide). Re-measure against `origin/main` immediately before merge: a sibling plan landing first moves the number.
 - `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md` - extend the refusal
-  enum table with the five new reasons and one line naming the join used for this attribution
+  enum table with the seven new reasons and one line naming the join used for this attribution
   (marker row to the `diff-path-refused` pino row on `cluster_hash`).
 - `knowledge-base/engineering/operations/runbooks/compound-promote-runbook.md` - describe the
-  two-step flow, the new refusals, and what an `edit-*` streak means.
+  two-step flow, the new refusals, what an `edit-*` streak means, and that `edit-derive-failed`
+  and `diff-underivable-apply` are both server-side defects told apart by the Sentry op.
 - `knowledge-base/engineering/architecture/decisions/ADR-092-additive-only-auto-edit-boundary-and-hard-rule-body-weakening-gate.md`
   - dated Amendment (via `soleur:architecture`).
 
@@ -368,7 +503,7 @@ the cluster must reach the apply step and must not produce `diff-underivable-app
 `draftAdditiveEdit` with an injectable `post`.
 
 **Phase 3 - GREEN, wiring.** `draft-edit-<hash8>` step, `target-path-refused` relocation, shared
-accumulation, `continue` on refused.
+accumulation through one `record()` helper, a refused draft skips the apply step.
 
 **Phase 4 - probe.** The follow-through script and suite.
 
@@ -381,10 +516,21 @@ touched `.md`.
 
 At ship: open the PR with `Ref #10552` (not `Closes`: the acceptance criterion is verified by a
 future scheduled run, so the follow-through closes the issue), label #10552 `follow-through`, and
-add the unfenced column-0 directive to its body with `earliest=2026-10-26T00:30:00Z`
-(the first `0 0 * * 0` fire after merge is 2026-10-25) and the three `BETTERSTACK_QUERY_*`
-secrets, which `.github/workflows/scheduled-followthrough-sweeper.yml` already wires for the 8281
-probe (verify, do not assume).
+add the unfenced column-0 directive to its body. The probe's merge floor is the DEPLOY completion
+time of the merged change (the `web-platform-release.yml` run that ships it), not the merge
+timestamp: old code keeps running until the image deploys, and a manual or scheduled fire in that
+gap would write `diff-underivable-apply` rows that must not be graded. Set `earliest` to one day
+after the first `0 0 * * 0` fire that follows the deploy, not a fixed `00:30`. The three
+`BETTERSTACK_QUERY_*` secrets are already wired in
+`.github/workflows/scheduled-followthrough-sweeper.yml` (lines 131-133, verified 2026-10-19).
+
+**Pre-merge real-model evidence (work phase, Phase 6).** Every test stubs `post`, so the first
+real evidence would otherwise arrive on a weekly cron. Run `draftAdditiveEdit` once against five
+real targets (`AGENTS.rules.md` and four SKILL.md files under the cap) with a dev Anthropic key if
+the `soleur/dev` Doppler config carries one (`doppler secrets get ANTHROPIC_API_KEY -p soleur -c
+dev --plain >/dev/null`; otherwise record "not run: no dev key"). It needs no GitHub write. Record
+the anchor hit-rate and the `cause` of each refusal in the PR body. Two sentences of evidence beat
+a three-week wait.
 
 ## Test Scenarios
 
@@ -392,22 +538,29 @@ Real throwaway git repos (the existing fixture pattern); every test asserts at l
 
 | # | Scenario | Expected |
 |---|---|---|
-| T1 | Anchor in the middle of `AGENTS.rules.md`, two new lines | derived diff has `diff --git a/AGENTS.rules.md b/AGENTS.rules.md`, only `+` content lines; `checkDiffPaths` returns `ok: true, paths: ["AGENTS.rules.md"]` |
-| T2 | `insert_after_line: ""` (append) on a file with a trailing newline | applies; additive only |
-| T3 | Base with NO trailing newline | `edit-target-unreadable` (and a note in the row that appending would rewrite the last line) |
-| T4 | Same on a `plugins/soleur/skills/alpha/SKILL.md` path | applies; header uses the full repo path (no `a/a/` doubling) |
+| T1 | Anchor in the middle of `AGENTS.rules.md`, a valid rule bullet | derived diff has `diff --git a/AGENTS.rules.md b/AGENTS.rules.md`, only `+` content lines; the row also asserts `git apply --cached` and `checkDiffPaths` return `ok: true, paths: ["AGENTS.rules.md"]` |
+| T2 | `insert_after_line: ""` (append) on a file with a trailing newline | applies; additive only (same assertions) |
+| T3 | Base with NO trailing newline | `edit-target-unreadable` (the row notes why: appending would rewrite the last line) |
+| T4 | Same as T1 on `plugins/soleur/skills/alpha/SKILL.md` and on a hyphenated directory (`agent-browser`) | applies; header uses the full repo path (no `a/a/` doubling) |
 | T5 | Anchor absent | `edit-anchor-not-found` |
 | T6 | Anchor line occurs twice | `edit-anchor-ambiguous` |
-| T7 | `new_lines: []`, `[""]`, `["   "]`, or an element containing `\n` | `edit-invalid` |
+| T7 | `new_lines`: `[]`, `[""]`, `["   "]`, an element with `\n`, with a tab, NUL, U+2028, U+0085, a zero-width and a tag-block character, an over-long line, 21 lines, a credential-shaped string, a line `---` | each `edit-invalid` with its own `cause` tag |
+| T8 | `AGENTS.rules.md` target: a line without `[id: ...]`, an `hr-` id, an id already in the base | `edit-invalid` (`shape`) |
+| T8b | SKILL.md target: anchor inside the frontmatter; anchor inside a fenced block | `edit-invalid` (`frontmatter` / `fence`) |
 | T9 | Base containing `\r` | `edit-target-unreadable` |
-| T10 | Target missing at HEAD | `edit-target-unreadable` |
-| T11 | Base over 120,000 bytes | `edit-target-too-large`, and the model is NOT called |
-| T12 | `TARGET_ALLOW_RE` violation | `target-path-refused`, no `git show`, model NOT called |
+| T10 | Target absent at HEAD; target is a symlink (mode 120000) | `edit-target-unreadable`; the model is NOT called |
+| T10b | `git` spawn error / missing `repoRoot` / non-128 git exit | THROWS (run error), not a refusal |
+| T11 | Base over 120,000 bytes (`git cat-file -s`) | `edit-target-too-large`, the model is NOT called |
+| T12 | `TARGET_ALLOW_RE` violation | `target-path-refused`, no `git show`, model NOT called; same inside `buildAdditiveEditDiff` itself |
 | T14 | Replays M1, M2, M3 fixtures through `checkDiffPaths` directly | still `underivable-apply` (pins that the guard is unchanged) |
-| T15 | Handler-level: phase-1 stub + phase-2 stub | cluster reaches the apply step; marker `refusals` has no `diff-underivable-apply` |
+| T15 | Handler-level, TWO clusters, stubbed `post`: one on `AGENTS.rules.md`, one on a SKILL.md | each cluster ends `opened` (stubbed `safeCommitAndPr`) or in a specific later-gate reason asserted by name; neither is `diff-underivable-*` |
 | T16 | Phase-2 `post` throws an Anthropic API error | propagates (not a refusal) |
 | T17 | Schema constants | phase-1 schema lacks `proposed_diff_unified` and `byte_impact`; `EDIT_OUTPUT_SCHEMA` has `additionalProperties: false` at every object level |
 | T18 | Probe suite (`.test.sh`) | see Guard 2 |
+| T19 | Two clusters, same `target_path` | second is `edit-target-duplicate`; the model is NOT called for it |
+| T20 | `source_learnings` containing `../../x` and an unknown path | dropped from the prompt (assert the prompt text), no disk read; none resolvable -> `edit-invalid` (`no-source`) |
+| T21 | Phase-2 prompt text | contains the delimited data blocks and the data-not-instructions statement; contains no tool-supplied path outside the corpus map |
+| T22 | `DRAFT_EDIT_TIMEOUT_MS` and `DRAFT_EDIT_MAX_TOKENS` are passed to `post` | asserted on the stub's call args |
 
 ## Guard Contract
 
@@ -436,6 +589,7 @@ assignment or schema property of that name exists.
 | M-4 | Drop the `--no-prefix` flag | T1, T4 (header doubles to `a/a/...`, `checkDiffPaths` refuses) |
 | M-5 | Skip the `TARGET_ALLOW_RE` check before `git show` | T12 |
 | M-6 | Make the anchor check `>= 1` instead of `=== 1` | T6 |
+| M-8 | Relax the charset check to `\\p{Cc}`-only (let U+2028 through), or drop the `hr-` refusal | T7 / T8 |
 | M-7 | After a compliant first cluster, a second cluster's draft is skipped, or a draft step returns without calling the builder | T15 with TWO clusters (must observe a derived diff for each, not an absence of refusals) |
 
 **Harness rows.** (i) Delete every `expect` in the new rows -> the `expect.hasAssertions()` floor
@@ -449,37 +603,58 @@ weaken. It quantifies over the schema and the type, which the census reads from 
 
 ### Guard 2 - the follow-through probe does not pass on silence
 
-**Property.** The probe exits 0 only when a run after the fix shows a draft PR opened, or a
-cluster that got PAST the draft step and was refused by a downstream gate (any named reason that
-is neither `diff-underivable-apply` nor an `edit-*` model-side reason): the original defect - a
-proposal that cannot reach the gates - is then demonstrably gone. A quiet week, a dark channel, a
-repeat of the old refusal, or a week of only `edit-anchor-*` / `edit-invalid` / `edit-target-*`
-refusals must never exit 0.
+**Property.** The probe exits 0 only on positive evidence that a derived diff was consumed: a draft
+PR opened, or a refusal that can occur only AFTER `checkDiffPaths` accepted a derived diff. A
+quiet week, a dark channel, a repeat of the old refusal, a week of model-side `edit-*` refusals, or
+a refusal that fires without touching the derived diff (for example `skill-conflict-guard`) must
+never exit 0. The PASS set is an ALLOWLIST, not the complement of the failure set: a complement is
+fail-open (it passes `target-path-refused`, `skill-conflict-guard`, `diff-size-exceeded`,
+`branch-name-shape-failed`, `target-missing` and any forged unknown string).
 
 **Assembly.** Every terminal exit of the script and every row family it reads (positive-control
-`SOLEUR_CLAUDE_COST`, the outcome marker); the grading is over decoded, field-isolated rows (`.fn`
-and the boolean discriminator), never a substring of `raw`, because PR and issue bodies that quote
-the marker name land in the same source (the 8281 probe documents this echo).
+`SOLEUR_CLAUDE_COST`, the outcome marker). Grading is done INSIDE `jq` on decoded, field-isolated
+rows (`.fn`, the boolean discriminator, `refusals[]` array membership by exact `==`), never a
+substring of `raw`: PR and issue bodies that quote reason names land in the same source (the 8281
+probe documents this echo). Output is hygienic: only reasons matching the closed enum are printed,
+anything else is bucketed `unknown`, so attacker-writable strings do not reach the sweeper's GitHub
+comment. Both triggers count (a manual fire is legitimate evidence); the trigger is printed.
+
+| Class | Reasons / statuses | Verdict |
+|---|---|---|
+| P (proof) | `clusters_opened >= 1`; `diff-path-off-target`, `byte-budget-overflow`, `corpus-shrink-refused`, `agents-core-hr-rule-edit-refused`, `not-committed-*` | exit 0 |
+| F (defect) | any `diff-underivable-*`; `git-apply-check-failed` (a derived diff that passed `--cached` but failed the real apply is a server bug); `edit-derive-failed` | exit 1 |
+| N (no proof) | `edit-target-unreadable`, `edit-target-too-large`, `edit-invalid`, `edit-anchor-not-found`, `edit-anchor-ambiguous`, `edit-target-duplicate`; `skill-conflict-guard`, `target-path-refused`, `target-missing`, `branch-name-shape-failed`, `diff-size-exceeded`; statuses `no-qualifying-clusters`, `week-cap-reached`, `deduped`, `disabled`, `empty-corpus`, `anthropic-truncated`, `error` | exit 2, printed |
+
+Precedence over the post-floor runs: any P row -> PASS; else the LATEST post-floor run decides
+(F -> FAIL, N -> NOT YET). If the probe is still NOT YET `35` days after the floor it exits 5
+(ACTION REQUIRED, never 0 or 1) so a permanent `edit-*` or skill-conflict streak surfaces instead
+of leaving a silently open tracker.
 
 **Mutation matrix**
 
 | # | Edit | Must go RED in |
 |---|---|---|
-| P-1 | Run window contains only `no-qualifying-clusters` rows | exit 2 (NOT YET), never 0 |
-| P-2 | Every refusal is `diff-underivable-apply` | exit 1 (FAIL) |
+| P-1 | Window contains only `no-qualifying-clusters` rows | exit 2, never 0 |
+| P-2 | Every refusal is `diff-underivable-apply` (post-floor) | exit 1 |
 | P-3 | `clusters_opened >= 1` | exit 0 |
-| P-4 | Refusals are all `edit-*` (e.g. `edit-anchor-not-found`) | exit 2 (NOT YET) with the reasons printed - the new path never reached a gate, so nothing is proven |
-| P-5 | Refusals include a downstream-gate reason (e.g. `diff-path-off-target`, `byte-budget-overflow`) and no `diff-underivable-*` | exit 0, reasons printed |
-| P-6 | Merge floor unset or unparsable, or positive-control rows absent | exit 3 (CANNOT ESTABLISH), never 0 or 1; rows older than the floor are ignored |
+| P-4 | Refusals are all `edit-*` model-side | exit 2 with reasons printed |
+| P-5 | A refusal of class P (e.g. `byte-budget-overflow`) and none of class F | exit 0 |
+| P-6 | Only `skill-conflict-guard` / `target-path-refused` | exit 2, never 0 |
+| P-7 | Merge/deploy floor unset or unparsable, or positive-control rows absent | exit 3, never 0 or 1; rows older than the floor are ignored |
+| P-8 | Old-code `diff-underivable-apply` row dated before the floor, plus a class-P row after it | exit 0 (the stale row is not graded) |
+| P-9 | A forged row naming a P-class reason in a PR-body echo (no marker discriminator) | exit 2, never 0 |
+| P-10 | NOT YET at floor + 36 days | exit 5 |
 
 **Harness rows.** Strip every assertion from the `.test.sh` -> a non-zero summary floor reddens it;
-must-PASS non-canonical: a window with two runs (one downstream-gate refusal, one quiet) and a
-manual-trigger row. P-5 and the positive-control / xtrace / floor machinery are inherited from the
-8281 probe's construction (copied, not re-derived); only the verdicts above are new.
+must-PASS non-canonical: a window with a manual-trigger row, one with two runs (one class P, one
+quiet), and one whose unknown reason string contains ANSI escape characters (printed as
+`unknown`). The positive-control, xtrace-refusal and decode machinery is inherited from the 8281
+probe's construction (copied, not re-derived); only the verdicts above are new.
 
-**Anchor.** The merge floor (`FT10552_MERGE_FLOOR`) is an input the PR author sets; a probe whose
-window can be slid earlier by editing that one value would grade pre-fix rows. The floor is set to
-the merge timestamp at ship and the suite asserts rows older than the floor are ignored.
+**Anchor.** The floor (`FT10552_DEPLOY_FLOOR`) is an input the PR author sets; a probe whose window
+can be slid earlier by editing that one value would grade pre-fix rows. It is set at ship to the
+deploy completion time, the suite asserts rows older than the floor are ignored (P-8), and an
+unset floor is exit 3 (P-7), never a default.
 
 ## Observability
 
@@ -487,43 +662,52 @@ the merge timestamp at ship and the suite asserts rows older than the floor are 
 liveness_signal:
   what: SOLEUR_COMPOUND_PROMOTE_OUTCOME marker (status, clusters_proposed, clusters_opened, refusals[], refusal_detail[]) emitted on every terminal path, plus the Sentry cron monitor scheduled-compound-promote
   cadence: weekly, Sunday 00:00 UTC (cron "0 0 * * 0"), plus any manual-trigger run
-  alert_target: Sentry monitor scheduled-compound-promote (liveness); the follow-through sweeper comment on #10552 (work)
+  alert_target: Sentry monitor scheduled-compound-promote (liveness only); the open #10552 tracker and the follow-through sweeper comment (work). No Sentry alert rule routes compound-promote refusals to a person
   configured_in: apps/web-platform/server/inngest/functions/cron-compound-promote.ts (emitOutcomeMarker calls; SENTRY_MONITOR_SLUG) and apps/web-platform/server/compound-promote-marker.ts
 error_reporting:
-  destination: Sentry web-platform via reportSilentFallback (feature cron-compound-promote; ops draft-edit-refused, diff-path-refused, handler-top-level) and Better Stack Logs via the marker
-  fail_loud: a refused cluster logs a warn row and mirrors to Sentry; the marker's refusals[] names the reason; status error carries error_class and error_message
+  destination: Sentry web-platform via reportSilentFallback (feature cron-compound-promote; ops draft-edit-refused, draft-edit-error, diff-path-refused, handler-top-level) and Better Stack Logs via the marker
+  fail_loud: a refused cluster logs a pino warn row and mirrors to Sentry with the reason in the Error message and in tags (cause, stop_reason, new_lines_count, anchor_empty, anchor_match_count, base_bytes), so five reasons do not collapse into one Sentry issue; the marker refusals[] names the reason; status error carries error_class and error_message
 failure_modes:
-  - mode: phase-2 anchor does not match the real file (model copied a line inexactly)
-    detection: marker refusals[] contains edit-anchor-not-found; Sentry op draft-edit-refused with the reason (layer 2 pino to Sentry breadcrumb mirror, layer 3 Vector to Better Stack)
-    alert_route: follow-through probe prints the reasons; Sentry issue via reportSilentFallback
-  - mode: anchor line occurs more than once
-    detection: marker refusals[] contains edit-anchor-ambiguous (layer 3)
+  - mode: phase-2 anchor does not match the real file, or occurs more than once
+    detection: marker refusals[] contains edit-anchor-not-found or edit-anchor-ambiguous (layer 2 pino to Sentry breadcrumb mirror; layer 3 Vector journald shipper to Better Stack); Sentry op draft-edit-refused with anchor_match_count
+    alert_route: follow-through probe prints the reasons (exit 2); Sentry issue; the open tracker
+  - mode: model output unusable (schema, charset, credential-shaped, shape, frontmatter or fence anchor, max_tokens)
+    detection: marker refusals[] contains edit-invalid and the Sentry cause tag names which (layer 2; layer 3 Vector to Better Stack)
     alert_route: same as above
-  - mode: target SKILL.md larger than the 120,000-byte cap
-    detection: marker refusals[] contains edit-target-too-large (layer 3); resolves as #10551 shortens the largest SKILL.md files
+  - mode: target SKILL.md larger than the 120,000-byte cap, unreadable, or duplicated
+    detection: marker refusals[] contains edit-target-too-large, edit-target-unreadable or edit-target-duplicate (layer 3 Vector to Better Stack); resolves for the large files as #10551 shortens them
     alert_route: follow-through probe output
-  - mode: a derived diff still fails the apply arm (server bug)
-    detection: marker refusals[] contains diff-underivable-apply AND Sentry event with the derived-diff flag (layer 2); the probe exits 1 on this
+  - mode: server-side defect - the derived diff is non-additive, derivation failed, or git rejects a derived diff
+    detection: marker refusals[] contains edit-derive-failed or diff-underivable-apply plus a Sentry event (ops draft-edit-error / diff-path-refused) (layer 2 and layer 3); the probe exits 1
     alert_route: follow-through sweeper FAIL comment on #10552 plus Sentry
   - mode: Anthropic credit exhausted or API error in phase 2
-    detection: run status error with error_class AnthropicApiError; credit exhaustion also fires reportAnthropicCreditExhausted (layer 1 sentry-correlation middleware tags the run)
-    alert_route: existing credit-exhaustion route (#8505)
-  - mode: quiet week masks a still-broken path
-    detection: probe exits 2 NOT YET on no-qualifying-clusters; the tracker stays open
-    alert_route: sweeper keeps the issue open and comments daily
+    detection: run status error with error_class AnthropicApiError; credit exhaustion fires reportAnthropicCreditExhausted from the shared transport in _cron-shared.ts (layer 1 sentry-correlation middleware tags the run)
+    alert_route: the existing #8505 credit-exhaustion marker; no person is paged by the cron itself
+  - mode: quiet week or skill-conflict streak masks a still-unproven path
+    detection: marker status no-qualifying-clusters or refusals[] skill-conflict-guard via pino to Vector to Better Stack (layer 3), liveness via the Sentry monitor heartbeat; the probe exits 2 and, after 35 days, 5
+    alert_route: the sweeper keeps #10552 open and comments on each sweep
 logs:
   where: Better Stack Logs source 2457081 (pino WARN to Vector), queried with scripts/betterstack-query.sh under doppler run -p soleur -c prd_terraform
   retention: 90 days in Better Stack; Sentry per project retention
 discoverability_test:
   command: bash scripts/followthroughs/compound-promote-draft-edit-10552.sh
-  expected_output: PASS or NOT YET
+  expected_output: PASS
   credentials_required: "doppler soleur/prd_terraform BETTERSTACK_QUERY_HOST, BETTERSTACK_QUERY_USERNAME, BETTERSTACK_QUERY_PASSWORD - the warehouse that holds the marker rows has no unauthenticated read, so no credential-free probe verifies the same property"
 ```
 
+`expected_output` is the literal the probe prints to STDOUT on success; the NOT YET and CANNOT
+ESTABLISH verdicts go to stderr as in the 8281 probe. Check 10 skips this block unexecuted
+(`SKIP-DECLARED`) because `credentials_required` is non-placeholder, so the literal is the
+contract the offline suite asserts, not something preflight runs.
+
 Affected-surface note (Phase 2.9.2, cron worker): every `detection` above is emitted FROM the worker
-(the marker and the `reportSilentFallback` mirror), and the five new reasons discriminate the
-competing root causes (inexact copy, duplicate line, oversized file, unreadable target, malformed
-or empty edit) in one event, which the single `diff-underivable-apply` string could not.
+(the marker and the `reportSilentFallback` mirror), and the seven new reasons plus the Sentry
+`cause` tag discriminate the competing root causes (inexact copy, duplicate line, oversized or
+unreadable file, malformed or unsafe output, server defect) in one event, which the single
+`diff-underivable-apply` string could not. `reportSilentFallback` calls `logger.error({err})`
+first and the pino hook captures an `Error` before the tagged capture, so each call site passes a
+reason-specific `Error` message (the existing sites pass a fixed message, which would merge five
+reasons into one issue).
 
 ## Architecture Decision (ADR/C4)
 
@@ -531,10 +715,25 @@ or empty edit) in one event, which the single `diff-underivable-apply` string co
 
 Amend **ADR-092** (additive-only auto-edit boundary) with a dated Amendment: the model proposes an
 insertion (`insert_after_line`, `new_lines`) against the real HEAD text; the server validates a
-unique anchor and derives the unified diff with git; the derived diff is asserted additive in code;
-new refusal members `edit-*`; `diffRemovesHardRule` retained as defence in depth. Written via
-`soleur:architecture` in Phase 5. No new ADR (ADR-054 write path and ADR-108 cost attribution are
-unchanged).
+unique anchor and the content constraints and derives the unified diff with git; the derived diff
+is asserted additive in code; new refusal members `edit-*`; `diffRemovesHardRule` retained as
+defence in depth. The Amendment must also say:
+
+- ADR-092's "additive-only" is a property at the rule-SET level (a new id, no body edit); the new
+  code assertion is LINE-level. They are different properties.
+- A line splice can still land inside YAML frontmatter or a fenced block of a SKILL.md, or add a
+  line that overrides an existing rule. The compensating controls are the content constraints in
+  `buildAdditiveEditDiff`, `lint-rule-bodies`, `lint-rule-ids`, the real CI run (the `test`
+  context is deliberately not synthesized for this cron) and human review of the draft PR.
+- `new_lines` is model-authored free text destined for the always-loaded corpus; the trust
+  boundary is unchanged from phase 1 (the model still writes the rule), only who writes the diff
+  moved.
+- Reconcile the ADR's Consequences bullet that defers the C4 views until the auto-proposer actor is
+  modelled (about line 118; the ADR is still `Provisional`) with this plan's "no C4 change".
+
+Written via `soleur:architecture` in Phase 5. No new ADR (ADR-054 write path and ADR-108 cost
+attribution are unchanged; ADR-033 I5, a deterministic `kind`-discriminated step return, is
+satisfied).
 
 ### C4 views
 
@@ -598,17 +797,36 @@ None. Queried open `code-review` issues for `cron-compound-promote.ts`,
 
 ## Scope Check
 
-| Ask (from the brief) | Plan element |
-|---|---|
-| Attribute the cause from the recorded diff shape in Better Stack, no operator fetch | `## Attribution` (pulled via `scripts/betterstack-query.sh` under `doppler run -p soleur -c prd_terraform`) |
-| Fix with a failing test first | Phase 0 RED, T1-T17 |
-| If the shape cannot discriminate, add the missing shape field | Evaluated and ruled out by CTO F2: the shape cannot discriminate M2/M3 but the fix makes the distinction unnecessary; field not added, trigger recorded |
-| #8443 is related context, do not close | Read; untouched; cut-listed |
+### Ask Mapping
 
-Item provenance: every Files-to-Edit entry is `ask` (the fix and its test) or `required-by-ruling`
-(runbook rows and ADR-092 amendment, F3; the probe, F4). Nothing is `inferred`. Split assessment:
-one PR; the phases share one chokepoint and splitting phase 1 from phase 2 would ship a state in
-which the model has no diff field and nothing derives one.
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "Attribute the cause from the diff shape recorded in the SOLEUR_COMPOUND_PROMOTE_OUTCOME refusal_detail rows in Better Stack (pull via scripts/betterstack-query.sh under doppler run -p soleur -c prd_terraform; do not ask the operator to fetch)" [brief] | `## Attribution` (rows pulled with `scripts/betterstack-query.sh` under `doppler run -p soleur -c prd_terraform`) | mapped |
+| 2 | "then fix with a failing test first" [brief] | Phase 0 RED (T1-T17), Phases 1-3 GREEN, Files-to-Edit entries for `cron-compound-promote.ts` and its test suites | mapped |
+| 3 | "If the recorded shape cannot discriminate, add the missing shape field to the marker rather than guessing." [brief] | `## Attribution` "Does the recorded shape discriminate?" and CTO F2: the shape cannot separate M2 from M3, the fix makes the distinction unreachable, so no field is added and the trigger to add one is recorded | mapped |
+| 4 | "treat it as related context (read it, do not close it)" [brief, #8443] | Read; neither edited nor closed; cut-listed under UC-1 | mapped |
+| 5 | "the next scheduled or manual run opens a draft PR or records a named non-`diff-underivable` cause" [issue #10552] | Follow-through probe `scripts/followthroughs/compound-promote-draft-edit-10552.sh` and Guard 2 | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| `cron-compound-promote.ts` (two-step flow, `buildAdditiveEditDiff`, `draft-edit` step) | "then fix with a failing test first" | asked |
+| `cron-compound-promote-allowlist.test.ts`, `cron-compound-promote.test.ts` | "then fix with a failing test first" | asked |
+| `cron-compound-promote-outcome-census.test.ts` | -- | inferred - justification: the census pins per-site reason counts and replay safety, so a new draft step and seven new reasons turn it red unless it moves with the code |
+| `betterstack-log-query.md` refusal table, `compound-promote-runbook.md` | -- | inferred - justification: the source's CO-MOVING ARTIFACTS comment names the refusal-enum table as a co-moving artifact, and the recipe is how the operator reads the new reasons without SSH |
+| ADR-092 Amendment | -- | inferred - justification: CTO ruling F3; the additive-only boundary names who authors the diff, so leaving the ADR unchanged would make the recorded architecture wrong |
+| Follow-through probe `.sh` and `.test.sh` | "the next scheduled or manual run opens a draft PR or records a named non-`diff-underivable` cause" | asked |
+| `preflight-discoverability-test.test.ts` `BASELINE_DECLARED_PROBES` bump | -- | inferred - justification: a plan declaring `credentials_required` moves the repo-global G1 ratchet, which reddens the full battery if not bumped in the same PR |
+| Compound learning file | -- | inferred - justification: the workflow requires capturing the session's learning, and no learning covers this failure class |
+| Second Anthropic call and `EDIT_OUTPUT_SCHEMA` | "then fix with a failing test first" (the fix) | asked - the CTO-ruled mechanism of the fix; no cheaper mechanism buys a parseable diff |
+
+### Split Assessment
+
+- Subsystems touched: 4 - apps/web-platform, scripts, knowledge-base, plugins/soleur
+- Planned files: 13 | Estimated changed lines: 850
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR - two thresholds are crossed only at the margin (the estimate counts about 400 lines of tests and 200 of probe script). The seam considered was moving the probe and ratchet into a second PR; rejected because the plan's `discoverability_test` must name a command that exists in this PR's tree, and the probe is the only verification the CTO ruled for acceptance ask 5.
 
 Deferrals (each needs a tracking issue created at ship, not left as prose): (1) `apply_error_class`
 marker field - trigger: `diff-underivable-apply` appears on a server-derived diff; (2) #8443 UC-1
@@ -628,19 +846,25 @@ and UC-2 - already tracked by #8443, no new issue; (3) `edit-target-too-large` c
   `checkDiffPaths` inside the same row.
 - [ ] AC4. The derived diff header is `diff --git a/<path> b/<path>` (no `a/a/` doubling), and a
   row fails if `--no-prefix` is removed (M-4).
-- [ ] AC5. The five `edit-*` reasons each have exactly one emit site and one behavioural row; the
+- [ ] AC5. The seven `edit-*` reasons each have exactly one emit site and one behavioural row; the
   reason-attribution census covers them; `diff-underivable-apply` is retained and T14 still
   passes.
 - [ ] AC6. The `draft-edit-<hash8>` step returns only `{kind, diff}` or `{kind, reason}`; no
   target-file text is in a step return value.
 - [ ] AC7. `target-path-refused` still fires before any `git show`, and the model is not called on
   a disallowed path (T12) or an oversized base (T11).
-- [ ] AC8. Anthropic API errors in phase 2 propagate (T16); they are not converted into refusals.
+- [ ] AC8. Anthropic API errors in phase 2 propagate (T16), and so does an infra fault on the
+  pre-call git reads (T10b); neither is converted into a refusal.
+- [ ] AC8b. The content constraints (T7, T8, T8b), the symlink and size pre-checks (T10, T11), the
+  source-learning `Map` lookup (T20), the timeout and max-token constants (T22) and the
+  duplicate-target refusal (T19) each have a behavioural row.
+- [ ] AC8c. The PR body records the real-model evidence run (anchor hit-rate and refusal causes) or
+  "not run: no dev key".
 - [ ] AC9. The marker field set is unchanged: `git diff --quiet origin/main...HEAD -- apps/web-platform/server/compound-promote-marker.ts` exits 0 (merge-base form, so a sibling merge to main cannot redden it).
-- [ ] AC10. The runbook refusal table lists the five new reasons; ADR-092 carries a dated
+- [ ] AC10. The runbook refusal table lists the seven new reasons; ADR-092 carries a dated
   Amendment; `plugins/soleur/test/c4-count-parity.test.sh` passes.
 - [ ] AC11. `scripts/followthroughs/compound-promote-draft-edit-10552.test.sh` passes and covers
-  P-1 through P-6; `python3 scripts/lint-guard-contract.py` passes on this plan (2 entries).
+  P-1 through P-10; `python3 scripts/lint-guard-contract.py` passes on this plan (2 entries).
 - [ ] AC12. The four vitest files pass, `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` is clean (the root `package.json` declares no `workspaces`, so the `-w` form aborts), and the
   PR body says `Ref #10552`.
 
@@ -648,10 +872,10 @@ and UC-2 - already tracked by #8443, no new issue; (3) `edit-target-too-large` c
 
 - [ ] AC13. #10552 carries the `follow-through` label and the unfenced column-0 directive
   (`script=scripts/followthroughs/compound-promote-draft-edit-10552.sh`, `earliest` after the
-  2026-10-25 fire, the three `BETTERSTACK_QUERY_*` secrets). The sweeper closes it when the first
-  post-merge run opens a draft PR, or refuses a cluster at a downstream gate (proof the proposal
-  now reaches the gates). A quiet week, or a week of only model-side `edit-*` refusals, leaves it
-  open (exit 2).
+  2026-10-25 fire, the three `BETTERSTACK_QUERY_*` secrets). The probe's floor is the deploy
+  completion time of the merged change. The sweeper closes the issue when a post-floor run opens a
+  draft PR or hits a class-P refusal (Guard 2). A quiet week, model-side `edit-*` refusals, or a
+  `skill-conflict-guard` streak leave it open (exit 2); 35 days of that exits 5.
 
 ## Plan Review (2026-10-19)
 
@@ -660,7 +884,7 @@ did not return before the pipeline moved on, so correctness is covered by the de
 Applied (all Mechanical, one right answer): a base without a trailing newline cannot take an
 additive append (reproduced: it rewrites the last line), so the base must end with LF and
 contain no CR - the earlier "add a newline" branch and CRLF handling are gone; `edit-empty` and
-`edit-schema-invalid` merged into `edit-invalid` (five reasons); a non-additive derived diff is a
+`edit-schema-invalid` merged into `edit-invalid` (five reasons at that point; the deepen pass below made it seven); a non-additive derived diff is a
 server bug and maps to the retained `diff-underivable-apply`, not to a model-side reason; the
 probe closes only on a draft PR or a downstream-gate refusal; test rows T13 and T19 and mutation
 rows M-8 and P-7/P-8 folded or cut; `byte_impact` confirmed unread downstream. Kept
@@ -682,6 +906,13 @@ the text anchor (self-verifying, unlike a line number). Not applied: shrinking t
   with the new path never having reached a gate. Plan review (two seats) tightened the probe: only
   a draft PR or a downstream-gate refusal closes; an all-`edit-*` week stays NOT YET and prints its
   reasons. A persistent `edit-*` streak is then a visible open tracker, not a silent closure.
+- Plan review classes already applied to the probe (two seats, then the flow, observability and
+  security seats of this deepen pass): the PASS set is an allowlist, not the complement of the
+  failure set - a complement passes refusals that never touched the derived diff.
+- Pre-existing and not folded in: `source_learnings` strings are never checked against the corpus
+  and flow into the commit trailer, the PR body and the `promotion-log.md` table row (newlines or
+  `|` can forge a trailer or a row). The phase-2 `Map` lookup stops the NEW use of them; the old
+  uses are a deferral (validate at the phase-1 parse).
 - Do not weaken the 120,000-byte cap into "send an excerpt": the anchor must be copied from text
   the model saw in full, and an excerpt makes `edit-anchor-not-found` the dominant failure.
 - The brief's three "likely candidates" are all wrong as stated; do not add a fence stripper, an
