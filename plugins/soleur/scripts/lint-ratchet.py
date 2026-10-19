@@ -110,7 +110,7 @@ BASE_LADDER = ("refs/remotes/origin/HEAD", "refs/remotes/origin/main", "refs/rem
 PIN_HINT_RE = re.compile(r"(?i)(required[- ]version|unknown rule selector|unknown (field|key|variant|option))")
 MAX_BASELINE_BYTES = 16 << 20
 # Per launch; Windows' command line is the tight limit, POSIX has 1 MiB (macOS) or more.
-ARGV_BUDGET = 24000 if sys.platform == "win32" else 150000
+ARGV_BUDGET = 24000 if sys.platform == "win32" else 100000
 TOTAL_RUN_BUDGET = 1800  # seconds across every chunked ruff launch of one run
 NOTICE_LIMIT = 25
 LINE_LIMIT = 600
@@ -491,18 +491,21 @@ def resolve_base_ladder(root, ref, env=None, baseline=None) -> tuple:
         if baseline is None:
             return sha, notes
         if baseline_at(root, sha, baseline, env) is not None:
-            carrying.append((sha, notes))
+            carrying.append((sha, notes, rung.startswith("refs/heads/")))
         else:
             first = first or (sha, notes)
     if carrying:
         # Rungs can disagree (a stale origin/HEAD next to a current origin/main): judge growth against the
         # NEWEST merge base that carries the baseline, the strictest reference.
-        best = carrying[0]
-        for candidate in carrying[1:]:
+        # A local branch only counts when no remote rung carries the baseline: on main with unpushed commits the
+        # local branch is the newest, and judging growth against your own unpushed work would always pass.
+        pool = [c for c in carrying if not c[2]] or carrying
+        best = pool[0]
+        for candidate in pool[1:]:
             if candidate[0] != best[0] and _git(root, ["merge-base", "--is-ancestor", best[0], candidate[0]],
                                                   env).returncode == 0:
                 best = candidate
-        return best
+        return best[0], best[1]
     if first is not None:
         return first
     shallow = _git(root, ["rev-parse", "--is-shallow-repository"], env)
@@ -1176,12 +1179,21 @@ def _tracked_configs(root, env=None) -> dict:
             content = "symlink:" + os.readlink(str(path))
             # A dangling or oversized target contributes its link text only; ruff would fail on it and say so.
             if os.path.isfile(str(path)) and os.path.getsize(str(path)) <= MAX_CONFIG_BYTES:
-                content += "\0" + Path(os.path.realpath(str(path))).read_text(encoding="utf-8", errors="replace")
+                try:
+                    content += "\0" + Path(os.path.realpath(str(path))).read_text(encoding="utf-8", errors="replace")
+                except OSError as exc:
+                    raise ContentError("could not read {}: {}".format(_clip(name), exc.strerror or type(exc).__name__))
             configs[name] = content
             continue
-        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_CONFIG_BYTES:
-            raise ContentError("{} is not a regular file under 1 MiB; refusing to run ruff against it".format(
-                _clip(name)))
+        if not stat.S_ISREG(info.st_mode):
+            raise ContentError("{} is not a regular file; refusing to run ruff against it".format(_clip(name)))
+        if info.st_size > MAX_CONFIG_BYTES:
+            # An oversized pyproject.toml matters only if it carries a ruff table; look at its head, not all of it.
+            with open(str(path), "rb") as handle:
+                head = handle.read(MAX_CONFIG_BYTES).decode("utf-8", "replace")
+            if name.rsplit("/", 1)[-1] == USER_PYPROJECT and not _has_ruff_table(head):
+                continue
+            raise ContentError("{} is over 1 MiB; refusing to run ruff against it".format(_clip(name)))
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
@@ -1220,6 +1232,19 @@ def _is_soleur_checkout(root) -> bool:
     return os.path.realpath(__file__) == os.path.join(top, SCRIPT_REL)
 
 
+def _is_untracked_ruff_config(root, name) -> bool:
+    base = name.rsplit("/", 1)[-1]
+    if base in USER_RUFF_CONFIGS:
+        return True
+    if base != USER_PYPROJECT:
+        return False
+    try:
+        with open(str(Path(root) / name), "rb") as handle:
+            return _has_ruff_table(handle.read(MAX_CONFIG_BYTES).decode("utf-8", "replace"))
+    except OSError:
+        return False
+
+
 def _scan_notices(root, env, pre) -> list:
     """What an OK would otherwise hide: tracked .py symlinks and untracked .py files are not scanned."""
     notices = []
@@ -1231,8 +1256,8 @@ def _scan_notices(root, env, pre) -> list:
                   + list(CONFIG_GLOBS), env)
     if others.returncode == 0:
         names = [n for n in others.stdout.split("\0") if n]
-        configs = [n for n in names if n.rsplit("/", 1)[-1] in USER_RUFF_CONFIGS + (USER_PYPROJECT,)]
-        python = [n for n in names if n not in configs]
+        configs = [n for n in names if _is_untracked_ruff_config(root, n)]
+        python = [n for n in names if n.rsplit("/", 1)[-1] not in USER_RUFF_CONFIGS + (USER_PYPROJECT,)]
         if python:
             notices.append(pre + "WARN: {} untracked .py file(s) are not scanned until they are added to git: "
                            "{}".format(len(python), ", ".join(_clip(n, 80) for n in python[:3])))

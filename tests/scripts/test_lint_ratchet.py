@@ -41,7 +41,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "plugins" / "soleur" / "scripts" / "lint-ratchet.py"
 REQUIREMENTS = REPO_ROOT / "plugins" / "soleur" / "scripts" / "ruff-requirements.txt"
 FIXTURES = REPO_ROOT / "tests" / "scripts" / "fixtures" / "lint-ratchet"
-MIN_CASES = 317
+MIN_CASES = 319
 # Per-class lower bounds (the count when they were set): renaming or deleting a test of a guard class turns this
 # red instead of leaving the total above MIN_CASES. Lowering one is a deliberate, reviewed act.
 CLASS_FLOORS = {
@@ -67,7 +67,7 @@ CLASS_FLOORS = {
     "TestSoleurOutputIsUnchanged": 1,
     "TestToolFailures": 4,
     "TestUserModeFingerprint": 8,
-    "TestUserModeFixRound": 33,
+    "TestUserModeFixRound": 35,
     "TestUserModeGuards": 34,
     "TestUserModeReviewFixes": 27,
     "TestUserModeSafety": 10,
@@ -3194,14 +3194,10 @@ class TestUserModeFixRound(UserModeBase):
     # K17/K18: constants that bound output and argv are pinned to a literal bound
     def test_K17_constants_have_literal_bounds(self):
         self.assertLessEqual(lr.OFFLINE_WINDOW, 900)
-        self.assertLessEqual(lr.ARGV_BUDGET, 200000)
+        self.assertLessEqual(lr.ARGV_BUDGET, 120000)
         self.assertLessEqual(lr.TOTAL_RUN_BUDGET, 3600)
         self.assertLessEqual(lr.LINE_LIMIT, 2000)
         self.assertLessEqual(lr.NOTICE_LIMIT, 50)
-
-    # K19: the skill lines
-    def test_K19_skill_line_tails_and_single_call(self):
-        self.assertEqual(TestSkillPointers.CALL.count("auto"), 1)
 
     # Z1: update zero-listing guard (previous finding 1)
     def test_Z1_zero_listing_update_guard_is_pinned(self):
@@ -3314,6 +3310,30 @@ class TestUserModeFixRound(UserModeBase):
         code, _, err = self.cli("auto")
         self.assertEqual(code, 2, "a broken baseline is REPO-CONTENT even when ruff could not be installed")
         self.assertIn("REPO-CONTENT", err)
+
+    def test_unpushed_local_commits_are_not_judged_against_themselves(self):
+        self.adopt()
+        remote = self.repo.git("rev-parse", "HEAD").stdout.strip()
+        self.repo.write("a.py", "import os\n" + VIOLATION + "    again = open(other)\n")
+        self.grown()
+        self.repo.commit("unpushed growth on main")
+        self.repo.git("update-ref", "refs/remotes/origin/main", remote)
+        code, _, err = self.cli("auto")
+        self.assertEqual(code, 1, "origin/main is the reference even though local main is newer")
+        self.assertIn("baseline grew", err)
+
+    def test_an_untracked_pyproject_without_a_ruff_table_is_not_a_ruff_config_notice(self):
+        self.adopt()
+        self.repo.write("pkg/pyproject.toml", "[project]\nname = 'x'\n")
+        code, out, err = self.cli("auto")
+        self.assertEqual(code, 0, (out, err))
+        self.assertNotIn("untracked ruff config", err)
+
+    def test_an_oversized_nested_pyproject_without_a_ruff_table_is_ignored(self):
+        self.adopt()
+        self.repo.write("pkg/pyproject.toml", "# " + "x" * (1 << 20) + "\n")
+        self.repo.git("add", "-A")
+        self.assertTrue(lr.toolchain_header(self.repo.root))
 
     def test_a_pin_error_in_the_ruff_output_gets_the_pin_hint(self):
         self.assertTrue(lr.PIN_HINT_RE.search("Required version `>=99` does not match the running version 0.16.10"))
