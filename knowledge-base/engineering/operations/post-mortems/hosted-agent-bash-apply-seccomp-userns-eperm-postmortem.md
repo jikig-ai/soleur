@@ -2,12 +2,12 @@
 title: "Hosted agent Bash failed on every call with apply-seccomp unshare(CLONE_NEWUSER) EPERM for an inferred ten days, and nothing alerted: our own seccomp filter killed the SDK's command-side helper while the canary replayed only the setup argv"
 date: 2026-10-16
 incident_pr: 10445
-incident_window: "2026-10-06T13:19:38Z (inferred onset: first production deploy of web-v0.324.3, web-1; no pre-2026-10-16 failure was observed directly) → ongoing at the time of writing (fix committed in 21a7319bf7, not yet deployed)"
-recovery_at: "TBD"
+incident_window: "2026-10-06T13:19:38Z (inferred onset: first production deploy of web-v0.324.3, web-1; no pre-2026-10-16 failure was observed directly) → 2026-10-18T16:41:40Z (fix PR #10451, merge commit 940578c435, deploy job success)"
+recovery_at: "2026-10-18T16:41:40Z"
 suspected_change: "#9595 (shared bwrap seccomp filter plus fd hygiene, first shipped in tag web-v0.324.3, 2026-10-06)"
 # incident class (every hosted session); the fix PR's plan declares `single-user incident` for the cross-tenant surface it widens
 brand_survival_threshold: aggregate pattern
-status: ongoing
+status: resolved
 triggers:
   - availability (hosted agent Bash tool fails at sandbox start; production /health stays ok)
   - silent detection gap (sandbox_canary green over a hard-down Bash; the tool_result classifier returns null for the helper line)
@@ -30,7 +30,7 @@ art_33_deadline: "n/a"
 
 Every hosted Concierge Bash call failed at sandbox start with `apply-seccomp: unshare(CLONE_NEWUSER): Operation not
 permitted` from the first production deploy of `web-v0.324.3` on 2026-10-06 (inferred from deploy time and mechanism; no
-failure before 2026-10-16 was observed directly) until at least the moment of writing. Production `/health` stayed `ok`
+failure before 2026-10-16 was observed directly) until the fix deployed on 2026-10-18 (see Status). Production `/health` stayed `ok`
 throughout and no alert fired. The cause was a collision between two controls we ship:
 the bwrap PATH shim's seccomp filter (introduced by #9595) denies `unshare(CLONE_NEWUSER)`, and the Agent SDK wraps every
 sandboxed Bash command in an embedded `apply-seccomp` helper whose first syscall, when it holds no capability, is
@@ -38,11 +38,12 @@ exactly that `unshare`. The recorded premise that this helper was "inert today" 
 
 ## Status
 
-ongoing — the fix (`network.allowAllUnixSockets: true`, so the SDK does not engage the helper) is committed on branch
-`feat-one-shot-10445-sandbox-seccomp-eperm` (first commit `21a7319bf7`) and is not yet deployed. Resolution gate: the
-post-merge readback (`scripts/followthroughs/sandbox-readback-10445.sh`, which proves "fix deployed and canary green",
-not that hosted Bash works) plus a real hosted Bash call recorded in this report. The flip to `resolved` is owned by
-#10456.
+resolved — the fix (`network.allowAllUnixSockets: true`, so the SDK does not engage the helper) shipped in PR #10451
+(merge commit `940578c435`) and its deploy job succeeded at 2026-10-18T16:41:40Z; production served the merge sha and
+the faithful canary reported `pass`. Resolution gate met on 2026-10-19: the operator made a real hosted Bash call and
+reported that it works. The call's clock time and the session's entitlement were not captured, so this report does not
+claim that an entitled web-egress session was verified (#10457 may still block those). The recovery time above is the
+fix deploy, not the operator call; the call confirms it.
 
 Visibility: the repository is public, so this report is not internal. It is redaction-gated, holds no tenant data, and
 the mechanism detail already lives in public ADRs.
@@ -56,8 +57,8 @@ permitted`. The line names the SDK helper, not bwrap, which is why the existing 
 
 - **Start time (detected):** 2026-10-16T14:44:25Z (issue #10445 filed from a user report)
 - **Onset (impact start):** 2026-10-06T13:19:38Z, inferred: first production deploy of `web-v0.324.3` (web-1; web-2 accepted the same tag at 13:20:41Z). No pre-2026-10-16 failure was observed directly; the onset follows from the deploy time and the mechanism (mechanism confirmed in Root-cause hypothesis and 5-Whys).
-- **End time (recovered):** TBD
-- **Duration (MTTR):** TBD (status not resolved)
+- **End time (recovered):** 2026-10-18T16:41:40Z (fix deploy job success; operator confirmed a working hosted Bash call on 2026-10-19)
+- **Duration (MTTR):** 2d 1h 57m 15s from detection (2026-10-16T14:44:25Z); impact window 12d 3h 22m 2s from the inferred onset
 
 Order of events (load-bearing: the redaction sentinel scans this table; the Actor key feeds the Actor column). Counts and
 timestamps only; sources are Better Stack `ci-deploy` rows, `/hooks/deploy-status` and the git history.
@@ -73,6 +74,9 @@ timestamps only; sources are Better Stack `ci-deploy` rows, `/hooks/deploy-statu
 | agent | 2026-10-11T18:44:14Z | `sandbox_canary` records its first pass after #10039 (`first_pass_at`); it then stays green. |
 | agent | 2026-10-10T13:15Z to 2026-10-11T16:12Z | 30 `SOLEUR_CANARY_SANDBOX_DIAG ... section=kernel_ns` rows, all identical: `restrict=0 clone=1 max=30852`. Unprivileged user namespaces are permitted by the kernel, so the host setting is refuted as the cause. |
 | human | 2026-10-16T14:44:25Z | Issue #10445 filed from a user report: hosted Bash is down. Discovery. |
+| human | 2026-10-18T15:44:52Z | Fix PR #10451 merged (merge commit `940578c435`, commit timestamp). |
+| agent | 2026-10-18T16:41:40Z | Release deploy job succeeds for the merge commit; `live-verify` succeeds at 16:41:59Z. Recovery. |
+| human | 2026-10-19 | Operator makes a real hosted Bash call and reports it works (clock time not captured). Resolution gate met. |
 | agent | 2026-10-16T15:28Z | Self-pulled `/hooks/deploy-status` (tag `v0.342.17`, deploy 09:19:32Z to 09:20:42Z, reason `ok`): `seccomp_profile_host_present=true`, `seccomp_profile_loaded_matches_host=true`, `sandbox_canary` verdict `pass` with `consecutive_pass=108`, `workspace_isolation` verdict `pass`, `outer_wrap_canary` verdict `sandbox_broken` reason `wrong_elevation_userns` (report-only, already red). The delivered profile is the enforcing one; the canary is green over a down Bash. |
 | agent | 2026-10-16 | Root cause reproduced locally with the committed filter artifact and the SDK's embedded helper (exact production line, rc 1). Fix committed in `21a7319bf7`. |
 
@@ -143,8 +147,8 @@ stdout), and the docker suite repeats both arms under the production run tuple (
 Debian bubblewrap 0.8) plus a pathname-socket census. Post-merge: `scripts/followthroughs/sandbox-readback-10445.sh`
 is a NOTIFY-ONLY probe (it never exits 0, so the sweeper cannot close #10456 on its own): it reports NOT YET until the PR's merge commit is an ancestor of the deployed tag, the last deploy succeeded for web-platform and the canary ran since it started, then reports ACTION REQUIRED.
 That means "fix deployed and canary green", not that hosted Bash works: the canary was green throughout the outage. The
-first real hosted Bash call is recorded here by the post-merge verification (agent-executed) before the status flips. The
-flip to `resolved` is owned by #10456. The deploy-time SDK Bash smoke that would make the canary see this class is #10453.
+first real hosted Bash call was made by the operator on 2026-10-19 and reported as working (see Status); no agent could
+make it, because no hosted-Bash prober exists. The deploy-time SDK Bash smoke that would make the canary see this class is #10453.
 
 ---
 
@@ -184,7 +188,7 @@ construction for this failure mode.
 ## Versions of Components
 
 - **Version(s) that triggered the outage:** `web-v0.324.3` (first tag containing #9595), first production deploy 2026-10-06T13:19:38Z. Production at the time of writing runs `v0.342.17`.
-- **Version(s) that restored the service:** N/A — not yet restored (fix commit `21a7319bf7`, not yet released).
+- **Version(s) that restored the service:** the release built from merge commit `940578c435` (PR #10451), deployed 2026-10-18T16:41:40Z.
 
 ## Impact details
 
@@ -255,5 +259,5 @@ listed below as items of that tracker.
 | #10453 | Deploy-time SDK Bash smoke in the canary container (non-blocking first); successor to #5941 for the wrapped-command class | open |
 | #5941 | Pre-existing owner of the nested-unshare probe inside the production canary container | open |
 | #10457 | Adjacent: `spawnEgressForwarder` mkdir EACCES on `/var/lib/soleur/egress-tokens` (entitled web-egress sessions) | open |
-| #10456 | PIR `status: ongoing` → `resolved` docs PR, notified by the notify-only `sandbox-readback-10445.sh` follow-through (ACTION REQUIRED); closed by hand after the flip; its directive gains `secrets=GH_TOKEN` | open |
+| #10456 | PIR `status: ongoing` → `resolved` docs PR, notified by the notify-only `sandbox-readback-10445.sh` follow-through (ACTION REQUIRED); closed by hand after the flip; its directive gains `secrets=GH_TOKEN` | done (this PR flips the status; close by hand) |
 | #10477 | Affected-user outreach: a targeted note to users whose sessions used Bash since 2026-10-06, and a check for lost half-finished runs. An operator brand decision, not assumed; pending | pending |
