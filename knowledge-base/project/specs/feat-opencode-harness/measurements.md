@@ -590,3 +590,121 @@ outside set being exactly `/builtin/opencode.md` and `/builtin/report.md`.
 `harness-discovery[opencode]: exit=0 reason=ok (mode=single)` in **~5 s**, `missing: []`,
 `extra: []`, `badMultiplicity: []`. `mode=single` is a new verdict mode for an expectation with no
 cross-root (k≥2) name — the OpenCode shape, where reporting `indeterminate` would read as a defect.
+
+## 12.0 — Correction pass, 2026-10-19: the hook surface, exercised live (refutes §5.0/§5.2's tool names; closes §10's "no live fire")
+
+**Run 2026-10-19, OpenCode 2.0.32. Verdict: the shell tool's wire name is `shell`, not `bash`, so
+the first plugin draft's guard dispatch was a silent no-op; `permission.evaluate` is a real blocking
+surface with a working `ask`; and a prompt DOES complete in a hermetic `HOME`, which refutes the
+"no provider credential, so no turn completes" premise several earlier sessions recorded as a
+blocker.**
+
+Correction by citation, per the append-only rule; the bodies above stay as recorded.
+
+Sources: the installed CLI, measured live against a hermetic `HOME` per §11.6, driving `POST
+/api/session` + `POST /api/session/<id>/prompt` and reading `GET /api/session/<id>/message`.
+
+### 12.1 — The shell tool is `shell`; the hook fire order is measured
+
+A probe plugin logging every hook it registers, then a prompt asking for a shell command:
+
+```
+TOOL_BEFORE tool=shell  input={"command":"echo hello-from-probe"}
+SHELL_BEFORE command=echo hello-from-probe cwd=/tmp/octoolprobe.fYzgbS/proj
+PERMISSION  action=shell resources=["echo hello-from-probe"] effect=allow agent=build
+TOOL_AFTER  status=completed tool=shell
+```
+
+- **The wire name is `shell`.** `tool.execute.before` reports `tool="shell"`, `permission.evaluate`
+  reports `action="shell"`, `shell.create.before` reports the command. §5.0/§5.2's `bash` comes from
+  the V1 docs' tool and permission-key tables and does **not** match the V2 wire name. Consequence:
+  a tool map keyed on `bash` alone never matches, the guards decline every call, and the failure is
+  invisible — nothing errors, the guard simply never runs. The plugin now maps both spellings.
+- **Order is `tool.execute.before` → `permission.evaluate` → `shell.create.before` → execute →
+  `tool.execute.after`.** The tool hook running *first* is load-bearing for the design (§12.2).
+- **Code-mode is a different tool.** A model that chose code mode called `execute` with
+  `input={"code":"return await tools.shell[\"run\"]({...})"}`; `tool.execute.before` fired with
+  `tool="execute"` and no `command`, and **no permission event followed**. So a shell command issued
+  from inside code mode is not decided by the Bash guards. Disclosed, not implied.
+
+### 12.2 — `permission.evaluate` blocks, and its `ask` is a real prompt
+
+Three controlled arms. `read` is used as the subject where the model's tool choice must not be a
+variable; `shell` where the production path is the subject.
+
+| Arm | Subject | Mutation | Reading |
+|---|---|---|---|
+| T | `shell` | `tool.execute.before` **throws** | tool ends `status:"error"`, the model reads the message, the command never runs |
+| D | `read` | `effect = "deny"`, `message` | `{"type":"permission.rejected","message":"probe set deny from the permission hook"}`, the file is never read |
+| A | `read` | `effect = "ask"`, `message` | tool stays `status:"running"`; the turn does not complete within 25 s — a real, unanswered prompt |
+| S | `shell` | `effect = "deny"` + `message` (production shape) | `{"type":"permission.rejected","message":"Soleur's destructive-command-guard blocked this: recursive-delete-home"}`, twice, and the command never ran |
+
+So **both** blocking surfaces exist, and they differ in exactly one respect that matters: only
+`permission.evaluate` can `ask`. Because `tool.execute.before` fires *first* (§12.1), binding a
+throw there would preempt the permission hook and collapse every guard's `ask` into a refusal.
+**The guards therefore bind at `permission.evaluate` only**, and `deny`/`ask` are delivered as
+`deny`/`ask` with no downgrade. The earlier "ask has no channel, so deliver a refusal-with-reason"
+design is withdrawn as measured-false on this harness.
+
+`permission.evaluate` fires for tools that carry a permission key (`shell`, `read`, `glob` were all
+observed with `effect:"allow"`); it did not fire for the code-mode `execute` tool.
+
+`operator-stage-approval.sh` still cannot be bound, and now for a sharper reason: it needs a
+**rewritten command** and an **ask** in the same decision. `permission.evaluate` can ask but types
+its `resources` as `readonly`, and `tool.execute.before` can rewrite `tool.input` but cannot prompt.
+
+### 12.3 — The context and compaction hooks fire, with the documented shapes
+
+```
+CONTEXT agent=build tools=12 sessionID=ses_... systemParts=<JSON.length> systemHead=[{"type":"text","text":"You are an AI agent running in OpenCode, ..."}]
+```
+
+`session.hook("context")` fires once per model request with `system: SystemPart[]`, `tools` (12
+entries), `agent`, and `sessionID` — everything the rule-corpus injection needs, at the injection
+point (`event.system.push`) the docs describe. `session.hook("compaction")` registers; its event is
+the same shape plus `result`, and per the docs its mutations reach only the summarization call, so
+the post-compaction re-read directive must ride the next real request. That is what the plugin does.
+
+### 12.4 — A turn completes in a hermetic `HOME`
+
+The prompt returned an assistant message with text and reasoning, `session.execution.succeeded` was
+emitted, and `tool.execute.before` fired for a real `shell` call. The model was reported as
+`opencode/big-pickle` on provider `opencode`.
+
+This refutes a premise recorded in earlier sessions of this feature and in §10's framing: **"no
+model/provider credential exists in a hermetic environment, so no turn completes."** Turns complete
+here. Where the credential comes from is **not** identified — `GET /api/provider` returned an
+`opencode` entry with `models: 0`, so this record does not claim a reproducible keyless path, only
+that the live-fire measurements above were obtainable, and that a CI arm needing a live turn must
+first establish its own credential rather than cite this section.
+
+Live event vocabulary observed in one session (one event per line, `type` field):
+`session.created`, `session.instructions.updated`, `session.inbox.enqueued`, `session.inbox.delivered`,
+`session.execution.started`, `session.execution.succeeded`, `session.step.started`, `session.step.streamed`,
+`session.step.ended`, `session.reasoning.started`, `session.reasoning.delta`, `session.reasoning.ended`,
+`session.text.started`, `session.text.delta`, `session.text.ended`, `session.tool.called`,
+`session.tool.input.started`, `session.tool.input.ended`, `session.tool.success`, `session.usage.updated`,
+`session.renamed`, plus `skill.updated`, `shell.created`, `shell.exited`. All were **observed** by
+`ctx.event.subscribe()` and acted on by nothing.
+
+### 12.5 — End to end, the installed adapter blocks a real call
+
+The adapter was installed with `scripts/install-opencode-adapter.ts --target <home>/.config/opencode`
+and a session asked to run a shell command:
+
+| Command asked for | Reading |
+|---|---|
+| `agent-browser snapshot` | `shell` → `{"status":"error","error":{"type":"permission.rejected","message":"Soleur's browser-snapshot-credential-guard: BLOCKED: this `agent-browser snapshot` is not routed through the credential redactor ..."}}`; the model read it and said "The command was blocked by a credential guard", then ran the **routed** variant, which `completed` |
+| `terraform destroy` | `shell` → `status:"running"`, never completing inside 25 s — the guard's `ask`, held open for a person |
+| `rm -rf /` | no tool call: the model refused it itself, so this arm measured the model, not the plugin |
+
+The credential-guard arm is the full delivery path: canonical script, unchanged, reached through the
+generated config, decided by the installed plugin module, and delivered as a block the model can read
+and correct.
+
+### 12.6 — Discovery counts reproduce, given settlement polling
+
+`GET /api/agent` = **74** (67 Soleur, matched by `path` under the checkout), `GET /api/command` = **6**
+(4 Soleur), `GET /api/skill` = **105** (103 Soleur) — §11.4 exactly. A first read before settlement
+returned `agent: 0`, then `command: 2`, then `skill: 105` on three consecutive calls, which is the
+§11.6 async-scan behavior seen from the other side: **read order, not discovery, decides the count.**

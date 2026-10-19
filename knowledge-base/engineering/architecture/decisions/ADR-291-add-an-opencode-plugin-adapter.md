@@ -119,6 +119,20 @@ Every OpenCode hook gets a disposition row in its own registry (ADR-223). There 
 fallback (ADR-179). The install surface is a config fragment plus a plugin module, because OpenCode
 has no declarative plugin manifest (§6.1, §10.0 item 8).
 
+The guards bind at `permission.evaluate`, the one hook surface with a blocking channel. Its event
+carries the tool as `action` and the command as `resources[0]`, with a mutable
+`effect: allow | ask | deny` plus `message`; setting `deny` ends the tool as `permission.rejected`
+carrying the reason, and `ask` holds it open for a person (both measured live, §12.2). So a guard's
+`deny` blocks and its `ask` prompts, and **neither is downgraded**. An earlier design in this ADR's
+implementation bound `tool.execute.before` and delivered `ask` as a refusal-with-reason; it is
+withdrawn as measured-false, because that surface fires *before* `permission.evaluate` and can only
+refuse by throwing, so it would preempt the true ask behind it. Two corrections arrived with it
+(§12.1): the shell tool's wire name is **`shell`**, not the docs' `bash` — a map keyed on `bash`
+alone never matches and the guards decline silently — and code-mode `execute` calls carry JavaScript
+rather than a command, so the Bash guards do not reach them. `operator-stage-approval.sh` still
+cannot be bound: it needs a rewritten command and an ask in the same decision, and
+`permission.evaluate` types `resources` as readonly while `tool.execute.before` cannot prompt.
+
 The adapter is supported only when a committed shape note quotes all four of: `/go` classifies the
 session as `opencode`, one pipeline skill finishes its gates, one agent spawn runs or is refused in
 words, and each guard fires (ADR-274's bar).
@@ -149,13 +163,16 @@ differ from the Codex/Devin arms and are recorded here so they are not "simplifi
 - The payload must be read from a FILE. `execFileSync`'s pipe silently truncates a large stdout
   (~0.8–0.9 MB, varying) and reports success, which grades a correct install UNRESOLVED.
 
-The plugin pin is `@opencode/plugin@2.0.32` — the V2 package, version-matched to the CLI. It is
-**not** `@opencode-ai/plugin@1.19.3`: that is the V1 package, and the 2.0.32 runtime rejects the V1
-module shape outright (`Plugin must export a default definition with an id and an effect or setup
-function`, §6.6 arm A). The V2 module is `export default { id, async setup(ctx) { … } }`. Both
-delivery routes were measured to load — the global discovery directory `<configdir>/plugins/*` with
-no config entry, and the `plugins` config key with a config-relative path (§6.6 arms B/C). The pin is
-a vendor-pin and inherits ADR-245's CI vendor-pin policy.
+There is **no vendor pin, because there is no vendor dependency**. The V2 loader accepts a plain
+default-exported object (measurement §6.6 arms B/C), so the plugin module imports only `node:`
+builtins and no vendor package is on its import graph. The V1 package `@opencode-ai/plugin@1.19.3`
+remains the wrong generation — the 2.0.32 runtime rejects the V1 module shape outright (`Plugin must
+export a default definition with an id and an effect or setup function`, §6.6 arm A) — and the V2
+module shape is `export default { id, async setup(ctx) { … } }`. Both delivery routes were measured
+to load: the global discovery directory `<configdir>/plugins/*` with no config entry, and the
+`plugins` config key with a config-relative path (§6.6 arms B/C). ADR-245's vendor-pin policy is
+satisfied vacuously, and a pin added back "for safety" would be a dependency the loader never asked
+for.
 
 Public README, getting-started, comparison, blog, and battlecard pages stay unchanged until the
 support bar is met. When the status flips to `accepted`, grep `knowledge-base/legal` for future-tense

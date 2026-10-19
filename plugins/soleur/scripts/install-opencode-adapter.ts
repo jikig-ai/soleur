@@ -21,6 +21,10 @@
  *     checkout and a second skill tree that could drift is never created.
  *   - The config fragment is merged rather than written, so an operator's existing
  *     `skills` / `instructions` entries and every other key survive.
+ *   - The hook module (`opencode/plugin.ts`, source rather than a generated stub) is copied
+ *     into `<configdir>/plugins/`, OpenCode's plugin discovery directory (measurement §6.6),
+ *     with the plugin-root token resolved so the installed copy still reaches the checkout's
+ *     guard scripts.
  *
  * `--check` writes nothing: it compares the target against `expectedInstalled` and exits 1
  * on a difference.
@@ -28,7 +32,12 @@
 
 import { mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join, relative, resolve } from "path";
-import { ADAPTER_DIR, PLUGIN_ROOT_TOKEN, expectedOpenCodeAdapter } from "./sync-opencode-adapter";
+import {
+  ADAPTER_DIR,
+  ADAPTER_SOURCE_FILES,
+  PLUGIN_ROOT_TOKEN,
+  expectedOpenCodeAdapter,
+} from "./sync-opencode-adapter";
 
 const PLUGIN_ROOT = resolve(dirname(import.meta.filename), "..");
 
@@ -50,7 +59,14 @@ export function mergeFragment(
   return merged;
 }
 
-/** Where each generated file lands in a config dir, with tokens resolved. */
+/**
+ * Where each generated file lands in a config dir, with tokens resolved.
+ *
+ * The plugin module is the one file here that is **source, not a generated stub**: it is
+ * hand-written in the generator's namespace (`ADAPTER_SOURCE_FILES`) and installed into
+ * OpenCode's plugin discovery directory, `<configdir>/plugins/`, with the plugin-root token
+ * resolved so the checkout's guard scripts stay reachable from the installed copy.
+ */
 export function expectedInstalled(targetDir: string, pluginRoot = PLUGIN_ROOT): Map<string, string> {
   const expected = new Map<string, string>();
   for (const [path, content] of expectedOpenCodeAdapter(pluginRoot)) {
@@ -60,6 +76,13 @@ export function expectedInstalled(targetDir: string, pluginRoot = PLUGIN_ROOT): 
     const installed =
       path === `${ADAPTER_DIR}/INSTRUCTIONS.md` ? `soleur/${relative(ADAPTER_DIR, path)}` : relative(ADAPTER_DIR, path);
     expected.set(installed, resolveToken(content, pluginRoot));
+  }
+  for (const source of ADAPTER_SOURCE_FILES) {
+    if (!source.startsWith(`${ADAPTER_DIR}/`)) continue;
+    // Every `*.ts` in `<configdir>/plugins/` loads (measurement §6.6), so the installed name
+    // carries the plugin's namespace: a bare `plugin.ts` would collide with an operator's own.
+    const installed = `plugins/soleur-${source.slice(ADAPTER_DIR.length + 1)}`;
+    expected.set(installed, resolveToken(readFileSync(join(pluginRoot, source), "utf-8"), pluginRoot));
   }
   const merged = mergeFragment(readConfig(join(targetDir, "opencode.json")), {
     skills: [join(pluginRoot, "skills")],

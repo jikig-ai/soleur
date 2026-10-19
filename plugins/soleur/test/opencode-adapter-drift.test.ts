@@ -4,6 +4,7 @@ import { tmpdir } from "os";
 import { join, resolve } from "path";
 import {
   ADAPTER_DIR,
+  ADAPTER_SOURCE_FILES,
   PLUGIN_ROOT_TOKEN,
   expectedOpenCodeAdapter,
   openCodeAdapterProblems,
@@ -52,7 +53,18 @@ function fixture(): string {
     join(root, "commands", "go.md"),
     "---\ndescription: Route a request down the pipeline\n---\n\nRun the pipeline for $ARGUMENTS.\n",
   );
+  // A hand-written source file inside the generator's namespace. The generator must assert it
+  // exists without claiming it: it carries logic that has to be imported by tests.
+  writeSourceFile(root);
   return root;
+}
+
+function writeSourceFile(root: string, body = 'const INSTALLED_ROOT = "__SOLEUR_PLUGIN_ROOT__";\n'): void {
+  for (const path of ADAPTER_SOURCE_FILES) {
+    const full = join(root, path);
+    mkdirSync(join(full, ".."), { recursive: true });
+    writeFileSync(full, body);
+  }
 }
 
 describe("opencode adapter drift", () => {
@@ -193,5 +205,52 @@ describe("opencode adapter drift", () => {
     const md = files.get(`${ADAPTER_DIR}/INSTRUCTIONS.md`)!;
     expect(md).toContain("Task");
     expect(md).toContain("$ARGUMENTS");
+  });
+
+  test("INSTRUCTIONS.md describes this harness's actual hook surface, not Claude Code's", () => {
+    const md = expectedOpenCodeAdapter(fixture()).get(`${ADAPTER_DIR}/INSTRUCTIONS.md`)!;
+    // The completion contract is the one a reader is most likely to act on, and the V1 form
+    // of this section cited a hook (`experimental.session.compacting`) that does not exist in
+    // 2.0.32 and a Stop hook this harness does not have. Both are checked for here.
+    expect(md).toContain("no Stop hook");
+    expect(md).not.toContain("experimental.session.compacting");
+    expect(md).toContain("advisory");
+  });
+
+  test("a hand-written source file is not drift and is never deleted by a regenerate", () => {
+    const root = fixture();
+    try {
+      expect(writeOpenCodeAdapter(root)).toEqual([]);
+      const path = join(root, ADAPTER_DIR, "plugin.ts");
+      const handEdited = "// hand-edited by a person\n";
+      writeFileSync(path, handEdited);
+      // The generator asserts the file EXISTS and stops there: it does not own its bytes, so
+      // a regeneration must neither flag it nor overwrite it.
+      expect(openCodeAdapterProblems(root)).toEqual([]);
+      expect(writeOpenCodeAdapter(root)).toEqual([]);
+      expect(readFileSync(path, "utf8")).toBe(handEdited);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a tree that lost its hook module is not clean — presence is still asserted", () => {
+    const root = fixture();
+    try {
+      expect(writeOpenCodeAdapter(root)).toEqual([]);
+      for (const path of ADAPTER_SOURCE_FILES) rmSync(join(root, path));
+      const expected = ADAPTER_SOURCE_FILES.map((path) => `MISSING-SOURCE: ${path}`).sort();
+      expect(openCodeAdapterProblems(root)).toEqual(expected);
+      const proc = runCheck(root);
+      expect(proc.exitCode).not.toBe(0);
+      expect(combined(proc)).toContain(`MISSING-SOURCE: ${ADAPTER_SOURCE_FILES[0]}`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("no source file is emitted, so nothing hand-written passes as a generated stub", () => {
+    const files = expectedOpenCodeAdapter(fixture());
+    for (const path of ADAPTER_SOURCE_FILES) expect(files.has(path)).toBe(false);
   });
 });

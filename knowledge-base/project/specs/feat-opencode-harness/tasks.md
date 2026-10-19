@@ -105,27 +105,28 @@ and a `routingInstructions` arm.
 
 ### 3.1 Disposition ledger
 
-- [ ] 3.1.1 Create the OpenCode hook disposition ledger, one row per hook, mirroring `.claude/hooks/devin-dispositions.tsv`'s shape and every row carrying a disposition (delivered / downgraded / absent-with-reason).
+- [x] 3.1.1 Create the OpenCode hook disposition ledger, one row per hook, mirroring `.claude/hooks/devin-dispositions.tsv`'s shape and every row carrying a disposition (bind / downgraded / already-covered-by-config / absent-with-reason). 13 rows in `.claude/hooks/opencode-dispositions.tsv`, pinned by `test/opencode-plugin.test.ts`.
 
 ### 3.2 Plugin module
 
-- [ ] 3.2.1 Create `plugins/soleur/opencode/<plugin>.ts` binding, in the **V2** shape `export default { id, async setup(ctx) { … } }` (the V1 named-export form is rejected — measurement §6.6 arm A): `ctx.tool.hook("execute.before")` for the Bash credential guard and destructive-command guard (plus `ctx.shell.hook("create.before")` on the shell path); `ctx.session.hook("context")` for the session-start rule injection; `ctx.session.hook("compaction")` plus `context` for the compaction re-read directive.
-- [ ] 3.2.2 Subscribe to `ctx.event.subscribe()` and record the advisory completion-marker state. **Measured (§6.6): no hook can block a stop** — this row is observation-only and must not claim a block or a continuation.
-- [ ] 3.2.3 Reuse the existing guard scripts where they are harness-agnostic; do not re-implement the credential or destructive-command logic.
-- [ ] 3.2.4 Pin `@opencode/plugin@2.0.32` — the **V2** package, version-matched to the CLI. (Not `@opencode-ai/plugin@1.19.3`: that is the V1 package, whose module shape the 2.0.32 runtime rejects — measurement §6.6. The "CLI-vs-package version skew" this task originally recorded is a package rename between API generations, not a skew.) Confirm the pin against ADR-245's vendor-pin policy.
+- [x] 3.2.1 Create `plugins/soleur/opencode/plugin.ts` in the **V2** shape `export default { id, async setup(ctx) { … } }` (the V1 named-export form is rejected — measurement §6.6 arm A): `ctx.permission.hook("evaluate")` for the Bash credential guard and destructive-command guard; `ctx.session.hook("context")` for the session-start rule injection; `ctx.session.hook("compaction")` plus `context` for the compaction re-read directive.
+- [x] 3.2.1b **Correction pass 2026-10-19 (measurement §12.1/§12.2), replacing what 3.2.1 originally specified.** The guards bind at `permission.evaluate`, not `tool.hook("execute.before")`, and there is no `shell.hook("create.before")` binding. Two measurements forced it: (1) the shell tool's wire name is **`shell`**, so a map keyed on `bash` never matched and the guard dispatch was a silent no-op; (2) `tool.execute.before` fires *before* `permission.evaluate` and can only refuse by throwing, so binding it would preempt the permission hook and collapse every guard's `ask` into a refusal. `permission.evaluate` carries a mutable `effect: allow|ask|deny` plus `message`, measured to block on `deny` and to hold the tool open on `ask` — so `ask` is delivered as a real prompt and nothing is downgraded.
+- [x] 3.2.2 Subscribe to `ctx.event.subscribe()` and record the advisory completion-marker state. **Measured (§6.6, §12.4): no hook can block a stop** — this row is observation-only and must not claim a block or a continuation.
+- [x] 3.2.3 Reuse the existing guard scripts where they are harness-agnostic; do not re-implement the credential or destructive-command logic. Both bind by path to `hooks/*.sh`, which run unmodified.
+- [x] 3.2.4 No vendor pin exists to take. `@opencode/plugin@2.0.32` is not on this module's import graph: the V2 loader accepts a plain default-exported object (measurement §6.6 arms B/C), so the module imports only `node:` builtins and carries no runtime dependency. ADR-245's vendor-pin policy is therefore satisfied vacuously — there is no vendor package to version-skew. (The V1 package `@opencode-ai/plugin@1.19.3` remains the wrong generation; its module shape is rejected by the 2.0.32 runtime.)
 
 ### 3.3 RED: hook tests
 
-- [ ] 3.3.1 Add a unit test that the credential guard fires on a representative Bash payload via the plugin's before-hook.
-- [ ] 3.3.2 Add a unit test that the destructive-command guard refuses a representative payload.
+- [x] 3.3.1 Add a unit test that the credential guard fires on a representative shell payload through `decidePermission`, and that its decision lands on the permission event with `effect` and `message` set.
+- [x] 3.3.2 Add a unit test that the destructive-command guard refuses a representative payload — and that at least one real command reaches `ask`, since the ask path is what a throw-based binding would have destroyed.
 
 ### 3.4 `INSTRUCTIONS.md` "Hooks and completion"
 
-- [ ] 3.4.1 State which hooks fire, which are downgraded, and that compaction re-read **is** delivered (unlike Codex/Devin). State the completion marker as advisory.
+- [x] 3.4.1 State which hooks fire, which are downgraded, and that compaction re-read **is** delivered (unlike Codex/Devin). State the completion marker as advisory.
 
 ### 3.5 Gate: hook firing captured
 
-- [ ] 3.5.1 In a live OpenCode session with the plugin installed, capture the credential guard and destructive-command guard actually dispatching (the Devin envelope-capture pattern). Append the capture to `measurements.md` §6.7.
+- [x] 3.5.1 In a live OpenCode 2.0.32 session with the adapter installed, capture the guards actually dispatching end to end (measurement §12.5, appended as §12 not §6.7): `agent-browser snapshot` came back `permission.rejected` carrying the credential guard's message and the model read it and corrected the command; `terraform destroy` stayed `running`, the guard's real ask. §12.1 also records the raw hook fire order and `permission.evaluate`'s payload shape.
 
 ## Phase 4 — Discovery proof in CI
 

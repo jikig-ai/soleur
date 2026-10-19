@@ -28,11 +28,32 @@ arguments as `$ARGUMENTS` (measurement §4.0).
 
 ## Hooks and completion
 
-OpenCode exposes no Stop hook. The `session.idle` event is the stop-equivalent, and a
-plugin cannot defer or block a stop through it, so Soleur's completion marker is
-**advisory** on this harness: the structural checks in the invoked skill are the
-contract, and the marker is a report, not a gate.
+The plugin module `plugin.ts` (installed as `<configdir>/plugins/soleur-plugin.ts`) is the hook
+carrier. `.claude/hooks/opencode-dispositions.tsv` is its ledger: one row per canonical
+registration, every row carrying a disposition, so a gate with no equivalent here is
+**reported, never silently skipped**.
 
-Compaction re-read **is** delivered here, unlike Codex and Devin: the plugin binds
-`experimental.session.compacting`, so the re-read directive fires on a compaction the
-same way the Claude Code Stop hook does.
+OpenCode V2 has **no Stop hook**. Every hook surface communicates only by mutating the event
+object it is handed, and `ctx.event.subscribe` is a one-way iterator with no return channel,
+so no hook can defer a stop, force a continuation, or veto a completion. Soleur's completion
+marker is therefore **advisory** on this harness: a session that goes quiet is observed and
+nothing more. The structural checks inside the invoked skill are the contract, and the marker
+is a report, not a gate.
+
+The guards are real, and they reuse the canonical scripts unchanged. A shell call is handed to
+`browser-snapshot-credential-guard.sh` and `destructive-command-guard.sh` in the order
+`hooks.json` registers them, and the decision is written onto the permission event: a `deny`
+becomes `effect = "deny"` and a guard's `ask` becomes `effect = "ask"`, a real prompt. The tool
+then reports `permission.rejected` carrying the guard's reason, which the model reads. Neither
+value is downgraded — `deny` blocks, `ask` waits (measurement §12.2).
+
+The shell tool's wire name here is **`shell`**, not `bash`; the plugin maps both to Claude's
+`Bash` before handing the call to a guard (measurement §12.1). Code-mode `execute` calls carry
+JavaScript rather than a command and are not decided by the Bash guards — a limitation this
+harness shares with the guard scripts' own input contract.
+
+The post-compaction re-read **is** delivered, unlike Codex and Devin: the plugin binds
+`ctx.session.hook("compaction")` and re-injects the rule corpus plus the re-read directive on
+the next request. What is not reproduced is `compaction-state.sh`'s transcript-bounded
+window bookkeeping, which counts `compact_boundary` records in a Claude Code transcript this
+harness has no equivalent of.

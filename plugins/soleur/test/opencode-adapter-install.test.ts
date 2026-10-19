@@ -26,6 +26,14 @@ function workspace(): { target: string; checkout: string } {
   writeFileSync(join(checkout, "commands", "go.md"), "---\ndescription: Route\n---\n\nRun $ARGUMENTS.\n");
   mkdirSync(join(checkout, "skills"), { recursive: true });
   writeFileSync(join(checkout, "skills", "plan.md"), "# plan\n");
+  // The hook module is a hand-written source file in the generator's namespace, so a checkout
+  // without it is not a checkout the generator can call clean. It carries the plugin-root token
+  // like every other emitted path.
+  mkdirSync(join(checkout, "opencode"), { recursive: true });
+  writeFileSync(
+    join(checkout, "opencode", "plugin.ts"),
+    `const INSTALLED_ROOT = "${PLUGIN_ROOT_TOKEN}";\nexport default { id: "soleur", async setup() {} };\n`,
+  );
   expect(writeOpenCodeAdapter(checkout)).toEqual([]);
   return { target, checkout };
 }
@@ -84,6 +92,24 @@ describe("opencode adapter install", () => {
     try {
       expect(installOpenCodeAdapter(target, checkout).written.length).toBeGreaterThan(0);
       expect(installOpenCodeAdapter(target, checkout).written).toEqual([]);
+      expect(installProblems(target, checkout)).toEqual([]);
+    } finally {
+      rmSync(join(target, ".."), { recursive: true, force: true });
+    }
+  });
+
+  test("the hook module lands in OpenCode's plugin discovery dir with the token resolved", () => {
+    const { target, checkout } = workspace();
+    try {
+      installOpenCodeAdapter(target, checkout);
+      // Measurement §6.6: `<configdir>/plugins/*.ts` loads with no config entry, so the module
+      // must be there — not inside `soleur/`, which is only an instructions location — and its
+      // name carries the namespace so it cannot collide with an operator's own plugin file.
+      const module = readFileSync(join(target, "plugins", "soleur-plugin.ts"), "utf-8");
+      expect(module).not.toContain(PLUGIN_ROOT_TOKEN);
+      // The installed copy sits at `<configdir>/plugins/`, so its own parent is not the
+      // checkout: only the resolved token can point at the guard scripts.
+      expect(module).toContain(checkout);
       expect(installProblems(target, checkout)).toEqual([]);
     } finally {
       rmSync(join(target, ".."), { recursive: true, force: true });
