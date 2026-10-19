@@ -16,6 +16,9 @@ import {
   writeFileSync,
   statSync,
   utimesSync,
+  openSync,
+  fstatSync,
+  closeSync,
 } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -337,8 +340,14 @@ describe("egress-forwarder lifecycle (#9534)", () => {
     const p = join(tokenDir, "pre-existing-0600");
     writeFileSync(p, "old\n", { mode: 0o600 });
     writeTokenFile(p, "ws-9");
-    expect(statSync(p).mode & 0o777).toBe(0o644);
-    expect(readFileSync(p, "utf8")).toBe("ws-9\n");
+    // One descriptor for both reads: stat-then-read by path is a check/use race (CodeQL js/file-system-race).
+    const fd = openSync(p, "r");
+    try {
+      expect(fstatSync(fd).mode & 0o777).toBe(0o644);
+      expect(readFileSync(fd, "utf8")).toBe("ws-9\n");
+    } finally {
+      closeSync(fd);
+    }
   });
 
   it("writeTokenFile leaves NO file behind when the write fails (the name is a live credential)", () => {
