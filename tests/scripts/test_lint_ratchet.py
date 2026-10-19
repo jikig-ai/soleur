@@ -2260,7 +2260,7 @@ class TestSkillPointers(unittest.TestCase):
         phase3 = text.split("### Phase 3: Quality Check", 1)[1].split("### Phase 4", 1)[0]
         line = [l for l in phase3.splitlines() if 'lint-ratchet.py" auto' in l]
         self.assertEqual(len(line), 1, line)
-        for clause in ('[ -n "$CLAUDE_PLUGIN_ROOT" ] &&', "never a repo-local copy", "never --update unprompted",
+        for clause in ('[ -n "${CLAUDE_PLUGIN_ROOT}" ] &&', "never a repo-local copy", "never --update unprompted",
                        "ship only if user confirms un-adoption"):
             self.assertIn(clause, line[0])
 
@@ -2270,7 +2270,7 @@ class TestSkillPointers(unittest.TestCase):
         end = text.index("**What this agent checks:**", start)
         window = text[start:end]
         self.assertEqual(window.count('lint-ratchet.py" auto'), 1)
-        for clause in ('[ -n "$CLAUDE_PLUGIN_ROOT" ] &&', "never a repo-local copy", "REPO-CONTENT", "CONFIG CHANGED"):
+        for clause in ('[ -n "${CLAUDE_PLUGIN_ROOT}" ] &&', "never a repo-local copy", "REPO-CONTENT", "CONFIG CHANGED"):
             self.assertIn(clause, window)
 
 
