@@ -652,8 +652,8 @@ Adopting to Accepted criteria. Status stays `adopting` (Deferral A).
 **Decision.** Ruled by CTO agent, 2026-10-19: DEMOTE. The deploy-time outer-wrap canary (`run_outer_wrap_canary`,
 the `outer_wrap_canary` key on `/hooks/deploy-status`, the `/mnt/data/ci-deploy-outer-wrap-canary.json` ledger,
 Sentry `op=sandbox-canary-outer-wrap`, and the `tenant-outer-wrap-soak-5863` follow-through with its tests and
-registrations) is removed. Tracker #9797 is closed as won't-fix and Sentry issue 152662657 is resolved with a link
-to this addendum.
+registrations) is removed. Tracker #9797 is to be closed as won't-fix and Sentry issue 152662657 resolved with a link
+to this addendum, both at ship (the PR's ship step performs them; this text is not evidence that they are done).
 
 **Why.** The arm's pass condition requires `elevation=privileged`. ADR-075's 2026-10-09 addendum (#9874,
 operator-ratified) dropped that elevation for good, and `AGENT_OUTER_WRAP` is flag-off in production, so
@@ -667,8 +667,8 @@ ADR-075.
 
 | Kept piece | Live consumer |
 |---|---|
-| `sandbox-canary.mjs --replay-outer`, `classifyOuterWrapReplayVerdict` | `test/sandbox-canary.test.ts` and the re-introduction path under #9773 |
-| `infra/agent-outer-wrap-argv.json` fixture and its Dockerfile/`.dockerignore` bakes | `test/sandbox-canary.test.ts`, `sandbox-canary-soak.test.sh` fixture checks |
+| `sandbox-canary.mjs --replay-outer`, `classifyOuterWrapReplayVerdict` | test-only (re-introduction path, #9773): `test/sandbox-canary.test.ts`; no production caller remains |
+| `infra/agent-outer-wrap-argv.json` fixture and its Dockerfile/`.dockerignore` bakes | `test/agent-outer-wrap.test.ts`, `test/c4-render-argv-fixture.test.ts` and `apps/web-platform/scripts/sdk-bump-sandbox-gate.sh` read it; `sandbox-canary-soak.test.sh` fixture checks |
 | `scripts/tenant-isolation-inner-probe.sh` payload | `agent-outer-wrap.ts` boot self-probe, `test/agent-outer-wrap.test.ts` |
 | `agent-outer-wrap.ts` | the `AGENT_OUTER_WRAP` flag path (off in production) |
 | `sandbox-canary.mjs --smoke-outer` | `sandbox-canary-verify-in-image.sh`, the CI capture-gate job |
@@ -741,3 +741,5 @@ call-site `|| true`), not a flag flip.
 **Scope.** This amends the Decision's canary contract (section 2) only; the faithful inner canary, its ledger and its journald
 emitter format are unchanged (the new alert's drift guard reads them). Status stays `adopting` (Deferral A) until #10548 closes.
 The operator-facing decode lives in `knowledge-base/engineering/operations/runbooks/canary-probe-set.md`.
+
+**Coverage of the smoke (what it does and does not run).** The deploy smoke runs the VARIANT (unixdeny) artifact under the NO-EGRESS shape only. It does not run the base artifact that production uses while the flag is OFF, and it does not run the egress shape. Those are covered, respectively, by the blocking legacy sandbox probe plus the canary `base_af_unix_control` probe, and by the pre-merge egress arm of `test/sandbox-wrapped-command-runtime.test.ts`.

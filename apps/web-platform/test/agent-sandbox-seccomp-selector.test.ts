@@ -63,6 +63,11 @@ describe("usesUnixDenyArtifact is the single predicate; seccompArtifactFor the s
     expect(SECCOMP_UNIXDENY_ARTIFACT).toBe("/app/infra/bwrap-userns-clone3-unixdeny.bpf");
     expect(SECCOMP_BASE_ARTIFACT).toBe("/app/infra/bwrap-userns-clone3-deny.bpf");
   });
+  it("the canary's hand-copied variant path literal equals the server constant (a rename must update every copy)", () => {
+    const canarySource = readFileSync(join(APP_ROOT, "scripts/sandbox-canary.mjs"), "utf8");
+    expect(canarySource).toMatch(/const UNIXDENY_ARTIFACT_DEFAULT = "\/app\/infra\/bwrap-userns-clone3-unixdeny\.bpf";/);
+    expect(canarySource).toContain(SECCOMP_UNIXDENY_ARTIFACT);
+  });
 });
 
 describe("dispatcher agreement: buildAgentEnv and buildAgentSandboxConfig", () => {

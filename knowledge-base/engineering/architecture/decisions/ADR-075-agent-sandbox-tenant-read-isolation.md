@@ -475,13 +475,14 @@ that changes how the helper is selected, so the premise is re-proved rather than
 
 ## Addendum — 2026-10-19 (#10455 a): AF_UNIX is denied for no-egress sessions by a second seccomp artifact, behind a runtime flag
 
-**This addendum SUPERSEDES two statements of the 2026-10-16 addendum above.** (1) The "Follow-up" paragraph said the
+**This addendum SUPERSEDES three statements of the earlier addenda above.** (1) The "Follow-up" paragraph said the
 replacement for the lost per-command AF_UNIX block is "a single `socket(AF_UNIX)` deny in the one bwrap-level filter". That is not
 buildable: the vendored builder starts in-sandbox `socat TCP-LISTEN:3128/1080 ... UNIX-CONNECT:<sock>` bridges before every user
 command (measured 2026-10-19 from the bwrap argv the real SDK emits, with `allowedDomains: []`, and pinned in
 `test/sandbox-vendored-argv-tail.test.ts`), so a blanket deny breaks the proxy bridge of every egress session. (2) The
 "Load-bearing assumption" said SDK proxy auth is the only remaining AF_UNIX control. For **no-egress sessions with the runtime flag
-on** it is no longer the only control: they cannot create an AF_UNIX socket at all.
+on** it is no longer the only control: they cannot create an AF_UNIX socket at all. (3) The 2026-10-06 (#8752) addendum's "one artifact
+(`bwrap-userns-clone3-deny.bpf`) serves both paths" is now two artifacts: the base artifact still serves the C4 render path and every session with egress or the flag OFF, and the unixdeny artifact serves only no-egress sessions with the flag ON.
 
 **Decision (CTO-ruled, 2026-10-19; the flag architecture-reviewed).** A second generated artifact,
 `infra/bwrap-userns-clone3-unixdeny.bpf` (`gen-bwrap-userns-seccomp.mjs --variant unixdeny`): the base rules plus
@@ -499,12 +500,12 @@ bytes pinned by sha256 and compared with `origin/main`), so egress sessions and 
   selector on a session that is not variant-eligible, e.g. an ambient `SOLEUR_BWRAP_SECCOMP_BPF` incident override equal to the unixdeny path
   on an egress session, is reset to the base artifact). Both runners resolve the flag once per query.
 - **Kill switch.** The flag defaults OFF and fails closed to OFF (a throw, a 2 s timeout, an absent flag service or a missing flag all
-  resolve OFF with one debounced warning). Turning it ON is a production write, taken only after the deploy SDK Bash smoke has been
+  resolve OFF with one debounced warning). Flipping it OFF takes effect on new queries after the 30 s flag cache; an active cc-soleur-go conversation keeps the artifact it started with until it idles out (10 min of inactivity) or the container restarts, and the legacy runner picks it up on the next message; a restart is the only way to force it and it is not routine. The post-flip check is a real hosted Bash call from a NEW conversation. Turning it ON is a production write, taken only after the deploy SDK Bash smoke has been
   green on a real deploy and with the operator's explicit authorization at that time (tracker #10548). The deploy smoke runs the
   no-egress tuple **with the variant selected**, so a variant that breaks Bash start is reported on the deploy that carries it before
-  the flag is ever on. The variant is a strict superset of the base program, so the same run also covers a broken base.
-- **Verified both ways.** `probeAgentSandboxHardening` (boot) and the canary hardening probes (deploy) verify both artifacts: under the
-  variant `socket(AF_UNIX)` must be `EPERM`, under the base it must still work. Real-SDK arms
+  the flag is ever on. The variant is a strict superset of the base program for FILTER semantics, but the smoke runs the variant artifact under the no-egress shape only: it does not exercise the base file itself (the flag-OFF production artifact; covered by the blocking legacy probe and the canary `base_af_unix_control`) nor the egress shape (pre-merge arm only).
+- **Verified both ways.** `probeAgentSandboxHardening` (boot) checks that both artifacts are present and `sock_filter`-sized (size % 8); the
+  deploy canary hardening probes check the behavior: under the variant `socket(AF_UNIX)` must be `EPERM`, under the base it must still work. Real-SDK arms
   (`test/sandbox-wrapped-command-runtime.test.ts`): no-egress + flag on, Bash starts, AF_UNIX is `EPERM`, `socketpair` and `AF_INET`
   sockets work and `curl` fails fast ("Proxy CONNECT aborted"); egress session, base artifact, the bridge reaches the proxy ("CONNECT
   tunnel failed, response 502"); flag off, today's posture.

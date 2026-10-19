@@ -293,7 +293,9 @@ not a manual step).
 
 `sandbox_canary.verdict` in deploy-state (and its Sentry `op=sandbox-canary` event) now covers the
 sandbox-hardening pair, not only sandbox-build health. Decoding `reason` (all `sandbox_broken` reset
-the consecutive-pass soak and page; `canary_infra_error` rows hold the soak and never roll back):
+the consecutive-pass soak and page; `canary_infra_error` rows hold the soak and never roll back. This includes `unixdeny_filter_bypass`,
+`unixdeny_artifact_unusable` and `base_denies_af_unix`: a defect in the dark, flag-OFF variant artifact resets the #5875 base soak and
+pages as `sandbox_broken` BY DESIGN, because the variant is verified on the same canary verdict and ledger as the base posture):
 
 | `reason` | Meaning | First move |
 |---|---|---|
@@ -315,8 +317,12 @@ the consecutive-pass soak and page; `canary_infra_error` rows hold the soak and 
 > blocking gate is #10548 (5 green verdicts over at least 3 days with the coverage field). Also in place: the runtime
 > `agent_sandbox_bash_denial` alert, the pre-merge wrapped-command guards (`test/sandbox-wrapped-command-runtime.test.ts` and the
 > wrapped-command/census arms of `infra/sandbox-masked-proc-docker.test.sh`), the probe parity suite
-> (`test/sdk-bash-probe-parity.test.ts`) and the readback `scripts/followthroughs/sandbox-readback-10445.sh` (retired at the end
-> of this PR; the soak-gated promotion has its own stateless verdict script, `sdk-bash-smoke-verdict-10548.sh`).
+> (`test/sdk-bash-probe-parity.test.ts`) and the soak-gated promotion's own stateless verdict script,
+> `sdk-bash-smoke-verdict-10548.sh`.
+>
+> **Revert order.** Revert this PR as a whole. A partial revert must revert the smoke commits (`sdk-bash-probe.mjs`,
+> `run_sdk_bash_smoke`) before, or together with, the artifact/server commits; reverting only the artifact leaves the smoke setting a
+> selector to a missing file: every deploy then emits `sdk_bash_smoke_failed` and the paging email while production runs base.
 
 **Why this exists.** The faithful canary above replays the captured bwrap SETUP argv and ends in `-- true`, so it
 never runs the process the Agent SDK wraps around every sandboxed Bash command
@@ -430,7 +436,7 @@ property of the dashboard integration settings, not of anything this repository 
 **State (2026-10-19): the flag is OFF; nothing changes for tenants until it is turned on.** Enabling is a production write that needs a
 green deploy `sdk_bash_smoke` (the smoke runs the no-egress tuple with the unixdeny artifact selected, so a variant that breaks Bash start
 shows as `sdk_bash_smoke_failed` on the deploy that carries it) and the operator's explicit authorization at that time (#10548). Rollback is
-flipping the flag OFF: the next query of every session is spawned with the base artifact; a running query keeps the artifact it started with.
+flipping the flag OFF. Flipping the flag OFF takes effect on new queries after the 30 s flag cache. An active cc-soleur-go conversation keeps the artifact it started with until it idles out (10 min of inactivity) or the container restarts; the legacy runner picks it up on the next message. A restart is the only way to force it, and it is not routine. The rollback latency to state in the #10548 enable request: up to about 10 minutes after each open conversation's last activity.
 
 **Release-notes line (dated, for the release that turns the flag ON).** `2026-10-19 - Sandbox: shell commands in projects without outbound
 network access can no longer open Unix-domain sockets (for example a local Postgres or Redis socket path, or Python multiprocessing
@@ -443,7 +449,7 @@ PR body, which is the release-notes source of record; there is no committed chan
 turned on, is this change, not a bug: tell the user the workload needs a TCP address on loopback (works inside the per-command network
 namespace) or a session with outbound access; engineering confirms with `soleur:flag-list` (flag `agent-sandbox-unix-deny` ON) and by the
 absence of `apply-seccomp:` helper rows for that user (those are a different failure). To roll back for everyone, set the flag OFF (`soleur:flag-set-role
-agent-sandbox-unix-deny prd off`, operator-authorized). No server restart is needed.
+agent-sandbox-unix-deny prd off`, operator-authorized). The flip reaches new queries after the 30 s flag cache; an active cc-soleur-go conversation keeps the artifact it started with until it idles out (10 min of inactivity) or the container restarts, so the support answer is "fixed for new conversations; an open one may stay affected for up to about 10 minutes after its last activity". After the flip, confirm with a real hosted Bash call from a NEW conversation; an open session never exercises the new posture.
 
 **Reading the probes.** Boot: `op=sandbox-hardening-selfprobe` now carries `unixdenyFilter` beside `filter`; an `ok: false` with
 `unixdenyFilter: false` means the image lacks the variant artifact (flag must stay OFF). Deploy: the three hardening reasons above.
@@ -466,8 +472,8 @@ rejected: it would turn the canary green on the mechanism its own code comment c
 
 | Kept piece | Live consumer |
 |---|---|
-| `sandbox-canary.mjs --replay-outer` and `classifyOuterWrapReplayVerdict` | `test/sandbox-canary.test.ts` (the `--replay-outer` path: fixture validation, `{{ROOT}}` substitution, verdict classifier); the masked-proc docker suite deliberately does NOT run it (its header says so) |
-| `infra/agent-outer-wrap-argv.json` fixture and its Dockerfile/`.dockerignore` bakes | `test/sandbox-canary.test.ts`, `sandbox-canary-soak.test.sh` fixture checks, and the re-introduction path under #9773 |
+| `sandbox-canary.mjs --replay-outer` and `classifyOuterWrapReplayVerdict` | test-only (re-introduction path, #9773): `test/sandbox-canary.test.ts` (fixture validation, `{{ROOT}}` substitution, verdict classifier); no production caller remains; the masked-proc docker suite deliberately does NOT run it (its header says so) |
+| `infra/agent-outer-wrap-argv.json` fixture and its Dockerfile/`.dockerignore` bakes | Read by `test/agent-outer-wrap.test.ts`, `test/c4-render-argv-fixture.test.ts` and `apps/web-platform/scripts/sdk-bump-sandbox-gate.sh`, plus `test/sandbox-canary.test.ts` and `sandbox-canary-soak.test.sh` fixture checks |
 | `scripts/tenant-isolation-inner-probe.sh` shared payload | `agent-outer-wrap.ts` (opt-in boot self-probe), `test/agent-outer-wrap.test.ts`, and `sandbox-canary.mjs --replay-outer` (`test/sandbox-canary.test.ts`) |
 | `agent-outer-wrap.ts` | the `AGENT_OUTER_WRAP` flag path (off in production) |
 | `sandbox-canary.mjs --smoke-outer` | `sandbox-canary-verify-in-image.sh`, the CI capture-gate job that guards the fixture |
