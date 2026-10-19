@@ -62,7 +62,10 @@ describe("codex-app-server-jsonl — encode/decode round-trip (property)", () =>
             prev = c;
           }
           chunks.push(wire.slice(prev));
-          const got = await collect(decodeCodexJsonlStream(chunks));
+          async function* feed(): AsyncIterable<string> {
+            for (const c of chunks) yield c;
+          }
+          const got = await collect(decodeCodexJsonlStream(feed()));
           expect(got).toEqual(messages.map(canonical));
         },
       ),
