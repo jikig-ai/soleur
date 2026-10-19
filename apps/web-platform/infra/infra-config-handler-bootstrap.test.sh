@@ -305,10 +305,8 @@ assert "web-2 remote-exec EXECUTES the pinned journalctl read as deploy (effecti
   "printf '%s' \"\$DPF2_BLOCK\" | grep -cF 'runuser -u deploy -- sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat >/dev/null' >/dev/null"
 assert "the web-2 journalctl execute probe is fatal, not advisory" \
   "printf '%s' \"\$DPF2_BLOCK\" | grep -F 'runuser -u deploy -- sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat' | grep -cF 'exit 1' >/dev/null"
-assert "the web-2 remote-exec sentinel is bumped to dpf-web2-remote-exec-v4 (#10136: /etc/soleur deploy-writable)" \
-  "printf '%s' \"\$DPF2_BLOCK\" | grep -cF 'dpf-web2-remote-exec-v4' >/dev/null"
-assert "no stale dpf-web2-remote-exec-v3 sentinel survives in the web-2 block" \
-  "! printf '%s' \"\$DPF2_BLOCK\" | grep -cF 'dpf-web2-remote-exec-v3' >/dev/null"
+assert "the web-2 remote-exec sentinel is bumped to dpf-web2-remote-exec-v3" \
+  "printf '%s' \"\$DPF2_BLOCK\" | grep -cF 'dpf-web2-remote-exec-v3' >/dev/null"
 assert "no stale dpf-web2-remote-exec-v2 sentinel survives in the web-2 block" \
   "! printf '%s' \"\$DPF2_BLOCK\" | grep -cF 'dpf-web2-remote-exec-v2' >/dev/null"
 

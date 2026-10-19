@@ -815,7 +815,7 @@ test_df_page_size_gate
 # #10136 — scheme-aware link resolution: the SAME default as inngest-registry-probe.sh (the documented owner)
 # =====================================================================================================
 test_df_link_env() {
-  echo "TEST: doublefire-probe — honours /etc/soleur/inngest-link.env (https + --cacert), overriding an inherited URL; byte-identical block"
+  echo "TEST: doublefire-probe — honours /mnt/data/inngest-link/inngest-link.env (https + --cacert), overriding an inherited URL; byte-identical block"
   local tmp; tmp=$(mktemp -d)  # lint-trap-ownership: ok removed at the end of this test; an abort leaks one TMPDIR dir
   mkdir -p "$tmp/bin"
   cat > "$tmp/bin/curl" <<'STUB'
@@ -825,7 +825,7 @@ printf '%s' '{"data":{"runs":{"totalCount":0,"pageInfo":{"hasNextPage":false,"en
 STUB
   printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "${DF_TMP:?}/logger.log"\nexit 0\n' > "$tmp/bin/logger"
   chmod +x "$tmp/bin/curl" "$tmp/bin/logger"
-  local https_env=$'INNGEST_LINK_URL=https://10.0.1.40:8443\nINNGEST_LINK_SCHEME=https\nINNGEST_LINK_CACERT=/etc/soleur/inngest-ca.pem'
+  local https_env=$'INNGEST_LINK_URL=https://10.0.1.40:8443\nINNGEST_LINK_SCHEME=https\nINNGEST_LINK_CACERT=/mnt/data/inngest-link/inngest-ca.pem'
   local http_env=$'INNGEST_LINK_URL=http://10.0.1.40:8288\nINNGEST_LINK_SCHEME=http\nINNGEST_LINK_CACERT='
   run_df() { # <env file> [extra env]
     local envf="$1"; shift
@@ -835,7 +835,7 @@ STUB
   printf '%s\n' "$https_env" > "$tmp/https.env"; printf '%s\n' "$http_env" > "$tmp/http.env"
   run_df "$tmp/https.env" INNGEST_REMOTE_GQL_URL=http://10.0.1.40:8288/v0/gql
   local argv; argv="$(cat "$tmp/curl.argv")"
-  case "$argv" in *"https://10.0.1.40:8443/v0/gql"*"--cacert"*|*"--cacert /etc/soleur/inngest-ca.pem"*"https://10.0.1.40:8443/v0/gql"*) PASS=$((PASS+1)); echo "  PASS: https + --cacert, the inherited http URL did not win" ;; *) FAIL=$((FAIL+1)); echo "  FAIL: https env not honoured (argv: $argv)" ;; esac
+  case "$argv" in *"https://10.0.1.40:8443/v0/gql"*"--cacert"*|*"--cacert /mnt/data/inngest-link/inngest-ca.pem"*"https://10.0.1.40:8443/v0/gql"*) PASS=$((PASS+1)); echo "  PASS: https + --cacert, the inherited http URL did not win" ;; *) FAIL=$((FAIL+1)); echo "  FAIL: https env not honoured (argv: $argv)" ;; esac
   case " $argv " in *" -k "*|*"--insecure"*|*"--capath"*) FAIL=$((FAIL+1)); echo "  FAIL: verification weakened" ;; *) PASS=$((PASS+1)); echo "  PASS: no -k/--insecure/--capath" ;; esac
   run_df "$tmp/http.env"
   argv="$(cat "$tmp/curl.argv")"
@@ -843,7 +843,7 @@ STUB
   case "$argv" in *"--cacert"*) FAIL=$((FAIL+1)); echo "  FAIL: --cacert on plain http" ;; *) PASS=$((PASS+1)); echo "  PASS: no --cacert on http" ;; esac
   run_df "$tmp/none.env"
   case "$(cat "$tmp/curl.argv")" in *"http://10.0.1.40:8288/v0/gql"*) PASS=$((PASS+1)); echo "  PASS: no link env -> the default http" ;; *) FAIL=$((FAIL+1)); echo "  FAIL: default is not http" ;; esac
-  printf 'INNGEST_LINK_URL=https://evil.invalid:8443\nINNGEST_LINK_SCHEME=https\nINNGEST_LINK_CACERT=/etc/soleur/inngest-ca.pem\n' > "$tmp/bad.env"
+  printf 'INNGEST_LINK_URL=https://evil.invalid:8443\nINNGEST_LINK_SCHEME=https\nINNGEST_LINK_CACERT=/mnt/data/inngest-link/inngest-ca.pem\n' > "$tmp/bad.env"
   run_df "$tmp/bad.env"
   if [[ "$(cat "$tmp/curl.argv")" == *"http://10.0.1.40:8288/v0/gql"* ]] && grep -q 'SOLEUR_INNGEST_LINK_ENV_INVALID' "$tmp/logger.log"; then PASS=$((PASS+1)); echo "  PASS: a hostile link env -> default endpoint + loud marker"; else FAIL=$((FAIL+1)); echo "  FAIL: hostile link env not refused"; fi
   # the resolution block is byte-identical to the registry probe's (one owner, one definition)

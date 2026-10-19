@@ -268,7 +268,7 @@ write_files:
       # block that CREATES the dir, so a mandatory token would 226/NAMESPACE this
       # unit on fresh boot (:9000 never binds). systemd ignores it while absent;
       # it becomes a real ReadWritePath once inngest-bootstrap creates it (#6090).
-      ReadWritePaths=/mnt/data /var/lock /etc/systemd/system /etc/default /etc/sudoers.d /etc/webhook -/etc/soleur -/var/lib/inngest -/var/lib/vector -/etc/vector /usr/local/bin
+      ReadWritePaths=/mnt/data /var/lock /etc/systemd/system /etc/default /etc/sudoers.d /etc/webhook -/var/lib/inngest -/var/lib/vector -/etc/vector /usr/local/bin
       ReadOnlyPaths=/etc/default/webhook-deploy
       TimeoutStopSec=180
 
@@ -789,9 +789,9 @@ runcmd:
     # exec-from-/tmp call sites first.
     stage=docker_run
     # #10136: the Inngest CA bind source must exist as a FILE before docker starts (a missing source becomes a root-owned
-    # directory). Empty placeholder; ci-deploy.sh (user deploy, hence the owner and the sticky group-writable dir) installs the real PEM.
-    install -d -o root -g deploy -m 1775 /etc/soleur
-    [ -f /etc/soleur/inngest-ca.pem ] || install -o deploy -g deploy -m 0644 /dev/null /etc/soleur/inngest-ca.pem
+    # directory). Empty placeholder under /mnt/data (deploy-owned, in the webhook ReadWritePaths); ci-deploy.sh installs the real PEM.
+    install -d -o deploy -g deploy -m 0755 /mnt/data/inngest-link
+    [ -f /mnt/data/inngest-link/inngest-ca.pem ] || install -o deploy -g deploy -m 0644 /dev/null /mnt/data/inngest-link/inngest-ca.pem
     docker run -d \
       --name soleur-web-platform \
       --log-driver journald \
@@ -805,7 +805,7 @@ runcmd:
       -e NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
-      -v /etc/soleur/inngest-ca.pem:/etc/soleur/inngest-ca.pem:ro \
+      -v /mnt/data/inngest-link/inngest-ca.pem:/etc/soleur/inngest-ca.pem:ro \
       -e SOLEUR_EGRESS_REAPER=1 \
       -v /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens \
       -p 0.0.0.0:80:3000 \

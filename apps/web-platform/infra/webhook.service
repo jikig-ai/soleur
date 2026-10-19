@@ -62,13 +62,7 @@ PrivateTmp=true
 # /var/lib/inngest got the `-` in #6090: web_colocate_inngest=false (default)
 # gates off the dir-creator, so a mandatory token 226/NAMESPACE'd fresh web-2
 # boots (:9000 never bound -> ok_peer_fanout_degraded).
-# -/etc/soleur added 2026-10-18 (#10136, ADR-292): ci-deploy.sh resolve_inngest_link runs as this unit's
-# User=deploy and installs /etc/soleur/inngest-ca.pem + inngest-link.env before every app `docker run`; without
-# the entry the write is EROFS and docker would create a root-owned DIRECTORY at the CA bind source. `-` for the
-# same reason as above. The directory is root:deploy 1775 (set by cloud-init on a fresh host, by the web-1 handler
-# bridge / web-2 resource on running hosts), so the sticky bit keeps root's cosign-trusted-root.json and the
-# cron-egress lists unreplaceable by deploy.
-ReadWritePaths=/mnt/data /var/lock /etc/systemd/system /etc/default /etc/sudoers.d /etc/webhook -/etc/soleur -/var/lib/inngest -/var/lib/vector -/etc/vector /usr/local/bin
+ReadWritePaths=/mnt/data /var/lock /etc/systemd/system /etc/default /etc/sudoers.d /etc/webhook -/var/lib/inngest -/var/lib/vector -/etc/vector /usr/local/bin
 ReadOnlyPaths=/etc/default/webhook-deploy
 TimeoutStopSec=180
 

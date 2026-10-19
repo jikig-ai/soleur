@@ -10,11 +10,13 @@
 #
 # ROWS are addressable functions (`row_<id>`) so a MUTATION row can run only the rows it must redden.
 #   Guard 1 rows covered here: 5 (self-gate), 8 (third value), 9 (read error), 10 (CA validation, one row
-#   per variant), 11 (allowlist, lease), plus the scope guard and the recheck. Harness rows:
+#   per variant: size, private key, exactly one certificate, expired, CA:TRUE), 11 (allowlist, lease), plus the scope
+#   guard. Name/SAN/EKU/self-signature are NOT validated by the resolver (the self-gate and the canary's CA-withheld
+#   negative control prove the pinned file against the real listener). Harness rows:
 #   H1  the curl stub is replaced by one that always succeeds: the CA-withheld case must go RED (a suite that
 #       cannot see a vacuous self-gate proves nothing);
-#   H2  must-PASS non-canonical input (flag unset, valid CA with CRLF / trailing blanks / leading prose,
-#       two certificates): a suite that only accepts the canonical bytes is vacuous the other way;
+#   H2  must-PASS non-canonical input (flag unset, valid CA with CRLF / trailing blanks / leading prose): a suite that
+#       only accepts the canonical bytes is vacuous the other way;
 #   H3  Node: a CA:FALSE self-signed certificate IS accepted as an extra root, and a leaf signed with its key
 #       is NOT (a non-CA anchor cannot issue).
 #
@@ -68,12 +70,7 @@ gen_cert() { # <name> <san ext> <basicConstraints> <eku or -> [subj]
 }
 gen_cert good  "IP:10.0.1.40"            "CA:FALSE" "serverAuth"
 gen_cert other "IP:10.0.1.40"            "CA:FALSE" "serverAuth" "/CN=another-server"
-gen_cert badsan "IP:10.0.1.41"           "CA:FALSE" "serverAuth"
-gen_cert dnssan "IP:10.0.1.40,DNS:inngest.example.invalid" "CA:FALSE" "serverAuth"
 gen_cert catrue "IP:10.0.1.40"           "CA:TRUE"  "serverAuth"
-gen_cert clientauth "IP:10.0.1.40"       "CA:FALSE" "clientAuth"
-gen_cert bothauth "IP:10.0.1.40"         "CA:FALSE" "serverAuth,clientAuth"
-gen_cert noeku "IP:10.0.1.40"            "CA:FALSE" "-"
 gen_cert loop  "IP:127.0.0.1"            "CA:FALSE" "serverAuth" "/CN=loopback-anchor"
 
 # An expired self-signed certificate (openssl ca -selfsign with an explicit validity window).
@@ -88,23 +85,12 @@ make_expired() {
 }
 make_expired
 
-# A leaf that is NOT self-signed: SAN/EKU/CA:FALSE all fine, issuer is another name (signed by `other`).
-openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout "$FX/leaf.key" -out "$FX/leaf.csr" -subj /CN=soleur-inngest-link >/dev/null 2>&1 || die "leaf csr failed"
-printf 'subjectAltName=IP:10.0.1.40\nbasicConstraints=critical,CA:FALSE\nextendedKeyUsage=serverAuth\n' > "$FX/leaf.ext"
-openssl x509 -req -in "$FX/leaf.csr" -CA "$FX/other.crt" -CAkey "$FX/other.key" -CAcreateserial -out "$FX/notself.crt" -days 3650 -extfile "$FX/leaf.ext" >/dev/null 2>&1 || die "notself leaf failed"
-
 # Derived PEM variants (CA text delivered through Doppler, before the base64 the secret stores).
 cp "$FX/good.crt" "$FX/v-good.pem"
 cat "$FX/good.crt" "$FX/good.key" > "$FX/v-privkey-concat.pem"
 cp "$FX/good.key" "$FX/v-privkey-only.pem"
-cp "$FX/badsan.crt" "$FX/v-badsan.pem"
-cp "$FX/dnssan.crt" "$FX/v-dnssan.pem"
 cp "$FX/catrue.crt" "$FX/v-catrue.pem"
-cp "$FX/clientauth.crt" "$FX/v-clientauth.pem"
-cp "$FX/bothauth.crt" "$FX/v-bothauth.pem"
-cp "$FX/noeku.crt" "$FX/v-noeku.pem"
 cp "$FX/expired.crt" "$FX/v-expired.pem"
-cp "$FX/notself.crt" "$FX/v-notself.pem"
 cat "$FX/good.crt" "$FX/good.crt" "$FX/good.crt" > "$FX/v-three.pem"
 cat "$FX/good.crt" "$FX/other.crt" > "$FX/v-two.pem"
 printf 'this is not a certificate\n' > "$FX/v-garbage.pem"
@@ -203,7 +189,8 @@ NOW="$(date +%s)"
 # ---------------------------------------------------------------------------------------
 # SCENARIO RUNNER: one resolver call in a fresh subshell and a fresh "etc" dir.
 #   env: SNAP_EXTRA (extra snapshot lines), SNAP_SCOPE (override the two scope lines), CA_MODE, CA_FILE,
-#        SERVER_CERT, SKIP_SNAPSHOT=1 (pass a path that does not exist), PRE (a bash snippet run in $ETC first)
+#        SERVER_CERT, SKIP_SNAPSHOT=1 (pass a path that does not exist), PRE (a bash snippet run in $ETC first),
+#        LINK_SUBDIR (INNGEST_LINK_DIR is $ETC/<LINK_SUBDIR>, which does not exist yet: the resolver must mkdir -p it)
 # Result files in $RUN: out (key=value), logger.log, curl.argv, and the etc dir listing in $ETC.
 # ---------------------------------------------------------------------------------------
 RUN=""; ETC=""
@@ -227,7 +214,7 @@ scenario() { # <block file> <run id>
     unset SENTRY_INGEST_DOMAIN SENTRY_PROJECT_ID SENTRY_PUBLIC_KEY
     # shellcheck disable=SC1090
     source "$block" || exit 99
-    INNGEST_LINK_DIR="$ETC"
+    INNGEST_LINK_DIR="$ETC${LINK_SUBDIR:+/$LINK_SUBDIR}"
     INNGEST_LINK_SELFGATE_ATTEMPTS=2
     _doppler_get_observed() { # <NAME> <DEST_VAR>: the real contract, driven by CA_MODE
       CRED_RC=0; CRED_EMPTY=0; CRED_ERR=""
@@ -246,8 +233,6 @@ scenario() { # <block file> <run id>
       printf 'url=%s\n' "${INNGEST_BASE_URL_RESOLVED-<unset>}"
       printf 'state=%s\n' "${INNGEST_LINK_STATE-<unset>}"
       printf 'reason=%s\n' "${INNGEST_LINK_REASON-<unset>}"
-      rr=0; inngest_link_ca_recheck || rr=$?
-      printf 'recheck=%s\n' "$rr"
     } > "$RUN/out"
   ) > "$RUN/stdout" 2>&1
   [ -s "$RUN/out" ] || printf 'rc=harness\n' > "$RUN/out"
@@ -295,7 +280,6 @@ row_A1_unset_http() {
   need "the CA placeholder is not empty" "$([ ! -s "$(caf)" ] && echo 0 || echo 1)" || return 1
   need "link env is not the http triple" "$(env_exact http://10.0.1.40:8288 http ''; echo $?)" || return 1
   need "no curl self-gate may run on the http path" "$([ ! -s "$RUN/curl.argv" ] && echo 0 || echo 1)" || return 1
-  need "recheck must be a no-op with the flag off (rc=$(val recheck))" "$([ "$(val recheck)" = 0 ] && echo 0 || echo 1)" || return 1
 }
 row_A1b_unset_with_ca_http() {
   SNAP_EXTRA='' CA_MODE=ok CA_FILE="$FX/v-good.pem" scenario "$1" "$ROW_ID"
@@ -318,7 +302,6 @@ row_A2_flag_on_https() {
     "$(case "$argv" in *"--cacert $(caf)"*"https://10.0.1.40:8443/health"*) echo 0 ;; *) echo 1 ;; esac)" || return 1
   need "the self-gate passes --noproxy" "$(case "$argv" in *"--noproxy"*) echo 0 ;; *) echo 1 ;; esac)" || return 1
   need "the self-gate passes -k/--insecure/--capath: $argv" "$(case " $argv " in *" -k "*|*"--insecure"*|*"--capath"*|*" -sk "*) echo 1 ;; *) echo 0 ;; esac)" || return 1
-  need "recheck failed right after a good install (rc=$(val recheck))" "$([ "$(val recheck)" = 0 ] && echo 0 || echo 1)" || return 1
 }
 row_A3_pending_live_https() {
   SNAP_EXTRA="INNGEST_LINK_TLS=pending:$((NOW - 5))\n" CA_MODE=ok scenario "$1" "$ROW_ID"
@@ -409,15 +392,10 @@ row_C_privkey_concat() { BLK="$1" ca_rejected "$FX/v-privkey-concat.pem" "cert p
   need "key bytes landed in the CA file" "$(grep -q 'PRIVATE KEY' "$(caf)" 2>/dev/null && echo 1 || echo 0)" || return 1; }
 row_C_privkey_prefixed() { BLK="$1" ca_rejected "$FX/v-privkey-prefixed.pem" "PRIVATE KEY text hidden behind a prefix (not a counted BEGIN line)" "key"; }
 row_C_privkey_only() { BLK="$1" ca_rejected "$FX/v-privkey-only.pem" "PRIVATE KEY only" "key"; }
-row_C_badsan() { BLK="$1" ca_rejected "$FX/v-badsan.pem" "SAN IP:10.0.1.41" "san"; }
-row_C_dnssan() { BLK="$1" ca_rejected "$FX/v-dnssan.pem" "SAN IP plus DNS" "san"; }
 row_C_catrue() { BLK="$1" ca_rejected "$FX/v-catrue.pem" "CA:TRUE" "ca"; }
-row_C_clientauth() { BLK="$1" ca_rejected "$FX/v-clientauth.pem" "EKU clientAuth only" "eku"; }
-row_C_bothauth() { BLK="$1" ca_rejected "$FX/v-bothauth.pem" "EKU serverAuth+clientAuth" "eku"; }
-row_C_noeku() { BLK="$1" ca_rejected "$FX/v-noeku.pem" "no EKU" "eku"; }
 row_C_expired() { BLK="$1" ca_rejected "$FX/v-expired.pem" "expired" "expired"; }
-row_C_notself() { BLK="$1" ca_rejected "$FX/v-notself.pem" "not self-signed" "notself"; }
 row_C_three() { BLK="$1" ca_rejected "$FX/v-three.pem" "three certificates" "count"; }
+row_C_two() { BLK="$1" ca_rejected "$FX/v-two.pem" "two certificates (a second trust anchor for every outbound TLS connection)" "count"; }
 row_C_garbage() { BLK="$1" ca_rejected "$FX/v-garbage.pem" "not PEM" "count"; }
 row_C_oversize() { BLK="$1" ca_rejected "$FX/v-oversize.pem" "over 4 KiB" "size"; }
 row_C_tool_missing_fails_closed() {
@@ -449,7 +427,7 @@ row_C_huge_base64() {
 # flag off: an invalid CA never lands, the placeholder stands in; the deploy is NOT failed
 row_C9_flag_off_invalid_ca_placeholder() {
   local v
-  for v in privkey-concat badsan catrue three garbage; do
+  for v in privkey-concat catrue two three garbage; do
     SNAP_EXTRA='' CA_MODE=ok CA_FILE="$FX/v-$v.pem" scenario "$1" "$ROW_ID"
     need "$v: rc=$(val rc)" "$([ "$(val rc)" = 0 ] && echo 0 || echo 1)" || return 1
     need "$v: url=$(val url)" "$([ "$(val url)" = http://10.0.1.40:8288 ] && echo 0 || echo 1)" || return 1
@@ -464,7 +442,7 @@ row_C9b_flag_off_stale_ca_replaced() {
 # --- H2: must-PASS non-canonical input -------------------------------------------------------------
 row_H2_noncanonical_passes() {
   local v
-  for v in noncanon nonl two spoof; do
+  for v in noncanon nonl spoof; do
     SNAP_EXTRA="$ONFLAG" CA_MODE=ok CA_FILE="$FX/v-$v.pem" scenario "$1" "$ROW_ID"
     need "$v: rc=$(val rc) reason=$(val reason)" "$([ "$(val rc)" = 0 ] && echo 0 || echo 1)" || return 1
     need "$v: url=$(val url)" "$([ "$(val url)" = https://10.0.1.40:8443 ] && echo 0 || echo 1)" || return 1
@@ -487,47 +465,23 @@ row_D1_link_env_not_derived_from_text() {
   need "link env mode" "$([ "$(stat -c %a "$(envf)")" = 644 ] && echo 0 || echo 1)" || return 1
 }
 
-# --- the recheck immediately before docker run --------------------------------------------------------
-row_D2_recheck_detects_tamper() {
-  SNAP_EXTRA="$ONFLAG" CA_MODE=ok scenario "$1" "$ROW_ID"
-  ok_https || return 1
-  assert_fixture_dir "$ETC"
-  # replay the recheck against tampered states, inside a subshell that re-sources the block
-  local st
-  for st in 'printf x >> "$ETC/inngest-ca.pem"' 'rm -f "$ETC/inngest-ca.pem"' 'rm -f "$ETC/inngest-ca.pem"; ln -s /etc/hostname "$ETC/inngest-ca.pem"' 'rm -f "$ETC/inngest-ca.pem"; mkdir "$ETC/inngest-ca.pem"'; do
-    local o; o="$(
-      export PATH="$BIN:$PATH" RUN_DIR="$RUN"
-      LOG_TAG=ci-deploy
-      # shellcheck disable=SC1090
-      source "$1"
-      INNGEST_LINK_DIR="$ETC"
-      INNGEST_LINK_CA_STRICT=1
-      INNGEST_LINK_CA_SHA="$(openssl x509 -in "$FX/good.crt" -outform PEM | sha256sum | cut -d' ' -f1)"
-      rm -rf "$ETC/inngest-ca.pem"; openssl x509 -in "$FX/good.crt" -outform PEM > "$ETC/inngest-ca.pem"
-      eval "$st"
-      rr=0; inngest_link_ca_recheck || rr=$?
-      printf '%s' "$rr"
-    )"
-    need "recheck did not refuse the tampered state [$st] (rc=$o)" "$([ "$o" != 0 ] && [ -n "$o" ] && echo 0 || echo 1)" || return 1
-  done
-  # and it accepts the untampered state
-  local o2; o2="$(
-    export PATH="$BIN:$PATH" RUN_DIR="$RUN"; LOG_TAG=ci-deploy
-    # shellcheck disable=SC1090
-    source "$1"; INNGEST_LINK_DIR="$ETC"; INNGEST_LINK_CA_STRICT=1
-    rm -rf "$ETC/inngest-ca.pem"
-    openssl x509 -in "$FX/good.crt" -outform PEM > "$ETC/inngest-ca.pem"
-    INNGEST_LINK_CA_SHA="$(sha256sum "$ETC/inngest-ca.pem" | cut -d' ' -f1)"
-    rr=0; inngest_link_ca_recheck || rr=$?; printf '%s' "$rr"
-  )"
-  need "recheck refused an untampered state (rc=$o2)" "$([ "$o2" = 0 ] && echo 0 || echo 1)" || return 1
-}
 row_D3_dest_is_directory() {
   PRE='mkdir inngest-ca.pem' SNAP_EXTRA="$ONFLAG" CA_MODE=ok scenario "$1" "$ROW_ID-on"
   need "flag on with a directory at the CA path must fail (rc=$(val rc))" "$([ "$(val rc)" != 0 ] && [ -z "$(val url)" ] && echo 0 || echo 1)" || return 1
   need "flag on, directory at the CA path: reason=$(val reason), want inngest_link_write_failed" "$([ "$(val reason)" = inngest_link_write_failed ] && echo 0 || echo 1)" || return 1
   PRE='mkdir inngest-ca.pem' SNAP_EXTRA='' CA_MODE=ok scenario "$1" "$ROW_ID-off"
   need "flag off with a directory at the CA path must not fail the deploy (rc=$(val rc))" "$([ "$(val rc)" = 0 ] && echo 0 || echo 1)" || return 1
+}
+row_D5_missing_dir_is_created() {
+  # the directory (/mnt/data/inngest-link on a real host) may not exist on the first deploy after merge: the resolver creates it,
+  # and the bind source FILE exists afterwards (placeholder with the flag off, the validated PEM with the flag on)
+  LINK_SUBDIR=inngest-link SNAP_EXTRA='' CA_MODE=absent scenario "$1" "$ROW_ID-off"
+  need "flag off: rc=$(val rc)" "$([ "$(val rc)" = 0 ] && echo 0 || echo 1)" || return 1
+  need "flag off: the placeholder CA file was not created in the missing directory" "$([ -f "$ETC/inngest-link/inngest-ca.pem" ] && [ ! -s "$ETC/inngest-link/inngest-ca.pem" ] && echo 0 || echo 1)" || return 1
+  need "flag off: the link env was not created in the missing directory" "$([ -f "$ETC/inngest-link/inngest-link.env" ] && echo 0 || echo 1)" || return 1
+  LINK_SUBDIR=inngest-link SNAP_EXTRA="$ONFLAG" CA_MODE=ok scenario "$1" "$ROW_ID-on"
+  need "flag on: rc=$(val rc) reason=$(val reason)" "$([ "$(val rc)" = 0 ] && echo 0 || echo 1)" || return 1
+  need "flag on: the CA file in the created directory is not the good certificate" "$([ "$(fp "$ETC/inngest-link/inngest-ca.pem")" = "$GOOD_FP" ] && echo 0 || echo 1)" || return 1
 }
 row_D4_install_failure_fails_strict() {
   # the etc dir is not writable: flag on fails closed, flag off proceeds (best effort, loud)
@@ -617,10 +571,10 @@ ROW_IDS=(
   A2_flag_on_https A3_pending_live_https A3b_pending_upper_boundaries
   A4_wrong_server_fails_closed A4b_pending_wrong_server_fails_closed A5_ca_absent_fails A5b_ca_read_error_fails A5c_ca_empty_fails A5d_pending_ca_absent_fails
   B1_lease_expired_http B2_pending_too_far_ahead_fails B3_non_allowlisted_fail B4_snapshot_unreadable_fails B5_scope_guard B6_duplicate_flag_fails
-  C_privkey_concat C_privkey_prefixed C_privkey_only C_badsan C_dnssan C_catrue C_clientauth C_bothauth C_noeku C_expired C_notself C_three C_garbage C_oversize C_tool_missing_fails_closed C_empty_value C_bad_base64 C_huge_base64
+  C_privkey_concat C_privkey_prefixed C_privkey_only C_catrue C_expired C_three C_two C_garbage C_oversize C_tool_missing_fails_closed C_empty_value C_bad_base64 C_huge_base64
   C9_flag_off_invalid_ca_placeholder C9b_flag_off_stale_ca_replaced
   H2_noncanonical_passes H2b_unset_and_valid_pass
-  D1_link_env_not_derived_from_text D2_recheck_detects_tamper D3_dest_is_directory D4_install_failure_fails_strict
+  D1_link_env_not_derived_from_text D3_dest_is_directory D4_install_failure_fails_strict D5_missing_dir_is_created
   E1_canary_flag_off_is_a_noop E2_canary_all_good E3_canary_inspect_must_show_https E4_canary_each_positive_check_gates
   E5_canary_negative_control_must_fail_verification E6_canary_unparseable_output_is_a_failure
 )
@@ -653,24 +607,17 @@ ROWS=0
 lineno() { grep -nF -- "$1" "$CI_DEPLOY" | sed -n "${2:-1}p" | cut -d: -f1; }
 L_RES="$(lineno 'resolve_inngest_link "$ENV_FILE" ||')"
 L_CANARY_RUN="$(lineno '--name soleur-web-platform-canary \')"
-L_RECHK1="$(lineno 'if ! inngest_link_ca_recheck; then' 1)"
 L_GAK="$(lineno 'github_app_key_canary_check; then')"
 L_LAYER5="$(lineno '! inngest_link_canary_check; then')"
 L_SWAP="$(lineno 'echo "Canary passed, swapping to production..."')"
-L_RECHK2="$(lineno 'if ! inngest_link_ca_recheck; then' 2)"
-L_STOP="$(lineno '{ docker stop --time=12 soleur-web-platform')"
-L_RECHK3="$(lineno 'if ! inngest_link_ca_recheck; then' 3)"
 L_PROD_RUN="$(lineno '--name soleur-web-platform \')"
 wire_ok() { # <desc> <a> <b> : a < b, both non-empty
   ROWS=$((ROWS + 1))
   if [ -n "$2" ] && [ -n "$3" ] && [ "$2" -lt "$3" ]; then ok "wiring: $1 ($2 < $3)"; else bad "wiring: $1 (got '$2' then '$3')"; fi
 }
 wire_ok "the resolver runs before the canary docker run" "$L_RES" "$L_CANARY_RUN"
-wire_ok "the CA recheck runs immediately before the canary docker run" "$L_RECHK1" "$L_CANARY_RUN"
 wire_ok "the canary layer-5 check runs after the GitHub App key check and before promotion" "$L_GAK" "$L_LAYER5"
 wire_ok "layer 5 gates promotion (before the swap)" "$L_LAYER5" "$L_SWAP"
-wire_ok "a recheck runs before the old container is stopped" "$L_RECHK2" "$L_STOP"
-wire_ok "a second recheck runs immediately before the prod docker run" "$L_RECHK3" "$L_PROD_RUN"
 ROWS=$((ROWS + 1))
 if [ "$(grep -c 'INNGEST_BASE_URL="\$INNGEST_BASE_URL_RESOLVED"' "$CI_DEPLOY")" = 2 ] && ! grep -qE '^[[:space:]]+-e INNGEST_BASE_URL=http' "$CI_DEPLOY"; then ok "wiring: both docker run sites take the resolver expansion and no literal URL remains"; else bad "wiring: a docker run site does not take the resolver expansion (or a literal URL remains)"; fi
 
@@ -787,22 +734,14 @@ kill_mut M09c-config-scope-guard-removed "B5_scope_guard" \
 # Guard 1 row 10: CA validation weakened, one mutation per variant
 kill_mut M10a-private-key-allowed "C_privkey_prefixed" \
   "if grep -q 'PRIVATE KEY' \"\$raw\"; then _IL_WHY=key; break; fi" 'if false; then break; fi'
-kill_mut M10b-san-weakened "C_badsan C_dnssan" \
-  '[[ "$san" == "IP Address:10.0.1.40" ]] || { _IL_WHY=san; break 2; }' 'true || break 2'
 kill_mut M10c-ca-true-allowed "C_catrue" \
-  '[[ "$bc" == *"CA:FALSE"* && "$bc" != *"CA:TRUE"* ]] || { _IL_WHY=ca; break 2; }' 'true || break 2'
-kill_mut M10d-three-certs-allowed "C_three" \
-  '"$n_begin" -le 2' '"$n_begin" -le 3'
-kill_mut M10e-eku-weakened "C_clientauth C_bothauth C_noeku" \
-  '[[ "$eku" == "TLS Web Server Authentication" ]] || { _IL_WHY=eku; break 2; }' 'true || break 2'
-kill_mut M10f-expiry-unchecked "C_expired" \
-  'openssl verify -CAfile "$p" -check_ss_sig "$p"' 'openssl verify -no_check_time -CAfile "$p" -check_ss_sig "$p"' \
-  'timeout 10 openssl x509 -in "$p" -noout -checkend 0 >/dev/null 2>&1 || { _IL_WHY=expired; break 2; }' 'true'
+  "if grep -q 'CA:TRUE' <<< \"\$x509\"; then _IL_WHY=ca; break; fi" 'if false; then break; fi'
+kill_mut M10d-second-certificate-allowed "C_two C_three" \
+  '[[ "$n_begin" == 1 && "$n_cert" == 1 ]]' '[[ "$n_begin" -le 3 && "$n_begin" == "$n_cert" ]]'
+kill_mut M10e-expiry-unchecked "C_expired" \
+  '*"will expire"*) _IL_WHY=expired; break ;;' '*"will expire"*) : ;;'
 kill_mut M10g-size-unbounded "C_oversize" \
   '-le 4096 ]] || { _IL_WHY=size; break; }' '-le 4096000 ]] || { _IL_WHY=size; break; }'
-kill_mut M10h-self-signed-unchecked "C_notself" \
-  '[[ -n "$subj" && "${subj#subject=}" == "${issuer#issuer=}" ]] || { _IL_WHY=notself; break 2; }' 'true || break 2' \
-  'timeout 10 openssl verify -CAfile "$p" -check_ss_sig "$p" >/dev/null 2>&1 || { _IL_WHY=notself; break 2; }' 'true'
 # Guard 1 row 11: the allowlist and the lease
 kill_mut M11a-non-allowlisted-treated-as-absent "B3_non_allowlisted_fail" \
   'INNGEST_LINK_REASON=inngest_link_flag_invalid; inngest_link_event flag_invalid error "len=${#flag}"; return 1' 'INNGEST_LINK_STATE=http_default'
@@ -840,13 +779,14 @@ kill_mut M13d-verdict-unanchored "E6_canary_unparseable_output_is_a_failure" \
 kill_mut M13e-canary-runs-with-flag-off "E1_canary_flag_off_is_a_noop" \
   '  [[ "$INNGEST_LINK_CA_STRICT" == 1 ]] || return 0
   envs=' '  envs='
-# the flag-off placeholder, the install failure, the recheck
+# the flag-off placeholder, the install failure
 kill_mut M12a-flag-off-writes-unvalidated-ca "C9_flag_off_invalid_ca_placeholder" \
   '[[ -n "$cand" ]] && : ' '[[ -n "$cand" ]] && { printf "%s" "$b64" | base64 -d 2>/dev/null || :; } '
+kill_mut M12d-mkdir-p-removed "D5_missing_dir_is_created" \
+  '  mkdir -p "$(dirname "$2")" 2>/dev/null || true
+' ''
 kill_mut M12b-strict-install-failure-ignored "D3_dest_is_directory" \
   'INNGEST_LINK_REASON=inngest_link_write_failed; inngest_link_event write_failed error "file=ca"; return 1' ':'
-kill_mut M12c-recheck-sha-ignored "D2_recheck_detects_tamper" \
-  'if [[ -z "$sha" || "$sha" != "$INNGEST_LINK_CA_SHA" ]]; then' 'if false; then'
 
 
 # ---------------------------------------------------------------------------------------
@@ -855,7 +795,7 @@ kill_mut M12c-recheck-sha-ignored "D2_recheck_detects_tamper" \
 printf '\n=== inngest-link-resolver: %d passed, %d failed, %d skipped (%d rows) ===\n' "$PASS" "$FAIL" "$SKIP" "$ROWS"
 # The anti-vacuity floor comes FIRST: scripts/guard-vacuity-floor.test.sh neuters every counter and runs the first floor it
 # finds, which must be this one (the accounting identity below holds trivially at zero).
-MIN_ROWS=95
+MIN_ROWS=84
 if [ "$ROWS" -lt "$MIN_ROWS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s rows ran, floor is %s\n' "$ROWS" "$MIN_ROWS" >&2
   exit 1

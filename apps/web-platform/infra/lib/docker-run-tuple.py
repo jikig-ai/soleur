@@ -79,7 +79,10 @@ ADD_HOSTS = {"host.docker.internal:host-gateway"}
 MEM_LITERAL = re.compile(r"^[1-9][0-9]*[bkmgBKMG]?$")
 
 INNGEST_CA_PATH = "/etc/soleur/inngest-ca.pem"
-INNGEST_CA_VOL = "%s:%s:ro" % (INNGEST_CA_PATH, INNGEST_CA_PATH)
+# HOST side of the CA bind mount: /mnt/data is already in webhook.service ReadWritePaths and deploy-owned, so ci-deploy.sh
+# (User=deploy, ProtectSystem=strict) can write it; the in-container path stays /etc/soleur/inngest-ca.pem.
+INNGEST_CA_HOST_PATH = "/mnt/data/inngest-link/inngest-ca.pem"
+INNGEST_CA_VOL = "%s:%s:ro" % (INNGEST_CA_HOST_PATH, INNGEST_CA_PATH)
 # The two values the resolver can produce live in ci-deploy.sh (resolve_inngest_link); the canary and prod tuples take ONLY its
 # expansion. The first-boot tuple cannot call the resolver, so it carries the literal http default.
 INNGEST_RESOLVED = "$INNGEST_BASE_URL_RESOLVED"

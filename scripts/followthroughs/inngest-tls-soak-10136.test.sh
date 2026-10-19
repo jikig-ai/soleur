@@ -151,7 +151,7 @@ build_series() {
     --argjson bootonly "$bootonly" --argjson tlsdec "$tlsdec" --argjson onesided "$onesided" '
     def h: "a" * 64;
     def ts($e): ($e | strftime("%Y-%m-%d %H:%M:%S"));
-    def detail($l; $t; $boot): "unit=active nrestarts=0 fetch_rc=0 bind=10.0.1.40:8443 listener=1 served_sha256=\(h) cert_sha256=\(h) notafter_days=3649 hs_fail_15m=0 legacy_8288_packets=\($l) tls_8443_packets=\($t) nft8443_sha256=\(h) nft_rules=9 boot_id=\($boot)";
+    def detail($l; $t; $boot): "unit=active nrestarts=0 fetch_rc=0 bind=10.0.1.40:8443 listener=1 served_sha256=\(h) cert_sha256=\(h) notafter_days=3649 legacy_8288_packets=\($l) tls_8443_packets=\($t) nft8443_sha256=\(h) nft_rules=9 boot_id=\($boot)";
     def row($e; $d): {dt: ts($e), raw: ({message: ("SOLEUR_INNGEST_BOOT_STAGE stage=tls-health " + $d), marker: "SOLEUR_INNGEST_BOOT_STAGE", stage: "tls-health", detail: $d, host: "soleur-inngest", dt: ($e | todate), shipper: "cloud-init-phone-home"} | tostring)};
     # deterministic jitter that visits both extremes: -j, +j, 0, +j, -j ... so consecutive gaps reach 300+2j
     def jitter($i): (if $onesided == 1 then ([0, 1] | .[$i % 2]) else ([-1, 1, 0, 1, -1, 0] | .[$i % 6]) end) * $jit;

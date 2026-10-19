@@ -51,13 +51,13 @@ readonly LOG_TAG="inngest-registry-probe"
 GQL_URL="${INNGEST_REMOTE_GQL_URL:-http://10.0.1.40:8288/v0/gql}"
 # >>> inngest-link-env >>>
 # (#10136) The Inngest link the web hosts' resolver (ci-deploy.sh resolve_inngest_link) chose, read from
-# /etc/soleur/inngest-link.env. PARSED, NEVER SOURCED: a key allowlist plus an exact literal check of the three values,
+# /mnt/data/inngest-link/inngest-link.env. PARSED, NEVER SOURCED: a key allowlist plus an exact literal check of the three values,
 # so a hostile or corrupt file can neither run code nor select another endpoint (anything else is `invalid`: the default
 # http endpoint plus a loud marker; the resolver, the tuple gate and the canary are the real gate, this file is advisory
 # for the probes). It OVERRIDES an inherited INNGEST_REMOTE_GQL_URL (server.tf writes an explicit http one into the
 # consumer probe's env, which would otherwise win). Byte-identical in inngest-registry-probe.sh and
 # inngest-doublefire-probe.sh (the doublefire test compares the two); the registry probe is the documented owner.
-INNGEST_LINK_ENV_FILE="${INNGEST_LINK_ENV_FILE:-/etc/soleur/inngest-link.env}"
+INNGEST_LINK_ENV_FILE="${INNGEST_LINK_ENV_FILE:-/mnt/data/inngest-link/inngest-link.env}"
 LINK_BASE="http://10.0.1.40:8288"
 LINK_CACERT=""
 LINK_STATE="default"
@@ -79,7 +79,7 @@ _link_env_resolve() {
   done < "$f"
   if [ "$bad" = 0 ] && [ "$url" = "http://10.0.1.40:8288" ] && [ "$scheme" = "http" ] && [ -z "$cacert" ]; then
     LINK_STATE="http"
-  elif [ "$bad" = 0 ] && [ "$url" = "https://10.0.1.40:8443" ] && [ "$scheme" = "https" ] && [ "$cacert" = "/etc/soleur/inngest-ca.pem" ]; then
+  elif [ "$bad" = 0 ] && [ "$url" = "https://10.0.1.40:8443" ] && [ "$scheme" = "https" ] && [ "$cacert" = "/mnt/data/inngest-link/inngest-ca.pem" ]; then
     LINK_BASE="$url"; LINK_CACERT="$cacert"; LINK_STATE="https"
   else
     LINK_STATE="invalid"
@@ -209,7 +209,7 @@ run_probe() {
 # line of fixed tokens plus numeric curl exit codes - never curl's stderr, never a certificate or a path. No -k, no --capath.
 # Exit 0 only when verified=200 AND the unverified leg exited 60. CA file: INNGEST_CA_FILE (test seam), default the host file.
 tls_handshake() {
-  local ca="${INNGEST_CA_FILE:-/etc/soleur/inngest-ca.pem}" url="https://10.0.1.40:8443/health"
+  local ca="${INNGEST_CA_FILE:-/mnt/data/inngest-link/inngest-ca.pem}" url="https://10.0.1.40:8443/health"
   local code_v="" rc_v=0 rc_u=0 vtok utok result=fail
   code_v=$(curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code}' --connect-timeout "$CONNECT_TIMEOUT" --max-time 10 \
     --cacert "$ca" "$url" 2>/dev/null) || rc_v=$?

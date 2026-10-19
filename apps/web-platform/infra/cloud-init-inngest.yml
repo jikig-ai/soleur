@@ -409,15 +409,16 @@ write_files:
       u=soleur-inngest-tls
       if [ "$1" = fetch ]; then
         umask 0077
-        die() { echo $1 > $d.rc; exit 1; }
+        m() { k=$(openssl pkey -in $1/key.pem -pubout) && [ "$k" = "$(openssl x509 -in $1/cert.pem -noout -pubkey)" ]; }
+        die() { echo $1 > $d.rc; m $d && openssl x509 -in $d/cert.pem -noout -checkend 86400 >/dev/null && exit 0; exit 1; }
         get() { ( set -a; . /etc/default/inngest-doppler || exit 90; timeout 30 doppler secrets get $1 --project soleur-inngest --plain 2>/dev/null ) > $t/$2; }
         chgrp stunnel4 $d && chmod 0750 $d || die 91
         t=$(mktemp -d -p $d) || die 92
         trap 'rm -rf $t' EXIT
-        get INNGEST_TLS_KEY k || die 93
-        get INNGEST_TLS_CERT c || die 94
-        kp=$(openssl pkey -in $t/k -pubout 2>/dev/null) && [ "$kp" = "$(openssl x509 -in $t/c -noout -pubkey 2>/dev/null)" ] || die 95
-        chown root:stunnel4 $t/k && chmod 0640 $t/k && chmod 0644 $t/c && mv $t/k $d/key.pem && mv $t/c $d/cert.pem || die 96
+        get INNGEST_TLS_KEY key.pem || die 93
+        get INNGEST_TLS_CERT cert.pem || die 94
+        m $t || die 95
+        chown root:stunnel4 $t/key.pem && chmod 0640 $t/key.pem && chmod 0644 $t/cert.pem && mv $t/*.pem $d || die 96
         echo 0 > $d.rc
         exit
       fi
@@ -435,7 +436,7 @@ write_files:
       sv=$(echo | timeout 8 openssl s_client -connect ${inngest_private_ip}:8443 2>/dev/null | fp)
       nd=$(( ($(date -d "$(openssl x509 -noout -enddate < $d/cert.pem | cut -d= -f2)" +%s) - $(date +%s)) / 86400 ))
       ch=$(nft list chain inet soleur_inngest input)
-      /usr/local/bin/inngest-boot-phone-home.sh tls-health "unit=$st nrestarts=$nr fetch_rc=$rc bind=$b listener=$l served_sha256=$sv cert_sha256=$cs notafter_days=$nd hs_fail_15m=$(journalctl -u $u --since -15min | grep -c SSL_accept:) legacy_8288_packets=$(cn legacy_8288) tls_8443_packets=$(cn tls_8443) nft8443_sha256=$(echo "$ch" | grep 8443 | sha256sum | cut -c1-64) nft_rules=$(echo "$ch" | grep -cE '^[[:space:]]+(iif|tcp)') boot_id=$(cut -c1-8 /proc/sys/kernel/random/boot_id)"
+      /usr/local/bin/inngest-boot-phone-home.sh tls-health "unit=$st nrestarts=$nr fetch_rc=$rc bind=$b listener=$l served_sha256=$sv cert_sha256=$cs notafter_days=$nd legacy_8288_packets=$(cn legacy_8288) tls_8443_packets=$(cn tls_8443) nft8443_sha256=$(echo "$ch" | grep 8443 | sha256sum | cut -c1-64) nft_rules=$(echo "$ch" | grep -cE '^[[:space:]]+(iif|tcp)') boot_id=$(cut -c1-8 /proc/sys/kernel/random/boot_id)"
       r=
       [ $l = 1 ] || r=listener_down
       [ $nd -ge 90 ] || r="$r cert_expiring"

@@ -492,7 +492,7 @@ test_rp_id_only_degrades_to_empty_triggers() {
 
 
 # =====================================================================================================
-# #10136 — scheme-aware link resolution (/etc/soleur/inngest-link.env) and the --tls-handshake mode
+# #10136 — scheme-aware link resolution (/mnt/data/inngest-link/inngest-link.env) and the --tls-handshake mode
 # =====================================================================================================
 LINK_TMP=$(mktemp -d)  # lint-trap-ownership: ok removed by the EXIT trap just below
 trap 'rm -rf "$LINK_TMP"' EXIT
@@ -529,17 +529,17 @@ write_link_env() { printf '%s\n' "$2" > "$LINK_TMP/$1"; }
 
 test_rp_link_https_env_file() {
   echo "TEST: registry-probe — a valid https link env sends the query to https://10.0.1.40:8443 with --cacert and --noproxy"
-  write_link_env https.env $'INNGEST_LINK_URL=https://10.0.1.40:8443\nINNGEST_LINK_SCHEME=https\nINNGEST_LINK_CACERT=/etc/soleur/inngest-ca.pem'
+  write_link_env https.env $'INNGEST_LINK_URL=https://10.0.1.40:8443\nINNGEST_LINK_SCHEME=https\nINNGEST_LINK_CACERT=/mnt/data/inngest-link/inngest-ca.pem'
   link_run "$LINK_TMP/https.env" >/dev/null || true
   local argv; argv="$(cat "$LINK_TMP/curl.argv")"
   case "$argv" in *"https://10.0.1.40:8443/v0/gql"*) echo "  PASS: query goes to the https endpoint"; PASS=$((PASS + 1)) ;; *) echo "  FAIL: query did not go to https (argv: $argv)"; FAIL=$((FAIL + 1)) ;; esac
-  case "$argv" in *"--cacert /etc/soleur/inngest-ca.pem"*) echo "  PASS: --cacert pins the host CA file"; PASS=$((PASS + 1)) ;; *) echo "  FAIL: no --cacert on the https query (argv: $argv)"; FAIL=$((FAIL + 1)) ;; esac
+  case "$argv" in *"--cacert /mnt/data/inngest-link/inngest-ca.pem"*) echo "  PASS: --cacert pins the host CA file"; PASS=$((PASS + 1)) ;; *) echo "  FAIL: no --cacert on the https query (argv: $argv)"; FAIL=$((FAIL + 1)) ;; esac
   case "$argv" in *"--noproxy"*) echo "  PASS: --noproxy on the https query"; PASS=$((PASS + 1)) ;; *) echo "  FAIL: no --noproxy on the https query"; FAIL=$((FAIL + 1)) ;; esac
   case " $argv " in *" -k "*|*"--insecure"*|*"--capath"*) echo "  FAIL: the probe disables or widens verification (argv: $argv)"; FAIL=$((FAIL + 1)) ;; *) echo "  PASS: no -k/--insecure/--capath"; PASS=$((PASS + 1)) ;; esac
 }
 test_rp_link_env_beats_inherited_url() {
   echo "TEST: registry-probe — the link env OVERRIDES an inherited INNGEST_REMOTE_GQL_URL (server.tf writes an explicit http one)"
-  write_link_env https.env $'INNGEST_LINK_URL=https://10.0.1.40:8443\nINNGEST_LINK_SCHEME=https\nINNGEST_LINK_CACERT=/etc/soleur/inngest-ca.pem'
+  write_link_env https.env $'INNGEST_LINK_URL=https://10.0.1.40:8443\nINNGEST_LINK_SCHEME=https\nINNGEST_LINK_CACERT=/mnt/data/inngest-link/inngest-ca.pem'
   link_run "$LINK_TMP/https.env" INNGEST_REMOTE_GQL_URL=http://10.0.1.40:8288/v0/gql >/dev/null || true
   local argv; argv="$(cat "$LINK_TMP/curl.argv")"
   case "$argv" in *"https://10.0.1.40:8443/v0/gql"*) echo "  PASS: https wins over the inherited http URL"; PASS=$((PASS + 1)) ;; *) echo "  FAIL: the inherited http URL won (argv: $argv)"; FAIL=$((FAIL + 1)) ;; esac
@@ -564,13 +564,14 @@ test_rp_link_invalid_env_is_parsed_not_sourced() {
   local n=0 body
   for body in \
     $'INNGEST_LINK_URL=http://10.0.1.40:8443\nINNGEST_LINK_SCHEME=http\nINNGEST_LINK_CACERT=' \
-    $'INNGEST_LINK_URL=https://evil.invalid:8443\nINNGEST_LINK_SCHEME=https\nINNGEST_LINK_CACERT=/etc/soleur/inngest-ca.pem' \
-    $'INNGEST_LINK_URL=https://10.0.1.40:8443\nINNGEST_LINK_SCHEME=http\nINNGEST_LINK_CACERT=/etc/soleur/inngest-ca.pem' \
+    $'INNGEST_LINK_URL=https://evil.invalid:8443\nINNGEST_LINK_SCHEME=https\nINNGEST_LINK_CACERT=/mnt/data/inngest-link/inngest-ca.pem' \
+    $'INNGEST_LINK_URL=https://10.0.1.40:8443\nINNGEST_LINK_SCHEME=http\nINNGEST_LINK_CACERT=/mnt/data/inngest-link/inngest-ca.pem' \
     $'INNGEST_LINK_URL=https://10.0.1.40:8443\nINNGEST_LINK_SCHEME=https\nINNGEST_LINK_CACERT=/tmp/other.pem' \
-    $'INNGEST_LINK_URL=https://10.0.1.40:8443\nINNGEST_LINK_SCHEME=https\nINNGEST_LINK_CACERT=/etc/soleur/inngest-ca.pem\nEXTRA=1' \
+    $'INNGEST_LINK_URL=https://10.0.1.40:8443\nINNGEST_LINK_SCHEME=https\nINNGEST_LINK_CACERT=/etc/soleur/inngest-ca.pem' \
+    $'INNGEST_LINK_URL=https://10.0.1.40:8443\nINNGEST_LINK_SCHEME=https\nINNGEST_LINK_CACERT=/mnt/data/inngest-link/inngest-ca.pem\nEXTRA=1' \
     $'INNGEST_LINK_URL=$(touch '"$LINK_TMP"$'/PWNED)\nINNGEST_LINK_SCHEME=http\nINNGEST_LINK_CACERT=' \
     $'INNGEST_LINK_URL=http://10.0.1.40:8288;touch '"$LINK_TMP"$'/PWNED\nINNGEST_LINK_SCHEME=http\nINNGEST_LINK_CACERT=' \
-    $'INNGEST_LINK_URL=https://10.0.1.40:8443 \nINNGEST_LINK_SCHEME=https\nINNGEST_LINK_CACERT=/etc/soleur/inngest-ca.pem' ; do
+    $'INNGEST_LINK_URL=https://10.0.1.40:8443 \nINNGEST_LINK_SCHEME=https\nINNGEST_LINK_CACERT=/mnt/data/inngest-link/inngest-ca.pem' ; do
     n=$((n + 1))
     write_link_env "bad$n.env" "$body"
     link_run "$LINK_TMP/bad$n.env" >/dev/null || true
@@ -583,7 +584,7 @@ test_rp_link_invalid_env_is_parsed_not_sourced() {
   done
   # a symlinked link env is refused, not followed
   ln -sf "$LINK_TMP/https.env" "$LINK_TMP/sym.env"
-  write_link_env https.env $'INNGEST_LINK_URL=https://10.0.1.40:8443\nINNGEST_LINK_SCHEME=https\nINNGEST_LINK_CACERT=/etc/soleur/inngest-ca.pem'
+  write_link_env https.env $'INNGEST_LINK_URL=https://10.0.1.40:8443\nINNGEST_LINK_SCHEME=https\nINNGEST_LINK_CACERT=/mnt/data/inngest-link/inngest-ca.pem'
   link_run "$LINK_TMP/sym.env" >/dev/null || true
   if [[ "$(cat "$LINK_TMP/curl.argv")" == *"http://10.0.1.40:8288/v0/gql"* ]] && grep -q 'SOLEUR_INNGEST_LINK_ENV_INVALID' "$LINK_TMP/logger.log"; then
     echo "  PASS: a symlinked link env is not followed"; PASS=$((PASS + 1))

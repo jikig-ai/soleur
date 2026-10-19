@@ -1900,17 +1900,6 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
       "visudo -cf /tmp/deploy-inngest-bootstrap.sudoers.staged",
       "install -o root -g root -m 0440 /tmp/deploy-inngest-bootstrap.sudoers.staged /etc/sudoers.d/deploy-inngest-bootstrap",
       "rm -f /tmp/deploy-inngest-bootstrap.sudoers.staged",
-      # #10136 / ADR-292 — ci-deploy.sh (User=deploy, ProtectSystem=strict) writes the Inngest CA and link env under
-      # /etc/soleur before every app `docker run`. The webhook unit now lists -/etc/soleur in ReadWritePaths; this makes
-      # the DIRECTORY deploy-writable but sticky, so root's cosign-trusted-root.json and the cron-egress lists stay
-      # unreplaceable by deploy (a sticky dir, not a chown of its contents). It runs BEFORE the webhook restart that makes
-      # the new unit take effect. The CA bind source must be a FILE: a missing source becomes a root-owned DIRECTORY at
-      # the first `docker run`, which the atomic rename in ci-deploy.sh then cannot replace (rmdir only ever removes an
-      # EMPTY directory, so a populated one fails the provisioner loudly). No placeholder inngest-link.env: the probes
-      # treat an absent file as the default http link and an empty one as INVALID.
-      "install -d -o root -g deploy -m 1775 /etc/soleur",
-      "if [ -d /etc/soleur/inngest-ca.pem ] && [ ! -L /etc/soleur/inngest-ca.pem ]; then rmdir /etc/soleur/inngest-ca.pem; fi",
-      "[ -e /etc/soleur/inngest-ca.pem ] || install -o deploy -g deploy -m 0644 /dev/null /etc/soleur/inngest-ca.pem",
       # Synchronous restart (safe — this SSH path is not the webhook process).
       "systemctl restart webhook",
       # Positive post-write assertions (journald_persistent / fail2ban_tuning
@@ -2324,7 +2313,7 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
     local.ghcr_deny_sh,
     local.ghcr_deny_assert_sh,
     file("${path.module}/web-2-ssh-host-key.pub"),
-    "dpf-web2-remote-exec-v4",
+    "dpf-web2-remote-exec-v3",
   ]))
 
   connection {
@@ -2543,17 +2532,6 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
       # hooks.json re-registers the status hook + the state-reporter key.
       "grep -q infra-config-status /etc/webhook/hooks.json",
       "grep -q cat_infra_config_state_sh_b64 /etc/webhook/hooks.json",
-      # #10136 / ADR-292 — ci-deploy.sh (User=deploy, ProtectSystem=strict) writes the Inngest CA and link env under
-      # /etc/soleur before every app `docker run`. The webhook unit now lists -/etc/soleur in ReadWritePaths; this makes
-      # the DIRECTORY deploy-writable but sticky, so root's cosign-trusted-root.json and the cron-egress lists stay
-      # unreplaceable by deploy (a sticky dir, not a chown of its contents). It runs BEFORE the webhook restart that makes
-      # the new unit take effect. The CA bind source must be a FILE: a missing source becomes a root-owned DIRECTORY at
-      # the first `docker run`, which the atomic rename in ci-deploy.sh then cannot replace (rmdir only ever removes an
-      # EMPTY directory, so a populated one fails the provisioner loudly). No placeholder inngest-link.env: the probes
-      # treat an absent file as the default http link and an empty one as INVALID.
-      "install -d -o root -g deploy -m 1775 /etc/soleur",
-      "if [ -d /etc/soleur/inngest-ca.pem ] && [ ! -L /etc/soleur/inngest-ca.pem ]; then rmdir /etc/soleur/inngest-ca.pem; fi",
-      "[ -e /etc/soleur/inngest-ca.pem ] || install -o deploy -g deploy -m 0644 /dev/null /etc/soleur/inngest-ca.pem",
       # try-restart, not restart: an inactive unit is left alone and the is-active
       # assertion below then reports the pre-existing outage rather than starting a
       # webhook whose absence might be deliberate (the downtime assessment for a

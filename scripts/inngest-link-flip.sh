@@ -11,44 +11,46 @@
 #   inngest-link-flip.sh off      flag absent -> redeploy -> verify (the rollback; also run by hand)
 #   inngest-link-flip.sh revert   best-effort `off` for the workflow's failure/cancel step; always exits 0
 #
-# THE LEASE IS THE CONTROL, not this script. `pending:<epoch>` is honoured by the resolver only while
-# now <= epoch + 1800 s, after which it resolves to http plus an event. So an aborted run (this script killed,
-# the off dispatch blocked on an environment reviewer nobody is there to approve) cannot leave the web tier on
-# https against a host that cannot answer: the worst case is 30 minutes. The `revert` path is best effort.
+# WHAT THE LEASE BOUNDS, stated so it is not over-read. `pending:<epoch>` is honoured by the deploy-time resolver
+# (ci-deploy.sh resolve_inngest_link) only while now <= epoch + 1800 s, after which a NEW deploy resolves http plus
+# an event. It bounds how long a stuck `pending` can make NEW deploys resolve https; it does NOT touch a RUNNING
+# container, whose INNGEST_BASE_URL is fixed at `docker run`. So a run that dies after the pending redeploy leaves
+# the fleet dialling https until something redeploys it: the `revert` step (best effort; it fires only once the first
+# flag write was attempted), an `off` run, or any later deploy after the lease lapsed.
 #
-# WHAT "VERIFIED" MEANS, stated so it is not over-read. The canary layer (docker inspect shows https, an
-# in-container fetch and inngest.send succeed, the CA-withheld negative control fails, the registry is non-empty)
-# runs INSIDE ci-deploy.sh before the swap and a failed canary exits non-zero and keeps the old container; so a
-# terminal deploy-status of exit_code 0 for our tag is this script's proof of canary + prod swap on the host that
-# answers /hooks/deploy-status (web-1). web-2 receives the deploy over the private-net fan-out (`peers`) and its
-# own canary/swap result is NOT readable from CI: read the ci-deploy resolver log lines for it from Better Stack
-# (runbook inngest-server.md, "Link TLS"). The script therefore ends with an explicit reminder, not a claim.
+# WHAT "VERIFIED" MEANS. The canary layer (docker inspect shows https, an in-container fetch and inngest.send succeed,
+# the CA-withheld negative control fails, the registry is non-empty) runs INSIDE ci-deploy.sh before the swap, and a
+# failed canary exits non-zero and keeps the old container. The redeploy is driven through
+# .github/actions/dispatch-web-redeploy/track.sh, which polls web-1's /hooks/deploy-status for our own frame and fails
+# closed on `ok_peer_fanout_degraded` and on every non-`ok` terminal reason (it keeps polling through a non-terminal
+# lock_contention). Its `ok` proves web-1 canary + prod swap AND that web-2 ACCEPTED the fan-out trigger (HTTP 202).
+# It does NOT prove web-2's own canary or swap: web-1's single status frame carries no per-host result for web-2 (the
+# peer's status is only readable over the private net). Likewise no deploy-status field and no hook reports the
+# scheme the running containers resolved (the handshake hook is independent of the link env). The final line of
+# every subcommand says so; read the `resolved` event (state=, scheme=) of both hosts' ci-deploy log in Better Stack.
 #
 # Environment (all supplied by the workflow; none is echoed):
-#   GH_TOKEN, GITHUB_REPOSITORY, GITHUB_RUN_ID     gh CLI + the audit string
-#   WEBHOOK_SECRET, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET   the deploy webhook (bearer-curl.sh, ADR-280)
-# Test seams (never set by the workflow): FLIP_SLEEP (sleep command), FLIP_NOW (date +%s command),
-#   FLIP_POLL_MAX (deploy-status attempts), FLIP_WATCH_TIMEOUT_S.
+#   GH_TOKEN, GITHUB_REPOSITORY, GITHUB_RUN_ID, GITHUB_OUTPUT     gh CLI, the audit string, the `started` output
+#   WEBHOOK_DEPLOY_SECRET, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET   the deploy webhook (bearer-curl.sh, ADR-280);
+#                                           the names track.sh reads
+#   WEB_HOST_PRIVATE_IPS   the fan-out roster, a parity-pinned literal in the workflow (web-hosts-fanout-parity.test.sh);
+#                          required: an empty value would redeploy web-1 alone and leave the fleet MIXED
+# Test seams (never set by the workflow): FLIP_SLEEP (sleep command), FLIP_NOW (date +%s command), FLIP_TRACK (the
+#   redeploy driver, default track.sh), FLIP_WATCH_TIMEOUT_S.
 
 set -euo pipefail
 
 FLIP_LEASE_S=1800
-FLIP_PEERS="10.0.1.10,10.0.1.11"
 FLIP_APPLY_WORKFLOW="apply-web-platform-infra.yml"
-FLIP_DEPLOY_URL="https://deploy.soleur.ai/hooks/deploy"
 FLIP_STATUS_URL="https://deploy.soleur.ai/hooks/deploy-status"
 FLIP_HANDSHAKE_URL="https://deploy.soleur.ai/hooks/inngest-tls-handshake"
-FLIP_HEALTH_URL="https://app.soleur.ai/health"
-FLIP_IMAGE="ghcr.io/jikig-ai/soleur-web-platform"
 FLIP_SLEEP="${FLIP_SLEEP:-sleep}"
 FLIP_NOW="${FLIP_NOW:-date +%s}"
-FLIP_POLL_MAX="${FLIP_POLL_MAX:-720}"
-FLIP_POLL_INTERVAL_S=5
+# track.sh gives up after this many seconds (verdict=redeploy_timeout). The git-data cutover's redeploy uses the same 2400.
+FLIP_REDEPLOY_TIMEOUT_S=2400
+FLIP_TRACK="${FLIP_TRACK:-${GITHUB_WORKSPACE:-.}/.github/actions/dispatch-web-redeploy/track.sh}"
 FLIP_DONE_AT=""
 FLIP_WATCH_TIMEOUT_S="${FLIP_WATCH_TIMEOUT_S:-1500}"
-# deploy-status is a single slot, so a frame older than the trigger is the PREVIOUS deploy. 60 s clock-skew
-# tolerance (the host stamps start_ts with its own clock), as restart-inngest-server.yml does.
-FLIP_SKEW_S=60
 # ci-deploy-wrapper.sh hard-kills at 4800 s; a status frame still `running` inside that window is live.
 FLIP_IN_FLIGHT_CEILING_S=4800
 
@@ -69,7 +71,7 @@ flip_load_bearer() {
 flip_webhook() {
   local method="$1" url="$2" body="$3" out="$4" code
   # shellcheck disable=SC2034  # read by NAME inside bc_curl
-  FLIP_SIG="$(printf '%s' "$body" | bc_hmac_sha256_hex WEBHOOK_SECRET)" || FLIP_SIG=""
+  FLIP_SIG="$(printf '%s' "$body" | bc_hmac_sha256_hex WEBHOOK_DEPLOY_SECRET)" || FLIP_SIG=""
   if [[ "$method" == POST ]]; then
     code="$(bc_curl inngest-link-flip 'X-Signature-256:sha256=:FLIP_SIG' 'CF-Access-Client-Id::CF_ACCESS_CLIENT_ID' \
       'CF-Access-Client-Secret::CF_ACCESS_CLIENT_SECRET' -- -s --max-time 30 -o "$out" -w '%{http_code}' \
@@ -133,38 +135,28 @@ flip_apply_flag() {
     || { flip_err "the inngest-link-flag run ${id} did not finish green (value ${value%%:*})."; return 1; }
 }
 
-# flip_redeploy: redeploy the RUNNING version (same image, canary-validated, cron-drained swap through ci-deploy.sh)
-# and wait for a terminal frame of our own. Sets FLIP_DONE_AT to the epoch at which the terminal frame was observed. Precedent: apply-deploy-pipeline-fix.yml "Redeploy to load applied profile" (#5875).
-flip_redeploy() {
-  local f="${RUNNER_TEMP:-/tmp}/flip-deploy.json" ver tag payload code trig exit_code reason ftag start
-  ver="$(curl -sf --max-time 15 "$FLIP_HEALTH_URL" 2>/dev/null | jq -r '.version // ""' 2>/dev/null || true)"
-  tag="v${ver}"
-  [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { flip_err "cannot resolve a released semver from ${FLIP_HEALTH_URL}; not redeploying."; return 1; }
-  payload="$(printf '{"command":"deploy web-platform %s %s","peers":"%s"}' "$FLIP_IMAGE" "$tag" "$FLIP_PEERS")"
-  trig="$(flip_now)"
-  code="$(flip_webhook POST "$FLIP_DEPLOY_URL" "$payload" "$f")"
-  [[ "$code" == 202 ]] || { flip_err "the deploy webhook answered HTTP ${code}; nothing was redeployed."; return 1; }
-  flip_log "redeploy of ${tag} accepted; polling deploy-status"
-  for _ in $(seq 1 "$FLIP_POLL_MAX"); do
-    flip_sleep "$FLIP_POLL_INTERVAL_S"
-    rm -f "$f"
-    code="$(flip_webhook GET "$FLIP_STATUS_URL" "" "$f")"
-    [[ "$code" == 200 ]] || continue
-    jq -e . "$f" >/dev/null 2>&1 || continue
-    exit_code="$(jq -r '.exit_code // -99' "$f")"; reason="$(jq -r '.reason // "unknown"' "$f" | tr -cd 'a-z0-9_-')"
-    ftag="$(jq -r '.tag // ""' "$f")"; start="$(jq -r '.start_ts // 0' "$f")"
-    [[ "$start" =~ ^[0-9]+$ ]] || start=0
-    # A frame that started before our trigger is the previous deploy's, whatever it says.
-    (( start >= trig - FLIP_SKEW_S )) || continue
-    case "$exit_code" in
-      0) if [[ "$ftag" == "$tag" ]]; then flip_log "ci-deploy.sh completed for ${tag} (canary passed, prod swapped on the answering host)"; FLIP_DONE_AT="$(flip_now)"; return 0; fi ;;
-      -1|-2|-3) ;;
-      *) if [[ "$reason" == lock_contention ]]; then continue; fi
-         flip_err "ci-deploy.sh exited ${exit_code} (reason=${reason}, tag=${ftag}): the canary or the swap failed and the old container keeps serving."; return 1 ;;
-    esac
-  done
-  flip_err "ci-deploy.sh reported no terminal frame for ${tag} within $((FLIP_POLL_MAX * FLIP_POLL_INTERVAL_S))s."
-  return 1
+# flip_dispatch_redeploy: redeploy the RUNNING version (same image, canary-validated, cron-drained swap through
+# ci-deploy.sh) by delegating to the shared driver, track.sh. It resolves the running tag, reads the PRIOR_START baseline,
+# POSTs with the full peer roster and polls for OUR frame, and it exits non-zero on `ok_peer_fanout_degraded` (a MIXED
+# fleet), on every non-`ok` terminal reason and on a timeout; it keeps polling through lock_contention. This function does
+# not interpret the frame itself, so it cannot accept a frame track.sh refuses. Sets FLIP_DONE_AT from the shell clock.
+flip_dispatch_redeploy() {
+  WEB_HOST_PRIVATE_IPS="${WEB_HOST_PRIVATE_IPS:-}" REDEPLOY_TIMEOUT_S="$FLIP_REDEPLOY_TIMEOUT_S" bash "$FLIP_TRACK" \
+    || { flip_err "the fleet redeploy (track.sh) did not confirm a clean swap on every host; the verdict is in its output above."; return 1; }
+  FLIP_DONE_AT="$(flip_now)"
+}
+
+# flip_require_peers: an empty roster makes track.sh redeploy web-1 alone (its manual lever), which for this flip is the
+# MIXED fleet it exists to prevent. Refuse before anything is dispatched.
+flip_require_peers() {
+  [[ "${WEB_HOST_PRIVATE_IPS:-}" =~ ^[0-9.]+(,[0-9.]+)*$ ]] \
+    || { flip_err "WEB_HOST_PRIVATE_IPS is unset or malformed; a single-host redeploy would leave the fleet mixed. Nothing was dispatched."; return 1; }
+}
+
+# flip_mark_started: tell the workflow the first flag write is about to be attempted. The revert step is gated on this
+# output, so a typo-guard or idle-guard refusal (nothing written) never dispatches an off apply or a redeploy.
+flip_mark_started() {
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then printf 'started=true\n' >> "$GITHUB_OUTPUT"; fi
 }
 
 # flip_verify <t0>: the post-swap checks that need no host access. The lease must not have lapsed during the deploy
@@ -181,27 +173,31 @@ flip_verify() {
 
 flip_cmd_flip() {
   local t0
-  flip_load_bearer; flip_guard_idle
+  flip_load_bearer; flip_require_peers; flip_guard_idle
   t0="$(flip_now)"
+  flip_mark_started
   flip_apply_flag "pending:${t0}"
-  flip_redeploy
+  flip_dispatch_redeploy
   flip_verify "$t0" "$FLIP_DONE_AT"
   flip_apply_flag 1
-  flip_log "FLIPPED: flag=1. T (last prod swap observed, before the drain) = ${FLIP_DONE_AT}. Take the counter baseline AFTER the old container drains; web-2's swap is proven by its ci-deploy resolver log (Better Stack), not by this run."
+  flip_log "FLIPPED: flag=1 applied and the fleet redeploy confirmed by track.sh (web-1 swapped, web-2 accepted the trigger). T (last prod swap observed, before the drain) = ${FLIP_DONE_AT}. NOT VERIFIED by this run: web-2's own canary and swap, and the scheme the running containers resolved (no deploy-status field or hook carries either); read the ci-deploy 'resolved' event (state=, scheme=) of BOTH hosts in Better Stack before taking the counter baseline, which is taken AFTER the old container drains."
 }
 
+# `off` is the release valve for a fail-closed fleet, so it takes NO idle guard: deploy contention is handled by
+# track.sh (lock_contention is non-terminal) and by the Tier-B job's own concurrency group.
 flip_cmd_off() {
-  flip_load_bearer; flip_guard_idle
+  flip_load_bearer; flip_require_peers
   flip_apply_flag off
-  flip_redeploy
-  flip_log "OFF: flag removed and the running version redeployed on the http link. web-2 follows through the fan-out; confirm it from the ci-deploy log."
+  flip_dispatch_redeploy
+  flip_log "OFF: the flag-absent apply job finished green (its plan held exactly one delete) and the fleet redeploy was confirmed by track.sh (web-1 swapped, web-2 accepted the trigger). NOT VERIFIED by this run: web-2's own canary and swap, and the scheme the running containers resolved (no deploy-status field or hook carries either); confirm with the ci-deploy 'resolved' event (state=http) of BOTH hosts in Better Stack."
 }
 
 flip_cmd_revert() {
-  flip_log "revert: best-effort flag off + redeploy (the 30-minute lease bounds the worst case)"
+  flip_log "revert: best-effort flag off + redeploy (the lease does not touch a running container, so this is what moves the fleet back)"
   flip_load_bearer || return 0
-  ( flip_apply_flag off ) || flip_log "::warning::the best-effort off dispatch did not finish green; the lease (${FLIP_LEASE_S}s) bounds the exposure."
-  ( flip_redeploy >/dev/null ) || flip_log "::warning::the best-effort redeploy did not complete; run the workflow with action=off."
+  flip_require_peers || return 0
+  ( flip_apply_flag off ) || flip_log "::warning::the best-effort off dispatch did not finish green; run the workflow with action=off. A running https container stays on https until a redeploy."
+  ( flip_dispatch_redeploy ) || flip_log "::warning::the best-effort redeploy did not complete; run the workflow with action=off."
   return 0
 }
 

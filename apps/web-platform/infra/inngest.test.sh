@@ -2717,51 +2717,6 @@ assert "webhook.service RWP has NO mandatory (bare) /var/lib/inngest" \
 assert "RWP token lists byte-identical across both lockstep copies" \
   "[[ -n \"\$CI_RWP\" && \"\$CI_RWP\" == \"\$WS_RWP\" ]]"
 
-# --- #10136: /etc/soleur must be writable by the deploy-run ci-deploy.sh (resolve_inngest_link) ---
-# ci-deploy.sh runs as User=deploy under ProtectSystem=strict and writes /etc/soleur/inngest-ca.pem and
-# /etc/soleur/inngest-link.env before EVERY app `docker run` on running hosts. Without a ReadWritePaths entry the write
-# is EROFS and docker would create a root-owned DIRECTORY at the CA bind source. `-` prefix (the #6090 rule): a host
-# without the directory must still bring the unit up. The directory itself is root:deploy 1775 (sticky), so the
-# root-owned files already there (cosign-trusted-root.json, the cron-egress lists) stay unreplaceable by deploy.
-echo ""
-echo "--- #10136: webhook RWP -/etc/soleur optional (both lockstep copies) ---"
-assert "cloud-init RWP marks /etc/soleur optional (-prefix)" \
-  "grep -qE -- '(^|[[:space:]])-/etc/soleur([[:space:]]|\$)' <<< \"\$CI_RWP\""
-assert "cloud-init RWP has NO mandatory (bare) /etc/soleur" \
-  "! grep -qE -- '(^|[[:space:]])/etc/soleur([[:space:]]|\$)' <<< \"\$CI_RWP\""
-assert "webhook.service RWP marks /etc/soleur optional (-prefix)" \
-  "grep -qE -- '(^|[[:space:]])-/etc/soleur([[:space:]]|\$)' <<< \"\$WS_RWP\""
-assert "webhook.service RWP has NO mandatory (bare) /etc/soleur" \
-  "! grep -qE -- '(^|[[:space:]])/etc/soleur([[:space:]]|\$)' <<< \"\$WS_RWP\""
-
-# The directory must be deploy-writable BEFORE the webhook restart that makes the new unit take effect, on BOTH running
-# hosts: web-1 through the root-SSH handler bridge (the webhook-delivered deploy_pipeline_fix cannot chgrp a root dir),
-# web-2 through its own SSH resource. A mkdir -p that leaves root:root 755 would make the RWP entry useless.
-SERVER_TF_10136="$SCRIPT_DIR/server.tf"
-tf_block_10136() { awk -v r="$1" '$0 ~ "^resource \"terraform_data\" \"" r "\" " { p = 1 } p && /^resource / && $0 !~ "\"" r "\" " { exit } p' "$SERVER_TF_10136"; }
-DIR_CMD_10136='install -d -o root -g deploy -m 1775 /etc/soleur'
-CA_CMD_10136='install -o deploy -g deploy -m 0644 /dev/null /etc/soleur/inngest-ca.pem'
-for spec_10136 in "infra_config_handler_bootstrap|systemctl restart webhook" "deploy_pipeline_fix_web2|systemctl try-restart webhook"; do
-  res_10136="${spec_10136%%|*}"; rst_10136="${spec_10136#*|}"
-  blk_10136="$(tf_block_10136 "$res_10136")"
-  dir_ln="$(grep -nF -- "\"$DIR_CMD_10136\"" <<< "$blk_10136" | sed -n '1p' | cut -d: -f1 || true)"
-  ca_ln="$(grep -nF -- "$CA_CMD_10136" <<< "$blk_10136" | sed -n '1p' | cut -d: -f1 || true)"
-  rst_ln="$(grep -nF -- "\"$rst_10136\"" <<< "$blk_10136" | sed -n '1p' | cut -d: -f1 || true)"
-  assert "$res_10136: block extracted (non-vacuous)" "[[ -n \"\$blk_10136\" ]]"
-  assert "$res_10136: /etc/soleur is made root:deploy 1775 (sticky) before the webhook restart" \
-    "[[ -n '$dir_ln' && -n '$rst_ln' && '$dir_ln' -lt '$rst_ln' ]]"
-  assert "$res_10136: the CA bind source exists as a deploy-owned FILE before the webhook restart" \
-    "[[ -n '$ca_ln' && -n '$rst_ln' && '$ca_ln' -lt '$rst_ln' ]]"
-  assert "$res_10136: an empty directory docker made at the CA bind source is removed (rmdir), never recursed into" \
-    "grep -qF -- 'rmdir /etc/soleur/inngest-ca.pem' <<< \"\$blk_10136\" && ! grep -qE -- 'rm -[a-z]*r[a-z]* /etc/soleur' <<< \"\$blk_10136\""
-  assert "$res_10136: no placeholder inngest-link.env (an empty file reads as an INVALID link to the probes)" \
-    "! grep -qF -- '/dev/null /etc/soleur/inngest-link.env' <<< \"\$blk_10136\""
-done
-assert "cloud-init first boot creates the same root:deploy 1775 directory and CA file" \
-  "grep -qF -- '$DIR_CMD_10136' '$CLOUD_INIT' && grep -qF -- '$CA_CMD_10136' '$CLOUD_INIT'"
-assert "infra-config-install.sh pins the committed webhook.service bytes (the unit edit is deliverable)" \
-  "grep -qF -- \"\$(sha256sum '$WEBHOOK_SERVICE' | cut -d' ' -f1)\" '$SCRIPT_DIR/infra-config-install.sh'"
-
 # --- `terraform fmt -check` for HCL hygiene ---
 echo ""
 echo "--- terraform fmt -check ---"

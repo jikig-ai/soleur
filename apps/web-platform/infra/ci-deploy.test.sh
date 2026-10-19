@@ -33,10 +33,11 @@ export DEPLOY_DOCKER_CONFIG_DIR
 # seed block re-arms the guard explicitly to prove the refusal fires.
 export PLUGIN_MOUNT_DIR_ALLOW_UNSAFE=1
 
-# #10136: resolve_inngest_link writes /etc/soleur/inngest-ca.pem and inngest-link.env. /etc/soleur is root-owned on a real
-# host and absent on the runner, so every deploy subshell (they inherit this export) writes under a scratch dir instead.
+# #10136: resolve_inngest_link writes /mnt/data/inngest-link/inngest-ca.pem and inngest-link.env (mkdir -p first). /mnt/data is
+# absent on the runner, so every deploy subshell (they inherit this export) writes under a scratch dir instead, in a
+# subdirectory that does NOT exist yet so the resolver's own mkdir -p is on the path of every deploy test.
 INNGEST_LINK_TEST_DIR="$(mktemp -d)"
-export INNGEST_LINK_DIR="$INNGEST_LINK_TEST_DIR"
+export INNGEST_LINK_DIR="$INNGEST_LINK_TEST_DIR/inngest-link"
 
 # #6665: the sleep mock's invocation cap has to be able to REPORT itself, and its own stderr
 # cannot. `run_deploy` merges the deploy script's stderr into the subshell's stdout
@@ -3130,13 +3131,13 @@ echo "--- Inngest link on docker run (#10136, Guard 1: the resolver chokepoint) 
 # resolver wrote the placeholder + link env under the scratch dir. The unit suite (inngest-link-resolver.test.sh) owns the
 # flag/CA/self-gate matrix; these rows prove the WIRING into the real deploy flow.
 TOTAL=$((TOTAL + 1))
-IL_OUT=$( ( export MOCK_DOCKER_MODE="apparmor-trace"; rm -f "$INNGEST_LINK_DIR"/inngest-*; run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1 ) ) && IL_RC=0 || IL_RC=$?
+IL_OUT=$( ( export MOCK_DOCKER_MODE="apparmor-trace"; rm -f "$INNGEST_LINK_DIR"/inngest-*; rmdir "$INNGEST_LINK_DIR" 2>/dev/null || true; run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1 ) ) && IL_RC=0 || IL_RC=$?
 IL_RUNS=$(printf '%s\n' "$IL_OUT" | grep -c '^DOCKER_RUN_ARGS:' || true)
 IL_OK=1
 [[ "$IL_RUNS" -eq 2 ]] || IL_OK=0
 [[ "$(printf '%s\n' "$IL_OUT" | grep '^DOCKER_RUN_ARGS:' | grep -cF -- '-e INNGEST_BASE_URL=http://10.0.1.40:8288')" -eq 2 ]] || IL_OK=0
 [[ "$(printf '%s\n' "$IL_OUT" | grep '^DOCKER_RUN_ARGS:' | grep -cF -- '-e NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem')" -eq 2 ]] || IL_OK=0
-[[ "$(printf '%s\n' "$IL_OUT" | grep '^DOCKER_RUN_ARGS:' | grep -cF -- '-v /etc/soleur/inngest-ca.pem:/etc/soleur/inngest-ca.pem:ro')" -eq 2 ]] || IL_OK=0
+[[ "$(printf '%s\n' "$IL_OUT" | grep '^DOCKER_RUN_ARGS:' | grep -cF -- '-v /mnt/data/inngest-link/inngest-ca.pem:/etc/soleur/inngest-ca.pem:ro')" -eq 2 ]] || IL_OK=0
 [[ -f "$INNGEST_LINK_DIR/inngest-ca.pem" && ! -s "$INNGEST_LINK_DIR/inngest-ca.pem" ]] || IL_OK=0
 [[ "$(cat "$INNGEST_LINK_DIR/inngest-link.env" 2>/dev/null)" == $'INNGEST_LINK_URL=http://10.0.1.40:8288\nINNGEST_LINK_SCHEME=http\nINNGEST_LINK_CACERT=' ]] || IL_OK=0
 if [[ "$IL_OK" -eq 1 ]]; then

@@ -941,7 +941,7 @@ STUB
   rc="$(tls_fetch_run)"
   [[ "$rc" == 0 && -s "$(D)/key.pem" && -s "$(D)/cert.pem" ]] && pass || fail "fetch happy path must publish key.pem and cert.pem (rc=$rc)"
   [[ "$(stat -c %a "$(D)/key.pem" 2>/dev/null)" == 640 && "$(stat -c %a "$(D)/cert.pem" 2>/dev/null)" == 644 ]] && pass || fail "published modes must be key 0640, cert 0644"
-  [[ "$(stat -c %a "$(D)")" == 750 ]] && grep -qxF "chgrp stunnel4 $(D)" "$W/own.log" && grep -q "^chown root:stunnel4 .*/k\$" "$W/own.log" && pass || fail "the runtime dir must be 0750 group stunnel4 and the key group stunnel4 (own.log: $(tr '\n' '|' < "$W/own.log"))"
+  [[ "$(stat -c %a "$(D)")" == 750 ]] && grep -qxF "chgrp stunnel4 $(D)" "$W/own.log" && grep -q "^chown root:stunnel4 .*/key.pem\$" "$W/own.log" && pass || fail "the runtime dir must be 0750 group stunnel4 and the key group stunnel4 (own.log: $(tr '\n' '|' < "$W/own.log"))"
   [[ "$(cat "$W/run/soleur-inngest-tls.rc" 2>/dev/null)" == 0 ]] && pass || fail "fetch must record rc 0 for the health emitter"
   [[ "$(ls -A "$(D)" | sort | tr '\n' ' ')" == "cert.pem key.pem " ]] && pass || fail "no temp directory may be left behind (found: $(ls -A "$(D)" | tr '\n' ' '))"
   # No secret on argv, stdout or stderr.
@@ -968,7 +968,26 @@ STUB
   rc="$(tls_fetch_run)"
   [[ "$rc" != 0 && ! -e "$(D)/key.pem" ]] && pass || fail "a missing Doppler token file must fail closed (rc=$rc)"
 
-  # 12e. BEHAVIOUR of the health emitter: stubs for systemctl, ss, nft, journalctl, logger, the phone-home
+  # R3 (P3): a failed re-fetch must not abort the unit start while the preserved RuntimeDirectory already
+  # holds a matching, unexpired pair (RuntimeDirectoryPreserve=restart). The rc file still records the cause.
+  tls_stale() { # <name> <key> <cert>: Doppler unreachable (no fixtures), pair already published
+    tls_sandbox "$1"; cp "$2" "$(D)/key.pem"; cp "$3" "$(D)/cert.pem"
+  }
+  tls_stale stale "$TLS_T/key" "$TLS_T/cert"
+  rc="$(tls_fetch_run)"
+  [[ "$rc" == 0 && "$(cat "$W/run/soleur-inngest-tls.rc")" == 93 ]] && cmp -s "$TLS_T/key" "$(D)/key.pem" && cmp -s "$TLS_T/cert" "$(D)/cert.pem" && pass || fail "a failed re-fetch with a valid pair already in place must exit 0, keep the pair and record rc 93 (rc=$rc, rcfile=$(cat "$W/run/soleur-inngest-tls.rc" 2>/dev/null))"
+  tls_stale stalemis "$TLS_T/otherkey" "$TLS_T/cert"
+  rc="$(tls_fetch_run)"
+  [[ "$rc" != 0 ]] && pass || fail "a failed re-fetch with a MISMATCHED pair in place must still fail the start (rc=$rc)"
+  openssl req -new -x509 -key "$TLS_T/key" -subj /CN=fixture -days 1 -addext "subjectAltName=IP:10.0.1.40" -out "$TLS_T/cert1d" 2>/dev/null
+  tls_stale staleexp "$TLS_T/key" "$TLS_T/cert1d"
+  rc="$(tls_fetch_run)"
+  [[ "$rc" != 0 ]] && pass || fail "a failed re-fetch with a pair that expires within a day must still fail the start (rc=$rc)"
+  tls_stale stalehalf "$TLS_T/key" "$TLS_T/cert"; rm -f "$(D)/cert.pem"
+  rc="$(tls_fetch_run)"
+  [[ "$rc" != 0 ]] && pass || fail "a failed re-fetch with only half a pair in place must still fail the start (rc=$rc)"
+
+  # 12e. BEHAVIOUR of the health emitter: stubs for systemctl, ss, nft, logger, the phone-home
   #      emitter and `openssl s_client`; every other openssl call is real.
   tls_hsandbox() { # <name> <cert> <listening 1|0>
     W="$TLS_T/$1"; mkdir -p "$W/bin" "$W/run/soleur-inngest-tls"
@@ -994,7 +1013,6 @@ case "$*" in
 esac
 STUB
     printf 'table inet soleur_inngest {\n\tchain input {\n\t\ttype filter hook input priority -10; policy accept;\n\t\tiif "lo" accept\n\t\ttcp dport 8288 ip saddr { 10.0.1.10 } counter name "legacy_8288"\n\t\ttcp dport { 8288, 8289 } ip saddr { 10.0.1.10 } accept\n\t\ttcp dport { 8288, 8289 } drop\n\t\ttcp dport 8443 ip saddr { 10.0.1.10 } counter name "tls_8443"\n\t\ttcp dport 8443 ip saddr { 10.0.1.10 } accept\n\t\ttcp dport 8443 drop\n\t}\n}\n' > "$W/chain.txt"
-    printf '#!/bin/sh\nprintf "SSL_accept: unsupported protocol\\nSSL_accept: no shared cipher\\nSSL_accept: bad certificate\\nTLS accepted: ok\\n"\n' > "$W/bin/journalctl"
     printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$W/logger.log"\n' > "$W/bin/logger"
     printf '#!/bin/sh\nprintf "%%s|%%s\\n" "$1" "$2" >> "$W/phone.log"\n' > "$W/phone.sh"
     cat > "$W/bin/openssl" <<'STUB'
@@ -1018,11 +1036,13 @@ STUB
   tls_hsandbox hok "$TLS_T/cert" 1
   rc="$(tls_health_run)"
   HROW="$(cat "$W/phone.log" 2>/dev/null)"
-  HRE='^tls-health\|unit=active nrestarts=2 fetch_rc=0 bind=10\.0\.1\.40:8443 listener=1 served_sha256=[0-9a-f]{64} cert_sha256=[0-9a-f]{64} notafter_days=[0-9]+ hs_fail_15m=3 legacy_8288_packets=6 tls_8443_packets=9 nft8443_sha256=[0-9a-f]{64} nft_rules=[0-9]+ boot_id=[0-9a-f]{8}$'
+  HRE='^tls-health\|unit=active nrestarts=2 fetch_rc=0 bind=10\.0\.1\.40:8443 listener=1 served_sha256=[0-9a-f]{64} cert_sha256=[0-9a-f]{64} notafter_days=[0-9]+ legacy_8288_packets=6 tls_8443_packets=9 nft8443_sha256=[0-9a-f]{64} nft_rules=[0-9]+ boot_id=[0-9a-f]{8}$'
   [[ "$rc" == 0 ]] && grep -qE "$HRE" <<<"$HROW" && pass || fail "healthy emit must be exactly one tls-health row with the planned field list in order (rc=$rc row='$HROW')"
   _s="$(printf '%s' "$HROW" | sed -n 's/.*served_sha256=\([0-9a-f]*\).*/\1/p')"; _c="$(printf '%s' "$HROW" | sed -n 's/.* cert_sha256=\([0-9a-f]*\).*/\1/p')"
   _real="$(openssl x509 -in "$TLS_T/cert" -noout -fingerprint -sha256 | cut -d= -f2 | tr -d : | tr 'A-F' 'a-f')"
   [[ -n "$_s" && "$_s" == "$_c" && "$_c" == "$_real" ]] && pass || fail "served_sha256 and cert_sha256 must both equal the lowercase colon-free SHA-256 of the DER cert (served=$_s cert=$_c real=$_real)"
+  # R3 (S5): the handshake-failure counter was removed (no consumer; a client that rejects the CA leaves no stunnel error line).
+  ! grep -qE 'hs_fail|journalctl|SSL_accept' <<<"$TLS_HEALTH" && pass || fail "the tls-health script must not carry the removed hs_fail_15m field or its journald scan"
   [[ ! -s "$W/logger.log" ]] && pass || fail "a healthy host must not emit the crit refusal marker (logger: $(cat "$W/logger.log"))"
   [[ "$(printf '%s\n' "$HROW" | grep -c .)" == 1 ]] && pass || fail "exactly one phone-home row per run"
   # The phone-home redaction pass must preserve the labelled sha256 fields and the 8-char boot_id.

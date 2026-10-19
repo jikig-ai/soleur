@@ -6570,14 +6570,16 @@ jobs:
             terraform plan -no-color -input=false -out=tfplan \
               -var="ssh_key_path=${CI_SSH_PUB}" \
               -target=doppler_secret.inngest_link_tls
-          # Blast-radius gate: read the PLAN. Only this address may change; `off` may only delete it, any
-          # other value may only create or update it.
+          # Blast-radius gate: read the PLAN. Only this address may change; `off` must plan EXACTLY ONE delete of it
+          # (a zero-change plan means the source-key delete above failed silently, or the flag was never set, and
+          # reporting success then would print "flag removed" while the flag is still live), any other value may
+          # only create or update it.
           terraform show -json tfplan | jq -e --arg v "$LINK_VALUE" '
             [.resource_changes[]? | select(.change.actions != ["no-op"] and .change.actions != ["read"])] as $c
             | ($c | all(.[]; .address == "doppler_secret.inngest_link_tls[0]"))
-              and (if $v == "off" then ($c | all(.[]; .change.actions == ["delete"]))
+              and (if $v == "off" then ($c | (length == 1 and all(.[]; .change.actions == ["delete"])))
                    else ($c | all(.[]; .change.actions == ["create"] or .change.actions == ["update"])) end)' >/dev/null \
-            || { echo "::error::blast-radius gate: the plan changes something other than doppler_secret.inngest_link_tls, or the wrong action for '${LINK_VALUE}'. Nothing was applied."; exit 1; }
+            || { echo "::error::blast-radius gate: the plan must change only doppler_secret.inngest_link_tls, with exactly one delete for 'off' (a zero-change plan fails: the flag delete did not take effect, or the flag was already absent) or a create/update for any other value. Nothing was applied (value '${LINK_VALUE}')."; exit 1; }
 
       - name: Terraform apply
         working-directory: ${{ env.INFRA_DIR }}

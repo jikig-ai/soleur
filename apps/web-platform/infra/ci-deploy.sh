@@ -3410,32 +3410,31 @@ github_app_key_canary_check() {
 # resolve_inngest_link <env-snapshot> (#10136, ADR-292): the SINGLE chokepoint that decides which Inngest link the
 # web container is handed, and the only writer of the CA file that becomes a trust anchor for EVERY Node outbound
 # TLS connection in that container (NODE_EXTRA_CA_CERTS). Everything downstream (the canary and prod `docker run`,
-# the probes through /etc/soleur/inngest-link.env, docker-run-tuple.py) accepts exactly the pair it can produce:
+# the probes through $INNGEST_LINK_DIR/inngest-link.env, docker-run-tuple.py) accepts exactly the pair it can produce:
 #   http://10.0.1.40:8288   only on a CLEAN not-found of the flag, or a lapsed `pending:` lease;
 #   https://10.0.1.40:8443  otherwise, or the deploy FAILS (non-zero, the old container keeps serving). Never a downgrade.
 # The flag is INNGEST_LINK_TLS in the soleur/prd snapshot resolve_env_file already wrote (a missing key is
 # authoritative absence; stderr is never parsed): allowlist ^(1|pending:[0-9]{1,10})$, a `pending:<epoch>` is honoured
 # only while epoch <= now+31 min AND now < epoch+30 min, any other non-empty value fails the deploy. The two Doppler
 # metadata lines of the snapshot must name soleur/prd (a mis-bound token must never read "absent").
-# The CA (INNGEST_TLS_CA, base64) is validated BEFORE it is written: <= 4 KiB, no PRIVATE KEY, 1-2 CERTIFICATE blocks,
-# each self-signed with CA:FALSE, SAN exactly IP:10.0.1.40, serverAuth only, notAfter in the future; it is re-encoded
-# canonically and installed with mktemp + rename. With the flag ON any of {CA read error, CA empty/invalid, install
-# failure, the host-side `curl --cacert` self-gate failing} fails the deploy. The self-gate proves only the host
-# OUTPUT path and the pinned bytes, not container egress or Node trust (the canary does); a substituted CA fails
-# against the real host, so it denies service rather than enabling a MITM. With the flag OFF a failure to read or
-# validate the CA leaves an EMPTY placeholder (never an unvalidated file) and never fails the deploy.
-# /etc/soleur/inngest-link.env is written from enum branches and constants ONLY, never from flag or CA text; the
+# The CA (INNGEST_TLS_CA, base64) is validated BEFORE it is written: <= 4 KiB, no PRIVATE KEY, EXACTLY ONE CERTIFICATE block,
+# parses, not expired, not CA:TRUE; it is installed with mktemp + rename under $INNGEST_LINK_DIR (/mnt/data/inngest-link, deploy-owned,
+# created here with mkdir -p; the docker bind source is the FILE, so it must exist before `docker run`). With the flag ON any of
+# {CA read error, CA empty/invalid, install failure, the host-side `curl --cacert` self-gate failing} fails the deploy. The
+# self-gate proves only the host OUTPUT path and the pinned bytes, not container egress or Node trust (the canary does); a
+# substituted CA fails against the real host, so it denies service rather than enabling a MITM. With the flag OFF a failure to
+# read or validate the CA leaves an EMPTY placeholder (never an unvalidated file) and never fails the deploy.
+# $INNGEST_LINK_DIR/inngest-link.env is written from enum branches and constants ONLY, never from flag or CA text; the
 # probes parse it with a key allowlist and never source it. Sets: INNGEST_BASE_URL_RESOLVED, INNGEST_LINK_STATE
 # (http_default|http_lease_expired|https_flag|https_pending), INNGEST_LINK_REASON (a fixed token on failure),
-# INNGEST_LINK_CA_SHA, INNGEST_LINK_CA_STRICT. Returns 0, or 1 with INNGEST_LINK_REASON set. The caller invokes it with
+# INNGEST_LINK_CA_STRICT. Returns 0, or 1 with INNGEST_LINK_REASON set. The caller invokes it with
 # `|| rc=$?` (set -e is OFF inside), so every step below handles its own failure.
 INNGEST_LINK_HTTP_URL="http://10.0.1.40:8288"
 INNGEST_LINK_HTTPS_URL="https://10.0.1.40:8443"
-INNGEST_LINK_DIR="${INNGEST_LINK_DIR:-/etc/soleur}"
+INNGEST_LINK_DIR="${INNGEST_LINK_DIR:-/mnt/data/inngest-link}"
 INNGEST_BASE_URL_RESOLVED=""
 INNGEST_LINK_STATE=""
 INNGEST_LINK_REASON=""
-INNGEST_LINK_CA_SHA=""
 INNGEST_LINK_CA_STRICT=0
 
 inngest_link_event() { # <class> <level> [detail]: journald always, Sentry for warning/error (best effort)
@@ -3469,18 +3468,21 @@ _inngest_link_snap_get() {
   return 0
 }
 
-# _inngest_link_validate_ca <base64> <out-file>: decode, validate every certificate, write the CANONICAL PEM to
-# <out-file>. Returns 0 valid, 1 invalid (nothing written) with _IL_WHY naming the first failed check (a fixed token, so
-# the ca_invalid event is diagnosable without SSH): tool|decode|size|empty|key|count|parse|expired|notself|ca|san|eku.
-# `openssl` is required (ca-certificates depends on it, so it is on every Ubuntu host; verified by this check, not assumed):
+# _inngest_link_validate_ca <base64> <out-file>: decode, validate, write the single certificate block to <out-file>.
+# Returns 0 valid, 1 invalid (nothing written) with _IL_WHY naming the first failed check (a fixed token, so the
+# ca_invalid event is diagnosable without SSH): tool|decode|size|empty|key|count|parse|expired|ca. Deliberately small: <= 4 KiB,
+# no PRIVATE KEY, EXACTLY ONE CERTIFICATE block (a second one would become a trust anchor for ALL outbound TLS of the
+# container), parses, not expired, not CA:TRUE. Name/SAN/EKU/self-signature are NOT re-checked here: the host-side
+# `curl --cacert ... https://10.0.1.40:8443/health` self-gate and the canary's CA-withheld negative control prove the pinned
+# file against the real listener. `openssl` is required (ca-certificates depends on it, so it is on every Ubuntu host):
 # without it a flag-on deploy fails closed with why=tool rather than trusting an unvalidated file.
 _inngest_link_validate_ca() {
-  local b64="$1" out="$2" wd raw n_begin n_cert p rc=1 cnt subj issuer bc san eku
+  local b64="$1" out="$2" wd raw n_begin n_cert x509 rc=1
   _IL_WHY=""
   command -v openssl >/dev/null 2>&1 || { _IL_WHY=tool; return 1; }
   # at most 4 KiB decoded is <= 5462 base64 characters; refuse an oversize secret before decoding it
   if (( ${#b64} == 0 || ${#b64} > 6000 )); then _IL_WHY=size; return 1; fi
-  wd="$(mktemp -d /tmp/inngest-ca-check.XXXXXX 2>/dev/null)" || { _IL_WHY=tool; return 1; }
+  wd="$(mktemp -d /tmp/inngest-ca-check.XXXXXX 2>/dev/null)" || { _IL_WHY=tool; return 1; }  # lint-trap-ownership: ok rm -rf on every path below; the unit has PrivateTmp, so an abort leaks nothing outside its namespace
   raw="$wd/raw"
   while :; do
     printf '%s' "$b64" | base64 -d 2>/dev/null | tr -d '\r' > "$raw" || { _IL_WHY=decode; break; }
@@ -3489,32 +3491,21 @@ _inngest_link_validate_ca() {
     if grep -q 'PRIVATE KEY' "$raw"; then _IL_WHY=key; break; fi
     n_begin="$(grep -cE '^[[:space:]]*-----BEGIN ' "$raw")" || n_begin=0
     n_cert="$(grep -cE '^[[:space:]]*-----BEGIN CERTIFICATE-----[[:space:]]*$' "$raw")" || n_cert=0
-    [[ "$n_begin" -ge 1 && "$n_begin" -le 2 && "$n_begin" == "$n_cert" ]] || { _IL_WHY=count; break; }
-    # split into one file per block; text outside the blocks is dropped by the canonical re-encoding below
-    awk -v d="$wd" '
-      /^[[:space:]]*-----BEGIN CERTIFICATE-----[[:space:]]*$/ { n++; f = d "/part" n ".pem"; inb = 1 }
-      inb { sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, ""); print > f }
-      /^[[:space:]]*-----END CERTIFICATE-----[[:space:]]*$/ { inb = 0; close(f) }' "$raw" || { _IL_WHY=parse; break; }
-    cnt=0; : > "$wd/canon"
-    for p in "$wd"/part*.pem; do
-      [[ -f "$p" ]] || { _IL_WHY=parse; break 2; }
-      cnt=$((cnt + 1))
-      timeout 10 openssl x509 -in "$p" -outform PEM >> "$wd/canon" 2>/dev/null || { _IL_WHY=parse; break 2; }
-      timeout 10 openssl x509 -in "$p" -noout -checkend 0 >/dev/null 2>&1 || { _IL_WHY=expired; break 2; }
-      # self-signed: the issuer is the subject AND the signature verifies under the certificate's own key
-      subj="$(timeout 10 openssl x509 -in "$p" -noout -subject -nameopt RFC2253 2>/dev/null)" || { _IL_WHY=parse; break 2; }
-      issuer="$(timeout 10 openssl x509 -in "$p" -noout -issuer -nameopt RFC2253 2>/dev/null)" || { _IL_WHY=parse; break 2; }
-      [[ -n "$subj" && "${subj#subject=}" == "${issuer#issuer=}" ]] || { _IL_WHY=notself; break 2; }
-      timeout 10 openssl verify -CAfile "$p" -check_ss_sig "$p" >/dev/null 2>&1 || { _IL_WHY=notself; break 2; }
-      bc="$(timeout 10 openssl x509 -in "$p" -noout -ext basicConstraints 2>/dev/null | tr -d '\n')" || { _IL_WHY=parse; break 2; }
-      [[ "$bc" == *"CA:FALSE"* && "$bc" != *"CA:TRUE"* ]] || { _IL_WHY=ca; break 2; }
-      san="$(timeout 10 openssl x509 -in "$p" -noout -ext subjectAltName 2>/dev/null | sed '1d;s/^[[:space:]]*//;s/[[:space:]]*$//' | paste -sd, -)" || { _IL_WHY=parse; break 2; }
-      [[ "$san" == "IP Address:10.0.1.40" ]] || { _IL_WHY=san; break 2; }
-      eku="$(timeout 10 openssl x509 -in "$p" -noout -ext extendedKeyUsage 2>/dev/null | sed '1d;s/^[[:space:]]*//;s/[[:space:]]*$//' | paste -sd, -)" || { _IL_WHY=parse; break 2; }
-      [[ "$eku" == "TLS Web Server Authentication" ]] || { _IL_WHY=eku; break 2; }
-    done
-    [[ "$cnt" == "$n_cert" ]] || { _IL_WHY=count; break; }
-    cp "$wd/canon" "$out" 2>/dev/null || { _IL_WHY=parse; break; }
+    [[ "$n_begin" == 1 && "$n_cert" == 1 ]] || { _IL_WHY=count; break; }
+    # keep only the block itself: text around it never reaches the CA file
+    awk '
+      /^[[:space:]]*-----BEGIN CERTIFICATE-----[[:space:]]*$/ { inb = 1 }
+      inb { sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, ""); print }
+      /^[[:space:]]*-----END CERTIFICATE-----[[:space:]]*$/ { inb = 0 }' "$raw" > "$wd/cert.pem" || { _IL_WHY=parse; break; }
+    # ONE parse: -checkend prints "will not expire" (rc 0) or "will expire" (rc 1); -ext prints the basicConstraints line
+    x509="$(timeout 10 openssl x509 -in "$wd/cert.pem" -noout -checkend 0 -ext basicConstraints 2>/dev/null)" || true
+    case "$x509" in
+      *"will not expire"*) : ;;
+      *"will expire"*) _IL_WHY=expired; break ;;
+      *) _IL_WHY=parse; break ;;
+    esac
+    if grep -q 'CA:TRUE' <<< "$x509"; then _IL_WHY=ca; break; fi
+    cp "$wd/cert.pem" "$out" 2>/dev/null || { _IL_WHY=parse; break; }
     rc=0
     break
   done
@@ -3522,10 +3513,11 @@ _inngest_link_validate_ca() {
   return "$rc"
 }
 
-# _inngest_link_install <content-file> <dest> <mode>: temp file beside the target, rename over it (mv -T never
-# descends into a directory a bind-mount of a missing path may have created).
+# _inngest_link_install <content-file> <dest> <mode>: mkdir -p the (deploy-owned, under /mnt/data) directory, then a temp
+# file beside the target, renamed over it (mv -T never descends into a directory a bind-mount of a missing path may have created).
 _inngest_link_install() {
   local tmp
+  mkdir -p "$(dirname "$2")" 2>/dev/null || true
   tmp="$(mktemp "$(dirname "$2")/.$(basename "$2").XXXXXX" 2>/dev/null)" || return 1
   if cat "$1" > "$tmp" 2>/dev/null && chmod "$3" "$tmp" 2>/dev/null && mv -fT "$tmp" "$2" 2>/dev/null; then
     return 0
@@ -3552,7 +3544,7 @@ _inngest_link_selfgate() { # <cafile>: no -k, no --capath; success = TLS verifie
 
 resolve_inngest_link() {
   local snap="${1:-}" flag="" now epoch ca_dest ca_env_dest b64="" cand="" try=1 scheme url cacert
-  INNGEST_BASE_URL_RESOLVED=""; INNGEST_LINK_STATE=""; INNGEST_LINK_REASON=""; INNGEST_LINK_CA_SHA=""; INNGEST_LINK_CA_STRICT=0
+  INNGEST_BASE_URL_RESOLVED=""; INNGEST_LINK_STATE=""; INNGEST_LINK_REASON=""; INNGEST_LINK_CA_STRICT=0
   ca_dest="$INNGEST_LINK_DIR/inngest-ca.pem"
   ca_env_dest="$INNGEST_LINK_DIR/inngest-link.env"
 
@@ -3602,7 +3594,7 @@ resolve_inngest_link() {
   else
     _doppler_get_observed INNGEST_TLS_CA b64 || b64=""
   fi
-  cand="$(mktemp /tmp/inngest-ca-cand.XXXXXX 2>/dev/null)" || cand=""
+  cand="$(mktemp /tmp/inngest-ca-cand.XXXXXX 2>/dev/null)" || cand=""  # lint-trap-ownership: ok rm -f on every path below; PrivateTmp bounds an abort leak
   if [[ -n "$cand" ]] && [[ -n "$b64" ]] && _inngest_link_validate_ca "$b64" "$cand"; then
     :
   else
@@ -3621,7 +3613,6 @@ resolve_inngest_link() {
     inngest_link_event ca_unwritable warning "dir=$INNGEST_LINK_DIR action=continue"
   fi
   rm -f "$cand"
-  INNGEST_LINK_CA_SHA="$(sha256sum "$ca_dest" 2>/dev/null | cut -d' ' -f1)" || INNGEST_LINK_CA_SHA=""
 
   # 4. the self-gate (strict only): the pinned bytes against the real listener, from the host OUTPUT chain
   if [[ "$INNGEST_LINK_CA_STRICT" == 1 ]]; then
@@ -3633,7 +3624,7 @@ resolve_inngest_link() {
     https_flag | https_pending) url="$INNGEST_LINK_HTTPS_URL"; scheme=https; cacert="$ca_dest" ;;
     *) url="$INNGEST_LINK_HTTP_URL"; scheme=http; cacert="" ;;
   esac
-  cand="$(mktemp /tmp/inngest-link-env.XXXXXX 2>/dev/null)" || cand=""
+  cand="$(mktemp /tmp/inngest-link-env.XXXXXX 2>/dev/null)" || cand=""  # lint-trap-ownership: ok rm -f on every path below; PrivateTmp bounds an abort leak
   if [[ -z "$cand" ]] \
      || ! printf 'INNGEST_LINK_URL=%s\nINNGEST_LINK_SCHEME=%s\nINNGEST_LINK_CACERT=%s\n' "$url" "$scheme" "$cacert" > "$cand" \
      || ! _inngest_link_install "$cand" "$ca_env_dest" 0644; then
@@ -3649,21 +3640,6 @@ resolve_inngest_link() {
   return 0
 }
 
-# inngest_link_ca_recheck: run IMMEDIATELY before each app `docker run` (and before the old container is stopped).
-# With the flag on, the CA is a regular non-symlink file whose sha256 is the one resolve_inngest_link installed
-# and gated; anything else (replaced, truncated, symlinked, a directory docker created) refuses the start.
-inngest_link_ca_recheck() {
-  local f="$INNGEST_LINK_DIR/inngest-ca.pem" sha=""
-  [[ "$INNGEST_LINK_CA_STRICT" == 1 ]] || return 0
-  if [[ ! -f "$f" || -L "$f" ]]; then
-    INNGEST_LINK_REASON=inngest_link_ca_recheck_failed; inngest_link_event ca_recheck_failed error "why=not_regular_file"; return 1
-  fi
-  sha="$(sha256sum "$f" 2>/dev/null | cut -d' ' -f1)" || sha=""
-  if [[ -z "$sha" || "$sha" != "$INNGEST_LINK_CA_SHA" ]]; then
-    INNGEST_LINK_REASON=inngest_link_ca_recheck_failed; inngest_link_event ca_recheck_failed error "why=sha_mismatch"; return 1
-  fi
-  return 0
-}
 # inngest_link_canary_check (#10136, canary layer 5 of canary-probe-set.md): the container-level proof, run against the CANARY
 # before promotion and ONLY when the resolver chose https (the host-side self-gate proves the host OUTPUT path and the pinned
 # bytes, never container egress or Node trust). Five checks: (1) `docker inspect` shows the canary was handed exactly the https
@@ -4674,11 +4650,6 @@ case "$COMPONENT" in
     # pdf-linearize tempfiles and keeps /tmp ephemeral. Post-GIT_ASKPASS
     # migration (git-auth.ts), git no longer writes credential helpers
     # under /tmp — the askpass script lives in $HOME instead.
-    # #10136: the CA is a trust anchor; re-verify the exact bytes the resolver gated, immediately before the start.
-    if ! inngest_link_ca_recheck; then
-      final_write_state 1 "${INNGEST_LINK_REASON:-inngest_link_ca_recheck_failed}"
-      exit 1
-    fi
     docker run -d \
       --name soleur-web-platform-canary \
       --log-driver journald \
@@ -4698,7 +4669,7 @@ case "$COMPONENT" in
       -e NODE_OPTIONS="$CANARY_NODE_OPTIONS" \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
-      -v /etc/soleur/inngest-ca.pem:/etc/soleur/inngest-ca.pem:ro \
+      -v /mnt/data/inngest-link/inngest-ca.pem:/etc/soleur/inngest-ca.pem:ro \
       -p 0.0.0.0:3001:3000 \
       "$VERIFIED_REF"
 
@@ -4968,14 +4939,6 @@ case "$COMPONENT" in
       # SUCCESS: swap canary to production
       echo "Canary passed, swapping to production..."
 
-      # #10136: refuse BEFORE anything is stopped, so a replaced CA file leaves the old container serving.
-      if ! inngest_link_ca_recheck; then
-        { docker stop soleur-web-platform-canary 2>/dev/null || true; }
-        { docker rm soleur-web-platform-canary 2>/dev/null || true; }
-        final_write_state 1 "${INNGEST_LINK_REASON:-inngest_link_ca_recheck_failed}"
-        exit 1
-      fi
-
       # --- Cron drain gate (#5669 / ADR-078) --------------------------------
       # Tear the canary down FIRST (free its CANARY_MEMORY_CAP) so the drain
       # wait does NOT hold canary + old-prod + cron resident (~6.9GB) for up to
@@ -5038,12 +5001,6 @@ case "$COMPONENT" in
         exit 1
       fi
 
-      # #10136: the second re-check, immediately before the start (the cron drain above can be long).
-      if ! inngest_link_ca_recheck; then
-        final_write_state 1 "${INNGEST_LINK_REASON:-inngest_link_ca_recheck_failed}"
-        exit 1
-      fi
-
       # tmpfs /tmp (closes #2473): see canary block above for rationale.
       # Post-GIT_ASKPASS migration, git auth is in $HOME (git-auth.ts) so
       # /tmp no longer needs to be exec-able for git credential helpers.
@@ -5080,7 +5037,7 @@ case "$COMPONENT" in
         -v /mnt/data/workspaces:/workspaces \
         -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
         -v /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens \
-        -v /etc/soleur/inngest-ca.pem:/etc/soleur/inngest-ca.pem:ro \
+        -v /mnt/data/inngest-link/inngest-ca.pem:/etc/soleur/inngest-ca.pem:ro \
         -p 0.0.0.0:80:3000 \
         -p 0.0.0.0:3000:3000 \
         "$VERIFIED_REF"; then
