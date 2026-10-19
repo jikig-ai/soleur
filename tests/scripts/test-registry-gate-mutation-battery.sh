@@ -119,7 +119,7 @@ run_suite() { # $1 = gate|engine ; echoes nothing, returns the suite's rc
   # and an unbounded battery would hang on exactly the mutation whose whole point is that a hang
   # is the failure mode. `timeout` returns 124, which is non-zero, so a hang reads as CAUGHT.
   # That is the correct verdict: the suite did detect the mutation, by not completing.
-  timeout 300 bash "$suite" > "${SB}/suite.log" 2>&1
+  timeout 300 bash "$suite" > "${SB}/suite.log" 2>&1 </dev/null
 }
 
 # ── PRE-FLIGHT: every anchor must resolve to exactly one match, checked BEFORE any dispatch. ──
@@ -346,8 +346,8 @@ mutate "E21 engine last_err drops the line-tail (conditional skip swallows a cre
 # grounds. What changed is the KIND of assertion that now covers it.
 #
 # The restore suite used to assert the guard with a whole-file `grep -qE "tr '\n' ' '"` over the
-# engine. That is satisfied by the COMMENT describing the guard and by the two `crane auth login`
-# interpolations, so deleting the guard from last_err left the suite green — the assertion named
+# engine. That is satisfied by the COMMENT describing the guard and by the two login-failure
+# message interpolations, so deleting the guard from last_err left the suite green — the assertion named
 # the token, not the thing. #7379 re-anchored it to the function body
 # (`sed -n '/^last_err() {/,/^}/p' | grep -qE …`), which makes this mutation detectable
 # STRUCTURALLY. No fixture separates the two implementations and none ever will; a source-anchored
@@ -359,7 +359,7 @@ mutate "E21 engine last_err drops the line-tail (conditional skip swallows a cre
 # that a capture distinguishes them. Promote only while a source-anchored assertion exists — if
 # that assertion is ever removed or loosened, this row must go back to expect_survive.
 mutate "E22 engine workflow-command injection guard dropped from last_err" engine \
-  "tail -c 400 \"\$1\" 2>/dev/null | tail -n 1 | tr '\\n' ' ' | sed 's/[[:space:]]*\$//' || true" \
+  "tail -c 400 \"\$1\" 2>/dev/null | tail -n 1 | tr '\\r\\n' '  ' | sed 's/[[:space:]]*\$//' || true" \
   "tail -c 400 \"\$1\" 2>/dev/null | tail -n 1 || true"
 
 # Anchored on the CONDITION ALONE. The previous anchor spanned this line and the `for _seam in`
@@ -426,8 +426,8 @@ echo
 echo "=== engine mutations (scripts/registry-restore-from-ghcr.sh) ==="
 
 mutate "E01 sink authentication skipped entirely (the shipped fail-open)" engine \
-  'if ! $CRANE auth login "$TARGET" -u "$ZOT_PUSH_USER" -p "$ZOT_PUSH_TOKEN" $SINK_TLS_FLAG' \
-  'if ! true "$TARGET" -u "$ZOT_PUSH_USER" -p "$ZOT_PUSH_TOKEN" $SINK_TLS_FLAG'
+  'if ! printf '\''%s'\'' "$ZOT_PUSH_TOKEN" | $CRANE auth login "$TARGET" -u "$ZOT_PUSH_USER" --password-stdin $SINK_TLS_FLAG' \
+  'if ! true "$TARGET" -u "$ZOT_PUSH_USER" --password-stdin $SINK_TLS_FLAG'
 
 mutate "E02 ZOT_PUSH_TOKEN emptiness check removed" engine \
   '[[ -n "${ZOT_PUSH_TOKEN:-}" ]] || die 5 ' ': # '
@@ -583,6 +583,36 @@ expect_survive "E34 signature-index child-count equality weakened to a lower bou
   '      (( n_children >= 0 )) || \' \
   'UNREACHABLE BY CONSTRUCTION on the index branches, and measured: the `// "-"` sentinel makes `@tsv` emit exactly one NON-EMPTY row per declared element, and `@tsv` escapes an embedded newline or tab rather than splitting on it (verified against jq for both) — so the row count and `.manifests | length` cannot disagree through any manifest a fixture can express. The guard is kept as defense-in-depth against a future edit that DECOUPLES the stream from the count, which is not hypothetical: #7410 shipped exactly that divergence in the sibling manifest branch, where an unconditional config slot emitted a row the conditional count did not include. PROMOTE THIS BACK TO `mutate` the moment the enumeration and the count stop being derived from the same array — that is the condition, not a vague 'if it becomes testable'.'
 
+# ── E35-E40: the registry credentials ride STDIN, never argv (#9757). ────────────────────────
+# E01 above skips the sink login; these pin HOW the credential is presented. The crane stub
+# refuses (exit 64) any password flag and records the stdin value per login, so a regression to
+# `-p` argv, a dropped or wrong-variable feeder, or a weakened xtrace refusal must turn the
+# restore suite RED. Anchors are single-quoted (the pre-flight audit only reads those).
+
+mutate "E35 sink login reverted to the password on argv (-p)" engine \
+  'if ! printf '\''%s'\'' "$ZOT_PUSH_TOKEN" | $CRANE auth login "$TARGET" -u "$ZOT_PUSH_USER" --password-stdin $SINK_TLS_FLAG' \
+  'if ! $CRANE auth login "$TARGET" -u "$ZOT_PUSH_USER" -p "$ZOT_PUSH_TOKEN" $SINK_TLS_FLAG'
+
+mutate "E36 GHCR login reverted to the password on argv (-p)" engine \
+  'if ! printf '\''%s'\'' "$GHCR_TOKEN" | $CRANE auth login ghcr.io -u "$GHCR_USER" --password-stdin' \
+  'if ! $CRANE auth login ghcr.io -u "$GHCR_USER" -p "$GHCR_TOKEN"'
+
+mutate "E37 sink login feeder dropped (stdin is empty, the login has no password)" engine \
+  'if ! printf '\''%s'\'' "$ZOT_PUSH_TOKEN" | $CRANE auth login "$TARGET"' \
+  'if ! $CRANE auth login "$TARGET"'
+
+mutate "E38 sink login feeder reads the wrong variable (the user is presented as the password)" engine \
+  'if ! printf '\''%s'\'' "$ZOT_PUSH_TOKEN" | $CRANE auth login "$TARGET"' \
+  'if ! printf '\''%s'\'' "$ZOT_PUSH_USER" | $CRANE auth login "$TARGET"'
+
+mutate "E39 xtrace refusal neutered (a traced run with a live credential proceeds)" engine \
+  'if [ -n "${DOPPLER_TOKEN:+x}${GHCR_TOKEN:+x}${ZOT_PUSH_TOKEN:+x}" ]; then' \
+  'if false; then'
+
+mutate "E40 xtrace refusal no longer covers the GHCR token (a GHCR-only traced run proceeds)" engine \
+  '"${DOPPLER_TOKEN:+x}${GHCR_TOKEN:+x}${ZOT_PUSH_TOKEN:+x}"' \
+  '"${DOPPLER_TOKEN:+x}${ZOT_PUSH_TOKEN:+x}"'
+
 restore_pristine
 
 echo
@@ -594,8 +624,8 @@ echo
 # equality: the count is developer-incremented, so `-eq` would turn every added mutation into a
 # spurious failure. Derived from a green run, not from an expected number.
 dispatched=$(( caught + survived + expected ))
-if (( dispatched < 56 )); then
-  echo "harness: only ${dispatched} mutations were dispatched, floor is 56. Either mutations were removed without lowering this floor deliberately, or the dispatch itself is broken — in both cases the verdict below is not reportable." >&2
+if (( dispatched < 62 )); then
+  echo "harness: only ${dispatched} mutations were dispatched, floor is 62. Either mutations were removed without lowering this floor deliberately, or the dispatch itself is broken — in both cases the verdict below is not reportable." >&2
   exit 2
 fi
 

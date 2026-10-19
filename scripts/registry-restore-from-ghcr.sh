@@ -74,6 +74,9 @@
 #      engine is where it still lives, post-destroy, against the host that actually applies.)
 #   6  COULD NOT CLASSIFY — the failure matched no known shape. Loudest arm. An unclassified
 #      failure must never read as either "absent" or "fine".
+#  78  TRACED INVOCATION ONLY — run under `bash -x` (or SHELLOPTS=xtrace) with a registry
+#      credential in the environment. Refused before any network call so the token never reaches
+#      the trace. Remove the trace; nothing else is wrong.
 #
 # Usage:
 #   scripts/registry-restore-from-ghcr.sh --target <host:port> --tags-from <manifest.json>
@@ -85,6 +88,19 @@
 #   REGISTRY_RESTORE_CRANE_CMD      (test seam) — the crane binary to invoke.
 
 set -uo pipefail
+
+# Refuse to run traced while a registry credential is in the environment: `bash -x` would print
+# the token (or any expansion of it) into the CI log. This precedes every other command on
+# purpose (the credential-trace lint's Rule A). Multi-line `case` on purpose: the lint's regexes
+# are line-anchored and the one-line spelling fails it.
+case "$-" in
+  *x*)
+    if [ -n "${DOPPLER_TOKEN:+x}${GHCR_TOKEN:+x}${ZOT_PUSH_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 
 TARGET=""
 TAGS_FROM=""
@@ -269,7 +285,7 @@ last_err() {
   # (not retryable) instead of 3 (retryable), AFTER the destroy, with the store empty. The
   # suite could not see it because every `.err` fixture is written with `printf '%s'`, i.e.
   # without the terminating newline real crane emits.
-  tail -c 400 "$1" 2>/dev/null | tail -n 1 | tr '\n' ' ' | sed 's/[[:space:]]*$//' || true
+  tail -c 400 "$1" 2>/dev/null | tail -n 1 | tr '\r\n' '  ' | sed 's/[[:space:]]*$//' || true
 }
 
 # digest_of <file> — keep only a bare sha256 token.
@@ -555,20 +571,32 @@ case "$TARGET" in
   *) SINK_TLS_FLAG="" ;;   # a non-loopback sink must use TLS
 esac
 
-if ! $CRANE auth login "$TARGET" -u "$ZOT_PUSH_USER" -p "$ZOT_PUSH_TOKEN" $SINK_TLS_FLAG \
+# The password rides STDIN (`--password-stdin`), fed by the `printf` builtin: it never appears in
+# any argv (`/proc/<pid>/cmdline`, `ps`) and a trace of this line shows only the variable name.
+# NOT a here-string and NOT process substitution: on bash older than 5.1 a here-string is a temp
+# file, which would put the secret on disk. The pipeline sits inside `if !` and this script runs
+# `set -uo pipefail` WITHOUT `-e`, so a failed (or SIGPIPE'd, 141) login still takes the die arm.
+# A die here means the login COMMAND failed locally (a crane without --password-stdin, an
+# unwritable DOCKER_CONFIG); a merely wrong credential is classified later, at `digest`/`copy`.
+if ! printf '%s' "$ZOT_PUSH_TOKEN" | $CRANE auth login "$TARGET" -u "$ZOT_PUSH_USER" --password-stdin $SINK_TLS_FLAG \
      >"$WORK/login.out" 2>"$WORK/login.err"; then
-  die 5 "could not authenticate to the sink ${TARGET} as '${ZOT_PUSH_USER}'. crane: $(tail -c 300 "$WORK/login.err" 2>/dev/null | tr '\n' ' ')"
+  die 5 "the crane login command for the sink ${TARGET} (as '${ZOT_PUSH_USER}') failed locally — a crane without --password-stdin, an unwritable DOCKER_CONFIG, or a rejected credential. crane: $(tail -c 300 "$WORK/login.err" 2>/dev/null | tr '\r\n' '  ')"
 fi
 
 # GHCR is a PRIVATE package set: an anonymous read 401s. Optional here because the caller may
 # already hold a keychain entry (the release path does), but when the vars are supplied we log
 # in explicitly rather than hoping an ambient one exists.
 if [[ -n "${GHCR_USER:-}" && -n "${GHCR_TOKEN:-}" ]]; then
-  if ! $CRANE auth login ghcr.io -u "$GHCR_USER" -p "$GHCR_TOKEN" \
+  if ! printf '%s' "$GHCR_TOKEN" | $CRANE auth login ghcr.io -u "$GHCR_USER" --password-stdin \
        >"$WORK/ghlogin.out" 2>"$WORK/ghlogin.err"; then
-    die 2 "could not authenticate to ghcr.io as '${GHCR_USER}'. crane: $(tail -c 300 "$WORK/ghlogin.err" 2>/dev/null | tr '\n' ' ')"
+    die 2 "the crane login command for ghcr.io (as '${GHCR_USER}') failed locally — a crane without --password-stdin, an unwritable DOCKER_CONFIG, or a rejected credential. crane: $(tail -c 300 "$WORK/ghlogin.err" 2>/dev/null | tr '\r\n' '  ')"
   fi
 fi
+
+# The credentials are only needed by the two logins above; the dozens of `crane` children below
+# must not inherit them. (This process's own initial /proc/<pid>/environ still holds them, and
+# they rest base64 in $DOCKER_CONFIG/config.json until the EXIT trap's rm -rf.)
+unset ZOT_PUSH_TOKEN GHCR_TOKEN DOPPLER_TOKEN GH_TOKEN_FOR_ENGINE
 
 restored=0
 skipped=0
