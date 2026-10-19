@@ -145,6 +145,26 @@ header prescribes.
   comments or types. Phase 4's call-site census should assert these, not the plan's five names.
 - **Baseline.** `bash plugins/soleur/test/c4-count-parity.test.sh` passes (`Failed: 0`).
 
+### Work-phase measurements: Phase 0.2 item 2 (Logs-alert count, free-tier cap, Sentry rule), 2026-10-19
+
+- **Logs-alert count (live, read-only Telemetry API, names and counts only).** `GET telemetry.betterstack.com/api/v2/alerts` with
+  `BETTERSTACK_API_TOKEN_READONLY` returned 17 alerts: the 16 Terraform-managed `logtail_exploration_alert` resources (every
+  `soleur-*-prd` alert in `betterstack-logs-alerts.tf`, `agent_sandbox_bash_denial` included, so its apply already landed) plus the
+  hand-made "Output utilization high". The new alert makes 18 live and the 17th Terraform-managed one (ADR-218 amendment).
+- **Free-tier cap.** Still not documented by the vendor (the pricing page and docs list no per-team Logs-alert cap), and 17 alerts apply
+  without a count refusal, so the cap is at least 17. A refusal at 18 is the measurement and would fail the whole push apply; the
+  pre-decided fallback (fold the smoke row into `agent_sandbox_bash_denial`'s incident text and rely on Sentry for the deploy signal)
+  stays armed but is NOT triggered by evidence: the cap would be exceeded only if the apply is refused. Recorded in ADR-218.
+- **Sentry rule on `op=sandbox-canary`.** None in IaC: `apps/web-platform/infra/sentry/*.tf` carries no `sandbox-canary` value (the
+  only agent-sandbox rule, `sandbox_startup_failure`, filters `feature=agent-sandbox` AND `op=sdk-startup`). The live project rules
+  could not be listed with the available read-only tokens (`SENTRY_ISSUE_RO_TOKEN`, `SENTRY_API_TOKEN`, `SENTRY_AUTH_TOKEN` all
+  answer 404 on the `rules/` and `combined-rules/` endpoints, an issue-scoped token), so "no live hand-made rule" is not proven.
+  Consequence: the deploy smoke's Sentry event (`op=sandbox-canary`, level error) is currently an unrouted issue, and the page for the
+  smoke is the Better Stack alert alone; routing the Sentry event is not in this PR's scope.
+- **Live positive control for the new predicate (counts only).** 167 `ci-deploy` rows in 14 days start `SANDBOX_CANARY_FAIL:
+  verdict=sandbox_broken` with `(op=sandbox-canary-outer-wrap;`; 45 in 30 days carry `(op=sandbox-canary;`; the full predicate matches
+  0 of them.
+
 ## Research Reconciliation — Spec vs. Codebase
 
 | Brief claim | Reality (checked 2026-10-19) | Plan response |

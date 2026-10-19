@@ -137,7 +137,7 @@ below proves.
    opting in is one more needle plus a rev bump.
 7. **Opt-in policy for future classes.** A same-severity `SOLEUR_*` PRIORITY-2 class joins *this*
    alert by adding a needle (+ a guard row + a runbook decode row). A class needing different
-   routing or severity gets its own `logtail_exploration_alert`, via the five-step checklist in
+   routing or severity gets its own `logtail_exploration_alert`, via the seven-step checklist [Amendment 2026-10-19: the body said "five-step"; the `.tf` header has listed seven steps since the fourth alert] in
    `betterstack-logs-alerts.tf`'s header. This keeps the free-tier alert count at one until a
    second routing is actually needed.
 
@@ -226,7 +226,7 @@ second routing is actually needed"). #6894 adds the second —
 `logtail_exploration_alert.inngest_luks_wrong_volume` — and it is the case that clause anticipated
 rather than an exception to it: a different signal class (a probe row's resolved device alias), a
 different routing rationale (the store silently returning to the plaintext volume, which no uptime
-or Sentry signal can see), and its own runbook. It followed this ADR's five-step recipe, including
+or Sentry signal can see), and its own runbook. It followed this ADR's recipe (five steps when written; seven in the `.tf` header today, see the 2026-10-19 amendment), including
 the live probe with a positive control before the SQL was written.
 
 Two things it does differently, both deliberate and both worth reading before a third is added:
@@ -520,3 +520,38 @@ Logs alert count from 15 to **16** once the post-merge apply has run (re-derive 
   agent-runner loop has no tool_result observer), and the classifier matches only the exact helper line. A forged row
   can keep one incident open and suppress new pages; accepted at current scale, mitigation tracked in #10455.
   Runbook: `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`.
+
+## Amendment — 2026-10-19 (#10453): the seventeenth Logs alert; the recipe is seven steps
+
+Appended, not edited, except two bracketed notes in the body above that fix a stale count (the body said "five-step" while the
+`betterstack-logs-alerts.tf` header, the recipe's single source of truth, lists SEVEN: predicate, exploration, alert, two
+`-target=` lines, runbook row, the exact exploration-count bump in `betterstack-send-failed-alert-mutation.test.sh`, and the
+`infra-validation.yml` step plus the runbook path filters).
+
+`faithful_canary_sandbox_broken` (`soleur-faithful-canary-sandbox-broken-prd`) brings the Terraform-managed Logs alert count from 16
+to **17** once the post-merge apply has run. Count read live on 2026-10-19 through the Telemetry API (read-only token, names and
+counts only): 17 alerts exist today (the 16 Terraform-managed ones plus the hand-made paused "Output utilization high"), so the
+free-tier cap is at least 17 and is still not documented by the vendor; this alert makes 18 live. The pre-decided fallback if the apply
+is refused on count is to drop the alert and fold the smoke row into `agent_sandbox_bash_denial`'s incident text, relying on the Sentry
+event for the deploy signal; the refusal would fail the whole push apply, so it would surface on the merge that carries it.
+
+- **Signal class: a stateless per-bucket count over producer-anchored journald rows**, the `bwrap_probe_rollback` class. No sibling
+  covers it: that alert watches the blocking bwrap probe's rollback row, and the faithful canary pages Sentry only. It pages on the
+  deploy-time SDK Bash smoke's `sdk_bash_smoke_failed` verdict, the check that closes the #10445 blind spot (a green faithful canary
+  over a total Bash outage) on the deploy that carries the break.
+- **Shape (CTO ruling 2026-10-19).** Three ANDed conjuncts: `SYSLOG_IDENTIFIER = 'ci-deploy'`,
+  `startsWith(message, 'SANDBOX_CANARY_FAIL: verdict=sandbox_broken reason=sdk_bash_smoke_failed')` and
+  `position(message, '(op=sandbox-canary;') > 0`. The `reason=` needle is mandatory (the inner canary's `bwrap_*` rows and the retired
+  outer-wrap rows share the `verdict=sandbox_broken` prefix); the `;` terminator keeps `op=sandbox-canary-outer-wrap` out. No
+  `host_name` conjunct (web-2 must page). `smoke_infra_error` does not page.
+- **Live probe (2026-10-19, 30 days, hot UNION archive, counts only).** 167 `ci-deploy` rows start with `SANDBOX_CANARY_FAIL:
+  verdict=sandbox_broken` and carry `(op=sandbox-canary-outer-wrap;` (14 days; the retired arm), 45 carry `(op=sandbox-canary;` (the
+  inner canary's other reasons), and the full predicate matches 0 of them: the discrimination holds on real rows. The alert has no
+  row of its own yet; its first hit is its own positive control, and no failing deploy is run against production.
+- **Parameters.** `bwrap_probe_rollback`'s: `higher_than 0`, `check_period 60`, `query_period 300`, `confirmation_period 0`,
+  `recovery_period 600`, `on_missing_data treat_as_zero`, email only. One row per failed deploy, so it cannot flap.
+- **Enforcement.** Both `-target=` lines sit in `apply-web-platform-infra.yml`'s MAIN plan; the drift guard
+  `apps/web-platform/test/infra/faithful-canary-sandbox-alert.test.sh` reads the three needles FROM `ci-deploy.sh`, evaluates the
+  predicate against fixture rows in the real `raw` shape, censuses every logtail alert's `-target=` lines, and carries mutation rows.
+- **Wake path.** Email on the free tier; the Slack wake of ADR-260 is not verified for Logs alerts (recorded in the runbook).
+  Runbook: `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md` and `canary-probe-set.md`.

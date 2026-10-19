@@ -7,7 +7,7 @@ Write each phase's RED tests before its code. Commit order: Phase 1 first, Phase
 
 - [ ] 0.1 Re-read the CTO rulings in `decision-challenges.md`
 - [ ] 0.2 `io_uring_setup` blocked by the container profile? If not, can ENOSYS be added to the variant cheaply? (Phase 4 go/no-go)
-- [ ] 0.3 Logs-alert count and free-tier cap; is there a Sentry rule on `op=sandbox-canary`? (Phase 3 fallback decision)
+- [x] 0.3 Logs-alert count and free-tier cap; is there a Sentry rule on `op=sandbox-canary`? (Phase 3 fallback decision) - live read 2026-10-19: 17 alerts apply (16 managed + 1 hand-made), cap undocumented and at least 17, so no fallback trigger; no Sentry rule on `op=sandbox-canary` in IaC (live rules unreadable with the read-only tokens); recorded in the plan's Work-phase measurements and ADR-218
 - [ ] 0.4 Heartbeat period floor (`/fail` support is CONFIRMED by the vendor docs, 2026-10-19; append `/fail` to the host's own heartbeat URL); prod container memory headroom for one SDK CLI spawn; `cloud-init.yml` user_data size headroom (Phase 5 go/no-go)
 - [x] 0.5 Does the tool_result observer's `block` carry an error flag? Helper step order: which of the 14 steps run before the worker fork (Phase 2)
 - [x] 0.6 `bash plugins/soleur/test/c4-count-parity.test.sh` green baseline; list the five callers of `buildAgentSandboxConfig`/`buildAgentEnv`
@@ -31,13 +31,13 @@ Write each phase's RED tests before its code. Commit order: Phase 1 first, Phase
 
 ## Phase 3: Deploy-time SDK Bash smoke (#10453)
 
-- [ ] 3.1 RED: probe verdict table (pass / failed / dispatched-hung / infra / replay_only), parity test `sdk-bash-probe-parity.test.ts`, `ci-deploy.test.sh` rows (both orderings, canary-only, atomic ledger, stale warning at 3, no rollback)
-- [ ] 3.2 `sdk-bash-probe.mjs` smoke mode; Dockerfile COPY + `.dockerignore` bang
-- [ ] 3.3 `ci-deploy.sh` `run_sdk_bash_smoke`, ledger via `write_sandbox_canary_state` extra-JSON arg, call after `run_faithful_sandbox_canary || true`
-- [ ] 3.4 `cat-deploy-state.sh` `sdk_bash_smoke_json` and tests
-- [ ] 3.5 Alert `faithful_canary_sandbox_broken` (+ `-target` lines, `faithful-canary-sandbox-alert.test.sh`, infra-validation step, mutation-count bump, runbook, ADR-218 amendment incl. stale step-count fix)
+- [x] 3.1 RED: probe verdict table (pass / failed / dispatched-hung / infra / replay_only), parity test `sdk-bash-probe-parity.test.ts`, `ci-deploy.test.sh` rows (both orderings, canary-only, atomic ledger, stale warning at 3, no rollback)
+- [x] 3.2 `sdk-bash-probe.mjs` smoke mode; Dockerfile COPY + `.dockerignore` bang
+- [x] 3.3 `ci-deploy.sh` `run_sdk_bash_smoke`, ledger via `write_sandbox_canary_state` extra-JSON arg, call after `run_faithful_sandbox_canary || true`
+- [x] 3.4 `cat-deploy-state.sh` `sdk_bash_smoke_json` and tests
+- [x] 3.5 Alert `faithful_canary_sandbox_broken` (+ `-target` lines, `faithful-canary-sandbox-alert.test.sh`, infra-validation step, mutation-count bump, runbook, ADR-218 amendment incl. stale step-count fix)
 - [ ] 3.6 `sdk-bash-smoke-verdict-10548.sh` + test + registrations + `BASELINE_DECLARED_PROBES` 70 to 71
-- [ ] 3.7 `canary-probe-set.md` SDK-smoke section implemented; post-merge positive-control query documented
+- [x] 3.7 `canary-probe-set.md` SDK-smoke section implemented; post-merge positive-control query documented
 
 ## Phase 4: AF_UNIX variant behind a runtime flag (#10455 a)
 

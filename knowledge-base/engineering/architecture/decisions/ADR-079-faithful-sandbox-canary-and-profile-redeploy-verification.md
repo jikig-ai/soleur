@@ -688,3 +688,50 @@ addendum), or delete the kept pieces. Reverses sooner if `AGENT_OUTER_WRAP` is e
 (`run_faithful_sandbox_canary`), its `sandbox-canary` ledger and its journald emitter format are unchanged. Status
 stays `adopting` (Deferral A). The operator-facing note lives in
 `knowledge-base/engineering/operations/runbooks/canary-probe-set.md`.
+
+## Addendum — 2026-10-19 (#10453): the deploy-time SDK Bash smoke is implemented (non-blocking)
+
+Appended, not edited. This updates the **Status** paragraph of the 2026-10-16 addendum above, which said the `sdk_bash_smoke`
+probe "does not exist yet". It now does, as the dark-launch that addendum specified.
+
+**What shipped.** `run_sdk_bash_smoke` in `ci-deploy.sh` runs after `run_faithful_sandbox_canary` and executes the baked probe
+(`/app/infra/lib/sdk-bash-probe.mjs`, `SMOKE=1`) inside the CANARY container (never the live prod container): one real Bash call
+through the real Agent SDK, the shipped shim and the production sandbox config, under `/usr/bin/env -i` with an explicit
+allowlist, a decoy `ANTHROPIC_API_KEY`, the container's real `HOME` and a 150 s host `timeout`. The call site is
+`run_sdk_bash_smoke || true`: no verdict rolls back, aborts or changes the deploy's exit code (`wg-dark-launch-deploy-gates`).
+
+**Verdicts (computed by the probe in JavaScript, unit-tested under node).** `pass` only when the per-run random nonce the wrapped
+command echoed comes back in the real tool_result, the result is not error-flagged, and the `coverage` field is
+`sdk_wrapper_shim_prodtuple` (the shim is the `bwrap` on `PATH` and the artifact at the pinned path is sock_filter-sized).
+`sdk_bash_smoke_failed` when Bash was dispatched and no verified nonce came back (an error result, a clean result without the
+nonce, a thrown SDK error, a hang), independent of any error signature, so a new wording of a failure cannot go silent; a sandbox
+that cannot start (`sandbox required but unavailable`) is also a failure, not an infra hiccup. `smoke_infra_error` only when Bash
+was never dispatched (probe absent in an old image, docker rc 125/126/127, a crashed probe, stub or ledger failure), and for a
+pass-shaped result whose coverage is `replay_only`: a HOLD that does not move `consecutive_pass`. This is the "coverage field"
+requirement of the 2026-10-16 addendum, implemented: a replay-only pass is distinguishable from a wrapper-exercising pass and
+never counts toward promotion.
+
+**Ledger and surfaces.** Its own durable ledger (`/mnt/data/ci-deploy-sdk-bash-smoke.json`, ledger stamp `sdk-bash-smoke`), written
+in ONE atomic write through `write_sandbox_canary_state` (the verdict, `coverage` and `consecutive_infra_error` land together; a
+failed write is reported `smoke_infra_error reason=ledger_write_failed`, never a coverage-less pass), surfaced as
+`sdk_bash_smoke` on `/hooks/deploy-status`. The smoke reads and writes only this ledger, never the shared deploy frame. A failure
+pages through the unchanged `sandbox_canary_sentry_event` journald format
+(`SANDBOX_CANARY_FAIL: verdict=sandbox_broken reason=sdk_bash_smoke_failed: ... (op=sandbox-canary; ...)`) into the new Better Stack
+alert `faithful_canary_sandbox_broken` (ADR-218 amendment of the same date) plus a Sentry event. Three consecutive
+`smoke_infra_error` verdicts emit `SDK_BASH_SMOKE_STALE` and a Sentry warning (not an email page), so a dead probe cannot stay
+silent.
+
+**Probe configuration.** The production image has no TypeScript sources, so the probe carries a literal sandbox config and a
+literal seccomp-selector path, pinned to `buildAgentSandboxConfig` / the shim default by `test/sdk-bash-probe-parity.test.ts`
+(deep equality for the no-egress shape; the failure prints the diff and the exact fix). Ruled by CTO agent, 2026-10-19: literal
+config with a parity test rather than a second esbuild bundle of the builder.
+
+**Promotion (unchanged and still this ADR's).** 5 green verdicts over at least 3 days with the coverage field present, tracked in
+#10548 and enrolled in the sweeper through `scripts/followthroughs/sdk-bash-smoke-verdict-10548.sh` (exit 0 only at
+`consecutive_pass >= 5`, span >= 3 days, coverage `sdk_wrapper_shim_prodtuple`; exit 1 on a recorded `sdk_bash_smoke_failed`).
+This addendum introduces no new soak number. The promotion itself is a code change (a red-verdict-to-rollback path and dropping the
+call-site `|| true`), not a flag flip.
+
+**Scope.** This amends the Decision's canary contract (section 2) only; the faithful inner canary, its ledger and its journald
+emitter format are unchanged (the new alert's drift guard reads them). Status stays `adopting` (Deferral A) until #10548 closes.
+The operator-facing decode lives in `knowledge-base/engineering/operations/runbooks/canary-probe-set.md`.
