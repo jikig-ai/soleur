@@ -251,9 +251,17 @@ in `agent-runner-sandbox-config.ts` (untouched; it only becomes effective once t
 the container, so this change turns it live). The first-boot tuple already runs this same
 configuration.
 
-**Brand-survival threshold:** aggregate pattern (the exposure is bounded by the existing denyRead
-and 0711 ACL and mirrors the already-running first-boot configuration; no single-user breach is
-introduced by restoring the designed state).
+**Brand-survival threshold:** single-user incident (Ruled by CTO agent, 2026-10-19: the mount makes
+live per-session gateway bearer credentials visible inside the multi-tenant agent container; the only
+barriers are the 0711 mode and the `denyRead` in `agent-runner-sandbox-config.ts`, which has never
+been live because the path did not exist in the container. A cross-tenant read hits exactly one named
+user, so the stricter threshold applies; keep it even after the proof below passes).
+
+**Verification requirement (CTO R5):** before this is called done, prove a sandboxed session cannot
+read or list `/var/lib/soleur/egress-tokens` against the real mount. Test proof in the PR (sandbox
+config asserts `denyRead` covers the dir for every session) plus a post-deploy probe from a sandboxed
+Bash session (list and read both denied). `soleur:engineering:review:user-impact-reviewer` runs at
+review.
 
 ## Scope Check
 
@@ -433,7 +441,7 @@ The ADR sentence is authored now (describes the state this PR ships); nothing is
 ## Sharp Edges
 
 - A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder text,
-  or omits the threshold will fail `deepen-plan` Phase 4.6; this one is filled (aggregate pattern).
+  or omits the threshold will fail `deepen-plan` Phase 4.6; this one is filled (single-user incident).
 - Draft PR #10501 edits `ci-deploy.sh`, `docker-run-tuple.py` and `docker-run-tuple.test.sh`.
   Conflict points: `MIN_ROWS`, the `TUPLES` block, `run_checks`. After either lands, the other
   rebases and re-measures `MIN_ROWS` (do not guess it).

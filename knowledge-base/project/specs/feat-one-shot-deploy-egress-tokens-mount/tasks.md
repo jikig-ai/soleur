@@ -42,4 +42,6 @@ Closes #10457 (in the PR body, not the title).
 - 7.2 Revert-only-the-prod-lines check: checker RED with `MISSING_DECLARED`
 - 7.3 `git diff --name-only origin/main` within the allowed set (no cloud-init, server.tf, sandbox config, audit rollup)
 - 7.4 Open PR (`Closes #10457`, "replaces filing an issue", Delivery); STOP before merge for the user's explicit go-ahead
+- 7.4a Threshold is single-user incident (CTO R5): add a test proving the sandbox config's denyRead covers the egress token dir for every session (existing sandbox-config tests; read `agent-runner-sandbox-config.ts` ~L445-500 first), and run `user-impact-reviewer` at review
 - 7.5 Post-deploy: absence assertion (`scripts/betterstack-assert-absence.sh`, positive control) and Sentry zero `web-egress-forwarder-spawn` events
+- 7.6 Post-deploy: from a sandboxed Bash session in the canary workspace, confirm list and read of `/var/lib/soleur/egress-tokens` are denied (CTO R5 flip condition); report the result in the PR
