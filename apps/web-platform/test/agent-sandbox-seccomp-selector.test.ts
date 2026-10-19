@@ -202,7 +202,7 @@ describe("call-site census", () => {
       .filter((l) => {
         // drop comment-only and import lines
         const body = l.replace(/^[^:]+:\d+:/, "").trim();
-        return !/^(\/\/|\*|\/\*|import\b)/.test(body) && !/\bfunction\s+\w+\(/.test(body);
+        return !/^(\/\/|\*|\/\*|import\b)/.test(body) && !/\bfunction\s+(buildAgentSandboxConfig|buildAgentEnv|buildAgentQueryOptions)\b/.test(body);
       });
   };
   const files = (lines: string[]) => [...new Set(lines.map((l) => l.split(":")[0]))].sort();
