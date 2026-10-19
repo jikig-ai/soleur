@@ -17,6 +17,11 @@
 # over all 256 status combinations; the audit flags the PR 9404 shape, counts an unread suite as UNAUDITED (exit
 # 1), exempts always_on suites and reads the selector's own `^glob:` edge. The selector subprocess sees an
 # allowlisted environment (no credential, no CI switch, no git location variable).
+# THE AUDIT SCAN (S4 index completion PR1, #10448). A reference is a tracked path named at a path-component boundary (the
+# character before it is not a word character, or the two before it are a printf escape such as \t), found by walking a
+# trie of the tracked paths, with the per-file result memoised across suites; a directory suite is read through its bun
+# test files; an accept row is keyed on the whitespace-collapsed line it describes. The work bound is an operation count
+# (PathIndex.ops), never a clock. The committed receipts/audit-differential.tsv is judged on its stored line text.
 # MUTATION ROWS copy the SUT and apply ONE edit; the harness requires the edit to land once, the mutant to parse,
 # the row to be GREEN on the pristine SUT, and the row to then FAIL on the mutant; controls prove it reports a
 # survivor, an unparseable mutant, a red row and an edit that did not land. The anti-vacuity floor and the
@@ -646,10 +651,14 @@ printf 'AFFECTED_SELECTED\tscripts/parens\t0\tedge:declared\t^scripts/parens.tes
 printf 'AFFECTED_SELECTED\tscripts/exact\t0\tedge:declared\t^scripts/exact.test.sh|^scripts/x.sh\n' > "$SANDBOX/audit-exact.rows"
 printf 'AFFECTED_SELECTED\tscripts/many\t0\tedge:declared\t^scripts/many.test.sh\n' > "$SANDBOX/audit-many.rows"
 printf 'AFFECTED_SELECTED\tscripts/short\t0\tedge:declared\n' > "$SANDBOX/audit-short.rows"
-printf 'scripts/lint-orphan-mutations\t.github/workflows/ci.yml\tfalse-positive: fixture write into a scratch repo\nscripts/lint-orphan-mutations\tscripts/guard-vacuity-floor.test.sh\tfalse-positive: only mentioned in a message\n' > "$SANDBOX/accept-ok.tsv"
-printf 'scripts/lint-orphan-mutations\t.github/workflows/ci.yml\n' > "$SANDBOX/accept-noreason.tsv"
-printf 'scripts/lint-orphan-mutations\t.github/workflows/ci.yml\tbecause I said so\n' > "$SANDBOX/accept-badreason.tsv"
-printf 'adir\t*\tfalse-positive: a directory suite whose reads the index declares by prefix\n' > "$SANDBOX/accept-dir.tsv"
+# An accept row is anchor-keyed: suite, path, anchor, ordinal, reason. The anchor is the first 12 hex of the sha256 of the source
+# line with its whitespace collapsed; this oracle is bash (tr, sed, sha256sum), independent of the SUT's own hashing.
+anchor_of() { local n; n="$(printf '%s' "$1" | tr -s '[:space:]' ' ' | sed -E 's/^ +//; s/ +$//')"; printf '%s' "$n" | sha256sum | cut -c1-12; }
+A_CI="$(anchor_of 'cat .github/workflows/ci.yml')"; A_GV="$(anchor_of 'bash scripts/guard-vacuity-floor.test.sh')"
+printf 'scripts/lint-orphan-mutations\t.github/workflows/ci.yml\t%s\t1\tfalse-positive: fixture write into a scratch repo\nscripts/lint-orphan-mutations\tscripts/guard-vacuity-floor.test.sh\t%s\t1\tfalse-positive: only mentioned in a message\n' "$A_CI" "$A_GV" > "$SANDBOX/accept-ok.tsv"
+printf 'scripts/lint-orphan-mutations\t.github/workflows/ci.yml\t%s\t1\n' "$A_CI" > "$SANDBOX/accept-noreason.tsv"
+printf 'scripts/lint-orphan-mutations\t.github/workflows/ci.yml\t%s\t1\tbecause I said so\n' "$A_CI" > "$SANDBOX/accept-badreason.tsv"
+printf 'adir\t*\t-\t-\tfalse-positive: a directory suite whose reads the index declares by prefix\n' > "$SANDBOX/accept-dir.tsv"
 audit() { RC=0; AOUT="$(run_sut audit --root "$AREPO" --list "$1" ${2:+"$2"} ${3:+"$3"} 2>&1)" || RC=$?; }
 audit "$SANDBOX/audit-bad.rows"
 [[ "$RC" -eq 1 ]] && grep -q 'gap_suites=1' <<<"$AOUT" && grep -q 'unaudited=0' <<<"$AOUT" && pass "a -mutations sibling that reads ci.yml and a sibling suite but declares only its own file is flagged" || fail "the PR 9404 shape is flagged (rc=$RC: $(tail -2 <<<"$AOUT"))"
@@ -694,6 +703,262 @@ audit "$SANDBOX/audit-dir.rows" --accept "$SANDBOX/accept-dir.tsv"
 : > "$SANDBOX/audit-empty.rows"
 run_sut audit --root "$AREPO" --list "$SANDBOX/audit-empty.rows" >/dev/null 2>&1; rc=$?
 [[ "$rc" -eq 2 ]] && pass "an audit that examined zero suites exits non-zero (anti-vacuity)" || fail "an audit that examined zero suites exits non-zero (rc=$rc)"
+
+# ---------------------------------------------------------------------------------------------------------------------
+# PR1 of the S4 index completion (#9729, #10448): the audit's match is a path-component-boundary scan with per-file
+# memoisation (it replaces the every-tracked-path `f in blob` scan, 53 s on 19,367 paths), directory suites are audited
+# through their bun-discoverable test files, and an accept row is keyed on the line it describes. Every fixture below is a
+# row that distinguishes the mutant from the real thing: a negative fixture (a mid-component mention that is NOT a read)
+# always sits beside a positive control (the same shape at a boundary) that IS reported, so an empty result cannot pass.
+echo "== audit scan: component-boundary match, memoisation, comment shapes, out-of-charset paths"
+SREPO="$SANDBOX/srepo"
+assert_fixture_dir "$SREPO"
+mkf() {  # mkf <relpath> <content>: write one fixture file under the scan repo, content verbatim (no newline is added)
+  assert_fixture_dir "$SREPO"; mkdir -p "$(dirname "$SREPO/$1")" && printf '%s' "$2" > "$SREPO/$1"
+}
+SFILES=(ab/cd.sh xy/ab/cd.sh lib/mid.txt data/p1.txt data/p2.txt data/end.txt data/esc1.txt data/esc2.txt "apps/(auth)/page.tsx" "apps/[id]/page.tsx"
+  apps/@scope/x.tsx apps/+page/x.svelte "apps/with space/y.txt" docs/hd-hash.md docs/hd-plain.md docs/trail.md docs/tabc.md
+  docs/crlf.md data/one.txt data/two.txt docs/acc1.md data/acc2.txt data/dup.txt docs/mixed.md docs/ws.md docs/cmt.md
+  docs/guide.md data/spec.txt data/nested.txt data/under.txt docs/shonly.md docs/notes-only.md dsuite/inner.txt dsuite/notes.txt)
+for f in "${SFILES[@]}"; do mkf "$f" $'t\n'; done
+mkf lib1/helper.sh $'cat data/one.txt\n'
+mkf lib2/helper.sh $'cat data/two.txt\n'
+mkf lib1/shared.sh $'cat scripts/pa.test.sh\n'
+mkf scripts/suffix.test.sh $'cat "xy/ab/cd.sh"\n'
+mkf scripts/tabbed.test.sh $'true\n\tdata/p1.txt\n'
+mkf scripts/mid.test.sh $'cat xlib/mid.txt\n'
+mkf scripts/midok.test.sh $'cat "lib/mid.txt"\n'
+mkf scripts/two.test.sh $'cat data/p1.txt data/p2.txt\n'
+mkf scripts/eol.test.sh 'cat data/end.txt'
+mkf scripts/esc.test.sh $'printf \'A\\tdata/esc1.txt\\nB\\ndata/esc2.txt\\n\'\n'
+mkf scripts/charset.test.sh $'cat "apps/(auth)/page.tsx"\ncat "apps/[id]/page.tsx"\ncat apps/@scope/x.tsx\ncat apps/+page/x.svelte\ncat "apps/with space/y.txt"\n'
+mkf scripts/shapes.test.sh $'cat <<\'EOF\'\n# docs/hd-hash.md\ncp docs/hd-plain.md x\nEOF\ntrue # docs/trail.md\n\t# docs/tabc.md\n'
+mkf scripts/crlf.test.sh $'cat docs/crlf.md\r\ntrue\r\n'
+mkf scripts/s1.test.sh $'source lib1/helper.sh\n'
+mkf scripts/s2.test.sh $'source lib2/helper.sh\n'
+mkf scripts/pa.test.sh $'source lib1/shared.sh\n'
+mkf scripts/pb.test.sh $'source lib1/shared.sh\n'
+mkf scripts/acc.test.sh $'cat docs/acc1.md\necho data/acc2.txt\n'
+mkf scripts/dup.test.sh $'cat data/dup.txt\ncat data/dup.txt\n'
+mkf scripts/mixed.test.sh $'cat docs/mixed.md\necho "see docs/mixed.md"\n'
+mkf scripts/ws.test.sh $'\t\tcat   docs/ws.md\r\n'
+mkf scripts/cmt.test.sh $'# cat docs/cmt.md\ntrue\n'
+mkf scripts/alw.test.sh $'cat docs/acc1.md\n'
+mkf dsuite/a.test.ts $'readFileSync("docs/guide.md")\n'
+mkf dsuite/b.test.tsx $'readFileSync("dsuite/inner.txt")\n'
+mkf dsuite/c.spec.js $'readFileSync("data/spec.txt")\n'
+mkf dsuite/d.test.sh $'cat docs/shonly.md\n'
+mkf dsuite/notes.md $'docs/notes-only.md\n'
+mkf dsuite/sub/e.test.js $'readFileSync("data/nested.txt")\n'
+mkf dsuite/f_test.ts $'readFileSync("data/under.txt")\n'
+(cd "$SREPO" && gitq init -q -b main . && gitq add -A && gitq commit -qm seed) || { echo "[FATAL] scan fixture" >&2; exit 1; }
+sfix_ok=1; for f in "${SFILES[@]}" scripts/shapes.test.sh dsuite/f_test.ts; do gitq -C "$SREPO" ls-files --error-unmatch -- "$f" >/dev/null 2>&1 || sfix_ok=0; done
+[[ "$sfix_ok" -eq 1 ]] && pass "the scan fixture repo tracks every planted path (a fixture that did not land would pass its negative rows vacuously)" || fail "the scan fixture repo is missing a planted path"
+srow() {  # srow <label> [extra patterns, joined with |]: one selector row for scripts/<label>
+  printf 'AFFECTED_SELECTED\tscripts/%s\t0\tedge:derived\t^scripts/%s.test.sh%s\n' "$1" "$1" "${2:+|$2}"
+}
+saudit() { RC=0; AOUT="$(run_sut audit --root "$SREPO" --list "$1" ${2:+"$2"} ${3:+"$3"} 2>&1)" || RC=$?; }   # saudit <rows> [--accept F | --all-refs] [..]
+srow suffix > "$SANDBOX/s-suffix.rows"; srow tabbed > "$SANDBOX/s-tabbed.rows"; { srow mid; srow midok; } > "$SANDBOX/s-mid.rows"
+srow two > "$SANDBOX/s-two.rows"; srow esc > "$SANDBOX/s-esc.rows"; srow eol > "$SANDBOX/s-eol.rows"; srow charset > "$SANDBOX/s-charset.rows"
+srow shapes > "$SANDBOX/s-shapes.rows"; srow crlf > "$SANDBOX/s-crlf.rows"
+{ srow s1 '^lib1/helper.sh'; srow s2 '^lib2/helper.sh'; } > "$SANDBOX/s-base.rows"
+{ srow pa '^lib1/shared.sh'; srow pb '^lib1/shared.sh'; } > "$SANDBOX/s-poison.rows"
+row_scan_suffix() { saudit "$SANDBOX/s-suffix.rows"; [[ "$RC" -eq 1 ]] && grep -qxF -- $'gap\tscripts/suffix\t2\tab/cd.sh,xy/ab/cd.sh' <<<"$AOUT"; }
+row_scan_tab() { saudit "$SANDBOX/s-tabbed.rows"; [[ "$RC" -eq 1 ]] && grep -qxF -- $'gap\tscripts/tabbed\t1\tdata/p1.txt' <<<"$AOUT"; }
+row_scan_mid() { saudit "$SANDBOX/s-mid.rows"; [[ "$RC" -eq 1 ]] && grep -qxF -- $'gap\tscripts/midok\t1\tlib/mid.txt' <<<"$AOUT" && ! grep -P -q '^gap\tscripts/mid\t' <<<"$AOUT"; }
+row_scan_two() { saudit "$SANDBOX/s-two.rows"; [[ "$RC" -eq 1 ]] && grep -qxF -- $'gap\tscripts/two\t2\tdata/p1.txt,data/p2.txt' <<<"$AOUT"; }
+row_scan_esc() { saudit "$SANDBOX/s-esc.rows"; [[ "$RC" -eq 1 ]] && grep -qxF -- $'gap\tscripts/esc\t2\tdata/esc1.txt,data/esc2.txt' <<<"$AOUT"; }
+row_scan_eol() { saudit "$SANDBOX/s-eol.rows"; [[ "$RC" -eq 1 ]] && grep -qxF -- $'gap\tscripts/eol\t1\tdata/end.txt' <<<"$AOUT"; }
+row_scan_charset() { saudit "$SANDBOX/s-charset.rows" --all-refs; [[ "$RC" -eq 1 ]] && grep -qxF -- $'gap\tscripts/charset\t5\tapps/(auth)/page.tsx,apps/+page/x.svelte,apps/@scope/x.tsx,apps/[id]/page.tsx,apps/with space/y.txt' <<<"$AOUT"; }
+row_scan_shapes() { saudit "$SANDBOX/s-shapes.rows"; [[ "$RC" -eq 1 ]] && grep -qxF -- $'gap\tscripts/shapes\t2\tdocs/hd-plain.md,docs/trail.md' <<<"$AOUT"; }
+row_scan_crlf() { saudit "$SANDBOX/s-crlf.rows"; [[ "$RC" -eq 1 ]] && grep -qxF -- $'gap\tscripts/crlf\t1\tdocs/crlf.md' <<<"$AOUT"; }
+row_scan_basename() { saudit "$SANDBOX/s-base.rows"; [[ "$RC" -eq 1 ]] && grep -qxF -- $'gap\tscripts/s1\t1\tdata/one.txt' <<<"$AOUT" && grep -qxF -- $'gap\tscripts/s2\t1\tdata/two.txt' <<<"$AOUT"; }
+row_scan_poison() { saudit "$SANDBOX/s-poison.rows"; [[ "$RC" -eq 1 ]] && grep -qxF -- $'gap\tscripts/pb\t1\tscripts/pa.test.sh' <<<"$AOUT" && ! grep -P -q '^gap\tscripts/pa\t' <<<"$AOUT"; }
+row_scan_suffix && pass "a tracked path that is a suffix of a longer tracked path (ab/cd.sh in xy/ab/cd.sh) is a match at its own component boundary: both are reported" || fail "suffix-path fixture (rc=$RC): $AOUT"
+row_scan_tab && pass "a path preceded by a tab is a match (must-PASS, not the canonical space or quote)" || fail "tab-preceded fixture (rc=$RC): $AOUT"
+row_scan_mid && pass "a mention that starts mid-component (xlib/mid.txt) is NOT a read, while the same path at a boundary (control, same run) is reported" || fail "mid-component fixture (rc=$RC): $AOUT"
+row_scan_two && pass "two paths on one line are both reported (the scan does not stop at the first member)" || fail "two-path fixture (rc=$RC): $AOUT"
+row_scan_esc && pass "a path after a printf escape (the source text has 'A\\tdata/x', the program has a tab) is a boundary: the letter before it is not a word" || fail "printf escape fixture (rc=$RC): $AOUT"
+row_scan_eol && pass "a path at the very end of a file with no trailing newline is reported (an end-of-text off-by-one would hide it)" || fail "no-trailing-newline fixture (rc=$RC): $AOUT"
+row_scan_charset && pass "paths with ( ) [ ] @ + and a space inside a component are matched component by component (five shapes, one run)" || fail "out-of-charset fixture (rc=$RC): $AOUT"
+row_scan_shapes && pass "comment shapes: a whole-line # (heredoc body or tab-indented) is stripped; a trailing comment and a plain heredoc body line keep the path" || fail "comment-shape fixture (rc=$RC): $AOUT"
+row_scan_crlf && pass "a path at the end of a CRLF line is reported (the carriage return is not part of the match)" || fail "CRLF fixture (rc=$RC): $AOUT"
+row_scan_basename && pass "two libraries with the same basename in different directories keep their own refs (memo keyed on the full path, not the basename)" || fail "basename-collision fixture (rc=$RC): $AOUT"
+row_scan_poison && pass "a memo filled while processing suite A does not drop A's own path for suite B that sources the same library" || fail "cache-poisoning fixture (rc=$RC): $AOUT"
+
+echo "== audit scan: the work is bounded by the text, not by the number of tracked paths (operation count, not wall clock)"
+row_scan_ops() {
+  local out ops20 ops2 blen
+  out="$(python3 - "$SUT" <<'PY' 2>&1
+import importlib.util as u, sys
+s = u.spec_from_file_location('m', sys.argv[1]); m = u.module_from_spec(s); s.loader.exec_module(m)
+def tree(n):
+    return {"d%d/s%d/f%d.txt" % (i % 200, i % 7, i) for i in range(n)}
+def blob():
+    lines, k = [], 0
+    while sum(len(x) + 1 for x in lines) < 10240:
+        lines.append("echo step %d && cat d%d/s%d/f%d.txt >> /dev/null" % (k, (k * 7) % 200, (k * 7) % 7, k * 7))
+        k += 1
+    return "\n".join(lines), {"d%d/s%d/f%d.txt" % ((j * 7) % 200, (j * 7) % 7, j * 7) for j in range(k)}
+b, want = blob()
+res = []
+for n in (20000, 2000):
+    idx = m.PathIndex(tree(n))
+    got = m.scan_text(idx, b)
+    res.append((idx.ops, got == (want & tree(n))))
+print("ok" if all(r[1] for r in res) else "WRONG", res[0][0], res[1][0], len(b))
+PY
+)" || return 1
+  read -r verdict ops20 ops2 blen <<<"$out"
+  [[ "$verdict" = ok && "$blen" -ge 10240 ]] || return 1
+  [[ "$ops20" -le $((blen / 2)) && "$ops20" -le $((ops2 * 2)) ]]
+}
+row_scan_ops && pass "scanning a 10 KB blob against a 20,000-path tree costs at most half an operation per byte (an every-offset scan costs about 1.4) and no more than twice the cost against a 2,000-path tree (the old scan was one substring search per tracked path)" || fail "operation-count fixture"
+
+echo "== audit scan: the committed differential receipt (old scan versus new scan on the pinned tree)"
+RECEIPT="$(find "$SCRIPT_DIR/../../../knowledge-base/project/specs" -path '*/receipts/audit-differential.tsv' 2>/dev/null | sort | head -1)"
+receipt_check() {  # receipt_check <file>: judged on the STORED line text (a pinned git tree may be absent in a shallow clone, and a skip would pass vacuously)
+  python3 - "$1" <<'PY'
+import re, sys
+want = {"dropped": 0, "kept-escape": 0}
+pairs, hdr = set(), {}
+for n, line in enumerate(open(sys.argv[1], errors="replace"), 1):
+    line = line.rstrip("\n")
+    m = re.match(r"^# old_refs=(\d+) new_refs=(\d+) dropped=(\d+) kept_escape=(\d+)$", line)
+    if m:
+        hdr = dict(zip(("old", "new", "dropped", "kept"), map(int, m.groups())))
+    if not line or line.startswith("#") or line.startswith("verdict\t"):
+        continue
+    f = line.split("\t")
+    if len(f) != 6 or f[0] not in want:
+        print("%d: want verdict(dropped|kept-escape),suite,path,source,line_no,line_text" % n); sys.exit(1)
+    verdict, suite, path, src, no, text = f
+    at = [i for i in range(len(text)) if text.startswith(path, i)]
+    if not at:
+        print("%d: the stored line does not contain the path" % n); sys.exit(1)
+    word = lambda i: i > 0 and re.match(r"[A-Za-z0-9_]", text[i - 1]) is not None
+    esc = lambda i: text[max(i - 2, 0):i] in ("\\t", "\\n", "\\r", "\\f", "\\v")
+    if verdict == "dropped":
+        if not all(word(i) and not esc(i) for i in at):
+            print("%d: %s occurs at a component boundary in the stored line, so it is a read, not a dropped mention" % (n, path)); sys.exit(1)
+        pairs.add((suite, path))
+    elif not any(esc(i) for i in at):
+        print("%d: a kept-escape row whose path is not preceded by a printf escape" % n); sys.exit(1)
+    want[verdict] += 1
+if not hdr:
+    print("no `# old_refs=N new_refs=M dropped=D kept_escape=K` header"); sys.exit(1)
+if len(pairs) != hdr["dropped"] or want["kept-escape"] != hdr["kept"] or hdr["old"] - hdr["new"] != hdr["dropped"] or hdr["old"] < 100:
+    print("the header %s disagrees with the rows (dropped pairs %d, kept-escape rows %d)" % (hdr, len(pairs), want["kept-escape"])); sys.exit(1)
+print("old_refs=%d new_refs=%d dropped=%d kept_escape=%d" % (hdr["old"], hdr["new"], hdr["dropped"], hdr["kept"]))
+PY
+}
+rhdr() { printf '# old_refs=300 new_refs=299 dropped=1 kept_escape=1\nverdict\tsuite\tpath\tsource\tline_no\tline_text\n'; }
+{ rhdr; printf 'dropped\tscripts/x\tlib/mid.txt\tscripts/x.test.sh\t3\tcat xlib/mid.txt\nkept-escape\tscripts/y\tlib/esc.txt\tscripts/y.test.sh\t4\tprintf %%s "A\\tlib/esc.txt"\n'; } > "$SANDBOX/receipt-good.tsv"
+{ rhdr; printf 'dropped\tscripts/x\tlib/mid.txt\tscripts/x.test.sh\t3\tcat "lib/mid.txt" xlib/mid.txt\nkept-escape\tscripts/y\tlib/esc.txt\tscripts/y.test.sh\t4\tprintf %%s "A\\tlib/esc.txt"\n'; } > "$SANDBOX/receipt-bad.tsv"
+{ rhdr; printf 'dropped\tscripts/x\tlib/mid.txt\tscripts/x.test.sh\t3\tprintf %%s "A\\tlib/mid.txt"\nkept-escape\tscripts/y\tlib/esc.txt\tscripts/y.test.sh\t4\tprintf %%s "A\\tlib/esc.txt"\n'; } > "$SANDBOX/receipt-esc.tsv"
+{ rhdr; printf 'dropped\tscripts/x\tlib/mid.txt\tscripts/x.test.sh\t3\tcat xlib/mid.txt\n'; } > "$SANDBOX/receipt-short.tsv"
+rc=0; receipt_check "$SANDBOX/receipt-good.tsv" >/dev/null 2>&1 || rc=$?
+[[ "$rc" -eq 0 ]] && pass "receipt checker control: a mid-component row passes" || fail "receipt checker control: good row (rc=$rc)"
+rc=0; receipt_check "$SANDBOX/receipt-bad.tsv" >/dev/null 2>&1 || rc=$?
+[[ "$rc" -eq 1 ]] && pass "receipt checker control: a row whose path also occurs at a boundary in the stored line is refused" || fail "receipt checker control: boundary row accepted (rc=$rc)"
+rc=0; receipt_check "$SANDBOX/receipt-esc.tsv" >/dev/null 2>&1 || rc=$?
+[[ "$rc" -eq 1 ]] && pass "receipt checker control: a dropped row whose path follows a printf escape (a boundary at runtime) is refused" || fail "receipt checker control: escape row accepted as dropped (rc=$rc)"
+rc=0; receipt_check "$SANDBOX/receipt-short.tsv" >/dev/null 2>&1 || rc=$?
+[[ "$rc" -eq 1 ]] && pass "receipt checker control: a declared count that disagrees with the rows is refused" || fail "receipt checker control: count mismatch accepted (rc=$rc)"
+rc=0; rout="$([[ -f "$RECEIPT" ]] && receipt_check "$RECEIPT" 2>&1)" || rc=$?
+[[ -n "$RECEIPT" && -f "$RECEIPT" && "$rc" -eq 0 ]] && pass "the committed differential receipt lists every dropped reference with its line (each starts mid-component) and every printf-escape mention the rule keeps ($rout)" || fail "committed differential receipt (path='${RECEIPT:-none}', rc=$rc): $rout"
+
+echo "== audit: directory suites are audited through their bun-discoverable test files"
+printf 'AFFECTED_SELECTED\tdsuite\t0\tedge:declared\t^dsuite/\n' > "$SANDBOX/s-dir.rows"
+printf 'AFFECTED_SELECTED\tdsuite/sub\t0\tedge:declared\t^dsuite/sub/\n' > "$SANDBOX/s-dirsub.rows"
+row_dir_scan() { saudit "$SANDBOX/s-dir.rows" --all-refs; [[ "$RC" -eq 1 ]] && grep -qxF -- $'gap\tdsuite\t4\tdata/nested.txt,data/spec.txt,data/under.txt,docs/guide.md' <<<"$AOUT" && grep -q 'audited=1 unaudited=0' <<<"$AOUT"; }
+row_dir_nested() { saudit "$SANDBOX/s-dirsub.rows"; [[ "$RC" -eq 1 ]] && grep -qxF -- $'gap\tdsuite/sub\t1\tdata/nested.txt' <<<"$AOUT" && grep -q 'audited=1 unaudited=0' <<<"$AOUT"; }
+row_dir_scan && pass "a directory suite unions the refs of its *.test.ts/tsx, *.spec.js and *_test.ts files; a .test.sh, a notes file and a path inside the directory are not gaps" || fail "directory-suite scan (rc=$RC): $AOUT"
+row_dir_nested && pass "a nested directory prefix (^dsuite/sub/) scans only the test files under it" || fail "nested directory suite (rc=$RC): $AOUT"
+RC=0; AOUT="$(run_sut audit --root "$AREPO" --list "$SANDBOX/audit-dir.rows" 2>&1)" || RC=$?
+[[ "$RC" -eq 1 ]] && grep -q 'audited=0 unaudited=1' <<<"$AOUT" && pass "control: a directory with no bun-discoverable test file (adir holds only data.txt) stays unaudited" || fail "directory without tests (rc=$RC): $AOUT"
+
+echo "== audit: accept rows are keyed on the line they describe"
+A_ACC1="$(anchor_of 'cat docs/acc1.md')"; A_ACC2="$(anchor_of 'echo data/acc2.txt')"; A_DUP="$(anchor_of 'cat data/dup.txt')"
+A_MX1="$(anchor_of 'cat docs/mixed.md')"; A_MX2="$(anchor_of 'echo "see docs/mixed.md"')"; A_WS="$(anchor_of 'cat docs/ws.md')"; A_CMT="$(anchor_of 'cat docs/cmt.md')"
+FPR='false-positive: a message string, not a read'
+arow() { printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "${5:-$FPR}"; }   # arow <suite> <path> <anchor> <ordinal> [reason]
+srow acc > "$SANDBOX/a-acc.rows"; srow dup > "$SANDBOX/a-dup.rows"; srow mixed > "$SANDBOX/a-mixed.rows"; srow ws > "$SANDBOX/a-ws.rows"; srow cmt > "$SANDBOX/a-cmt.rows"
+{ srow acc; printf 'AFFECTED_SELECTED\tscripts/alw\t1\talways_on\t^scripts/alw.test.sh\n'; } > "$SANDBOX/a-alw.rows"
+{ arow scripts/acc docs/acc1.md "$A_ACC1" 1; arow scripts/acc data/acc2.txt "$A_ACC2" 1; } > "$SANDBOX/a-ok.tsv"
+row_acc_ok() { saudit "$SANDBOX/a-acc.rows" --accept "$SANDBOX/a-ok.tsv"; [[ "$RC" -eq 0 ]] && grep -q 'gap_suites=0 gap_refs=0 accepted=2 stale=0' <<<"$AOUT"; }
+row_acc_ok && pass "pristine control: two anchor-keyed rows that match live lines exempt exactly their two pairs (accepted=2 stale=0)" || fail "anchor-keyed accept (rc=$RC): $AOUT"
+{ arow scripts/acc docs/acc1.md 000000000000 1; arow scripts/acc data/acc2.txt "$A_ACC2" 1; } > "$SANDBOX/a-anchor.tsv"
+row_acc_anchor() { saudit "$SANDBOX/a-acc.rows" --accept "$SANDBOX/a-anchor.tsv"; [[ "$RC" -eq 1 ]] && grep -P -q '^stale\tscripts/acc\tdocs/acc1.md\t000000000000/1\tanchor-not-live$' <<<"$AOUT" && grep -qxF -- $'gap\tscripts/acc\t1\tdocs/acc1.md' <<<"$AOUT" && grep -q 'accepted=1 stale=1' <<<"$AOUT"; }
+row_acc_anchor && pass "a row whose anchor matches no live line is STALE: reported, exit 1, and it exempts nothing" || fail "anchor mismatch (rc=$RC): $AOUT"
+{ arow scripts/acc docs/acc1.md "$A_ACC1" 1; arow scripts/acc data/acc2.txt "$A_ACC2" 1; arow scripts/acc docs/nowhere.md "$A_ACC1" 1; } > "$SANDBOX/a-untracked.tsv"
+row_acc_untracked() { saudit "$SANDBOX/a-acc.rows" --accept "$SANDBOX/a-untracked.tsv"; [[ "$RC" -eq 1 ]] && grep -P -q '^stale\tscripts/acc\tdocs/nowhere.md\t[0-9a-f]{12}/1\tpath-untracked$' <<<"$AOUT" && grep -q 'gap_suites=0 gap_refs=0 accepted=2 stale=1' <<<"$AOUT"; }
+row_acc_untracked && pass "a row naming an untracked path is STALE (the live rows still exempt their pairs)" || fail "untracked path (rc=$RC): $AOUT"
+{ arow scripts/acc docs/acc1.md "$A_ACC1" 1; arow scripts/acc data/acc2.txt "$A_ACC2" 1; arow scripts/phantom docs/acc1.md "$A_ACC1" 1; } > "$SANDBOX/a-phantom.tsv"
+row_acc_phantom() { saudit "$SANDBOX/a-acc.rows" --accept "$SANDBOX/a-phantom.tsv"; [[ "$RC" -eq 1 ]] && grep -P -q '^stale\tscripts/phantom\tdocs/acc1.md\t[0-9a-f]{12}/1\tsuite-unregistered$' <<<"$AOUT"; }
+row_acc_phantom && pass "a row for a suite the selector does not register is STALE" || fail "unregistered suite (rc=$RC): $AOUT"
+{ arow scripts/acc docs/acc1.md "$A_ACC1" 1; arow scripts/acc docs/acc1.md "$A_ACC1" 2; arow scripts/acc data/acc2.txt "$A_ACC2" 1; } > "$SANDBOX/a-ord2.tsv"
+row_acc_ord2() { saudit "$SANDBOX/a-acc.rows" --accept "$SANDBOX/a-ord2.tsv"; [[ "$RC" -eq 1 ]] && grep -P -q "^stale\tscripts/acc\tdocs/acc1.md\t$A_ACC1/2\tanchor-not-live\$" <<<"$AOUT"; }
+row_acc_ord2 && pass "ordinal 2 for a line that occurs once is STALE (the ordinal names the Nth identical line)" || fail "ordinal beyond the last identical line (rc=$RC): $AOUT"
+{ arow scripts/dup data/dup.txt "$A_DUP" 1; } > "$SANDBOX/a-dup1.tsv"; { arow scripts/dup data/dup.txt "$A_DUP" 1; arow scripts/dup data/dup.txt "$A_DUP" 2; } > "$SANDBOX/a-dup2.tsv"
+row_acc_dup1() { saudit "$SANDBOX/a-dup.rows" --accept "$SANDBOX/a-dup1.tsv"; [[ "$RC" -eq 1 ]] && grep -qxF -- $'gap\tscripts/dup\t1\tdata/dup.txt' <<<"$AOUT"; }
+row_acc_dup2() { saudit "$SANDBOX/a-dup.rows" --accept "$SANDBOX/a-dup2.tsv"; [[ "$RC" -eq 0 ]] && grep -q 'accepted=1 stale=0' <<<"$AOUT"; }
+row_acc_dup1 && pass "two identical reading lines with only ordinal 1 accepted: the pair stays a gap (every boundary-match line must be accepted)" || fail "partial ordinals (rc=$RC): $AOUT"
+row_acc_dup2 && pass "control: ordinals 1 and 2 together accept both identical lines (one pair, accepted=1)" || fail "both ordinals (rc=$RC): $AOUT"
+{ arow scripts/mixed docs/mixed.md "$A_MX1" 1; } > "$SANDBOX/a-mx1.tsv"; { arow scripts/mixed docs/mixed.md "$A_MX1" 1; arow scripts/mixed docs/mixed.md "$A_MX2" 1; } > "$SANDBOX/a-mx2.tsv"
+row_acc_mixed1() { saudit "$SANDBOX/a-mixed.rows" --accept "$SANDBOX/a-mx1.tsv"; [[ "$RC" -eq 1 ]] && grep -qxF -- $'gap\tscripts/mixed\t1\tdocs/mixed.md' <<<"$AOUT"; }
+row_acc_mixed2() { saudit "$SANDBOX/a-mixed.rows" --accept "$SANDBOX/a-mx2.tsv"; [[ "$RC" -eq 0 ]] && grep -q 'accepted=1 stale=0' <<<"$AOUT"; }
+row_acc_mixed1 && pass "a second DIFFERENT line naming the same path is a new gap until it is accepted too" || fail "second reading line (rc=$RC): $AOUT"
+row_acc_mixed2 && pass "control: both different lines accepted exempt the pair" || fail "both lines accepted (rc=$RC): $AOUT"
+{ arow scripts/ws docs/ws.md "$A_WS" 1; } > "$SANDBOX/a-ws.tsv"
+row_acc_ws() { saudit "$SANDBOX/a-ws.rows" --accept "$SANDBOX/a-ws.tsv"; [[ "$RC" -eq 0 ]] && grep -q 'accepted=1 stale=0' <<<"$AOUT"; }
+row_acc_ws && pass "the anchor ignores indentation, runs of spaces and CRLF (a tab-indented, CRLF line matches the anchor of its collapsed text)" || fail "whitespace-normalised anchor (rc=$RC): $AOUT"
+{ arow scripts/cmt docs/cmt.md "$A_CMT" 1; } > "$SANDBOX/a-cmt.tsv"
+row_acc_cmt() { saudit "$SANDBOX/a-cmt.rows" --accept "$SANDBOX/a-cmt.tsv"; [[ "$RC" -eq 1 ]] && grep -P -q "^stale\tscripts/cmt\tdocs/cmt.md\t$A_CMT/1\tanchor-not-live\$" <<<"$AOUT"; }
+row_acc_cmt && pass "commenting out an accepted line makes its row STALE (anchor liveness is computed on the comment-stripped text)" || fail "commented-out accepted line (rc=$RC): $AOUT"
+row_acc_missing() { saudit "$SANDBOX/a-acc.rows" --accept "$SANDBOX/no-such-accept.tsv"; [[ "$RC" -eq 1 ]] && grep -q 'gap_suites=1 gap_refs=2 accepted=0 stale=0' <<<"$AOUT"; }
+row_acc_missing && pass "a missing accept file means no exemptions (not an error): both pairs stay gaps, exit 1" || fail "missing accept file (rc=$RC): $AOUT"
+{ arow scripts/acc '*' - -; } > "$SANDBOX/a-star.tsv"
+row_acc_star() { saudit "$SANDBOX/a-acc.rows" --accept "$SANDBOX/a-star.tsv"; [[ "$RC" -eq 1 ]] && grep -P -q '^stale\tscripts/acc\t\*\t-/-\tstar-row-readable-suite$' <<<"$AOUT" && grep -q 'gap_suites=1' <<<"$AOUT"; }
+row_acc_star && pass "a '*' row naming a READABLE suite is rejected and exempts nothing (control: the '*' row for the unreadable directory suite above is still accepted)" || fail "star row for a readable suite (rc=$RC): $AOUT"
+{ arow scripts/alw docs/acc1.md "$A_ACC1" 1; arow scripts/acc docs/acc1.md "$A_ACC1" 1; arow scripts/acc data/acc2.txt "$A_ACC2" 1; } > "$SANDBOX/a-alw.tsv"
+row_acc_alw() { saudit "$SANDBOX/a-alw.rows" --accept "$SANDBOX/a-alw.tsv"; [[ "$RC" -eq 1 ]] && grep -P -q '^stale\tscripts/alw\tdocs/acc1.md\t[0-9a-f]{12}/1\tsuite-always-on$' <<<"$AOUT"; }
+row_acc_alw && pass "a row for an always_on suite is STALE (its reads are not audited, so nothing can be accepted)" || fail "always_on suite row (rc=$RC): $AOUT"
+printf '%s\t%s\t%s\t%s\n' scripts/acc docs/acc1.md "$A_ACC1" 1 > "$SANDBOX/a-four.tsv"
+printf '%s\t%s\tnot-hex\t1\t%s\n' scripts/acc docs/acc1.md "$FPR" > "$SANDBOX/a-nothex.tsv"
+printf '%s\t%s\t%s\t0\t%s\n' scripts/acc docs/acc1.md "$A_ACC1" "$FPR" > "$SANDBOX/a-ord0.tsv"
+printf '%s\t%s\t%s\tx\t%s\n' scripts/acc docs/acc1.md "$A_ACC1" "$FPR" > "$SANDBOX/a-ordx.tsv"
+printf '%s\t%s\t%s\t1\t%s\n%s\t%s\t%s\t1\t%s\n' scripts/acc docs/acc1.md "$A_ACC1" "$FPR" scripts/acc docs/acc1.md "$A_ACC1" "$FPR" > "$SANDBOX/a-dupe.tsv"
+printf '%s\t*\t%s\t1\t%s\n' scripts/acc "$A_ACC1" "$FPR" > "$SANDBOX/a-starkey.tsv"
+row_acc_bad() { saudit "$SANDBOX/a-acc.rows" --accept "$SANDBOX/a-$1.tsv"; [[ "$RC" -eq 2 ]]; }   # row_acc_bad <name>: the accept file is refused as a value error
+row_acc_four() { row_acc_bad four; }; row_acc_nothex() { row_acc_bad nothex; }; row_acc_ord0() { row_acc_bad ord0; }
+row_acc_ordx() { row_acc_bad ordx; }; row_acc_dupe() { row_acc_bad dupe; }; row_acc_starkey() { row_acc_bad starkey; }
+for t in four nothex ord0 ordx dupe starkey; do
+  "row_acc_$t" && pass "a malformed accept row ($t) is a value error, rc 2, never a quiet exemption" || fail "malformed accept row $t (rc=$RC): $AOUT"
+done
+
+echo "== audit scan: a library read once is scanned once, however many suites source it"
+MEMODIR="$SANDBOX/memo"; assert_fixture_dir "$MEMODIR"; mkdir -p "$MEMODIR"
+row_scan_memo() {
+  python3 - "$SUT" "$MEMODIR" <<'PYMEMO'
+import importlib.util as u, os, sys
+s = u.spec_from_file_location('m', sys.argv[1]); m = u.module_from_spec(s); s.loader.exec_module(m)
+root = sys.argv[2]
+tracked = {"dd%d/ff%d.txt" % (i % 50, i) for i in range(2000)}
+lib = "\n".join("cat dd%d/ff%d.txt" % (i % 50, i) for i in range(0, 2000, 3)) + "\n"
+for name, body in (("lib.sh", lib), ("a.test.sh", "source lib.sh\n"), ("b.test.sh", "source lib.sh\n")):
+    with open(os.path.join(root, name), "w") as fh:
+        fh.write(body)
+alone = m.PathIndex(tracked); m.scan_text(alone, lib); once = alone.ops
+idx = m.PathIndex(tracked)
+ra = m.suite_refs(root, "a", [os.path.join(root, "a.test.sh")], idx); after_a = idx.ops
+rb = m.suite_refs(root, "b", [os.path.join(root, "b.test.sh")], idx); extra = idx.ops - after_a
+ok = ra == rb and len(ra) == len(range(0, 2000, 3)) and once > 1000 and after_a >= once and extra * 10 < once
+print("memo once=%d first=%d second=%d refs=%d" % (once, after_a, extra, len(ra)), file=sys.stderr)
+sys.exit(0 if ok else 1)
+PYMEMO
+}
+row_scan_memo 2>/dev/null && pass "the second suite that sources the same library costs a tenth of one scan of it or less (per-file memoisation across suites)" || fail "memoisation fixture: $(row_scan_memo 2>&1 | tail -2)"
 
 # ---------------------------------------------------------------------------------------------------------------------
 echo "== mutation rows (each edit lands once, leaves valid python, leaves the row GREEN on the pristine SUT, and the named row must then FAIL)"
@@ -850,8 +1115,8 @@ mutate cp-overflow 'math.exp(math.lgamma(n + 1) - math.lgamma(i + 1) - math.lgam
 mutate audit-comments-counted '        if t.startswith("#") or t.startswith("//"):
             continue' '        if False:
             continue' row_audit_comment
-mutate audit-runner-not-excused 'f not in (suite, own) and f not in RUNNER_TRIGGERS and len(f) > 6' 'f not in (suite, own) and len(f) > 6' row_audit_runner
-mutate audit-gap-blind 'miss = [r for r in suite_refs(root, suite, path, tracked) if not any(edge_hit(pt, r) for pt in pats)]' 'miss = [r for r in suite_refs(root, suite, path, tracked) if False]' row_audit_bad
+mutate audit-runner-not-excused 'f != suite and f not in own and f not in RUNNER_TRIGGERS and len(f) > 6' 'f != suite and f not in own and len(f) > 6' row_audit_runner
+mutate audit-gap-blind 'miss = [r for r in suite_refs(root, suite, inputs, index) if not any(edge_hit(pt, r) for pt in pats)]' 'miss = [r for r in suite_refs(root, suite, inputs, index) if False]' row_audit_bad
 mutate audit-zero-suites 'if suites == 0:' 'if False:' row_audit_zero
 mutate audit-unread-suite-clean '                unaudited.append((suite, pats[0]))' '                pass' row_audit_ghost
 mutate audit-always-on-audited '        if reason == "always_on":' '        if False:' row_audit_always
@@ -872,8 +1137,8 @@ mutate bad-timeout-env-traceback 'except ValueError as _e:' 'except KeyError as 
 mutate ejections-manifest-optional '        if not os.path.exists(meta_path):' '        if False:' row_agg_no_meta
 mutate ejections-count-unchecked '        if have != meta["refused"]:' '        if False:' row_agg_short
 mutate accepted-unread-counted-audited 'suites - always_on - len(unaudited) - accepted_unread' 'suites - always_on - len(unaudited)' row_accept_dir
-mutate accept-ignored '        kept = [r for r in miss if r not in ok]' '        kept = miss' row_accept_ok
-mutate accept-without-reason 'or not re.match(r"^false-positive: \S", f[2])' 'or False' row_accept_badreason
+mutate accept-ignored '                if lines and all(k in want for k in lines):' '                if False:' row_accept_ok
+mutate accept-without-reason 'or not re.match(r"^false-positive: \S", f[4])' 'or False' row_accept_badreason
 mutate cleared-by-failed-run 'if o["created_at"] > r["created_at"] and o["conclusion"] == "success":' 'if o["created_at"] > r["created_at"]:' row_cleared_by_failed
 mutate cleared-read-error-as-cleared '                    except ReadError:
                         return False' '                    except ReadError:
@@ -906,6 +1171,45 @@ mutate internal-error-handler-dropped '    except Exception as e:  # an internal
         return 4' row_internal
 mutate flake-pr-threshold-lowered 'len({x.get("pr") or x["sha"] for x in us}) >= 3}' 'len({x.get("pr") or x["sha"] for x in us}) >= 2}' row_two_prs
 
+# PR1: the component-boundary scan, memoisation, directory suites and the anchor-keyed accept rows
+mutate scan-drops-last-char 'r = index.refs[q] = scan_text(index, t)' 'r = index.refs[q] = scan_text(index, t[:-1])' row_scan_eol
+mutate scan-stops-at-first-member '                    out.add(hit)' '                    out.add(hit)
+                    return out' row_scan_two
+mutate scan-component-charset-limited 'node = node.dirs.get(text[cur:slash])' 'node = node.dirs.get(re.sub(r"[^A-Za-z0-9._-]", "", text[cur:slash]))' row_scan_charset
+mutate scan-boundary-ignored '(?:(?<![A-Za-z0-9_])|(?<=\\[tnrfv]))' '' row_scan_mid
+mutate scan-boundary-rejects-after-slash '(?<![A-Za-z0-9_])' '(?<![A-Za-z0-9_/])' row_scan_suffix
+mutate scan-boundary-rejects-after-tab '(?<![A-Za-z0-9_])' '(?<![A-Za-z0-9_\t])' row_scan_tab
+mutate scan-boundary-escape-not-a-boundary '|(?<=\\[tnrfv])' '' row_scan_esc
+mutate scan-memo-keyed-on-basename '        r = index.refs.get(q)
+        if r is None:
+            r = index.refs[q] = scan_text(index, t)' '        r = index.refs.get(os.path.basename(q))
+        if r is None:
+            r = index.refs[os.path.basename(q)] = scan_text(index, t)' row_scan_basename
+mutate scan-memo-poisoned-by-own-path 'r = index.refs[q] = scan_text(index, t)' 'r = index.refs[q] = scan_text(index, t) - {os.path.relpath(p, root) for p in inputs}' row_scan_poison
+mutate scan-library-hop-dropped '        for m in SOURCE_HOP.finditer(t):' '        for m in []:' row_scan_basename
+mutate scan-memo-bypassed '        r = index.refs.get(q)' '        r = None' row_scan_memo
+mutate scan-every-offset 'for m in index.start.finditer(text):' 'for m in re.finditer("", text):' row_scan_ops
+mutate comment-trailing-stripped '        keep.append(line)' '        keep.append(re.sub(r"\s#.*$", "", line))' row_scan_shapes
+mutate comment-tab-indent-kept '        t = line.lstrip()' '        t = line' row_scan_shapes
+mutate dir-suite-unaudited '    return files or None' '    return None' row_dir_scan
+mutate dir-suite-no-underscore-tests 'BUN_TEST = re.compile(r"[._](?:test|spec)' 'BUN_TEST = re.compile(r"[.](?:test|spec)' row_dir_scan
+mutate dir-suite-no-spec-files 'BUN_TEST = re.compile(r"[._](?:test|spec)' 'BUN_TEST = re.compile(r"[._](?:test)' row_dir_scan
+mutate dir-suite-prefix-ignored 'index.under(d) if BUN_TEST.search(f)' 'index.under("") if BUN_TEST.search(f)' row_dir_nested
+mutate accept-any-line-suffices '                if lines and all(k in want for k in lines):' '                if lines and any(k in want for k in lines):' row_acc_dup1
+mutate accept-ordinal-ignored 'out.append((a, count[a]))' 'out.append((a, 1))' row_acc_dup1
+mutate accept-whitespace-significant 'hashlib.sha256(" ".join(line.split()).encode())' 'hashlib.sha256(line.strip().encode())' row_acc_ws
+mutate accept-stale-anchor-tolerated 'stale_rows(suite, p, [x for x in r if (x[0], x[1]) not in live], "anchor-not-live")' 'stale_rows(suite, p, [], "anchor-not-live")' row_acc_anchor
+mutate accept-untracked-path-tolerated '                elif p not in tracked:' '                elif False:' row_acc_untracked
+mutate accept-unregistered-suite-tolerated 'stale_rows(suite, p, r, "suite-unregistered")' 'pass' row_acc_phantom
+mutate accept-always-on-suite-tolerated '        elif registered[suite] == "always_on":' '        elif False:' row_acc_alw
+mutate accept-star-row-for-readable-suite 'stale_rows(suite, p, r, "star-row-readable-suite")' 'pass' row_acc_star
+mutate accept-missing-file-is-an-error '    if not os.path.exists(path):' '    if False:' row_acc_missing
+mutate accept-duplicate-row-tolerated '            if tuple(f[:4]) in seen:' '            if False:' row_acc_dupe
+mutate accept-ordinal-zero-tolerated 're.match(r"^[1-9][0-9]*$", f[3])' 're.match(r"^[0-9]+$", f[3])' row_acc_ord0
+mutate accept-anchor-not-hex 're.match(r"^[0-9a-f]{12}$", f[2])' 'f[2]' row_acc_nothex
+mutate accept-star-needs-no-dashes '(f[2:4] == ["-", "-"] if f[1] == "*" else' '(True if f[1] == "*" else' row_acc_starkey
+mutate accept-four-columns-tolerated 'keyed = len(f) == 5 and' 'keyed = len(f) >= 4 and' row_acc_four
+
 # ---------------------------------------------------------------------------------------------------------------------
 echo "== controls: the harness reports a survivor, an unparseable mutant, a red row and an edit that did not land"
 row_always_red() { false; }
@@ -931,12 +1235,12 @@ ctl_mutate_records && pass "control: mutate() records a survivor as a failure" |
 if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_KILLED of $MUT_RUN)"; else fail "mutants killed $MUT_KILLED of $MUT_RUN"; fi
 
 # Anti-vacuity floors, reported through printf + exit so they never ride on the helpers they guard.
-FLOOR_ASSERTIONS=213
+FLOOR_ASSERTIONS=287   # base 213 + the 74 assertions the PR1 rows add (measured: the pre-change suite ran 213)
 total=$((passes + fails))
 if [[ "$total" -lt "$FLOOR_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$total" "$FLOOR_ASSERTIONS" >&2; exit 1
 fi
-FLOOR_MUTANTS=74
+FLOOR_MUTANTS=106   # base 74 + the 32 PR1 mutants
 if [[ "$MUT_RUN" -lt "$FLOOR_MUTANTS" ]]; then
   printf '[FATAL] mutation floor: only %s mutants ran, floor is %s\n' "$MUT_RUN" "$FLOOR_MUTANTS" >&2; exit 1
 fi

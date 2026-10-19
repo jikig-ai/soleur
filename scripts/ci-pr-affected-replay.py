@@ -49,7 +49,7 @@ SUBCOMMANDS
   audit        [--root DIR] [--list FILE] [--accept FILE] [--all-refs]
 The receipt paths are arguments; no repository path literal lives in this file.
 
-EXIT CODES (collect, ejections, aggregate, audit): 0 done and clean; 1 audit found gaps or unaudited suites; 2 usage or
+EXIT CODES (collect, ejections, aggregate, audit): 0 done and clean; 1 audit found gaps, unaudited suites or stale accept rows; 2 usage or
 a value error (a malformed --since, an unknown status, an incomplete aggregate directory); 3 a remote or local READ
 failed; 4 an internal error. `verdict` and `cp-upper` exit 0 whatever they print: read `computed=GO|NO-GO|UNDECIDED`
 on stdout, the exit code carries no verdict. An uncaught Python error is rc 4, never rc 1.
@@ -63,6 +63,7 @@ import re
 import subprocess
 import sys
 import time
+from bisect import bisect_left
 
 RULE_TEXT = (
     "skip a suite iff AFFECTED_SELECTED sel=0 and reason is not always_on and "
@@ -839,42 +840,203 @@ def suite_file(root, pattern):
     return full if path and not path.endswith("/") and os.path.isfile(full) else None
 
 
-def suite_refs(root, suite, suite_path, tracked):
-    """Tracked repo paths this suite file (and the libs it sources, one level) names literally."""
-    with open(suite_path, errors="replace") as fh:
-        t = strip_comments(fh.read())
-    texts = [t]
-    for m in re.finditer(r"""(?:source|\.)\s+["']?(?:\$\{?[A-Za-z_]+\}?/)?([A-Za-z0-9_./-]+\.sh)""", t):
-        q = os.path.join(root, m.group(1))
-        if os.path.isfile(q):
-            with open(q, errors="replace") as fh:
-                texts.append(strip_comments(fh.read()))
-    blob = "\n".join(texts)
-    own = os.path.relpath(suite_path, root)
-    return sorted(f for f in tracked if f not in (suite, own) and f not in RUNNER_TRIGGERS and len(f) > 6 and f in blob)
+# A match starts at a path-component boundary: the start of the text, or any character that is not a word character
+# (so `/`, a quote, a tab, `=`, `$VAR/` and `./` all start one), or a printf/echo escape (`\t`, `\n`: the source text has a
+# letter before the path, the running program has a tab or a newline). A mention that starts inside a word (`xlib/mid.txt`
+# for the tracked `lib/mid.txt`) is a different name, not a read. The right edge is deliberately open: `a.sh` is
+# still named by `a.sh.bak` (the conditional precision PR owns that rule).
+WORD = re.compile(r"[A-Za-z0-9_]")
+ESCAPES = ("\\t", "\\n", "\\r", "\\f", "\\v")
+SOURCE_HOP = re.compile(r"""(?:source|\.)\s+["']?(?:\$\{?[A-Za-z_]+\}?/)?([A-Za-z0-9_./-]+\.sh)""")
+# bun's test discovery: *.test.* *_test.* *.spec.* *_spec.* over js, jsx, ts and tsx
+BUN_TEST = re.compile(r"[._](?:test|spec)\.(?:js|jsx|ts|tsx)$")
+
+
+class PathNode:
+    """One directory of the tracked tree: its sub-directories by name, its files by name length, and the longest
+    sub-directory name (which bounds the `/` lookup)."""
+    __slots__ = ("dirs", "files", "dlen")
+
+    def __init__(self):
+        self.dirs, self.files, self.dlen = {}, {}, 0
+
+
+class PathIndex:
+    """The tracked paths as a component trie, plus what one audit run memoises across suites: each file's comment-stripped
+    text and the tracked paths it names, keyed on the FULL path (two libraries named helper.sh in different directories are
+    two entries). `ops` counts trie steps, so a test can bound the work by an operation count instead of a clock."""
+
+    def __init__(self, tracked):
+        self.paths = sorted(tracked)
+        self.root = PathNode()
+        for p in self.paths:
+            comps = p.split("/")
+            node = self.root
+            for c in comps[:-1]:
+                child = node.dirs.get(c)
+                if child is None:
+                    child = node.dirs[c] = PathNode()
+                    node.dlen = max(node.dlen, len(c))
+                node = child
+            node.files.setdefault(len(comps[-1]), {})[comps[-1]] = p
+        names = sorted({p.split("/")[0] for p in self.paths}, key=len, reverse=True)
+        self.start = re.compile(r"(?:(?<![A-Za-z0-9_])|(?<=\\[tnrfv]))(?=(?:%s))" % "|".join(re.escape(n) for n in names)) if names else None
+        self.ops = 0
+        self.texts = {}
+        self.refs = {}
+
+    def under(self, prefix):
+        """The tracked paths that start with `prefix`, in order."""
+        i = bisect_left(self.paths, prefix)
+        out = []
+        while i < len(self.paths) and self.paths[i].startswith(prefix):
+            out.append(self.paths[i])
+            i += 1
+        return out
+
+
+def scan_text(index, text):
+    """Every tracked path that `text` names starting at a component boundary. A candidate start is a boundary where some
+    top-level name begins; from there the match is extended component by component through the trie of tracked paths and
+    stops at the first component that is not tracked, so the work follows the text and not the number of tracked paths."""
+    out = set()
+    if index.start is None:
+        return out
+    for m in index.start.finditer(text):
+        cur, node = m.start(), index.root
+        while True:
+            for length, names in node.files.items():
+                index.ops += 1
+                hit = names.get(text[cur:cur + length])
+                if hit is not None:
+                    out.add(hit)
+            if not node.dirs:
+                break
+            index.ops += 1
+            slash = text.find("/", cur, cur + node.dlen + 1)
+            if slash < 0:
+                break
+            index.ops += 1
+            node = node.dirs.get(text[cur:slash])
+            if node is None:
+                break
+            cur = slash + 1
+    return out
+
+
+def read_text(index, path):
+    """The comment-stripped text of one file, read once per run."""
+    t = index.texts.get(path)
+    if t is None:
+        with open(path, errors="replace") as fh:
+            t = index.texts[path] = strip_comments(fh.read())
+    return t
+
+
+def suite_inputs(root, pattern, index):
+    """The files a suite's reads are taken from: its own file, or for a directory suite (the first pattern is a `dir/`
+    prefix) the tracked bun-discoverable test files under it. None when there is neither, and the caller counts it unaudited."""
+    path = suite_file(root, pattern)
+    if path is not None:
+        return [path]
+    d = pattern[1:] if pattern.startswith("^") else pattern
+    if not d.endswith("/") or d.startswith("glob:") or not os.path.isdir(os.path.join(root, d)):
+        return None
+    files = [os.path.join(root, f) for f in index.under(d) if BUN_TEST.search(f)]
+    for f in files:
+        if not os.path.isfile(f):
+            raise ReadError("tracked test file %s is not a readable file in %s" % (os.path.relpath(f, root), root))
+    return files or None
+
+
+def suite_texts(root, inputs, index):
+    """-> [(path, text)]: the suite's own files, then the libraries they source (one hop), each file once."""
+    out, seen = [], set()
+    for p in inputs:
+        t = read_text(index, p)
+        chain = [(p, t)]
+        for m in SOURCE_HOP.finditer(t):
+            q = os.path.join(root, m.group(1))
+            if os.path.isfile(q):
+                chain.append((q, read_text(index, q)))
+        for q, tq in chain:
+            if q not in seen:
+                seen.add(q)
+                out.append((q, tq))
+    return out
+
+
+def suite_refs(root, suite, inputs, index):
+    """Tracked repo paths this suite (its file, or a directory suite's test files) and the libs it sources, one level, names
+    literally. The per-file result is memoised UNEXCLUDED: the suite's own path is dropped here, per call, because the same
+    library is read for other suites that do name it."""
+    named = set()
+    for q, t in suite_texts(root, inputs, index):
+        r = index.refs.get(q)
+        if r is None:
+            r = index.refs[q] = scan_text(index, t)
+        named |= r
+    own = {os.path.relpath(p, root) for p in inputs}
+    return sorted(f for f in named if f != suite and f not in own and f not in RUNNER_TRIGGERS and len(f) > 6)
+
+
+def boundary(text, i):
+    """True when a match at offset i of `text` starts a path component (see WORD and ESCAPES)."""
+    return i == 0 or WORD.match(text[i - 1]) is None or text[i - 2:i] in ESCAPES
+
+
+def pair_anchors(texts, path):
+    """-> [(anchor, ordinal)] for every line of the suite's texts that holds a boundary match of `path`, in order. The anchor
+    is the first 12 hex of the sha256 of the line with its whitespace collapsed (re-indenting or CRLF do not move it); the
+    ordinal numbers identical anchors 1, 2, ... so two identical reading lines are two rows."""
+    count, out = {}, []
+    for _, t in texts:
+        for line in t.split("\n"):
+            i = line.find(path)
+            while i >= 0 and not boundary(line, i):
+                i = line.find(path, i + 1)
+            if i >= 0:
+                a = hashlib.sha256(" ".join(line.split()).encode()).hexdigest()[:12]
+                count[a] = count.get(a, 0) + 1
+                out.append((a, count[a]))
+    return out
 
 
 def load_accept(path):
-    """Human-written exemptions: TSV `suite<TAB>path-or-*<TAB>false-positive: <reason>`. The reason is mandatory and must
-    start with `false-positive:` (a gap cannot be waved off by a bare name); `*` accepts a whole unaudited suite."""
+    """Exemptions: TSV `suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason>`. The anchor (12 hex) and the ordinal
+    (1, 2, ...) name the source line the reason describes, so a suite that later adds a second reading line of the same path
+    is not exempt. The reason is mandatory and must start with `false-positive:` (a gap cannot be waved off by a bare name);
+    `*<TAB>-<TAB>-` accepts a whole unaudited suite. A missing file is no exemptions.
+    -> {suite: {path: [(anchor, ordinal, reason)]}}"""
     acc = {}
+    if not os.path.exists(path):
+        return acc
+    seen = set()
     with open(path) as fh:
         for n, line in enumerate(fh, 1):
             if not line.strip() or line.startswith("#"):
                 continue
             f = line.rstrip("\n").split("\t")
-            if len(f) != 3 or not f[0] or not f[1] or not re.match(r"^false-positive: \S", f[2]):
-                raise ValueError("%s:%d: want `suite<TAB>path|*<TAB>false-positive: <reason>`" % (path, n))
-            acc.setdefault(f[0], {})[f[1]] = f[2]
+            keyed = len(f) == 5 and (f[2:4] == ["-", "-"] if f[1] == "*" else
+                                     re.match(r"^[0-9a-f]{12}$", f[2]) and re.match(r"^[1-9][0-9]*$", f[3]))
+            if not keyed or not f[0] or not f[1] or not re.match(r"^false-positive: \S", f[4]):
+                raise ValueError("%s:%d: want `suite<TAB>path<TAB>anchor (12 hex)<TAB>ordinal (1, 2, ..)<TAB>false-positive: <reason>`"
+                                 " (`*<TAB>-<TAB>-` for a whole unaudited suite)" % (path, n))
+            if tuple(f[:4]) in seen:
+                raise ValueError("%s:%d: duplicate accept row" % (path, n))
+            seen.add(tuple(f[:4]))
+            acc.setdefault(f[0], {}).setdefault(f[1], []).append((f[2], int(f[3]) if f[3] != "-" else 0, f[4]))
     return acc
 
 
 def cmd_audit(a):
     """Index-completeness audit over the selector's own rows: every tracked path a registered suite names
     must be hit by one of that suite's declared/derived edges. Prints one `gap` line per suite with gaps (the first six
-    paths, or all with --all-refs) and one `unaudited` line per suite whose file could not be read. Exit 0 only when no gap
-    and no unaudited suite remain after the --accept exemptions: a suite the audit never read is not a suite with no gaps.
-    always_on suites run on every diff, so their index is moot. A row too short to name its edges is unaudited."""
+    paths, or all with --all-refs), one `unaudited` line per suite whose file could not be read and one `stale` line per accept
+    row the tree no longer backs (suite unregistered or always_on, path untracked, anchor matching no live line, a `*` row
+    naming a readable suite). Exit 0 only when no gap, no unaudited suite and no stale row remain after the --accept
+    exemptions: a suite the audit never read is not a suite with no gaps. always_on suites run on every diff, so their index is
+    moot. A row too short to name its edges is unaudited. A directory suite is read through its bun test files."""
     root = a.root or repo_root()
     accept = load_accept(a.accept) if a.accept else {}
     if a.list:
@@ -886,8 +1048,14 @@ def cmd_audit(a):
             raise ReadError("selector rc=%d: rows printed before a failure are not an audit" % sp.returncode)
         rows = sp.stdout.splitlines()
     tracked = tracked_files(root)
+    index = PathIndex(tracked)
     suites = always_on = accepted = accepted_unread = 0
-    gaps, unaudited = [], []
+    gaps, unaudited, stale = [], [], []
+    registered = {}
+
+    def stale_rows(suite, path, rows_, why):
+        stale.extend((suite, path, "-/-" if r[0] == "-" else "%s/%d" % (r[0], r[1]), why) for r in rows_)
+
     for line in rows:
         f = line.split("\t")
         if f[0] != "AFFECTED_SELECTED":
@@ -897,34 +1065,66 @@ def cmd_audit(a):
             unaudited.append((f[1] if len(f) > 1 else "?", "short-row"))
             continue
         suite, reason, pats = f[1], f[3], f[4].split("|")
+        registered[suite] = reason
         if reason == "always_on":
             always_on += 1
             continue
-        path = suite_file(root, pats[0])
-        if path is None:
-            if "*" in accept.get(suite, {}):
+        inputs = suite_inputs(root, pats[0], index)
+        rules = accept.get(suite, {})
+        if inputs is None:
+            if "*" in rules:
                 accepted += 1
                 accepted_unread += 1
             else:
                 unaudited.append((suite, pats[0]))
+            for p, r in rules.items():
+                if p != "*":
+                    stale_rows(suite, p, r, "suite-unaudited")
             continue
-        miss = [r for r in suite_refs(root, suite, path, tracked) if not any(edge_hit(pt, r) for pt in pats)]
-        ok = accept.get(suite, {})
-        kept = [r for r in miss if r not in ok]
-        accepted += len(miss) - len(kept)
+        miss = [r for r in suite_refs(root, suite, inputs, index) if not any(edge_hit(pt, r) for pt in pats)]
+        kept = []
+        if rules:
+            texts = suite_texts(root, inputs, index)
+            for p, r in rules.items():
+                if p == "*":
+                    stale_rows(suite, p, r, "star-row-readable-suite")
+                elif p not in tracked:
+                    stale_rows(suite, p, r, "path-untracked")
+                else:
+                    live = set(pair_anchors(texts, p))
+                    stale_rows(suite, p, [x for x in r if (x[0], x[1]) not in live], "anchor-not-live")
+            for r in miss:
+                want = {(x[0], x[1]) for x in rules.get(r, [])}
+                lines = pair_anchors(texts, r) if want else []
+                if lines and all(k in want for k in lines):
+                    accepted += 1
+                else:
+                    kept.append(r)
+        else:
+            kept = miss
         if kept:
             gaps.append((suite, kept))
     if suites == 0:
         print("replay audit: the selector printed no AFFECTED_SELECTED rows", file=sys.stderr)
         return 2
+    for suite, rules in accept.items():
+        if suite not in registered:
+            for p, r in rules.items():
+                stale_rows(suite, p, r, "suite-unregistered")
+        elif registered[suite] == "always_on":
+            for p, r in rules.items():
+                stale_rows(suite, p, r, "suite-always-on")
+    stale.sort()
     for suite, miss in gaps:
         print("gap\t%s\t%d\t%s" % (suite, len(miss), ",".join(miss if a.all_refs else miss[:6])))
     for suite, why in unaudited:
         print("unaudited\t%s\t%s" % (suite, why))
-    print("SOLEUR_PR_AFFECTED_AUDIT suites=%d always_on=%d audited=%d unaudited=%d gap_suites=%d gap_refs=%d accepted=%d"
+    for suite, p, key, why in stale:
+        print("stale\t%s\t%s\t%s\t%s" % (suite, p, key, why))
+    print("SOLEUR_PR_AFFECTED_AUDIT suites=%d always_on=%d audited=%d unaudited=%d gap_suites=%d gap_refs=%d accepted=%d stale=%d"
           % (suites, always_on, suites - always_on - len(unaudited) - accepted_unread, len(unaudited), len(gaps),
-             sum(len(m) for _, m in gaps), accepted))
-    return 0 if not gaps and not unaudited else 1
+             sum(len(m) for _, m in gaps), accepted, len(stale)))
+    return 0 if not gaps and not unaudited and not stale else 1
 
 
 def main(argv):
@@ -970,7 +1170,7 @@ def main(argv):
     u = sub.add_parser("audit", help="index-completeness audit; run it on a pinned origin/main tree")
     u.add_argument("--root", default="", help="the tree to audit (default: the current checkout; use a pinned detached one)")
     u.add_argument("--list", default="", help="read AFFECTED_SELECTED rows from FILE instead of running the selector")
-    u.add_argument("--accept", default="", help="TSV of human exemptions: suite<TAB>path|*<TAB>false-positive: <reason>")
+    u.add_argument("--accept", default="", help="TSV of exemptions: suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason> (a missing file exempts nothing)")
     u.add_argument("--all-refs", action="store_true", dest="all_refs", help="print every undeclared path, not the first six")
     a = ap.parse_args(argv)
     if a.cmd == "collect" and not re.match(r"^[1-9][0-9]*/[1-9][0-9]*$", a.chunk):
