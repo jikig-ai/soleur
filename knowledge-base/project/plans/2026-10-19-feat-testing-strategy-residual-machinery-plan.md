@@ -90,7 +90,8 @@ eight env gates) plus the `lint-integration-env-gates.sh` dormancy guard.
 - P4 written flaky-test policy → PARTIAL: machinery exists, policy unwritten.
 - P5 cost-shape awareness for new subprocess fan-out suites → PARTIAL: declared
   exception covers duration enforcement; the unweighed-NEW-suite nudge is missing.
-- P6 written placement convention → UNOWNED (dominant in practice, unwritten).
+- P6 written placement convention → UNOWNED (in use but not dominant — flat
+  still leads ~825 vs ~540 `*.test.*`; unwritten).
 - P7 callable strategy skill → trigger 3, no demand evidence.
 
 **Cut List (Phase 0.6b).**

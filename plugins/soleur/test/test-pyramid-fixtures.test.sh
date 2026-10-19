@@ -157,6 +157,11 @@ cases=$((cases + 1)); assert_eq "1" "$(found_code "$WARN_FIX" 'kill -- -')" "sub
 cases=$((cases + 1)); assert_eq "1" "$(found_code "$WARN_FIX" '(PORT=[0-9]|--bind|nc -l)')" "subprocess-fanout fixture: bound-port signal"
 cases=$((cases + 1)); assert_eq "1" "$(found_code "$WARN_FIX" '(setsid|http\.server)')" "subprocess-fanout fixture: spawned server signal"
 cases=$((cases + 1)); assert_eq "0" "$(count "$WARN_FIX" 'suite-durations')" "subprocess-fanout fixture: no weight row referenced (new suite is unweighed)"
+# The absence pin below is vacuous if a durations table itself is missing —
+# cat suppresses the error and grep sees fewer rows. Pin existence first.
+for t in "$REPO_ROOT"/scripts/suite-durations.tsv "$REPO_ROOT"/scripts/suite-durations-heavy.tsv "$REPO_ROOT"/apps/web-platform/infra/suite-durations.tsv; do
+  cases=$((cases + 1)); assert_file_exists "$t" "durations table exists: $(basename "$t") (absence pin is vacuous without it)"
+done
 cases=$((cases + 1)); assert_eq "0" "$(cat "$REPO_ROOT"/scripts/suite-durations.tsv "$REPO_ROOT"/scripts/suite-durations-heavy.tsv "$REPO_ROOT"/apps/web-platform/infra/suite-durations.tsv 2>/dev/null | grep -c 'stub-proxy-fanout' || true)" "subprocess-fanout fixture SUT absent from all three duration tables"
 
 # ---------------------------------------------------------------------------
@@ -232,7 +237,7 @@ fi
 
 # ANTI-VACUITY FLOOR. Set AT the running count, never below it; reads `cases`,
 # the counter no helper can move.
-MIN_ASSERTIONS=81
+MIN_ASSERTIONS=84
 if [[ "$cases" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$cases" "$MIN_ASSERTIONS" >&2
