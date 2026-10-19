@@ -742,8 +742,8 @@ else:
     bad("(12b) the infra step carries no JOBS pin and no JOBS assignment exists outside the tests step env",
         f"{_d} -- Item I (#7432, tracker #9217) removed the infra-step pin on measured evidence. To "
         "restore it, flip this check in the same diff and apply the revert trigger stated in the header of "
-        "scripts/followthroughs/jobs1-stopgap-7432.sh. See "
-        "knowledge-base/project/learnings/2026-08-09-the-monitor-reported-success-and-i-read-the-field-that-cannot-say-otherwise.md")
+        "scripts/followthroughs/jobs1-stopgap-7432.sh. Background: the 2026-08-09 learning on the monitor "
+        "reporting success through a field that cannot say otherwise (the spurious P1 #7386).")
 
 # Mutation matrix for (12): each row perturbs an in-memory copy of the RAW workflow, re-strips it, and
 # asserts (i) the mutation landed (a mutation that did not land would just re-grade the original) and
