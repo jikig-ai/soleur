@@ -2163,14 +2163,14 @@ assert_seed_run_argv() {
   argv="$(cat "$d/seed-argv" 2>/dev/null || true)"
   rm -rf "$d"
   if [[ "$actual_exit" -eq 0 && "$(printf '%s\n' "$argv" | wc -l)" -eq 1 ]] \
-     && printf '%s\n' "$argv" | grep -qF 'run --rm --name soleur-plugin-seed -u 0 --entrypoint /bin/sh -v ' \
-     && printf '%s\n' "$argv" | grep -qF ':/plugin-mount -e SEED_TAG=v1.0.0 ' \
-     && printf '%s\n' "$argv" | grep -qF '@sha256:' \
-     && printf '%s\n' "$argv" | grep -qF ' -c ' \
-     && printf '%s\n' "$argv" | grep -qF 'PLUGIN_SEED_PROBE' \
-     && printf '%s\n' "$argv" | grep -qF 'find "$DST" -mindepth 1 -delete' \
-     && printf '%s\n' "$argv" | grep -qF 'cp -a /opt/soleur/plugin/. "$DST"/' \
-     && printf '%s\n' "$argv" | grep -qF '.seed-complete'; then
+     && grep -qF 'run --rm --name soleur-plugin-seed -u 0 --entrypoint /bin/sh -v ' <<<"$argv" \
+     && grep -qF ':/plugin-mount -e SEED_TAG=v1.0.0 ' <<<"$argv" \
+     && grep -qF '@sha256:' <<<"$argv" \
+     && grep -qF ' -c ' <<<"$argv" \
+     && grep -qF 'PLUGIN_SEED_PROBE' <<<"$argv" \
+     && grep -qF 'find "$DST" -mindepth 1 -delete' <<<"$argv" \
+     && grep -qF 'cp -a /opt/soleur/plugin/. "$DST"/' <<<"$argv" \
+     && grep -qF '.seed-complete' <<<"$argv"; then
     PASS=$((PASS + 1))
     echo "  PASS: seed is one container-side docker run: --rm --name soleur-plugin-seed -u 0 --entrypoint /bin/sh, -v <mount>:/plugin-mount, -e SEED_TAG, verified-digest ref, probe→clear→cp -a→sentinel argv (#8743)"
   else
@@ -2209,10 +2209,10 @@ assert_no_host_side_seed() {
   TOTAL=$((TOTAL + 1))
   local body
   body=$(grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT")
-  if ! printf '%s\n' "$body" | grep -qF 'docker cp soleur-plugin-seed' \
-     && ! printf '%s\n' "$body" | grep -qF 'docker create --name soleur-plugin-seed' \
-     && ! printf '%s\n' "$body" | grep -qF 'find "$PLUGIN_MOUNT_DIR" -mindepth 1 -delete' \
-     && ! printf '%s\n' "$body" | grep -qF '"$PLUGIN_MOUNT_DIR/.seed-complete"'; then
+  if ! grep -qF 'docker cp soleur-plugin-seed' <<<"$body" \
+     && ! grep -qF 'docker create --name soleur-plugin-seed' <<<"$body" \
+     && ! grep -qF 'find "$PLUGIN_MOUNT_DIR" -mindepth 1 -delete' <<<"$body" \
+     && ! grep -qF '"$PLUGIN_MOUNT_DIR/.seed-complete"' <<<"$body"; then
     PASS=$((PASS + 1))
     echo "  PASS: no host-side docker cp/create/-delete/.seed-complete remnant survives on soleur-plugin-seed (#8743)"
   else
@@ -2281,7 +2281,7 @@ assert_seed_mount_unsafe() {
   rm -rf "$d"
   if [[ "$actual_exit" -ne 0 && "$reason" == "plugin_seed_mount_unsafe" && "$exitc" == "1" \
      && "$seed_seen" == "0" ]] \
-     && printf '%s\n' "$output" | grep -qF 'PLUGIN_SEED_MOUNT_UNSAFE'; then
+     && grep -qF 'PLUGIN_SEED_MOUNT_UNSAFE' <<<"$output"; then
     PASS=$((PASS + 1))
     echo "  PASS: unsafe PLUGIN_MOUNT_DIR refuses the seed with plugin_seed_mount_unsafe before any docker run (#8743)"
   else
@@ -10799,7 +10799,7 @@ _gak_chk_hijack() {  # a runtime-hijack class in prd → refuse before any KEY-C
   # tolerated run line and must itself read env_token=0)
   if [[ "$1" == ci ]]; then
     [[ "$(cat "$2/rc")" != 0 && "$(_gak_st "$2" reason)" == github_app_key_env_hijack && "$(_gak_st "$2" github_app_key_fetch)" == env_hijack ]] \
-      && ! grep '^run:' "$2/gak.log" | grep -vqxF 'run:soleur-plugin-seed env_token=0' \
+      && ! grep -vqxF 'run:soleur-plugin-seed env_token=0' < <(grep '^run:' "$2/gak.log") \
       || { GAK_WHY="rc=$(cat "$2/rc") reason=$(_gak_st "$2" reason) runs=$(grep -c '^run:' "$2/gak.log")"; return 1; }
   else
     [[ "$(cat "$2/rc")" == 72 ]] && grep -qF 'cond=github_app_key_env_hijack attempt=1/1' "$2/detail/doppler_download" 2>/dev/null \
@@ -10811,7 +10811,7 @@ _gak_chk_mergefail() {  # the atomic rename fails → abort (ci refuses, boot ex
   # pre-overlay `run:soleur-plugin-seed` is the sanctioned #8743 seed — tolerated, env_token=0, see _gak_chk_hijack)
   if [[ "$1" == ci ]]; then
     [[ "$(cat "$2/rc")" != 0 && "$(_gak_st "$2" reason)" == github_app_key_merge_failed && "$(_gak_st "$2" github_app_key_fetch)" == merge_failed ]] \
-      && ! grep '^run:' "$2/gak.log" | grep -vqxF 'run:soleur-plugin-seed env_token=0' \
+      && ! grep -vqxF 'run:soleur-plugin-seed env_token=0' < <(grep '^run:' "$2/gak.log") \
       || { GAK_WHY="rc=$(cat "$2/rc") reason=$(_gak_st "$2" reason) runs=$(grep -c '^run:' "$2/gak.log")"; return 1; }
   else
     [[ "$(cat "$2/rc")" == 72 ]] && grep -qF 'cond=github_app_key_merge_failed' "$2/detail/doppler_download" 2>/dev/null \

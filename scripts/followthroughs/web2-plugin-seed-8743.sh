@@ -169,7 +169,7 @@ run_one() {
     printf 'NOT YET: betterstack-query.sh exited %s: %s\n' "$rc" "${out:0:200}" >&2
     return 2
   fi
-  if printf '%s' "$out" | grep -qiE 'exception|DB::Err|Code: [0-9]+|syntax error'; then
+  if grep -qiE 'exception|DB::Err|Code: [0-9]+|syntax error' <<<"$out"; then
     printf 'NOT YET: the query response carries an error alongside the count: %s\n' "${out:0:200}" >&2
     return 2
   fi
