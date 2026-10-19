@@ -5147,7 +5147,7 @@ if want_scripts; then
   # apps/web-platform/node_modules, which this shard does not have). The live ruff run installs a
   # hash-pinned ruff on first use; under CI an unobtainable ruff is exit 2, never a skip.
   run_suite "tests/scripts/lint-ratchet" python3 -m unittest tests.scripts.test_lint_ratchet
-  run_suite "scripts/lint-ratchet-ruff-live" python3 scripts/lint-ratchet.py ruff --check
+  run_suite "scripts/lint-ratchet-ruff-live" python3 plugins/soleur/scripts/lint-ratchet.py ruff --check
   # ADR-170. Both halves are required: the unit suite proves the RULE is right (its fixtures are
   # the executable spec), the live scan proves the TREE is clean. Either alone is satisfiable by
   # a detector that has stopped detecting -- a broken linter and a clean repo emit identical
@@ -5608,6 +5608,9 @@ if want_scripts; then
   # thresholds). Registered explicitly: scripts/followthroughs/*.test.sh is not in SUITE_GLOBS. A vacuous PASS
   # would let the soak window read clean on an unmeasured stream.
   run_suite "scripts/hosted-destroy-ask-window-9776" bash scripts/followthroughs/hosted-destroy-ask-window-9776.test.sh
+  # #7432 (Item I of #9217): exit-code harness for the JOBS-pin soak probe. Registered explicitly:
+  # scripts/followthroughs/*.test.sh is not in SUITE_GLOBS. A vacuous PASS would close #7432, and through it #7376.
+  run_suite "scripts/jobs1-stopgap-7432" bash scripts/followthroughs/jobs1-stopgap-7432.test.sh
   # #9237: exit-code harness for the watchdog-arm soak probe. Registered
   # explicitly (orphan-suite class above). The probe is notify-only (never 0/1);
   # its arms drive whether the sweeper reports NOT YET / CANNOT ESTABLISH /
