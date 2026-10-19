@@ -15,6 +15,7 @@ Branch: `feat-one-shot-schedule-test-weight-tweet`
 - [ ] 2.1 Run `bash scripts/lint-distribution-content.sh knowledge-base/marketing/distribution-content/2026-10-19-test-suite-weight-warn.md` — expect exit 0.
 - [ ] 2.2 Confirm `grep -cE '^publish_date: "2026-10-20"$' <file>` → `1` and `grep -cE '^status: scheduled$' <file>` → `1`.
 - [ ] 2.3 Confirm `git status --short knowledge-base/marketing/distribution-content/` shows only the one file modified.
+- [ ] 2.4 Parse-equivalence assertion (CTO ruling 2026-10-19): replicate the publisher's `get_frontmatter_field` extraction (`scripts/content-publisher.sh`, ~lines 96-106) against the file and assert byte-equal `status` = `scheduled` and `publish_date` = `2026-10-20`, `^status: scheduled` anchored at column 0, and `publish_date >= $(date +%Y-%m-%d)` (host-local) at ship time. Covers the whitespace/quote failure class invisible to diff review.
 
 ## Notes
 
