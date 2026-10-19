@@ -180,7 +180,13 @@ Two ordering/ledger facts worth knowing before triaging a soak anomaly:
 
 - The probe runs (and records `pass`) **before** `github_app_key_canary_check` —
   a verdict is about the image's isolation property, and still stands even if a
-  later gate rolls that canary back for unrelated reasons.
+  later gate rolls that canary back for unrelated reasons. This ordering is a
+  known, pre-existing hazard that the SDK Bash smoke (#10453) deliberately does
+  NOT share: the smoke runs AFTER the key gate under its own `CANARY_HEALTHY`
+  check (CTO ruling F4, 2026-10-19; the canary has `--memory 1536m` and hosts the
+  Next server), whereas this probe, run before the gate, could in principle OOM
+  the canary or linger after a host-cap timeout and fail that gate. Moving it is
+  out of scope for #10453.
 - `WORKSPACE_ISOLATION_STATE_FILE` is alias-guarded against the canary ledger
   (`WORKSPACE_ISOLATION_LEDGER_ALIAS`): an env override that aliases it logs a
   warn and skips the probe entirely — verdict vocabularies must never interleave in one file.

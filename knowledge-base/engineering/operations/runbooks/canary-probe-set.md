@@ -186,14 +186,15 @@ command. (Delivering a CHANGED host `ci-deploy.sh` is the one thing that workflo
 ## Canary sandbox DIAG bundle — why a sandbox canary failed (#9871, #9860)
 
 `DEPLOY_ROLLBACK: bwrap sandbox non-functional ...` says THAT the blocking probe failed and keeps 200
-characters of stderr. When the probe fails, or the faithful canary (`op=sandbox-canary`) reports
-`sandbox_broken`, `ci-deploy.sh` also runs ONE bounded, read-only bundle inside the still-running canary
-and emits it under the same `ci-deploy` journald tag, so it reaches Better Stack with no SSH. The two
-triggers are mutually exclusive in one run (a legacy failure exits before the faithful canary runs), so a
-deploy carries at most one bundle:
+characters of stderr. When the probe fails, when the faithful canary (`op=sandbox-canary`) reports
+`sandbox_broken`, or when the deploy-time SDK Bash smoke reports `sdk_bash_smoke_failed` (#10453), `ci-deploy.sh` also runs ONE
+bounded, read-only bundle inside the still-running canary per trigger and emits it under the same `ci-deploy` journald tag, so it
+reaches Better Stack with no SSH. `legacy` is exclusive of the other two (a legacy failure exits before the faithful canary and the
+smoke run), but `faithful` and `sdk_smoke` can both fire on one deploy (both are report-only and run in sequence), so a deploy
+carries at most one `legacy` bundle OR up to one `faithful` and one `sdk_smoke` bundle; group rows by `trigger=` before reading:
 
 ```text
-SOLEUR_CANARY_SANDBOX_DIAG: image=<image>:<tag> trigger=<legacy|faithful> section=<name> val="<text|<empty>>"
+SOLEUR_CANARY_SANDBOX_DIAG: image=<image>:<tag> trigger=<legacy|faithful|sdk_smoke> section=<name> val="<text|<empty>>"
 ```
 
 `val` is last and quote-bounded; cut each line at the FIRST `section=` and read the rest as free text. It is
@@ -265,7 +266,9 @@ Four more limits on reading `j=ok`:
 
 **Reading absence.** The anchor for "a bundle should exist" is `trigger=legacy`: a `DEPLOY_ROLLBACK: bwrap sandbox
 non-functional` row; `trigger=faithful` has no rollback row, its anchor is the `sandbox-canary` Sentry event or the
-`Faithful sandbox canary (non-blocking): verdict=sandbox_broken` line. Then query the three row kinds together
+`Faithful sandbox canary (non-blocking): verdict=sandbox_broken` line; `trigger=sdk_smoke` has no rollback row either, its anchor is the
+`SDK Bash smoke (non-blocking): verdict=sdk_bash_smoke_failed` line / `SANDBOX_CANARY_FAIL: verdict=sandbox_broken
+reason=sdk_bash_smoke_failed` journald row and the `sandbox-canary` Sentry event it posts. Then query the three row kinds together
 (`--grep` is repeatable and OR-combined):
 
 ```bash
@@ -293,9 +296,15 @@ not a manual step).
 
 `sandbox_canary.verdict` in deploy-state (and its Sentry `op=sandbox-canary` event) now covers the
 sandbox-hardening pair, not only sandbox-build health. Decoding `reason` (all `sandbox_broken` reset
-the consecutive-pass soak and page; `canary_infra_error` rows hold the soak and never roll back. This includes `unixdeny_filter_bypass`,
-`unixdeny_artifact_unusable` and `base_denies_af_unix`: a defect in the dark, flag-OFF variant artifact resets the #5875 base soak and
-pages as `sandbox_broken` BY DESIGN, because the variant is verified on the same canary verdict and ledger as the base posture):
+the consecutive-pass soak and are reported as a Sentry event plus a journald row; `canary_infra_error` rows hold the soak and never
+roll back. **None of the inner canary's reasons emails anyone:** no Terraform Logs alert keys on `op=sandbox-canary` for the inner
+canary (the only alert on that op is `faithful_canary_sandbox_broken`, which requires `reason=sdk_bash_smoke_failed`) and
+`apps/web-platform/infra/sentry/` carries no rule for it, so a `sandbox_broken` here is visible only as the `op=sandbox-canary` Sentry
+event and the `SANDBOX_CANARY_FAIL: verdict=sandbox_broken reason=<reason>` journald row (live Sentry rules that are not in the repo
+are unreadable to the read-only tokens and were not checked). This includes `unixdeny_filter_bypass`, `unixdeny_artifact_unusable`,
+`base_denies_af_unix` and `base_artifact_unusable`: a defect in the dark, flag-OFF variant artifact (or in the base artifact the AF_UNIX
+control runs against) resets the #5875 base soak BY DESIGN, because the variant is verified on the same canary verdict and ledger as the
+base posture; it surfaces as a Sentry event and a journald row, not as an email):
 
 | `reason` | Meaning | First move |
 |---|---|---|
@@ -305,6 +314,7 @@ pages as `sandbox_broken` BY DESIGN, because the variant is verified on the same
 | `unixdeny_filter_bypass` | Under the unixdeny artifact the in-sandbox probe CREATED an AF_UNIX socket (ENOENT on connect) - the variant's `socket(AF_UNIX)` deny is not engaged (#10455 a) | `node apps/web-platform/scripts/gen-bwrap-userns-seccomp.mjs --check` in the canary image; the flag must stay OFF until this is green |
 | `unixdeny_artifact_unusable` | The shim refused the variant artifact (`bwrap-shim:` line: absent or unreadable `/app/infra/bwrap-userns-clone3-unixdeny.bpf`) - with the flag ON every no-egress session would die with exit 65 | Check the Dockerfile COPY and the `.dockerignore` bang; do NOT turn the flag on |
 | `base_denies_af_unix` | Under the BASE artifact `socket(AF_UNIX)` was denied - egress sessions' proxy bridges would break | Base artifact drifted from `origin/main` bytes: regenerate with the generator and re-run `bwrap-userns-seccomp.test.ts` |
+| `base_artifact_unusable` | The shim refused the BASE artifact in the AF_UNIX control probe (`bwrap-shim:` line) - every session would fail to start, flag or no flag | Check the Dockerfile COPY of `infra/bwrap-userns-clone3-deny.bpf` and the `.dockerignore` bang, and read the `bwrap-shim:` line for the exact refusal |
 | `args_fd_closed` | The `--args <fd>` transport probe failed — the SDK's real spawn shape broke (shim closed the argv fd) | Every agent spawn fails too; treat as deploy-blocking |
 | `bwrap_shim_refused[: <detail>]` | The shim itself exited 65 (`bwrap-shim:` marker) — artifact or real bwrap missing in the image; **post-#10032 also fires on unresolvable command-side `/proc/self/fd/N` refs** (deleted/non-file/procfs-resident/absent fd — including a command that merely *mentions* the path), and on `/proc`-mounting argvs lacking `--unshare-pid`/`--unshare-user`. The verdict's `detail` field (folded into the deploy-state reason as `bwrap_shim_refused: bwrap-shim: <first refusal line>`) names the class | `probeAgentSandboxHardening` fields (`shim`, `filter`, `bpfBytes`) cover the artifact/binary-missing classes; the `bwrap-shim:` line names the rest |
 
@@ -334,12 +344,21 @@ A green `sandbox_canary` therefore certifies the bwrap setup only; it is NOT evi
 
 **How the smoke is decoded (implemented, #10453).** `sdk_bash_smoke` is a separate object in `/hooks/deploy-status` (read it with the
 call pattern in `plugins/soleur/skills/postmerge/references/deploy-status-debugging.md`, no SSH): `verdict`, `reason`, `coverage`,
-`consecutive_pass`, `first_pass_at`, `consecutive_infra_error`, `checked_at`. It runs ONE real Bash command (`echo SDK_SMOKE_<per-run
-nonce>`) end to end through the SDK's own wrapper path and the shipped shim, inside the CANARY container (never the live prod
-container), under `/usr/bin/env -i` with an explicit allowlist, a decoy `ANTHROPIC_API_KEY` and the container's real `HOME`, under a
-150 s host `timeout` (`SDK_BASH_SMOKE_TIMEOUT`) above the probe's 120 s internal cap. The probe (`infra/lib/sdk-bash-probe.mjs`, `SMOKE=1`)
-computes its own verdict: `pass` requires the nonce echoed in the real tool_result, a non-error result and coverage
-`sdk_wrapper_shim_prodtuple` (the shim on `PATH`, a sock_filter-sized artifact at the pinned path). It is non-blocking (`wg-dark-launch-deploy-gates`):
+`consecutive_pass`, `first_pass_at`, `consecutive_infra_error`, `checked_at`. It runs ONE real Bash command
+(`echo SDK_SMOKE_$(printf %s '<per-run nonce>' | tr 0-9a-f a-f0-9)`: the tool_result must carry the TRANSFORMED nonce, so a result that
+only quotes the command text cannot pass) end to end through the SDK's own wrapper path and the shipped shim, inside the CANARY container
+(never the live prod container), under `/usr/bin/env -i` with an explicit allowlist, a decoy `ANTHROPIC_API_KEY` and the container's real
+`HOME`, under a 150 s host `timeout` (`SDK_BASH_SMOKE_TIMEOUT`) above the probe's 120 s internal cap. The smoke makes TWO canary
+`docker exec`s, each under that cap: one capped pre-exec (`test -f <probe> || exit 66; printf %s "$HOME"`) that checks the probe file
+and reads the container's real `HOME`, then the probe run itself. The probe (`infra/lib/sdk-bash-probe.mjs`, `SMOKE=1`)
+computes its own verdict: `pass` requires the transformed nonce echoed in the real tool_result, a non-error result and coverage
+`sdk_wrapper_shim_prodtuple` (the shim on `PATH`, a sock_filter-sized artifact at the pinned path). **Coverage means the shim on PATH,
+the pinned `buildAgentSandboxConfig` literal and the variant artifact under the no-egress shape. It does not cover the SDK child env,
+query options, the outer-wrap spawn, or the flag-OFF base.** The smoke workspace is also a `mkdtemp` under `/tmp`, not a path under
+the denied `/workspaces` root, so the production mount shape (tmpfs-mask of the denied workspaces root, then a re-bind of the session's
+own workspace) is NOT exercised by the smoke; the real-bwrap tests exercise it (`test/sandbox-isolation.test.ts` direct tier, which also
+runs in the canary as `run_workspace_isolation_probe`, and `test/sandbox-wrapped-command-runtime.test.ts`, which points
+`WORKSPACES_ROOT` at a temp root). It is non-blocking (`wg-dark-launch-deploy-gates`):
 `run_sdk_bash_smoke || true`, no verdict rolls back or aborts. It runs AFTER the GitHub App key gate (its own `CANARY_HEALTHY` check), so a smoke OOM or a probe still running after a host-cap timeout cannot fail that gate and roll back a deploy.
 
 **Headroom obligation (before promotion to blocking, #10548).** The canary runs with `--memory 1536m --memory-swap 1536m` and already hosts the Next server; the smoke adds a node probe, a stub HTTP server, the SDK CLI and a bwrap'd Bash child with no measured headroom. Before promoting the smoke to a blocking gate, record the canary cgroup's `memory.peak` and the `oom_kill` counter in `memory.events` during a smoke run. Requirement: zero OOM kills and peak below 80% of 1536 MiB. Documentation obligation only; nothing measures it today.
@@ -347,25 +366,41 @@ computes its own verdict: `pass` requires the nonce echoed in the real tool_resu
 | `verdict` / `reason` | Meaning | First move |
 |---|---|---|
 | `pass` | A real wrapped Bash command ran green through the shim and its nonce came back. `coverage` is `sdk_wrapper_shim_prodtuple`: a verdict without that field certifies nothing about the wrapper | None. Promotion needs 5 green verdicts over at least 3 days (ADR-079, tracker #10548) |
-| `sdk_bash_smoke_failed` | Bash WAS dispatched and no verified nonce came back: an error result, a clean result without the nonce (`no_nonce`), a thrown SDK error (`dispatched_then_error`, or `sandbox required but unavailable` even before dispatch), no tool_result (`dispatched_no_tool_result`), a hang (`hung_after_dispatch`) or the host cap firing AFTER the probe printed `SDK_BASH_DISPATCHED` (`host_timeout_150s`). Signature-independent: a new error wording cannot go silent. A journald row `SANDBOX_CANARY_FAIL: verdict=sandbox_broken reason=sdk_bash_smoke_failed: <detail> ... (op=sandbox-canary; ...)` pages `faithful_canary_sandbox_broken` (one row per failed deploy) and a Sentry event (`op=sandbox-canary`, level error) is posted | Read `reason` (the first sandbox error line, scrubbed) and the `SOLEUR_CANARY_SANDBOX_DIAG` rows with `trigger=sdk_smoke` that follow the page. `apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted` is this incident: confirm `network.allowAllUnixSockets` is still set and that no SDK bump changed the helper-selection condition (`vendored-bwrap-tail` tests). Do NOT carve a `CLONE_NEWUSER` exception in the filter: a seccomp filter cannot key on the caller, so it re-opens nested userns for every sandboxed process (undoes #8752) |
-| `smoke_infra_error` / `probe_absent[: <docker stderr>]` | The probe file is missing in the canary image (an image that predates the probe, or a Dockerfile/`.dockerignore` regression), or the canary container is absent | New script with an old image is expected once. Persistent: check the Dockerfile COPY of `infra/lib/sdk-bash-probe.mjs` and its `.dockerignore` bang (`test/sdk-bash-probe-parity.test.ts` pins both) |
-| `smoke_infra_error` / `docker_exec_rc_125\|126\|127`, `probe_rc_<n>`, `no_result_line`, `container_home_unresolved`, `nonce_unavailable`, `host_timeout_before_dispatch`, `sdk_module_unavailable`, `stub_server_failed`, `nonce_missing_or_malformed` | The smoke itself could not run or print a verdict (daemon trouble, node missing, the probe crashed, no `SDK_BASH_RESULT` line, no `/dev/urandom` nonce, or the 150 s host cap firing before the probe printed `SDK_BASH_DISPATCHED`). Bash was never dispatched | No signal; holds the soak and never pages. The reason carries docker's first stderr line |
+| `sdk_bash_smoke_failed` | Bash WAS dispatched and no verified nonce came back: an error result, a clean result without the nonce (`no_nonce`), a thrown SDK error (`dispatched_then_error`, or `sandbox required but unavailable` even before dispatch), no tool_result (`dispatched_no_tool_result`), a hang (`hung_after_dispatch`), the host cap firing AFTER the probe printed `SDK_BASH_DISPATCHED` (`host_timeout_150s`), or ANY other non-zero `docker exec` rc whose output already carries the `SDK_BASH_DISPATCHED` line (`probe_rc_<N>_after_dispatch`: Bash was handed to the SDK, so a death after that is the #10445 shape, not an infra hiccup; the marker, not the rc, decides for every non-zero rc, 124 included). Signature-independent: a new error wording cannot go silent. A journald row `SANDBOX_CANARY_FAIL: verdict=sandbox_broken reason=sdk_bash_smoke_failed: <detail> ... (op=sandbox-canary; ...)` pages `faithful_canary_sandbox_broken` (one row per failed deploy) and a Sentry event (`op=sandbox-canary`, level error) is posted | Read `reason` (the first sandbox error line, scrubbed) and the `SOLEUR_CANARY_SANDBOX_DIAG` rows with `trigger=sdk_smoke` that follow the page. `apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted` is this incident: confirm `network.allowAllUnixSockets` is still set and that no SDK bump changed the helper-selection condition (`vendored-bwrap-tail` tests). Do NOT carve a `CLONE_NEWUSER` exception in the filter: a seccomp filter cannot key on the caller, so it re-opens nested userns for every sandboxed process (undoes #8752) |
+| `smoke_infra_error` / `probe_absent[: <docker stderr>]` | The ONE capped pre-exec (`test -f <probe> \|\| exit 66; printf %s "$HOME"`) failed with a non-zero rc other than the host cap's 124: rc 66 is a bare `probe_absent` (the probe file is missing in the canary image: an image that predates the probe, or a Dockerfile/`.dockerignore` regression); any other rc (the canary container is absent, the daemon refused the exec) carries docker's first stderr line after the colon. A host-cap 124 in this pre-exec is NOT `probe_absent`: it is `smoke_infra_error` / `host_timeout_before_dispatch: preflight` (a wedged daemon, before Bash could be dispatched) | New script with an old image is expected once. Persistent: check the Dockerfile COPY of `infra/lib/sdk-bash-probe.mjs` and its `.dockerignore` bang (`test/sdk-bash-probe-parity.test.ts` pins both) |
+| `smoke_infra_error` / `docker_exec_rc_125\|126\|127`, `probe_rc_<n>`, `no_result_line`, `container_home_unresolved`, `nonce_unavailable`, `host_timeout_before_dispatch`, `sdk_module_unavailable`, `stub_server_failed`, `nonce_missing_or_malformed` | The smoke itself could not run or print a verdict (daemon trouble, node missing, the probe crashed BEFORE printing `SDK_BASH_DISPATCHED`, no `SDK_BASH_RESULT` line, no `/dev/urandom` nonce, or the 150 s host cap firing before the probe printed `SDK_BASH_DISPATCHED`). Bash was never dispatched (a non-zero rc AFTER that marker is `sdk_bash_smoke_failed`, above) | No signal; holds the soak and never pages. The reason carries docker's first stderr line |
 | `smoke_infra_error` / `coverage_replay_only` | A pass-shaped result whose coverage was not the shim-and-wrapper tuple (the shim is not the `bwrap` on `PATH`, or the artifact is missing/unreadable). A HOLD: `consecutive_pass` does not move | Treat as not-yet-proven; inspect `probeAgentSandboxHardening` (`op=sandbox-hardening-selfprobe`) and the faithful canary's hardening verdicts |
-| `smoke_infra_error` / `ledger_write_failed` | The verdict could not be recorded (the `/mnt/data` ledger is unwritable). Never reported as a pass; a real FAILURE still pages | Check `/mnt/data` space and ownership via the deploy-status fields; the journald row `SDK_BASH_SMOKE: ledger_write_failed` names the file |
+| `smoke_infra_error` / `ledger_write_failed` | The verdict could not be recorded (the `/mnt/data` ledger is unwritable, read-back mismatch). Never reported as a pass; a real FAILURE still pages. A failed write ALSO emits the stale warning at once (`SDK_BASH_SMOKE_STALE`, prior counter + 1), because a ledger that cannot be written cannot accumulate the counter that would otherwise raise it; and a `sdk_bash_smoke_failed` verdict whose write failed DELETES the stale ledger, so an old `consecutive_pass` can never keep reading as a soak this failure should have reset | Check `/mnt/data` space and ownership via the deploy-status fields; the journald row `SDK_BASH_SMOKE: ledger_write_failed` names the file |
 
 **The stale warning.** `smoke_infra_error` never pages by email, so a dead probe needs another consumer. At three consecutive infra
 errors (`consecutive_infra_error >= 3`) the deploy emits a journald row `SDK_BASH_SMOKE_STALE: consecutive_infra_error=<n> last_reason=...`
-and a Sentry WARNING (`op=sandbox-canary`, `event=sdk_bash_smoke_stale`): recorded in journald and Sentry, not emailed. The #10548
+and a Sentry WARNING (`op=sandbox-canary`, `event=sdk_bash_smoke_stale`): recorded in journald and Sentry, flagged on the #10548 tracker by
+the follow-through at 3 consecutive infra errors, not emailed. The #10548
 follow-through (`scripts/followthroughs/sdk-bash-smoke-verdict-10548.sh`) reads the same counter from `/hooks/deploy-status` and exits 1
-(FAIL, `probe is blind`) at `consecutive_infra_error >= 3`, which flags the #10548 tracker; 1-2 infra errors stay a retry. Treat it as
-"the deploy-time Bash check is blind"; the next green or failed verdict resets the counter.
+(FAIL, `probe is blind`) at `consecutive_infra_error >= 3`, which flags the #10548 tracker; 1-2 infra errors stay a retry (exit 2). Treat it as
+"the deploy-time Bash check is blind"; the next green or failed verdict resets the counter. **Caveat for the first week:** the #10548
+directive carries `earliest=2026-10-26T00:00:00Z`, and the sweeper does not run the script before that date, so until then a blind probe
+is visible only in journald and Sentry (and in `/hooks/deploy-status` for anyone who reads it).
 
 **No-SSH reads.** (1) `/hooks/deploy-status` `.sdk_bash_smoke`; (2) journald rows `SDK_BASH_SMOKE: verdict=... reason=... coverage=...`
 (one per deploy, the `ci-deploy` tag) through the Better Stack query in
 [`betterstack-log-query.md`](./betterstack-log-query.md#standing-alarms-over-this-source-log-content-recurrence-alarms); (3) the soak
-verdict: `bash scripts/followthroughs/sdk-bash-smoke-verdict-10548.sh` (prints a line starting `sdk_bash_smoke`; credential-declared,
-reads the same signed deploy-status frame). The ledger is the smoke's OWN file: the deploy-status frame is shared by every
-component's deploy, so soak accounting never reads it.
+verdict, which needs the signing secret and the Cloudflare Access pair (`WEBHOOK_DEPLOY_SECRET`, `CF_ACCESS_CLIENT_ID`,
+`CF_ACCESS_CLIENT_SECRET`, the three names in the script header and in the #10548 directive):
+
+```bash
+doppler run -p soleur -c prd_terraform -- bash scripts/followthroughs/sdk-bash-smoke-verdict-10548.sh
+```
+
+It prints ONE line starting `sdk_bash_smoke` and reads the HMAC-signed, Cloudflare-Access-gated deploy-status request (the response is not
+signed). Exit codes (per the sweeper contract, `scripts/sweep-followthroughs.sh`): **it never exits 0**, because exit 0 would make the
+sweeper CLOSE the tracker and #10548 also tracks the promotion itself and the operator-authorized flag decision, which no script can observe.
+`5` = ACTION REQUIRED (soak complete: at least 5 consecutive green verdicts over at least 3 days, latest verdict `pass`, coverage
+`sdk_wrapper_shim_prodtuple`; the sweeper treats 5 as notify-only: it comments, leaves the issue open, and on an already-closed issue
+comments without reopening), `1` = FAIL (a recorded `sdk_bash_smoke_failed`, OR `consecutive_infra_error >= 3`, the stale escalation above),
+`2` = TRANSIENT (unreachable endpoint, soak not complete, 1-2 infra errors, a pass without full coverage, a non-numeric counter). A human
+closes #10548 after the promotion change and the flag decision are done. The ledger is the smoke's OWN file: the deploy-status frame is
+shared by every component's deploy, so soak accounting never reads it.
 
 **Config parity.** The probe carries a literal sandbox config and seccomp-selector path (the production image has no TypeScript).
 `test/sdk-bash-probe-parity.test.ts` deep-equals the literal with `buildAgentSandboxConfig(...)` for the no-egress shape and prints the
@@ -403,12 +438,25 @@ flip `execvp` out to make it 14 only if a measured argv shows the helper execs t
 bump that adds a step surfaces in CI rather than as an unclassified line.
 
 In autonomous sessions the streamed `command_stream` text of a Bash result that is, as a whole, ONE error-flagged
-pre-exec sandbox line (any classified helper step except `waitpid`, or a `bwrap` EPERM line) is replaced by: "Platform notice: command execution
-is temporarily unavailable on our side. This is a platform issue, not a problem with your project." The mirror event is
+pre-exec sandbox line is replaced by: "Platform notice: command execution
+is temporarily unavailable on our side. This is a platform issue, not a problem with your project." The rewrite needs that single
+line to START with `bwrap:` plus a space (and carry EPERM / `Operation not permitted`), or to be an exact-allowlisted `apply-seccomp: <step>:
+Operation not permitted` line for one of the 15 pre-command steps (any classified helper step except `waitpid`); a line that merely
+CONTAINS "bwrap" (`rm: cannot remove 'bwrap': Operation not permitted`) is never rewritten. The mirror event is
 emitted first from the raw output. The SDK-visible tool_result is not rewritable, so the model still sees the raw line and a
 system-prompt directive (`BASH_UNAVAILABLE_PROMPT_DIRECTIVE`) tells it not to echo it, to retry the same command ONCE only
-when it is read-only or idempotent, and after a second failure to stop and say to try again later. The retry is
+when it is read-only or idempotent, and after a second failure to stop and say to try again later. The directive is a prompt, not code:
+it triggers only on a FAILED Bash call (result marked as an error) whose whole output is ONE line starting `apply-seccomp:` or `bwrap:`
+and ending in `Operation not permitted`. The retry is
 model-compliance based (the SDK turn cap bounds a non-compliant loop); non-autonomous sessions rely on the directive alone.
+
+**Scope of the signal (CTO ruling E, 2026-10-19).** The `agent_sandbox_bash_denial` alert and the notice rewrite cover cc-soleur-go
+sessions only. The legacy runner has no tool_result observer, so a helper EPERM there is neither mirrored nor paged. A variant-induced
+AF_UNIX EPERM has no signal on either runner. (Routing, `server/conversation-routing.ts` and `server/ws-handler.ts`: a conversation whose
+`active_workflow` is NULL parses to routing `legacy` and runs on the legacy runner, `agent-runner.ts` `startAgentSession` /
+`sendUserMessage`; a conversation with `soleur_go_pending` or `soleur_go_active` routing runs on cc-soleur-go,
+`dispatchSoleurGoForConversation`.) The #10455 open item "Legacy agent-runner loop has no tool_result observer" stays open and gains
+"variant-EPERM signal".
 
 **Accepted forgery limitation.** The runtime classifier reads Bash `tool_result` text, which a tenant controls.
 The arm matches only the exact helper line (`apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted`,
@@ -428,7 +476,17 @@ listed 17 Logs alerts (the 16 Terraform-managed ones plus the hand-made "Output 
 `escalation_target = {team_id, team_name}` (or `current_team`), `email = true` and `push`, `call`, `sms` all `false`. Verdict: **an
 integration exists at account level; delivery of Logs alerts to Slack is not provable from the API** (no field ties a Logs-source alert
 to a Slack channel), so both alerts stay documented as email-only and nothing here claims that Slack wakes. To repeat the check, re-run
-those two reads. What an agent cannot establish is whether the dashboard routes team alerts to the connected Slack workspace; that is a
+those two reads with the token on curl's stdin as a header, never in argv (the pattern of `app-database-readiness-alarm.md`, Diagnose
+step 2: `--disable --noproxy "*" --header @-`), one URL per call, summarised with `jq` so nothing large prints:
+
+```bash
+doppler run -p soleur -c prd_terraform -- bash -c 'printf "Authorization: Bearer %s\n" "$BETTERSTACK_API_TOKEN_READONLY" \
+  | curl --disable --noproxy "*" -sS --max-time 30 --header @- https://uptime.betterstack.com/api/v2/slack-integrations' | jq '.data | length'
+doppler run -p soleur -c prd_terraform -- bash -c 'printf "Authorization: Bearer %s\n" "$BETTERSTACK_API_TOKEN_READONLY" \
+  | curl --disable --noproxy "*" -sS --max-time 30 --header @- "https://telemetry.betterstack.com/api/v2/alerts?per_page=50"' | jq '.data | length'
+```
+
+What an agent cannot establish is whether the dashboard routes team alerts to the connected Slack workspace; that is a
 property of the dashboard integration settings, not of anything this repository applies, and it stays open on #10455.
 
 ## Tenant-visible: no-egress AF_UNIX deny (#10455 a), runtime flag `agent-sandbox-unix-deny`
@@ -436,20 +494,68 @@ property of the dashboard integration settings, not of anything this repository 
 **State (2026-10-19): the flag is OFF; nothing changes for tenants until it is turned on.** Enabling is a production write that needs a
 green deploy `sdk_bash_smoke` (the smoke runs the no-egress tuple with the unixdeny artifact selected, so a variant that breaks Bash start
 shows as `sdk_bash_smoke_failed` on the deploy that carries it) and the operator's explicit authorization at that time (#10548). Rollback is
-flipping the flag OFF. Flipping the flag OFF takes effect on new queries after the 30 s flag cache. An active cc-soleur-go conversation keeps the artifact it started with until it idles out (10 min of inactivity) or the container restarts; the legacy runner picks it up on the next message. A restart is the only way to force it, and it is not routine. The rollback latency to state in the #10548 enable request: up to about 10 minutes after each open conversation's last activity.
+flipping the flag OFF. Flipping the flag OFF takes effect on new queries after up to about 60 s (the 30 s resolver memo in
+`server/resolve-sandbox-unix-deny.ts` on top of the 30 s flag cache in `lib/feature-flags/server.ts`; each read is bounded at 300 ms and a
+failed read resolves OFF). An active cc-soleur-go conversation keeps the artifact it started with until it idles out (10 min of inactivity) or the container restarts; the legacy runner picks it up on the next message after that window. A restart is the only way to force it, and it is not routine. The rollback latency to state in the #10548 enable request: new queries about 60 s; up to about 10 minutes after each open conversation's last activity.
+
+**Enable request must contain** (CTO ruling G, 2026-10-19: the flag stays GLOBAL and the enable is a staged, operator-attended
+procedure; a per-organisation cohort was deferred, not built). The #10548 request is incomplete without every item:
+
+1. **Blast radius, stated in the request.** The flag is global (anonymous identity), so ONE write flips every no-egress session at once:
+   the whole legacy runner (it never carries a GitHub token or a web-egress handle, so every legacy session is no-egress) plus every
+   repo-less or no-web cc-soleur-go session. There is no partial rollout.
+2. **A named rollback owner and the exact rollback command** (the owner types the OFF write of `soleur:flag-set-role`: flag
+   `agent-sandbox-unix-deny`, role `prd`, `off`; the agent prepares its `--dry-run` preview).
+3. **Rollback latency:** new queries about 60 s; each open cc-soleur-go conversation up to about 10 minutes after its last activity.
+4. **An operator-attended soak of at least 30 minutes after the flip**, watching Sentry for `socket: Operation not permitted`,
+   `PermissionError` and `agent_sandbox_bash_denial`.
+5. **A post-flip smoke of real tenant-style Bash from a NEW conversation on EACH runner path** (an open session never exercises the new
+   posture): `echo ok`; `git status`; `node -e 1`; `python3 -c 'import multiprocessing as m; m.Pool(1).map(abs,[1])'`, which is EXPECTED to
+   FAIL under the variant (the known shape, see the tenant-visible list below); and a localhost AF_UNIX connect, EXPECTED to fail with
+   EPERM. Run a real Bash plus AF_UNIX call on EACH runner path. The alert is not the check.
+   Routing (`server/conversation-routing.ts`, `server/ws-handler.ts`): a conversation whose `active_workflow` is NULL (routing `legacy`) runs
+   on the legacy runner (`agent-runner.ts`); one with `soleur_go_pending` / `soleur_go_active` routing runs on cc-soleur-go
+   (`cc-dispatcher.ts`), so use one conversation of each kind. The author of the enable request must confirm how to start a `legacy`-routed conversation in
+   the product UI (for example a domain-leader conversation) before the request is sent; this runbook established the routing rule from the
+   code, not the UI path.
+6. **Abort criteria:** any non-AF_UNIX command failing, or any tenant report, means roll back first and diagnose after.
+7. **The enable sequence:** (a) run `soleur:flag-list` first (it shows code wiring and the live Doppler dev/prd values with drift
+   detection; the Doppler mirror `FLAG_AGENT_SANDBOX_UNIX_DENY` is not verified by this runbook). (b) Create the Flagsmith feature with the
+   create skill's `--flagsmith-only` mode, which is operator-typed: the flag is already code-wired (`RUNTIME_FLAGS` in `lib/feature-flags/server.ts`
+   and `FLAG_AGENT_SANDBOX_UNIX_DENY=0` in `apps/web-platform/.env.example`), and a plain create stops at its "already appears in server.ts" exit-1
+   precheck. The `soleur:flag-create` skill states: "`--flagsmith-only` creates **only** the Flagsmith feature for a flag that is
+   **already code-wired** ... It skips the server.ts / `.env.example` / Doppler mutations **and** the 'already appears in server.ts' exit-1
+   precheck". Its `<ARGS>` are `agent-sandbox-unix-deny --flagsmith-only` (default OFF: no `--dev-on`, no `--prd-on`); the agent first runs the
+   same with `--dry-run`, then prints the typed-`yes` write command for the operator (exit 64 in an agent shell is by design, ADR-249).
+   (c) Flip dry-run, agent-runnable: `soleur:flag-set-role agent-sandbox-unix-deny prd on --dry-run`. (d) Flip `prd` ON, operator-typed.
+   (e) Verify with `soleur:flag-list` and the post-flip smoke in item 5.
+8. **The dev-segment trap.** The anonymous identity resolves to the `prd` segment (`ANON_IDENTITY.role = "prd"` in
+   `lib/feature-flags/server.ts`), so a dev-only flip is a no-op for this flag, and every flag write touches BOTH Flagsmith environments
+   (dev and prd) whichever role it names. Nobody should treat `dev on` as a canary: it changes nothing a tenant or a test session sees.
+9. **Two rollout facts the tenant-facing answer depends on.** (a) The ambient `SOLEUR_BWRAP_SECCOMP_BPF` incident override loses to the flag for
+   no-egress sessions (the selector is assigned after the allowlist copy in `buildAgentEnv`), so to use that override flip the flag OFF first.
+   (b) Variant assignment can differ per conversation, because egress is derived from best-effort handles: a GitHub installation-token mint
+   failure is non-fatal (`cc-dispatcher.ts`, `op=mint-gh-token`) and a web-egress forwarder spawn failure proceeds zero-egress, so an
+   entitled tenant can get the AF_UNIX-deny artifact for one conversation and working AF_UNIX in the next. To tie a user report to the flag,
+   read the per-session `tenant-deny` log line (`feature=agent-sandbox`, `op=tenant-deny`): it carries `seccompArtifact: base|unixdeny`
+   for that session.
 
 **Release-notes line (dated, for the release that turns the flag ON).** `2026-10-19 - Sandbox: shell commands in projects without outbound
-network access can no longer open Unix-domain sockets (for example a local Postgres or Redis socket path, or Python multiprocessing
-Manager). Pipes, socketpair and normal networking checks are unchanged; sessions with GitHub or web access are not affected.` (GitHub
+network access can no longer open Unix-domain sockets (for example a local Postgres or Redis socket path, Python multiprocessing
+Manager, Pool or ProcessPoolExecutor on Python 3.14 and later where the default start method is forkserver, gpg-agent for
+signed git commits, ssh-agent or SSH ControlMaster, tmux or screen). Pipes, socketpair and normal networking checks are unchanged;
+sessions with GitHub or web access are not affected.` (GitHub
 release bodies are generated from the merged PR text and the in-app Releases page sanitizes security wording, so the line is carried in the
 PR body, which is the release-notes source of record; there is no committed changelog file.)
 
 **Support runbook line.** A user report of `Operation not permitted` from a Unix-socket workload (`psycopg2` to a local socket,
-`redis-cli -s`, `multiprocessing.Manager()`, a D-Bus client) in a session with no GitHub token and no web access, dated after the flag was
+`redis-cli -s`, `multiprocessing.Manager()`, `multiprocessing.Pool` or `ProcessPoolExecutor` on Python 3.14 and later (the default
+forkserver start method talks over a Unix socket), `git commit -S` through `gpg-agent`, `ssh-agent` or SSH ControlMaster, `tmux` or `screen`, a D-Bus
+client) in a session with no GitHub token and no web access, dated after the flag was
 turned on, is this change, not a bug: tell the user the workload needs a TCP address on loopback (works inside the per-command network
 namespace) or a session with outbound access; engineering confirms with `soleur:flag-list` (flag `agent-sandbox-unix-deny` ON) and by the
 absence of `apply-seccomp:` helper rows for that user (those are a different failure). To roll back for everyone, set the flag OFF (`soleur:flag-set-role
-agent-sandbox-unix-deny prd off`, operator-authorized). The flip reaches new queries after the 30 s flag cache; an active cc-soleur-go conversation keeps the artifact it started with until it idles out (10 min of inactivity) or the container restarts, so the support answer is "fixed for new conversations; an open one may stay affected for up to about 10 minutes after its last activity". After the flip, confirm with a real hosted Bash call from a NEW conversation; an open session never exercises the new posture.
+agent-sandbox-unix-deny prd off`, operator-authorized). The flip reaches new queries after up to about 60 s (30 s resolver memo plus the 30 s flag cache); an active cc-soleur-go conversation keeps the artifact it started with until it idles out (10 min of inactivity) or the container restarts, so the support answer is "fixed for new conversations; an open one may stay affected for up to about 10 minutes after its last activity". After the flip, confirm with a real hosted Bash call from a NEW conversation; an open session never exercises the new posture. To tell whether a given session ran the variant, read its `tenant-deny` log line: `seccompArtifact: base|unixdeny`. **Incident-time seccomp override:** with the flag ON, an ambient `SOLEUR_BWRAP_SECCOMP_BPF` is ignored for no-egress sessions (the selector is set after the allowlist copy), so flip the flag OFF FIRST, then apply the override; an override equal to the unixdeny path on an egress session is reset to the base artifact with a Sentry warning (`op=seccomp-agreement`).
 
 **Reading the probes.** Boot: `op=sandbox-hardening-selfprobe` now carries `unixdenyFilter` beside `filter`; an `ok: false` with
 `unixdenyFilter: false` means the image lacks the variant artifact (flag must stay OFF). Deploy: the three hardening reasons above.
@@ -459,7 +565,9 @@ agent-sandbox-unix-deny prd off`, operator-authorized). The flip reaches new que
 The deploy-time outer-wrap arm (`run_outer_wrap_canary`, deploy-state key `outer_wrap_canary`, ledger
 `/mnt/data/ci-deploy-outer-wrap-canary.json`, Sentry `op=sandbox-canary-outer-wrap`, soak script
 `tenant-outer-wrap-soak-5863.sh`, promotion tracker #9797) is retired. Ruled by CTO agent, 2026-10-19: DEMOTE
-(ADR-079 addendum 2026-10-19). Do not look for an `outer_wrap_canary` key on `/hooks/deploy-status` any more.
+(ADR-079 addendum 2026-10-19). Do not look for an `outer_wrap_canary` key on `/hooks/deploy-status` any more. The ledger file
+`/mnt/data/ci-deploy-outer-wrap-canary.json` remains on every host, inert (nothing reads or writes it any more): a re-introduction of the
+arm must use a NEW ledger name or delete that file first, otherwise it would inherit the old `consecutive_pass` and `first_pass_at`.
 
 **Why.** Its pass condition requires `elevation=privileged` (a file-cap'd `/usr/bin/bwrap` plus
 `--cap-add SYS_ADMIN`). ADR-075's 2026-10-09 addendum (#9874, operator-ratified) dropped that elevation on purpose,

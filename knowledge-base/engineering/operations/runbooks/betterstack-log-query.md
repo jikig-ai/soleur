@@ -157,7 +157,8 @@ Live standing alarms over this source:
   Bash call in that session fails); `helper_step_eperm` is any other step (the #10455 e regression net: while
   `allowAllUnixSockets` is set the helper is skipped, so these lines only appear if that knob regresses). EACCES and
   EINVAL helper failures are NOT matched (a recorded residual). **Coverage:** the legacy agent-runner
-  loop has no tool_result observer, so the alert covers the cc-soleur-go path only. It filters on these two
+  loop has no tool_result observer, so the alert covers the cc-soleur-go path only (a helper EPERM on the legacy runner is neither
+  mirrored nor paged, and a variant-induced AF_UNIX EPERM has no signal on either runner). It filters on these two
   codes, not on the whole `op`, so an older `bwrap_eperm` / `proc_mount_eperm` row never pages it. The row carries
   only the matched line (a fixed string for the helper codes) and counts, never the command or the output. **First move (no SSH):** (1) read
   the count and first timestamp with the SQL below; (2) pull `/hooks/deploy-status` (call pattern in
@@ -223,9 +224,13 @@ Live standing alarms over this source:
   the real Agent SDK, the shim and the production sandbox config failed in the canary image: the #10445 shape the faithful
   canary's replay cannot see. The `reason=` needle is mandatory (the inner canary's `bwrap_*` rows and the standing
   outer-wrap rows share the `verdict=sandbox_broken` prefix) and the `;` terminator keeps `op=sandbox-canary-outer-wrap`
-  out. `smoke_infra_error` does NOT page (three in a row warn through Sentry as `SDK_BASH_SMOKE_STALE`). The deploy is
-  NOT rolled back (report-only until #10548 promotes it), so production still runs the previous version; if the build is
-  promoted, every hosted Bash call fails. **First move (no SSH):** read `sdk_bash_smoke` from `/hooks/deploy-status` (call
+  out. `smoke_infra_error` does NOT page by email: three in a row are recorded in journald and Sentry as `SDK_BASH_SMOKE_STALE` and
+  flagged on the #10548 tracker by the follow-through (exit 1 at `consecutive_infra_error >= 3`), not emailed; the sweeper does not run
+  that script before the directive's `earliest=2026-10-26T00:00:00Z`, so for the first ~7 days a blind probe is visible only in
+  journald and Sentry. The deploy is NOT rolled back (report-only until #10548 promotes it) and this build IS promoted to
+  production in the same run, so a page here means hosted Bash may be failing in production right now (the alert's own incident text:
+  "treat hosted Bash as failing in production until the reason is read and cleared"; if only the AF_UNIX variant fails, the
+  consequence applies only once the `agent-sandbox-unix-deny` flag is ON). **First move (no SSH):** read `sdk_bash_smoke` from `/hooks/deploy-status` (call
   pattern in `plugins/soleur/skills/postmerge/references/deploy-status-debugging.md`; `reason` carries the first sandbox error
   line) and decode it with the table in
   [`canary-probe-set.md`](./canary-probe-set.md#sdk-bash-smoke-and-the-helper_userns_eperm-denial-10445). **Wake path: email
