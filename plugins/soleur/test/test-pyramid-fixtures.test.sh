@@ -84,7 +84,7 @@ found() { grep -qE "$2" "$1" && printf '1' || printf '0'; }
 # the fixture: extract `^+` lines, drop the `+++` header and `+`-anchored
 # comment lines (any whitespace indent, `#`, `//`, or `/*` comment openers),
 # then match.
-found_code() { grep -E '^\+' "$1" | grep -vE '^\+\+\+' | grep -vE '^\+[[:space:]]*(#|//|/\*)' | grep -qE "$2" && printf '1' || printf '0'; }
+found_code() { local _fc; _fc=$(grep -E '^\+' "$1" | grep -vE '^\+\+\+' | grep -vE '^\+[[:space:]]*(#|//|/\*)'); grep -qE "$2" <<<"$_fc" && printf '1' || printf '0'; }
 
 # ---------------------------------------------------------------------------
 # CENSUS — glob count over ALL entries AND over `*.diff`, not a name list.
