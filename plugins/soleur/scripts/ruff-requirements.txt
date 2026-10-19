@@ -1,6 +1,6 @@
-# Pinned ruff for scripts/lint-ratchet.py (installed with pip --require-hashes --only-binary=:all:).
+# Pinned ruff for plugins/soleur/scripts/lint-ratchet.py (installed with pip --require-hashes --only-binary=:all:).
 # Bump recipe: take the version and one sha256 per wheel from https://pypi.org/pypi/ruff/<version>/json,
-# replace the pin and ALL hash lines below, then run: python3 scripts/lint-ratchet.py ruff --update
+# replace the pin and ALL hash lines below, then run: python3 plugins/soleur/scripts/lint-ratchet.py ruff --update
 # (a hash line carries no trailing comment: pip rejects a continuation followed by one).
 ruff==0.16.10 \
     --hash=sha256:1dfc6f0088149fb6a362c1c446bcbb3fd2157b3852fe2fa68409276eab9ad9b3 \

@@ -595,8 +595,9 @@ jobs:
     # annotations — attribution is per-suite, per-leg, never anonymous. Full width
     # is deliberate here: #7376's -P4 flake was the tmpfs/live-tree collision class
     # (fixed at source; per-suite bounds + named RED bound what remains), and
-    # main-health-monitor keeps JOBS:1 because a spurious P1 page is a worse
-    # failure there than a slow leg is here.
+    # main-health-monitor now runs its infra step at the default width too (#7432: these
+    # legs are its -P 4 evidence, though each leg runs about a quarter of the set; #7423 fixed the
+    # live-tree collision, #7376 is still open); only its tests step keeps a JOBS pin.
     #
     # REGISTRATION IS NOW THE FILESYSTEM: presence under apps/web-platform/infra/**.test.sh
     # IS registration (ADR-252). The runner derives its execute set by `git ls-files` glob —
