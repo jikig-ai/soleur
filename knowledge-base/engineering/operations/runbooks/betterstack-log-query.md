@@ -171,7 +171,9 @@ Live standing alarms over this source:
   only.** On the free tier the alert emails the team and nothing else; the Slack wake of
   [ADR-260](../../architecture/decisions/ADR-260-db-outage-paging-and-bounded-auto-restart.md) is a
   dashboard-side integration that has NOT been verified for this alert, so do not assume a Slack message
-  accompanies the email until that verification is recorded. **Accepted limitation:** a tenant (or a
+  accompanies the email until that verification is recorded. (2026-10-19 read-only check: the account has one Slack integration and every
+  Logs alert carries a team-email escalation target only, so delivery to Slack is not provable from the API; the dated result and the two
+  reads are in `canary-probe-set.md`, "Slack wake check".) **Accepted limitation:** a tenant (or a
   prompt-injected agent) printing the exact helper line every few minutes can keep ONE incident open and suppress new
   pages for everyone (`recovery_period 600`, `treat_as_zero`, per-user 5-minute debounce). Accepted at current scale;
   mitigation (page on at least 2 distinct users, or verify server-side) is tracked in #10455. It auto-resolves after 10 quiet minutes,

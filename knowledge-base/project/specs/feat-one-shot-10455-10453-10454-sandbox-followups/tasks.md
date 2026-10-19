@@ -62,12 +62,12 @@ Write each phase's RED tests before its code. Commit order: Phase 1 first, Phase
 
 ## Phase 6: Slack wake check (#10455 d)
 
-- [ ] 6.1 One read-only `slack-integrations` call plus the Logs alerts' escalation targets; record the dated result and exact commands in the runbooks and on #10455
-- [ ] 6.2 Name the operator-only residue (OAuth consent, paid tier); attempt Playwright up to the consent gate before naming it operator-only
+- [x] 6.1 One read-only `slack-integrations` call plus the Logs alerts' escalation targets; record the dated result and exact commands in the runbooks and on #10455
+- [x] 6.2 Name the operator-only residue (OAuth consent, paid tier); attempt Playwright up to the consent gate before naming it operator-only
 
 ## Phase 7: Records and hygiene
 
-- [ ] 7.1 ADR-079, ADR-075, ADR-218 text; `model.c4` edge prose; run C4 tests
+- [x] 7.1 ADR-079, ADR-075, ADR-218 text; `model.c4` edge prose; run C4 tests
 - [ ] 7.2 Comment on #10455 listing remaining open items and the new residuals
 - [ ] 7.3 Open Code-Review Overlap re-check against the final file list
 - [ ] 7.4 LAST commit: retire `sandbox-readback-10445.sh`, its test and its `test-all.sh` line

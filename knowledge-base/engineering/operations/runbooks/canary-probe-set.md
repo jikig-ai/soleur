@@ -408,6 +408,17 @@ line and a pre-fork step, but a command that ran and exited non-zero can print t
 is why the notice does not claim the command did not run. The deploy-time smoke (#10453), not tenant text, is the authoritative signal; the email only prompts the check above. The wake path for both alerts is email-only on
 the Better Stack free tier until the ADR-260 Slack integration is verified.
 
+**Slack wake check, run 2026-10-19 (#10455 d), read-only.** Two reads with the read-only token (Doppler `soleur/prd_terraform`,
+`BETTERSTACK_API_TOKEN_READONLY`; counts and flags only, nothing written):
+`GET https://uptime.betterstack.com/api/v2/slack-integrations` answered HTTP 200 with one `slack_integration` entry (it answered
+`{"data":[]}` before #9168, see `app-database-readiness-alarm.md`), and `GET https://telemetry.betterstack.com/api/v2/alerts?per_page=50`
+listed 17 Logs alerts (the 16 Terraform-managed ones plus the hand-made "Output utilization high"), every one with
+`escalation_target = {team_id, team_name}` (or `current_team`), `email = true` and `push`, `call`, `sms` all `false`. Verdict: **an
+integration exists at account level; delivery of Logs alerts to Slack is not provable from the API** (no field ties a Logs-source alert
+to a Slack channel), so both alerts stay documented as email-only and nothing here claims that Slack wakes. To repeat the check, re-run
+those two reads. What an agent cannot establish is whether the dashboard routes team alerts to the connected Slack workspace; that is a
+property of the dashboard integration settings, not of anything this repository applies, and it stays open on #10455.
+
 ## Tenant-visible: no-egress AF_UNIX deny (#10455 a), runtime flag `agent-sandbox-unix-deny`
 
 **State (2026-10-19): the flag is OFF; nothing changes for tenants until it is turned on.** Enabling is a production write that needs a
