@@ -95,7 +95,7 @@ If `$ARGUMENTS` contains no `#N` substrings (e.g., a plan file path or freeform 
 
 **Overlap preflight.** After the OPEN-PR probes, run `bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/pr-overlap-preflight.sh" --mode start`; at the post-planning re-probe re-run it with `--files "<planned files>"`. It only reads: never edit or comment on another session's PR. Exit 12 (duplicate, no vehicle): spawn the CTO to designate one, record the ruling as a `decision-challenges.md` row `overlap vehicle`, re-run with `--vehicle <N|this>`; never an operator question. Exit 10: hold back, one plain sentence. 0, 11, 13: continue and print the notice. 2: retry once, then continue with the notice, never as clear. Detail: [pr-overlap.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/pr-overlap.md).
 
-A direct run whose brief carries `#N` and a `HOLDS:` list follows go.md Step 1.5 in headless form: no delegation means every hold stands, one `action-required` issue, then the draft PR.
+A direct run whose brief carries `#N` and a `HOLDS:` list (or an `OWNER-GATED` list, as go.md Step 1.5 defines the trigger) follows go.md Step 1.5 in headless form: no delegation means every hold stands, one `action-required` issue, then the draft PR.
 
 **Step 0b: Ensure branch isolation.** Check the current branch with `git branch --show-current`. If on the default branch (main or master), create a worktree for the feature branch. Do NOT use `git pull` or `git checkout -b` -- both fail on bare repos (`core.bare=true`).
 
