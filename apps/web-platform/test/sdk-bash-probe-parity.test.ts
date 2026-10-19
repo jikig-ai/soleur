@@ -13,6 +13,7 @@
 // The egress shape is exercised pre-merge by the real-SDK egress arm (sandbox-wrapped-command-runtime.test.ts), not by the
 // deploy smoke (recorded as out of scope in the plan).
 
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -198,6 +199,9 @@ describe("the probe is baked into the image and ci-deploy.sh execs the baked pat
 // ---- (c) verdict table --------------------------------------------------------------------------------------------
 
 const NONCE = "0123456789abcdef0123456789abcdef";
+const OTHER_NONCE = "fedcba9876543210fedcba9876543210";
+// What `tr 0-9a-f a-f0-9` makes of NONCE, written out by hand (independent of the probe's transformNonce): 0->a ... 5->f, 6->0 ... 9->3, a->4 ... f->9.
+const EXECUTED = "abcdef0123456789abcdef0123456789";
 const HELPER_EPERM = "apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted";
 const FULL = probe.SMOKE_COVERAGE_FULL;
 
@@ -210,7 +214,7 @@ interface Row {
 }
 
 const ROWS: Row[] = [
-  { name: "pass: dispatched, real tool_result carries the nonce, full coverage", obs: { nonce: NONCE, dispatched: true, toolResult: { isError: false, content: `SDK_SMOKE_${NONCE}\n` }, coverage: FULL }, verdict: "pass", reason: /^ok$/, coverage: FULL },
+  { name: "pass: dispatched, real tool_result carries the nonce, full coverage", obs: { nonce: NONCE, dispatched: true, toolResult: { isError: false, content: `SDK_SMOKE_${EXECUTED}\n` }, coverage: FULL }, verdict: "pass", reason: /^ok$/, coverage: FULL },
   { name: "failed: the #10445 helper EPERM line in an error result", obs: { nonce: NONCE, dispatched: true, toolResult: { isError: true, content: HELPER_EPERM }, coverage: FULL }, verdict: "sdk_bash_smoke_failed", reason: /apply-seccomp: unshare\(CLONE_NEWUSER\)/ },
   { name: "failed: dispatched, clean (non-error) result WITHOUT the nonce (Bash ran nothing we can verify)", obs: { nonce: NONCE, dispatched: true, toolResult: { isError: false, content: "" }, coverage: FULL }, verdict: "sdk_bash_smoke_failed", reason: /^no_nonce/ },
   { name: "failed: dispatched, unknown error wording without any sandbox signature (signature-independent)", obs: { nonce: NONCE, dispatched: true, toolResult: { isError: true, content: "the widget exploded" }, coverage: FULL }, verdict: "sdk_bash_smoke_failed", reason: /widget exploded/ },
@@ -218,19 +222,22 @@ const ROWS: Row[] = [
   { name: "failed: dispatched, the SDK threw a non-sandbox error", obs: { nonce: NONCE, dispatched: true, thrown: "Error: stream closed", coverage: FULL }, verdict: "sdk_bash_smoke_failed", reason: /^dispatched_then_error/ },
   { name: "failed: dispatched, no tool_result at all", obs: { nonce: NONCE, dispatched: true, coverage: FULL }, verdict: "sdk_bash_smoke_failed", reason: /^dispatched_no_tool_result$/ },
   { name: "failed: the SDK threw 'sandbox required but unavailable' before Bash was dispatched (a sandbox that cannot start is the incident)", obs: { nonce: NONCE, dispatched: false, thrown: "Error: sandbox required but unavailable", coverage: FULL }, verdict: "sdk_bash_smoke_failed", reason: /sandbox required but unavailable/ },
-  { name: "failed: nonce present but the result is error-flagged (a failing command cannot certify)", obs: { nonce: NONCE, dispatched: true, toolResult: { isError: true, content: `SDK_SMOKE_${NONCE}\nboom` }, coverage: FULL }, verdict: "sdk_bash_smoke_failed", reason: /./ },
+  { name: "failed: nonce present but the result is error-flagged (a failing command cannot certify)", obs: { nonce: NONCE, dispatched: true, toolResult: { isError: true, content: `SDK_SMOKE_${EXECUTED}\nboom` }, coverage: FULL }, verdict: "sdk_bash_smoke_failed", reason: /./ },
+  { name: "A8: failed: a clean result that only QUOTES the command text (the printf pipeline with the raw nonce) does not pass", obs: { nonce: NONCE, dispatched: true, toolResult: { isError: false, content: `$ echo SDK_SMOKE_$(printf %s '${NONCE}' | tr 0-9a-f a-f0-9)\nSDK_SMOKE_${NONCE}` }, coverage: FULL }, verdict: "sdk_bash_smoke_failed", reason: /^no_nonce/ },
+  { name: "A8: failed: another run's executed output (a different nonce) does not pass", obs: { nonce: NONCE, dispatched: true, toolResult: { isError: false, content: `SDK_SMOKE_${probe.transformNonce(OTHER_NONCE)}\n` }, coverage: FULL }, verdict: "sdk_bash_smoke_failed", reason: /^no_nonce/ },
+  { name: "A8: failed: the pre-transform spelling (SDK_SMOKE_<raw nonce>) is no longer a pass", obs: { nonce: NONCE, dispatched: true, toolResult: { isError: false, content: `SDK_SMOKE_${NONCE}\n` }, coverage: FULL }, verdict: "sdk_bash_smoke_failed", reason: /^no_nonce/ },
   { name: "infra: Bash never dispatched, non-signature SDK error before dispatch", obs: { nonce: NONCE, dispatched: false, thrown: "Error: spawn ENOENT", coverage: FULL }, verdict: "smoke_infra_error", reason: /^sdk_error_before_dispatch/ },
   { name: "infra: Bash never dispatched, nothing happened", obs: { nonce: NONCE, dispatched: false, coverage: FULL }, verdict: "smoke_infra_error", reason: /^bash_not_dispatched$/ },
   { name: "infra: hung before Bash was dispatched", obs: { nonce: NONCE, dispatched: false, timedOut: true, coverage: FULL }, verdict: "smoke_infra_error", reason: /^hung_before_dispatch$/ },
   { name: "infra: the probe's own precondition failed (SDK module missing)", obs: { nonce: NONCE, infraError: "sdk_module_unavailable: Cannot find package" }, verdict: "smoke_infra_error", reason: /^sdk_module_unavailable/ },
-  { name: "HOLD: a pass-shaped result with replay_only coverage is smoke_infra_error (never moves the soak counter)", obs: { nonce: NONCE, dispatched: true, toolResult: { isError: false, content: `SDK_SMOKE_${NONCE}` }, coverage: probe.SMOKE_COVERAGE_REPLAY_ONLY }, verdict: "smoke_infra_error", reason: /^coverage_replay_only$/, coverage: probe.SMOKE_COVERAGE_REPLAY_ONLY },
-  { name: "unknown coverage string is treated as replay_only", obs: { nonce: NONCE, dispatched: true, toolResult: { isError: false, content: `SDK_SMOKE_${NONCE}` }, coverage: "whatever" }, verdict: "smoke_infra_error", reason: /^coverage_replay_only$/, coverage: probe.SMOKE_COVERAGE_REPLAY_ONLY },
+  { name: "HOLD: a pass-shaped result with replay_only coverage is smoke_infra_error (never moves the soak counter)", obs: { nonce: NONCE, dispatched: true, toolResult: { isError: false, content: `SDK_SMOKE_${EXECUTED}` }, coverage: probe.SMOKE_COVERAGE_REPLAY_ONLY }, verdict: "smoke_infra_error", reason: /^coverage_replay_only$/, coverage: probe.SMOKE_COVERAGE_REPLAY_ONLY },
+  { name: "unknown coverage string is treated as replay_only", obs: { nonce: NONCE, dispatched: true, toolResult: { isError: false, content: `SDK_SMOKE_${EXECUTED}` }, coverage: "whatever" }, verdict: "smoke_infra_error", reason: /^coverage_replay_only$/, coverage: probe.SMOKE_COVERAGE_REPLAY_ONLY },
 ];
 
 describe("smokeVerdict classifies every known outcome", () => {
   // Anti-vacuity floor: the table must not be emptied (a verdict suite that runs zero rows passes).
   it("runs at least the floor of rows", () => {
-    expect(ROWS.length).toBeGreaterThanOrEqual(15);
+    expect(ROWS.length).toBeGreaterThanOrEqual(18);
   });
 
   for (const row of ROWS) {
@@ -249,8 +256,32 @@ describe("smokeVerdict classifies every known outcome", () => {
   });
 
   it("never echoes anything that looks like the decoy credential into the reason of a pass", () => {
-    const v = probe.smokeVerdict({ nonce: NONCE, dispatched: true, toolResult: { isError: false, content: `SDK_SMOKE_${NONCE}` }, coverage: FULL });
+    const v = probe.smokeVerdict({ nonce: NONCE, dispatched: true, toolResult: { isError: false, content: `SDK_SMOKE_${EXECUTED}` }, coverage: FULL });
     expect(JSON.stringify(v)).not.toContain(probe.SMOKE_DECOY_API_KEY);
+  });
+});
+
+describe("A8: the smoke command's output differs from its text", () => {
+  it("transformNonce matches the hand-written expectation and changes every digit", () => {
+    expect(probe.transformNonce(NONCE)).toBe(EXECUTED);
+    expect(probe.smokeExpectedOutput(NONCE)).toBe(`SDK_SMOKE_${EXECUTED}`);
+    for (let i = 0; i < NONCE.length; i++) expect(EXECUTED[i]).not.toBe(NONCE[i]);
+  });
+
+  it("the command text never contains the output it is verified against", () => {
+    const cmd = probe.smokeCommand(NONCE);
+    expect(cmd).toContain(NONCE); // the raw nonce is the printf argument...
+    expect(cmd).not.toContain(probe.smokeExpectedOutput(NONCE)); // ...and the transformed value only exists after execution
+    expect(cmd).not.toContain(`SDK_SMOKE_${NONCE}`);
+  });
+
+  it("really executing the command in a shell prints exactly the expected output", () => {
+    const r = spawnSync("sh", ["-c", probe.smokeCommand(NONCE)], { encoding: "utf8" });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe(`${probe.smokeExpectedOutput(NONCE)}\n`);
+    // and the verdict accepts that very output
+    const v = probe.smokeVerdict({ nonce: NONCE, dispatched: true, toolResult: { isError: false, content: r.stdout }, coverage: FULL });
+    expect(v.verdict).toBe("pass");
   });
 });
 

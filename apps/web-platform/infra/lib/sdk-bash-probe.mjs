@@ -98,10 +98,31 @@ export function smokeSandboxConfig({ workspace, uid, home }) {
   };
 }
 
+/** The nonce, rewritten the way the smoke command rewrites it: each hex digit is mapped by `tr 0-9a-f a-f0-9` (0->a, 5->f,
+ *  6->0, 9->3, a->4, f->9), so the output has the same length and alphabet but no digit in place. */
+export function transformNonce(nonce) {
+  const from = "0123456789abcdef";
+  const to = "abcdef0123456789";
+  return String(nonce).replace(/[0-9a-f]/g, (c) => to[from.indexOf(c)]);
+}
+
+/** The Bash command the smoke runs. The per-run nonce appears in its TEXT only as the argument of `printf`; the OUTPUT is
+ *  the transformed value, so a tool_result that merely QUOTES the command (an error message echoing it, a stub replaying
+ *  it) cannot contain what `smokeVerdict` requires. Only a shell that actually executed the pipeline can. The nonce is
+ *  validated as 16-64 lowercase hex by the caller before it reaches here (safe inside single quotes). */
+export function smokeCommand(nonce) {
+  return `echo SDK_SMOKE_$(printf %s '${nonce}' | tr 0-9a-f a-f0-9)`;
+}
+
+/** The single line the smoke command prints when it really ran. */
+export function smokeExpectedOutput(nonce) {
+  return `SDK_SMOKE_${transformNonce(nonce)}`;
+}
+
 const SANDBOX_SIGNATURE = /apply-seccomp|bwrap|unshare|seccomp|sandbox required but unavailable|EPERM|Operation not permitted/i;
 
 /** A print-safe, length-capped one-liner for the verdict reason (it rides journald and Sentry). */
-export function safeReason(text, max = 160) {
+function safeReason(text, max = 160) {
   const one = String(text ?? "")
     .replace(/[^\x20-\x7e\n]/g, " ")
     .replace(/\s*\n\s*/g, " | ")
@@ -124,7 +145,7 @@ function signatureLine(text) {
  *           `dispatched` = the stub delivered the Bash tool_use turn (the SDK was asked to run a command).
  *   output: { verdict, reason, coverage }
  *
- * `pass` ONLY when the real tool_result carries the per-run nonce the wrapped command echoed (and is not error-flagged)
+ * `pass` ONLY when the real tool_result carries the transformed per-run nonce the wrapped command computed (and is not error-flagged)
  * AND the coverage is the shim-and-wrapper tuple. A pass-shaped result whose coverage is `replay_only` is a HOLD: it is
  * returned as smoke_infra_error so the soak counter does not move.
  * `sdk_bash_smoke_failed` when Bash was dispatched and the run produced no verified nonce (an error result, a clean result
@@ -141,7 +162,8 @@ export function smokeVerdict(obs) {
 
   if (toolResult) {
     const content = String(toolResult.content ?? "");
-    const echoed = nonce.length > 0 && content.includes(`SDK_SMOKE_${nonce}`);
+    // The EXECUTED output (transformed nonce), never the command text: see smokeCommand.
+    const echoed = nonce.length > 0 && content.includes(smokeExpectedOutput(nonce));
     if (echoed && toolResult.isError !== true) {
       if (coverage !== SMOKE_COVERAGE_FULL) {
         return { verdict: "smoke_infra_error", reason: "coverage_replay_only", coverage };
@@ -312,7 +334,7 @@ async function runSmoke() {
   }
 
   const state = { dispatched: false, announce: true };
-  const server = startStub(`echo SDK_SMOKE_${nonce}`, state);
+  const server = startStub(smokeCommand(nonce), state);
   try {
     await new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
   } catch (e) {
