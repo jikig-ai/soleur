@@ -5147,7 +5147,7 @@ if want_scripts; then
   # apps/web-platform/node_modules, which this shard does not have). The live ruff run installs a
   # hash-pinned ruff on first use; under CI an unobtainable ruff is exit 2, never a skip.
   run_suite "tests/scripts/lint-ratchet" python3 -m unittest tests.scripts.test_lint_ratchet
-  run_suite "scripts/lint-ratchet-ruff-live" python3 scripts/lint-ratchet.py ruff --check
+  run_suite "scripts/lint-ratchet-ruff-live" python3 plugins/soleur/scripts/lint-ratchet.py ruff --check
   # ADR-170. Both halves are required: the unit suite proves the RULE is right (its fixtures are
   # the executable spec), the live scan proves the TREE is clean. Either alone is satisfiable by
   # a detector that has stopped detecting -- a broken linter and a clean repo emit identical
