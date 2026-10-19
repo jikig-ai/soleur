@@ -345,10 +345,12 @@ computes its own verdict: `pass` requires the nonce echoed in the real tool_resu
 | `smoke_infra_error` / `coverage_replay_only` | A pass-shaped result whose coverage was not the shim-and-wrapper tuple (the shim is not the `bwrap` on `PATH`, or the artifact is missing/unreadable). A HOLD: `consecutive_pass` does not move | Treat as not-yet-proven; inspect `probeAgentSandboxHardening` (`op=sandbox-hardening-selfprobe`) and the faithful canary's hardening verdicts |
 | `smoke_infra_error` / `ledger_write_failed` | The verdict could not be recorded (the `/mnt/data` ledger is unwritable). Never reported as a pass; a real FAILURE still pages | Check `/mnt/data` space and ownership via the deploy-status fields; the journald row `SDK_BASH_SMOKE: ledger_write_failed` names the file |
 
-**The stale warning.** `smoke_infra_error` never pages, so a dead probe could stay silent forever. At three consecutive infra errors
-(`consecutive_infra_error >= 3`) the deploy emits a journald row `SDK_BASH_SMOKE_STALE: consecutive_infra_error=<n> last_reason=...` and
-a Sentry WARNING (`op=sandbox-canary`, `event=sdk_bash_smoke_stale`): deliberately not an email page. Treat it as "the deploy-time Bash
-check is blind"; the next green or failed verdict resets the counter.
+**The stale warning.** `smoke_infra_error` never pages by email, so a dead probe needs another consumer. At three consecutive infra
+errors (`consecutive_infra_error >= 3`) the deploy emits a journald row `SDK_BASH_SMOKE_STALE: consecutive_infra_error=<n> last_reason=...`
+and a Sentry WARNING (`op=sandbox-canary`, `event=sdk_bash_smoke_stale`): recorded in journald and Sentry, not emailed. The #10548
+follow-through (`scripts/followthroughs/sdk-bash-smoke-verdict-10548.sh`) reads the same counter from `/hooks/deploy-status` and exits 1
+(FAIL, `probe is blind`) at `consecutive_infra_error >= 3`, which flags the #10548 tracker; 1-2 infra errors stay a retry. Treat it as
+"the deploy-time Bash check is blind"; the next green or failed verdict resets the counter.
 
 **No-SSH reads.** (1) `/hooks/deploy-status` `.sdk_bash_smoke`; (2) journald rows `SDK_BASH_SMOKE: verdict=... reason=... coverage=...`
 (one per deploy, the `ci-deploy` tag) through the Better Stack query in

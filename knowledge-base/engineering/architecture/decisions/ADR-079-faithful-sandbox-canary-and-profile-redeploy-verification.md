@@ -718,8 +718,9 @@ failed write is reported `smoke_infra_error reason=ledger_write_failed`, never a
 pages through the unchanged `sandbox_canary_sentry_event` journald format
 (`SANDBOX_CANARY_FAIL: verdict=sandbox_broken reason=sdk_bash_smoke_failed: ... (op=sandbox-canary; ...)`) into the new Better Stack
 alert `faithful_canary_sandbox_broken` (ADR-218 amendment of the same date) plus a Sentry event. Three consecutive
-`smoke_infra_error` verdicts emit `SDK_BASH_SMOKE_STALE` and a Sentry warning (not an email page), so a dead probe cannot stay
-silent.
+`smoke_infra_error` verdicts emit `SDK_BASH_SMOKE_STALE`: recorded in journald and Sentry (a warning), flagged on the #10548 tracker
+by the follow-through (`sdk-bash-smoke-verdict-10548.sh` exits 1 at `consecutive_infra_error >= 3`), not emailed (CTO ruling,
+2026-10-19; no alert predicate covers it).
 
 **Probe configuration.** The production image has no TypeScript sources, so the probe carries a literal sandbox config and a
 literal seccomp-selector path, pinned to `buildAgentSandboxConfig` / the shim default by `test/sdk-bash-probe-parity.test.ts`

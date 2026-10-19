@@ -3,7 +3,7 @@
 # (no network, no credentials). The properties:
 #   * exit 0 ONLY when the latest verdict is `pass`, coverage is sdk_wrapper_shim_prodtuple, consecutive_pass >= 5 and the span
 #     since first_pass_at is >= 3 days (a replay_only/absent coverage, an infra error, 4 greens or 2 days each read TRANSIENT);
-#   * exit 1 ONLY for a recorded sdk_bash_smoke_failed;
+#   * exit 1 ONLY for a recorded sdk_bash_smoke_failed or for >= 3 consecutive smoke_infra_error verdicts (the probe is blind);
 #   * EVERY path prints one stdout line starting `sdk_bash_smoke` (the discoverability probe's contract), with remote values
 #     reduced so a forged verdict cannot inject a second line or a workflow command;
 #   * the three credentials ride curl's stdin as exactly three header lines; a hostile Cloudflare Access value is refused before
@@ -72,9 +72,9 @@ run() { # <expected rc> <expected status word or ""> <label> <body> [http] [env-
   fi
   PASSES=$((PASSES + 1)); echo "  ok: $label (rc=$rc)"
 }
-body() { # <verdict> <consecutive_pass> <first_pass_at> <checked_at> <coverage> [reason]
-  printf '{"tag":"v1.2.3","exit_code":0,"sdk_bash_smoke":{"verdict":"%s","reason":"%s","consecutive_pass":%s,"first_pass_at":%s,"checked_at":%s,"coverage":"%s","consecutive_infra_error":0}}' \
-    "$1" "${6:-ok}" "$2" "$3" "$4" "$5"
+body() { # <verdict> <consecutive_pass> <first_pass_at> <checked_at> <coverage> [reason] [consecutive_infra_error]
+  printf '{"tag":"v1.2.3","exit_code":0,"sdk_bash_smoke":{"verdict":"%s","reason":"%s","consecutive_pass":%s,"first_pass_at":%s,"checked_at":%s,"coverage":"%s","consecutive_infra_error":%s}}' \
+    "$1" "${6:-ok}" "$2" "$3" "$4" "$5" "${7:-0}"
 }
 FULL=sdk_wrapper_shim_prodtuple
 
@@ -85,6 +85,15 @@ run 2 TRANSIENT "5 greens over 2d23h59m59s -> TRANSIENT (the span boundary)" "$(
 run 2 TRANSIENT "5 greens, replay_only coverage -> TRANSIENT (a replay-only pass never counts)" "$(body pass 5 "$FIRST" $((FIRST + 4 * DAY)) replay_only)"
 run 2 TRANSIENT "5 greens, coverage field empty -> TRANSIENT" "$(body pass 5 "$FIRST" $((FIRST + 4 * DAY)) "")"
 run 2 TRANSIENT "5 greens over 4 days but the LATEST verdict is smoke_infra_error -> TRANSIENT (the held counter must not PASS)" "$(body smoke_infra_error 5 "$FIRST" $((FIRST + 4 * DAY)) "$FULL" probe_absent)"
+# Dead-probe signal (CTO ruling F3): >= 3 consecutive infra errors means the probe is blind, which is a FAIL (flags the tracker), not a retry.
+run 2 TRANSIENT "2 consecutive infra errors -> still TRANSIENT (below the threshold)" "$(body smoke_infra_error 0 0 $((FIRST + 4 * DAY)) "" probe_absent 2)"
+run 1 FAIL "3 consecutive infra errors -> FAIL (the probe is blind)" "$(body smoke_infra_error 0 0 $((FIRST + 4 * DAY)) "" probe_absent 3)"
+if grep -qF 'probe is blind' <<<"$LAST_ERR" && grep -qF 'consecutive_infra_error=3' <<<"$LAST_OUT"; then PASSES=$((PASSES + 1)); echo "  ok: the blind-probe FAIL says so on stderr and carries consecutive_infra_error=3 on the summary line"
+else FAIL_N=$((FAIL_N + 1)); FAILURES+=("blind-probe FAIL lacks the stderr line or the summary field: $LAST_OUT / $LAST_ERR"); echo "  FAIL: blind-probe message"; fi
+run 1 FAIL "7 consecutive infra errors with banked greens -> FAIL (the counters hold, the blindness does not)" "$(body smoke_infra_error 4 "$FIRST" $((FIRST + 4 * DAY)) "$FULL" probe_absent 7)"
+run 2 TRANSIENT "non-numeric consecutive_infra_error -> TRANSIENT (numeric guard)" "$(body smoke_infra_error 0 0 $((FIRST + 4 * DAY)) "" probe_absent '"many"')"
+if ! grep -qF 'reason=non_numeric_soak_field' <<<"$LAST_OUT"; then FAIL_N=$((FAIL_N + 1)); FAILURES+=("non-numeric infra counter was not refused by the numeric guard: $LAST_OUT"); echo "  FAIL: numeric guard reason"
+else PASSES=$((PASSES + 1)); echo "  ok: the non-numeric infra counter is refused by the numeric guard (not by the soak fall-through)"; fi
 run 2 TRANSIENT "first_pass_at 0 with 9 greens -> TRANSIENT" "$(body pass 9 0 $((FIRST + 4 * DAY)) "$FULL")"
 run 1 FAIL "a recorded sdk_bash_smoke_failed -> FAIL" "$(body sdk_bash_smoke_failed 0 0 $((FIRST + 4 * DAY)) "$FULL" 'apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted')"
 run 1 FAIL "sdk_bash_smoke_failed wins over a high held counter" "$(body sdk_bash_smoke_failed 7 "$FIRST" $((FIRST + 9 * DAY)) "$FULL")"
@@ -138,7 +147,7 @@ echo ""
 echo "=== sdk-bash-smoke-verdict-10548: $PASSES passed, ${#FAILURES[@]} failed ==="
 # Floor reported directly (not through the helper it backstops): both operands are literals on the lines immediately above the if.
 SELFTEST_ROWS=0
-MIN_ROWS=24
+MIN_ROWS=30
 REAL=$((PASSES + FAIL_N - SELFTEST_ROWS))
 if (( REAL < MIN_ROWS )); then
   printf 'FAIL: only %d rows ran (floor %d)\n' "$REAL" "$MIN_ROWS"

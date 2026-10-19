@@ -20,9 +20,12 @@
 #                   a follow-up PR promotes the smoke to blocking: a code change that adds a red-verdict->rollback path in
 #                   run_sdk_bash_smoke AND drops the call-site `|| true`. Enabling the agent-sandbox-unix-deny flag is a separate,
 #                   operator-authorized step tracked in #10548)
-#   1 = FAIL       (an `sdk_bash_smoke_failed` verdict is recorded: investigate before promoting; do NOT flip)
-#   * = TRANSIENT  (endpoint unreachable / non-JSON / field absent / soak not complete / `smoke_infra_error` / unknown / a pass whose
-#                   coverage is not the shim-and-wrapper tuple; retry next sweep)
+#   1 = FAIL       (an `sdk_bash_smoke_failed` verdict is recorded: investigate before promoting; do NOT flip. Also: >= 3 consecutive
+#                   `smoke_infra_error` verdicts, `consecutive_infra_error` >= 3 -- the probe is blind and has not exercised Bash on the
+#                   last 3 deploys; flags the tracker. The host records the same condition as `SDK_BASH_SMOKE_STALE` in journald and
+#                   Sentry; nothing emails it)
+#   * = TRANSIENT  (endpoint unreachable / non-JSON / field absent / soak not complete / 1-2 `smoke_infra_error` / unknown / a pass whose
+#                   coverage is not the shim-and-wrapper tuple / a non-numeric counter; retry next sweep)
 #
 # Required env (declared in the #10548 followthrough directive): WEBHOOK_DEPLOY_SECRET, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET.
 #
@@ -97,8 +100,13 @@ COVERAGE="$(_safe "$(printf '%s' "$BODY" | jq -r '.sdk_bash_smoke.coverage // ""
 CONSEC="$(printf '%s' "$BODY" | jq -r '.sdk_bash_smoke.consecutive_pass // 0')"
 FIRST="$(printf '%s' "$BODY" | jq -r '.sdk_bash_smoke.first_pass_at // 0')"
 CHECKED="$(printf '%s' "$BODY" | jq -r '.sdk_bash_smoke.checked_at // 0')"
+# Consecutive `smoke_infra_error` verdicts (the host bumps it on an infra error and resets it on any other verdict). It is the ONLY
+# signal that the probe itself is dead (e.g. a .dockerignore regression drops sdk-bash-probe.mjs: `probe_absent` every deploy), which
+# the soak counters cannot show: they HOLD on an infra error. See the stale-probe rule below.
+CIE="$(printf '%s' "$BODY" | jq -r '.sdk_bash_smoke.consecutive_infra_error // 0')"
+BLIND_THRESHOLD=3
 
-for n in "$CONSEC" "$FIRST"; do
+for n in "$CONSEC" "$FIRST" "$CIE"; do
   [[ "$n" =~ ^[0-9]+$ ]] || { _say "status=TRANSIENT reason=non_numeric_soak_field verdict=$VERDICT"; echo "TRANSIENT: non-numeric soak field" >&2; exit 2; }
 done
 # Span endpoint is the host's last-observation time (`checked_at`); if absent, fall back to this client's now. Residual (the 2640
@@ -110,7 +118,7 @@ else
   NOW="$(date +%s)"
 fi
 SPAN=$((NOW - FIRST))
-SUMMARY="verdict=$VERDICT coverage=${COVERAGE:-none} consecutive_pass=$CONSEC span_days=$((SPAN / 86400)) reason=${REASON:-none}"
+SUMMARY="verdict=$VERDICT coverage=${COVERAGE:-none} consecutive_pass=$CONSEC consecutive_infra_error=$CIE span_days=$((SPAN / 86400)) reason=${REASON:-none}"
 
 case "$VERDICT" in
   sdk_bash_smoke_failed)
@@ -126,6 +134,15 @@ if [[ "$VERDICT" == "pass" && "$COVERAGE" == "$FULL_COVERAGE" && "$CONSEC" -ge "
   _say "status=PASS $SUMMARY"
   echo "PASS: $CONSEC consecutive green sdk_bash_smoke verdicts over $((SPAN / 86400))d (>= ${REQUIRED_GREENS} / >= 3d) with coverage $COVERAGE since first_pass_at=$FIRST. The smoke is proven; promote it in a follow-up PR (add the red-verdict->rollback path in run_sdk_bash_smoke AND drop the call-site '|| true'). Also review the alert rows against the real failed verdicts (no flap)." >&2
   exit 0
+fi
+
+# A dead probe must not stay silent (CTO ruling F3, 2026-10-19): >= 3 consecutive `smoke_infra_error` verdicts mean no deploy has
+# actually exercised Bash for 3 deploys running. Exit 1 so the sweeper flags the #10548 tracker; the host side only records it in
+# journald and Sentry (`SDK_BASH_SMOKE_STALE`), it does not email.
+if [[ "$CIE" -ge "$BLIND_THRESHOLD" ]]; then
+  _say "status=FAIL stale=1 $SUMMARY"
+  echo "FAIL: sdk_bash_smoke probe is blind: $CIE consecutive smoke_infra_error verdicts (latest reason=$REASON). The deploy smoke has not exercised Bash on the last $CIE deploys: fix the probe (image missing sdk-bash-probe.mjs? docker exec failing?) before relying on the soak (canary-probe-set.md, SDK Bash smoke section)." >&2
+  exit 1
 fi
 
 _say "status=TRANSIENT $SUMMARY"

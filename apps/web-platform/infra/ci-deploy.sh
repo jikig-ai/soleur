@@ -3198,7 +3198,7 @@ run_sdk_bash_smoke() {
   # The reason rides journald, Sentry and the deploy-status frame: scrub it (secret shapes, env values, control chars) and cap it.
   reason="$(_cred_err_tail "$reason" | cut -c1-200)"
 
-  # Stale-probe counter: held across a verdict, bumped on an infra error, reset by anything else. Foreign-stamped ledgers
+  # Stale-probe counter: bumped on an infra error, reset by any other verdict. Foreign-stamped ledgers
   # contribute nothing (the write_sandbox_canary_state guard).
   if [[ -f "$SDK_BASH_SMOKE_STATE_FILE" ]]; then
     prior_ledger="$(jq -r '.ledger // ""' "$SDK_BASH_SMOKE_STATE_FILE" 2>/dev/null || echo '')"
