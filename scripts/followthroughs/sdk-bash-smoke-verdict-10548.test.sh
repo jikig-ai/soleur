@@ -114,10 +114,10 @@ curl_stdin_log="$ROOT_TMP/curl-stdin.log"
 env PATH="$STUBS:$PATH" WEBHOOK_DEPLOY_SECRET="$WH_SECRET" CF_ACCESS_CLIENT_ID="$CF_ID" CF_ACCESS_CLIENT_SECRET="$CF_SECRET" \
   STUB_BODY="$(body pass 5 "$FIRST" $((FIRST + 4 * DAY)) "$FULL")" CURL_STDIN_LOG="$curl_stdin_log" bash "$SUT" >/dev/null 2>&1
 want_sig="$(printf '' | openssl dgst -sha256 -hmac "$WH_SECRET" 2>/dev/null | sed 's/^.* //')"
-if grep -qxF "header = \"X-Signature-256: sha256=$want_sig\"" "$curl_stdin_log" && [[ ${#want_sig} -eq 64 ]] \
+if grep -qxF 'header = "X-Signature-256: sha256='"$want_sig"'"' "$curl_stdin_log" && [[ ${#want_sig} -eq 64 ]] \
    && grep -qE '^header = "X-Signature-256: sha256=[0-9a-f]{64}"$' "$curl_stdin_log" \
-   && grep -qxF "header = \"CF-Access-Client-Id: $CF_ID\"" "$curl_stdin_log" \
-   && grep -qxF "header = \"CF-Access-Client-Secret: $CF_SECRET\"" "$curl_stdin_log" && [[ "$(wc -l <"$curl_stdin_log")" -eq 3 ]]; then
+   && grep -qxF 'header = "CF-Access-Client-Id: '"$CF_ID"'"' "$curl_stdin_log" \
+   && grep -qxF 'header = "CF-Access-Client-Secret: '"$CF_SECRET"'"' "$curl_stdin_log" && [[ "$(wc -l <"$curl_stdin_log")" -eq 3 ]]; then
   PASSES=$((PASSES + 1)); echo "  ok: curl stdin carries exactly the three header lines (the HMAC of the empty body, the id, the secret)"
 else FAIL_N=$((FAIL_N + 1)); FAILURES+=("curl stdin does not carry exactly the three expected header lines"); echo "  FAIL: curl stdin header lines"; fi
 # The GET targets the deploy-status URL only.
