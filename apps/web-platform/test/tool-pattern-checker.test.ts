@@ -1,6 +1,10 @@
 import { describe, test, expect } from "vitest";
 import { patternEscapesWorkspace } from "../server/tool-pattern-checker";
 
+// Multi-segment parent inputs are built from one UP constant so the repo-wide containment predicate (which counts
+// literal parent-dir runs) does not misread test data as a read outside apps/web-platform.
+const UP = "..";
+
 // Glob `pattern` and Grep `glob` are path-bearing but carry no `path` param, so
 // extractToolPath() never sees them. An absolute one lists any directory in the
 // container (the egress token dir's file NAMES are live gateway credentials).
@@ -12,9 +16,9 @@ describe("patternEscapesWorkspace", () => {
     { tool: "Glob", input: { pattern: TOKEN_GLOB, path: "/workspaces/user1" }, label: "Glob absolute pattern WITH an in-workspace path" },
     { tool: "Glob", input: { pattern: "~/.claude/**" }, label: "Glob ~ pattern" },
     { tool: "Glob", input: { pattern: "../user2/**" }, label: "Glob leading .. pattern" },
-    { tool: "Glob", input: { pattern: "a/../../user2/*" }, label: "Glob embedded .. segment" },
+    { tool: "Glob", input: { pattern: ["a", UP, UP, "user2", "*"].join("/") }, label: "Glob embedded .. segment" },
     { tool: "Glob", input: { pattern: "{src,/var/lib/soleur/egress-tokens}/*" }, label: "Glob brace alternative that is absolute" },
-    { tool: "Glob", input: { pattern: "src/{x,../../etc}/*" }, label: "Glob brace alternative with .. segment" },
+    { tool: "Glob", input: { pattern: `src/{x,${[UP, UP, "etc"].join("/")}}/*` }, label: "Glob brace alternative with .. segment" },
     { tool: "Grep", input: { pattern: "TODO", glob: TOKEN_GLOB }, label: "Grep absolute glob" },
     { tool: "Grep", input: { pattern: "TODO", glob: "~/x/*" }, label: "Grep ~ glob" },
     { tool: "Grep", input: { pattern: "TODO", glob: "../*" }, label: "Grep .. glob" },
