@@ -217,6 +217,11 @@ Three small, in-lane changes plus the issue bookkeeping:
 - Prescribed-command verification (run at plan time, 2026-10-19):
   `bash plugins/soleur/test/test-pyramid-fixtures.test.sh` → ALL PASS, 50
   assertions, 0 failed on the pre-change tree.
+- Precedent-diff (Phase 4.4): canonical precedent exists — the two committed
+  fixtures (`fast-unit.diff`, `slow-e2e-no-justification.diff`) and the unit-row
+  declared exception; the new fixtures mirror that exact `--- /dev/null` /
+  `+++ b/` / `@@` shape and the WARN bullet mirrors the existing WARN rows'
+  "stated necessity" escape hatch. No novel pattern.
 
 ## Files to Edit
 
@@ -251,11 +256,33 @@ Three small, in-lane changes plus the issue bookkeeping:
 
 ## Observability
 
-Skipped — the Files-to-Edit/Create list touches no code-class path under
-`apps/*/server/`, `apps/*/src/`, `apps/*/infra/`, or `plugins/*/scripts/`, and
-introduces no infrastructure surface (agent prompt text, repo README, test
-fixtures, a `.test.sh` pin suite). The pin suite IS the change's own
-observability: it fails loudly in `test-all.sh` on drift.
+```yaml
+liveness_signal:
+  what: test-pyramid-fixtures pin suite — the change's own drift detector
+  cadence: per-PR (selected by the AFFECTED_ block in scripts/lib/test-affected-paths.sh) and in full test-all.sh runs
+  alert_target: CI red leg on the PR / main
+  configured_in: plugins/soleur/test/test-pyramid-fixtures.test.sh
+
+error_reporting:
+  destination: GitHub Actions check output for the test-all leg
+  fail_loud: non-zero suite exit (assertion failures print per-case FAIL lines)
+
+failure_modes:
+  - mode: a fixture lands under fixtures/test-pyramid/ with no census/role entry
+    detection: census glob counts all entries — unclassified member reds the suite
+    alert_route: CI red on the PR that adds it
+  - mode: WARN vocabulary or the suite-durations.tsv anchor is removed from test-design-reviewer.md
+    detection: DRIFT block token assertions red
+    alert_route: CI red on the PR that removes it
+
+logs:
+  where: GitHub Actions job log for the test-all leg
+  retention: GitHub default run-log retention
+
+discoverability_test:
+  command: grep -o 'subprocess fan-out' plugins/soleur/agents/engineering/review/test-design-reviewer.md
+  expected_output: subprocess fan-out
+```
 
 ## Encryption Posture
 
@@ -428,6 +455,50 @@ None — checked 2026-10-19: open `code-review` issues fetched via
   records it as a known gap needing a second producer keyed on `test-*.sh`) is
   adjacent machinery but outside #9771's carried scope — noted here so it is
   not silently folded; a follow-up issue is the honest vehicle if it recurs.
+
+## Enhancement Summary
+
+Deepen-pass run 2026-10-19 (inline, sequential-fallback — no Task/Agent tool on
+this harness; all gates and review lenses executed in this process, never claimed
+as independent review).
+
+### Gate results
+
+- 4.5 Network-outage: no trigger patterns → skipped.
+- 4.55 Downtime/cutover: no infra/DB/deploy change → skipped.
+- 4.6 User-Brand Impact halt: section present, threshold `none`, no
+  sensitive-path match on the Files lists → PASS.
+- 4.7 Observability halt: detection fired (`.test.sh` + `.md` under `apps/*/`
+  are not pure-docs paths) → `## Observability` block added this pass;
+  `discoverability_test` uses an allowlisted verb (`grep -o`), no banned
+  shell-active bytes, literal `expected_output`, well under the 15 s cap.
+- 4.8 PAT halt: regex sweep clean → PASS.
+- 4.9 UI-wireframe: no UI-surface file in Files lists → skipped.
+- 4.10 Encryption posture: no store/connection trigger → skipped.
+- 4.11 Guard Contract: `python3 scripts/lint-guard-contract.py` → green
+  (1 file, 1 entry); assembly is structural (census glob + DRIFT tokens), 6-row
+  matrix incl. own-dispatch and must-PASS rows → PASS.
+- 4.12 Scope Check: exactly one unfenced section; three subsections present;
+  no `unmapped`/`BLOCKED` rows; every `descoped`/`inferred` carries a
+  justification; `Recommendation:` present → PASS.
+
+### Key improvements applied
+
+- Added the `## Observability` section (the pin suite named as the liveness
+  surface rather than fabricating service telemetry).
+- Tightened FR-1: the weight-row check reads the committed
+  `scripts/suite-durations.tsv`, not the diff (Kieran-lens catch — an
+  auto-tabled default-floor row does not satisfy the condition).
+- Added the precedent-diff note (Phase 4.4) and the agent invocation-surface
+  enumeration (all diff-shaped; no non-diff fallback needed).
+- Recorded inline execution of the plan-review eng panel and this deepen pass.
+
+### Research applied
+
+Arc learnings already folded into Research Insights; no additional learnings
+matched beyond those cited. Skill discovery: no other installed-plugin skill
+applies to repo-internal review machinery. External research skipped — all
+mechanisms are repo-local and verified against `origin/main`.
 
 ## References
 
