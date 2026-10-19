@@ -459,7 +459,7 @@ export function buildAgentSandboxConfig(
      *  SRT-chained sandboxed paths (Phase-0 spike, spec TR7). */
     allowWebEgress?: boolean;
     /** #10455 (a) — the resolved runtime flag `agent-sandbox-unix-deny` (default OFF). Recorded with the
-     *  session's egress so `assertSeccompAgreement` can check it against `buildAgentEnv`'s selector. */
+     *  session's egress so `checkSeccompAgreement` can check it against `buildAgentEnv`'s selector. */
     sandboxUnixDeny?: boolean;
   },
 ): AgentSandboxConfig {
@@ -744,7 +744,7 @@ export function buildAgentSandboxConfig(
   };
   // #10455 (a): record which seccomp posture this config pairs with. Egress is the union of the two
   // egress widenings (GitHub hosts, web egress); `buildAgentEnv` derives the same bit from the
-  // `ghToken` / `egressProxy` handles and `assertSeccompAgreement` compares them at spawn time.
+  // `ghToken` / `egressProxy` handles and `checkSeccompAgreement` compares them at spawn time.
   return recordSandboxPosture(config, {
     hasEgress: Boolean(opts?.allowGithubEgress) || Boolean(opts?.allowWebEgress),
     unixDenyFlag: opts?.sandboxUnixDeny === true,

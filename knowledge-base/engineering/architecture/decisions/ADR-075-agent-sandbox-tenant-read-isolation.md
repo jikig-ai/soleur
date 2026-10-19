@@ -489,12 +489,15 @@ on** it is no longer the only control: they cannot create an AF_UNIX socket at a
 and Node IPC); the arch gate is kept; `--check` verifies both artifacts. The base artifact is byte-identical to today's (golden
 bytes pinned by sha256 and compared with `origin/main`), so egress sessions and the C4 render path are provably unchanged.
 
-- **Selection.** `seccompArtifactFor` (`server/agent-sandbox-seccomp.ts`) is the single decision point.
+- **Selection.** `usesUnixDenyArtifact` (`server/agent-sandbox-seccomp.ts`) is the single predicate and `seccompArtifactFor` the single path resolver.
   `buildAgentEnv` sets `SOLEUR_BWRAP_SECCOMP_BPF` to the variant only for a session with **no egress of any kind** (no GitHub
   installation token, no web-egress handle) while the runtime flag `agent-sandbox-unix-deny` is ON; otherwise it passes the ambient value
   through unchanged (the #8752 incident-time override is preserved; the CTO's "always set" is amended because the flag defaults OFF).
-  `buildAgentSandboxConfig` records the same posture, and `buildAgentQueryOptions` asserts at spawn time that env and config agree
-  (a disagreement throws and the query is not started). Both runners resolve the flag once per query.
+  `buildAgentSandboxConfig` records the same posture, and `buildAgentQueryOptions` checks at spawn time that env and config agree
+  (CTO-ruled fail-safe, 2026-10-19: a disagreement mirrors to Sentry (`op=seccomp-agreement`) and corrects to base; it never throws, because a
+  throw at query start would turn defense-in-depth into a total tenant outage. The only correction is toward the base artifact: an unixdeny
+  selector on a session that is not variant-eligible, e.g. an ambient `SOLEUR_BWRAP_SECCOMP_BPF` incident override equal to the unixdeny path
+  on an egress session, is reset to the base artifact). Both runners resolve the flag once per query.
 - **Kill switch.** The flag defaults OFF and fails closed to OFF (a throw, a 2 s timeout, an absent flag service or a missing flag all
   resolve OFF with one debounced warning). Turning it ON is a production write, taken only after the deploy SDK Bash smoke has been
   green on a real deploy and with the operator's explicit authorization at that time (tracker #10548). The deploy smoke runs the

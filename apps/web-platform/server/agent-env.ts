@@ -333,7 +333,7 @@ export function buildAgentEnv(
   // #10455 (a): per-session seccomp artifact. Egress is read from the SAME handles that set the egress
   // env above (`ghToken` -> GH_TOKEN, `egressProxy` -> HTTPS_PROXY). Only a no-egress session with the
   // runtime flag ON gets the variant; every other session keeps the ambient allowlist copy (the ADR-075
-  // #8752 incident-time override). `assertSeccompAgreement` re-checks this against the sandbox config.
+  // #8752 incident-time override). `checkSeccompAgreement` re-checks this against the sandbox config.
   const hasEgress = Boolean(opts?.ghToken) || Boolean(opts?.egressProxy);
   if (usesUnixDenyArtifact(hasEgress, opts?.sandboxUnixDeny)) {
     env[SECCOMP_SELECTOR_ENV] = seccompArtifactFor(hasEgress, opts?.sandboxUnixDeny);

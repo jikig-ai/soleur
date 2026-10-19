@@ -1,5 +1,5 @@
 // #10455 (a): the per-session seccomp artifact selector (ADR-075 addendum 2026-10-19).
-// Guard 3 rows 1, 8, 9: seccompArtifactFor is the only place that decides the artifact;
+// Guard 3 rows 1, 8, 9: usesUnixDenyArtifact is the single predicate and seccompArtifactFor the single path resolver;
 // buildAgentEnv sets SOLEUR_BWRAP_SECCOMP_BPF to the unixdeny artifact only for NO-EGRESS
 // sessions while the runtime flag is ON; the flag defaults OFF and fails closed to OFF;
 // every direct caller of the two builders is accounted for.
@@ -26,15 +26,19 @@ import {
   SECCOMP_UNIXDENY_ARTIFACT,
   seccompArtifactFor,
   usesUnixDenyArtifact,
-  assertSeccompAgreement,
+  checkSeccompAgreement,
+  unixdenyArtifactPath,
 } from "@/server/agent-sandbox-seccomp";
 import { buildAgentEnv } from "@/server/agent-env";
 import { buildAgentSandboxConfig, probeAgentSandboxHardening } from "@/server/agent-runner-sandbox-config";
+import { buildAgentQueryOptions } from "@/server/agent-runner-query-options";
+import { warnSilentFallback } from "@/server/observability";
+import { resolveWorkspaceMode } from "@/server/workspace-mode";
 
 const CRED = { value: "sk-test", scheme: "api_key" as const };
 const SEL = "SOLEUR_BWRAP_SECCOMP_BPF";
 
-describe("seccompArtifactFor (the single decision point)", () => {
+describe("usesUnixDenyArtifact is the single predicate; seccompArtifactFor the single path resolver", () => {
   it("the table: variant only for no-egress with the flag ON", () => {
     const rows: Array<[boolean, boolean, string]> = [
       [false, true, SECCOMP_UNIXDENY_ARTIFACT],
@@ -102,7 +106,7 @@ describe("dispatcher agreement: buildAgentEnv and buildAgentSandboxConfig", () =
       const egress = gh || web;
       const wantVariant = !egress && flag;
       expect(env[SEL], `gh=${gh} web=${web} flag=${flag}`).toBe(wantVariant ? SECCOMP_UNIXDENY_ARTIFACT : undefined);
-      expect(() => assertSeccompAgreement(env, sandbox)).not.toThrow();
+      expect(checkSeccompAgreement(env, sandbox), `gh=${gh} web=${web} flag=${flag}`).toBeNull();
       evaluated++;
     }
     expect(evaluated).toBe(cases.length);
@@ -117,24 +121,76 @@ describe("dispatcher agreement: buildAgentEnv and buildAgentSandboxConfig", () =
     const env = buildAgentEnv(CRED, undefined, {});
     expect(env[SEL]).toBeUndefined();
     const sandbox = buildAgentSandboxConfig("/workspaces/w");
-    expect(() => assertSeccompAgreement(env, sandbox)).not.toThrow();
+    expect(checkSeccompAgreement(env, sandbox)).toBeNull();
   });
-  it("the spawn-time assertion throws when env and config disagree", () => {
+  it("the spawn-time check returns the disagreement text (it never throws) when env and config disagree", () => {
     // a no-egress config with the flag ON, but an env that kept the base artifact
     const sandbox = buildAgentSandboxConfig("/workspaces/w", { sandboxUnixDeny: true });
     const envBase = buildAgentEnv(CRED, undefined, { sandboxUnixDeny: false });
-    expect(() => assertSeccompAgreement(envBase, sandbox)).toThrow(/seccomp/i);
+    expect(checkSeccompAgreement(envBase, sandbox)).toMatch(/seccomp/i);
     // an egress env carrying the variant (the bridge-breaking direction)
     const egressEnv = buildAgentEnv(CRED, undefined, { ghToken: "ghs_x", sandboxUnixDeny: false });
     egressEnv[SEL] = SECCOMP_UNIXDENY_ARTIFACT;
     const egressCfg = buildAgentSandboxConfig("/workspaces/w", { allowGithubEgress: true, sandboxUnixDeny: true });
-    expect(() => assertSeccompAgreement(egressEnv, egressCfg)).toThrow(/seccomp/i);
+    expect(checkSeccompAgreement(egressEnv, egressCfg)).toMatch(/artifact disagreement/i);
     // egress disagreement: env has a GH token, config was built without egress
     const noEgressCfg = buildAgentSandboxConfig("/workspaces/w", { sandboxUnixDeny: false });
-    expect(() => assertSeccompAgreement(egressEnv, noEgressCfg)).toThrow(/egress/i);
+    expect(checkSeccompAgreement(egressEnv, noEgressCfg)).toMatch(/egress/i);
   });
-  it("a config that was not built by buildAgentSandboxConfig is refused (fail closed)", () => {
-    expect(() => assertSeccompAgreement({}, { enabled: true } as never)).toThrow(/posture/i);
+  it("a config that was not built by buildAgentSandboxConfig is reported (no recorded posture)", () => {
+    expect(checkSeccompAgreement({}, { enabled: true } as never)).toMatch(/posture/i);
+  });
+});
+
+describe("spawn-time agreement is fail-safe (F1: mirror to Sentry, correct toward base, never throw)", () => {
+  const OVERRIDE = "/tmp/incident-override.bpf";
+  const args = {
+    workspacePath: "/tmp/test-workspace",
+    pluginPath: "/tmp/test-workspace/plugins/soleur",
+    mode: resolveWorkspaceMode("command_center"),
+    credential: CRED,
+    serviceTokens: {} as Record<string, string>,
+    systemPrompt: "x",
+    canUseTool: (async () => ({ behavior: "allow" as const, updatedInput: {} })) as never,
+  };
+  let ambient: string | undefined;
+  beforeEach(() => {
+    ambient = process.env[SEL];
+    vi.mocked(warnSilentFallback).mockClear();
+  });
+  afterEach(() => {
+    if (ambient === undefined) delete process.env[SEL];
+    else process.env[SEL] = ambient;
+  });
+
+  it("an egress session with the ambient selector set to the unixdeny path ends on base, warns once, does not throw", () => {
+    process.env[SEL] = unixdenyArtifactPath();
+    let opts: Record<string, any> | undefined;
+    expect(() => {
+      opts = buildAgentQueryOptions({ ...args, ghToken: "ghs_x", sandboxUnixDeny: false });
+    }).not.toThrow();
+    expect(opts!.env?.[SEL]).toBe(SECCOMP_BASE_ARTIFACT);
+    const calls = vi.mocked(warnSilentFallback).mock.calls.filter((c) => (c[1] as { op?: string })?.op === "seccomp-agreement");
+    expect(calls.length).toBe(1);
+    expect(calls[0][1]).toMatchObject({ feature: "agent-sandbox", op: "seccomp-agreement" });
+    expect((calls[0][1] as { message: string }).message).toMatch(/artifact disagreement/i);
+  });
+  it("a no-egress flag-OFF session with the ambient unixdeny selector is corrected to base too", () => {
+    process.env[SEL] = unixdenyArtifactPath();
+    const opts = buildAgentQueryOptions({ ...args, sandboxUnixDeny: false });
+    expect(opts.env?.[SEL]).toBe(SECCOMP_BASE_ARTIFACT);
+  });
+  it("never corrects in the other direction: a flag-ON no-egress session keeps the variant, with no warning", () => {
+    delete process.env[SEL];
+    const opts = buildAgentQueryOptions({ ...args, sandboxUnixDeny: true });
+    expect(opts.env?.[SEL]).toBe(SECCOMP_UNIXDENY_ARTIFACT);
+    expect(vi.mocked(warnSilentFallback).mock.calls.filter((c) => (c[1] as { op?: string })?.op === "seccomp-agreement").length).toBe(0);
+  });
+  it("an unrelated ambient override (not the unixdeny path) is left untouched", () => {
+    process.env[SEL] = OVERRIDE;
+    const opts = buildAgentQueryOptions({ ...args, ghToken: "ghs_x", sandboxUnixDeny: false });
+    expect(opts.env?.[SEL]).toBe(OVERRIDE);
+    expect(vi.mocked(warnSilentFallback).mock.calls.filter((c) => (c[1] as { op?: string })?.op === "seccomp-agreement").length).toBe(0);
   });
 });
 
@@ -231,7 +287,7 @@ describe("call-site census", () => {
     const src = readFileSync(join(APP_ROOT, "server/agent-runner-query-options.ts"), "utf8");
     expect(src).toContain("sandboxUnixDeny: args.sandboxUnixDeny");
     expect((src.match(/sandboxUnixDeny: args\.sandboxUnixDeny/g) ?? []).length).toBe(2);
-    expect(src).toContain("assertSeccompAgreement(");
+    expect(src).toContain("checkSeccompAgreement(");
   });
   it("no module outside agent-sandbox-seccomp.ts names the artifact filenames inline", () => {
     const lines = grep("bwrap-userns-clone3-(unix)?deny\\.bpf", ["server"]);

@@ -62,7 +62,7 @@ vi.mock("@/server/agent-runner", () => ({
 // real pairing is pinned by test/agent-sandbox-seccomp-selector.test.ts.
 vi.mock("@/server/agent-sandbox-seccomp", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/agent-sandbox-seccomp")>()),
-  assertSeccompAgreement: vi.fn(),
+  checkSeccompAgreement: vi.fn(),
 }));
 vi.mock("@/server/agent-runner-sandbox-config", () => ({
   buildAgentSandboxConfig: mockBuildAgentSandboxConfig,

@@ -39,7 +39,14 @@ import { resolveWorkspaceMode, type WorkspaceMode } from "./workspace-mode";
 import { assertTrustedPluginPath, getPluginPath } from "./plugin-path";
 import { warnSilentFallback } from "./observability";
 import { buildAgentSandboxConfig } from "./agent-runner-sandbox-config";
-import { assertSeccompAgreement } from "./agent-sandbox-seccomp";
+import {
+  checkSeccompAgreement,
+  sandboxPostureOf,
+  SECCOMP_BASE_ARTIFACT,
+  SECCOMP_SELECTOR_ENV,
+  unixdenyArtifactPath,
+  usesUnixDenyArtifact,
+} from "./agent-sandbox-seccomp";
 import { createSandboxHook } from "./sandbox-hook";
 import { createContextQueriesHook } from "./context-queries-hook";
 import { createPhaseSurfaceHook } from "./phase-surface-hook";
@@ -328,7 +335,7 @@ export function buildAgentQueryOptions(
     // #10445: per-tenant CLI temp base; the sandbox config denies its shared root.
     claudeTmpDir: agentSessionTmpDir(args.workspaceId ?? path.basename(args.workspacePath)),
     // #10455 (a): the resolved `agent-sandbox-unix-deny` flag (default OFF). The SAME value feeds the
-    // sandbox config below, and `assertSeccompAgreement` checks the pair before the query is built.
+    // sandbox config below, and `checkSeccompAgreement` checks the pair before the query is built.
     sandboxUnixDeny: args.sandboxUnixDeny,
   });
   const buildAgentEnvHome = agentEnv.HOME ?? "/home/soleur";
@@ -508,10 +515,22 @@ export function buildAgentQueryOptions(
   if (args.maxBudgetUsd !== undefined) opts.maxBudgetUsd = args.maxBudgetUsd;
   if (args.abortController !== undefined) opts.abortController = args.abortController;
 
-  // #10455 (a): spawn-time agreement. The selector in `env` and the posture recorded on `sandbox` were
-  // derived from the same arguments a few lines above; a refactor that lets one drift throws here
-  // (the query is never started) instead of silently shipping the weaker or the bridge-breaking artifact.
-  assertSeccompAgreement(opts.env, opts.sandbox);
+  // #10455 (a): spawn-time agreement, FAIL-SAFE (CTO ruling F1, 2026-10-19). The selector in `env` and the
+  // posture recorded on `sandbox` were derived from the same arguments a few lines above. A disagreement
+  // is mirrored to Sentry and never thrown: a throw here would fail every tenant query start, and the
+  // weaker posture is today's base artifact. The only correction is TOWARD the base artifact: an
+  // unixdeny selector on a session that is not variant-eligible (e.g. an ambient incident-time
+  // SOLEUR_BWRAP_SECCOMP_BPF equal to the unixdeny path on an egress session, which would break the SDK's
+  // socat UNIX-CONNECT bridges). Never the other direction.
+  const disagreement = checkSeccompAgreement(opts.env, opts.sandbox);
+  if (disagreement) {
+    warnSilentFallback(null, { feature: "agent-sandbox", op: "seccomp-agreement", message: disagreement });
+  }
+  const posture = sandboxPostureOf(opts.sandbox);
+  const variantEligible = posture !== undefined && usesUnixDenyArtifact(posture.hasEgress, posture.unixDenyFlag);
+  if (opts.env[SECCOMP_SELECTOR_ENV] === unixdenyArtifactPath() && !variantEligible) {
+    opts.env[SECCOMP_SELECTOR_ENV] = SECCOMP_BASE_ARTIFACT;
+  }
   return opts;
 }
 

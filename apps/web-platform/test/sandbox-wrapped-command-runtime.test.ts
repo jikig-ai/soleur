@@ -39,7 +39,7 @@ import {
   sessionTranscriptDirs,
 } from "@/server/agent-runner-sandbox-config";
 import { buildAgentEnv } from "@/server/agent-env";
-import { assertSeccompAgreement } from "@/server/agent-sandbox-seccomp";
+import { checkSeccompAgreement } from "@/server/agent-sandbox-seccomp";
 import { AGENT_SESSION_TMP_ROOT, agentSessionTmpDir } from "@/server/agent-session-tmp";
 import { classifyBashSandboxFailure } from "@/server/sandbox-startup-classifier";
 import { startAnthropicStub, type AnthropicStub } from "./helpers/anthropic-stub";
@@ -591,7 +591,7 @@ describe.skipIf(!SANDBOX_OK || !PERL_OK)("the AF_UNIX-deny variant through the r
       sandboxUnixDeny: session.flag,
     });
     const sandbox = buildAgentSandboxConfig(own, { allowGithubEgress: session.egress, sandboxUnixDeny: session.flag });
-    assertSeccompAgreement(env, sandbox);
+    expect(checkSeccompAgreement(env, sandbox), `${label}: env and sandbox must agree`).toBeNull();
     const result = await runBash({
       stubPort: stub!.port,
       home,

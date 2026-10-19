@@ -8,9 +8,11 @@
 //   - unixdeny:  base + socket(AF_UNIX) -> EPERM. NO-EGRESS sessions only, and only while the runtime
 //                flag `agent-sandbox-unix-deny` is ON (default OFF = base = today's posture).
 //
-// `seccompArtifactFor` is the ONLY place that decides. `buildAgentEnv` (the selector env var) and
-// `buildAgentSandboxConfig` (the session posture it records) both feed it the same inputs, and
-// `assertSeccompAgreement` re-checks the pair at spawn time. It is a leaf module on purpose:
+// `usesUnixDenyArtifact` is the single predicate; `seccompArtifactFor` the single path resolver.
+// `buildAgentEnv` (the selector env var) and `buildAgentSandboxConfig` (the session posture it
+// records) both feed them the same inputs, and `checkSeccompAgreement` re-checks the pair at spawn
+// time; it never throws (the caller mirrors the disagreement to Sentry and corrects toward the base
+// artifact, see agent-runner-query-options.ts). It is a leaf module on purpose:
 // agent-env.ts cannot import agent-runner-sandbox-config.ts (that file imports agent-env.ts).
 
 /** Baked default of the base artifact (Dockerfile COPY); the shim's own default is the same path. */
@@ -65,8 +67,11 @@ export function sandboxPostureOf(config: object): SandboxPosture | undefined {
 }
 
 /**
- * Spawn-time assertion: the env handed to the SDK and the sandbox config describe the SAME session.
- * Throws (fail closed: the query is not started) when
+ * Spawn-time check: do the env handed to the SDK and the sandbox config describe the SAME session?
+ * Returns the disagreement text, or null when they agree. It NEVER throws: a throw at query start would
+ * turn defense-in-depth into a total outage for every tenant that hits it (an incident-time
+ * SOLEUR_BWRAP_SECCOMP_BPF override naming the unixdeny path is enough). The caller mirrors the text to
+ * Sentry and corrects the selector toward the base artifact (today's posture). Disagreement is
  *   - the config was not built by buildAgentSandboxConfig (no recorded posture),
  *   - the env carries egress (GH_TOKEN / the credentialed proxy URL) that the config did not, or vice versa,
  *   - the env selects the unixdeny artifact for an egress session, or the base for a no-egress session
@@ -74,26 +79,25 @@ export function sandboxPostureOf(config: object): SandboxPosture | undefined {
  * `allowGithubEgress` / the web-egress handle are constant for the lifetime of a query: both builders
  * run once, in the same call, from the same arguments.
  */
-export function assertSeccompAgreement(env: Env, sandbox: object, process_env: Env = process.env): void {
+export function checkSeccompAgreement(env: Env, sandbox: object, process_env: Env = process.env): string | null {
   const posture = sandboxPostureOf(sandbox);
   if (!posture) {
-    throw new Error("agent-sandbox seccomp: sandbox config has no recorded posture (not built by buildAgentSandboxConfig)");
+    return "agent-sandbox seccomp: sandbox config has no recorded posture (not built by buildAgentSandboxConfig)";
   }
   const envHasEgress = Boolean(env.GH_TOKEN) || Boolean(env.HTTPS_PROXY);
   if (envHasEgress !== posture.hasEgress) {
-    throw new Error(
-      `agent-sandbox seccomp: egress disagreement (env hasEgress=${envHasEgress}, sandbox hasEgress=${posture.hasEgress})`,
-    );
+    return `agent-sandbox seccomp: egress disagreement (env hasEgress=${envHasEgress}, sandbox hasEgress=${posture.hasEgress})`;
   }
   const wantVariant = usesUnixDenyArtifact(posture.hasEgress, posture.unixDenyFlag);
   const selected = env[SECCOMP_SELECTOR_ENV];
   const variantPath = unixdenyArtifactPath(process_env);
   const gotVariant = selected === variantPath;
   if (gotVariant !== wantVariant) {
-    throw new Error(
+    return (
       `agent-sandbox seccomp: artifact disagreement (selector=${selected ?? "<unset>"}, ` +
-        `expected ${wantVariant ? "the unixdeny artifact" : "a non-unixdeny artifact"} ` +
-        `for hasEgress=${posture.hasEgress} flag=${posture.unixDenyFlag})`,
+      `expected ${wantVariant ? "the unixdeny artifact" : "a non-unixdeny artifact"} ` +
+      `for hasEgress=${posture.hasEgress} flag=${posture.unixDenyFlag})`
     );
   }
+  return null;
 }
