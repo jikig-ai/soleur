@@ -753,7 +753,7 @@ failure mode — zot OOM-restart-looping ~4/min during the boot scan of the ~35 
 heartbeat **GREEN** throughout. A durable, continuous recurrence alarm now closes that liveness gap:
 
 - **Mechanism = an in-repo GitHub-Actions scheduled-cron poller**
-  (`.github/workflows/scheduled-zot-restart-loop.yml`, `*/30 * * * *`) that reads the
+  (`.github/workflows/scheduled-zot-restart-loop.yml`, `*/30 * * * *` (now `0 * * * *` plus the web dispatch clock, ADR-248)) that reads the
   `SOLEUR_ZOT_DISK` stream from Better Stack Logs source 2457081 via `betterstack-query.sh`
   (ClickHouse SQL), evaluates three firing conditions in `scripts/zot-restart-loop-alarm.sh`
   (scoped to the newest `boot_id`: `exit_code=137` seen, OR `zot_restarts` climbs across ≥3
@@ -2142,6 +2142,8 @@ running. Decided 2026-10-03, with no new Terraform delivery code:
   boots from the baked image, whose host scripts carry the carve, so the rebirth is the delivery event. Its
   `image_tag` must be built from a commit that already carries the 2026-10-03 resolver and loader changes
   (`cron-egress-resolve.sh`, `cron-egress-nftables.sh`: baked host scripts whose content hash moves).
+  > **Superseded 2026-10-12 (#9372), in part:** the rebirth ran on 2026-10-06 and its workflow is retired; web-2's volume is
+  > LUKS-formatted, so the plain-replace refusal described here no longer applies (ADR-263 addendum 2026-10-12).
 - **web-1** is delivered by the first run of `apply-web-platform-infra.yml` (the only workflow whose
   `-target` list names `terraform_data.cron_egress_firewall`): that resource hashes the carve file, the resolver
   and the post-apply assertion, so a green run whose SSH apply step actually ran (it can green-skip, #7539) is
@@ -2175,3 +2177,66 @@ names describe the state before this date and are left as written.
   exists for the third name. The proof is `zot-image-fetch.test.sh` R10 (the rendered entry executed against a
   re-rooted hosts file) and `web-ghcr-deny.test.sh` (byte parity of all copies on both `web_tunnel_connector`
   arms, and the assertion's per-name behaviour).
+
+## Amendment 2026-10-16 (#7521) — the restart-loop workflow also hosts a standing fill-rate leg
+
+The `soleur-registry-disk-prd` heartbeat stops pinging at 85 percent, which is the incident itself and not a
+leading indicator, and the one probe that measured the store's fill rate (`scripts/followthroughs/zot-fill-rate-7341.sh`,
+the #7341 follow-through) ran only while that tracker was open: its PASS closed #7341 on 2026-08-14 and nothing
+has run it since. `.github/workflows/scheduled-zot-restart-loop.yml` therefore carries four steps after its Sentry
+check-in that run that script in place, on that workflow's own trigger (its logic is unchanged apart from a bounded `pcent` parse and a `future_dated_newest_sample` gate, each of which can only turn a crash or a forgery into exit 2) (the poller pattern of the
+[#6291 amendment of 2026-07-10](#durable-restart-loop-recurrence-alarm-amendment-2026-07-10-6291), its direct
+precedent; the same secrets and issue-filing idiom as the restart-loop alarm). The real cadence is the web hosts'
+watchdog dispatch clock (ADR-248): one run per hourly slot, dispatched by whichever web host fires first; collisions
+and the cron fallback add extras. A projected breach surfaces as a deduped `action-required` `[ci/zot-fill-rate]`
+issue while the store is still well below 85 percent; a PASS closes the breach issue only after 6 hours with no new
+FAIL comment. Relates to ADR-248 (the trigger; the workflow is already a dispatch-table row, so its eligibility rule is
+met by the existing row and the leg adds none), `ADR-033-inngest-cron-functions-invoke-claude-code-via-child-process-spawn.md`
+(its anti-circularity corollary: the verifier runs on a GitHub runner, never on the registry host it watches) and
+ADR-218 (see the rejected alternatives below).
+
+- **Independent of the zot exit code and the Sentry status.** The leg follows the private-NIC stream's precedent: its
+  verdict is not folded into the checker's exit code, and the Sentry `status:` expression still reads only
+  `steps.alarm.*`. Nothing in Sentry covers the fill leg's own liveness (accepted residual).
+- **A red run of this workflow can also mean a broken fill probe**, not only a restart loop, and it does not by itself
+  mean a store state. The probe classifies by exit code AND a single column-0 header line; any disagreement, an exit
+  code outside the contract, or a precondition exit that prints no header is `UNEVALUATED`, the probe step fails
+  itself, and a deduped `[ci/zot-fill-rate]` probe-defect issue is filed. The probe pre-writes that same verdict as its
+  first action, so a 3-minute step timeout also files it. A JOB-level timeout (8 minutes) or a cancellation files
+  nothing, only a red run, because every filing step is gated on `!cancelled()`. The pre-write relies on the runner
+  processing `GITHUB_OUTPUT` after the step ends (the `actions/runner` ActionRunner `finally` block, verified from the
+  runner source by two review seats and not by a live drill). A fill-leg-only `TRANSIENT` whose cause is outside a
+  closed benign set files the same issue unless the zot leg already files the shared fault (alarm exit 2, 3 or 4: the
+  Sentry error, the PRODUCER_SILENT issue, the INGEST_DARK issue); the benign causes (a young boot, a reclaim, a stale
+  newest sample, too few samples) file nothing. The next PASS or FAIL run closes the probe-defect issue at once; a
+  TRANSIENT run leaves it open.
+- **FAIL comments are not throttled.** Each FAIL run comments on the open breach issue, so a sustained FAIL comments
+  once per run of the cadence above. That is the CTO ruling of 2026-10-16, carried as a row of the plan's Decision
+  Record: decline the throttle, because comment volume is the whole cost and the benefit is that the breach close's
+  age test keeps meaning "no FAIL for 6 hours".
+- **Accepted coupling.** The fill leg shares job `alarm` with `dispatch-inventory` (which `needs: alarm`) and its
+  8 minute job timeout. The CTO ruling V1a plus the review ordering kept the leg in the job rather than splitting it:
+  the steps sit after the Sentry check-in, the probe has a 3 minute step timeout, and a fill-side hang can delay the
+  inventory dispatch but never the check-in nor its status. Reasons against a second job: the job timeout is 8
+  minutes, the filing steps have no timeout of their own, a cancelled run is non-covering for the dispatch clock, and
+  a new job would queue behind the org runner queue (p90 about 20 minutes, ADR-248).
+- **Accepted trades.** (i) The probe-defect issue closes on a single PASS, so a probe that flaps between a defect and
+  PASS re-files a new issue number per flap (the breach issue keeps its 6 hour age test). (ii) Suppressing a
+  `TRANSIENT` on alarm exit 2 depends on the Sentry monitor being live: exit 2 files no GitHub issue by design, so a
+  disabled monitor leaves that `TRANSIENT` unreported. (iii) While the zot leg keeps exiting 3 or 4 (its own
+  PRODUCER_SILENT or INGEST_DARK issue is being filed), a fill-only `TRANSIENT` stays quiet. (iv) A job-level timeout files nothing, as above.
+- **Alternatives rejected** (CTO ruling, 2026-10-16): moving the script (two of its path references sit under
+  `apps/web-platform/infra/**`, which would fire a production apply); folding the slope into
+  `zot-restart-loop-alarm.sh` (a 3 hour window cannot hold a 72 hour slope, and it would duplicate the parse); a Better
+  Stack logtail alert (ADR-218 Decision 1 keeps this poller pattern as the default for "stateful / newest-scoped
+  signals and for signals whose surface must be a digest-visible GitHub issue", and this signal is both; the
+  script-side guards, the last-wipe segmentation and `MIN_SPAN_HOURS`, cannot be copied into SQL without forking the
+  decode); a new scheduled workflow (the watchdog-dispatch-table, Sentry monitor and parity-test registration for
+  nothing the existing workflow lacks).
+- **Known seam.** The script returns `TRANSIENT` for the first 24 hours of any new boot, so after a reclaim or a host
+  replace this leg is dark for about 25 hours while the store refills from empty; the heartbeat is the only cover
+  meanwhile. The breach issue's close therefore lands about 25 hours after the store recovers. Tracked in #10464,
+  not hoisted here.
+- **What pins it.** `scripts/zot-fill-rate-standing-wiring.test.sh` parses the workflow and executes the probe and
+  filing bodies; `scripts/alarm-issue-filing-guard.test.sh` and `watchdog-workflow-idempotence.test.ts` are the
+  independent witnesses for the filing steps' conditions and lookup lines.

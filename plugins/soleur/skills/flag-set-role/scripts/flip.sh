@@ -112,6 +112,9 @@ declare -A FLAG_ENV_VARS=(
   ["support-live"]="FLAG_SUPPORT_LIVE"
   ["guided-tour"]="FLAG_GUIDED_TOUR"
   ["codex-engine"]="FLAG_CODEX_ENGINE"
+  ["untrusted-content-classify"]="FLAG_UNTRUSTED_CONTENT_CLASSIFY"
+  ["untrusted-content-wrap"]="FLAG_UNTRUSTED_CONTENT_WRAP"
+  ["egress-audit-collection"]="FLAG_EGRESS_AUDIT_COLLECTION"
 )
 
 # --- arg parsing ------------------------------------------------------------

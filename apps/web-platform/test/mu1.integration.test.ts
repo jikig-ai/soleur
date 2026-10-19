@@ -10,13 +10,13 @@
 // AC-2 is deferred until a public fixture repo exists — see #2605.
 //
 // See:
-//   - knowledge-base/project/plans/2026-04-18-ops-verify-signup-workspace-provisioning-plan.md
+//   - knowledge-base/project/plans/archive/20261013-003106-2026-04-18-ops-verify-signup-workspace-provisioning-plan.md
 //   - knowledge-base/engineering/operations/runbooks/mu1-signup-workspace-verification.md
 
 import { tmpdir } from "os";
 import { mkdtempSync, existsSync, readlinkSync, readdirSync } from "fs";
 import { join } from "path";
-import { randomUUID } from "crypto";
+import { randomUUID, randomBytes } from "crypto";
 
 // Set env BEFORE importing the module under test — workspace.ts reads these
 // at call time, not load time, but the GIT_* hygiene must happen before any
@@ -36,14 +36,17 @@ import {
   removeWorkspaceDir,
 } from "../server/workspace";
 import { isPathInWorkspace } from "../server/sandbox";
+import { tearDownTenantUser } from "./helpers/tenant-isolation-teardown";
 
 // Synthetic-identifier allowlist for MU1. Per
 // cq-destructive-prod-tests-allowlist — any destructive cleanup must refuse
-// to touch an identifier that does not match this regex. Pinned to the v4
-// UUID shape (8-4-4-4-12 hex) rather than a permissive hex-blob prefix so
-// the same regex can safely drive the runbook's sweep one-liner.
-const SYNTH_EMAIL_RE =
-  /^mu1-integration-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}@soleur-test\.invalid$/i;
+// to touch an identifier that does not match this regex. Pinned to the
+// canonical helper shape (`mu1-integration-` is in SYNTHETIC_PREFIXES) —
+// a permissive hex-blob prefix would let the same regex match fixture
+// leftovers (PR #2597 incident class). The pre-#9995 shape
+// (mu1-integration-<uuid>@soleur-test.invalid) is still swept by
+// infra/mu1-cleanup-guard.mjs for already-leaked users.
+const SYNTH_EMAIL_RE = /^mu1-integration-[a-f0-9]{16}@soleur\.test$/i;
 
 function assertSyntheticEmail(email: string): void {
   if (!SYNTH_EMAIL_RE.test(email)) {
@@ -141,7 +144,7 @@ describe.skipIf(process.env.MU1_INTEGRATION !== "1")(
         "../server/workspace-resolver"
       );
       const client = createServiceClient();
-      const email = `mu1-integration-${randomUUID()}@soleur-test.invalid`;
+      const email = `mu1-integration-${randomBytes(8).toString("hex")}@soleur.test`;
       assertSyntheticEmail(email);
 
       let userId: string | undefined;
@@ -159,7 +162,7 @@ describe.skipIf(process.env.MU1_INTEGRATION !== "1")(
         }
         // Defense-in-depth: the allowlist passed on the email we requested;
         // re-assert the server-returned user has the same synthetic email
-        // before we'll ever call deleteUser on its id.
+        // before teardown will ever act on its id.
         expect(created.user.email?.toLowerCase()).toBe(email.toLowerCase());
         userId = created.user.id;
 
@@ -178,10 +181,12 @@ describe.skipIf(process.env.MU1_INTEGRATION !== "1")(
           `${process.env.WORKSPACES_ROOT || "/workspaces"}/${userId}`,
         );
       } finally {
-        if (userId) {
-          assertSyntheticEmail(email);
-          await client.auth.admin.deleteUser(userId);
-        }
+        // Route through the canonical helper: a raw deleteUser 500s on the
+        // trigger-created workspace_members RESTRICT FK (the #9994 class)
+        // and a swallowed {error} leaks the user silently. The helper runs
+        // the anonymise-first sequence, verifies the id↔email binding,
+        // and re-asserts the synthetic-email boundary itself.
+        await tearDownTenantUser(client, { id: userId, email });
       }
     }, 30_000);
   },
@@ -217,13 +222,17 @@ const INSTALLATION_ID_RE = /^[1-9][0-9]{0,9}$/;
 // the Doppler `dev`/`dev_scheduled` configs, so without this gate a routine
 // `doppler run -c dev -- <full suite>` run fired AC-2 and hard-failed with
 // `GitHub installation token request failed: 401` (the local env's App creds
-// can't mint a token for the fixture installation). The nightly
-// scheduled-integration-suites.yml leg DOES set MU1_INTEGRATION=1 under
-// dev_scheduled (which carries MU1_FIXTURE_* + GITHUB_APP_*), so AC-2 runs
-// there by design; per-PR CI does not set the gate and skips. The
-// partial-set canary above still guards the
+// can't mint a token for the fixture installation — `dev` carries a different
+// app identity). The nightly scheduled-integration-suites.yml leg DOES set
+// MU1_INTEGRATION=1 under dev_scheduled, whose GITHUB_APP_* pair is the
+// least-privilege `soleur-ci-fixture` App (#9995 — contents:read on
+// jikig-ai/mu1-fixture only, installed repo-scoped; a dev_scheduled leak can
+// only read fixture content), so AC-2 runs there by design — and the step
+// first runs scripts/probe-github-app-mint.sh, which fails fast with a named
+// error when the pair can no longer mint. Per-PR CI does not set the gate and
+// skips. The partial-set canary above still guards the
 // one-var-set misconfig. See #4663. Run the live check with:
-//   MU1_INTEGRATION=1 doppler run -p soleur -c dev -- \
+//   MU1_INTEGRATION=1 doppler run -p soleur -c dev_scheduled -- \
 //     npm run test:ci -- test/mu1.integration.test.ts --project unit
 const AC2_OPTED_IN = process.env.MU1_INTEGRATION === "1";
 

@@ -67,7 +67,15 @@ write_files:
       command -v nft >/dev/null || { echo "[inngest-nft] nft binary not found"; exit 1; }
       # ${web_host_private_ips} is rendered VERBATIM into the nft saddr set (comma-joined
       # host addresses from inngest-host.tf local.web_host_private_ips — a TF constant, not
-      # user input). `nft -f` table declarations replace our table atomically → idempotent.
+      # user input). A bare `table` declaration via `nft -f` does NOT replace atomically —
+      # measured on Ubuntu 24.04 / nftables v1.0.9 (#7772): applying it TWICE leaves TWO
+      # copies of every rule, because `nft -f` MERGES into an existing table rather than
+      # replacing it. The bare-declare below is safe here ONLY because this unit is a
+      # oneshot re-asserted at BOOT and a reboot clears nftables, so each boot starts from
+      # an empty ruleset with nothing to merge into. Re-running this script within a single
+      # boot would duplicate the rules; cloud-init-git-data.yml's sibling ruleset uses the
+      # load-bearing declare/delete/declare three-line idiom instead, which is safe to
+      # re-run within a boot.
       nft -f - <<'NFTEOF'
       table inet soleur_inngest {
         chain input {
@@ -119,17 +127,26 @@ write_files:
   # `--now` so a malformed unit surfaces at PROVISION time (off-box, via the phone-home) rather
   # than at the next reboot, when nothing is watching.
   #
-  # IDEMPOTENT: if the mapper is already open (first boot, where runcmd just opened it) this is
-  # a no-op. It is NOT a substitute for the runcmd stage — that stage owns the format/mkfs
+  # IDEMPOTENT: if the mapper is already open (first boot, where runcmd just opened it) the open
+  # is a no-op, and the mount completion is a no-op whenever the mountpoint is already mounted
+  # FROM the arm-verified source — a wrong-source or stacked mount converges or refuses, it is
+  # never silently accepted.
+  # It is NOT a substitute for the runcmd stage — that stage owns the format/mkfs
   # decision, which this unit must never make. If the device is not already crypto_LUKS, this
   # unit FAILS rather than formatting: a boot-time unit that can create a filesystem is a boot
-  # -time unit that can destroy one.
+  # -time unit that can destroy one. Since #10217 it also COMPLETES THE MOUNT for the arm it
+  # verified (fstab line + mkdir + fstab-driven mount), so a first-boot race lost to a late
+  # volume attachment self-heals here — on the `enable --now` run after an aborted stage and on
+  # every later boot — instead of requiring a host replace.
   - path: /etc/systemd/system/inngest-luks-open.service
     content: |
       [Unit]
-      Description=Open the LUKS mapper for /mnt/data before Redis starts (#7695)
+      Description=Open the LUKS mapper, then complete the mount for the arm it verified — never formats, never mkfs (#7695)
       DefaultDependencies=no
       After=cryptsetup-pre.target systemd-udev-settle.service
+      # Ordered after systemd-remount-fs so ensure_mount's /etc/fstab rewrite and mkdir -p
+      # cannot land on a still-read-only root on boot >=2 (#10217).
+      After=systemd-remount-fs.service
       Before=inngest-redis.service local-fs.target
       # SKIP-VS-FAIL (#9939). Both EnvironmentFile= paths are runcmd writes late in first boot:
       # /etc/default/inngest-doppler before the LUKS stage and /etc/default/inngest-luks inside
@@ -155,9 +172,11 @@ write_files:
   - path: /usr/local/bin/inngest-luks-open.sh
     content: |
       #!/usr/bin/env bash
-      # Boot-reopen for the LUKS mappers under /mnt/data and /mnt/data-luks. Opens ONLY; never
-      # formats, never mkfs. On a pre-cutover host it opens what is already LUKS and leaves the
-      # plaintext store alone; under a pointer it opens exactly the volume the pointer names.
+      # Boot-reopen for the LUKS mapper under /mnt/data. Opens, then completes the mount for the
+      # arm it verified — never formats, never mkfs (#10217: a first-boot attach race can leave
+      # the mapper open but unmounted, and no fstab line; ensure_mount converges that state on
+      # this same boot). With no pointer it opens the one rendered volume if it is LUKS and
+      # refuses otherwise; under a pointer it opens exactly the volume the pointer names.
       #
       # ESCAPING — THIS FILE IS A TERRAFORM TEMPLATE. Terraform unescapes dollar-dollar-brace to
       # dollar-brace and leaves
@@ -170,29 +189,47 @@ write_files:
       # that was never delivered. Measured 2026-09-18 (#6894). Write a bare dollar for everything,
       # and the doubled form only where a brace follows.
       set -euo pipefail
-      PLAIN_ID='${inngest_volume_id}'
       LUKS_ID='${inngest_luks_volume_id}'
       BYID=/dev/disk/by-id/scsi-0HC_Volume_
-      DEV="$${BYID}$${PLAIN_ID}"
-      STAGING_DEV="$${BYID}$${LUKS_ID}"
+      DEV="$${BYID}$${LUKS_ID}"
+      MAPPER=/dev/mapper/inngest-redis
       # THE POINTER, staged into /etc/default/inngest-luks by the first-boot stage because this unit
       # runs before the network and cannot fetch it. Same authority as in the runcmd resolver.
       POINTER="$${INNGEST_LUKS_ACTIVE_VOLUME_ID:-}"
-      emit() { logger -t inngest-luks-stage "SOLEUR_INNGEST_LUKS_STAGE stage=$1 rc=$2 blkid_type=$${3:-n/a} expect_luks=${inngest_expect_luks} detail=$${4:-none}" || true; }
+      emit() { logger -t inngest-luks-stage "SOLEUR_INNGEST_LUKS_STAGE stage=$1 rc=$2 blkid_type=$${3:-n/a} detail=$${4:-none}" || true; }
       fail() { emit "$1" "$2" "$${3:-n/a}" "$4"; exit 1; }
 
       # Unprivileged blkid reads a populated device as blank (rc 2 / empty type). Assert, do not assume.
       [ "$(id -u)" -eq 0 ] || fail reopen_privilege 1 n/a "not root: blkid cannot read a root-owned device"
 
       # Bounded attach wait, same reason as the runcmd stage: blkid on an absent path returns 2,
-      # and "not attached yet" must never be read as "no header".
+      # and "not attached yet" must never be read as "no header". The bound is a literal 300
+      # counted sleep-1 passes (~80s attachment-in-flight measured, #10217; the bound is counted
+      # passes — a hung probe is capped by its own 10s timeout, so wall time is bounded but not
+      # exactly 300s), the WHOLE predicate is re-run each pass, a probe runs once immediately, one wait-start emit fires on the
+      # first miss and an appeared-after emit on resolution, and exactly ONE udevadm settle runs
+      # after the loop — never per pass. Mirrors the runcmd stage's same-named helper.
       wait_dev() {
         _i=0
-        while [ "$_i" -lt 30 ]; do
-          [ -b "$1" ] && [ "$(/usr/sbin/blockdev --getsize64 "$1" 2>/dev/null || echo 0)" -gt 0 ] && return 0
+        _wd_hit=0
+        if [ -b "$1" ] && [ "$(/usr/bin/timeout -k 2 10 /usr/sbin/blockdev --getsize64 "$1" 2>/dev/null || echo 0)" -gt 0 ]; then
+          return 0
+        fi
+        emit reopen_device_wait 0 n/a "waiting up to 300s for $1 — the volume attachment is still in flight"
+        while [ "$_i" -lt 300 ]; do
           sleep 1; _i=$((_i+1))
+          if [ -b "$1" ] && [ "$(/usr/bin/timeout -k 2 10 /usr/sbin/blockdev --getsize64 "$1" 2>/dev/null || echo 0)" -gt 0 ]; then
+            _wd_hit=1
+            break
+          fi
         done
-        return 1
+        /usr/bin/udevadm settle --timeout=10 >/dev/null 2>&1 || true
+        if [ "$_wd_hit" -eq 0 ] && [ -b "$1" ] && [ "$(/usr/bin/timeout -k 2 10 /usr/sbin/blockdev --getsize64 "$1" 2>/dev/null || echo 0)" -gt 0 ]; then
+          _wd_hit=1
+        fi
+        [ "$_wd_hit" -eq 1 ] || return 1
+        emit reopen_device_wait 0 n/a "$1 appeared after $${_i}s of the 300s bound"
+        return 0
       }
       # luks_type <dev> — prints the device's TYPE; FAILS the unit on an unmeasurable probe.
       luks_type() {
@@ -200,53 +237,115 @@ write_files:
         BLK_TYPE="$(/usr/sbin/blkid -p -o value -s TYPE "$1" 2>/dev/null)" || _blk_rc=$?
         { [ "$_blk_rc" -eq 0 ] || [ "$_blk_rc" -eq 2 ]; } || fail reopen_blkid "$_blk_rc" n/a "blkid could not read $1"
       }
+      # backing_is <mapper> <device> — the mapper's ONLY backing block device is <device>.
+      # Same sysfs slaves/ shape as the runcmd stage's same-named helper: authoritative,
+      # cache-free, ioctl-free.
+      backing_is() {
+        _dm="$(basename "$(readlink -f "$1")")" || _dm=""
+        _want="$(basename "$(readlink -f "$2")")" || _want=""
+        _got="$(ls "/sys/class/block/$_dm/slaves" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')" || _got=""
+        [ -n "$_want" ] && [ "$_got" = "$_want" ]
+      }
       # open_as <dev> <name> — open a device already measured crypto_LUKS under <name>.
       open_as() {
-        [ -e "/dev/mapper/$2" ] && { emit reopen_noop 0 crypto_LUKS "$2 already open"; return 0; }
+        if [ -e "/dev/mapper/$2" ]; then
+          # An already-open mapper is only a noop when it is backed by THIS arm's verified
+          # device — the noop path feeds ensure_mount, so a wrongly-backed mapper would
+          # otherwise be mounted + fstab'd silently (#10217 review).
+          backing_is "/dev/mapper/$2" "$1" || fail reopen_backing 1 n/a "mapper $2 is open but not backed by $1"
+          emit reopen_noop 0 crypto_LUKS "$2 already open"; return 0
+        fi
         [ -n "$${INNGEST_REDIS_LUKS_KEY:-}" ] || fail reopen_key_missing 1 crypto_LUKS "INNGEST_REDIS_LUKS_KEY empty"
         printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksOpen --key-file - "$1" "$2"
         emit reopen_ok 0 crypto_LUKS "$2"
       }
+      # ensure_mount <source> <mountpoint> — complete the mount for the arm this run verified
+      # (#10217). A mapper left open-but-unmounted by a first-boot race (the stage aborted before
+      # its mount + fstab_set steps) was unhealable by construction: reopen opened only, no fstab
+      # line existed, and every later boot repeated the state. The fast path requires the
+      # mountpoint to be mounted FROM $1 (source-congruent, checked through findmnt+readlink -f
+      # like the stage's mounted_from): a stale generated mnt-*.mount can hold a wrong-source
+      # mount — a mountpoint match alone is not convergence, so that state is umounted and
+      # converged here, never no-op'd (this unit is Before=local-fs.target; nothing holds it).
+      # Otherwise write the fstab line with the stage's fstab_set semantics (replace the
+      # mountpoint's lines, assert exactly one) installed ATOMICALLY via same-dir rename — a
+      # mid-write death must never leave /etc/fstab truncated (inngest-luks-cutover.sh
+      # documents the cat-redirect form as that defect) — then daemon-reload so the fstab
+      # generator re-reads the line THIS boot (a boot that began with no/stale /mnt/data line
+      # otherwise resolves RequiresMountsFor against the stale generated unit), mkdir the
+      # mountpoint, and mount BY MOUNTPOINT so the fstab line just written is the source of
+      # truth for source and options — never re-typed here.
+      ensure_mount() {
+        _em_mount=1
+        if mountpoint -q "$2"; then
+          # Read the KERNEL-SERVED layer (tail -1; findmnt lists a stack oldest-first — head reads
+          # the shadowed entry, the defect inngest-luks-cutover.sh documents). Pop wrong top
+          # layers until the top reads congruent or nothing is left: a same-source stack is a
+          # benign generated-unit race artifact, and a wrong layer under a right top is harmless
+          # residue — but a WRONG TOP means the served store is wrong and must be converged.
+          _em_i=0
+          _em_src=""
+          while mountpoint -q "$2"; do
+            _em_src="$(findmnt -no SOURCE "$2" 2>/dev/null | tail -1)" || _em_src=""
+            [ -n "$_em_src" ] || break
+            _em_i=$((_em_i+1))
+            [ "$_em_i" -le 8 ] || fail reopen_mount 1 n/a "umount loop at $2 did not converge in 8 passes"
+            [ "$(readlink -f "$_em_src")" = "$(readlink -f "$1")" ] && break
+            emit reopen_mount 0 n/a "$2 is mounted from $${_em_src:-unknown}, not $1 — converging to the verified source"
+            umount "$2" || fail reopen_mount 1 n/a "umount of a wrong-source layer at $2 failed"
+          done
+          if mountpoint -q "$2" && [ -n "$_em_src" ]; then
+            # Top layer is congruent — converged for this boot, but only durable if fstab still
+            # anchors it (a death between the stage's mount and fstab_set, or a hand-edit, would
+            # leave it unanchored next boot). Heal the line; skip the mount.
+            if [ "$(awk -v mp="$2" '$1 !~ /^#/ && $2 == mp' /etc/fstab | grep -c .)" -eq 1 ]; then
+              return 0
+            fi
+            _em_mount=0
+          fi
+        fi
+        _em_tmp="$(mktemp /etc/fstab.soleur.XXXXXX)" || fail reopen_fstab 1 n/a "mktemp /etc/fstab.soleur.XXXXXX failed"
+        awk -v mp="$2" '$1 ~ /^#/ || $2 != mp' /etc/fstab > "$_em_tmp" || { rm -f "$_em_tmp"; fail reopen_fstab 1 n/a "rewriting /etc/fstab for $2 failed"; }
+        printf '%s\n' "$1 $2 ext4 defaults,nofail 0 2" >> "$_em_tmp" || { rm -f "$_em_tmp"; fail reopen_fstab 1 n/a "writing the $2 fstab line failed"; }
+        chmod 0644 "$_em_tmp" || { rm -f "$_em_tmp"; fail reopen_fstab 1 n/a "chmod on the rewritten fstab failed"; }
+        mv -f "$_em_tmp" /etc/fstab || { rm -f "$_em_tmp"; fail reopen_fstab 1 n/a "installing the rewritten /etc/fstab failed"; }
+        _em_n="$(awk -v mp="$2" '$1 !~ /^#/ && $2 == mp' /etc/fstab | wc -l)" || _em_n=0
+        [ "$_em_n" -eq 1 ] || fail reopen_fstab 1 n/a "fstab carries $_em_n lines for $2 after the rewrite — exactly one is required"
+        systemctl daemon-reload || fail reopen_fstab 1 n/a "daemon-reload after the fstab install failed"
+        if [ "$_em_mount" -eq 1 ]; then
+          mkdir -p "$2" || fail reopen_mount 1 n/a "mkdir -p $2 failed"
+          mount "$2" || fail reopen_mount 1 n/a "mount $2 failed"
+          emit reopen_mount 0 n/a "$1 mounted at $2 via fstab"
+        else
+          emit reopen_mount 0 n/a "$1 already mounted at $2 — fstab line healed"
+        fi
+      }
 
       if [ -n "$POINTER" ]; then
         # POST-CUTOVER. The pointer names the store; it must be present and must be LUKS. There is
-        # no fallback to the other volume — that fallback is the silent un-encryption Fork P refuses.
+        # no fallback to any other device — that fallback is the silent un-encryption Fork P refuses.
         case "$POINTER" in
-          "$PLAIN_ID"|"$LUKS_ID") ;;
-          *) fail reopen_pointer 1 n/a "the pointer names volume $POINTER, which is neither of this host's volumes" ;;
+          "$LUKS_ID") ;;
+          *) fail reopen_pointer 1 n/a "the pointer names volume $POINTER, which is not this host's volume" ;;
         esac
         CANON_DEV="$${BYID}$${POINTER}"
-        wait_dev "$CANON_DEV" || fail reopen_device_wait 1 n/a "the pointer names $CANON_DEV and it is absent after 30s"
+        wait_dev "$CANON_DEV" || fail reopen_device_wait 1 n/a "the pointer names $CANON_DEV and it is absent after 300s"
         luks_type "$CANON_DEV"
         [ "$BLK_TYPE" = crypto_LUKS ] || fail reopen_not_luks 1 "$${BLK_TYPE:-empty}" "the pointer names a device that is not crypto_LUKS"
         open_as "$CANON_DEV" inngest-redis
+        ensure_mount "$MAPPER" /mnt/data
         exit 0
       fi
 
-      # PRE-CUTOVER. The plaintext-id volume is canonical; open it only if it is already LUKS (the
-      # ADR-199 recut world). On an ext4 host there is nothing to open and nothing to decide.
-      wait_dev "$DEV" || fail reopen_device_wait 1 n/a "device absent after 30s"
+      # NO POINTER. The one rendered volume is canonical and must already be LUKS: open it, then
+      # complete the mount — never format it. Anything else is a refusal, not a skip.
+      wait_dev "$DEV" || fail reopen_device_wait 1 n/a "device absent after 300s"
       luks_type "$DEV"
       if [ "$BLK_TYPE" = crypto_LUKS ]; then
         open_as "$DEV" inngest-redis
-      elif [ "${inngest_expect_luks}" = "true" ]; then
-        fail reopen_not_luks 1 "$${BLK_TYPE:-empty}" "expect_luks=true but the device is not crypto_LUKS"
+        ensure_mount "$MAPPER" /mnt/data
       else
-        emit reopen_skip_plaintext 0 "$${BLK_TYPE:-empty}" "pre-recut host; nothing to reopen"
-      fi
-
-      # The additive volume, staged under the NON-canonical name. Opened AFTER the canonical store,
-      # so a refusal here cannot stop the store's mapper from opening. Never formatted here: the
-      # runcmd stage is the only writer, and a raw volume on a later boot means that stage did not run.
-      if wait_dev "$STAGING_DEV"; then
-        luks_type "$STAGING_DEV"
-        case "$BLK_TYPE" in
-          crypto_LUKS) open_as "$STAGING_DEV" inngest-redis-staging ;;
-          "") fail reopen_staging_raw 1 empty "the additive volume is attached but was never formatted" ;;
-          *) fail reopen_staging_foreign 1 "$BLK_TYPE" "the additive volume carries an unexpected signature" ;;
-        esac
-      else
-        emit reopen_staging_absent 0 n/a "no additive volume attached"
+        fail reopen_not_luks 1 "$${BLK_TYPE:-empty}" "the volume is not crypto_LUKS"
       fi
     owner: root:root
     permissions: '0755'
@@ -327,7 +426,14 @@ write_files:
       fi
       host="$(hostname 2>/dev/null)"
       ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
-      detail="$(printf '%s' "$detail" | sed -E 's#(://[^:@/]+:)[^@]+(@)#\1REDACTED\2#g; s#dp\.[a-z0-9]+\.[A-Za-z0-9_-]{10,}#REDACTED#g; s#[0-9a-f]{32,}#REDACTED#g; s#(signkey-[a-z]+-)[0-9a-f]*#\1REDACTED#g' 2>/dev/null)"
+      # #6780/CTO-D2 exemption: the generic [0-9a-f]{32,} backstop would eat the labeled
+      # `sha256=<64hex>` field the config-refresh consumer's APPLIED/NOOP/FLOOR markers
+      # carry — and the drift comparator greps THAT field. Protect the labeled form by
+      # upcasing it first (the hex-run pattern is lowercase-only, so an upcased digest
+      # survives it) and restoring lowercase last. ONLY `sha256=` + exactly 64 hex
+      # chars is exempted — the 32-hex-and-up backstop on unlabeled material is
+      # unchanged, so no credential class loses redaction.
+      detail="$(printf '%s' "$detail" | sed -E 's#sha256=[0-9a-f]{64}#\U&#g; s#(://[^:@/]+:)[^@]+(@)#\1REDACTED\2#g; s#dp\.[a-z0-9]+\.[A-Za-z0-9_-]{10,}#REDACTED#g; s#[0-9a-f]{32,}#REDACTED#g; s#(signkey-[a-z]+-)[0-9a-f]*#\1REDACTED#g; s#SHA256=[0-9A-F]{64}#\L&#g' 2>/dev/null)"
       payload="$(jq -nc --arg m SOLEUR_INNGEST_BOOT_STAGE --arg s "$stage" --arg d "$detail" --arg h "$host" --arg t "$ts" '{message:($m+" stage="+$s+" "+$d), marker:$m, stage:$s, detail:$d, host:$h, dt:$t, shipper:"cloud-init-phone-home"}' 2>/dev/null)"
       [ -n "$payload" ] || payload="{\"message\":\"SOLEUR_INNGEST_BOOT_STAGE stage=$stage\",\"marker\":\"SOLEUR_INNGEST_BOOT_STAGE\",\"stage\":\"$stage\",\"host\":\"$host\"}"
       # The bearer token reaches curl on STDIN as a config line (`-K -`), never on argv, where any
@@ -1037,7 +1143,7 @@ write_files:
       # guard reads the tag from it. Deleting it would break the bump bot and disarm the guard;
       # pulling it would be the retired GHCR leg. On a zot hit IREF is re-pointed at the zot ref,
       # and every consumer below follows IREF.
-      IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.50@sha256:25935628a6a376409aa111113d4563b67c24f5039601dcb544cc378e6a387d36
+      IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.56@sha256:a7557da673788bcc793eb5c96a4bdc8983f7197ba37b3e1765af7b8798bd6ca1
       # --- #7462 (ADR-096): resolve the effective ref ONCE, from zot ----------------------------
       # THE DEFECT THIS CLOSED. Every other pull site in the fleet was flipped to prefer the
       # self-hosted zot registry in the ADR-096 Phase-3 dark launch; this one was missed. ADR-096
@@ -1087,7 +1193,7 @@ write_files:
       # mirror_only=true` is picked up by the NEXT attempt on the same host, without a replace.
       set +e
       if [ -n "$ZOT_EP" ]; then
-        ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.50@sha256:25935628a6a376409aa111113d4563b67c24f5039601dcb544cc378e6a387d36"
+        ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.56@sha256:a7557da673788bcc793eb5c96a4bdc8983f7197ba37b3e1765af7b8798bd6ca1"
         last_stage=pre-zot-pull
         /usr/local/bin/inngest-boot-phone-home.sh pre-zot-pull "$ZIREF"
         install -m 600 /dev/null /var/log/inngest-zot-pull.log
@@ -1418,6 +1524,11 @@ write_files:
       Wants=network-online.target docker.service
       After=network-online.target docker.service inngest-luks-open.service inngest-bs-token-restage.service inngest-nftables.service
       ConditionPathExists=!/var/lib/soleur-inngest-provision/done
+      # SKIP-VS-FAIL (#9962, the #9939 pattern): /etc/default/inngest-doppler is a runcmd write —
+      # a boot re-entry before (or after an abort of) that write must SKIP the unit, never FAIL
+      # it into the Restart=on-failure ×4 retry storm. The EnvironmentFile= line stays unprefixed:
+      # once a start IS attempted, an absent file still fails the unit — fail-closed is retained.
+      ConditionPathExists=/etc/default/inngest-doppler
       StartLimitIntervalSec=0
 
       [Service]
@@ -1458,6 +1569,500 @@ write_files:
     owner: root:root
     permissions: '0644'
 
+  # --- #6780 (ADR-135, amended 2026-10-13): the signed config-bundle consumer ------
+  # The host-side half of the pull channel ADR-135 specifies: a root oneshot, fired by
+  # a 60 s timer, that reads the promoted INNGEST_CONFIG_DIGEST pointer, pulls that
+  # digest from the private zot (the only registry read left on this host — #8036
+  # deleted the GHCR credential), proves the bundle by offline cosign verify-blob,
+  # and installs its members through infra-config-install's DEST_SPEC allowlist,
+  # advancing /var/lib/inngest-config/applied.version only after the last file lands.
+  #
+  # infra-config-install + cosign-trusted-root.json are delivered as templatefile
+  # vars — the repo files stay the single source; a second inline copy would drift
+  # silently (D12). The vars carry TEXT, not b64: `indent(6, file())` lands the repo
+  # bytes verbatim inside the `content: |` scalar, and the payload's own comment-line
+  # strip removes the installer's ~16 kB of rationale lines before gzip — the b64
+  # encodings were measured ~4.5 kB heavier stored and overflowed the 32 KiB cap
+  # (D12's ordered fallbacks: base64encode(file()) -> base64encode(replace(...)) both
+  # measured over; this is the documented escape).
+  - path: /usr/local/bin/infra-config-install
+    content: |
+      ${indent(6, infra_config_install_text)}
+    owner: root:root
+    permissions: '0755'
+
+  - path: /etc/soleur/cosign-trusted-root.json
+    content: |
+      ${indent(6, cosign_trusted_root_text)}
+    owner: root:root
+    permissions: '0644'
+
+  # The monotonic version ledger floor. Missing/empty/corrupt resolves to 0 with the
+  # distinguishable SOLEUR_INFRA_PULL_FLOOR row (D5) — never a silent parse-to-0.
+  - path: /var/lib/inngest-config/applied.version
+    content: |
+      0
+    owner: root:root
+    permissions: '0644'
+
+  - path: /usr/local/bin/inngest-config-refresh.sh
+    content: |
+      #!/usr/bin/env bash
+      # inngest-config-refresh.sh — the host-side CONSUMER of the ADR-135 pull-based signed
+      # config-refresh channel (#6780). Runs as root under inngest-config-refresh.service
+      # (oneshot), fired every 60 s by inngest-config-refresh.timer.
+      #
+      # THE POINT. The dedicated scheduler host is a deny-all-public box whose host-executed
+      # script surface previously changed only by rebirth. This service is the in-place
+      # channel: it reads the promoted digest pointer (INNGEST_CONFIG_DIGEST, injected by the
+      # unit's scoped `doppler run --only-secrets`), pulls that exact digest from the private
+      # zot (the ONLY registry read on this host — #8036 deleted the GHCR credential; ADR-135
+      # amended 2026-10-13), proves provenance by an OFFLINE cosign verify-blob against the
+      # baked trusted root + the build-inngest-config-bundle.yml@refs/heads/main identity
+      # regexp, then installs the manifest's members through infra-config-install (whose
+      # DEST_SPEC allowlist is the second gate) — atomically, with applied.version advancing
+      # only after the LAST file lands.
+      #
+      # EVERY TICK ENDS ONE OF THREE WAYS (fail-closed, never a silent state):
+      #   * throttled noop (empty pointer, or pointer == applied digest) — the liveness row;
+      #   * a NAMED SOLEUR_INFRA_PULL_VERIFY_FAIL (pull / signature / manifest / sha /
+      #     rollback-or-replay / install / version-write) — the unit fails, the next tick
+      #     re-drives the whole pull->verify->apply, applied.version never advanced;
+      #   * SOLEUR_INFRA_PULL_APPLIED version=<N> sha256=<digest> verify=ok.
+      #
+      # MARKER FIELD DISCIPLINE — the off-box drift comparator (inngest-config-drift.yml ->
+      # inngest-config-drift-compare.sh) parses `version=` and `sha256=` out of the marker
+      # text to decide OK/DIVERGED. So:
+      #   * APPLIED rows carry version=<N> sha256=<applied-digest> verify=ok;
+      #   * same-digest NOOP rows carry version=<N> sha256=<applied-digest> (the applied
+      #     digest IS the pointer here — the comparator reads OK, which is correct);
+      #   * FLOOR rows carry version=floor + the all-zeros sha256 sentinel (D5), which is
+      #     what lets the comparator's floor-only-stuck-delta arm fire at all;
+      #   * VERIFY_FAIL rows carry reason=, offered=<12-hex> and rejver= — deliberately
+      #     NEVER the sha256=/version= labels, because a rejected offer must not parse as
+      #     applied state. offered= is truncated to 12 hex because the phone-home redactor
+      #     scrubs unlabeled runs of 32+ hex anyway; a short prefix survives it and still
+      #     identifies the rejected bundle.
+      #
+      # FLOOR (HARD-9). /var/lib/inngest-config/applied.version is baked `0`; a missing,
+      # empty or non-integer file resolves to floor 0 and emits the distinguishable
+      # SOLEUR_INFRA_PULL_FLOOR row — throttled like the noop. Never a silent parse-to-0
+      # (the comparator would read an unmarked floor as applied version 0 and miss a torn
+      # ledger), never a hard fail (a fresh host must converge).
+      #
+      # STAGING LOCATION. `mktemp -d` under the STATE DIRECTORY, not /tmp: the unit runs
+      # PrivateTmp=true, and `docker run -v <path>` resolves the bind in the DAEMON's mount
+      # namespace — a path under the unit's private /tmp does not exist for the daemon.
+      #
+      # FIXTURE SEAMS (#7761 argv gate). The REFRESH_* env names are honoured ONLY when
+      # argv[1] is --fixture-seams; in production the gate unsets every one of them (an
+      # env-injected seam name is inert, never silently in command position) and emits
+      # SOLEUR_INFRA_PULL_SEAM_REFUSED. INNGEST_CONFIG_DIGEST is a REAL input, never a seam —
+      # the unit's --only-secrets list is its bound.
+
+      set -uo pipefail
+
+      # (#7797) refuse xtrace unconditionally — the check used to gate on
+      # ZOT_PULL_TOKEN being bound, but that var only exists after the env-file
+      # source far below, so the condition was always-false on the production
+      # path while the traced `docker login` leak stayed open. Every attempt
+      # pipes the token to a registry login and this journal is persistent
+      # (soleur-inngest-provision's shape — unconditional for the same reason).
+      case "$-" in *x*) printf '[FATAL] inngest-config-refresh refuses to run under xtrace: the pull pipes the zot token to a registry login and this journal is persistent (#7797)\n' >&2; exit 78 ;; esac
+
+      # --- SEAM GATE (#7761) -----------------------------------------------------------
+      # A `doppler run` child inherits whatever the config injects; a REFRESH_* name in the
+      # injected env would be a live exec seam without this gate. argv is NOT reachable from
+      # a Doppler config write, so the flag is the authority.
+      if [ "$${1:-}" != "--fixture-seams" ]; then
+        _seams_present=0
+        for _seam in \
+            REFRESH_BUNDLE_REPO REFRESH_COSIGN_IMAGE REFRESH_DOCKER_BIN \
+            REFRESH_IDENTITY_REGEXP REFRESH_INSTALL_CMD REFRESH_LOGGER_CMD \
+            REFRESH_NOOP_THROTTLE_S REFRESH_PHONE_HOME_CMD REFRESH_PULL_TIMEOUT_S \
+            REFRESH_STATE_DIR REFRESH_TRUSTED_ROOT REFRESH_VERIFY_TIMEOUT_S \
+            REFRESH_ZOT_ENV_FILE; do
+          if [ -n "$${!_seam+x}" ]; then _seams_present=$((_seams_present + 1)); fi
+          unset "$_seam"
+        done
+        if [ "$_seams_present" -gt 0 ]; then
+          # Defer the row until STATE_DIR exists (the throttle stamp lives there) —
+          # the emit below gates on the same fail-open 300 s window as NOOP.
+          SEAM_REFUSED_COUNT="$_seams_present"
+        fi
+        unset _seam _seams_present
+      fi
+
+      LOG_TAG="inngest-config-refresh"
+      DOCKER_BIN="$${REFRESH_DOCKER_BIN:-docker}"
+      INSTALL_CMD="$${REFRESH_INSTALL_CMD:-/usr/local/bin/infra-config-install}"
+      LOGGER_CMD="$${REFRESH_LOGGER_CMD:-logger}"
+      PHONE_HOME_CMD="$${REFRESH_PHONE_HOME_CMD:-/usr/local/bin/inngest-boot-phone-home.sh}"
+      STATE_DIR="$${REFRESH_STATE_DIR:-/var/lib/inngest-config}"
+      ZOT_ENV_FILE="$${REFRESH_ZOT_ENV_FILE:-/etc/default/soleur-zot-read}"
+      # The SAME pinned cosign image ci-deploy.sh uses (v3.1.1); the suite parity-pins it.
+      COSIGN_IMAGE="$${REFRESH_COSIGN_IMAGE:-gcr.io/projectsigstore/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870}"
+      TRUSTED_ROOT="$${REFRESH_TRUSTED_ROOT:-/etc/soleur/cosign-trusted-root.json}"
+      BUNDLE_REPO="$${REFRESH_BUNDLE_REPO:-jikig-ai/soleur-inngest-config}"
+      # Provenance is pinned to the bundle producer's workflow on main — nothing else may sign.
+      IDENTITY_REGEXP="$${REFRESH_IDENTITY_REGEXP:-^https://github\\.com/jikig-ai/soleur/\\.github/workflows/build-inngest-config-bundle\\.yml@refs/heads/main$}"
+      OIDC_ISSUER="https://token.actions.githubusercontent.com"
+      NOOP_THROTTLE_S="$${REFRESH_NOOP_THROTTLE_S:-300}"
+      PULL_TIMEOUT_S="$${REFRESH_PULL_TIMEOUT_S:-180}"
+      VERIFY_TIMEOUT_S="$${REFRESH_VERIFY_TIMEOUT_S:-120}"
+      # The D5 sentinel: all-zeros sha256 so the comparator's floor arm can parse the row.
+      FLOOR_SHA="0000000000000000000000000000000000000000000000000000000000000000"
+      APPLIED_VERSION_FILE="$${STATE_DIR}/applied.version"
+      APPLIED_JSON="$${STATE_DIR}/applied.json"
+      NOOP_STAMP="$${STATE_DIR}/.noop-emitted"
+      SEAM_STAMP="$${STATE_DIR}/.seam-refused-emitted"
+      # A garbage interval must neither silently disable the throttle nor crash `set -u`
+      # arithmetic — fall CLOSED to the defaults (the same reading the flip records).
+      case "$NOOP_THROTTLE_S" in ''|*[!0-9]*) NOOP_THROTTLE_S=300 ;; esac
+      case "$PULL_TIMEOUT_S" in ''|*[!0-9]*) PULL_TIMEOUT_S=180 ;; esac
+      case "$VERIFY_TIMEOUT_S" in ''|*[!0-9]*) VERIFY_TIMEOUT_S=120 ;; esac
+
+      # emit — BOTH channels, and a dead channel never kills the emit (the whole point of
+      # phone-home is that it survives what kills journald, and vice versa):
+      #   1. `logger -t inngest-config-refresh` — the journald -> Vector Source 4 row. The
+      #      tag only routes off-box after a future image bake adds it to vector.toml; the
+      #      row is durable on-host TODAY (journalctl -t inngest-config-refresh).
+      #   2. inngest-boot-phone-home.sh — the direct Better Stack POST, the v1 LOAD-BEARING
+      #      channel (CTO D2): it works on the currently pinned image and carries the
+      #      marker inside the detail field the drift comparator greps.
+      emit() {
+        "$LOGGER_CMD" -t "$LOG_TAG" "$1 $2" 2>/dev/null || true
+        "$PHONE_HOME_CMD" config-refresh "$1 $2" 2>/dev/null || true
+      }
+
+      # emit_due <stamp> — the 300 s mtime-stamp throttle, mirrors inngest-cutover-flip.sh.
+      # Fails toward EMITTING, never silence: an absent/unreadable stamp or an unmeasurable
+      # clock answers "emit", so a broken stamp can only restore the noisy behaviour, never
+      # manufacture a silent reading for the liveness gate.
+      emit_due() {
+        local now mtime
+        now="$(date +%s 2>/dev/null || true)"
+        case "$now" in ''|*[!0-9]*) return 0 ;; esac
+        [ -f "$1" ] || return 0
+        mtime="$(stat -c %Y "$1" 2>/dev/null || true)"
+        case "$mtime" in ''|*[!0-9]*) return 0 ;; esac
+        [ $((now - mtime)) -ge "$NOOP_THROTTLE_S" ]
+      }
+      noop_emit_due() { emit_due "$NOOP_STAMP"; }
+
+      noop() {
+        noop_emit_due || return 0
+        emit "SOLEUR_INFRA_PULL_NOOP" "$1"
+        touch "$NOOP_STAMP" 2>/dev/null || true
+      }
+
+      floor_emit() {
+        noop_emit_due || return 0
+        emit "SOLEUR_INFRA_PULL_FLOOR" "version=floor sha256=$FLOOR_SHA"
+        touch "$NOOP_STAMP" 2>/dev/null || true
+      }
+
+      # write_state — /var/lib/inngest-config/applied.json. On SUCCESS this is the applied
+      # ledger; on FAILURE it records the attempt while applied_version/bundle_sha256 stay
+      # pinned to the previously applied state — so the same-digest noop check reads only
+      # what was actually applied and a failed apply re-drives next tick (HARD-5).
+      write_state() {
+        # $1 = verify_result token; $2 = attempted manifest VERSION; $3 = attempted digest.
+        # PROPAGATES the write rc: the success path refuses to emit APPLIED against an
+        # unrecorded apply (a swallowed ledger write leaves applied_sha stale while
+        # applied_version advanced — every later tick reads pointer != applied_sha and
+        # rejects rollback-or-replay forever while the comparator holds the stale APPLIED);
+        # verify_fail's attempt record stays best-effort at ITS call site.
+        # Every interpolated field is charset-gated to `"invalid"` rather than
+        # printf-interpolated raw — `verify_fail pointer-malformed` deliberately carries
+        # the REJECTED pointer in $3, and a quote-bearing value would otherwise smuggle a
+        # second "bundle_sha256" key that the anchored read-back never asked for.
+        _wsv="$1" _wsv2="$${2:-}" _wsv3="$${3:-}"
+        case "$_wsv" in ''|*[!a-z0-9:-]*) _wsv=invalid ;; esac
+        case "$_wsv2" in ''|*[!0-9]*) _wsv2=invalid ;; esac
+        case "$_wsv3" in ''|*[!0-9a-f]*) _wsv3=invalid ;; *) [ "$${#_wsv3}" -eq 64 ] || _wsv3=invalid ;; esac
+        printf '{"applied_version":%s,"bundle_sha256":"%s","applied_ts":"%s","verify_result":"%s","attempted_version":"%s","attempted_sha256":"%s"}\n' \
+          "$applied_version" "$applied_sha" \
+          "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" \
+          "$_wsv" "$_wsv2" "$_wsv3" > "$${APPLIED_JSON}.new" 2>/dev/null \
+          && mv -f "$${APPLIED_JSON}.new" "$APPLIED_JSON" 2>/dev/null
+      }
+
+      # verify_fail — the named-failure exit. Records the attempt in applied.json WITHOUT
+      # advancing the applied pair (best-effort — a dead state dir must not mask the emit),
+      # emits the marker under the same fail-open 300 s throttle as NOOP (a reason CHANGE
+      # always emits; a sustained identical failure re-emits once per window — ~288
+      # rows/day per sustained reason, not ~1,440), and exits 1 EVERY
+      # tick regardless — the oneshot failure + timer retry is the liveness signal, the row
+      # is the reason (the comparator DIVERGES if it is the last thing the host said).
+      VF_STAMP="$${STATE_DIR}/.verify-fail-emitted"
+      verify_fail() {
+        # $1 = reason token; $2 = manifest VERSION when known (rejver= — never `version=`,
+        # which the comparator would parse as applied state); $3 = extra detail. The emit
+        # is reason-change-or-300s-window (emit_due fails toward emitting, never silence).
+        write_state "verify-fail:$1" "$${2:-}" "$pointer" || true
+        if [ "$(cat "$VF_STAMP" 2>/dev/null || true)" != "$1" ] || emit_due "$VF_STAMP"; then
+          emit "SOLEUR_INFRA_PULL_VERIFY_FAIL" "reason=$1 offered=$${pointer:0:12} rejver=$${2:-none}$${3:+ $3}"
+          printf '%s' "$1" > "$VF_STAMP" 2>/dev/null || true
+        fi
+        exit 1
+      }
+
+      mkdir -p "$STATE_DIR" 2>/dev/null || true
+
+      # Deferred SEAM_REFUSED row (recorded at the gate, before STATE_DIR existed):
+      # throttled on the same fail-open 300 s window — a persisting seam env emits
+      # once per window, not ~1,440 rows/day. Bare logger, the registered shape.
+      if [ "$${SEAM_REFUSED_COUNT:-0}" -gt 0 ] && emit_due "$SEAM_STAMP"; then
+        logger -t inngest-config-refresh "SOLEUR_INFRA_PULL_SEAM_REFUSED count=$SEAM_REFUSED_COUNT detail=REFRESH_* seam names present without --fixture-seams argv; unset and ignored (#7761)" 2>/dev/null || true
+        touch "$SEAM_STAMP" 2>/dev/null || true
+      fi
+
+      # --- resolve applied state -------------------------------------------------------
+      applied_version_raw=""
+      if [ -f "$APPLIED_VERSION_FILE" ]; then
+        applied_version_raw="$(tr -d '[:space:]' < "$APPLIED_VERSION_FILE" 2>/dev/null || true)"
+      fi
+      applied_version=0
+      case "$applied_version_raw" in
+        ''|*[!0-9]*)
+          # Missing/empty/corrupt applied.version -> floor 0 + the distinguishable row.
+          floor_emit
+          ;;
+        *) applied_version="$applied_version_raw" ;;
+      esac
+      applied_sha=""
+      if [ -f "$APPLIED_JSON" ]; then
+        # Anchored on the document shape — bundle_sha256 is the SECOND field, so a
+        # smuggled later key can never win the read-back.
+        applied_sha="$(sed -n 's/^{"applied_version":[0-9]*,"bundle_sha256":"\([0-9a-f]\{64\}\)".*/\1/p' "$APPLIED_JSON" 2>/dev/null | head -1)"
+      fi
+
+      # --- resolve the promoted pointer -------------------------------------------------
+      # INNGEST_CONFIG_DIGEST is the Terraform-promoted digest (Doppler secret, scoped
+      # injected by the unit). Normalize: whitespace and an optional `sha256:` prefix.
+      pointer="$(printf '%s' "$${INNGEST_CONFIG_DIGEST:-}" | tr -d '[:space:]')"
+      pointer="$${pointer#sha256:}"
+      if [ -z "$pointer" ]; then
+        noop "reason=empty-pointer"
+        exit 0
+      fi
+      if ! grep -qE '^[0-9a-f]{64}$' <<<"$pointer"; then
+        verify_fail pointer-malformed
+      fi
+      if [ -n "$applied_sha" ] && [ "$pointer" = "$applied_sha" ]; then
+        noop "reason=same-digest version=$applied_version sha256=$applied_sha"
+        exit 0
+      fi
+
+      # --- zot pull (the ONLY registry read path on this host; ADR-135 amended 2026-10-13)
+      ZOT_REGISTRY_ENDPOINT=""
+      ZOT_PULL_USER=""
+      ZOT_PULL_TOKEN=""
+      if [ -r "$ZOT_ENV_FILE" ]; then . "$ZOT_ENV_FILE"; fi
+      ZOT_EP="$ZOT_REGISTRY_ENDPOINT"
+      [ -n "$ZOT_EP" ] || verify_fail pull-endpoint-absent
+      BREF="$${ZOT_EP}/$${BUNDLE_REPO}@sha256:$${pointer}"
+
+      # Staging lives under the STATE DIR — the docker daemon resolves -v binds in ITS mount
+      # namespace, so a PrivateTmp /tmp staging dir would not exist for it (see header).
+      # Sweep residue first: a SIGKILL'd tick leaks its stage dir and orphan .new files
+      # (the EXIT trap can't run under SIGKILL).
+      rm -rf "$${STATE_DIR}"/stage.* 2>/dev/null || true
+      rm -f "$${APPLIED_JSON}.new" "$${APPLIED_VERSION_FILE}.new" 2>/dev/null || true
+      STAGE="$(mktemp -d "$${STATE_DIR}/stage.XXXXXX" 2>/dev/null)" || verify_fail stage-init
+      trap 'rm -rf "$STAGE"' EXIT
+
+      # The pull token rides stdin, never argv (the same shape every sibling uses).
+      if [ -n "$ZOT_PULL_USER" ] && [ -n "$ZOT_PULL_TOKEN" ]; then
+        printf '%s' "$ZOT_PULL_TOKEN" | timeout 60 "$DOCKER_BIN" login "$ZOT_EP" \
+          -u "$ZOT_PULL_USER" --password-stdin >/dev/null 2>&1 || verify_fail pull-login
+      else
+        verify_fail pull-creds-absent
+      fi
+
+      # Bounded digest-pinned pull — the @sha256 pin, not TLS, is the integrity control on
+      # the private net; provenance is the cosign gate below.
+      timeout "$PULL_TIMEOUT_S" "$DOCKER_BIN" pull "$BREF" >/dev/null 2>&1 || verify_fail pull
+
+      "$DOCKER_BIN" rm -f inngest-config-extract >/dev/null 2>&1 || true
+      cid="$("$DOCKER_BIN" create --name inngest-config-extract "$BREF" 2>/dev/null)" || verify_fail extract
+      if ! "$DOCKER_BIN" cp "$${cid}:/bundle.tar.gz" "$STAGE/bundle.tar.gz" >/dev/null 2>&1; then
+        "$DOCKER_BIN" rm -f "$cid" >/dev/null 2>&1 || true
+        verify_fail extract
+      fi
+      "$DOCKER_BIN" rm -f "$cid" >/dev/null 2>&1 || true
+
+      mkdir -p "$STAGE/bundle"
+      # The bundle is UNAUTHENTICATED until verify-blob lands below, and root's tar
+      # parses it — bound the parse: size cap (a multi-GB artifact is a pre-auth
+      # disk-fill), regular-file/dir members only (no setuid/device/fifo/link
+      # members), and no carried ownership/mode bits (GNU tar defaults to
+      # --same-owner/--same-permissions as root).
+      _tgz_bytes="$(stat -c %s "$STAGE/bundle.tar.gz" 2>/dev/null || echo 0)"
+      case "$_tgz_bytes" in ''|*[!0-9]*) _tgz_bytes=0 ;; esac
+      [ "$_tgz_bytes" -gt 67108864 ] && verify_fail extract "" "member=oversized"
+      tar -tzvf "$STAGE/bundle.tar.gz" 2>/dev/null | awk '$1 !~ /^[-d]/ {found=1; exit} END{exit found?0:1}' \
+        && verify_fail extract "" "member=nonregular" || true
+      tar -xzf "$STAGE/bundle.tar.gz" -C "$STAGE/bundle" \
+        --no-same-owner --no-same-permissions 2>/dev/null || verify_fail extract
+      [ -f "$STAGE/bundle/manifest.txt" ] || verify_fail manifest-absent
+
+      # --- provenance: cosign verify-blob OFFLINE ---------------------------------------
+      # The .cert + .sig travel inside the bundle so nothing here touches Fulcio/Rekor; the
+      # trusted root is baked and mounted :ro. --network none: the verify needs no egress at
+      # all — the daemon-side implicit pull of the cosign image is unaffected by it.
+      if ! timeout "$VERIFY_TIMEOUT_S" "$DOCKER_BIN" run --rm --network none \
+          -v "$STAGE/bundle:/bundle:ro" \
+          -v "$TRUSTED_ROOT:/etc/cosign/trusted_root.json:ro" \
+          "$COSIGN_IMAGE" verify-blob \
+          --trusted-root /etc/cosign/trusted_root.json \
+          --certificate /bundle/manifest.txt.cert \
+          --signature /bundle/manifest.txt.sig \
+          --certificate-identity-regexp "$IDENTITY_REGEXP" \
+          --certificate-oidc-issuer "$OIDC_ISSUER" \
+          /bundle/manifest.txt >/dev/null 2>&1; then
+        verify_fail signature
+      fi
+
+      # VERSION is read ONLY from the signed manifest — never from an OCI tag or the pointer
+      # (HARD-2). A missing/malformed VERSION is a named fail, not a parse-to-0.
+      VERSION="$(sed -n 's/^VERSION=\([0-9][0-9]*\)[[:space:]]*$/\1/p' "$STAGE/bundle/manifest.txt" | head -1)"
+      case "$VERSION" in
+        ''|*[!0-9]*) verify_fail manifest-version ;;
+      esac
+      # Bounded to 15 digits — an absurd digit string must hit the named fail, not the
+      # arithmetic `-le` below (overflow reads as non-less-than = a rollback bypass).
+      [ "$${#VERSION}" -gt 15 ] && verify_fail manifest-version
+
+      # Monotonic gate: a version strictly below applied is a rollback-or-replay, loudly
+      # rejected — never a silent no-op (HARD-9; rejection is the signal). The
+      # same-version/different-digest arm is NOT a reject: under the producer's
+      # monotonic-VERSION invariant it is the torn-ledger signature — applied.version
+      # advanced while applied.json still pins the prior digest (a lost write_state,
+      # kill, or full disk) — or applied.json itself lost. The bundle is already
+      # signature- and per-member-sha verified and the promoted digest is the
+      # convergence authority, so repair by falling through to install + the dual
+      # ledger write; the emit below marks it REPAIRED, distinguishable from APPLIED.
+      _repairing=0
+      if [ "$VERSION" = "$applied_version" ] && [ "$pointer" != "$applied_sha" ]; then _repairing=1
+      elif [ "$VERSION" -le "$applied_version" ]; then verify_fail rollback-or-replay "$VERSION"; fi
+
+      # Member names must be bare basenames ending .sh (the refresh set is scripts-only,
+      # v1) — anything else would aim the install outside the DEST_SPEC allowlist or at a
+      # non-carrier path.
+      member_rows="$(grep -E '^[0-9a-f]{64}  [^[:space:]]+$' "$STAGE/bundle/manifest.txt" || true)"
+      [ -n "$member_rows" ] || verify_fail manifest-empty "$VERSION"
+      member_names="$(printf '%s\n' "$member_rows" | awk '{print $2}')"
+      # An empty name set must not ride the 0==0 equality below into an APPLIED
+      # with zero files installed (the installs-ALL-files contract is fail-closed).
+      [ -n "$member_names" ] || verify_fail manifest-empty "$VERSION"
+      total_members="$(printf '%s\n' "$member_names" | grep -c .)"
+      good_members="$(printf '%s\n' "$member_names" | grep -cE '^[A-Za-z0-9._-]+\.sh$' || true)"
+      if [ "$good_members" != "$total_members" ]; then
+        verify_fail manifest-member-name "$VERSION"
+      fi
+
+      # Per-file sha256 against the SIGNED manifest rows, in the extract dir.
+      sha_out="$(cd "$STAGE/bundle" && printf '%s\n' "$member_rows" | sha256sum -c - 2>&1)" \
+        && sha_rc=0 || sha_rc=$?
+      if [ "$sha_rc" -ne 0 ]; then
+        bad_member="$(printf '%s\n' "$sha_out" | sed -n 's/: FAILED.*//p' | head -1)"
+        verify_fail sha "$VERSION" "member=$${bad_member:-unknown}"
+      fi
+
+      # --- install: stage-all (above), then install-all through the allowlist ------------
+      # infra-config-install re-checks DEST_SPEC per member and lands each file via
+      # install-to-tmp + atomic same-dir rename (the #6178 install boundary). A mid-set
+      # failure leaves applied.version un-advanced; the next tick re-drives the whole set.
+      install_member=""
+      for _mname in $member_names; do
+        if ! "$INSTALL_CMD" "/usr/local/bin/$_mname" 755 root:root < "$STAGE/bundle/$_mname" \
+            2>/dev/null; then
+          install_member="$_mname"
+          break
+        fi
+      done
+      if [ -n "$install_member" ]; then
+        verify_fail install "$VERSION" "member=$install_member"
+      fi
+
+      # --- advance: version + ledger only after the LAST file landed ---------------------
+      printf '%s\n' "$VERSION" > "$${APPLIED_VERSION_FILE}.new" 2>/dev/null \
+        && mv -f "$${APPLIED_VERSION_FILE}.new" "$APPLIED_VERSION_FILE" 2>/dev/null \
+        || verify_fail version-write "$VERSION"
+      applied_version="$VERSION"
+      applied_sha="$pointer"
+      write_state ok "$VERSION" "$pointer" \
+        || verify_fail ledger-write "$VERSION"
+      # REPAIRED (not APPLIED) marks the torn-ledger self-heal — the next same-digest
+      # NOOP converges the comparator; the row is the audit trail.
+      _m=APPLIED; [ "$_repairing" -eq 1 ] && _m=REPAIRED
+      emit "SOLEUR_INFRA_PULL_$_m" "version=$VERSION sha256=$pointer verify=ok"
+      exit 0
+    owner: root:root
+    permissions: '0755'
+
+  - path: /etc/systemd/system/inngest-config-refresh.service
+    content: |
+      [Unit]
+      Description=Pull + verify + apply the signed inngest config bundle when the promoted digest moves (#6780, ADR-135)
+      After=network-online.target docker.service
+      Wants=network-online.target docker.service
+      ConditionPathExists=/etc/default/inngest-server
+
+      [Service]
+      Type=oneshot
+      # 420 > the worst-case tick (login 60 + PULL_TIMEOUT_S 180 + VERIFY_TIMEOUT_S 120):
+      # a TimeoutStartSec kill lands mid-gate with NO marker — the flip's own value.
+      TimeoutStartSec=420
+      Environment=HOME=/root
+      Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      EnvironmentFile=/etc/default/inngest-server
+      NoNewPrivileges=yes
+      ProtectSystem=strict
+      PrivateTmp=true
+      StateDirectory=inngest-config
+      # ProtectSystem=strict makes /etc/ /usr/ read-only at the mount-namespace
+      # level — the script's apply leg shells out to infra-config-install, whose
+      # mktemp lives inside /usr/local/bin (webhook.service precedent); without
+      # it here every promotion fails EROFS forever. `-` on /root/.docker: a
+      # non-existent ReadWritePaths entry fails mount-namespace setup, and the
+      # dir is created by the bootstrap's own `docker login` later in runcmd.
+      ReadWritePaths=-/root/.docker /usr/local/bin
+      SyslogIdentifier=inngest-config-refresh
+      # --only-secrets bounds doppler injection to the ONE pointer this consumer needs —
+      # an unbounded `doppler run` here would give a root ExecStart the whole isolated
+      # prd secret set. --no-exit-on-missing-only-secrets because INNGEST_CONFIG_DIGEST is
+      # count-gated in terraform: absent until first promotion, and a hard doppler error
+      # would read as a refresh failure rather than the correct empty-pointer NOOP.
+      # --config takes the templatefile var (${inngest_doppler_config}) — the same
+      # parameterization every sibling --config site on this path uses (#9175 census):
+      # the rehearsal render resolves it to soleur-inngest/rehearsal_<runid>, never a
+      # literal prd, and the census regexes in inngest.test.sh accept only that form.
+      ExecStart=/usr/bin/doppler run --project soleur-inngest --config ${inngest_doppler_config} --only-secrets INNGEST_CONFIG_DIGEST --no-exit-on-missing-only-secrets -- /usr/local/bin/inngest-config-refresh.sh
+
+      [Install]
+      WantedBy=multi-user.target
+    owner: root:root
+    permissions: '0644'
+
+  - path: /etc/systemd/system/inngest-config-refresh.timer
+    content: |
+      [Unit]
+      Description=Fire inngest-config-refresh.service every 60 s (#6780, ADR-135)
+      ConditionPathExists=/etc/default/inngest-server
+
+      [Timer]
+      OnBootSec=60s
+      OnUnitActiveSec=60s
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+    owner: root:root
+    permissions: '0644'
+
 runcmd:
   # --- #6178 boot observability: EARLIEST marker (Doppler-INDEPENDENT) -------------------
   # First instruction. Stage the baked Better Stack token and phone home immediately. If this
@@ -1484,8 +2089,8 @@ runcmd:
   # Mount the Redis AOF volume by id at /mnt/data (inngest-redis.conf `dir /mnt/data/redis`).
   # `nofail` so a volume hiccup does not wedge boot; the redis unit's RequiresMountsFor=
   # /mnt/data pins Redis behind this mount so the AOF never lands on the ephemeral root disk.
-  # #7695: the plaintext `mount … || true` + ext4 fstab line that used to live here have MOVED,
-  # not been duplicated — they are now the ext4 arm of the LUKS discriminator further down, which
+  # #7695: the plaintext `mount … || true` + ext4 fstab line that used to live here were REMOVED,
+  # not moved: the mount now happens only in the LUKS stage further down (the mapper), which
   # cannot run until the Doppler CLI and token file exist. `mkdir` stays here so the mountpoint
   # exists for anything that probes it in between.
   - mkdir -p /mnt/data
@@ -1558,28 +2163,25 @@ runcmd:
   # Doppler (INNGEST_REDIS_LUKS_KEY on the isolated soleur-inngest/prd), so this stage
   # cannot run before the CLI install + token file above. The mount was previously a
   # plaintext `mount … || true` up at the mkdir; it has been REMOVED, not duplicated —
-  # grep this file for `scsi-0HC_Volume_` and there must be exactly one consumer, this one.
+  # grep this file for `scsi-0HC_Volume_` and the consumers are this stage and the boot-reopen
+  # script (both derive DEV from the same template id).
   #
-  # THE DISCRIMINATOR READS THE DEVICE, NOT TERRAFORM, and that is load-bearing in BOTH
-  # directions. `hcloud_volume.inngest_redis` no longer declares `format` at all (dropped
-  # 2026-09-03, #7695, so the recut's replacement volume is born RAW — `ignore_changes`
-  # suppresses diffs, never creates), while the LIVE device is still ext4 from its 2026-07-07
-  # creation. So the Terraform attribute and the disk disagree today and would have disagreed
-  # the other way before the drop: it was never a truthful statement about what is on the disk.
-  # blkid is. Five arms, and every non-handled state is FATAL rather than a fallthrough:
+  # THE DISCRIMINATOR READS THE DEVICE, NOT TERRAFORM. `hcloud_volume.inngest_redis_luks`
+  # is born RAW (`ignore_changes` suppresses diffs, never creates), so the Terraform attribute
+  # was never a truthful statement about what is on the disk. blkid is. Every non-handled
+  # state is FATAL rather than a fallthrough. With a pointer set (the production path) the
+  # pointer arm applies and refuses everything but crypto_LUKS. With NO pointer (a rehearsal
+  # host) the one rendered volume is read as:
   #
   #   device absent after a bounded wait  -> FATAL (never format a path that is not a device)
-  #   TYPE=ext4                           -> pre-recut: mount as-is.  post-recut: FATAL
-  #   TYPE empty (no signature)           -> luksFormat + luksOpen + mkfs + mount
+  #   TYPE empty (no signature)           -> rehearsal_* config only: luksFormat + luksOpen + mkfs
+  #                                          + mount. Any other config: FATAL unpointed_raw_refused
   #   TYPE=crypto_LUKS                    -> luksOpen + mount
-  #   anything else                       -> FATAL
+  #   anything else (ext4 included)       -> FATAL
   #
-  # The ext4 arm is what keeps this deliverable. The volume is ext4 TODAY and this cloud-init
-  # edit force-replaces the host, so the very first boot under this stage is the ext4 case.
-  # A three-arm mirror of git-data (which owns a born-raw volume) would have made that boot
-  # FATAL and taken the host dark on merge. `expect_luks` is what arms the post-recut refusal:
-  # once the recut has run, an ext4 signature means the recut silently did not take, and
-  # mounting it would put the AOF back on plaintext while every artifact claims otherwise.
+  # The plaintext ext4 arm and the post-recut refusal (with the Terraform input that armed it) that
+  # used to sit here were removed in #9786: the plaintext volume was destroyed in #8285, so an ext4
+  # signature on the one remaining volume is a surprise to refuse, never a state to mount.
   - |
     set -a
     . /etc/default/inngest-doppler
@@ -1601,7 +2203,7 @@ runcmd:
       # journald-config.test.sh asserts BOTH sides, because Source 4 is exact-value equality
       # and a one-sided change is a silent no-op.
       logger -t inngest-luks-stage \
-        "SOLEUR_INNGEST_LUKS_STAGE stage=$1 rc=$2 blkid_type=$${3:-n/a} expect_luks=$${EXPECT_LUKS} detail=$${4:-none}" || true
+        "SOLEUR_INNGEST_LUKS_STAGE stage=$1 rc=$2 blkid_type=$${3:-n/a} detail=$${4:-none}" || true
     }
     luks_err() {
       rc=$?
@@ -1628,23 +2230,18 @@ runcmd:
       exit 1
     }
     trap luks_err EXIT
-    EXPECT_LUKS='${inngest_expect_luks}'
-    # ── THE TWO VOLUMES, BY ID (#6894, ADR-142 additive blue-green) ──────────────────────
-    # PLAIN_ID is the live store as it exists today. LUKS_ID is the additive volume attached
-    # beside it. BOTH ids come from the template, so the pointer below can only ever name one
-    # of these two: a pointer naming a third id is a refusal, never a new device to open.
-    PLAIN_ID='${inngest_volume_id}'
+    # ── THE ONE VOLUME, BY ID (#6894, ADR-142; #9786 retired the plaintext volume) ───────
+    # LUKS_ID is the store's volume. It comes from the template, so the pointer below can only
+    # ever name this one: a pointer naming any other id is a refusal, never a new device to open.
     LUKS_ID='${inngest_luks_volume_id}'
     BYID=/dev/disk/by-id/scsi-0HC_Volume_
-    DEV="$${BYID}$${PLAIN_ID}"
-    STAGING_DEV="$${BYID}$${LUKS_ID}"
+    DEV="$${BYID}$${LUKS_ID}"
     MAPPER=/dev/mapper/inngest-redis
-    STAGING_MAPPER=/dev/mapper/inngest-redis-staging
     # THE POINTER (Fork P). Authoritative for which volume holds the store; the disk signature
     # only CORROBORATES it. It lives in Doppler, not on the root disk, because the only delivery
     # path to this host is a replace that destroys the root disk — a root-disk pointer would be
-    # erased by the very dispatch every later change must fire, and the resolver would then take
-    # the pointer-absent arm onto the stale plaintext AOF. Absent = the pre-cutover world.
+    # erased by the very dispatch every later change must fire. Absent = the unpointed arm below,
+    # which resolves the one volume by its signature and may format it ONLY on a rehearsal_* config.
     POINTER="$${INNGEST_LUKS_ACTIVE_VOLUME_ID:-}"
 
     # THE PROBE MUST BE ABLE TO MEASURE. Unprivileged `blkid -p` on a root-owned device prints
@@ -1658,39 +2255,61 @@ runcmd:
     [ -n "$${INNGEST_REDIS_LUKS_KEY:-}" ] || { echo "FATAL: INNGEST_REDIS_LUKS_KEY empty — refusing an unencrypted mount" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
 
     STAGE=volume_ids
-    case "$PLAIN_ID" in ''|*[!0-9]*) echo "FATAL: the plaintext volume id '$PLAIN_ID' did not render as a number" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1 ;; esac
-    case "$LUKS_ID" in ''|*[!0-9]*) echo "FATAL: the additive volume id '$LUKS_ID' did not render as a number" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1 ;; esac
-    [ "$PLAIN_ID" != "$LUKS_ID" ] || { echo "FATAL: both volume ids rendered as $PLAIN_ID — the resolver cannot tell the store from its backstop" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+    case "$LUKS_ID" in ''|*[!0-9]*) echo "FATAL: the volume id '$LUKS_ID' did not render as a number" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1 ;; esac
 
     # ── HELPERS ─────────────────────────────────────────────────────────────────────────────
     # wait_dev <path> — bounded attach wait. blkid on an ABSENT path returns rc 2, which the
     # accept-0-or-2 policy would read as blank, so presence is established before any probe.
-    # One definition, so the 30s bound cannot drift between the readers that use it.
+    # One definition, so the 300s bound cannot drift between the readers that use it. Counted
+    # sleep-1 passes, never the clock — a ~80s attachment-in-flight is the measured case (#10217,
+    # the sibling git-data remedy's shipped shape). The WHOLE predicate is re-run each pass, a
+    # probe runs once immediately (bound 0 still probes: once immediately, once post-settle), one wait-start emit
+    # fires on the first miss and an appeared-after emit on resolution, and exactly ONE udevadm
+    # settle runs after the loop — never per pass. The same-named helper in inngest-luks-open.sh
+    # is this body's mirror (its emit channel is `emit`); keep the two in step.
     wait_dev() {
       _i=0
-      while [ "$_i" -lt 30 ]; do
-        [ -b "$1" ] && [ "$(/usr/sbin/blockdev --getsize64 "$1" 2>/dev/null || echo 0)" -gt 0 ] && return 0
+      _wd_hit=0
+      if [ -b "$1" ] && [ "$(/usr/bin/timeout -k 2 10 /usr/sbin/blockdev --getsize64 "$1" 2>/dev/null || echo 0)" -gt 0 ]; then
+        return 0
+      fi
+      luks_emit "$STAGE" 0 n/a "waiting up to 300s for $1 — the volume attachment is still in flight"
+      while [ "$_i" -lt 300 ]; do
         sleep 1; _i=$((_i+1))
+        if [ -b "$1" ] && [ "$(/usr/bin/timeout -k 2 10 /usr/sbin/blockdev --getsize64 "$1" 2>/dev/null || echo 0)" -gt 0 ]; then
+          _wd_hit=1
+          break
+        fi
       done
-      return 1
+      /usr/bin/udevadm settle --timeout=10 >/dev/null 2>&1 || true
+      if [ "$_wd_hit" -eq 0 ] && [ -b "$1" ] && [ "$(/usr/bin/timeout -k 2 10 /usr/sbin/blockdev --getsize64 "$1" 2>/dev/null || echo 0)" -gt 0 ]; then
+        _wd_hit=1
+      fi
+      [ "$_wd_hit" -eq 1 ] || return 1
+      luks_emit "$STAGE" 0 n/a "$1 appeared after $${_i}s of the 300s bound"
+      return 0
     }
     # fstab_set <mountpoint> <line> — REPLACE the mountpoint's line in place, then assert exactly
     # one. Every earlier writer was `grep -q … || append`, so a swapped store kept its old line and
     # the old line won the next boot: a silent one-boot time bomb. Field-exact on $2, so
     # /mnt/data never matches /mnt/data-luks, and comment lines are left alone.
     fstab_set() {
-      _fs_tmp="$(mktemp /etc/fstab.soleur.XXXXXX)"
-      awk -v mp="$1" '$1 ~ /^#/ || $2 != mp' /etc/fstab > "$_fs_tmp"
-      printf '%s\n' "$2" >> "$_fs_tmp"
-      cat "$_fs_tmp" > /etc/fstab
-      rm -f "$_fs_tmp"
+      _fs_tmp="$(mktemp /etc/fstab.soleur.XXXXXX)" || { echo "FATAL: mktemp for the fstab rewrite failed" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+      awk -v mp="$1" '$1 ~ /^#/ || $2 != mp' /etc/fstab > "$_fs_tmp" || { rm -f "$_fs_tmp"; echo "FATAL: rewriting fstab for $1 failed" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+      printf '%s\n' "$2" >> "$_fs_tmp" || { rm -f "$_fs_tmp"; echo "FATAL: writing the $1 fstab line failed" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+      # Atomic install: same-dir rename, never a truncate-in-place — a death or ENOSPC mid-write
+      # must not leave /etc/fstab truncated (inngest-luks-cutover.sh:536 documents that defect).
+      chmod 0644 "$_fs_tmp" || { rm -f "$_fs_tmp"; echo "FATAL: chmod on the rewritten fstab failed" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+      mv -f "$_fs_tmp" /etc/fstab || { rm -f "$_fs_tmp"; echo "FATAL: installing the rewritten fstab failed" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
       _fs_n="$(awk -v mp="$1" '$1 !~ /^#/ && $2 == mp' /etc/fstab | wc -l)"
       [ "$_fs_n" -eq 1 ] || { echo "FATAL: fstab carries $_fs_n lines for $1 after the rewrite — exactly one is required" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
     }
     # mounted_from <mountpoint> <expected-source> — the mount's SOURCE resolves to the expected
     # device. Compared through readlink -f so a by-id alias and its /dev/sdX target agree.
     mounted_from() {
-      _src="$(findmnt -no SOURCE "$1" 2>/dev/null | head -1)" || _src=""
+      # tail -1, never head -1: on a stacked mountpoint findmnt lists oldest-first and the
+      # kernel serves the LAST entry (inngest-luks-cutover.sh documents the measurement).
+      _src="$(findmnt -no SOURCE "$1" 2>/dev/null | tail -1)" || _src=""
       [ -n "$_src" ] && [ "$(readlink -f "$_src")" = "$(readlink -f "$2")" ]
     }
     # backing_is <mapper> <device> — the mapper's ONLY backing block device is <device>. Read from
@@ -1705,30 +2324,29 @@ runcmd:
     }
 
     # ── RESOLVE: which volume is /mnt/data ─────────────────────────────────────────────────
-    # Four worlds, and the pointer decides between them; the signature never does:
-    #   pointer absent                     -> pre-cutover. PLAIN_ID is canonical (the four-arm
-    #                                         discriminator below, unchanged); LUKS_ID is staged
-    #                                         at /mnt/data-luks under a NON-canonical mapper.
-    #   pointer = one of the two ids       -> that volume is canonical and MUST read crypto_LUKS.
-    #   pointer names an absent device     -> REFUSE. Falling through to the other volume is the
+    # Three worlds, and the pointer decides between them; the signature never does:
+    #   pointer absent                     -> unpointed. LUKS_ID is the one candidate (the
+    #                                         signature discriminator below); no choice to make.
+    #   pointer = LUKS_ID                  -> that volume is canonical and MUST read crypto_LUKS.
+    #   pointer names an absent device     -> REFUSE. Falling through to another device is the
     #                                         rejected signature rule's failure: plaintext mounted,
     #                                         no mapper, the Redis guard vacuous, writes on a stale AOF.
     #   pointer non-numeric / a third id   -> REFUSE, rather than derive a device path from it.
     STAGE=resolve
     case "$POINTER" in
       "")
-        MODE=plaintext_canonical
+        MODE=unpointed
         CANON_DEV="$DEV"
         ;;
       *[!0-9]*)
         echo "FATAL: INNGEST_LUKS_ACTIVE_VOLUME_ID is set but is not a volume id — refusing to derive a device path from it" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1
         ;;
-      "$PLAIN_ID"|"$LUKS_ID")
+      "$LUKS_ID")
         MODE=pointer
         CANON_DEV="$${BYID}$${POINTER}"
         ;;
       *)
-        echo "FATAL: the pointer names volume $POINTER, which is neither of this host's volumes ($PLAIN_ID, $LUKS_ID) — refusing rather than guessing which one holds the store" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1
+        echo "FATAL: the pointer names volume $POINTER, which is not this host's volume ($LUKS_ID) — refusing rather than guessing which one holds the store" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1
         ;;
     esac
     luks_emit resolve 0 n/a "mode=$MODE pointer=$${POINTER:-absent}"
@@ -1748,13 +2366,15 @@ runcmd:
     chown root:root /etc/default/inngest-luks
     [ -s /etc/default/inngest-luks ] || { echo "FATAL: /etc/default/inngest-luks is empty after staging — the boot-reopen unit would fail on every later boot" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
     if [ -n "$POINTER" ]; then
-      grep -qx "INNGEST_LUKS_ACTIVE_VOLUME_ID=$POINTER" /etc/default/inngest-luks || { echo "FATAL: the pointer did not land in /etc/default/inngest-luks — the boot-reopen unit would take the pre-cutover arm on boot 2" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+      grep -qx "INNGEST_LUKS_ACTIVE_VOLUME_ID=$POINTER" /etc/default/inngest-luks || { echo "FATAL: the pointer did not land in /etc/default/inngest-luks — the boot-reopen unit would take the unpointed arm on boot 2" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
     fi
     luks_emit luks_key_stage 0 n/a staged
-    # THE TWO VOLUME IDS, for inngest-luks-cutover.service (#6894). That script ships in the image
+    # THE VOLUME ID, for inngest-luks-cutover.service (#6894). That script ships in the image
     # and cannot see template variables, and it compares every mount against these ids — never a
-    # kernel name. Not secret (0644), but asserted: without them the cutover refuses every run.
-    printf 'INNGEST_LUKS_PLAIN_VOLUME_ID=%s\nINNGEST_LUKS_ADDITIVE_VOLUME_ID=%s\n' "$PLAIN_ID" "$LUKS_ID" > /etc/default/inngest-luks-volumes
+    # kernel name. Not secret (0644), but asserted: the file's presence keeps the cutover units
+    # active. The image-baked script reads a plaintext id from this file too and now refuses every
+    # flagged run `volume-ids-unreadable` (#9786): the cutover is complete, that refusal is the intent.
+    printf 'INNGEST_LUKS_ADDITIVE_VOLUME_ID=%s\n' "$LUKS_ID" > /etc/default/inngest-luks-volumes
     grep -qx "INNGEST_LUKS_ADDITIVE_VOLUME_ID=$LUKS_ID" /etc/default/inngest-luks-volumes || { echo "FATAL: /etc/default/inngest-luks-volumes did not land — the cutover unit would refuse every run" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
 
     if [ "$MODE" = pointer ]; then
@@ -1785,15 +2405,15 @@ runcmd:
       fstab_set /mnt/data "$MAPPER /mnt/data ext4 defaults,nofail 0 2"
       luks_emit mount_luks 0 crypto_LUKS "mode=pointer"
     else
-      # ── PRE-CUTOVER ARM — the #7695 four-arm discriminator over PLAIN_ID, unchanged except
-      # that its fstab writes now replace rather than append ──────────────────────────────
+      # ── UNPOINTED ARM — the #7695 discriminator over the one volume, minus its ext4 arm,
+      # with fstab writes that replace rather than append ─────────────────────────────────
       # ARM 0 — bounded device-presence wait, BEFORE the discriminator. blkid on an absent path
       # returns rc 2, which the accept-0-or-2 policy below would otherwise route straight into
       # the luksFormat arm. A volume that is merely slow to attach must not be read as blank.
       STAGE=device_wait
       wait_dev "$DEV" || true
-      [ -b "$DEV" ] || { echo "FATAL: $DEV is not a block device after 30s — refusing to proceed" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
-      [ "$(/usr/sbin/blockdev --getsize64 "$DEV" 2>/dev/null || echo 0)" -gt 0 ] || { echo "FATAL: $DEV reports zero size after 30s" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+      [ -b "$DEV" ] || { echo "FATAL: $DEV is not a block device after 300s — refusing to proceed" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+      [ "$(/usr/bin/timeout -k 2 10 /usr/sbin/blockdev --getsize64 "$DEV" 2>/dev/null || echo 0)" -gt 0 ] || { echo "FATAL: $DEV reports zero size after 300s" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
 
       # blkid's OWN rc is checked: 0=signature found, 2=none found. Anything else is "could not
       # measure", which is NEVER "blank". A wrong format here is terminal — there is no header
@@ -1801,23 +2421,11 @@ runcmd:
       # grounds), so the cost of guessing is the whole AOF.
       STAGE=blkid_probe
       _blk_rc=0
-      BLK_TYPE="$(/usr/sbin/blkid -o value -s TYPE "$DEV" 2>/dev/null)" || _blk_rc=$?
+      BLK_TYPE="$(/usr/sbin/blkid -p -o value -s TYPE "$DEV" 2>/dev/null)" || _blk_rc=$?
       { [ "$_blk_rc" -eq 0 ] || [ "$_blk_rc" -eq 2 ]; } || { echo "FATAL: blkid could not read $DEV (rc=$_blk_rc) — refusing to write to a device whose contents are unknown" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
       luks_emit blkid_probe 0 "$${BLK_TYPE:-empty}"
 
       case "$${BLK_TYPE:-}" in
-        ext4)
-          # ARM 1 — the pre-recut steady state. Mount the plaintext volume as-is and say so.
-          if [ "$EXPECT_LUKS" = "true" ]; then
-            echo "FATAL: expect_luks=true but $DEV still carries an ext4 signature — the recut did not take. Refusing to mount the AOF plaintext while the ledger claims encryption." | tee -a "$INNGEST_LUKS_DETAIL"
-            exit 1
-          fi
-          STAGE=mount_ext4
-          mkdir -p /mnt/data
-          mountpoint -q /mnt/data || mount "$DEV" /mnt/data 2>>"$INNGEST_LUKS_DETAIL"
-          fstab_set /mnt/data "$DEV /mnt/data ext4 defaults,nofail 0 2"
-          luks_emit mount_ext4 0 ext4
-          ;;
         crypto_LUKS)
           # ARM 2 — already recut. Open and mount; never format.
           STAGE=luks_open_existing
@@ -1833,7 +2441,11 @@ runcmd:
           # ARM 3 — raw device, no signature. This is the ONLY arm that may write a new header on
           # the canonical device, and it is reachable only because blkid returned rc 0-or-2 with an
           # EMPTY type while running as root: a positive proof of blankness, not an inference from
-          # a failed probe.
+          # a failed probe. It is an ALLOWLIST (#9786): only a rehearsal_* config may format. A lost
+          # pointer plus a damaged header reads blank on a real host, and the volume is the only
+          # copy of the AOF, so every other config (prd today, anything added later) refuses.
+          STAGE=unpointed_raw_refused
+          case '${inngest_doppler_config}' in rehearsal_*) ;; *) echo "FATAL: unpointed_raw_refused — $DEV reads blank on a non-rehearsal config with no pointer; refusing to luksFormat the only copy of the AOF" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1 ;; esac
           STAGE=luks_format
           printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksFormat --batch-mode --type luks2 --key-file - "$DEV" 2>>"$INNGEST_LUKS_DETAIL"
           luks_emit luks_format 0 empty
@@ -1882,94 +2494,10 @@ runcmd:
     # A mountpoint check proves something is mounted; it does not prove it is the store.
     STAGE=verify
     mountpoint -q /mnt/data || { echo "FATAL: /mnt/data is not a mountpoint after the stage completed" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
-    if [ "$MODE" = pointer ] || [ "$${BLK_TYPE:-}" != ext4 ]; then
-      mounted_from /mnt/data "$MAPPER" || { echo "FATAL: /mnt/data is not mounted from $MAPPER" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
-      backing_is "$MAPPER" "$CANON_DEV" || { echo "FATAL: $MAPPER is not backed by $CANON_DEV — the canonical mapper sits on the wrong volume" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
-    else
-      mounted_from /mnt/data "$DEV" || { echo "FATAL: /mnt/data is not mounted from $DEV" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
-    fi
+    mounted_from /mnt/data "$MAPPER" || { echo "FATAL: /mnt/data is not mounted from $MAPPER" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+    backing_is "$MAPPER" "$CANON_DEV" || { echo "FATAL: $MAPPER is not backed by $CANON_DEV — the canonical mapper sits on the wrong volume" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
     luks_emit verify 0 "$${BLK_TYPE:-empty}" "mode=$MODE"
 
-    # ── STAGING — the additive volume, pre-cutover only ─────────────────────────────────────
-    # Runs AFTER the canonical store is mounted and verified, so nothing here can delay or break
-    # the store the scheduler is serving from; a staging refusal is loud (its own stage, phoned
-    # home) and leaves /mnt/data exactly as the lines above left it. Under a pointer there is no
-    # staging: the additive volume IS the store, and the plaintext volume is the retained backstop,
-    # left attached and untouched.
-    #
-    # The staging arm writes ONLY to a device positively measured blank or already LUKS (Guard 1),
-    # under a NON-canonical mapper name: /dev/mapper/inngest-redis is the name the Redis mount guard
-    # keys on, so opening the staging volume under it would trip that guard's mapper-open state.
-    # Probes here use `-p` (bypass the cache): across an abort-and-retry the cached type is the
-    # previous run's, and the arms are destructive in opposite directions.
-    if [ "$MODE" != pointer ]; then
-      STAGE=staging_wait
-      if ! wait_dev "$STAGING_DEV"; then
-        # Absent: the plaintext-only world, byte-identical to the stage before #6894.
-        luks_emit staging_absent 0 n/a "no additive volume attached"
-      else
-        STAGE=staging_blkid_probe
-        _stg_rc=0
-        STG_TYPE="$(/usr/sbin/blkid -p -o value -s TYPE "$STAGING_DEV" 2>/dev/null)" || _stg_rc=$?
-        { [ "$_stg_rc" -eq 0 ] || [ "$_stg_rc" -eq 2 ]; } || { echo "FATAL: blkid could not read $STAGING_DEV (rc=$_stg_rc) — refusing to stage a device whose contents are unknown" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
-        luks_emit staging_blkid_probe 0 "$${STG_TYPE:-empty}"
-        case "$${STG_TYPE:-}" in
-          "")
-            STAGE=staging_luks_format
-            printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksFormat --batch-mode --type luks2 --key-file - "$STAGING_DEV" 2>>"$INNGEST_LUKS_DETAIL"
-            luks_emit staging_luks_format 0 empty
-            ;;
-          crypto_LUKS)
-            : # already formatted by an earlier boot — re-entry is idempotent
-            ;;
-          *)
-            echo "FATAL: the additive volume $STAGING_DEV carries TYPE=$STG_TYPE — the staging arm writes only to a device measured blank or already LUKS" | tee -a "$INNGEST_LUKS_DETAIL"
-            exit 1
-            ;;
-        esac
-        STAGE=staging_luks_open
-        [ -e "$STAGING_MAPPER" ] || printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksOpen --key-file - "$STAGING_DEV" inngest-redis-staging 2>>"$INNGEST_LUKS_DETAIL"
-        STAGE=staging_mapper_probe
-        _smap_rc=0
-        SMAP_TYPE="$(/usr/sbin/blkid -p -o value -s TYPE "$STAGING_MAPPER" 2>/dev/null)" || _smap_rc=$?
-        { [ "$_smap_rc" -eq 0 ] || [ "$_smap_rc" -eq 2 ]; } || { echo "FATAL: blkid could not read $STAGING_MAPPER (rc=$_smap_rc)" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
-        case "$${SMAP_TYPE:-}" in
-          "")
-            # mkfs only on a mapper positively measured empty, AFTER luksOpen created it.
-            STAGE=staging_mkfs
-            mkfs.ext4 -q "$STAGING_MAPPER" 2>>"$INNGEST_LUKS_DETAIL"
-            luks_emit staging_mkfs 0 empty
-            ;;
-          ext4)
-            : # a filesystem from an earlier boot — mount it, never recreate it
-            ;;
-          *)
-            echo "FATAL: the staging mapper carries TYPE=$SMAP_TYPE — refusing to create a filesystem over it" | tee -a "$INNGEST_LUKS_DETAIL"
-            exit 1
-            ;;
-        esac
-        STAGE=staging_mount
-        mkdir -p /mnt/data-luks
-        mountpoint -q /mnt/data-luks || mount "$STAGING_MAPPER" /mnt/data-luks 2>>"$INNGEST_LUKS_DETAIL"
-        fstab_set /mnt/data-luks "$STAGING_MAPPER /mnt/data-luks ext4 defaults,nofail 0 2"
-        STAGE=staging_verify
-        mounted_from /mnt/data-luks "$STAGING_MAPPER" || { echo "FATAL: /mnt/data-luks is not mounted from $STAGING_MAPPER" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
-        backing_is "$STAGING_MAPPER" "$STAGING_DEV" || { echo "FATAL: $STAGING_MAPPER is not backed by $STAGING_DEV — the staging mapper sits on the wrong volume" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
-        # THE EMIT CARRIES ITS MEASUREMENTS, not just its name (#6894 AC-33). A stage name proves
-        # the stage RAN; it is satisfiable while the staging path is a directory on the root disk
-        # under a mountpoint shadow — a recorded root cause in this estate. So the three readings
-        # the two assertions above just made are shipped off-box, where the follow-through re-checks
-        # them: the staging mount's resolved source, the mapper's sysfs backing, and the LIVE
-        # mount's source (which must differ — the staging arm must disturb nothing).
-        _sv_src="$(findmnt -no SOURCE /mnt/data-luks 2>/dev/null | head -1)"
-        _sv_dm="$(basename "$(readlink -f "$STAGING_MAPPER")" 2>/dev/null)"
-        _sv_back="$(ls "/sys/class/block/$${_sv_dm}/slaves" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
-        _sv_want="$(basename "$(readlink -f "$STAGING_DEV")" 2>/dev/null)"
-        _sv_live="$(findmnt -no SOURCE /mnt/data 2>/dev/null | head -1)"
-        luks_emit staging_verify 0 "$${STG_TYPE:-empty}" \
-          "stg_src=$${_sv_src:-unreadable} stg_backing=$${_sv_back:-unreadable} stg_dev=$${_sv_want:-unreadable} stg_devid=$${LUKS_ID} live_src=$${_sv_live:-unreadable}"
-      fi
-    fi
     # NO `trap - EXIT`: disarming on success would make the rc guard unreachable and untested.
     # That is why `luks_err` branches on rc instead — see its own note. Keeping the trap armed
     # while the handler treated rc=0 as a failure is what made every successful boot report
@@ -2202,6 +2730,24 @@ runcmd:
       /usr/local/bin/inngest-boot-phone-home.sh inngest-probe-cred-ABSENT "redis_keys will report __UNREADABLE__" || true
     fi
     unset _rp
+
+  # --- #6780 (ADR-135, 2026-10-13 amendment): ARM the config-refresh consumer ------------
+  # Placed AFTER /etc/default/inngest-server exists (the ~20 lines above): the timer's
+  # ConditionPathExists is evaluated at ACTIVATION, so arming it earlier would leave it
+  # unarmed for the boot's whole life (the same measured systemd behaviour the provision
+  # timer comment records). `enable --now` is correct here — the refresh timer's whole
+  # purpose is a steady 60 s cadence; an immediate first fire on this boot is the
+  # intended behaviour, not a double-trigger (OnBootSec counts from boot, and this host
+  # is already past it).
+  # daemon-reload first: the consumer's units were written by write_files and the last
+  # reload systemd saw was the luks-open block far above.
+  - systemctl daemon-reload
+  - systemctl enable --now inngest-config-refresh.timer
+  - |
+    set +e
+    if ! systemctl is-enabled --quiet inngest-config-refresh.timer; then
+      /usr/local/bin/inngest-boot-phone-home.sh refresh-timer-enable-FAILED "timer=$(systemctl is-enabled inngest-config-refresh.timer 2>&1)" || true
+    fi
 
   # --- #8562: ARM the provision unit. The last runcmd items, and all runcmd still does for it ---
   # Placed directly after the last prerequisite the unit needs and only runcmd writes

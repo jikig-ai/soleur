@@ -117,7 +117,7 @@ Refusal reasons, and what each one is telling you:
 
 | `reason=` | Meaning |
 | --- | --- |
-| `luks-key-absent` / `redis-password-absent` / `volume-ids-unreadable` | The unit's own inputs did not arrive — a Doppler name is missing, or the first-boot stage did not write `/etc/default/inngest-luks-volumes`. Nothing was stopped. |
+| `luks-key-absent` / `redis-password-absent` / `volume-ids-unreadable` | The unit's own inputs did not arrive — a Doppler name is missing, or the first-boot stage did not write `/etc/default/inngest-luks-volumes`. Nothing was stopped. **After the host replace that carries #9786 this is the EXPECTED answer to any flagged run** (flag `armed`/`copying`/`copied`/`swapped`/`rollback`): the stage no longer writes the plaintext id the image-baked script reads, the cutover is complete, and at flag `done` the unit is a no-op. Such a refusal writes the terminal flag `aborted`, so do not dispatch a flagged run on a host in that state. |
 | `pointer-already-set` | This host is already past the cutover. There is no verb to go back (§5a); nothing to do. |
 | `canonical-not-plaintext` / `staging-not-mapper` / `staging-wrong-backing` / `canonical-mapper-open` | The pre-cutover topology is not what the FSM requires. The host is not in the state this dispatch acts on; read the probe row before doing anything. |
 | `envfile-key-absent` | `/etc/default/inngest-luks` carries no passphrase, so the boot-reopen unit could not open the store on the next boot. Refused before anything stopped. |
@@ -239,26 +239,17 @@ drained tick double-fires the cron. That procedure's `routine_runs` check tells 
    cutover). #8296 is closed explicitly (`gh issue close 8296`) once PR-2 has merged and its
    post-merge steps are read back, never by a sweeper. The one open step is now #8285: destroy
    `hcloud_volume.inngest_redis` by 2026-10-22.
-   - #8285 is enrolled, as a post-merge step of #8296 PR-2, with the `follow-through` label and the
-     directive for `scripts/followthroughs/inngest-luks-property-8296.sh`. The probe is NOTIFY-ONLY:
-     it never exits 0 or 1, so the sweeper never closes that tracker. It comments on #8285 every
-     day. The heading reads "NOT YET" when the ledger claim and the device agree (the body says
-     "healthy: nothing to do"), and "ACTION REQUIRED" when they do not. **Do not close #8285 before
-     the backstop is destroyed**: on a closed issue the sweeper does nothing with 2, 3 or 5, so
-     closing it turns the probe off.
-   - **Retiring the probe** happens only AFTER the destroy apply has run and the Hetzner API shows
-     the volume gone, never in the PR that merely removes it from Terraform. That PR's body carries
-     no closing keyword next to #8285; #8285 is closed explicitly after the check. The probe
-     header's RETIREMENT line lists what to delete.
-   - A silent probe pipeline reads as healthy to the wrong-volume alert (`treat_as_zero`). The
-     property probe reports that as "CANNOT ESTABLISH". The dead-probe heartbeat resource landed in
-     cde96fb5e2 (#8516, closed), but its feeder is not wired or armed (#9703, open), so a silent probe
-     still reads as healthy to the alert today. Do not retire the property probe before #9703 is armed
-     (§5b, "Records the convergence PR must carry").
+   - **Retired 2026-10-12 (#9703 Stage 3b); the backstop was destroyed 2026-10-09 (#8285 PR B, §5b) and `op=luks-rollback` no longer exists:** the #8285 follow-through probe for
+     the ledger-vs-device claim (the `inngest-luks-property-8296` script, its test and every registration) is
+     deleted, and its directive was removed from #9703 (and the closed #8285) that day. A silent probe pipeline reads
+     as healthy to the wrong-volume alert (`treat_as_zero`); `betteruptime_heartbeat.inngest_server_probe` (armed
+     2026-10-12, #9703, arm record in `inngest-server.md` section "Arming the probe heartbeat (#9703)") now carries that
+     case, with the twice-daily (06:00 and 18:00 UTC) `heartbeat-live-reconcile` `fed-but-paused` check as the net.
+     **What was lost:** the probe's daily cross-read of the ledger claim against the probe row's `data_mount_src`
+     (the `/dev/mapper/inngest-redis` mapper path). The wrong-volume alert keys on `data_mount_devid` only, so a
+     right volume remounted without the dm-crypt mapper is no longer reported by anything automated. It never
+     verified the LUKS cipher either (the ledger's `live_verification` stays `unavailable:`).
    - **After a sanctioned `op=luks-rollback`**, see §5a.
-   - **Superseded 2026-10-09 (#8285 PR B), appended rather than edited:** the backstop was destroyed (§5b), so the
-     bullets above about #8285 describe the state before that. The probe stays until the dead-probe feeder (#9703)
-     is armed; its daily comment moves to #9703 when #8285 is closed, and `op=luks-rollback` no longer exists.
 
 ---
 
@@ -272,14 +263,13 @@ copy has nowhere to land. The dated history of the verb stays in ADR-142.
 **The live LUKS volume `hcloud_volume.inngest_redis_luks` (id 106903269) is now the only copy of the Inngest queue and run
 state, and `INNGEST_REDIS_LUKS_KEY` in Doppler `soleur-inngest/prd` is the only opener the host reads; an independent
 copy of the passphrase exists in Terraform state.** Losing the volume, or both copies of the passphrase, is data loss with
-nothing to restore from. Protection for that (delete protection, edge pins, key-loss posture) is built by
-#9879 (PR #9925, ADR-282) and described in §5c; it is in force only once that PR is merged, its apply has landed and the
-§5c read-back returns `protected`, so do not assume it exists before then.
+nothing to restore from. Protection for that (delete protection, edge pins, key-loss posture) was built by
+#9879 (PR #9925, ADR-282, accepted 2026-10-15) and is described in §5c. It is a point-in-time flag that a holder of the
+read/write Hetzner token can lift: re-read it per §5c before relying on it.
 
 **Signals that used to mean "the store went back to plaintext" are now incidents, not rollbacks.** The wrong-volume
 alert (`logtail_exploration_alert.inngest_luks_wrong_volume`), a probe row whose `data_mount_src` is not
-`/dev/mapper/inngest-redis`, and the property probe's `rollback_inversion` verdict all mean the store is on a device
-the ledger does not claim. Nothing here can put it back on a plaintext volume. Treat each as a production incident
+`/dev/mapper/inngest-redis` all mean the store is on a device the ledger does not claim. Nothing here can put it back on a plaintext volume. Treat each as a production incident
 (`soleur:incident`): read the newest `host_role=dedicated` `SOLEUR_INNGEST_SERVER_PROBE` row first (§5 step 1's query).
 
 **Signal -> route.** Read the newest `host_role=dedicated` probe row first, then pick the route; the host-replace route is a
@@ -289,13 +279,7 @@ production write and needs the operator's per-command go-ahead:
 | --- | --- | --- |
 | Host dark / probe silent, volume intact (first read `GET /v1/servers/<id>` with the read-only token, §5b read-backs: the LUKS volume must still be attached, else stop and escalate) | Host or shipper failure, store not implicated | `gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f reason="<why>"` (keeps the LUKS volume by omission), then `gh workflow run cutover-inngest.yml -f op=resume` (#7228) |
 | `data_mount_src` is not `/dev/mapper/inngest-redis`, or the wrong-volume alert fires | The store is on a device the ledger does not claim | Incident (`soleur:incident`); do NOT replace the host until the probe row says which device is mounted |
-| `rollback_inversion` verdict from the property probe | The ledger claims LUKS but the measured store is not on `/dev/mapper/inngest-redis` | Incident; the verdict text names this section |
 | `op=luks-cutover` dispatched again | Refused on this host: the durable pointer is set and the flag is `done` (G1/G2) | Nothing to do |
-
-The probe's other verdicts are about the ledger or the probe pipeline, not about where the store is: `under_claim` is a
-ledger-only edit, `backstop_expired` cannot fire once the backstop row is gone, and `no_rows` / `producer_silent` /
-`row_unusable` / `ledger_unreadable` (exit 3) mean the probe pipeline went silent or unreadable (see the #9703 note under
-"Rules that stay in force"): that reads as "cannot establish", never as healthy.
 
 **Recovery routes that exist:** the host-replace route is the first row of the table above (note #7228: **every**
 replace strands the scheduler, whose one-dispatch recovery is `gh workflow run cutover-inngest.yml -f op=resume`).
@@ -307,7 +291,7 @@ replace strands the scheduler, whose one-dispatch recovery is `gh workflow run c
 `plaintext-exception`, answered the three `[2026-09-21 AMENDMENT (#8296)` cells of the Article 30 register, re-paused the
 wrong-volume alert and amended the C4 model and ADR-142. All of that assumed a plaintext volume to revert to. With the
 volume destroyed there is no plaintext exception to record, so none of those steps applies. This heading is kept
-(`op=luks-rollback` in the title) because the property probe's `ACTION REQUIRED` text still points readers at 5a.
+(`op=luks-rollback` in the title) so existing links to 5a still resolve.
 
 ---
 
@@ -343,13 +327,7 @@ Expect `404`. The same token form reads `GET /v1/servers/169426216` (`.server.vo
 
 - After retirement the live LUKS volume is the only copy of the store and `INNGEST_REDIS_LUKS_KEY` in Doppler
   `soleur-inngest/prd` is the only opener the host reads; an independent copy of the passphrase exists in Terraform state
-  (ADR-142 addendum 2026-10-08; protection is described in §5c and ADR-282 and takes
-  effect on the merge of PR #9925 and its apply).
-- **Do not delete `scripts/followthroughs/inngest-luks-property-8296.sh` until the dead-probe heartbeat feeder (#9703) is
-  armed.** That script is the only reporter that says "CANNOT ESTABLISH" for a silent probe pipeline; the wrong-volume
-  alert reads a silent probe as healthy until the feeder is wired. Its deletion sites are the probe, its test, the
-  `run_suite` line in `scripts/test-all.sh`, two `*.tsv` rows, the `test-affected-kb-consumers.baseline.txt` rows and the
-  5a pointer; the list is posted on #9703 when #8285 is closed.
+  (ADR-142 addendum 2026-10-08; protection is described in §5c and ADR-282 (accepted 2026-10-15)).
 - The dead on-host `rollback)` arm in `inngest-luks-cutover.sh`, its FSM comments and fixtures, and the dead
   plaintext-resolver arm in `cloud-init-inngest.yml` leave at the next planned Inngest host replace (#9786).
 
@@ -357,9 +335,10 @@ Expect `404`. The same token form reads `GET /v1/servers/169426216` (`.server.vo
 
 ## 5c. Sole-copy protection and key loss
 
-**Status: adopting (#9879, PR #9925, ADR-282).** Everything below that says a protection "is in force" becomes true only
-when the PR is merged, the merge's per-merge apply has landed one in-place update on `hcloud_volume.inngest_redis_luks`,
-and the read-back below has returned `protected`. Until then treat the live volume as unprotected (as §5a said).
+**Status: accepted 2026-10-15 (#10018, ADR-282).** The read-back below returned protected on 2026-10-15 (evidence: ADR-282,
+Addendum 2026-10-15). It is a point-in-time check of the delete-protection flag; re-run it after any merge that touches
+`apps/web-platform/infra/inngest-redis-luks.tf` (`soleur:postmerge` Phase 5.7 does) and after a sanctioned lift (each step below
+says what it expects).
 
 **What is pinned, and what is not.** The volume, the passphrase pair and the two Doppler cascade parents carry
 `prevent_destroy`; the volume also carries Hetzner delete protection. The attachment is deliberately NOT pinned, because
@@ -413,11 +392,12 @@ asserts presence of the read-only token; its scope is not verified here. The tok
 there is no `-v` and no `set -x`. A JSON string `"true"` reads as `read-failed`, not as `protected`. This read is a proxy
 for "Hetzner refuses a delete"; the refusal itself is not exercised. The command was exercised against a stubbed `doppler`
 and `curl` (fake token, no network) for protected, not-protected, HTTP 401, HTTP 404, network failure, non-JSON, a missing
-field, a missing token, an empty token and a failing `doppler` (no word); it has not been run against the real API.
+field, a missing token, an empty token and a failing `doppler` (no word). It was then run once against the real API, on
+2026-10-15, and printed `protected` (exit 0; ADR-282, Addendum 2026-10-15).
 
 **No drift check by log search.** The scheduled drift workflow does not print its plan to the job log (the plan goes to a
 file and, when drift is found, to the body or a comment of the open `infra-drift` issue, titled `infra: drift detected in
-<stack>`), so a log search would pass vacuously. Drift plans surface as comments on that issue; the read-back is the arbiter.
+<stack>`), so a log search would pass vacuously. Drift plans surface as comments on that issue; the read-back is the arbiter. The drift workflow's `sole-copy-protection-check` job (#9927 item 9) is the recurring distinct signal: it compares the live protection flag with the Terraform declaration and files its own issue titled `infra: Inngest store volume delete protection differs from Terraform (...)` when they differ (a sanctioned lift is quiet by design; see ADR-282, Addendum 2026-10-16).
 
 ### Delivery route and ordering
 
@@ -449,8 +429,8 @@ file and, when drift is found, to the body or a comment of the open `infra-drift
   means applying locally to update state. For the sole-copy addresses that is wrong: never apply locally, never untargeted,
   and there is no SSH step anywhere on this path (`hr-no-ssh-fallback-in-runbooks`). A drift reason at a sole-copy address
   is read from the plan text for that address and resolved through a reviewed change or the `manual-rerun` route.
-- The drift workflow's own output prints runnable `DELETE` recipes for other resources. Those recipes must never be pointed
-  at this volume or its Doppler secret.
+- The drift workflow's issue bodies print no `DELETE` recipe (removed by #9927 item 8c). Any reclaim of a rehearsal
+  survivor is a separately authorized call and must never be pointed at this volume or its Doppler secret.
 
 ### Per-loss-mode owner and procedure
 
@@ -623,6 +603,14 @@ and no `BASELINE_DECLARED_PROBES` bump were created.
   not a reason to open a shell.
 - **Rolling back later, on purpose.** There is no rollback: `op=luks-rollback` was retired by #8285 PR B and the
   plaintext volume it would have copied back to was destroyed on 2026-10-09 (§5a, §5b).
+- **After the host replace that carries #9786 (parked; not yet in force).** The template resolves the one LUKS volume.
+  An unpointed boot-reopen of a non-LUKS volume now FAILS `reopen_not_luks` (it used to skip with exit 0), and the
+  first-boot stage row for the no-pointer world reads `mode=unpointed` (was `plaintext_canonical`). A blank volume is
+  formatted only on a `rehearsal_*` config; on any other config the stage fails with `stage=unpointed_raw_refused`
+  (`inngest-luks-FAILED` phone-home carries the same stage), and there is no automated bring-up for a brand-new blank
+  `prd` volume, so that case needs a disaster-recovery procedure written when it is ever needed (ADR-142, addendum
+  2026-10-12). A lost pointer over an INTACT LUKS volume boots (opened and mounted) and is visible only as
+  `pointer=absent` on the `stage=resolve` row.
 
 ---
 
@@ -632,3 +620,11 @@ and no `BASELINE_DECLARED_PROBES` bump were created.
 - ADR-199 — the empty-store world, where the destructive recut is lawful instead.
 - `knowledge-base/engineering/operations/runbooks/inngest-server.md` — the host itself.
 - `betterstack-log-query.md` — the standing alarms over this source, including the wrong-volume alert.
+
+## 2026-10-13 — `reopen_mount`: what a heal row means (#10217)
+
+Since this change, a boot where the LUKS stage lost the volume-attach race is no longer fatal-by-construction. The boot-reopen unit now completes the mount for the arm it verified: a `SOLEUR_INNGEST_LUKS_STAGE`/`inngest-luks-stage` journald row `reopen_mount` after `reopen_ok` (or after the already-open `reopen_noop`, or after `reopen_skip_plaintext` on the ext4 arm) means the reopen wrote the `/mnt/data` (or `/mnt/data-luks`) fstab line and mounted it. Note two `reopen_mount` shapes share one stage name: the progress row (rc=0, fires BEFORE the umount on a wrong-source convergence — the detail string says what it is doing) and the completion row; and `reopen_device_wait` now emits rc=0 PROGRESS rows ("waiting up to 300s", "appeared after Ns") under the same stage name as the old rc=1 FATAL — rc is the discriminator, not the name.
+
+Failure surface: `reopen_fstab` (fstab write/install), `reopen_mount` (umount/mkdir/mount, and the new stacked-mountpoint refusal), `reopen_backing` (an already-open mapper not backed by the arm's verified device — the noop path now refuses this rather than entrenching it), and `reopen_pointer_lost` (empty pointer plus post-cutover evidence — the ext4-skip arm refuses rather than mounting the plaintext backstop). All leave the unit `failed`. **Phone-home scope:** `inngest-luks-reopen-ARM-FAILED` fires only from the first-boot runcmd arm — on boot ≥2 there is no `OnFailure=` reporter, so the detection path is the journald row itself → the hourly probe (`data_mount_devid=__UNREADABLE__` / `redis_active=inactive`) → the wrong-volume alarm. Conversely, the emit signature differs by boot number: on the FIRST boot (`enable --now` arm) a healthy run emits `reopen_noop` and NO `reopen_mount` (the stage already mounted). On boot ≥2 the mapper starts closed and this unit runs `Before=local-fs.target`, so a healthy boot shows `reopen_ok` then a `reopen_mount` completion row — it performs the mount itself (the fstab-generated unit cannot precede it: the mapper device does not exist until this unit's cryptsetup). A boot ≥2 with `reopen_ok` and NO `reopen_mount` is fine iff `/mnt/data` was already mounted from the mapper — the silent fast path.
+
+Incident that motivated it: iid 170091264 (first replace of the day) — `pointer_device_wait` FATAL at the 30 s bound while the attachment took ~80 s; reopen opened the mapper but could not mount; Redis refused (`not a mountpoint`); `bootstrap-done-DEGRADED`; `op=resume` G4 refused; healed only by a second replace (iid 170097260). Both readers now carry a counted 300 s bound (timeout-wrapped probe, one post-loop `udevadm settle`, post-settle re-probe) and the reopen self-heals the mount, so a lost race converges on the same boot — and any later boot heals the 170091264 shape outright.

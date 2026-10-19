@@ -586,6 +586,129 @@ _gd_n="$(find "$SANDBOX" -maxdepth 1 -type d -name 'gdboot.*' | grep -c . || tru
 if (( _gd_n >= _GD_POLLS_MIN )); then _report "S22 every gdboot scratch dir ($_gd_n) lands under the suite sandbox, not the shared TMPDIR" ok
 else _report "S22 gdboot scratch dirs land under the suite sandbox" bad "only $_gd_n of >= $_GD_POLLS_MIN found under $SANDBOX"; fi
 
+# ── S23  (#10175) the rotate freshness read: pins, credential route, and the pure verdicts ──────────────────
+d=$(mkshim s23 "$(spec '0|{"epoch":"1790000001"}|')")
+in_step "$d" "git_data_boot_complete_dt_read '$SANDBOX/s23.out' '$SANDBOX/s23.err' && echo DT_RC=0 || echo DT_RC=\$?" >/dev/null
+have    "S23a the dt read ran and returned 0"                      "DT_RC=0"
+if grep -qF "toUnixTimestamp(dt)" "$d/sql" && grep -qF "stage') = 'boot_complete'" "$d/sql" && grep -qF "host_name') = 'soleur-git-data'" "$d/sql"; then
+  _report "S23b the SQL reads the newest boot_complete epoch on host_name=soleur-git-data" ok
+else _report "S23b the SQL reads the newest boot_complete epoch on host_name=soleur-git-data" bad "sql: $(tr '\n' ' ' < "$d/sql" | cut -c1-200)"; fi
+if grep -qF "ORDER BY dt DESC LIMIT 1" "$d/sql"; then _report "S23c the SQL takes exactly the newest row" ok
+else _report "S23c the SQL takes exactly the newest row" bad "no ORDER BY dt DESC LIMIT 1"; fi
+if grep -q "wrong_table" "$d/tables"; then _report "S23d the library pins its OWN git-data tables (the harness's wrong table lost)" bad "wrong table reached the reader"
+else _report "S23d the library pins its OWN git-data tables (the harness's wrong table lost)" ok; fi
+if grep -qF -- "--only-secrets BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD" "$d/doppler_argv"; then
+  _report "S23e the credential route is --only-secrets with the three reader keys" ok
+else _report "S23e the credential route is --only-secrets with the three reader keys" bad "argv: $(cat "$d/doppler_argv")"; fi
+if grep -qF "DOPPLER_TOKEN=<unset> AWS_SECRET_ACCESS_KEY=<unset>" "$d/env"; then _report "S23f the reader runs with no Doppler or R2 credential in its environment" ok
+else _report "S23f the reader runs with no Doppler or R2 credential in its environment" bad "env: $(cat "$d/env")"; fi
+in_step "$d" "git_data_boot_complete_dt_read relative.out '$SANDBOX/e' && echo DT_RC=0 || echo DT_RC=\$?" >/dev/null
+have    "S23g a relative stdout target is refused (rc 78)"        "DT_RC=78"
+in_step "$d" "git_data_boot_complete_dt_read '$SANDBOX/s23.out' relative.err && echo DT_RC=0 || echo DT_RC=\$?" >/dev/null
+have    "S23g2 a relative stderr target is refused (rc 78) and names its caller" "DT_RC=78"
+have    "S23g3 the refusal carries the caller's own label"         "git_data_boot_complete_dt_read: refusing a relative stderr target"
+in_step "$d" "_git_data_bs_read lbl no_such_sql_fn '$SANDBOX/s23.out' '$SANDBOX/s23.err' && echo H_RC=0 || echo H_RC=\$?" >/dev/null
+have    "S23g4 the shared helper refuses an unknown sql function (rc 78)" "H_RC=78"
+# The pure verdicts. fresh() runs the freshness verdict and prints "<token>/<rc>".
+fresh() { in_step "$d" "t=\$(git_data_boot_complete_freshness '$1' '$2') && r=0 || r=\$?; echo \"V=\$t/\$r\"" >/dev/null; sed -n 's/^V=//p' "$SANDBOX/out"; }
+for _row in \
+  '{"epoch":"1790000010"}|1790000000|fresh/0|S23h epoch 10 s after created is fresh' \
+  '{"epoch":1790000010}|1790000000|fresh/0|S23i a numeric epoch parses' \
+  '{"epoch":"1790000001"}|1790000000|fresh/0|S23j one second after created is fresh (strictness boundary)' \
+  '{"epoch":"1790000000"}|1790000000|stale_boot_complete/1|S23k epoch EQUAL to created is stale (strict)' \
+  '{"epoch":"1789999999"}|1790000000|stale_boot_complete/1|S23l one second before created is stale' \
+  '|1790000000|boot_complete_unreadable/2|S23m an empty read is unreadable, never fresh' \
+  '{"x":"1"}|1790000000|boot_complete_unreadable/2|S23n a row without an epoch is unreadable' \
+  '{"epoch":"abc"}|1790000000|boot_complete_unreadable/2|S23o a non-numeric epoch is unreadable' \
+  '{"epoch":"1790000010"}||boot_complete_unreadable/2|S23p a missing created epoch is unreadable' \
+  '{"epoch":"1790000010"}|x|boot_complete_unreadable/2|S23q a non-numeric created epoch is unreadable' \
+  '{"epoch":"1790000005"}\n{"epoch":"1789000000"}|1790000000|fresh/0|S23r only the FIRST (newest) row decides'; do
+  IFS='|' read -r _r _c _want _label <<<"$_row"
+  _got="$(fresh "$(printf '%b' "$_r")" "$_c")"
+  if [[ "$_got" == "$_want" ]]; then _report "$_label" ok; else _report "$_label" bad "got $_got want $_want"; fi
+done
+# Hetzner servers body -> creation epoch. exactly one server, named soleur-git-data, parseable created.
+created() { in_step "$d" "git_data_server_created_epoch '$1' && echo '|RC=0' || echo \"|RC=\$?\"" >/dev/null; tr -d '\n' < "$SANDBOX/out"; }
+_one='{"servers":[{"name":"soleur-git-data","created":"2026-10-13T10:00:00+00:00"}]}'
+_reordered='{"meta":{"x":1},"servers":[{"id":1,"created":"2026-10-13T10:00:00+00:00","name":"soleur-git-data"}]}'
+_frac='{"servers":[{"name":"soleur-git-data","created":"2026-10-13T10:00:00.5Z"}]}'
+for _row in \
+  "${_one}|1791885600|RC=0|S23s one server, offset created" \
+  "${_reordered}|1791885600|RC=0|S23t different key order and extra fields" \
+  "${_frac}|1791885600|RC=0|S23u fractional seconds with Z" \
+  '{"servers":[]}||RC=1|S23v zero servers refuses' \
+  '{"servers":[{"name":"soleur-git-data","created":"2026-10-13T10:00:00+00:00"},{"name":"soleur-git-data","created":"2026-10-01T10:00:00+00:00"}]}||RC=1|S23w two servers (a replace caught half-way) refuses' \
+  '{"servers":[{"name":"soleur-git-data-old","created":"2026-10-13T10:00:00+00:00"}]}||RC=1|S23x a decoy name refuses' \
+  '{"servers":[{"name":"soleur-git-data"}]}||RC=1|S23y a missing created refuses' \
+  '{"servers":[{"name":"soleur-git-data","created":"yesterday"}]}||RC=1|S23z an unparseable created refuses' \
+  'not json||RC=1|S23za a non-JSON body refuses'; do
+  IFS='|' read -r _r _want_epoch _want_rc _label <<<"$_row"
+  _got="$(created "$_r")"
+  if [[ "$_got" == "${_want_epoch}|${_want_rc}" ]]; then _report "$_label" ok; else _report "$_label" bad "got '$_got' want '${_want_epoch}|${_want_rc}'"; fi
+done
+
+# ── S24  (#10138, W5) the wipe job's boot_complete FIELD read: the query, its pins, and the pure verdict ─────
+d=$(mkshim s24 "$(spec '0|{"epoch":"1790000010","luks_mounted":"yes"}|')")
+in_step "$d" "git_data_boot_fields_read '$SANDBOX/s24.out' '$SANDBOX/s24.err' && echo F_RC=0 || echo F_RC=\$?" >/dev/null
+have    "S24a the field read ran and returned 0"                   "F_RC=0"
+_s24_fields_ok=1
+for _f in luks_mounted fence_on_mapper erasure_probe plaintext_empty served_repos plaintext_volume plaintext_journal; do
+  grep -qF "JSONExtractString(raw,'$_f')" "$d/sql" || _s24_fields_ok=0
+done
+if (( _s24_fields_ok )) && grep -qF "toUnixTimestamp(dt) AS epoch" "$d/sql"; then _report "S24b the SQL projects the epoch and all seven fields the wipe reads" ok
+else _report "S24b the SQL projects the epoch and all seven fields the wipe reads" bad "sql: $(tr '\n' ' ' < "$d/sql" | cut -c1-300)"; fi
+if grep -qF "stage') = 'boot_complete'" "$d/sql" && grep -qF "host_name') = 'soleur-git-data'" "$d/sql" && grep -qF "ORDER BY dt DESC LIMIT 1" "$d/sql"; then
+  _report "S24c the SQL reads the NEWEST boot_complete row of host_name=soleur-git-data" ok
+else _report "S24c the SQL reads the NEWEST boot_complete row of host_name=soleur-git-data" bad "sql: $(tr '\n' ' ' < "$d/sql" | cut -c1-300)"; fi
+if grep -qF "remote(\$BS_TABLE)" "$d/sql" && grep -qF "s3Cluster(primary, \$BS_TABLE_S3)" "$d/sql" && ! grep -qF "dt >" "$d/sql"; then
+  _report "S24d the SQL unions the hot and archive tables and has NO time anchor (the row is old by construction)" ok
+else _report "S24d the SQL unions the hot and archive tables and has NO time anchor" bad "sql: $(tr '\n' ' ' < "$d/sql" | cut -c1-300)"; fi
+if grep -q "wrong_table" "$d/tables"; then _report "S24e the library pins its OWN git-data tables for the field read" bad "wrong table reached the reader"
+else _report "S24e the library pins its OWN git-data tables for the field read" ok; fi
+if grep -qF -- "--only-secrets BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD" "$d/doppler_argv" && grep -qF "DOPPLER_TOKEN=<unset> AWS_SECRET_ACCESS_KEY=<unset>" "$d/env"; then
+  _report "S24f the field read uses the same credential route and the same three-name scrub (no Doppler or R2 credential reaches the reader)" ok
+else _report "S24f the field read uses the same credential route and scrub" bad "argv: $(cat "$d/doppler_argv") env: $(cat "$d/env")"; fi
+in_step "$d" "git_data_boot_fields_read relative.out '$SANDBOX/e' && echo F_RC=0 || echo F_RC=\$?" >/dev/null
+have    "S24g a relative stdout target is refused (rc 78) with the caller's own label" "git_data_boot_fields_read: refusing a relative stdout target"
+_g='{"epoch":"1790000010","luks_mounted":"yes","fence_on_mapper":"yes","erasure_probe":"yes","plaintext_empty":"yes","served_repos":"0","plaintext_volume":"present","plaintext_journal":"dirty"}'
+_gj() { printf '%s' "$_g" | sed "s/\"plaintext_journal\":\"dirty\"/\"plaintext_journal\":\"$1\"/"; }
+_bad() { printf '%s' "$_g" | sed "s/\"$1\":\"[a-z0-9]*\"/\"$1\":\"$2\"/"; }
+_drop() { printf '%s' "$_g" | sed "s/\"$1\":\"[a-z0-9]*\",\{0,1\}//; s/,}/}/"; }
+for _row in \
+  "$_g|0|1790000000|ok plaintext_journal=dirty/0|S24h a fully good newest row passes and reports the journal state" \
+  "$(_gj clean)|0|1790000000|ok plaintext_journal=clean/0|S24i journal=clean passes too (it never gates)" \
+  "$(_drop plaintext_journal)|0|1790000000|ok plaintext_journal=unknown/0|S24j an absent journal field reads unknown, never gates" \
+  "$(_gj 'ev il;x')|0|1790000000|ok plaintext_journal=unknown/0|S24k an off-shape journal value is reported as unknown (no free text leaves the library)" \
+  "$_g|1|1790000000|wipe_boot_unreadable/2|S24l a failed read (rc 1) is unreadable even with good-looking rows" \
+  "|0|1790000000|wipe_boot_absent/1|S24m an answered read with no row is ABSENT, distinct from a failed read" \
+  "   |0|1790000000|wipe_boot_absent/1|S24n a whitespace-only answer is absent" \
+  "Code: 60. DB::Exception: boom|0|1790000000|wipe_boot_unreadable/2|S24o a bare exception line is unreadable, not absent" \
+  "$_g\nCode: 60. DB::Exception: boom|0|1790000000|wipe_boot_unreadable/2|S24p a good row followed by a mid-stream exception is a PARTIAL answer: unreadable" \
+  "{\"epoch\":\"1790000000\",\"luks_mounted\":\"yes\"}|0|1790000000|wipe_boot_predates_server/1|S24q a row at the server creation second belongs to the previous host (strict)" \
+  "{\"epoch\":\"1789999999\"}|0|1790000000|wipe_boot_predates_server/1|S24r a row before the server was created refuses" \
+  "{\"luks_mounted\":\"yes\"}|0|1790000000|wipe_boot_unreadable/2|S24s a row with no epoch is unreadable" \
+  "$_g|0||wipe_boot_unreadable/2|S24t a missing server created epoch is unreadable" \
+  "$_g|0|soon|wipe_boot_unreadable/2|S24u a non-numeric server created epoch is unreadable" \
+  "$(_bad luks_mounted no)|0|1790000000|wipe_boot_field_luks_mounted/1|S24v luks_mounted=no refuses and names the field" \
+  "$(_bad fence_on_mapper no)|0|1790000000|wipe_boot_field_fence_on_mapper/1|S24w fence_on_mapper=no refuses" \
+  "$(_bad erasure_probe maybe)|0|1790000000|wipe_boot_field_erasure_probe/1|S24x a third value is not yes" \
+  "$(_bad plaintext_empty no)|0|1790000000|wipe_boot_field_plaintext_empty/1|S24y plaintext_empty=no refuses" \
+  "$(_bad served_repos 3)|0|1790000000|wipe_boot_field_served_repos/1|S24z served_repos=3 refuses" \
+  "$(_bad served_repos '')|0|1790000000|wipe_boot_field_served_repos/1|S24za served_repos empty refuses" \
+  "$(_bad plaintext_volume absent)|0|1790000000|wipe_boot_field_plaintext_volume/1|S24zb plaintext_volume=absent (never attached to this instance) refuses" \
+  "$(_drop luks_mounted)|0|1790000000|wipe_boot_field_luks_mounted/1|S24zc a MISSING required field refuses (luks_mounted)" \
+  "$(_drop served_repos)|0|1790000000|wipe_boot_field_served_repos/1|S24zd a MISSING required field refuses (served_repos)" \
+  "$(_bad luks_mounted no | sed 's/"served_repos":"0"/"served_repos":"9"/')|0|1790000000|wipe_boot_field_luks_mounted/1|S24ze two bad fields: the first in roster order is named" \
+  "$_g\n$(_bad luks_mounted no)|0|1790000000|ok plaintext_journal=dirty/0|S24zf only the FIRST (newest) row decides: an older bad row behind a good one" \
+  "$(_bad luks_mounted no)\n$_g|0|1790000000|wipe_boot_field_luks_mounted/1|S24zg only the FIRST (newest) row decides: a bad newest row over an older good one" \
+  '{"plaintext_volume":"present","served_repos":0,"zzz":{"a":[1]},"plaintext_empty":"yes","erasure_probe":"yes","fence_on_mapper":"yes","luks_mounted":"yes","epoch":1790000010,"note":"CANARY-f00d"}|0|1790000000|ok plaintext_journal=unknown/0|S24zh (must-PASS) another key order, a numeric epoch and served_repos 0, extra fields, no journal'; do
+  IFS='|' read -r _r _rc _c _want _label <<<"$_row"
+  _got="$(in_step "$d" "t=\$(git_data_boot_fields_verdict '$_rc' '$(printf '%b' "$_r")' '$_c') && r=0 || r=\$?; echo \"V=\$t/\$r\"" >/dev/null; sed -n 's/^V=//p' "$SANDBOX/out")"
+  if [[ "$_got" == "$_want" ]]; then _report "$_label" ok; else _report "$_label" bad "got '$_got' want '$_want'"; fi
+done
+if grep -qF "CANARY" "$SANDBOX/out"; then _report "S24zi no field value from the row is echoed (the canary in an extra field never reaches the output)" bad "canary printed"
+else _report "S24zi no field value from the row is echoed (the canary in an extra field never reaches the output)" ok; fi
+
 # ── Assertion count: EXACT, printf + exit, never through the helper it backstops ──
 _total=$((pass + fail))
 # RAISED 146 -> 184 (#8211), ITEMISED:
@@ -600,7 +723,14 @@ _total=$((pass + fail))
 #    38
 # RAISED 184 -> 185 (#5274): S20i, plaintext_journal=clean does not gate the poll.
 # RAISED 185 -> 186 (#9677): S22, the library's gdboot scratch lands under the suite sandbox.
-_EXACT=186
+# RAISED 213 -> 216 (#10175 review): S23g2/g3 relative stderr target and its label, S23g4 the shared helper refuses an unknown sql function.
+# RAISED 186 -> 213 (#10175), ITEMISED: 7 S23a-g the freshness read's SQL, pins, credential route and
+#     relative-target refusal; 11 S23h-r the freshness verdicts (strict boundary both sides, unreadable arms,
+#     newest row decides); 9 S23s-za the Hetzner created parse (one server only, decoy, key order).
+# RAISED 216 -> 251 (#10138), ITEMISED: 7 S24a-g the wipe field read's SQL, pins, credential route and relative-target
+#     refusal; 27 S24h-zh the pure verdict (ok + journal reporting, absent vs unreadable, strict freshness, each required
+#     field wrong or missing, newest row decides, a must-PASS shape); 1 S24zi no row value is echoed.
+_EXACT=251
 if (( _total != _EXACT )); then
   printf 'FAIL: assertion count: %d ran, expected exactly %d — coverage changed; update _EXACT deliberately\n' "$_total" "$_EXACT" >&2
   exit 1

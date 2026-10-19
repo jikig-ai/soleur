@@ -47,7 +47,7 @@ category: integration-issues
 module: git-workflow
 related:
   - knowledge-base/project/learnings/2026-05-15-fail-closed-redaction-enables-committed-default-output.md
-  - knowledge-base/project/plans/2026-05-15-feat-code-to-prd-skill-plan.md
+  - knowledge-base/project/plans/archive/20261013-014038-2026-05-15-feat-code-to-prd-skill-plan.md
 issue: 2726
 
 ## Prevention

@@ -2928,7 +2928,57 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // TRUTH: the event is read with a Sentry API token (Doppler prd); the event store has no anonymous query
   // form. NO SUBSTITUTE: the tag and user shape is pinned offline by cc-dispatcher-bash-sandbox-sentry-path.test.ts,
   // but that verifies code, not the deployed event stream. Genuine.
-  const BASELINE_DECLARED_PROBES = 62;
+  // #9995 (2026-10-11): +1 (62 -> 63) for `2026-10-11-fix-mu1-ac2-dev-scheduled-github-app-credential-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash scripts/probe-github-app-mint.sh`) reads GITHUB_APP_{ID,PRIVATE_KEY} via
+  // `doppler run -p soleur -c dev_scheduled` and expects a `GITHUB_APP_MINT` line. NO SUBSTITUTE: a private
+  // key's mint liveness has no unauthenticated read path — the JWT only exists signed. Genuine.
+  // #10045 (2026-10-12): +1 (63 -> 64) for `2026-10-11-chore-kdeny-kernel-stream-read-grant-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash scripts/betterstack-query.sh --since 6h --limit 100 --grep 'section=kdeny'`)
+  // reads the Better Stack Telemetry API under `doppler run -p soleur -c prd_terraform`; the emitted
+  // kdeny bundle's live content has no unauthenticated read path. NO SUBSTITUTE: the grant's host-side
+  // effectiveness (sudo policy accept) is asserted by the terraform_data execute probes at apply time,
+  // not repo-readable — the warehouse query is the only observable of the post-apply src=journal arm. Genuine.
+  // #10003 (2026-10-12): +1 (64 -> 65) for `2026-10-12-fix-egress-gw-tcp-open-bounded-retry-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`scripts/betterstack-query.sh --since 1h --grep egress_gw_probe`) reads
+  // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform). NO SUBSTITUTE: the property is the
+  // per-host `egress_gw_probe result=ok` row (journald -> vector -> the Logs warehouse), which has no
+  // unauthenticated read path; the host itself is no-SSH. Genuine.
+  // #10054 (2026-10-12): +1 (65 -> 66) for `2026-10-12-feat-accept-hosted-must-ask-lane-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the soak probe reads stored Better Stack rows through the ClickHouse HTTP connection credential (Doppler
+  // prd_terraform); the warehouse has no unauthenticated read path. NO SUBSTITUTE: the decode and isolation are pinned
+  // offline by the probe's own fixture suite, but that verifies code, not the stored stream. Genuine.
+  // #9545 (2026-10-15): +1 (67 -> 68, after #7530's 66 -> 67 below) for `2026-10-15-feat-workspace-egress-audit-log-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: `scripts/egress-audit-retention-check.sh` reads the rollup table through the Supabase PostgREST path with the
+  // prd service-role key (Doppler soleur/prd): RLS is on with no member policy and every privilege is revoked from
+  // anon/authenticated, so the table has no unauthenticated read path. NO SUBSTITUTE: the migration's verify SQL and the
+  // live-database harness prove the schema, grants and sweep, but not that rows are fresh or that old rows are gone in
+  // the stored data. Genuine.
+  // #7530 (2026-10-15): +1 (66 -> 67) for `2026-10-14-fix-registry-phase2-batch-htpasswd-stdin-clientip-alert-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash scripts/followthroughs/registry-clientip-alert-7530.sh`) reads Better Stack through the
+  // ClickHouse HTTP connection credential (BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}, Doppler soleur/prd_terraform) and
+  // grades the stored registry log stream and the live alert predicate. NO SUBSTITUTE: the warehouse has no
+  // unauthenticated read path and the registry host is no-SSH; the offline suites verify the code and the SQL text,
+  // not the stored stream or the engine. Genuine.
+  // #7521 (2026-10-16): +1 (68 -> 69) for `2026-10-16-feat-standing-registry-fill-rate-alarm-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`doppler run -p soleur -c prd_terraform -- bash scripts/followthroughs/zot-fill-rate-7341.sh`)
+  // reads Better Stack through the ClickHouse HTTP connection credential (BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD},
+  // Doppler soleur/prd_terraform) and grades the stored SOLEUR_ZOT_DISK fill series. NO SUBSTITUTE: the warehouse has no
+  // unauthenticated read path and the registry host is no-SSH; the offline suites verify the code and the verdict
+  // classification, not the stored stream. Genuine.
+  // #10445 (2026-10-18): +1 (69 -> 70) for `2026-10-16-fix-hosted-agent-bash-apply-seccomp-userns-eperm-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash scripts/followthroughs/sandbox-readback-10445.sh`) reads the host's /hooks/deploy-status
+  // through the deploy-webhook HMAC (Doppler soleur/prd_terraform) plus the Cloudflare Access service token, and `gh api`
+  // compare with GH_TOKEN. NO SUBSTITUTE: the deploy-status hook has no unauthenticated read path and the host is no-SSH;
+  // the offline suite drives the script against stubs and proves the verdict logic, not the live deployed state. Genuine.
+  const BASELINE_DECLARED_PROBES = 70;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

@@ -89,7 +89,7 @@
 #     uploads the resulting report as a per-release GitHub release
 #     asset. Avoids commit-storm + write-to-main authorization surface.
 #
-# Plan: knowledge-base/project/plans/2026-05-15-feat-sentry-monitors-alerts-adapt-plan.md
+# Plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-15-feat-sentry-monitors-alerts-adapt-plan.md
 # Phase: 1 (script) + 2.1 (operator run) + 2.2 (CI re-run on release)
 
 

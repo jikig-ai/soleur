@@ -160,8 +160,37 @@ assert "bootstrap block precedes web-platform start" "(( BOOTSTRAP_LINE < WEBPLA
 # --- AC4: extracted shell snippet is POSIX clean ---
 echo ""
 echo "--- AC4: extracted shell snippet POSIX-portable ---"
+
+# Session scratch root (#7004, ADR-250): bind one owned soleur-run.<pid>.* root
+# under the effective TMPDIR and export TMPDIR at it, so every mktemp below —
+# including strays the growing trap chain does not name — lands inside a root
+# the reapers (tmpfs-guard Reaper 3, session-start sweep) can attribute and
+# reclaim without name heuristics. Mirrors the scripts/test-all.sh adoption
+# block. Opportunistic: an absent lib (e.g. the mutation battery's sandbox,
+# which reproduces only infra/ + .github/) degrades to the pre-#7004 shape and
+# never blocks the suite; under run-registered-suites.sh the parent's exported
+# SOLEUR_SCRATCH_SESSION_ROOT makes begin a no-op. "${TMPDIR:-/tmp}" — not a
+# bare "$TMPDIR" — because `set -u` aborts on the unbound expansion even under
+# `|| true`, and /tmp is mktemp's own default when TMPDIR is unset. The
+# explicit base is load-bearing a second way: an explicit arg is honored
+# as-given (scratch-root.sh only normalizes /tmp-subdir bases it DERIVES), so
+# the residue suite's private measured TMPDIR ($BASE/d.<leaf>) stays private —
+# a no-arg or normalized call would lift the root to real /tmp and make that
+# leaf's delta arm measure the wrong directory.
+_SCRATCH_LIB="$SCRIPT_DIR/../../../scripts/lib/scratch-root.sh"
+if [[ -f "$_SCRATCH_LIB" ]]; then
+  # shellcheck source=scripts/lib/scratch-root.sh
+  source "$_SCRATCH_LIB" || true
+fi
+if declare -F soleur_scratch_session_begin >/dev/null 2>&1; then
+  soleur_scratch_session_begin "${TMPDIR:-/tmp}" || true
+fi
+# Defined unconditionally so every arm of the growing EXIT trap below can name
+# the cleanup (ADR-129: spliced into the existing chain, never a second trap).
+declare -F _soleur_scratch_cleanup >/dev/null 2>&1 || _soleur_scratch_cleanup() { :; }
+
 SNIPPET_FILE=$(mktemp -t inngest-runcmd-XXXXXX.sh)
-trap 'rm -f "$SNIPPET_FILE"' EXIT
+trap 'rm -f "$SNIPPET_FILE"; _soleur_scratch_cleanup || true' EXIT
 
 # Extract the runcmd block following the Inngest bootstrap comment.
 # The block ends at the next YAML sibling key (line starting with `  - |`
@@ -232,6 +261,49 @@ assert "deploy-inngest-bootstrap.sudoers exists"         "[[ -s '$SUDOERS_SRC' ]
 assert "cloud-init inline block is non-empty"            "[[ -n \"\$CLOUD_INIT_SUDOERS\" ]]"
 assert "sudoers source and cloud-init inline match"      "[[ \"\$SUDOERS_CONTENT_ONLY\" == \"\$CLOUD_INIT_SUDOERS\" ]]"
 assert "ci-deploy.sh invokes the sudoers-pinned path"    "grep -qE '/usr/bin/bash /tmp/inngest-extract/inngest-bootstrap.sh' '$SCRIPT_DIR/ci-deploy.sh'"
+
+# --- #10045: KDENY_KERNEL_STREAM argv lockstep (plan Guard 1) -------------------------------
+# sudo matches the resolved command PLUS argv literally, so four text surfaces must name the
+# SAME byte string or the grant denies (fails closed — never widens): the Cmnd_Alias body in
+# (a) the .sudoers source and (b) its comment-stripped cloud-init mirror, (c) the argv
+# _canary_kdeny_read passes after `sudo -n` in ci-deploy.sh, and (d) the `runuser -u deploy --
+# sudo -n …` execute probes in BOTH server.tf terraform_data bridges. The granted argv is
+# pinned below, byte-exact, per the interface contract — pinning the literal (not just surface
+# equality) also fails the all-surfaces-drift-together shape.
+echo ""
+echo "--- #10045: KDENY_KERNEL_STREAM argv lockstep ---"
+CIDEPLOY="$SCRIPT_DIR/ci-deploy.sh"
+SERVER_TF="$SCRIPT_DIR/server.tf"
+KDENY_ARGV='/usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat'
+# Alias body extraction: split the Cmnd_Alias line on its FIRST `=` only — the argv itself
+# carries `=` inside `--since=-5min`, so `cut -d= -f2` would truncate mid-flag.
+KDENY_ALIAS_SRC=$(sed -nE 's/^Cmnd_Alias KDENY_KERNEL_STREAM[[:space:]]*=[[:space:]]*//p' "$SUDOERS_SRC")
+KDENY_ALIAS_CI=$(sed -nE 's/^Cmnd_Alias KDENY_KERNEL_STREAM[[:space:]]*=[[:space:]]*//p' <<<"$CLOUD_INIT_SUDOERS")
+# Call-site extraction: everything after `sudo -n /usr/bin/journalctl ` up to a shell metachar,
+# with the ` 2>&1` capture tail cut — the runuser probes are extracted the same way, from each
+# `runuser -u deploy -- sudo -n …` line (one per terraform_data bridge).
+KDENY_CALL_ARGV=$(grep -vE '^[[:space:]]*#' "$CIDEPLOY" | grep -oE 'sudo -n /usr/bin/journalctl [^|")]*' | sed -E 's/^sudo -n //; s/ *2>&1 *$//; s/ +$//' | sort -u || true)
+KDENY_PROBE_ARGV=$(grep -vE '^[[:space:]]*#' "$SERVER_TF" | grep -oE 'runuser -u deploy -- sudo -n /usr/bin/journalctl [^"]*' | sed -E 's/^.*sudo -n //; s/ *>.*//; s/ +$//' | sort -u || true)
+assert "KDENY_KERNEL_STREAM alias defined in the sudoers source" \
+  "grep -qE '^Cmnd_Alias KDENY_KERNEL_STREAM = ' '$SUDOERS_SRC'"
+assert "KDENY grant line is the ANCHORED whole line for deploy (no appended commands hide in the substring)" \
+  "grep -qxF 'deploy ALL=(root) NOPASSWD: KDENY_KERNEL_STREAM' '$SUDOERS_SRC'"
+assert "exactly ONE non-comment line in the sudoers source names journalctl at all — a direct grant, a space-less alias, an appended command, or an include directive cannot hide a wider argv" \
+  "(( \$(grep -vE '^[[:space:]]*#|^[[:space:]]*$' '$SUDOERS_SRC' | grep -cF journalctl) == 1 ))"
+assert "the sudoers source carries no include directive that could pull a grant from outside the file" \
+  "! grep -qE '^[[:space:]]*[@#]include' '$SUDOERS_SRC'"
+assert "the alias argv (first-= split) is identical across the sudoers source and the cloud-init inline copy, and is the pinned grant argv" \
+  "[[ \"\$KDENY_ALIAS_SRC\" == \"\$KDENY_ARGV\" && \"\$KDENY_ALIAS_CI\" == \"\$KDENY_ARGV\" ]]"
+assert "the cloud-init inline copy carries the ANCHORED grant line for deploy" \
+  "grep -qxF 'deploy ALL=(root) NOPASSWD: KDENY_KERNEL_STREAM' <<<\"\$CLOUD_INIT_SUDOERS\""
+assert "ci-deploy.sh attempts the privileged journal read exactly once, timeout-bounded outside sudo" \
+  "(( \$(grep -cF 'timeout -k 1 3 sudo -n /usr/bin/journalctl' '$CIDEPLOY' || true) == 1 ))"
+assert "the ci-deploy.sh call-site argv equals the pinned grant argv (alias<->caller lockstep)" \
+  "[[ \"\$KDENY_CALL_ARGV\" == \"\$KDENY_ARGV\" ]]"
+assert "both terraform_data bridges carry the runuser execute probe for the granted read" \
+  "(( \$(grep -cF 'runuser -u deploy -- sudo -n /usr/bin/journalctl ' '$SERVER_TF' || true) == 2 ))"
+assert "the execute-probe argv in server.tf is one identical string equal to the pinned grant argv" \
+  "[[ \"\$KDENY_PROBE_ARGV\" == \"\$KDENY_ARGV\" ]]"
 _COND_BEFORE=$TOTAL
 if command -v visudo >/dev/null 2>&1; then
   assert "sudoers source parses via visudo -cf"          "visudo -cf '$SUDOERS_SRC' >/dev/null"
@@ -398,6 +470,84 @@ PIN_REF_COUNT=$(grep -coE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$C
 DISTINCT_PINS=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$CLOUD_INIT" | sort -u | wc -l)
 assert "both soleur-inngest-bootstrap pin refs (IREF + ZIREF) present and share one tag (found $PIN_REF_COUNT refs, $DISTINCT_PINS distinct)" \
   "(( PIN_REF_COUNT == 2 && DISTINCT_PINS == 1 ))"
+
+# --- AC6c (#6780): CROSS-FILE pin consistency — AC6b's sibling binds to cloud-init.yml's
+#     two refs only; the dedicated host's second ref pair (cloud-init-inngest.yml IREF +
+#     ZIREF) was unguarded for agreement. A partial bump across the two files (web bumped,
+#     dedicated left stale — or the reverse) red-lines nothing until this guard: count all
+#     full `vX.Y.Z@sha256:<64hex>` refs across BOTH files — 4 expected (one IREF + one ZIREF
+#     each) — and require ONE distinct tag+digest. Tag-only distinct would miss a same-tag
+#     digest mismatch, so the tag@digest pair is compared whole.
+echo ""
+echo "--- AC6c: cross-file pin-consistency (all 4 bootstrap tag@digest refs across both cloud-init files agree) ---"
+AC6C_REFS="$( { grep -ohE 'jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}' \
+    "$CLOUD_INIT" "$SCRIPT_DIR/cloud-init-inngest.yml" || true; } | sort -u)"
+AC6C_TOTAL="$( { grep -oE 'jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}' \
+    "$CLOUD_INIT" "$SCRIPT_DIR/cloud-init-inngest.yml" || true; } | wc -l)"
+AC6C_DISTINCT="$(printf '%s\n' "$AC6C_REFS" | grep -c . || true)"
+assert "AC6c: all four tag+digest pin sites present (IREF+ZIREF in each cloud-init; found $AC6C_TOTAL)" \
+  "(( AC6C_TOTAL == 4 ))"
+assert "AC6c: one distinct tag@digest across both files (partial bump -> distinct 2; found $AC6C_DISTINCT)" \
+  "(( AC6C_DISTINCT == 1 ))"
+# --- AC6d: the scheduled published-digest reconciler's wiring (#4699) ---
+# AC6 above asserts pin == semver-max tag NAME; it cannot see a tag's GHCR
+# *content* move — a non-`mirror_only` workflow_dispatch re-publish of an
+# existing tag (the designed CVE rebuild hatch) moves the tag's digest while
+# "tag exists" stays true everywhere, and GuardA's own commentary names that
+# residual. The scheduled reconciler —
+# .github/workflows/scheduled-vinngest-digest-freshness.yml driving
+# .github/scripts/vinngest-digest-freshness.sh — closes it: per merged tag,
+# live `crane digest` vs the digest the pin history recorded. These are WIRING
+# pins ("the check exists and is dispatched, the script carries the
+# derivation + the selector"): the live resolution itself cannot run here —
+# crane is not provisioned in this job (GuardA's commentary records why adding
+# it would red every PR), so the behavioral half is
+# .github/scripts/test/test-vinngest-digest-freshness.sh, which is
+# merge-blocking via run-all.sh's `test-*.sh` glob while this suite stays
+# advisory.
+echo ""
+echo "--- AC6d: scheduled published-digest reconciler — wiring pins (#4699) ---"
+AC6D_WF="$SCRIPT_DIR/../../../.github/workflows/scheduled-vinngest-digest-freshness.yml"
+AC6D_SH="$SCRIPT_DIR/../../../.github/scripts/vinngest-digest-freshness.sh"
+assert "AC6d: the reconciler workflow is readable" "[[ -r '$AC6D_WF' ]]"
+assert "AC6d: the workflow is scheduled AND dispatchable (a deleted schedule is a silent dead check)" \
+  "grep -qE '^  schedule:' '$AC6D_WF' && grep -qF 'cron:' '$AC6D_WF' && grep -qF 'workflow_dispatch' '$AC6D_WF'"
+assert "AC6d: the workflow invokes the comparator script" \
+  "grep -qF 'vinngest-digest-freshness.sh' '$AC6D_WF'"
+# The recorded digest is derived from git pin HISTORY — a shallow or tagless
+# checkout silently empties it, so the fetch wiring is part of the contract.
+assert "AC6d: the workflow checks out full history AND tags (fetch-depth: 0 + fetch-tags: true)" \
+  "grep -qF 'fetch-depth: 0' '$AC6D_WF' && grep -qF 'fetch-tags: true' '$AC6D_WF'"
+# crane reads GHCR through the docker login the bump job's recipe provisions;
+# packages: read + docker/login-action are the auth the manifest HEADs need.
+assert "AC6d: the workflow logs into GHCR with packages: read" \
+  "grep -qF 'packages: read' '$AC6D_WF' && grep -qF 'docker/login-action' '$AC6D_WF'"
+assert "AC6d: the comparator script is readable" "[[ -r '$AC6D_SH' ]]"
+assert "AC6d: the script derives the recorded digest from git pin history (git log -G over the pin files)" \
+  "grep -qE 'git .*log .*-G ' '$AC6D_SH' && grep -qF 'cloud-init' '$AC6D_SH'"
+assert "AC6d: the script resolves the live digest through the crane seam" \
+  "grep -qF 'VDF_CRANE' '$AC6D_SH' && grep -qE 'digest ' '$AC6D_SH'"
+
+# Selector byte-equality, modulo the ONE intended delta: AC6 keeps `| tail -1`
+# (semver-MAX only — the blind spot this whole check exists to close), the
+# reconciler drops it so ALL merged tags are classified. Extract both blocks by
+# structure (a `NAME=$(git -C ... tag --merged` START line that is a
+# continuation — NOT a self-contained `|| true)` one-liner — through the line
+# ending `|| true)`), normalize the variable name + dir operand, strip the
+# tail -1 from the AC6 side, and require byte equality — a selector that
+# re-imported the max-only truncation, or any other drift, differs here and
+# reds. The variable names are deliberately NOT spelled below: the bump
+# battery's `checker-one-write` pin counts LATEST_TAG writes in this file.
+ac6d_slice() { # <file> — print the file's tag-selector block's lines
+  awk '$0 ~ /^[A-Za-z_]+=\$\(git -C .*tag --merged HEAD --list/ && $0 !~ /\|\| true\)/ {on=1} on {print} on && /\|\| true\)[[:space:]]*$/ {exit}' "$1"
+}
+AC6D_SEL_A="$(ac6d_slice "${BASH_SOURCE[0]}" \
+  | sed -e 's/^[A-Za-z_]*=/SEL=/' -e 's/"\$SCRIPT_DIR"/"$DIR"/' -e 's/ | tail -1//' -e 's/^[[:space:]]*//')"
+AC6D_SEL_B="$(ac6d_slice "$AC6D_SH" \
+  | sed -e 's/^[A-Za-z_]*=/SEL=/' -e 's/"\$REPO_DIR"/"$DIR"/' -e 's/^[[:space:]]*//')"
+if [[ -n "$AC6D_SEL_A" && "$AC6D_SEL_A" == "$AC6D_SEL_B" ]]; then AC6D_SEL_EQ=1; else AC6D_SEL_EQ=0; fi
+assert "AC6d: the reconciler's tag selector is AC6's selector MINUS the tail -1 (all merged tags, not semver-max only)" \
+  "(( AC6D_SEL_EQ == 1 ))"
 
 # --- AC7: web_colocate_inngest gate (#6178) — structural smoke ---
 # The "Bootstrap Inngest server on first boot" runcmd item is wrapped in a col-0
@@ -763,7 +913,9 @@ echo "--- Guard 1 (#7462): zot-primary bootstrap pull arm (dedicated host) ---"
 DED_CODE_FILE="$(mktemp -t inngest-ci-code-XXXXXX.yml)"
 DED_BLOCK_FILE="$(mktemp -t inngest-ci-block-XXXXXX.sh)"
 # The existing EXIT trap already removes SNIPPET_FILE; extend it rather than replace it.
-trap 'rm -f "$SNIPPET_FILE" "$DED_CODE_FILE" "$DED_BLOCK_FILE"' EXIT
+# `_soleur_scratch_cleanup` rides every arm of this growing chain — an arm left
+# unspliced would leak the whole session root on a mid-chain failure exit.
+trap 'rm -f "$SNIPPET_FILE" "$DED_CODE_FILE" "$DED_BLOCK_FILE"; _soleur_scratch_cleanup || true' EXIT
 sed -E 's/^[[:space:]]*#.*$//' "$INNGEST_CI_YML" > "$DED_CODE_FILE"
 
 # The bootstrap block, isolated. #8562 MOVED it out of runcmd into the write_files script that
@@ -1133,7 +1285,7 @@ echo "--- Guard 1b (#6500): per-arm Sentry stage emits (dedicated host) ---"
 G1B_BEFORE="$TOTAL"
 ARM_ZOT="$(mktemp -t inngest-arm-zot-XXXXXX)"
 ARM_FB="$(mktemp -t inngest-arm-fb-XXXXXX)"
-trap 'rm -f "$SNIPPET_FILE" "$DED_CODE_FILE" "$DED_BLOCK_FILE" "$ARM_ZOT" "$ARM_FB"' EXIT
+trap 'rm -f "$SNIPPET_FILE" "$DED_CODE_FILE" "$DED_BLOCK_FILE" "$ARM_ZOT" "$ARM_FB"; _soleur_scratch_cleanup || true' EXIT
 # DEPTH-AWARE (review P1-2/P2-3): the split happens only at nesting depth 0, and only depth-0
 # statements are emitted into an arm file, because a statement inside a nested block (`if false;
 # then … fi`, a `case`, a loop) is not an unconditional statement of the arm. A nested `else` must
@@ -1467,6 +1619,55 @@ assert "GuardA2 anti-vacuity: the section ran its full inventory (expected 9, ra
 rm -rf "$GA2_TMP"
 
 # =========================================================================================
+# Guard A3 (#7596) — the pinned image provably carries the boot-trace allowlist
+# =========================================================================================
+# Guard A byte-compares every baked carrier at the pinned tag, so the image's
+# vector.toml IS HEAD's — but that is a structural binding, not the content
+# claim #7596 needs. This block names it: the image the NEXT
+# inngest-host-replace boots carries BOTH #7457 Source-4 identifiers,
+# `inngest-boot-phone-home` and `inngest-bs-token-restage`, in the baked
+# vector.toml. Asserted at the PINNED TAG's tree — HEAD's vector.toml is not
+# the image, the pinned tag's tree is — and again at HEAD, so a HEAD-side
+# removal reds too. A future pin to a tag lacking either entry reds HERE,
+# before the bake, instead of shipping the allowlist-shaped silence #7596
+# records. Green-guard today: vinngest-v1.1.52's tree carries both
+# (journald-config.test.sh CF-4 covers the HEAD-side lockstep semantics).
+#
+# Own counted span, own floor — never folded into the GuardA `expected 11`
+# inventory (a block inside that span is fungible against it; measured).
+GUARDA3_BEFORE="$TOTAL"
+GA3_VEC_TAG=""
+GA3_HSJ_TAG=""
+if (( GA_TAG_OK == 1 )); then
+  GA3_VEC_TAG="$(git -C "$SCRIPT_DIR" show "$GA_TAG_REF:apps/web-platform/infra/vector.toml" 2>/dev/null || true)"
+  # Same extractor shape as journald-config.test.sh's HSJ — scope membership to
+  # Source 4's block, not the whole file.
+  GA3_HSJ_TAG="$(awk '/^\[sources\.host_scripts_journald\]/{f=1;next} f&&/^\[[a-z]/{f=0} f' <<<"$GA3_VEC_TAG")"
+fi
+# An unresolvable pinned tag (or a vector.toml absent from its tree) yields an
+# EMPTY blob — the named FAIL verdict below, never "nothing to compare, pass".
+assert "GuardA3: vector.toml resolves at the pinned tag $GA_TAG_REF (non-empty blob)" \
+  "[[ -n \"\$GA3_VEC_TAG\" ]]"
+assert "GuardA3: the pinned tag's vector.toml carries the Source-4 (host_scripts_journald) block" \
+  "[[ -n \"\$GA3_HSJ_TAG\" ]] && grep -qF 'include_matches.SYSLOG_IDENTIFIER' <<<\"\$GA3_HSJ_TAG\""
+assert "GuardA3: the pinned tag allowlists \"inngest-boot-phone-home\"" \
+  "grep -qE '^[[:space:]]*\"inngest-boot-phone-home\",\$' <<<\"\$GA3_HSJ_TAG\""
+assert "GuardA3: the pinned tag allowlists \"inngest-bs-token-restage\"" \
+  "grep -qE '^[[:space:]]*\"inngest-bs-token-restage\",\$' <<<\"\$GA3_HSJ_TAG\""
+
+GA3_HSJ_HEAD="$(awk '/^\[sources\.host_scripts_journald\]/{f=1;next} f&&/^\[[a-z]/{f=0} f' "$SCRIPT_DIR/vector.toml")"
+assert "GuardA3: HEAD's vector.toml carries the Source-4 block" \
+  "[[ -n \"\$GA3_HSJ_HEAD\" ]] && grep -qF 'include_matches.SYSLOG_IDENTIFIER' <<<\"\$GA3_HSJ_HEAD\""
+assert "GuardA3: HEAD allowlists \"inngest-boot-phone-home\"" \
+  "grep -qE '^[[:space:]]*\"inngest-boot-phone-home\",\$' <<<\"\$GA3_HSJ_HEAD\""
+assert "GuardA3: HEAD allowlists \"inngest-bs-token-restage\"" \
+  "grep -qE '^[[:space:]]*\"inngest-bs-token-restage\",\$' <<<\"\$GA3_HSJ_HEAD\""
+
+GUARDA3_ASSERTIONS=$(( TOTAL - GUARDA3_BEFORE ))
+assert "GuardA3 anti-vacuity: the section ran its full inventory (expected 7, ran $GUARDA3_ASSERTIONS)" \
+  "(( GUARDA3_ASSERTIONS == 7 ))"
+
+# =========================================================================================
 # Guard D (#7695) — quoted delimiters on generated artifacts
 # =========================================================================================
 # PROPERTY. Every heredoc that writes a generated host artifact uses a NON-EXPANDING
@@ -1668,7 +1869,7 @@ if command -v terraform >/dev/null 2>&1; then
   NG1_DIR="$(mktemp -d -t nicg1-XXXXXX)"
   # Extends the Guard 1b trap rather than replacing it: a bare `rm -rf "$NG1_DIR"` here leaked
   # the five temp files above on every run wherever terraform is installed.
-  trap 'rm -f "$SNIPPET_FILE" "$DED_CODE_FILE" "$DED_BLOCK_FILE" "$ARM_ZOT" "$ARM_FB"; rm -rf "$NG1_DIR"' EXIT
+  trap 'rm -f "$SNIPPET_FILE" "$DED_CODE_FILE" "$DED_BLOCK_FILE" "$ARM_ZOT" "$ARM_FB"; rm -rf "$NG1_DIR"; _soleur_scratch_cleanup || true' EXIT
   NG1_RENDER="$NG1_DIR/rendered.yml"
   bash "$SCRIPT_DIR/inngest-userdata-budget.sh" "$NG1_RENDER" > "$NG1_DIR/budget.log" 2>&1 || true
   NG1_RENDER_BYTES=$(wc -c < "$NG1_RENDER" 2>/dev/null | tr -cd '0-9' || true)
@@ -2206,8 +2407,11 @@ COND_ASSERTIONS=$(( COND_ASSERTIONS + TOTAL - _COND_BEFORE ))
 # #8036 1d: 144 -> 153, re-measured from a green run (Guard 1 grew 50 -> 59; the executed Guard 4
 # rows are terraform-gated and counted in COND_ASSERTIONS, like the rendered NIC-G1 rows).
 # #9082: 153 -> 163, re-measured from a green run (Guard A2 added 10 unconditional rows).
+# #10045: 163 -> 173 (the KDENY_KERNEL_STREAM argv-lockstep block added 10 unconditional rows in AC5).
+# #6780: 173 -> 175 (the AC6c cross-file pin-consistency block added 2 unconditional rows).
+# #4699/#7596: -> 192 (the AC6d wiring pins + GuardA3 at-tag block added 17 unconditional rows over 175).
 UNCONDITIONAL_ASSERTIONS=$(( TOTAL - COND_ASSERTIONS ))
-BOOTSTRAP_MIN_ASSERTIONS=163
+BOOTSTRAP_MIN_ASSERTIONS=192
 if [[ "$UNCONDITIONAL_ASSERTIONS" -lt "$BOOTSTRAP_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s unconditional assertions ran (%s total, %s from tool-gated blocks), expected >= %s — a block was skipped or emptied.\n' \
     "$UNCONDITIONAL_ASSERTIONS" "$TOTAL" "$COND_ASSERTIONS" "$BOOTSTRAP_MIN_ASSERTIONS" >&2

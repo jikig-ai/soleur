@@ -231,7 +231,7 @@ mitigates the session's leak surface (no `browser_network_requests` /
 snapshot-only navigation). An *ephemeral* mint→use→revoke `User API Tokens:Edit`
 token is arguably security-optimal for the automation phase but is documented as a
 future opt-in, not adopted (an orphaned revoke would leave a standing omnipotent
-token). See `knowledge-base/project/specs/feat-one-shot-cf-token-scope-6755/decision-challenges.md`.
+token). See `knowledge-base/project/specs/archive/20261013-041741-feat-one-shot-cf-token-scope-6755/decision-challenges.md`.
 
 **2. The skill strengthens this ADR's illustrative probe.** The `-o /dev/null` +
 `%{http_code}` snippet in § Consequences is illustrative only. The skill hardens

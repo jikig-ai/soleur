@@ -106,4 +106,4 @@ When writing or reviewing RLS-related tests and comments:
 - **Related learning** — `knowledge-base/project/learnings/security-issues/rls-column-takeover-github-username-20260407.md` (permissive `UPDATE` policies also grant access to new columns — complementary RLS gotcha).
 - **Related learning** — `knowledge-base/project/learnings/2026-04-12-silent-rls-failures-in-team-names.md` (silent RLS failures in read paths).
 - **Related learning** — `knowledge-base/project/learnings/integration-issues/2026-04-07-supabase-postgrest-anon-key-schema-listing-401.md` (PostgREST returns 200 with `[]` for RLS-filtered table queries, not 401 — referenced in the BYOK test's SELECT assertion).
-- **Related brainstorm** — `knowledge-base/project/brainstorms/2026-03-20-byok-key-storage-evaluation-brainstorm.md` (Supabase Vault rejected for per-user keys; HKDF chosen).
+- **Related brainstorm** — `knowledge-base/project/brainstorms/archive/20261012-213508-2026-03-20-byok-key-storage-evaluation-brainstorm.md` (Supabase Vault rejected for per-user keys; HKDF chosen).

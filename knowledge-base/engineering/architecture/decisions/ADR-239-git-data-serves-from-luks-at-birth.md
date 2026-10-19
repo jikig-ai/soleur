@@ -317,9 +317,9 @@ landed:
 
 ## References
 
-- Plan: `knowledge-base/project/plans/2026-09-22-feat-git-data-cutover-real-modes-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-051752-2026-09-22-feat-git-data-cutover-real-modes-plan.md`
 - Decision challenges (DC-1, DC-2):
-  `knowledge-base/project/specs/feat-one-shot-8211-git-data-cutover-real-modes/decision-challenges.md`
+  `knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-8211-git-data-cutover-real-modes/decision-challenges.md`
 - Runbooks: `knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md`,
   `git-data-rung2-rehearsal.md`
 - Art. 30 register: `knowledge-base/legal/article-30-register.md` PA-36 (g)(1)-(2), PA-2 (g)(17)
@@ -392,17 +392,22 @@ Plan: `knowledge-base/project/plans/archive/20261003-090828-2026-10-02-feat-git-
   exception and the CLO before 2026-10-23, the first day the ledger lint fails; the date is not extended
   quietly.** Until the volume is deleted, the files remain readable to anyone holding the volume or a snapshot of
   it. The lint warns inside 14 days of `expires_on` and fails CI after it.
+
+> **Superseded 2026-10-15 (#6897): "it is gated by the flip chain" no longer holds for the separated wipe variant; see Amendment 2026-10-15 below. The flip chain still gates the flip-chained variant.**
+
 - **Inputs for the CLO re-ruling.** The issue sets the trigger: if the fix and the served-store purge slip past
   2026-10-24, the CLO re-rules on the DPD §10.3(b) disclosure. The re-ruling needs the state of four things: the
   wipe (done, with Hetzner delete evidence, or slipped), the served-store purge (run, with its count, or not),
   the flip (slipped, so the wipe, which is gated behind it, has not been reached), and the gc cursor (fixed by a
   hash-bound payload change, declined by the owner, or still open).
 
+> **Superseded 2026-10-15 (#6897): "the flip (slipped, so the wipe, which is gated behind it, has not been reached)" no longer holds for the separated wipe variant: its wipe is not gated behind the flip; see Amendment 2026-10-15 below.**
+
 Alternatives considered and rejected: purging the files in place by mounting the volume (violates D2); a
 standalone dated purge (needs the same writable mount); extending the date without re-opening this ADR
 (storage limitation; the ledger records `expires_on` as deliberately not extended).
 
-Plan: `knowledge-base/project/plans/2026-10-09-fix-git-data-lock-no-subject-id-9066-plan.md`.
+Plan: `knowledge-base/project/plans/archive/20261013-062704-2026-10-09-fix-git-data-lock-no-subject-id-9066-plan.md`.
 
 ## Amendment 2026-10-09 — the gc timer is not a cutover precondition; the probe verifies first; the unwind marks the attempt (#9439)
 
@@ -444,3 +449,117 @@ assumption: the probe `if:` reads the unfreeze step's `gc_timer_failed` output a
 runner behaviour and is checked by the first real dispatch, not by any offline suite.
 
 Plan: `knowledge-base/project/plans/archive/20261009-234236-2026-10-09-fix-git-data-cutover-residual-state-matrix-gaps-plan.md`.
+
+## Amendment 2026-10-12 — plaintext-volume retention end re-opened (#6897)
+
+The 2026-10-09 amendment set 2026-10-22 as the target for destroying `hcloud_volume.git_data` and said that if the date will pass with the volume present, this ADR is re-opened with the ledger exception and the CLO before 2026-10-23. This amendment is that re-opening. **The 2026-10-22 target will be missed.** The residue on the volume is understood to include erased-user identifiers (the lock residue is unmeasured, below), so holding the volume past the target is a storage-limitation (Art. 5(1)(e)) overrun against our own stated date once the date passes, and this amendment records it as one rather than as a schedule change.
+
+**New date: 2026-11-12, at the latest.** The ledger row `hcloud_volume.git_data` is renewed to that date (tracking #6897). The date is bound to the flip chain, not to a calendar: a second slip past it re-opens this ADR again and goes back to the CLO. It is not rolled quietly. The CLO's final re-ruling is due 2026-10-24; this amendment is provisional until then. No published legal wording changes in this PR (the hold on privacy-policy and DPD wording stays).
+
+> **Superseded 2026-10-15 (#6897): "bound to the flip chain" no longer holds for the separated wipe variant; the 2026-11-12 date is unchanged. See Amendment 2026-10-15 below.**
+
+**State as measured (Hetzner API read-only and Better Stack, 2026-10-12; none of it read from a host):**
+
+- **Wipe** — not done. Volume 106867358 is attached to server 169724272 next to the LUKS volume 107102614. The wipe body was deleted in #8189 and does not exist on main.
+- **Rotate** — `git-data-host-rotate` run 38140050880 (2026-10-11) applied: per its apply log it destroyed the previous LUKS store volume (106867359) and server (169437185), re-created the LUKS passphrase resource, and created server 169724272 with LUKS volume 107102614. The job concluded `failure`: the post-apply both-volumes-preserved assert reported `hcloud_volume.git_data_luks shows 1 delete/forget action(s)` on the replace the rotate arm intends. The cutover flip gate requires that job to have succeeded, so it cannot be satisfied while the assert stands. The fix is tracked at #10137 (separate PR); no re-dispatch is part of this amendment.
+- **Flip** — not done. `git_data_store=disabled` on every web container sampled (latest 2026-10-12); #8209, #8609 and #8573 are open.
+- **Served-store purge, gc cursor, id-bearing `.<workspace_id>.init.lock` residue since 2026-09-14, Hetzner snapshot retention** — unmeasured. Nothing is claimed about their absence or about copies of the volume.
+- **Serving path** — web-1's `luks-monitor` reported `/mnt/data` as LUKS-backed (`mount_source=/dev/mapper/workspaces`, `workspace_count=9`) at 2026-10-12T12:28Z; with the flag disabled, workspaces are served from that volume and not from the git-data host. This says nothing about web-2.
+
+**Owner:** the operator, via #8211 and #6897. **Blocker chain:** the rotate-arm assert fix (#10137), then a fresh rotate dispatch that the operator authorises by naming the command, then #8209, #8609 and #8573, then a hash-bound wipe PR with its own rung-2 rehearsal, then the wipe itself, which the operator authorises by naming the command.
+
+> **Superseded 2026-10-15 (#6897): this blocker chain (#8209, #8609, #8573 before the wipe) applies only to the flip-chained variant; none of them gates the separated variant (Ruled by CTO agent, 2026-10-15). The rotate steps in it are done (measured 2026-10-14). See Amendment 2026-10-15 below.**
+
+Rule for the horizon: moving the ledger `expires_on` of `hcloud_volume.git_data` past 2026-11-12 requires a CLO re-ruling linked on #6897 first; a one-line date bump is not a renewal. This is a review-time rule: the lint treats `expires_on` as a clock only and does not enforce the cap.
+
+## Amendment 2026-10-13 — no workflow rotate after the first flip attempt (#10175)
+
+**Decision.** `git-data-host-rotate` is refused once any run of `git-data-cutover.yml` has executed the
+`Write GIT_DATA_STORE_ENABLED` step (any conclusion other than skipped, in any attempt). After a flip the LUKS volume
+may hold the only copy of the replicated repositories, and the rotate's emptiness check read a once-per-boot row that
+a flipped store never refreshes. The guard reads run records, not the flag and not the cutover stamp (the stamp
+survives a rollback, and rollback is flag-off only, so a rollback does not make the store clean). It needs no prd
+Doppler token in the apply workflow (alternative G above stands). It proves the history is complete by pinning two
+post-seam runs that must stay listed and readable: run records can be deleted (the retention horizon is unknown: run
+records 196 days old are still listed today) and GitHub strips step lists at about 170 days, so the guard fails closed
+by about 2027-03-18 at the latest until a PR re-baselines the pins (and, because the scan reads every listed run, until any
+older post-seam run whose step list was stripped is deleted or attested; the standing policy is tracked in #10216). A second layer requires the newest `boot_complete` row to be newer than the current
+server's creation. Ruled by CTO agent, 2026-10-13 (CPO sign-off with conditions; CLO: no Art. 17/32 conflict while it
+guards only the automated rotate, with a key-compromise break-glass).
+
+**Consequences.** From the first flip there is no in-workflow route to rotate `GIT_DATA_LUKS_KEY`: a suspected
+key compromise is an owner-run break-glass (a reviewed PR that lifts the guard for one dispatch, owner and CLO
+reviewing), and the accepted Art. 17 residue (erased means unlinked) is re-evaluated by 2026-11-12 with the
+plaintext-volume outer retention. The exits are #8571 (copy mode) for a populated store and #10211 (a live
+"store measured empty" marker). The guard does not defend against a hostile owner, a flag set outside the workflow, or
+a re-run of a rotate run that predates it (the owner deletes those run records). Follow-ups: #10216.
+
+## Amendment 2026-10-13 — first boot may precede the volume attachments (#10138)
+
+**Context (measured 2026-10-13: the apply log of run 38384137515 and Sentry; nothing was read from a
+host).** Cloud-init first boot starts when the server is created; Hetzner attaches block volumes
+afterwards as separate actions. Terraform recorded the LUKS attachment finishing 65 s and the
+plaintext one 125 s after server create. Those are API-completion times, not the moment the guest
+first saw each device. The bootstrap ran at 10:37:11Z, and a FATAL in the `luks_open` heredoc aborts
+the concatenated runcmd script (read from the template, 2026-10-13), so by inference the heredoc had
+already found, formatted and opened the LUKS device 7 s before Terraform recorded that attachment
+finishing: the figures overstate guest-side latency, and this incident does not by itself show that
+the heredoc's 30 to 300 raise was needed (it is kept as insurance). Sentry shows the bootstrap's plaintext check dying at
+10:37:11Z, about 70 s before the plaintext attachment completed at 10:38:19Z: it resolved the by-id
+link once and exited at the named FATAL `plaintext_unverified reason=source`. Four earlier boots
+(runs 38140050880, 36118115758, and the seed and payload phases of 38356246710) attached both
+volumes in 17-33 s as Terraform recorded them, so the race was latent. The boot was fail-closed and
+wrote no marker (inferred from the code order, not read from a host); that nothing was served
+rests on the store flag being off (inherited from #10175, 2026-10-13).
+
+**Decision.** Waiting for an attachment is part of proving a layout. The bootstrap waits at the
+plaintext link for 300 s: 30 passes of `sleep 10`, counted and never read from the clock (so 300 s is a
+lower bound; each pass's probes add to it), a literal rather than a seam. The `luks_open` heredoc's device wait is 300 counted passes of
+`sleep 1`, followed by one `udevadm settle` before the single-shot probes that gate `luksFormat`.
+The wait changes WHEN the device is resolved, never what is checked: after the bound the same named
+FATAL fires, the plaintext-empty verification is never skipped, and the device number is still
+pinned and re-checked before `--setro`. A FATAL inside the heredoc aborts the concatenated runcmd
+script, so the bootstrap never runs after it (read from the template, 2026-10-13). The bootstrap's
+own LUKS discovery is unchanged: it runs only when the store is not yet mounted, which the heredoc
+has already ensured on a first boot. The rung-2 rehearsal now delays both attachments on purpose
+(LUKS by floor(delay/2) s, plaintext by the full delay; the workflow sets 150), so the paid run
+exercises the heredoc wait and the bootstrap wait. One rehearsal at 150 s does not prove the 300 s
+bound, and that a PASS implies the wait ran is an inference: no `boot_complete` field records it.
+
+**Consequences.** The payload hash moves, so the committed rung-2 evidence is stale until a fresh
+rehearsal and an evidence-only PR land, and the rotate's own interlock refuses until then. This
+amendment does not change the status line, the retention date or any legal wording, and makes no
+claim about key escrow. The recovery order and the half-rotated host are in the runbook entry of
+the same date.
+
+## Amendment 2026-10-14 — pointer: the empty-id rehearsal moved to PR-R, and the wipe mechanism PR is not hash-bound (#10138)
+
+Appended; nothing above is edited. The Consequences bullet "The wipe branch needs a rehearsal of its own" and the 2026-10-12 amendment's blocker chain ("a hash-bound wipe PR with its own rung-2 rehearsal, then the wipe itself") describe a sequence that the built work does not follow, by a CTO ruling of 2026-10-14 (`knowledge-base/project/specs/archive/20261015-113544-feat-one-shot-10138-git-data-wipe-body/decision-challenges.md`, row "PR-W scope").
+
+- **The wipe mechanism PR (#10294) is not hash-bound.** It adds a workflow job, a runner-side Hetzner helper and a host verb that the runner sends over stdin (`git-data-cutover.sh` `MODE=wipe_assert`, `git-data-wipe-assert.sh`). None of them is part of the rendered `user_data` or of a `file()`-bound payload, so the rung-2 template hash does not move and this PR carries no rehearsal.
+- **The empty-id rung-2 rehearsal moved to PR-R (#10296).** The render branch selected by an empty `git_data_volume_id` is first rendered by the record PR (PR-C) that removes `hcloud_volume.git_data`, so the rehearsal binds PR-C only. PR-R must merge before PR-C, not before the wipe, and should be on `main` before the wipe is dispatched because it needs a paid host. The requirement that the branch be rehearsed before it can reach the live host is unchanged; where it lives is what moved.
+- **What the owner records before the dispatch.** The runbook ("The wipe", "Before naming `mode=wipe`") has #6897 carry the link to a READY PR-C, the main-dispatched empty-id rehearsal evidence (PR-R) or a recorded owner acceptance of a longer wedge, and the dispatch-to-merge bound. The alternative to the evidence is the CTO's wording of that ruling, not an addition of this note, and no workflow checks any of the three.
+- **Unchanged.** The 2026-11-12 outer date, the CLO re-ruling due 2026-10-24, and the rule that moving the ledger `expires_on` past 2026-11-12 needs a CLO re-ruling linked on #6897.
+
+## Amendment 2026-10-15 — the plaintext-volume wipe is separated from the flip chain (#6897, #10138)
+
+Appended; nothing above is edited, and the four sentences it supersedes (the gate sentence, the "gated behind it" clause in the CLO re-ruling inputs, "bound to the flip chain" and the blocker chain) carry a marker directly beneath them. Takes effect when the carrying PR (#10352) merges, and #10352 was gated on the CLO re-attestation (task A.11, CTO ruling 2026-10-15 on the PR topology), recorded 2026-10-15; #10294 (the wipe mechanism) merged 2026-10-15T12:32:44Z, a8dffdedd5 (read from GitHub), and did not activate it. Until #10352 merges, the chained gate in the Amendments of 2026-10-09 and 2026-10-12 is the operative text.
+
+Ruled by CTO agent, 2026-10-15 (separability, replacement predicates, schedule; follow-up ruling on the leftover-snapshot clear and the post-flip barrier). Ruled by CLO agent, 2026-10-15; v1 internal attestation, re-attested as final 2026-10-15 (A.11) (the soak is not a legal gate for the separated variant; evidence record; notice dates). Both rulings are posted on #10138 and recorded in `knowledge-base/project/specs/archive/20261015-113544-feat-one-shot-10138-git-data-wipe-body/decision-challenges.md`.
+
+**Decision.** The wipe of `hcloud_volume.git_data` has two variants, chosen in-session from reads and never by an input:
+
+- **`flip_chained`** (flag `GIT_DATA_STORE_ENABLED` is `true`, or the stamp `GIT_DATA_LUKS_CUTOVER_AT` is present): today's gate unchanged: flag true, stamp present, 7-day soak (`WIPE_SOAK_FLOOR_SECONDS=604800`, pinned), stamp newer than the last rollback. There is no soak-less fall-through after a flip.
+- **`separated`** (flag read successfully and exactly `false` or unset, AND stamp absent): (1) `git_data_store_dirty_scan` returns `store_clean` (run records, with the current run's attempt excluded); (2) the newest `boot_complete` for `soleur-git-data` is newer than the current server's creation with `served_repos=0`; (3) the typed volume id is attached to the current server; (4) the on-host read-only count `store_root_repos=0` of the LUKS store root. Anything else refuses with a named verdict.
+
+Unchanged for both: typed volume id equal to what Hetzner names, same-session host reads, the Hetzner re-read before the delete, the ID-pinned delete, the 404 read-back as the end event, the reviewer-gated environment (one reviewer; self-approval not prevented, #10343 item 2, reported 2026-10-15; not a separation-of-duties claim), Tier-B token containment, and the rule that the owner names the exact command.
+
+**Why.** Rollback to the plaintext volume no longer exists (Consequences bullet 1, inherited) and the volume is never mounted writable (D2, policy), so the flip status does not decide whether destroying it loses served data. The flip chain (#8573, #8609, #8209, then a flip, then a 7-day soak) cannot finish before 2026-11-12 (CTO schedule, inferred), and each extra retention day is an Art. 5(1)(e) overrun against our own stated date (policy, CLO). The CLO ruled on 2026-10-13 that the destroy should be separated if it can be.
+
+**Alternatives considered.** (a) Keep the chained gate only: rejected, it cannot meet 2026-11-12 (inferred). (b) Drop the soak for every variant: rejected, a flip leaves the store populated and the soak is the engineering gate for that case. (c) Scan alone as the separated barrier: rejected by the CTO follow-up ruling, because after a flip with a failed probe and a rollback the flag is false and the stamp is absent (the stamp is written last, only after a proven probe, so this holds today and after #10297), and the scan reads run records only; the on-host count is the second, independent barrier.
+
+**State as measured (read-only, 2026-10-15; the 2026-10-12 read of server 169724272 and LUKS volume 107102614 is a past measurement and those ids no longer exist).** Volume 106867358 (`soleur-git-data-store`, created 2026-09-14, no delete protection) is attached to server 170370833 beside LUKS volume 107140231 (created 2026-10-14T14:51:26Z). The newest `boot_complete` for `soleur-git-data` is 2026-10-14 14:52:17Z: `served_repos=0 plaintext_empty=yes plaintext_volume=present plaintext_journal=dirty`. That row is boot-time only: `plaintext_empty=yes` means no repository entry at boot, not no residue.
+
+**Residuals (recorded on #6897, comment 6188355137, 2026-10-15; told to the CLO and attested as labelled, A.11, 2026-10-15).** (1) The run-record scan does not see a flag set by hand in Doppler; the on-host count shows the LUKS store holds no repositories at that moment, not that the flag never flipped (CTO, inferred). (2) The soleur-ai runtime App key residual of #8609 (ADR-241 D2) applies to every Tier-B consumer, including the `wipe` job (inherited from #8609, measured there 2026-09-22). (3) Erased-user `.<id>.init.lock` and `.gc-cursor` residue on the plaintext volume, and any Hetzner snapshot or backup retention, are unmeasured (inherited, Amendment 2026-10-09); the 404 read-back is the end event for the device only. (4) An untrappable kill during the `wipe_check` listing can leave the throwaway `git-data-pt-snap` until an owner-named `snapshot_clear` dispatch (CTO, inferred).
+
+**Unchanged.** The 2026-11-12 outer date; a second slip goes back to the CLO; moving the ledger `expires_on` past 2026-11-12 needs a CLO re-ruling linked on #6897; the CLO re-ruling due 2026-10-24 concerns DPD §10.3(b) and the #10136 items and does not gate this amendment, whose wording was re-attested as final on 2026-10-15 (A.11). Nothing here claims reopen, passphrase-loss recovery (#9948), re-escrow (#9949), the state-restore substrate (#7992), or emptiness for web-2.

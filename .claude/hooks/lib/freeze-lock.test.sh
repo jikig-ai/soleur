@@ -14,6 +14,9 @@
 # the operator's real .claude/.freeze-lock is never touched.
 
 set -uo pipefail
+SUITE_TMP=$(mktemp -d)
+[[ "$SUITE_TMP" == /* ]] || { echo "FATAL: SUITE_TMP is not absolute: $SUITE_TMP" >&2; exit 2; }
+trap 'rm -rf "$SUITE_TMP"' EXIT
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELPER="$SCRIPT_DIR/freeze-lock.sh"
@@ -34,7 +37,7 @@ assert_eq() {
 
 # Each test gets a fresh temp root; the state file lands at
 # $root/.claude/.freeze-lock.
-mk_root() { mktemp -d; }
+mk_root() { mktemp -d -p "$SUITE_TMP"; }
 
 # Invoke the helper CLI with the state root redirected.
 cli() {

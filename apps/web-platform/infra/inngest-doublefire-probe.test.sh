@@ -764,6 +764,53 @@ test_df_build_body_harness_is_live
 test_df_build_body_empty_csv
 test_df_build_body_nonempty_csv
 
+# ===========================================================================
+# #6940 item 3 — INNGEST_GQL_PAGE_SIZE is caller-supplied (hooks.json.tmpl
+# ?page_size= pass-environment) and must be a positive integer in 1..1000 BEFORE
+# it reaches --argjson first. The gate is fail-closed FATAL; a bounded default
+# can never be silently substituted.
+# ===========================================================================
+test_df_page_size_gate() {
+  echo "TEST: doublefire-probe — INNGEST_GQL_PAGE_SIZE gate (#6940 item 3)"
+  local dir; dir=$(mktemp -d)
+  make_page false "" "[$(make_edge run-1 fn-a 2026-07-08T10:00:00Z)]" > "$dir/page-1.json"
+
+  local badvals=('abc' 'x' '12.5' '-1' '0' '1001' '99999' ' ' '0x64')
+  for v in "${badvals[@]}"; do
+    local rc=0 out
+    out=$(INNGEST_DOUBLEFIRE_RUNS_FIXTURE="$dir" INNGEST_GQL_PAGE_SIZE="$v" bash "$TARGET" 2>&1 >/dev/null) || rc=$?
+    if [[ "$rc" -eq 1 ]] && grep -q 'FATAL INNGEST_GQL_PAGE_SIZE' <<<"$out"; then
+      PASS=$((PASS+1)); echo "  PASS: page_size '$v' refused FATAL (rc=1)"
+    else
+      FAIL=$((FAIL+1)); echo "  FAIL: page_size '$v' rc=$rc out='$out' (want FATAL rc=1)"
+    fi
+  done
+
+  # valid boundary + a normal value run the fixture path and emit a parseable body
+  for v in '1' '1000' '42' '007'; do
+    local rc2=0 out2
+    out2=$(INNGEST_DOUBLEFIRE_RUNS_FIXTURE="$dir" INNGEST_GQL_PAGE_SIZE="$v" bash "$TARGET" 2>/dev/null) || rc2=$?
+    if [[ "$rc2" -eq 0 ]] && printf '%s' "$out2" | jq -e '.runs | type == "array"' >/dev/null 2>&1; then
+      PASS=$((PASS+1)); echo "  PASS: page_size '$v' accepted, runs body parseable"
+    else
+      FAIL=$((FAIL+1)); echo "  FAIL: page_size '$v' rc=$rc2 (want 0 + parseable runs)"
+    fi
+  done
+
+  # wiring: the gate sits ABOVE the --argjson first site (a later-introduced
+  # unvalidated read would re-open the channel this closes).
+  local gate_ln argjson_ln
+  gate_ln=$(grep -n 'INNGEST_GQL_PAGE_SIZE is not a positive integer' "$TARGET" | head -1 | cut -d: -f1 || true)
+  argjson_ln=$(grep -n -- '--argjson first "\$PAGE_SIZE"' "$TARGET" | head -1 | cut -d: -f1 || true)
+  if [[ -n "$gate_ln" && -n "$argjson_ln" && "$gate_ln" -lt "$argjson_ln" ]]; then
+    PASS=$((PASS+1)); echo "  PASS: validation precedes --argjson first ($gate_ln < $argjson_ln)"
+  else
+    FAIL=$((FAIL+1)); echo "  FAIL: gate ordering broken (gate=$gate_ln argjson=$argjson_ln)"
+  fi
+  rm -rf "$dir"
+}
+test_df_page_size_gate
+
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

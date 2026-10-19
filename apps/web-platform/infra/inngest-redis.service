@@ -7,6 +7,11 @@ Wants=network-online.target
 # ephemeral ROOT disk — silently reproducing the exact data-loss trap this
 # migration fixes. This pins the unit to the persistent /mnt/data mount.
 RequiresMountsFor=/mnt/data
+# DELIBERATELY UNCONDITIONED (#9962): the sibling units gained ConditionPathExists=
+# skip-vs-fail on the same env file, but this unit stays loud — a missing
+# /etc/default/inngest-server on the data-bearing Redis unit is a designed-loud
+# mount-class failure, not benign ordering noise. Do not add a condition here
+# without a written rationale.
 
 [Service]
 Type=simple

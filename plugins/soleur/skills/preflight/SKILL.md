@@ -15,7 +15,7 @@ description: "This skill should be used when running pre-ship checks on migratio
 
 **Purpose:** Validate technical readiness of code changes before a PR is created, catching the class of bugs that only appear in production context -- unapplied database migrations, CSP violations from injected scripts, and bare-repo stale file reads.
 
-**CRITICAL: No command substitution.** Never use `$()` in Bash commands. When a step says "get value X, then use it in command Y", run them as **two separate Bash tool calls** -- first get the value, then use it literally in the next call.
+**CRITICAL: No command substitution.** Never use `$()` in Bash commands. When a step says "get value X, then use it in command Y", run them as **two separate Bash tool calls** -- first get the value, then use it literally in the next call. The one exception is a fenced block that says it is run as ONE Bash call (Step 1.4): its `$()` fetches a credential into a variable that the same block checks and then feeds to curl's stdin config, because a literal value pasted into a later call would sit in the transcript.
 
 <!-- operator-typed-render:start -->
 **Any message this skill PRINTS that tells the operator to run a skill or command renders at emit time.** The doc names it canonically (`soleur:<name>`, ADR-226); before printing, render it as the active harness's **operator-typed form** per `formatSkillInvocation` (`plugins/soleur/lib/harness.ts`), which owns the per-harness slash and sigil forms — the operator types that string into a fresh session where no routing contract is in context, so a bare canonical name is model-discretion there rather than a dispatch. This covers abort messages, `AskUserQuestion` prompts and options, `Display`/`echo` lines and resume prompts alike; an agent-read instruction stays canonical.
@@ -97,9 +97,9 @@ Both Check 6 (Brand-Survival Self-Review) and Check 10 (Discoverability Test Exe
 
 ```bash
 # Step S.1: fetch PR body to a private temp file (umask 077; mktemp).
-PR_BODY_FILE=$(umask 077 && mktemp -t preflight-pr-body.XXXXXXXX.md)
+PR_BODY_FILE=$(umask 077 && mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)" preflight-pr-body.XXXXXXXX.md)
 gh pr view --json body --jq .body > "$PR_BODY_FILE"
-trap 'rm -f "$PR_BODY_FILE" "$COMBINED"' EXIT
+trap 'rm -f "$PR_BODY_FILE" "$COMBINED"; rmdir "$(dirname "$PR_BODY_FILE")" 2>/dev/null' EXIT
 
 # Step S.2: strip HTML comments and fenced code blocks from PR body.
 SCRUBBED_BODY=$(awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f{print}' "$PR_BODY_FILE" \
@@ -109,7 +109,7 @@ SCRUBBED_BODY=$(awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f{print}' "$PR_B
 PLAN_PATH=$(printf '%s' "$SCRUBBED_BODY" | grep -Eo 'knowledge-base/project/plans/[^[:space:])"`'\'']+\.md' | head -n 1 || true)
 
 # Step S.4: build the combined check input.
-COMBINED=$(mktemp -t preflight-combined.XXXXXXXX.md)
+COMBINED=$(mktemp -p "$(dirname "$PR_BODY_FILE")" preflight-combined.XXXXXXXX.md)
 printf '%s\n' "$SCRUBBED_BODY" > "$COMBINED"
 if [[ -n "$PLAN_PATH" && -f "$PLAN_PATH" ]]; then
   awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f{print}' "$PLAN_PATH" \
@@ -129,7 +129,7 @@ Re-use the cached path-set from Phase 0 Step 0.1 (`"$PREFLIGHT_TMP/preflight-dif
 grep -E '(^|/)supabase/migrations/.*\.sql$' "$PREFLIGHT_TMP/preflight-diff-files.txt"
 ```
 
-The regex anchors are intentional: `(^|/)` accepts both top-level (`supabase/migrations/X.sql`) and nested-under-app-dir paths (`apps/web-platform/supabase/migrations/X.sql`); `.*\.sql$` accepts files at any depth under the migrations directory (matching git pathspec's `*` which crosses `/`). Verify at edit time via `a=$(mktemp) && b=$(mktemp) && git diff --name-only origin/main...HEAD -- '*/supabase/migrations/*.sql' supabase/migrations/*.sql > "$a" && grep -E '(^|/)supabase/migrations/.*\.sql$' "$PREFLIGHT_TMP/preflight-diff-files.txt" > "$b" && diff -u "$a" "$b"`.
+The regex anchors are intentional: `(^|/)` accepts both top-level (`supabase/migrations/X.sql`) and nested-under-app-dir paths (`apps/web-platform/supabase/migrations/X.sql`); `.*\.sql$` accepts files at any depth under the migrations directory (matching git pathspec's `*` which crosses `/`). Verify at edit time via `_v=$(mktemp -d -t soleur-run.$$.XXXXXXXX) && a=$(mktemp -p "$_v") && b=$(mktemp -p "$_v") && git diff --name-only origin/main...HEAD -- '*/supabase/migrations/*.sql' supabase/migrations/*.sql > "$a" && grep -E '(^|/)supabase/migrations/.*\.sql$' "$PREFLIGHT_TMP/preflight-diff-files.txt" > "$b" && diff -u "$a" "$b"`.
 
 If no migration files are found (grep rc=1), return **SKIP**.
 
@@ -186,26 +186,31 @@ grep -iE 'ADD COLUMN|CREATE TABLE' <migration_file>
 
 Parse the output to extract `<table> <column>` pairs. The project uses `ALTER TABLE public.<table> ADD COLUMN IF NOT EXISTS <column> <type>` patterns.
 
-**Step 1.3: Get Supabase credentials from Doppler.**
+**Step 1.3: Check the Supabase credentials exist in Doppler (presence only).**
 
-Run these as two separate Bash calls (no command substitution):
+Run these as two separate Bash calls. They print nothing secret: the values are fetched again, inside the one Bash call of Step 1.4, because the Bash tool keeps no shell state between calls.
 
 ```bash
-doppler secrets get NEXT_PUBLIC_SUPABASE_URL -p soleur -c prd --plain
+doppler secrets get NEXT_PUBLIC_SUPABASE_URL -p soleur -c prd --plain >/dev/null && echo "NEXT_PUBLIC_SUPABASE_URL present"
 ```
 
 ```bash
-doppler secrets get SUPABASE_SERVICE_ROLE_KEY -p soleur -c prd --plain
+doppler secrets get SUPABASE_SERVICE_ROLE_KEY -p soleur -c prd --plain >/dev/null && echo "SUPABASE_SERVICE_ROLE_KEY present"
 ```
 
 If either credential is missing, return **SKIP** with note: "Supabase credentials not available in Doppler prd config."
 
 **Step 1.4: Verify each column via Supabase REST API.**
 
-For each table/column pair extracted in Step 1.2, issue a read-only GET request:
+For each table/column pair extracted in Step 1.2, issue a read-only GET request. Run the whole block as ONE Bash call (it fetches its own credentials; nothing carries over from Step 1.3):
 
 ```bash
-curl -sf "<SUPABASE_URL>/rest/v1/<table>?select=<column>&limit=1" -H "apikey: <SERVICE_ROLE_KEY>" -H "Authorization: Bearer <SERVICE_ROLE_KEY>"
+SUPABASE_URL="$(doppler secrets get NEXT_PUBLIC_SUPABASE_URL -p soleur -c prd --plain)"
+SERVICE_ROLE_KEY="$(doppler secrets get SUPABASE_SERVICE_ROLE_KEY -p soleur -c prd --plain)"
+# argv shows in /proc/<pid>/cmdline, so the key rides curl's stdin config. Bash only; `bash -x` would print the key.
+(LC_ALL=C; case "$SERVICE_ROLE_KEY" in ''|*[!A-Za-z0-9._~+/=-]*) exit 1;; esac) || { echo "SERVICE_ROLE_KEY unset or not [A-Za-z0-9._~+/=-] (refused, not sent)" >&2; exit 1; }
+curl --disable --proto '=https' -m 30 -fsS --config - "${SUPABASE_URL}/rest/v1/<table>?select=<column>&limit=1" \
+  < <(printf 'header = "apikey: %s"\nheader = "Authorization: Bearer %s"\n' "$SERVICE_ROLE_KEY" "$SERVICE_ROLE_KEY")
 ```
 
 - A **200 response** (even empty `[]`) confirms the column exists -- migration is applied.

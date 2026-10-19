@@ -21,7 +21,7 @@ Plan §AC encoded a sweep verifying no live references to the deleted agent rema
 git grep -nE 'identity-rbac-reviewer|identity-rbac' -- 'plugins/' 'knowledge-base/' 'docs/' '.github/' 'apps/' \
   ':!**/archive/**' \
   ':!knowledge-base/project/learnings/2026-05-22-identity-rbac-reviewer-subset-audit.md' \
-  ':!knowledge-base/project/plans/2026-05-22-chore-audit-identity-rbac-reviewer-subset-plan.md'
+  ':!knowledge-base/project/plans/archive/20261013-014038-2026-05-22-chore-audit-identity-rbac-reviewer-subset-plan.md'
 ```
 
 The two `:!` excludes cover the audit learning + the chore plan — the two artifacts that document the deletion's reasoning and verdict.
@@ -96,4 +96,4 @@ This also applies to `git log -- <pathspec>`, `git diff -- <pathspec>`, and any 
 
 - The fold itself: PR #4344, issue #4322.
 - Audit verdict + reasoning: `2026-05-22-identity-rbac-reviewer-subset-audit.md`.
-- Plan that pre-committed the AC sweep (and warned about self-grep hazard): `knowledge-base/project/plans/2026-05-22-chore-audit-identity-rbac-reviewer-subset-plan.md` §Sharp Edges and §Enhancement Summary "Key Improvements after deepen-pass" §1.
+- Plan that pre-committed the AC sweep (and warned about self-grep hazard): `knowledge-base/project/plans/archive/20261013-014038-2026-05-22-chore-audit-identity-rbac-reviewer-subset-plan.md` §Sharp Edges and §Enhancement Summary "Key Improvements after deepen-pass" §1.

@@ -2,19 +2,58 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { withGoTrueRetry } from "./gotrue-retry";
 
 /**
- * Synthetic-only allowlist gate for tenant-isolation test users.
+ * Synthetic-only prefix allowlist for integration-suite test users.
  *
  * Boundary sentinel (per `hr-write-boundary-sentinel-sweep-all-write-sites`):
- * the helper refuses to run against any email that doesn't match the
- * canonical tenant-isolation synthetic pattern. Mirrors the call-site
- * `assertSynthetic` guards but pulls the check into the helper itself so
- * a future caller copying the pattern cannot accidentally drop the guard.
+ * the helper refuses to run against any email outside the enumerated
+ * synthetic prefixes. Mirrors the call-site `assertSynthetic` guards but
+ * pulls the check into the helper itself so a future caller copying the
+ * pattern cannot accidentally drop the guard.
+ *
+ * Every member suite generates `<prefix>-<16 lowercase hex>@soleur.test`
+ * (`randomBytes(8).toString("hex")` — verified in-file per suite). Adding a
+ * suite's prefix is a one-line, review-visible edit; the `[a-f0-9]{16}`
+ * suffix pin is load-bearing — a permissive `<prefix>.*@` shape lets a
+ * fixture's leftovers match (the PR #2597 permissive-regex incident class).
+ * `mu1-integration-` was added when mu1.integration.test.ts converged onto
+ * this helper for #9995 — it previously used a different domain
+ * (@soleur-test.invalid); the infra/mu1-cleanup-guard.mjs sweep still
+ * matches that legacy shape for already-leaked users.
+ *
+ * `workspace-backfill-parity-` was added for #10096's drain of
+ * workspace-backfill-trigger-parity.test.ts — the lone drain file whose
+ * generator deviates from the `tenant-isolation-` shape.
  */
-const SYNTHETIC_EMAIL_PATTERN =
-  /^tenant-isolation-[a-f0-9]{16}@soleur\.test$/;
+export const SYNTHETIC_PREFIXES = [
+  "tenant-isolation-",
+  "byok-isolation-",
+  "beta-crm-",
+  "cc-cross-tenant-",
+  "conv-rail-cross-tenant-",
+  "dsar-cross-tenant-",
+  "workspace-fixture-",
+  "workspace-backfill-parity-",
+  "mu1-integration-",
+] as const;
+
+const escapeRegExp = (s: string): string =>
+  s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const SYNTHETIC_EMAIL_PATTERN = new RegExp(
+  `^(?:${SYNTHETIC_PREFIXES.map(escapeRegExp).join("|")})[a-f0-9]{16}@soleur\\.test$`,
+);
 
 /**
- * FK-reverse cleanup for synthetic tenant-isolation users.
+ * Reusable surface for consumers validating against the pinned shape —
+ * export the PREDICATE, never the pattern, so a caller cannot drop the
+ * `[a-f0-9]{16}` suffix pin by reconstructing the regex.
+ */
+export function isSyntheticTestEmail(email: string): boolean {
+  return SYNTHETIC_EMAIL_PATTERN.test(email);
+}
+
+/**
+ * FK-reverse cleanup for synthetic integration-suite users.
  *
  * Mig 053's `handle_new_user` trigger backfills every new `auth.users` row
  * with a solo organization, workspace, and workspace_members row. Each of
@@ -34,9 +73,10 @@ const SYNTHETIC_EMAIL_PATTERN =
  * scrubs those natively, so their anonymise RPCs are non-fatal here.
  *
  * Pattern source: `tearDownSharedWorkspace` (apps/web-platform/test/
- * helpers/workspace-members-fixtures.ts:142). That helper targets a
- * multi-member fixture; this one covers the solo-canary case used in
- * `*tenant-isolation.test.ts`.
+ * helpers/workspace-members-fixtures.ts). That helper targets a
+ * multi-member fixture; this one covers the solo-user teardown for every
+ * suite whose synthetic prefix is enumerated in `SYNTHETIC_PREFIXES`
+ * (adopted beyond tenant-isolation for #9994).
  *
  * FK-cascade parity (#5582). The sequence below mirrors the full set of
  * anonymise_* RPCs `server/account-delete.ts` runs before
@@ -74,6 +114,11 @@ type FatalityClass = "restrict" | "set-null" | "graceful";
 const ANONYMISE_SEQUENCE: ReadonlyArray<
   readonly [rpc: string, argName: string, klass: FatalityClass]
 > = [
+  // Entry stays "restrict" deliberately though the FK is ON DELETE SET
+  // NULL (mig 041): its fatality isn't for the FK — it's for the PII the
+  // cascade leaves intact (requester_ip/user_agent must be scrubbed
+  // before erasure; the SET NULL only clears user_id). Downgrading this
+  // label would silently retain PII post-delete.
   ["anonymise_dsar_export_audit_pii", "p_user_id", "restrict"],
   ["anonymise_action_sends", "p_user_id", "restrict"],
   ["anonymise_template_authorizations", "p_user_id", "restrict"],
@@ -118,7 +163,35 @@ export async function tearDownTenantUser(
   // is the canonical guard.
   if (!SYNTHETIC_EMAIL_PATTERN.test(user.email)) {
     throw new Error(
-      `tearDownTenantUser: refusing non-synthetic email ${user.email}`,
+      `tearDownTenantUser: refusing non-synthetic email ${user.email} — ` +
+        `not in SYNTHETIC_PREFIXES (<prefix>-[a-f0-9]{16}@soleur.test). ` +
+        `New synthetic suite? Register its prefix in SYNTHETIC_PREFIXES ` +
+        `(test/helpers/tenant-isolation-teardown.ts).`,
+    );
+  }
+
+  // id<->email binding: the sentinel gates on email but every destructive
+  // op below acts on user.id — verify the pair resolves to the same auth
+  // user before touching anything (a mismatched pair would scrub+delete a
+  // real user under a synthetic-looking email). A missing auth row is
+  // tolerated: deleteUser's not-found path below is the idempotent exit.
+  // The error half is checked — a transient GoTrue failure must not read
+  // as "no auth row" and silently skip the binding (fail-closed).
+  const { data: existing, error: lookupErr } = await withGoTrueRetry(
+    `getUserById:${user.id}`,
+    () => service.auth.admin.getUserById(user.id!),
+  );
+  if (lookupErr && !/not found/i.test(lookupErr.message)) {
+    throw new Error(
+      `tearDownTenantUser: getUserById(${user.id}) failed — binding ` +
+        `unverifiable, refusing teardown: ${lookupErr.message}`,
+    );
+  }
+  if (existing?.user && existing.user.email !== user.email) {
+    throw new Error(
+      `tearDownTenantUser: id/email mismatch — ${user.id} resolves to ` +
+        `"${existing.user.email}", refusing teardown declared as ` +
+        `"${user.email}"`,
     );
   }
 
@@ -154,9 +227,9 @@ export async function tearDownTenantUser(
 
   if (fatalErrors.length > 0) {
     throw new Error(
-      `tearDownTenantUser: ${fatalErrors.length} RESTRICT-class anonymise ` +
+      `tearDownTenantUser: ${fatalErrors.length} anonymise ` +
         `failure(s) for ${user.email} — auth-delete would 500 on the FK ` +
-        `block. Fix the anonymise RPC(s) before retrying:\n  ` +
+        `block (or retain PII). Fix the anonymise RPC(s) before retrying:\n  ` +
         fatalErrors.join("\n  "),
     );
   }
@@ -174,3 +247,61 @@ export async function tearDownTenantUser(
     );
   }
 }
+
+/**
+ * Plural teardown — #10249. A sequential `for (const u of users) await
+ * tearDownTenantUser(service, u)` loop abandons every user after the first
+ * failure: the suite reds correctly, but the remaining users leak silently
+ * inside the investigation of the first failure — a bounded re-introduction
+ * of the class #9994/#10096 closed. This variant attempts EVERY user and
+ * then throws one aggregated error, keeping the failure fail-loud without
+ * abandoning the rest of the batch.
+ *
+ * Stays sequential deliberately: the per-user anonymise sequence is ~22
+ * RPCs under withGoTrueRetry, so parallelising would multiply the GoTrue
+ * rate-limit burst it exists to absorb.
+ *
+ * `opts.tolerate` is the escape hatch for a KNOWN-undeletable residue
+ * shape: it runs per failed user and suppresses only a failure it
+ * confirms — every other failure still aggregates and throws.
+ */
+export async function tearDownTenantUsers(
+  service: SupabaseClient,
+  users: ReadonlyArray<{ id: string | undefined; email: string }>,
+  opts: {
+    tolerate?: (
+      error: unknown,
+      user: { id: string | undefined; email: string },
+    ) => boolean | Promise<boolean>;
+  } = {},
+): Promise<void> {
+  const failures: string[] = [];
+  for (const user of users) {
+    try {
+      await tearDownTenantUser(service, user);
+    } catch (err) {
+      if (opts.tolerate && (await opts.tolerate(err, user))) {
+        console.warn(
+          `tearDownTenantUsers: tolerated teardown failure for ` +
+            `${user.email}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        continue;
+      }
+      failures.push(
+        `${user.email}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      console.error(
+        `tearDownTenantUsers: teardown failed for ${user.email} — ` +
+          `continuing so remaining users are still torn down`,
+      );
+    }
+  }
+  if (failures.length > 0) {
+    throw new Error(
+      `tearDownTenantUsers: ${failures.length} of ${users.length} ` +
+        `teardown(s) failed — synthetic user(s) may have leaked:\n  ` +
+        failures.join("\n  "),
+    );
+  }
+}
+

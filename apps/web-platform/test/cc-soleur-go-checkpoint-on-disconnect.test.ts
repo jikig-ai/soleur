@@ -1,7 +1,7 @@
 /**
  * #5356 — cc-soleur-go in-flight work checkpoint parity (RED).
  *
- * Plan: knowledge-base/project/plans/2026-06-15-feat-cc-soleur-go-checkpoint-parity-plan.md
+ * Plan: knowledge-base/project/plans/archive/20261013-032858-2026-06-15-feat-cc-soleur-go-checkpoint-parity-plan.md
  *
  * This file pins the RUNNER-side half of the fix: `closeConversation` must
  * thread an optional `reason` through the shared `closeQuery` path to the

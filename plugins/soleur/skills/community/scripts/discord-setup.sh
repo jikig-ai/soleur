@@ -45,9 +45,12 @@
 # Exit codes:
 #   0 - Success
 #   1 - General error (including a write-env value outside the allow-list: the stderr marker
-#       SOLEUR_CREDENTIAL_REFUSED carries `var=<NAME> phase=write-env`, the one human line is on
-#       stdout; and a non-numeric guild_id, whose one line is on stderr like every other command's)
-#   2 - Retryable error (e.g., webhook limit on channel)
+#       SOLEUR_CREDENTIAL_REFUSED carries `reason=token_shape|control_char var=<NAME> phase=write-env`;
+#       or an operational write-env fault: the same marker with `reason=env_* var=ENV_FILE`, to diagnose
+#       and retry once. The one human line is on stdout; and a non-numeric guild_id, whose one line is on
+#       stderr like every other command's)
+#   2 - Retryable error from the Discord API (e.g., webhook limit on channel). write-env never exits 2:
+#       its faults exit 1
 #   64 - Usage error (write-env only: no guild_id, the webhook URL passed as an argument, or
 #        DISCORD_WEBHOOK_URL_INPUT or DISCORD_BOT_TOKEN_INPUT missing or empty). The usage text
 #        is printed on STDOUT, and so is the remedy for every one of these except the missing guild_id.
@@ -268,6 +271,173 @@ _wenv_validate() {
       *) _wenv_refuse token_shape "$_wn" ;;
     esac
   done
+}
+
+# (#10091) write-env commit: ONE helper, byte-identical in the four setup scripts (a drift row pins
+# it, from this comment line through the closing brace of `_wenv_write`). `_wenv_write <env_file>
+# <remove-ERE> <KEY=VALUE>...` replaces the old remove-then-append, which raced (two writers each read
+# the file, each rewrote it, the later mv lost the earlier's keys), was not atomic (the append hit the
+# live file after the mv) and widened a new file before the chmod.
+# The edit is built in a temp file `<.env>.wenv.XXXXXX` beside the RESOLVED .env (same filesystem, so the
+# final `mv -f` is one atomic rename; a namespace of its own, so the sweep below touches only that
+# namespace (a file there that is not a regular file this user owns is left alone), never the operator
+# library's `.env.tmp.*` temps) under `umask 077` (0600 from birth), serialized by
+# ONE mutual-exclusion mechanism on every platform: an owner-pid `mkdir` lock directory
+# (`<.env>.lock.d`) that is held until AFTER that rename. No flock (a flock run and a mkdir run exclude
+# nothing against each other, flock without a timeout blocks forever, and `exec {fd}<` needs bash 4.1
+# while macOS ships 3.2).
+# Stale-lock recovery is serialized as well, by a second `mkdir` mutex `<.env>.lock.d.recover`. A waiter
+# judges a lock stale when its owner pid is dead (or its owner file stayed empty for _WENV_EMPTY_POLLS
+# passes), then tries to take the mutex; a waiter that loses it keeps waiting. The winner RE-READS the
+# owner of the lock UNDER the mutex (the snapshot it judged on is never trusted; the re-read narrows the
+# window to the few instructions between the read and the removal, it does not close it), removes the lock
+# only if the owner is still a dead pid, or if the snapshot AND the re-read (after a short pause) both found
+# no pid, ALWAYS releases the mutex, and goes round the loop again. A lock whose owner turned from a dead pid
+# into nothing has changed hands and is left alone. A recovering waiter never writes while it recovers,
+# nothing is renamed away and put back, and the lock path is never empty while a live holder exists, so two
+# waiters cannot both hold the lock. A SOLEUR_WENV_LOCK_TICKS below 2 never attempts recovery.
+# The wait is ONE bounded loop. Every failed `mkdir` pass either sleeps one tick (0.1 s; 1 s where
+# `sleep` takes no fraction) or fails at once, and every pass counts against SOLEUR_WENV_LOCK_TICKS
+# (digits only, at most _WENV_TICKS_MAX, else _WENV_TICKS_DEFAULT): about 10 s by default with a
+# fractional `sleep`, about 100 s without one. It FAILS CLOSED: no write, a value-free marker, exit 1,
+# .env untouched. A lock path that exists but is not a directory fails at once (env_lock_not_dir). grep
+# exit 1 (nothing left) is normal; exit 2 (an unreadable .env) aborts, because swallowing it would
+# install an empty file over the credentials. A symlinked .env is resolved first (the real target is
+# rewritten, the link survives); a dangling link or a non-regular target is refused.
+# Signals: this helper owns the EXIT, INT, TERM and HUP traps for its duration and restores nothing (no
+# caller installs one today; a caller that needs its own must chain them). On those four it removes its
+# temp and its recovery mutex and releases the lock, and it removes the lock ONLY when the owner file
+# reads exactly this process. Residual, stated: SIGKILL leaves its lock (recovered by the next run
+# through the dead pid), its temp (swept by the next run, under the lock) and, if it died mid-recovery,
+# `<.env>.lock.d.recover`, which the next runs report after the bounded wait ("remove that directory");
+# a recycled pid can keep a dead owner looking live until the wait times out; the owner check uses
+# `kill -0`, so a lock held by another user reads as dead; a holder stalled between its `mkdir` and its
+# owner write for longer than the empty-owner window can be treated as ownerless and recovered.
+_WENV_TICK=0.1          # seconds per wait tick (a `sleep` without fractions falls back to 1 s)
+_WENV_TICKS_DEFAULT=100 # the default bound: about 10 s
+_WENV_TICKS_MAX=1000    # the largest SOLEUR_WENV_LOCK_TICKS accepted: about 100 s
+_WENV_EMPTY_POLLS=30    # passes an ownerless lock directory is waited on before recovery is tried: about 3 s
+_WENV_EMPTY_PAUSE=0.3   # pause between the two owner reads under the recovery mutex when the owner is not a pid
+_WENV_LOCK="" _WENV_TMP="" _WENV_REC=""
+_wenv_unlock() { # idempotent: remove our temp and recovery mutex; release the lock ONLY if its owner file reads exactly this process
+  local _wo=""
+  if [[ -n "$_WENV_TMP" ]]; then rm -f -- "$_WENV_TMP"; _WENV_TMP=""; fi
+  if [[ -n "$_WENV_REC" ]]; then rmdir -- "$_WENV_REC" 2>/dev/null || true; _WENV_REC=""; fi
+  if [[ -n "$_WENV_LOCK" ]]; then
+    { read -r _wo < "$_WENV_LOCK/owner"; } 2>/dev/null || _wo=""
+    if [[ "$_wo" == "$$" ]]; then rm -rf -- "$_WENV_LOCK"; fi
+    _WENV_LOCK=""
+  fi
+}
+_wenv_fail() { # <reason> <human text>: value-free marker on stderr, one human line on stdout, exit 1
+  printf 'SOLEUR_CREDENTIAL_REFUSED script=%s reason=%s var=ENV_FILE phase=write-env\n' "$SOLEUR_TRANSPORT_SCRIPT" "$1" >&2
+  echo "Error: $2 Nothing was written and your existing .env is unchanged."
+  exit 1
+}
+_wenv_write() {
+  local _wf="$1" _wre="$2" _wr _wl _wm _wd _wi=0 _ws=0 _wt _wown _wo2 _wsnap="" _wstale _wgone _wwhy="" _wn _wrc _wum
+  shift 2
+  if _wr="$(readlink -f -- "$_wf" 2>/dev/null)" && [[ -n "$_wr" ]]; then
+    :
+  elif [[ -L "$_wf" ]]; then
+    _wenv_fail env_unresolvable "The .env link at ${_wf} could not be resolved."
+  else
+    _wr="$_wf"
+  fi
+  if [[ -L "$_wf" && ! -e "$_wr" ]]; then
+    _wenv_fail env_dangling_link "The .env at ${_wf} is a link to a file that does not exist."
+  fi
+  if [[ -e "$_wr" && ! -f "$_wr" ]]; then
+    _wenv_fail env_not_regular "The .env at ${_wf} is not a regular file."
+  fi
+  _wl="${_wr}.lock.d"
+  _wm="${_wl}.recover"
+  _wt="${SOLEUR_WENV_LOCK_TICKS:-$_WENV_TICKS_DEFAULT}"
+  if [[ "$_wt" =~ ^[0-9]{1,4}$ ]] && (( 10#$_wt <= _WENV_TICKS_MAX )); then _wt=$((10#$_wt)); else _wt=$_WENV_TICKS_DEFAULT; fi
+  _wum="$(umask)"
+  umask 077
+  trap '_wenv_unlock' EXIT
+  trap '_wenv_unlock; exit 130' INT
+  trap '_wenv_unlock; exit 143' TERM
+  trap '_wenv_unlock; exit 129' HUP
+  while :; do
+    if mkdir -- "$_wl" 2>/dev/null; then
+      _WENV_LOCK="$_wl"
+      if ! printf '%s\n' "$$" > "$_wl/owner"; then
+        rm -rf -- "$_wl"; _WENV_LOCK=""
+        _wenv_fail env_write_failed "The lock at ${_wl} could not be recorded."
+      fi
+      break
+    fi
+    if [[ -L "$_wl" || -f "$_wl" ]]; then
+      _wenv_fail env_lock_not_dir "The lock path ${_wl} exists but is not a directory; remove it."
+    fi
+    _wi=$((_wi + 1))
+    _wstale=0
+    if [[ ! -d "$_wl" ]]; then
+      # mkdir failed with the path absent: the lock was released in between, or mkdir fails for another
+      # reason (a name too long, no space): a pass that made no progress, so it sleeps below like any other.
+      _ws=0; _wwhy=""
+      _wd="${_wr%/*}"; [[ "$_wd" != "$_wr" ]] || _wd=.
+      [[ -d "$_wd" && -w "$_wd" ]] || _wenv_fail env_dir_unwritable "The directory of ${_wf} does not allow a lock to be created."
+    else
+      _wown=""
+      { read -r _wown < "$_wl/owner"; } 2>/dev/null || _wown=""
+      if [[ "$_wown" =~ ^[0-9]+$ ]]; then
+        _ws=0; _wsnap=pid
+        if [[ "$_wown" == "$$" ]] || ! kill -0 "$_wown" 2>/dev/null; then _wstale=1; _wwhy=stale; else _wwhy=live; fi
+      else
+        _ws=$((_ws + 1)); _wwhy=""; _wsnap=empty
+        if (( _ws > _WENV_EMPTY_POLLS )); then _wstale=1; fi
+      fi
+    fi
+    if (( _wstale == 1 && _wi < _wt )); then
+      if mkdir -- "$_wm" 2>/dev/null; then
+        _WENV_REC="$_wm"
+        _wo2=""
+        { read -r _wo2 < "$_wl/owner"; } 2>/dev/null || _wo2=""
+        if [[ "$_wsnap" == empty && ! "$_wo2" =~ ^[0-9]+$ ]]; then
+          sleep "$_WENV_EMPTY_PAUSE" 2>/dev/null || sleep 1
+          { read -r _wo2 < "$_wl/owner"; } 2>/dev/null || _wo2=""
+        fi
+        _wgone=0
+        if [[ "$_wo2" =~ ^[0-9]+$ ]]; then
+          if [[ "$_wo2" == "$$" ]] || ! kill -0 "$_wo2" 2>/dev/null; then rm -rf -- "$_wl"; _ws=0; _wgone=1; fi
+        elif [[ "$_wsnap" == empty ]]; then
+          rm -rf -- "$_wl"; _ws=0; _wgone=1
+        fi
+        _wenv_unlock
+        if (( _wgone == 1 )); then continue; fi
+      fi
+    fi
+    if (( _wi >= _wt )); then
+      if [[ "$_wwhy" != live && -d "$_wm" ]]; then _wwhy=recover; fi
+      case "$_wwhy" in
+        live) _wenv_fail env_lock_timeout "Another write-env run is still holding the lock at ${_wl}; wait for it to finish and run this again. If no other run is active, remove that directory." ;;
+        recover) _wenv_fail env_lock_timeout "A lock recovery is in progress or was interrupted (${_wm} exists); waited and gave up. If no other run is active, remove that directory." ;;
+        *) _wenv_fail env_lock_timeout "The lock at ${_wl} could not be taken or recovered; waited and gave up. If no other run is active, remove that directory." ;;
+      esac
+    fi
+    sleep "$_WENV_TICK" 2>/dev/null || sleep 1
+  done
+  for _wn in "${_wr}".wenv.??????; do
+    if [[ -f "$_wn" && ! -L "$_wn" && -O "$_wn" ]]; then rm -f -- "$_wn"; fi
+  done
+  _WENV_TMP="$(mktemp "${_wr}.wenv.XXXXXX")" || _wenv_fail env_write_failed "A temp file could not be created beside ${_wf}."
+  if [[ -f "$_wr" ]]; then
+    _wrc=0
+    LC_ALL=C grep -a -v -E "$_wre" "$_wr" > "$_WENV_TMP" || _wrc=$?
+    if (( _wrc > 1 )); then
+      _wenv_fail env_unreadable "The existing .env at ${_wf} could not be read."
+    fi
+  fi
+  printf '%s\n' "$@" >> "$_WENV_TMP" || _wenv_fail env_write_failed "The new values could not be written beside ${_wf}."
+  chmod 600 "$_WENV_TMP" || _wenv_fail env_write_failed "The temp file beside ${_wf} could not be restricted to mode 600."
+  mv -f -- "$_WENV_TMP" "$_wr" || _wenv_fail env_write_failed "The new .env could not be moved into place at ${_wf}."
+  _WENV_TMP=""
+  _wenv_unlock
+  trap - EXIT INT TERM HUP
+  umask "$_wum"
 }
 
 # Make a Discord API request. Suppresses curl stderr to prevent token leakage
@@ -498,39 +668,21 @@ cmd_write_env() {
   local repo_root="$GIT_ROOT"
   local env_file="${repo_root}/.env"
 
-  # Remove existing Discord vars if .env exists
-  if [[ -f "$env_file" ]]; then
-    local tmp
-    tmp=$(mktemp) || { echo "Error: Failed to create temp file." >&2; exit 1; }
-    grep -v '^DISCORD_BOT_TOKEN=' "$env_file" | \
-      grep -v '^DISCORD_GUILD_ID=' | \
-      grep -v '^DISCORD_WEBHOOK_URL=' | \
-      grep -v '^DISCORD_RELEASES_WEBHOOK_URL=' | \
-      grep -v '^DISCORD_BLOG_WEBHOOK_URL=' > "$tmp" || true
-    mv "$tmp" "$env_file"
-  fi
-
-  # Set restrictive permissions BEFORE writing secrets
-  touch "$env_file"
-  chmod 600 "$env_file"
-
-  # Append Discord vars (file already has correct permissions)
-  local var_count=3
-  {
-    echo "DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN_INPUT}"
-    echo "DISCORD_GUILD_ID=${guild_id}"
-    echo "DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL_INPUT}"
-  } >> "$env_file"
-
-  # Optional: write channel-specific webhooks if provided
+  # The required three, then the optional channel-specific webhooks if provided.
+  local -a kv=(
+    "DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN_INPUT}"
+    "DISCORD_GUILD_ID=${guild_id}"
+    "DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL_INPUT}"
+  )
   if [[ -n "${DISCORD_RELEASES_WEBHOOK_URL_INPUT:-}" ]]; then
-    echo "DISCORD_RELEASES_WEBHOOK_URL=${DISCORD_RELEASES_WEBHOOK_URL_INPUT}" >> "$env_file"
-    var_count=$((var_count + 1))
+    kv+=("DISCORD_RELEASES_WEBHOOK_URL=${DISCORD_RELEASES_WEBHOOK_URL_INPUT}")
   fi
   if [[ -n "${DISCORD_BLOG_WEBHOOK_URL_INPUT:-}" ]]; then
-    echo "DISCORD_BLOG_WEBHOOK_URL=${DISCORD_BLOG_WEBHOOK_URL_INPUT}" >> "$env_file"
-    var_count=$((var_count + 1))
+    kv+=("DISCORD_BLOG_WEBHOOK_URL=${DISCORD_BLOG_WEBHOOK_URL_INPUT}")
   fi
+  # One atomic, serialized, mode-600-from-birth write (see _wenv_write above).
+  _wenv_write "$env_file" '^(DISCORD_BOT_TOKEN|DISCORD_GUILD_ID|DISCORD_WEBHOOK_URL|DISCORD_RELEASES_WEBHOOK_URL|DISCORD_BLOG_WEBHOOK_URL)=' "${kv[@]}"
+  local var_count=${#kv[@]}
 
   # The confirmation is on STDOUT like the rest of write-env's human text (agent runtimes surface
   # stdout and swallow stderr, so a success printed on stderr reads as silence).

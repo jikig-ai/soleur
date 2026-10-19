@@ -159,10 +159,13 @@ expect_green_added() {
 # 66 -> 67 at #9597 (S4): NON_PAGING_MARKERS gains SOLEUR_CREDENTIAL_REFUSED — infra-config-verify.sh prints
 # it to stderr inside the apply-deploy-pipeline-fix job, so it never reaches web-1 journald. One census row;
 # the case count is unchanged.
+# 73 -> 74 at #10257: SOLEUR_INFRA_PULL_SEAM_REFUSED registered in NON_PAGING_MARKERS (inngest-config-refresh.sh's bare-logger seam refusal) — one census row.
+# 74 -> 79 at #9757 PR C (#10120, #10093): inngest-bootstrap.sh, inngest-consumer-probe.sh, web-private-nic-guard.sh (two sites: the refused and the unset URL) and web-zot-consumer-probe.sh now emit SOLEUR_CREDENTIAL_REFUSED (non-paging), one stays-below-crit check each (+5); the case count is unchanged.
+# 71 -> 73 at #9757 residue: luks-monitor.sh and web-git-data-probe.sh now emit SOLEUR_CREDENTIAL_REFUSED (non-paging), one stays-below-crit check each.
 # 67 -> 71 at #9597 (S5): the four Better Stack posting scripts of cloud-init-registry.yml (disk heartbeat, log shipper,
 # private-NIC guard, boot block) each print SOLEUR_CREDENTIAL_REFUSED on a refused ingest token, to stderr and never at crit. The guard
 # scans cloud-init*.yml, so each emitter is one NON_PAGING census row (+4); the case count is unchanged. No mutation row changes.
-BASELINE_PASSES=71
+BASELINE_PASSES=79
 BASELINE_CASES=9
 restore; cases=$((cases + 1))
 if run_guard; then ok "baseline: guard is GREEN against the unmutated sandbox"
@@ -258,15 +261,15 @@ assert s.count(old) == 1, "anchor"
 s = s.replace(old, "vector_prd_source_id = \"2457082\"")'
 expect_red "M8 (source id 2457082)" betterstack-logs-alerts.tf "source id != vector.toml sink"
 
-# TWELVE explorations carry this line (monitor_send_failed #8097 — the first occurrence and the one mutated below; #6894, #8408's registry_store_not_luks, #8611's three, #8706's
+# SIXTEEN explorations carry this line (monitor_send_failed #8097 — the first occurrence and the one mutated below; #6894, #8408's registry_store_not_luks, #7530's registry_clientip_not_rfc1918, #10321's registry_zot_log_credential_shape, #8611's three, #8706's
 # luks_monitor_host_timer_dark, #9045's workspaces_luks_deadman_fired, #9342's bwrap_probe_rollback, #9391's ghcr_hostsfile_deny_lost, #9534's egress_gw_deny_spike and
-# egress_gw_probe_silent), and the guard
+# egress_gw_probe_silent, the review follow-up's egress_gw_probe_fail, and #10445's agent_sandbox_bash_denial), and the guard
 # reads the monitor_send_failed block only — so the mutation must land in THAT block, which is the
 # first occurrence in the file. The count is asserted exactly (not `>= 1`), and the first-occurrence
 # premise is asserted directly below, so a reordered file cannot make "the first" mean another block.
 MUT='
 old = "    values        = [local.vector_prd_source_id]"
-assert s.count(old) == 12, "anchor"
+assert s.count(old) == 16, "anchor"
 assert s.index(old) > s.index("resource \"logtail_exploration\" \"monitor_send_failed\" {") and s.index(old) < s.index("resource \"logtail_exploration\" \"inngest_luks_wrong_volume\" {"), "first occurrence is not in monitor_send_failed"
 s = s.replace(old, "    values        = [\"2734275\"]", 1)'
 expect_red "M17 (exploration values literal, not the pinned local)" betterstack-logs-alerts.tf "exploration source not pinned"

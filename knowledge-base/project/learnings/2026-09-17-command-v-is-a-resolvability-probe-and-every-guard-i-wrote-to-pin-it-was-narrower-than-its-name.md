@@ -203,6 +203,6 @@ repo-wide the same day: a sibling file's stale twin is where it will be re-read 
 
 ## Related
 
-- `knowledge-base/project/specs/feat-one-shot-8231-parallel-test-all/acceptance-evidence.md`
+- `knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-8231-parallel-test-all/acceptance-evidence.md`
 - #8231 (open — the parallel scheduler is blocked on a green baseline)
 - #7376, #7432, #7454, #7554, #7076, #8045, #6496 — the adjacent test-infrastructure set

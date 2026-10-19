@@ -112,7 +112,7 @@ fi
 # --- T6: runnable by preflight Check 10 ------------------------------------
 # Pins the reason this probe is a script at all. If someone later "simplifies"
 # it back to a pipeline in the plan, Check 10 silently stops verifying it.
-PLAN="$REPO_ROOT/knowledge-base/project/plans/2026-07-28-chore-collapse-agents-change-class-sidecars-plan.md"
+PLAN="$REPO_ROOT/knowledge-base/project/plans/archive/20261013-041741-2026-07-28-chore-collapse-agents-change-class-sidecars-plan.md"
 if [[ -r "$PLAN" ]]; then
   CMD=$(awk '/^## Observability$/{i=1;next} /^## /{if(i)exit} i' "$PLAN" \
         | awk '/^[[:space:]]*command:/{sub(/^[[:space:]]*command:[[:space:]]*/,"");print;exit}')

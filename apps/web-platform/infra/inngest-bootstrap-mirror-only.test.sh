@@ -598,6 +598,7 @@ CRANE_SHA_EXPECTED="c14340087103ba9dadf61d45acd20675490fd0ccbd56ac7901fc1b502137
 for wf in .github/workflows/build-inngest-bootstrap-image.yml \
           .github/workflows/build-inngest-config-bundle.yml \
           .github/workflows/reusable-release.yml \
+          .github/workflows/scheduled-vinngest-digest-freshness.yml \
           .github/workflows/apply-web-platform-infra.yml; do
   # Anchored on the ASSIGNMENT, not a whole-file grep. A bare `grep -qF` over raw text is
   # satisfied by a comment recording the OLD pin (`# previous pin: c1434008...`) sitting
@@ -609,7 +610,12 @@ for wf in .github/workflows/build-inngest-bootstrap-image.yml \
   # file carries TWO pins (apply-web-platform-infra.yml gained a second when #7277 split the
   # gate job out of the recut) this degraded into a first-member guard: drift the SECOND copy —
   # the one the POST-DESTROY restore runs — and this stayed green. Count both sides.
-  elif [[ "$(grep -cE '^[[:space:]]*CRANE_SHA256=' "$wf")" == "$(grep -cE "^[[:space:]]*CRANE_SHA256=\"${CRANE_SHA_EXPECTED}\"" "$wf")" ]]; then
+  # The anchor accepts BOTH the shell-assignment form (`CRANE_SHA256=<sha>`)
+  # and the YAML step-env form (`CRANE_SHA256: <sha>`) — step-env sites carry
+  # the colon form, and an =-only anchor would count zero on both sides and
+  # pass vacuously.
+  elif [[ "$(grep -cE '^[[:space:]]*CRANE_SHA256(:|=)' "$wf")" -ge 1 ]] \
+    && [[ "$(grep -cE '^[[:space:]]*CRANE_SHA256(:|=)' "$wf")" == "$(grep -cE "^[[:space:]]*CRANE_SHA256(:|=)[[:space:]]*\"?${CRANE_SHA_EXPECTED}" "$wf")" ]]; then
     ok "crane SHA256 pin matches across workflows — $(basename "$wf")"
   else
     no "crane SHA256 pin DRIFTED in $wf (expected an assignment of $CRANE_SHA_EXPECTED)"

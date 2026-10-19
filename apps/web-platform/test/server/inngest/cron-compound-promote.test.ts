@@ -33,7 +33,7 @@ import { SYNTHETIC_CHECK_NAMES } from "@/server/inngest/functions/_cron-safe-com
 // =============================================================================
 
 describe("PII regex parity (AC8)", () => {
-  it("TS regex source matches the bash PII_REGEX at scripts/compound-promote.sh:75", () => {
+  it("TS regex source matches the bash PII_REGEX in scripts/compound-promote.sh", () => {
     const repoRoot = join(__dirname, "..", "..", "..", "..", "..");
     const script = readFileSync(
       join(repoRoot, "scripts", "compound-promote.sh"),

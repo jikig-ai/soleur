@@ -1646,7 +1646,7 @@ hcloud firewall attached until the next full/drift apply reconciles server_ids".
 non-ForceNew) does NOT change, so it is DELIBERATELY absent from the allow-set". No actor ever did
 that reconcile: the drift check only plans, the per-merge apply never targeted the attachment, and no
 other workflow applies it. The gap was not new. The 2026-07-20 plan
-(`knowledge-base/project/plans/2026-07-20-feat-inngest-liveness-marker-discriminators-and-registry-probe-op-plan.md`,
+(`knowledge-base/project/plans/archive/20261013-041741-2026-07-20-feat-inngest-liveness-marker-discriminators-and-registry-probe-op-plan.md`,
 architecture P1-4) recorded that for this reconcile "no such automated path exists", and the gap was
 accepted anyway, on a premise that plan had just shown false. The Apply-path bullet itself stands. Its replace gate now also requires the
 replacement to be born bound to the firewall (`firewall_not_bound`).
@@ -1824,7 +1824,7 @@ halves, matching the zot-pin precedent (#7282):
 - Liveness probe for operators: `apps/web-platform/infra/inngest-cli-pin-probe.sh`
   prints `PINNED=`, `CAPTURE_DATE=`, `VERDICT=` in under a second, offline.
 
-### Phase-0 findings re-spiked against v1.45.1 (evidence: `knowledge-base/project/specs/feat-one-shot-7463-inngest-cli-pin-bump/phase0-respike-evidence.md`)
+### Phase-0 findings re-spiked against v1.45.1 (evidence: `knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7463-inngest-cli-pin-bump/phase0-respike-evidence.md`)
 
 | Finding | Verdict on v1.45.1 |
 |---|---|

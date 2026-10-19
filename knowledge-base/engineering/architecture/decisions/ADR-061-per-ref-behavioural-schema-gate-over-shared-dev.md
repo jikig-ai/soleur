@@ -45,7 +45,7 @@ The gate is a **fail-fast named-relation early-warning, not a proof**: its "rais
 
 ### Context
 
-The #7964 work made the ledger drift probe BLOCKING on push to main, the alternative rejected above. Its plan (`knowledge-base/project/plans/2026-09-21-fix-tenant-integration-shared-fixture-contention-plan.md` §M2) assumed "on push … there is no legitimate unmerged-migration state". This ADR's own Context says the opposite: dev is the union of main plus every open PR's applied-but-unmerged migrations. The rejected alternative's prediction came true on 2026-09-22. Runs 35732801080 and 35736906203 failed every push to main on `Missing-on-main: 139_openai_api_key_provider.sql`, a row an open PR had legitimately applied, until that PR merged.
+The #7964 work made the ledger drift probe BLOCKING on push to main, the alternative rejected above. Its plan (`knowledge-base/project/plans/archive/20261013-051752-2026-09-21-fix-tenant-integration-shared-fixture-contention-plan.md` §M2) assumed "on push … there is no legitimate unmerged-migration state". This ADR's own Context says the opposite: dev is the union of main plus every open PR's applied-but-unmerged migrations. The rejected alternative's prediction came true on 2026-09-22. Runs 35732801080 and 35736906203 failed every push to main on `Missing-on-main: 139_openai_api_key_provider.sql`, a row an open PR had legitimately applied, until that PR merged.
 
 Separately, content drift accumulated for months: 26 rows on 2026-09-21. The cause was PRs editing a migration after their CI had applied it. The runner never re-applies a ledgered filename, so dev kept the old body.
 

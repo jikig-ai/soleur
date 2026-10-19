@@ -305,8 +305,8 @@ DARK_ARM_RENDER_BLOCK=$(
   awk '/^# @@DARK_ARM@@ render begin/{f=1;next} /^# @@DARK_ARM@@ render end/{f=0} f' "$BOOTSTRAP_SH"
 )
 
-assert "ping-script heredoc body extracted (carries the curl exec)" \
-  "[[ -s '$PING_BODY' ]] && grep -qF 'exec /usr/bin/curl' '$PING_BODY'"
+assert "ping-script heredoc body extracted (carries the stdin-config curl transport line)" \
+  "[[ -s '$PING_BODY' ]] && grep -qF '| /usr/bin/curl --disable' '$PING_BODY'"
 # Anchored on the STANDALONE sentinel line, mirroring the production sed's own `^...$`
 # anchors: the sentinel is also named in the heredoc's explanatory comment, so a bare-token
 # grep would match the prose and pass vacuously against a deleted sentinel.
@@ -557,40 +557,38 @@ assert "1.6.2 no INNGEST_HEARTBEAT_URL is assigned a literal URL anywhere in inf
 assert "1.6.2 no Better Stack heartbeat URL literal is baked into a delivered infra artifact" \
   "! grep -rIE --exclude='*.test.sh' 'uptime\\.betterstack\\.com/api/v[0-9]+/heartbeat/[A-Za-z0-9]' '$SCRIPT_DIR'"
 
-# AC5b case 3 -- web render, URL absent: NO dark arm, so the absent URL reaches curl and
-# exits 2, loudly. This is what makes CPO P1-1 STRUCTURALLY unreachable rather than gated:
-# the live co-located pusher's script has no exit-0 branch to reach at all.
+# AC5b case 3 -- web render, URL absent: NO dark arm, so the absent URL reaches the #9757 shape guard (reason=empty),
+# which exits 2, loudly. This is what makes CPO P1-1 STRUCTURALLY unreachable rather than gated:
+# the live co-located pusher's script has no exit-0 branch to reach at all for an ABSENT URL.
 assert "AC5b/3 web render carries NO dark arm (no exit-0 branch on the live pusher)" \
   "! grep -qF 'url_present=no' '$WEB_PING'"
 WEB_LOG="$PING_TMP/logger-web-absent.txt"
 WEB_ABSENT_OUT=$(run_ping "$WEB_PING" "" "$WEB_LOG") && WEB_ABSENT_RC=0 || WEB_ABSENT_RC=$?
-# The contract is LOUD (non-zero) and CURL-attributable — NOT a specific exit code. curl's
-# empty-URL code is version-dependent: 8.18 exits 2 ("option : blank argument where content is
-# expected"), while #4116 recorded exit 3 ("URL using bad/illegal format or missing URL") on an
-# older curl. #6536's prod host measured 2, so an `-eq 2` assertion looks right on a modern box
-# and hard-fails on any runner shipping an older curl — it pins the AUTHOR'S curl build, not the
-# behaviour under test. Both halves are load-bearing:
-#   - `-ne 0` is the actual property (the live pusher must not silently succeed with no URL);
-#   - `^curl:` proves curl RAN and rejected the URL. Without it a missing binary would exit 127
-#     (`sh: exec: /usr/bin/curl: not found` — sh's message, not curl's) and satisfy a bare
-#     `-ne 0`, passing this assertion for the one reason that would mean the test proved nothing.
-assert "AC5b/3 web render + URL absent -> non-zero AND curl is what rejected it (loud; absent URL on the live pusher is a fault)" \
-  "[[ '$WEB_ABSENT_RC' -ne 0 && '$WEB_ABSENT_RC' -ne 127 ]] && printf '%s' \"\$WEB_ABSENT_OUT\" | grep -c '^curl:' >/dev/null"
+# #9757: the URL no longer reaches curl as an argument, and an EMPTY value fails the shape guard before any
+# request, so curl never runs here: the loud, attributable signal is the guard's own refusal (exit 2, the same
+# code curl's blank-URL rejection gave) plus its one marker. The contract is "non-zero AND not 127": a missing
+# binary would be exit 127 and has no marker, so the marker half keeps the row from passing for the one reason that
+# would prove nothing. (The pre-#9757 `^curl:` attribution, which depended on curl's version-dependent blank-URL
+# code, is SUPERSEDED by the marker and is no longer asserted.)
+assert "AC5b/3 web render + URL absent -> non-zero AND the shape guard is what rejected it (loud; absent URL on the live pusher is a fault)" \
+  "[[ '$WEB_ABSENT_RC' -ne 0 && '$WEB_ABSENT_RC' -ne 127 ]] && grep -q 'SOLEUR_CREDENTIAL_REFUSED script=inngest-heartbeat' '$WEB_LOG'"
 assert "AC5b/3 web render + URL absent -> emitted no dark-arm row" \
-  "[[ ! -s '$WEB_LOG' ]]"
+  "! grep -q 'url_present=no' '$WEB_LOG'"
 
 # AC5b case 2 + AC3 (leak gate) -- dedicated render, URL PRESENT: the happy path is
-# unchanged (exec curl runs), AND the canary value never appears in stdout+stderr+logger.
+# unchanged (the stdin-config curl runs), AND the canary value never appears in stdout+stderr+logger.
 # Value-based by design: v2's source-grep caught 1 of 3 leak shapes (it missed the brace
 # form ${INNGEST_HEARTBEAT_URL} -- this repo's own house style -- and printf '%s'), and is
 # blind to set -x / curl -v / --write-out '%{url}'. Asserting the VALUE's absence in the
 # real output cannot be defeated by any of those shapes.
-CANARY_URL="http://127.0.0.1:1/api/v1/heartbeat/CANARY_SENTINEL"
+CANARY_URL="https://127.0.0.1:1/api/v1/heartbeat/CANARY_SENTINEL"
 DED_PRESENT_LOG="$PING_TMP/logger-dedicated-present.txt"
 DED_PRESENT_OUT=$(run_ping "$DEDICATED_PING" "$CANARY_URL" "$DED_PRESENT_LOG") \
   && DED_PRESENT_RC=0 || DED_PRESENT_RC=$?
-assert "AC5b/2 dedicated render + URL present -> exec curl runs (rc=7 vs closed port, happy path intact)" \
-  "[[ '$DED_PRESENT_RC' -eq 7 ]]"
+# rc=7 (connection refused on the closed port) is the proof that REAL curl parsed the config and tried to connect:
+# a rejected config or option would exit 2 and print `curl: option ...`; a refused URL never reaches curl at all.
+assert "AC5b/2 dedicated render + URL present -> curl runs (rc=7 vs closed port, happy path intact, config parsed)" \
+  "[[ '$DED_PRESENT_RC' -eq 7 ]] && ! grep -q '^curl: option' <<<\"\$DED_PRESENT_OUT\""
 assert "AC5b/2 dedicated render + URL present -> dark arm NOT taken" \
   "! grep -q 'url_present=no' '$DED_PRESENT_LOG'"
 assert "AC3 leak gate: canary value appears ZERO times in stdout+stderr" \
@@ -605,7 +603,398 @@ assert "AC3 non-vacuity: the harness observes a leaked canary when one IS emitte
 # Cheap secondary (AC3): no logger/echo/printf line may reference the URL value. Asserted on
 # the RENDERED scripts (not the heredoc body) so it also covers the sed replacement's text.
 assert "AC3 secondary: no logger/echo/printf line references the URL value (both renders)" \
-  "! grep -qE '^[[:space:]]*(logger|echo|printf)[[:space:]].*INNGEST_HEARTBEAT_URL' '$DEDICATED_PING' '$WEB_PING'"
+  "[[ \$(cat '$DEDICATED_PING' '$WEB_PING' | grep -E '^[[:space:]]*(logger|echo|printf)[[:space:]].*INNGEST_HEARTBEAT_URL' | grep -vcE '\\| /usr/bin/curl --disable ') -eq 0 ]]"
+
+# --- #9757: the heartbeat URL is a PATH SECRET and must never be a curl ARGUMENT --------------
+# `curl "$INNGEST_HEARTBEAT_URL"` put the bearer capability in /proc/<pid>/cmdline, readable by every
+# local user for the life of the child (ADR-280). The beat now reaches curl on its stdin config
+# (`--config -`, fed by a pipe from the printf builtin: this body is POSIX sh, so no process substitution and no [[ ]]), after a
+# shape guard: https:// then a non-empty rest of [A-Za-z0-9._~:/?&=%+-] only, no trimming. A value that
+# fails it makes ZERO requests and logs ONE value-free SOLEUR_CREDENTIAL_REFUSED line through the hourly limiter
+# (this unit fires every 60 s, so an unlimited marker would be ~1,440 rows/day; only the log line is limited,
+# the decision never is). EXIT STATUS (CTO-ruled): a PRESENT-but-malformed value (token_shape, control_char)
+# exits 0 -- the missed beat is the alarm, and a non-zero exit would fire the unit's unlimited OnFailure ERR
+# logger every tick; only reason=empty (unset URL on the web render, which has no dark arm) exits 2. The script calls the ABSOLUTE /usr/bin/curl, so the recording stub is wired in
+# by rewriting that path ONLY on the transport line (`--config -`) in a COPY of the rendered script: a
+# file-wide rewrite would also stub the listener-gate health curl and suppress every beat.
+echo ""
+echo "--- #9757: heartbeat URL on curl's stdin config, never argv (shape guard, hourly marker, POSIX sh) ---"
+HB_CALLS="$PING_TMP/hb-calls.txt"
+HB_STUB="$PING_TMP/hb-stub-curl"
+cat > "$HB_STUB" <<'HBSTUBEOF'
+#!/bin/bash
+case " $* " in
+  *" --config - "*)
+    printf 'argv %s\n' "$*" >> "$HB_CALLS"
+    line=""
+    while IFS= read -r l || [ -n "$l" ]; do case "$l" in 'url = "'*) line="$l"; break ;; esac; done
+    if [ -z "$line" ]; then printf 'cfg-MISSING\n' >> "$HB_CALLS"; exit 97; fi
+    printf 'cfg %s\n' "$line" >> "$HB_CALLS"
+    exit "${HB_STUB_RC:-0}" ;;
+  *) exec /usr/bin/curl "$@" ;;
+esac
+HBSTUBEOF
+chmod +x "$HB_STUB"
+HB_WEB="$PING_TMP/ping-web-stub.sh"; HB_DED="$PING_TMP/ping-ded-stub.sh"
+sed "/--config -/s|/usr/bin/curl|$HB_STUB|" "$WEB_PING" > "$HB_WEB"
+sed "/--config -/s|/usr/bin/curl|$HB_STUB|" "$DEDICATED_PING" > "$HB_DED"
+assert "the stub-wired copies differ from the rendered scripts in EXACTLY one line (the transport line); the health probe keeps the real curl" \
+  "[[ \$(diff '$WEB_PING' '$HB_WEB' | grep -c '^>') -eq 1 && \$(diff '$DEDICATED_PING' '$HB_DED' | grep -c '^>') -eq 1 && \$(grep -c '$HB_STUB' '$HB_WEB') -eq 1 && \$(grep -c '$HB_STUB' '$HB_DED') -eq 1 ]]"
+
+HB_RUN_SEQ=0
+hb_run() {  # <script> <url> <logger sink> [VAR=val ...]   (sets HB_RC, HB_OUT; recorded calls in $HB_CALLS)
+  local script="$1" url="$2" sink="$3"; shift 3
+  # A per-call COUNTER names the refusal stamp: $RANDOM collided (birthday odds over ~100 calls) and a reused fresh stamp
+  # suppresses the marker the next row expects.
+  HB_RUN_SEQ=$((HB_RUN_SEQ + 1))
+  : > "$HB_CALLS"; : > "$sink"
+  HB_OUT="$(env PATH="$PING_TMP/bin:$PATH" LOGGER_OUT="$sink" HB_CALLS="$HB_CALLS" \
+    INNGEST_HEARTBEAT_URL="$url" INNGEST_HEARTBEAT_HEALTH_URL="$HEALTH_OK_URL" \
+    INNGEST_HEARTBEAT_REFUSAL_STAMP="$PING_TMP/hb-refusal-$HB_RUN_SEQ.stamp" "$@" sh "$script" 2>&1)" && HB_RC=0 || HB_RC=$?
+  HB_N_ARGV="$(grep -c '^argv ' "$HB_CALLS" || true)"
+  HB_N_MISSING="$(grep -c '^cfg-MISSING' "$HB_CALLS" || true)"
+  HB_N_MARK="$(grep -c 'SOLEUR_CREDENTIAL_REFUSED' "$sink" || true)"
+}
+HB_GOOD="https://uptime.betterstack.test/api/v1/heartbeat/CANARY_SENTINEL"
+HB_LOG="$PING_TMP/logger-hb.txt"
+
+for _render in web ded; do
+  if [[ "$_render" == web ]]; then _scr="$HB_WEB"; else _scr="$HB_DED"; fi
+  hb_run "$_scr" "$HB_GOOD" "$HB_LOG"
+  assert "#9757 $_render render, healthy URL: exactly one heartbeat curl, exit 0, no marker" \
+    "[[ '$HB_N_ARGV' -eq 1 && '$HB_RC' -eq 0 && '$HB_N_MARK' -eq 0 && '$HB_N_MISSING' -eq 0 ]]"
+  assert "#9757 $_render render: curl argv is exactly --disable --noproxy * -gfsS --max-time 10 --config - (no URL word)" \
+    "grep -qxF 'argv --disable --noproxy * -gfsS --max-time 10 --config -' '$HB_CALLS'"
+  assert "#9757 $_render render: the URL is the recorded stdin url line, and only there" \
+    "grep -qxF 'cfg url = \"$HB_GOOD\"' '$HB_CALLS' && ! grep -q '^argv .*CANARY_SENTINEL' '$HB_CALLS'"
+  assert "#9757 $_render render: the URL is absent from stdout, stderr and logger output" \
+    "[[ \$(printf '%s' \"\$HB_OUT\" | grep -c CANARY_SENTINEL) -eq 0 && \$(grep -c CANARY_SENTINEL '$HB_LOG') -eq 0 ]]"
+done
+hb_run "$HB_WEB" "$HB_GOOD" "$HB_LOG" HB_STUB_RC=7
+assert "#9757 a failing beat keeps its exit code (the pipeline's status is curl's, as exec curl gave: rc=7 propagates to the unit)" "[[ '$HB_RC' -eq 7 && '$HB_N_ARGV' -eq 1 ]]"
+# must-PASS: a different well-formed token carrying every allowed punctuation class
+hb_run "$HB_WEB" 'https://uptime.betterstack.test/api/v1/heartbeat/A.b_c~d:9?x=1&y=%2B+z-Q' "$HB_LOG"
+assert "#9757 a well-formed URL with a different token (every allowed punctuation class) beats once, on stdin only" \
+  "[[ '$HB_N_ARGV' -eq 1 && '$HB_N_MARK' -eq 0 && '$HB_RC' -eq 0 ]] && grep -qxF 'cfg url = \"https://uptime.betterstack.test/api/v1/heartbeat/A.b_c~d:9?x=1&y=%2B+z-Q\"' '$HB_CALLS'"
+
+# HOSTILE and malformed values on the LIVE (web) render: zero requests, exit 0, exactly one value-free marker.
+# A POSITIVE-pattern guard (`https://[...]*`, which only constrains the first character) passes every row that
+# carries its bad byte mid-value, and a guard that checked only the class passes the non-https rows: both
+# halves of the guard are discriminated here.
+hb_refuse() {  # <label> <value> <reason>
+  hb_run "$HB_WEB" "$2" "$HB_LOG"
+  # The marker is the LAST text on its logged line (END-anchored), so trailing text cannot hide a leak.
+  assert "#9757 guard refuses $1: zero curl calls, exit 0 (the missed beat is the alarm), exactly one marker (reason=$3)" \
+    "[[ '$HB_N_ARGV' -eq 0 && '$HB_RC' -eq 0 && '$HB_N_MARK' -eq 1 ]] && grep -qE ' SOLEUR_CREDENTIAL_REFUSED script=inngest-heartbeat reason=$3 var=INNGEST_HEARTBEAT_URL\$' '$HB_LOG'"
+  assert "#9757 guard refuses $1: neither the host nor the secret path token is echoed to the output or the log" \
+    "[[ \$(grep -c -e 'betterstack' -e 'CANARY_SENTINEL' <<<\"\$HB_OUT\" || true) -eq 0 && \$(grep -c -e 'betterstack' -e 'CANARY_SENTINEL' '$HB_LOG') -eq 0 ]]"
+}
+# ONE defect per row (a good URL plus a single bad thing, built per row), defined ONCE as parallel arrays so
+# the list cannot silently diverge from its assertions; the array is pinned by length AND by content.
+HB_H_LABEL=(); HB_H_VAL=(); HB_H_REASON=()
+hb_h() { HB_H_LABEL+=("$1"); HB_H_VAL+=("$2"); HB_H_REASON+=("$3"); }
+hb_h 'an empty rest (bare scheme)' "https://" token_shape
+hb_h 'a scheme other than https' "http://uptime.betterstack.test/x" token_shape
+hb_h 'an uppercase scheme' "HTTPS://uptime.betterstack.test/x" token_shape
+hb_h 'no scheme' "uptime.betterstack.test/x" token_shape
+hb_h 'a leading space' " ${HB_GOOD}" token_shape
+hb_h 'a trailing space' "${HB_GOOD} " token_shape
+hb_h 'an embedded space' "${HB_GOOD} x" token_shape
+hb_h 'a double quote' "${HB_GOOD}\"" token_shape
+hb_h 'a single quote' "${HB_GOOD}'" token_shape
+hb_h 'a backslash' "${HB_GOOD}\\x" token_shape
+hb_h 'an injected directive after a newline' "${HB_GOOD}
+proxy = \"http://203.0.113.1:3128\"" control_char
+hb_h 'a mid-value newline' "${HB_GOOD}
+x" control_char
+hb_h 'a trailing newline' "${HB_GOOD}
+" control_char
+hb_h 'a carriage return' "${HB_GOOD}"$'\r'"x" control_char
+hb_h 'a tab' "${HB_GOOD}"$'\t'"x" control_char
+hb_h 'a semicolon' "${HB_GOOD};x" token_shape
+hb_h 'a dollar sign' "${HB_GOOD}\$x" token_shape
+hb_h 'a backtick' "${HB_GOOD}\`x" token_shape
+hb_h 'userinfo (@)' "https://u@uptime.betterstack.test/x" token_shape
+hb_h 'a hash' "${HB_GOOD}#x" token_shape
+assert "#9757 the hostile-value table is pinned: 20 rows, labels unique, every reason is token_shape or control_char" \
+  "[[ '${#HB_H_VAL[@]}' -eq 20 && '${#HB_H_LABEL[@]}' -eq 20 && '${#HB_H_REASON[@]}' -eq 20 && \$(printf '%s\n' \"\${HB_H_LABEL[@]}\" | sort -u | wc -l) -eq 20 && \$(printf '%s\n' \"\${HB_H_REASON[@]}\" | grep -cvE '^(token_shape|control_char)\$') -eq 0 ]]"
+for _i in "${!HB_H_VAL[@]}"; do hb_refuse "${HB_H_LABEL[$_i]}" "${HB_H_VAL[$_i]}" "${HB_H_REASON[$_i]}"; done
+# An ABSENT URL on the live pusher stays loud (it was curl's own rc=2): exit 2, zero requests, one marker.
+hb_run "$HB_WEB" "" "$HB_LOG"
+assert "#9757 web render + URL absent: still loud (exit 2), zero curl calls, one marker (an empty value is not of the shape)" \
+  "[[ '$HB_RC' -eq 2 && '$HB_N_ARGV' -eq 0 && '$HB_N_MARK' -eq 1 ]]"
+# An UNSET URL is not a MALFORMED one: on the web render (no dark arm) it reaches the guard, and the marker says so.
+assert "#9757 web render + URL absent: the marker names reason=empty (an unset value is not filed as malformed)" \
+  "grep -qF ' SOLEUR_CREDENTIAL_REFUSED script=inngest-heartbeat reason=empty var=INNGEST_HEARTBEAT_URL' '$HB_LOG'"
+# A present-but-malformed value does NOT fire the unit's failure path (the unlimited OnFailure ERR logger): the
+# script's exit status is 0 for token_shape and for control_char, and 2 only for empty. One defect per row.
+hb_run "$HB_WEB" "${HB_GOOD}\"" "$HB_LOG"
+assert "#9757 exit status: a present-but-malformed value (reason=token_shape) exits 0, so the unit's failure path does not fire" \
+  "[[ '$HB_RC' -eq 0 ]] && grep -qE ' reason=token_shape var=INNGEST_HEARTBEAT_URL\$' '$HB_LOG'"
+hb_run "$HB_WEB" "${HB_GOOD}"$'\n'"x" "$HB_LOG"
+assert "#9757 exit status: a present-but-malformed value (reason=control_char) exits 0, so the unit's failure path does not fire" \
+  "[[ '$HB_RC' -eq 0 ]] && grep -qE ' reason=control_char var=INNGEST_HEARTBEAT_URL\$' '$HB_LOG'"
+hb_run "$HB_WEB" "" "$HB_LOG"
+assert "#9757 exit status: an ABSENT value (reason=empty) exits 2 on the web render (stays loud)" \
+  "[[ '$HB_RC' -eq 2 ]] && grep -qE ' reason=empty var=INNGEST_HEARTBEAT_URL\$' '$HB_LOG'"
+# ...and the dedicated render's dark arm still exits 0 BEFORE the guard (url_present=no, never a credential refusal)
+hb_run "$HB_DED" "" "$HB_LOG"
+assert "#9757 dedicated render + URL absent: the dark arm still wins (exit 0, url_present=no, no refusal marker)" \
+  "[[ '$HB_RC' -eq 0 && '$HB_N_ARGV' -eq 0 && '$HB_N_MARK' -eq 0 ]] && grep -q 'url_present=no' '$HB_LOG'"
+# ORDER: the listener gate precedes the guard, so a non-serving host with a malformed URL stays SUPPRESSED (exit 0)
+hb_run "$HB_WEB" "${HB_GOOD}\"" "$HB_LOG" INNGEST_HEARTBEAT_HEALTH_URL="$HEALTH_404_URL"
+assert "#9757 ordering: the listener gate precedes the guard (a non-serving host stays suppressed, exit 0, no refusal marker)" \
+  "[[ '$HB_RC' -eq 0 && '$HB_N_ARGV' -eq 0 && '$HB_N_MARK' -eq 0 ]] && grep -q 'listener=no' '$HB_LOG'"
+
+# The hourly limiter on the refusal marker: the DECISION (exit 0, zero requests) is never limited, only the row.
+HB_RL_STAMP="$PING_TMP/hb-rl/refusal.stamp"; mkdir -p "$(dirname "$HB_RL_STAMP")"; rm -f "$HB_RL_STAMP"
+HB_RL_LOG="$PING_TMP/logger-hb-rl.txt"; : > "$HB_RL_LOG"; : > "$HB_CALLS"
+hb_rl_fire() {
+  PATH="$PING_TMP/bin:$PATH" LOGGER_OUT="$HB_RL_LOG" HB_CALLS="$HB_CALLS" INNGEST_HEARTBEAT_URL="${HB_GOOD}\"" \
+    INNGEST_HEARTBEAT_HEALTH_URL="$HEALTH_OK_URL" INNGEST_HEARTBEAT_REFUSAL_STAMP="$HB_RL_STAMP" \
+    sh "$HB_WEB" >/dev/null 2>&1
+}
+HB_RL_RCS=""
+for _ in 1 2 3 4; do hb_rl_fire && HB_RL_RC=0 || HB_RL_RC=$?; HB_RL_RCS+="$HB_RL_RC"; done
+assert "#9757 four refused fires inside one window log exactly ONE marker (was one per 60 s tick), every tick exits 0, none sends a request" \
+  "[[ \$(grep -c SOLEUR_CREDENTIAL_REFUSED '$HB_RL_LOG') -eq 1 && '$HB_RL_RCS' == 0000 && ! -s '$HB_CALLS' ]]"
+printf '%s' "$(( $(date +%s) - 7200 ))" > "$HB_RL_STAMP"
+hb_rl_fire || true
+assert "#9757 an aged stamp RE-EMITS the marker (rate-limited, not eliminated)" \
+  "[[ \$(grep -c SOLEUR_CREDENTIAL_REFUSED '$HB_RL_LOG') -eq 2 ]]"
+# OWN-STAMP behaviour: a FRESH dark-arm or listener-gate stamp must not suppress the refusal marker, and a FRESH
+# refusal stamp must not suppress the dark arm's row (the three limiters answer different questions).
+HB_OS_FRESH="$PING_TMP/hb-os-fresh.stamp"; printf '%s' "$(date +%s)" > "$HB_OS_FRESH"
+hb_run "$HB_WEB" "${HB_GOOD}\"" "$HB_LOG" INNGEST_HEARTBEAT_DARK_STAMP="$HB_OS_FRESH" INNGEST_HEARTBEAT_GATE_STAMP="$HB_OS_FRESH"
+assert "#9757 own stamp: fresh dark-arm and listener-gate stamps do NOT suppress the refusal marker" \
+  "[[ '$HB_N_MARK' -eq 1 && '$HB_RC' -eq 0 && '$HB_N_ARGV' -eq 0 ]]"
+hb_run "$HB_DED" "" "$HB_LOG" INNGEST_HEARTBEAT_REFUSAL_STAMP="$HB_OS_FRESH"
+assert "#9757 own stamp: a fresh refusal stamp does NOT suppress the dark arm's url_present=no row" \
+  "[[ '$HB_RC' -eq 0 ]] && grep -q 'url_present=no' '$HB_LOG'"
+# An unwritable stamp fails OPEN (the marker still ships on every tick: loud rather than silent).
+HB_UW_STAMP="$PING_TMP/no-such-dir/refusal.stamp"
+hb_run "$HB_WEB" "${HB_GOOD}\"" "$HB_LOG" INNGEST_HEARTBEAT_REFUSAL_STAMP="$HB_UW_STAMP"; HB_UW1="$HB_N_MARK"
+hb_run "$HB_WEB" "${HB_GOOD}\"" "$HB_LOG" INNGEST_HEARTBEAT_REFUSAL_STAMP="$HB_UW_STAMP"; HB_UW2="$HB_N_MARK"
+assert "#9757 an unwritable refusal stamp fails OPEN: the marker ships on every fire, the decision (exit 0, zero requests) is unchanged" \
+  "[[ '$HB_UW1' -eq 1 && '$HB_UW2' -eq 1 && '$HB_RC' -eq 0 && '$HB_N_ARGV' -eq 0 ]]"
+assert "#9757 the refusal limiter has its OWN stamp (not the dark arm's or the listener gate's)" \
+  "grep -qE 'INNGEST_HEARTBEAT_DARK_STAMP=\"\\\$\\{INNGEST_HEARTBEAT_REFUSAL_STAMP:-/run/inngest-heartbeat/refusal\\.stamp\\}\" dark_arm_emit_due' '$PING_BODY'"
+
+# Stamp normalisation of the refusal limiter (dark_arm_emit_due): the stamp file is untrusted bytes and this function sits
+# on the credential-refusal path, whose contract is exit 0, so a bad stamp must read as "never emitted", never abort the shell.
+# A zero-padded 08/09 is an invalid OCTAL in shell arithmetic (dash aborts with "Illegal number", exit 2); a stamp longer than 10
+# digits is not an epoch. The 11-digit seed is future-dated and would emit WITHOUT the length cap; only DISC (a zero-padded epoch
+# 10 s old, 12 characters) pins the cap: a cap-less limiter reads it as a number 10 s old and SUPPRESSES, the capped one EMITS.
+HB_SEED_STAMP="$PING_TMP/hb-seed.stamp"
+HB_SEED_BAD='Illegal number|value too great|syntax error|bad number|arithmetic'
+for _seed in 0000000009 0000000008 abc 12ab 12345678901 DISC; do
+  if [[ "$_seed" == DISC ]]; then _seed="00$(( $(date +%s) - 10 ))"; _sname="the zero-padded 12-char epoch aged 10 s (length cap)"; else _sname="$_seed"; fi
+  HB_SEED_T0="$(date +%s)"; printf '%s' "$_seed" > "$HB_SEED_STAMP"
+  hb_run "$HB_WEB" "${HB_GOOD}\"" "$HB_LOG" INNGEST_HEARTBEAT_REFUSAL_STAMP="$HB_SEED_STAMP"
+  assert "#9757 refusal stamp of $_sname reads as emit: exit 0 (never 2), zero requests, exactly one marker, stamp rewritten to a current epoch" \
+    "[[ '$HB_RC' -eq 0 && '$HB_N_ARGV' -eq 0 && '$HB_N_MARK' -eq 1 && \"\$(cat '$HB_SEED_STAMP')\" =~ ^[0-9]{10}\$ && \"\$(cat '$HB_SEED_STAMP')\" -ge '$HB_SEED_T0' ]]"
+  assert "#9757 refusal stamp of $_sname leaves no shell arithmetic error text in the run output" \
+    "! grep -qE '$HB_SEED_BAD' <<<\"\$HB_OUT\""
+done
+# Boundary rows at the exact edge of the 3600 s window. A run that straddles a clock-second tick would age the stamp by one more
+# second and move the edge under the assertion, so the helper re-seeds until a run began and ended inside one second.
+hb_exact_age_run() {  # <age seconds> -> a refused run against a stamp of exactly that age; rc 1 if no tick-free run in 5 tries
+  local age="$1" t0 t1 try
+  HB_AGE_T0=0
+  for try in 1 2 3 4 5; do
+    t0="$(date +%s)"; printf '%s' "$((t0 - age))" > "$HB_SEED_STAMP"
+    hb_run "$HB_WEB" "${HB_GOOD}\"" "$HB_LOG" INNGEST_HEARTBEAT_REFUSAL_STAMP="$HB_SEED_STAMP"
+    t1="$(date +%s)"; HB_AGE_T0="$t0"; [[ "$t0" == "$t1" ]] && return 0
+  done
+  return 1
+}
+hb_exact_age_run 3599; HB_AGE_OK=$?
+assert "#9757 refusal stamp aged exactly 3599 s still suppresses (one second inside the window): zero markers, stamp left alone, exit 0" \
+  "[[ '$HB_AGE_OK' -eq 0 && '$HB_N_MARK' -eq 0 && '$HB_RC' -eq 0 && \"\$(cat '$HB_SEED_STAMP')\" -eq '$((HB_AGE_T0 - 3599))' ]]"
+hb_exact_age_run 3600; HB_AGE_OK=$?
+assert "#9757 refusal stamp aged exactly 3600 s emits (the window is half-open: age < 3600 suppresses): one marker, stamp rewritten to now" \
+  "[[ '$HB_AGE_OK' -eq 0 && '$HB_N_MARK' -eq 1 && '$HB_RC' -eq 0 && \"\$(cat '$HB_SEED_STAMP')\" -eq '$HB_AGE_T0' ]]"
+
+# STATIC: the body is POSIX sh. No process substitution and no [[ ]] in its CODE lines (comments excluded);
+# the config is fed by a printf pipe (no heredoc); the guard is the NEGATED class (never a positive pattern).
+PING_CODE="$PING_TMP/ping-body-code.sh"; grep -vE '^[[:space:]]*#' "$PING_BODY" > "$PING_CODE"
+assert "#9757 the POSIX heartbeat body has no process substitution and no [[ ]] in its code lines" \
+  "! grep -qE '<\\(|\\[\\[[[:space:]]' '$PING_CODE'"
+# The config is fed by ONE pipeline (`printf` builtin | curl): never a heredoc (lint Rule E refuses a heredoc feeding the
+# config) and never a process substitution (not POSIX). Exactly one such transport line, with the exact flags, and the URL variable
+# appears on no OTHER printf/echo/logger line.
+assert "#9757 the heartbeat body has exactly one transport line: printf url-config piped to curl (no exec) with the exact flags, and no heredoc" \
+  "[[ \$(grep -cxF 'printf '\\''url = \"%s\"\\n'\\'' \"\$INNGEST_HEARTBEAT_URL\" | /usr/bin/curl --disable --noproxy '\\''*'\\'' -gfsS --max-time 10 --config - >/dev/null' '$PING_BODY') -eq 1 && \$(grep -cE '<<' '$PING_CODE') -eq 0 ]]"
+assert "#9757 no logger/echo/printf line names the URL variable except the one transport line that pipes it into curl" \
+  "[[ \$(grep -E '^[[:space:]]*(logger|echo|printf)[[:space:]].*INNGEST_HEARTBEAT_URL' '$PING_BODY' | grep -vcE '\\| /usr/bin/curl --disable ') -eq 0 ]]"
+assert "#9757 the shape guard is the NEGATED class case (a positive pattern would only constrain the first character)" \
+  "[[ \$(grep -cF '*[!A-Za-z0-9._~:/?\\&=%+-]*)' '$PING_CODE') -eq 1 ]]"
+assert "#9757 the printf-pipe transport did not disturb the LOG_TAG derivation or the closing delimiter of the outer heredoc" \
+  "[[ \$(grep -cE '^LOG_TAG=\"inngest-heartbeat\"\$' '$PING_BODY') -eq 1 && \$(grep -cxF 'HEARTBEATSCRIPTEOF' '$BOOTSTRAP_SH') -eq 1 ]]"
+
+# REAL-curl smoke for the POSIX body. Every row above runs a STUB curl, which accepts any argv, so a flag the real curl
+# rejects (exit 2, "curl: option ...") would pass them all. Extract the rendered web script's single transport line and run it
+# with sh against the REAL /usr/bin/curl at a closed port: a well-formed argv gets as far as the connect and fails with rc 7;
+# a rejected option gives rc 2. The line keeps its -S, so curl's own message is visible in the captured output.
+HB_SMOKE_LINE="$PING_TMP/hb-smoke-line.sh"
+grep -E '^printf .*\| /usr/bin/curl .*--config -' "$WEB_PING" > "$HB_SMOKE_LINE" || true
+HB_SMOKE_RC=0
+HB_SMOKE_TXT="$(env INNGEST_HEARTBEAT_URL='https://127.0.0.1:9/p' timeout 30 sh "$HB_SMOKE_LINE" 2>&1)" || HB_SMOKE_RC=$?
+assert "#9757 smoke: the rendered web script has exactly one transport line, and the real /usr/bin/curl is executable" \
+  "[[ \$(wc -l < '$HB_SMOKE_LINE') -eq 1 && -x /usr/bin/curl ]]"
+assert "#9757 smoke: the real curl accepts the transport line under sh: exit 7 (connection refused), never 2 (option rejected)" \
+  "[[ '$HB_SMOKE_RC' -eq 7 ]]"
+assert "#9757 smoke: the real curl's own message is a connect failure, with no 'curl: option' and no '(2)' text" \
+  "grep -qF '(7)' <<<\"\$HB_SMOKE_TXT\" && ! grep -qF -e 'curl: option' -e '(2)' <<<\"\$HB_SMOKE_TXT\""
+
+# --- the DASH row ----------------------------------------------------------------------------
+# A local /bin/sh may be bash, so a green local run proves nothing about the shell the unit actually runs
+# (Ubuntu /bin/sh is dash). The rendered body is therefore syntax-checked AND run for real under dash.
+# Which dash (CTO ruling, 2026-10-15): the digest-pinned ubuntu image (read from the one copy the rehearsal
+# suite owns, same OS and dash as production) is AUTHORITATIVE and MANDATORY in CI: missing docker, a failed
+# pull (after a bounded retry) or a skipped row is a FAILURE there, never a skip. A local `dash` binary is a
+# labelled fallback ("non-pinned dash") used ONLY when docker is absent outside CI; neither present is a loud
+# skip, and skipped rows do NOT count toward the assertion floor (two-tier floor below). The row is
+# integration-shaped (a container start plus a digest-pinned registry pull) inside a unit-classified file
+# because issue 10120 asked for the pinned-image dash run; it reuses the image layer
+# git-data-runcmd-rehearsal.test.sh already pulls.
+DASH_ROWS=10
+DASH_SKIPPED=0
+_in_ci_dash() { [[ -n "${GITHUB_ACTIONS:-}" || "${CI:-}" == "1" || "${CI:-}" == "true" ]]; }
+DASH_UBUNTU="$(sed -nE "s/^UBUNTU_BASE='(ubuntu:24\\.04@sha256:[0-9a-f]{64})'\$/\\1/p" "$SCRIPT_DIR/git-data-runcmd-rehearsal.test.sh" 2>/dev/null | sed -n '1p')"
+assert "#9757 dash row: the ubuntu image is named by tag@sha256:<64-hex> (read from git-data-runcmd-rehearsal.test.sh)" \
+  "[[ '$DASH_UBUNTU' =~ ^ubuntu:24\\.04@sha256:[0-9a-f]{64}\$ ]]"
+# Bounded pull retry (3 attempts): a registry hiccup is retried, a persistent failure is the CI FAILURE below.
+dash_image_ready() {
+  local i
+  for i in 1 2 3; do
+    docker image inspect "$DASH_UBUNTU" >/dev/null 2>&1 && return 0
+    timeout 120 docker pull -q "$DASH_UBUNTU" >/dev/null 2>&1 && return 0
+    sleep 3
+  done
+  return 1
+}
+DASH_MODE=""; DASH_WHY=""
+if ! command -v docker >/dev/null 2>&1; then DASH_WHY="docker is absent"
+elif ! docker info >/dev/null 2>&1; then DASH_WHY="the docker daemon is unreachable"
+elif ! dash_image_ready; then DASH_WHY="the pinned ubuntu image is not local and could not be pulled after 3 attempts"
+else DASH_MODE="pinned"; fi
+if [[ -z "$DASH_MODE" ]]; then
+  if _in_ci_dash; then
+    assert "#9757 dash row: $DASH_WHY — and this is CI, so it is a FAILURE (the runner must provide docker and the pinned image)" "false"
+  elif command -v dash >/dev/null 2>&1; then
+    DASH_MODE="local"
+    echo "  NOTE: $DASH_WHY; running the dash rows under the NON-PINNED local dash ($(command -v dash)). CI requires the pinned image."
+  else
+    DASH_SKIPPED=$DASH_ROWS
+    echo "  SKIP: $DASH_ROWS dash row(s) NOT RUN: $DASH_WHY and no local dash binary either (skipped rows do not count toward the floor; CI fails closed on this)"
+  fi
+fi
+if [[ -n "$DASH_MODE" ]]; then
+  DASH_DIR="$PING_TMP/dash"; DASH_OUT="$DASH_DIR/out"; mkdir -p "$DASH_DIR/bin" "$DASH_OUT"
+  cp "$WEB_PING" "$DASH_DIR/ping.sh"
+  cat > "$DASH_DIR/curl" <<'DSTUBEOF'
+#!/bin/sh
+# The stub curl (POSIX sh). A health probe (has -w) answers 200; a --config - call records its argv and its stdin
+# url line; anything else fails.
+case " $* " in
+  *" -w "*) printf 200; exit 0 ;;
+  *" --config - "*)
+    printf 'argv %s\n' "$*" >> "$CALLS"
+    line=""
+    while IFS= read -r l || [ -n "$l" ]; do case "$l" in 'url = "'*) line="$l"; break ;; esac; done
+    if [ -z "$line" ]; then printf 'cfg-MISSING\n' >> "$CALLS"; exit 97; fi
+    printf 'cfg %s\n' "$line" >> "$CALLS"
+    exit 0 ;;
+esac
+exit 64
+DSTUBEOF
+  cat > "$DASH_DIR/bin/logger" <<'DLOGEOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$LOGGER_OUT"
+DLOGEOF
+  cat > "$DASH_DIR/drive.sh" <<'DDRIVEEOF'
+#!/bin/bash
+# Runs INSIDE the pinned ubuntu image (WORK=/work OUT=/out, SH=sh) or locally (WORK/OUT/SH exported by the suite).
+# Every case is executed with $SH (dash), never bash.
+WORK="${WORK:-/work}"; OUT="${OUT:-/out}"; SH="${SH:-sh}"
+cd "$OUT" || exit 3
+readlink -f "$(command -v "$SH")" > sh-impl
+"$SH" -n "$WORK/ping.sh" > syntax.out 2>&1; echo $? > syntax.rc
+run() {  # <case> <url>
+  : > "$OUT/$1.calls"; : > "$OUT/$1.log"
+  CALLS="$OUT/$1.calls" LOGGER_OUT="$OUT/$1.log" PATH="$WORK/bin:$PATH" INNGEST_HEARTBEAT_URL="$2" \
+    INNGEST_HEARTBEAT_REFUSAL_STAMP="$OUT/$1.stamp" "$SH" "$WORK/ping.sh" > "$OUT/$1.out" 2>&1
+  echo $? > "$OUT/$1.rc"
+}
+run good 'https://uptime.betterstack.test/api/v1/heartbeat/DASH_SENTINEL'
+run other 'https://uptime.betterstack.test/api/v1/heartbeat/A.b_c~d:9?x=1&y=%2B+z-Q'
+run quote 'https://uptime.betterstack.test/x"y'
+run newline 'https://uptime.betterstack.test/x
+proxy = "http://203.0.113.1:3128"'
+run http 'http://uptime.betterstack.test/x'
+run empty ''
+# High-byte hostile cases (octal escapes), each ONE defect on a good URL prefix: \205\001 (a C1 byte then SOH) and
+# \201 followed by b. printf builds them so the driver file itself stays pure ASCII.
+run highc1 "$(printf 'https://uptime.betterstack.test/x\205\001')"
+run high81 "$(printf 'https://uptime.betterstack.test/x\201b')"
+# Stamp seeds (the refusal limiter): each case pre-writes its own refusal stamp. A zero-padded 08/09 is an invalid octal in
+# dash arithmetic ("Illegal number", exit 2) unless the limiter strips the padding; DISC is a zero-padded epoch 10 s old
+# (12 characters), which only the 10-digit length cap turns into an emit.
+runseed() {  # <case> <stamp text>
+  : > "$OUT/$1.calls"; : > "$OUT/$1.log"; printf '%s' "$2" > "$OUT/$1.stamp"
+  CALLS="$OUT/$1.calls" LOGGER_OUT="$OUT/$1.log" PATH="$WORK/bin:$PATH" \
+    INNGEST_HEARTBEAT_URL='https://uptime.betterstack.test/x"y' \
+    INNGEST_HEARTBEAT_REFUSAL_STAMP="$OUT/$1.stamp" "$SH" "$WORK/ping.sh" > "$OUT/$1.out" 2>&1
+  echo $? > "$OUT/$1.rc"
+}
+runseed seed9 0000000009
+runseed seed8 0000000008
+runseed seedabc abc
+runseed seed12ab 12ab
+runseed seed11 12345678901
+runseed seeddisc "00$(( $(date +%s) - 10 ))"
+echo done > "$OUT/DONE"
+DDRIVEEOF
+  chmod +x "$DASH_DIR/curl" "$DASH_DIR/bin/logger" "$DASH_DIR/drive.sh"
+  if [[ "$DASH_MODE" == pinned ]]; then
+    DASH_LABEL="pinned dash"
+    timeout 240 docker run --rm -v "$DASH_DIR/ping.sh:/work/ping.sh:ro" -v "$DASH_DIR/bin:/work/bin:ro" \
+      -v "$DASH_DIR/curl:/usr/bin/curl:ro" -v "$DASH_DIR/drive.sh:/work/drive.sh:ro" -v "$DASH_OUT:/out" \
+      "$DASH_UBUNTU" bash /work/drive.sh > "$DASH_DIR/stdout" 2>&1 || true
+  else
+    DASH_LABEL="non-pinned dash"
+    # Only the transport line is rewritten to the stub; the listener-gate health curl keeps the real binary
+    # against the suite's mock health endpoint.
+    sed "/--config -/s|/usr/bin/curl|$DASH_DIR/curl|" "$WEB_PING" > "$DASH_DIR/ping.sh"
+    WORK="$DASH_DIR" OUT="$DASH_OUT" SH="$(command -v dash)" INNGEST_HEARTBEAT_HEALTH_URL="$HEALTH_OK_URL" \
+      timeout 240 bash "$DASH_DIR/drive.sh" > "$DASH_DIR/stdout" 2>&1 || true
+  fi
+  dr() { cat "$DASH_OUT/$1" 2>/dev/null || echo MISSING; }
+  assert "#9757 dash row ($DASH_LABEL): the driver ran to its last case (else every row below is vacuous)" \
+    "[[ -e '$DASH_OUT/DONE' ]]"
+  assert "#9757 dash row ($DASH_LABEL): the shell under test is dash, and the rendered body passes sh -n under it" \
+    "[[ \"\$(dr sh-impl)\" == */dash && \"\$(dr syntax.rc)\" == 0 ]]"
+  assert "#9757 dash row ($DASH_LABEL): a well-formed URL beats once under dash, exit 0, the URL only in the stdin url line" \
+    "[[ \"\$(dr good.rc)\" == 0 && \$(grep -c '^argv ' '$DASH_OUT/good.calls') -eq 1 ]] && grep -qxF 'argv --disable --noproxy * -gfsS --max-time 10 --config -' '$DASH_OUT/good.calls' && grep -qxF 'cfg url = \"https://uptime.betterstack.test/api/v1/heartbeat/DASH_SENTINEL\"' '$DASH_OUT/good.calls' && ! grep -q DASH_SENTINEL '$DASH_OUT/good.out' '$DASH_OUT/good.log'"
+  assert "#9757 dash row ($DASH_LABEL): a different well-formed token (every allowed punctuation class) beats under dash (the negated class passes it)" \
+    "[[ \"\$(dr other.rc)\" == 0 && \$(grep -c '^cfg url = ' '$DASH_OUT/other.calls') -eq 1 ]]"
+  assert "#9757 dash row ($DASH_LABEL): a quote is refused under dash (zero requests, exit 0, one marker)" \
+    "[[ \"\$(dr quote.rc)\" == 0 && ! -s '$DASH_OUT/quote.calls' && \$(grep -c SOLEUR_CREDENTIAL_REFUSED '$DASH_OUT/quote.log') -eq 1 ]]"
+  assert "#9757 dash row ($DASH_LABEL): a newline-injected directive is refused under dash (exit 0, zero requests, reason=control_char)" \
+    "[[ \"\$(dr newline.rc)\" == 0 && ! -s '$DASH_OUT/newline.calls' ]] && grep -qF ' SOLEUR_CREDENTIAL_REFUSED script=inngest-heartbeat reason=control_char var=INNGEST_HEARTBEAT_URL' '$DASH_OUT/newline.log'"
+  assert "#9757 dash row ($DASH_LABEL): a non-https scheme is refused under dash (zero requests, exit 0, one marker)" \
+    "[[ \"\$(dr http.rc)\" == 0 && ! -s '$DASH_OUT/http.calls' && \$(grep -c SOLEUR_CREDENTIAL_REFUSED '$DASH_OUT/http.log') -eq 1 ]]"
+  assert "#9757 dash row ($DASH_LABEL): an empty value is refused under dash (exit 2, zero requests, one marker)" \
+    "[[ \"\$(dr empty.rc)\" == 2 && ! -s '$DASH_OUT/empty.calls' && \$(grep -c SOLEUR_CREDENTIAL_REFUSED '$DASH_OUT/empty.log') -eq 1 ]]"
+  assert "#9757 dash row ($DASH_LABEL): refusal stamps 0000000009, 0000000008, abc, 12ab, an 11-digit and a zero-padded 12-char epoch each read as emit (exit 0 never 2, one marker, no arithmetic error text, stamp rewritten)" \
+    "[[ \$(for c in seed9 seed8 seedabc seed12ab seed11 seeddisc; do [[ \"\$(dr \$c.rc)\" == 0 && ! -s '$DASH_OUT'/\$c.calls && \$(grep -c SOLEUR_CREDENTIAL_REFUSED '$DASH_OUT'/\$c.log) -eq 1 && \"\$(dr \$c.stamp)\" =~ ^[0-9]{10}\$ ]] && ! grep -qE 'Illegal number|value too great|syntax error|bad number' '$DASH_OUT'/\$c.out && echo ok; done | wc -l) -eq 6 ]]"
+  # High bytes: pinned ubuntu 24.04 dash 0.5.12 refuses these (measured). A local dash build of another version may
+  # not; that failure is a NON-PINNED-DASH QUIRK, labelled as such, and must not weaken the pinned-container check.
+  if [[ "$DASH_MODE" == pinned ]]; then DASH_HB_NOTE=""; else DASH_HB_NOTE=" [NON-PINNED DASH QUIRK: a local dash build may classify high bytes differently; the pinned image is authoritative]"; fi
+  assert "#9757 dash row ($DASH_LABEL): high-byte values (\\205\\001 and \\201b) are refused under dash (exit 0, zero requests, one marker each)$DASH_HB_NOTE" \
+    "[[ \"\$(dr highc1.rc)\" == 0 && ! -s '$DASH_OUT/highc1.calls' && \$(grep -c SOLEUR_CREDENTIAL_REFUSED '$DASH_OUT/highc1.log') -eq 1 && \"\$(dr high81.rc)\" == 0 && ! -s '$DASH_OUT/high81.calls' && \$(grep -c SOLEUR_CREDENTIAL_REFUSED '$DASH_OUT/high81.log') -eq 1 ]]"
+fi
 
 # --- #7228 AC4: the LISTENER GATE ------------------------------------------------------------
 # THE DEFECT. This pusher is `curl "$INNGEST_HEARTBEAT_URL"` fired by a systemd timer. It proves
@@ -873,12 +1262,16 @@ assert "A4 probe emits the marker under the resolved inngest-server-probe tag (l
 assert "A4 a failed curl degrades http_code to the literal 000, not to an empty field" \
   "grep -qE 'http_code=000( |\$)' '$PROBE_LOG'"
 
-# --- #7695: the /mnt/data store facts Guard 2 decides on ---------------------------------
-# Guard 2 (the recut dispatch gate) clears a DESTRUCTIVE apply only on a measured-empty store.
-# Every field below is one it reads, and each carries two distinct not-a-measurement tokens:
+# --- #7695: the /mnt/data store facts the retired Guard 2 decided on ---------------------
+# Guard 2 (the recut dispatch gate) was retired under #8316; these fields are still emitted and
+# pinned here. The retired gate was their consumer; some now have none and some have live consumers
+# elsewhere (the audit and any pruning wait for the next probe_schema bump, #10290). While it
+# existed it cleared a DESTRUCTIVE apply only on a measured-empty store.
+# Every field below is one it read, and each carries two distinct not-a-measurement tokens:
 # `n/a` = the question does not apply on this host, `__UNREADABLE__` = it applied and could not
-# be answered. Neither may ever degrade to `0`, because `0` IS the clearance condition — a
-# degradation that renders as `0` would authorize the destroy it was meant to withhold.
+# be answered. Neither may ever degrade to `0`, because `0` was the retired gate's clearance
+# condition — a degradation that rendered as `0` would have authorized the destroy it was meant to
+# withhold. The rule stays so that a future gate can rely on it.
 #
 # THE ASSERTIONS BELOW ARE WRITTEN AS NEGATIVE SPACE, not as positive expectations. A mutation
 # audit flipped `__UNREADABLE__` to `0` in three fields and the suite stayed green at 250/250,
@@ -902,7 +1295,7 @@ PROBE_7695_FIELDS="probe_schema host_role flush_latched redis_keys redis_expires
 # the field was added to detect can never be emitted.
 PROBE_7695_NEVER_ZERO="probe_schema host_role flush_latched data_mount_src data_bytes data_mount_base data_mount_devid"
 
-assert "#8017 probe declares probe_schema=8 (Guard 2 refuses a stale_schema row)" \
+assert "#8017 probe declares probe_schema=8 (the execute gate refuses a stale_schema row, E6)" \
   "grep -qE 'probe_schema=8( |\$)' '$PROBE_LOG'"
 for _f7695 in $PROBE_7695_FIELDS; do
   assert "#7695 probe emits a non-empty $_f7695" \
@@ -1314,13 +1707,13 @@ assert "#8017 a base device with no Hetzner alias => __NOMATCH__, never a false 
 # aliases for one device, so the emitter COUNTS instead of assuming -- and says so when it cannot
 # decide, rather than picking one arbitrarily.
 ln -sf "$PROBE_S8_DEV/sdb" "$PROBE_S8_BYID/scsi-0HC_Volume_${S8_VOLID}"
-ln -sf "$PROBE_S8_DEV/sdb" "$PROBE_S8_BYID/scsi-0HC_Volume_999999999"
+ln -sf "$PROBE_S8_DEV/sdb" "$PROBE_S8_BYID/scsi-0HC_Volume_5495499"
 S8_AMB="$(s8_run ambiguous)"
 assert "#8017 TWO aliases resolving to one device => __AMBIGUOUS__, never an arbitrary pick" \
   "grep -qE 'data_mount_devid=__AMBIGUOUS__( |\$)' '$S8_AMB'"
 assert "#8017 __AMBIGUOUS__ is not silently coerced to the expected alias" \
   "! grep -qE 'data_mount_devid=scsi-0HC_Volume_${S8_VOLID}( |\$)' '$S8_AMB'"
-rm -f "$PROBE_S8_BYID/scsi-0HC_Volume_999999999"
+rm -f "$PROBE_S8_BYID/scsi-0HC_Volume_5495499"
 
 # --- __UNREADABLE__: the resolution itself broke, and base DISAMBIGUATES it -----------------
 s8_lsblk '\n'
@@ -1596,10 +1989,10 @@ mutate_emitter devid-revmap 's|^        \*/"\$data_mount_base")$|        __NEVER
 # ITS FIXTURE NEEDS TWO ALIASES. With one, _devid_hits is 1, the `-gt 1` arm is UNREACHABLE, and
 # the mutant survives for a reason that says nothing about the guard. Measured: it did survive on
 # the first run, and the fix was the FIXTURE, not the predicate.
-ln -sf "$PROBE_S8_DEV/sdb" "$PROBE_S8_BYID/scsi-0HC_Volume_999999999"
+ln -sf "$PROBE_S8_DEV/sdb" "$PROBE_S8_BYID/scsi-0HC_Volume_5495499"
 mutate_emitter devid-ambiguity 's|^      elif \[ "\$_devid_hits" -gt 1 \]; then$|      elif false; then|' \
   data_mount_devid "__AMBIGUOUS__"
-rm -f "$PROBE_S8_BYID/scsi-0HC_Volume_999999999"
+rm -f "$PROBE_S8_BYID/scsi-0HC_Volume_5495499"
 # M3 — unbound the base-device resolution: devid must inherit __UNREADABLE__, not invent a match.
 mutate_emitter base-resolution 's|^    data_mount_base="\$(timeout 5 lsblk|    data_mount_base="$(false \&\& timeout 5 lsblk|' \
   data_mount_base "sdb"
@@ -2327,6 +2720,7 @@ assert "RWP token lists byte-identical across both lockstep copies" \
 # --- `terraform fmt -check` for HCL hygiene ---
 echo ""
 echo "--- terraform fmt -check ---"
+TF_SKIPPED=0
 if command -v terraform >/dev/null 2>&1; then
   if (cd "$SCRIPT_DIR" && terraform fmt -check -diff=false inngest.tf >/dev/null 2>&1); then
     PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
@@ -2336,7 +2730,8 @@ if command -v terraform >/dev/null 2>&1; then
     echo "  FAIL: inngest.tf needs 'terraform fmt' (run: terraform fmt apps/web-platform/infra/inngest.tf)"
   fi
 else
-  echo "  SKIP: terraform not installed locally"
+  TF_SKIPPED=1
+  echo "  SKIP: terraform not installed locally (1 row NOT RUN; a skipped row does not count toward the floor)"
 fi
 
 # --- #6555: DOPPLER_PROJECT via EnvironmentFile (the units dropped --project) ---
@@ -2391,16 +2786,22 @@ echo "--- #9175: Doppler --config census on the inngest dedicated-host boot path
 # A site carrying ANY other form — including a reverted literal `--config prd` — is an
 # unclassified site: RED, and the site must be enumerated here (the count is exact, so a NEW
 # site cannot slip in unlisted either).
+# The heartbeat's curl `--config - >/dev/null` (#9757) is curl's stdin config, not a Doppler config name: excluded by its exact shape.
 DOPPLER_CFG_SITES="$(for _f in "$CLOUD_INIT_INNGEST" "$BOOTSTRAP_SH" \
     "$SCRIPT_DIR/inngest-cutover-flip.sh" "$SCRIPT_DIR/inngest-luks-cutover.sh" \
     "$SCRIPT_DIR/inngest-redis.service" "$CUTOVER_FLIP_SERVICE" \
     "$SCRIPT_DIR/inngest-luks-cutover.service"; do
-    grep -nE -- '--config [^ ]+' "$_f" | grep -vE '^[0-9]+:[[:space:]]*#'
+    grep -nE -- '--config [^ ]+' "$_f" | grep -vE '^[0-9]+:[[:space:]]*#' \
+      | grep -vE -- '/usr/bin/curl .* --config - >/dev/null$'
   done)"
 DCFG_N="$(printf '%s\n' "$DOPPLER_CFG_SITES" | grep -c . || true)"
 DCFG_BAD="$(printf '%s\n' "$DOPPLER_CFG_SITES" | grep -vE -- '--config (\$\{inngest_doppler_config\}|@@DOPPLER_CONFIG@@|"?\$?\{?DOPPLER_CONFIG[^ ]*"?)' || true)"
-assert "inngest boot-path --config census is exactly 19 sites (unlisted site -> RED, #9175)" \
-  "[[ '$DCFG_N' == '19' ]]"
+# 19 -> 20: #6780 added one site — the config-refresh unit's ExecStart `doppler run
+# --project soleur-inngest --config ${inngest_doppler_config}` (the templatefile-var form,
+# the same shape every sibling site carries so the rehearsal render swaps prd ->
+# rehearsal_<runid>).
+assert "inngest boot-path --config census is exactly 20 sites (unlisted site -> RED, #9175)" \
+  "[[ '$DCFG_N' == '20' ]]"
 assert "every boot-path --config site resolves through a parameterization (no literal config name, #9175)" \
   "[[ -z \"\$DCFG_BAD\" ]]"
 
@@ -2610,6 +3011,75 @@ assert "inngest-luks-cutover.timer carries the inngest-luks-volumes condition in
 assert "inngest-luks-cutover.timer's [Unit] condition path-set equals the service's [Service] EnvironmentFile path-set" \
   "[[ -n \"\$(_luks_sec_vals '$LUKS_CUTOVER_TMR' Unit ConditionPathExists)\" && \"\$(_luks_sec_vals '$LUKS_CUTOVER_TMR' Unit ConditionPathExists)\" == \"\$(_luks_sec_vals '$LUKS_CUTOVER_SVC' Service EnvironmentFile)\" ]]"
 
+echo "--- #9962: the same skip-vs-fail class on the non-LUKS siblings ---"
+#
+# #9962 extends the #9939 calibration to every unit whose unprefixed EnvironmentFile= is a
+# late-runcmd write and whose activation path can fire before it — flip pair (30s), provision
+# (boot re-entry), heartbeat (60s), vector + server (Restart crash-loops). inngest-redis stays
+# deliberately loud (RequiresMountsFor is already its designed signal). The bootstrap-generated
+# units live inside inngest-bootstrap.sh heredocs — each block is extracted by its delimiter
+# and the [Unit]/[Service] sections are judged inside it, so a condition dropped into [Service]
+# reads as absent the same way the LUKS pins do.
+FLIP_SVC="$SCRIPT_DIR/inngest-cutover-flip.service"
+FLIP_TMR="$SCRIPT_DIR/inngest-cutover-flip.timer"
+REDIS_SVC="$SCRIPT_DIR/inngest-redis.service"
+# <heredoc-delimiter> — print the generated unit body from inngest-bootstrap.sh.
+# Opener anchored end-of-line with an optional single-quote each side of the delimiter: the old
+# `.?`-slack form would alias a future `<<XUNITEOF`/`<<UNITEOF2` into this extraction, and a
+# condition line in the aliased body could satisfy a -eq 1 pin vacuously (review P3).
+_boot_unit() { awk -v q="'" -v d="$1" '$0~("cat > .*<<" q "?" d q "?[[:space:]]*$"){u=1;next} $0==d{u=0} u' "$BOOTSTRAP_SH"; }
+# <text-via-stdin> <section> — same section semantics as _luks_sec but for heredoc bodies.
+# Indent-tolerant: the cloud-init yaml embeds units under write_files `content: |`, where the
+# [Unit] header itself is indented — the exact-match form would never enter the section there.
+_sec_body() { awk -v sec="$1" '{ h=$0; sub(/^[[:space:]]+/,"",h); if (h=="["sec"]") {u=1;next} if (h ~ /^\[/) u=0 } u'; }
+# <section> <directive> — sorted value set of a directive inside a named section, from stdin.
+_sec_body_vals() { _sec_body "$1" | sed -n "s/^[[:space:]]*$2=//p" | tr ' \t' '\n' | sed '/^$/d' | sort -u; }
+
+assert "inngest-cutover-flip.service skips in [Unit] when /etc/default/inngest-server is absent" \
+  "[[ \$(_luks_sec '$FLIP_SVC' Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-server') -eq 1 ]]"
+assert "inngest-cutover-flip.service keeps its EnvironmentFile= unprefixed (fail-closed)" \
+  "_luks_sec '$FLIP_SVC' Service | grep -cxF 'EnvironmentFile=/etc/default/inngest-server' >/dev/null && ! _luks_sec '$FLIP_SVC' Service | grep -cE '^[[:space:]]*EnvironmentFile=-' >/dev/null"
+assert "inngest-cutover-flip.service's [Unit] condition path-set equals its [Service] EnvironmentFile path-set" \
+  "[[ -n \"\$(_luks_sec_vals '$FLIP_SVC' Service EnvironmentFile)\" && \"\$(_luks_sec_vals '$FLIP_SVC' Unit ConditionPathExists)\" == \"\$(_luks_sec_vals '$FLIP_SVC' Service EnvironmentFile)\" ]]"
+assert "inngest-cutover-flip.timer carries the condition in [Unit] (evaluated at activation, not per-elapse)" \
+  "[[ \$(_luks_sec '$FLIP_TMR' Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-server') -eq 1 ]]"
+assert "no bare EnvironmentFile=/ConditionPathExists= reset lines in the flip pair" \
+  "! grep -cE '^[[:space:]]*(EnvironmentFile|ConditionPathExists)=[[:space:]]*$' '$FLIP_SVC' '$FLIP_TMR' >/dev/null"
+
+assert "inngest-heartbeat.service (heredoc) skips when /etc/default/inngest-server is absent" \
+  "[[ \$(printf '%s\n' \"\$(_boot_unit HEARTBEATEOF)\" | _sec_body Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-server') -eq 1 ]]"
+assert "inngest-heartbeat.timer (heredoc) carries the condition in [Unit]" \
+  "[[ \$(printf '%s\n' \"\$(_boot_unit TIMEREOF)\" | _sec_body Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-server') -eq 1 ]]"
+assert "inngest-server.service (heredoc) skips when /etc/default/inngest-server is absent" \
+  "[[ \$(printf '%s\n' \"\$(_boot_unit UNITEOF)\" | _sec_body Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-server') -eq 1 ]]"
+assert "vector.service (heredoc) skips when /etc/default/inngest-server is absent" \
+  "[[ \$(printf '%s\n' \"\$(_boot_unit VECTOREOF)\" | _sec_body Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-server') -eq 1 ]]"
+
+# Precedent-shape set-identity + fail-closed pins for the heredoc units (AC-1, review P2):
+# presence pins alone let a stray wrong-path condition or a `-` prefixed envfile ride green.
+for _hb in HEARTBEATEOF UNITEOF VECTOREOF; do
+  assert "heredoc unit ${_hb} [Unit] condition path-set equals its [Service] EnvironmentFile path-set" \
+    "[[ \$(printf '%s\n' \"\$(_boot_unit ${_hb})\" | _sec_body_vals Service EnvironmentFile) == /etc/default/inngest-server && \$(printf '%s\n' \"\$(_boot_unit ${_hb})\" | _sec_body_vals Unit ConditionPathExists) == /etc/default/inngest-server ]]"
+  assert "heredoc unit ${_hb} keeps its EnvironmentFile= unprefixed (fail-closed)" \
+    "printf '%s\n' \"\$(_boot_unit ${_hb})\" | _sec_body Service | grep -cxF 'EnvironmentFile=/etc/default/inngest-server' >/dev/null && ! printf '%s\n' \"\$(_boot_unit ${_hb})\" | _sec_body Service | grep -cE '^[[:space:]]*EnvironmentFile=-' >/dev/null"
+  assert "heredoc unit ${_hb} carries no bare EnvironmentFile=/ConditionPathExists= reset line" \
+    "! printf '%s\n' \"\$(_boot_unit ${_hb})\" | grep -cE '^[[:space:]]*(EnvironmentFile|ConditionPathExists)=[[:space:]]*\$' >/dev/null"
+done
+assert "inngest-heartbeat.timer's [Unit] condition path-set equals heartbeat.service's envfile path-set" \
+  "[[ \$(printf '%s\n' \"\$(_boot_unit TIMEREOF)\" | _sec_body_vals Unit ConditionPathExists) == \$(printf '%s\n' \"\$(_boot_unit HEARTBEATEOF)\" | _sec_body_vals Service EnvironmentFile) ]]"
+assert "inngest-cutover-flip.timer's [Unit] condition path-set equals the flip service's envfile path-set" \
+  "[[ \$(_luks_sec_vals '$FLIP_TMR' Unit ConditionPathExists) == \$(_luks_sec_vals '$FLIP_SVC' Service EnvironmentFile) ]]"
+
+assert "soleur-inngest-provision.service (cloud-init) skips when /etc/default/inngest-doppler is absent" \
+  "[[ \$(awk '/path: \\/etc\\/systemd\\/system\\/soleur-inngest-provision.service/,/owner: root:root/' '$SCRIPT_DIR/cloud-init-inngest.yml' | _sec_body Unit | grep -cxF '      ConditionPathExists=/etc/default/inngest-doppler') -eq 1 ]]"
+assert "soleur-inngest-provision.service keeps the !-latch condition beside the new one" \
+  "[[ \$(awk '/path: \\/etc\\/systemd\\/system\\/soleur-inngest-provision.service/,/owner: root:root/' '$SCRIPT_DIR/cloud-init-inngest.yml' | _sec_body Unit | grep -cxF '      ConditionPathExists=!/var/lib/soleur-inngest-provision/done') -eq 1 ]]"
+assert "soleur-inngest-provision.service: every [Service] EnvironmentFile path has a non-! [Unit] condition (subset — the !-latch sits in the condition set too)" \
+  "_prov_ef() { awk '/path: \\/etc\\/systemd\\/system\\/soleur-inngest-provision.service/,/owner: root:root/' '$SCRIPT_DIR/cloud-init-inngest.yml' | _sec_body Service | sed -n 's/^[[:space:]]*EnvironmentFile=//p' | sort -u; }; _prov_cd() { awk '/path: \\/etc\\/systemd\\/system\\/soleur-inngest-provision.service/,/owner: root:root/' '$SCRIPT_DIR/cloud-init-inngest.yml' | _sec_body Unit | sed -n 's/^[[:space:]]*ConditionPathExists=//p' | grep -v '^!' | sort -u; }; [[ -n \"\$(_prov_ef)\" && -z \"\$(comm -23 <(_prov_ef) <(_prov_cd))\" ]]"
+
+assert "inngest-redis.service stays deliberately unconditioned on the env file (designed-loud, #9962)" \
+  "! _luks_sec '$REDIS_SVC' Unit | grep -cE '^[[:space:]]*ConditionPathExists=' >/dev/null"
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 
@@ -2624,7 +3094,15 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # check) reported 303/303, exit 0. Keyed on PASS rather than TOTAL: TOTAL counts failures, so a
 # TOTAL floor cannot back up the verdict -- dropping `if [[ "$FAIL" -gt 0 ]]` left a 303/305 run
 # reporting exit 0. 7761's floor already had this shape.
-INNGEST_MIN_ASSERTIONS=427
+# #9757 / #10120: 451 -> 549 (the heartbeat stdin-config, shape-guard, hourly-marker, own-stamp, stamp-normalisation,
+# real-curl smoke, exit-status and dash rows; measured 549/549 with the pinned-container dash rows and terraform run).
+# Skipped rows are never counted toward the floor: the active floor is the FULL literal minus the dash rows that were SKIPPED
+# (no docker AND no local dash, outside CI: all-or-nothing, checked just below) minus the terraform fmt row when terraform is
+# absent. Under CI a skipped or failed dash row is itself a FAILURE (see the dash block above).
+# Accounting: DASH_SKIPPED is 0 or DASH_ROWS, never a partial count, so a half-skipped block cannot read as a tier.
+if [[ "$DASH_SKIPPED" -ne 0 && "$DASH_SKIPPED" -ne "$DASH_ROWS" ]]; then printf 'FAIL: dash accounting: DASH_SKIPPED=%s is neither 0 nor DASH_ROWS=%s.\n' "$DASH_SKIPPED" "$DASH_ROWS" >&2; exit 1; fi
+INNGEST_MIN_ASSERTIONS_FULL=549
+INNGEST_MIN_ASSERTIONS=$((INNGEST_MIN_ASSERTIONS_FULL - DASH_SKIPPED - TF_SKIPPED))
 if [[ "$PASS" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \
     "$PASS" "$INNGEST_MIN_ASSERTIONS" >&2

@@ -237,7 +237,9 @@ _PRINT_SELECTION=0
 # --paths=<a,b,...> (#9307): with --print-selection only, select against THESE paths
 # instead of the real diff -- "what would these files select?". Print-only by
 # construction (--print-selection exits before any suite runs), so it can never
-# narrow a real run's diff.
+# narrow a real run's diff. Elements are normalized at the parse arm (#10117):
+# a leading ./ is stripped to fixpoint, and unclean spellings refuse rc 2 — a
+# bad element must never silently select nothing.
 _PRINT_PATHS=""
 _PRINT_PATHS_REQ=0
 # --affected-scope=branch|staged (#9173): which diff the affected axis selects
@@ -305,7 +307,59 @@ while [[ "${1:-}" == --* ]]; do
       _AFFECTED_REQ=1
       ;;
     --paths=*)
-      _PRINT_PATHS="${1#--paths=}"
+      # Per-element normalize+reject (#10117). The comma-joined list stands in
+      # for a diff-name blob downstream; an unclean element never matches a git
+      # path line — `./x` silently selected nothing, which is a lie in a
+      # diagnostic. The rejects run on the RAW element (named error echoing
+      # the element + a valid example, rc 2), then a leading `./` run is
+      # stripped to fixpoint — ordering is load-bearing: every shape the strip
+      # could leave behind (.., //, /., a trailing /) is already present
+      # pre-strip, so normalization can never mint a reject shape that escaped
+      # the case and no post-strip re-check is needed. Rejected shapes: empty
+      # elements (a,,b / a
+      # trailing comma / --paths= — bare `.`/`./` and trailing-`/` elements are
+      # dir refs, not file diff paths, and land in the last case arm),
+      # absolute paths, `..` SEGMENTS (substring `..` is legal name content —
+      # foo..bar.sh passes), `//` or `/.` segments/trails (a/./b; the
+      # doubled-head ././x carries one), and control bytes (the ingestion point
+      # joins on commas and the edge matcher splits on TAB — a C0/DEL byte
+      # mints fake diff lines and is C-quoted by git anyway, so the spelling
+      # can never match a real path line; the C1 range is a deliberate
+      # over-reject margin, matched only under C1-aware locales).
+      # A repeated --paths= is last-wins. Legal
+      # name bytes that simply cannot match (glob metachars, `~`, `\`, a
+      # comma inside one filename) stay admitted — the reject set names the
+      # lie classes, not every unmatchable spelling; a comma is the delimiter
+      # and cannot be expressed inside an element. _affected_normpath is
+      # deliberately NOT called: it is defined ~2500 lines below this top-level
+      # parse loop, and it collapses a/../b where this arm rejects.
+      _PRINT_PATHS=""
+      _pp_rest="${1#--paths=},"
+      while [[ -n "$_pp_rest" ]]; do
+        _pp="${_pp_rest%%,*}"
+        _pp_rest="${_pp_rest#*,}"
+        _pp_orig="$_pp"
+        _pp_why=""
+        # `..` is checked before `/.` — `a/../.` carries both and the traversal
+        # is the reason worth naming.
+        case "$_pp" in
+          "")                  _pp_why="empty element" ;;
+          /*)                  _pp_why="absolute path" ;;
+          *[[:cntrl:]]*)       _pp_why="control byte" ;;
+          *//*)                _pp_why="// segment" ;;
+          ..|../*|*/..|*/../*) _pp_why=".. path segment" ;;
+          */./*|*/.)           _pp_why="/. segment" ;;
+          .|*/)                _pp_why="not a file diff path" ;;
+        esac
+        while [[ "$_pp" == ./* ]]; do _pp="${_pp#./}"; done
+        if [[ -n "$_pp_why" ]]; then
+          # the element is arbitrary operator input — scrub control bytes so
+          # the rejected bytes cannot forge stderr lines
+          echo "ERROR: --paths element '${_pp_orig//[[:cntrl:]]/?}' rejected (${_pp_why}); expected a comma-joined list of clean repo-relative paths, e.g. --paths=scripts/foo.sh,docs/a.md" >&2
+          exit 2
+        fi
+        _PRINT_PATHS+="${_PRINT_PATHS:+,}${_pp}"
+      done
       _PRINT_PATHS_REQ=1
       ;;
     --print-affected-set)
@@ -332,6 +386,9 @@ declines five self-test mutation batteries whose subject the diff does not touch
                         classes and ignores the diff.
   --paths=a,b           with --print-selection: select against these paths instead
                         of the real diff (print-only; never narrows a real run).
+                        Elements normalize (a leading ./ is stripped); unclean
+                        spellings — empty elements, absolute, .. or /. or //
+                        segments, a trailing /, control bytes — refuse rc 2.
   --affected-scope=V    diff source for affected selection: branch (default) or
                         staged (the index — what the pre-commit hook gates on).
                         Selects on the INDEX only: committed edits are not in that
@@ -1050,7 +1107,7 @@ fi
 #
 # See `.github/workflows/ci.yml` test-{webplat,bun,scripts,scripts-heavy} jobs + the
 # synthetic `test` aggregator. See plan
-# `knowledge-base/project/plans/2026-05-12-feat-ci-test-job-speedup-plan.md`.
+# `knowledge-base/project/plans/archive/20261013-014038-2026-05-12-feat-ci-test-job-speedup-plan.md`.
 TEST_GROUP="${TEST_GROUP:-${1:-all}}"
 case "$TEST_GROUP" in
   all|webplat|bun|scripts|scripts-heavy|infra|affected) ;;
@@ -1739,6 +1796,13 @@ run_suite() {
   # per-suite git snapshots would narrow it further and cost ~660 extra process spawns, which is
   # not worth it for a strictly-narrower answer.
   _repo_last_suite="$label"
+  # #7697 — one holder-marker stamp per suite boundary. A waiter staring at
+  # the held lock then sees last_suite/progress_epoch advancing (or NOT, which
+  # is the wedge signature the heartbeat's holder_progress_age names).
+  # Advisory only: silent no-op when the lib is absent or the lock isn't ours.
+  if declare -F stamp_lock_holder >/dev/null 2>&1; then
+    stamp_lock_holder test-all "last_suite=$label" "suites_done=$_suites_completed"
+  fi
   local start="${EPOCHREALTIME:-}"
   echo "--- $label ---"
   # #8940 — tee every suite's combined output into a per-suite file inside the
@@ -1882,6 +1946,7 @@ run_suite() {
       printf '%s\t%d\tFAIL%s\n' "$label" "$elapsed_ms" "$tmp_field" >> "${TEST_TIMING_LOG:-/dev/null}"
     fi
   fi
+  _suites_completed=$(( _suites_completed + 1 ))
 }
 
 # A DECLINE IS A VERDICT, NOT AN ABSENCE (ADR-181).
@@ -2538,7 +2603,7 @@ _aff_classify_runner_diff() {
 # infra check: over-matching a path that merely CONTAINS the string errs toward RUNNING the
 # suite, which is the safe direction. A `^`-marked entry (minted by `_affected_add_edge`) is
 # ANCHORED instead — see `_diff_edge_hit` above — and errs toward NOT running on a path that
-# only contains the word; knowledge-base/project/specs/feat-affected-parallel-test-gate/
+# only contains the word; knowledge-base/project/specs/archive/20261013-062704-feat-affected-parallel-test-gate/
 # edge-anchoring-corpus.md records the measurement behind that trade.
 #
 # `_diff_touches --pr-gated <paths...>` (ADR-262) is the one call-site opt-in for a self-test
@@ -3737,7 +3802,9 @@ _aff_runner_banner() {
 # never executes. Both exit 4 — "refused, nothing ran" — NOT 3, which #7424
 # reserved for a suite TERMINATED mid-coverage.
 # #9763: 38 heavy/stale labels withdrawn to edge-selection; the floor pins count-5.
-_MIN_ALWAYS_ON_DECLARED=108
+# #8875: +1 always-on (emitter census is repo-global by construction); re-pinned at 114-5.
+# #10331: +2 always-on (the lint-ratchet pair); re-pinned at 116-5.
+_MIN_ALWAYS_ON_DECLARED=111
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -4162,7 +4229,7 @@ tc_capacity_line >&2
 #
 # It fires HERE, AFTER tc_preamble (which computes the count) and BEFORE tc_acquire, deliberately.
 # Refusing after tc_acquire would make a run that should never have started wait up to
-# TC_LOCK_TIMEOUT (900 s) to be told so, and take the advisory lock a legitimate sibling is queued
+# TC_LOCK_TIMEOUT (3600 s) to be told so, and take the advisory lock a legitimate sibling is queued
 # on. A refused run must cost nothing.
 #
 # ADDITIVE, not a replacement: the SOLEUR_SUBAGENT arm above is untouched and still exits 4.
@@ -4275,6 +4342,9 @@ fi
 _RUN_START_EPOCH="${EPOCHSECONDS:-0}"
 _ceiling_tripped=0
 _ceiling_declined=0
+# Suites this run has completed — stamped into the holder marker (#7697) once
+# per run_suite call. Same splice-window constraint as the ceiling state.
+_suites_completed=0
 
 # --- #8940 / #8993 state ---------------------------------------------------
 # Declared HERE, at top level, for the same splice-window reason as the
@@ -4553,7 +4623,15 @@ _run_log_retain() {
   fi
   return 0
 }
-trap '_repo_boundary_exit_note; _run_log_retain; _soleur_refguard_cleanup; _soleur_inc_cleanup; _soleur_scratch_cleanup || true; _enum_wd_disarm; _run_wd_disarm' EXIT
+# #7697: test-all never calls release_lock — the fd dies with the process —
+# so the holder marker minted at acquire needs an explicit removal or every
+# completed run reads as a wedged holder to the next waiter. declare -F
+# guarded: sandbox splices of this file may never source session-state.sh.
+_lock_holder_cleanup() {
+  declare -F release_lock >/dev/null 2>&1 || return 0
+  release_lock test-all 2>/dev/null || true
+}
+trap '_repo_boundary_exit_note; _run_log_retain; _soleur_refguard_cleanup; _soleur_inc_cleanup; _soleur_scratch_cleanup || true; _enum_wd_disarm; _run_wd_disarm; _lock_holder_cleanup' EXIT
 
 # NOT under --enumerate. The shard-totality guard runs this path from inside a gate run that
 # already holds this lock; blocking here would deadlock the gate on itself. An enumerate pass
@@ -5008,6 +5086,9 @@ if want_scripts; then
   # Image CVE scan (W3, epic #9601): hermetic suite (stub Grype/curl, file:// /health); scripts/*.test.sh is
   # not in SUITE_GLOBS, so it is registered explicitly.
   run_suite "scripts/image-cve-scan" bash scripts/image-cve-scan.test.sh
+  # Egress audit rollup retention/freshness probe (#9545, ADR-288): hermetic (curl PATH shim, stub gateway
+  # query); scripts/*.test.sh is not in SUITE_GLOBS, so it is registered explicitly.
+  run_suite "scripts/egress-audit-retention-check" bash scripts/egress-audit-retention-check.test.sh
   # Doppler's API caps a doppler_* `description` at 255; the provider schema and `terraform plan`
   # do not, so a 273-char doppler_project.infra_privileged reddened every push apply after the
   # credential-tiering merge. -live asserts the real tree; -unit is the mutation matrix.
@@ -5060,6 +5141,13 @@ if want_scripts; then
   # alert path that had never once delivered, because `set -u` killed it before the curl.
   run_suite "scripts/lint-workflow-step-env-refs" bash scripts/lint-workflow-step-env-refs.test.sh
   run_suite "scripts/lint-workflow-step-env-refs-live" python3 scripts/lint-workflow-step-env-refs.py
+  # #10331 PR3a, ADR-290. Same both-halves shape: the unit suite proves the shrink-only RULE (and
+  # pins ruff.toml, the scope tuple and the floors); the live run proves the TREE equals its
+  # baseline. The eslint-test-dirs live arm runs as a vitest file in `test-webplat` (it needs
+  # apps/web-platform/node_modules, which this shard does not have). The live ruff run installs a
+  # hash-pinned ruff on first use; under CI an unobtainable ruff is exit 2, never a skip.
+  run_suite "tests/scripts/lint-ratchet" python3 -m unittest tests.scripts.test_lint_ratchet
+  run_suite "scripts/lint-ratchet-ruff-live" python3 scripts/lint-ratchet.py ruff --check
   # ADR-170. Both halves are required: the unit suite proves the RULE is right (its fixtures are
   # the executable spec), the live scan proves the TREE is clean. Either alone is satisfiable by
   # a detector that has stopped detecting -- a broken linter and a clean repo emit identical
@@ -5460,6 +5548,12 @@ if want_scripts; then
   # proof (both RED directions) that the guard can catch the banned form.
   run_suite "scripts/followthrough-varq-ban-live" bash scripts/lint-followthrough-varq-ban.sh
   run_suite "scripts/followthrough-varq-ban" bash scripts/lint-followthrough-varq-ban.test.sh
+  # #8875: the emitter-selection census — every tracked betterstack-query.sh reader must
+  # select rows by SYSLOG_IDENTIFIER (or a sourced emitter def) or carry a reasoned allowlist
+  # entry. Same two-line shape as varq-ban: -live runs the guard over the real tree, the
+  # .test.sh is the mutation battery over fixture git trees.
+  run_suite "scripts/betterstack-emitter-read-live" bash scripts/lint-betterstack-emitter-read.sh
+  run_suite "scripts/betterstack-emitter-read" bash scripts/lint-betterstack-emitter-read.test.sh
   # The differential oracle over every executable reader of the directive (#7490). Four copies
   # of the fence predicate cannot share code (two are prose an agent pastes; one is a hook that
   # must not `source` a repo file), so they are held in agreement by a walker instead.
@@ -5494,6 +5588,15 @@ if want_scripts; then
   # sweeper closes issue 8651 as completed — the observed-evidence condition zot-soak-6122.sh's
   # WEB_BLOCKER arm requires — so every sweeper exit code is driven by a fixture.
   run_suite "scripts/web-fresh-boot-zot-8651" bash scripts/followthroughs/web-fresh-boot-zot-8651.test.sh
+  # #10445: exit-code harness for the hosted-Bash-outage readback. Registered EXPLICITLY (scripts/followthroughs/*.test.sh
+  # is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes the PIR-flip tracker, so "PASS only when the
+  # fix PR's merge commit is contained in the deployed tag" must redden CI if it regresses to a bare canary-green exit 0.
+  run_suite "scripts/sandbox-readback-10445" bash scripts/followthroughs/sandbox-readback-10445.test.sh
+  # #10119: exit-code + branch harness for the registry htpasswd-stdin delivery probe. Registered explicitly
+  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes
+  # #10119 after the unattended registry host replace, so a vacuous PASS (old-host rows, forged tails, quoted
+  # markers) must redden CI.
+  run_suite "scripts/registry-htpasswd-stdin-10119" bash scripts/followthroughs/registry-htpasswd-stdin-10119.test.sh
   # #9826 (W3, epic #9601): exit-code harness for the image-CVE-scan dark-launch window probe. Registered
   # explicitly — scripts/followthroughs/*.test.sh is not in SUITE_GLOBS. A vacuous PASS would close the
   # tracker on an unmeasured window.
@@ -5565,6 +5668,16 @@ if want_scripts; then
   # (marker text echoed inside a step's run: source) and the per-step exercised proof are driven
   # through a stub gh that exits 64 on any request it does not expect.
   run_suite "scripts/bearer-curl-s4-first-runs-9905" bash scripts/followthroughs/bearer-curl-s4-first-runs-9905.test.sh
+  # #9995: the mu1 in-leg mint canary. Guard-1 matrix rows drive the real script against a
+  # PATH-shim curl that records calls (argv NUL-delimited + the credential library's stdin
+  # config) and answers from env — a 401/000/garbage-PEM arm must exit 1 with zero or named
+  # requests, never print GITHUB_APP_MINT, and the JWT must ride the stdin config (ADR-280).
+  run_suite "scripts/probe-github-app-mint" bash scripts/probe-github-app-mint.test.sh
+  # #9995: the dev_scheduled credential-shape audit. Guard-2 matrix rows drive the real
+  # script against a stub doppler (census + per-name gets) — a CR-corrupted token, an
+  # empty/unreadable/wrongly-shaped census, and a mid-list FAIL must all be named and
+  # nonzero; an unclassified name reports UNCLASSIFIED, never ok.
+  run_suite "scripts/audit-dev-scheduled-shapes" bash scripts/audit-dev-scheduled-shapes.test.sh
   # #8151 AC-PM1: exit-code harness for the event-ship-merge merge-base verdict probe.
   # Registered explicitly (orphan-suite class above). Same CONTAMINATION arm as #6297/#8281:
   # every live Better Stack hit for the probe's marker strings has been a `"caller":"api"`
@@ -5593,12 +5706,6 @@ if want_scripts; then
   # 2026-10-15, forget >48 h old, or closed unmerged; 2 = NOT YET; 3 = gh failed). Registered
   # explicitly (orphan-suite class above): a false 0 would close the tracker on a live hold.
   run_suite "scripts/workspaces-plaintext-hold-9348" bash scripts/followthroughs/workspaces-plaintext-hold-9348.test.sh
-  # #8706: exit-code harness for the luks-monitor host-timer closure probe. Registered explicitly
-  # (orphan-suite class above). Its exit 0 closes #8706, so the suite pins that PASS needs three
-  # CONSECUTIVE UTC nights (two, or three with gaps, is FAIL), that a dark channel (zero
-  # luks-monitor rows) is exit 2 and never FAIL/PASS, and that an empty result is a real zero
-  # while a failed query is exit 2.
-  run_suite "scripts/luks-monitor-host-timer-8706" bash scripts/followthroughs/luks-monitor-host-timer-8706.test.sh
   # #6931: exit-code harness for the web-2 live-LUKS soak-gated closure probe. Registered explicitly
   # (orphan-suite class above). Its exit 0 closes #6931, so the suite pins the arms that must NOT reach
   # it: a young marker, a red probe row since the marker (and that a FAIL row from BEFORE the marker is
@@ -5607,15 +5714,6 @@ if want_scripts; then
   # the daily verify leg; a structural arm pins that it carries no query or parse of its own. Four
   # mutants are replayed against the arms, each from a sandbox tree.
   run_suite "scripts/web2-luks-live-6931" bash scripts/followthroughs/web2-luks-live-6931.test.sh
-  # #9372 — the single-use web-2 volume rebirth: the stateful steps against a fake Hetzner/Terraform world, the 7-day emptiness
-  # evidence, the names-only never-pooled reader and the birth-time recovery check. Each carries its own mutation battery.
-  run_suite "scripts/web2-rebirth" bash scripts/web2-rebirth.test.sh
-  run_suite "scripts/web2-rebirth-emptiness" bash scripts/web2-rebirth-emptiness.test.sh
-  run_suite "scripts/web2-rebirth-never-pooled" bash scripts/web2-rebirth-never-pooled.test.sh
-  run_suite "scripts/web2-rebirth-recovery-check" bash scripts/web2-rebirth-recovery-check.test.sh
-  # #9372 — the agent-dispatchable, approval-gated soft reboot of the allow-listed web-2 standby: the writer's refusal table and the
-  # read-only rows evidence reader against a fake Hetzner/Terraform/Better Stack world, with a claim-word scan and a mutation battery.
-  run_suite "scripts/web-host-reboot" bash scripts/web-host-reboot.test.sh
   # #7220: exit-code harness for the ACTIVATION soak. Registered explicitly (orphan-suite class
   # above). Review found this probe returning exit 0 — which auto-closes the tracker — on a host
   # where reconciliation was BROKEN: it counted `action=failed reason=sudo_denied` rows, and the
@@ -5665,9 +5763,6 @@ if want_scripts; then
   # load-bearing arms are SYSLOG_IDENTIFIER field isolation, latest-verdict grading, and
   # zero-hosts-never-PASS.
   run_suite "scripts/cosign-verify-live-8037" bash scripts/followthroughs/cosign-verify-live-8037.test.sh
-  # #8296 ledger-vs-device property probe, enrolled on #8285. NOTIFY-ONLY: the suite pins that no
-  # path exits 0 or 1, because a 0 would let the sweeper close the backstop-retirement tracker.
-  run_suite "scripts/inngest-luks-property-8296" bash scripts/followthroughs/inngest-luks-property-8296.test.sh
   # #9703 feeder for the inngest probe heartbeat. Pins the one property that matters: a beat reaches
   # Better Stack only on a fresh host_role=dedicated probe row with an unpaused heartbeat, and exit 0
   # means exactly {beat, fresh_heartbeat_paused}. M1-M7 mutation rows run inside the suite.
@@ -5808,6 +5903,10 @@ if want_scripts; then
   # exists to report. Static gate over both alarm workflows — the condition is evaluated by
   # GitHub, so the YAML is the only artifact there is to test.
   run_suite "scripts/alarm-issue-filing-guard" bash scripts/alarm-issue-filing-guard.test.sh
+  # #7521: the standing registry fill-rate leg lives in YAML (four steps after the Sentry check-in of
+  # scheduled-zot-restart-loop.yml); this suite parses it and EXECUTES the probe and filing bodies, so
+  # its Sentry isolation, ordering, classification, filing and close rules are pinned by a test.
+  run_suite "scripts/zot-fill-rate-standing-wiring" bash scripts/zot-fill-rate-standing-wiring.test.sh
   # A workflow that writes to the issue tracker must hold `issues: write`. Registered beside the
   # alarm guard because they are the same class one layer apart: that one checks an alarm step CAN
   # RUN, this one checks it CAN WRITE. The dispatcher's refusal artifact satisfied the first and
@@ -6090,6 +6189,7 @@ if want_scripts; then
   run_suite "tests/scripts/zot-log-channel-probe" bash tests/scripts/test-zot-log-channel-probe.sh
   # git-data-host-replace scoped-recreate destroy-guard (#6242; 5-target, preserves BOTH data volumes + LUKS passphrase by omission).
   run_suite "tests/scripts/git-data-host-replace-gate" bash tests/scripts/test-git-data-host-replace-gate.sh
+  run_suite "tests/scripts/git-data-wipe-wedge" bash tests/scripts/test-git-data-wipe-wedge.sh
   # git-data root-key create-gate arm (#8189, ADR-220, Guard 4), sourced by the replace and birth gates.
   run_suite "tests/scripts/git-data-root-key-arm" bash tests/scripts/test-git-data-root-key-arm.sh
   run_suite "tests/scripts/git-data-root-token-census" bash tests/scripts/test-git-data-root-token-census.sh
@@ -6110,10 +6210,6 @@ if want_scripts; then
   # inherits nothing from the per-PR apply's inline HALT), so every arm is load-bearing and
   # the suite mutation-proves each one. Registered HERE — nothing auto-discovers tests/scripts/.
   run_suite "tests/scripts/web-host-birth-gate" bash tests/scripts/test-web-host-birth-gate.sh
-  # web-2 volume REBIRTH gate (#9372) — the third sibling (birth requires zero destroys, replace requires the volume to survive;
-  # this one grades the pre and post plans of the single-use rebirth). Registered HERE: nothing auto-discovers tests/scripts/.
-  run_suite "tests/scripts/web-host-rebirth-gate" bash tests/scripts/test-web-host-rebirth-gate.sh
-  run_suite "tests/scripts/web2-rebirth-classify" bash tests/scripts/test-web2-rebirth-classify.sh
   # web-host REPLACE gate (#6969) — the SIBLING of the birth gate above and its opposite by
   # contract: exactly one delete+create of the dispatched host, both volume families and the
   # LUKS passphrase preserved by omission, plus positive requirements on the NIC, the volume
@@ -6305,6 +6401,14 @@ if want_scripts; then
   # run_suite for the same no-`scripts/*.test.sh`-glob reason; appended LAST in the block so no
   # earlier registration's positional-shard ordinal moves. Declared edge set, not always-on.
   run_suite "scripts/test-affected-derive-cache" bash scripts/test-affected-derive-cache.test.sh
+  # #9729 (ADR-276 S4, PR B): the pr-selection driver EXECUTED (real merge-commit fixture repos, a stub test-all.sh replaying
+  # the measured record shapes, a restricted PATH, and a mutant per guard row). Same explicit-registration and LAST-in-block
+  # reasons as above. Declared edge set, not always-on.
+  run_suite "scripts/ci-pr-selection" bash scripts/ci-pr-selection.test.sh
+  # #7530 (PR 10320): the clientIP-alert post-merge probe's exit-code contract (same stubs, plus the SQL the
+  # probe sends compared against the committed betterstack-logs-alerts.tf text, and a no-address-in-output
+  # assertion on every run). Same explicit-registration and LAST-in-block reasons as above.
+  run_suite "scripts/followthroughs/registry-clientip-alert-7530" bash scripts/followthroughs/registry-clientip-alert-7530.test.sh
 fi
 
 # Named bun-test entries — bun shard.

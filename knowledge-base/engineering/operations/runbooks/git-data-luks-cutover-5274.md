@@ -11,7 +11,9 @@ repoints a mount — the flag-off readback is the rollback); `unfreeze` clears t
 There is no copy or repoint — the store has served the LUKS mapper since boot (ADR-239); the old
 plaintext volume is retained read-only until its wipe decision (#6897/#8571). The residue on it ends
 when that volume is destroyed by the DL-2 wipe, never mounted to purge in place; the target date and the slip
-rule are in ADR-239, amendment 2026-10-09.
+rule are in ADR-239, amendment 2026-10-09. Three further modes, `wipe_check`, `wipe` and `wipe_finish` (#10138),
+run in a separate job (`wipe`) and retire that volume by detaching it and deleting it at the provider API; they
+are owner-named and described in [The wipe](#the-wipe-dl-2-10138--6897).
 
 **No SSH in this runbook.** Every read below is a workflow annotation, a Better Stack API read or a
 Sentry query. The dispatch itself uses SSH transport off the app host; you never SSH a host to check
@@ -95,9 +97,17 @@ The modes exist (PR2). The `flip` dispatch is refused unless all of these hold:
   armed after a measured `up` transition on the CURRENT host (the manifest row's `arming_pending` is
   gone), and a re-read at the flip dispatch shows it `up` with a `state=ok` event under 15 minutes
   old and later than that host's `boot_complete`. A box ticked once goes stale at the next replace,
-  so it is RE-READ, never remembered. Procedure and reads:
+  so it is RE-READ, never remembered. **Armed 2026-10-12 (#9438, record PR):** the host that
+  replace run 38140050880 created (its `boot_complete` was read; the run's own conclusion is `failure`, at
+  a post-apply step after "Apply complete") was armed with `--arm-one` (#9980), `outcome=armed`, `status=up`
+  within 11 s, id 506836; the pre- and post-arm `--status` reads are on #9438. That is one read at one
+  instant, not the flip-time re-read, which is still taken at the flip dispatch and is the binding one. The
+  pre-arm soak read (step 6) is not recorded in this PR or on #9438. Procedure and reads:
   [Liveness heartbeat](#liveness-heartbeat-9438). Until #9943 enforces it in the workflow, this item
   and its re-read are the only control.
+- **No post-flip rotate route is accepted, in writing (#10175).** The owner has recorded that from the first flip no
+  workflow dispatch can rotate the LUKS key until #8571 or the "store measured empty" marker lands, and names the
+  [break-glass](#when-a-rotate-is-needed-after-the-flip-10175) as the only route for a key compromise.
 - **#8101** — remaining: the hooks copy, the post-copy fence readback and the wrappers' mapper
   assertion, carried in #8211 ("Carried from #8101"). The wrapper edit is hash-bound, so it follows
   the [two-PR sequence](git-data-rung2-rehearsal.md#changing-the-payload-the-two-pr-sequence). The
@@ -120,6 +130,12 @@ gh workflow run git-data-cutover.yml --ref main -f mode=<MODE> -f confirm=<TOKEN
 | `rollback` | `ROLLBACK-GIT-DATA` | flag off + the same redeploy + `git_data_store=disabled` readback + unfreeze. Never touches a mount or volume. |
 | `unfreeze` | `UNFREEZE-GIT-DATA` | clears a same-lineage sentinel + restarts `git-data-gc.timer` (exit 6 if the timer will not start). A STRANDED sentinel (its writing run is dead) needs `-f lineage=cutover-<dead run id>`. Foreign or unattributed sentinels refuse. |
 | `redeploy` | `REDEPLOY-GIT-DATA` | the standalone pin-load/same-version redeploy lever (no flag or host touch). |
+| `wipe_check` | `WIPE-CHECK-GIT-DATA` | the read-only front of the wipe (job `wipe`): the soak precheck in report-only form, the provider reads, the boot-signal read and the one-session host assertion including the host-local counts-only listing (a transient device-mapper snapshot with a RAM copy-on-write file, removed before the run ends; a killed run can leave one, see `snapshot_clear`). No loader, detach or delete call. Takes `volume_id`. Ends `NOT authorization`. |
+| `snapshot_clear` | `CLEAR-SNAPSHOT-GIT-DATA` | removes a LEFTOVER throwaway device-mapper snapshot of the plaintext volume (job `wipe`, no Tier-B loader, no provider write): the W4 identity read, the SSH bridge, then the host verb with phase `clear`. It proves the leftover is the one the listing makes (origin = the typed device, non-persistent, a loop-backed COW and any mount under the pinned `/dev/shm/tmp.<id>` directory) and refuses `wipe_snapshot_not_ours` otherwise; with no leftover it answers `snapshot=absent`. It never detaches or deletes a volume. See [A leftover snapshot](#a-leftover-snapshot-snapshot_clear). Owner-gated by the same environment as `wipe`. |
+| `wipe` | `WIPE-GIT-DATA` | detaches and then deletes, at the provider API, the plaintext volume the owner names by `volume_id`, after the full evidence front. Owner-named, environment-approved. See [The wipe](#the-wipe-dl-2-10138--6897). |
+| `wipe_finish` | `WIPE-FINISH-GIT-DATA` | finishes a wipe that stopped between its detach and its delete; takes `volume_id` and `origin_run` (the original `wipe` run). Makes zero detach calls. |
+
+The wipe family also takes `volume_id` (and `wipe_finish` also `origin_run`), refused for every other mode. The headless `pending_deployments` approval form is never valid for any of the three.
 
 ### Downtime and blast radius (read before approving each dispatch)
 
@@ -134,6 +150,9 @@ promise.
 | `flip` | **web-1's app container restarts** (web-1 is the singleton ingress, ADR-143 D2); the freeze refuses git-data store writes for the window between freeze and unfreeze | the same-version redeploy takes ~75 s as a release deploy job (runs 36970234398 and 36962950359, 2026-10-02: 74 s and 77 s wall time, both hosts). The container's own unavailable window is inside that and is *not measured*: no per-host availability probe exists. The job bounds are 2400 s for the redeploy and 900 s for the finalizer's unwind. | `gh run view <id> --json jobs` on the two runs; `track.sh` bounds |
 | `rollback` | the same web-1 container restart, with the flag off; git-data keeps serving | as `flip`, plus the erasure probe that follows | as above |
 | `redeploy` | the same web-1 container restart; no flag or host change | ~75 s | as above |
+| `wipe_check` | nothing | n/a | no volume or provider state changes: provider API reads, a Better Stack read and one host-side session that creates and removes a transient host-local device-mapper snapshot (mounted read-only; a killed run can leave it, see `snapshot_clear`) |
+| `snapshot_clear` | nothing | n/a | removes one LEFTOVER host-local device-mapper snapshot of the plaintext device, its loop device and its RAM copy-on-write file; no volume or provider operation |
+| `wipe`, `wipe_finish` | nothing stops: git-data keeps serving from the LUKS volume. The retired plaintext volume (not serving since boot) is detached, then deleted at the provider API; no web restart, no flag write, no freeze. During `wipe` (and `wipe_check`), a transient host-local device-mapper snapshot of the kernel read-only plaintext device (copy-on-write file in RAM) exists on the git-data host and is removed before the run continues | *not measured*: no destructive run has happened; the job bound is 30 min (`timeout-minutes: 30`) | `.github/workflows/git-data-cutover.yml` job `wipe`; [The wipe](#the-wipe-dl-2-10138--6897) |
 | `git-data-host-rotate` | **git-data is destroyed and rebuilt**: it serves nothing from the destroy until the new host's `boot_complete`, and every Article 17 erasure is refused and logged in that window (see below) | at least 12 min 15 s: the one recorded replace job ran that long before its boot poll budget expired with no `boot_complete` (run 35979304442, 2026-09-24, a failed boot; the poll step ran 09:09:47 to 09:19:37). A *successful* replace has *not been timed* in this record; record its job duration here after the first rotate. The pin redeploy that follows adds the ~75 s web swap. | `gh run view 35979304442` |
 
 web-2 is a standby outside the ingress rotation (ADR-143 D2), so its swap has no user-visible effect.
@@ -165,6 +184,8 @@ email (secondary, best-effort). The body carries the run URL, the mode and verdi
 | `FAILED` (no other word) | the run failed and its finalizer ran; it found no stranded freeze and no partial unwind | read the failing step in the run log; for `mode=proof` nothing on any host changed |
 | `STATE UNKNOWN` | no finalizer output exists: the run was cancelled, timed out or lost its runner | read the flag, the sentinel and both hosts before anything else |
 
+The wipe family (`wipe_check`, `wipe`, `wipe_finish`) reports through the same job with its own words, chosen before the generic logic, and no wipe word ever carries the unfreeze remedy: see the failure states S1 to S6 in [The wipe](#the-wipe-dl-2-10138--6897) and the Verdict map.
+
 A failed run whose confirm step rejected the input (a typo in the confirm token, a bad mode) changed nothing and
 does not notify. Not covered by the notify job, by platform design: a force-cancel (it skips `always()`), and a
 pending run replaced by a newer dispatch in the `git-data-state` group before any job exists (a queued recovery
@@ -185,9 +206,34 @@ erasure working); the rehearsal is dispatched only on the user's per-step author
 
 ### The D6 rotate (dispatch BEFORE the flip)
 
+**Never dispatch the rotate after the flip, or after any run that executed the flag-write step.** From the first
+`flip` the LUKS volume may hold the only copy of the replicated repositories, and a rotate destroys it. The rule for
+an operator is: dispatch a rotate only if no run of `git-data-cutover.yml` executed the `Write GIT_DATA_STORE_ENABLED`
+step (any conclusion other than skipped, in any attempt). If the guard refuses with `store_dirty`, do not dispatch
+again and escalate on #10175 and #8571; with `cutover_in_flight`, wait for that run and re-dispatch once; with
+`scan_unreadable`, re-dispatch at most once and then stop and escalate. A flip that was
+refused at a precondition, a `mode=proof` run and a rehearsal that never reached the write step leave the store
+clean, and the rotate stays allowed. The apply workflow enforces the rule (#10175): the step `Rotate precondition —
+store never written (cutover run records)` refuses the rotate once any attempt of any `git-data-cutover.yml` run
+executed the flag-write step, whatever that step concluded (a failed or cancelled write may have landed), and a
+rollback does not reopen it:
+rollback is flag-off only and the data stays on the LUKS volume (ADR-239). There is no bypass input. The rule
+reads run records, not the flag and not `GIT_DATA_LUKS_CUTOVER_AT` (the stamp survives a rollback, so it decides
+nothing). See [When a rotate is needed after the flip](#when-a-rotate-is-needed-after-the-flip-10175).
+
 `d6_replace_stale` requires a completed `git-data-host-rotate` run — a fresh host PLUS a re-minted
 `GIT_DATA_LUKS_KEY`, volume and Doppler secret together (the passphrase can only rotate with a fresh
-volume). Dispatch it off `main`:
+volume). A rotate run counts only when its job succeeded AND it carries the last-step marker
+`Rotate completed (d6 marker)` (#10166): runs from before the marker cannot discharge D6, so the rotate
+must be dispatched once more after that change merges (a destructive re-rotate: fresh host, re-minted
+key). A later plain replace does not invalidate a stamp (it never re-mints the key); the stamp attests that
+a rotate job completed, not the key-escrow state. Never re-run a rotate run from the GitHub UI: the gate
+reads the latest attempt, so a re-run hides the failed attempt from it (the failed attempt stays visible with
+`gh run view <id> --attempt 1`). A re-run that completes as a rotate stamps, but it re-executes the destructive
+apply; one refused at the plan gate reads as nothing having happened and lets an older stamp discharge D6.
+Dispatch a fresh rotate instead. A rotate run that dies before its precondition step (checkout or credential setup) or is refused at that step never reached the apply, so it reads `skip` like a failed plain replace: the run record carries no dispatch inputs to tell them apart, and an older stamp stays valid because nothing was changed (a ruled trade-off, 2026-10-13: the gate blocks only on an attempt whose apply began). (Two statements here are inferred from the run-record shape and have not been observed on a live run: that a re-run refused at the plan gate reads `skip`, and that an in-progress run which does not list the job yet is treated as in flight.) The gate
+reads the 100 newest dispatch runs of the apply workflow (every target counts toward the 100), so a rotate
+older than that is not visible to it. Dispatch it off `main`:
 
 ```bash
 gh workflow run apply-web-platform-infra.yml --ref main   -f apply_target=git-data-host-rotate -f confirm=ROTATE-GIT-DATA -f reason="<why this rotate, with the issue number>"
@@ -197,7 +243,92 @@ The rotate's `served_repos=0` precondition reads the latest `stage=boot_complete
 `host_name=soleur-git-data` out of Better Stack — pinned to the git-data source
 (`t520508_soleur_git_data_prd_logs` UNION'd with the `s3` archive; the emit is once-per-boot, and the
 shared inngest source the reader defaults to answers zero rows for this host) — and fails closed when
-the store cannot be read empty.
+the store cannot be read empty. That reading is a once-per-boot observation, **not a live proof of
+emptiness**: a flipped store takes writes without a reboot and the row still says `served_repos=0`. It
+is therefore only a second layer: the step also requires the row to be strictly newer than the single
+`soleur-git-data` server's Hetzner `created` time (so a row from a previous host cannot discharge it), and
+the first layer is the run-record step above. Both steps run before the rung-2 interlock and every plan step.
+
+| Rotate precondition refusal (step annotation) | Meaning | Action |
+|---|---|---|
+| `store_dirty` (names a run id) | That run of `git-data-cutover.yml` executed the flag-write step (any attempt, any conclusion). The store may hold the only copy of replicated repositories. | Do not rotate. Read [When a rotate is needed after the flip](#when-a-rotate-is-needed-after-the-flip-10175). There is no bypass input. |
+| `cutover_in_flight` (names a run id) | A cutover run is still running. | Re-dispatch after it finishes. |
+| `scan_unreadable` | A run record could not be read: an API error, a page or count mismatch, an unknown run status, no job named `cutover` or no flag-write step in a run created after the seam landed (a rename), or `scan_unreadable pinned_run_missing`: a pinned run is no longer listed as completed, so the history cannot be proven complete. A named run id (`scan_unreadable <id>`) with no job steps is an old post-seam run whose step list was stripped (see the re-baseline section). | Fail closed: an unreadable history is not a clean one. Re-dispatch at most once and then stop. For `pinned_run_missing`, see [Re-baselining the pinned runs](#re-baselining-the-pinned-runs-10175). Otherwise compare the step name constant in `scripts/lib/git-data-store-dirty-scan.sh` with `git-data-cutover.yml` (the parity test pins them). The name GitHub records is the YAML-parsed one, truncated at the first space-then-hash (`Write GIT_DATA_STORE_ENABLED (via the`). |
+| `stale_boot_complete` | The newest `boot_complete` row is not newer than the current server's creation, so `served_repos=0` describes a previous host. | Wait for the current host's `boot_complete`, or investigate the emit path. |
+| `boot_complete_unreadable` | The `boot_complete` time or the server's creation time could not be read (exactly one server named `soleur-git-data` is required; `HCLOUD_TOKEN` must be loaded). | Fail closed; re-dispatch once the read path is verified. |
+
+The scan reads every attempt of every run (a re-run that skips the write step cannot hide the first attempt's
+write). Runs created before 2026-09-30T02:18:17Z predate the write step and could not write the flag, so an
+absent step there is clean (verified against the recorded runs, not enforced by code). Known residuals, accepted
+by the owner as a floor against the accidental dispatch and not a defence against a hostile owner: a flag set
+outside the workflow (a hand-run `doppler secrets set`, the Doppler API, a resume arm B load) is invisible to the
+scan; a post-pin run record deleted by hand is outside the threat model (repository write access already allows a
+dispatch); and the rotate is gated only by the typed token `ROTATE-GIT-DATA`, this guard and the `main`-only branch
+policy of the `infra-privileged` environment, which has **no required reviewers**, so no human approval stands in
+front of it. A rotate that is refused here has no in-workflow exit (below). A `d6_replace_stale` that fires again
+after a flip attempt (the stamped rotate aged out of the 100-run window) is a deadlock the guard cannot resolve by
+dispatch; the durable rotate stamp is tracked in #10216.
+
+### Re-baselining the pinned runs (#10175)
+
+The scan proves the history is complete by requiring two post-seam runs to still be listed as `completed` and their
+step lists readable (`GDSD_PINNED_RUNS` in `scripts/lib/git-data-store-dirty-scan.sh`: `36685251588` from 2026-09-30
+and `37823216637` from 2026-10-08). Run records can be deleted and `total_count` shrinks with them, so without that
+proof a deleted flip would read clean. Two measured facts set the horizon (2026-10-13, read-only API): run records
+are still listed at 196 days although the artifact-and-log retention setting reads 90 days, so the deletion horizon is
+unknown and not relied on; and GitHub strips a job's step list at about 170 days, after which a step-less post-seam
+job reads `unreadable`. The scan therefore turns closed by about **2027-03-18** at the latest (170 days after the
+oldest pin), earlier if a pin is deleted. It prints a `::warning::` once the oldest pin is more than 120 days old, but
+only while a rotate is dispatched, so the real early warning is the tracker #10216 calendar item for **2026-12-01**.
+To re-baseline: while the old pins are still listed and readable, run
+`GITHUB_REPOSITORY=jikig-ai/soleur bash -c 'source scripts/lib/git-data-store-dirty-scan.sh; git_data_store_dirty_list | git_data_store_dirty_scan'`
+and require `store_clean`; then open a PR that sets `GDSD_PINNED_RUNS` to two newer completed runs of
+`git-data-cutover.yml` (dispatch a `mode=proof` run if none is newer than the seam), and update the two run ids in
+`plugins/soleur/test/terraform-target-parity.test.ts` only if its derived constants moved (they are read from the
+library). **If the window is missed** (the guard already reports `pinned_run_missing`), the history can no longer be
+proven complete from run records: the only exits are an owner attestation PR (owner and CLO reviewing) that moves the
+pins and states, with evidence (the Doppler `GIT_DATA_STORE_ENABLED` value is not `true`, and no `git_data_store=`
+readback of `enabled` in Better Stack since the last pin), that no flip happened in the gap; or the live emptiness
+proof (#10211). After a flip the scan is dirty for good, so the pins can no longer be moved.
+
+Moving the pins is not enough by itself once any other post-seam run record has lost its step list (about 170 days
+after it was created): the scan reads every listed run, so that run reads `scan_unreadable <id>` until its record is
+deleted or the owner attests it in the same PR. Plan the re-baseline PR to cover that too; the standing policy for
+stripped post-seam records (an age-aware verdict plus the attestation) is tracked in #10216.
+
+**Owner action after the #10175 PR merges:** a "Re-run failed jobs" on a rotate run that predates the guard executes
+the OLD workflow, which has no guard. Delete those run records so nothing can be re-run:
+`gh run delete 38140050880`, `gh run delete 38383684022`, `gh run delete 38384137515`. None carries the d6 marker, so
+no stamp is lost, but the deletion DOES change the flip gate's reading: while run 38384137515 (a failed rotate
+attempt) is the newest rotate record, `d6_last_rotate_failed` blocks the flip and an older success cannot override it;
+once it and 38140050880 are deleted the gate reads `d6_replace_stale` (no stamped rotate), and a fresh rotate on the
+never-flipped store is the next step. Deleting only one of the two failed attempts leaves the other blocking.
+
+### When a rotate is needed after the flip (#10175)
+
+The guard is a floor against the accidental dispatch, not a prohibition on ever rotating.
+
+- **No bypass input.** The workflow offers none and the step carries no `continue-on-error`.
+- **A suspected `GIT_DATA_LUKS_KEY` compromise (a Doppler secret exposure included) is an owner-run break-glass,
+  not a workflow dispatch.** Contain first: revoke access to the secret and detach the volume per the host-incident
+  procedure. Git-data is a replica of what the web hosts hold, so it is re-seeded from them (each workspace's next
+  session end force-pushes every head and tag). Then land a reviewed PR that lifts the guard for one dispatch, with
+  the owner and the CLO named as reviewers, then rotate. Containment within hours, re-encryption within days, and
+  Art. 33's 72 hours counted from awareness.
+- **Accepted residue.** An erased repository is unlinked, not overwritten (ADR-239), so the ordinary Art. 17
+  residue stays until a copy mode (#8571) or the "store measured empty" marker (the follow-up below) lands. That
+  acceptance is re-evaluated by **2026-11-12**, the date of the plaintext-volume outer-retention decision; a second
+  slip returns to the CLO (ADR-239 Amendment 2026-10-12).
+- **Escalate** on issue #10175 (the guard) and issue #8571 (copy mode), and to the owner.
+
+Follow-ups, not built here: the mode-unique "store measured empty" marker step in `git-data-cutover.yml`, which is
+the later live proof and the exit from dirty (#10211; blocked on #8571 for a populated store); the pinned-run
+re-baseline, the durable rotate stamp, `delete_protection` on the LUKS volume and required reviewers on
+`infra-privileged` (tracker #10216); #9943 (machine-enforce the
+heartbeat flip precondition, merged design, a different workflow); #6975 (a per-host heartbeat suffix so a healthy
+web-1 probe cannot mask a dead web-2-to-git-data path, a Terraform fan-out). The web-fed `soleur-git-data-prd`
+heartbeat is not a flip precondition, so #6975 does not block the flip: the binding read is the host's own
+`soleur-git-data-host-prd`.
 
 ## What the read-only dispatch does
 
@@ -475,6 +606,9 @@ and in the app. It publishes no git-data pin by itself: the pin is created by th
       `gh api -X POST repos/jikig-ai/soleur/actions/runs/<id>/pending_deployments -F 'environment_ids[]=<env-id>' -f state=approved -f comment=<why>`.
       A run still unapproved at the end of the session is cancelled (`gh run cancel <id>`), because
       it holds the `git-data-state` group.
+
+      This headless form is for the `cutover` job's modes only. It is never valid for any wipe mode
+      (`wipe_check`, `wipe`, `wipe_finish`): see [The wipe](#the-wipe-dl-2-10138--6897).
 
       **Only a run ending `verdict=clear` discharges the collected ids**, and only with all four of
       these recorded:
@@ -909,6 +1043,238 @@ G3 marker, querying `op:git-data-bare-repo-erasure` (pre-FATAL refusals may have
 **2026-10-24**. Record the count and the Sentry issue ids on #5914, never the ids themselves (host-key step 5.1). If G3 has not reached GO well before then,
 escalate to the CLO rather than rushing G3.
 
+### 2026-10-13: the real rotate's first boot lost the volume-attachment race (#10138)
+
+Recorded, not edited into the steps above. `git-data-host-rotate` run 38384137515 applied (7 added,
+3 changed, 7 destroyed; measured, apply log, 2026-10-13), and the fresh host's bootstrap then died at
+10:37:11Z with `FATAL: plaintext_unverified reason=source — /dev/disk/by-id/scsi-0HC_Volume_106867358
+does not resolve to a block device`; the boot poll ended `VERDICT=silent` after its 20 reads
+(measured, same log). The attachment timings, and why they overstate guest-side latency, are in
+ADR-239's 2026-10-13 amendment; they are not repeated here.
+
+**State left behind.**
+
+- Server 170081857 and LUKS volume 107125716 were created (measured, apply log, 2026-10-13; a
+  snapshot, not a current-state read). The old server and old LUKS volume were destroyed (same).
+- The rotate's own precondition read `served_repos=0` before it destroyed anything (measured, its
+  step log, 2026-10-13). Nothing was read from 170081857 or volume 107125716.
+- That 107125716 holds no user repository is **inferred** (the bootstrap exits before any repository
+  is created and the store flag is off), 2026-10-13. Whether the rotate's `served_repos=0`
+  precondition can read a host that never emitted `boot_complete` is **unverified**: check that
+  before the rotate, because it either wedges (see step 4) or reads 0 without having measured.
+- The d6 gate reads `d6_last_rotate_failed 38384137515` (measured, the gate's own scan, 2026-10-13);
+  only a newer successful rotate carrying the `Rotate completed (d6 marker)` supersedes it.
+- No claim is made about the previous key's escrow, passphrase recovery or reopening.
+
+**The fix** (PR #10210): the bootstrap waits 300 s (a lower bound on real time) at the plaintext link and the `luks_open`
+heredoc's device wait is 300 counted passes (ADR-239 amendment). After the bound the same named
+FATAL fires and the plaintext-empty verification is never skipped. The poll starts after
+`terraform apply` returns and apply blocks on both attachments, so a waiting boot adds only its
+post-attach tail (up to 56 s in rehearsal 38356246710, measured 2026-10-13 on a boot that did not wait;
+that a waiting boot costs no more is inferred from the sequencing).
+
+**Recovery order (forward only; each dispatch needs an explicit go-ahead that names the command).**
+A new server is unavoidable: `user_data` is ForceNew and runcmd is once-per-instance, so no existing
+path re-runs first boot on 170081857.
+
+1. Merge the fix PR. Editing `git-data-bootstrap.sh` and `cloud-init-git-data.yml` moves the rung-2
+   payload hash, so the rotate's interlock refuses until new evidence exists.
+2. Rehearsal: `gh workflow run git-data-rung2-rehearsal.yml --ref main -f confirm=REHEARSE-GIT-DATA
+   -f dry_run=false` (paid; it now delays both attachments on purpose, see the rehearsal runbook).
+3. The evidence-only PR (see that runbook's "After a PASS"); its description states the delay the
+   run actually applied, read from the run log. Hold every merge that touches a bound file until it
+   lands.
+4. If the sibling gate PR for the rotate precondition (#10207) merged as drafted, its
+   `stale_boot_complete` refusal needs a `boot_complete` newer than the server's creation, and
+   170081857 never emitted one (inferred, 2026-10-13: its bootstrap died at the FATAL before the
+   emit, and nothing was read from the host): run a plain replace first
+   (`apply_target=git-data-host-replace`, `plan_only=true` before the real one). Otherwise go to 5,
+   but only once the rotate's `served_repos` read for 170081857 is confirmed to be a measurement and
+   not a default (see "State left behind"): until then run step 4 anyway.
+5. The rotate: `apply_target=git-data-host-rotate -f confirm=ROTATE-GIT-DATA`, `plan_only=true`
+   first, then the real run. It destroys LUKS volume 107125716 and re-mints the passphrase again.
+
+A plain replace outside step 4 buys no gate benefit. The schedule coupling is tracked on #10138: if
+this sequence slips past about 2026-11-05, tell the CLO.
+
+## The wipe (DL-2, #10138 / #6897)
+
+The `wipe` job of `git-data-cutover.yml` retires the plaintext rollback volume (Terraform `hcloud_volume.git_data`, the Hetzner volume named `soleur-git-data-store`) by detaching it and deleting it at the provider API. It has four modes (`wipe_check`, `wipe`, `wipe_finish`, `snapshot_clear`; the table under "The modes" gives their confirm tokens), every one behind the `web-platform-infra-apply` environment, and every one names the volume by its id (`volume_id`). The `cutover` job is skipped for all four.
+
+**What a run can claim.** The only claim any wipe run, step summary, notification, record or this section makes about the end state is that the DEVICE was deleted at the provider API: the DELETE returned 204, the read-back read 404 by id and an empty list by name, and the LUKS volume was still attached to the git-data server. A `wipe_finish` that finds the volume already absent made no delete call and claims less: the volume is absent at the provider API at its read-back, and the delete outcome is in the origin run (its summary says so and names the origin run). Nothing here states that the volume was empty or held no personal data; the host verb reports only pre-detach per-type counts and fixed words (an exit-34 refusal also carries one fixed 0/1 field and two counts, see 'Reading the exit-34 line'), and no name read from the volume ever leaves the host. Standing line, the CLO's, which the run summary carries in its own words: this run does not address provider-side snapshot or backup retention of the volume (Art. 30 PA-36(f), not measured), the served store's lock residue, the `.gc-cursor` residue, or any copy held by someone with prior access. The record PR that follows (PR-C) states the end event in the CLO's form: device (Hetzner volume id N) deleted at T by run URL; provider API delete returned 204 and read-back was 404 (for a finish that found the volume absent: absent at the read-back, delete outcome in the origin run). It adds nothing about contents. Run logs, step summaries and notification emails are as public as #6897: they carry ids, counts and fixed verdict words only. In these words `snapshot` always means the transient host-local device-mapper snapshot that the pre-detach read takes (RAM copy-on-write, removed before the run continues), never a provider-side snapshot or backup.
+
+**Status (2026-10-14).** The mechanism exists (PR #10294, merged 2026-10-15). No `wipe_check`, `wipe`, `wipe_finish` or `snapshot_clear` has been dispatched (newest `git-data-cutover.yml` run 2026-10-08, read 2026-10-15). Anything marked UNVERIFIED below has not run against production. Update (2026-10-18, measured): two `wipe_check` runs have since been dispatched (read-only) and both refused with `wipe_boot_layout_signal_offlist`: run 39081408368, and [run 39136900735](https://github.com/jikig-ai/soleur/actions/runs/39136900735), the first to print the `has_hooks_d`, `lf_entries` and `offlist_n` fields (see 'Reading the exit-34 line'). As of the `gh run list` read on 2026-10-18, no `wipe`, `wipe_finish` or `snapshot_clear` had been dispatched; re-read the run list before relying on this. CLO addendum 2 ([#6897 comment](https://github.com/jikig-ai/soleur/issues/6897#issuecomment-6251181879)) lifted C1 for one further `wipe_check` only; run 39136900735 is that run and spent the lift. It refused at exit 34 before `lock_residue` and `store_root_repos` printed, so neither run printed either field and the closed posting list is unchanged.
+
+**Who names a dispatch.** The owner names each exact command (`hr-menu-option-ack-not-prod-write-auth`) and approves the environment in the owner's own session. The headless `pending_deployments` approval form is NEVER valid for any wipe mode (`wipe`, `wipe_finish`, `wipe_check`, `snapshot_clear`), and an agent never approves its own dispatch: the platform enforces the `main` branch policy but not the separation of dispatching from approving (ADR-241, amendment of 2026-10-07).
+
+### Before naming `mode=wipe`
+
+> Before naming `mode=wipe`, #6897 carries (i) the link to a READY PR-C, (ii) the main-dispatched empty-id rehearsal evidence (PR-R #10296) or a recorded owner acceptance of a longer wedge, and (iii) the dispatch-to-merge bound. The workflow does not check these. An agent does not propose the command until each is verified.
+
+Items the CLO holds before the dispatch (not before the build): sign-off on the wording of the record PR, sight of the host-local device-mapper snapshot procedure (the transient RAM copy-on-write listing on the git-data host, not a provider-side snapshot), the routing of any off-allowlist, non-empty or reboot dead-end result (below), and the Better Stack retention measurement recorded on #6897. Once those hold, the owner naming the command is the trigger; no further CLO approval is needed.
+
+The bound in (iii) is a recorded commitment, not a limit any workflow measures: a working bound of one business day from dispatch to PR-C's merge, written on #6897 before the dispatch. A breach returns to the owner, who records on #6897 whether to extend it; once 2026-11-12 has passed it returns to the CLO (ADR-239, amendment 2026-10-12: a second slip returns to the CLO). No agent extends it.
+
+### Preconditions the workflow enforces (W3), and the ones it does not
+
+The precheck step runs in all four modes. In `wipe_check` it is report-only: it prints the verdict `wipe` would have refused with and exits 0. In `snapshot_clear` it runs as `FLAG_MODE=pin_only`, only to write the git-data host-key pin the ssh_config step requires; it evaluates no predicate and prints no variant.
+
+**Two variants (ADR-239 Amendment 2026-10-15; takes effect on merge of #10352).** The first line the precheck prints is `wipe_variant=flip_chained|separated|none`, chosen ONLY from two reads, the flag and the stamp, never from an input or an environment value. `flip_chained` (the flag reads `true`, OR the stamp is non-empty, valid or not) is the gate in the numbered list below, unchanged. `separated` (the flag read successfully as exactly `false` or unset, AND no stamp) needs neither a flip nor the 7-day soak; it needs, instead: the run-record scan `git_data_store_dirty_scan` returns `store_clean` (`wipe_separated_store_dirty`), a `boot_complete` row newer than the current server's creation with `served_repos=0` (W5), the typed id attached to the current server (W4), and the on-host read-only count `store_root_repos=0` of the LUKS store root (`wipe_separated_store_root_populated`). A flag value outside `true|false|unset` is `none` and refuses `wipe_precondition_flag_unreadable`; a non-empty stamp that is not a valid timestamp counts as present, so it can never reach `separated`: with the flag `true` it refuses `wipe_precondition_stamp_malformed`, and with the flag `false` the first refusal is `wipe_precondition_flag_not_true`. W7b re-asserts the variant (`wipe_precondition_variant_changed expected=<v> got=<v>`): a variant that differs from the one W3 printed is always a refusal. Do not dispatch `flip`, `proof`, `rollback` or `redeploy` between a `wipe` that detached the volume and its `wipe_finish`: `wipe_finish` re-derives the variant, and a flip run that reached the flag-write step turns the run-record scan to `store_dirty` (or changes the flag), so a detached volume would wait past the 2026-11-12 outer date with no workflow path to delete it. The numbered list below describes `flip_chained`.
+
+1. **The flag reads exactly `true`.** Unset and `off` both refuse `wipe_precondition_flag_not_true`.
+2. **The stamp `GIT_DATA_LUKS_CUTOVER_AT` is present** and reads `YYYY-MM-DDTHH:MM:SSZ` as a real date (`wipe_precondition_stamp_absent`). An unreadable stamp is a read failure (`wipe_stamp_read_failed`), not a predicate.
+3. **Seven days have passed since the stamp** (`wipe_precondition_soak_not_elapsed`). The floor is the pinned constant `WIPE_SOAK_FLOOR_SECONDS=604800` in `apps/web-platform/infra/git-data-flag-precheck.sh`, assigned unconditionally: no input, environment value or variable lowers it. It is relaxed only by a reviewed diff of that one line, its pin test and this number, together with an ADR-239 amendment and a CLO ruling. No bypass is prepared. The seven days are an engineering rollback-safety floor. They are not a retention period and not a statement of how long the plaintext volume will be kept.
+4. **The interim stamp guard.** Because a rollback does not clear the stamp today, the precheck also reads the last 100 runs of this workflow and refuses when a `git-data rollback` run (any conclusion: a failed rollback may have changed the flag) or a legacy-titled run, dispatched from `main`, was created at or after the stamp (`wipe_precondition_rollback_after_stamp`, `wipe_precondition_legacy_run_after_stamp`); an unclassifiable title, a full list that does not reach back to the stamp, or an unreadable list refuses too. End of life of this guard: delete it once #10297 lands (the rollback arm clearing the stamp).
+5. **The flag is read again** just before the credential loader (W7b); a flag that is no longer `true` refuses there.
+
+> **Superseded 2026-10-15 (#6897), as to "the latest flip stamp this runbook allows is 2026-11-04" below:** that date binds the `flip_chained` variant only. The `separated` variant needs no flip and no soak (ADR-239 Amendment 2026-10-15); its schedule is the CTO's: the wipe PR merged by 2026-10-30, `wipe_check` green by 2026-11-02, the owner names the command by 2026-11-02, dispatch target 2026-11-05 and last 2026-11-09 (inferred), the record PR merged by 2026-11-12.
+
+What the workflow does NOT check: the three items under "Before naming `mode=wipe`", the state of PR-C, and whether another git-data run is pending.
+
+Schedule. The outer date is 2026-11-12 (ADR-239). With the 7-day floor, a stamp at or before 2026-11-05T00:00:00Z satisfies the floor at 2026-11-12T00:00:00Z (2026-11-12 minus 604800 s). **The latest flip stamp this runbook allows is 2026-11-04**, one day earlier, which leaves a day for the approval and the run itself. If the flip cannot be stamped by 2026-11-04, tell the CLO.
+
+**Standing rule: never rotate after the flip.** A rotate destroys the LUKS store, which after the flip may hold the only copy of some replicated repositories ([The D6 rotate](#the-d6-rotate-dispatch-before-the-flip); [When a rotate is needed after the flip](#when-a-rotate-is-needed-after-the-flip-10175)).
+
+**Rule for the queue:** do not dispatch while another git-data run is pending (a pending run is replaced by any newer dispatch and a wipe waiting for approval holds the web-1-swap queue: approve or reject promptly). The replacement happens in the workflow-level `git-data-state` group, which keeps one pending run. A rejected or timed-out environment approval pages as `WIPE_STATE_UNKNOWN` (the job never published an output).
+
+### Dispatch strings
+
+The id is the Hetzner id of the volume named `soleur-git-data-store`, read at the provider API with the read-only token (a read; the id is also the dispatch input, so the run title carries it):
+
+```bash
+doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY -- bash -c '
+  printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" \
+    | curl -sS --max-time 20 -K - "https://api.hetzner.cloud/v1/volumes?name=soleur-git-data-store" \
+    | jq "[.volumes[] | {id, attached_to: .server, delete_protected: .protection.delete}]"'
+```
+
+Exactly one volume must be listed. The volume's own action history is a second read with the same token (no SSH). A detach that the provider accepted shows here while the volume still lists its server, so this read, not the `server` field, says whether anything is running:
+
+```bash
+doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY -- bash -c '
+  printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" \
+    | curl -sS --max-time 20 -K - "https://api.hetzner.cloud/v1/volumes/<id>/actions?sort=id:desc&per_page=5" \
+    | jq "[.actions[] | {id, command, status, started, finished}]"'
+```
+
+`status` reads `running`, `success` or `error`. A `detach_volume` action reading `running` is a detach still in flight. The `actions` line of a `wipe_check` run prints only the count and the latest command word, never the status, so use this read when the question is whether anything is running. Then, one command at a time, each named by the owner:
+
+```bash
+gh workflow run git-data-cutover.yml --ref main -f mode=wipe_check -f confirm=WIPE-CHECK-GIT-DATA -f volume_id=<id>
+gh workflow run git-data-cutover.yml --ref main -f mode=snapshot_clear -f confirm=CLEAR-SNAPSHOT-GIT-DATA -f volume_id=<id>
+gh workflow run git-data-cutover.yml --ref main -f mode=wipe -f confirm=WIPE-GIT-DATA -f volume_id=<id>
+gh workflow run git-data-cutover.yml --ref main -f mode=wipe_finish -f confirm=WIPE-FINISH-GIT-DATA -f volume_id=<id> -f origin_run=<id>
+```
+
+To find the id of the original `wipe` run when no email carried it (a lost runner, or `WIPE_STATE_UNKNOWN`), list the recent runs and match the title `git-data wipe <volume_id>`: `gh run list --workflow git-data-cutover.yml --json databaseId,displayTitle,createdAt --limit 100`. The run that detached the volume is the one whose `wipe_detach_gate` step concluded `success` (`gh run view <run id> --json jobs` lists the steps). Read a failed step with `gh run view <run id> --log-failed`, never `--log`, which prints the whole job log.
+
+`volume_id` is 1 to 12 digits and valid only for the wipe family; `origin_run` is numeric and valid only for `wipe_finish`. Each is refused for every other mode, and a `lineage` input is refused for the wipe family.
+
+**"Re-run failed jobs" must never be used (nor `gh run rerun`) on a wipe-family run.** A re-run is attempt 2 and is refused by the attempt-1 rule in the first step, silently: no marker is written and no email is sent. Dispatch a new run instead.
+
+Reading a refusal: **a red run with no email means the input was refused** (a typo in the confirm token, a bad id, an `origin_run` on the wrong mode, a re-run). Nothing was called. The first step writes `mode=` last, after every refusal, so a refused input leaves `started` false and the notifier stays quiet.
+
+### Step order, and what each mode does
+
+The order is pinned by the census: identity read, boot-signal read, host assertion, flag re-read, credential loader, detach marker, detach, post-detach host read, provider re-read, delete marker, delete, read-back.
+
+- **`wipe_check`** (confirm `WIPE-CHECK-GIT-DATA`) runs the front only: precheck (report-only), the provider reads (`state`, the identity checks, the volume's action history: count and latest command word), the boot-signal read, the one-session host assertion including the counts-only host-local listing (a transient device-mapper snapshot, RAM copy-on-write, removed before the run ends), and teardown. It calls no loader, no detach and no delete. Its identity line prints the plaintext, LUKS and server ids, so the id to type can be read from the run. It ends with `NOT authorization; W3 would be <variant>/<verdict>; layout listing exercised: counts only`, and prints `elapsed_s` and the days to the 2026-11-12 outer date. Hold the first run that prints the residue counts (the first `wipe_check`, or a first `wipe` that has no prior `wipe_check`) until the DPD §10.3(b) re-ruling (due by 2026-10-24, and it may be made earlier) has landed: a numeric `lock_residue` or `repos` in its run summary (public: this repository is public) is a measurement the published disclosure must be reconciled with first (CLO ruling 2026-10-15, condition C1). Run it first: it is the only way to exercise the checks under the real credentials before the destructive dispatch, and several facts are first measured by it (see "Not proven").
+
+  > **Superseded 2026-10-18, as to "Hold the first run that prints the residue counts" for run 39136900735 only ([run](https://github.com/jikig-ai/soleur/actions/runs/39136900735), CLO addendum 2 on #6897):** addendum 2 lifted C1 for one further `wipe_check`, and that run is run 39136900735; the lift is spent. This note does not otherwise change that hold. Both prior `wipe_check` runs refused at exit 34 and printed neither `lock_residue` nor `store_root_repos`. `repos` did print (`repos=0`) in both exit-34 lines; addendum 2 item 2 lists `repos` for the one further run, and whether run 39081408368's public `repos=0` fell under C1 is the CLO's to say. Any further `wipe_check` needs a new CLO addendum (addendum 2, item 7) and the owner to name the exact command ('Who names a dispatch'). Nothing in this note authorizes dispatching any mode; `wipe`, `wipe_finish` and `snapshot_clear` stay held (addendum 2). The DPD §10.3(b) re-ruling stays due 2026-10-24.
+- **`wipe`** (confirm `WIPE-GIT-DATA`) runs the same front (the host-local listing included, as in `wipe_check`; it also reads the volume's action history in W4 and prints the count and the latest command word; unlike the finish it does not refuse on a running action, which is why S2 reads the action status first), then the flag re-read, the Tier-B loader (the only loader call, with only the Tier-B token), the detach marker, one detach (the helper polls the same provider action at most 30 times, never re-sends), the post-detach host read (the mapper still serves, the by-id link is gone), a second provider read of the target, the delete marker, one delete, and the read-back. Git-data keeps serving from the LUKS volume throughout; nothing restarts.
+- **`wipe_finish`** (confirm `WIPE-FINISH-GIT-DATA`) finishes a wipe that stopped between its detach and its delete. It makes zero detach calls. It verifies the origin run first (below), then reads the volume: still detached, it requires the action-history evidence below, repeats the post-detach host read, and runs the delete steps; already absent, it loads no credential, makes no delete call and runs only the read-back.
+
+`origin_run` is **always the id of the original `mode=wipe` run** (title exactly `git-data wipe <volume_id>`, on `main`, by `workflow_dispatch`, a run of this workflow by its workflow name (a run title is free text that any workflow on `main` can set), whose `wipe_detach_gate` step concluded `success`), never a `wipe_finish` run's id, also on a second finish. The check accepts the run when that gate concluded `success`, and otherwise when its `wipe_delete_gate` step did. It does not look at the volume's state when it chooses, so for the absent branch the evidence is that the origin run reached one of those two gates: a volume deleted by something else in the meantime passes the same check. That is why the absent branch claims only that the volume is absent at the read-back, with the delete outcome left to the origin run. When the volume is still detached, the finish also reads the volume's provider action history and requires nothing running, no `attach_volume` action started at or after the origin run (`attach_after`, even when a later detach follows it), and the newest attach or detach action to be a successful `detach_volume` started at or after the origin run.
+
+### A leftover snapshot (`snapshot_clear`)
+
+The layout listing of `wipe_check` and `wipe` stacks a throwaway device-mapper snapshot (`git-data-pt-snap`) on the plaintext volume, backed by a loop device on a RAM copy-on-write file under `/dev/shm/tmp.<id>`, and removes it in an exit trap. A trap runs for HUP, INT, TERM and PIPE and for a normal exit; it cannot run for SIGKILL (a host out-of-memory kill, for example), so a killed listing can leave the snapshot, its mount, its loop device and its COW file behind (inferred; not observed). A leftover is safe but blocking: the next `wipe_check` or `wipe` refuses `wipe_snapshot_present` (exit 26) and nothing proceeds.
+
+The way out is `mode=snapshot_clear` (CTO ruling 2026-10-15), dispatched by the owner naming the command (ADR-239 Amendment 2026-10-15), behind the same reviewer-gated environment as `wipe`:
+
+```bash
+gh workflow run git-data-cutover.yml --ref main -f mode=snapshot_clear -f confirm=CLEAR-SNAPSHOT-GIT-DATA -f volume_id=<id>
+```
+
+It is not called from `wipe_check`, and there is no reboot path (a reboot drops serving and invalidates the boot-row window). It reads the Hetzner identity of the typed volume (W4), then one SSH session runs the host verb's `clear` phase: the typed device is proven not LUKS and not the mapper's backing; the snapshot's origin must be the typed device and it must be non-persistent; its COW must be a loop device whose backing file is in a `/dev/shm/tmp.<id>` directory, and a mount of the snapshot, if any, must be that directory's `mnt`; no process may hold the snapshot open. Only then are the mount, the snapshot (`dmsetup remove --retry git-data-pt-snap`, a literal), the loop device and the COW file removed, in that order, every step attempted. It ends by proving the origin's write counters read `0 0` and its kernel read-only flag reads 1. After a `cleared` answer, run a fresh `wipe_check` before any `wipe`.
+
+Blast radius (from plan A1.7b and the CTO ruling 2026-10-15, not re-measured here): a transient snapshot with a RAM copy-on-write file; the LUKS mapper and the serving path are not touched. With the store flag off the host is not meant to serve user repositories (the boot-time `served_repos=0` row is not a measurement of what is served at the moment of the clear).
+
+### Failure states (S1 to S6)
+
+Every recovery below is owner-authorized, never automatic. The email subject and body carry the notify word, and so does the `ci/git-data-cutover` issue; the notify job writes no step summary. The issue is a COMMENT under the newest open issue with that label, so a wipe word can sit under an older title: read the comments, not only the titles. The failing step's annotation carries the verdict word (titled `git-data-wipe` for the provider and workflow steps, and `git-data-cutover store` or `git-data-cutover access` for the host verb's words). `wipe_check` has its own word, `WIPE_CHECK_FAILED`: no volume or provider state changed, but a killed listing can leave a throwaway snapshot (see "A leftover snapshot" above); read the failing step.
+
+| State | Notify word | Reads as | Recovery |
+|---|---|---|---|
+| **S1a** no marker, `started` true | `WIPE_REFUSED_BEFORE_ANY_CALL` | this run made no irreversible call; it says nothing about earlier runs | read the failing step (`gh run view <run id> --log-failed`), fix the cause, dispatch a NEW run |
+| **S1b** no marker, `started` absent | `WIPE_STATE_UNKNOWN` | the runner was lost, the job timed out or was cancelled, or its environment approval was rejected or expired: UNKNOWN, never "nothing changed" | read the volume at the provider first: the volume read and the action-status read under "Dispatch strings" (or a `wipe_check` dispatch, whose first provider call prints `state plaintext=attached`, `detached` or `absent`). Attached to the git-data server **and no `detach_volume` action reading `running`**: nothing changed, fix the cause and dispatch a new run. A running `detach_volume` action: read again later (S2). Detached: S3, and find the original `wipe` run id as under "Dispatch strings". Absent: S4 or S5 |
+| **S2** `phase=detach_attempted` | `DETACH_ATTEMPTED_UNCONFIRMED` | the detach POST may have been sent and accepted (a refusal inside the detach step after the marker reads the same, conservatively); the volume may be attached, detaching or detached | read the volume AND its action status (the two reads under "Dispatch strings"). Attached to the git-data server and no `detach_volume` action reading `running`: nothing changed, dispatch a new `wipe`. A `detach_volume` action reading `running`: the volume may still list its server while the detach completes, so "attached" alone does not mean nothing changed; read again later. A finish refuses `wipe_detach_in_flight` meanwhile; a plain `wipe` does not check it and would send a second detach, so wait for the action to end. Detached: S3 |
+| **S3** `phase=detached` | `VOLUME_DETACHED` | the volume is detached and not deleted; the post-detach host read, the provider re-read or the delete marker did not complete. Only a `mode=wipe` run publishes this phase: a `wipe_finish` run never does | the email carries the `wipe_finish` command. In every such email `volume_id` is the digits typed (an input that was not 1 to 12 digits is never copied into the body and reads as the plain word `VOLUME_ID`: replace it). `origin_run` is the email's own run id only in the email of a `mode=wipe` run that detached the volume (the detach, detached and delete words); in any other email it reads as the plain word `ORIGIN_RUN_ID`: replace it by the id of the original `wipe` run. The `VOLUME_ALREADY_DETACHED` email always carries the plain word `ORIGIN_RUN_ID`, even from a `mode=wipe` run, because that run refused and detached nothing: replace it by the id of the wipe run that detached the volume. A plain `mode=wipe` against a detached volume REFUSES, by design (`wipe_volume_already_detached`, notify `VOLUME_ALREADY_DETACHED`, carrying the same command), and a `resume` input is not offered because it would skip the host assertion |
+| **S3b** the post-detach host read gave a store verdict (the host verb exited 5 with a word other than `probe_failed`) | `STORE_NOT_SERVING_DO_NOT_FINISH` | after the detach the host verb answered that the git-data host did not read as serving from the encrypted store | **do NOT dispatch `wipe_finish` and do not delete anything.** The wrong volume may have been detached or the store is unhealthy; read the annotation word and the run log, and escalate on #6897 with the CTO. Re-attaching the volume is an owner decision recorded on #6897; no workflow re-attaches it |
+| **S3c** the post-detach host read did not answer (`probe_failed` with `rc` 16, 96, 124, 141 or 255, or an argument word, or an access-gate refusal with exit 3) | `VOLUME_DETACHED` from a `mode=wipe` run; `WIPE_REFUSED_BEFORE_ANY_CALL` from a `wipe_finish` run | the volume is detached and the store was not read after the detach; the annotation is not a store verdict. The workflow sets no `refusal` for these (it greps the host verb's output for `verdict=probe_failed`, and an exit 3 is not 5) | S3: the next action is `wipe_finish` with the original `origin_run` (it repeats this read before any delete and stops there if the store does not serve). Do not re-dispatch `wipe` |
+| **S4** `phase=delete_attempted` or `delete_sent` | `DELETE_ATTEMPTED_UNCONFIRMED`, `DELETE_SENT_UNCONFIRMED` | the DELETE may have been sent (or returned 204) and the read-back did not confirm | read the volume read-only; do not run detach again. Not listed at the provider (404 by id, nothing by name): dispatch `wipe_finish` with the SAME original `origin_run`. The absent branch makes no delete call; it records the read-back, and its summary says absent, with the delete outcome in the origin run. Listed and detached: dispatch `wipe_finish` (S3). Listed and attached: nothing was deleted, a plain `wipe` re-asserts everything. The email's finish command does not know the annotation word: if the failing step's word is one of S5's, do not run it |
+| **S5** the read-back disagrees | `DELETE_SENT_UNCONFIRMED` (the phase is still `delete_sent`; the annotation word tells S5 from S4) | `wipe_readback_name_still_listed` (404 by id but the name still lists a volume: the typed id was not the volume the name resolves to), `wipe_readback_still_exists` (the id still answers), `wipe_readback_luks_missing` or `wipe_readback_luks_detached` (the LUKS volume is not the one attached) | **incident.** Treat as a defect in the identity read, which should have caught it. Open an incident (Breach-triage trigger), escalate to the CTO and the CLO. Never dispatch another delete until the cause is understood, and do not run the email's finish command for these words |
+| **S6** `phase=deleted`, then a later failure | `VOLUME_DELETED_TEARDOWN_FAILED` | the provider API read-back confirmed the volume is no longer listed (from this run's own delete, or, for a `wipe_finish` that found it absent, as an observation with no delete call); a step after the read-back failed, or the job was cancelled or timed out after it | nothing to repeat: the read-back is recorded in the run. Confirm with one read-only look at the provider (404 by id). Do NOT re-dispatch: it would refuse at the identity read. For a finish that found the volume absent the delete outcome is in the origin run |
+
+A `wipe_finish` publishes no phase before its delete gate (nothing in a finish writes `detached`), so a finish that fails at the origin check, the identity read, the action-history read, the host read, the loader or the provider re-read reads as S1a (`WIPE_REFUSED_BEFORE_ANY_CALL`), and the volume stays detached; one that fails after its delete gate reads as S4. Dispatch `wipe_finish` again with the SAME original `origin_run`. In an email from a `wipe_finish` run the finish command carries the plain word `ORIGIN_RUN_ID`, not that run's own id: a `wipe_finish` run's id never qualifies as `origin_run`. Only a `mode=wipe` run fills its own id (it is the origin).
+
+**A `mode=rollback` after the detach.** The precheck (W3) runs for `wipe_finish` as well and refuses `wipe_precondition_rollback_after_stamp` for any `git-data rollback` run on `main` created at or after the stamp. A rollback dispatched once the volume is detached therefore makes every later `wipe_finish` refuse until a new flip and its 7-day soak, so the detached volume then outlives 2026-11-12 with no workflow path to delete it. Before any `mode=rollback` while a volume is detached and not deleted (S2 to S4), the owner records on #6897 that this trade is accepted and routes it to the CTO and the CLO. The guard retires with #10297.
+
+### The wedge
+
+After the delete and before PR-C merges, Terraform state and HCL still list `hcloud_volume.git_data` (and its attachment). Read facts, from `tests/scripts/test-git-data-wipe-wedge.sh`:
+
+- **The drift plan shows a create of `hcloud_volume.git_data`.** `scheduled-terraform-drift.yml` plans the whole root with no `-target` and keeps reporting that create until PR-C merges. It only plans, so the effect is a drift report; it is the second reader of the wedge, and expected.
+- **A refreshed-away volume plans a NEW volume id.** The id flows into the rendered `user_data` of `hcloud_server.git_data` (no `ignore_changes`), so an apply that sees the wedge would replace the live git-data host. The two jobs that can plan those addresses, `git_data_host_replace` and `git_data_host_create` in `apply-web-platform-infra.yml`, are gated and refuse (`out_of_scope`); every other apply job is targeted so its plan cannot contain them. The wedge test derives the population from `git ls-files` and is RED if any apply-capable job that can reach the wedge would pass it. The detached-but-not-deleted state (S3) has its own fixture: an attachment create, which an unguarded apply would use to re-attach the plaintext volume to the live host.
+- **The cost.** Until PR-C merges, the gates refuse every web-platform apply on main that would plan the git-data host replace or the volume create, security fixes included: a fix to the rendered `user_data` of `hcloud_server.git_data` cannot ship in that window. **The replace lever stays held** for that window; this is why the dispatch-to-merge bound exists. The mitigation is the PR-C readiness precondition under "Before naming `mode=wipe`"; no workflow checks it and the bound is prose only.
+- **The control is the gates, not a pause.** The retired workspaces wipe closed its delete-to-PR window by pausing both push-apply workflows and refusing unless both read `disabled_manually` (ADR-119, addendum of 2026-09-28). This wipe pauses nothing and checks no workflow state. The replacement control is the pair of plan-time gates `git_data_host_replace_gate` (job `git_data_host_replace`) and `git_data_host_birth_gate` (job `git_data_host_create`), whose refusal of both fixtures `tests/scripts/test-git-data-wipe-wedge.sh` derives and pins; the targeted apply jobs keep running because their plans cannot contain the wedge addresses.
+- **A replace after the flip re-runs first boot against a populated store.** The first boot FATALs closed (`luks_residue`, forward-only): git-data stays dark with its data intact. This is true of any ForceNew replace of the git-data host after the first flip, with or without the wedge, and it is tracked as #8571 (copy mode). Nothing here promises users more than "fails closed".
+- **The live host still names the deleted id** in its rendered `user_data` until its next replace. `runcmd` runs once per instance, so a reboot does not re-run the bootstrap; a manual bootstrap re-run would FATAL closed (`plaintext_unverified`, no marker).
+
+### The reboot dead end
+
+The host assertion binds the boot-time evidence to the device. After ANY reboot of the git-data host the evidence is stale and nothing refreshes it: the kernel read-only flag reads 0 (`wipe_ro_flag_lost`) and the host booted after the evidence row, or the row lies more than 3600 s after boot (`wipe_boot_generation_mismatch`). No new `boot_complete` row follows (`runcmd` is once per instance) and a replace cannot refresh it (the populated-store first boot refuses), so **no machine path out exists and none is prepared.** The 3600 s boot-to-row window and the H9 instance-id check are first measured by `wipe_check` (it prints `boot_to_row_s`); run it early so a dead end shows while the CLO can still be reached. If a reboot since the row blocks the layout evidence, route to the CLO: the owner records the situation on #6897 and brings an owner-supplied, recorded read (counts only) taken by a procedure the CLO has seen; no agent decides, and no input of `mode=wipe` accepts such a read. The date 2026-11-12 stays the outer bound.
+
+Other results that route to the CLO, not to a retry: `wipe_boot_layout_signal_offlist`, `wipe_plaintext_not_empty`, `wipe_boot_field_plaintext_empty`, `wipe_boot_field_served_repos`. Post the verdict word and the counts on #6897, never a name. For an off-allowlist result (`wipe_boot_layout_signal_offlist`), post the verdict word and, copied verbatim from the `wipe-assert: rc=34` line, only these fixed fields: `top_d`, `top_f`, `top_l`, `top_o`, `repos`, `has_hooks_d` (0 or 1), `lf_entries` and `offlist_n`. These are counts and one boolean. Never post, quote, paraphrase, hash or guess a listing name, and never any field outside this list. Policy (CLO ruling, 2026-10-18; takes effect on the merge of the change that adds the fields). The owner posts; an agent may read the line and report it to the owner but does not post it to #6897 (the owner posts the verdict word and the closed field list: CLO ruling L-5(i), 2026-10-18).
+
+### Reading the exit-34 line
+
+The host line for `wipe_boot_layout_signal_offlist` (host exit 34) reads `wipe-assert: rc=34 reason=offlist top_d=<n> top_f=<n> top_l=<n> top_o=<n> repos=<n> has_hooks_d=<0|1> lf_entries=<n> offlist_n=<n>`. The last three fields appear only from the merge of the change that adds them; a run dispatched before that merge prints only the first five counts. Where to read it: in the run log, behind the prefix `[git-data-cutover] probe-stderr:`; the `STORE probe=` line, the annotation and the step summary carry the verdict word only, not these fields. A line that does not match that grammar exactly (an older five-count line, an extra token, a missing field) is posted as the verdict word and the five counts only; it is never partly trusted. Inherited from the verb and the suite's `RE_34`, 2026-10-18.
+
+- `has_hooks_d`: 1 if and only if a top-level directory is named exactly `hooks` (case-sensitive; a file or a symbolic link with that name reads 0). Inherited from the script header and the code, 2026-10-18.
+- `lf_entries`: the number of entries inside the top-level `lost+found` directory; 0 when it is absent or is not a directory, and 0 for a directory with no entries too (a count at one moment). A `lost+found` that is a file or a symbolic link reads 0 here and counts once in `offlist_n`, so `lf_entries=0` does not mean `lost+found` is a clean directory. Inherited from the script header and the code, 2026-10-18.
+- `offlist_n`: the number of top-level entries that fail the path-typed allowlist; entries inside `lost+found` are not counted here. Inherited from the script header and the code, 2026-10-18.
+
+| Fields | Reading the owner may post |
+|---|---|
+| `has_hooks_d=1 offlist_n=1 lf_entries=0` | the only off-list entry is a directory named `hooks`, the name the bootstrap uses; its owner and contents are unread. This is the single sanctioned reading of the `has_hooks_d` bit. It says nothing about `repositories/`: read `repos` separately (above 0 means repositories remain), because exit 34 is reported before the `repositories/` check, and lock residue is not in this line. It is not an emptiness reading and not a basis to widen the allowlist |
+| `offlist_n=0 lf_entries>=1` | the refusal came from entries inside `lost+found`; the count only (the entries are unread and may be recovered file fragments; no inference about them) |
+| any other combination | post the fields only; make no inference about which entries they are (`offlist_n=0 lf_entries=0` cannot occur with exit 34: an instrument fault, route to the CTO) |
+
+- Measured 2026-10-18 (run 39081408368, read-only; the line as printed before these fields existed): `top_d=3 top_f=0 top_l=0 top_o=0 repos=0`.
+- Inherited (2026-10-18, `git-data-bootstrap.sh`): the bootstrap creates a `hooks` directory beside `repositories`.
+- Measured 2026-10-18 ([run 39136900735](https://github.com/jikig-ai/soleur/actions/runs/39136900735), read-only, verdict `wipe_boot_layout_signal_offlist`): `wipe-assert: rc=34 reason=offlist top_d=3 top_f=0 top_l=0 top_o=0 repos=0 has_hooks_d=1 lf_entries=0 offlist_n=1`. Read through the table in this section, row `has_hooks_d=1 offlist_n=1 lf_entries=0`: the only off-list entry is a directory named `hooks`; its owner and contents are unread. This is not an emptiness reading, the allowlist is unchanged and the refusal stands. `repos=0` is a count at one moment, in the transient host-local snapshot, of the entries directly under a top-level `repositories` directory (regular files named `.<id>.init.lock` or `.init.lock`, and an empty `lost+found` directory, excluded); it also reads 0 when no such directory is present. It is not a statement that no user repository remains and not an emptiness reading. `lock_residue` and `store_root_repos` are not in the line: exit 34 comes before the host prints them, so this run published neither. Recorded here from the public run log. Not proven: what `hooks` holds.
+- Policy (CLO ruling, 2026-10-18): the allowlist is unchanged and the refusal stands. A change to the allowlist needs a CTO ruling, counts-only fixed-vocabulary evidence of what the entry holds, CLO review with a dated addendum, an ADR-239 amendment where the allowlist is part of the recorded gate, and its own CLO ruling for each new output field. The question is tracked on #6897.
+- Nothing here dispatches a run or sets a date; a further `wipe_check` needs the owner to name the exact command and a new CLO addendum.
+  > **Superseded 2026-10-18, as to "a further `wipe_check` needs the owner to name the exact command and a new CLO addendum" for run 39136900735 only:** the exact command was set out in CLO addendum 2, item 1 ([comment](https://github.com/jikig-ai/soleur/issues/6897#issuecomment-6251181879)), and [run 39136900735](https://github.com/jikig-ai/soleur/actions/runs/39136900735) is that further `wipe_check`; the lift in addendum 2 is spent. The sentence still binds any run after it.
+
+### Retention of the evidence row
+
+The boot-signal read takes the newest `boot_complete` row of the CURRENT server (strictly newer than the server's creation; another host's row is not evidence). After a flip no newer row can exist, so the row is old by construction. Measured 2026-10-14 (read-only): Better Stack `logs_retention` is 90 days on both sources; the git-data archive is at least 40 days deep and the control archive at least 62. The row the check uses is the CURRENT server's newest `boot_complete` row; a row of a replaced server, such as one dated 2026-10-11, is refused as `wipe_boot_predates_server`. The newest `boot_complete` row for the git-data host read 2026-10-14 14:34Z on 2026-10-14 (it counts only if it belongs to the current server; `wipe_check` is what shows that). At the configured 90 days that row would remain within retention until about 2027-01-12; that is the setting read on 2026-10-14, not a commitment by Better Stack or by us. **A healthy query that returns no row after that date may mean retention was exceeded** (`wipe_boot_absent`, distinct from a failed read, `wipe_boot_unreadable`): route to the CLO.
+
+### Not proven
+
+- The host-local device-mapper snapshot listing (RAM copy-on-write) runs in `mode=wipe_check` and `mode=wipe` (CLO, 2026-10-15: `wipe_check` exercises the layout listing so its first live run is not the destructive one; it creates a transient local snapshot and removes it). It is a port of the bootstrap's tested unit with a loopback test; a failure refuses before the loader and the detach, with nothing changed.
+- H9 (the host's instance id equals the Hetzner server id), the H8 baseline (sectors written and discarded both exactly 0, kernel read-only flag 1) and the 3600 s window are first measured by `wipe_check`.
+- The provider response shapes of the detach (201 with an action id), the action poll's end states and the DELETE (204) are pinned from the retired `workspaces-luks-cutover.yml` `wipe` job, not seen live; the first destructive run's fail-closed reads are their first live exercise. The read shapes (server and volume lists, the volume's action history) were pinned from a live read-only call on 2026-10-14.
+- The epoch bounds are working values: the host-assertion-to-detach bound is 120 s (the Tier-B loader step took 0 to 2 s over 83 recent apply and drift runs, measured 2026-10-14, so the plan's formula lands on its 120 s floor); the re-read-to-delete bound is 60 s.
+- `plaintext_empty=yes` at boot and a clean listing are evidence the gate requires; neither is a statement about what the volume held.
+- What GitHub publishes for a job that was cancelled, timed out or lost its runner is not observable offline: the census simulator keeps a killed step's output file and proves only that the phase chain then reads correctly. Whether a marker written in a step that is then cancelled still reaches the notifier is first observed on a real run (cancel one `wipe_check` while it runs before the first `wipe`); an absent output always reads as `WIPE_STATE_UNKNOWN`, never as "nothing changed", so a lost marker degrades to the more conservative word. The same holds for a run cancelled while it waits for the environment approval and for the result GitHub reports for a rejected approval.
+
+### Last-resort diagnosis (the wipe)
+
+SSH-class and for a stuck state only; no step above depends on it. `wipe_snapshot_teardown_failed` means a host-local device-mapper snapshot named `git-data-pt-snap` (copy-on-write file in `/dev/shm`) may still exist over the retired device. Every later run then refuses (`wipe_snapshot_present` or `wipe_device_has_holders`), and nothing can be detached while it stands. Do not clear it by rebooting the host: the reboot is the dead end above. Open an incident with the CTO and have the host-side teardown done in the script's own order (unmount the snapshot, `dmsetup remove --retry git-data-pt-snap`, detach the loop device, remove the COW file), then `wipe_check` shows the device as before.
+
 ## Verdict map
 
 | Where you are | What the run reads | What to do |
@@ -951,13 +1317,16 @@ escalate to the CLO rather than rushing G3.
 | **Store session could not be answered** — the store-empty stage | `probe=store-empty verdict=probe_failed rc=3\|4\|7\|8\|9\|96` (exit 5) | Every store-verified fact held, then the count could not be taken. `rc=3`: `repositories` is a dangling symlink or not a directory. `rc=7`: it is missing (the bootstrap always creates it). `rc=8`: its containing mount is not the store root, so a second mount is hiding what lies under it. `rc=9`: `readlink`/`stat` could not resolve it. `rc=4`: `find` failed. `rc=96`: the count answer was malformed. None of these is transient and an empty store produces none of them: open an incident, and discharge nothing. |
 | The store holds repositories | `probe=store-empty verdict=store_not_empty` (exit 5) | **Incident.** See "Store not empty" below. Since #8211 PR2 this counts every entry under `repositories/` (the bootstrap's `_repo_count` rule), not only `*.git`. |
 | A probe could not be answered | `probe=store-mounted verdict=probe_failed rc=<n>`, or any probe's `rc=124\|255\|141` (exit 5) | `rc=124`: the 30 s bound expired; re-dispatch. `rc=255`: ssh transport failed; read the heartbeat, then re-dispatch. `rc=141`: the answer was larger than the cap. `rc=96` from store-mounted: the answer did not match the expected pattern; re-dispatch once, then open an incident. No `rc` from store-on-mapper or store-verified: the first probe left nothing to compare; re-dispatch once. |
-| The pre-receive fence is not intact | `probe=fence-shape verdict=fence_not_intact reason=hooks_dir_absent\|hooks_dir_owner\|hook_absent\|hook_owner\|hooks_parent_writable\|hook_not_runnable_by_git\|hooks_path_mismatch\|transport_pin_mismatch\|hooks_wrong_source` (exit 5) | **Incident first.** A root-owned path or mount changed on git-data (before post-merge host-key step 3, on a host whose SSH key was not yet pinned, #7226). Capture the run's annotations and its `probe-stderr:` lines (`gh run view <run-id> --log`), then open an incident (Breach-triage trigger). Then dispatch `apply-web-platform-infra.yml` with `apply_target=git-data-host-replace`, which re-runs the bootstrap; the pre-cutover replace plus `GIT_DATA_LUKS_KEY` rotation (ADR-220 D6) is still required afterwards. The bootstrap FATALs at boot on the ownership, executable and `core.hooksPath` facts; it does not check the device, the parent directory, the wrapper pin or the `git` user's access. The words:<br>`hooks_dir_absent` — the hooks directory is missing or is a symlink. A symlink survives a replace (the volume is retained), so remove it in the incident first.<br>`hooks_dir_owner` — the hooks directory is not `root:git 750`.<br>`hook_absent` — `pre-receive` is missing, a symlink, not a regular file, or not executable.<br>`hook_owner` — `pre-receive` is not `root:root 755`.<br>`hooks_parent_writable` — the hooks directory's parent is not root-owned, or is group/other-writable.<br>`hook_not_runnable_by_git` — the `git` user cannot read and execute `pre-receive` (group membership, an ACL, a denied traversal). Git would skip the hook and accept the push.<br>`hooks_path_mismatch` — the effective system `core.hooksPath` is unset or names another path.<br>`transport_pin_mismatch` — the installed transport wrapper no longer pins pushes to the serving hooks directory.<br>`hooks_wrong_source` — the hooks directory or `pre-receive` is on a different device from the store. |
+| The pre-receive fence is not intact | `probe=fence-shape verdict=fence_not_intact reason=hooks_dir_absent\|hooks_dir_owner\|hook_absent\|hook_owner\|hooks_parent_writable\|hook_not_runnable_by_git\|hooks_path_mismatch\|transport_pin_mismatch\|hooks_wrong_source` (exit 5) | **Incident first.** A root-owned path or mount changed on git-data (before post-merge host-key step 3, on a host whose SSH key was not yet pinned, #7226). Capture the run's annotations and its `probe-stderr:` lines (`gh run view <run-id> --log`), then open an incident (Breach-triage trigger). Then dispatch `apply-web-platform-infra.yml` with `apply_target=git-data-host-replace`, which re-runs the bootstrap; the pre-cutover replace plus `GIT_DATA_LUKS_KEY` rotation (ADR-220 D6) is still required afterwards on a store that has never been flipped (after a flip the rotate is refused, see the D6 section). The bootstrap FATALs at boot on the ownership, executable and `core.hooksPath` facts; it does not check the device, the parent directory, the wrapper pin or the `git` user's access. The words:<br>`hooks_dir_absent` — the hooks directory is missing or is a symlink. A symlink survives a replace (the volume is retained), so remove it in the incident first.<br>`hooks_dir_owner` — the hooks directory is not `root:git 750`.<br>`hook_absent` — `pre-receive` is missing, a symlink, not a regular file, or not executable.<br>`hook_owner` — `pre-receive` is not `root:root 755`.<br>`hooks_parent_writable` — the hooks directory's parent is not root-owned, or is group/other-writable.<br>`hook_not_runnable_by_git` — the `git` user cannot read and execute `pre-receive` (group membership, an ACL, a denied traversal). Git would skip the hook and accept the push.<br>`hooks_path_mismatch` — the effective system `core.hooksPath` is unset or names another path.<br>`transport_pin_mismatch` — the installed transport wrapper no longer pins pushes to the serving hooks directory.<br>`hooks_wrong_source` — the hooks directory or `pre-receive` is on a different device from the store. |
 | The fence probe could not be answered | `probe=fence-shape verdict=probe_failed rc=5\|16` or `reason=arg_root\|arg_source\|arg_serving\|arg_wrapper` (exit 5) | `rc=5`: `findmnt` could not resolve a fence path's device. `rc=16`: an instrument on the host failed; the `probe-stderr:` lines in `gh run view <run-id> --log` name which (`stat`, or `git config` exiting above 1). Re-dispatch once; if it repeats, dispatch `git-data-host-replace`, since an instrument failing on a bootstrapped host is itself drift. `reason=arg_root\|arg_source\|arg_serving\|arg_wrapper`: the probe was called with an empty or unsafe argument. That is a code or configuration fault: do not re-dispatch, fix the caller. Other `rc` values read as in the row above. |
 | A stale invocation asking for a real mode | `verdict=real_cutover_unreconciled` (exit 5) | Nothing to do — the PR1 variable vocabulary (`DRY_RUN`/`ROLLBACK`/`CONFIRM_WIPE`) is superseded by `MODE`. Dispatch `git-data-cutover.yml` with the `mode` input instead. |
 | Wrong mode/confirm pair, or a `lineage` input on a non-unfreeze mode | the confirm step exits 1 on `confirm token mismatch` / `lineage is only valid with mode=unfreeze` | `confirm` must equal the mode's token exactly; `lineage` is meaningful only under `mode=unfreeze` (it names a stranded sentinel's writer). |
 | Precondition: the #8209 Tier-B seam is not seeded | `verdict=precondition_8209_open` | Set `DOPPLER_TOKEN_INFRA_PRIVILEGED` on the environment (ADR-241 R7), then re-dispatch. |
 | Precondition: the pin-fault Sentry rule is not live | `verdict=pin_fault_paging_absent` | Rule 1310055 unreadable or disabled — the read is live (`SENTRY_ACTIONS_RO_TOKEN`), not inferred. Enable it or fix the token before flipping. |
-| Precondition: no completed `git-data-host-rotate` | `verdict=d6_replace_stale` | Dispatch `apply_target=git-data-host-rotate confirm=ROTATE-GIT-DATA` off `main` (above). A plain replace cannot discharge D6 — it re-mints no LUKS key. |
+| Precondition: no completed `git-data-host-rotate` | `verdict=d6_replace_stale` | Only if no run of `git-data-cutover.yml` executed the `Write GIT_DATA_STORE_ENABLED` step (store never flipped): dispatch `apply_target=git-data-host-rotate confirm=ROTATE-GIT-DATA` off `main` ([above](#the-d6-rotate-dispatch-before-the-flip)). Otherwise do NOT dispatch it (the guard refuses and a rotate would destroy the only copy): see [When a rotate is needed after the flip](#when-a-rotate-is-needed-after-the-flip-10175). A plain replace cannot discharge D6 — it re-mints no LUKS key. |
+| Precondition: the newest rotate attempt did not complete | `verdict=d6_last_rotate_failed` | The newest `git-data-host-rotate` attempt (the run id is in the remedy line) failed, was cancelled or timed out after its apply began, so host and key state are uncertain, and an older success does not discharge D6. Read it with `gh run view <id> --log-failed` and the sections above, repair, and dispatch a fresh rotate; only a newer successful rotate supersedes it. The block is sticky: its only exits are a newer successful rotate or the failed run aging out of the 100-run window; re-running the failed run is a risky exit, not a safe one (a re-run that completes stamps but re-executes the destructive apply; one refused at the plan gate hides the failure from the gate), and a fresh dispatch refused at its precondition reads `skip` (inferred from the run record shape) and does not supersede it. There is no bypass input and no passphrase-loss recovery path is defined for this host, so a refused re-rotate is read from that run's precondition line, not worked around. |
+| Precondition: a replace or rotate run is still going | `verdict=d6_rotate_in_flight` | A `git-data-host-replace`/`-rotate` run (id in the remedy line) is running, queued or waiting for approval, or is a non-complete run that does not list the job yet, so its target cannot be read. Re-dispatch the flip when it completes. Cancel it only if `gh run view <id> --json status` reads `waiting` (a stale approval request); never cancel an `in_progress` run, since cancelling mid-apply can leave the host destroyed. |
+| Precondition: run state could not be read | `verdict=d6_run_unreadable` | `gh run list`/`gh run view` failed, returned nothing or an unparseable body, or the stamp library could not be loaded from the checkout. Nothing was concluded; run `gh run view <id> --json jobs` for the id in the remedy line to see why, then re-dispatch the flip. A listed run whose `gh run view` keeps failing strands the flip until a newer successful rotate exists; there is no bypass. |
 | Precondition: a web deploy is in flight | `verdict=deploy_in_flight` | Wait for `web-platform-release.yml` to settle; a mid-flip env rebake would be an unattributed cutover. |
 | Precondition: running image below the emitter floor | `verdict=live_image_stale` | `/health` reports a release older than `vars.GIT_DATA_EMITTER_FLOOR` — the `git_data_store=` emitter is not live, so a flip could not prove itself. |
 | A host never reported the flag's new value | `verdict=deploy_assert_failed` | The `git_data_store=<value>` emit never landed in Better Stack within the poll window — the finalizer has already unwound; reconcile the emit path before re-dispatching. |
@@ -986,6 +1355,33 @@ escalate to the CLO rather than rushing G3.
 | The LUKS volume itself holds repository entries | `FATAL: luks_residue count=<n>` | An adopted volume carries content this register has not recorded. No marker is written and the host serves nothing. Treat it as "Store not empty": open an incident and route it to the CLO before any erasure or wipe. |
 | The pre-receive fence did not land on the mapper | `FATAL: fence_on_mapper=no`, and `boot_complete` `fence_on_mapper=no` | The hooks landed under the mountpoint instead of on the serving device, so a push would run an unfenced hook. No marker is written. Forward fix; follow "If the fresh host fails a boot check after step 3". |
 | The boot erasure self-probe failed | `FATAL: erasure_probe=no`, and `boot_complete` `erasure_probe=no` | The bootstrap removed the marker before the FATAL, so the Art. 17 path is fail-closed rather than silently broken. Forward fix, and sweep and re-drive the refused ids; follow "If the fresh host fails a boot check after step 3". |
+| **Wipe family** — the confirm step refused the input | a red run with NO email; the annotation reads `confirm token mismatch`, `volume_id must be 1 to 12 digits`, `origin_run must be the numeric id`, `origin_run is only valid with mode=wipe_finish`, `lineage is only valid with mode=unfreeze` or `a wipe-family run cannot be re-run` | Nothing was called and `started` stayed false. Fix the input and dispatch a NEW run; never "Re-run failed jobs" ([The wipe](#the-wipe-dl-2-10138--6897)). |
+| **Wipe, precheck** — the flag, the stamp or the soak | `wipe_precondition_flag_not_true`, `wipe_precondition_stamp_absent`, `wipe_precondition_stamp_malformed`, `wipe_precondition_flag_unreadable`, `wipe_precondition_variant_changed` (W7b; the line carries `expected=` and `got=`), `wipe_precondition_variant_unreadable` (the precheck printed no `wipe_variant` line), `wipe_separated_store_dirty`, `wipe_separated_cutover_in_flight`, `wipe_separated_scan_unreadable` (the separated variant's run-record scan), `wipe_separated_store_root_populated`, `wipe_separated_store_root_unreadable` (the on-host store-root count), `wipe_precondition_soak_not_elapsed` (the line carries `floor_days` and `elapsed_s`), `wipe_stamp_read_failed` (the same cause words as `flag_read_failed`); in `wipe_check` the same word appears as `would_refuse=<word>` and the run continues | Nothing was called. Wait out the 7-day floor (the pinned constant is relaxed only by an ADR-239 amendment plus a CLO ruling), or fix the flag or the stamp; a read failure is handled like `flag_read_failed`. |
+| **Wipe, precheck** — a rollback or legacy run after the stamp | `wipe_precondition_rollback_after_stamp`, `wipe_precondition_legacy_run_after_stamp`, `wipe_precondition_run_title_unparseable`, `wipe_precondition_run_list_unreaching`, `wipe_precondition_run_list_unreadable`, `wipe_runs_bad_args` | The interim stamp guard: a rollback (any conclusion) or a legacy-titled run on `main` after `GIT_DATA_LUKS_CUTOVER_AT` means the stamp no longer proves a soak. Escalate on #6897 and #10297 (the guard retires when the rollback arm clears the stamp). `unreaching` and `unreadable`: the run list could not prove the window; re-dispatch once. |
+| **Wipe finish** — the origin run does not qualify | `wipe_origin_run_unreadable`, `wipe_origin_run_title_mismatch`, `wipe_origin_run_workflow_mismatch`, `wipe_origin_run_not_main`, `wipe_origin_run_not_dispatch`, `wipe_origin_run_gate_not_success` | `origin_run` must be the original `mode=wipe` run (title exactly `git-data wipe <volume_id>`, a run of this workflow by name, `main`, `workflow_dispatch`, and its step `wipe_detach_gate` concluded `success`, or else its step `wipe_delete_gate` did). A `wipe_finish` run's own id never qualifies. Nothing was called. |
+| **Wipe, tokens** — a provider token is missing or unusable | `wipe_readonly_token_absent`, `wipe_readonly_token_unusable`, `wipe_write_token_absent`, `wipe_write_token_unusable` | The read-only token `HCLOUD_TOKEN_READONLY` (from `prd_terraform`) or the Tier-B write token (from the loader) was empty or malformed. There is NO fall-back from one to the other. Nothing was sent; fix the secret and dispatch a new run. |
+| **Wipe, identity** — the typed id is not the target | `wipe_volume_id_shape`, `wipe_volume_id_mismatch`, `wipe_target_is_luks`, `wipe_volume_count`, `wipe_luks_count`, `wipe_server_count` | The typed id must be the one volume the API lists under `soleur-git-data-store`, never the LUKS volume, with exactly one `soleur-git-data` server and one LUKS volume. Nothing was sent. `wipe_volume_id_mismatch` and `wipe_target_is_luks` are mistyped or stale ids: re-read the id and `wipe_check` again. Counts other than one are an incident to understand before any dispatch. |
+| **Wipe, identity** — the volume is not in the expected place | `wipe_not_attached_to_current_host`, `wipe_volume_already_detached`, `wipe_volume_not_detached`, `wipe_label_mismatch`, `wipe_delete_protected`, `wipe_target_changed` | `wipe_volume_already_detached` (plain `wipe`): the volume is already detached, so this run detached nothing; notify `VOLUME_ALREADY_DETACHED` carries the finish command with the plain word `ORIGIN_RUN_ID` for the id of the wipe run that detached it (S3). `wipe_volume_not_detached` (`wipe_finish`): it is still attached, nothing was detached; a plain `wipe` is the path. `wipe_not_attached_to_current_host`: attached to another server, or the LUKS volume is not on the git-data server: stop. `wipe_label_mismatch`, `wipe_delete_protected`: not the volume this run was built for (a lifted protection is a Terraform change of its own, never lifted here). `wipe_target_changed`: the second provider read disagrees with the first; nothing was deleted. |
+| **Wipe, provider reads** — a read could not be answered | `wipe_server_unreadable`, `wipe_luks_unreadable`, `wipe_volume_unreadable`, `wipe_protection_unreadable`, `wipe_actions_unreadable`, `wipe_clock_unreadable` (each prints the HTTP code or `shape`) | The answer was not the pinned shape (or the call failed); fail-closed. Re-dispatch once; a repeat is a defect or a provider incident. |
+| **Wipe, finish** — the volume's action history | `wipe_detach_in_flight`, `wipe_detach_not_evidenced` (names `no_detach`, `attach_after`, `status_not_success` or `started_before_origin`) | `in_flight`: a provider action is still running; read again later. `not_evidenced`: the history does not show a successful detach started at or after the origin run, or shows any attach started at or after it (`attach_after`, also for the sequence detach, attach, detach). Nothing was called; record on #6897, the owner decides (a re-attach and re-detach after the origin run is not read as the origin's detach). |
+| **Wipe, epoch** — the evidence is too old, or the record is wrong | `wipe_assertion_stale` (names `expired`, `future`, `unstamped`, `w7_unstamped` or `w4_expired`), `wipe_record_absent`, `wipe_record_invalid`, `wipe_record_volume_mismatch` | The host assertion is bounded to the detach and the provider re-read to the delete, and the verdict record is one file in the job's temp dir. A refusal in the marker step (the checks run first) writes nothing and reads as `WIPE_REFUSED_BEFORE_ANY_CALL`. The same bound is checked again inside the detach and the delete step, after their marker: a stale record caught there reads as `DETACH_ATTEMPTED_UNCONFIRMED` or `DELETE_ATTEMPTED_UNCONFIRMED` although nothing was sent (conservative), so read the volume first (S2, S4). Dispatch a new run; if the loader is repeatedly slower than the bound, that is a measurement for the CTO, not a bound to raise inline. |
+| **Wipe, boot signal** — the evidence row | `wipe_boot_unreadable`, `wipe_boot_absent`, `wipe_boot_predates_server`, `wipe_boot_field_luks_mounted`, `wipe_boot_field_fence_on_mapper`, `wipe_boot_field_erasure_probe`, `wipe_boot_field_plaintext_empty`, `wipe_boot_field_served_repos`, `wipe_boot_field_plaintext_volume` | `unreadable`: the Better Stack read failed or a row was malformed; re-dispatch once. `absent`: the read answered and no row exists; after about 2027-01-12 (90 days from a row of 2026-10-14) that may mean retention was exceeded: route to the CLO ([Retention](#the-wipe-dl-2-10138--6897)). `predates_server`: the newest row belongs to an older server. `wipe_boot_field_<name>`: that field is not as required; `plaintext_empty` and `served_repos` are a STOP routed to the CLO, never a retry. `erasure_probe` is the boot self-probe of the repository-removal path on a synthetic id; it is not a statement about the retired volume. |
+| **Wipe, host** — the store is not what it should be | the host verb refuses with one of the store words that the rows above define (the store root is not on the mapper, the freeze sentinel is held, or the store marker is missing, unbound or mismatched), or `wipe_mapper_read_failed`, `wipe_store_root_unreadable`, `wipe_device_still_attached` | The store words mean what their own rows above say. After the detach, a host verb refusal in that step with exit 5 and a word other than `probe_failed` (these words and the store words above) sets the job output `refusal` to `store_not_serving`, and the notify word is `STORE_NOT_SERVING_DO_NOT_FINISH`: do NOT finish, delete nothing, escalate on #6897 (S3b). `probe_failed` (the read did not answer) and an access refusal (exit 3) set no refusal: see the row "Wipe, host — the session could not be answered" and S3c. |
+| **Wipe, host** — the device is not the retired volume | `wipe_device_absent`, `wipe_device_not_block`, `wipe_device_is_luks_backing`, `wipe_device_luks_or_unknown`, `wipe_luks_identity_mismatch` | The by-id device of the typed id is missing, not a block device, the LUKS mapper's backing device, LUKS or of unknown type, or the LUKS volume is not the mapper's backing. **Stop.** Nothing was sent. These are wrong-volume signals: escalate on #6897 before any retry. |
+| **Wipe, host** — the device is in use or was written | `wipe_device_mounted`, `wipe_device_has_holders`, `wipe_snapshot_present`, `wipe_device_open`, `wipe_device_active`, `wipe_device_written`, `wipe_ro_flag_lost` | The retired device must be unmounted, held by nothing, with no leftover host-local device-mapper snapshot or open handle, quiescent, never written since enumeration (written and discarded sectors both exactly 0 over 2 s) and kernel read-only. `wipe_ro_flag_lost` after a host reboot is the [reboot dead end](#the-wipe-dl-2-10138--6897): route to the CLO. `wipe_snapshot_present` or `wipe_device_has_holders` after a failed run: see Last-resort diagnosis in the wipe section. `snapshot` in these words always means the transient host-local device-mapper snapshot, never a provider-side snapshot or backup. |
+| **Wipe, host** — the instance or the boot generation | `wipe_instance_mismatch`, `wipe_boot_generation_mismatch` | `wipe_instance_mismatch`: the host's instance id is not the Hetzner server id (H9, UNVERIFIED until `wipe_check` has run). `wipe_boot_generation_mismatch`: the host booted after the evidence row (`host_booted_after_row`) or the row is outside the 3600 s boot window (`row_outside_window`): the reboot dead end, route to the CLO. |
+| **Wipe, host** — the listing | `wipe_boot_layout_signal_absent`, `wipe_boot_layout_signal_offlist`, `wipe_boot_layout_signal_unparseable`, `wipe_snapshot_teardown_failed`, `wipe_plaintext_not_empty` | The listing (`mode=wipe_check` and `mode=wipe`) reads a host-local read-only device-mapper snapshot (RAM copy-on-write) and reports per-type counts; it could not be taken (`absent`), found an entry outside the path-typed allowlist (`offlist`: the verdict word and the closed field list of 'Reading the exit-34 line', route to the CLO), could not be parsed (`unparseable`), or found content under `repositories/` (`wipe_plaintext_not_empty`: STOP, route to the CLO, bump #8571). `wipe_snapshot_teardown_failed` outranks every other word: the host-local snapshot may still stand; do not re-dispatch. |
+| **Wipe, host** — the session could not be answered | `probe_failed` with `rc=16`, `rc=96`, `rc=124`, `rc=141` or `rc=255`, or an argument word beginning `arg_` | `16`: an input, read or instrument failed on the host (the `wipe-assert:` stderr line names a fixed reason). `96`: the answer did not match the phase's fixed shape. `124`: the bound expired (300 s with the listing, 240 s for `clear`, 90 s otherwise); the local timeout does not signal the remote, so wait about two minutes before re-dispatching, because a still-running listing can leave its host-local snapshot standing (a later run then refuses `wipe_snapshot_present`; see Last-resort diagnosis). `141`: the answer was larger than the cap. `255`: the ssh transport failed. **Before the detach (the pre-detach read): nothing was sent;** re-dispatch once, then escalate. **After the detach: the volume IS detached,** this is S3c (the email reads `VOLUME_DETACHED` from a `mode=wipe` run), and the right action is `wipe_finish` (it repeats the read before any delete), not a plain re-dispatch of `wipe`. |
+| **Wipe, loader** — the Tier-B credentials | the loader step is red, or `wipe_loader_not_tier_b` | Raised before the detach marker, so nothing was sent (`WIPE_REFUSED_BEFORE_ANY_CALL`). The loader runs once with only the Tier-B token; a missing token fails closed. Dispatch a new run after fixing the environment secret. |
+| **Wipe, detach** — the provider refused or did not confirm | `wipe_detach_rejected` (a 4xx), `wipe_detach_not_confirmed` (the POST outcome, the poll or the final server check was unconfirmed; the poll follows the one accepted action for up to 90 reads or 240 s, whichever ends first, and never sends the POST again) | `rejected`: the provider answered 4xx, read the volume (S2). `not_confirmed`: the detach may have been accepted and the helper never re-sends. The phase is `detach_attempted`: notify `DETACH_ATTEMPTED_UNCONFIRMED` (S2). |
+| **Wipe, delete** — the provider refused or did not confirm | `wipe_delete_not_found`, `wipe_delete_rejected`, `wipe_delete_unconfirmed` | `not_found` (404 at the DELETE): the provider API does not list that id (deleted by something else, or the id is wrong); read first (S4, S5). `rejected` (4xx, 423 while attached): not deleted. `unconfirmed`: the DELETE may have taken. The phase is `delete_attempted`: notify `DELETE_ATTEMPTED_UNCONFIRMED` (S4). |
+| **Wipe, read-back** — the end event disagrees | `wipe_readback_unreadable`, `wipe_readback_still_exists`, `wipe_readback_name_still_listed`, `wipe_readback_luks_missing`, `wipe_readback_luks_detached` | The read-back needs 404 by id, nothing listed by name and the LUKS volume still the one attached. `unreadable`: re-read read-only (S4). The other four are S5, an incident: never dispatch another delete until the cause is understood. |
+| **Wipe, helper** — setup | `wipe_library_missing`, `wipe_scratch_unavailable`, `wipe_usage` | The helper could not load its bearer library or a scratch file, or was called with a wrong verb or option. A defect in the step or the checkout, not a transient. |
+| **Wipe, notification** — no marker was written | `WIPE_REFUSED_BEFORE_ANY_CALL`, `WIPE_STATE_UNKNOWN`, `WIPE_CHECK_FAILED` | S1a, S1b and the `wipe_check` failure (no volume or provider state changed; a killed listing may leave a throwaway snapshot, see `snapshot_clear`) ([failure states](#the-wipe-dl-2-10138--6897)). `WIPE_STATE_UNKNOWN` also covers an unrecognised phase value, a rejected or expired environment approval and a lost runner. No wipe word carries the unfreeze remedy. |
+| **Wipe, leftover snapshot** — `snapshot_clear` or a `wipe_check` that met a leftover | `wipe_snapshot_not_ours` (the leftover does not match what the listing makes: another origin, a persistent snapshot, a mount or COW outside the pinned directory, or two mounts), `wipe_snapshot_present` (a leftover blocks a `wipe_check` or `wipe`), `wipe_device_open` (a process holds the snapshot open), `wipe_snapshot_teardown_failed` (a removal step failed) | On a refusal of `wipe_snapshot_not_ours` or `wipe_device_open` nothing was removed; after `wipe_snapshot_teardown_failed` some removal steps may have run and the snapshot may still stand (do not re-dispatch `wipe`; dispatch `snapshot_clear` once). `snapshot_clear` answers `absent` when the snapshot name is gone; an orphaned loop device or RAM copy-on-write file left by a run killed between two of its steps is not reported (RAM only; it does not block `wipe_check`). `wipe_snapshot_present` is cleared by an owner-named `snapshot_clear`; `wipe_snapshot_not_ours` is not: escalate to the owner with the run log; this runbook never removes that snapshot. |
+| **Wipe, notification** — a marker was written | `DETACH_ATTEMPTED_UNCONFIRMED`, `VOLUME_DETACHED`, `DELETE_ATTEMPTED_UNCONFIRMED`, `DELETE_SENT_UNCONFIRMED`, `VOLUME_DELETED_TEARDOWN_FAILED` | S2, S3, S4 (twice) and S6. The first two and the delete words carry the `wipe_finish` command; its `origin_run` is the original `wipe` run (the plain word `ORIGIN_RUN_ID` in any email but a `mode=wipe` run's, whose own id is the origin). |
+| **Wipe, notification** — a `snapshot_clear` run failed | `SNAPSHOT_CLEAR_FAILED` | No volume was detached or deleted. Read the failing step in the run log; a leftover may still be present. |
+| **Wipe, notification** — a refusal after the detach, or an already-detached volume | `STORE_NOT_SERVING_DO_NOT_FINISH`, `VOLUME_ALREADY_DETACHED` | S3b: do NOT dispatch `wipe_finish`; escalate. `VOLUME_ALREADY_DETACHED`: this run detached nothing; if a wipe run detached the volume, finish with the command in the email after replacing `ORIGIN_RUN_ID` by that run's id. |
 
 L3 and L7 are different faults: L3 is reachability (NIC, sshd, host), L7 is authorization (the key).
 Read the private-NIC heartbeat before treating an L7 verdict as a key problem.
@@ -1203,7 +1599,11 @@ authorization; a menu answer is not authorization.
    boots into `url_unavailable` and heals on its next tick once the secret exists, with no second
    replace.
 5. **Host replace with key rotation** (ADR-220 D6). This is the replace the cutover already
-   requires, so this change adds none. The monitor is paused, so it pages nothing.
+   requires, so this change adds none. For the first replace the monitor was paused, so it paged nothing.
+   Since the 2026-10-12 arm it is live: a later replace pages about 6 minutes in (period 60 s plus grace
+   300 s). Do not pause it by hand to avoid that: a paused armed monitor reads as `fed-but-paused` to the
+   nightly reconcile. If a replace needs a pause, say so on #9438 and re-arm with `--arm-one` afterwards;
+   steps 4 and 7 apply again only if the monitor is found paused.
 6. **Pre-arm soak read** (owner-authorized: it uses the Better Stack query token). The host's events
    land in the git-data Better Stack source, NOT the default table the query script reads, so the
    tables are pinned (the same pin the boot-poll read above uses). `$A` is the replace run's
@@ -1571,6 +1971,7 @@ These stay recorded for the rebuild; none applies to the read-only proof.
 
 - Dispatch workflows: `.github/workflows/git-data-cutover.yml`, `.github/workflows/apply-git-data-root-key.yml`
 - Script: `apps/web-platform/infra/git-data-cutover.sh`; flag precheck: `apps/web-platform/infra/git-data-flag-precheck.sh`
+- The wipe (#10138): `apps/web-platform/infra/git-data-wipe.sh` (provider API half), `apps/web-platform/infra/git-data-wipe-assert.sh` (host half, sent over `MODE=wipe_assert`), `scripts/lib/git-data-wipe-runs.sh`, `scripts/lib/git-data-boot-signal-poll.sh`, `tests/scripts/test-git-data-wipe-wedge.sh`; ADR-239 (DL-2), ADR-241 amendment 2026-10-14
 - Root-key Terraform root: `apps/web-platform/infra/git-data-root-key/`
 - Create-gate arm: `tests/scripts/lib/git-data-root-key-arm-gate.sh`
 - ADR-220 (access and credential), ADR-068 (cutover design), ADR-149 (birth route)

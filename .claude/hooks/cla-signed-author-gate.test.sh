@@ -5,6 +5,9 @@
 # Isolation pattern mirrors ship-unpushed-commits-gate.test.sh.
 
 set -euo pipefail
+SUITE_TMP=$(mktemp -d)
+[[ "$SUITE_TMP" == /* ]] || { echo "FATAL: SUITE_TMP is not absolute: $SUITE_TMP" >&2; exit 2; }
+trap 'rm -rf "$SUITE_TMP"' EXIT
 
 # Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
 # Inline per-call `INCIDENTS_REPO_ROOT=… bash "$HOOK"` is what leaked here:
@@ -109,27 +112,32 @@ assert_pass() {
 }
 
 # T1: unsigned-author commit + gh pr merge → DENY
-t1() { local t; t=$(mktemp -d); read -r work inc < <(make_branch "$t" feat-x "$UNSIGNED")
+t1() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_branch "$t" feat-x "$UNSIGNED")
   out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr merge 123 --squash --auto')"); rc=$?
   assert_deny "T1 unsigned author + gh pr merge denies" "$inc" "$out" "$rc"; rm -rf "$t"; }
 
+# T1b: rtk-prefixed merge reaches the gate identically (#10248)
+t1b() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_branch "$t" feat-rtk "$UNSIGNED")
+  local rc=0; out=$(run_hook "$inc" "$(make_payload "$work" 'rtk gh pr merge 123 --squash --auto')") || rc=$?
+  assert_deny "T1b unsigned author + rtk gh pr merge denies (#10248)" "$inc" "$out" "$rc"; rm -rf "$t"; }
+
 # T2: all-signed commits + gh pr merge → PASS
-t2() { local t; t=$(mktemp -d); read -r work inc < <(make_branch "$t" feat-y test@test.local)
+t2() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_branch "$t" feat-y test@test.local)
   out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr merge 123 --squash --auto')"); rc=$?
   assert_pass "T2 signed authors pass" "$inc" "$out" "$rc"; rm -rf "$t"; }
 
 # T3: unsigned author + gh pr ready → DENY (gate also covers ready)
-t3() { local t; t=$(mktemp -d); read -r work inc < <(make_branch "$t" feat-z "$UNSIGNED")
+t3() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_branch "$t" feat-z "$UNSIGNED")
   out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready 123')"); rc=$?
   assert_deny "T3 unsigned author + gh pr ready denies" "$inc" "$out" "$rc"; rm -rf "$t"; }
 
 # T4: unrelated command → no fire (PASS)
-t4() { local t; t=$(mktemp -d); read -r work inc < <(make_branch "$t" feat-w "$UNSIGNED")
+t4() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_branch "$t" feat-w "$UNSIGNED")
   out=$(run_hook "$inc" "$(make_payload "$work" 'git status')"); rc=$?
   assert_pass "T4 non-gh-pr command does not fire" "$inc" "$out" "$rc"; rm -rf "$t"; }
 
 # T5: on main → fail-open PASS even with command match
-t5() { local t; t=$(mktemp -d); local work="$t/work" inc="$t/inc"; mkdir -p "$work" "$inc"
+t5() { local t; t=$(mktemp -d -p "$SUITE_TMP"); local work="$t/work" inc="$t/inc"; mkdir -p "$work" "$inc"
   git init -q --bare "$t/o.git"; init_git_repo "$work"
   echo b > "$work/f"; git -C "$work" add f
   GIT_AUTHOR_EMAIL="$UNSIGNED" git -C "$work" commit -q -m c
@@ -140,11 +148,11 @@ t5() { local t; t=$(mktemp -d); local work="$t/work" inc="$t/inc"; mkdir -p "$wo
 # T6 (#5192): a `git commit` whose MESSAGE documents `gh pr merge` must NOT
 # fire — even with an unsigned-author commit on the branch (which would deny if
 # the trigger grep ran on the raw command). The strip blanks the -m body first.
-t6() { local t; t=$(mktemp -d); read -r work inc < <(make_branch "$t" feat-fp "$UNSIGNED")
+t6() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_branch "$t" feat-fp "$UNSIGNED")
   out=$(run_hook "$inc" "$(make_payload "$work" $'git add . && git commit -m "ship note\ngh pr merge must not be hand-rolled\n"')"); rc=$?
   assert_pass "T6 commit-body gh pr merge does not fire (#5192)" "$inc" "$out" "$rc"; rm -rf "$t"; }
 
-t1; t2; t3; t4; t5; t6
+t1; t1b; t2; t3; t4; t5; t6
 echo "----"
 echo "$PASS/$TOTAL passed"
 [[ "$FAIL" -eq 0 ]] || exit 1

@@ -465,7 +465,7 @@ plaintext volume gives a rehearsed rollback that a snapshot never would.
 **Sequencing.** The doc corrections are **coupled** to live verification per the operator's decision
 (2026-07-17): all four — the three permanently-false clauses *and* the LUKS present-tense flip — land
 in a single PR **after** the cutover canary passes, never before. See
-`knowledge-base/project/specs/feat-one-shot-6588-luks-workspaces-volume/decision-challenges.md`.
+`knowledge-base/project/specs/archive/20261013-041741-feat-one-shot-6588-luks-workspaces-volume/decision-challenges.md`.
 
 ## Addendum (2026-07-18): the header-escrow implementation (#6649)
 
@@ -1458,6 +1458,8 @@ as written.
 - §(d) is reversed by ADR-263 (a fresh host MUST get the reopen unit). The claim that web-2's volume is LUKS
   at boot becomes true only after the volume rebirth (#9372); until then it is the empty Hetzner-formatted
   ext4 volume, kept un-pooled by `lb-weight-gate.sh`.
+  > **Superseded 2026-10-12 (#9372), in part:** the rebirth ran on 2026-10-06 and was graded on 2026-10-10 (formatted/opened
+  > plus green probes only; ADR-263 addendum 2026-10-11 for the claim boundary); its workflow is retired.
 
 ## Addendum (2026-10-08): the plaintext backstop is retired (#6604 step 7, PR B)
 
@@ -1571,3 +1573,9 @@ volume and its passphrase pair) to the Inngest sole-copy volume `hcloud_volume.i
 difference: its attachment stays unpinned because the sanctioned `inngest-host-replace` replaces it. This ADR's D1 and
 `apps/web-platform/infra/workspaces-luks.tf` remain the source of the web-1 attachment pin. Nothing about web-1 or this
 decision changes. It takes effect on the merge of PR #9925 (adopting until that merge's apply and read-back, per ADR-282).
+
+> **Superseded 2026-10-15 (#10018), as to "adopting":** ADR-282 is `accepted` (its post-apply read-back returned `protected` on 2026-10-15, a point-in-time check of the flag only; evidence in ADR-282's addendum of that date). The paragraph above is kept as the dated record.
+
+## Addendum — 2026-10-14 (#10138, pointer to the git-data wipe)
+
+Appended; nothing above is edited. The 2026-09-28 addendum ("The delete→PR-B window is closed by a pause, not a new guard") describes the retired workspaces wipe job, which refused unless both push-apply workflows read `disabled_manually`; that job and its pause are retired (2026-10-08 addendum). The git-data wipe (`git-data-cutover.yml` `wipe`, ADR-239 DL-2) does NOT pause or check either workflow. Its control over the same kind of window (after the delete, before the record PR removes `hcloud_volume.git_data` from HCL and state) is the pair of plan-time gates `git_data_host_replace_gate` (job `git_data_host_replace`) and `git_data_host_birth_gate` (job `git_data_host_create`) in `apply-web-platform-infra.yml`, whose refusal of the post-delete and detached-not-deleted plans `tests/scripts/test-git-data-wipe-wedge.sh` derives and pins. The cost is that those two jobs refuse every apply that would plan a replace of `hcloud_server.git_data` or a create of `hcloud_volume.git_data` until the record PR merges, security fixes to the host's rendered `user_data` included; targeted apply jobs keep running. Nothing about the workspaces volume or this ADR's decision changes.

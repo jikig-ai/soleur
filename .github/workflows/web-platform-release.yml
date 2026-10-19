@@ -19,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       bump_type:
-        description: "Version bump type"
+        description: "Version bump type (a retry with a different bump orphans the prior draft)"
         required: true
         type: choice
         options:
@@ -1824,8 +1824,16 @@ jobs:
   # status breaks, surfacing a bad deploy loudly instead of recording a green run
   # over a broken WS/auth/persist path. Enforced by the final "Enforce live-verify
   # gate" step on the BLOCK signal computed in the emit step:
-  #   BLOCK=1 ONLY for FAIL (the #5391/#5436 persist regression) or an unverifiable
-  #           TRIGGERED run (no-result-line — "empty fails closed").
+  #   BLOCK=1 ONLY for FAIL (the #5391/#5436 persist regression), an unverifiable
+  #           TRIGGERED run (no-result-line — "empty fails closed"), or
+  #           CANT-RUN:cannot-spend-violated (ADR-064 I-cannot-spend: the synthetic
+  #           principal holds a non-sentinel key or an active delegation — a safety
+  #           breach, unlike the environmental CANT-RUNs below, so it must not fail
+  #           open). CANT-RUN:cannot-spend-unverified (the check could not read its
+  #           inputs) is BLOCK=0 by CTO ruling: the throw before the browser launch
+  #           already delivers the safety property, so a red run would add no safety
+  #           and would gate prod on an infra blip. It is annotated ::error so a
+  #           permanently unverifiable gate is not invisible.
   #   BLOCK=0 for PASS, SKIPPED, the deliberate environmental CANT-RUNs (rate-limited
   #           / session-rejected / session-not-acked), and pre-harness INFRA failures
   #           (setup-failed / gate-diff-failed — these fire on EVERY push, including
@@ -1973,7 +1981,7 @@ jobs:
           fi
           exit 0
 
-      - name: Run live-verify harness (report-only)
+      - name: Run live-verify harness (verdict enforced by the Enforce step)
         id: harness
         if: steps.gate.outputs.triggered == '1'
         continue-on-error: true
@@ -2035,8 +2043,10 @@ jobs:
           # a denominator — "ran and skipped" must be distinguishable from "never
           # ran").
           # BLOCK is the #5463 flip authority (1 = fail the job → redden the
-          # release; 0 = record-only). Default 0; set to 1 ONLY for a genuine FAIL
-          # or an unverifiable TRIGGERED run (no-result-line — "empty fails closed").
+          # release; 0 = record-only). Default 0; set to 1 ONLY for a genuine FAIL,
+          # an unverifiable TRIGGERED run (no-result-line — "empty fails closed"), or
+          # CANT-RUN:cannot-spend-violated (I-cannot-spend breach; fails closed).
+          # CANT-RUN:cannot-spend-unverified stays BLOCK=0 (see the job header).
           # PASS/SKIPPED, the environmental CANT-RUNs, and the pre-harness infra
           # failures (setup-failed / gate-diff-failed, which fire on every push)
           # stay BLOCK=0 so they never gate prod. See the job-header comment.
@@ -2059,6 +2069,8 @@ jobs:
               "RESULT: PASS"*) RESULT="PASS"; LEVEL="info" ;;
               "RESULT: FAIL"*) RESULT="FAIL"; LEVEL="error"; BLOCK=1 ;;
               *no-result-line*) RESULT="CANT-RUN"; LEVEL="error"; BLOCK=1 ;;
+              "RESULT: CANT-RUN:cannot-spend-violated"*) RESULT="CANT-RUN"; LEVEL="error"; BLOCK=1 ;;
+              "RESULT: CANT-RUN:cannot-spend-unverified"*) RESULT="CANT-RUN"; LEVEL="error" ;;
               *gate-diff-failed*) RESULT="CANT-RUN"; LEVEL="error" ;;
               "RESULT: CANT-RUN"*) RESULT="CANT-RUN"; LEVEL="warning" ;;
               *) RESULT="CANT-RUN"; LEVEL="warning" ;;
@@ -2070,14 +2082,27 @@ jobs:
           # log — which is exactly how #7969 stayed invisible for five releases.
           # Emit the FULL reason, not just the classified token.
           if [[ "${RESULT}" == CANT-RUN* ]]; then
-            echo "::warning title=live-verify could not reach a verdict::${MSG}"
+            if [[ "${MSG}" == "RESULT: CANT-RUN:cannot-spend-violated"* || "${MSG}" == "RESULT: CANT-RUN:cannot-spend-unverified"* ]]; then
+              echo "::error title=live-verify cannot-spend check did not pass::${MSG}"
+            else
+              echo "::warning title=live-verify could not reach a verdict::${MSG}"
+            fi
           fi
           echo "live-verify: result=${RESULT} level=${LEVEL} block=${BLOCK}" >> "$GITHUB_STEP_SUMMARY"
           echo "live-verify reason: \`${MSG}\`" >> "$GITHUB_STEP_SUMMARY"
+          # Sentry `reason` tag, so cannot-spend-violated and cannot-spend-unverified
+          # are queryable and alertable apart from the other CANT-RUNs. A closed
+          # vocabulary: it is set ONLY when the line matches the fixed grammar the
+          # harness emits for these two classes, never from page-controlled text.
+          SPEND_REASON=""
+          if [[ "${MSG}" =~ ^RESULT:\ CANT-RUN:(cannot-spend-(violated|unverified)):\ (api_keys-non-sentinel-row|api_keys-unreadable|api_keys-empty|byok_delegations-present|byok_delegations-unreadable)$ ]]; then
+            SPEND_REASON="${BASH_REMATCH[1]}:${BASH_REMATCH[3]}"
+          fi
           {
             echo "result=${RESULT}"
             echo "level=${LEVEL}"
             echo "block=${BLOCK}"
+            echo "reason=${SPEND_REASON}"
           } >> "$GITHUB_OUTPUT"
           # Parse the public client DSN: https://<public_key>@<host>/<project_id>.
           # The POST host MUST carry the DSN's own region segment
@@ -2099,9 +2124,10 @@ jobs:
           fi
           STORE_URL="https://${HOST}/api/${PROJECT_ID}/store/"
           PAYLOAD=$(jq -nc --arg msg "$MSG" --arg level "$LEVEL" --arg result "$RESULT" \
-            --arg sha "${GITHUB_SHA:-}" \
+            --arg reason "$SPEND_REASON" --arg sha "${GITHUB_SHA:-}" \
             '{message:$msg, level:$level, platform:"other",
-              tags:{gate:"live-verify", component:"web-platform", result:$result},
+              tags:({gate:"live-verify", component:"web-platform", result:$result}
+                    + (if $reason == "" then {} else {reason:$reason} end)),
               extra:{sha:$sha}}')
           ok=0; code="000"
           for attempt in 1 2 3; do
@@ -2125,18 +2151,19 @@ jobs:
         env:
           RESULT: ${{ steps.emit.outputs.result }}
           BLOCK: ${{ steps.emit.outputs.block }}
+          REASON: ${{ steps.emit.outputs.reason }}
         run: |
           set -uo pipefail
-          # The report-only→blocking flip (#5463), unblocked by the first real PASS
-          # on 2026-06-18 (run 27786435514) per wg-dark-launch-deploy-gates. This is
-          # the SOLE blocking authority; BLOCK is classified in the emit step (1 only
-          # for FAIL or no-result-line). Post-deploy job → reddening the release run
+          # The report-only→blocking flip (#5463, PR #5576), unblocked by the first
+          # real PASS on 2026-06-18 (run 27786435514) per wg-dark-launch-deploy-gates.
+          # This is the SOLE blocking authority; BLOCK is classified in the emit step
+          # (1 only for FAIL, no-result-line or cannot-spend-violated). Post-deploy job → reddening the release run
           # signals a bad deploy loudly; it does NOT roll back the already-shipped
           # image (ADR-064 §Substrate). Sentry emit is observability and never blocks
           # (a Sentry outage must not gate prod), so the gate keys on BLOCK, not on
           # whether the event POSTed.
           if [ "${BLOCK:-0}" = "1" ]; then
-            echo "::error::live-verify gate BLOCKED the release: result=${RESULT:-unknown}. Inspect the 'Run live-verify harness' step output and the gate=live-verify Sentry event."
+            echo "::error::live-verify gate BLOCKED the release: result=${RESULT:-unknown}${REASON:+ reason=${REASON}}. Inspect the 'Run live-verify harness' step output and the gate=live-verify Sentry event. If the reason is cannot-spend-violated, see ADR-064 (2026-10-18 amendment, Recovery)."
             exit 1
           fi
           echo "live-verify gate: non-blocking (result=${RESULT:-unknown})"

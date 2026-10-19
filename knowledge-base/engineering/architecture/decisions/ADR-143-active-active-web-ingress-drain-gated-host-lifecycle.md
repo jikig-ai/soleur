@@ -5,7 +5,7 @@
 - **Issue:** #6459 (blue-green host replacement — the ADR this issue asked for). Related: #6608 (inngest allowlist), #6570 (git-data root blocker), #6441/ADR-115 (fresh-boot NIC + boot-unlock), #6538 (web-2 retirement), #5274/ADR-068 (multi-host `/workspaces`).
 - **Amends:** `hr-prod-host-config-change-immutable-redeploy`, ADR-103 (adds the drain-gated volume-preserving reprovision path for the `web-1` key).
 - **Extends:** ADR-068 (this is the ingress + host-lifecycle layer; the serving/writer model is unchanged and its `replicas=1` invariant remains in force until ADR-068 Phase-3 GA).
-- **Plan:** `knowledge-base/project/plans/2026-07-24-feat-web-active-active-cluster-iac-plan.md` (6-agent review applied).
+- **Plan:** `knowledge-base/project/plans/archive/20261013-041741-2026-07-24-feat-web-active-active-cluster-iac-plan.md` (6-agent review applied).
 
 ## Context
 
@@ -313,6 +313,9 @@ a baked provisioner ([ADR-263](ADR-263-guest-side-fresh-boot-luks-for-web-hosts.
 statements above (the R3 couplings and the `workspaces_luks` guard text) are historical. Merging it changes no
 running host: web-2's live volume is converted by the single-use rebirth tracked as #9372, and the anti-pooling
 coupling (`WORKSPACES_LUKS_CUTOVER_AT`) stays the fence until a flip orchestrator consumes the marker (#9358).
+
+> **Superseded 2026-10-12 (#9372), in part:** the single-use rebirth ran on 2026-10-06 and its workflow is retired (ADR-263
+> addendum 2026-10-12); the anti-pooling fence is unchanged.
 
 ## Addendum — 2026-10-01 (#6604 step 7, PR B #9348): §Consequences "sole-copy protection" corrected
 

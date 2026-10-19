@@ -8,6 +8,9 @@
 # off the operator's real .claude/.rule-incidents.jsonl.
 
 set -euo pipefail
+SUITE_TMP=$(mktemp -d)
+[[ "$SUITE_TMP" == /* ]] || { echo "FATAL: SUITE_TMP is not absolute: $SUITE_TMP" >&2; exit 2; }
+trap 'rm -rf "$SUITE_TMP"' EXIT
 
 # Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
 # Inline per-call `INCIDENTS_REPO_ROOT=… bash "$HOOK"` is what leaked here:
@@ -148,7 +151,7 @@ run_hook() {
 
 # --- T1: unpushed commits → DENY -----------------------------------------
 t1_unpushed_commits_deny() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-unpushed")
   assert_fixture_dir "$work"
   # Add a local commit AFTER the initial push; do not push.
@@ -166,7 +169,7 @@ t1_unpushed_commits_deny() {
 
 # --- T2: clean state → PASS ----------------------------------------------
 t2_clean_state_pass() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-clean")
   assert_fixture_dir "$work"
   # No local commits ahead of origin/<branch>.
@@ -181,7 +184,7 @@ t2_clean_state_pass() {
 
 # --- T3: on main → PASS (fail-open) --------------------------------------
 t3_on_main_pass() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   local work="$tmp/work" incidents="$tmp/incidents"
   mkdir -p "$work" "$incidents"
   init_git_repo "$work"
@@ -198,7 +201,7 @@ t3_on_main_pass() {
 
 # --- T4: detached HEAD → PASS (fail-open) --------------------------------
 t4_detached_head_pass() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   local work="$tmp/work" incidents="$tmp/incidents"
   mkdir -p "$work" "$incidents"
   init_git_repo "$work"
@@ -223,7 +226,7 @@ t4_detached_head_pass() {
 
 # --- T5: no upstream tracking → PASS (fail-open) -------------------------
 t5_no_upstream_pass() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   local work="$tmp/work" incidents="$tmp/incidents"
   mkdir -p "$work" "$incidents"
   init_git_repo "$work"
@@ -241,7 +244,7 @@ t5_no_upstream_pass() {
 
 # --- T6: non-merge command → PASS (no-op early exit) ---------------------
 t6_non_merge_command_pass() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-status")
   assert_fixture_dir "$work"
   echo "x" > "$work/x.txt"
@@ -258,7 +261,7 @@ t6_non_merge_command_pass() {
 
 # --- T7: chained command form → DENY -------------------------------------
 t7_chained_command_deny() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-chained")
   assert_fixture_dir "$work"
   echo "fix" > "$work/fix.txt"
@@ -273,9 +276,26 @@ t7_chained_command_deny() {
   rm -rf "$tmp"
 }
 
+# --- T7b: rtk-prefixed merge → DENY (#10248) --------------------------------
+t7b_rtk_prefixed_merge_deny() {
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_synced_branch "$tmp" "feat-rtk")
+  assert_fixture_dir "$work"
+  echo "fix" > "$work/fix.txt"
+  git -C "$work" add fix.txt
+  git -C "$work" commit -q -m "the fix"
+
+  local payload out exit_code=0
+  payload=$(make_payload "$work" "rtk gh pr merge 128 --squash --auto")
+  out=$(printf '%s' "$payload" | INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>/dev/null) || exit_code=$?
+  exit_code=${exit_code:-0}
+  assert_deny "T7b rtk gh pr merge denies (#10248)" "$incidents" "$out" "$exit_code"
+  rm -rf "$tmp"
+}
+
 # --- T8: substring false-positive in echo string → PASS ------------------
 t8_substring_false_positive_pass() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-echoes")
   assert_fixture_dir "$work"
   echo "fix" > "$work/fix.txt"
@@ -296,7 +316,7 @@ t8_substring_false_positive_pass() {
 # exists to prevent (stale tracking ref → rev-list = 0 → unpushed merge).
 # The deny prompts the operator to fetch manually.
 t9_fetch_failure_deny() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-no-net")
   assert_fixture_dir "$work"
   echo "fix" > "$work/fix.txt"
@@ -402,7 +422,7 @@ t11_hook_ordering() {
 
 # --- T12: emit_incident prefix length ≤50 chars --------------------------
 t12_emit_incident_prefix_length() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-prefix")
   assert_fixture_dir "$work"
   echo "fix" > "$work/fix.txt"
@@ -433,7 +453,7 @@ t12_emit_incident_prefix_length() {
 
 # --- T13: emit_incident INCIDENTS_REPO_ROOT redirect ---------------------
 t13_incidents_redirect() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-redirect")
   assert_fixture_dir "$work"
   echo "fix" > "$work/fix.txt"
@@ -456,7 +476,7 @@ t13_incidents_redirect() {
 
 # --- T14: stdout JSON not corrupted by git progress (R5) -----------------
 t14_stdout_json_clean() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-clean-stdout")
   assert_fixture_dir "$work"
   echo "fix" > "$work/fix.txt"
@@ -484,7 +504,7 @@ t14_stdout_json_clean() {
 # command), but the trigger phrase lives only inside the -m message body, which
 # the strip blanks before detection.
 t15_commit_body_fp_pass() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-fp")
   assert_fixture_dir "$work"
   echo "fix" > "$work/fix.txt"
@@ -506,6 +526,7 @@ t4_detached_head_pass
 t5_no_upstream_pass
 t6_non_merge_command_pass
 t7_chained_command_deny
+t7b_rtk_prefixed_merge_deny
 t8_substring_false_positive_pass
 t9_fetch_failure_deny
 t10_settings_json_valid

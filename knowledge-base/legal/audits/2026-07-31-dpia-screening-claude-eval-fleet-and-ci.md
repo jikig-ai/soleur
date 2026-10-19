@@ -3,7 +3,7 @@ title: "DPIA screening memo — Anthropic-egressing Inngest function fleet, comm
 type: dpia-screening-memo
 date: 2026-07-31
 issue: 7100
-plan: knowledge-base/project/plans/2026-07-31-docs-art30-register-claude-eval-fleet-and-ci-surface-plan.md
+plan: knowledge-base/project/plans/archive/20261013-051752-2026-07-31-docs-art30-register-claude-eval-fleet-and-ci-surface-plan.md
 status: draft-requires-counsel-review
 processing_activity: "Article 30 register Processing Activity 31 (Anthropic-egressing Inngest function fleet), Processing Activity 32 (community observation and republication) and Processing Activity 33 (Jikigai-keyed Anthropic API surface in GitHub Actions CI)"
 conclusion: "SPLIT. PA-31 and PA-33: full DPIA NOT required — two and one WP248 criteria engaged respectively, no public-output limb, named accepted residuals and pinned re-screening triggers are the proportionate Art. 24/25 record. PA-32 (community observation and republication): a full DPIA IS required under Art. 35(1) — six WP248 rev.01 criteria are engaged, and Art. 35(1) requires the assessment PRIOR TO the processing, so it is overdue by approximately five months. The memo records that remediation R1-R4 collapses four of the six criteria at once and may therefore be the better path than assessing a limb that should not exist in its current form."
@@ -128,7 +128,7 @@ assessment is **overdue by approximately five months**, and the public-issue-com
 continues to run. This is recorded as a compliance finding, not as a plan.
 
 The full DPIA is tracked as deferred item **DEF-5** (#7121; body drafted at
-`knowledge-base/project/specs/feat-one-shot-7100-art30-eval-fleet-register/deferred-issues.md`;
+`knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7100-art30-eval-fleet-register/deferred-issues.md`;
 #7121). PA-32 §(g) records **DPIA status: FULL DPIA REQUIRED — and overdue**, with the
 ~2026-02-19 date and the DEF-5 scoping in the sentences that follow it. **[2026-07-31
 CORRECTION (#7100), applied at review: the preceding sentence previously presented a

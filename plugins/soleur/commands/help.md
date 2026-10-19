@@ -12,7 +12,21 @@ Display a formatted overview of all available Soleur capabilities. Read the plug
 
 Use the **Read tool** to read `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json` to get the plugin name, description, and metadata.
 
-**The manifest carries no `version` key** — that is deliberate, not an omission (a constant version string makes `claude plugin update` compare equal and no-op while reporting success, #7471). Do not report a version read from it. If a version is wanted, it comes from the latest plugin release tag (`gh release list --exclude-drafts --exclude-pre-releases --limit 30 --json tagName --jq '[.[] | select(.tagName | test("^v[0-9]"))][0].tagName'` — the repo also publishes `web-v*` and `zot-image-*` releases); if that is unavailable, print no version rather than guessing one.
+Then resolve the installed version with the **Bash tool**: run this block (if the script is not at that path it prints `source=unknown`; do not look for it elsewhere):
+
+```bash
+if grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" 2>/dev/null; then
+  if [ -f "${CLAUDE_PLUGIN_ROOT}/scripts/plugin-version.sh" ]; then
+    bash "${CLAUDE_PLUGIN_ROOT}/scripts/plugin-version.sh" --installed
+  else
+    echo "source=unknown"
+  fi
+else
+  echo "source=unknown"
+fi
+```
+
+It prints `key=value` lines: `source=manifest` with `version=`, `source=commit` with `commit=` (a 12-character hash), `source=checkout` with `commit=` (the HEAD commit of the local git checkout the plugin is loaded from in place), or `source=unknown`/`source=none`. Use only what it prints. The manifest carries no `version` key by design (#7471), so never report a version read from it yourself and never guess one. This call is local and does no network lookup.
 
 If `CLAUDE_PLUGIN_ROOT` is not set or the path does not exist, try reading from `plugins/soleur/.claude-plugin/plugin.json` (monorepo checkout) or `~/.claude/plugins/*/soleur/.claude-plugin/plugin.json` (legacy installed path).
 
@@ -56,6 +70,10 @@ Present one harness-appropriate overview. Replace placeholder counts with actual
 
 ```text
 Soleur - The Company-as-a-Service Platform
+
+[Version line: `Soleur <version>` when source=manifest, `Soleur commit <commit>` when source=commit, `Soleur commit <commit> (local checkout)` when source=checkout.
+ When source is unknown, none or any other value, print no version line; print only the hint
+ "Version unknown (on Claude Code: run /soleur:version)".]
 
 COMMANDS:
   /soleur:go <what you want>  The recommended way to use Soleur

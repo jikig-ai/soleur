@@ -319,8 +319,8 @@ while the in-image one initially did not:
 1. **permissionMode `default`, not `bypassPermissions`.** `bypassPermissions` maps
    to `--dangerously-skip-permissions`, which `claude.exe` **refuses under root**
    ("cannot be used with root/sudo privileges") — and the in-image/CI capture runs
-   as root. The `canUseTool` force-allow + `autoAllowBashIfSandboxed` already
-   auto-allow the single Bash op, so `default` is sufficient and root-compatible.
+   as root. The canary's `allowedTools: ["Bash"]` rule and its `canUseTool` force-allow allow the single Bash op (the hosted sandbox config no
+   longer auto-allows it, #10054), so `default` is sufficient and root-compatible.
    (An off-image capture on a non-root dev user silently avoided this.)
 2. **The bwrap PATH shim answers `bwrap --version`** like the real binary, so the
    SDK's availability probe (`failIfUnavailable`) passes and proceeds to the real
@@ -612,3 +612,37 @@ byte-stable only because capture and verify both run as uid 0 in the pinned
 image). `prepDirs` now carries both; a structural test pins "every mount
 target and placeholder-subpath bind source resolves under a prepDirs entry".
 Status stays `adopting` (Deferral A).
+
+## Addendum — 2026-10-16 (#10445): the faithful replay must exercise the command-side wrapper
+
+The faithful canary replays the captured bwrap SETUP argv and ends in `-- true`
+(`parseShimSetupArgv` documents the command tail as model-chosen and never
+replayed). It therefore never runs the process the Agent SDK wraps around every
+sandboxed Bash command: `ARGV0=apply-seccomp /proc/self/fd/<N> <shell> -c <cmd>`.
+From the first production deploy of `web-v0.324.3` (2026-10-06) the shim's
+seccomp filter denied `unshare(CLONE_NEWUSER)`, which that embedded helper needs,
+so every hosted Bash call failed while `sandbox_canary` stayed green
+(`consecutive_pass=108` at the 2026-10-16 readback). The canary's own
+`nested_userns_deny` probe asserted the denial that broke the helper. See
+`knowledge-base/engineering/operations/post-mortems/hosted-agent-bash-apply-seccomp-userns-eperm-postmortem.md`.
+
+**Rule to be added (planned, with #10453).** A pass verdict from the faithful canary would have to be backed by a probe
+that executes a real Bash command through the SDK's real command-side path (the
+wrapper the SDK emits, not a captured tail) inside the production container, under
+the production run tuple and the shipped shim. A replay that ends in a command
+which never reaches the wrapper certifies the setup argv only and must not be
+described, in a verdict or in a runbook, as proof that Bash works (that part holds
+today). The probe would report a coverage field in the verdict so a replay-only
+pass is distinguishable from a wrapper-exercising pass.
+
+**Promotion (planned, unchanged and still the ADR's).** The new probe (`sdk_bash_smoke`)
+would ship non-blocking first (`wg-dark-launch-deploy-gates`) and be promoted to the
+blocking lane under this ADR's own soak criterion: 5 green verdicts over at least
+3 days, with the coverage field present. `smoke_infra_error` would hold the soak and
+never roll back. This addendum introduces no new soak number.
+
+**Scope.** This amends the Decision's canary contract (section 2) only. It does not
+change the profile-to-redeploy coupling (section 3), the interim mechanism, or the
+Adopting to Accepted criteria. Status stays `adopting` (Deferral A).
+
+**Status.** The `sdk_bash_smoke` probe described above does not exist yet; it is deferred to #10453, the successor to #5941 (the earlier tracker of the nested-unshare-in-the-production-canary gap, still open) (time-boxed per the CTO's 2026-10-16 ruling). Until it ships, the wrapped-command guard is pre-merge only: `test/sandbox-wrapped-command-runtime.test.ts` (CI runner) and the wrapped-command control/treatment arms of `infra/sandbox-masked-proc-docker.test.sh` (production run tuple, driven by `infra/lib/sdk-bash-probe.mjs`). The faithful canary's replay is still blind to the command-side wrapper, which is exactly why the probe is required before this ADR's blocking promotion.

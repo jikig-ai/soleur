@@ -84,19 +84,37 @@ timestamp: <ISO-8601>
    hook on Write run `parse-override.sh` to validate. Valid artifact → install
    accepted.
 
-### PII safety — path-form mandate
+### PII safety — findings provenance
 
-The `findings_json` field MUST be a **path to the persisted, redacted
-`.scan-meta.json`** — not an inline JSON copy of findings. Reason: scanner
-stdout (which the operator sees during review) is intentionally unredacted
-for in-terminal inspection; the persisted `.scan-meta.json` runs through
-`redact_pii()` (email, IPv4, IBAN, JWT, Anthropic/OpenAI keys, GitHub
+The `findings_json` field MUST carry **redacted bytes from the persisted
+`.scan-meta.json`** — never an inline copy typed from scanner stdout. Reason:
+scanner stdout (which the operator sees during review) is intentionally
+unredacted for in-terminal inspection; the persisted `.scan-meta.json` runs
+through `redact_pii()` (email, IPv4, IBAN, JWT, Anthropic/OpenAI keys, GitHub
 PAT/OAuth, GitLab PAT, Doppler tokens, Slack tokens, AWS keys). Copy-pasting
 from terminal scrollback lands raw PII / secrets in a permanent git artifact
-retained "for repository lifetime" per Art. 32 evidence retention.
+retained "for repository lifetime" per Art. 32 evidence retention. The
+path form is the default because it cannot be mis-pasted.
 
 `parse-override.sh` enforces this: artifacts whose body contains a raw email
 pattern outside the `approver:` field are rejected with `invalid_schema`.
+
+The path form is valid only inside the retention window: the scanner's startup
+reap removes `skill-security-scan-*` dirs older than `SKILL_SCAN_META_REAP_MIN`
+minutes (default 10080 = 7 days), and `$XDG_RUNTIME_DIR` is cleared on logout
+regardless (#6789, #6760). For a reference that must outlive the window, embed
+the findings inline — the schema's `oneOf` admits an object form — copied from
+the **redacted `.scan-meta.json`**, never from scanner stdout (the mandate
+above is about where the bytes come from, not the YAML shape). Two mechanics
+matter: the presence check (#10167) counts `findings_json` present iff the
+`findings_json:` key line carries non-whitespace, non-null content OR a
+following *indented* line does before the block ends — so both the inline
+`findings_json: {…}` form and the block mapping (`findings_json:` then
+indented `key: value` lines) are accepted, while `findings_json:` bare,
+whitespace-only, `null`/`~`, a same-line comment (`findings_json: # …`,
+reads as null), or `findings_json:{…}` (no separation space — YAML reads that
+as a scalar, not a mapping) still report missing. And the
+source bytes must still be the redacted file.
 
 ## Multiple overrides per PR
 

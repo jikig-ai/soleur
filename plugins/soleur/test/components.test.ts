@@ -614,9 +614,84 @@ describe("Technical-ruling delegation wiring", () => {
     const start = oneShot.indexOf("TECHNICAL RULINGS (inline copy");
     expect(start, "one-shot lost its inline technical-rulings copy").toBeGreaterThan(-1);
     const copy = oneShot.slice(start, start + 1400);
-    for (const token of ["soleur:engineering:cto", "Ruled by CTO agent", "surface it"]) {
+    for (const token of ["soleur:engineering:cto", "Ruled by CTO agent", "surface it", "OPEN DECISION"]) {
       expect(copy.includes(token), `one-shot inline copy lost "${token}"`).toBe(true);
     }
+  });
+
+  test("a brief's own wording is the CTO trigger: the reference, the go Sharp Edge and the shim say so", () => {
+    // Whitespace-normalized content anchors, not line numbers: a re-wrap must not break the pin. Every slice is bounded and a
+    // missing anchor fails with its own message (indexOf -1 would otherwise slice from the last character).
+    const flat = (rel: string) => read(rel).replace(/\s+/g, " ");
+    const between = (text: string, from: string, to: string | null) => {
+      const i = text.indexOf(from);
+      expect(i, `anchor not found: ${from}`).toBeGreaterThan(-1);
+      const j = to === null ? text.length : text.indexOf(to, i + from.length);
+      expect(j, `end anchor not found: ${to}`).toBeGreaterThan(i);
+      return text.slice(i, j);
+    };
+    const ref = flat(REF_REL);
+    const override = between(ref, "## 5. Override clause", "## 6.");
+    expect(override.includes("OPEN DECISION"), "reference section 5 lost the OPEN DECISION trigger").toBe(true);
+    expect(override.includes('"ask the operator once, then act"'), "reference section 5 lost the quoted incident wording").toBe(true);
+    const scope = between(ref, "- **scope**", "- **priority / schedule**");
+    expect(scope.includes("the routing of an already-identified gap") && scope.includes("is technical and goes to the CTO"), "reference section 1 lost the scope-routing classification or its polarity").toBe(true);
+    expect(scope.includes("assigning work to a named person stays the operator's"), "reference section 1 lost the assignment carve-out").toBe(true);
+    const edge = between(flat("commands/go.md"), "A technical ruling is never the operator's to make", "**Why:**");
+    expect(edge.includes("OPEN DECISION"), "the first go Sharp Edge lost the OPEN DECISION trigger").toBe(true);
+    const shim = flat("skills/go/SKILL.md");
+    expect(shim.includes("OPEN DECISION") && shim.includes("never a reason to ask") && shim.includes("technical-ruling-delegation.md"), "the go shim lost the trigger sentence, its polarity or its link").toBe(true);
+  });
+});
+
+// Final-report wiring (#10499): the report list of review/work is a carrier of
+// hr-technical-fork-is-not-an-operator-question. Presence pins, so the paragraphs cannot be
+// trimmed away under the SKILL.md byte ceilings without a red test naming the file + anchor.
+describe("Technical-ruling final-report wiring (#10499)", () => {
+  // Fenced blocks and HTML comments are stripped first: an anchor moved into either is not live prose.
+  const strip = (t: string) => t.replace(/```[\s\S]*?```|<!--[\s\S]*?-->/g, " ").replace(/\s+/g, " ");
+  const flat = (rel: string) => strip(readFileSync(resolve(PLUGIN_ROOT, rel), "utf-8"));
+  const hasAnchor = (text: string, anchor: string) => strip(text).includes(anchor);
+  const REF = "skills/brainstorm-techniques/references/technical-ruling-delegation.md";
+  const LINK81 = "technical-ruling-delegation.md) section 8.1; only `operator (<category>)` items stay";
+  const PAIRS: Array<[string, string]> = [
+    [REF, "## 8. Final-report check and seat dissent from a ruling"],
+    [REF, "**8.1 Final-report decision check"],
+    [REF, "**8.2 Seat dissent from a ruling"],
+    ["skills/review/SKILL.md", "**Final-report decision check (before either template).** Class every decision"],
+    ["skills/review/SKILL.md", LINK81],
+    ["skills/review/SKILL.md", "**Seat dissent from a ruling.**"],
+    ["skills/review/SKILL.md", "to uphold or amend, never to the operator"],
+    ["skills/review/SKILL.md", "**Route to the domain agent for a BINDING ruling (a GATE before Step 3"],
+    ["skills/work/SKILL.md", "**Final-report decision check.** Class every decision"],
+    ["skills/work/SKILL.md", LINK81],
+  ];
+
+  test("the anchor table has a floor (an emptied table must not pass)", () => {
+    expect(PAIRS.length).toBeGreaterThanOrEqual(10);
+  });
+
+  for (const [rel, anchor] of PAIRS) {
+    test(`${rel} carries "${anchor}"`, () => {
+      expect(hasAnchor(flat(rel), anchor), `${rel} lost the final-report wiring anchor "${anchor}".`).toBe(true);
+    });
+  }
+
+  test("the seat-dissent paragraph sits at the spawn site, before the seat list", () => {
+    const review = flat("skills/review/SKILL.md");
+    const dissent = review.indexOf("**Seat dissent from a ruling.**");
+    const seats = review.indexOf("#### Parallel Agents to review the PR:");
+    expect(dissent, "review lost the seat-dissent paragraph").toBeGreaterThan(-1);
+    expect(seats, "review lost the seat-list heading").toBeGreaterThan(-1);
+    expect(dissent < seats, "the seat-dissent rule must precede the seat spawn (rulings are read before seats exist)").toBe(true);
+  });
+
+  test("the instrument self-test: the helper rejects an absent, fenced or commented anchor and accepts a re-flowed one", () => {
+    const a = "**Final-report decision check";
+    expect(hasAnchor("no wiring here", a)).toBe(false);
+    expect(hasAnchor("```\n" + a + " (x)\n```", a)).toBe(false);
+    expect(hasAnchor("<!-- " + a + " (x) -->", a)).toBe(false);
+    expect(hasAnchor("**Final-report\n    decision   check (x)", a)).toBe(true);
   });
 });
 

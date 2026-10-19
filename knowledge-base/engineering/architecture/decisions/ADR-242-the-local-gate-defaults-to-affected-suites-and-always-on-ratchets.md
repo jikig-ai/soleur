@@ -12,6 +12,7 @@ amended_by:
   - "#9400 (2026-10-01) — the affected-ratchets pre-push lane moves the cheap ratchet net earlier than the local gate (push time, merged tree); the required `test` context remains the merge gate; see ## Amendment — 2026-10-01 (#9400)"
   - "#9813 (2026-10-10) — decision 22: the `glob:<literal-head>/<glob-tail>` declared-edge kind for corpus walkers, the five-site malformed-shape doctrine, and the per-suite dispositions; see ## Amendment — 2026-10-10 (#9813)"
   - "#9814 (2026-10-11) — the local weight-drift detector: TEST_TIMING_LOG defaults on affected-shaped local runs and the epilogue emits advisory WEIGHT_DRIFT lines against committed weights; see ## Amendment — 2026-10-11 (#9814)"
+  - "#10117 (2026-10-13) — decision 27: the root-anchored `glob:` grammar residual is detected, not extended; the extension triggers only on a live dir-less corpus file (#10198); see ## Amendment — 2026-10-13 (#10117)"
 ---
 
 # ADR-242: `test-all.sh` — the local gate defaults to the affected set plus always-on ratchets (#8322)
@@ -243,7 +244,7 @@ decisions 1-3 above and do not change the CI contract.
     could never match, which would turn a select-everything edge into a select-nothing one). Evidence: over 30
     real diffs the new matcher selected 0 suites the old one did not and dropped 84 selections belonging to 7
     suites, every one a demonstrated false positive (a directory token matched inside a longer path); the
-    record is `knowledge-base/project/specs/feat-affected-parallel-test-gate/edge-anchoring-corpus.md`.
+    record is `knowledge-base/project/specs/archive/20261013-062704-feat-affected-parallel-test-gate/edge-anchoring-corpus.md`.
     **The direction flips.** A substring over-matched toward RUNNING, the safe side decisions 3 and 8 rely on;
     an anchored edge errs toward NOT running whenever the diff text does not present a path as its own line.
     The diff blob therefore has to: `--name-status -M` rename rows (`R100<TAB>old<TAB>new`) are split on TABs
@@ -358,7 +359,7 @@ identity-preserving and is a separate decision (decision 18, with the `REPO_ROOT
 
 Context: decision 15's evidence was one run of session-scratch scripts, and decision 16 named the further route to a cheaper pre-pass
 (stop following what the runner's text merely names) as a separate decision. This amendment records both. Numbers follow landing order.
-The measured figures live in `knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md` (Rounds 2 and 3); they are not restated here.
+The measured figures live in `knowledge-base/project/specs/archive/20261013-062704-feat-affected-parallel-test-gate/always-on-audit.md` (Rounds 2 and 3); they are not restated here.
 
 17. **The always-on evidence is a committed recorder with one verdict function, and a recording that is not complete is never evidence for a
     demotion.** `scripts/audit-suite-reads.sh` (with `scripts/lib/inotify-open-recorder.py`) re-issues decision 15's audit as "Round 2" and
@@ -483,7 +484,7 @@ receipt is a `RATCHET_LANE verdict=` line, not a battery verdict.
     suite's edge array: re-record that suite then, or put it back in `ALWAYS_ON_SUITES`. **Revisit** the hedge when always-on suite time passes 1,500 s or when the suite
     becomes incremental, so "keep" does not become permanent by default; row f1 holds the census slack at 5 and this change leaves it at 0, so the next
     always-on addition raises the floor (in `scripts/test-all.sh` and in f1's pin), which is the review point. The measurements, costs and final table live in the audit doc's 2026-10-04 addendum
-    (`knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md`), not here.
+    (`knowledge-base/project/specs/archive/20261013-062704-feat-affected-parallel-test-gate/always-on-audit.md`), not here.
 
 ## Amendment — 2026-10-05 (#9552)
 
@@ -732,3 +733,38 @@ Alternatives added by this amendment:
 | Export `WEBPLAT_RELATED` | The #9814 learning's env-scrub class: an exported var leaks into every suite child (a nested runner would inherit the parent's list). `env` per registration is the bounded channel. |
 | Meta-hit = subset of diff under the app | Two meta entries live outside the app (`scripts/lib/test-affected-paths.sh`'s sibling, `test-relevance-paths.sh`) — membership is checked against the whole diff, not only app paths. |
 | Decline the whole feature because `related` misses dynamic imports | The residual is bounded: zero-resolution falls back to full, the meta set covers run-semantics files, and a dynamic-import-only change is already the class of diff a reviewer flags. Accepting a bounded coverage gap buys the measured ~40-60 s per app diff. |
+
+## Amendment — 2026-10-13 (#10117)
+
+Context: decision 22's `glob:<literal-head>/<glob-tail>` edge kind covered every corpus member
+under a directory but stopped at the grammar boundary — a dir-less corpus file at the repository
+root (`x.test.sh`, `x.sh`) has no `<dir>/` head to mint, so no declared edge can cover it and its
+diff would select no corpus suite: a silent hole. The same fix round's review identified two
+further residuals on different surfaces: `--paths` elements were diff-name stand-ins that never
+matched a git path line (`./x` silently selected nothing — a misleading diagnostic), and the th6
+root-coverage census certified a `glob:<root>/` edge by *suffix shape* rather than *matchability*
+(a `sub/*.test.sh` tail ends in `.test.sh` yet reaches only that subtree — it under-covers the
+root the corpus scan enumerates).
+
+27. **The root-anchored `glob:` grammar stays unrepresentable; detection, not extension, is the
+    durable posture.** A dir-less corpus file is detected loudly — the th8 row in
+    `scripts/test-all-affected.test.sh` re-derives the single-component complement of
+    `git ls-files` (`.test.sh` and `.sh`-but-not-`.test.sh` as disjoint classes, with a
+    producer-liveness floor and `_TH_REPO` fixture confinement) and REDs the first battery run
+    carrying one — while the grammar extension is deferred to #10198 and activates only when a
+    live member exists. The row stays RED on existence alone: a literal edge or an ALWAYS_ON
+    entry covers the file's *selection* in the interim but does not clear it — the durable exits
+    are moving the file under a covered root or landing the #10198 extension (at which point the
+    row's expectation revisits what the new grammar expresses). The decision is *detect now,
+    extend on evidence* — the grammar grows for a member that exists, never for one that might.
+    Companion hardening in the same change: `--paths` elements normalize a leading `./` run to
+    fixpoint at the parse arm and refuse unclean spellings (empty elements, absolute, `..` or
+    `/.` or `//` segments, a trailing `/`, control bytes) with a named rc-2 error — a print-only
+    diagnostic that silently selects nothing is a lie; and the th6 census predicate now certifies
+    a root only via the forms the mint arm can actually act on — a `<root>/` (or slash-less
+    `<root>`) dir member whose target exists on disk, or a `glob:<root>/` edge whose tail is a
+    bare `*<ext>` or `**<ext>` — so only an edge that can actually match the corpus class
+    certifies it. Note for readers of
+    `scripts/audit-suite-reads.sh`: its `UNCOVERED_AWK` compares an edge by literal equality or
+    `<dir>/` prefix only, so a read covered solely by a `glob:` member reports as uncovered —
+    over-report, the safe direction; those rows are not oracle disagreements.

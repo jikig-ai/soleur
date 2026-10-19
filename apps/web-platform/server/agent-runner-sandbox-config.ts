@@ -7,10 +7,12 @@ import {
   workspaceTenantDenyRoots,
 } from "./workspace-resolver";
 import { AGENT_AUTH_ENV_VARS } from "./agent-auth-env-vars";
-import { basename, delimiter, dirname, join, resolve } from "path";
+import { basename, delimiter, dirname, isAbsolute, join, resolve } from "path";
+import { homedir } from "os";
 import * as Sentry from "@sentry/nextjs";
 
 import { ALLOWED_SERVICE_ENV_VARS } from "./agent-env";
+import { AGENT_SESSION_TMP_ROOT } from "./agent-session-tmp";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback, warnSilentFallback } from "./observability";
 
@@ -67,6 +69,17 @@ const log = createChildLogger("agent-sandbox");
 //     re-inverts it fails `test/sandbox-canary.test.ts`'s ordering pin and the
 //     capture gate's byte-diff.
 //
+// #10445 — `network.allowAllUnixSockets: true` is deliberate. The vendored
+// builder otherwise wraps every Bash command in `apply-seccomp`, whose first
+// call (unshare(CLONE_NEWUSER)) the shim filter below denies. That helper WAS
+// the per-command AF_UNIX block until 2026-10-06, so this returns to a state
+// with no AF_UNIX block; the residual is bounded by (1) a per-tenant CLI temp base
+// (`agentSessionTmpDir`, denied as a whole root below) so no sibling can READ a
+// persisted Bash output that carries a proxy credential, (2) per-session proxy
+// authentication on the bridge sockets as the backstop
+// (test/sandbox-wrapped-command-runtime.test.ts), (3) the peer-socket and transcript
+// masks below, and (4) `--unshare-net` for abstract sockets (ADR-075 addendum 2026-10-16).
+//
 // #8752 — the two hardening layers this config cannot express through the SDK
 // (the vendored builder owns the whole bwrap argv, transported on `--args
 // <fd>`) live OUTSIDE this object, at the spawn layer: the PATH shim
@@ -85,12 +98,15 @@ const log = createChildLogger("agent-sandbox");
 export type AgentSandboxConfig = {
   enabled: true;
   failIfUnavailable: true;
-  autoAllowBashIfSandboxed: true;
+  autoAllowBashIfSandboxed: false;
   allowUnsandboxedCommands: false;
   enableWeakerNestedSandbox: true;
   network: {
     allowedDomains: string[];
     allowManagedDomainsOnly: true;
+    /** #10445: makes the vendored builder skip the SDK's `apply-seccomp`
+     *  unix-socket helper (see the header note and the ADR-075 addendum). */
+    allowAllUnixSockets: true;
   };
   filesystem: {
     allowWrite: string[];
@@ -379,6 +395,36 @@ function webEgressDenyReadPaths(): string[] {
 }
 
 
+/** Directories the CLI binds its peer-messaging sockets in. Measured in the vendored CLI 2.1.284: the primary path is
+ *  `(XDG_RUNTIME_DIR || CLAUDE_CODE_TMPDIR || os.tmpdir())/cc-socks/<pid>.sock`, and the CLI falls back to
+ *  `/tmp/cc-socks-<uid>/<pid>.sock` when that path is over 103 bytes or its directory is refused (shared/world-writable
+ *  without sticky, or not owned by the caller). The CLI's env is the allowlisted one (`TMPDIR` is forwarded, `XDG_RUNTIME_DIR`
+ *  is not), so this returns the UNION of every base: masking a dir the CLI never uses is free, missing one is a
+ *  cross-tenant channel. Only absolute bases count (the CLI ignores a relative one). */
+export function peerMessagingSocketDirs(
+  env: Record<string, string | undefined> = process.env,
+  uid: number | undefined = typeof process.getuid === "function" ? process.getuid() : undefined,
+): string[] {
+  const bases = [env.XDG_RUNTIME_DIR, env.CLAUDE_CODE_TMPDIR, env.TMPDIR, "/tmp"].filter(
+    (b): b is string => typeof b === "string" && b !== "" && isAbsolute(b),
+  );
+  const dirs = bases.map((b) => join(b, "cc-socks"));
+  if (uid !== undefined) dirs.push(`/tmp/cc-socks-${uid}`);
+  return Array.from(new Set(dirs));
+}
+
+/** Directories holding the CLI's session transcripts. With AF_UNIX allowed, a sibling session's proxy credential that
+ *  its own `env`/`printenv` output put into a transcript under a SHARED HOME becomes usable against that sibling's
+ *  bridge socket, so a tenant's Bash must not read them (the CLI process itself runs outside the sandbox). */
+export function sessionTranscriptDirs(env: Record<string, string | undefined> = process.env): string[] {
+  const dirs: string[] = [];
+  if (env.HOME && isAbsolute(env.HOME)) dirs.push(join(env.HOME, ".claude", "projects"));
+  // The CLI falls back to the passwd home when HOME is unset, so an unset HOME must not silently drop the mask.
+  else if (!env.HOME) dirs.push(join(homedir(), ".claude", "projects"));
+  if (env.CLAUDE_CONFIG_DIR && isAbsolute(env.CLAUDE_CONFIG_DIR)) dirs.push(join(env.CLAUDE_CONFIG_DIR, "projects"));
+  return Array.from(new Set(dirs));
+}
+
 /**
  * Build the canonical sandbox options block. Drift here propagates to BOTH
  * the legacy domain-leader runner AND the cc-soleur-go factory (they both
@@ -465,6 +511,23 @@ export function buildAgentSandboxConfig(
   // landing is a builder skip). Removal is the flag-deletion follow-up
   // (#9798), never part of this PR — the `denyRead` arm must not fork
   // per-flag.
+  // The SDK skips a deny landing that does not exist, so create each masked dir first (0700, the mode the CLI
+  // itself uses). A failure here leaves that dir's mask OFF for a cross-tenant channel, so it is reported to
+  // Sentry (reportSilentFallback, an error event; no dedicated alert routes it yet, #10455), unlike the c4 staging root above.
+  const peerSocketDirs = peerMessagingSocketDirs();
+  const transcriptDirs = sessionTranscriptDirs();
+  for (const dir of [...peerSocketDirs, ...transcriptDirs, AGENT_SESSION_TMP_ROOT]) {
+    try {
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+    } catch (err) {
+      reportSilentFallback(err, {
+        feature: "agent-sandbox",
+        op: "masked-dir-precreate",
+        extra: { dir },
+        message: "agent-sandbox: a masked dir could not be created; its read-deny may not apply",
+      });
+    }
+  }
   const denyRoots = workspaceTenantDenyRoots();
   const denyRootsExist = denyRoots.map((root) => existsSync(root));
   denyRoots.forEach((root, i) => {
@@ -523,6 +586,16 @@ export function buildAgentSandboxConfig(
       // ONLY for the entitled session (the extra denies would be dead config
       // where no gateway exists — tracked as a hardening follow-up).
       process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
+      // #10445: the CLI's peer-messaging sockets (`<dir>/cc-socks/<pid>.sock`, 0700, same uid for every tenant
+      // session in the container) were unreachable while the apply-seccomp helper blocked AF_UNIX for the
+      // command; with allowAllUnixSockets set they would be connectable from a sibling's Bash. Masked for every
+      // session (pre-created above: the SDK skips a deny landing that does not exist yet). The shared-HOME
+      // session transcripts are masked for the same reason (a sibling's proxy credential can land in one).
+      ...peerSocketDirs,
+      ...transcriptDirs,
+      // #10445: sibling sessions' CLI temp bases (persisted Bash output incl. proxy credentials). The session's own
+      // `<root>/<id>/claude-<uid>` is re-bound writable by the builder (the CLI's own allowWrite), nothing else is.
+      AGENT_SESSION_TMP_ROOT,
       ...(opts?.allowWebEgress ? webEgressDenyReadPaths() : []),
     ]),
   );
@@ -571,13 +644,17 @@ export function buildAgentSandboxConfig(
     // @anthropic-ai/claude-agent-sdk) — Tier 4 defense-in-depth
     // disappears with no Sentry signal. See #2634.
     failIfUnavailable: true,
-    autoAllowBashIfSandboxed: true,
+    // #10054: false so a sandboxed Bash call still reaches `canUseTool` (the SDK auto-allows it
+    // before the callback otherwise, and the must-ask lane / safe-Bash allowlist / autonomous
+    // toggle never run). The sandbox itself stays on. Pinned against the real SDK by the
+    // real-SDK C9 probe under scripts/ (ADR-284 post-merge verification).
+    autoAllowBashIfSandboxed: false,
     allowUnsandboxedCommands: false,
     // A fresh procfs mount inside a nested user namespace is refused (EPERM) under
     // docker's default masked /proc, so enableWeakerNestedSandbox makes the vendored
     // builder emit a tail `--bind /proc /proc` instead of `--proc /proc` (#1557). The
     // bwrap shim then DROPS that tail bind (#10039), so the vendored `--tmpfs /proc`
-    // is the realized mask: no procfs at all inside the sandbox. `denyRead` alone is
+    // is the realized mask: an empty /proc tmpfs with no /proc/<pid> entries inside the sandbox (the container procfs sits beneath it). `denyRead` alone is
     // not what protects the CLI parent's environment;
     // the outcome (no readable environ carries the key) is measured in ADR-272
     // and pinned by sandbox-credential-deny-runtime.test.ts, the mechanism is not.
@@ -585,6 +662,14 @@ export function buildAgentSandboxConfig(
     network: {
       allowedDomains: opts?.allowGithubEgress ? [...ENTITLED_EGRESS_DOMAINS] : [],
       allowManagedDomainsOnly: true,
+      // #10445: with this off, the vendored builder wraps EVERY Bash command in
+      // its embedded `apply-seccomp` helper to block AF_UNIX sockets, and the
+      // helper's first call is unshare(CLONE_NEWUSER) — which the bwrap-shim
+      // nested-userns filter denies, so every hosted Bash call died with EPERM
+      // from 2026-10-06. Setting it makes the builder skip the helper ("Skipping
+      // seccomp filter - allowAllUnixSockets is enabled"); the nested-userns /
+      // clone3 filter is untouched. Posture and residual bounds: ADR-075 addendum.
+      allowAllUnixSockets: true,
     },
     filesystem: {
       // Full read+write of the agent's OWN workspace: it sits UNDER the

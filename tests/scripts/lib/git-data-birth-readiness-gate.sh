@@ -1051,8 +1051,10 @@ git_data_rung2_token_sets() {
 }
 
 # _git_data_rung2_bearer_ok <token> — the token-shape allowlist for the stdin config channel.
-# Prefixed (a sourced library shares its caller's namespace). GitHub tokens are alphanumeric
-# plus `_` (ghp_…, ghs_…, github_pat_…), all inside this set; the extra `. ~ + / =` are tolerated.
+# Prefixed (a sourced library shares its caller's namespace). The allowlist is the RFC 6750
+# b64token alphabet [A-Za-z0-9._~+/=-] — the canonical credential class (scripts/lib/bearer-curl.sh,
+# ADR-280), not a vendor's issued format: GitHub's `ghs_` installation tokens now run ~390-520
+# chars over that alphabet, and ghp_… / github_pat_… sit inside it as well.
 _git_data_rung2_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
 
 # _git_data_rung2_fetch <path-suffix>
@@ -1430,20 +1432,21 @@ _git_data_rung2_hash_at_sha() {
   # -- ""` is fatal. `<sha>:<dir>` roots the archive at the directory; `<sha>:` covers the root.
   if [[ -z "$_rel_dir" || "$_rel_dir" == "." ]]; then _treeish="${_sha}:"; else _treeish="${_sha}:${_rel_dir}"; fi
   local _tmp
-  # lint-trap-ownership: ok — the library must not install an EXIT trap over its caller's
-  # (ADR-129 rule (c)), and the closest precedent (scripts/lib/git-data-boot-signal-poll.sh)
-  # records that an explicit variable-rooted `rm -rf` was CONSIDERED AND REJECTED: it is an
-  # operand the P1b relative-operand guard cannot prove safe, so it trades a bounded leak for
-  # an unprovable destructive operation. The residual is one directory per gate call.
+  # Owning trap at the allocation site (ADR-129): the extracted tree is consumed
+  # entirely inside this function, so a RETURN trap reaps it on every return path —
+  # including each RUN_HASH_UNCOMPUTABLE early return below — and under the sole
+  # caller's `$( )` (measured: a RETURN trap set in-function fires in the
+  # substitution subshell). The handler SELF-DISARMS first (`trap - RETURN`): a
+  # RETURN trap is not scoped to the function that set it, so a live copy would
+  # re-fire on every later function return in this shell, re-running
+  # `rm -rf "$_tmp"` under a possibly-reassigned name. The `/*/rung2-archive.*`
+  # case is the provably-absolute operand the P1b guard requires before any
+  # `rm -rf`, anchored to the basename this line just allocated so a later
+  # reassignment of `_tmp` cannot redirect the delete; a non-matching result
+  # skips the delete (bounded leak, never an unprovable rm).
   _tmp="$(mktemp -d -t rung2-archive.XXXXXXXX)" || {
     printf 'RUN_HASH_UNCOMPUTABLE|could not create a scratch directory to extract the archived tree. Nothing was measured — check free space and TMPDIR, then re-run.\n'; return 1; }
-  # Declare the owner the tmp reaper can check (#7004): pid= is the session
-  # harness owner when soleur_scratch_session_begin ran, else this process —
-  # the dir deliberately outlives the call (the bounded-leak trade documented
-  # above), so the marker is what lets Reaper 3 reclaim it once the owner dies.
-  printf 'pid=%s\nschema=1\nns=%s\n' "${SOLEUR_SCRATCH_OWNER_PID:-$$}" \
-    "$(readlink /proc/self/ns/pid 2>/dev/null || printf 'pid:[unknown]')" \
-    > "$_tmp/.soleur-owned" 2>/dev/null || true
+  trap 'trap - RETURN; case "${_tmp:-}" in /*/rung2-archive.*) rm -rf "$_tmp" ;; esac' RETURN
   # `core.attributesfile=/dev/null` DISABLES THE GLOBAL/SYSTEM ATTRIBUTES FILE, AND NOTHING
   # MORE — the earlier comment here claimed it stopped a future `export-ignore`/`export-subst`
   # entry from making archived bytes differ from the worktree bytes, and that is false.

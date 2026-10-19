@@ -39,6 +39,10 @@ import {
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 import { mintFounderJwt } from "@/lib/supabase/tenant";
+import {
+  tearDownTenantUser,
+  tearDownTenantUsers,
+} from "@/test/helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -184,29 +188,14 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       userA_grantId = grantRows![0].id as string;
     });
 
+    // The helper's anonymise-first sequence covers this suite's
+    // anonymise_action_sends + anonymise_scope_grants RPCs, runs even if
+    // individual tests failed, and is fail-loud per #10096 — a teardown
+    // failure reds the suite instead of leaking the synthetic user.
+    // 60_000: ~24 sequential round-trips × 2 users under withGoTrueRetry.
     afterAll(async () => {
-      // anonymise + delete users. Anonymise runs even if individual tests
-      // failed — keeps the test DB cleanish.
-      for (const u of [userA, userB]) {
-        if (!u.id) continue;
-        assertSynthetic(u.email);
-        try {
-          await service.rpc("anonymise_action_sends", { p_user_id: u.id });
-        } catch {
-          /* tolerate teardown failures */
-        }
-        try {
-          await service.rpc("anonymise_scope_grants", { p_user_id: u.id });
-        } catch {
-          /* tolerate teardown failures */
-        }
-        try {
-          await service.auth.admin.deleteUser(u.id);
-        } catch {
-          /* tolerate teardown failures */
-        }
-      }
-    });
+      await tearDownTenantUsers(service, [userA, userB]);
+    }, 60_000);
 
     test("(a) INSERT happy → 201", async () => {
       const msg = await seedDraftMessage(service, userA.id, ACTION_CLASS);
@@ -384,16 +373,24 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         .single();
 
       const msg = await seedDraftMessage(service, u.id, ACTION_CLASS);
-      await service.from("action_sends").insert({
-        user_id: u.id,
-        message_id: msg.id,
-        action_class: ACTION_CLASS,
-        tier_at_send: "draft_one_click",
-        template_hash: sha256("template-h"),
-        per_send_body_sha256: sha256("body-h"),
-        recipient_id_hash: sha256("recipient-h"),
-        grant_id: g!.id,
-      });
+      // mig 162: capture the row id — the anonymise RPC now NULLs
+      // message_id, so post-anonymise probes must key on `id`, not the
+      // de-linked FK.
+      const { data: sendRow, error: sendInsErr } = await service
+        .from("action_sends")
+        .insert({
+          user_id: u.id,
+          message_id: msg.id,
+          action_class: ACTION_CLASS,
+          tier_at_send: "draft_one_click",
+          template_hash: sha256("template-h"),
+          per_send_body_sha256: sha256("body-h"),
+          recipient_id_hash: sha256("recipient-h"),
+          grant_id: g!.id,
+        })
+        .select("id")
+        .single();
+      expect(sendInsErr).toBeNull();
 
       // Run the anonymise RPC.
       const { data: rowsAffected, error: anonErr } = await service.rpc(
@@ -404,14 +401,15 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect(typeof rowsAffected).toBe("number");
       expect(rowsAffected as unknown as number).toBeGreaterThan(0);
 
-      // Post-condition: user_id zeroed.
+      // Post-condition: user_id zeroed, message_id de-linked (mig 162).
       const { data: afterRows } = await service
         .from("action_sends")
-        .select("user_id, recipient_id_hash")
-        .eq("message_id", msg.id);
+        .select("user_id, recipient_id_hash, message_id")
+        .eq("id", sendRow!.id);
       expect(afterRows?.length).toBe(1);
       expect(afterRows![0].user_id, "user_id zeroed").toBeNull();
       expect(afterRows![0].recipient_id_hash, "recipient_id_hash overwritten").toBe("__anonymised__");
+      expect(afterRows![0].message_id, "message_id de-linked by mig 162 hardening").toBeNull();
 
       // (h.2) Idempotent re-run: the WHERE user_id = p_user_id clause matches
       // nothing on a second pass, so 0 additional rows are anonymised. Guards
@@ -436,21 +434,16 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       const { error: rearmErr } = await service
         .from("action_sends")
         .update({ recipient_id_hash: sha256("post-anonymise-rewrite") })
-        .eq("message_id", msg.id);
+        .eq("id", sendRow!.id);
       expect(rearmErr, "WORM re-armed after anonymise").not.toBeNull();
       expect(rearmErr!.code).toBe("P0001");
       expect(rearmErr!.message).toMatch(/append-only|WORM/i);
 
-      // Best-effort cleanup of the throwaway user — independent of the
-      // assertion under test. Cascade-ordering owned by
-      // account-delete-scope-grants-cascade.test.ts.
-      try {
-        await service.rpc("anonymise_scope_grants", { p_user_id: u.id });
-      } catch { /* tolerate teardown failure */ }
-      try {
-        await service.auth.admin.deleteUser(u.id);
-      } catch { /* tolerate teardown failure */ }
-    });
+      // Cleanup of the throwaway user — independent of the assertion under
+      // test. Cascade-ordering owned by
+      // account-delete-scope-grants-cascade.test.ts. Fail-loud per #10096.
+      await tearDownTenantUser(service, u);
+    }, 30_000);
 
     test("(i) cross-tenant SELECT → 0 rows", async () => {
       // userA has rows; userB queries via JWT → RLS owner-select must

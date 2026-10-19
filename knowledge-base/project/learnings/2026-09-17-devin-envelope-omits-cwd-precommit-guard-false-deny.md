@@ -45,6 +45,6 @@ Under Devin, a hook can never see the exec tool's `workdir` parameter — it is 
 ## Cross-references
 
 - Defect filing: #8254
-- Envelope measurement: `knowledge-base/project/specs/feat-settings-matcher-devin-audit/envelope-capture.md`
+- Envelope measurement: `knowledge-base/project/specs/archive/20261013-051752-feat-settings-matcher-devin-audit/envelope-capture.md`
 - Capability matrix `.cwd` row: `plugins/soleur/devin/INSTRUCTIONS.md` §Hooks and completion
 - Guard sources: `.claude/hooks/guardrails.sh` (block-commit-on-main), `plugins/soleur/scripts/precommit-guard.sh`

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # learning-retrieval-bench.sh — one-shot retrieval diagnostic for knowledge-base/project/learnings/
 #
-# Plan:       knowledge-base/project/plans/2026-05-19-feat-learnings-retrieval-bench-plan.md
-# Spec:       knowledge-base/project/specs/feat-learnings-retrieval-bench/spec.md
-# Brainstorm: knowledge-base/project/brainstorms/2026-05-19-learnings-retrieval-bench-brainstorm.md
+# Plan:       knowledge-base/project/plans/archive/20261013-014038-2026-05-19-feat-learnings-retrieval-bench-plan.md
+# Spec:       knowledge-base/project/specs/archive/20261013-014038-feat-learnings-retrieval-bench/spec.md
+# Brainstorm: knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-19-learnings-retrieval-bench-brainstorm.md
 # Precedent:  scripts/compound-promote.sh:124-200 (Anthropic curl + jq pattern, ADR-021)
 #
 # Schema versions for knowledge-base/project/learning-retrieval-metrics-<date>.json:
@@ -106,9 +106,9 @@ print_help() {
   cat <<'HELP'
 learning-retrieval-bench.sh — one-shot retrieval diagnostic for knowledge-base/project/learnings/
 
-Plan:       knowledge-base/project/plans/2026-05-19-feat-learnings-retrieval-bench-plan.md
-Spec:       knowledge-base/project/specs/feat-learnings-retrieval-bench/spec.md
-Brainstorm: knowledge-base/project/brainstorms/2026-05-19-learnings-retrieval-bench-brainstorm.md
+Plan:       knowledge-base/project/plans/archive/20261013-014038-2026-05-19-feat-learnings-retrieval-bench-plan.md
+Spec:       knowledge-base/project/specs/archive/20261013-014038-feat-learnings-retrieval-bench/spec.md
+Brainstorm: knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-19-learnings-retrieval-bench-brainstorm.md
 Precedent:  scripts/compound-promote.sh:124-200 (Anthropic curl + jq pattern, ADR-021)
 
 Usage:
@@ -608,7 +608,7 @@ rank_paths_min_rank() {
 # legitimate developer vocabulary. Mirrors plugins/soleur/skills/kb-search/SKILL.md
 # §Phase 2.5 guard; the kb-search-lockstep.test.sh asserts byte-equality of
 # the regex literal across both files.
-SENSITIVE_QUERY_REGEX='((=|:)[[:space:]]*[a-zA-Z0-9+/]{16,}|sk-(ant-)?[a-zA-Z0-9_-]{20,}|sk_live_[a-zA-Z0-9]{20,}|pk_live_[a-zA-Z0-9]{20,}|rk_live_[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{36}|gho_[a-zA-Z0-9]{36}|ghs_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{40,}|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|xox[abprs]-[a-zA-Z0-9-]{10,}|eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_.+/=-]{15,}|dsn=)'
+SENSITIVE_QUERY_REGEX='((=|:)[[:space:]]*[a-zA-Z0-9+/]{16,}|sk-(ant-)?[a-zA-Z0-9_-]{20,}|sk_live_[a-zA-Z0-9]{20,}|pk_live_[a-zA-Z0-9]{20,}|rk_live_[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9._~+/=-]{36}|gho_[a-zA-Z0-9._~+/=-]{36}|ghs_[a-zA-Z0-9._~+/=-]{36}|ghu_[a-zA-Z0-9._~+/=-]{36}|ghr_[a-zA-Z0-9._~+/=-]{36}|github_pat_[a-zA-Z0-9._~+/=-]{40,}|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|xox[abprs]-[a-zA-Z0-9-]{10,}|eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_.+/=-]{15,}|dsn=)'
 
 # query_is_sensitive: returns 0 (match) when the query carries a credential-
 # shaped literal, 1 otherwise. Case-insensitive.

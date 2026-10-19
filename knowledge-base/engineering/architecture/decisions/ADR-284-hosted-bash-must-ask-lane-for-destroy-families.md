@@ -4,7 +4,7 @@ status: adopting
 date: 2026-10-10
 supersedes: none
 issue: 9776
-related: [9601, 9776, 9603, 9388, 9825]
+related: [9601, 9776, 9603, 9388, 9825, 10054, 10111]
 related_adrs: [ADR-022, ADR-027, ADR-093, ADR-113, ADR-264, ADR-277]
 tags: [security, hosted, permission-callback, autonomous-mode, destructive-commands, review-gate]
 brand_survival_threshold: single-user incident
@@ -14,8 +14,11 @@ brand_survival_threshold: single-user incident
 
 ## Status
 
-**Adopting — 2026-10-10 (#9776).** The record flips to `accepted` when the post-merge verification below has passed on dev and the
-24 h and 7 d soak numbers are recorded in the ADR-277 addendum (CPO3-R1 stays open until then). The ordinal is provisional: it was
+**Adopting — 2026-10-10 (#9776); still adopting on 2026-10-12 (#10054): arrival of the lane's lines in the production sinks is NOT
+OBSERVED, a member approval has never been observed, and the 24 h and 7 d soak numbers are not recorded. Revisit at the first
+multi-member workspace or the first external founder (follow-up #10111).** The record flips to `accepted` through the `## Flip
+checklist` below, in a later separate PR once the soak windows (re-timed from the fix deploy) close on 2026-10-13T08:40Z and
+2026-10-19T08:40Z, and the numbers are recorded in the ADR-277 addendum (CPO3-R1 stays open until then). The ordinal is provisional: it was
 re-derived over `refs/remotes/origin/*` on 2026-10-10 and 282 (sole-copy LUKS volume protection) and 283 (git-data liveness
 heartbeat) were already claimed on sibling branches, so this record took 284. `soleur:ship` re-derives it again.
 
@@ -109,7 +112,7 @@ the existing-workspace opt-out hold and the batched-approval cache. A match RETU
 | Conversation type | Lane applies | How it is asserted |
 |---|---|---|
 | cc-routed Concierge (`cc-dispatcher.ts`) | Yes | `permission-callback-destroy-ask.test.ts`; the factory-wiring test in `cc-dispatcher-real-factory.test.ts` |
-| Legacy domain-leader runner (`agent-runner.ts`) | Every non-safe Bash command already reaches the generic gate (no `bashAutonomous`, no batch cache, no resolver); a destroy form gets the destroy card with the resolver unresolved | `permission-callback-destroy-ask-error.test.ts` pins the call site |
+| Legacy domain-leader runner (`agent-runner.ts`) | By design every non-safe Bash command reaches the generic gate (no `bashAutonomous`, no batch cache, no resolver); a destroy form gets the destroy card with the resolver unresolved. In production this took effect only with #10054: before it the SDK never called `canUseTool` for sandboxed Bash, so domain leaders ran Bash unprompted | `permission-callback-destroy-ask-error.test.ts` pins the call site |
 | Support persona | Denied (with escalation) before the lane; no gate emitted | the lane suite's support row |
 | Scheduled and Inngest agents | Outside `canUseTool`; the plugin hook is active there (ADR-277, "Server-side scheduled agents") | not asserted here |
 
@@ -117,8 +120,107 @@ the existing-workspace opt-out hold and the batched-approval cache. A match RETU
 
 The factory-wiring test proves the real `createCanUseTool` sits in the same SDK options object as the sandbox that carries
 `autoAllowBashIfSandboxed`, that `permissions.allow` stays empty and that a destroy command reaches the review gate in an acked
-autonomous workspace. **It does not prove that the real SDK still calls `canUseTool` under `autoAllowBashIfSandboxed`:** the SDK is
-mocked, and that rests on the #3252 behaviour. The runtime proof is the post-deploy dev probe below (CLO C9).
+autonomous workspace. **It does not prove that the real SDK calls `canUseTool` for sandboxed Bash:** the SDK is
+mocked. The runtime proof is the real-SDK probe `apps/web-platform/scripts/dev-probe-destroy-ask.ts` (CLO C9).
+
+**C9 result (2026-10-11, #10054).** Against the hosted path's real stack (SDK 0.3.284 and the Claude Code 2.1.284 binary bundled
+in `@anthropic-ai/claude-agent-sdk-linux-x64`; the hosted path sets no `pathToClaudeCodeExecutable`, so the 2.1.293 copy the crons spawn
+is not what it runs) and the production option builder, the probe **failed** at #9977: `canUseTool` was never called for sandboxed
+Bash, so this lane, the safe-Bash allowlist, the autonomous toggle gate and the batch cache were all inert. When that began is
+**not measured**: #3252 (closed 2026-05-05) shows Command Center Bash prompting on SDK 0.2.85 with both causes below already in the
+code, so the start lies between 2026-05-05 and the SDK 0.3.284 bump (#9236, merged 2026-09-29); the 0.3.x line arrived with #5849 on
+2026-07-01, an untested candidate. Two independent causes, either enough: `autoAllowBashIfSandboxed: true`, and the PreToolUse sandbox
+hook returning an explicit `allow` for every Bash command (a hook allow resolves the permission before `canUseTool`). The forward fix
+sets `autoAllowBashIfSandboxed: false` (the sandbox stays on) and makes the hook return no decision for Bash (`{ continue: true }`;
+the sensitive-env deny stays). After the fix the same probe passes: the force-push to the default branch, `terraform destroy` and a
+`bash -lc` variant each reach the Approve/Reject card and, answered Reject, leave the remote's default branch unchanged (the probe's
+local `main` is made to diverge from the remote's, so a force-push that ran would move it); a plain push to a feature branch is not asked.
+
+Consequences of Bash reaching `createCanUseTool` again, all of them the callback working as written:
+
+- A non-autonomous workspace shows an Approve card for every command outside the safe allowlist; an unanswered card expires after
+  5 minutes into a deny whose text tells the agent the command did not run and not to retry or respell it.
+- `BLOCKED_BASH_PATTERNS` (curl, wget, nc, `sh -c`, sudo, eval) is live again for hosted Bash, including autonomous workspaces, so a
+  plugin skill that relied on `curl` is denied.
+- "Approve all `<prefix>`" now grants one simple command only: it is not offered for, and not honoured against, a compound command
+  or a destroy-capable head (shells and interpreters, `rm`, infra CLIs, `git push` and the other state-rewriting git verbs), because
+  a grant would turn any spelling the lane does not recognise into a silent run.
+- Stacked cards (parallel Bash calls) keep the conversation `waiting_for_user` until the last one resolves.
+- The hook still returns `allow` for the file tools, so their `canUseTool` branch is not reached; that is unchanged here and is a
+  residual (the file-path deny lives in the hook and `disallowedTools`).
+- A headless session with no connected client waits out the 5-minute gate and then denies; there is no strand.
+
+Re-run the probe (`apps/web-platform/scripts/dev-probe-destroy-ask.ts`) after any SDK, CLI or sandbox-option bump: it is the only
+check that exercises hook-then-`canUseTool` precedence against the real binary; nothing in CI does.
+
+> **Superseded 2026-10-12 (#10054):** the C9 paragraph above says when the gate went inert "is **not measured**", that the start lies
+> between 2026-05-05 and the SDK 0.3.284 bump, and that the 0.3.x line arriving with #5849 was "an untested candidate". Measured since:
+> the SDK version is not the discriminator (the pre-fix tree is inert on every pinned SDK, 0.2.80 to 0.3.284), each cause alone
+> suffices, #3252 is not evidence that the gate worked, and the start remains a window from code history, not a date. See the
+> post-mortem's "Window" section for the table and commands.
+
+**C9 result, measured limbs (2026-10-12, #10054).** The limbs the dev-hosted observation was meant to cover were exercised against the
+deployed SDK, bundled CLI and option builder, on the DEV HOST (host bwrap, `NODE_ENV=test`), not in the hosted container. Probe source
+is the file as committed in `8c1d17e8e7` (this PR, after the review round; the run used the working tree whose probe file is byte-identical to
+that commit), run 2026-10-12T11:04:46Z. Deployed build: `/health` reported `build_sha` `edb74743f0` (version 0.338.32); the lane and sandbox
+files are identical to the fix commit `dfb9e2dba5` (`git log dfb9e2dba5..origin/main` over the SDK pin, lockfile, sandbox config, sandbox
+hook, option builder, permission callback and lane files is empty). An earlier identical run (10:06:01Z, build `0dc19ef389`) preceded the
+review-round hardening of the probe's selection and PASS rules. Output, verbatim (no paths):
+
+```text
+PROVENANCE sdk=0.3.284 cli=2.1.284 node=v26.3.0 bun=1.4.3
+PROBE force-push-default canUseToolCalls=[Bash] verdict=ok bashAttempted=true gateCalls=1 approveRejectOptions=true cardOk=true neutral=true sentryAskEvents=1 sentryOk=true
+PROBE terraform-destroy canUseToolCalls=[Bash] verdict=ok bashAttempted=true gateCalls=1 approveRejectOptions=true cardOk=true neutral=true sentryAskEvents=1 sentryOk=true
+PROBE bash-lc-variant canUseToolCalls=[Bash] verdict=ok bashAttempted=true gateCalls=1 approveRejectOptions=true cardOk=true neutral=true sentryAskEvents=1 sentryOk=true
+PROBE control-plain-push canUseToolCalls=[Bash] verdict=ok bashAttempted=true gateCalls=0 approveRejectOptions=false cardOk=true neutral=true sentryAskEvents=0 sentryOk=true
+PROBE member-force-push-default canUseToolCalls=[Bash] verdict=ok bashAttempted=true gateCalls=1 approveRejectOptions=true cardOk=true neutral=true sentryAskEvents=1 sentryOk=true
+PROBE grant-live-control canUseToolCalls=[Bash] verdict=ok bashAttempted=true gateCalls=0 approveRejectOptions=false cardOk=true neutral=true sentryAskEvents=0 sentryOk=true cacheAllowsBeforeRun=true
+PROBE grant-force-push-default canUseToolCalls=[Bash] verdict=ok bashAttempted=true gateCalls=1 approveRejectOptions=true cardOk=true neutral=true sentryAskEvents=1 sentryOk=true cacheAllowsBeforeRun=false
+PROBE gh-repo-delete canUseToolCalls=[Bash] verdict=ok bashAttempted=true gateCalls=1 approveRejectOptions=true cardOk=true neutral=true sentryAskEvents=1 sentryOk=true
+PROBE remote-refs-unchanged=true
+RESULT: PASS (sdk=0.3.284 cli=2.1.284, cases-run=8)
+```
+
+(Each `PROBE` line also carries `sdk=0.3.284 cli=2.1.284`; omitted here for width.) What it shows: the force-push, `terraform destroy`, the
+`bash -lc` variant and `gh repo delete` each reach the Approve/Reject card for an owner, and the force-push does for a non-owner member
+(the card does not name an owner); a stale batch grant (`git push`) is present and the force-push is still gated, while a live grant for
+a simple command (`npm run probe-noop`) is honoured in the same wiring, so the grant limb is not vacuous (since #10072 the cache refuses
+destroy-capable heads by construction, which is why `cacheAllowsBeforeRun=false` for the force-push); the control push reaches
+`canUseTool` and is not asked; and the throwaway remote's default branch is unchanged. Emission is asserted in-process for each ask: one
+Sentry event with `feature=cc-permissions`, `op=hosted-destroy-ask`, a `hosted-destroy-ask:` rule id, a family, `extra.isOwner` equal to the
+variant, and an envelope with neither the command text nor a branch name; `PROBE_DECODE_ONLY=1` (real pino lines from the production
+logger, wrapped in the stored shape, through the soak probe's own decode) printed `verdict=ok` and `RESULT: DECODE-COMPAT-OK` (the wrapper
+is hand-built: it proves the decoder reads the real pino object, not that Vector produces this wrapper).
+
+Probe self-checks (exact outcomes): the pre-fix tree on SDK 0.3.284 FAILS with `canUseToolCalls=[]` and `bashAttempted=true` (the harness
+can go red, and it reproduces #10054); a grant that is not live aborts `CANT-RUN:grant-not-live` (exit 3, no SDK call); a dispatch that
+selects nothing prints no `PROBE` line and exits 3; a model that does not use Bash exits 3; a member case wired with `isOwner:true` FAILS
+(exit 1); a second case with a widened card fails while the first stays ok (exit 1); a different grantable command passes with no card;
+`PROBE_ONLY` with a typo or with `sandbox-engaged-control` and no `PROBE_PREFLIGHT` exits 3 (`unknown-or-unavailable-case`, `no-case-selected`)
+before any model call; a case table that disagrees with the name list is `case-table-drift` and a default matrix of fewer than 8 cases is
+`case-count-below-floor`, both exit 3 and never PASS. These offline guards were exercised by hand in the review round and have no committed
+suite row (see #10111).
+
+**Telemetry readout (self-pulled 2026-10-12, counts only), window T0 2026-10-12T08:40Z to about 09:47Z (about 1 h 7 min).** Better Stack
+source 2457081: `logs_retention` 90 days; the shipper's `app_container_warn_filter` keeps pino level 40 and above (the lane's lines are
+WARN) and every non-JSON line; positive controls: 103 app-container WARN-and-above rows in the last hour (hot arm AT THE TIME of the read; that hour has since moved to the archive arm, and a re-read gives about 102), 1536 in a window
+3 to 1 days old (archive arm; the archive's newest row lagged about 80 minutes, so the hot arm carries the recent window); lane lines from
+the app container in the window: 0 (one non-app row quoting the marker, from the Inngest host's journald, is excluded by field
+isolation). Sentry (org events, prd): `hosted-destroy-ask`, `destroy-classifier-error`, `destroy-classifier-near-miss` and
+`safe-bash-near-miss` all 0 in the window; controls: 69 events of any kind since T0 (including the fix build and the three builds
+deployed after it), 9,651 events aged 8 to 30 days, and 0 `hosted-destroy-ask` over 30 days. **Reading: 0 natural asks in the first
+hour; arrival of the lane's pino line and Sentry event in the production sinks is NOT OBSERVED.** The channel is live, so the zero is a
+measured zero, but at founder-only volume it says nothing about the lane itself.
+
+**Proposed equivalence, pending operator ratification (CLO advisory, internal, not external counsel).** The "post-merge verification on dev
+hosted" below cannot be run (there is no dev account and no deployed dev hosted instance). It is proposed to be replaced by two limbs:
+(a) card behaviour, the real-SDK probe above on the deployed SDK, bundled CLI and option builder, run on the DEV HOST (host bwrap), not in
+the hosted container, so the container sandbox (the variable behind #10054) is not exercised and a PASS is not a sandbox witness;
+(b) production arrival, which is NOT OBSERVED and stays open until one production arrival is recorded, pulled by API, or the OPERATOR
+records an explicit acceptance of in-process emission plus channel liveness as the substitute (Flip checklist criteria 4 and 6); an agent
+never records that acceptance. Limb (a) may be closed by ratified decision, which does not make it a dev-hosted
+observation. The claim "the ask gate is verified in production" must not appear anywhere: the strongest true sentence is "the real-SDK
+probe passes against the deployed SDK, CLI and option builder on the dev host; production telemetry arrival is not yet observed."
 
 ### Residuals (not recognised; named so the copy and the control page never imply otherwise)
 
@@ -162,6 +264,15 @@ of the repository through the installation token and is not itself audited.
   events are Sentry-only. The probe's decode of the stored shape was measured on live app-container rows (a pino WARN line is stored
   as `raw` = a JSON string whose `.message` is the pino object) but could not be measured on a `destroy-ask` row, which does not
   exist before the lane ships.
+
+  > **Updated 2026-10-12 (#10054):** the soak probe now (1) reads APP-CONTAINER rows only (a bare marker grep also returned 36 rows in
+  > 24h, 57 in 7d, from the Inngest host's journald copies of webhook payloads that quote the marker, which tripped SHAPE_DRIFT every
+  > sweep); an unclassifiable (undecodable) marker-mentioning row still counts toward SHAPE_DRIFT; (2) on zero asks requires a liveness
+  > read over the same window and both Better Stack arms (one UNION count: any app-container WARN row, one in the last 3 hours, and for
+  > 7d rows on at least 6 calendar days), else exit 3; (3) exits 5 on a trailing 7d read with zero asks on a live channel, pointing at
+  > this ADR's Flip checklist. The sentence above that the probe "does not check the lane's liveness" is REFINED, not
+  > superseded (it checks the CHANNEL's liveness, still not the lane's), and "does not exist before the lane ships" is superseded: the lane
+  > has been live since 2026-10-12T08:38Z with no stored row yet (0 natural asks in the first hour; see the telemetry readout).
 - **Widening trigger for a versioned acknowledgement (CPO4-R8).** Any change that widens what hosted autonomous mode may do without
   asking (relaxing the lane, adding a flag that bypasses it, enabling the hook's weaker modes) first requires the versioned
   acknowledgement. Smallest design, recorded so it is not re-litigated: one nullable `autonomous_disclosure_ack_version smallint` on
@@ -178,6 +289,57 @@ of the repository through the installation token and is not itself audited.
   `decision:"destroy-ask"` line and a Sentry `hosted-destroy-ask` event with the rule id and no command text; a non-owner member
   session gets the same card; a pre-granted `git push` batch grant is still gated; a plain `git push origin feat-x` shows no card.
   Data is pulled by API, never by dashboard.
+
+  > **Superseded 2026-10-12 (#10054):** there is no dev account and no deployed dev hosted instance, so this verification cannot be run as
+  > written. See "C9 result, measured limbs" and the proposed equivalence above (pending operator ratification).
+
+## Flip checklist
+
+`status` stays `adopting` until every criterion below holds, then a separate small PR flips it. Criteria (CPO and CLO, 2026-10-12):
+
+1. The real-SDK probe prints `RESULT: PASS` on the build then deployed (SDK, bundled CLI, `build_sha` and UTC time recorded verbatim, paths
+   redacted), covering owner, non-owner member, a stale batch grant with a live-grant control and the destroy families, with the control push
+   reaching `canUseTool` and not asked.
+2. Emission is proven in-process (pino line fields; Sentry tags and extra, no command text) and the real line decodes in the soak probe.
+3. The 24 h window shows no revert-threshold trip and the 7 d window no tune-threshold trip, recorded as counts from explicit
+   [T0, T0+24h] and [T0, T0+7d] reads (the sweeper's trailing windows start at 18:00Z and are alarms, not the measurement), with any count
+   under 5 written "under 5", including "0 natural asks; the soak did not exercise the lane" when that is the measurement. Natural
+   false-positive and abandon rates are recorded as "unmeasured, n=0" and CPO3-R3 stays open.
+4. The channel is proven live over the same windows (allowlist, retention, archive arm, positive control rows). If zero natural asks
+   persist, arrival of the pino line and the Sentry event in the production sinks is recorded as NOT OBSERVED, and the OPERATOR decides
+   whether in-process emission plus channel liveness is accepted as the substitute or a production write (a synthetic ask) is authorised.
+   Without a recorded arrival or that recorded acceptance, limb (b) of the proposed equivalence stays open and the audit stays NOT
+   DISCHARGED: `accepted` is then not reachable.
+5. No SDK, bundled-CLI, sandbox-option, hook or option-builder change landed between the fix deploy and the flip (check `git log
+   dfb9e2dba5..origin/main` over `apps/web-platform/package*.json`, `server/agent-runner-sandbox-config.ts`, `server/sandbox-hook.ts`,
+   `server/agent-runner-query-options.ts`, `server/permission-callback.ts` and `server/destroy-ask-*.ts`); otherwise re-run the probe on
+   that build and re-time both directives from that deploy. sdk-bump-sandbox-gate.sh does NOT enforce this (it demands a commit
+   attestation on a lockfile SDK change and cannot see the other files), so this check is a human step.
+6. The OPERATOR ratifies limb (a) of the proposed equivalence in the flip PR (and, per criterion 4, records the acceptance of the
+   substitute for limb (b) unless a production arrival has been recorded), and the counsel-review audit disposition is updated by the
+   CLO agent in the same PR to record both decisions.
+
+**An agent running this checklist stops at criteria 4 and 6.** They are the operator's decisions: leave the flip PR in DRAFT, state which
+criterion is open, and ask; never treat "in-process emission plus channel liveness" as accepted on the operator's behalf.
+
+Commands (agent-runnable): the deployed build is `curl -s https://app.soleur.ai/health | jq -r .build_sha`; the probe is
+`NODE_ENV=test doppler run -p soleur -c ci -- bun run apps/web-platform/scripts/dev-probe-destroy-ask.ts` (require `RESULT: PASS ... cases-run=8`;
+it prints `PROVENANCE` and `sdk=`/`cli=` on every line, and `cli=` is the SDK package's declared version; ADR-284 records it with the deployed
+`build_sha` and the UTC time); the explicit windows are `doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since
+2026-10-12T08:40:00Z --until 2026-10-19T08:40:00Z --grep destroy-ask --limit 5000` decoded and isolated to `CONTAINER_NAME ==
+"soleur-web-platform"` exactly as the soak script does (the 24h window ends 2026-10-13T08:40:00Z), plus the Sentry events by `op:` over the same
+bounds with a release control.
+
+The flip PR's own work: record the final counts in the ADR-277 addendum; set `status: accepted` in the frontmatter and in `## Status`;
+sweep `knowledge-base/INDEX.md`, the ADR-277 addendum, the counsel-review audit, the post-mortem and `knowledge-base/legal/` for
+future-tense sentences about the lane; retire the soak probe family together as its header says (`hosted-destroy-ask-window-9776.sh`,
+`-24h.sh`, `-7d.sh`, the `.test.sh`, the `run_suite` row in `scripts/test-all.sh`, the matching rows in `scripts/suite-shard-legs.tsv` and
+`scripts/suite-durations.tsv`, both tracker directives, and the `PROBE_DECODE_ONLY` mode of `dev-probe-destroy-ask.ts`, which execs the soak
+script: remove the mode or repoint it); then `git grep -n 'hosted-destroy-ask-window-9776'` must return nothing outside
+`knowledge-base/` history; close #9776 and #9976 by hand (`gh issue close 9776 9976`) and REMOVE their `follow-through` label
+(`gh issue edit <n> --remove-label follow-through`) so the closed-set sweep stops re-running the probe. Retiring the soak probe leaves
+nothing that detects a lane re-inerted by a later change: the follow-up that does is #10111 (a scheduled real-SDK probe on SDK bump and a
+synthetic canary), and until it exists criterion 5 above is the only guard.
 
 ## Cost Impacts
 

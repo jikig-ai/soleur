@@ -185,7 +185,7 @@ export const TOOL_TIER_MAP: Record<string, ToolTier> = {
  * construction, regardless of any future demand signal.
  *
  * See brainstorm Key Decision #3:
- *   knowledge-base/project/brainstorms/2026-05-13-mcp-tier-classify-cc-soleur-go-brainstorm.md
+ *   knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-13-mcp-tier-classify-cc-soleur-go-brainstorm.md
  *
  * NOTE: legacy `TOOL_TIER_MAP` entries for Plausible tools do not exist;
  * `getToolTier()` returns "gated" by default for them on the legacy path,

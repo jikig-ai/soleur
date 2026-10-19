@@ -284,12 +284,20 @@ PY
 
 # Run one arm inside the fixture repo. The runner reads `git diff` from cwd, so cwd IS
 # the test input here — not incidental environment.
+#
+# SIB_SCRUB (#10209): the sandbox re-arms TC_SIBLING_RUN_COUNT_PID=$$
+# unconditionally so refusal arms stay exercisable — which also means an
+# INHERITED TC_SIBLING_RUN_COUNT (a parent gate run exports it) would reach a
+# refusal this sandbox never measured. Scrub the pair at every env boundary;
+# the refusal arms below re-set them explicitly, and env applies -u before
+# assignments.
+SIB_SCRUB="-u TC_SIBLING_RUN_COUNT -u TC_SIBLING_RUN_COUNT_PID"
 run_arm() {
   local name="$1" mutation="${2:-none}" extra_env="${3:-}" timing="${4:-}"
   local sb="$TMP/runner-${name}-${mutation}.sh"
   ARM_OUT=""; ARM_RC=-1
   build_sandbox "$sb" "$mutation" >/dev/null || { fail "sandbox build failed: $name/$mutation"; return 1; }
-  ARM_OUT=$(cd "$FX" && env SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= CI= GITHUB_EVENT_NAME= \
+  ARM_OUT=$(cd "$FX" && env $SIB_SCRUB SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= CI= GITHUB_EVENT_NAME= \
             SOLEUR_TEST_FORCE_ALL= $extra_env \
             TEST_TIMING_LOG="$timing" TEST_GROUP=affected timeout 120 bash "$sb" 2>&1)
   ARM_RC=$?
@@ -344,7 +352,7 @@ for lbl in beta-declined epsilon-declined; do
 done
 
 # --- B2: enumerate stays truthful --------------------------------------------------
-ENUM_OUT=$(cd "$FX" && env SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= CI= \
+ENUM_OUT=$(cd "$FX" && env $SIB_SCRUB SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= CI= \
            TEST_GROUP=affected timeout 120 bash "$TMP/runner-b1-none.sh" --enumerate-commands 2>&1)
 if grep -qE $'^SUITE_COMMAND_DECLINED\tbeta-declined\t' <<<"$ENUM_OUT" \
    && grep -qE $'^SUITE_COMMAND\talpha-stem\tbash\tscripts/alpha.test.sh' <<<"$ENUM_OUT"; then
@@ -376,7 +384,7 @@ NONGIT_DIR="$TMP/not-a-repo"; mkdir -p "$NONGIT_DIR"
 ln -s "$FX/scripts" "$NONGIT_DIR/scripts"
 ln -s "$FX/plugins" "$NONGIT_DIR/plugins"
 ln -s "$FX/delta"   "$NONGIT_DIR/delta"
-NONGIT_OUT=$(cd "$NONGIT_DIR" && env SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= CI= \
+NONGIT_OUT=$(cd "$NONGIT_DIR" && env $SIB_SCRUB SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= CI= \
              TEST_GROUP=affected timeout 120 bash "$TMP/runner-b1-none.sh" 2>&1)
 if ! grep -q '(affected)' <<<"$NONGIT_OUT" && grep -qE '^=== 9/9 suites passed ===' <<<"$NONGIT_OUT"; then
   pass "B3 — undeterminable diff fails open (all suites run)"
@@ -385,7 +393,7 @@ else
 fi
 
 # --- B4: refusal exemptions ----------------------------------------------------------
-SUBG_OUT=$(cd "$FX" && env SOLEUR_SUBAGENT=1 SOLEUR_ALLOW_FULL_GATE= CI= \
+SUBG_OUT=$(cd "$FX" && env $SIB_SCRUB SOLEUR_SUBAGENT=1 SOLEUR_ALLOW_FULL_GATE= CI= \
            TEST_GROUP=affected timeout 120 bash "$TMP/runner-b1-none.sh" 2>&1)
 SUBG_RC=$?
 if [[ "$SUBG_RC" == "0" ]] && grep -qE '^=== 7/9 suites passed ===' <<<"$SUBG_OUT"; then
@@ -394,7 +402,7 @@ else
   fail "B4 — subagent refused or mis-ran affected mode (rc=$SUBG_RC)"; dump "$SUBG_OUT"
 fi
 
-SUBG_ALL_OUT=$(cd "$FX" && env SOLEUR_SUBAGENT=1 SOLEUR_ALLOW_FULL_GATE= CI= \
+SUBG_ALL_OUT=$(cd "$FX" && env $SIB_SCRUB SOLEUR_SUBAGENT=1 SOLEUR_ALLOW_FULL_GATE= CI= \
                TEST_GROUP=all timeout 120 bash "$TMP/runner-b1-none.sh" 2>&1)
 SUBG_ALL_RC=$?
 if [[ "$SUBG_ALL_RC" == "4" ]]; then
@@ -403,8 +411,10 @@ else
   fail "B4 — subagent full-gate refusal broken (rc=$SUBG_ALL_RC)"; dump "$SUBG_ALL_OUT"
 fi
 
-SIB_OUT=$(cd "$FX" && env SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= CI= \
-          TC_SIBLING_RUN_COUNT=2 TC_SIBLING_RUN_COUNT_PID=$$ \
+# The count alone drives the refusal — the splice re-arms the PID stamp
+# inside the runner unconditionally, so passing a PID here is dead env.
+SIB_OUT=$(cd "$FX" && env $SIB_SCRUB SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= CI= \
+          TC_SIBLING_RUN_COUNT=2 \
           TEST_GROUP=affected timeout 120 bash "$TMP/runner-b1-none.sh" 2>&1)
 SIB_RC=$?
 if [[ "$SIB_RC" == "0" ]] && grep -qE '^=== 7/9' <<<"$SIB_OUT"; then
@@ -413,8 +423,8 @@ else
   fail "B4 — sibling refusal still fires under affected (rc=$SIB_RC)"; dump "$SIB_OUT"
 fi
 
-SIB_ALL_OUT=$(cd "$FX" && env SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= CI= \
-              TC_SIBLING_RUN_COUNT=2 TC_SIBLING_RUN_COUNT_PID=$$ \
+SIB_ALL_OUT=$(cd "$FX" && env $SIB_SCRUB SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= CI= \
+              TC_SIBLING_RUN_COUNT=2 \
               TEST_GROUP=all timeout 120 bash "$TMP/runner-b1-none.sh" 2>&1)
 SIB_ALL_RC=$?
 if [[ "$SIB_ALL_RC" == "4" ]]; then
@@ -424,7 +434,7 @@ else
 fi
 
 # --- B5: group validation --------------------------------------------------------------
-BADG_OUT=$(cd "$FX" && TEST_GROUP=bogus bash "$TMP/runner-b1-none.sh" 2>&1); BADG_RC=$?
+BADG_OUT=$(cd "$FX" && env $SIB_SCRUB TEST_GROUP=bogus bash "$TMP/runner-b1-none.sh" 2>&1); BADG_RC=$?
 if [[ "$BADG_RC" == "2" ]] && grep -q 'affected' <<<"$BADG_OUT"; then
   pass "B5 — an unknown TEST_GROUP exits 2 and names affected in usage"
 else
@@ -453,7 +463,7 @@ else
   fail "B6 — no_exempt mutant did not decline the curated label"; dump "$ARM_OUT"
 fi
 run_arm m-fo no_failopen || true
-MFO_NONGIT=$(cd "$NONGIT_DIR" && env SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= CI= \
+MFO_NONGIT=$(cd "$NONGIT_DIR" && env $SIB_SCRUB SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= CI= \
              TEST_GROUP=affected timeout 120 bash "$TMP/runner-m-fo-no_failopen.sh" 2>&1)
 if grep -q '(affected)' <<<"$MFO_NONGIT"; then
   pass "B6 — removing the diff fail-open declines suites on an undeterminable diff (detected)"

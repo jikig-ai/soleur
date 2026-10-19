@@ -523,9 +523,9 @@ resource "doppler_secret" "workspaces_luks_heartbeat_url" {
 # the grace. (DP-10's shape, scaled from daily to hourly.)
 #
 # paused = true forever-until-armed, same DP-10/#6210 discipline: Better Stack starts expecting
-# pings at creation, so an unfed unpaused heartbeat pages falsely. The FEEDER is deliberately not
-# in this resource's PR — candidate shapes and the beat budget are tracked on the issue the
-# heartbeat-manifest.ts row (feeder.kind = "none" + tracking_issue + arming_pending) names. The
+# pings at creation, so an unfed unpaused heartbeat pages falsely. The FEEDER landed separately
+# (the verifier workflow the heartbeat-manifest.ts row evidences, #9703) and the heartbeat was armed
+# on 2026-10-12 (read-back and run ids: runbook section "Arming the probe heartbeat (#9703)"). The
 # beat must certify a FRESH host_role=dedicated inngest-server-probe row landed in the
 # warehouse (covers sink + allowlist failures a host-side push cannot see; #6780).
 resource "betteruptime_heartbeat" "inngest_server_probe" {
@@ -542,7 +542,7 @@ resource "betteruptime_heartbeat" "inngest_server_probe" {
   paused    = true
 
   lifecycle {
-    # Arming happens out-of-band after an observed beat (the tracked follow-up); a later
+    # Armed out-of-band on 2026-10-12 after an observed beat (#9703); a later
     # apply MUST NOT revert the unpause (mirrors every sibling heartbeat).
     ignore_changes = [paused]
   }

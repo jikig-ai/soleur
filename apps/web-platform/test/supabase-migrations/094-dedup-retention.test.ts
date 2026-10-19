@@ -17,7 +17,7 @@ import path from "node:path";
 // File-parse test, not a live-DB test — pins the SQL contract. Mirrors
 // 038-039-disk-io-fix.test.ts.
 //
-// Plan: knowledge-base/project/plans/2026-06-02-fix-supabase-disk-io-recurrence-and-sentry-monitor-plan.md Phase 2.
+// Plan: knowledge-base/project/plans/archive/20261013-032858-2026-06-02-fix-supabase-disk-io-recurrence-and-sentry-monitor-plan.md Phase 2.
 
 const MIG_DIR = path.join(__dirname, "../../supabase/migrations");
 const stripComments = (sql: string) => sql.replace(/--[^\n]*/g, "");

@@ -51,6 +51,12 @@ export const PUBLIC_PATHS = [
   // timingSafeEqual gate runs. Same class as schedule-reminder / trigger-cron.
   // NARROW exact path — do NOT broaden to /api/internal.
   "/api/internal/cohort",
+  // /api/internal/egress-audit-ingest: bearer-gated POST (EGRESS_AUDIT_INGEST_TOKEN, current
+  // plus previous for rotation) from Vector on the same host (#9545, ADR-288). Carries no
+  // session cookie — without PUBLIC_PATHS membership Supabase middleware 307s Vector to
+  // /login before the route's own loopback-Host, forwarding-header and constant-time bearer
+  // gates run. NARROW exact path — do NOT broaden to /api/internal.
+  "/api/internal/egress-audit-ingest",
   "/ws",
   "/manifest.webmanifest",
   // /robots.txt: Next.js robots.ts metadata route (Disallow: /). Public-by-design,

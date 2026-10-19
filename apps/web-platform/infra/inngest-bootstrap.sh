@@ -3,7 +3,9 @@
 #
 # Idempotent contract:
 #   - Downloads pinned inngest-cli, SHA256-verifies, installs to /usr/local/bin.
-#   - Writes systemd units for inngest-server.service + inngest-heartbeat.{service,timer}.
+#   - Writes systemd units for inngest-server.service, inngest-heartbeat.{service,timer},
+#     inngest-heartbeat-failure-log.service, inngest-server-probe.{service,timer}, and
+#     vector.service; stages the flip + LUKS cutover units from the image's /tmp payload.
 #   - On second invocation with the SAME version, short-circuits via
 #     `systemctl is-active` + version match.
 #   - On version bump: a DRAIN_SLEEP_SEC settle delay, then binary replace, then
@@ -191,8 +193,9 @@ cat > "$HEARTBEAT_SCRIPT" <<'HEARTBEATSCRIPTEOF'
 LOG_TAG="inngest-heartbeat"
 #
 # --- #6617b: dark-arm rate limiter ---------------------------------------------------------
-# Reachable ONLY from the dark arm rendered below (the live co-located host's render deletes
-# that arm entirely, so on that host this function is defined and never called). It exists as a
+# Called from the dark arm rendered below, from the listener gate, and from the credential-refusal
+# branch at the end of this body, each on its OWN stamp (the dark arm's render is deleted entirely on
+# the live co-located host, but the gate and the refusal branch still call it there). It exists as a
 # function rather than inline in the sed replacement because the replacement is a single
 # `s|...|...|` expression with \n escapes -- readable logic does not survive in there.
 #
@@ -226,6 +229,11 @@ dark_arm_emit_due() {
   _last="$(cat "$_stamp" 2>/dev/null || true)"
   # A truncated/garbage stamp reads as "never emitted", not as "emitted just now".
   case "$_last" in '' | *[!0-9]*) _last=0 ;; esac
+  # A stamp longer than 10 digits is not an epoch, and a zero-padded one is OCTAL in arithmetic (dash aborts the shell
+  # with "Illegal number" on 08/09): strip the padding so a corrupted stamp reads as a number, never as a crash. This
+  # function now also serves the credential-refusal branch, whose contract is exit 0 (a crash here would exit 2).
+  [ "${#_last}" -le 10 ] || _last=0
+  _z=${_last%%[!0]*}; _last=${_last#"$_z"}; : "${_last:=0}"
   # A stamp in the FUTURE (boot-before-NTP wrote now+skew, then timesyncd stepped back) reads
   # as "never emitted" too. Without this the subtraction goes negative and suppresses the
   # marker for the entire skew -- the one path where this function failed CLOSED.
@@ -239,8 +247,9 @@ dark_arm_emit_due() {
 # just below): the skip branch on the dedicated host, EMPTY on the co-located web host.
 #
 # An absent INNGEST_HEARTBEAT_URL is NOT a curl no-op. `curl -fsS --max-time 10 ""` exits 2
-# ("option : blank argument where content is expected" -- measured, #6536); unset behaves
-# identically. That is why this oneshot failed every 60s for 3 days (3,724 fires) on the dark
+# ("option : blank argument where content is expected" -- measured, #6536); unset behaved
+# identically (since #9757 the shape guard at the end of this body refuses it first, reason=empty,
+# still exit 2, so the web render stays loud). That is why this oneshot failed every 60s for 3 days (3,724 fires) on the dark
 # host, and why inngest-host.tf's old "curl no-ops" claim was false. Same class as #4116.
 #
 # The dark host legitimately has NO url: inngest-host.tf:137-151 keeps one unambiguous pusher
@@ -253,7 +262,7 @@ dark_arm_emit_due() {
 # Everything above decides WHETHER THIS HOST SHOULD BEAT AT ALL. This decides whether it has
 # anything to beat ABOUT, and it is the whole of #7228.
 #
-# The beat below is `curl "$INNGEST_HEARTBEAT_URL"` fired by a 60s systemd timer: it proves a
+# The beat below (originally `curl "$INNGEST_HEARTBEAT_URL"`, now the stdin-config form) is fired by a 60s systemd timer: it proves a
 # TIMER FIRED, and asserts nothing whatsoever about :8288. That is why one correctly-armed,
 # correctly-scoped, unpaused monitor stayed GREEN for twelve days while the dedicated host
 # served nothing and every app dispatch failed with ECONNREFUSED. The tempting fix -- give the
@@ -304,8 +313,58 @@ fi
 # { } makes curl print the FULL URL in its glob-parse error (`curl: (3) bad range in URL
 # position N:` followed by the URL) — measured, curl 8.18 — which FR4's SyslogIdentifier
 # now ships straight to Better Stack. -g disables globbing (we never glob) and the echo
-# with it. Belt to cat-deploy-state.sh's braces: neither alone is sufficient.
-exec /usr/bin/curl -gfsS --max-time 10 "$INNGEST_HEARTBEAT_URL" >/dev/null
+# with it. Belt to cat-deploy-state.sh's braces: neither alone is sufficient. (Since #9757 the shape
+# guard below refuses any value carrying [ ] { } before curl runs, so -g is defence in depth here.)
+#
+# #9757 / ADR-280: the URL's PATH is the credential, so it must not be a curl ARGUMENT either (argv is
+# readable by every local user in /proc/<pid>/cmdline for the life of the child). It reaches curl on the
+# stdin config (`--config -`) through a PIPE: this body is POSIX sh (dash on Ubuntu), so no process
+# substitution and no [[ ]], and the repo's Rule E lint refuses a heredoc feeding the config. `printf` is a
+# builtin, so the URL is never an argument of any process. There is no `exec` before curl (inside a
+# pipeline it would only replace the pipeline's forked subshell, not this shell) and no pipefail: this line
+# is the script's LAST command, so the script's status is the pipeline's, which is curl's, exactly as
+# `exec curl` gave.
+# `--disable` (first, so no ~/.curlrc is read) and `--noproxy '*'` confine the transport (lint Rule D); the
+# host has no checkout, so this is the inline form of the shared library.
+#
+# The value is judged BEFORE any request, with no trimming: `https://` and then a non-empty rest of
+# [A-Za-z0-9._~:/?&=%+-] only. The scheme is its own test (the class alone admits `http://x`) and the
+# class is NEGATED (a positive pattern constrains only the first character, because `*` matches quotes
+# and newlines). A quote, backslash or newline would otherwise add directives to the config grammar.
+# LC_ALL=C pins bytewise matching: dash matches bytewise anyway, a busybox or bash `sh` would use locale
+# ranges.
+#
+# A refusal makes zero requests and logs ONE value-free marker through the hourly limiter on its OWN
+# stamp. EXIT STATUS (CTO-ruled, 2026-10-15): a present-but-malformed value (reason token_shape or
+# control_char) exits 0 ON PURPOSE. The missed Better Stack beat IS the alarm (the monitors are armed and
+# page within minutes, exactly as for the three web-1 probe scripts), and a non-zero exit would fire this
+# unit's unlimited OnFailure ERR logger on every 60 s tick (the #6536 storm shape: at least ~2.9k rows/day,
+# the ERR row on Source 4 plus the systemd failure row on Source 1, against Source 4 headroom as measured in
+# #7228). Only `reason=empty` keeps exit 2 and so keeps that storm exposure BY CHOICE (pre-existing since
+# #6536, a provisioning fault): the web render has no dark arm and an absent URL on the live pusher must stay
+# loud, as curl's own blank-URL rejection (rc 2) was.
+# The marker is assigned to a variable first so no logger line names the URL variable
+# (inngest.test.sh bans exactly that shape).
+LC_ALL=C
+_hb_ok=
+case $INNGEST_HEARTBEAT_URL in
+  https://*)
+    case ${INNGEST_HEARTBEAT_URL#https://} in
+      ''|*[!A-Za-z0-9._~:/?\&=%+-]*) ;;
+      *) _hb_ok=1 ;;
+    esac ;;
+esac
+if [ -z "$_hb_ok" ]; then
+  case $INNGEST_HEARTBEAT_URL in '') _hb_reason=empty ;; *[[:cntrl:]]*) _hb_reason=control_char ;; *) _hb_reason=token_shape ;; esac
+  _hb_marker="SOLEUR_CREDENTIAL_REFUSED script=inngest-heartbeat reason=$_hb_reason var=INNGEST_HEARTBEAT_URL"
+  if INNGEST_HEARTBEAT_DARK_STAMP="${INNGEST_HEARTBEAT_REFUSAL_STAMP:-/run/inngest-heartbeat/refusal.stamp}" dark_arm_emit_due; then
+    logger -t "$LOG_TAG" "$_hb_marker"
+  fi
+  # The exit is OUTSIDE the rate limit (the limit governs the LINE, never the DECISION).
+  case $_hb_reason in empty) exit 2 ;; esac
+  exit 0
+fi
+printf 'url = "%s"\n' "$INNGEST_HEARTBEAT_URL" | /usr/bin/curl --disable --noproxy '*' -gfsS --max-time 10 --config - >/dev/null
 HEARTBEATSCRIPTEOF
 chmod 0755 "$HEARTBEAT_SCRIPT"
 
@@ -341,7 +400,7 @@ if [[ "$DOPPLER_PROJECT" == "soleur-inngest" ]]; then
   log "inngest-heartbeat: dark arm RENDERED (DOPPLER_PROJECT=$DOPPLER_PROJECT) — an absent URL skips the ping and logs why, hourly"
 else
   sed -i '/^@@DARK_ARM@@$/d' "$HEARTBEAT_SCRIPT"
-  log "inngest-heartbeat: dark arm OMITTED (DOPPLER_PROJECT=$DOPPLER_PROJECT) — live pusher; an absent URL stays loud (curl rc=2)"
+  log "inngest-heartbeat: dark arm OMITTED (DOPPLER_PROJECT=$DOPPLER_PROJECT) — live pusher; an absent URL stays loud (guard refusal reason=empty, exit 2)"
 fi
 # @@DARK_ARM@@ render end
 
@@ -362,9 +421,21 @@ Description=Inngest server heartbeat ping to Better Stack
 After=network-online.target
 # #6556 Part 2: on failure, fire a push-less oneshot that emits an ERR-priority
 # `inngest-heartbeat` line so a unit failure is READABLE off-box (no SSH). Before this, a
-# heartbeat failure surfaced only as the un-shippable SYSLOG_IDENTIFIER=systemd "Failed to
-# start" journal row (the #6551 signature); now it also ships on the inngest-heartbeat channel.
+# heartbeat failure surfaced only as the SYSLOG_IDENTIFIER=systemd "Failed to
+# start" journal row (the #6551 signature — since explained and positively controlled by
+# #9963: Source 1's PRIORITY<=4 OR-arm carries it); now it also ships on the
+# inngest-heartbeat channel.
 OnFailure=inngest-heartbeat-failure-log.service
+# SKIP-VS-FAIL (#9962, the #9939 pattern): /etc/default/inngest-server is a late-runcmd write and
+# the 60s timer fires from boot — an absent file must SKIP the start (one "skipped, unmet
+# condition check" notice), never FAIL it into the every-60s storm + OnFailure ERR rows. The
+# EnvironmentFile= line stays unprefixed: once a start IS attempted, an absent file still fails
+# the unit — the fail-closed contract is retained. A skipped heartbeat is a MISSING heartbeat:
+# on this host the designed-dark signal is the web-1-fed inngest_consumer beat (the
+# missing-ping monitor pings nothing only while a beat never landed — the dark arm means that
+# alarm's arm state is an operator-runbook step, so the consumer beat is the channel that
+# pages either way).
+ConditionPathExists=/etc/default/inngest-server
 
 [Service]
 Type=oneshot
@@ -399,7 +470,8 @@ EnvironmentFile=/etc/default/inngest-server
 # Do NOT remove without moving DOPPLER_CONFIG_DIR off the shared /tmp.
 PrivateTmp=true
 # #6617b: the dark arm's hourly rate limiter keeps its last-emit stamp at
-# /run/inngest-heartbeat/dark.stamp. This unit runs User=deploy and /run is root-owned 0755,
+# /run/inngest-heartbeat/dark.stamp (and the listener gate and the credential refusal keep gate.stamp
+# and refusal.stamp in the same directory). This unit runs User=deploy and /run is root-owned 0755,
 # so deploy cannot create anything there directly -- without RuntimeDirectory= the stamp write
 # fails on every fire, the limiter never engages, and the quota fix is a silent no-op.
 # PrivateTmp=true above does NOT cover /run, so this is the right mechanism (and /tmp is
@@ -449,9 +521,12 @@ cat > "$HEARTBEAT_FAILURE_LOG_UNIT" <<'FAILLOGEOF'
 Description=Log an ERR-priority marker when inngest-heartbeat.service fails (#6556)
 # QUERYABLE, NOT ALARMING. This oneshot emits a single ERR line on the inngest-heartbeat
 # Vector -> Better Stack channel (vector.toml Source 4) so a heartbeat-unit failure is readable
-# off-box with NO SSH — it turns the failure systemd otherwise emits as the un-shippable
-# SYSLOG_IDENTIFIER=systemd "Failed to start" row (the #6551 signature) into a shippable
-# inngest-heartbeat line.
+# off-box with NO SSH — it turns the failure systemd emits as a SYSLOG_IDENTIFIER=systemd
+# "Failed to start" row (the #6551 signature) into a row that also ships under the unit's
+# own tag. That systemd row is no longer un-shippable: it rides Source 1's
+# include_matches.PRIORITY arm under OR-over-fields matching — the #9939 storm proved it,
+# #9963 pins it — but this tagged re-emit stays belt-and-braces so the failure is
+# queryable under inngest-heartbeat where the rest of the channel's evidence lives.
 #
 # It deliberately does NOT push to any monitor. One-unambiguous-pusher-per-monitor
 # (inngest-host.tf:137-171): the LIVE co-located pusher's alarm IS the Better Stack heartbeat
@@ -464,7 +539,7 @@ Description=Log an ERR-priority marker when inngest-heartbeat.service fails (#65
 Type=oneshot
 # Reuse the existing Source 4 tag (vector.toml) — no new allowlist entry, no fresh quota decision.
 SyslogIdentifier=inngest-heartbeat
-# Bare `logger`, NO `doppler run` wrapper: this unit emits only a fixed marker and needs no
+# Unwrapped `logger` (absolute /usr/bin form), NO `doppler run` wrapper: this unit emits only a fixed marker and needs no
 # secrets. A `doppler run --project …` wrapper would hardcode a project (WRONG on the
 # soleur-inngest host) and re-introduce the exact project-resolution surface #6555 removes.
 ExecStart=/usr/bin/logger -t inngest-heartbeat -p err "inngest-heartbeat.service entered failed state (OnFailure) — the 60s ping failed; see the preceding inngest-heartbeat lines for the underlying ping error (#6556)"
@@ -482,6 +557,11 @@ FAILLOGEOF
 cat > "$HEARTBEAT_TIMER" <<'TIMEREOF'
 [Unit]
 Description=Run Inngest heartbeat every 60s
+# SKIP-VS-FAIL (#9962): a condition on the TIMER is evaluated at activation — an abort-host
+# never arms the 60s tick against a missing /etc/default/inngest-server at all. A timer skipped
+# this way stays unarmed for the boot's life (systemd does not re-evaluate); re-entry is the
+# bootstrap `enable --now` on the next provision run or a reboot with the file present.
+ConditionPathExists=/etc/default/inngest-server
 
 [Timer]
 OnBootSec=30s
@@ -1193,6 +1273,20 @@ esac
 # --- emit: unconditional, one event, all fields. NO `if` may precede this line. ---
 logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys redis_expires=$redis_expires redis_key_patterns=$redis_key_patterns data_mount_src=$data_mount_src data_bytes=$data_bytes data_mount_base=$data_mount_base data_mount_devid=$data_mount_devid registry_fns=$registry_fns"
 
+# --- #9963: second unconditional emit, SAME invariant (no `if` may precede it) ---
+# Positive control for the SYSLOG_IDENTIFIER=systemd journald delivery path. Vector's
+# contains_match is OR-over-record-fields, so a `-t systemd -p err` row (PRIORITY 3) is
+# admitted by inngest_journald's include_matches.PRIORITY {3,4} arm regardless of unit —
+# the SAME arm real PID-1 `Failed to start` rows take. The spoofed tag is load-bearing:
+# consumers discriminate the path by SYSLOG_IDENTIFIER=systemd, so the control must prove
+# THAT field shape transits. Absolute /usr/bin/logger per the FAILLOG ExecStart
+# precedent (~:487); the sibling emit two lines up can stay bare `logger` — it emits
+# under $LOG_TAG (script-set), while this line's tag is the contract itself, so its
+# binary is pinned absolute to keep the emission independent of PATH resolution
+# (journald stamps host itself; no host= field). NOT in Source 4 by design
+# (vector.toml).
+/usr/bin/logger -t systemd -p err "SOLEUR_SYSTEMD_JOURNALD_CONTROL ts=$(date -u +%s) — rides the inngest_journald PRIORITY≤4 admission arm (#9963)"
+
 # --- second channel, AFTER the unconditional emit above (ADR-117 unaffected) ---
 # vector_active is the ONE field whose only off-box path is Vector itself: this marker reaches
 # Better Stack via journald -> Vector Source 4. So `vector_active=inactive` is unobservable by
@@ -1547,6 +1641,17 @@ cat > "$UNIT_FILE" <<'UNITEOF'
 Description=Inngest self-hosted server (:8288/:8289, firewall+nftables scoped)
 After=network-online.target
 Wants=network-online.target
+# SKIP-VS-FAIL (#9962, the #9939 pattern): /etc/default/inngest-server is a late-runcmd write —
+# on an aborted first boot a missing file must SKIP the start, never FAIL it into the
+# RestartSec=5 crash-loop storm. The EnvironmentFile= line stays unprefixed: once a start IS
+# attempted, an absent file still fails the unit — the fail-closed contract is retained.
+# A skipped server is a DARK server — the designed off-box detectors are the web-1-fed
+# betteruptime_heartbeat.inngest_consumer beat (armed; dies in ~4 min when the dedicated host
+# stops serving) and the inngest-server-probe unit (its EnvironmentFile is `-`-tolerant, so the
+# probe itself still runs). NOT the heartbeat — it is conditioned on this same file and skips
+# too (review finding: the earlier claim credited the heartbeat, which co-dies in exactly the
+# scenario the condition covers).
+ConditionPathExists=/etc/default/inngest-server
 
 [Service]
 Type=simple
@@ -1880,6 +1985,11 @@ else
 Description=Vector observability shipper (journald + host_metrics -> Better Stack Logs)
 After=network-online.target inngest-server.service
 Wants=network-online.target
+# SKIP-VS-FAIL (#9962, the #9939 pattern): /etc/default/inngest-server is a late-runcmd write —
+# a missing file must SKIP the shipper, never FAIL it into the RestartSec=10 crash-loop storm.
+# The EnvironmentFile= line stays unprefixed: once a start IS attempted, an absent file still
+# fails the unit — the fail-closed contract is retained.
+ConditionPathExists=/etc/default/inngest-server
 
 [Service]
 Type=simple

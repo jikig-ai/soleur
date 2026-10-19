@@ -59,7 +59,6 @@ locals {
 
   rehearsal_user_data_plain = replace(templatefile("${path.module}/../cloud-init-inngest.yml", {
     # --- identity/scratch args (the ONLY deliberate divergences from prod's map) ---
-    inngest_volume_id      = hcloud_volume.rehearsal_inngest.id
     inngest_luks_volume_id = hcloud_volume.rehearsal_inngest_luks.id
     doppler_token          = doppler_service_token.rehearsal.key
     inngest_doppler_config = local.rehearsal_doppler_config
@@ -71,7 +70,6 @@ locals {
     web_host_private_ips = "127.0.0.1"
     inngest_private_ip   = local.rehearsal_private_ip
     # --- MUST MATCH PROD (the checksums above are drift-pinned by the sentinel suite) ---
-    inngest_expect_luks    = "false"
     inngest_cli_arch       = local.rehearsal_arch
     inngest_cli_sha256     = local.rehearsal_arch == "arm64" ? local.inngest_cli_sha256_arm64 : local.inngest_cli_sha256
     vector_sha256          = local.rehearsal_arch == "arm64" ? local.vector_sha256_arm64 : local.vector_sha256
@@ -82,6 +80,14 @@ locals {
     zot_pull_token         = var.zot_pull_token
     betterstack_logs_token = var.betterstack_logs_token
     sentry_dsn             = ""
+    # #6780 (ADR-135, 2026-10-13 amendment): the config-refresh consumer's baked
+    # payloads — the SAME templatefile vars production passes (D12; text-embed via
+    # `${indent(6, ...)}` in the template, not b64 — both b64 forms measured over the
+    # 32 KiB cap), reading the shared repo files one level up. A render missing these
+    # fails templatefile outright, so they must stay in parity with inngest-host.tf's
+    # map.
+    infra_config_install_text = file("${path.module}/../infra-config-install.sh")
+    cosign_trusted_root_text  = file("${path.module}/../cosign-trusted-root.json")
   }), local.inngest_rationale_strip, "")
   rehearsal_user_data_b64gz = base64gzip(local.rehearsal_user_data_plain)
 }
@@ -217,10 +223,15 @@ resource "doppler_service_token" "rehearsal" {
 }
 
 # --- The two volumes ---------------------------------------------------------
-# Mirrors prod's pair: a plaintext AOF volume and the LUKS target volume, both RAW (no
-# `format` — the blkid signature IS the LUKS discriminator; declaring ext4 would make the
-# resolver's empty arm unreachable, see inngest-redis-luks.tf's header note). Size matches
-# prod's inngest_redis_volume_size default so the rehearsal exercises the same geometry.
+# `rehearsal_inngest_luks` is the volume the rendered template resolves and (with no pointer, on a
+# `rehearsal_*` config) luksFormats; it is RAW (no `format` — the blkid signature IS the LUKS
+# discriminator; declaring ext4 would make the resolver's empty arm unreachable, see
+# inngest-redis-luks.tf's header note).
+# `rehearsal_inngest` is UNUSED since #9786: it used to mirror prod's retired plaintext AOF volume, and
+# the template no longer takes its id (the `inngest_volume_id` key is gone), so it is attached and
+# never read. It is kept for now only because removing it changes the rehearsal's attach topology, its
+# plan-shape fixtures and two ledger rows; removal is tracked in #10112.
+# Size matches prod's inngest_redis_volume_size default so the rehearsal exercises the same geometry.
 resource "hcloud_volume" "rehearsal_inngest" {
   name     = "${local.rehearsal_host_name}-store"
   size     = 10

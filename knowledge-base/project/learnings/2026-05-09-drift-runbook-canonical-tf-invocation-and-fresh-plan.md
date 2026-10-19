@@ -37,7 +37,7 @@ The root module input variable "cf_api_token_bot_management" is not set, ...
 
 …and the same for `cf_zone_id`, `cf_account_id`, `webhook_deploy_secret`, `doppler_token`, `cf_notification_email`, `resend_api_key`, plus 6 more.
 
-**Cause:** the invocation lacked two pieces that the precedent runbook (`knowledge-base/project/plans/2026-04-30-fix-terraform-drift-deploy-pipeline-fix-3061-plan.md` Phase 1) prescribes:
+**Cause:** the invocation lacked two pieces that the precedent runbook (`knowledge-base/project/plans/archive/20261013-003106-2026-04-30-fix-terraform-drift-deploy-pipeline-fix-3061-plan.md` Phase 1) prescribes:
 
 1. `--name-transformer tf-var` — Doppler's renamer that converts `CF_API_TOKEN` → `TF_VAR_cf_api_token` (the form `terraform` expects). Without it, secrets are loaded under their raw uppercase names and Terraform sees zero `TF_VAR_*` env vars. See the complementary learning `2026-03-21-doppler-tf-var-naming-alignment.md` for *why* the variable names match.
 2. Separate `export AWS_ACCESS_KEY_ID=...` / `AWS_SECRET_ACCESS_KEY=...` lines for the R2 backend creds. The `tf-var` transformer would otherwise rewrite them to `TF_VAR_aws_access_key_id` (which Terraform's S3 backend doesn't read). They must be exported as raw `AWS_*` *before* the `doppler run --name-transformer tf-var` wrapper fires.
@@ -113,7 +113,7 @@ The fix isn't to add more rules to AGENTS.md — both gaps are discoverable via 
 ## References
 
 - Plan executed: `knowledge-base/project/plans/2026-05-09-fix-terraform-drift-seo-page-redirects-3371-plan.md`
-- Precedent referenced (and incompletely copied): `knowledge-base/project/plans/2026-04-30-fix-terraform-drift-deploy-pipeline-fix-3061-plan.md`
+- Precedent referenced (and incompletely copied): `knowledge-base/project/plans/archive/20261013-003106-2026-04-30-fix-terraform-drift-deploy-pipeline-fix-3061-plan.md`
 - Complementary prior learning (the *why* behind tf-var): `knowledge-base/project/learnings/2026-03-21-doppler-tf-var-naming-alignment.md`
 - Issue closed: `#3371`
 - Follow-up filed: `#3485`

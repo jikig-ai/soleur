@@ -177,7 +177,7 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
 - The sweeper uses `gh` CLI for issue close/comment, not raw token interpolation.
 
 - **An operator-confirmed probe filters verdicts through `scripts/lib/trusted-verdict.sh`, never an
-  inline `authorAssociation` select.** `jikig-ai/soleur` is public with issues open, so an
+  inline `authorAssociation` (GraphQL) or `author_association` (REST) select.** `jikig-ai/soleur` is public with issues open, so an
   unfiltered `.comments[].body` accepts a verdict from any authenticated GitHub user (#7448). The
   filter that closed that hole introduced a quieter one: **`authorAssociation` is computed against
   the READING token's visibility**, so a member whose org membership is PRIVATE renders as
@@ -204,11 +204,64 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
   comments on nearly every tracker and answers 404, so collapsing the two makes every such thread
   permanently unresolvable — the same permanent red, reached from the other side.
 
-  `scripts/lint-followthrough-varq-ban.sh` rule 4 enforces the POSITIVE OBLIGATION, not a ban on
-  one wrong spelling: a probe under `scripts/followthroughs/` that reads issue comments AND
-  branches on a `RESULT:` verdict must route that decision through the lib. An inline
-  `authorAssociation` select is subsumed — it reads comments, branches on a verdict and does not
-  call `trusted_verdict_bodies`, so it fires without needing a rule of its own.
+  `scripts/lint-followthrough-varq-ban.sh` rule 4 enforces the POSITIVE OBLIGATION: a probe
+  under `scripts/followthroughs/` that reads issue comments AND branches on a `RESULT:` verdict or
+  an `S<n>-<WORD>` soak marker must route that decision through the lib. Which comment-read
+  spellings, marker spellings and files it covers, and what it does NOT, is one paragraph: the
+  COVERAGE paragraph in the rule-4 section of that script (this runbook does not restate it). Rule 5 (#9818) is the complementary SPELLING ban: no non-test probe may name
+  `author_association` or `authorAssociation` (either spelling, any case) on an executable line
+  (whole-line comments are stripped, a trailing `# why` mention fires, no per-line opt-out). Rule 5
+  bans the spelling; rule 4 owns the obligation. Rule 4 alone stayed green over the S2 and S3 soak
+  probes because it keyed on `RESULT:`, which a marker probe never writes: they filtered on
+  `author_association` and dropped the operator's activation marker (#9818). Incident and
+  measurement: `knowledge-base/project/learnings/2026-10-13-a-lint-anchored-on-the-verdict-word-stayed-green-over-the-marker-probes-that-had-the-same-defect.md`.
+
+  **Which view.** Need the comment's created time -> `trusted_verdict_comments <issue>`; otherwise
+  `trusted_verdict_bodies <issue>`. The bodies view returns the trusted bodies, stripped of fenced
+  blocks and HTML comments, of authors who have a marker line at all (a
+  `RESULT:` probe, or a marker probe that orders markers by the marker's own timestamp, like S2).
+  The comments view returns one compact JSON object `{t,b}` per trusted comment (`t` = `createdAt`,
+  `b` = the stripped body): a probe that orders by comment time (S3's CONFIRMED-before-
+  ACTIVATED) reads `.t` and projects `.b` with `jq -r '.b'`. Both are views of one core. The causes of
+  rc 2 are the ONE list in the header of `scripts/lib/trusted-verdict.sh` (the comments view has one
+  cause of its own there); this runbook does not restate it. Map rc 2 to the probe's CANNOT ESTABLISH
+  exit: a NEW probe exits 3 (the sweeper renders 3 as CANNOT ESTABLISH and 2 as NOT YET, so an `exit 2`
+  on a failed read tells the operator to wait). The three `RESULT:` probes that predate the rule
+  (`concierge-strand-754ee124-5733.sh`, `cpx22-invoice-reconcile-7431.sh`,
+  `inngest-zot-client-authz-6500.sh`) exit 2 on rc 2, which renders NOT YET and is still non-closing;
+  they are not migrated here. Check any projection too, and check the marker chains: an empty
+  projection after a jq failure erases every marker, and a bare `x="$(... | grep | sed | sort | tail)"`
+  drops the status of every stage (a failing sed/sort/tail or a grep error reads as "no marker", so a
+  dropped DEACTIVATED marker can turn a FAIL into a PASS). Take the whole `PIPESTATUS` array in one
+  assignment and treat grep rc 1 as the only non-zero answer: the stub template shows the shape and the
+  two soak probes carry it.
+
+  **Paging.** `gh issue view --json comments` returns ALL pages of comments: measured 214 returned
+  against 214 on the issue (`gh api` comment count) on #9777 at review time, and 220 against 220 on
+  2026-10-13 after the thread grew, gh 2.102.0. The fake `gh` in the suites cannot model pagination,
+  so no suite pins it; the rows named `latebatch` / `M-NOSLICE` pin only that the probe's and the
+  lib's own jq do not slice a long comment list.
+
+  **Semantics to state, not to rediscover.**
+  - Trust is resolved at READ time: a commenter demoted later stops counting retroactively (an old
+    `ACTIVATED` can become live again if its `DEACTIVATED` author is demoted), and a user promoted
+    later retroactively legitimizes their earlier markers.
+  - `createdAt` is CREATION time, not edit time (`gh` exposes no `updatedAt`), so S3's
+    CONFIRMED-before-ACTIVATED check guards operator mistakes, not tampering by a writer.
+  - A seated bot must never relay raw issue text at line start (a relayed `S2-ACTIVATED:` line
+    authored by a writer-level bot would count).
+  - WHO COUNTS changed once, in #9818, and the old and new sets are NOT nested. The trusted set is
+    now `admin`/`maintain`/`write` (a `write` author can therefore close a tracker even where a
+    tracker's issue text says "owner/member/collaborator"). GAINED: a private-org member who holds
+    one of those permissions (read as CONTRIBUTOR under the sweeper's token, dropped before). LOST:
+    an OWNER/MEMBER/COLLABORATOR association that carries only `read` or `triage` (a collaborator
+    invited with `read`, an org member whose only access is the org base permission), who counted
+    under the association. Also new: fenced blocks and HTML comments are stripped (a marker inside a
+    CommonMark-style fence or a `<!-- -->` comment counted before and is ignored now), and an author
+    is looked up only if some comment of theirs has a line starting `RESULT:` or `S<n>-<WORD>:`
+    (a commenter who posts no such line is never looked up; anyone CAN post one and become a candidate,
+    and a candidate whose permission read errors with a non-404 still makes the lib rc 2. The lib
+    header is the single statement of this and of the marker-family contract for lib-routed probes).
 
   The difference is load-bearing and was measured. While the rule banned the wrong MECHANISM, a
   live probe read `.comments[].body` with **no author filter at all** — strictly worse than what
@@ -246,9 +299,17 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
 - **A probe that reads a resource's ARMED/enabled/unpaused state has a hidden dependency on the per-member wiring that arms it — and that wiring does NOT fan out with `for_each`.** When a soak asserts a new host/tenant's Better Stack heartbeat is `up`, trace the ENABLE path (the apply arm-gate's `arm_one` calls, the `systemctl enable`, the `paused=false` flip) and confirm it was extended to the new member, exactly like the roster-coupled parity guards. A `for_each`-created monitor is born in its declared state (`paused=true` + `ignore_changes=[paused]`), so it reads `paused`, **never `ABSENT`** — a probe's "not-provisioned ⇒ ABSENT ⇒ TRANSIENT" contract silently does not hold for the born-but-not-yet-armed window, and the probe **false-FAILs a healthy target** (paused ≠ up → DARK) with the tracker never closing. Route `paused`/`pending` to TRANSIENT, distinct from ABSENT and a genuinely-down status. See `knowledge-base/project/learnings/2026-07-24-followthrough-soak-must-arm-every-new-member-monitor.md` (#6459).
 - **A probe that proves a ONE-TIME event through a `--since` window stops proving it once the window slides past the event, and on a CLOSED tracker the resulting exit 1 REOPENS it.** When the tracker closes, retire its directive in the same step, or key the verdict on a recurring terminal-state row instead of the transition row. **Why:** #8296 — `inngest-luks-cutover-6894.sh` read `--since 48h --grep cutover-complete`; the only such row was 2026-09-20 15:29Z, so every sweep from 2026-09-23 (its `earliest`) would have exited 1 and falsely reopened the operator-closed #8295.
 
-- **In a NOTIFY-ONLY probe, put the xtrace refusal first and the rc-remapping EXIT trap directly after it, with nothing in between.** `lint-shell-trace-credential-refusal.py` requires the refusal in the prologue, and the refusal can only exit 78, so no 0/1 path opens before the trap. Assert the ordering, exactly one `trap`, and no `exec`/`kill` in the probe's suite: `exec true` and `trap - EXIT` both bypass the remap. Also pin BOTH `.host` and `.host_name` on the rows: every host writes into one Logs source. **Why:** #8296 PR-2 review — the structural seat found all three open in a green 91-case suite (`inngest-luks-property-8296.sh`).
+- **In a NOTIFY-ONLY probe, put the xtrace refusal first and the rc-remapping EXIT trap directly after it, with nothing in between.** `lint-shell-trace-credential-refusal.py` requires the refusal in the prologue, and the refusal can only exit 78, so no 0/1 path opens before the trap. Assert the ordering, exactly one `trap`, and no `exec`/`kill` in the probe's suite: `exec true` and `trap - EXIT` both bypass the remap. Also pin BOTH `.host` and `.host_name` on the rows: every host writes into one Logs source. **Why:** #8296 PR-2 review — the structural seat found all three open in a green 91-case suite (the retired #8296 probe).
 
 - **A decoded warehouse line is not necessarily ONE row from ONE emitter — pin each signal to its emitter at offset 0 AND to its row shape, decode to exactly one line per row, and count server fields once (#7556).** The source is shared with webhook receipts that quote attacker-influenceable text; `jq -r` re-emits an embedded newline as a row break (one message can forge a whole sample floor), a client-controlled `User-Agent`/`path`/`username` inside a correctly-pinned row can quote the signal or carry a second `statusCode:`/`latency:`, and a read whose empty answer reads as "none" (a drop guard) must account for every row it fetched. Reference implementation: `scripts/followthroughs/zot-upload-ceiling-7556.sh` (`DECODE_PY`, `CONFIG_PY`, `CLASSIFIER_PY`) and its forgery rows in the `.test.sh`.
+
+- **A tracker closed on PASS drops its probe out of the sweep after `CLOSED_LOOKBACK_DAYS`
+  (14) days — a check meant to outlive its tracker is NOT a follow-through probe.** Enroll it as
+  a standing alert (the ADR-218 `logtail_exploration_alert` pattern) and say so in the probe's
+  header; a probe whose header claims post-close regression detection while its tracker is
+  closed is a defect class (#10321 — `zot-log-channel-7440.sh` claimed "enrolled as a REGRESSION
+  detector" for ~7 dormant weeks). When closing such a tracker, land the standing vehicle in the
+  same or a linked PR and correct the probe header's enrollment claim.
 
 ## What the sweeper does NOT cover
 

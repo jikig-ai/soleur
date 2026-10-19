@@ -451,7 +451,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     mockBuildAgentSandboxConfig.mockReturnValue({
       enabled: true,
       failIfUnavailable: true,
-      autoAllowBashIfSandboxed: true,
+      autoAllowBashIfSandboxed: false,
       allowUnsandboxedCommands: false,
       enableWeakerNestedSandbox: true,
       network: { allowedDomains: [], allowManagedDomainsOnly: true },
@@ -831,7 +831,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       // Issue A: third opts arg always present; ghToken undefined here
       // because the default mock resolves no installation (null). Slice B:
       // pluginPath (getPluginPath() = deployed root) is always threaded.
-      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur" },
+      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur", claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/) },
     );
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.env.ANTHROPIC_API_KEY).toBe("sk-test");
@@ -869,6 +869,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
         gitAskpassScriptPath: `${WORKSPACE_PATH}/.askpass-fixed-test.sh`,
         gitInstallationToken: "ghs_minted_xyz",
         pluginPath: "/app/shared/plugins/soleur",
+        claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/),
       },
     );
   });
@@ -953,6 +954,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
         gitAskpassScriptPath: undefined,
         gitInstallationToken: undefined,
         pluginPath: "/app/shared/plugins/soleur",
+        claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/),
       },
     );
   });
@@ -997,7 +999,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     expect(mockBuildAgentEnv).toHaveBeenCalledWith(
       { value: "sk-test", scheme: "api_key" },
       {},
-      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur" },
+      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur", claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/) },
     );
     expect(mockQuery).toHaveBeenCalledOnce();
   });
@@ -1017,7 +1019,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     expect(mockBuildAgentEnv).toHaveBeenCalledWith(
       { value: "sk-test", scheme: "api_key" },
       {},
-      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur" },
+      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur", claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/) },
     );
   });
 
@@ -1526,7 +1528,7 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
     expect(mockBuildAgentEnv).toHaveBeenCalledWith(
       { value: "sk-test", scheme: "api_key" },
       {},
-      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur" },
+      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur", claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/) },
     );
     // Egress closed (also pinned in T2 via the sandbox-config call).
     expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(
@@ -1559,7 +1561,7 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
     expect(mockBuildAgentEnv).toHaveBeenCalledWith(
       { value: "sk-test", scheme: "api_key" },
       { STRIPE_SECRET_KEY: "sk_live_other" },
-      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur" },
+      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur", claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/) },
     );
   });
 
@@ -1909,11 +1911,13 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
 // ---------------------------------------------------------------------------
 // #9776 / ADR-284 — hosted must-ask lane: factory wiring (AC-14, AC-23).
 //
-// This does NOT claim runtime proof that the real SDK still calls `canUseTool`
-// under `autoAllowBashIfSandboxed` (the SDK is mocked here, as everywhere in this
-// file; that rests on the #3252 behaviour and is proven by the post-deploy dev
-// probe, CLO C9). It pins the wiring: the REAL `createCanUseTool` is the callback
-// in the SAME options object as the sandbox that carries `autoAllowBashIfSandboxed`,
+// This does NOT claim runtime proof that the real SDK calls `canUseTool` for sandboxed
+// Bash (the SDK is mocked here, as everywhere in this file). That proof is the real-SDK
+// probe `scripts/dev-probe-destroy-ask.ts` (CLO C9): it FAILED at #9977 (#10054) because
+// `autoAllowBashIfSandboxed: true` and the sandbox hook's `allow` pre-empted the callback.
+// It pins the wiring: the REAL `createCanUseTool` is the callback
+// in the options object (the sandbox value itself is pinned by agent-runner-sandbox-config.test.ts against the REAL
+// builder; this file mocks the builder, so asserting it here would only read the mock back),
 // `permissions.allow` stays empty, and the lane's inputs come from the dispatch
 // scope, never from the empty-string `ctx.repoOwner` / `ctx.repoName`.
 // ---------------------------------------------------------------------------
@@ -1937,7 +1941,7 @@ describe("realSdkQueryFactory — hosted must-ask lane wiring (#9776)", () => {
     mockBuildAgentSandboxConfig.mockReturnValue({
       enabled: true,
       failIfUnavailable: true,
-      autoAllowBashIfSandboxed: true,
+      autoAllowBashIfSandboxed: false,
       allowUnsandboxedCommands: false,
       enableWeakerNestedSandbox: true,
       network: { allowedDomains: [], allowManagedDomainsOnly: true },
@@ -1959,7 +1963,7 @@ describe("realSdkQueryFactory — hosted must-ask lane wiring (#9776)", () => {
     mockWriteAskpassScriptTo.mockReturnValue(`${WORKSPACE_PATH}/.git/.soleur-askpass.sh`);
   });
 
-  it("AC-14: the real canUseTool sits beside autoAllowBashIfSandboxed, permissions.allow is empty, and a destroy command still reaches the review gate in an acked autonomous workspace", async () => {
+  it("AC-14: the real canUseTool is wired, permissions.allow is empty, and a destroy command still reaches the review gate in an acked autonomous workspace", async () => {
     mockSendToClient.mockReturnValue(true);
     // The lane flips the conversation status around the card: give the tenant client a recursive, awaitable chain
     // (`.update().eq().eq()` and `.in()` / `.select()` variants) so that write resolves instead of throwing.
@@ -1971,7 +1975,6 @@ describe("realSdkQueryFactory — hosted must-ask lane wiring (#9776)", () => {
     );
     const opts = await realCanUseToolOptions();
     expect(typeof opts.canUseTool).toBe("function");
-    expect(opts.sandbox?.autoAllowBashIfSandboxed).toBe(true);
     expect(opts.settingSources).toEqual([]);
     expect(opts.permissions?.allow ?? []).toEqual([]);
 

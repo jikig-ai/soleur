@@ -4,7 +4,7 @@
 # inside the skill (the CI grep is the durable backstop outside it).
 #
 # Brand-survival threshold: single-user incident (see plan
-# knowledge-base/project/plans/2026-05-12-feat-linear-issue-image-context-plan.md).
+# knowledge-base/project/plans/archive/20261013-014038-2026-05-12-feat-linear-issue-image-context-plan.md).
 # A regression here means a uploads.linear.app signed URL can leak into a
 # committed artifact on a public-GitHub repo.
 #

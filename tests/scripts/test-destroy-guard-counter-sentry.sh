@@ -235,7 +235,7 @@ t_replace_not_counted_as_create() {
 #
 # Attribute names taken from the provider docs at v0.15.5, not from the migration
 # plan's prose: that prose had the frequency mapping wrong (Phase 0 evidence,
-# knowledge-base/project/specs/fix-7650-sentry-alert-migration/).
+# knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/).
 _sa_plan() { # $1=before $2=after -> a one-resource update plan
   printf '{"resource_changes":[{"type":"sentry_alert","address":"sentry_alert.zot","change":{"actions":["update"],"before":%s,"after":%s}}]}' "$1" "$2"
 }

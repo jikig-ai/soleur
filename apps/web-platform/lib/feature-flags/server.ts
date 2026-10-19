@@ -83,6 +83,23 @@ const RUNTIME_FLAGS = {
   // registry capability, authorization, and qualification checks. Keep the
   // env mirror default-off because it is role-blind during a Flagsmith outage.
   "codex-engine": "FLAG_CODEX_ENGINE",
+  // #4671 / ADR-287 — heuristic injection scan + annotation of WebFetch results
+  // (apps/web-platform/server/untrusted-content.ts). Annotate-only; prd default OFF
+  // until the observe window. Read ONLY through `isUntrustedContentClassifyEnabled`.
+  // Fail-closed: FLAG_UNTRUSTED_CONTENT_CLASSIFY=0 mirror.
+  "untrusted-content-classify": "FLAG_UNTRUSTED_CONTENT_CLASSIFY",
+  // #4671 / ADR-287 — subordinate to the flag above: ALSO rewrites a flagged WebFetch
+  // result into the data-only envelope (`updatedToolOutput`). prd default OFF; enabling
+  // it is a separate, operator-visible flip after >=7 days of prd telemetry.
+  // Fail-closed: FLAG_UNTRUSTED_CONTENT_WRAP=0 mirror.
+  "untrusted-content-wrap": "FLAG_UNTRUSTED_CONTENT_WRAP",
+  // #9545 / ADR-288 — egress audit rollup collection (the Vector -> app ingest route,
+  // apps/web-platform/server/egress-audit-ingest.ts). Dark by default and evaluated PER
+  // ORG after the ingest route has authenticated the batch: environment default OFF
+  // (kill switch), a Jikigai-owned canary org enabled by a per-org segment override (ruling
+  // A); external orgs stay OFF until PR2 ships. Read ONLY through the ingest module.
+  // Fail-closed: FLAG_EGRESS_AUDIT_COLLECTION=0 mirror.
+  "egress-audit-collection": "FLAG_EGRESS_AUDIT_COLLECTION",
 } as const;
 
 export type EnvFlagName = keyof typeof ENV_FLAGS;
@@ -278,6 +295,16 @@ export async function isCodexEngineEnabled(
  */
 export async function isDebugModeAvailable(identity: Identity): Promise<boolean> {
   return getRuntimeFlag("debug-mode", identity);
+}
+
+/** #4671 / ADR-287 — classify + annotate WebFetch results. Resolve with the session's REAL identity. */
+export async function isUntrustedContentClassifyEnabled(identity: Identity): Promise<boolean> {
+  return getRuntimeFlag("untrusted-content-classify", identity);
+}
+
+/** #4671 / ADR-287 — rewrite flagged WebFetch results into the data-only envelope. Subordinate to classify. */
+export async function isUntrustedContentWrapEnabled(identity: Identity): Promise<boolean> {
+  return getRuntimeFlag("untrusted-content-wrap", identity);
 }
 
 export function __resetFeatureFlagsForTests(): void {

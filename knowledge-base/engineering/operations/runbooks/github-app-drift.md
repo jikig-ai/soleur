@@ -398,5 +398,5 @@ that doesn't change.
   the three traps the workflow author must internalize.
 - Learning `2026-04-18-drift-guard-self-silent-failures.md` — broader
   drift-guard self-silencing class.
-- Spec `knowledge-base/project/specs/feat-3187-gh-app-drift-guard/spec.md`
-- Plan `knowledge-base/project/plans/2026-05-05-feat-github-app-drift-guard-plan.md`
+- Spec `knowledge-base/project/specs/archive/20261013-014038-feat-3187-gh-app-drift-guard/spec.md`
+- Plan `knowledge-base/project/plans/archive/20261013-014038-2026-05-05-feat-github-app-drift-guard-plan.md`

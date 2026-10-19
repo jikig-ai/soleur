@@ -415,3 +415,108 @@ since #8036, so a loss is not a deploy or user outage.
   unmeasured in the Count bullet above, is at least 11. While the workflow is paused again, a
   later merge under `apps/web-platform/infra/` triggers no apply, as that bullet says for the
   disabled state.
+
+## Amendment — 2026-10-12 (#9534 review): the twelfth/thirteenth Logs alerts land; host-attributed silence
+
+#9534's egress-gateway pair (`egress_gw_deny_spike`, `egress_gw_probe_silent`) brought the count to
+**12**; review found two defects this change closes, and the new `egress_gw_probe_fail` is the
+thirteenth.
+
+- **The host-mask defect.** `egress_gw_probe_silent` counted ROWS per bucket. Both web hosts
+  multiplex into source 2457081, so one emitting host's ~3 rows/15 min kept the aggregate above the
+  `lower_than 1` threshold while the other host shipped nothing — and web-2 was in fact shipping
+  nothing: its `/etc/vector/vector.toml` was frozen at a pre-`egress-gw-probe` revision (the
+  `journald_persistent` re-delivery provisioner dials web-1 only; closed by the
+  `journald_persistent_web2` twin in the same follow-up). The predicate is now a whole-window scalar
+  counting `DISTINCT JSONExtractString(raw, 'host_name')` against `lower_than
+  length(var.web_hosts)`. This restates the standing rule for absence alerts on multiplexed
+  sources: count emitting HOSTS (or scope the conjunct to one), never rows.
+- **`egress_gw_probe_fail` pages what Sentry-only could not.** The probe's `result=fail` rows (allow
+  leg refused / deny bypassed) posted only a Sentry event (`op=egress_gw_probe_fail`), which pages
+  nobody. The alert predicates on the shipped row: `result=fail` OR `reason=gw_absent` (the
+  gateway-missing skip class — a probe that cannot run is an incident, not silence; other skip
+  reasons stay non-paging because the silent alert already owns "pipeline alive?"). `higher_than 0`
+  over 900 s — a real failure recurs every probe cycle, and a single `deny_bypassed` row is already
+  security-critical.
+- **Live probe (2026-10-12, source 2457081).** As written, fail needle: rows exist in the window
+  (web-1's recovery-era `allow_rc=28` stream, 451 tagged rows/3 d total, 1 distinct host —
+  soleur-web-platform — because web-2's rows were being dropped at its stale Vector allowlist).
+  Silent predicate as written: `count(DISTINCT host_name)` over 15 min returned 1 < 2 while web-2's
+  delivery was still missing — a TRUE positive for the deployed-at-merge defect, resolved by the
+  twin's apply.
+- **Enforcement.** All six egress resources sit in `apply-web-platform-infra.yml`'s MAIN plan
+  `-target=` set; the drift guard `apps/web-platform/test/infra/egress-gw-alert.test.sh` pins every
+  conjunct, the host-distinct scalar shape, the paging semantics, the emitter needles in
+  `cron-egress-resolve.sh`, and the runbook anchor — and carries the mutation rows proving it can
+  red.
+
+## Amendment 2026-10-15 — credential-shape signal class + the dormant-probe rule (#10321)
+
+- The managed-alert census gains `logtail_exploration_alert.registry_zot_log_credential_shape`
+  (`soleur-registry-zot-log-credential-shape-prd`), the 14th managed Logs alert on the merge-SHA
+  main (re-derive if #10320 lands first — 15th then). Signal class: **credential-shape content
+  match over producer-anchored envelope rows** — three disjuncts ported from
+  `scripts/followthroughs/zot-log-channel-7440.sh`'s exit-1 arm (unmasked `Authorization` value,
+  `dp.(pt|st|sa|ct).` prefix with a >=16 non-separator run, bcrypt `$2[aby]$`). `value = 0` +
+  `higher_than`: one row is an incident; unlike the delivery-grader probe there is no
+  newest-boot scoping.
+- **The rule this codifies:** a check meant to outlive its tracker is a standing alert, not a
+  follow-through probe. A probe's enrollment dies with its tracker's `CLOSED_LOOKBACK_DAYS=14`
+  lookback — #7455 closed 2026-08-13 and the probe's regression arm silently went dark
+  ~2026-08-27 while its header (and ADR-184's) still claimed enrollment. Convention clause in
+  `knowledge-base/engineering/operations/runbooks/followthrough-convention.md`.
+
+## Amendment — 2026-10-14 (#7530): the fifteenth Logs alert, a producer-anchored per-bucket count
+
+Appended, not edited. `registry_clientip_not_rfc1918` (`soleur-registry-clientip-not-rfc1918-prd`)
+brings the Terraform-managed Logs alert count from 14 to **15** (the 2026-10-15 #10321 amendment above
+counted 14, with this PR landing second). The 2026-09-18 amendment asks each new alert to name its signal class and show that no
+existing alert covers it.
+
+- **Signal class: a stateless per-bucket count over producer-anchored rows, graded on one field.**
+  It counts shipped `SOLEUR_ZOT_LOG` envelope rows (host-scoped) and `SOLEUR_ZOT_DISK` rows, each
+  anchored at offset 0 of the stored row, whose FIRST `clientIP` is address-shaped and outside
+  RFC1918. No sibling covers it: `registry_store_not_luks` grades two fields of one heartbeat head,
+  `monitor_send_failed` greps a marker class, and the absence alerts count silence. Here the
+  predicate is a value test on a producer-controlled field, and the producer's field order is part of
+  the contract.
+- **Why an alert and not a follow-through probe.** The CLO's condition (every observable `clientIP`
+  is RFC1918) must hold continuously. A probe's tracker closes on PASS and drops out of the sweeper's
+  14-day lookback (`CLOSED_LOOKBACK_DAYS`), so the dormant `zot-log-channel-7440.sh` regression arm
+  has not run since about 2026-08-27 (tracked as #10321). An alert has no tracker to close.
+- **Parameters.** `higher_than 0`, `check_period 300`, `query_period 900`, `confirmation_period 0`,
+  `recovery_period 1800`, `on_missing_data treat_as_zero` (silence is the heartbeats' job), declared
+  `paused = false` because the 7-day population is all-private. Detection, not prevention: up to about
+  20 minutes late, sampled over shipped rows only (the shipper rate-caps ordinary rows). The channel is
+  the sibling's: email on the free tier, no escalation policy. **Delivery state: the alert exists only
+  after the merge's push apply creates it, and it is not treated as an enforced invariant until the #7530
+  follow-through probe has graded the new boot's window.** **[Amendment 2026-10-16: In force, graded 2026-10-15 (#7530): PR #10320 merged 2026-10-15T17:57Z, its push apply created the alert (2 added, 0 changed, 0 destroyed), and the #7530 follow-through probe passed over the running registry boot (46f08985, which postdates the host template's last delivery, PR #10322): 1152 clientIP-bearing shipper rows over 660 minutes, 0 outside RFC1918, the private-flagged control 1152, 16 of 16 classification literals correct (counts only). The measured population is the `SOLEUR_ZOT_LOG` shipper arm only; the disk-heartbeat arm is not graded. Detection, not prevention: monitored and alerted by email. The Better Stack Vendor DPA remains PENDING (#7529).]**
+- **Consumed contract.** The grade depends on zot writing `clientIP` before `method`, `path` and
+  `headers` and on the field name; `treat_as_zero` reads a renamed field as healthy forever, so the
+  drift guard (`apps/web-platform/test/infra/registry-clientip-not-rfc1918-alert.test.sh`) pins the
+  zot image digest the order was verified against and reds on a `zot_image_amd64` bump until the live
+  population check is re-run (ADR-184 records the producer side of this contract).
+- **Vendor-tier reality.** The free-tier alert-count cap remains unmeasured; a refusal at this count
+  is the measurement and would land here.
+- **Enforcement and runbook.** Both `-target=` lines sit in `apply-web-platform-infra.yml`'s MAIN plan
+  set; the guard carries mutation and must-pass rows run on copies. Runbook:
+  `knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-7530.md` (the alert is the
+  observable signature of the public-ingress re-evaluation trigger; the legal steps live there).
+
+## Amendment — 2026-10-16 (#10445): the sixteenth Logs alert (nested `message.*` keys)
+
+Appended, not edited. `agent_sandbox_bash_denial` (`soleur-agent-sandbox-bash-denial-prd`) brings the Terraform-managed
+Logs alert count from 15 to **16** once the post-merge apply has run (re-derive if another alert lands first).
+
+- **Signal class: a stateless per-bucket count over app-container pino rows.** It counts rows from
+  `CONTAINER_NAME = 'soleur-web-platform'` whose `op` is `bash-tool-result` and whose `sandboxErrorCode` is
+  `helper_userns_eperm`, written by the cc-dispatcher `onToolResult` mirror. No sibling covers it: the existing alerts
+  read journald marker text or producer envelopes, and none reads user-visible Bash failures. It reads **nested `message.*` keys**
+  (`JSONExtractString(raw, 'message', 'op')`), as `claude_cost_daily_burn` and `inngest_step_524` already do.
+- **Parameters.** `higher_than 0`, `check_period 60`, `query_period 300`, `confirmation_period 0`,
+  `recovery_period 600`, `on_missing_data treat_as_zero`, email only (the `bwrap_probe_rollback` values). Auto-resolution
+  after 10 quiet minutes does not mean the cause was fixed.
+- **Limits.** `treat_as_zero` reads a dead log path as healthy, the mirror covers the cc-soleur-go path only (the legacy
+  agent-runner loop has no tool_result observer), and the classifier matches only the exact helper line. A forged row
+  can keep one incident open and suppress new pages; accepted at current scale, mitigation tracked in #10455.
+  Runbook: `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`.

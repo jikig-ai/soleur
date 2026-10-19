@@ -27,6 +27,7 @@ import {
   _resetTenantCache,
 } from "@/lib/supabase/tenant";
 import { registerSharedMintCache } from "@/test/helpers/mint-once";
+import { tearDownTenantUsers } from "@/test/helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -95,12 +96,8 @@ describe.skipIf(!INTEGRATION_ENABLED)(
 
     afterAll(async () => {
       if (!service) return;
-      for (const user of [userA, userB]) {
-        if (!user.id) continue;
-        assertSynthetic(user.email);
-        await service.auth.admin.deleteUser(user.id).catch(() => {});
-      }
-    }, 30_000);
+      await tearDownTenantUsers(service, [userA, userB]);
+    }, 60_000);
 
     test("baseline: A reads own users row", async () => {
       const { data, error } = await aClient

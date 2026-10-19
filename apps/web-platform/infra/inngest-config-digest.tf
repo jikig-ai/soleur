@@ -2,7 +2,9 @@
 #
 # INNGEST_CONFIG_DIGEST is the IMMUTABLE @sha256 digest of the currently-promoted,
 # keyless-signed config bundle. The dedicated Inngest host's config-refresh timer resolves
-# this pointer, pulls the bundle @sha256 GHCR-direct, cosign-verify-blobs it OFFLINE against
+# this pointer, pulls the bundle @sha256 zot-direct (#8036 deleted the host's GHCR
+# credential; zot is the only registry read left — ADR-135, 2026-10-13 amendment),
+# cosign-verify-blobs it OFFLINE against
 # the baked trusted root, checks the per-file sha256 manifest + a monotonic VERSION read only
 # from the signed bytes, and applies atomically via infra-config-install.sh (ADR-135).
 #

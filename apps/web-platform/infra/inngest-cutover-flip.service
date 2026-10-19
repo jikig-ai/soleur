@@ -21,6 +21,12 @@ Wants=network-online.target
 # reason token. After= keeps the ordering benefit on a healthy boot and costs nothing on a
 # broken one.
 After=mnt-data.mount
+# SKIP-VS-FAIL (#9962, the #9939 pattern): /etc/default/inngest-server is written even LATER in
+# runcmd than the LUKS files, and the 30s timer is always armed — an absent file must SKIP the
+# start (one "skipped, unmet condition check" notice), never FAIL it into the same every-30s
+# storm the LUKS trio produced. The EnvironmentFile= line stays unprefixed: once a start IS
+# attempted, an absent file still fails the unit — the fail-closed contract is retained.
+ConditionPathExists=/etc/default/inngest-server
 
 [Service]
 Type=oneshot

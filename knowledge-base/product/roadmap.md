@@ -46,7 +46,7 @@ MCP is a first-class integration tier alongside REST APIs. Services that publish
 
 The desktop native app earns its existence specifically because browser automation is impossible on PWA, iOS, or Android. This is not "wrapping the web app" — it provides a capability no other surface can.
 
-Full brainstorm: `knowledge-base/project/brainstorms/2026-03-23-browser-automation-cloud-platform-brainstorm.md`
+Full brainstorm: `knowledge-base/project/brainstorms/archive/20261012-213508-2026-03-23-browser-automation-cloud-platform-brainstorm.md`
 
 ---
 
@@ -319,7 +319,7 @@ Before recruiting founders, the platform must handle multiple users signing up a
 | MU1 | Signup provisions a workspace (git clone + plugin install per user) | [#1448](https://github.com/jikig-ai/soleur/issues/1448) Done |
 | MU2 | BYOK encryption works per-tenant (each user's API key isolated) | [#1449](https://github.com/jikig-ai/soleur/issues/1449) Done |
 | MU3 | Workspace isolation at process level (container isolation is P4 hardening, but basic isolation must work) | [#1450](https://github.com/jikig-ai/soleur/issues/1450) Done |
-| MU4 | Team workspaces — multi-user invite/remove + workspace co-membership + JWT-claim org switching + Art 15/17/20 DSAR over workspace tables + WORM attestations + workspace-scoped sandbox + BYOK split | [#4229](https://github.com/jikig-ai/soleur/issues/4229) Done (PR [#4225](https://github.com/jikig-ai/soleur/pull/4225), closed 2026-05-21) — `FLAG_TEAM_WORKSPACE_INVITE=1` flip still gated on parallel legal-PR (`feat-team-workspace-legal-scaffolding`). Rollback: `knowledge-base/project/specs/feat-team-workspace-multi-user/rollback.md`. |
+| MU4 | Team workspaces — multi-user invite/remove + workspace co-membership + JWT-claim org switching + Art 15/17/20 DSAR over workspace tables + WORM attestations + workspace-scoped sandbox + BYOK split | [#4229](https://github.com/jikig-ai/soleur/issues/4229) Done (PR [#4225](https://github.com/jikig-ai/soleur/pull/4225), closed 2026-05-21) — `FLAG_TEAM_WORKSPACE_INVITE=1` flip still gated on parallel legal-PR (`feat-team-workspace-legal-scaffolding`). Rollback: `knowledge-base/project/specs/archive/20261013-014038-feat-team-workspace-multi-user/rollback.md`. |
 | MU4.1 | BYOK delegations — owner-funded co-member runs + UI surfaces + legal docs + consent gate | [#4232](https://github.com/jikig-ai/soleur/issues/4232) PR-A merged ([#4290](https://github.com/jikig-ai/soleur/pull/4290)); PR-B ([#4508](https://github.com/jikig-ai/soleur/pull/4508)) merged. Gated by `BYOK_DELEGATIONS_ENABLED` (default OFF). Flag flip after Side Letter signed. |
 
 **Gate:** All three must pass before any recruitment outreach.
@@ -417,7 +417,7 @@ Low-priority improvements deferred until after validation. Revisit when the plat
 | L10 | Add explicit AI-crawler allow rules to robots.txt (GPTBot, ClaudeBot, PerplexityBot, Google-Extended — defensive) | P3 | [#2558](https://github.com/jikig-ai/soleur/issues/2558) | Not started |
 | L11 | Rewrite /agents/ meta description with concrete number + outcome | P2 | [#2667](https://github.com/jikig-ai/soleur/issues/2667) | Not started |
 | L12 | Add shared hub + sibling back-links for /blog/soleur-vs-*/ comparison cluster | P2 | [#2668](https://github.com/jikig-ai/soleur/issues/2668) | Not started |
-| L13 | Split /getting-started/ intent — "Two ways to start" pattern | P2 | [#2669](https://github.com/jikig-ai/soleur/issues/2669) | Not started |
+| L13 | Split /getting-started/ intent — "Two ways to start" pattern. Raised to P1 by growth audit 2026-10-19 ([#10516](https://github.com/jikig-ai/soleur/issues/10516)): the homepage self-host CTA now lands visitors here | P1 | [#2669](https://github.com/jikig-ai/soleur/issues/2669) | Not started |
 | L14 | Rename "Uncategorized" H2 on /skills/ + add inline definition of "agentic engineering" | P2 | [#2670](https://github.com/jikig-ai/soleur/issues/2670) | Done |
 | L15 | Add FAQ blocks to /getting-started/ and /vision/ | P2 | [#2671](https://github.com/jikig-ai/soleur/issues/2671) | Not started |
 | L16 | Add "This week in Soleur" weekly summary lede to /changelog/ | P2 | [#2672](https://github.com/jikig-ai/soleur/issues/2672) | Not started |
@@ -447,7 +447,7 @@ Surfaced 2026-05-30 from benchmarking against **Viktor** (multi-player enterpris
 
 | # | Bet | Priority | ICP fit | Issue | Status |
 |---|-----|----------|---------|-------|--------|
-| CP1 | Runtime untrusted-data classification (indirect prompt-injection defense) — LLM-classify external content before agents act on it | P1 | Near-term (current ICP) | [#4671](https://github.com/jikig-ai/soleur/issues/4671) | Not started |
+| CP1 | Runtime untrusted-data classification (indirect prompt-injection defense) — heuristic annotation of fetched web content (WebFetch only, ADR-287); not yet a defense: flags off in prd, no out-of-sample numbers; LLM tier conditional on measured recall | P1 | Near-term (current ICP) | [#4671](https://github.com/jikig-ai/soleur/issues/4671) | In progress (WebFetch slice, flags off in prd) |
 | CP2 | Structured human-in-the-loop approval queue for write/send actions (batched, reviewable — better than per-call CLI prompts for non-technical operators) | P2 | Near-term (current ICP) | [#4672](https://github.com/jikig-ai/soleur/issues/4672) | Not started |
 | CP3 | Cross-system scheduled business automations (business-process crons beyond infra/dev) | P2 | Unlocks with CP4 | [#4674](https://github.com/jikig-ai/soleur/issues/4674) | Not started |
 | CP4 | Business-SaaS integration breadth (Slack/Gmail/Asana-class MCP connectors for cross-silo orchestration) | P3 | Strategic (up-market) | [#4673](https://github.com/jikig-ai/soleur/issues/4673) | Not started |

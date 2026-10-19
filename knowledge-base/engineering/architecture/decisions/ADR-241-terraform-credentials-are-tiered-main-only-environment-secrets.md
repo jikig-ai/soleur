@@ -19,8 +19,8 @@ share one. Each decision's own status is in the **Statuses** table. This follows
 convention: `architecture list` shows the frontmatter's single status, which is the least-advanced
 one, and D2's is `proposed`.
 
-- **D1 and D3–D8 are `adopting`.** They are implemented by the PR that carries this ADR
-  (references #8209; it does not close it). They flip to `accepted` when the runbook's post-operator
+- **D1, D3 and D5–D8 are `adopting`; D4 is `accepted` (2026-10-12, see the Amendment log).** The adopting decisions are implemented by the PR that carries this ADR
+  (references #8209; it does not close it). The others flip to `accepted` when the runbook's post-operator
   verification passes — AC12 through AC16 of the plan.
 - **D2 stays `proposed` until residual R1 closes.** This is explicit, and it is the CPO sign-off
   condition. Until R1 closes, D2 stops a branch workflow from *naming* a Tier-B secret; it does not
@@ -553,7 +553,7 @@ has merged; until then both release jobs still hold the broad token and would re
 project and its `prd` environment, and no `doppler_secret`, `doppler_service_token`, data source,
 variable or output, for D3's reason: this root's state is readable by the Tier-A backend keys. The two
 values and the token are put there by an operator-run, re-runnable script
-(`knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh`), which is
+(`knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh`), which is
 the part Terraform cannot hold. The script is permanent for this feature: it is also the rotation tool
 (`--rotate-token`, and a re-run after an App key rotation), so it stays at that path. Census Guard 7
 enforces the container half (G7c: no stateful `doppler_*` resource on the project through any alias of
@@ -615,9 +615,9 @@ instead.
 | Decision | Status | Flips when |
 |---|---|---|
 | D1 tiers | `adopting` | AC12–AC16 pass: the three names are absent from `prd_terraform`, the App key there hashes equal to the sentinel, and the per-credential invalidation probes return `401`/verify-failure. |
-| D2 boundary | `proposed` | **R1 (#8609) closes** (and R7 closes at O5b). Until then the boundary is nominal against a `prd` repo-secret holder. This is the CPO sign-off condition. |
+| D2 boundary | `proposed` | **R1 (#8609) closes** (and R7 closes at O5b, which was met on 2026-09-29: see the 2026-10-12 amendment, so R1 is the only open limb). Until then the boundary is nominal against a `prd` repo-secret holder. This is the CPO sign-off condition. |
 | D3 carrier | `adopting` | The Tier-B project is populated and its read token is seeded on all four environments, and the canary reads `source=tier_b`. |
-| D4 Tier-A substitutes | `adopting` | The read-only Hetzner token returns `token_readonly` on a write, and the Tier-A state pair returns `403` on a put and `200` on a get. |
+| D4 Tier-A substitutes | `accepted` | **Met 2026-09-29 (O5, O5b; accepted 2026-10-12).** The read-only Hetzner token is refused on a write (`forbidden`; the plan's `token_readonly` is the older Hetzner wording), and the Tier-A state pair returns `403` on a put and `200` on a get. |
 | D5 GitHub identity | `adopting` | The infra App's write scopes are exercised by a green no-op apply-on-merge from `main`, and board sync runs with no legacy warning. **Amended 2026-09-30 (#9262):** and O4c's evidence (#9262 plan AC15): one `main`-dispatched build whose `bump-cloud-init-pin` job is green under `infra-privileged` with the `app-token` notice naming `app=soleur-infra`. D5 cannot reach `accepted` until the new scopes have been exercised. **Amended 2026-10-01 (#9360):** and the marketplace bypass-actor follow-up (#9361) has landed, with a manifest write exercised as soleur-infra. |
 | D6 integrity | `adopting` | The loader's sentinel row and Guard 2 are green on the PR, and a planted same-named `prd_terraform` value is measured to have no effect. |
 | D7 state custody | `adopting` | The privileged bucket's object matches the source by sha256, lineage and serial; a Tier-A key gets `403` on it; the two custody forgets have applied. |
@@ -763,7 +763,7 @@ sequence in the runbook's §Runtime App key (#8609), which is the canonical copy
 - **Labels.** In this ADR, R1–R8 are residuals. The runbook's steps are written "R-step N"
   (R-step 7 is the GitHub key delete); an unqualified "R7" here always means the residual.
 
-Plan: `knowledge-base/project/plans/2026-09-30-security-evict-runtime-app-key-from-prd-reachability-plan.md`.
+Plan: `knowledge-base/project/plans/archive/20261013-051752-2026-09-30-security-evict-runtime-app-key-from-prd-reachability-plan.md`.
 
 ### 2026-09-30 (#9262): the inngest-release App-token consumers move to Tier B
 
@@ -850,7 +850,7 @@ now that the second is the 2026-10-03 entry below.)*
   entry, and the 2026-10-03 entry below lists what it supersedes.)*
 - No other decision's status changes here.
 
-Plan: `knowledge-base/project/plans/2026-10-01-security-scoped-doppler-source-for-app-token-release-jobs-plan.md`.
+Plan: `knowledge-base/project/plans/archive/20261013-062704-2026-10-01-security-scoped-doppler-source-for-app-token-release-jobs-plan.md`.
 
 ### 2026-10-02 (#8211): `RESEND_API_KEY` is Tier A
 
@@ -979,6 +979,10 @@ One dated line, no status change: the dispatch-only `web-host-reboot.yml` job `r
 
 **The approval gate on this consumer is a rule, not a platform separation (measured 2026-10-07).** `web-platform-infra-apply` has a custom deployment branch policy that lists exactly `main`, a single required reviewer whose login is `deruelle` (the owner), and `prevent_self_review` false. The dispatching agent's `gh` identity is that same login, so the platform enforces only the branch (a run from another ref never starts the gated job) and does not separate dispatching from approving. The separation is the owner's explicit per-dispatch go-ahead naming the production write (`hr-menu-option-ack-not-prod-write-auth`) and the owner doing the approving; an agent never approves its own dispatch. The issue records the same property for the other gated environments. Whether destructive dispatches should be two-party (`prevent_self_review` and a distinct agent identity, a `.tf` change) is tracked on #8044 and is not decided here. A re-run of the workflow is refused by design (a `github.run_attempt` guard), so an approval is never silently reused for a second request.
 
+### 2026-10-12 (#9372): `web-host-reboot.yml` is retired, and its Tier-B consumer with it
+
+One dated line, no status change: the dispatch-only `web-host-reboot.yml` (jobs `reboot` and `observe`), recorded as a Tier-B consumer in the 2026-10-07 entry above, was deleted on 2026-10-12 together with the web-2 rebirth workflow (ADR-263 addendum 2026-10-12). The 2026-10-07 entry stays as the dated record. The `web-platform-infra-apply` environment and the Tier-B secrets it served are shared with live workflows and are not changed by the retirement.
+
 ### 2026-10-08 (#8767): `cutover-inngest.yml` `op=backup` is Tier B, and currently ungated
 
 `op=backup`'s Hetzner `create_image` is a **write**, so its `HCLOUD_TOKEN` read is **Tier B**; the generation-anchor read stays Tier A (`HCLOUD_TOKEN_READONLY`). The runbook row for `cutover-inngest.yml::cutover` is split in two accordingly (a tier classification change, recorded here rather than as a new ADR, as the 2026-09-30 and 2026-10-02 entries do).
@@ -1024,9 +1028,63 @@ This supersedes the 2026-10-01 bullet "Pre-existing, unchanged here" for the app
   `infra/github` root, and the root's README still carries stale local-apply recipes. Neither can write; a planted value shows up there as a
   plan difference.
 
+### 2026-10-11 (#9454): `weakness-miner.yml::open-pr` is a fourth composite caller (narrow source, `infra-privileged`)
+
+One dated line, no status change: the weekly digest PR is authored, pushed and armed as the `soleur-infra` App from the new `open-pr` job (narrow source `soleur-infra-app`, `DOPPLER_TOKEN_INFRA_APP`, scoped to `contents:write` + `pull_requests:write` on `soleur`; ADR-285). Read D11's "release jobs" as "unattended App-token jobs" from here (D11's text is not rewritten); census row G7f counts four callers. Inventory row: `infra-credential-tiers-8209.md` (Group 4).
+
+### 2026-10-12 (#8209): D4 `accepted`; where D1 and D2 stand, measured
+
+D4 flips to `accepted`. Its condition was met on 2026-09-29 and is recorded on #8209: the read-only Hetzner token's write
+attempt was refused with `forbidden` (the plan's `token_readonly` is the older Hetzner wording; a differential probe with the
+read/write token, which got `not_found` for the same nonexistent id, shows the permission is checked before the lookup), and the
+Tier-A state pair returned `403` on a put and `200` on a get (O5b; the drift canary, run 36574141712, was green on the read-only pair).
+The table's condition for D4 is those two probes, and both are recorded. D4's body also describes the removals, the App-key sentinel and the PR
+plan: the removals and the sentinel are checked under D1's AC12 below, and the PR plan was not re-measured today. D4's own evidence is
+thirteen days old and was not re-run today either.
+
+Nothing else flips. Measured read-only on 2026-10-12 (names and access levels only; no value was read):
+
+- **D1 stays `adopting`.** AC12's name limb holds: `DOPPLER_TOKEN_TF`, `HCLOUD_TOKEN`, `CF_API_TOKEN_R2` and `DOPPLER_TOKEN_GIT_DATA_ROOT` are absent
+  from `soleur/prd_terraform`; `GITHUB_APP_PRIVATE_KEY` is there as the `EVICTED_SEE_ADR_241` sentinel (O10 recorded its sha256 as equal; it
+  was not re-hashed today, because that reads the value), so AC12's name limb holds today and its hash limb is as O10 recorded it. AC16 is
+  **not shown**. An old-value invalidation probe is recorded for `DOPPLER_TOKEN_TF` only (old token `401`, O13, 2026-10-01). For the App key
+  the deletion of the old key row is recorded (2026-10-03) but the runbook's old-key probe (`GET /app` returning `401`) is not. The Hetzner
+  read/write token and the R2 token were **moved, not rotated**: hash-equal copies went into Tier B (O2, O10), and the Tier-A substitutes are
+  new read-only tokens. The Tier-A `403` probes in O5b and O8 test isolation, not invalidation, so nothing in the record shows the old Hetzner
+  or R2 value dead. The runbook's Rotation step 4 (the read/write R2 state key, `TF_STATE_AWS_*`) is likewise unrecorded. R5 therefore stays
+  OPEN.
+- **D2 stays `proposed`.** G1 ([#9294](https://github.com/jikig-ai/soleur/issues/9294)) and G2 ([#9295](https://github.com/jikig-ai/soleur/issues/9295))
+  are open. The G2 census (a comment on #9295) found no write-capable service token on `soleur/prd` itself (its four tokens are all `read`); across all 16 `soleur` configs there are exactly
+  two write tokens, `gha-prd-terraform-write` on `prd_terraform` (the O6 mint) and `workspaces-luks-marker-write` on `prd_workspaces_luks_marker`.
+  The unresolved parts are the personal-token proxy (not listed by that command) and `workspaces-luks-marker-write`, a write token a branch
+  workflow can name through `DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER`, on `prd_workspaces_luks_marker` rather than `prd`. G1 has not started: the
+  three deploy-channel credentials are still in `soleur/prd_terraform` and at repo level, and the consumer set (34 files; a comment on
+  #9294) is larger than that issue lists, including the `dispatch-web-redeploy` composite action.
+- **D3 and D5–D8 were not re-measured today.** Their evidence is the dated O-steps on #8209 and the PR-time suites; they flip on the
+  table's own conditions.
+
+### 2026-10-14 (#10138): `git-data-cutover.yml::wipe` is the first Tier-B loader consumer in a mixed-tier workflow
+
+No status change: D1 stays `adopting` and D2 stays `proposed`. The dispatch-only `wipe` job (modes `wipe_check`, `wipe`, `wipe_finish`; the owner-gated retirement of the plaintext rollback volume, ADR-239 DL-2) consumes the Tier-B Hetzner write token through the loader behind `web-platform-infra-apply`, inside a workflow whose other job and notifier hold Tier-A repo secrets (`DOPPLER_TOKEN`, `DOPPLER_TOKEN_PRD`, `DOPPLER_TOKEN_GIT_DATA_ROOT`, `RESEND_API_KEY`). It does not change the ADR-239 statement. Inventory row: `infra-credential-tiers-8209.md` (Group 4); the existing `git-data-cutover.yml::cutover` row there is not edited. The decisions cited are D1, D2, D4, D6, D8 and D9.
+
+- **First, not second (a correction of the merged design).** The merged wipe design (`design-wipe-body-pr.md`, section 10, "ADR-241 amendment note") called this "a second Tier-B loader consumer inside a mixed-tier workflow". That count was wrong, and this entry replaces it without editing the design: `git-data-cutover.yml::cutover` only checks that `secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED` is non-empty (`precondition_8209_open`) and never calls the loader, and the other loader consumer in the design's reckoning, `web-host-reboot.yml`, was retired on 2026-10-12 (see that entry above). `wipe` is the FIRST job in this file to call `.github/actions/infra-credentials`.
+- **One loader call, Tier-B arm only (V-14).** The loader runs once, after the flag re-read and before the detach marker, with `doppler-token-infra-privileged` and WITHOUT `doppler-token-legacy`. With both token inputs empty the loader exits `no_credential_source`, so the legacy arm cannot run and `outputs.source` is `tier_b` or the step fails. The detach-marker step asserts `source == 'tier_b'` BEFORE it writes `detach_attempted`, so a refusal never emits a marker.
+- **The post-loader containment convention.** The loader exports the whole privileged project into `$GITHUB_ENV` (the plain and `TF_VAR_` names, `TF_STATE_AWS_*`, `DOPPLER_TOKEN_TF`). That export is D9's residual and stays a residual, contained by convention, not closed. The convention for every step after the loader that executes anything: the step begins with the xtrace refusal and then `exec env -i <allow-list> bash ...`, so the step's own shell, which holds the loader's environment, is replaced; no allow-list carries `TF_VAR_*`, `AWS_*`, `TF_STATE_AWS_*` or `DOPPLER_*`; and a credential reaches a child on STDIN (`IFS= read -r` in a `bash -c` child), never as `NAME=$value` on an `env -i` line, which is argv (the class ADR-280 ratchets). The Tier-A `DOPPLER_TOKEN` reaches a post-loader child only through that one stdin-handoff shape (the provider re-read and the read-back). `env -u` is not containment against an open-ended environment and is not used after the loader. The earlier design's blanking step for the plain `HCLOUD_TOKEN` name (W11b) was deliberately dropped (plan 4.3, CTO ruling) as false assurance, so no post-loader step blanks anything and containment is `exec env -i` per step alone: it blanked one of about forty exported names while `TF_VAR_hcloud_token`, `DOPPLER_TOKEN_TF` and the state keys remained; once every post-loader step is `exec env -i`, nothing reads the plain name.
+- **The pre-loader reads run in a closed environment.** The identity and boot-signal reads precede the SSH bridge and the loader, and no step before them writes `$GITHUB_ENV`, so the three-flag `env -u` form the boot-signal library uses (`DOPPLER_TOKEN`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`) strips everything that environment can carry. This is valid only while that ordering holds; the census suites pin it.
+- **The Tier-B write token is a value source in exactly two steps.** Only the detach and the delete steps read `HCLOUD_TOKEN` (from the loader's environment, handed to the helper on stdin). Every read uses `HCLOUD_TOKEN_READONLY` (D4), and there is no fall-back from the read-only token to the write token: the retired `workspaces-luks-cutover.yml` job fell back, and that behaviour is not reused.
+- **One remote `uses:`, pinned by SHA.** The job's `uses:` set is `actions/checkout` (the one remote action, pinned by commit SHA), `./.github/actions/cf-tunnel-ssh-bridge` and `./.github/actions/infra-credentials`; neither local action declares a `post:` hook (`runs.using: composite`). The Doppler CLI is installed by an inline pinned step whose version and sha256 equal the loader's two literals (the `cutover` job's unpinned `DopplerHQ/cli-action` installs the latest CLI and is not used here).
+- **Safeguards of the retired `workspaces-luks-cutover.yml` wipe job that this job does not carry over, recorded as accepted or deferred.** The retired job (PR #9348) is the precedent for the Hetzner calls and not for these four. (1) *The verify-run baseline* (a same-day green `workspaces-luks-verify.yml` run at or above its inventory baseline): accepted as not applicable, since that workflow verifies the workspaces volume; the replacement is the `boot_complete` evidence row of the current server plus the same-session host read before the detach. (2) *The write-capability probe* (an idempotent labels PUT before the host is touched): accepted; the first write of this job is the detach POST, which a token without write rights is refused (`wipe_detach_rejected`) with nothing changed, and the detach-gate step asserts `source == tier_b` before it writes its marker. (3) *`::stop-commands::` fencing of host-printed lines*: carried by the existing `_access_stderr`, not re-implemented: a successful host answer is matched against an anchored pattern in full and never echoed, and the stderr of a FAILED read is relayed capped, filtered and inside a `::stop-commands::` fence; the host script writes only fixed words and digits to its stderr (a no-names test pins this). (4) *The post-API live-mount re-check* (a host session after the API step): accepted as not carried, by decision of the second-reviewer gate on the review of PR #10294: the delete removes only the detached plaintext volume, which the mapper never uses; the host reads the mapper before the detach and again after it (before the delete), and the read-back after the delete confirms at the provider that the LUKS volume is still the one attached. A host session after the delete would add an ssh round trip whose only new fact is what the mapper already answered a moment earlier, so none is added; adding one is an owner choice, not a gap.
+- **Approval independence is a rule, not a platform separation (D2).** The environment's sole reviewer is the owner, who is also the dispatching identity, so the platform enforces only the `main` branch policy (the 2026-10-07 entry above). The separation is the owner's per-dispatch go-ahead naming the production write and the owner doing the approving; an agent never approves its own dispatch, and the headless `pending_deployments` approval form is never valid for any wipe mode (#8044).
+- **Census scope.** `tests/scripts/test-infra-privileged-tier-census.sh` derives the Tier-B job set from references to the loader (`LOADER_USES`), so `wipe` joins it by existing; the `git-data-cutover` census suites carry the per-step pins (the step order, the `exec env -i` first statement of every post-loader step, the exact `uses:` set, the single loader call and its single input). The convention above is stated here in prose so that a diff that weakens the census and the workflow together is still reviewable against this entry.
+- **Left open, tracked in #10300.** A single-name carrier (a direct narrow read of only the write token by a stdin child) would shrink the whole-project export, but it is a new carrier pattern needing its own amendment and census rows; the wipe uses the loader because D3 names the loader's project as the carrier.
+
+### 2026-10-15 (#10138, #8609): the separated wipe inherits the runtime-App-key residual (R1)
+
+Appended; the 2026-10-14 entry above is not edited. No status change: D1 stays `adopting`, D2 stays `proposed`, D10 stays `adopting`. ADR-239 Amendment 2026-10-15 separates the `wipe` job from the flip chain (#8573 and #8609 no longer gate it as sequencing dependencies; the Tier-B loader seam that #8209 provided is still a runtime dependency of the `wipe` job's W8 step, and its environment secret was present on 2026-10-15). That removes a sequencing dependency, not the residual this entry records: while #8609 is open (R1 above), a holder of the soleur-ai runtime App key can rewrite deployment-branch policy (the App holds `administration:write` on `jikig-ai/soleur`, measured by #8609 on 2026-09-22 and inherited here, not re-measured), so the boundary that D2 relies on, "a Tier-B credential is delivered only to an environment whose deployment-branch policy admits `main`", is not a secret boundary against that holder for ANY Tier-B consumer, `git-data-cutover.yml::wipe` included. The `wipe` job's destructive step is additionally bounded by the owner naming the exact command and approving the environment (D2: approval independence is a rule, not a platform separation). The owner accepted the residual for the separated wipe on 2026-10-15 (recorded on #6897, comment 6188355137; the CLO attested the wording as final on 2026-10-15, A.11, comment 6196825174); that is an acceptance for one owner-named destructive dispatch, not a status change for R1. Ref #8609, #6897.
+
 ## References
 
-- Plan: `knowledge-base/project/plans/2026-09-22-feat-evict-privileged-terraform-credentials-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-051752-2026-09-22-feat-evict-privileged-terraform-credentials-plan.md`
   (Decision, Guard Contract, Operator Sequence, User-Brand Impact)
 - Runbook: `knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md`
 - Terraform: `apps/web-platform/infra/infra-privileged-environment.tf` (the Tier-B carriers and the
@@ -1049,3 +1107,6 @@ This supersedes the 2026-10-01 bullet "Pre-existing, unchanged here" for the app
 - D2 note (2026-10-04): #9377, #9461
 - `op=backup` tier note (2026-10-08): #8767, #9755
 - Apply-path injection removed and by-value gate (2026-10-10): #9362, #9914
+- D4 `accepted`; D1/D2 measured state (2026-10-12): #8209, #9294, #9295
+- `git-data-cutover.yml::wipe` loader consumer (2026-10-14): #10138, #6897, #10300, #8044; ADR-239 (DL-2), ADR-280
+- Separated wipe inherits R1 (2026-10-15): #10138, #8609, #6897; ADR-239 Amendment 2026-10-15

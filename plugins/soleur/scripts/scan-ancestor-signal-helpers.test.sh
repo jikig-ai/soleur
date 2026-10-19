@@ -4,7 +4,7 @@
 # shrink-only ratchet for shell test suites that contain a signal helper (an ancestor walk that
 # signals, a signal to the parent, an all-process signal; targeted group and name-pattern signals
 # are listed only). Guard 2 of the plan
-# knowledge-base/project/plans/2026-10-10-chore-pid-namespace-guard-for-signal-helper-mutants-plan.md
+# knowledge-base/project/plans/archive/20261013-062704-2026-10-10-chore-pid-namespace-guard-for-signal-helper-mutants-plan.md
 #
 # WHY NOTHING HERE SENDS A SIGNAL. The suite works on tracked DATA files (.txt, under
 # plugins/soleur/test/fixtures/ancestor-signal/) that are passed to the scanner as explicit PATHs, and on a
@@ -58,7 +58,7 @@ passes=0
 fails=0
 cases=0
 skipped=0
-PLANNED_TOTAL=127
+PLANNED_TOTAL=148
 
 pass() { passes=$((passes + 1)); printf '[ok] %s\n' "$1"; }
 fail() { fails=$((fails + 1)); printf '[FAIL] %s\n' "$1"; }
@@ -350,6 +350,7 @@ if [[ -w /dev/full ]]; then
   ( cd "$FIX" && timeout 60 python3 -I "$SCAN" --list site-base.txt ) >/dev/full 2>"$TMP/err"
   RC=$?
   check "D7 an exception inside main (stdout is full): rc 3, never a traceback-only rc 1" test "$RC" -eq 3 -a "$(has_err 'UNRESOLVED' && echo y || echo n)" = y
+  check "D7b the swallowed flush error is noted by class name; the UNRESOLVED line and rc 3 are unchanged" test "$RC" -eq 3 -a "$(has_err ': swallowed [A-Za-z]+ at flush-stdout$' && echo y || echo n)" = y -a "$(has_err '^ancestor-signal scan: UNRESOLVED: ' && echo y || echo n)" = y
 else
   skipped=$((skipped + 1)); printf 'SKIP D7: /dev/full is not writable here\n'
 fi
@@ -465,10 +466,195 @@ run_scan --list "$TMP/stress.txt"
 check "H9 many parent assignments times many kills finish inside the 60 s cap (no quadratic stall)" test "$RC" -eq 0
 
 # ============================================================================================
+# F. Swallowed-exception note (PR2 of #10331): class name and a literal site label only, never raises
+# ============================================================================================
+assert_fixture_dir "$TMP"
+python3 -I - "$SCAN" flush-stdout > "$TMP/note-probe.out" 2>&1 <<'PY' || true
+import ast, importlib.util, io, os, sys
+spec = importlib.util.spec_from_file_location("note_target", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+def say(ok, name):
+    print(("OK " if ok else "NOT-OK ") + name)
+
+class Boom(OSError):
+    pass
+
+def run_note(exc, stream):
+    real, sys.stderr = sys.stderr, stream
+    try:
+        mod._note(exc, "probe")
+    finally:
+        sys.stderr = real
+
+buf = io.StringIO()
+run_note(Boom("CANARY-7f3a"), buf)
+line = buf.getvalue()
+say(line.endswith(" swallowed Boom at probe\n") and line.count("\n") == 1, "line-shape")
+say("CANARY" not in line, "canary-absent")
+
+class Failing:
+    def __init__(self, exc):
+        self.exc = exc
+    def write(self, s):
+        raise self.exc
+    def flush(self):
+        raise self.exc
+
+for name, exc in (("oserror-stderr", OSError("w")), ("valueerror-stderr", ValueError("w"))):
+    try:
+        run_note(Boom("x"), Failing(exc))
+        say(True, name)
+    except BaseException:
+        say(False, name)
+
+try:
+    run_note(Boom("x"), None)
+    say(True, "none-stderr")
+except BaseException:
+    say(False, "none-stderr")
+
+closed = open(os.devnull, "w")
+closed.close()
+try:
+    run_note(Boom("x"), closed)
+    say(True, "closed-stderr")
+except BaseException:
+    say(False, "closed-stderr")
+
+def census(src):
+    calls, bad, labels = 0, [], set()
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_note":
+            calls += 1
+            lit = (len(node.args) == 2 and not node.keywords
+                   and isinstance(node.args[0], ast.Name)
+                   and isinstance(node.args[1], ast.Constant) and isinstance(node.args[1].value, str))
+            if lit:
+                labels.add(node.args[1].value)
+            else:
+                bad.append(node.lineno)
+    return calls, bad, labels
+
+calls, bad, labels = census(open(sys.argv[1], encoding="utf-8").read())
+say(calls >= 1 and not bad, "census-literal-labels")
+say(labels == set(sys.argv[2].split(",")), "census-label-set")
+say(census("_note(exc, site='x')")[1] != [], "census-rejects-keyword")
+say(census("_note(str(exc), 'a')")[1] != [], "census-rejects-computed")
+say(census("_note(exc, 'a')")[:2] == (1, []), "census-accepts-literal")
+PY
+for tok in line-shape canary-absent oserror-stderr valueerror-stderr none-stderr closed-stderr census-literal-labels census-label-set census-rejects-keyword census-rejects-computed census-accepts-literal; do
+  check "F-$tok the _note probe reports $tok" grep -qxF "OK $tok" "$TMP/note-probe.out"
+done
+
+# ============================================================================================
+# G. Uncaught-exception exit contract (slice 1 of #10331): main() narrowed from BaseException to (Exception, KeyboardInterrupt);
+#    an uncaught exception of either class must still read as rc 3 UNRESOLVED, never rc 1 "findings".
+#    main() ends in os._exit(3), so each probe runs in its own subprocess. kill -INT is not used (non-interactive
+#    background jobs ignore SIGINT); the exception is raised from the replaced run() instead.
+# ============================================================================================
+assert_fixture_dir "$TMP"
+for exc_name in KeyboardInterrupt RuntimeError; do
+  g_rc=0
+  python3 -I - "$SCAN" "$exc_name" > "$TMP/uncaught-$exc_name.out" 2>&1 <<'PY' || g_rc=$?
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("main_target", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+exc_name = sys.argv[2]
+
+def boom(argv):
+    raise KeyboardInterrupt() if exc_name == "KeyboardInterrupt" else RuntimeError("synthetic")
+
+mod.run = boom
+mod.main()
+sys.exit(0)
+PY
+  check "G-$exc_name an uncaught $exc_name from run() exits 3 (UNRESOLVED), not 1 (findings)" test "$g_rc" -eq 3
+  check "G-$exc_name the UNRESOLVED line names $exc_name" grep -qF "UNRESOLVED: uncaught $exc_name" "$TMP/uncaught-$exc_name.out"
+done
+
+# GB2. The narrowing is deliberate: a BaseException subclass outside (Exception, KeyboardInterrupt) is not caught and exits 1
+#     with a traceback (the script docstring records it as unreachable from this synchronous scan). Pinned so a revert to
+#     `except BaseException` (rc 3) is a visible decision rather than a silent one.
+g2_rc=0
+python3 -I - "$SCAN" > "$TMP/uncaught-base.out" 2>&1 <<'PY' || g2_rc=$?
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("main_target", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+class OutsideBase(BaseException):
+    pass
+
+def boom(argv):
+    raise OutsideBase("synthetic")
+
+mod.run = boom
+mod.main()
+sys.exit(0)
+PY
+check "GB2 a BaseException subclass outside the narrowed tuple exits 1, not 3 (deliberate narrowing)" test "$g2_rc" -eq 1
+check "GB2 that exit carries a traceback and no UNRESOLVED line" bash -c '! grep -qF "UNRESOLVED" "$1" && grep -qF "OutsideBase" "$1"' _ "$TMP/uncaught-base.out"
+
+# GB3. The reconfigure capability probe is ONE suppress around both calls: a stdout without reconfigure() (an io.StringIO)
+#     skips the stderr call too, and main() still returns run()'s rc.
+assert_fixture_dir "$TMP"
+python3 -I - "$SCAN" > "$TMP/reconfigure-probe.out" 2>&1 <<'PY' || true
+import importlib.util, io, sys
+spec = importlib.util.spec_from_file_location("main_target", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+real_out = sys.stdout
+
+class Err(io.StringIO):
+    calls = 0
+    def reconfigure(self, **kw):
+        Err.calls += 1
+
+mod.run = lambda argv: 0
+sys.stdout, sys.stderr = io.StringIO(), Err()
+try:
+    rc = mod.main()
+finally:
+    sys.stdout = real_out
+print("RC=%s CALLS=%s" % (rc, Err.calls))
+PY
+check "GB3 a stdout without reconfigure() does not stop main() returning run()'s rc, and skips the stderr call" grep -qxF "RC=0 CALLS=0" "$TMP/reconfigure-probe.out"
+
+# GB3 positive control: with reconfigure() present on both streams, main() calls both and asks for surrogateescape.
+python3 -I - "$SCAN" > "$TMP/reconfigure-both.out" 2>&1 <<'PY' || true
+import importlib.util, io, sys
+spec = importlib.util.spec_from_file_location("main_target", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+real_out = sys.stdout
+
+class Stream(io.StringIO):
+    def __init__(self):
+        super().__init__()
+        self.seen = []
+    def reconfigure(self, **kw):
+        self.seen.append(kw.get("errors"))
+
+mod.run = lambda argv: 0
+out, err = Stream(), Stream()
+sys.stdout, sys.stderr = out, err
+try:
+    mod.main()
+finally:
+    sys.stdout = real_out
+print("OUT=%s ERR=%s" % (out.seen, err.seen))
+PY
+check "GB3 control: stdout is reconfigured with errors=surrogateescape" grep -qF "OUT=['surrogateescape']" "$TMP/reconfigure-both.out"
+check "GB3 control: stderr is reconfigured with errors=surrogateescape" grep -qF "ERR=['surrogateescape']" "$TMP/reconfigure-both.out"
+
+# ============================================================================================
 # Anti-vacuity and accounting (direct printf + exit, never through fail())
 # ============================================================================================
-if [[ "$cases" -lt 124 ]]; then
-  printf '[FATAL] anti-vacuity floor: only %s cases ran, floor is 124\n' "$cases" >&2
+if [[ "$cases" -lt 145 ]]; then
+  printf '[FATAL] anti-vacuity floor: only %s cases ran, floor is 145\n' "$cases" >&2
   exit 1
 fi
 if [[ $((passes + fails)) -ne "$cases" ]]; then

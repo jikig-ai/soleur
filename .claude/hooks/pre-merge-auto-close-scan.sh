@@ -93,7 +93,7 @@ CMD="$HOOK_CMD"
 SCAN=$(printf '%s' "$CMD" | strip_command_bodies || printf '%s' "$CMD")
 
 # Only intercept `gh pr merge` (incl. the `… -- gh pr merge` wrapped form).
-if ! grep -qE '(^|&&|\|\||;|\s--\s)\s*gh\s+pr\s+merge(\s|$)' <<<"$SCAN"; then
+if ! grep -qE '(^|&&|\|\||;|\s--\s)\s*('"${SOLEUR_BOUNDARY_PFX:-}"'[[:space:]]+)*gh\s+pr\s+merge(\s|$)' <<<"$SCAN"; then
   exit 0
 fi
 

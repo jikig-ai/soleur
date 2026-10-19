@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Structure + control-flow anchor tests for grok-gpu-bootstrap.sh — no live GPU required.
 set -euo pipefail
+SUITE_TMP=$(mktemp -d)
+[[ "$SUITE_TMP" == /* ]] || { echo "FATAL: SUITE_TMP is not absolute: $SUITE_TMP" >&2; exit 2; }
+trap 'rm -rf "$SUITE_TMP"' EXIT
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SCRIPT="${ROOT}/scripts/dogfood/grok-gpu-bootstrap.sh"
@@ -100,7 +103,7 @@ else
 fi
 
 # Non-loopback base_url refuse
-tmpcfg="$(mktemp)"
+tmpcfg="$(mktemp -p "$SUITE_TMP")"
 printf 'base_url = "http://203.0.113.9:11434/v1"\n' >"$tmpcfg"
 if ! assert_config_base_url_loopback "$tmpcfg" 2>/dev/null; then
   pass "assert_config_base_url_loopback refuses public host"

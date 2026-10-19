@@ -33,6 +33,7 @@ import path from "node:path";
 import * as Sentry from "@sentry/nextjs";
 
 import { buildAgentEnv, type AgentCredential } from "./agent-env";
+import { agentSessionTmpDir } from "./agent-session-tmp";
 import { makeSandboxedSpawn, outerWrapEnabled } from "./agent-outer-wrap";
 import { resolveWorkspaceMode, type WorkspaceMode } from "./workspace-mode";
 import { assertTrustedPluginPath, getPluginPath } from "./plugin-path";
@@ -41,6 +42,7 @@ import { buildAgentSandboxConfig } from "./agent-runner-sandbox-config";
 import { createSandboxHook } from "./sandbox-hook";
 import { createContextQueriesHook } from "./context-queries-hook";
 import { createPhaseSurfaceHook } from "./phase-surface-hook";
+import { createUntrustedContentHook } from "./untrusted-content";
 import { createGitLockMarkerHook } from "./git-lock-marker-telemetry";
 import { createChildLogger } from "./logger";
 
@@ -199,6 +201,25 @@ export interface AgentQueryOptionsArgs {
    */
   enableContextQueries?: boolean;
   /**
+   * #4671 / ADR-287 — when true AND `webEgress` is present (the only way the built-in
+   * WebFetch is enabled for a hosted session), a fail-open `PostToolUse(WebFetch)` hook
+   * classifies fetched content with the heuristic scorer and ANNOTATES flagged results
+   * (`additionalContext`). Resolved per session from the `untrusted-content-classify`
+   * Flagsmith flag by the cc dispatcher; crons never pass `webEgress`, so they are
+   * untouched. Annotate-only: never blocks.
+   */
+  enableUntrustedContentClassify?: boolean;
+  /**
+   * #4671 / ADR-287 — subordinate to `enableUntrustedContentClassify` (a no-op without
+   * it). When true the same hook also rewrites a FLAGGED WebFetch result into the
+   * data-only envelope via `updatedToolOutput`. Resolved from the `untrusted-content-wrap`
+   * flag. The single PostToolUse output rewriter (a second one would compete
+   * last-write-wins, ADR-287).
+   */
+  enableUntrustedContentWrap?: boolean;
+  /** Metadata-only telemetry context for the WebFetch hook (never content). */
+  untrustedContentTelemetry?: { workspaceId?: string; sessionId?: string };
+  /**
    * TR3 tool-attempt telemetry (#5843, ADR-070 amendment). When set, this single
    * fail-open `PreToolUse` hook (minted per query by `createToolAttemptCollector`
    * in the cc dispatcher) is registered as a SEPARATE, matcher-less PreToolUse
@@ -296,6 +317,8 @@ export function buildAgentQueryOptions(
     // Set only for the entitled+verified dispatch (see field doc); beats
     // the ambient allowlist copy inside buildAgentEnv.
     egressProxy: args.webEgress,
+    // #10445: per-tenant CLI temp base; the sandbox config denies its shared root.
+    claudeTmpDir: agentSessionTmpDir(args.workspaceId ?? path.basename(args.workspacePath)),
   });
   const buildAgentEnvHome = agentEnv.HOME ?? "/home/soleur";
 
@@ -419,8 +442,9 @@ export function buildAgentQueryOptions(
           ],
         },
       ],
-      // PostToolUse hooks (all fail-open, observe/additive-only — never touch the
-      // tool floor):
+      // PostToolUse hooks (all fail-open; none touches the tool floor. All but the
+      // optional WebFetch hook below are observe/additive-only; that one may also, behind a
+      // flag, REWRITE a flagged WebFetch result via updatedToolOutput — ADR-287):
       //   - ALWAYS: the #4826 git-lock marker mirror (matcher "Bash"). Observe-only;
       //     re-emits the in-sandbox SOLEUR_GIT_LOCK_*/"worktree wedge" markers to the
       //     server-side logger (→ Better Stack + Sentry breadcrumb), closing ADR-081's
@@ -438,6 +462,23 @@ export function buildAgentQueryOptions(
           : []),
         ...(args.enableContextQueries
           ? [{ matcher: "Skill", hooks: [createContextQueriesHook(args.workspacePath)] }]
+          : []),
+        // #4671 / ADR-287 — heuristic injection scan of WebFetch results. Installed only
+        // when the session actually has web egress (WebFetch is otherwise disallowed) AND
+        // the per-session classify flag is on. Exactly ONE hook may emit
+        // `updatedToolOutput`; this is it.
+        ...(args.webEgress && args.enableUntrustedContentClassify
+          ? [
+              {
+                matcher: "WebFetch",
+                hooks: [
+                  createUntrustedContentHook({
+                    wrap: args.enableUntrustedContentWrap === true,
+                    ...args.untrustedContentTelemetry,
+                  }),
+                ],
+              },
+            ]
           : []),
       ],
     },

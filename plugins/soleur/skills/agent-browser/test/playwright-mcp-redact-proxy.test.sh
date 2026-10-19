@@ -321,6 +321,7 @@ PY
 assert_stderr_marker 'B7: initialize logs what was wrapped' "$main" 'wrapping Playwright' 1
 assert_stderr_marker 'B4: child pgid logged once' "$main" 'child pgid' 1
 assert_stderr_marker 'B10: teardown line on stdin EOF' "$main" 'child exited rc=0' 1
+assert_stderr_marker 'PR2: a clean EOF session emits no swallowed marker (characterization)' "$main" 'swallowed' 0
 assert_group_empty 'FR14: stdin EOF → child group empty' "$main"
 assert_rc 'FR14: clean child exit → proxy exit 0' "$main" 0
 assert_true 'NFR2: every stdout line of a full session is a JSON-RPC object' test "$(fact "$main" 0 alljson)" = "1"
@@ -708,6 +709,31 @@ assert_rc 'FR7: the session ended cleanly after the withhold' "$r" 0
 mk_variant "$WORK/v-rename" "$PROXY" 'def main() -> None:' 'del looks_like_a11y_tree\n\n\ndef main() -> None:'
 r="$(session v-rename "$WORK/v-rename/proxy.py" --send "$INIT" --end eof --timeout 3)"
 assert_refused_start 'B2: a redactor missing one of the four names → refuse (not a per-result withhold)' "$r" 'does not export looks_like_a11y_tree'
+# Startup refusal (slice 1 of #10331): the startup handlers catch (Exception, SystemExit, KeyboardInterrupt), not BaseException. Each excluded
+# class must still refuse with rc 2 and the unchanged reason line, at every member: the import, the redact_text call and the
+# looks_like_a11y_tree call in the self-test (a case for one member does not cover the other).
+for cls in SystemExit KeyboardInterrupt; do
+  mk_variant "$WORK/v-load-$cls" "$PROXY" 'def main() -> None:' "raise $cls()\n\n\ndef main() -> None:"
+  r="$(session "v-load-$cls" "$WORK/v-load-$cls/proxy.py" --send "$INIT" --end eof --timeout 3)"
+  assert_refused_start "G1: a redactor raising $cls at import → refuse to start (rc 2), class named" "$r" "cannot load redact-a11y-snapshot.py: $cls"
+done
+mk_variant "$WORK/v-st-redact" "$PROXY" 'def redact_text(text: str) -> str:' 'def redact_text(text: str) -> str:\n    raise KeyboardInterrupt()\n\ndef _unused_redact_text(text: str) -> str:'
+r="$(session v-st-redact "$WORK/v-st-redact/proxy.py" --send "$INIT" --end eof --timeout 3)"
+assert_refused_start 'G1: redact_text raising KeyboardInterrupt in the self-test → refuse (rc 2), class named' "$r" 'redactor self-test raised KeyboardInterrupt'
+mk_variant "$WORK/v-st-redact-exit" "$PROXY" 'def redact_text(text: str) -> str:' 'def redact_text(text: str) -> str:\n    raise SystemExit(3)\n\ndef _unused_redact_text(text: str) -> str:'
+r="$(session v-st-redact-exit "$WORK/v-st-redact-exit/proxy.py" --send "$INIT" --end eof --timeout 3)"
+assert_refused_start 'G1: redact_text raising SystemExit in the self-test → refuse (rc 2), class named' "$r" 'redactor self-test raised SystemExit'
+mk_variant "$WORK/v-st-looks" "$PROXY" 'def looks_like_a11y_tree(value: str) -> bool:' 'def looks_like_a11y_tree(value: str) -> bool:\n    raise KeyboardInterrupt()\n\ndef _unused_looks(value: str) -> bool:'
+r="$(session v-st-looks "$WORK/v-st-looks/proxy.py" --send "$INIT" --end eof --timeout 3)"
+assert_refused_start 'G1: looks_like_a11y_tree raising KeyboardInterrupt in the self-test → refuse (rc 2), class named' "$r" 'looks_like_a11y_tree raised KeyboardInterrupt'
+mk_variant "$WORK/v-st-looks-exit" "$PROXY" 'def looks_like_a11y_tree(value: str) -> bool:' 'def looks_like_a11y_tree(value: str) -> bool:\n    raise SystemExit(3)\n\ndef _unused_looks(value: str) -> bool:'
+r="$(session v-st-looks-exit "$WORK/v-st-looks-exit/proxy.py" --send "$INIT" --end eof --timeout 3)"
+assert_refused_start 'G1: looks_like_a11y_tree raising SystemExit in the self-test → refuse (rc 2), class named' "$r" 'looks_like_a11y_tree raised SystemExit'
+# The narrowing is deliberate: a BaseException subclass outside (Exception, SystemExit, KeyboardInterrupt) is not caught, so the proxy
+# dies with rc 1 and a traceback. Still fail-closed (no stdout line, no child) -- pinned so widening back to BaseException (rc 2) is a decision.
+mk_variant "$WORK/v-load-outside" "$PROXY" 'def main() -> None:' "class _OutsideBase(BaseException):\n    pass\n\n\nraise _OutsideBase()\n\n\ndef main() -> None:"
+r="$(session v-load-outside "$WORK/v-load-outside/proxy.py" --send "$INIT" --end eof --timeout 3)"
+assert_true 'G1: a BaseException subclass outside the narrowed tuple at import → rc 1, nothing relayed, no child spawned' bash -c '[[ "$(rcof "$1")" == "1" && "$(fact "$1" 0 lines)" == "0" && -z "$(cat "$1/child_pgid" 2>/dev/null)" ]] && stderr_has "$1" "_OutsideBase"' _ "$r"
 # FR13 behavioural: a SPY redactor tags every string it is handed. Every text block
 # the proxy delivers must carry the tag — a proxy-side predicate that skips some
 # text (a literal, a tool-name allowlist, any spelling of either) cannot hide.
@@ -746,6 +772,10 @@ r="$(odd meta-in-result)"; assert_withheld 'FR11b: _meta in the result → withh
 r="$(odd result-and-method)"; assert_withheld 'FR11b: result AND method → withheld' "$r" 3 'unrecognised result shape'
 r="$(odd no-content)"; assert_withheld 'FR11b: no content key → withheld' "$r" 3 'unrecognised result shape'
 r="$(odd result-string)"; assert_withheld 'FR11b: result is a string → withheld' "$r" 3 'unrecognised result shape'
+for f in evaluate-escaped-object; do
+  r="$(odd "$f")"
+  assert_true "PR2: non-JSON candidate lines ($f) emit no swallowed marker (characterization)" bash -c 'stderr_has "$1" "child pgid" && ! stderr_has "$1" "swallowed"' _ "$r"
+done
 r="$(odd empty-content)"; assert_byte_identical 'edge: content: [] forwarded unchanged' "$r" 3 "$ODD/empty-content.json"
 r="$(odd error-with-data)"; assert_withheld 'row 31: error with structured data → withheld' "$r" 3 'unrecognised shape'
 r="$(odd error-and-result)"; assert_withheld 'row 31: an error frame that also carries a result → withheld' "$r" 3 'unrecognised shape'
@@ -879,9 +909,11 @@ assert_stderr_marker 'row 37: discard noted with the byte count only' "$r" 'disc
 r="$(session hold-eof "$PROXY" --env FAKE_PW_HOLD=1 --send "$INIT" --end eof)"
 assert_group_empty 'FR14/row 12: stdin EOF with a holding child → group empty (SIGKILL after grace)' "$r"
 assert_stderr_marker 'FR14: SIGKILL-after-grace line' "$r" 'survived SIGTERM; SIGKILL sent' 1
+assert_stderr_marker 'PR2: the SIGTERM-ignoring child needing SIGKILL emits no swallowed marker (characterization)' "$r" 'swallowed' 0
 r="$(session grandchild "$PROXY" --env FAKE_PW_GRANDCHILD=1 --send "$INIT" --end eof)"
 assert_group_empty 'FR14/row 50: direct child exits, a SIGTERM-ignoring grandchild holds → group still emptied' "$r"
 assert_stderr_marker 'FR14/row 50: the grandchild needed the SIGKILL' "$r" 'survived SIGTERM; SIGKILL sent' 1
+assert_stderr_marker 'PR2: the grandchild needing SIGKILL emits no swallowed marker (characterization)' "$r" 'swallowed' 0
 r="$(session hold-term "$PROXY" --env FAKE_PW_HOLD=1 --send "$INIT" --end sigterm)"
 assert_group_empty 'FR14/row 27: SIGTERM to the proxy → group empty' "$r"
 r="$(session exit3 "$PROXY" --env FAKE_PW_EXIT_CODE=3 --send "$INIT" --send "$SNAP" --end none --timeout 5)"
@@ -931,7 +963,7 @@ assert_true 'NFR1/NFR3: stdlib-only imports, no threading' python3 - "$PROXY" <<
 import ast, sys
 t = ast.parse(open(sys.argv[1]).read())
 mods = {(n.names[0].name if isinstance(n, ast.Import) else n.module).split(".")[0] for n in ast.walk(t) if isinstance(n, (ast.Import, ast.ImportFrom))}
-allowed = {"__future__", "importlib", "json", "os", "selectors", "signal", "subprocess", "sys", "time", "typing"}
+allowed = {"__future__", "contextlib", "importlib", "json", "os", "selectors", "signal", "subprocess", "sys", "time", "typing"}
 sys.exit(0 if mods <= allowed and "threading" not in mods else 1)
 PY
 
@@ -1356,6 +1388,192 @@ g3_mut 'Guard 3 mutant 6: a second mcpServers key → not the pinned key set' 'd
 g3_mut 'Guard 3 mutant 7: --chromium-fallback dropped → a Chrome-less host gets no browser' 'd["mcpServers"]["playwright"]["args"].remove("--chromium-fallback")'
 assert_true 'Guard 3 mutant 5: renaming the server key fails the lookup loudly' bash -c '! python3 -c "import json,sys; d=json.load(open(sys.argv[1])); d[\"mcpServers\"][\"playwrite\"]=d[\"mcpServers\"].pop(\"playwright\"); print(d[\"mcpServers\"][\"playwright\"][\"args\"][0])" "$1" 2>/dev/null' _ "$PLUGIN_MCP"
 
+# PR2 (#10331): the swallowed-error note carries a class name and a literal site label only, never raises,
+# and runs after the group kill. The probe text is shared with the other suites except its census and the teardown case.
+# $PROXY, not $PROXY_SHIPPED: the probe must exercise the proxy under test so a mutated copy (PROXY_UNDER_TEST) is actually driven.
+note_probe="$(python3 -I - "$PROXY" reply-unrelayed-request,teardown-stdin-close,teardown-sigkill,teardown-final-wait,teardown-flush 2>&1 <<'PY' || true
+import ast, importlib.util, io, os, signal, sys
+spec = importlib.util.spec_from_file_location("note_target", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+def say(ok, name):
+    print(("OK " if ok else "NOT-OK ") + name)
+
+class Boom(OSError):
+    pass
+
+def run_note(exc, stream):
+    real, sys.stderr = sys.stderr, stream
+    try:
+        mod._note(exc, "probe")
+    finally:
+        sys.stderr = real
+
+buf = io.StringIO()
+run_note(Boom("CANARY-7f3a"), buf)
+line = buf.getvalue()
+say(line.endswith(" swallowed Boom at probe\n") and line.count("\n") == 1, "line-shape")
+say("CANARY" not in line, "canary-absent")
+
+class Failing:
+    def __init__(self, exc):
+        self.exc = exc
+    def write(self, s):
+        raise self.exc
+    def flush(self):
+        raise self.exc
+
+for name, exc in (("oserror-stderr", OSError("w")), ("valueerror-stderr", ValueError("w")), ("runtimeerror-stderr", RuntimeError("w"))):
+    try:
+        run_note(Boom("x"), Failing(exc))
+        say(True, name)
+    except BaseException:
+        say(False, name)
+
+try:
+    run_note(Boom("x"), None)
+    say(True, "none-stderr")
+except BaseException:
+    say(False, "none-stderr")
+
+closed = open(os.devnull, "w")
+closed.close()
+try:
+    run_note(Boom("x"), closed)
+    say(True, "closed-stderr")
+except BaseException:
+    say(False, "closed-stderr")
+
+def literal(node):
+    return isinstance(node, ast.Constant) and isinstance(node.value, str)
+
+def census(src):
+    # the proxy collects (exc, literal-label) pairs in `pending` inside teardown and emits them from _flush_notes,
+    # so the loop's own _note(exc, label) call is exempt and every pending.append tuple is checked instead
+    calls, bad, labels = 0, [], set()
+    tree = ast.parse(src)
+    exempt = set()
+    for fn in ast.walk(tree):
+        if isinstance(fn, ast.FunctionDef) and fn.name == "_flush_notes":
+            exempt.update(id(n) for n in ast.walk(fn))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or id(node) in exempt:
+            continue
+        if isinstance(node.func, ast.Name) and node.func.id == "_note":
+            calls += 1
+            if len(node.args) == 2 and not node.keywords and isinstance(node.args[0], ast.Name) and literal(node.args[1]):
+                labels.add(node.args[1].value)
+            else:
+                bad.append(node.lineno)
+        elif isinstance(node.func, ast.Attribute) and node.func.attr == "append" and isinstance(node.func.value, ast.Name) and node.func.value.id == "pending":
+            calls += 1
+            tup = node.args[0] if len(node.args) == 1 else None
+            if isinstance(tup, ast.Tuple) and len(tup.elts) == 2 and isinstance(tup.elts[0], ast.Name) and literal(tup.elts[1]):
+                labels.add(tup.elts[1].value)
+            else:
+                bad.append(node.lineno)
+    return calls, bad, labels
+
+calls, bad, labels = census(open(sys.argv[1], encoding="utf-8").read())
+say(calls >= 1 and not bad, "census-literal-labels")
+say(labels == set(sys.argv[2].split(",")), "census-label-set")
+say(census("_note(exc, site='x')")[1] != [], "census-rejects-keyword")
+say(census("_note(str(exc), 'a')")[1] != [], "census-rejects-computed")
+say(census("_note(exc, 'a')")[:2] == (1, []), "census-accepts-literal")
+say(census("pending.append((exc, 'a'))")[:2] == (1, []), "census-accepts-pending-literal")
+say(census("pending.append((exc, str(exc)))")[1] != [], "census-rejects-pending-computed")
+
+class FakeStdin:
+    closed = False
+    def close(self):
+        raise OSError("stdin")
+
+class FakeChild:
+    stdin = FakeStdin()
+    returncode = 0
+    def wait(self, timeout=None):
+        return 0
+    def poll(self):
+        return 0
+
+class Exit(BaseException):
+    def __init__(self, code):
+        self.code = code
+
+def fake_exit(code):
+    raise Exit(code)
+
+kills = []
+def fake_killpg(pg, sig):
+    if sig == 0:
+        raise ProcessLookupError
+    kills.append(sig)
+
+attempts = []
+texts = []
+class FlakyErr(io.StringIO):
+    def write(self, s):
+        if "swallowed" in s:
+            attempts.append(list(kills))
+            texts.append(s)
+            raise RuntimeError("reentrant write")
+        return super().write(s)
+
+proxy = mod.Proxy.__new__(mod.Proxy)
+proxy.out = io.BytesIO()
+proxy.tearing_down = False
+proxy.grace = 0.2
+proxy.pgid = 4242424
+proxy.child = FakeChild()
+real_exit, real_killpg, real_err = os._exit, os.killpg, sys.stderr
+os._exit, os.killpg, sys.stderr = fake_exit, fake_killpg, FlakyErr()
+code = None
+try:
+    proxy.teardown("probe")
+except Exit as stop:
+    code = stop.code
+except BaseException:
+    code = "raised"
+finally:
+    captured = sys.stderr.getvalue()
+    os._exit, os.killpg, sys.stderr = real_exit, real_killpg, real_err
+say(code == 0 and attempts == [[signal.SIGTERM]] and "child exited rc=0" in captured, "teardown-note-after-kill")
+say(texts == [mod.PREFIX + " swallowed OSError at teardown-stdin-close\n"], "teardown-note-text")
+
+# Teardown narrowness (slice 1 of #10331): the SIGTERM step suppresses ProcessLookupError ONLY. A PermissionError from os.killpg is not
+# "the group is already empty" and must surface; widening the suppress to Exception would swallow it.
+def fake_killpg_denied(pg, sig):
+    if sig == 0:
+        raise ProcessLookupError
+    raise PermissionError("denied")
+
+proxy2 = mod.Proxy.__new__(mod.Proxy)
+proxy2.out = io.BytesIO()
+proxy2.tearing_down = False
+proxy2.grace = 0.2
+proxy2.pgid = 4242425
+proxy2.child = FakeChild()
+real_exit, real_killpg, real_err = os._exit, os.killpg, sys.stderr
+os._exit, os.killpg, sys.stderr = fake_exit, fake_killpg_denied, io.StringIO()
+outcome = "returned"
+try:
+    proxy2.teardown("probe-denied")
+except Exit:
+    outcome = "exit"
+except PermissionError:
+    outcome = "PermissionError"
+except BaseException:
+    outcome = "other"
+finally:
+    os._exit, os.killpg, sys.stderr = real_exit, real_killpg, real_err
+say(outcome == "PermissionError", "teardown-permerror-surfaces")
+PY
+)"
+for tok in line-shape canary-absent oserror-stderr valueerror-stderr runtimeerror-stderr none-stderr closed-stderr census-literal-labels census-label-set census-rejects-keyword census-rejects-computed census-accepts-literal census-accepts-pending-literal census-rejects-pending-computed teardown-note-after-kill teardown-note-text teardown-permerror-surfaces; do
+  assert_true "PR2 note probe: $tok" grep -qxF "OK $tok" <<<"$note_probe"
+done
+
 reap_all
 assert_true 'hygiene: sessions recorded their child groups, and none still holding a stub outlives the reap' bash -c '[[ "$1" -gt 0 && -z "$2" ]]' _ "$(grep -c . "$PGIDS" || true)" "$(stub_groups)"
 
@@ -1372,7 +1590,7 @@ if [[ $mutants_declared -ne $EXPECTED_MUTANTS || $red_rows -ne $EXPECTED_RED_ROW
   printf '[FATAL] mutation matrix: %d mutants / %d mutation rows ran, expected %d / %d — a row vanished\n' "$mutants_declared" "$red_rows" "$EXPECTED_MUTANTS" "$EXPECTED_RED_ROWS" >&2
   exit 1
 fi
-MIN_ASSERTIONS=471
+MIN_ASSERTIONS=499
 if [[ $cases -lt $MIN_ASSERTIONS ]]; then
   printf '[FATAL] vacuity floor: only %d cases executed, expected at least %d\n' "$cases" "$MIN_ASSERTIONS" >&2
   exit 1

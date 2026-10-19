@@ -460,10 +460,14 @@ trigger.
 reports `fresh_heartbeat_paused` and exits 0): the response to a beat sent to a paused heartbeat is
 undocumented, and `updated_at` does not move on a beat while paused. So the row ships with
 `arming_pending` and the arming is a separately authorized, trap-rolled-back unpause described in
-`knowledge-base/engineering/operations/runbooks/inngest-server.md`. Nothing in this record states that
-the heartbeat is armed. Dropping `arming_pending` after the arm's read-back re-arms the nightly
+`knowledge-base/engineering/operations/runbooks/inngest-server.md`. As of this amendment (2026-10-11),
+nothing in this record stated that the heartbeat was armed; see the 2026-10-12 record below. Dropping
+`arming_pending` after the arm's read-back re-arms the nightly
 reconcile's `fed-but-paused` class, which is the net for a re-pause (the feeder itself exits 0 on a
-paused heartbeat and would not alert).
+paused heartbeat and would not alert). 2026-10-12 record (#9703): the heartbeat was armed through the
+runbook block (read-back `status=up paused=false`; the feeder reported `verdict=beat` on three runs, ids in the
+runbook section "Arming the probe heartbeat (#9703)") and `arming_pending` is dropped from the manifest row by the
+Stage 3a record PR, so from its merge the reconcile's `fed-but-paused` class covers it. The live state is read from Better Stack, not from this record.
 
 ## Consequences
 

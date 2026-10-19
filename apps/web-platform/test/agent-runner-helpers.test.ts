@@ -19,13 +19,18 @@
 // shape, ignoring divergent per-call overrides (mcpServers,
 // allowedTools, maxTurns, maxBudgetUsd).
 
+import { AGENT_SESSION_TMP_ROOT, agentSessionTmpDir } from "@/server/agent-session-tmp";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "fs";
-import { tmpdir } from "os";
+import { homedir, tmpdir } from "os";
 import { join } from "path";
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-import { buildAgentSandboxConfig } from "@/server/agent-runner-sandbox-config";
+import {
+  buildAgentSandboxConfig,
+  peerMessagingSocketDirs,
+  sessionTranscriptDirs,
+} from "@/server/agent-runner-sandbox-config";
 
 vi.mock("@/server/agent-env", () => ({
   buildAgentEnv: vi.fn(() => ({ ANTHROPIC_API_KEY: "sk-test" })),
@@ -91,12 +96,16 @@ describe("buildAgentSandboxConfig drift guard", () => {
     // Non-filesystem fields are static and must stay byte-identical.
     expect(result.enabled).toBe(true);
     expect(result.failIfUnavailable).toBe(true);
-    expect(result.autoAllowBashIfSandboxed).toBe(true);
+    expect(result.autoAllowBashIfSandboxed).toBe(false);
     expect(result.allowUnsandboxedCommands).toBe(false);
     expect(result.enableWeakerNestedSandbox).toBe(true);
     expect(result.network).toEqual({
       allowedDomains: [],
       allowManagedDomainsOnly: true,
+      // #10445: the SDK's unix-socket seccomp helper (`apply-seccomp`) needs
+      // unshare(CLONE_NEWUSER), which our shim filter denies. Setting this makes
+      // the vendored builder skip the helper (ADR-075 addendum).
+      allowAllUnixSockets: true,
     });
     // filesystem: write own; CONSTANT parent deny; NO allowRead key.
     expect(result.filesystem.allowWrite).toEqual([own]);
@@ -119,6 +128,9 @@ describe("buildAgentSandboxConfig drift guard", () => {
       "/proc",
       "/sys",
       process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
+      ...peerMessagingSocketDirs(),
+      ...sessionTranscriptDirs(),
+      AGENT_SESSION_TMP_ROOT,
     ]);
   });
 
@@ -204,6 +216,9 @@ describe("buildAgentSandboxConfig drift guard", () => {
       "/proc",
       "/sys",
       process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
+      ...peerMessagingSocketDirs(),
+      ...sessionTranscriptDirs(),
+      AGENT_SESSION_TMP_ROOT,
     ]);
   });
 
@@ -221,6 +236,9 @@ describe("buildAgentSandboxConfig drift guard", () => {
       extra,
       // #9534: token dir lands after extras (appended last in the union).
       process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
+      ...peerMessagingSocketDirs(),
+      ...sessionTranscriptDirs(),
+      AGENT_SESSION_TMP_ROOT,
     ]);
   });
 
@@ -228,6 +246,64 @@ describe("buildAgentSandboxConfig drift guard", () => {
     const result = buildAgentSandboxConfig(own);
     expect(result.network.allowedDomains).toEqual([]);
     expect(result.network.allowManagedDomainsOnly).toBe(true);
+  });
+
+  // The pins above derive their expectation from the functions under test, so a typo inside them would
+  // agree with itself. These rows pin the CLI's real path derivation by LITERAL (measured in the vendored
+  // CLI 2.1.284: `(XDG_RUNTIME_DIR || CLAUDE_CODE_TMPDIR || os.tmpdir())/cc-socks/<pid>.sock`, falling back
+  // to `/tmp/cc-socks-<uid>/` when the primary path is over 103 bytes or its dir is refused).
+  it("peerMessagingSocketDirs pins the CLI path derivation by literal (#10445)", () => {
+    expect(peerMessagingSocketDirs({}, 1001)).toEqual(["/tmp/cc-socks", "/tmp/cc-socks-1001"]);
+    expect(
+      peerMessagingSocketDirs(
+        { XDG_RUNTIME_DIR: "/run/user/1001", CLAUDE_CODE_TMPDIR: "/ct", TMPDIR: "/t" },
+        1001,
+      ),
+    ).toEqual([
+      "/run/user/1001/cc-socks",
+      "/ct/cc-socks",
+      "/t/cc-socks",
+      "/tmp/cc-socks",
+      "/tmp/cc-socks-1001",
+    ]);
+    // A relative or empty base is not a path the CLI would use; a base of /tmp collapses with the default.
+    expect(peerMessagingSocketDirs({ TMPDIR: "rel", XDG_RUNTIME_DIR: "" }, 7)).toEqual([
+      "/tmp/cc-socks",
+      "/tmp/cc-socks-7",
+    ]);
+    expect(peerMessagingSocketDirs({ TMPDIR: "/tmp" }, 7)).toEqual(["/tmp/cc-socks", "/tmp/cc-socks-7"]);
+  });
+
+  it("sessionTranscriptDirs pins the shared-HOME transcript dir by literal (#10445)", () => {
+    expect(sessionTranscriptDirs({ HOME: "/home/soleur" })).toEqual(["/home/soleur/.claude/projects"]);
+    expect(sessionTranscriptDirs({ HOME: "/h", CLAUDE_CONFIG_DIR: "/cfg" })).toEqual([
+      "/h/.claude/projects",
+      "/cfg/projects",
+    ]);
+    expect(sessionTranscriptDirs({ HOME: "relative" })).toEqual([]);
+    // Unset HOME: the CLI uses the passwd home, so the mask must not silently disappear.
+    expect(sessionTranscriptDirs({})).toEqual([join(homedir(), ".claude", "projects")]);
+  });
+
+  it("the production config denies the peer-socket and transcript dirs by literal (#10445)", () => {
+    const deny = buildAgentSandboxConfig(own).filesystem.denyRead;
+    expect(deny).toContain("/tmp/cc-socks");
+    expect(deny).toContain(join(process.env.HOME ?? "/root", ".claude", "projects"));
+  });
+
+  // #10445: with the knob off the SDK wraps EVERY Bash command in its embedded
+  // `apply-seccomp` helper, which calls unshare(CLONE_NEWUSER) — denied by our
+  // bwrap-shim filter, so every hosted Bash call died with EPERM. Pin the exact
+  // post-state (toBe(true), not truthy) for BOTH egress arms.
+  it("allowAllUnixSockets is exactly true on every arm (#10445)", () => {
+    for (const opts of [
+      undefined,
+      { allowGithubEgress: true },
+      { allowWebEgress: true },
+      { readOnly: true },
+    ]) {
+      expect(buildAgentSandboxConfig(own, opts).network.allowAllUnixSockets).toBe(true);
+    }
   });
 });
 
@@ -276,6 +352,7 @@ describe("buildAgentSandboxConfig — GitHub egress variant (#5041 follow-up)", 
         ...EXPECTED_SA_ACCOUNTS,
       ],
       allowManagedDomainsOnly: true,
+      allowAllUnixSockets: true,
     });
     // Filesystem is unchanged by the egress flag.
     expect(result.filesystem.allowWrite).toEqual([own]);
@@ -289,6 +366,9 @@ describe("buildAgentSandboxConfig — GitHub egress variant (#5041 follow-up)", 
       "/proc",
       "/sys",
       process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
+      ...peerMessagingSocketDirs(),
+      ...sessionTranscriptDirs(),
+      AGENT_SESSION_TMP_ROOT,
     ]);
   });
 
@@ -360,5 +440,19 @@ describe("buildAgentQueryOptions drift guard (legacy ↔ cc — #2922)", () => {
       // biome-ignore lint/style/noNonNullAssertion: shape verified by other tests
       cc.hooks!.PreToolUse![0].matcher,
     );
+  });
+});
+
+// #10445 CTO ruling: the per-tenant CLI temp base. The CLI falls back to the SHARED `<tmpdir>/claude-<uid>` for children when
+// `<base>/claude-<uid>` is over 44 bytes, which would silently re-open the sibling-output channel.
+describe("agentSessionTmpDir (#10445)", () => {
+  it("is per tenant, stable, and keeps the per-uid dir within the CLI's 44-byte child-TMPDIR limit for any uid", () => {
+    const a = agentSessionTmpDir("00000000-0000-0000-0000-00000000000a");
+    expect(a).toBe(agentSessionTmpDir("00000000-0000-0000-0000-00000000000a"));
+    expect(a).not.toBe(agentSessionTmpDir("00000000-0000-0000-0000-00000000000b"));
+    expect(a.startsWith(`${AGENT_SESSION_TMP_ROOT}/`)).toBe(true);
+    // 44 = the vendored CLI 2.1.284 threshold above which it silently falls back to the SHARED <tmpdir>/claude-<uid> for
+    // children (measured by the CTO ruling, 2026-10-16; G2's own-entry-only assertion re-proves it end to end).
+    expect(Buffer.byteLength(`${a}/claude-4294967294`)).toBeLessThanOrEqual(44);
   });
 });

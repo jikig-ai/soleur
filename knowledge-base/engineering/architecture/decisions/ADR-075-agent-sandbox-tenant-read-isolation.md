@@ -334,6 +334,32 @@ did not. The shim now:
 in the shared container, not just the sandbox, as an interim for a defect
 the shim can fix without widening anything. Rejected on least-privilege.
 
+> **Addendum — 2026-10-12 (#10065):** the "Dropping (not covering) is load-bearing" rationale above holds for a mount
+> NAMESPACE that carries no other procfs. The vendored argv for the agent runner begins with a recursive `--ro-bind / /`,
+> so the container's own procfs already sits beneath the vendor `--tmpfs /proc` after a drop as well; a drop and a cover
+> therefore differ only for a process that could `umount` the tmpfs, i.e. one holding `CAP_SYS_ADMIN` over the mount
+> namespace. **Observed** 2026-10-12 (`knowledge-base/project/specs/feat-one-shot-10065-sandbox-proc-suite-parity/measurements.md`,
+> M3; run under `apparmor=unconfined`, so the AppArmor half is CI's): in the unprivileged suite image every
+> `umount2("/proc")` from inside the sandbox is EPERM for drop and cover alike, with and without `--cap-add CAP_SYS_ADMIN`,
+> so no behavioral probe separates them. **Inferred, not measured:** that attribution (unprivileged bwrap drops every
+> capability after setup, and the vendored tail carries `--cap-drop ALL`) is the reading consistent with those
+> observations; locked inherited mounts would also produce EPERM, and no positive control (a sandbox that CAN umount)
+> exists in that image. The shim still drops, because "no argv-requested procfs mount at `/proc`" is the property it can
+> state and the suite can assert (the recorder arm of `apps/web-platform/infra/sandbox-masked-proc-docker.test.sh`).
+> **Conditional on three things:** (1) an UNELEVATED bwrap: the production bwrap is neither setuid nor file-capability'd
+> (the 2026-10-09 addendum reverted that arm; the suite's static `ELEVATION` arm is a best-effort scan of the common
+> Dockerfile spellings, backed by a live `stat` of the suite container's `/usr/bin/bwrap`, so it is not a proof); (2) the
+> vendored tail keeps `--cap-drop ALL`, which `test/sandbox-vendored-argv-tail.test.ts` pins in both vendored binaries;
+> (3) the three app-container `docker run` tuples keep their posture (no added capability, no host pid mode, no
+> `systempaths` override), which the closed-world tuple check `infra/lib/docker-run-tuple.py` enforces in the required
+> lane through `test/docker-run-tuple-posture.test.ts`. If any stops holding, drop versus cover
+> becomes load-bearing again and this addendum must be re-decided, not carried forward. The hook sandbox builder in the CLI
+> platform binary has no root bind, so the original sentence holds there.
+>
+> In effect this supersedes the sentences of the **Isolation effect** paragraph below that read "no procfs is mounted" and
+> "no-procfs-at-all": the realized mask is an empty `/proc` tmpfs with the container's procfs beneath it, and the paragraph's
+> conclusion (cross-tenant `/proc/<pid>/environ` reads are unreachable) rests on the unelevated-bwrap condition above.
+
 **Why the single-rung re-home.** The plan's rung-2 (`--bind-data` /
 `--ro-bind-data` / `--bind-fd` content binds for deleted or memfd sources)
 is dead on production's bwrap 0.8.0: `--bind-data` EBADFs at write,
@@ -345,7 +371,9 @@ verified end-to-end in-image (the re-homed binary executes through
 `/proc/self/fd/5`). Anything else refuses rather than shipping a silently
 broken multicall.
 
-**Isolation effect.** Preserved and, strictly, strengthened: the realized
+**Isolation effect.** *(Read with the 2026-10-12 (#10065) addendum above: the realized mask is an empty `/proc` tmpfs with
+the container's procfs beneath it, so "no procfs is mounted" and "no-procfs-at-all" below describe the argv, not the
+kernel mount set.)* Preserved and, strictly, strengthened: the realized
 mask is now no-procfs-at-all (previously a pidns-scoped procfs that still
 exposed the sandbox's own `/proc/<pid>` surface). `/proc/<pid>/environ`
 cross-tenant reads are unreachable because no procfs is mounted; the
@@ -375,10 +403,70 @@ path is retained against posture drift.
 
 **Deferred.** Per-tenant executor topology remains **#9773** (epic #9842) —
 this is an interim realization change, not the architecture. The
-least-privilege kernel-stream read for `kdeny` (`src=none`) is **#10045**,
-explicitly not folded into this change.
+least-privilege kernel-stream read for `kdeny` (`src=none`) was **#10045** —
+resolved 2026-10-11: the `KDENY_KERNEL_STREAM` fixed-argv sudoers grant plus a
+`sudo:`-signature denial fallback in `_canary_kdeny_read` give the row the host
+kernel stream it needed.
 
-**Basis.** `knowledge-base/project/specs/feat-one-shot-10032-sandbox-shim-procfs/measurements.md`
+**Basis.** `knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-10032-sandbox-shim-procfs/measurements.md`
 (in-image repro + rewritten-argv spawn, rung-2 EBADF measurement,
 `systempaths=unconfined` contrast); `infra/bwrap-shim/bwrap`;
 `test/bwrap-shim.test.ts`; `scripts/sandbox-canary.mjs`.
+
+## Addendum — 2026-10-16 (#10445): AF_UNIX blocking inside the inner sandbox is deliberately not enforced
+
+**Context.** The #8752 plan recorded the vendored `apply-seccomp` helper as "inert today (our config sets no
+`allowUnixSockets`)", and the 2026-10-11 addendum above (its "Invariance caveat") recorded that the multicall "dies at
+`unshare(CLONE_NEWUSER)` on every kernel posture measured". The first was false, and the second was measured on a host
+that denies unprivileged `NEWUSER` in the container, not on production's posture. The vendored builder wraps **every**
+sandboxed command in that helper (its job is to block `socket(AF_UNIX)` for the command), so under the shim's `--add-seccomp-fd` filter every hosted Bash call failed with
+`apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted` from the first production deploy of
+`web-v0.324.3` (2026-10-06) until this change. The incident record is the PIR
+`knowledge-base/engineering/operations/post-mortems/hosted-agent-bash-apply-seccomp-userns-eperm-postmortem.md`.
+
+**Decision (CTO-ruled, 2026-10-16).** `buildAgentSandboxConfig` sets `network.allowAllUnixSockets: true`. The
+vendored builder then skips the helper ("Skipping seccomp filter - allowAllUnixSockets is enabled"). The
+nested-userns / `clone3` filter injected by the shim is **unchanged**. Rejected: a `CLONE_NEWUSER` exception in
+the filter, because a seccomp filter cannot key on the caller and the exception would re-open nested user
+namespaces for every sandboxed process.
+
+**Residual and its bounds.** The SDK helper was the per-command AF_UNIX block until 2026-10-06 (when #9595 made it
+fail). This change returns to a state with no AF_UNIX block, which is weaker than the pre-incident baseline in this
+dimension: a tenant's Bash can create and connect AF_UNIX sockets inside its sandbox, and bwrap's `--ro-bind / /`
+leaves sibling sessions' pathname sockets in the shared temp dir visible. The exposure is bounded by:
+
+1. Per-session proxy-credential auth on the sibling bridge sockets. `test/sandbox-wrapped-command-runtime.test.ts` (G2)
+   runs two real SDK sessions and requires that, through every visible socket, a request with no credential and a
+   request with a wrong credential both get `407`, while the caller's own credential is accepted by its own socket (the
+   negative control). This is proven for HTTP CONNECT; SOCKS auth was established by reading the vendored binary and is
+   not yet tested (#10455).
+2. Masks over the CLI peer-messaging socket directories (`peerMessagingSocketDirs()`: the union of `cc-socks` under
+   `XDG_RUNTIME_DIR`, `CLAUDE_CODE_TMPDIR`, `TMPDIR` and `/tmp`, plus `/tmp/cc-socks-<uid>`). The peer-messaging
+   protocol's own auth was not characterised, so the mask, not auth, is the control there.
+3. A mask over the session-transcript directory (`$HOME/.claude/projects`, and `$CLAUDE_CONFIG_DIR/projects` when set),
+   because a sibling's proxy credential printed by `env` and persisted in a shared-HOME transcript would otherwise be
+   usable against that sibling's bridge socket; G2 asserts the sandbox sees none.
+4. Per-command `--unshare-net`, which bounds abstract-namespace sockets (asserted in the runtime test's spawn argv).
+5. A per-tenant CLI temp base. The CLI persists every Bash command's output (a sibling's `env` included, with its
+   per-session proxy credential) under `<CLAUDE_CODE_TMPDIR or tmpdir>/claude-<uid>/...`, and the vendored builder binds
+   that whole per-uid dir writable into every sandbox, so no `denyRead` can hide it (the covered allowWrite path is
+   re-bound after the tmpfs). Found by the fix-round security seat: with AF_UNIX allowed, session B could read A's
+   persisted `env` output and replay A's credential against A's bridge sockets (accepted: 502, not 407). Each tenant
+   (workspace) therefore gets its own CLI temp base (`agentSessionTmpDir`, `/tmp/.cs/<sha256(workspace)[0:16]>`, injected as
+   `CLAUDE_CODE_TMPDIR`) and the sandbox config denies the shared root `/tmp/.cs`; G2 runs A with `env; sleep 60` and
+   requires B to find none of A's credential under `/tmp`, `$TMPDIR` or `$HOME`, with a control arm (no per-tenant base)
+   that must find it. This, not socket authentication, is now the primary control for the credential; proxy auth stays
+   as the backstop. Other persisted CLI output locations (`<cfg>/tasks`, `debug`, `history.jsonl`, `cc-daemon-<uid>`)
+   are tracked in #10455.
+
+Load-bearing assumption: SDK proxy auth is the only remaining AF_UNIX control for the bridge sockets. Sockets of the
+host runtime (docker, dbus) are a property of the run tuple and are checked by the pathname-socket census in
+`infra/sandbox-masked-proc-docker.test.sh`. The census has limits: one idle session in the suite image
+(which has none of production's `/workspaces` or plugin mounts), and no abstract sockets. The egress forwarder is a TCP loopback listener, outside the
+per-command network namespace, so it is not covered by these socket controls.
+
+**Follow-up.** If the SDK changes how the proxy sockets authenticate, or a decision is made to enforce AF_UNIX
+blocking again, the replacement is a single `socket(AF_UNIX)` deny in the one bwrap-level filter (`socketpair` stays
+allowed: libuv child processes need it), tracked in #10455. The vendored-binary pins in
+`test/sandbox-vendored-argv-tail.test.ts` (helper-selection literals and the settings mapping) turn red on an SDK bump
+that changes how the helper is selected, so the premise is re-proved rather than inherited.
