@@ -6,6 +6,12 @@ brand_survival_threshold: single-user incident
 
 # CTO rulings, 2026-10-19 (epic #8211)
 
+> **Decision record, not authority.** No row below authorizes any dispatch, merge or approval; the owner names each production
+> command. Superseded in part: PR #10535 was merged on 2026-10-19 at 11:43:22Z (GitHub `mergedAt`), before builds 1 to 3, so T1a
+> ("authorise `gh pr ready 10535` and `gh pr merge 10535`"), the "Operator Holds" gate lines and the "Standing delegation offer" for
+> #10535 below are historical; see `precondition-read-2026-10-19.md` ("Ordering note"). The "Draft A/B/D" wording and the
+> runbook edits C-1 to C-5 belong to the wipe_check stream (PR #10523), copied here as the rulings recorded them.
+
 Nothing here dispatched a workflow, applied terraform or wrote production state. Every cited fact was read in this worktree
 or with a read-only `gh`/`curl` call on 2026-10-19 unless marked `unverified`. Dates: CLO re-ruling 2026-10-24, latest flip
 stamp 2026-11-04, plaintext retention 2026-11-12.
@@ -240,3 +246,27 @@ Scope items (one per line, each names its target):
 2. ready pull request #10535
 
 Expiry: 2026-11-04. Not in scope and never delegable here: every flip, rollback, proof and wipe dispatch (a flag-on window can strand a customer's only copy of work, and the wipe destroys a volume), and every terraform apply. New preparation pull requests need their numbers added by a fresh delegation, because a Scope item must name its target.
+
+## Addendum 2026-10-19 (review of PR #10565): forks the run sheet surfaced
+
+Nothing here dispatched a workflow, applied terraform or wrote production state. The runbook run sheet carries the wording.
+
+- **D6 and the real flip.** Ruled by CTO agent, 2026-10-19: a fresh replace plus a `GIT_DATA_LUKS_KEY` rotation is required before the FIRST
+  flip of any kind, which is the rehearsal; the rehearsal flip executes the flag-write step, so the rotate guard (`store_dirty`) refuses every
+  later rotate and the real cutover rides the 2026-10-14 stamp (run 38583657167). D6's "nothing planted survives" is established only as of that
+  rotate; the rehearsal's R7 `proof` `clear`, the pin fingerprint match and the heartbeat cover the period since, not a fresh host. Follow-ups
+  for the owner or an agent to file: the stale `d6_replace_stale` remedy text in `git-data-cutover.yml`; a dated ADR-220 D6 amendment.
+- **Per-id re-erasure precondition (#8211).** Ruled by CTO agent, 2026-10-19: NARROWED, not waived, for the rehearsal flip (discharged only while the
+  built session-refusal control is on from before R1 to after R4 with session counts of 0, because then the store can hold only the synthetic
+  account's repository, which R6 and R7 erase and re-prove empty; owner acceptance of stranded-work risk alone does not discharge it). For the REAL
+  flip it stands in full, in two parts, neither built: a per-id re-erasure path, and reaping of the flag-resolved `WORKTREE_ROOT` tree on account
+  deletion (`deleteWorkspace` removes only `<workspaces root>/<id>`). Follow-up to file: the second part, and a mount for `WORKTREE_ROOT`.
+- **`WORKTREE_ROOT`.** Ruled by CTO agent, 2026-10-19: R0 adds a names-only listing of the `prd` Doppler config for `WORKTREE_ROOT`; the tree is lost
+  with the old container at the rollback redeploy (not merely unreachable by path). This is a configuration name check and does not reopen the
+  rejected directory read.
+- **Art. 17 in the window.** Ruled by CLO agent, 2026-10-19 (v1 internal attestation, not external counsel): the rehearsal flip may proceed with the
+  per-id path unbuilt on three conditions (the built control holds, shown per host before R1 and before R4; R7 reads `clear`; the runbook carries the
+  carve-out wording), a request received in the window is recorded as "received in window, bounded by R4, not observed erased", any failed read opens a
+  `clo-attestation` issue with the Art. 12(3) deadline in its title, and the owner's acceptance covers the production-flip risk, not an Art. 17
+  shortfall. The CLO suggested an audit record under `knowledge-base/legal/audits/` (`2026-10-19-clo-ruling-8211-rehearsal-art17-window.md`); this PR
+  edits no legal document, so that record is left to the owner to request.
