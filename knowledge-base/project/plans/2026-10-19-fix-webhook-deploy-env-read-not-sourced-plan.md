@@ -12,6 +12,32 @@ type: fix
 
 PR body: `Ref #9639` and `Part of tracker #9217`. No closing keyword (F6-F8 stay open).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-19
+**Gates run:** 4.6 User-Brand Impact (pass), 4.7 Observability (pass; new block, `grep` verb, literal `:0`, no ssh, fits the 15s cap), 4.8 PAT-shaped variable (none), 4.9 UI wireframe (no UI surface, skipped), 4.10 Encryption Posture (no `.tf`/cloud-init/migration in Files to Edit/Create, skipped), 4.11 Guard Contract (`scripts/lint-guard-contract.py` green, adequacy read done), 4.12 Scope Check (1 unfenced section, all rows mapped/justified).
+**Research agents used:** none spawned - the change is two lines in two shell scripts; every claim was verified directly (shell experiments, grep, `gh`), which is the proportionate depth for a mechanical fix with a CTO ruling already recorded.
+
+### Key Improvements
+1. Empirically verified the semantic-parity claim in BOTH dash and bash (matrix below) instead of leaning on the CTO's reasoning alone.
+2. Found a lint trap: the bare `DOPPLER_TOKEN=$_t` assignment trips shellcheck SC2034 (the old `.` hid it). The plan now prescribes an explicit directive.
+3. Verified every cited number, line and label live.
+
+### New Considerations Discovered
+- shellcheck SC2034 on the new assignment (Phase 3 / AC updated).
+- In the dash bootstrap the assignment is inert (the token is not exported there) - this is parity with the sourcing it replaces, not a bug introduced here; a reviewer should not "fix" it with `export` (CTO ruling).
+
+### Verified parity matrix (scratch experiment, dash and bash identical)
+
+| Case | Old `. file` | New sed read | Parity |
+|------|--------------|--------------|--------|
+| Parent did not export the token | shell var set, child env count 0 | shell var set to last assignment, child env count 0 | yes |
+| Parent exported `DOPPLER_TOKEN=inh`, file has token | child sees file value | child sees file value (`last`) | yes |
+| Parent exported, file empty | child keeps `inh` | child keeps `inh` | yes |
+| Parent exported, file missing | child keeps `inh` | child keeps `inh` | yes |
+| `#DOPPLER_TOKEN=bad` comment line, duplicate keys | n/a | `^` anchor ignores the comment; `tail -n 1` takes the last | yes |
+| `sh -ue` caller with the new lines inside `( set +e ... )` | n/a | still alive | safe |
+
 ## Overview
 
 `apps/web-platform/infra/cron-egress-enforce-probe.sh` (`emit_fail`, line 74) and `apps/web-platform/infra/soleur-host-bootstrap.sh` (`_sentry_emit`, line 46) both run `. /etc/default/webhook-deploy 2>/dev/null || true` as root. cloud-init writes that file as `DOPPLER_TOKEN=..`, `DOPPLER_CONFIG_DIR=/tmp/.doppler`, `DOPPLER_ENABLE_VERSION_CHECK=false` and then `chown deploy:deploy` (cloud-init.yml:451-453), so anything the deploy user plants in it (including `set -x`, which lands after the xtrace refusal already passed) executes as root.
@@ -72,10 +98,11 @@ Probe (bash), inside `emit_fail`'s `( set +e ... )`, replacing the sourcing line
 
 ```bash
     _t=$(sed -n 's/^DOPPLER_TOKEN=//p' /etc/default/webhook-deploy 2>/dev/null | tail -n 1)
+    # shellcheck disable=SC2034  # consumed by the doppler child through the inherited env, not in this shell
     [ -z "$_t" ] || DOPPLER_TOKEN=$_t
 ```
 
-Bootstrap `_sentry_emit` (POSIX sh) takes the identical two lines. Semantics, per CTO ruling:
+Bootstrap `_sentry_emit` (POSIX sh) takes the identical lines (verified: `shellcheck -s sh` on the snippet reports only SC2034, which the directive covers). Semantics, per CTO ruling:
 
 - Plain assignment, no `export`: an already-exported `DOPPLER_TOKEN` stays exported with the file's value (probe); an unexported one stays unexported (dash bootstrap). Same as sourcing.
 - Assign only when non-empty: a missing, unreadable or token-less file leaves an inherited token untouched, as sourcing did.
@@ -106,7 +133,7 @@ Extract `_sentry_emit` with `awk '/^_sentry_emit\(\)/{f=1} f{print} f&&/^}/{exit
 
 ### Phase 3 - GREEN: edit both scripts
 
-Apply the two-line read; refresh the stale comments in the probe. Run both suites, `bash -n` both scripts, `shellcheck` both (the repo runs it in CI), and `dash -n` on the bootstrap.
+Apply the two-line read; refresh the stale comments in the probe. Run both suites, `bash -n` both scripts, `shellcheck` both (the repo runs it in CI; the new bare assignment needs the SC2034 directive shown above or it goes red), and `dash -n` on the bootstrap.
 
 ### Phase 4 - Sweep and wrap
 
@@ -213,7 +240,7 @@ discoverability_test:
 - [ ] `grep -cE '^[[:space:]]*\. /etc/default/webhook-deploy' apps/web-platform/infra/cron-egress-enforce-probe.sh apps/web-platform/infra/soleur-host-bootstrap.sh` prints `:0` for both files.
 - [ ] `git diff origin/main --stat` lists only the 4 infra files above plus plan/spec artifacts: no `cloud-init.yml`, `betterstack-logs-alerts.tf`, `apply-web-platform-infra.yml`, `server.tf`.
 - [ ] The "Sentry TRANSPORT parity" block and AC8c still pass unchanged (transport lines untouched).
-- [ ] `bash -n`, `dash -n` (bootstrap) and `shellcheck` clean on both scripts.
+- [ ] `bash -n`, `dash -n` (bootstrap) and `shellcheck` (no new SC2034) clean on both scripts.
 - [ ] PR body carries `Ref #9639` and `Part of tracker #9217` and no closing keyword; the decision-challenges rows are rendered by ship.
 - [ ] Tracking issue exists for the remaining cloud-init terminal-block sourcing site, linked from the PR body.
 
@@ -240,5 +267,6 @@ No cross-domain implications detected - infrastructure/tooling hardening of two 
 - A plan whose `## User-Brand Impact` section is empty or placeholder fails `deepen-plan` Phase 4.6; this one carries a concrete threshold.
 - The path-rewrite fixture is only meaningful if the rewrite is proven to hit; the anti-vacuity row is mandatory, not optional.
 - Do not "fix" the parity-pinned transport lines while editing nearby: the `KEY=`/`SHOST=`/`PROJ=`/`curl` lines must stay byte-identical between the two scripts and in the baked `soleur-boot-emit` copy.
+- The two-line read is inert in the dash bootstrap when the parent did not export the token (verified; same as the sourcing it replaces). Reviewers may call it dead code; the answer is parity, not `export`.
 - Do not add `export`: it silently makes the bootstrap Doppler fallback live, a behavior change outside F5.
 - `sed -n 's/^DOPPLER_TOKEN=//p'` keeps any trailing `\r` or quotes the file might carry; the writer (`printf 'DOPPLER_TOKEN=%s\n'`) never adds them, and sourcing would have stripped quotes - noted as an accepted divergence for a hostile/hand-edited file only.

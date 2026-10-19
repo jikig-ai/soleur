@@ -16,7 +16,7 @@ PR body: `Ref #9639`, `Part of tracker #9217` (no closing keyword). Do NOT touch
 - 2.3 If extraction proves brittle, ship the static row only and file a follow-up.
 
 ## Phase 3 - GREEN
-- 3.1 cron-egress-enforce-probe.sh: replace `. /etc/default/webhook-deploy ...` with `_t=$(sed -n 's/^DOPPLER_TOKEN=//p' /etc/default/webhook-deploy 2>/dev/null | tail -n 1)` + `[ -z "$_t" ] || DOPPLER_TOKEN=$_t`; refresh the stale header and `LIMIT:` comments.
+- 3.1 cron-egress-enforce-probe.sh: add the `# shellcheck disable=SC2034` directive above the assignment (new bare assignment trips SC2034); replace `. /etc/default/webhook-deploy ...` with `_t=$(sed -n 's/^DOPPLER_TOKEN=//p' /etc/default/webhook-deploy 2>/dev/null | tail -n 1)` + `[ -z "$_t" ] || DOPPLER_TOKEN=$_t`; refresh the stale header and `LIMIT:` comments.
 - 3.2 soleur-host-bootstrap.sh `_sentry_emit`: identical two lines (POSIX sh).
 - 3.3 Run both suites, `bash -n`, `dash -n`, shellcheck; confirm the Sentry TRANSPORT parity and AC8c blocks still pass.
 
