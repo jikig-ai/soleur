@@ -339,6 +339,20 @@ describe("Edit/Write/NotebookEdit workspace containment (Stage 2.11)", () => {
     assertDeny(result);
   });
 
+  test.each([
+    { tool: "Glob", input: { path: "/tmp/ws", pattern: "/var/lib/soleur/egress-tokens/*" }, label: "absolute pattern WITH an in-workspace path" },
+    { tool: "Glob", input: { pattern: "~/.claude/**" }, label: "~ pattern" },
+    { tool: "Glob", input: { pattern: "../other/**" }, label: ".. pattern" },
+    { tool: "Glob", input: { pattern: "{/var/lib/soleur/egress-tokens,x}/*" }, label: "brace with an absolute first alternative" },
+    { tool: "Grep", input: { pattern: "x", glob: "../*" }, label: "Grep .. glob" },
+  ])("escaping pattern → deny: $label", async ({ tool, input }) => {
+    mockExtractToolPath.mockReturnValue((input as { path?: string }).path ?? "");
+    mockIsPathInWorkspace.mockReturnValue(true);
+    const canUseTool = createCanUseTool(buildContext());
+    const result = await canUseTool(tool, input, sdkOptions());
+    assertDeny(result);
+  });
+
   test("Glob with a relative pattern and no path → allow", async () => {
     mockExtractToolPath.mockReturnValue("");
     mockIsPathInWorkspace.mockReturnValue(true);

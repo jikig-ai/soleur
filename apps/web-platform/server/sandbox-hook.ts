@@ -22,11 +22,17 @@ export function createSandboxHook(workspacePath: string): HookCallback {
 
       // Empty path is allowed through -- Glob/Grep default to CWD (workspacePath),
       // and Read/Write/Edit require file_path so the SDK rejects empty values.
-      if (
-        (filePath && !isPathInWorkspace(filePath, workspacePath)) ||
-        patternEscapesWorkspace(toolName, toolInput ?? {})
-      ) {
-        logPermissionDecision("sandbox-hook", toolName, "deny", "file path outside workspace");
+      const pathEscapes = !!filePath && !isPathInWorkspace(filePath, workspacePath);
+      const patternEscapes = !pathEscapes && patternEscapesWorkspace(toolName, toolInput ?? {});
+      if (pathEscapes || patternEscapes) {
+        // A distinct reason: an absolute Glob pattern is an attempt to ENUMERATE a directory (the egress
+        // token dir's file names are credentials), which an ordinary path escape is not.
+        logPermissionDecision(
+          "sandbox-hook",
+          toolName,
+          "deny",
+          patternEscapes ? "glob pattern outside workspace" : "file path outside workspace",
+        );
         return {
           systemMessage:
             "File access outside the workspace is not permitted. " +

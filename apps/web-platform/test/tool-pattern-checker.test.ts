@@ -18,6 +18,12 @@ describe("patternEscapesWorkspace", () => {
     { tool: "Grep", input: { pattern: "TODO", glob: TOKEN_GLOB }, label: "Grep absolute glob" },
     { tool: "Grep", input: { pattern: "TODO", glob: "~/x/*" }, label: "Grep ~ glob" },
     { tool: "Grep", input: { pattern: "TODO", glob: "../*" }, label: "Grep .. glob" },
+    // the escaping alternative FIRST in the braces (a comma-only split misses these)
+    { tool: "Glob", input: { pattern: "{/var/lib/soleur/egress-tokens,x}/*" }, label: "Glob brace whose FIRST alternative is absolute" },
+    { tool: "Glob", input: { pattern: "{../x,y}/*" }, label: "Glob brace whose FIRST alternative is .." },
+    { tool: "Glob", input: { pattern: "!/var/lib/soleur/egress-tokens/*" }, label: "Glob negated absolute pattern" },
+    { tool: "Grep", input: { pattern: "x", glob: "*.ts /var/lib/soleur/egress-tokens/*" }, label: "Grep glob with whitespace-separated absolute member" },
+    { tool: "Glob", input: { pattern: "a".repeat(4097) }, label: "Glob pattern over the 4096-char cap (fail closed, no legitimate glob is that long)" },
   ])("flags $label", ({ tool, input }) => {
     expect(patternEscapesWorkspace(tool, input)).toBe(true);
   });
@@ -31,6 +37,9 @@ describe("patternEscapesWorkspace", () => {
     { tool: "Grep", input: { pattern: "../x" }, label: "Grep regex containing .." },
     { tool: "Grep", input: { pattern: "TODO", glob: "*.{ts,tsx}" }, label: "Grep brace glob" },
     { tool: "Read", input: { file_path: "/workspaces/user1/a.md" }, label: "Read (not a pattern tool)" },
+    { tool: "Glob", input: { pattern: "a..b/*.md" }, label: "Glob where .. is part of a name, not a segment" },
+    { tool: "constructor", input: { pattern: "/abs" }, label: "an inherited Object key used as a tool name" },
+    { tool: "__proto__", input: { pattern: "/abs" }, label: "__proto__ used as a tool name" },
     { tool: "Glob", input: {}, label: "Glob with no pattern" },
     { tool: "Glob", input: { pattern: 42 as unknown as string }, label: "non-string pattern" },
   ])("allows $label", ({ tool, input }) => {

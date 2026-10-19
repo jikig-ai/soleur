@@ -401,10 +401,9 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         });
       }
       const filePath = extractToolPath(toolInput);
-      if (
-        (filePath && !isPathInWorkspace(filePath, ctx.workspacePath)) ||
-        patternEscapesWorkspace(toolName, toolInput)
-      ) {
+      const pathEscapes = !!filePath && !isPathInWorkspace(filePath, ctx.workspacePath);
+      const patternEscapes = !pathEscapes && patternEscapesWorkspace(toolName, toolInput);
+      if (pathEscapes || patternEscapes) {
         if (ctx.persona === "support") {
           return deny({
             conversationId: ctx.conversationId,
@@ -418,7 +417,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
           "canUseTool-file-tool",
           toolName,
           "deny",
-          "outside workspace",
+          patternEscapes ? "glob pattern outside workspace" : "outside workspace",
         );
         return {
           behavior: "deny" as const,

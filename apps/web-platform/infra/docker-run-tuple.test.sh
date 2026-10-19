@@ -444,6 +444,17 @@ kill_row K28f-prod-no-init            'm_del prod "--init"'                     
 kill_row K28g-prod-not-detached       'm_repl prod "docker run -d" "docker run"'             'MISSING_DECLARED: option -d missing from ci-deploy.sh prod' '!canary' '#1'
 kill_row K28h-canary-no-log-driver    'm_del canary "--log-driver"'                          'MISSING_DECLARED: option --log-driver missing from ci-deploy.sh canary' '!prod' '#1'
 kill_row K28i-prod-no-memory-swap     'm_del prod "--memory-swap"'                           'MISSING_DECLARED: option --memory-swap missing from ci-deploy.sh prod' '!canary' '#1'
+# --- the other half of the scalar matrix: the deploy-start-only options on the CANARY, and prod's own restart/log-driver/add-host
+# --- (a spec that quietly dropped --init/--memory/--memory-swap from the canary would otherwise survive every row above).
+kill_row K29a-canary-no-init          'm_del canary "--init"'                                'MISSING_DECLARED: option --init missing from ci-deploy.sh canary' '!prod' '!cloud-init.yml' '#1'
+kill_row K29b-canary-no-memory        'm_del canary "--memory \""'                           'MISSING_DECLARED: option --memory missing from ci-deploy.sh canary' '!prod' '#1'
+kill_row K29c-canary-no-memory-swap   'm_del canary "--memory-swap"'                         'MISSING_DECLARED: option --memory-swap missing from ci-deploy.sh canary' '!prod' '#1'
+kill_row K29d-canary-no-env-file      'm_del canary "--env-file"'                            'MISSING_DECLARED: option --env-file missing from ci-deploy.sh canary' '!prod' '#1'
+kill_row K29e-prod-no-restart         'm_del prod "--restart"'                               'MISSING_DECLARED: option --restart missing from ci-deploy.sh prod' '!canary' '#1'
+kill_row K29f-prod-no-log-driver      'm_del prod "--log-driver"'                            'MISSING_DECLARED: option --log-driver missing from ci-deploy.sh prod' '!canary' '#1'
+kill_row K29g-prod-no-add-host        'm_del prod "--add-host"'                              'MISSING_DECLARED: option --add-host missing from ci-deploy.sh prod' '!canary' '#1'
+# a rogue option AND a deleted member in one tuple: the MISSING line must not be hidden behind the first violation
+kill_row K29h-rogue-option-and-missing 'm_ins prod "--cap-add NET_ADMIN"; m_del prod "--env-file"' 'UNKNOWN_OPTION: --cap-add in ci-deploy.sh prod' 'MISSING_DECLARED: option --env-file missing from ci-deploy.sh prod' '#2'
 kill_row K20i-memory-zero-unlimited 'm_repl prod "--memory \"\$PROD_MEMORY_CAP\"" "--memory 0"' 'POSTURE_VALUE: --memory 0 in ci-deploy.sh prod'
 kill_row K20h-main-file-symlink   'm_symlink "$CI_DEPLOY_REL" /dev/zero'                 'TUPLE_COUNT: cannot read ci-deploy.sh' 'not a regular file'
 
@@ -644,7 +655,9 @@ h1_stub declared check_declared '[]' \
   K27a-canary-no-workspaces-vol K27b-canary-no-port K27c-canary-no-host-id-env K27d-first-boot-no-reaper-env \
   K27e-first-boot-no-inngest-env K27f-first-boot-no-port K27g-prod-two-members-gone \
   K28a-prod-no-env-file K28b-prod-no-memory K28c-canary-no-restart K28d-first-boot-no-env-file K28e-first-boot-no-add-host \
-  K28f-prod-no-init K28g-prod-not-detached K28h-canary-no-log-driver K28i-prod-no-memory-swap
+  K28f-prod-no-init K28g-prod-not-detached K28h-canary-no-log-driver K28i-prod-no-memory-swap \
+  K29a-canary-no-init K29b-canary-no-memory K29c-canary-no-memory-swap K29d-canary-no-env-file \
+  K29e-prod-no-restart K29f-prod-no-log-driver K29g-prod-no-add-host
 h1_stub census check_count '[]' \
   K05-prod-renamed K06-fourth-site-dup K11-heredoc-all K16-missing-cloud-init K20h-main-file-symlink
 h1_stub projection check_projection '[]' \
@@ -668,7 +681,7 @@ if [ "$((PASS + FAIL))" -ne "$ROWS" ]; then
   printf '[FATAL] accounting identity: passes(%s) + fails(%s) != rows(%s) - a verdict was discarded\n' "$PASS" "$FAIL" "$ROWS" >&2
   exit 1
 fi
-MIN_ROWS=251
+MIN_ROWS=266
 if [ "$ROWS" -lt "$MIN_ROWS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s rows ran, floor is %s\n' "$ROWS" "$MIN_ROWS" >&2
   exit 1

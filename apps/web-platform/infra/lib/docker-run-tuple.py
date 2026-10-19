@@ -6,8 +6,8 @@ in cloud-init.yml. Each carries the security posture that the /proc mask and the
 (the soleur-bwrap AppArmor profile, the seccomp profile, a bounded /tmp tmpfs, no added capability, no host
 namespace, no environment lever on PATH or the loader). A deny list of option spellings was bypassed every time
 a spelling was missed, so this is a CLOSED world: the tuples are tokenized with shlex and every option,
-environment name, volume, port and value outside the declared set is a violation, a declared volume, environment name
-or port that is ABSENT from its tuple is a violation too (MISSING_DECLARED), and every command-position
+environment name, volume, port and value outside the declared set is a violation, a declared volume, environment name,
+port or scalar option that is ABSENT from its tuple is a violation too (MISSING_DECLARED), and every command-position
 `docker run|create|...` in the two files is censused so a fourth start site cannot hide.
 
 Usage (stdlib only, run as `python3 -I`):
@@ -77,11 +77,13 @@ _COMMON_ENV = {
     "SOLEUR_HOST_ID": {"$HOST_ID"},
 }
 _VOLS = {"/mnt/data/workspaces:/workspaces", "/mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro"}
-# The host session-token dir (server.tf: 1001:1001, 0711). Prod and first-boot mount it and set SOLEUR_EGRESS_REAPER;
-# the canary neither mounts it nor reaps (ADR-278 canary isolation: its /proc cannot see prod forwarders).
-# Scalar options a start must CARRY (their allowed values are checked separately). first-boot has no memory cap or --init by design.
+# Scalar options a start must CARRY (MISSING_DECLARED); their allowed VALUES are checked separately. The memory cap and
+# --init are required on the two deploy starts only: ADR-062 scopes them to ci-deploy.sh's two blocks, and the
+# first-boot start has neither today (not required there).
 _SCALARS = {"-d", "--log-driver", "--restart", "--env-file", "--add-host"}
 _SCALARS_APP = _SCALARS | {"--init", "--memory", "--memory-swap"}
+# The host session-token dir (server.tf: 1001:1001, 0711). Prod and first-boot mount it and set SOLEUR_EGRESS_REAPER;
+# the canary's argv neither mounts it nor reaps (ADR-278 canary isolation: its /proc cannot see prod forwarders).
 _EGRESS_TOKENS_VOL = "/var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens"
 
 # tuple name -> declared spec. `file` is the basename of the file the tuple lives in.
@@ -955,7 +957,7 @@ HINTS = {
     "TRAILING_ARGS": "nothing may follow the image except `; then`",
     "TUPLE_COUNT": "a start site was added, moved or renamed: declare it together with the site and keep the three-tuple expectation; never lower the count (when the line says `cannot read`, a scanned file is missing, unreadable or not a regular file: restore it)",
     "UNCLASSIFIED_DOCKER_RUN": "declare it as an app tuple, or add a NAMED non-app exemption (EXEMPT_RUN / EXEMPT_CREATE) ONLY with a security review: an exempt site is closed-world too (a create is exactly `--name NAME IMAGE`)",
-    "MISSING_DECLARED": "restore the named volume, env or port on the tuple, or remove it from TUPLES in the same commit with the reason (a tuple that drops a declared member silently loses that behaviour)",
+    "MISSING_DECLARED": "restore the named volume, env, port or scalar option on the tuple, or remove it from TUPLES in the same commit with the reason (a tuple that drops a declared member silently loses that behaviour)",
     "POSTURE_DIVERGENCE": "restore the apparmor, seccomp and tmpfs options on the named tuple",
     "UNPARSEABLE_OPTION": "make the option literal; a variable, substitution or ambiguous heredoc opener is refused, and a file that cannot be read cannot be shown free of a start site",
 }

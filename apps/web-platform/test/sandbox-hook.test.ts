@@ -131,6 +131,10 @@ describe("createSandboxHook - file tools", () => {
     { tool: "Glob", input: { pattern: "~/.claude/**" } },
     { tool: "Glob", input: { pattern: "../user2/**" } },
     { tool: "Grep", input: { pattern: "x", glob: "/var/lib/soleur/egress-tokens/*" } },
+    // an in-workspace `path` must NOT excuse an escaping pattern (the CLI lets an absolute pattern win over `path`)
+    { tool: "Glob", input: { path: "/workspaces/user1", pattern: "/var/lib/soleur/egress-tokens/*" } },
+    { tool: "Grep", input: { path: "/workspaces/user1", pattern: "x", glob: "/var/lib/soleur/egress-tokens/*" } },
+    { tool: "Glob", input: { pattern: "{/var/lib/soleur/egress-tokens,x}/*" } },
   ])("denies $tool with an escaping pattern/glob ($input)", async ({ tool, input }) => {
     const result = await invokeHook(tool, input);
     expectDenied(result, "outside the workspace");

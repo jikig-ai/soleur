@@ -459,7 +459,7 @@ The ADR sentence is authored now (describes the state this PR ships); nothing is
 - Never read the real prod env-file or Doppler values while verifying; the absence assertion needs
   only the query transport credentials injected by its own wrapper.
 
-## Review-Round Amendments (2026-10-19, 11-seat panel + CTO rulings R6-R15)
+## Review-Round Amendments (2026-10-19, 11-seat panel + 8-seat fix round + CTO rulings R6-R16)
 
 Scope grew beyond the original "4 lines + tuple". Everything below was found by the review panel at `f3d0f70fb1`
 and ruled by the CTO agent (`decision-challenges.md` rows 6-15). The PR is HELD as draft until the merge-blocking set
@@ -491,7 +491,7 @@ lands and the pre-merge proofs below are recorded.
    ARGV only; env-file injection and `EGRESS_TOKEN_DIR` are stated residuals in the checker docstring and ADR-278.
 6. **Checker tests (R15).** K27a-h (canary/first-boot members, two-members-at-once, tokenization failure), K26a-b into
    the H1 stub, set-safe `declared - set(got)`, and `check_declared` no longer piles MISSING_DECLARED onto a tuple that
-   already reds UNPARSEABLE_OPTION. `MIN_ROWS=233`.
+   already reds UNPARSEABLE_OPTION. (Final row count after the scalar rows below: `MIN_ROWS=266`.)
 7. **Post-deploy gate (R9), replaces tasks 7.5/7.6 as the ordering.** (a) `docker inspect` prod shows the mount and
    `SOLEUR_EGRESS_REAPER=1`, canary shows neither. (b) From a NON-entitled test workspace, with a positive control that
    a `probe-*` token exists host-side: sandboxed Bash `ls`/`cat`/`touch` in the dir, in-process Glob with an absolute
@@ -510,4 +510,31 @@ lands and the pre-merge proofs below are recorded.
 10. **Scalar posture flags are now required per tuple (CTO withdrew E4 after the second-reviewer DISSENT):** `-d`,
    `--log-driver`, `--restart`, `--env-file`, `--add-host` on all three tuples; `--init`, `--memory`, `--memory-swap` on
    canary and prod (first-boot has none by design). Before this, deleting `--env-file` (prod with zero secrets) or
-   `--memory` passed the checker at rc 0. Rows K28a-i; `MIN_ROWS=251`.
+   `--memory` passed the checker at rc 0. Rows K28a-i and K29a-h (the canary's deploy-only options, prod's
+   restart/log-driver/add-host, and a rogue-option-plus-missing-member row); `MIN_ROWS=266`.
+11. **Fix-round hardening (8 targeted seats on `f3d0f70fb1..9f0684bd2f`; no P1, five P2s closed):** the token-path scrub
+   now sits at the PUBLIC entry point of `spawnEgressForwarder` (a thin wrapper rethrowing `withoutTokenPath(err)`) instead of
+   at three inner report sites, so `writeFileSync`/`chmodSync`/cleanup `rmSync` errors cannot reach `cc-dispatcher`'s
+   Sentry report raw; `withoutTokenPath` strips trailing slashes from the dir, checks message, stack and `path`, and
+   returns the ORIGINAL error (stack intact) when there is nothing to scrub; `writeTokenFile` writes+chmods and removes
+   the file if either step fails; a `probe-*` file dated more than 60 s in the FUTURE is stale, not fresh (a forged
+   mtime used to keep a credential alive across every boot sweep); `.gw-target` must be exactly `172.31.10[0-3].2`
+   with a port in 1-65535 (the bootstrap only ever publishes `<subnet>.2`; `.1` is the host side of the bridge); the
+   forwarder-created dir is `0711` like the provisioned one. Pattern checker: also splits on whitespace (the CLI splits
+   Grep `glob` on it), fails closed above 4096 chars, uses an own-key lookup (`constructor` and `__proto__` are not
+   tools), and a pattern denial logs the distinct reason `glob pattern outside workspace`. Tests pin each of these
+   (umask-independent `writeTokenFile` chmod test, scrub on teardown/reap/exit paths with a positive control and
+   code/`<token-dir>` assertions, probe grace at 0/4/11 min and in the future, a 4-accept/11-reject `.gw-target` table,
+   a source-level wire check of the spawn boundary, hook-level rows with an in-workspace `path` plus an escaping pattern,
+   brace first-alternative rows).
+12. **Post-deploy gate refinements (user-impact seat):** (i) BEFORE the merge deploys, the Jikigai workspace owner turns the
+   workspace's web-access grant OFF (the settings toggle is the owner's own action) so no real session token can be
+   minted while the mask is unproven; it is turned back ON only after gate (b); if (b) fails, leave it off and revert the
+   mount. (ii) The positive control for (b) is EMPTINESS, not absence: a sandboxed `ls -A` of the dir must return an empty
+   listing with exit 0 (ENOENT would mean the mount is missing and the check is vacuous), `docker inspect` shows the bind
+   mount, and a file written from sandboxed Bash into the dir is NOT visible host-side afterwards. A host-side
+   `probe-*` file is transient (the cron probe removes its own within seconds) and is not a reliable control. (iii) Add a
+   symlink probe to (b): `ln -s /var/lib/soleur/egress-tokens tk` inside the workspace, then in-process Glob/Grep over
+   `tk/*` must return nothing. (iv) The AppArmor profile carries a blanket `mount, umount,` rule
+   (`apparmor-soleur-bwrap.profile` lines 11-13), so the AppArmor gap is smaller than "unverified" suggests; the
+   realised-isolation proof is still gate (b), because the SDK builder silently skips a deny it considers absent.

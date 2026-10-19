@@ -95,11 +95,20 @@ export function egressForwarderWorkspaceId(
  * A token file's NAME is a live gateway credential, and a node fs error carries the full path
  * (`rm returned EISDIR ... /var/lib/soleur/egress-tokens/<token>`). Never hand such an error to
  * Sentry / logs raw: replace everything under the token dir with a placeholder and drop `path`.
+ * When nothing under the token dir appears in the message, stack or `path`, the ORIGINAL error is
+ * returned so its stack stays useful. @internal exported for tests.
  */
-function withoutTokenPath(err: unknown): unknown {
+export function withoutTokenPath(err: unknown): unknown {
   if (!(err instanceof Error)) return err;
-  const dir = egressTokenDir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`${dir}/[^\\s'"]*`, "g");
+  // trailing slashes are normalised away: node prints the join()-normalised path (single slash)
+  const dir = egressTokenDir().replace(/\/+$/, "");
+  const re = new RegExp(`${dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/[^\\s'"]*`, "g");
+  const errPath = (err as NodeJS.ErrnoException).path;
+  const dirty =
+    new RegExp(re.source).test(err.message) ||
+    new RegExp(re.source).test(err.stack ?? "") ||
+    (typeof errPath === "string" && errPath.startsWith(`${dir}/`));
+  if (!dirty) return err;
   const clean = new Error(err.message.replace(re, "<token-dir>/<redacted>"));
   clean.name = err.name;
   const code = (err as NodeJS.ErrnoException).code;
@@ -107,15 +116,42 @@ function withoutTokenPath(err: unknown): unknown {
   return clean; // a fresh Error: no stack frames or `path` carried over from the original
 }
 
-/** egress-gateway-bootstrap.sh collision-probes exactly these four /24s. */
-const GW_SUBNET_RE = /^172\.31\.(100|101|102|103)\.(\d{1,3})$/;
+/**
+ * Write the token file (its existence IS the gateway-side credential validity window) and leave no
+ * file behind if any step fails: the name is a live credential, so a half-created file is an
+ * orphaned credential until the next boot sweep. Mode 0644, NOT 0600: the gateway's auth helper
+ * runs as the squid `proxy` uid (13) and READS the file (it checks that the content equals the
+ * username); measured against the pinned ubuntu/squid image, a 0600 uid-1001 file is
+ * `Permission denied` for it and every session token would be rejected. The content is only the
+ * workspace id. Unlistability comes from the 0711 dir plus the 192-bit name, and tenant sessions
+ * are kept out by denyRead (sandboxed Bash) and the sandbox hooks (in-process file tools) — NOT
+ * by file mode, since every tenant process shares uid 1001. The explicit chmod makes the mode
+ * independent of the umask and of a pre-existing file. @internal exported for tests.
+ */
+export function writeTokenFile(tokenPath: string, workspaceId: string): void {
+  try {
+    writeFileSync(tokenPath, `${workspaceId}\n`, { mode: 0o644 });
+    chmodSync(tokenPath, 0o644);
+  } catch (err) {
+    try {
+      rmSync(tokenPath, { force: true });
+    } catch {
+      /* best effort: the original error is the one to surface */
+    }
+    throw err;
+  }
+}
+
+/** egress-gateway-bootstrap.sh collision-probes exactly these four /24s and always publishes
+ *  `<subnet>.2` (the gateway; `.1` is the host side of the bridge) — nothing else is a gateway. */
+const GW_SUBNET_RE = /^172\.31\.10[0-3]\.2$/;
 
 /** Gateway dial target. The bootstrap collision-probes 172.31.100-103.0/24
  *  and publishes the winner to `<token dir>/.gw-target` ("host:port") — the
  *  shared dir is already the app's rw / gateway's ro channel, so no new mount
  *  is needed. Env vars override (tests); the file beats the hardcoded default
  *  so a fallback-subnet host never dials a phantom. */
-function egressGwTarget(): { host: string; port: number } {
+export function egressGwTarget(): { host: string; port: number } {
   if (process.env.EGRESS_GW_HOST || process.env.EGRESS_GW_PORT) {
     return {
       host: process.env.EGRESS_GW_HOST ?? "172.31.100.2",
@@ -132,7 +168,8 @@ function egressGwTarget(): { host: string; port: number } {
     // candidates. The file sits in a dir every same-uid process in this container
     // can write, so anything else is ignored (pinned default) rather than dialled:
     // a forged target would receive every session's CONNECT head, token included.
-    if (m && GW_SUBNET_RE.test(m[1])) return { host: m[1], port: Number(m[2]) };
+    const port = m ? Number(m[2]) : 0;
+    if (m && GW_SUBNET_RE.test(m[1]) && port >= 1 && port <= 65535) return { host: m[1], port };
   } catch {
     /* absent/unreadable → fall through to the pinned default */
   }
@@ -168,6 +205,19 @@ export async function spawnEgressForwarder(
   conversationId: string,
   workspaceId: string,
 ): Promise<EgressForwarderHandle> {
+  try {
+    return await spawnEgressForwarderUnscrubbed(conversationId, workspaceId);
+  } catch (err) {
+    // Every throw out of here reaches cc-dispatcher's reportSilentFallback; an fs error from the
+    // token-dir writes/cleanups below carries the token file NAME (a live credential).
+    throw withoutTokenPath(err);
+  }
+}
+
+async function spawnEgressForwarderUnscrubbed(
+  conversationId: string,
+  workspaceId: string,
+): Promise<EgressForwarderHandle> {
   // A second spawn for the same conversation (supersede / stale-resume edge)
   // must not orphan the first child and its still-valid token file.
   teardownEgressForwarder(conversationId);
@@ -183,20 +233,11 @@ export async function spawnEgressForwarder(
   // base64url: filename-safe AND header-safe — the token is a token-dir
   // filename on one side and a proxy-URL password on the other.
   const token = randomBytes(24).toString("base64url");
-  mkdirSync(egressTokenDir(), { recursive: true, mode: 0o700 });
-  // The gateway's auth helper checks <dir>/<password> exists AND that the file's
-  // content equals the username — the file's existence IS the credential validity
-  // window. Mode 0644, NOT 0600: the helper runs as the squid `proxy` uid (13) in the
-  // gateway container and READS the file; measured against the pinned ubuntu/squid
-  // image, a 0600 uid-1001 file is `Permission denied` for it and every session token
-  // would be rejected. The content is only the workspace id. Unlistability comes from
-  // the 0711 dir plus the 192-bit name, and tenant sessions are kept out by denyRead
-  // (sandboxed Bash) and the sandbox hooks (in-process file tools) — NOT by file mode,
-  // since every tenant process shares uid 1001. chmod after the write so a restrictive
-  // umask cannot narrow the mode.
+  // 0711 to match the provisioned dir (server.tf / the gateway bootstrap): the gateway's auth helper
+  // runs as another uid and needs TRAVERSE on it. Only created here where nothing provisioned it.
+  mkdirSync(egressTokenDir(), { recursive: true, mode: 0o711 });
   const tokenPath = join(egressTokenDir(), token);
-  writeFileSync(tokenPath, `${workspaceId}\n`, { mode: 0o644 });
-  chmodSync(tokenPath, 0o644);
+  writeTokenFile(tokenPath, workspaceId);
 
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
@@ -358,6 +399,20 @@ export function teardownEgressForwarder(conversationId: string): void {
   }
 }
 
+/** A host-probe token younger than this is left alone by the boot sweep. */
+const PROBE_TOKEN_GRACE_MS = 10 * 60 * 1_000;
+/** Tolerated clock skew: a file dated further in the future than this is not "fresh", it is forged or the clock jumped. */
+const PROBE_TOKEN_SKEW_MS = 60 * 1_000;
+
+function isFreshProbeToken(path: string): boolean {
+  try {
+    const age = Date.now() - statSync(path).mtimeMs;
+    return age > -PROBE_TOKEN_SKEW_MS && age < PROBE_TOKEN_GRACE_MS;
+  } catch {
+    return false; // vanished or unreadable: treat as not fresh, the rmSync below is force
+  }
+}
+
 /**
  * Dispatcher-startup orphan reaper. A dispatcher restart reparents a live
  * forwarder to init, so the forwarder's own ppid watchdog keeps passing —
@@ -367,17 +422,6 @@ export function teardownEgressForwarder(conversationId: string): void {
  * startup, when the registry is definitionally empty. Best-effort + never
  * throws.
  */
-/** A host-probe token younger than this is left alone by the boot sweep. */
-const PROBE_TOKEN_GRACE_MS = 10 * 60 * 1000;
-
-function isFreshProbeToken(path: string): boolean {
-  try {
-    return Date.now() - statSync(path).mtimeMs < PROBE_TOKEN_GRACE_MS;
-  } catch {
-    return false; // vanished or unreadable: treat as not fresh, the rmSync below is force
-  }
-}
-
 export function reapOrphanEgressForwarders(): void {
   const liveTokens = new Set(
     Array.from(egressForwarders.values(), (e) => e.token),
