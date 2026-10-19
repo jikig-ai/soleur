@@ -5,8 +5,9 @@ work is tracked. This table lives here rather than in an ADR (ADR-245) because i
 changes every time a gate is added, and an ADR is not the home for a table with
 that lifecycle.
 
-Soleur ships ONE plugin tree to four harnesses — Claude Code, Grok Build, Codex and
-Devin — each with its own invocation syntax and its own tool vocabulary. Every gate
+Soleur ships ONE plugin tree to five detected harnesses — Claude Code, Grok Build,
+Codex, Devin and OpenCode (plus Cursor's name-mapped slice) — each with its own
+invocation syntax and its own tool vocabulary. Every gate
 below exists because some part of that tree is read by an agent on a harness the
 author was not using.
 

@@ -11,6 +11,7 @@ import {
   decidePermission,
   decisionMessage,
   guardEnvelope,
+  GUARD_RUN_FAILURE,
   parseGuardOutput,
   permissionCommand,
   rulesInjection,
@@ -525,5 +526,154 @@ describe("opencode hook disposition ledger", () => {
     }
     const ledgerText = ledger.map((row) => row.join("\t")).join("\n");
     for (const name of commands) expect(ledgerText).toContain(`${name}.sh`);
+  });
+});
+
+describe("opencode plugin — a guard that cannot run fails closed (review fix, 2026-10-19)", () => {
+  test("a guard exiting non-zero with no decision is a deny that names the dead path", () => {
+    const run: ScriptRunner = () => ({
+      status: 127,
+      stdout: "",
+      stderr: "bash: /nope/hooks/browser-snapshot-credential-guard.sh: No such file or directory",
+    });
+    const decision = decideBash("shell", { command: "rm -rf /" }, "/project", run, "/nope");
+    expect(decision?.decision).toBe("deny");
+    expect(decision?.guard).toBe(GUARD_RUN_FAILURE);
+    expect(decision?.reason).toContain(join("/nope", BASH_GUARDS[0].script));
+  });
+
+  test("a timed-out or unspawnable guard (status null) is a deny, never an implicit allow", () => {
+    const run: ScriptRunner = () => ({ status: null, stdout: "", stderr: "" });
+    const decision = decideBash("shell", { command: "terraform destroy" }, "/project", run, "/nope");
+    expect(decision?.decision).toBe("deny");
+    expect(decision?.guard).toBe(GUARD_RUN_FAILURE);
+  });
+
+  test("a guard that ran and declined still passes the call through unchanged", () => {
+    const { run } = fakeRunner("", "");
+    expect(decideBash("shell", { command: "ls -la" }, "/project", run)).toBeUndefined();
+  });
+
+  test("the failure lands as deny on the event and is announced in the event log", async () => {
+    const written: string[] = [];
+    const run: ScriptRunner = () => ({ status: 127, stdout: "", stderr: "" });
+    const { ctx, handlers } = fakeContext();
+    await createSetup(run, "/nope", (line) => void written.push(line))(ctx);
+    const event: PermissionEvaluateEvent = { action: "shell", resources: ["rm -rf /"], effect: "allow" };
+    handlers["permission:evaluate"](event);
+    expect(event.effect).toBe("deny");
+    expect(event.message).toContain(GUARD_RUN_FAILURE);
+    expect(written.some((line) => line.includes("guard-run-failure"))).toBe(true);
+  });
+
+  test("an arriving deny is never relaxed to an ask", async () => {
+    const ask = guardPayload({
+      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: "confirm" },
+    });
+    const { ctx, handlers } = fakeContext();
+    await createSetup(fakeRunner(ask, ask).run, pluginRoot, () => {})(ctx);
+    const event: PermissionEvaluateEvent = { action: "shell", resources: ["terraform apply"], effect: "deny" };
+    handlers["permission:evaluate"](event);
+    expect(event.effect).toBe("deny");
+    expect(event.message).toBeUndefined();
+  });
+});
+
+describe("opencode plugin — unkeyed and malformed context events (review fix, 2026-10-19)", () => {
+  test("a context event without a sessionID injects every time instead of sharing one bucket", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "opencode-rules-"));
+    try {
+      writeFileSync(join(dir, "AGENTS.rules.md"), "---\nt: r\n---\n\nBODY\n");
+      const { ctx, handlers } = fakeContext();
+      ctx.location = { directory: dir };
+      await createSetup(fakeRunner().run, pluginRoot, () => {})(ctx);
+      const context = handlers["session:context"];
+      const first: { system: unknown[] } = { system: [] };
+      const second: { system: unknown[] } = { system: [] };
+      context(first);
+      context(second);
+      expect(first.system.length).toBe(1);
+      expect(second.system.length).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("every injection decision is observable, so silence is distinguishable from working", async () => {
+    const withCorpus = mkdtempSync(join(tmpdir(), "opencode-rules-"));
+    const withoutCorpus = mkdtempSync(join(tmpdir(), "opencode-norules-"));
+    try {
+      writeFileSync(join(withCorpus, "AGENTS.rules.md"), "BODY\n");
+      const injected: string[] = [];
+      const present = fakeContext();
+      present.ctx.location = { directory: withCorpus };
+      await createSetup(fakeRunner().run, pluginRoot, (line) => void injected.push(line))(present.ctx);
+      present.handlers["session:context"]({ system: [], sessionID: "ses_1" });
+      expect(injected.some((line) => line.includes("injected:"))).toBe(true);
+
+      const missing: string[] = [];
+      const bare = fakeContext();
+      bare.ctx.location = { directory: withoutCorpus };
+      await createSetup(fakeRunner().run, pluginRoot, (line) => void missing.push(line))(bare.ctx);
+      bare.handlers["session:context"]({ system: [], sessionID: "ses_1" });
+      expect(missing.some((line) => line.includes("no-corpus"))).toBe(true);
+    } finally {
+      rmSync(withCorpus, { recursive: true, force: true });
+      rmSync(withoutCorpus, { recursive: true, force: true });
+    }
+  });
+
+  test("a non-array `system` is reported rather than silently skipping the injection", async () => {
+    const written: string[] = [];
+    const { ctx, handlers } = fakeContext();
+    await createSetup(fakeRunner().run, pluginRoot, (line) => void written.push(line))(ctx);
+    handlers["session:context"]({ system: "not-an-array", sessionID: "ses_1" });
+    expect(written.some((line) => line.includes("no-system-array"))).toBe(true);
+  });
+
+  test("an unkeyed compaction arms nothing and says so, instead of poisoning a shared bucket", async () => {
+    const written: string[] = [];
+    const { ctx, handlers } = fakeContext();
+    await createSetup(fakeRunner().run, pluginRoot, (line) => void written.push(line))(ctx);
+    handlers["session:compaction"]({});
+    expect(written.some((line) => line.includes("unkeyed"))).toBe(true);
+  });
+});
+
+describe("opencode guard registration triangle (review fix, 2026-10-19)", () => {
+  // The hooks.json ↔ BASH_GUARDS ↔ ledger triangle, closed in the direction that was open. A
+  // third PreToolUse Bash guard added to hooks/hooks.json with a `bind` ledger row used to pass
+  // both existing two-way pins while `plugin.ts` never bound it — silently absent on OpenCode,
+  // with the ledger asserting that it was bound.
+  const hooksJson = JSON.parse(readFileSync(join(pluginRoot, "hooks/hooks.json"), "utf8")) as {
+    hooks: Record<string, { hooks: { command: string }[] }[]>;
+  };
+  const ledger = readFileSync(join(repoRoot, ".claude/hooks/opencode-dispositions.tsv"), "utf8")
+    .split("\n")
+    .filter((line) => line !== "" && !line.startsWith("#"))
+    .map((line) => line.split("\t"));
+  const bound = new Set(BASH_GUARDS.map((guard) => guard.script.replace(/^hooks\//, "")));
+
+  /** `hooks/<name>.sh` from a hooks.json command string. */
+  const scriptOf = (command: string): string => (command.match(/hooks\/[a-z-]+\.sh/) ?? [""])[0].replace(/^hooks\//, "");
+
+  test("every PreToolUse guard in hooks.json is bound by the plugin, or is a recorded absence", () => {
+    const preToolUse = (hooksJson.hooks["PreToolUse"] ?? []).flatMap((registration) => registration.hooks);
+    expect(preToolUse.length).toBeGreaterThan(0);
+    const arbitrated = new Set(
+      ledger.filter((row) => row[4] === "absent-with-reason" || row[4] === "downgraded").map((row) => (row[5].match(/hooks\/[a-z-]+\.sh/) ?? [""])[0].replace(/^hooks\//, "")),
+    );
+    for (const hook of preToolUse) {
+      const script = scriptOf(hook.command);
+      expect(bound.has(script) || arbitrated.has(script)).toBe(true);
+    }
+  });
+
+  test("every ledger row that claims a Bash-guard bind names a script the plugin actually binds", () => {
+    for (const row of ledger.filter((r) => r[4] === "bind" && r[1].includes('permission.hook("evaluate")'))) {
+      expect(bound.has(scriptOf(row[5]))).toBe(true);
+    }
+    // Non-vacuity: the triangle has both sides populated before "closed" means anything.
+    expect(ledger.filter((r) => r[4] === "bind" && r[1].includes('permission.hook("evaluate")')).length).toBeGreaterThan(0);
   });
 });

@@ -33,7 +33,11 @@ Measured (§12.5): in a hermetic installed adapter session, a model presented wi
 
 This constitutes an end-to-end execution through the plugin's guard path to completion (a pipeline-adjacent completion observed in the live message stream).
 
+**What this does not demonstrate (added at review, 2026-10-19):** a full pipeline skill running *its own* gate sequence on OpenCode — e.g. `/go <task>` through `plan` → `work` → `review` → `ship`. The capture above is one routed call completing after a guard block, which exercises the guard path but not a skill's internal gates. The probe host carries no provider credentials for a hermetic OpenCode session, so the full run cannot be reproduced there. The support-bar point is ticked on the substituted evidence, disclosed rather than restated as full: live reproduction is tracked in #10591 item 1.
+
 ## 7.1.3 — One agent spawn runs, or is refused in words (never silently absent)
+
+**Scope of this capture (added at review, 2026-10-19):** the JSON below is `spawnAgent()`'s returned dispatch — the tool name, id and prompt a live spawn would carry — plus the generated stubs' `mode: subagent` field. A live `subagent` invocation was not observed on the wire: that needs a model request, and this host has no credentials for a hermetic session. Tracked with §7.1.2 in #10591 item 1.
 
 Measured (live session, harness.ts dispatch):
 

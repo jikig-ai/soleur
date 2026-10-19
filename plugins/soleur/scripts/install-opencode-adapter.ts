@@ -20,7 +20,12 @@
  *     from the canonical tree through the `skills` key (§2.0), so the config points at the
  *     checkout and a second skill tree that could drift is never created.
  *   - The config fragment is merged rather than written, so an operator's existing
- *     `skills` / `instructions` entries and every other key survive.
+ *     `skills` / `instructions` entries and every other key survive — for a config this script
+ *     can READ. A config it cannot parse (JSONC comments, a syntax error, a torn write) is
+ *     **refused**, not replaced: silently substituting `{}` would discard every key the operator
+ *     ever set, and report success. `--force` replaces it after writing a `.bak-<ts>` beside it.
+ *   - Writes are temp-file + rename, so an interrupted install cannot leave a half-written
+ *     `opencode.json` whose next read takes the unparseable path.
  *   - The hook module (`opencode/plugin.ts`, source rather than a generated stub) is copied
  *     into `<configdir>/plugins/`, OpenCode's plugin discovery directory (measurement §6.6),
  *     with the plugin-root token resolved so the installed copy still reaches the checkout's
@@ -30,12 +35,13 @@
  * on a difference.
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from "fs";
+import { copyFileSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "fs";
 import { dirname, join, relative, resolve } from "path";
 import {
   ADAPTER_DIR,
   ADAPTER_SOURCE_FILES,
   PLUGIN_ROOT_TOKEN,
+  configFragmentValues,
   expectedOpenCodeAdapter,
 } from "./sync-opencode-adapter";
 
@@ -60,6 +66,25 @@ export function mergeFragment(
 }
 
 /**
+ * A config file that exists but cannot be read as a JSON object.
+ *
+ * This is not a generic parse error: it is the branch that decides between merging into an
+ * operator's config and destroying it. It names the path and the remedy because the caller's
+ * only sane action is to look at that file.
+ */
+export class UnparseableConfigError extends Error {
+  constructor(
+    readonly path: string,
+    readonly detail: string,
+  ) {
+    super(
+      `${path} exists but is not a JSON object (${detail}). Refusing to overwrite it — that would replace every key you set with the Soleur fragment alone. Fix the file, move it aside, or re-run with --force (which writes a timestamped backup first).`,
+    );
+    this.name = "UnparseableConfigError";
+  }
+}
+
+/**
  * Where each generated file lands in a config dir, with tokens resolved.
  *
  * The plugin module is the one file here that is **source, not a generated stub**: it is
@@ -67,7 +92,11 @@ export function mergeFragment(
  * OpenCode's plugin discovery directory, `<configdir>/plugins/`, with the plugin-root token
  * resolved so the checkout's guard scripts stay reachable from the installed copy.
  */
-export function expectedInstalled(targetDir: string, pluginRoot = PLUGIN_ROOT): Map<string, string> {
+export function expectedInstalled(
+  targetDir: string,
+  pluginRoot = PLUGIN_ROOT,
+  config?: Record<string, unknown>,
+): Map<string, string> {
   const expected = new Map<string, string>();
   for (const [path, content] of expectedOpenCodeAdapter(pluginRoot)) {
     if (path === `${ADAPTER_DIR}/opencode.json`) continue; // merged below, never copied verbatim
@@ -84,23 +113,113 @@ export function expectedInstalled(targetDir: string, pluginRoot = PLUGIN_ROOT): 
     const installed = `plugins/soleur-${source.slice(ADAPTER_DIR.length + 1)}`;
     expected.set(installed, resolveToken(readFileSync(join(pluginRoot, source), "utf-8"), pluginRoot));
   }
-  const merged = mergeFragment(readConfig(join(targetDir, "opencode.json")), {
-    skills: [join(pluginRoot, "skills")],
+  // One definition of the fragment's shape, shared with the generator: the generator emits it
+  // with the token, this resolves the token and unions it into the operator's config.
+  const fragment = configFragmentValues(pluginRoot);
+  const merged = mergeFragment(config ?? readConfig(join(targetDir, "opencode.json")), {
+    skills: fragment.skills,
+    // The installed path (`soleur/`), not the generator's `opencode/` namespace.
     instructions: [join(targetDir, "soleur", "INSTRUCTIONS.md")],
   });
   expected.set("opencode.json", `${JSON.stringify(merged, null, 2)}\n`);
   return expected;
 }
 
+/**
+ * Read an operator config. A **missing** config is an empty one (a first install); anything
+ * else that is not a JSON object throws `UnparseableConfigError`. The two cases were one branch
+ * (`catch → {}`), which made "first install" and "operator config with JSONC comments"
+ * indistinguishable — and the write path then replaced the second with the fragment alone.
+ */
 function readConfig(path: string): Record<string, unknown> {
+  let raw: string;
   try {
-    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
-    return parsed !== null && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
-  } catch {
-    // A missing or unparseable config must not abort an install: the fragment becomes the
-    // whole file, and the operator's bytes are replaced only on the write path.
-    return {};
+    raw = readFileSync(path, "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw new UnparseableConfigError(path, `could not be read: ${String(error)}`);
   }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new UnparseableConfigError(path, String(error));
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new UnparseableConfigError(path, `top level is ${Array.isArray(parsed) ? "an array" : parsed === null ? "null" : typeof parsed}`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+/** Target-relative paths of every file under `dir` (empty when the directory is absent). */
+function walkFiles(targetDir: string, dir: string): string[] {
+  const found: string[] = [];
+  const visit = (relativeDir: string): void => {
+    let entries;
+    try {
+      entries = readdirSync(join(targetDir, relativeDir), { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const path = `${relativeDir}/${entry.name}`;
+      if (entry.isDirectory()) visit(path);
+      else found.push(path);
+    }
+  };
+  visit(dir);
+  return found.sort();
+}
+
+/**
+ * The generated stubs' own signature. `agents/` and `commands/` are SHARED with the operator, so
+ * a file there is only removable when it says, in its own text, that this generator wrote it and
+ * that it points at the resolved checkout. Anything else in those roots is not ours.
+ */
+const STUB_SIGNATURES = ["Stub for the canonical agent `", "Run the canonical `"] as const;
+
+function isGeneratedStub(content: string, pluginRoot: string): boolean {
+  return content.includes(pluginRoot) && STUB_SIGNATURES.some((signature) => content.includes(signature));
+}
+
+/**
+ * Files an install owns but no longer generates. Without this, deleting an agent or renaming a
+ * command in the canonical tree leaves its installed stub loading forever — a half-updated
+ * install that `--check` would call ok.
+ */
+export function installedExtras(
+  targetDir: string,
+  expected: Map<string, string>,
+  pluginRoot = PLUGIN_ROOT,
+): string[] {
+  const extras: string[] = [];
+  // Exclusive namespaces: everything under `soleur/` and `plugins/soleur-*` is ours by name.
+  for (const path of walkFiles(targetDir, "soleur")) if (!expected.has(path)) extras.push(path);
+  for (const path of walkFiles(targetDir, "plugins")) {
+    if (path.startsWith("plugins/soleur-") && !expected.has(path)) extras.push(path);
+  }
+  // Shared roots: attributed by content, never by location.
+  for (const root of ["agents", "commands"]) {
+    for (const path of walkFiles(targetDir, root)) {
+      if (expected.has(path)) continue;
+      let content: string;
+      try {
+        content = readFileSync(join(targetDir, path), "utf-8");
+      } catch {
+        continue;
+      }
+      if (isGeneratedStub(content, pluginRoot)) extras.push(path);
+    }
+  }
+  return extras.sort();
+}
+
+/** Write through a sibling temp file and rename, so a reader never sees a partial file. */
+function writeAtomic(full: string, content: string): void {
+  mkdirSync(dirname(full), { recursive: true });
+  const temp = `${full}.soleur-tmp-${process.pid}`;
+  writeFileSync(temp, content);
+  renameSync(temp, full);
 }
 
 export interface InstallResult {
@@ -108,11 +227,30 @@ export interface InstallResult {
   written: string[];
   /** Config-dir-relative files that were already correct, sorted. */
   unchanged: string[];
+  /** Config-dir-relative stale files removed, sorted. */
+  removed: string[];
 }
 
-export function installOpenCodeAdapter(targetDir: string, pluginRoot = PLUGIN_ROOT): InstallResult {
-  const result: InstallResult = { written: [], unchanged: [] };
-  for (const [path, content] of expectedInstalled(targetDir, pluginRoot)) {
+export function installOpenCodeAdapter(
+  targetDir: string,
+  pluginRoot = PLUGIN_ROOT,
+  options: { force?: boolean } = {},
+): InstallResult {
+  const result: InstallResult = { written: [], unchanged: [], removed: [] };
+  const configPath = join(targetDir, "opencode.json");
+  let config: Record<string, unknown> | undefined;
+  try {
+    config = readConfig(configPath);
+  } catch (error) {
+    if (!(error instanceof UnparseableConfigError)) throw error;
+    if (options.force !== true) throw error;
+    const backup = `${configPath}.bak-${Date.now()}`;
+    copyFileSync(configPath, backup);
+    console.error(`[soleur] --force: replaced ${configPath}; the previous bytes are at ${backup}`);
+    config = {};
+  }
+  const expected = expectedInstalled(targetDir, pluginRoot, config);
+  for (const [path, content] of expected) {
     const full = join(targetDir, path);
     let current: string | undefined;
     try {
@@ -124,19 +262,24 @@ export function installOpenCodeAdapter(targetDir: string, pluginRoot = PLUGIN_RO
       result.unchanged.push(path);
       continue;
     }
-    mkdirSync(dirname(full), { recursive: true });
-    writeFileSync(full, content);
+    writeAtomic(full, content);
     result.written.push(path);
+  }
+  for (const path of installedExtras(targetDir, expected, pluginRoot)) {
+    rmSync(join(targetDir, path), { force: true });
+    result.removed.push(path);
   }
   result.written.sort();
   result.unchanged.sort();
+  result.removed.sort();
   return result;
 }
 
 /** Read-only: paths the target does not already match. Empty means installed and current. */
 export function installProblems(targetDir: string, pluginRoot = PLUGIN_ROOT): string[] {
   const problems: string[] = [];
-  for (const [path, content] of expectedInstalled(targetDir, pluginRoot)) {
+  const expected = expectedInstalled(targetDir, pluginRoot);
+  for (const [path, content] of expected) {
     let current: string | undefined;
     try {
       current = readFileSync(join(targetDir, path), "utf-8");
@@ -144,6 +287,9 @@ export function installProblems(targetDir: string, pluginRoot = PLUGIN_ROOT): st
       current = undefined;
     }
     if (current !== content) problems.push(current === undefined ? `MISSING: ${path}` : `STALE: ${path}`);
+  }
+  for (const path of installedExtras(targetDir, expected, pluginRoot)) {
+    problems.push(`EXTRA: ${path}`);
   }
   return problems.sort();
 }
@@ -156,23 +302,71 @@ function parseArg(argv: readonly string[], flag: string): string | undefined {
   return value;
 }
 
+const USAGE = [
+  "Usage: bun plugins/soleur/scripts/install-opencode-adapter.ts [--target DIR] [--plugin-root DIR] [--check] [--force] [--help]",
+  "",
+  "  --target DIR       config dir to install into (default: $HOME/.config/opencode)",
+  "  --plugin-root DIR  checkout the installed files should point at (default: this checkout)",
+  "  --check            write nothing; report MISSING / STALE / EXTRA",
+  "  --force            replace an existing opencode.json that cannot be parsed (backup first)",
+  "  --help, -h         print this text and exit 0 without writing",
+].join("\n");
+
+/**
+ * Unknown arguments are rejected: a typo (`--chek`) otherwise falls through to the WRITE path,
+ * which is the direction that changes an operator's machine.
+ */
+function validateArgs(argv: readonly string[]): void {
+  const withValue = new Set(["--target", "--plugin-root"]);
+  const known = new Set([...withValue, "--check", "--force", "--help", "-h"]);
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === "--help" || arg === "-h") {
+      console.log(USAGE);
+      process.exit(0);
+    }
+    if (!known.has(arg)) {
+      console.error(`unknown argument: ${arg}\n${USAGE}`);
+      process.exit(2);
+    }
+    if (withValue.has(arg)) i += 1;
+  }
+}
+
 function main(): void {
   const argv = process.argv.slice(2);
-  const targetDir = resolve(parseArg(argv, "--target") ?? join(process.env["HOME"] ?? "", ".config", "opencode"));
+  validateArgs(argv);
+  const explicitTarget = parseArg(argv, "--target");
+  const home = process.env["HOME"];
+  if (explicitTarget === undefined && (home === undefined || home === "")) {
+    console.error(
+      "HOME is not set and --target was not given: refusing to install into a cwd-relative `.config/opencode`. Pass --target DIR.",
+    );
+    process.exit(2);
+  }
+  const targetDir = resolve(explicitTarget ?? join(home as string, ".config", "opencode"));
   const pluginRoot = resolve(parseArg(argv, "--plugin-root") ?? PLUGIN_ROOT);
-  if (argv.includes("--check")) {
-    const problems = installProblems(targetDir, pluginRoot);
-    if (problems.length > 0) {
-      for (const problem of problems) console.error(problem);
+  try {
+    if (argv.includes("--check")) {
+      const problems = installProblems(targetDir, pluginRoot);
+      if (problems.length > 0) {
+        for (const problem of problems) console.error(problem);
+        process.exit(1);
+      }
+      console.log("opencode-install ok");
+      return;
+    }
+    const result = installOpenCodeAdapter(targetDir, pluginRoot, { force: argv.includes("--force") });
+    console.log(
+      `opencode-adapter installed into ${targetDir} (${result.written.length} written, ${result.unchanged.length} unchanged, ${result.removed.length} removed)`,
+    );
+  } catch (error) {
+    if (error instanceof UnparseableConfigError) {
+      console.error(error.message);
       process.exit(1);
     }
-    console.log("opencode-install ok");
-    return;
+    throw error;
   }
-  const result = installOpenCodeAdapter(targetDir, pluginRoot);
-  console.log(
-    `opencode-adapter installed into ${targetDir} (${result.written.length} written, ${result.unchanged.length} unchanged)`,
-  );
 }
 
 if (import.meta.main) main();

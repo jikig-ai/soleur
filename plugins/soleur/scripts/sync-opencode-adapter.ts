@@ -11,7 +11,7 @@
  *
  *   - agents are discovered from a path, register as `mode: primary` unless
  *     `mode: subagent` is emitted, and ignore frontmatter `name:` (§3.0). A primary
- *     agent is unreachable from the Task tool, so the field is the whole gate.
+ *     agent is unreachable from the `subagent` tool, so the field is the whole gate.
  *   - commands register from `commands/<name>.md` by filename stem and take
  *     `$ARGUMENTS` (§4.0).
  *
@@ -65,7 +65,13 @@ function frontmatter(path: string): Record<string, unknown> {
   const raw = readFileSync(path, "utf-8");
   const match = raw.match(/^---\n([\s\S]*?)\n---\n?/);
   if (!match) return {};
-  return (parseYaml(match[1]) ?? {}) as Record<string, unknown>;
+  try {
+    return (parseYaml(match[1]) ?? {}) as Record<string, unknown>;
+  } catch (error) {
+    // A YAML error with no path is unactionable; the generator walks ~70 files and the first
+    // broken one must say which. `--check` and a write both exit non-zero with this text.
+    throw new Error(`invalid YAML frontmatter in ${path}: ${String(error)}`);
+  }
 }
 
 function frontmatterString(path: string, key: string): string {
@@ -138,9 +144,14 @@ function agentStub(agent: CanonicalAgent): string {
   ].join("\n");
 }
 
-function commandStub(name: string, description: string): string {
+function commandStub(name: string, description: string, record: Record<string, unknown>): string {
   const lines = ["---"];
   if (description !== "") lines.push(`description: ${yamlQuote(description)}`);
+  // Carried so the canonical "operator-typed only" intent is not dropped on the stub. The key
+  // is measured honored on this harness for skills (§2.3: 8 of 9 registered `autoinvoke:
+  // false`); its effect on commands is unmeasured, and unknown frontmatter keys are ignored
+  // (§4.0 registers by filename stem), so carrying it is safe in either world.
+  if (record["disable-model-invocation"] === true) lines.push("disable-model-invocation: true");
   lines.push(
     "---",
     "",
@@ -155,15 +166,21 @@ function commandStub(name: string, description: string): string {
   return lines.join("\n");
 }
 
+/**
+ * The two config keys the adapter contributes, as one definition: this file emits the fragment
+ * with the token standing in for the checkout, and `install-opencode-adapter.ts` unions the SAME
+ * values (token resolved) into the operator's config. Two shapes written twice drift apart
+ * silently — `test/opencode-adapter-install.test.ts` now pins the two copies to each other.
+ */
+export function configFragmentValues(root: string): { skills: string[]; instructions: string[] } {
+  return {
+    skills: [join(root, "skills")],
+    instructions: [join(root, ADAPTER_DIR, "INSTRUCTIONS.md")],
+  };
+}
+
 function configFragment(): string {
-  return `${JSON.stringify(
-    {
-      skills: [`${PLUGIN_ROOT_TOKEN}/skills`],
-      instructions: [`${PLUGIN_ROOT_TOKEN}/${ADAPTER_DIR}/INSTRUCTIONS.md`],
-    },
-    null,
-    2,
-  )}\n`;
+  return `${JSON.stringify(configFragmentValues(PLUGIN_ROOT_TOKEN), null, 2)}\n`;
 }
 
 function instructions(): string {
@@ -189,14 +206,45 @@ function instructions(): string {
     "Soleur agent is generated with `mode: subagent`; without that field an agent registers",
     "as primary and the `subagent` tool cannot reach it.",
     "",
-    "Spawn subagents through the **`subagent`** tool, with the path-derived id and a",
-    "complete prompt. Foreground waits for the result; `background: true` returns",
-    "immediately and notifies the parent when the child finishes. Nesting depth is one.",
+    "Spawn subagents through the **`subagent`** tool. It takes the path-derived id",
+    "(`engineering/cto`), a one-line `description`, and a complete `prompt` — the child sees",
+    "nothing but that prompt. Foreground waits for the result; `background: true` returns",
+    "immediately and notifies the parent when the child finishes.",
+    "",
+    "**Nesting depth is one.** A spawned child must not spawn further children: when a skill's",
+    "step says *the leader spawns X*, the leader is the session that invoked the skill. A child",
+    "that finds it needs a specialist reports back instead of delegating.",
     "",
     "## Commands",
     "",
-    "`/go`, `/help`, `/sync` and `/version` register from `opencode/commands/` and take their",
-    "arguments as `$ARGUMENTS` (measurement §4.0).",
+    "`/go`, `/help`, `/sync` and `/version` register from the **config directory's** `commands/`",
+    "(`install-opencode-adapter.ts` copies `opencode/commands/*.md` there). The committed tree's",
+    "`opencode/commands/` is the source the installer copies, not a discovery root. If `/go` is",
+    "absent, the adapter is not installed: with `CLAUDE_PLUGIN_ROOT` exported (see *Paths and",
+    "entry points* below), `bun",
+    "\"$CLAUDE_PLUGIN_ROOT/scripts/install-opencode-adapter.ts\" --check` names what is missing",
+    "(measurement §4.0).",
+    "",
+    "A stub's body carries the literal text `$ARGUMENTS`. OpenCode's docs say the token is",
+    "replaced with the invocation's arguments (§4.0 is docs-sourced, not measured); the stub is",
+    "written on that basis. If the token is still present when the command runs, read it as the",
+    "arguments you were given — the stub's job is to route you, not to parse them.",
+    "",
+    "## Paths and entry points",
+    "",
+    "Soleur's canonical prose calls scripts as `bash \"${CLAUDE_PLUGIN_ROOT}/<path>\"`. **Nothing on",
+    "this harness exports `CLAUDE_PLUGIN_ROOT`** — there is no plugin loader to set it — so such a",
+    "call collapses to a workdir-relative path and fails, usually as `source=none verified=false`",
+    "in the `go` gate rather than as anything that looks like a missing variable. Export it first:",
+    "",
+    "    export CLAUDE_PLUGIN_ROOT=\"" + PLUGIN_ROOT_TOKEN + "\"",
+    "",
+    "The installed copy of this file carries that token **resolved**, so the line above is the",
+    "real checkout path and can be used verbatim. It is the prefix for every path in the plugin",
+    "(`skills/`, `agents/`, `commands/`, `hooks/`, `scripts/`), and it is also the prefix of the",
+    "`skills` entry in `opencode.json` — if the line is ambiguous, read that entry instead of",
+    "guessing. A `subagent` child does not inherit your shell environment: export the variable in",
+    "the shell call you hand it, or pass the absolute path.",
     "",
     "## Tools",
     "",
@@ -251,10 +299,14 @@ function instructions(): string {
     "JavaScript rather than a command and are not decided by the Bash guards — a limitation this",
     "harness shares with the guard scripts' own input contract.",
     "",
-    "The post-compaction re-read **is** delivered, unlike Codex and Devin: the plugin binds",
-    "`ctx.session.hook(\"compaction\")` and re-injects the rule corpus plus the re-read directive on",
-    "the next request. What is not reproduced is `compaction-state.sh`'s transcript-bounded",
-    "window bookkeeping, which counts `compact_boundary` records in a Claude Code transcript this",
+    "The post-compaction re-read is **armed, not guaranteed**, unlike Codex and Devin:",
+    "`ctx.session.hook(\"compaction\")` sets state and the next `ctx.session.hook(\"context\")`",
+    "re-injects the rule corpus plus the re-read directive. §12.3 captured that `context` fire",
+    "once; §14.0 records a later probe where it did **not** fire, unreconciled (#10587). No",
+    "compaction-support claim is published from this. Operationally: after a compaction you",
+    "notice, re-read `AGENTS.rules.md` yourself rather than assuming the injection happened.",
+    "What is not reproduced at all is `compaction-state.sh`'s transcript-bounded window",
+    "bookkeeping, which counts `compact_boundary` records in a Claude Code transcript this",
     "harness has no equivalent of.",
     "",
   ].join("\n");
@@ -272,8 +324,9 @@ export function expectedOpenCodeAdapter(root: string): Map<string, string> {
     files.set(`${ADAPTER_DIR}/agents/${agent.path.slice("agents/".length)}`, agentStub(agent));
   }
   for (const name of walkCommands(root)) {
-    const description = frontmatterString(join(root, "commands", `${name}.md`), "description");
-    files.set(`${ADAPTER_DIR}/commands/${name}.md`, commandStub(name, description));
+    const record = frontmatter(join(root, "commands", `${name}.md`));
+    const description = typeof record["description"] === "string" ? record["description"] : "";
+    files.set(`${ADAPTER_DIR}/commands/${name}.md`, commandStub(name, description, record));
   }
   files.set(`${ADAPTER_DIR}/opencode.json`, configFragment());
   files.set(`${ADAPTER_DIR}/INSTRUCTIONS.md`, instructions());
@@ -352,8 +405,39 @@ export function parseRoot(argv: readonly string[]): string {
   return resolve(value);
 }
 
+const USAGE = [
+  "Usage: bun plugins/soleur/scripts/sync-opencode-adapter.ts [--root DIR] [--check] [--help]",
+  "",
+  "  --root DIR   plugin root to walk (default: this checkout)",
+  "  --check      compare the committed tree against a fresh walk; write nothing",
+  "  --help, -h   print this text and exit 0 without writing",
+].join("\n");
+
+/**
+ * Every argument must be known. Silently ignoring an unknown flag means a typo (`--chek`)
+ * takes the WRITE path while the operator believes they asked for a check — the direction that
+ * destroys a tree. Exit 2 is the usage-error convention, distinct from a drift's exit 1.
+ */
+function validateArgs(argv: readonly string[]): void {
+  const withValue = new Set(["--root"]);
+  const known = new Set([...withValue, "--check", "--help", "-h"]);
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === "--help" || arg === "-h") {
+      console.log(USAGE);
+      process.exit(0);
+    }
+    if (!known.has(arg)) {
+      console.error(`unknown argument: ${arg}\n${USAGE}`);
+      process.exit(2);
+    }
+    if (withValue.has(arg)) i += 1; // the value is consumed; its own leading dash is never validated
+  }
+}
+
 function main(): void {
   const argv = process.argv.slice(2);
+  validateArgs(argv);
   const root = parseRoot(argv);
   const problems = argv.includes("--check") ? openCodeAdapterProblems(root) : writeOpenCodeAdapter(root);
   if (problems.length > 0) {

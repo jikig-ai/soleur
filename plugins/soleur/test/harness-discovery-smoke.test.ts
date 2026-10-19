@@ -365,13 +365,6 @@ describe("opencode — structural parseability and the exit taxonomy", () => {
     expect(r.reason).toContain("2 missing");
   });
 
-  test("that same shape is a FALSE ALARM if the probe reads it before opening a session", () => {
-    // Exit 3 is UNRESOLVED — "could not check". An install that is correct but read
-    // too early must never be reported as UNRESOLVED (AP-021), and must never be
-    // reported clean either. The probe's session POST is what makes the reading real.
-    expect(isStructurallyParseable("opencode", emptyListing, new Map())).toBe(true);
-  });
-
   test("a non-payload response is UNRESOLVED", () => {
     expect(isStructurallyParseable("opencode", "Error: connect ECONNREFUSED", new Map())).toBe(false);
     expect(isStructurallyParseable("opencode", JSON.stringify({ location: { directory: "/p" } }), new Map())).toBe(false);

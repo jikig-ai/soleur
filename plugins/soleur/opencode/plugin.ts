@@ -54,15 +54,17 @@ const INSTALLED_ROOT = "__SOLEUR_PLUGIN_ROOT__";
  * at `<checkout>/opencode/`, so its own parent IS the checkout. The two are told apart by the
  * plugin identity file (`.claude-plugin/plugin.json`), which only a checkout carries — the
  * repo's established root-resolution marker (devin/INSTRUCTIONS.md §Detection). (A module that
- * landed at `<configdir>/plugins/` still carrying the literal token would resolve to the token
- * itself and every guard spawn would fail loudly, which is the desired failure.) The env
- * override exists so a test or a local run can point at a checkout explicitly.
+ * landed at `<configdir>/plugins/` still carrying the literal token must not resolve to a
+ * *relative* token: a planted `__SOLEUR_PLUGIN_ROOT__/hooks/` directory inside the session's own
+ * working directory would then supply both guard scripts. It is anchored at `/` so that path
+ * cannot exist, and `decideBash` turns the failed spawn into a deny naming the dead path.) The
+ * env override exists so a test or a local run can point at a checkout explicitly.
  */
 function resolvePluginRoot(): string {
   const override = process.env["SOLEUR_OPENCODE_PLUGIN_ROOT"];
   if (override !== undefined && override !== "") return override;
   const sibling = resolve(import.meta.dir, "..");
-  return existsSync(join(sibling, ".claude-plugin", "plugin.json")) ? sibling : INSTALLED_ROOT;
+  return existsSync(join(sibling, ".claude-plugin", "plugin.json")) ? sibling : join("/", INSTALLED_ROOT);
 }
 
 export const PLUGIN_ROOT = resolvePluginRoot();
@@ -90,6 +92,8 @@ const CLAUDE_TOOL_NAME: Readonly<Record<string, string>> = {
   websearch: "WebSearch",
   question: "AskUserQuestion",
   task: "Task",
+  // The measured V2 spawn tool (§12.8): the same logical agent, named `subagent` on the wire.
+  subagent: "Task",
 };
 
 /**
@@ -199,9 +203,21 @@ export function parseGuardOutput(stdout: string): { decision: "deny" | "ask"; re
   return { decision, reason: typeof reason === "string" ? reason : "" };
 }
 
+/** The guard id a failed guard *run* is reported under — never a guard that examined and declined. */
+export const GUARD_RUN_FAILURE = "guard-did-not-run";
+
 /**
  * Run the Bash guards in order for a tool call; the first decision wins. `undefined` means
- * every guard declined and the call proceeds unchanged.
+ * every guard **ran and declined**, and the call proceeds unchanged.
+ *
+ * A run that did not produce a decision is not the same event. Both guard scripts print a
+ * decision or nothing and exit 0 in every path, so a non-zero status (missing or moved checkout,
+ * an unresolved `__SOLEUR_PLUGIN_ROOT__` → 127, a spawn error, the 12 s timeout → `null`) means
+ * the guard never spoke. That is a **deny**, with the dead path in the reason: the alternative is
+ * a silent fail-open of the credential and destructive-command guards — a support failure dressed
+ * as a feature, and the exact class this adapter's spec names as its load-bearing risk. Measured:
+ * `decideBash("shell", {command:"rm -rf /"}, …)` returned `undefined` for a `{status:127}` runner
+ * before this branch (10-seat review, 2026-10-19).
  */
 export function decideBash(
   tool: string,
@@ -213,8 +229,18 @@ export function decideBash(
   const envelope = guardEnvelope(tool, input, cwd);
   if (envelope === undefined) return undefined;
   for (const guard of BASH_GUARDS) {
-    const parsed = parseGuardOutput(runner(join(pluginRoot, guard.script), envelope, cwd).stdout);
+    const script = join(pluginRoot, guard.script);
+    const run = runner(script, envelope, cwd);
+    const parsed = parseGuardOutput(run.stdout);
     if (parsed !== undefined) return { guard: guard.id, ...parsed };
+    if (run.status !== 0) {
+      const how = run.status === null ? "timed out or could not be spawned" : `exited ${run.status}`;
+      return {
+        guard: GUARD_RUN_FAILURE,
+        decision: "deny",
+        reason: `the guard did not run (${how}): ${script}. The checkout the adapter points at may have moved or been removed — re-run \`bun "${INSTALLED_ROOT}/scripts/install-opencode-adapter.ts" --check\` from the plugin checkout. The command was NOT run, because an unrunnable guard cannot vouch for it.`,
+      };
+    }
   }
   return undefined;
 }
@@ -349,6 +375,13 @@ interface SessionState {
 }
 
 /**
+ * Cap on remembered sessions. A long-lived `opencode serve` sees one session per conversation and
+ * no session-end event was measured to hook (§6.6), so the map is bounded here and the oldest
+ * entry is evicted first — `Map` preserves insertion order, so this is a two-line LRU.
+ */
+const MAX_SESSIONS = 500;
+
+/**
  * Build `setup`. The hooks are returned bound to injected collaborators so the unit tests can
  * drive them with a fake context and a fake script runner.
  */
@@ -361,37 +394,77 @@ export function createSetup(
 ): (ctx: SetupContext) => Promise<void> {
   const sessions = new Map<string, SessionState>();
 
+  /** Wire-controlled text before it goes into a TSV line: no C0/C1, no line/paragraph separators. */
+  const field = (value: unknown): string => String(value).replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, "_");
+
+  /** Remember a session's state, keeping the map bounded and the most recent entry last. */
+  const remember = (id: string, state: SessionState): void => {
+    sessions.delete(id);
+    sessions.set(id, state);
+    while (sessions.size > MAX_SESSIONS) {
+      const oldest = sessions.keys().next();
+      if (oldest.done === true) break;
+      sessions.delete(oldest.value);
+    }
+  };
+
   return async function setup(ctx: SetupContext): Promise<void> {
     const sessionCwd = ctx.location?.directory ?? process.cwd();
 
-    // The only blocking surface bound here. `effect` is overwritten, never merged: the event
-    // arrives with the permission ruleset's own verdict, and a guard's decision replaces it.
+    // The only blocking surface bound here. A guard's decision replaces the ruleset's own verdict
+    // — except in one direction: an arriving `deny` is never relaxed to `ask`. Only `allow`
+    // arrivals were measured (§12.2), and relaxing an unmeasured deny is the silent-enforcement-loss
+    // direction.
     await ctx.permission.hook("evaluate", (event) => {
       const decision = decidePermission(event.action, event.resources ?? [], sessionCwd, runner, pluginRoot);
       if (decision === undefined) return;
+      if (event.effect === "deny" && decision.decision === "ask") return;
       event.effect = decision.decision;
       event.message = decisionMessage(decision);
+      // A guard that could not run is an operator-visible fault, so it is announced even when the
+      // observation channel was never armed.
+      if (decision.guard === GUARD_RUN_FAILURE) {
+        console.error(`[soleur] ${decision.reason}`);
+        write(`soleur-opencode\tguard-run-failure\teffect=deny\t${field(decision.reason)}`);
+      }
     });
 
     await ctx.session.hook("context", (event) => {
       const cwd = typeof event["cwd"] === "string" ? event["cwd"] : sessionCwd;
-      const sessionID = typeof event["sessionID"] === "string" ? event["sessionID"] : "unknown";
-      const state = sessions.get(sessionID) ?? { injected: false, compacted: false };
+      const rawSessionID = event["sessionID"];
+      const sessionID = typeof rawSessionID === "string" ? rawSessionID : undefined;
+      // A missing or non-string id gets no shared bucket: one session's `injected` must never
+      // silence another's. Such an event injects and is not memoized.
+      const state =
+        sessionID === undefined ? { injected: false, compacted: false } : (sessions.get(sessionID) ?? { injected: false, compacted: false });
       if (state.injected && !state.compacted) return;
       const system = event["system"];
-      if (!Array.isArray(system)) return;
+      if (!Array.isArray(system)) {
+        write(`soleur-opencode\tcontext\tno-system-array\tsession=${field(sessionID)}`);
+        return;
+      }
       // The compaction hook's own `system` reaches only the summarization call, so the re-read
       // directive has to ride the next real request — which is this one (measurement §12.3).
       if (state.compacted) system.push({ type: "text", text: compactionDirective() });
       const rules = rulesInjection(cwd, runner);
       if (rules !== undefined) system.push({ type: "text", text: rules });
-      sessions.set(sessionID, { injected: true, compacted: false });
+      // One line per injection decision: whether the corpus landed must be answerable from the
+      // log, so a hook that stops firing — or a corpus that moved — is visible rather than
+      // indistinguishable from working.
+      const outcome = rules === undefined ? "no-corpus" : `injected:${rules.length}`;
+      write(`soleur-opencode\tcontext\t${outcome}\tsession=${field(sessionID)}\tcwd=${field(cwd)}`);
+      if (sessionID !== undefined) remember(sessionID, { injected: true, compacted: false });
     });
 
     await ctx.session.hook("compaction", (event) => {
-      const sessionID = typeof event["sessionID"] === "string" ? event["sessionID"] : "unknown";
-      const state = sessions.get(sessionID) ?? { injected: false, compacted: false };
-      sessions.set(sessionID, { ...state, compacted: true });
+      const rawSessionID = event["sessionID"];
+      if (typeof rawSessionID !== "string") {
+        write(`soleur-opencode\tcompaction\tunkeyed\treread-not-armed`);
+        return;
+      }
+      const state = sessions.get(rawSessionID) ?? { injected: false, compacted: false };
+      remember(rawSessionID, { ...state, compacted: true });
+      write(`soleur-opencode\tcompaction\treread-armed\tsession=${field(rawSessionID)}`);
     });
 
     // Observation only, and it must stay that way: §6.6 measured no return channel, so an idle
@@ -401,10 +474,10 @@ export function createSetup(
       try {
         for await (const event of ctx.event.subscribe()) {
           const type = typeof event?.type === "string" ? event.type : "unknown";
-          if (type.startsWith("session.")) write(`soleur-opencode\t${type}\tadvisory-completion-marker-not-enforceable`);
+          if (type.startsWith("session.")) write(`soleur-opencode\t${field(type)}\tadvisory-completion-marker-not-enforceable`);
         }
       } catch (error) {
-        write(`soleur-opencode\tevent-stream-error\t${String(error)}`);
+        write(`soleur-opencode\tevent-stream-error\t${field(String(error))}`);
       }
     })();
   };

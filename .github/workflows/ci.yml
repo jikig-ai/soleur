@@ -1831,7 +1831,9 @@ jobs:
   # NON-REQUIRED on purpose — it drives two vendor CLIs over the network; #8574 owns
   # promoting it to a required check after a soak, and the pin-freshness criterion.
   harness-discovery:
-    timeout-minutes: 10
+    # Sized for THREE vendor CLIs (Codex, Devin, OpenCode): each installs, boots and
+    # settles, and they run sequentially because one outage must not cost the others.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     # continue-on-error is LOAD-BEARING, not decoration (#8570 review, P0).
     #
@@ -1949,7 +1951,7 @@ jobs:
           # that lands on PATH is the one the pin names. `|| true` everywhere the
           # version is parsed: under `bash -e` an unparsed banner must fall through
           # to the assertion below, not kill the step before it can explain itself.
-          raw="$(opencode --version 2>&1 || true)"
+          raw="$(timeout 30 opencode --version 2>&1 || true)"
           got="$(printf '%s' "${raw//[$'\r\n']/ }" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
           [ "$got" = "$OPENCODE_PIN" ] || {
             echo "::error::harness-discovery[opencode] version-mismatch:${got:-<unparsed>}!=${OPENCODE_PIN} raw=${raw:0:200}"

@@ -335,7 +335,7 @@ describe("spawnAgent", () => {
     expect(spawn.prompt).toContain("devin/INSTRUCTIONS.md");
   });
 
-  test("opencode uses the Task tool with the path-derived agent id", () => {
+  test("opencode uses the subagent tool with the path-derived agent id", () => {
     process.env.OPENCODE = "1";
     delete process.env.CLAUDECODE;
     const spawn = spawnAgent("soleur:engineering:cto", "Plan the migration");
@@ -346,6 +346,9 @@ describe("spawnAgent", () => {
     // the actual spawn argument, so it is the guard that matters.
     expect(spawn.agent).toBe("engineering/cto");
     expect(spawn.instruction).toContain("subagent");
+    // Measured wire name (§12.8). Calling it Claude's Task tool tells the model to reach for a
+    // tool this harness does not have.
+    expect(spawn.instruction).not.toContain("Task tool");
     expect(spawn.instruction).toContain("engineering/cto");
     expect(spawn.prompt).toContain("Plan the migration");
   });
@@ -425,6 +428,15 @@ describe("routingInstructions", () => {
     expect(md).not.toMatch(/grok --trust/);
   });
 
+  test("the unknown arm defaults to Claude conventions and names Claude's Tool tool, not OpenCode's", () => {
+    // Collateral-edit pin (review fix, 2026-10-19): an OpenCode-scoped change once swept this
+    // arm to `Agents: subagent.` while the same line still said "default to Claude conventions".
+    const md = routingInstructions("unknown");
+    expect(md).toContain("default to Claude conventions");
+    expect(md).toContain("Agents: Task tool.");
+    expect(md).not.toContain("Agents: subagent.");
+  });
+
   test("opencode does not fall through to the unknown text", () => {
     const md = routingInstructions("opencode");
     expect(md).not.toContain("Harness: unknown");
@@ -495,6 +507,12 @@ describe("pollInstructions", () => {
     // while nothing will ever wake it. Absence is the property; a `toContain`
     // on the replacement cannot express it.
     expect(md).not.toContain("get_output");
+  });
+
+  test("opencode poll names the measured shell tool, never Claude's bash tool", () => {
+    const md = pollInstructions("opencode");
+    expect(md).toContain("**shell** tool");
+    expect(md).not.toContain("**bash** tool");
   });
 
   test("cursor poll is the behind-sync stop and names no wait tool", () => {

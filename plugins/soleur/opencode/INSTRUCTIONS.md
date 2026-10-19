@@ -19,14 +19,45 @@ An agent id is derived from its file path, not from frontmatter `name:`, so
 Soleur agent is generated with `mode: subagent`; without that field an agent registers
 as primary and the `subagent` tool cannot reach it.
 
-Spawn subagents through the **`subagent`** tool, with the path-derived id and a
-complete prompt. Foreground waits for the result; `background: true` returns
-immediately and notifies the parent when the child finishes. Nesting depth is one.
+Spawn subagents through the **`subagent`** tool. It takes the path-derived id
+(`engineering/cto`), a one-line `description`, and a complete `prompt` — the child sees
+nothing but that prompt. Foreground waits for the result; `background: true` returns
+immediately and notifies the parent when the child finishes.
+
+**Nesting depth is one.** A spawned child must not spawn further children: when a skill's
+step says *the leader spawns X*, the leader is the session that invoked the skill. A child
+that finds it needs a specialist reports back instead of delegating.
 
 ## Commands
 
-`/go`, `/help`, `/sync` and `/version` register from `opencode/commands/` and take their
-arguments as `$ARGUMENTS` (measurement §4.0).
+`/go`, `/help`, `/sync` and `/version` register from the **config directory's** `commands/`
+(`install-opencode-adapter.ts` copies `opencode/commands/*.md` there). The committed tree's
+`opencode/commands/` is the source the installer copies, not a discovery root. If `/go` is
+absent, the adapter is not installed: with `CLAUDE_PLUGIN_ROOT` exported (see *Paths and
+entry points* below), `bun
+"$CLAUDE_PLUGIN_ROOT/scripts/install-opencode-adapter.ts" --check` names what is missing
+(measurement §4.0).
+
+A stub's body carries the literal text `$ARGUMENTS`. OpenCode's docs say the token is
+replaced with the invocation's arguments (§4.0 is docs-sourced, not measured); the stub is
+written on that basis. If the token is still present when the command runs, read it as the
+arguments you were given — the stub's job is to route you, not to parse them.
+
+## Paths and entry points
+
+Soleur's canonical prose calls scripts as `bash "${CLAUDE_PLUGIN_ROOT}/<path>"`. **Nothing on
+this harness exports `CLAUDE_PLUGIN_ROOT`** — there is no plugin loader to set it — so such a
+call collapses to a workdir-relative path and fails, usually as `source=none verified=false`
+in the `go` gate rather than as anything that looks like a missing variable. Export it first:
+
+    export CLAUDE_PLUGIN_ROOT="__SOLEUR_PLUGIN_ROOT__"
+
+The installed copy of this file carries that token **resolved**, so the line above is the
+real checkout path and can be used verbatim. It is the prefix for every path in the plugin
+(`skills/`, `agents/`, `commands/`, `hooks/`, `scripts/`), and it is also the prefix of the
+`skills` entry in `opencode.json` — if the line is ambiguous, read that entry instead of
+guessing. A `subagent` child does not inherit your shell environment: export the variable in
+the shell call you hand it, or pass the absolute path.
 
 ## Tools
 
@@ -81,8 +112,12 @@ The shell tool's wire name here is **`shell`**, not `bash`; the plugin maps both
 JavaScript rather than a command and are not decided by the Bash guards — a limitation this
 harness shares with the guard scripts' own input contract.
 
-The post-compaction re-read **is** delivered, unlike Codex and Devin: the plugin binds
-`ctx.session.hook("compaction")` and re-injects the rule corpus plus the re-read directive on
-the next request. What is not reproduced is `compaction-state.sh`'s transcript-bounded
-window bookkeeping, which counts `compact_boundary` records in a Claude Code transcript this
+The post-compaction re-read is **armed, not guaranteed**, unlike Codex and Devin:
+`ctx.session.hook("compaction")` sets state and the next `ctx.session.hook("context")`
+re-injects the rule corpus plus the re-read directive. §12.3 captured that `context` fire
+once; §14.0 records a later probe where it did **not** fire, unreconciled (#10587). No
+compaction-support claim is published from this. Operationally: after a compaction you
+notice, re-read `AGENTS.rules.md` yourself rather than assuming the injection happened.
+What is not reproduced at all is `compaction-state.sh`'s transcript-bounded window
+bookkeeping, which counts `compact_boundary` records in a Claude Code transcript this
 harness has no equivalent of.

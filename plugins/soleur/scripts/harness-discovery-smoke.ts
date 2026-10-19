@@ -664,6 +664,21 @@ function runToFile(
  * idle boot settles) and `POST /api/location/reload` (measured to CLEAR the listing
  * before rebuilding it, which would make the poll race its own reset).
  */
+/**
+ * Is a child pid still alive? The `error`/`exit` events cannot fire while the boot loop blocks
+ * the thread, so liveness is asked synchronously instead of awaited: `kill(pid, 0)` performs no
+ * signal and throws `ESRCH` for a process that is gone.
+ */
+function processAlive(pid: number | undefined): boolean {
+  if (pid === undefined) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function openCodeSkillProbe(
   bin: string,
   project: string,
@@ -698,7 +713,6 @@ function openCodeSkillProbe(
     let password: string | undefined;
     const bootDeadline = Date.now() + SERVER_BOOT_TIMEOUT_MS;
     while (Date.now() < bootDeadline && !(url && password)) {
-      if (spawnError) return { ok: false, raw: `spawn failed: ${spawnError.message}` };
       const text = readLog();
       url ??= text.match(/server listening on (http:\/\/[^\s]+)/)?.[1];
       password ??= text.match(/server password (\S+)/)?.[1];
@@ -706,6 +720,15 @@ function openCodeSkillProbe(
       sleepMs(250);
     }
     if (!url || !password) {
+      // `spawnError` is set by the child's `error` event, and no event handler can run while
+      // this loop blocks the thread in `Atomics.wait` (`sleepMs`) — so the check is HERE, after
+      // the loop, where it is reachable. A child that never spawned (no pid) or already
+      // exited is a DEAD PROBE (UNRESOLVED), not a slow boot: grading it as "did not announce
+      // itself" would report a correct install as a set mismatch.
+      if (spawnError !== undefined || !processAlive(child.pid)) {
+        const why = spawnError?.message ?? `process ${String(child.pid)} is not running`;
+        return { ok: false, raw: `server failed to start: ${why}\n${readLog().slice(0, 4096)}` };
+      }
       return {
         ok: false,
         raw: `server did not announce itself within ${SERVER_BOOT_TIMEOUT_MS}ms:\n${readLog().slice(0, 4096)}`,

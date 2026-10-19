@@ -56,6 +56,7 @@ Detect the active harness before printing commands:
   with Codex skill mentions and skill-loading instructions substituted. Omit the
   `(type /soleur:<name>)` user-invoked marker: Codex ignores the key (ADR-236).
   Render the HOW THE SKILLS FIT TOGETHER map verbatim.
+- **OpenCode:** commands are unqualified (`/go`, `/sync`, `/help`, `/version`). Workflow skills are invoked with the **skill** tool using the **bare** id (`plan`, never `soleur:plan`) — OpenCode keys a skill by its directory name. Agents use the **subagent** tool with the path-derived id (`engineering/cto`). Read [OpenCode compatibility instructions](../opencode/INSTRUCTIONS.md) and render the Claude Code block below with those substitutions. Carry the `(type /soleur:<name>)` marker as `(type /<name>)` — the key is honored for skills (measurement §2.3) and the `/version` stub carries it. Export `CLAUDE_PLUGIN_ROOT` from the checkout root before any `${CLAUDE_PLUGIN_ROOT}` step; nothing on this harness sets it.
 - **Cursor CLI:** `/go` and `/sync` stay bare. Every other skill is `/soleur-<name>`, including `/soleur-help`, `/soleur-plan`, and `/soleur-review`. Cursor's `/plan`, `/help`, `/review`, and `/shell` are built-ins; do not type them for Soleur. Do not call the Skill tool, the Task tool, `run_subagent`, or AwaitShell. Slice 1 does not run hooks and does not classify the session as cursor. Use the Cursor CLI column in Step 3 for this harness. Read [Cursor compatibility instructions](../cursor/INSTRUCTIONS.md).
 
 Use the matching column in Step 3 below.

@@ -52,7 +52,7 @@ export function pathToAgentId(relativePath: string): string {
  * `engineering/review/security-sentinel`.
  *
  * OpenCode derives an agent's id from its **file path**, not from frontmatter `name:`
- * (measurement §3.0), so the path form is the only id its Task tool resolves. A bare
+ * (measurement §3.0), so the path form is the only id its subagent tool resolves. A bare
  * one-segment id is returned unchanged.
  */
 export function agentIdToPath(id: string): string {

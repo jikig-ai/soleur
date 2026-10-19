@@ -6,7 +6,7 @@
  * Codex:  $soleur:<skill> skill mentions, spawn_agent (agents).
  * Devin:  Skill tool (`soleur:<skill>`), run_subagent (agents), `/soleur:<command>` slash commands.
  * Cursor: `/go` and `/sync` stay bare; every other skill and agent is `/soleur-<name>`. Slice 1 does not detect this harness.
- * OpenCode: bare skill ids (the registration key), agents via the Task tool keyed on the path id.
+ * OpenCode: bare skill ids (the registration key), agents via the subagent tool keyed on the path id.
  *
  * Skills and go.md must call these helpers (or follow routingInstructions) — never improvise workflows.
  */
@@ -23,15 +23,7 @@ import { cursorAgentSlash, cursorSkillSlash } from "../scripts/sync-cursor-name-
 import { behindSyncInstructions } from "./pr-merge-poll";
 import { pipelineInvocationSuffix, workflowFidelityInstructions } from "./workflow-fidelity";
 
-export type Harness =
-  | "claude"
-  | "grok"
-  | "codex"
-  | "devin"
-  | "cursor"
-  | "opencode"
-  | "antigravity"
-  | "unknown";
+export type Harness = "claude" | "grok" | "codex" | "devin" | "cursor" | "opencode" | "antigravity" | "unknown";
 
 /** Env vars set by Antigravity CLI / Google Gemini CLI. */
 const ANTIGRAVITY_ENV_MARKERS = [
@@ -64,7 +56,7 @@ export interface SkillInvocation {
 
 export interface AgentSpawn {
   harness: Harness;
-  tool: "Task" | "spawn_subagent" | "spawn_agent" | "run_subagent" | "invoke_subagent";
+  tool: "Task" | "spawn_subagent" | "spawn_agent" | "run_subagent" | "invoke_subagent" | "subagent";
   agent: string;
   prompt: string;
   instruction: string;
@@ -588,7 +580,7 @@ export function pollInstructions(harness: Harness): string {
       return [
         "**Merge/deploy polling (OpenCode)**",
         "- Poll `gh pr view --json state,mergeStateStatus` on every tick — **pending checks alone miss BEHIND**.",
-        "- Use the **bash** tool with bounded `gh` probes. No wait primitive is measured on this harness (no Monitor, no AwaitShell), so run the canonical sync block itself inside a bounded foreground loop with a deadline exit and a probe-error exit.",
+        "- Use the **shell** tool with bounded `gh` probes. No wait primitive is measured on this harness (no Monitor, no AwaitShell), so run the canonical sync block itself inside a bounded foreground loop with a deadline exit and a probe-error exit.",
         "- NEVER ask the operator to monitor merge, CI, or deploy — you own the wait.",
         "- After `ship` merges: poll the release workflows, invoke `postmerge`, then emit `<promise>DONE</promise>` (advisory on this harness — ADR-291 D3).",
         "- FORBIDDEN: heartbeating on CI while `mergeStateStatus` is `BEHIND` — except when `main` has a merge queue and the PR is armed (the Phase 7 poll prints `[ship.phase7.queue_wait]`: GitHub enqueues it; never sync it by hand until `[ship.phase7.queue_wait_expired]`, a push line, MERGED, a dequeue or any poll exit).",
@@ -713,7 +705,7 @@ export function routingInstructions(harness: Harness): string {
     default:
       return [
         "**Harness: unknown** — default to Claude conventions.",
-        "- Skills: Skill tool (`soleur:<skill>`). Agents: subagent.",
+        "- Skills: Skill tool (`soleur:<skill>`). Agents: Task tool.",
         "- If tools are missing, run `grok inspect` from repo root. Live CLI 1.0.29 has no `--trust` flag — do not invent one.",
         "",
         fidelity,

@@ -2,7 +2,7 @@
  * Harness parity — every component reference in plugin prose is the canonical `soleur:<name>`.
  *
  * ADR-226 (#8299). A skill, command or agent named in a SKILL.md, command or agent doc is read by an
- * agent on FOUR harnesses (Claude, Grok Build, Codex, Devin), and each harness has its own
+ * agent on FIVE harnesses (Claude, Grok Build, Codex, Devin, OpenCode), and each has its own
  * invocation syntax (`/plan`, `/soleur:plan`, `$soleur:plan`, `soleur:plan`). The doc must name
  * the component in the one shape every adapter resolves — `soleur:<name>` for skills and
  * commands, the registry id for agents — and leave rendering to `formatSkillInvocation` /

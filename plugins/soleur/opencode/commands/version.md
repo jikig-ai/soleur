@@ -1,5 +1,6 @@
 ---
 description: "Show the installed Soleur plugin version and whether a newer release exists"
+disable-model-invocation: true
 ---
 
 Run the canonical `version` command. Its full definition lives at

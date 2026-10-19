@@ -194,8 +194,8 @@ and a `routingInstructions` arm.
 ### 7.1 Four-point support bar (ADR-274 shape)
 
 - [x] 7.1.1 `/go` in a live OpenCode session classifies the intent (`opencode`, not `unknown`). — SHAPE-NOTE §7.1.1 (live session): `detectHarness(process.env)` → `"opencode"` (markers `OPENCODE=1`, `AI_AGENT=opencode`), `resolveGoRoute("plan")` → `{kind:"skill", skill:"brainstorm"}`, `dispatchGoRoute` → `{harness:"opencode", tool:"skill", command:"brainstorm"}`; §1.0/§7.0 record the predicate and marker precedence.
-- [x] 7.1.2 One pipeline skill completes its gates end to end. — SHAPE-NOTE §7.1.2, measuring §12.5: in a hermetic installed-adapter session a model met the credential guard's block (`agent-browser snapshot` → `permission.rejected`), read the message, ran the routed variant, and that call **completed** — the installed module, generated config, and canonical guard script were all on the path.
-- [x] 7.1.3 One agent spawn runs, or is refused in words. — SHAPE-NOTE §7.1.3: `spawnAgent(cto)` → `{tool:"subagent", agent:"engineering/cto"}` with the canonical agent path and `opencode/INSTRUCTIONS.md` in the prompt; generated stubs carry `mode: subagent`. Refusal-in-words was observed for unsafe actions (§12.5), never a silent absence.
+- [x] 7.1.2 One pipeline skill completes its gates end to end. — SHAPE-NOTE §7.1.2, measuring §12.5: in a hermetic installed-adapter session a model met the credential guard's block (`agent-browser snapshot` → `permission.rejected`), read the message, ran the routed variant, and that call **completed** — the installed module, generated config, and canonical guard script were all on the path. **Substituted evidence, disclosed in SHAPE-NOTE:** the completion is one routed call after a guard block, not a full skill gate sequence; a full run needs provider credentials the probe host does not have (#10591 item 1).
+- [x] 7.1.3 One agent spawn runs, or is refused in words. — SHAPE-NOTE §7.1.3: `spawnAgent(cto)` → `{tool:"subagent", agent:"engineering/cto"}` with the canonical agent path and `opencode/INSTRUCTIONS.md` in the prompt; generated stubs carry `mode: subagent`. Refusal-in-words was observed for unsafe actions (§12.5), never a silent absence. **Substituted evidence, disclosed in SHAPE-NOTE:** the capture is the returned dispatch, not a live `subagent` call on the wire (#10591 item 1).
 - [x] 7.1.4 Both guards fire (from 3.5). — SHAPE-NOTE §7.1.4, measuring §12.5: credential guard → `permission.rejected` on `shell`; destructive-command guard → `effect:"ask"` held open on `terraform destroy` (a real blocking prompt, not downgraded, per D10). Dispositions ledger: `.claude/hooks/opencode-dispositions.tsv`.
 - [x] 7.1.5 Commit a shape note quoting all four, with the captured evidence. — `knowledge-base/project/specs/feat-opencode-harness/SHAPE-NOTE.md` (committed), quoting all four points with the captures and naming its evidence sources (measurements §1.0, §6.6, §11.1–§11.6, §12.1–§12.8; the dispositions ledger; the in-session probe; 547 pass in the targeted parity/drift set).
 
@@ -205,15 +205,15 @@ and a `routingInstructions` arm.
 
 ### 7.3 PR finalization
 
-- [ ] 7.3.1 Add a `## Changelog` section to the PR body (`semver:minor` — a new harness adapter).
-- [ ] 7.3.2 Do NOT add a `version` key to any plugin manifest (#7471).
-- [ ] 7.3.3 Attach the 3.5 and 7.1 capture evidence.
+- [x] 7.3.1 Add a `## Changelog` section to the PR body (`semver:minor` — a new harness adapter). — PR #10571 body; label `semver:minor` applied.
+- [x] 7.3.2 Do NOT add a `version` key to any plugin manifest (#7471). — unchanged: the diff adds no manifest and no `version` key.
+- [x] 7.3.3 Attach the 3.5 and 7.1 capture evidence. — SHAPE-NOTE §3.5/§7.1.* committed; §7.1.2/§7.1.3 now name their substituted-evidence scope (#10591).
 - [ ] 7.3.4 `/ship` skill — pre-ship gates, mark ready for review.
 
 ### 7.4 Post-merge
 
 - [ ] 7.4.1 Verify release/deploy workflows succeed.
-- [ ] 7.4.2 Flip ADR-291 `status: proposed` → `accepted` once 7.1 is quoted.
+- [ ] 7.4.2 Flip ADR-291 `status: adopting` → `accepted` once 7.1 is quoted.
 
 ## Completion Gate
 

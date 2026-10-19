@@ -85,7 +85,8 @@ describe("harness tool-map coverage", () => {
     // without a floor, the edit lands, `--check` stays green (generator and tree agree),
     // and the gate below is the only thing that would notice — against the corpus, which
     // is exactly the right anchor.
-    expect(OPENCODE_INSTRUCTIONS).toContain("plugins/soleur/opencode/INSTRUCTIONS.md");
+    // (No assertion that the content mentions its own path: that held trivially and
+    // could not fail. The row floor below is the property that a regeneration can lose.)
     expect(opencode.size).toBeGreaterThanOrEqual(30);
     // The row #8318 was filed about, and the ones that name a mechanism this harness
     // genuinely lacks: each must be present AND carry a translation, not a blank cell.
