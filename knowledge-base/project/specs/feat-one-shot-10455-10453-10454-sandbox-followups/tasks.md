@@ -36,7 +36,7 @@ Write each phase's RED tests before its code. Commit order: Phase 1 first, Phase
 - [x] 3.3 `ci-deploy.sh` `run_sdk_bash_smoke`, ledger via `write_sandbox_canary_state` extra-JSON arg, call after `run_faithful_sandbox_canary || true`
 - [x] 3.4 `cat-deploy-state.sh` `sdk_bash_smoke_json` and tests
 - [x] 3.5 Alert `faithful_canary_sandbox_broken` (+ `-target` lines, `faithful-canary-sandbox-alert.test.sh`, infra-validation step, mutation-count bump, runbook, ADR-218 amendment incl. stale step-count fix)
-- [ ] 3.6 `sdk-bash-smoke-verdict-10548.sh` + test + registrations + `BASELINE_DECLARED_PROBES` 70 to 71
+- [x] 3.6 `sdk-bash-smoke-verdict-10548.sh` + test + registrations + `BASELINE_DECLARED_PROBES` 70 to 71
 - [x] 3.7 `canary-probe-set.md` SDK-smoke section implemented; post-merge positive-control query documented
 
 ## Phase 4: AF_UNIX variant behind a runtime flag (#10455 a)

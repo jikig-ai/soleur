@@ -52,13 +52,13 @@ CF_SECRET="cfsec-synth-xyz"
 FIRST=1000000
 DAY=86400
 
-LAST_OUT=""; LAST_ERR=""; LAST_RC=""
+LAST_OUT=""; LAST_ERR=""
 run() { # <expected rc> <expected status word or ""> <label> <body> [http] [env-unset-var]
   local want="$1" status="$2" label="$3" body="$4" http="${5:-200}" unset_var="${6:-}" rc first_line
   LAST_OUT="$(env PATH="$STUBS:$PATH" WEBHOOK_DEPLOY_SECRET="$WH_SECRET" CF_ACCESS_CLIENT_ID="$CF_ID" CF_ACCESS_CLIENT_SECRET="$CF_SECRET" \
     STUB_BODY="$body" STUB_HTTP="$http" env ${unset_var:+-u "$unset_var"} bash "$SUT" 2>"$ROOT_TMP/err.txt")"
   rc=$?
-  LAST_RC="$rc"; LAST_ERR="$(cat "$ROOT_TMP/err.txt")"
+  LAST_ERR="$(cat "$ROOT_TMP/err.txt")"
   first_line="$(printf '%s\n' "$LAST_OUT" | head -n 1)"
   if [[ "$rc" != "$want" ]]; then
     FAIL_N=$((FAIL_N + 1)); FAILURES+=("$label: want rc=$want got rc=$rc: $LAST_OUT / $LAST_ERR"); echo "  FAIL: $label (want rc=$want got $rc)"; return
