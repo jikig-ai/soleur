@@ -175,6 +175,20 @@ describe("the probe is baked into the image and ci-deploy.sh execs the baked pat
     expect(deploy).toContain('SDK_BASH_SMOKE_PROBE="${SDK_BASH_SMOKE_PROBE:-/app/infra/lib/sdk-bash-probe.mjs}"');
   });
 
+  it("the dispatched marker: the probe prints it beside state.dispatched (smoke mode only) and the host's 124 arm reads the same literal", () => {
+    const src = read("infra", "lib", "sdk-bash-probe.mjs");
+    const MARKER = "SDK_BASH_DISPATCHED";
+    // printed right after the assignment, gated on the smoke-only `announce` flag so the docker suite's default mode stays one-line
+    expect(src).toMatch(/state\.dispatched = true;\n\s*if \(state\.announce\) console\.log\("SDK_BASH_DISPATCHED"\);/);
+    expect(src).toMatch(/const state = \{ dispatched: false, announce: true \};/);
+    // the 124 arm of run_sdk_bash_smoke reads the identical literal, and the result parse ignores it (it is anchored on `SDK_BASH_RESULT `)
+    const smokeFn = deploy.slice(deploy.indexOf("run_sdk_bash_smoke() {"));
+    expect(smokeFn).toContain(`SDK_BASH_DISPATCHED`);
+    expect(smokeFn).toContain("grep -a '^SDK_BASH_RESULT '");
+    expect(smokeFn).toContain("host_timeout_before_dispatch");
+    expect(MARKER).not.toMatch(/^SDK_BASH_RESULT /);
+  });
+
   it("the bang is an exact path (no directory bang that would re-include siblings)", () => {
     expect(dockerignore).not.toMatch(/^!infra\/lib\/?$/m);
     expect(dockerignore).not.toMatch(/^!infra\/lib\/\*/m);

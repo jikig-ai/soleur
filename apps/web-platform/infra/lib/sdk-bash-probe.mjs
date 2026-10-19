@@ -15,7 +15,8 @@
 //                          test/sdk-bash-probe-parity.test.ts) and computes its OWN verdict in JavaScript
 //                          (smokeVerdict, unit-tested under node). Env: NONCE (fresh per-run hex, required), HOME
 //                          (the container's real HOME: the transcript mask derives from it), APP (default /app).
-//                          Prints exactly one line:
+//                          Prints `SDK_BASH_DISPATCHED` once the Bash tool_use turn has been delivered to the SDK (the
+//                          host reads it to classify a host-cap timeout), then exactly one result line:
 //                          SDK_BASH_RESULT {"verdict":"pass|sdk_bash_smoke_failed|smoke_infra_error","reason":"...",
 //                                           "coverage":"sdk_wrapper_shim_prodtuple|replay_only"}
 //                          and exits 0 for every verdict (the caller classifies rc only for docker/node failures).
@@ -219,7 +220,11 @@ function startStub(cmd, state) {
       const start = { type: "message_start", message: { id: "msg", type: "message", role: "assistant", model: j.model || "stub", content: [], stop_reason: null, usage: { input_tokens: 1, output_tokens: 1 } } };
       const toolTurn = !JSON.stringify(j.messages || []).includes("tool_result");
       if (toolTurn) {
+        // Printed (stdout to a pipe is synchronous, so it is flushed) BEFORE the SDK runs the command: a host `timeout` that kills
+        // this process mid-hang still leaves it in the captured output. ci-deploy.sh reads it to tell "Bash hung" from "never got
+        // that far". The `grep '^SDK_BASH_RESULT '` parse ignores it.
         state.dispatched = true;
+        if (state.announce) console.log("SDK_BASH_DISPATCHED");
         sse(res, [["message_start", start],
           ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_1", name: "Bash", input: {} } }],
           ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify({ command: cmd }) } }],
@@ -306,7 +311,7 @@ async function runSmoke() {
     infra(`sdk_module_unavailable: ${String(e).slice(0, 120)}`);
   }
 
-  const state = { dispatched: false };
+  const state = { dispatched: false, announce: true };
   const server = startStub(`echo SDK_SMOKE_${nonce}`, state);
   try {
     await new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });

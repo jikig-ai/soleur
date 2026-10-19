@@ -694,7 +694,10 @@ stays `adopting` (Deferral A). The operator-facing note lives in
 Appended, not edited. This updates the **Status** paragraph of the 2026-10-16 addendum above, which said the `sdk_bash_smoke`
 probe "does not exist yet". It now does, as the dark-launch that addendum specified.
 
-**What shipped.** `run_sdk_bash_smoke` in `ci-deploy.sh` runs after `run_faithful_sandbox_canary` and executes the baked probe
+**What shipped.** `run_sdk_bash_smoke` in `ci-deploy.sh` runs after `run_faithful_sandbox_canary` and after the GitHub App key gate (its own
+`if [[ "$CANARY_HEALTHY" == "true" ]]` block, CTO ruling 2026-10-19: the canary runs with `--memory 1536m` and already hosts the Next server, so a probe OOM or a
+probe still running after a host-cap timeout must not be able to fail the last promotion gate and roll back a healthy deploy; the pre-existing
+workspace-isolation probe still runs before that gate and is out of scope here) and executes the baked probe
 (`/app/infra/lib/sdk-bash-probe.mjs`, `SMOKE=1`) inside the CANARY container (never the live prod container): one real Bash call
 through the real Agent SDK, the shipped shim and the production sandbox config, under `/usr/bin/env -i` with an explicit
 allowlist, a decoy `ANTHROPIC_API_KEY`, the container's real `HOME` and a 150 s host `timeout`. The call site is
@@ -704,9 +707,11 @@ allowlist, a decoy `ANTHROPIC_API_KEY`, the container's real `HOME` and a 150 s 
 command echoed comes back in the real tool_result, the result is not error-flagged, and the `coverage` field is
 `sdk_wrapper_shim_prodtuple` (the shim is the `bwrap` on `PATH` and the artifact at the pinned path is sock_filter-sized).
 `sdk_bash_smoke_failed` when Bash was dispatched and no verified nonce came back (an error result, a clean result without the
-nonce, a thrown SDK error, a hang), independent of any error signature, so a new wording of a failure cannot go silent; a sandbox
+nonce, a thrown SDK error, a hang, or the 150 s host cap firing AFTER the probe printed `SDK_BASH_DISPATCHED`), independent of any error signature, so a new wording of a failure cannot go silent; a sandbox
 that cannot start (`sandbox required but unavailable`) is also a failure, not an infra hiccup. `smoke_infra_error` only when Bash
-was never dispatched (probe absent in an old image, docker rc 125/126/127, a crashed probe, stub or ledger failure), and for a
+was never dispatched (probe absent in an old image, docker rc 125/126/127, a crashed probe, stub or ledger failure, no usable
+`/dev/urandom` nonce, or a host-cap timeout that fired BEFORE the probe printed `SDK_BASH_DISPATCHED`: `host_timeout_before_dispatch`, a daemon
+stall or a wedged node start, never a Bash verdict), and for a
 pass-shaped result whose coverage is `replay_only`: a HOLD that does not move `consecutive_pass`. This is the "coverage field"
 requirement of the 2026-10-16 addendum, implemented: a replay-only pass is distinguishable from a wrapper-exercising pass and
 never counts toward promotion.

@@ -3125,13 +3125,21 @@ sdk_bash_smoke_stale_event() {
 # verdict to its own ledger, and pages through journald (the faithful_canary_sandbox_broken alert) on a failure. It NEVER
 # changes the deploy's outcome: every verdict returns 0, the call site is `|| true`, no verdict rolls back or aborts.
 #
-# Probe contract (infra/lib/sdk-bash-probe.mjs, SMOKE=1): prints one `SDK_BASH_RESULT {verdict,reason,coverage}` line.
+# Probe contract (infra/lib/sdk-bash-probe.mjs, SMOKE=1): prints one `SDK_BASH_RESULT {verdict,reason,coverage}` line, preceded by
+# one `SDK_BASH_DISPATCHED` line once the Bash tool_use turn has been delivered (the `grep '^SDK_BASH_RESULT '` parse ignores it).
 #   pass                  the per-run NONCE came back in the real tool_result AND coverage is sdk_wrapper_shim_prodtuple
 #   sdk_bash_smoke_failed Bash was dispatched and no verified nonce came back (error, no nonce, hang): signature-independent
 #   smoke_infra_error     Bash was never dispatched; also a pass-shaped result with coverage replay_only (a HOLD)
-# docker-exec classification (the #4941 false-rollback guard): 124 (the host cap fired on a wedged probe) is failed, 125/126/127
-# (daemon / not-executable / not-found) and any other non-zero rc (the probe crashed before printing) are smoke_infra_error,
-# and so is an absent probe file (an image that predates the probe: `probe_absent`).
+# docker-exec classification (the #4941 false-rollback guard): 124 (the host cap fired) is a Bash failure ONLY when the probe had
+# already printed `SDK_BASH_DISPATCHED` (Bash was handed to the SDK, so a hang after that is the #10445 shape); a 124 before the
+# marker is a daemon stall or a wedged node start and is smoke_infra_error host_timeout_before_dispatch. 125/126/127 (daemon /
+# not-executable / not-found) and any other non-zero rc (the probe crashed before printing) are smoke_infra_error, and so is an
+# absent probe file (an image that predates the probe: `probe_absent`) and a nonce that /dev/urandom could not supply
+# (`nonce_unavailable`: never a $RANDOM-derived nonce, the nonce is the proof the tool_result came from this run).
+# Ordering (CTO ruling F4, 2026-10-19): the call site is AFTER github_app_key_canary_check, under its own CANARY_HEALTHY check. The
+# canary runs with `--memory 1536m --memory-swap 1536m` and already hosts the Next server; a probe OOM, or a probe still running
+# after a host-cap 124 (only the `docker exec` client is killed), could fail the key gate and roll back a healthy deploy. After the
+# gate the canary is torn down immediately, so the smoke cannot change the outcome even indirectly.
 # Targeting: ONLY soleur-web-platform-canary, never the live prod container. Ledger: ONE atomic write through
 # write_sandbox_canary_state (the extra-JSON argument carries coverage and consecutive_infra_error), read back afterwards: a
 # failed write can never leave a coverage-less pass (it is reported smoke_infra_error reason=ledger_write_failed instead).
@@ -3153,8 +3161,9 @@ run_sdk_bash_smoke() {
   else
     home="$(docker exec "$ctr" /bin/sh -c 'printf %s "$HOME"' soleur-smoke-home 2>/dev/null || true)"
     nonce="$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' || true)"
-    [[ "$nonce" =~ ^[0-9a-f]{32}$ ]] || nonce="$(printf '%08x%08x%08x%08x' "$((RANDOM * 32768 + RANDOM))" "$((RANDOM * 32768 + RANDOM))" "$((RANDOM * 32768 + RANDOM))" "$(date +%s)")"
-    if ! [[ "$home" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+    if ! [[ "$nonce" =~ ^[0-9a-f]{32}$ ]]; then
+      verdict="smoke_infra_error"; reason="nonce_unavailable"
+    elif ! [[ "$home" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
       verdict="smoke_infra_error"; reason="container_home_unresolved"
     else
       # `if` (not a bare capture + `exec_rc=$?`): under `set -e` a failed exec aborts before the read.
@@ -3186,7 +3195,12 @@ run_sdk_bash_smoke() {
             *) verdict="smoke_infra_error"; reason="no_result_line${docker_err:+: $docker_err}"; coverage="" ;;
           esac ;;
         124)
-          verdict="sdk_bash_smoke_failed"; reason="host_timeout_${SDK_BASH_SMOKE_TIMEOUT}s${docker_err:+: $docker_err}" ;;
+          # `out` still holds whatever the probe printed before `timeout` killed the docker exec client.
+          if [[ $'\n'"$out"$'\n' == *$'\nSDK_BASH_DISPATCHED\n'* ]]; then
+            verdict="sdk_bash_smoke_failed"; reason="host_timeout_${SDK_BASH_SMOKE_TIMEOUT}s${docker_err:+: $docker_err}"
+          else
+            verdict="smoke_infra_error"; reason="host_timeout_before_dispatch${docker_err:+: $docker_err}"
+          fi ;;
         125|126|127)
           verdict="smoke_infra_error"; reason="docker_exec_rc_${exec_rc}${docker_err:+: $docker_err}" ;;
         *)
@@ -4693,11 +4707,7 @@ case "$COMPONENT" in
       # no outer-wrap verdict: retired, see ADR-079 addendum 2026-10-19 (#10454). Its pass condition
       # (privileged elevation) was dropped on purpose by ADR-075's 2026-10-09 addendum, so it could never go green.
 
-      # Deploy-time SDK Bash smoke (#10453) — NON-BLOCKING dark-launch (wg-dark-launch-deploy-gates). One real wrapped Bash
-      # call through the real Agent SDK in the CANARY container: the check the faithful canary above cannot make (its replay ends
-      # in `-- true`, the #10445 shape). Records a verdict to its own ledger and pages on a failure, but never gates or rolls
-      # back this deploy. `|| true` is LOAD-BEARING: no verdict may abort a deploy under set -e. Promotion is #10548.
-      run_sdk_bash_smoke || true
+      # (The deploy-time SDK Bash smoke, #10453, runs after the GitHub App key gate below, not here.)
 
       # Cross-workspace isolation probe (#2640) — NON-BLOCKING dark-launch
       # (wg-dark-launch-deploy-gates). Runs the direct tier of the cross-workspace
@@ -4711,6 +4721,16 @@ case "$COMPONENT" in
     # #8609 (plan §3.3): the GitHub App key check is the last gate before promotion.
     if [[ "$CANARY_HEALTHY" == "true" ]] && ! github_app_key_canary_check; then
       CANARY_HEALTHY=false
+    fi
+
+    # Deploy-time SDK Bash smoke (#10453) — NON-BLOCKING dark-launch (wg-dark-launch-deploy-gates). One real wrapped Bash call
+    # through the real Agent SDK in the CANARY container: the check the faithful canary cannot make (its replay ends in `-- true`,
+    # the #10445 shape). Records a verdict to its own ledger and pages on a failure, but never gates or rolls back this deploy.
+    # It runs AFTER the last promotion gate (the key check above) so that a probe OOM in the memory-capped canary, or a probe
+    # still running after a host-cap 124, cannot fail that gate and roll back a healthy deploy, even indirectly (CTO ruling F4).
+    # `|| true` is LOAD-BEARING: no verdict may abort a deploy under set -e. Promotion is #10548.
+    if [[ "$CANARY_HEALTHY" == "true" ]]; then
+      run_sdk_bash_smoke || true
     fi
 
     if [[ "$CANARY_HEALTHY" == "true" ]]; then

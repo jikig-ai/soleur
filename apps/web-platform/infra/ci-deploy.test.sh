@@ -638,6 +638,9 @@ fi
 #   are untouched. Default: one `ok` verdict line. MOCK_GAK_PROBE_OUT (exact stdout, may be empty)
 #   and MOCK_GAK_PROBE_RC override it. MOCK_GAK_PLANTED_NODE=1 models a prd-planted `node` on the
 #   container PATH: an exec that is NOT isolated runs it, and it answers `ok` whatever the key.
+# MOCK_EXEC_ALL_LOG records EVERY docker exec in order (moved above the GitHub App key probe handler, which exits, so the F4 ordering row can
+# compare the key gate's exec with the smoke's).
+if [[ "${1:-}" == "exec" && -n "${MOCK_EXEC_ALL_LOG:-}" ]]; then printf '%s\n' "$*" >> "$MOCK_EXEC_ALL_LOG"; fi
 if [[ -n "${MOCK_GAK_LOG:-}" && "${1:-}" == "run" ]]; then
   _gn=""; _gef=""; _gp=""
   for _a in "$@"; do
@@ -706,7 +709,6 @@ fi
 # Every one of them appends its raw argv (space-joined) to MOCK_SMOKE_LOG so a row can assert the target container, the
 # envelope and the count. A second recorder, MOCK_EXEC_ALL_LOG, sees EVERY docker exec (to prove the live prod container is
 # never exec'd by the smoke).
-if [[ "${1:-}" == "exec" && -n "${MOCK_EXEC_ALL_LOG:-}" ]]; then printf '%s\n' "$*" >> "$MOCK_EXEC_ALL_LOG"; fi
 if [[ "${1:-}" == "exec" && "$*" == *soleur-smoke-home* ]]; then
   if [[ -n "${MOCK_SMOKE_LOG:-}" ]]; then printf '%s\n' "$*" >> "$MOCK_SMOKE_LOG"; fi
   printf '%s' "${MOCK_SMOKE_HOME-/home/soleur}"
@@ -1512,6 +1514,9 @@ create_base_mocks() {
   create_mock_sudo "$mock_dir"
   create_mock_chown "$mock_dir"
   create_mock_seq "$mock_dir"
+  # #10453 (F4 follow-up): MOCK_OD_FAIL=1 makes `od` produce nothing (the smoke's nonce source), so the "no weak nonce" row can
+  # reach the fallback. Installed ONLY on request: every other row keeps the real `od`.
+  if [[ "${MOCK_OD_FAIL:-}" == "1" ]]; then printf '#!/bin/bash\nexit 1\n' > "$mock_dir/od"; chmod +x "$mock_dir/od"; fi
   create_mock_flock "$mock_dir"
   create_mock_systemctl "$mock_dir"
   create_mock_df "$mock_dir"
@@ -3679,6 +3684,14 @@ assert_sdk_bash_smoke() {
   sbs_check "SBS-1c" "the smoke runs after the faithful canary and before the prod swap" \
     "$([[ -n "$smoke_line" && -n "$swap_line" && -n "$faith_line" && "$faith_line" -lt "$smoke_line" && "$smoke_line" -lt "$swap_line" ]] && echo 0 || echo 1)" \
     "faithful=$faith_line smoke=$smoke_line swap=$swap_line"
+  # F4 (CTO ruling 2026-10-19): the smoke runs AFTER the GitHub App key gate, the last gate before promotion, so it cannot fail that
+  # gate (an OOM or a lingering post-124 probe in the memory-capped canary) and roll back a healthy deploy. MOCK_EXEC_ALL_LOG sees
+  # every docker exec in order: the key probe's exec must precede the smoke's presence read.
+  local key_ln smoke_ln
+  key_ln=$({ grep -n 'github-app-key-probe' "$d/exec-all.log" || true; } | head -n 1 | cut -d: -f1)
+  smoke_ln=$({ grep -n 'sdk-bash-probe.mjs' "$d/exec-all.log" || true; } | head -n 1 | cut -d: -f1)
+  sbs_check "SBS-1c2" "the smoke's first exec comes AFTER the GitHub App key gate's exec (the smoke can no longer fail that gate)" \
+    "$([[ -n "$key_ln" && -n "$smoke_ln" && "$key_ln" -lt "$smoke_ln" ]] && echo 0 || echo 1)" "key=$key_ln smoke=$smoke_ln"
   sbs_check "SBS-1d" "only the CANARY container is exec'd for the smoke (the live prod container, present in the mock, is never exec'd with the probe or the presence/HOME reads)" \
     "$([[ -s "$d/smoke-argv.log" ]] && ! grep -qE 'exec (-w /app )?soleur-web-platform( |$)' "$d/smoke-argv.log" && [[ "$(grep -cE 'exec (-w /app )?soleur-web-platform-canary ' "$d/smoke-argv.log" || true)" -eq 3 ]] && echo 0 || echo 1)" \
     "$(tr '\n' '|' < "$d/smoke-argv.log")"
@@ -3708,12 +3721,27 @@ assert_sdk_bash_smoke() {
   sbs_check "SBS-2d" "the bounded DIAG bundle follows the page (every row carries trigger=sdk_smoke)" \
     "$([[ -n "$pg" && -n "$dg" && "$pg" -lt "$dg" && "$(grep -F 'SOLEUR_CANARY_SANDBOX_DIAG:' "$d/logger.txt" | grep -vc 'trigger=sdk_smoke' || true)" == 0 ]] && echo 0 || echo 1)" "page=$pg diag=$dg"
   cp2=$(sbs_jq "$d2/sb.json" '.consecutive_pass')
-  # SBS-3: a host-timeout (rc 124) is a failed verdict (a wedged probe), signature-independent.
-  out=$(run_sbs_deploy "export MOCK_SMOKE_RC=124; export MOCK_SMOKE_OUT=''") && rc=0 || rc=$?
+  # SBS-3: a host-timeout (rc 124) is a Bash failure ONLY when the probe printed SDK_BASH_DISPATCHED (Bash was handed to the SDK);
+  # before that it is a daemon stall or a wedged node start, which is smoke_infra_error and never pages (the #4941 class).
+  out=$(run_sbs_deploy "export MOCK_SMOKE_RC=124; export MOCK_SMOKE_OUT='SDK_BASH_DISPATCHED'") && rc=0 || rc=$?
   d=$(sbs_dir "$out")
-  sbs_check "SBS-3" "docker exec rc 124 (the host cap fired on a wedged probe) is sdk_bash_smoke_failed host_timeout_150s, pages once, deploy continues" \
+  sbs_check "SBS-3a" "docker exec rc 124 AFTER SDK_BASH_DISPATCHED is sdk_bash_smoke_failed host_timeout_150s, pages once, deploy continues" \
     "$([[ "$rc" -eq 0 && "$out" == *"$swap_msg"* && "$(sbs_jq "$d/sb-state.json" '.verdict + " " + .reason')" == "sdk_bash_smoke_failed host_timeout_150s" && "$(sbs_count "$d/logger.txt" 'reason=sdk_bash_smoke_failed: host_timeout_150s')" == 1 ]] && echo 0 || echo 1)" \
     "rc=$rc state: $(cat "$d/sb-state.json" 2>/dev/null)"
+  out=$(run_sbs_deploy "export MOCK_SMOKE_RC=124; export MOCK_SMOKE_OUT=''") && rc=0 || rc=$?
+  d=$(sbs_dir "$out")
+  sbs_check "SBS-3b" "docker exec rc 124 BEFORE any SDK_BASH_DISPATCHED is smoke_infra_error host_timeout_before_dispatch: no page, no Sentry event, deploy continues" \
+    "$([[ "$rc" -eq 0 && "$out" == *"$swap_msg"* && "$(sbs_jq "$d/sb-state.json" '.verdict + " " + .reason')" == "smoke_infra_error host_timeout_before_dispatch" \
+        && "$(sbs_count "$d/logger.txt" 'SANDBOX_CANARY_FAIL')" == 0 && "$(sbs_sentry_events "$d/sentry.txt" '.tags.op == "sandbox-canary"')" == 0 ]] && echo 0 || echo 1)" \
+    "rc=$rc state: $(cat "$d/sb-state.json" 2>/dev/null)"
+  out=$(run_sbs_deploy "export MOCK_SMOKE_RC=124; export MOCK_SMOKE_OUT='SDK_BASH_RESULT {\"verdict\":\"pass\",\"reason\":\"ok\"}'") && rc=0 || rc=$?
+  d=$(sbs_dir "$out")
+  sbs_check "SBS-3c" "rc 124 with output but WITHOUT the dispatched marker is still before-dispatch (a stray result line is not the marker)" \
+    "$([[ "$rc" -eq 0 && "$(sbs_jq "$d/sb-state.json" '.reason')" == host_timeout_before_dispatch ]] && echo 0 || echo 1)"
+  out=$(run_sbs_deploy "export MOCK_SMOKE_RC=0; export MOCK_SMOKE_OUT=\$'SDK_BASH_DISPATCHED\nSDK_BASH_RESULT {\"verdict\":\"pass\",\"reason\":\"ok\",\"coverage\":\"sdk_wrapper_shim_prodtuple\"}'") && rc=0 || rc=$?
+  d=$(sbs_dir "$out")
+  sbs_check "SBS-3d" "the dispatched marker does not disturb the result parse: marker line + a pass line (rc 0) is a pass" \
+    "$([[ "$rc" -eq 0 && "$(sbs_jq "$d/sb-state.json" '.verdict + " " + .coverage')" == "pass sdk_wrapper_shim_prodtuple" ]] && echo 0 || echo 1)" "state: $(cat "$d/sb-state.json" 2>/dev/null)"
 
   # SBS-4: infra classes never page and never roll back: docker rc 125/126/127, any other probe rc, rc 0 without a result line.
   local rcv
@@ -3754,6 +3782,22 @@ assert_sdk_bash_smoke() {
   d=$(sbs_dir "$out")
   sbs_check "SBS-5c" "an unresolvable container HOME is smoke_infra_error container_home_unresolved (the probe is not exec'd with a guessed HOME)" \
     "$([[ "$rc" -eq 0 && "$(sbs_jq "$d/sb-state.json" '.reason')" == container_home_unresolved && "$(grep -c 'node /app/infra/lib/sdk-bash-probe.mjs' "$d/smoke-argv.log" || true)" == 0 ]] && echo 0 || echo 1)"
+
+  # SBS-5d: no weak nonce. When /dev/urandom cannot supply one the smoke is an infra error, never a $RANDOM-derived nonce.
+  out=$(run_sbs_deploy "export MOCK_OD_FAIL=1") && rc=0 || rc=$?
+  d=$(sbs_dir "$out")
+  sbs_check "SBS-5d" "no usable /dev/urandom nonce is smoke_infra_error nonce_unavailable (the probe is not exec'd with a weak nonce), no page, deploy continues" \
+    "$([[ "$rc" -eq 0 && "$out" == *"$swap_msg"* && "$(sbs_jq "$d/sb-state.json" '.verdict + " " + .reason')" == "smoke_infra_error nonce_unavailable" \
+        && "$(grep -c 'node /app/infra/lib/sdk-bash-probe.mjs' "$d/smoke-argv.log" || true)" == 0 && "$(sbs_count "$d/logger.txt" 'SANDBOX_CANARY_FAIL')" == 0 ]] && echo 0 || echo 1)" \
+    "state: $(cat "$d/sb-state.json" 2>/dev/null)"
+
+  # SBS-5e: the smoke only runs while the canary is still healthy AFTER the key gate: a rejected key refuses promotion, and the smoke
+  # neither runs nor writes its ledger (it is behind its own CANARY_HEALTHY check).
+  out=$(run_sbs_deploy "export MOCK_GAK_PROBE_OUT='github_app_key_probe=rejected reason=http_401'") && rc=0 || rc=$?
+  d=$(sbs_dir "$out")
+  sbs_check "SBS-5e" "a rejected GitHub App key refuses promotion and the smoke does not run (no probe exec, no ledger), the key gate's exec did run" \
+    "$([[ "$out" != *"$swap_msg"* && "$(grep -c 'github-app-key-probe' "$d/exec-all.log" || true)" -ge 1 && "$(grep -c 'sdk-bash-probe.mjs' "$d/exec-all.log" || true)" == 0 && ! -e "$d/sb-state.json" ]] && echo 0 || echo 1)" \
+    "rc=$rc ledger: $(cat "$d/sb-state.json" 2>/dev/null) exec-all: $(tr '\n' '|' < "$d/exec-all.log" | head -c 400)"
 
   # SBS-6: coverage. A pass-shaped result with replay_only (or no) coverage is a HOLD: the counter does not move.
   local d6 cp6 fp6 fp6_first
@@ -3842,6 +3886,21 @@ assert_sdk_bash_smoke() {
         && "$(awk '/^run_sdk_bash_smoke\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$DEPLOY_SCRIPT" | grep -c 'ctr="soleur-web-platform-canary"' || true)" == 1 ]] && echo 0 || echo 1)"
   sbs_check "SBS-12d" "the smoke function never calls final_write_state, exit, or rollback (no verdict changes the deploy outcome)" \
     "$([[ "$(awk '/^run_sdk_bash_smoke\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$DEPLOY_SCRIPT" | grep -vE '^[[:space:]]*#' | grep -cE 'final_write_state|(^|[^a-z_])exit([^a-z_]|$)|rollback|docker (stop|rm)' || true)" == 0 ]] && echo 0 || echo 1)"
+  # SBS-12e (F4): source ordering. The smoke call is AFTER the GitHub App key gate and is the first statement of its own
+  # `if [[ "$CANARY_HEALTHY" == "true" ]]` block (a rejected key must skip it).
+  local key_src smoke_src prev_line want_if
+  want_if='if [[ "$CANARY_HEALTHY" == "true" ]]; then'
+  key_src=$(grep -n '^[[:space:]]*if \[\[ "\$CANARY_HEALTHY" == "true" \]\] && ! github_app_key_canary_check' "$DEPLOY_SCRIPT" | head -n 1 | cut -d: -f1)
+  smoke_src=$(grep -nE '^[[:space:]]*run_sdk_bash_smoke \|\| true[[:space:]]*$' "$DEPLOY_SCRIPT" | head -n 1 | cut -d: -f1)
+  prev_line=$(sed -n "$((${smoke_src:-1} - 1))p" "$DEPLOY_SCRIPT" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+  sbs_check "SBS-12e" "the call site is after the GitHub App key gate, directly inside its own CANARY_HEALTHY check" \
+    "$([[ -n "$key_src" && -n "$smoke_src" && "$key_src" -lt "$smoke_src" && "$prev_line" == "$want_if" ]] && echo 0 || echo 1)" \
+    "key=$key_src smoke=$smoke_src prev=[$prev_line]"
+  # SBS-12f (F4): the dispatched marker is ONE literal in both files, next to `state.dispatched = true` in the probe.
+  local probe_src="$(dirname "$DEPLOY_SCRIPT")/lib/sdk-bash-probe.mjs"
+  sbs_check "SBS-12f" "SDK_BASH_DISPATCHED is printed by the probe beside state.dispatched = true and read by the 124 arm (parity)" \
+    "$([[ "$(grep -A1 'state\.dispatched = true;' "$probe_src" | grep -c 'SDK_BASH_DISPATCHED' || true)" -ge 1 \
+        && "$(awk '/^run_sdk_bash_smoke\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$DEPLOY_SCRIPT" | grep -cF 'SDK_BASH_DISPATCHED' || true)" -ge 1 ]] && echo 0 || echo 1)"
   rm -rf "$d2" "$d6" "$d7" "$d11"
 }
 
@@ -11727,7 +11786,11 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # SBS-3 (rc 124), SBS-4 x6 (rc 125/126/127, probe crash, no result line, unknown verdict), SBS-5a-c (old image, canary absent, HOME
 # unresolved), SBS-6a-c (replay_only and coverage-less holds, resume), SBS-7a-c (stale warning at 3), SBS-8a-c (ledger write failure,
 # page survives it, single atomic write), SBS-9 (scrubbing), SBS-10 (fresh nonce), SBS-11 (alias skip), SBS-12a-d (static pins).
-CI_DEPLOY_ASSERT_FLOOR=659
+# #10453 review round (F4, 2026-10-19): raised 659 -> 667 (the SBS block measured 43 rows, +8) with SBS-1c2 (the smoke's exec follows the GitHub App
+# key gate's exec), SBS-3a/3b/3c/3d (rc 124 with and without SDK_BASH_DISPATCHED, a stray result line is not the marker, the marker does not disturb
+# the result parse; SBS-3 became 3a), SBS-5d (no weak nonce), SBS-5e (a rejected key skips the smoke), SBS-12e (source ordering) and SBS-12f (probe/host
+# marker parity).
+CI_DEPLOY_ASSERT_FLOOR=667
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"
