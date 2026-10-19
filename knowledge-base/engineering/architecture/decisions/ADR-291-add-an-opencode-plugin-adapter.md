@@ -1,6 +1,6 @@
 ---
 title: Add an OpenCode plugin adapter
-status: proposed
+status: adopting
 date: 2026-10-17
 supersedes: none
 related_adrs: [ADR-110, ADR-179, ADR-215, ADR-223, ADR-226, ADR-245, ADR-274]
@@ -12,8 +12,9 @@ brand_survival_threshold: single-user incident
 
 ## Status
 
-**Proposed — 2026-10-17.** Flips to `adopting` when the generator lands, and to `accepted` when the
-support bar below is met. In this record, **harness** means the `Harness` union in
+**Adopting — generator landed 2026-10-19** (`plugins/soleur/scripts/sync-opencode-adapter.ts`, drift-gated by
+`plugins/soleur/test/opencode-adapter-drift.test.ts`), per the condition this record set for itself. Flips to
+`accepted` when the support bar below is met. In this record, **harness** means the `Harness` union in
 `plugins/soleur/lib/harness.ts`. The word is not in `knowledge-base/project/glossary.md`.
 
 Ordinal census on 2026-10-17, after `git fetch origin --prune`, over `refs/heads` and
@@ -49,8 +50,13 @@ Three measured shapes drive the decision:
 2. **Agents default to `primary`.** Every canonical agent registered as unspawnable until
    `mode: subagent` was injected (§3.0). The agent id is path-derived with `/` and the frontmatter
    `name:` is ignored (§3.0). `model: inherit` resolves to null — the session model (§3.0).
-3. **There is no Stop hook.** The plugin API has `event` (including `session.idle`) and
-   `experimental.session.compacting`, but no documented contract for *blocking* a stop (§6.4, §6.2).
+3. **There is no Stop hook.** OpenCode V2's complete hook surface — `session(prompt | context |
+   compaction | generate | title | model.request | http.request | http.response |
+   experimental.ws.* | retry)`, `permission.evaluate`, `shell.create.before`, and
+   `tool.execute.before | after` — communicates only by mutating the event object it is handed, and
+   `ctx.event.subscribe` is a one-way iterator with no return channel. No member of it can defer a
+   stop, force a continuation, or veto a completion (§6.6). "Session went quiet" is an observation,
+   not a boundary.
 
 ## Considered Options
 
@@ -65,7 +71,8 @@ Three measured shapes drive the decision:
   breaks the ADR-226 census and every `soleur:<name>` reference. Rejected — Grok already accepts the
   bare-dispatch class.
 - **Enforce the completion marker with a blocking Stop equivalent.** Pros: parity with
-  `stop-hook.sh`. Cons: no blocking stop contract is measured (§6.4); building one is a claim, not a
+  `stop-hook.sh`. Cons: there is no blocking stop contract to use — the hook surface is enumerated
+  in full and none of it can veto or continue a stop (§6.6); building one is a claim, not a
   measurement. Rejected — the Codex posture applies: report the unsupported gate, never simulate it.
 - **Call the adapter supported when the mapping doc exists.** Pros: the work closes faster. Cons: a
   session would still be `unknown` and no guard would have fired. Rejected on the ADR-274 precedent.
@@ -95,12 +102,18 @@ form and canonical, agent-read docs keep `soleur:<name>` (ADR-226 census unchang
 is the path id (`engineering/cto`), never the registry id or the ignored `name:` field. Every
 generated agent carries `mode: subagent`.
 
-`session.idle` stands in for the Stop event, but because no blocking contract is measured the
-`<promise>DONE</promise>` marker is **advisory** on OpenCode and autonomous skills rely on their
-structural completion checks (exit codes, CLI-output checks) — AGENTS.md's stated preference.
-Compaction is the opposite case: `experimental.session.compacting` and
-`experimental.compaction.autocontinue` exist (§6.2), so the post-compaction re-read directive **is**
-delivered here, unlike Codex and Devin.
+There is no Stop hook to stand in for. The `<promise>DONE</promise>` marker is **advisory** on
+OpenCode and autonomous skills rely on their structural completion checks (exit codes, CLI-output
+checks) — AGENTS.md's stated preference. This is the final word and not a placeholder: the hook
+surface is enumerated in full (§6.6) and no member of it can block or continue a stop, so no later
+phase may upgrade the marker to a contract without new measurement.
+
+Compaction splits. The post-compaction re-read directive **is** deliverable —
+`ctx.session.hook("compaction")` observes the checkpoint, and `context` runs for every agent-loop
+request including tool-driven continuations (§6.6) — unlike Codex and Devin, where
+`compaction-state.sh` has no equivalent. The **autocontinue** half is not: V2 has no
+`experimental.compaction.autocontinue` hook and nothing can resume a stop, so the re-read lands on
+the next real request rather than by continuation.
 
 Every OpenCode hook gets a disposition row in its own registry (ADR-223). There is no plugin-root
 fallback (ADR-179). The install surface is a config fragment plus a plugin module, because OpenCode
@@ -122,14 +135,27 @@ The generator is the maintenance surface and carries a `--check` mode that fails
 canonical agent added without regenerating its OpenCode stub reds rather than silently missing.
 
 `plugins/soleur/test/harness-discovery-smoke.test.ts` names `opencode` as the *refused* harness in
-its "unknown harness" case; that case must move to a still-unknown name. The discovery arm keys on
-`path`, not `name`, because the listing is polluted by the operator's global skill roots and ids are
-bare (§9.0). It inherits ADR-245's exit taxonomy — 3 for unresolved or unreadable, 1 for measured
-loss.
+its "unknown harness" case; that case moves to a still-unknown name (`cursor`). The discovery arm
+keys on `path`, not `name`, because ids are bare basenames and the listing is polluted by the
+operator's global skill roots when `HOME` is not controlled (§9.0). It inherits ADR-245's exit
+taxonomy — 3 for unresolved or unreadable, 1 for measured loss.
 
-The published `@opencode-ai/plugin` package is 1.19.3 while the CLI reports V2 (`2.0.32`); the v2
-API is reached at the `/v2/effect` subpath (§6.1). The plugin pin is a vendor-pin and inherits
-ADR-245's CI vendor-pin policy.
+Two implementation findings, both from building the arm (§11.6), make the OpenCode arm's shape
+differ from the Codex/Devin arms and are recorded here so they are not "simplified" back:
+
+- The listing is built by an asynchronous scan, so the arm POLLS until the expected population is
+  reached. A single read reports a correct install as a total loss; `POST /api/location/reload` is
+  not the fix (it clears the listing before rebuilding it).
+- The payload must be read from a FILE. `execFileSync`'s pipe silently truncates a large stdout
+  (~0.8–0.9 MB, varying) and reports success, which grades a correct install UNRESOLVED.
+
+The plugin pin is `@opencode/plugin@2.0.32` — the V2 package, version-matched to the CLI. It is
+**not** `@opencode-ai/plugin@1.19.3`: that is the V1 package, and the 2.0.32 runtime rejects the V1
+module shape outright (`Plugin must export a default definition with an id and an effect or setup
+function`, §6.6 arm A). The V2 module is `export default { id, async setup(ctx) { … } }`. Both
+delivery routes were measured to load — the global discovery directory `<configdir>/plugins/*` with
+no config entry, and the `plugins` config key with a config-relative path (§6.6 arms B/C). The pin is
+a vendor-pin and inherits ADR-245's CI vendor-pin policy.
 
 Public README, getting-started, comparison, blog, and battlecard pages stay unchanged until the
 support bar is met. When the status flips to `accepted`, grep `knowledge-base/legal` for future-tense

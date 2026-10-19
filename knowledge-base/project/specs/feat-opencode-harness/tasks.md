@@ -29,8 +29,8 @@ entry) and `serve` stand in for the non-session surfaces, and headless `run` was
 
 ### 0.2 `session.idle` continuation
 
-- [ ] 0.2.1 Write a throwaway OpenCode plugin whose `event` handler logs on `session.idle` and attempts to return a continuation / blocking signal.
-- [ ] 0.2.2 Record whether a stop can be deferred or continued, or whether the downgrade in ADR-291 (advisory `<promise>DONE</promise>`) is final. Append to `measurements.md` §6.6.
+- [x] 0.2.1 Write a throwaway OpenCode plugin whose `event` handler logs on `session.idle` and attempts to return a continuation / blocking signal. Done as four arms that differ only in module shape and delivery route (measurement §6.6).
+- [x] 0.2.2 Record whether a stop can be deferred or continued, or whether the downgrade in ADR-291 (advisory `<promise>DONE</promise>`) is final. Append to `measurements.md` §6.6. **Finding: no blocking Stop contract exists** — the V2 hook surface is enumerated and none of it can defer a stop, force a continuation, or veto a completion, and `ctx.event.subscribe` is a one-way iterator. The advisory downgrade is final. The pass also refuted §6.2–§6.5 (they read the V1 package) and established the V2 module shape `export default { id, setup(ctx) }`.
 
 ## Phase 1 — Harness core
 
@@ -109,10 +109,10 @@ and a `routingInstructions` arm.
 
 ### 3.2 Plugin module
 
-- [ ] 3.2.1 Create `plugins/soleur/opencode/<plugin>.ts` binding: `tool.execute.before` for the Bash credential guard and destructive-command guard; a session-start surface for the rule injection; `experimental.session.compacting` for the compaction re-read directive.
-- [ ] 3.2.2 Wire the `event` hook on `session.idle` to record the advisory completion-marker state (per 0.2's finding — do not claim a block if 0.2 found none).
+- [ ] 3.2.1 Create `plugins/soleur/opencode/<plugin>.ts` binding, in the **V2** shape `export default { id, async setup(ctx) { … } }` (the V1 named-export form is rejected — measurement §6.6 arm A): `ctx.tool.hook("execute.before")` for the Bash credential guard and destructive-command guard (plus `ctx.shell.hook("create.before")` on the shell path); `ctx.session.hook("context")` for the session-start rule injection; `ctx.session.hook("compaction")` plus `context` for the compaction re-read directive.
+- [ ] 3.2.2 Subscribe to `ctx.event.subscribe()` and record the advisory completion-marker state. **Measured (§6.6): no hook can block a stop** — this row is observation-only and must not claim a block or a continuation.
 - [ ] 3.2.3 Reuse the existing guard scripts where they are harness-agnostic; do not re-implement the credential or destructive-command logic.
-- [ ] 3.2.4 Pin the `@opencode-ai/plugin` dependency and note the CLI-vs-package version skew (CLI 2.0.32 / package 1.19.3, v2 at `/v2/effect`) in a comment. Confirm the pin against ADR-245's vendor-pin policy.
+- [ ] 3.2.4 Pin `@opencode/plugin@2.0.32` — the **V2** package, version-matched to the CLI. (Not `@opencode-ai/plugin@1.19.3`: that is the V1 package, whose module shape the 2.0.32 runtime rejects — measurement §6.6. The "CLI-vs-package version skew" this task originally recorded is a package rename between API generations, not a skew.) Confirm the pin against ADR-245's vendor-pin policy.
 
 ### 3.3 RED: hook tests
 
@@ -131,15 +131,15 @@ and a `routingInstructions` arm.
 
 ### 4.1 RED: discovery tests
 
-- [ ] 4.1.1 Move `opencode` off the *refused* harness name in `plugins/soleur/test/harness-discovery-smoke.test.ts` to a still-unknown name.
-- [ ] 4.1.2 Write failing cases: a hermetic `skill.list` payload keyed on `path` distinguishes canonical registrations; a shrunken listing exits 1 naming the loss; an unreadable payload exits 3.
+- [x] 4.1.1 Move `opencode` off the *refused* harness name in `plugins/soleur/test/harness-discovery-smoke.test.ts` to a still-unknown name (`cursor`; commit `05a3e2582b`).
+- [x] 4.1.2 Write failing cases: a hermetic `skill.list` payload keyed on `path` distinguishes canonical registrations; a shrunken listing exits 1 naming the loss; an unreadable payload exits 3.
 
 ### 4.2 GREEN: parser + arm
 
-- [ ] 4.2.1 Add the `opencode` arm to `plugins/soleur/scripts/harness-discovery-smoke.ts`: extend the `Harness` type and `parseArgs`, and add a parser keyed on `path` (not `name`).
-- [ ] 4.2.2 Control `HOME` and the project dir so global skill roots cannot pollute the fixture.
-- [ ] 4.2.3 Inherit ADR-245's exit taxonomy (3 = unresolved/unreadable, 1 = measured loss).
-- [ ] 4.2.4 GREEN `harness-discovery-smoke.test.ts`.
+- [x] 4.2.1 Add the `opencode` arm to `plugins/soleur/scripts/harness-discovery-smoke.ts`: extend the `Harness` type and `parseArgs`, and add a parser keyed on `path` (not `name`).
+- [x] 4.2.2 Control `HOME` and the project dir so global skill roots cannot pollute the fixture (`resolveBin` + hermetic `HOME`/`XDG_*`; §11.6).
+- [x] 4.2.3 Inherit ADR-245's exit taxonomy (3 = unresolved/unreadable, 1 = measured loss). The listing is polled to settlement; the payload is read from a file (§11.6).
+- [x] 4.2.4 GREEN `harness-discovery-smoke.test.ts` — 48 pass, and the live arm exits 0 (`ok (mode=single)`) in ~5 s.
 
 ### 4.3 CI job
 
@@ -147,7 +147,7 @@ and a `routingInstructions` arm.
 
 ### 4.4 Gate: hermetic install fixture
 
-- [ ] 4.4.1 Prove a hermetic install from this checkout registers exactly the declared set (no global leakage), and record the fixture in `measurements.md`.
+- [x] 4.4.1 Prove a hermetic install from this checkout registers exactly the declared set (no global leakage), and record the fixture in `measurements.md` (§11.4, §11.6).
 
 ## Phase 5 — Model tiers + tool map
 

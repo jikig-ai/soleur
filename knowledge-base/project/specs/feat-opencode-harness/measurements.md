@@ -299,6 +299,83 @@ The npm package also exposes an **Effect-based** plugin interface at
 plugin may be written to either; the spec should pick one deliberately rather than assume the
 docs' shape is the only one.
 
+### 6.6 — Correction pass, 2026-10-19: the V2 plugin contract (§6.2–§6.5 read the V1 package)
+
+**Run 2026-10-19, OpenCode 2.0.32. Verdict: the runtime implements the V2 plugin contract, and it
+rejects the V1 module shape §6.2/§6.5 describe. This also closes the §10 open item "the plugin
+contract has not been exercised" and settles spec D3 / task 3.2.2.**
+
+Correction by citation, per the append-only rule; the bodies above stay as recorded.
+
+Sources: the installed CLI, measured live; `https://opencode.ai/v2/docs/build/plugins`;
+`https://opencode.ai/v2/docs/api`; the npm registry. Method: hermetic `HOME` with
+`XDG_*` inside it (identical to §11.6), a git-committed scratch project as cwd, an explicitly
+started server, `OPENCODE_PASSWORD` from the `server password <pw>` line, and a probe plugin that
+appends to a log file. Three arms differ **only** in the plugin module's export shape; the
+directory (`<configdir>/plugins/`) and the config key (`"plugins"`) are identical.
+
+| Arm | Module shape | Result |
+|---|---|---|
+| A | `export const Foo = async () => ({ … })` — the V1 named export the V1 docs page shows (§6.2/§6.5) | **Rejected.** Server log: `msg="failed to load plugin" … cause="PluginModule.LoadError: Plugin must export a default definition with an id and an effect or setup function. (cause: SchemaError(Missing key at ["default"]))"` |
+| B | `export default { id, async setup(ctx) { … } }` — V2 | **Loaded and ran.** The plugin's own first log line (`SETUP_OK`) is present |
+| C | Arm B's module, with **no** `"plugins"` entry in `opencode.json` | **Loaded and ran** from the global discovery directory |
+
+Readings:
+
+- The config key is `plugins` (plural), and a relative entry resolves against the config file that
+  contains it. The load is logged as `msg="loading plugin" id=<abs> entrypoint=file://<abs>`.
+- The global discovery directory `<configdir>/plugins/*.js` loads **without** any `plugins` entry
+  (arm C logged the load line and the plugin's setup ran). Both delivery routes therefore work.
+- `ctx`'s keys, read from inside `setup` (measured, not from docs):
+  `app, location, options, agent, aisdk, command, credential, event, experimental, generate, model,
+  provider, integration, mcp, permission, plugin, reference, rpc, skill, storage, tool, vcs,
+  websearch, worktree, session, shell`.
+- V2 hook surface (build docs, "Hooks"; consistent with `ctx` above):
+  `ctx.session.hook(name, cb, opts?)` with `name` one of
+  `prompt | context | compaction | generate | title | model.request | http.request | http.response |
+  experimental.ws.handshake | experimental.ws.send | experimental.ws.receive | retry`;
+  plus `ctx.permission.hook("evaluate")`, `ctx.shell.hook("create.before")`, and
+  `ctx.tool.hook("execute.before" | "execute.after")`. Every one of these is handed a **mutable
+  event object** and communicates only by mutating it; none returns a decision about stopping.
+  A plugin may not redirect prompt admission (`Session and message IDs are readonly; a hook cannot
+  redirect admission`) and the prompt hook `do[es] not expose a typed rejection API`.
+- `ctx.event.subscribe(options?) -> AsyncIterable<OpenCodeEvent>` is the event surface. A live
+  capture while `POST /api/session` and `POST /api/session/{id}/prompt` were issued yielded
+  `integration.updated, model.updated, provider.updated, vcs.branch.updated, agent.updated,
+  command.updated, skill.updated, websearch.updated, reference.updated, plugin.updated,
+  session.inbox.enqueued, session.execution.started, session.instructions.updated,
+  session.inbox.delivered`.
+- `POST /api/session/{id}/prompt` takes `{"text": …}`; the v1-style `{"parts":[…]}` body is rejected
+  with `InvalidRequestError: Missing key at ["text"]`. The v1 path `/api/session/{id}/message` is
+  `GET`-only (a `POST` answers 404).
+- "Idle" in V2 is a **persisted message type** — `Session.Message.Idle`, a member of the
+  `Session.Message.Info` union — not a hook and not a controllable boundary.
+
+Verdict (closes Phase 0.2): **there is no blocking Stop contract.** No hook can defer a stop, force
+a continuation, or veto a completion, and the event surface is a one-way iterator with no return
+channel. "Session went quiet" is therefore *observation only*: a plugin can notice it and cannot act
+on it. The advisory `<promise>DONE</promise>` marker plus structural verification is the correct and
+only available design (spec D3). Task 3.2.2 is capped accordingly — the hook module may **not** claim
+a block; it records the advisory marker's state and nothing more.
+
+Package identity (npm registry, 2026-10-19), which corrects §6.0 and the spec's task 3.2.4:
+
+| Package | Latest | What it is |
+|---|---|---|
+| `@opencode/plugin` | `2.0.32` | **V2** authoring interfaces + loader — "Authoring interfaces and runtime loader support for OpenCode V2 plugins". Version-matched to the CLI |
+| `@opencode-ai/plugin` | `1.19.3` | **V1** — the package §6.2 read `dist/index.d.ts` from, and the one task 3.2.4 proposed to pin |
+
+So the pin is `@opencode/plugin` (2.0.32), **not** `@opencode-ai/plugin`: pinning the latter against a
+V2 CLI pins exactly the API the runtime rejects (arm A). The "CLI-vs-package version skew" the spec
+recorded (CLI 2.0.32 / package 1.19.3) is not a skew — it is a package rename between API
+generations, and §6.5's `/v2/effect` subpath is the same V1 package's Effect entry, not the V2
+surface.
+
+Caveat (stated, not resolved): no turn was driven to completion — a hermetic environment has no
+provider credential — so the `session.idle` **event** is inferred from the V1 catalog and was not
+observed here. The verdict does not depend on it: the hook surface is enumerated in full, and no
+member of it can defer a stop.
+
 ---
 
 ## 7.0 — Instructions / rules
@@ -461,3 +538,55 @@ Two footguns: `GET /api/skill` returns each skill's full `content` (~3 MB for 10
 **file**, a pipe truncates near 139 kB; and with `HOME` redirected the `opencode` shim re-resolves
 through mise and **installs another copy into the scratch HOME** (hit `Disk quota exceeded` once) —
 invoke the resolved binary path directly to avoid it.
+
+### 11.6 — The discovery arm's probe recipe, corrected by building it
+
+Readings taken while implementing the `opencode` arm of `scripts/harness-discovery-smoke.ts`
+(OpenCode 2.0.32, hermetic `HOME` + `XDG_*`, adapter installed with
+`scripts/install-opencode-adapter.ts --target <home>/.config/opencode`).
+
+**The listing is built ASYNCHRONOUSLY, and §11.1's "needs a session" was a timing artifact.**
+Polling `GET /api/skill` every 1–2 s from boot with no session and no reload:
+
+| Elapsed | `data` length |
+|---|---|
+| t=0 s | 0 |
+| t=3 s | **105** |
+
+The scan appears to start on the first request rather than at boot — a first read at t=8 s also
+returned `0`, then `2`, then the full set. Either way the reading is only meaningful once polled to
+settlement, and `POST /api/session` is **not** part of the recipe. §11.1's attribution to the session
+is superseded: it was the second request, not the session call, that observed the populated list.
+
+**`POST /api/location/reload` CLEARS the listing before rebuilding it.** Issued on a settled server:
+`data` drops to **2** (built-ins only) and returns to **105** about 3 s later. So it must not be part
+of the probe — a reload immediately before the read makes the arm race its own reset.
+
+**The payload MUST be read from a file. `execFileSync` truncates a large stdout and reports
+SUCCESS.** Same settled payload, same call, two consumers:
+
+| Consumer | Bytes | `JSON.parse` |
+|---|---|---|
+| shell redirect `> out.json` (and `\| wc -c`) | 3,069,018 | valid |
+| `spawnSync` with an `fd` opened on `out.json` | 3,069,017 | valid |
+| bun `execFileSync(..., { maxBuffer: 32*1024*1024 })` | 803,968 (also 945,818 chars on another run) | **INVALID** — string cut mid-`content` |
+
+`maxBuffer` is not honoured on this path: the truncation point differed between runs, the call
+returned without throwing, and the unclosed string made a correct install grade `unparseable-output`
+(exit 3). §11.5's "a pipe truncates near 139 kB" is corrected: the reproduced truncation is bun's
+`execFileSync` at ~0.8–0.9 MB, not a 139 kB shell pipe — that figure came from `| head`, which closes
+the pipe early and is not the failure mode here.
+
+**Hermetic `HOME` is only safe with the absolute binary.** With `HOME` redirected, the `opencode` on
+`PATH` (`~/.local/bin/opencode`, a version-manager shim) resolves its install THROUGH `HOME`,
+reinstalls into the scratch dir and hangs (`env -i PATH=$PATH opencode --version` exceeded 180 s);
+`readlink -f` follows the chain to
+`.../mise/installs/opencode/2.0.32/node_modules/.bin/opencode`, which needs no `HOME` and answers
+`opencode v2.0.32` under `env -i`. With that binary, `HOME` + `XDG_*` can all be hermetic, which
+reproduces §11.4 exactly: **105** skills, **103** with a `path` under `<checkout>/skills/`, the
+outside set being exactly `/builtin/opencode.md` and `/builtin/report.md`.
+
+**End-to-end, the arm passes.** `bun scripts/harness-discovery-smoke.ts --harness opencode` →
+`harness-discovery[opencode]: exit=0 reason=ok (mode=single)` in **~5 s**, `missing: []`,
+`extra: []`, `badMultiplicity: []`. `mode=single` is a new verdict mode for an expectation with no
+cross-root (k≥2) name — the OpenCode shape, where reporting `indeterminate` would read as a defect.
