@@ -117,7 +117,7 @@ declare -A ALLOW=(
   [".github/workflows/apply-deploy-pipeline-fix.yml"]="hint-only: the reference is remediation text inside an ::error:: string (:2108); the step reads no rows"
   [".github/workflows/apply-web-platform-infra.yml"]="hint-only: betterstack-query.sh references are remediation text inside ::error:: strings (e.g. :3664)"
   [".github/workflows/build-inngest-bootstrap-image.yml"]="hint-only: _ptr evidence strings embed the query recipe for the operator (:741,:743)"
-  [".github/workflows/scheduled-zot-restart-loop.yml"]="hint-only: references live in remediation printf blocks; BETTERSTACK_QUERY_* env there feeds betterstack-ingest-probe.sh (the write probe), not a reader"
+  [".github/workflows/scheduled-zot-restart-loop.yml"]="hint-only: references live in remediation printf blocks; BETTERSTACK_QUERY_* env there feeds betterstack-ingest-probe.sh (the write probe) and, since #7521, the fill-rate probe step, which reads rows only through scripts/followthroughs/zot-fill-rate-7341.sh (envelope-anchored, its own entry below)"
   ["scripts/registry-heartbeat-poll.sh"]="hint-only: the reference sits inside a diagnostic heredoc listing reproduce commands (:203)"
   ["scripts/followthroughs/inngest-soak-6178.sh"]="hint-only: BETTERSTACK_HINT (:196) is an operator-facing recipe string interpolated into error text; the probe reads Sentry/issue state, never query rows"
   ["scripts/followthroughs/l3-probe-armed-6438.sh"]="hint-only: 'Diagnose:' echo string (:125); the probe reads the Better Stack REST API, not query output"
@@ -136,6 +136,7 @@ declare -A ALLOW=(
   ["scripts/followthroughs/compound-promote-outcome-8281.sh"]="field-scoped: decodes .raw|fromjson|.message and selects on the message object's fields (:101-102)"
   ["scripts/followthroughs/git-data-birth-emitter-6982.sh"]="field-scoped SQL: JSONExtractString(raw,'stage') = 'boot_complete' AND host_name equality (:83-84) — field predicates, not message substring"
   ["scripts/followthroughs/git-data-rung2-evidence-capture.sh"]="field-scoped SQL: JSONExtractString extraction of stage/host_name/rc/luks_* fields with host_name in the WHERE (:589-650)"
+  ["scripts/egress-audit-retention-check.sh"]="field-scoped SQL: JSONExtractString(raw,'CONTAINER_NAME') = 'soleur-egress-gw' on the container axis, plus a status allowlist and canary workspace ids; the verdict can only FAIL on a match (n>0 means ingest is not landing), so a forged or quoting row can raise a false alarm but never a false pass"
   ["scripts/followthroughs/hosted-destroy-ask-window-9776.sh"]="field-scoped: selects .CONTAINER_NAME == \$c and the message object's .decision prefix on the decoded row (:129-132) — container axis, not substring"
   ["scripts/followthroughs/hostname-mislabel-web1-6616.sh"]="field-scoped SQL: JSONExtractString(raw,'host_name')/'host' GROUP BY read (:93-98); the verdict keys on host fields, not marker text"
   ["scripts/followthroughs/image-cve-scan-window-9826.sh"]="field-scoped: decoded selects .message == \$m and .marker == \$m (:95-97) — equality on the row's own fields"
@@ -157,6 +158,8 @@ declare -A ALLOW=(
   ["scripts/followthroughs/private-nic-converged-6415.sh"]="envelope-anchored '\"raw\":\"{\"message\":\"SOLEUR_PRIVATE_NIC ' (:50)"
   ["scripts/followthroughs/zot-fill-rate-7341.sh"]="envelope-anchored '\"raw\":\"{\"message\":\"SOLEUR_ZOT_DISK ' guard (:130) ahead of every verdict read"
   ["scripts/followthroughs/zot-last-err-redact-7500.sh"]="envelope-anchored (:149, mirrors zot_envelope_anchor from scripts/lib/zot-telemetry-parse.sh)"
+  ["scripts/followthroughs/registry-htpasswd-stdin-10119.sh"]="envelope-anchored via zot_envelope_anchor (scripts/lib/zot-telemetry-parse.sh, :151) ahead of every verdict read; each field is then read from the decoded message cut at its FIRST ' zot_last_err=' (:156-160), and a row that merely quotes the marker never passes the anchor"
+  ["scripts/followthroughs/registry-clientip-alert-7530.sh"]="two honest reads: (1) the SOLEUR_ZOT_DISK boot read is anchored on the DECODED message at offset 0 (jq startswith(\"SOLEUR_ZOT_DISK \")) and host-scoped on the trusted head, exactly like the 10119 probe; (2) the four raw-SQL engine reads are the COMMITTED alert predicate extracted from betterstack-logs-alerts.tf, whose WHERE is producer-anchored at offset 0 of the stored raw (startsWith(raw, '{\"message\":\"SOLEUR_ZOT_LOG shipper=zot-log-shipper host=soleur-registry ') OR startsWith(raw, '{\"message\":\"SOLEUR_ZOT_DISK ')) — a quoting journald row starts {\"PRIORITY\" and cannot satisfy it; the suite pins the SQL sent against the committed text"
   ["scripts/followthroughs/registry-luks-live-8386.sh"]="envelope-anchored '\"raw\":\"{\"message\":\"<marker> ' (:317, mirrors zot_envelope_anchor)"
 
   # --- any-emitter by property ---------------------------------------------------------------

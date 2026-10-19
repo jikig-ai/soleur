@@ -14,6 +14,7 @@ Close mutation does surgical line-level edits to preserve key order.
 """
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -214,6 +215,15 @@ def find_frontmatter_block(lines: list[str]) -> tuple[int, int] | None:
     return None
 
 
+def _note(exc: BaseException, site: str) -> None:
+    # Class name and a static site label only. Never str(exc)/repr(exc): exception text can carry a path or
+    # ledger content. `site` is a string literal at every call site.
+    # A closed, full or missing stderr (None when fd 2 is closed) must not turn a swallowed error into a crash.
+    with contextlib.suppress(OSError, ValueError, AttributeError):
+        sys.stderr.write("resolve-debt: swallowed %s at %s\n" % (type(exc).__name__, site))
+        sys.stderr.flush()
+
+
 def mutate_entry(fp: Path, new_status: str, linked_issue: int | None) -> None:
     """Rewrite the entry's frontmatter: replace status:, optionally insert linked_issue:.
 
@@ -303,8 +313,8 @@ def mutate_entry(fp: Path, new_status: str, linked_issue: int | None) -> None:
     except Exception:
         try:
             os.unlink(tmp_path)
-        except OSError:
-            pass
+        except OSError as exc:
+            _note(exc, "tmp-cleanup")
         raise
 
 

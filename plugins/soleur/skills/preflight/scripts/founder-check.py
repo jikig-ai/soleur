@@ -29,6 +29,7 @@ fixes the bytes of the script a command names, never what that script loads. `ha
 identity shown in the log; the freeze-commit comparison is the integrity control.
 """
 import argparse
+import contextlib
 import datetime
 import hashlib
 import json
@@ -1574,6 +1575,31 @@ def build_parser():
 _OUTPUT_FLAGS = ("--out", "--command-out", "--display-out")
 
 
+def _note(exc, site):
+    # Class name and a static site label only. Never str(exc)/repr(exc): exception text can carry a path or
+    # the founder's command. `site` is a string literal at every call site.
+    # A closed, full or missing stderr (None when fd 2 is closed) must not turn a swallowed error into a crash.
+    with contextlib.suppress(OSError, ValueError, AttributeError):
+        sys.stderr.write("founder-check: swallowed %s at %s\n" % (type(exc).__name__, site))
+        sys.stderr.flush()
+
+
+def _locator(exc):
+    # Exception class plus the innermost frame IN THIS FILE (function name and line), e.g. "KeyError at cmd_verify:1034";
+    # the innermost frame overall is usually a stdlib one an agent cannot locate. Never str(exc): that text can carry a
+    # path or the founder's command. Needs no import. Mirrored inline in incident/scripts/redact-engine.py main().
+    tb, own, last = exc.__traceback__, None, None
+    while tb is not None:
+        last = tb
+        if tb.tb_frame.f_code.co_filename == __file__:
+            own = tb
+        tb = tb.tb_next
+    tb = own or last
+    if tb is None:
+        return type(exc).__name__
+    return "%s at %s:%s" % (type(exc).__name__, tb.tb_frame.f_code.co_name, tb.tb_lineno)
+
+
 def _clear_outputs(argv):
     """Remove the files a run is about to write, BEFORE argument parsing. A stale decision record or
     command file from an earlier run must never survive a run that dies early (a usage error, a
@@ -1591,8 +1617,8 @@ def _clear_outputs(argv):
         try:
             if os.path.islink(p) or os.path.isfile(p):
                 os.unlink(p)
-        except OSError:
-            pass
+        except OSError as exc:
+            _note(exc, "clear-output")
 
 
 def main(argv=None):
@@ -1603,14 +1629,14 @@ def main(argv=None):
         return args.fn(args)
     except Exception as e:  # a traceback is an unreadable verdict: print a one-line FAIL and a distinct rc
         line = json.dumps({"outcome": "FAIL", "reason": "internal-error", "environmental": True,
-                           "detail": f"{type(e).__name__}: {str(e)[:120]}"})
+                           "detail": _locator(e)})  # class name and innermost frame only: exception text can carry a path or the command
         out = getattr(args, "out", None)
         if out:
             try:
                 with open(out, "w", encoding="utf-8") as fh:
                     fh.write(line + "\n")
-            except OSError:
-                pass
+            except OSError as exc:
+                _note(exc, "out-file-write")
         print(line)
         return 4
 

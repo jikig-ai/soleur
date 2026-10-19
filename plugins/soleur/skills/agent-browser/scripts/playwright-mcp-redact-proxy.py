@@ -38,7 +38,10 @@ path uses (loaded by path from the sibling `redact-a11y-snapshot.py`; this file
 defines no predicate of its own). Three fail-closed arms, no bypass variable:
 
   * startup  -- `refuse_argv_and_env`, `load_redactor`, `self_test`: stderr
-                `refusing to start: <reason>`, exit 2, no child spawned;
+                `refusing to start: <reason>`, exit 2, no child spawned (these three catch
+                Exception, SystemExit and KeyboardInterrupt; a BaseException subclass outside
+                them is unreachable here and would die with exit 1 and a traceback before any
+                child is spawned, so nothing is relayed);
   * per call -- `refuse_request` / `rewrite_result`: an `isError` result naming the
                 tool, built by `error_result`, whose reason never quotes input;
   * transport -- `teardown`: the child's whole process group is ended on stdin
@@ -54,6 +57,7 @@ server". Stdlib only, single `selectors` loop, POSIX.
 """
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import json
 import os
@@ -123,9 +127,33 @@ GOOGLE_CHROME_PATHS = {
 _LOG_SCRUB = {c: " " for c in list(range(0x20)) + [0x7F, 0x2028, 0x2029]}
 
 
+# json.loads can legitimately return None (JSON null), so a failed parse needs its own marker.
+_NOT_JSON = object()
+
+
 def log(msg: str) -> None:
     sys.stderr.write(f"{PREFIX} {msg.translate(_LOG_SCRUB)}\n")
     sys.stderr.flush()
+
+
+def _log_quiet(msg: str) -> None:
+    # log() that cannot raise: for lines written on the teardown path, where an exception would skip the reap and the exit.
+    # RuntimeError is in the guard because teardown can run from the SIGTERM handler, where a reentrant stderr write raises it.
+    # A closed, full, busy or missing stderr (None when fd 2 is closed) must not abort teardown.
+    with contextlib.suppress(OSError, ValueError, RuntimeError, AttributeError):
+        log(msg)
+
+
+def _note(exc: BaseException, site: str) -> None:
+    # Class name and a static site label only. Never str(exc)/repr(exc)/input text: exception text can carry page
+    # content, and Claude Code persists this stderr. `site` is a string literal at every call site.
+    _log_quiet(f"swallowed {type(exc).__name__} at {site}")
+
+
+def _flush_notes(pending: List[Tuple[BaseException, str]]) -> None:
+    # Emits the (exc, literal-label) pairs a handler collected while it must not write to stderr (see teardown).
+    for exc, label in pending:
+        _note(exc, label)
 
 
 def refuse_start(reason: str) -> NoReturn:
@@ -250,7 +278,7 @@ def load_redactor() -> Tuple[Any, Any, int, str]:
             raise ImportError("no loader")
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-    except BaseException as exc:  # noqa: BLE001 - a module-level sys.exit is a refusal too
+    except (Exception, SystemExit, KeyboardInterrupt) as exc:  # a module-level sys.exit is a refusal too
         refuse_start(f"cannot load {REDACTOR_BASENAME}: {type(exc).__name__}")
     missing = [n for n in ("redact_text", "looks_like_a11y_tree", "MAX_INPUT_BYTES", "REDACTED") if not hasattr(mod, n)]
     if missing:
@@ -265,14 +293,14 @@ def self_test(redact_text: Any, looks_like_a11y_tree: Any, redacted: str) -> Non
     row = '- textbox "Token" [ref=e1]: ZZQP-SENTINEL-7980'
     try:
         out = redact_text(row)
-    except BaseException as exc:  # noqa: BLE001
+    except (Exception, SystemExit, KeyboardInterrupt) as exc:
         refuse_start(f"redactor self-test raised {type(exc).__name__}")
     if redacted not in out or "ZZQP-SENTINEL-7980" in out:
         refuse_start("redactor self-test did not redact the sentinel row")
     try:
         tree_true = looks_like_a11y_tree(row)
         prose_false = looks_like_a11y_tree("### Page\n- Page URL: x")
-    except BaseException as exc:  # noqa: BLE001
+    except (Exception, SystemExit, KeyboardInterrupt) as exc:
         refuse_start(f"looks_like_a11y_tree raised {type(exc).__name__}")
     if not tree_true or prose_false:
         refuse_start("looks_like_a11y_tree self-test failed (tree row / prose row)")
@@ -658,8 +686,8 @@ class Proxy:
             assert self.child is not None and self.child.stdin is not None
             try:
                 write_line(self.child.stdin, jsonrpc_error(msg.get("id"), -32601, "method not relayed by playwright-mcp-redact-proxy"))
-            except (OSError, ValueError):
-                pass
+            except (OSError, ValueError) as exc:
+                _note(exc, "reply-unrelayed-request")
             return
         if method in PASSTHROUGH_NOTIFICATIONS:
             rebuilt: Dict[str, Any] = {"jsonrpc": "2.0", "method": method}
@@ -721,6 +749,8 @@ class Proxy:
             try:
                 parsed = json.loads(cand)
             except (ValueError, RecursionError):
+                parsed = _NOT_JSON  # a per-line probe over page text: most lines are not JSON, the negative result is the normal one
+            if parsed is _NOT_JSON:
                 continue
             # No newline requirement: one row returned by `ariaSnapshot()` on a
             # single locator is a whole tree to the redactor's predicate.
@@ -817,10 +847,9 @@ class Proxy:
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
             if self.child is not None and self.child.poll() is None:
-                try:
+                # A 50 ms poll: the child still running is the normal outcome of each tick.
+                with contextlib.suppress(subprocess.TimeoutExpired):
                     self.child.wait(timeout=0.05)
-                except subprocess.TimeoutExpired:
-                    pass
             if not self.group_alive():
                 return True
             time.sleep(0.05)
@@ -834,42 +863,44 @@ class Proxy:
         if child is None:
             log(f"no child to tear down ({why})")
             os._exit(1)
+        # Notes are collected here and written after the kill ladder: teardown also runs from on_signal, and a
+        # stderr write that raises ahead of os.killpg would skip the group kill, the proxy's core invariant.
+        pending: List[Tuple[BaseException, str]] = []
         try:
             if child.stdin and not child.stdin.closed:
                 child.stdin.close()
-        except OSError:
-            pass
-        try:
+        except OSError as exc:
+            pending.append((exc, "teardown-stdin-close"))
+        # The designed route into the SIGTERM step: a child that ignores EOF is the case the ladder exists for.
+        with contextlib.suppress(subprocess.TimeoutExpired):
             child.wait(timeout=STDIN_CLOSE_WAIT_S)
-        except subprocess.TimeoutExpired:
-            pass
         # Always signal the GROUP: the direct child (npx) may already have exited
         # while Chrome, its grandchild, still holds the group.
-        try:
+        # The group is already empty after a clean exit: the normal outcome of every clean session.
+        with contextlib.suppress(ProcessLookupError):
             os.killpg(self.pgid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
         if not self.wait_group_empty(self.grace):
-            log(f"group {self.pgid} survived SIGTERM; SIGKILL sent")
             try:
                 os.killpg(self.pgid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            except ProcessLookupError as exc:
+                pending.append((exc, "teardown-sigkill"))
+            _log_quiet(f"group {self.pgid} survived SIGTERM; SIGKILL sent")  # after the kill
             self.wait_group_empty(self.grace)
         try:
             child.wait(timeout=self.grace)
-        except subprocess.TimeoutExpired:
-            pass
+        except subprocess.TimeoutExpired as exc:
+            pending.append((exc, "teardown-final-wait"))
         rc = child.returncode
         if rc is None:
             rc = 1
         sig = -rc if rc < 0 else 0
-        log(f"child exited rc={rc} signal={sig} ({why})")
+        _flush_notes(pending)
+        _log_quiet(f"child exited rc={rc} signal={sig} ({why})")
         code = rc if rc >= 0 else 128 - rc
         try:
             self.out.flush()
-        except (OSError, ValueError):
-            pass
+        except (OSError, ValueError) as exc:
+            _note(exc, "teardown-flush")
         os._exit(code)
 
     # -- B4 -- the single loop ------------------------------------------------

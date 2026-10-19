@@ -213,6 +213,7 @@
 5	apps/web-platform/infra/luks-monitor.test.sh
 1	apps/web-platform/infra/nic-wait-gate.test.sh
 1	apps/web-platform/infra/orphan-reaper.sh
+2	apps/web-platform/infra/registry-boot-guard.test.sh
 2	apps/web-platform/infra/registry-luks.test.sh
 1	apps/web-platform/infra/registry-userdata-budget.sh
 1	apps/web-platform/infra/registry-userdata-budget.test.sh
@@ -278,7 +279,7 @@
 1	.claude/hooks/prod-write-defer-gate.sh
 1	.claude/hooks/session-rules-loader.sh
 8	.claude/hooks/ship-kb-archive-gate.sh
-1	.claude/hooks/ship-kb-archive-gate.test.sh
+3	.claude/hooks/ship-kb-archive-gate.test.sh
 1	.claude/hooks/ship-soak-followthrough-gate.test.sh
 2	.claude/hooks/ship-unpushed-commits-gate.sh
 1	.claude/hooks/skill-invocation-logger.sh
@@ -290,6 +291,8 @@
 3	plugins/soleur/hooks/memory-backstop.sh
 1	plugins/soleur/hooks/operator-stage-approval.sh
 3	plugins/soleur/hooks/stop-hook.sh
+14	plugins/soleur/scripts/delegation-verify.sh
+2	plugins/soleur/scripts/delegation-verify.test.sh
 4	plugins/soleur/scripts/domain-model-drift.sh
 2	plugins/soleur/scripts/emit-decision.sh
 1	plugins/soleur/scripts/ext-filter-divergence.sh
@@ -330,6 +333,9 @@
 1	plugins/soleur/skills/provision-doppler/scripts/provision-doppler.sh
 1	plugins/soleur/skills/provision-github/scripts/provision-github.sh
 1	plugins/soleur/skills/review/test/ensure-semgrep.test.sh
+1	plugins/soleur/skills/ship/scripts/hold-gate-eval.sh
+4	plugins/soleur/skills/ship/scripts/pr-overlap-preflight.sh
+11	plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh
 3	plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh
 1	plugins/soleur/skills/skill-security-scan/scripts/run-self-test.sh
 3	plugins/soleur/test/ci-head-verdict.test.sh
@@ -338,6 +344,7 @@
 1	plugins/soleur/test/fixture-dir-operand-assert.test.sh
 2	plugins/soleur/test/fixture-env-adoption.test.sh
 1	plugins/soleur/test/fixture-relative-assert.test.sh
+2	plugins/soleur/test/fixtures/standing-delegation/gh-stub.sh
 2	plugins/soleur/test/git-fixture-env.mutation.sh
 4	plugins/soleur/test/go-session-gates.test.sh
 4	plugins/soleur/test/harvest-debt.test.sh
@@ -347,12 +354,14 @@
 2	plugins/soleur/test/operator-digest-provision.test.sh
 1	plugins/soleur/test/operator-script.test.sh
 4	plugins/soleur/test/proc.test.sh
+1	plugins/soleur/test/pr-overlap-preflight.test.sh
 1	plugins/soleur/test/ralph-loop.test.sh
 51	plugins/soleur/test/regenerate-shard-manifest.test.sh
 13	plugins/soleur/test/scripts-shard-totality-mutations.sh
 1	plugins/soleur/test/scripts-shard-totality.test.sh
 1	plugins/soleur/test/session-state.test.sh
 11	plugins/soleur/test/ship-battery-owed.test.sh
+1	plugins/soleur/test/technical-ruling-gate.test.sh
 3	plugins/soleur/test/test-helpers.sh
 1	plugins/soleur/test/vendor-pin-integrity.test.sh
 2	plugins/soleur/test/worktree-manager-heal-stale-branch.test.sh
@@ -473,6 +482,7 @@
 3	tests/hooks/test_hook_emissions.sh
 3	tests/scripts/lib/gate-suite-harness.sh
 2	tests/scripts/lib/inngest-host-dark-gate.sh
+5	tests/scripts/test-argv-bearer-sweep.sh
 5	tests/scripts/test-audit-bot-codeql-coverage.sh
 23	tests/scripts/test-audit-ruleset-bypass.sh
 2	tests/scripts/test-git-data-birth-readiness-gate.sh

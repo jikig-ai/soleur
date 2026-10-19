@@ -117,7 +117,7 @@ Refusal reasons, and what each one is telling you:
 
 | `reason=` | Meaning |
 | --- | --- |
-| `luks-key-absent` / `redis-password-absent` / `volume-ids-unreadable` | The unit's own inputs did not arrive — a Doppler name is missing, or the first-boot stage did not write `/etc/default/inngest-luks-volumes`. Nothing was stopped. |
+| `luks-key-absent` / `redis-password-absent` / `volume-ids-unreadable` | The unit's own inputs did not arrive — a Doppler name is missing, or the first-boot stage did not write `/etc/default/inngest-luks-volumes`. Nothing was stopped. **After the host replace that carries #9786 this is the EXPECTED answer to any flagged run** (flag `armed`/`copying`/`copied`/`swapped`/`rollback`): the stage no longer writes the plaintext id the image-baked script reads, the cutover is complete, and at flag `done` the unit is a no-op. Such a refusal writes the terminal flag `aborted`, so do not dispatch a flagged run on a host in that state. |
 | `pointer-already-set` | This host is already past the cutover. There is no verb to go back (§5a); nothing to do. |
 | `canonical-not-plaintext` / `staging-not-mapper` / `staging-wrong-backing` / `canonical-mapper-open` | The pre-cutover topology is not what the FSM requires. The host is not in the state this dispatch acts on; read the probe row before doing anything. |
 | `envfile-key-absent` | `/etc/default/inngest-luks` carries no passphrase, so the boot-reopen unit could not open the store on the next boot. Refused before anything stopped. |
@@ -397,7 +397,7 @@ field, a missing token, an empty token and a failing `doppler` (no word). It was
 
 **No drift check by log search.** The scheduled drift workflow does not print its plan to the job log (the plan goes to a
 file and, when drift is found, to the body or a comment of the open `infra-drift` issue, titled `infra: drift detected in
-<stack>`), so a log search would pass vacuously. Drift plans surface as comments on that issue; the read-back is the arbiter.
+<stack>`), so a log search would pass vacuously. Drift plans surface as comments on that issue; the read-back is the arbiter. The drift workflow's `sole-copy-protection-check` job (#9927 item 9) is the recurring distinct signal: it compares the live protection flag with the Terraform declaration and files its own issue titled `infra: Inngest store volume delete protection differs from Terraform (...)` when they differ (a sanctioned lift is quiet by design; see ADR-282, Addendum 2026-10-16).
 
 ### Delivery route and ordering
 
@@ -429,8 +429,8 @@ file and, when drift is found, to the body or a comment of the open `infra-drift
   means applying locally to update state. For the sole-copy addresses that is wrong: never apply locally, never untargeted,
   and there is no SSH step anywhere on this path (`hr-no-ssh-fallback-in-runbooks`). A drift reason at a sole-copy address
   is read from the plan text for that address and resolved through a reviewed change or the `manual-rerun` route.
-- The drift workflow's own output prints runnable `DELETE` recipes for other resources. Those recipes must never be pointed
-  at this volume or its Doppler secret.
+- The drift workflow's issue bodies print no `DELETE` recipe (removed by #9927 item 8c). Any reclaim of a rehearsal
+  survivor is a separately authorized call and must never be pointed at this volume or its Doppler secret.
 
 ### Per-loss-mode owner and procedure
 
@@ -603,6 +603,14 @@ and no `BASELINE_DECLARED_PROBES` bump were created.
   not a reason to open a shell.
 - **Rolling back later, on purpose.** There is no rollback: `op=luks-rollback` was retired by #8285 PR B and the
   plaintext volume it would have copied back to was destroyed on 2026-10-09 (§5a, §5b).
+- **After the host replace that carries #9786 (parked; not yet in force).** The template resolves the one LUKS volume.
+  An unpointed boot-reopen of a non-LUKS volume now FAILS `reopen_not_luks` (it used to skip with exit 0), and the
+  first-boot stage row for the no-pointer world reads `mode=unpointed` (was `plaintext_canonical`). A blank volume is
+  formatted only on a `rehearsal_*` config; on any other config the stage fails with `stage=unpointed_raw_refused`
+  (`inngest-luks-FAILED` phone-home carries the same stage), and there is no automated bring-up for a brand-new blank
+  `prd` volume, so that case needs a disaster-recovery procedure written when it is ever needed (ADR-142, addendum
+  2026-10-12). A lost pointer over an INTACT LUKS volume boots (opened and mounted) and is visible only as
+  `pointer=absent` on the `stage=resolve` row.
 
 ---
 
