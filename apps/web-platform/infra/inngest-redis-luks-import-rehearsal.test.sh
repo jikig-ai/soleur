@@ -254,7 +254,12 @@ else
 fi
 
 SCR=""
-cleanup() { [ -n "$SCR" ] && rm -rf -- "$SCR"; }
+CHILD_ROOT=""
+cleanup() {
+  [ -n "$SCR" ] && rm -rf -- "$SCR"
+  [ -n "$CHILD_ROOT" ] && rm -rf -- "$CHILD_ROOT" "$CHILD_ROOT.value"
+  return 0
+}
 trap cleanup EXIT
 trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
@@ -411,6 +416,11 @@ SHIM
   tf apply -auto-approve -input=false >"$SCR/out/mint.out" 2>&1
   rc=$?
   dchk "dynamic: a synthetic value mints on local state" [ "$rc" = 0 ]
+  if [ "$rc" != 0 ]; then
+    # Nothing has been minted yet, so this output cannot carry the value.
+    printf 'mint diagnostic (rc=%s, scratch path length %s):\n' "$rc" "${#SCR}" >&2
+    head -n 15 "$SCR/out/mint.out" | cut -c1-240 >&2
+  fi
   [ "$rc" = 0 ] || { BLOCKED="mint"; return; }
   tf state pull >"$SCR/pull.json" 2>/dev/null
   jq -r '.resources[] | select(.type == "random_password") | .instances[0].attributes.result' "$SCR/pull.json" >"$SCR/value"
@@ -552,15 +562,19 @@ fi
 # ---------------------------------------------------------------------------------------------------
 if [ "$CHILD" = 0 ] && [ "$RAN_DYNAMIC" = 1 ]; then
   RESOLVED_PLUGIN="$PLUGIN_DIR"
-  mkdir -p "$SCR/mut" "$SCR/c"
+  mkdir -p "$SCR/mut"
+  # A child nests its own scratch tree, and the provider's unix socket under it is limited to about 108 bytes, so
+  # the children get a short root outside the (possibly long) parent scratch path.
+  CHILD_ROOT="$(mktemp -d /tmp/irl-c.XXXXXX)"
+  assert_fixture_dir "$CHILD_ROOT"
   CHILD_LEFTOVER=0
   CHILD_LEAK=0
 
-  # Every child scratches under $SCR/c, so a child that failed to clean up after itself is visible here.
+  # Every child scratches under $CHILD_ROOT, so a child that failed to clean up after itself is visible here.
   run_child() { # OUTNAME ARGS...
     local out="$SCR/mut/$1.out"
     shift
-    timeout -k 5 240 bash "$SELF" --child --plugin-dir "$RESOLVED_PLUGIN" --scratch-parent "$SCR/c" "$@" >"$out" 2>&1
+    timeout -k 5 240 bash "$SELF" --child --plugin-dir "$RESOLVED_PLUGIN" --scratch-parent "$CHILD_ROOT" "$@" >"$out" 2>&1
     CHILD_RC=$?
     # A healthy-control child that fails must say why: its output is already scanned for the value and withheld by _emit.
     case "$out" in
@@ -570,10 +584,10 @@ if [ "$CHILD" = 0 ] && [ "$RAN_DYNAMIC" = 1 ]; then
           head -n 12 "$out" | cut -c1-240 >&2
         fi ;;
     esac
-    if [ -n "$(ls -A "$SCR/c" 2>/dev/null)" ]; then CHILD_LEFTOVER=1; fi
-    if [ -s "$SCR/c.value" ]; then
-      if grep -qF -f "$SCR/c.value" "$out"; then CHILD_LEAK=1; fi
-      rm -f "$SCR/c.value"
+    if [ -n "$(ls -A "$CHILD_ROOT" 2>/dev/null)" ]; then CHILD_LEFTOVER=1; fi
+    if [ -s "$CHILD_ROOT.value" ]; then
+      if grep -qF -f "$CHILD_ROOT.value" "$out"; then CHILD_LEAK=1; fi
+      rm -f "$CHILD_ROOT.value"
     fi
   }
   wellformed() { # FILE: the mutated block must still parse, or a RED is a syntax error, not evidence
