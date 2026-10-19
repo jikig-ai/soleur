@@ -264,6 +264,39 @@ extended query read-only against dev and assert the dormant census equals
 exactly the audited set (hr-no-dashboard-eyeball — pull the rows, cite
 them in the PR).
 
+
+## User-Brand Impact
+
+Threshold: `single-user incident` (frontmatter) — a false-negative gate re-admits the exact
+wedge class that shipped the #10254 Art-17 erasure blocker.
+
+- **Founder exercising Art-17 deletion (protected party).** A WORM-gated table's RESTRICT/
+  NO ACTION FK to an in-cone non-users parent aborts `auth.admin.deleteUser` inside GoTrue's
+  transaction — 23503 for any user with referencing rows, indistinguishable from a green
+  build. The `cone-refuse` class fails closed on exactly this shape.
+- **Honest residual — non-WORM children.** A plain (non-WORM) table's `r`/`a` FK to an
+  in-cone parent aborts erasure identically and CAN reach the user; it is scoped out here
+  because `account-delete.ts` can freely DELETE/repoint non-WORM rows before auth-delete —
+  ordinary erasure-saga coverage owned by the behavioural backstop
+  `account-delete.cascade.integration.test.ts`, not the WORM-specific defect model this gate
+  is chartered for. Bound to a required follow-up issue (tasks 2.2) per the CTO ruling
+  (2026-10-19).
+- **Residue-warning contract.** `cone-write-row` stays `::warning::` permanently —
+  `action_sends.message_id` post-162 and `dsar_export_audit_pii.user_id` post-160 residue —
+  because the `prosrc` heuristic cannot see sanctioned carve-outs; the behavioural
+  backstop owns correctness there.
+- **False-positive analysis (cone-refuse).** Not a false positive: an FK refusal has no
+  in-schema carve-out mechanism (no child mutation is attempted — the abort is on the
+  parent delete), so neither `app.worm_bypass` nor a trigger transition can ever admit it.
+  Escape hatch: the `owned_by_ref` gate downgrades leave-behinds to `::warning::` so only
+  the owning PR blocks. Residual overstatement: `cone-write-stmt`'s "no carve-out
+  possible" is true only by the uniform-literal-RAISE convention — a conditional
+  STATEMENT trigger could still match the heuristic (accepted convention risk).
+- **Error-copy requirement (CTO pin).** `cone-refuse` `::error::` must say "any user with
+  rows in `<tbl>`" (row-conditional wedge), name the transitive parent, and prescribe
+  transitive remediation (SET NULL + carve-out, or repoint the FK) — NOT reuse the
+  users-table fix text at the gate's current line ~179.
+
 ## Out of Scope
 
 - Fixing the two dormant anchors (tracking issues to be filed).
