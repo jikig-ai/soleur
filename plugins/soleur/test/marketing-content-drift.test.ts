@@ -59,7 +59,6 @@ function walkSiteCopy(dir: string, acc: string[] = []): string[] {
   return acc;
 }
 
-let buildAttempted = false;
 let buildOk = false;
 let buildStderr = "";
 
@@ -68,7 +67,6 @@ let buildStderr = "";
 // timed out` even for `beforeAll` — grep both when debugging.
 beforeAll(async () => {
   // Build the Eleventy site once for tests 3-5. Argv array (no shell metacharacters).
-  buildAttempted = true;
   // SOLEUR_DOCS_OFFLINE=1 makes the build hermetic — the _data/github.js,
   // githubStats.js, and communityStats.js loaders skip their live GitHub/Discord
   // fetches and return deterministic fallbacks, so a transient GitHub API

@@ -4576,7 +4576,7 @@ describe("G2e attribute pin (#9879): the sole-copy attributes on EFFECTIVE text,
       ["rename the attachment", sub(...ATT, (b) => b.replace('"inngest_redis_luks" {', '"inngest_redis_luks_x" {')), /hcloud_volume_attachment\.inngest_redis_luks: missing/],
       ["a second copy of the volume block", withLuks(live.luks + "\n" + /^resource "hcloud_volume" "inngest_redis_luks" \{\n[\s\S]*?\n\}$/m.exec(live.luks)![0] + "\n"), /hcloud_volume\.inngest_redis_luks: duplicate/],
       ["an unterminated /* before everything blinds the file: RED, not zero checks", withLuks("/* oops\n" + live.luks), /missing/],
-      ["an empty body (attributes read as zero)", sub(...PW, (b) => 'resource "random_password" "inngest_redis_luks" {\n}'), /random_password\.inngest_redis_luks: extractor read zero attributes/],
+      ["an empty body (attributes read as zero)", sub(...PW, () => 'resource "random_password" "inngest_redis_luks" {\n}'), /random_password\.inngest_redis_luks: extractor read zero attributes/],
       ["`# see <<EOF` before the lifecycle, prevent_destroy removed", sub(...VOL, (b) => rmPD(b.replace(/\n[ \t]*lifecycle \{/, "\n  # see <<EOF\n  lifecycle {"))), /hcloud_volume\.inngest_redis_luks: no lifecycle block/],
       ["`// see <<-EOT` trailing, the lifecycle commented out", sub(...KEY, (b) => b.replace(/\n([ \t]*)lifecycle \{\n[ \t]*prevent_destroy = true\n[ \t]*\}/, "\n  # x // see <<-EOT\n/*\n$1lifecycle {\n    prevent_destroy = true\n  }\n*/")), /doppler_secret\.inngest_redis_luks_key: no lifecycle block/],
       ["trailing `# see <<EOF` on an attribute, then prevent_destroy removed", sub(...PW, (b) => rmPD(b.replace(/^(  length .*)$/m, "$1 # see <<EOF"))), /random_password\.inngest_redis_luks: no lifecycle block/],
@@ -7644,7 +7644,7 @@ describe("the web-class passphrase pair is reachable only from the apply job, wh
       expect(luksHaltViolations(m).join("\n")).toMatch(/counter read for luks_rotations is missing|is not read from the destroy-guard/);
     });
     test("a HALT moved after the destroy_count sum is refused", () => {
-      const m = mutate(applyCode, (l, s, e, r, sum) => {
+      const m = mutate(applyCode, (l, s, e) => {
         const block = l.splice(s, e - s + 1);
         const newSum = l.findIndex((x) => x.includes("destroy_count=$((resource_deletes"));
         l.splice(newSum + 1, 0, ...block);
