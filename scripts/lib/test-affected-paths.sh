@@ -1910,6 +1910,7 @@ AFFECTED_TESTS_SCRIPTS_INFRA_PRIVILEGED_TIER_CENSUS_PATHS=(
   ".github/"
   "apps/"
   "infra/"
+  "knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md"
   "tests/scripts/test-infra-privileged-tier-census.sh"
   "scripts/lib/test-affected-paths.sh"
 )

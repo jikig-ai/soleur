@@ -9,8 +9,9 @@
 // to forged events.
 //
 // INNGEST_BASE_URL is optional. Self-hosted Hetzner deploys set it to the
-// Inngest server URL — the dedicated soleur-inngest host http://10.0.1.40:8288
-// post-cutover (#6178; formerly the co-located scheduler via the Docker host-gateway http://host.docker.internal:8288
+// Inngest server URL — the dedicated soleur-inngest host, http://10.0.1.40:8288 or
+// (flag INNGEST_LINK_TLS on) https://10.0.1.40:8443, chosen per deploy by ci-deploy.sh
+// resolve_inngest_link (#10136) post-cutover (#6178; formerly the co-located scheduler via the Docker host-gateway http://host.docker.internal:8288
 // per ADR-030); Inngest Cloud deploys (rejected, see ADR-030) would omit it.
 
 import { Inngest } from "inngest";

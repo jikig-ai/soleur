@@ -544,7 +544,7 @@ _VAR_RE='^(export[[:space:]]+)?(DEV|MAPPER|BYID|LUKS_ID|CANON_DEV|POINTER|MNT|CA
 # by-mountpoint mount). #9786 removed the staging block's fstab/mount/luksFormat set and the
 # plaintext arm's sites with it.
 _exp_ops="$(cat <<'EXPEOF'
-- cryptsetup # #7695 guest-side LUKS-at-rest for /mnt/data (the Redis AOF store)
+- cryptsetup
 Description=Open the LUKS mapper, then complete the mount for the arm it verified — never formats, never mkfs (#7695)
 After=cryptsetup-pre.target systemd-udev-settle.service
 printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksOpen --key-file - "$1" "$2"

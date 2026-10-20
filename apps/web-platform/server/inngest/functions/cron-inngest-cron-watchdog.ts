@@ -66,11 +66,15 @@ export { EXPECTED_CRON_FUNCTIONS, manualTriggerEventFor };
 
 const SENTRY_MONITOR_SLUG = "scheduled-inngest-cron-watchdog";
 
-// Fallback when INNGEST_BASE_URL is unset. Matches the container's
-// runtime env: the web-platform `docker run` in ci-deploy.sh sets
-// `-e INNGEST_BASE_URL=http://10.0.1.40:8288` (both the canary and production
-// run blocks) — the DEDICATED soleur-inngest host after the #6178 cutover's
-// 2.4 app-repoint. Parity-tested in cron-inngest-cron-watchdog.test.ts.
+// Fallback when INNGEST_BASE_URL is unset. Matches the legacy plain-http value
+// of the container's runtime env: the web-platform `docker run` in ci-deploy.sh
+// (both the canary and production run blocks) sets
+// `-e INNGEST_BASE_URL="$INNGEST_BASE_URL_RESOLVED"`, which resolve_inngest_link
+// (#10136) sets to exactly one of http://10.0.1.40:8288 or https://10.0.1.40:8443
+// (the DEDICATED soleur-inngest host after the #6178 cutover's 2.4 app-repoint);
+// cloud-init.yml's first-boot run still spells the http literal. This fallback
+// must stay a MEMBER of that resolver set (and stay plain http); the membership
+// is parity-tested in cron-inngest-cron-watchdog.test.ts.
 const INNGEST_HOST_FALLBACK = "http://10.0.1.40:8288";
 
 // Restart cooldown (defense-in-depth on the backstop): must exceed the

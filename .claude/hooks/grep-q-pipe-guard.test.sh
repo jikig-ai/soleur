@@ -2045,7 +2045,7 @@ eqv_sh="$(_eqv "$EQV_SH")"
 # the port drifting, and only a person who runs it will see one.
 PJ_DRAIN_WINDOW=4
 PJ_ALL="$(git ls-files)"
-PJ_TRIPLES=282   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples
+PJ_TRIPLES=288   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples
 PJ_VOCAB=' not-a-command text-only unverified helper-built-stub variable-named-verb pass-through deliberate-fault arm-drain fenced '
 PJ_FENCED_RE='^fenced[[:space:]]+#[0-9]+[[:space:]]+[^[:space:]]'   # the one word that carries a tracker link (pj_judge)
 PRODUCER_JOIN=(
@@ -2060,6 +2060,7 @@ PRODUCER_JOIN=(
   'apps/web-platform/infra/ci-deploy.test.sh | docker | drains | 2 | --password-stdin'
   'apps/web-platform/infra/ci-deploy.test.sh | doppler | exempt | unverified reach probe: suite did not finish green here (cap or host), no matching piped call seen (1 non-test producers) (reach T1; t1:rc124/300s; hits 0 (stdin-flag))'
   'apps/web-platform/infra/ci-deploy.test.sh | logger | exempt | arm-drain the logger mock of create_mock_logger (def 69) drains stdin first when no message operand follows the options (S7c edit, wire assert after the Layer 3 rollback case); the other four logger definitions are in-process function shadows of small extracted functions that no pipe feeds (reach: T1, hits 757)'
+  'apps/web-platform/infra/ci-deploy.test.sh | openssl | exempt | text-only the suite names cloud-init-inngest.yml only to grep-pin it; the derived producer there is the health script echo-to-openssl s_client pipe, which this suite never executes, and the one openssl definition here (fo99_run) records its argv then delegates to the real openssl via command'
   'apps/web-platform/infra/ci-deploy.test.sh | python3 | exempt | unverified reach probe: suite did not finish green here (cap or host), no matching piped call seen (3 non-test producers) (reach T1; t1:rc124/300s; hits 0)'
   'apps/web-platform/infra/ci-deploy.test.sh | rc | exempt | not-a-command rc is a variable written by printf > $d/rc, no stub exists'
   'apps/web-platform/infra/ci-deploy.test.sh | tr | exempt | deliberate-fault stub exits 3 on purpose; pipeline status is the second tr, decided by the stub, not by a write race'
@@ -2092,7 +2093,11 @@ PRODUCER_JOIN=(
   'apps/web-platform/infra/inngest-boot-emitter.test.sh | curl | drains | 2 | *'
   'apps/web-platform/infra/inngest-dedicated-host-classify.test.sh | curl | exempt | text-only the suite runs only the probe and nolive steps of the inngest health workflow; the piped site is its pool probe step (printf Authorization to curl --header @-), which the suite never runs; the 13 stdin hits of the reach probe are the bearer-curl library process substitution, not a pipe (S7c re-read, evidence Phase 3)'
   'apps/web-platform/infra/inngest-dedicated-host-classify.test.sh | jq | drains | 1 | -R'
+  'apps/web-platform/infra/inngest-host.test.sh | openssl | drains | 1 | s_client'
   'apps/web-platform/infra/inngest-inventory.test.sh | logger | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T2; t2:rc0/27s; hits 0)'
+  'apps/web-platform/infra/inngest-link-flip-workflow.test.sh | doppler | drains | 1 | *'
+  'apps/web-platform/infra/inngest-link-resolver.test.sh | docker | exempt | text-only the suite sources only the inngest-link-resolver block of ci-deploy.sh (no pipe into docker inside it); the derived producer sites (the printf-to-docker-login --password-stdin pipe, the canary layer 3 pipe into logger and the docker logs pipe into logger) lie outside the block and are never executed here'
+  'apps/web-platform/infra/inngest-link-resolver.test.sh | logger | exempt | text-only the suite sources only the inngest-link-resolver block of ci-deploy.sh, whose logger calls are plain calls or after a || (no pipe into logger); the derived producer sites (canary layer 3 and docker logs piped into logger) lie outside the block and are never executed here'
   'apps/web-platform/infra/inngest.test.sh | curl | exempt | text-only the probe body under test never pipes into curl; both stubs ignore stdin'
   'apps/web-platform/infra/inngest.test.sh | logger | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T2; t2:rc0/36s; hits 0)'
   'apps/web-platform/infra/luks-monitor.test.sh | cryptsetup | drains | 2 | --key-file -'

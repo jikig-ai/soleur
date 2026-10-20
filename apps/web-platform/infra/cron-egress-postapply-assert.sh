@@ -57,6 +57,9 @@ nft list chain ip filter SOLEUR-EGRESS | grep -c 'dport 8288 accept' >/dev/null 
 # through. Assert the dedicated-host accept specifically so a missing rule fails post-apply
 # loudly (closes the "hides from the cutover gate" hole — op=verify never sees container egress).
 nft list chain ip filter SOLEUR-EGRESS | grep -c '10.0.1.40 tcp dport 8288 accept' >/dev/null || { echo 'ASSERT-FAILED: dedicated-inngest-8288-accept'; exit 1; }
+# #10136: the TLS listener's accept (10.0.1.40 form: the egress gateway has its own `dport 8443` accept under another daddr, which must
+# not satisfy this). Without it a flipped container's handshake dies in the egress chain while this script reports success.
+nft list chain ip filter SOLEUR-EGRESS | grep -c '10.0.1.40 tcp dport 8443 accept' >/dev/null || { echo 'ASSERT-FAILED: dedicated-inngest-8443-accept'; exit 1; }
 nft list set ip filter soleur_egress_allow | grep -cE '[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+' >/dev/null || { echo 'ASSERT-FAILED: allow-set-populated'; exit 1; }
 nft list chain ip filter SOLEUR-EGRESS | grep -c 'cidr allowlist' >/dev/null || { echo 'ASSERT-FAILED: cidr-allowlist-rule'; exit 1; }
 # Match the GitHub octet, NOT the literal /20: nft renders an interval-set

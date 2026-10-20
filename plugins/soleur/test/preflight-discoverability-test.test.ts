@@ -2983,7 +2983,15 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // only occur after a server-derived diff was accepted. NO SUBSTITUTE: the warehouse has no unauthenticated read path;
   // the offline suite drives the script against stubs and proves the verdict classification, not the stored stream or
   // that the model's anchors match real files in production. Genuine.
-  const BASELINE_DECLARED_PROBES = 71;
+  // #10136 (2026-10-18): +1 (71 -> 72) for `2026-10-18-feat-inngest-tls-verification-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 15m --grep stage=tls-health --limit 1`)
+  // reads the Inngest host's `tls-health` series through the ClickHouse HTTP connection credential
+  // (BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}, Doppler soleur/prd_terraform). NO SUBSTITUTE: the row is emitted by the
+  // host's own timer through the Better Stack ingest and has no unauthenticated read path; the Inngest host is no-SSH and
+  // deny-all-public, and the offline suites verify the emitter's field list and the listener's behaviour against stubs,
+  // not that the stored stream carries them. Genuine.
+  const BASELINE_DECLARED_PROBES = 72;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

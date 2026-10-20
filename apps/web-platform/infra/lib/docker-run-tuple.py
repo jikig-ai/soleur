@@ -24,7 +24,14 @@ optionally, .github/workflows). The layouts <root>/infra and <root> itself (the 
 too. It defaults to the repo root derived from this file's location.
 
 Tokens: UNKNOWN_OPTION, POSTURE_VALUE, TUPLE_COUNT, POSTURE_DIVERGENCE, ENV_NAME, UNPARSEABLE_OPTION,
-UNCLASSIFIED_DOCKER_RUN, TRAILING_ARGS, DUPLICATE_OPTION, MISSING_DECLARED.
+UNCLASSIFIED_DOCKER_RUN, TRAILING_ARGS, DUPLICATE_OPTION, MISSING_DECLARED, MISSING_REQUIRED.
+
+The Inngest link (#10136, Guard 1): every tuple MUST carry `-e INNGEST_BASE_URL` (the canary and prod tuples only as the
+`resolve_inngest_link` expansion `$INNGEST_BASE_URL_RESOLVED`, never a literal; the first-boot tuple, which cannot call the
+resolver, as the literal http value it re-resolves at the next deploy), `-e NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem` and
+the read-only CA volume. A tuple without them is MISSING_REQUIRED, which is what makes the watchdog's http fallback (used only
+when INNGEST_BASE_URL is unset in the container) unreachable. The TLS verification switch is forbidden in the tuples AND as any
+non-comment text of the two main files (ENV_NAME): a `0` there would silently defeat verification of every Node connection.
 
 What this proves and what it does not: the closed set lives here and the tuples live in the files this parses, and one
 diff can edit both, so a green check is CONSISTENCY between the two, not INTEGRITY of the posture. What outside the
@@ -71,12 +78,25 @@ ADD_HOSTS = {"host.docker.internal:host-gateway"}
 # a positive limit only: `--memory 0` means UNLIMITED in docker, which would pass a bare [0-9]+ pattern
 MEM_LITERAL = re.compile(r"^[1-9][0-9]*[bkmgBKMG]?$")
 
+INNGEST_CA_PATH = "/etc/soleur/inngest-ca.pem"
+# HOST side of the CA bind mount: /mnt/data is already in webhook.service ReadWritePaths and deploy-owned, so ci-deploy.sh
+# (User=deploy, ProtectSystem=strict) can write it; the in-container path stays /etc/soleur/inngest-ca.pem.
+INNGEST_CA_HOST_PATH = "/mnt/data/inngest-link/inngest-ca.pem"
+INNGEST_CA_VOL = "%s:%s:ro" % (INNGEST_CA_HOST_PATH, INNGEST_CA_PATH)
+# The two values the resolver can produce live in ci-deploy.sh (resolve_inngest_link); the canary and prod tuples take ONLY its
+# expansion. The first-boot tuple cannot call the resolver, so it carries the literal http default.
+INNGEST_RESOLVED = "$INNGEST_BASE_URL_RESOLVED"
+INNGEST_HTTP_LITERAL = "http://10.0.1.40:8288"
+FORBIDDEN_ENV = ("NODE_TLS_REJECT_UNAUTHORIZED",)
+REQUIRED_ENV = ("INNGEST_BASE_URL", "NODE_EXTRA_CA_CERTS")
+
 _COMMON_ENV = {
-    "INNGEST_BASE_URL": {"http://10.0.1.40:8288"},
+    "INNGEST_BASE_URL": {INNGEST_RESOLVED},
+    "NODE_EXTRA_CA_CERTS": {INNGEST_CA_PATH},
     "CRON_WORKSPACE_ROOT": {"/workspaces"},
     "SOLEUR_HOST_ID": {"$HOST_ID"},
 }
-_VOLS = {"/mnt/data/workspaces:/workspaces", "/mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro"}
+_VOLS = {"/mnt/data/workspaces:/workspaces", "/mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro", INNGEST_CA_VOL}
 # Scalar options a start must CARRY (MISSING_DECLARED); their allowed VALUES are checked separately. The memory cap and
 # --init are required on the two deploy starts only: ADR-062 scopes them to ci-deploy.sh's two blocks, and the
 # first-boot start has neither today (not required there).
@@ -103,7 +123,7 @@ TUPLES = {
     "first-boot": {
         "file": "cloud-init.yml", "name": "soleur-web-platform", "restart": {"unless-stopped"},
         "mem_exprs": set(), "env_files": {"$TMPENV"}, "images": {"$(cat /run/soleur-image-ref)"},
-        "env": {"INNGEST_BASE_URL": {"http://10.0.1.40:8288"}, "SOLEUR_EGRESS_REAPER": {"1"}},
+        "env": {"INNGEST_BASE_URL": {INNGEST_HTTP_LITERAL}, "NODE_EXTRA_CA_CERTS": {INNGEST_CA_PATH}, "SOLEUR_EGRESS_REAPER": {"1"}},
         "volumes": _VOLS | {_EGRESS_TOKENS_VOL},
         "ports": {"0.0.0.0:80:3000", "0.0.0.0:3000:3000"}, "scalars": _SCALARS,
     },
@@ -551,6 +571,11 @@ def walk_options(site, spec, tuple_name):
     if tail:
         if tail[0] != ";" or any(x not in ("then",) for x in tail[1:]):
             v("TRAILING_ARGS", " ".join(tail))
+    for ename in REQUIRED_ENV:
+        if ename not in env_seen:
+            v("MISSING_REQUIRED", "-e %s is required in every tuple%s" % (ename, " (an unset INNGEST_BASE_URL makes the app fall back to plain http)" if ename == "INNGEST_BASE_URL" else ""))
+    if INNGEST_CA_VOL not in rec.volumes:
+        v("MISSING_REQUIRED", "-v %s is required in every tuple" % INNGEST_CA_VOL)
     return rec, viols
 
 
@@ -609,6 +634,9 @@ def check_value(name, val, spec, rec, seen, env_seen, v):
             v("ENV_NAME", "%s (no value)" % val)
             return
         ename, evalue = val.split("=", 1)
+        if ename in FORBIDDEN_ENV:
+            v("ENV_NAME", "%s (the TLS verification switch is never allowed)" % ename)
+            return
         if ename not in spec["env"]:
             v("ENV_NAME", ename)
             return
@@ -691,6 +719,17 @@ def check_projection(app_sites):
 
 def check_census_extra(extra):
     return list(extra)
+
+
+def check_forbidden_env(file_lines, fname):
+    """The TLS verification switch never appears as non-comment text of either main file (an export, an env-file write, a
+    heredoc body): the tuples carry no such -e, so any other spelling is a way to reach the container around the tuple."""
+    out = []
+    for lg in file_lines:
+        for name in FORBIDDEN_ENV:
+            if name in lg.text:
+                out.append("FAIL ENV_NAME: %s appears in %s line %d (verification must never be disabled)" % (name, fname, lg.start))
+    return out
 
 
 def check_node_options(file_lines):
@@ -796,8 +835,9 @@ def scan(root):
                 raw = raw[:MAX_LINE * 8]
             if "soleur-web-platform" in raw and NAME_RE.search(strip_comment(raw)) and idx not in own:
                 extra.append("FAIL UNCLASSIFIED_DOCKER_RUN: %s:%d --name soleur-web-platform outside a declared tuple" % (fname, idx))
+        node_viols.extend(check_forbidden_env(lines, fname))
         if fname == "ci-deploy.sh":
-            node_viols = check_node_options(lines)
+            node_viols.extend(check_node_options(lines))
 
     # wider scope: the app container name in any other deployable text
     seen = 0
@@ -1006,6 +1046,7 @@ HINTS = {
     "UNKNOWN_OPTION": "remove the option from the tuple; widen the closed set here only with a security review, a posture option is never an allowlist entry",
     "POSTURE_VALUE": "restore the declared value; the declared posture constants are edited only with a security review",
     "ENV_NAME": "remove the environment variable from the tuple (PATH, loader and runtime-hijack names are never allowed)",
+    "MISSING_REQUIRED": "restore the Inngest link env and the read-only CA volume on the named tuple (canary and prod: INNGEST_BASE_URL=\"$INNGEST_BASE_URL_RESOLVED\"; never a literal, never absent)",
     "DUPLICATE_OPTION": "keep exactly one occurrence; docker honours the last, so a second one hides the first",
     "TRAILING_ARGS": "nothing may follow the image except `; then`",
     "TUPLE_COUNT": "a start site was added, moved or renamed: declare it together with the site and keep the three-tuple expectation; never lower the count (when the line says `cannot read`, a scanned file is missing, unreadable or not a regular file: restore it)",

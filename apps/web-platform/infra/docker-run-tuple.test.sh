@@ -296,6 +296,37 @@ kill_row K07d-env-attached        'm_ins prod "-ePATH=/x"'                      
 kill_row K07e-env-long-form       'm_ins prod "--env PATH=/x"'                           'ENV_NAME: PATH in ci-deploy.sh prod'
 kill_row K07f-node-options-lit    'm_repl canary "-e NODE_OPTIONS=\"\$CANARY_NODE_OPTIONS\"" "-e NODE_OPTIONS=--require=/x"' 'ENV_NAME: NODE_OPTIONS value'
 kill_row K07g-first-boot-env-new  'm_ins first-boot "-e SOLEUR_BWRAP_REAL=/x"'           'ENV_NAME: SOLEUR_BWRAP_REAL in cloud-init.yml first-boot'
+# --- #10136 Guard 1 (Inngest link chokepoint): the link env, the CA mount, the TLS verification switch ---------------------
+# row 1: a literal (https, or the old http) instead of the resolver expansion; first-boot cannot use the expansion
+kill_row K07h-canary-literal-https   'm_repl canary "-e INNGEST_BASE_URL=\"\$INNGEST_BASE_URL_RESOLVED\"" "-e INNGEST_BASE_URL=https://10.0.1.40:8443"' 'ENV_NAME: INNGEST_BASE_URL value '"'"'https://10.0.1.40:8443'"'"' in ci-deploy.sh canary' '!prod'
+kill_row K07i-prod-literal-old-http  'm_repl prod "-e INNGEST_BASE_URL=\"\$INNGEST_BASE_URL_RESOLVED\"" "-e INNGEST_BASE_URL=http://10.0.1.40:8288"' 'ENV_NAME: INNGEST_BASE_URL value '"'"'http://10.0.1.40:8288'"'"' in ci-deploy.sh prod' '!canary'
+kill_row K07j-first-boot-literal-https 'm_repl first-boot "-e INNGEST_BASE_URL=http://10.0.1.40:8288" "-e INNGEST_BASE_URL=https://10.0.1.40:8443"' 'ENV_NAME: INNGEST_BASE_URL value '"'"'https://10.0.1.40:8443'"'"' in cloud-init.yml first-boot'
+kill_row K07k-first-boot-resolver-expansion 'm_repl first-boot "-e INNGEST_BASE_URL=http://10.0.1.40:8288" "-e INNGEST_BASE_URL=\$INNGEST_BASE_URL_RESOLVED"' 'UNPARSEABLE_OPTION: -e INNGEST_BASE_URL=$INNGEST_BASE_URL_RESOLVED in cloud-init.yml first-boot'
+kill_row K07l-canary-other-expansion 'm_repl canary "-e INNGEST_BASE_URL=\"\$INNGEST_BASE_URL_RESOLVED\"" "-e INNGEST_BASE_URL=\"\$INNGEST_URL\""' 'UNPARSEABLE_OPTION: -e INNGEST_BASE_URL=$INNGEST_URL in ci-deploy.sh canary'
+# the unset path: a tuple without the link env or the CA env/volume makes the app fall back to plain http
+kill_row K07m-canary-no-link-env     'm_del canary "INNGEST_BASE_URL"'                    'MISSING_REQUIRED: -e INNGEST_BASE_URL is required in every tuple' 'ci-deploy.sh canary' '!prod'
+kill_row K07n-first-boot-no-link-env 'm_del first-boot "INNGEST_BASE_URL"'                'MISSING_REQUIRED: -e INNGEST_BASE_URL is required' 'cloud-init.yml first-boot'
+kill_row K07o-prod-no-extra-ca-env   'm_del prod "NODE_EXTRA_CA_CERTS"'                   'MISSING_REQUIRED: -e NODE_EXTRA_CA_CERTS is required' 'ci-deploy.sh prod' '!canary'
+kill_row K07p-first-boot-no-extra-ca-env 'm_del first-boot "NODE_EXTRA_CA_CERTS"'         'MISSING_REQUIRED: -e NODE_EXTRA_CA_CERTS is required' 'cloud-init.yml first-boot'
+kill_row K07q-extra-ca-other-path    'm_repl canary "-e NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem" "-e NODE_EXTRA_CA_CERTS=/tmp/evil-ca.pem"' 'ENV_NAME: NODE_EXTRA_CA_CERTS value '"'"'/tmp/evil-ca.pem'"'"' in ci-deploy.sh canary'
+# row 6: the CA volume dropped from ONE site, or mounted writable
+kill_row K10x-prod-no-ca-volume      'm_del prod "inngest-ca.pem:ro"'                      'MISSING_REQUIRED: -v /mnt/data/inngest-link/inngest-ca.pem:/etc/soleur/inngest-ca.pem:ro is required' 'ci-deploy.sh prod' '!canary'
+kill_row K10y-canary-no-ca-volume    'm_del canary "inngest-ca.pem:ro"'                    'MISSING_REQUIRED: -v /mnt/data/inngest-link/inngest-ca.pem:/etc/soleur/inngest-ca.pem:ro is required' 'ci-deploy.sh canary' '!prod'
+kill_row K10z-first-boot-no-ca-volume 'm_del first-boot "inngest-ca.pem:ro"'               'MISSING_REQUIRED: -v /mnt/data/inngest-link/inngest-ca.pem:/etc/soleur/inngest-ca.pem:ro is required' 'cloud-init.yml first-boot'
+kill_row K10za-ca-volume-writable    'm_repl prod "inngest-ca.pem:ro" "inngest-ca.pem:rw"' 'UNKNOWN_OPTION: -v /mnt/data/inngest-link/inngest-ca.pem:/etc/soleur/inngest-ca.pem:rw in ci-deploy.sh prod' 'MISSING_REQUIRED'
+kill_row K10zb-ca-volume-other-source 'm_repl canary "-v /mnt/data/inngest-link/inngest-ca.pem:" "-v /tmp/ca.pem:"' 'UNKNOWN_OPTION: -v /tmp/ca.pem:/etc/soleur/inngest-ca.pem:ro in ci-deploy.sh canary'
+kill_row K10zc-ca-volume-old-etc-source 'm_repl prod "-v /mnt/data/inngest-link/inngest-ca.pem:" "-v /etc/soleur/inngest-ca.pem:"' 'UNKNOWN_OPTION: -v /etc/soleur/inngest-ca.pem:/etc/soleur/inngest-ca.pem:ro in ci-deploy.sh prod'
+# the TLS verification switch: in a tuple (any spelling of -e) and as non-comment text of either main file
+kill_row K07r-canary-reject-unauthorized 'm_ins canary "-e NODE_TLS_REJECT_UNAUTHORIZED=0"' 'ENV_NAME: NODE_TLS_REJECT_UNAUTHORIZED (the TLS verification switch is never allowed) in ci-deploy.sh canary'
+kill_row K07s-prod-reject-unauthorized-long 'm_ins prod "--env NODE_TLS_REJECT_UNAUTHORIZED=0"' 'ENV_NAME: NODE_TLS_REJECT_UNAUTHORIZED (the TLS verification switch is never allowed) in ci-deploy.sh prod'
+kill_row K07t-first-boot-reject-unauthorized 'm_ins first-boot "-e NODE_TLS_REJECT_UNAUTHORIZED=0"' 'ENV_NAME: NODE_TLS_REJECT_UNAUTHORIZED (the TLS verification switch is never allowed) in cloud-init.yml first-boot'
+kill_row K07u-switch-exported-in-script 'm_append "$CI_DEPLOY_REL" "export NODE_TLS_REJECT_UNAUTHORIZED=0"' 'ENV_NAME: NODE_TLS_REJECT_UNAUTHORIZED appears in ci-deploy.sh'
+kill_row K07v-switch-in-cloud-init-heredoc 'm_append_lines "$CLOUD_INIT_REL" "cat >> /tmp/x <<'"'"'EOF'"'"'" "NODE_TLS_REJECT_UNAUTHORIZED=0" "EOF"' 'ENV_NAME: NODE_TLS_REJECT_UNAUTHORIZED appears in cloud-init.yml'
+# row 3: a fourth site after the compliant three, carrying the old literal (the gate must not stop at the third)
+kill_row K06c-fourth-site-old-literal 'm_append "$CI_DEPLOY_REL" "docker run -d --name soleur-web-platform-canary -e INNGEST_BASE_URL=http://10.0.1.40:8288 \"\$VERIFIED_REF\""' 'TUPLE_COUNT: want 3 got 4' 'ENV_NAME: INNGEST_BASE_URL value '"'"'http://10.0.1.40:8288'"'"' in ci-deploy.sh canary'
+# row 4: the gate pointed at an empty file finds zero sites and must be RED, never "0 checked, exit 0"
+kill_row K06d-empty-ci-deploy       ': > "$T/$CI_DEPLOY_REL"'                              'TUPLE_COUNT: want 3 got 1'
+kill_row K06e-empty-both-files      ': > "$T/$CI_DEPLOY_REL"; : > "$T/$CLOUD_INIT_REL"'   'TUPLE_COUNT: want 3 got 0'
 # --- row 8: expansions in option position -------------------------------------------------
 kill_row K08a-splat               'm_ins prod "\"\${EXTRA_DOCKER_OPTS[@]}\""'            'UNPARSEABLE_OPTION' 'ci-deploy.sh prod'
 kill_row K08b-cmdsubst-value      'm_repl prod "--memory \"\$PROD_MEMORY_CAP\"" "--memory \"\$(echo 1g)\""' 'UNPARSEABLE_OPTION'
@@ -429,7 +460,7 @@ kill_row K27a-canary-no-workspaces-vol 'm_del canary "-v /mnt/data/workspaces:/w
 kill_row K27b-canary-no-port          'm_del canary "-p 0.0.0.0:3001:3000"'                 'MISSING_DECLARED: port 0.0.0.0:3001:3000 missing from ci-deploy.sh canary' '!prod' '!cloud-init.yml' '#1'
 kill_row K27c-canary-no-host-id-env   'm_del canary "-e SOLEUR_HOST_ID"'                   'MISSING_DECLARED: env SOLEUR_HOST_ID missing from ci-deploy.sh canary' '!prod' '!cloud-init.yml' '#1'
 kill_row K27d-first-boot-no-reaper-env 'm_del first-boot "-e SOLEUR_EGRESS_REAPER"'         'MISSING_DECLARED: env SOLEUR_EGRESS_REAPER missing from cloud-init.yml first-boot' '!ci-deploy.sh' '#1'
-kill_row K27e-first-boot-no-inngest-env 'm_del first-boot "-e INNGEST_BASE_URL"'            'MISSING_DECLARED: env INNGEST_BASE_URL missing from cloud-init.yml first-boot' '!ci-deploy.sh' '#1'
+kill_row K27e-first-boot-no-inngest-env 'm_del first-boot "-e INNGEST_BASE_URL"'            'MISSING_DECLARED: env INNGEST_BASE_URL missing from cloud-init.yml first-boot' 'MISSING_REQUIRED: -e INNGEST_BASE_URL is required in every tuple' '!ci-deploy.sh' '#2'
 kill_row K27f-first-boot-no-port      'm_del first-boot "-p 0.0.0.0:3000:3000"'             'MISSING_DECLARED: port 0.0.0.0:3000:3000 missing from cloud-init.yml first-boot' '!ci-deploy.sh' '#1'
 kill_row K27g-prod-two-members-gone   'm_del prod "-v /mnt/data/workspaces:/workspaces"; m_del prod "-e SOLEUR_EGRESS_REAPER"' 'MISSING_DECLARED: volume /mnt/data/workspaces:/workspaces missing from ci-deploy.sh prod' 'MISSING_DECLARED: env SOLEUR_EGRESS_REAPER missing from ci-deploy.sh prod' '!canary' '#2'
 kill_row K27h-prod-unbalanced-quote   'm_repl prod "-e SOLEUR_HOST_ID=\"\$HOST_ID\"" "-e SOLEUR_HOST_ID=\"\$HOST_ID"' 'UNPARSEABLE_OPTION' 'ci-deploy.sh prod' '!MISSING_DECLARED'
@@ -470,6 +501,7 @@ pass_row P8-exempt-create-site    'm_append "$CI_DEPLOY_REL" "docker create --na
 pass_row P10-if-then-canary       'm_repl canary "docker run -d" "if docker run -d"; m_repl canary "\"\$VERIFIED_REF\"" "\"\$VERIFIED_REF\"; then"'
 pass_row P11-arithmetic-shift-no-docker 'm_append_lines "$CI_DEPLOY_REL" "x=\$(( 1 <<3 ))" "echo done"'
 pass_row P12-token-mount-first-env-long 'm_del prod "-v /var/lib/soleur/egress-tokens"; m_ins_at prod "-v /mnt/data/workspaces:/workspaces" "-v /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens \\"; m_repl prod "-e SOLEUR_EGRESS_REAPER=1" "--env SOLEUR_EGRESS_REAPER=1"'
+pass_row P13-switch-named-in-comment 'm_append "$CI_DEPLOY_REL" "# NODE_TLS_REJECT_UNAUTHORIZED must stay unset everywhere"; m_append "$CLOUD_INIT_REL" "# NODE_TLS_REJECT_UNAUTHORIZED must stay unset"'
 pass_row P9-trailing-comment      'm_repl prod "; then" "; then # trailing note"'
 
 # ---------------------------------------------------------------------------------------
@@ -648,7 +680,8 @@ h1_stub classify check_options '[]' \
   K01-prod-cap-add-space K02-first-boot-cap-add-eq K03a-canary-pid-eq K03b-canary-pid-space \
   K04a-prod-systempaths K04b-prod-systempaths-eq K07a-canary-env-path K07b-canary-env-ldpre \
   K08a-splat K10a-apparmor-unconfined K10b-seccomp-unconfined K10f-privileged K10r-volume-root K20i-memory-zero-unlimited \
-  K26a-canary-reaper-env K26b-canary-token-mount
+  K26a-canary-reaper-env K26b-canary-token-mount \
+  K07h-canary-literal-https K07m-canary-no-link-env K07o-prod-no-extra-ca-env K10x-prod-no-ca-volume K07r-canary-reject-unauthorized
 h1_stub declared check_declared '[]' \
   K24a-prod-no-workspaces-vol K24b-prod-no-plugin-vol K24c-prod-no-host-id-env K24d-prod-no-second-port \
   K25a-prod-no-token-mount K25b-prod-no-reaper-env K25c-first-boot-no-token-mount \
@@ -681,7 +714,7 @@ if [ "$((PASS + FAIL))" -ne "$ROWS" ]; then
   printf '[FATAL] accounting identity: passes(%s) + fails(%s) != rows(%s) - a verdict was discarded\n' "$PASS" "$FAIL" "$ROWS" >&2
   exit 1
 fi
-MIN_ROWS=266
+MIN_ROWS=296
 if [ "$ROWS" -lt "$MIN_ROWS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s rows ran, floor is %s\n' "$ROWS" "$MIN_ROWS" >&2
   exit 1
