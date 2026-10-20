@@ -208,7 +208,7 @@ and a `routingInstructions` arm.
 - [x] 7.3.1 Add a `## Changelog` section to the PR body (`semver:minor` — a new harness adapter). — PR #10571 body; label `semver:minor` applied.
 - [x] 7.3.2 Do NOT add a `version` key to any plugin manifest (#7471). — unchanged: the diff adds no manifest and no `version` key.
 - [x] 7.3.3 Attach the 3.5 and 7.1 capture evidence. — SHAPE-NOTE §3.5/§7.1.* committed; §7.1.2/§7.1.3 now name their substituted-evidence scope (#10591).
-- [x] 7.3.4 `/ship` skill — pre-ship gates, mark ready for review. — **done 2026-10-19/20 on PR #10571.** Pre-ship gates ran and passed: `.github/scripts/check-pr-body-vs-diff.sh` (`PR_NUMBER=10571`) → no-op, `technical-ruling-gate.sh --pr-body` → PASS (no unscoped owner-decision label, no pending placeholder), `pr-overlap-preflight.sh --mode merge` → exit 13 (five overlapping open PRs, none blocking), `hold-gate-eval.sh` → 0 holds. `pr ready` was run with a rationale: the review panel was green after the P1/P2 fix round. PR un-drafted (ready for review) and merged through the merge queue at `95562f22ffb4`.
+- [x] 7.3.4 `/ship` skill — pre-ship gates, mark ready for review. — **done 2026-10-19/20 on PR #10571.** Pre-ship gates ran and passed: `.github/scripts/check-pr-body-vs-diff.sh` (`PR_NUMBER=10571`) → no-op, `technical-ruling-gate.sh --pr-body <saved-pr-body-file>` → PASS (no unscoped owner-decision label, no pending placeholder), `pr-overlap-preflight.sh --mode merge` → exit 13 (five overlapping open PRs, none blocking), `hold-gate-eval.sh` → 0 holds. `pr ready` was run with a rationale: the review panel was green after the P1/P2 fix round. PR un-drafted (ready for review) and merged through the merge queue at `95562f22ffb4`.
 
 ### 7.4 Post-merge
 
@@ -220,4 +220,4 @@ and a `routingInstructions` arm.
 All boxes checked. ADR-291 status flipped. Four-point support bar quoted with captured evidence.
 `harness-discovery` OpenCode arm green on a hermetic fixture and red on a dropped root. Generator
 `--check` green in CI. `harness-parity` census and tree tests green with the new globs. Legal grep
-routed. No `version` key added to any manifest.
+run at flip time — zero hits, nothing to route. No `version` key added to any manifest.

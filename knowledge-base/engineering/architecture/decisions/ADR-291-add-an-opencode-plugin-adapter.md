@@ -13,14 +13,16 @@ brand_survival_threshold: single-user incident
 ## Status
 
 **Accepted 2026-10-20** — the adapter shipped in `v3.342.0` (PR #10571, merge commit `95562f22ffb4`), and the
-support bar below is met: `knowledge-base/project/specs/archive/20261019-180200-feat-opencode-harness/SHAPE-NOTE.md`
-quotes all four ADR-274 points. Two of the four (§7.1.2 a pipeline skill's gates, §7.1.3 a live agent spawn) are
-quoted on **substituted evidence** — a routed call completing after a guard block and the `spawnAgent()` dispatch
-shape — because the probe host carries no provider credentials for a hermetic OpenCode session; the live
-reproduction is tracked in #10591 item 1. That substitution is a disclosed gap in the evidence, not in the
+support bar below is met: all four ADR-274 points are quoted, in full, in
+`knowledge-base/project/specs/archive/20261019-180200-feat-opencode-harness/SHAPE-NOTE.md`. Two of the four
+(§7.1.2 a pipeline skill's gates, §7.1.3 a live agent spawn) are quoted on **substituted evidence** —
+a routed call completing after a guard block and the `spawnAgent()` dispatch shape — because the probe host
+carries no provider credentials for a hermetic OpenCode session; the live reproduction is tracked in
+#10591 item 1. That substitution is a disclosed gap in the evidence, not in the
 adapter, and it is why this record can be `accepted` while **no public "supports OpenCode" claim is made**:
-the README, getting-started, comparison, blog, and battlecard pages are unchanged, and the future-tense sweep of
-`knowledge-base/legal` at flip time returned zero harness-list hits to route to the CLO.
+the README, getting-started, comparison, blog, and battlecard pages are unchanged, and the future-tense
+sweep of `knowledge-base/legal` and `docs/` for support-OpenCode sentences returned zero hits to route
+to the CLO.
 
 In this record, **harness** means the `Harness` union in `plugins/soleur/lib/harness.ts`. The word is not in
 `knowledge-base/project/glossary.md`.
@@ -32,9 +34,9 @@ met.
 
 Ordinal census on 2026-10-17, after `git fetch origin --prune`, over `refs/heads` and
 `refs/remotes/origin`: ADR-291 was unused. The highest ordinal present is ADR-290, carried only by
-`feat-one-shot-10331-pr3a-ruff-eslint-scope` and its origin ref. The checked-out tree holds up to
+`feat-one-shot-10331-pr3a-ruff-eslint-scope` and its origin ref. The checked-out tree held up to
 ADR-288. ADR-289 and ADR-290 are taken, so this record does not reuse them; no citation of 291
-exists in the corpus.
+existed in the corpus.
 
 Every OpenCode fact below is measured in
 `knowledge-base/project/specs/archive/20261019-180200-feat-opencode-harness/measurements.md` and cited by anchor. Do not
@@ -218,12 +220,14 @@ satisfied vacuously, and a pin added back "for safety" would be a dependency the
 for.
 
 Public README, getting-started, comparison, blog, and battlecard pages stay unchanged. The flip to
-`accepted` (2026-10-20) required grepping `knowledge-base/legal` for future-tense sentences about the harness
-list and routing hits to the CLO; that sweep returned **zero** hits (`grep -rniE "(will|going to|plans to|soon|
-future) support (the )?opencode" knowledge-base/legal/ docs/` is empty), so there was nothing to route and
-nothing to review. The pages stay unchanged for a separate reason recorded above in Status: the ADR-274 bar is
-met, but two of its four points rest on substituted evidence pending the live reproduction in #10591 item 1,
-and a public claim is not made on that footing.
+`accepted` (2026-10-20) required grepping `knowledge-base/legal` and `docs/` for future-tense sentences
+about supporting OpenCode and routing hits to the CLO; that sweep returned **zero** hits — this is empty:
+
+`grep -rniE "(will|going to|plans to|soon|future) support (the )?opencode" knowledge-base/legal/ docs/`
+
+so there was nothing to route and nothing to review. The pages stay unchanged for a separate reason recorded
+above in Status: the ADR-274 bar is met, but two of its four points rest on substituted evidence pending the
+live reproduction in #10591 item 1, and a public claim is not made on that footing.
 
 ## Cost Impacts
 
@@ -237,8 +241,8 @@ is the CI discovery arm, which is a gate and not a runtime monitor.
 
 ## Principle Alignment
 
-AP-004 (Agent-native parity): Aligned — the same lifecycle skills are reachable from OpenCode once
-the support bar is met.
+AP-004 (Agent-native parity): Aligned — the same lifecycle skills are reachable from OpenCode; the
+support bar was met 2026-10-20 (see Status).
 
 AP-006 (All knowledge in committed repo files): Aligned — the generated tree and config fragment are
 committed and drift-checked.
