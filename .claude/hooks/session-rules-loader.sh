@@ -509,6 +509,7 @@ fi
 # bodies. It was lines 4-6 until ADR-151 removed the HINT line; the loader tests
 # assert these offsets positionally, so any future line added to the header must
 # move them again in the same commit. The alarm block, then the heal marker, trail everything.
-OUT_BODY="${STAMP}"$'\n'"[rules-loader] manifest: ${MANIFEST}"$'\n'"${SESSION_CONTEXT}"$'\n'"${CONTEXT}${TMPFS_ALARM_BLOCK}${BARE_HEAL_MARKER:+$'\n'$BARE_HEAL_MARKER}${BARE_CWD_BLOCK:+$'\n'$BARE_CWD_BLOCK}"
+MANIFEST_SAFE=$(printf '%s' "$MANIFEST" | soleur_ctx_sanitize)
+OUT_BODY="${STAMP}"$'\n'"[rules-loader] manifest: ${MANIFEST_SAFE}"$'\n'"${SESSION_CONTEXT}"$'\n'"${CONTEXT}${TMPFS_ALARM_BLOCK}${BARE_HEAL_MARKER:+$'\n'$BARE_HEAL_MARKER}${BARE_CWD_BLOCK:+$'\n'$BARE_CWD_BLOCK}"
 jq -nc --arg out "$OUT_BODY" '{ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: $out } }'
 exit 0
