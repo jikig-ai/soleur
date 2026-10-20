@@ -5846,6 +5846,14 @@ if want_scripts; then
   # transaction rows carry measurements.{lcp,fcp,cls,inp,ttfb}. Explicit
   # run_suite — scripts/followthroughs/ is covered by no glob here.
   run_suite "scripts/cwv-field-rum-9178" bash scripts/followthroughs/cwv-field-rum-9178.test.sh
+  # #8743: exit-code harness for the web-2 plugin-seed (fchmodat2) soak probe.
+  # Registered explicitly — scripts/followthroughs/*.test.sh is not in SUITE_GLOBS,
+  # and this probe's exit 0 auto-closes the tracker. The load-bearing arms are the
+  # PASS conjunction (positive control + post-fix marker + zero post-marker
+  # fchmodat2), the marker-anchored absence floor (pre-delivery rows are history,
+  # not a verdict), and every transport fault mapping to NOT YET / CANNOT
+  # ESTABLISH, never PASS.
+  run_suite "scripts/web2-plugin-seed-8743" bash scripts/followthroughs/web2-plugin-seed-8743.test.sh
   # #8450 standing monitor core (scripts/actions-queue-health.sh): the verdict
   # logic behind scheduled-actions-queue-health.yml — live queue depth +
   # delivered-vs-entitled concurrency + median live queued age ->

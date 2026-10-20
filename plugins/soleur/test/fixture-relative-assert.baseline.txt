@@ -163,8 +163,8 @@
 4	apps/web-platform/infra/arm-heartbeats.sh
 1	apps/web-platform/infra/arm-heartbeats.test.sh
 4	apps/web-platform/infra/canary-bundle-claim-check.test.sh
-21	apps/web-platform/infra/ci-deploy.sh
-9	apps/web-platform/infra/ci-deploy.test.sh
+19	apps/web-platform/infra/ci-deploy.sh
+10	apps/web-platform/infra/ci-deploy.test.sh
 1	apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh
 1	apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh
 7	apps/web-platform/infra/container-restart-monitor.sh
@@ -422,7 +422,7 @@
 1	scripts/generate-article-30-register.sh
 6	scripts/generate-kb-index.sh
 1	scripts/grok-fidelity-bootstrap.sh
-6	scripts/guard-vacuity-floor.test.sh
+18	scripts/guard-vacuity-floor.test.sh
 2	scripts/infra-config-red-alert.test.sh
 1	scripts/kb-staleness-metric.sh
 9	scripts/learning-retrieval-bench.sh
