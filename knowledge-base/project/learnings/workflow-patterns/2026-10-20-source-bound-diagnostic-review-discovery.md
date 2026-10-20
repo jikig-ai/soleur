@@ -143,3 +143,24 @@ Review pure preparation across producer and consumer before requesting an
 operational approval; isolated component coverage did not prove their integration.
 The scoped Semgrep rerun initially refused its settings write in the sandbox;
 the approved rerun must complete before any scan verdict is recorded.
+
+The approved Config execution exited with its fixed refusal, while the private
+output still contained only the reviewed manifest. Independent source review
+confirmed the one-use marker is created before the first request and has no
+removal path, so this attempt did not reach DNS or HTTP; the actual failing
+local predicate remains unknown. A later read-only pre-consumption probe passed
+current checks but cannot prove which historical check failed. The approval is
+spent despite the absent marker. Preserve the failed directory, never retry it
+or infer a network cause, and use only fixed allowlisted failure-stage labels
+after a later separately approved attempt. Offline synthetic execution reached
+the mocked request boundary with marker and transport mocked, and the real
+marker writer passed in a separate synthesized private directory; neither
+reconstructs the historical failure.
+
+One diagnostic probe initially compared the manifest with a literal backslash
+and `n` instead of a newline; its check failed locally, then passed after using
+`bytes([10])`. A combined tool wrapper also returned `functions is not defined`
+after the patch had landed; the diff was inspected and the focused test was run
+separately. A scoped `sed` lookup used a repository-relative path while already
+in the component directory; it read no file and was corrected by reading from
+the worktree root. None of these results support an acquisition verdict.

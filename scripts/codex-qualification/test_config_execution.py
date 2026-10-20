@@ -179,6 +179,47 @@ class ConfigExecution(unittest.TestCase):
             self.assertEqual({path.name for path in self.output.iterdir()}, {acquisition.MANIFEST})
             self.transport.request.assert_not_called()
 
+    def test_main_reports_fixed_source_binding_stage_without_exception_details(self):
+        def change(source):
+            source[0]['pairing_sha256'] = '0' * 64
+        with self.environment(before=change):
+            stdout, stderr = io.StringIO(), io.StringIO()
+            argv = ['config_acquisition.py', 'execute', '--manifest', self.args.manifest,
+                    '--manifest-sha256', self.args.manifest_sha256,
+                    '--runner-sha256', self.args.runner_sha256]
+            with patch.object(sys, 'argv', argv), redirect_stdout(stdout), \
+                    redirect_stderr(stderr), self.assertRaises(SystemExit) as caught:
+                acquisition.main()
+            self.assertEqual(caught.exception.code, 1)
+            self.assertEqual(stdout.getvalue(), '')
+            self.assertEqual(stderr.getvalue(), acquisition.ERROR + '; preconsume_stage=source_binding\n')
+            self.assertNotIn(CANARY, stderr.getvalue())
+            self.assertEqual({path.name for path in self.output.iterdir()}, {acquisition.MANIFEST})
+            self.transport.request.assert_not_called()
+
+    def test_preconsume_stage_reporting_is_closed_and_drops_exception_context(self):
+        expected = ('startup', 'manifest', 'source_binding', 'private_output',
+                    'tls_setup', 'preconsume', 'gate_write')
+        self.assertEqual(acquisition.PRECONSUMPTION_STAGES, expected)
+        for stage in expected:
+            def fail(_args, *, clock, report_stage):
+                report_stage(stage)
+                raise RuntimeError(CANARY)
+            with self.subTest(stage=stage), patch.object(acquisition, '_execute_action', side_effect=fail):
+                with self.assertRaises(acquisition.PreconsumeFailure) as caught:
+                    acquisition.execute_action(Namespace())
+                self.assertEqual(caught.exception.stage, stage)
+                self.assertEqual(str(caught.exception), acquisition.ERROR)
+                self.assertIsNone(caught.exception.__context__)
+        def invalid_stage(_args, *, clock, report_stage):
+            report_stage(CANARY)
+            raise RuntimeError(CANARY)
+        with patch.object(acquisition, '_execute_action', side_effect=invalid_stage):
+            with self.assertRaises(acquisition.PreconsumeFailure) as caught:
+                acquisition.execute_action(Namespace())
+        self.assertEqual(caught.exception.stage, 'startup')
+        self.assertNotIn(CANARY, str(caught.exception))
+
     def test_binding_changed_after_token_is_spent_and_stops_registry(self):
         def change(role, source):
             if role == 'token':

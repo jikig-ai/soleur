@@ -30,6 +30,8 @@ PLATFORM_SHA256 = '168f762c218e167ba88ae7e48194126eb5ba5e99ef652063e3f14f9c4f0ee
 ROLES = ('token', 'registry', 'destination')
 AUTHORITY = ('destination_ownership', 'publisher_verified', 'issuer_verified', 'profile_admitted',
              'runtime_authorized', 'recovery_authorized', 'hosted_auth_cleared', 'qualified')
+PRECONSUMPTION_STAGES = ('startup', 'manifest', 'source_binding', 'private_output',
+                         'tls_setup', 'preconsume', 'gate_write')
 DEPENDENCIES = ('config_acquisition.py', 'config_https.py', 'config_resolver.py', 'config_schema.py',
                 'test_config_acquisition.py', 'test_config_https.py', 'test_config_schema.py',
                 'test_config_execution.py')
@@ -199,6 +201,14 @@ class AcquisitionFailure(Refused):
     def __init__(self, receipt):
         super().__init__(ERROR)
         self.receipt = copy.deepcopy(receipt)
+
+
+class PreconsumeFailure(Refused):
+    """A fixed diagnostic checkpoint; never carries an underlying exception."""
+    def __init__(self, stage):
+        _ensure(stage in PRECONSUMPTION_STAGES)
+        super().__init__(ERROR)
+        self.stage = stage
 
 
 def _config_sha256(raw):
@@ -490,8 +500,9 @@ def _verify_inputs(manifest, args):
     return ca
 
 
-def _execute_action(args, *, clock):
+def _execute_action(args, *, clock, report_stage):
     """Dormant operational source; separate exact-command approval remains mandatory."""
+    report_stage('startup')
     started = clock()
     require(metadata.base._finite(started), ERROR)
     deadline, last = started + 60, started
@@ -500,22 +511,29 @@ def _execute_action(args, *, clock):
         now = clock()
         _ensure(metadata.base._finite(now) and last <= now < deadline, 'deadline')
         last = now
+    report_stage('manifest')
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     manifest = metadata.base._json(args.manifest)
     checked_manifest(manifest, args.manifest_sha256)
     context = manifest['context']
     require(args.manifest == str(Path(context['output_directory']) / MANIFEST), ERROR)
+    report_stage('source_binding')
     _verify_inputs(manifest, args)
     remaining()
+    report_stage('private_output')
     with PrivateOutput(context['output_directory'], context['output_directory_fingerprint']) as store:
         require(store.read(MANIFEST) == canonical(manifest) + b'\n', ERROR)
+        report_stage('source_binding')
         ca = _verify_inputs(manifest, args)
         remaining()
+        report_stage('tls_setup')
         transport = https.BoundedHTTPS(ca, context['ca_sha256'], clock=clock)
         marker = None
         def consume():
             nonlocal marker
+            report_stage('gate_write')
             marker = store.consume(args.manifest_sha256)
+            report_stage('post_gate')
             return marker
         def binding():
             store.check()
@@ -528,24 +546,31 @@ def _execute_action(args, *, clock):
         collector = ConfigAcquisition(manifest, transport, consume,
             manifest_sha256=args.manifest_sha256, output_binding=binding,
             clock=clock, overall_deadline=deadline)
+        report_stage('preconsume')
         try:
             result = collector.collect()
         except AcquisitionFailure as failure:
             store.publish(failure.receipt, manifest, args.manifest_sha256, marker)
             raise Refused(ERROR) from None
+        report_stage('post_gate')
         binding()
         store.publish(result, manifest, args.manifest_sha256, marker)
 
 
 def execute_action(args, *, clock=time.monotonic):
     """Sanitize every operational failure, including filesystem publication errors."""
+    current = ['startup']
+    def report_stage(value):
+        current[0] = value if value in (*PRECONSUMPTION_STAGES, 'post_gate') else 'startup'
     failed = False
     try:
-        _execute_action(args, clock=clock)
+        _execute_action(args, clock=clock, report_stage=report_stage)
     except Exception:
         failed = True
     if failed:
         # Outside the handler, so exception context cannot retain private errors.
+        if current[0] in PRECONSUMPTION_STAGES:
+            raise PreconsumeFailure(current[0]) from None
         raise Refused(ERROR) from None
 
 
@@ -565,6 +590,8 @@ def main():
         else:
             execute_action(args)
             print('Config integrity/schema observed; no profile or qualification authority')
+    except PreconsumeFailure as error:
+        parser.exit(1, ERROR + '; preconsume_stage=' + error.stage + '\n')
     except Exception:
         parser.exit(1, ERROR + '\n')
 
