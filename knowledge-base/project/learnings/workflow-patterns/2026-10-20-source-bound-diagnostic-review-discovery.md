@@ -181,3 +181,8 @@ repository or acquisition changes.
 The first combined append patch did not match the learning's exact tail and
 applied no hunks; re-read both file tails and applied the records against their
 actual anchors. Confirm the final diff before committing multi-file notes.
+
+The worktree `.git/info/exclude` lookup failed because `.git` is a gitfile here;
+exclude configuration is not readable by that path. A guessed test helper name
+also had no match. Use `rg --files` / symbol discovery before path or function
+reads, and treat non-matches as no evidence rather than a repository result.
