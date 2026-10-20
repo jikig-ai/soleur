@@ -3290,6 +3290,57 @@ assert_soleur_host_id "web-platform: docker run has -e SOLEUR_HOST_ID on both ca
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
 
 echo ""
+echo "--- egress-token mount and reaper flag on the PROD docker run ---"
+
+assert_prod_egress_tokens() {
+  # The deploy-started PROD container must bind-mount the host session-token dir and set
+  # SOLEUR_EGRESS_REAPER=1 (the fresh-host start in cloud-init.yml has both). Without the
+  # mount the forwarder's mkdir fails EACCES inside the container and an entitled web-egress
+  # session degrades to zero egress. The canary gets neither (ADR-278 canary isolation; pinned
+  # by docker-run-tuple.test.sh K26a-b). The prod line is told apart by its exact --name word with
+  # a trailing space, because the canary name begins with the same text.
+  local description="$1"
+  local cmd="$2"
+
+  TOTAL=$((TOTAL + 1))
+
+  local output
+  output=$(
+    export MOCK_DOCKER_MODE="apparmor-trace"
+    run_deploy "$cmd" 2>&1
+  ) || true
+
+  local prod_line
+  prod_line=$(printf '%s\n' "$output" | grep "^DOCKER_RUN_ARGS:" | grep -F -- "--name soleur-web-platform " || true)
+
+  if [[ -z "$prod_line" ]]; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description (no prod DOCKER_RUN_ARGS line found)"
+    return
+  fi
+
+  local missing=""
+  if ! grep -qF -- "-v /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens " <<<"$prod_line"; then
+    missing="${missing} egress-tokens mount"
+  fi
+  if ! grep -qF -- "-e SOLEUR_EGRESS_REAPER=1 " <<<"$prod_line"; then
+    missing="${missing} SOLEUR_EGRESS_REAPER=1"
+  fi
+
+  if [[ -z "$missing" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $description"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description (prod docker run missing:${missing})"
+    printf '%s\n' "$prod_line" | head -2 | sed 's/^/    /'
+  fi
+}
+
+assert_prod_egress_tokens "web-platform: prod docker run mounts the egress-tokens dir and sets SOLEUR_EGRESS_REAPER=1" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+
+echo ""
 echo "--- Deploy fan-out loop-prevention (#5274 Phase 3, ADR-068) ---"
 # The 2-host fan-out is loop-safe ONLY if the /hooks/deploy-peer hook does NOT
 # receive the peer list — otherwise a forwarded deploy would re-fan (A->B->A...).

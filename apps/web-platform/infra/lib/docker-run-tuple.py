@@ -6,7 +6,8 @@ in cloud-init.yml. Each carries the security posture that the /proc mask and the
 (the soleur-bwrap AppArmor profile, the seccomp profile, a bounded /tmp tmpfs, no added capability, no host
 namespace, no environment lever on PATH or the loader). A deny list of option spellings was bypassed every time
 a spelling was missed, so this is a CLOSED world: the tuples are tokenized with shlex and every option,
-environment name, volume, port and value outside the declared set is a violation, and every command-position
+environment name, volume, port and value outside the declared set is a violation, a declared volume, environment name,
+port or scalar option that is ABSENT from its tuple is a violation too (MISSING_DECLARED), and every command-position
 `docker run|create|...` in the two files is censused so a fourth start site cannot hide.
 
 Usage (stdlib only, run as `python3 -I`):
@@ -23,7 +24,7 @@ optionally, .github/workflows). The layouts <root>/infra and <root> itself (the 
 too. It defaults to the repo root derived from this file's location.
 
 Tokens: UNKNOWN_OPTION, POSTURE_VALUE, TUPLE_COUNT, POSTURE_DIVERGENCE, ENV_NAME, UNPARSEABLE_OPTION,
-UNCLASSIFIED_DOCKER_RUN, TRAILING_ARGS, DUPLICATE_OPTION.
+UNCLASSIFIED_DOCKER_RUN, TRAILING_ARGS, DUPLICATE_OPTION, MISSING_DECLARED.
 
 What this proves and what it does not: the closed set lives here and the tuples live in the files this parses, and one
 diff can edit both, so a green check is CONSISTENCY between the two, not INTEGRITY of the posture. What outside the
@@ -35,8 +36,14 @@ and it reads the COMMITTED files only (a container started out of band on a host
 
 Stated residuals (outside the closed set by design, not claimed closed): the CONTENT of --env-file (Doppler prd;
 ci-deploy.sh overlay_github_app_key refuses runtime-hijack names such as PATH and LD_* only when that overlay
-runs) and the value of -e NODE_OPTIONS (pinned to the --max-old-space-size assignment lines, not to the flag set).
-Containers started on other hosts (the zot registry, the egress gateway) are not part of the closed set.
+runs; a prd secret SOLEUR_EGRESS_REAPER=1 would give the canary the reaper, and EGRESS_TOKEN_DIR can decouple the
+mount from the code, neither of which the argv shows) and the value of -e NODE_OPTIONS (pinned to the
+--max-old-space-size assignment lines, not to the flag set). Required-ness (MISSING_DECLARED) covers volumes,
+environment NAMES, ports and the scalar options (-d, --restart, --log-driver, --add-host, --env-file, and for the two
+deploy starts --init, --memory, --memory-swap) PER TUPLE: the first-boot start has no memory cap or --init by design,
+so they are not required there. The scan is a text scan with no control-flow model: a tuple behind an `exit 0`, a start through an indirect docker word (`d=docker; $d run`), a
+`docker rename|start|restart|update` of an existing container, and an app start in a file outside the scanned set
+are not seen. Containers started on other hosts (the zot registry, the egress gateway) are not part of the closed set.
 """
 
 import argparse
@@ -70,6 +77,14 @@ _COMMON_ENV = {
     "SOLEUR_HOST_ID": {"$HOST_ID"},
 }
 _VOLS = {"/mnt/data/workspaces:/workspaces", "/mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro"}
+# Scalar options a start must CARRY (MISSING_DECLARED); their allowed VALUES are checked separately. The memory cap and
+# --init are required on the two deploy starts only: ADR-062 scopes them to ci-deploy.sh's two blocks, and the
+# first-boot start has neither today (not required there).
+_SCALARS = {"-d", "--log-driver", "--restart", "--env-file", "--add-host"}
+_SCALARS_APP = _SCALARS | {"--init", "--memory", "--memory-swap"}
+# The host session-token dir (server.tf: 1001:1001, 0711). Prod and first-boot mount it and set SOLEUR_EGRESS_REAPER;
+# the canary's argv neither mounts it nor reaps (ADR-278 canary isolation: its /proc cannot see prod forwarders).
+_EGRESS_TOKENS_VOL = "/var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens"
 
 # tuple name -> declared spec. `file` is the basename of the file the tuple lives in.
 TUPLES = {
@@ -77,20 +92,20 @@ TUPLES = {
         "file": "ci-deploy.sh", "name": "soleur-web-platform-canary", "restart": {"no"},
         "mem_exprs": {"$CANARY_MEMORY_CAP"}, "env_files": {"$ENV_FILE"}, "images": {"$VERIFIED_REF"},
         "env": dict(_COMMON_ENV, NODE_OPTIONS={"$CANARY_NODE_OPTIONS"}),
-        "volumes": set(_VOLS), "ports": {"0.0.0.0:3001:3000"},
+        "volumes": set(_VOLS), "ports": {"0.0.0.0:3001:3000"}, "scalars": _SCALARS_APP,
     },
     "prod": {
         "file": "ci-deploy.sh", "name": "soleur-web-platform", "restart": {"unless-stopped"},
         "mem_exprs": {"$PROD_MEMORY_CAP"}, "env_files": {"$ENV_FILE"}, "images": {"$VERIFIED_REF"},
-        "env": dict(_COMMON_ENV, NODE_OPTIONS={"$PROD_NODE_OPTIONS"}),
-        "volumes": set(_VOLS), "ports": {"0.0.0.0:80:3000", "0.0.0.0:3000:3000"},
+        "env": dict(_COMMON_ENV, NODE_OPTIONS={"$PROD_NODE_OPTIONS"}, SOLEUR_EGRESS_REAPER={"1"}),
+        "volumes": _VOLS | {_EGRESS_TOKENS_VOL}, "ports": {"0.0.0.0:80:3000", "0.0.0.0:3000:3000"}, "scalars": _SCALARS_APP,
     },
     "first-boot": {
         "file": "cloud-init.yml", "name": "soleur-web-platform", "restart": {"unless-stopped"},
         "mem_exprs": set(), "env_files": {"$TMPENV"}, "images": {"$(cat /run/soleur-image-ref)"},
         "env": {"INNGEST_BASE_URL": {"http://10.0.1.40:8288"}, "SOLEUR_EGRESS_REAPER": {"1"}},
-        "volumes": _VOLS | {"/var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens"},
-        "ports": {"0.0.0.0:80:3000", "0.0.0.0:3000:3000"},
+        "volumes": _VOLS | {_EGRESS_TOKENS_VOL},
+        "ports": {"0.0.0.0:80:3000", "0.0.0.0:3000:3000"}, "scalars": _SCALARS,
     },
 }
 TUPLE_ORDER = ("canary", "prod", "first-boot")
@@ -448,6 +463,10 @@ class Record:
         self.seccomp = []
         self.tmpfs = []
         self.init = False
+        self.volumes = set()      # the -v, -e NAME and -p values the tuple actually carries (check_declared)
+        self.env = set()
+        self.ports = set()
+        self.scalars = set()      # the scalar options (-d, --restart, --memory, --env-file, ...) the tuple carries
 
 
 def walk_options(site, spec, tuple_name):
@@ -501,6 +520,7 @@ def walk_options(site, spec, tuple_name):
                     if name in seen:
                         v("DUPLICATE_OPTION", name)
                     seen[name] = True
+                    rec.scalars.add(name)
                     if name == "--init":
                         rec.init = True
                 i += 1
@@ -535,6 +555,7 @@ def walk_options(site, spec, tuple_name):
 
 
 def check_value(name, val, spec, rec, seen, env_seen, v):
+    rec.scalars.add(name)
     def bad(token, label):
         v("UNPARSEABLE_OPTION" if has_exp(val) else token, label)
 
@@ -594,15 +615,18 @@ def check_value(name, val, spec, rec, seen, env_seen, v):
         if ename in env_seen:
             v("DUPLICATE_OPTION", "-e %s" % ename)
         env_seen.add(ename)
+        rec.env.add(ename)
         if evalue not in spec["env"][ename]:
             if has_exp(evalue):
                 v("UNPARSEABLE_OPTION", "-e %s=%s" % (ename, evalue))
             else:
                 v("ENV_NAME", "%s value '%s'" % (ename, evalue))
     elif name == "-v":
+        rec.volumes.add(val)
         if val not in spec["volumes"]:
             bad("UNKNOWN_OPTION", "-v %s" % val)
     elif name == "-p":
+        rec.ports.add(val)
         if val not in spec["ports"]:
             bad("UNKNOWN_OPTION", "-p %s" % val)
 
@@ -612,6 +636,25 @@ def check_options(app_sites):
     out = []
     for s in app_sites:
         out.extend(s.option_viols)
+    return out
+
+
+def check_declared(app_sites):
+    """Every volume, env name, port and scalar option a tuple DECLARES must be present on its site. check_options only refuses
+    members outside the declared set, so a deleted member (the egress-token mount on the prod start) passed."""
+    out = []
+    for s in app_sites:
+        # A site that already reds UNPARSEABLE_OPTION (tokenization failed, or the tuple is truncated so "no image")
+        # has an incomplete record: reporting every member after the cut as missing too is noise on top of that red.
+        if s.toks is None or any(v.startswith("FAIL UNPARSEABLE_OPTION") for v in s.option_viols):
+            continue
+        spec = TUPLES[s.tuple]
+        for kind, declared, got in (("volume", spec["volumes"], s.rec.volumes),
+                                    ("env", set(spec["env"]), s.rec.env),
+                                    ("port", spec["ports"], s.rec.ports),
+                                    ("option", spec["scalars"], s.rec.scalars)):
+            for member in sorted(declared - set(got)):
+                out.append("FAIL MISSING_DECLARED: %s %s missing from %s %s (declared in TUPLES)" % (kind, member, s.file, s.tuple))
     return out
 
 
@@ -947,6 +990,7 @@ def run_checks(root):
     viols.extend(scan_viols)
     viols.extend(check_count(app_sites, unreadable))
     viols.extend(check_options(app_sites))
+    viols.extend(check_declared(app_sites))
     viols.extend(check_projection(app_sites))
     viols.extend(check_census_extra(extra))
     viols.extend(node_viols)
@@ -966,6 +1010,7 @@ HINTS = {
     "TRAILING_ARGS": "nothing may follow the image except `; then`",
     "TUPLE_COUNT": "a start site was added, moved or renamed: declare it together with the site and keep the three-tuple expectation; never lower the count (when the line says `cannot read`, a scanned file is missing, unreadable or not a regular file: restore it)",
     "UNCLASSIFIED_DOCKER_RUN": "declare it as an app tuple, or add a NAMED non-app exemption (EXEMPT_RUN / EXEMPT_CREATE) ONLY with a security review: an exempt site is closed-world too (a create is exactly `--name NAME IMAGE`)",
+    "MISSING_DECLARED": "restore the named volume, env, port or scalar option on the tuple, or remove it from TUPLES in the same commit with the reason (a tuple that drops a declared member silently loses that behaviour)",
     "POSTURE_DIVERGENCE": "restore the apparmor, seccomp and tmpfs options on the named tuple",
     "UNPARSEABLE_OPTION": "make the option literal; a variable, substitution or ambiguous heredoc opener is refused, and a file that cannot be read cannot be shown free of a start site",
 }
