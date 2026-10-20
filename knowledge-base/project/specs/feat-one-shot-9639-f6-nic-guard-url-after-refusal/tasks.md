@@ -18,14 +18,14 @@ PR body: `Ref #9639`, `Part of tracker #9217` (no closing keyword). Do NOT touch
 
 ### doppler-injection-bound.test.sh
 
-- [x] 1.6 RED rows G1.1-G1.9 and GH1-GH3, GH6 (restore wrapper expansion; second directive; operator-suffix spelling; no-op wrapper stage -> `CENSUS_FAIL`; strip script-side indirect -> `ACK_FAIL stale`; delete an unfixed sibling's wrapper ack; stale wrapper ack for a fixed unit; wrapper-ack pin edit; must-PASS unit without an outer `bash -c`; unmutated control; G1.9 `_KEY`-bound script-side regex: `${!FOO_KEY:-}` enters, `${!_seam+x}` does not, inngest-luks-cutover stays out; GH6 meta-floor row for `wrapper_units_checked`).
+- [x] 1.6 RED rows G1.1-G1.3, G1.5, G1.6-G1.12 and GH2 (restore wrapper expansion; second directive; operator-suffix and modifier/subscript spellings; no-op wrapper stage -> `CENSUS_FAIL`; strip script-side indirect -> `ACK_FAIL stale`; delete an unfixed sibling's wrapper ack; stale wrapper ack; ack pin; acked unit gaining a second expansion; bare, `:?` and comment-only script-side fixtures; fixed unit written without the outer `bash -c` stays green).
 - [x] 1.7 Run the three suites on the unchanged tree; record the failing row names for the PR body.
 
 ## Phase 2 - GREEN
 
 - [x] 2.1 `web-private-nic-guard.sh`: key read after the refusal, `LC_ALL=C` `case` validation, `${!_key:-}` into a plain unexported variable, value-free invalid-key line inside the existing `_refusal_due` block; refresh the header LIMIT comment and the step-7 comment.
 - [x] 2.2 `web-private-nic-guard.service`: `ExecStart=/bin/bash -c 'doppler run --project soleur --config prd -- /usr/local/bin/web-private-nic-guard.sh'`; rewrite the comment block.
-- [x] 2.3 Same pair for `web-zot-consumer-probe.sh` / `.service` (lookup after the refusal `case` and after the `--canary-only` early exit; header states the refusal needs the pull credential).
+- [x] 2.3 Same pair for `web-zot-consumer-probe.sh` / `.service` (lookup after the refusal `case` and after the `--canary-only` early exit; refusal fires on the pull credential, or on the key name outside `--canary-only`; reworked in review per the CTO ruling).
 - [x] 2.4 `doppler-injection-bound.test.sh` scanner: widen the unit-side `INDIRECT_RE` (optional operator suffix), script-side population reason bound to `*_KEY`-named indirect expansion, unit-side wrapper finding over every directive, `WRAPPER_ACK_REASONS` (2 entries) + `WRAPPER_ACK_CARDINALITY = 2`, `CENSUS: wrapper_units_checked` floor from a green run, stale-wrapper-ack check; refresh the two fixed units' `ACK_REASONS` text. `ACK_CARDINALITY`, `MIN_POPULATION`, `MIN_DOPPLER_UNITS` unchanged.
 - [x] 2.5 `web-probe-envwrite.sh`: comment-only correction.
 - [x] 2.6 Confirm every Phase 1 row is now GREEN and the mutation rows still RED.
@@ -35,7 +35,7 @@ PR body: `Ref #9639`, `Part of tracker #9217` (no closing keyword). Do NOT touch
 - [x] 3.1 `grep-q-pipe-guard.test.sh` (PJ_TRIPLES unchanged, recompute before/after), `lint-trap-tempfile-ownership` (+ test), `guard-vacuity-floor.test.sh`, shellcheck on touched `.sh`, `c4-count-parity.test.sh`, `lint-guard-contract.py`, `lint-infra-no-human-steps.py --changed --base origin/main`, markdownlint on plan + tasks, the discoverability probe verbatim.
 - [x] 3.2 `fresh-boot-parity.test.sh`, `web-host-provisioner-parity.test.sh`.
 - [x] 3.3 Simulate the rollback in a scratch detached worktree under `/var/tmp`; write the measured recipe into the PR body.
-- [ ] 3.4 Record `doppler-injection-bound` CENSUS before/after (population 10 -> 10, doppler units 20 -> 20) in the PR body.
+- [x] 3.4 `doppler-injection-bound` CENSUS measured after the review round: doppler_run_units=20, bound_required_population=10, wrapper_units_checked=20 (unchanged by the INDIRECT_RE widening); goes in the PR body.
 - [x] 3.5 `git diff --name-only origin/main...HEAD` contains none of the files listed under "Do NOT touch".
 
 ## Phase 4 - ADR and tracking
@@ -43,3 +43,9 @@ PR body: `Ref #9639`, `Part of tracker #9217` (no closing keyword). Do NOT touch
 - [x] 4.1 ADR-202 addendum (3 lines): the refusal's reach includes the unit wrapper; enforced for `doppler run` units by the scanner stage.
 - [ ] 4.2 Comment on #9639: F6 fixed for nic-guard + zot; git-data-probe and inngest-consumer-probe NOT fixed (reason: no xtrace refusal to order against; adding one is a separate #7797-class change; inngest-consumer-probe also sources a file open PR #10501 edits); F7 and F8 still open. No new issue.
 - [ ] 4.3 After merge: run the plan's post-merge verification (anchored `Creation complete` lines for both install resources, heartbeats up, Logs rows), record the merge on #9217 without DONE, then close out the series status there.
+
+## Phase 5 - Review round (fix-inline, 2026-10-20)
+
+- [x] 5.1 Zot refusal: key disjunct exempt for `--canary-only`; `unset URL` in both scripts; stale comments swept by claim (nic header, zot canary block, both `.service` comments, `web-probe.tf`, scanner header); ADR-202 addendum reworded.
+- [x] 5.2 Rows added and mutation-proven in a scratch sandbox: nic 347 -> 362, zot 407 -> 422, scanner 45 -> 55; floors raised in the same edits.
+- [ ] 5.3 Record on #9639 the findings not fixed here (ExecStop*, other doppler spellings, drop-ins, direct `$NAME` wrappers, prefix allowlist, web_hosts key validation, stale sentences under other open PRs).

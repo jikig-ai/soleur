@@ -75,7 +75,7 @@ No open PR touches any of the four units' `.service`/`.sh`/`.test.sh` files nor 
 - Fixing `web-git-data-probe` and `inngest-consumer-probe` -> would buy property 1 only after adding a brand-new unconditional xtrace refusal to each (a #7797-class change) -> cut; recorded on #9639 as not fixed (CTO F1).
 - Keeping a bare `WEB_NIC_GUARD_URL` fallback -> buys backwards tolerance nobody uses -> cut (CTO F3).
 - Lowering `ACK_CARDINALITY` / deleting the four ACKs (scanner option B) -> would shrink the guard's coverage and move a ratchet -> cut (CTO F2).
-- Widening the zot refusal condition -> not F6 -> cut; the PR states that zot's refusal depends on the token being present, and that the `--canary-only` `ExecStartPre` runs outside `doppler run` and reads no URL (unchanged, harmless).
+- Widening the zot refusal condition -> cut as first planned, then REVERSED at implementation: the credential-refusal lint (Rule C) counts `WEB_ZOT_CONSUMER_URL_KEY` as a credential name, so the new lookup needs the key in the refusal. Ruled by CTO agent 2026-10-20 (review): keep the key disjunct but exempt `--canary-only` (token disjuncts still apply there), so the `ExecStartPre` canary behaves exactly as on `main`; rows pin both disjuncts and both canary-only cases.
 - A new boot-trail event (F7), a standing alert (F8), Sentry-DSN transport hardening (#9638) -> outside this PR by the brief.
 - A production env seam for the unit-launch tests -> cut; the tests rewrite the extracted `ExecStart` text in a fixture copy.
 
@@ -250,14 +250,14 @@ error_reporting:
   fail_loud: stderr line SOLEUR_CREDENTIAL_REFUSED script=web-private-nic-guard reason=empty var=WEB_NIC_GUARD_URL (hourly-limited) plus the new value-free invalid-key line; the beat lapses so absence alarms
 failure_modes:
   - mode: lookup broken or key unreadable on web-1 after the apply (URL resolves empty)
-    detection: reason=empty marker in Better Stack Logs for SyslogIdentifier web-nic-guard after the apply timestamp (post-merge query), and the heartbeat going down
+    detection: (layer 3: vector Source 4 host_scripts_journald, exact SyslogIdentifier web-nic-guard) the reason=empty marker in Better Stack Logs after the apply timestamp (post-merge query), and the heartbeat going down
     alert_route: Better Stack heartbeat absence -> operator email
   - mode: invalid key name in /etc/default/web-private-nic-guard
-    detection: the value-free invalid-key stderr line in the same Logs source
+    detection: (layer 3: vector Source 4 host_scripts_journald, exact SyslogIdentifier web-nic-guard / web-zot-consumer-probe) the value-free invalid-key stderr line in the same Logs source
     alert_route: heartbeat absence -> operator email (a standing log alert is F8, out of scope)
   - mode: web-2 still on the old pair
-    detection: none needed for correctness (self-consistent); recorded in the PR body
-    alert_route: not applicable until web-2 is replaced
+    detection: none: web-2 keeps a self-consistent old unit + script pair (no signal needed); recorded in the PR body
+    alert_route: none (not applicable until web-2 is replaced)
 logs:
   where: the unit journal (identifier web-nic-guard), shipped off-box to Better Stack Logs
   retention: Better Stack Logs source retention (plan-tier); journald persistent per journald-config
@@ -272,13 +272,15 @@ The probe above is the credential-free static half: the unit's `ExecStart` runs 
 
 1. Resolve the merge SHA (`gh pr view 10637 --json mergeCommit,mergedAt`; the SHA is empty until the merge lands, so an empty value means "not yet", never "no run"), find the `apply-web-platform-infra.yml` run whose `headSha` equals it (`gh run list --workflow apply-web-platform-infra.yml --limit 10 --json databaseId,conclusion,headSha,createdAt`; verified read-only on 2026-10-20, it returns those four fields), require `conclusion == success`, and in `gh run view <id> --log` count the ANCHORED lines `terraform_data.private_nic_guard_install: Creation complete` and `terraform_data.zot_consumer_probe_install: Creation complete` (both >= 1). Measured on run 39351965961 (an unrelated, no-change apply): the bare resource name appears twice there, once in the `-target=` list and once as `Refreshing state`, and `Creation complete` appears zero times, so an unanchored grep for the name would pass on a run that applied nothing.
 2. Better Stack heartbeat `soleur-web-nic-guard-web-1` is `up` with a ping later than the apply completion time (API read with the read-only token from Doppler; value never printed). Same for the zot consumer beat.
-3. Better Stack Logs query, `SyslogIdentifier` in (`web-nic-guard`, `web-zot-consumer-probe`) since the apply time: at least one `SOLEUR_PRIVATE_NIC nic_ok=true` row and no `reason=empty`, no invalid-key line.
+3. Better Stack Logs, read no earlier than about ten minutes after the apply completes (nic-guard ticks every 300s, zot every 60s): (a) a `SOLEUR_PRIVATE_NIC nic_ok=true` row with NO tag filter (it is a direct POST to the ingest, not a journald line, so it has no SyslogIdentifier) proves the ingest is alive; (b) the two beats from step 2 are the authority for "the new pair works" (a ping later than the apply completion); (c) under SyslogIdentifier `web-nic-guard` and `web-zot-consumer-probe` since the apply, none of `reason=empty`, `WEB_NIC_GUARD_URL_KEY is unset`, `WEB_ZOT_CONSUMER_URL unset`, `WEB_ZOT_CONSUMER_URL_KEY is unset`. A missing marker alone is weak evidence (the nic hourly limiter can hide one); the beat timestamps decide.
 4. Failure handling: any of the three fails -> revert the PR (the per-merge apply restores the old pair) and record on #9639.
 5. Record the merge on #9217 (no DONE), then close out the series status there.
 
 ## Rollback
 
 Revert this PR; the per-merge apply re-fires `private_nic_guard_install` and `zot_consumer_probe_install` and restores the old script + unit pair on web-1 (web-2 never left the old pair). The old pair works with the new Doppler/EnvironmentFile data, because the data is unchanged. On the revert apply the provisioner copies `.sh` first and `.service` second, so for one tick the pair is OLD script + NEW wrapper: the old script reads the bare variable, which the new wrapper no longer exports, sees it empty and takes the `reason=empty` path (no beat for that tick, then the `.service` copy lands). That one-tick gap is accepted; the forward direction (NEW script + OLD wrapper) is the safe order. The scanner revert restores the four unit-side population reasons and ACKs together. The simulated-revert run (Phase 3.3) replaces this paragraph with the measured recipe in the PR body.
+
+A revert can email once: between the old script and the new unit landing there is a window of seconds where the old script reads a bare variable that is no longer exported, and one skipped 300s tick can exceed the beat tolerance. Decode it as `reason=empty var=WEB_NIC_GUARD_URL` with no key line; it clears on the next tick.
 
 ## Test Scenarios
 
@@ -291,7 +293,7 @@ Revert this PR; the per-merge apply re-fires `private_nic_guard_install` and `zo
 7. Pre-set bare `WEB_NIC_GUARD_URL` with no key: ignored, no beat. Pre-set bare var with a key: the key's value wins.
 8. Stub curl `env` dump never contains the URL (not exported).
 9. Scanner: G1.1-G1.9 and GH1-GH3, GH6 (see Guard Contract); census lines unchanged.
-10. Zot: scenarios 1-4 and 6 with `ZOT_PULL_TOKEN` set; `--canary-only` mode unchanged.
+10. Zot: scenarios 1-4 and 6 with `ZOT_PULL_TOKEN` set; `--canary-only` mode unchanged (key name alone does not refuse a traced canary; a pull credential still does). Both refusal disjuncts are pinned by their own launch.
 
 ## Acceptance Criteria
 

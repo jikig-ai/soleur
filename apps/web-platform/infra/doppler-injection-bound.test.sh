@@ -46,9 +46,10 @@
 #
 #   4. AN EXEMPTION CLASS IS REQUIRED, NOT OPTIONAL. Four probe units resolve their own secret by
 #      indirect expansion over a per-host key name Terraform bakes in and the tracked unit never
-#      contains — `export WEB_ZOT_CONSUMER_URL="${!WEB_ZOT_CONSUMER_URL_KEY}"` — where the key
-#      expands to e.g. WEB_ZOT_CONSUMER_URL_WEB_1 (server.tf:683,734; :820 and :871 are identity
-#      mappings today — see ACK_REASONS for the measured correction). A literal
+#      contains — `${!WEB_ZOT_CONSUMER_URL_KEY}` — where the key expands to e.g. WEB_ZOT_CONSUMER_URL_WEB_1
+#      (the `*_URL_KEY=%s` printf of each server.tf install provisioner builds it; the git-data and inngest
+#      keys are identity mappings today — see ACK_REASONS for the measured correction). Two of the four do
+#      it in their SCRIPT now and two still do it in the unit's own ExecStart (item 5). A literal
 #      `--only-secrets` list in a TRACKED unit cannot name a per-host secret — the unit contains a
 #      VARIABLE name, never the secret's name, so there is nothing to enumerate. That alone is the
 #      limit, and it is sufficient. An earlier revision also argued "the flag is fail-closed on a
@@ -160,7 +161,7 @@ cat > "$SCANNER" <<'PYEOF'
 #   (2) select the `doppler run` population (literal AND resolved-binary spellings);
 #   (3) resolve each unit's target scripts across three script-authoring surfaces;
 #   (4) decide bound-required membership (exec/source seam in the target, or ${!VAR} indirect
-#       expansion in the unit itself);
+#       expansion in the unit itself, or a ${!<NAME>_KEY} expansion in its target script (#9639));
 #   (5) check the bound is a `doppler run` FLAG (before the `--`) and names at least one secret;
 #   (6) reconcile against ACK_REASONS and pin its cardinality;
 #   (7) check each AUTHORED list against a LOWER BOUND of names its script provably reads.
@@ -245,26 +246,29 @@ ACK_REASONS = {
     # cannot name the secret: the unit holds a VARIABLE name, so there is nothing to enumerate.
     #
     # MEASURED, and it corrects the plan: only TWO of the four keys are per-host TODAY.
-    # server.tf:683 and :734 build the key as `<NAME>_${upper(replace("web-1","-","_"))}`, i.e.
-    # WEB_NIC_GUARD_URL_WEB_1 / WEB_ZOT_CONSUMER_URL_WEB_1. server.tf:820 and :871 are IDENTITY
-    # mappings ('INNGEST_CONSUMER_URL' / 'GIT_DATA_HEARTBEAT_URL') because there is one dedicated
-    # inngest host and one git-data host. The exemption holds for all four regardless: the name is
-    # not in the unit, and :820/:871 become per-host on the multi-host path the fleet is opening.
+    # The server.tf provisioners that write `WEB_NIC_GUARD_URL_KEY=%s` / `WEB_ZOT_CONSUMER_URL_KEY=%s` build the key as
+    # `<NAME>_${upper(replace("web-1","-","_"))}`, i.e. WEB_NIC_GUARD_URL_WEB_1 / WEB_ZOT_CONSUMER_URL_WEB_1. The ones
+    # writing `INNGEST_CONSUMER_URL_KEY=%s` / `GIT_DATA_HEARTBEAT_URL_KEY=%s` are IDENTITY mappings
+    # ('INNGEST_CONSUMER_URL' / 'GIT_DATA_HEARTBEAT_URL') because there is one dedicated inngest host and one
+    # git-data host. The exemption holds for all four regardless: the name is not in the unit, and those two become
+    # per-host on the multi-host path the fleet is opening.
     # (#9639: the web-zot-consumer-probe and web-private-nic-guard units no longer expand the key in their ExecStart;
     # the SCRIPT does, after its xtrace refusal. They stay in the population through the script-side `*_KEY` reason.)
     'web-zot-consumer-probe.service':
         'the script resolves WEB_ZOT_CONSUMER_URL_KEY by indirect expansion (${!WEB_ZOT_CONSUMER_URL_KEY}), which '
-        'server.tf:734 builds PER HOST (WEB_ZOT_CONSUMER_URL_WEB_1) — no literal list in a tracked unit can name it',
+        'the WEB_ZOT_CONSUMER_URL_KEY printf in server.tf builds PER HOST (WEB_ZOT_CONSUMER_URL_WEB_1) — no literal list '
+        'in a tracked unit can name it',
     'web-private-nic-guard.service':
         'the script resolves WEB_NIC_GUARD_URL_KEY by indirect expansion (${!WEB_NIC_GUARD_URL_KEY}), which '
-        'server.tf:683 builds PER HOST (WEB_NIC_GUARD_URL_WEB_1) — same fail-closed multi-host break',
+        'the WEB_NIC_GUARD_URL_KEY printf in server.tf builds PER HOST (WEB_NIC_GUARD_URL_WEB_1) — same fail-closed '
+        'multi-host break',
     'inngest-consumer-probe.service':
-        'indirect expansion of INNGEST_CONSUMER_URL_KEY; server.tf:820 maps it to the identity '
-        'name today (one dedicated inngest host), but the unit still never names the secret, so '
+        'indirect expansion of INNGEST_CONSUMER_URL_KEY; the INNGEST_CONSUMER_URL_KEY printf in server.tf maps it to the '
+        'identity name today (one dedicated inngest host), but the unit still never names the secret, so '
         'the list would have to be authored against a variable rather than a name',
     'web-git-data-probe.service':
-        'indirect expansion of GIT_DATA_HEARTBEAT_URL_KEY; server.tf:871 is an identity mapping '
-        'today for the single git-data host, with the same never-named-in-the-unit limit',
+        'indirect expansion of GIT_DATA_HEARTBEAT_URL_KEY; the GIT_DATA_HEARTBEAT_URL_KEY printf in server.tf is an '
+        'identity mapping today for the single git-data host, with the same never-named-in-the-unit limit',
     # -- exemption class B: the read-set is not authorable from the tracked source ---------------
     'cron-egress-resolve.service':
         'read-set is not derivable: cron-egress-resolve.sh:149-157 reads SENTRY_INGEST_DOMAIN / '
@@ -305,17 +309,23 @@ ACK_CARDINALITY = 8
 # web-zot-consumer-probe were fixed (the script resolves the key after its refusal). These two have the same wrapper
 # shape and NO xtrace refusal to order a moved lookup against; adding one is a separate change, so they are recorded as
 # NOT fixed on #9639. This list can only ratchet DOWN: a fix removes the entry and lowers the pin, and an entry for a
-# unit that no longer expands anything is itself a failure.
+# unit that no longer expands anything is itself a failure. Each entry is (the EXACT set of names the unit expands, the
+# reason): an acked unit that gains a second expansion, or swaps the one it has, is a finding again.
 WRAPPER_ACK_REASONS = {
     'web-git-data-probe.service':
-        'NOT fixed (#9639): the unit expands GIT_DATA_HEARTBEAT_URL_KEY in its ExecStart wrapper and its script has no '
-        'xtrace refusal for a moved lookup to follow; adding one is a separate change',
+        (('GIT_DATA_HEARTBEAT_URL_KEY',),
+         'NOT fixed (#9639): the unit expands GIT_DATA_HEARTBEAT_URL_KEY in its ExecStart wrapper and its script has no '
+         'xtrace refusal for a moved lookup to follow; adding one is a separate change'),
     'inngest-consumer-probe.service':
-        'NOT fixed (#9639): the unit expands INNGEST_CONSUMER_URL_KEY in its ExecStart wrapper, its script has no xtrace '
-        'refusal to order against, and it sources a file an open pull request edits',
+        (('INNGEST_CONSUMER_URL_KEY',),
+         'NOT fixed (#9639): the unit expands INNGEST_CONSUMER_URL_KEY in its ExecStart wrapper, its script has no xtrace '
+         'refusal to order against, and it sources a file an open pull request edits'),
 }
 WRAPPER_ACK_CARDINALITY = 2
 # The wrapper stage must examine at least this many doppler-run units; a stage that checks none reports no findings.
+# This is a COUNTER-PRESENCE check only: the stage counts once per doppler-run unit, so the number equals doppler_run_units
+# (itself floored by MIN_DOPPLER_UNITS) and cannot see a broken INDIRECT_RE. Rows G1.1-G1.3 and G1.10-G1.12 are the
+# discriminating ones; G1.4 deletes the counter and proves this floor fires.
 MIN_WRAPPER_UNITS = 12
 
 # ── surface enumeration (LIFTED from credential-persist-home-guard.test.sh:506-605) ───────────
@@ -505,8 +515,10 @@ SEP_RE = re.compile(r'(?<=\s)--(?=\s)')
 # lookbehind on [-\w] is what stops it being read as a bound — anchor on the construct, never the
 # bare token (cq-assert-anchor-not-bare-token).
 ONLY_SECRETS_RE = re.compile(r'(?<![-\w])--only-secrets(?:[= ]+)([^\s]*)')
-# Unit side: ANY indirect expansion in an Exec directive, with or without an operator suffix (`${!K}`, `${!K:-}`, `${!K+x}`).
-INDIRECT_RE = re.compile(r'\$\{!(\w+)(?::?[-+=?][^}]*)?\}')
+# Unit side: ANY indirect expansion in an Exec directive, whatever follows the name: nothing (`${!K}`), an operator
+# (`${!K:-}`, `${!K+x}`), a substring or trim or case or replace form (`${!K:0:3}`, `${!K#p}`, `${!K%p}`, `${!K/a/b}`,
+# `${!K^^}`, `${!K,,}`), a subscript (`${!K[0]}`) or the prefix forms (`${!K@}`, `${!K*}`).
+INDIRECT_RE = re.compile(r'\$\{!(\w+)(?:\[[^\]]*\]|[-+=?:#%/^,@*][^}]*)?\}')
 # Script side (#9639): a doppler TARGET script that resolves its own secret through a variable named `*_KEY` (the per-host
 # key NAME an env file carries). Bound to the `_KEY` convention on purpose: the unrestricted form also matched
 # `${!_seam+x}` in inngest-luks-cutover.sh, pulling that unit into the population and turning it red.
@@ -680,8 +692,8 @@ def main():
               'changing its size must be a deliberate, visible edit'
               % (len(WRAPPER_ACK_REASONS), WRAPPER_ACK_CARDINALITY))
         return 5
-    for name, reason in sorted(WRAPPER_ACK_REASONS.items()):
-        if len(reason.strip()) < 40:
+    for name, (ack_names, reason) in sorted(WRAPPER_ACK_REASONS.items()):
+        if not ack_names or len(reason.strip()) < 40:
             print('ACK_FAIL wrapper unit=%s — wrapper-ack entries carry a written reason, not a bare name' % name)
             return 5
 
@@ -713,6 +725,11 @@ def main():
                     'directive of a `doppler run` unit: the expansion runs before the target script can refuse to '
                     'run under xtrace; resolve the key inside the script after its refusal src=%s'
                     % (u['name'], ','.join('${!%s}' % i for i in w_ind), u['source']))
+            elif set(w_ind) != set(WRAPPER_ACK_REASONS[u['name']][0]):
+                findings.append(
+                    'FINDING unit=%s reason=wrapper-acked unit expands %s but its ack names only %s: an ack covers the '
+                    'exact expansion it recorded, not the unit src=%s'
+                    % (u['name'], ','.join(w_ind), ','.join(sorted(WRAPPER_ACK_REASONS[u['name']][0])), u['source']))
         for info in infos:
             for ind in info['indirect']:
                 reasons.append('indirect-expansion:%s' % ind)
@@ -1092,7 +1109,7 @@ elif prog in ('drop-wrapper-ack', 'wrapper-pin-only', 'add-wrapper-ack'):
     else:
         # A wrapper ack for a FIXED unit (which no longer expands anything), with the pin raised to match.
         new = ("    'web-private-nic-guard.service':\n"
-               "        'a stale wrapper ack for a unit that no longer expands a secret in any Exec directive',\n")
+               "        (('WEB_NIC_GUARD_URL_KEY',), 'a stale wrapper ack for a unit that no longer expands a secret in any Exec directive'),\n")
         s2 = s.replace("WRAPPER_ACK_REASONS = {\n", "WRAPPER_ACK_REASONS = {\n" + new, 1)
         if s2 == s:
             raise SystemExit('add-wrapper-ack: dict not found')
@@ -1214,6 +1231,45 @@ expect_green "G1.9b a script using \${!_seam+x} does NOT enter the population (t
 # GH2 — must-PASS non-canonical: the fixed unit written WITHOUT the outer `bash -c` is still compliant and still counted.
 gh2() { set_execstart "$1/$NICU" 'ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/local/bin/web-private-nic-guard.sh'; }
 expect_green "GH2 a fixed unit written without the outer bash -c stays GREEN (the contract is no expansion, not one spelling)" gh2
+# G1.10 — an ack covers the EXACT expansion it recorded: a wrapper-acked unit that gains a second expansion is a finding again.
+g110() { printf '%s\n' "ExecStartPre=/bin/bash -c 'doppler run --project soleur --config prd -- bash -c '\\''export G110_X=\"\$\${!G110_OTHER_KEY}\"; true'\\'''" >> "$1/web-git-data-probe.service"; }
+expect_red "G1.10 a wrapper-acked unit gains a SECOND expansion its ack does not name" \
+  "FINDING unit=web-git-data-probe.service reason=wrapper-acked unit expands" g110
+# G1.11 — every spelling of an indirect expansion the unit-side regex must see, not only the bare and operator forms.
+g_spell() {   # <dir> <suffix after the variable name> : the nic unit's ExecStart expands ${!WEB_NIC_GUARD_URL_KEY<suffix>}
+  set_execstart "$1/$NICU" "ExecStart=/bin/bash -c 'doppler run --project soleur --config prd -- bash -c '\\''export WEB_NIC_GUARD_URL=\"\$\${!WEB_NIC_GUARD_URL_KEY$2}\"; exec /usr/local/bin/web-private-nic-guard.sh'\\'''"
+}
+g111a() { g_spell "$1" ':0:3'; }
+g111b() { g_spell "$1" '[0]'; }
+g111c() { g_spell "$1" '@'; }
+g111d() { g_spell "$1" '#p'; }
+g111e() { g_spell "$1" '/a/b'; }
+g111f() { g_spell "$1" '^^'; }
+for g111 in "a:\${!K:0:3} substring" "b:\${!K[0]} subscript" "c:\${!K@} prefix list" "d:\${!K#p} trim" "e:\${!K/a/b} replace" "f:\${!K^^} case"; do
+  expect_red "G1.11${g111%%:*} the $(printf '%s' "${g111#*:}") spelling is a wrapper expansion too" \
+    "FINDING unit=$NICU reason=wrapper expands a secret" "g111${g111%%:*}"
+done
+# G1.12 — the script-side regex across the operator group, and the comment-stripped body (settled ruling: comments do not count).
+g19c() {
+  printf '%s\n' '#!/usr/bin/env bash' 'set -u' 'URL="${!G19C_URL_KEY}"' 'echo "$URL"' > "$1/g19c.sh"
+  printf '%s\n' '[Unit]' 'Description=G1.12c fixture' '[Service]' 'Type=oneshot' \
+    'ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/local/bin/g19c.sh' > "$1/g19c.service"
+}
+expect_red "G1.12c a script resolving the bare \${!FOO_KEY} (no operator) enters the population" \
+  "FINDING unit=g19c.service reason=no --only-secrets bound" g19c
+g19d() {
+  printf '%s\n' '#!/usr/bin/env bash' 'set -u' 'URL="${!G19D_URL_KEY:?}"' 'echo "$URL"' > "$1/g19d.sh"
+  printf '%s\n' '[Unit]' 'Description=G1.12d fixture' '[Service]' 'Type=oneshot' \
+    'ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/local/bin/g19d.sh' > "$1/g19d.service"
+}
+expect_red "G1.12d a script resolving \${!FOO_KEY:?} enters the population" \
+  "FINDING unit=g19d.service reason=no --only-secrets bound" g19d
+g19e() {
+  printf '%s\n' '#!/usr/bin/env bash' 'set -u' '# URL="${!G19E_URL_KEY:-}"  (documented only, never executed)' 'echo hello' > "$1/g19e.sh"
+  printf '%s\n' '[Unit]' 'Description=G1.12e fixture' '[Service]' 'Type=oneshot' \
+    'ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/local/bin/g19e.sh' > "$1/g19e.service"
+}
+expect_green "G1.12e a \${!FOO_KEY:-} that exists only in a COMMENT does NOT enter the population (the body is comment-stripped)" g19e
 
 # ── harness rows ──────────────────────────────────────────────────────────────────────────────
 echo ""
@@ -1322,7 +1378,7 @@ expect_green "H4 runcmd doppler invocation is NOT flagged (boot self-check must 
 TOTAL=$((PASS + FAIL))
 # 25 -> 29 -> 45 (#9639: the wrapper-stage rows): set to the measured green count, not below it. Slack in a floor is the budget an
 # attacker (or an accidental deletion) gets for free.
-MIN_ASSERTIONS=45
+MIN_ASSERTIONS=55
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
   # printf + exit, NOT fail() (ADR-193): routing the floor through the counter it exists to
   # protect means one edit disarms both. See the instrument self-test at the top.

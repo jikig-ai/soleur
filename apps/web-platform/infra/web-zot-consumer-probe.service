@@ -24,8 +24,8 @@ SyslogIdentifier=web-zot-consumer-probe
 # run injects that var + ZOT_PULL_USER/ZOT_PULL_TOKEN, and the (host-agnostic) probe resolves the host's own
 # heartbeat URL itself through that key NAME, AFTER its xtrace refusal. The ExecStart below expands and exports
 # NOTHING (#9639): the URL is a credential, and a wrapper that expanded it would print it under a traced launch
-# before the probe could refuse. doppler-injection-bound.test.sh enforces that no doppler-run unit expands a
-# secret in its wrapper. Shipping the unit as a FILE keeps the nested-quoted doppler ExecStart intact.
+# before the probe could refuse. doppler-injection-bound.test.sh rejects an indirect expansion in the Exec
+# directives of a doppler-run unit.
 EnvironmentFile=/etc/default/web-zot-consumer-probe
 # #7103 R3 — the Source-4 positive control is emitted HERE, outside the doppler wrapper below.
 # Inside it, a dead prd token makes `doppler run` exit before the probe ever execs, so the

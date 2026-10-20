@@ -946,6 +946,10 @@ assert "F6 static: no Exec* directive of the unit holds an indirect expansion (t
   '[[ "$(grep -cE "^Exec[A-Za-z]*=.*[$]{1,2}[{][!]" "$SVC" || true)" -eq 0 ]]'
 assert "F6 static: ExecStart runs the script directly under doppler run: names it, holds no dollar sign and no export" \
   '[[ "$F6_LINE" == *"$F6_SCRIPT_PATH"* && "$F6_LINE" != *\$* && "$F6_LINE" != *export* && "$F6_LINE" == *"doppler run"* ]]'
+# Every Exec* line of the unit (backslash continuations joined, as systemd reads them), not only the first ExecStart.
+F6_ALLEXEC="$(awk '{ if (sub(/\\$/, "")) { buf = buf $0; next } print buf $0; buf = "" }' "$SVC" | grep -E '^Exec[A-Za-z]*=' || true)"
+assert "F6 static: EVERY Exec* directive of the unit (continuations joined) is dollar-free and export-free, so no second line can expand the secret" \
+  '[[ -n "$F6_ALLEXEC" && "$F6_ALLEXEC" != *\$* && "$F6_ALLEXEC" != *export* ]]'
 for f6_form in xtrace benv; do
   f6_launch "$F6_LINE" "$f6_form"
   assert "F6 unit[$f6_form]: the real ExecStart exits 78 with the refusal text on a non-trace line (the script RAN; got rc=$RC)" \
@@ -977,7 +981,10 @@ run_guard true 0 true
 assert "F6 key unset: a bare WEB_NIC_GUARD_URL is ignored: no beat, one reason=empty marker, a value-free key line, exit 0" \
   'no_beat && [[ "$RC" -eq 0 && "$(grep -c SOLEUR_CREDENTIAL_REFUSED <<<"$ERR" || true)" -eq 1 && "$ERR" == *"$HB_MARKER_EMPTY"* && "$ERR" == *"WEB_NIC_GUARD_URL_KEY"* && "$ERR" != *"$F6_TOK"* ]]'
 F6_PLANT="$TMP/f6-plant"
-f6_keys=(lowercase 1LEAD "A B" "A-B" "a[\$(touch $F6_PLANT)]" $'A\nB' "")
+# The upper-case-led entries reach the BODY clause of _key_ok (*[!A-Z0-9_]*), the one that stops the characters bash
+# evaluates inside ${!name}: a lowercase lead is refused earlier and would never exercise it.
+f6_keys=(lowercase 1LEAD "A B" "A-B" "a[\$(touch $F6_PLANT)]" $'A\nB' ""
+  "A[\$(touch $F6_PLANT)]" "A=B" "A.B" "A/B" "A(B)" "A\$B" "A[0]" "A[B]" "A@" "A*")
 for f6_k in "${f6_keys[@]}"; do
   rm -f "$F6_PLANT"; EXTRA_ENV=("WEB_NIC_GUARD_URL_KEY=$f6_k"); run_guard true 0 true
   f6_label="$(printf '%s' "$f6_k" | tr '\n' '~')"
@@ -989,8 +996,8 @@ for f6_k in WEB_NIC_GUARD_URL_WEB_1 WEB_NIC_GUARD_URL_WEB_2; do
   assert "F6 production-shaped key [$f6_k] resolves and delivers" '[[ "$PING" == "$F6_URL" && "$TA_PING" -eq 1 ]]'
 done
 EXTRA_ENV=(LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 WEB_NIC_GUARD_URL_KEY=f6lowerkey f6lowerkey="$F6_URL"); run_guard true 0 true
-assert "F6 locale: a lowercase key is refused under a UTF-8 locale too (a locale-collated [A-Z] would admit it)" 'no_beat && [[ "$RC" -eq 0 ]]'
-for f6_k in RANDOM PATH; do
+assert "F6 locale: a lowercase key is refused under a UTF-8 locale too (a regression pin; the LC_ALL line in _key_ok cannot be shown load-bearing on bash 5)" 'no_beat && [[ "$RC" -eq 0 ]]'
+for f6_k in RANDOM PATH BASH_ENV; do
   rm -f "$F6_PLANT"; EXTRA_ENV=("WEB_NIC_GUARD_URL_KEY=$f6_k"); run_guard true 0 true
   assert "F6 valid-but-special key [$f6_k]: read as a plain variable, nothing executed, no beat, exit 0" 'no_beat && [[ ! -e "$F6_PLANT" && "$RC" -eq 0 ]]'
 done
@@ -998,6 +1005,24 @@ done
 F6_ENVDUMP="$TMP/f6-envdump"; rm -f "$F6_ENVDUMP"; EXTRA_ENV=(STUB_ENVDUMP="$F6_ENVDUMP" WEB_NIC_GUARD_URL_SYNTH="$F6_URL"); run_guard true 0 true
 assert "F6 not exported: the resolved URL reaches no child environment (only the injected key-named variable holds it)" \
   '[[ -s "$F6_ENVDUMP" && "$(grep -v "^WEB_NIC_GUARD_URL_SYNTH=" "$F6_ENVDUMP" | grep -cF -- "$F6_URL" || true)" -eq 0 && "$(grep -cF -- "$F6_URL" "$F6_ENVDUMP" || true)" -eq 1 ]]'
+# An exported URL in the inherited environment must not stay exported: the script unsets it before assigning (the same
+# env dump, now with a pre-exported URL, must hold no URL= line at all).
+rm -f "$F6_ENVDUMP"; EXTRA_ENV=(STUB_ENVDUMP="$F6_ENVDUMP" URL="https://synthetic.invalid/beat/PRESET-9639"); run_guard true 0 true
+assert "F6 preset URL: an exported URL inherited from the environment does not ride the child environment (no URL= line in curl's env)" \
+  '[[ -s "$F6_ENVDUMP" && "$(grep -c "^URL=" "$F6_ENVDUMP" || true)" -eq 0 && "$PING" == "https://synthetic.invalid/beat/web-nic-guard" ]]'
+# The key-bad line sits inside the hourly limiter with the marker: three runs under one root give ONE marker and ONE key line.
+rm -rf "$TMP/f6-lim"; f6_marks=0; f6_keylines=0
+for f6_i in 1 2 3; do
+  FIXED_ROOT="f6-lim"; EXTRA_ENV=("WEB_NIC_GUARD_URL_KEY=lowercase"); run_guard true 0 true
+  f6_marks=$((f6_marks + $(grep -c SOLEUR_CREDENTIAL_REFUSED <<<"$ERR" || true)))
+  f6_keylines=$((f6_keylines + $(grep -c 'WEB_NIC_GUARD_URL_KEY is unset' <<<"$ERR" || true)))
+done
+assert "F6 limiter: three runs with an invalid key under one root emit exactly one marker and one key line (no flood at timer cadence)" \
+  '[[ "$f6_marks" -eq 1 && "$f6_keylines" -eq 1 ]]'
+# _key_ok is inline-copied into the zot probe (each is a standalone shipped file): the two copies must stay byte-identical.
+F6_ZOT_SUT="$(dirname "$SUT")/web-zot-consumer-probe.sh"
+assert "F6 parity: _key_ok is byte-identical in the nic-guard and zot scripts (one copy cannot lose the charset or LC_ALL=C alone)" \
+  '[[ -n "$(grep -m1 "^_key_ok()" "$SUT")" && "$(grep -m1 "^_key_ok()" "$SUT")" == "$(grep -m1 "^_key_ok()" "$F6_ZOT_SUT")" ]]'
 # Order: the lookup sits BELOW the refusal, and a mutant that hoists it above the refusal leaks under SHELLOPTS=xtrace.
 f6_line_of() { awk -v n="$1" 'index($0, n) && $0 !~ /^[[:space:]]*#/ { print NR; exit }' "$SUT"; }   # first NON-comment line holding the text
 assert "F6 order: the indirect lookup is on a later line than the xtrace refusal" \
@@ -1029,7 +1054,7 @@ if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
   printf '\n[FATAL] accounting identity: PASS(%d) + FAIL(%d) != CASES(%d). An assertion recorded no verdict or more than one.\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
-MIN_CASES=347
+MIN_CASES=362
 if [[ "$CASES" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity floor: only %d assertions ran; floor is %d\n' "$CASES" "$MIN_CASES" >&2
   exit 1

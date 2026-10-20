@@ -2,12 +2,14 @@
 set -u
 # Refuse to run under shell tracing while the pull credential is set: `set -x` would write the
 # Basic-auth token into the journal that Vector ships off-box (#7797). The refusal is CONDITIONAL: it fires when the
-# pull credential OR the heartbeat key name (WEB_ZOT_CONSUMER_URL_KEY, always in the env file) is set, i.e. whenever
-# this script would resolve a credential. The heartbeat URL is one: it is resolved BELOW, after this refusal, from the
-# variable NAME in WEB_ZOT_CONSUMER_URL_KEY, and the unit's ExecStart expands nothing (#9639).
+# pull credential is set, OR when the heartbeat key name (WEB_ZOT_CONSUMER_URL_KEY, always in the env file) is set and
+# this is not the --canary-only launch. The heartbeat URL is a credential too: it is resolved BELOW, after this
+# refusal, from the variable NAME in WEB_ZOT_CONSUMER_URL_KEY, and the unit's ExecStart expands nothing (#9639).
+# --canary-only runs outside `doppler run` with no URL to resolve, so the key name alone does not refuse it and a traced
+# canary still emits (only a pull credential refuses it, exactly as before).
 case "$-" in
   *x*)
-    if [ -n "${WEB_ZOT_CONSUMER_URL_KEY:+x}${ZOT_PULL_TOKEN:+x}${ZTOK:+x}" ]; then
+    if [ -n "${ZOT_PULL_TOKEN:+x}${ZTOK:+x}" ] || { [ "${1:-}" != "--canary-only" ] && [ -n "${WEB_ZOT_CONSUMER_URL_KEY:+x}" ]; }; then
       printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
       exit 78
     fi
@@ -104,6 +106,8 @@ REPO="${ZOT_PROBE_REPO:-}"
 ZUSER="${ZUSER:-${ZOT_PULL_USER:-}}"
 ZTOK="${ZTOK:-${ZOT_PULL_TOKEN:-}}"
 # URL is resolved after the xtrace refusal and the --canary-only exit (see "THE HEARTBEAT URL" below); until then it is empty.
+# `unset` first: an exported URL in the inherited environment would keep its export attribute through the assignments below.
+unset URL
 URL=""
 KEY_BAD=false
 # Happy-path stderr is shipped off-box via Vector Source 4 (SyslogIdentifier=web-zot-consumer-probe);
@@ -160,6 +164,7 @@ _refused() {
   now=$(date +%s 2>/dev/null || echo 0)
   reason=token_shape
   case "$URL" in *[[:cntrl:]]*) reason=control_char ;; esac
+  # var=WEB_ZOT_CONSUMER_URL is a stable decode label, not the name of a variable this script reads (that name is held by WEB_ZOT_CONSUMER_URL_KEY).
   echo "SOLEUR_CREDENTIAL_REFUSED script=web-zot-consumer-probe reason=$reason var=WEB_ZOT_CONSUMER_URL" >&2
   echo "[zot-probe] WARN: heartbeat URL refused (servable, no ping sent)" >&2
   _stamp "$m" "$now"
@@ -234,8 +239,8 @@ _repo_markers() {
 # that runs OUTSIDE the `doppler run` wrapper.
 #
 # THE DEFECT THIS CLOSES. The unit's ExecStart is
-#   doppler run --project soleur --config prd -- bash -c '... exec web-zot-consumer-probe.sh'
-# so on a dead prd token `doppler run` exits before the inner bash ever execs and the canary is
+#   doppler run --project soleur --config prd -- /usr/local/bin/web-zot-consumer-probe.sh
+# so on a dead prd token `doppler run` exits before the probe ever execs and the canary is
 # never emitted. The positive control for "is vector shipping?" was therefore gated behind
 # exactly the credential whose failure it is used to certify — and its absence reads as
 # "vector is dead" rather than "the token is dead". That is the reading that made #7095's
@@ -253,8 +258,10 @@ fi
 # (WEB_ZOT_CONSUMER_URL_KEY, one per host, written by the *_install provisioner) and this script reads that variable
 # HERE, after the xtrace refusal above and after the --canary-only exit (which runs outside `doppler run` and sends no
 # heartbeat). The NAME comes from an env file, and `${!name}` evaluates array subscripts and command substitutions
-# inside `name`, so it is judged first: an upper-case identifier or nothing (LC_ALL=C: a locale-collated [A-Z] admits
-# lowercase). No fallback to a bare variable of any other name; the value stays in this shell's variable, never exported.
+# inside `name`, so it is judged first: an upper-case identifier or nothing (LC_ALL=C pins ASCII ranges for exotic
+# collations; bash 5 with globasciiranges already does, so this line is defence in depth that no test can exercise here).
+# No fallback to a bare variable of any other name. This script never exports the resolved value; doppler's own injected
+# copy under the key-named variable is still inherited by children, as before this change.
 _key_ok() { local LC_ALL=C; case "${1:-}" in ''|[!A-Z]*|*[!A-Z0-9_]*) return 1 ;; esac; }
 if _key_ok "${WEB_ZOT_CONSUMER_URL_KEY:-}"; then URL="${!WEB_ZOT_CONSUMER_URL_KEY:-}"; else KEY_BAD=true; fi
 

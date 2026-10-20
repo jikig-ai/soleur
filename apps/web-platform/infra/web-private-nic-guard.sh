@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -u
 # Refuse to run under xtrace (#7797): this guard handles a Better Stack bearer token and a secret
-# heartbeat URL (WEB_NIC_GUARD_URL), so tracing would print them. Unconditional on purpose: it is not
+# heartbeat URL (the variable named by WEB_NIC_GUARD_URL_KEY), so tracing would print them. Unconditional on purpose: it is not
 # keyed on a credential name, which no name rule can see for the heartbeat URL. It tests the STATE
 # (`$-`), so `bash -x`, SHELLOPTS=xtrace and a BASH_ENV `set -x` are all caught. The guard therefore
 # cannot be traced on-host by design: read its stderr via `journalctl -t web-nic-guard` (shipped to
@@ -25,7 +25,7 @@ esac
 # ways — an SSH `terraform_data` provisioner ships it to the unrebuildable web-1, and cloud-init
 # bakes it verbatim (as a templatefile VARIABLE, not inline) for future hosts (#6459). So it reads
 # every per-host value from /etc/default/web-private-nic-guard (EXPECTED_IP, BETTERSTACK_INGEST_URL)
-# + the doppler-run env (BETTERSTACK_LOGS_TOKEN, WEB_NIC_GUARD_URL). No TF `$${...}` escaping —
+# + the doppler-run env (BETTERSTACK_LOGS_TOKEN and the heartbeat URL, under the name WEB_NIC_GUARD_URL_KEY holds). No TF `$${...}` escaping —
 # plain bash — so the byte-identical file survives both delivery routes with zero drift.
 #
 # Registry-specific machinery is INTENTIONALLY ABSENT: the zot store-mount self-heal + `docker
@@ -148,10 +148,13 @@ fi
 # The unit no longer exports the URL: it names the variable doppler injected it under (WEB_NIC_GUARD_URL_KEY, one per
 # host, written by the *_install provisioner), and this script reads that variable HERE, after the xtrace refusal.
 # The NAME comes from an env file, and `${!name}` evaluates array subscripts and command substitutions inside `name`,
-# so it is judged first: an upper-case identifier or nothing (LC_ALL=C: a locale-collated [A-Z] admits lowercase).
-# There is no fallback to a bare variable of any other name. The value stays in this shell's own variable and is never
-# exported, so no child process (curl) inherits it.
+# so it is judged first: an upper-case identifier or nothing (LC_ALL=C pins ASCII ranges for exotic collations; bash 5
+# with globasciiranges already does, so this line is defence in depth that no test can exercise here).
+# There is no fallback to a bare variable of any other name. This script never exports the resolved value; doppler's own
+# injected copy under the key-named variable is still inherited by children, as before this change.
 _key_ok() { local LC_ALL=C; case "${1:-}" in ''|[!A-Z]*|*[!A-Z0-9_]*) return 1 ;; esac; }
+# `unset` first: an exported URL in the inherited environment would keep its export attribute through the assignments below.
+unset URL
 URL=""
 KEY_BAD=false
 if _key_ok "${WEB_NIC_GUARD_URL_KEY:-}"; then URL="${!WEB_NIC_GUARD_URL_KEY:-}"; else KEY_BAD=true; fi
@@ -195,6 +198,8 @@ if [ "$NIC_OK" = true ] && [ "$SHIP_REFUSED" = false ]; then
   if [ -z "$URL" ]; then
     # An unset beat URL (a wrong key name, or a secret missing on a freshly replaced host) pages "host down" with
     # nothing off-box saying why: same hourly limiter, reason=empty (the inngest heartbeat body uses the same token).
+    # var=WEB_NIC_GUARD_URL below is a stable decode label (the runbook keys on it), not the name of a variable this
+    # script reads: the real name is whatever WEB_NIC_GUARD_URL_KEY holds. The key-bad line sits inside the limiter too.
     if _refusal_due; then
       echo "SOLEUR_CREDENTIAL_REFUSED script=web-private-nic-guard reason=empty var=WEB_NIC_GUARD_URL" >&2
       [ "$KEY_BAD" = true ] && echo "[nic] WARN: WEB_NIC_GUARD_URL_KEY is unset or is not an upper-case variable name (the value is not shown); the heartbeat URL cannot be resolved." >&2
