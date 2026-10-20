@@ -440,3 +440,59 @@ the runner, suites and monitor are all already modeled).
 - Issue: #7376 (OPEN); related: #7432, #7554, #9217, #9554, #10459, #7423, #7429
 - Monitor soak runs observed: 39298929992 (clean), 39345015242 (`-P 4`, 179/180,
   1 deterministic tag-drift RED — allowlisted class, instrument attributed it)
+
+## Enhancement Summary (deepen-plan, 2026-10-20)
+
+`Reviewed-Coverage: sequential-fallback` — this harness has no spawn/Task tool;
+every deepen-plan fan-out (per-section research, round-1 realism passes, review
+agents) ran sequentially inline in the planning process. No independent review
+ran in a second context.
+
+### Gate results
+
+- 4.4 Precedent-diff: precedent identified and cited (`FILES_7376` /
+  `SWEEP_DEFERRALS` file-exact zero-pin convention in
+  `.claude/hooks/grep-q-pipe-guard.test.sh`); scheduled-work check N/A (no new
+  cron/poll).
+- 4.45 Verify-the-negative: the plan's negative claims were each grepped this
+  session and hold — docker names/tags `$$`-scoped; sole host port bind inside
+  a docker netns; zero `mktemp --dry-run` in the execute set; zero UNACCOUNTED
+  in the observed soak runs.
+- 4.5 Network-outage checklist: gate fired on the token `timeout`; deep-dive
+  not applicable — the plan investigates a parallel test-harness flake, no
+  SSH/connectivity hypothesis exists.
+- 4.6 User-Brand Impact: PASS (threshold `none` + scope-out line; the
+  sensitive-path regex matches `apps/[^/]+/infra/`, so the scope-out bullet is
+  load-bearing and present).
+- 4.7 Observability: PASS (5/5 fields; probe `bash ... --list` is allowlisted,
+  ssh-free, sub-second, literal `expected_output`).
+- 4.8 PAT-shaped variables: none.
+- 4.9 UI wireframe: skipped (no UI surface).
+- 4.10 Encryption Posture: skipped (no persistent store / new connection).
+- 4.11 Guard Contract: PASS — `scripts/lint-guard-contract.py` reports 1 guard
+  entry with ≥3 mutation rows.
+- 4.12 Scope Check: PASS — all four asks mapped (one as
+  `mapped — established-not-triggered`, one as `mapped — pre-satisfied`),
+  inferred items carry justifications.
+
+### Findings folded in during deepen
+
+- SpecFlow caught `mktemp --dry-run` as the `-u` long-form alias — the guard
+  pattern now covers both spellings (Phase 2).
+- Sharp-edge 128 (absence-grep self-reference): AC1 rewritten to anchor on the
+  T-case verdict rather than a raw `git grep` that would false-fail on the
+  `workspaces-luks-g4-mutation.test.sh:939` string payload.
+- `inngest-redis-luks` fix uses `${TMPDIR:-/tmp}` fallback so a standalone
+  (non-runner) invocation keeps working.
+- Exemption lines print file:line + reason token so marker growth is a visible
+  diff (advisor-consult addition, applied at plan time).
+
+### New considerations discovered
+
+- The guard must NOT extend to a bare-`/tmp` write prohibition: the audit found
+  ~11 files whose `/tmp` writes are container-scoped or the rung2 workflow
+  contract — all legal; a line search cannot see the boundary.
+- `mktemp -u`'s man page literally flags the form "(unsafe)" — reinforcing the
+  zero-assert property.
+- The third soak run (39378082716) was still in-flight at plan time; Phase 3.4
+  re-harvests before the issue comment posts.
