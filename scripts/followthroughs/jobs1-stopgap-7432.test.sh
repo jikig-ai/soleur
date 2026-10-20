@@ -8,7 +8,8 @@
 # non-empty). It also models the real gh 2.102 refusal: the job-log endpoint exits 1 with "the response contains
 # terminal escape sequences" unless `--allow-escape-sequences` is passed, and every fixture log carries an ESC byte,
 # as every real monitor log does. Without that, the probe's log fetch could be wrong in production and green here.
-# Fixtures are synthesized (run ids are 9xxxx, the tracker number is the real #7432 only because the probe names it).
+# Fixtures are synthesized (run ids are 9xxxx, plus the two real judged ids the committed probe pins at R4b4; the
+# tracker number is the real #7432 only because the probe names it).
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 export TZ=UTC
