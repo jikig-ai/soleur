@@ -10,7 +10,7 @@
 # templatefile — un-indent -> substitute TF vars -> un-escape `$${`), this guard is ENV-DRIVEN
 # PLAIN BASH delivered byte-identically by BOTH routes (SSH provisioner + cloud-init variable),
 # so we EXECUTE THE REAL .sh DIRECTLY against synthesized fixtures + PATH stubs. Env seams:
-# EXPECTED_IP, BETTERSTACK_INGEST_URL, BETTERSTACK_LOGS_TOKEN, WEB_NIC_GUARD_URL, and the
+# EXPECTED_IP, BETTERSTACK_INGEST_URL, BETTERSTACK_LOGS_TOKEN, WEB_NIC_GUARD_URL_KEY (+ the variable it names), and the
 # SOLEUR_NIC_TEST_ROOT FS-read re-root (cq-test-fixtures-synthesized-only).
 #
 # AC4 (the load-bearing one) has TWO parts:
@@ -99,7 +99,7 @@ printf '%s\n' "${STUB_IP_OUT:-}"
 EOS
 
 # `curl` serves three callers: the IMDS probe (private-networks), the Better Stack POST
-# (--data-raw), and the liveness heartbeat ping (WEB_NIC_GUARD_URL on its stdin config, the only other curl).
+# (--data-raw), and the liveness heartbeat ping (the resolved heartbeat URL on its stdin config, the only other curl).
 cat > "$BIN/curl" <<'EOS'
 #!/usr/bin/env bash
 # Log argv FIRST (before the IMDS early exit), one argument per line (printf, never echo: -n is a
@@ -140,6 +140,7 @@ fi
 # Otherwise this is the heartbeat ping. The URL never rides argv any more: it is the value of the
 # `url = "..."` line on the stdin config. A call whose stdin lost that line records an EMPTY line, which the
 # suite reads as "no URL" (T1 and the healthy-run row go RED; the negative rows are backed by TA_PING).
+[[ -n "${STUB_ENVDUMP:-}" ]] && env | grep -E '^URL=|synthetic\.invalid' > "$STUB_ENVDUMP"   # filtered by VALUE (any name holding the URL is kept), never the whole ambient environment
 url=$(printf '%s\n' "$cfg_in" | sed -n 's/^url = "\(.*\)"$/\1/p' | sed -n '1p')
 printf '%s\n' "$url" >> "$STUB_PING"
 exit "${STUB_PING_RC:-0}"
@@ -159,6 +160,16 @@ cat > "$BIN/sleep" <<'EOS'
 exit 0
 EOS
 
+# `doppler run ... -- CMD`: skip to the `--` and exec CMD. It never expands or exports the secret itself (its own
+# xtrace would print the value and void the #9639 leak control); the secret is pre-exported in the test environment,
+# as `doppler run` would inject it.
+cat > "$BIN/doppler" <<'EOS'
+#!/usr/bin/env bash
+while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done
+shift
+exec "$@"
+EOS
+
 chmod +x "$BIN"/*
 
 # --- Fixture harness ---------------------------------------------------------------------
@@ -174,6 +185,8 @@ SUT_UNDER_TEST=""
 FIXED_ROOT=""   # BASENAME of a root under $TMP reused across runs (the refusal limiter's stamp lives under it); default is a fresh root per run
 LAUNCH_FLAGS=()
 EXTRA_ENV=()
+UNSET_EXTRA=()   # extra `-u NAME` words for env (env stops option parsing at the first NAME=value, so these cannot ride EXTRA_ENV)
+UNIT_LINE=""     # when set, run THIS command line (a unit's real ExecStart, $$ unescaped) through `eval` instead of `bash $SUT`
 run_guard() {
   local ip_present="$1" imds_rc="$2" imds_expected="$3" hide_ip="${4:-false}"
   local root="$TMP/${FIXED_ROOT:-root.$$.$RANDOM}"
@@ -226,14 +239,22 @@ run_guard() {
   fi
 
   local sut="${SUT_UNDER_TEST:-$SUT}"
-  "$ENV_BIN" -u BASH_ENV -u SHELLOPTS -u STUB_POST_RC -u STUB_PING_RC -u INGEST_URL_PINNED \
+  local -a launch keydef=(WEB_NIC_GUARD_URL_KEY=WEB_NIC_GUARD_URL_SYNTH)
+  [[ ${#UNSET_EXTRA[@]} -eq 0 ]] || keydef=()   # an env `-u NAME` before the assignments would be undone by the default assignment
+  # shellcheck disable=SC2016  # the eval program is single-quoted on purpose: bash -c receives $1 literally
+  if [[ -n "$UNIT_LINE" ]]; then launch=("$BASH_BIN" -c 'eval "$1"' _ "$UNIT_LINE"); else launch=("$BASH_BIN" ${LAUNCH_FLAGS[@]+"${LAUNCH_FLAGS[@]}"} "$sut"); fi
+  # The default heartbeat URL arrives the way `doppler run` delivers it: under the per-host key NAME the env file
+  # carries (WEB_NIC_GUARD_URL_KEY), never under a bare name the guard would read (#9639 F6).
+  "$ENV_BIN" -u BASH_ENV -u SHELLOPTS -u STUB_POST_RC -u STUB_PING_RC -u INGEST_URL_PINNED -u WEB_NIC_GUARD_URL -u STUB_ENVDUMP \
+    ${UNSET_EXTRA[@]+"${UNSET_EXTRA[@]}"} \
     PATH="$run_path" EXPECTED_IP="$TEST_IP" SOLEUR_NIC_TEST_ROOT="$root" \
     BETTERSTACK_LOGS_TOKEN=synthetic-token BETTERSTACK_INGEST_URL="$PINNED_URL" \
-    WEB_NIC_GUARD_URL="https://synthetic.invalid/beat/web-nic-guard" \
+    ${keydef[@]+"${keydef[@]}"} \
+    WEB_NIC_GUARD_URL_SYNTH="https://synthetic.invalid/beat/web-nic-guard" \
     ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"} \
-    "$TIMEOUT_BIN" 10 "$BASH_BIN" ${LAUNCH_FLAGS[@]+"${LAUNCH_FLAGS[@]}"} "$sut" >"$root/out" 2>"$root/err"
+    "$TIMEOUT_BIN" 10 "${launch[@]}" >"$root/out" 2>"$root/err"
   RC=$?
-  SUT_UNDER_TEST=""; FIXED_ROOT=""; LAUNCH_FLAGS=(); EXTRA_ENV=()
+  SUT_UNDER_TEST=""; FIXED_ROOT=""; LAUNCH_FLAGS=(); EXTRA_ENV=(); UNSET_EXTRA=(); UNIT_LINE=""
 
   # shellcheck disable=SC2034  # consumed by assert() conditions via eval
   OUT="$(cat "$root/out" 2>/dev/null || true)"
@@ -450,7 +471,7 @@ printf 'set -x\n' > "$TMP/xt.env"
 # --- X1: xtrace refusal, three launch forms (two of them carry no `-x` token) --------------
 echo "--- X1: the guard refuses to run under xtrace ---"
 for form in bash-x SHELLOPTS BASH_ENV; do
-  EXTRA_ENV=(BETTERSTACK_LOGS_TOKEN="$SYNTH_TOKEN" WEB_NIC_GUARD_URL="$SYNTH_BEAT")
+  EXTRA_ENV=(BETTERSTACK_LOGS_TOKEN="$SYNTH_TOKEN" WEB_NIC_GUARD_URL_SYNTH="$SYNTH_BEAT")
   case "$form" in
     bash-x)   LAUNCH_FLAGS=(-x) ;;
     SHELLOPTS) EXTRA_ENV+=(SHELLOPTS=xtrace) ;;
@@ -641,7 +662,7 @@ assert "HB healthy run: exactly one ping call and exactly one stdin url line (th
 assert "HB healthy run: no marker, no WARN, nothing on stdout, exit 0" \
   "[[ \"\$ERR\" != *SOLEUR_CREDENTIAL_REFUSED* && \"\$ERR\" != *WARN* && -z \"\$OUT\" && \"\$RC\" -eq 0 ]]"
 HB_PUNCT="https://synthetic.invalid/beat/A.b_c~d:9?x=1&y=%2B+z-Q"
-EXTRA_ENV=("WEB_NIC_GUARD_URL=$HB_PUNCT")
+EXTRA_ENV=("WEB_NIC_GUARD_URL_SYNTH=$HB_PUNCT")
 run_guard true 0 true
 assert "HB a different token using every permitted punctuation class beats once, on stdin only, unrefused (positive control)" \
   "[[ \"\$PING\" == \"\$HB_PUNCT\" && \"\$TA_PING\" -eq 1 && \"\$ERR\" != *SOLEUR_CREDENTIAL_REFUSED* ]] && ! grep -qF 'A.b_c' \"\$ARGV_FILE\""
@@ -654,7 +675,7 @@ assert "HB per-attempt: both attempts failing is a WARN with exit 0, never a ref
 assert "HB per-attempt: every ping used the golden argv with a zero tail (ALL transport rows stay clean)" "[[ \"\$TA_BAD\" -eq 0 ]]"
 # An UNSET beat URL on a healthy, shippable guard is now surfaced (it used to lapse the beat with no off-box reason):
 # the same hourly limiter, reason=empty, still no request.
-EXTRA_ENV=(WEB_NIC_GUARD_URL=)
+EXTRA_ENV=(WEB_NIC_GUARD_URL_SYNTH=)
 run_guard true 0 true
 assert "HB empty URL (healthy NIC, shippable): no ping on any witness, exit 0, nothing on stdout" "no_beat && [[ \"\$RC\" -eq 0 && -z \"\$OUT\" ]]"
 assert "HB empty URL (healthy NIC, shippable): exactly one marker, and it is exactly reason=empty with the variable name" \
@@ -665,15 +686,15 @@ assert "HB empty URL (healthy NIC, shippable): the Better Stack POST is unaffect
   "[[ \"\$TA_POST\" -eq 1 && -n \"\$EMIT\" && \"\$TA_BAD\" -eq 0 && \"\$TA_BEARER_BAD\" -eq 0 ]]"
 # A beat nobody would have attempted needs no explanation: a broken NIC, or a guard that cannot report, lapses the beat
 # for its OWN reason, and an empty URL adds no marker on top of it.
-EXTRA_ENV=(WEB_NIC_GUARD_URL=)
+EXTRA_ENV=(WEB_NIC_GUARD_URL_SYNTH=)
 run_guard false 0 true
 assert "HB empty URL on a broken NIC: no ping, no marker, no URL WARN (the beat lapses for its real reason)" \
   "no_beat && [[ \"\$ERR\" != *SOLEUR_CREDENTIAL_REFUSED* && \"\$ERR\" != *'heartbeat URL'* && \"\$(field nic_ok)\" == false ]]"
-EXTRA_ENV=(WEB_NIC_GUARD_URL= BETTERSTACK_LOGS_TOKEN=)
+EXTRA_ENV=(WEB_NIC_GUARD_URL_SYNTH= BETTERSTACK_LOGS_TOKEN=)
 run_guard true 0 true
 assert "HB empty URL when the guard cannot report (no token): no ping, no marker, no URL WARN (SHIP_REFUSED already withholds)" \
   "no_beat && [[ \"\$ERR\" != *SOLEUR_CREDENTIAL_REFUSED* && \"\$ERR\" != *'heartbeat URL'* && \"\$ERR\" == *WARN* ]]"
-EXTRA_ENV=(WEB_NIC_GUARD_URL= BETTERSTACK_INGEST_URL=https://evil.invalid/)
+EXTRA_ENV=(WEB_NIC_GUARD_URL_SYNTH= BETTERSTACK_INGEST_URL=https://evil.invalid/)
 run_guard true 0 true
 assert "HB empty URL when the ingest URL is unpinned: no ping, no marker, no URL WARN" \
   "no_beat && [[ \"\$ERR\" != *SOLEUR_CREDENTIAL_REFUSED* && \"\$ERR\" != *'heartbeat URL'* && \"\$ERR\" == *unpinned_url* ]]"
@@ -714,7 +735,7 @@ assert "HB hostile list: the content carries the bytes it names (quote, apostrop
   "[[ \"\${HB_VALUES[5]}\" == *'\"' && \"\${HB_VALUES[6]}\" == *\"'\" && \"\${HB_VALUES[7]}\" == *'\\'* && \"\${HB_VALUES[8]}\" == *\$'\\n'* && \"\${HB_VALUES[9]}\" == *\$'\\r' && \"\${HB_VALUES[10]}\" == *\$'\\t' && \"\${HB_VALUES[11]}\" == *';'* && \"\${HB_VALUES[12]}\" == *'\$'* && \"\${HB_VALUES[13]}\" == *'\`'* && \"\${HB_VALUES[14]}\" == *'@'* && \"\${HB_VALUES[15]}\" == *'#'* && \"\${HB_VALUES[3]}\" == ' '* && \"\${HB_VALUES[4]}\" == *' ' && \"\${HB_VALUES[0]}\" == 'https://' ]]"
 for ((hi = 0; hi < ${#HB_VALUES[@]}; hi++)); do
   hl="${HB_LABELS[hi]}"; hv="${HB_VALUES[hi]}"; hr="${HB_REASONS[hi]}"
-  EXTRA_ENV=("WEB_NIC_GUARD_URL=$hv")
+  EXTRA_ENV=("WEB_NIC_GUARD_URL_SYNTH=$hv")
   run_guard true 0 true
   assert "HB refused[$hl]: zero ping calls, no stdin url line, the beat is withheld (argv count, parsed URL and stdin all agree)" "no_beat"
   assert "HB refused[$hl]: exactly one marker with reason=$hr and the variable name, and exactly one WARN (both lines matched whole)" \
@@ -727,10 +748,10 @@ for ((hi = 0; hi < ${#HB_VALUES[@]}; hi++)); do
 done
 # A refusal is a property of a beat that WOULD have been sent: a broken NIC (or a guard that cannot report)
 # already withholds it, so the judgement never runs and no marker is filed for a beat nobody attempted.
-EXTRA_ENV=("WEB_NIC_GUARD_URL=${HB_GOOD}\"")
+EXTRA_ENV=("WEB_NIC_GUARD_URL_SYNTH=${HB_GOOD}\"")
 run_guard false 0 true
 assert "HB a hostile URL on a broken NIC: no ping and no marker (the existing predicate is unchanged)" "no_beat && [[ \"\$ERR\" != *SOLEUR_CREDENTIAL_REFUSED* ]]"
-EXTRA_ENV=("WEB_NIC_GUARD_URL=${HB_GOOD}\"" BETTERSTACK_LOGS_TOKEN=)
+EXTRA_ENV=("WEB_NIC_GUARD_URL_SYNTH=${HB_GOOD}\"" BETTERSTACK_LOGS_TOKEN=)
 run_guard true 0 true
 assert "HB a hostile URL when the guard cannot report: no ping and no marker (SHIP_REFUSED already withholds)" "no_beat && [[ \"\$ERR\" != *SOLEUR_CREDENTIAL_REFUSED* ]]"
 
@@ -740,7 +761,7 @@ echo "--- heartbeat URL refusal limiter: own stamp, one marker per window ---"
 HB_BAD="${HB_GOOD}\""
 STAMP_NAME="web-private-nic-guard.refusal"
 lim_run() {  # <root path under $TMP> -> leaves LIM_MARKERS (markers on this run's stderr)
-  FIXED_ROOT="${1#"$TMP"/}"; EXTRA_ENV=("WEB_NIC_GUARD_URL=$HB_BAD")
+  FIXED_ROOT="${1#"$TMP"/}"; EXTRA_ENV=("WEB_NIC_GUARD_URL_SYNTH=$HB_BAD")
   run_guard true 0 true
   LIM_MARKERS=$(grep -c SOLEUR_CREDENTIAL_REFUSED <<<"$ERR" || true)
 }
@@ -763,7 +784,7 @@ assert "HB limiter: the suppressed runs also withheld the WARN (marker and WARN 
 LIM1E="$TMP/lim1e"; rm -rf "$LIM1E"; mkdir -p "$LIM1E"
 lime_marks=0; lime_warns=0; lime_pings=0; lime_posts=0; lime_bad=0
 for _ in 1 2 3 4; do
-  FIXED_ROOT="${LIM1E#"$TMP"/}"; EXTRA_ENV=("WEB_NIC_GUARD_URL=")
+  FIXED_ROOT="${LIM1E#"$TMP"/}"; EXTRA_ENV=("WEB_NIC_GUARD_URL_SYNTH=")
   run_guard true 0 true
   lime_marks=$((lime_marks + $(grep -c SOLEUR_CREDENTIAL_REFUSED <<<"$ERR" || true)))
   lime_warns=$((lime_warns + $(grep -c 'heartbeat URL unset' <<<"$ERR" || true)))
@@ -855,7 +876,7 @@ assert "HB limiter: an unwritable stamp path fails OPEN (a marker on every run, 
 assert "HB limiter: the unwritable stamp costs no exit status and leaks no shell error text" \
   "[[ \"\$lim7_rc\" -eq 0 && \"\$RC\" -eq 0 && \"\$lim7_err_noise\" -eq 0 ]]"
 LIM8="$TMP/lim8"; rm -rf "$LIM8"; mkdir -p "$LIM8"
-FIXED_ROOT="${LIM8#"$TMP"/}"; EXTRA_ENV=("WEB_NIC_GUARD_URL=$HB_BAD"); run_guard true 0 true
+FIXED_ROOT="${LIM8#"$TMP"/}"; EXTRA_ENV=("WEB_NIC_GUARD_URL_SYNTH=$HB_BAD"); run_guard true 0 true
 assert "HB limiter: the stamp lives under SOLEUR_NIC_TEST_ROOT (nothing leaked to the real /run in a test)" \
   "[[ -f '$LIM8/run/$STAMP_NAME' ]]"
 
@@ -892,10 +913,155 @@ assert "static: no code line carrying a curl word names the heartbeat URL variab
   "[[ \"\$(grep -E 'curl' <<<\"\$STRIPPED\" | grep -E '\\\$\\{?URL\\}?\\b' | grep -vF 'printf' | wc -l)\" -eq 0 ]]"
 assert "static: _hb_url_ok is called before the transport and the transport is called twice (the || fallback)" \
   "grep -qF '_hb_url_ok \"\$URL\"' <<<\"\$STRIPPED\" && [[ \"\$(grep -cF '_hb_curl ||' <<<\"\$STRIPPED\" || true)\" -ge 1 ]]"
-assert "static: the comment no longer claims the URL rides argv, and still names #9639 for the unit expansion" \
-  "! grep -qF \"still rides curl's argv\" '$SUT' && grep -qF '#9639' '$SUT'"
+assert "static: the comment no longer claims the URL rides argv, and no longer reports the unit expansion as a tracked limitation" \
+  "! grep -qF \"still rides curl's argv\" '$SUT' && ! grep -qF 'tracked as #9639' '$SUT' && ! grep -qF 'still tracks only the unit' '$SUT'"
 assert "static: no set -e was added (a failed beat or refusal must never change the exit status)" \
   "! grep -qE '^[[:space:]]*set -[a-z]*e' <<<\"\$STRIPPED\""
+
+# --- #9639 F6: the unit stops expanding the secret; the script resolves it AFTER the xtrace refusal ------------------
+# Before: ExecStart ran `bash -c 'export WEB_NIC_GUARD_URL="${!WEB_NIC_GUARD_URL_KEY}"; exec <script>'` under `doppler run`,
+# so a traced launch printed the heartbeat URL (its path is the secret) before the script's refusal could run. Now the
+# unit runs the script directly and the script reads WEB_NIC_GUARD_URL_KEY, validates the NAME, and expands it itself.
+echo "--- F6 (#9639): unit wrapper expands nothing; lookup follows the refusal ---"
+# shellcheck disable=SC2016  # the F6 conditions are single-quoted on purpose: assert() evals them in this shell, where the variables are live
+F6_URL="https://synthetic.invalid/beat/F6-SECRET-9639"
+F6_TOK="F6-SECRET-9639"
+F6_SCRIPT_PATH="/usr/local/bin/web-private-nic-guard.sh"
+F6_LINE="$(sed -n 's/^ExecStart=//p' "$SVC" | sed -n '1p' | sed 's/\$\$/$/g')"   # systemd's $$ is a literal $
+# The pre-fix ExecStart, kept ONLY as the leak control's mutant (never compared with the tree).
+F6_OLD_LINE="/bin/bash -c 'doppler run --project soleur --config prd -- bash -c '\\''export WEB_NIC_GUARD_URL=\"\${!WEB_NIC_GUARD_URL_KEY}\"; exec $F6_SCRIPT_PATH'\\'''"
+# The unit execs the script path itself, so the launch needs an executable file (the repo copy is not mode +x).
+F6_EXEC="$TMP/f6-exec-web-private-nic-guard.sh"; cp "$SUT" "$F6_EXEC"; chmod +x "$F6_EXEC"
+mkdir -p "$TMP/dead"; printf '#!/usr/bin/env bash\nexit 0\n' > "$TMP/dead/doppler"; chmod +x "$TMP/dead/doppler"
+# systemd runs the line itself; eval over the same text is faithful here because systemd's '\'' quoting reads like the shell's.
+f6_launch() {   # <line> <none|xtrace|benv> : run the unit's ExecStart text with the script path rewritten to the SUT
+  local line="$1" form="$2"
+  [[ "$line" == *"$F6_SCRIPT_PATH"* ]] || { printf '[FATAL] f6_launch: the ExecStart text does not name %s; the rewrite would be a silent no-op\n' "$F6_SCRIPT_PATH" >&2; exit 1; }
+  UNIT_LINE="${line//"$F6_SCRIPT_PATH"/${SUT_UNDER_TEST:-$F6_EXEC}}"
+  EXTRA_ENV+=(WEB_NIC_GUARD_URL_SYNTH="$F6_URL")
+  case "$form" in xtrace) EXTRA_ENV+=(SHELLOPTS=xtrace) ;; benv) EXTRA_ENV+=(BASH_ENV="$TMP/xt.env") ;; esac
+  run_guard true 0 true
+}
+assert "F6 static: no Exec* directive of the unit holds an indirect expansion (the secret is not expanded by systemd's wrapper)" \
+  '[[ "$(grep -cE "^[[:space:]]*Exec[A-Za-z]*=.*[$]{1,2}[{][!]" "$SVC" || true)" -eq 0 ]]'
+assert "F6 static: ExecStart runs the script directly under doppler run: names it, holds no dollar sign and no export" \
+  '[[ "$F6_LINE" == *"$F6_SCRIPT_PATH"* && "$F6_LINE" != *\$* && "$F6_LINE" != *export* && "$F6_LINE" == *"doppler run"* ]]'
+# Every Exec* line of the unit (backslash continuations joined, as systemd reads them), not only the first ExecStart.
+# shellcheck disable=SC2034  # read inside the single-quoted assert() condition
+F6_ALLEXEC="$(awk '{ if (sub(/\\$/, "")) { buf = buf $0; next } print buf $0; buf = "" }' "$SVC" | grep -E '^[[:space:]]*Exec[A-Za-z]*=' || true)"
+assert "F6 static: EVERY Exec* directive of the unit (continuations joined) is dollar-free and export-free, so no second line can expand the secret" \
+  '[[ -n "$F6_ALLEXEC" && "$F6_ALLEXEC" != *\$* && "$F6_ALLEXEC" != *export* ]]'
+for f6_form in xtrace benv; do
+  f6_launch "$F6_LINE" "$f6_form"
+  assert "F6 unit[$f6_form]: the real ExecStart exits 78 with the refusal text on a non-trace line (the script RAN; got rc=$RC)" \
+    '[[ "$RC" -eq 78 ]] && [[ "$(grep -v "^+" <<<"$ERR" | grep -c "refusing to run under xtrace" || true)" -ge 1 ]]'
+  assert "F6 unit[$f6_form]: the synthetic heartbeat URL (and its secret path token) appears in NEITHER stream" \
+    '[[ "$OUT$ERR" != *"$F6_TOK"* ]] && no_beat'
+done
+# Leak control: the pre-fix ExecStart text, same launch, MUST show the secret. Without it a launch that cannot see the
+# defect would make the rows above vacuous.
+f6_launch "$F6_OLD_LINE" xtrace
+assert "F6 control: the PRE-FIX ExecStart under SHELLOPTS=xtrace prints the secret (the harness can see the defect; rc=$RC)" \
+  '[[ "$ERR" == *"$F6_TOK"* && "$RC" -eq 78 ]]'
+# Dispatch: a doppler that never execs the command must make the refusal assertion FAIL, so "no secret in the output"
+# cannot pass for a launch that never reached the script.
+EXTRA_ENV=(PATH="$TMP/dead:$BIN:$PATH"); f6_launch "$F6_LINE" xtrace
+assert "F6 dispatch: with a doppler that never execs the script there is NO refusal text (so the rows above discriminate)" \
+  '[[ "$ERR" != *"refusing to run under xtrace"* && "$RC" -eq 0 ]]'
+f6_launch "$F6_LINE" none
+assert "F6 positive: the untraced real ExecStart delivers the URL to curl on its stdin config, once (rc=$RC)" \
+  '[[ "$RC" -eq 0 && "$PING" == "$F6_URL" && "$TA_PING" -eq 1 && "$ERR" != *SOLEUR_CREDENTIAL_REFUSED* ]]'
+# Transitional pair: the OLD unit still exported a bare WEB_NIC_GUARD_URL; the NEW script ignores it and uses the key's value.
+EXTRA_ENV=(WEB_NIC_GUARD_URL="https://synthetic.invalid/beat/STRAY-9639")
+run_guard true 0 true
+assert "F6 transitional: a stray exported bare WEB_NIC_GUARD_URL (old wrapper) loses to the key's value" \
+  '[[ "$PING" == "https://synthetic.invalid/beat/web-nic-guard" && "$TA_PING" -eq 1 ]]'
+# Key handling in the script.
+EXTRA_ENV=(WEB_NIC_GUARD_URL="$F6_URL"); UNSET_EXTRA=(-u WEB_NIC_GUARD_URL_KEY)
+run_guard true 0 true
+assert "F6 key unset: a bare WEB_NIC_GUARD_URL is ignored: no beat, one reason=empty marker, a value-free key line, exit 0" \
+  'no_beat && [[ "$RC" -eq 0 && "$(grep -c SOLEUR_CREDENTIAL_REFUSED <<<"$ERR" || true)" -eq 1 && "$ERR" == *"$HB_MARKER_EMPTY"* && "$ERR" == *"WEB_NIC_GUARD_URL_KEY"* && "$ERR" != *"$F6_TOK"* ]]'
+F6_PLANT="$TMP/f6-plant"
+# The upper-case-led entries reach the BODY clause of _key_ok (*[!A-Z0-9_]*), the one that stops the characters bash
+# evaluates inside ${!name}: a lowercase lead is refused earlier and would never exercise it.
+f6_keys=(lowercase 1LEAD "A B" "A-B" "a[\$(touch $F6_PLANT)]" $'A\nB' ""
+  "A[\$(touch $F6_PLANT)]" "A=B" "A.B" "A/B" "A(B)" "A\$B" "A[0]" "A[B]" "A@" "A*")
+for f6_k in "${f6_keys[@]}"; do
+  rm -f "$F6_PLANT"; EXTRA_ENV=("WEB_NIC_GUARD_URL_KEY=$f6_k"); run_guard true 0 true
+  f6_label="$(printf '%s' "$f6_k" | tr '\n' '~')"
+  assert "F6 invalid key [$f6_label]: nothing executed, no beat, reason=empty, a key line that does not echo the name, exit 0" \
+    '[[ ! -e "$F6_PLANT" && "$RC" -eq 0 && "$ERR" == *"$HB_MARKER_EMPTY"* && "$ERR" == *"WEB_NIC_GUARD_URL_KEY"* ]] && no_beat && { [[ -z "$f6_k" ]] || [[ "$ERR" != *"$f6_k"* ]]; }'
+done
+# Every printable ASCII character outside [A-Z0-9_], inside an upper-case-led name, is refused: a generated list, not a hand-picked one.
+f6_bodybad=""
+for f6_ord in $(seq 33 126); do
+  f6_c="$(printf "\\x$(printf '%02x' "$f6_ord")")"
+  case "$f6_c" in [A-Z0-9_]) continue ;; esac
+  rm -f "$F6_PLANT"; EXTRA_ENV=("WEB_NIC_GUARD_URL_KEY=A${f6_c}B"); run_guard true 0 true
+  { [[ ! -e "$F6_PLANT" && "$RC" -eq 0 && "$ERR" == *"$HB_MARKER_EMPTY"* && "$ERR" == *"WEB_NIC_GUARD_URL_KEY"* ]] && no_beat; } || f6_bodybad+="$f6_c"
+done
+assert "F6 body clause (generated): every printable ASCII character outside [A-Z0-9_] inside an upper-case-led key is refused (offenders: [$f6_bodybad])" \
+  '[[ -z "$f6_bodybad" ]]'
+for f6_k in WEB_NIC_GUARD_URL_WEB_1 WEB_NIC_GUARD_URL_WEB_2; do
+  EXTRA_ENV=("WEB_NIC_GUARD_URL_KEY=$f6_k" "$f6_k=$F6_URL"); run_guard true 0 true
+  assert "F6 production-shaped key [$f6_k] resolves and delivers" '[[ "$PING" == "$F6_URL" && "$TA_PING" -eq 1 ]]'
+done
+EXTRA_ENV=(LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 WEB_NIC_GUARD_URL_KEY=f6lowerkey f6lowerkey="$F6_URL"); run_guard true 0 true
+assert "F6 locale: a lowercase key is refused under a UTF-8 locale too (a regression pin; the discriminating row follows)" 'no_beat && [[ "$RC" -eq 0 ]]'
+# The discriminating locale row: with ASCII ranges switched OFF (BASH_ENV shopt) under a UTF-8 locale, [A-Z] admits b..z,
+# so `bz` passes a _key_ok that lacks `local LC_ALL=C`; the real one refuses it. Deleting that line makes this row red.
+printf 'shopt -u globasciiranges\n' > "$TMP/f6-noascii.env"
+f6_loc="$(locale -a 2>/dev/null | grep -ciE '^en_US\.utf-?8$' || true)"
+EXTRA_ENV=(BASH_ENV="$TMP/f6-noascii.env" LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 WEB_NIC_GUARD_URL_KEY=bz bz="$F6_URL"); run_guard true 0 true
+[[ "$f6_loc" -ge 1 ]] || echo "  NOTE: no en_US.UTF-8 locale on this host, so the next row is only a pin here (it discriminates the LC_ALL=C line where the locale exists)" >&2
+assert "F6 locale[ranges off]: a lowercase key is refused even when [A-Z] would collate over it (en_US.UTF-8 present on this host: $f6_loc; with 0 this row is only a pin)" \
+  'no_beat && [[ "$RC" -eq 0 && "$ERR" == *"WEB_NIC_GUARD_URL_KEY"* ]]'
+for f6_k in RANDOM PATH BASH_ENV; do
+  rm -f "$F6_PLANT"; EXTRA_ENV=("WEB_NIC_GUARD_URL_KEY=$f6_k"); run_guard true 0 true
+  assert "F6 valid-but-special key [$f6_k]: read as a plain variable, nothing executed, no beat, exit 0" 'no_beat && [[ ! -e "$F6_PLANT" && "$RC" -eq 0 ]]'
+done
+# Not exported: the stub curl dumps ITS environment; only the key-named line (where doppler injects the secret) may hold it.
+F6_ENVDUMP="$TMP/f6-envdump"; rm -f "$F6_ENVDUMP"; EXTRA_ENV=(STUB_ENVDUMP="$F6_ENVDUMP" WEB_NIC_GUARD_URL_SYNTH="$F6_URL"); run_guard true 0 true
+assert "F6 not exported: the resolved URL reaches no child environment (only the injected key-named variable holds it)" \
+  '[[ -s "$F6_ENVDUMP" && "$(grep -v "^WEB_NIC_GUARD_URL_SYNTH=" "$F6_ENVDUMP" | grep -cF -- "$F6_URL" || true)" -eq 0 && "$(grep -cF -- "$F6_URL" "$F6_ENVDUMP" || true)" -eq 1 ]]'
+# An exported URL in the inherited environment must not stay exported: the script unsets it before assigning (the same
+# env dump, now with a pre-exported URL, must hold no URL= line at all).
+rm -f "$F6_ENVDUMP"; EXTRA_ENV=(STUB_ENVDUMP="$F6_ENVDUMP" URL="https://synthetic.invalid/beat/PRESET-9639"); run_guard true 0 true
+assert "F6 preset URL: an exported URL inherited from the environment does not ride the child environment (no URL= line in curl's env)" \
+  '[[ -s "$F6_ENVDUMP" && "$(grep -c "^URL=" "$F6_ENVDUMP" || true)" -eq 0 && "$PING" == "https://synthetic.invalid/beat/web-nic-guard" ]]'
+# The key-bad line sits inside the hourly limiter with the marker: three runs under one root give ONE marker and ONE key line.
+rm -rf "$TMP/f6-lim"; f6_marks=0; f6_keylines=0
+for f6_i in 1 2 3; do
+  FIXED_ROOT="f6-lim"; EXTRA_ENV=("WEB_NIC_GUARD_URL_KEY=lowercase"); run_guard true 0 true
+  f6_marks=$((f6_marks + $(grep -c SOLEUR_CREDENTIAL_REFUSED <<<"$ERR" || true)))
+  f6_keylines=$((f6_keylines + $(grep -c 'WEB_NIC_GUARD_URL_KEY is unset' <<<"$ERR" || true)))
+done
+assert "F6 limiter: three runs with an invalid key under one root emit exactly one marker and one key line (no flood at timer cadence)" \
+  '[[ "$f6_marks" -eq 1 && "$f6_keylines" -eq 1 ]]'
+# _key_ok is inline-copied into the zot probe (each is a standalone shipped file): the two copies must stay byte-identical.
+F6_ZOT_SUT="$(dirname "$SUT")/web-zot-consumer-probe.sh"
+assert "F6 parity: _key_ok is byte-identical in the nic-guard and zot scripts (one copy cannot lose the charset or LC_ALL=C alone)" \
+  '[[ -n "$(grep -m1 "^_key_ok()" "$SUT")" && "$(grep -m1 "^_key_ok()" "$SUT")" == *"; }" && "$(grep -m1 "^_key_ok()" "$SUT")" == "$(grep -m1 "^_key_ok()" "$F6_ZOT_SUT")" ]]'
+# Order: the lookup sits BELOW the refusal, and a mutant that hoists it above the refusal leaks under SHELLOPTS=xtrace.
+f6_line_of() { awk -v n="$1" 'index($0, n) && $0 !~ /^[[:space:]]*#/ { print NR; exit }' "$SUT"; }   # first NON-comment line holding the text
+assert "F6 order: the indirect lookup is on a later line than the xtrace refusal" \
+  '[[ -n "$(f6_line_of "refusing to run under xtrace")" && -n "$(f6_line_of "\${!WEB_NIC_GUARD_URL_KEY")" && "$(f6_line_of "\${!WEB_NIC_GUARD_URL_KEY")" -gt "$(f6_line_of "refusing to run under xtrace")" ]]'
+f6_mutant() {   # <name> <sed-script> : a copy of the SUT with one edit; the edit must have landed
+  local m="$TMP/f6-mut-$1.sh"; sed "$2" "$SUT" > "$m"; chmod +x "$m"
+  assert "F6 mutant[$1]: the edit landed (the copy differs from the SUT)" '! cmp -s "$SUT" "$m"'
+  F6_MUT="$m"
+}
+f6_mutant hoist '/^set -u$/a\
+__leak="${!WEB_NIC_GUARD_URL_KEY:-}"'
+SUT_UNDER_TEST="$F6_MUT"; EXTRA_ENV=(SHELLOPTS=xtrace WEB_NIC_GUARD_URL_SYNTH="$F6_URL"); run_guard true 0 true
+assert "F6 mutant[hoist]: a lookup hoisted above the refusal leaks the URL under SHELLOPTS=xtrace (the order row can see it)" '[[ "$ERR" == *"$F6_TOK"* ]]'
+f6_mutant novalidate 's/if _key_ok "\${WEB_NIC_GUARD_URL_KEY:-}"; then/if true; then/'
+rm -f "$F6_PLANT"; SUT_UNDER_TEST="$F6_MUT"; EXTRA_ENV=("WEB_NIC_GUARD_URL_KEY=a[\$(touch $F6_PLANT)]"); run_guard true 0 true
+assert "F6 mutant[novalidate]: without the charset check a hostile key name executes (PLANT exists)" '[[ -e "$F6_PLANT" ]]'
+f6_mutant export 's/^URL=""$/export URL=""/'
+rm -f "$F6_ENVDUMP"; SUT_UNDER_TEST="$F6_MUT"; EXTRA_ENV=(STUB_ENVDUMP="$F6_ENVDUMP"); run_guard true 0 true
+assert "F6 mutant[export]: exporting the resolved URL puts it in a child environment (the env-capture row can see it)" \
+  '[[ "$(grep -v "^WEB_NIC_GUARD_URL_SYNTH=" "$F6_ENVDUMP" | grep -cF -- "https://synthetic.invalid/beat/web-nic-guard" || true)" -ge 1 ]]'
 
 # --- every run, one verdict ------------------------------------------------------------------
 assert "no run anywhere issued a curl missing --disable-first or --noproxy '*' (ALL_TA_BAD=$ALL_TA_BAD)" "[[ \"\$ALL_TA_BAD\" -eq 0 ]]"
@@ -907,7 +1073,7 @@ if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
   printf '\n[FATAL] accounting identity: PASS(%d) + FAIL(%d) != CASES(%d). An assertion recorded no verdict or more than one.\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
-MIN_CASES=316
+MIN_CASES=364
 if [[ "$CASES" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity floor: only %d assertions ran; floor is %d\n' "$CASES" "$MIN_CASES" >&2
   exit 1

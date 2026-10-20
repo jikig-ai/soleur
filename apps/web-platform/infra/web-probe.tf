@@ -97,9 +97,10 @@ resource "betteruptime_heartbeat" "web_nic_guard" {
   }
 }
 
-# Per-host heartbeat URLs → Doppler soleur/prd. The probe/guard systemd units resolve their host's
-# own URL by indirect expansion (${!<KEY>}) over the WEB_*_URL_KEY name baked into their env file,
-# so these secrets are GENUINELY consumed (not a reserved-but-inert reservation — the anti-pattern
+# Per-host heartbeat URLs → Doppler soleur/prd. Each probe/guard resolves its host's own URL by
+# indirect expansion (${!<KEY>}) over the WEB_*_URL_KEY name baked into its env file: the nic-guard and
+# zot SCRIPTS do it after their xtrace refusal (#9639 F6); the git-data and inngest units still do it in
+# their wrapper (recorded not fixed on #9639), so these secrets are GENUINELY consumed (not a reserved-but-inert reservation — the anti-pattern
 # doppler_secret.zot_heartbeat_url_prd was deleted for, #6438 B3). Masked, same class as every
 # existing heartbeat URL secret.
 resource "doppler_secret" "web_zot_consumer_url" {
