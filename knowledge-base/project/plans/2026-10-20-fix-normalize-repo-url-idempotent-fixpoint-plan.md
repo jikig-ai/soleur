@@ -10,6 +10,23 @@ lane: cross-domain
 
 # fix: normalizeRepoUrl must be idempotent (dot-segment, opaque-path and peel-chain shapes)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-20
+**Sections enhanced:** Research Insights, Observability, Guard Contract, Phase 3 (hunt rule, mutation demonstration)
+**Passes used (proportionate to a ~15-line fix):** plan-review panel (DHH, Kieran, code-simplicity) before deepen; deepen fan-out scoped to learnings-researcher and test-design-reviewer plus the mechanical halt gates (4.6 user-brand, 4.7 observability, 4.8 PAT, 4.11 guard-contract lint, 4.12 scope check) and live verification of every cited PR/issue/run/rule id. Full 40-agent fan-out deliberately not run: two CTO consults and a 3-agent panel already covered the design, and the change is one pure function.
+
+### Key Improvements
+1. Hunt rule split: a counterexample reachable through the committed `inputArb` now blocks the PR (the merge queue can hit it); alphabet-only finds are reported and deferred.
+2. Guard Contract states honestly that the pinned fixtures are the regression guard and the unchanged property run is only a smoke net (~1.3% of dot-heavy inputs need more than 3 passes); mutation rows 1-3 must be demonstrated in a sandbox copy, not asserted; redundant mutation row merged.
+3. Observability section added with a real, discriminating probe: `bun -e` import of the dependency-free module prints `drifted` on the unfixed tree and `idempotent` after the fix (measured, 0.02s).
+
+### New Considerations Discovered
+- Institutional learning `knowledge-base/project/learnings/workflow-patterns/2026-10-07-merge-queue-silent-ejection-re-enqueue.md`: poll the PR timeline (`added_to_merge_queue` / `removed_from_merge_queue`) rather than `isInMergeQueue`; re-enqueue at most once; a second identical ejection is a systemic problem to file — consistent with the CTO flake ruling.
+- Learning `knowledge-base/project/learnings/best-practices/2026-10-20-fastcheck-v4-substitutions-and-json-canonical-oracle.md`: verify fast-check API names against the installed 4.x package; the fixtures here use only direct calls, so no API risk.
+- No KB learning covers WHATWG dot-segment / `new URL()` canonicalization; the behavior is therefore pinned by this plan's own fixtures and measured scratch runs, not by precedent.
+- Live verification (2026-10-20): PR #10624 MERGED, #10025 MERGED (added the stray `#9815` probe line, an ancestor of origin/main), #10528 OPEN (untouched), #10633 OPEN, #10692 OPEN draft, run 39400877769 = CI / merge_group / failure on `gh-readonly-queue/main/pr-10528-...`. Cited rule ids `cq-write-failing-tests-before`, `hr-never-git-stash-in-worktrees`, `cq-cite-content-anchor-not-line-number` exist as active rules. PAT-pattern sweep: no hits.
+
 Spec lacks valid `lane:` — defaulted to cross-domain (TR2 fail-closed).
 
 ## Overview
@@ -27,7 +44,7 @@ Constraints carried from the caller: PR #10692 is the only change; do not touch 
 | Brief claim | Reality (measured) | Plan response |
 |---|---|---|
 | Counterexample reproduces; a bounded loop "max 4 passes" fixes it | Seed + path replay reproduces on the first property (scratch replay against the worktree code: `Counterexample: [" http://a.aa/..git/"]`, `Shrunk 0 time(s)`). A **4-pass** cap is NOT enough: `"http://a.aa/" + "..git/"x6` needs 7 passes, `"x" + " /"x20` needs 20, and a dot-heavy fuzz needed up to 8 (1.3% of inputs needed >3). | Cap is length-derived (`raw.length + 3`), not 4. Ruled by CTO below. |
-| "the dot-segment shape" is the defect | Same single-pass-not-a-fixpoint root cause also produces: opaque-path non-special scheme `"xx:B"` -> `"xx://B"` -> `"xx://b"`; string-only peel chains `"x / / / /"` (each pass peels one `/ ` pair); `"a#.git // // "`. | The same loop fixes all of them (no extra code). They are pinned as extra fixtures and listed in the PR body as additional counterexamples found. Property generator NOT widened (CTO). |
+| "the dot-segment shape" is the defect | Same single-pass-not-a-fixpoint root cause also produces: opaque-path non-special scheme `"xx:B"` -> `"xx://B"` -> `"xx://b"`; string-only peel chains `"x / / / /"` (each pass peels one `/ ` pair); `"a#.git // // "` (observed in scratch only; this query/fragment shape is NOT pinned and not claimed as CI-reachable, since `fc.webUrl()` defaults omit query and fragment). | The same loop fixes all of them (no extra code). They are pinned as extra fixtures and listed in the PR body as additional counterexamples found. Property generator NOT widened (CTO). |
 | Function header: coupled to SQL regex chain in `031_normalize_repo_url.sql` | 031 is a one-time backfill `UPDATE` using `regexp_replace`; it has no URL parsing, so it never resolved dot segments, `%2e` segments or opaque paths. TS<->SQL already diverges on those classes (e.g. `http://a.aa/x/../y`). | Finding: the dot-segment shape does NOT affect the SQL mirror and needs no migration. See `## SQL Mirror Finding`. |
 | Stray `/* #9815 e2e probe — REVERTED BEFORE COMMIT */` | Present on `origin/main` as line 71 of `lib/repo-url.ts` (added by #10025). | Deleted in this PR (CTO), called out in PR body. |
 
@@ -106,7 +123,7 @@ Edit `apps/web-platform/test/lib/repo-url.property.test.ts`, inside the existing
    - Comment: `// regression fixture: fast-check seed -1029694662 path 68:0:0:0:0:0:1:0:0` plus one line of explanation (trailing `.git` strip leaves a `.` dot segment the next `new URL()` resolves away).
    - Assert idempotence AND the pinned value: `const once = normalizeRepoUrl(" http://a.aa/..git/"); expect(once).toBe("http://a.aa"); expect(normalizeRepoUrl(once)).toBe(once);`
    - Never commit `{ seed }` params (ADR-293 / README convention).
-2. Three extra example fixtures for the other shapes (label `// pinned example (scratch fuzz 2026-10-20, no fast-check seed)`), each asserting value + idempotence:
+2. Three extra example fixtures for the other shapes (label `// pinned example (scratch fuzz 2026-10-20, no fast-check seed)`), each its own `it` block (a failure names the shape; no anonymous `it.each`), each asserting the pinned value FIRST (a RED names the unfixed output) and then idempotence. The `xx:B` block is labelled `// characterization: opaque-path, not an endorsed canonical form` — its value comes from the opaque-path code path and a future opaque-path fix may legitimately change it; the idempotence assertion is its primary check:
    - deep dot-segment chain `"http://a.aa/" + "..git/".repeat(5)` (written out literally or via `.repeat`) -> `http://a.aa`
    - opaque-path scheme `"xx:B"` -> `xx://b`
    - string-only peel chain `"x" + " /".repeat(8)` -> `x`
@@ -147,7 +164,7 @@ export function normalizeRepoUrl(raw: string | null | undefined): string {
 - `cd apps/web-platform && bunx vitest run test/lib/repo-url.property.test.ts test/repo-url.test.ts test/repo-url-sql-parity.test.ts test/current-repo-url.test.ts`.
 - Real importers of the module are `app/api/repo/setup/route.ts`, `app/api/workspace/active-repo/route.ts`, `app/api/webhooks/github/route.ts`, `server/current-repo-url.ts` and `server/inngest/functions/workspace-reconcile-on-push.ts`. The three setup-route suites fully `vi.mock("@/lib/repo-url")` and never load the real module, so they prove nothing here; run the suites that load it: `bunx vitest run test/current-repo-url.test.ts test/server/inngest/workspace-reconcile-on-push.test.ts` plus any webhook / active-repo suite found by `git grep -l "webhooks/github/route\|workspace/active-repo/route" -- 'apps/web-platform/test/**'`. With no new import this is a plain regression run, not a gate on a new dependency.
 - `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` (the in-package form; the repo root declares no `workspaces`, so `npm run -w` aborts).
-- Higher-run-count hunt, scratch only (a throwaway script in the session scratchpad, NOT committed, no env knob added to the test): a driver that imports the real `normalizeRepoUrl` and runs `fc.assert(..., { numRuns: 100000 })` several times with the property file's own `inputArb` plus a dot-segment alphabet (`.`, `..`, `..git`, `%2e`, `%2E`, `.%2e`, `.git`, `.GIT`, ` `, `/`) over 3+ different random seeds. Any counterexample found is reported in the PR body and NOT fixed in this PR unless the loop already fixes it; a counterexample that hits the `raw.length + 3` cap flips the CTO ruling to the Sentry-mirror option and reopens the termination argument (rework, not a bigger cap).
+- Higher-run-count hunt, scratch only (a throwaway script in the session scratchpad, NOT committed, no env knob added to the test): a driver that imports the real `normalizeRepoUrl` and runs `fc.assert(..., { numRuns: 100000 })` several times with the property file's own `inputArb` plus a dot-segment alphabet (`.`, `..`, `..git`, `%2e`, `%2E`, `.%2e`, `.git`, `.GIT`, ` `, `/`) over 3+ different random seeds. A counterexample reachable through the committed `inputArb` (the file's own generator, i.e. one the merge queue can hit) BLOCKS the PR: rework the fix, or pin the shape and fix it, before queueing. A counterexample reachable only through the extra scratch alphabet is reported in the PR body and deferred, not fixed here; a counterexample that hits the `raw.length + 3` cap flips the CTO ruling to the Sentry-mirror option and reopens the termination argument (rework, not a bigger cap).
 
 ### Phase 4 — Docs (ADR-293)
 
@@ -210,6 +227,7 @@ Explicitly NOT touched: `supabase/migrations/**`, `supabase/verify/**`, `test/re
 - [ ] Extra fixtures (5-deep `..git/` chain, `xx:B`, 8-pair `" /"` peel) pass and each fails under a 4-pass-cap variant of the loop (mutation row below).
 - [ ] Output byte-identical to the pre-fix single pass for realistic repo URLs (scratch 300k-run corpus of `scheme://host/owner/repo` with `.git`/`.GIT`/`/`/`.git.git`/whitespace variants, owner/repo segments excluding dot segments: 0 differences between single pass and loop; cited in the PR body). Documented canonical form unchanged for realistic inputs: `test/repo-url.test.ts` and `test/repo-url-sql-parity.test.ts` pass unmodified.
 - [ ] `cd apps/web-platform && bunx vitest run test/lib/repo-url.property.test.ts test/repo-url.test.ts test/repo-url-sql-parity.test.ts test/current-repo-url.test.ts` all green; the importer-loading suites listed in Phase 3 green; typecheck green.
+- [ ] Mutation rows 1-3 demonstrated, not asserted: run each against a COPY of `lib/repo-url.ts` in a scratch sandbox (never edit the tracked file in place), confirm the pristine tree exits 0 first, count only a non-zero vitest exit as a caught mutation, and put the per-row result next to the RED/GREEN output in the PR body.
 - [ ] Scratch high-run-count hunt (>= 3 seeds x 100k runs) reports zero non-idempotent outputs and zero inputs hitting the `raw.length + 3` cap; any other counterexample is listed in the PR body.
 - [ ] `lib/repo-url.ts` gains no import (the diff shows no new `import` line) and no side effect on the cap path.
 - [ ] `git diff --name-only origin/main...HEAD` is a subset of: the three Files-to-Edit paths, planning artifacts under `knowledge-base/project/{plans,specs}/feat-one-shot-normalize-repo-url-idempotent-fixpoint/` and the plan file, and the pipeline-written `knowledge-base/INDEX.md` / `specs/<branch>/session-state.md` if regenerated; no `supabase/`, no `.github/`, nothing git-data/legal.
@@ -222,17 +240,16 @@ Explicitly NOT touched: `supabase/migrations/**`, `supabase/verify/**`, `test/re
 
 **Property.** For every input `x`, `normalizeRepoUrl(normalizeRepoUrl(x)) === normalizeRepoUrl(x)`, and the loop that delivers it terminates within `raw.length + 3` iterations.
 
-**Assembly.** The suite's population is whatever flows through the single chokepoint `normalizeRepoUrl`. Real importers (verified by `git grep`): `app/api/repo/setup/route.ts`, `app/api/workspace/active-repo/route.ts`, `app/api/webhooks/github/route.ts`, `server/current-repo-url.ts`, `server/inngest/functions/workspace-reconcile-on-push.ts`; other files that mention the name (detect-installation route, resolve-founder-for-installation, agent-runner, session-sync, cron-workspace-sync-health) only reference it in comments. There is no second exported entry point; internal `normalizeRepoUrlPass` is not exported, so no caller can bypass the loop. Property file: `test/lib/repo-url.property.test.ts` (arbitraries over `fc.string()`, `webUrl x suffix`, padded). Fixtures: the four pinned examples.
+**Assembly.** The pinned fixtures are the regression guard; the property run is a smoke net only (unchanged generator, default 100 runs, random seed; by the plan's own measurement ~1.3% of dot-heavy inputs need >3 passes, so reverting the fix would pass the property tests almost every time). The suite's population is whatever flows through the single chokepoint `normalizeRepoUrl`. Real importers (verified by `git grep`): `app/api/repo/setup/route.ts`, `app/api/workspace/active-repo/route.ts`, `app/api/webhooks/github/route.ts`, `server/current-repo-url.ts`, `server/inngest/functions/workspace-reconcile-on-push.ts`; other files that mention the name (detect-installation route, resolve-founder-for-installation, agent-runner, session-sync, cron-workspace-sync-health) only reference it in comments. There is no second exported entry point; internal `normalizeRepoUrlPass` is not exported, so no caller can bypass the loop. Property file: `test/lib/repo-url.property.test.ts` (arbitraries over `fc.string()`, `webUrl x suffix`, padded). Fixtures: the four pinned examples. The generator-widening follow-up (CTO ruling 2) is filed as a NEW issue at ship time (no comments on existing issues) so the smoke net gets teeth later.
 
 **Mutation matrix.**
 
 | # | Edit | Expected |
 |---|------|----------|
-| 1 | Revert the SUT to the single pass (exported function = one pass) | reported-counterexample fixture RED |
+| 1 | Exported function runs only one pass (revert the loop, or return `current` after the first iteration) | reported-counterexample fixture RED and `xx:B` fixture RED |
 | 2 | Change the cap to a fixed `4` | 5-deep `..git/` chain fixture RED and 8-pair peel fixture RED |
-| 3 | Loop returns `current` after the first pass regardless of `next` | `xx:B` fixture RED (host lowercase only lands on pass 2) |
-| 4 | Loop compares `next.length === current.length` instead of `next === current` | `xx:B` fixture RED / loop exits early (same-length change lowercases host) |
-| 5 | Drop the `raw.length + 3` bound (`while (true)`) | not caught by the suite — covered by the scratch 400k-run convergence evidence and review of the diff; recorded as accepted gap (the cap-hit branch is unreachable by construction) |
+| 3 | Loop compares `next.length === current.length` instead of `next === current` | `xx:B` fixture RED / loop exits early (same-length change lowercases host) |
+| 4 | Drop the `raw.length + 3` bound (`while (true)`) | not caught by the suite — covered by the scratch 400k-run convergence evidence and review of the diff; recorded as accepted gap (the cap-hit branch is unreachable by construction) |
 
 **Harness rows.** (a) Edit the SUITE: drop the second `normalizeRepoUrl(once)` assertion from the reported-counterexample fixture — the fixture must still be RED on the unfixed SUT only because of the pinned `toBe("http://a.aa")` value (confirm the value assertion alone also fails: unfixed output is `http://a.aa/.`). (b) A must-PASS non-canonical input: `"  HTTPS://GitHub.com/Foo/Bar.git/  "` -> `https://github.com/Foo/Bar` (already in `test/repo-url.test.ts`; confirms the loop does not over-strip). The existing negative-control `it` in the property file (a deliberately false property throws) stays and keeps the anti-vacuity floor.
 
@@ -248,7 +265,33 @@ Explicitly NOT touched: `supabase/migrations/**`, `supabase/verify/**`, `test/re
 
 ## Observability
 
-Skipped per Phase 2.9: `apps/web-platform/lib/` is outside the path set that triggers the section, and the change adds no server route, cron, infra or error path (the cap-exhausted branch returns silently by CTO ruling; it is unreachable by construction).
+The change adds no server route, cron or infra (outside Phase 2.9's path set), but deepen-plan Phase 4.7 applies to any non-docs Files-to-Edit entry, so the surface is declared. The normalizer is a pure function; its "signal" is the idempotence property itself.
+
+```yaml
+liveness_signal:
+  what: normalizeRepoUrl(normalizeRepoUrl(x)) === normalizeRepoUrl(x) for the reported counterexample and for the property suite's generated inputs
+  cadence: every CI run of the unit project (pull_request and merge_group) executes test/lib/repo-url.property.test.ts
+  alert_target: a red unit-project job on the PR or merge_group run (the merge queue ejects the PR, as run 39400877769 did)
+  configured_in: apps/web-platform/test/lib/repo-url.property.test.ts (property + pinned regression fixtures); CI wiring is by test-glob placement (ADR-293), no runner edit
+error_reporting:
+  destination: CI test output (fast-check prints seed, path and the shrunk counterexample); no Sentry path is added (CTO re-ruling: the cap-exhausted branch is unreachable by construction and returns silently)
+  fail_loud: yes - a non-idempotent output fails the property test and the job
+failure_modes:
+  - mode: a strip exposes a dot segment or opaque path the next parse rewrites (the reported shape)
+    detection: pinned regression fixtures plus the idempotence property fail in CI
+    alert_route: red CI job / merge-queue ejection
+  - mode: the loop cap is reached (termination guard)
+    detection: unreachable by construction (0 hits in 400k+ fuzz runs); the 5-deep chain and 8-pair peel fixtures fail first if the cap shrinks
+    alert_route: red CI job; reversal trigger in the CTO ruling flips this to a Sentry mirror if any input ever hits the cap
+logs:
+  where: CI job logs (vitest reporter); nothing is logged at runtime
+  retention: GitHub Actions log retention
+discoverability_test:
+  command: bun -e 'import { normalizeRepoUrl as n } from "./apps/web-platform/lib/repo-url.ts"; const a = n(" http://a.aa/..git/"); console.log(n(a) === a ? "idempotent" : "drifted")'
+  expected_output: idempotent
+```
+
+Probe notes: runs in about 0.02s (well inside preflight Check 10's 15s cap), first token `bun` is allowlisted, no `ssh`, and the module is dependency-free so it needs no install. Measured on the unfixed worktree it prints `drifted`, so it is a real discriminator: it prints `idempotent` only after the fix.
 
 ## Domain Review
 

@@ -25,8 +25,8 @@ Branch: `feat-one-shot-normalize-repo-url-idempotent-fixpoint` | Draft PR: #1069
 - 3.1 `cd apps/web-platform && bunx vitest run test/lib/repo-url.property.test.ts test/repo-url.test.ts test/repo-url-sql-parity.test.ts test/current-repo-url.test.ts`.
 - 3.2 Run the suites that load the real module: `test/current-repo-url.test.ts`, `test/server/inngest/workspace-reconcile-on-push.test.ts`, plus any webhook / active-repo route suite (`git grep -l "webhooks/github/route\|workspace/active-repo/route" -- 'apps/web-platform/test/**'`). The three setup-route suites fully mock `@/lib/repo-url` and are not evidence.
 - 3.3 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
-- 3.4 Scratch (uncommitted, session scratchpad) high-run-count hunt: >= 3 seeds x 100k runs over the property file's `inputArb` plus a dot-segment alphabet; record any other counterexample and any input hitting the `raw.length + 3` cap (that flips the CTO ruling to a Sentry mirror).
-- 3.5 Mutation battery from the plan's Guard Contract (revert to single pass; fixed cap 4; return after first pass) — confirm each goes RED, then restore.
+- 3.4 Scratch (uncommitted, session scratchpad) high-run-count hunt: >= 3 seeds x 100k runs over the property file's `inputArb` plus a dot-segment alphabet; record any other counterexample (one reachable via the committed `inputArb` blocks the PR; one reachable only via the scratch alphabet is reported and deferred) and any input hitting the `raw.length + 3` cap (that flips the CTO ruling to a Sentry mirror).
+- 3.5 Mutation rows 1-3 from the plan's Guard Contract (single pass; fixed cap 4; length-compare loop), each against a COPY of `lib/repo-url.ts` in a scratch sandbox (never edit the tracked file in place): confirm the pristine tree passes first, count only a non-zero exit as caught, keep per-row output for the PR body.
 
 ## Phase 4: Docs
 
@@ -35,4 +35,5 @@ Branch: `feat-one-shot-normalize-repo-url-idempotent-fixpoint` | Draft PR: #1069
 ## Phase 5: Ship
 
 - 5.1 PR #10692 body: root cause, RED and GREEN output, SQL mirror finding (no migration), other counterexamples found, stray-line deletion, follow-up issue for generator widening. `Ref #10624`, `Ref` failing run 39400877769, `Ref #10633`; never Closes/Fixes/Resolves. Do not comment on any issue; do not touch PR #10528, git-data or legal files; do not dispatch any workflow.
+- 5.1b File a NEW issue (no comments on existing issues) for the property-generator widening (dot-segment/peel alphabet and its CI budget), per CTO ruling 2.
 - 5.2 If the same suite flakes in the merge queue after this PR is queued, file a flake issue; do not re-enqueue a third time.
