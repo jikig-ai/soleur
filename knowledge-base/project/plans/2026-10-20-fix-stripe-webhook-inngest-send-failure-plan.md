@@ -220,7 +220,10 @@ Edit `apps/web-platform/app/api/webhooks/stripe/route.ts`, `case "invoice.paymen
    Put two short comment lines above the catch body stating (a) that idempotency basis and (b) that every
    send failure returns 500 and the `SOLEUR_FR5_ENABLED=false` kill switch is the escape for a
    deterministic failure. Nothing after the send can throw in this case, so a send that landed server-side
-   but errored client-side is the only duplicate-send exposure, and the event id covers it.
+   but errored client-side is the only duplicate-send exposure, and the event id covers it only within
+   the 24 h window (per the Inngest docs; unverified for the self-hosted server, and the CFO function
+   inserts drafts without a `source_ref`): beyond it a second draft is possible. That residual is the
+   accepted CTO ruling (decision-challenges.md row 5).
 4. Fix the stale comments in the same case: replace "Stripe redelivery upstream covers the gap if the
    operator forgets — at-least-once." and the "dedup INSERT at line 116 ... short-circuited at
    line 126" comment with accurate prose (the dedup claim happens before the switch; a failed send now
@@ -284,8 +287,12 @@ constraint 2). The merge needs a separate go naming the merge.
   `customer.subscription.*` and `checkout.session.completed` updates for every user (the disable
   threshold is unverified; mitigation is the kill switch, effective on restart, and the alert is
   unwired until #10660); (2) a send that landed but errored, redelivered after Inngest's 24 h
-  event-id window, can add a second draft card, because the CFO function inserts drafts without a
-  `source_ref` (its own comment defers that wiring to PR-G).
+  event-id window (24 h per the Inngest docs, unverified for the self-hosted server), can add a
+  second draft card, because the CFO function inserts drafts without a `source_ref` (its own comment
+  defers that wiring to "PR-G (#3947)", a pointer that is stale because #3947 already landed the
+  grant gate, so no open item tracks it; accepted as a residual, see decision-challenges.md).
+  Both exist only once `SOLEUR_FR5_ENABLED` is `true` in prd (it is as of 2026-05-19), and the kill
+  switch that stops the 500s also stops every future draft, which is the trade-off it buys.
 - **If this leaks, the user's money / workflow is exposed via:** no new exposure vector: the change
   adds no data to any payload; the Sentry `extra` carries only event/invoice ids and a pseudonymized
   user id, never the customer email hash.
@@ -310,13 +317,13 @@ error_reporting:
 
 failure_modes:
   - mode: Inngest unreachable or send rejected after 3 attempts
-    detection: layer 2 (reportSilentFallback message path: Sentry event op=inngest-send-payment-failed plus a pino error line in Better Stack); Stripe delivery log shows the 500 and the redelivery
+    detection: reportSilentFallback message path: a direct Sentry message event op=inngest-send-payment-failed, plus a pino error line shipped to Better Stack by Vector (layer 3, queryable by eventId) and a pino breadcrumb (layer 2); Stripe delivery log shows the 500 and the redelivery
     alert_route: none yet - Sentry search by tag only; the alert rule is tracked as #10660 (infra that auto-applies on merge, out of this PR's no-production-touch scope)
   - mode: dedup-row release DELETE fails after a send failure (redelivery will be short-circuited)
-    detection: layer 2 (existing releaseDedupRow reporting: Sentry event op=dedup-release plus a pino error line in Better Stack) alongside the send-failure event; correlate by eventId in Better Stack (not searchable in Sentry extra)
-    alert_route: none yet - Sentry search by tag only (#10660 covers the send-failure rule; the existing dedup-release capture is untouched)
+    detection: the existing releaseDedupRow reporting: a pino error line shipped to Better Stack by Vector (layer 3, reliable; correlate by eventId there, since Sentry extra is not searchable) and a `feature:pino-mirror` Sentry event; the tagged `op=dedup-release` capture of the same Error instance may be dropped by Sentry's de-dup (#8629 class, pre-existing code, not changed here), so do not rely on that tag alone
+    alert_route: none yet; #10660 now also covers `op=dedup-release` (its scope was widened in a comment on that issue), so its rule must key on the Better Stack line or fix the capture first
   - mode: deterministic non-transient send error (for example a 4xx) returns 500 on every redelivery
-    detection: layer 2 (repeated op=inngest-send-payment-failed events carrying the same eventId, queryable in Better Stack through the pino line) and the Stripe delivery log showing repeated 500s
+    detection: repeated op=inngest-send-payment-failed events; the same eventId repeating is visible only in Better Stack through the pino line (layer 3), not in Sentry extra; plus the Stripe delivery log showing repeated 500s
     alert_route: none yet (#10660); mitigation is the SOLEUR_FR5_ENABLED=false flip in Doppler prd, effective on the next container restart (a production write that needs the owner's separate go; not performed by this PR)
 
 logs:
@@ -401,6 +408,9 @@ documented residual-loss case.
 | T2 | Transient failure exhausts 3 attempts | send rejects `TypeError("fetch failed")` x3 | 3 attempts, 500, one release, one report |
 | T3 | Redelivery after failure | fail once then resolve; same event twice | 500 then 200; `inngest.send` called twice; insert called twice |
 | T4 | Release itself fails | send rejects; `mockDeleteEq` resolves `{error}` | still 500; release failure logged with eventId; redelivery short-circuits (200, no send) |
+| T1b | Reported name/code follow the thrown value | send rejects `RangeError` with string `code`; a string; a numeric and an object `code`; `undefined` | 500 each; `errorName`/`errorCode` mirror the value; a non-string code is never reported; a nullish rejection is reported |
+| T5 | Release is awaited | delete mock settles on a later macrotask | 500 returns only after the row is released |
+| T6 | Release throws | `mockDeleteEq` rejects | the send failure was already reported once; the release was attempted once |
 
 ## Sharp Edges
 

@@ -143,3 +143,8 @@ row and returns 5xx; a catch that only reports is a decision to lose the event.*
 retry's idempotency basis too: Inngest dedups the event id for 24 hours while Stripe retries for
 about three days, and a consumer without its own key (the CFO draft has no `source_ref`) can add a
 duplicate after that window.
+
+Sources (read 2026-10-20): Inngest idempotency, "Event IDs will only be used to prevent duplicate
+execution for a 24 hour period" (https://www.inngest.com/docs/durable-execution/guides-and-advanced/idempotency),
+a figure not verified for our self-hosted server; Stripe webhook automatic retries, up to three days
+in live mode (https://docs.stripe.com/webhooks).
