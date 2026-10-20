@@ -15,7 +15,7 @@ Issue: #10609 (closes). Reference only: the closed epic. Deferred sibling gap: #
 
 - 1.1 `ctr_wants_lex` pre-filter (cd, pushd, GIT_DIR, GIT_WORK_TREE, --git-dir, --work-tree, `git` + option); pin its token list with a unit row.
 - 1.2 `ctr_collect`: guarded `perl "$LEXER"` fed by `printf '%s'`; LEXER path from `${BASH_SOURCE[0]}`; `IFS= read -r -d ''`, parse by count, `OK` terminator as the only success signal; sets CTR_TARGETS, CTR_BAD, CTR_COMMIT_SEEN, CTR_LEX_STATE.
-- 1.3 Record walker: assignments and wrappers; `cd`/`pushd` operands (expansion, `-`, `~` -> bad); `git` global options (`-C`, `-c`, `--git-dir`/`--work-tree` -> bad); subcommand `commit`; runner records with an expansion operand -> bad.
+- 1.3 Record walker: assignments and wrappers (`env -C <dir>` / `--chdir=` adds a target; `builtin`, `command` skipped); `cd`/`pushd` operands (expansion, `-`, `~` -> bad); `git` global options (`-C`, `-c`, `--git-dir`/`--work-tree` -> bad); subcommand `commit`; runner records with an expansion operand -> bad.
 - 1.4 `ctr_resolve_roots`: absolute and relative joins against {PWD, payload cwd, earlier candidates}, `env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C ... rev-parse --show-toplevel`, string-membership de-dup (bash 3.2).
 - 1.5 Hand-check every Test Scenario command with `perl plugins/soleur/hooks/lib/shell-argv.pl --trace < file`.
 

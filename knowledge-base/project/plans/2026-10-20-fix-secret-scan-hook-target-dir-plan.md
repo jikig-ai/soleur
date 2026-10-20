@@ -13,6 +13,23 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-20
+**Sections enhanced:** 4 (walker spec, Observability schema, Test Scenarios, Research Insights)
+**Verification used (proportionate - the plan already had a five-seat eng review, a CTO panel of four rulings, CPO sign-off and gdpr-gate):** lexer-behaviour measurements on 12 command shapes, live cross-checks of every cited issue / PR / ADR / rule id / learning path, and the mechanical halt gates (4.6 User-Brand Impact, 4.7 Observability, 4.11 Guard Contract via `scripts/lint-guard-contract.py`, 4.12 Scope Check).
+
+### Key Improvements
+
+1. `env -C <dir> git commit` is a directory-changing wrapper the lexer exposes as plain argv (`[env] [-C] [/a] [git] ...`); the walker now adds its `-C` / `--chdir=` operand as a target instead of leaving it a documented gap.
+2. The lexer was measured on the hard cases: `eval "$CMD"` and `bash -c "$SCRIPT"` surface the operand with an expansion (so the runner-operand deny is mechanically reachable), an unterminated quote exits 2 with the `E` framing, and `builtin cd` / `command git` arrive as separate leading words that the wrapper skip must drop.
+3. An `## Observability` schema block was added so the plan passes the Phase 4.7 gate (the hook path is outside plan Phase 2.9's trigger set, but the deepen gate only skips pure-docs plans).
+
+### New Considerations Discovered
+
+- A quoted `-m "$(cat <<'EOF' ... cd "$WT" ... EOF)"` message lexes as ONE quoted word plus a `cat` substitution record, so the heredoc text never becomes a `cd` record (T35 is reachable and meaningful, not vacuous).
+- `commit -C HEAD` arrives as `[commit] [-C] [HEAD]`: the walker must stop reading global options at the subcommand (walker unit row already present).
+
 ## Overview
 
 The pre-commit secret-scan hook (`.claude/hooks/git-commit-secret-scan.sh`) resolves its repository
@@ -85,6 +102,10 @@ is recorded as an addendum to ADR-157 (Architecture Decision section).
 - `2026-06-09-gitleaks-same-id-custom-rule-shadows-default-pack-rule.md` and AGENTS `cq-test-fixtures-synthesized-only`: build the fake secret by concatenation (`_mk_pem` already does).
 - Sharp Edge (plan-sharp-edges): "A fail-closed change is not done until its most natural REPAIR is also refused" and "a plan that segments shell text must fixture every overloaded character" - see S-repair and the walker unit rows.
 
+**Deepen-plan measurements (2026-10-20).** `perl plugins/soleur/hooks/lib/shell-argv.pl --trace` on 12 shapes: `eval "$CMD"` -> `[eval] [$CMD]` (operand carries the expansion flag); `bash -c "$SCRIPT"` -> `[bash] [-c] [$SCRIPT]`; `cd ~/wt` -> `[cd] [~/wt]`; `git -c a=b --no-pager -C ../x commit -C HEAD` -> one record with `-C` appearing both before and after `commit`; `GIT_DIR=/x git commit` -> the assignment is a leading word; `(cd /a && git commit)` and `cd /a 2>&1 && git commit` -> plain `cd` and `git` records (redirects dropped); `builtin cd /a && command git commit` -> `[builtin] [cd] [/a]`, `[command] [git] [commit]`; `env -C /a git commit` -> `[env] [-C] [/a] [git] [commit]`; an unterminated quote -> exit 2; the heredoc-in-`-m` message -> a `cat` substitution record and one quoted `git` word. Run time about 7 ms.
+
+**Cross-checks done live.** Issues #9089 (CLOSED), #10331 (CLOSED), #10609 (OPEN), #10696 (OPEN), PR #9099 (MERGED); ADR-099, 156, 157, 165, 173, 256, 277 exist; every AGENTS rule id cited exists as an active rule; all four plan-cited learning paths exist.
+
 **Sensitive-surface note.** `.claude/hooks/` is not in preflight Check 6's `SENSITIVE_PATH_RE`, but the brief and AGENTS
 `hr-weigh-every-decision-against-target-user-impact` treat it as one; the threshold is declared explicitly below.
 
@@ -113,7 +134,7 @@ associative arrays; empty arrays under `set -u` read as `${a[@]+"${a[@]}"}`; `$H
   terminating `OK` field is the ONLY success signal, and a stream without it is `E`. Sets `CTR_TARGETS`, `CTR_BAD`
   (reason strings), `CTR_COMMIT_SEEN` (a `git ... commit` record exists) and `CTR_LEX_STATE` (`ok` | `unavailable`).
 - Record walker (per record, any ctx): skip leading `NAME=value` words (`GIT_DIR=` / `GIT_WORK_TREE=` -> bad) and the
-  wrappers `env command builtin exec nohup time`; then
+  wrappers `env command builtin exec nohup time` (measured: they arrive as separate leading argv words, e.g. `[builtin] [cd] [/a]`, `[command] [git] [commit]`); `env -C <p>` / `env --chdir=<p>` adds `<p>` as a target (measured: `[env] [-C] [/a] [git] ...`), `env -S` or an expansion operand -> bad; then
   - `cd` / `pushd`: skip options `-L -P -e -@ --`; the first operand is a target; no operand -> `$HOME`; an operand
     flagged `x` (expansion), `-`, or any word starting with `~` -> bad (agents are told to use absolute paths).
   - `git`: loop over global options - `-C <p>` (adds `<p>`; repeated `-C` each resolve against the previous),
@@ -192,7 +213,7 @@ root and says to unstage or scrub in that root.
 - **Performance.** Measured: `shell-argv.pl` lexes a 3-command string in about 7 ms. Perl runs only when the pre-filter matches.
 - **Lexer ownership.** `plugins/soleur/hooks/lib/shell-argv.pl` is plugin-owned and ships to customers; the hook takes a runtime dependency on it from inside the same repo. `shell-argv-parity.test.sh` pins the shared lexer spans and `--trace` argv, NOT the NUL record framing the walker reads; T40 (in the hook's suite) asserts the framing and that the resolved lexer path exists, and the README states the coupling. If the plugin dir moves, the hook fails closed (lexer unavailable -> deny for tokenised commands) with a repair text, never open. The Devin binding (`.devin/config.json`, disposition `bind`) resolves the hook from `$hook_root/.claude/hooks`, and `plugins/soleur/` sits in the same checkout (also in the bare-root `sync_bare_files` overlay of HEAD); T40's path assertion covers it. Cloud sessions run no hooks (INSTRUCTIONS.md Cloud Mode), so they are unaffected.
 - **Threat model (documented, not defended).** The adversary is a fallible cooperative agent, not a hostile one. Not modelled: aliases, `xargs git commit`, a script that runs the commit, `find -exec`. Those fall back to the fallback roots (today's behaviour). Also unchanged: a command that stages and commits in one call (`git add -A && git commit`, `git commit -a`) is scanned against the index BEFORE it runs - tracked separately in #10696 (deferred, `deferred-scope-out`).
-- **Attack Surface Enumeration.** Ways the commit target can be named in command text: leading/chained `cd` and `pushd`; `git -C` (repeatable); `--git-dir[=]`, `--work-tree[=]`; `GIT_DIR=` / `GIT_WORK_TREE=` assignments; subshell `( ... )`; `$(...)` / backticks; `bash|sh|zsh -c '...'` and `eval`; `builtin cd`; wrappers (`env`, `command`). Literal forms are covered by the union + lexer re-lexing; non-literal and git-dir/work-tree forms by the deny. Documented non-goals: `xargs`, `find -exec`, aliases, scripts, `env -C <dir> git commit` (wrapper option; the `env` wrapper's own `-C` is not parsed - falls back to fallback roots; documented, tracked with the other wrapper non-goals).
+- **Attack Surface Enumeration.** Ways the commit target can be named in command text: leading/chained `cd` and `pushd`; `git -C` (repeatable); `--git-dir[=]`, `--work-tree[=]`; `GIT_DIR=` / `GIT_WORK_TREE=` assignments; subshell `( ... )`; `$(...)` / backticks; `bash|sh|zsh -c '...'` and `eval`; `builtin cd`; wrappers (`env`, `command`; `env -C <dir>` is parsed as a target). Literal forms are covered by the union + lexer re-lexing; non-literal and git-dir/work-tree forms by the deny. Documented non-goals: `xargs`, `find -exec`, aliases, scripts.
 
 ## User-Brand Impact
 
@@ -208,7 +229,34 @@ root and says to unstage or scrub in that root.
 
 ## Observability
 
-No schema block is required (`.claude/hooks/` is outside the code-class paths of plan Phase 2.9), but the signal exists: every outcome writes an incident-ledger row via `emit` (`.claude/.rule-incidents.jsonl`): `deny` rows for findings and for the new undeterminable-target deny (reason prefix `git-commit-secret-scan: BLOCKED: cannot determine`), and one `bypass` row per root skipped (`.gitleaks.toml absent`) or per environment fault. A drop in `bypass ".gitleaks.toml absent"` rows after bare-root sessions is the field confirmation; the false-deny rate is read from `cannot determine` rows (CTO ruling: flip the fallback-union policy only if it proves material). Whether payload `.cwd` follows a prior separate `cd` call in the real harness is confirmed post-merge from the ledger (the repair path depends on it); the fixture T42 proves the hook side.
+The plan Phase 2.9 trigger set does not list `.claude/hooks/`, but the deepen gate (4.7) only skips pure-docs plans, so the schema is declared. The signal exists: every outcome writes an incident-ledger row via `emit` (`.claude/.rule-incidents.jsonl`): `deny` rows for findings and for the new undeterminable-target deny (reason prefix `git-commit-secret-scan: BLOCKED: cannot determine`), and one `bypass` row per root skipped (`.gitleaks.toml absent`) or per environment fault. A drop in `bypass ".gitleaks.toml absent"` rows after bare-root sessions is the field confirmation; the false-deny rate is read from `cannot determine` rows (CTO ruling: flip the fallback-union policy only if it proves material). Whether payload `.cwd` follows a prior separate `cd` call in the real harness is confirmed post-merge from the ledger (the repair path depends on it); the fixture T42 proves the hook side.
+
+```yaml
+liveness_signal:
+  what: incident-ledger rows (deny and bypass) written by the hook through emit on every commit it evaluates
+  cadence: per git commit evaluated by the hook
+  alert_target: none automatic (local developer hook); the false-deny and skip rates are read from the ledger after landing
+  configured_in: .claude/hooks/git-commit-secret-scan.sh (emit calls) and .claude/hooks/lib/incidents.sh
+error_reporting:
+  destination: the hook JSON permissionDecisionReason (deny) plus stderr WARN lines and ledger rows for every bypass
+  fail_loud: true - every undeterminable-target condition denies with a named cause and repair; no path skips silently
+failure_modes:
+  - mode: target directory not determinable (non-literal, lexer error, perl or library missing)
+    detection: deny reason prefix "git-commit-secret-scan: BLOCKED: cannot determine" in the ledger
+    alert_route: the agent sees the deny at once; repeated rows in the ledger surface a false-deny pattern
+  - mode: root skipped because it has no .gitleaks.toml
+    detection: bypass row ".gitleaks.toml absent" (one per root)
+    alert_route: ledger row plus stderr WARN
+  - mode: gitleaks unrunnable or probe timed out
+    detection: existing bypass rows "gitleaks unrunnable" / probe-timeout
+    alert_route: ledger row plus stderr WARN
+logs:
+  where: .claude/.rule-incidents.jsonl (local) and the hook stderr
+  retention: governed by .claude/hooks/lib/log-rotation.sh
+discoverability_test:
+  command: grep -q 'cannot determine' .claude/hooks/git-commit-secret-scan.sh && printf ok
+  expected_output: ok
+```
 
 ## Architecture Decision (ADR/C4)
 
@@ -293,7 +341,7 @@ Fixture topology (helper `_mk_bare_root_with_worktree`): a scratch dir `git init
 | T43 non-commit stays allowed | bare root | `git -C <wt> log --oneline`, `git --no-pager status`, `echo "git -C x commit"` | allow, no scan, no false deny |
 | S-repair | bare root | the repairs the deny text recommends: literal absolute `cd /abs/wt && git commit`, `git -C /abs/wt commit`, `cd /abs/wt; git commit`; and the lazily-bound `WT=/abs/wt; cd "$WT" && git commit` | the first three are scanned (deny on the planted leak); the lazily-bound one is still denied; with a clean worktree the literal repairs ALLOW (repair must not reopen the skip and must not dead-end) |
 
-Walker unit rows (source the lib, call `ctr_collect`, assert `CTR_TARGETS` / `CTR_BAD`): redirects (`cd /a 2>&1 && ...`, `cd /a &> /dev/null`), `$(...)` containing `cd`, a `#` comment mid-word, `builtin cd`, `cd -P -- /a`, `pushd /a`, repeated `-C`, `-c k=v`, `git commit -C HEAD` (the `-C` after `commit` is not a global option), quoted path with a space, and the pre-filter token list (every form the walker handles matches `ctr_wants_lex`).
+Walker unit rows (source the lib, call `ctr_collect`, assert `CTR_TARGETS` / `CTR_BAD`): redirects (`cd /a 2>&1 && ...`, `cd /a &> /dev/null`), `$(...)` containing `cd`, a `#` comment mid-word, `builtin cd`, `cd -P -- /a`, `pushd /a`, repeated `-C`, `-c k=v`, `git commit -C HEAD` (the `-C` after `commit` is not a global option), quoted path with a space, `env -C /a git commit`, `builtin cd /a && command git commit`, `(cd /a && git commit)`, `eval "$CMD"` and `bash -c "$SCRIPT"` (operand carries an expansion -> bad), and the pre-filter token list (every form the walker handles matches `ctr_wants_lex`).
 
 Commands for verification (run by `soleur:work`, not here): `bash .claude/hooks/git-commit-secret-scan.test.sh`, `bash plugins/soleur/test/boundary-prefix.test.sh`, `bash plugins/soleur/test/shell-argv-parity.test.sh`, `bash plugins/soleur/test/c4-count-parity.test.sh`, `shellcheck` on the touched `.sh` files, `bash .claude/hooks/hook-input-contract.test.sh`.
 
