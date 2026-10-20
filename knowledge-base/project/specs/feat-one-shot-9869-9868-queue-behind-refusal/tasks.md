@@ -45,10 +45,10 @@ Closes (by Ref, ship step owns the body): #9869, #9868. Draft PR: #10655.
 - [x] 4.3 bun tests GREEN
 
 ## Phase 5: AGENTS rule (#9868)
-- [ ] 5.1 Edit the tail of the hr-pipeline-skills-never-inline-after-go-route line to the Phase 5.1 wording (before pins/hash/ack)
-- [ ] 5.2 lint-rule-bodies.py --write
-- [ ] 5.3 Append the hash-bound ack (PR 10655)
-- [ ] 5.4 lint-rule-ids / rule-budget / enforcement-tags / rule-bodies --check / workflow-fidelity GREEN
+- [x] 5.1 Edit the tail of the hr-pipeline-skills-never-inline-after-go-route line to the Phase 5.1 wording (before pins/hash/ack)
+- [x] 5.2 lint-rule-bodies.py --write
+- [x] 5.3 Append the hash-bound ack (PR 10655)
+- [x] 5.4 lint-rule-ids / rule-budget / enforcement-tags / rule-bodies --check / workflow-fidelity GREEN
 
 ## Phase 6: ADR
 - [ ] 6.1 ADR-270 addendum 2026-10-20 (decision + four residuals); check-adr-ordinals; c4-count-parity
