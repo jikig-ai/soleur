@@ -651,15 +651,15 @@ interface ProposedCluster {
   rationale: string;
   /**
    * The length of the model's raw `source_learnings` list BEFORE normalisation. Diagnostic
-   * only: it rides the Sentry event of a quorum refusal (never the outcome marker), so one
-   * event separates "the model proposed too few" from "normalisation dropped paths that are
-   * not in the corpus".
+   * only: the handler copies it into the Sentry `extra` of a quorum refusal (never the outcome
+   * marker), so one event separates "the model proposed too few" from "normalisation dropped
+   * unknown or duplicate paths".
    */
   raw_source_count?: number;
 }
 
 /** A proposal plus the diff the SERVER derived for it; the only shape the apply step reads. */
-interface Cluster extends ProposedCluster {
+interface Cluster extends Omit<ProposedCluster, "raw_source_count"> {
   proposed_diff_unified: string;
 }
 
@@ -952,17 +952,23 @@ export const EDIT_REFUSAL_REASONS = [
 export type EditRefusalReason = (typeof EDIT_REFUSAL_REASONS)[number];
 export type EditRefusal = {
   ok: false;
-  // `quorum-not-met` is deliberately not an `edit-*` member (Guard 1b pins that prefix to the
-  // seven in EDIT_REFUSAL_REASONS); `target-path-refused` is the precedent.
-  reason: EditRefusalReason | "target-path-refused" | "quorum-not-met";
+  reason: EditRefusalReason | "target-path-refused";
   /** Closed vocabulary; goes to the Sentry tag, never to the marker. */
   cause: string;
-  /** Quorum refusal only: distinct corpus-resolved sources. A bare integer, Sentry `extra` only. */
-  sourceCount?: number;
-  /** Quorum refusal only: the model's raw list length before normalisation. Sentry `extra` only. */
-  proposedCount?: number;
 };
-export type DraftEditResult = { ok: true; diff: string } | EditRefusal;
+/**
+ * The server-enforced promotion quorum (ADR-092 Amendment 2026-10-20). Its own member rather
+ * than a widened `EditRefusal`: it is deliberately not an `edit-*` reason (Guard 1b pins that
+ * prefix to the seven in EDIT_REFUSAL_REASONS; `target-path-refused` is the precedent) and it
+ * alone carries a count. `sourceCount` is a bare integer for the Sentry `extra`, never the marker.
+ */
+export type QuorumRefusal = {
+  ok: false;
+  reason: "quorum-not-met";
+  cause: "below-quorum";
+  sourceCount: number;
+};
+export type DraftEditResult = { ok: true; diff: string } | EditRefusal | QuorumRefusal;
 
 export const EDIT_OUTPUT_SCHEMA = {
   type: "object",
@@ -1278,10 +1284,11 @@ export async function buildAdditiveEditDiff(input: {
 /**
  * Phase 2: ask the model for an anchor and the lines to insert, against the REAL file.
  * Anthropic API errors and infra faults on the pre-call reads propagate (the function has
- * `retries: 1`); only a model-side or content problem is a refusal.
+ * `retries: 1`); only a model-side or content problem is a refusal, and a cluster with fewer
+ * than PROMOTION_QUORUM distinct corpus-resolved sources is refused first of all.
  */
 export async function draftAdditiveEdit(args: {
-  cluster: { target_path: string; rationale: string; source_learnings: string[]; raw_source_count?: number };
+  cluster: { target_path: string; rationale: string; source_learnings: string[] };
   repoRoot: string;
   apiKey: string;
   runId?: string;
@@ -1296,7 +1303,8 @@ export async function draftAdditiveEdit(args: {
   // Summaries come from a Map built from the already-collected corpus. A model-supplied
   // path that is not a key is DROPPED, never read from disk: `readFile(join(repoRoot, p))`
   // on a model string would send an arbitrary file to Anthropic. This loop is pure (a Map
-  // lookup), so it sits ABOVE every git read: the quorum check below needs no I/O.
+  // lookup), so it sits ABOVE every git read. (The draft step that calls this function still
+  // checks the API key and reads the always-loaded files first; they are not git reads.)
   const sources: Array<{ path: string; summary: string }> = [];
   for (const p of cluster.source_learnings) {
     const summary = corpusSummaries.get(p);
@@ -1310,13 +1318,7 @@ export async function draftAdditiveEdit(args: {
   // call (no spend). Zero sources is below any positive quorum, so the former
   // `edit-invalid`/`no-source` cause is subsumed here.
   if (sources.length < PROMOTION_QUORUM) {
-    return {
-      ok: false,
-      reason: "quorum-not-met",
-      cause: "below-quorum",
-      sourceCount: sources.length,
-      ...(cluster.raw_source_count === undefined ? {} : { proposedCount: cluster.raw_source_count }),
-    };
+    return { ok: false, reason: "quorum-not-met", cause: "below-quorum", sourceCount: sources.length };
   }
 
   const target = await readEditTarget(repoRoot, cluster.target_path);
@@ -1771,7 +1773,7 @@ export async function cronCompoundPromoteHandler({
       rationale: typeof c.rationale === "string" ? c.rationale : "",
       // Captured BEFORE the filter below: a diagnostic integer for a quorum refusal's Sentry event.
       raw_source_count: Array.isArray(c.source_learnings) ? c.source_learnings.length : 0,
-      // Deduped: five copies of one path must not read as five learnings (`Threshold-Hit`).
+      // Deduped: N copies of one path must not read as N learnings (`Threshold-Hit`).
       source_learnings: [
         ...new Set(
           (Array.isArray(c.source_learnings) ? c.source_learnings : []).filter(
@@ -1840,8 +1842,14 @@ export async function cronCompoundPromoteHandler({
             tags: { reason: result.reason, cause: result.cause },
             extra: {
               cluster_hash: clusterHash,
-              ...(result.sourceCount === undefined ? {} : { source_count: result.sourceCount }),
-              ...(result.proposedCount === undefined ? {} : { proposed_count: result.proposedCount }),
+              // Bare integers (a length is not model text). Quorum refusals only: the counts
+              // separate "the model proposed too few" from "normalisation dropped paths".
+              ...(result.reason === "quorum-not-met"
+                ? {
+                    source_count: result.sourceCount,
+                    ...(proposed.raw_source_count === undefined ? {} : { proposed_count: proposed.raw_source_count }),
+                  }
+                : {}),
             },
           });
           return { kind: "refused", reason: result.reason };

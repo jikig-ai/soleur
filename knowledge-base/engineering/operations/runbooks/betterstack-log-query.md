@@ -662,7 +662,7 @@ Reading it:
 
   | reason | what actually happened | probe class |
   |---|---|---|
-  | `quorum-not-met` | the cluster had fewer than `PROMOTION_QUORUM` (5) distinct corpus-resolved source learnings; refused before any git read or model call (ADR-092 Amendment 2026-10-20). Sentry tags `reason=quorum-not-met`, `cause=below-quorum`; `extra.source_count` (distinct resolved) and `extra.proposed_count` (the model's raw list length) are bare integers | N |
+  | `quorum-not-met` | the cluster had fewer than `PROMOTION_QUORUM` (5) distinct corpus-resolved source learnings; refused before the target file is read and before the phase-2 model call (the draft step's API-key check and always-loaded read still run first; ADR-092 Amendment 2026-10-20). Sentry tags `reason=quorum-not-met`, `cause=below-quorum`; `extra.source_count` (distinct resolved) and `extra.proposed_count` (the model's raw list length) are bare integers, also present on the pino `draft-edit-refused` row | N |
 
   `diff-path-off-target`, `corpus-shrink-refused` and `agents-core-hr-rule-edit-refused` can no longer fire
   for a correct server derivation (the diff touches only the declared target, removes nothing, and cannot mint

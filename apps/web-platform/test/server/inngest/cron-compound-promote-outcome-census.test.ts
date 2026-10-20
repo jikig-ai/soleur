@@ -830,6 +830,12 @@ export function censusQuorum(src: string): {
   trailerQuorumSpans: number;
   trailerHasNumericDenominator: boolean;
   comparisons: number;
+  /** The comparison's `if` returns the quorum refusal (not an empty or unrelated body). */
+  gateReturnsRefusal: boolean;
+  /** The comparison's `if` ends before every `readEditTarget(` and `post(` call in its function. */
+  gateBeforeIo: boolean;
+  /** The quorum span in the phase-1 prompt follows a `>=` (the sense of the threshold). */
+  promptSenseOk: boolean;
   emits: number;
 } {
   const sf = ts.createSourceFile("t.ts", src, ts.ScriptTarget.Latest, true);
@@ -841,6 +847,9 @@ export function censusQuorum(src: string): {
   let trailerHasNumericDenominator = false;
   let trailerSeen = 0;
   let comparisons = 0;
+  let gateReturnsRefusal = false;
+  let gateBeforeIo = false;
+  let promptSenseOk = false;
   let emits = 0;
   const isQuorum = (e: ts.Node): boolean => ts.isIdentifier(e) && e.text === "PROMOTION_QUORUM";
   const pieces = (t: ts.TemplateExpression): string[] => [t.head.text, ...t.templateSpans.map((s) => s.literal.text)];
@@ -852,6 +861,10 @@ export function censusQuorum(src: string): {
       if (n.head.text.includes("clustering agent")) {
         promptSeen++;
         promptQuorumSpans += n.templateSpans.filter((s) => isQuorum(s.expression)).length;
+        n.templateSpans.forEach((span, i) => {
+          const before = i === 0 ? n.head.text : n.templateSpans[i - 1].literal.text;
+          if (isQuorum(span.expression) && before.endsWith(">=")) promptSenseOk = true;
+        });
         if (pieces(n).some((p) => />=\s*\d/.test(p))) promptHasNumericThreshold = true;
       }
       if (n.head.text.startsWith("Threshold-Hit:")) {
@@ -861,13 +874,45 @@ export function censusQuorum(src: string): {
         if (pieces(n).some((p) => /\/\s*\d/.test(p))) trailerHasNumericDenominator = true;
       }
     }
+    // Either operand order: `sources.length < Q` and `Q > sources.length` are the same gate.
     if (
       ts.isBinaryExpression(n) &&
-      n.operatorToken.kind === ts.SyntaxKind.LessThanToken &&
-      n.left.getText(sf) === "sources.length" &&
-      isQuorum(n.right)
+      ((n.operatorToken.kind === ts.SyntaxKind.LessThanToken &&
+        n.left.getText(sf) === "sources.length" &&
+        isQuorum(n.right)) ||
+        (n.operatorToken.kind === ts.SyntaxKind.GreaterThanToken &&
+          n.right.getText(sf) === "sources.length" &&
+          isQuorum(n.left)))
     ) {
       comparisons++;
+      // The gate's `if`: it must return the refusal, and it must end before the first read or
+      // model call in the same function (so it cannot be moved below them, or emptied).
+      let gate: ts.Node | undefined = n;
+      while (gate && !ts.isIfStatement(gate)) gate = gate.parent;
+      let fn: ts.Node | undefined = n;
+      while (fn && !ts.isFunctionDeclaration(fn) && !ts.isFunctionExpression(fn) && !ts.isArrowFunction(fn)) fn = fn.parent;
+      if (gate && ts.isIfStatement(gate) && fn) {
+        const gateEnd = gate.getEnd();
+        let returnsRefusal = false;
+        const scanThen = (m: ts.Node): void => {
+          if (ts.isReturnStatement(m) && m.expression && /["']quorum-not-met["']/.test(m.expression.getText(sf))) {
+            returnsRefusal = true;
+          }
+          m.forEachChild(scanThen);
+        };
+        scanThen(gate.thenStatement);
+        gateReturnsRefusal = returnsRefusal;
+        let before = true;
+        const scanIo = (m: ts.Node): void => {
+          if (ts.isCallExpression(m)) {
+            const callee = m.expression.getText(sf);
+            if ((callee === "readEditTarget" || callee === "post") && m.getStart(sf) < gateEnd) before = false;
+          }
+          m.forEachChild(scanIo);
+        };
+        scanIo(fn);
+        gateBeforeIo = before;
+      }
     }
     if (
       ts.isPropertyAssignment(n) &&
@@ -892,6 +937,9 @@ export function censusQuorum(src: string): {
     trailerQuorumSpans,
     trailerHasNumericDenominator,
     comparisons,
+    gateReturnsRefusal,
+    gateBeforeIo,
+    promptSenseOk,
     emits,
   };
 }
@@ -911,6 +959,11 @@ describe("Guard 1d -- PROMOTION_QUORUM is the single source of the quorum", () =
     expect(c.trailerHasNumericDenominator).toBe(false);
     expect(c.comparisons).toBe(1);
     expect(c.emits).toBe(1);
+    // The wire, not only the endpoints: the comparison's `if` returns the refusal, it ends
+    // before the first readEditTarget(/post( call in its function, and the prompt says `>=` Q.
+    expect(c.gateReturnsRefusal).toBe(true);
+    expect(c.gateBeforeIo).toBe(true);
+    expect(c.promptSenseOk).toBe(true);
   });
 
   it("quorum-not-met is NOT an edit-* member: EDIT_REFUSAL_REASONS stays at seven", () => {
@@ -944,19 +997,59 @@ describe("Guard 1d -- PROMOTION_QUORUM is the single source of the quorum", () =
     expect(c.comparisons).toBe(0);
   });
 
+  it("mutation: the gate moved below readEditTarget is RED", () => {
+    const c = censusQuorum(
+      mutate(
+        "  if (sources.length < PROMOTION_QUORUM) {",
+        // Parsed, never executed: the arguments are irrelevant (and must not spell the repo-root
+        // helper name, which repo-wide-containment reads as an escape from the app).
+        "  const _t0 = await readEditTarget(cluster.target_path, cluster.target_path);\n  if (sources.length < PROMOTION_QUORUM) {",
+      ),
+    );
+    expect(c.comparisons).toBe(1);
+    expect(c.gateBeforeIo).toBe(false);
+  });
+
+  it("mutation: the gate's body emptied (no refusal returned) is RED", () => {
+    const c = censusQuorum(
+      mutate(
+        'return { ok: false, reason: "quorum-not-met", cause: "below-quorum", sourceCount: sources.length };',
+        "void 0;",
+      ),
+    );
+    expect(c.gateReturnsRefusal).toBe(false);
+  });
+
+  it("mutation: the prompt's sense flipped (>= becomes >) is RED", () => {
+    const c = censusQuorum(mutate("(each with >=${PROMOTION_QUORUM} source learnings", "(each with >${PROMOTION_QUORUM} source learnings"));
+    expect(c.promptSenseOk).toBe(false);
+  });
+
+  it("refactor-tolerance: the operand-swapped spelling of the same gate stays GREEN", () => {
+    const c = censusQuorum(mutate("sources.length < PROMOTION_QUORUM", "PROMOTION_QUORUM > sources.length"));
+    expect(c.comparisons).toBe(1);
+    expect(c.gateReturnsRefusal).toBe(true);
+    expect(c.gateBeforeIo).toBe(true);
+  });
+
   it("mutation: a second emit site for the reason is RED", () => {
     const c = censusQuorum(read() + '\nexport const _second = { reason: "quorum-not-met" };\n');
     expect(c.emits).toBe(2);
   });
 
   it("mutation: the emit site removed is RED", () => {
-    const c = censusQuorum(mutate('reason: "quorum-not-met"', 'reason: "edit-invalid"'));
+    // Anchor on the return, not the bare literal: the QuorumRefusal TYPE also spells it.
+    const c = censusQuorum(mutate('return { ok: false, reason: "quorum-not-met"', 'return { ok: false, reason: "edit-invalid"'));
     expect(c.emits).toBe(0);
   });
 
   it("dispatch: zero or two declarations THROW, never read clean", () => {
-    expect(() => censusQuorum(read().replace("export const PROMOTION_QUORUM = 5;", ""))).toThrow(/found 0/);
+    // Anchors are derived from the source (any numeric value), never a literal 5: the census
+    // must keep working if the constant legitimately changes (the value pin owns the value).
+    const decl = /export const PROMOTION_QUORUM = \d+;/;
+    expect(read()).toMatch(decl);
+    expect(() => censusQuorum(read().replace(decl, ""))).toThrow(/found 0/);
     expect(() => censusQuorum(read() + "\nconst PROMOTION_QUORUM = 4;\n")).toThrow(/found 2/);
-    expect(() => censusQuorum(read().replace("PROMOTION_QUORUM = 5;", "PROMOTION_QUORUM = Number('5');"))).toThrow(/numeric literal/);
+    expect(() => censusQuorum(read().replace(decl, "export const PROMOTION_QUORUM = Number('5');"))).toThrow(/numeric literal/);
   });
 });

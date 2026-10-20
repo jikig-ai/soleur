@@ -636,17 +636,9 @@ describe("draftAdditiveEdit -- the model call", () => {
       for (const n of [PROMOTION_QUORUM - 1, 0]) {
         const post = answer(good);
         const r = await draftAdditiveEdit(
-          args(post, {
-            cluster: { ...cluster, source_learnings: quorumSources.slice(0, n), raw_source_count: n + 3 },
-          }),
+          args(post, { cluster: { ...cluster, source_learnings: quorumSources.slice(0, n) } }),
         );
-        expect(r, `n=${n}`).toMatchObject({
-          ok: false,
-          reason: "quorum-not-met",
-          cause: "below-quorum",
-          sourceCount: n,
-          proposedCount: n + 3,
-        });
+        expect(r, `n=${n}`).toEqual({ ok: false, reason: "quorum-not-met", cause: "below-quorum", sourceCount: n });
         expect(post, `n=${n}`).not.toHaveBeenCalled();
       }
     });
@@ -661,8 +653,8 @@ describe("draftAdditiveEdit -- the model call", () => {
 
     it("Q3: the count is DISTINCT RESOLVED sources, not the raw list length", async () => {
       const post = answer(good);
-      // 2 * quorum entries listed: (quorum - 2) distinct in-corpus paths, each duplicated,
-      // plus unknown paths. The raw length is far above the quorum; the resolved set is not.
+      // 2 * (quorum - 2) + 3 entries listed: (quorum - 2) distinct in-corpus paths, each
+      // duplicated, plus three unknown paths. The raw length is above the quorum; the resolved set is not.
       const distinct = quorumSources.slice(0, PROMOTION_QUORUM - 2);
       const listed = [
         ...distinct,

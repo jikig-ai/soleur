@@ -25,7 +25,8 @@
 # probe's clock with a PATH-shimmed `date` for the 35-day boundary pair, and prove
 # nothing raw from the query helper's stderr reaches the output. Mutation rows M-5 ..
 # M-13 prove each of those guards is load-bearing. Rows P-4b / P-4c and M-14 / M-15 pin the
-# server-enforced quorum refusal `quorum-not-met` as class N (never PASS, never FAIL).
+# server-enforced quorum refusal `quorum-not-met` as class N (never PASS, never FAIL; P-4d
+# pins that it also never hides a class-F defect beside it).
 #
 # All fixtures are synthesized. Nothing here talks to a network or reads a secret.
 set -uo pipefail
@@ -186,6 +187,10 @@ if grep -q -- "quorum-not-met" "$PROBE_DIR/err"; then pass "P-4b: prints quorum-
 echo "P-4c. a sub-quorum refusal beside a class-P sibling in the same run does not suppress the proof -> exit 0"
 probe_rows -- "$C" "$(mk_row "$(marker cron completed 0 '["quorum-not-met","byte-budget-overflow"]')" "$D1")"
 expect_rc "P-4c" 0 "$PROBE_RC"
+
+echo "P-4d. a sub-quorum refusal beside a class-F defect in the same run does not hide the defect -> exit 1"
+probe_rows -- "$C" "$(mk_row "$(marker cron completed 0 '["quorum-not-met","git-apply-check-failed"]')" "$D1")"
+expect_rc "P-4d" 1 "$PROBE_RC"
 
 echo "P-5. a class-P refusal and no class-F refusal -> exit 0"
 for r in byte-budget-overflow not-committed-pr-create; do
@@ -689,7 +694,7 @@ mut_row M-15 "quorum-not-met added to the P set -> a quorum-only window becomes 
 
 
 # --- verdict: floor + conservation reported DIRECTLY, never via pass()/fail() --
-MIN_CASES=183
+MIN_CASES=184
 total=$((passes + fails))
 if (( total < MIN_CASES )); then
   printf 'FATAL: only %d case(s) ran; floor is %d - the suite asserted nothing\n' "$total" "$MIN_CASES" >&2

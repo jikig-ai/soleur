@@ -19,7 +19,7 @@
 # proof: a derived diff touches only the declared target, removes nothing and cannot mint an
 # `hr-` id, so one of them firing means the SERVER derivation is defective (class F; CTO ruling).
 # The PASS set is NOT the complement of the failure set: a complement would pass
-# `target-path-refused`, `skill-conflict-guard`, `diff-size-exceeded`,
+# `target-path-refused`, `quorum-not-met`, `skill-conflict-guard`, `diff-size-exceeded`,
 # `branch-name-shape-failed`, `target-missing` and any forged unknown string, none of
 # which touches the derived diff.
 #

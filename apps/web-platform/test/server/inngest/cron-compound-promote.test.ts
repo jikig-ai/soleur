@@ -273,8 +273,12 @@ describe("model contract (#10552)", () => {
     );
     const start = src.indexOf("You are a clustering agent");
     const prompt = src.slice(start, src.indexOf("].join(", start));
-    expect(prompt).toContain("${PROMOTION_QUORUM}");
+    // Both prompt lines state it (the census pins only the first template): the sense (>=) and
+    // the "N or more distinct" line, each read from the constant, with no literal anywhere.
+    expect(prompt).toContain(">=${PROMOTION_QUORUM} source learnings");
+    expect(prompt.match(/\$\{PROMOTION_QUORUM\}/g)).toHaveLength(2);
     expect(prompt).not.toMatch(/>=\s*\d/);
+    expect(prompt).not.toMatch(/\b\d+\s+or more\b/);
     // The model is told a short cluster is refused, so it does not spend a slot on one.
     expect(prompt).toMatch(/server refuses a cluster with fewer/);
   });

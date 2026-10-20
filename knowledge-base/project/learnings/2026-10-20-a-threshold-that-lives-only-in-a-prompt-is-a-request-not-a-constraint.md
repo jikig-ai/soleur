@@ -14,7 +14,8 @@ pr: 10673
 
 The Compound Promotion Loop promises a draft PR only for a cluster of at least five related learnings. That
 "five" existed as prompt prose and as the literal `/5` in the `Threshold-Hit: N/5` trailer. Nothing checked it, so a
-two-learning cluster opened a draft PR whose own trailer read `Threshold-Hit: 2/5`. The previous PR (#10553) made
+two-learning cluster would open a draft PR whose own trailer read `Threshold-Hit: 2/5` (an inference from the code and
+the fixtures, not an observed incident: the weekly run had opened zero PRs). The previous PR (#10553) made
 `source_learnings` honest (non-strings dropped, duplicates collapsed, only corpus keys kept), which is what made the
 length of that list a trustworthy count, and it deliberately deferred the check.
 
@@ -43,9 +44,11 @@ fixed vocabulary of seven.
 4. **A model-side refusal must be class N in the probe.** Class P would let a quorum refusal count as proof the derived-diff
    path works; class F would page a server defect for a model behaviour. Mutation rows that add it to the P set and drop it
    from the N set prove the classification is load-bearing.
-
-## Session Errors
-
-- The worktree-isolation guard refused several compound Bash commands (pipes, `&&` chains, heredocs that append to a file);
-  splitting them into plain commands, and appending with the Edit tool instead of a heredoc, was the recovery.
-- `npm ci` was needed in the worktree before any vitest run: a fresh isolated worktree has no `node_modules`.
+5. **A census that counts declarations and uses pins the endpoints, not the wire.** The first census proved the
+   constant was declared once and read by the prompt, trailer and comparison, yet moving the check below the file read
+   or emptying its body kept it green (only the behavioural rows caught that). The structural-enumeration seat's
+   question, "does the guard's assembly equal the property it names", produced the fix: assert the comparison's `if`
+   returns the refusal and ends before the first `readEditTarget(`/`post(` in its function.
+6. **Do not thread a diagnostic through a function that never uses it.** A raw list length rode
+   ProposedCluster -> drafter parameter -> refusal field -> handler just to reach one Sentry field; the handler already
+   held the proposal, so the route was cut and the three-name drift (raw/proposed/proposedCount) went with it.

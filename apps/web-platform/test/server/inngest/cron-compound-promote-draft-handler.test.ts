@@ -438,8 +438,9 @@ describe("round 2: the parse boundary and the headroom order", () => {
 
 // =============================================================================
 // The server-enforced quorum: a cluster with fewer than PROMOTION_QUORUM distinct,
-// corpus-resolved sources is refused `quorum-not-met` before any git read and before the
-// phase-2 model call, through the same refusals[] / Sentry path as every other refusal.
+// corpus-resolved sources is refused `quorum-not-met` before the target file is read and
+// before the phase-2 model call, through the same refusals[] / Sentry path as every other
+// refusal. (The draft step's API-key check and always-loaded read still precede the drafter.)
 // =============================================================================
 describe("PROMOTION_QUORUM: a sub-quorum cluster is refused and never reaches phase 2", () => {
   const quorumEvents = () =>
@@ -468,11 +469,44 @@ describe("PROMOTION_QUORUM: a sub-quorum cluster is refused and never reaches ph
         op: "draft-edit-refused",
         message: "draft edit refused: quorum-not-met (below-quorum)",
         tags: { reason: "quorum-not-met", cause: "below-quorum" },
-        extra: expect.objectContaining({
+        // Exact: bare integers only, nothing else rides the event.
+        extra: {
           cluster_hash: expect.stringMatching(/^[0-9a-f]{64}$/),
           source_count: Q - 1,
           proposed_count: Q + 1,
-        }),
+        },
+      }),
+    );
+  });
+
+  it("H1b: a non-array source_learnings is a quorum refusal with proposed_count 0; other refusals carry no counts", async () => {
+    stubModel(
+      [{ ...AGENTS_CLUSTER, source_learnings: "not-an-array" as unknown as string[] }],
+      { "RATIONALE-AGENTS": GOOD_AGENTS_EDIT },
+    );
+    const nonArray = await run();
+    expect(nonArray.last).toMatchObject({ clusters_opened: 0, refusals: ["quorum-not-met"] });
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({
+        op: "draft-edit-refused",
+        extra: { cluster_hash: expect.any(String), source_count: 0, proposed_count: 0 },
+      }),
+    );
+
+    vi.mocked(reportSilentFallback).mockClear();
+    h.post.mockReset();
+    // A different refusal on a full-quorum cluster must not grow count fields.
+    stubModel([AGENTS_CLUSTER], {
+      "RATIONALE-AGENTS": { insert_after_line: "- Not in the file", new_lines: ["- Rule [id: cq-rule-x]. x"] },
+    });
+    const other = await run();
+    expect(other.last).toMatchObject({ refusals: ["edit-anchor-not-found"] });
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({
+        op: "draft-edit-refused",
+        extra: { cluster_hash: expect.any(String) },
       }),
     );
   });

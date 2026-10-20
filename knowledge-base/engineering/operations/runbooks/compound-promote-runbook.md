@@ -136,11 +136,10 @@ floor, the draft PR) is unchanged.
 **The quorum is checked first.** Before the target file is read and before phase 2 is called, the server
 counts the cluster's DISTINCT source learnings that are keys of the collected corpus (duplicates and paths
 the model invented do not count). Fewer than `PROMOTION_QUORUM` (5) and the cluster is refused
-`quorum-not-met`: no git read, no model call, no draft PR. Two things the gate does not claim: it counts
-corpus paths, not relatedness (`Threshold-Hit: 5/5` is a floor, and the human review of each draft PR is
-unchanged), and a refused cluster still occupies one of the week's proposal slots (the phase-1 answer is
-sliced to the remaining cap before the server normalises it). The draft step still runs its API-key check
-and reads the always-loaded files before it reaches the quorum check; those are not model calls.
+`quorum-not-met`: the target file is not read, the model is not called, no draft PR opens. Two things the
+gate does not claim: it counts corpus paths, not relatedness (`Threshold-Hit: 5/5` is a floor, and the
+human review of each draft PR is unchanged), and a refused cluster still occupies one of the week's
+proposal slots. The rationale and the other consequences live in the ADR-092 Amendment of 2026-10-20.
 
 Before this change three consecutive weekly runs each failed `git apply` in a different way and no PR
 was ever opened; the refusal enum is in `betterstack-log-query.md` (seven `edit-*` reasons).
@@ -154,11 +153,11 @@ What a streak means when you read the weekly marker:
   learnings. Model-side, not a server fault (probe class N: never PASS, never FAIL). Read the Sentry event
   (op `draft-edit-refused`, tags `reason=quorum-not-met`, `cause=below-quorum`): `extra.source_count` is the
   distinct corpus-resolved count and `extra.proposed_count` is the model's raw list length, so
-  `proposed_count` well above `source_count` means paths the corpus does not hold (a prompt or corpus-key
-  problem), and both low means the model really proposed a thin cluster. A recurring `cluster_hash` that is
-  the same every week with `source_count` 0 is the hash of an EMPTY list (a constant), not one cluster
-  recurring. The same run can also end `edit-invalid` for a cluster that an older deploy memoized before the
-  `no-source` cause was removed; that clears within one weekly run.
+  `proposed_count` well above `source_count` means unknown or duplicate paths (a prompt or corpus-key
+  problem), and both low means the model really proposed a thin cluster. The same two integers are on the
+  pino `draft-edit-refused` row in Better Stack (`scripts/betterstack-query.sh --grep draft-edit-refused`,
+  see `betterstack-log-query.md`). A recurring `cluster_hash` with `source_count` 0 is the hash of an EMPTY
+  list (a constant), not one cluster recurring.
 - **A red `lint-rule-ids` on an `AGENTS.rules.md` draft is expected, not a defect.** The cron edits one
   file; the corpus lint requires an `AGENTS.md` pointer line for every rule body. The draft PR body names
   the exact `- [id: <slug>]` line for the reviewer to add. Neither the follow-through probe nor the census

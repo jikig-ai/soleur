@@ -280,9 +280,17 @@ week-cap proposal slots (the phase-1 answer is sliced to the remaining cap befor
 it), and still counts in the headroom divisor `proposals.length - clusterIndex`, so a valid first
 cluster can be offered a smaller headroom share. Moving the filter ahead of the slice was rejected: it
 needs the corpus-key check inside the phase-1 step (replay risk) and would hide refusals from the marker.
-The gate counts distinct corpus paths, not relatedness, so `Threshold-Hit: 5/5` is a floor, and the
-human review of every draft PR is unchanged. A `draft-edit-*` step memoized by an older deploy resumes
-on the new code with its stored outcome; the window is one weekly run.
+With `remaining = 2` and a model answer of `[thin, thin, valid]`, the valid cluster is dropped by the
+slice with no refusal recorded for it. The gate counts distinct corpus paths, not relatedness or
+distinct content (a repository writer can inflate the count with copies or symlinked files; that is
+inherent to a count-based gate and outside the threat model of an operator-reviewed, never-auto-merged
+loop), so `Threshold-Hit: 5/5` is a floor, and the human review of every draft PR is unchanged. A
+`draft-edit-*` step memoized by an older deploy resumes on the new code with its stored outcome, so a
+sub-quorum cluster it had already drafted still opens one PR; the window is one weekly run.
+
+**Deferral closed.** This overturns the line "Server-side quorum of 5 source learnings: unchanged
+(pre-existing)" recorded in the #10552 decision record (Review round 2 dispositions); the revisit
+trigger named there (#8293) stays open and is not something this change waits on.
 
 **C4.** No change (CTO ruling 2026-10-20): the same Inngest function calls the same external systems;
 model call volume only falls.
