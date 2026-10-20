@@ -41,7 +41,11 @@ Forbidden: editing `apps/web-platform/server/inngest/functions/cron-compound-pro
 
 - 5.1 Fresh `soleur:legal:clo` review writes `knowledge-base/legal/audits/2026-10-counsel-review-6107.md` (SIGNED-OFF or BLOCKED).
 - 5.2 Apply conditions; re-verify after any rebase.
-- 5.3 PR body lists this plan path first among `knowledge-base/project/` paths.
+- 5.3 Update draft PR #10674 body first: plan path written BARE and first among `knowledge-base/project/` paths (verify with the gate's own extraction + `[[ -f ]]`), then run the gate.
+- 5.4 Re-run `bash scripts/lint-legal-registers.sh` after the counsel-review file exists (no breach-article strings in either new audit file).
+- 5.5 Counsel-review file records blob hashes of attested legal files; recompute after any rebase / merge-queue rebase; re-spawn the CLO only if content changed. Memo DRAFT banner + `draft-requires-counsel-review` stay.
+- 5.6 Immediately before merge: `gh pr view 10673 --json state`; if merged and it changed what is sent to a processor, re-read the cron diff and re-run the CLO.
+- 5.7 Pre-merge hollow-file / leak / overclaim checks on the memo (plan AC14, AC18, AC19, AC21, AC22).
 
 ## Phase 6: Ship and postmerge
 
