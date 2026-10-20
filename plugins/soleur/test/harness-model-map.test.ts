@@ -70,8 +70,29 @@ describe("harness-model-map (ADR-110)", () => {
     expect(TIER_MAPS.grok.cheap).not.toBe("grok-build-0.1");
   });
 
-  test("every non-inherit tier resolves to a non-empty value for claude and grok", () => {
-    for (const harness of ["claude", "grok"] as const) {
+  test("opencode fixture map names keyless Zen slugs, not paid or trial rows", () => {
+    // Rationale and the rejected set: measurement §12.7 + the file docblock.
+    expect(resolveModelTier("cheap", "opencode")).toBe("opencode/glm-5.3-flash-free");
+    expect(resolveModelTier("standard", "opencode")).toBe("opencode/big-pickle");
+    expect(resolveModelTier("strong", "opencode")).toBe("opencode/big-pickle");
+    expect(resolveModelTier("advisor", "opencode")).toBe("opencode/big-pickle");
+    expect(resolveModelTier("inherit", "opencode")).toBe("inherit");
+    // Every value is a `provider/model` id, never a bare alias: a bare `sonnet` is
+    // unresolvable here and the spawn fails at the harness, not at Soleur.
+    for (const tier of ["cheap", "standard", "strong", "advisor"] as const) {
+      expect(TIER_MAPS.opencode[tier]).toMatch(/^[a-z0-9-]+\/.+/);
+    }
+    // `cheap` must not be the flagship: a mechanical step pinning it would silently
+    // upgrade a cheaper session instead of downgrading (ADR-053 tier 2).
+    expect(TIER_MAPS.opencode.cheap).not.toBe(TIER_MAPS.opencode.standard);
+    // The NVIDIA trial rows (logged, "trial use only") are never a Soleur default.
+    for (const tier of ["cheap", "standard", "strong", "advisor"] as const) {
+      expect(TIER_MAPS.opencode[tier]).not.toContain("nemotron");
+    }
+  });
+
+  test("every non-inherit tier resolves to a non-empty value for every mapped harness", () => {
+    for (const harness of ["claude", "grok", "opencode"] as const) {
       for (const tier of SEMANTIC_TIERS) {
         const value = resolveModelTier(tier, harness);
         expect(value.length).toBeGreaterThan(0);
@@ -126,6 +147,12 @@ describe("harness-model-map (ADR-110)", () => {
     expect(
       resolveModelTier("cheap", detectHarness(env({ GROK_HOME: "/tmp/.grok" }))),
     ).toBe("grok-4.5");
+    // OpenCode's marker resolves through the same predicate the adapter uses, so the
+    // tier a workflow pin lands on cannot diverge from the harness that spawned it.
+    expect(detectHarness(env({ OPENCODE: "1" }))).toBe("opencode");
+    expect(resolveModelTier("cheap", detectHarness(env({ OPENCODE: "1" })))).toBe(
+      "opencode/glm-5.3-flash-free",
+    );
   });
 
   test("resolveAdvisorTier is fable on Claude and strong-map on Grok; fallback is strong", () => {
@@ -133,12 +160,15 @@ describe("harness-model-map (ADR-110)", () => {
     expect(resolveAdvisorFallback("claude")).toBe("opus");
     expect(resolveAdvisorTier("grok")).toBe("grok-4.7");
     expect(resolveAdvisorFallback("grok")).toBe("grok-4.7");
+    expect(resolveAdvisorTier("opencode")).toBe("opencode/big-pickle");
+    expect(resolveAdvisorFallback("opencode")).toBe("opencode/big-pickle");
   });
 
   test("TIER_MAPS is the exported fixture (one file to bump per vendor generation)", () => {
     expect(TIER_MAPS.claude.cheap).toBe("haiku");
     expect(TIER_MAPS.claude.standard).toBe("sonnet");
     expect(TIER_MAPS.grok.standard).toBe("grok-4.7");
+    expect(TIER_MAPS.opencode.standard).toBe("opencode/big-pickle");
   });
 });
 
@@ -160,14 +190,17 @@ describe("workflow inline resolver is a copy of TIER_MAPS (no import in workflow
     }
   });
 
-  test("inlined maps match TIER_MAPS (claude + grok SKUs)", () => {
+  test("inlined maps match TIER_MAPS (claude + grok + opencode SKUs)", () => {
     const fence = extractFence(
       readFileSync(join(SKILLS_DIR, PINNED_WORKFLOWS[0]), "utf-8"),
     );
     const litRe =
       /\{ cheap: '([^']+)', standard: '([^']+)', strong: '([^']+)', advisor: '([^']+)', inherit: '([^']+)' \}/g;
     const lits = [...fence.matchAll(litRe)];
-    expect(lits.length).toBe(3);
+    // FOUR, not three: an added TIER_MAPS row with no fence branch is a silent
+    // divergence (the pin resolves to `inherit` in the workflow and to a SKU in the
+    // lib), so the count is part of the pin.
+    expect(lits.length).toBe(4);
     const toMap = (m: RegExpMatchArray) => ({
       cheap: m[1],
       standard: m[2],
@@ -177,7 +210,8 @@ describe("workflow inline resolver is a copy of TIER_MAPS (no import in workflow
     });
     expect(toMap(lits[0])).toEqual({ ...TIER_MAPS.grok });
     expect(toMap(lits[1])).toEqual({ ...TIER_MAPS.claude });
-    expect(toMap(lits[2])).toEqual({
+    expect(toMap(lits[2])).toEqual({ ...TIER_MAPS.opencode });
+    expect(toMap(lits[3])).toEqual({
       cheap: "inherit",
       standard: "inherit",
       strong: "inherit",
@@ -234,6 +268,13 @@ describe("workflow inline resolver is a copy of TIER_MAPS (no import in workflow
       // both paths must inherit. The fence has no argv/title fallback — env only.
       { DEVIN: "1" },
       { DEVIN_HOME: "/h/.devin" },
+      // OpenCode, in the three orderings that matter (harness.ts detection order is
+      // CLAUDECODE → OPENCODE → GROK): alone; over a grok marker; under CLAUDECODE.
+      // A fence that checked grok first would take the grok branch in case two.
+      { OPENCODE: "1" },
+      { OPENCODE: "1", GROK_HOME: "/h/.grok" },
+      { OPENCODE: "1", CODEX_THREAD_ID: "t" },
+      { CLAUDECODE: "1", OPENCODE: "1" },
     ];
     for (const rel of PINNED_WORKFLOWS) {
       const src = readFileSync(join(SKILLS_DIR, rel), "utf-8");

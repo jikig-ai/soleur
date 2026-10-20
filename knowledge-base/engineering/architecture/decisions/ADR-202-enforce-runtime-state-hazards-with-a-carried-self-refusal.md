@@ -206,3 +206,9 @@ token injects a second curl request) and the `printf | curl` SIGPIPE measurement
   `configure-auth.sh`, and the `Api-Key` Flagsmith header in `set-role.sh`.
 - **Proxy and `~/.curlrc`.** Every converted call carries `--disable` first, so a user's `~/.curlrc` is ignored; `--noproxy '*'`
   is kept wherever the script already carried it.
+
+## Addendum — 2026-10-20 (#9639 F6, PR #10637): the unit wrapper must not expand the secret before the refusal
+
+The script-side refusal runs AFTER the unit's wrapper, so it cannot reach an expansion the wrapper performed first; that is the named residual above (xtrace does not cross an exec, so a traced parent leaks a callee's argv). A unit that runs a credential-handling script therefore must not resolve the secret by indirect expansion (`${!…}`) in an `Exec*` directive: the expansion runs before the script's own refusal can, so a traced launch prints it. The script resolves its secret after its refusal (the nic-guard and zot probe now read `*_URL_KEY`, validate the NAME, and expand `${!…_KEY}` themselves into an unexported variable). `apps/web-platform/infra/doppler-injection-bound.test.sh` enforces the unit-side half for every `doppler run` unit it recognises: an indirect expansion in an `Exec*` directive that invokes `doppler run` is a finding, except for two units not yet fixed (`web-git-data-probe`, `inngest-consumer-probe`, recorded on #9639) whose ack names the exact set of names they expand and is cardinality-pinned. It checks indirect expansion only; direct expansion, `ExecStop*`, drop-ins and other `doppler` spellings are recorded on #9639 as not covered.
+
+The zot probe's refusal is conditional (ADR rule above): it fires on the pull credential, or on the heartbeat key name outside `--canary-only`. The key name is in the env file of every provisioned host, so a traced run that loads that env file refuses unless the key is unset; the `--canary-only` ExecStartPre keeps its pre-change behaviour.

@@ -40,10 +40,24 @@
 # repositories/ the lock-name exclusion applies to regular files only). Anything else is off the list.
 #
 # NO NAME LEAVES THE HOST. The output is one fixed-shape line of per-type COUNTS (no digest, no name,
-# no per-name hash, nothing from inside repositories/ but a count). The off-list refusal adds exactly one
-# bit, whether a top-level directory is named hooks (the name git-data-bootstrap.sh uses for its hooks
-# directory; the bit proves the name only, not who made the directory or what it holds), and two counts;
-# the compared name is one constant in this file, and no listed name is printed, hashed or stored.
+# no per-name hash, nothing from inside repositories/ but a count). The off-list refusal adds one bit,
+# whether a top-level directory is named hooks (the name git-data-bootstrap.sh uses for its hooks
+# directory; the bit proves the name only, not who made the directory or what it holds), and two counts,
+# and, when that bit is 1, the group below; the compared names are constants in this file, and no listed
+# name is printed, hashed or stored.
+# When that bit is 1 the line carries ONE further group of four fields, in this order, describing the depth-1
+# shape of that directory by TYPE and SIZE metadata at one moment (a printed 0 is "zero at that moment", never
+# "unread"):
+#   hk_entries    entries directly inside it, dotfiles included (a count, never a name)
+#   hk_nonfile    how many of them are not regular files, from the same walk (never above hk_entries)
+#   hk_pr_f       1 if an entry named exactly pre-receive (case-sensitive) is a regular file directly inside it,
+#                 no link followed; 0 otherwise
+#   hk_pr_small   1 if that same file is at most 4096 bytes (WA_HK_PR_MAX; a zero-byte file reads 1, there is no lower
+#                 bound); never above hk_pr_f
+# The group is absent when the bit is 0: an absent group reads "not measured", and a printed 0 never stands in for
+# it. The size comes from inode metadata, the file's content is never opened, and no size, letter or listing name
+# is printed. A read that fails or answers off-shape is rc 33 (hooks_shape_failed, hooks_shape_unparseable,
+# hooks_pr_failed, hooks_pr_unparseable), never a default 0 and never a partial line.
 # Names are read into shell variables for classification only: stdout is held back until the final
 # line, stderr of every command is
 # discarded, and the only stderr this file writes is a fixed reason word and digits (gd_capture prints
@@ -92,6 +106,22 @@ wa_main() {
 
   # ---- BEGIN wipe-core ----
   readonly WA_SNAP=git-data-pt-snap
+  # Beyond the allowlist arms on the retired volume's host-local device-mapper snapshot, the hooks directory and the pre-receive file are the two names
+  # probed by the hk_ reads, both constants (a third name, a list or a configurable name needs a new ruling): the top-level
+  # directory WA_HK_DIR and, as a regular file directly inside it, WA_HK_PR. They are the names git-data-bootstrap.sh uses
+  # for its hooks directory and fence hook (a suite row compares them).
+  readonly WA_HK_DIR=hooks
+  readonly WA_HK_PR=pre-receive
+  # WA_HK_PR_MAX is a coarse plausibility bound on the size of that file, not an identity test. It is read off the pre-receive
+  # file Terraform delivered into cloud-init. By commit date the sizes delivered were 997 bytes (the placeholder, unstripped, base64-delivered
+  # at first; 2026-06-30 to 2026-07-28), 197 bytes (the stripped placeholder, once the comment strip was added, 34654d7ab1;
+  # 2026-07-29 to 2026-09-29) and 2784 bytes (the real script, stripped, from 2026-09-30, a96d123938). Which of them reached the
+  # retired volume is not established. 4096 is above all three. The real script's six source commits strip to 1870 to 2784
+  # bytes. A size at or under the bound says nothing about provenance or content (a zero-byte file reads 1; there is no lower
+  # bound); a size over it is not evidence of foreign content (an unstripped copy of the real script, raw 6170 to 9325 bytes,
+  # reads over it). Which delivery the retired volume's pre-receive file came from (the era of that file) is likewise not
+  # established in the repo. A change of the value returns to the CLO.
+  readonly WA_HK_PR_MAX=4096
   readonly WA_ROW_WINDOW_S=3600      # max seconds from host boot to the boot_complete row (UNMEASURED: wipe_check prints boot_to_row_s)
   readonly WA_BUDGET_S=240           # self-imposed ceiling; the ssh bound in git-data-cutover.sh is longer
   readonly WA_SETTLE_TRIES=20        # post-detach: wait up to 20 s for udev to drop the by-id link
@@ -304,8 +334,10 @@ wa_main() {
   }
 
   # ---- BEGIN wipe-listing unit ----
-  # Inputs: DEV MM SYS BYID W0 (set by the identity stages). Outputs: J (dirty|clean), TOP_D TOP_F TOP_L
-  # TOP_O REPOS, and for the off-list refusal HAS_HOOKS (0|1), LF_ENTRIES and OFFLIST_N (counts). The
+  # Inputs: DEV MM SYS BYID W0 (set by the identity stages) and the function budget (defined by wa_main, outside this
+  # unit; a driver that extracts the unit supplies its own). Outputs: J (dirty|clean), TOP_D TOP_F TOP_L
+  # TOP_O REPOS, and for the off-list refusal HAS_HOOKS (0|1), LF_ENTRIES and OFFLIST_N (counts) and HK_TAIL (the
+  # hk_ group text, empty unless HAS_HOOKS=1). The
   # loopback suite extracts this unit (and the core above) by their sentinels and drives them on real
   # loop devices.
   wl_has_nr() { awk_hit "$1" '/^Filesystem features:/ && / needs_recovery( |$)/ { f = 1 } END { exit !f }'; }
@@ -345,6 +377,9 @@ wa_main() {
   }
   wipe_listing() {
     local sb jb bs cow_bytes eh sz deps src got want ssb dm e0 e1 rn ln lk names_after hold_after w_after ro_after
+    # HK_PR_F and HK_PR_SMALL are upper-case locals on purpose: the emitted fields are written from exactly these names,
+    # a spelling the suite's rows HK7 (the one say line) and HK8 (the closed set, which holds the HK_TAIL assignment line) pin.
+    local ht nf al pr HK_PR_F HK_PR_SMALL
     wl_same
     sb="$(timeout 20 dumpe2fs -h "$DEV")" || die 33 dumpe2fs_failed
     if wl_has_nr "$sb"; then J=dirty; else J=clean; fi
@@ -413,6 +448,30 @@ wa_main() {
       LF_ENTRIES="$ln"   # keep after the digit check above: only a validated count is ever printed
       [ "$ln" -eq 0 ] || OFFLIST=1
     fi
+    # The shape of a top-level hooks DIRECTORY (HAS_HOOKS=1 implies OFFLIST=1: no allowlist arm names it), read here, before
+    # the errors_count re-read below, so a filesystem error these reads induce is caught by it. TYPE and SIZE metadata only:
+    # one find prints a type letter per depth-1 entry (nothing else, no name), one find prints a fixed letter for the file
+    # named WA_HK_PR when it is a regular file (s: at most WA_HK_PR_MAX bytes, b: larger). No link is followed, the path has
+    # no trailing slash, and the file is never opened. The count is the string length (linear; bash pattern substitution on
+    # a long string is quadratic). Every failure or off-shape answer is rc 33 with a fixed word: never a default 0.
+    # ---- BEGIN wipe-hooks reads ----
+    HK_TAIL=""
+    if [ "$HAS_HOOKS" = 1 ]; then
+      budget
+      ht="$(timeout 30 find "$WA_MNT/$WA_HK_DIR" -mindepth 1 -maxdepth 1 -printf '%y')" || die 33 hooks_shape_failed
+      nf="$(printf '%s' "$ht" | tr -d f | wc -c)" || die 33 hooks_shape_failed
+      al="$(printf '%s' "$ht" | tr -d 'dflcbpsDU' | wc -c)" || die 33 hooks_shape_failed
+      [[ "$nf" =~ ^[0-9]+$ && "$al" =~ ^[0-9]+$ ]] || die 33 hooks_shape_unparseable
+      [ "$((10#$al))" -eq 0 ] || die 33 hooks_shape_unparseable
+      pr="$(timeout 30 find "$WA_MNT/$WA_HK_DIR" -mindepth 1 -maxdepth 1 -name "$WA_HK_PR" -type f \( -size -$((WA_HK_PR_MAX + 1))c -printf s -o -printf b \))" || die 33 hooks_pr_failed
+      [[ "$pr" =~ ^[sb]?$ ]] || die 33 hooks_pr_unparseable
+      HK_PR_F=0
+      if [ -n "$pr" ]; then HK_PR_F=1; fi
+      HK_PR_SMALL=0
+      if [ "$pr" = s ]; then HK_PR_SMALL=1; fi
+      HK_TAIL=" hk_entries=${#ht} hk_nonfile=$((10#$nf)) hk_pr_f=$HK_PR_F hk_pr_small=$HK_PR_SMALL"
+    fi
+    # ---- END wipe-hooks reads ----
     e1="$(wl_errs "$dm")" || die 33 errors_count_unreadable
     [ "$e1" = "$e0" ] || die 33 errors_count_changed_by_listing
     wl_valid
@@ -428,7 +487,7 @@ wa_main() {
     [ "$ro_after" = 1 ] || die 30 ro_flag_lost_after
     # Verdicts: off-list beats not-empty (the counts on stderr are digits only; has_hooks_d is a single 0 or 1).
     if [ "$OFFLIST" = 1 ]; then
-      say "wipe-assert: rc=34 reason=offlist top_d=$TOP_D top_f=$TOP_F top_l=$TOP_L top_o=$TOP_O repos=$REPOS has_hooks_d=$HAS_HOOKS lf_entries=$LF_ENTRIES offlist_n=$OFFLIST_N"
+      say "wipe-assert: rc=34 reason=offlist top_d=$TOP_D top_f=$TOP_F top_l=$TOP_L top_o=$TOP_O repos=$REPOS has_hooks_d=$HAS_HOOKS lf_entries=$LF_ENTRIES offlist_n=$OFFLIST_N$HK_TAIL"
       exit 34
     fi
     [ "$REPOS" -eq 0 ] || die 37 repositories_not_empty "repos=$REPOS"

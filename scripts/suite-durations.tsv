@@ -1,8 +1,8 @@
 # suite-durations.tsv — aggregated per-suite durations (ADR-240 amd.)
 # group=light
 # generated-from-runs=38090871167,38088705648,38086978176,38085840669,38055372785
-# default-weight-ms=1184
-# generated-at=2026-10-18T01:51:18Z
+# default-weight-ms=1196
+# generated-at=2026-10-18T15:53:30Z
 # generator=regenerate-shard-manifest.py v3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	777	measured
@@ -395,6 +395,7 @@ scripts/inngest-provision-unit-8562	1061	measured
 scripts/inngest-restart-age-gate	75	measured
 scripts/inngest-restart-poll-classify	125	measured
 scripts/inngest-soak-6178	22033	measured
+scripts/inngest-tls-soak-10136	1196	floor
 scripts/inngest-zot-boot-7462	426	measured
 scripts/inngest-zot-client-authz-6500	499	measured
 scripts/learning-retrieval-bench	922	measured

@@ -6,7 +6,8 @@ in cloud-init.yml. Each carries the security posture that the /proc mask and the
 (the soleur-bwrap AppArmor profile, the seccomp profile, a bounded /tmp tmpfs, no added capability, no host
 namespace, no environment lever on PATH or the loader). A deny list of option spellings was bypassed every time
 a spelling was missed, so this is a CLOSED world: the tuples are tokenized with shlex and every option,
-environment name, volume, port and value outside the declared set is a violation, and every command-position
+environment name, volume, port and value outside the declared set is a violation, a declared volume, environment name,
+port or scalar option that is ABSENT from its tuple is a violation too (MISSING_DECLARED), and every command-position
 `docker run|create|...` in the two files is censused so a fourth start site cannot hide.
 
 Usage (stdlib only, run as `python3 -I`):
@@ -23,7 +24,14 @@ optionally, .github/workflows). The layouts <root>/infra and <root> itself (the 
 too. It defaults to the repo root derived from this file's location.
 
 Tokens: UNKNOWN_OPTION, POSTURE_VALUE, TUPLE_COUNT, POSTURE_DIVERGENCE, ENV_NAME, UNPARSEABLE_OPTION,
-UNCLASSIFIED_DOCKER_RUN, TRAILING_ARGS, DUPLICATE_OPTION.
+UNCLASSIFIED_DOCKER_RUN, TRAILING_ARGS, DUPLICATE_OPTION, MISSING_DECLARED, MISSING_REQUIRED.
+
+The Inngest link (#10136, Guard 1): every tuple MUST carry `-e INNGEST_BASE_URL` (the canary and prod tuples only as the
+`resolve_inngest_link` expansion `$INNGEST_BASE_URL_RESOLVED`, never a literal; the first-boot tuple, which cannot call the
+resolver, as the literal http value it re-resolves at the next deploy), `-e NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem` and
+the read-only CA volume. A tuple without them is MISSING_REQUIRED, which is what makes the watchdog's http fallback (used only
+when INNGEST_BASE_URL is unset in the container) unreachable. The TLS verification switch is forbidden in the tuples AND as any
+non-comment text of the two main files (ENV_NAME): a `0` there would silently defeat verification of every Node connection.
 
 What this proves and what it does not: the closed set lives here and the tuples live in the files this parses, and one
 diff can edit both, so a green check is CONSISTENCY between the two, not INTEGRITY of the posture. What outside the
@@ -35,8 +43,14 @@ and it reads the COMMITTED files only (a container started out of band on a host
 
 Stated residuals (outside the closed set by design, not claimed closed): the CONTENT of --env-file (Doppler prd;
 ci-deploy.sh overlay_github_app_key refuses runtime-hijack names such as PATH and LD_* only when that overlay
-runs) and the value of -e NODE_OPTIONS (pinned to the --max-old-space-size assignment lines, not to the flag set).
-Containers started on other hosts (the zot registry, the egress gateway) are not part of the closed set.
+runs; a prd secret SOLEUR_EGRESS_REAPER=1 would give the canary the reaper, and EGRESS_TOKEN_DIR can decouple the
+mount from the code, neither of which the argv shows) and the value of -e NODE_OPTIONS (pinned to the
+--max-old-space-size assignment lines, not to the flag set). Required-ness (MISSING_DECLARED) covers volumes,
+environment NAMES, ports and the scalar options (-d, --restart, --log-driver, --add-host, --env-file, and for the two
+deploy starts --init, --memory, --memory-swap) PER TUPLE: the first-boot start has no memory cap or --init by design,
+so they are not required there. The scan is a text scan with no control-flow model: a tuple behind an `exit 0`, a start through an indirect docker word (`d=docker; $d run`), a
+`docker rename|start|restart|update` of an existing container, and an app start in a file outside the scanned set
+are not seen. Containers started on other hosts (the zot registry, the egress gateway) are not part of the closed set.
 """
 
 import argparse
@@ -64,12 +78,33 @@ ADD_HOSTS = {"host.docker.internal:host-gateway"}
 # a positive limit only: `--memory 0` means UNLIMITED in docker, which would pass a bare [0-9]+ pattern
 MEM_LITERAL = re.compile(r"^[1-9][0-9]*[bkmgBKMG]?$")
 
+INNGEST_CA_PATH = "/etc/soleur/inngest-ca.pem"
+# HOST side of the CA bind mount: /mnt/data is already in webhook.service ReadWritePaths and deploy-owned, so ci-deploy.sh
+# (User=deploy, ProtectSystem=strict) can write it; the in-container path stays /etc/soleur/inngest-ca.pem.
+INNGEST_CA_HOST_PATH = "/mnt/data/inngest-link/inngest-ca.pem"
+INNGEST_CA_VOL = "%s:%s:ro" % (INNGEST_CA_HOST_PATH, INNGEST_CA_PATH)
+# The two values the resolver can produce live in ci-deploy.sh (resolve_inngest_link); the canary and prod tuples take ONLY its
+# expansion. The first-boot tuple cannot call the resolver, so it carries the literal http default.
+INNGEST_RESOLVED = "$INNGEST_BASE_URL_RESOLVED"
+INNGEST_HTTP_LITERAL = "http://10.0.1.40:8288"
+FORBIDDEN_ENV = ("NODE_TLS_REJECT_UNAUTHORIZED",)
+REQUIRED_ENV = ("INNGEST_BASE_URL", "NODE_EXTRA_CA_CERTS")
+
 _COMMON_ENV = {
-    "INNGEST_BASE_URL": {"http://10.0.1.40:8288"},
+    "INNGEST_BASE_URL": {INNGEST_RESOLVED},
+    "NODE_EXTRA_CA_CERTS": {INNGEST_CA_PATH},
     "CRON_WORKSPACE_ROOT": {"/workspaces"},
     "SOLEUR_HOST_ID": {"$HOST_ID"},
 }
-_VOLS = {"/mnt/data/workspaces:/workspaces", "/mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro"}
+_VOLS = {"/mnt/data/workspaces:/workspaces", "/mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro", INNGEST_CA_VOL}
+# Scalar options a start must CARRY (MISSING_DECLARED); their allowed VALUES are checked separately. The memory cap and
+# --init are required on the two deploy starts only: ADR-062 scopes them to ci-deploy.sh's two blocks, and the
+# first-boot start has neither today (not required there).
+_SCALARS = {"-d", "--log-driver", "--restart", "--env-file", "--add-host"}
+_SCALARS_APP = _SCALARS | {"--init", "--memory", "--memory-swap"}
+# The host session-token dir (server.tf: 1001:1001, 0711). Prod and first-boot mount it and set SOLEUR_EGRESS_REAPER;
+# the canary's argv neither mounts it nor reaps (ADR-278 canary isolation: its /proc cannot see prod forwarders).
+_EGRESS_TOKENS_VOL = "/var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens"
 
 # tuple name -> declared spec. `file` is the basename of the file the tuple lives in.
 TUPLES = {
@@ -77,28 +112,32 @@ TUPLES = {
         "file": "ci-deploy.sh", "name": "soleur-web-platform-canary", "restart": {"no"},
         "mem_exprs": {"$CANARY_MEMORY_CAP"}, "env_files": {"$ENV_FILE"}, "images": {"$VERIFIED_REF"},
         "env": dict(_COMMON_ENV, NODE_OPTIONS={"$CANARY_NODE_OPTIONS"}),
-        "volumes": set(_VOLS), "ports": {"0.0.0.0:3001:3000"},
+        "volumes": set(_VOLS), "ports": {"0.0.0.0:3001:3000"}, "scalars": _SCALARS_APP,
     },
     "prod": {
         "file": "ci-deploy.sh", "name": "soleur-web-platform", "restart": {"unless-stopped"},
         "mem_exprs": {"$PROD_MEMORY_CAP"}, "env_files": {"$ENV_FILE"}, "images": {"$VERIFIED_REF"},
-        "env": dict(_COMMON_ENV, NODE_OPTIONS={"$PROD_NODE_OPTIONS"}),
-        "volumes": set(_VOLS), "ports": {"0.0.0.0:80:3000", "0.0.0.0:3000:3000"},
+        "env": dict(_COMMON_ENV, NODE_OPTIONS={"$PROD_NODE_OPTIONS"}, SOLEUR_EGRESS_REAPER={"1"}),
+        "volumes": _VOLS | {_EGRESS_TOKENS_VOL}, "ports": {"0.0.0.0:80:3000", "0.0.0.0:3000:3000"}, "scalars": _SCALARS_APP,
     },
     "first-boot": {
         "file": "cloud-init.yml", "name": "soleur-web-platform", "restart": {"unless-stopped"},
         "mem_exprs": set(), "env_files": {"$TMPENV"}, "images": {"$(cat /run/soleur-image-ref)"},
-        "env": {"INNGEST_BASE_URL": {"http://10.0.1.40:8288"}, "SOLEUR_EGRESS_REAPER": {"1"}},
-        "volumes": _VOLS | {"/var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens"},
-        "ports": {"0.0.0.0:80:3000", "0.0.0.0:3000:3000"},
+        "env": {"INNGEST_BASE_URL": {INNGEST_HTTP_LITERAL}, "NODE_EXTRA_CA_CERTS": {INNGEST_CA_PATH}, "SOLEUR_EGRESS_REAPER": {"1"}},
+        "volumes": _VOLS | {_EGRESS_TOKENS_VOL},
+        "ports": {"0.0.0.0:80:3000", "0.0.0.0:3000:3000"}, "scalars": _SCALARS,
     },
 }
 TUPLE_ORDER = ("canary", "prod", "first-boot")
 
 # Sites that are allowed to exist next to the app tuples. Matched on (file, verb, name or image expression).
 EXEMPT_RUN = {("ci-deploy.sh", "image", "$COSIGN_IMAGE")}      # the cosign verify `docker run --rm`
+# Name-keyed exempt runs: (file, --name). The #8743 plugin-mount seed is one
+# `docker run --rm --name soleur-plugin-seed -u 0 --entrypoint /bin/sh
+# -v $PLUGIN_MOUNT_DIR:/plugin-mount -e SEED_TAG=$TAG $VERIFIED_REF -c <script>`
+# — a container-side root seed, not an app tuple.
+EXEMPT_RUN_NAMED = {("ci-deploy.sh", "soleur-plugin-seed")}
 EXEMPT_CREATE = {
-    ("ci-deploy.sh", "soleur-plugin-seed"),
     ("ci-deploy.sh", "$INNGEST_EXTRACT_CONTAINER"),
     ("cloud-init.yml", "soleur-hostscript-seed"),
     ("cloud-init.yml", "soleur-plugin-seed"),
@@ -133,6 +172,17 @@ COSIGN_VALUE_OPTS = {
     "-v": {"$GHCR_DOCKER_CONFIG:$cosign_cfg_dir/config.json:ro", "$COSIGN_TRUSTED_ROOT_HOST:/etc/cosign/trusted_root.json:ro"},
 }
 COSIGN_IMAGE = "$COSIGN_IMAGE"
+# The #8743 seed run's closed-world option set (image: $VERIFIED_REF, then
+# `-c <one script token>` and nothing else).
+SEED_RUN_FLAGS = {"--rm"}
+SEED_RUN_VALUE_OPTS = {
+    "--name": {"soleur-plugin-seed"},
+    "-u": {"0"},
+    "--entrypoint": {"/bin/sh"},
+    "-v": {"$PLUGIN_MOUNT_DIR:/plugin-mount"},
+    "-e": {"SEED_TAG=$TAG"},
+}
+SEED_RUN_IMAGE = "$VERIFIED_REF"
 # `case x in a) …`, `a|b) …` and the parenthesised `(a) …` label forms all put a command in command position.
 CASE_LABEL_RE = re.compile(r"^\(?[^()\s]*\)$")
 TIMEOUT_ARG_RE = re.compile(r"^(?:\d+[smhd]?|-{1,2}[\w-]+(?:=\S*)?)$")
@@ -433,6 +483,10 @@ class Record:
         self.seccomp = []
         self.tmpfs = []
         self.init = False
+        self.volumes = set()      # the -v, -e NAME and -p values the tuple actually carries (check_declared)
+        self.env = set()
+        self.ports = set()
+        self.scalars = set()      # the scalar options (-d, --restart, --memory, --env-file, ...) the tuple carries
 
 
 def walk_options(site, spec, tuple_name):
@@ -486,6 +540,7 @@ def walk_options(site, spec, tuple_name):
                     if name in seen:
                         v("DUPLICATE_OPTION", name)
                     seen[name] = True
+                    rec.scalars.add(name)
                     if name == "--init":
                         rec.init = True
                 i += 1
@@ -516,10 +571,16 @@ def walk_options(site, spec, tuple_name):
     if tail:
         if tail[0] != ";" or any(x not in ("then",) for x in tail[1:]):
             v("TRAILING_ARGS", " ".join(tail))
+    for ename in REQUIRED_ENV:
+        if ename not in env_seen:
+            v("MISSING_REQUIRED", "-e %s is required in every tuple%s" % (ename, " (an unset INNGEST_BASE_URL makes the app fall back to plain http)" if ename == "INNGEST_BASE_URL" else ""))
+    if INNGEST_CA_VOL not in rec.volumes:
+        v("MISSING_REQUIRED", "-v %s is required in every tuple" % INNGEST_CA_VOL)
     return rec, viols
 
 
 def check_value(name, val, spec, rec, seen, env_seen, v):
+    rec.scalars.add(name)
     def bad(token, label):
         v("UNPARSEABLE_OPTION" if has_exp(val) else token, label)
 
@@ -573,21 +634,27 @@ def check_value(name, val, spec, rec, seen, env_seen, v):
             v("ENV_NAME", "%s (no value)" % val)
             return
         ename, evalue = val.split("=", 1)
+        if ename in FORBIDDEN_ENV:
+            v("ENV_NAME", "%s (the TLS verification switch is never allowed)" % ename)
+            return
         if ename not in spec["env"]:
             v("ENV_NAME", ename)
             return
         if ename in env_seen:
             v("DUPLICATE_OPTION", "-e %s" % ename)
         env_seen.add(ename)
+        rec.env.add(ename)
         if evalue not in spec["env"][ename]:
             if has_exp(evalue):
                 v("UNPARSEABLE_OPTION", "-e %s=%s" % (ename, evalue))
             else:
                 v("ENV_NAME", "%s value '%s'" % (ename, evalue))
     elif name == "-v":
+        rec.volumes.add(val)
         if val not in spec["volumes"]:
             bad("UNKNOWN_OPTION", "-v %s" % val)
     elif name == "-p":
+        rec.ports.add(val)
         if val not in spec["ports"]:
             bad("UNKNOWN_OPTION", "-p %s" % val)
 
@@ -597,6 +664,25 @@ def check_options(app_sites):
     out = []
     for s in app_sites:
         out.extend(s.option_viols)
+    return out
+
+
+def check_declared(app_sites):
+    """Every volume, env name, port and scalar option a tuple DECLARES must be present on its site. check_options only refuses
+    members outside the declared set, so a deleted member (the egress-token mount on the prod start) passed."""
+    out = []
+    for s in app_sites:
+        # A site that already reds UNPARSEABLE_OPTION (tokenization failed, or the tuple is truncated so "no image")
+        # has an incomplete record: reporting every member after the cut as missing too is noise on top of that red.
+        if s.toks is None or any(v.startswith("FAIL UNPARSEABLE_OPTION") for v in s.option_viols):
+            continue
+        spec = TUPLES[s.tuple]
+        for kind, declared, got in (("volume", spec["volumes"], s.rec.volumes),
+                                    ("env", set(spec["env"]), s.rec.env),
+                                    ("port", spec["ports"], s.rec.ports),
+                                    ("option", spec["scalars"], s.rec.scalars)):
+            for member in sorted(declared - set(got)):
+                out.append("FAIL MISSING_DECLARED: %s %s missing from %s %s (declared in TUPLES)" % (kind, member, s.file, s.tuple))
     return out
 
 
@@ -633,6 +719,17 @@ def check_projection(app_sites):
 
 def check_census_extra(extra):
     return list(extra)
+
+
+def check_forbidden_env(file_lines, fname):
+    """The TLS verification switch never appears as non-comment text of either main file (an export, an env-file write, a
+    heredoc body): the tuples carry no such -e, so any other spelling is a way to reach the container around the tuple."""
+    out = []
+    for lg in file_lines:
+        for name in FORBIDDEN_ENV:
+            if name in lg.text:
+                out.append("FAIL ENV_NAME: %s appears in %s line %d (verification must never be disabled)" % (name, fname, lg.start))
+    return out
 
 
 def check_node_options(file_lines):
@@ -738,8 +835,9 @@ def scan(root):
                 raw = raw[:MAX_LINE * 8]
             if "soleur-web-platform" in raw and NAME_RE.search(strip_comment(raw)) and idx not in own:
                 extra.append("FAIL UNCLASSIFIED_DOCKER_RUN: %s:%d --name soleur-web-platform outside a declared tuple" % (fname, idx))
+        node_viols.extend(check_forbidden_env(lines, fname))
         if fname == "ci-deploy.sh":
-            node_viols = check_node_options(lines)
+            node_viols.extend(check_node_options(lines))
 
     # wider scope: the app container name in any other deployable text
     seen = 0
@@ -815,6 +913,12 @@ def classify_site(s, fname):
             return "the cosign verifier run %s (an exempt site is parsed closed-world: only its real option set is allowed)" % bad
         s.kind = "exempt"
         return None
+    if s.verb == "run" and s.plain and name is not None and (fname, name) in EXEMPT_RUN_NAMED:
+        bad = seed_run_violation(s)
+        if bad:
+            return "exempt `docker run` of %s %s (an exempt site is parsed closed-world: only its real option set is allowed)" % (name, bad)
+        s.kind = "exempt"
+        return None
     if s.verb == "create" and s.plain and name is not None and (fname, name) in EXEMPT_CREATE:
         bad = exempt_create_violation(s)
         if bad:
@@ -874,6 +978,38 @@ def exempt_run_violation(s):
     return "has no image"
 
 
+def seed_run_violation(s):
+    words = _statement(s.toks)
+    i = 2
+    n = len(words)
+    while i < n:
+        t = words[i]
+        if t in SEED_RUN_FLAGS:
+            i += 1
+            continue
+        if t in SEED_RUN_VALUE_OPTS:
+            if i + 1 >= n or words[i + 1] not in SEED_RUN_VALUE_OPTS[t]:
+                return "has an unexpected value for %s" % t
+            i += 2
+            continue
+        if t.startswith("--name="):
+            if t.split("=", 1)[1] != "soleur-plugin-seed":
+                return "names a different container (%s)" % t
+            i += 1
+            continue
+        if t.startswith("-"):
+            return "carries the option %s" % t
+        if t != SEED_RUN_IMAGE:
+            return "starts a different image or command (%s) instead of %s" % (t, SEED_RUN_IMAGE)
+        # image reached: `-c` plus exactly one script token, then the statement ends
+        if i + 2 < n and words[i + 1] == "-c" and i + 3 == n:
+            return None
+        if i + 1 < n:
+            return "carries words beyond `%s -c <script>`: %s" % (SEED_RUN_IMAGE, " ".join(words[i + 1:i + 6]))
+        return "has no `-c <script>` command after the image"
+    return "has no image"
+
+
 def _prefix_ok(self):
     return all(t in ("if", "!") for t in self.prefix)
 
@@ -894,6 +1030,7 @@ def run_checks(root):
     viols.extend(scan_viols)
     viols.extend(check_count(app_sites, unreadable))
     viols.extend(check_options(app_sites))
+    viols.extend(check_declared(app_sites))
     viols.extend(check_projection(app_sites))
     viols.extend(check_census_extra(extra))
     viols.extend(node_viols)
@@ -909,10 +1046,12 @@ HINTS = {
     "UNKNOWN_OPTION": "remove the option from the tuple; widen the closed set here only with a security review, a posture option is never an allowlist entry",
     "POSTURE_VALUE": "restore the declared value; the declared posture constants are edited only with a security review",
     "ENV_NAME": "remove the environment variable from the tuple (PATH, loader and runtime-hijack names are never allowed)",
+    "MISSING_REQUIRED": "restore the Inngest link env and the read-only CA volume on the named tuple (canary and prod: INNGEST_BASE_URL=\"$INNGEST_BASE_URL_RESOLVED\"; never a literal, never absent)",
     "DUPLICATE_OPTION": "keep exactly one occurrence; docker honours the last, so a second one hides the first",
     "TRAILING_ARGS": "nothing may follow the image except `; then`",
     "TUPLE_COUNT": "a start site was added, moved or renamed: declare it together with the site and keep the three-tuple expectation; never lower the count (when the line says `cannot read`, a scanned file is missing, unreadable or not a regular file: restore it)",
     "UNCLASSIFIED_DOCKER_RUN": "declare it as an app tuple, or add a NAMED non-app exemption (EXEMPT_RUN / EXEMPT_CREATE) ONLY with a security review: an exempt site is closed-world too (a create is exactly `--name NAME IMAGE`)",
+    "MISSING_DECLARED": "restore the named volume, env, port or scalar option on the tuple, or remove it from TUPLES in the same commit with the reason (a tuple that drops a declared member silently loses that behaviour)",
     "POSTURE_DIVERGENCE": "restore the apparmor, seccomp and tmpfs options on the named tuple",
     "UNPARSEABLE_OPTION": "make the option literal; a variable, substitution or ambiguous heredoc opener is refused, and a file that cannot be read cannot be shown free of a start site",
 }

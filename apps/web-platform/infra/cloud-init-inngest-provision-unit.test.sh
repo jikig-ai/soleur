@@ -1218,7 +1218,7 @@ rep_line("exit \"$zot_rc\"", "( exit \"$zot_rc\" )"); save()'
 row G2-r3 RED "TA T4: exits 1" '
 b = one(BOOT_CALL); rep_line("wait \"$child\"", "wait \"$child\" || true", after=b); save()'
 row G2-r4 RED "G2: Restart=on-failure in [Service]" '
-rep_line("Restart=on-failure", "Restart=no"); save()'
+w = one("- path: /etc/systemd/system/soleur-inngest-provision.service"); rep_line("Restart=on-failure", "Restart=no", after=w); save()'
 row G2-r5 RED "TA T3: exits 1" '
 f = one(ISO_FAILED); rep_line("exit 1", "exit 0", after=f); save()'
 row G2-r6 RED "G2: a TERM/INT trap exits 143" '
@@ -1293,7 +1293,7 @@ ins_after("- /usr/local/bin/soleur-inngest-nic-wait 10.0.1.40 || true", ["", "- 
 
 # ---- G6 --------------------------------------------------------------------------------------
 row G6-r1 RED "G6: [Unit] StartLimitIntervalSec=0" '
-rep_line("StartLimitIntervalSec=0", "StartLimitIntervalSec=1h"); ins_after("StartLimitIntervalSec=1h", ["StartLimitBurst=5"]); save()'
+w = one("- path: /etc/systemd/system/soleur-inngest-provision.service"); rep_line("StartLimitIntervalSec=0", "StartLimitIntervalSec=1h", after=w); ins_after("StartLimitIntervalSec=1h", ["StartLimitBurst=5"], after=w); save()'
 row G6-r2 RED "G6: RestartSec is set once and >= 60s" '
 rep_line("RestartSec=120", "RestartSec=1"); save()'
 row G6-r3 RED "G6: TimeoutStartSec is set once" '
@@ -1306,7 +1306,7 @@ w = one("- path: /etc/systemd/system/soleur-inngest-provision.service"); ins_aft
 row G6-r6 RED "G6: the timer re-enters on boot" '
 del_line("OnBootSec=90s"); save()'
 row G6-r7 RED "G6: [Unit] StartLimitIntervalSec=0" '
-del_line("StartLimitIntervalSec=0"); w = one("- path: /etc/systemd/system/soleur-inngest-provision.service"); ins_after("Type=oneshot", ["StartLimitIntervalSec=0"], after=w); save()'
+w = one("- path: /etc/systemd/system/soleur-inngest-provision.service"); del_line("StartLimitIntervalSec=0", after=w); ins_after("Type=oneshot", ["StartLimitIntervalSec=0"], after=w); save()'
 row G6-r8 RED "G6: the script refuses xtrace" '
 ls = lines(); base = one("- path: /usr/local/bin/soleur-inngest-provision")
 nxt = [i for i, l in enumerate(ls) if i > base and l.strip().startswith("- path:")]
@@ -1346,7 +1346,7 @@ row G8-r4 RED "G8: the script keeps no verdict state" '
 rep_line(ISO_OPEN, "if [ -f \"$STATE/iso.ok\" ] || doppler run --project soleur-inngest --config prd -- bash -s <<\x27CHKEOF\x27")
 ins_after(ISO_PASSED, [": > \"$STATE/iso.ok\""]); save()'
 row G8-r5 PASS - '
-raw_rep("LUKS_ACTIVE_VOLUME_ID|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)", "LUKS_ACTIVE_VOLUME_ID|NEW_ADMITTED_NAME|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)"); save()'
+raw_rep("LUKS_ACTIVE_VOLUME_ID|TLS_KEY|TLS_CERT|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)", "LUKS_ACTIVE_VOLUME_ID|TLS_KEY|TLS_CERT|NEW_ADMITTED_NAME|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)"); save()'
 
 # ---- review batch (PR #9159): widened detectors, each proven by a row --------------------------
 row G1-r9 RED "G1: no runcmd or bootcmd item pulls an image" '

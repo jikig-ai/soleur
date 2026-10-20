@@ -404,6 +404,16 @@ AFFECTED_APPS_CLA_EVIDENCE_SCRIPTS_BOOTSTRAP_R2_PROBE_TEST_SH_PATHS=(
 # whose real subject is a narrow SUT set, declared here rather than always-on:
 # the scan is scoped, so the edges are honest.
 
+# .claude/hooks/lib/context-sanitize.test.sh (#10395) — corpus walker: the drift
+# sentinel greps every production file under .claude/hooks/ and plugins/soleur/
+# for raw `tr -d` strips, so any file in those trees is its subject. Directory
+# entries are prefix edges; the scan is exactly those two trees.
+AFFECTED_CLAUDE_HOOKS_LIB_CONTEXT_SANITIZE_TEST_SH_PATHS=(
+  ".claude/hooks/"
+  "plugins/soleur/"
+  "scripts/lib/test-affected-paths.sh"            # THIS FILE
+)
+
 AFFECTED_CLAUDE_HOOKS_GREP_REWRITE_TEST_SH_PATHS=(
   ".claude/hooks/grep-rewrite.sh"
   ".claude/hooks/grep-rewrite.test.sh"
@@ -1900,6 +1910,7 @@ AFFECTED_TESTS_SCRIPTS_INFRA_PRIVILEGED_TIER_CENSUS_PATHS=(
   ".github/"
   "apps/"
   "infra/"
+  "knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md"
   "tests/scripts/test-infra-privileged-tier-census.sh"
   "scripts/lib/test-affected-paths.sh"
 )

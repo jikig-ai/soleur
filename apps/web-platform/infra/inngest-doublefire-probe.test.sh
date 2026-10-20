@@ -811,6 +811,73 @@ test_df_page_size_gate() {
 }
 test_df_page_size_gate
 
+# =====================================================================================================
+# #10136 — scheme-aware link resolution: the SAME default as inngest-registry-probe.sh (the documented owner)
+# =====================================================================================================
+test_df_link_env() {
+  echo "TEST: doublefire-probe — honours /mnt/data/inngest-link/inngest-link.env (https + --cacert), overriding an inherited URL; byte-identical block"
+  local tmp; tmp=$(mktemp -d)  # lint-trap-ownership: ok removed at the end of this test; an abort leaks one TMPDIR dir
+  mkdir -p "$tmp/bin"
+  cat > "$tmp/bin/curl" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "${DF_TMP:?}/curl.argv"
+printf '%s' '{"data":{"runs":{"totalCount":0,"pageInfo":{"hasNextPage":false,"endCursor":""},"edges":[]}}}'
+STUB
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "${DF_TMP:?}/logger.log"\nexit 0\n' > "$tmp/bin/logger"
+  chmod +x "$tmp/bin/curl" "$tmp/bin/logger"
+  local https_env=$'INNGEST_LINK_URL=https://10.0.1.40:8443\nINNGEST_LINK_SCHEME=https\nINNGEST_LINK_CACERT=/mnt/data/inngest-link/inngest-ca.pem'
+  local http_env=$'INNGEST_LINK_URL=http://10.0.1.40:8288\nINNGEST_LINK_SCHEME=http\nINNGEST_LINK_CACERT='
+  run_df() { # <env file> [extra env]
+    local envf="$1"; shift
+    : > "$tmp/curl.argv"; : > "$tmp/logger.log"
+    env -u INNGEST_REMOTE_GQL_URL -u INNGEST_DOUBLEFIRE_RUNS_FIXTURE DF_TMP="$tmp" PATH="$tmp/bin:$PATH" INNGEST_LINK_ENV_FILE="$envf" "$@" bash "$TARGET" >/dev/null 2>&1 || true
+  }
+  printf '%s\n' "$https_env" > "$tmp/https.env"; printf '%s\n' "$http_env" > "$tmp/http.env"
+  run_df "$tmp/https.env" INNGEST_REMOTE_GQL_URL=http://10.0.1.40:8288/v0/gql
+  local argv; argv="$(cat "$tmp/curl.argv")"
+  case "$argv" in *"https://10.0.1.40:8443/v0/gql"*"--cacert"*|*"--cacert /mnt/data/inngest-link/inngest-ca.pem"*"https://10.0.1.40:8443/v0/gql"*) PASS=$((PASS+1)); echo "  PASS: https + --cacert, the inherited http URL did not win" ;; *) FAIL=$((FAIL+1)); echo "  FAIL: https env not honoured (argv: $argv)" ;; esac
+  case " $argv " in *" -k "*|*"--insecure"*|*"--capath"*) FAIL=$((FAIL+1)); echo "  FAIL: verification weakened" ;; *) PASS=$((PASS+1)); echo "  PASS: no -k/--insecure/--capath" ;; esac
+  # curl honours --disable (skip ~/.curlrc) only as its FIRST argument: the https data-path curl must lead with it
+  case "$(head -n1 "$tmp/curl.argv")" in "--disable "*) PASS=$((PASS+1)); echo "  PASS: --disable is curl's FIRST argument on the https query" ;; *) FAIL=$((FAIL+1)); echo "  FAIL: --disable is not the first curl argument (argv: $argv)" ;; esac
+  run_df "$tmp/http.env"
+  argv="$(cat "$tmp/curl.argv")"
+  case "$argv" in *"--disable"*) FAIL=$((FAIL+1)); echo "  FAIL: --disable leaked into the http arm" ;; *) PASS=$((PASS+1)); echo "  PASS: the http arm carries no --disable" ;; esac
+  case "$argv" in *"http://10.0.1.40:8288/v0/gql"*) PASS=$((PASS+1)); echo "  PASS: http env -> http endpoint" ;; *) FAIL=$((FAIL+1)); echo "  FAIL: http env not honoured (argv: $argv)" ;; esac
+  case "$argv" in *"--cacert"*) FAIL=$((FAIL+1)); echo "  FAIL: --cacert on plain http" ;; *) PASS=$((PASS+1)); echo "  PASS: no --cacert on http" ;; esac
+  run_df "$tmp/none.env"
+  case "$(cat "$tmp/curl.argv")" in *"http://10.0.1.40:8288/v0/gql"*) PASS=$((PASS+1)); echo "  PASS: no link env -> the default http" ;; *) FAIL=$((FAIL+1)); echo "  FAIL: default is not http" ;; esac
+  printf 'INNGEST_LINK_URL=https://evil.invalid:8443\nINNGEST_LINK_SCHEME=https\nINNGEST_LINK_CACERT=/mnt/data/inngest-link/inngest-ca.pem\n' > "$tmp/bad.env"
+  run_df "$tmp/bad.env"
+  if [[ "$(cat "$tmp/curl.argv")" == *"http://10.0.1.40:8288/v0/gql"* ]] && grep -q 'SOLEUR_INNGEST_LINK_ENV_INVALID' "$tmp/logger.log"; then PASS=$((PASS+1)); echo "  PASS: a hostile link env -> default endpoint + loud marker"; else FAIL=$((FAIL+1)); echo "  FAIL: hostile link env not refused"; fi
+  # the resolution block is byte-identical to the registry probe's (one owner, one definition)
+  local reg="$SCRIPT_DIR/inngest-registry-probe.sh" a b
+  a="$(sed -n '/^# >>> inngest-link-env >>>$/,/^# <<< inngest-link-env <<<$/p' "$reg")"
+  b="$(sed -n '/^# >>> inngest-link-env >>>$/,/^# <<< inngest-link-env <<<$/p' "$TARGET")"
+  if [[ -n "$a" && "$a" == "$b" ]]; then PASS=$((PASS+1)); echo "  PASS: the link-env block is byte-identical in both probes"; else FAIL=$((FAIL+1)); echo "  FAIL: the link-env block differs between the registry and doublefire probes"; fi
+  rm -rf "$tmp"
+}
+test_df_link_env
+
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
+
+# ANTI-VACUITY FLOOR (exact count). Reported by printf + exit, never through assert_eq/the counters it backstops (ADR-193): deleting
+# a block of rows (or neutering assert_eq so it stops counting) must be visible. First an instrument self-test: a subshell drives the
+# suite's own assert_eq once with a comparison that MUST fail and requires the FAIL counter, not PASS, to have moved.
+ST_GOT="$( PASS=0; FAIL=0; assert_eq selftest-must-fail 1 2 >/dev/null; printf '%s/%s' "$PASS" "$FAIL" )"
+if [[ "$ST_GOT" != "0/1" ]]; then
+  printf 'INSTRUMENT FAIL - %s: assert_eq self-test got pass/fail %s, want 0/1\n' "$(basename "${BASH_SOURCE[0]}")" "$ST_GOT" >&2
+  exit 2
+fi
+SELFTEST_PASSES=0
+REAL_PASSES=$((PASS - SELFTEST_PASSES))
+MIN_PASSES=113
+if [[ "$FAIL" -eq 0 && "$REAL_PASSES" -lt "$MIN_PASSES" ]]; then
+  printf 'FATAL: anti-vacuity floor - %s assertions passed, expected exactly %s (a block of rows was deleted or skipped)\n' "$REAL_PASSES" "$MIN_PASSES" >&2
+  exit 1
+fi
+if [[ "$FAIL" -eq 0 && "$REAL_PASSES" -gt "$MIN_PASSES" ]]; then
+  printf 'FATAL: floor drift - %s assertions passed but MIN_PASSES is %s - set MIN_PASSES=%s\n' "$REAL_PASSES" "$MIN_PASSES" "$REAL_PASSES" >&2
+  exit 1
+fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
