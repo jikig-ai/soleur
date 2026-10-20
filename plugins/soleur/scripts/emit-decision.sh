@@ -63,6 +63,8 @@ esac
 harness="unknown"
 if [ -n "${CLAUDECODE:-}" ]; then
   harness="claude"
+elif [ -n "${OPENCODE:-}" ] || [ "${AI_AGENT:-}" = "opencode" ]; then
+  harness="opencode"
 elif [ -n "${GROK_HOME:-}" ] || [ -n "${GROK_AGENT:-}" ] || [ -n "${GROK_DEFAULT_MODEL:-}" ] || [ -n "${GROK_SUBAGENTS:-}" ]; then
   harness="grok"
 elif [ -n "${CODEX_THREAD_ID:-}" ]; then
@@ -71,10 +73,12 @@ elif [ -n "${DEVIN:-}" ] || [ -n "${DEVIN_HOME:-}" ]; then
   harness="devin"
 fi
 
-session_id="${CLAUDE_SESSION_ID:-${DEVIN_SESSION_ID:-${CODEX_THREAD_ID:-${GROK_SESSION_ID:-}}}}"
+session_id="${CLAUDE_SESSION_ID:-${OPENCODE_SESSION_ID:-${DEVIN_SESSION_ID:-${CODEX_THREAD_ID:-${GROK_SESSION_ID:-}}}}}"
 if [ -z "$session_id" ]; then
-  # None of the four harnesses exports a session env var today (the repo's own
-  # learnings measured this — 2026-03-17 PPID note). Derive a session-stable,
+  # Four harnesses still export no session env var (the repo's own learnings
+  # measured this — 2026-03-17 PPID note); OpenCode does export
+  # `OPENCODE_SESSION_ID`, measured live on 2.0.32, so it is in the chain above.
+  # Derive a session-stable,
   # non-correlatable id from the parent pid: one emit writer per agent session
   # shares the same PPID, and hashing keeps the raw pid out of the corpus.
   if command -v sha256sum >/dev/null 2>&1; then

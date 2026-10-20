@@ -5592,6 +5592,10 @@ if want_scripts; then
   # is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes the PIR-flip tracker, so "PASS only when the
   # fix PR's merge commit is contained in the deployed tag" must redden CI if it regresses to a bare canary-green exit 0.
   run_suite "scripts/sandbox-readback-10445" bash scripts/followthroughs/sandbox-readback-10445.test.sh
+  # #10552: exit-code + row-class harness for the compound-promote derived-diff probe. Registered EXPLICITLY
+  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes #10552,
+  # so a PASS on a refusal that is not proof (or on a quiet week) must redden CI.
+  run_suite "scripts/compound-promote-draft-edit-10552" bash scripts/followthroughs/compound-promote-draft-edit-10552.test.sh
   # #10119: exit-code + branch harness for the registry htpasswd-stdin delivery probe. Registered explicitly
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes
   # #10119 after the unattended registry host replace, so a vacuous PASS (old-host rows, forged tails, quoted
