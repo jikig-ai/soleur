@@ -122,9 +122,11 @@ estimates_ok() {
   printf '{%s,"table_name":"function_runs","est_rows":-1,"live_rows":-1,"rls_on":false,"n_policies":0}]' "$(proof)"
 }
 set_resp() { # <name> <code> <body>
+  assert_fixture_dir "$WORK"
   printf '%s\n%s' "$2" "$3" > "$WORK/state/resp.$1"
 }
 reset_state() {
+  assert_fixture_dir "$WORK"
   rm -f "$WORK"/state/resp.* "$WORK"/state/curl_rc.* "$WORK"/state/sql.* "$WORK"/state/argv.log "$WORK"/state/env.log
   : > "$WORK/state/requests.log"; : > "$WORK/state/argv.log"; : > "$WORK/state/env.log"
   set_resp identity 200 "$(identity_ok)"
@@ -135,6 +137,7 @@ reset_state() {
 P_RC=0; P_OUT=""; P_ERR=""
 run_probe() { # <probe args...> -- env additions come from P_ENV (array)
   local script="${PROBE_SH:-$PROBE}"
+  assert_fixture_dir "$WORK"
   P_RC=0
   env -i PATH="$BASE_PATH" HOME="$WORK" SUPABASE_ACCESS_TOKEN="${P_TOKEN-$TOKEN}" \
     LEAK_DECOY_SECRET="decoy-secret-must-not-reach-curl" DOPPLER_TOKEN="decoy-doppler-token" \
@@ -298,7 +301,7 @@ status_case 500 server_error
 status_case 503 server_error
 status_case 302 shape
 for rcode in 28:timeout 7:transport 6:transport 35:transport; do
-  reset_state; printf '%s' "${rcode%%:*}" > "$WORK/state/curl_rc.identity"; run_probe round1
+  assert_fixture_dir "$WORK"; reset_state; printf '%s' "${rcode%%:*}" > "$WORK/state/curl_rc.identity"; run_probe round1
   [[ "$P_RC" -eq 3 && "$(nreq)" -eq 1 ]] && streams_have "could-not-measure(${rcode##*:})" \
     && pass "B17: curl exit ${rcode%%:*} -> could-not-measure(${rcode##*:}), never a zero" || fail "B17: curl ${rcode%%:*} rc=$P_RC out=${P_OUT:0:100}"
 done
@@ -380,6 +383,7 @@ PY
 mkdir -p "$WORK/mut/lib"; cp "$HERE/lib/bearer-curl.sh" "$WORK/mut/lib/bearer-curl.sh"
 run_mutant() { # <label> <snippet> <expect-fn>
   if mut_probe "$1" "$2"; then
+    assert_fixture_dir "$WORK"
     cp "$WORK/probe.mut.sh" "$WORK/mut/inngest-history-probe.sh"
     PROBE_SH="$WORK/mut/inngest-history-probe.sh"
     "$3"

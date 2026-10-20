@@ -105,6 +105,7 @@ if [[ "$rc" -ne 0 ]]; then
 fi
 
 # ---- The stub ------------------------------------------------------------
+assert_fixture_dir "$WORK"
 mkdir -p "$WORK/bin"
 cat > "$WORK/bin/doppler" <<'STUB'
 #!/usr/bin/env bash
@@ -831,6 +832,7 @@ for marker in ("PLAN_ACTIONS_CREDENTIAL", "TF_VAR_hcloud_token", "TF_VAR_doppler
 open(sys.argv[2], "w").write(body)
 PY
 }
+assert_fixture_dir "$WORK"
 mkdir -p "$WORK/binb"
 cat > "$WORK/binb/doppler" <<'STUB'
 #!/usr/bin/env bash
