@@ -2080,8 +2080,10 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # in this comment and the number in the guard below MUST be the same number. They disagreed once
 # (comment 46, guard 48, run 48/48), which is a ratchet whose own prose says the notch is
 # lower than it is — a reader trusting the comment would have "raised" it downward.
-if [[ "$((PASS + FAIL))" -lt 168 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 168." >&2
+# Then 168 -> 172 with R6a-c (the listing blocks load the read-only Hetzner token, no read/write fallback, #9927 item 8b) and the g-doppler-ro
+# classifier row; 172 is the REALIZED `PASS + FAIL`.
+if [[ "$((PASS + FAIL))" -lt 172 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 172." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

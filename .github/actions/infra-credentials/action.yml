@@ -182,78 +182,78 @@ runs:
           fi
           echo "::warning title=infra-privileged::source=legacy verdict=privileged_source_missing — this job read its credentials from Doppler prd_terraform (Tier A). Expected before operator step O3; after O10 it means the Tier-B environment secret is missing and this run is using credentials that no longer exist."
 
-          # THE LEGACY ARM MUST SUPPLY WHAT IT REPLACED, not merely decline.
+          # THE LEGACY ARM SUPPLIES A READ-ONLY HETZNER TOKEN AND NOTHING ELSE (#9927 item 8b).
           #
           # Several Tier-B steps read `$HCLOUD_TOKEN` from the JOB environment rather than
-          # from inside a `doppler run` wrapper — the stock-preflight gates, the drift
-          # orphan sweep, the rung-2 hard reset, the root-key fingerprint attestation. Each
-          # of those used to carry its own inline `doppler secrets get HCLOUD_TOKEN` read,
-          # and each of those reads was removed in this change because census row G1g (AC3)
-          # forbids a Tier-B name being read from `prd_terraform` outside THIS action.
+          # from inside a `doppler run` wrapper -- the stock-preflight gates, the drift
+          # orphan sweep, the rung-2 hard reset, the root-key fingerprint attestation. Census
+          # row G1g forbids reading a Tier-B name from `prd_terraform` outside THIS action, so
+          # the read belongs here, not nowhere (deleting it would make every one of those steps
+          # abort on an empty token).
           #
-          # Satisfying that row by DELETING the read rather than by MOVING it here would
-          # have made the legacy arm export nothing at all, so between merge and operator
-          # step O3 every one of those steps would abort on an empty token — the outage
-          # their own comments warn about ("an outage, not a tripwire"), and a direct
-          # contradiction of this PR's merge-safety claim. The read belongs here, where the
-          # census sanctions it, not nowhere.
+          # This arm used to try `HCLOUD_TOKEN_READONLY` and then fall back to the read/write
+          # `HCLOUD_TOKEN`, a before-state fallback that lasted until operator steps O5 and O10.
+          # Both are done (measured 2026-10-20: the read-only name is listed in prd_terraform and
+          # the read/write name is gone), so the fallback is dead code, and dead code with that
+          # authority is a hazard: the day the read-only secret goes missing, a job that only
+          # READS Hetzner would silently start using a token that can destroy the fleet. The arm
+          # reads the read-only name alone. Absent, empty or unusable is a named verdict, rc 0,
+          # and NOTHING is exported -- three callers (apply-github-infra, apply-sentry-infra,
+          # web-host-escrow-diagnose) never touch Hetzner, and every consumer that does fails
+          # closed on its own empty token (CTO ruling F2b/F6, decision-challenges.md). "Nothing
+          # exported" is deliberate: exporting an empty `HCLOUD_TOKEN` would win under
+          # `--preserve-env` and break the Terraform steps of a legacy-arm job, which still
+          # need the read/write token from their own `doppler run` until O10 evicts it from
+          # Tier A. That residual is closed by O10, not here (row 8.8 measures the precedence).
           #
-          # Read-only first (operator step O5 mints it), then the read/write token as the
-          # before-state fallback. That ORDER is the same one census row G1g's allowance is
-          # anchored on, and it means a job that only needs to GET from Hetzner stops using
-          # a destroy-capable token as soon as O5 lands.
-          #
-          # `DOPPLER_TOKEN=` IS LOAD-BEARING, and its absence is why the first version of
-          # this block was a no-op. Arm 2 below prefixes its own read; this one did not,
-          # and the step's `env:` binds only DP_INFRA/DP_LEGACY/GIT_DATA_ROOT_STATE_MIGRATED
-          # — never DOPPLER_TOKEN. So the read ran UNAUTHENTICATED, `doppler` exited
-          # non-zero, `2>/dev/null` hid the reason, `|| legacy_hcloud=""` turned it into a
-          # value, and the outage fix above exported nothing while looking like it had run.
-          #
-          # That is the could-not-measure/measured-bad collapse, and it lands on the arm
-          # whose entire job is to be invisible when it works: the warning below would have
-          # blamed a missing SECRET for what was a missing TOKEN, so the operator reading it
-          # would have gone to Doppler to add a key that was already there. Auth failure and
-          # absent-key are now separated, and the reason is carried into the message.
+          # `DOPPLER_TOKEN=` IS LOAD-BEARING. The step's `env:` binds only DP_INFRA/DP_LEGACY/
+          # GIT_DATA_ROOT_STATE_MIGRATED, never DOPPLER_TOKEN, so without the inline prefix the
+          # read runs UNAUTHENTICATED, `doppler` exits non-zero, and `2>>` hides the reason: the
+          # first version of this arm exported nothing while looking like it had run. Auth
+          # failure and absent-key are separated below, and the reason is carried into the
+          # message.
           legacy_hcloud=""
           legacy_err_file="$(mktemp)"
-          for n in HCLOUD_TOKEN_READONLY HCLOUD_TOKEN; do
-            if legacy_hcloud="$(DOPPLER_TOKEN="$DP_LEGACY" doppler secrets get "$n" --plain -p soleur -c prd_terraform 2>>"$legacy_err_file")"; then
-              [[ -n "$legacy_hcloud" ]] && break
-            fi
-            legacy_hcloud=""
-          done
-          if [[ -n "$legacy_hcloud" ]]; then
-            # Doppler-fetched values are NOT auto-masked by Actions (unlike `secrets.*`), and
-            # this token carries destroy authority over the whole prod fleet. Mask PER LINE:
-            # a single blob mask leaves every interior line of a multi-line value unmasked.
+          if legacy_hcloud="$(DOPPLER_TOKEN="$DP_LEGACY" doppler secrets get HCLOUD_TOKEN_READONLY --plain -p soleur -c prd_terraform 2>>"$legacy_err_file")"; then :; else legacy_hcloud=""; fi
+          # A bearer token is one line of [A-Za-z0-9._~+/=-]. `[[ -n ]]` accepts a whitespace-only
+          # or multi-line value, which would then be masked, exported and used. The value comes
+          # from `prd_terraform`, which the branch-nameable `DOPPLER_TOKEN_WRITE` repo secret can
+          # write until operator step O11, so a value that is not a plain token is refused here,
+          # before it can reach $GITHUB_ENV, rather than contained afterwards.
+          # `LC_ALL=C` so the ranges are ASCII, not the runner locale's collation.
+          _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+          legacy_shape_ok=true
+          if [[ -n "$legacy_hcloud" ]] && ! _bearer_ok "$legacy_hcloud"; then
+            legacy_shape_ok=false
+          fi
+          if [[ -n "$legacy_hcloud" && "$legacy_shape_ok" == true ]]; then
+            # Doppler-fetched values are NOT auto-masked by Actions (unlike `secrets.*`).
+            # Mask PER LINE: a single blob mask leaves every interior line of a multi-line
+            # value unmasked (the shape check above admits one line only; this stays as the
+            # second line of defence).
             while IFS= read -r ln; do
               [[ -n "$ln" ]] && printf '::add-mask::%s\n' "$ln"
             done <<< "$legacy_hcloud"
-            # HEREDOC DELIMITER, never `K=V`. This value comes from `prd_terraform`, which
-            # `DOPPLER_TOKEN_WRITE` — a REPO secret any branch can name — can write until
-            # operator step O11. With the `K=V` form a value of `tok\nBASH_ENV=/tmp/x` writes
-            # TWO lines into $GITHUB_ENV, and Actions honours `BASH_ENV` (and `LD_PRELOAD`)
-            # in every later `run:` step: arbitrary code execution in a main-only job, from a
-            # branch, through the very substitution path this action exists to close.
-            # `--preserve-env` is no defence — the loader is the thing doing the write. The
-            # Tier-B export loop and the AWS alias below already use this form; this arm was
-            # the only one that departed from it.
+            # HEREDOC DELIMITER, never `K=V`: with the `K=V` form a value of `tok\nBASH_ENV=/tmp/x`
+            # writes TWO lines into $GITHUB_ENV, and Actions honours `BASH_ENV` (and `LD_PRELOAD`)
+            # in every later `run:` step. The Tier-B export loop and the AWS alias below use this
+            # form too.
             ldelim="SOLEUR_EOF_$(openssl rand -hex 12)"
             printf 'HCLOUD_TOKEN<<%s\n%s\n%s\n' "$ldelim" "$legacy_hcloud" "$ldelim" >> "$GITHUB_ENV"
+          elif [[ -n "$legacy_hcloud" ]]; then
+            # The value is NEVER echoed: it is not a token, and it came from a store a branch
+            # actor can write.
+            echo "::error title=infra-privileged::source=legacy verdict=legacy_hcloud_readonly_unusable — HCLOUD_TOKEN_READONLY in prd_terraform is not a plain one-line bearer token (whitespace, a newline or a shell metacharacter). Nothing was exported. Re-mint it by the O5 procedure in infra-credential-tiers-8209.md."
           else
-            # NOT fatal: a Tier-A job that never touches Hetzner is a legitimate caller, and
-            # every consumer already fail-closes loudly on an empty token with a message
-            # naming its own gate. Say so here so the two are distinguishable in the log.
-            # Distinguish "the token cannot authenticate" from "the key is not there". The
-            # first is a broken caller and the operator fixes DOPPLER_TOKEN; the second is
-            # the expected state after O10 and needs no action. Grep the CLI's own stderr
-            # rather than guessing from an exit code, and never echo the stderr itself — a
-            # Doppler auth error can quote the token prefix.
+            # NOT fatal (see above). Distinguish "the token cannot authenticate" from "the key is
+            # not there": the first is a broken caller and the operator fixes DOPPLER_TOKEN; the
+            # second needs the Tier-B environment secret first. Grep the CLI's own stderr rather
+            # than guessing from an exit code, and never echo the stderr itself -- a Doppler auth
+            # error can quote the token prefix.
             if grep -qiE 'unauthor|invalid.*token|authentication' "$legacy_err_file"; then
               echo "::error title=infra-privileged::source=legacy verdict=legacy_token_unauthorized — DOPPLER_TOKEN (Tier A) was rejected by Doppler when reading prd_terraform. This is a broken credential, NOT a missing secret: do not add keys to Doppler. Check the DOPPLER_TOKEN repo secret."
             else
-              echo "::warning title=infra-privileged::source=legacy hcloud_token=absent — the Tier-A token authenticated, but neither HCLOUD_TOKEN_READONLY nor HCLOUD_TOKEN exists in prd_terraform. Expected after operator step O10. Any step that needs a Hetzner token will fail closed and name itself."
+              echo "::error title=infra-privileged::source=legacy verdict=legacy_hcloud_readonly_absent — HCLOUD_TOKEN_READONLY is absent from prd_terraform and no read/write fallback is read. Nothing was exported, so any step that needs a Hetzner token will fail closed and name itself. Likelier root cause: privileged_source_missing (the job's Tier-B environment secret is missing), so check that first; if the environment secret is fine, re-mint the read-only token by the O5 procedure in infra-credential-tiers-8209.md before deleting anything."
             fi
           fi
           rm -f "$legacy_err_file"

@@ -725,11 +725,11 @@ printf '\n%s passed, %s failed\n' "$pass" "$fail"
 
 # NON-DEGENERACY FLOOR — see the sibling rationale in workspaces-luks-staging.test.sh. A python
 # leg that dies before emitting verdicts, or a `check()` block deleted wholesale, would otherwise
-# leave this suite reporting "0 passed, 0 failed" and exiting 0. The floor (WF_MIN_ASSERTIONS, 107) is
+# leave this suite reporting "0 passed, 0 failed" and exiting 0. The floor (WF_MIN_ASSERTIONS, 111) is
 # a literal on the `if` itself and is reported by printf + exit 1, never through ok()/no(), so a
 # neutered helper cannot silence the check that exists to notice it.
-if [[ "$pass" -lt 107 ]]; then
-  printf 'FAIL - WF_MIN_ASSERTIONS: only %s assertions passed (floor 107) — the structural leg produced fewer verdicts than expected; a green run here would be vacuous\n' "$pass"
+if [[ "$pass" -lt 111 ]]; then
+  printf 'FAIL - WF_MIN_ASSERTIONS: only %s assertions passed (floor 111) — the structural leg produced fewer verdicts than expected; a green run here would be vacuous\n' "$pass"
   exit 1
 fi
 [[ "$fail" -eq 0 ]] || exit 1
