@@ -44,3 +44,9 @@ soleur:plan (full workflow, inline), soleur:deepen-plan (halt gates 4.5–4.55 i
 - Next after last 2: fix-round invocation `soleur:review 10718 --fix-round --since <panel-sha>` if new findings, else skip; qa (no Test Scenarios browser flows — docs change, QA skips gracefully); compound; ship.
 - Epic #10397 checklist: #10398 #10399 tickable NOW (both closed+merged); #10400 on merge.
 - #10726 (fix-10693): ready + merge-queued, full battery running on ready.
+
+## Review Synthesis (COMPLETE — all 8 seats returned)
+- Panel verdict: 1 real P1 (vacuous Hypothesis example — fixed eaab20329e), all other P2/P3 fixed inline; data-integrity + git-history verified the fix at HEAD.
+- Findings fixed: Counter-oracle+idempotence example, invertible-pairs scope, unverified tool rows, phrase-pin ×3+floor 85, header re-wrap, home-layer clause, RED-first reword, plan 2.1 one-site sync, canonical-oracle caveat (latest commit).
+- ZERO open code-review issues filed — all findings were ≤100-line inline fixes.
+- NEXT: fix-round review `soleur:review 10718 --fix-round --since 955863414e` (mapped seats over fix range), then qa (docs-only → skips), compound, ship (mark ready → merge queue → postmerge → close 10400 → tick epic).
