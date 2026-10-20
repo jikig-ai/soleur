@@ -640,6 +640,39 @@ Reading it:
   `refusals[]` breaks on all six values, not just `diff-empty`; nothing in this
   repo has one, and a saved query outside it cannot be verified from here. An empty proposal was never a derivation failure; this is a
   reclassification, not a compatibility break to route around.
+- **The model no longer authors the diff (#10552), and seven `edit-*` reasons name why a draft was refused BEFORE `checkDiffPaths`.**
+  Phase 2 asks the model for an anchor line and the lines to insert; the server splices them into the
+  real HEAD text and derives the diff with git. A refusal at that step is one of:
+
+  | reason | what actually happened | probe class |
+  |---|---|---|
+  | `edit-target-unreadable` | path not in HEAD, not a regular file, no trailing newline, or contains a carriage return | N (no proof) |
+  | `edit-target-too-large` | base over 120,000 bytes (about 30k tokens); `review`, `work`, `ship`, `brainstorm` today (#10551) | N |
+  | `edit-invalid` | schema, empty, charset, length, credential shape, rule-bullet shape, frontmatter or fence anchor, no resolvable source learning, or a `max_tokens` stop; the cause is the Sentry `cause` tag | N |
+  | `edit-anchor-not-found` | the anchor line does not occur in the file | N |
+  | `edit-anchor-ambiguous` | the anchor line occurs more than once | N |
+  | `edit-target-duplicate` | a second cluster on a target already drafted this run (both PRs would fork from one base) | N |
+  | `edit-derive-failed` | a SERVER defect: the derived diff was not additive, or the derivation itself failed (Sentry op `draft-edit-error`) | F (defect) |
+
+  `diff-path-off-target`, `corpus-shrink-refused` and `agents-core-hr-rule-edit-refused` can no longer fire
+  for a correct server derivation (the diff touches only the declared target, removes nothing, and cannot mint
+  an `hr-` id), so the follow-through probe grades them as server defects (class F), not as proof.
+
+  `diff-underivable-apply` is retained for the residual case (a derived diff that git then rejects) and is
+  also a server defect; `edit-derive-failed` and `diff-underivable-apply` are told apart by the Sentry op
+  (`draft-edit-error` vs `diff-path-refused`). The marker field set is unchanged: the cause lives in Sentry,
+  not here. **Where the cause is readable (no SSH):** each refused draft emits a Sentry MESSAGE event
+  (feature `cron-compound-promote`, op `draft-edit-refused`) tagged `reason` and `cause` with `cluster_hash` in
+  `extra`; a derivation fault emits op `draft-edit-error` tagged `cause` (`bad-base`, `git-exit`, `non-additive`,
+  `error`). `cluster_hash` sits in the event's `extra`, which Sentry does NOT index: search Sentry by the
+  `reason` / `cause` / `op` tags, then read `cluster_hash` off the matching event. Better Stack carries the same
+  value in two shapes: the pino `draft-edit-refused` warn line keys it `hash`, and the error row mirrored by
+  `reportSilentFallback` keys it `cluster_hash`; the marker's `refusal_detail[].cluster_hash` is the join key
+  to either. Example, no SSH (one marker row to its cause):
+  `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 8d --grep draft-edit-refused`,
+  then decode each row and select the one whose `hash` or `cluster_hash` equals the marker's. The `diff-path-refused`
+  site is on the same message path with a `reason` tag. The events are MESSAGE events on purpose: on the Error path
+  the pino mirror captures the same Error first and Sentry drops the tagged capture (#8629).
 - **Do not write `.diff_fenced // "-"` in a jq projection.** jq's `//` yields
   its right-hand side when the left is `null` **or `false`**, so every `false`
   renders identically to an absent field — and `false` is a meaningful value for

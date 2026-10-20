@@ -615,6 +615,8 @@ export SOLEUR_TIMEOUT_BIN="$TIMEOUT_BIN"
 SOLEUR_SUITE_TIMEOUT_DEFAULT="${SOLEUR_SUITE_TIMEOUT_DEFAULT:-360}"
 _SUITE_BOUNDS=(
   "apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh=600"
+  # (#9927 item 5) ~130 s serial locally (a terraform sequence per battery child); CI runs registry init and a contended leg.
+  "apps/web-platform/infra/inngest-redis-luks-import-rehearsal.test.sh=540"
   "apps/web-platform/infra/git-data-cutover-access.test.sh=600"
   "apps/web-platform/infra/git-data-ownership.test.sh=300"
   # #8609: the Guard 7 mutation rows took the suite from ~360 to 485 assertions. At 180 s it was

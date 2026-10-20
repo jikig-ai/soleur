@@ -5592,6 +5592,10 @@ if want_scripts; then
   # is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes the PIR-flip tracker, so "PASS only when the
   # fix PR's merge commit is contained in the deployed tag" must redden CI if it regresses to a bare canary-green exit 0.
   run_suite "scripts/sandbox-readback-10445" bash scripts/followthroughs/sandbox-readback-10445.test.sh
+  # #10552: exit-code + row-class harness for the compound-promote derived-diff probe. Registered EXPLICITLY
+  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes #10552,
+  # so a PASS on a refusal that is not proof (or on a quiet week) must redden CI.
+  run_suite "scripts/compound-promote-draft-edit-10552" bash scripts/followthroughs/compound-promote-draft-edit-10552.test.sh
   # #10119: exit-code + branch harness for the registry htpasswd-stdin delivery probe. Registered explicitly
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes
   # #10119 after the unattended registry host replace, so a vacuous PASS (old-host rows, forged tails, quoted
@@ -5847,6 +5851,14 @@ if want_scripts; then
   # transaction rows carry measurements.{lcp,fcp,cls,inp,ttfb}. Explicit
   # run_suite — scripts/followthroughs/ is covered by no glob here.
   run_suite "scripts/cwv-field-rum-9178" bash scripts/followthroughs/cwv-field-rum-9178.test.sh
+  # #8743: exit-code harness for the web-2 plugin-seed (fchmodat2) soak probe.
+  # Registered explicitly — scripts/followthroughs/*.test.sh is not in SUITE_GLOBS,
+  # and this probe's exit 0 auto-closes the tracker. The load-bearing arms are the
+  # PASS conjunction (positive control + post-fix marker + zero post-marker
+  # fchmodat2), the marker-anchored absence floor (pre-delivery rows are history,
+  # not a verdict), and every transport fault mapping to NOT YET / CANNOT
+  # ESTABLISH, never PASS.
+  run_suite "scripts/web2-plugin-seed-8743" bash scripts/followthroughs/web2-plugin-seed-8743.test.sh
   # #8450 standing monitor core (scripts/actions-queue-health.sh): the verdict
   # logic behind scheduled-actions-queue-health.yml — live queue depth +
   # delivered-vs-entitled concurrency + median live queued age ->

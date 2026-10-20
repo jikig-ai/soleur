@@ -18,6 +18,10 @@ const markers = [
   "CODEX_THREAD_ID",
   "DEVIN",
   "DEVIN_HOME",
+  "OPENCODE",
+  "OPENCODE_SESSION_ID",
+  "OPENCODE_TERMINAL",
+  "AI_AGENT",
 ];
 let saved: Record<string, string | undefined>;
 

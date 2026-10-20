@@ -316,7 +316,6 @@ describe("extract_tweets", () => {
   // --- Edge cases for numbered-mode robustness ---
 
   test("numbered format: single-tweet (hook only, no N/ lines) yields 1 tweet", () => {
-    const RS = "\\x1e";
     const result = Bun.spawnSync(["bash", "-c", `
       set -euo pipefail
       source '${SCRIPT_PATH}'
@@ -342,7 +341,6 @@ EOF
   });
 
   test("numbered format: prose `1/3 of devs` in hook does NOT split (sequence guard)", () => {
-    const RS = "\\x1e";
     const result = Bun.spawnSync(["bash", "-c", `
       set -euo pipefail
       source '${SCRIPT_PATH}'
@@ -383,7 +381,6 @@ EOF
     // Documents the current contract: tweet 1 has no leading `N/ ` by
     // convention. If an author writes `1/ ...` as the hook, it is treated as
     // hook content (not a boundary — the sequence starts at expected=2).
-    const RS = "\\x1e";
     const result = Bun.spawnSync(["bash", "-c", `
       set -euo pipefail
       source '${SCRIPT_PATH}'
@@ -421,7 +418,6 @@ EOF
   test("labeled format: `N/ ` inside a tweet body is NOT treated as a boundary", () => {
     // The labeled convention uses **Tweet N labels as the only boundaries;
     // body content can include `2/ ` on its own line without being sliced.
-    const RS = "\\x1e";
     const result = Bun.spawnSync(["bash", "-c", `
       set -euo pipefail
       source '${SCRIPT_PATH}'

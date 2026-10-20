@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import re
 import subprocess
 import sys
@@ -133,7 +134,8 @@ def lint(path: Path, retired_ids: set[str]) -> int:
     # Format drift guard: the rule_id regex above (ID_RE) is mirrored in
     # scripts/rule-prune.sh as _RULE_ID_RE. Bash ERE and Python `re` differ
     # in syntax, so the two definitions are kept in sync manually.
-    try:
+    # File not in HEAD yet: git show fails, skip the diff check.
+    with contextlib.suppress(subprocess.CalledProcessError):
         head = subprocess.run(
             ["git", "show", f"HEAD:{path}"],
             capture_output=True, text=True, check=True,
@@ -145,9 +147,6 @@ def lint(path: Path, retired_ids: set[str]) -> int:
                 f"{path}: removed id(s) detected: {sorted(removed)}. "
                 "Add to scripts/retired-rule-ids.txt to retire."
             )
-    except subprocess.CalledProcessError:
-        # File not in HEAD yet — skip diff check
-        pass
 
     if errors:
         for err in errors:
@@ -360,7 +359,7 @@ def lint_union(
         )
 
     # Sibling-aware removed-id check vs HEAD:<index_path>
-    try:
+    with contextlib.suppress(subprocess.CalledProcessError):
         head = subprocess.run(
             ["git", "show", f"HEAD:{index_path}"],
             capture_output=True, text=True, check=True,
@@ -372,8 +371,6 @@ def lint_union(
                 f"{index_path}: removed id(s) detected: {sorted(removed)}. "
                 "Add to scripts/retired-rule-ids.txt to retire."
             )
-    except subprocess.CalledProcessError:
-        pass
 
     if errors:
         for err in errors:

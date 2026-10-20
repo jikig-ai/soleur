@@ -5,7 +5,8 @@
 # (variables.tf). A drift means a deploy fans out to the wrong peers → a host
 # silently ships stale code (single-user incident). The in-repo copies this guard
 # covers (operands 2-4 below): web-platform-release.yml (the tagged-release deploy
-# fan-out, ×1), apply-web-platform-infra.yml (×2, the inline pin_load steps) and
+# fan-out, ×2 — the deploy job env and its identical verify-peer-deploy sibling),
+# apply-web-platform-infra.yml (×2, the inline pin_load steps) and
 # git-data-cutover.yml (×1, feeding the redeploy and the finalizer).
 #
 # Operand 5 (#8211) is the SET of host KEYS the cutover workflow's per-host readback
@@ -112,7 +113,10 @@ check_all_copies() {
   done
 }
 
-# Operand 2: web-platform-release.yml — 1 copy (the tagged-release deploy fan-out).
+# Operand 2: web-platform-release.yml — 2 copies (the tagged-release deploy
+# fan-out in `deploy`'s env + the identical sibling in `verify-peer-deploy`'s
+# env; floor stays 1 so a silently-removed copy still reds, and BOTH are
+# compared per-copy).
 check_all_copies "$WORKFLOW" "release-workflow" 1
 # Operand 3: apply-web-platform-infra.yml — 2 copies (#8211 PR2: the inline pin_load steps in
 # git_data_host_replace + git_data_host_create each fan the webhook redeploy to the full peer set).
@@ -146,6 +150,20 @@ elif [ -z "$rb_keys" ]; then fail "readback: extracted 0 host keys from the read
 elif [ "$tf_key_n" -ne "$tf_ip_n" ]; then fail "readback: var.web_hosts has $tf_ip_n private_ip entries but the key extractor saw $tf_key_n keys — a host entry shape the extractor cannot read"
 elif [ "$tf_keys" = "$rb_keys" ]; then pass
 else fail "readback host-key drift: var.web_hosts=[$tf_keys] readback loop=[$rb_keys] — a host would be redeployed but never read back"; fi
+
+# Operand 6 (#8743 review): the `Verify peer deploy completion` step excludes the
+# `deploy.` ingress host from the expected-peer set by a LITERAL IP
+# (`grep -vxF '10.0.1.10'`). tunnel.tf:54 expresses that ingress as
+# `var.web_hosts["web-1"].private_ip`, so the excluded literal MUST equal the
+# web-1 entry — a re-addressed web-1 otherwise puts web-1 in its own peer gate
+# and leaves the real peer unaudited.
+wh1_ip="$(printf '%s\n' "$wh_block" | awk '/"web-1"[[:space:]]*=[[:space:]]*\{/{f=1} f{print} f&&/\}/{exit}' \
+  | grep -oE 'private_ip[[:space:]]*=[[:space:]]*"10\.0\.1\.[0-9]+"' | grep -oE '10\.0\.1\.[0-9]+' | head -1)"
+excl_ips="$(grep -oE "grep -vxF '10\.0\.1\.[0-9]+'" "$WORKFLOW" | grep -oE '10\.0\.1\.[0-9]+' | sort -u | paste -sd, -)"
+if [ -z "$wh1_ip" ]; then fail "ingress-exclusion bind: could not extract var.web_hosts[\"web-1\"].private_ip (parser drift)"
+elif [ -z "$excl_ips" ]; then fail "ingress-exclusion bind: no 'grep -vxF 10.0.1.*' exclusion found in $WORKFLOW"
+elif [ "$excl_ips" != "$wh1_ip" ]; then fail "ingress-exclusion bind: the peer gate excludes [$excl_ips] but var.web_hosts[\"web-1\"].private_ip (the deploy. ingress target, tunnel.tf) is [$wh1_ip]"
+else pass; fi
 
 # --- Self-test: the operand above must go RED on the edits it exists to catch (Guard 1 matrix,
 # #8211 plan). Each mutant is a COPY of the real file fed through a seam; the suite re-invokes

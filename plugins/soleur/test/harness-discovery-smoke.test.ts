@@ -3,15 +3,19 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
+  expectedOpenCodeSkillFiles,
   expectedSkills,
   isStructurallyParseable,
   parseCodexPromptInput,
   parseArgs,
   parseDevinSkillsList,
+  parseOpenCodeSkillList,
+  resolveBin,
   resolveExit,
   sanitizeForLog,
   verdict,
 } from "../scripts/harness-discovery-smoke";
+import { PLUGIN_ROOT_TOKEN } from "../scripts/sync-opencode-adapter";
 import { MIN_MANIFEST_DECLARED_SKILLS } from "./lib/population-floors";
 
 // Guard 6 of the harness-parity hardening bundle (ADR-245).
@@ -262,6 +266,111 @@ describe("structural parseability", () => {
   });
 });
 
+// OpenCode's skill ids are BARE directory basenames with no `soleur:` namespace
+// (measurement §2.3), so the id `plan` is shared by this plugin's skill and by any
+// operator-level `plan` in `~/.claude/skills` or `~/.agents/skills`. The id therefore
+// cannot anchor the expectation; the absolute `path` the server reports is what does.
+// The probe drives a real server (measurement §11.0), which is why the shapes below
+// mirror a `/api/skill` payload rather than a transcript.
+function fixtureOpenCodeRoot(names: string[]): { root: string; manifest: string } {
+  const root = mkdtempSync(join(tmpdir(), "harness-discovery-opencode-"));
+  for (const name of names) {
+    mkdirSync(join(root, "skills", name), { recursive: true });
+    writeFileSync(join(root, "skills", name, "SKILL.md"), `---\nname: ${name}\n---\n`);
+  }
+  const manifest = join(root, "opencode.json");
+  writeFileSync(manifest, JSON.stringify({ skills: [`${PLUGIN_ROOT_TOKEN}/skills`] }));
+  return { root, manifest };
+}
+
+describe("opencode — the listing is keyed on `path`, never on the bare id", () => {
+  test("the expectation is the declared roots' SKILL.md files, sentinel resolved", () => {
+    const { root, manifest } = fixtureOpenCodeRoot(["plan", "ship"]);
+    const expected = expectedOpenCodeSkillFiles(manifest, root);
+    expect([...expected.keys()].sort()).toEqual(["skills/plan/SKILL.md", "skills/ship/SKILL.md"]);
+    expect([...expected.values()]).toEqual([1, 1]);
+  });
+
+  test("a declared root that does not exist throws rather than expecting less", () => {
+    const { root, manifest } = fixtureOpenCodeRoot(["plan"]);
+    writeFileSync(manifest, JSON.stringify({ skills: [`${PLUGIN_ROOT_TOKEN}/skilz`] }));
+    expect(() => expectedOpenCodeSkillFiles(manifest, root)).toThrow(/does not exist/);
+  });
+
+  test("a directory under a declared root with no SKILL.md is not a skill", () => {
+    const { root, manifest } = fixtureOpenCodeRoot(["plan"]);
+    mkdirSync(join(root, "skills", "references"), { recursive: true });
+    expect([...expectedOpenCodeSkillFiles(manifest, root).keys()]).toEqual(["skills/plan/SKILL.md"]);
+  });
+
+  test("a bare id from OUTSIDE the plugin root is not a hit, and neither is a built-in", () => {
+    // The whole reason this arm keys on `path`: the second row carries the SAME id
+    // (`plan`) as the first from the operator's own tree, and `/builtin/opencode.md`
+    // ships with the harness. Neither may be counted as a Soleur registration.
+    const { root } = fixtureOpenCodeRoot(["plan", "ship"]);
+    const raw = JSON.stringify({
+      location: { directory: "/elsewhere" },
+      data: [
+        { id: "plan", description: "…", path: join(root, "skills", "plan", "SKILL.md"), content: "…" },
+        { id: "opencode", description: "…", path: "/builtin/opencode.md", content: "…" },
+        { id: "plan", description: "…", path: "/home/operator/.claude/skills/plan/SKILL.md", content: "…" },
+      ],
+    });
+    const counts = parseOpenCodeSkillList(raw, root);
+    expect([...counts.keys()]).toEqual(["skills/plan/SKILL.md"]);
+    expect(counts.get("skills/plan/SKILL.md")).toBe(1);
+  });
+
+  test("an unreadable payload is an empty map, not a throw — parseability decides the exit", () => {
+    expect(parseOpenCodeSkillList("Error: connect ECONNREFUSED 127.0.0.1:1", "/root").size).toBe(0);
+    expect(parseOpenCodeSkillList(JSON.stringify({ location: {}, data: null }), "/root").size).toBe(0);
+  });
+});
+
+describe("opencode — a path-keyed verdict has no multi-root names", () => {
+  const expected = new Map([
+    ["skills/plan/SKILL.md", 1],
+    ["skills/ship/SKILL.md", 1],
+  ]);
+
+  test("every path is k=1, so the mode is `single`, not an inferred dedup/additive", () => {
+    // The Codex/Devin modes describe CROSS-ROOT multiplicity. There is none here —
+    // one canonical tree, no shim roots — so reporting `indeterminate` would read
+    // as a problem in a gate log when it is the normal shape.
+    const v = verdict(expected, new Map(expected));
+    expect(v).toMatchObject({ missing: [], extra: [], badMultiplicity: [], mode: "single" });
+  });
+
+  test("a stray plugin-local SKILL.md is EXTRA", () => {
+    const v = verdict(expected, new Map([...expected, ["skills/rogue/SKILL.md", 1]]));
+    expect(v.extra).toEqual(["skills/rogue/SKILL.md"]);
+  });
+});
+
+describe("opencode — structural parseability and the exit taxonomy", () => {
+  // Measured §11.1: until a session exists (or a config-reload fires), `GET /api/skill`
+  // answers `{location, data: []}` for a fully CORRECT install.
+  const emptyListing = JSON.stringify({ location: { directory: "/proj" }, data: [] });
+
+  test("a valid payload with no data is READABLE — a total loss grades exit 1, not 3", () => {
+    expect(isStructurallyParseable("opencode", emptyListing, new Map())).toBe(true);
+    const expected = new Map([
+      ["skills/plan/SKILL.md", 1],
+      ["skills/ship/SKILL.md", 1],
+    ]);
+    const discovered = parseOpenCodeSkillList(emptyListing, "/proj");
+    const parseable = isStructurallyParseable("opencode", emptyListing, discovered);
+    const r = resolveExit({ cliPresent: true, parseable, verdict: verdict(expected, discovered) });
+    expect(r.code).toBe(1);
+    expect(r.reason).toContain("2 missing");
+  });
+
+  test("a non-payload response is UNRESOLVED", () => {
+    expect(isStructurallyParseable("opencode", "Error: connect ECONNREFUSED", new Map())).toBe(false);
+    expect(isStructurallyParseable("opencode", JSON.stringify({ location: { directory: "/p" } }), new Map())).toBe(false);
+  });
+});
+
 describe("the live manifests are the ones this gate will judge", () => {
   test("both declare two roots, and the expectation covers every tracked skill dir", () => {
     const codex = expectedSkills(new URL("../.codex-plugin/plugin.json", import.meta.url).pathname);
@@ -276,6 +385,15 @@ describe("the live manifests are the ones this gate will judge", () => {
       "soleur:sync",
     ]);
   });
+
+  test("the opencode fragment declares the canonical skills root, and nothing else", () => {
+    const opencode = expectedOpenCodeSkillFiles(new URL("../opencode/opencode.json", import.meta.url).pathname);
+    // Floor: a fragment that dropped its `skills` root collapses the expectation.
+    expect(opencode.size).toBeGreaterThanOrEqual(MIN_MANIFEST_DECLARED_SKILLS);
+    // Every member is a canonical skill, and every k is 1 (there are no shim roots here).
+    expect([...opencode.keys()].every((p) => /^skills\/[^/]+\/SKILL\.md$/.test(p))).toBe(true);
+    expect(new Set(opencode.values())).toEqual(new Set([1]));
+  });
 });
 
 describe("argument parsing refuses, rather than defaulting to something plausible", () => {
@@ -288,8 +406,8 @@ describe("argument parsing refuses, rather than defaulting to something plausibl
   });
 
   test("an unknown harness is named in the error, not silently coerced", () => {
-    const r = parseArgs(["--harness", "opencode"]);
-    expect("error" in r && r.error).toContain("opencode");
+    const r = parseArgs(["--harness", "cursor"]);
+    expect("error" in r && r.error).toContain("cursor");
   });
 
   test("--pin without a value is an error, NOT an unpinned run", () => {
@@ -305,6 +423,15 @@ describe("argument parsing refuses, rather than defaulting to something plausibl
       harness: "devin",
       pin: "3000.11.1",
     });
+    expect(parseArgs(["--harness", "opencode"])).toEqual({ harness: "opencode" });
+  });
+});
+
+describe("resolveBin — the shim is followed to a HOME-independent launcher", () => {
+  test("a binary that is not on PATH is undefined, not an empty string", () => {
+    // `driveOpenCode` falls back to the bare name, which under a hermetic HOME would be
+    // a shim that tries to reinstall — so the undefined case must be a clean signal.
+    expect(resolveBin("soleur-no-such-binary-9f3a1c")).toBeUndefined();
   });
 });
 

@@ -1,24 +1,30 @@
 /**
  * Tool-map coverage — every Claude Code tool an agent-read doc names has a stated
- * Codex and Devin translation (#8318, ADR-245).
+ * Codex, Devin and OpenCode translation (#8318, ADR-245, ADR-291).
  *
  * WHY A TABLE AND NOT A BLOCKLIST. #8318's original proposal was a born-blocking
  * blocklist of "bare mechanism nouns" (`Skill tool`, `Task tool`, `subagent_type`).
  * That was rejected on the AP-025 / ADR-202 posture: a list of forbidden forms cannot
  * be proven complete. This gate is the inverse and is complete by construction — an
  * ALLOWLIST over a closed vocabulary, asking one question per name: does the doc
- * corpus use it, and if so, do BOTH adapter tables translate it?
+ * corpus use it, and if so, do ALL adapter tables translate it?
  *
  * The tables are the translation authority the plugin already ships
- * (`codex/INSTRUCTIONS.md`, `devin/INSTRUCTIONS.md` §Tools). A Codex or Devin session
- * that meets `SendMessage` in a skill body has nothing else to resolve it with, which
- * is exactly the gap #8318 names: `SendMessage` is used in `review` and `work` and had
- * a row in neither table.
+ * (`codex/INSTRUCTIONS.md`, `devin/INSTRUCTIONS.md`, `opencode/INSTRUCTIONS.md` §Tools).
+ * A Codex, Devin or OpenCode session that meets `SendMessage` in a skill body has
+ * nothing else to resolve it with, which is exactly the gap #8318 names: `SendMessage`
+ * is used in `review` and `work` and had a row in neither table.
+ *
+ * The OpenCode table is GENERATED (it ships inside `opencode/INSTRUCTIONS.md`, whose
+ * generator owns the whole `opencode/` tree). This gate is therefore also the pin that
+ * keeps a regeneration from quietly dropping a row: the table is compared to the
+ * corpus, not to the generator.
  *
  * WHAT THIS GATE DOES NOT DO. It does not forbid naming a Claude tool — plugin prose
  * legitimately says "Claude: Skill tool; Grok: …". It requires only that the name be
  * translatable. And it says nothing about whether the translation is CORRECT; that is
- * a human claim, measured per row where it was measured at all.
+ * a human claim, measured per row where it was measured at all (the OpenCode rows cite
+ * measurement §12.8, the V2 built-in tool inventory).
  */
 
 import { readFileSync } from "fs";
@@ -100,6 +106,8 @@ export const CLAUDE_CODE_TOOLS: readonly string[] = [
 
 export const CODEX_INSTRUCTIONS = resolve(PLUGIN_ROOT, "codex/INSTRUCTIONS.md");
 export const DEVIN_INSTRUCTIONS = resolve(PLUGIN_ROOT, "devin/INSTRUCTIONS.md");
+export const ANTIGRAVITY_INSTRUCTIONS = resolve(PLUGIN_ROOT, "antigravity/INSTRUCTIONS.md");
+export const OPENCODE_INSTRUCTIONS = resolve(PLUGIN_ROOT, "opencode/INSTRUCTIONS.md");
 
 /**
  * The names a `## Tools` table's FIRST column translates.

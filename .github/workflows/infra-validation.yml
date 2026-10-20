@@ -200,6 +200,9 @@ on:
       # skill's (H2). A docs-only heading rename or runbook command edit would otherwise skip the suite. PR list only:
       # the push list above is deliberately narrower.
       - "knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md"
+      # (#9927 item 5) inngest-redis-luks-import-rehearsal.test.sh pins that this ADR's "Terraform state entry lost"
+      # row names it (and the runbook row above). PR list only, like the runbook entry.
+      - "knowledge-base/engineering/architecture/decisions/ADR-282-sole-copy-luks-volume-protection-set.md"
       - "plugins/soleur/skills/postmerge/SKILL.md"
       # (#3366) supabase-advisor/scan-workflow.test.sh reads all of these. The
       # guard's whole job is to catch a gate that looks present but does nothing

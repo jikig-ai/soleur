@@ -280,7 +280,9 @@ readonly PROD_NODE_MAX_OLD_SPACE_MB="${PROD_NODE_MAX_OLD_SPACE_MB:-3072}"
 readonly CANARY_NODE_MAX_OLD_SPACE_MB="${CANARY_NODE_MAX_OLD_SPACE_MB:-1152}"
 
 # Plugin bind-mount target. Test harness overrides via env so the seed block
-# writes under a tmpdir instead of /mnt/data (which the GH runner cannot create).
+# writes under a tmpdir instead of /mnt/data (which the GH runner cannot create)
+# — paired with PLUGIN_MOUNT_DIR_ALLOW_UNSAFE=1, the harness-only opt-out of the
+# mount shape guard that runs before the seed's container-side `find -delete`.
 PLUGIN_MOUNT_DIR="${PLUGIN_MOUNT_DIR:-/mnt/data/plugins/soleur}"
 
 # -----------------------------------------------------------------------------
@@ -546,10 +548,43 @@ write_state() {
       gak+=",\"github_app_key_probe_reason\":\"$(_gak_enum "$GITHUB_APP_KEY_PROBE_REASON" 'no_app_id|unparseable_key|http_401|http_404|wrong_app|http_other|unspecified|no_verdict')\""
     fi
   fi
+  # #8743 Phase 2 (ADR-068 constraint (c)): persist `fanout_peers` — the
+  # EFFECTIVE SOLEUR_DEPLOY_PEERS list (blank-stripped, minus this host's own
+  # IPs) — so cat-deploy-state.sh's `peers` merge knows which peer hosts to
+  # poll for the per-host verdict. ABSENT when unset or filtered empty: a
+  # deploy-peer-received run never carries it (no re-fan → the merge is inert
+  # on a peer and cannot recurse). THE FILTER IS THE SAME ONE fan_out_to_peers
+  # applies — keep in sync. Deliberately duplicated rather than shared: the
+  # fan-out test harness extracts fan_out_to_peers' body alone.
+  local fp=""
+  if [[ -n "${SOLEUR_DEPLOY_PEERS:-}" ]]; then
+    local _fp_self _fp _fp_csv="" _fp_json="" _fp_arr
+    _fp_self=" $(ip -4 -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | tr '\n' ' ') "
+    # Fail-safe (review finding): when the self-IP probe yields NOTHING the
+    # filter below cannot exclude this host's own address, so a persisted list
+    # could contain self and make cat-deploy-state.sh's peers merge poll the
+    # host's own hook (self-slot recursion). An empty probe persists NO
+    # fanout_peers rather than an unfiltered one.
+    if [[ -n "${_fp_self// /}" ]]; then
+    IFS=',' read -ra _fp_arr <<< "$SOLEUR_DEPLOY_PEERS"
+    for _fp in "${_fp_arr[@]}"; do
+      _fp="${_fp//[[:space:]]/}"
+      [[ -n "$_fp" ]] || continue
+      [[ "$_fp_self" == *" $_fp "* ]] && continue
+      _fp_csv+="${_fp_csv:+,}$_fp"
+    done
+    if [[ -n "$_fp_csv" ]]; then
+      # JSON-escaped via jq — the peer list is webhook-payload-derived and must
+      # never be able to corrupt the state document.
+      _fp_json="$(printf '%s' "$_fp_csv" | jq -Rs . 2>/dev/null || true)"
+      [[ -n "$_fp_json" ]] && fp=",\"fanout_peers\":$_fp_json"
+    fi
+    fi
+  fi
   # start_ts: schema-stable, consumed by web-platform-release.yml elapsed
   # annotation (#3398). Do NOT rename without updating that workflow.
-  printf '{"start_ts":%d,"end_ts":%d,"exit_code":%d,"component":"%s","image":"%s","tag":"%s","reason":"%s"%s}\n' \
-    "$START_TS" "$(date +%s)" "$exit_code" "${COMPONENT:-}" "${IMAGE:-}" "${TAG:-}" "$reason" "$gak" \
+  printf '{"start_ts":%d,"end_ts":%d,"exit_code":%d,"component":"%s","image":"%s","tag":"%s","reason":"%s"%s%s}\n' \
+    "$START_TS" "$(date +%s)" "$exit_code" "${COMPONENT:-}" "${IMAGE:-}" "${TAG:-}" "$reason" "$gak" "$fp" \
     > "$tmp" 2>/dev/null || {
     logger -t "$LOG_TAG" "write_state: printf/redirect failed"
     rm -f "$tmp"
@@ -4193,40 +4228,72 @@ case "$COMPONENT" in
     # Source of truth: /opt/soleur/plugin in the image (vendored at build time).
     # Must run BEFORE the canary docker run so the canary itself sees populated
     # content on first read — the Layer 3 probe script lives in the same mount.
-    # Uses an ephemeral container (`docker create` + `docker cp` + `docker rm`)
-    # so we never run a second instance of the new image during the canary phase.
-    # `docker cp src/. dst/` copies *contents* of src into dst (NOT src as a
-    # child of dst); `find -mindepth 1 -delete` is a single POSIX-portable
-    # cleanup form shared with cloud-init.yml — handles dotfiles like
-    # `.claude-plugin/` correctly.
-    echo "Seeding plugin mount from image..."
-    # Pre-flight: a prior SIGKILLed deploy may have left this container behind.
-    # `docker create --name` would otherwise fail with "container already exists".
-    docker rm -f soleur-plugin-seed >/dev/null 2>&1 || true
-    if ! docker create --name soleur-plugin-seed "$VERIFIED_REF" >/dev/null; then
-      final_write_state 1 "plugin_seed_create_failed"
+    #
+    # #8743: ONE container-side `docker run -u 0` clears, copies and
+    # sentinel-writes INSIDE the image — replacing the former host-side
+    # `docker create` + `docker cp` + `docker rm` sequence. `docker cp` untars
+    # client-side AS THE INVOKING UID (deploy, 1000), so it can neither delete
+    # nor re-chmod entries owned by a foreign uid: a mount tree seeded at birth
+    # by cloud-init.yml (root) carrying the image's uid-1001 ownership wedged
+    # every subsequent deploy on that host with `fchmodat2` EPERM →
+    # plugin_seed_copy_failed. Container-side root makes the seed
+    # ownership-agnostic and SELF-HEALING: the first deploy after delivery
+    # repairs a wedged mount in place — no host replace, no new privilege
+    # surface (deploy is docker-group = documented root-equivalent). `-u 0`
+    # overrides the image's `USER soleur`; `--entrypoint /bin/sh` pins the
+    # interpreter so a future Dockerfile ENTRYPOINT cannot reinterpret the
+    # args. `cp -a` preserves the image's 1001 ownership — now harmless: every
+    # later clear+copy is container-side root, and the app container only reads
+    # the :ro mount (world-readable). cloud-init.yml keeps its own host-side
+    # root `docker cp` seed (birth path, works once, never repaired thereafter
+    # — a DIFFERENT contract than this block; the first deploy after a boot
+    # rewrites whatever it left).
+    # PLUGIN_MOUNT_DIR shape guard (review finding, #8743): the seed below runs
+    # `find "$DST" -mindepth 1 -delete` on the bind source AS CONTAINER ROOT, so
+    # an env-derived PLUGIN_MOUNT_DIR pointing anywhere else turns the seed into
+    # a recursive delete on that host path. Refuse unless it is non-empty,
+    # absolute, under /mnt/data/, and basename `soleur` (i.e. ends
+    # /plugins/soleur — a trailing slash is tolerated; a `..` segment is not).
+    # The discriminating stderr marker is PLUGIN_SEED_MOUNT_UNSAFE; the state
+    # reason is plugin_seed_mount_unsafe. Harness opt-out: tests redirect the
+    # mount under a mktemp dir, so they set PLUGIN_MOUNT_DIR_ALLOW_UNSAFE=1 —
+    # a value production env never carries, same posture as the MOCK_* levers.
+    _pmd="${PLUGIN_MOUNT_DIR%/}"
+    if [[ "${PLUGIN_MOUNT_DIR_ALLOW_UNSAFE:-0}" != "1" ]] && \
+       [[ -z "$_pmd" || "$_pmd" != /mnt/data/* || "$_pmd" != */plugins/soleur || "$_pmd" == *..* ]]; then
+      echo "PLUGIN_SEED_MOUNT_UNSAFE: refusing the plugin-mount seed — PLUGIN_MOUNT_DIR='$PLUGIN_MOUNT_DIR' is not under /mnt/data/ ending /plugins/soleur" >&2
+      logger -t "$LOG_TAG" "DEPLOY_ABORT: PLUGIN_SEED_MOUNT_UNSAFE PLUGIN_MOUNT_DIR='$PLUGIN_MOUNT_DIR' refused by the seed shape guard"
+      final_write_state 1 "plugin_seed_mount_unsafe"
       exit 1
     fi
-    # Pre-create the mount dir so the sentinel write below cannot fail with
-    # ENOENT in test harnesses that run with PLUGIN_MOUNT_DIR pointed at a
-    # tmpdir. In production cloud-init.yml already creates /mnt/data/plugins/
-    # soleur, so this is a no-op there.
+    echo "Seeding plugin mount from image..."
+    # Pre-flight: a prior SIGKILLed deploy may have left this container behind.
+    docker rm -f soleur-plugin-seed >/dev/null 2>&1 || true
+    # Pre-create the mount dir so the -v bind cannot fail with ENOENT in test
+    # harnesses that point PLUGIN_MOUNT_DIR at a tmpdir. In production
+    # cloud-init.yml already creates /mnt/data/plugins/soleur — a no-op there.
     mkdir -p "$PLUGIN_MOUNT_DIR"
-    find "$PLUGIN_MOUNT_DIR" -mindepth 1 -delete 2>/dev/null || true
-    # Redirect cp stdout so it stays out of the docker-trace assertion stream
-    # used by ci-deploy.test.sh (which greps DOCKER_TRACE:* from script stdout).
-    # Stderr is preserved for journalctl debugging on real failures.
-    if ! docker cp soleur-plugin-seed:/opt/soleur/plugin/. "$PLUGIN_MOUNT_DIR/" >/dev/null; then
-      docker rm soleur-plugin-seed >/dev/null 2>&1 || true
+    # PLUGIN_SEED_PROBE is emitted INSIDE the container BEFORE any mutation on
+    # STDERR (>&2 — not stdout): Docker demultiplexes fd 2 to the client's
+    # stderr, which journald records at PRIORITY 3 for webhook.service — the
+    # one arm (Source 1 include_matches.PRIORITY {3,4}) that admits a
+    # ci-deploy.sh-tagged row to Better Stack; stdout lands at PRIORITY 6 and
+    # ships nowhere. dst ownership, the .claude-plugin marker's ownership and
+    # the mount source are the uid/gid facts that adjudicate the fchmodat2
+    # root cause and cannot be read off-box any other
+    # way. The .seed-complete sentinel is written LAST inside the container —
+    # same atomic-position semantics as before: a killed run leaves it absent
+    # and verifyPluginMountOnce still detects a partial copy.
+    # The -c script stays a SINGLE physical line: docker-run-tuple.py's census
+    # cannot tokenize a quote that spans the run's continuation lines, and a
+    # tokenization failure would also mask the site's named exemption.
+    if ! docker run --rm --name soleur-plugin-seed -u 0 --entrypoint /bin/sh \
+         -v "$PLUGIN_MOUNT_DIR":/plugin-mount \
+         -e "SEED_TAG=$TAG" \
+         "$VERIFIED_REF" -c 'set -eu; DST=/plugin-mount; echo "PLUGIN_SEED_PROBE dst_owner=$(stat -c %u:%g "$DST" 2>/dev/null || echo unknown) marker=$(stat -c %u:%g "$DST/.claude-plugin" 2>/dev/null || echo absent) findmnt=$(findmnt -no SOURCE "$DST" 2>/dev/null || echo unknown)" >&2; find "$DST" -mindepth 1 -delete; cp -a /opt/soleur/plugin/. "$DST"/; printf "%s\n" "seeded $(date -u +%Y-%m-%dT%H:%M:%SZ) tag=$SEED_TAG" > "$DST/.seed-complete"'; then
       final_write_state 1 "plugin_seed_copy_failed"
       exit 1
     fi
-    docker rm soleur-plugin-seed >/dev/null
-    # Sentinel marker — written LAST so a SIGKILL mid-cp leaves the marker
-    # absent. `verifyPluginMountOnce` checks for it to distinguish "manifest
-    # extracted early but partial copy" from a healthy mount.
-    printf '%s\n' "seeded $(date -u +%Y-%m-%dT%H:%M:%SZ) tag=$TAG" \
-      > "$PLUGIN_MOUNT_DIR/.seed-complete"
 
     # Prepare environment (shared between canary and production)
     sudo chown 1001:1001 /mnt/data/workspaces

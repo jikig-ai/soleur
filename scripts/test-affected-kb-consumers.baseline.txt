@@ -149,6 +149,7 @@ scripts/compound-promote	knowledge-base/project/plans
 scripts/compound-promote	knowledge-base/project/plans/archive/20261013-014038-2026-05-19-feat-learnings-retrieval-bench-plan.md
 scripts/compound-promote	knowledge-base/project/promotion-config.yml
 scripts/compound-promote	knowledge-base/project/specs/archive/20261013-014038-feat-learnings-retrieval-bench/spec.md
+scripts/compound-promote-draft-edit-10552	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 scripts/content-publisher-residue	knowledge-base/marketing/distribution-content
 scripts/followthrough-predicate-parity	knowledge-base/engineering/operations/runbooks/followthrough-convention.md
 scripts/followthrough-varq-ban	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
