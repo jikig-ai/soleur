@@ -103,7 +103,7 @@ Soleur's shipped workflow teaches example-based testing only. The `work` TDD gat
 
 Three small documentation deliverables, all inside `plugins/soleur/`:
 
-1. **`work` RED-layer accepts `property`.** Widen the TDD task-title vocabulary to `RED(unit|integration|e2e|property)` and add one line of selection guidance at both the todo-structure step and the TDD gate: pick `property` when the behavior is a contract over an input domain (invariant, idempotence, round-trip) — typically a pure function — where a generator plus shrinking outperforms hand-picked examples. A `property` RED still lands at whatever pyramid layer its test file lives at (usually unit) — `property` names the oracle class, not a fourth layer.
+1. **`work` RED-layer accepts `property`.** Widen the TDD task-title vocabulary to `RED(unit|integration|e2e|property)` and add one line of selection guidance at ONE site — the todo-structure step's RED-task bullet (cut from two sites to one per CTO ruling 2026-10-20, byte ceiling): pick `property` when the behavior is a contract over an input domain (invariant, idempotence, round-trip) — typically a pure function — where a generator plus shrinking outperforms hand-picked examples. A `property` RED still lands at whatever pyramid layer its test file lives at (usually unit) — `property` names the oracle class, not a fourth layer.
 2. **`plan` Test Scenarios states the property.** In all three `## Test Scenarios` template blocks, add the guidance: when a scenario asserts a contract that must hold for every input, state the *properties that must never break* in plain English alongside the example cases — `soleur:work` can then choose the `property` RED form.
 3. **A shipped reference** — `plugins/soleur/skills/work/references/property-testing.md` (~150 lines), linked from the `work` TDD gate, teaching the pattern end to end: start with a pure function, state the property in plain English before writing cases, the four property shapes by strength, the generator/alphabet idea, counterexample → minimized permanent regression fixture (never pin seeds), anti-vacuity obligations, and a language→tool map.
 
@@ -232,7 +232,7 @@ discoverability_test:
 
 ## Files to Edit
 
-- `plugins/soleur/skills/work/SKILL.md` — widen `RED(unit|integration|e2e)` → `RED(unit|integration|e2e|property)`; selection guidance + reference link at the todo-structure step and the TDD gate.
+- `plugins/soleur/skills/work/SKILL.md` — widen `RED(unit|integration|e2e)` → `RED(unit|integration|e2e|property)`; selection guidance + reference link at ONE site (the todo-structure step's RED-task bullet) per CTO ruling 2026-10-20.
 - `plugins/soleur/skills/plan/references/plan-issue-templates.md` — "properties that must never break" sentence in all three `## Test Scenarios` blocks.
 - `plugins/soleur/test/test-pyramid-fixtures.test.sh` — extend the DRIFT pin to cover `property`; bump `MIN_ASSERTIONS`; header vocabulary sentence.
 

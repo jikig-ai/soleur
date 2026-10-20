@@ -223,8 +223,8 @@ tpl_blocks="$(awk '/^## Test Scenarios/{inblock=1; blocks++} /^##? / && !/^## Te
 cases=$((cases + 1)); assert_eq "3" "$(count "$PLAN_TPL" '^## Test Scenarios')" "plan-issue-templates.md: exactly 3 Test Scenarios blocks (a 4th unlabeled block reds)"
 cases=$((cases + 1)); assert_eq "3" "$(count "$PLAN_TPL" 'pyramid layer')" "plan-issue-templates.md: all 3 blocks still carry the pyramid-layer label line"
 cases=$((cases + 1)); assert_eq "3:3" "$tpl_blocks" "plan-issue-templates.md: EVERY Test Scenarios block carries the marker line (per-block, not just count)"
-cases=$((cases + 1)); assert_eq "3" "$(count "$PLAN_TPL" 'properties that must never break')" "plan-issue-templates.md: all 3 Test Scenarios blocks carry the property-guidance sentence (#10400)"
-cases=$((cases + 1)); assert_eq "1" "$(found "$WORK_SKILL" 'RED\(unit\|integration\|e2e\|property\)')" "work/SKILL.md: RED-task layer naming present (property joined the vocabulary 2026-10-20, #10400)"
+cases=$((cases + 1)); assert_eq "3" "$(count "$PLAN_TPL" 'properties that must never break.*home pyramid layer')" "plan-issue-templates.md: all 3 Test Scenarios blocks carry the property-guidance sentence incl. the home-layer clause (#10400)"
+cases=$((cases + 1)); assert_eq "1" "$(count "$WORK_SKILL" 'RED\(unit\|integration\|e2e\|property\)')" "work/SKILL.md: RED-task layer naming present at exactly ONE site (property joined the vocabulary 2026-10-20, #10400)"
 cases=$((cases + 1)); assert_eq "1" "$(found "$WORK_SKILL" 'pyramid-justified')" "work/SKILL.md: e2e marker warning present"
 
 # ---------------------------------------------------------------------------

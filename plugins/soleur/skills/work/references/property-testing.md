@@ -13,8 +13,9 @@ input, not a list of cases you can enumerate:
 - **Round-trips** — `decode(encode(x)) == x` for all x (serializers, codecs,
   normalizers; escape/unescape pairs only where the transform is truly
   invertible). Through a lossy serializer (JSON `-0`/`NaN`/`undefined`),
-  compare against the canonical form `decode(encode(canonicalize(x)))`,
-  never `x` itself.
+  compare `decode(encode(x))` against the canonical form `canonicalize(x)` —
+  never `x` itself, never the round-trip expression (a self-oracular RHS
+  passes a constantly-wrong codec).
 - **Invariants under mutation** — `sort` is idempotent and a permutation of its
   input; `retry` never exceeds the cap; a reducer keeps a conserved quantity.
 - **Metamorphic relations** — output is monotone in a parameter; appending an
@@ -100,8 +101,10 @@ from hypothesis import given, strategies as st
 
 @given(st.lists(st.integers()))
 def test_sort_is_permutation(xs):
-    assert Counter(sorted(xs)) == Counter(xs)   # same multiset — a permutation
-    assert sorted(sorted(xs)) == sorted(xs)     # idempotent
+    s = sorted(xs)
+    assert Counter(s) == Counter(xs)                    # same multiset — a permutation
+    assert sorted(s) == s                               # idempotent
+    assert all(a <= b for a, b in zip(s, s[1:]))        # actually ordered
 ```
 
 (Hypothesis also supports `@settings` for run counts and `st.data()` for
