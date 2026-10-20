@@ -15,8 +15,6 @@ POINTER='The check executes knowledge-base/legal/art30-reverification-triggers.y
 CELL_BASE='| **(f) Retention** | Reviewed **(1)** **(2)** **(3)** **(4)** **(5)** **(6)** **(7)** on 2020-01-01 with word alpha.'
 CELL_PASS='| **(f) Retention** | Reviewed **(1)** **(2)** **(3)** **(4)** **(5)** **(6)** **(7)** on 2026-10-21 with word noted-2 noted-4.'
 ROW1_WANT=1
-# Floor is the green-run pass count.
-MIN_ASSERTIONS=68
 
 fails=0
 passes=0
@@ -894,8 +892,11 @@ printf 'passed: %s  failed: %s\n' "$passes" "$fails"
 if (( fails > 0 )); then
   exit 1
 fi
+# The bound sits on the line directly above the comparison. The vacuity mutant
+# slices only that comparison plus the contiguous assignments above it.
+MIN_ASSERTIONS=68
 if (( passes < MIN_ASSERTIONS )); then
-  printf 'FATAL: assertions %s are below floor %s\n' "$passes" "$MIN_ASSERTIONS" >&2
+  printf '[FATAL] assertion floor: only %s assertion(s) ran, floor is %s\n' "$passes" "$MIN_ASSERTIONS" >&2
   exit 1
 fi
 exit 0
