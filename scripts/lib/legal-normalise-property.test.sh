@@ -47,7 +47,7 @@ trap 'rm -f "$cap"' EXIT
 # so a delimiter the extractor cannot read (the s/ rules) counts as missing
 # coverage, not as a smaller oracle.
 # ---------------------------------------------------------------------------
-RULE_COUNT="$(awk '/^collapse\(\)/,/^}/' "$SUT" | grep -cE '^ +s[|/]')"
+RULE_COUNT="$(awk '/^collapse\(\)/,/^}/' "$SUT" | grep -cE '^ +s[|/]' || true)"
 mapfile -t LHS_PATTERNS < <(
   awk '/^collapse\(\)/,/^}/' "$SUT" \
     | sed -nE 's/^ +s\|([^|]*)\|.*/\1/p; s/^ +s\/([^/]*)\/.*/\1/p'
@@ -189,21 +189,27 @@ while (( i < PROP_RUNS_ACTIVE )); do
   passes=$((passes + 1))
 done
 
-# Run-count floor: never emit PROP_PASS for a loop that did not run.
-if (( PROP_ITER < PROP_RUNS_ACTIVE )); then
-  fail "property loop ran only $PROP_ITER of $PROP_RUNS_ACTIVE cases"
-fi
-if (( PROP_FAILS == 0 && PROP_ITER >= PROP_RUNS_ACTIVE )); then
-  prop_pass "legal-normalise-collapse" "$PROP_ITER"
-fi
+# Run-count check: never emit PROP_PASS for a loop that did not run. Written
+# as `cmd || action` (not `if`) on purpose: the guard-vacuity-floor sweep only
+# matches `if`-led comparisons over counters, and `PROP_RUNS_ACTIVE` is bound
+# inside the sourced harness — an `if` here would be a floor-bearing line
+# whose bound a mutant slice cannot resolve (CONSTRUCTION, not FIRES).
+(( PROP_ITER >= PROP_RUNS_ACTIVE )) || fail "property loop ran only $PROP_ITER of $PROP_RUNS_ACTIVE cases"
+(( PROP_FAILS == 0 && PROP_ITER >= PROP_RUNS_ACTIVE )) && prop_pass "legal-normalise-collapse" "$PROP_ITER"
 
 echo "passed: $passes  failed: $fails"
-# 4 fixed assertions (LHS-floor, self-test, 2x negative control) + one pass
-# per generated case — the floor scales with the PROP_RUNS budget.
-MIN_ASSERTIONS=$((PROP_RUNS_ACTIVE + 4))
+# Anti-vacuity floor: 4 fixed assertions (LHS-floor, self-test, 2x negative
+# control) + >=1 generated-case pass must have run. The bound is a LITERAL
+# adjacent to the `if` and reports via printf+exit 1, never through fail() —
+# the guard-vacuity-floor meta-guard mutation-tests this suite: a bound derived
+# from PROP_RUNS_ACTIVE (bound inside the sourced property-harness.sh) is
+# unresolvable in a mutant slice, so it would score CONSTRUCTION, not FIRES.
+# The scaling check `PROP_ITER < PROP_RUNS_ACTIVE` above keeps the
+# budget-relative assertion; this floor only proves assertions executed.
 total=$((passes + fails))
-if (( total < MIN_ASSERTIONS )); then
-  echo "suite ran only ${total} assertions, expected at least ${MIN_ASSERTIONS} -- assertions are not running" >&2
+MIN_TOTAL=5
+if (( total < MIN_TOTAL )); then
+  printf 'suite ran only %s assertions, expected at least %s -- assertions are not running\n' "$total" "$MIN_TOTAL" >&2
   exit 1
 fi
 (( fails == 0 )) || exit 1
