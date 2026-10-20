@@ -159,7 +159,6 @@ def make_config(findings_by_path, floor=0, file_count=None, baseline="base.txt",
         "floor": floor,
         "run": run,
         "remedy": "REMEDY-TEXT",
-        "drawdown": "#1",
         "script": script,
     }
 
@@ -283,16 +282,15 @@ class TestEntries(ScrubbedEnv):
         self.assertEqual(entries, sorted(entries))
 
     def test_rendered_header_never_names_a_rule_code(self):
-        text = lr.render_baseline("ruff", [], "#1")
+        text = lr.render_baseline("ruff", [])
         for code in ("SIM115", "S110", "S112", "F401", "F841", "no-unused-vars"):
             self.assertNotIn(code, text)
 
     def test_rendered_header_documents_the_recovery_path(self):
-        text = lr.render_baseline("ruff", [], "#1")
+        text = lr.render_baseline("ruff", [])
         self.assertIn("--update", text)
         self.assertIn("--list", text)
         self.assertIn("conflict", text)
-        self.assertIn("#1", text)
 
     def test_baseline_entries_contain_no_source_text(self):
         repo = Repo(self)
@@ -462,7 +460,7 @@ class CheckBase(ScrubbedEnv):
 
     def write_live_baseline(self, config=None):
         findings, _ = (config or self.config)["run"](self.repo.root)
-        text = lr.render_baseline("fixture", lr.census(findings, self.repo.root), "#1")
+        text = lr.render_baseline("fixture", lr.census(findings, self.repo.root))
         (self.repo.root / "base.txt").write_text(text)
 
 
@@ -525,7 +523,7 @@ class TestCheckVerdicts(CheckBase):
 
     def test_deleting_a_baseline_entry_whose_finding_is_live_fails(self):
         self.seed_baseline()
-        (self.repo.root / "base.txt").write_text(lr.render_baseline("fixture", [], "#1"))
+        (self.repo.root / "base.txt").write_text(lr.render_baseline("fixture", []))
         code, _ = self.check()
         self.assertEqual(code, 1)
 
@@ -602,7 +600,7 @@ class TestFloors(CheckBase):
 
     def test_an_empty_scan_never_reports_green(self):
         cfg = make_config({}, floor=1, file_count=0)
-        (self.repo.root / "base.txt").write_text(lr.render_baseline("fixture", [], "#1"))
+        (self.repo.root / "base.txt").write_text(lr.render_baseline("fixture", []))
         code, lines = self.check(cfg)
         self.assertEqual(code, 1)
         self.assertIn("scan", "\n".join(lines))
@@ -660,7 +658,7 @@ class TestMergeBaseDelta(CheckBase):
         self.assertEqual(code, 1, "--update must refuse to admit growth")
         entries = lr.parse_baseline((self.repo.root / "base.txt").read_text())
         hand = entries + lr.census([lr.Finding("b.py", "SIM115", 1, "m")], self.repo.root)
-        (self.repo.root / "base.txt").write_text(lr.render_baseline("fixture", sorted(hand), "#1"))
+        (self.repo.root / "base.txt").write_text(lr.render_baseline("fixture", sorted(hand)))
         code, lines = self.check(cfg, base=base)
         out = "\n".join(lines)
         self.assertEqual(code, 1)
@@ -736,7 +734,7 @@ class TestMergeBaseDelta(CheckBase):
         cfg = make_config({"a.py": [("SIM115", "open(")], "copy.py": [("SIM115", "open(")]})
         entries = lr.parse_baseline((self.repo.root / "base.txt").read_text())
         hand = entries + lr.census([lr.Finding("copy.py", "SIM115", 2, "m")], self.repo.root)
-        (self.repo.root / "base.txt").write_text(lr.render_baseline("fixture", sorted(hand), "#1"))
+        (self.repo.root / "base.txt").write_text(lr.render_baseline("fixture", sorted(hand)))
         code, lines = self.check(cfg, base=base)
         self.assertEqual(code, 1)
         self.assertIn("grew", "\n".join(lines))
@@ -1194,9 +1192,26 @@ class TestConfigPins(unittest.TestCase):
         for scope in lr.SCOPES.values():
             self.assertRegex(scope["baseline"], r"^scripts/lint-[a-z-]+\.baseline\.txt$")
 
-    def test_the_drawdown_reference_is_one_constant(self):
-        self.assertEqual(lr.build_config("ruff", {})["drawdown"], lr.DRAWDOWN)
-        self.assertEqual(lr.build_config("eslint-test-dirs", {})["drawdown"], lr.DRAWDOWN)
+    def test_the_user_form_is_byte_identical(self):
+        # Captured from origin/main before the drawdown parameter was removed: a user repo's committed
+        # .lint-ratchet/ruff.baseline.txt must not churn because the renderer's switch changed.
+        self.assertEqual(lr.render_baseline("user-ruff", []), (
+            "# lint-ratchet baseline (ruff) for this repository; engine: the Soleur plugin, design in ADR-290.\n"
+            "# Shrink-only: this file always equals the live census, and per (path, rule) it may never hold more\n"
+            "# entries than the merge base, except when the toolchain line below changed (a ruff pin or config\n"
+            "# change; that run prints CONFIG CHANGED so the config diff gets reviewed). Entry: path|rule|anchor|n,\n"
+            "# where anchor is a 12-hex fingerprint of the normalised source line (the line is never stored).\n"
+            "# List the live findings:  python3 {rel} user-ruff --list\n"
+            "# After fixing findings:   python3 {rel} user-ruff --update  (it refuses to add, except as above)\n"
+            "# Outside Claude Code, replace ${{CLAUDE_PLUGIN_ROOT}} with the plugin's install directory.\n"
+            "# After a merge conflict, take the base branch's copy of this file and re-run --update.\n"
+        ).format(rel=lr.SCRIPT_REL))
+
+    def test_the_committed_soleur_baselines_equal_the_rendered_empty_form(self):
+        # Byte equality covers both properties: zero entries, and a header that is the renderer's own.
+        for name in ("ruff", "eslint-test-dirs"):
+            path = REPO_ROOT / lr.SCOPES[name]["baseline"]
+            self.assertEqual(path.read_text(), lr.render_baseline(name, []), name)
 
 
 class TestRegistration(unittest.TestCase):
@@ -1877,7 +1892,7 @@ class TestUserModeStates(UserModeBase):
         self.repo.git("checkout", "-q", "-b", "feature")
         self.repo.write("a.py", "import os\n" + VIOLATION + "    again = open(other)\n")
         findings, _ = lr.run_user_ruff(self.repo.root, dict(self.repo.env), ruff_path=self.fake_ruff)
-        text = lr.render_baseline("user-ruff", lr.census(findings, self.repo.root), None, None, header=lr.toolchain_header(self.repo.root))
+        text = lr.render_baseline("user-ruff", lr.census(findings, self.repo.root), header=lr.toolchain_header(self.repo.root))
         (self.repo.root / USER_BASELINE).write_text(text)
         code, _, err = self.cli("auto")
         self.assertEqual(code, 1, err)
@@ -2031,7 +2046,7 @@ class TestUserModeTotality(UserModeBase):
         code, out, err = self.cli("auto")
         self.assertEqual(code, 1, "a baseline entry with nothing to scan is STALE")
         self.assertEqual(self.provisioned, 1, "adopt() provisioned once; zero files must not provision again")
-        (self.repo.root / USER_BASELINE).write_text(lr.render_baseline("user-ruff", [], None, None,
+        (self.repo.root / USER_BASELINE).write_text(lr.render_baseline("user-ruff", [],
                                                                          header=lr.toolchain_header(self.repo.root)))
         code, out, err = self.cli("auto")
         self.assertEqual(code, 0)
@@ -2153,7 +2168,7 @@ class TestUserModeSafety(UserModeBase):
 
     def test_the_user_scope_ignores_the_soleur_tables(self):
         self.adopt()
-        with mock.patch.object(lr, "SCOPES", {}), mock.patch.object(lr, "DRAWDOWN", "POISON"), \
+        with mock.patch.object(lr, "SCOPES", {}), \
                 mock.patch.object(lr, "ESLINT_CONFIG", "POISON"), mock.patch.object(lr, "ESLINT_BIN", "POISON"):
             code, out, err = self.cli("auto")
         self.assertEqual((code, err), (0, ""))
@@ -2214,7 +2229,7 @@ class TestUserModeFingerprint(UserModeBase):
         self.repo.git("checkout", "-q", "-b", "feature")
         self.repo.write("a.py", "import os\n" + VIOLATION + "    again = open(other)\n")
         findings, _ = lr.run_user_ruff(self.repo.root, dict(self.repo.env), ruff_path=self.fake_ruff)
-        forged = lr.render_baseline("user-ruff", lr.census(findings, self.repo.root), None, None,
+        forged = lr.render_baseline("user-ruff", lr.census(findings, self.repo.root),
                                     header="# toolchain: ruff {} ; config sha256:".format(
                                         lr.requirements_pin(REQUIREMENTS)) + "f" * 16)
         (self.repo.root / USER_BASELINE).write_text(forged)
@@ -2226,7 +2241,7 @@ class TestUserModeFingerprint(UserModeBase):
         self.adopt()
         self.grow_with_changed_config()
         findings, _ = lr.run_user_ruff(self.repo.root, dict(self.repo.env), ruff_path=self.fake_ruff)
-        text = lr.render_baseline("user-ruff", lr.census(findings, self.repo.root), None, None, header=None)
+        text = lr.render_baseline("user-ruff", lr.census(findings, self.repo.root), header=None)
         (self.repo.root / USER_BASELINE).write_text(text)
         code, _, err = self.cli("auto")
         self.assertEqual(code, 1)
@@ -2331,16 +2346,17 @@ class TestUserModeWaiversAndSoleurIsolation(UserModeBase):
         config = make_config({"a.py": [("SIM115", "open(")]})
         code, lines = lr.check(config, repo.root, env=dict(repo.env))
         self.assertEqual(code, 2)
-        (repo.root / "base.txt").write_text(lr.render_baseline("fixture", [], "#1"))
+        (repo.root / "base.txt").write_text(lr.render_baseline("fixture", []))
         code, lines = lr.check(config, repo.root, env=dict(repo.env))
         self.assertEqual(code, 1)
         self.assertEqual(lines[-2:], [
             "lint-ratchet(fixture): remedy: REMEDY-TEXT",
             "lint-ratchet(fixture): inline waivers (# noqa, eslint-disable) are NOT honoured here, and --update must "
             "not be used to admit a new finding"])
-        text = lr.render_baseline("ruff", [], "#10433")
-        self.assertIn("(PR3a of #10331; design in ADR-290)", text)
-        self.assertIn("# Drawdown tracking: #10433", text)
+        text = lr.render_baseline("ruff", [])
+        self.assertTrue(text.startswith("# lint-ratchet scope 'ruff' is a zero-findings gate (design in ADR-290)"), text)
+        for gone in ("Drawdown", "Shrink-only", "PR3a", "10331"):
+            self.assertNotIn(gone, text)
 
 
 class TestUserModeGuards(UserModeBase):
@@ -2425,7 +2441,7 @@ class TestUserModeGuards(UserModeBase):
         self.repo.write("a.py", "import os\n" + VIOLATION + "    again = open(other)\n")
         findings, _ = lr.run_user_ruff(self.repo.root, dict(self.repo.env), ruff_path=self.fake_ruff)
         (self.repo.root / USER_BASELINE).write_text(lr.render_baseline(
-            "user-ruff", lr.census(findings, self.repo.root), None, None, header=lr.toolchain_header(self.repo.root)))
+            "user-ruff", lr.census(findings, self.repo.root), header=lr.toolchain_header(self.repo.root)))
         code, out, err = self.cli("auto")
         self.assertEqual(code, 1, (out, err))
         self.assertIn("baseline grew", err)
@@ -2667,7 +2683,7 @@ class TestUserModeReviewFixes(UserModeBase):
     def grown_baseline(self):
         findings, _ = lr.run_user_ruff(self.repo.root, dict(self.repo.env), ruff_path=self.fake_ruff)
         (self.repo.root / USER_BASELINE).write_text(lr.render_baseline(
-            "user-ruff", lr.census(findings, self.repo.root), None, None, header=lr.toolchain_header(self.repo.root)))
+            "user-ruff", lr.census(findings, self.repo.root), header=lr.toolchain_header(self.repo.root)))
 
     def feature_with_growth(self, extra=1):
         self.repo.git("checkout", "-q", "-b", "feature")
@@ -2954,7 +2970,7 @@ class TestUserModeReviewFixes(UserModeBase):
 
     def test_the_user_scopes_ignore_the_soleur_tables_for_check_as_well(self):
         self.adopt()
-        with mock.patch.object(lr, "SCOPES", {}), mock.patch.object(lr, "DRAWDOWN", "POISON"):
+        with mock.patch.object(lr, "SCOPES", {}):
             code, out, err = self.cli("user-ruff", "--check")
         self.assertEqual((code, err), (0, ""))
         self.assertIn("OK", out)
@@ -2978,7 +2994,7 @@ class TestUserModeFixRound(UserModeBase):
     def grown(self):
         findings, _ = lr.run_user_ruff(self.repo.root, dict(self.repo.env), ruff_path=self.fake_ruff)
         (self.repo.root / USER_BASELINE).write_text(lr.render_baseline(
-            "user-ruff", lr.census(findings, self.repo.root), None, None, header=lr.toolchain_header(self.repo.root)))
+            "user-ruff", lr.census(findings, self.repo.root), header=lr.toolchain_header(self.repo.root)))
 
     def many(self, n):
         return "import os\n" + "".join("    h{} = open(p)\n".format(i) for i in range(n))
@@ -3408,15 +3424,11 @@ class TestSoleurOutputIsUnchanged(ScrubbedEnv):
         self.assertEqual(lr.check(floor, repo.root, env=env), (1, [
             "lint-ratchet(fixture): the scan saw only 1 files, below the floor of 5; a scan of (almost) nothing "
             "cannot report green"]))
-        self.assertEqual(lr.render_baseline("ruff", [("a.py", "SIM115", "abcdef012345", 1)], "#10433"), (
-            "# lint-ratchet baseline for scope 'ruff' (PR3a of #10331; design in ADR-290).\n"
-            "# Shrink-only: this file always equals the live census, and per (path, rule) it may never\n"
-            "# hold more entries than the merge base. Entry: path|rule|anchor|n, where anchor is a 12-hex\n"
-            "# fingerprint of the normalised source line (the line itself is never stored).\n"
+        self.assertEqual(lr.render_baseline("ruff", [("a.py", "SIM115", "abcdef012345", 1)]), (
+            "# lint-ratchet scope 'ruff' is a zero-findings gate (design in ADR-290): fix findings, never baseline them.\n"
             "# List the live findings:  python3 {rel} ruff --list\n"
             "# After fixing findings:   python3 {rel} ruff --update  (it refuses to add)\n"
             "# After a merge conflict, take the base branch's copy of this file and re-run --update.\n"
-            "# Drawdown tracking: #10433\n"
             "a.py|SIM115|abcdef012345|1\n").format(rel=rel))
 
 

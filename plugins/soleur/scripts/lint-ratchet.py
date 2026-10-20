@@ -39,7 +39,7 @@ user scopes honour the user's own ``# noqa``) and no tool is ever run in a fix m
 
 Library contract (PR3b): ``check(config, root, base, env)`` takes a plain dict with ``name``,
 ``baseline``, ``floor``, ``run`` (``run(root) -> (findings, file_count)``, may raise ``Vacuous``,
-``InfraError`` or ``Skip``), ``remedy``, ``drawdown``, and optionally ``script``, ``recovery_cmd``,
+``InfraError`` or ``Skip``), ``remedy``, and optionally ``script``, ``recovery_cmd``,
 ``waiver_note``, ``ladder``, ``header`` (a callable giving the toolchain header line, which turns on the
 fingerprint rule), ``repo_content`` and ``header_recovery``. ``Skip`` propagates to the caller.
 
@@ -90,7 +90,6 @@ ESLINT_EXTS = (".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".mts", ".cts")
 # path; anything else a tracked file is missing from ruff's own file list for is a silent skip and
 # fails the scan.
 EXCLUDED_DIRS = ("knowledge-base",)
-DRAWDOWN = "#10433"
 
 # User scopes (PR3b). These pathspecs are deliberately NOT read from SCOPES: the user scopes must give the
 # same verdict whatever the Soleur tables hold.
@@ -295,9 +294,9 @@ def parse_baseline(text: str) -> list:
     return entries
 
 
-def render_baseline(name: str, entries: list, drawdown, recovery=None, header=None) -> str:
+def render_baseline(name: str, entries: list, *, recovery=None, header=None) -> str:
     recovery = recovery or "python3 {} {}".format(SCRIPT_REL, name)
-    if drawdown is None:
+    if name in USER_SCOPES:
         # User baseline: machine-independent text (no absolute path, no tracker reference).
         lines = [
             "# lint-ratchet baseline (ruff) for this repository; engine: the Soleur plugin, design in ADR-290.",
@@ -314,14 +313,10 @@ def render_baseline(name: str, entries: list, drawdown, recovery=None, header=No
             lines.append(header)
         return "\n".join(lines + [format_entry(*entry) for entry in sorted(entries)]) + "\n"
     header = [
-        "# lint-ratchet baseline for scope '{}' (PR3a of #10331; design in ADR-290).".format(name),
-        "# Shrink-only: this file always equals the live census, and per (path, rule) it may never",
-        "# hold more entries than the merge base. Entry: path|rule|anchor|n, where anchor is a 12-hex",
-        "# fingerprint of the normalised source line (the line itself is never stored).",
+        "# lint-ratchet scope '{}' is a zero-findings gate (design in ADR-290): fix findings, never baseline them.".format(name),
         "# List the live findings:  {} --list".format(recovery),
         "# After fixing findings:   {} --update  (it refuses to add)".format(recovery),
         "# After a merge conflict, take the base branch's copy of this file and re-run --update.",
-        "# Drawdown tracking: {}".format(drawdown),
     ]
     body = [format_entry(*entry) for entry in sorted(entries)]
     return "\n".join(header + body) + "\n"
@@ -845,8 +840,8 @@ def update(config: dict, root, base=None, env=None) -> tuple:
         return 2, [_content_prefix(config, exc) + str(exc)]
     header = config["header"](root) if config.get("header") else None
     try:
-        _write_baseline(path, render_baseline(config["name"], entries, config["drawdown"],
-                                              config.get("header_recovery") or _recovery(config), header=header))
+        _write_baseline(path, render_baseline(config["name"], entries,
+                                              recovery=config.get("header_recovery") or _recovery(config), header=header))
     except OSError as exc:
         return 2, [_content_prefix(config, ContentError("")) + "could not write {}: {}".format(
             config["baseline"], exc.strerror or type(exc).__name__)]
@@ -1428,7 +1423,7 @@ def run_user_ruff(root, env=None, ruff_path=None, run=subprocess.run) -> tuple:
 def build_user_config(env) -> dict:
     return {
         "name": "user-ruff", "baseline": USER_BASELINE, "floor": 0, "run": lambda root: run_user_ruff(root, env),
-        "remedy": REMEDY_USER, "drawdown": None, "waiver_note": WAIVER_NOTE_USER,
+        "remedy": REMEDY_USER, "waiver_note": WAIVER_NOTE_USER,
         "ladder": True, "header": lambda root: toolchain_header(root, env), "repo_content": True,
         "recovery_cmd": "python3 {} user-ruff".format(shlex.quote(str(Path(__file__).resolve()))),
         "header_recovery": 'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lint-ratchet.py" user-ruff',
@@ -1444,7 +1439,7 @@ def build_config(name: str, env) -> dict:
         raise InfraError("the {} scope runs only from the Soleur repository checkout ({} is not it); user "
                          "repositories use the user-ruff or auto scope".format(name, REPO_ROOT))
     runner = (lambda root: run_ruff(root, env)) if name == "ruff" else (lambda root: run_eslint(root, env))
-    return dict(SCOPES[name], name=name, run=runner, drawdown=DRAWDOWN, script=SCRIPT_REL)
+    return dict(SCOPES[name], name=name, run=runner, script=SCRIPT_REL)
 
 
 def _emit(code: int, lines: list, warnings: list, scope: str) -> int:
