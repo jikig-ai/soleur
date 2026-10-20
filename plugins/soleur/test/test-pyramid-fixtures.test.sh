@@ -16,7 +16,8 @@
 #     exercises the no-WARN path (a `test-*.sh` of pure greps/assertions, the
 #     must-PASS input).
 #   - DRIFT: `test-design-reviewer.md` still defines the marker token, the
-#     layer/verdict vocabulary, the FAIL rule and the subprocess-fan-out WARN
+#     layer/verdict vocabulary (work/SKILL.md's RED-layer set now includes
+#     `property` and the pin asserts the full spelling), the FAIL rule and the subprocess-fan-out WARN
 #     rule the fixtures key on — and the four restatement sites
 #     (review/SKILL.md, review.workflow.js, plan-issue-templates.md,
 #     work/SKILL.md) still carry the contract.
@@ -221,7 +222,7 @@ tpl_blocks="$(awk '/^## Test Scenarios/{inblock=1; blocks++} /^##? / && !/^## Te
 cases=$((cases + 1)); assert_eq "3" "$(count "$PLAN_TPL" '^## Test Scenarios')" "plan-issue-templates.md: exactly 3 Test Scenarios blocks (a 4th unlabeled block reds)"
 cases=$((cases + 1)); assert_eq "3" "$(count "$PLAN_TPL" 'pyramid layer')" "plan-issue-templates.md: all 3 blocks still carry the pyramid-layer label line"
 cases=$((cases + 1)); assert_eq "3:3" "$tpl_blocks" "plan-issue-templates.md: EVERY Test Scenarios block carries the marker line (per-block, not just count)"
-cases=$((cases + 1)); assert_eq "1" "$(found "$WORK_SKILL" 'RED\(unit\|integration\|e2e\)')" "work/SKILL.md: RED-task layer naming present"
+cases=$((cases + 1)); assert_eq "1" "$(found "$WORK_SKILL" 'RED\(unit\|integration\|e2e\|property\)')" "work/SKILL.md: RED-task layer naming present (property joined the vocabulary 2026-10-20, #10400)"
 cases=$((cases + 1)); assert_eq "1" "$(found "$WORK_SKILL" 'pyramid-justified')" "work/SKILL.md: e2e marker warning present"
 
 # ---------------------------------------------------------------------------
