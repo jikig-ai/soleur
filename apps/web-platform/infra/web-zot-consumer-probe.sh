@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -u
 # Refuse to run under shell tracing while the pull credential is set: `set -x` would write the
-# Basic-auth token into the journal that Vector ships off-box (#7797). The refusal is CONDITIONAL on that credential
-# (under `doppler run` it is always set). The heartbeat URL is a credential too: it is resolved BELOW, after this
-# refusal, from the variable NAME in WEB_ZOT_CONSUMER_URL_KEY, and the unit's ExecStart expands nothing (#9639).
+# Basic-auth token into the journal that Vector ships off-box (#7797). The refusal is CONDITIONAL: it fires when the
+# pull credential OR the heartbeat key name (WEB_ZOT_CONSUMER_URL_KEY, always in the env file) is set, i.e. whenever
+# this script would resolve a credential. The heartbeat URL is one: it is resolved BELOW, after this refusal, from the
+# variable NAME in WEB_ZOT_CONSUMER_URL_KEY, and the unit's ExecStart expands nothing (#9639).
 case "$-" in
   *x*)
-    if [ -n "${ZOT_PULL_TOKEN:+x}${ZTOK:+x}" ]; then
+    if [ -n "${WEB_ZOT_CONSUMER_URL_KEY:+x}${ZOT_PULL_TOKEN:+x}${ZTOK:+x}" ]; then
       printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
       exit 78
     fi
@@ -255,8 +256,7 @@ fi
 # inside `name`, so it is judged first: an upper-case identifier or nothing (LC_ALL=C: a locale-collated [A-Z] admits
 # lowercase). No fallback to a bare variable of any other name; the value stays in this shell's variable, never exported.
 _key_ok() { local LC_ALL=C; case "${1:-}" in ''|[!A-Z]*|*[!A-Z0-9_]*) return 1 ;; esac; }
-_key="${WEB_ZOT_CONSUMER_URL_KEY:-}"
-if _key_ok "$_key"; then URL="${!_key:-}"; else KEY_BAD=true; fi
+if _key_ok "${WEB_ZOT_CONSUMER_URL_KEY:-}"; then URL="${!WEB_ZOT_CONSUMER_URL_KEY:-}"; else KEY_BAD=true; fi
 
 if [ -z "$REPO" ]; then
   echo "[zot-probe] FATAL: ZOT_PROBE_REPO unset (source /etc/default/web-zot-consumer-probe) — cannot probe serviceability without a real repository path." >&2

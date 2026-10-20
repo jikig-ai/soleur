@@ -999,9 +999,9 @@ F6_ENVDUMP="$TMP/f6-envdump"; rm -f "$F6_ENVDUMP"; EXTRA_ENV=(STUB_ENVDUMP="$F6_
 assert "F6 not exported: the resolved URL reaches no child environment (only the injected key-named variable holds it)" \
   '[[ -s "$F6_ENVDUMP" && "$(grep -v "^WEB_NIC_GUARD_URL_SYNTH=" "$F6_ENVDUMP" | grep -cF -- "$F6_URL" || true)" -eq 0 && "$(grep -cF -- "$F6_URL" "$F6_ENVDUMP" || true)" -eq 1 ]]'
 # Order: the lookup sits BELOW the refusal, and a mutant that hoists it above the refusal leaks under SHELLOPTS=xtrace.
-f6_line_of() { grep -nF -- "$1" "$SUT" | sed -n '1p' | cut -d: -f1; }
+f6_line_of() { awk -v n="$1" 'index($0, n) && $0 !~ /^[[:space:]]*#/ { print NR; exit }' "$SUT"; }   # first NON-comment line holding the text
 assert "F6 order: the indirect lookup is on a later line than the xtrace refusal" \
-  '[[ -n "$(f6_line_of "refusing to run under xtrace")" && -n "$(f6_line_of "\${!_key")" && "$(f6_line_of "\${!_key")" -gt "$(f6_line_of "refusing to run under xtrace")" ]]'
+  '[[ -n "$(f6_line_of "refusing to run under xtrace")" && -n "$(f6_line_of "\${!WEB_NIC_GUARD_URL_KEY")" && "$(f6_line_of "\${!WEB_NIC_GUARD_URL_KEY")" -gt "$(f6_line_of "refusing to run under xtrace")" ]]'
 f6_mutant() {   # <name> <sed-script> : a copy of the SUT with one edit; the edit must have landed
   local m="$TMP/f6-mut-$1.sh"; sed "$2" "$SUT" > "$m"; chmod +x "$m"
   assert "F6 mutant[$1]: the edit landed (the copy differs from the SUT)" '! cmp -s "$SUT" "$m"'
@@ -1011,7 +1011,7 @@ f6_mutant hoist '/^set -u$/a\
 __leak="${!WEB_NIC_GUARD_URL_KEY:-}"'
 SUT_UNDER_TEST="$F6_MUT"; EXTRA_ENV=(SHELLOPTS=xtrace WEB_NIC_GUARD_URL_SYNTH="$F6_URL"); run_guard true 0 true
 assert "F6 mutant[hoist]: a lookup hoisted above the refusal leaks the URL under SHELLOPTS=xtrace (the order row can see it)" '[[ "$ERR" == *"$F6_TOK"* ]]'
-f6_mutant novalidate 's/if _key_ok "\$_key"; then/if true; then/'
+f6_mutant novalidate 's/if _key_ok "\${WEB_NIC_GUARD_URL_KEY:-}"; then/if true; then/'
 rm -f "$F6_PLANT"; SUT_UNDER_TEST="$F6_MUT"; EXTRA_ENV=("WEB_NIC_GUARD_URL_KEY=a[\$(touch $F6_PLANT)]"); run_guard true 0 true
 assert "F6 mutant[novalidate]: without the charset check a hostile key name executes (PLANT exists)" '[[ -e "$F6_PLANT" ]]'
 f6_mutant export 's/^URL=""$/export URL=""/'

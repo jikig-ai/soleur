@@ -152,10 +152,9 @@ fi
 # There is no fallback to a bare variable of any other name. The value stays in this shell's own variable and is never
 # exported, so no child process (curl) inherits it.
 _key_ok() { local LC_ALL=C; case "${1:-}" in ''|[!A-Z]*|*[!A-Z0-9_]*) return 1 ;; esac; }
-_key="${WEB_NIC_GUARD_URL_KEY:-}"
 URL=""
 KEY_BAD=false
-if _key_ok "$_key"; then URL="${!_key:-}"; else KEY_BAD=true; fi
+if _key_ok "${WEB_NIC_GUARD_URL_KEY:-}"; then URL="${!WEB_NIC_GUARD_URL_KEY:-}"; else KEY_BAD=true; fi
 # The beat URL is itself the credential (its path is the secret), so it must not ride curl's argument list
 # (readable by every local user in /proc/<pid>/cmdline; ADR-280, #9757): it reaches curl on the stdin config
 # (`--config -`). `--disable` (first, so no ~/.curlrc is read as root) and `--noproxy '*'` confine the

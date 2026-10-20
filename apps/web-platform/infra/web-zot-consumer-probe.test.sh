@@ -1264,8 +1264,8 @@ fi
 
 # --- #9639 F6 (lean subset): the unit stops expanding the secret; the script resolves it AFTER its refusal ----------------
 # Same defect and fix as web-private-nic-guard (see that suite for the full row set and the hostile-key table). This unit's
-# refusal is conditional on the pull credential being set (ZOT_PULL_TOKEN / ZTOK); under `doppler run` it always is, so the
-# launches below set ZTOK. The --canary-only ExecStartPre runs outside doppler and reads no URL.
+# refusal is conditional on the pull credential or the heartbeat key name being set (ZOT_PULL_TOKEN / ZTOK /
+# WEB_ZOT_CONSUMER_URL_KEY); under `doppler run` they always are, and the launches below set all three. The --canary-only ExecStartPre runs outside doppler and reads no URL.
 echo "--- F6 (#9639): zot unit wrapper expands nothing; lookup follows the refusal ---"
 # shellcheck disable=SC2016  # the F6 conditions are single-quoted on purpose: assert() evals them in this shell, where the variables are live
 F6_URL='https://uptime.betterstack.test/api/v1/heartbeat/F6-SECRET-9639'
@@ -1339,9 +1339,9 @@ __leak="${!WEB_ZOT_CONSUMER_URL_KEY:-}"' "$SUT" > "$F6_MUT"; chmod +x "$F6_MUT"
 assert "F6 mutant[hoist]: the edit landed (the copy differs from the SUT)" '! cmp -s "$SUT" "$F6_MUT"'
 F6_SUT="$F6_MUT" run_unit "$F6_LINE" xtrace
 assert "F6 mutant[hoist]: a lookup hoisted above the refusal leaks the URL under SHELLOPTS=xtrace (the order row can see it)" '[[ "$HOUTTXT" == *"$F6_TOK"* ]]'
-f6z_line_of() { grep -nF -- "$1" "$SUT" | sed -n '1p' | cut -d: -f1; }
+f6z_line_of() { awk -v n="$1" 'index($0, n) && $0 !~ /^[[:space:]]*#/ { print NR; exit }' "$SUT"; }   # first NON-comment line holding the text
 assert "F6 order: the indirect lookup is on a later line than the refusal AND than the --canary-only exit" \
-  '[[ -n "$(f6z_line_of "refusing to trace with a live credential")" && "$(f6z_line_of "\${!_key")" -gt "$(f6z_line_of "refusing to trace with a live credential")" && "$(f6z_line_of "\${!_key")" -gt "$(f6z_line_of "if [ \"\${1:-}\" = \"--canary-only\" ]")" ]]'
+  '[[ -n "$(f6z_line_of "refusing to trace with a live credential")" && "$(f6z_line_of "\${!WEB_ZOT_CONSUMER_URL_KEY")" -gt "$(f6z_line_of "refusing to trace with a live credential")" && "$(f6z_line_of "\${!WEB_ZOT_CONSUMER_URL_KEY")" -gt "$(f6z_line_of "if [ \"\${1:-}\" = \"--canary-only\" ]")" ]]'
 
 [[ "$TF_SKIPPED" -eq 0 ]] || echo "=== $TF_SKIPPED terraform-console rows skipped (not counted) ==="
 echo

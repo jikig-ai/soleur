@@ -206,3 +206,7 @@ token injects a second curl request) and the `printf | curl` SIGPIPE measurement
   `configure-auth.sh`, and the `Api-Key` Flagsmith header in `set-role.sh`.
 - **Proxy and `~/.curlrc`.** Every converted call carries `--disable` first, so a user's `~/.curlrc` is ignored; `--noproxy '*'`
   is kept wherever the script already carried it.
+
+## Addendum — 2026-10-20 (#9639 F6, PR #10637): the refusal's reach includes the unit wrapper
+
+A unit that runs a credential-handling script must not expand, export or name the secret in its `ExecStart`: the expansion runs before the script's own refusal can, so a traced launch prints it. The script resolves its secret after its refusal (the nic-guard and zot probe now read `*_URL_KEY` and expand `${!…_KEY}` themselves). `apps/web-platform/infra/doppler-injection-bound.test.sh` enforces this for every `doppler run` unit (a wrapper-expansion finding plus a cardinality-pinned wrapper-ack list for the two units not yet fixed, `web-git-data-probe` and `inngest-consumer-probe`, recorded on #9639).
