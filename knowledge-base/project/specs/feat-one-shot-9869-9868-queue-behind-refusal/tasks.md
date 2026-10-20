@@ -40,9 +40,9 @@ Closes (by Ref, ship step owns the body): #9869, #9868. Draft PR: #10655.
 - [x] 3.3 Fixtures GREEN; lint-skill-body-budget; ship <= 273955 B
 
 ## Phase 4: text surfaces
-- [ ] 4.1 pr-merge-poll.ts lines ~75 and ~82
-- [ ] 4.2 queue-mode.md boundary (1), merge-queue-dequeue.md ~15, constitution.md ~177 (one clause each)
-- [ ] 4.3 bun tests GREEN
+- [x] 4.1 pr-merge-poll.ts lines ~75 and ~82
+- [x] 4.2 queue-mode.md boundary (1), merge-queue-dequeue.md ~15, constitution.md ~177 (one clause each)
+- [x] 4.3 bun tests GREEN
 
 ## Phase 5: AGENTS rule (#9868)
 - [ ] 5.1 Edit the tail of the hr-pipeline-skills-never-inline-after-go-route line to the Phase 5.1 wording (before pins/hash/ack)
