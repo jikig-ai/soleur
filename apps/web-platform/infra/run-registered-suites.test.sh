@@ -1302,7 +1302,7 @@ fi
 # 73/50 after T10d gained its detection half (see the T10d block). 83/60 after
 # the #8736 T11 rows (shard partition, privileged bucket, per-suite bound,
 # timings feed, --enumerate, active/malformed manifest arms).
-if [[ -n "${SOLEUR_MUTATION_CHILD:-}" ]]; then MIN_ASSERTIONS=60; else MIN_ASSERTIONS=88; fi
+if [[ -n "${SOLEUR_MUTATION_CHILD:-}" ]]; then MIN_ASSERTIONS=60; else MIN_ASSERTIONS=92; fi
 TOTAL=$(( pass + fail ))
 if (( TOTAL < MIN_ASSERTIONS )); then
   echo "[FAIL] anti-vacuity: only ${TOTAL} assertion(s) ran, expected >= ${MIN_ASSERTIONS}" >&2
