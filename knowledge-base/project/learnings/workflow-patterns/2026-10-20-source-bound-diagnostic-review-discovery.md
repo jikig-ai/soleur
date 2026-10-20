@@ -202,3 +202,9 @@ successful acquisition from a valid receipt or reuse this spent attempt.
 A combined patch for the evidence record included a mismatched learning-file
 anchor and applied no changes. Re-read the target tail, then patch each artifact
 with its own exact context and verify both diffs before committing.
+
+During the bounded PR-check watch, one `api.github.com` read failed and the
+monitor correctly marked that poll UNKNOWN. The exact read-only `gh pr view`
+query succeeded through the required escalation path; resumed polling then
+settled with five check jobs passing, CodeQL skipped/neutral, and no failures.
+Never treat an UNKNOWN network poll as a CI verdict.
