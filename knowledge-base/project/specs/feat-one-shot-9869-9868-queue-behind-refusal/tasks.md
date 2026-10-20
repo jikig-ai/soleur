@@ -31,8 +31,8 @@ Closes (by Ref, ship step owns the body): #9869, #9868. Draft PR: #10655.
 - [x] 1.7 flip run_step to --fence (+ S1 row), shellcheck, suite GREEN
 
 ## Phase 2: pre-merge-rebase.sh
-- [ ] 2.1 Armed + not_queued + OPEN skip via --queue-wait under a 20 s wrapper; exact-line verdict parse; reuse _Q_NOTE for unreadable
-- [ ] 2.2 Header comment; shellcheck; suites GREEN
+- [x] 2.1 Armed + not_queued + OPEN skip via --queue-wait under a 20 s wrapper; exact-line verdict parse; reuse _Q_NOTE for unreadable
+- [x] 2.2 Header comment; shellcheck; suites GREEN
 
 ## Phase 3: fences
 - [ ] 3.1 ship/SKILL.md probe -> --fence, call -> --step --fence, exit-14 clause, comments at ~2267 and ~2544

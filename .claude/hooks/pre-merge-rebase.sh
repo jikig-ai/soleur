@@ -18,7 +18,11 @@
 # only when the session cwd is PR N's own checkout (state O) or the PR could not be
 # resolved (state L); from any other checkout it is skipped and reported (#8778).
 # The sync is skipped when the PR is already in the merge queue (#9454: a push would dequeue it); a
-# failed or unparseable queue read falls through to the sync, never to a block.
+# failed or unparseable queue read falls through to the sync, never to a block. It is also skipped for an
+# ARMED PR that GitHub reports BEHIND or UNKNOWN on a merge-queue repo but that is not in the queue yet (#9869:
+# the queue makes it current, a resync push restarts every required check for nothing): the verdict is
+# `sync-pr-behind.sh <N> --queue-wait`, the script's one copy of that predicate; an unreadable answer falls
+# through to the sync with a named note (cause=queue_wait_unreadable), never to a block.
 # The sync itself is also conditional (#9401): when the incoming origin/main delta shares
 # NO file with the branch's diff it is skipped (`delta disjoint` in additionalContext) so a
 # green head SHA is not invalidated; a diff that cannot be computed falls through to the
@@ -744,6 +748,48 @@ if [[ -n "$PR_HEAD_NUMBER" ]]; then
       }
     }'
     exit 0
+  fi
+
+  # Armed-BEHIND skip (#9869). Between `gh pr merge --auto` and the enqueue a PR is OPEN, armed, BEHIND (or UNKNOWN: recompute lag)
+  # and NOT in the queue, so the queued skip above cannot see it, and the sync below pushes a commit that restarts every required
+  # check for nothing: on a merge-queue repo the queue makes the PR current itself. Asked ONLY when this hook's own --queue-state read
+  # said `not_queued OPEN armed` (an UNARMED PR still syncs: the first arm's pre-sync is what this hook exists for), and answered by
+  # `sync-pr-behind.sh <N> --queue-wait`, the one copy of the predicate (OPEN, BEHIND/UNKNOWN never DIRTY, armed, a merge_queue rule on
+  # main). Two bounded reads (PR_QUEUE_ATTEMPTS=1, PR_QUEUE_TIMEOUT 5 s each) inside a 20 s outer wrapper: shorter than the reads would
+  # fail OPEN into the push this exists to prevent. The verdict is read from STDOUT only (2>/dev/null) and accepted only when the rc is 0
+  # and exactly one line of the CR-stripped output is exactly `queue_wait` or `proceed`; anything else (a non-zero rc incl. 124, an OLD
+  # script that exits 2, no line, a forged queue_wait followed by proceed, a suffix) is unreadable and falls THROUGH to today's sync with a
+  # named note on every exit path (_Q_NOTE), never a block. A PR that GitHub never enqueues, or that stays UNKNOWN, makes this skip quiet
+  # and bounded: the Phase 7 fence's queue-wait expiry fallback performs the sync. `--admin` takes the skip too (consistent with the
+  # queued skip), so its context says an --admin merge bypasses the queue and lands the head as pushed.
+  if [[ "$_q_state" == "not_queued" && -r "$_QS_SH" ]]; then
+    _q_v=""; _q_st=""; _q_am=""; _q_rm=""
+    read -r _q_v _q_st _q_am _q_rm <<<"$_q_first" || true
+    if [[ "$_q_st" == "OPEN" && "$_q_am" == "armed" ]]; then
+      _to20=()
+      if command -v timeout >/dev/null 2>&1; then _to20=(timeout -k 2 20)
+      elif command -v gtimeout >/dev/null 2>&1; then _to20=(gtimeout -k 2 20); fi
+      _qw_rc=0
+      _qw_out=$(cd "$WORK_DIR" && PR_QUEUE_ATTEMPTS=1 PR_QUEUE_TIMEOUT="${PR_QUEUE_TIMEOUT:-5}" ${_to20[@]+"${_to20[@]}"} bash "$_QS_SH" "$PR_HEAD_NUMBER" --queue-wait 2>/dev/null) || _qw_rc=$?
+      _qw_clean=$(printf '%s\n' "$_qw_out" | tr -d '\r' || true)
+      _qw_verdict=""
+      if [[ "$_qw_rc" -eq 0 && "$(grep -cxE 'queue_wait|proceed' <<<"$_qw_clean" || true)" == "1" ]]; then
+        _qw_verdict=$(grep -xE 'queue_wait|proceed' <<<"$_qw_clean" || true)
+      fi
+      if [[ "$_qw_verdict" == "queue_wait" ]]; then
+        headless_or_stderr info "PR #$PR_HEAD_NUMBER is BEHIND with auto-merge armed on a merge-queue repo — origin/main sync skipped (the queue makes it current)"
+        jq -n --arg n "$PR_HEAD_NUMBER" '{
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            additionalContext: ("Pre-merge hook: PR #" + $n + " is BEHIND with auto-merge armed (GitHub merge state BEHIND or UNKNOWN) on a merge-queue repo and is not in the queue yet; skipped the origin/main sync. The merge queue makes the PR current itself, and a resync push restarts every required check for nothing, so no sync is needed. Red required check? Push the fix itself, not a resync. Green and never enqueued? Follow plugins/soleur/skills/ship/references/merge-queue-dequeue.md (\u0027Armed and green but never enqueued\u0027). The Phase 7 poll\u0027s expiry fallback is the sanctioned sync. A --admin merge bypasses the queue and lands the head as pushed, so a not-up-to-date refusal there is real: gate it with plugins/soleur/scripts/admin-merge-ready.sh.")
+          }
+        }'
+        exit 0
+      elif [[ "$_qw_verdict" != "proceed" ]]; then
+        headless_or_stderr warn "merge-queue wait check failed (cause=queue_wait_unreadable) for PR #$PR_HEAD_NUMBER — proceeding with the origin/main sync; if the PR is waiting on the queue, the push restarts its required checks"
+        _Q_NOTE="${_Q_NOTE} Merge-queue wait check unreadable (cause=queue_wait_unreadable) for PR #$PR_HEAD_NUMBER, so the origin/main sync ran as if the PR were not waiting on the queue; if it was, that push restarted its required checks. Re-check: bash plugins/soleur/scripts/sync-pr-behind.sh $PR_HEAD_NUMBER --queue-wait."
+      fi
+    fi
   fi
 fi
 
