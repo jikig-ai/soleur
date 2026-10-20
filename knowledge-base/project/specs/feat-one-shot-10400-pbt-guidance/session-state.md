@@ -50,3 +50,9 @@ soleur:plan (full workflow, inline), soleur:deepen-plan (halt gates 4.5–4.55 i
 - Findings fixed: Counter-oracle+idempotence example, invertible-pairs scope, unverified tool rows, phrase-pin ×3+floor 85, header re-wrap, home-layer clause, RED-first reword, plan 2.1 one-site sync, canonical-oracle caveat (latest commit).
 - ZERO open code-review issues filed — all findings were ≤100-line inline fixes.
 - NEXT: fix-round review `soleur:review 10718 --fix-round --since 955863414e` (mapped seats over fix range), then qa (docs-only → skips), compound, ship (mark ready → merge queue → postmerge → close 10400 → tick epic).
+
+## Fix-Round (armed, awaiting 9 seats)
+- Range: 955863414e..HEAD. Seats: 9ad66fd3 security, 55f7a4be code-quality, b5801bc3 git-history, d30ec290 pattern, 5673ef82 architecture, 2b1f49e9 data-integrity, 1397a8bc agent-native, a8ca6462 test-design, 7d06ac1e shellcheck.
+- Next: synthesize fix-round → fix any new findings → one verification pass (pin suite + markdownlint + body budget) → `soleur:qa` (docs-only, skips gracefully) → `soleur:compound` → `soleur:ship` (ready → merge queue → postmerge → `gh issue close 10400` → epic tick) → attest with Reviewed-Fix-Round/Reviewed-Fix-Range trailers.
+- Epic #10397: #10398/#10399 checklist TICKED on issue body; #10726 (10693) queued for merge on CI green.
+- Remaining epic children after this: #10402 (needs feature-map on main — now available), #10403, #10401, #10404 (largest — CTO ruling needed: fold into constraint-scaffold vs own skill).
