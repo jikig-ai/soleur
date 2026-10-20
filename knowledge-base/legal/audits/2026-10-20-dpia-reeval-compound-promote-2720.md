@@ -5,7 +5,7 @@ date: 2026-10-20
 issue: 6107
 status: draft-requires-counsel-review
 processing_activity: "Article 30 register Processing Activity 31 (Anthropic-egressing Inngest function fleet), member `cron-compound-promote` — the Compound Promotion Loop (#2720), phase 1 (cluster call) and phase 2 (additive-edit call)"
-conclusion: "Full DPIA NOT required at single-operator scale — a determination at current scale, conditional, NOT an empirical finding. The empirical limbs (false-positive rate, operator merge ratio) were not assessable (0/0, undefined) and the verdict does not rest on them; it rests on structural factors only. Five named accepted residual risks; twelve re-evaluation triggers pinned; re-arm tracker #10676."
+conclusion: "DRAFT position, pending operator adoption and counsel review: full DPIA NOT required at single-operator scale — a determination at current scale, conditional, NOT an empirical finding. On the 2026-07-31 fleet screening's own scoring the loop engages WP248 criterion 8 and partially engages 7 and 9, with 4 unassessed (two and a half criteria, more if 4 is engaged), so WP248's presumption IS met; it is displaced on stated reasons, not by the count, and the displacement requires counsel confirmation. The empirical limbs (false-positive rate, operator merge ratio) were not assessable (0/0, undefined) and the verdict does not rest on them; it rests on structural factors only, two of which are unverified. This memo is the first recorded Art. 35(1) threshold determination and is retrospective; if counsel concludes otherwise, the period from 2026-07-06 is a timing failure this memo does not cure. Five named accepted residual risks; fifteen re-evaluation triggers pinned (fourteen distinct, trigger 11 restates trigger 1); re-arm tracker #10676."
 related:
   - knowledge-base/legal/article-30-register.md
   - knowledge-base/legal/audits/2026-07-31-dpia-screening-claude-eval-fleet-and-ci.md
@@ -26,34 +26,44 @@ Assessment for the Compound Promotion Loop (`cron-compound-promote`, #2720), now
 has run for about fifteen weeks and its second phase (a per-cluster additive-edit call, #10553)
 has changed what is sent to the processor?
 
-**Determination: a full DPIA is not required at single-operator scale.** This is a
-**determination at current scale**. It is **conditional** on the facts and triggers below, and
-it is **not an empirical finding**. The two empirical limbs the 2026-05-11 posture note
-asked for — the false-positive rate and the operator merge ratio — were **not assessable**: the
-loop has never opened a draft PR, so both ratios are 0/0, which is undefined. **The verdict does
-not rest on those ratios.** It rests only on structural factors: one operator; no cohort user's
-data in the corpus by design; the same processor, key and DPA as the fleet already screened;
-output limited to a draft PR that is never auto-merged; and a best-effort (not guaranteed)
-pattern prefilter on the input. The empirical limbs are deferred to the first opened draft PR,
-and the re-arm tracker is **#10676**.
+**Determination (DRAFT position): a full DPIA is not required at single-operator scale.** This
+is a **determination at current scale**, **subject to counsel confirmation** and to operator
+adoption. It is **conditional** on the facts and triggers below, and it is **not an empirical
+finding**. The two empirical limbs the 2026-05-11 posture note asked for — the false-positive
+rate and the operator merge ratio — were **not assessable**: the loop has never opened a draft
+PR, so both ratios are 0/0, which is undefined. **The verdict does not rest on those ratios.**
+It rests only on structural factors: one operator; cohort-user data not intended to be in the
+corpus (no enforcing control is cited, and this is unverified, see §7); the same processor, key
+and DPA as the fleet already screened (the DPA premise, Commercial Terms status, is recorded as
+unverified at `anthropic.md` and is inherited, not verified, here); output limited to a draft PR
+that is never auto-merged (plus a second, comment-based output surface, see §2); and a
+best-effort (not guaranteed) pattern prefilter on the input. The WP248 tally is stated in §3: it
+**meets** the WP248 presumption and the presumption is displaced on stated reasons. The empirical
+limbs are deferred to the first opened draft PR, and the re-arm tracker is **#10676**.
 
 ## 0. Why now, and why late
 
 | Fact | Value |
 |---|---|
-| Loop enabled | 2026-07-06 (#6039) |
+| Loop enabled | 2026-07-06 (PR #6100, which carries issue #6039). The tracker issue #2720 is CLOSED on GitHub (2026-05-11); live tracking is #6107 and #10676. |
 | Re-evaluation clock expiry (4 weeks of operation; follow-through earliest date) | 2026-08-03 |
 | Date this re-evaluation is performed | **2026-10-20** |
 | Lateness | The 4-week clock was **missed**. This record is **overdue by 78 days** against the 2026-08-03 date. It is not described as on schedule. |
-| Delay cause | The follow-through reminder surfaced daily from 2026-08-03 and the record was not made. Separately, the empirical limbs had nothing to measure: the loop opened **zero** draft PRs in the whole window, because every proposed cluster was refused before a PR could open, until the phase-2 fix (#10553) merged on 2026-10-19. The empty limbs are the reason the ratios are undefined. They are **not** an excuse for the missed date. |
+| Delay cause | The follow-through reminder surfaced daily from 2026-08-03 and the record was not made. Separately, the empirical limbs had nothing to measure: **zero** draft PRs were opened in the whole window (by label, branch and title search, §1). For the decoded window 2026-09-19 to 2026-10-18 the outcome rows show every one of the 10 proposed clusters refused before a PR could open; the cause for 2026-07-12 to 2026-09-13 is **not derivable**, and nothing here attributes it. The empty limbs are the reason the ratios are undefined. They are **not** an excuse for the missed date. |
 | State of the fix | #10553 merged 2026-10-19. **This memo does not state that the fix works.** The first scheduled run that can show whether it works is 2026-10-25, and the enrolled probe for #10552 is what settles it. |
 
-The decision to defer was taken at registration (2026-05-11), before the processing started.
-Article 35(1) asks for the assessment *prior to* processing that is likely to result in a high
-risk. The controller's position, recorded here, is that this processing was and is **not** likely
-to result in a high risk at single-operator scale, so the deferral was a confirmatory step and not
-a late mandatory DPIA. If a later reader concludes the opposite (see §6, trigger 6), the interval
-since 2026-07-06 becomes a finding, and this memo says so in advance rather than after the fact.
+**Art. 35(1) timing: the record.** Article 35(1) asks for the assessment *prior to* processing
+that is likely to result in a high risk. No documented threshold determination existed on
+2026-07-06. The 2026-05-11 plan finding (LC-04) flagged the loop as an Art. 35 candidate and
+**deferred the question** for four weeks pending operating data; it did not record a
+not-high-risk determination, and the data it waited for never materialised (the ratios are
+0/0). This memo is therefore the **first recorded threshold determination** and it is
+**retrospective**. The position it records, that the processing was and is not likely to result
+in a high risk at single-operator scale, is **this draft's position**, pending operator adoption
+and counsel review; it is not yet the controller's. If counsel concludes otherwise, the period
+from 2026-07-06 is an Art. 35(1) timing failure that this memo **does not cure**, as the register
+records for PA-32 (outstanding item 8: neither path cures the overdue period). That outcome is
+re-opening trigger 13 in §6.
 
 ## 1. Empirical basis
 
@@ -64,13 +74,14 @@ denominator is written 0/0 and called undefined; it is never written as a percen
 
 | Quantity | Label | Value | Source |
 |---|---|---|---|
-| Draft PRs opened by the loop, 2026-07-06 to 2026-10-20 | **Measured** | 0 | Four independent routes: the append-only audit log `knowledge-base/project/learnings/promotion-log.md` has no data row below its marker line; a label search for `self-healing/auto` across all PR states returns an empty list (re-run by the CLO on 2026-10-20); a head-branch search for the loop's branch shape returns only unrelated feature branches that contain the words; a title search for the loop name returns only PRs that change the loop, none opened by it. |
+| Draft PRs opened by the loop, 2026-07-06 to 2026-10-20 | **Measured** | 0 | Two sources, not four independent routes. (i) The append-only audit log `knowledge-base/project/learnings/promotion-log.md` has no data row below its marker line; this is **merged-only evidence**, because the row is committed on the PR branch and reaches the main branch only if the PR merges, so an empty log shows zero merged PRs, not zero opened ones (the log header's wording "every promotion proposal opened" is stale and is not relied on). (ii) GitHub PR search by label, by head branch and by title: a label search for `self-healing/auto` across all PR states returns an empty list (re-run by the CLO on 2026-10-20); a head-branch search returns only unrelated feature branches; a title search returns only PRs that change the loop. These three searches read the same PR corpus and are not independent corroboration of each other; the label is applied in a best-effort step, so an unlabelled loop PR would escape the label route but not the branch and title routes. |
+| Skill-conflict comments posted by the loop (second public output surface, §2) | **Not established** | — | A review-seat search of comments on 2026-10-20 found no posted comment of that kind. A negative search is not proof, it was not re-run by the CLO, and the 2026-07-12 to 2026-09-13 weeks are not decodable. |
 | False-positive rate (rejected opened PRs / opened PRs) | **Not measurable** | 0/0, undefined | Needs at least one opened PR. |
 | Operator merge ratio (merged opened PRs / opened PRs) | **Not measurable** | 0/0, undefined | Same. |
 | Cluster count, runs 2026-09-19 to 2026-10-18 | **Measured** (work-agent log query, read-only; not re-run by the CLO) | 10 clusters proposed over 5 runs that proposed any; 0 opened | Structured outcome rows from the log processor, field-isolated on the outcome discriminator and the function name; a positive-control query over the same window confirmed the channel was live (liveness only). |
-| Cluster count, runs 2026-07-12 to 2026-09-13 | **Not derivable** | — | The outcome marker was console-formatted multi-line text until PR #8344 (merged 2026-09-18); its module header records that ten weeks of zero output were undiagnosable. Log retention is 90 days (runbook measurement dated 2026-09-04), so retention is not the limit; the earlier rows are simply not field-decodable. |
+| Cluster count, runs 2026-07-12 to 2026-09-13 | **Not derivable** | — | The outcome marker was console-formatted multi-line text until PR #8344 (merged 2026-09-19 UTC); its module header records that ten weeks of zero output were undiagnosable. Log retention is 90 days as last measured (runbook measurement dated 2026-09-04); retention before the move to a paid plan on 2026-08-16 is unknown. Ninety days before 2026-10-20 is 2026-07-22, so the runs of 2026-07-12 and 2026-07-19 are outside the window regardless, and the later rows are in any case not field-decodable. |
 | Scheduled runs since enablement | **Not derivable as an observation**; schedule arithmetic only | 15 (Sundays 00:00 UTC, 2026-07-12 to 2026-10-18) | Cron expression `0 0 * * 0`. The Sentry cron heartbeat was not queried. |
-| Refusal reasons across the 10 proposed clusters | **Measured** (same query) | All 10 refused before any PR; reason `diff-underivable-apply` ×8 and `diff-underivable` ×2 (closed-enum names) | Outcome rows. |
+| Refusal reasons across the 10 proposed clusters | **Measured** (same query) | All 10 refused before any PR; reason `diff-underivable-apply` ×8 and `diff-underivable` ×2 (names from a vocabulary closed by test census, not by type) | Outcome rows. |
 
 The ten decoded outcome rows break down as follows (aggregates only): by status, 5 `completed`,
 3 `no-qualifying-clusters`, 2 `error`; by trigger, 5 scheduled and 5 manual. The corpus held
@@ -79,8 +90,9 @@ call grew from 1,204,697 to 1,575,462 bytes over the same interval.
 
 **What this table does not support.** It does not support any statement about the quality of
 the loop's proposals, because none was ever reviewed by a human. It supports one structural
-statement: in 106 days of operation, the loop's output reaching a public surface was zero draft
-PRs.
+statement: in 106 days of operation, no draft PR was opened by the loop. Whether a skill-conflict
+comment (the second public surface, §2) was ever posted in the weeks that cannot be decoded is
+not established.
 
 ## 2. Data-flow change record
 
@@ -89,17 +101,25 @@ The loop's call to the processor (Anthropic PBC, Art. 28 processor, under the Ji
 Swiss Addendum) has two phases. Both use the same helper (`postAnthropicMessage`), the same key
 and the same DPA. Code is cited by symbol and constant name; line numbers are deliberately not used.
 
+**Premise caveat.** DPA applicability rests on the Commercial Terms premise, which the vendor
+record (`anthropic.md`, open operator action 4) marks as **unverified**: the account's
+Commercial-versus-Consumer status has not been confirmed. This memo inherits that premise and
+does **not** verify it. The cohort-onboarding trigger (the alpha-tester controller/processor row
+in `compliance-posture.md` and the vendor record) fired on 2026-08-06 for other activities under
+the same Jikigai key; this memo did **not** check whether tester-derived
+learnings are in the corpus (§7).
+
 | Item | Phase 1 (`anthropic-cluster` step; unchanged by #10553) | Phase 2 (`draftAdditiveEdit`; new in #10553) |
 |---|---|---|
-| Calls per run | 1 | One per proposed cluster; at most `WEEK_CAP_DEFAULT` = 2 |
+| Calls per run | 1 per attempt | One per proposed cluster; at most `WEEK_CAP_DEFAULT` = 2 per attempt. The function retries once and a manual-trigger event exists, so calls per run can exceed these figures on a retried step or a manual run. |
 | Corpus | The whole prefiltered learnings corpus (one entry per learnings file, archive excluded): path plus the first 10 lines. Files matching `PII_REGEX` (email, IPv4, IBAN, API-key shapes) and files listed in `scripts/retired-rule-ids.txt` are excluded **before** the call (`collect-corpus` step). | A **second transmission** of the same prefiltered path-plus-first-10-lines summaries, for that cluster's source learnings only. They are taken from the already-collected corpus map; a model-supplied path that is not a key of the map is dropped and never read from disk. |
 | Target file | Only the list of eligible target paths with byte sizes (`listEligibleTargets`). | The **target file in full**, read from the repository HEAD by `readEditTarget`: either `AGENTS.rules.md` or one `plugins/soleur/skills/<name>/SKILL.md`. Refused above `EDIT_TARGET_MAX_BYTES` = 120,000 bytes. A tracked file of a repository whose visibility is public (verified 2026-10-20). |
 | Model-authored text sent | None (the model has not yet spoken). | The cluster rationale from phase 1, capped at 2,000 characters; it is derived from data already sent. |
-| Untrusted-data handling | n/a | Each block is wrapped in per-call-nonce delimiters and labelled as data, not instructions. |
+| Untrusted-data handling | **None beyond JSON serialization.** The whole corpus is appended after a `Corpus:` heading with no nonce and no data-not-instructions framing. Only `target_path` and the source list are server-validated; the `rationale` is model text. | Each block is wrapped in per-call-nonce delimiters and labelled as data, not instructions. |
 | Model output | Up to the cluster cap: path, tier, target, source list, rationale. No diff. | An insertion only (anchor line plus new lines), at most 4,096 output tokens (`DRAFT_EDIT_MAX_TOKENS`). The server derives the diff with git. |
-| Output screen before any PR | Path allowlist (`TARGET_ALLOW_RE`). | Inserted lines: at most 20 lines of at most 500 printable-ASCII characters; credential shapes refused (`CREDENTIAL_RE`); no links to URLs, code fences, HTML comments or command substitution; for `AGENTS.rules.md`, exactly one new rule id of an allowed class and no hard-rule or workflow-gate id. **The email, IPv4 and IBAN alternatives of `PII_REGEX` are deliberately not applied to model output** (the code comment gives the reason: they over-match rule prose). The screen on output is therefore narrower than the screen on input. |
-| Result | A list of proposed clusters. | A draft PR labelled `self-healing/auto`, `mergeMode` none (never auto-merged), operator review required. The PR body and commit trailers name the source learnings' paths; the PR carries the diff. |
-| Concurrency cap | At most `WEEK_CAP_DEFAULT` = 2 minus the loop PRs already open; when two are open the run exits at `week-cap-reached`. | Same cap, so at most 2 phase-2 calls per run. |
+| Output screen before any PR | Path allowlist (`TARGET_ALLOW_RE`). | Inserted lines: at most 20 lines of at most 500 printable-ASCII characters; credential shapes refused (`CREDENTIAL_RE`); scheme-bearing (`://`) and non-relative markdown links, code fences, HTML comments and command substitution refused; for `AGENTS.rules.md`, each inserted line carries exactly one new rule id of an allowed class (cq, rf, pdr, cm) and no hard-rule or workflow-gate id. Bare hosts, `mailto:` text and bare email text are not screened. **On the draft-PR diff screen, the email, IPv4 and IBAN alternatives of `PII_REGEX` are deliberately not applied to model output** (the code comment gives the reason: they over-match rule prose), so that screen is narrower than the screen on input. The skill-conflict comment path (next row) applies the full `PII_REGEX` to its model-derived diff. |
+| Result | A list of proposed clusters. | **Two public output surfaces.** (1) A draft PR labelled `self-healing/auto`, `mergeMode` none (never auto-merged), operator review required; the PR body and commit trailers name the source learnings' paths and the PR carries the diff. (2) For a `plugins/soleur/skills/` target, when another open PR touches skills, the apply step posts the model-derived diff as a comment on that **unrelated** open PR, as the GitHub App, with no draft PR, no label and no human gate before posting; the full `PII_REGEX` is applied first and a match replaces the diff with a redaction notice. Surface (2) is invisible to the PR-only measurements in §1. |
+| Concurrency cap | At most `WEEK_CAP_DEFAULT` = 2 minus the open PRs carrying the label `self-healing/auto` (a search count, and the label is applied in a best-effort step); when two are open the run exits at `week-cap-reached`. The cap is **inactive at zero open PRs**. | Same cap, per attempt. It does not bound weekly transmissions at one scheduled run, given manual triggers and the retry. |
 
 **Net change from phase 2.** One additional file per cluster (the target, which is committed
 repository content), a repeat of already-sent summaries, and a model-authored rationale derived
@@ -111,28 +131,40 @@ because "a new call site" is one of the triggers in §6.
 **Outcome marker (log sink).** The `SOLEUR_COMPOUND_PROMOTE_OUTCOME` marker field set is
 **unchanged by the phase-2 change**: PR #10553 did not touch the marker module. The fields are
 the status (a closed union of eight), corpus count, clusters proposed and opened, a capped list
-of refusal reason names (closed enum, capped by `REFUSAL_DETAIL_CAP` = 20) with a total, a
-bounded refusal-detail list (a sha256 digest of the source set, a closed reason, and numbers or
+of refusal reason names (a vocabulary closed by test census, not by type, since the field is a
+plain string list; capped by `REFUSAL_DETAIL_CAP` = 20) with a total, a
+bounded refusal-detail list (a sha256 digest of the source set, a reason name, and numbers or
 booleans describing the proposal's shape, never its text), corpus input bytes, trigger, a run
 identifier, an error class, and one free-text field, the error text, which the caller caps at
-200 bytes and the emitter passes through `redactGithubSourcedText`. The marker carries no
-model-supplied free text other than that single redacted, capped field; this was verified
-against the marker module and, as PA-31 records, is pinned by the marker's own test suite
-(Guard 3); the suite was not re-run for this memo.
-The phase-2 prompt and the proposed insertion are not written to the marker.
+200 characters (not bytes) and the emitter passes through `redactGithubSourcedText`. The marker
+carries no model-supplied free text other than that single redacted, capped field; this was
+verified against the marker module and, as PA-8 records (not PA-31; the log-sink processing of
+the marker is a PA-8 operation), is pinned by the marker's own test suite (Guard 3); the suite
+was not re-run for this memo. #10553 added new refusal reason names to the list; the field set
+is unchanged. The phase-2 prompt and the proposed insertion are not written to the marker.
 
 **Other sinks, which the marker statement does not cover.** (i) When the allowlist refuses a
 model-supplied target path, the path is written to the function log and to Sentry after
 `redactGithubSourcedText` and a 200-character cap; that is model-chosen text, redacted by
 shape, not by content. (ii) The refusal diagnostics sent through the shared silent-fallback
-helper carry closed-vocabulary reasons and the source-set digest, and that helper's logger
-reaches the same log processor as the marker. (iii) The corpus entries and step outputs are
-held in the self-hosted Inngest run state (see §4).
+helper carry reason names and the source-set digest **and, for a diff-path refusal, a detail
+field holding git's own stderr, redacted by shape (not by content) and capped at 200
+characters**; that helper's logger reaches the same log processor as the marker. The detail
+text comes from a tool processing model-derived input, so arbitrary prose is unlikely but the
+field exists. (iii) The corpus entries and step outputs are held in the self-hosted Inngest run
+state (see §4). (iv) The skill-conflict comment is a publication surface, not a sink, and is
+recorded in the Result row above.
 
 ## 3. Screening against Art. 35(3) and WP248 rev.01
 
 Assessed against Art. 35(3)(a)-(c) and the nine WP248 rev.01 criteria, in the manner of the
 fleet screening of 2026-07-31 under which this loop is already a PA-31 member.
+
+CNIL list (Art. 35(4)): not re-checked for this memo; the fleet screening of 2026-07-31 found no
+squarely matching type, and the loop's change does not alter that. Art. 35(2): the register
+records no designated DPO, so no DPO advice was sought and none is applicable. Art. 35(11)
+(review where the risk changes) is the legal anchor, by analogy, for the trigger list in §6;
+there is no DPIA to review, so the triggers stand in for it.
 
 | Criterion | Finding |
 |---|---|
@@ -142,23 +174,46 @@ fleet screening of 2026-07-31 under which this loop is already a PA-31 member.
 | WP248 1, evaluation or scoring | Not engaged. |
 | WP248 2, automated decision with legal or similar effect | Not engaged. |
 | WP248 3, systematic monitoring | Not engaged. |
-| WP248 4, sensitive or highly personal data | **Not established, not engaged by design.** The corpus is engineering notes. This memo did **not** sample the corpus for names or other identifying prose (see §7), so the criterion is treated as unassessed rather than as clear; residual (a) carries it. |
-| WP248 5, large scale | **Not engaged.** Factors: number of data subjects unknown but bounded by one project's authors and contributors; volume 2,768 entries and about 1.6 MB per cluster call at the last measured run, one scheduled run a week; duration about fifteen weeks; one repository. Volume of documents is not the test; the number and range of data subjects is. |
+| WP248 4, sensitive or highly personal data | **Not established; unassessed.** The corpus is engineering notes. This memo did **not** sample the corpus for names or other identifying prose (see §7), so the criterion is counted as **unassessed**, neither engaged nor clear; residual (a) carries it. |
+| WP248 5, large scale | **Not engaged, on factors that are partly unmeasured.** Number of data subjects: unknown, bounded by the repository's authors and the persons named in learnings, order of magnitude not measured. Volume: 2,768 entries and 1,575,462 bytes in the serialized corpus of a cluster call at the last measured run; one scheduled run a week, plus manual triggers and one retry. Duration: 106 days. One repository. Volume of documents is not the test; the number and range of data subjects is. |
 | WP248 6, matching or combining datasets | Not engaged. One corpus, one purpose. |
-| WP248 7, vulnerable data subjects or imbalance | Not engaged. No cohort user or customer data is in the corpus by design; any contributor named in a learning is the PA-31 population (b)(i), not a distinct vulnerable class. |
+| WP248 7, vulnerable data subjects or imbalance | **Partially engaged**, consistent with the fleet screening's scoring of the PA-31 population (involuntary contributors with no relationship to Jikigai). For this member the population is the authors of committed content and any person named in a learning. Cohort-user or customer data is not intended to be in the corpus; no enforcing control is cited and this is unverified (§7). |
 | WP248 8, innovative use of technology | **Engaged.** A scheduled LLM drafts text that, if merged, becomes a rule in the file that governs other agents. |
-| WP248 9, processing that prevents exercise of a right | **Partially engaged, through the publication limb only.** A draft PR is readable the moment it opens, and the human gate acts at merge, not at publication. Once a PR body, branch and diff are on a public repository, the controller alone cannot reliably erase them (edit history, forks, mirrors); the fleet screening reached the same mechanism for PA-32. Contained here because the content is derived from committed repository text, the inserted text is bounded (§2), and zero PRs have been opened. Residual (b). |
+| WP248 9, processing that prevents exercise of a right | **Partially engaged, through the publication limb.** A draft PR is readable the moment it opens, and the human gate acts at merge, not at publication; a skill-conflict comment is posted with no gate at all. Once text is on a public repository, the controller alone cannot reliably erase it (edit history, forks, mirrors); the fleet screening reached the same mechanism for PA-32. The limb is **not yet realised** (zero draft PRs opened), which is a fact about the past and not a control. The fleet screening scored PA-31 "No" here because it found no public-output limb; this member has one, so that scoring does not transfer. Residual (b). |
 
-One criterion engaged and one partially engaged. At single-operator scale, with no Art. 22
-effect, no large-scale special-category processing, the same processor and DPA as the screened
-fleet, and a human merge gate, the risk to rights and freedoms is **not "high"** in the
-Art. 35(1) sense on the facts available. A full DPIA is not required. The screening of
-2026-07-31 reached the same result for PA-31 on two criteria; this memo reaches it on one and a
-half, and for that reason treats the publication limb as the item to watch, not as closed.
+**Tally.** On the fleet screening's scoring, the loop engages criterion 8 and partially engages
+7 (the same involuntary population) and 9 (the public-output limb that the fleet screening's
+PA-31 conclusion expressly excluded); criterion 4 is unassessed. That is **two and a half
+criteria, or more if 4 is engaged**. The loop is therefore not lighter than the PA-31 member
+set the fleet screening assessed (two criteria), and arguably heavier. **WP248's presumption
+("in most cases" a DPIA where two criteria are met) is met.**
+
+**Displacement, as a determination at current scale, subject to counsel confirmation.** The
+presumption is displaced here, as it was for PA-31 in the fleet screening, for these reasons:
+one operator and a single repository; the recipient is a contracted Art. 28 processor under the
+same key and DPA as the screened fleet (subject to the unverified Commercial Terms premise,
+§2); a draft PR requires a human merge decision (the skill-conflict comment has no such gate)
+and no write authority beyond a draft PR or a comment exists; there is no Art. 22 effect and no decision about a
+natural person; the inserted text is bounded (§2); and the publication limb has not yet been
+realised. The fleet screening's own reason "no public-output limb" does **not** apply and is
+not relied on. The reasoning is the CLO's draft; it is **not** shown by the count, and it
+requires counsel confirmation. On those reasons the risk to rights and freedoms is draft-assessed
+as **not "high"** in the Art. 35(1) sense on the facts available, and a full DPIA is not
+required at current scale.
 
 **Art. 6 basis.** PA-31 records Art. 6(1)(f) for the repository population, balanced in the
-fleet LIA (Arm A). This memo does not repeat the balancing and does not author a new LIA. It
-relies on that record, and the processor-side facts in §2 are within it.
+fleet LIA (Arm A). Arm A covers the transmission to the processor of **already-published
+repository content** of its authors and contributors. It was **not** struck for (i) a person
+who is merely named in a learning and is not its author (that person published nothing; this is
+an Art. 14 population, and necessity of names for a clustering task is not shown, since the
+prefilter's existence shows minimisation is feasible), or (ii) publication of a draft PR, which
+is a distinct operation of the PA-32 type, for which the register records that Art. 6(1)(f)
+failed necessity as implemented for the community digest. This memo **claims no basis for (i) or
+(ii)** and does not author a new LIA. A short Arm A-style balancing for (i) and (ii) is required
+at or before the first opened draft PR (trigger 1). The loop has no gate that waits for it; the
+operator can honour it only by completing it before the first scheduled run that could open a PR
+(2026-10-25) or by using the kill switch in the loop's config. A PR opened before the balancing
+exists is a publication without a recorded basis, and is to be recorded as such.
 
 ## 4. Why the remaining surface does not change the conclusion
 
@@ -167,17 +222,31 @@ relies on that record, and the processor-side facts in §2 are within it.
   has no automatic deletion (PA-31 section (f)). It is a PII surface on the controller's own
   infrastructure, not a third-party recipient, and it holds content already committed to the
   repository. Its retention was not re-measured here.
-- **Anthropic retention.** The default 30-day retention applies to phase-1 and phase-2 inputs;
-  the Zero-Retention amendment is recorded as unsigned (`anthropic.md`, snapshot 2026-08-06).
-  This is inherited from PA-31 section (f), not new, and phase 2 adds one more payload to the
-  same window.
-- **GitHub.** GitHub receives the draft PR content as host and as API recipient (PA-31 section
-  (d)).
-- **Self-limiting cap.** With two loop PRs open, the run exits at `week-cap-reached` and sends
-  nothing. If the operator does not review, the outbound flow stops growing.
-- **Published policies.** A search of the published policies in `docs/legal/` for the loop,
-  its name and the corpus found no sentence that describes it or that this memo contradicts. No
-  policy text is changed, and no public or marketing claim comes out of this memo.
+- **Anthropic retention.** Inputs are deleted within the default 30 days, subject to
+  Anthropic's stated exceptions (longer retention for flagged inputs and outputs and for other
+  services; the exceptions were not re-verified here); the Zero-Retention amendment is recorded
+  as unsigned (`anthropic.md`, snapshot 2026-08-06). The Commercial Terms status of the account
+  is unverified there, and this bullet inherits that caveat. This is inherited from PA-31
+  section (f), not new, and phase 2 adds one more payload to the same window.
+- **GitHub.** GitHub receives the draft PR and comment content as an API recipient (PA-31
+  section (d), which records API recipient only). GitHub's **host** role for loop-published
+  draft PRs and comments is **registered nowhere**: PA-32 section (d) covers the host role for
+  the community digest and public issue comments only. Disposition: not yet registered; filed
+  for counsel; no draft PR has been opened; this PR does not amend PA-32.
+- **Self-limiting cap.** With two open PRs carrying the label, the run exits at
+  `week-cap-reached` and sends nothing. The cap is inactive at zero open PRs, which is the
+  current state, so it bounds nothing today; manual triggers and the function retry also exist.
+- **Published policies.** None describes the loop by name. **Purpose gap:** Privacy Policy
+  §4.4 and its Art. 6(1)(f) paragraph in §6 state only an "awareness of community activity"
+  purpose for Soleur's own processing; the loop's engineering purpose (clustering notes and
+  drafting rule edits) is not disclosed (Art. 13 and 14(1)(c)), and §4.4 does not list
+  repository source while the GDPR Policy and Data Protection Disclosure tables do, without a
+  purpose. The gap dates from 2026-07-31, is **pre-existing and not caused or aggravated by
+  phase 2**, and is **referred to counsel** together with deferred item DEF-1 (#7120). **No
+  `docs/legal/` edit is made in this PR:** an edit would need the Eleventy mirrors, the SHA
+  re-pin and five CI gates, would publish wording no counsel has seen, and the first opened PR
+  (the point at which the gap becomes material) is a re-evaluation trigger. This is a CLO
+  ruling; it is revisited at trigger 1. No public or marketing claim comes out of this memo.
 
 ## 5. Named accepted residual risks
 
@@ -187,80 +256,116 @@ Accepted by name, with a failure mode and a recovery path. They are not mitigate
 email, IPv4, IBAN and key shapes. It does not match names, handles or other identifying prose.
 The prefilter is a best-effort mechanism, not a guarantee. A learning may have been authored
 from private session context and then committed; once committed it is repository content in a
-public repository, so the transmission to the processor discloses nothing that was not already
-published, but it is still a transfer to a processor, sent twice (phase 1 whole corpus, phase 2
-summaries again). Accepted because the corpus is the operator's own committed engineering notes,
-no cohort user's data is in it by design, and the DPA, SCCs and 30-day window apply. Recovery:
-exclude or edit the learning and the next run drops it; the Anthropic copy expires with the
-window. Trigger: 6.
+public repository, so the transmission adds no new public-disclosure risk beyond what the
+committed text already presents, but it remains a transfer to a processor, sent twice (phase 1
+whole corpus, phase 2 summaries again). Persons merely named in a learning are outside the
+recorded Art. 6 basis (§3). Accepted because the corpus is the operator's own committed
+engineering notes, cohort-user data is not intended to be in it (no enforcing control is cited;
+unverified), and the DPA, SCCs and default 30-day retention apply, the DPA subject to the
+unverified Commercial Terms premise (`anthropic.md`). Recovery: exclude or edit the learning
+and the next run drops it; the Anthropic copy is deleted within the default 30 days, subject to
+Anthropic's stated exceptions. Triggers: 3, 6, 14.
 
-**(b) Publication before human review.** The draft PR is public when it opens. The body names
-source-learning paths; the diff is up to 20 lines of up to 500 characters of model-authored
-text. The output screen refuses credential shapes and links but not email, IP or IBAN shapes,
-names or other prose. Accepted because the text derives from committed content, at most two
-loop PRs can be open, and none has been opened. Recovery: close the PR and delete the branch;
-that does not reach forks, mirrors or edit history, which is why the first opened PR is a
-trigger and not a formality.
+**(b) Publication before human review.** There are two public surfaces. The draft PR is public
+when it opens; its body names source-learning paths and the diff is up to 20 lines of up to
+500 characters of model-authored text. A skill-conflict comment carrying the model-derived diff
+can be posted on an unrelated open PR with no human gate. The draft-PR output screen refuses
+credential shapes and scheme-bearing or non-relative links but not email, IP or IBAN shapes,
+bare-host autolinks, names or other prose; the comment path applies the full `PII_REGEX` but
+not a name screen. No Art. 6 basis is recorded for the publication (§3). Accepted, conditionally
+on the pre-first-PR balancing in trigger 1, because the text derives from committed content, the
+cap bounds open PRs at two once any are open, and the limb has not yet been realised (zero draft
+PRs; comments not established). Recovery: close the PR and delete the branch, or delete the
+comment; that does not reach forks, mirrors or edit history, which is why the first opened PR
+or posted comment is a trigger and not a formality.
 
-**(c) Model-chosen text in secondary sinks.** The single redacted, capped error text field, and
-the redacted, capped refused target path, are redacted by shape, not by content. Accepted
-because they are capped (200 bytes and 200 characters), pass through the shared redaction
-function, and are bounded by the closed-vocabulary posture of everything else the marker
-carries. Recovery: log retention is 90 days; the sink is operator-controlled.
+**(c) Model-chosen text in secondary sinks.** The single redacted, capped error text field, the
+redacted, capped refused target path, and the git stderr detail field of the diff-path refusal
+diagnostic are redacted by shape, not by content. Accepted because they are capped (200
+characters each, not bytes), pass through the shared redaction function, and are bounded by the
+reason-name posture of everything else the marker carries. Recovery: log retention is 90 days as
+last measured (2026-09-04); the sink is operator-controlled. Triggers: 7, 15.
 
 **(d) Prompt injection through the corpus.** A learning is untrusted data. Phase 2 delimits it
-with a per-call nonce and labels it as data; the output is additive-only and validated; a
-human reviews before merge. A hostile or mistaken learning could still steer the text of a
-proposed rule. The harm is a misleading or low-quality rule proposal, caught at merge, not an
-action on a person. Whether that is adequate as an engineering control is for the CTO; this
-memo evaluates only that no write or act authority beyond a draft PR exists.
+with a per-call nonce and labels it as data; **phase 1 does not**: the whole corpus is appended
+undelimited after a heading, with validation only on the chosen target path and the source
+list, so a hostile learning can steer which target is chosen and the rationale text that flows
+into phase 2, not only phase 2 text. The output is additive-only and validated; a human reviews
+a draft PR before merge. The draft PR is created with synthetic status for most required
+checks other than the test check (including the skill security scan gate), and whether real CI
+supersedes them was not verified, so human review is the effective gate and no real skill scan
+should be assumed behind a `SKILL.md` draft. A hostile or mistaken learning could still steer
+the text of a proposed rule. The harm is a misleading or low-quality rule proposal, caught at
+merge for a draft PR, not an action on a person. Whether that is adequate as an engineering
+control is for the CTO; this memo evaluates only that no write or act authority beyond a draft
+PR or a comment exists.
 
-**(e) 30-day processor retention, Zero-Retention amendment unsigned.** Inherited from PA-31
-section (f) and applicable to both phases. Accepted on the same grounds as there; the operator
-step that would remove it is tracked at the vendor record.
+**(e) 30-day processor retention, Zero-Retention amendment unsigned; Commercial Terms status
+unverified (`anthropic.md`).** Inherited from PA-31 section (f) and applicable to both phases.
+Accepted on the same grounds as there, with the same caveat: DPA applicability rests on the
+Commercial Terms premise, recorded as unverified at the vendor record (open operator action 4),
+which this memo inherits and does not verify. The operator steps that would remove the
+retention and verify the premise are tracked at the vendor record. Triggers: 9, 14.
 
 ## 6. Re-evaluation triggers
 
 Any one of these re-opens this determination. Each is a concrete condition that can be checked.
 The re-arm tracker is **#10676** (state OPEN, labelled `keep-open`, no sweeper directive and no
-probe script, verified 2026-10-20). The same change rewrites the posture row so that it carries
-this list; the two must be read together.
+probe script, verified 2026-10-20). The same change rewrites the posture rows so that they carry
+this list; the two must be read together. The list is the by-analogy anchor of Art. 35(11) (§3).
+There are fifteen numbered triggers: three required and twelve additional. Fourteen are
+distinct. **Trigger 11 restates trigger 1** and is listed only so that nobody treats the run
+date as the event that confirms anything; the posture rows carry the fourteen distinct
+conditions and omit trigger 11 for that reason.
 
 The three required triggers:
 
-1. **First opened draft PR** by the loop. Check: the label search for `self-healing/auto` across
-   all PR states returns a row, or the audit log gains a data row. Action: re-run the empirical
-   limbs (false-positive rate, operator merge ratio) with real counts, review the PR body and
-   diff for identifying text, and amend or supersede this memo. Repeat at the fifth opened PR.
+1. **First opened draft PR, or first posted skill-conflict comment**, by the loop. Check: the
+   label search for `self-healing/auto` across all PR states returns a row, a branch or title
+   search returns a loop PR, the audit log gains a data row (merged PRs only), or a skill-conflict
+   comment is found. Action: re-run the empirical limbs (false-positive rate, operator merge
+   ratio) with real counts, review the PR body, diff or comment for identifying text, decide
+   whether the Privacy Policy purpose gap (§4) must be closed before the next run, and amend or
+   supersede this memo. **Precondition:** a short Arm A-style balancing for persons named in a
+   learning and for publication (§3) is written at or before the first opened PR; a PR opened
+   without it is recorded as a publication without a recorded basis. Repeat the empirical re-run
+   at the fifth opened PR.
 2. **Any change to what is sent to a processor.** This includes the prefilter loosened or
-   bypassed; `EDIT_TARGET_MAX_BYTES` raised above 120,000; the target set widened beyond
+   skipped; `EDIT_TARGET_MAX_BYTES` raised above 120,000; the target set widened beyond
    `AGENTS.rules.md` and the skill `SKILL.md` files; the summary length or fields changed; a
    new call site or model call; or a change of processor or API key. Check: the diff of
    `cron-compound-promote.ts` and of the config file.
 3. **A move off single-operator scale.** A second operator or reviewer, any cohort or customer
-   user's data in the corpus, or the loop pointed at any repository other than the Soleur
-   repository.
+   user's data in the corpus (the cohort-onboarding trigger fired on 2026-08-06 for other
+   activities; the check here is whether tester-derived learnings have entered the corpus, which
+   was not done, §7), or the loop pointed at any repository other than the Soleur repository.
 
 Additional triggers:
 
-4. **Corpus made private**, or widened beyond committed learnings files (including any
+4. **Corpus made private, or widened** beyond committed learnings files (including any
    uncommitted or session content).
 5. **Auto-merge or a reduced human gate.** The draft flag dropped, `mergeMode` changed from
    none, or the operator review requirement removed.
 6. **First observed identifying text or special-category content** in a source summary, a model
-   output, a draft PR body or diff, or a prefilter miss found in the corpus.
+   output, a draft PR body, diff or comment, or a prefilter miss found in the corpus.
 7. **The marker or the secondary sinks gaining model-supplied free text** beyond the single
-   redacted, capped error text field.
+   redacted, capped error text field and the shape-redacted git stderr detail.
 8. **A recipient other than the operator** for the output, apart from the processors and host
    already recorded.
 9. **The Anthropic retention terms change** (the Zero-Retention amendment is signed, or the
    window changes): update residuals (a) and (e).
 10. **PR #10673 merges** (it also edits the cron): re-read its diff against trigger 2 before
     relying on this memo.
-11. **A reviewer finds, or the 2026-10-25 run shows, that phase 2 now opens PRs.** That is
-    trigger 1; it is listed so that nobody treats the run date as the event that confirms
-    anything.
+11. **A reviewer finds, or the 2026-10-25 run shows, that phase 2 now opens PRs.** This restates
+    trigger 1.
 12. **Quarterly**, alongside the Article 30 register review cadence.
+13. **Counsel or an authority concludes otherwise**: that the Art. 35(1) threshold question was
+    answered wrongly, or that the interval since 2026-07-06 is a timing failure (§0).
+14. **The Anthropic account is found to be on Consumer Terms**, or the Commercial Terms premise
+    is otherwise disproved (`anthropic.md`, open operator action 4): residuals (a) and (e) and
+    the processor reasoning in §3 fall away until re-assessed.
+15. **The marker's field set changes**, including any outcome of the open decision challenge
+    #8443.
 
 ## 7. Limitations: what this memo does not establish
 
@@ -274,11 +379,21 @@ Additional triggers:
   not queried. Per-run outcomes exist only for 2026-09-19 to 2026-10-18, were read by the work
   agent, and were not re-run by the CLO. Cluster counts before 2026-09-19 are not derivable.
 - **Corpus content.** The corpus was not sampled for names or other identifying prose, and the
-  memo cannot say how many learnings contain any. That unknown is residual (a).
-- **Art. 35(1) timing.** Processing began 2026-07-06 without a completed assessment. This memo
-  is retrospective and records the controller's position that the risk was not high; it is not a
-  contemporaneous DPIA.
-- **Balancing.** No new Art. 6(1)(f) balancing was done; the PA-31 record is relied on.
+  memo cannot say how many learnings contain any. That unknown is residual (a). It was also not
+  checked for tester-derived learnings, although the cohort-onboarding trigger fired on
+  2026-08-06 under the same key; "not intended to be in the corpus" is the most this memo can
+  say, and no enforcing control is cited.
+- **Art. 35(1) timing.** Processing began 2026-07-06 without a completed assessment or a
+  documented threshold determination (§0). This memo is retrospective and records this draft's
+  position, pending operator adoption and counsel review, that the risk was not high; it is not
+  a contemporaneous DPIA, and it does not cure the interval if counsel disagrees (trigger 13).
+- **Balancing.** No new Art. 6(1)(f) balancing was done. The PA-31 record is relied on only for
+  already-published content of authors and contributors; none is claimed for persons named in a
+  learning or for publication (§3).
+- **Closure of #6107.** The daily sweeper closes #6107 on the existence of this file. That
+  records the **filing** of this memo only; it is not counsel review and not an outcome. Who is
+  expected to notice the first opened PR: the operator, via the draft PR itself and the #10552
+  probe on or after 2026-10-25; the re-arm tracker #10676 is passive and notifies no one.
 - **Engineering adequacy.** Whether the injection and output controls are adequate as
   engineering is not assessed here (CTO).
 - **Review status.** This is an AI-assisted draft and a CLO-agent internal assessment for the
