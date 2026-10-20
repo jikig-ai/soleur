@@ -265,6 +265,19 @@ describe("model contract (#10552)", () => {
     expect(prompt).not.toContain("proposed_diff_unified");
     expect(prompt).not.toContain("byte_impact");
   });
+
+  it("the phase-1 prompt states the quorum from the constant, tells the model the server enforces it, and keeps no literal threshold", () => {
+    const src = readFileSync(
+      join(__dirname, "../../../server/inngest/functions/cron-compound-promote.ts"),
+      "utf-8",
+    );
+    const start = src.indexOf("You are a clustering agent");
+    const prompt = src.slice(start, src.indexOf("].join(", start));
+    expect(prompt).toContain("${PROMOTION_QUORUM}");
+    expect(prompt).not.toMatch(/>=\s*\d/);
+    // The model is told a short cluster is refused, so it does not spend a slot on one.
+    expect(prompt).toMatch(/server refuses a cluster with fewer/);
+  });
 });
 
 // =============================================================================

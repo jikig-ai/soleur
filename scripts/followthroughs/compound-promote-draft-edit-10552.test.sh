@@ -24,7 +24,8 @@
 # the query helper's argv (the --since window and both --limit values), freeze the
 # probe's clock with a PATH-shimmed `date` for the 35-day boundary pair, and prove
 # nothing raw from the query helper's stderr reaches the output. Mutation rows M-5 ..
-# M-13 prove each of those guards is load-bearing.
+# M-13 prove each of those guards is load-bearing. Rows P-4b / P-4c and M-14 / M-15 pin the
+# server-enforced quorum refusal `quorum-not-met` as class N (never PASS, never FAIL).
 #
 # All fixtures are synthesized. Nothing here talks to a network or reads a secret.
 set -uo pipefail
@@ -175,6 +176,16 @@ expect_rc "P-4" 2 "$PROBE_RC"
 for r in edit-anchor-not-found edit-invalid edit-anchor-ambiguous edit-target-unreadable edit-target-too-large edit-target-duplicate; do
   if grep -q -- "$r" "$PROBE_DIR/err"; then pass "P-4: prints $r"; else fail "P-4: $r missing from: $(err_of)"; fi
 done
+
+echo "P-4b. a run that refused only quorum-not-met (a sub-quorum cluster, no model call) is class N -> exit 2, reason printed, never PASS"
+probe_rows -- "$C" "$(mk_row "$(marker cron completed 0 '["quorum-not-met"]')" "$D1")"
+expect_rc "P-4b" 2 "$PROBE_RC"
+if [[ "$(out_of)" != "PASS" ]]; then pass "P-4b: stdout is not PASS"; else fail "P-4b: stdout was PASS on a quorum-only window"; fi
+if grep -q -- "quorum-not-met" "$PROBE_DIR/err"; then pass "P-4b: prints quorum-not-met (not bucketed unknown)"; else fail "P-4b: quorum-not-met missing from: $(err_of)"; fi
+
+echo "P-4c. a sub-quorum refusal beside a class-P sibling in the same run does not suppress the proof -> exit 0"
+probe_rows -- "$C" "$(mk_row "$(marker cron completed 0 '["quorum-not-met","byte-budget-overflow"]')" "$D1")"
+expect_rc "P-4c" 0 "$PROBE_RC"
 
 echo "P-5. a class-P refusal and no class-F refusal -> exit 0"
 for r in byte-budget-overflow not-committed-pr-create; do
@@ -631,6 +642,15 @@ h_argv() { sc_argv "$1"; [[ "$SC_RC" == 0 ]] && argv_is "$SC_DIR" "$(win_for "$N
 h_exact35() { sc_boundary "$1" $((35 * 86400)); [[ "$SC_RC" == 5 ]]; }
 h_not_yet34() { sc_boundary "$1" $((35 * 86400 - 3600)); [[ "$SC_RC" == 2 ]]; }
 h_hygiene() { sc_hygiene "$1"; [[ "$SC_RC" == 3 ]] && ! grep -q 'RAW-HELPER-LEAK\|INJECTED' "$SC_DIR/err"; }
+# A run refusing only quorum-not-met: healthy = exit 2 (class N) AND the reason is printed by
+# name. Dropping it from the N set prints `unknown` (the name vanishes); adding it to the P set
+# turns the run into a PASS (exit 0).
+h_quorum() {
+  local d rc
+  d=$(make_sandbox "$(fx "$C" "$(mk_row "$(marker cron completed 0 '["quorum-not-met"]')" "$D1")")" "$1")
+  rc=$(run_probe "$d")
+  [[ "$rc" == 2 ]] && grep -q -- "quorum-not-met" "$d/err"
+}
 
 mut_row() { # mut_row <id> <description> <old> <new> <healthy-predicate>
   local id="$1" desc="$2" m
@@ -661,11 +681,15 @@ mut_row M-12 "escalation budget 35 -> 34 days (34d23h stops being NOT YET)" \
 mut_row M-13 "rc-3 path echoes the helper's raw output again" \
   $'exited 3 (%s): the query never ran (credentials not injected into the helper).\\n\' "$label" >&2' \
   $'exited 3 (%s): %s\\n\' "$label" "$(head -c 400 "$QOUT")" >&2' h_hygiene
+mut_row M-14 "quorum-not-met dropped from the N set -> it is bucketed unknown and its name vanishes" \
+  ',"quorum-not-met"];' '];' h_quorum
+mut_row M-15 "quorum-not-met added to the P set -> a quorum-only window becomes a false PASS" \
+  'def pset: ["byte-budget-overflow"];' 'def pset: ["byte-budget-overflow","quorum-not-met"];' h_quorum
 }
 
 
 # --- verdict: floor + conservation reported DIRECTLY, never via pass()/fail() --
-MIN_CASES=175
+MIN_CASES=183
 total=$((passes + fails))
 if (( total < MIN_CASES )); then
   printf 'FATAL: only %d case(s) ran; floor is %d - the suite asserted nothing\n' "$total" "$MIN_CASES" >&2

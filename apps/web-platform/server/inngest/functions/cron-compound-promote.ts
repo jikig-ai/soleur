@@ -66,6 +66,16 @@ const TOKEN_MIN_LIFETIME_MS = 15 * 60 * 1000;
 
 const WEEK_CAP_DEFAULT = 2;
 export const MAX_DIFF_BYTES = 16384;
+/**
+ * The quorum: the fewest DISTINCT, corpus-resolved source learnings a cluster may cite and
+ * still be drafted. The phase-1 prompt, the refusal in `draftAdditiveEdit` and the
+ * `Threshold-Hit: N/<quorum>` trailer all read this one constant (census Guard 1d).
+ *
+ * A code constant on purpose, not `promotion-config.yml`: a config-only change must not be
+ * able to weaken what may be proposed into the always-loaded rules. Changing the value needs
+ * an ADR-092 Amendment and the matching line in `compound-promote-runbook.md`.
+ */
+export const PROMOTION_QUORUM = 5;
 
 // Always-loaded (AGENTS.md + AGENTS.rules.md) byte budgets.
 //
@@ -639,6 +649,13 @@ interface ProposedCluster {
   target_path: string;
   source_learnings: string[];
   rationale: string;
+  /**
+   * The length of the model's raw `source_learnings` list BEFORE normalisation. Diagnostic
+   * only: it rides the Sentry event of a quorum refusal (never the outcome marker), so one
+   * event separates "the model proposed too few" from "normalisation dropped paths that are
+   * not in the corpus".
+   */
+  raw_source_count?: number;
 }
 
 /** A proposal plus the diff the SERVER derived for it; the only shape the apply step reads. */
@@ -912,6 +929,9 @@ async function applyDiffToWorkspace(
 // one emit site; the refusal-enum table in `betterstack-log-query.md`, the runbook and
 // the follow-through probe's P/F/N classes
 // (`scripts/followthroughs/compound-promote-draft-edit-10552.sh`) move with it.
+// `quorum-not-met` (the PROMOTION_QUORUM refusal) is not an `edit-*` member but moves with
+// the same artifacts, and census Guard 1d pins its single declaration, single emit site and
+// the three places that read the constant.
 
 export const DRAFT_EDIT_TIMEOUT_MS = 120_000;
 export const DRAFT_EDIT_MAX_TOKENS = 4_096;
@@ -932,9 +952,15 @@ export const EDIT_REFUSAL_REASONS = [
 export type EditRefusalReason = (typeof EDIT_REFUSAL_REASONS)[number];
 export type EditRefusal = {
   ok: false;
-  reason: EditRefusalReason | "target-path-refused";
+  // `quorum-not-met` is deliberately not an `edit-*` member (Guard 1b pins that prefix to the
+  // seven in EDIT_REFUSAL_REASONS); `target-path-refused` is the precedent.
+  reason: EditRefusalReason | "target-path-refused" | "quorum-not-met";
   /** Closed vocabulary; goes to the Sentry tag, never to the marker. */
   cause: string;
+  /** Quorum refusal only: distinct corpus-resolved sources. A bare integer, Sentry `extra` only. */
+  sourceCount?: number;
+  /** Quorum refusal only: the model's raw list length before normalisation. Sentry `extra` only. */
+  proposedCount?: number;
 };
 export type DraftEditResult = { ok: true; diff: string } | EditRefusal;
 
@@ -1255,7 +1281,7 @@ export async function buildAdditiveEditDiff(input: {
  * `retries: 1`); only a model-side or content problem is a refusal.
  */
 export async function draftAdditiveEdit(args: {
-  cluster: { target_path: string; rationale: string; source_learnings: string[] };
+  cluster: { target_path: string; rationale: string; source_learnings: string[]; raw_source_count?: number };
   repoRoot: string;
   apiKey: string;
   runId?: string;
@@ -1267,12 +1293,10 @@ export async function draftAdditiveEdit(args: {
   const { cluster, repoRoot, apiKey, runId, corpusSummaries, headroomBytes } = args;
   const post = args.post ?? postAnthropicMessage;
 
-  const target = await readEditTarget(repoRoot, cluster.target_path);
-  if (!target.ok) return target;
-
   // Summaries come from a Map built from the already-collected corpus. A model-supplied
   // path that is not a key is DROPPED, never read from disk: `readFile(join(repoRoot, p))`
-  // on a model string would send an arbitrary file to Anthropic.
+  // on a model string would send an arbitrary file to Anthropic. This loop is pure (a Map
+  // lookup), so it sits ABOVE every git read: the quorum check below needs no I/O.
   const sources: Array<{ path: string; summary: string }> = [];
   for (const p of cluster.source_learnings) {
     const summary = corpusSummaries.get(p);
@@ -1280,7 +1304,23 @@ export async function draftAdditiveEdit(args: {
       sources.push({ path: p, summary });
     }
   }
-  if (sources.length === 0) return invalidEdit("no-source");
+  // The server-side quorum (ADR-092 Amendment 2026-10-20). `sources` is exactly the set the
+  // model would be shown, so this counts what phase 2 would actually draw on. It is the FIRST
+  // statement that can refuse: before `readEditTarget` (no git read) and before the model
+  // call (no spend). Zero sources is below any positive quorum, so the former
+  // `edit-invalid`/`no-source` cause is subsumed here.
+  if (sources.length < PROMOTION_QUORUM) {
+    return {
+      ok: false,
+      reason: "quorum-not-met",
+      cause: "below-quorum",
+      sourceCount: sources.length,
+      ...(cluster.raw_source_count === undefined ? {} : { proposedCount: cluster.raw_source_count }),
+    };
+  }
+
+  const target = await readEditTarget(repoRoot, cluster.target_path);
+  if (!target.ok) return target;
 
   // Per-call nonce: a hostile learning cannot pre-write the closing marker.
   const nonce = randomBytes(8).toString("hex");
@@ -1630,8 +1670,8 @@ export async function cronCompoundPromoteHandler({
       const eligibleTargets = await listEligibleTargets(repoRoot);
 
       const prompt = [
-        `You are a clustering agent. Cluster the following learnings by problem/root-cause similarity. Return up to ${weekCapResult.remaining} qualifying clusters (each with >=5 source learnings).`,
-        `Schema: {clusters:[{cluster_hash:'', tier:'skill'|'agents-core', target_path:string, source_learnings:[paths], rationale:string}]}. You do NOT write any diff: a later step edits the file.`,
+        `You are a clustering agent. Cluster the following learnings by problem/root-cause similarity. Return up to ${weekCapResult.remaining} qualifying clusters (each with >=${PROMOTION_QUORUM} source learnings; the server refuses a cluster with fewer, so do not return one).`,
+        `Schema: {clusters:[{cluster_hash:'', tier:'skill'|'agents-core', target_path:string, source_learnings:[paths], rationale:string}]}. Each source_learnings entry must be an exact path key from the corpus, ${PROMOTION_QUORUM} or more distinct ones per cluster. You do NOT write any diff: a later step edits the file.`,
         `Apply AGENTS.md cq-agents-md-tier-gate: already-enforced -> skip; domain-scoped -> skill; cross-cutting -> agents-core targeting AGENTS.rules.md.`,
         `Current always-loaded payload (AGENTS.md + AGENTS.rules.md) is ${alwaysLoadedNow} bytes; propose against a budget of ${PROPOSE_ALWAYS_LOADED_BUDGET} bytes (the warn floor — leave headroom, do not aim for the hard ceiling).`,
         `target_path MUST be one of: AGENTS.rules.md, plugins/soleur/skills/<skill-name>/SKILL.md. The workflow refuses any other path. cluster_hash is ignored (the workflow computes it).`,
@@ -1687,6 +1727,11 @@ export async function cronCompoundPromoteHandler({
         return { clusters: [] as ProposedCluster[], truncated: false };
       }
 
+      // Known consequence (ADR-092 Amendment 2026-10-20): this slice runs BEFORE the
+      // normalisation below, so a cluster the server later refuses `quorum-not-met` still
+      // occupies one of the `remaining` proposal slots. Moving the quorum filter ahead of
+      // the slice would need the corpus-key check inside this step (replay risk) and would
+      // hide refusals from the marker, so it is documented, not fixed.
       return { clusters: (parsed.clusters as ProposedCluster[]).slice(0, weekCapResult.remaining), truncated: false };
     }, MAX_RUN_DURATION_MS));
 
@@ -1715,7 +1760,8 @@ export async function cronCompoundPromoteHandler({
     // The parse above is a cast of model output. Rebuild each proposal field by field and keep
     // only source learnings that are keys of the collected corpus: they flow into the cluster
     // hash, the commit trailers and the PR body, where a newline in a model-invented path would
-    // forge a trailer. A cluster left with none is refused `edit-invalid` (no-source).
+    // forge a trailer. A cluster left with fewer than PROMOTION_QUORUM is refused
+    // `quorum-not-met` by `draftAdditiveEdit`, before any model call.
     const proposals: ProposedCluster[] = clusterResult.clusters
       .filter((c) => typeof c === "object" && c !== null)
       .map((c) => ({
@@ -1723,6 +1769,8 @@ export async function cronCompoundPromoteHandler({
       tier: c.tier === "skill" ? "skill" : "agents-core",
       target_path: typeof c.target_path === "string" ? c.target_path : "",
       rationale: typeof c.rationale === "string" ? c.rationale : "",
+      // Captured BEFORE the filter below: a diagnostic integer for a quorum refusal's Sentry event.
+      raw_source_count: Array.isArray(c.source_learnings) ? c.source_learnings.length : 0,
       // Deduped: five copies of one path must not read as five learnings (`Threshold-Hit`).
       source_learnings: [
         ...new Set(
@@ -1790,7 +1838,11 @@ export async function cronCompoundPromoteHandler({
             feature: "cron-compound-promote", op: "draft-edit-refused",
             message: `draft edit refused: ${result.reason} (${result.cause})`,
             tags: { reason: result.reason, cause: result.cause },
-            extra: { cluster_hash: clusterHash },
+            extra: {
+              cluster_hash: clusterHash,
+              ...(result.sourceCount === undefined ? {} : { source_count: result.sourceCount }),
+              ...(result.proposedCount === undefined ? {} : { proposed_count: result.proposedCount }),
+            },
           });
           return { kind: "refused", reason: result.reason };
         }
@@ -2046,7 +2098,7 @@ export async function cronCompoundPromoteHandler({
         const trailer = [
           `Bot-Author: compound-promotion-loop@${process.env.GITHUB_SHA ?? "local"}`,
           `Source-Learnings: ${cluster.source_learnings.join(",")}`,
-          `Threshold-Hit: ${cluster.source_learnings.length}/5`,
+          `Threshold-Hit: ${cluster.source_learnings.length}/${PROMOTION_QUORUM}`,
           `Cluster-Hash: ${clusterHash}`,
           `Tier: ${cluster.tier}`,
         ].join("\n");

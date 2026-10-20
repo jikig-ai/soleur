@@ -235,3 +235,54 @@ diff that git then rejects, which is a server defect. The marker field set is un
 
 **C4.** No change: the same Inngest function calls the same external systems. The "C4 views
 deferred" bullet above stays accurate.
+
+## Amendment — server-enforced promotion quorum (2026-10-20)
+
+**Where the "5" is enforced changed.** The loop promises a cluster only when at least five source
+learnings back it, but that number lived only in the phase-1 prompt and as the literal `/5` in the
+draft PR trailer `Threshold-Hit: N/5`; the server never checked it, so a two-learning cluster could
+open a draft PR whose own trailer read `2/5`. The quorum is now enforced in code by the exported
+constant `PROMOTION_QUORUM` in `apps/web-platform/server/inngest/functions/cron-compound-promote.ts`.
+It is a code constant on purpose, not a field of `promotion-config.yml`: a config-only change must not
+be able to weaken what may be proposed into the always-loaded corpus. Changing its value needs an
+amendment to this ADR and the matching line in `compound-promote-runbook.md`. The phase-1 prompt, the
+check and the trailer denominator all read it, and census Guard 1d pins one declaration and those
+three reads (it pins consistency, not the value; a value-pin test makes a change a visible diff).
+
+**The check.** It is the first statement that can refuse inside `draftAdditiveEdit`: it counts the
+cluster's DISTINCT source learnings that are keys of the collected corpus (exactly the set phase 2
+would show the model, after the PR #10553 normalisation) and refuses a count below the quorum as
+`quorum-not-met` (Sentry cause `below-quorum`). It runs before `readEditTarget`, so no git read
+happens, and before the phase-2 model call, so nothing is spent. It subsumes the former
+`edit-invalid`/`no-source` cause (zero sources is below any positive quorum), which is deleted. The
+draft callback itself still checks the API key and reads the always-loaded files before it reaches the
+drafter; those are not model calls and are accepted. Order for one cluster: duplicate target
+(`edit-target-duplicate`, handler body), then `target-path-refused` (first check in the draft step),
+then `quorum-not-met`, then the git reads and the model call.
+
+**Why inside the draft step, not beside it.** The refusal rides the existing memoized
+`draft-edit-<hash8>` step, so it reuses the one `DraftOutcome` -> `record()` -> marker `refusals[]` path
+and the Sentry event fires once per step, not once per replay. A handler-body predicate would re-fire
+the Sentry call on every replay, and a second memoized step would break census Guard 3b, which allows
+exactly one `Promise<DraftOutcome>` callback.
+
+**Vocabulary and observability.** `quorum-not-met` is a new member of the refusal vocabulary but not an
+`edit-*` one: `EDIT_REFUSAL_REASONS` stays at seven (Guard 1b pins that prefix), as `target-path-refused`
+before it. Sentry reuses op `draft-edit-refused` with tags `reason` and `cause`, plus two bare-integer
+`extra` fields, `source_count` (distinct resolved) and `proposed_count` (the model's raw list length
+before normalisation), which separate "the model proposed too few" from "normalisation dropped paths the
+corpus does not hold". The outcome-marker field set is unchanged (`compound-promote-marker.ts` is not
+edited). The follow-through probe for #10552 classes the reason N: a quorum refusal is a model-side
+outcome, never proof (PASS) and never a server defect (FAIL).
+
+**Known consequences, stated so they are not rediscovered.** A refused cluster still occupies one of the
+week-cap proposal slots (the phase-1 answer is sliced to the remaining cap before the server normalises
+it), and still counts in the headroom divisor `proposals.length - clusterIndex`, so a valid first
+cluster can be offered a smaller headroom share. Moving the filter ahead of the slice was rejected: it
+needs the corpus-key check inside the phase-1 step (replay risk) and would hide refusals from the marker.
+The gate counts distinct corpus paths, not relatedness, so `Threshold-Hit: 5/5` is a floor, and the
+human review of every draft PR is unchanged. A `draft-edit-*` step memoized by an older deploy resumes
+on the new code with its stored outcome; the window is one weekly run.
+
+**C4.** No change (CTO ruling 2026-10-20): the same Inngest function calls the same external systems;
+model call volume only falls.

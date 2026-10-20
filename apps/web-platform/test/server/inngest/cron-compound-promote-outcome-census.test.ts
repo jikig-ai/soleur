@@ -808,3 +808,155 @@ describe("Guard 1c (#10552) -- proposed_diff_unified comes from the derived diff
     expect(stripped.split("TARGET_ALLOW_RE.test(").length - 1).toBe(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Guard 1d -- the promotion quorum is ONE named constant, and the three places that used to
+// spell the number (the phase-1 prompt, the `Threshold-Hit` trailer, the drafter's refusal)
+// all read it. A census over the parse tree, never a list of today's call sites.
+//
+// What this pins and what it does not: it pins that the code reads the constant everywhere
+// and that the refusal has exactly one emit site. It does not pin the VALUE (the value row in
+// cron-compound-promote-draft-edit.test.ts does, and the ADR-092 Amendment names it).
+// ---------------------------------------------------------------------------
+
+// window-assembly: censusQuorum -- complete against the whole module, parsed once: every
+// VariableDeclaration, TemplateExpression, BinaryExpression and `reason` PropertyAssignment
+// in the file is visited, so a second declaration or emit site ANYWHERE in the module is
+// counted, not only those in today's functions.
+export function censusQuorum(src: string): {
+  declaredValue: number;
+  promptQuorumSpans: number;
+  promptHasNumericThreshold: boolean;
+  trailerQuorumSpans: number;
+  trailerHasNumericDenominator: boolean;
+  comparisons: number;
+  emits: number;
+} {
+  const sf = ts.createSourceFile("t.ts", src, ts.ScriptTarget.Latest, true);
+  const decls: number[] = [];
+  let promptQuorumSpans = 0;
+  let promptHasNumericThreshold = false;
+  let promptSeen = 0;
+  let trailerQuorumSpans = 0;
+  let trailerHasNumericDenominator = false;
+  let trailerSeen = 0;
+  let comparisons = 0;
+  let emits = 0;
+  const isQuorum = (e: ts.Node): boolean => ts.isIdentifier(e) && e.text === "PROMOTION_QUORUM";
+  const pieces = (t: ts.TemplateExpression): string[] => [t.head.text, ...t.templateSpans.map((s) => s.literal.text)];
+  const visit = (n: ts.Node): void => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === "PROMOTION_QUORUM") {
+      decls.push(n.initializer && ts.isNumericLiteral(n.initializer) ? Number(n.initializer.text) : Number.NaN);
+    }
+    if (ts.isTemplateExpression(n)) {
+      if (n.head.text.includes("clustering agent")) {
+        promptSeen++;
+        promptQuorumSpans += n.templateSpans.filter((s) => isQuorum(s.expression)).length;
+        if (pieces(n).some((p) => />=\s*\d/.test(p))) promptHasNumericThreshold = true;
+      }
+      if (n.head.text.startsWith("Threshold-Hit:")) {
+        trailerSeen++;
+        const last = n.templateSpans[n.templateSpans.length - 1];
+        if (last && isQuorum(last.expression)) trailerQuorumSpans++;
+        if (pieces(n).some((p) => /\/\s*\d/.test(p))) trailerHasNumericDenominator = true;
+      }
+    }
+    if (
+      ts.isBinaryExpression(n) &&
+      n.operatorToken.kind === ts.SyntaxKind.LessThanToken &&
+      n.left.getText(sf) === "sources.length" &&
+      isQuorum(n.right)
+    ) {
+      comparisons++;
+    }
+    if (
+      ts.isPropertyAssignment(n) &&
+      ts.isIdentifier(n.name) &&
+      n.name.text === "reason" &&
+      (ts.isStringLiteral(n.initializer) || ts.isNoSubstitutionTemplateLiteral(n.initializer)) &&
+      n.initializer.text === "quorum-not-met"
+    ) {
+      emits++;
+    }
+    n.forEachChild(visit);
+  };
+  visit(sf);
+  if (decls.length !== 1) throw new Error(`expected exactly 1 PROMOTION_QUORUM declaration, found ${decls.length}`);
+  if (Number.isNaN(decls[0])) throw new Error("PROMOTION_QUORUM must be initialised with a numeric literal");
+  if (promptSeen !== 1) throw new Error(`expected exactly 1 phase-1 prompt template, found ${promptSeen}`);
+  if (trailerSeen !== 1) throw new Error(`expected exactly 1 Threshold-Hit template, found ${trailerSeen}`);
+  return {
+    declaredValue: decls[0],
+    promptQuorumSpans,
+    promptHasNumericThreshold,
+    trailerQuorumSpans,
+    trailerHasNumericDenominator,
+    comparisons,
+    emits,
+  };
+}
+
+describe("Guard 1d -- PROMOTION_QUORUM is the single source of the quorum", () => {
+  beforeEach(() => {
+    expect.hasAssertions();
+  });
+  const read = () => readFileSync(SRC_PATH, "utf-8");
+
+  it("one numeric declaration; the prompt, the trailer and the drafter's comparison each read it; exactly one emit site", () => {
+    const c = censusQuorum(read());
+    expect(c.declaredValue).toBeGreaterThan(0);
+    expect(c.promptQuorumSpans).toBe(1);
+    expect(c.promptHasNumericThreshold).toBe(false);
+    expect(c.trailerQuorumSpans).toBe(1);
+    expect(c.trailerHasNumericDenominator).toBe(false);
+    expect(c.comparisons).toBe(1);
+    expect(c.emits).toBe(1);
+  });
+
+  it("quorum-not-met is NOT an edit-* member: EDIT_REFUSAL_REASONS stays at seven", () => {
+    const { declared } = censusEditReasons(read());
+    expect(declared).toHaveLength(7);
+    expect(declared).not.toContain("quorum-not-met");
+  });
+
+  // Each mutation is an in-file row (a PR-body table does not run in CI), one `it` per member
+  // so a failure names the member. The anchor must LAND or the row is vacuous.
+  const mutate = (anchor: string, replacement: string): string => {
+    const src = read();
+    expect(src, `anchor must land: ${anchor}`).toContain(anchor);
+    const out = src.replace(anchor, replacement);
+    expect(out).not.toBe(src);
+    return out;
+  };
+
+  it("mutation: the phase-1 prompt back to a literal threshold is RED", () => {
+    const c = censusQuorum(mutate("(each with >=${PROMOTION_QUORUM} source learnings", "(each with >=5 source learnings"));
+    expect(c.promptQuorumSpans === 1 && !c.promptHasNumericThreshold).toBe(false);
+  });
+
+  it("mutation: the trailer denominator back to a literal /5 is RED", () => {
+    const c = censusQuorum(mutate("/${PROMOTION_QUORUM}`,", "/5`,"));
+    expect(c.trailerQuorumSpans === 1 && !c.trailerHasNumericDenominator).toBe(false);
+  });
+
+  it("mutation: deleting the drafter's comparison is RED", () => {
+    const c = censusQuorum(mutate("sources.length < PROMOTION_QUORUM", "sources.length < 0"));
+    expect(c.comparisons).toBe(0);
+  });
+
+  it("mutation: a second emit site for the reason is RED", () => {
+    const c = censusQuorum(read() + '\nexport const _second = { reason: "quorum-not-met" };\n');
+    expect(c.emits).toBe(2);
+  });
+
+  it("mutation: the emit site removed is RED", () => {
+    const c = censusQuorum(mutate('reason: "quorum-not-met"', 'reason: "edit-invalid"'));
+    expect(c.emits).toBe(0);
+  });
+
+  it("dispatch: zero or two declarations THROW, never read clean", () => {
+    expect(() => censusQuorum(read().replace("export const PROMOTION_QUORUM = 5;", ""))).toThrow(/found 0/);
+    expect(() => censusQuorum(read() + "\nconst PROMOTION_QUORUM = 4;\n")).toThrow(/found 2/);
+    expect(() => censusQuorum(read().replace("PROMOTION_QUORUM = 5;", "PROMOTION_QUORUM = Number('5');"))).toThrow(/numeric literal/);
+  });
+});

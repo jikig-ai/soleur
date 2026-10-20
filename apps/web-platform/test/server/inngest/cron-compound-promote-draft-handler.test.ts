@@ -53,10 +53,15 @@ vi.mock("@/server/compound-promote-marker", async (importOriginal) => ({
 }));
 
 import { reportSilentFallback } from "@/server/observability";
-import { cronCompoundPromoteHandler } from "@/server/inngest/functions/cron-compound-promote";
+import { PROMOTION_QUORUM, cronCompoundPromoteHandler } from "@/server/inngest/functions/cron-compound-promote";
 import { gitFixture, gitFixtureEnv } from "../../../../../plugins/soleur/test/lib/git-fixture-env";
 
 const L = (n: number) => `knowledge-base/project/learnings/l${n}.md`;
+// Every fixture size derives from the constant, never a literal 5: a fixture that hard-codes
+// the quorum keeps passing when the constant is lowered. `Ls(start, count)` is `count`
+// consecutive corpus paths from `L(start)`.
+const Q = PROMOTION_QUORUM;
+const Ls = (start: number, count: number) => Array.from({ length: count }, (_, i) => L(start + i));
 const SKILL = "plugins/soleur/skills/alpha/SKILL.md";
 
 const AGENTS_RULES = [
@@ -100,7 +105,7 @@ beforeAll(() => {
   put(SKILL, SKILL_TEXT);
   put("knowledge-base/project/promotion-config.yml", "enabled: true\n");
   put("knowledge-base/project/learnings/promotion-log.md", "| date | hash | target | n | status | tier | pr |\n");
-  for (let n = 1; n <= 6; n++) put(L(n), `# Learning ${n}\n\nA recurring failure number ${n} about test ordering.\n`);
+  for (let n = 1; n <= 2 * Q + 2; n++) put(L(n), `# Learning ${n}\n\nA recurring failure number ${n} about test ordering.\n`);
   git(["add", "-A"]);
   git(["commit", "-qm", "init"]);
   h.cloneUrl = `file://${remoteDir}`;
@@ -133,13 +138,13 @@ type Cl = {
 const AGENTS_CLUSTER: Cl = {
   tier: "agents-core",
   target_path: "AGENTS.rules.md",
-  source_learnings: [L(1), L(2)],
+  source_learnings: Ls(1, Q),
   rationale: "RATIONALE-AGENTS",
 };
 const SKILL_CLUSTER: Cl = {
   tier: "skill",
   target_path: SKILL,
-  source_learnings: [L(3), L(4)],
+  source_learnings: Ls(Q + 1, Q),
   rationale: "RATIONALE-SKILL",
 };
 
@@ -246,7 +251,7 @@ describe("a refused draft is a counted, named refusal that skips the apply step"
   });
 
   it("refused-then-good: a REFUSED first draft does not block a later valid cluster on the same target", async () => {
-    const second: Cl = { ...AGENTS_CLUSTER, source_learnings: [L(5), L(6)], rationale: "RATIONALE-AGENTS-2" };
+    const second: Cl = { ...AGENTS_CLUSTER, source_learnings: Ls(Q + 1, Q), rationale: "RATIONALE-AGENTS-2" };
     stubModel([AGENTS_CLUSTER, second], {
       "RATIONALE-AGENTS-2": GOOD_AGENTS_EDIT,
       "RATIONALE-AGENTS": { insert_after_line: "- Not in the file", new_lines: ["- Rule [id: cq-rule-x]. x"] },
@@ -257,7 +262,7 @@ describe("a refused draft is a counted, named refusal that skips the apply step"
   });
 
   it("T19: a second cluster on an already-drafted target is edit-target-duplicate and the model is NOT called for it", async () => {
-    const second: Cl = { ...AGENTS_CLUSTER, source_learnings: [L(5), L(6)], rationale: "RATIONALE-AGENTS-2" };
+    const second: Cl = { ...AGENTS_CLUSTER, source_learnings: Ls(Q + 1, Q), rationale: "RATIONALE-AGENTS-2" };
     stubModel([AGENTS_CLUSTER, second], { "RATIONALE-AGENTS": GOOD_AGENTS_EDIT });
     const { last } = await run();
     expect(last).toMatchObject({ clusters_proposed: 2, clusters_opened: 1, refusals: ["edit-target-duplicate"] });
@@ -307,29 +312,36 @@ describe("the derived diff is the ONLY diff (a model-supplied proposed_diff_unif
 describe("model-supplied source_learnings never reach the commit trailers or PR body unless they are corpus paths", () => {
   it("a newline-bearing / unknown path is dropped before the cluster hash, the trailer and the PR body", async () => {
     const evil = "knowledge-base/project/learnings/x.md\nCo-Authored-By: Mallory <m@example.test>";
-    stubModel([{ ...AGENTS_CLUSTER, source_learnings: [L(1), evil, "../../etc/passwd", L(2)] }], {
+    stubModel([{ ...AGENTS_CLUSTER, source_learnings: [L(1), evil, "../../etc/passwd", ...Ls(2, Q - 1)] }], {
       "RATIONALE-AGENTS": GOOD_AGENTS_EDIT,
     });
     const { last } = await run();
     expect(last).toMatchObject({ clusters_opened: 1, refusals: [] });
     const cfg = h.safeCommit.mock.calls[0][0] as { commitBody: string; prBody: string };
-    expect(cfg.commitBody).toContain(`Source-Learnings: ${L(1)},${L(2)}\n`);
+    expect(cfg.commitBody).toContain(`Source-Learnings: ${Ls(1, Q).join(",")}\n`);
     expect(cfg.commitBody).not.toContain("Mallory");
     expect(cfg.prBody).not.toContain("Mallory");
     expect(cfg.prBody).not.toContain("etc/passwd");
   });
 
-  it("a cluster whose every source learning is unknown is refused edit-invalid and never calls the model", async () => {
+  it("a cluster whose every source learning is unknown is refused quorum-not-met (zero is below the quorum) and never calls the model", async () => {
     stubModel([{ ...AGENTS_CLUSTER, source_learnings: ["../../a", "../../b"] }], { "RATIONALE-AGENTS": GOOD_AGENTS_EDIT });
     const { last } = await run();
-    expect(last).toMatchObject({ clusters_opened: 0, refusals: ["edit-invalid"] });
+    expect(last).toMatchObject({ clusters_opened: 0, refusals: ["quorum-not-met"] });
     expect(phase2Calls()).toHaveLength(0);
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({
+        op: "draft-edit-refused",
+        extra: expect.objectContaining({ source_count: 0, proposed_count: 2 }),
+      }),
+    );
   });
 });
 
 describe("replay: a resumed run reproduces the same marker from memoized steps", () => {
   it("the duplicate-target refusal survives a full replay and the model is not called again", async () => {
-    const second: Cl = { ...AGENTS_CLUSTER, source_learnings: [L(5), L(6)], rationale: "RATIONALE-AGENTS-2" };
+    const second: Cl = { ...AGENTS_CLUSTER, source_learnings: Ls(Q + 1, Q), rationale: "RATIONALE-AGENTS-2" };
     stubModel([AGENTS_CLUSTER, second], { "RATIONALE-AGENTS-2": GOOD_AGENTS_EDIT, "RATIONALE-AGENTS": GOOD_AGENTS_EDIT });
     const memo = new Map<string, unknown>();
     const first = await run(memo);
@@ -353,7 +365,7 @@ describe("headroom is divided across the clusters still to draft", () => {
     const lone = headroomOf(phase2Calls()[0]);
     h.post.mockReset();
     h.safeCommit.mockClear();
-    const second: Cl = { ...AGENTS_CLUSTER, source_learnings: [L(5), L(6)], rationale: "RATIONALE-AGENTS-2" };
+    const second: Cl = { ...AGENTS_CLUSTER, source_learnings: Ls(Q + 1, Q), rationale: "RATIONALE-AGENTS-2" };
     stubModel([AGENTS_CLUSTER, second], { "RATIONALE-AGENTS-2": GOOD_AGENTS_EDIT, "RATIONALE-AGENTS": GOOD_AGENTS_EDIT });
     await run();
     const first = headroomOf(phase2Calls()[0]);
@@ -402,11 +414,11 @@ describe("round 2: the parse boundary and the headroom order", () => {
   });
 
   it("duplicate source learnings are collapsed before the trailer and the threshold line", async () => {
-    stubModel([{ ...AGENTS_CLUSTER, source_learnings: [L(1), L(1), L(1), L(2)] }], { "RATIONALE-AGENTS": GOOD_AGENTS_EDIT });
+    stubModel([{ ...AGENTS_CLUSTER, source_learnings: [L(1), L(1), L(1), ...Ls(1, Q)] }], { "RATIONALE-AGENTS": GOOD_AGENTS_EDIT });
     await run();
     const cfg = h.safeCommit.mock.calls[0][0] as { commitBody: string };
-    expect(cfg.commitBody).toContain(`Source-Learnings: ${L(1)},${L(2)}\n`);
-    expect(cfg.commitBody).toContain("Threshold-Hit: 2/5");
+    expect(cfg.commitBody).toContain(`Source-Learnings: ${Ls(1, Q).join(",")}\n`);
+    expect(cfg.commitBody).toContain(`Threshold-Hit: ${Q}/${Q}`);
   });
 
   it("an AGENTS draft that comes SECOND is offered the full headroom, not half", async () => {
@@ -421,5 +433,139 @@ describe("round 2: the parse boundary and the headroom order", () => {
     await run();
     const agentsCall = phase2Calls().find((c) => (c[0] as { messages: Array<{ content: string }> }).messages[0].content.includes("headroom for this edit"));
     expect(headroomOf(agentsCall as unknown[])).toBe(lone);
+  });
+});
+
+// =============================================================================
+// The server-enforced quorum: a cluster with fewer than PROMOTION_QUORUM distinct,
+// corpus-resolved sources is refused `quorum-not-met` before any git read and before the
+// phase-2 model call, through the same refusals[] / Sentry path as every other refusal.
+// =============================================================================
+describe("PROMOTION_QUORUM: a sub-quorum cluster is refused and never reaches phase 2", () => {
+  const quorumEvents = () =>
+    vi.mocked(reportSilentFallback).mock.calls.filter((c) => (c[1] as { op?: string }).op === "draft-edit-refused");
+  const SUB = (start: number) => Ls(start, Q - 1);
+
+  it("H1: Q-1 valid sources plus unknown paths -> quorum-not-met, no model call, no commit, exact Sentry shape, marker row carries no count", async () => {
+    // Raw length Q+1 (above the quorum), resolved distinct Q-1 (below it): the resolved set decides.
+    stubModel([{ ...AGENTS_CLUSTER, source_learnings: [...SUB(1), "../../a", "knowledge-base/project/learnings/nope.md"] }], {
+      "RATIONALE-AGENTS": GOOD_AGENTS_EDIT,
+    });
+    const { last, names } = await run();
+    expect(last).toMatchObject({ status: "completed", clusters_proposed: 1, clusters_opened: 0, refusals: ["quorum-not-met"] });
+    expect(phase2Calls()).toHaveLength(0);
+    expect(h.safeCommit).not.toHaveBeenCalled();
+    expect(names.some((n) => n.startsWith("apply-and-pr-"))).toBe(false);
+    const detail = last.refusal_detail as Array<Record<string, unknown>>;
+    expect(detail).toHaveLength(1);
+    // The marker field set is unchanged: the count rides Sentry only.
+    expect(Object.keys(detail[0]).sort()).toEqual(["cluster_hash", "reason"]);
+    expect(detail[0].reason).toBe("quorum-not-met");
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({
+        feature: "cron-compound-promote",
+        op: "draft-edit-refused",
+        message: "draft edit refused: quorum-not-met (below-quorum)",
+        tags: { reason: "quorum-not-met", cause: "below-quorum" },
+        extra: expect.objectContaining({
+          cluster_hash: expect.stringMatching(/^[0-9a-f]{64}$/),
+          source_count: Q - 1,
+          proposed_count: Q + 1,
+        }),
+      }),
+    );
+  });
+
+  it("H2: a sub-quorum cluster beside a valid one (either order, different targets): one opens, one is refused, the run is a green completed one", async () => {
+    for (const order of ["valid-first", "sub-first"] as const) {
+      h.post.mockReset();
+      h.safeCommit.mockClear();
+      vi.mocked(reportSilentFallback).mockClear();
+      const valid = AGENTS_CLUSTER;
+      const sub: Cl = { ...SKILL_CLUSTER, source_learnings: SUB(Q + 1) };
+      stubModel(order === "valid-first" ? [valid, sub] : [sub, valid], {
+        "RATIONALE-AGENTS": GOOD_AGENTS_EDIT,
+        "RATIONALE-SKILL": GOOD_SKILL_EDIT,
+      });
+      const { last, names } = await run();
+      expect(last, order).toMatchObject({ status: "completed", clusters_proposed: 2, clusters_opened: 1, refusals: ["quorum-not-met"] });
+      // The refused cluster is OBSERVED refused (one phase-2 call total, for the valid one),
+      // not merely absent.
+      expect(phase2Calls(), order).toHaveLength(1);
+      expect(h.safeCommit, order).toHaveBeenCalledTimes(1);
+      expect(quorumEvents(), order).toHaveLength(1);
+      expect(names, order).toContain("sentry-heartbeat");
+    }
+  });
+
+  it("H3: a quorum-refused target is not consumed -- a later valid cluster on the same target drafts and opens", async () => {
+    const sub: Cl = { ...AGENTS_CLUSTER, source_learnings: SUB(Q + 1), rationale: "RATIONALE-AGENTS-SUB" };
+    stubModel([sub, AGENTS_CLUSTER], { "RATIONALE-AGENTS": GOOD_AGENTS_EDIT });
+    const { last } = await run();
+    expect(last).toMatchObject({ clusters_proposed: 2, clusters_opened: 1, refusals: ["quorum-not-met"] });
+    expect(last.refusals).not.toContain("edit-target-duplicate");
+    expect(phase2Calls()).toHaveLength(1);
+  });
+
+  it("H4: a valid cluster drafts first, then a sub-quorum cluster on the SAME target is edit-target-duplicate (duplicate outranks quorum)", async () => {
+    const sub: Cl = { ...AGENTS_CLUSTER, source_learnings: SUB(Q + 1), rationale: "RATIONALE-AGENTS-SUB" };
+    stubModel([AGENTS_CLUSTER, sub], { "RATIONALE-AGENTS": GOOD_AGENTS_EDIT });
+    const { last } = await run();
+    expect(last).toMatchObject({ clusters_opened: 1, refusals: ["edit-target-duplicate"] });
+  });
+
+  it("H5: an off-allowlist target_path with a sub-quorum list is target-path-refused (the security signal wins)", async () => {
+    stubModel([{ ...AGENTS_CLUSTER, target_path: "apps/web-platform/server/x.ts", source_learnings: SUB(1) }], {});
+    const { last } = await run();
+    expect(last).toMatchObject({ clusters_opened: 0, refusals: ["target-path-refused"] });
+    expect(last.refusals).not.toContain("quorum-not-met");
+  });
+
+  it("H6: exactly Q and Q+2 sources both open, and the trailer is built from the constant", async () => {
+    for (const n of [Q, Q + 2]) {
+      h.post.mockReset();
+      h.safeCommit.mockClear();
+      stubModel([{ ...AGENTS_CLUSTER, source_learnings: Ls(1, n) }], { "RATIONALE-AGENTS": GOOD_AGENTS_EDIT });
+      const { last } = await run();
+      expect(last, `n=${n}`).toMatchObject({ clusters_opened: 1, refusals: [] });
+      const cfg = h.safeCommit.mock.calls[0][0] as { commitBody: string };
+      expect(cfg.commitBody, `n=${n}`).toContain(`Threshold-Hit: ${n}/${Q}`);
+      expect(cfg.commitBody, `n=${n}`).toContain(`Source-Learnings: ${Ls(1, n).join(",")}\n`);
+    }
+  });
+
+  it("H7: a full replay reproduces the refusal from the memo and the Sentry event fires exactly once per step", async () => {
+    stubModel([{ ...AGENTS_CLUSTER, source_learnings: SUB(1) }], { "RATIONALE-AGENTS": GOOD_AGENTS_EDIT });
+    const memo = new Map<string, unknown>();
+    const first = await run(memo);
+    expect(quorumEvents()).toHaveLength(1);
+    const callsAfterFirst = h.post.mock.calls.length;
+    const again = await run(memo);
+    expect(first.last).toMatchObject({ clusters_opened: 0, refusals: ["quorum-not-met"] });
+    expect(again.last).toMatchObject({ clusters_opened: 0, refusals: ["quorum-not-met"] });
+    // Asserting only "unchanged" would pass vacuously if the event never fired; the mock is
+    // cleared only in beforeEach, so the count after pass 2 is still 1.
+    expect(quorumEvents()).toHaveLength(1);
+    expect(h.post.mock.calls.length).toBe(callsAfterFirst);
+  });
+
+  it("H8: two sub-quorum clusters with identical or empty lists are each counted and each reported", async () => {
+    // The cluster hash is over the sorted sources only, so identical lists share the step
+    // name `draft-edit-<hash8>`. With no memo map the harness does not alias them.
+    const a: Cl = { ...AGENTS_CLUSTER, source_learnings: SUB(1) };
+    const b: Cl = { ...SKILL_CLUSTER, source_learnings: SUB(1) };
+    stubModel([a, b], {});
+    const same = await run();
+    expect(same.last).toMatchObject({ clusters_opened: 0, refusals: ["quorum-not-met", "quorum-not-met"] });
+    expect(quorumEvents()).toHaveLength(2);
+
+    vi.mocked(reportSilentFallback).mockClear();
+    h.post.mockReset();
+    stubModel([{ ...AGENTS_CLUSTER, source_learnings: [] }, { ...SKILL_CLUSTER, source_learnings: [] }], {});
+    const empty = await run();
+    expect(empty.last).toMatchObject({ clusters_opened: 0, refusals: ["quorum-not-met", "quorum-not-met"] });
+    expect(quorumEvents()).toHaveLength(2);
+    expect(phase2Calls()).toHaveLength(0);
   });
 });
