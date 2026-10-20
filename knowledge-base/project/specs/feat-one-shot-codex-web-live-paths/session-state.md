@@ -2418,3 +2418,14 @@
 - Main resync/full CI, full review/QA/preflight, build/recovery, qualification,
   permitted Web/CLO matrices, promotion and ship remain held. Hosted auth BLOCKED;
   alternate route PENDING; all attempts/approvals spent and bindings unrefreshed.
+
+### Source and offline-test authorization update — 2026-10-20
+
+- Operator separately authorized source implementation and synthesized offline
+  tests only. The corrected source candidate now has provisional-only receipts
+  and supervisor completion evidence; its 58-test focused suite and scoped Ruff
+  pass are recorded in [the source-review record](resolver-only-source-review-2026-10-20.md).
+- Independent source re-review is pending. Real resolver/helper execution,
+  diagnostics, preparation, DNS/network, retries, resync/full CI, full review,
+  QA, preflight, recovery, qualification, promotion and ship remain held.
+  Historical evidence and hashes are unchanged; no operational artifact exists.

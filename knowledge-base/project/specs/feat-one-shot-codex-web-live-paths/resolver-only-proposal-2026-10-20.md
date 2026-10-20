@@ -201,3 +201,25 @@ runtime capabilities. No acquisition or historical-cause inference follows.
 The operator subsequently granted source/synthesized-offline-test authority only;
 the [source implementation record](resolver-only-source-review-2026-10-20.md)
 owns that authorization and its results. No operational authority follows.
+
+## Source-review finalization consistency ruling — 2026-10-20
+
+Ruled by CTO agent while defining the source-review field consistency reserved
+above: all persisted receipts must remain explicitly `finalization=provisional`
+and `action_accepted=false`. A receipt's `admitted` category describes only the
+observed DNS answer-policy result. It cannot establish complete action acceptance
+because a later close or process-finalization step may fail.
+
+Completion requires separate closed supervisor evidence bound to the source,
+action manifest and provisional receipt hash, with matching normal coordinator
+success and established owned-process termination/reaping. Missing, partial,
+mismatched or contradictory completion evidence, nonzero exit, adopted children,
+timeout or uncertain cleanup leaves the action incomplete. Never delete through
+uncertain last-pin ownership or retry an ambiguous close; preserve consumed
+markers, foreign replacements and earlier evidence. No recursive commit markers
+or extra backup-pin protocol is proposed. Independent evidence review is still
+required; completion grants no acquisition/retry/profile/recovery authority.
+
+These are source-correction requirements, not accepted implementation or runtime
+evidence. Meaningful synthesized regressions and independent source re-review
+must pass before requesting separate preparation permission.

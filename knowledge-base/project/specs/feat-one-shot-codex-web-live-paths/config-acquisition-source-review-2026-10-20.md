@@ -205,3 +205,13 @@ now own that limited design scope. Both reviewers accepted its prose boundary at
 offline tests require separate operator permission, still ungranted. The spent
 attempt, exact historical cause uncertainty and all operational holds above are
 unchanged; no new evidence, resolver execution or acquisition is claimed.
+
+### Source authorization update — 2026-10-20
+
+The operator subsequently answered “Authorize source and offline tests only” to
+a separate scope question. This grants implementation of the accepted resolver-
+only design and synthesized offline tests. It does not authorize diagnostics,
+preparation, real resolver execution, DNS/network, retries, resync or shipping.
+See the [corrected source record](resolver-only-source-review-2026-10-20.md) for
+the offline results and independent review status. Historical evidence is
+unchanged.

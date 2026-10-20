@@ -61,3 +61,9 @@ the actual `ruff.toml` and pinned cached Ruff binary. The installed lint engine'
 `auto` command reports the user-repository scope as unadopted here, so it does not
 substitute for directly checking the new files with the existing pinned tool.
 No adoption, installer or network access was attempted.
+
+The source implementation agent reached its API usage limit mid-correction. Its
+saved RED tests and notes were intact in the shared worktree, so the primary agent
+continued from those artifacts instead of treating the partial result as complete
+or retrying an unavailable agent. Recheck the shared diff and focused test state
+before assigning ownership after an agent usage-limit failure.

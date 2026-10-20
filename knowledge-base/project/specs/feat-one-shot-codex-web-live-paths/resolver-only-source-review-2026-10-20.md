@@ -1,6 +1,6 @@
 # Resolver-only source implementation and review — 2026-10-20
 
-Status: source implemented; scoped independent source review pending.
+Status: initial source rejected by scoped review; source-only corrections in progress.
 No operational preparation or execution is authorized.
 
 ## Authorization and accepted boundary
@@ -108,6 +108,52 @@ was resolved, and no operational manifest, marker or receipt was created.
 Historical evidence remains untouched. No full PR/SAST/QA/preflight/CI verdict
 or real-helper runtime result is claimed.
 
+## Initial scoped source reviews — blocked
+
+All three seats reviewed pushed `5ea1e20081a86746ea962a72fa752715b5520bdc`.
+Engineering, security and test-design reviewers independently reran the guarded
+37-test suite successfully. They nevertheless blocked source acceptance:
+
+- Security/engineering: `coordinate()` could publish an `admitted` receipt and
+  then fail its final deadline or output-close check, leaving apparently accepted
+  evidence. Publication ownership must cover final acceptance; unknown cleanup
+  must never establish admission. Preserve consumed markers, foreign replacements
+  and earlier accepted evidence. Never delete by unpinned inode or retry an
+  ambiguously closed descriptor.
+- All seats: no test invoked the actual coordinator. Collector/component tests
+  did not prove supervisor-parent argv checks, process-group/session refusal,
+  consumption-to-helper-to-receipt composition or late-publication failures.
+  Valid CLI dispatch and actual bounded pipe reading also needed synthesized
+  owning-path coverage.
+- Test-design score: **8.3/10, Grade B**, with both test files passing their
+  unit/process-integration pyramid assessment. That score did not override the
+  blocking missing coverage. Independently pinning the allowed outcome tuples
+  was recommended to avoid a production-derived rejection oracle.
+
+Ruled by CTO agent: fix these source findings with failing synthesized regressions
+before changes, then obtain independent re-review of the corrected pushed source.
+No preparation or execution authority follows from the initial green tests.
+
+### Finalization technical ruling
+
+Ruled by CTO agent: choose explicitly provisional persisted receipts plus
+separately corroborated supervisor completion. A last-pin close can be ambiguous;
+repeating pins or adding another supposedly final file does not resolve that
+boundary. Every persisted receipt must have fixed `finalization=provisional` and
+`action_accepted=false`; DNS `admitted` is an observation, not action acceptance.
+Validate completion separately against closed source/action/receipt bindings,
+normal coordinator exit, established process termination/reaping and supervisor
+success. A receipt alone, nonzero exit, missing/partial/mismatched signal or
+cleanup uncertainty cannot establish completion. Best-effort rollback must use
+only still-established ownership, preserve markers/foreign/prior evidence, and
+never retry an ambiguous close or delete by stale inode.
+
+Correction tests must exercise actual synthesized coordinator/valid dispatch,
+parent argv and PGID/SID refusal, bounded pipe reading, late deadline/directory/
+last-pin close and rollback failures, provisional-only receipt rejection, and
+partial/forged completion rejection. Source conformance stays blocked until the
+corrected pushed source passes the independent scoped reviews.
+
 ## Continuing limits
 
 Containment and truthful outcome classification are requirements to prove, not
@@ -115,3 +161,30 @@ runtime observations. A future diagnostic outcome cannot explain the spent Confi
 attempt. Preparation, actual-manifest review, exact-command execution approval
 and separate evidence review remain future, distinct gates. Hosted auth BLOCKED;
 alternate route PENDING. PR #9051 remains draft/disarmed/conflicting.
+
+### Corrected source candidate — awaiting independent re-review
+
+The source author reached an API usage limit before applying the finalization
+correction. The primary agent completed the saved RED-first correction, without
+using operational inputs or actions. The actual coordinator now persists only
+`finalization=provisional`, `action_accepted=false` receipts. The outer supervisor
+accepts one bounded closed coordinator candidate only after normal exit, group
+termination and clean reaping, then emits separate source/manifest/receipt-bound
+completion evidence. `checked_completed_action()` also requires independently
+observed supervisor exit 0. Late deadline and directory-close failures attempt
+rollback only while the receipt inode and directory remain pinned; an ambiguous
+pin close leaves provisional evidence and cannot emit completion.
+
+Correction RED evidence: 51 synthesized checks first exposed three assertion
+failures in late publication/deadline/close behavior; the expanded 55-check run
+exposed the missing provisional fields, missing completion API, and the same
+rollback failures. Actual pipe-reader boundary cases were included. After the
+correction, `/usr/bin/python3.14 -E -B -W error -m unittest
+test_resolver_diagnostic test_resolver_lifecycle` passed **58 tests** (2.152s),
+and cached Ruff 0.16.10 over the five scoped source/test files passed. This is
+offline source evidence only; no operational census, preparation, helper,
+resolver, DNS or network action ran.
+
+The corrected source is not accepted until the three independent scoped
+reviewers re-review its pushed full SHA. The initial 37-test findings above
+remain historical and are not replaced by this local result.

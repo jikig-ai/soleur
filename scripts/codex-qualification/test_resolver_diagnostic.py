@@ -1,7 +1,7 @@
 """Synthesized offline resolver contract tests; never invoke the real helper."""
 import copy
 from argparse import Namespace
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 import io
 import json
 import os
@@ -20,6 +20,19 @@ import resolver_supervisor as supervisor
 ROWS = [[int(socket.AF_INET), '8.8.8.8', 443, 0, 0]]
 CANARY = 'SYNTHETIC_SECRET_DO_NOT_RETAIN'
 _OFFLINE_GUARDS = []
+ALLOWED_OUTCOMES = frozenset((
+    ('local_refusal', 'prelaunch', 0, 'not_started'),
+    ('launch_refusal', 'launch', 0, 'not_started'),
+    ('resolution_refusal', 'resolution', 1, 'reaped'),
+    ('answer_refusal', 'answers', 1, 'reaped'),
+    ('protocol_refusal', 'protocol', 1, 'reaped'),
+    ('address_refusal', 'address_policy', 1, 'reaped'),
+    ('deadline_refusal', 'prelaunch', 0, 'not_started'),
+    ('deadline_refusal', 'helper', 1, 'reaped'),
+    ('cleanup_uncertain', 'cleanup', 1, 'uncertain'),
+    ('admitted', 'complete', 1, 'reaped'),
+    ('internal_refusal', 'prelaunch', 0, 'not_started'),
+    ('internal_refusal', 'helper', 1, 'reaped')))
 
 
 def setUpModule():
@@ -87,25 +100,18 @@ class Contracts(unittest.TestCase):
                 diagnostic.checked_manifest(forged, diagnostic.sha(diagnostic.canonical(forged)))
 
     def test_every_permitted_category_is_explicit_and_closed(self):
-        outcomes = [('local_refusal', 'prelaunch', 0, 'not_started'),
-                    ('launch_refusal', 'launch', 0, 'not_started'),
-                    ('resolution_refusal', 'resolution', 1, 'reaped'),
-                    ('answer_refusal', 'answers', 1, 'reaped'),
-                    ('protocol_refusal', 'protocol', 1, 'reaped'),
-                    ('address_refusal', 'address_policy', 1, 'reaped'),
-                    ('deadline_refusal', 'prelaunch', 0, 'not_started'),
-                    ('deadline_refusal', 'helper', 1, 'reaped'),
-                    ('cleanup_uncertain', 'cleanup', 1, 'uncertain'),
-                    ('admitted', 'complete', 1, 'reaped'),
-                    ('internal_refusal', 'prelaunch', 0, 'not_started'),
-                    ('internal_refusal', 'helper', 1, 'reaped')]
+        outcomes = ALLOWED_OUTCOMES
+        self.assertEqual(diagnostic.OUTCOMES, ALLOWED_OUTCOMES)
         self.assertEqual(set(row[0] for row in outcomes), set(diagnostic.CATEGORIES))
         for values in outcomes:
             with self.subTest(values=values):
                 result = self.receipt(*values)
                 diagnostic.checked_receipt(result, self.plan, self.digest, self.marker)
                 self.assertEqual(set(result), {'schema', 'bindings', 'category', 'stage',
-                    'helper_launches', 'cleanup', 'authority', 'review', 'receipt_sha256'})
+                    'helper_launches', 'cleanup', 'authority', 'review', 'receipt_sha256',
+                    'finalization', 'action_accepted'})
+                self.assertEqual(result['finalization'], 'provisional')
+                self.assertIs(result['action_accepted'], False)
                 self.assertTrue(all(value is False for value in result['authority'].values()))
 
     def test_rehashed_forgery_and_every_invalid_outcome_combination_fail_closed(self):
@@ -126,7 +132,7 @@ class Contracts(unittest.TestCase):
                 for launches in (0, 1):
                     for cleanup in ('not_started', 'reaped', 'uncertain'):
                         values = (category, stage, launches, cleanup)
-                        if values not in diagnostic.OUTCOMES:
+                        if values not in ALLOWED_OUTCOMES:
                             with self.subTest(values=values), self.assertRaises(diagnostic.Refused):
                                 self.receipt(*values)
 
@@ -137,6 +143,34 @@ class Contracts(unittest.TestCase):
             diagnostic.checked_receipt(result, self.plan, self.digest, self.marker)
         with self.assertRaises(diagnostic.Refused):
             diagnostic.checked_manifest(self.plan, '0' * 64)
+
+    def test_completion_requires_provisional_receipt_closed_signal_and_observed_exit(self):
+        result = self.receipt()
+        expected = {'manifest_sha256': self.digest, 'source_sha': self.plan['source_sha'],
+                    'supervisor_sha256': self.plan['files']['resolver_supervisor.py']}
+        candidate = {'schema': 'resolver-coordinator-completion-v1', **expected,
+                     'receipt_sha256': result['receipt_sha256']}
+        signal = supervisor.completion_signal(candidate, expected)
+        diagnostic.checked_completed_action(result, signal, self.plan, self.digest,
+                                            self.marker, supervisor_exit=0)
+        for invalid in (None, {}, {'schema': 'resolver-supervisor-completion-v1'},
+                        {**signal, 'extra': CANARY}, {**signal, 'group_cleanup': 'uncertain'},
+                        {**signal, 'coordinator_exit': 1}, {**signal, 'adopted_descendants': True},
+                        {**signal, 'receipt_sha256': 'f' * 64}, {**signal, 'source_sha': 'f' * 40},
+                        {**signal, 'manifest_sha256': 'f' * 64}, {**signal, 'supervisor_sha256': 'f' * 64}):
+            with self.subTest(invalid=invalid), self.assertRaises(diagnostic.Refused):
+                diagnostic.checked_completed_action(result, invalid, self.plan, self.digest,
+                                                    self.marker, supervisor_exit=0)
+        for exit_code in (None, False, 1, 2, -9):
+            with self.subTest(exit_code=exit_code), self.assertRaises(diagnostic.Refused):
+                diagnostic.checked_completed_action(result, signal, self.plan, self.digest,
+                                                    self.marker, supervisor_exit=exit_code)
+        for field, value in (('finalization', 'complete'), ('action_accepted', True)):
+            forged = {**result, field: value}
+            forged['receipt_sha256'] = diagnostic.sha(diagnostic.canonical(
+                {key: value for key, value in forged.items() if key != 'receipt_sha256'}))
+            with self.subTest(field=field), self.assertRaises(diagnostic.Refused):
+                diagnostic.checked_receipt(forged, self.plan, self.digest, self.marker)
 
 
 class HelperProtocol(unittest.TestCase):
@@ -335,7 +369,290 @@ class Collector(unittest.TestCase):
         self.gate.assert_called_once()
 
 
+class CoordinateComposition(unittest.TestCase):
+    """Call the real coordinator with fabricated source/process identities only."""
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory(prefix='resolver-coordinate-test-')
+        self.addCleanup(self.scratch.cleanup)
+        self.directory = Path(self.scratch.name) / 'synthetic-action'
+        self.directory.mkdir(mode=0o700)
+        info = self.directory.stat()
+        self.plan = plan(str(self.directory), {'dev': info.st_dev, 'ino': info.st_ino, 'uid': info.st_uid})
+        self.digest = diagnostic.sha(diagnostic.canonical(self.plan))
+        self.manifest = self.directory / diagnostic.MANIFEST
+        self.manifest.write_bytes(diagnostic.canonical(self.plan) + b'\n')
+        self.manifest.chmod(0o600)
+        self.args = Namespace(manifest=str(self.manifest), manifest_sha256=self.digest, parent_pid=3456)
+        self.synthetic_source = '/synthetic/repo/scripts/codex-qualification/resolver_diagnostic.py'
+        self.parent_argv = ['/synthetic/python', '-I', '-S', '-B',
+            '/synthetic/repo/scripts/codex-qualification/resolver_supervisor.py', 'execute',
+            '--manifest', str(self.manifest), '--manifest-sha256', self.digest,
+            '--supervisor-sha256', 'b' * 64]
+        self.bindings = Mock()
+        self.helper = Mock(return_value=('admitted', 'complete', 1, 'reaped'))
+        self.now = 0.
+        self.output = io.StringIO()
+
+    def invoke(self, *, pgid=1234, sid=1234, extra=None):
+        original_read = Path.read_bytes
+        original_diagnostic = diagnostic.Diagnostic
+        def fabricated_proc(path):
+            if str(path) == '/proc/3456/cmdline':
+                return b'\0'.join(value.encode() for value in self.parent_argv) + b'\0'
+            return original_read(path)
+        def collector(*args, **kwargs):
+            return original_diagnostic(*args, helper=self.helper, **kwargs)
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(diagnostic, '__file__', self.synthetic_source))
+            stack.enter_context(patch.object(diagnostic, 'verify_sources', self.bindings))
+            stack.enter_context(patch.object(diagnostic, 'Diagnostic', side_effect=collector))
+            stack.enter_context(patch.object(supervisor, 'arm_parent_death'))
+            stack.enter_context(patch.object(diagnostic.resource, 'setrlimit'))
+            stack.enter_context(patch.object(diagnostic.os, 'getpid', return_value=1234))
+            stack.enter_context(patch.object(diagnostic.os, 'getpgrp', return_value=pgid))
+            stack.enter_context(patch.object(diagnostic.os, 'getsid', return_value=sid))
+            stack.enter_context(patch.object(Path, 'read_bytes', fabricated_proc))
+            stack.enter_context(redirect_stdout(self.output))
+            if extra is not None:
+                extra(stack)
+            return diagnostic.coordinate(self.args, clock=lambda: self.now)
+
+    def result(self):
+        return json.loads((self.directory / diagnostic.RECEIPT).read_bytes())
+
+    def assert_marker_only(self):
+        self.assertTrue((self.directory / diagnostic.MARKER).exists())
+        self.assertFalse((self.directory / diagnostic.RECEIPT).exists())
+
+    def test_actual_coordinator_admitted_one_helper_and_no_continuation(self):
+        self.assertEqual(self.invoke(), 0)
+        self.helper.assert_called_once()
+        self.assertEqual(self.bindings.call_count, 3)
+        result = self.result()
+        marker = diagnostic.sha((self.directory / diagnostic.MARKER).read_bytes())
+        diagnostic.checked_receipt(result, self.plan, self.digest, marker)
+        self.assertEqual(result['category'], 'admitted')
+        self.assertNotIn(CANARY, self.output.getvalue())
+
+    def test_actual_coordinator_resolver_refusal_remains_single_terminal_action(self):
+        self.helper.return_value = ('resolution_refusal', 'resolution', 1, 'reaped')
+        self.assertEqual(self.invoke(), 1)
+        self.assertEqual(self.result()['category'], 'resolution_refusal')
+        self.helper.assert_called_once()
+
+    def test_parent_invocation_mismatch_refuses_before_marker(self):
+        self.parent_argv[-1] = CANARY
+        self.assertEqual(self.invoke(), 1)
+        self.helper.assert_not_called()
+        self.assertFalse((self.directory / diagnostic.MARKER).exists())
+        self.assertFalse((self.directory / diagnostic.RECEIPT).exists())
+        self.assertNotIn(CANARY, self.output.getvalue())
+
+    def test_wrong_pgid_or_sid_refuses_before_marker(self):
+        for pgid, sid in ((1235, 1234), (1234, 1235)):
+            with self.subTest(pgid=pgid, sid=sid):
+                self.assertEqual(self.invoke(pgid=pgid, sid=sid), 1)
+                self.helper.assert_not_called()
+                self.assertFalse((self.directory / diagnostic.MARKER).exists())
+
+    def test_stale_bindings_before_consumption_never_launch(self):
+        self.bindings.side_effect = RuntimeError(CANARY)
+        self.assertEqual(self.invoke(), 1)
+        self.helper.assert_not_called()
+        self.assertFalse((self.directory / diagnostic.MARKER).exists())
+        self.assertNotIn(CANARY, self.output.getvalue())
+
+    def test_postconsumption_binding_refusal_is_zero_launch_receipt(self):
+        self.bindings.side_effect = [None, None, RuntimeError(CANARY)]
+        self.assertEqual(self.invoke(), 1)
+        result = self.result()
+        self.assertEqual((result['category'], result['helper_launches'], result['cleanup']),
+                         ('local_refusal', 0, 'not_started'))
+        self.helper.assert_not_called()
+        self.assertTrue((self.directory / diagnostic.MARKER).exists())
+
+    def test_deadline_after_publication_rolls_back_new_receipt_preserving_marker(self):
+        original = diagnostic.PrivateOutput.publish
+        def publish_then_expire(store, *args):
+            value = original(store, *args)
+            self.now = 11.
+            return value
+        self.assertEqual(self.invoke(extra=lambda stack: stack.enter_context(
+            patch.object(diagnostic.PrivateOutput, 'publish', publish_then_expire))), 1)
+        self.assert_marker_only()
+
+    def test_deadline_during_receipt_fsync_rolls_back_new_receipt(self):
+        original = os.fsync
+        def fsync_then_expire(fd):
+            original(fd)
+            if os.readlink('/proc/self/fd/' + str(fd)).endswith('/' + diagnostic.RECEIPT):
+                self.now = 11.
+        self.assertEqual(self.invoke(extra=lambda stack: stack.enter_context(
+            patch.object(diagnostic.os, 'fsync', side_effect=fsync_then_expire))), 1)
+        self.assert_marker_only()
+
+    def test_final_directory_close_failure_rolls_back_unaccepted_receipt(self):
+        original = diagnostic.PrivateOutput.__exit__
+        def close_then_fail(store, *args):
+            original(store, *args)
+            raise OSError(CANARY)
+        self.assertEqual(self.invoke(extra=lambda stack: stack.enter_context(
+            patch.object(diagnostic.PrivateOutput, '__exit__', close_then_fail))), 1)
+        self.assert_marker_only()
+
+    def test_final_receipt_pin_close_uncertainty_retains_only_provisional_evidence(self):
+        real_close = os.close
+        receipt_closes, failed_slots = [], []
+        def close_final_pin_once(fd):
+            target = os.readlink('/proc/self/fd/' + str(fd))
+            if target.endswith('/' + diagnostic.RECEIPT):
+                receipt_closes.append(fd)
+                if len(receipt_closes) == 2:
+                    real_close(fd)
+                    failed_slots.append(fd)
+                    raise OSError(CANARY)
+            self.assertNotIn(fd, failed_slots, 'Ambiguous final pin close was retried')
+            real_close(fd)
+        self.assertEqual(self.invoke(extra=lambda stack: stack.enter_context(
+            patch.object(diagnostic.os, 'close', side_effect=close_final_pin_once))), 1)
+        self.assertEqual(len(failed_slots), 1)
+        self.assertTrue((self.directory / diagnostic.MARKER).exists())
+        self.assertNotIn('resolver-coordinator-completion-v1', self.output.getvalue())
+        target = self.directory / diagnostic.RECEIPT
+        if target.exists():
+            result = self.result()
+            self.assertEqual(result['finalization'], 'provisional')
+            self.assertIs(result['action_accepted'], False)
+            marker = diagnostic.sha((self.directory / diagnostic.MARKER).read_bytes())
+            with self.assertRaises(diagnostic.Refused):
+                diagnostic.checked_completed_action(result, None, self.plan, self.digest,
+                                                    marker, supervisor_exit=1)
+
+    def test_late_failure_preserves_foreign_replacement_and_consumed_marker(self):
+        original = diagnostic.PrivateOutput.publish
+        def replace_then_expire(store, *args):
+            value = original(store, *args)
+            target = self.directory / diagnostic.RECEIPT
+            target.unlink()
+            target.write_bytes(CANARY.encode())
+            self.now = 11.
+            return value
+        self.assertEqual(self.invoke(extra=lambda stack: stack.enter_context(
+            patch.object(diagnostic.PrivateOutput, 'publish', replace_then_expire))), 1)
+        self.assertEqual((self.directory / diagnostic.RECEIPT).read_bytes(), CANARY.encode())
+        self.assertTrue((self.directory / diagnostic.MARKER).exists())
+
+
+class HelperReader(unittest.TestCase):
+    def pipe(self, raw, *, close_writer=True):
+        readfd, writefd = os.pipe()
+        stream = os.fdopen(readfd, 'rb', buffering=0)
+        self.addCleanup(stream.close)
+        if raw:
+            os.write(writefd, raw)
+        if close_writer:
+            os.close(writefd)
+        else:
+            self.addCleanup(os.close, writefd)
+        return Namespace(stdout=stream)
+
+    def test_actual_reader_partial_reads_then_eof(self):
+        process = self.pipe(answer())
+        original = os.read
+        with patch.object(diagnostic.os, 'read', side_effect=lambda fd, count: original(fd, min(count, 7))):
+            self.assertEqual(diagnostic.read_helper(process, 10., lambda: 0.), answer())
+
+    def test_actual_reader_bounds_4096_versus_4097_and_clean_eof(self):
+        for size in (0, 4096, 4097):
+            with self.subTest(size=size):
+                process = self.pipe(b'x' * size)
+                self.assertEqual(len(diagnostic.read_helper(process, 10., lambda: 0.)), size)
+
+    def test_reader_empty_select_and_readable_no_progress_deadlines(self):
+        process = self.pipe(b'', close_writer=False)
+        with patch.object(diagnostic.select, 'select', return_value=([], [], [])):
+            with self.assertRaises(diagnostic.Deadline):
+                diagnostic.read_helper(process, 10., lambda: 0.)
+        readings = iter((0., 11.))
+        with patch.object(diagnostic.select, 'select', return_value=([process.stdout], [], [])):
+            with self.assertRaises(diagnostic.Deadline):
+                diagnostic.read_helper(process, 10., lambda: next(readings))
+
+    def test_actual_reader_composes_with_runner_reaping_and_protocol_refusal(self):
+        for raw, category in ((answer(), 'admitted'), (b'x' * 4097, 'protocol_refusal')):
+            child = FakeProcess()
+            child.stdout.close()
+            child.stdout = self.pipe(raw).stdout
+            result = diagnostic.run_helper(deadline=10., clock=lambda: 0.,
+                                           launch=Mock(return_value=child))
+            self.assertEqual(result, (category, 'complete' if category == 'admitted' else 'protocol', 1, 'reaped'))
+            self.assertTrue(child.stdout.closed)
+            self.assertGreaterEqual(len(child.waits), 1)
+
+
 class SourceAndCLI(unittest.TestCase):
+    def test_valid_supervisor_cli_uses_mocked_containment_and_closed_completion(self):
+        manifest = plan()
+        raw_source = b'synthetic-supervisor-source'
+        supervisor_sha = diagnostic.sha(raw_source)
+        manifest['files']['resolver_supervisor.py'] = supervisor_sha
+        digest = diagnostic.sha(diagnostic.canonical(manifest))
+        expected = {'manifest_sha256': digest, 'source_sha': manifest['source_sha'],
+                    'supervisor_sha256': supervisor_sha}
+        candidate = {'schema': 'resolver-coordinator-completion-v1', **expected, 'receipt_sha256': 'd' * 64}
+        output = io.StringIO()
+        def synthetic_supervision(command, *, expected, completed, **kwargs):
+            self.assertEqual(command[1:4], ['-I', '-S', '-B'])
+            self.assertEqual(command[5], '_coordinate')
+            signal_value = supervisor.completion_signal(candidate, expected)
+            completed.append(signal_value)
+            kwargs['report']('Resolver diagnostic completion=' + json.dumps(
+                signal_value, sort_keys=True, separators=(',', ':')))
+            return 0
+        argv = ['synthetic', 'execute', '--manifest', '/synthetic/output/' + diagnostic.MANIFEST,
+                '--manifest-sha256', digest, '--supervisor-sha256', supervisor_sha]
+        before = list(__import__('sys').path)
+        try:
+            with (patch('sys.argv', argv), patch.object(supervisor.sys, 'executable', '/synthetic/python'),
+                  patch.object(Path, 'read_bytes', new=lambda path: raw_source if Path(path).name == 'resolver_supervisor.py' else diagnostic.canonical(manifest)),
+                  patch.object(diagnostic.policy.metadata.base, '_read', return_value=diagnostic.canonical(manifest)),
+                  patch.object(supervisor, 'arm_parent_death'),
+                  patch.object(supervisor, 'supervise', side_effect=synthetic_supervision) as containment,
+                  patch.object(supervisor.time, 'monotonic', return_value=0.), redirect_stdout(output)):
+                self.assertEqual(supervisor.main(), 0)
+                containment.assert_called_once()
+        finally:
+            __import__('sys').path[:] = before
+        prefix = 'Resolver diagnostic completion='
+        line = next(line for line in output.getvalue().splitlines() if line.startswith(prefix))
+        signal = json.loads(line[len(prefix):])
+        supervisor.checked_completion(signal, **expected, receipt_sha256='d' * 64, supervisor_exit=0)
+
+    def test_valid_diagnostic_cli_routes_only_to_mocked_separate_endpoints(self):
+        commands = [(['prepare', '--repo', '/synthetic/repo', '--source-sha', 'a' * 40,
+                      '--attempt', 'synthetic', '--directory', '/synthetic/output'], 'prepare_action', 'd' * 64),
+                    (['_coordinate', '--manifest', '/synthetic/manifest', '--manifest-sha256', 'b' * 64,
+                      '--parent-pid', '3456'], 'coordinate', 1)]
+        for argv, target, result in commands:
+            with (patch('sys.argv', ['synthetic', *argv]), redirect_stdout(io.StringIO()),
+                  patch.object(diagnostic, target, return_value=result) as endpoint):
+                self.assertEqual(diagnostic.main(), 0 if target == 'prepare_action' else 1)
+                endpoint.assert_called_once()
+
+    def test_valid_probe_cli_uses_only_mocked_probe_and_parent_seam(self):
+        output = Namespace(buffer=io.BytesIO())
+        before = list(__import__('sys').path)
+        try:
+            with (patch('sys.argv', ['synthetic', 'auth.docker.io', '3456']),
+                  patch('sys.stdout', output), patch.object(probe, 'probe', return_value=(b'synthetic', 4)) as run,
+                  patch.object(supervisor, 'arm_parent_death') as parent):
+                self.assertEqual(probe.main(), 4)
+                run.assert_called_once_with('auth.docker.io', socket.getaddrinfo)
+                parent.assert_called_once_with(3456)
+        finally:
+            __import__('sys').path[:] = before
+        self.assertEqual(output.buffer.getvalue(), b'synthetic')
+
     def test_synthetic_directory_failure_keeps_owned_inode_pinned_during_rollback(self):
         # Every source/runtime prerequisite is fabricated. Only a fresh scratch
         # directory is written; no repo census or operational binding is read.

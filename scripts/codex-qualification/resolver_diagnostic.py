@@ -120,7 +120,8 @@ def receipt(manifest, digest, marker, category, stage, launches, cleanup):
     ensure(type(launches) is int and (category, stage, launches, cleanup) in OUTCOMES)
     result = {'schema': 'resolver-diagnostic-receipt-v1', 'bindings': _bindings(manifest, digest, marker),
         'category': category, 'stage': stage, 'helper_launches': launches, 'cleanup': cleanup,
-        'authority': dict.fromkeys(AUTHORITY, False), 'review': 'pending'}
+        'authority': dict.fromkeys(AUTHORITY, False), 'review': 'pending',
+        'finalization': 'provisional', 'action_accepted': False}
     result['receipt_sha256'] = sha(canonical(result))
     return result
 
@@ -131,6 +132,18 @@ def checked_receipt(value, manifest, digest, marker):
         expected = receipt(manifest, digest, marker, value['category'], value['stage'],
                            value['helper_launches'], value['cleanup'])
         ensure(canonical(value) == canonical(expected))
+    except Exception:
+        raise Refused(ERROR) from None
+
+
+def checked_completed_action(value, completion, manifest, digest, marker, *, supervisor_exit):
+    try:
+        checked_receipt(value, manifest, digest, marker)
+        ensure(type(supervisor_exit) is int and supervisor_exit == 0)
+        import resolver_supervisor
+        resolver_supervisor.checked_completion(completion, manifest_sha256=digest,
+            source_sha=manifest['source_sha'], supervisor_sha256=manifest['files']['resolver_supervisor.py'],
+            receipt_sha256=value['receipt_sha256'], supervisor_exit=supervisor_exit)
     except Exception:
         raise Refused(ERROR) from None
 
@@ -354,7 +367,7 @@ class PrivateOutput:
         finally:
             os.close(fd)
 
-    def write(self, name, value, *, rollback):
+    def write(self, name, value, *, rollback, retain=False):
         descriptor, pin, owned = None, None, None
         try:
             self.check()
@@ -374,6 +387,9 @@ class PrivateOutput:
             self.check()
             ensure(os.stat(name, dir_fd=self.fd, follow_symlinks=False) == os.fstat(pin) and
                    os.fstat(pin).st_nlink == 1)
+            if retain:
+                retained, pin = pin, None
+                return retained
         except Exception:
             if rollback and owned is not None:
                 try:
@@ -407,8 +423,23 @@ class PrivateOutput:
             ensure(set(os.listdir(self.fd)) == {MANIFEST, MARKER} and sha(self.read(MARKER)) == marker)
             ensure(self.read(MANIFEST) == canonical(manifest) + b'\n')
             checked_receipt(result, manifest, digest, marker)
-            self.write(RECEIPT, result, rollback=True)
+            pin = self.write(RECEIPT, result, rollback=True, retain=True)
+            return [pin, os.dup(self.fd)]
         except Exception:
+            raise Refused(ERROR) from None
+
+    @staticmethod
+    def rollback_published(name, receipt_fd, directory_fd):
+        """Unlink only while both the created inode and directory remain pinned."""
+        if receipt_fd is None or directory_fd is None:
+            return
+        try:
+            owned = os.fstat(receipt_fd)
+            current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            if (current.st_dev, current.st_ino) == (owned.st_dev, owned.st_ino):
+                os.unlink(name, dir_fd=directory_fd)
+                os.fsync(directory_fd)
+        except OSError:
             raise Refused(ERROR) from None
 
 
@@ -518,7 +549,7 @@ def coordinate(args, *, clock=time.monotonic):
     from resolver_supervisor import arm_parent_death
     started = clock()
     budget = Budget(clock, started + 10.)
-    stage, consumed = 'startup', False
+    stage, consumed, publication = 'startup', False, None
     try:
         arm_parent_death(args.parent_pid)
         ensure(os.getpid() == os.getpgrp() == os.getsid(0))
@@ -555,13 +586,37 @@ def coordinate(args, *, clock=time.monotonic):
                 clock=clock, deadline=started + 10.).collect()
             budget.remaining()
             stage = 'receipt_publication'
-            store.publish(result, manifest, args.manifest_sha256, result['bindings']['marker_sha256'])
+            publication = store.publish(result, manifest, args.manifest_sha256,
+                                        result['bindings']['marker_sha256'])
             budget.remaining()
-            return 0 if result['category'] == 'admitted' else 1
+        budget.remaining()
+        for index in range(len(publication)):
+            descriptor = publication[index]
+            publication[index] = None
+            os.close(descriptor)
+        publication = None
+        candidate = {'schema': 'resolver-coordinator-completion-v1',
+            'manifest_sha256': args.manifest_sha256, 'source_sha': manifest['source_sha'],
+            'supervisor_sha256': manifest['files']['resolver_supervisor.py'],
+            'receipt_sha256': result['receipt_sha256']}
+        print('Resolver diagnostic candidate=' + json.dumps(candidate, sort_keys=True, separators=(',', ':')))
+        return 0 if result['category'] == 'admitted' else 1
     except Exception:
+        cleanup_uncertain = False
+        if publication is not None:
+            try:
+                if all(descriptor is not None for descriptor in publication):
+                    PrivateOutput.rollback_published(RECEIPT, *publication)
+            except Exception:
+                cleanup_uncertain = True
+            for descriptor in publication:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    cleanup_uncertain = True
         # A failed marker write may already have consumed the action. Never remove
         # it, fabricate a receipt, claim absence, or infer permission to retry.
-        print('Resolver diagnostic publication refused' if consumed else
+        print('Resolver diagnostic publication refused' if consumed or cleanup_uncertain else
               'Resolver diagnostic refused; preconsume_stage=' + stage)
         return 1
 
