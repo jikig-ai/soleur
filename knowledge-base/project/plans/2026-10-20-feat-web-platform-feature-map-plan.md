@@ -252,13 +252,13 @@ discoverability_test:
 
 <!-- founder-stated check: ACs map 1:1 to issue #10399's Acceptance section. -->
 
-- [ ] `apps/web-platform/test/feature-map.md` exists; every route derived from `git ls-files 'apps/web-platform/app/**/page.tsx'` appears either as a `##`/route`` entry carrying `selectors:` + `expects:` or as a reasoned bullet under `## Deliberately unmapped`.
+- [x] `apps/web-platform/test/feature-map.md` exists; every route derived from `git ls-files 'apps/web-platform/app/**/page.tsx'` appears either as a `##`/route`` entry carrying `selectors:` + `expects:` or as a reasoned bullet under `## Deliberately unmapped`.
 - [ ] Map covers every `app/(dashboard)/**` route plus `/`, `/login`, `/signup`, `/accept-terms` (≥ 24 mapped entries), each naming at least one stable selector and one expected outcome.
-- [ ] `scripts/lint-feature-map-coverage.sh` exits non-zero listing each uncovered route; exits non-zero when the map file is absent; exits non-zero when the producer derives zero routes; exits non-zero on a tombstone entry (mapped/exempted route with no backing `page.tsx`), an entry missing `selectors:`/`expects:`, or a route classified in both sets; exits 0 on a fully-consistent tree.
-- [ ] `scripts/lint-feature-map-coverage.test.sh` drives every Guard-Contract matrix row (12 rows) and is registered in `scripts/test-all.sh` alongside a live run of the lint itself.
-- [ ] `.github/workflows/ci.yml` `lint-bot-statuses` gains a step running `bash scripts/lint-feature-map-coverage.sh`; the job remains absent from `scripts/required-checks.txt` (advisory-first per the ask).
-- [ ] `plugins/soleur/skills/test-browser/SKILL.md` `<file_to_route_mapping>` names `apps/web-platform/test/feature-map.md` as the preferred navigation source when present.
-- [ ] `bash scripts/lint-feature-map-coverage.sh` exits 0 on the committed tree; `bash scripts/lint-orphan-test-suites.sh` stays green.
+- [x] `scripts/lint-feature-map-coverage.sh` exits non-zero listing each uncovered route; exits non-zero when the map file is absent; exits non-zero when the producer derives zero routes; exits non-zero on a tombstone entry (mapped/exempted route with no backing `page.tsx`), an entry missing `selectors:`/`expects:`, or a route classified in both sets; exits 0 on a fully-consistent tree.
+- [x] `scripts/lint-feature-map-coverage.test.sh` drives every Guard-Contract matrix row (12 rows) and is registered in `scripts/test-all.sh` alongside a live run of the lint itself.
+- [x] `.github/workflows/ci.yml` `lint-bot-statuses` gains a step running `bash scripts/lint-feature-map-coverage.sh`; the job remains absent from `scripts/required-checks.txt` (advisory-first per the ask).
+- [x] `plugins/soleur/skills/test-browser/SKILL.md` `<file_to_route_mapping>` names `apps/web-platform/test/feature-map.md` as the preferred navigation source when present.
+- [x] `bash scripts/lint-feature-map-coverage.sh` exits 0 on the committed tree; `bash scripts/lint-orphan-test-suites.sh` stays green.
 
 ## Domain Review
 
