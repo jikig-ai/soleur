@@ -937,7 +937,7 @@ ctx38=$(invoke_hook "$SEP38" | jq -r '.hookSpecificOutput.additionalContext' 2>/
 # The emit legitimately contains \n and \t; what must be gone is every other
 # C0 byte, DEL, NEL, and the LS/PS sequences.
 # (grep -P: PCRE, GNU-only — this suite runs on the Linux dev host)
-if ! printf '%s' "$ctx38" | LC_ALL=C grep -qP '[\x00-\x08\x0b-\x1f\x7f]|\xc2\x85|\xe2\x80\xa8|\xe2\x80\xa9'; then
+if ! LC_ALL=C grep -qP '[\x00-\x08\x0b-\x1f\x7f]|\xc2\x85|\xe2\x80\xa8|\xe2\x80\xa9' <<<"$ctx38"; then
   echo "PASS: separator-laden path emits no C0-high/DEL/NEL/LS/PS bytes"
   PASS=$((PASS+1))
 else

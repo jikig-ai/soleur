@@ -32,15 +32,15 @@ out=$(printf 'a\x7fb\xe2\x80\xa8c\xc2\x85d\x1be\xe2\x80\xa9f' | soleur_ctx_sanit
 # keep-lines: TAB+LF survive; DEL/LS/PS/NEL removed.
 out=$(printf 'a\tb\nc\x7fd\xc2\x85e\xe2\x80\xa8f' | soleur_ctx_sanitize_lines)
 [ "$out" = "$(printf 'a\tb\ncdef')" ] && pass "keep-lines strips DEL/NEL/LS keeps TAB+LF" || fail "keep-lines: got $(printf '%s' "$out" | od -An -tx1 | tr -d ' \n')"
-printf 'a\tb\nc\x7fd\xc2\x85e\xe2\x80\xa8f' | soleur_ctx_sanitize_lines | od -An -tx1 | grep -q '7f' && fail "keep-lines passed DEL"
-printf 'x\xe2\x80\xa8y' | soleur_ctx_sanitize_lines | od -An -tx1 | grep -q 'e2' && fail "keep-lines passed LS"
-printf 'x\xe2\x80\xa9y' | soleur_ctx_sanitize_lines | od -An -tx1 | grep -q 'e2' && fail "keep-lines passed PS"
-printf 'x\xc2\x85y' | soleur_ctx_sanitize_lines | od -An -tx1 | grep -q 'c2' && fail "keep-lines passed NEL"
+grep -q '7f' <<<"$(printf 'a\tb\nc\x7fd\xc2\x85e\xe2\x80\xa8f' | soleur_ctx_sanitize_lines | od -An -tx1)" && fail "keep-lines passed DEL"
+grep -q 'e2' <<<"$(printf 'x\xe2\x80\xa8y' | soleur_ctx_sanitize_lines | od -An -tx1)" && fail "keep-lines passed LS"
+grep -q 'e2' <<<"$(printf 'x\xe2\x80\xa9y' | soleur_ctx_sanitize_lines | od -An -tx1)" && fail "keep-lines passed PS"
+grep -q 'c2' <<<"$(printf 'x\xc2\x85y' | soleur_ctx_sanitize_lines | od -An -tx1)" && fail "keep-lines passed NEL"
 
 # newline-only: LF survives, TAB stripped.
 out=$(printf 'a\tb\nc\td' | soleur_ctx_sanitize_nl)
 [ "$out" = "$(printf 'ab\ncd')" ] && pass "newline-only strips TAB keeps LF" || fail "newline-only: got $(printf '%s' "$out" | od -An -tx1 | tr -d ' \n')"
-printf 'x\x7fy\xe2\x80\xa8z' | soleur_ctx_sanitize_nl | od -An -tx1 | grep -qE '7f|e2' && fail "newline-only passed DEL/LS"
+grep -qE '7f|e2' <<<"$(printf 'x\x7fy\xe2\x80\xa8z' | soleur_ctx_sanitize_nl | od -An -tx1)" && fail "newline-only passed DEL/LS"
 
 # --- ANSI-C quoting pin (BSD sed silently no-ops on bare '\xHH') ------------
 
@@ -94,7 +94,7 @@ hit_count=$(printf '%s\n' "$hits" | grep -c .)
 
 while IFS= read -r f; do
   [ -z "$f" ] && continue
-  if ! printf '%s\n' "$DISPOSITIONS" | grep -qF "$f|"; then
+  if ! grep -qF "$f|" <<<"$DISPOSITIONS"; then
     fail "undispositioned strip site: $f — adopt or add a disposition row"
   fi
 done <<< "$hits"
