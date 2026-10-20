@@ -108,7 +108,7 @@ Three coupled deliverables, one PR:
 - **Single map-path constant (advisor consult):** `MAP_FILE=apps/web-platform/test/feature-map.md` is declared once at the lint's top and cited by symbol everywhere else — the path already repeats across the script, ci.yml step, SKILL.md, README, and the map's own header, so a rename must touch one constant, not five literals.
 - **Architecture decision check (Phase 2.10):** none — a docs artifact + advisory lint following an established pattern; no substrate/trust-boundary/ownership change. Reading `model.c4`/`views.c4`/`spec.c4` is unnecessary: no external actor, system, container, or access relationship changes (no new user role, vendor, store, or edge). Explicitly no C4 impact.
 - **Encryption posture (Phase 2.11):** skip — no persistent store, no cross-component connection.
-- **Observability (Phase 2.9):** detection set (`apps/*/server|src|infra`, `plugins/*/scripts/`, new infra surface) not touched — the deliverable IS the detection surface; its own liveness is the CI step plus the companion battery.
+- **Observability (Phase 2.9):** plan-time detection set (`apps/*/server|src|infra`, `plugins/*/scripts/`, new infra surface) not touched — but deepen-plan 4.7's pure-docs exemption is narrower (`.md` under `apps/*/` does not exempt), so a schema block is emitted below anyway: the deliverable IS the detection surface and its probe is free.
 
 ## User-Brand Impact
 
@@ -116,6 +116,35 @@ Three coupled deliverables, one PR:
 - **If this leaks, the user's [data / workflow / money] is exposed via:** nothing — the map contains route paths and selectors already public in the repo's own source; no user data, credentials, or tenant information is captured.
 - **Brand-survival threshold:** `none`
 - **Threshold decision (challengeable):** dev-tooling artifact plus advisory CI signal; no user data path touched and no blocking gate introduced — the blast radius of a defect is CI annotation noise or agent mis-navigation, both internal.
+
+## Observability
+
+```yaml
+liveness_signal:
+  what: "lint-bot-statuses CI step `Lint feature-map coverage (advisory)` — the guard's own run"
+  cadence: "per pull_request / merge_group / push (ci.yml triggers)"
+  alert_target: "run conclusion + step annotation; main-health-monitor sweep reads the same run"
+  configured_in: ".github/workflows/ci.yml (lint-bot-statuses job)"
+error_reporting:
+  destination: "step stdout in the Actions log (one line per uncovered/stale/incomplete route)"
+  fail_loud: "non-zero exit reds the step (advisory — reds run conclusion, never the merge)"
+failure_modes:
+  - mode: "map file deleted"
+    detection: "guard exits non-zero with map-missing line"
+    alert_route: "advisory step red on the offending PR"
+  - mode: "new page.tsx without map entry"
+    detection: "guard exits non-zero naming each derived route"
+    alert_route: "advisory step red on the offending PR"
+  - mode: "tombstone entry (page deleted, entry kept)"
+    detection: "staleness arm exits non-zero naming the entry"
+    alert_route: "advisory step red on the offending PR"
+logs:
+  where: "GitHub Actions step log for the lint-bot-statuses job"
+  retention: "repo default (90 days)"
+discoverability_test:
+  command: bash scripts/lint-feature-map-coverage.sh
+  expected_output: feature-map-coverage: ok
+```
 
 ## Guard Contract
 
@@ -288,4 +317,15 @@ Panel run in-process, sequential-fallback (Devin CLI harness — no Task tool; r
 
 ## Deepen-Plan Enhancements
 
-(pending — populated by `soleur:deepen-plan`)
+### Key Improvements
+
+- **Observability block added (4.7 halt):** plan-time Phase 2.9 detection judged the diff out-of-set, but deepen-plan's pure-docs exemption is narrower — `.md` under `apps/*/` and the `ci.yml`/`*.sh` edits make the gate apply. A schema-conformant `## Observability` block now declares the guard's own liveness (the advisory step), failure modes, and a local probe (`bash scripts/lint-feature-map-coverage.sh` → `feature-map-coverage: ok`, allowlisted verb, no shell metachars, literal expected output).
+- **Precedent-diff (4.4):** the lint follows `lint-integration-env-gates.sh` verbatim — shebang/`set -euo pipefail`/`LC_ALL=C`/root-override seam/allowlist-with-reason/companion-`.test.sh`/`run_suite` live+battery pair. One deliberate deviation, already documented in Proposed Solution: the exemption registry lives *inside* the artifact (`## Deliberately unmapped`) rather than in-script or a `.allowlist.txt`, so the allowlist is maintained where contributors already look.
+- **Negative-claim audit (4.45):** "no second route-injection site" verified — App Router pages are file-defined; `app/**/route.ts` API handlers are deliberately outside the glob (not navigable pages). "Nothing reads absent as skip" consistent with the Guard Contract's fail-closed states.
+- **Halt-gate results:** 4.6 pass · 4.7 pass (block added) · 4.8 pass (no PAT-shaped vars) · 4.9 skip (no UI-surface files) · 4.10 skip (no store/connection) · 4.11 pass (`lint-guard-contract.py` clean — 1 guard, 12 matrix rows) · 4.12 pass (asks mapped; three `inferred` items justified; single-PR recommendation reasoned).
+
+### New Considerations Discovered
+
+- `internal/` in `app/internal/github-app-init` is a *literal* segment, not a route group — derivation strips `(...)`-parenthesized segments only; the battery's row 11 pins the distinction.
+- `lint-orphan-test-suites.sh` requires the companion battery registered in `scripts/test-all.sh`; the registration is a Files-to-Edit item, not a nicety.
+- Deepen-review seats (in-process, sequential-fallback): no additional findings beyond the spec-flow arms already folded in.
