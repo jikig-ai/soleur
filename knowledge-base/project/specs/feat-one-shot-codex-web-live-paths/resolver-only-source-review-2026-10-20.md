@@ -104,7 +104,9 @@ All actual source-binding functions in these tests used fabricated identities,
 mocked Git/runtime results or temporary synthetic source trees. One preparation
 ownership regression exercised only fabricated scratch bindings and files.
 No operational preparation/helper/resolver or execution CLI ran, no real hostname
-was resolved, and no operational manifest, marker or receipt was created.
+was resolved, and no operational manifest, marker or receipt was created. The
+isolated supervisor CLI was exercised only with a malformed synthesized manifest;
+it refused at manifest validation before marker creation or helper launch.
 Historical evidence remains untouched. No full PR/SAST/QA/preflight/CI verdict
 or real-helper runtime result is claimed.
 

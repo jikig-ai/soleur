@@ -506,22 +506,25 @@ class CoordinateComposition(unittest.TestCase):
             patch.object(diagnostic.PrivateOutput, '__exit__', close_then_fail))), 1)
         self.assert_marker_only()
 
-    def test_deadline_after_final_receipt_pin_close_leaves_only_provisional_completion_state(self):
-        real_close, receipt_closes = os.close, []
+    def test_deadline_after_final_directory_pin_close_leaves_only_provisional_state(self):
+        real_close, real_dup, directory_pins = os.close, os.dup, []
+        def duplicate_directory_pin(fd):
+            result = real_dup(fd)
+            if os.readlink('/proc/self/fd/' + str(fd)) == str(self.directory):
+                directory_pins.append(result)
+            return result
         def close_then_expire(fd):
             if type(fd) is not int:
                 return real_close(fd)
-            target = os.readlink('/proc/self/fd/' + str(fd))
-            if target.endswith('/' + diagnostic.RECEIPT):
-                receipt_closes.append(fd)
-                if len(receipt_closes) == 2:
-                    real_close(fd)
-                    self.now = 11.
-                    raise OSError(CANARY)
-            return real_close(fd)
-        self.assertEqual(self.invoke(extra=lambda stack: stack.enter_context(
-            patch.object(diagnostic.os, 'close', side_effect=close_then_expire))), 1)
-        self.assertEqual(len(receipt_closes), 2)
+            real_close(fd)
+            if fd in directory_pins:
+                directory_pins.remove(fd)
+                self.now = 11.
+        def inject(stack):
+            stack.enter_context(patch.object(diagnostic.os, 'dup', side_effect=duplicate_directory_pin))
+            stack.enter_context(patch.object(diagnostic.os, 'close', side_effect=close_then_expire))
+        self.assertEqual(self.invoke(extra=inject), 1)
+        self.assertFalse(directory_pins)
         self.assertTrue((self.directory / diagnostic.MARKER).exists())
         self.assertNotIn('resolver-coordinator-completion-v1', self.output.getvalue())
         result = self.result()
