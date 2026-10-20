@@ -47,19 +47,30 @@ DEFAULT_retries=3
 DEFAULT_min_backoff=1
 DEFAULT_max_backoff=30
 
-# Enumerate every top-level `provider "cloudflare" { ... }` block. Providers
-# are top-level blocks: the closing `}` sits at column 0. awk emits one
-# NUL-separated record per block body.
+# Enumerate every `provider "cloudflare"` block across ALL *.tf files in this
+# root — Terraform merges the whole directory as one configuration, so a block
+# in any sibling file is live config (precedent: jikigai-com.tf once held a
+# cloudflare provider block). Blocks are recorded by brace DEPTH, never a
+# column-0 `}`: an indented opener, a `{` on the next line, or a `}` not at
+# column 0 must still flush the record. Each record is "file|body".
 BLOCKS=()
-while IFS= read -r -d '' blk; do
-  BLOCKS+=("$blk")
-done < <(
-  awk '
-    /^provider "cloudflare"[[:space:]]*\{/ { inblk=1; blk=""; next }
-    inblk && /^\}/ { inblk=0; printf "%s\0", blk; next }
-    inblk { blk = blk $0 "\n" }
-  ' "$MAIN_TF" || true
-)
+for tf in "$SCRIPT_DIR"/*.tf; do
+  [[ -e "$tf" ]] || continue
+  while IFS= read -r -d '' blk; do
+    BLOCKS+=("$(basename "$tf")|$blk")
+  done < <(
+    awk '
+      /^[[:space:]]*provider[[:space:]]+"cloudflare"/ { inblk=1; blk=""; depth=0 }
+      inblk {
+        blk = blk $0 "\n"
+        n = gsub(/\{/, "{")
+        m = gsub(/\}/, "}")
+        depth += n - m
+        if (depth <= 0 && (n + m) > 0) { inblk=0; printf "%s\0", blk }
+      }
+    ' "$tf"
+  )
+done
 
 NUM_BLOCKS=${#BLOCKS[@]}
 
@@ -70,12 +81,14 @@ assert "census: at least one provider \"cloudflare\" block enumerated" \
 
 if [[ "$NUM_BLOCKS" -ge 1 ]]; then
   for i in "${!BLOCKS[@]}"; do
-    blk="${BLOCKS[$i]}"
+    rec="${BLOCKS[$i]}"
+    src="${rec%%|*}"
+    blk="${rec#*|}"
     for key in $EXPECTED_KEYS; do
-      eval "default_val=\$DEFAULT_$key"
+      eval "default_val=\$DEFAULT_${key}"
       # Extract the attribute value; whitespace-tolerant, order-agnostic.
-      val="$(printf '%s' "$blk" | grep -oE "^[[:space:]]*$key[[:space:]]*=[[:space:]]*[0-9]+" | head -1 | grep -oE '[0-9]+$' || true)"
-      assert "block $((i + 1))/$NUM_BLOCKS: $key present and > v4 default ($default_val)" \
+      val="$(printf '%s' "$blk" | grep -oE "^[[:space:]]*${key}[[:space:]]*=[[:space:]]*[0-9]+" | head -1 | grep -oE '[0-9]+$' || true)"
+      assert "block $((i + 1))/$NUM_BLOCKS ($src): ${key} present and > v4 default (${default_val})" \
         "[[ -n '$val' && '$val' -gt '$default_val' ]]"
     done
   done

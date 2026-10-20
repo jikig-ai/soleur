@@ -35,3 +35,9 @@
 - GDPR: skip — diff is infra .tf/.test.sh/runbook only, no regulated-data surfaces.
 - lint-ratchet: not adopted (relay only, do not adopt unattended).
 - Affected-shard: apps/web-platform/infra/** defers to ship Phase 4 battery; cla-evidence covered by infra-validation in CI.
+
+## Review Phase
+- Panel: 9 seats (8-class panel minus performance-oracle, replaced by structural-enumeration; + test-design-reviewer). PANEL_SHA=3c12c9e805.
+- Findings fixed inline: (a) enumerate ALL `provider "cloudflare"` blocks across ALL `*.tf` in each root (sibling-file escape; jikigai-com.tf precedent); (b) brace-depth records replace col-0 `}` anchors (indented opener/next-line `{`/non-col-0 `}`); (c) cla-evidence first-block-only `exit` → all-block loop; (d) provision-cloudflare.sh:135 generator now emits the trio; (e) `${key}` braces.
+- Dispositioned: text-grep can't distinguish string-embedded `key = N` (bounded residual); infra-validation `if [[ -f main.test.sh ]]` skip-on-delete is pre-existing workflow property outside this PR's zero-YAML scope; 6× comment duplication — HCL has no provider inheritance (declined); T6 RED-first evidence exists in-session (suite ran 18/19 FAIL pre-fix).
+- Verified post-fix: both suites green; sibling-.tf mutation reds naming the file.
