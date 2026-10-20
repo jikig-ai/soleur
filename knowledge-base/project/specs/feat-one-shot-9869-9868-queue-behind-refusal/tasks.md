@@ -51,7 +51,7 @@ Closes (by Ref, ship step owns the body): #9869, #9868. Draft PR: #10655.
 - [x] 5.4 lint-rule-ids / rule-budget / enforcement-tags / rule-bodies --check / workflow-fidelity GREEN
 
 ## Phase 6: ADR
-- [ ] 6.1 ADR-270 addendum 2026-10-20 (decision + four residuals); check-adr-ordinals; c4-count-parity
+- [x] 6.1 ADR-270 addendum 2026-10-20 (decision + four residuals); check-adr-ordinals; c4-count-parity
 
 ## Phase 7: validation
 - [ ] 7.1 All suites GREEN; scripts/test-all.sh --affected under the lock
