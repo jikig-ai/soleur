@@ -30,9 +30,12 @@
 # (clean) | infra neither success nor failure (hard) | infra=failure: the runner's own tally line (`=== registered infra
 # suites: P passed, F failed, U unaccounted ===`) absent, duplicated, with U > 0 or with F not equal to the RED lines, or an
 # UNACCOUNTED line (all hard), no RED line (hard), a RED set inside KNOWN_DETERMINISTIC_REDS (clean, disclosed), otherwise
-# one STRIKE per non-allowlisted RED suite unless the run id is in JUDGED_REPRODUCING_RUNS (run-granular). A human adds an
-# id there, by PR, only after confirming the RED reproduces (which makes it not a strike under the trigger above); a run
-# judged NON-reproducing stays a strike. A run whose only REDs are allowlisted reads clean and is named in the PASS line;
+# one STRIKE per non-allowlisted RED suite unless the run id is in JUDGED_REPRODUCING_RUNS (run-granular — every
+# non-allowlisted RED in a listed run is excused, so ids are added only for runs verified to carry no second defect). A
+# human adds an id there, by PR, only after confirming the RED reproduces (which makes it not a strike under the
+# trigger above) — or, exceptionally, judging it reproducing-in-intent: a self-attributing defect class with its fix
+# in the same PR, the deviation disclosed at the data site and in the PR body; a run judged NON-reproducing stays a
+# strike. A run whose only REDs are allowlisted reads clean and is named in the PASS line;
 # there is no cap, because the deterministic tag-drift RED has its own P1 from the monitor.
 #
 # Exit codes (sweep-followthroughs.sh vocabulary), in precedence order: 1 FAIL (a counted run was killed) | 5 ACTION
@@ -72,6 +75,7 @@ KNOWN_DETERMINISTIC_REDS="cloud-init-inngest-bootstrap.test.sh"
 # entry (#10654), not the -P 4 flake the soak measures. Neither literal reproduction test held
 # (same-sha infra-validation passed it; -P 1 would pass), so this judgment is disclosed deviation,
 # bounded by: self-attributing rc class, the fix landing in this PR, disclosure in the PR body.
+# Both runs verified single-RED (tallies 180/1/0, 182/1/0), so the run-granular excuse masks nothing.
 JUDGED_REPRODUCING_RUNS="39378082716 39446197504"
 
 for need in gh jq base64 awk grep sed sort tr head date wc; do

@@ -693,8 +693,9 @@ _SUITE_BOUNDS=(
   # monitor runs (39378082716, 39446197504) — the H4 class the ATTRIBUTION block owns to this
   # map. Measured 162-178 s serial on the dev host (faster than the 4-core CI runner); under the
   # monitor's unsharded -P 4 pool the contention multiplier lands it past 360. Pin at 720 (~2x the
-  # observed kill point, ~4.4x local serial), matching the sibling entries' 2.5-3x-plus-headroom
-  # precedent — a slow day renders as this suite's RED, not a step-ceiling kill.
+  # observed kill point, ~4x local serial, ~3x the ~240 s CI-serial estimate), per the ATTRIBUTION
+  # block's >=1.5x-worst-observed rule and the sibling entries' same basis — a slow day renders as
+  # this suite's RED, not a step-ceiling kill.
   "apps/web-platform/infra/git-data-wipe-assert.test.sh=720"
 )
 export SOLEUR_SUITE_TIMEOUTS="${_SUITE_BOUNDS[*]}"

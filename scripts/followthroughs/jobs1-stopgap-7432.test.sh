@@ -259,6 +259,8 @@ new_fx r4b2; good_runs 10; mkrun 90030 40000 completed success failure 0 some-ot
 run_probe "$PROBE"; expect "R4b2 TWO strikes need a person" 5 90030 90031 some-other.test.sh another.test.sh
 new_fx r4b3; good_runs 10; mkrun 90030 40000 completed success failure 0 some-other.test.sh; mkrun 90031 41000 completed success failure 0 another.test.sh
 mutate judged 'JUDGED_REPRODUCING_RUNS="39378082716 39446197504"' 'JUDGED_REPRODUCING_RUNS="90030 90031"' && { run_probe "$MUT"; expect "R4b3 two strikes both judged reproducing by a committed id list" 0 "Judged-reproducing run(s): 90030 90031"; }
+new_fx r4b4; good_runs 10; mkrun 39378082716 40000 completed success failure 0 git-data-wipe-assert.test.sh; mkrun 39446197504 41000 completed success failure 0 git-data-wipe-assert.test.sh
+run_probe "$PROBE"; expect "R4b4 the committed judged ids are honoured by the un-mutated probe" 0 "Judged-reproducing run(s): 39378082716 39446197504"
 new_fx r4c; good_runs 11; mkrun 90032 40000 completed success failure 0
 run_probe "$PROBE"; expect "R4c infra=failure with no RED line at all is a measurement defect" 5 90032
 new_fx r4d; good_runs 11; mkrun 90033 40000 completed success failure 0 cloud-init-inngest-bootstrap.test.sh
