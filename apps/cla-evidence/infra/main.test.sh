@@ -114,6 +114,26 @@ if ! grep -qE 'com\.cloudflare\.edge\.r2\.bucket\.\$\{var\.cf_account_id\}_defau
   fail=1
 fi
 
+# Cloudflare provider 5xx retry budget (#10643): the provider block must carry
+# retries/min_backoff/max_backoff set ABOVE the v4 defaults (3/1/30), so a
+# multi-minute upstream API blip cannot hard-fail a plan on ~7s of backoff.
+# terraform validate refuses unknown attribute names but lets a dropped
+# optional attribute pass silently — presence + value are pinned here.
+# v5 renames the trio `max_retries`; a v5 migration must update these keys too.
+cf_block=$(awk '/^provider "cloudflare"[[:space:]]*\{/{f=1} f{print} f&&/^\}/{exit}' main.tf)
+if [[ -z "$cf_block" ]]; then
+  red "FAIL: main.tf declares no provider \"cloudflare\" block (census floor — the guard must never read green on zero blocks)."
+  fail=1
+fi
+for kv in "retries 3" "min_backoff 1" "max_backoff 30"; do
+  key=${kv%% *}; floor=${kv##* }
+  val=$(printf '%s\n' "$cf_block" | grep -oE "^[[:space:]]*${key}[[:space:]]*=[[:space:]]*[0-9]+" | head -1 | grep -oE '[0-9]+$' || true)
+  if [[ -z "$val" || "$val" -le "$floor" ]]; then
+    red "FAIL: main.tf provider \"cloudflare\" must set $key above the v4 default ($floor) — 5xx retry budget (#10643)."
+    fail=1
+  fi
+done
+
 # Bearer-vs-HMAC separation policy gate (PR #3919 regression guard, codified after
 # PR #3939 review). Driver-style scripts in apps/cla-evidence/scripts/ that invoke
 # `aws --endpoint-url ...` MUST wrap via `doppler run -p soleur -c prd_cla --`
