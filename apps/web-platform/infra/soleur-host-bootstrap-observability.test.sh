@@ -480,7 +480,7 @@ fi
 _ac13_tmp="$(mktemp -d)"
 # The one owning trap in this file (lint-trap-tempfile-ownership): the block below also removes
 # the directory on its normal path, so this exists for a death between allocation and that rm.
-trap 'rm -rf "${_ac13_tmp:-}"' EXIT
+trap 'rm -rf "${_ac13_tmp:-}" "${F5_D:-}"' EXIT
 mkdir -p "$_ac13_tmp/bin"
 printf '#!/usr/bin/env bash\necho invoked >> "%s/doppler-called"; exit 1\n' "$_ac13_tmp" > "$_ac13_tmp/bin/doppler"
 chmod +x "$_ac13_tmp/bin/doppler"
@@ -1158,11 +1158,123 @@ else
   no "AC23: 'hostscripts_incomplete' must be a real soleur-boot-emit call (not comment prose)"
 fi
 
-# ADR-193 floor at the MEASURED green count (113 on 2026-09-11, #7946 review): a lower bound,
+# ── #9639 F5: _sentry_emit READS the webhook-deploy token; it never sources the deploy-owned file as root ──
+# Behavioural, under dash (the interpreter the bootstrap runs under): extract the REAL function, rewrite the env
+# path to a fixture, run it with doppler/curl stubs on PATH. A negative control swaps the read for `. fixture` and
+# must execute the planted code, so the harness can see the defect.
+F5_D="$(mktemp -d)"; F5_FIX="$F5_D/webhook-deploy"; F5_PLANT="$F5_D/planted"; F5_TOK="$F5_D/doppler-tok"
+mkdir -p "$F5_D/bin"
+awk '/^_sentry_emit\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$BOOT" > "$F5_D/fn.sh"
+sed "s#/etc/default/webhook-deploy#$F5_FIX#g" "$F5_D/fn.sh" > "$F5_D/fn-fixed.sh"
+sed -E "s#^( *)_t=.*#\\1. $F5_FIX#" "$F5_D/fn-fixed.sh" > "$F5_D/fn-ctrl.sh"
+printf '#!/bin/sh\nprintf "%%s\\n" "${DOPPLER_TOKEN-UNSET}" >> "%s"\necho "https://k@o0.ingest.invalid/42"\n' "$F5_TOK" > "$F5_D/bin/doppler"
+printf '#!/bin/sh\nexit 0\n' > "$F5_D/bin/curl"; chmod +x "$F5_D/bin/doppler" "$F5_D/bin/curl"
+# The bootstrap runs under a POSIX /bin/sh (dash on the hosts): require dash, or an sh that is not bash, and say which ran.
+F5_SH="$(command -v dash || true)"
+if [ -z "$F5_SH" ] && [ -z "$(sh -c 'printf %s "${BASH_VERSION:-}"')" ]; then F5_SH="$(command -v sh)"; fi
+if [ -n "$F5_SH" ]; then
+  ok "F5: the behavioural block runs under a POSIX sh, not bash ($F5_SH)"
+else
+  no "F5: no dash (and /bin/sh is bash) — the behavioural block would not model the bootstrap's interpreter"
+  F5_SH="$(command -v sh)"
+fi
+f5_run() { # <fn file> [env words...]: run the extracted function under dash with a clean env
+  local fnf="$1"; shift
+  : > "$F5_TOK"; rm -f "$F5_PLANT"
+  { cat "$fnf"; printf '%s\n' "_sentry_emit '{}'"; } > "$F5_D/run.sh"
+  env -i PATH="$F5_D/bin:/usr/bin:/bin" "$@" "$F5_SH" "$F5_D/run.sh" >/dev/null 2>&1
+}
+f5_tok() { tail -n 1 "$F5_TOK" 2>/dev/null || true; }
+if [ -s "$F5_D/fn.sh" ] && [ "$(grep -c '_sentry_emit' "$F5_D/fn.sh")" -ge 1 ]; then
+  ok "F5: the real _sentry_emit body was extracted (non-vacuity for the rows below)"
+else
+  no "F5: _sentry_emit extraction produced nothing (the rows below would be vacuous)"
+fi
+if [ "$(grep -cF "$F5_FIX" "$F5_D/fn-fixed.sh")" -ge 1 ] && [ "$(grep -cF '/etc/default/webhook-deploy' "$F5_D/fn-fixed.sh")" -eq 0 ] \
+   && [ "$(grep -cE "^ *\. $F5_FIX" "$F5_D/fn-ctrl.sh")" -eq 1 ]; then
+  ok "F5: the path rewrite hit and the control variant sources the fixture (injection is real)"
+else
+  no "F5: path rewrite or control injection did not land"
+fi
+printf '%s\n' 'set -x' "touch $F5_PLANT" 'DOPPLER_TOKEN=tok-from-file' > "$F5_FIX"
+f5_run "$F5_D/fn-fixed.sh"
+if [ ! -e "$F5_PLANT" ] && [ -s "$F5_TOK" ]; then
+  ok "F5: a hostile webhook-deploy fixture (set -x + planted write) does not execute in _sentry_emit"
+else
+  no "F5: a hostile webhook-deploy fixture executed in _sentry_emit (planted=$([ -e "$F5_PLANT" ] && echo yes || echo no))"
+fi
+f5_run "$F5_D/fn-ctrl.sh"
+if [ -e "$F5_PLANT" ]; then
+  ok "F5: negative control — the sourcing variant DOES execute the same fixture (the harness can see the defect)"
+else
+  no "F5: negative control did not execute the planted write — the hostile row above is vacuous"
+fi
+printf '%s\n' '# DOPPLER_TOKEN=commented' 'DOPPLER_TOKEN=first' 'DOPPLER_TOKEN=last-tok' > "$F5_FIX"
+f5_run "$F5_D/fn-fixed.sh" DOPPLER_TOKEN=inherited-tok
+if [ "$(f5_tok)" = last-tok ] && [ "$(wc -l < "$F5_TOK")" -eq 1 ]; then
+  ok "F5: a non-canonical fixture (comment, duplicate key) reads the last uncommented token, as ONE value, when the parent exported one"
+else
+  no "F5: expected one last-tok value in the doppler stub, got '$(f5_tok)' over $(wc -l < "$F5_TOK") line(s)"
+fi
+f5_run "$F5_D/fn-fixed.sh"
+if [ "$(f5_tok)" = UNSET ]; then
+  ok "F5: with no exported parent token the read stays unexported (same as sourcing a plain KEY=VALUE file)"
+else
+  no "F5: the read token leaked into the doppler child env without an export (got '$(f5_tok)')"
+fi
+if [ "$(grep -vE '^[[:space:]]*#' "$BOOT" | grep -cE '(^|[:;&(]|[[:space:]])(\.|source)[[:space:]]+/etc/default/webhook-deploy')" -eq 0 ]; then
+  ok "F5: soleur-host-bootstrap.sh sources webhook-deploy on no code line"
+else
+  no "F5: soleur-host-bootstrap.sh still sources /etc/default/webhook-deploy on a code line"
+fi
+printf '%s\n' "DOPPLER_TOKEN=\$(touch $F5_PLANT)" > "$F5_FIX"
+f5_run "$F5_D/fn-fixed.sh" DOPPLER_TOKEN=inherited-tok
+if [ ! -e "$F5_PLANT" ] && [ "$(f5_tok)" = "\$(touch $F5_PLANT)" ]; then
+  ok "F5: a command substitution ON the token line is data, not executed, and arrives literally"
+else
+  no "F5: a command substitution on the token line executed or was mangled (planted=$([ -e "$F5_PLANT" ] && echo yes || echo no), got '$(f5_tok)')"
+fi
+f5_run "$F5_D/fn-ctrl.sh"
+if [ -e "$F5_PLANT" ]; then
+  ok "F5: negative control — the sourcing variant DOES execute a command substitution on the token line"
+else
+  no "F5: negative control did not execute the token-line substitution — the row above is vacuous"
+fi
+: > "$F5_FIX"
+f5_run "$F5_D/fn-fixed.sh" DOPPLER_TOKEN=inherited-tok
+if [ "$(f5_tok)" = inherited-tok ]; then
+  ok "F5: an empty fixture keeps the inherited token (the read assigns only when non-empty)"
+else
+  no "F5: an empty fixture clobbered the inherited token (got '$(f5_tok)')"
+fi
+rm -f "$F5_FIX"
+f5_run "$F5_D/fn-fixed.sh" DOPPLER_TOKEN=inherited-tok
+if [ "$(f5_tok)" = inherited-tok ]; then
+  ok "F5: an absent fixture keeps the inherited token"
+else
+  no "F5: an absent fixture clobbered the inherited token (got '$(f5_tok)')"
+fi
+printf '%s\n' 'DOPPLER_TOKEN=prod-order-tok' 'DOPPLER_CONFIG_DIR=/tmp/.doppler' 'DOPPLER_ENABLE_VERSION_CHECK=false' '# DOPPLER_TOKEN=commented-after' 'DOPPLER_TOKEN_OLD=prefixed-key' > "$F5_FIX"
+f5_run "$F5_D/fn-fixed.sh" DOPPLER_TOKEN=inherited-tok
+if [ "$(f5_tok)" = prod-order-tok ] && [ "$(wc -l < "$F5_TOK")" -eq "$(grep -c . "$F5_TOK")" ] && [ "$(wc -l < "$F5_TOK")" -eq 1 ]; then
+  ok "F5: a production-order file (token first, later keys, a trailing commented token, a prefixed key) yields exactly the real token on one line"
+else
+  no "F5: production-order fixture read '$(f5_tok)' over $(wc -l < "$F5_TOK") line(s)"
+fi
+F5_IND='(^|[;&(]|[[:space:]])(\.|source|eval|export)[[:space:]]+.*\$\{?WEBHOOK_ENV_FILE|cat[[:space:]]+"?\$\{?WEBHOOK_ENV_FILE'
+if [ "$(printf '%s\n' '. "$WEBHOOK_ENV_FILE"' 'eval "$(cat "$WEBHOOK_ENV_FILE")"' | grep -cE "$F5_IND")" -eq 2 ] \
+   && [ "$(grep -vE '^[[:space:]]*#' "$BOOT" | grep -cE "$F5_IND")" -eq 0 ]; then
+  ok "F5: no code line sources, evals or cats the WEBHOOK_ENV_FILE variable (the pattern matches both indirect spellings, the bootstrap has none)"
+else
+  no "F5: the bootstrap reads the webhook-deploy file through a variable indirection, or the indirection pattern is vacuous"
+fi
+rm -rf "$F5_D"
+
+# ADR-193 floor at the MEASURED green count (124 after #9639 F5; 113 on 2026-09-11, #7946 review): a lower bound,
 # so adding rows never trips it, and a gutted suite (a deleted block, an extraction that
 # matched nothing and skipped every row inside its `if`) cannot report 0 failed over nothing.
 # Reported with printf + exit 1 DIRECTLY, never through ok()/no() -- the floor polices those.
-MIN_ASSERTIONS=113
+MIN_ASSERTIONS=131
 if (( pass + fail < MIN_ASSERTIONS )); then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
   exit 1
