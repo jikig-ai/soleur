@@ -20,3 +20,11 @@ soleur:plan (full workflow, inline), soleur:deepen-plan (halt gates 4.5–4.55 i
 - #10400 OPEN; linked-PR + body probes clean.
 - Anchor probe over planned files: open PRs #6778 (stale WIP, plan-issue-templates.md) and #9051 (work/SKILL.md). pr-overlap-preflight exit=13 → continue; disjoint sections, re-verified at merge.
 - cto_spawns=1
+
+## Work Phase
+- Status: COMPLETE — impl commit 222168a7f2 pushed. Pin suite GREEN (84 assertions), markdownlint clean, components.test.ts 1437 pass, body-budget OK, mutation row-1 verified, README diff empty.
+- cto_spawns=1 (items 1-3 + #10693 ruled)
+- Next: soleur:review → fix-round → qa → compound → ship
+- PR: #10718 (draft)
+- Sibling: PR #10726 (fix-10693 pointers) marked ready + auto-merge armed, full battery running on ready.
+- Post-merge 10666: all green except one transient tenant-integration failure on the queue-shadow tree (hashUserId mock gap — current main already carries the importOriginal fix; subsequent runs incl. branch pushes all green; no action needed).
