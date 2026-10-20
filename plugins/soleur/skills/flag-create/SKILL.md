@@ -44,6 +44,8 @@ because the flag is already wired). Use it to back-fill the Flagsmith feature fo
 a flag that shipped its code wiring in an earlier PR, before scoping it per-org
 with `soleur:flag-set-role <flag> <env> on --org <orgId>`.
 
+**Code-first wiring needs the flip map too.** A flag whose `RUNTIME_FLAGS` entry is added by hand (or by a PR that ships the code before the vendor feature exists) must ALSO be added to the `FLAG_ENV_VARS` map in `soleur:flag-set-role`'s flip script, or the documented flip and rollback command exits "unknown flag" and `plugins/soleur/test/flip-flag-map-parity.test.sh` goes red (it lives in a different shard than the suites that cover `server.ts`, so a file-selected run does not see it). Neither create mode writes that map entry for an already-wired flag. See `knowledge-base/project/learnings/2026-10-19-a-hook-deferred-bash-call-silently-ends-a-subagent-and-a-code-first-runtime-flag-needs-the-flip-map.md`.
+
 ## Prerequisites
 
 - Doppler authed with access to `soleur` configs `dev`, `prd`, `cli_ops`.

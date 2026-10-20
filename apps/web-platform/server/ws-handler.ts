@@ -1,4 +1,5 @@
 import { Server as HTTPServer } from "http";
+import { newAgentSessionsRefused, QUIET_WINDOW_MESSAGE } from "./quiet-window";
 import { WebSocketServer, WebSocket } from "ws";
 import { parse } from "url";
 import { randomUUID } from "crypto";
@@ -440,6 +441,25 @@ export function abortActiveSession(userId: string, session: ClientSession): void
   }
 
   session.conversationId = undefined;
+}
+
+/**
+ * #8211 quiet-window (review P2): while the kill-switch is on, a new or resumed conversation must not
+ * ABORT the user's in-flight legacy session. `abortActiveSession` is the supersede path: running it
+ * before any gate killed a running turn and then refused the replacement, so "your existing work is
+ * safe" was false. While paused the in-flight session is left alone (it finishes on its own); the new
+ * conversation's first message is refused at the gates below. `observe` keeps this read out of the
+ * refusal count.
+ */
+async function abortActiveSessionUnlessPaused(userId: string, session: ClientSession): Promise<void> {
+  if (await newAgentSessionsRefused({ observe: true })) {
+    log.info(
+      { feature: "quiet-window", op: "skip-supersede-abort" },
+      "quiet-window: left the in-flight session running (new-sessions-paused)",
+    );
+    return;
+  }
+  abortActiveSession(userId, session);
 }
 
 /**
@@ -1862,7 +1882,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           return;
         }
 
-        abortActiveSession(userId, session);
+        await abortActiveSessionUnlessPaused(userId, session);
 
         // Reject invalid resumeByContextPath up-front — see review #2381.
         // The field was previously passed straight into `.eq()` with no
@@ -2119,7 +2139,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
       try {
         if (checkSubscriptionSuspended(userId, session)) return;
 
-        abortActiveSession(userId, session);
+        await abortActiveSessionUnlessPaused(userId, session);
         // Clear any pending deferred state — resuming an existing conversation
         session.pending = undefined;
 
@@ -2443,6 +2463,18 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             sendToClient(userId, { type: "error", message: sanitizeErrorForClient(refErr) });
             return;
           }
+        }
+
+        // #8211 quiet-window (review P2): refuse a FIRST message BEFORE createConversation. Gating only
+        // inside the dispatch left an empty "active" conversation row and a held concurrency slot behind
+        // every refused first message. session.pending is kept so the user can resend after the window.
+        if (await newAgentSessionsRefused()) {
+          log.info(
+            { feature: "quiet-window", op: "refuse-first-message" },
+            "quiet-window: refused a first message before creating its conversation (new-sessions-paused)",
+          );
+          sendToClient(userId, { type: "error", message: QUIET_WINDOW_MESSAGE });
+          return;
         }
 
         try {

@@ -1,5 +1,6 @@
 "use client";
 
+import { QUIET_WINDOW_CODE } from "@/lib/repo-connect-codes";
 import { useCallback, useState } from "react";
 import {
   reportSilentFallback,
@@ -191,6 +192,12 @@ async function attemptResetup(
       body: JSON.stringify({ repoUrl }),
     });
     if (!res.ok) {
+      // #8211: a planned quiet-window refusal is expected, not an incident; do not report it.
+      const refusal = await res.clone().json().catch(() => null);
+      if (refusal?.code === QUIET_WINDOW_CODE) {
+        handlers.onResetupError();
+        return true;
+      }
       // Fall LOUD via the browser Sentry SDK (server reportSilentFallback is
       // server-only). Still resolve — no dead button (#4712).
       reportSilentFallback(

@@ -1,3 +1,5 @@
+import { hashUserIdValue } from "@/server/userid-pseudonymize";
+import { quietWindowRefusal } from "@/server/quiet-window-http";
 import { NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
@@ -23,6 +25,12 @@ export async function POST(request: Request) {
   if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  // #8211 quiet-window (review P2): creating the repo is the first half of a flow whose second half
+  // (POST /api/repo/setup) is refused during the window. Refusing here keeps a refused user from being
+  // left with a created-but-never-connected GitHub repo that their retry then collides with (422/409).
+  const quietWindow = await quietWindowRefusal("repo-create", hashUserIdValue(userId));
+  if (quietWindow) return quietWindow;
 
   const body = await request.json().catch(() => null);
   if (!body?.name || typeof body.name !== "string") {

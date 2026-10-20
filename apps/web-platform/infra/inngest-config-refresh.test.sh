@@ -236,13 +236,23 @@ if [ -n "$SED_LINE" ]; then
     && pass || fail "S8b: bare 64-hex run survived the sanitizer (must still be scrubbed)"
 fi
 
-# S9: the verify-blob call shape — offline, trusted root, keyless identity + OIDC issuer,
-# pinned cosign image.
-for pin in 'verify-blob' '--trusted-root' '--certificate' '--signature' \
+# S9: the verify-blob call shape — offline, trusted root, single sigstore bundle (cosign
+# 3.x dropped the 2.x detached sig/cert flags entirely; #10390), keyless identity + OIDC
+# issuer, pinned cosign image.
+for pin in 'verify-blob' '--trusted-root' '--bundle /bundle/manifest.txt.sigstore.json' \
            '--certificate-identity-regexp' '--certificate-oidc-issuer' \
            'token.actions.githubusercontent.com' '--network none'; do
   grep -qF -- "$pin" <<<"$SC" && pass || fail "S9: verify call missing $pin"
 done
+# Negative pin: no dropped-2.x flag spelling may survive — on the producer side v3.1.1
+# removed sign-blob's --output-* flags entirely (the #10390 flag-parse failure), while
+# verify-blob's detached --signature/--certificate spellings are merely deprecated and
+# would silently diverge from the --bundle contract rather than die. `--certificate `
+# (with the space) does not false-positive on
+# --certificate-identity-regexp / --certificate-oidc-issuer.
+! grep -qF -- '--signature' <<<"$SC" \
+  && ! grep -qE -- '--certificate[[:space:]]' <<<"$SC" \
+  && pass || fail "S9: verify call still carries a dropped cosign-2.x flag"
 grep -q 'cosign@sha256:57c0e93a' <<<"$SC" \
   && pass || fail "S9: cosign image not the pinned v3.1.1 digest"
 grep -q 'IDENTITY_REGEXP.*build-inngest-config-bundle' <<<"$SC" \
@@ -306,7 +316,9 @@ ZOT_PULL_TOKEN=fixture-token
 EOF
 printf '{"tuf":true}\n' > "$FX/trusted-root.json"
 
-# build a fixture bundle tarball: manifest.txt + member files (real sha256s)
+# build a fixture bundle tarball: manifest.txt + manifest.txt.sigstore.json (the cosign 3.x
+# --bundle output the producer now ships; a fixture stub — the docker mock never parses it)
+# + member files (real sha256s)
 mk_bundle() {  # $1=version $2=dir-with-members -> writes $FX/bundle.tar.gz
   local v="$1" mdir="$2" bd="$FX/bundle-$1"
   rm -rf "$bd"; mkdir -p "$bd"
@@ -315,6 +327,7 @@ mk_bundle() {  # $1=version $2=dir-with-members -> writes $FX/bundle.tar.gz
     echo "VERSION=$v"
     ( cd "$bd" && for f in *.sh; do printf '%s  %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$f"; done )
   } > "$bd/manifest.txt"
+  printf '{"fixture":"sigstore-bundle"}\n' > "$bd/manifest.txt.sigstore.json"
   tar -C "$bd" -czf "$FX/bundle.tar.gz" .
 }
 mkdir -p "$FX/members"

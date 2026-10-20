@@ -27,6 +27,9 @@ import {
   scanHelperSelection,
   assertLiteralCensus,
   assertTailMatchesFixture,
+  BRIDGE_PINS,
+  assertBridgeStructure,
+  scanBridgeStructure,
   bufferSource,
   builderTailTokens,
   extractBuilderTail,
@@ -330,6 +333,64 @@ describe("sandbox-vendored-argv-tail: helper-selection pins (#10445, synthetic)"
   });
 });
 
+// ---------------------------------------------------------------------------------------------
+// #10455 (a): the proxy-bridge structure the AF_UNIX variant depends on. The deny is only safe for NO-EGRESS sessions because
+// the builder starts `socat TCP-LISTEN:... UNIX-CONNECT:<sock>` bridges in the sandbox BEFORE the user command and
+// unshares the net namespace. If a bump reorders that (or drops the bridge), the "egress sessions need AF_UNIX, no-egress
+// sessions only lose a dead bridge" premise is unproven and the variant must be re-measured through the real SDK.
+
+const BRIDGE_WRAPPER_OK =
+  "function WV(e,r,n,s,h,g){let y=h||\"bash\",b=As([g??\"socat\"]),S=[`${b} TCP-LISTEN:3128,fork,reuseaddr UNIX-CONNECT:${e} >/dev/null 2>&1 &`," +
+  "`${b} TCP-LISTEN:1080,fork,reuseaddr UNIX-CONNECT:${r} >/dev/null 2>&1 &`,\"trap 'rc=$?; kill %1 %2 2>/dev/null; exit $rc' EXIT\"];" +
+  "if(s){let T=s+As([y,\"-c\",n]),w=[...S,T].join(`\n`);return`${y} -c ${As([w])}`}else{let T=[...S,`eval ${As([n])}`].join(`\n`);return`${y} -c ${As([T])}`}}";
+const BRIDGE_NET_OK =
+  'if(s){if(tt.push("--unshare-net"),h&&g){if(!_t.existsSync(h))throw Error(`Linux HTTP bridge socket does not exist: ${h}.`);' +
+  'if(!_t.existsSync(g))throw Error(`Linux SOCKS bridge socket does not exist: ${g}.`);if(tt.push("--bind",h,h),g!==h)tt.push("--bind",g,g);';
+const bridgeBuf = (wrapper = BRIDGE_WRAPPER_OK, net = BRIDGE_NET_OK) =>
+  Buffer.from(`${FILLER}${wrapper}${FILLER}${net}${FILLER}`, "latin1");
+
+describe("sandbox-vendored-argv-tail: proxy-bridge structure (#10455 a, synthetic)", () => {
+  it("the literal shape passes: bridges precede the user command, --unshare-net, bridge binds", () => {
+    expect(failureOf(() => assertBridgeStructure(scanBridgeStructure(bufferSource(bridgeBuf())), "synthetic"))).toBe("");
+  });
+  it("the user command ahead of the bridges (reordered array) reds BRIDGE_ORDER", () => {
+    const reordered = BRIDGE_WRAPPER_OK.replace("[...S,T]", "[T,...S]");
+    expect(failureOf(() => assertBridgeStructure(scanBridgeStructure(bufferSource(bridgeBuf(reordered))), "synthetic"))).toMatch(
+      /BRIDGE_ORDER/,
+    );
+  });
+  it("the trap line moved ahead of the bridges reds BRIDGE_ORDER", () => {
+    const moved = BRIDGE_WRAPPER_OK.replace(
+      /S=\[(`[^`]*`),(`[^`]*`),("trap[^"]*")\]/,
+      (_m, a, b, t) => `S=[${t},${a},${b}]`,
+    );
+    expect(moved).not.toBe(BRIDGE_WRAPPER_OK);
+    expect(failureOf(() => assertBridgeStructure(scanBridgeStructure(bufferSource(bridgeBuf(moved))), "synthetic"))).toMatch(
+      /BRIDGE_ORDER/,
+    );
+  });
+  it("a missing --unshare-net ahead of the bridge binds reds BRIDGE_NET", () => {
+    const noNet = BRIDGE_NET_OK.replace('tt.push("--unshare-net")', 'tt.push("--share-net")');
+    expect(failureOf(() => assertBridgeStructure(scanBridgeStructure(bufferSource(bridgeBuf(BRIDGE_WRAPPER_OK, noNet))), "synthetic"))).toMatch(
+      /BRIDGE_NET|anchor/,
+    );
+  });
+  it("a missing bridge bind reds BRIDGE_NET", () => {
+    const noBind = BRIDGE_NET_OK.replace('if(tt.push("--bind",h,h),g!==h)tt.push("--bind",g,g);', "");
+    expect(failureOf(() => assertBridgeStructure(scanBridgeStructure(bufferSource(bridgeBuf(BRIDGE_WRAPPER_OK, noBind))), "synthetic"))).toMatch(
+      /BRIDGE_NET/,
+    );
+  });
+  it("an absent wrapper reds the anchor count", () => {
+    expect(failureOf(() => assertBridgeStructure(scanBridgeStructure(bufferSource(Buffer.from(FILLER, "latin1"))), "synthetic"))).toMatch(
+      /anchor/i,
+    );
+  });
+  it("the pins are non-empty (floor)", () => {
+    expect(Object.keys(BRIDGE_PINS).length).toBeGreaterThanOrEqual(2);
+  });
+});
+
 describe("sandbox-vendored-argv-tail: spawn-tail normalization (cap segment is not ignored)", () => {
   const base = ["--dev", "/dev", "--unshare-pid", "--unshare-user"];
   it("collapses `--cap-drop ALL` with and without `--cap-add CAP_SETFCAP` to the same token", () => {
@@ -414,6 +475,7 @@ describe.skipIf(SKIP_REAL)("sandbox-vendored-argv-tail: real vendored binaries",
         tail: ReturnType<typeof extractBuilderTailFrom>;
         census: ReturnType<typeof scanLiterals>;
         helper: ReturnType<typeof scanHelperSelection>;
+        bridge: ReturnType<typeof scanBridgeStructure>;
       };
       beforeAll(() => {
         const bin = resolveVendoredBinary(pkg, join(APP_ROOT, "node_modules"));
@@ -424,6 +486,7 @@ describe.skipIf(SKIP_REAL)("sandbox-vendored-argv-tail: real vendored binaries",
             tail: extractBuilderTailFrom(fs.source),
             census: scanLiterals(fs.source),
             helper: scanHelperSelection(fs.source),
+            bridge: scanBridgeStructure(fs.source),
           };
         } finally {
           fs.close();
@@ -443,6 +506,12 @@ describe.skipIf(SKIP_REAL)("sandbox-vendored-argv-tail: real vendored binaries",
 
       it("the unix-socket helper selection (skip/apply/missing lines, settings mapping) equals the measured pin (#10445)", () => {
         expect(failureOf(() => assertHelperSelection(scanned.helper, HELPER_PINS[pkg], `${pkg}@${scanned.version}`))).toBe("");
+      });
+
+      it("the bridge wrapper starts both socat bridges before the user command and the net namespace is unshared with the bridge binds (#10455 a)", () => {
+        expect(failureOf(() => assertBridgeStructure(scanned.bridge, `${pkg}@${scanned.version}`))).toBe("");
+        expect(scanned.bridge.wrapperHits).toBe(BRIDGE_PINS.wrapperHits);
+        expect(scanned.bridge.netHits).toBe(BRIDGE_PINS.netHits);
       });
 
       it("the builder tail equals the committed fixture tail (infra/sandbox-canary-argv.json), cap segment normalized", () => {

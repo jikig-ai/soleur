@@ -5597,10 +5597,10 @@ if want_scripts; then
   # sweeper closes issue 8651 as completed — the observed-evidence condition zot-soak-6122.sh's
   # WEB_BLOCKER arm requires — so every sweeper exit code is driven by a fixture.
   run_suite "scripts/web-fresh-boot-zot-8651" bash scripts/followthroughs/web-fresh-boot-zot-8651.test.sh
-  # #10445: exit-code harness for the hosted-Bash-outage readback. Registered EXPLICITLY (scripts/followthroughs/*.test.sh
-  # is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes the PIR-flip tracker, so "PASS only when the
-  # fix PR's merge commit is contained in the deployed tag" must redden CI if it regresses to a bare canary-green exit 0.
-  run_suite "scripts/sandbox-readback-10445" bash scripts/followthroughs/sandbox-readback-10445.test.sh
+  # #10548: exit-code harness for the SDK Bash smoke promotion soak (5 greens over 3 days with full coverage). Registered EXPLICITLY
+  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). A vacuous PASS (replay_only coverage, a held counter under an infra
+  # error, 4 greens) would close the promotion tracker on a smoke that proved nothing, so it must redden CI.
+  run_suite "scripts/followthroughs/sdk-bash-smoke-verdict-10548" bash scripts/followthroughs/sdk-bash-smoke-verdict-10548.test.sh
   # #10552: exit-code + row-class harness for the compound-promote derived-diff probe. Registered EXPLICITLY
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes #10552,
   # so a PASS on a refusal that is not proof (or on a quiet week) must redden CI.
@@ -5621,11 +5621,6 @@ if want_scripts; then
   # #7432 (Item I of #9217): exit-code harness for the JOBS-pin soak probe. Registered explicitly:
   # scripts/followthroughs/*.test.sh is not in SUITE_GLOBS. A vacuous PASS would close #7432, and through it #7376.
   run_suite "scripts/jobs1-stopgap-7432" bash scripts/followthroughs/jobs1-stopgap-7432.test.sh
-  # #5863: exit-code harness for the outer-wrap soak follow-through (stub-curl
-  # arms for verdict binding, freshness window, and HTTP classes). Registered
-  # explicitly (orphan-suite class above) — its PASS authorizes promoting the
-  # report-only canary to gating, so the promotion decision must be driven.
-  run_suite "scripts/tenant-outer-wrap-soak-5863" bash scripts/followthroughs/tenant-outer-wrap-soak-5863.test.sh
   # #9237: exit-code harness for the watchdog-arm soak probe. Registered
   # explicitly (orphan-suite class above). The probe is notify-only (never 0/1);
   # its arms drive whether the sweeper reports NOT YET / CANNOT ESTABLISH /
