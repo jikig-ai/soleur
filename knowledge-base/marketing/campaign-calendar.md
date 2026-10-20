@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-10-12
+last_updated: 2026-10-19
 ---
 
 # Campaign Calendar
@@ -14,7 +14,7 @@ Rolling view of content distributions. Auto-generated from `distribution-content
 
 | Title | Type | Age (days) | Channels | Status |
 |-------|------|-----------|----------|--------|
-| Show HN: Soleur — open-source agents that call APIs, not browsers | hn-show | 171 | | draft |
+| Show HN: Soleur — open-source agents that call APIs, not browsers | hn-show | 178 | | draft |
 
 ## Draft
 

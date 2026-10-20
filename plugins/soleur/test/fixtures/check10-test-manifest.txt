@@ -95,7 +95,7 @@ P2 known divergence — CRLF (TS splits on /\\r?\\n/, awk leaves the \\r)
 P2 known divergence — a Unicode space after a closing quote (TS fallback, awk verbatim)
 P3 every parity fixture is Form-A-only (has `command:`, no fenced block)
 Phase 2 aggregate table includes Discoverability Test Execution row
-Phase 4 prescribes at least one invocation that actually RUNS the battery
+Phase 4 prescribes the plugin gate as the dispatch
 Phase 4 states WHY it stays unsharded
 Phase 4's prescription is imperative, not conditional
 Q ${id} awk and TS emit the YAML value
@@ -240,16 +240,16 @@ editing the pinned script after the freeze is CHANGED-SINCE-APPROVAL (pinned-scr
 empty Form A block scalar (`command: |` with no continuation) returns empty
 every Bash block that reads PREFLIGHT_TMP derives it in the same block
 every `founder-check.py <word>` mention names a real subcommand
-every battery-running invocation in Phase 4 carries an explicit mode flag (#8322)
 every block parses to the expected fields, or is a ParseError
 every document yields exactly the expected number of blocks
 every documented script call goes through the plugin root, and each Read-surface doc carries the root-delivery notice
 every documented script call parses against the real argument parser (a renamed flag or subcommand is RED)
-every fenced test-all.sh invocation in Phase 4 is unsharded, in any spelling
+every fenced gate or test-all.sh invocation in Phase 4 is unsharded, in any spelling
 every reason a FAIL can carry has a plain-language line, and an unknown one falls back to the detail
 every row column follows its record: rc, polarity, kind and expected_matched are not constants
 every row yields exactly the expected reason
 every row yields exactly the expected verdict
+every wired call site names the gate entry point
 every wording constant is named at least once as `text <key>`
 hash-object ignores .gitattributes filters: a CRLF copy of a pinned script is a changed script
 headless is the documented default, and the outcome-to-wording tables map each outcome to its own key
@@ -279,6 +279,7 @@ no documented call types plan-authored or agent-chosen values into a shell word
 no founder-facing guidance uses 'verified', 'proven' or 'safe'
 no plan change on the branch is NO-BLOCK, exit 0, with the pinned banner
 no string contains 'verified', 'proven' or 'safe' (no exemption: the CLO ruled the negation out)
+no surviving battery-running test-all.sh invocation in Phase 4 is mode-less (#8322)
 non-ASCII text hashes as written (the canonical hash is not ASCII-escaped)
 normalizes trailing newline before comparing
 only _git and _verb_gate reference subprocess, and nothing else can start a process
@@ -315,6 +316,8 @@ the default under uncertainty is the full battery, and covers ENFORCEMENT not ju
 the extracted block is the real one (non-empty, carries the fail-closed test)
 the founder-check log in the tree does not make the next verify read as dirty (the Retry flow)
 the gate and rejectReason agree on verdict and reason for every shape
+the gate is delegation-capable: probe token + --affected/--full in its source
+the gate script exists and answers --self-check inside its 15s bound
 the generated fold-indicator matrix is pinned (manifest sees one entry for all six)
 the log path follows an ARCHIVED spec directory (compound moves it)
 the log row records the freeze source and whether a PR was checked
@@ -338,5 +341,6 @@ two reject reasons that once misled say exactly what is true
 unknown or case-variant outcomes and modes are usage errors, never recorded
 verify emits the head sha and whether the tree is dirty
 work/SKILL.md defines the fallback once, with the conditional stated
-§9 prescribes NO unsharded battery run — every invocation carries a mode flag or is a query
-§9 prescribes the affected gate
+§9 prescribes NO unsharded battery run — surviving test-all.sh lines carry a mode flag or are queries
+§9 prescribes the plugin gate
+§9's gate invocation is the affected run — never --full at implementation exit

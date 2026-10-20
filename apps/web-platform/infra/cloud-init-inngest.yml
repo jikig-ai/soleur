@@ -384,7 +384,7 @@ write_files:
     content: |
       #!/usr/bin/env bash
       set +e
-      stage="$1"; detail="$2"
+      stage="$1"; detail="$2"; marker="$3"; [ -z "$marker" ] && marker=SOLEUR_INNGEST_BOOT_STAGE
       tok_file=/run/inngest-bs-logs-token
       # Test seam (never set in production). Deliberately brace-FREE: this file is rendered by
       # Terraform templatefile(), where a bare $${...} would have to be escaped and the escaped
@@ -434,8 +434,13 @@ write_files:
       # chars is exempted — the 32-hex-and-up backstop on unlabeled material is
       # unchanged, so no credential class loses redaction.
       detail="$(printf '%s' "$detail" | sed -E 's#sha256=[0-9a-f]{64}#\U&#g; s#(://[^:@/]+:)[^@]+(@)#\1REDACTED\2#g; s#dp\.[a-z0-9]+\.[A-Za-z0-9_-]{10,}#REDACTED#g; s#[0-9a-f]{32,}#REDACTED#g; s#(signkey-[a-z]+-)[0-9a-f]*#\1REDACTED#g; s#SHA256=[0-9A-F]{64}#\L&#g' 2>/dev/null)"
-      payload="$(jq -nc --arg m SOLEUR_INNGEST_BOOT_STAGE --arg s "$stage" --arg d "$detail" --arg h "$host" --arg t "$ts" '{message:($m+" stage="+$s+" "+$d), marker:$m, stage:$s, detail:$d, host:$h, dt:$t, shipper:"cloud-init-phone-home"}' 2>/dev/null)"
-      [ -n "$payload" ] || payload="{\"message\":\"SOLEUR_INNGEST_BOOT_STAGE stage=$stage\",\"marker\":\"SOLEUR_INNGEST_BOOT_STAGE\",\"stage\":\"$stage\",\"host\":\"$host\"}"
+      # Optional 3rd arg: marker override (#10382 — the cutover-flip noop dual-emit rides
+      # SOLEUR_INNGEST_NOOP so ~288 daily liveness rows never crowd the BOOT_STAGE
+      # consumers' fixed newest-first limits). TRUSTED-LITERAL ONLY: the jq-failure
+      # fallback below interpolates $marker raw into the JSON, so callers pass constant
+      # marker tokens, never host-derived text.
+      payload="$(jq -nc --arg m "$marker" --arg s "$stage" --arg d "$detail" --arg h "$host" --arg t "$ts" '{message:($m+" stage="+$s+" "+$d), marker:$m, stage:$s, detail:$d, host:$h, dt:$t, shipper:"cloud-init-phone-home"}' 2>/dev/null)"
+      [ -n "$payload" ] || payload="{\"message\":\"$marker stage=$stage\",\"marker\":\"$marker\",\"stage\":\"$stage\",\"host\":\"$host\"}"
       # The bearer token reaches curl on STDIN as a config line (`-K -`), never on argv, where any
       # local user could read it from /proc/<pid>/cmdline for the life of the POST — the same
       # shape soleur-boot-emit uses for the Sentry key. crc is curl's status (last in the pipe).
@@ -1143,7 +1148,7 @@ write_files:
       # guard reads the tag from it. Deleting it would break the bump bot and disarm the guard;
       # pulling it would be the retired GHCR leg. On a zot hit IREF is re-pointed at the zot ref,
       # and every consumer below follows IREF.
-      IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.56@sha256:a7557da673788bcc793eb5c96a4bdc8983f7197ba37b3e1765af7b8798bd6ca1
+      IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.57@sha256:ed366d53de834d5a2b48316a1bed4819f481069007f7c75885c191520848988c
       # --- #7462 (ADR-096): resolve the effective ref ONCE, from zot ----------------------------
       # THE DEFECT THIS CLOSED. Every other pull site in the fleet was flipped to prefer the
       # self-hosted zot registry in the ADR-096 Phase-3 dark launch; this one was missed. ADR-096
@@ -1193,7 +1198,7 @@ write_files:
       # mirror_only=true` is picked up by the NEXT attempt on the same host, without a replace.
       set +e
       if [ -n "$ZOT_EP" ]; then
-        ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.56@sha256:a7557da673788bcc793eb5c96a4bdc8983f7197ba37b3e1765af7b8798bd6ca1"
+        ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.57@sha256:ed366d53de834d5a2b48316a1bed4819f481069007f7c75885c191520848988c"
         last_stage=pre-zot-pull
         /usr/local/bin/inngest-boot-phone-home.sh pre-zot-pull "$ZIREF"
         install -m 600 /dev/null /var/log/inngest-zot-pull.log
@@ -1473,9 +1478,32 @@ write_files:
       priv="$(curl -s -o /dev/null -w '%%{http_code}' --max-time 5 http://${inngest_private_ip}:8288/ 2>&1)" || true
       nic="$(ip -o -4 addr show 2>/dev/null | grep -oE '10\.0\.1\.[0-9]+' | tr '\n' ',')" || true
       bind="$(ss -tlnH 2>/dev/null | grep ':8288' | awk '{print $4}' | tr '\n' ',')" || true
-      nft="$(nft list chain inet soleur_inngest input 2>/dev/null | tr '\n' ' ' | head -c 160)" || true
+      # #10382: ship the chain WHOLE — the old `| head -c 160` cut every render mid-rule at
+      # `ip saddr {`, so the member set (the field this emit exists to show) never reached
+      # Better Stack. Untruncated the rendered chain space-joins to ~230 B (measured against
+      # the two-member web-host saddr set); the 4000-char bound below is ~17x that — a cap
+      # that never cuts today's set but stops a pathological ruleset from pushing the row
+      # past a transport field cap, and the +TRUNCATED marker makes a cut loud rather than
+      # silent. nft_sha256= fingerprints the RAW nft output so a changed ruleset is
+      # detectable even if a later field budget trims nft= further; the phone-home
+      # sanitizer's #6780 D2 leg exempts a labelled `sha256=<64hex>`, so the digest
+      # survives the redaction pass (as a substring of nft_sha256= — see #10382 review).
+      # A failed read emits `unavailable`, matching the inngest-cutover-flip.sh emit's
+      # failed-read contract — never sha256-of-empty, which reads as a valid digest.
+      nft_raw="$(nft list chain inet soleur_inngest input 2>/dev/null)" || true
+      nft_full="$(printf '%s' "$nft_raw" | tr '\n' ' ')" || true
+      nft="$(printf '%s' "$nft_full" | cut -c1-4000)" || true
+      [ "$nft" != "$nft_full" ] && nft="$nft+TRUNCATED" || true
+      nft_sha256="unavailable"
+      if [ -n "$nft_raw" ]; then
+        nft_sha256="$(printf '%s' "$nft_raw" | sha256sum | awk '{print $1}')" || nft_sha256="unavailable"
+      fi
+      # Post-guard, matching inngest-cutover-flip.sh: dash has no pipefail, so a failed
+      # sha256sum mid-pipe still exits 0 through awk and leaves nft_sha256 EMPTY — the
+      # guard restores the unavailable sentinel rather than emitting a blank field.
+      [ -n "$nft_sha256" ] || nft_sha256="unavailable"
       last_stage=net-health
-      /usr/local/bin/inngest-boot-phone-home.sh net-health "priv8288=$priv nic=[$nic] bind=[$bind] nft=[$nft]" || true
+      /usr/local/bin/inngest-boot-phone-home.sh net-health "priv8288=$priv nic=[$nic] bind=[$bind] nft=[$nft] nft_sha256=$nft_sha256" || true
       exit 0
     owner: root:root
     permissions: '0755'

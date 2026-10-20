@@ -790,7 +790,6 @@ describe("runReconcile — logs_alert arm through the injected fetchImpl (#8097)
         manifest,
       );
       expect(result.code).toBe(2);
-      const out = result.markers.join("\n");
       // The ADR-218 / runbook prefix through `reason=` is unchanged; `resource=` and `route=` follow,
       // and the quoted vendor text stays last.
       expect(result.markers).toContain(

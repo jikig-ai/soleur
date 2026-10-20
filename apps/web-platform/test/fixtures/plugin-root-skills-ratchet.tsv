@@ -73,7 +73,7 @@
 2	plugins/soleur/skills/ship/SKILL.md	bash scripts/check-adr-ordinals.sh
 1	plugins/soleur/skills/ship/SKILL.md	bash scripts/lib/tweet-eligibility.sh
 3	plugins/soleur/skills/ship/SKILL.md	bash scripts/sync-readme-counts.sh
-6	plugins/soleur/skills/ship/SKILL.md	bash scripts/test-all.sh
+4	plugins/soleur/skills/ship/SKILL.md	bash scripts/test-all.sh
 2	plugins/soleur/skills/ship/references/ci-workflow-authoring.md	node scripts/md-to-mrkdwn.mjs
 1	plugins/soleur/skills/ship/references/detached-battery-verdict.md	bash scripts/test-all.sh
 1	plugins/soleur/skills/ship/references/feature-tweet-draft.md	bash scripts/lib/tweet-eligibility.sh
@@ -104,4 +104,4 @@
 2	plugins/soleur/skills/social-distribute/SKILL.md	bash scripts/lint-distribution-content.sh
 2	plugins/soleur/skills/triage/SKILL.md	bash scripts/lint-rejected-register.sh
 1	plugins/soleur/skills/work/SKILL.md	./scripts/dev.sh
-6	plugins/soleur/skills/work/SKILL.md	bash scripts/test-all.sh
+5	plugins/soleur/skills/work/SKILL.md	bash scripts/test-all.sh
