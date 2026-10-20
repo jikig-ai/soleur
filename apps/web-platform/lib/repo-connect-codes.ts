@@ -15,3 +15,9 @@
 // primitive — the switch ACTION currently lives only in the React component).
 export const REPO_CONNECT_BLOCKED_CODE = "repo_connect_blocked" as const;
 export const WORKSPACE_SWITCH_REQUIRED_CODE = "workspace_switch_required" as const;
+
+// #8211 quiet-window: POST /api/repo/setup and /api/repo/create answer 503 with this `code` while the
+// new-sessions-paused kill-switch is on. The connect-repo page maps it to calm "try again in a few
+// minutes" copy instead of the generic "Project Setup Failed" (review P2).
+export const QUIET_WINDOW_CODE = "quiet_window" as const;
+

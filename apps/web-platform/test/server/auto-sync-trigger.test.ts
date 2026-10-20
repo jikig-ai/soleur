@@ -72,6 +72,7 @@ function baseSeams(startAgentSession: ReturnType<typeof vi.fn>) {
     serviceClient: serviceClient as never,
     resolveWorkspaceId: vi.fn().mockResolvedValue(WORKSPACE_ID),
     userHasEffectiveByokKey: vi.fn().mockResolvedValue(true),
+    newAgentSessionsRefused: vi.fn().mockResolvedValue(false),
   };
   return { inserts, seams };
 }
@@ -131,7 +132,7 @@ describe("triggerHeadlessSync — lease/auth retry resilience (AC3)", () => {
     // Must NOT reject into the setup `.then()` — resolves cleanly.
     const p = triggerHeadlessSync(USER_ID, REPO_URL, seams);
     await vi.runAllTimersAsync();
-    await expect(p).resolves.toBeUndefined();
+    await expect(p).resolves.toBe("failed");
 
     // 1 initial + 3 retries = 4 attempts (bounded).
     expect(startAgentSession).toHaveBeenCalledTimes(4);
@@ -148,7 +149,7 @@ describe("triggerHeadlessSync — lease/auth retry resilience (AC3)", () => {
 
     const p = triggerHeadlessSync(USER_ID, REPO_URL, seams);
     await vi.runAllTimersAsync();
-    await expect(p).resolves.toBeUndefined();
+    await expect(p).resolves.toBe("failed");
 
     expect(startAgentSession).toHaveBeenCalledTimes(1);
     expect(inserts).toHaveLength(1);
@@ -221,5 +222,98 @@ describe("triggerHeadlessSync — gating", () => {
     const promptArg = startAgentSession.mock.calls[0][4];
     expect(promptArg).toContain("/soleur:sync");
     expect(promptArg).toContain("--headless");
+  });
+});
+
+describe("triggerHeadlessSync — quiet-window kill-switch (#8211, CTO ruling: refuse)", () => {
+  test("refused: returns skipped-quiet-window, no BYOK read, no INSERT, no session, no Sentry", async () => {
+    const startAgentSession = vi.fn().mockResolvedValue(undefined);
+    const { inserts, seams } = baseSeams(startAgentSession);
+    seams.newAgentSessionsRefused = vi.fn().mockResolvedValue(true);
+
+    const outcome = await triggerHeadlessSync(USER_ID, REPO_URL, seams);
+
+    expect(outcome).toBe("skipped-quiet-window");
+    expect(seams.userHasEffectiveByokKey).not.toHaveBeenCalled();
+    expect(seams.resolveWorkspaceId).not.toHaveBeenCalled();
+    expect(inserts).toHaveLength(0);
+    expect(startAgentSession).not.toHaveBeenCalled();
+    expect(mockReportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  test("DEFAULT binding (no seam, production shape): flag ON through the real flag module skips; absent starts", async () => {
+    // The only production caller passes no newAgentSessionsRefused seam, so production always runs the
+    // dynamic-import default. Injecting a seam (every other case) cannot tell that default from
+    // `async () => false`; this case exercises it end to end through the REAL feature-flag module
+    // (env-mirror path: no FLAGSMITH_ENVIRONMENT_KEY).
+    const { __resetFeatureFlagsForTests } = await import("@/lib/feature-flags/server");
+    const prevKey = process.env.FLAGSMITH_ENVIRONMENT_KEY;
+    const prevFlag = process.env.FLAG_NEW_SESSIONS_PAUSED;
+    delete process.env.FLAGSMITH_ENVIRONMENT_KEY;
+    try {
+      process.env.FLAG_NEW_SESSIONS_PAUSED = "1";
+      __resetFeatureFlagsForTests();
+      const startOn = vi.fn().mockResolvedValue(undefined);
+      const on = baseSeams(startOn);
+      delete (on.seams as { newAgentSessionsRefused?: unknown }).newAgentSessionsRefused;
+      const outcomeOn = await triggerHeadlessSync(USER_ID, REPO_URL, on.seams);
+      expect(outcomeOn).toBe("skipped-quiet-window");
+      expect(on.inserts).toHaveLength(0);
+      expect(startOn).not.toHaveBeenCalled();
+
+      delete process.env.FLAG_NEW_SESSIONS_PAUSED;
+      __resetFeatureFlagsForTests();
+      const startOff = vi.fn().mockResolvedValue(undefined);
+      const off = baseSeams(startOff);
+      delete (off.seams as { newAgentSessionsRefused?: unknown }).newAgentSessionsRefused;
+      const outcomeOff = await triggerHeadlessSync(USER_ID, REPO_URL, off.seams);
+      expect(outcomeOff).toBe("started");
+      expect(off.inserts).toHaveLength(1);
+    } finally {
+      if (prevKey === undefined) delete process.env.FLAGSMITH_ENVIRONMENT_KEY;
+      else process.env.FLAGSMITH_ENVIRONMENT_KEY = prevKey;
+      if (prevFlag === undefined) delete process.env.FLAG_NEW_SESSIONS_PAUSED;
+      else process.env.FLAG_NEW_SESSIONS_PAUSED = prevFlag;
+      __resetFeatureFlagsForTests();
+    }
+  });
+
+  test("a throwing flag read fails OPEN: the sync proceeds and the helper never rejects (review P3)", async () => {
+    const startAgentSession = vi.fn().mockResolvedValue(undefined);
+    const { inserts, seams } = baseSeams(startAgentSession);
+    seams.newAgentSessionsRefused = vi.fn().mockRejectedValue(new Error("dynamic import failed"));
+
+    const outcome = await triggerHeadlessSync(USER_ID, REPO_URL, seams);
+
+    expect(outcome).toBe("started");
+    expect(inserts).toHaveLength(1);
+    expect(startAgentSession).toHaveBeenCalledTimes(1);
+  });
+
+  test("not refused: unchanged, returns started after exactly one INSERT and one session start", async () => {
+    const startAgentSession = vi.fn().mockResolvedValue(undefined);
+    const { inserts, seams } = baseSeams(startAgentSession);
+
+    const outcome = await triggerHeadlessSync(USER_ID, REPO_URL, seams);
+
+    expect(outcome).toBe("started");
+    expect(inserts).toHaveLength(1);
+    expect(startAgentSession).toHaveBeenCalledTimes(1);
+  });
+
+  test("keyless user stays distinct from quiet-window: skipped-keyless", async () => {
+    const startAgentSession = vi.fn();
+    const { seams } = baseSeams(startAgentSession);
+    seams.userHasEffectiveByokKey = vi.fn().mockResolvedValue(false);
+
+    expect(await triggerHeadlessSync(USER_ID, REPO_URL, seams)).toBe("skipped-keyless");
+  });
+
+  test("exhausted retries return failed", async () => {
+    vi.useRealTimers();
+    const startAgentSession = vi.fn().mockRejectedValue(new Error("boom"));
+    const { seams } = baseSeams(startAgentSession);
+
+    expect(await triggerHeadlessSync(USER_ID, REPO_URL, seams)).toBe("failed");
   });
 });
