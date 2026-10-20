@@ -2078,8 +2078,10 @@ AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS=(
 
 # scripts/lint-feature-map-coverage-battery — mutation battery over the
 # feature-map sentinel + synthetic fixture repos; its verdict moves only with
-# its SUT, itself, the map it checks, or the canonical fixture-dir guard it
-# copies.
+# its SUT, itself, or the canonical fixture-dir guard it copies. The real map
+# is an edge because the battery's fixture maps mirror its entry grammar — a
+# convention change there must re-drive this suite (the live suite is
+# always-on and covers the map itself).
 AFFECTED_SCRIPTS_LINT_FEATURE_MAP_COVERAGE_BATTERY_PATHS=(
 
   "scripts/lint-feature-map-coverage.sh"

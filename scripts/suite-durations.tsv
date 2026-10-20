@@ -431,6 +431,8 @@ scripts/lint-doppler-description-length-unit	1906	measured
 scripts/lint-dual-lockfile	729	measured
 scripts/lint-dual-lockfile-live	861	measured
 scripts/lint-encryption-posture	2954	measured
+scripts/lint-feature-map-coverage-battery	2384	floor
+scripts/lint-feature-map-coverage-live	104	floor
 scripts/lint-gh-argv-arg	11549	measured
 scripts/lint-gh-argv-arg-live	7092	measured
 scripts/lint-guard-contract	1221	measured
