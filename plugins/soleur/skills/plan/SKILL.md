@@ -564,7 +564,7 @@ Place after Acceptance Criteria, before Test Scenarios (or before the last major
 
 Every plan MUST include a `## User-Brand Impact` section. This is the framing-time enforcement of AGENTS.md `hr-weigh-every-decision-against-target-user-impact` and the gate that catches the #2887-class blind spot — decisions weighed on technical and convenience axes only, with no question asked about what one user's breach would cost the brand.
 
-**Step 1 — Insert the section.** If the plan draft does not yet contain a `## User-Brand Impact` heading, insert one using the template from `plugins/soleur/skills/plan/references/plan-issue-templates.md`. The section MUST appear between the description and the Acceptance Criteria. Required lines (template adds a 4th):
+**Step 1 — Insert the section.** If the plan draft does not yet contain a `## User-Brand Impact` heading, insert one using the template from `${CLAUDE_PLUGIN_ROOT}/skills/plan/references/plan-issue-templates.md`. The section MUST appear between the description and the Acceptance Criteria. Required lines (template adds a 4th):
 
 - `**If this lands broken, the user experiences:**` — name a concrete, user-facing artifact.
 - `**If this leaks, the user's [data / workflow / money] is exposed via:**` — name a concrete exposure vector.
@@ -819,7 +819,7 @@ After planning the issue structure, run SpecFlow Analyzer to validate and refine
 
 ### 4. Choose Implementation Detail Level
 
-**Read `plugins/soleur/skills/plan/references/plan-issue-templates.md` now** to load the three issue templates (MINIMAL, MORE, A LOT). Select the appropriate detail level based on complexity -- simpler is mostly better. Use the template structure from the reference file for the chosen level.
+**Read `${CLAUDE_PLUGIN_ROOT}/skills/plan/references/plan-issue-templates.md` now** to load the three issue templates (MINIMAL, MORE, A LOT). Select the appropriate detail level based on complexity -- simpler is mostly better. Use the template structure from the reference file for the chosen level.
 
 ### 4.5. Scoped Advisor Consult (token-frugal)
 
@@ -921,7 +921,7 @@ Examples:
 
 ### 6.5. Sharp Edges verification pass
 
-**Read [plan-sharp-edges.md](./references/plan-sharp-edges.md) now, ONCE — the
+**Read [plan-sharp-edges.md](${CLAUDE_PLUGIN_ROOT}/skills/plan/references/plan-sharp-edges.md) now, ONCE — the
 plan file is complete (Acceptance Criteria land last, so this is the first
 point at which there is a finished plan to check) — and apply it as a
 verification pass over the plan before handing it to Plan Review.** It is a

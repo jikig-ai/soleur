@@ -378,7 +378,7 @@ grep -q '^## User-Brand Impact' <plan-file>
 If the heading is absent, HALT with:
 
 > Error: Plan is missing `## User-Brand Impact` section.
-> See `plugins/soleur/skills/plan/references/plan-issue-templates.md` for the template.
+> See `${CLAUDE_PLUGIN_ROOT}/skills/plan/references/plan-issue-templates.md` for the template.
 > Per AGENTS.md `hr-weigh-every-decision-against-target-user-impact`, every plan
 > must answer the user-impact framing question before deepen-plan can proceed.
 > Re-run `soleur:plan` (or edit the plan directly) to add the section, then re-run deepen-plan.
@@ -433,7 +433,7 @@ grep -q '^## Observability' <plan-file>
 If absent, HALT with:
 
 > Error: Plan touches production code/infra but is missing `## Observability` section.
-> See `plugins/soleur/skills/plan/references/plan-issue-templates.md` for the schema.
+> See `${CLAUDE_PLUGIN_ROOT}/skills/plan/references/plan-issue-templates.md` for the schema.
 > Per AGENTS.md `hr-observability-as-plan-quality-gate`, every plan that ships production
 > code or infrastructure must declare its observability surface before deepen-plan proceeds.
 
@@ -549,7 +549,7 @@ grep -q '^## Encryption Posture' <plan-file>
 If absent, HALT with:
 
 > Error: Plan introduces a persistent store or cross-component connection but is missing `## Encryption Posture` section.
-> See `plugins/soleur/skills/plan/references/plan-issue-templates.md` for the schema.
+> See `${CLAUDE_PLUGIN_ROOT}/skills/plan/references/plan-issue-templates.md` for the schema.
 > Every new store or connection must declare a design-time encryption posture before deepen-plan proceeds.
 
 **Step 3 — Validate field values.** Extract the section body (between `^## Encryption Posture` and the next `^## ` heading). For each `at_rest` entry (`mechanism`, `evidence`, `defends_against`, `does_not_defend`, `disclosed_as`, `live_verification`) and each `in_transit` entry (`tls`, `cert_verification`, `does_not_defend`, `disclosed_as`), reject if ANY of: <!-- markdownlint-disable-line MD038 -->
@@ -590,7 +590,7 @@ grep -q '^## Guard Contract' <plan-file>
 Absent while detection fires → HALT with:
 
 > Error: Plan's deliverable includes a guard but there is no `## Guard Contract` section.
-> See `plugins/soleur/skills/plan/references/plan-issue-templates.md` for the template.
+> See `${CLAUDE_PLUGIN_ROOT}/skills/plan/references/plan-issue-templates.md` for the template.
 > Per plan Phase 2.12, each guard needs its property, its structural ASSEMBLY, and a
 > mutation matrix of >= 3 edits that must go RED. Re-run `soleur:plan` (or edit the plan
 > directly) to add the section, then re-run deepen-plan.
@@ -625,7 +625,7 @@ Read the printed COUNT, not the exit code — `grep -c` exits 1 on `0`, which is
 
 > Error: Plan has no compliant `## Scope Check` section. Per plan Phase 2.4 every plan emits
 > one (see `plugins/soleur/skills/plan/references/plan-scope-check.md`; the schema ships in
-> `plugins/soleur/skills/plan/references/plan-issue-templates.md`). Re-run
+> `${CLAUDE_PLUGIN_ROOT}/skills/plan/references/plan-issue-templates.md`). Re-run
 > `soleur:plan`, or add the section by hand — it maps asks the plan already
 > contains — then re-run deepen-plan.
 
