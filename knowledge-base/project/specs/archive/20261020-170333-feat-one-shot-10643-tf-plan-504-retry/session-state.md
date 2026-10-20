@@ -49,3 +49,10 @@
 ## QA Phase
 - All plan Test Scenarios exercised: unit suites green, Guard Contract mutations 1-4 RED + row 5 PASS, run-registered-suites --enumerate registers the new suite (1 hit), e2e unschedulable by design (pyramid-justified).
 - HEAD: 3652ea0efc pushed. Reviewed-Fix-Round: 1 of max 2.
+
+## Ship Phase (in progress)
+- PR #10679 draft→ready pending. Title/body set, semver:patch label applied, KB artifacts archived, all commits pushed (HEAD 2a433d87b2).
+- Affected battery launched detached: log=/var/tmp/soleur-ship-10643/battery.log rc=/var/tmp/soleur-ship-10643/battery.rc (pid detached via setsid; poll rc file).
+- NEXT: read battery.rc → if 0: `gh pr ready 10679` → wait ready-run per ship/references/ready-run-wait.md → `gh pr merge 10679 --squash --auto` → poll state=MERGED → postmerge → resume prompt + <promise>DONE</promise>.
+- ci-head-verdict: plugins/soleur/scripts/ci-head-verdict.sh ready-count.
+- If battery non-zero: read log tail, fix, re-run.
