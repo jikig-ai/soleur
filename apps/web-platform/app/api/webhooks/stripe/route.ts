@@ -548,14 +548,15 @@ export async function POST(request: Request) {
       // PR-F (#3244, #3940) — gated bridge to Inngest CFO function.
       // Default OFF at merge per Phase 0 ops task (SOLEUR_FR5_ENABLED=false
       // in Doppler prd). Post-merge operator flips to "true" after the
-      // self-hosted Inngest server health-checks. Stripe redelivery
-      // upstream covers the gap if the operator forgets — at-least-once.
+      // self-hosted Inngest server health-checks.
       //
-      // The `processed_stripe_events` dedup INSERT at line 116 already ran
-      // BEFORE this case body; any duplicate Stripe `event.id` short-
-      // circuited at line 126 with 200. So inngest.send fires at most
-      // once per Stripe event.id without a second guard.
+      // The `processed_stripe_events` dedup claim ran BEFORE this case body;
+      // a duplicate Stripe `event.id` short-circuited with 200. A failed
+      // send releases that claim and returns 500 (see the catch below), so
+      // Stripe's redelivery re-enters and re-attempts the send.
       if (process.env.SOLEUR_FR5_ENABLED === "true" && customerId) {
+        // The lookup error is ignored here and the event is acknowledged
+        // without a send (same loss class; tracked in #10657).
         const { data: founderRow } = await supabase
           .from("users")
           .select("id")
@@ -635,13 +636,38 @@ export async function POST(request: Request) {
               { feature: "stripe-webhook", eventId: event.id },
             );
           } catch (err) {
-            reportSilentFallback(err, {
-              feature: "inngest-emit",
-              op: "finance.payment_failed",
+            // A failed send must not be acknowledged: release the dedup row
+            // and return 500 so Stripe redelivers (#10542). The retry is
+            // idempotent through the `stripe-${event.id}` Inngest event id,
+            // which Inngest treats as a duplicate for 24 hours, so a send
+            // that landed server-side but errored client-side cannot spawn a
+            // second CFO draft.
+            // Every send failure returns 500, transient or not; a
+            // deterministic failure is escaped by SOLEUR_FR5_ENABLED=false.
+            //
+            // `err` is passed as null (the message path): an Error is
+            // captured first by the pino mirror without our tags and Sentry
+            // drops the tagged second capture (#8629). Only the error name
+            // and code are reported; the raw message can embed hosts or ids.
+            const errorCode = (err as { code?: unknown } | null)?.code;
+            reportSilentFallback(null, {
+              feature: "stripe-webhook",
+              op: "inngest-send-payment-failed",
               message:
-                "Inngest unreachable on invoice.payment_failed — CFO draft skipped (Stripe redelivery will retry)",
-              extra: { founderId, invoiceId: invoice.id, eventId: event.id },
+                "Stripe webhook: inngest.send failed for invoice.payment_failed — releasing dedup row, returning 500 so Stripe redelivers",
+              extra: {
+                userId: founderId,
+                invoiceId: invoice.id,
+                eventId: event.id,
+                errorName: err instanceof Error ? err.name : typeof err,
+                errorCode: typeof errorCode === "string" ? errorCode : undefined,
+              },
             });
+            await releaseDedupRow();
+            return NextResponse.json(
+              { error: "Dispatch failed" },
+              { status: 500 },
+            );
           }
         }
       }

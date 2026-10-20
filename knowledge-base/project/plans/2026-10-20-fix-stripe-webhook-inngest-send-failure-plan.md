@@ -363,24 +363,24 @@ documented residual-loss case.
 
 ### Functional
 
-- [ ] With `SOLEUR_FR5_ENABLED=true`, a founder with an active grant and a send that fails after the
+- [x] With `SOLEUR_FR5_ENABLED=true`, a founder with an active grant and a send that fails after the
   retries: the route returns 500 with `{"error":"Dispatch failed"}` and the `processed_stripe_events`
   row for `event.id` is deleted (T1, T2).
-- [ ] A second delivery of the same `event.id` after that failure re-enters the handler, claims the
+- [x] A second delivery of the same `event.id` after that failure re-enters the handler, claims the
   row again, and calls `inngest.send` again (T3).
-- [ ] The failure is reported once through `reportSilentFallback` with `feature: "stripe-webhook"`,
+- [x] The failure is reported once through `reportSilentFallback` with `feature: "stripe-webhook"`,
   `op: "inngest-send-payment-failed"`, a message that does not contain "will retry", and no
   `customerEmailHash` in `extra` (T1).
-- [ ] Success path unchanged: 200, no release, no failure report (strengthened existing test); flag off,
+- [x] Success path unchanged: 200, no release, no failure report (strengthened existing test); flag off,
   no founder, and no-grant branches still return 200 without sending (existing tests).
-- [ ] A failed release after a failed send still returns 500, logs the release failure with the event id, and the redelivery is short-circuited without a send (T4).
+- [x] A failed release after a failed send still returns 500, logs the release failure with the event id, and the redelivery is short-circuited without a send (T4).
 
 ### Quality gates
 
-- [ ] The RED run (Phase 1) failed on T1-T4 before the route change; the GREEN run passes.
-- [ ] `stripe-webhook-invoice`, `stripe-webhook-plan-tier` and `webhook-subscription` suites pass.
-- [ ] `./node_modules/.bin/tsc --noEmit` clean in `apps/web-platform`.
-- [ ] `rg -n "will retry|upstream covers the gap" apps/web-platform/app/api/webhooks/stripe/route.ts`
+- [x] The RED run (Phase 1) failed on T1-T4 before the route change; the GREEN run passes.
+- [x] `stripe-webhook-invoice`, `stripe-webhook-plan-tier` and `webhook-subscription` suites pass.
+- [x] `./node_modules/.bin/tsc --noEmit` clean in `apps/web-platform`.
+- [x] `rg -n "will retry|upstream covers the gap" apps/web-platform/app/api/webhooks/stripe/route.ts`
   returns no match after the change.
 - [ ] PR body contains `Ref #10542`, `Ref #10136`, `Closes #10542`, and the replay-check note; the
   title contains no closing keyword.

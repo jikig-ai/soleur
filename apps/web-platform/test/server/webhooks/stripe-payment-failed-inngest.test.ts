@@ -9,15 +9,16 @@ import type Stripe from "stripe";
 //   - SOLEUR_FR5_ENABLED unset/false → existing log behavior, NO inngest.send.
 //   - SOLEUR_FR5_ENABLED=true       → inngest.send fires with envelope
 //     {id: `stripe-${event.id}`, name: "finance.payment_failed", v: "1"}
-//     AFTER the processed_stripe_events dedup insert (which already lives
-//     in the route at lines 116-118).
+//     AFTER the processed_stripe_events dedup insert (which runs in the
+//     route before the event-type switch).
 //   - Stripe redelivery (same event.id twice) → inngest.send fires ONCE
 //     because dedup short-circuits the second call with 200 before reaching
 //     the switch.
 //   - Minimization (RV7): `data.payload` carries no `@`, no `payment_method`,
 //     keeps amount/currency/failureCode/invoiceId.
-//   - Inngest unreachable → reportSilentFallback fires; webhook STILL
-//     returns 200 (Stripe redelivery handles eventual delivery).
+//   - Inngest unreachable → the failure is reported to Sentry, the claimed
+//     dedup row is released and the webhook returns 500, so Stripe redelivers
+//     and the redelivery is not swallowed by the dedup gate (#10542).
 
 const {
   mockConstructEvent,
@@ -139,10 +140,26 @@ function restoreEnv(key: keyof typeof ORIGINAL_ENV) {
   else process.env[key] = ORIGINAL_ENV[key];
 }
 
+// Stateful model of `processed_stripe_events`: the insert claims an id (23505
+// when already claimed) and the release (`delete().eq("event_id", id)`)
+// frees it. A stateless stub could not tell whether the route ever released
+// the row, so a redelivery test would pass against the swallow bug (#10542).
+const claimed = new Set<string>();
+
 beforeEach(() => {
   vi.clearAllMocks();
-  // Default dedup success (no existing row).
-  mockInsert.mockResolvedValue({ data: null, error: null });
+  claimed.clear();
+  mockInsert.mockImplementation(async (row: { event_id: string }) => {
+    if (claimed.has(row.event_id)) {
+      return { data: null, error: { code: "23505", message: "duplicate key" } };
+    }
+    claimed.add(row.event_id);
+    return { data: null, error: null };
+  });
+  mockDeleteEq.mockImplementation(async (_col: string, id: string) => {
+    claimed.delete(id);
+    return { error: null };
+  });
   // Default founder lookup hit.
   mockMaybeSingle.mockResolvedValue({
     data: { id: FOUNDER_ID, stripe_customer_id: CUSTOMER_ID },
@@ -191,6 +208,9 @@ describe("Stripe invoice.payment_failed → Inngest bridge (FR5)", () => {
     expect(envelope.name).toBe("finance.payment_failed");
     expect(envelope.v).toBe("1");
     expect(envelope.data.founderId).toBe(FOUNDER_ID);
+    // Success path: the dedup row stays claimed and nothing is reported.
+    expect(mockDeleteEq).not.toHaveBeenCalled();
+    expect(mockReportSilentFallback).not.toHaveBeenCalled();
   });
 
   test("Stripe redelivery (same event.id twice) → inngest.send fires only ONCE", async () => {
@@ -234,20 +254,91 @@ describe("Stripe invoice.payment_failed → Inngest bridge (FR5)", () => {
     expect(envelope.data.payload.customerEmailHash).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  test("Inngest unreachable → reportSilentFallback fires, webhook returns 200", async () => {
+  // T1 (#10542): a failed send must release the dedup row and return 500 so
+  // Stripe redelivers; before the fix the route returned 200 with the row
+  // still claimed and the CFO draft was lost for good.
+  test("T1: Inngest unreachable → reports, releases the dedup row, returns 500", async () => {
+    process.env.SOLEUR_FR5_ENABLED = "true";
+    mockConstructEvent.mockReturnValue(makePaymentFailedEvent());
+    // A plain Error is not matched by isTransientFetchError: one attempt, no timer.
+    mockInngestSend.mockRejectedValueOnce(new Error("ECONNREFUSED 127.0.0.1:8288"));
+
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: "Dispatch failed" });
+    expect(mockDeleteEq).toHaveBeenCalledTimes(1);
+    expect(mockDeleteEq).toHaveBeenCalledWith("event_id", "evt_pf_001");
+    expect(claimed.has("evt_pf_001")).toBe(false);
+
+    expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
+    // First argument null: the message path. An Error-path report is
+    // pre-captured by the pino mirror and the tagged capture is dropped
+    // (#8629), so the feature/op tags would not be findable in Sentry.
+    expect(mockReportSilentFallback.mock.calls[0][0]).toBeNull();
+    const ctx = mockReportSilentFallback.mock.calls[0][1] as {
+      feature: string;
+      op?: string;
+      message?: string;
+      extra?: Record<string, unknown>;
+    };
+    expect(ctx.feature).toBe("stripe-webhook");
+    expect(ctx.op).toBe("inngest-send-payment-failed");
+    expect(ctx.message).not.toMatch(/will retry/i);
+    expect(ctx.message).toMatch(/releasing dedup row/);
+    expect(ctx.extra).toMatchObject({
+      userId: FOUNDER_ID,
+      eventId: "evt_pf_001",
+      invoiceId: "in_pf_001",
+      errorName: "Error",
+    });
+    expect(ctx.extra).not.toHaveProperty("founderId");
+    expect(ctx.extra).not.toHaveProperty("customerEmailHash");
+    // The raw error text can embed hosts or ids; only its name is reported.
+    expect(JSON.stringify(ctx.extra)).not.toContain("ECONNREFUSED");
+  });
+
+  // T3 (#10542): the behavior the old code lost. The stateful insert mock
+  // accepts the redelivery only if the route really released the row.
+  test("T3: redelivery after a failed send re-attempts the send and succeeds", async () => {
     process.env.SOLEUR_FR5_ENABLED = "true";
     mockConstructEvent.mockReturnValue(makePaymentFailedEvent());
     mockInngestSend.mockRejectedValueOnce(new Error("ECONNREFUSED 127.0.0.1:8288"));
 
-    const res = await POST(makeRequest());
-    expect(res.status).toBe(200);
-    expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
-    const ctx = mockReportSilentFallback.mock.calls[0][1] as {
-      feature: string;
-      op?: string;
-    };
-    expect(ctx.feature).toBe("inngest-emit");
-    expect(ctx.op).toBe("finance.payment_failed");
+    const res1 = await POST(makeRequest());
+    expect(res1.status).toBe(500);
+    expect(claimed.has("evt_pf_001")).toBe(false);
+
+    mockInngestSend.mockResolvedValueOnce(undefined);
+    const res2 = await POST(makeRequest());
+    expect(res2.status).toBe(200);
+    expect(mockInngestSend).toHaveBeenCalledTimes(2);
+    // Both attempts carry the same Inngest event id, which Inngest dedups.
+    const ids = mockInngestSend.mock.calls.map((c) => (c[0] as { id: string }).id);
+    expect(ids).toEqual(["stripe-evt_pf_001", "stripe-evt_pf_001"]);
+    // The successful redelivery keeps its claim.
+    expect(claimed.has("evt_pf_001")).toBe(true);
+  });
+
+  // T4 (#10542): the accepted residual. If the release itself fails the route
+  // still answers 500 (a 200 would make the loss worse) and the redelivery is
+  // short-circuited by the dedup gate; the release failure is logged.
+  test("T4: release fails after a failed send → still 500, release failure logged, redelivery short-circuits", async () => {
+    process.env.SOLEUR_FR5_ENABLED = "true";
+    mockConstructEvent.mockReturnValue(makePaymentFailedEvent());
+    mockInngestSend.mockRejectedValueOnce(new Error("ECONNREFUSED 127.0.0.1:8288"));
+    mockDeleteEq.mockResolvedValueOnce({ error: { message: "delete failed" } });
+
+    const res1 = await POST(makeRequest());
+    expect(res1.status).toBe(500);
+    expect(claimed.has("evt_pf_001")).toBe(true);
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ eventId: "evt_pf_001" }),
+      expect.stringContaining("failed to release dedup row"),
+    );
+
+    const res2 = await POST(makeRequest());
+    expect(res2.status).toBe(200);
+    expect(mockInngestSend).toHaveBeenCalledTimes(1);
   });
 
   test("No founder row for stripe_customer_id → does NOT call inngest.send (logs only)", async () => {
@@ -297,7 +388,9 @@ describe("Stripe invoice.payment_failed → Inngest bridge (FR5)", () => {
     expect(mockInngestSend).not.toHaveBeenCalled();
   });
 
-  test("Inngest transient failure → retries exhaust, then reportSilentFallback fires after 3 attempts", async () => {
+  // T2 (#10542): real timers; the retry helper backs off 500 ms then 1000 ms
+  // (about 1.5 s, well inside the repo's testTimeout).
+  test("T2: transient failure → retries exhaust after 3 attempts, then releases once and returns 500", async () => {
     process.env.SOLEUR_FR5_ENABLED = "true";
     mockConstructEvent.mockReturnValue(makePaymentFailedEvent());
     const fetchError = new TypeError("fetch failed");
@@ -307,9 +400,11 @@ describe("Stripe invoice.payment_failed → Inngest bridge (FR5)", () => {
       .mockRejectedValueOnce(fetchError);
 
     const res = await POST(makeRequest());
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(500);
     expect(mockInngestSend).toHaveBeenCalledTimes(3);
+    expect(mockDeleteEq).toHaveBeenCalledTimes(1);
     expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
+    expect(claimed.has("evt_pf_001")).toBe(false);
   });
 
   test("Inngest transient failure → retries and succeeds on second attempt", async () => {
