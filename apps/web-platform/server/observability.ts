@@ -441,6 +441,11 @@ export function infoSilentFallback(
  *   read-side detector for a committed model with elements but no views, from
  *   any writer; see #8740, #8861).
  *
+ * - `agent-sandbox` seccomp family (#10455, warn-level via `mirrorWarnWithDebounce`; dedup key `global`, an
+ *   in-process token, NOT a userId): `agent-sandbox-seccomp-agreement` (agent-runner-query-options.ts, the spawn-time
+ *   env/sandbox disagreement) and `agent-sandbox-unix-deny-unresolved` (resolve-sandbox-unix-deny.ts, the flag read
+ *   failed or timed out and the query fell back to the base artifact).
+ *
  * - `untrusted-content` family (#4671, ADR-287): `untrusted-content-scorer-error`,
  *   `untrusted-content-shape`, `untrusted-content-hook-error` (dedup key is the
  *   `workspaceId` (or "unknown"), an in-process token, NOT a userId; metadata-only

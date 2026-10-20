@@ -258,6 +258,12 @@ export function buildBwrapInvocation(fixture) {
 //     sandbox → `fd_hygiene_bypass`. Each fd is probed by a redirect in a
 //     subshell — no /proc dependency — so the census keeps discriminating
 //     under the mask.
+//   unixdeny_filter / base_af_unix_control (#10455 a) — BOTH seccomp artifacts are
+//     verified at deploy time: under the variant (SOLEUR_BWRAP_SECCOMP_BPF_UNIXDENY,
+//     default the baked /app/infra path) socket(AF_UNIX) MUST be EPERM
+//     (`unixdeny_filter_bypass` otherwise; `unixdeny_artifact_unusable` when the
+//     shim refuses the file), and under the base artifact it MUST still work
+//     (`base_denies_af_unix`: egress sessions' proxy bridges depend on it).
 //   args_fd_transport — the SDK's real spawn shape: setup argv rides
 //     `--args <fd>` NUL-separated on a pipe the shim consumes and re-emits
 //     on a fresh fd (the #9723 mask splice needs the content). Replay that
@@ -427,6 +433,60 @@ export function classifyProcMaskProbe({ status, stderr = "", errorCode } = {}) {
   return null;
 }
 
+// #10455 (a) - the AF_UNIX-deny variant (second seccomp artifact, selected per no-egress session). The probes spawn the
+// SAME connect() under each artifact: node's net.connect to a path that does not exist reports ENOENT when the AF_UNIX
+// socket was created (and the connect failed) and EPERM when socket() itself was denied, so the one program discriminates
+// "the filter is live" from "the filter never installed" without needing a listener.
+const AF_UNIX_PROBE_JS =
+  "const c=require('net').connect('/canary-af-unix-probe.sock');" +
+  "c.on('error',e=>{console.log(e.code);process.exit(0)});" +
+  "c.on('connect',()=>{console.log('CONNECTED');process.exit(0)});" +
+  "setTimeout(()=>{console.log('TIMEOUT');process.exit(0)},5000)";
+
+/** Baked path of the variant in the runner image; SOLEUR_BWRAP_SECCOMP_BPF_UNIXDENY overrides it (dev, tests). */
+const UNIXDENY_ARTIFACT_DEFAULT = "/app/infra/bwrap-userns-clone3-unixdeny.bpf";
+
+function afUnixProbeInfra(probe, reason, extra = {}) {
+  return { verdict: "canary_infra_error", reason, probe, ...extra };
+}
+
+/**
+ * Classify the probe run under the VARIANT artifact: socket(AF_UNIX) MUST be denied (EPERM). Returns a verdict or null.
+ *
+ * @param {{ status?: number | null, stdout?: string, stderr?: string, errorCode?: string }} res
+ */
+export function classifyUnixdenyFilterProbe({ status, stdout = "", stderr = "", errorCode } = {}) {
+  const probe = "unixdeny_filter";
+  if (errorCode) return afUnixProbeInfra(probe, `unixdeny_probe_spawn_${String(errorCode).toLowerCase()}`);
+  // Our own shim refused the spawn (absent / unreadable / unopenable variant artifact): the image cannot start a
+  // no-egress session once the flag is on.
+  if (/(^|\n)bwrap-shim:/.test(stderr)) {
+    return { verdict: "sandbox_broken", reason: "unixdeny_artifact_unusable", probe };
+  }
+  const out = stdout.trim();
+  if (status === 0 && out === "EPERM") return null;
+  if (status === 0 && out === "ENOENT") return { verdict: "sandbox_broken", reason: "unixdeny_filter_bypass", probe };
+  return afUnixProbeInfra(probe, `unixdeny_probe_${status === null || status === undefined ? "null" : `exit_${status}`}_${out.slice(0, 12) || "empty"}`);
+}
+
+/**
+ * Classify the probe run under the BASE artifact: socket(AF_UNIX) MUST still work (ENOENT = created, connect failed).
+ * Returns a verdict or null. A base that denies AF_UNIX breaks every egress session's in-sandbox proxy bridge.
+ *
+ * @param {{ status?: number | null, stdout?: string, stderr?: string, errorCode?: string }} res
+ */
+export function classifyBaseAfUnixControlProbe({ status, stdout = "", stderr = "", errorCode } = {}) {
+  const probe = "base_af_unix_control";
+  if (errorCode) return afUnixProbeInfra(probe, `base_af_unix_spawn_${String(errorCode).toLowerCase()}`);
+  if (/(^|\n)bwrap-shim:/.test(stderr)) {
+    return { verdict: "sandbox_broken", reason: "base_artifact_unusable", probe };
+  }
+  const out = stdout.trim();
+  if (status === 0 && out === "ENOENT") return null;
+  if (status === 0 && out === "EPERM") return { verdict: "sandbox_broken", reason: "base_denies_af_unix", probe };
+  return afUnixProbeInfra(probe, `base_af_unix_${status === null || status === undefined ? "null" : `exit_${status}`}_${out.slice(0, 12) || "empty"}`);
+}
+
 // The procfs-free fd enumerator: dup-test every fd 3..255 in a subshell — an
 // open fd accepts `<&` (read) or `>&` (write); a closed one fails both.
 // Stdio 0-2 are assumed present (the n<3 lower bound in the classifier stays
@@ -473,6 +533,19 @@ const HARDENING_PROBES = [
     classify: classifyFdCensusProbe,
     leakFd: true,
   },
+  {
+    // #10455 (a): the variant artifact, selected explicitly (the shim reads SOLEUR_BWRAP_SECCOMP_BPF per spawn).
+    argv: [process.execPath, "-e", AF_UNIX_PROBE_JS],
+    classify: classifyUnixdenyFilterProbe,
+    env: () => ({
+      SOLEUR_BWRAP_SECCOMP_BPF: process.env.SOLEUR_BWRAP_SECCOMP_BPF_UNIXDENY || UNIXDENY_ARTIFACT_DEFAULT,
+    }),
+  },
+  {
+    // #10455 (a): the control on the BASE artifact (the ambient selector / shim default): AF_UNIX must still work.
+    argv: [process.execPath, "-e", AF_UNIX_PROBE_JS],
+    classify: classifyBaseAfUnixControlProbe,
+  },
 ];
 
 /**
@@ -502,6 +575,7 @@ export function runHardeningProbes(setupArgv) {
     try {
       res = spawnSync("bwrap", [...setupArgv, "--", ...probe.argv], {
         encoding: "utf8",
+        ...(probe.env ? { env: { ...process.env, ...probe.env() } } : {}),
         timeout: 15_000, // a wedge lands as status null → canary_infra_error, never a soak reset
         ...(leakFd >= 0 ? { stdio: ["inherit", "pipe", "pipe", leakFd] } : {}),
       });
