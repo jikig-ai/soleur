@@ -130,3 +130,16 @@ The execution-test worker guessed `config_transport.py`; discovery identified
 allocator refused unavailable disk-backed bases; it performed no fallback
 mutation and did not claim one. Committed test batteries use synthesized temporary
 module fixtures and expose their own pristine/failure controls.
+
+The approved file-only Config preparation preflight found the operational
+contract's fixed component census still omitted all eight new Config files.
+The downstream dependency gate would refuse before creating its directory;
+no operational manifest was created. A synthesized prepared-contract regression
+failed at that exact binding check first. The census and fixture now include
+those files, and the behavioral test passes the generated contract through the
+real dependency verifier before requiring refusal for each omitted reference.
+The existing missing-committed-component battery also covers all eight files.
+Review pure preparation across producer and consumer before requesting an
+operational approval; isolated component coverage did not prove their integration.
+The scoped Semgrep rerun initially refused its settings write in the sandbox;
+the approved rerun must complete before any scan verdict is recorded.

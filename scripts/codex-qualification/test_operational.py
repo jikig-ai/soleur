@@ -10,6 +10,7 @@ import candidate
 import prepare
 import test_candidate
 import operational
+import config_acquisition
 
 
 class Operational(unittest.TestCase):
@@ -37,7 +38,10 @@ class Operational(unittest.TestCase):
                      'prebuild_acquisition.py', 'test_prebuild_acquisition.py',
                      'reference_diagnostic.py', 'test_reference_diagnostic.py',
                      'registry_metadata.py', 'test_registry_metadata.py',
-                     'redirect_diagnostic.py', 'test_redirect_diagnostic.py'):
+                     'redirect_diagnostic.py', 'test_redirect_diagnostic.py',
+                     'config_acquisition.py', 'config_https.py', 'config_resolver.py', 'config_schema.py',
+                     'test_config_acquisition.py', 'test_config_https.py', 'test_config_schema.py',
+                     'test_config_execution.py'):
             (self.component.parent / name).write_bytes((Path(__file__).parent / name).read_bytes())
         for name in ('40_race_holder.sql', '41_race_waiter.sql', '42_race_observe.sql', '43_race_assert.sql'):
             path = self.component.parent / 'scenarios' / name
@@ -106,6 +110,18 @@ class Operational(unittest.TestCase):
         self.assertNotIn(prepare.synthetic_browser_config()['anon_key'], dumped)
         self.assertNotIn(prepare.synthetic_browser_config()['signing_material'], dumped)
         self.assertNotIn('fixture_roles', dumped)
+
+    def test_prepared_contract_binds_config_dependencies_and_refuses_each_omission(self):
+        dependencies = config_acquisition._dependencies(self.repo, self.contract)
+        for name in config_acquisition.DEPENDENCIES:
+            with self.subTest(name=name):
+                path = 'scripts/codex-qualification/' + name
+                self.assertEqual(dependencies[name], prepare.sha((self.repo / path).read_bytes()))
+                changed = copy.deepcopy(self.contract)
+                del changed['source_references'][path]
+                with self.assertRaisesRegex(prepare.Refused, config_acquisition.ERROR):
+                    config_acquisition._dependencies(self.repo, changed)
+        self.assertFalse(self.destination.exists())
 
     def test_builder_binds_exact_source_recipe_and_unresolved_dependencies(self):
         spec = candidate.candidate_spec(self.repo, self.source, self.destination)
@@ -219,7 +235,10 @@ class Operational(unittest.TestCase):
                      'prebuild_acquisition.py', 'test_prebuild_acquisition.py',
                      'reference_diagnostic.py', 'test_reference_diagnostic.py',
                      'registry_metadata.py', 'test_registry_metadata.py',
-                     'redirect_diagnostic.py', 'test_redirect_diagnostic.py'):
+                     'redirect_diagnostic.py', 'test_redirect_diagnostic.py',
+                     'config_acquisition.py', 'config_https.py', 'config_resolver.py', 'config_schema.py',
+                     'test_config_acquisition.py', 'test_config_https.py', 'test_config_schema.py',
+                     'test_config_execution.py'):
             component = self.component.parent / name
             original = component.read_bytes()
             component.unlink()
