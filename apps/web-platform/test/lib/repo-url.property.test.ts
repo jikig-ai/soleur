@@ -107,6 +107,31 @@ describe("normalizeRepoUrl — regression fixtures", () => {
   });
 });
 
+describe("normalizeRepoUrl — dot-segment exposure regression", () => {
+  // regression fixture: fast-check seed 1186074284 path 59:0:0:0:0:1:0
+  // Counterexample " http://a.aa/..git.git": the `.git` strip left `/.`, a
+  // dot-segment the NEXT call's URL parse resolves to `/` — so one pass was
+  // not a fixpoint (f(f(x)) !== f(x)). SUT fix: iterate the pipeline to a
+  // fixpoint.
+  it("a suffix strip that exposes a dot-segment is still idempotent", () => {
+    const once = normalizeRepoUrl(" http://a.aa/..git.git");
+    expect(normalizeRepoUrl(once)).toBe(once);
+    expect(once).toBe("http://a.aa");
+  });
+
+  it("the path-segment forms of the same class are idempotent", () => {
+    for (const x of [
+      "http://a.aa/..git.git",
+      "https://h.io/o/..git",
+      "https://h.io/o/r/..git.git/",
+      "http://a.aa/...git",
+    ]) {
+      const once = normalizeRepoUrl(x);
+      expect(normalizeRepoUrl(once)).toBe(once);
+    }
+  });
+});
+
 // Negative control (anti-vacuity, AC6): the harness must be able to fail.
 describe("repo-url property suite — negative control", () => {
   it("a deliberately-false property throws", () => {

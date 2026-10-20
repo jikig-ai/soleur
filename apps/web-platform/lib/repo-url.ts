@@ -16,6 +16,9 @@
  *      output to be trim-stable. Defect found by the fast-check
  *      property suite (test/lib/repo-url.property.test.ts).
  *
+ *   6. Repeat 1-5 to a fixpoint (see `normalizeRepoUrl`): a strip can expose a
+ *      dot-segment (`/..git.git` -> `/.`) the next call's URL parse resolves.
+ *
  * Non-URL input passes through as the trimmed + string-only-op'd value.
  * `null`/`undefined`/`""` → `""`.
  *
@@ -26,7 +29,7 @@
  * See plan:
  *   `knowledge-base/project/plans/2026-04-22-refactor-drain-web-platform-code-review-2775-2776-2777-plan.md`
  */
-export function normalizeRepoUrl(raw: string | null | undefined): string {
+function normalizeRepoUrlOnce(raw: string | null | undefined): string {
   if (raw == null) return "";
   const trimmed = raw.trim();
   if (trimmed.length === 0) return "";
@@ -68,4 +71,21 @@ export function normalizeRepoUrl(raw: string | null | undefined): string {
 
   return working;
 }
-/* #9815 e2e probe — REVERTED BEFORE COMMIT */
+
+/**
+ * Public entry: run the single-pass pipeline to a FIXPOINT so the documented
+ * idempotence holds for every input. One pass is not enough: a suffix strip
+ * can expose a dot-segment (`/..git.git` -> `/.`) that the next call's URL
+ * parse resolves (`/.` -> `/`), so `f(f(x)) !== f(x)` for one pass. Each pass
+ * only shortens or leaves the value, so this converges in a handful of
+ * rounds; the cap is a fail-safe, not an expected path.
+ */
+export function normalizeRepoUrl(raw: string | null | undefined): string {
+  let current = normalizeRepoUrlOnce(raw);
+  for (let i = 0; i < 8; i++) {
+    const next = normalizeRepoUrlOnce(current);
+    if (next === current) return current;
+    current = next;
+  }
+  return current;
+}
