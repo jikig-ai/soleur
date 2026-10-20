@@ -161,3 +161,34 @@ receipt, DNS, network and execution. Review the actual manifest and exact
 expanded command as separate gates; fresh exact-command authorization and
 separate evidence review remain required. All profile, recovery, qualification,
 resync/full CI and ship holds persist.
+
+## Approved Config attempt and separate evidence review — 2026-10-20
+
+The operator approved the fully expanded one-time command for the fresh manifest
+above. It exited 1 with the fixed generic refusal. The private output now contains
+the unchanged mode-0600 manifest, a consumed mode-0600 marker, and a sanitized
+mode-0600 receipt; all are regular files in the bound mode-0700 directory. The
+receipt canonical self-hash is
+`305323043f7eb30ba9e2642f4d62ff88201f4781f325bf376c19ae48a07cdf40`; its raw
+SHA-256 is `0280a557343c5fb00cf87007c27638f7f93db188aca5aa44163fad5f28262dc0`.
+The marker SHA-256 is
+`9824d6f4657a21933708e2be693ad71f5026c95dc64cb42e9a8c7ac197bf75c6`.
+
+Separate security evidence review passed: the closed receipt consistently says
+`status=refused`, `stage=token`, `failure=dns`, zero HTTP requests, null HTTP
+status/peer/TLS results, zero Config bytes, null Config checks, all authority
+flags false, and review pending. Source places DNS/address admission before the
+application send boundary and increments request count at send. The evidence
+supports that no token, registry or destination HTTP request started. DNS
+activity may have occurred; the fixed `dns` category groups helper startup,
+resolution, output parsing and address-policy failures, and does not identify
+the exact cause or prove absence of DNS traffic. No Config was acquired.
+
+Ruled by CTO agent, 2026-10-20: stop after this receipt; preserve the consumed
+marker and spent attempt, with no further diagnostics or acquisition. Source-only
+inspection cannot recover the attempt-specific runtime DNS cause. The exact
+command approval is spent. Further source-only diagnostics, retries and resolver
+or transport probes are rejected; the profile/recovery chain remains gated on
+successful acquisition. The independent review and ruling authorize no further
+operational action. Historical diagnostic attempts and this Config attempt are
+all spent; never remove or reuse their markers or output directories.

@@ -186,3 +186,19 @@ The worktree `.git/info/exclude` lookup failed because `.git` is a gitfile here;
 exclude configuration is not readable by that path. A guessed test helper name
 also had no match. Use `rg --files` / symbol discovery before path or function
 reads, and treat non-matches as no evidence rather than a repository result.
+
+## Approved Config acquisition attempt — 2026-10-20
+
+The freshly reviewed one-time command exited with a sanitized refusal. Preserve
+the mode-0600 consumed marker and receipt in the original mode-0700 output
+directory. Separate evidence review verified a valid receipt self-hash,
+`stage=token`, `failure=dns`, zero HTTP requests and zero Config bytes. DNS
+activity may still have occurred; the fixed category does not identify whether
+helper startup, resolution, parsing or address policy failed. CTO ruled to stop:
+source-only inspection cannot recover attempt-specific runtime state, and no
+diagnostic, retry, or resolver/transport probe is authorized. Never infer
+successful acquisition from a valid receipt or reuse this spent attempt.
+
+A combined patch for the evidence record included a mismatched learning-file
+anchor and applied no changes. Re-read the target tail, then patch each artifact
+with its own exact context and verify both diffs before committing.
