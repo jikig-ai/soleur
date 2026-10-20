@@ -131,3 +131,15 @@ mitigation: the factory branches on `table === "<name>"`.
   `cq-preflight-fetch-sweep-test-mocks`, `cq-nextjs-route-files-http-only-exports`,
   `cq-for-local-verification-of-apps-doppler`,
   `wg-when-a-pr-includes-database-migrations`.
+
+## Addendum — 2026-10-20 (#10542)
+
+Step 4 above ("call `releaseDedupRow()` before every 5xx exit in the switch") never covered a
+side-effect dispatch that acknowledges with 200: the `invoice.payment_failed` case caught a failed
+Inngest send, reported it and fell through to 200 with the dedup row still claimed, so Stripe's
+redelivery short-circuited and the CFO draft was lost for good, under a log line that said
+redelivery would retry. The rule is now: **a dispatch whose failure must be retried releases the
+row and returns 5xx; a catch that only reports is a decision to lose the event.** Check the
+retry's idempotency basis too: Inngest dedups the event id for 24 hours while Stripe retries for
+about three days, and a consumer without its own key (the CFO draft has no `source_ref`) can add a
+duplicate after that window.

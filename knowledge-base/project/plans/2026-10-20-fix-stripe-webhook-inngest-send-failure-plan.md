@@ -279,6 +279,13 @@ constraint 2). The merge needs a separate go naming the merge.
 - **If this lands broken, the user experiences:** a founder whose card payment failed sees no CFO
   draft card in their Today queue (the failed-payment nudge never appears) and no signal that it was
   lost; or, if the fix over-reaches, Stripe sees 500s on `invoice.payment_failed` and retries.
+  Two review-found vectors sit behind that: (1) sustained 500s while the Inngest server is
+  unavailable could lead Stripe to disable this shared endpoint, which would stop
+  `customer.subscription.*` and `checkout.session.completed` updates for every user (the disable
+  threshold is unverified; mitigation is the kill switch, effective on restart, and the alert is
+  unwired until #10660); (2) a send that landed but errored, redelivered after Inngest's 24 h
+  event-id window, can add a second draft card, because the CFO function inserts drafts without a
+  `source_ref` (its own comment defers that wiring to PR-G).
 - **If this leaks, the user's money / workflow is exposed via:** no new exposure vector: the change
   adds no data to any payload; the Sentry `extra` carries only event/invoice ids and a pseudonymized
   user id, never the customer email hash.
@@ -294,7 +301,7 @@ constraint 2). The merge needs a separate go naming the merge.
 liveness_signal:
   what: Sentry message events (err=null path, #8629) tagged feature=stripe-webhook op=inngest-send-payment-failed (failure signal; absence alongside healthy Stripe deliveries means sends succeed)
   cadence: per Stripe invoice.payment_failed delivery
-  alert_target: Sentry issue alert on the web-platform project
+  alert_target: none until #10660 lands (until then, Sentry search for feature:stripe-webhook op:inngest-send-payment-failed)
   configured_in: apps/web-platform/app/api/webhooks/stripe/route.ts (reportSilentFallback in the invoice.payment_failed catch block)
 
 error_reporting:
@@ -303,13 +310,13 @@ error_reporting:
 
 failure_modes:
   - mode: Inngest unreachable or send rejected after 3 attempts
-    detection: Sentry event op=inngest-send-payment-failed; Stripe delivery shows 500 and redelivers
+    detection: layer 2 (reportSilentFallback message path: Sentry event op=inngest-send-payment-failed plus a pino error line in Better Stack); Stripe delivery log shows the 500 and the redelivery
     alert_route: none yet - Sentry search by tag only; the alert rule is tracked as #10660 (infra that auto-applies on merge, out of this PR's no-production-touch scope)
   - mode: dedup-row release DELETE fails after a send failure (redelivery will be short-circuited)
-    detection: Sentry event op=dedup-release (existing releaseDedupRow reporting) alongside the send-failure event
+    detection: layer 2 (existing releaseDedupRow reporting: Sentry event op=dedup-release plus a pino error line in Better Stack) alongside the send-failure event; correlate by eventId in Better Stack (not searchable in Sentry extra)
     alert_route: none yet - Sentry search by tag only (#10660 covers the send-failure rule; the existing dedup-release capture is untouched)
   - mode: deterministic non-transient send error (for example a 4xx) returns 500 on every redelivery
-    detection: repeated Sentry events carrying the same eventId in extra, and Stripe delivery log showing repeated 500s
+    detection: layer 2 (repeated op=inngest-send-payment-failed events carrying the same eventId, queryable in Better Stack through the pino line) and the Stripe delivery log showing repeated 500s
     alert_route: none yet (#10660); mitigation is the SOLEUR_FR5_ENABLED=false flip in Doppler prd, effective on the next container restart (a production write that needs the owner's separate go; not performed by this PR)
 
 logs:
