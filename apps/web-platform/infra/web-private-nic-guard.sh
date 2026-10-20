@@ -6,8 +6,9 @@ set -u
 # (`$-`), so `bash -x`, SHELLOPTS=xtrace and a BASH_ENV `set -x` are all caught. The guard therefore
 # cannot be traced on-host by design: read its stderr via `journalctl -t web-nic-guard` (shipped to
 # Better Stack by Vector), and run web-private-nic-guard.test.sh to observe it against stubs.
-# LIMIT: this covers the script's own commands. The unit's ExecStart wrapper expands the secret
-# heartbeat URL in an inner `bash -c` before this check can run (tracked as #9639).
+# The unit's ExecStart runs this script directly under `doppler run` and expands nothing: the heartbeat URL is
+# resolved BELOW, after this refusal, from the variable NAME in WEB_NIC_GUARD_URL_KEY (#9639). A change that
+# resolves it above this block, or that makes the unit expand it again, reopens that gap.
 case "$-" in
   *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
 esac
@@ -144,13 +145,22 @@ fi
 # from "guard dead"). Ping ONLY when nic_ok AND the guard could report (not SHIP_REFUSED) — a NIC-broken
 # host, or a guard that cannot ship, must let the beat lapse so absence alarms. Decode a missing beat by
 # reading the guard's stderr in Better Stack (`bad_token` / `unpinned_url` / `WARN` / `SOLEUR_CREDENTIAL_REFUSED` vs `nic_ok=false`). Independent unit/failure-domain from the zot beat (folding would re-introduce OR-masking).
-URL="${WEB_NIC_GUARD_URL:-}"
+# The unit no longer exports the URL: it names the variable doppler injected it under (WEB_NIC_GUARD_URL_KEY, one per
+# host, written by the *_install provisioner), and this script reads that variable HERE, after the xtrace refusal.
+# The NAME comes from an env file, and `${!name}` evaluates array subscripts and command substitutions inside `name`,
+# so it is judged first: an upper-case identifier or nothing (LC_ALL=C: a locale-collated [A-Z] admits lowercase).
+# There is no fallback to a bare variable of any other name. The value stays in this shell's own variable and is never
+# exported, so no child process (curl) inherits it.
+_key_ok() { local LC_ALL=C; case "${1:-}" in ''|[!A-Z]*|*[!A-Z0-9_]*) return 1 ;; esac; }
+_key="${WEB_NIC_GUARD_URL_KEY:-}"
+URL=""
+KEY_BAD=false
+if _key_ok "$_key"; then URL="${!_key:-}"; else KEY_BAD=true; fi
 # The beat URL is itself the credential (its path is the secret), so it must not ride curl's argument list
 # (readable by every local user in /proc/<pid>/cmdline; ADR-280, #9757): it reaches curl on the stdin config
 # (`--config -`). `--disable` (first, so no ~/.curlrc is read as root) and `--noproxy '*'` confine the
 # transport; `-g` is new here (a URL with [ ] or { } would otherwise print itself in curl's glob-parse error).
-# #9639 still tracks only the unit's pre-refusal expansion of the secret in its ExecStart wrapper. The value is
-# judged BEFORE any request, with no trimming: a scheme other than https://, an empty rest, or any byte
+# The value is judged BEFORE any request, with no trimming: a scheme other than https://, an empty rest, or any byte
 # outside [A-Za-z0-9._~:/?&=%+-] (a quote, backslash or newline would add directives to the config grammar)
 # is refused: zero requests, one value-free marker on stderr (the unit's SyslogIdentifier ships it), and the
 # beat lapses so the absence alarm names the guard. A URL refusal does NOT set SHIP_REFUSED: the Better Stack
@@ -188,6 +198,7 @@ if [ "$NIC_OK" = true ] && [ "$SHIP_REFUSED" = false ]; then
     # nothing off-box saying why: same hourly limiter, reason=empty (the inngest heartbeat body uses the same token).
     if _refusal_due; then
       echo "SOLEUR_CREDENTIAL_REFUSED script=web-private-nic-guard reason=empty var=WEB_NIC_GUARD_URL" >&2
+      [ "$KEY_BAD" = true ] && echo "[nic] WARN: WEB_NIC_GUARD_URL_KEY is unset or is not an upper-case variable name (the value is not shown); the heartbeat URL cannot be resolved." >&2
       echo "[nic] WARN: web_nic_guard heartbeat URL unset (nic_ok=true, no ping sent) — the monitor will alarm on a healthy host." >&2
     fi
   elif _hb_url_ok "$URL"; then
