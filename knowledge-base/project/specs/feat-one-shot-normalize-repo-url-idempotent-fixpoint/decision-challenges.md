@@ -1,0 +1,13 @@
+# Decision Challenges — feat-one-shot-normalize-repo-url-idempotent-fixpoint
+
+Planning ran with the Agent tool available: every technical fork was delegated to `soleur:engineering:cto` (ruled 2026-10-20, one batched consult, no AskUserQuestion). No operator-class decision exists in this plan. All rows are ruled; none pending. `soleur:ship` renders this table into the PR body.
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|------|-------|--------|
+| Loop cap for the `normalizeRepoUrl` fixpoint: fixed max 4 passes (caller's scratch proposal) vs length-derived convergence cap; fallback on cap hit | technical | Ruled by CTO agent, 2026-10-20: Convergence loop capped at `raw.length + 3` passes; first ruling mirrored cap-hit to Sentry, RE-RULED after plan-review (DHH, Kieran, code-simplicity) to option B: return the last output silently, no Sentry import - a fixed 4 is provably insufficient (7 and 20 passes measured) while the length bound terminates the loop; the cap branch is unreachable by construction so a mirror could never be tested. Reversal trigger: any input hits the cap -> Sentry mirror. Throw and no-cap rejected |
+| Regression fixture breadth: pin only the reported counterexample vs also pin extra shapes; whether to widen the property generator | technical | Ruled by CTO agent, 2026-10-20: Pin the reported counterexample plus the extra examples, leave the generator unchanged and file the generator widening as a follow-up - the loop fix needs fixtures that would catch a cap regression, and generator changes risk queue flakes |
+| Stray `/* #9815 e2e probe — REVERTED BEFORE COMMIT */` line at the end of `lib/repo-url.ts`: delete in this PR or leave out of scope | technical | Ruled by CTO agent, 2026-10-20: Delete line 71 of `lib/repo-url.ts` in this PR - it is a dead one-line leftover in the file already being changed |
+| ADR-293 documentation: add a "Second yield" note or skip docs | technical | Ruled by CTO agent, 2026-10-20: Keep the ADR-293 note at the yield only (1-2 lines), SQL divergence in the lib header comment and the PR body - the ADR holds the yield itself, the mirroring obligation belongs next to the code it constrains (re-ruled after plan-review; first ruling had the divergence in the ADR) |
+| SQL mirror (`031_normalize_repo_url.sql`): is a migration needed for the dot-segment shape | technical | Planner finding, no fork: not needed - 031 is a one-time backfill with no URL parse, so it never resolved dot segments; TS<->SQL already diverges on these input classes and the realistic stored values (GitHub repo URLs) contain none. Separate defect #10633 stays untouched |
