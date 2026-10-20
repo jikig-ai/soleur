@@ -41,6 +41,7 @@ import {
   extractToolPath,
   UNVERIFIED_PARAM_TOOLS,
 } from "./tool-path-checker";
+import { patternEscapesWorkspace } from "./tool-pattern-checker";
 import { isPathInWorkspace } from "./sandbox";
 import type { NotificationPayload } from "./notifications";
 import type { WSMessage } from "@/lib/types";
@@ -400,7 +401,9 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         });
       }
       const filePath = extractToolPath(toolInput);
-      if (filePath && !isPathInWorkspace(filePath, ctx.workspacePath)) {
+      const pathEscapes = !!filePath && !isPathInWorkspace(filePath, ctx.workspacePath);
+      const patternEscapes = !pathEscapes && patternEscapesWorkspace(toolName, toolInput);
+      if (pathEscapes || patternEscapes) {
         if (ctx.persona === "support") {
           return deny({
             conversationId: ctx.conversationId,
@@ -414,7 +417,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
           "canUseTool-file-tool",
           toolName,
           "deny",
-          "outside workspace",
+          patternEscapes ? "glob pattern outside workspace" : "outside workspace",
         );
         return {
           behavior: "deny" as const,
