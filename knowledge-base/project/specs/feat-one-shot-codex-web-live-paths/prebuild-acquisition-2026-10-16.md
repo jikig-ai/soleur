@@ -828,3 +828,18 @@ proposal source `b7bd072a87`; the [acceptance record](config-acquisition-proposa
 owns the decision, dissent and validation limits. The next authorization is
 source and offline tests only. No implementation, manifest preparation or
 execution is authorized by this acceptance, and broader holds remain unchanged.
+
+### Approved Config source implementation and review — 2026-10-20
+
+The operator then approved transport source and synthesized offline tests only.
+Implementation and corrective reviews are complete at `714f48c3e4`; the
+[source review record](config-acquisition-source-review-2026-10-20.md) owns the
+394-test result, source findings/fixes, three independent review PASS results,
+CTO conformance ruling and exact next authorization boundary. No operational
+manifest, marker, receipt or origin request was created by that source work.
+
+Ruled by CTO agent: next request separate permission for file-only binding refresh
+and one fresh unused Config manifest, preserving historical evidence. This
+permission excludes marker consumption, receipts, DNS, network and execution.
+It is not yet granted. Main resync remains held; later changes require affected
+bindings/tests/reviews to be refreshed. All broader holds persist.

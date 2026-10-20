@@ -2369,3 +2369,28 @@
   BLOCKED; alternate route PENDING. Source review → separately authorized
   preparation → actual-manifest review → fresh exact-command approval → separate
   evidence review → profile/recovery/qualification remains the acceptance chain.
+
+### Config source approved, implemented and reviewed — 2026-10-20
+
+- Operator approved transport source and synthesized offline tests only.
+  Pushed source `714f48c3e4dd245367ff12ee39e4c31cbc8ec486` implements the accepted
+  acquisition boundary in four new modules plus four test files. Historical
+  acquisition/diagnostic source and spent evidence remain unchanged.
+- [Source review record](config-acquisition-source-review-2026-10-20.md) owns
+  the implementation/limitation details, 394 full offline tests, 65 focused
+  tests, Ruff 44-baseline/123-file and Semgrep 151-rule/eight-file results.
+  Independent security, code-quality and test-design re-reviews PASS at that
+  source; initial receipt/test findings and publication-error leak are fixed.
+- Ruled by CTO agent: scoped source conformance accepted. Next obtain separate
+  operator permission for file-only source/input/CA/platform binding refresh
+  and one fresh unused Config manifest in a new private directory. Permission
+  excludes marker consumption, receipts, DNS, network and execution. It remains
+  ungranted. Main resync remains held; bind the final clean committed pushed
+  HEAD and repeat affected gates after any later source/input/runtime change.
+- No operational preparation/acquisition was performed. Synthesized test-only
+  manifests/markers/receipts are temporary fixtures, not operational evidence.
+  All three historical diagnostic approvals remain spent. Actual-manifest
+  review → fresh exact-command approval → acquisition → separate evidence review
+  → profile/recovery → qualification → permitted Web/CLO → resync/full CI/full
+  review/QA/preflight/promotion remains pending. PR draft/disarmed/conflicting;
+  hosted auth BLOCKED; alternate route PENDING; no ship authority granted.
