@@ -135,9 +135,12 @@ Four things were created; remove all four, because a partial removal is worse th
    the operator, so delete only the files whose body names the canonical plugin path (the
    stubs' signature) — never the whole directory.
 2. **`<configdir>/soleur/`** — the installed instructions tree.
-3. **`<configdir>/plugins/soleur-plugin.ts`** — the hook carrier. Leaving it behind fails
-   every shell call closed with a `guard-did-not-run` deny, because the guards it registers
-   no longer resolve.
+3. **`<configdir>/plugins/soleur-plugin.ts`** — the hook carrier. Leaving it behind keeps
+   Soleur live after you meant to remove it: it still registers the Bash guards and still
+   re-injects the rule corpus on every session. It does **not** fail closed by itself — the
+   `guard-did-not-run` deny fires only when a guard *script* cannot be spawned (the checkout
+   moved or was removed, or `__SOLEUR_PLUGIN_ROOT__` never resolved), which is a checkout
+   problem rather than a leftover-file one.
 4. **The `skills` and `instructions` entries the installer added to `<configdir>/opencode.json`.**
    Edit the file and drop those two keys; leaving them behind points OpenCode at a tree that
    no longer exists.
@@ -145,5 +148,5 @@ Four things were created; remove all four, because a partial removal is worse th
 Do **not** use `install-opencode-adapter.ts --check` to confirm removal. It is an
 idempotence check for an *installed* adapter: it reports `MISSING` for every path it expects
 and exits 1, so a correct removal is indistinguishable from a broken install. Verify by hand
-instead — the four paths above are absent, and no shell call fails closed with a
-`guard-did-not-run` deny.
+instead — the four paths above are absent, and a fresh OpenCode session no longer
+re-injects the Soleur rule corpus or emits a `[soleur] guard-run-failure` line.
