@@ -140,6 +140,8 @@ _ping() {
     return 0
   fi
   if [ -z "$URL" ]; then
+    # "WEB_ZOT_CONSUMER_URL unset" is a stable decode label (the runbook and the post-merge check grep it), not the name of a
+    # variable this script reads: the real name is whatever WEB_ZOT_CONSUMER_URL_KEY holds.
     echo "[zot-probe] WARN: WEB_ZOT_CONSUMER_URL unset — servable but cannot ping." >&2
     [ "$KEY_BAD" = true ] && echo "[zot-probe] WARN: WEB_ZOT_CONSUMER_URL_KEY is unset or is not an upper-case variable name (the value is not shown); the heartbeat URL cannot be resolved." >&2
     return 0
@@ -258,8 +260,9 @@ fi
 # (WEB_ZOT_CONSUMER_URL_KEY, one per host, written by the *_install provisioner) and this script reads that variable
 # HERE, after the xtrace refusal above and after the --canary-only exit (which runs outside `doppler run` and sends no
 # heartbeat). The NAME comes from an env file, and `${!name}` evaluates array subscripts and command substitutions
-# inside `name`, so it is judged first: an upper-case identifier or nothing (LC_ALL=C pins ASCII ranges for exotic
-# collations; bash 5 with globasciiranges already does, so this line is defence in depth that no test can exercise here).
+# inside `name`, so it is judged first: an upper-case identifier or nothing (LC_ALL=C pins ASCII ranges: with
+# globasciiranges off under a UTF-8 locale [A-Z] collates over b..z; the nic-guard suite's "F6 locale[ranges off]" row
+# makes that case against the byte-identical _key_ok there, and its parity row ties this copy to that one).
 # No fallback to a bare variable of any other name. This script never exports the resolved value; doppler's own injected
 # copy under the key-named variable is still inherited by children, as before this change.
 _key_ok() { local LC_ALL=C; case "${1:-}" in ''|[!A-Z]*|*[!A-Z0-9_]*) return 1 ;; esac; }

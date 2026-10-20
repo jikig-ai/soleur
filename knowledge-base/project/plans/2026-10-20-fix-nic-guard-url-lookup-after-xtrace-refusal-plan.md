@@ -42,7 +42,7 @@ Scope, by CTO ruling 2026-10-20 (F1, option c):
 | Unit | Has an xtrace refusal to order against? | This PR |
 |------|------------------------------------------|---------|
 | `web-private-nic-guard` | yes, unconditional | fixed |
-| `web-zot-consumer-probe` | yes, only when `ZOT_PULL_TOKEN`/`ZTOK` is set (always set under `doppler run`) | fixed |
+| `web-zot-consumer-probe` | yes: when the pull credential (`ZOT_PULL_TOKEN`/`ZTOK`) is set, or the key name is set and the launch is not `--canary-only` (both always set under `doppler run`) | fixed |
 | `web-git-data-probe` | none | recorded NOT fixed on #9639 |
 | `inngest-consumer-probe` | none (and it sources `inngest-registry-probe.sh`, which open PR #10501 edits) | recorded NOT fixed on #9639 |
 
@@ -64,7 +64,7 @@ No open PR touches any of the four units' `.service`/`.sh`/`.test.sh` files nor 
 
 **Property List.**
 
-1. Under any xtrace launch form, the secret heartbeat URL never reaches stdout/stderr/the journal from the unit's `ExecStart` path (nic-guard always; zot whenever its credential is present).
+1. Under any xtrace launch form, the secret heartbeat URL never reaches stdout/stderr/the journal from the unit's `ExecStart` path (nic-guard always; zot whenever its credential is present, or its key name is set outside `--canary-only`).
 2. The production path is unchanged for a well-formed install: the same URL reaches `curl` on its stdin config and the beat is sent.
 3. A malformed key name cannot execute code through bash's `${!name}` subscript evaluation.
 4. The resolved URL is not exported, so no child process inherits it.
@@ -172,7 +172,7 @@ Harness rows: GH4 - must-PASS non-canonical (the bare-variable-ignored case is a
 
 2.1 `web-private-nic-guard.sh`: after the existing refusal (the lookup site is the existing `URL=` line, below the refusal), replace `URL="${WEB_NIC_GUARD_URL:-}"` with: read `WEB_NIC_GUARD_URL_KEY`; validate with a `case` glob under `LC_ALL=C` (`''|[!A-Z]*|*[!A-Z0-9_]*` -> invalid, same style as `_hb_url_ok`); on valid `URL="${!_key:-}"` (a plain, unexported variable); invalid/unset -> `URL=""` with a flag; in the existing `-z "$URL"` branch, inside the same `_refusal_due` block, add a value-free line when the flag is set. Rewrite the header LIMIT comment and the step-7 comment that name #9639 as pending.
 2.2 `web-private-nic-guard.service`: `ExecStart=/bin/bash -c 'doppler run --project soleur --config prd -- /usr/local/bin/web-private-nic-guard.sh'` (no `$`, no inner shell, no export); rewrite the comment block that describes the wrapper expansion. Keep `Environment=HOME=/root`, `SyslogIdentifier`, `EnvironmentFile`.
-2.3 Same pair for zot: `web-zot-consumer-probe.sh` (lookup placed after the refusal `case` AND after the `--canary-only` early exit, next to the first real use, replacing `URL="${WEB_ZOT_CONSUMER_URL:-}"` at line 103; the `--canary-only` ExecStartPre path runs outside `doppler run` and never reaches the lookup) and `web-zot-consumer-probe.service`. Header comment of the script: state that the refusal fires only with the pull credential set.
+2.3 Same pair for zot: `web-zot-consumer-probe.sh` (lookup placed after the refusal `case` AND after the `--canary-only` early exit, next to the first real use, replacing `URL="${WEB_ZOT_CONSUMER_URL:-}"` at line 103; the `--canary-only` ExecStartPre path runs outside `doppler run` and never reaches the lookup) and `web-zot-consumer-probe.service`. Header comment of the script: state that the refusal fires on the pull credential, or on the key name outside `--canary-only` (reworked in review per the CTO ruling).
 2.4 `doppler-injection-bound.test.sh` scanner: widen the unit-side `INDIRECT_RE` to accept an optional operator suffix; script-side population reason restricted to `*_KEY`-named indirect expansion (G1.9); unit-side wrapper finding over every directive; `WRAPPER_ACK_REASONS` (2 entries: `web-git-data-probe.service`, `inngest-consumer-probe.service`, each reason naming #9639 in prose) with `WRAPPER_ACK_CARDINALITY = 2`; `CENSUS: wrapper_units_checked` with a floor derived from a green run; stale-wrapper-ack check. Update the two fixed units' `ACK_REASONS` text (still true, now script-side). `ACK_CARDINALITY`, `MIN_POPULATION`, `MIN_DOPPLER_UNITS` stay as they are.
 2.5 `web-probe-envwrite.sh`: comment-only correction of the "unit's ${!KEY} indirect expansion" sentence for the two fixed units.
 
@@ -252,11 +252,14 @@ failure_modes:
   - mode: lookup broken or key unreadable on web-1 after the apply (URL resolves empty)
     detection: (layer 3: vector Source 4 host_scripts_journald, exact SyslogIdentifier web-nic-guard) the reason=empty marker in Better Stack Logs after the apply timestamp (post-merge query), and the heartbeat going down
     alert_route: Better Stack heartbeat absence -> operator email
+  - mode: zot key valid but its secret missing (the beat URL resolves empty)
+    detection: (layer 3: vector Source 4 host_scripts_journald, exact SyslogIdentifier web-zot-consumer-probe) the `WEB_ZOT_CONSUMER_URL unset` stderr line each 60s tick, and the zot beat going down
+    alert_route: Better Stack heartbeat absence -> operator email
   - mode: invalid key name in /etc/default/web-private-nic-guard
     detection: (layer 3: vector Source 4 host_scripts_journald, exact SyslogIdentifier web-nic-guard / web-zot-consumer-probe) the value-free invalid-key stderr line in the same Logs source
     alert_route: heartbeat absence -> operator email (a standing log alert is F8, out of scope)
-  - mode: web-2 still on the old pair
-    detection: none: web-2 keeps a self-consistent old unit + script pair (no signal needed); recorded in the PR body
+  - mode: web-2 still on the old pair (not a failure: the old unit and script are mutually consistent)
+    detection: none by design (layer 3 would show the old, unchanged emitters); recorded in the PR body
     alert_route: none (not applicable until web-2 is replaced)
 logs:
   where: the unit journal (identifier web-nic-guard), shipped off-box to Better Stack Logs
@@ -272,7 +275,7 @@ The probe above is the credential-free static half: the unit's `ExecStart` runs 
 
 1. Resolve the merge SHA (`gh pr view 10637 --json mergeCommit,mergedAt`; the SHA is empty until the merge lands, so an empty value means "not yet", never "no run"), find the `apply-web-platform-infra.yml` run whose `headSha` equals it (`gh run list --workflow apply-web-platform-infra.yml --limit 10 --json databaseId,conclusion,headSha,createdAt`; verified read-only on 2026-10-20, it returns those four fields), require `conclusion == success`, and in `gh run view <id> --log` count the ANCHORED lines `terraform_data.private_nic_guard_install: Creation complete` and `terraform_data.zot_consumer_probe_install: Creation complete` (both >= 1). Measured on run 39351965961 (an unrelated, no-change apply): the bare resource name appears twice there, once in the `-target=` list and once as `Refreshing state`, and `Creation complete` appears zero times, so an unanchored grep for the name would pass on a run that applied nothing.
 2. Better Stack heartbeat `soleur-web-nic-guard-web-1` is `up` with a ping later than the apply completion time (API read with the read-only token from Doppler; value never printed). Same for the zot consumer beat.
-3. Better Stack Logs, read no earlier than about ten minutes after the apply completes (nic-guard ticks every 300s, zot every 60s): (a) a `SOLEUR_PRIVATE_NIC nic_ok=true` row with NO tag filter (it is a direct POST to the ingest, not a journald line, so it has no SyslogIdentifier) proves the ingest is alive; (b) the two beats from step 2 are the authority for "the new pair works" (a ping later than the apply completion); (c) under SyslogIdentifier `web-nic-guard` and `web-zot-consumer-probe` since the apply, none of `reason=empty`, `WEB_NIC_GUARD_URL_KEY is unset`, `WEB_ZOT_CONSUMER_URL unset`, `WEB_ZOT_CONSUMER_URL_KEY is unset`. A missing marker alone is weak evidence (the nic hourly limiter can hide one); the beat timestamps decide.
+3. Better Stack Logs, read no earlier than about ten minutes after the apply completes (nic-guard ticks every 300s, zot every 60s): (a) a row whose message STARTS with `SOLEUR_PRIVATE_NIC nic_ok=true`, with NO tag filter (it is a direct POST to the ingest, not a journald line, so it has no SyslogIdentifier; the nic failure paths echo the same text after `not shipped:` or `FAILED:` in journald, so anchor on the start of the message) proves the ingest is alive; (b) the two beats from step 2 are the authority for "the new pair works" (a ping later than the apply completion); (c) under SyslogIdentifier `web-nic-guard` and `web-zot-consumer-probe` since the apply, none of `reason=empty`, `WEB_NIC_GUARD_URL_KEY is unset`, `WEB_ZOT_CONSUMER_URL unset`, `WEB_ZOT_CONSUMER_URL_KEY is unset`. A missing marker alone is weak evidence (the nic hourly limiter can hide one); the beat timestamps decide.
 4. Failure handling: any of the three fails -> revert the PR (the per-merge apply restores the old pair) and record on #9639.
 5. Record the merge on #9217 (no DONE), then close out the series status there.
 
@@ -303,7 +306,7 @@ A revert can email once: between the old script and the new unit landing there i
 - [ ] Repo-global ratchets green with no baseline lowered: `grep-q-pipe-guard.test.sh` (PJ_TRIPLES unchanged), `lint-trap-tempfile-ownership`, `guard-vacuity-floor`, `lint-guard-contract.py`.
 - [ ] `git diff --name-only origin/main...HEAD` (merge-base form, so a sibling merge cannot redden it) lists no file from "Files NOT touched" and only the files in the two lists above plus the pipeline-written `knowledge-base/INDEX.md` / `specs/<branch>/session-state.md` if regenerated.
 - [ ] ADR-202 addendum present; `c4-count-parity` green; no `.c4` file edited.
-- [ ] PR body: `Ref #9639`, `Part of tracker #9217`, no closing keyword; lists the two unfixed siblings with the reason and the zot refusal-depends-on-token note; web-2 residual stated.
+- [ ] PR body: `Ref #9639`, `Part of tracker #9217`, no closing keyword; lists the two unfixed siblings with the reason and the zot refusal-predicate note (pull credential, or key name outside `--canary-only`); web-2 residual stated.
 - [ ] #9639 comment posted (fixed / not fixed / F7 F8 open); #9217 merge recorded without DONE.
 - [ ] Post-merge checks 1-3 pass (pre-merge ACs above are verified by the commands shown; these three are verified after the apply).
 

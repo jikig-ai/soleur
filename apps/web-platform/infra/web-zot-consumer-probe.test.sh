@@ -252,7 +252,7 @@ for a in "$@"; do
 done
 if [[ "$hb" == 1 && "$hbw" == 0 ]]; then
   printf '%s\n' "$*" >> "${STUB_HB_ARGV:-/dev/null}"
-  [[ -n "${STUB_HB_ENVDUMP:-}" ]] && env > "$STUB_HB_ENVDUMP"   # the F6 not-exported rows read the heartbeat curl's environment
+  [[ -n "${STUB_HB_ENVDUMP:-}" ]] && env | grep -E '^(URL|WEB_[A-Z0-9_]*)=' > "$STUB_HB_ENVDUMP"   # the F6 not-exported rows read only these variables of the heartbeat curl's environment, never the ambient one
   [[ "$hbcfg" == 1 && "${STUB_HB_NOSTDIN:-}" != 1 ]] && cat >> "${STUB_HB_STDIN:-/dev/null}"
   hbn=$(wc -l < "${STUB_HB_ARGV:-/dev/null}")
   [[ "${STUB_HB_FAIL_FIRST:-}" == 1 && "$hbn" -eq 1 ]] && exit 7
@@ -338,7 +338,7 @@ HB_OTHER='https://uptime.betterstack.test/api/v1/heartbeat/A.b_c~d:9?x=1&y=%2B+z
 HB_ARGV_FORM='--disable --noproxy * -gfsS -m 10 -o /dev/null --config -'
 HB_MARKER_HEAD='SOLEUR_CREDENTIAL_REFUSED script=web-zot-consumer-probe'
 # HEC / HB_ARGV / HB_STDIN / HB_REGARGV / HOUT (files) / HOUTTXT / N_HB (heartbeat curls) / N_MARK / N_WARN.
-run_hb() {  # <WEB_ZOT_CONSUMER_URL value> [extra env assignments, applied last so they win]
+run_hb() {  # <resolved heartbeat URL value, delivered under the key-named variable> [extra env assignments, applied last so they win]
   local url="$1" ec=0; shift
   MARKER_N=$((MARKER_N + 1))
   HB_ARGV="$(mktemp "$TMP/hbargv.XXXXXX")"; HB_STDIN="$(mktemp "$TMP/hbstdin.XXXXXX")"
@@ -1292,11 +1292,11 @@ run_unit() {   # <ExecStart text> <none|xtrace|benv> [extra env words, applied l
   case "$form" in xtrace) fenv=(SHELLOPTS=xtrace) ;; benv) fenv=(BASH_ENV="$TMP/f6-xt.env") ;; esac
   MARKER_N=$((MARKER_N + 1))
   HB_ARGV="$(mktemp "$TMP/hbargv.XXXXXX")"; HB_STDIN="$(mktemp "$TMP/hbstdin.XXXXXX")"; HOUT="$(mktemp "$TMP/hbout.XXXXXX")"
-  env -u SOLEUR_ZOT_PROBE_PING_LOG -u SOLEUR_ZOT_PROBE_STATUS_OVERRIDE -u WEB_ZOT_CONSUMER_URL -u SHELLOPTS -u BASH_ENV \
+  env -u SOLEUR_ZOT_PROBE_PING_LOG -u SOLEUR_ZOT_PROBE_STATUS_OVERRIDE -u WEB_ZOT_CONSUMER_URL -u SHELLOPTS -u BASH_ENV -u ZOT_PULL_TOKEN -u ZOT_PULL_USER -u ZTOK -u ZUSER \
     STUB_ARGV="$TMP/hbreg.argv.$MARKER_N" STUB_STDIN="$TMP/hbreg.stdin.$MARKER_N" STUB_HB_ARGV="$HB_ARGV" STUB_HB_STDIN="$HB_STDIN" \
     PATH="$TMP/stubbin:$PATH" SOLEUR_PROBE_REPOS_MARKER="$TMP/repos.$MARKER_N" SOLEUR_PROBE_CANARY_MARKER="$TMP/canary.$MARKER_N" \
     SOLEUR_PROBE_REFUSAL_MARKER="$TMP/refusal.$MARKER_N" \
-    ZOT_ENDPOINT=127.0.0.1:9 ZOT_PROBE_REPO=known/repo ZUSER=zuser ZTOK=ztok \
+    ZOT_ENDPOINT=127.0.0.1:9 ZOT_PROBE_REPO=known/repo ZOT_PULL_USER=zuser ZOT_PULL_TOKEN=ztok \
     WEB_ZOT_CONSUMER_URL_KEY=WEB_ZOT_CONSUMER_URL_SYNTH WEB_ZOT_CONSUMER_URL_SYNTH="$F6_URL" \
     ${fenv[@]+"${fenv[@]}"} "$@" \
     timeout 20 bash -c 'eval "$1"' _ "${line//"$F6_SCRIPT_PATH"/$sut}" >"$HOUT" 2>&1 || ec=$?
@@ -1306,7 +1306,7 @@ run_unit() {   # <ExecStart text> <none|xtrace|benv> [extra env words, applied l
   N_HB="$(wc -l < "$HB_ARGV" | tr -d ' ')"
 }
 assert "F6 static: no Exec* directive of the zot unit holds an indirect expansion" \
-  '[[ "$(grep -cE "^Exec[A-Za-z]*=.*[$]{1,2}[{][!]" "$SVC" || true)" -eq 0 ]]'
+  '[[ "$(grep -cE "^[[:space:]]*Exec[A-Za-z]*=.*[$]{1,2}[{][!]" "$SVC" || true)" -eq 0 ]]'
 assert "F6 static: ExecStart runs the probe directly under doppler run: names it, no dollar sign, no export" \
   '[[ "$F6_LINE" == *"$F6_SCRIPT_PATH"* && "$F6_LINE" != *\$* && "$F6_LINE" != *export* && "$F6_LINE" == *"doppler run"* ]]'
 for f6_form in xtrace benv; do
@@ -1336,11 +1336,12 @@ assert "F6 hostile key a[\$(touch ...)]: nothing executed, no heartbeat, a key l
 run_unit "$F6_LINE" none "WEB_ZOT_CONSUMER_URL_KEY=lowercase"
 assert "F6 lowercase key: refused, no heartbeat, exit 0" '[[ "$N_HB" -eq 0 && "$HEC" -eq 0 && "$HOUTTXT" == *"WEB_ZOT_CONSUMER_URL_KEY"* ]]'
 # Every Exec* line of the unit (backslash continuations joined, as systemd reads them): ExecStartPre AND ExecStart.
-F6_ALLEXEC="$(awk '{ if (sub(/\\$/, "")) { buf = buf $0; next } print buf $0; buf = "" }' "$SVC" | grep -E '^Exec[A-Za-z]*=' || true)"
+# shellcheck disable=SC2034  # read inside the single-quoted assert() condition
+F6_ALLEXEC="$(awk '{ if (sub(/\\$/, "")) { buf = buf $0; next } print buf $0; buf = "" }' "$SVC" | grep -E '^[[:space:]]*Exec[A-Za-z]*=' || true)"
 assert "F6 static: EVERY Exec* directive of the zot unit (continuations joined) is dollar-free and export-free, so no second line can expand the secret" \
   '[[ -n "$F6_ALLEXEC" && "$F6_ALLEXEC" != *\$* && "$F6_ALLEXEC" != *export* ]]'
 # Both refusal disjuncts: the pull credential alone, and the heartbeat key name alone (outside --canary-only).
-run_unit "$F6_LINE" xtrace ZTOK=
+run_unit "$F6_LINE" xtrace ZOT_PULL_TOKEN=
 assert "F6 refusal[key only]: with the key name set and no pull credential, a traced launch exits 78 with the URL in neither stream (rc=$HEC)" \
   '[[ "$HEC" -eq 78 && "$HOUTTXT" == *"refusing to trace"* && "$HOUTTXT" != *"$F6_TOK"* && "$N_HB" -eq 0 ]]'
 run_unit "$F6_LINE" xtrace WEB_ZOT_CONSUMER_URL_KEY=
@@ -1348,9 +1349,20 @@ assert "F6 refusal[credential only]: with the pull credential set and no key nam
   '[[ "$HEC" -eq 78 && "$HOUTTXT" == *"refusing to trace"* && "$N_HB" -eq 0 ]]'
 # --canary-only (the ExecStartPre, outside doppler): the key name alone must NOT refuse it, a pull credential still does.
 F6_CANARY_LINE="$(sed -n 's/^ExecStartPre=-//p' "$SVC" | sed -n '1p')"
-run_unit "$F6_CANARY_LINE" xtrace ZTOK=
-assert "F6 canary-only[key only, traced]: the canary still runs: no refusal, exit 0 (the Source-4 positive control survives a traced launch; rc=$HEC)" \
-  '[[ "$HEC" -eq 0 && "$HOUTTXT" != *"refusing to trace"* ]]'
+run_unit "$F6_CANARY_LINE" xtrace ZOT_PULL_TOKEN=
+assert "F6 canary-only[key only, traced]: the canary RUNS: no refusal, exit 0, the Source-4 canary line is emitted and its marker written, the URL is in no stream (rc=$HEC)" \
+  '[[ "$HEC" -eq 0 && "$HOUTTXT" != *"refusing to trace"* && "$HOUTTXT" != *"$F6_TOK"* && -s "$TMP/canary.$MARKER_N" && "$(grep -v "^+" "$HOUT" | grep -c "SOLEUR_PROBE_CANARY" || true)" -ge 1 ]]'
+# The legacy credential name (ZTOK) is a disjunct of its own, and the argument shapes that are NOT the exact --canary-only
+# launch must refuse (a looser test of "${1:-}" would admit them).
+run_unit "$F6_LINE" xtrace ZOT_PULL_TOKEN= ZTOK=ztok WEB_ZOT_CONSUMER_URL_KEY=
+assert "F6 refusal[legacy ZTOK only]: with only the legacy-named pull credential set, a traced launch exits 78 (rc=$HEC)" \
+  '[[ "$HEC" -eq 78 && "$HOUTTXT" == *"refusing to trace"* && "$N_HB" -eq 0 ]]'
+F6_EMPTYARG="''"
+for f6_shape in "foo --canary-only" "--canary-only=1" "$F6_EMPTYARG"; do
+  run_unit "${F6_CANARY_LINE/--canary-only/$f6_shape}" xtrace ZOT_PULL_TOKEN=
+  assert "F6 canary-only shape [$f6_shape]: only the exact --canary-only argument is exempt; any other argument shape with the key name set refuses (rc=$HEC)" \
+    '[[ "$HEC" -eq 78 && "$HOUTTXT" == *"refusing to trace"* && "$HOUTTXT" != *"$F6_TOK"* ]]'
+done
 run_unit "$F6_CANARY_LINE" xtrace WEB_ZOT_CONSUMER_URL_KEY=
 assert "F6 canary-only[credential, traced]: a pull credential still refuses the canary, exactly as before (rc=$HEC)" \
   '[[ "$HEC" -eq 78 && "$HOUTTXT" == *"refusing to trace"* ]]'
@@ -1370,6 +1382,16 @@ for f6_k in "A[\$(touch $F6_PLANT)]" "A[0]" "A[B]" "A=B" "A.B" "A/B" "A@" "A*"; 
   assert "F6 body-clause key [$f6_k]: nothing executed, no heartbeat, a key line that does not echo the name, exit 0" \
     '[[ ! -e "$F6_PLANT" && "$N_HB" -eq 0 && "$HEC" -eq 0 && "$HOUTTXT" == *"WEB_ZOT_CONSUMER_URL_KEY"* && "$HOUTTXT" != *"$f6_k"* ]]'
 done
+# Every printable ASCII character outside [A-Z0-9_], inside an upper-case-led name, is refused: a generated list, not a hand-picked one.
+f6_bodybad=""
+for f6_ord in $(seq 33 126); do
+  f6_c="$(printf "\\x$(printf '%02x' "$f6_ord")")"
+  case "$f6_c" in [A-Z0-9_]) continue ;; esac
+  rm -f "$F6_PLANT"; run_unit "$F6_LINE" none "WEB_ZOT_CONSUMER_URL_KEY=A${f6_c}B"
+  { [[ ! -e "$F6_PLANT" && "$N_HB" -eq 0 && "$HEC" -eq 0 && "$HOUTTXT" == *"WEB_ZOT_CONSUMER_URL_KEY"* ]]; } || f6_bodybad+="$f6_c"
+done
+assert "F6 body clause (generated): every printable ASCII character outside [A-Z0-9_] inside an upper-case-led key is refused (offenders: [$f6_bodybad])" \
+  '[[ -z "$f6_bodybad" ]]'
 # Order: a mutant that resolves the URL above the refusal leaks it under SHELLOPTS=xtrace.
 F6_MUT="$TMP/f6-mut-hoist-zot.sh"
 sed '/^set -u$/a\
@@ -1386,11 +1408,11 @@ echo
 echo "=== $PASS passed, $FAIL failed ==="
 # Anti-vacuity floor (ADR-193): a disarmed assert() or a skipped block must not read as green. Raise it in
 # the SAME edit that adds rows; it is reported with printf, never through assert().
-# 422 assertions run with terraform installed; the 3 terraform-console rows are gated and a skip never counts, so
-# a box without terraform floors at the count WITHOUT them (419) and must not read as a disarmed suite. The threshold
+# 427 assertions run with terraform installed; the 3 terraform-console rows are gated and a skip never counts, so
+# a box without terraform floors at the count WITHOUT them (424) and must not read as a disarmed suite. The threshold
 # literal sits directly above the `if` (scripts/guard-vacuity-floor.test.sh builds its mutant from that adjacency);
 # the stricter full count applies in a SECOND check wherever terraform ran, so no row can be deleted behind slack.
-MIN_ASSERTS=419
+MIN_ASSERTS=424
 if [[ "$((PASS + FAIL))" -lt "$MIN_ASSERTS" ]]; then
   printf 'FAIL: only %s assertions ran (floor %s) — a block was skipped or assert() was disarmed\n' "$((PASS + FAIL))" "$MIN_ASSERTS"
   exit 1

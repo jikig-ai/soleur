@@ -99,7 +99,7 @@ printf '%s\n' "${STUB_IP_OUT:-}"
 EOS
 
 # `curl` serves three callers: the IMDS probe (private-networks), the Better Stack POST
-# (--data-raw), and the liveness heartbeat ping (WEB_NIC_GUARD_URL on its stdin config, the only other curl).
+# (--data-raw), and the liveness heartbeat ping (the resolved heartbeat URL on its stdin config, the only other curl).
 cat > "$BIN/curl" <<'EOS'
 #!/usr/bin/env bash
 # Log argv FIRST (before the IMDS early exit), one argument per line (printf, never echo: -n is a
@@ -140,7 +140,7 @@ fi
 # Otherwise this is the heartbeat ping. The URL never rides argv any more: it is the value of the
 # `url = "..."` line on the stdin config. A call whose stdin lost that line records an EMPTY line, which the
 # suite reads as "no URL" (T1 and the healthy-run row go RED; the negative rows are backed by TA_PING).
-[[ -n "${STUB_ENVDUMP:-}" ]] && env > "$STUB_ENVDUMP"
+[[ -n "${STUB_ENVDUMP:-}" ]] && env | grep -E '^(URL|WEB_[A-Z0-9_]*)=' > "$STUB_ENVDUMP"   # only the variables the F6 rows read, never the ambient environment
 url=$(printf '%s\n' "$cfg_in" | sed -n 's/^url = "\(.*\)"$/\1/p' | sed -n '1p')
 printf '%s\n' "$url" >> "$STUB_PING"
 exit "${STUB_PING_RC:-0}"
@@ -943,11 +943,12 @@ f6_launch() {   # <line> <none|xtrace|benv> : run the unit's ExecStart text with
   run_guard true 0 true
 }
 assert "F6 static: no Exec* directive of the unit holds an indirect expansion (the secret is not expanded by systemd's wrapper)" \
-  '[[ "$(grep -cE "^Exec[A-Za-z]*=.*[$]{1,2}[{][!]" "$SVC" || true)" -eq 0 ]]'
+  '[[ "$(grep -cE "^[[:space:]]*Exec[A-Za-z]*=.*[$]{1,2}[{][!]" "$SVC" || true)" -eq 0 ]]'
 assert "F6 static: ExecStart runs the script directly under doppler run: names it, holds no dollar sign and no export" \
   '[[ "$F6_LINE" == *"$F6_SCRIPT_PATH"* && "$F6_LINE" != *\$* && "$F6_LINE" != *export* && "$F6_LINE" == *"doppler run"* ]]'
 # Every Exec* line of the unit (backslash continuations joined, as systemd reads them), not only the first ExecStart.
-F6_ALLEXEC="$(awk '{ if (sub(/\\$/, "")) { buf = buf $0; next } print buf $0; buf = "" }' "$SVC" | grep -E '^Exec[A-Za-z]*=' || true)"
+# shellcheck disable=SC2034  # read inside the single-quoted assert() condition
+F6_ALLEXEC="$(awk '{ if (sub(/\\$/, "")) { buf = buf $0; next } print buf $0; buf = "" }' "$SVC" | grep -E '^[[:space:]]*Exec[A-Za-z]*=' || true)"
 assert "F6 static: EVERY Exec* directive of the unit (continuations joined) is dollar-free and export-free, so no second line can expand the secret" \
   '[[ -n "$F6_ALLEXEC" && "$F6_ALLEXEC" != *\$* && "$F6_ALLEXEC" != *export* ]]'
 for f6_form in xtrace benv; do
@@ -991,12 +992,29 @@ for f6_k in "${f6_keys[@]}"; do
   assert "F6 invalid key [$f6_label]: nothing executed, no beat, reason=empty, a key line that does not echo the name, exit 0" \
     '[[ ! -e "$F6_PLANT" && "$RC" -eq 0 && "$ERR" == *"$HB_MARKER_EMPTY"* && "$ERR" == *"WEB_NIC_GUARD_URL_KEY"* ]] && no_beat && { [[ -z "$f6_k" ]] || [[ "$ERR" != *"$f6_k"* ]]; }'
 done
+# Every printable ASCII character outside [A-Z0-9_], inside an upper-case-led name, is refused: a generated list, not a hand-picked one.
+f6_bodybad=""
+for f6_ord in $(seq 33 126); do
+  f6_c="$(printf "\\x$(printf '%02x' "$f6_ord")")"
+  case "$f6_c" in [A-Z0-9_]) continue ;; esac
+  rm -f "$F6_PLANT"; EXTRA_ENV=("WEB_NIC_GUARD_URL_KEY=A${f6_c}B"); run_guard true 0 true
+  { [[ ! -e "$F6_PLANT" && "$RC" -eq 0 && "$ERR" == *"$HB_MARKER_EMPTY"* && "$ERR" == *"WEB_NIC_GUARD_URL_KEY"* ]] && no_beat; } || f6_bodybad+="$f6_c"
+done
+assert "F6 body clause (generated): every printable ASCII character outside [A-Z0-9_] inside an upper-case-led key is refused (offenders: [$f6_bodybad])" \
+  '[[ -z "$f6_bodybad" ]]'
 for f6_k in WEB_NIC_GUARD_URL_WEB_1 WEB_NIC_GUARD_URL_WEB_2; do
   EXTRA_ENV=("WEB_NIC_GUARD_URL_KEY=$f6_k" "$f6_k=$F6_URL"); run_guard true 0 true
   assert "F6 production-shaped key [$f6_k] resolves and delivers" '[[ "$PING" == "$F6_URL" && "$TA_PING" -eq 1 ]]'
 done
 EXTRA_ENV=(LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 WEB_NIC_GUARD_URL_KEY=f6lowerkey f6lowerkey="$F6_URL"); run_guard true 0 true
-assert "F6 locale: a lowercase key is refused under a UTF-8 locale too (a regression pin; the LC_ALL line in _key_ok cannot be shown load-bearing on bash 5)" 'no_beat && [[ "$RC" -eq 0 ]]'
+assert "F6 locale: a lowercase key is refused under a UTF-8 locale too (a regression pin; the discriminating row follows)" 'no_beat && [[ "$RC" -eq 0 ]]'
+# The discriminating locale row: with ASCII ranges switched OFF (BASH_ENV shopt) under a UTF-8 locale, [A-Z] admits b..z,
+# so `bz` passes a _key_ok that lacks `local LC_ALL=C`; the real one refuses it. Deleting that line makes this row red.
+printf 'shopt -u globasciiranges\n' > "$TMP/f6-noascii.env"
+f6_loc="$(locale -a 2>/dev/null | grep -ciE '^en_US\.utf-?8$' || true)"
+EXTRA_ENV=(BASH_ENV="$TMP/f6-noascii.env" LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 WEB_NIC_GUARD_URL_KEY=bz bz="$F6_URL"); run_guard true 0 true
+assert "F6 locale[ranges off]: a lowercase key is refused even when [A-Z] would collate over it (en_US.UTF-8 present on this host: $f6_loc; with 0 this row is only a pin)" \
+  'no_beat && [[ "$RC" -eq 0 && "$ERR" == *"WEB_NIC_GUARD_URL_KEY"* ]]'
 for f6_k in RANDOM PATH BASH_ENV; do
   rm -f "$F6_PLANT"; EXTRA_ENV=("WEB_NIC_GUARD_URL_KEY=$f6_k"); run_guard true 0 true
   assert "F6 valid-but-special key [$f6_k]: read as a plain variable, nothing executed, no beat, exit 0" 'no_beat && [[ ! -e "$F6_PLANT" && "$RC" -eq 0 ]]'
@@ -1022,7 +1040,7 @@ assert "F6 limiter: three runs with an invalid key under one root emit exactly o
 # _key_ok is inline-copied into the zot probe (each is a standalone shipped file): the two copies must stay byte-identical.
 F6_ZOT_SUT="$(dirname "$SUT")/web-zot-consumer-probe.sh"
 assert "F6 parity: _key_ok is byte-identical in the nic-guard and zot scripts (one copy cannot lose the charset or LC_ALL=C alone)" \
-  '[[ -n "$(grep -m1 "^_key_ok()" "$SUT")" && "$(grep -m1 "^_key_ok()" "$SUT")" == "$(grep -m1 "^_key_ok()" "$F6_ZOT_SUT")" ]]'
+  '[[ -n "$(grep -m1 "^_key_ok()" "$SUT")" && "$(grep -m1 "^_key_ok()" "$SUT")" == *"; }" && "$(grep -m1 "^_key_ok()" "$SUT")" == "$(grep -m1 "^_key_ok()" "$F6_ZOT_SUT")" ]]'
 # Order: the lookup sits BELOW the refusal, and a mutant that hoists it above the refusal leaks under SHELLOPTS=xtrace.
 f6_line_of() { awk -v n="$1" 'index($0, n) && $0 !~ /^[[:space:]]*#/ { print NR; exit }' "$SUT"; }   # first NON-comment line holding the text
 assert "F6 order: the indirect lookup is on a later line than the xtrace refusal" \
@@ -1054,7 +1072,7 @@ if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
   printf '\n[FATAL] accounting identity: PASS(%d) + FAIL(%d) != CASES(%d). An assertion recorded no verdict or more than one.\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
-MIN_CASES=362
+MIN_CASES=364
 if [[ "$CASES" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity floor: only %d assertions ran; floor is %d\n' "$CASES" "$MIN_CASES" >&2
   exit 1

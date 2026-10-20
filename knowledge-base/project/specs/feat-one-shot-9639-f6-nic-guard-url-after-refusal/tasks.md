@@ -14,12 +14,12 @@ PR body: `Ref #9639`, `Part of tracker #9217` (no closing keyword). Do NOT touch
 
 ### web-zot-consumer-probe.test.sh
 
-- [x] 1.5 Lean subset against `WEB_ZOT_CONSUMER_URL` with `ZOT_PULL_TOKEN` set: static, xtrace launch (both forms), G2.1 leak control, positive, dispatch, hoisted-lookup, one hostile key.
+- [x] 1.5 Lean subset against the key-named heartbeat variable with the pull credential set (`ZOT_PULL_TOKEN`, the name doppler injects; one row for the legacy `ZTOK`): static, xtrace launch (both forms), G2.1 leak control, positive, dispatch, hoisted-lookup, one hostile key.
 
 ### doppler-injection-bound.test.sh
 
 - [x] 1.6 RED rows G1.1-G1.3, G1.5, G1.6-G1.12 and GH2 (restore wrapper expansion; second directive; operator-suffix and modifier/subscript spellings; no-op wrapper stage -> `CENSUS_FAIL`; strip script-side indirect -> `ACK_FAIL stale`; delete an unfixed sibling's wrapper ack; stale wrapper ack; ack pin; acked unit gaining a second expansion; bare, `:?` and comment-only script-side fixtures; fixed unit written without the outer `bash -c` stays green).
-- [x] 1.7 Run the three suites on the unchanged tree; record the failing row names for the PR body.
+- [ ] 1.7 Run the three suites on the unchanged tree; record the failing row names for the PR body (written when the PR body is written).
 
 ## Phase 2 - GREEN
 
@@ -34,7 +34,7 @@ PR body: `Ref #9639`, `Part of tracker #9217` (no closing keyword). Do NOT touch
 
 - [x] 3.1 `grep-q-pipe-guard.test.sh` (PJ_TRIPLES unchanged, recompute before/after), `lint-trap-tempfile-ownership` (+ test), `guard-vacuity-floor.test.sh`, shellcheck on touched `.sh`, `c4-count-parity.test.sh`, `lint-guard-contract.py`, `lint-infra-no-human-steps.py --changed --base origin/main`, markdownlint on plan + tasks, the discoverability probe verbatim.
 - [x] 3.2 `fresh-boot-parity.test.sh`, `web-host-provisioner-parity.test.sh`.
-- [x] 3.3 Simulate the rollback in a scratch detached worktree under `/var/tmp`; write the measured recipe into the PR body.
+- [ ] 3.3 Simulate the rollback in a scratch detached worktree under `/var/tmp` (done once at 8115aa712e: nic 316, zot 391, scanner 33 on the pre-PR files); write the measured recipe into the PR body.
 - [x] 3.4 `doppler-injection-bound` CENSUS measured after the review round: doppler_run_units=20, bound_required_population=10, wrapper_units_checked=20 (unchanged by the INDIRECT_RE widening); goes in the PR body.
 - [x] 3.5 `git diff --name-only origin/main...HEAD` contains none of the files listed under "Do NOT touch".
 
@@ -47,5 +47,5 @@ PR body: `Ref #9639`, `Part of tracker #9217` (no closing keyword). Do NOT touch
 ## Phase 5 - Review round (fix-inline, 2026-10-20)
 
 - [x] 5.1 Zot refusal: key disjunct exempt for `--canary-only`; `unset URL` in both scripts; stale comments swept by claim (nic header, zot canary block, both `.service` comments, `web-probe.tf`, scanner header); ADR-202 addendum reworded.
-- [x] 5.2 Rows added and mutation-proven in a scratch sandbox: nic 347 -> 362, zot 407 -> 422, scanner 45 -> 55; floors raised in the same edits.
+- [x] 5.2 Rows added and mutation-proven in a scratch sandbox: nic 347 -> 364, zot 407 -> 427, scanner 45 -> 61; floors raised in the same edits (round 1: 41dbe4ec5c; round 2 adds the ZOT_PULL_TOKEN/ZTOK/argument-shape/canary-emitted rows, the generated key-character table, the discriminating locale row and the exact-ack rows).
 - [ ] 5.3 Record on #9639 the findings not fixed here (ExecStop*, other doppler spellings, drop-ins, direct `$NAME` wrappers, prefix allowlist, web_hosts key validation, stale sentences under other open PRs).

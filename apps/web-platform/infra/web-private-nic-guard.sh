@@ -148,8 +148,8 @@ fi
 # The unit no longer exports the URL: it names the variable doppler injected it under (WEB_NIC_GUARD_URL_KEY, one per
 # host, written by the *_install provisioner), and this script reads that variable HERE, after the xtrace refusal.
 # The NAME comes from an env file, and `${!name}` evaluates array subscripts and command substitutions inside `name`,
-# so it is judged first: an upper-case identifier or nothing (LC_ALL=C pins ASCII ranges for exotic collations; bash 5
-# with globasciiranges already does, so this line is defence in depth that no test can exercise here).
+# so it is judged first: an upper-case identifier or nothing (LC_ALL=C pins ASCII ranges: with globasciiranges off under a
+# UTF-8 locale [A-Z] collates over b..z; the suite's "F6 locale[ranges off]" row makes that case and fails without it).
 # There is no fallback to a bare variable of any other name. This script never exports the resolved value; doppler's own
 # injected copy under the key-named variable is still inherited by children, as before this change.
 _key_ok() { local LC_ALL=C; case "${1:-}" in ''|[!A-Z]*|*[!A-Z0-9_]*) return 1 ;; esac; }

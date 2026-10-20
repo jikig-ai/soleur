@@ -517,12 +517,13 @@ SEP_RE = re.compile(r'(?<=\s)--(?=\s)')
 ONLY_SECRETS_RE = re.compile(r'(?<![-\w])--only-secrets(?:[= ]+)([^\s]*)')
 # Unit side: ANY indirect expansion in an Exec directive, whatever follows the name: nothing (`${!K}`), an operator
 # (`${!K:-}`, `${!K+x}`), a substring or trim or case or replace form (`${!K:0:3}`, `${!K#p}`, `${!K%p}`, `${!K/a/b}`,
-# `${!K^^}`, `${!K,,}`), a subscript (`${!K[0]}`) or the prefix forms (`${!K@}`, `${!K*}`).
-INDIRECT_RE = re.compile(r'\$\{!(\w+)(?:\[[^\]]*\]|[-+=?:#%/^,@*][^}]*)?\}')
+# `${!K^^}`, `${!K,,}`), a subscript (`${!K[0]}`), a subscript followed by any of those (`${!K[0]:-x}`) or the prefix forms
+# (`${!K@}`, `${!K*}`).
+INDIRECT_RE = re.compile(r'\$\{!(\w+)(?:\[[^\]]*\])?(?:[-+=?:#%/^,@*][^}]*)?\}')
 # Script side (#9639): a doppler TARGET script that resolves its own secret through a variable named `*_KEY` (the per-host
-# key NAME an env file carries). Bound to the `_KEY` convention on purpose: the unrestricted form also matched
+# key NAME an env file carries), in every spelling the unit-side regex knows (the two share one grammar). Bound to the `_KEY` convention on purpose: the unrestricted form also matched
 # `${!_seam+x}` in inngest-luks-cutover.sh, pulling that unit into the population and turning it red.
-SCRIPT_KEY_INDIRECT_RE = re.compile(r'\$\{!(\w*_KEY)(?::?[-+=?][^}]*)?\}')
+SCRIPT_KEY_INDIRECT_RE = re.compile(r'\$\{!(\w*_KEY)(?:\[[^\]]*\])?(?:[-+=?:#%/^,@*][^}]*)?\}')
 PATH_TOKEN_RE = re.compile(r'/usr/(?:local/)?bin/([A-Za-z0-9._-]+)')
 
 
@@ -722,14 +723,15 @@ def main():
             if u['name'] not in WRAPPER_ACK_REASONS:
                 findings.append(
                     'FINDING unit=%s reason=wrapper expands a secret by indirect expansion (%s) in an Exec '
-                    'directive of a `doppler run` unit: the expansion runs before the target script can refuse to '
+                    'directive that invokes `doppler run`: the expansion runs before the target script can refuse to '
                     'run under xtrace; resolve the key inside the script after its refusal src=%s'
                     % (u['name'], ','.join('${!%s}' % i for i in w_ind), u['source']))
             elif set(w_ind) != set(WRAPPER_ACK_REASONS[u['name']][0]):
                 findings.append(
                     'FINDING unit=%s reason=wrapper-acked unit expands %s but its ack names only %s: an ack covers the '
                     'exact expansion it recorded, not the unit src=%s'
-                    % (u['name'], ','.join(w_ind), ','.join(sorted(WRAPPER_ACK_REASONS[u['name']][0])), u['source']))
+                    % (u['name'], ','.join('${!%s}' % i for i in w_ind),
+                       ','.join('${!%s}' % i for i in sorted(WRAPPER_ACK_REASONS[u['name']][0])), u['source']))
         for info in infos:
             for ind in info['indirect']:
                 reasons.append('indirect-expansion:%s' % ind)
@@ -1085,6 +1087,11 @@ if prog == 'drop-ack-entry':
     s = re.sub(r'^ACK_CARDINALITY = \d+$', 'ACK_CARDINALITY = %d' % (n - 1), s, count=1, flags=re.M)
 elif prog == 'drop-ack-entry-only':
     s = re.sub(ENTRY, '', s)
+elif prog == 'ack-extra-name':
+    old = "(('GIT_DATA_HEARTBEAT_URL_KEY',),"
+    if s.count(old) != 1:
+        raise SystemExit('ack-extra-name: expected exactly one %s, found %d' % (old, s.count(old)))
+    s = s.replace(old, "(('GIT_DATA_HEARTBEAT_URL_KEY', 'GIT_DATA_EXTRA_KEY'),")
 elif prog == 'noop-wrapper-stage':
     # The wrapper stage's own dispatch: make it examine nothing. The new census floor must catch it.
     if s.count('        wrapper_checked += 1\n') != 1:
@@ -1235,6 +1242,12 @@ expect_green "GH2 a fixed unit written without the outer bash -c stays GREEN (th
 g110() { printf '%s\n' "ExecStartPre=/bin/bash -c 'doppler run --project soleur --config prd -- bash -c '\\''export G110_X=\"\$\${!G110_OTHER_KEY}\"; true'\\'''" >> "$1/web-git-data-probe.service"; }
 expect_red "G1.10 a wrapper-acked unit gains a SECOND expansion its ack does not name" \
   "FINDING unit=web-git-data-probe.service reason=wrapper-acked unit expands" g110
+# G1.10b/c — the ack is EXACT in both directions: a unit that SWAPS the one name it expands, and an ack that names MORE than the unit expands.
+g110b() { sed -i 's/\${!GIT_DATA_HEARTBEAT_URL_KEY}/${!GIT_DATA_SWAPPED_KEY}/' "$1/web-git-data-probe.service"; }
+expect_red "G1.10b a wrapper-acked unit SWAPS the name it expands (the ack names the old one)" \
+  "FINDING unit=web-git-data-probe.service reason=wrapper-acked unit expands \${!GIT_DATA_SWAPPED_KEY} but its ack names only \${!GIT_DATA_HEARTBEAT_URL_KEY}" g110b
+expect_red_scanner "G1.10c a wrapper ack that names MORE than the unit expands is a finding too" \
+  "FINDING unit=web-git-data-probe.service reason=wrapper-acked unit expands" 'ack-extra-name'
 # G1.11 — every spelling of an indirect expansion the unit-side regex must see, not only the bare and operator forms.
 g_spell() {   # <dir> <suffix after the variable name> : the nic unit's ExecStart expands ${!WEB_NIC_GUARD_URL_KEY<suffix>}
   set_execstart "$1/$NICU" "ExecStart=/bin/bash -c 'doppler run --project soleur --config prd -- bash -c '\\''export WEB_NIC_GUARD_URL=\"\$\${!WEB_NIC_GUARD_URL_KEY$2}\"; exec /usr/local/bin/web-private-nic-guard.sh'\\'''"
@@ -1245,31 +1258,47 @@ g111c() { g_spell "$1" '@'; }
 g111d() { g_spell "$1" '#p'; }
 g111e() { g_spell "$1" '/a/b'; }
 g111f() { g_spell "$1" '^^'; }
-for g111 in "a:\${!K:0:3} substring" "b:\${!K[0]} subscript" "c:\${!K@} prefix list" "d:\${!K#p} trim" "e:\${!K/a/b} replace" "f:\${!K^^} case"; do
+g111g() { g_spell "$1" '[0]:-x'; }
+g111h() { g_spell "$1" '[0]#p'; }
+for g111 in "a:\${!K:0:3} substring" "b:\${!K[0]} subscript" "c:\${!K@} prefix list" "d:\${!K#p} trim" "e:\${!K/a/b} replace" "f:\${!K^^} case" "g:\${!K[0]:-x} subscript plus operator" "h:\${!K[0]#p} subscript plus trim"; do
   expect_red "G1.11${g111%%:*} the $(printf '%s' "${g111#*:}") spelling is a wrapper expansion too" \
     "FINDING unit=$NICU reason=wrapper expands a secret" "g111${g111%%:*}"
 done
 # G1.12 — the script-side regex across the operator group, and the comment-stripped body (settled ruling: comments do not count).
-g19c() {
-  printf '%s\n' '#!/usr/bin/env bash' 'set -u' 'URL="${!G19C_URL_KEY}"' 'echo "$URL"' > "$1/g19c.sh"
+g112a() {
+  printf '%s\n' '#!/usr/bin/env bash' 'set -u' 'URL="${!G112A_URL_KEY}"' 'echo "$URL"' > "$1/g112a.sh"
+  printf '%s\n' '[Unit]' 'Description=G1.12a fixture' '[Service]' 'Type=oneshot' \
+    'ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/local/bin/g112a.sh' > "$1/g112a.service"
+}
+expect_red "G1.12a a script resolving the bare \${!FOO_KEY} (no operator) enters the population" \
+  "FINDING unit=g112a.service reason=no --only-secrets bound" g112a
+g112b() {
+  printf '%s\n' '#!/usr/bin/env bash' 'set -u' 'URL="${!G112B_URL_KEY:?}"' 'echo "$URL"' > "$1/g112b.sh"
+  printf '%s\n' '[Unit]' 'Description=G1.12b fixture' '[Service]' 'Type=oneshot' \
+    'ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/local/bin/g112b.sh' > "$1/g112b.service"
+}
+expect_red "G1.12b a script resolving \${!FOO_KEY:?} enters the population" \
+  "FINDING unit=g112b.service reason=no --only-secrets bound" g112b
+g112c() {
+  printf '%s\n' '#!/usr/bin/env bash' 'set -u' '# URL="${!G112C_URL_KEY:-}"  (documented only, never executed)' 'echo hello' > "$1/g112c.sh"
   printf '%s\n' '[Unit]' 'Description=G1.12c fixture' '[Service]' 'Type=oneshot' \
-    'ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/local/bin/g19c.sh' > "$1/g19c.service"
+    'ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/local/bin/g112c.sh' > "$1/g112c.service"
 }
-expect_red "G1.12c a script resolving the bare \${!FOO_KEY} (no operator) enters the population" \
-  "FINDING unit=g19c.service reason=no --only-secrets bound" g19c
-g19d() {
-  printf '%s\n' '#!/usr/bin/env bash' 'set -u' 'URL="${!G19D_URL_KEY:?}"' 'echo "$URL"' > "$1/g19d.sh"
+expect_green "G1.12c a \${!FOO_KEY:-} that exists only in a COMMENT does NOT enter the population (the body is comment-stripped)" g112c
+g112d() {
+  printf '%s\n' '#!/usr/bin/env bash' 'set -u' 'URL="${!G112D_URL_KEY:0:3}"' 'echo "$URL"' > "$1/g112d.sh"
   printf '%s\n' '[Unit]' 'Description=G1.12d fixture' '[Service]' 'Type=oneshot' \
-    'ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/local/bin/g19d.sh' > "$1/g19d.service"
+    'ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/local/bin/g112d.sh' > "$1/g112d.service"
 }
-expect_red "G1.12d a script resolving \${!FOO_KEY:?} enters the population" \
-  "FINDING unit=g19d.service reason=no --only-secrets bound" g19d
-g19e() {
-  printf '%s\n' '#!/usr/bin/env bash' 'set -u' '# URL="${!G19E_URL_KEY:-}"  (documented only, never executed)' 'echo hello' > "$1/g19e.sh"
+expect_red "G1.12d a script resolving \${!FOO_KEY:0:3} (a substring form) enters the population" \
+  "FINDING unit=g112d.service reason=no --only-secrets bound" g112d
+g112e() {
+  printf '%s\n' '#!/usr/bin/env bash' 'set -u' 'URL="${!G112E_URL_KEY[0]}"' 'echo "$URL"' > "$1/g112e.sh"
   printf '%s\n' '[Unit]' 'Description=G1.12e fixture' '[Service]' 'Type=oneshot' \
-    'ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/local/bin/g19e.sh' > "$1/g19e.service"
+    'ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/local/bin/g112e.sh' > "$1/g112e.service"
 }
-expect_green "G1.12e a \${!FOO_KEY:-} that exists only in a COMMENT does NOT enter the population (the body is comment-stripped)" g19e
+expect_red "G1.12e a script resolving \${!FOO_KEY[0]} (a subscript form) enters the population" \
+  "FINDING unit=g112e.service reason=no --only-secrets bound" g112e
 
 # ── harness rows ──────────────────────────────────────────────────────────────────────────────
 echo ""
@@ -1376,9 +1405,9 @@ expect_green "H4 runcmd doppler invocation is NOT flagged (boot self-check must 
 # expect_red/expect_green invocation would report FAIL=0 and exit 0. A FLOOR, not equality: bump
 # it deliberately when adding assertions; NEVER lower it to make a run pass.
 TOTAL=$((PASS + FAIL))
-# 25 -> 29 -> 45 (#9639: the wrapper-stage rows): set to the measured green count, not below it. Slack in a floor is the budget an
+# 25 -> 29 -> 45 -> 61 (#9639: the wrapper-stage rows, then the review round's spelling and ack-exactness rows): set to the measured green count, not below it. Slack in a floor is the budget an
 # attacker (or an accidental deletion) gets for free.
-MIN_ASSERTIONS=55
+MIN_ASSERTIONS=61
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
   # printf + exit, NOT fail() (ADR-193): routing the floor through the counter it exists to
   # protect means one edit disarms both. See the instrument self-test at the top.
