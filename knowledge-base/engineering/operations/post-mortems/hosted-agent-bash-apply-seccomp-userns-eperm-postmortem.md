@@ -152,6 +152,8 @@ That means "fix deployed and canary green", not that hosted Bash works: the cana
 it is not evidence of recovery. The first real hosted Bash call was made by the operator on 2026-10-19 and reported as
 working (see Status); no existing agent-run check exercises a hosted Bash call, so none could make it. The deploy-time SDK Bash smoke that would make the canary see this class is #10453.
 
+> Note (2026-10-19): `scripts/followthroughs/sandbox-readback-10445.sh` was retired after #10456 closed (the script no longer exists in the repository); the paragraph above is the historical record of what it did.
+
 ---
 
 # Incident Post-Mortem Analysis

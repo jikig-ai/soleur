@@ -25,3 +25,6 @@ fe234ddc6d259bd885a5a5fe85c89a7f6cbd9f87:plugins/soleur/test/preflight-founder-c
 # No credential is present; the tip rewords it. The PR-diff scan reads each commit as it was, so the tip fix alone does not clear it.
 # Format for a git-mode scan: <commit>:<path>:<rule-id>:<line>
 233ccb0adb9ceeef9519bce8ab9120d8036d032d:knowledge-base/project/learnings/2026-10-12-a-sigv4-pair-on-argv-needs-a-helper-whose-callers-carry-the-trace-defence.md:curl-auth-user:1
+# #10546: the verdict suite stubs the signed deploy-status call with a synthetic webhook-secret literal (whsec-synth-...,
+# cfid-synth-..., cfsec-synth-...), no real credential. The PR-diff scan reads each commit as it was, so a tip rewrite would not clear it.
+61672531bb5e2a9342ab44319a84313c0e045167:scripts/followthroughs/sdk-bash-smoke-verdict-10548.test.sh:generic-api-key:49

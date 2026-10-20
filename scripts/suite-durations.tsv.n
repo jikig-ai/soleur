@@ -342,6 +342,7 @@ scripts/followthroughs/ci-draft-light-soak-9728	104456	measured
 scripts/followthroughs/ci-push-dedupe-soak-9512	87919	measured
 scripts/followthroughs/inngest-provision-rehearsal-capture	1223	measured
 scripts/followthroughs/pr-battery-gate-saving-9323	11826	measured
+scripts/followthroughs/sdk-bash-smoke-verdict-10548	1194	floor
 scripts/followthroughs/t5-skip-persistence-bound-7510	9027	measured
 scripts/followthroughs/tty-ack-migration-9387	3438	measured
 scripts/generate-kb-index-live	2444	measured
@@ -471,7 +472,6 @@ scripts/supabase-watchdog-classify	462	measured
 scripts/sweep-followthroughs	26244	measured
 scripts/tenant-dpa-register-guard-live	9	measured
 scripts/tenant-dpa-register-guard-unit	286	measured
-scripts/tenant-outer-wrap-soak-5863	425	measured
 scripts/test-affected-derive	5526	measured
 scripts/test-affected-derive-cache	1279	measured
 scripts/test-affected-kb-consumers	91233	measured

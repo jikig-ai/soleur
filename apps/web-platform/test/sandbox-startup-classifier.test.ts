@@ -8,11 +8,28 @@
 // (plain Error, no `.stderr`/`.cause`). These tests use a SYNTHESIZED signal
 // in that exact shape (cq-test-fixtures-synthesized-only) — no LLM in the
 // assertion path.
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterAll } from "vitest";
 import {
   classifySandboxStartupError,
   classifyBashSandboxFailure,
+  isPreExecSandboxDenialOutput,
+  BASH_UNAVAILABLE_NOTICE,
+  HELPER_STEPS,
+  HELPER_STEPS_PRE_COMMAND,
+  HELPER_STEPS_POST_COMMAND,
 } from "@/server/sandbox-startup-classifier";
+import {
+  assertHelperStepCensus,
+  HELPER_NON_STEP_LINES,
+  bufferSource,
+  fileSource,
+  resolveVendoredBinary,
+  scanHelperStepStrings,
+  shouldSkipRealBinaryRows,
+} from "./helpers/vendored-bwrap-tail";
 
 // The #5873 shape: bwrap fails to set up the userns after the split unshare()
 // because the container seccomp profile denied the second unshare() call.
@@ -242,8 +259,11 @@ describe("classifyBashSandboxFailure — apply-seccomp helper arm (#10445, Guard
     );
   });
 
-  it("another helper step failing with EPERM is NOT this code (residual tracked in #10455)", () => {
-    expect(classifyBashSandboxFailure("apply-seccomp: prctl(PR_SET_NO_NEW_PRIVS): EPERM", null)).toBeNull();
+  it("another helper step failing with EPERM is NOT helper_userns_eperm: it is helper_step_eperm (#10455 e)", () => {
+    expect(classifyBashSandboxFailure("apply-seccomp: prctl(PR_SET_NO_NEW_PRIVS): EPERM", null)?.errorCode).toBe(
+      "helper_step_eperm",
+    );
+    // Not a step the helper prints: still unclassified (exact-step allowlist, no charset).
     expect(classifyBashSandboxFailure("apply-seccomp: seccomp(SET_MODE_FILTER): Operation not permitted", null)).toBeNull();
   });
 
@@ -296,5 +316,243 @@ describe("classifyBashSandboxFailure — apply-seccomp helper arm (#10445, Guard
   it("the matched line is the fixed helper line, whatever surrounds it", () => {
     const f = classifyBashSandboxFailure(`/workspaces/x says:\n${ISSUE_LINE}\n`, null);
     expect(f?.matchedLine).toBe(ISSUE_LINE);
+  });
+});
+
+// #10455 e — every step line the vendored helper can print is classified or deliberately excluded (Guard 2).
+// Step list MEASURED on claude-agent-sdk 0.3.284 (strings of the embedded helper; runtime order recorded with an
+// LD_PRELOAD interposer on 2026-10-19): 16 `<step>: <strerror>` literals + the errno-less `observe sendmsg failed`.
+describe("apply-seccomp helper steps — classification (#10455 e, Guard 2)", () => {
+  const USERNS = "unshare(CLONE_NEWUSER)";
+  const NON_USERNS = HELPER_STEPS.filter((s) => s !== USERNS);
+  const POST_COMMAND = ["waitpid"];
+  const line = (step: string, errno = "Operation not permitted") => `apply-seccomp: ${step}: ${errno}`;
+
+  it("floor: the allowlist is the 16 measured steps, userns among them, with no duplicates", () => {
+    expect(HELPER_STEPS).toHaveLength(16);
+    expect(new Set(HELPER_STEPS).size).toBe(16);
+    expect(HELPER_STEPS).toContain(USERNS);
+    expect(NON_USERNS).toHaveLength(15);
+  });
+
+  it.each(HELPER_STEPS)("step %s: EPERM (both spellings) classifies; the matched line is the fixed line", (step) => {
+    for (const errno of ["Operation not permitted", "EPERM"]) {
+      const f = classifyBashSandboxFailure(line(step, errno), null);
+      expect(f?.errorCode, `${step} / ${errno}`).toBe(step === USERNS ? "helper_userns_eperm" : "helper_step_eperm");
+      expect(f?.matchedLine).toBe(line(step, errno));
+    }
+  });
+
+  it.each(HELPER_STEPS)("step %s: EACCES / EINVAL / a tenant-chosen tail / a prefix stay unclassified", (step) => {
+    expect(classifyBashSandboxFailure(line(step, "Permission denied"), null)).toBeNull();
+    expect(classifyBashSandboxFailure(line(step, "Invalid argument"), null)).toBeNull();
+    expect(classifyBashSandboxFailure(`${line(step)} then tenant text`, null)).toBeNull();
+    expect(classifyBashSandboxFailure(`error: ${line(step)}`, null)).toBeNull();
+    // A tail hidden past the scan cap behind padding must not slip through the line-end anchor.
+    expect(classifyBashSandboxFailure(`${line(step)}${" ".repeat(2100)}tenant`, null)).toBeNull();
+  });
+
+  it("an unknown or wrapped step is not classified (exact-match allowlist, no charset)", () => {
+    expect(classifyBashSandboxFailure("apply-seccomp: prctl(PR_FOO): EPERM", null)).toBeNull();
+    expect(classifyBashSandboxFailure(`apply-seccomp: ${USERNS} after userns: EPERM`, null)).toBeNull();
+    expect(classifyBashSandboxFailure("apply-seccomp: observe sendmsg failed", null)).toBeNull();
+    expect(classifyBashSandboxFailure("apply-seccomp: : EPERM", null)).toBeNull();
+  });
+
+  it("the errno-less helper message is deliberately excluded, and the exclusions are not allowlisted", () => {
+    expect(HELPER_NON_STEP_LINES).toEqual(["observe sendmsg failed"]);
+    for (const x of HELPER_NON_STEP_LINES) expect(HELPER_STEPS).not.toContain(x);
+  });
+
+  it("the notice subset is exactly the 15 steps that run before the tenant command; only waitpid is excluded", () => {
+    expect(HELPER_STEPS_PRE_COMMAND).toHaveLength(15);
+    expect(HELPER_STEPS_POST_COMMAND).toEqual(POST_COMMAND);
+    for (const s of HELPER_STEPS_PRE_COMMAND) expect(HELPER_STEPS).toContain(s);
+    for (const s of ["fork(worker)", "prctl(PR_SET_NO_NEW_PRIVS)", "prctl(PR_SET_SECCOMP)", "execvp"]) {
+      expect(HELPER_STEPS_PRE_COMMAND, s).toContain(s);
+    }
+    expect(HELPER_STEPS_PRE_COMMAND).not.toContain("waitpid");
+    expect([...HELPER_STEPS].filter((s) => !HELPER_STEPS_PRE_COMMAND.includes(s)).sort()).toEqual([...POST_COMMAND].sort());
+    expect(HELPER_STEPS_PRE_COMMAND.length + HELPER_STEPS_POST_COMMAND.length).toBe(HELPER_STEPS.length);
+  });
+
+  it("Guard 2 row 5: a waitpid line (printed AFTER the tenant command ran) never triggers the notice, even as a single error line", () => {
+    for (const step of POST_COMMAND) {
+      expect(isPreExecSandboxDenialOutput(line(step), true), step).toBe(false);
+    }
+    // ...while it is still classified, so the page still fires.
+    expect(classifyBashSandboxFailure(line("waitpid"), null)?.errorCode).toBe("helper_step_eperm");
+  });
+});
+
+describe("isPreExecSandboxDenialOutput — the notice predicate (#10455 c, Guard 2)", () => {
+  const HELPER = "apply-seccomp: prctl(PR_SET_DUMPABLE): Operation not permitted";
+  const USERNS_LINE = "apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted";
+  const BWRAP = "bwrap: Can't mount proc on /newroot/proc: Operation not permitted";
+
+  it("every pre-command step line, alone and error-flagged, qualifies", () => {
+    expect(HELPER_STEPS_PRE_COMMAND.length).toBeGreaterThan(0); // floor: an empty table must not pass vacuously
+    for (const step of HELPER_STEPS_PRE_COMMAND) {
+      expect(isPreExecSandboxDenialOutput(`apply-seccomp: ${step}: Operation not permitted`, true), step).toBe(true);
+    }
+    expect(isPreExecSandboxDenialOutput(BWRAP, true)).toBe(true);
+  });
+
+  it("requires an error result: a non-error or unknown-flag result never qualifies (forged-line guard)", () => {
+    expect(isPreExecSandboxDenialOutput(USERNS_LINE, false)).toBe(false);
+    expect(isPreExecSandboxDenialOutput(USERNS_LINE, undefined)).toBe(false);
+  });
+
+  it("Guard 2 row 6: mixed output (a helper line plus an ordinary line) does not qualify", () => {
+    expect(isPreExecSandboxDenialOutput(`${HELPER}\nhello`, true)).toBe(false);
+    expect(isPreExecSandboxDenialOutput(`hello\n${HELPER}`, true)).toBe(false);
+    expect(isPreExecSandboxDenialOutput(`${HELPER}\n${USERNS_LINE}`, true)).toBe(false);
+    expect(isPreExecSandboxDenialOutput(`${BWRAP}\nrm: x: Operation not permitted`, true)).toBe(false);
+  });
+
+  it("Guard 2 row 7 (must-PASS): CRLF, leading whitespace and blank lines around the one line are permitted", () => {
+    expect(isPreExecSandboxDenialOutput(`  ${HELPER}\r\n`, true)).toBe(true);
+    expect(isPreExecSandboxDenialOutput(`\n\n\t${HELPER}  \r\n\r\n`, true)).toBe(true);
+  });
+
+  it("a tenant-chosen tail, a prefix, an empty string, or an oversized line never qualifies", () => {
+    expect(isPreExecSandboxDenialOutput(`${HELPER} extra`, true)).toBe(false);
+    expect(isPreExecSandboxDenialOutput(`echo ${HELPER}`, true)).toBe(false);
+    expect(isPreExecSandboxDenialOutput("", true)).toBe(false);
+    expect(isPreExecSandboxDenialOutput(`${BWRAP} ${"x ".repeat(2000)}`, true)).toBe(false);
+  });
+
+  it("an ordinary EPERM that is not a sandbox line does not qualify", () => {
+    expect(isPreExecSandboxDenialOutput("rm: cannot remove 'x': Operation not permitted", true)).toBe(false);
+    expect(isPreExecSandboxDenialOutput("unshare: unshare failed: Operation not permitted", true)).toBe(false);
+  });
+
+  it("A2: a tenant line that merely CONTAINS bwrap/bubblewrap is never rewritten; only a line that starts with `bwrap: ` is", () => {
+    // Both still classify (and so still page): the paging classifier is unchanged.
+    for (const l of [
+      "rm: cannot remove 'bwrap': Operation not permitted",
+      "chmod: changing permissions of 'bwrap-notes.md': Operation not permitted",
+      "bubblewrap: setting up uid map: Operation not permitted",
+      "echo bwrap: Operation not permitted",
+      // `bwrap-notes:` carries the bwrap token (so it classifies) but does not START with `bwrap: `: the `/^\s*bwrap/`
+      // mutant of the own-line anchor would rewrite it. `bwrapper:` is a different word (no token at all).
+      "bwrap-notes: x: Operation not permitted",
+      "bwrapper: y: Operation not permitted",
+    ]) {
+      expect(isPreExecSandboxDenialOutput(l, true), l).toBe(false);
+    }
+    expect(classifyBashSandboxFailure("rm: cannot remove 'bwrap': Operation not permitted", null)?.errorCode).toBe("bwrap_eperm");
+    // A real bwrap line (and indented / CRLF forms) is still rewritten.
+    expect(isPreExecSandboxDenialOutput("bwrap: setting up uid map: Operation not permitted", true)).toBe(true);
+    expect(isPreExecSandboxDenialOutput(`  ${BWRAP}\r\n`, true)).toBe(true);
+  });
+
+  it("the notice is the agreed plain sentence and does NOT claim the command did not run", () => {
+    expect(BASH_UNAVAILABLE_NOTICE).toBe(
+      "Platform notice: command execution is temporarily unavailable on our side. This is a platform issue, not a problem with your project.",
+    );
+    expect(BASH_UNAVAILABLE_NOTICE).not.toMatch(/did not run|not run|never ran|apply-seccomp|bwrap/i);
+  });
+
+  it("A6(e): an 8 MB multi-line string is rejected by the length bound BEFORE any split", () => {
+    const eightMb = "x\n".repeat(4 * 1024 * 1024);
+    expect(eightMb.length).toBe(8 * 1024 * 1024);
+    // Structural, not wall-clock: no split may be performed on an over-bound string (a timing bound flakes on a loaded runner).
+    const split = vi.spyOn(String.prototype, "split");
+    let results: boolean[];
+    let splitLengths: number[];
+    try {
+      results = [
+        isPreExecSandboxDenialOutput(eightMb, true),
+        // The real denial line buried in a huge multi-line payload is still not a lone denial.
+        isPreExecSandboxDenialOutput(`${HELPER}\n${eightMb}`, true),
+        isPreExecSandboxDenialOutput(`${eightMb}${HELPER}`, true),
+      ];
+      // Read BEFORE restore: mockRestore clears the recorded contexts.
+      splitLengths = split.mock.contexts.map((c) => String(c).length);
+    } finally {
+      split.mockRestore();
+    }
+    expect(results).toEqual([false, false, false]);
+    expect(splitLengths.filter((n) => n > 4000)).toEqual([]);
+  });
+
+  it("a 5000-character slash-heavy single line is rejected without a long scan", () => {
+    const t0 = Date.now();
+    expect(isPreExecSandboxDenialOutput(`bwrap: ${"/a".repeat(2500)} Operation not permitted`, true)).toBe(false);
+    expect(Date.now() - t0).toBeLessThan(200);
+  });
+});
+
+// Guard 2 vs the REAL helper: the allowlist is derived from, and checked against, the vendored binary's own strings.
+describe("apply-seccomp helper steps — census against the vendored binary (Guard 2)", () => {
+  const APP_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+  const SKIP_REAL = shouldSkipRealBinaryRows(process.platform, process.arch, process.env.CI);
+  const PINS = { classified: HELPER_STEPS, excluded: HELPER_NON_STEP_LINES, minStrings: 17 };
+  let realRowsRun = 0;
+
+  // Independent of SKIP_REAL (a floor that reads the skip flag would be satisfied by the very skip it guards).
+  const MUST_RUN_REAL = (process.platform === "linux" && process.arch === "x64") || Boolean(process.env.CI);
+
+  afterAll(() => {
+    // A skip must not pass vacuously: on linux-x64, or under CI, at least one real-binary row has to have run.
+    if (MUST_RUN_REAL) expect(realRowsRun, "no real-binary helper-step row ran").toBeGreaterThanOrEqual(1);
+  });
+
+  it.skipIf(SKIP_REAL)(
+    "the claude-agent-sdk binary carries exactly the allowlisted steps plus the excluded errno-less message",
+    () => {
+      const bin = resolveVendoredBinary("claude-agent-sdk", join(APP_ROOT, "node_modules"));
+      const fs = fileSource(bin.path);
+      try {
+        const found = scanHelperStepStrings(fs.source);
+        realRowsRun += 1;
+        assertHelperStepCensus(found, PINS, `claude-agent-sdk ${bin.version}`);
+      } finally {
+        fs.close();
+      }
+    },
+    90_000,
+  );
+
+  // Harness rows (synthetic buffers): the census itself reds on each drift direction.
+  const synth = (steps: readonly string[]) => bufferSource(Buffer.from(steps.map((s) => `apply-seccomp: ${s}`).join("\0") + "\0"));
+  const FULL = [...HELPER_STEPS, ...HELPER_NON_STEP_LINES];
+  const failureOf = (fn: () => void): string => {
+    try {
+      fn();
+      return "";
+    } catch (e) {
+      return (e as Error).message;
+    }
+  };
+
+  it("harness: the complete step set passes the census (must-PASS control, order independent)", () => {
+    expect(failureOf(() => assertHelperStepCensus(scanHelperStepStrings(synth([...FULL].reverse())), PINS, "synthetic"))).toBe("");
+  });
+
+  it("Guard 2 row 1: an allowlisted step absent from the binary reds HELPER_STEP_ABSENT", () => {
+    const without = FULL.filter((s) => s !== "prctl(PR_SET_DUMPABLE)");
+    expect(failureOf(() => assertHelperStepCensus(scanHelperStepStrings(synth(without)), PINS, "synthetic"))).toMatch(
+      /HELPER_STEP_ABSENT.*PR_SET_DUMPABLE/,
+    );
+  });
+
+  it("Guard 2 row 3: a scan that reads zero strings reds the floor (never passes vacuously)", () => {
+    expect(scanHelperStepStrings(bufferSource(Buffer.alloc(0)))).toEqual([]);
+    expect(failureOf(() => assertHelperStepCensus([], PINS, "synthetic"))).toMatch(/HELPER_STEP_FLOOR/);
+  });
+
+  it("Guard 2 row 4: a new step in the binary that is neither classified nor excluded reds HELPER_STEP_NEW", () => {
+    const withNew = [...FULL, "prctl(PR_SET_NEW_THING)"];
+    expect(failureOf(() => assertHelperStepCensus(scanHelperStepStrings(synth(withNew)), PINS, "synthetic"))).toMatch(
+      /HELPER_STEP_NEW.*PR_SET_NEW_THING/,
+    );
+  });
+
+  it("a string that only mentions the prefix mid-text is read bounded and never throws", () => {
+    const found = scanHelperStepStrings(bufferSource(Buffer.from(`xx apply-seccomp: ${"y".repeat(500)}\0`)));
+    expect(found).toHaveLength(1);
+    expect(found[0].length).toBeLessThanOrEqual(200);
   });
 });
