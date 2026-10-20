@@ -1047,13 +1047,13 @@ FIX
 st=$(mktemp -u)
 FIX
   cat >"$TMPNS_FIX/viol-tmp.test.sh" <<'FIX'
-log=$(mktemp -d /tmp/fixed.XXXX)
+log=$(mktemp -d /tmp/fixed.XXXX)  # lint-trap-ownership: ok planted guard-violation fixture
 FIX
   cat >"$TMPNS_FIX/viol-dryrun.test.sh" <<'FIX'
 st=$(mktemp --dry-run)
 FIX
   cat >"$TMPNS_FIX/viol-p-tmp.test.sh" <<'FIX'
-st=$(mktemp -p /tmp)
+st=$(mktemp -p /tmp)  # lint-trap-ownership: ok planted guard-violation fixture
 FIX
   cat >"$TMPNS_FIX/viol-pglued.test.sh" <<'FIX'
 st=$(mktemp -p/tmp)
