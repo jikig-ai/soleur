@@ -28,3 +28,10 @@ soleur:plan (full workflow, inline), soleur:deepen-plan (halt gates 4.5–4.55 i
 - PR: #10718 (draft)
 - Sibling: PR #10726 (fix-10693 pointers) marked ready + auto-merge armed, full battery running on ready.
 - Post-merge 10666: all green except one transient tenant-integration failure on the queue-shadow tree (hashUserId mock gap — current main already carries the importOriginal fix; subsequent runs incl. branch pushes all green; no action needed).
+
+## Review Phase (in flight)
+- Class: code (test-pyramid-fixtures.test.sh .sh extension) → 8-seat panel
+- design-risk: NOT run — the mechanism design (widened token) is already CTO-ruled; rulings passed to all seats as settled decisions
+- Seats: 462dfa1b git-history, d823dbb3 pattern-recognition, b5fb1f50 architecture, b723c78c security, 232e4fa4 performance, 37504a3e data-integrity, d06387e0 agent-native, 9974f96f code-quality
+- merge-tree rc=0 vs origin/main; mergeStateStatus=BEHIND (main moved after branch push — resync at ship)
+- Next after synthesis: fix findings inline (≤100 lines/≤4 files auto-flip) or file code-review issues + pr-comment-resolver + fix-round; then qa → compound → ship
