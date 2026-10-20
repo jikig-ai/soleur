@@ -779,3 +779,35 @@ describe("Guard 5 — the bot must not synthesize green for the corpus linters",
     expect(block).not.toMatch(/names: SYNTHETIC_CHECK_NAMES,/);
   });
 });
+
+describe("T14 (#10552) — the guard is unchanged: the three observed model-authored diffs still refuse", () => {
+  // The model no longer authors the diff, so none of these can reach the guard from
+  // the handler any more. They are replayed through `checkDiffPaths` DIRECTLY to pin
+  // that the guard itself was not loosened to make the fix pass: the fix is upstream
+  // of the gate, not inside it. Shapes measured from the 2026-09-24 .. 2026-10-11 runs.
+  it("M1 (headers, no @@ hunk) -> underivable-apply", async () => {
+    const m1 = ["--- a/AGENTS.rules.md", "+++ b/AGENTS.rules.md", "+added", ""].join("\n");
+    const v = await checkDiffPaths(m1, repoRoot);
+    expect(v).toMatchObject({ ok: false, reason: "underivable-apply" });
+  });
+
+  it("M2 (hunk counts disagree with the body) -> underivable-apply", async () => {
+    const m2 = [
+      "--- a/AGENTS.rules.md",
+      "+++ b/AGENTS.rules.md",
+      "@@ -1,2 +1,5 @@",
+      " rules",
+      " second line",
+      "+added",
+      "",
+    ].join("\n");
+    const v = await checkDiffPaths(m2, repoRoot);
+    expect(v).toMatchObject({ ok: false, reason: "underivable-apply" });
+  });
+
+  it("M3 (an @@ line that is not a parseable hunk header) -> underivable-apply", async () => {
+    const m3 = ["--- a/AGENTS.rules.md", "+++ b/AGENTS.rules.md", "@@ section @@", " rules", "+added", ""].join("\n");
+    const v = await checkDiffPaths(m3, repoRoot);
+    expect(v).toMatchObject({ ok: false, reason: "underivable-apply" });
+  });
+});

@@ -6,12 +6,14 @@
  * Codex:  $soleur:<skill> skill mentions, spawn_agent (agents).
  * Devin:  Skill tool (`soleur:<skill>`), run_subagent (agents), `/soleur:<command>` slash commands.
  * Cursor: `/go` and `/sync` stay bare; every other skill and agent is `/soleur-<name>`. Slice 1 does not detect this harness.
+ * OpenCode: bare skill ids (the registration key), agents via the subagent tool keyed on the path id.
  *
  * Skills and go.md must call these helpers (or follow routingInstructions) — never improvise workflows.
  */
 
 import { resolve } from "path";
 import {
+  agentIdToPath,
   agentIdToGrokSubagentType,
   discoverAgentEntries,
   pathToAgentId,
@@ -21,7 +23,7 @@ import { cursorAgentSlash, cursorSkillSlash } from "../scripts/sync-cursor-name-
 import { behindSyncInstructions } from "./pr-merge-poll";
 import { pipelineInvocationSuffix, workflowFidelityInstructions } from "./workflow-fidelity";
 
-export type Harness = "claude" | "grok" | "codex" | "devin" | "cursor" | "antigravity" | "unknown";
+export type Harness = "claude" | "grok" | "codex" | "devin" | "cursor" | "opencode" | "antigravity" | "unknown";
 
 /** Env vars set by Antigravity CLI / Google Gemini CLI. */
 const ANTIGRAVITY_ENV_MARKERS = [
@@ -54,7 +56,7 @@ export interface SkillInvocation {
 
 export interface AgentSpawn {
   harness: Harness;
-  tool: "Task" | "spawn_subagent" | "spawn_agent" | "run_subagent" | "invoke_subagent";
+  tool: "Task" | "spawn_subagent" | "spawn_agent" | "run_subagent" | "invoke_subagent" | "subagent";
   agent: string;
   prompt: string;
   instruction: string;
@@ -84,11 +86,25 @@ export function normalizeAgentName(agent: string): string {
 
 /**
  * Detect the active harness from environment markers and process metadata.
- * Detection order: CLAUDECODE → GROK_* → CODEX_THREAD_ID → DEVIN_* → process title/argv heuristics.
+ * Detection order: CLAUDECODE → OPENCODE → ANTIGRAVITY_* → GROK_* → CODEX_THREAD_ID → DEVIN_* → process title/argv heuristics.
+ *
+ * OPENCODE is checked second, and before the config-path markers, on purpose. OpenCode injects it
+ * into the environment of every process it spawns as a tool call — and into nothing else: a clean
+ * env, `opencode serve`, `opencode acp`, and the session runtime process itself all lack it
+ * (measurements.md §1.1). GROK_HOME / DEVIN_HOME are installation *paths* that a shell profile can
+ * export into any session, so they must not be able to shadow a marker OpenCode injects itself.
+ * CLAUDECODE keeps the first position the existing precedence tests pin.
+ *
+ * `AI_AGENT=opencode` is present in the same arm but is deliberately NOT the predicate: the name is
+ * generic (measurements.md §1.0 caveat).
  */
 export function detectHarness(env: NodeJS.ProcessEnv = process.env): Harness {
   if (env.CLAUDECODE) {
     return "claude";
+  }
+
+  if (env.OPENCODE) {
+    return "opencode";
   }
 
   for (const key of ANTIGRAVITY_ENV_MARKERS) {
@@ -148,6 +164,13 @@ export function formatSkillInvocation(skill: string, args?: string): string {
     return trimmedArgs ? `/${name} ${trimmedArgs}` : `/${name}`;
   }
 
+  if (harness === "opencode") {
+    // OpenCode's skill id is the bare directory basename: the name must equal its directory
+    // (measurements §2.3), so `soleur:<name>` cannot be a registration key. This is the same
+    // bare-dispatch shape Grok already carries, not a new exception (ADR-291 D1).
+    return trimmedArgs ? `${name} ${trimmedArgs}` : name;
+  }
+
   if (harness === "devin") {
     const command = trimmedArgs ? `/soleur:${name} ${trimmedArgs}` : `/soleur:${name}`;
     return command;
@@ -202,6 +225,22 @@ export function invokeSkill(skill: string, args?: string): SkillInvocation {
         `Read \`plugins/soleur/skills/${name}/SKILL.md\` in this process and run it to completion ` +
         `(Grok has no nested Skill/slash tool; \`/${name}\` names the skill, it is not a nested tool_use). ` +
         "Do NOT improvise a subset of its steps." +
+        pipelineSuffix,
+    };
+  }
+
+  if (harness === "opencode") {
+    return {
+      harness,
+      tool: "skill",
+      command: name,
+      args: trimmedArgs,
+      instruction:
+        `Load the registered Soleur skill \`${name}\` with the **skill** tool — OpenCode keys skills ` +
+        `by their bare directory name. If that tool is unavailable, read ` +
+        `\`plugins/soleur/skills/${name}/SKILL.md\` and run the entire workflow. ` +
+        "Do NOT improvise a subset of its steps." +
+        (trimmedArgs ? ` Use these arguments as $ARGUMENTS: ${trimmedArgs}` : "") +
         pipelineSuffix,
     };
   }
@@ -279,6 +318,16 @@ export function formatAgentSpawn(agent: string, prompt: string): string {
   if (harness === "antigravity") {
     return (
       `Use **invoke_subagent** with agent \`${agentId}\` (or register dynamically via **define_subagent**) and this prompt:\n\n${prompt}`
+    );
+  }
+
+  if (harness === "opencode") {
+    // OpenCode derives the agent id from its file path and ignores frontmatter `name:`
+    // (measurements §3.0), so the registry's colon id does not resolve — the path form does.
+    const pathId = agentIdToPath(agentId);
+    return (
+      `Use the **subagent** tool with subagent_type \`${pathId}\` ` +
+      `(OpenCode's path-derived id; canonical id \`${agentId}\`) and this prompt:\n\n${prompt}`
     );
   }
 
@@ -364,6 +413,28 @@ export function spawnAgent(agent: string, prompt: string): AgentSpawn {
       instruction:
         `Spawn via **invoke_subagent** with agent \`${entry.id}\` (define dynamically via \`define_subagent\` if not already registered in this session). ` +
         "Set Workspace: 'inherit' and Model: 'inherit'. " +
+        "Pass the prompt verbatim — do NOT substitute a manual workflow.",
+    };
+  }
+
+  if (harness === "opencode") {
+    const entries = discoverAgentEntries().filter(
+      (entry) => entry.id === agentId || entry.name === agentId,
+    );
+    if (entries.length !== 1) {
+      throw new Error(`Unknown or ambiguous Soleur agent: ${agent}`);
+    }
+    const entry = entries[0];
+    const pathId = agentIdToPath(entry.id);
+    return {
+      harness,
+      tool: "subagent",
+      agent: pathId,
+      prompt: `Read and follow the Soleur agent definition at ${resolve(PLUGIN_ROOT, entry.path)}.\nApply the OpenCode compatibility instructions at ${resolve(PLUGIN_ROOT, "opencode/INSTRUCTIONS.md")}.\n\n${prompt}`,
+      instruction:
+        `Spawn via the **subagent** tool with subagent_type \`${pathId}\` ` +
+        `(OpenCode's path-derived id for \`${entry.id}\`; a path id needs \`mode: subagent\`, which ` +
+        "the generated tree sets). Inherit the session model and permissions. " +
         "Pass the prompt verbatim — do NOT substitute a manual workflow.",
     };
   }
@@ -505,6 +576,18 @@ export function pollInstructions(harness: Harness): string {
         behind,
       ].join("\n");
 
+    case "opencode":
+      return [
+        "**Merge/deploy polling (OpenCode)**",
+        "- Poll `gh pr view --json state,mergeStateStatus` on every tick — **pending checks alone miss BEHIND**.",
+        "- Use the **shell** tool with bounded `gh` probes. No wait primitive is measured on this harness (no Monitor, no AwaitShell), so run the canonical sync block itself inside a bounded foreground loop with a deadline exit and a probe-error exit.",
+        "- NEVER ask the operator to monitor merge, CI, or deploy — you own the wait.",
+        "- After `ship` merges: poll the release workflows, invoke `postmerge`, then emit `<promise>DONE</promise>` (advisory on this harness — ADR-291 D3).",
+        "- FORBIDDEN: heartbeating on CI while `mergeStateStatus` is `BEHIND` — except when `main` has a merge queue and the PR is armed (the Phase 7 poll prints `[ship.phase7.queue_wait]`: GitHub enqueues it; never sync it by hand until `[ship.phase7.queue_wait_expired]`, a push line, MERGED, a dequeue or any poll exit).",
+        "",
+        behind,
+      ].join("\n");
+
     default:
       return [
         "**Merge/deploy polling**",
@@ -598,6 +681,21 @@ export function routingInstructions(harness: Harness): string {
         "- Subagent Communication: Use `send_message` with subagent conversation IDs. Do not poll in a loop; wait for reactive message delivery.",
         "- Questions: Use `ask_question` for decisions and forks instead of freeform chat whenever structured options exist.",
         "- Read antigravity/INSTRUCTIONS.md in the installed plugin for tool and path mappings.",
+        "",
+        fidelity,
+        "",
+        polling,
+      ].join("\n");
+
+    case "opencode":
+      return [
+        "**Harness: OpenCode**",
+        "- Skills: the built-in **skill** tool, with the BARE id — `plan`, `one-shot`, `brainstorm`. The id is the skill's directory name; `soleur:<name>` is the canonical doc form and is not a registration key.",
+        "- Agents: the **subagent** tool with the path-derived id (`engineering/cto`). Every generated agent carries `mode: subagent`; without it the agent registers as a primary and the subagent tool cannot reach it.",
+        "- Commands: `/go`, `/sync`, `/help`, `/version`.",
+        "- If a bare id is ambiguous, read `plugins/soleur/skills/<name>/SKILL.md` and follow it in full.",
+        "- Read opencode/INSTRUCTIONS.md in the installed plugin for the tool and path mappings.",
+        "- **Never improvise** when a route names a skill or an agent — load it with the skill tool or spawn it.",
         "",
         fidelity,
         "",
