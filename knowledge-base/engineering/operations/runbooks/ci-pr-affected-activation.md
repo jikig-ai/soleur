@@ -97,6 +97,8 @@ audit (a suite the audit never read is not a suite with no gaps). `always_on` su
 the selector's own grammar (`^dir/` prefix, `^file` exact, `^glob:` bash glob), not as regexes. Tally the most frequent undeclared paths
 from the `--all-refs` output (the default prints only the first six per suite).
 
+What the audit reads is frozen, and `python3 scripts/ci-pr-affected-replay.py --help` (the REACH and DECLARED LIMITS sections of its docstring) is the single place that defines it: the suite's own file, the `source` closure of it to depth 8 (operands resolved against the including file), and the code files the suite's own selector row lists that an already-read text names, to depth 8. `gap_suites=0` is literal-name completeness over the selector closure: necessary, not sufficient. Reach moves only through declared edges (the drain-reveal rule): declaring a code file as an edge makes the audit read it, which can reveal more pairs, so accept an anchor-keyed row when the suite does not read or execute the file, declare an edge only when it does, and re-run the audit until it stops changing.
+
 ```bash
 OUT=/var/tmp/s4-replay
 # the last 300 first-parent commits of main (resumable; --chunk I/K splits it; --reclassify re-reads every non-clean unit)
