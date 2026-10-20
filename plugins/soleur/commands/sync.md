@@ -955,6 +955,16 @@ When a canonical skill or agent file in this repository changes, regenerate the 
 
 Running bun "${CLAUDE_PLUGIN_ROOT}/scripts/sync-cursor-name-map.ts" --check prints cursor-name-map ok when the committed stubs match that walk. This command does not run as part of `all`.
 
+## OpenCode adapter tree
+
+The `opencode/` front door — routing instructions, the agent and command stubs, and the `opencode.json` config fragment — is generated from the canonical tree. When a canonical agent, command, or the routing prose changes, regenerate it by running bun "${CLAUDE_PLUGIN_ROOT}/scripts/sync-opencode-adapter.ts".
+
+Running bun "${CLAUDE_PLUGIN_ROOT}/scripts/sync-opencode-adapter.ts" --check exits non-zero when the committed tree drifts from the canonical one. Like the Cursor walk above, this does not run as part of `all`.
+
+Generated files carry `__SOLEUR_PLUGIN_ROOT__` rather than an absolute path, so the committed tree is machine-independent. Resolve that token once per machine with bun "${CLAUDE_PLUGIN_ROOT}/scripts/install-opencode-adapter.ts": it unions the fragment's `skills`/`instructions` entries into `~/.config/opencode/opencode.json` and preserves an operator's other keys **when it can read that file**. A config it cannot parse (JSONC comments, a syntax error, a torn write) is **refused** — replacing it would discard every key the operator set — and `--force` replaces it only after writing a timestamped `.bak-<ts>` beside it. The installer copies the stubs and the hook module, removes stubs this generator no longer emits (attributed by their own text, so an operator's own command or agent in the same roots is untouched), and `--target DIR` installs into a project `.opencode` instead. `--check` reports `MISSING` / `STALE` / `EXTRA` without writing. Skills are deliberately not copied: they register from the canonical tree through the config's `skills` key, so a second skill tree is never created to drift.
+
+**Removing the adapter** (no `--uninstall` today; tracked in #10591 item 4): delete `<configdir>/agents/` and `<configdir>/commands/` entries whose body names the canonical path (they are the generated stubs), `<configdir>/plugins/soleur-plugin.ts`, `<configdir>/soleur/`, and the `skills`/`instructions` entries the installer added to `<configdir>/opencode.json`. Leaving the entries behind points OpenCode at a missing tree; leaving the plugin behind fails every shell call closed with a `guard-did-not-run` deny.
+
 ## Limitations
 
 - No PR analysis (requires GitHub token - deferred)

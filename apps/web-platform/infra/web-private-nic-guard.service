@@ -23,7 +23,9 @@ SyslogIdentifier=web-nic-guard
 # /etc/default/web-private-nic-guard (baked per-host) carries EXPECTED_IP (the host's own private
 # address, never a literal — from var.web_hosts[each.key].private_ip), BETTERSTACK_INGEST_URL, and
 # WEB_NIC_GUARD_URL_KEY (the per-host Doppler var name). doppler run injects BETTERSTACK_LOGS_TOKEN
-# + WEB_NIC_GUARD_URL_<host>; bash indirect expansion resolves the host's liveness-beat URL under
-# the generic name the (host-agnostic) script reads. Shipped as a FILE (nested doppler quotes).
+# + WEB_NIC_GUARD_URL_<host>, and the (host-agnostic) script resolves the host's liveness-beat URL itself through
+# that key NAME, AFTER its xtrace refusal. The ExecStart below expands and exports NOTHING (#9639): the URL is a
+# credential, and a wrapper that expanded it would print it under a traced launch before the script could refuse.
+# doppler-injection-bound.test.sh rejects an indirect expansion in the Exec directives of a doppler-run unit.
 EnvironmentFile=/etc/default/web-private-nic-guard
-ExecStart=/bin/bash -c 'doppler run --project soleur --config prd -- bash -c '\''export WEB_NIC_GUARD_URL="$${!WEB_NIC_GUARD_URL_KEY}"; exec /usr/local/bin/web-private-nic-guard.sh'\'''
+ExecStart=/bin/bash -c 'doppler run --project soleur --config prd -- /usr/local/bin/web-private-nic-guard.sh'

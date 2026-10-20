@@ -105,6 +105,34 @@ for _t in "${TARGETS[@]}" ".kb-index.stamp"; do
   fi
 done
 
+# ── NOT INSIDE A WORK TREE → SKIP ENTIRELY (#10392 audit fix) ───────────────────────────────
+# A bare root is a valid `knowledge-base/` location on disk but NOT a valid place to write
+# one: under the row-3 worktree layout the bare repo lives at `<root>/.git` and
+# `sync_bare_files` mirrors every TRACKED file into a synced overlay at `<root>` — and that
+# sync is additive-only for untracked paths. So writing `knowledge-base/INDEX.md` (or any of
+# the other three artifacts) at a bare-repo root does not create a regenerable cache, it
+# MATERIALIZES four untracked files into the synced overlay, where they persist forever and
+# poison the freshness fingerprint for every real worktree that shares it (at a bare root
+# the git half of the fingerprint degrades to `ls-files` only — `status`/`diff`/`hash-object`
+# of worktree content have no work tree to read).
+#
+# `rev-parse --is-inside-work-tree` answers exactly the predicate needed: `true` only inside
+# a real work tree. It covers three shapes with one probe:
+#   - bare repo root (row-3 overlay)            -> prints `false`  -> skip
+#   - non-checkout `--kb-dir` (not in any repo) -> fails, prints nothing -> skip
+#   - masked-config worktree (core.bare mask)   -> prints `false`  -> skip
+# The masked-config case degrades a REAL worktree to a skip — accepted deliberately (CTO
+# ruling, decision-challenges): that shape is already broken per ADR-173, and skipping is the
+# safe direction to be wrong in. The cost is symmetric in the other direction: a checkoutless
+# tree (an exported tarball) no longer gets the "generate once then no-op" index the old
+# empty-fingerprint path provided — a checkoutless `--kb-dir` is indistinguishable from a
+# bare-overlay target at the `git` level, and the audit ask closes both.
+#
+# SILENT like the `-d` exit above: the wired callers are `prepare` and SessionStart, where a
+# WARN on every bare-root session would be a noise tax on the one topology that must always
+# take this branch — the bare-root-cwd guard hook is the operator-facing diagnostic there.
+[[ "$(git -C "$KB_DIR" rev-parse --is-inside-work-tree 2>/dev/null)" == "true" ]] || exit 0
+
 # ── FRESHNESS ──────────────────────────────────────────────────────────────────────────────
 # Two independent reasons to regenerate, checked in this order because absence is cheaper and
 # is NOT implied by staleness: a fingerprint can match while kb-tags.txt has been deleted.
@@ -127,10 +155,11 @@ done
 # checkout whose ignore rules differ, and the failure mode is a silent 3 s tax on every read.
 # Excluding them here makes the probe a function of the SOURCES alone.
 #
-# EMPTY OUTSIDE A CHECKOUT, deliberately. Both git commands fail there, and an empty
-# fingerprint hashes to a stable value, so the script regenerates on its first call (the
-# stamp is absent) and then no-ops. That is the correct behaviour for an exported tarball:
-# generate once, then stop paying for it.
+# CAN STILL BE EMPTY inside a work tree — an empty knowledge-base/, or a repo with no
+# commits, gives both halves nothing — and an empty fingerprint hashes to a stable value, so
+# the script regenerates on its first call (the stamp is absent) and then no-ops. The
+# "outside a checkout" case this comment used to document is now unreachable: the
+# is-inside-work-tree guard above exits before this probe runs (#10392 audit fix).
 # THE FIRST TWO COMMANDS CARRY NO WORKING-TREE CONTENT, so on their own they answer a
 # different question than this probe's name (#8384 review, reproduced):
 #   - `ls-files -s` emits the INDEX blob of each tracked path. A worktree edit does not

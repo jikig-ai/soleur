@@ -841,6 +841,111 @@ else
   FAIL=$((FAIL+1))
 fi
 
+# ------------- Test 34: bare-root cwd envelope carries the marker + redirect block (#10383) ----
+# A SessionStart at a bare repo root in this layout must append
+# SOLEUR_BARE_ROOT_CWD + the [bare-root-cwd] block, and the corpus still loads.
+TOTAL=$((TOTAL+1))
+T34=$(mktemp -d); LATE_TMPDIRS+=("$T34"); setup_repo "$T34"
+( cd "$T34" && git config core.bare true )
+ctx34=$(invoke_hook "$T34" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
+n34=$(grep -c '^- \[id: ' "$T34/AGENTS.md") || true
+if printf '%s' "$ctx34" | grep -c >/dev/null "loaded: ${n34} of ${n34} rules" \
+   && printf '%s' "$ctx34" | grep -c >/dev/null '^SOLEUR_BARE_ROOT_CWD source=session-start$' \
+   && printf '%s' "$ctx34" | grep -c >/dev/null '^\[bare-root-cwd\].*--yes create'; then
+  echo "PASS: bare-root envelope carries marker + redirect block and corpus still loads (${n34} rules)"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: bare-root envelope missing marker/block or corpus"
+  printf '%s\n' "$ctx34" | tail -12
+  FAIL=$((FAIL+1))
+fi
+
+# ------------- Test 35: worktree envelope carries neither marker nor block ----
+TOTAL=$((TOTAL+1))
+T35=$(mktemp -d); LATE_TMPDIRS+=("$T35"); setup_repo "$T35" docs
+ctx35=$(invoke_hook "$T35" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
+if ! grep -q 'SOLEUR_BARE_ROOT_CWD\|\[bare-root-cwd\]' <<<"$ctx35"; then
+  echo "PASS: worktree envelope has no bare-root marker or block"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: worktree envelope unexpectedly carries the bare-root marker"
+  FAIL=$((FAIL+1))
+fi
+
+# ------------- Test 36: helper absent -> valid envelope, no marker (fail-open) ----
+# A stale bare-root copy of the loader without the sibling helper must still emit
+# the full envelope.
+TOTAL=$((TOTAL+1))
+T36=$(mktemp -d); LATE_TMPDIRS+=("$T36"); setup_repo "$T36"
+# Bare-root fixture on purpose (#10386 review): on a plain clone a helper is
+# silent anyway, so the no-marker arm could not tell helper-absent from
+# helper-silent. At a bare root a PRESENT helper would emit — absent means none.
+( cd "$T36" && git config core.bare true )
+copy36="$T36-loader-copy"; LATE_TMPDIRS+=("$copy36")
+mkdir -p "$copy36"
+cp "$HOOK" "$copy36/session-rules-loader.sh"
+chmod +x "$copy36/session-rules-loader.sh"
+out36=$(cd "$copy36" && printf '%s' "$(jq -nc --arg cwd "$T36" '{cwd: $cwd, session_id: "test-sess-1"}')" | "$copy36/session-rules-loader.sh" 2>/dev/null)
+if jq -e '.hookSpecificOutput.additionalContext' <<<"$out36" >/dev/null 2>&1 \
+   && ! grep -q 'SOLEUR_BARE_ROOT_CWD' <<<"$out36"; then
+  echo "PASS: helper-absent loader emits a valid envelope with no marker"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: helper-absent envelope invalid or marker present"
+  FAIL=$((FAIL+1))
+fi
+
+# ------------- Test 37: marker + arbitrary line -> arbitrary line dropped (#10386 P3) ----
+# The shape filter forwards ONLY the marker and [bare-root-cwd] prefixed lines;
+# a helper emitting extra stdout cannot smuggle lines into context.
+TOTAL=$((TOTAL+1))
+T37=$(mktemp -d); LATE_TMPDIRS+=("$T37"); setup_repo "$T37"
+( cd "$T37" && git config core.bare true )
+copy37="$T37-loader-copy"; LATE_TMPDIRS+=("$copy37")
+mkdir -p "$copy37"
+cp "$HOOK" "$copy37/session-rules-loader.sh"
+cat > "$copy37/bare-root-cwd-guard.sh" <<'STUB'
+#!/usr/bin/env bash
+printf 'SOLEUR_BARE_ROOT_CWD source=session-start\n'
+printf '[bare-root-cwd] legit line\n'
+printf 'ARBITRARY-INJECTED\n'
+exit 0
+STUB
+chmod +x "$copy37/session-rules-loader.sh" "$copy37/bare-root-cwd-guard.sh"
+out37=$(printf '%s' "$(jq -nc --arg cwd "$T37" '{cwd: $cwd, session_id: "test-sess-1"}')" | "$copy37/session-rules-loader.sh" 2>/dev/null)
+ctx37=$(jq -r '.hookSpecificOutput.additionalContext // empty' <<<"$out37" 2>/dev/null)
+if grep -q 'SOLEUR_BARE_ROOT_CWD source=session-start' <<<"$ctx37" \
+   && grep -q '\[bare-root-cwd\] legit line' <<<"$ctx37" \
+   && ! grep -q 'ARBITRARY-INJECTED' <<<"$ctx37"; then
+  echo "PASS: arbitrary helper lines are filtered; documented shape still passes"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: shape filter leaked or dropped the wrong lines"
+  printf '%s\n' "$ctx37" | tail -8
+  FAIL=$((FAIL+1))
+fi
+
+# ------------- Test 38: separator-laden path bytes are stripped (#10395) ----
+# A bare-root fixture path containing DEL + U+2028/U+2029 must not smuggle a
+# fake line break into the emitted context — LS/PS render as line breaks in
+# JSON viewers (the P3 finding this consolidation closes).
+TOTAL=$((TOTAL+1))
+T38=$(mktemp -d); LATE_TMPDIRS+=("$T38")
+SEP38="$T38/dir$(printf '\xe2\x80\xa8')sep$(printf '\x7f')x"
+mkdir -p "$SEP38" && setup_repo "$SEP38" && ( cd "$SEP38" && git config core.bare true )
+ctx38=$(invoke_hook "$SEP38" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
+# The emit legitimately contains \n and \t; what must be gone is every other
+# C0 byte, DEL, NEL, and the LS/PS sequences.
+# (grep -P: PCRE, GNU-only — this suite runs on the Linux dev host)
+if ! LC_ALL=C grep -qP '[\x00-\x08\x0b-\x1f\x7f]|\xc2\x85|\xe2\x80\xa8|\xe2\x80\xa9' <<<"$ctx38"; then
+  echo "PASS: separator-laden path emits no C0-high/DEL/NEL/LS/PS bytes"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: separator bytes survived into emitted context"
+  printf '%s' "$ctx38" | od -An -tx1 | grep -nE '7f|c2|e2' | head -5
+  FAIL=$((FAIL+1))
+fi
+
 echo ""
 echo "RESULT: $PASS/$TOTAL passed ($FAIL failed)"
 [[ $FAIL -eq 0 ]] || exit 1

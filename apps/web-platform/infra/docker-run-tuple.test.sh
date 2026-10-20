@@ -2,7 +2,8 @@
 # Unit + mutation battery for lib/docker-run-tuple.py (Guard 1 of the #10065 plan: sandbox masked-/proc
 # suite parity). The helper parses the three docker run tuples that start the web-platform app container
 # (canary and prod in ci-deploy.sh, first boot in cloud-init.yml) CLOSED-WORLD: every option, environment
-# name, volume and port outside the declared set is a red, and the helper censuses every command-position
+# name, volume and port outside the declared set is a red, a declared volume, env name or port missing from its
+# tuple is a red too, and the helper censuses every command-position
 # docker run / create so a fourth start site cannot hide.
 #
 # CONTRACT. Every row mutates ONE COPY of the two real files inside $WORK (never the tree), proves the
@@ -12,8 +13,8 @@
 # not a kill. Must-PASS rows run the same way and require rc 0 plus the exact ok line with the pinned
 # posture digest, so a helper that rejects everything fails them.
 #
-# HARNESS ROWS. H1: the matrix is re-run against COPIES of the helper whose classification, census-count
-# and projection arms are stubbed (a redefinition spliced into the copy, never a seam in the shipped
+# HARNESS ROWS. H1: the matrix is re-run against COPIES of the helper whose classification, census-count,
+# projection, unclassified-census and declared-member arms are stubbed (a redefinition spliced into the copy, never a seam in the shipped
 # helper); the rows that arm owns must then be NOT KILLED, so a battery that stays green against a stubbed
 # arm is itself vacuous. H2: passes + fails == rows executed, and the row count is an exact literal beside
 # its use, reported by printf + exit 1 (never through ok()/bad()).
@@ -286,7 +287,7 @@ kill_row K06-fourth-site-dup      'm_dup canary'                                
 kill_row K06b-fourth-site-shadow  'm_dup canary; m_repl canary "--name soleur-web-platform-canary \\" "--name soleur-web-platform-shadow \\"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
 kill_row K11-heredoc-all          'm_heredoc canary; m_heredoc prod; m_heredoc first-boot' 'TUPLE_COUNT: want 3 got 0'
 kill_row K11b-heredoc-one         'm_heredoc prod'                                       'TUPLE_COUNT: want 3 got 2' 'UNCLASSIFIED_DOCKER_RUN'
-kill_row K12-comment-mid-tuple    'm_ins_at prod "--security-opt apparmor" "# a comment line ends the bash command here"' 'UNPARSEABLE_OPTION: no image in ci-deploy.sh prod'
+kill_row K12-comment-mid-tuple    'm_ins_at prod "--security-opt apparmor" "# a comment line ends the bash command here"' 'UNPARSEABLE_OPTION: no image in ci-deploy.sh prod' '!MISSING_DECLARED'
 # --- row 7: PATH and loader levers, other environment names ------------------------------
 kill_row K07a-canary-env-path     'm_ins canary "-e PATH=/usr/bin:/usr/local/bin"'       'ENV_NAME: PATH in ci-deploy.sh canary'
 kill_row K07b-canary-env-ldpre    'm_ins canary "-e LD_PRELOAD=/x"'                      'ENV_NAME: LD_PRELOAD in ci-deploy.sh canary'
@@ -295,6 +296,37 @@ kill_row K07d-env-attached        'm_ins prod "-ePATH=/x"'                      
 kill_row K07e-env-long-form       'm_ins prod "--env PATH=/x"'                           'ENV_NAME: PATH in ci-deploy.sh prod'
 kill_row K07f-node-options-lit    'm_repl canary "-e NODE_OPTIONS=\"\$CANARY_NODE_OPTIONS\"" "-e NODE_OPTIONS=--require=/x"' 'ENV_NAME: NODE_OPTIONS value'
 kill_row K07g-first-boot-env-new  'm_ins first-boot "-e SOLEUR_BWRAP_REAL=/x"'           'ENV_NAME: SOLEUR_BWRAP_REAL in cloud-init.yml first-boot'
+# --- #10136 Guard 1 (Inngest link chokepoint): the link env, the CA mount, the TLS verification switch ---------------------
+# row 1: a literal (https, or the old http) instead of the resolver expansion; first-boot cannot use the expansion
+kill_row K07h-canary-literal-https   'm_repl canary "-e INNGEST_BASE_URL=\"\$INNGEST_BASE_URL_RESOLVED\"" "-e INNGEST_BASE_URL=https://10.0.1.40:8443"' 'ENV_NAME: INNGEST_BASE_URL value '"'"'https://10.0.1.40:8443'"'"' in ci-deploy.sh canary' '!prod'
+kill_row K07i-prod-literal-old-http  'm_repl prod "-e INNGEST_BASE_URL=\"\$INNGEST_BASE_URL_RESOLVED\"" "-e INNGEST_BASE_URL=http://10.0.1.40:8288"' 'ENV_NAME: INNGEST_BASE_URL value '"'"'http://10.0.1.40:8288'"'"' in ci-deploy.sh prod' '!canary'
+kill_row K07j-first-boot-literal-https 'm_repl first-boot "-e INNGEST_BASE_URL=http://10.0.1.40:8288" "-e INNGEST_BASE_URL=https://10.0.1.40:8443"' 'ENV_NAME: INNGEST_BASE_URL value '"'"'https://10.0.1.40:8443'"'"' in cloud-init.yml first-boot'
+kill_row K07k-first-boot-resolver-expansion 'm_repl first-boot "-e INNGEST_BASE_URL=http://10.0.1.40:8288" "-e INNGEST_BASE_URL=\$INNGEST_BASE_URL_RESOLVED"' 'UNPARSEABLE_OPTION: -e INNGEST_BASE_URL=$INNGEST_BASE_URL_RESOLVED in cloud-init.yml first-boot'
+kill_row K07l-canary-other-expansion 'm_repl canary "-e INNGEST_BASE_URL=\"\$INNGEST_BASE_URL_RESOLVED\"" "-e INNGEST_BASE_URL=\"\$INNGEST_URL\""' 'UNPARSEABLE_OPTION: -e INNGEST_BASE_URL=$INNGEST_URL in ci-deploy.sh canary'
+# the unset path: a tuple without the link env or the CA env/volume makes the app fall back to plain http
+kill_row K07m-canary-no-link-env     'm_del canary "INNGEST_BASE_URL"'                    'MISSING_REQUIRED: -e INNGEST_BASE_URL is required in every tuple' 'ci-deploy.sh canary' '!prod'
+kill_row K07n-first-boot-no-link-env 'm_del first-boot "INNGEST_BASE_URL"'                'MISSING_REQUIRED: -e INNGEST_BASE_URL is required' 'cloud-init.yml first-boot'
+kill_row K07o-prod-no-extra-ca-env   'm_del prod "NODE_EXTRA_CA_CERTS"'                   'MISSING_REQUIRED: -e NODE_EXTRA_CA_CERTS is required' 'ci-deploy.sh prod' '!canary'
+kill_row K07p-first-boot-no-extra-ca-env 'm_del first-boot "NODE_EXTRA_CA_CERTS"'         'MISSING_REQUIRED: -e NODE_EXTRA_CA_CERTS is required' 'cloud-init.yml first-boot'
+kill_row K07q-extra-ca-other-path    'm_repl canary "-e NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem" "-e NODE_EXTRA_CA_CERTS=/tmp/evil-ca.pem"' 'ENV_NAME: NODE_EXTRA_CA_CERTS value '"'"'/tmp/evil-ca.pem'"'"' in ci-deploy.sh canary'
+# row 6: the CA volume dropped from ONE site, or mounted writable
+kill_row K10x-prod-no-ca-volume      'm_del prod "inngest-ca.pem:ro"'                      'MISSING_REQUIRED: -v /mnt/data/inngest-link/inngest-ca.pem:/etc/soleur/inngest-ca.pem:ro is required' 'ci-deploy.sh prod' '!canary'
+kill_row K10y-canary-no-ca-volume    'm_del canary "inngest-ca.pem:ro"'                    'MISSING_REQUIRED: -v /mnt/data/inngest-link/inngest-ca.pem:/etc/soleur/inngest-ca.pem:ro is required' 'ci-deploy.sh canary' '!prod'
+kill_row K10z-first-boot-no-ca-volume 'm_del first-boot "inngest-ca.pem:ro"'               'MISSING_REQUIRED: -v /mnt/data/inngest-link/inngest-ca.pem:/etc/soleur/inngest-ca.pem:ro is required' 'cloud-init.yml first-boot'
+kill_row K10za-ca-volume-writable    'm_repl prod "inngest-ca.pem:ro" "inngest-ca.pem:rw"' 'UNKNOWN_OPTION: -v /mnt/data/inngest-link/inngest-ca.pem:/etc/soleur/inngest-ca.pem:rw in ci-deploy.sh prod' 'MISSING_REQUIRED'
+kill_row K10zb-ca-volume-other-source 'm_repl canary "-v /mnt/data/inngest-link/inngest-ca.pem:" "-v /tmp/ca.pem:"' 'UNKNOWN_OPTION: -v /tmp/ca.pem:/etc/soleur/inngest-ca.pem:ro in ci-deploy.sh canary'
+kill_row K10zc-ca-volume-old-etc-source 'm_repl prod "-v /mnt/data/inngest-link/inngest-ca.pem:" "-v /etc/soleur/inngest-ca.pem:"' 'UNKNOWN_OPTION: -v /etc/soleur/inngest-ca.pem:/etc/soleur/inngest-ca.pem:ro in ci-deploy.sh prod'
+# the TLS verification switch: in a tuple (any spelling of -e) and as non-comment text of either main file
+kill_row K07r-canary-reject-unauthorized 'm_ins canary "-e NODE_TLS_REJECT_UNAUTHORIZED=0"' 'ENV_NAME: NODE_TLS_REJECT_UNAUTHORIZED (the TLS verification switch is never allowed) in ci-deploy.sh canary'
+kill_row K07s-prod-reject-unauthorized-long 'm_ins prod "--env NODE_TLS_REJECT_UNAUTHORIZED=0"' 'ENV_NAME: NODE_TLS_REJECT_UNAUTHORIZED (the TLS verification switch is never allowed) in ci-deploy.sh prod'
+kill_row K07t-first-boot-reject-unauthorized 'm_ins first-boot "-e NODE_TLS_REJECT_UNAUTHORIZED=0"' 'ENV_NAME: NODE_TLS_REJECT_UNAUTHORIZED (the TLS verification switch is never allowed) in cloud-init.yml first-boot'
+kill_row K07u-switch-exported-in-script 'm_append "$CI_DEPLOY_REL" "export NODE_TLS_REJECT_UNAUTHORIZED=0"' 'ENV_NAME: NODE_TLS_REJECT_UNAUTHORIZED appears in ci-deploy.sh'
+kill_row K07v-switch-in-cloud-init-heredoc 'm_append_lines "$CLOUD_INIT_REL" "cat >> /tmp/x <<'"'"'EOF'"'"'" "NODE_TLS_REJECT_UNAUTHORIZED=0" "EOF"' 'ENV_NAME: NODE_TLS_REJECT_UNAUTHORIZED appears in cloud-init.yml'
+# row 3: a fourth site after the compliant three, carrying the old literal (the gate must not stop at the third)
+kill_row K06c-fourth-site-old-literal 'm_append "$CI_DEPLOY_REL" "docker run -d --name soleur-web-platform-canary -e INNGEST_BASE_URL=http://10.0.1.40:8288 \"\$VERIFIED_REF\""' 'TUPLE_COUNT: want 3 got 4' 'ENV_NAME: INNGEST_BASE_URL value '"'"'http://10.0.1.40:8288'"'"' in ci-deploy.sh canary'
+# row 4: the gate pointed at an empty file finds zero sites and must be RED, never "0 checked, exit 0"
+kill_row K06d-empty-ci-deploy       ': > "$T/$CI_DEPLOY_REL"'                              'TUPLE_COUNT: want 3 got 1'
+kill_row K06e-empty-both-files      ': > "$T/$CI_DEPLOY_REL"; : > "$T/$CLOUD_INIT_REL"'   'TUPLE_COUNT: want 3 got 0'
 # --- row 8: expansions in option position -------------------------------------------------
 kill_row K08a-splat               'm_ins prod "\"\${EXTRA_DOCKER_OPTS[@]}\""'            'UNPARSEABLE_OPTION' 'ci-deploy.sh prod'
 kill_row K08b-cmdsubst-value      'm_repl prod "--memory \"\$PROD_MEMORY_CAP\"" "--memory \"\$(echo 1g)\""' 'UNPARSEABLE_OPTION'
@@ -366,20 +398,20 @@ kill_row K15-oversize-line        'm_append "$CI_DEPLOY_REL" "docker run -d $(he
 kill_row K16-missing-cloud-init   'm_rm "$CLOUD_INIT_REL"'                               'TUPLE_COUNT: cannot read cloud-init.yml' 'TUPLE_COUNT: want 3 got 2'
 kill_row K16b-unterminated-heredoc 'm_append "$CI_DEPLOY_REL" "cat <""<DRT_NEVER_CLOSED"'  'UNPARSEABLE_OPTION: unterminated heredoc DRT_NEVER_CLOSED'
 # --- #10065 review: the census must not be hidden by position, by a chained statement, by arithmetic, by a symlink ---
-kill_row K20a-chained-after-exempt-create 'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed \"\$VERIFIED_REF\" >/dev/null; docker run -d --privileged --cap-add SYS_ADMIN --name sneaky img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
+kill_row K20a-chained-after-exempt-create 'm_append "$CI_DEPLOY_REL" "docker create --name \"\$INNGEST_EXTRACT_CONTAINER\" \"\$VERIFIED_REF\" >/dev/null; docker run -d --privileged --cap-add SYS_ADMIN --name sneaky img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
 kill_row K20b-chained-after-cosign 'm_append "$CI_DEPLOY_REL" "docker run --rm \"\$COSIGN_IMAGE\" x && docker run -d --privileged --name sneaky img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
 kill_row K20c-heredoc-arithmetic-shift 'm_append_lines "$CI_DEPLOY_REL" "x=\$(( 1 <""<n ))" "docker run -d --privileged --name sneaky img" "n"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
 kill_row K20d-heredoc-quoted-opener 'm_append_lines "$CI_DEPLOY_REL" "echo \"<""<EOF\"" "docker run -d --privileged img" "EOF"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
 kill_row K20e-case-label-position 'm_append "$CI_DEPLOY_REL" "case \"\$X\" in start) docker run -d --cap-add ALL img ;; esac"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
 kill_row K20f-eval-upper-docker-var 'm_append "$CI_DEPLOY_REL" "eval \"\$DOCKER run -d img\""' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
-kill_row K20g-exempt-name-privileged 'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed --privileged -v /:/h img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'exempt `docker create` of soleur-plugin-seed carries words beyond'
+kill_row K20g-exempt-name-privileged 'm_append "$CI_DEPLOY_REL" "docker create --name \"\$INNGEST_EXTRACT_CONTAINER\" --privileged -v /:/h img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'exempt `docker create` of $INNGEST_EXTRACT_CONTAINER carries words beyond'
 # --- #10065 review round 2: an exempt site is parsed closed-world, a chained second start needs no privilege flag to be refused,
 # --- and a `<<` the lexer cannot decide (single quote, backslash, ${ }, $[ ], $'...') never hides the lines after it
-kill_row K21a-chained-bare-after-create 'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed \"\$VERIFIED_REF\" >/dev/null; docker run -d --name sneaky img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
+kill_row K21a-chained-bare-after-create 'm_append "$CI_DEPLOY_REL" "docker create --name \"\$INNGEST_EXTRACT_CONTAINER\" \"\$VERIFIED_REF\" >/dev/null; docker run -d --name sneaky img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
 kill_row K21b-chained-bare-after-cosign 'm_append "$CI_DEPLOY_REL" "docker run --rm \"\$COSIGN_IMAGE\" x && docker run -d img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
-kill_row K21c-create-with-volume 'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed -v /:/h img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries words beyond'
-kill_row K21d-create-with-user 'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed --user root img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries words beyond'
-kill_row K21e-create-with-pid 'm_append "$CI_DEPLOY_REL" "docker create --pid host --name soleur-plugin-seed img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries words beyond'
+kill_row K21c-create-with-volume 'm_append "$CI_DEPLOY_REL" "docker create --name \"\$INNGEST_EXTRACT_CONTAINER\" -v /:/h img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries words beyond'
+kill_row K21d-create-with-user 'm_append "$CI_DEPLOY_REL" "docker create --name \"\$INNGEST_EXTRACT_CONTAINER\" --user root img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries words beyond'
+kill_row K21e-create-with-pid 'm_append "$CI_DEPLOY_REL" "docker create --pid host --name \"\$INNGEST_EXTRACT_CONTAINER\" img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries words beyond'
 kill_row K21f-cosign-cap-add 'm_append "$CI_DEPLOY_REL" "docker run --rm --cap-add SYS_ADMIN \"\$COSIGN_IMAGE\" x"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries the option --cap-add'
 kill_row K21g-cosign-host-mount 'm_append "$CI_DEPLOY_REL" "docker run --rm -v /:/h \"\$COSIGN_IMAGE\" x"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'unexpected value for -v'
 kill_row K21h-cosign-root-user 'm_append "$CI_DEPLOY_REL" "docker run --rm --user root \"\$COSIGN_IMAGE\" x"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'unexpected value for --user'
@@ -399,16 +431,61 @@ kill_row K22b-heredoc-in-nested-quote 'm_append_lines "$CI_DEPLOY_REL" ": \"\$(e
 kill_row K22c-wrapper-with-user-arg 'm_append "$CI_DEPLOY_REL" "sudo -u root docker run -d --privileged evil/img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
 kill_row K22d-wrapper-flock 'm_append "$CI_DEPLOY_REL" "flock -n /tmp/l docker run -d --privileged evil/img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
 kill_row K22e-wrapper-runuser 'm_append "$CI_DEPLOY_REL" "runuser -u root -- docker run -d --privileged evil/img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
-kill_row K22f-create-other-image 'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed evil/img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries words beyond'
-kill_row K22g-create-unlisted-variable-image 'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed \$EXTRA"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries words beyond'
-kill_row K22h-create-subst-image 'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed \"\$(printf x)\""' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries words beyond'
-kill_row K23a-exempt-then-indirect 'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed \"\$VERIFIED_REF\" >/dev/null; xargs docker run -d --privileged img"' 'indirect execution wrapper'
-kill_row K23b-exempt-then-app-name 'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed \"\$VERIFIED_REF\" >/dev/null; x=\"--name soleur-web-platform\""' 'ci-deploy.sh'
+kill_row K22f-create-other-image 'm_append "$CI_DEPLOY_REL" "docker create --name \"\$INNGEST_EXTRACT_CONTAINER\" evil/img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries words beyond'
+kill_row K22g-create-unlisted-variable-image 'm_append "$CI_DEPLOY_REL" "docker create --name \"\$INNGEST_EXTRACT_CONTAINER\" \$EXTRA"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries words beyond'
+kill_row K22h-create-subst-image 'm_append "$CI_DEPLOY_REL" "docker create --name \"\$INNGEST_EXTRACT_CONTAINER\" \"\$(printf x)\""' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries words beyond'
+kill_row K23a-exempt-then-indirect 'm_append "$CI_DEPLOY_REL" "docker create --name \"\$INNGEST_EXTRACT_CONTAINER\" \"\$VERIFIED_REF\" >/dev/null; xargs docker run -d --privileged img"' 'indirect execution wrapper'
+kill_row K23b-exempt-then-app-name 'm_append "$CI_DEPLOY_REL" "docker create --name \"\$INNGEST_EXTRACT_CONTAINER\" \"\$VERIFIED_REF\" >/dev/null; x=\"--name soleur-web-platform\""' 'ci-deploy.sh'
 kill_row K23c-cosign-privileged 'm_append "$CI_DEPLOY_REL" "docker run --rm --privileged \"\$COSIGN_IMAGE\" x"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries the option --privileged'
 kill_row K23d-cosign-env-preload 'm_append "$CI_DEPLOY_REL" "docker run --rm -e LD_PRELOAD=/x \"\$COSIGN_IMAGE\" x"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'unexpected value for -e'
-kill_row K23e-create-name-eq-other-image 'm_append "$CI_DEPLOY_REL" "docker create --name=soleur-plugin-seed evil/img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries words beyond'
+kill_row K23e-create-name-eq-other-image 'm_append "$CI_DEPLOY_REL" "docker create --name=\$INNGEST_EXTRACT_CONTAINER evil/img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries words beyond'
 kill_row K23f-heredoc-in-bracket-arith 'm_append_lines "$CI_DEPLOY_REL" "x=\$[ 1 <""<ZZ ]" "docker run -d --privileged img" "ZZ"' 'UNPARSEABLE_OPTION: a heredoc opener inside'
-kill_row K23g-create-dash-image 'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed --privileged"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries words beyond'
+kill_row K23g-create-dash-image 'm_append "$CI_DEPLOY_REL" "docker create --name \"\$INNGEST_EXTRACT_CONTAINER\" --privileged"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries words beyond'
+# --- a declared member that is MISSING from a tuple: the closed set only refused extras, so the prod start lost the egress-token
+# --- mount and nothing noticed. The ! needles prove the line names the right file and tuple, not a sibling.
+kill_row K24a-prod-no-workspaces-vol 'm_del prod "-v /mnt/data/workspaces:/workspaces"'   'MISSING_DECLARED: volume /mnt/data/workspaces:/workspaces missing from ci-deploy.sh prod' '!canary' '!cloud-init.yml' '#1'
+kill_row K24b-prod-no-plugin-vol     'm_del prod "/app/shared/plugins/soleur:ro"'         'MISSING_DECLARED: volume /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro missing from ci-deploy.sh prod' '!canary' '#1'
+kill_row K24c-prod-no-host-id-env    'm_del prod "-e SOLEUR_HOST_ID"'                     'MISSING_DECLARED: env SOLEUR_HOST_ID missing from ci-deploy.sh prod' '!canary' '#1'
+kill_row K24d-prod-no-second-port    'm_del prod "-p 0.0.0.0:3000:3000"'                  'MISSING_DECLARED: port 0.0.0.0:3000:3000 missing from ci-deploy.sh prod' '!canary' '#1'
+kill_row K25a-prod-no-token-mount    'm_del prod "-v /var/lib/soleur/egress-tokens"'      'MISSING_DECLARED: volume /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens missing from ci-deploy.sh prod' '!canary' '!cloud-init.yml' '#1'
+kill_row K25b-prod-no-reaper-env     'm_del prod "-e SOLEUR_EGRESS_REAPER"'               'MISSING_DECLARED: env SOLEUR_EGRESS_REAPER missing from ci-deploy.sh prod' '!canary' '!cloud-init.yml' '#1'
+kill_row K25c-first-boot-no-token-mount 'm_del first-boot "-v /var/lib/soleur/egress-tokens"' 'MISSING_DECLARED: volume /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens missing from cloud-init.yml first-boot' '!ci-deploy.sh' '#1'
+# the canary neither mounts the token dir nor reaps (ADR-278 canary isolation): a reaper on the canary would revoke live prod tokens
+kill_row K26a-canary-reaper-env      'm_ins canary "-e SOLEUR_EGRESS_REAPER=1"'           'ENV_NAME: SOLEUR_EGRESS_REAPER in ci-deploy.sh canary' '!prod' '!cloud-init.yml' '#1'
+kill_row K26b-canary-token-mount      'm_ins canary "-v /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens"' 'UNKNOWN_OPTION: -v /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens in ci-deploy.sh canary' '!prod' '!cloud-init.yml' '#1'
+# --- the arm covers EVERY tuple and EVERY kind, not just the prod rows above: a canary member, a first-boot env/port, two
+# --- members gone at once (a version reporting only the first missing member survives a single-deletion row), and a tuple
+# --- that already reds UNPARSEABLE_OPTION must not ALSO report every member as missing.
+kill_row K27a-canary-no-workspaces-vol 'm_del canary "-v /mnt/data/workspaces:/workspaces"' 'MISSING_DECLARED: volume /mnt/data/workspaces:/workspaces missing from ci-deploy.sh canary' '!prod' '!cloud-init.yml' '#1'
+kill_row K27b-canary-no-port          'm_del canary "-p 0.0.0.0:3001:3000"'                 'MISSING_DECLARED: port 0.0.0.0:3001:3000 missing from ci-deploy.sh canary' '!prod' '!cloud-init.yml' '#1'
+kill_row K27c-canary-no-host-id-env   'm_del canary "-e SOLEUR_HOST_ID"'                   'MISSING_DECLARED: env SOLEUR_HOST_ID missing from ci-deploy.sh canary' '!prod' '!cloud-init.yml' '#1'
+kill_row K27d-first-boot-no-reaper-env 'm_del first-boot "-e SOLEUR_EGRESS_REAPER"'         'MISSING_DECLARED: env SOLEUR_EGRESS_REAPER missing from cloud-init.yml first-boot' '!ci-deploy.sh' '#1'
+kill_row K27e-first-boot-no-inngest-env 'm_del first-boot "-e INNGEST_BASE_URL"'            'MISSING_DECLARED: env INNGEST_BASE_URL missing from cloud-init.yml first-boot' 'MISSING_REQUIRED: -e INNGEST_BASE_URL is required in every tuple' '!ci-deploy.sh' '#2'
+kill_row K27f-first-boot-no-port      'm_del first-boot "-p 0.0.0.0:3000:3000"'             'MISSING_DECLARED: port 0.0.0.0:3000:3000 missing from cloud-init.yml first-boot' '!ci-deploy.sh' '#1'
+kill_row K27g-prod-two-members-gone   'm_del prod "-v /mnt/data/workspaces:/workspaces"; m_del prod "-e SOLEUR_EGRESS_REAPER"' 'MISSING_DECLARED: volume /mnt/data/workspaces:/workspaces missing from ci-deploy.sh prod' 'MISSING_DECLARED: env SOLEUR_EGRESS_REAPER missing from ci-deploy.sh prod' '!canary' '#2'
+kill_row K27h-prod-unbalanced-quote   'm_repl prod "-e SOLEUR_HOST_ID=\"\$HOST_ID\"" "-e SOLEUR_HOST_ID=\"\$HOST_ID"' 'UNPARSEABLE_OPTION' 'ci-deploy.sh prod' '!MISSING_DECLARED'
+# --- scalar posture flags are REQUIRED too, per tuple (first-boot has no --memory/--memory-swap/--init by design): deleting
+# --- --env-file runs prod with zero secrets, --memory leaves it unbounded, --restart leaves it down after a reboot.
+kill_row K28a-prod-no-env-file        'm_del prod "--env-file"'                              'MISSING_DECLARED: option --env-file missing from ci-deploy.sh prod' '!canary' '!cloud-init.yml' '#1'
+kill_row K28b-prod-no-memory          'm_del prod "--memory \""'                             'MISSING_DECLARED: option --memory missing from ci-deploy.sh prod' '!canary' '#1'
+kill_row K28c-canary-no-restart       'm_del canary "--restart"'                             'MISSING_DECLARED: option --restart missing from ci-deploy.sh canary' '!prod' '!cloud-init.yml' '#1'
+kill_row K28d-first-boot-no-env-file  'm_del first-boot "--env-file"'                        'MISSING_DECLARED: option --env-file missing from cloud-init.yml first-boot' '!ci-deploy.sh' '#1'
+kill_row K28e-first-boot-no-add-host  'm_del first-boot "--add-host"'                        'MISSING_DECLARED: option --add-host missing from cloud-init.yml first-boot' '!ci-deploy.sh' '#1'
+kill_row K28f-prod-no-init            'm_del prod "--init"'                                  'MISSING_DECLARED: option --init missing from ci-deploy.sh prod' '!canary' '#1'
+kill_row K28g-prod-not-detached       'm_repl prod "docker run -d" "docker run"'             'MISSING_DECLARED: option -d missing from ci-deploy.sh prod' '!canary' '#1'
+kill_row K28h-canary-no-log-driver    'm_del canary "--log-driver"'                          'MISSING_DECLARED: option --log-driver missing from ci-deploy.sh canary' '!prod' '#1'
+kill_row K28i-prod-no-memory-swap     'm_del prod "--memory-swap"'                           'MISSING_DECLARED: option --memory-swap missing from ci-deploy.sh prod' '!canary' '#1'
+# --- the other half of the scalar matrix: the deploy-start-only options on the CANARY, and prod's own restart/log-driver/add-host
+# --- (a spec that quietly dropped --init/--memory/--memory-swap from the canary would otherwise survive every row above).
+kill_row K29a-canary-no-init          'm_del canary "--init"'                                'MISSING_DECLARED: option --init missing from ci-deploy.sh canary' '!prod' '!cloud-init.yml' '#1'
+kill_row K29b-canary-no-memory        'm_del canary "--memory \""'                           'MISSING_DECLARED: option --memory missing from ci-deploy.sh canary' '!prod' '#1'
+kill_row K29c-canary-no-memory-swap   'm_del canary "--memory-swap"'                         'MISSING_DECLARED: option --memory-swap missing from ci-deploy.sh canary' '!prod' '#1'
+kill_row K29d-canary-no-env-file      'm_del canary "--env-file"'                            'MISSING_DECLARED: option --env-file missing from ci-deploy.sh canary' '!prod' '#1'
+kill_row K29e-prod-no-restart         'm_del prod "--restart"'                               'MISSING_DECLARED: option --restart missing from ci-deploy.sh prod' '!canary' '#1'
+kill_row K29f-prod-no-log-driver      'm_del prod "--log-driver"'                            'MISSING_DECLARED: option --log-driver missing from ci-deploy.sh prod' '!canary' '#1'
+kill_row K29g-prod-no-add-host        'm_del prod "--add-host"'                              'MISSING_DECLARED: option --add-host missing from ci-deploy.sh prod' '!canary' '#1'
+# a rogue option AND a deleted member in one tuple: the MISSING line must not be hidden behind the first violation
+kill_row K29h-rogue-option-and-missing 'm_ins prod "--cap-add NET_ADMIN"; m_del prod "--env-file"' 'UNKNOWN_OPTION: --cap-add in ci-deploy.sh prod' 'MISSING_DECLARED: option --env-file missing from ci-deploy.sh prod' '#2'
 kill_row K20i-memory-zero-unlimited 'm_repl prod "--memory \"\$PROD_MEMORY_CAP\"" "--memory 0"' 'POSTURE_VALUE: --memory 0 in ci-deploy.sh prod'
 kill_row K20h-main-file-symlink   'm_symlink "$CI_DEPLOY_REL" /dev/zero'                 'TUPLE_COUNT: cannot read ci-deploy.sh' 'not a regular file'
 
@@ -420,9 +497,11 @@ pass_row P4-tab-indented          'm_tabs first-boot'
 pass_row P5-equals-spellings      'm_repl canary "--name soleur-web-platform-canary \\" "--name=soleur-web-platform-canary \\"; m_repl canary "--security-opt apparmor=soleur-bwrap" "--security-opt=apparmor=soleur-bwrap"; m_repl canary "--env-file \"\$ENV_FILE\"" "--env-file=\"\$ENV_FILE\""'
 pass_row P6-benign-other-sites    'm_write .github/workflows/ok.yml "      - run: docker run --rm httpd:2.4-alpine true"; m_write apps/web-platform/infra/egress-gateway-bootstrap.sh "docker run -d --name \"\$GW_NAME\" img"'
 pass_row P7-comments-and-strings  'm_append "$CI_DEPLOY_REL" "# docker run -d --name soleur-web-platform img"; m_append "$CI_DEPLOY_REL" "logger -t x \"FAILED: docker run -d\""; m_append "$CI_DEPLOY_REL" "echo docker create --name sneaky"'
-pass_row P8-exempt-create-site    'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed \"\$VERIFIED_REF\" >/dev/null"'
+pass_row P8-exempt-create-site    'm_append "$CI_DEPLOY_REL" "docker create --name \"\$INNGEST_EXTRACT_CONTAINER\" \"\$VERIFIED_REF\" >/dev/null"'
 pass_row P10-if-then-canary       'm_repl canary "docker run -d" "if docker run -d"; m_repl canary "\"\$VERIFIED_REF\"" "\"\$VERIFIED_REF\"; then"'
 pass_row P11-arithmetic-shift-no-docker 'm_append_lines "$CI_DEPLOY_REL" "x=\$(( 1 <<3 ))" "echo done"'
+pass_row P12-token-mount-first-env-long 'm_del prod "-v /var/lib/soleur/egress-tokens"; m_ins_at prod "-v /mnt/data/workspaces:/workspaces" "-v /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens \\"; m_repl prod "-e SOLEUR_EGRESS_REAPER=1" "--env SOLEUR_EGRESS_REAPER=1"'
+pass_row P13-switch-named-in-comment 'm_append "$CI_DEPLOY_REL" "# NODE_TLS_REJECT_UNAUTHORIZED must stay unset everywhere"; m_append "$CLOUD_INIT_REL" "# NODE_TLS_REJECT_UNAUTHORIZED must stay unset"'
 pass_row P9-trailing-comment      'm_repl prod "; then" "; then # trailing note"'
 
 # ---------------------------------------------------------------------------------------
@@ -600,7 +679,18 @@ h1_stub() { # <stub name> <function> <return expr> <row id>...
 h1_stub classify check_options '[]' \
   K01-prod-cap-add-space K02-first-boot-cap-add-eq K03a-canary-pid-eq K03b-canary-pid-space \
   K04a-prod-systempaths K04b-prod-systempaths-eq K07a-canary-env-path K07b-canary-env-ldpre \
-  K08a-splat K10a-apparmor-unconfined K10b-seccomp-unconfined K10f-privileged K10r-volume-root K20i-memory-zero-unlimited
+  K08a-splat K10a-apparmor-unconfined K10b-seccomp-unconfined K10f-privileged K10r-volume-root K20i-memory-zero-unlimited \
+  K26a-canary-reaper-env K26b-canary-token-mount \
+  K07h-canary-literal-https K07m-canary-no-link-env K07o-prod-no-extra-ca-env K10x-prod-no-ca-volume K07r-canary-reject-unauthorized
+h1_stub declared check_declared '[]' \
+  K24a-prod-no-workspaces-vol K24b-prod-no-plugin-vol K24c-prod-no-host-id-env K24d-prod-no-second-port \
+  K25a-prod-no-token-mount K25b-prod-no-reaper-env K25c-first-boot-no-token-mount \
+  K27a-canary-no-workspaces-vol K27b-canary-no-port K27c-canary-no-host-id-env K27d-first-boot-no-reaper-env \
+  K27e-first-boot-no-inngest-env K27f-first-boot-no-port K27g-prod-two-members-gone \
+  K28a-prod-no-env-file K28b-prod-no-memory K28c-canary-no-restart K28d-first-boot-no-env-file K28e-first-boot-no-add-host \
+  K28f-prod-no-init K28g-prod-not-detached K28h-canary-no-log-driver K28i-prod-no-memory-swap \
+  K29a-canary-no-init K29b-canary-no-memory K29c-canary-no-memory-swap K29d-canary-no-env-file \
+  K29e-prod-no-restart K29f-prod-no-log-driver K29g-prod-no-add-host
 h1_stub census check_count '[]' \
   K05-prod-renamed K06-fourth-site-dup K11-heredoc-all K16-missing-cloud-init K20h-main-file-symlink
 h1_stub projection check_projection '[]' \
@@ -624,7 +714,7 @@ if [ "$((PASS + FAIL))" -ne "$ROWS" ]; then
   printf '[FATAL] accounting identity: passes(%s) + fails(%s) != rows(%s) - a verdict was discarded\n' "$PASS" "$FAIL" "$ROWS" >&2
   exit 1
 fi
-MIN_ROWS=199
+MIN_ROWS=296
 if [ "$ROWS" -lt "$MIN_ROWS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s rows ran, floor is %s\n' "$ROWS" "$MIN_ROWS" >&2
   exit 1

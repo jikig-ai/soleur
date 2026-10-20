@@ -52,6 +52,10 @@ describe("Devin plugin package", () => {
       delete process.env.CLAUDECODE;
       for (const key of Object.keys(process.env)) if (key.startsWith("GROK_")) delete process.env[key];
       delete process.env.CODEX_THREAD_ID;
+      delete process.env.OPENCODE;
+      delete process.env.OPENCODE_SESSION_ID;
+      delete process.env.OPENCODE_TERMINAL;
+      delete process.env.AI_AGENT;
       process.env.DEVIN = "1";
       for (const agent of discoverAgentEntries()) {
         const result = spawnAgent(agent.id, "test request");

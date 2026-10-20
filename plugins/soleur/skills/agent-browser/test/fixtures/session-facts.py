@@ -22,6 +22,7 @@ Fields (printed on stdout):
 import base64
 import json
 import sys
+from pathlib import Path
 
 TRAILER = "[Soleur: redacted in flight by playwright-mcp-redact-proxy]"
 
@@ -29,7 +30,7 @@ TRAILER = "[Soleur: redacted in flight by playwright-mcp-redact-proxy]"
 def main(argv):
     out, rid_json, field = argv[0], argv[1], argv[2]
     rid = json.loads(rid_json)
-    raw = open(f"{out}/stdout.bin", "rb").read()
+    raw = Path(f"{out}/stdout.bin").read_bytes()
     lines = raw.split(b"\n")
     if lines and lines[-1] == b"":
         lines = lines[:-1]
@@ -70,10 +71,10 @@ def main(argv):
         print(1 if ok else 0); return 0
     if field.startswith("stderr_count:"):
         needle = field.split(":", 1)[1]
-        err = open(f"{out}/stderr.txt", "rb").read().decode("utf-8", "replace").splitlines()
+        err = Path(f"{out}/stderr.txt").read_bytes().decode("utf-8", "replace").splitlines()
         print(sum(1 for e in err if needle in e)); return 0
     if field == "expected_line":
-        fx = json.load(open(argv[3]))
+        fx = json.loads(Path(argv[3]).read_text())
         line = json.dumps({"jsonrpc": "2.0", "id": rid, "result": fx["result"]}, separators=(",", ":")).encode()
         print(base64.b64encode(line).decode()); return 0
     if not hits:

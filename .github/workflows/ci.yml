@@ -1713,7 +1713,9 @@ jobs:
           if [ "$EVENT_NAME" = "pull_request" ]; then
             GIT_ERR="$RUNNER_TEMP/shard-totality-git.err"
             : > "$GIT_ERR"
-            if CHANGED="$(git diff --name-status "origin/${GITHUB_BASE_REF}...HEAD" 2>>"$GIT_ERR")" \
+            # Raw rows, not --name-status (#10416): the classifier gates on the file MODES a raw row carries, so an added
+            # symlink or an exec-bit `.md` runs the battery. A base-ref classifier that predates this feed fails closed (true).
+            if CHANGED="$(git diff --raw --no-color --no-ext-diff --ignore-submodules=none "origin/${GITHUB_BASE_REF}...HEAD" 2>>"$GIT_ERR")" \
               && git show "origin/${GITHUB_BASE_REF}:scripts/ci-shard-totality-classify.sh" > "$RUNNER_TEMP/ci-shard-totality-classify.sh" 2>>"$GIT_ERR"; then
               # Here-string, not `printf | bash`: see the e2e classify step (SIGPIPE on a >64 KB listing).
               APPLICABLE="$(bash "$RUNNER_TEMP/ci-shard-totality-classify.sh" pull_request <<<"$CHANGED")"
@@ -1829,7 +1831,9 @@ jobs:
   # NON-REQUIRED on purpose — it drives two vendor CLIs over the network; #8574 owns
   # promoting it to a required check after a soak, and the pin-freshness criterion.
   harness-discovery:
-    timeout-minutes: 10
+    # Sized for THREE vendor CLIs (Codex, Devin, OpenCode): each installs, boots and
+    # settles, and they run sequentially because one outage must not cost the others.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     # continue-on-error is LOAD-BEARING, not decoration (#8570 review, P0).
     #
@@ -1853,6 +1857,10 @@ jobs:
       # check into a no-op (#8574 bumps these monthly).
       CODEX_PIN: "0.156.1"
       DEVIN_PIN: "3000.11.1"
+      # OpenCode's V2 CLI. NOT `opencode-ai` — that package's latest is 1.19.3, the
+      # previous API generation, and the 2.x runtime rejects its plugin module shape.
+      # `npm:@opencode/cli` is what the `opencode` version-manager entry resolves to.
+      OPENCODE_PIN: "2.0.32"
       # sha256 of the pinned Devin setup script, measured 2026-09-23. A version
       # in a URL is a NAME, not a content pin; this is the content pin.
       DEVIN_SETUP_SHA256: "bff4e02d0297ba5494d2cd1a8314b9c48ebd237f37f22438e83d60e09f3b72c7"
@@ -1929,6 +1937,30 @@ jobs:
       - name: Devin discovers every declared skill
         if: '!cancelled()'
         run: bun plugins/soleur/scripts/harness-discovery-smoke.ts --harness devin --pin "$DEVIN_PIN"
+
+      - name: Install OpenCode CLI (exact pin)
+        # `!cancelled()` for the same reason as the Devin half: three independent
+        # vendors drive this job and one outage must not cost the other two their
+        # signal. The npm package is `@opencode/cli`, not `opencode-ai` — see the
+        # pin comment above.
+        if: '!cancelled()'
+        run: |
+          set -uo pipefail
+          npm i -g "@opencode/cli@${OPENCODE_PIN}"
+          # Same `linux-x64` optional dependency the release ships, so the binary
+          # that lands on PATH is the one the pin names. `|| true` everywhere the
+          # version is parsed: under `bash -e` an unparsed banner must fall through
+          # to the assertion below, not kill the step before it can explain itself.
+          raw="$(timeout 30 opencode --version 2>&1 || true)"
+          got="$(printf '%s' "${raw//[$'\r\n']/ }" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+          [ "$got" = "$OPENCODE_PIN" ] || {
+            echo "::error::harness-discovery[opencode] version-mismatch:${got:-<unparsed>}!=${OPENCODE_PIN} raw=${raw:0:200}"
+            exit 3
+          }
+
+      - name: OpenCode discovers every declared skill
+        if: '!cancelled()'
+        run: bun plugins/soleur/scripts/harness-discovery-smoke.ts --harness opencode --pin "$OPENCODE_PIN"
 
   # Synthetic aggregator.
   #
@@ -2230,10 +2262,12 @@ jobs:
             # for the whole life of this gate (#9729). The warning below prints only observed values.
             GIT_ERR="$RUNNER_TEMP/e2e-git.err"
             : > "$GIT_ERR"
-            if CHANGED="$(git diff --name-status "origin/${GITHUB_BASE_REF}...HEAD" 2>>"$GIT_ERR")" \
+            # Raw rows, not --name-status (#10416): the classifier gates on the file MODES a raw row carries, so an added
+            # symlink or an exec-bit `.md` runs the job. A base-ref classifier that predates this feed fails closed (true).
+            if CHANGED="$(git diff --raw --no-color --no-ext-diff --ignore-submodules=none "origin/${GITHUB_BASE_REF}...HEAD" 2>>"$GIT_ERR")" \
               && git show "origin/${GITHUB_BASE_REF}:scripts/ci-e2e-classify.sh" > "$RUNNER_TEMP/ci-e2e-classify.sh" 2>>"$GIT_ERR"; then
               # A here-string, not `printf | bash`: the classifier exits at the first non-allowlisted row without reading the
-              # rest, so on a name-status listing over the 64 KB pipe buffer the printf takes SIGPIPE and pipefail reds the step.
+              # rest, so on a raw-row listing over the 64 KB pipe buffer the printf takes SIGPIPE and pipefail reds the step.
               APPLICABLE="$(bash "$RUNNER_TEMP/ci-e2e-classify.sh" pull_request <<<"$CHANGED")"
             else
               echo "::warning::e2e classification fell back to enum-failed; git stderr: [$(tr '\n' ' ' < "$GIT_ERR" | cut -c1-300)] shallow=$(git rev-parse --is-shallow-repository 2>&1 | head -1) base_ref_resolves=$(git rev-parse --verify -q "origin/${GITHUB_BASE_REF}" >/dev/null 2>&1 && echo yes || echo no) head=$(git rev-parse --short HEAD 2>&1 | head -1) uid=$(id -u)"

@@ -3804,7 +3804,8 @@ _aff_runner_banner() {
 # #9763: 38 heavy/stale labels withdrawn to edge-selection; the floor pins count-5.
 # #8875: +1 always-on (emitter census is repo-global by construction); re-pinned at 114-5.
 # #10331: +2 always-on (the lint-ratchet pair); re-pinned at 116-5.
-_MIN_ALWAYS_ON_DECLARED=111
+# #7893: +1 always-on (the Art. 30 re-verification unit); re-pinned at 117-5.
+_MIN_ALWAYS_ON_DECLARED=112
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -5147,7 +5148,7 @@ if want_scripts; then
   # apps/web-platform/node_modules, which this shard does not have). The live ruff run installs a
   # hash-pinned ruff on first use; under CI an unobtainable ruff is exit 2, never a skip.
   run_suite "tests/scripts/lint-ratchet" python3 -m unittest tests.scripts.test_lint_ratchet
-  run_suite "scripts/lint-ratchet-ruff-live" python3 scripts/lint-ratchet.py ruff --check
+  run_suite "scripts/lint-ratchet-ruff-live" python3 plugins/soleur/scripts/lint-ratchet.py ruff --check
   # ADR-170. Both halves are required: the unit suite proves the RULE is right (its fixtures are
   # the executable spec), the live scan proves the TREE is clean. Either alone is satisfiable by
   # a detector that has stopped detecting -- a broken linter and a clean repo emit identical
@@ -5471,6 +5472,7 @@ if want_scripts; then
   # scripts/lib/legal-normalise.test.sh is the detector for that, and it is fixture-anchored so
   # it cannot red on a legal edit.
   run_suite "scripts/lint-legal-scope-block-placement-unit" bash scripts/lint-legal-scope-block-placement.test.sh
+  run_suite "scripts/lint-art30-reverification-unit" bash scripts/lint-art30-reverification.test.sh
   run_suite "scripts/lint-legal-scope-block-placement-live" bash scripts/lint-legal-scope-block-placement.sh
   run_suite "scripts/lint-legal-mirror-drift-baseline-unit" bash scripts/lint-legal-mirror-drift-baseline.test.sh
   run_suite "scripts/lint-legal-mirror-drift-baseline-live" bash scripts/lint-legal-mirror-drift-baseline.sh
@@ -5592,6 +5594,10 @@ if want_scripts; then
   # is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes the PIR-flip tracker, so "PASS only when the
   # fix PR's merge commit is contained in the deployed tag" must redden CI if it regresses to a bare canary-green exit 0.
   run_suite "scripts/sandbox-readback-10445" bash scripts/followthroughs/sandbox-readback-10445.test.sh
+  # #10552: exit-code + row-class harness for the compound-promote derived-diff probe. Registered EXPLICITLY
+  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes #10552,
+  # so a PASS on a refusal that is not proof (or on a quiet week) must redden CI.
+  run_suite "scripts/compound-promote-draft-edit-10552" bash scripts/followthroughs/compound-promote-draft-edit-10552.test.sh
   # #10119: exit-code + branch harness for the registry htpasswd-stdin delivery probe. Registered explicitly
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes
   # #10119 after the unattended registry host replace, so a vacuous PASS (old-host rows, forged tails, quoted
@@ -5605,6 +5611,9 @@ if want_scripts; then
   # thresholds). Registered explicitly: scripts/followthroughs/*.test.sh is not in SUITE_GLOBS. A vacuous PASS
   # would let the soak window read clean on an unmeasured stream.
   run_suite "scripts/hosted-destroy-ask-window-9776" bash scripts/followthroughs/hosted-destroy-ask-window-9776.test.sh
+  # #7432 (Item I of #9217): exit-code harness for the JOBS-pin soak probe. Registered explicitly:
+  # scripts/followthroughs/*.test.sh is not in SUITE_GLOBS. A vacuous PASS would close #7432, and through it #7376.
+  run_suite "scripts/jobs1-stopgap-7432" bash scripts/followthroughs/jobs1-stopgap-7432.test.sh
   # #5863: exit-code harness for the outer-wrap soak follow-through (stub-curl
   # arms for verdict binding, freshness window, and HTTP classes). Registered
   # explicitly (orphan-suite class above) — its PASS authorizes promoting the
@@ -5786,6 +5795,10 @@ if want_scripts; then
   # (0 closes, 1 reopens a tracker whose close releases four snapshots), an argv-asserting curl stub
   # that answers by requested id, the exact run-id pin on the explained groups, and a pinned clock.
   run_suite "scripts/inngest-soak-6178" bash scripts/followthroughs/inngest-soak-6178.test.sh
+  # #10136 Inngest link TLS soak probe (Guard 2). Drives the predicate over a 48 h synthetic `tls-health` series through a
+  # fake gh (trusted-verdict lib) and an argv-asserting fake betterstack-query.sh: the seven Guard 2 mutation rows, the two
+  # harness rows, the anchor trust rows, and per-check deletion mutants of the probe copy.
+  run_suite "scripts/inngest-tls-soak-10136" bash scripts/followthroughs/inngest-tls-soak-10136.test.sh
   # CPX22 invoice reconciliation (#7437). An operator-confirmed probe reads a production ledger
   # verdict out of free text a human typed, so the suite pins the two properties that decide
   # whether it can be trusted: the verdict is anchored at line start (an unanchored grep closes
@@ -5844,6 +5857,14 @@ if want_scripts; then
   # transaction rows carry measurements.{lcp,fcp,cls,inp,ttfb}. Explicit
   # run_suite — scripts/followthroughs/ is covered by no glob here.
   run_suite "scripts/cwv-field-rum-9178" bash scripts/followthroughs/cwv-field-rum-9178.test.sh
+  # #8743: exit-code harness for the web-2 plugin-seed (fchmodat2) soak probe.
+  # Registered explicitly — scripts/followthroughs/*.test.sh is not in SUITE_GLOBS,
+  # and this probe's exit 0 auto-closes the tracker. The load-bearing arms are the
+  # PASS conjunction (positive control + post-fix marker + zero post-marker
+  # fchmodat2), the marker-anchored absence floor (pre-delivery rows are history,
+  # not a verdict), and every transport fault mapping to NOT YET / CANNOT
+  # ESTABLISH, never PASS.
+  run_suite "scripts/web2-plugin-seed-8743" bash scripts/followthroughs/web2-plugin-seed-8743.test.sh
   # #8450 standing monitor core (scripts/actions-queue-health.sh): the verdict
   # logic behind scheduled-actions-queue-health.yml — live queue depth +
   # delivered-vs-entitled concurrency + median live queued age ->

@@ -2899,16 +2899,7 @@ jobs:
       - name: Sweep for orphaned inngest rehearsal hosts
         id: sweep
         env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           REHEARSAL_PREFIX: soleur-inngest-rehearsal-
-          # Same declared-floor shape as the rung-2 sweep's RUNG2_CONFIGS_FLOOR: a demand this
-          # step makes of its own credential — the identity must enumerate at least this many
-          # environments before its "no orphaned scratch environment" answer means anything.
-          # The soleur-inngest project holds exactly `prd` today (inngest-host.tf's
-          # doppler_environment.inngest_prd), so the floor is 1; a service token scoped to one
-          # config lists zero and reports `unsatisfiable` honestly rather than a clean verdict
-          # it did not measure.
-          INNGEST_ENVS_FLOOR: 1
         run: |
           set -euo pipefail
           TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
@@ -2944,42 +2935,12 @@ jobs:
             echo "::error::could not parse the server name-sweep — fail-closed."; exit 1
           fi
           [[ -n "$_nhits" ]] && survivors="${survivors}$(printf '%s\n' "$_nhits" | sed 's/^/server(name): /')"$'\n'
-          # ── THE SCRATCH DOPPLER ENVIRONMENT IS NOT A HETZNER OBJECT ──────────────
-          # It needs its own probe, and that probe gets the same honest-verdict treatment as
-          # the rung-2 sweep's config half: a Doppler service token is config-scoped by
-          # construction, so `doppler environments list` under this job's credential may
-          # return a list that answers nothing. The listed count is CHECKED against the
-          # declared floor, never assumed — `performed`, `unsatisfiable` and `failed` are
-          # three different verdicts and only the first can bear a "none found".
-          _env_rc=0
-          _env_total=0
-          _envs=""
-          _env_raw="$(doppler environments list -p soleur-inngest --json)" || _env_rc=$?
-          if (( _env_rc == 0 )); then
-            _env_total="$(printf '%s' "$_env_raw" | jq -r 'length')" || _env_rc=$?
-          fi
-          if (( _env_rc == 0 )); then
-            _envs="$(printf '%s' "$_env_raw" | jq -r '[.[]? | (.slug // .name) | select(startswith("rehearsal_"))] | .[]')" || _env_rc=$?
-          fi
-          if (( _env_rc != 0 )) || [[ ! "$_env_total" =~ ^[0-9]+$ ]] \
-             || [[ ! "${INNGEST_ENVS_FLOOR:-}" =~ ^[0-9]+$ ]]; then
-            _env_probe=failed
-          elif (( 10#$_env_total < 10#$INNGEST_ENVS_FLOOR )); then
-            _env_probe=unsatisfiable
-          else
-            _env_probe=performed
-          fi
-          [[ -n "${_env_total:-}" ]] || _env_total=-1
-          [[ -n "${_env_rc:-}" ]] || _env_rc=-1
-          [[ -n "${_env_probe:-}" ]] || _env_probe=failed
-          {
-            echo "scratch_env_probe=${_env_probe}"
-            echo "scratch_env_rc=${_env_rc}"
-            echo "scratch_env_listed=${_env_total}"
-            echo "scratch_env_floor=${INNGEST_ENVS_FLOOR:--1}"
-          } >> "$GITHUB_OUTPUT"
-          echo "scratch-environment probe: ${_env_probe} (doppler/jq exit ${_env_rc}, ${_env_total} of a declared floor of ${INNGEST_ENVS_FLOOR:--1} environment(s) listed)"
-          [[ -n "$_envs" ]] && survivors="${survivors}$(printf 'doppler environment: %s\n' $_envs)"$'\n'
+          # The scratch-Doppler-environment half MOVED OUT of this sweep (#9919): this job's
+          # token is config-scoped by construction, so `doppler environments` under it could
+          # never enumerate the project — every run reported `unsatisfiable`, which is a clean
+          # verdict the probe never measured. The check now lives in the rehearsal workflow's
+          # always() teardown (inngest-provision-rehearsal.yml), the arm that holds the provider
+          # token able to see what it created.
           survivors="$(printf '%s' "$survivors" | grep -v '^$' || true)"
           if [[ -z "$survivors" ]]; then
             echo "no orphaned inngest rehearsal resources"
@@ -3051,101 +3012,3 @@ jobs:
               --milestone "Post-MVP / Later" \
               --body-file /tmp/orphan-body-inngest.md
           fi
-
-      # ── ITS OWN FILER, ITS OWN TITLE ──────────────────────────────────────────
-      # Same defect the rung-2 sibling's `scratch_cfg_issue` step exists for: the
-      # `_env_probe` output above is `unsatisfiable` in the STEADY STATE (a config-scoped
-      # service token lists nothing), so without this step the finding reaches nobody —
-      # `orphans != '0'` gates the orphan filer, and an annotation on a green cron run is
-      # a channel nobody opens. Create-only: the condition holds on every run until the
-      # wiring changes, so it is never re-commented.
-      - name: File an issue when the scratch-environment half of the sweep was not performed
-        id: scratch_env_issue
-        if: >-
-          always()
-          && (steps.sweep.outputs.scratch_env_probe == 'failed'
-              || steps.sweep.outputs.scratch_env_probe == 'unsatisfiable')
-        continue-on-error: true
-        timeout-minutes: 2
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PROBE: ${{ steps.sweep.outputs.scratch_env_probe }}
-          PROBE_RC: ${{ steps.sweep.outputs.scratch_env_rc }}
-          LISTED: ${{ steps.sweep.outputs.scratch_env_listed }}
-          FLOOR: ${{ steps.sweep.outputs.scratch_env_floor }}
-          SERVER_URL: ${{ github.server_url }}
-          REPOSITORY: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
-        run: |
-          set -uo pipefail
-          TITLE="infra: the inngest rehearsal orphan sweep is not checking for stranded scratch Doppler environments"
-          RUN_URL="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
-          echo "channel_failed=false" >> "$GITHUB_OUTPUT"
-          fail_channel() {
-            echo "::error::$1"
-            echo "channel_failed=true" >> "$GITHUB_OUTPUT"
-          }
-          LIST_RC=0
-          EXISTING=$(gh issue list --label infra-drift --state open --limit 100 \
-            --json number,title --jq ".[] | select(.title == \"${TITLE}\") | .number" | head -1) || LIST_RC=$?
-          if (( LIST_RC != 0 )); then
-            fail_channel "inngest_scratch_env_list_failed — could not query open infra-drift issues (gh exit ${LIST_RC}); declining to create a possible duplicate."
-            exit 0
-          fi
-          if [[ -n "$EXISTING" ]]; then
-            echo "scratch-environment sweep issue #${EXISTING} already open — create-only, not commenting."
-            exit 0
-          fi
-          BODY="${RUNNER_TEMP}/inngest-scratch-env.md"
-          {
-            echo "**The inngest-provision rehearsal orphan sweep reports \"no orphaned scratch"
-            echo "Doppler environment\" without being able to look** (probe: \`${PROBE}\`,"
-            echo "doppler/jq exit \`${PROBE_RC}\`, \`${LISTED}\` environment(s) listed against a"
-            echo "declared floor of \`${FLOOR}\` — the credential this job holds is config-scoped"
-            echo "and cannot enumerate the project). Run: ${RUN_URL}"
-            echo ""
-            echo "### Why this matters"
-            echo ""
-            echo "A partial rehearsal teardown strands the \`rehearsal_*\` Doppler environment in"
-            echo "\`soleur-inngest\`, which holds the real production \`BETTERSTACK_LOGS_TOKEN\`"
-            echo "alongside its throwaway values. The Hetzner half of this sweep is sound; this"
-            echo "half has been returning a clean verdict for a question it never asked."
-            echo ""
-            echo "### Remedy"
-            echo ""
-            echo "The shapes that fit: give this job its own narrowly-scoped read identity, or"
-            echo "have the rehearsal teardown arm assert the environment's deletion at teardown"
-            echo "time (it already holds a credential that can see what it created)."
-            echo ""
-            echo "Closed by hand once the environment half of the sweep reports a verdict it"
-            echo "actually measured. Filed create-only: the condition holds on every run until"
-            echo "the wiring changes, so this issue is not re-commented."
-            echo ""
-            echo "_Auto-created by the [terraform-drift workflow](${SERVER_URL}/${REPOSITORY}/actions/workflows/scheduled-terraform-drift.yml)._"
-          } > "$BODY"
-          if gh issue create \
-            --title "$TITLE" \
-            --label "infra-drift" \
-            --label action-required \
-            --label priority/p2-medium \
-            --milestone "Post-MVP / Later" \
-            --body-file "$BODY"; then
-            echo "Filed an infra-drift issue for the unperformed scratch-environment sweep (${PROBE})."
-          else
-            fail_channel "inngest_scratch_env_escalation_failed — gh issue create did not succeed. The unperformed scratch-env sweep (${PROBE}, ${LISTED} env(s) listed) reached NO channel this run."
-          fi
-          rm -f "$BODY"
-
-      # Same fallback as the rung-2 job's: `continue-on-error` + `exit 0` means a failed `gh`
-      # leaves only a run annotation — unless this step turns it into email.
-      - name: Email notification (inngest sweep — the scratch-env finding could not reach its issue channel)
-        if: >-
-          always()
-          && (steps.scratch_env_issue.outputs.channel_failed == 'true'
-              || steps.scratch_env_issue.outcome == 'failure')
-        continue-on-error: true
-        uses: ./.github/actions/notify-ops-email
-        with:
-          subject: '[INFRA DRIFT] The inngest scratch-env finding could not reach its issue channel'
-          body: '<p><strong>The twice-daily inngest rehearsal orphan sweep found that its scratch-Doppler-environment half was not performed, and the GitHub issue channel that carries that finding did not accept it.</strong></p><p>Measured: probe <code>${{ steps.sweep.outputs.scratch_env_probe }}</code>, exit <code>${{ steps.sweep.outputs.scratch_env_rc }}</code>, <code>${{ steps.sweep.outputs.scratch_env_listed }}</code> env(s) listed against a floor of <code>${{ steps.sweep.outputs.scratch_env_floor }}</code>. <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> and look for <code>inngest_scratch_env_list_failed</code> or <code>inngest_scratch_env_escalation_failed</code>.</p>'
-          resend-api-key: ${{ secrets.RESEND_API_KEY }}

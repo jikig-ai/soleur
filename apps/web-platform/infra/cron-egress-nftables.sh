@@ -251,6 +251,10 @@ add rule ip filter SOLEUR-EGRESS ip daddr $BRIDGE_GW tcp dport 8288 accept comme
 # inngest-doublefire-probe.sh together). Dedicated Inngest host egress for the #6178 /
 # ADR-100 cutover (INNGEST_BASE_URL repoint to http://10.0.1.40:8288, PR #6348).
 add rule ip filter SOLEUR-EGRESS ip daddr 10.0.1.40 tcp dport 8288 accept comment "soleur-egress: dedicated inngest host (#6178)"
+# #10136: the same host's TLS listener (stunnel, 8443 -> 127.0.0.1:8288). The :8288 accept above STAYS (legacy, counted on the
+# Inngest host until the soak proves no caller dials it); this is the verified-TLS path NODE_EXTRA_CA_CERTS uses after the flip.
+# Not the egress gateway's `dport 8443` accept below (a different daddr).
+add rule ip filter SOLEUR-EGRESS ip daddr 10.0.1.40 tcp dport 8443 accept comment "soleur-egress: dedicated inngest host tls (#10136)"
 add rule ip filter SOLEUR-EGRESS ip daddr @soleur_egress_allow accept comment "soleur-egress: allowlist"
 add rule ip filter SOLEUR-EGRESS ip daddr @soleur_egress_allow_cidr accept comment "soleur-egress: cidr allowlist (github git LB ranges)"
 $GW_ACCEPT_LINE

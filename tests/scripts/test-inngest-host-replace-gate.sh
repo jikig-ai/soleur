@@ -301,6 +301,38 @@ RCHK "AC3a (must-PASS): host replace = server + attachment delete+create, protec
 rp "$(srv_replace "{\"firewall_ids\":[${FW_ID}]}")" "$FW_NOOP" "$NET_REPLACE" "$LUKS_ATT_REPLACE_ENTRY" "$(LUKS_VOL_NOOP_ENTRY update false)"
 RCHK "AC3b (pre-apply): the same plan with the LUKS volume UPDATE (delete_protection not yet applied) => ABORT luks_volume_touched" 1 "reason=luks_volume_touched "
 
+# ── #10136: the Inngest link TLS material stays OUT of the host-replace closure ─────────────────────
+# tls_private_key.inngest_link / tls_self_signed_cert.inngest_link and the doppler_secret.inngest_tls_*
+# copies are created by the per-merge apply (inngest-tls.tf), never by this dispatch. If a templatefile
+# variable in inngest-host.tf ever referenced one, a cert change would force-replace the scheduler host
+# and the replace plan would carry the resources; this gate must then ABORT as an out-of-scope change
+# (none of these addresses is in its allow-set). The prevent_destroy on the key and cert is the second
+# line; this row is the first.
+rp "$BASE_REPLACE" "$(rc_obj 'tls_self_signed_cert.inngest_link' '"create"')"
+RCHK "T1 (#10136): a tls_self_signed_cert create riding a host replace => ABORT inngest_out_of_scope_changes" 1 "reason=inngest_out_of_scope_changes "
+rp "$BASE_REPLACE" "$(rc_obj 'tls_private_key.inngest_link' '"create"')"
+RCHK "T2 (#10136): a tls_private_key create riding a host replace => ABORT inngest_out_of_scope_changes" 1 "reason=inngest_out_of_scope_changes "
+rp "$BASE_REPLACE" "$(rc_obj 'tls_self_signed_cert.inngest_link' '"delete","create"')"
+RCHK "T3 (#10136): a tls_self_signed_cert REPLACE (cert drift) riding a host replace => ABORT" 1 "reason=inngest_out_of_scope_changes "
+rp "$BASE_REPLACE" "$(rc_obj 'doppler_secret.inngest_tls_key' '"update"')"
+RCHK "T4 (#10136): a doppler_secret.inngest_tls_key update riding a host replace => ABORT inngest_out_of_scope_changes" 1 "reason=inngest_out_of_scope_changes "
+rp "$BASE_REPLACE" "$(rc_obj 'tls_self_signed_cert.inngest_link' '"no-op"')"
+RCHK "T5 (must-PASS): the cert present as an explicit no-op (already applied by the merge apply) => PASS" 0 "inngest_host_replace_gate: PASS"
+
+# Mutation proof (the matrix row for T1-T4): admit the tls_ prefix into the gate's allow-set on a COPY and
+# the create must stop aborting. A row that stays RED here would be redness unrelated to the allow-set.
+rp "$BASE_REPLACE" "$(rc_obj 'tls_self_signed_cert.inngest_link' '"create"')"
+awk '{ print } /"hcloud_server_network.inngest",/ && !d { print "        \"tls_self_signed_cert.inngest_link\","; d=1 }' "$GATE" > "$TMP/mutated-tls-allow.sh"
+if cmp -s "$TMP/mutated-tls-allow.sh" "$GATE"; then
+  fail "T6: the allow-set mutation matched NOTHING in the gate; the allow-set shape drifted"
+else
+  _rc=0; _out="$(bash -c "source '$PREAMBLE'; source '$TMP/mutated-tls-allow.sh'; inngest_host_replace_gate '$TMP/plan.json'" 2>&1)" || _rc=$?
+  if [[ "$_rc" -eq 0 && "$_out" == *"inngest_host_replace_gate: PASS"* ]]; then
+    pass
+  else
+    fail "T6: with the cert admitted into the allow-set the create must stop aborting (rc=${_rc}): ${_out}"
+  fi
+fi
 
 
 # ANTI-VACUITY FLOOR (#6997). Nothing else asserts that the assertions RAN. Every
@@ -320,11 +352,11 @@ RCHK "AC3b (pre-apply): the same plan with the LUKS volume UPDATE (delete_protec
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 43 ]]; then
+if [[ "$_ran" -lt 49 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 43. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 49. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 43)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 49)\n' "$_ran"
 fi
 
 echo ""

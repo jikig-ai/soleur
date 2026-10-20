@@ -640,37 +640,69 @@ for hookf in "$REPO_ROOT/lefthook.yml" "$REPO_ROOT/plugins/soleur/scripts/grok-p
     [[ -n "$_m" ]] || continue
     HOOK_INV="$(grep -vF -- "test-all.sh $_m" <<<"$HOOK_INV" || true)"
   done <<<"$_modes"
+  # Plugin-gate surface (#9307): the grok pre-push gate's battery step dispatches
+  # `affected-tests.sh` through `$GATE` — resolved beside the script itself by
+  # `dirname $0` (ADR-179), so the invocation names the indirection, not the
+  # literal path. Other surfaces may spell the path out. Exemption polarity
+  # INVERTS relative to test-all.sh: the gate's BARE spelling IS the affected
+  # mode (it delegates `--affected` to a capability-positive runner), so only an
+  # `affected-tests.sh … --full` segment is full-shaped and needs the hatch.
+  PGATE_INV="$(grep -E '(^|[[:space:]])(bash|sh|zsh|exec|source)[[:space:]]+("?\$\{?GATE\}?|[^[:space:]|;&]*affected-tests\.sh)' <<<"$HOOK_SRC" || true)"
+  # The `$GATE` indirection counts only while the file resolves it to the gate —
+  # a repointed variable would launder the pin. Checked against the
+  # comment-stripped but UNSPLIT source: the `&&` split that builds HOOK_SRC
+  # cuts the `GATE=$(cd … && pwd)/affected-tests.sh` assignment in two, so the
+  # `GATE=` token and the path can never co-locate a line there.
+  if grep -qF '$GATE' <<<"$PGATE_INV" \
+     && ! grep -q 'GATE=.*affected-tests\.sh' < <(sed 's/\(^\|[[:space:]]\)#.*$/\1/' "$hookf"); then
+    PGATE_INV="$(grep -vF '$GATE' <<<"$PGATE_INV" || true)"
+  fi
   CASES=$((CASES + 1))
-  if [[ -z "$HOOK_INV" ]]; then
-    fail "$hookrel no longer invokes scripts/test-all.sh — this guard is pinned to the wrong file"
+  if [[ -z "$HOOK_INV" && -z "$PGATE_INV" ]]; then
+    fail "$hookrel no longer invokes a gate runner (scripts/test-all.sh or affected-tests.sh) — this guard is pinned to the wrong file"
     continue
   fi
-  pass "$hookrel carries $(grep -c . <<<"$HOOK_INV") uncommented full-gate invocation segment(s)"
-  # `--affected` segments are exempt by construction (#8322): the mode refuses
+  pass "$hookrel carries $(printf '%s\n%s\n' "$HOOK_INV" "$PGATE_INV" | grep -c .) uncommented full-gate invocation segment(s)"
+  # `--affected` test-all.sh segments are exempt by construction (#8322): the mode refuses
   # nothing, and a degraded-full refusal under it is the intended signal. What
-  # remains — `--full` and the mode-less spelling — must carry the hatch.
+  # remains — `--full` and the mode-less spelling — must carry the hatch. For the
+  # plugin gate the polarity is the mirror image: bare IS affected, and `--full`
+  # is the segment that needs SOLEUR_ALLOW_FULL_GATE=1.
   HOOK_BARE="$(grep -vF -- '--affected' <<<"$HOOK_INV" | grep -vF 'SOLEUR_ALLOW_FULL_GATE=1' || true)"
+  PGATE_BARE="$(grep -F -- '--full' <<<"$PGATE_INV" | grep -vF 'SOLEUR_ALLOW_FULL_GATE=1' || true)"
+  [[ -n "$PGATE_BARE" ]] && HOOK_BARE="${HOOK_BARE:+$HOOK_BARE$'\n'}${PGATE_BARE}"
   CASES=$((CASES + 1))
   if [[ -z "$HOOK_BARE" ]]; then
-    pass "$hookrel: every non-exempt gate invocation carries SOLEUR_ALLOW_FULL_GATE=1 (ADR-196 section 6, re-spec'd #8322)"
+    pass "$hookrel: every non-exempt gate invocation carries SOLEUR_ALLOW_FULL_GATE=1 (ADR-196 section 6, re-spec'd #8322/#9307)"
   else
     fail "$hookrel has a full-shaped invocation WITHOUT the hatch — it exits 4 whenever any sibling runs the battery: $HOOK_BARE"
   fi
 done
 
-# POSITIVE PIN (#8322): the exemption checks above are vacuous if nothing
-# carries `--affected` — a `--full`+hatch invocation reads identically green.
-# Assert each local gate surface literally selects the affected mode, not
-# merely that whatever it carries is legal.
+# POSITIVE PIN (#8322, re-spec'd #9307): the exemption checks above are vacuous if
+# nothing selects the affected mode — a `--full`+hatch invocation reads identically
+# green. Assert each local gate surface literally selects the affected mode, not
+# merely that whatever it carries is legal. TWO vocabularies satisfy it: the
+# runner's `test-all.sh --affected`, and the plugin gate's bare spelling — a
+# `affected-tests.sh` (or `bash "$GATE"`) invocation carrying NO `--full` IS the
+# affected run: the gate delegates `--affected` to a capability-positive runner
+# and refuses or adapter-selects otherwise.
 for hookf in "$REPO_ROOT/lefthook.yml" "$REPO_ROOT/plugins/soleur/scripts/grok-pre-push-gate.sh"; do
   hookrel="${hookf#"$REPO_ROOT"/}"
-  _aff_modes="$(sed 's/\(^\|[[:space:]]\)#.*$/\1/' "$hookf" \
-    | grep -oE 'test-all\.sh[[:space:]]+--[a-z-]+' | sort -u || true)"
+  _stripped="$(sed 's/\(^\|[[:space:]]\)#.*$/\1/' "$hookf")"
+  _aff_modes="$(grep -oE 'test-all\.sh[[:space:]]+--[a-z-]+' <<<"$_stripped" | sort -u || true)"
+  _pgate_lines="$(grep -E '(^|[[:space:]])(bash|sh|zsh|exec|source)[[:space:]]+("?\$\{?GATE\}?|[^[:space:]|;&]*affected-tests\.sh)' <<<"$_stripped" || true)"
+  _pgate_aff="$(grep -vF -- '--full' <<<"$_pgate_lines" || true)"
+  # The `$GATE` indirection counts only while the file resolves it to
+  # affected-tests.sh — a repointed variable would launder the pin.
+  if grep -qF '$GATE' <<<"$_pgate_aff" && ! grep -q 'GATE=.*affected-tests\.sh' <<<"$_stripped"; then
+    _pgate_aff="$(grep -vF '$GATE' <<<"$_pgate_aff" || true)"
+  fi
   CASES=$((CASES + 1))
-  if grep -qxF 'test-all.sh --affected' <<<"$_aff_modes"; then
-    pass "$hookrel's gate run pins --affected"
+  if grep -qxF 'test-all.sh --affected' <<<"$_aff_modes" || [[ -n "$_pgate_aff" ]]; then
+    pass "$hookrel's gate run pins the affected mode (--affected or bare affected-tests.sh)"
   else
-    fail "$hookrel does not pin --affected (found: ${_aff_modes:-<none>}) — the local gate lost its mode flag"
+    fail "$hookrel does not pin the affected mode (found: ${_aff_modes:-<none>}${_pgate_lines:+; gate lines:}${_pgate_lines:+ $_pgate_lines}) — the local gate lost its mode flag"
   fi
 done
 

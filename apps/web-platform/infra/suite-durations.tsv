@@ -2,7 +2,7 @@
 # group=infra
 # generated-from-runs=36327508617,36323335413,36249105039,36194570054,36186259058
 # default-weight-ms=1000
-# generated-at=2026-10-14T19:16:08Z
+# generated-at=2026-10-19T09:37:54Z
 # generator=regenerate-shard-manifest.py v3
 apps/web-platform/infra/apex-single-node-replace-mutation.test.sh	12000	measured
 apps/web-platform/infra/apex-single-node-replace.test.sh	500	measured
@@ -93,6 +93,7 @@ apps/web-platform/infra/inngest-luks-sole-copy.test.sh	1000	floor
 apps/web-platform/infra/inngest-nic-wait.test.sh	34500	measured
 apps/web-platform/infra/inngest-provision-rehearsal.test.sh	1000	floor
 apps/web-platform/infra/inngest-rearm-reminders.test.sh	4000	measured
+apps/web-platform/infra/inngest-redis-luks-import-rehearsal.test.sh	130000	measured
 apps/web-platform/infra/inngest-redis-luks.test.sh	500	measured
 apps/web-platform/infra/inngest-registry-probe.test.sh	1500	measured
 apps/web-platform/infra/inngest-rls/apply-inngest-rls-workflow.test.sh	1000	measured

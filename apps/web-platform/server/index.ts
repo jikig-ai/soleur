@@ -27,10 +27,12 @@ import {
 // leaves the previous generation's forwarders reparented to init with live
 // token files — waiting for the first dispatch leaves a window where dead
 // sessions' credentials still authenticate at the gateway.
-// GATED on SOLEUR_EGRESS_REAPER=1: only the dir-owning app container sets it.
-// A second container sharing the host dir (the deploy canary, ci-deploy.sh)
-// runs this same server — its /proc cannot see the prod forwarders, so an
-// ungated sweep would mass-revoke the prod dispatcher's live tokens.
+// GATED on SOLEUR_EGRESS_REAPER=1: only the dir-owning app containers (prod and
+// the fresh-host start) set it. The deploy canary (ci-deploy.sh) runs this same
+// server but neither mounts the dir nor sets the flag (ADR-278 canary isolation,
+// pinned by lib/docker-run-tuple.py); the gate is the second layer — its /proc
+// cannot see the prod forwarders, so an ungated sweep would mass-revoke the prod
+// dispatcher's live tokens.
 import { reapOrphanEgressForwarders } from "./egress-forwarder";
 import { handleConversationMessages } from "./api-messages";
 import { releaseAllHeldLeases } from "./worktree-write-lease";

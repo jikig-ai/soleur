@@ -4492,7 +4492,7 @@ else row "S4 parity population: a Markdown file teaches a divergent or unlisted 
 # first bc_* use; no credential header literal inside a bc_curl statement; no stderr discard on one; no branch on rc == 2; the marker
 # names the file).
 # =====================================================================================
-S4_SCRIPT_MANIFEST="$(printf '%s\n' .github/actions/dispatch-web-redeploy/track.sh apps/web-platform/infra/push-infra-config.sh apps/web-platform/scripts/github-app-key-status.sh scripts/probe-github-app-mint.sh apps/web-platform/infra/git-data-wipe.sh | sort)"
+S4_SCRIPT_MANIFEST="$(printf '%s\n' .github/actions/dispatch-web-redeploy/track.sh apps/web-platform/infra/push-infra-config.sh apps/web-platform/scripts/github-app-key-status.sh scripts/probe-github-app-mint.sh apps/web-platform/infra/git-data-wipe.sh scripts/inngest-link-flip.sh | sort)"
 S4_SCRIPT_POP="$(cd "$REPO_ROOT" && git grep -lE '^[[:space:]]*(source|\.)[[:space:]].*scripts/lib/bearer-curl\.sh' -- '*.sh' ':!*.test.sh' ':!tests' ':!scripts/lib' | sort)"
 S4_SU="$(comm -23 <(printf '%s\n' "$S4_SCRIPT_POP" | grep .) <(printf '%s\n' "$S4_SCRIPT_MANIFEST"))"
 S4_SS="$(comm -13 <(printf '%s\n' "$S4_SCRIPT_POP" | grep .) <(printf '%s\n' "$S4_SCRIPT_MANIFEST"))"
@@ -4503,7 +4503,7 @@ S4_YML_NEW=".github/actions/mint-infra-app-token/action.yml .github/workflows/ap
 S4_YML_MISS=""; for f in $S4_YML_NEW; do grep -qxF -- "$f" <<<"$S3_POP" || S4_YML_MISS+=" $f"; done
 [[ -z "$S4_YML_MISS" ]] && row "S4 population: the five newly converted YAML files and the converted inngest-health probe are all in the derived library-user set ($(printf '%s\n' "$S3_POP" | grep -c .) YAML members in all, judged by the S3 structure rows)" ok || row "S4 population: a converted YAML file is not a derived library user" fail "$S4_YML_MISS"
 # Anti-vacuity floor on the two derived populations (BOTH operands are literals on the lines IMMEDIATELY above the `if`).
-S4_POP_FLOOR=23
+S4_POP_FLOOR=24
 S4_POP_N=$(( $(printf '%s\n' "$S3_POP" | grep -c .) + $(printf '%s\n' "$S4_SCRIPT_POP" | grep -c .) ))
 if [[ "$S4_POP_N" -ge "$S4_POP_FLOOR" ]]; then row "S4 population: the derived library-user population holds $S4_POP_N members (anti-vacuity floor $S4_POP_FLOOR)" ok
 else row "S4 population: the derived library-user population is below its anti-vacuity floor" fail "n=$S4_POP_N floor=$S4_POP_FLOOR"; fi
@@ -4530,8 +4530,8 @@ done
 [[ -z "$S4_RC2_BAD" ]] && row "S4 structure: no script branches on rc == 2 (the marker is the discriminator)" ok || row "S4 structure: a script branches on rc 2" fail "$S4_RC2_BAD"
 [[ -z "$S4_NAME_BAD" ]] && row "S4 structure: every bc_curl / bc_refuse in a script names its own file in the marker" ok || row "S4 structure: a script's marker names another file" fail "$S4_NAME_BAD"
 [[ -z "$S4_HMAC_SCRIPT_BAD" ]] && row "S4 structure: no library-user script computes an HMAC with the key on openssl's argv" ok || row "S4 structure: openssl -hmac in a library-user script" fail "$S4_HMAC_SCRIPT_BAD"
-# The floor is the realized count (7 bc_curl statements: track.sh x2, push-infra-config x1, github-app-key-status x1, probe-github-app-mint x1, git-data-wipe x2 (the read and the write wrapper)). BOTH operands are literals above the `if`.
-S4_SCALLS_FLOOR=7
+# The floor is the realized count (9 bc_curl statements: track.sh x2, push-infra-config x1, github-app-key-status x1, probe-github-app-mint x1, git-data-wipe x2 (the read and the write wrapper), inngest-link-flip x2 (flip_webhook's POST and GET arms)). BOTH operands are literals above the `if`.
+S4_SCALLS_FLOOR=9
 if [[ "$S4_SCALLS" -ge "$S4_SCALLS_FLOOR" ]]; then row "S4 structure: the library-user scripts hold $S4_SCALLS bc_curl statements (anti-vacuity floor $S4_SCALLS_FLOOR)" ok
 else row "S4 structure: the script population floor" fail "only $S4_SCALLS bc_curl statements derived (floor $S4_SCALLS_FLOOR)"; fi
 # The lint's SCRIPT-CONSUMER derivation (scripts/lint-workflow-local-action-checkout.py, SCRIPT CONSUMERS) runs its `git ls-files` arm on the REAL tree only here
@@ -4560,14 +4560,14 @@ else row "S4 track.sh vocabulary: a verdict word was added or removed" fail "got
 echo "=== stage S4: Guard 1 census, populations and structure done ==="
 
 # =====================================================================================
-# GUARD 1 (d): the inline-wrapper copies, judged by the S2 PARITY AUDIT (hm_audit above, which reads any indentation). S4 adds seven
-# copies of the canonical python3 HMAC snippet to the 19 of the cutover script: web-platform-release.yml 3 and deploy-inngest-image.yml
+# GUARD 1 (d): the inline-wrapper copies, judged by the S2 PARITY AUDIT (hm_audit above, which reads any indentation). S4 adds eight
+# copies of the canonical python3 HMAC snippet to the 19 of the cutover script: web-platform-release.yml 4 and deploy-inngest-image.yml
 # 2 (workflow steps, 10-space YAML indentation, signing through the inline `_sig_curl`), infra-config-verify.sh 1 and
 # verify-tunnel-ingress-origin.sh 1 (scripts at column 0 that print their own header directives; both sign a status GET).
 # The cutover script holds all 19 copies (no -hmac operand is left). The inline wrappers are the exception ADR-280 allows only where a
 # pinned property of the job or its suite rules out sourcing a repo file; this audit is the mechanical bound on that exception.
 # =====================================================================================
-S4_HM_SPEC=".github/workflows/web-platform-release.yml:3: .github/workflows/deploy-inngest-image.yml:2: apps/web-platform/infra/infra-config-verify.sh:1:empty apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh:1:empty"
+S4_HM_SPEC=".github/workflows/web-platform-release.yml:4: .github/workflows/deploy-inngest-image.yml:2: apps/web-platform/infra/infra-config-verify.sh:1:empty apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh:1:empty"
 S4_HM_TOTAL=0; S4_HM_ALLBAD=""
 for spec in $S4_HM_SPEC; do
   IFS=: read -r hf hn hd <<< "$spec"
@@ -4580,10 +4580,10 @@ for spec in $S4_HM_SPEC; do
   done
 done
 hm_audit "$CUT"; S4_HM_CUT="$HM_NCOPY"; S4_HM_HELD="$HM_NOLD"
-# BOTH operands are literals on the lines IMMEDIATELY above the `if`: 19 cutover copies + 7 S4 copies, and no -hmac operand left in the cutover script.
-S4_HM_COPIES_WANT=26
+# BOTH operands are literals on the lines IMMEDIATELY above the `if`: 19 cutover copies + 8 S4 copies, and no -hmac operand left in the cutover script.
+S4_HM_COPIES_WANT=27
 if [[ $((S4_HM_CUT + S4_HM_TOTAL)) -eq "$S4_HM_COPIES_WANT" && -z "$S4_HM_ALLBAD" && "$S4_HM_HELD" == 0 ]]; then
-  row "S4 parity audit: $S4_HM_COPIES_WANT converted copies in all (19 cutover + 7 inline: release 3, deploy-inngest-image 2, infra-config-verify 1, verify-tunnel 1), no -hmac operand left in the cutover script" ok
+  row "S4 parity audit: $S4_HM_COPIES_WANT converted copies in all (19 cutover + 8 inline: release 4, deploy-inngest-image 2, infra-config-verify 1, verify-tunnel 1), no -hmac operand left in the cutover script" ok
 else row "S4 parity audit: the converted-copy count moved or a -hmac operand is back" fail "cutover=$S4_HM_CUT inline=$S4_HM_TOTAL want=$S4_HM_COPIES_WANT hmac=$S4_HM_HELD bad:$S4_HM_ALLBAD"; fi
 # Mutants of the parity audit on the S4 copies: ONE byte (-I dropped) in ONE inline copy is caught as exactly that copy, touching exactly that line.
 for spec in $S4_HM_SPEC; do
@@ -4668,10 +4668,10 @@ for f in files:
 print(n_ok, n_sig, n_brr, ",".join(bad))
 '
 read -r S4_G_OK S4_G_SIG S4_G_BRR S4_G_BAD < <(cd "$REPO_ROOT" && python3 -I -c "$s4_guard_py" "$BEARER_FN" "$CUT" $S4_OK_DERIVED)
-# BOTH operands are literals above the `if`: 74 `_bearer_ok` definitions outside the cutover script (the four S4 inline-wrapper files hold 9 of them: release 5,
-# deploy-inngest-image 2, luks 1, verify-tunnel 1; the rest are the ops scripts and followthrough probes converted by S1 to S3), 5 `_sig_curl`, 2 `_bearer_curl`.
-S4_GUARD_FLOOR=74
-if [[ -z "$S4_G_BAD" && "$S4_G_OK" -ge "$S4_GUARD_FLOOR" && "$S4_G_OK" == "$S4_OK_DEFS" && "$S4_G_SIG" == 5 && "$S4_G_BRR" == 2 ]]; then
+# BOTH operands are literals above the `if`: 77 `_bearer_ok` definitions outside the cutover script (the four S4 inline-wrapper files hold 10 of them: release 6,
+# deploy-inngest-image 2, luks 1, verify-tunnel 1; the rest are the ops scripts and followthrough probes converted by S1 to S3), 6 `_sig_curl`, 2 `_bearer_curl`.
+S4_GUARD_FLOOR=77
+if [[ -z "$S4_G_BAD" && "$S4_G_OK" -ge "$S4_GUARD_FLOOR" && "$S4_G_OK" == "$S4_OK_DEFS" && "$S4_G_SIG" == 6 && "$S4_G_BRR" == 2 ]]; then
   row "S4 inline guard pin: all $S4_G_OK _bearer_ok definitions of the $(printf '%s\n' "$S4_OK_DERIVED" | grep -c .) tracked files that define one equal the canonical text byte for byte (the count equals git grep's), and the $S4_G_SIG _sig_curl and $S4_G_BRR _bearer_curl wrappers equal the cutover script's (marker name and its --max-time normalized); floor $S4_GUARD_FLOOR"  ok
 else row "S4 inline guard pin: an inline guard or wrapper differs from the canonical text" fail "ok=$S4_G_OK defs=$S4_OK_DEFS sig=$S4_G_SIG brr=$S4_G_BRR bad=$S4_G_BAD"; fi
 # The pinned file sets are populations, so they are judged by SET IDENTITY: the files defining a wrapper are exactly the explicit set, and the four
@@ -4863,6 +4863,7 @@ mapfile -t S4_REL_JOBENV < <(s4_jobenv "$REPO_ROOT/$S4_WFR" deploy)
 s4_body "$REPO_ROOT/$S4_WFR" "Pre-rerun lock probe" "$S4/b-r8.sh"
 s4_body "$REPO_ROOT/$S4_WFR" "Deploy via webhook" "$S4/b-r9.sh"
 s4_body "$REPO_ROOT/$S4_WFR" "Verify deploy script completion" "$S4/b-r10.sh"
+s4_body "$REPO_ROOT/$S4_WFR" "Verify peer deploy completion" "$S4/b-r10p.sh"
 s4_body "$REPO_ROOT/$S4_WFR" "Email notification (deploy FAILED)" "$S4/b-r11.sh"
 s4_body "$REPO_ROOT/$S4_WFR" "email" "$S4/b-r12.sh"
 # Each step gets ONLY what its YAML declares (s4_run drops the rest and the final "declared environment" row asserts nothing was dropped):
@@ -5286,7 +5287,7 @@ s4_mutant_red "S4 row 3 deploy-inngest-image verify control: a refused status re
 # secret (the two email steps: of RESEND_API_KEY). The HMAC key is never trimmed. A stored value with a trailing newline or space is the commonest storage accident, and the old
 # argv form tolerated a leading blank too (curl sent it and the edge discards leading whitespace of a field value). The loop's text is the CANONICAL spelling below; what the
 # battery asserts about it is (a) a DERIVED population row (every step that defines the inline `_bearer_ok() {` and declares a GitHub `secrets.` value for one of the three names
-# carries exactly that loop for exactly those names BEFORE the definition, and the seven hand-listed executed steps are that population), and (b) executed rows that DISCRIMINATE the
+# carries exactly that loop for exactly those names BEFORE the definition, and the eight hand-listed executed steps are that population), and (b) executed rows that DISCRIMINATE the
 # shape: leading and trailing mixed whitespace trimmed and the clean value sent; interior space or LF refused (strip-all would send a different credential); an interior control
 # byte, all-whitespace and U+2003 (leading, trailing, under a UTF-8 locale so a `[[:space:]]` implementation is seen) refused; the HMAC key untrimmed.
 IFS= read -r -d '' s4_trim_py <<'PY' || true
@@ -5420,7 +5421,7 @@ s4_b7_bad() {
 }
 S4_B7_ID_MIX_ALL=$' \t\r\n\v\f'
 S4_B7_RS_MIX=$'\t '"${S4_RESEND}"$' \r\n'
-s4_b7_step() { # <tag> <body> <mode> <said> <NAME=value>...: one of the seven executed inline steps, every scenario
+s4_b7_step() { # <tag> <body> <mode> <said> <NAME=value>...: one of the eight executed inline steps, every scenario
   local tag="$1" body="$2" mode="$3" said="$4" scen="$S4_B7_SCEN_WH"; shift 4
   [[ "$mode" == resend-* ]] && scen="$S4_B7_SCEN_RS"
   S4_B7_N=$((S4_B7_N + 1)); printf '%s\n' "${S4_BODY_SRC[$body]:-unbuilt|$body}" >> "$S4_B7_COVERED"
@@ -5429,11 +5430,14 @@ s4_b7_step() { # <tag> <body> <mode> <said> <NAME=value>...: one of the seven ex
   else row "S4 inline trim $tag: the call-site trim, an interior/non-ASCII refusal or the untrimmed key" fail "$S4_B7_BAD"; fi
 }
 S4_B7_REL=("${S4_WH_BASE[@]}" "${S4_REL_ENV[@]}")
+mapfile -t S4_PEER_JOBENV < <(s4_jobenv "$REPO_ROOT/$S4_WFR" verify-peer-deploy)
+S4_B7_PEERREL=("${S4_WH_BASE[@]}" "${S4_PEER_JOBENV[@]}" VERSION=1.2.3)
 S4_B7_BASE_DEPLOY=("${S4_B7_REL[@]}" WEB_HOST_PRIVATE_IPS=10.0.1.10,10.0.1.11)
 S4_B7_BASE_FAILMAIL=(MIRROR_VERIFIED=true RUN_URL=https://example.invalid/run VERSION=1.2.3 SHIM_PROFILE=generic)
 s4_b7_step release-lock-probe "$S4/b-r8.sh" wh-empty 'Pre-rerun probe: no in-flight deploy (exit_code=0)' "${S4_WH_BASE[@]}" "${S4_REL_JOBENV[@]}" 'SHIM_STATUS_BODY={"exit_code":0}'
 s4_b7_step release-deploy "$S4/b-r9.sh" wh-post 'Deploy initiated (HTTP 202)' "${S4_B7_BASE_DEPLOY[@]}"
 s4_b7_step release-verify "$S4/b-r10.sh" wh-empty 'ci-deploy.sh completed successfully for v1.2.3' "${S4_B7_REL[@]}" STATUS_POLL_MAX_ATTEMPTS=3 STATUS_POLL_INTERVAL_S=0 'SHIM_STATUS_BODY={"exit_code":0,"reason":"ok","tag":"v1.2.3"}'
+s4_b7_step release-peer-verify "$S4/b-r10p.sh" wh-empty 'All expected peers reported v1.2.3 deploy completion' "${S4_B7_PEERREL[@]}" STATUS_POLL_MAX_ATTEMPTS=3 STATUS_POLL_INTERVAL_S=0 'SHIM_STATUS_BODY={"exit_code":0,"reason":"ok","tag":"v1.2.3","peers":{"10.0.1.11":{"exit_code":0,"reason":"ok","tag":"v1.2.3"}}}'
 s4_b7_step release-deploy-failed-email "$S4/b-r11.sh" resend-hdr 'Deploy-failure email sent to ops@jikigai.com (HTTP 200)' "${S4_B7_BASE_FAILMAIL[@]}"
 s4_b7_step release-outcome-email "$S4/b-r12.sh" resend-gho '' CLASSIFIER=failure FAILED=live-verify 'FAILED_HTML=<li>live-verify</li>' R_DEPLOY=failure TAG=v1.2.3 VERSION=1.2.3 RUN_URL=https://example.invalid/run SHIM_PROFILE=generic
 s4_b7_step deploy-inngest-trigger "$S4/b-r3t.sh" wh-post 'initiated (HTTP 202)' "${S4_WH_BASE[@]}" TAG=v1.2.3
@@ -5445,7 +5449,7 @@ s4_b7_step deploy-inngest-verify "$S4/b-r3v.sh" wh-empty 'Inngest deploy v1.2.3 
 S4_B7_DERIVED="$(cd "$REPO_ROOT" && python3 -I -c "$s4_b7_py" scan "$REPO_ROOT")"
 S4_B7_DERIVED_N="$(grep -c . <<<"$S4_B7_DERIVED" || true)"; S4_B7_BADN="$(grep -c $'\tBAD$' <<<"$S4_B7_DERIVED" || true)"
 S4_B7_COVER="$(cd "$REPO_ROOT" && python3 -I -c "$s4_b7_py" cover "$REPO_ROOT" "$S4_B7_COVERED")"
-S4_B7_FLOOR=7
+S4_B7_FLOOR=8
 if [[ "$S4_B7_BADN" == 0 && -z "$S4_B7_COVER" && "$S4_B7_DERIVED_N" == "$S4_B7_N" && "$S4_B7_DERIVED_N" -ge "$S4_B7_FLOOR" ]]; then
   row "S4 inline trim population: every workflow step that defines the inline _bearer_ok and declares a secrets.* value for CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET or RESEND_API_KEY carries exactly the canonical trim loop for exactly those names before the definition, and the $S4_B7_N executed rows are exactly that derived population ($S4_B7_DERIVED_N steps; floor $S4_B7_FLOOR)" ok
 else row "S4 inline trim population: a derived step lacks the canonical trim, no executed row covers it, or the population is below its floor" fail "bad=$S4_B7_BADN derived=$S4_B7_DERIVED_N executed=$S4_B7_N floor=$S4_B7_FLOOR cover='${S4_B7_COVER//$'\n'/;}' bad-steps='$(grep $'\tBAD$' <<<"$S4_B7_DERIVED" | cut -f1,3 | tr '\t\n' ': ;')'"; fi
@@ -7602,6 +7606,409 @@ done
 ctl_row "evaluate_body: a compliant row is green, and each of its clauses (at least one call, password in no curl argv, password in no jq argv, a recorded body, the exact identifier and password in it) fails when only its fact is doctored (an unrecorded body also fails the content clause, which it cannot satisfy)"
 
 # =====================================================================================
+# STAGE S8 (argv-bearer sweep, Guard 3, #9757): no registry LOGIN command carries a password on argv.
+#
+# PROPERTY. No tracked, non-test, non-comment registry login invocation (`crane auth login`, `docker login`, `podman login`, and the variable
+# spellings of those binaries: `$CRANE auth login`, `"$DOCKER_BIN" login`) passes a password as an argument: no option token is `-p`, `--password`,
+# `--password=<v>`, a glued `-p<value>` or a short cluster holding p (`-up`), in any order relative to the host. `--password-stdin` never matches.
+#
+# WHY A VARIABLE-AWARE VERB. The restore engine spells its login `$CRANE auth login` (a variable, for the test seam). A scan keyed on the literal
+# `crane` sees ZERO engine sites and stays green over the file this stage exists for; the floor row and mutation 8 exist for that.
+#
+# DERIVATION. One python3 pass (scan.py) over `git ls-files --cached --others --exclude-standard` of a root, minus `*.test.*`, any path with a
+# `test`, `tests` or `fixtures` directory, and `knowledge-base/` (the exclusion is by path component at ANY depth: a production script under a directory
+# named `test` is invisible); `.md` joins only under `plugins/` (stage S7 treats agent-run markdown as a
+# surface). Backslash-continuation lines are joined (a comment line is never continued). Each logical line is TOKENISED with a quote-,
+# `$(...)`-, backtick- and `${{ ... }}`-aware splitter: operators (`&&`, `||`, `;`, `|`, `&`, redirections, `)`) end an invocation, a `#` at a word
+# start ends the line, and a quoted string is one token, so a prose `docker login` inside an echo, a grep pattern or an alias is not a command. A
+# login found INSIDE a `$(...)` or backtick span, or inside a quoted payload that a shell runs (`bash -c`/`-lc`, `eval`, a YAML `run:`/`command:`
+# value, `ssh host "..."`, an `exec`-style call), is scanned recursively; any other quoted string is prose. An invocation is a verb, optional
+# global flags, an optional `auth`, `login`, then its arguments: it is BAD when any argument is a password option (whatever the host count), and it
+# is a SITE (counted against the floor) when it has exactly one host and at least one option. The scan is a FUNCTION OF A ROOT, so the mutation
+# rows run the same text on a scratch repository.
+#
+# NAMED BLIND SPOTS (stated, not hidden): clients that are not crane/docker/podman or a variable named for them (skopeo, oras, regctl, buildah,
+# nerdctl, cosign, `helm registry login`; no site exists today), a variable verb with none of those names (`$ENGINE`, `$CTR`), arguments held in a
+# variable or array (`"${LOGIN_ARGS[@]}"`), a flag-variable (`$SINK_TLS_FLAG`, anything ending FLAG, FLAGS, OPTS or OPTIONS) that itself carries
+# `-p`, a command built by concatenation or an `eval`ed string, a payload inside any other quoted string (e.g. a YAML list item), a YAML folded `>` block, a backslash followed by
+# a space or CRLF, a FEEDER that itself carries the token on argv (`/usr/bin/printf '%s' "$T" |`), and the excluded trees. S8 selects on the FULL run only: the affected-test array does not name its population, and editing
+# it would arm every PR-gated battery (CTO ruling D1).
+#
+# FLOOR. The scan sees 12 sites in 7 files on the real tree (measured when this stage was written): 10 already `--password-stdin` (one is a plugin
+# doc snippet) and the engine's 2 `$CRANE` lines. A scan that sees fewer (a renamed binary, moved roots, a broken regex) is RED, never a clean bill.
+# Retiring a legitimate login site is a floor edit in the same change. No allowlist: there is no residual.
+# =====================================================================================
+S8_SITE_FLOOR=12; S8_FILE_FLOOR=7
+S8="$TMPD/s8"; assert_fixture_dir "$S8"; mkdir -p "$S8/base" "$S8/mut"
+cat > "$S8/scan.py" <<'S8PY'
+import os, re, subprocess, sys
+root = sys.argv[1]
+VERB = re.compile(
+    r'^(?:.*/)?(?:crane|docker|podman)(?:_[a-z_]*)?$'
+    r'|^\$\{?[A-Za-z_]*(?:crane|docker|podman)[A-Za-z_]*(?:\[[@*]\])?\}?$'
+    r'|^\$\{[A-Za-z_]+:[-=]?(?:crane|docker|podman)\}$'
+    r'|^\$\(command -v (?:crane|docker|podman)\)$', re.I)
+VALUED = {"-u", "--username", "-p", "--password", "--config", "--authfile", "--cert-dir", "--registry-config", "-e", "--email"}
+# A bare flag-variable (`$SINK_TLS_FLAG`) expands to an option or to nothing: neither the host nor a visible option.
+NEUTRAL = re.compile(r'^"?\$\{?[A-Za-z_]*(?:FLAG|FLAGS|OPTS|OPTIONS)\}?"?$', re.I)
+PLACEHOLDER = re.compile(r"<[A-Za-z][\w.\- ]*>")
+CLUSTER_C = re.compile(r"^-[A-Za-z]*c$")
+PAYLOAD_KEYS = ("run:", "command:", "script:", "cmd:", "entrypoint:")
+EXEC_CALLS = re.compile(r"^(?:exec|execSync|execFile|system|popen|run|call|check_output|check_call|Popen|Command)$")
+REDIRS = {"\0>", "\0>>", "\0<", "\0<<", "\0<<<", "\0&>", "\0>&"}
+OPS = ("&&", "||", "<<<", "<<", ">>", "&>", ">&", ";", "|", ">", "<", "&", ")", "(")
+
+
+def tokens(s):
+    """Quote-, $(..)-, ${{..}}- and backtick-aware split. Operators come back as \\0-prefixed tokens; a `#` at a word start ends the line."""
+    out, cur, i, n, q, angle = [], [], 0, len(s), None, False
+
+    def flush():
+        if cur:
+            out.append("".join(cur))
+            cur.clear()
+
+    while i < n:
+        c = s[i]
+        if q:
+            cur.append(c)
+            if c == "\\" and q == '"' and i + 1 < n:
+                cur.append(s[i + 1])
+                i += 2
+                continue
+            if c == q:
+                q = None
+            i += 1
+            continue
+        if s.startswith("${{", i):
+            j = s.find("}}", i)
+            j = n if j < 0 else j + 2
+            cur.append(s[i:j])
+            i = j
+            continue
+        if s.startswith("$(", i):
+            d, j = 1, i + 2
+            while j < n and d:
+                d += (s[j] == "(") - (s[j] == ")")
+                j += 1
+            cur.append(s[i:j])
+            i = j
+            continue
+        if c == "`":
+            j = s.find("`", i + 1)
+            j = n if j < 0 else j + 1
+            cur.append(s[i:j])
+            i = j
+            continue
+        if c in "\"'":
+            q = c
+            cur.append(c)
+            i += 1
+            continue
+        if c.isspace():
+            flush()
+            i += 1
+            continue
+        if c == "#" and not cur:
+            break
+        if c == "<" and not cur and PLACEHOLDER.match(s, i):
+            angle = True  # a `<placeholder>` in a doc, not a redirection
+        if angle:
+            cur.append(c)
+            if c == ">":
+                angle = False
+            i += 1
+            continue
+        fd = cur and "".join(cur).isdigit() and s[i:i + 1] in "<>"
+        op = next((o for o in OPS if s.startswith(o, i)), None)
+        if op:
+            if fd:
+                cur.clear()
+            flush()
+            out.append("\0" + op)
+            i += len(op)
+            continue
+        cur.append(c)
+        i += 1
+    flush()
+    return out
+
+
+def unq(t):
+    return t[1:-1] if len(t) > 1 and t[0] in "\"'" and t[-1] == t[0] else t
+
+
+SHELLS = {"sh", "bash", "zsh", "dash", "ksh", "su"}
+
+
+def subs(t, md=False):
+    """The bodies of every balanced $( ... ) span inside one token, and its backtick spans (never in markdown inline code or single quotes)."""
+    out, i = ([] if md or t[:1] == "'" else [x[1:-1] for x in re.findall(r"`[^`]*`", t)]), 0
+    while True:
+        i = t.find("$(", i)
+        if i < 0:
+            return out
+        d, j = 1, i + 2
+        while j < len(t) and d:
+            d += (t[j] == "(") - (t[j] == ")")
+            j += 1
+        out.append(t[i + 2:j - 1])
+        i = j
+
+
+def payload_context(toks, i):
+    """Is toks[i] (a quoted string) code that a shell will run, rather than prose?"""
+    prev = toks[i - 1] if i else ""
+    if prev == "--" and i > 1:
+        prev = toks[i - 2]
+    start = i
+    while start and toks[start - 1][:1] != "\0":
+        start -= 1  # the first token of the command this string belongs to
+    words = [unq(x) for x in toks[start:i]]
+    if CLUSTER_C.match(prev) and any(w in SHELLS for w in words):
+        return True
+    if prev == "eval" or prev in PAYLOAD_KEYS or ("ssh" in words and not prev.startswith("-")):
+        return True
+    return prev == "\0(" and i > 1 and bool(EXEC_CALLS.match(toks[i - 2].split(".")[-1]))
+
+
+def scan_line(code, depth=0, md=False):
+    toks, recs, i = tokens(code), [], 0
+    while i < len(toks):
+        t = toks[i]
+        if depth < 3 and t[:1] != "\0" and ("$(" in t or "`" in t):
+            for inner in subs(t, md):
+                recs += scan_line(inner, depth + 1, md)  # a login inside a command substitution
+        if depth < 2 and t[:1] in "\"'" and payload_context(toks, i):
+            recs += scan_line(unq(t), depth + 1, md)  # bash -lc "docker login ..." / eval "..." / run: '...' / ssh host "..." / execSync("...")
+        if t[:1] == "\0" or not VERB.match(unq(t)):
+            i += 1
+            continue
+        k, found = i + 1, False
+        lead = 2 if "_" in unq(t) and t[:1] != "$" else 0  # a wrapper (crane_capture <out> <err> auth login ...) takes two bare words first
+        while k < len(toks) and k < i + 8 and toks[k][:1] != "\0":
+            u = unq(toks[k])
+            if u == "login":
+                found = True
+                break
+            if u == "auth":
+                k += 1
+                continue
+            if not u.startswith("-"):
+                if lead:
+                    lead -= 1
+                    k += 1
+                    continue
+                break
+            k += 1
+            if k < len(toks) and toks[k][:1] != "\0" and unq(toks[k]) not in ("auth", "login") and not unq(toks[k]).startswith("-"):
+                k += 1
+        if not found:
+            i += 1
+            continue
+        j, opts, hosts, bad = k + 1, [], 0, False
+        while j < len(toks):
+            if toks[j][:1] == "\0":
+                if toks[j] in REDIRS:  # a redirection may sit anywhere in the argument list: skip it and its target (never an option)
+                    j += 2 if j + 1 < len(toks) and not unq(toks[j + 1]).startswith("-") else 1
+                    continue
+                break
+            u = unq(toks[j])
+            if u.startswith("-"):
+                opts.append(u)
+                glued_user = u.startswith("-u") and not u.startswith("--") and len(u) > 3  # -ujpierre is a username; -up is treated as a cluster (conservative)
+                if u in ("-p", "--password") or u.startswith("--password=") or (re.match(r"^-[A-Za-z]*p", u) and not u.startswith("--") and not glued_user):
+                    bad = True
+                if u in VALUED or (u == "--tls-verify" and j + 1 < len(toks) and unq(toks[j + 1]) in ("true", "false")):
+                    j += 1
+            elif NEUTRAL.match(toks[j]):
+                pass
+            else:
+                hosts += 1
+            j += 1
+        if bad or (hosts == 1 and opts):
+            recs.append((" ".join(opts), "1" if bad else "0"))
+        i = j
+    return recs
+
+
+out = subprocess.run(["git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"], capture_output=True, check=True)
+for rel in out.stdout.decode("utf-8", "replace").split("\0"):
+    parts = rel.split("/")
+    if not rel or rel.endswith(".test.sh") or ".test." in parts[-1] or "test" in parts[:-1] or "tests" in parts[:-1] or "fixtures" in parts[:-1] or parts[0] == "knowledge-base":
+        continue
+    if rel.endswith(".md") and parts[0] != "plugins":
+        continue
+    try:
+        data = open(os.path.join(root, rel), "rb").read()
+    except OSError:
+        continue
+    if b"\0" in data[:8192] or b"login" not in data.lower():
+        continue
+    lines = data.decode("utf-8", "replace").split("\n")
+    i = 0
+    while i < len(lines):
+        start, cur = i + 1, lines[i]
+        while cur.endswith("\\") and not cur.lstrip().startswith("#") and i + 1 < len(lines):
+            i += 1
+            cur = cur[:-1] + " " + lines[i].strip()
+        i += 1
+        if "login" not in cur.lower():
+            continue
+        for opts, bad in scan_line(cur.strip(), 0, rel.endswith(".md")):
+            print("\t".join([rel, str(start), opts, bad, cur.strip()]))
+S8PY
+s8_scan() { python3 -I "$S8/scan.py" "$1"; } # <root>: one TSV record per invocation: file, line, options, bad(0|1), code
+S8_J_REASONS=""; S8_J_SITES=0; S8_J_FILES=0; S8_J_DETAIL=""
+s8_judge_text() { # <scan text>: sets S8_J_REASONS (empty = GREEN), S8_J_SITES, S8_J_FILES, S8_J_DETAIL. Reasons: floor, bad:<file>
+  local f
+  S8_J_REASONS=""
+  S8_J_SITES="$(grep -c . <<<"$1" || true)"
+  S8_J_FILES="$(cut -f1 <<<"$1" | sort -u | grep -c . || true)"
+  S8_J_DETAIL="$(awk -F'\t' '$4 == 1 { print $1 ":" $2 }' <<<"$1" | tr '\n' ' ')"
+  [[ "$S8_J_SITES" -ge "$S8_SITE_FLOOR" && "$S8_J_FILES" -ge "$S8_FILE_FLOOR" ]] || S8_J_REASONS+=" floor"
+  while IFS= read -r f; do [[ -n "$f" ]] && S8_J_REASONS+=" bad:$f"; done < <(awk -F'\t' '$4 == 1 { print $1 }' <<<"$1" | sort -u)
+  S8_J_REASONS="${S8_J_REASONS# }"
+}
+s8_judge() { s8_judge_text "$(s8_scan "$1")"; } # <root>
+( source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh" && git_fixture_env "$S8/base" || exit 1; git -C "$S8/base" init -q ) \
+  || fatal "S8 could not create the scratch repository"
+S8_REAL_SCAN="$(s8_scan "$REPO_ROOT")"
+S8_ENGINE="scripts/registry-restore-from-ghcr.sh"
+S8_CONT="apps/web-platform/infra/cloud-init-inngest.yml"
+# The base copies EVERY file the floor counts (a partial base would trip the floor and turn every mutant RED for the wrong reason).
+while IFS= read -r f; do [[ -n "$f" ]] || continue; mkdir -p "$S8/base/$(dirname "$f")"; cp "$REPO_ROOT/$f" "$S8/base/$f"; done < <(cut -f1 <<<"$S8_REAL_SCAN" | sort -u)
+s8_fresh() { local d="$S8/mut/$1"; assert_fixture_dir "$d"; rm -rf "${d:?}"; cp -a "$S8/base" "$d" && printf '%s' "$d"; } # <name>: prints a new root
+s8_put() { assert_fixture_dir "$1"; mkdir -p "$1/$(dirname "$2")"; printf '%s\n' "$3" > "$1/$2"; } # <root> <relative path> <content>
+s8_edit() { s6_edit "$@" || fatal "S8 mutation did not land: $2"; } # <file> <old> <new> [<count>]: replace exactly <count> occurrences or abort the suite
+s8_has() { [[ " $S8_J_REASONS " == *" $1 "* ]]; } # <reason>: the last judgement carried that reason
+s8_recs() { s8_scan "$1" | awk -F'\t' -v f="$2" -v b="$3" '$1 == f && ($4 == b || b == "") { n++ } END { print n + 0 }'; } # <root> <file> <bad: 0|1|empty>: record count
+
+s8_judge_text "$S8_REAL_SCAN"
+S8_REAL_REASONS="$S8_J_REASONS"; S8_REAL_SITES="$S8_J_SITES"; S8_REAL_FILES="$S8_J_FILES"
+if [[ -z "$S8_REAL_REASONS" ]]; then row "S8 Guard 3: no tracked registry login (crane, docker, podman, in literal or variable spelling) carries a password on argv ($S8_REAL_SITES invocations in $S8_REAL_FILES files, derived over the whole tracked tree)" ok
+else row "S8 Guard 3: a registry login invocation carries a password on argv, or the scan saw fewer sites than its floor" fail "reasons='$S8_REAL_REASONS' at=$S8_J_DETAIL sites=$S8_REAL_SITES files=$S8_REAL_FILES"; fi
+if [[ "$S8_REAL_SITES" -ge "$S8_SITE_FLOOR" && "$S8_REAL_FILES" -ge "$S8_FILE_FLOOR" ]]; then row "S8 floor: the scan saw $S8_REAL_SITES invocations in $S8_REAL_FILES files (the floor is $S8_SITE_FLOOR sites in $S8_FILE_FLOOR files: the stdin-form sites plus the engine's 2 \$CRANE lines)" ok
+else row "S8 floor: the scan saw fewer than $S8_SITE_FLOOR sites in $S8_FILE_FLOOR files (a renamed binary, moved roots or a broken scanner)" fail "sites=$S8_REAL_SITES files=$S8_REAL_FILES"; fi
+S8_ENG_N="$(awk -F'\t' -v f="$S8_ENGINE" '$1 == f { n++ } END { print n + 0 }' <<<"$S8_REAL_SCAN")"
+S8_ENG_BAD="$(awk -F'\t' -v f="$S8_ENGINE" '$1 == f && ($4 == 1 || $3 !~ /--password-stdin/) { n++ } END { print n + 0 }' <<<"$S8_REAL_SCAN")"
+if [[ "$S8_ENG_N" -eq 2 && "$S8_ENG_BAD" -eq 0 ]]; then row "S8 engine: scripts/registry-restore-from-ghcr.sh holds exactly 2 login invocations (the sink and GHCR, spelled \$CRANE) and both carry --password-stdin and no password flag" ok
+else row "S8 engine: the restore engine's two \$CRANE login lines were not both seen in the --password-stdin form" fail "engine-sites=$S8_ENG_N not-stdin-or-bad=$S8_ENG_BAD"; fi
+
+# --- the baseline-GREEN control: the scratch base is judged by the SAME function and must be green ---------------------------------
+s8_judge "$S8/base"
+if [[ -z "$S8_J_REASONS" && "$S8_J_SITES" -eq "$S8_REAL_SITES" && "$S8_J_FILES" -eq "$S8_REAL_FILES" ]]; then row "S8 control: the scratch base (a copy of every file the floor counts) is judged GREEN with the real tree's site and file counts, so every mutant below is RED for its mutation alone" ok
+else row "S8 control: the scratch base is not GREEN with the real counts (every mutant below would be measuring the base)" fail "reasons='$S8_J_REASONS' sites=$S8_J_SITES/$S8_REAL_SITES files=$S8_J_FILES/$S8_REAL_FILES"; fi
+
+# --- mutation 1: either engine login reverted to the password on argv -------------------------------------------------------------
+d="$(s8_fresh m1a)"; s8_edit "$d/$S8_ENGINE" '--password-stdin $SINK_TLS_FLAG' '-p "$ZOT_PUSH_TOKEN" $SINK_TLS_FLAG'; s8_judge "$d"; m1a="$S8_J_REASONS"
+d="$(s8_fresh m1b)"; s8_edit "$d/$S8_ENGINE" '-u "$GHCR_USER" --password-stdin' '-u "$GHCR_USER" -p "$GHCR_TOKEN"'; s8_judge "$d"; m1b="$S8_J_REASONS"
+if [[ "$m1a" == "bad:$S8_ENGINE" && "$m1b" == "bad:$S8_ENGINE" ]]; then row "S8 mutation 1: reverting either engine login (sink, GHCR) to -p \"\$X\" is RED, reason bad:$S8_ENGINE and nothing else" ok
+else row "S8 mutation 1: an engine login reverted to -p argv was not judged exactly bad:$S8_ENGINE" fail "sink='$m1a' ghcr='$m1b'"; fi
+
+# --- mutation 2: every spelling of the password option, in the engine's own line and in option orders a regex would miss -------------
+m2=""; n2=0
+for v in '--password "$ZOT_PUSH_TOKEN"' '--password=$ZOT_PUSH_TOKEN' '-p"$ZOT_PUSH_TOKEN"' '-pXYZ' '-up "$ZOT_PUSH_TOKEN"'; do
+  n2=$((n2 + 1)); d="$(s8_fresh m2-$n2)"; s8_edit "$d/$S8_ENGINE" '--password-stdin $SINK_TLS_FLAG' "$v \$SINK_TLS_FLAG"; s8_judge "$d"; [[ "$S8_J_REASONS" == "bad:$S8_ENGINE" ]] || m2+=" [$v => $S8_J_REASONS]"
+done
+for v in 'docker login -p "$X" -u u registry.example.test:5000' 'docker --config "$D" login -u u -p "$X" registry.example.test:5000' 'crane --insecure auth login -u u -p "$X" registry.example.test:5000'; do
+  n2=$((n2 + 1)); d="$(s8_fresh m2-$n2)"; s8_put "$d" scripts/extra-a.sh "$v"; s8_judge "$d"; [[ "$S8_J_REASONS" == "bad:scripts/extra-a.sh" ]] || m2+=" [$v => $S8_J_REASONS]"
+done
+if [[ -z "$m2" ]]; then row "S8 mutation 2: the long forms, the glued forms, a short cluster (-up), -p before the host and global flags before the subcommand are each RED, reason bad:<that file>" ok
+else row "S8 mutation 2: a password-option spelling or an option order was not judged bad" fail "$m2"; fi
+
+# --- mutations 4, 5: a -p on a continuation line, and --password-stdin TOGETHER with -p ------------------------------------------
+d="$(s8_fresh m4)"; s8_edit "$d/$S8_CONT" '--password-stdin >/dev/null 2>&1 || verify_fail pull-login' '-p "$ZOT_PULL_TOKEN" >/dev/null 2>&1 || verify_fail pull-login'; s8_judge "$d"
+if [[ "$S8_J_REASONS" == "bad:$S8_CONT" ]]; then row "S8 mutation 4: a -p on the CONTINUATION line of a backslash-split \"\$DOCKER_BIN\" login is RED, reason bad:$S8_CONT (the per-file join sees it)" ok
+else row "S8 mutation 4: a -p on a continuation line was not judged bad" fail "reasons='$S8_J_REASONS'"; fi
+d="$(s8_fresh m5)"; s8_edit "$d/$S8_ENGINE" '--password-stdin $SINK_TLS_FLAG' '--password-stdin -p "$ZOT_PUSH_TOKEN" $SINK_TLS_FLAG'; s8_judge "$d"
+if [[ "$S8_J_REASONS" == "bad:$S8_ENGINE" ]]; then row "S8 mutation 5: --password-stdin TOGETHER with -p (the precondition met, the property broken) is RED, reason bad:$S8_ENGINE" ok
+else row "S8 mutation 5: --password-stdin alongside -p was not judged bad" fail "reasons='$S8_J_REASONS'"; fi
+
+# --- mutation 7: a SECOND member after a compliant first, on the next line and on the SAME line ----------------------------------
+d="$(s8_fresh m7)"
+s8_put "$d" scripts/extra-b.sh "$(printf '%s\n%s' "printf '%s' \"\$T\" | docker login h.example.test:5000 -u u --password-stdin" 'docker login h.example.test:5000 -u u -p "$T"')"
+s8_judge "$d"
+if [[ "$S8_J_REASONS" == "bad:scripts/extra-b.sh" && "$S8_J_SITES" -eq $((S8_REAL_SITES + 2)) ]]; then row "S8 mutation 7: a compliant login followed by a -p login in the same new file is RED for that file, and both are counted (the second member is not shadowed by the first)" ok
+else row "S8 mutation 7: the second member of a new file was not judged bad, or the compliant first was not counted" fail "reasons='$S8_J_REASONS' sites=$S8_J_SITES want=$((S8_REAL_SITES + 2))"; fi
+m7b=""; n7=0
+for v in 'printf %s "$A" | docker login h1.example -u u --password-stdin && docker login h2.example -u u -p "$B"' 'docker login h1.example -u u --password-stdin; docker login h2.example -u u -p "$B"' 'echo "step #1"; docker login h.example -u u -p "$B"'; do
+  n7=$((n7 + 1)); d="$(s8_fresh m7b-$n7)"; s8_put "$d" scripts/extra-d.sh "$v"; s8_judge "$d"
+  [[ "$S8_J_REASONS" == "bad:scripts/extra-d.sh" && "$(s8_recs "$d" scripts/extra-d.sh "")" -ge 1 && "$(s8_recs "$d" scripts/extra-d.sh 1)" -eq 1 ]] || m7b+=" [$v => $S8_J_REASONS]"
+  case "$n7" in 1|2) [[ "$(s8_recs "$d" scripts/extra-d.sh "")" -eq 2 ]] || m7b+=" [$v => the compliant first login was not split off and counted]" ;; esac
+done
+if [[ -z "$m7b" ]]; then row "S8 mutation 7b: a -p login AFTER a compliant one on the same line (&&, ;) and after a quoted '#' earlier on the line is RED" ok
+else row "S8 mutation 7b: a same-line second invocation hid a -p login" fail "$m7b"; fi
+
+# --- evasion shapes the review found: each is a password on argv that a looser scanner reads as clean or as nothing -----------------
+m_ev=""; n_ev=0
+for v in 'docker login ghcr.io -u $(id -un) -p "$X"' 'crane auth login ghcr.io -u $(< f) -p "$X"' 'docker login ghcr.io -u u -p "$(cat /run/secrets/x)"' 'docker login -u u -p "$X"' 'docker login -u u --password "$X"' \
+         'docker login ghcr.io -u ${{ github.actor }} -p "$X"' 'docker login -u "a;b" -p "$X" host' 'docker login host >/tmp/o -p "$X"' 'docker login host &>/dev/null -p "$X"' 'docker login host 2>&1 -p "$X"' \
+         'podman login --authfile /x -p "$X" host' 'bash -c "docker login -u u -p $X host"' 'bash -lc "docker login -u u -p $X host"' 'eval "docker login -u u -p $X host"' \
+         'ssh h "docker login -u u -p $X host"' 'ssh -o BatchMode=yes root@h "docker login -u u -p $X host"' 'os.system("docker login -u u -p x host")' 'docker login <your registry> -p "$X" host' "run: 'docker login -u u -p \"\$X\" host'" 'OUT=`docker login -u u -p "$X" host`' 'execSync(`docker login -u u -p ${t} host`)' \
+         '/usr/bin/docker login -u u -p "$X" host' 'crane_capture o e auth login host -u u -p "$X"' 'X="$(printf %s "$T" | docker login host -u u -p "$T")"'; do
+  n_ev=$((n_ev + 1)); d="$(s8_fresh ev-$n_ev)"; s8_put "$d" scripts/extra-e.sh "$v"; s8_judge "$d"; [[ "$S8_J_REASONS" == "bad:scripts/extra-e.sh" ]] || m_ev+=" [$v => $S8_J_REASONS]"
+done
+if [[ -z "$m_ev" ]]; then row "S8 evasion shapes: each construct sits BEFORE the -p so a mis-tokenised tail loses it: a \$( ) user, a command-substitution password, a host-less login, a \${{ }} expression, a quoted ;, a redirection (>, &>, 2>&1) before -p, a valued option, bash -c and -lc, eval, ssh, a YAML run: value, a backtick span, an exec call, a path verb, a wrapper and a login inside \$( ) are each RED" ok
+else row "S8 evasion shapes: a password on argv was judged clean or unseen" fail "$m_ev"; fi
+
+# --- mutation 8: dispatch and floor (scan roots broken, the verb renamed, one site file removed) ------------------------------------
+m8=""
+d="$(s8_fresh m8a)"; rm -rf "${d:?}/apps" "${d:?}/scripts" "${d:?}/.github" "${d:?}/plugins"; s8_judge "$d"; s8_has floor && [[ "$S8_J_SITES" -eq 0 ]] || m8+=" [roots broken => '$S8_J_REASONS' sites=$S8_J_SITES]"
+d="$(s8_fresh m8b)"; s8_edit "$d/$S8_ENGINE" '$CRANE auth login' '$KRANE auth login' 2; s8_judge "$d"; s8_has floor && [[ "$S8_J_SITES" -eq $((S8_REAL_SITES - 2)) ]] || m8+=" [verb renamed => '$S8_J_REASONS' sites=$S8_J_SITES]"
+d="$(s8_fresh m8c)"; rm -f "${d:?}/${S8_CONT:?}"; s8_judge "$d"; s8_has floor || m8+=" [site file removed => '$S8_J_REASONS']"
+if [[ -z "$m8" ]]; then row "S8 mutation 8: scan roots broken (0 sites), the engine's verb renamed past the verb match (the sites vanish), and one site file removed are each RED, reason floor" ok
+else row "S8 mutation 8: a dispatch or floor mutation was not judged floor" fail "$m8"; fi
+
+# --- must-pass inputs that are NOT invocations (prose, patterns, aliases, comments): zero BAD records -----------------------------
+d="$(s8_fresh pass1)"
+s8_put "$d" scripts/prose.sh "$(cat <<'S8PASS'
+description: 'Bring up a cloudflared TCP bridge to the private-net zot registry so a GH runner can reach it, and (unless skipped) docker login to it'
+          echo "::error::docker login to zot (127.0.0.1:5000) failed over the CF-tunnel bridge. Read the cloudflared log below."
+    logger -t "$LOG_TAG" "ZOT_GATE: active — docker login $ZOT_REGISTRY_URL ok (zot-primary)"
+    logger -t "$LOG_TAG" "ZOT_GATE: docker login $ZOT_REGISTRY_URL FAILED class=$zclass http=${zhttp:-none} — no pull path (zot login failed)"
+  if grep -qE '(ZOT_GATE|PRELUDE): docker login .* FAILED' <<<"$line" \
+     && true; then :; fi
+for tok in 'docker push' 'cosign' 'crane' 'id-token' 'docker login' 'login-action'; do :; done
+# token free of chars that break `docker login -p` / htpasswd.
+echo "Use docker login registry -u me -p secret"
+printf 'docker login -u u -p pw r.io\n'
+grep -q "docker login -p" file
+alias dl='docker login r.io -u u -p t'
+echo 'Run `docker login -p x` to see'
+grep -qc "docker login -p" file
+# docker login r.io -u u -p t
+docker login --help
+docker logout r.io
+S8PASS
+)"
+s8_put "$d" plugins/prose.md 'Never write `docker login -u u -p "$T"`; use `--password-stdin`'
+if [[ "$(s8_recs "$d" scripts/prose.sh 1)" -eq 0 && "$(s8_recs "$d" plugins/prose.md 1)" -eq 0 ]]; then row "S8 must-pass: prose and pattern lines that merely MENTION docker login (the action description, an ::error:: echo, the ci-deploy logger lines, a grep pattern, a token-list loop, an echo, a printf, an alias, a single-quoted backtick, grep -qc, a markdown inline-code warning, a comment, --help, logout) are not invocations, so none is judged bad" ok
+else row "S8 must-pass: a prose or pattern mention of docker login was judged a password-on-argv login" fail "$(s8_scan "$d" | awk -F'\t' '$1 == "scripts/prose.sh" && $4 == 1 { print $2 }' | tr '\n' ' ')"; fi
+m_ok=""; n_ok=0
+for v in 'printf %s "$T" | docker login --insecure -u u h.example.test:5000 --password-stdin' 'printf %s "$T" | docker login h.example.test:5000 -u u --password-stdin && mkdir -p x' \
+         'printf %s "$T" | docker login --password-stdin -u u h.example.test:5000' 'printf %s "$T" | docker login h.example.test:5000 -u ${{ github.actor }} --password-stdin' \
+         'printf %s "$T" | docker login h.example.test:5000 -u u --password-stdin &>/dev/null' 'printf %s "$T" | docker login h.example.test:5000 -u u --password-stdin 2>&1 | tee x' \
+         'aws ecr get-login-password | docker login --username AWS --password-stdin r.io' \
+         'podman login --authfile /x -u u --password-stdin h.example.test:5000 < tok.txt' 'podman login --tls-verify false -u u --password-stdin h.example.test:5000' \
+         'docker login h.example.test:5000 -u u --password-stdin <tok.txt && mkdir -p out' 'docker login h.example.test:5000 -ujpierre --password-stdin'; do
+  n_ok=$((n_ok + 1)); d="$(s8_fresh pass2-$n_ok)"; s8_put "$d" scripts/extra-c.sh "$v"
+  n="$(s8_recs "$d" scripts/extra-c.sh "")"; b="$(s8_recs "$d" scripts/extra-c.sh 1)"
+  [[ "$n" -eq 1 && "$b" -eq 0 ]] || m_ok+=" [$v => sites=$n bad=$b]"
+done
+if [[ -z "$m_ok" ]]; then row "S8 must-pass: compliant variants (an extra --insecure, a trailing && mkdir -p x, --password-stdin before the host, a \${{ }} user, &>, 2>&1 | tee, an ECR password feeder, a valued --authfile, --tls-verify false, a <file redirect and a glued -ujpierre username) are each counted once and judged GREEN" ok
+else row "S8 must-pass: a compliant --password-stdin variant was mis-counted or judged bad" fail "$m_ok"; fi
+# --- exclusion rules: a -p login under each excluded path is not judged; under a similarly named non-excluded path it IS -------------
+m_x=""; n_x=0
+for pair in 'x/test/a.sh:0' 'x/tests/a.sh:0' 'x/fixtures/a.sh:0' 'a.test.ts:0' 'knowledge-base/a.sh:0' 'docs/a.md:0' 'plugins/a.md:1' 'scripts/testing/a.sh:1' 'apps/web-platform/a.ts:1'; do
+  n_x=$((n_x + 1)); d="$(s8_fresh excl-$n_x)"; s8_put "$d" "${pair%%:*}" 'docker login -u u -p "$X" host'
+  [[ "$(s8_recs "$d" "${pair%%:*}" 1)" -eq "${pair##*:}" ]] || m_x+=" [${pair%%:*} => want ${pair##*:} bad]"
+done
+if [[ -z "$m_x" ]]; then row "S8 exclusions: a -p login under test/, tests/, fixtures/, *.test.*, knowledge-base/ or a .md outside plugins/ is not scanned, and the same login under plugins/*.md, scripts/testing/ and apps/ is" ok
+else row "S8 exclusions: an exclusion rule hid a login it should not, or missed one it should" fail "$m_x"; fi
+echo "=== stage S8: Guard 3 rows (registry login password off argv: tokenised derived census, floor, mutations, evasion shapes, must-pass inputs) done ==="
+
+# =====================================================================================
 # VERDICT. The floor and the conservation check are reported with printf + exit 1, never
 # through the helpers they guard. Rows only grow as probes convert, so the floor is a LOWER bound.
 # =====================================================================================
@@ -7639,7 +8046,8 @@ SELFTEST_PASSES=0
 # 802 -> 808 at PR B (#10119, registry template): S6 registry site rows now identity rows, the ceiling row also judges a grow-by-one allowlist, mutation 8 (each registry site back to argv) and the S6-REG heartbeat scan (real tree, three mutations, one must-pass): measured (808 passed, 0 failed). 808 -> 811 at review (S6-REG mutations 5-7: comment-backslash, absolute curl path, continuation split).
 # 811 -> 819 at PR C (#10120, probe scripts of #10093): four converted-script rows (the inngest body and the three probes join S6H_CONVERTED), mutations 1b (inngest body), 1c (the three probes), 3c (a probe) and the inngest guard-class mutation; the stale and growth mutations are re-anchored, the ceiling row is 0 == 0: measured (819 passed, 0 failed).
 # 819 -> 823 at the PR C review round: the guard-copy parity row and its mutation row, and two scanner-reach rows (bare HEARTBEAT_URL; path-prefixed, backslashed and backtick curl): measured (823 passed, 0 failed).
-EXPECTED_TESTS=823
+# 823 -> 840 at #9757 (stage S8, Guard 3: registry login password off argv, tokenised derived census): the 15 S8 rows. The tree measured 825 before S8 (the floor had 2 rows of slack), so the new floor is the measured total (840 passed, 0 failed).
+EXPECTED_TESTS=840
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2

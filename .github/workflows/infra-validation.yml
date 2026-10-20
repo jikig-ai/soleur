@@ -157,6 +157,16 @@ on:
       # its admission literal and its 30-odd renders. Same class as the two comments above and
       # as #8378 ("the gate that caught it was the one suite I had no reason to run").
       - "scripts/cutover-inngest.sh"
+      # (#10136) inngest-link-flip-workflow.test.sh asserts the flip workflow's posture (dispatch-only, least privilege,
+      # the revert step's exact `if`) and drives its body, scripts/inngest-link-flip.sh, against stubbed gh/curl. Neither
+      # file is under apps/*/infra/**, so a PR editing only one of them would skip the suite whose job is to turn that
+      # edit red - the same defect class as the #6178 and #8079 entries above. (apply-web-platform-infra.yml, which holds
+      # the Tier-B flag job the suite also reads, is already listed.)
+      - ".github/workflows/inngest-link-flip.yml"
+      - "scripts/inngest-link-flip.sh"
+      # The flip's redeploy is the shared driver (track.sh), which the same suite runs for real against a degraded
+      # fan-out frame, and its roster literal is pinned by web-hosts-fanout-parity.test.sh (under apps/*/infra/**).
+      - ".github/actions/dispatch-web-redeploy/track.sh"
       - "tests/scripts/lib/inngest-host-dark-gate.sh"
       - "scripts/lib/betterstack-read-classify.sh"
       # (#8846) the shared probe-row predicate the dark-gate lib, the cutover liveness counters and
@@ -200,6 +210,9 @@ on:
       # skill's (H2). A docs-only heading rename or runbook command edit would otherwise skip the suite. PR list only:
       # the push list above is deliberately narrower.
       - "knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md"
+      # (#9927 item 5) inngest-redis-luks-import-rehearsal.test.sh pins that this ADR's "Terraform state entry lost"
+      # row names it (and the runbook row above). PR list only, like the runbook entry.
+      - "knowledge-base/engineering/architecture/decisions/ADR-282-sole-copy-luks-volume-protection-set.md"
       - "plugins/soleur/skills/postmerge/SKILL.md"
       # (#3366) supabase-advisor/scan-workflow.test.sh reads all of these. The
       # guard's whole job is to catch a gate that looks present but does nothing
@@ -595,8 +608,9 @@ jobs:
     # annotations — attribution is per-suite, per-leg, never anonymous. Full width
     # is deliberate here: #7376's -P4 flake was the tmpfs/live-tree collision class
     # (fixed at source; per-suite bounds + named RED bound what remains), and
-    # main-health-monitor keeps JOBS:1 because a spurious P1 page is a worse
-    # failure there than a slow leg is here.
+    # main-health-monitor now runs its infra step at the default width too (#7432: these
+    # legs are its -P 4 evidence, though each leg runs about a quarter of the set; #7423 fixed the
+    # live-tree collision, #7376 is still open); only its tests step keeps a JOBS pin.
     #
     # REGISTRATION IS NOW THE FILESYSTEM: presence under apps/web-platform/infra/**.test.sh
     # IS registration (ADR-252). The runner derives its execute set by `git ls-files` glob —

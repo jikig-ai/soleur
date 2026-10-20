@@ -128,6 +128,15 @@ const EXCLUSION_ALLOWLIST = new Map<string, string>([
     "scoped -replace of a Cloudflare Access service token (no server → stock-preflight is a no-op); its own blast-radius gate FORBIDS every hcloud_*/terraform_data/tls_private_key address, and gating it on server stock would fail-close the one remedy available when stock is zero (ADR-154)",
   ],
   [
+    "inngest-link-flag",
+    // #10136 Tier-B flag actuator (job `inngest_link_flag`). Its single `-target` is
+    // `doppler_secret.inngest_link_tls` (a Doppler secret in soleur/prd, project and config are literals,
+    // so the plan closure holds no other address). No hcloud_server, no volume, nothing from Hetzner's
+    // pool, so stock-preflight-gate.sh (which selects hcloud_server) is out-of-scope; the job's own gate
+    // admits only that one address and fails on anything else, which makes the exclusion a live refusal.
+    "flag secret create/update/delete (no server -> stock-preflight is a no-op); its own plan gate admits exactly doppler_secret.inngest_link_tls[0] and aborts on any other address",
+  ],
+  [
     "vector-redeliver",
     // #7542 scoped delivery of vector.toml to the RUNNING web-1 (job `vector_redeliver`). Its
     // single `-target` is `terraform_data.journald_persistent`, and its own plan gate permits

@@ -107,7 +107,7 @@ export function isAdoptableScratchRoot(root: string): boolean {
     if (Number(pid) <= 1) return false;
     try {
       process.kill(Number(pid), 0);
-    } catch (e) {
+    } catch {
       // ESRCH: owner is dead. EPERM: a live pid we may not signal is another uid's, which cannot be
       // the owner of a same-uid marker (tc_owner_alive makes the same call).
       return false;

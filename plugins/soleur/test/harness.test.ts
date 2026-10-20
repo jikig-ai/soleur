@@ -35,6 +35,13 @@ beforeEach(() => {
     GROK_SUBAGENTS: process.env.GROK_SUBAGENTS,
     DEVIN: process.env.DEVIN,
     DEVIN_HOME: process.env.DEVIN_HOME,
+    // OpenCode injects these into every tool-spawned child (measurements.md §1.1). The suite
+    // itself runs inside an OpenCode session, so without this sweep every arm below would
+    // observe a live `OPENCODE=1` it never set.
+    OPENCODE: process.env.OPENCODE,
+    OPENCODE_SESSION_ID: process.env.OPENCODE_SESSION_ID,
+    OPENCODE_TERMINAL: process.env.OPENCODE_TERMINAL,
+    AI_AGENT: process.env.AI_AGENT,
   };
   delete process.env.CLAUDECODE;
   delete process.env.CODEX_THREAD_ID;
@@ -44,6 +51,10 @@ beforeEach(() => {
   delete process.env.GROK_SUBAGENTS;
   delete process.env.DEVIN;
   delete process.env.DEVIN_HOME;
+  delete process.env.OPENCODE;
+  delete process.env.OPENCODE_SESSION_ID;
+  delete process.env.OPENCODE_TERMINAL;
+  delete process.env.AI_AGENT;
 });
 
 afterEach(() => {
@@ -103,6 +114,42 @@ describe("detectHarness", () => {
     expect(detectHarness(env({ CURSOR_AGENT: "1" }))).toBe("unknown");
     expect(detectHarness(env({ CLAUDECODE: "1", CURSOR_AGENT: "1" }))).toBe("claude");
   });
+
+  test("OPENCODE → opencode", () => {
+    expect(detectHarness(env({ OPENCODE: "1" }))).toBe("opencode");
+  });
+
+  test("the full measured marker set → opencode", () => {
+    expect(
+      detectHarness(
+        env({
+          OPENCODE: "1",
+          OPENCODE_SESSION_ID: "ses_eb832230dffenhEfi6NEWvyp6P",
+          OPENCODE_TERMINAL: "1",
+          AI_AGENT: "opencode",
+        }),
+      ),
+    ).toBe("opencode");
+  });
+
+  test("AI_AGENT alone does not classify — the name is generic (measurements §1.0 caveat)", () => {
+    expect(detectHarness(env({ AI_AGENT: "opencode" }))).toBe("unknown");
+  });
+
+  test("a plain env stays unknown", () => {
+    expect(detectHarness(env({ HOME: "/home/user" }))).toBe("unknown");
+  });
+
+  test("CLAUDECODE wins over OPENCODE (first position preserved)", () => {
+    expect(detectHarness(env({ CLAUDECODE: "1", OPENCODE: "1" }))).toBe("claude");
+  });
+
+  test("OPENCODE wins over a config-path marker so a profile export cannot shadow it", () => {
+    // §1.1 Ordering: GROK_HOME / DEVIN_HOME are installation paths a shell profile can export
+    // into any session; they must not outrank a marker OpenCode injects itself.
+    expect(detectHarness(env({ OPENCODE: "1", GROK_HOME: "/home/user/.grok" }))).toBe("opencode");
+    expect(detectHarness(env({ OPENCODE: "1", DEVIN_HOME: "/home/user/.devin" }))).toBe("opencode");
+  });
 });
 
 describe("normalizeSkillName", () => {
@@ -147,8 +194,17 @@ describe("formatSkillInvocation", () => {
       ["GROK_HOME", "/"],
       ["CODEX_THREAD_ID", "$soleur:"],
       ["DEVIN", "/soleur:"],
+      // OpenCode's form is the BARE id — an empty prefix is asserted explicitly below, and
+      // `toContain("(args:")` still guards the display-form regression.
+      ["OPENCODE", ""],
     ] as const) {
-      for (const k of ["CLAUDECODE", "GROK_HOME", "CODEX_THREAD_ID", "DEVIN"]) delete process.env[k];
+      for (const k of [
+        "CLAUDECODE",
+        "GROK_HOME",
+        "CODEX_THREAD_ID",
+        "DEVIN",
+        "OPENCODE",
+      ]) delete process.env[k];
       process.env[env] = "1";
       const out = formatSkillInvocation("plan", "#123");
       expect(out.startsWith(prefix)).toBe(true);
@@ -170,6 +226,14 @@ describe("formatSkillInvocation", () => {
       "/soleur:one-shot fix auth",
     );
     expect(formatSkillInvocation("brainstorm")).toBe("/soleur:brainstorm");
+  });
+
+  test("opencode formats the bare id — OpenCode's skill name must equal its directory name", () => {
+    process.env.OPENCODE = "1";
+    expect(formatSkillInvocation("soleur:plan")).toBe("plan");
+    expect(formatSkillInvocation("plan", "-x")).toBe("plan -x");
+    // A name already lacking the prefix is unchanged.
+    expect(formatSkillInvocation("brainstorm")).toBe("brainstorm");
   });
 });
 
@@ -217,6 +281,20 @@ describe("invokeSkill", () => {
     expect(inv.instruction).toContain("<promise>DONE</promise>");
     expect(inv.instruction).toContain("Steps 0–8");
   });
+
+  test("opencode loads the bare id and names the canonical SKILL.md", () => {
+    process.env.OPENCODE = "1";
+    const inv = invokeSkill("one-shot", "implement Phase F");
+
+    expect(inv.harness).toBe("opencode");
+    expect(inv.tool).toBe("skill");
+    expect(inv.command).toBe("one-shot");
+    expect(inv.args).toBe("implement Phase F");
+    // The bare id is the registration key; the canonical file is how a bare id stays unambiguous.
+    expect(inv.instruction).toContain("plugins/soleur/skills/one-shot/SKILL.md");
+    expect(inv.instruction).not.toContain("soleur:one-shot");
+    expect(inv.instruction).toContain("<promise>DONE</promise>");
+  });
 });
 
 describe("spawnAgent", () => {
@@ -256,6 +334,24 @@ describe("spawnAgent", () => {
     expect(spawn.instruction).toContain("run_subagent");
     expect(spawn.prompt).toContain("devin/INSTRUCTIONS.md");
   });
+
+  test("opencode uses the subagent tool with the path-derived agent id", () => {
+    process.env.OPENCODE = "1";
+    delete process.env.CLAUDECODE;
+    const spawn = spawnAgent("soleur:engineering:cto", "Plan the migration");
+
+    expect(spawn.harness).toBe("opencode");
+    expect(spawn.tool).toBe("subagent");
+    // The id IS the path: OpenCode ignores frontmatter `name:` (measurements §3.0). This field is
+    // the actual spawn argument, so it is the guard that matters.
+    expect(spawn.agent).toBe("engineering/cto");
+    expect(spawn.instruction).toContain("subagent");
+    // Measured wire name (§12.8). Calling it Claude's Task tool tells the model to reach for a
+    // tool this harness does not have.
+    expect(spawn.instruction).not.toContain("Task tool");
+    expect(spawn.instruction).toContain("engineering/cto");
+    expect(spawn.prompt).toContain("Plan the migration");
+  });
 });
 
 describe("formatAgentSpawn", () => {
@@ -281,6 +377,18 @@ describe("formatAgentSpawn", () => {
     delete process.env.GROK_HOME;
     const text = formatAgentSpawn("clo", "prompt body");
     expect(text).toContain("run_subagent");
+    expect(text).toContain("prompt body");
+  });
+
+  test("opencode mentions the Task tool with the path id, not the registry id", () => {
+    process.env.OPENCODE = "1";
+    delete process.env.CLAUDECODE;
+    const text = formatAgentSpawn("soleur:engineering:cto", "prompt body");
+    expect(text).toContain("subagent");
+    // The spawn ARGUMENT is the path form; the canonical id is named only for traceability,
+    // mirroring the Grok arm's "spawn key; canonical id" shape.
+    expect(text).toMatch(/subagent_type `engineering\/cto`/);
+    expect(text).toContain("soleur:engineering:cto");
     expect(text).toContain("prompt body");
   });
 });
@@ -320,6 +428,28 @@ describe("routingInstructions", () => {
     expect(md).not.toMatch(/grok --trust/);
   });
 
+  test("the unknown arm defaults to Claude conventions and names Claude's Tool tool, not OpenCode's", () => {
+    // Collateral-edit pin (review fix, 2026-10-19): an OpenCode-scoped change once swept this
+    // arm to `Agents: subagent.` while the same line still said "default to Claude conventions".
+    const md = routingInstructions("unknown");
+    expect(md).toContain("default to Claude conventions");
+    expect(md).toContain("Agents: Task tool.");
+    expect(md).not.toContain("Agents: subagent.");
+  });
+
+  test("opencode does not fall through to the unknown text", () => {
+    const md = routingInstructions("opencode");
+    expect(md).not.toContain("Harness: unknown");
+    expect(md).not.toContain("default to Claude conventions");
+    expect(md).toContain("Harness: OpenCode");
+    expect(md).toContain("opencode/INSTRUCTIONS.md");
+    expect(md).toContain("mode: subagent");
+    expect(md).toContain("Workflow fidelity");
+    // It must not name Claude's Skill tool as the mechanism — OpenCode's surface is the
+    // built-in `skill` tool keyed on a bare id.
+    expect(md).not.toContain("Skill tool");
+  });
+
   test("cursor names /go and /soleur-plan and does not name claude tools", () => {
     const md = routingInstructions("cursor");
     expect(md).toContain("/go");
@@ -343,7 +473,7 @@ describe("routingInstructions", () => {
 
 describe("pollInstructions", () => {
   test("every harness carries the queue-mode exception beside its BEHIND instruction (#9710)", () => {
-    for (const h of ["claude", "grok", "codex", "devin", "unknown"] as const) {
+    for (const h of ["claude", "grok", "codex", "devin", "opencode", "unknown"] as const) {
       expect(pollInstructions(h)).toContain("[ship.phase7.queue_wait]");
     }
   });
@@ -377,6 +507,12 @@ describe("pollInstructions", () => {
     // while nothing will ever wake it. Absence is the property; a `toContain`
     // on the replacement cannot express it.
     expect(md).not.toContain("get_output");
+  });
+
+  test("opencode poll names the measured shell tool, never Claude's bash tool", () => {
+    const md = pollInstructions("opencode");
+    expect(md).toContain("**shell** tool");
+    expect(md).not.toContain("**bash** tool");
   });
 
   test("cursor poll is the behind-sync stop and names no wait tool", () => {

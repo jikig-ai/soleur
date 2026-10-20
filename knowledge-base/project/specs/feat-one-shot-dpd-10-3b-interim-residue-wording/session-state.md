@@ -30,3 +30,8 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan, soleur:legal:clo, soleur:pr
 - Gates green: check-tc-document-sha, lint-legal-mirror-drift-baseline, lint-legal-registers, lint-legal-scope-block-placement, probe-legal-corpus-truth, technical-ruling-gate, 4 vitest files (64 tests), markdownlint.
 - Known plan-vs-reality notes: AC4's no-"2.6.0" grep still matches two dated historical statements in compliance-posture.md (append-only, left as is); AC6's 450-character proximity does not hold for the PA-36 (f) "Target: 2026-10-22" mention, which is governed by the end-of-cell marker (CLO ruled acceptable).
 - Stop rule: Operator Holds in the plan make ship stop at the draft PR; no DONE promise.
+
+## As-of refresh 2026-10-20 (after merging origin/main)
+- read_utc 2026-10-20T07:58Z, plain reads, no dispatch: one volume soleur-git-data-store (id 106867358), attached, protection.delete=false, latest action attach_volume 2026-10-14; git-data-cutover.yml run list (limit 1000) 17 runs, none non-completed, no wipe, wipe_finish or snapshot_clear title, no successful wipe_check; newest run 39387092654 "git-data redeploy" success 2026-10-20T07:31Z (wipe job skipped). Doppler prd: GIT_DATA_STORE_ENABLED exit 0 value false; GIT_DATA_LUKS_CUTOVER_AT exit 0 empty. PR isDraft=true, mergeQueueEntry=null.
+- Flip run 39253824891 (2026-10-19) wrote the flag true 12:41:54Z, failed the per-host assertion 12:55:45Z, finalizer unwound by 12:56:43Z. CTO note on the window and the mounted device is pending (owner-visible).
+- CLO re-attestation 2026-10-20: APPROVED WITH EXACT EDITS, applied; see the attestation addendum.
