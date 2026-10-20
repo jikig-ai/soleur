@@ -59,4 +59,4 @@ When a review fix narrows a diagnostic (a dump, a log filter, a capture) to prot
 
 - PR #10637, tracker #9639, series #9217
 - `knowledge-base/project/learnings/security-issues/2026-10-19-a-hostile-fixture-must-put-the-payload-in-the-value-the-fix-reads.md` (F5: the sibling hostile-fixture lesson)
-- `knowledge-base/project/specs/feat-one-shot-9639-f6-nic-guard-url-after-refusal/decision-challenges.md` (CTO rulings), `session-state.md` (Review Phase ledger)
+- `knowledge-base/project/specs/archive/20261020-063243-feat-one-shot-9639-f6-nic-guard-url-after-refusal/decision-challenges.md` (CTO rulings), `session-state.md` in the same archived directory (Review Phase ledger)
