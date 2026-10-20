@@ -167,10 +167,12 @@ export function classifySandboxStartupError(
 
 /** A sandbox denial found in a Bash `tool_result`'s output (#10032 follow-up). */
 export interface BashSandboxFailure {
-  errorCode: "proc_mount_eperm" | "bwrap_eperm" | "helper_userns_eperm";
+  errorCode: "proc_mount_eperm" | "bwrap_eperm" | "helper_userns_eperm" | "helper_step_eperm";
   /** ONLY the matched line, scrubbed and capped — never the surrounding tool output. */
   matchedLine: string;
   sdkVersion: string | null;
+  /** The helper step literal for `helper_*` codes (an exact member of `HELPER_STEPS`); absent for bwrap codes. */
+  helperStep?: string;
 }
 
 /** Longest matched line forwarded to Sentry. */
@@ -182,11 +184,60 @@ const BASH_MATCHED_LINE_CAP = 300;
 const BASH_LINE_SCAN_CAP = 2000;
 const BASH_BWRAP_TOKEN = /\b(?:bwrap|bubblewrap)\b/i;
 // The SDK's command-side `apply-seccomp` helper (#10445) prints its own `apply-seccomp: <step>: <errno>` line with no
-// bwrap token. Matched as the WHOLE line, and only for the `unshare(CLONE_NEWUSER)` step this code is named for:
-// (a) another helper step failing with EPERM is a different fault that must not page with this name (residual,
-// tracked in #10455), and (b) a line that must match end to end carries no tenant-chosen tail, so the emitted
-// `matchedLine` is a fixed string a forged line cannot extend.
-const BASH_APPLY_SECCOMP_LINE = /^[ \t]*apply-seccomp: unshare\(CLONE_NEWUSER\): (?:Operation not permitted|EPERM)[ \t]*$/;
+// bwrap token. Matched as the WHOLE line against an EXACT-step allowlist (no charset): a line that must match end to
+// end carries no tenant-chosen tail, so the emitted `matchedLine` is a fixed string a forged line cannot extend.
+// Only EPERM counts; EACCES / EINVAL helper failures stay unclassified (a recorded residual, #10455).
+//
+// The step list is MEASURED, not recalled: the 16 `apply-seccomp: <step>` literals of the helper embedded in the
+// vendored `claude` binary (claude-agent-sdk 0.3.284; identical in claude-code 2.1.293), read from its string pool,
+// plus the runtime order recorded with an LD_PRELOAD interposer on 2026-10-19. A test (sandbox-startup-classifier
+// .test.ts, Guard 2) re-reads the binary and reds when this list and the binary disagree in either direction.
+const HELPER_USERNS_STEP = "unshare(CLONE_NEWUSER)";
+
+/**
+ * Steps that run BEFORE the tenant command starts (2026-10-19 review ruling; rationale: canary-probe-set.md, the helper-step list under "SDK Bash smoke and the helper_userns_eperm denial"). Measured runtime order (helper
+ * process, then the PID-namespace init it forks): unshare(NEWPID|NEWNS) attempt, unshare(CLONE_NEWUSER), write
+ * setgroups / uid_map / gid_map, unshare(NEWPID|NEWNS) after userns, `fork` (the init), then in the init
+ * prctl(PR_SET_DUMPABLE), mount(MS_PRIVATE), mount(/proc), prctl(PR_CAP_AMBIENT_CLEAR_ALL), `fork(worker)`, and in
+ * the worker prctl(PR_SET_NO_NEW_PRIVS), prctl(PR_SET_SECCOMP) and execvp of the tenant command. Every one of these
+ * fails before the tenant command could have produced output, so only these may trigger the user-facing notice.
+ * Flip `execvp` out of this list only if a measured argv shows the helper execs the tenant argv directly.
+ */
+export const HELPER_STEPS_PRE_COMMAND: readonly string[] = [
+  HELPER_USERNS_STEP,
+  "write /proc/self/setgroups (nested userns is capability-restricted; caller must provide CAP_SYS_ADMIN)",
+  "write /proc/self/uid_map",
+  "write /proc/self/gid_map",
+  "unshare(CLONE_NEWPID|CLONE_NEWNS)",
+  "unshare(CLONE_NEWPID|CLONE_NEWNS) after userns",
+  "fork",
+  "prctl(PR_SET_DUMPABLE)",
+  "mount(MS_PRIVATE)",
+  "mount(/proc)",
+  "prctl(PR_CAP_AMBIENT_CLEAR_ALL)",
+  "fork(worker)",
+  "prctl(PR_SET_NO_NEW_PRIVS)",
+  "prctl(PR_SET_SECCOMP)",
+  "execvp",
+];
+
+/** Steps that run AFTER the tenant command: classified (so they page) but never rewritten into the notice.
+ *  `waitpid` is printed after the command ran, so its line can sit behind real command output and a forged copy
+ *  proves nothing. */
+export const HELPER_STEPS_POST_COMMAND: readonly string[] = ["waitpid"];
+
+/** Every helper step that takes a `: <strerror>` suffix: the exact-match allowlist. */
+export const HELPER_STEPS: readonly string[] = [
+  ...HELPER_STEPS_PRE_COMMAND,
+  ...HELPER_STEPS_POST_COMMAND,
+];
+
+const HELPER_STEP_SET: ReadonlySet<string> = new Set(HELPER_STEPS);
+const HELPER_PRE_COMMAND_SET: ReadonlySet<string> = new Set(HELPER_STEPS_PRE_COMMAND);
+// Captures the step; membership in HELPER_STEP_SET is the exact-match check, so no charset reasoning is needed.
+const BASH_APPLY_SECCOMP_LINE = /^[ \t]*apply-seccomp: (.{1,160}): (?:Operation not permitted|EPERM)[ \t]*$/;
+// bwrap prints its own diagnostics as `bwrap: <message>`; anything else that merely contains the token is tenant output.
+const BWRAP_OWN_LINE = /^\s*bwrap: /;
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 // EVERY absolute path token (a solo workspace's id IS the user id, and /home, /var/lib, /tmp paths are tenant-adjacent
 // too) except bwrap's own `/newroot/{proc,dev,sys,tmp}` targets, which carry the diagnostic. Linear: it only starts at
@@ -222,27 +273,72 @@ export function classifyBashSandboxFailure(
     const raw = full.slice(0, BASH_LINE_SCAN_CAP);
     // `bwrap`/`bubblewrap` or the line-anchored `apply-seccomp:` helper only: a bare `unshare` or `seccomp` line is
     // what an agent's OWN `unshare -U` under the sandbox prints (the canary expects that EPERM), not a sandbox failure.
-    const isHelperLine = BASH_APPLY_SECCOMP_LINE.test(raw);
+    // A helper line longer than the scan cap is never a helper line: the cap would otherwise hide a tail behind padding.
+    const helperStep =
+      full.length <= BASH_LINE_SCAN_CAP ? (BASH_APPLY_SECCOMP_LINE.exec(raw)?.[1] ?? null) : null;
+    const isHelperLine = helperStep !== null && HELPER_STEP_SET.has(helperStep);
     if (!isHelperLine && !BASH_BWRAP_TOKEN.test(raw)) continue;
     if (!OPERATION_NOT_PERMITTED.test(raw)) continue;
-    const matchedLine = raw
-      .replace(CONTROL_RE, " ")
-      .replace(UUID_RE, "<uuid>")
-      .replace(ABS_PATH_RE, "<path>")
-      .replace(OPAQUE_TOKEN_RE, "<token>")
-      .trim()
-      .slice(0, BASH_MATCHED_LINE_CAP);
+    // An allowlisted helper line is a FIXED string (exact step, exact errno, nothing else on the line): nothing in it
+    // is tenant data, so it is forwarded as is rather than path-scrubbed (the scrub would turn `/proc/self/uid_map`
+    // into `<path>` and blur which step failed).
+    const matchedLine = isHelperLine
+      ? raw.trim()
+      : raw
+          .replace(CONTROL_RE, " ")
+          .replace(UUID_RE, "<uuid>")
+          .replace(ABS_PATH_RE, "<path>")
+          .replace(OPAQUE_TOKEN_RE, "<token>")
+          .trim()
+          .slice(0, BASH_MATCHED_LINE_CAP);
     return {
       errorCode: isHelperLine
-        ? "helper_userns_eperm"
+        ? helperStep === HELPER_USERNS_STEP
+          ? "helper_userns_eperm"
+          : "helper_step_eperm"
         : /can't mount proc/i.test(raw)
           ? "proc_mount_eperm"
           : "bwrap_eperm",
       matchedLine,
       sdkVersion,
+      ...(isHelperLine ? { helperStep: helperStep as string } : {}),
     };
   }
   return null;
+}
+
+/**
+ * The fixed sentence a tenant sees in place of a raw sandbox error line (#10455 c). It names no mechanism and does
+ * NOT claim the command did not run: a tenant, or a prompt-injected file, can print an exact helper line after a
+ * command that ran (`rm -rf x && echo "<line>"`), so "did not run" would be a false statement in that case.
+ */
+export const BASH_UNAVAILABLE_NOTICE =
+  "Platform notice: command execution is temporarily unavailable on our side. This is a platform issue, not a problem with your project.";
+
+/**
+ * True only when a Bash tool_result is, as a whole, ONE pre-exec platform denial the user should see as the notice:
+ *   - the result is flagged as an error (`is_error`), so a command that exited 0 can never be rewritten,
+ *   - the trimmed output is exactly ONE non-blank line (mixed or multi-line output falls through unchanged),
+ *   - that line is a classified helper line from the PRE-command subset (every step but `waitpid`), or a line that starts with `bwrap: ` and carries EPERM,
+ *   - the line fits the scan cap (a longer line is never rewritten).
+ * A forged single line from a command that ran and exited non-zero can still satisfy this: the residual is accepted
+ * and recorded in the runbook, which is why the notice makes no claim about whether the command ran. The mirror event
+ * (and its page) is independent of this predicate.
+ */
+export function isPreExecSandboxDenialOutput(output: string, isError: boolean | undefined): boolean {
+  if (isError !== true) return false;
+  // Bound before any split: a denial line is short; anything this long is real command output.
+  if (output.length === 0 || output.length > BASH_LINE_SCAN_CAP * 2) return false;
+  const lines = output.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (lines.length !== 1 || lines[0].length > BASH_LINE_SCAN_CAP) return false;
+  const failure = classifyBashSandboxFailure(lines[0], null);
+  if (!failure) return false;
+  if (failure.errorCode === "proc_mount_eperm" || failure.errorCode === "bwrap_eperm") {
+    // The bwrap arm requires the line to START with bwrap's own `bwrap: ` prefix: a tenant command that merely names a
+    // file containing "bwrap" (`rm: cannot remove 'bwrap': Operation not permitted`) must never be rewritten.
+    return BWRAP_OWN_LINE.test(lines[0]);
+  }
+  return failure.helperStep !== undefined && HELPER_PRE_COMMAND_SET.has(failure.helperStep);
 }
 
 // NOTE (CTO ruling, ADR-079): there is deliberately NO stream-phase gate here.

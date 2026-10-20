@@ -39,6 +39,7 @@ import {
   sessionTranscriptDirs,
 } from "@/server/agent-runner-sandbox-config";
 import { buildAgentEnv } from "@/server/agent-env";
+import { checkSeccompAgreement } from "@/server/agent-sandbox-seccomp";
 import { AGENT_SESSION_TMP_ROOT, agentSessionTmpDir } from "@/server/agent-session-tmp";
 import { classifyBashSandboxFailure } from "@/server/sandbox-startup-classifier";
 import { startAnthropicStub, type AnthropicStub } from "./helpers/anthropic-stub";
@@ -47,6 +48,7 @@ import { pointCliAtStub, scrubAmbientCliEnv } from "./helpers/hermetic-cli-env";
 const APP_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const BWRAP_SHIM = join(APP_ROOT, "infra", "bwrap-shim", "bwrap");
 const BWRAP_BPF = join(APP_ROOT, "infra", "bwrap-userns-clone3-deny.bpf");
+const BWRAP_BPF_UNIXDENY = join(APP_ROOT, "infra", "bwrap-userns-clone3-unixdeny.bpf");
 
 const HELPER_EPERM = "apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted";
 
@@ -132,15 +134,21 @@ async function runBash(opts: {
 // the census arm is only meaningful if the probe masks what production masks.
 describe("the docker suite's probe literal tracks the production config (#10445)", () => {
   const probeSrc = readFileSync(join(APP_ROOT, "infra", "lib", "sdk-bash-probe.mjs"), "utf8");
+  // The docker-suite (default) mode's literal only: the file also carries the deploy smoke's production-equal literal, which
+  // test/sdk-bash-probe-parity.test.ts pins separately (there autoAllowBashIfSandboxed is false, as in production).
+  const defaultModeSrc = probeSrc.slice(probeSrc.indexOf("async function runDefault"), probeSrc.indexOf("const SMOKE_INTERNAL_CAP_MS"));
   const literalOf = (key: string): string => {
-    const m = new RegExp(`\\b${key}:\\s*([^,}\\n]+)`).exec(probeSrc);
+    const m = new RegExp(`\\b${key}:\\s*([^,}\\n]+)`).exec(defaultModeSrc);
     expect(m, `the probe no longer carries ${key}`).not.toBeNull();
     return m![1].trim();
   };
 
   it("the probe masks exactly what the production builder masks in the suite container's env (no XDG/TMPDIR, uid, HOME)", () => {
     // The probe derives these from its own process (uid, HOME); the production functions get the same inputs here.
-    expect(probeSrc).toContain('const MASKED_DIRS = ["/tmp/cc-socks", `/tmp/cc-socks-${uid}`, `${HOME}/.claude/projects`];');
+    // The derivation lives in the probe's exported maskedDirs() (also used by the smoke mode); the probe's own parity suite
+    // (test/sdk-bash-probe-parity.test.ts) pins its output to the production functions. Here: the default mode uses it.
+    expect(probeSrc).toContain("const MASKED_DIRS = maskedDirs(uid, HOME);");
+    expect(probeSrc).toContain('return ["/tmp/cc-socks", `/tmp/cc-socks-${uid}`, `${home}/.claude/projects`];');
     expect(probeSrc).toContain("const HOME = process.env.HOME;");
     expect(peerMessagingSocketDirs({}, 1001)).toEqual(["/tmp/cc-socks", "/tmp/cc-socks-1001"]);
     expect(sessionTranscriptDirs({ HOME: "/home/soleur" })).toEqual(["/home/soleur/.claude/projects"]);
@@ -512,3 +520,144 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
   it("per-tenant CLI temp: B cannot find or replay A's credential (A ran `env`); tokenless and wrong-credential requests return 407; the caller's own credential is live", () => scenario(true), 240_000);
   it("CONTROL: with a shared CLI temp (the pre-fix layout) the same scan finds A's credential and the replay is accepted", () => scenario(false), 240_000);
 });
+
+// ---- #10455 (a): the AF_UNIX-deny variant through the real SDK ---------------------------------------------------
+// The variant is selected per session by buildAgentEnv (flag ON, no egress) and loaded by the real shim. Every arm drives
+// the REAL SDK with the REAL builders, so the selector, the config and the shim are the production chain. The flip-to-
+// descope condition (ADR-075 addendum 2026-10-19) is "the variant breaks no-egress Bash": the first arm is that check.
+const PERL_OK = process.platform === "linux" && spawnSync("sh", ["-c", "command -v perl"], { stdio: "ignore" }).status === 0;
+const CURL_OK = process.platform === "linux" && spawnSync("sh", ["-c", "command -v curl"], { stdio: "ignore" }).status === 0;
+const VARIANT_ARMS_RUN = new Set<string>();
+
+describe.skipIf(!SANDBOX_OK || !PERL_OK)("the AF_UNIX-deny variant through the real SDK (#10455 a)", () => {
+  let stub: AnthropicStub | undefined;
+  let root: string;
+  let own: string;
+  let home: string;
+  let shimDir: string;
+  const savedPath = process.env.PATH;
+
+  // One script, printed line by line; the tool_result is parsed. `curl` is optional (CURL_OK).
+  const PROBE =
+    `perl -e 'use Socket; ` +
+    `socket(S, PF_UNIX, SOCK_STREAM, 0) ? print "unix=OK\\n" : print "unix=ERR:$!\\n"; ` +
+    `socket(T, PF_INET, SOCK_STREAM, 0) ? print "inet=OK\\n" : print "inet=ERR:$!\\n"; ` +
+    `socketpair(A, B, PF_UNIX, SOCK_STREAM, 0) ? print "pair=OK\\n" : print "pair=ERR:$!\\n";'; ` +
+    `echo VARIANT_BASH_OK; ` +
+    `if command -v curl >/dev/null; then ` +
+    `P="\${https_proxy:-$HTTPS_PROXY}"; ` +
+    `s=$(date +%s); out=$(curl -sS -m 20 -o /dev/null \${P:+-x "$P"} https://example.test/ 2>&1); rc=$?; e=$(date +%s); ` +
+    `echo "curl_rc=$rc"; echo "curl_secs=$((e-s))"; echo "curl_out=$(printf '%s' "$out" | head -n1)"; fi`;
+
+  beforeAll(async () => {
+    root = realpathSync(mkdtempSync(join(tmpdir(), "sbx-unixdeny-")));
+    own = join(root, "00000000-0000-0000-0000-000000000001");
+    mkdirSync(own);
+    home = realpathSync(mkdtempSync(join(tmpdir(), "sbx-unixdeny-home-")));
+    shimDir = realpathSync(mkdtempSync(join(tmpdir(), "sbx-unixdeny-shim-")));
+    writeFileSync(join(shimDir, "bwrap"), `#!/usr/bin/env bash\nexec ${JSON.stringify(BWRAP_SHIM)} "$@"\n`);
+    spawnSync("chmod", ["+x", join(shimDir, "bwrap")], { stdio: "ignore" });
+    stub = await startAnthropicStub(PROBE);
+    scrubAmbientCliEnv();
+    pointCliAtStub(stub.port, home, "decoy-api-key-sentinel");
+    vi.stubEnv("WORKSPACES_ROOT", root);
+    vi.stubEnv("C4_RENDER_STAGING_ROOT", `${root}-c4-staging`);
+    vi.stubEnv("SOLEUR_BWRAP_REAL", "/usr/bin/bwrap");
+    // The ambient selector (the base artifact) and the variant path the repo checkout provides (no /app here).
+    vi.stubEnv("SOLEUR_BWRAP_SECCOMP_BPF", BWRAP_BPF);
+    vi.stubEnv("SOLEUR_BWRAP_SECCOMP_BPF_UNIXDENY", BWRAP_BPF_UNIXDENY);
+    vi.stubEnv("PATH", `${shimDir}:${savedPath ?? "/usr/bin:/bin"}`);
+  });
+
+  afterAll(async () => {
+    vi.unstubAllEnvs();
+    await stub?.close();
+    for (const dir of [root, root && `${root}-c4-staging`, home, shimDir]) {
+      if (!dir) continue;
+      try {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+      } catch {
+        /* scratch space */
+      }
+    }
+  });
+
+  const field = (out: string, key: string): string | undefined => new RegExp(`^${key}=(.*)$`, "m").exec(out)?.[1];
+
+  /** Runs the probe the way the dispatcher builds a session: env AND sandbox from the production builders. */
+  const arm = async (label: string, session: { egress: boolean; flag: boolean }) => {
+    const env = buildAgentEnv({ value: "decoy-api-key-sentinel", scheme: "api_key" }, {}, {
+      ...(session.egress ? { ghToken: "ghs_decoy" } : {}),
+      sandboxUnixDeny: session.flag,
+    });
+    const sandbox = buildAgentSandboxConfig(own, { allowGithubEgress: session.egress, sandboxUnixDeny: session.flag });
+    expect(checkSeccompAgreement(env, sandbox), `${label}: env and sandbox must agree`).toBeNull();
+    const result = await runBash({
+      stubPort: stub!.port,
+      home,
+      cwd: own,
+      sandbox,
+      // buildAgentEnv's selector (when it sets one) beats the ambient stub; otherwise the ambient base applies.
+      env: env.SOLEUR_BWRAP_SECCOMP_BPF ? { SOLEUR_BWRAP_SECCOMP_BPF: env.SOLEUR_BWRAP_SECCOMP_BPF } : {},
+    });
+    VARIANT_ARMS_RUN.add(label);
+    expect(result, `${label}: no Bash tool_result came back`).not.toBeNull();
+    return { result: result!, env };
+  };
+
+  it("NO-EGRESS + flag ON: Bash still starts, socket(AF_UNIX) is EPERM, AF_INET sockets and socketpair(AF_UNIX) work, curl fails", async () => {
+    const { result, env } = await arm("no-egress-on", { egress: false, flag: true });
+    expect(env.SOLEUR_BWRAP_SECCOMP_BPF, "the builder did not select the variant").toBe(BWRAP_BPF_UNIXDENY);
+    const out = result.content;
+    expect(result.isError, out).toBe(false);
+    expect(out, "Bash did not start under the variant (the descope condition)").toContain("VARIANT_BASH_OK");
+    expect(field(out, "unix")).toMatch(/^ERR:Operation not permitted$/);
+    expect(field(out, "inet")).toBe("OK");
+    expect(field(out, "pair")).toBe("OK");
+    if (CURL_OK) {
+      // Measured 2026-10-19 (curl 8, vendored SDK 0.3.284): the in-sandbox socat bridge cannot create its AF_UNIX
+      // client, so the proxy is never reached: "Proxy CONNECT aborted", not an HTTP status from the proxy.
+      expect(field(out, "curl_out"), `the proxy answered through the bridge under the variant:\n${out}`).not.toMatch(
+        /CONNECT tunnel failed, response \d{3}/,
+      );
+      expect(Number(field(out, "curl_rc")), `curl should fail:\n${out}`).not.toBe(0);
+      expect(Number(field(out, "curl_secs")), "curl must fail fast, not hang").toBeLessThan(15);
+    }
+  }, 180_000);
+
+  it("NO-EGRESS + flag OFF: the base artifact, AF_UNIX works (today's posture)", async () => {
+    const { result, env } = await arm("no-egress-off", { egress: false, flag: false });
+    expect(env.SOLEUR_BWRAP_SECCOMP_BPF).toBe(BWRAP_BPF); // the ambient value, passed through unchanged
+    const out = result.content;
+    expect(result.isError, out).toBe(false);
+    expect(out).toContain("VARIANT_BASH_OK");
+    expect(field(out, "unix")).toBe("OK");
+    expect(field(out, "pair")).toBe("OK");
+    if (CURL_OK) {
+      // Control for the variant arm's curl assertion: under the base artifact the bridge works and the proxy answers
+      // (an HTTP status for the refused host), so the variant arm's "aborted" is attributable to the AF_UNIX deny.
+      expect(field(out, "curl_out")).toMatch(/CONNECT tunnel failed, response \d{3}/);
+    }
+  }, 180_000);
+
+  it("EGRESS + flag ON: the base artifact stays, AF_UNIX works and the in-sandbox proxy bridge answers", async () => {
+    const { result, env } = await arm("egress-on", { egress: true, flag: true });
+    expect(env.SOLEUR_BWRAP_SECCOMP_BPF).toBe(BWRAP_BPF);
+    const out = result.content;
+    expect(result.isError, out).toBe(false);
+    expect(out).toContain("VARIANT_BASH_OK");
+    expect(field(out, "unix")).toBe("OK");
+    if (CURL_OK) {
+      // The bridge reaches the proxy: the proxy refuses the non-allowlisted host with a status, rather than the connection
+      // being refused at the bridge (which is what a socket(AF_UNIX) deny would produce).
+      expect(field(out, "curl_out"), `the proxy did not answer through the bridge:\n${out}`).toMatch(/CONNECT tunnel failed, response \d{3}/);
+    }
+  }, 180_000);
+
+  it("floor: every arm ran (a skipped describe, or a filtered run, cannot pass vacuously)", () => {
+    expect([...VARIANT_ARMS_RUN].sort()).toEqual(["egress-on", "no-egress-off", "no-egress-on"]);
+  });
+});
+if (process.platform === "linux" && process.env.C4_BWRAP_REQUIRED && !PERL_OK) {
+  throw new Error("C4_BWRAP_REQUIRED is set but perl is not on PATH, so the AF_UNIX variant arms would be skipped.");
+}

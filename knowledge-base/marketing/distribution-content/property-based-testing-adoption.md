@@ -4,6 +4,8 @@ type: feature-tweet
 publish_date: ""
 channels: x, discord
 status: draft
+pr_reference: "#10624"
+issue_reference: "#10398"
 ---
 
 ## X/Twitter Thread

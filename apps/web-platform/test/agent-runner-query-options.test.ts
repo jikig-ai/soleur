@@ -30,6 +30,10 @@ vi.mock("@/server/agent-env", async (importOriginal) => {
       // so the AC3 integration pin below can assert the value survives
       // pass-through into the final options.env (catches a downstream drop).
       ...(opts?.pluginPath ? { CLAUDE_PLUGIN_ROOT: opts.pluginPath } : {}),
+      // #10455 (a): mirror the real contract the spawn-time seccomp agreement assertion reads
+      // (egress handles surface as GH_TOKEN / HTTPS_PROXY in the real env).
+      ...(opts?.ghToken ? { GH_TOKEN: opts.ghToken } : {}),
+      ...(opts?.egressProxy ? { HTTPS_PROXY: "http://proxy.invalid" } : {}),
     })) satisfies typeof import("@/server/agent-env").buildAgentEnv),
   };
 });

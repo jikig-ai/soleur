@@ -1,6 +1,7 @@
 import { PROVIDER_CONFIG } from "./providers";
 import { assertTrustedPluginPath, isPluginPathTestEnv } from "./plugin-path";
 import { API_KEY_ENV_VAR, OAUTH_ENV_VAR } from "./agent-auth-env-vars";
+import { SECCOMP_SELECTOR_ENV, seccompArtifactFor, usesUnixDenyArtifact } from "./agent-sandbox-seccomp";
 
 /**
  * The auth scheme an agent run is funded by. `api_key` feeds the raw
@@ -187,6 +188,27 @@ export interface BuildAgentEnvOptions {
   pluginPath?: string;
   /** Per-tenant CLI temp base (`agentSessionTmpDir(workspaceId)`), injected as `CLAUDE_CODE_TMPDIR`. */
   claudeTmpDir?: string;
+  /**
+   * #10455 (a) — the resolved runtime flag `agent-sandbox-unix-deny` (default OFF). With it ON a session
+   * that has NO egress (no `ghToken`, no `egressProxy`) is spawned with the AF_UNIX-deny seccomp artifact
+   * via `SOLEUR_BWRAP_SECCOMP_BPF`; every other session keeps the ambient value unchanged. The decision is
+   * `seccompArtifactFor` in agent-sandbox-seccomp.ts, shared with `buildAgentSandboxConfig`.
+   */
+  sandboxUnixDeny?: boolean;
+}
+
+/**
+ * Does a session carry egress of any kind? `buildAgentEnv` (the seccomp selector) and the dispatcher (which skips the
+ * flag read for an egress session, since the flag cannot change its artifact) both call this function. Egress = a
+ * minted GitHub token (`ghToken` -> GH_TOKEN) or a web-egress proxy handle (`egressProxy` -> HTTPS_PROXY).
+ * It is NOT the only spelling of the predicate: the same rule is written over the other handles at
+ *   - `buildAgentSandboxConfig` (agent-runner-sandbox-config.ts, `posture.hasEgress`: `allowGithubEgress || allowWebEgress`),
+ *   - `checkSeccompAgreement` (agent-sandbox-seccomp.ts, `env.GH_TOKEN || env.HTTPS_PROXY`).
+ * `checkSeccompAgreement` re-checks them against each other at spawn time, which is what catches drift between the
+ * three spellings; a fourth spelling must be added to that check.
+ */
+export function sessionHasEgress(ghToken: string | undefined, egressProxy: unknown): boolean {
+  return Boolean(ghToken) || Boolean(egressProxy);
 }
 
 export function buildAgentEnv(
@@ -321,6 +343,15 @@ export function buildAgentEnv(
   }
 
   if (opts?.claudeTmpDir) env.CLAUDE_CODE_TMPDIR = opts.claudeTmpDir;
+
+  // #10455 (a): per-session seccomp artifact. Egress is read from the SAME handles that set the egress
+  // env above (`ghToken` -> GH_TOKEN, `egressProxy` -> HTTPS_PROXY). Only a no-egress session with the
+  // runtime flag ON gets the variant; every other session keeps the ambient allowlist copy (the ADR-075
+  // #8752 incident-time override). `checkSeccompAgreement` re-checks this against the sandbox config.
+  const hasEgress = sessionHasEgress(opts?.ghToken, opts?.egressProxy);
+  if (usesUnixDenyArtifact(hasEgress, opts?.sandboxUnixDeny)) {
+    env[SECCOMP_SELECTOR_ENV] = seccompArtifactFor(hasEgress, opts?.sandboxUnixDeny);
+  }
 
   // Auth var LAST and mutually exclusive: the credential branch is
   // authoritative over any ambient/service value, and the NON-selected auth
