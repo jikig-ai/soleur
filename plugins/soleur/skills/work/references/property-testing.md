@@ -12,7 +12,9 @@ input, not a list of cases you can enumerate:
 
 - **Round-trips** — `decode(encode(x)) == x` for all x (serializers, codecs,
   normalizers; escape/unescape pairs only where the transform is truly
-  invertible).
+  invertible). Through a lossy serializer (JSON `-0`/`NaN`/`undefined`),
+  compare against the canonical form `decode(encode(canonicalize(x)))`,
+  never `x` itself.
 - **Invariants under mutation** — `sort` is idempotent and a permutation of its
   input; `retry` never exceeds the cap; a reducer keeps a conserved quantity.
 - **Metamorphic relations** — output is monotone in a parameter; appending an
