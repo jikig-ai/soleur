@@ -3,7 +3,11 @@
 # directive in their bodies, and run the referenced verification script
 # when the earliest-check timestamp has passed. Close the issue with a
 # PASS comment on script exit 0; comment FAIL and leave open on exit 1;
-# comment TRANSIENT and leave open on any other exit.
+# comment ACTION REQUIRED and leave open on exit 5 (notify-only: a human should
+# look; it NEVER closes, and on an already-closed issue it comments without
+# reopening; an open tracker is commented on at every sweep until the label is
+# removed); comment TRANSIENT and leave open on any other exit (2 reads NOT YET,
+# 3 CANNOT ESTABLISH).
 #
 # Convention: knowledge-base/engineering/operations/runbooks/followthrough-convention.md
 #

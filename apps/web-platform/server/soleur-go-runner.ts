@@ -764,8 +764,8 @@ function classifyInteractiveTool(
 function extractBashToolResults(
   msg: SDKUserMessage,
   bashToolUses: Map<string, string>,
-): Array<{ toolUseId: string; command: string; output: string }> {
-  const out: Array<{ toolUseId: string; command: string; output: string }> = [];
+): Array<{ toolUseId: string; command: string; output: string; isError: boolean }> {
+  const out: Array<{ toolUseId: string; command: string; output: string; isError: boolean }> = [];
   const content = (msg.message as { content?: unknown } | undefined)?.content;
   if (!Array.isArray(content)) return out;
   for (const blockRaw of content) {
@@ -774,6 +774,7 @@ function extractBashToolResults(
       type?: unknown;
       tool_use_id?: unknown;
       content?: unknown;
+      is_error?: unknown;
     };
     if (block.type !== "tool_result") continue;
     const toolUseId =
@@ -783,6 +784,7 @@ function extractBashToolResults(
       toolUseId,
       command: bashToolUses.get(toolUseId) ?? "",
       output: flattenToolResultText(block.content),
+      isError: block.is_error === true,
     });
   }
   return out;
@@ -914,6 +916,9 @@ export interface DispatchEvents {
     toolUseId: string;
     command: string;
     output: string;
+    /** The SDK `tool_result.is_error` flag. `false` when absent. The sandbox-denial notice rewrite requires it
+     *  (#10455 c): a result that is not an error is never rewritten. */
+    isError?: boolean;
   }) => void;
   onWorkflowDetected: (workflow: WorkflowName) => void;
   onWorkflowEnded: (end: WorkflowEnd) => void;

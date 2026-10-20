@@ -515,3 +515,130 @@ export function assertHelperSelection(
       "(infra/sandbox-masked-proc-docker.test.sh wrapped-command arm) before updating the pins (#10445).",
   );
 }
+
+// ---------------------------------------------------------------------------------------------
+// `apply-seccomp:` helper step strings (#10455 e, Guard 2).
+//
+// The SDK's command-side helper (the multicall embedded in the same `claude` binary) prints
+// `apply-seccomp: <step>: <strerror>` for each failing step. The step literal sits in the binary's string
+// pool as `apply-seccomp: <step>` followed by NUL. Measured on claude-agent-sdk 0.3.284 (and identical in
+// claude-code 2.1.293): 17 distinct strings, one occurrence each. 16 are `<step>` literals that take a
+// `: <strerror>` suffix; `observe sendmsg failed` is a fixed message with no errno.
+
+export const HELPER_STEP_PREFIX = "apply-seccomp: ";
+/** A step literal is short printable ASCII; the longest measured is ~110 bytes. Bounded read, no regex on the binary. */
+const HELPER_STEP_READ_BYTES = 200;
+
+/** Every distinct `apply-seccomp: ...` string in the source, prefix stripped, sorted. */
+export function scanHelperStepStrings(src: ByteSource, opts: ScanOptions = {}): string[] {
+  const hits = scanNeedles(src, { step: Buffer.from(HELPER_STEP_PREFIX, "latin1") }, opts).step;
+  const found = new Set<string>();
+  for (const at of hits) {
+    const buf = src.read(at + HELPER_STEP_PREFIX.length, HELPER_STEP_READ_BYTES);
+    let end = 0;
+    while (end < buf.length && buf[end] >= 0x20 && buf[end] <= 0x7e) end += 1;
+    if (end > 0) found.add(buf.subarray(0, end).toString("latin1"));
+  }
+  return [...found].sort();
+}
+
+export interface HelperStepPins {
+  /** Steps the classifier allowlists (take a `: <strerror>` suffix). */
+  classified: readonly string[];
+  /** Strings the binary carries that are deliberately NOT classified (no errno suffix). */
+  excluded: readonly string[];
+  /** Floor on the number of distinct strings read: a scan that reads nothing must red, never pass. */
+  minStrings: number;
+}
+
+/** Census: binary strings === classified ∪ excluded, both directions, with a floor. */
+/** Helper strings deliberately NOT classified (a fixed message with no errno suffix). Test-only: the census needs
+ *  it to tell "known and excluded" from "new in the binary"; production never reads it. */
+export const HELPER_NON_STEP_LINES: readonly string[] = ["observe sendmsg failed"];
+
+export function assertHelperStepCensus(found: readonly string[], pins: HelperStepPins, label: string): void {
+  const known = new Set([...pins.classified, ...pins.excluded]);
+  const seen = new Set(found);
+  const problems: string[] = [];
+  if (found.length < pins.minStrings) {
+    problems.push(`HELPER_STEP_FLOOR want >= ${pins.minStrings} strings got ${found.length}`);
+  }
+  for (const s of pins.classified) {
+    if (!seen.has(s)) problems.push(`HELPER_STEP_ABSENT allowlisted ${JSON.stringify(s)} is not in the binary`);
+  }
+  for (const s of found) {
+    if (!known.has(s)) problems.push(`HELPER_STEP_NEW the binary carries ${JSON.stringify(s)}, neither classified nor excluded`);
+  }
+  if (problems.length === 0) return;
+  throw new Error(
+    `[${label}] ${problems.join("; ")}. The vendored apply-seccomp helper's step list moved: decide whether each new ` +
+      "step runs before the tenant command (can show the platform notice) or after it, then update HELPER_STEPS / " +
+      "HELPER_STEPS_PRE_COMMAND / HELPER_STEPS_POST_COMMAND in server/sandbox-startup-classifier.ts and " +
+      "HELPER_NON_STEP_LINES in test/helpers/vendored-bwrap-tail.ts (#10455 e).",
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Proxy-bridge structure (#10455 a).
+//
+// The AF_UNIX-deny seccomp variant is safe for NO-EGRESS sessions only because of how the builder lays out the per-command
+// network: with a restricted network it `--unshare-net`s, binds the two bridge sockets, and wraps EVERY command in a shell
+// that starts the `socat TCP-LISTEN:3128/1080 ... UNIX-CONNECT:<sock>` bridges BEFORE the user command (the bridges are
+// what an egress session reaches its proxy through; under the variant they fail to open their AF_UNIX client and the
+// no-egress session simply has no working proxy, which it must not have anyway). The source-form of both functions is
+// embedded in the binary (minified names differ per release), so they are matched with name-agnostic regexes.
+// Measured 2026-10-19 on claude-agent-sdk 0.3.284 and claude-code 2.1.293: one source-form occurrence each.
+
+export const BRIDGE_WRAPPER_ANCHOR = "TCP-LISTEN:3128,fork,reuseaddr UNIX-CONNECT:${";
+export const BRIDGE_NET_ANCHOR = '.push("--unshare-net"),';
+const BRIDGE_WINDOW_BYTES = 1600;
+
+export const BRIDGE_PINS = Object.freeze({ wrapperHits: 1, netHits: 1 });
+
+// `[bridge-3128, bridge-1080, trap]` is built first, then the user command is appended AFTER it (`[...S, T]`).
+const BRIDGE_WRAPPER_RE =
+  /^TCP-LISTEN:3128,fork,reuseaddr UNIX-CONNECT:\$\{\w+\} >\/dev\/null 2>&1 &`,`\$\{\w+\} TCP-LISTEN:1080,fork,reuseaddr UNIX-CONNECT:\$\{\w+\} >\/dev\/null 2>&1 &`,"trap 'rc=\$\?; kill %1 %2 2>\/dev\/null; exit \$rc' EXIT"\];if\(\w+\)\{let \w+=\w+\+\w+\(\[\w+,"-c",\w+\]\),\w+=\[\.\.\.\w+,\w+\]\.join\(/;
+// `--unshare-net` first, then (when both bridge sockets exist) the two bridge binds.
+const BRIDGE_NET_RE =
+  /^\.push\("--unshare-net"\),\w+&&\w+\)\{if\(!\w+\.existsSync\(\w+\)\)throw Error\(`Linux HTTP bridge socket does not exist[^`]*`\);if\(!\w+\.existsSync\(\w+\)\)throw Error\(`Linux SOCKS bridge socket does not exist[^`]*`\);if\(\w+\.push\("--bind",\w+,\w+\),\w+!==\w+\)\w+\.push\("--bind",\w+,\w+\);/;
+
+export interface BridgeScan {
+  wrapperHits: number;
+  netHits: number;
+  wrapperWindow: string;
+  netWindow: string;
+}
+
+export function scanBridgeStructure(src: ByteSource): BridgeScan {
+  const hits = scanNeedles(src, {
+    wrapper: Buffer.from(BRIDGE_WRAPPER_ANCHOR, "latin1"),
+    net: Buffer.from(BRIDGE_NET_ANCHOR, "latin1"),
+  });
+  const win = (offs: number[]): string => (offs.length === 1 ? src.read(offs[0], BRIDGE_WINDOW_BYTES).toString("latin1") : "");
+  return {
+    wrapperHits: hits.wrapper.length,
+    netHits: hits.net.length,
+    wrapperWindow: win(hits.wrapper),
+    netWindow: win(hits.net),
+  };
+}
+
+export function assertBridgeStructure(scan: BridgeScan, label: string): void {
+  const problems: string[] = [];
+  if (scan.wrapperHits !== BRIDGE_PINS.wrapperHits) {
+    problems.push(`bridge wrapper anchor ${JSON.stringify(BRIDGE_WRAPPER_ANCHOR)} found ${scan.wrapperHits}, want ${BRIDGE_PINS.wrapperHits}`);
+  } else if (!BRIDGE_WRAPPER_RE.test(scan.wrapperWindow)) {
+    problems.push("BRIDGE_ORDER: the wrapper no longer builds [bridge 3128, bridge 1080, trap] and then appends the user command");
+  }
+  if (scan.netHits !== BRIDGE_PINS.netHits) {
+    problems.push(`net anchor ${JSON.stringify(BRIDGE_NET_ANCHOR)} found ${scan.netHits}, want ${BRIDGE_PINS.netHits}`);
+  } else if (!BRIDGE_NET_RE.test(scan.netWindow)) {
+    problems.push("BRIDGE_NET: --unshare-net is no longer followed by the bridge-socket checks and the two bridge binds");
+  }
+  if (problems.length === 0) return;
+  throw new Error(
+    `[${label}] ${problems.join("; ")}. The unixdeny variant assumes the vendored builder starts the socat proxy bridges before ` +
+      "the user command inside an unshared net namespace. Re-measure through the real SDK (test/sandbox-wrapped-command-runtime.test.ts, " +
+      "the AF_UNIX-deny variant block) before updating the pins; a no-egress session's Bash must still start under the variant (ADR-075 addendum 2026-10-19).",
+  );
+}
