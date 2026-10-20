@@ -71,13 +71,18 @@ function makeAssistant(
 }
 
 /** Synthetic `user`-role tool_use_result carrying one `tool_result` block. */
-function makeToolResult(toolUseId: string, text: string): SDKUserMessage {
+function makeToolResult(toolUseId: string, text: string, isError?: boolean): SDKUserMessage {
   return {
     type: "user",
     message: {
       role: "user",
       content: [
-        { type: "tool_result", tool_use_id: toolUseId, content: [{ type: "text", text }] },
+        {
+          type: "tool_result",
+          tool_use_id: toolUseId,
+          content: [{ type: "text", text }],
+          ...(isError === undefined ? {} : { is_error: isError }),
+        },
       ],
       // biome-ignore lint/suspicious/noExplicitAny: minimal SDK fixture
     } as any,
@@ -167,7 +172,7 @@ function makeEvents(
 }
 
 describe("command_stream RUNNER forwarding (AC5)", () => {
-  let toolResults: Array<{ toolUseId: string; command: string; output: string }>;
+  let toolResults: Array<{ toolUseId: string; command: string; output: string; isError?: boolean }>;
 
   beforeEach(() => {
     vi.useFakeTimers({ now: 0 });
@@ -180,6 +185,7 @@ describe("command_stream RUNNER forwarding (AC5)", () => {
   async function run(
     tool: { id: string; name: string; input: Record<string, unknown> },
     resultText: string,
+    isError?: boolean,
   ): Promise<void> {
     const mock = createMockQuery();
     const factory: QueryFactory = () => mock.query;
@@ -200,7 +206,7 @@ describe("command_stream RUNNER forwarding (AC5)", () => {
     });
     mock.emit(makeAssistant([{ type: "tool_use", ...tool }]));
     await flushMicrotasks();
-    mock.emit(makeToolResult(tool.id, resultText));
+    mock.emit(makeToolResult(tool.id, resultText, isError));
     await flushMicrotasks();
     mock.finish();
     await flushMicrotasks();
@@ -215,6 +221,19 @@ describe("command_stream RUNNER forwarding (AC5)", () => {
     expect(toolResults[0].toolUseId).toBe("toolu_bash");
     expect(toolResults[0].command).toBe("git status");
     expect(toolResults[0].output).toBe("On branch main\n");
+  });
+
+  // #10455 c — the notice rewrite needs the SDK's error flag; the runner used to drop it on the floor.
+  it("forwards the SDK tool_result error flag: is_error true -> isError true", async () => {
+    await run({ id: "toolu_bash", name: "Bash", input: { command: "ls" } }, "boom", true);
+    expect(toolResults).toHaveLength(1);
+    expect(toolResults[0].isError).toBe(true);
+  });
+
+  it("a result without is_error, or with is_error false, is isError false (never undefined-as-error)", async () => {
+    await run({ id: "toolu_a", name: "Bash", input: { command: "ls" } }, "ok");
+    await run({ id: "toolu_b", name: "Bash", input: { command: "ls" } }, "ok", false);
+    expect(toolResults.map((r) => r.isError)).toEqual([false, false]);
   });
 
   it("non-Bash tool_use (Read) → onToolResult never fires", async () => {

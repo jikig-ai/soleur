@@ -263,26 +263,17 @@ SC_BAD=$(CI_DEPLOY_STATE="$TMP/ok.state" SANDBOX_CANARY_STATE_FILE="$TMP/bad-can
 assert "malformed sandbox_canary.checked_at falls back to sentinel 0" \
   "[[ \$(printf '%s' '$SC_BAD' | jq -r .sandbox_canary.checked_at) == '0' ]]"
 
-# Outer-wrap canary verdict (#5863) surfaced under outer_wrap_canary — the
-# same canary_state_json shape on the separate
-# SANDBOX_OUTER_WRAP_CANARY_STATE_FILE ledger.
-OWC_ABSENT=$(CI_DEPLOY_STATE="$TMP/ok.state" SANDBOX_OUTER_WRAP_CANARY_STATE_FILE="$TMP/no-owc.json" bash "$TARGET")
-assert "outer_wrap_canary.verdict sentinel 'unknown' when no state file" \
-  "[[ \$(printf '%s' '$OWC_ABSENT' | jq -r .outer_wrap_canary.verdict) == 'unknown' ]]"
-assert "outer_wrap_canary.consecutive_pass sentinel 0 when no state file" \
-  "[[ \$(printf '%s' '$OWC_ABSENT' | jq -r .outer_wrap_canary.consecutive_pass) == '0' ]]"
-echo '{"verdict":"pass","reason":"ok","sdk_version":"0.3.197","checked_at":1751000600,"consecutive_pass":3,"first_pass_at":1750900000}' > "$TMP/owc.json"
-OWC_PRESENT=$(CI_DEPLOY_STATE="$TMP/ok.state" SANDBOX_OUTER_WRAP_CANARY_STATE_FILE="$TMP/owc.json" bash "$TARGET")
-assert "outer_wrap_canary.verdict read from state file (pass)" \
-  "[[ \$(printf '%s' '$OWC_PRESENT' | jq -r .outer_wrap_canary.verdict) == 'pass' ]]"
-assert "outer_wrap_canary.consecutive_pass surfaced (3)" \
-  "[[ \$(printf '%s' '$OWC_PRESENT' | jq -r .outer_wrap_canary.consecutive_pass) == '3' ]]"
-assert "outer_wrap_canary.first_pass_at surfaced" \
-  "[[ \$(printf '%s' '$OWC_PRESENT' | jq -r .outer_wrap_canary.first_pass_at) == '1750900000' ]]"
-echo '{"verdict":"pass","reason":"ok","sdk_version":"0.3.197","checked_at":"not-a-number"}' > "$TMP/owc-bad.json"
-OWC_BAD=$(CI_DEPLOY_STATE="$TMP/ok.state" SANDBOX_OUTER_WRAP_CANARY_STATE_FILE="$TMP/owc-bad.json" bash "$TARGET")
-assert "malformed outer_wrap_canary.checked_at falls back to sentinel 0" \
-  "[[ \$(printf '%s' '$OWC_BAD' | jq -r .outer_wrap_canary.checked_at) == '0' ]]"
+# Outer-wrap canary RETIRED (#10454, ADR-079 addendum 2026-10-19): deploy-status carries no outer_wrap_canary key
+# and the reader function is gone, even when a legacy ledger file is still on the host's /mnt/data volume or the
+# old env override is still exported. Positive control: the sibling sandbox_canary key IS still emitted.
+echo '{"verdict":"pass","reason":"ok","sdk_version":"0.3.197","checked_at":1751000600,"consecutive_pass":3,"first_pass_at":1750900000,"ledger":"sandbox-canary-outer-wrap"}' > "$TMP/owc.json"
+OWC_RETIRED=$(CI_DEPLOY_STATE="$TMP/ok.state" SANDBOX_OUTER_WRAP_CANARY_STATE_FILE="$TMP/owc.json" bash "$TARGET")
+assert "retired: deploy-status has no outer_wrap_canary key even with a legacy ledger present" \
+  "[[ \$(printf '%s' '$OWC_RETIRED' | jq 'has(\"outer_wrap_canary\")') == 'false' ]]"
+assert "retired positive control: sandbox_canary key is still emitted" \
+  "[[ \$(printf '%s' '$OWC_RETIRED' | jq 'has(\"sandbox_canary\")') == 'true' ]]"
+assert "retired: cat-deploy-state.sh has no outer_wrap_canary_json / OUTER_WRAP_CANARY / sandbox-canary-outer-wrap reference" \
+  "! grep -qE 'outer_wrap_canary|OUTER_WRAP_CANARY|sandbox-canary-outer-wrap' \"$TARGET\""
 
 # Workspace-isolation probe verdict (#2640) surfaced under workspace_isolation —
 # the same canary_state_json shape on the separate WORKSPACE_ISOLATION_STATE_FILE
@@ -321,6 +312,40 @@ echo '{"verdict":"pass","reason":"ok","sdk_version":"","checked_at":1751000900,"
 WI_OWN=$(CI_DEPLOY_STATE="$TMP/ok.state" WORKSPACE_ISOLATION_STATE_FILE="$TMP/wi-own.json" bash "$TARGET")
 assert "workspace_isolation reads normally on its own ledger stamp" \
   "[[ \$(printf '%s' '$WI_OWN' | jq -r .workspace_isolation.verdict) == 'pass' && \$(printf '%s' '$WI_OWN' | jq -r .workspace_isolation.consecutive_pass) == '9' ]]"
+
+# SDK Bash smoke (#10453, ADR-079 addendum): deploy-status carries sdk_bash_smoke from its OWN ledger. Beyond the shared
+# ledger shape it surfaces `coverage` (a replay_only pass never counts toward promotion) and `consecutive_infra_error`
+# (the stale-probe counter). An ABSENT file reads as the `unknown` sentinel (an old script + a new image, or a deploy that
+# never reached the smoke), distinguishable from a failed verdict, never a false green.
+SB_ABSENT=$(CI_DEPLOY_STATE="$TMP/ok.state" SDK_BASH_SMOKE_STATE_FILE="$TMP/no-sb.json" bash "$TARGET")
+assert "sdk_bash_smoke.verdict sentinel 'unknown' when no state file" \
+  "[[ \$(printf '%s' '$SB_ABSENT' | jq -r .sdk_bash_smoke.verdict) == 'unknown' ]]"
+assert "sdk_bash_smoke sentinel carries coverage '' and consecutive_infra_error 0 and consecutive_pass 0" \
+  "[[ \$(printf '%s' '$SB_ABSENT' | jq -c '.sdk_bash_smoke | [.coverage, .consecutive_infra_error, .consecutive_pass]') == '[\"\",0,0]' ]]"
+echo '{"verdict":"pass","reason":"ok","sdk_version":"","checked_at":1751001000,"consecutive_pass":4,"first_pass_at":1750800000,"ledger":"sdk-bash-smoke","coverage":"sdk_wrapper_shim_prodtuple","consecutive_infra_error":0}' > "$TMP/sb-pass.json"
+SB_PASS=$(CI_DEPLOY_STATE="$TMP/ok.state" SDK_BASH_SMOKE_STATE_FILE="$TMP/sb-pass.json" bash "$TARGET")
+assert "sdk_bash_smoke reads verdict, coverage and the soak accumulators from its ledger" \
+  "[[ \$(printf '%s' '$SB_PASS' | jq -c '.sdk_bash_smoke | [.verdict, .coverage, .consecutive_pass, .first_pass_at, .consecutive_infra_error]') == '[\"pass\",\"sdk_wrapper_shim_prodtuple\",4,1750800000,0]' ]]"
+echo '{"verdict":"smoke_infra_error","reason":"probe_absent","sdk_version":"","checked_at":1751001100,"consecutive_pass":4,"first_pass_at":1750800000,"ledger":"sdk-bash-smoke","coverage":"replay_only","consecutive_infra_error":3}' > "$TMP/sb-infra.json"
+SB_INFRA=$(CI_DEPLOY_STATE="$TMP/ok.state" SDK_BASH_SMOKE_STATE_FILE="$TMP/sb-infra.json" bash "$TARGET")
+assert "sdk_bash_smoke surfaces consecutive_infra_error and a held consecutive_pass" \
+  "[[ \$(printf '%s' '$SB_INFRA' | jq -c '.sdk_bash_smoke | [.verdict, .reason, .consecutive_pass, .consecutive_infra_error]') == '[\"smoke_infra_error\",\"probe_absent\",4,3]' ]]"
+echo '{"verdict":"pass","reason":"ok","checked_at":"not-a-number","consecutive_pass":"x","ledger":"sdk-bash-smoke","coverage":"<script>","consecutive_infra_error":"many"}' > "$TMP/sb-bad.json"
+SB_BAD=$(CI_DEPLOY_STATE="$TMP/ok.state" SDK_BASH_SMOKE_STATE_FILE="$TMP/sb-bad.json" bash "$TARGET")
+assert "malformed sdk_bash_smoke fields fall back to sentinels (numbers 0, unrecognised coverage '')" \
+  "[[ \$(printf '%s' '$SB_BAD' | jq -c '.sdk_bash_smoke | [.checked_at, .consecutive_pass, .coverage, .consecutive_infra_error]') == '[0,0,\"\",0]' ]]"
+printf 'not json{' > "$TMP/sb-garbage.json"
+SB_GARBAGE=$(CI_DEPLOY_STATE="$TMP/ok.state" SDK_BASH_SMOKE_STATE_FILE="$TMP/sb-garbage.json" bash "$TARGET")
+assert "an unparseable sdk_bash_smoke ledger is still a well-formed object with a string verdict" \
+  "printf '%s' '$SB_GARBAGE' | jq -e '.sdk_bash_smoke | (.verdict | type) == \"string\" and (.consecutive_infra_error | type) == \"number\"' >/dev/null"
+echo '{"verdict":"pass","reason":"ok","sdk_version":"","checked_at":1751001200,"consecutive_pass":9,"first_pass_at":1750700000,"ledger":"workspace-isolation","coverage":"sdk_wrapper_shim_prodtuple","consecutive_infra_error":0}' > "$TMP/sb-foreign.json"
+SB_FOREIGN=$(CI_DEPLOY_STATE="$TMP/ok.state" SDK_BASH_SMOKE_STATE_FILE="$TMP/sb-foreign.json" bash "$TARGET")
+assert "sdk_bash_smoke refuses a foreign ledger stamp: 'unknown', reason names it, coverage and counters do not leak through" \
+  "[[ \$(printf '%s' '$SB_FOREIGN' | jq -c '.sdk_bash_smoke | [.verdict, .reason, .consecutive_pass, .coverage]') == '[\"unknown\",\"foreign_ledger_stamp\",0,\"\"]' ]]"
+assert "the other ledgers' fields are unchanged by the new key (sandbox_canary and workspace_isolation still present)" \
+  "printf '%s' '$SB_PASS' | jq -e 'has(\"sandbox_canary\") and has(\"workspace_isolation\") and has(\"sdk_bash_smoke\")' >/dev/null"
+assert "cat-deploy-state.sh default ledger path matches ci-deploy.sh SDK_BASH_SMOKE_STATE_FILE" \
+  "grep -qF 'SDK_BASH_SMOKE_STATE_FILE:-/mnt/data/ci-deploy-sdk-bash-smoke.json' \"$TARGET\" && grep -qF 'SDK_BASH_SMOKE_STATE_FILE:-/mnt/data/ci-deploy-sdk-bash-smoke.json' \"$SCRIPT_DIR/ci-deploy.sh\""
 
 # --- #5960 live seccomp loaded/host discriminators (Phase 1) ------------------
 # seccomp_profile_loaded_matches_host (reload leg, host-jq skew-immune),
@@ -997,4 +1022,11 @@ rm -rf "$PEER_MOCK" "$PEER_DIR"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
+# Assertion floor (literal, read straight off the counter, derived from a green run): a suite that silently stops reaching its
+# assertions (an early return, a swallowed extraction failure, an emptied loop) must not pass on the strength of the few that ran.
+MIN_ASSERTIONS=151
+if (( TOTAL < MIN_ASSERTIONS )); then
+  printf 'FAIL: only %d assertions ran (floor %d)\n' "$TOTAL" "$MIN_ASSERTIONS"
+  exit 1
+fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

@@ -179,6 +179,8 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
       "untrusted-content-classify": false,
       "untrusted-content-wrap": false,
       "egress-audit-collection": false,
+      "agent-sandbox-unix-deny": false,
+      "new-sessions-paused": false,
     });
   });
 
@@ -206,6 +208,8 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
       "untrusted-content-classify": false,
       "untrusted-content-wrap": false,
       "egress-audit-collection": false,
+      "agent-sandbox-unix-deny": false,
+      "new-sessions-paused": false,
     });
   });
 
@@ -233,6 +237,8 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
       "untrusted-content-classify": false,
       "untrusted-content-wrap": false,
       "egress-audit-collection": false,
+      "agent-sandbox-unix-deny": false,
+      "new-sessions-paused": false,
     });
   });
 
@@ -461,6 +467,8 @@ describe("getIdentityFlags timeout → warn-level debounced mirror (Sentry-bug r
       "untrusted-content-classify": false,
       "untrusted-content-wrap": false,
       "egress-audit-collection": false,
+      "agent-sandbox-unix-deny": false,
+      "new-sessions-paused": false,
     });
   });
 
@@ -496,5 +504,43 @@ describe("getIdentityFlags timeout → warn-level debounced mirror (Sentry-bug r
 
     const ctorArg = vi.mocked(Flagsmith).mock.calls[0]![0] as Record<string, unknown>;
     expect(ctorArg).not.toHaveProperty("defaultFlagHandler");
+  });
+});
+
+// #10455 (a) — agent-sandbox-unix-deny: default OFF, fail-closed to OFF (Guard 3 row 8).
+describe("isAgentSandboxUnixDenyEnabled (agent-sandbox-unix-deny)", () => {
+  it("is OFF when neither Flagsmith nor the env mirror says otherwise (default OFF)", async () => {
+    delete process.env.FLAGSMITH_ENVIRONMENT_KEY;
+    delete process.env.FLAG_AGENT_SANDBOX_UNIX_DENY;
+    const { isAgentSandboxUnixDenyEnabled } = await import("./server");
+    expect(await isAgentSandboxUnixDenyEnabled()).toBe(false);
+  });
+  it("is OFF when the flag service is unreachable and the mirror is unset or 0", async () => {
+    process.env.FLAGSMITH_ENVIRONMENT_KEY = "key";
+    mockGetIdentityFlags.mockRejectedValue(new Error("flagsmith unreachable"));
+    const { isAgentSandboxUnixDenyEnabled } = await import("./server");
+    delete process.env.FLAG_AGENT_SANDBOX_UNIX_DENY;
+    expect(await isAgentSandboxUnixDenyEnabled()).toBe(false);
+    __resetFeatureFlagsForTests();
+    process.env.FLAG_AGENT_SANDBOX_UNIX_DENY = "0";
+    expect(await isAgentSandboxUnixDenyEnabled()).toBe(false);
+  });
+  it("is OFF when the feature does not exist in Flagsmith yet (isFeatureEnabled throws)", async () => {
+    process.env.FLAGSMITH_ENVIRONMENT_KEY = "key";
+    delete process.env.FLAG_AGENT_SANDBOX_UNIX_DENY;
+    mockGetIdentityFlags.mockResolvedValue({
+      isFeatureEnabled: (name: string) => {
+        if (name === "agent-sandbox-unix-deny") throw new Error("Feature does not exist: " + name);
+        return false;
+      },
+    });
+    const { isAgentSandboxUnixDenyEnabled } = await import("./server");
+    expect(await isAgentSandboxUnixDenyEnabled()).toBe(false);
+  });
+  it("is ON only when Flagsmith answers enabled for the feature", async () => {
+    process.env.FLAGSMITH_ENVIRONMENT_KEY = "key";
+    mockGetIdentityFlags.mockResolvedValue({ isFeatureEnabled: (name: string) => name === "agent-sandbox-unix-deny" });
+    const { isAgentSandboxUnixDenyEnabled } = await import("./server");
+    expect(await isAgentSandboxUnixDenyEnabled()).toBe(true);
   });
 });

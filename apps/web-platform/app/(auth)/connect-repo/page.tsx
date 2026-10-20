@@ -1,5 +1,6 @@
 "use client";
 
+import { QUIET_WINDOW_CODE } from "@/lib/repo-connect-codes";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 
@@ -203,7 +204,7 @@ export default function ConnectRepoPage() {
           if (!createRes.ok) {
             const data = await createRes.json().catch(() => null);
             setSetupError(data?.error ?? "Failed to create repository");
-            setSetupErrorCode(CREATE_FAILED_ERROR_CODE);
+            setSetupErrorCode(data?.code === QUIET_WINDOW_CODE ? QUIET_WINDOW_CODE : CREATE_FAILED_ERROR_CODE);
             setState("failed");
             return;
           }
@@ -548,7 +549,7 @@ export default function ConnectRepoPage() {
       }
       // Other errors → show failed state with the create-flow escape hatch
       setSetupError(errorData?.error ?? "Failed to create repository");
-      setSetupErrorCode(CREATE_FAILED_ERROR_CODE);
+      setSetupErrorCode(errorData?.code === QUIET_WINDOW_CODE ? QUIET_WINDOW_CODE : CREATE_FAILED_ERROR_CODE);
       setState("failed");
       return;
     } catch {

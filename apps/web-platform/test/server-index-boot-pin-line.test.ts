@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   listen: vi.fn(),
   startClock: vi.fn(),
   stopClock: vi.fn(),
+  reporterStartMock: vi.fn(),
 }));
 
 vi.mock("../sentry.server.config", () => ({}));
@@ -48,8 +49,16 @@ vi.mock("../server/agent-runner", () => ({
   startStuckActiveReaper: vi.fn(),
 }));
 vi.mock("../server/cc-dispatcher", () => ({
+  activeCcQueryCount: vi.fn(() => 0),
   drainCcQueriesForShutdown: vi.fn(),
   startCcIdleReaper: vi.fn(),
+}));
+// #8211 — the counts-only live-session reporter is armed once at boot.
+vi.mock("../server/quiet-window", () => ({
+  startQuietWindowReporter: (...a: unknown[]) => {
+    h.reporterStartMock(...a);
+    return setTimeout(() => {}, 0);
+  },
 }));
 vi.mock("../server/api-messages", () => ({ handleConversationMessages: vi.fn() }));
 // The real egress-forwarder's boot reaper scans /proc and deletes token
@@ -117,6 +126,13 @@ describe("server/index.ts boot — git-data host-key pin line (#7226 AC16)", () 
     await vi.waitFor(() => expect(h.listen).toHaveBeenCalledTimes(1));
     expect(h.bootStarted).toHaveBeenCalledTimes(1);
     expect(h.logPin).toHaveBeenCalledTimes(1);
+
+    // #8211 — the quiet-window reporter is armed exactly once, with both count sources.
+    expect(h.reporterStartMock).toHaveBeenCalledTimes(1);
+    const reporterDeps = h.reporterStartMock.mock.calls[0][0] as {
+      readCounts: () => { ccQueries: number; legacySessions: number };
+    };
+    expect(reporterDeps.readCounts()).toEqual({ ccQueries: 0, legacySessions: expect.any(Number) });
 
     // #8495 — the watchdog dispatch clock is armed exactly once, with defaults.
     expect(h.startClock).toHaveBeenCalledTimes(1);
