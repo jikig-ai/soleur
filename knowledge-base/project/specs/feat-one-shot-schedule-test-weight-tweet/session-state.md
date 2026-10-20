@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-schedule-test-weight-tweet/knowledge-base/project/plans/2026-10-19-chore-schedule-test-suite-weight-warn-draft-plan.md
+- Plan file: knowledge-base/project/plans/2026-10-19-chore-schedule-test-suite-weight-warn-draft-plan.md
 - Status: complete
 - cto_spawns=1 (validate-tweet-draft.sh ordering ruling — gate exit 1 fixed and re-verified rc=0)
 - Plan artifact: complete (selector=branch)

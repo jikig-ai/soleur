@@ -213,7 +213,7 @@ subagent fan-out was unavailable in this planning context — assessment is inli
 - The draft file itself documents the release mechanism in its body comment (`:11`).
 - Lefthook pre-commit `distribution-content-liquid-guard` (`lefthook.yml:494-497`) re-runs
   the Liquid lint on the staged file automatically at commit time — the explicit run in
-  AC-3 is belt-and-suspenders, not a substitute.
+  AC-2 is belt-and-suspenders, not a substitute.
 
 ## References
 

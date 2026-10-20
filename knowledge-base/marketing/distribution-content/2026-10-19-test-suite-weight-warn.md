@@ -1,7 +1,7 @@
 ---
 title: "New heavy test suites now get flagged before they silently misprice CI"
 type: feature-launch
-publish_date: "2026-10-20"
+publish_date: 2026-10-20
 channels: x, bluesky
 status: scheduled
 pr_reference: "#10578"
