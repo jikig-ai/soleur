@@ -646,6 +646,19 @@ worktree, a true-bare repo, a masked config, and a symlinked `.git` all stay sil
 - **Scope:** fires only when the session's cwd IS the bare root — a bare-root subdirectory
   does not match the gitdir-identity term (tracked as a #10392 candidate). Legitimate
   maintenance sessions see the block on every start; that is the disclosure, not a refusal.
+- **Plugin-level arm (#10392):** `plugins/soleur/hooks/bare-root-cwd-guard.sh` carries the
+  same three-term predicate in the plugin payload, registered in `hooks.json` with a `""`
+  SessionStart matcher so OTHER repos on the machine get the arm. It dedups against repos
+  already carrying `session-rules-loader.sh` (marker grep + registry reference), emits
+  `SOLEUR_BARE_ROOT_CWD source=plugin-session-start`, and uses topology-generic
+  `git worktree add` redirect text — a genuinely bare customer repo (truebare) stays silent.
+- **Shared context sanitizer (#10395):** `.claude/hooks/lib/context-sanitize.sh` (byte-equal
+  copy at `plugins/soleur/scripts/lib/context-sanitize.sh`) is the single strip helper all
+  context/display boundaries call — three variants (strip-all / keep-`\t\n` / keep-`\n`-only)
+  that additionally remove DEL and the UTF-8 line-break class (NEL, U+2028, U+2029). Each
+  adopt site keeps a `declare -F` fallback carrying its pre-change strip set so an
+  unreadable lib degrades to status quo. `context-sanitize.test.sh` pins the byte contract,
+  the `cmp` parity, and the drift-sentinel enumeration.
 
 ### Sharp Edges (SessionStart hook design)
 

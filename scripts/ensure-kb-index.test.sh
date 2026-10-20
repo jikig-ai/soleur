@@ -425,9 +425,14 @@ CASES_RUN=$((CASES_RUN + 1))
 [[ -d "$r/knowledge-base" ]] && fail "AC6: the SUT created a knowledge-base/ directory" \
   || pass "AC6: nothing was created"
 
-# ── Outside a git checkout: the fingerprint is empty, so regenerate once then no-op ─────────
+# ── Outside a git checkout: NOT a work tree, so the is-inside-work-tree guard ───────────────
+#    exits before the freshness probe. The pre-#10392 contract here was "the fingerprint is
+#    empty, so regenerate once then no-op" — the exported-tarball "generate once" behaviour.
+#    The audit fix retires it: a checkoutless knowledge-base/ is indistinguishable from a
+#    non-checkout --kb-dir at the `git` level, and the ruling closes both. Assert the new
+#    contract: exit 0, print NOTHING (silence stays the only output contract), write NOTHING.
 echo ""
-echo "--- non-git checkout ---"
+echo "--- non-git checkout: the work-tree guard skips the whole run ---"
 r="$SANDBOX/nogit"; assert_fixture_dir "$r"
 mkdir -p "$r/scripts" "$r/knowledge-base/engineering"
 cp "$SUT" "$r/scripts/ensure-kb-index.sh"; cp "$GEN" "$r/scripts/generate-kb-index.sh"
@@ -436,11 +441,91 @@ res="$(run_sut "$r")"
 CASES_RUN=$((CASES_RUN + 1))
 [[ "$(sut_rc "$res")" == "0" ]] && pass "non-git: exits 0" || fail "non-git: exited $(sut_rc "$res")"
 CASES_RUN=$((CASES_RUN + 1))
-[[ -f "$r/$IDX" ]] && pass "non-git: an index is produced" || fail "non-git: no index produced"
+[[ -z "$(sut_out "$res")" ]] && pass "non-git: prints NOTHING (a skip is silent, not a regen)" \
+  || fail "non-git: printed '$(sut_out "$res")' — only a regen may write to stdout"
+CASES_RUN=$((CASES_RUN + 1))
+wrote=""
+for f in INDEX.md kb-tags.txt kb-categories.txt .kb-index.stamp; do
+  [[ -e "$r/knowledge-base/$f" ]] && { wrote="$f"; break; }
+done
+[[ -z "$wrote" ]] && pass "non-git: no artifact materialized outside a work tree" \
+  || fail "non-git: $wrote was written outside a work tree"
 res="$(run_sut "$r")"
 CASES_RUN=$((CASES_RUN + 1))
-[[ -z "$(sut_out "$res")" ]] && pass "non-git: the second call is silent (no regen loop)" \
-  || fail "non-git: regenerates on every call — '$(sut_out "$res")'"
+[[ -z "$(sut_out "$res")" && ! -e "$r/$IDX" ]] && pass "non-git: the second call also skips (no write, no noise)" \
+  || fail "non-git: second call wrote or printed — the skip is not stable"
+
+# ── Non-worktree rows (#10392 audit fix, task 0.4). The guard is ────────────────────────────
+#    `git -C "$KB_DIR" rev-parse --is-inside-work-tree` != true -> skip. Both shapes below
+#    must prove the regen was SKIPPED — nothing written, nothing printed — because the
+#    failure they pin is OVERLAY MATERIALIZATION: artifacts written at a bare root persist
+#    in the synced overlay forever (sync_bare_files is additive for untracked paths).
+echo ""
+echo "--- non-worktree: a bare-root overlay KB skips the regen ---"
+r="$SANDBOX/bareroot"; assert_fixture_dir "$r"
+mkdir -p "$r/scripts" "$r/knowledge-base/engineering"
+cp "$SUT" "$r/scripts/ensure-kb-index.sh"; cp "$GEN" "$r/scripts/generate-kb-index.sh"
+printf -- '---\ntitle: "Overlay Note"\ntags: [overlay-tag]\n---\n\nbody\n' \
+  > "$r/knowledge-base/engineering/overlay.md"
+# The row-3 layout: a normal repo with on-disk files, then core.bare true — the bare repo
+# sits at .git, the working files on disk ARE the synced overlay. Commit FIRST: git refuses
+# worktree writes (add/commit) once the repo reads bare (mk_bare_root convention).
+git -C "$r" init -q -b main
+git -C "$r" -c user.email=t@t -c user.name=t add -A >/dev/null 2>&1
+git -C "$r" -c user.email=t@t -c user.name=t commit -q -m init >/dev/null 2>&1
+git -C "$r" config core.bare true
+# Precondition: the fixture really is the shape under test — rev-parse must NOT say true,
+# or this row would be re-asserting an ordinary worktree and prove nothing.
+[[ "$(git -C "$r/knowledge-base" rev-parse --is-inside-work-tree 2>/dev/null)" == "true" ]] \
+  && { echo "[FATAL] bareroot fixture resolves inside a work tree — fixture construction broken" >&2; exit 1; }
+res="$(run_sut "$r")"
+CASES_RUN=$((CASES_RUN + 1))
+[[ "$(sut_rc "$res")" == "0" ]] && pass "bare-root: exits 0" \
+  || fail "bare-root: exited $(sut_rc "$res")"
+CASES_RUN=$((CASES_RUN + 1))
+[[ -z "$(sut_out "$res")" ]] && pass "bare-root: no SOLEUR_KB_INDEX_REGEN line (the regen was skipped)" \
+  || fail "bare-root: printed '$(sut_out "$res")' — the guard did not hold"
+CASES_RUN=$((CASES_RUN + 1))
+wrote=""
+for f in INDEX.md kb-tags.txt kb-categories.txt .kb-index.stamp; do
+  [[ -e "$r/knowledge-base/$f" ]] && { wrote="$f"; break; }
+done
+[[ -z "$wrote" ]] && pass "bare-root: no artifact materialized into the synced overlay" \
+  || fail "bare-root: $wrote materialized into the overlay"
+
+echo ""
+echo "--- non-worktree: a --kb-dir outside any checkout skips the regen ---"
+r="$(mkrepo kbdir-outside)"
+ext="$SANDBOX/kb-outside"; assert_fixture_dir "$ext"
+mkdir -p "$ext"
+printf -- '---\ntitle: "Outside Note"\ntags: [outside-tag]\n---\n\nbody\n' > "$ext/note.md"
+# The SUT copy runs from a real checkout (so this is not the no-repo shape above) but is
+# steered at a target nothing tracks — the argv-only seam exercising its own guard.
+res="$(cd "$r" && bash scripts/ensure-kb-index.sh --kb-dir "$ext" 2>/dev/null; printf '\n%s' "$?")"
+CASES_RUN=$((CASES_RUN + 1))
+[[ "$(sut_rc "$res")" == "0" ]] && pass "--kb-dir non-checkout: exits 0" \
+  || fail "--kb-dir non-checkout: exited $(sut_rc "$res")"
+CASES_RUN=$((CASES_RUN + 1))
+[[ -z "$(sut_out "$res")" ]] && pass "--kb-dir non-checkout: silent (skip, not regen)" \
+  || fail "--kb-dir non-checkout: printed '$(sut_out "$res")'"
+CASES_RUN=$((CASES_RUN + 1))
+wrote=""
+for f in INDEX.md kb-tags.txt kb-categories.txt .kb-index.stamp; do
+  [[ -e "$ext/$f" ]] && { wrote="$f"; break; }
+done
+[[ -z "$wrote" ]] && pass "--kb-dir non-checkout: nothing written outside any work tree" \
+  || fail "--kb-dir non-checkout: $wrote written outside any work tree"
+# POSITIVE CONTROL — the observability failure mode "regen wrongly skipped on a real
+# worktree" needs its detector in the same section: an --kb-dir INSIDE the fixture's own
+# worktree (is-inside-work-tree -> true) must still regenerate. The target must exist and
+# carry an indexable file BEFORE the run: a missing dir exits 0 on the -d check, and an
+# empty dir has nothing to index.
+mkdir -p "$r/victim-in"
+printf -- '---\ntitle: "Inside"\n---\n\nbody\n' > "$r/victim-in/i.md"
+( cd "$r" && bash scripts/ensure-kb-index.sh --kb-dir "$r/victim-in" >/dev/null 2>&1 )
+CASES_RUN=$((CASES_RUN + 1))
+[[ -f "$r/victim-in/INDEX.md" ]] && pass "--kb-dir inside a worktree: still regenerates (guard is not over-broad)" \
+  || fail "--kb-dir inside a worktree: skipped — is-inside-work-tree=true was wrongly refused"
 
 # ── Argument handling ──────────────────────────────────────────────────────────────────────
 echo ""

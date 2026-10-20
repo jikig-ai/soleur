@@ -75,6 +75,15 @@ if ! declare -f hook_parse_input >/dev/null 2>&1; then
   exit 0
 fi
 
+# Shared context-sanitize lib (#10395). When it is unreadable the same-name
+# fallback carries this site's pre-change strip set (C0 minus \t\n, DEL, plus
+# the LS/PS sed) — never weaker than today.
+_ctx_lib="$(dirname "${BASH_SOURCE[0]}")/lib/context-sanitize.sh"
+# shellcheck source=/dev/null
+[[ -r "$_ctx_lib" ]] && . "$_ctx_lib" || true
+declare -F soleur_ctx_sanitize_lines >/dev/null 2>&1 \
+  || soleur_ctx_sanitize_lines() { LC_ALL=C tr -d '\000-\010\013-\037\177' | LC_ALL=C sed -e $'s/\xe2\x80\xa8//g' -e $'s/\xe2\x80\xa9//g'; }
+
 INPUT=$(cat)
 # Parse hook stdin WITHOUT shell evaluation (ADR-156: stdin is
 # model-controlled and untrusted). ADR-157: a hook that cannot fully parse
@@ -775,8 +784,7 @@ fi
 # Sanitize the row list: C0 control bytes except \t and \n, DEL, U+2028-9,
 # 80-char truncation (sibling precedent; CWE-117/CWE-532).
 ROWS=$(printf '%s' "$LEAKY" \
-  | LC_ALL=C tr -d '\000-\010\013-\037\177' \
-  | LC_ALL=C sed -e $'s/\xe2\x80\xa8//g' -e $'s/\xe2\x80\xa9//g' \
+  | soleur_ctx_sanitize_lines \
   | awk '{ if (length($0) > 80) print substr($0,1,79)"…"; else print $0 }')
 
 # Branch-aware remediation: the deny may fire on a checkout that is NOT

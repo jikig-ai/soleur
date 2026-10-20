@@ -169,6 +169,14 @@ fi
 # registry; unknown tokens are dropped with a sanitized stderr warning and
 # never echoed raw to stdout. `set -f` kills pathname expansion, so a forged
 # `*`/`?`/glob token cannot expand into cwd filenames mid-validation.
+_ctx_lib="$(cd "${BASH_SOURCE[0]%/*}/../../../scripts/lib" 2>/dev/null && pwd -P)/context-sanitize.sh"
+_ctx_lib="${_ctx_lib:-/nonexistent/context-sanitize.sh}"
+# shellcheck source=/dev/null
+[[ -r "$_ctx_lib" ]] && . "$_ctx_lib" || true
+# Ambient-locale [:cntrl:] on purpose — mirrors technical-ruling-gate.sh: a C-pinned
+# fallback could strip less than the pre-change site under UTF-8 locales (C1 range).
+declare -F soleur_ctx_sanitize >/dev/null 2>&1 \
+  || soleur_ctx_sanitize() { tr -d '[:cntrl:]'; }
 if [[ -n "$FINDING_SEATS" ]]; then
   set -f
   for tok in $(printf '%s' "$FINDING_SEATS" | tr ',' ' '); do
@@ -176,7 +184,7 @@ if [[ -n "$FINDING_SEATS" ]]; then
     for s in $SEAT_REGISTRY; do
       if [[ "$tok" == "$s" ]]; then add "$tok"; continue 2; fi
     done
-    printf 'unknown-seat: %s\n' "$(printf '%s' "$tok" | tr -d '[:cntrl:]')" >&2
+    printf 'unknown-seat: %s\n' "$(printf '%s' "$tok" | soleur_ctx_sanitize)" >&2
   done
   set +f
 fi

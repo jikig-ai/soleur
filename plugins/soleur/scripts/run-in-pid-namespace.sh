@@ -29,6 +29,16 @@ set -u
 
 readonly MARKER=RUN_IN_PID_NAMESPACE_REFUSED
 
+# Shared context-sanitize lib (#10395), beside this script under lib/. When it
+# is unreadable the same-name fallback carries this site's pre-change strip set
+# (C0+DEL) — never weaker than today.
+_ctx_lib="$(cd "${BASH_SOURCE[0]%/*}" 2>/dev/null && pwd -P)/lib/context-sanitize.sh"
+_ctx_lib="${_ctx_lib:-/nonexistent/context-sanitize.sh}"
+# shellcheck source=/dev/null
+[[ -r "$_ctx_lib" ]] && . "$_ctx_lib" || true
+declare -F soleur_ctx_sanitize >/dev/null 2>&1 \
+  || soleur_ctx_sanitize() { LC_ALL=C tr -d '\000-\037\177'; }
+
 [[ "${1:-}" == "--" ]] && shift
 if [[ $# -eq 0 ]]; then
   printf 'usage: %s [--] <command> [args...]\n' "${0##*/}" >&2
@@ -71,7 +81,7 @@ probe_err="$("$u" -Urpf --kill-child --mount-proc -- sh -c "$CHECK || exit 97" 2
 probe_rc=$?
 if [[ "$probe_rc" -ne 0 ]]; then
   # One line, control characters stripped, cut short: the text comes from whatever unshare is.
-  first="$(printf '%s\n' "$probe_err" | head -n 1 | tr -d '\000-\037\177' | cut -c1-200)"
+  first="$(printf '%s\n' "$probe_err" | head -n 1 | soleur_ctx_sanitize | cut -c1-200)"
   if [[ "$probe_rc" -eq 97 ]]; then
     refuse not-isolating "the unshare on PATH ran the command without a fresh PID namespace and its own /proc (or awk or /proc/self/status was unusable inside it)" \
       "check which unshare resolves first on PATH and that it is util-linux unshare"
