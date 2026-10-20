@@ -15,8 +15,8 @@
 #
 #   prop_init <label>
 #     Bind the run: PROP_SEED=<n> replays a stream, unset draws a fresh seed from
-#     the ambient $RANDOM stream and pins RANDOM to it; PROP_RUNS=<n> overrides the
-#     default 100 case budget. Prints PROP_SEED=<seed> runs=<n> label=<label> so a
+#     the ambient $RANDOM stream and pins RANDOM to it; PROP_RUNS=<n> (>= 1)
+#     overrides the default 100 case budget. Prints PROP_SEED=<seed> runs=<n> label=<label> so a
 #     failure line alone cannot answer "which stream produced this". Both env
 #     knobs must match ^[0-9]+$ -- an unvalidated numeric seam fails open (see
 #     #7537: a non-numeric MIN_AGE_S signalled a 2s-old process while every
@@ -85,10 +85,14 @@ prop_init() {
   PROP_RUNS_ACTIVE="${PROP_RUNS:-100}"
   case "$PROP_RUNS_ACTIVE" in
     ''|*[!0-9]*)
-      echo "property-harness: PROP_RUNS must be a non-negative integer (got: ${PROP_RUNS_ACTIVE})" >&2
+      echo "property-harness: PROP_RUNS must be a positive integer (got: ${PROP_RUNS_ACTIVE})" >&2
       return 2
       ;;
   esac
+  if (( PROP_RUNS_ACTIVE < 1 )); then
+    echo "property-harness: PROP_RUNS must be >= 1 -- a zero budget emits a vacuous PROP_PASS for a loop that ran nothing (got: ${PROP_RUNS_ACTIVE})" >&2
+    return 2
+  fi
   if [[ -n "${PROP_SEED:-}" ]]; then
     PROP_SEED_ACTIVE="$PROP_SEED"
   else

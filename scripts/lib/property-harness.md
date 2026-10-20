@@ -88,7 +88,9 @@ When two implementations exist (TS + SQL twin, canonical + mirror), an
 - Every run prints `PROP_SEED=<n>` at `prop_init`. On failure the
   `PROP_FAIL <label> seed=<s> iter=<i>` line gives the replay command:
   `PROP_SEED=<s> bash <suite>.test.sh`.
-- `PROP_RUNS=<n>` overrides the default 100-case budget. Keep the default at
+- `PROP_RUNS=<n>` overrides the default 100-case budget (must be >= 1 — a zero
+  budget would print a vacuous `PROP_PASS` for a loop that ran nothing).
+  Keep the default at
   ~seconds of CI time; run `PROP_RUNS=1000` locally when hardening a fix.
 - **Streams are bash-version-specific.** `$RANDOM`'s generator is
   implementation-defined; a seed replays on the same host/bash, not across
