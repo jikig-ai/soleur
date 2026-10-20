@@ -61,3 +61,11 @@ soleur:plan (full workflow, inline), soleur:deepen-plan (halt gates 4.5–4.55 i
 - Security seat P2 (self-oracular canonical caveat) + P3s fixed: canonical-oracle reword, ordering assert added, found->count ONE-site pin, .*home pyramid layer pin widening, plan :106/:235 one-site sync. Committed as latest.
 - Seats still pending: 55f7a4be code-quality, 1397a8bc agent-native.
 - After last 2: final verification pass → qa → compound → ship → close 10400 → epic tick → remaining children (#10402 first).
+
+## Review Phase COMPLETE
+- Panel (8 seats) + fix-round (9 seats over 955863414e..HEAD) both synthesized. 1 real P1 (vacuous Hypothesis example) + 1 P2 (self-oracular canonical caveat) + ~10 P3s — ALL fixed inline across 4 fix commits; ZERO open code-review issues filed.
+- Final verification GREEN: pin suite 85/85, markdownlint clean, body-budget OK, components.test.ts pass, README diff empty.
+- Risk tier: code class. Seats: 8+9=17 total.
+- NEXT (ship tail): `soleur:qa` (docs-only — Test Scenarios has no browser/API flows → exits gracefully) → `soleur:compound` → `soleur:ship` (mark ready → full battery → merge queue → postmerge → `gh issue close 10400` → epic tick) → then #10402 (feature-map convention), #10403, #10401, #10404.
+- PR: #10718 draft; branch tip = latest fix commit. mergeStateStatus was BEHIND — resync at ship.
+- Attestations owed at ship: Reviewed-By + Reviewed-Fix-Round/Reviewed-Fix-Range (955863414e..<ship-sha>) trailers in squash commit message.
