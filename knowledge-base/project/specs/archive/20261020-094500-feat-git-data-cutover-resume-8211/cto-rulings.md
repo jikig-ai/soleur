@@ -271,3 +271,78 @@ Nothing here dispatched a workflow, applied terraform or wrote production state.
   shortfall. The CLO also ruled that the host-key step 5 emptiness discharge stays available after a rehearsal whose R7 read `clear`, with the flag
   off and no store-enabled window since, until the real flip, although "`GIT_DATA_STORE_ENABLED` has never been on" is then no longer literally true. The CLO suggested an audit record under `knowledge-base/legal/audits/` (`2026-10-19-clo-ruling-8211-rehearsal-art17-window.md`); this PR
   edits no legal document, so that record is left to the owner to request.
+
+## T6. Why web-2's app-container logs are absent from the flip's per-host assertion
+
+Read-only: Better Stack reads (`scripts/betterstack-query.sh`, hot window plus the 14 to 21 day archive arm) and repo/`gh` reads on
+2026-10-19. No SSH, no dispatch, no terraform. Claims about the live container's state are `unverified` where marked.
+
+Decision: Ruled by CTO agent, 2026-10-19: none of candidates (a), (b), (c) is the cause. The cause is a fourth one, (d): web-2's app container
+is journald-logged and Vector ships it (Source 3 works on web-2), but `git_data_pin=`, `git_data_ssh_client=` and `git_data_store=`
+are emitted ONCE per container start, and web-2's container has not been started since the host's cloud-init boot on 2026-10-07 20:08Z,
+because every `deploy-peer` deploy on web-2 aborts at the plugin-mount seed (`fchmodat2 .claude-plugin: operation not permitted`) before
+the canary and the swap. That is the open incident #8743 (fix: open PR #10577). The 7-day window (from 2026-10-12) simply starts after
+the only boot that emitted the lines. The fix is a PRECONDITION of `mode=flip` (merge #10577, get it delivered to web-2, prove one
+web-2 deploy completes); a workflow precheck is worth adding on top of it but cannot replace it.
+
+Evidence.
+1. The container ran and shipped on web-2. Query: `host_name='soleur-web-2' AND CONTAINER_NAME='soleur-web-platform'` returns rows on 11
+   days between 2026-09-24 and 2026-10-15 (the caller's "zero rows" holds only for lines at WARN-and-above after 2026-10-15; the last
+   rows are `supabase-edge-warmer` pino warns on 10-14 and 10-15, container id `ef7566df6dfb`). Source 3 (`vector.toml`
+   `[sources.app_container_journald]`, `include_matches.CONTAINER_NAME = ["soleur-web-platform"]`) is therefore live on web-2: candidate (b) is false.
+2. The three lines DID ship from web-2 at its last container start. Rows at 2026-10-07 20:08:01-02Z, container `ef7566df6dfb`,
+   level 40: `git_data_pin=present fp=SHA256:4eErmLfOuKM17zzNd+2so+26zojG0tsv9NMVNCuXpCs`, `git_data_ssh_client=present`,
+   `git_data_store=disabled`. Earlier pin rows for web-2: 2026-10-06 18:24 and 19:36 (earlier boots). So the app emits on web-2 (candidate (c) false) and the container
+   was launched with `--log-driver journald` (cloud-init.yml:793; candidate (a) false as to the driver). The same rows show
+   `"host_id":""` and `SOLEUR_HOST_ID is empty`: the signature of a cloud-init launch (cloud-init.yml docker run passes no `SOLEUR_HOST_ID`; ci-deploy.sh passes it), i.e. a container that no deploy has replaced.
+3. web-2 booted once since 2026-10-07: `_BOOT_ID dd08ac9d...` spans 2026-10-07 20:08Z to now (93051 rows). No container-boot lines
+   from web-2 after 10-07 20:08Z, so no restart.
+4. Every web-2 deploy fails after the verify steps. Daily counts of `fchmodat2` rows (webhook/ci-deploy tags) on soleur-web-2: 2, 10, 26, 16,
+   4, 7, 12, 17, 19, 19, 11, 12, 16, 35, 32, 19, 24, 21, 2, 13, 8 for 2026-09-28 through 2026-10-19; zero on web-1 on every day. On
+   web-2 the count of `SANDBOX_PROBE_OK` (the first line a completed deploy writes after the freshness check) is 0 on every day; on web-1 it
+   equals the deploy count. Today's deploy of v0.344.14 on web-2 (hook `deploy-peer`): `IMAGE_VERIFY ok` and `IMAGE_FRESHNESS ok` at 17:43:02Z (what the
+   caller read), then in the webhook tag: `Seeding plugin mount from image...`, `fchmodat2 .claude-plugin: operation not permitted`,
+   `error occurred: exit status 1`, `finished handling deploy-peer`. No canary, no swap, no `GITHUB_APP_KEY`/`SANDBOX_PROBE_OK` line follows,
+   unlike web-1's same deploy at 17:41. The code path is `ci-deploy.sh` "Seeding plugin mount" block (`docker cp` as the deploy uid into a
+   uid-1001 tree), which runs after the freshness check and before the canary.
+5. Known and tracked: #8743 (open, "every web-2 deploy aborts at plugin-mount seeding"), #10585 (the defect recurred across two web-2
+   replacements), #10584 (no alert on `plugin_seed_copy_failed`). PR #10577 replaces the `docker cp` seed with a container-side
+   `docker run --rm -u 0` seed and adds a fail-closed per-host verdict gate to `web-platform-release.yml`. State at 18:08Z: open, mergeable,
+   check `test` FAILURE (run 39299992946, not examined), 24 checks cancelled.
+
+Why it blocks the flip. `git-data-cutover.yml` step "Per-host git_data_store= assertion (Better Stack)" requires web-2 to report
+`git_data_store=enabled` within 12 polls after a same-version redeploy on BOTH hosts. A web-2 deploy that aborts at the seed never
+restarts its container, so it keeps its 10-07 env (`git_data_store=disabled`) and emits nothing: the assertion fails after the freeze and the flag
+write, and the finalizer unwinds. That is a safe failure and a guaranteed one. The same holds for `rollback`'s `disabled` readback when
+the flag was `true`. `mode=proof` and `wipe_check` do not depend on web-2's container.
+
+Smallest fix.
+1. Merge #10577 after its `test` check is green (owner-gated: production deploy-pipeline code and a changed release-workflow gate). Merging
+   touches `ci-deploy.sh`, which triggers `apply-deploy-pipeline-fix.yml` (`-target=terraform_data.deploy_pipeline_fix_web2`, SSH via the web-1 bastion): that apply is what
+   delivers the new script to web-2, and the workflow's own header says the merge is the authorization. If the auto-apply is skipped or fails, the delivery is a
+   `workflow_dispatch` of that workflow (owner-named).
+2. web-2's container changes only on a completed deploy: the next release or a same-version redeploy (`mode=redeploy`, which also redeploys web-1; owner-named dispatch).
+3. Proof it worked, all read-only from Better Stack: a web-2 `ci-deploy` row `SANDBOX_PROBE_OK`, zero new `fchmodat2` rows after it, and a new container id on web-2 with
+   `git_data_pin=present` and `git_data_store=disabled` (the flag is still off at that point). Only then is the per-host assertion able to see web-2. The follow-through
+   `scripts/followthroughs/web2-plugin-seed-8743.sh` (earliest 2026-10-21) grades the same thing and can be run by hand.
+
+Precondition or precheck. Precondition for `mode=flip` (and `rollback` when the flag is on). A workflow precheck is additive: in the flip preconditions step, before the
+freeze, refuse unless soleur-web-2 has a `ci-deploy` `SANDBOX_PROBE_OK` row newer than its newest `fchmodat2` row (or, once #10577 lands, `peers["10.0.1.11"].exit_code == 0`
+from `/hooks/deploy-status`). That turns the failure into a pre-freeze refusal instead of a post-freeze unwind. It is a workflow-semantics change in a 1761-line
+safety-critical workflow, so it is owner-gated and belongs after #10577, not instead of it. A precheck keyed on `git_data_pin=` presence is wrong: those lines are boot-time,
+not periodic, so they are absent for any long-running container including a healthy web-1.
+
+Rejected alternatives. (a) Treat web-2 as a standby and drop its leg from the readback: the flag change must reach every host that can serve git-data
+writes, and web-2 is a registered web host (volume role `unverified`), so a host on the old env during a flip is the split state the assertion exists to catch. (b) Restart web-2's container by hand or
+replace web-2 (terraform): a restart yields the stale 10-07 image, and #10585 records that a fresh replacement hits the same seed defect; not smaller and a production
+write. (c) Add a periodic emitter of the three lines: more code on the hot path of an app image, and it would still not make web-2 deploy. (d) Edit `vector.toml`
+or cloud-init: nothing there is wrong.
+
+Dissent: an owner short on time could dispatch `mode=flip` after only the redeploy, trusting web-2 to come up. I rule against it because the evidence shows web-2 deploys aborting on every day with a deploy since 09-28 (fchmodat2 on 21 of 21 such days, no completed-deploy marker on any). Flip the ruling if a web-2 deploy shows `SANDBOX_PROBE_OK` before the flip.
+
+Unverified: that the container `ef7566df6dfb` is running right now (no SSH; inferred from one continuous boot id, `--restart unless-stopped` and no later start lines); the root
+cause of the EPERM on web-2 beyond what #8743 and PR #10577 state (uid-1000 deploy user cannot chmod into a root-seeded uid-1001 plugin mount); why #10577's `test` check fails; and that
+the merge-triggered apply reaches web-2 (the workflow fails closed if web-2 is down).
+
+Owner-gated, not done here: merge of #10577; the `apply-deploy-pipeline-fix.yml` apply it triggers (or a manual dispatch of it); the same-version redeploy dispatch; any flip-workflow precheck edit.
+Legal/GDPR: none (no user data touched).

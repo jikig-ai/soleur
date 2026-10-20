@@ -206,7 +206,7 @@ CI root key); it does not exercise the app's own erasure path (`removeGitDataRep
 the redeployed web container). That is why Level 2 below is required: the CLO ruled on 2026-10-12 that Level 1
 alone does not discharge the #8211 Art. 17 condition, and that Level 1 is never worded "erasure verified".
 
-Ruled by CTO agent, 2026-10-19 (`knowledge-base/project/specs/feat-git-data-cutover-resume-8211/cto-rulings.md`): this
+Ruled by CTO agent, 2026-10-19 (`knowledge-base/project/specs/archive/20261020-094500-feat-git-data-cutover-resume-8211/cto-rulings.md`): this
 section is the run sheet; it adds no mode and no dry run. **The rehearsal flip IS a production flip**: `flip`
 freezes the store, writes `GIT_DATA_STORE_ENABLED=true` into Doppler `prd`, redeploys both web hosts and writes
 `GIT_DATA_LUKS_CUTOVER_AT`. Everything below makes the flag-on window short and its consequences read; it does not
@@ -312,7 +312,7 @@ The workflow does not enforce the following, so the owner holds them:
    and later than its newest `boot_complete`. See [Liveness heartbeat](#liveness-heartbeat-9438).
 3. **A dated by-hand read of the other flip preconditions against live data** (d6 index, the two floors against `/health`, no
    release in flight, the pin-fault workflow, the flag and stamp absent, host ids), taken the day of the dispatch and rerun at
-   R0. The last record is `knowledge-base/project/specs/feat-git-data-cutover-resume-8211/precondition-read-2026-10-19.md`;
+   R0. The last record is `knowledge-base/project/specs/archive/20261020-094500-feat-git-data-cutover-resume-8211/precondition-read-2026-10-19.md`;
    it is a point-in-time read, not a standing fact. `deploy_in_flight` in particular reads `web-platform-release.yml` runs of
    event `workflow_run`: a merge to `main` starts one, so a flip dispatched after a merge refuses until it settles. Read also
    the unchecked boxes of "Preconditions for the flip" above (every merge-triggered apply `success`, the ssh client on the
