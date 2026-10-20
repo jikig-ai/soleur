@@ -228,6 +228,7 @@ What each reader does when the read-only secret is absent, empty or not a plain 
 | `workspaces-luks-cutover` volume lookup | `SOLEUR_CREDENTIAL_REFUSED script=workspaces-luks-cutover reason=readonly_absent` (or `token_shape`) | the step stops before any request and before anything is delivered to web-1 |
 
 **Break-glass: an incident PR needs a plan, or a rollback needs the lookup, and a verdict above fired.**
+
 1. Restore the job's Tier-B environment secret first (`DOPPLER_TOKEN_INFRA_PRIVILEGED`): the loader's legacy arm
    is reached when that secret is missing, which is the likelier root cause, and the Tier-B arm reads the
    token from the privileged project instead.
