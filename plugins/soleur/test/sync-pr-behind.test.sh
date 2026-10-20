@@ -8,6 +8,7 @@
 #   --step: every exit code on real git (0/6/7/9/10/11), trace-env hygiene,
 #   unmapped-main refspec; standalone: wrong branch (12), exhausted (8), gh failure (4);
 #   argv strictness; the tag-shape contract over every line emitted above.
+#   flagless --step / --queue-wait (#9869): the F1-F8 and W1-W4 rows below; a mutation matrix per guard line.
 #   merge queue (#9454): a PR that is in the merge queue is skipped (kind=queued, rc 0,
 #   no merge, no push — a push would dequeue it); a failed queue read is kind=gh, never
 #   "not queued". The gh stub serves the RAW GraphQL body, projected to the fields the
@@ -461,12 +462,13 @@ collect "$OUTSIDE/out" "$OUTSIDE/err"
 rm -rf "$OUTSIDE"
 
 # =============================================================================
-# --step: ONE attempt, one gh call (#8383, #9454). This is the path both Phase 7 fences
-# run, so every exit code the fences dispatch on is pinned here on REAL git.
-# `gh` is a stub that records any call: --step makes exactly ONE, the merge-queue read
+# --step --fence: ONE attempt, one gh call (#8383, #9454, #9869). This is the path both Phase 7
+# fences run, so every exit code the fences dispatch on is pinned here on REAL git.
+# `gh` is a stub that records any call: the fenced --step makes exactly ONE, the merge-queue read
 # (`gh api graphql`, asked before any merge or push because a push to a queued PR
-# dequeues it); the fence already read mergeStateStatus this tick, so any other call
-# is UNEXPECTED.
+# dequeues it); the fence already read mergeStateStatus this tick and owns the queue-armed
+# decision, so any other call is UNEXPECTED. The flagless --step (any other caller) is refused on an
+# armed BEHIND PR of a merge-queue repo: the F rows further down.
 # =============================================================================
 install_gh_forbidden() {
   local bin="$1" queue="${2:-notqueued}"
@@ -499,13 +501,14 @@ advance_main() {
   git -C "$d/mainwt" push -q origin main
 }
 
-# run_step <dir> [extra args…] — runs --step from the caller's worktree; stdout and
-# stderr are captured SEPARATELY so the stdout-only tagging contract is checkable.
+# run_step <dir> [extra args…] — runs the FENCE's call (`--step --fence`) from the caller's worktree: the ~40 rows below assert the
+# fence path, whose only gh call is the merge-queue read. stdout and stderr are captured SEPARATELY so the stdout-only tagging
+# contract is checkable. The flagless call (what any other caller runs) is run_step_bare, below.
 run_step() {
   local d="$1"; shift
   assert_fixture_dir "$d"
   ( cd "$d/work" && assert_in_fixture "$d/work" \
-      && PATH="$d/bin:$PATH" bash "$d/work/plugins/soleur/scripts/sync-pr-behind.sh" "${QPR:-1}" --step "$@" ) \
+      && PATH="$d/bin:$PATH" bash "$d/work/plugins/soleur/scripts/sync-pr-behind.sh" "${QPR:-1}" --step --fence "$@" ) \
     >"$d/out" 2>"$d/err"
 }
 
@@ -680,7 +683,7 @@ advance_main "$S_TR" h extra
 install_gh_forbidden "$S_TR/bin"
 ( cd "$S_TR/work" && assert_in_fixture "$S_TR/work" \
     && GIT_CURL_VERBOSE=1 GIT_TRACE=1 GIT_TRACE_PACKET=1 GIT_TRACE_CURL=1 GIT_TRACE2=1 \
-       PATH="$S_TR/bin:$PATH" bash "$S_TR/work/plugins/soleur/scripts/sync-pr-behind.sh" 1 --step ) \
+       PATH="$S_TR/bin:$PATH" bash "$S_TR/work/plugins/soleur/scripts/sync-pr-behind.sh" 1 --step --fence ) \
   >"$S_TR/out" 2>"$S_TR/err"; rc=$?
 if [[ "$rc" -eq 0 ]] && ! grep -qE 'trace: |packet: |== Info|=> Send|<= Recv|trace2' "$S_TR/out" "$S_TR/err"; then
   pass "--step under exported GIT_CURL_VERBOSE/GIT_TRACE*: rc 0, no trace/verbose lines"
@@ -1264,15 +1267,15 @@ if [[ "$QW_RC" -eq 0 && "$QW_MOVED" == no ]] && grep -q '^\[pr-behind-sync\] kin
   pass "R7 in the queue: unchanged kind=queued, no rules read"
 else fail "R7 in queue: rc=$QW_RC moved=$QW_MOVED rules-calls=$(qw_rulescalls) out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-300)"; fi
 qw_done
-# --step is the Phase 7 fence's call and is unguarded by design (the fence owns the queue decision and its expiry): it
-# still syncs on a queue repo, and makes NO gh call besides the queue read (the forbidden stub logs every other argv).
+# --step --fence is the Phase 7 fence's call: the fence owns the queue decision and its expiry, so the script does not second-guess
+# it. It still syncs on a queue repo, and makes NO gh call besides the queue read (the forbidden stub logs every other argv).
 R8="$(mktemp -d "$TMPDIR/sync-qw-step.XXXXXXXX")"; FIXTURES+=("$R8")
 make_pair "$R8"; advance_main "$R8" h extra
 export QPR="$QUEUE_PR"; install_gh_forbidden "$R8/bin" notqueued; unset QPR
 before="$(git -C "$R8/work" rev-parse HEAD)"
 QPR="$QUEUE_PR" run_step "$R8"; rc=$?
 if [[ "$rc" -eq 0 && "$(git -C "$R8/work" rev-parse HEAD)" != "$before" ]] && no_gh "$R8" && [[ ! -s "$R8/bin/calls" ]]; then
-  pass "R8 --step on a queue repo: unguarded (still syncs), and its only gh call is the queue read"
+  pass "R8 --step --fence on a queue repo: still syncs (the fence owns that decision), and its only gh call is the queue read"
 else fail "R8 --step: rc=$rc calls=$(tr '\n' ' ' < "$R8/bin/calls" 2>/dev/null) out=$(tr '\n' ' ' < "$R8/out" | cut -c1-300)"; fi
 collect "$R8/out" "$R8/err"; rm -rf "$R8"
 
@@ -1618,10 +1621,10 @@ if qw_scenario f1 && qw_scenario f1b && qw_scenario f3 && qw_scenario f4 && qw_s
   pass "mutation control: the real SUT satisfies the flagless --step scenarios (F1, F1b, F3, F4, F5 rules/pr view, F6, R6, F7)"
 else fail "mutation control: the real SUT fails one of the flagless --step scenarios"; fi
 # Guard 1 mutation matrix (plan): every anchor is a literal line of the guard, occurs once in the SUT, and the mutant must RUN.
-qw_mutant "delete the flagless --step guard call" f1 $'    step_guard\n' ''
+qw_mutant "delete the flagless --step guard call" f1 $'    step_guard\n' $'    :\n'
 qw_mutant "treat DIRTY like BEHIND (the BEHIND/UNKNOWN-only boundary widened)" f4 ' && "$1" != *DIRTY* ]] || return 0' ' || "$1" == *DIRTY* ]] || return 0'
 qw_mutant "drop the armed condition (bare --step)" f3 $'  [[ "$am" == armed ]] || return 0\n' ''
-qw_mutant "an unreadable rules read is read as proceed" f5r $'  QW_VERDICT=unreadable; QW_DETAIL="rules read failed after' $'  QW_VERDICT=proceed; QW_DETAIL="rules read failed after'
+qw_mutant "an unreadable rules read is read as proceed" f5r $'  QW_VERDICT=unreadable; QW_DETAIL="rule read failed after' $'  QW_VERDICT=proceed; QW_DETAIL="rule read failed after'
 qw_mutant "an unreadable pr view is read as proceed" f5v $'  if [[ "$rc" -eq 0 && "$out" =~ ^(OPEN|CLOSED|MERGED)\\ [A-Z_]+\\ (armed|disarmed)$ ]]; then\n' $'  if true; then\n'
 qw_mutant "--fence runs the guard anyway" f6 $'  if [[ "$FENCE" != 1 ]]; then\n' $'  if true; then\n'
 qw_mutant "evaluate the predicate only on the first standalone attempt" r6 $'  queue_wait_gate "$state_line"\n' $'  [[ "$attempt" -gt 1 ]] || queue_wait_gate "$state_line"\n'

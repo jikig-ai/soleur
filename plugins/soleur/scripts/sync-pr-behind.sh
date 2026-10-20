@@ -2,11 +2,12 @@
 # BEHIND resync — merge origin/main into the current PR branch and push.
 #
 # THE ONE IMPLEMENTATION of the Phase 7 BEHIND auto-sync (#8383). Three callers:
-#   1. ship/SKILL.md Phase 7 poll fence      — runs `sync-pr-behind.sh <n> --step`
-#   2. merge-pr/SKILL.md §5.2 mirror fence   — runs `sync-pr-behind.sh <n> --step`
+#   1. ship/SKILL.md Phase 7 poll fence      — runs `sync-pr-behind.sh <n> --step --fence`
+#   2. merge-pr/SKILL.md §5.2 mirror fence   — runs `sync-pr-behind.sh <n> --step --fence`
 #   3. standalone (Grok AwaitShell, review/SKILL.md's CONFLICTING-but-clean
 #      recovery)                             — runs `sync-pr-behind.sh <n> [--max-attempts N]`
-# A fix to the merge/push path is made in sync_step() below and reaches all three.
+# A fix to the merge/push path is made in sync_step() below and reaches all three. Two read-only modes serve other
+# callers: `--queue-state` (the pre-merge hook, monitor-pr-checks.sh) and `--queue-wait` (the pre-merge hook).
 # The fences keep their own `BEHIND detected` / `auto-sync N pushed` lines and their
 # counters; this script owns the attempt and reports it.
 #
@@ -48,11 +49,16 @@
 #      reached through the marker alone is reported ONCE: --step (exit 13) and --queue-state (the `dequeued` print) each
 #      consume the marker, so a PR the agent fixed and re-armed is not reported again. The
 #      fences reach this on a BEHIND tick via --step and on every 5th OPEN tick via --queue-state.
-#   Before 1, standalone only. Armed BEHIND on a merge-queue repo (2026-10-09, PR 9839): a PR that GitHub reports BEHIND
-#      (not DIRTY), with auto-merge armed and a merge_queue rule on main, is skipped before any git work — `kind=queue_wait`
-#      rc=0, exit 0, nothing fetched, merged or pushed (queue_wait_gate() below). The window it closes is between the arm
-#      and the enqueue, where queue_gate sees no entry and a push restarts every required check for nothing. `--step` is
-#      NOT guarded: it is the Phase 7 fence's call, and the fence owns the queue-mode decision and its expiry fallback.
+#   Before 1. Armed BEHIND on a merge-queue repo (2026-10-09, PR 9839; extended to --step and the hook 2026-10-20, #9869): a PR
+#      that GitHub reports BEHIND or UNKNOWN (never DIRTY), with auto-merge armed and a merge_queue rule on main, is skipped
+#      before any git work — nothing fetched, merged or pushed. The window it closes is between the arm and the enqueue, where
+#      queue_gate sees no entry and a push restarts every required check for nothing. ONE predicate (queue_wait_eval() below)
+#      serves three callers: the standalone loop answers `kind=queue_wait` rc=0 (exit 0); a FLAGLESS `--step` answers
+#      `kind=queue_wait` rc=14 (exit 14: not 11, the fences' uncounted no-op arm, which an OLD pasted fence would loop on
+#      silently — 14 hits its loud sync_failed stop); `--queue-wait` prints the verdict (`queue_wait` | `proceed`) for the
+#      pre-merge hook. The Phase 7 fences pass `--fence`, which skips the guard entirely: the fence owns the queue-mode
+#      decision and its expiry fallback, and its legitimate sync arms (expiry, DIRTY-derived BEHIND, no merge_queue rule, a
+#      failed armed read) must still sync. `--fence` is accident prevention, not authentication.
 # Every tagged line is `[pr-behind-sync] kind=<k> rc=<n> — …` on STDOUT (a Monitor
 # streams stdout only). rc is git's own exit status where a git command failed, else
 # this script's exit code. Exit codes: see usage() / --help — the one table.
@@ -60,7 +66,8 @@
 # Any unrecognised argument exits 2. The strictness is load-bearing: an older copy
 # silently ignored unknown flags, so `--step` ran a full standalone sync and exited 0
 # on "no sync needed" — which a fence would print as `pushed`. The fences refuse a
-# copy whose --help does not name --step.
+# copy whose --help does not name --fence (a copy that predates the queue-armed
+# refusal; --fence implies --step).
 #
 # Portability: runs on customer hosts including macOS's bash 3.2 — no mapfile, no
 # ${x,,}, no associative arrays, no date; `timeout` only when present and `sleep` only between
@@ -79,17 +86,24 @@ export GIT_TRACE_REDACT=1
 usage() {
   cat <<'USAGE'
 usage: sync-pr-behind.sh <pr-number> [--max-attempts N]
-       sync-pr-behind.sh <pr-number> --step
+       sync-pr-behind.sh <pr-number> --step [--fence]
        sync-pr-behind.sh <pr-number> --queue-state
+       sync-pr-behind.sh <pr-number> --queue-wait
        sync-pr-behind.sh --help
 
   Run from the PR's feature worktree, on its branch: the script syncs $PWD's branch.
 
-  --step            one sync attempt on the current branch (merge origin/main, push);
-                    its only gh call is the merge-queue read — the caller already read
-                    mergeStateStatus. A PR in the merge queue is skipped (a push would
-                    dequeue it). The Phase 7 fence's call: the fence owns the queue-mode
-                    decision (rule, armed, expiry); do not call it from your own loop
+  --step            one sync attempt on the current branch (merge origin/main, push).
+                    A PR in the merge queue is skipped (a push would dequeue it). Without
+                    --fence it also refuses an OPEN, armed PR that GitHub reports BEHIND or
+                    UNKNOWN (never DIRTY) on a repo whose main has a merge_queue rule:
+                    kind=queue_wait, exit 14, nothing fetched, merged or pushed (the queue
+                    makes the PR current; a resync restarts every required check). The Phase
+                    7 fence's call: the fence owns the queue-mode decision (rule, armed,
+                    expiry); do not call it from your own loop
+  --fence           with --step only: the Phase 7 / merge-pr poll fences pass this;
+                    nobody else. It skips the queue-armed refusal (and its extra gh reads)
+                    because the fence has already made that decision, expiry included
   --queue-state     print `<queued|not_queued|dequeued> <OPEN|CLOSED|MERGED> <armed|disarmed> removal=<reason|none>`
                     (the merge queue state; `dequeued` = out of the queue, OPEN, and seen queued or a current removal
                     event; no push, no worktree needed) and exit 0, or `kind=gh` exit 4 after one retry. Writes
@@ -97,7 +111,14 @@ usage: sync-pr-behind.sh <pr-number> [--max-attempts N]
                     reported once, so a re-armed PR is not reported again (a current removal event needs no marker)
                     Env: PR_QUEUE_TIMEOUT (s, default 10), PR_QUEUE_ATTEMPTS (default 2 = one retry),
                     PR_QUEUE_RETRY_SLEEP (s, default 2), PR_QUEUE_REPO=OWNER/REPO (else the cwd repo);
-                    the same four also govern the standalone loop's merge-queue rule read
+                    the same four also govern the merge-queue rule read and the pr view read
+  --queue-wait      print `queue_wait` or `proceed` and exit 0, or `kind=gh` exit 4 (a failed, hung or
+                    unparseable read is never read as `proceed`). `queue_wait` = the PR is OPEN, GitHub
+                    reports BEHIND or UNKNOWN (not DIRTY), auto-merge is armed and main has a merge_queue
+                    rule. One pr view snapshot (state, mergeStateStatus, autoMergeRequest) and one rules
+                    read; no GraphQL queue read, no worktree, nothing written. The pre-merge hook calls it
+                    after --queue-state said not_queued. `--queue-state`: is the PR in the queue;
+                    `--queue-wait`: should a sync be skipped. Same env as --queue-state
   --max-attempts N  standalone loop (N = 1..999): check the PR's head branch is the
                     current branch, read state, sync while BEHIND, up to N times
 
@@ -105,11 +126,12 @@ exit codes (each non-zero exit prints one tagged `kind=<k> rc=<n>` line on stdou
   0   synced and pushed (--step), or nothing to do / BEHIND resolved (standalone), or
       the PR is in the merge queue — standalone only: skipped, nothing merged or pushed
       (kind=queued; --step exits 11 for it, see below), or BEHIND + armed on a merge-queue
-      repo — standalone only: skipped, nothing fetched, merged or pushed (kind=queue_wait)
+      repo — standalone only: skipped, nothing fetched, merged or pushed (kind=queue_wait;
+      a flagless --step exits 14 for it, see below)
   2   usage error or unknown argument (kind=usage)
   3   not inside a work tree (kind=not_worktree)
-  4   a gh call failed (kind=gh): gh pr view (standalone), the merge-queue read after one retry,
-      or (standalone, armed BEHIND PR) the main merge-queue rule read
+  4   a gh call failed (kind=gh): gh pr view (standalone, flagless --step, --queue-wait), the merge-queue
+      read after one retry, or (armed BEHIND PR) the main merge-queue rule read
   5   fetching main failed (kind=fetch)
   6   merge conflict, or merge not committed (hook) — the merge was aborted (kind=merge)
   7   git push failed — the local merge commit is retained (kind=push)
@@ -126,18 +148,23 @@ exit codes (each non-zero exit prints one tagged `kind=<k> rc=<n>` line on stdou
   13  the PR is out of the merge queue, OPEN, and was seen queued or has a current removal event (a failed
       merge_group run or a removal; kind=dequeued; auto-merge state is not consulted) — nothing merged or
       pushed; the line has the removal reason and the recovery
+  14  flagless --step on an armed BEHIND/UNKNOWN PR of a merge-queue repo (kind=queue_wait): nothing fetched,
+      merged or pushed. kind=queue_wait carries rc 0 standalone and rc 14 under --step, so no consumer keys
+      on the kind alone
 USAGE
 }
 
 tag() { local k="$1" r="$2"; shift 2; echo "[pr-behind-sync] kind=$k rc=$r — $*"; }
 usage_err() { tag usage 2 "$1"; usage; exit 2; }
 
-PR=""; MODE=loop; MAX_ATTEMPTS=1
+PR=""; MODE=loop; MAX_ATTEMPTS=1; FENCE=0; NMODE=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --help|-h) usage; exit 0 ;;
-    --step) MODE=step ;;
-    --queue-state) MODE=queue_state ;;
+    --step) MODE=step; NMODE=$((NMODE + 1)) ;;
+    --queue-state) MODE=queue_state; NMODE=$((NMODE + 1)) ;;
+    --queue-wait) MODE=queue_wait; NMODE=$((NMODE + 1)) ;;
+    --fence) FENCE=1 ;;
     --max-attempts)
       [[ "${2:-}" =~ ^[1-9][0-9]{0,2}$ ]] || usage_err "--max-attempts takes 1..999, got '${2:-}'"
       MAX_ATTEMPTS="$2"; shift ;;
@@ -147,7 +174,11 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 [[ -n "$PR" ]] || usage_err "missing <pr-number>"
-if [[ "$MODE" != loop && "$MAX_ATTEMPTS" != 1 ]]; then usage_err "--step and --queue-state take no --max-attempts"; fi
+# The strictness invariant: a mode-flag misuse is a usage error, never a quiet pick of one of them (an older copy that ignored
+# unknown flags once printed a false "pushed").
+if [[ "$NMODE" -gt 1 ]]; then usage_err "at most one of --step, --queue-state, --queue-wait"; fi
+if [[ "$FENCE" == 1 && "$MODE" != step ]]; then usage_err "--fence is only valid with --step"; fi
+if [[ "$MODE" != loop && "$MAX_ATTEMPTS" != 1 ]]; then usage_err "--step, --queue-state and --queue-wait take no --max-attempts"; fi
 
 # queue_state_read — THE ONE copy of the merge-queue GraphQL read and its jq verdict program (the
 # pre-merge hook and monitor-pr-checks.sh reach it through --queue-state). Sets QS_OUT to
@@ -204,7 +235,8 @@ query($owner: String!, $name: String!, $number: Int!) {
             _ "$PR" "$query" "$jqp" "$owner" "$repo" 2>"$errf")" || rc=$?
     if [[ "$rc" -ne 0 ]]; then
       case "$rc" in 124|137|143) QS_CAUSE=timeout ;; *) QS_CAUSE=gh_error ;; esac
-      QS_DETAIL="rc=$rc $(head -c 200 "$errf" | tr '\n' ' ')"
+      # gh's raw stderr reaches the `kind=gh rc=4` line a Monitor streams to the model: ESC, CR and a forged tag line must not.
+      QS_DETAIL="$(printf '%s' "rc=$rc $(head -c 200 "$errf")" | tr -c '[:alnum:] ._:/=-' '?')"
     else
       out="${out%%$'\n'*}"
       case "${out%% *}" in
@@ -239,6 +271,116 @@ queue_read_settled() {
   queue_state_read || return 1
   if dq_candidate "$1"; then sleep "$nap"; queue_state_read || return 1; fi
   return 0
+}
+
+# queue_wait_eval — THE ONE copy of the armed-BEHIND predicate (2026-10-09, PR 9839; shared with --step and --queue-wait,
+# #9869). Between `gh pr merge --auto` and the enqueue a PR is OPEN, BEHIND, armed and NOT in the queue, so queue_gate (which
+# only sees an entry) lets it through, and a sync there pushes a commit that restarts every required check for nothing: on a
+# merge-queue repo the queue makes the PR current itself. Fires when the PR is OPEN, GitHub says BEHIND or UNKNOWN (UNKNOWN is
+# recompute lag; DIRTY never: a conflicting or kb-index-class PR still resolves) AND auto-merge is armed AND `main` has a
+# merge_queue rule (one rules read, selected by `.type`, never by position: merge_queue is not the first rule on a live repo, and
+# the read asks for 100 rules per page: a merge_queue beyond rule 100 would read as absent). It always RETURNS 0 and reports
+# through QW_VERDICT (wait | proceed | unreadable) and QW_DETAIL: a distinct non-zero return would kill a caller under
+# `set -euo pipefail` on the common proceed path. A rules read that still fails after PR_QUEUE_ATTEMPTS tries (default 2, like
+# queue_state_read), or answers empty or non-numeric, is `unreadable`: the one place this script fails CLOSED on an unreadable
+# rules answer (ADR-270 addendum 2026-10-09) — an unknown answer is not a yes. The cause is in QW_DETAIL. Base is `main`.
+queue_wait_eval() {  # <state_line: "<STATE> <MERGESTATE>"> <armed|disarmed|->
+  local am="$2" out="" rc=0 n=0 detail="" errf owner='{owner}' repo='{repo}'
+  local to_s="${PR_QUEUE_TIMEOUT:-10}" attempts="${PR_QUEUE_ATTEMPTS:-2}" nap="${PR_QUEUE_RETRY_SLEEP:-2}" to=()
+  QW_VERDICT=proceed; QW_DETAIL=""
+  [[ "$1" == OPEN\ * ]] || return 0
+  [[ ( "$1" == *BEHIND* || "$1" == *UNKNOWN* ) && "$1" != *DIRTY* ]] || return 0
+  [[ "$am" == armed ]] || return 0
+  [[ "$to_s" =~ ^[1-9][0-9]{0,3}$ ]] || to_s=10
+  [[ "$attempts" =~ ^[1-9]$ ]] || attempts=2
+  [[ "$nap" =~ ^[0-9]{1,3}$ ]] || nap=2
+  if [[ "${PR_QUEUE_REPO:-}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then owner="${PR_QUEUE_REPO%%/*}"; repo="${PR_QUEUE_REPO#*/}"; fi
+  if command -v timeout >/dev/null 2>&1; then to=(timeout -k 2 "$to_s")
+  elif command -v gtimeout >/dev/null 2>&1; then to=(gtimeout -k 2 "$to_s"); fi
+  errf="$(mktemp)" || { QW_VERDICT=unreadable; QW_DETAIL="rule read not attempted (mktemp failed)"; return 0; }  # lint-trap-ownership: ok — removed by rm -f on every return path of queue_wait_eval; a kill leaves one tiny file
+  while [[ "$n" -lt "$attempts" ]]; do
+    n=$((n + 1)); rc=0
+    # shellcheck disable=SC2016  # $1..$3 are bash -c's own positional parameters, not this shell's
+    out="$(${to[@]+"${to[@]}"} bash -c 'gh api "repos/$1/$2/rules/branches/main?per_page=100" --jq "$3"' \
+            _ "$owner" "$repo" '[.[] | select(.type == "merge_queue")] | length' 2>"$errf")" || rc=$?
+    out="${out%%$'\n'*}"
+    if [[ "$rc" -eq 0 && "$out" =~ ^[0-9]{1,6}$ ]]; then break; fi
+    detail="rc=$rc answered=${out:0:40} $(head -c 160 "$errf" | tr '\n' ' ')"
+    if [[ "$n" -lt "$attempts" ]]; then sleep "$nap"; fi
+  done
+  rm -f "$errf"
+  if [[ "$rc" -eq 0 && "$out" =~ ^[0-9]{1,6}$ ]]; then
+    if (( 10#$out >= 1 )); then QW_VERDICT="wait"; QW_DETAIL="rules=$out"; fi
+    return 0
+  fi
+  detail="$(printf '%s' "$detail" | tr -c '[:alnum:] ._:/=-' '?')"
+  QW_VERDICT=unreadable; QW_DETAIL="rule read failed after $n attempt(s) ($detail)"
+  return 0
+}
+
+# The refusal text shared by every caller that refuses (the standalone loop, a flagless --step): what to do instead of a resync.
+qw_refusal() {
+  printf '%s' "PR #$PR is BEHIND, auto-merge is armed (not in the queue yet) and main has a merge queue: not syncing — a resync alone restarts every required check and the queue makes the PR current. Wait for MERGED or a dequeue; with no poll running, re-arm the Phase 7 poll with CLAUDE_PLUGIN_ROOT exported — its expiry fallback after 6 idle ticks is the sanctioned sync. Red required check? Push the fix itself, not a resync. Green and never enqueued? Follow plugins/soleur/skills/ship/references/merge-queue-dequeue.md ('Armed and green but never enqueued')."
+}
+# ... and the unreadable-rules text (fail closed): an unknown answer is not a yes.
+qw_unreadable() {  # <detail>
+  printf '%s' "merge-queue $1 — not syncing: that read decides whether this armed BEHIND PR may be resynced and an unknown answer is not a yes. Retry the poll; a persistent failure means the token cannot read repository rules (raise PR_QUEUE_ATTEMPTS, or resync by hand only after confirming main has no merge queue)."
+}
+
+# qw_snapshot — ONE bounded `gh pr view <PR> --json state,mergeStateStatus,autoMergeRequest` for the flagless --step and --queue-wait
+# (no GraphQL queue read: --queue-wait's caller already classified queued / not_queued, and a second read would race a
+# just-dequeued PR that still reads armed). Sets QW_STATE (`<STATE> <MERGESTATE>`) and QW_ARMED (armed | disarmed). It runs under
+# the same timeout wrapper and PR_QUEUE_REPO handling as the other reads, with gh's stderr kept OUT of the string the match
+# tests, and a strict match on the answer. ANY failure — non-zero, hung, empty, garbage — is `kind=gh` exit 4: never read as "not armed".
+qw_snapshot() {
+  local to_s="${PR_QUEUE_TIMEOUT:-10}" out="" rc=0 errf pvd repo_arg="" to=()
+  [[ "$to_s" =~ ^[1-9][0-9]{0,3}$ ]] || to_s=10
+  if [[ "${PR_QUEUE_REPO:-}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then repo_arg="$PR_QUEUE_REPO"; fi
+  if command -v timeout >/dev/null 2>&1; then to=(timeout -k 2 "$to_s")
+  elif command -v gtimeout >/dev/null 2>&1; then to=(gtimeout -k 2 "$to_s"); fi
+  errf="$(mktemp)" || { tag gh 4 "pr view snapshot not attempted (mktemp failed) — not syncing; retry the poll"; exit 4; }  # lint-trap-ownership: ok — removed by rm -f on every path of qw_snapshot; a kill leaves one tiny file
+  # shellcheck disable=SC2016  # $1..$3 are bash -c's own positional parameters, not this shell's
+  out="$(${to[@]+"${to[@]}"} bash -c 'if [[ -n "$3" ]]; then gh pr view "$1" --repo "$3" --json state,mergeStateStatus,autoMergeRequest --jq "$2"; else gh pr view "$1" --json state,mergeStateStatus,autoMergeRequest --jq "$2"; fi' \
+          _ "$PR" '"\(.state) \(.mergeStateStatus) \(if .autoMergeRequest == null then "disarmed" else "armed" end)"' "$repo_arg" 2>"$errf")" || rc=$?
+  out="${out%%$'\n'*}"
+  if [[ "$rc" -eq 0 && "$out" =~ ^(OPEN|CLOSED|MERGED)\ [A-Z_]+\ (armed|disarmed)$ ]]; then
+    rm -f "$errf"
+    QW_STATE="${out% *}"; QW_ARMED="${out##* }"
+    return 0
+  fi
+  pvd="$(printf '%s' "rc=$rc answered=${out:0:40} $(head -c 160 "$errf")" | tr -c '[:alnum:] ._:/=-' '?')"
+  rm -f "$errf"
+  tag gh 4 "pr view snapshot read failed ($pvd) — not syncing: whether this PR is armed and BEHIND decides if a resync is allowed, and an unknown answer is not a yes. Retry."
+  exit 4
+}
+
+# --queue-wait: the read-only verdict for the pre-merge hook (#9869), handled beside --queue-state before the worktree check.
+# Armed means autoMergeRequest != null in THIS snapshot, so an armed PR that is already in the queue also reads queue_wait (the
+# stricter, safe direction for a caller that decides whether to push). Writes nothing — no marker.
+if [[ "$MODE" == queue_wait ]]; then
+  QW_STATE=""; QW_ARMED=""
+  qw_snapshot
+  queue_wait_eval "$QW_STATE" "$QW_ARMED"
+  case "$QW_VERDICT" in
+    wait) echo queue_wait; exit 0 ;;
+    unreadable) tag gh 4 "$(qw_unreadable "$QW_DETAIL")"; exit 4 ;;
+  esac
+  echo proceed; exit 0
+fi
+
+# step_guard — a FLAGLESS --step (#9869): refuse an armed BEHIND/UNKNOWN PR of a merge-queue repo with exit 14, a code of its
+# own. 11 is the fences' uncounted "no sync needed" arm, so an OLD pasted fence would loop silently on it; 14 reaches its `*)`
+# arm, a loud bounded stop whose line above names the action. The line opens with "NOT AN ERROR in itself" so an errexit reader
+# does not fall back to a hand merge. Unreadable is fail closed (kind=gh, exit 4), as in the standalone loop.
+step_guard() {
+  QW_STATE=""; QW_ARMED=""
+  qw_snapshot
+  queue_wait_eval "$QW_STATE" "$QW_ARMED"
+  case "$QW_VERDICT" in
+    wait) tag queue_wait 14 "NOT AN ERROR in itself (GitHub says: $QW_STATE) — $(qw_refusal) If this copy of the fence predates --fence, re-paste the fence from the current ship/SKILL.md."
+          exit 14 ;;
+    unreadable) tag gh 4 "$(qw_unreadable "$QW_DETAIL")"; exit 4 ;;
+  esac
 }
 
 # --queue-state: the shared read — no git work, no worktree needed, no push. It never WRITES the marker (only --step does,
@@ -322,54 +464,19 @@ queue_gate() {
   esac
 }
 
-# Armed-and-BEHIND gate (2026-10-09, PR 9839). Between `gh pr merge --auto` and the enqueue a PR is OPEN, BEHIND, armed
-# and NOT in the queue, so queue_gate (which only sees an entry) lets it through, and a sync there pushes a commit that
-# restarts every required check for nothing: on a merge-queue repo the queue makes the PR current itself. Standalone loop
-# only. Fires when GitHub says BEHIND (not DIRTY: a DIRTY that is only recompute lag still resolves) AND auto-merge is
-# armed (the third field of QS_OUT, set by the queue_gate that just ran: no extra call) AND `main` has a merge_queue rule
-# (one rules read, selected by `.type`, never by position: merge_queue is not the first rule on a live repo, and the read
-# asks for 100 rules per page: a merge_queue beyond rule 100 would read as absent). Verdict: rule found -> `kind=queue_wait` exit 0 with nothing fetched, merged or pushed;
-# none -> return, the sync proceeds as before; a read that still fails after PR_QUEUE_ATTEMPTS tries (default 2, like
-# queue_state_read), or answers empty or non-numeric -> `kind=gh` exit 4. That is the one place this script fails CLOSED
-# on an unreadable rules answer (ADR-270 addendum 2026-10-09): the fence falls toward sync, but here the caller is a
-# standalone run with no poll behind it, and an unknown answer is not a yes. The cause is in the tag. `--step` is not
-# guarded: it is the Phase 7 fence's call and the fence owns the queue-mode decision and its expiry. Base is `main`.
-# The standalone answer has NO expiry of its own: re-arming the Phase 7 poll is the bound (its fallback sync).
+# Armed-and-BEHIND gate for the standalone loop (2026-10-09, PR 9839): queue_wait_eval's verdict, as the loop answers it. Runs
+# after queue_gate, whose QS_OUT carries the armed bit (no extra call). `wait` -> `kind=queue_wait` rc=0, exit 0 with nothing
+# fetched, merged or pushed; `proceed` -> return, the sync goes on; `unreadable` -> `kind=gh` exit 4. The standalone answer has NO
+# expiry of its own: re-arming the Phase 7 poll is the bound (its fallback sync).
 queue_wait_gate() {  # <state_line>
-  local v st am rm out="" rc=0 n=0 detail="" errf msg owner='{owner}' repo='{repo}'
-  local to_s="${PR_QUEUE_TIMEOUT:-10}" attempts="${PR_QUEUE_ATTEMPTS:-2}" nap="${PR_QUEUE_RETRY_SLEEP:-2}" to=()
-  [[ "$1" == *BEHIND* && "$1" != *DIRTY* ]] || return 0
+  local v st am rm
   read -r v st am rm <<<"$QS_OUT"
-  [[ "$am" == armed ]] || return 0
-  [[ "$to_s" =~ ^[1-9][0-9]{0,3}$ ]] || to_s=10
-  [[ "$attempts" =~ ^[1-9]$ ]] || attempts=2
-  [[ "$nap" =~ ^[0-9]{1,3}$ ]] || nap=2
-  if [[ "${PR_QUEUE_REPO:-}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then owner="${PR_QUEUE_REPO%%/*}"; repo="${PR_QUEUE_REPO#*/}"; fi
-  if command -v timeout >/dev/null 2>&1; then to=(timeout -k 2 "$to_s")
-  elif command -v gtimeout >/dev/null 2>&1; then to=(gtimeout -k 2 "$to_s"); fi
-  errf="$(mktemp)" || { tag gh 4 "merge-queue rule read not attempted (mktemp failed) — not syncing; retry the poll"; exit 4; }  # lint-trap-ownership: ok — removed by rm -f on every exit path of queue_wait_gate; a kill leaves one tiny file
-  while [[ "$n" -lt "$attempts" ]]; do
-    n=$((n + 1)); rc=0
-    # shellcheck disable=SC2016  # $1..$3 are bash -c's own positional parameters, not this shell's
-    out="$(${to[@]+"${to[@]}"} bash -c 'gh api "repos/$1/$2/rules/branches/main?per_page=100" --jq "$3"' \
-            _ "$owner" "$repo" '[.[] | select(.type == "merge_queue")] | length' 2>"$errf")" || rc=$?
-    out="${out%%$'\n'*}"
-    if [[ "$rc" -eq 0 && "$out" =~ ^[0-9]{1,6}$ ]]; then break; fi
-    detail="rc=$rc answered=${out:0:40} $(head -c 160 "$errf" | tr '\n' ' ')"
-    if [[ "$n" -lt "$attempts" ]]; then sleep "$nap"; fi
-  done
-  rm -f "$errf"
-  if [[ "$rc" -eq 0 && "$out" =~ ^[0-9]{1,6}$ ]]; then
-    if (( 10#$out >= 1 )); then
-      msg="PR #$PR is BEHIND, auto-merge is armed (not in the queue yet) and main has a merge queue: not syncing — a resync alone restarts every required check and the queue makes the PR current. Wait for MERGED or a dequeue; with no poll running, re-arm the Phase 7 poll with CLAUDE_PLUGIN_ROOT exported — its expiry fallback after 6 idle ticks is the sanctioned sync. Red required check? Push the fix itself, not a resync. Green and never enqueued? Follow plugins/soleur/skills/ship/references/merge-queue-dequeue.md ('Armed and green but never enqueued')."
-      tag queue_wait 0 "$msg"
-      exit 0
-    fi
-    return 0
-  fi
-  detail="$(printf '%s' "$detail" | tr -c '[:alnum:] ._:/=-' '?')"
-  tag gh 4 "merge-queue rule read failed after $n attempt(s) ($detail) — not syncing: that read decides whether this armed BEHIND PR may be resynced and an unknown answer is not a yes. Retry the poll; a persistent failure means the token cannot read repository rules (raise PR_QUEUE_ATTEMPTS, or resync by hand only after confirming main has no merge queue)."
-  exit 4
+  queue_wait_eval "$1" "$am"
+  case "$QW_VERDICT" in
+    wait) tag queue_wait 0 "$(qw_refusal)"; exit 0 ;;
+    unreadable) tag gh 4 "$(qw_unreadable "$QW_DETAIL")"; exit 4 ;;
+  esac
+  return 0
 }
 
 # One sync attempt. Returns the exit code documented in usage() and prints the tagged
@@ -446,6 +553,11 @@ sync_step() {
 
 if [[ "$MODE" == step ]]; then
   queue_gate
+  # The Phase 7 fences pass --fence: they decided to sync (expiry fallback, DIRTY-derived BEHIND, no merge_queue rule, a failed armed
+  # read) and made no extra read here. Any other caller gets the queue-armed refusal.
+  if [[ "$FENCE" != 1 ]]; then
+    step_guard
+  fi
   rc=0; sync_step || rc=$?
   exit "$rc"
 fi

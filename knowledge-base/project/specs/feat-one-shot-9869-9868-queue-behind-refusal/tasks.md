@@ -21,14 +21,14 @@ Closes (by Ref, ship step owns the body): #9869, #9868. Draft PR: #10655.
 - [x] 0.6 Run all five and record the RED row list
 
 ## Phase 1: sync-pr-behind.sh
-- [ ] 1.1 queue_wait_eval (always returns 0, QW_VERDICT/QW_DETAIL); queue_wait_gate as wrapper
-- [ ] 1.2 Parse --fence (only with --step) and --queue-wait
-- [ ] 1.2 Sanitise queue_state_read detail; bounded pr view with strict match
-- [ ] 1.3 Parse --fence/--queue-wait with mode exclusivity
-- [ ] 1.4 Flagless --step guard: one pr view snapshot, kind=queue_wait rc=14, fail-closed kind=gh rc=4
-- [ ] 1.5 --queue-wait mode (queue_wait | proceed; one pr view, no GraphQL read, no marker)
-- [ ] 1.6 usage/exit-code table (row 14)/header comments
-- [ ] 1.7 flip run_step to --fence (+ S1 row), shellcheck, suite GREEN
+- [x] 1.1 queue_wait_eval (always returns 0, QW_VERDICT/QW_DETAIL); queue_wait_gate as wrapper
+- [x] 1.2 Parse --fence (only with --step) and --queue-wait
+- [x] 1.2 Sanitise queue_state_read detail; bounded pr view with strict match
+- [x] 1.3 Parse --fence/--queue-wait with mode exclusivity
+- [x] 1.4 Flagless --step guard: one pr view snapshot, kind=queue_wait rc=14, fail-closed kind=gh rc=4
+- [x] 1.5 --queue-wait mode (queue_wait | proceed; one pr view, no GraphQL read, no marker)
+- [x] 1.6 usage/exit-code table (row 14)/header comments
+- [x] 1.7 flip run_step to --fence (+ S1 row), shellcheck, suite GREEN
 
 ## Phase 2: pre-merge-rebase.sh
 - [ ] 2.1 Armed + not_queued + OPEN skip via --queue-wait under a 20 s wrapper; exact-line verdict parse; reuse _Q_NOTE for unreadable
