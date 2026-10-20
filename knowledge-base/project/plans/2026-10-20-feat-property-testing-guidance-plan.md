@@ -48,7 +48,7 @@ Discrete properties the ask decomposes to (observable outcomes):
 
 ### Repo Research
 
-- **`plugins/soleur/skills/work/SKILL.md`** — TDD task-title convention at the "Create Todo List (TDD-First Structure)" step (`RED(unit|integration|e2e): Write failing test for [feature]`); the TDD Gate (HARD GATE) block in Phase 2 prescribes the failing-test properties. Both are the edit surface.
+- **`plugins/soleur/skills/work/SKILL.md`** — TDD task-title convention at the "Create Todo List (TDD-First Structure)" step (`RED(unit|integration|e2e): Write failing test for [feature]`); the TDD Gate (HARD GATE) block in Phase 2 prescribes the failing-test properties. Both were candidate surface; the CTO ruling cut the edit to the first (one site, byte ceiling).
 - **`plugins/soleur/skills/plan/references/plan-issue-templates.md`** — three `## Test Scenarios` blocks (MINIMAL/MORE/A LOT templates), each already carrying the pyramid-layer label sentence ("`unit`, `integration`, or `e2e`" + `pyramid-justified:` marker rule). The "state the property" guidance lands inside all three blocks (per-block — `test-pyramid-fixtures.test.sh` asserts every block carries its marker lines).
 - **`plugins/soleur/test/test-pyramid-fixtures.test.sh`** — DRIFT pin asserting `RED\(unit\|integration\|e2e\)` presence in `work/SKILL.md`. **CTO-corrected evidence (2026-10-20):** the pin is a full-literal ERE including the closing `\)`, so the widened form `RED(unit|integration|e2e|property)` does NOT satisfy it — extending the pin is FORCED, not optional. Also pins `^## Test Scenarios` count == 3 and per-block `pyramid layer`/`pyramid-justified` markers — all edits stay inside existing blocks.
 - **Consumer census for the widened vocabulary** (hr-type-widening-cross-consumer-grep): no code path parses `RED(<layer>)` task titles (repo-wide `RED\(` grep outside markdown returns only unrelated shell identifiers). Prose consumers that restate the vocabulary: `review/SKILL.md` + `review.workflow.js` (pyramid marker restatements — e2e-specific, unaffected), `test-design-reviewer.md` (layer *classification* of files — orthogonal axis, unaffected), `qa/SKILL.md`/`reproduce-bug/SKILL.md` (seam/layer prose — unaffected), cursor/opencode/manifest stubs (description text only — unaffected).
@@ -85,7 +85,7 @@ No `spec.md` exists for this branch (one-shot path; no brainstorm ran). Reconcil
 | Issue claim | Reality on `origin/main` | Plan response |
 |---|---|---|
 | "`git grep -il fast-check plugins/soleur/skills plugins/soleur/agents` returns zero" | Holds — machinery is all outside `plugins/soleur/` | Plan proceeds; the gap is real. |
-| "`work` SKILL.md prescribes RED(unit\|integration\|e2e) but never property tests" | Holds (`RED(unit|integration|e2e)` task-title convention; no `property` token) | Edit the vocabulary + TDD gate guidance. |
+| "`work` SKILL.md prescribes RED(unit\|integration\|e2e) but never property tests" | Holds (`RED(unit|integration|e2e)` task-title convention; no `property` token) | Edit the vocabulary + selection guidance at the RED-task bullet (one site per CTO ruling). |
 | "`plan` (Test Scenarios — 'state the property' guidance)" | Test Scenarios content lives in `plan/references/plan-issue-templates.md` (3 template blocks), not in `plan/SKILL.md` itself | The "`plan`" edit lands in the templates file where the guidance actually lives — a file-location nuance, not a scope change. |
 | "Sized as edits to 2 SKILL.md + 1 new reference" | Real edit set is 1 SKILL.md + 1 templates file + 1 new reference (+1 recommended pin-suite line) | Track the drift-pin consumer explicitly; the sizing intent (small) holds. |
 
@@ -268,7 +268,7 @@ discoverability_test:
 
 ## Acceptance Criteria
 
-- [ ] AC1 — `work/SKILL.md` RED-task naming accepts `property` alongside the existing layers: `grep -nE 'RED\([^)]*property' plugins/soleur/skills/work/SKILL.md` returns a hit on the RED-task naming line (spelling per the technical-ruling outcome — default `unit|integration|e2e|property`), and the TDD gate names when to choose it + links `references/property-testing.md`.
+- [ ] AC1 — `work/SKILL.md` RED-task naming accepts `property` alongside the existing layers: `grep -nE 'RED\([^)]*property' plugins/soleur/skills/work/SKILL.md` returns a hit on the RED-task naming line (spelling per the technical-ruling outcome — default `unit|integration|e2e|property`), and that line names when to choose it + links `references/property-testing.md` — ONE site per CTO ruling 2026-10-20 (the todo-structure RED-task bullet is inside the TDD-gated task-list step; the separate Phase-2 HARD GATE block carries neither per the byte-ceiling ruling).
 - [ ] AC2 — `grep -c 'properties that must never break' plugins/soleur/skills/plan/references/plan-issue-templates.md` returns `3` (one per `## Test Scenarios` block — the issue's literal phrase).
 - [ ] AC3 — `plugins/soleur/skills/work/references/property-testing.md` exists and is referenced from `work/SKILL.md` (`grep -n 'property-testing.md' plugins/soleur/skills/work/SKILL.md` hits); the file names `fast-check`, `hypothesis`, and `proptest`.
 - [ ] AC4 — `bash plugins/soleur/test/test-pyramid-fixtures.test.sh` exits 0 after the pin extension, and the extended pin asserts `property` membership (visible in the file's DRIFT-pin block).
