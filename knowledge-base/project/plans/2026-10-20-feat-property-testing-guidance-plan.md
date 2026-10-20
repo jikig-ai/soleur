@@ -10,6 +10,14 @@ issue: 10400
 
 Ship property-based-testing (PBT) guidance to Soleur plugin users: accept `property` as a RED-layer option in the `work` skill's TDD gate, add "state the property" guidance to `plan`'s Test Scenarios templates, and add a short shipped reference teaching the pattern (pure-function first, plain-English property, minimized-counterexample regression, language→tool map). Repo-side machinery (fast-check + `scripts/lib/property-harness.*`, ADR-293) already merged via #10398; this change is docs-only on the two shipped skill surfaces plus one reference file.
 
+## Enhancement Summary
+
+Plan deepened via `soleur:deepen-plan` (inline execution — subagent context): the Observability section was added (the `plugins/*/skills/` `.md` files do not qualify for the pure-docs exemption in deepen-plan §4.7's trigger test, and the diff extends a CI gate suite — a shipped-behavior surface); the 118-byte `work/SKILL.md` body-ceiling headroom was measured and budgets the edit form; all halt gates pass.
+
+### Deepen-Gate Verdicts (all pass)
+
+User-Brand §4.6: PASS (threshold `none`; no sensitive-path files — `plugins/soleur/**` is outside the canonical regex). Observability §4.7: PASS (5 fields non-placeholder; `grep` allowlisted verb; literal `expected_output`; <15s probe; no `ssh`). PAT §4.8: PASS (no token-shaped vars — grep clean). UI-wireframe §4.9: SKIP (no UI surface in Files lists). Encryption §4.10: SKIP (no store/connection — detection regex empty). Guard Contract §4.11: PASS (`lint-guard-contract.py` green — 1 entry, ≥3 matrix rows incl. own-dispatch + must-PASS rows). Scope Check §4.12: PASS (single live `## Scope Check`; 7/7 asks mapped; `Recommendation: single PR` present). Network-outage §4.5: SKIP (no trigger patterns). Downtime §4.55: SKIP (docs-only). Precedent-diff §4.4: pin extension mirrors the file's own `found "$WORK_SKILL" …` assertion idiom; reference file mirrors `work-test-harness-sharp-edges.md` conventions (no frontmatter, `# Title`, markdown links). Founder check §2.13: N/A (headless run — no block written, per `plan-founder-check.md`).
+
 ## Research Insights
 
 ### Premise Validation (Phase 0.6)
@@ -161,6 +169,37 @@ Extend the DRIFT-pin block so the new vocabulary member is itself pinned: assert
 | Teach PBT inside `test-design-reviewer.md` | Rejected — wrong axis: the reviewer classifies files by pyramid layer; `property` is an oracle class and `*.property.test.ts` already classifies `unit`. |
 | `RED(unit,property)` two-axis title form instead of a widened token | Alternative noted for the technical-ruling row — preserves the layer signal explicitly but invents a composite title grammar no other token uses. Default assumed: the issue's literal `RED(unit|integration|e2e|property)` widening. |
 | `RED(property)` as a separate alternative form (keeping `RED(unit\|integration\|e2e)` verbatim) | Rejected — two spellings of the same enum invites drift; one canonical form plus the updated pin is cleaner. |
+
+## Observability
+
+The shipped surface is documentation consumed by agents; "observability" here is whether the landed guidance is mechanically discoverable in the tree (the pin suite is the enforcement layer; this block is the declared probe).
+
+```yaml
+liveness_signal:
+  what: "the `property` token is present in work/SKILL.md's RED-layer naming and the reference file is linked"
+  cadence: "per-PR via test-pyramid-fixtures.test.sh DRIFT pin; CI on every diff touching plugins/soleur/"
+  alert_target: "CI check failure (plugin test shard)"
+  configured_in: "plugins/soleur/test/test-pyramid-fixtures.test.sh (extended in this diff)"
+error_reporting:
+  destination: "CI job log + suite FAIL line naming the missing vocabulary member"
+  fail_loud: "yes — the pin suite exits non-zero and names the missing member"
+failure_modes:
+  - mode: "`property` token silently dropped from work/SKILL.md later"
+    detection: "extended DRIFT pin assertion in test-pyramid-fixtures.test.sh"
+    alert_route: "CI red on the next diff touching the plugin shard"
+  - mode: "reference file orphaned (nothing names it)"
+    detection: "components.test.ts references-reachability guard"
+    alert_route: "CI red — orphan reference files are a suite failure"
+  - mode: "a Test Scenarios block loses the property guidance"
+    detection: "AC2 grep count == 3 in this diff's verification; the per-block tpl_blocks pin already covers marker lines"
+    alert_route: "review-time AC check"
+logs:
+  where: "CI job log (test-pyramid-fixtures.test.sh assertion lines)"
+  retention: "GitHub Actions retention"
+discoverability_test:
+  command: "grep -l 'property-testing.md' plugins/soleur/skills/work/SKILL.md"
+  expected_output: "work/SKILL.md"
+```
 
 ## User-Brand Impact
 
