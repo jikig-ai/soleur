@@ -208,12 +208,12 @@ and a `routingInstructions` arm.
 - [x] 7.3.1 Add a `## Changelog` section to the PR body (`semver:minor` — a new harness adapter). — PR #10571 body; label `semver:minor` applied.
 - [x] 7.3.2 Do NOT add a `version` key to any plugin manifest (#7471). — unchanged: the diff adds no manifest and no `version` key.
 - [x] 7.3.3 Attach the 3.5 and 7.1 capture evidence. — SHAPE-NOTE §3.5/§7.1.* committed; §7.1.2/§7.1.3 now name their substituted-evidence scope (#10591).
-- [ ] 7.3.4 `/ship` skill — pre-ship gates, mark ready for review.
+- [x] 7.3.4 `/ship` skill — pre-ship gates, mark ready for review. — **done 2026-10-19/20 on PR #10571.** Pre-ship gates ran and passed: `.github/scripts/check-pr-body-vs-diff.sh` (`PR_NUMBER=10571`) → no-op, `technical-ruling-gate.sh --pr-body` → PASS (no unscoped owner-decision label, no pending placeholder), `pr-overlap-preflight.sh --mode merge` → exit 13 (five overlapping open PRs, none blocking), `hold-gate-eval.sh` → 0 holds. `pr ready` was run with a rationale: the review panel was green after the P1/P2 fix round. PR un-drafted (ready for review) and merged through the merge queue at `95562f22ffb4`.
 
 ### 7.4 Post-merge
 
-- [ ] 7.4.1 Verify release/deploy workflows succeed.
-- [ ] 7.4.2 Flip ADR-291 `status: adopting` → `accepted` once 7.1 is quoted.
+- [x] 7.4.1 Verify release/deploy workflows succeed. — **verified 2026-10-20** on merge commit `95562f22ffb4` (PR #10571, merged 2026-10-19T23:40:33Z through the merge queue). All 11 post-merge workflows green: `Version Bump and Release` → `v3.342.0` published 23:41:29Z (minor bump off the `semver:minor` label; `v3.341.0` was the prior tag), `Web Platform Release`, `Deploy Documentation to Cloudflare Pages`, `Push on main`, `CI`, `CodeQL Main Alert Gate`, `secret-scan`, `vendor-pin-verify`, `Tenant integration (dev-Supabase)`, and both `skill-security-scan` arms — all `completed/success`, 0 failures.
+- [x] 7.4.2 Flip ADR-291 `status: adopting` → `accepted` once 7.1 is quoted. — **done 2026-10-20**. `status: accepted` in the frontmatter and the Status section rewritten to carry the evidence footing forward: all four ADR-274 points are quoted in `SHAPE-NOTE.md`, with §7.1.2 and §7.1.3 on disclosed substituted evidence (no provider credentials on the probe host), live reproduction tracked in #10591 item 1. The flip-time sweep of `knowledge-base/legal` for future-tense harness-list claims returned zero hits (nothing to route to the CLO), and no public "supports OpenCode" claim was made — README/getting-started/comparison/blog/battlecard unchanged.
 
 ## Completion Gate
 
