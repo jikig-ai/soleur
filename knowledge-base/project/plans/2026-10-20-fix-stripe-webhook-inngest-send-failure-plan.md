@@ -217,13 +217,13 @@ Edit `apps/web-platform/app/api/webhooks/stripe/route.ts`, `case "invoice.paymen
    idempotent through the `stripe-${event.id}` Inngest event id: Inngest treats a repeated event `id`
    within 24 hours as a duplicate, stored but triggering no new run, source
    https://www.inngest.com/docs/durable-execution/guides-and-advanced/idempotency, read 2026-10-20).
-   Put two short comment lines above the catch body stating (a) that idempotency basis and (b) that every
+   Put a short comment above the catch body stating (a) that idempotency basis and (b) that every
    send failure returns 500 and the `SOLEUR_FR5_ENABLED=false` kill switch is the escape for a
    deterministic failure. Nothing after the send can throw in this case, so a send that landed server-side
    but errored client-side is the only duplicate-send exposure, and the event id covers it only within
    the 24 h window (per the Inngest docs; unverified for the self-hosted server, and the CFO function
    inserts drafts without a `source_ref`): beyond it a second draft is possible. That residual is the
-   accepted CTO ruling (decision-challenges.md row 5).
+   accepted CTO ruling (decision-challenges.md row 7; the deferred wiring is tracked in #4583).
 4. Fix the stale comments in the same case: replace "Stripe redelivery upstream covers the gap if the
    operator forgets — at-least-once." and the "dedup INSERT at line 116 ... short-circuited at
    line 126" comment with accurate prose (the dedup claim happens before the switch; a failed send now

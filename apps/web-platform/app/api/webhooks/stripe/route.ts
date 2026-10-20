@@ -557,9 +557,9 @@ export async function POST(request: Request) {
       // send releases that claim and returns 500 (see the catch below), so
       // Stripe's redelivery re-enters and re-attempts the send.
       if (process.env.SOLEUR_FR5_ENABLED === "true" && customerId) {
-        // The lookup error here (and an isGranted DB error below) is ignored
-        // and the event acknowledged without a send: same loss class, tracked
-        // in #10657.
+        // The lookup error here (and an isGranted DB error below, which is
+        // mirrored to Sentry but not redelivered) is ignored and the event
+        // acknowledged without a send: same loss class, tracked in #10657.
         const { data: founderRow } = await supabase
           .from("users")
           .select("id")
@@ -650,8 +650,9 @@ export async function POST(request: Request) {
             // without a source_ref, so a redelivery after that window of a send
             // that landed but errored can add a second draft. The residual is
             // accepted (decision-challenges.md, 2026-10-20 CTO rulings).
-            // Release-then-500 also adds ~1.5 s of retry backoff before the
-            // response, so the orphan-row tradeoff above applies here too.
+            // A transient failure that exhausts the send retries waits ~1.5 s
+            // before the response, so the orphan-row tradeoff above applies here
+            // too.
             //
             // `err` is passed as null (message path): an Error is captured
             // first by the pino mirror without our tags and Sentry drops the
