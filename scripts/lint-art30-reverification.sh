@@ -427,7 +427,7 @@ fi
 if (( cell_rc == 0 && nul_bytes > 0 )); then
   cell_rc=1
 fi
-if (( cell_rc == 0 )) && git ls-tree HEAD -- "$REGISTER_REL" | grep -q '^120000'; then
+if (( cell_rc == 0 )) && grep -q '^120000' < <(git ls-tree HEAD -- "$REGISTER_REL"); then
   cell_rc=1
 fi
 if (( cell_rc == 0 )); then
@@ -585,7 +585,7 @@ base_cell_rc=0
 if (( show_rc != 0 || nul_bytes > 0 )); then
   base_cell_rc=1
 fi
-if (( base_cell_rc == 0 )) && git ls-tree "$MERGE_BASE" -- "$REGISTER_REL" | grep -q '^120000'; then
+if (( base_cell_rc == 0 )) && grep -q '^120000' < <(git ls-tree "$MERGE_BASE" -- "$REGISTER_REL"); then
   base_cell_rc=1
 fi
 if (( base_cell_rc == 0 )); then

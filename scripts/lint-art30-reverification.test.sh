@@ -782,7 +782,7 @@ fi
 SECTION="$(awk 'BEGIN{p=0} /^### Re-verification triggers$/{p=1; next} /^### /{if(p){exit}} p{print}' "$RUNBOOK")"
 MARKERS_OK=1
 for n in 1 2 3 4 5 6 7; do
-  if ! printf '%s\n' "$SECTION" | grep -q "^${n}\\."; then
+  if ! grep -q "^${n}\\." <<<"$SECTION"; then
     MARKERS_OK=0
   fi
 done
