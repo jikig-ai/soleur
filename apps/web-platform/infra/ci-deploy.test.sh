@@ -1149,7 +1149,9 @@ case "$mode" in
   apparmor-trace)
     if [[ "${1:-}" == "run" ]]; then
       echo "DOCKER_RUN_ARGS:$*"
-      [[ -n "${MOCK_IL_RUN_LOG:-}" ]] && printf '%s\n' "$*" >> "$MOCK_IL_RUN_LOG"
+      # The #8743 plugin-mount seed is a root helper run, not an app start: it never enters the app-start log the
+      # #10136 rows count (canary + prod), exactly as the apparmor rows above exclude it from DOCKER_RUN_ARGS.
+      [[ -n "${MOCK_IL_RUN_LOG:-}" && "$*" != *":/plugin-mount"* ]] && printf '%s\n' "$*" >> "$MOCK_IL_RUN_LOG"
       echo "abc123"
     fi
     # #10136 (MOCK_IL_CANARY=1): answer the Inngest-link canary layer like docker would. `inspect` reports the -e pairs of the
@@ -3149,7 +3151,7 @@ echo "--- Inngest link on docker run (#10136, Guard 1: the resolver chokepoint) 
 # flag/CA/self-gate matrix; these rows prove the WIRING into the real deploy flow.
 TOTAL=$((TOTAL + 1))
 IL_OUT=$( ( export MOCK_DOCKER_MODE="apparmor-trace"; rm -f "$INNGEST_LINK_DIR"/inngest-*; rmdir "$INNGEST_LINK_DIR" 2>/dev/null || true; run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1 ) ) && IL_RC=0 || IL_RC=$?
-IL_RUNS=$(printf '%s\n' "$IL_OUT" | grep -c '^DOCKER_RUN_ARGS:' || true)
+IL_RUNS=$(printf '%s\n' "$IL_OUT" | grep -vF ':/plugin-mount' | grep -c '^DOCKER_RUN_ARGS:' || true)
 IL_OK=1
 [[ "$IL_RUNS" -eq 2 ]] || IL_OK=0
 [[ "$(printf '%s\n' "$IL_OUT" | grep '^DOCKER_RUN_ARGS:' | grep -cF -- '-e INNGEST_BASE_URL=http://10.0.1.40:8288')" -eq 2 ]] || IL_OK=0
@@ -3171,7 +3173,7 @@ printf 'DOPPLER_PROJECT=soleur\nDOPPLER_CONFIG=prd\nINNGEST_LINK_TLS=1\nGITHUB_A
 IL_OUT=$( ( export MOCK_DOCKER_MODE="apparmor-trace" MOCK_GAK_PRD_BODY="$IL_DIR/prd.env" CI_DEPLOY_STATE="$IL_DIR/state.json"; run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1 ) ) && IL_RC=0 || IL_RC=$?
 IL_OK=1
 [[ "$IL_RC" -ne 0 ]] || IL_OK=0
-[[ "$(printf '%s\n' "$IL_OUT" | grep -c '^DOCKER_RUN_ARGS:' || true)" -eq 0 ]] || IL_OK=0
+[[ "$(printf '%s\n' "$IL_OUT" | grep -vF ':/plugin-mount' | grep -c '^DOCKER_RUN_ARGS:' || true)" -eq 0 ]] || IL_OK=0
 [[ "$(jq -r '.reason' "$IL_DIR/state.json" 2>/dev/null)" == inngest_link_ca_invalid ]] || IL_OK=0
 if [[ "$IL_OK" -eq 1 ]]; then
   PASS=$((PASS + 1)); echo "  PASS: flag on + unusable CA: exit non-zero, reason=inngest_link_ca_invalid, no docker run (the old container keeps serving)"
@@ -3183,7 +3185,7 @@ fi
 TOTAL=$((TOTAL + 1))
 printf 'DOPPLER_PROJECT=soleur-inngest\nDOPPLER_CONFIG=prd\nGITHUB_APP_ID=4242\nGITHUB_APP_PRIVATE_KEY=mock-prd-app-key\n' > "$IL_DIR/prd.env"
 IL_OUT=$( ( export MOCK_DOCKER_MODE="apparmor-trace" MOCK_GAK_PRD_BODY="$IL_DIR/prd.env" CI_DEPLOY_STATE="$IL_DIR/state2.json"; run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1 ) ) && IL_RC=0 || IL_RC=$?
-if [[ "$IL_RC" -ne 0 && "$(jq -r '.reason' "$IL_DIR/state2.json" 2>/dev/null)" == inngest_link_scope_mismatch && "$(printf '%s\n' "$IL_OUT" | grep -c '^DOCKER_RUN_ARGS:' || true)" -eq 0 ]]; then
+if [[ "$IL_RC" -ne 0 && "$(jq -r '.reason' "$IL_DIR/state2.json" 2>/dev/null)" == inngest_link_scope_mismatch && "$(printf '%s\n' "$IL_OUT" | grep -vF ':/plugin-mount' | grep -c '^DOCKER_RUN_ARGS:' || true)" -eq 0 ]]; then
   PASS=$((PASS + 1)); echo "  PASS: a snapshot bound to another Doppler project fails the deploy (reason=inngest_link_scope_mismatch), no docker run"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: scope guard wiring (rc=$IL_RC reason=$(jq -r '.reason' "$IL_DIR/state2.json" 2>/dev/null))"
@@ -3317,7 +3319,7 @@ else
   rm -rf "$INNGEST_LINK_DIR"; : > "$IL_DIR/nometa.runs"; : > "$IL_DIR/nometa.log"
   IL_OUT=$( ( export MOCK_DOCKER_MODE="apparmor-trace" MOCK_IL_RUN_LOG="$IL_DIR/nometa.runs" MOCK_GAK_PRD_BODY="$IL_DIR/nometa.env" CI_DEPLOY_STATE="$IL_DIR/nometa.state" MOCK_LOGGER_CAPTURE_FILE="$IL_DIR/nometa.log"
       run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1 ) ) && IL_RC=0 || IL_RC=$?
-  if [[ "$IL_RC" -eq 0 && "$(printf '%s\n' "$IL_OUT" | grep -c '^DOCKER_RUN_ARGS:' || true)" -eq 2 ]] && grep -qF 'class=scope_unverified level=warning' "$IL_DIR/nometa.log"; then
+  if [[ "$IL_RC" -eq 0 && "$(printf '%s\n' "$IL_OUT" | grep -vF ':/plugin-mount' | grep -c '^DOCKER_RUN_ARGS:' || true)" -eq 2 ]] && grep -qF 'class=scope_unverified level=warning' "$IL_DIR/nometa.log"; then
     PASS=$((PASS + 1)); echo "  PASS: snapshot without DOPPLER_PROJECT/CONFIG lines + flag absent: the deploy proceeds on http with a scope_unverified warning"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: a metadata-less snapshot broke the flag-absent deploy (rc=$IL_RC)"
@@ -3348,7 +3350,7 @@ else
   : > "$IL_DIR/partial.runs"; : > "$IL_DIR/partial.log"
   IL_OUT=$( ( export MOCK_DOCKER_MODE="apparmor-trace" MOCK_IL_RUN_LOG="$IL_DIR/partial.runs" MOCK_GAK_PRD_BODY="$IL_DIR/partial.env" CI_DEPLOY_STATE="$IL_DIR/partial.state" MOCK_LOGGER_CAPTURE_FILE="$IL_DIR/partial.log"
       run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1 ) ) && IL_RC=0 || IL_RC=$?
-  if [[ "$IL_RC" -ne 0 && "$(printf '%s\n' "$IL_OUT" | grep -c '^DOCKER_RUN_ARGS:' || true)" -eq 0 \
+  if [[ "$IL_RC" -ne 0 && "$(printf '%s\n' "$IL_OUT" | grep -vF ':/plugin-mount' | grep -c '^DOCKER_RUN_ARGS:' || true)" -eq 0 \
         && "$(jq -r '.reason' "$IL_DIR/partial.state" 2>/dev/null)" == inngest_link_scope_mismatch \
         && "$(cat "$INNGEST_LINK_DIR/last-scheme" 2>/dev/null)" == https ]] && grep -qF 'field=unverified previous=https' "$IL_DIR/partial.log"; then
     PASS=$((PASS + 1)); echo "  PASS: unverifiable scope + flag absent + last-scheme=https: the deploy fails closed (inngest_link_scope_mismatch), no container started, last-scheme untouched"
@@ -12025,7 +12027,7 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # D10k7 (warning + silent failure is no masquerading denial).
 # #9294 PR-1: raised 618 -> 622 (619 measured on main, which carried one slack row, plus 3 new rows) with T-9294-1..3 (fan-out
 # under an `or` trigger-rule: first-HMAC-secret signing over four shapes, six fail-closed shapes, and the source census).
-CI_DEPLOY_ASSERT_FLOOR=638
+CI_DEPLOY_ASSERT_FLOOR=648
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"
