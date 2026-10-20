@@ -3804,7 +3804,8 @@ _aff_runner_banner() {
 # #9763: 38 heavy/stale labels withdrawn to edge-selection; the floor pins count-5.
 # #8875: +1 always-on (emitter census is repo-global by construction); re-pinned at 114-5.
 # #10331: +2 always-on (the lint-ratchet pair); re-pinned at 116-5.
-_MIN_ALWAYS_ON_DECLARED=111
+# #7893: +1 always-on (the Art. 30 re-verification unit); re-pinned at 117-5.
+_MIN_ALWAYS_ON_DECLARED=112
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -5471,6 +5472,7 @@ if want_scripts; then
   # scripts/lib/legal-normalise.test.sh is the detector for that, and it is fixture-anchored so
   # it cannot red on a legal edit.
   run_suite "scripts/lint-legal-scope-block-placement-unit" bash scripts/lint-legal-scope-block-placement.test.sh
+  run_suite "scripts/lint-art30-reverification-unit" bash scripts/lint-art30-reverification.test.sh
   run_suite "scripts/lint-legal-scope-block-placement-live" bash scripts/lint-legal-scope-block-placement.sh
   run_suite "scripts/lint-legal-mirror-drift-baseline-unit" bash scripts/lint-legal-mirror-drift-baseline.test.sh
   run_suite "scripts/lint-legal-mirror-drift-baseline-live" bash scripts/lint-legal-mirror-drift-baseline.sh

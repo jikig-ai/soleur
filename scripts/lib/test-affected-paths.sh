@@ -170,6 +170,7 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-legal-mirror-drift-baseline-unit"
   "scripts/lint-legal-registers-unit"
   "scripts/lint-legal-scope-block-placement-unit"
+  "scripts/lint-art30-reverification-unit"
   "scripts/lint-migrated-rule-ids-unit"
   "scripts/lint-shell-capture-exit"
   "scripts/lint-shell-trace-credential-refusal-repo"
