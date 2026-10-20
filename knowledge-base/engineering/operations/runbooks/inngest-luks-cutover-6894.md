@@ -530,6 +530,11 @@ scaffold the report. Who is affected is **unknowable from surviving data**: `sch
 default is to treat **all active users** as potentially affected: no per-user list exists, because `schedule-reminder` persists
 nothing app-side. Whether a surviving source exists (the Inngest Postgres run history, application logs) is open and tracked
 in #9927; until it is verified, do not state a narrower set.
+**Superseded 2026-10-20 (#9927), as to "the default is all active users":** the default stays, but it is not complete. The
+code read below shows two groups it does not cover: **users who are not currently active** (a founder with a connected GitHub
+installation or an unpaid invoice may be past due or churned yet still have a lost draft card), and **people who are not users
+at all** (the sender of an inbound email whose triage event was in flight). The loss horizon is the whole life of the store,
+because no copy exists off the volume; in practice the harm is work that was queued or in flight at the moment of loss.
 Before sending, assess with counsel whether the loss of availability of personal data held in the store is a
 personal-data breach (Art. 4(12), 33 and 34; total loss of availability is not necessarily one, so the step is to assess).
 If any limb is a personal-data breach, the 72-hour clock of Art. 33 runs from awareness. The breach register is
@@ -539,6 +544,30 @@ empty store, the app's behaviour is that functions re-register and new reminders
 reminders will be restored. **Restoring an empty store has no automated route:** the recut dispatch is retired (#8285), the
 per-merge create HALT refuses a new passphrase, and the inngest-host shape gate refuses the volume and passphrase pair, so
 the owner designs the restoration in a reviewed change (#9927).
+
+#### Which Inngest events carry a user reference (code read, 2026-10-20, #9927 item C1)
+
+Read from the repository only (no production access): the senders, the handlers and the payload FIELD NAMES, never values.
+This table is the code-side half of the C1 finding; the measured half is the C1 result below. A `bot-fix/*` name is a GitHub
+label, not an Inngest event, and no `vendor/*` event exists (the only vendor-related event is
+`cron/content-vendor-drift.manual-trigger`).
+
+| Event family | User reference in the payload | User-visible harm if an armed or in-flight instance is lost | Covered by "all active users"? |
+| --- | --- | --- | --- |
+| `reminder.scheduled` (`app/api/internal/schedule-reminder`, handler `eventScheduledReminder`) | none (`reminder_id`, `fire_at`, a platform actor, `action`); the `action` can hold operator or agent free text | a scheduled operator comment or registered check never fires | not applicable (operator work) |
+| GitHub action-class events: `engineering.pr_review_pending`, `engineering.ci_failed`, `triage.p0p1_issue`, `security.cve_alert` (`app/api/webhooks/github`, handler `githubOnEvent`) | `founderId`, `installationId`, `deliveryId`; a redacted copy of the webhook body (titles, author logins) | the founder's draft card for that PR, CI failure, P0/P1 issue or CVE alert is never created; the webhook dedup row is already claimed, so GitHub does not redeliver | yes if the founder is active; no if inactive |
+| `platform/workspace.reconcile.requested` | `installationId`, `deliveryId`, repository slug (no user id since schema v3) | a workspace is not synced to its default branch until the next push | partly (identified by installation and repository, not user) |
+| `finance.payment_failed` (`app/api/webhooks/stripe`, handler `cfoOnPaymentFailed`) | `founderId`, `customerEmailHash`, `invoiceId` | the founder's payment-failure draft card is never created | yes if active; a past-due founder may not be |
+| `agent.spawn.requested` (`app/api/dashboard/today/[id]/send`, handler `agentOnSpawnRequested`) | `founderId`, `messageId`, `actionSendId`, `actionClass`, `sourceRef` | an action the founder approved with "send" is never executed and no acknowledgement is posted; no redelivery | yes if active |
+| `agent.spawn.orphaned` (internal) | the whole original envelope, so `founderId` and `actionSendId` | the failed spawn is never settled and its `action_sends` row stays unfinished | yes if active |
+| `email/inbound.received` (`app/api/webhooks/resend-inbound`, handler `email-on-received`) | the sender address, the recipient inbox addresses, provider message ids, a subject | an inbound email is never triaged, including a possible statutory request (a data-subject request); its clock still runs | **no**: the person harmed is an external correspondent, not a user |
+| `cron/<name>.manual-trigger` (59 names; `server/routines/run-routine.ts`, `app/api/internal/trigger-cron`) | `actor_id`, `delegating_principal`, `actor_class`, run ids | an operator-requested one-off run is lost; the scheduled run still happens | yes (an operator or user requested it) |
+| `oneshot/*.fire`, `cron/action-required-sla.process-issue`, `ship-merge.manual-trigger`, `cf-token-expiry-check.manual-trigger` | none | an operator check or a daily nudge for one issue is skipped | not applicable |
+
+Only `reminder.scheduled` has a re-arm path (`infra/inngest-rearm-reminders.sh`). The event store keeps payloads with no automatic
+deletion, per a source comment in the GitHub webhook route (not independently verified): the redacted GitHub body and the inbound
+email addresses sit in the Postgres history. That is why this section never asks anyone to copy the store, and why the ciphertext
+backup (item 1b of #9927) stays parked until an Art. 17 retention and erasure design exists.
 
 ### Deliberate unprotect (two reviewed changes; no sanctioned erase path)
 
