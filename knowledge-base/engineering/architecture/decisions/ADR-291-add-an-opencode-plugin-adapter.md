@@ -1,6 +1,6 @@
 ---
 title: Add an OpenCode plugin adapter
-status: adopting
+status: accepted
 date: 2026-10-17
 supersedes: none
 related_adrs: [ADR-110, ADR-179, ADR-215, ADR-223, ADR-226, ADR-245, ADR-274]
@@ -12,10 +12,23 @@ brand_survival_threshold: single-user incident
 
 ## Status
 
-**Adopting — generator landed 2026-10-19** (`plugins/soleur/scripts/sync-opencode-adapter.ts`, drift-gated by
-`plugins/soleur/test/opencode-adapter-drift.test.ts`), per the condition this record set for itself. Flips to
-`accepted` when the support bar below is met. In this record, **harness** means the `Harness` union in
-`plugins/soleur/lib/harness.ts`. The word is not in `knowledge-base/project/glossary.md`.
+**Accepted 2026-10-20** — the adapter shipped in `v3.342.0` (PR #10571, merge commit `95562f22ffb4`), and the
+support bar below is met: `knowledge-base/project/specs/archive/20261019-180200-feat-opencode-harness/SHAPE-NOTE.md`
+quotes all four ADR-274 points. Two of the four (§7.1.2 a pipeline skill's gates, §7.1.3 a live agent spawn) are
+quoted on **substituted evidence** — a routed call completing after a guard block and the `spawnAgent()` dispatch
+shape — because the probe host carries no provider credentials for a hermetic OpenCode session; the live
+reproduction is tracked in #10591 item 1. That substitution is a disclosed gap in the evidence, not in the
+adapter, and it is why this record can be `accepted` while **no public "supports OpenCode" claim is made**:
+the README, getting-started, comparison, blog, and battlecard pages are unchanged, and the future-tense sweep of
+`knowledge-base/legal` at flip time returned zero harness-list hits to route to the CLO.
+
+In this record, **harness** means the `Harness` union in `plugins/soleur/lib/harness.ts`. The word is not in
+`knowledge-base/project/glossary.md`.
+
+Superseded status, kept so the condition this record set for itself stays auditable: **Adopting — generator
+landed 2026-10-19** (`plugins/soleur/scripts/sync-opencode-adapter.ts`, drift-gated by
+`plugins/soleur/test/opencode-adapter-drift.test.ts`). It flipped to `accepted` when the support bar below was
+met.
 
 Ordinal census on 2026-10-17, after `git fetch origin --prune`, over `refs/heads` and
 `refs/remotes/origin`: ADR-291 was unused. The highest ordinal present is ADR-290, carried only by
@@ -204,10 +217,13 @@ to load: the global discovery directory `<configdir>/plugins/*` with no config e
 satisfied vacuously, and a pin added back "for safety" would be a dependency the loader never asked
 for.
 
-Public README, getting-started, comparison, blog, and battlecard pages stay unchanged until the
-support bar is met. When the status flips to `accepted`, grep `knowledge-base/legal` for future-tense
-sentences about the harness list and route hits to the CLO; do not edit those pages in the flip
-commit without that review.
+Public README, getting-started, comparison, blog, and battlecard pages stay unchanged. The flip to
+`accepted` (2026-10-20) required grepping `knowledge-base/legal` for future-tense sentences about the harness
+list and routing hits to the CLO; that sweep returned **zero** hits (`grep -rniE "(will|going to|plans to|soon|
+future) support (the )?opencode" knowledge-base/legal/ docs/` is empty), so there was nothing to route and
+nothing to review. The pages stay unchanged for a separate reason recorded above in Status: the ADR-274 bar is
+met, but two of its four points rest on substituted evidence pending the live reproduction in #10591 item 1,
+and a public claim is not made on that footing.
 
 ## Cost Impacts
 

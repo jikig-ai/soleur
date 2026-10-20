@@ -97,8 +97,12 @@ TUPLE_ORDER = ("canary", "prod", "first-boot")
 
 # Sites that are allowed to exist next to the app tuples. Matched on (file, verb, name or image expression).
 EXEMPT_RUN = {("ci-deploy.sh", "image", "$COSIGN_IMAGE")}      # the cosign verify `docker run --rm`
+# Name-keyed exempt runs: (file, --name). The #8743 plugin-mount seed is one
+# `docker run --rm --name soleur-plugin-seed -u 0 --entrypoint /bin/sh
+# -v $PLUGIN_MOUNT_DIR:/plugin-mount -e SEED_TAG=$TAG $VERIFIED_REF -c <script>`
+# — a container-side root seed, not an app tuple.
+EXEMPT_RUN_NAMED = {("ci-deploy.sh", "soleur-plugin-seed")}
 EXEMPT_CREATE = {
-    ("ci-deploy.sh", "soleur-plugin-seed"),
     ("ci-deploy.sh", "$INNGEST_EXTRACT_CONTAINER"),
     ("cloud-init.yml", "soleur-hostscript-seed"),
     ("cloud-init.yml", "soleur-plugin-seed"),
@@ -133,6 +137,17 @@ COSIGN_VALUE_OPTS = {
     "-v": {"$GHCR_DOCKER_CONFIG:$cosign_cfg_dir/config.json:ro", "$COSIGN_TRUSTED_ROOT_HOST:/etc/cosign/trusted_root.json:ro"},
 }
 COSIGN_IMAGE = "$COSIGN_IMAGE"
+# The #8743 seed run's closed-world option set (image: $VERIFIED_REF, then
+# `-c <one script token>` and nothing else).
+SEED_RUN_FLAGS = {"--rm"}
+SEED_RUN_VALUE_OPTS = {
+    "--name": {"soleur-plugin-seed"},
+    "-u": {"0"},
+    "--entrypoint": {"/bin/sh"},
+    "-v": {"$PLUGIN_MOUNT_DIR:/plugin-mount"},
+    "-e": {"SEED_TAG=$TAG"},
+}
+SEED_RUN_IMAGE = "$VERIFIED_REF"
 # `case x in a) …`, `a|b) …` and the parenthesised `(a) …` label forms all put a command in command position.
 CASE_LABEL_RE = re.compile(r"^\(?[^()\s]*\)$")
 TIMEOUT_ARG_RE = re.compile(r"^(?:\d+[smhd]?|-{1,2}[\w-]+(?:=\S*)?)$")
@@ -815,6 +830,12 @@ def classify_site(s, fname):
             return "the cosign verifier run %s (an exempt site is parsed closed-world: only its real option set is allowed)" % bad
         s.kind = "exempt"
         return None
+    if s.verb == "run" and s.plain and name is not None and (fname, name) in EXEMPT_RUN_NAMED:
+        bad = seed_run_violation(s)
+        if bad:
+            return "exempt `docker run` of %s %s (an exempt site is parsed closed-world: only its real option set is allowed)" % (name, bad)
+        s.kind = "exempt"
+        return None
     if s.verb == "create" and s.plain and name is not None and (fname, name) in EXEMPT_CREATE:
         bad = exempt_create_violation(s)
         if bad:
@@ -871,6 +892,38 @@ def exempt_run_violation(s):
         if t != COSIGN_IMAGE:
             return "starts a different image or command (%s) instead of %s" % (t, COSIGN_IMAGE)
         return None
+    return "has no image"
+
+
+def seed_run_violation(s):
+    words = _statement(s.toks)
+    i = 2
+    n = len(words)
+    while i < n:
+        t = words[i]
+        if t in SEED_RUN_FLAGS:
+            i += 1
+            continue
+        if t in SEED_RUN_VALUE_OPTS:
+            if i + 1 >= n or words[i + 1] not in SEED_RUN_VALUE_OPTS[t]:
+                return "has an unexpected value for %s" % t
+            i += 2
+            continue
+        if t.startswith("--name="):
+            if t.split("=", 1)[1] != "soleur-plugin-seed":
+                return "names a different container (%s)" % t
+            i += 1
+            continue
+        if t.startswith("-"):
+            return "carries the option %s" % t
+        if t != SEED_RUN_IMAGE:
+            return "starts a different image or command (%s) instead of %s" % (t, SEED_RUN_IMAGE)
+        # image reached: `-c` plus exactly one script token, then the statement ends
+        if i + 2 < n and words[i + 1] == "-c" and i + 3 == n:
+            return None
+        if i + 1 < n:
+            return "carries words beyond `%s -c <script>`: %s" % (SEED_RUN_IMAGE, " ".join(words[i + 1:i + 6]))
+        return "has no `-c <script>` command after the image"
     return "has no image"
 
 
