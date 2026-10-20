@@ -33,3 +33,17 @@ manifest: keep tracked HEAD fixed through approval and execution, then include
 sanitized review and evidence records in the next source change. Any source,
 input, CA, platform, or private-output identity change requires fresh bindings
 and review rather than reuse of the approved command.
+
+## Proposal-resume addendum — 2026-10-20
+
+The Config proposal resume repeated overlarge skill/script reads and a learning
+path guess that omitted `workflow-patterns/`. Delegated exploration also guessed
+`spec.md` and `role_admission.py`; discovery found `test_role_admission.py` and
+`image_observations.py`. A stray inspection targeted a nonexistent temporary
+probe and failed before any action. Discover exact paths first and keep each
+read bounded; a failed read supplies no evidence. A process search matched its
+own sandbox wrapper, producing noisy output rather than useful ownership data.
+Prefer retained tool session identifiers for liveness. Docker documentation's
+Edit link returned a web-tool internal error; the official documentation page
+itself loaded successfully and supplies the cited exact-host listing. No failed
+probe is used as a successful check or as origin/ownership evidence.

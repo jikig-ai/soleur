@@ -813,3 +813,12 @@ different acquisition design and primary evidence may not justify this host;
 that uncertainty keeps acquisition held. Resync/full CI and all broader build,
 Docker/SQL/provider/browser/account, recovery, qualification, Web/CLO, promotion
 and ship gates remain unchanged. No new transport has been implemented.
+
+### Source-only Config proposal — 2026-10-20
+
+The next proposal is [Config-only acquisition](config-acquisition-proposal-2026-10-20.md).
+It records Docker's primary exact-host documentation, a fresh finite request
+chain, credential/address/TLS isolation, exact Config integrity/schema checks,
+minimal outputs and the tests/review/approval sequence. Independent engineering
+and security acceptance is pending. This append-only planning update grants
+neither implementation nor execution authority; all preceding holds persist.
