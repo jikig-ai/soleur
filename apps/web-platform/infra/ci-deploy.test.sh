@@ -6459,7 +6459,7 @@ assert_zot_no_fallback
 # an unset variable, which is what the default now fills.
 assert_zot_dark_is_terminal() {
   TOTAL=$((TOTAL + 1))
-  local pf st; pf=$(mktemp); st=$(mktemp -u)
+  local pf st; pf=$(mktemp); st="${pf}.state"
   (
     export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
     MOCK_DIR=$(mktemp -d); trap 'rm -rf "$MOCK_DIR"' EXIT

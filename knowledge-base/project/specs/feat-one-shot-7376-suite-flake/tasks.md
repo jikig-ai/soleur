@@ -17,40 +17,40 @@ explicitly rejected (memory-derived `JOBS` cap; bare-`/tmp` write prohibition;
 
 ## Phase 1 — Namespacing fixes (three audited sites)
 
-- [ ] 1.1 `apps/web-platform/infra/verify-tunnel-ingress-origin-infradir.test.sh:40` —
+- [x] 1.1 `apps/web-platform/infra/verify-tunnel-ingress-origin-infradir.test.sh:40` —
       `MARKER="$(mktemp -u)"` → `MARKER="$(mktemp)"`. The stub `touch`es the path;
       `touch` on an existing file is identical observable behaviour.
-- [ ] 1.2 `apps/web-platform/infra/ci-deploy.test.sh:6462` — `st=$(mktemp -u)` →
+- [x] 1.2 `apps/web-platform/infra/ci-deploy.test.sh:6462` — `st=$(mktemp -u)` →
       derive from the already-unique `pf` (`st="${pf}.state"`) or an owned `mktemp -d`
       dir; property is "name unpredictable and unclaimed", not "name absent".
-- [ ] 1.3 `apps/web-platform/infra/inngest-redis-luks.test.sh:176` —
+- [x] 1.3 `apps/web-platform/infra/inngest-redis-luks.test.sh:176` —
       `/tmp/.ilt-block.$$` → `"${TMPDIR:-/tmp}/.ilt-block.$$"` (fallback keeps
       standalone invocation working).
 
 ## Phase 2 — Namespacing guard T-case (`apps/web-platform/infra/run-registered-suites.test.sh`)
 
-- [ ] 2.1 Derive the execute set as the runner does (`git ls-tree` glob minus
+- [x] 2.1 Derive the execute set as the runner does (`git ls-tree` glob minus
       PRIVILEGED_WHY basenames, or `--enumerate`); assert the set is non-empty
       BEFORE scanning (vacuity floor).
-- [ ] 2.2 `git grep` the set for `mktemp` with `-u` **and** `--dry-run` (its alias),
+- [x] 2.2 `git grep` the set for `mktemp` with `-u` **and** `--dry-run` (its alias),
       and `mktemp` with a positional `/tmp` template. Zero hits outside
       `# tmpns-exempt: <reason>` marker lines; print each exempted file:line +
       reason.
-- [ ] 2.3 Strip comment lines and string-payload lines (the
+- [x] 2.3 Strip comment lines and string-payload lines (the
       `workspaces-luks-g4-mutation.test.sh:939` `mktemp -u` payload must NOT
       count) — mirror `_strip_comments` convention from grep-q-pipe-guard.
-- [ ] 2.4 Planted-hit fixture (SOLEUR_INFRA_DIR fixture root or synthesized line):
+- [x] 2.4 Planted-hit fixture (SOLEUR_INFRA_DIR fixture root or synthesized line):
       prove the pattern family fires — a "0 checked" suite must RED.
-- [ ] 2.5 Do NOT assert "no bare `/tmp` writes" — container-heredoc and
+- [x] 2.5 Do NOT assert "no bare `/tmp` writes" — container-heredoc and
       workflow-contract `/tmp` uses are legal (~11 files audited clean).
 
 ## Phase 3 — Record
 
-- [ ] 3.1 `apps/web-platform/infra/run-registered-suites.sh` header: `ATTRIBUTION
+- [x] 3.1 `apps/web-platform/infra/run-registered-suites.sh` header: `ATTRIBUTION
       (#7376)` block beside `DIAGNOSTICS ON RED` — the H1–H4 verdict lines +
       exit-code-first rule (124→H4; signal/UNACCOUNTED→H2; marker FAIL→real/H3).
       Comment-only.
-- [ ] 3.2 `knowledge-base/engineering/architecture/decisions/ADR-133-*.md`:
+- [x] 3.2 `knowledge-base/engineering/architecture/decisions/ADR-133-*.md`:
       append ONE clause — memory-derived `JOBS` cap is a *rejected* alternative
       (irreproducible width + self-masking evidence + single-file-SUT
       constraint); deterministic class-serialisation is the evidence-gated arm.
@@ -63,10 +63,10 @@ explicitly rejected (memory-derived `JOBS` cap; bare-`/tmp` write prohibition;
 
 ## Phase 4 — Verify
 
-- [ ] 4.1 Mutation-matrix rows 1–5 from the plan's Guard Contract each produce
+- [x] 4.1 Mutation-matrix rows 1–5 from the plan's Guard Contract each produce
       the expected verdict.
-- [ ] 4.2 `bash apps/web-platform/infra/run-registered-suites.test.sh` green.
-- [ ] 4.3 `bash scripts/test-all.sh` green (or the affected lane covering all
+- [x] 4.2 `bash apps/web-platform/infra/run-registered-suites.test.sh` green.
+- [x] 4.3 `bash scripts/test-all.sh` green (or the affected lane covering all
       five touched files).
-- [ ] 4.4 Confirm `JOBS` computation untouched (`run-registered-suites.sh`
+- [x] 4.4 Confirm `JOBS` computation untouched (`run-registered-suites.sh`
       `min(nproc,6)`), no workflow file modified, no new suite file created.

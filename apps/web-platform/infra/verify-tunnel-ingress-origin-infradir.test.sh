@@ -37,7 +37,7 @@ fails=0
 # it proves the cd resolved. It exits 0 with no output; the script then fails its
 # own IP-regex check and exits 1 — expected, and irrelevant to this test.
 STUB_DIR="$(mktemp -d)"
-MARKER="$(mktemp -u)"
+MARKER="$(mktemp)"
 trap 'rm -rf "$STUB_DIR"; rm -f "$MARKER"' EXIT
 cat >"$STUB_DIR/doppler" <<STUB
 #!/usr/bin/env bash
