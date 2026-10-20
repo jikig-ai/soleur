@@ -40,3 +40,9 @@ unrelated read joined with `&&`; repeat that read independently. A guessed
 correctly locates the modules under `scripts/codex-qualification/`. Discover paths
 before searching their contents. None of these tooling errors diagnoses the
 historical Config refusal or authorizes an operational probe.
+
+The proposal commit initially failed because Git's worktree index lives in the
+shared metadata mounted read-only by the sandbox. The approved escalated retry
+committed and pushed the documentation. The security reviewer also included a
+nonexistent `config_bindings.py` in a local search; the error was inspected and
+no operational action followed. Use verified source-record paths for each read.

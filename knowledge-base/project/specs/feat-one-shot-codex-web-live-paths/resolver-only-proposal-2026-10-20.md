@@ -63,14 +63,16 @@ After separate source, preparation and execution permissions, a dormant dedicate
 diagnostic would allow at most **one fresh helper launch and one
 `socket.getaddrinfo()` invocation**, for **`auth.docker.io` only**, service port
 443. No registry/CDN resolution is included. OS/NSS resolution may consult caches,
-local configuration or network services and emit multiple DNS queries. This is
-not a one-packet guarantee or a claim that all resolver activity uses port 443.
+local configuration, resolver daemons, search suffixes or network services and
+emit multiple DNS queries. This is not a one-packet guarantee, an exact DNS
+wire-name guarantee or a claim that all resolver activity uses port 443.
 
 No application connection to a resolved address, TLS handshake, HTTP request,
-token request, response body or Config access is permitted. There is no alternate
-resolver, host, address attempt, reconnect, retry, daemon contact or acquisition
-continuation. Resolver-related system communication is the sole proposed network
-exposure. Do not call the acquisition or HTTPS request entry points.
+token request, response body or Config access is permitted. There is no
+tool-directed alternate resolver/hostname attempt, address connection attempt,
+reconnect, retry, Docker daemon contact or acquisition continuation.
+Resolver-related system communication is the sole proposed network exposure.
+Do not call the acquisition or HTTPS request entry points.
 
 Preserve the existing isolation and admission limits: a fresh isolated interpreter,
 empty environment, closed inherited descriptors, null stdin, discarded stderr,
@@ -80,13 +82,19 @@ Use a separate diagnostic helper/protocol if finer classification requires it;
 leave existing acquisition/resolver behavior and historical evidence unchanged.
 This must remain a small fixed action, not a general troubleshooting framework.
 
-Proposed budget: ten seconds total for the diagnostic body, including private
-gate/receipt work and cancellation/reaping. Reserve at least 250 ms for child
-cancellation/reaping and stop earlier if remaining time is insufficient. Bind a
-separate outer process timeout of twelve seconds with a one-second kill grace;
-the outer timeout is a backstop, not a successful cleanup or receipt guarantee.
-Final exact expanded command and runtime behavior require separate source and
-actual-manifest review. Failure to reap within the budget is terminal uncertainty.
+Proposed budget: ten seconds for the diagnostic body and its owned processes,
+including private gate/receipt work and cancellation/reaping. Reserve at least
+250 ms for child cancellation/reaping and stop earlier if time is insufficient.
+Bind a separate outer supervisor with a twelve-second timeout and one-second
+kill grace, covering both coordinator and helper. The new helper must remain in
+that supervisor's termination scope; do not copy the existing helper launcher’s
+detached-session behavior. Parent death must not leave an owned helper running.
+Prove termination scope and child lifecycle with synthesized processes during
+source review. The outer timeout is a backstop, not a successful cleanup or
+receipt guarantee. This budget does not guarantee that system resolver services
+emit no later packets after client cancellation. Final exact expanded command
+and runtime behavior require separate source and actual-manifest review. Failure
+to reap within the body budget is terminal uncertainty.
 
 ## New evidence contract
 
@@ -144,9 +152,10 @@ physical-zeroization or hostile-host guarantee.
 3. Failing synthesized tests before source implementation; independent source
    review before preparation. Cover every category and invalid combination,
    secret canaries, malformed/mixed/over-bound answers, shrinking deadlines,
-   kill/reap schedules, marker replay, owned publication/rollback and receipt
-   integrity. Prove acquisition/TLS/HTTP continuation is unreachable, including
-   success. Tests must never resolve a real host or invoke the production helper.
+   kill/reap schedules, parent-death/outer-timeout helper termination, marker
+   replay, owned publication/rollback and receipt integrity. Prove acquisition/
+   TLS/HTTP continuation is unreachable, including success. Tests must never
+   resolve a real host or invoke the production helper.
 4. Separate permission for file-only binding refresh and one fresh unused
    diagnostic manifest, followed by actual-manifest and exact-command review.
 5. Fresh explicit approval for the fully expanded, one-time DNS-capable command.
@@ -158,7 +167,7 @@ would need its own current-source review, new bindings/manifest, actual-command
 review and fresh execution approval. A new failure does not authorize corrective
 source changes or a second diagnostic. Historical cause remains unknown.
 
-Stop on an unexpected host, extra helper/invocation, attempted application
+Stop on an unexpected helper hostname argument, extra helper/invocation, attempted application
 connection/TLS/HTTP, stale binding, marker collision, invalid output, failed
 address policy, deadline/cleanup uncertainty or publication failure.
 
