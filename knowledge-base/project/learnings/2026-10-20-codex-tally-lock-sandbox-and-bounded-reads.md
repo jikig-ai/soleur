@@ -1,3 +1,10 @@
+---
+title: Distinguish sandbox restrictions from lock contention during a held resume
+date: 2026-10-20
+category: workflow-patterns
+tags: [codex, sandbox, bounded-output, worktrees]
+---
+
 # Learning: distinguish sandbox restrictions from lock contention during a held resume
 
 During the documentation-only resume of PR #9051, the budget tracker printed
@@ -46,3 +53,11 @@ shared metadata mounted read-only by the sandbox. The approved escalated retry
 committed and pushed the documentation. The security reviewer also included a
 nonexistent `config_bindings.py` in a local search; the error was inspected and
 no operational action followed. Use verified source-record paths for each read.
+
+A long heading search piped through `cut` into `head` printed `Broken pipe`;
+select and bound matching lines in the reader instead of terminating a downstream
+pipe early. Guessed lint-configuration names were also absent; discovery located
+the actual `ruff.toml` and pinned cached Ruff binary. The installed lint engine's
+`auto` command reports the user-repository scope as unadopted here, so it does not
+substitute for directly checking the new files with the existing pinned tool.
+No adoption, installer or network access was attempted.

@@ -1,7 +1,7 @@
 # Resolver-only diagnostic proposal — 2026-10-20
 
 Status: prose design accepted by independent engineering and security review;
-source/offline-test authorization pending.
+source and synthesized offline tests subsequently authorized separately.
 PR #9051 remains OPEN/draft/disarmed. No implementation or operational authority
 is granted by this document.
 
@@ -198,4 +198,6 @@ document/source reads only. No test, probe, resolver or operational action ran.
 Containment, cleanup, truthful category consistency and unreachable transport
 continuation remain requirements to prove during source review, not established
 runtime capabilities. No acquisition or historical-cause inference follows.
-The next authorization has not been granted. All continuing holds above stand.
+The operator subsequently granted source/synthesized-offline-test authority only;
+the [source implementation record](resolver-only-source-review-2026-10-20.md)
+owns that authorization and its results. No operational authority follows.
