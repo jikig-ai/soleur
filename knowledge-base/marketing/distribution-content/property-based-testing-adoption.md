@@ -6,7 +6,7 @@ channels: x, discord
 status: draft
 ---
 
-## X
+## X/Twitter Thread
 
 New: property-based testing is now a first-class test class in Soleur.
 
