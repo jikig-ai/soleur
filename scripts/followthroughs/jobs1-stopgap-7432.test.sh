@@ -258,7 +258,7 @@ run_probe "$PROBE"; expect "R4b ONE strike is tolerated, and the PASS line names
 new_fx r4b2; good_runs 10; mkrun 90030 40000 completed success failure 0 some-other.test.sh; mkrun 90031 41000 completed success failure 0 another.test.sh
 run_probe "$PROBE"; expect "R4b2 TWO strikes need a person" 5 90030 90031 some-other.test.sh another.test.sh
 new_fx r4b3; good_runs 10; mkrun 90030 40000 completed success failure 0 some-other.test.sh; mkrun 90031 41000 completed success failure 0 another.test.sh
-mutate judged 'JUDGED_REPRODUCING_RUNS=""' 'JUDGED_REPRODUCING_RUNS="90030 90031"' && { run_probe "$MUT"; expect "R4b3 two strikes both judged reproducing by a committed id list" 0 "Judged-reproducing run(s): 90030 90031"; }
+mutate judged 'JUDGED_REPRODUCING_RUNS="39378082716 39446197504"' 'JUDGED_REPRODUCING_RUNS="90030 90031"' && { run_probe "$MUT"; expect "R4b3 two strikes both judged reproducing by a committed id list" 0 "Judged-reproducing run(s): 90030 90031"; }
 new_fx r4c; good_runs 11; mkrun 90032 40000 completed success failure 0
 run_probe "$PROBE"; expect "R4c infra=failure with no RED line at all is a measurement defect" 5 90032
 new_fx r4d; good_runs 11; mkrun 90033 40000 completed success failure 0 cloud-init-inngest-bootstrap.test.sh
@@ -287,7 +287,7 @@ run_probe "$PROBE"; expect "R4o the infra timeout annotation kills even when the
 new_fx r4p; good_runs 10; mkrun 90064 40000 completed success failure 0 a_b/c_d.test.sh; mkrun 90065 41000 completed success failure 0 e.test.sh
 run_probe "$PROBE"; expect "R4p a RED name with an underscore and a slash is a plain path, not an unsafe name" 5 a_b/c_d.test.sh
 new_fx r4q; good_runs 10; mkrun 90030 40000 completed success failure 0 some-other.test.sh; mkrun 90032 41000 completed success failure 0 another.test.sh
-mutate judged2 'JUDGED_REPRODUCING_RUNS=""' 'JUDGED_REPRODUCING_RUNS="900301"' && { run_probe "$MUT"; expect "R4q a judged id that merely CONTAINS a run id (900301 vs 90030) judges nothing" 5 90030 90032; }
+mutate judged2 'JUDGED_REPRODUCING_RUNS="39378082716 39446197504"' 'JUDGED_REPRODUCING_RUNS="900301"' && { run_probe "$MUT"; expect "R4q a judged id that merely CONTAINS a run id (900301 vs 90030) judges nothing" 5 90030 90032; }
 # accounting: the runner's own tally is the proof
 new_fx r4e2; good_runs 11; MK_UNACCLINE=1 mkrun 90070 40000 completed success failure 0 cloud-init-inngest-bootstrap.test.sh
 run_probe "$PROBE"; expect "R4e2 an UNACCOUNTED line alone (the tally says 0) is a measurement defect" 5 90070
@@ -420,7 +420,7 @@ if mutate m10 '[ "$nw" != 1 ]' '[ "$nw" -lt 1 ]'; then run_probe "$MUT"; kill_ro
 new_fx m11; good_runs 11; MK_ELAPSED=0 mkrun 90041 40000 completed success failure 0 other.test.sh
 if mutate m11 '! grep -qE '"'"'^infra_elapsed_s=[0-9]+$'"'"' <<<"$toks"' '! true'; then run_probe "$MUT"; kill_row "K10 dropping the no-infra_elapsed_s kill route is caught by R4k" 0; fi
 new_fx m13; good_runs 10; mkrun 90030 40000 completed success failure 0 some-other.test.sh; mkrun 90031 41000 completed success failure 0 another.test.sh
-if mutate m13a 'JUDGED_REPRODUCING_RUNS=""' 'JUDGED_REPRODUCING_RUNS="90030 90031"' && mutate m13b '*" $rid "*) judged="$judged $rid"; return ;; esac' '*" zz "*) judged="$judged $rid"; return ;; esac' "$TMP/mut.m13a.sh"; then
+if mutate m13a 'JUDGED_REPRODUCING_RUNS="39378082716 39446197504"' 'JUDGED_REPRODUCING_RUNS="90030 90031"' && mutate m13b '*" $rid "*) judged="$judged $rid"; return ;; esac' '*" zz "*) judged="$judged $rid"; return ;; esac' "$TMP/mut.m13a.sh"; then
   run_probe "$MUT"; kill_row "K12 a judged-id list that is never consulted is caught by R4b3" 5
 fi
 new_fx m14; good_runs 10; mkrun 90030 40000 completed success failure 0 some-other.test.sh; mkrun 90031 41000 completed success failure 0 another.test.sh
@@ -442,7 +442,7 @@ if mutate m20 '*" $name "*) :' '*"$name"*) :'; then run_probe "$MUT"; kill_row "
 new_fx m22; good_runs 11; mkrun 90060 40000 completed success failure 0 foo.test.sh bar.test.sh
 if mutate m22 'nstrikes=$((nstrikes + n_other))' 'nstrikes=$((nstrikes + 1))'; then run_probe "$MUT"; kill_row "K21 counting a run as ONE strike however many REDs it holds is caught by R4l" 0; fi
 new_fx m23; good_runs 10; mkrun 90030 40000 completed success failure 0 some-other.test.sh; mkrun 90032 41000 completed success failure 0 another.test.sh
-if mutate m23a 'JUDGED_REPRODUCING_RUNS=""' 'JUDGED_REPRODUCING_RUNS="900301"' && mutate m23b '*" $rid "*) judged=' '*"$rid"*) judged=' "$TMP/mut.m23a.sh"; then run_probe "$MUT"; kill_row "K22 an unfenced judged-id match is caught by R4q" 0; fi
+if mutate m23a 'JUDGED_REPRODUCING_RUNS="39378082716 39446197504"' 'JUDGED_REPRODUCING_RUNS="900301"' && mutate m23b '*" $rid "*) judged=' '*"$rid"*) judged=' "$TMP/mut.m23a.sh"; then run_probe "$MUT"; kill_row "K22 an unfenced judged-id match is caught by R4q" 0; fi
 new_fx m24; good_runs 11; MK_MSG="SOLEUR_MAIN_HEALTH tests=failure infra=failure infra_elapsed_s=" mkrun 90061 40000 completed success failure 0 other.test.sh
 if mutate m24 "'^infra_elapsed_s=[0-9]+\$'" "'^infra_elapsed_s='"; then run_probe "$MUT"; kill_row "K23 a digits-free infra_elapsed_s match is caught by R4k/R4l2" 0; fi
 new_fx m25; good_runs 11; MK_ELAPSED=1 mkrun 90062 40000 completed success failure 1 other.test.sh

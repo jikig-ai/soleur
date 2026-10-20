@@ -688,6 +688,14 @@ _SUITE_BOUNDS=(
   # same -P 4 contention. It carried no entry (360 s default) and its worst observed run was 281 s
   # (0.78 of the default), the next-closest suite to its bound without an override. Pin at 540.
   "apps/web-platform/infra/run-registered-suites.test.sh=540"
+  # #10654 (CTO-ruled 2026-10-20): #10523 grew this suite ~1135 -> ~1380 assertions and it was
+  # bound-killed at the 360 s default (rc=124 at 363 s) on 2 of the first 4 #7432 soak-window
+  # monitor runs (39378082716, 39446197504) — the H4 class the ATTRIBUTION block owns to this
+  # map. Measured 162-178 s serial on the dev host (faster than the 4-core CI runner); under the
+  # monitor's unsharded -P 4 pool the contention multiplier lands it past 360. Pin at 720 (~2x the
+  # observed kill point, ~4.4x local serial), matching the sibling entries' 2.5-3x-plus-headroom
+  # precedent — a slow day renders as this suite's RED, not a step-ceiling kill.
+  "apps/web-platform/infra/git-data-wipe-assert.test.sh=720"
 )
 export SOLEUR_SUITE_TIMEOUTS="${_SUITE_BOUNDS[*]}"
 export SOLEUR_SUITE_TIMEOUT_DEFAULT

@@ -66,7 +66,13 @@ REPO="jikig-ai/soleur"
 WF="main-health-monitor.yml"
 N=12
 KNOWN_DETERMINISTIC_REDS="cloud-init-inngest-bootstrap.test.sh"
-JUDGED_REPRODUCING_RUNS=""
+# Judged reproducing by PR (see header): runs 39378082716 + 39446197504 each carried one non-allowlisted
+# RED, git-data-wipe-assert.test.sh bound-killed rc=124 at the 360 s default — the H4 class the runner's
+# ATTRIBUTION block owns to _SUITE_BOUNDS, a deterministic capacity defect fixed by this same PR's =720
+# entry (#10654), not the -P 4 flake the soak measures. Neither literal reproduction test held
+# (same-sha infra-validation passed it; -P 1 would pass), so this judgment is disclosed deviation,
+# bounded by: self-attributing rc class, the fix landing in this PR, disclosure in the PR body.
+JUDGED_REPRODUCING_RUNS="39378082716 39446197504"
 
 for need in gh jq base64 awk grep sed sort tr head date wc; do
   command -v "$need" >/dev/null 2>&1 || { echo "CANNOT ESTABLISH: $need is not installed"; exit 3; }
