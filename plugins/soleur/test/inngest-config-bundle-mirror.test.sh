@@ -130,6 +130,25 @@ tm = mirror.get("timeout-minutes")
 v(isinstance(tm, int) and 0 < tm <= 30, "the mirror step has a timeout-minutes bound of at most 30")
 body = mirror.get("run", "")
 v(len(re.findall(r"^\s*degraded\(\)\s*\{", body, re.M)) == 1, "degraded() is defined exactly once")
+
+# Producer sign-step pin (#10390): the workflow's cosign invocation must stay on the v3
+# `--bundle` contract — the single .sigstore.json (sig + cert + chain) is what the host's
+# offline `verify-blob --bundle` consumes. Anchored on the call form inside run bodies, not
+# the step name (a rename must not lose the pin) and not a comment (a body grep sees prose).
+sign_steps = [
+    s
+    for j in jobs.values()
+    for s in j.get("steps", [])
+    if re.search(r"^\s*cosign\s+sign-blob\b", str(s.get("run", "")), re.M)
+]
+v(len(sign_steps) == 1, "exactly one step invokes cosign sign-blob (%d found)" % len(sign_steps))
+sbody = str(sign_steps[0].get("run", "")) if sign_steps else ""
+v(len(re.findall(r"^\s*cosign\s+sign-blob\s+--yes\b", sbody, re.M)) == 1,
+  "sign-blob runs once with --yes (keyless CI signing is non-interactive)")
+v(re.search(r'--bundle\s+"\$\{MANIFEST\}\.sigstore\.json"', sbody) is not None,
+  "sign-blob writes <manifest>.sigstore.json via --bundle")
+v(not re.search(r"--output-signature\b|--output-certificate\b", sbody),
+  "sign-blob carries no removed cosign-2.x --output-signature/--output-certificate flags")
 open(body_out, "w").write(body)
 PY
 
@@ -515,6 +534,21 @@ elif name == "copy-timeout-dropped":
     s = must_sub(r"retry timeout 180 crane copy", "retry crane copy", s)
 elif name == "digest-timeout-dropped":
     s = must_sub(r'"\$\(timeout 60 crane digest', '"$(crane digest', s)
+elif name == "sign-drops-yes":
+    s = must_sub(r"cosign sign-blob --yes", "cosign sign-blob", s)
+elif name == "sign-drops-bundle":
+    s = must_sub(r'\n            --bundle "\$\{MANIFEST\}\.sigstore\.json" \\', "", s)
+elif name == "sign-renames-bundle":
+    s = must_sub(r'--bundle "\$\{MANIFEST\}\.sigstore\.json"', '--bundle "${MANIFEST}.sig.json"', s)
+elif name == "sign-adds-output-signature":
+    s = must_sub(r"(cosign sign-blob --yes \\\n)",
+                 "\\1            --output-signature \"${MANIFEST}.sig\" \\\n", s)
+elif name == "sign-adds-output-certificate":
+    s = must_sub(r"(cosign sign-blob --yes \\\n)",
+                 "\\1            --output-certificate \"${MANIFEST}.cert\" \\\n", s)
+elif name == "sign-step-deleted":
+    s = must_sub(r"      - name: Keyless sign-blob the manifest.*?      - name: Assemble",
+                 "      - name: Assemble", s)
 elif name == "variant-no-if":
     s = must_sub(r"(id: zot_mirror\n)\s+if: [^\n]*\n", r"\1", s)
 elif name == "variant-reworded":
@@ -606,6 +640,12 @@ else
     "digest-check-dropped|digestbad|digest mismatch after the copy"
     "digest-lookup-unrouted|digestfail|crane digest lookup failing"
     "digest-shape-unchecked|digestshape|crane digest returning garbage"
+    "sign-drops-yes|struct|sign-blob runs once with --yes"
+    "sign-drops-bundle|struct|via --bundle"
+    "sign-renames-bundle|struct|via --bundle"
+    "sign-adds-output-signature|struct|no removed cosign-2.x"
+    "sign-adds-output-certificate|struct|no removed cosign-2.x"
+    "sign-step-deleted|struct|exactly one step invokes cosign sign-blob"
   )
   for row in "${ROWS[@]}"; do
     IFS='|' read -r m kind expect <<< "$row"
@@ -660,7 +700,7 @@ fi
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # ANTI-VACUITY FLOOR. Equal to the green-run count: raise it in the same edit that adds a case. It sits
 # directly above its `if` so guard-vacuity-floor can slice it.
-MIN_ASSERTIONS=78
+MIN_ASSERTIONS=88
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   echo "FATAL: only $((PASS + FAIL)) assertions ran (floor $MIN_ASSERTIONS); the suite did not execute what it claims to." >&2
   exit 1
