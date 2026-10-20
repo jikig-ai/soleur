@@ -356,8 +356,10 @@ runbook_ids_text() {
 }
 
 # The cell is the committed blob, not a worktree read. Exactly one PA-8
-# heading and exactly one (f) Retention line in that section. A symlink blob
-# is the link text, so it cannot supply the cell.
+# heading and exactly one line that contains the table marker
+# "| **(f) Retention**" in that section. A prose mention of (f) Retention
+# is not the cell. A
+# symlink blob is the link text, so mode 120000 cannot supply the cell.
 pa8_cell_text() {
   local text="$1" line p=0 found=0 headings=0 cell=""
   while IFS= read -r line || [[ -n "${line:-}" ]]; do
@@ -370,7 +372,7 @@ pa8_cell_text() {
       p=0
       continue
     fi
-    if [[ "$p" == 1 && "$line" == *"(f) Retention"* ]]; then
+    if [[ "$p" == 1 && "$line" == *"| **(f) Retention**"* ]]; then
       cell="$line"
       found=$((found + 1))
     fi
@@ -406,9 +408,31 @@ add_fire_ids() {
 parse_manifest "$MANIFEST_REL"
 check_shape
 
+token_dir="$(mktemp -d)"
+cleanup_tokens() {
+  if [[ -n "${token_dir:-}" && -d "$token_dir" ]]; then
+    rm -rf -- "$token_dir"
+  fi
+}
+trap cleanup_tokens EXIT
+
 cell_rc=0
+head_blob="$token_dir/head-register"
 head_register=""
-head_register=$(git cat-file blob "HEAD:${REGISTER_REL}") || cell_rc=$?
+nul_bytes=0
+git cat-file blob "HEAD:${REGISTER_REL}" > "$head_blob" || cell_rc=$?
+if (( cell_rc == 0 )); then
+  nul_bytes=$(tr -cd '\0' < "$head_blob" | wc -c) || cell_rc=$?
+fi
+if (( cell_rc == 0 && nul_bytes > 0 )); then
+  cell_rc=1
+fi
+if (( cell_rc == 0 )) && git ls-tree HEAD -- "$REGISTER_REL" | grep -q '^120000'; then
+  cell_rc=1
+fi
+if (( cell_rc == 0 )); then
+  head_register=$(cat "$head_blob") || cell_rc=$?
+fi
 HEAD_CELL=""
 if (( cell_rc == 0 )); then
   HEAD_CELL=$(pa8_cell_text "$head_register") || cell_rc=$?
@@ -419,8 +443,19 @@ if (( cell_rc != 0 || ${#HEAD_CELL} == 0 )); then
 fi
 
 rb_rc=0
+rb_file="$token_dir/runbook"
 rb_blob=""
-rb_blob=$(git cat-file blob "HEAD:${RUNBOOK_REL}") || rb_rc=$?
+nul_bytes=0
+git cat-file blob "HEAD:${RUNBOOK_REL}" > "$rb_file" || rb_rc=$?
+if (( rb_rc == 0 )); then
+  nul_bytes=$(tr -cd '\0' < "$rb_file" | wc -c) || rb_rc=$?
+fi
+if (( rb_rc == 0 && nul_bytes > 0 )); then
+  rb_rc=1
+fi
+if (( rb_rc == 0 )); then
+  rb_blob=$(cat "$rb_file") || rb_rc=$?
+fi
 RB_IDS=""
 if (( rb_rc == 0 )); then
   RB_IDS=$(runbook_ids_text "$rb_blob") || rb_rc=$?
@@ -537,27 +572,34 @@ if (( fired_count == 0 )); then
 fi
 
 show_rc=0
+base_file="$token_dir/base-register"
 base_register=""
-base_register=$(git cat-file blob "${MERGE_BASE}:${REGISTER_REL}") || show_rc=$?
+nul_bytes=0
+git cat-file blob "${MERGE_BASE}:${REGISTER_REL}" > "$base_file" || show_rc=$?
 if (( show_rc != 0 )); then
   emit_error "cannot read the base register"
   exit 2
 fi
+nul_bytes=$(tr -cd '\0' < "$base_file" | wc -c) || show_rc=$?
 base_cell_rc=0
+if (( show_rc != 0 || nul_bytes > 0 )); then
+  base_cell_rc=1
+fi
+if (( base_cell_rc == 0 )) && git ls-tree "$MERGE_BASE" -- "$REGISTER_REL" | grep -q '^120000'; then
+  base_cell_rc=1
+fi
+if (( base_cell_rc == 0 )); then
+  base_register=$(cat "$base_file") || base_cell_rc=$?
+fi
 REMOVED_CELL=""
-REMOVED_CELL=$(pa8_cell_text "$base_register") || base_cell_rc=$?
+if (( base_cell_rc == 0 )); then
+  REMOVED_CELL=$(pa8_cell_text "$base_register") || base_cell_rc=$?
+fi
 if (( base_cell_rc != 0 || ${#REMOVED_CELL} == 0 )); then
   emit_error "id census rejected"
   exit 1
 fi
 
-token_dir="$(mktemp -d)"
-cleanup_tokens() {
-  if [[ -n "${token_dir:-}" && -d "$token_dir" ]]; then
-    rm -rf -- "$token_dir"
-  fi
-}
-trap cleanup_tokens EXIT
 removed_tokens="$token_dir/removed"
 added_tokens="$token_dir/added"
 read -ra removed_parts <<< "$REMOVED_CELL"

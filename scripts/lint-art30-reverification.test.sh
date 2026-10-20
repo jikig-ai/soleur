@@ -13,9 +13,10 @@ RUNBOOK="$REPO_ROOT/knowledge-base/engineering/operations/runbooks/recover-useri
 MANIFEST_FILE="$REPO_ROOT/knowledge-base/legal/art30-reverification-triggers.yml"
 POINTER='The check executes knowledge-base/legal/art30-reverification-triggers.yml. This list stays numbered 1 through 7. That file is the predicate.'
 CELL_BASE='| **(f) Retention** | Reviewed **(1)** **(2)** **(3)** **(4)** **(5)** **(6)** **(7)** on 2020-01-01 with word alpha.'
+CELL_PASS='| **(f) Retention** | Reviewed **(1)** **(2)** **(3)** **(4)** **(5)** **(6)** **(7)** on 2026-10-21 with word noted-2 noted-4.'
 ROW1_WANT=1
 # Floor is the green-run pass count.
-MIN_ASSERTIONS=59
+MIN_ASSERTIONS=68
 
 fails=0
 passes=0
@@ -123,8 +124,8 @@ write_decoy_first_cell() {
     '' \
     '## Processing Activity 8 — Operational Telemetry' \
     '| **(b) Purpose** | telemetry |' \
-    '| **(f) Retention** | Reviewed **(1)** **(2)** **(3)** **(4)** **(5)** **(6)** **(7)** on 2026-10-21 with word noted.' \
-    '| **(f) Retention** | Reviewed **(1)** **(2)** **(3)** **(4)** **(5)** **(6)** **(7)** on 2020-01-01 with word alpha.' \
+    "$CELL_PASS" \
+    "$CELL_BASE" \
     '' \
     '## Processing Activity 9 — Next' \
     '| **(f) Retention** | next activity word. |' \
@@ -136,7 +137,7 @@ write_fake_pa8_pair() {
   assert_fixture_dir "$d"
   printf '%s\n' \
     '## Processing Activity 8 — Decoy' \
-    '| **(f) Retention** | Reviewed **(1)** **(2)** **(3)** **(4)** **(5)** **(6)** **(7)** on 2026-10-21 with word noted.' \
+    "$CELL_PASS" \
     '## Processing Activity 9 — Decoy' \
     '## Processing Activity 2 — Example' \
     '| **(f) Retention** | other activity word 2019-01-01.' \
@@ -155,11 +156,42 @@ replace_register_with_symlink() {
   assert_fixture_dir "$d"
   printf '%s\n' \
     '## Processing Activity 8 — Decoy' \
-    '| **(f) Retention** | Reviewed **(1)** **(2)** **(3)** **(4)** **(5)** **(6)** **(7)** on 2026-10-21 with word noted.' \
+    "$CELL_PASS" \
     '## Processing Activity 9 — Decoy' \
     > "$d/knowledge-base/legal/decoy-register.md"
   rm -f -- "$d/knowledge-base/legal/article-30-register.md"
   ln -s decoy-register.md -- "$d/knowledge-base/legal/article-30-register.md"
+}
+
+write_prose_retention() {
+  local d="$1"
+  assert_fixture_dir "$d"
+  printf '%s\n' \
+    '## Processing Activity 2 — Example' \
+    '| **(f) Retention** | other activity word 2019-01-01.' \
+    '' \
+    '## Processing Activity 8 — Operational Telemetry' \
+    '| **(b) Purpose** | telemetry |' \
+    'see (f) Retention on 2026-10-21 with word noted-2 noted-4 **(1)** **(2)** **(3)** **(4)** **(5)** **(6)** **(7)**.' \
+    '' \
+    '## Processing Activity 9 — Next' \
+    '| **(f) Retention** | next activity word. |' \
+    > "$d/knowledge-base/legal/article-30-register.md"
+}
+
+write_nul_register() {
+  local d="$1"
+  assert_fixture_dir "$d"
+  write_register "$d" "$CELL_PASS"
+  printf '\0' >> "$d/knowledge-base/legal/article-30-register.md"
+}
+
+write_multiline_symlink_register() {
+  local d="$1" target
+  assert_fixture_dir "$d"
+  target=$(printf '## Processing Activity 8 — Decoy\n%s\n' "$CELL_PASS")
+  rm -f -- "$d/knowledge-base/legal/article-30-register.md"
+  ln -s "$target" -- "$d/knowledge-base/legal/article-30-register.md"
 }
 
 write_runbook() {
@@ -795,6 +827,7 @@ write_decoy_first_cell "$D"
 commit_all "$D" head
 RC="$(run_gate "$D")"
 expect_rc "row 35 earlier retention row is not the cell" 1 "$RC"
+want_text "row 35 census" "id census rejected"
 
 reset_seed
 D="$(seed)"
@@ -803,6 +836,7 @@ write_fake_pa8_pair "$D"
 commit_all "$D" head
 RC="$(run_gate "$D")"
 expect_rc "row 36 earlier activity pair is not the cell" 1 "$RC"
+want_text "row 36 census" "id census rejected"
 
 reset_seed
 D="$(seed)"
@@ -811,6 +845,34 @@ replace_register_with_symlink "$D"
 commit_all "$D" head
 RC="$(run_gate "$D")"
 expect_rc "row 37 symlink register blob is not the cell" 1 "$RC"
+want_text "row 37 census" "id census rejected"
+
+reset_seed
+D="$(seed)"
+add_line "$D" apps/web-platform/infra/ci-deploy.sh 'docker run --log-opt max-size=1m'
+write_prose_retention "$D"
+commit_all "$D" head
+RC="$(run_gate "$D")"
+expect_rc "row 38 prose retention mention is not the cell" 1 "$RC"
+want_text "row 38 census" "id census rejected"
+
+reset_seed
+D="$(seed)"
+add_line "$D" apps/web-platform/infra/ci-deploy.sh 'docker run --log-opt max-size=1m'
+write_nul_register "$D"
+commit_all "$D" head
+RC="$(run_gate "$D")"
+expect_rc "row 39 nul byte is not the cell" 1 "$RC"
+want_text "row 39 census" "id census rejected"
+
+reset_seed
+D="$(seed)"
+add_line "$D" apps/web-platform/infra/ci-deploy.sh 'docker run --log-opt max-size=1m'
+write_multiline_symlink_register "$D"
+commit_all "$D" head
+RC="$(run_gate "$D")"
+expect_rc "row 40 symlink mode is not the cell" 1 "$RC"
+want_text "row 40 census" "id census rejected"
 
 if grep -n 'docs/legal/' "$GATE" >/dev/null; then
   fail "script references docs/legal"
