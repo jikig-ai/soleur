@@ -211,8 +211,8 @@ else
                '[ship.phase7.required_failed]' '[ship.phase7.dirty]' \
                '[ship.phase7.behind_exhausted]' '*DIRTY*' 'mapfile -t REQUIRED_CHECKS' \
                'is-inside-work-tree' \
-               'bash "$SYNC_SNAP" "$PR" --step || sync_rc=$?' \
-               'sync-pr-behind.sh exited $sync_rc' '--help 2>/dev/null | grep -q -- '"'"'--step'"'"'' \
+               'bash "$SYNC_SNAP" "$PR" --step --fence || sync_rc=$?' \
+               'sync-pr-behind.sh exited $sync_rc' '--help 2>/dev/null | grep -q -- '"'"'--fence'"'"'' \
                'SYNC_ROOT="$(set +u; printf '"'"'%s'"'"' "${CLAUDE_PLUGIN_ROOT}")"' \
                'fetch_failures=' 'PR="4387"' '[[ $PR =~ ^[0-9]+$ ]] ||' \
                'behind_pushes=$((behind_pushes+1))' '(( behind_pushes == 2 ))' \
@@ -1072,12 +1072,34 @@ cat > "$SCEN13" <<EOF
 ${SYNC_MOCKS}
 EOF
 SCEN_ROOT="$SKEW_ROOT" run_scenario_both "13-version-skew" "$SCEN13" \
-  "\[ship\.phase7\.precondition\] sync-pr-behind\.sh not usable at '[^']*': its --help has no --step
+  "\[ship\.phase7\.precondition\] sync-pr-behind\.sh not usable at '[^']*': its --help has no --fence \(an older copy\)
 \[1/90\] \[ship\.phase7\.behind_no_sync\] PR 4387 is BEHIND and auto-sync is disabled
 sync-pr-behind\.sh\"? 4387 .*re-arm the poll\. Stopping the poll\.
 \[scenario exit rc=0\]" \
   "BEHIND detected|auto-sync [0-9/]+ pushed|Merge made by|Merge poll timed out|\[2/90\]|UNEXPECTED gh call"
 rm -f "$SCEN13"
+
+# Scenario 13d — the skew the first fixture cannot see: an OLDER script whose --help names --step (so a probe that still
+# greps `--step` accepts it) but not --fence. Paired with this fence it would run the flagless --step, so the probe must
+# refuse it at loop entry: the only row that goes red if the probe is reverted to `--step`.
+SKEW2_ROOT="$(mktemp -d)"
+assert_fixture_dir "$SKEW2_ROOT"
+_TMP_OWNED+=("$SKEW2_ROOT")
+mkdir -p "$SKEW2_ROOT/.claude-plugin" "$SKEW2_ROOT/scripts"
+printf '{ "name": "soleur" }\n' > "$SKEW2_ROOT/.claude-plugin/plugin.json"
+printf '#!/usr/bin/env bash\necho "usage: sync-pr-behind.sh <pr-number> [--max-attempts N]"\necho "       sync-pr-behind.sh <pr-number> --step"\necho "       sync-pr-behind.sh <pr-number> --queue-state"\nexit 0\n' \
+  > "$SKEW2_ROOT/scripts/sync-pr-behind.sh"
+SCEN13D="$(mktemp)"
+_TMP_OWNED+=("$SCEN13D")
+cat > "$SCEN13D" <<EOF
+${SYNC_MOCKS}
+EOF
+SCEN_ROOT="$SKEW2_ROOT" run_scenario_both "13d-version-skew-has-step-but-no-fence" "$SCEN13D" \
+  "\[ship\.phase7\.precondition\] sync-pr-behind\.sh not usable at '[^']*': its --help has no --fence \(an older copy\)
+\[1/90\] \[ship\.phase7\.behind_no_sync\] PR 4387 is BEHIND and auto-sync is disabled
+\[scenario exit rc=0\]" \
+  "BEHIND detected|auto-sync [0-9/]+ pushed|Merge made by|Merge poll timed out|\[2/90\]|UNEXPECTED gh call"
+rm -f "$SCEN13D"
 
 # ---------------------------------------------------------------------------
 # Scenario 13b — CLAUDE_PLUGIN_ROOT unset (the Devin-cloud / Codex shape: the
@@ -1621,11 +1643,14 @@ for pair in "ship:$BLOCK_FILE" "merge-pr:$MIRROR_FILE"; do
   inline="$(grep -vE '^[[:space:]]*(#|echo )' "$f" \
     | sed -E "s/git( +-[Cc] +(\"[^\"]*\"|'[^']*'|[^ ]+))+/git/g" \
     | grep -nE '(^|[;&|([:space:]`])git (merge( |$)(origin|--abort|--no-edit)|push( |$))' || true)"
+  # Both spellings count: the prefix match sees `--step` and `--step --fence` alike, so a second (flagless) call cannot hide
+  # beside the one fenced call, and the fenced call cannot lose its flag.
   calls="$(grep -cF 'bash "$SYNC_SNAP" "$PR" --step' "$f" || true)"
-  if [[ -z "$inline" && "$calls" -eq 1 ]]; then
-    pass "[$lbl] no inline git merge/push; exactly one sync-pr-behind.sh --step call"
+  fenced="$(grep -cF 'bash "$SYNC_SNAP" "$PR" --step --fence || sync_rc=$?' "$f" || true)"
+  if [[ -z "$inline" && "$calls" -eq 1 && "$fenced" -eq 1 ]]; then
+    pass "[$lbl] no inline git merge/push; exactly one sync-pr-behind.sh --step call, and it passes --fence"
   else
-    fail "[$lbl] inline merge/push: ${inline:-none}; --step calls: $calls (want 1)"
+    fail "[$lbl] inline merge/push: ${inline:-none}; --step calls: $calls (want 1), of which --step --fence: $fenced (want 1)"
   fi
 done
 
@@ -1681,6 +1706,16 @@ gh() {
   case "$1 $2" in
     "pr view")
       case "$*" in
+        *"mergeStateStatus,autoMergeRequest"*)
+          # The guard snapshot of a FLAGLESS `sync-pr-behind.sh <N> --step` (state, mergeStateStatus, autoMergeRequest), served the
+          # way the real call is: raw JSON through the handed --jq. MOCK_ARMED / MOCK_MSS drive it like the fence's own reads.
+          armed="${MOCK_ARMED:-true}"
+          case "$armed" in
+            true)  data='{"state":"OPEN","mergeStateStatus":"'"${MOCK_MSS:-BEHIND}"'","autoMergeRequest":{"enabledAt":"2026-10-07T00:00:00Z"}}' ;;
+            false) data='{"state":"OPEN","mergeStateStatus":"'"${MOCK_MSS:-BEHIND}"'","autoMergeRequest":null}' ;;
+            *) echo "gh: HTTP 502 from fixture (pr view snapshot)" >&2; return 1 ;;
+          esac
+          jq -r "$(_q_jqx "$@")" <<<"$data" ;;
         *"--json autoMergeRequest"*)
           armed="${MOCK_ARMED:-true}"
           if [[ -n "${MOCK_ARMED_FALSE_AT:-}" ]] && (( i == MOCK_ARMED_FALSE_AT )); then armed=false; fi
@@ -1715,7 +1750,7 @@ gh() {
         *) echo "gh: HTTP 502 from fixture (pr checks)" >&2; return 1 ;;
       esac
       jq -r "$(_q_jqx "$@")" <<<"$data" ;;
-    "api repos/{owner}/{repo}/rules/branches/main")
+    "api repos/{owner}/{repo}/rules/branches/main"*)   # `*`: the script's own read asks for ?per_page=100
       case "${MOCK_RULES:-noqueue}" in
         queue)   data='[{"type":"deletion"},{"type":"merge_queue","parameters":{"merge_method":"SQUASH","grouping_strategy":"ALLGREEN"}},{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"test"}]}}]' ;;
         queue2)  data='[{"type":"deletion"},{"type":"merge_queue","parameters":{"merge_method":"SQUASH","grouping_strategy":"ALLGREEN"}},{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"test"},{"context":"e2e"}]}}]' ;;
@@ -1778,6 +1813,27 @@ q_both "Q1n-queue-rule-without-required-checks-syncs-as-today" "$QF" \
   "BEHIND detected .* auto-sync attempt 1/6
 $Q_SYNCED" \
   "queue_wait|ship\.phase7\.queued|$Q_FORBID"
+# Q1n-old-fence — the SAME fixture with `--fence` stripped from the fence's single call (what an OLD pasted fence runs against the NEW
+# script, and what in-flight sessions hold: pasted fences are never re-read from disk). The fence decides to sync (QUEUE_RULE=0), the
+# script refuses the flagless --step on this armed BEHIND PR of a merge-queue repo with exit 14, and the old fence's `*)` arm turns that
+# into a LOUD bounded stop naming the action — never its `11)` "no sync needed" arm (a silent livelock), never `pushed`. Pins ADR-270
+# addendum residual 3.
+STRIP_SHIP="$(mktemp)"; _TMP_OWNED+=("$STRIP_SHIP")
+STRIP_MIRROR="$(mktemp)"; _TMP_OWNED+=("$STRIP_MIRROR")
+sed 's/--step --fence/--step/' "$BLOCK_FILE" > "$STRIP_SHIP"
+sed 's/--step --fence/--step/' "$MIRROR_FILE" > "$STRIP_MIRROR"
+if cmp -s "$STRIP_SHIP" "$BLOCK_FILE" || cmp -s "$STRIP_MIRROR" "$MIRROR_FILE"; then
+  fail "[Q1n-old-fence] stripping --fence changed nothing in a fence block (the row would not test an old fence)"
+else
+  for pair in "ship:$STRIP_SHIP" "merge-pr:$STRIP_MIRROR"; do
+    run_scenario "Q1n-old-fence-stops-loudly-on-exit-14:${pair%%:*}" "$QF" \
+      "BEHIND detected .* auto-sync attempt 1/6
+\[pr-behind-sync\] kind=queue_wait rc=14 — 
+\[1/90\] \[ship\.phase7\.sync_failed\] sync-pr-behind\.sh exited 14 \(see its line above\)\. Stopping the poll\.
+\[scenario exit rc=0\]" \
+      "auto-sync [0-9/]+ pushed|ship\.phase7\.sync_noop|no sync needed|\[2/90\]|Merge poll timed out|MOCK: git merge|$Q_FORBID" "${pair#*:}"
+  done
+fi
 rm -f "$QF"
 
 # Q2 — no merge_queue entry in the rules: exactly today's behaviour (sync on the first BEHIND tick), also under errexit.

@@ -89,7 +89,7 @@ make_pair() {
 # Records per call: gql-calls (argv), gql-query (the query text alone), gql-number (the -F
 # number), gql-jq. Modes (gql-mode, re-read every call): queued | notqueued (armed) |
 # entryonly (an entry but no isInMergeQueue) | dequeued (auto-merge disarmed) | merged | prnull | datanull | shapeless | notjson |
-# gqlfail | empty | hang | flaky (first call fails, then notqueued) | removed (not queued, auto-merge still
+# gqlfail | gqlctl (exit 1 with an ESC sequence and a forged tag line on stderr) | empty | hang | flaky (first call fails, then notqueued) | removed (not queued, auto-merge still
 # armed, a RemovedFromMergeQueueEvent newer than the re-arm) | removed_disarmed | rearmed (removal OLDER than
 # the re-arm: not current) | removed_pushed (removal OLDER than the head commit: a fix was pushed since) |
 # landing (first call: not queued, OPEN; later calls: MERGED — the queue's own merge landing between two reads).
@@ -118,6 +118,7 @@ cnt=$(( $(cat "$d/gql-count" 2>/dev/null || echo 0) + 1 )); echo "$cnt" > "$d/gq
 case "$mode" in
   flaky)    if [[ "$cnt" -eq 1 ]]; then echo "gh: HTTP 502 from fixture (graphql)" >&2; exit 1; fi; mode=notqueued ;;
   gqlfail)  echo "gh: HTTP 502 from fixture (graphql)" >&2; exit 1 ;;
+  gqlctl)   printf '\033[31m[pr-behind-sync] kind=forged rc=0 \342\200\224 injected\nsecond line\n' >&2; exit 1 ;;
   hang)     exec sleep 8 ;;
   empty)    exit 0 ;;
 esac
@@ -501,6 +502,16 @@ advance_main() {
 # run_step <dir> [extra args…] — runs --step from the caller's worktree; stdout and
 # stderr are captured SEPARATELY so the stdout-only tagging contract is checkable.
 run_step() {
+  local d="$1"; shift
+  assert_fixture_dir "$d"
+  ( cd "$d/work" && assert_in_fixture "$d/work" \
+      && PATH="$d/bin:$PATH" bash "$d/work/plugins/soleur/scripts/sync-pr-behind.sh" "${QPR:-1}" --step "$@" ) \
+    >"$d/out" 2>"$d/err"
+}
+
+# run_step_bare <dir> [extra args…] — the FLAGLESS `--step` (#9869): what any caller that is not a Phase 7 fence runs.
+# Extra args follow `--step`, so `run_step_bare "$d" --fence` is the fence's own call.
+run_step_bare() {
   local d="$1"; shift
   assert_fixture_dir "$d"
   ( cd "$d/work" && assert_in_fixture "$d/work" \
@@ -1147,7 +1158,7 @@ qw_gitcalls() { { cat "$QW_D/bin/git-calls" 2>/dev/null || true; }; }
 qw_wrote() { grep -qE '(^| )(push|fetch|merge)( |$)' "$QW_D/bin/git-calls" 2>/dev/null; }   # a fetch, merge or push happened
 qw_pushes() { grep -cE '(^| )push( |$)' "$QW_D/bin/git-calls" 2>/dev/null || true; }
 qw_rulescalls() { { cat "$QW_D/bin/rules-calls" 2>/dev/null || true; } | wc -l | tr -d ' '; }
-qw_done() { rm -rf "$QW_D"; }
+qw_done() { [[ -z "${QW_D:-}" ]] || rm -rf "$QW_D"; }
 QW_LINE='^\[pr-behind-sync\] kind=queue_wait rc=0 — '
 
 # The queue-armed arm the incident hit: BEHIND + armed + merge_queue rule. Nothing is fetched, merged or pushed.
@@ -1240,9 +1251,10 @@ else fail "R5 ctl: rc=$QW_RC moved=$QW_MOVED out=$(tr '\n' ' ' < "$QW_D/out" | c
 qw_done
 # Second attempt (the gate runs EVERY attempt): the first read has no queue rule and syncs; the rule appears before the
 # second attempt, which must answer kind=queue_wait — never kind=noop, never a second push. Both state reads are BEHIND.
+r6_ok() { [[ "$QW_RC" -eq 0 ]] && [[ "$(grep -c 'auto-sync [0-9]* pushed' "$QW_D/out")" == 1 ]] && grep -qE "$QW_LINE" "$QW_D/out" \
+   && ! grep -q 'kind=noop' "$QW_D/out" && [[ "$(qw_rulescalls)" == 2 ]] && [[ "$(qw_pushes)" == 1 ]]; }
 qw_run flip notqueued "OPEN BEHIND" "OPEN BEHIND" --max-attempts 2
-if [[ "$QW_RC" -eq 0 ]] && [[ "$(grep -c 'auto-sync [0-9]* pushed' "$QW_D/out")" == 1 ]] && grep -qE "$QW_LINE" "$QW_D/out" \
-   && ! grep -q 'kind=noop' "$QW_D/out" && [[ "$(qw_rulescalls)" == 2 ]] && [[ "$(qw_pushes)" == 1 ]]; then
+if r6_ok; then
   pass "R6 second attempt: attempt 1 pushes, attempt 2 reads the rule again and answers kind=queue_wait (2 rules reads, 1 push, no noop)"
 else fail "R6 second attempt: rc=$QW_RC rules-calls=$(qw_rulescalls) pushes=$(qw_pushes) out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-400)"; fi
 qw_done
@@ -1277,9 +1289,281 @@ if ! q1_ok && [[ "$QW_RC" -eq 0 ]] && grep -qE "$QW_LINE" "$QW_D/out" && [[ ! -s
 else fail "H1 harness: q1_ok stayed green with a non-recording git shim"; fi
 qw_done
 
+# =============================================================================
+# Flagless `--step` on an armed BEHIND PR of a merge-queue repo (#9869). The Phase 7 fences pass `--fence`; any other
+# `--step` caller gets the same refusal the standalone loop gives (kind=queue_wait), on a DEDICATED exit 14: exit 11 is
+# the fences' uncounted "no sync needed" arm, so an OLD pasted fence would livelock silently on it, whereas 14 hits the old
+# fence's loud sync_failed stop. `--queue-wait` is the read-only verdict mode the pre-merge hook calls (queue_wait|proceed).
+# One recording gh stub (install_gh_wait) serves the queue GraphQL, the rules endpoint and `gh pr view --json
+# state,mergeStateStatus,autoMergeRequest`, and logs EVERY call to wait-calls; `git` is the recording shim, so "refused"
+# is asserted from the log of every git call, never inferred.
+# =============================================================================
+NOWT="$(mktemp -d "$TMPDIR/sync-notworktree.XXXXXXXX")"
+FIXTURES+=("$NOWT")
+# A gh that always fails: an argv row whose mutant gets past the usage check must not reach the real network.
+mkdir -p "$NOWT/bin"
+printf '#!/usr/bin/env bash\necho "gh: refused by the argv fixture" >&2\nexit 1\n' > "$NOWT/bin/gh"; chmod +x "$NOWT/bin/gh"
+argv_rc() {  # <args…> → prints rc; stdout/stderr land in $NOWT/out,err (cwd: not a repo). QW_SUT overrides the script (mutant rows)
+  ( cd "$NOWT" && GIT_CEILING_DIRECTORIES="$(dirname "$NOWT")" PATH="$NOWT/bin:$PATH" bash "${QW_SUT:-$SUT}" "$@" ) >"$NOWT/out" 2>"$NOWT/err"
+  local r=$?; collect "$NOWT/out" "$NOWT/err"; echo "$r"
+}
+
+# install_gh_wait <bin> <gql-mode> <pr-view-mode> [rules-mode] — pr-view-mode: ok:<STATE MERGESTATE>:<armed|disarmed> | fail |
+# hang | garbage | ctl (exit 1 with an ESC sequence and a forged tag line on stderr). The pr view serves the RAW JSON for the
+# fields `--json` names and runs the `--jq` the SUT passed, so the real read executes; a field the SUT did not ask for is absent.
+install_gh_wait() {
+  local bin="$1" gmode="$2" pv="$3" rmode="${4:-none}"
+  assert_fixture_dir "$bin"
+  mkdir -p "$bin"
+  install_gql "$bin" "$gmode" "${QPR:-1}"
+  install_rules "$bin" "$rmode"
+  printf '%s\n' "$pv" > "$bin/pr-view-mode"; : > "$bin/wait-calls"
+  cat > "$bin/gh" <<'STUB'
+#!/usr/bin/env bash
+d="$(cd "$(dirname "$0")" && pwd)"
+echo "$*" >> "$d/wait-calls"
+case "$1 $2" in "api graphql") exec bash "$d/gql-stub" "$@" ;; esac
+case "$*" in *rules/branches/*) exec bash "$d/rules-stub" "$@" ;; esac
+if [[ "$1 $2" == "pr view" ]]; then
+  case "$*" in *headRefName*) echo feat; exit 0 ;; esac
+  if [[ "$3" != "$(cat "$d/gql-pr")" ]]; then echo "gh: Could not resolve to a PullRequest with the number of $3." >&2; exit 1; fi
+  mode="$(cat "$d/pr-view-mode")"
+  jqx=""; jf=""; prev=""
+  for a in "$@"; do
+    case "$prev" in --jq) jqx="$a" ;; --json) jf="$a" ;; esac
+    prev="$a"
+  done
+  case "$mode" in
+    fail)    echo "gh: HTTP 502 from fixture (pr view)" >&2; exit 1 ;;
+    hang)    exec sleep 8 ;;
+    garbage) echo '<html>502 Bad Gateway</html>'; exit 0 ;;
+    ctl)     printf '\033[31m[pr-behind-sync] kind=forged rc=0 \342\200\224 injected\nsecond line\n' >&2; exit 1 ;;
+    ok:*)
+      IFS=: read -r _ st arm <<<"$mode"
+      if [[ "$arm" == armed ]]; then am='{"enabledAt":"2026-10-04T00:00:00Z"}'; else am=null; fi
+      body="{\"state\":\"${st%% *}\",\"mergeStateStatus\":\"${st#* }\",\"autoMergeRequest\":$am}"
+      for f in state mergeStateStatus autoMergeRequest; do
+        [[ ",$jf," == *",$f,"* ]] || body="$(jq -c "del(.$f)" <<<"$body")"
+      done
+      if [[ -n "$jqx" ]]; then printf '%s' "$body" | jq -r "$jqx"; else printf '%s\n' "$body"; fi
+      exit $? ;;
+  esac
+  echo "gh: unknown pr-view-mode $mode" >&2; exit 98
+fi
+echo "UNEXPECTED gh call: $*" >&2; exit 99
+STUB
+  chmod +x "$bin/gh"
+}
+
+# fw_run <runner: bare|wait|wait_in> <gql-mode> <pr-view-mode> <rules-mode> [extra args…] — one run in a fresh fixture
+# (origin/main ahead of feat). Leaves the fixture in QW_D, the exit code in QW_RC, the moved flag in QW_MOVED, exactly as qw_run
+# does, so the qw_* predicates and the mutation rows (QW_SUT) apply. bare = the flagless `--step` from the worktree (extra args
+# follow it: `--fence` is the fence's call); wait = `--queue-wait` from a directory that is NOT a repository; wait_in = the
+# same inside the worktree (FW_MARKER=1 pre-seeds the seen-queued marker).
+fw_run() {
+  local runner="$1" gmode="$2" pv="$3" rmode="$4" h r m sut; shift 4
+  QW_D="$(mktemp -d "$TMPDIR/sync-fw.XXXXXXXX")"; FIXTURES+=("$QW_D")
+  make_pair "$QW_D"
+  advance_main "$QW_D" h extra
+  if [[ -n "${QW_SUT:-}" ]]; then cp "$QW_SUT" "$QW_D/work/plugins/soleur/scripts/sync-pr-behind.sh"; fi
+  sut="$QW_D/work/plugins/soleur/scripts/sync-pr-behind.sh"
+  export QPR="$QUEUE_PR"
+  install_gh_wait "$QW_D/bin" "$gmode" "$pv" "$rmode"
+  install_git_shim "$QW_D/bin"
+  if [[ "${FW_MARKER:-}" == 1 ]]; then touch "$QW_D/work/.git/pr-queue-seen-$QUEUE_PR"; fi
+  h="$(git -C "$QW_D/work" rev-parse HEAD)"
+  r="$(git -C "$QW_D/work" ls-remote --heads origin feat | cut -f1)"
+  m="$(git -C "$QW_D/work" rev-parse refs/remotes/origin/main)"
+  case "$runner" in
+    bare) run_step_bare "$QW_D" "$@" ;;
+    wait) mkdir -p "$QW_D/outside"
+          ( cd "$QW_D/outside" && GIT_CEILING_DIRECTORIES="$QW_D" PATH="$QW_D/bin:$PATH" bash "$sut" "$QUEUE_PR" --queue-wait ) >"$QW_D/out" 2>"$QW_D/err" ;;
+    wait_in) ( cd "$QW_D/work" && assert_in_fixture "$QW_D/work" && PATH="$QW_D/bin:$PATH" bash "$sut" "$QUEUE_PR" --queue-wait ) >"$QW_D/out" 2>"$QW_D/err" ;;
+    *) echo "FATAL: fw_run: unknown runner '$runner'" >&2; exit 97 ;;
+  esac
+  QW_RC=$?
+  unset QPR
+  QW_MOVED=no
+  [[ "$h" == "$(git -C "$QW_D/work" rev-parse HEAD)" && "$r" == "$(git -C "$QW_D/work" ls-remote --heads origin feat | cut -f1)" \
+     && "$m" == "$(git -C "$QW_D/work" rev-parse refs/remotes/origin/main)" ]] || QW_MOVED=yes
+  collect "$QW_D/out" "$QW_D/err"
+}
+fw_n() { local c; c="$(grep -cE -e "$1" "$QW_D/bin/wait-calls" 2>/dev/null || true)"; echo "${c:-0}"; }   # wait-calls lines matching <regex>
+FQ='ok:OPEN BEHIND:armed'
+# f1_ok: the refusal arm of a flagless --step in QW_D — exit 14, kind=queue_wait rc=14 (NOT kind=queued, which is also an rc-11
+# tag), nothing fetched/merged/pushed, and the recording shim provably recorded (rev-parse is always run by the queue gate).
+f1_ok() {
+  [[ "$QW_RC" -eq 14 && "$QW_MOVED" == no ]] && grep -qE '^\[pr-behind-sync\] kind=queue_wait rc=14 — ' "$QW_D/out" \
+    && ! grep -q 'kind=queued' "$QW_D/out" && ! grep -q 'auto-sync [0-9]* pushed' "$QW_D/out" \
+    && grep -q '^rev-parse' "$QW_D/bin/git-calls" 2>/dev/null && ! qw_wrote
+}
+fsync_ok() { [[ "$QW_RC" -eq 0 && "$QW_MOVED" == yes ]] && ! grep -q 'kind=queue_wait' "$QW_D/out" && [[ "$(qw_pushes)" -ge 1 ]]; }
+fgh_ok() { [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no ]] && grep -qE '^\[pr-behind-sync\] kind=gh rc=4 — ' "$QW_D/out" && ! grep -q $'\033' "$QW_D/out" "$QW_D/err" && ! qw_wrote; }
+f6_ok() { fsync_ok && [[ "$(fw_n '^pr view')" == 0 && "$(fw_n 'rules/branches')" == 0 && "$(fw_n '^api graphql')" -ge 1 ]]; }
+
+# F1: refused. The refusal line says what to do and opens with "NOT AN ERROR in itself" (an errexit reader must not fall back to a
+# hand merge); the guard took ONE pr view and ONE rules read.
+fw_run bare notqueued "$FQ" queue
+if f1_ok && grep -q 'NOT AN ERROR' "$QW_D/out" && grep -q 'merge-queue-dequeue.md' "$QW_D/out" && grep -q 're-paste the fence' "$QW_D/out" \
+   && [[ "$(fw_n '^pr view')" == 1 && "$(fw_n 'rules/branches')" == 1 ]]; then
+  pass "F1 flagless --step, OPEN BEHIND armed, merge_queue rule: kind=queue_wait rc=14 (not kind=queued), nothing fetched/merged/pushed, one pr view and one rules read"
+else fail "F1 flagless --step refusal: rc=$QW_RC moved=$QW_MOVED pv=$(fw_n '^pr view') rules=$(fw_n 'rules/branches') out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-300) err=$(tr '\n' ' ' < "$QW_D/err" | cut -c1-200)"; fi
+qw_done
+# F1b: GitHub UNKNOWN (recompute lag) counts like BEHIND. F1c/F1d: UNKNOWN but disarmed / without a rule still sync.
+fw_run bare notqueued "ok:OPEN UNKNOWN:armed" queue
+if f1_ok; then pass "F1b flagless --step on OPEN UNKNOWN armed + rule: refused like BEHIND (rc 14, nothing moved)"
+else fail "F1b UNKNOWN: rc=$QW_RC moved=$QW_MOVED out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-300)"; fi
+qw_done
+fw_run bare notqueued "ok:OPEN UNKNOWN:disarmed" queue
+if fsync_ok; then pass "F1c flagless --step on OPEN UNKNOWN disarmed + rule: still syncs (green-on-arrival control)"
+else fail "F1c UNKNOWN disarmed: rc=$QW_RC moved=$QW_MOVED out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-300)"; fi
+qw_done
+fw_run bare notqueued "ok:OPEN UNKNOWN:armed" none
+if fsync_ok; then pass "F1d flagless --step on OPEN UNKNOWN armed, NO rule: still syncs (green-on-arrival control)"
+else fail "F1d UNKNOWN no rule: rc=$QW_RC moved=$QW_MOVED out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-300)"; fi
+qw_done
+# F2-F4b: outside the predicate, the flagless --step is today's --step (green on arrival: they pin that the guard does not refuse everything).
+fw_run bare notqueued "$FQ" none
+if fsync_ok; then pass "F2 flagless --step, BEHIND armed, NO merge_queue rule: syncs"
+else fail "F2 no rule: rc=$QW_RC moved=$QW_MOVED rules=$(fw_n 'rules/branches') out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-300)"; fi
+qw_done
+fw_run bare dequeued "ok:OPEN BEHIND:disarmed" queue
+if fsync_ok && [[ "$(fw_n 'rules/branches')" == 0 ]]; then pass "F3 flagless --step, BEHIND DISARMED + rule: syncs, and the rules endpoint is never asked (armed is checked first)"
+else fail "F3 disarmed: rc=$QW_RC moved=$QW_MOVED rules=$(fw_n 'rules/branches') out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-300)"; fi
+qw_done
+fw_run bare notqueued "ok:OPEN DIRTY:armed" queue
+if fsync_ok; then pass "F4 flagless --step, DIRTY armed + rule: syncs (the guard is BEHIND/UNKNOWN only, never DIRTY)"
+else fail "F4 DIRTY: rc=$QW_RC moved=$QW_MOVED out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-300)"; fi
+qw_done
+fw_run bare notqueued "ok:OPEN CLEAN:armed" queue
+if fsync_ok; then pass "F4b flagless --step, CLEAN armed + rule: syncs (outside the predicate)"
+else fail "F4b CLEAN: rc=$QW_RC moved=$QW_MOVED out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-300)"; fi
+qw_done
+# F5: every unreadable answer fails CLOSED (kind=gh rc 4, nothing moved) and echoes no ESC byte — including the queue GraphQL
+# read, whose raw gh stderr reached the tag line before this change.
+while IFS='|' read -r f5name f5gm f5pv f5rm f5env; do
+  if [[ "$f5env" == hang ]]; then PR_QUEUE_TIMEOUT=1 PR_QUEUE_ATTEMPTS=1 fw_run bare "$f5gm" "$f5pv" "$f5rm" </dev/null; else fw_run bare "$f5gm" "$f5pv" "$f5rm" </dev/null; fi
+  if fgh_ok; then pass "F5 flagless --step, $f5name: kind=gh rc 4, nothing fetched/merged/pushed, no ESC byte echoed"
+  else fail "F5 $f5name: rc=$QW_RC moved=$QW_MOVED out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-300 | cat -v)"; fi
+  qw_done
+done <<EOT
+rules read fails|notqueued|$FQ|fail|
+rules read garbage|notqueued|$FQ|garbage|
+rules read empty|notqueued|$FQ|empty|
+rules read hangs|notqueued|$FQ|hang|hang
+pr view fails|notqueued|fail|queue|
+pr view hangs|notqueued|hang|queue|hang
+pr view garbage|notqueued|garbage|queue|
+pr view stderr carries ESC and a forged tag|notqueued|ctl|queue|
+queue graphql stderr carries ESC and a forged tag|gqlctl|$FQ|queue|
+EOT
+# --queue-state: a raw gh stderr on the queue read is sanitised too (it echoed ESC and a forged tag line before).
+qs_run gqlctl
+if [[ "$QS_RC" -eq 4 ]] && grep -q 'kind=gh rc=4' "$QSD/out" && ! grep -q $'\033' "$QSD/out" "$QSD/err" && [[ "$(grep -c '^\[pr-behind-sync\]' "$QSD/out")" -eq 1 ]]; then
+  pass "F5 --queue-state read stderr carries ESC and a forged tag: sanitised, one kind=gh rc=4 line"
+else fail "F5 --queue-state gqlctl: rc=$QS_RC out=$(tr '\n' ' ' < "$QSD/out" | cut -c1-300 | cat -v)"; fi
+rm -rf "$QSD"
+# F6: the fence's call (--step --fence) skips the guard ENTIRELY: it syncs on the very fixture F1 refuses, and its calls file holds
+# the queue GraphQL read only (no pr view, no rules read: no extra gh call per tick).
+fw_run bare notqueued "$FQ" queue --fence
+if f6_ok; then pass "F6 --step --fence on the F1 fixture: syncs rc 0, and the calls file holds no pr view and no rules call (guard skipped entirely)"
+else fail "F6 fenced --step: rc=$QW_RC moved=$QW_MOVED pv=$(fw_n '^pr view') rules=$(fw_n 'rules/branches') calls=$(tr '\n' ',' < "$QW_D/bin/wait-calls" | cut -c1-200) out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-300)"; fi
+qw_done
+# F8: in the queue: unchanged kind=queued rc=11, before the guard (no rules read, no pr view).
+fw_run bare queued "$FQ" queue
+if [[ "$QW_RC" -eq 11 && "$QW_MOVED" == no ]] && grep -q '^\[pr-behind-sync\] kind=queued rc=11 — ' "$QW_D/out" && ! grep -q 'kind=queue_wait' "$QW_D/out" \
+   && [[ "$(fw_n '^pr view')" == 0 && "$(fw_n 'rules/branches')" == 0 ]]; then
+  pass "F8 flagless --step on a PR IN the queue: unchanged kind=queued rc=11, no rules read, no pr view"
+else fail "F8 in the queue: rc=$QW_RC moved=$QW_MOVED out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-300)"; fi
+qw_done
+
+# F7: mode-flag misuse is a usage error (rc 2, kind=usage) that NAMES its reason, so "rc 2" cannot be the generic unknown-argument
+# answer of an older copy; the control (--step --fence from outside a worktree) must reach the worktree check (rc 3).
+f7_one() {  # <reason-regex> <args…> → appends to F7_BAD unless rc 2, kind=usage and the reason
+  local re="$1" r; shift
+  r=$(argv_rc "$@")
+  if [[ "$r" -eq 2 ]] && grep -q '^\[pr-behind-sync\] kind=usage rc=2 — ' "$NOWT/out" && grep -qE -e "$re" "$NOWT/out"; then :; else F7_BAD+="[$*→$r] "; fi
+}
+f7_ok() {  # → 0 iff every misuse is refused with its reason and the control runs; leaves the control's rc in QW_RC
+  F7_BAD=""
+  f7_one 'only valid with --step' 1 --fence
+  f7_one 'only valid with --step' 1 --fence --queue-state
+  f7_one 'only valid with --step' 1 --fence --queue-wait
+  f7_one 'at most one of --step, --queue-state, --queue-wait' 1 --step --queue-wait
+  f7_one 'at most one of --step, --queue-state, --queue-wait' 1 --queue-wait --queue-state
+  f7_one '--queue-wait take no --max-attempts' 1 --queue-wait --max-attempts 2
+  QW_RC=$(argv_rc 1 --step --fence)
+  [[ -z "$F7_BAD" && "$QW_RC" -eq 3 ]] && grep -q '^\[pr-behind-sync\] kind=not_worktree rc=3 — ' "$NOWT/out"
+}
+if f7_ok; then pass "F7 mode flags: --fence alone / with --queue-state / with --queue-wait, two mode flags and --queue-wait --max-attempts are kind=usage rc 2 naming the reason; --step --fence reaches the worktree check (rc 3)"
+else fail "F7 mode-flag exclusivity: bad=${F7_BAD:-none} control rc=$QW_RC"; fi
+help_out="$(bash "$SUT" --help 2>/dev/null)"
+if grep -q -- '--fence' <<<"$help_out" && grep -q -- '--queue-wait' <<<"$help_out" && grep -qE '^  14 .*kind=queue_wait' <<<"$help_out" \
+   && grep -qE '^  11 .*kind=noop' <<<"$help_out" && grep -qF 'should a sync be skipped' <<<"$help_out" && grep -qF 'is the PR in the queue' <<<"$help_out" \
+   && grep -q 'nobody else' <<<"$help_out"; then
+  pass "F7 --help names --fence (only the fences pass it), --queue-wait with its --queue-state cross-reference and the exit-14 row, and keeps the exit-11 kind=noop row"
+else fail "F7 --help lacks --fence / --queue-wait / the exit-14 row / the cross-reference: $(grep -nE -e '--fence|--queue-wait|^  1[14] ' <<<"$help_out" | head -8 | tr '\n' '|')"; fi
+
+# W1-W4: --queue-wait, the read-only verdict the pre-merge hook calls. ONE pr view snapshot (state, mergeStateStatus, armed =
+# autoMergeRequest != null) and the rules read; NO GraphQL queue read, so there is no just-dequeued-still-reads-armed race and no
+# duplicate read. stdout is exactly one line, `queue_wait` or `proceed`; any failed read is kind=gh rc 4, never "not armed".
+w_one() {  # <label> <pr-view-mode> <rules-mode> <want-stdout> <want-rules-calls>
+  fw_run wait notqueued "$2" "$3"
+  if [[ "$QW_RC" -eq 0 && "$(cat "$QW_D/out")" == "$4" && ! -s "$QW_D/err" && "$(fw_n '^pr view')" == 1 && "$(fw_n 'rules/branches')" == "$5" && "$(fw_n '^api graphql')" == 0 ]]; then
+    pass "W $1: stdout exactly '$4', rc 0, outside a worktree, one pr view, $5 rules read(s), no GraphQL read"
+  else fail "W $1: rc=$QW_RC out=$(tr '\n' '|' < "$QW_D/out" | cut -c1-200) err=$(tr '\n' ' ' < "$QW_D/err" | cut -c1-120) pv=$(fw_n '^pr view') rules=$(fw_n 'rules/branches') gql=$(fw_n '^api graphql')"; fi
+  qw_done
+}
+w_one "W1 BEHIND armed + rule" "$FQ" queue queue_wait 1
+w_one "W1b UNKNOWN armed + rule" "ok:OPEN UNKNOWN:armed" queue queue_wait 1
+w_one "W2 disarmed" "ok:OPEN BEHIND:disarmed" queue proceed 0
+w_one "W2 no merge_queue rule" "$FQ" none proceed 1
+w_one "W2 DIRTY" "ok:OPEN DIRTY:armed" queue proceed 0
+w_one "W2 CLEAN" "ok:OPEN CLEAN:armed" queue proceed 0
+w_one "W2 MERGED" "ok:MERGED CLEAN:disarmed" queue proceed 0
+while IFS='|' read -r w3name w3pv w3rm w3env; do
+  if [[ "$w3env" == hang ]]; then PR_QUEUE_TIMEOUT=1 PR_QUEUE_ATTEMPTS=1 fw_run wait notqueued "$w3pv" "$w3rm" </dev/null; else fw_run wait notqueued "$w3pv" "$w3rm" </dev/null; fi
+  if [[ "$QW_RC" -eq 4 ]] && grep -qE '^\[pr-behind-sync\] kind=gh rc=4 — ' "$QW_D/out" && ! grep -qxE 'queue_wait|proceed' "$QW_D/out" && ! grep -q $'\033' "$QW_D/out" "$QW_D/err"; then
+    pass "W3 --queue-wait, $w3name: kind=gh rc 4 (fail closed: never read as 'not armed'), no verdict line, no ESC byte"
+  else fail "W3 $w3name: rc=$QW_RC out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-300 | cat -v)"; fi
+  qw_done
+done <<EOT
+pr view fails|fail|queue|
+pr view hangs|hang|queue|hang
+pr view garbage|garbage|queue|
+pr view stderr carries ESC|ctl|queue|
+rules read fails|$FQ|fail|
+rules read hangs|$FQ|hang|hang
+rules read garbage|$FQ|garbage|
+EOT
+# W4: inside a worktree with a seen-queued marker pre-seeded, the mode neither writes nor consumes it (outside a worktree there is
+# no git dir, so only this variant makes the check non-vacuous); with no marker it writes none; and it makes no GraphQL read.
+FW_MARKER=1 fw_run wait_in notqueued "$FQ" queue
+if [[ "$QW_RC" -eq 0 && "$(cat "$QW_D/out")" == queue_wait && -f "$QW_D/work/.git/pr-queue-seen-$QUEUE_PR" && "$(fw_n '^api graphql')" == 0 ]]; then
+  pass "W4 --queue-wait inside a worktree: the pre-seeded seen-queued marker is not consumed, no GraphQL read"
+else fail "W4 marker kept: rc=$QW_RC out=$(tr '\n' ' ' < "$QW_D/out") marker=$([[ -f "$QW_D/work/.git/pr-queue-seen-$QUEUE_PR" ]] && echo present || echo GONE) gql=$(fw_n '^api graphql')"; fi
+qw_done
+fw_run wait_in notqueued "$FQ" queue
+if [[ "$QW_RC" -eq 0 && "$(cat "$QW_D/out")" == queue_wait && ! -e "$QW_D/work/.git/pr-queue-seen-$QUEUE_PR" && "$QW_MOVED" == no ]] && ! qw_wrote; then
+  pass "W4 --queue-wait inside a worktree writes no seen-queued marker and fetches/merges/pushes nothing"
+else fail "W4 no marker written: rc=$QW_RC out=$(tr '\n' ' ' < "$QW_D/out") marker=$([[ -e "$QW_D/work/.git/pr-queue-seen-$QUEUE_PR" ]] && echo WRITTEN || echo none)"; fi
+qw_done
+
+# H1 for the flagless rows: the recording git shim must RECORD. With a non-recording shim f1_ok (which needs the logged rev-parse
+# and the absence of a push in the log) must go red, so "refused" cannot pass vacuously.
+fw_run bare notqueued "$FQ" queue
+f1_ok || fail "H1 control: the F1 arm is not green before the shim mutation"
+printf '#!/usr/bin/env bash\nexec "%s" "$@"\n' "$(command -v git)" > "$QW_D/bin/git"
+rm -f "$QW_D/bin/git-calls"
+export QPR="$QUEUE_PR"; run_step_bare "$QW_D"; QW_RC=$?; unset QPR
+if ! f1_ok && [[ "$QW_RC" -eq 14 ]] && grep -qE '^\[pr-behind-sync\] kind=queue_wait rc=14 — ' "$QW_D/out" && [[ ! -s "$QW_D/bin/git-calls" ]]; then
+  pass "H1 harness: with a non-recording git shim f1_ok goes red (the flagless 'no push' assertions need the recorded log)"
+else fail "H1 harness (flagless): f1_ok stayed green with a non-recording git shim"; fi
+qw_done
+
 # MUTATION ROWS (in-suite, permanent): each mutant of the SUT must turn its scenario red; the control is the real SUT. Each
 # mutation is asserted to differ from the SUT and to land inside queue_wait_gate, so a no-op replace cannot read as a catch.
-qw_scenario() {  # <kind: q1|r3|q1f|hang|numfail|ctl> → 0 iff the scenario holds against $QW_SUT
+qw_scenario() {  # <kind: q1|r3|q1f|hang|numfail|ctl|r6|f1|f1b|f3|f4|f5r|f5v|f6|f7> → 0 iff the scenario holds against $QW_SUT
   local kind="$1" ok=1
   case "$kind" in
     q1) qw_run queue notqueued "OPEN BEHIND" "OPEN BEHIND"; q1_ok && ok=0 ;;
@@ -1289,6 +1573,15 @@ qw_scenario() {  # <kind: q1|r3|q1f|hang|numfail|ctl> → 0 iff the scenario hol
           [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no ]] && grep -q 'rc=124' "$QW_D/out" && ok=0 ;;
     numfail) qw_run numfail notqueued "OPEN BEHIND" "OPEN CLEAN"; [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no ]] && ok=0 ;;
     ctl) qw_run ctl notqueued "OPEN BEHIND" "OPEN CLEAN"; [[ "$QW_RC" -eq 4 ]] && ! grep -q $'\033' "$QW_D/out" && ok=0 ;;
+    r6) qw_run flip notqueued "OPEN BEHIND" "OPEN BEHIND" --max-attempts 2; r6_ok && ok=0 ;;
+    f1) fw_run bare notqueued "$FQ" queue; f1_ok && ok=0 ;;
+    f1b) fw_run bare notqueued "ok:OPEN UNKNOWN:armed" queue; f1_ok && ok=0 ;;
+    f3) fw_run bare dequeued "ok:OPEN BEHIND:disarmed" queue; fsync_ok && ok=0 ;;
+    f4) fw_run bare notqueued "ok:OPEN DIRTY:armed" queue; fsync_ok && ok=0 ;;
+    f5r) fw_run bare notqueued "$FQ" fail; fgh_ok && ok=0 ;;
+    f5v) fw_run bare notqueued fail queue; fgh_ok && ok=0 ;;
+    f6) fw_run bare notqueued "$FQ" queue --fence; f6_ok && ok=0 ;;
+    f7) QW_D=""; f7_ok && ok=0 ;;
     *) echo "FATAL: qw_scenario: unknown kind '$kind'" >&2; exit 97 ;;
   esac
   qw_done
@@ -1304,7 +1597,7 @@ qw_mutant() {  # <label> <scenario> <old> <new>
   [[ "$SUT_SRC" == *"$old"* ]] || { fail "mutation '$label': the anchor text is absent from the SUT (fix the row)"; return; }
   # a first-match replace must land where intended: the WHOLE anchor occurs exactly once in the SUT, or the row is wrong
   rest="${SUT_SRC//"$old"/}"
-  [[ $(( (${#SUT_SRC} - ${#rest}) / ${#old} )) -eq 1 ]] || { fail "mutation '$label': the anchor occurs more than once in the SUT, so a first-match replace may land outside queue_wait_gate (fix the row)"; return; }
+  [[ $(( (${#SUT_SRC} - ${#rest}) / ${#old} )) -eq 1 ]] || { fail "mutation '$label': the anchor occurs more than once in the SUT, so a first-match replace may land outside the predicate (fix the row)"; return; }
   md="$(mktemp -d "$TMPDIR/sync-qwmut.XXXXXXXX")"; FIXTURES+=("$md"); assert_fixture_dir "$md"
   mut="$md/sync-pr-behind.sh"; printf '%s\n' "${SUT_SRC/"$old"/"$new"}" > "$mut"
   if cmp -s "$mut" "$SUT"; then fail "mutation '$label': the mutant equals the SUT"; rm -rf "$md"; return; fi
@@ -1321,15 +1614,23 @@ qw_mutant "read the second rule instead of selecting .type == merge_queue" q1f '
 qw_mutant "drop the timeout wrapper on the rules read" hang $'    out="$(${to[@]+"${to[@]}"} bash -c \'gh api "repos/' $'    out="$(bash -c \'gh api "repos/'
 qw_mutant "echo the rules-read cause unsanitised" ctl $'  detail="$(printf \'%s\' "$detail" | tr -c \'[:alnum:] ._:/=-\' \'?\')"\n' ''
 qw_mutant "grade the rules read on stdout alone (drop the rc clause)" numfail $'  if [[ "$rc" -eq 0 && "$out" =~ ^[0-9]{1,6}$ ]]; then\n    if (( 10#$out' $'  if [[ "$out" =~ ^[0-9]{1,6}$ ]]; then\n    if (( 10#$out'
+if qw_scenario f1 && qw_scenario f1b && qw_scenario f3 && qw_scenario f4 && qw_scenario f5r && qw_scenario f5v && qw_scenario f6 && qw_scenario r6 && qw_scenario f7; then
+  pass "mutation control: the real SUT satisfies the flagless --step scenarios (F1, F1b, F3, F4, F5 rules/pr view, F6, R6, F7)"
+else fail "mutation control: the real SUT fails one of the flagless --step scenarios"; fi
+# Guard 1 mutation matrix (plan): every anchor is a literal line of the guard, occurs once in the SUT, and the mutant must RUN.
+qw_mutant "delete the flagless --step guard call" f1 $'    step_guard\n' ''
+qw_mutant "treat DIRTY like BEHIND (the BEHIND/UNKNOWN-only boundary widened)" f4 ' && "$1" != *DIRTY* ]] || return 0' ' || "$1" == *DIRTY* ]] || return 0'
+qw_mutant "drop the armed condition (bare --step)" f3 $'  [[ "$am" == armed ]] || return 0\n' ''
+qw_mutant "an unreadable rules read is read as proceed" f5r $'  QW_VERDICT=unreadable; QW_DETAIL="rules read failed after' $'  QW_VERDICT=proceed; QW_DETAIL="rules read failed after'
+qw_mutant "an unreadable pr view is read as proceed" f5v $'  if [[ "$rc" -eq 0 && "$out" =~ ^(OPEN|CLOSED|MERGED)\\ [A-Z_]+\\ (armed|disarmed)$ ]]; then\n' $'  if true; then\n'
+qw_mutant "--fence runs the guard anyway" f6 $'  if [[ "$FENCE" != 1 ]]; then\n' $'  if true; then\n'
+qw_mutant "evaluate the predicate only on the first standalone attempt" r6 $'  queue_wait_gate "$state_line"\n' $'  [[ "$attempt" -gt 1 ]] || queue_wait_gate "$state_line"\n'
+qw_mutant "accept --fence without --step" f7 $'if [[ "$FENCE" == 1 && "$MODE" != step ]]; then usage_err "--fence is only valid with --step"; fi\n' ''
+qw_mutant "accept two mode flags" f7 $'if [[ "$NMODE" -gt 1 ]]; then usage_err "at most one of --step, --queue-state, --queue-wait"; fi\n' ''
+qw_mutant "drop UNKNOWN from the predicate" f1b ' || "$1" == *UNKNOWN* )' ' )'
 unset PR_QUEUE_REPO
 
 # --- argv strictness and --help (no fixture needed: neither touches git) ---------
-NOWT="$(mktemp -d "$TMPDIR/sync-notworktree.XXXXXXXX")"
-FIXTURES+=("$NOWT")
-argv_rc() {  # <args…> → prints rc; stdout/stderr land in $NOWT/out,err (cwd: not a repo)
-  ( cd "$NOWT" && GIT_CEILING_DIRECTORIES="$(dirname "$NOWT")" bash "$SUT" "$@" ) >"$NOWT/out" 2>"$NOWT/err"
-  local r=$?; collect "$NOWT/out" "$NOWT/err"; echo "$r"
-}
 rc_bogus=$(argv_rc 1 --bogus)
 bogus_ok=0; grep -q '^\[pr-behind-sync\] kind=usage rc=2 — ' "$NOWT/out" && [[ ! -s "$NOWT/err" ]] && bogus_ok=1
 rc_mixed=$(argv_rc 1 --step --max-attempts 3)
@@ -1402,5 +1703,5 @@ else
 fi
 
 echo "=== $PASS passed, $FAIL failed ==="
-[[ "$FAIL" -eq 0 && "$PASS" -eq 122 ]]
+[[ "$FAIL" -eq 0 && "$PASS" -eq 172 ]]
 exit $?

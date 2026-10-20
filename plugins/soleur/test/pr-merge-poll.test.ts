@@ -84,6 +84,82 @@ describe("pr-merge-poll BEHIND contract", () => {
     expect(behindSyncInstructions("claude")).toMatch(/exit 11 with `--step`/);
   });
 
+  test("exit 14 is named where exit codes are listed: kind=queue_wait is exit 0 standalone and 14 under a flagless --step (#9869)", () => {
+    // Exit 11 stays the fences' uncounted no-op arm; the refusal has its own code so an OLD pasted fence stops loudly instead of looping.
+    expect(behindSyncInstructions("grok")).toMatch(/exit 14/i);
+    expect(behindSyncInstructions("grok")).toMatch(/exits 0 here and 11 only with `--step`/);
+    expect(behindSyncInstructions("claude")).toMatch(/exit 11 with `--step`/);
+    expect(behindSyncInstructions("claude")).toMatch(/exit 14/);
+    for (const h of ["grok", "claude"] as const) expect(behindSyncInstructions(h)).not.toContain("--fence");
+  });
+
+  test("the fences' only opt-in flag is taught nowhere an agent could copy it from (#9869)", () => {
+    // `--fence` is accident prevention, not authentication: the two Phase 7 fences pass it, the script's own --help defines it, and
+    // NOTHING else names it. A third surface that did would teach every hand-rolled loop to bypass the queue-armed refusal.
+    const REPO_ROOT = resolve(PLUGIN_ROOT, "../..");
+    const ALLOWED_FENCE = new Set(["skills/ship/SKILL.md", "skills/merge-pr/SKILL.md", "scripts/sync-pr-behind.sh"]);
+    const SKIP = new Set(["node_modules", "test", ".git"]);
+    const walk = (dir: string, out: string[] = []): string[] => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const full = resolve(dir, e.name);
+        if (e.isDirectory()) {
+          if (!SKIP.has(e.name)) walk(full, out);
+        } else if (/\.(md|ts|js|mjs|sh|yml|yaml|json|njk)$/.test(e.name)) out.push(full);
+      }
+      return out;
+    };
+    const files = [...walk(PLUGIN_ROOT), ...walk(resolve(REPO_ROOT, ".github"))];
+    expect(files.length).toBeGreaterThan(300); // non-vacuity: the walk found skills, scripts, lib, hooks and workflows
+    const rel = (f: string) => (f.startsWith(PLUGIN_ROOT + "/") ? f.slice(PLUGIN_ROOT.length + 1) : f);
+    const withFence = files.filter((f) => readFileSync(f, "utf-8").includes("--fence")).map(rel).sort();
+    // the allow-list is exact: the script and both fences carry it (a fence that lost it would run the flagless call)
+    expect(withFence).toEqual([...ALLOWED_FENCE].sort());
+    // generated instruction text, for every harness: never names it either
+    for (const h of ["grok", "claude", "codex", "devin", "opencode", "cursor", "unknown"] as const) {
+      expect(behindSyncInstructions(h)).not.toContain("--fence");
+      expect(pollInstructions(h)).not.toContain("--fence");
+    }
+    for (const f of ["skills/drain-prs/SKILL.md", "lib/harness.ts", "codex/INSTRUCTIONS.md", "devin/INSTRUCTIONS.md"]) {
+      expect(readFileSync(resolve(PLUGIN_ROOT, f), "utf-8")).not.toContain("--fence");
+    }
+  });
+
+  test("nothing but the two Phase 7 fences calls sync-pr-behind.sh with --step (#9869)", () => {
+    // A hand-rolled `--step` loop is the second writer this change closes. The call shapes: the fence's `"$SYNC_SNAP" "$PR" --step`,
+    // and any `sync-pr-behind.sh <pr> --step` an instruction or workflow would hand to an agent to run.
+    const REPO_ROOT = resolve(PLUGIN_ROOT, "../..");
+    const CALL = /(\$SYNC_SNAP"?\s+"?\$PR"?\s+--step|sync-pr-behind\.sh"?\s+("?\$?[\w{}<>-]+"?)\s+--step)\b/;
+    const SKIP = new Set(["node_modules", "test", ".git"]);
+    const walk = (dir: string, out: string[] = []): string[] => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const full = resolve(dir, e.name);
+        if (e.isDirectory()) {
+          if (!SKIP.has(e.name)) walk(full, out);
+        } else if (/\.(md|ts|js|mjs|sh|yml|yaml)$/.test(e.name)) out.push(full);
+      }
+      return out;
+    };
+    // positive controls: the pattern must fire on the real spellings, or the empty result pins nothing
+    expect('bash "$SYNC_SNAP" "$PR" --step --fence || sync_rc=$?').toMatch(CALL);
+    expect('bash "${CLAUDE_PLUGIN_ROOT}/scripts/sync-pr-behind.sh" 4242 --step').toMatch(CALL);
+    expect("`sync-pr-behind.sh <PR-number> --step`").toMatch(CALL);
+    const files = [...walk(PLUGIN_ROOT), ...walk(resolve(REPO_ROOT, ".github"))];
+    expect(files.length).toBeGreaterThan(300);
+    const FENCES = new Set([resolve(PLUGIN_ROOT, "skills/ship/SKILL.md"), resolve(PLUGIN_ROOT, "skills/merge-pr/SKILL.md")]);
+    // pr-merge-poll.ts names the call once, to say it is never the agent's ("never yours"); the script's header comments list its callers.
+    const DOC = new Set([resolve(PLUGIN_ROOT, "lib/pr-merge-poll.ts"), resolve(PLUGIN_ROOT, "scripts/sync-pr-behind.sh")]);
+    const hits = files.filter((f) => !FENCES.has(f) && !DOC.has(f) && CALL.test(readFileSync(f, "utf-8")));
+    expect(hits).toEqual([]);
+    // each fence has exactly one call, and it is the fenced one
+    for (const f of FENCES) {
+      const text = readFileSync(f, "utf-8");
+      expect(text.match(/bash "\$SYNC_SNAP" "\$PR" --step/g)?.length).toBe(1);
+      expect(text).toContain('bash "$SYNC_SNAP" "$PR" --step --fence || sync_rc=$?');
+      expect(text).toContain("--help 2>/dev/null | grep -q -- '--fence'");
+      expect(text).not.toContain("--help 2>/dev/null | grep -q -- '--step'");
+    }
+  });
+
   test("behindSyncInstructions agrees with queue mode: a queue_wait heartbeat on BEHIND is not a reason to sync (#9710)", () => {
     // Every harness gets the exception: the default case is appended for codex, devin and unknown, and without it the
     // amended FORBIDDEN/resolve lines sit above an unconditional "BEHIND -> merge origin/main and push".
@@ -109,8 +185,11 @@ describe("pr-merge-poll BEHIND contract", () => {
       expect(md).toMatch(/never write your own/i);
       expect(md).toContain("kind=queue_wait");
     }
-    // the --step mention carries its own warning, in the same sentence, so the pinned substring is not a teaching
-    expect(claude).toMatch(/sync-pr-behind\.sh <PR-number> --step`[^.]*never yours; unguarded by design/);
+    // the --step mention carries its own warning, in the same sentence, so the pinned substring is not a teaching. The script now
+    // REFUSES a flagless --step on an armed BEHIND PR of a merge-queue repo (kind=queue_wait, exit 14): the text says so, and the
+    // old "unguarded by design" wording (false since #9869) is gone. The flag the fences pass is deliberately not named here.
+    expect(claude).toMatch(/sync-pr-behind\.sh <PR-number> --step`[^.]*never yours; the script refuses a flagless `--step`[^.]*`kind=queue_wait`, exit 14/);
+    expect(claude).not.toContain("unguarded by design");
     // grok: the queue exception comes BEFORE the sync bullet
     expect(grok.indexOf("Exception (first)")).toBeGreaterThan(-1);
     expect(grok.indexOf("Exception (first)")).toBeLessThan(grok.indexOf("Otherwise, from the PR worktree"));
@@ -222,8 +301,12 @@ describe("pr-merge-poll sentinel markers", () => {
     expect(stat).toContain("BEHIND detected");
     expect(stat).toContain("auto-sync");
     expect(stat).toContain("[pr-behind-sync]");
-    // The Phase 7 fences run `--step` and refuse a copy whose --help lacks it (#8383).
+    // The Phase 7 fences run `--step --fence` and refuse a copy whose --help lacks --fence (#8383, #9869): the flag is how a fence
+    // proves it is paired with a script that knows about the queue-armed refusal. --queue-wait is the hook's read-only verdict.
     expect(stat).toContain("--step");
+    expect(stat).toContain("--fence");
+    expect(stat).toContain("--queue-wait");
+    expect(stat).toMatch(/^  14 +.*kind=queue_wait/m);
     expect(PR_BEHIND_SYNC_SENTINEL).toBe("pr-behind-sync-protocol");
   });
 
