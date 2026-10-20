@@ -11,7 +11,8 @@ Reach for `property` when the behavior is a contract that must hold for every
 input, not a list of cases you can enumerate:
 
 - **Round-trips** — `decode(encode(x)) == x` for all x (serializers, codecs,
-  normalizers, sanitizers paired with an un-sanitizer).
+  normalizers; escape/unescape pairs only where the transform is truly
+  invertible).
 - **Invariants under mutation** — `sort` is idempotent and a permutation of its
   input; `retry` never exceeds the cap; a reducer keeps a conserved quantity.
 - **Metamorphic relations** — output is monotone in a parameter; appending an
@@ -71,9 +72,9 @@ That minimized case is the real find.
 | TypeScript / JavaScript | [fast-check](https://fast-check.dev/) (v4 verified 2026-10-20) | `fc.assert(fc.property(arb, fn))` |
 | Python | [Hypothesis](https://hypothesis.works/) (v6 verified 2026-10-20) | `@given(st.<strategy>)` |
 | Rust | [proptest](https://crates.io/crates/proptest) (v1.12 verified 2026-10-20) | `proptest! { #[test] fn t(x in strategy) { … } }` |
-| JVM | jqwik | `@Property` |
-| Haskell | QuickCheck | `quickCheck prop` |
-| .NET | FsCheck | `Check.Quick` |
+| JVM | jqwik (unverified) | `@Property` |
+| Haskell | QuickCheck (unverified) | `quickCheck prop` |
+| .NET | FsCheck (unverified) | `Check.Quick` |
 
 ### Minimal fast-check example (TypeScript)
 
@@ -92,12 +93,13 @@ fc.assert(
 ### Minimal Hypothesis example (Python)
 
 ```python
+from collections import Counter
 from hypothesis import given, strategies as st
 
 @given(st.lists(st.integers()))
 def test_sort_is_permutation(xs):
-    assert sorted(xs) == list(xs) or sorted(xs) != list(xs) or sorted(sorted(xs)) == sorted(xs)
-    assert sorted(xs) == list(xs) or sorted(xs) != list(xs) or sorted(sorted(xs)) == sorted(xs)
+    assert Counter(sorted(xs)) == Counter(xs)   # same multiset — a permutation
+    assert sorted(sorted(xs)) == sorted(xs)     # idempotent
 ```
 
 (Hypothesis also supports `@settings` for run counts and `st.data()` for
