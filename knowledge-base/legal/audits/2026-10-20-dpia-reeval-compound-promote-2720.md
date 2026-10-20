@@ -5,7 +5,7 @@ date: 2026-10-20
 issue: 6107
 status: draft-requires-counsel-review
 processing_activity: "Article 30 register Processing Activity 31 (Anthropic-egressing Inngest function fleet), member `cron-compound-promote` — the Compound Promotion Loop (#2720), phase 1 (cluster call) and phase 2 (additive-edit call)"
-conclusion: "DRAFT position, pending operator adoption and counsel review: full DPIA NOT required at single-operator scale — a determination at current scale, conditional, NOT an empirical finding. On the 2026-07-31 fleet screening's own scoring the loop engages WP248 criterion 8 and partially engages 7 and 9, with 4 unassessed (two and a half criteria, more if 4 is engaged), so WP248's presumption IS met; it is displaced on stated reasons, not by the count, and the displacement requires counsel confirmation. The empirical limbs (false-positive rate, operator merge ratio) were not assessable (0/0, undefined) and the verdict does not rest on them; it rests on structural factors only, two of which are unverified. This memo is the first recorded Art. 35(1) threshold determination and is retrospective; if counsel concludes otherwise, the period from 2026-07-06 is a timing failure this memo does not cure. Five named accepted residual risks; fifteen re-evaluation triggers pinned (fourteen distinct, trigger 11 restates trigger 1); re-arm tracker #10676."
+conclusion: "DRAFT position, pending operator adoption and counsel review: full DPIA NOT required at single-operator scale — a determination at current scale, conditional, NOT an empirical finding. On the 2026-07-31 fleet screening's own scoring the loop engages WP248 criterion 8 and partially engages 7 and 9, with 4 unassessed (two and a half criteria, more if 4 is engaged), so WP248's presumption IS met; it is displaced on stated reasons, not by the count, and the displacement requires counsel confirmation. The empirical limbs (false-positive rate, operator merge ratio) were not assessable (0/0, undefined) and the verdict does not rest on them; it rests on structural factors only, two of which are unverified. Acceptance of residuals (a) and (b) is conditional on two Art. 6 balancings (persons named in a learning, by 2026-11-19; publication, before 2026-10-25) that are currently unmet. This memo is the first recorded Art. 35(1) threshold determination and is retrospective; if counsel concludes otherwise, the period from 2026-07-06 is a timing failure this memo does not cure. Five named accepted residual risks; fifteen re-evaluation triggers pinned (fourteen distinct, trigger 11 restates trigger 1); re-arm tracker #10676."
 related:
   - knowledge-base/legal/article-30-register.md
   - knowledge-base/legal/audits/2026-07-31-dpia-screening-claude-eval-fleet-and-ci.md
@@ -74,7 +74,7 @@ denominator is written 0/0 and called undefined; it is never written as a percen
 
 | Quantity | Label | Value | Source |
 |---|---|---|---|
-| Draft PRs opened by the loop, 2026-07-06 to 2026-10-20 | **Measured** | 0 | Two sources, not four independent routes. (i) The append-only audit log `knowledge-base/project/learnings/promotion-log.md` has no data row below its marker line; this is **merged-only evidence**, because the row is committed on the PR branch and reaches the main branch only if the PR merges, so an empty log shows zero merged PRs, not zero opened ones (the log header's wording "every promotion proposal opened" is stale and is not relied on). (ii) GitHub PR search by label, by head branch and by title: a label search for `self-healing/auto` across all PR states returns an empty list (re-run by the CLO on 2026-10-20); a head-branch search returns only unrelated feature branches; a title search returns only PRs that change the loop. These three searches read the same PR corpus and are not independent corroboration of each other; the label is applied in a best-effort step, so an unlabelled loop PR would escape the label route but not the branch and title routes. |
+| Draft PRs opened by the loop, 2026-07-06 to 2026-10-20 | **Measured** | 0 | Two sources, not four independent routes. (i) The append-only audit log `knowledge-base/project/learnings/promotion-log.md` has no data row below its marker line; this is **merged-only evidence**, because the row is committed on the PR branch and reaches the main branch only if the PR merges, so an empty log shows zero merged PRs, not zero opened ones (the log header's wording "every promotion proposal opened" is stale and is not relied on). (ii) GitHub PR search, all states, by label (`label:self-healing/auto`), by head branch (`head:self-healing/auto-`) and by title (`compound-promote`, the loop's own title shape): the label search returns an empty list (re-run by the CLO on 2026-10-20) and the loop-specific branch and title searches are empty per the review seats' re-runs; looser title searches return only unrelated PRs, none opened by the loop. These three searches read the same PR corpus and are not independent corroboration of each other; the label is applied in a best-effort step, so an unlabelled loop PR would escape the label route but not the branch and title routes. |
 | Skill-conflict comments posted by the loop (second public output surface, §2) | **Not established** | — | A review-seat search of comments on 2026-10-20 found no posted comment of that kind. A negative search is not proof, it was not re-run by the CLO, and the 2026-07-12 to 2026-09-13 weeks are not decodable. |
 | False-positive rate (rejected opened PRs / opened PRs) | **Not measurable** | 0/0, undefined | Needs at least one opened PR. |
 | Operator merge ratio (merged opened PRs / opened PRs) | **Not measurable** | 0/0, undefined | Same. |
@@ -177,12 +177,12 @@ there is no DPIA to review, so the triggers stand in for it.
 | WP248 4, sensitive or highly personal data | **Not established; unassessed.** The corpus is engineering notes. This memo did **not** sample the corpus for names or other identifying prose (see §7), so the criterion is counted as **unassessed**, neither engaged nor clear; residual (a) carries it. |
 | WP248 5, large scale | **Not engaged, on factors that are partly unmeasured.** Number of data subjects: unknown, bounded by the repository's authors and the persons named in learnings, order of magnitude not measured. Volume: 2,768 entries and 1,575,462 bytes in the serialized corpus of a cluster call at the last measured run; one scheduled run a week, plus manual triggers and one retry. Duration: 106 days. One repository. Volume of documents is not the test; the number and range of data subjects is. |
 | WP248 6, matching or combining datasets | Not engaged. One corpus, one purpose. |
-| WP248 7, vulnerable data subjects or imbalance | **Partially engaged**, consistent with the fleet screening's scoring of the PA-31 population (involuntary contributors with no relationship to Jikigai). For this member the population is the authors of committed content and any person named in a learning. Cohort-user or customer data is not intended to be in the corpus; no enforcing control is cited and this is unverified (§7). |
+| WP248 7, vulnerable data subjects or imbalance | **Partially engaged, by analogy.** The fleet screening's partial score for 7 attaches to the community-collector members (involuntary subjects with no relationship to Jikigai), not to this member; it is applied here conservatively. For this member the population is the authors of committed content and any person named in a learning. Cohort-user or customer data is not intended to be in the corpus; no enforcing control is cited and this is unverified (§7). |
 | WP248 8, innovative use of technology | **Engaged.** A scheduled LLM drafts text that, if merged, becomes a rule in the file that governs other agents. |
 | WP248 9, processing that prevents exercise of a right | **Partially engaged, through the publication limb.** A draft PR is readable the moment it opens, and the human gate acts at merge, not at publication; a skill-conflict comment is posted with no gate at all. Once text is on a public repository, the controller alone cannot reliably erase it (edit history, forks, mirrors); the fleet screening reached the same mechanism for PA-32. The limb is **not yet realised** (zero draft PRs opened), which is a fact about the past and not a control. The fleet screening scored PA-31 "No" here because it found no public-output limb; this member has one, so that scoring does not transfer. Residual (b). |
 
 **Tally.** On the fleet screening's scoring, the loop engages criterion 8 and partially engages
-7 (the same involuntary population) and 9 (the public-output limb that the fleet screening's
+7 (by analogy to the fleet screening, whose partial score for 7 attaches to the community-collector members, not to this member) and 9 (the public-output limb that the fleet screening's
 PA-31 conclusion expressly excluded); criterion 4 is unassessed. That is **two and a half
 criteria, or more if 4 is engaged**. The loop is therefore not lighter than the PA-31 member
 set the fleet screening assessed (two criteria), and arguably heavier. **WP248's presumption
@@ -209,11 +209,24 @@ an Art. 14 population, and necessity of names for a clustering task is not shown
 prefilter's existence shows minimisation is feasible), or (ii) publication of a draft PR, which
 is a distinct operation of the PA-32 type, for which the register records that Art. 6(1)(f)
 failed necessity as implemented for the community digest. This memo **claims no basis for (i) or
-(ii)** and does not author a new LIA. A short Arm A-style balancing for (i) and (ii) is required
-at or before the first opened draft PR (trigger 1). The loop has no gate that waits for it; the
-operator can honour it only by completing it before the first scheduled run that could open a PR
-(2026-10-25) or by using the kill switch in the loop's config. A PR opened before the balancing
-exists is a publication without a recorded basis, and is to be recorded as such.
+(ii)** and does not author a new LIA. The two limbs have different timing, and the balancing
+for each is a separate condition of the residual that depends on it. **The conditions are
+currently unmet.**
+
+- **Limb (i), persons merely named in a learning.** This transmission is not future: it occurs
+  on every scheduled run, in phase 1 and again in phase 2, and has since 2026-07-06 without a
+  recorded basis. It has no first-PR deadline. The CLO draft rules it an **accepted, conditional
+  residual**, not a stop: the content is already in a public repository, one further weekly run
+  does not change the character of a 106-day-old processing, and a hard stop on 2026-10-25 would
+  not cure the past. The condition is a short Arm A-style balancing for this limb, **owner: the
+  operator; dated action: recorded by 2026-11-19**, carried on the re-arm tracker #10676. If the
+  action is not recorded by that date, the acceptance of residual (a) lapses and the recommended
+  state is the kill switch (`enabled: false` in the loop's config) until it is.
+- **Limb (ii), publication.** This depends on a first opened draft PR (or posted comment). The
+  loop has no gate that waits for the balancing, so the practical deadline is **2026-10-25**, the
+  first scheduled run that could open a PR (a manual trigger could be sooner): complete it
+  before then or use the kill switch. A PR opened before it exists is a publication without a
+  recorded basis and is recorded as such (trigger 1).
 
 ## 4. Why the remaining surface does not change the conclusion
 
@@ -259,10 +272,12 @@ from private session context and then committed; once committed it is repository
 public repository, so the transmission adds no new public-disclosure risk beyond what the
 committed text already presents, but it remains a transfer to a processor, sent twice (phase 1
 whole corpus, phase 2 summaries again). Persons merely named in a learning are outside the
-recorded Art. 6 basis (§3). Accepted because the corpus is the operator's own committed
-engineering notes, cohort-user data is not intended to be in it (no enforcing control is cited;
-unverified), and the DPA, SCCs and default 30-day retention apply, the DPA subject to the
-unverified Commercial Terms premise (`anthropic.md`). Recovery: exclude or edit the learning
+recorded Art. 6 basis (§3). Accepted, **conditionally**, because the corpus is the operator's
+own committed engineering notes, cohort-user data is not intended to be in it (no enforcing
+control is cited; unverified), and the DPA, SCCs and default 30-day retention apply, the DPA
+subject to the unverified Commercial Terms premise (`anthropic.md`). **The condition is a
+limb (i) balancing recorded by the operator by 2026-11-19 (§3); it is currently unmet, and if
+it is not recorded by that date the acceptance lapses.** Recovery: exclude or edit the learning
 and the next run drops it; the Anthropic copy is deleted within the default 30 days, subject to
 Anthropic's stated exceptions. Triggers: 3, 6, 14.
 
@@ -272,8 +287,9 @@ when it opens; its body names source-learning paths and the diff is up to 20 lin
 can be posted on an unrelated open PR with no human gate. The draft-PR output screen refuses
 credential shapes and scheme-bearing or non-relative links but not email, IP or IBAN shapes,
 bare-host autolinks, names or other prose; the comment path applies the full `PII_REGEX` but
-not a name screen. No Art. 6 basis is recorded for the publication (§3). Accepted, conditionally
-on the pre-first-PR balancing in trigger 1, because the text derives from committed content, the
+not a name screen. No Art. 6 basis is recorded for the publication (§3). Accepted, **conditionally
+on the limb (ii) balancing (§3, trigger 1), which is currently unmet and practically due before
+2026-10-25**, because the text derives from committed content, the
 cap bounds open PRs at two once any are open, and the limb has not yet been realised (zero draft
 PRs; comments not established). Recovery: close the PR and delete the branch, or delete the
 comment; that does not reach forks, mirrors or edit history, which is why the first opened PR
@@ -326,10 +342,13 @@ The three required triggers:
    comment is found. Action: re-run the empirical limbs (false-positive rate, operator merge
    ratio) with real counts, review the PR body, diff or comment for identifying text, decide
    whether the Privacy Policy purpose gap (§4) must be closed before the next run, and amend or
-   supersede this memo. **Precondition:** a short Arm A-style balancing for persons named in a
-   learning and for publication (§3) is written at or before the first opened PR; a PR opened
-   without it is recorded as a publication without a recorded basis. Repeat the empirical re-run
-   at the fifth opened PR.
+   supersede this memo. **Precondition (publication limb only):** a short Arm A-style balancing for
+   publication (§3, limb (ii)) is written at or before the first opened PR, practically before
+   2026-10-25; a PR opened without it is recorded as a publication without a recorded basis.
+   This trigger is post-hoc by construction and cannot enforce the "before". The balancing for
+   persons named in a learning (limb (i)) is **not** keyed to this trigger: it is an ongoing
+   transmission with its own dated action (2026-11-19, residual (a), §3). Repeat the empirical
+   re-run at the fifth opened PR.
 2. **Any change to what is sent to a processor.** This includes the prefilter loosened or
    skipped; `EDIT_TARGET_MAX_BYTES` raised above 120,000; the target set widened beyond
    `AGENTS.rules.md` and the skill `SKILL.md` files; the summary length or fields changed; a
@@ -372,7 +391,10 @@ Additional triggers:
 - **The ratios.** The false-positive rate and the operator merge ratio are 0/0, undefined. The
   determination does not rest on them. It does not show that the loop produces good proposals.
 - **The 2026-10-25 run.** That run proves nothing about this determination. If it opens a PR,
-  trigger 1 fires; if it does not, nothing is learned about risk.
+  trigger 1 fires; if it does not, nothing is learned about risk. It is, separately, the
+  practical deadline for the publication-limb balancing (§3, limb (ii)); the limb (i) balancing
+  has its own date, 2026-11-19. Both conditions are currently unmet, so the acceptance of
+  residuals (a) and (b) is conditional and not yet earned.
 - **The fix.** The memo does not state that #10553 works. The work agent's report is that no
   real-model evidence run was made before merge; the CLO did not verify that independently.
 - **Run observation.** The 15 scheduled runs are schedule arithmetic. The Sentry heartbeat was
