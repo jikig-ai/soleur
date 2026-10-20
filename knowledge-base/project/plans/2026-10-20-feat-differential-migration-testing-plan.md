@@ -12,6 +12,24 @@ brand_survival_threshold: none
 lane: cross-domain
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-20
+**Passes applied (in-process, sequential per harness):** halt gates §4.6–4.12, precedent-diff §4.4, verify-the-negative §4.45, spec-flow gap pass, sharp-edges full read (317 lines), in-process review panel.
+
+### Key findings applied by the deepen pass
+
+1. **`reproduce-bug/SKILL.md:90` reconciliation** — the plan-time gap grep omitted the closest shipped artifact ("**Differential loop.** Run the same input through old-version vs new-version"); the Research Insights claim now enumerates all four `differential` hits and records why none teach the migration apparatus. The new doc may name it as a shipped sibling.
+2. **`## Guard Contract` section added** — §4.11's prose trigger ("guard") fires on this plan; three relied-upon pre-existing guards (references census, template/pin suites, AC3 multiplicity) now carry Property/Assembly/mutation-matrix entries; `lint-guard-contract.py` green.
+3. **Pointer link form corrected to `${CLAUDE_PLUGIN_ROOT}/...`** — the template text is copied verbatim into generated plans where a `./` relative link resolves nowhere; the root-prefixed form resolves to the user's plugin install (canonical per `plan-skeleton-checkpoint.test.ts` precedent).
+4. **Spec-flow gap pass** added two doc-outline items: incremental/partial migrations (per-surface scoping) and replayed-traffic sanitization (production-data sharp edge).
+5. **MD038 fixes** — five `` `## ` `` code spans reworded; markdownlint clean on plan + tasks.md.
+
+### New considerations discovered
+
+- Merge race with #10400/PR #10718 confirmed by `gh` — it edits `plan-issue-templates.md` and `test-pyramid-fixtures.test.sh`; pointer-line re-resolution on rebase is called out in tasks.md §4.1.
+- `verify-the-negative` sweep (§4.45): negative claims re-probed — "no capped-file edits" is enforced by AC6's merge-base diff; "no shipped doc teaches this" re-verified and reconciled above; "no new guard needed" rests on the census enumeration (Guard 1).
+
 ## Overview
 
 Ship the differential-migration-testing technique to Soleur plugin users: a reference doc teaching the old-system-as-oracle loop for rewrites/migrations (normalize non-semantic diffs, random plus replayed inputs, approved-changes ledger, iterate-fix-diff cycle, delete-the-old exit criterion) plus pointer edits so `plan`/`work` migration-type features cite it. The pattern is practiced internally (`*-drift` workflows, rehearsal harnesses, eval-harness control-vs-treatment arms) but nothing shipped teaches it for user code.
@@ -26,7 +44,7 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 - Epic #10397 `OPEN`; siblings: #10398 `CLOSED` via PR #10624 (merged 2026-10-20), #10399 `CLOSED` via PR #10666 (merged 2026-10-20), #10400 `OPEN` with in-flight PR #10718 — matches the pipeline brief exactly.
 - Issue evidence claim verified on `origin/main`: `eval-harness` (`plugins/soleur/skills/eval-harness/SKILL.md`) is a promptfoo control-vs-treatment grid over **skill/agent prompt edits** — its configs (`promptfooconfig-*.yaml`), baselines (`prompts/*-baseline.txt`), and golden tasks (`tasks/*.jsonl`) all target Soleur classifier prose, never user codebases. The "skill edits only" claim holds.
 - Repo-internal analogues verified on `origin/main`: nine `*-drift*` workflows under `.github/workflows/` (terraform, marketplace, dev-migration, domain-model, sentry-alert, prod-version, kb-drift-walker, devin-docs, inngest-config), plus rehearsal machinery (`git-data-rung2-rehearsal`, `inngest-provision-rehearsal`, `rung2-rehearsal/` Terraform roots). The old-vs-new comparison pattern exists internally — it is simply not packaged.
-- Gap claim verified: `grep -rln -i "differential" plugins/soleur/skills/` hits only `preflight/scripts/parse-form-a.awk`, `review/SKILL.md` (a different sense — diff *review*), and `plan/references/plan-sharp-edges.md`. No shipped artifact teaches the technique. `review/references/generated-input-oracle-surfaces.md` (merged via #10398) covers generated-input *oracle extraction* for test review — adjacent vocabulary, different subject (it reviews a test's coverage of its input set; it does not teach running two systems side-by-side).
+- Gap claim verified: `grep -rln -i "differential" plugins/soleur/skills/` hits `preflight/scripts/parse-form-a.awk`, `reproduce-bug/SKILL.md`, `review/SKILL.md`, and `plan/references/plan-sharp-edges.md` — four hits, all adjacent-but-different senses: parse-form-a's is a yaml-indentation differential, `reproduce-bug/SKILL.md:90` names a one-line "**Differential loop.** Run the same input through old-version vs new-version (or two configs) and diff output" — the closest shipped artifact, but it is scoped to *bug reproduction* and carries none of the migration apparatus (normalization contract, replayed-traffic corpus, approved-changes ledger, delete-the-old exit criterion); review/SKILL.md's is a diff-*review* gate; plan-sharp-edges' is a hand-parser fixture rule. No shipped artifact teaches the migration-validation technique. `review/references/generated-input-oracle-surfaces.md` (merged via #10398) covers generated-input *oracle extraction* for test review — adjacent vocabulary, different subject (it reviews a test's coverage of its input set; it does not teach running two systems side-by-side). The new doc may name `reproduce-bug`'s differential loop as the shipped sibling for the single-version bug case, distinct from migration validation.
 - ADR-corpus check for the proposed mechanism (grep `differential|migration test|oracle` over `knowledge-base/engineering/architecture/decisions/`): no ADR rejects or claims this ground. ADR-293 sanctions generated-input testing generally; a reference doc is a packaging decision below ADR altitude. No mechanism conflict.
 - Primary source fetched: the cited Addy Osmani *Agentic Verification* article (2026-10-14) — the differential-testing section confirms the four technique elements verbatim: old system as oracle, random + replayed-live-traffic inputs, approved-changes list ("keeps 'different' from becoming an acceptable state"), and delete-the-old ("the diff harness gives you the confidence to wipe the old system away; keeping both systems running is twice the work").
 - **Terminology hedge (glossary):** `glossary.md` has no entry for "migration" in the rewrite sense; the repo's dominant sense is DB schema migrations (`supabase/migrations/*.sql`, `defect-classes-migrations.md`). The doc must disambiguate itself: it covers system rewrites/ports, not schema migrations. Hedge carried into the doc's "when this applies" section.
@@ -52,7 +70,7 @@ Discrete properties the ask decomposes to (observable outcomes):
 
 - **`plugins/soleur/skills/plan/references/`** — plan-time reference docs live here; `plan/SKILL.md` loads them via `Read … now` directives. `plan-issue-templates.md` is the unconditional one (plan Step 4 reads it on every run) and carries the three `## Test Scenarios` template blocks — the surface where a migration feature's test strategy is authored.
 - **Pin surface over `plan-issue-templates.md`** (verified, none block an in-block sentence):
-  - `plugins/soleur/test/test-pyramid-fixtures.test.sh` — asserts exactly 3 `^## Test Scenarios` blocks, `pyramid layer` count == 3, per-block `pyramid-justified` marker. A new sentence inside each block is safe; it must not introduce a `## ` heading, contain `pyramid layer`/`pyramid-justified` tokens, or add a 4th block.
+  - `plugins/soleur/test/test-pyramid-fixtures.test.sh` — asserts exactly 3 `^## Test Scenarios` blocks, `pyramid layer` count == 3, per-block `pyramid-justified` marker. A new sentence inside each block is safe; it must not introduce a `##`-level heading, contain `pyramid layer`/`pyramid-justified` tokens, or add a 4th block.
   - `plugins/soleur/test/observability-schema-parity.test.ts` — pins the 3 `## Observability` yaml blocks key-set-equal to canonical; untouched.
   - `plugins/soleur/test/preflight-discoverability-test.test.ts` — pins a verbatim `credentials_required:` comment line; untouched.
   - `plugins/soleur/test/ship-incident-pir-gate.test.ts` — reads `^- \*\*If this (lands broken|leaks)` trigger lines and asserts exactly 2; the pointer line must NOT match that regex (it doesn't — different prefix).
@@ -148,7 +166,7 @@ If the feature rewrites, ports, or replaces a running system, prescribe the diff
 
 The link uses the `${CLAUDE_PLUGIN_ROOT}` form — the canonical citation form inside skill content (asserted by `plan-skeleton-checkpoint.test.ts` for `plan-founder-check.md`) — because these template blocks are fenced and copied verbatim into generated plans: a `./` relative link would resolve nowhere from `knowledge-base/project/plans/` in the user's repo, while `${CLAUDE_PLUGIN_ROOT}` resolves to the plugin install for the consuming agent. The basename substring still satisfies the reachability census.
 
-Constraints honored by this placement: inside existing blocks (no new `## ` heading, no `pyramid layer`/`pyramid-justified` token reuse, no `^- \*\*If this (lands broken|leaks)` prefix match, no `^#\d` line-start); markdown-link form, no backtick path; identical ×3 keeps per-block marker symmetry the pin suite measures.
+Constraints honored by this placement: inside existing blocks (no new `##`-level heading, no `pyramid layer`/`pyramid-justified` token reuse, no `^- \*\*If this (lands broken|leaks)` prefix match, no `^#\d` line-start); markdown-link form, no backtick path; identical ×3 keeps per-block marker symmetry the pin suite measures.
 
 ## Observability
 
@@ -180,6 +198,54 @@ discoverability_test:
   command: "grep -c 'differential-migration-testing.md' plugins/soleur/skills/plan/references/plan-issue-templates.md"
   expected_output: "3"
 ```
+
+## Guard Contract
+
+This plan ships no new guard; its diff is made safe by three **pre-existing** enforcement surfaces. Each is recorded here because the plan's correctness claims stand on them — a regression in any one is the mechanism by which this change could land broken.
+
+### Guard 1 — References-reachability census (`plugins/soleur/test/components.test.ts`)
+
+**Property.** Every `references/*.md` file inside a skill directory is named (by basename substring) from another file in the same skill directory — the new `differential-migration-testing.md` can never ship orphaned/unreachable.
+
+**Assembly.** The suite walks the plugin's skills directory, collects every `references/*.md` path on disk, and asserts each basename appears in a same-skill sibling file — a census over the live tree, not a pinned name list. Fires on every diff selecting `plugins/soleur/**` via `scripts/lib/test-affected-paths.sh`.
+
+**Mutation matrix:**
+
+| Mutation | Expected result |
+|---|---|
+| Create `differential-migration-testing.md` with zero pointers added | RED — census reports the orphan reference |
+| Rename the file so the basename in the pointer line no longer matches | RED — census reports the (renamed) orphan |
+| Delete all three pointer lines after the file exists | RED — same census failure |
+
+### Guard 2 — Template/pyramid pin suites (`test-pyramid-fixtures.test.sh`, `observability-schema-parity.test.ts`, `plan-skeleton-checkpoint.test.ts`)
+
+**Property.** `plan-issue-templates.md` keeps its pinned structure: exactly three `## Test Scenarios` blocks, the pyramid-vocabulary restatements, and the Observability schema parity the skeleton test asserts.
+
+**Assembly.** `test-pyramid-fixtures.test.sh` counts block markers and pinned literal lines in the file; the two bun suites assert the template/schema contract each block must satisfy. All three are selected by the affected-paths edge `scripts/lib/test-affected-paths.sh` declares for `plan-issue-templates.md`.
+
+**Mutation matrix:**
+
+| Mutation | Expected result |
+|---|---|
+| Pointer line added *outside* a `## Test Scenarios` block as a new `##`-level heading | RED — block/marker count assertion fails |
+| Pointer edit removes or rewords a `pyramid layer` line it anchors after | RED — pinned literal count drops below 3 |
+| Pointer line breaks the Observability yaml-key contract inside a block | RED — observability-schema-parity fails |
+
+### Guard 3 — Pointer-line multiplicity check (this plan's AC3, applied at verification)
+
+**Property.** The conditional pointer exists in exactly all three `## Test Scenarios` blocks — not zero, not one, not a fourth copy elsewhere.
+
+**Assembly.** `grep -c 'differential-migration-testing.md' plan-issue-templates.md == 3` in this diff's verification battery; the count is the whole-file multiset, so a pointer that lands in the wrong place or an extra copy both fail it.
+
+**Mutation matrix:**
+
+| Mutation | Expected result |
+|---|---|
+| Pointer added to only 2 of 3 blocks | RED — count = 2 |
+| Pointer line duplicated inside one block | RED — count = 4 |
+| Pointer uses a backtick path with no `differential-migration-testing.md` basename | RED — count = 0 and census reds |
+
+**Must-pass row:** the full affected-suite battery (`test-pyramid-fixtures.test.sh` + the bun suites above) green on the final tree.
 
 ## User-Brand Impact
 
@@ -250,7 +316,7 @@ Label each scenario's pyramid layer — `unit`, `integration`, or `e2e` — and 
 ### Engineering
 
 **Status:** reviewed (inline — subagent context, no Task spawn; CTO Rule interface executed for the placement fork)
-**Assessment:** Blast radius is prose-only: one new reference file plus three identical sentences inside existing template blocks. The structural risks are all pin/census mechanics — the five pins over `plan-issue-templates.md` are enumerated in Research Insights and every one is compatible with an in-block sentence (no new `## ` heading, no pinned token reuse, no trigger-regex prefix match). The placement fork (doc home + pointer surface) was ruled technically: `plan/references/` because the issue names "pointer in plan references", the templates file is the unconditionally-read plan surface, and every capped SKILL.md lacks headroom (34 B / 118 B contested / 0 B). Recorded in `decision-challenges.md`.
+**Assessment:** Blast radius is prose-only: one new reference file plus three identical sentences inside existing template blocks. The structural risks are all pin/census mechanics — the five pins over `plan-issue-templates.md` are enumerated in Research Insights and every one is compatible with an in-block sentence (no new `##`-level heading, no pinned token reuse, no trigger-regex prefix match). The placement fork (doc home + pointer surface) was ruled technically: `plan/references/` because the issue names "pointer in plan references", the templates file is the unconditionally-read plan surface, and every capped SKILL.md lacks headroom (34 B / 118 B contested / 0 B). Recorded in `decision-challenges.md`.
 
 ### Product/UX Gate
 
@@ -274,7 +340,7 @@ No Product/UX pipeline runs at NONE tier.
 
 | Risk | Mitigation |
 |---|---|
-| Pointer line breaks a templates pin (block count, `pyramid layer` count, per-block markers, section slicing, trigger regex) | Pin surface enumerated in Research Insights; the line carries no `## ` heading, no `pyramid layer`/`pyramid-justified` tokens, no `^- \*\*If this` prefix; AC5 runs the suites. |
+| Pointer line breaks a templates pin (block count, `pyramid layer` count, per-block markers, section slicing, trigger regex) | Pin surface enumerated in Research Insights; the line carries no `##`-level heading, no `pyramid layer`/`pyramid-justified` tokens, no `^- \*\*If this` prefix; AC5 runs the suites. |
 | New reference orphaned (census failure) | AC3 asserts the basename is named 3× from a same-skill file; the negative-control scenario proves the census actually catches the orphan. |
 | Doc teaches over-normalization (real divergence normalized away) | Content rule in the doc: normalize only categories a human declares non-semantic; the ledger is the escape valve for everything else; advisor consult + review panel weigh the wording. |
 | Doc links `#10400`'s `property-testing.md` before it merges | Hard rule: prose mention only, no file link; work-phase check `git show origin/main:plugins/soleur/skills/work/references/property-testing.md` before adding a see-also. |
