@@ -13,9 +13,8 @@ Always provision infrastructure via Terraform for reproducibility and cloud port
 ```bash
 cd apps/<app>/infra
 terraform init
-terraform apply \
-  -var="hcloud_token=<your-token>" \
-  -var='admin_ips=["<your-ip>/32"]'
+read -rs TF_VAR_hcloud_token; export TF_VAR_hcloud_token   # the token stays off the argument list and out of shell history
+terraform apply -var='admin_ips=["<your-ip>/32"]'
 ```
 
 Terraform handles: server creation, SSH key upload, volume attachment, firewall rules, and cloud-init (Docker install, volume mount, container start, SSH hardening).

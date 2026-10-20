@@ -215,13 +215,13 @@ jobs:
           set -euo pipefail
           ZOT_PULL="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain)"
           printf '::add-mask::%s\n' "$ZOT_PULL"
+          export TF_VAR_zot_pull_token="$ZOT_PULL"
           # nic_attached=false: destroy is state-driven (the flag's value does not decide
           # what is destroyed), and false keeps the conditional NIC resource out of the
           # destroy graph — so a transiently-unreadable prod network cannot fail teardown.
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform destroy -auto-approve -input=false \
-              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=false \
-              -var "zot_pull_token=${ZOT_PULL}"
+              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=false
           echo "teardown-only complete"
 
       # ── PHASE A: birth WITHOUT the private NIC ────────────────────────────────────
@@ -231,7 +231,9 @@ jobs:
       # passed explicitly (the parent root mirrors it to soleur-registry/prd AND keeps it in
       # soleur/prd — measured by registry-zot-inventory.yml; but THAT read needs
       # DOPPLER_TOKEN_PRD: secrets.DOPPLER_TOKEN is prd_terraform-scoped and 403s on soleur/prd,
-      # which is what the first dry run proved).
+      # which is what the first dry run proved; prd_terraform lists an equal ZOT_PULL_TOKEN, and the
+      # explicit read stays until the CI token's read of that name is measured). It reaches terraform
+      # as TF_VAR_zot_pull_token in the step environment, never as a -var option (ADR-280).
       - name: Terraform plan (phase A — NIC absent)
         id: plan_a
         if: '!inputs.teardown_only'
@@ -244,10 +246,10 @@ jobs:
           set -euo pipefail
           ZOT_PULL="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain)"
           printf '::add-mask::%s\n' "$ZOT_PULL"
+          export TF_VAR_zot_pull_token="$ZOT_PULL"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan-a \
-              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=false \
-              -var "zot_pull_token=${ZOT_PULL}"
+              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=false
 
       # THE PLAN-SHAPE GUARD RUNS ON THE REAL ARM TOO, not only dry_run: the dangerous
       # dispatch is precisely the one with dry_run=false. The shape step reads EXACTLY the
@@ -370,10 +372,10 @@ jobs:
           date -u +%Y-%m-%dT%H:%M:%S > "$GITHUB_WORKSPACE/phase-b-since.txt"
           ZOT_PULL="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain)"
           printf '::add-mask::%s\n' "$ZOT_PULL"
+          export TF_VAR_zot_pull_token="$ZOT_PULL"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan-b \
-              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=true \
-              -var "zot_pull_token=${ZOT_PULL}"
+              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=true
 
       - name: Assert the phase-B delta is exactly the NIC attachment (plan-shape nic-attach)
         if: ${{ !inputs.teardown_only && !inputs.dry_run }}
@@ -637,13 +639,13 @@ jobs:
           # assertion below is skipped, and a real run leaks the paid stack.
           ZOT_PULL="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain)"
           printf '::add-mask::%s\n' "$ZOT_PULL"
+          export TF_VAR_zot_pull_token="$ZOT_PULL"
           # nic_attached=false: destroy is state-driven (the flag's value does not decide
           # what is destroyed), and false keeps the conditional NIC resource out of the
           # destroy graph — so a transiently-unreadable prod network cannot fail teardown.
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform destroy -auto-approve -input=false \
-              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=false \
-              -var "zot_pull_token=${ZOT_PULL}"
+              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=false
 
       # THE ORPHAN ASSERTION, IN-WORKFLOW. `terraform destroy` acts only on state, so a
       # destroy that half-ran leaves paying objects behind — the drift sweep DETECTS those
