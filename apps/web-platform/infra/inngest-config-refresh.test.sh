@@ -244,9 +244,11 @@ for pin in 'verify-blob' '--trusted-root' '--bundle /bundle/manifest.txt.sigstor
            'token.actions.githubusercontent.com' '--network none'; do
   grep -qF -- "$pin" <<<"$SC" && pass || fail "S9: verify call missing $pin"
 done
-# Negative pin: no dropped-2.x flag spelling may survive — under the pinned v3.1.1 image a
-# stale flag dies at flag-parse, which is the exact defect class #10390 fixed on the
-# producer side. `--certificate ` (with the space) does not false-positive on
+# Negative pin: no dropped-2.x flag spelling may survive — on the producer side v3.1.1
+# removed sign-blob's --output-* flags entirely (the #10390 flag-parse failure), while
+# verify-blob's detached --signature/--certificate spellings are merely deprecated and
+# would silently diverge from the --bundle contract rather than die. `--certificate `
+# (with the space) does not false-positive on
 # --certificate-identity-regexp / --certificate-oidc-issuer.
 ! grep -qF -- '--signature' <<<"$SC" \
   && ! grep -qE -- '--certificate[[:space:]]' <<<"$SC" \
