@@ -93,7 +93,7 @@ Persisted in `knowledge-base/project/specs/feat-one-shot-10583-drop-drawdown-con
 | `scripts/lint-ratchet-eslint-test-dirs.baseline.txt` | "remove the baseline header lines" | asked |
 | `tests/scripts/test_lint_ratchet.py` (re-pin, drop poison patches) | "Update any tests/docs that reference the drawdown header or the DRAWDOWN constant" | asked |
 | `knowledge-base/engineering/architecture/decisions/ADR-290-shrink-only-lint-ratchet-keyed-on-file-rule-anchor.md` | "including ADR-290" | asked |
-| `name in USER_SCOPES` switch and keyword-only `recovery`/`header` | — | inferred — justification: removing the `drawdown` parameter deletes the only thing `render_baseline` branched on, and the user form must stay byte-identical (a user repo's committed baseline would otherwise churn); keyword-only turns a missed positional call site into a TypeError instead of a silent mis-bind |
+| `name == "user-ruff"` switch and keyword-only `recovery`/`header` | — | inferred — justification: removing the `drawdown` parameter deletes the only thing `render_baseline` branched on, and the user form must stay byte-identical (a user repo's committed baseline would otherwise churn); keyword-only turns a missed positional call site into a TypeError instead of a silent mis-bind |
 | Baseline parity test (zero entries, header equals rendered form) | "decide with care what stays so the files remain valid for the ratchet parser" | asked (CTO F2: the test is what keeps the regenerated headers and the renderer from drifting; the parser cannot see header text) |
 | Decision file `decision-challenges.md` | — | inferred — justification: the pipeline's technical-ruling contract requires every CTO ruling to be persisted as a table row |
 
@@ -155,7 +155,7 @@ Engine (`plugins/soleur/scripts/lint-ratchet.py`):
 
 1. Docstring (~line 42): remove `drawdown,` from the scope-config key list.
 2. Delete `DRAWDOWN = "#10433"` (line ~93).
-3. `render_baseline`: signature `def render_baseline(name: str, entries: list, *, recovery=None, header=None) -> str`; replace `if drawdown is None:` with `if name in USER_SCOPES:` (the user branch text stays byte-identical; a comment says user baselines are machine-independent and carry no tracker reference). Replace the Soleur header with:
+3. `render_baseline`: signature `def render_baseline(name: str, entries: list, *, recovery=None, header=None) -> str`; replace `if drawdown is None:` with `if name == "user-ruff":` (the user branch text stays byte-identical; a comment says user baselines are machine-independent and carry no tracker reference). Replace the Soleur header with:
 
    ```text
    # lint-ratchet scope '<name>' is a zero-findings gate (design in ADR-290): fix findings, never baseline them.
@@ -181,7 +181,7 @@ Run `python3 plugins/soleur/scripts/lint-ratchet.py ruff --update` and `... esli
 
 ### Phase 4 — ADR-290
 
-Edit in place: in the "PR3b contract" paragraph delete `drawdown,` from the key list. Frontmatter: `amended: 2026-10-20`, `related: [10433, 10583]`. Append `## Amendment 3 (2026-10-20, #10583)` in three lines: the `DRAWDOWN` constant, the `drawdown` scope-config key and the `# Drawdown tracking` header line are removed; `render_baseline` now switches on `name in USER_SCOPES`; the Soleur baseline header is a short zero-findings-gate header pinned to the committed files by a test. Amendment 2 is not edited and the amendment carries no tracker line (Amendment 2 already does).
+Edit in place: in the "PR3b contract" paragraph delete `drawdown,` from the key list. Frontmatter: `amended: 2026-10-20`, `related: [10433, 10583]`. Append `## Amendment 3 (2026-10-20, #10583)` in three lines: the `DRAWDOWN` constant, the `drawdown` scope-config key and the `# Drawdown tracking` header line are removed; `render_baseline` now switches on `name == "user-ruff"`; the Soleur baseline header is a short zero-findings-gate header pinned to the committed files by a test. Amendment 2 is not edited and the amendment carries no tracker line (Amendment 2 already does).
 
 ### Phase 5 — Ship
 
@@ -203,7 +203,7 @@ Run `soleur:ship` then `soleur:postmerge` to completion. PR body: `Closes #10583
 | 2 | With the ruff baseline compliant, add one four-field entry line (path, rule, anchor, n) to `scripts/lint-ratchet-eslint-test-dirs.baseline.txt` (a second member after a compliant first) | parity test RED |
 | 3 | Change one word of the Soleur header string in `render_baseline` without regenerating the baselines | parity test RED |
 | 4 | Own dispatch: change `SCOPES["ruff"]["baseline"]` to a path that does not exist | parity test RED (missing file), not a vacuous pass |
-| 5 | Break the switch (`name in USER_SCOPES` replaced by `False`) | user-form byte-pin test RED |
+| 5 | Break the switch (`name == "user-ruff"` replaced by `False`) | user-form byte-pin test RED |
 
 The property has no ordering or lifetime component, so no REORDER row applies.
 

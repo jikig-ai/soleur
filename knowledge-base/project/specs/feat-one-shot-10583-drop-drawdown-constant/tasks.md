@@ -24,7 +24,7 @@ All code edits land in ONE commit (the gate compares the baselines to the live w
 
 - [x] 3.1 Remove `drawdown,` from the module docstring key list (~line 42).
 - [x] 3.2 Delete `DRAWDOWN = "#10433"` (~line 93).
-- [x] 3.3 Change `render_baseline` to `(name, entries, *, recovery=None, header=None)`, switch on `name in USER_SCOPES`, and write the new 4-line Soleur header (no tracker, no PR3a, no `# lint-ratchet baseline` or `# Shrink-only` wording, no rule code).
+- [x] 3.3 Change `render_baseline` to `(name, entries, *, recovery=None, header=None)`, switch on `name == "user-ruff"`, and write the new 4-line Soleur header (no tracker, no PR3a, no `# lint-ratchet baseline` or `# Shrink-only` wording, no rule code).
 - [x] 3.4 Update the `update()` call site to pass `recovery=` and `header=` by keyword.
 - [x] 3.5 Delete `"drawdown": None` from `build_user_config` and `drawdown=DRAWDOWN` from `build_config`.
 - [x] 3.6 `grep -nEi drawdown plugins/soleur/scripts/lint-ratchet.py` prints nothing.
