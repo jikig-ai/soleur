@@ -35,9 +35,9 @@ Closes (by Ref, ship step owns the body): #9869, #9868. Draft PR: #10655.
 - [x] 2.2 Header comment; shellcheck; suites GREEN
 
 ## Phase 3: fences
-- [ ] 3.1 ship/SKILL.md probe -> --fence, call -> --step --fence, exit-14 clause, comments at ~2267 and ~2544
-- [ ] 3.2 merge-pr/SKILL.md mirror probe and call
-- [ ] 3.3 Fixtures GREEN; lint-skill-body-budget; ship <= 273955 B
+- [x] 3.1 ship/SKILL.md probe -> --fence, call -> --step --fence, exit-14 clause, comments at ~2267 and ~2544
+- [x] 3.2 merge-pr/SKILL.md mirror probe and call
+- [x] 3.3 Fixtures GREEN; lint-skill-body-budget; ship <= 273955 B
 
 ## Phase 4: text surfaces
 - [ ] 4.1 pr-merge-poll.ts lines ~75 and ~82

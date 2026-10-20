@@ -30,6 +30,9 @@
 #   11. not inside a worktree → BEHIND auto-sync disabled; BEHIND is a named stop
 #   13/13b/13c. plugin root with an old script / unset / plugin.json not soleur →
 #       precondition line naming the failed check, then [ship.phase7.behind_no_sync]
+#   13d. an older script whose --help names --step but not --fence → the --fence probe refuses it (#9869)
+#   Q1n-old-fence. the fence with `--fence` stripped (an OLD pasted fence against the NEW script) → the script's exit 14
+#       reaches the fence's `*)` arm: `[ship.phase7.sync_failed] … exited 14`, a loud bounded stop, never `pushed` (#9869)
 #   14. PR set to `#4387` → refused before the poll (exit 2)
 #   15. fetch fails then a push → the hatch counts pushes, so it does not fire
 #   16. sync no-op (exit 11) → sync_noop line, not counted, never "pushed"
@@ -2390,7 +2393,7 @@ echo "ship-phase-7 fixture: $PASS pass, $FAIL fail"
 # run_scenario, a deleted call) must not read as green. Reported directly —
 # never through pass/fail, which is the machinery it backstops. Ratchet the
 # literal up when rows are added; never down.
-MIN_VERDICTS=1093
+MIN_VERDICTS=1123
 if (( PASS + FAIL < MIN_VERDICTS )); then
   printf '  FATAL: anti-vacuity: only %s verdicts; the floor is %s (fix the dispatch, do not lower it).\n' "$((PASS + FAIL))" "$MIN_VERDICTS" >&2
   exit 1
