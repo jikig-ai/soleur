@@ -7,9 +7,12 @@
 #   idempotence    -- collapse(collapse(d)) == collapse(d)
 #   residue-free   -- collapsed output contains none of collapse()'s LHS patterns
 #
-# The LHS set is EXTRACTED from the SUT's sed body at run time (never hand-copied):
-# a new rewrite rule joins both the generator alphabet floor and the residue
-# oracle automatically, so a forgotten pattern cannot silently shrink coverage.
+# The LHS set is EXTRACTED from the SUT's sed body at run time (never hand-copied,
+# BOTH `s|` and `s/` delimiters) with a conservation count against the rule
+# census: a new rewrite rule joins the residue oracle automatically, and a
+# delimiter the extractor cannot read fails the suite instead of silently
+# shrinking coverage. The generator ALPHABET is hand-maintained -- a NEW
+# transform still needs a new alphabet token; extraction guarantees the oracle.
 #
 # Auto-globbed by test-all.sh (`scripts/lib/*.test.sh`); its `source` of
 # legal-normalise.sh is also the derived edge that selects it on SUT diffs.
@@ -39,20 +42,39 @@ cap="$(mktemp -t legal-norm-prop.XXXXXXXX)"
 trap 'rm -f "$cap"' EXIT
 
 # ---------------------------------------------------------------------------
-# Extract every LHS pattern from collapse()'s sed block. The floor (>= 25) is
-# an anti-vacuity guard: an extraction that returns nothing must not green.
+# Extract every LHS pattern from collapse()'s sed block. The check is
+# conservation, not a magic floor: extracted count must equal the rule census,
+# so a delimiter the extractor cannot read (the s/ rules) counts as missing
+# coverage, not as a smaller oracle.
 # ---------------------------------------------------------------------------
+RULE_COUNT="$(awk '/^collapse\(\)/,/^}/' "$SUT" | grep -cE '^ +s[|/]')"
 mapfile -t LHS_PATTERNS < <(
-  awk '/^collapse\(\)/,/^}/' "$SUT" | sed -nE 's/^ +s\|([^|]*)\|.*/\1/p'
+  awk '/^collapse\(\)/,/^}/' "$SUT" \
+    | sed -nE 's/^ +s\|([^|]*)\|.*/\1/p; s/^ +s\/([^/]*)\/.*/\1/p'
 )
-if (( ${#LHS_PATTERNS[@]} >= 25 )); then
-  pass "extracted ${#LHS_PATTERNS[@]} collapse LHS patterns (floor 25)"
+if (( ${#LHS_PATTERNS[@]} == RULE_COUNT && RULE_COUNT > 0 )); then
+  pass "extracted all ${#LHS_PATTERNS[@]} collapse LHS patterns (${RULE_COUNT} sed rules)"
 else
-  fail "extracted only ${#LHS_PATTERNS[@]} LHS patterns -- the alphabet cannot enumerate what the residue oracle cannot name"
+  fail "extracted ${#LHS_PATTERNS[@]} LHS patterns from ${RULE_COUNT} sed rules -- a delimiter the extractor cannot read silently narrows the residue oracle"
   echo "suite cannot continue without the LHS inventory" >&2
   echo "passed: $passes  failed: $fails" >&2
   exit 1
 fi
+
+# grep -qE returns 2 on an INVALID pattern, and `if grep -qE` reads rc>=2 the
+# same as no-match -- an uncompilable extracted LHS would join the oracle as a
+# permanent no-op. Compile-check each pattern up front so a bad one fails the
+# suite rather than silently skipping its residue.
+for p in "${LHS_PATTERNS[@]}"; do
+  if grep -qE "$p" </dev/null; then rc=0; else rc=$?; fi
+  if (( rc > 1 )); then
+    fail "extracted LHS pattern is not a valid ERE: $p"
+    echo "suite cannot continue with an uncompilable oracle pattern" >&2
+    echo "passed: $passes  failed: $fails" >&2
+    exit 1
+  fi
+done
+unset p rc
 
 prop_init "legal-normalise-collapse"
 
@@ -146,19 +168,20 @@ fi
 # The property loop.
 # ---------------------------------------------------------------------------
 i=0
+doc=""   # assigned per case via gen_doc's printf -v outvar (invisible to shellcheck)
 while (( i < PROP_RUNS_ACTIVE )); do
   prop_iter; i=$PROP_ITER
   gen_doc doc
   once="$(printf '%s' "$doc" | collapse)"
   twice="$(printf '%s' "$once" | collapse)"
   if [[ "$twice" != "$once" ]]; then
-    prop_fail "idempotence" "collapse(collapse(d)) != collapse(d)" || true
+    prop_fail "idempotence" "collapse(collapse(d)) != collapse(d)" || fails=$((fails + 1))
     printf '%s' "$doc" >"$cap.doc"
     printf 'counterexample doc saved to %s\n' "$cap.doc" >&2
     continue
   fi
   if ! residue_free "$once"; then
-    prop_fail "residue-free" "collapsed output still matches an LHS pattern" || true
+    prop_fail "residue-free" "collapsed output still matches an LHS pattern" || fails=$((fails + 1))
     printf '%s' "$doc" >"$cap.doc"
     printf 'counterexample doc saved to %s\n' "$cap.doc" >&2
     continue
