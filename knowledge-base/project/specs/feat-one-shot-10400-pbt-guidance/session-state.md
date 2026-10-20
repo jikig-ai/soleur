@@ -56,3 +56,8 @@ soleur:plan (full workflow, inline), soleur:deepen-plan (halt gates 4.5–4.55 i
 - Next: synthesize fix-round → fix any new findings → one verification pass (pin suite + markdownlint + body budget) → `soleur:qa` (docs-only, skips gracefully) → `soleur:compound` → `soleur:ship` (ready → merge queue → postmerge → `gh issue close 10400` → epic tick) → attest with Reviewed-Fix-Round/Reviewed-Fix-Range trailers.
 - Epic #10397: #10398/#10399 checklist TICKED on issue body; #10726 (10693) queued for merge on CI green.
 - Remaining epic children after this: #10402 (needs feature-map on main — now available), #10403, #10401, #10404 (largest — CTO ruling needed: fold into constraint-scaffold vs own skill).
+
+## Fix-Round 2 (in flight)
+- Security seat P2 (self-oracular canonical caveat) + P3s fixed: canonical-oracle reword, ordering assert added, found->count ONE-site pin, .*home pyramid layer pin widening, plan :106/:235 one-site sync. Committed as latest.
+- Seats still pending: 55f7a4be code-quality, 1397a8bc agent-native.
+- After last 2: final verification pass → qa → compound → ship → close 10400 → epic tick → remaining children (#10402 first).
