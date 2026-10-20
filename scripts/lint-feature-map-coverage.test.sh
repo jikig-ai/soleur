@@ -69,6 +69,7 @@ notok(){ printf 'FAIL %s\n' "$1"; failed=$((failed + 1)); }
 # mutate <sut-copy> <literal> <replacement> -- anchor must occur exactly once.
 mutate() {
   local f="$1" lit="$2" rep="$3"
+  assert_fixture_dir "$f"
   local n
   # `-e` pins the pattern: an anchor starting with `- ` (e.g. a map bullet)
   # would otherwise be parsed as grep's own options and count nothing.
@@ -78,6 +79,7 @@ mutate() {
     exit 3
   fi
   local tmp="$f.mut"
+  assert_fixture_dir "$tmp"
   # index()+substr() surgery, never sub(): sub() re-matches the anchor as an
   # ERE and can replace a different occurrence than the literal index() found.
   # ENVIRON, never -v: `awk -v lit='/page\.tsx$'` escape-processes the value,
@@ -99,6 +101,7 @@ mutate() {
 # one reasoned exemption (`/setup-key`, with a backing page).
 mkmap() {
   local d="$1"
+  assert_fixture_dir "$d"
   cat > "$d/apps/web-platform/test/feature-map.md" <<'MD'
 # Feature map
 
