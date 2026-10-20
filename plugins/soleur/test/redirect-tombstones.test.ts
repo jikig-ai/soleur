@@ -211,7 +211,7 @@ function writeDoc(dir: string, rel: string, body: string): void {
   writeFileSync(p, body);
 }
 
-const DATED_POST = (slug: string, date: string) => `---
+const DATED_POST = (slug: string) => `---
 title: ${slug}
 ---
 post body for ${slug}
@@ -336,7 +336,7 @@ describe("Guard 1 — redirect tombstones: dead-URL census over docs history (#8
 
   test("mutation: uncovered D of a dated post reds with both URL families", () => {
     const dir = synthRepo();
-    writeDoc(dir, "blog/2026-01-01-x.md", DATED_POST("x", "2026-01-01"));
+    writeDoc(dir, "blog/2026-01-01-x.md", DATED_POST("x"));
     commitAll(dir, "add post");
     rmSync(join(dir, DOCS_PREFIX, "blog/2026-01-01-x.md"));
     commitAll(dir, "delete post");
@@ -361,7 +361,7 @@ describe("Guard 1 — redirect tombstones: dead-URL census over docs history (#8
 
   test("mutation: covered D is green (control — the assert is not vacuous)", () => {
     const dir = synthRepo();
-    writeDoc(dir, "blog/2026-01-01-x.md", DATED_POST("x", "2026-01-01"));
+    writeDoc(dir, "blog/2026-01-01-x.md", DATED_POST("x"));
     commitAll(dir, "add post");
     rmSync(join(dir, DOCS_PREFIX, "blog/2026-01-01-x.md"));
     commitAll(dir, "delete post");
@@ -385,7 +385,7 @@ describe("Guard 1 — redirect tombstones: dead-URL census over docs history (#8
 
   test("mutation: date-only rename requires the OLD dated family, not the canonical", () => {
     const dir = synthRepo();
-    writeDoc(dir, "blog/2026-01-01-x.md", DATED_POST("x", "2026-01-01"));
+    writeDoc(dir, "blog/2026-01-01-x.md", DATED_POST("x"));
     commitAll(dir, "add post");
     sh(dir, "git", [
       "mv",
@@ -536,7 +536,7 @@ describe("Guard 1 — redirect tombstones: dead-URL census over docs history (#8
 
   test("mutation: nested dated post serves /blog/<slug>/ — fileSlug strips dir+date", () => {
     const dir = synthRepo();
-    writeDoc(dir, "blog/sub/2026-01-01-x.md", DATED_POST("x", "2026-01-01"));
+    writeDoc(dir, "blog/sub/2026-01-01-x.md", DATED_POST("x"));
     commitAll(dir, "add nested dated post");
     rmSync(join(dir, DOCS_PREFIX, "blog/sub/2026-01-01-x.md"));
     commitAll(dir, "delete nested post");

@@ -151,6 +151,7 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 # Commands whose non-zero exit is a NEGATIVE ANSWER rather than a failure. Kept deliberately
 # short: every entry must be a command a reader would agree "exits 1 to mean no". Adding a
@@ -1036,7 +1037,7 @@ def scan(path: str) -> list[tuple[int, str, str]]:
     canonical mis-fix and judging at the read would make it invisible.
     """
     try:
-        raw = open(path, encoding="utf-8", errors="replace").read().split("\n")
+        raw = Path(path).read_text(encoding="utf-8", errors="replace").split("\n")
     except OSError:
         return []
 

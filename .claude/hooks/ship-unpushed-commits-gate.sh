@@ -56,6 +56,15 @@ if ! declare -f hook_parse_input >/dev/null 2>&1; then
   exit 0
 fi
 
+# Shared context-sanitize lib (#10395). When it is unreadable the same-name
+# fallback carries this site's pre-change strip set (C0 minus \t\n, DEL, plus
+# the LS/PS sed) — never weaker than today.
+_ctx_lib="$(dirname "${BASH_SOURCE[0]}")/lib/context-sanitize.sh"
+# shellcheck source=/dev/null
+[[ -r "$_ctx_lib" ]] && . "$_ctx_lib" || true
+declare -F soleur_ctx_sanitize_lines >/dev/null 2>&1 \
+  || soleur_ctx_sanitize_lines() { LC_ALL=C tr -d '\000-\010\013-\037\177' | LC_ALL=C sed -e $'s/\xe2\x80\xa8//g' -e $'s/\xe2\x80\xa9//g'; }
+
 INPUT=$(cat)
 # Single jq fork, and NO shell evaluation of hook input. Halves hot-path
 # overhead vs. two forks. The previous comment claimed `@sh` quoting blocked
@@ -163,8 +172,7 @@ fi
 # 50-char rule-text prefix gate enforced by lib/incidents.sh; matched by T12.
 COMMIT_LIST=$(git -C "$WORK_DIR" log "origin/${CURRENT_BRANCH}..HEAD" --oneline 2>/dev/null \
   | head -10 \
-  | LC_ALL=C tr -d '\000-\010\013-\037\177' \
-  | LC_ALL=C sed -e $'s/\xe2\x80\xa8//g' -e $'s/\xe2\x80\xa9//g' \
+  | soleur_ctx_sanitize_lines \
   | awk '{ if (length($0) > 80) print substr($0,1,79)"…"; else print $0 }')
 
 emit_incident "wg-ship-push-before-merge" deny \

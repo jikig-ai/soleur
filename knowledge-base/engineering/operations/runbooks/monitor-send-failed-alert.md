@@ -1,5 +1,5 @@
 ---
-title: The soleur-monitor-send-failed-prd alert fired (a web-1 monitor could not send)
+title: The soleur-monitor-send-failed-prd alert fired (a web-1 monitor could not send, or the Inngest TLS terminator refused)
 date: 2026-09-13
 owners: engineering/ops
 category: infrastructure
@@ -23,7 +23,13 @@ off-host — no SSH is needed at any step.
 
 | Alert name | Vendor | Means | Time to page |
 |---|---|---|---|
-| `soleur-monitor-send-failed-prd` | Better Stack (Logs alert, `logtail_exploration_alert`) | One of the four web-1 monitor units, or (since #8706) the LUKS probe's emit helper, tried to page (Resend email or Sentry event) and the send **failed** or was **refused**. The monitored condition itself (disk / memory / container restart / cron egress / LUKS at-rest drift) may be live and unreported. | ≤ ~6 min (check every 60 s over a 300 s window) |
+| `soleur-monitor-send-failed-prd` | Better Stack (Logs alert, `logtail_exploration_alert`) | One of the four web-1 monitor units, or (since #8706) the LUKS probe's emit helper, tried to page (Resend email or Sentry event) and the send **failed** or was **refused**. The monitored condition itself (disk / memory / container restart / cron egress / LUKS at-rest drift) may be live and unreported. **Since #10136 it also carries a marker that is not a send failure and does not come from web-1**: `SOLEUR_INNGEST_TLS_REFUSED`, logged by the dedicated Inngest host when its TLS terminator is down or its certificate is within 90 days of expiry (decode row below). | ≤ ~6 min (check every 60 s over a 300 s window) |
+
+The email's `cause` line is fixed text in `betterstack-logs-alerts.tf` (`incident_cause`). It is host-neutral since #10136: it names
+"a host monitor unit", either a web-1 monitor's own send failure or the Inngest host's `SOLEUR_INNGEST_TLS_REFUSED`. Incidents opened
+before that wording change carry the older text ("from a web-1 monitor unit"), which is inaccurate for the Inngest marker. For
+`SOLEUR_INNGEST_TLS_REFUSED` the emitter is `soleur-inngest-tls-health.service` on the Inngest host (the readback's `host` column says
+so), never web-1.
 
 It reads Better Stack Logs source `2457081` for PRIORITY-2 journald rows whose message starts
 with `SOLEUR_` and contains `_SEND_FAILED` or `_REFUSED` (predicate in
@@ -72,6 +78,7 @@ authoritative for which machine emitted the row; `host_name` on web-1 still carr
 | `SOLEUR_CRON_EGRESS_ALARM_SEND_FAILED channel=sentry\|resend …` | `cron-egress-alarm` | Sentry or Resend | The cron-egress firewall alarm could not page. |
 | `SOLEUR_CRON_EGRESS_ALARM_REFUSED channel=sentry reason=<token>` | `cron-egress-alarm` | Sentry | As above: refused destination. |
 | `SOLEUR_WORKSPACES_LUKS_SEND_FAILED reason=<r> drift_reason=<slug>` | `luks-monitor` (emitter `apps/web-platform/infra/workspaces-luks-emit.sh`, #8706) | Sentry | A LUKS at-rest drift event was lost. `<r>` is `no_dsn` or `send_failed`. `no_dsn` = no `SOLEUR_SENTRY_DSN=` line resolved on the host; `send_failed` = the Sentry POST failed (ingest or egress). `drift_reason` is the lost event's reason. Decode: [the cutover runbook's host-timer section](./workspaces-luks-cutover-6604.md#host-timer-liveness-alert-8706), step D. |
+| `SOLEUR_INNGEST_TLS_REFUSED reason=<r>[,<r>] unit=<state> fetch_rc=<n> nrestarts=<n> notafter_days=<n>` | `inngest-tls-health` (the Inngest host's `soleur-inngest-tls-health.timer`, every 5 min; script `soleur-inngest-tls` in `cloud-init-inngest.yml`, #10136) | none (host-local check) | Not a send failure: the Inngest link TLS listener is unhealthy. `reason=listener_down` = nothing is bound on `10.0.1.40:8443` (`unit=` is the stunnel unit state, `nrestarts=` its restart count). `fetch_rc` separates the causes: `0` = key and cert were fetched, so stunnel itself failed (port busy, bad config); `91`/`92` = runtime directory or temp dir; `93`/`94` = the `INNGEST_TLS_KEY`/`INNGEST_TLS_CERT` read from Doppler failed or the env file was missing (`90` surfaces as `93`); `95` = the key does not match the cert, or either is unparseable; `96` = publishing the pair failed. `reason=cert_expiring` = `notafter_days` is under 90 (a re-mint is a certificate publish, an Inngest host replace and a flip, see [`inngest-server.md`](./inngest-server.md) "Link TLS (#10136)"); a row with `notafter_days=0` and a non-zero `fetch_rc` is a certificate that was never installed, not an expiry (the day count is computed from an empty date). Both reasons can appear in one row (`listener_down,cert_expiring`). Read the periodic `stage=tls-health` row in the same window for the rest (`served_sha256` against `cert_sha256`, the nft counters): `--grep stage=tls-health --since 1h`. |
 | `… synthetic=1 probe_rev=<n>` on any of the above | `disk-monitor` tag | — | **The verification probe.** Not a real failure — see [Synthetic rows](#synthetic-rows). |
 
 Rows that **never** page, by construction (a `SOLEUR_*_SEND_SKIPPED` or `SOLEUR_*_HALT` row in the

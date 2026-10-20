@@ -39,6 +39,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import re
 import sys
@@ -309,11 +310,9 @@ def resolve_agent_name(name: str, root: Path) -> bool:
     if agents_root.exists():
         haystacks.extend(sorted(agents_root.rglob("*.md")))
     for h in haystacks:
-        try:
+        with contextlib.suppress(OSError):
             if token.search(h.read_text(encoding="utf-8")):
                 return True
-        except OSError:
-            continue
     return False
 
 

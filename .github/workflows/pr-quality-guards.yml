@@ -692,6 +692,12 @@ jobs:
       - name: Enforce BACKSTOP_REVISION bump on memory-backstop hook changes
         run: bash scripts/check-backstop-revision.sh
 
+      - name: Enforce Art. 30 re-verification triggers
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: bash scripts/lint-art30-reverification.sh
+
   skill-security-scan:
     # DO NOT RENAME — this exact string is referenced as a required check
     # in CI Required ruleset #14145388, in scripts/required-checks.txt, and

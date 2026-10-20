@@ -109,6 +109,7 @@ POSTURE. `./` + `actions/checkout` stays canonical for jobs that already check o
 Usage: python3 scripts/lint-workflow-local-action-checkout.py [<dir>]   (default .github/workflows)
 Exit: 0 clean, 1 findings, 2 usage/parse
 """
+import contextlib
 import os
 import re
 import subprocess
@@ -242,14 +243,13 @@ def tracked_shell_files(repo: Path):
     """(files, how): repo-relative posix paths of every `.sh` file. `git ls-files` when the root is a git checkout,
     else a walk (a tree copied out with `git ls-files | tar` has no `.git`; neither does a fixture)."""
     if (repo / ".git").exists():
-        try:
+        # on failure fall through to the walk: a failed derivation must not become an empty set
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
             out = subprocess.run(
                 ["git", "-C", str(repo), "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "*.sh"],
                 capture_output=True, check=True, timeout=60,
             ).stdout
             return sorted({f for f in out.decode("utf8", "replace").split("\0") if f}), "git ls-files"
-        except (OSError, subprocess.SubprocessError):
-            pass  # fall through to the walk: a failed derivation must not become an empty set
     found = []
     for dirpath, dirnames, filenames in os.walk(repo):
         dirnames[:] = [d for d in dirnames if d not in (".git", "node_modules")]
@@ -267,11 +267,9 @@ def lib_scripts(repo: Path):
         if rel.startswith("scripts/lib/"):
             continue
         f = repo / rel
-        try:
+        with contextlib.suppress(OSError):
             if f.is_file() and LIB_NEEDLE in f.read_bytes().decode("utf8", "replace"):
                 found.append(rel)
-        except OSError:
-            continue
     return found, how
 
 
@@ -305,7 +303,7 @@ def lib_composites(actions_root: Path, repo: Path, scripts: list) -> set:
             try:
                 doc = yaml.safe_load(action.read_text(encoding="utf8"))
             except (OSError, UnicodeDecodeError, RecursionError, yaml.YAMLError):
-                continue
+                doc = None  # unreadable: the non-mapping guard below skips it
             runs = doc.get("runs") if isinstance(doc, dict) else None
             steps = runs.get("steps") if isinstance(runs, dict) else None
             if not isinstance(steps, list):

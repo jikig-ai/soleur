@@ -15,6 +15,7 @@ module is imported by every python suite that spawns git, which is exactly the p
 from __future__ import annotations
 
 import atexit
+import contextlib
 import os
 import secrets
 import shutil
@@ -95,10 +96,8 @@ def write_scratch_marker(directory: str, pid: int | None = None) -> None:
             fh.write(f"pid={owner}\nschema=1\nns={_pid_namespace()}\n")
         os.replace(tmp, os.path.join(directory, _SCRATCH_MARKER))
     except BaseException:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp)
-        except OSError:
-            pass
         raise
 
 
@@ -181,12 +180,10 @@ def ensure_scratch_session() -> str:
     for _ in range(8):
         # 6 random bytes -> exactly 8 url-safe characters: the ``soleur-run.<pid>.XXXXXXXX`` schema.
         candidate = os.path.join(base, f"soleur-run.{os.getpid()}.{secrets.token_urlsafe(6)}")
-        try:
+        with contextlib.suppress(FileExistsError):
             os.mkdir(candidate, 0o700)
-        except FileExistsError:
-            continue
-        root = candidate
-        break
+            root = candidate
+            break
     if not root:
         raise RuntimeError(f"scratch-session: could not allocate a root under {base}")
     try:
@@ -212,14 +209,13 @@ def ensure_scratch_session() -> str:
             shutil.rmtree(root, ignore_errors=True)
 
     atexit.register(_remove)
-    try:
+    # ValueError: not the main thread, where atexit still covers a normal exit
+    with contextlib.suppress(ValueError):
         if signal.getsignal(signal.SIGTERM) is signal.SIG_DFL:
             def _on_term(signum: int, _frame: object) -> None:
                 raise SystemExit(128 + signum)  # unwinds through atexit; keeps the 128+n status
 
             signal.signal(signal.SIGTERM, _on_term)
-    except ValueError:
-        pass  # not the main thread: atexit still covers a normal exit
     return root
 
 

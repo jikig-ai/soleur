@@ -2030,8 +2030,9 @@ eqv_sh="$(_eqv "$EQV_SH")"
 #   pairs ran at all. PJ_TRIPLES is a count pin: an edit that adds one triple and removes another leaves the count and passes (the swap escape; a set-diff pin is deliberately not attempted here).
 #   Recompute PJ_TRIPLES from a tree with no uncommitted tracked change: `PJ_ALL="$(git ls-files)"; . <(sed -n '/^# PJ-DERIVE-BEGIN/,/^# PJ-DERIVE-END/p' .claude/hooks/grep-q-pipe-guard.test.sh); pj_join_pairs | LC_ALL=C sort -u | wc -l`
 #   (the guard prints the same number on its PASS line). The derivation is bounded: a wrapper chain is read to 200 characters, a joined line to 8192 bytes and 50 lines, the loop list to 32 entries.
-# STILL OPEN (listed, not planned here): the series of #9217 continues with Item I (whether JOBS=1 in main-health-monitor.yml can go, once enough merge-queue runs
-# exist), the wave A3 carriers (six carrier rows and 23 later-wave sites, gated on a host replace), and the #9639 and #9638 triage. Items D and H are recorded as not
+# STILL OPEN (listed, not planned here): the series of #9217 continues with the wave A3 carriers (six carrier rows and 23 later-wave sites, gated on a host replace)
+# and the #9639 and #9638 triage. Item I (PR #10459) removes the infra-step JOBS pin of main-health-monitor.yml; its soak runs under tracker #7432, which stays
+# open, and its merge record goes on #9217. Items D and H are recorded as not
 # fixed, Item E as moot, and Item G (a --ratchets selector in scripts/test-all.sh) as not fixed, each with its reason on #9217; Item F is the multi-line passes, the
 # widened reader pattern and population in the sweep above, and the survivors it left are listed under its STATED LIMITS. This block does not claim the series is finished.
 # THE PRE-PUSH AFFECTED GATE DOES NOT SELECT THIS GUARD for a change to many of the files it reads. Measured 2026-10-16 at ee8644bded over this guard's own pairs, with
@@ -2044,7 +2045,7 @@ eqv_sh="$(_eqv "$EQV_SH")"
 # the port drifting, and only a person who runs it will see one.
 PJ_DRAIN_WINDOW=4
 PJ_ALL="$(git ls-files)"
-PJ_TRIPLES=277   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples
+PJ_TRIPLES=288   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples
 PJ_VOCAB=' not-a-command text-only unverified helper-built-stub variable-named-verb pass-through deliberate-fault arm-drain fenced '
 PJ_FENCED_RE='^fenced[[:space:]]+#[0-9]+[[:space:]]+[^[:space:]]'   # the one word that carries a tracker link (pj_judge)
 PRODUCER_JOIN=(
@@ -2059,6 +2060,7 @@ PRODUCER_JOIN=(
   'apps/web-platform/infra/ci-deploy.test.sh | docker | drains | 2 | --password-stdin'
   'apps/web-platform/infra/ci-deploy.test.sh | doppler | exempt | unverified reach probe: suite did not finish green here (cap or host), no matching piped call seen (1 non-test producers) (reach T1; t1:rc124/300s; hits 0 (stdin-flag))'
   'apps/web-platform/infra/ci-deploy.test.sh | logger | exempt | arm-drain the logger mock of create_mock_logger (def 69) drains stdin first when no message operand follows the options (S7c edit, wire assert after the Layer 3 rollback case); the other four logger definitions are in-process function shadows of small extracted functions that no pipe feeds (reach: T1, hits 757)'
+  'apps/web-platform/infra/ci-deploy.test.sh | openssl | exempt | text-only the suite names cloud-init-inngest.yml only to grep-pin it; the derived producer there is the health script echo-to-openssl s_client pipe, which this suite never executes, and the one openssl definition here (fo99_run) records its argv then delegates to the real openssl via command'
   'apps/web-platform/infra/ci-deploy.test.sh | python3 | exempt | unverified reach probe: suite did not finish green here (cap or host), no matching piped call seen (3 non-test producers) (reach T1; t1:rc124/300s; hits 0)'
   'apps/web-platform/infra/ci-deploy.test.sh | rc | exempt | not-a-command rc is a variable written by printf > $d/rc, no stub exists'
   'apps/web-platform/infra/ci-deploy.test.sh | tr | exempt | deliberate-fault stub exits 3 on purpose; pipeline status is the second tr, decided by the stub, not by a write race'
@@ -2091,7 +2093,11 @@ PRODUCER_JOIN=(
   'apps/web-platform/infra/inngest-boot-emitter.test.sh | curl | drains | 2 | *'
   'apps/web-platform/infra/inngest-dedicated-host-classify.test.sh | curl | exempt | text-only the suite runs only the probe and nolive steps of the inngest health workflow; the piped site is its pool probe step (printf Authorization to curl --header @-), which the suite never runs; the 13 stdin hits of the reach probe are the bearer-curl library process substitution, not a pipe (S7c re-read, evidence Phase 3)'
   'apps/web-platform/infra/inngest-dedicated-host-classify.test.sh | jq | drains | 1 | -R'
+  'apps/web-platform/infra/inngest-host.test.sh | openssl | drains | 1 | s_client'
   'apps/web-platform/infra/inngest-inventory.test.sh | logger | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T2; t2:rc0/27s; hits 0)'
+  'apps/web-platform/infra/inngest-link-flip-workflow.test.sh | doppler | drains | 1 | *'
+  'apps/web-platform/infra/inngest-link-resolver.test.sh | docker | exempt | text-only the suite sources only the inngest-link-resolver block of ci-deploy.sh (no pipe into docker inside it); the derived producer sites (the printf-to-docker-login --password-stdin pipe, the canary layer 3 pipe into logger and the docker logs pipe into logger) lie outside the block and are never executed here'
+  'apps/web-platform/infra/inngest-link-resolver.test.sh | logger | exempt | text-only the suite sources only the inngest-link-resolver block of ci-deploy.sh, whose logger calls are plain calls or after a || (no pipe into logger); the derived producer sites (canary layer 3 and docker logs piped into logger) lie outside the block and are never executed here'
   'apps/web-platform/infra/inngest.test.sh | curl | exempt | text-only the probe body under test never pipes into curl; both stubs ignore stdin'
   'apps/web-platform/infra/inngest.test.sh | logger | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T2; t2:rc0/36s; hits 0)'
   'apps/web-platform/infra/luks-monitor.test.sh | cryptsetup | drains | 2 | --key-file -'
@@ -2102,6 +2108,7 @@ PRODUCER_JOIN=(
   'apps/web-platform/infra/resend-inbound-bootstrap.test.sh | doppler | exempt | text-only step 4 pipe (resend-inbound-bootstrap.sh:252) is unreachable: the curl shim returns an empty domain list so step 1 exits first'
   'apps/web-platform/infra/scripts/sigpipe-triage-feasibility.test.sh | grep | exempt | arm-drain the shims drain on purpose and only when reading stdin (the suite negative arms depend on it)'
   'apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh | doppler | exempt | text-only the derived producer apps/cla-evidence/infra/bootstrap.sh matches by basename only; the suite says bootstrap.sh only in assertion messages about the host bootstrap script and never runs the cla-evidence script'
+  'apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh | curl | exempt | text-only the suite names cloud-init-inngest.yml and workspaces-luks-provision.sh only to grep their text; the curl stub (exit 0, stdin ignored) serves the F5 emit and none of their piped curl calls is run'
   'apps/web-platform/infra/web-ghcr-deny.test.sh | docker | exempt | text-only the shim only sees `timeout 120 sudo docker pull` with no piped stdin'
   'apps/web-platform/infra/web-ghcr-deny.test.sh | timeout | exempt | text-only no pipe feeds the timeout shim here (cloud-init-registry.yml:2085 is not run)'
   'apps/web-platform/infra/web-probes-token-rotation.test.sh | doppler | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T1; t1:rc0/20s; hits 0 (stdin-flag))'

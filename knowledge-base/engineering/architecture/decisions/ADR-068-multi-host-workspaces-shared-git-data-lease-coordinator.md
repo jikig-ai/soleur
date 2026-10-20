@@ -390,6 +390,28 @@ fixes for every per-step plan:
 > which silently misses deploys (a fix then hits ~50% stale code, invisibly): a
 > single-user-incident trap the threshold exists to prevent.
 
+> **Implementation note (2026-10-19, #8743 — constraint (b)'s ASYNC arm realized).**
+> Constraint (b) above — "the forward result folds into the webhook's HTTP
+> response" — was built only for the SYNCHRONOUS arm: `fan_out_to_peers` folds
+> the peer's 202-*acceptance* into the deploy response, and a refused forward
+> degrades the reason to `ok_peer_fanout_degraded`. The peer's post-acceptance
+> verdict — the `deploy-peer` run's own exit — was folded nowhere: a 202
+> followed by an async exit 1 reached no channel. Measured consequence: web-2
+> aborted every deploy at the plugin-mount seed for 25 days (2026-09-24→10-19)
+> while every release run reported success. The async half is now realized by
+> two pieces: `cat-deploy-state.sh` merges a `peers` map into
+> `/hooks/deploy-status` (each fan-out peer's whole status JSON, read
+> private-net `http://<peer>:9000` with the shared `webhook_deploy_secret` HMAC,
+> `curl --max-time 3`, error-slotted `unreachable|http_<code>|not_json` —
+> fail-open for the merge, the workflow owns the verdict), and
+> `web-platform-release.yml`'s `Verify peer deploy completion` step fails the
+> run on any expected peer not reporting `exit_code==0 && tag==v$VERSION`. This
+> is the fold-into-response semantics extended to the verdict the synchronous
+> response could not carry at accept time — and it satisfies constraint (c) by
+> construction (peer-driven, private-net, no SSH). The `deploy-peer` hook still
+> does not re-fan (constraint (a)): it writes no `fanout_peers`, so the merge is
+> inert on the peer and cannot recurse.
+
 > **Extension ([ADR-114](./ADR-114-one-tunnel-many-connectors-ingress-must-be-origin-relative.md), 2026-07-15, #6416) — the finding above generalizes beyond the deploy path.**
 > Nothing above is retracted. This ADR correctly stated the multi-connector fact — *"both
 > hosts run cloudflared on that ONE tunnel, so a POST load-balances to ONE connector

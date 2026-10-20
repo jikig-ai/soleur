@@ -1,0 +1,31 @@
+triggers:
+  1:
+    class: unactuated
+  2:
+    class: actuated
+  3:
+    class: unactuated
+  4:
+    class: actuated
+  5:
+    class: actuated
+  6:
+    class: unactuated
+  7:
+    class: unactuated
+sites:
+  - kind: path-token
+    paths:
+      - apps/web-platform/infra/cloud-init.yml
+      - apps/web-platform/infra/ci-deploy.sh
+    groups:
+      - token: --log-driver
+        fires: [2, 4]
+      - token: --log-opt
+        fires: [2, 4]
+      - token: --restart
+        fires: [4]
+  - kind: file
+    paths:
+      - apps/web-platform/infra/journald-soleur.conf
+    fires: [5]

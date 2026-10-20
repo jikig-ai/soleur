@@ -13,7 +13,7 @@
 # WHY IT HAS TO GROW AS WELL AS BE SHARED. Measured 2026-10-12: the existing cues match none of the
 # three questions that triggered this work (evidence sufficiency, a design choice, an ordering), and
 # the existing veto silences one of them (the word `deploy` inside `deploy-channel`). So the closing
-# group adds three cues and a narrower veto; the pre-ask hook is NOT widened by them. It asks for `shared+ask`, which
+# group adds three `?` cues and a narrower veto, plus one declarative cue (CL4, its own function `tfc_is_handoff`, 2026-10-19); the pre-ask hook is NOT widened by them. It asks for `shared+ask`, which
 # adds ONE cue of its own (`ask`, 2026-10-14: a brief's "ask the operator" question about how named leftover items are
 # disposed of, run as a new pipeline vs recorded as not fixed). `shared` itself is unchanged; no production hook asks for
 # plain `shared` first, but the pre-ask hook's version-skew fallback does (do not "clean it up"). The closing
@@ -72,13 +72,32 @@ RULING_MONEY_RE='\b(charging|paying|refunds?|invoices?|price|pricing|costs?|spen
 
 # ---- CLOSING group: new for the closing-message carrier ----------------------------------------
 # CL1 sufficiency, CL2a/CL2b design, CL3 ordering. Each sits on a `?` sentence, so no co-signal is
-# needed. Narrowed on purpose (never widened): CL2a needs an object, CL2b needs a technical noun.
+# needed. (CL4, the declarative hand-off, is the one closing cue with no `?`: see `tfc_is_handoff` below.) Narrowed on purpose (never widened): CL2a needs an object, CL2b needs a technical noun.
 TFC_CL1_RE='\b(is|are) [^?]{0,60}\b(evidence|census|inventory|coverage|audit|baseline|gate|proof)\b[^?]{0,60}\b(enough|sufficient|adequate)\b'
 TFC_CL2A_RE='\b(what|which)( is|'"'"'s| are| would be)? (the )?(right|best|correct|proper|cleanest) (design|architecture|mechanism|approach) (for|to|of|when)\b'
 TFC_CL2B_RE='\bdo you want (a|an|the) ([a-z -]{0,20} )?(migration|rotation|storage|credential|schema|pipeline|rollout|cutover)[a-z -]{0,20}(design|architecture)\b'
 TFC_CL3_ORDER_RE='\b(in what|what|which) (order|sequence)\b'
 TFC_CL3_NOUN_RE='\b(credentials?|tokens?|secrets?|keys?|configs?|configuration|storage|migrations?|cutover|pipelines?|schema|hosts?|rotat[a-z]*)\b'
 TFC_BUSINESS_RE='\b('"${TFC_BUSINESS_WORDS}"')\b'
+# CL4 declarative hand-off (2026-10-19, miss, cue, fixture): a closing that makes the operator the decider of a technical
+# step WITHOUT a question mark ("Next step: your call. Tell me to build #10297.") was invisible to CL1-CL3, which all read `?`
+# units. Review of the first draft (8 seats, PR #10547) found a broad "phrase + common noun" cue blocks courtesy closers
+# ("let me know if you want the design doc") and operator authorizations ("say the word and I will merge #123"), so CL4 is
+# deliberately narrow and lives in its OWN function, `tfc_is_handoff`, judged apart from the `?` cues: a declarative sentence
+# never reaches the strong cues (bar, suff) and never spends the 12-unit `?` budget.
+#   SELF  = an explicit instruction to start work ("tell me to build"): the verb is the technical-work noun.
+#   PHRASE + NOUN = a hand-off phrase AND a DECISION noun (design, approach, order, sequencing, ruling, next step ...). Bare
+#       `pr`, `fix`, `build`, `#N` are NOT decision nouns: they are everyday words in a courtesy closer.
+# CANDIDATE is the one alternation the hook's prefilter and its awk emitter use, so the hook can never judge fewer
+# sentences than this function accepts. It has no `\b`, so grep -E and awk read it the same way.
+# PURE: no repo-specific nouns beyond the decision-noun list; the lib's graduation rule is unchanged.
+TFC_CL4_SELF_ERE='(tell|ask) me to (build|implement|fix|draft|write|start)'
+TFC_CL4_PHRASE_ERE='your call|up to you|^[^a-z]*(so |then |now )?you (decide|choose|pick)'
+TFC_CL4_CANDIDATE_ERE="${TFC_CL4_SELF_ERE}|${TFC_CL4_PHRASE_ERE}"
+TFC_CL4_NOUN_RE='\b(design|approach|sequenc[a-z]*|order(ing)?|ruling|rehearsal|diagnostic|collector|architecture|trade-?offs?|next steps?)\b'
+# An authorization or production-mutating verb in the sentence makes it the operator's call, not a technical fork. This is the
+# CL4 veto list; the closing-permission shapes (TFC_CLOSING_PERM_RE) are a second, separate exemption.
+TFC_CL4_AUTH_RE='\b(flip|dispatch|rotate|rotation|wipe|delete|revoke|deploy|redeploy|apply|force[- ]push|arm (the|auto|it)|ack-destroy|go[- ]ahead|authori[sz]e[a-z]*|approv[a-z]*|merge|ship|release|push|revert|roll ?back|migrat[a-z]*|cutover|cancel|restart|prod|production)\b'
 # A seed list tuned by the false-positive sample; applies to EVERY cue in the closing group (SHARED
 # ones included) and to no cue in the pre-ask group.
 TFC_CLOSING_EXTRA_RE='\b(prioriti[sz]\w*|publish\w*|announce\w*|auditors?|accountants?|lawyers?|investors?|customers?|features?|roadmap|milestones?)\b'
@@ -107,6 +126,9 @@ tfc_self_check() {
   [[ -n "${_TFC_COMPLETE-}" ]] || return 1
   # An EMPTY ask regex matches every line (ROUTE/RECORD would deny, VETO would veto), so a lib that lost one is parse doubt.
   [[ -n "${TFC_ASK_ROUTE_RE-}" && -n "${TFC_ASK_RECORD_RE-}" && -n "${TFC_ASK_VETO_RE-}" ]] || return 1
+  # Same reason for CL4: an empty ERE matches every sentence, so the hook would block every closing.
+  [[ -n "${TFC_CL4_SELF_ERE-}" && -n "${TFC_CL4_PHRASE_ERE-}" && -n "${TFC_CL4_CANDIDATE_ERE-}" && -n "${TFC_CL4_NOUN_RE-}" && -n "${TFC_CL4_AUTH_RE-}" ]] || return 1
+  declare -f tfc_is_handoff >/dev/null 2>&1 || return 1
   declare -f tfc_is_fork >/dev/null 2>&1 || return 1
   return 0
 }
@@ -171,6 +193,30 @@ tfc_is_fork() {
   [[ "$closing" -eq 1 ]] && grep -qE "$TFC_CLOSING_PERM_RE" <<<"$unit" && return 1
   # shellcheck disable=SC2034  # read by the sourcing hook
   TFC_HIT="$hit"
+  return 0
+}
+
+# tfc_is_handoff <sentence>  exit 0 = a declarative hand-off of a technical step to the operator (CL4), 1 = pass.
+# <sentence> is ONE sentence, already lowercased and single-spaced. Sets TFC_HIT=cl4 on a hit. Same call-in-current-shell
+# rule as tfc_is_fork. Order of vetoes: closing EXTRA, BUSINESS, authorization verbs; then the two permission exemptions.
+tfc_is_handoff() {
+  local unit="${1-}" self=0 phrase=0
+  # shellcheck disable=SC2034  # TFC_HIT is the function's output channel, read by the sourcing hook
+  TFC_HIT=""
+  [[ -n "$unit" ]] || return 1
+  grep -qE "$TFC_CLOSING_EXTRA_RE" <<<"$unit" && return 1
+  grep -qE "$TFC_BUSINESS_RE" <<<"$unit" && return 1
+  grep -qE "$TFC_CL4_AUTH_RE" <<<"$unit" && return 1
+  grep -qE "$TFC_CL4_SELF_ERE" <<<"$unit" && self=1
+  grep -qE "$TFC_CL4_PHRASE_ERE" <<<"$unit" && phrase=1
+  if (( self == 0 )); then
+    (( phrase == 1 )) || return 1
+    grep -qE "$TFC_CL4_NOUN_RE" <<<"$unit" || return 1
+  fi
+  grep -qE "$RULING_PERM_RE" <<<"$unit" && return 1
+  grep -qE "$TFC_CLOSING_PERM_RE" <<<"$unit" && return 1
+  # shellcheck disable=SC2034  # read by the sourcing hook
+  TFC_HIT="cl4"
   return 0
 }
 

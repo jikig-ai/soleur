@@ -33,6 +33,12 @@
 #      repaired HEAD. It repairs a dangling `.git/HEAD` at a bare repo root and emits one
 #      SOLEUR_BARE_HEAD_HEALED line (appended last, after the tmpfs alarm block), and
 #      nothing on a healthy session. See .claude/hooks/README.md "Bare-root HEAD self-heal".
+#  11. the bare-root CWD marker: a child-process call to bare-root-cwd-guard.sh (#10383).
+#      When the session's resolved root is a bare repo ROOT in this layout it emits one
+#      SOLEUR_BARE_ROOT_CWD line plus a bounded [bare-root-cwd] redirect block (appended
+#      last, after the heal marker), and nothing on a worktree session. Advisory only —
+#      it routes file-touching work to a worktree; it cannot refuse anything. See
+#      .claude/hooks/README.md "Bare-root CWD marker".
 #
 # WHAT MUST NOT BE "SIMPLIFIED": do not merge AGENTS.rules.md into AGENTS.md.
 # The index is re-rendered every turn and the corpus is injected once per
@@ -73,6 +79,20 @@ strip_frontmatter() { cat; }
 _strip_lib="$(dirname "${BASH_SOURCE[0]}")/../../scripts/lib/frontmatter-strip/strip.sh"
 # shellcheck source=/dev/null
 if [[ -r "$_strip_lib" ]]; then source "$_strip_lib" 2>/dev/null || true; fi
+
+# context-sanitize lib (#10395): one canonical boundary strip for every byte
+# stream that flows into additionalContext — C0 controls, DEL, NEL, and the
+# U+2028/U+2029 line separators the C0 range alone misses. Sourced hook-relative
+# like strip.sh above. When the lib is unreadable the same-name fallbacks carry
+# each site's pre-change strip set — never weaker than today, so an absent lib
+# degrades to status quo rather than to zero protection or a hook crash.
+_ctx_lib="$(dirname "${BASH_SOURCE[0]}")/lib/context-sanitize.sh"
+# shellcheck source=/dev/null
+[[ -r "$_ctx_lib" ]] && . "$_ctx_lib" || true
+declare -F soleur_ctx_sanitize >/dev/null 2>&1 \
+  || soleur_ctx_sanitize() { LC_ALL=C tr -d '\000-\037'; }
+declare -F soleur_ctx_sanitize_lines >/dev/null 2>&1 \
+  || soleur_ctx_sanitize_lines() { LC_ALL=C tr -d '\000-\010\013-\037'; }
 
 # strip_sidecar_into_global <file> [sentinel_rule_id] — set STRIPPED_OUT to the
 # frontmatter-stripped sidecar. OVER-STRIP GUARD (obs P1): if the strip drops
@@ -317,6 +337,28 @@ if command -v timeout >/dev/null 2>&1; then BARE_HEAL_TO=(timeout -k 1 "${SOLEUR
 BARE_HEAL_OUT=$("${BARE_HEAL_TO[@]+"${BARE_HEAL_TO[@]}"}" bash "$(dirname "${BASH_SOURCE[0]}")/bare-head-self-heal.sh" "$REPO_ROOT" 2>/dev/null || true)
 BARE_HEAL_MARKER="${BARE_HEAL_OUT%%$'\n'*}"
 [[ "$BARE_HEAL_MARKER" == "SOLEUR_BARE_HEAD_HEALED "* ]] || BARE_HEAL_MARKER=""
+
+# Bare-root CWD marker (job 11 in the header; #10383). Same child-process contract as the
+# heal call: `|| true` keeps the ERR trap quiet, a missing helper (a stale bare-root copy of
+# this file) is the same fail-open path, and the call is time-boxed. Accept ONLY the helper's
+# documented shape — a SOLEUR_BARE_ROOT_CWD first line followed by [bare-root-cwd] lines —
+# and strip control chars while preserving newline/tab, the same clamp posture as the MCP
+# roster and the worktree path. SOLEUR_BARE_CWD_TIMEOUT_S exists for tests.
+BARE_CWD_TO=()
+if command -v timeout >/dev/null 2>&1; then BARE_CWD_TO=(timeout -k 1 "${SOLEUR_BARE_CWD_TIMEOUT_S:-5}"); fi
+BARE_CWD_OUT=$("${BARE_CWD_TO[@]+"${BARE_CWD_TO[@]}"}" bash "$(dirname "${BASH_SOURCE[0]}")/bare-root-cwd-guard.sh" "$REPO_ROOT" 2>/dev/null || true)
+if [[ "${BARE_CWD_OUT%%$'\n'*}" == "SOLEUR_BARE_ROOT_CWD "* ]]; then
+  # Lines after the marker must carry the [bare-root-cwd] prefix — forwarding
+  # arbitrary helper stdout would let a future noisy line inside the helper
+  # reach context unfiltered (#10386 review, P3). Keep the marker, keep only
+  # prefixed lines, strip control chars (preserving newline/tab), cap at 12.
+  BARE_CWD_BLOCK=$(printf '%s\n' "$BARE_CWD_OUT" \
+    | soleur_ctx_sanitize_lines \
+    | sed -n '1p;/^\[bare-root-cwd\] /p' \
+    | sed -n '1,12p')
+else
+  BARE_CWD_BLOCK=""
+fi
 WS_BRANCH=$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "(unknown)")
 # Guard git's non-zero exit INSIDE the pipe, not after it. `… | wc -l || echo 0`
 # is a double-output bug under pipefail: when git fails, `wc -l` already emits
@@ -335,14 +377,17 @@ WS_DIRTY=$( { git -C "$REPO_ROOT" status --porcelain --ignore-submodules=all 2>/
 # `gsub("[[:cntrl:]]";"")` strips control chars (incl. embedded newlines) from each
 # server-name key BEFORE the line-oriented sort/paste — a JSON key may legally
 # contain a newline, which would otherwise split one server into two roster
-# entries. Sanitizing per-key (not on the whole stream) preserves the inter-key
-# newlines sort/paste rely on. Mirrors the file's symlink-rejection posture:
+# entries. `gsub("\u2028|\u2029";"")` adds the two Unicode line/paragraph
+# separators, which are NOT in [[:cntrl:]] but inject display lines the same way
+# (#10395 — jq decodes the \u escapes inside the program literal). Sanitizing
+# per-key (not on the whole stream) preserves the inter-key newlines sort/paste
+# rely on. Mirrors the file's symlink-rejection posture:
 # committed config is a content surface that flows into agent context, so clamp it.
 MCP_SERVERS=$(
   {
-    jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"")' "$REPO_ROOT/.mcp.json" 2>/dev/null || true
-    jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"")' "$REPO_ROOT/plugins/soleur/.claude-plugin/plugin.json" 2>/dev/null || true
-    jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"")' "$REPO_ROOT/plugins/soleur/.mcp.json" 2>/dev/null || true
+    jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"") | gsub("\u2028|\u2029";"")' "$REPO_ROOT/.mcp.json" 2>/dev/null || true
+    jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"") | gsub("\u2028|\u2029";"")' "$REPO_ROOT/plugins/soleur/.claude-plugin/plugin.json" 2>/dev/null || true
+    jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"") | gsub("\u2028|\u2029";"")' "$REPO_ROOT/plugins/soleur/.mcp.json" 2>/dev/null || true
   } | sort -u | paste -sd, - || true
 )
 [[ -z "$MCP_SERVERS" ]] && MCP_SERVERS="(none)"
@@ -352,7 +397,7 @@ MCP_SERVERS=$(
 # path would otherwise inject a physical line into the block below, shifting the
 # rule bodies and breaking the lines-4-6 invariant. Near-impossible (the path is a
 # validated git worktree, lines 81-84), but the strip is one cheap defense-in-depth.
-WS_WORKTREE=$(printf '%s' "$REPO_ROOT" | tr -d '\000-\037')
+WS_WORKTREE=$(printf '%s' "$REPO_ROOT" | soleur_ctx_sanitize)
 
 # Line-1 field order (branch | dirty) is LOAD-BEARING for the AC1 grep
 # `^\[session-context\] branch: … | dirty: N files`. Worktree path and roster
@@ -443,7 +488,7 @@ if [[ -s "$TMPFS_ALARM_FILE" ]]; then
   # Report the most recent alarm, not a count of cron ticks: the guard appends
   # every 5 minutes while the condition holds (288/day against a 200-line cap),
   # so a count saturates within hours and carries no severity information.
-  _alarm_last=$(tail -1 "$TMPFS_ALARM_FILE" 2>/dev/null | tr -d '\000-\037' | cut -c1-400 || true)
+  _alarm_last=$(tail -1 "$TMPFS_ALARM_FILE" 2>/dev/null | soleur_ctx_sanitize | cut -c1-400 || true)
   if [[ -n "$_alarm_last" ]]; then
     TMPFS_ALARM_BLOCK=$'\n'"[tmpfs-guard] /tmp alarm, most recent: ${_alarm_last}"
   fi
@@ -464,6 +509,7 @@ fi
 # bodies. It was lines 4-6 until ADR-151 removed the HINT line; the loader tests
 # assert these offsets positionally, so any future line added to the header must
 # move them again in the same commit. The alarm block, then the heal marker, trail everything.
-OUT_BODY="${STAMP}"$'\n'"[rules-loader] manifest: ${MANIFEST}"$'\n'"${SESSION_CONTEXT}"$'\n'"${CONTEXT}${TMPFS_ALARM_BLOCK}${BARE_HEAL_MARKER:+$'\n'$BARE_HEAL_MARKER}"
+MANIFEST_SAFE=$(printf '%s' "$MANIFEST" | soleur_ctx_sanitize)
+OUT_BODY="${STAMP}"$'\n'"[rules-loader] manifest: ${MANIFEST_SAFE}"$'\n'"${SESSION_CONTEXT}"$'\n'"${CONTEXT}${TMPFS_ALARM_BLOCK}${BARE_HEAL_MARKER:+$'\n'$BARE_HEAL_MARKER}${BARE_CWD_BLOCK:+$'\n'$BARE_CWD_BLOCK}"
 jq -nc --arg out "$OUT_BODY" '{ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: $out } }'
 exit 0
