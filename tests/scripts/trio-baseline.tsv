@@ -110,6 +110,9 @@
 .github/workflows/git-data-cutover.yml	FALLBACK:CI_SSH_ACCESS_TOKEN_ID	tier-a	2026-11-30	#9294:PR-2
 .github/workflows/git-data-cutover.yml	FALLBACK:CI_SSH_ACCESS_TOKEN_SECRET	tier-a	2026-11-30	#9294:PR-2
 .github/workflows/git-data-cutover.yml	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
+.github/workflows/inngest-link-flip.yml	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-2
+.github/workflows/inngest-link-flip.yml	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
+.github/workflows/inngest-link-flip.yml	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
 .github/workflows/restart-inngest-server.yml	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-4
 .github/workflows/restart-inngest-server.yml	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-4
 .github/workflows/restart-inngest-server.yml	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-4
@@ -135,6 +138,9 @@ apps/web-platform/infra/infra-config-verify.sh	CF_ACCESS_CLIENT_SECRET	tier-a	20
 apps/web-platform/infra/infra-config-verify.sh	FALLBACK:CI_SSH_ACCESS_TOKEN_ID	tier-a	2026-11-30	#9294:PR-2
 apps/web-platform/infra/infra-config-verify.sh	FALLBACK:CI_SSH_ACCESS_TOKEN_SECRET	tier-a	2026-11-30	#9294:PR-2
 apps/web-platform/infra/infra-config-verify.sh	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
+apps/web-platform/infra/inngest-link-flip-workflow.test.sh	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-2
+apps/web-platform/infra/inngest-link-flip-workflow.test.sh	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
+apps/web-platform/infra/inngest-link-flip-workflow.test.sh	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
 apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-2
 apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
 apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh	FALLBACK:CI_SSH_ACCESS_TOKEN_ID	tier-a	2026-11-30	#9294:PR-2
@@ -195,6 +201,9 @@ scripts/followthroughs/tenant-outer-wrap-soak-5863.sh	WEBHOOK_DEPLOY_SECRET	sink
 scripts/followthroughs/workspace-isolation-verdict-2640.sh	CF_ACCESS_CLIENT_ID	sink	-	#9294:PR-4
 scripts/followthroughs/workspace-isolation-verdict-2640.sh	CF_ACCESS_CLIENT_SECRET	sink	-	#9294:PR-4
 scripts/followthroughs/workspace-isolation-verdict-2640.sh	WEBHOOK_DEPLOY_SECRET	sink	-	#9294:PR-4
+scripts/inngest-link-flip.sh	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-2
+scripts/inngest-link-flip.sh	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
+scripts/inngest-link-flip.sh	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
 tests/scripts/test-argv-bearer-sweep.sh	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-2
 tests/scripts/test-argv-bearer-sweep.sh	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
 tests/scripts/test-argv-bearer-sweep.sh	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
