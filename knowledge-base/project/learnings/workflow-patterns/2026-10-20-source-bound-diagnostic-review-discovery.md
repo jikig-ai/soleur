@@ -63,3 +63,9 @@ promise to define a receipt later leaves its disclosure boundary undefined.
 The proposal now states prose precedence and the exact closed receipt contract.
 Its future validator must pair omitted/null/invalid-type tests and reject all
 unlisted receipt fields rather than exporting validator messages.
+
+The final read-only PR-scope probe hit a mise `gh` installation attempt against
+read-only tool storage. Repeating that exact read through the approval tool
+succeeded and returned the PR's linked issue numbers. Treat shim-install
+failure as a tool-resolution failure, not as a GitHub result; keep the Git
+cleanliness probe separate so a failed first command cannot hide its status.
