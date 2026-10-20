@@ -34,9 +34,9 @@ PR body: `Ref #9639`, `Part of tracker #9217` (no closing keyword). Do NOT touch
 
 - [x] 3.1 `grep-q-pipe-guard.test.sh` (PJ_TRIPLES unchanged, recompute before/after), `lint-trap-tempfile-ownership` (+ test), `guard-vacuity-floor.test.sh`, shellcheck on touched `.sh`, `c4-count-parity.test.sh`, `lint-guard-contract.py`, `lint-infra-no-human-steps.py --changed --base origin/main`, markdownlint on plan + tasks, the discoverability probe verbatim.
 - [x] 3.2 `fresh-boot-parity.test.sh`, `web-host-provisioner-parity.test.sh`.
-- [ ] 3.3 Simulate the rollback in a scratch detached worktree under `/var/tmp`; write the measured recipe into the PR body.
+- [x] 3.3 Simulate the rollback in a scratch detached worktree under `/var/tmp`; write the measured recipe into the PR body.
 - [ ] 3.4 Record `doppler-injection-bound` CENSUS before/after (population 10 -> 10, doppler units 20 -> 20) in the PR body.
-- [ ] 3.5 `git diff --name-only origin/main...HEAD` contains none of the files listed under "Do NOT touch".
+- [x] 3.5 `git diff --name-only origin/main...HEAD` contains none of the files listed under "Do NOT touch".
 
 ## Phase 4 - ADR and tracking
 
