@@ -218,7 +218,7 @@ describe("Stripe invoice.payment_failed → Inngest bridge (FR5)", () => {
     mockConstructEvent.mockReturnValue(makePaymentFailedEvent());
 
     // First delivery: dedup row inserted → handler runs.
-    await POST(makeRequest());
+    expect((await POST(makeRequest())).status).toBe(200);
     expect(mockInngestSend).toHaveBeenCalledTimes(1);
 
     // Redelivery: the row is still claimed (stateful dedup model), so the
@@ -226,6 +226,7 @@ describe("Stripe invoice.payment_failed → Inngest bridge (FR5)", () => {
     // with 200 BEFORE the switch fires again.
     const res2 = await POST(makeRequest());
     expect(res2.status).toBe(200);
+    expect(mockInsert).toHaveBeenCalledTimes(2);
     expect(mockInngestSend).toHaveBeenCalledTimes(1);
   });
 
@@ -288,15 +289,16 @@ describe("Stripe invoice.payment_failed → Inngest bridge (FR5)", () => {
       invoiceId: "in_pf_001",
       errorName: "Error",
     });
-    // Exact key set, so nothing else (a raw founderId, the email hash, a
-    // nested payload) can ride along in the Sentry extra.
-    expect(Object.keys(ctx.extra ?? {}).sort()).toEqual([
-      "errorCode",
-      "errorName",
-      "eventId",
-      "invoiceId",
-      "userId",
-    ]);
+    // Exact key set of the DEFINED values (errorCode is undefined for this
+    // plain Error and is dropped by Sentry's JSON serialization), so nothing
+    // else (a raw founderId, the email hash, a nested payload) can ride along
+    // in the Sentry extra, and the route may assign errorCode conditionally.
+    expect(
+      Object.entries(ctx.extra ?? {})
+        .filter(([, value]) => value !== undefined)
+        .map(([key]) => key)
+        .sort(),
+    ).toEqual(["errorName", "eventId", "invoiceId", "userId"]);
     // The raw error text can embed hosts or ids; only its name and code are reported.
     expect(JSON.stringify(ctx.extra)).not.toContain("ECONNREFUSED");
   });
@@ -324,6 +326,33 @@ describe("Stripe invoice.payment_failed → Inngest bridge (FR5)", () => {
     ).extra;
     expect(extra.errorName).toBe("string");
     expect(extra.errorCode).toBeUndefined();
+
+    // Only a STRING code is reported: a numeric errno or an object code
+    // (which could carry a host or an address) must not reach Sentry.
+    for (const code of [111, { host: "10.0.0.1" }]) {
+      mockReportSilentFallback.mockClear();
+      mockInngestSend.mockRejectedValueOnce(Object.assign(new Error("boom"), { code }));
+      expect((await POST(makeRequest())).status).toBe(500);
+      const nonString = (
+        mockReportSilentFallback.mock.calls[0][1] as {
+          extra: Record<string, unknown>;
+        }
+      ).extra;
+      expect(nonString.errorCode).toBeUndefined();
+    }
+
+    // A nullish rejection must still be reported and answered with 500
+    // (the code lookup must not throw on it).
+    mockReportSilentFallback.mockClear();
+    mockInngestSend.mockRejectedValueOnce(undefined);
+    expect((await POST(makeRequest())).status).toBe(500);
+    const nullish = (
+      mockReportSilentFallback.mock.calls[0][1] as {
+        extra: Record<string, unknown>;
+      }
+    ).extra;
+    expect(nullish.errorName).toBe("undefined");
+    expect(nullish.errorCode).toBeUndefined();
   });
 
   // The 500 must not return before the DELETE has settled: a serverless
@@ -354,6 +383,9 @@ describe("Stripe invoice.payment_failed → Inngest bridge (FR5)", () => {
     mockDeleteEq.mockRejectedValueOnce(new Error("db down"));
 
     await POST(makeRequest()).catch(() => undefined);
+    // The release was attempted (and consumed the queued rejection), and the
+    // report was still emitted once.
+    expect(mockDeleteEq).toHaveBeenCalledTimes(1);
     expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
   });
 

@@ -119,7 +119,9 @@ export async function POST(request: Request) {
   // fire at 10-60s, handler p99 is sub-second), the row is orphaned and
   // Stripe's retry 23505-short-circuits. The event is operator-replayable
   // from the Stripe dashboard; a deeper fix (TTL-reclaim or SECURITY
-  // DEFINER RPC transaction) is tracked as a follow-up.
+  // DEFINER RPC transaction) is tracked as a follow-up. The invoice.payment_failed
+  // send-failure path is wider than "sub-second": it waits out the send
+  // retries before its 5xx (see the catch in that case).
   const { error: dedupErr } = await supabase
     .from("processed_stripe_events")
     .insert({ event_id: event.id, event_type: event.type });
@@ -640,11 +642,16 @@ export async function POST(request: Request) {
             // A failed send must not be acknowledged (#10542): release the
             // dedup row and return 500 so Stripe redelivers, for every
             // failure, transient or not. A deterministic failure is stopped by
-            // SOLEUR_FR5_ENABLED=false (Doppler prd, read at process start).
+            // SOLEUR_FR5_ENABLED=false (a Doppler prd snapshot fixed at container
+            // start, so the flip needs a restart).
             // The only duplicate guard on the retry is Inngest's event-id dedup
-            // for `stripe-${event.id}` (24 h window): the CFO function inserts
-            // its draft without a source_ref, so a redelivery after that window
-            // of a send that landed but errored can add a second draft.
+            // for `stripe-${event.id}` (24 h per the Inngest docs, not verified
+            // for our self-hosted server): the CFO function inserts its draft
+            // without a source_ref, so a redelivery after that window of a send
+            // that landed but errored can add a second draft. The residual is
+            // accepted (decision-challenges.md, 2026-10-20 CTO rulings).
+            // Release-then-500 also adds ~1.5 s of retry backoff before the
+            // response, so the orphan-row tradeoff above applies here too.
             //
             // `err` is passed as null (message path): an Error is captured
             // first by the pino mirror without our tags and Sentry drops the
