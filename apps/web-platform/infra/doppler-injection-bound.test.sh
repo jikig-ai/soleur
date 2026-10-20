@@ -521,7 +521,9 @@ ONLY_SECRETS_RE = re.compile(r'(?<![-\w])--only-secrets(?:[= ]+)([^\s]*)')
 # (`${!K@}`, `${!K*}`).
 INDIRECT_RE = re.compile(r'\$\{!(\w+)(?:\[[^\]]*\])?(?:[-+=?:#%/^,@*][^}]*)?\}')
 # Script side (#9639): a doppler TARGET script that resolves its own secret through a variable named `*_KEY` (the per-host
-# key NAME an env file carries), in every spelling the unit-side regex knows (the two share one grammar). Bound to the `_KEY` convention on purpose: the unrestricted form also matched
+# key NAME an env file carries), in every spelling the unit-side regex knows (the two share one grammar). The array
+# index list `${!MAP_KEY[@]}` matches too: it is not a secret lookup, and a doppler script that iterates a `*_KEY` array
+# would enter the population as a false positive, which fails closed (an ack or a bound resolves it). Bound to the `_KEY` convention on purpose: the unrestricted form also matched
 # `${!_seam+x}` in inngest-luks-cutover.sh, pulling that unit into the population and turning it red.
 SCRIPT_KEY_INDIRECT_RE = re.compile(r'\$\{!(\w*_KEY)(?:\[[^\]]*\])?(?:[-+=?:#%/^,@*][^}]*)?\}')
 PATH_TOKEN_RE = re.compile(r'/usr/(?:local/)?bin/([A-Za-z0-9._-]+)')

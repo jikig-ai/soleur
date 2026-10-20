@@ -252,7 +252,7 @@ for a in "$@"; do
 done
 if [[ "$hb" == 1 && "$hbw" == 0 ]]; then
   printf '%s\n' "$*" >> "${STUB_HB_ARGV:-/dev/null}"
-  [[ -n "${STUB_HB_ENVDUMP:-}" ]] && env | grep -E '^(URL|WEB_[A-Z0-9_]*)=' > "$STUB_HB_ENVDUMP"   # the F6 not-exported rows read only these variables of the heartbeat curl's environment, never the ambient one
+  [[ -n "${STUB_HB_ENVDUMP:-}" ]] && env | grep -E '^URL=|uptime\.betterstack\.test' > "$STUB_HB_ENVDUMP"   # filtered by VALUE (any name holding the URL is kept), never the whole ambient environment
   [[ "$hbcfg" == 1 && "${STUB_HB_NOSTDIN:-}" != 1 ]] && cat >> "${STUB_HB_STDIN:-/dev/null}"
   hbn=$(wc -l < "${STUB_HB_ARGV:-/dev/null}")
   [[ "${STUB_HB_FAIL_FIRST:-}" == 1 && "$hbn" -eq 1 ]] && exit 7

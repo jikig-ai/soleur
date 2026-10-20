@@ -140,7 +140,7 @@ fi
 # Otherwise this is the heartbeat ping. The URL never rides argv any more: it is the value of the
 # `url = "..."` line on the stdin config. A call whose stdin lost that line records an EMPTY line, which the
 # suite reads as "no URL" (T1 and the healthy-run row go RED; the negative rows are backed by TA_PING).
-[[ -n "${STUB_ENVDUMP:-}" ]] && env | grep -E '^(URL|WEB_[A-Z0-9_]*)=' > "$STUB_ENVDUMP"   # only the variables the F6 rows read, never the ambient environment
+[[ -n "${STUB_ENVDUMP:-}" ]] && env | grep -E '^URL=|synthetic\.invalid' > "$STUB_ENVDUMP"   # filtered by VALUE (any name holding the URL is kept), never the whole ambient environment
 url=$(printf '%s\n' "$cfg_in" | sed -n 's/^url = "\(.*\)"$/\1/p' | sed -n '1p')
 printf '%s\n' "$url" >> "$STUB_PING"
 exit "${STUB_PING_RC:-0}"
@@ -1013,6 +1013,7 @@ assert "F6 locale: a lowercase key is refused under a UTF-8 locale too (a regres
 printf 'shopt -u globasciiranges\n' > "$TMP/f6-noascii.env"
 f6_loc="$(locale -a 2>/dev/null | grep -ciE '^en_US\.utf-?8$' || true)"
 EXTRA_ENV=(BASH_ENV="$TMP/f6-noascii.env" LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 WEB_NIC_GUARD_URL_KEY=bz bz="$F6_URL"); run_guard true 0 true
+[[ "$f6_loc" -ge 1 ]] || echo "  NOTE: no en_US.UTF-8 locale on this host, so the next row is only a pin here (it discriminates the LC_ALL=C line where the locale exists)" >&2
 assert "F6 locale[ranges off]: a lowercase key is refused even when [A-Z] would collate over it (en_US.UTF-8 present on this host: $f6_loc; with 0 this row is only a pin)" \
   'no_beat && [[ "$RC" -eq 0 && "$ERR" == *"WEB_NIC_GUARD_URL_KEY"* ]]'
 for f6_k in RANDOM PATH BASH_ENV; do
