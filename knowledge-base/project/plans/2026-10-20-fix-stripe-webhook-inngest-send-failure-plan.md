@@ -13,6 +13,23 @@ brand_survival_threshold: aggregate pattern
 requires_cpo_signoff: false
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-20. **Agents used:** CTO (two rulings), dhh-rails, kieran-rails, code-simplicity
+(plan review), observability-coverage, security-sentinel; Context7 (Inngest), Stripe docs fetch.
+
+### Key Improvements
+1. Sentry capture switched to the `err = null` message path (#8629): an `Error`-path report would have
+   been unfindable by the new tags. T1 pins it.
+2. Test model made stateful (claimed-id set) so T3/T4 prove the dedup release really ran.
+3. Idempotency and retry claims now carry sources (Inngest 24 h event-id dedup; Stripe 3-day live retry).
+4. Honest observability: no alert rule exists for the new tags; filed #10660 instead of claiming paging.
+
+### New Considerations Discovered
+- Unconditional 500 vs a freshness bound: ruled unconditional (CTO, 2026-10-20); revisit if Stripe
+  documents a disable threshold or Sentry shows failures lasting over 24 h.
+- Concurrent-duplicate race and pre-existing PII log lines noted; #10662 tracks the latter.
+
 ## Overview
 
 The Stripe webhook route acknowledges a Stripe event as handled even when forwarding the
@@ -67,7 +84,9 @@ setup must resolve it.
 
 **Not in scope (tracked).** The founder-lookup DB error in the same case is also swallowed and
 returns 200 (same loss class). Ruled out of this PR by the CTO agent; tracked as #10657
-(`deferred-scope-out`, same milestone as #10542). `isGranted` stays fail-closed by design (TR9).
+(`deferred-scope-out`, same milestone as #10542). `isGranted` stays fail-closed by design (TR9). Also filed from the deepen pass: #10660 (Sentry alert
+rule for the new tags) and #10662 (raw `founderId` in a pino `logger.info`, and unredacted retry
+`logger.warn`).
 
 ## Open Code-Review Overlap
 
@@ -136,11 +155,11 @@ Edit `apps/web-platform/test/server/webhooks/stripe-payment-failed-inngest.test.
    `mockInngestSend.mockRejectedValueOnce(new Error("ECONNREFUSED 127.0.0.1:8288"))` (a plain
    `Error` is not matched by `isTransientFetchError`, so one attempt and no timer) → expect
    `res.status === 500`, `await res.json()` equals `{ error: "Dispatch failed" }`, `mockDeleteEq`
-   called once with `("event_id", "evt_pf_001")`, `mockReportSilentFallback` called once with context
+   called once with `("event_id", "evt_pf_001")`, `mockReportSilentFallback` called once with first argument `null` (pins the #8629 message path) and context
    `feature: "stripe-webhook"`, `op: "inngest-send-payment-failed"`, a `message` that does NOT contain
    "will retry" and does name the dedup release, and `extra` with `userId === FOUNDER_ID` (pins the
-   pseudonymized key at the call site), `eventId`, `invoiceId`, no `founderId` key and no
-   `customerEmailHash`.
+   pseudonymized key at the call site), `eventId`, `invoiceId`, `errorName`, no `founderId` key, no raw
+   error message and no `customerEmailHash`.
 3. Rewrite `"Inngest transient failure → retries exhaust..."` as **T2**: three
    `TypeError("fetch failed")` rejections → 3 send attempts with REAL timers (the existing test already
    does this: 500 + 1000 ms backoff, about 1.5 s, well inside the repo's `testTimeout` of 16 s; fake
@@ -175,13 +194,22 @@ Edit `apps/web-platform/app/api/webhooks/stripe/route.ts`, `case "invoice.paymen
 
 1. Keep the `try { ...sendInngestWithRetry(...) }` block as is.
 2. Replace the catch body with, in order:
-   - `reportSilentFallback(err, { feature: "stripe-webhook", op: "inngest-send-payment-failed",
+   - `reportSilentFallback(null, { feature: "stripe-webhook", op: "inngest-send-payment-failed",
      message: "Stripe webhook: inngest.send failed for invoice.payment_failed — releasing dedup row, returning 500 so Stripe redelivers",
-     extra: { userId: founderId, invoiceId: invoice.id, eventId: event.id } })`.
-     `reportSilentFallback` already does the pino `logger.error` and the Sentry capture (verified in
+     extra: { userId: founderId, invoiceId: invoice.id, eventId: event.id, errorName, errorCode } })`
+     where `errorName = err instanceof Error ? err.name : typeof err` and `errorCode` is `err.code` when it
+     is a string. **`err` is passed as `null` (the message path), not the caught `Error`:** a real
+     `Error` is captured first by the pino mirror with only `feature=pino-mirror` and Sentry drops the
+     tagged second capture (#8629; precedent `server/c4-writer.ts` and `server/account-delete.ts`, which
+     both pass `null` for exactly this reason), so an `Error`-path report would be unfindable by
+     `feature`/`op` tag. Keep the message text fixed and low-cardinality (Sentry groups a message
+     capture by its text). Do not put the raw error message or `customerEmailHash` in `extra`.
+     `reportSilentFallback` still does the pino `logger.error` plus the Sentry capture (verified in
      `server/observability.ts`), so there is no separate `logger.error` or `Sentry.captureException`.
-     Use the `userId` key (not `founderId`) so the emit boundary pseudonymizes it (Recital 26).
-     Never put `customerEmailHash` in `extra`.
+     Use the `userId` key (not `founderId`) so the emit boundary pseudonymizes it (Recital 26); the
+     current code passes a raw `founderId`, so this also closes a small PII gap.
+   - Order matters: report FIRST, then release. If the release throws, the Sentry event for the send
+     failure already exists and the route still answers 5xx (an unhandled throw is a 500 in Next).
    - `await releaseDedupRow();`
    - `return NextResponse.json({ error: "Dispatch failed" }, { status: 500 });`
 3. Return 500 for every send failure, transient or not (CTO ruling: `isTransientFetchError` covers
@@ -231,6 +259,11 @@ constraint 2). The merge needs a separate go naming the merge.
   candidate lost events. Re-sending one through Stripe requires deleting its dedup row first, which is
   a production write that needs its own go. Rows from before the flag flip or for founders without a
   grant legitimately have no draft.
+- Also state in the PR body: (a) a concurrent duplicate delivery can get a 200 from the 23505 short-circuit
+  while the first delivery then fails and releases, losing the draft (rare, accepted); (b) no Sentry alert
+  rule exists for the new tags yet (#10660); (c) `Ref #10660`, `Ref #10662` for the follow-ups; (d) the
+  Sentry capture carries only a pseudonymized user id plus opaque Stripe ids, so no new Art. 30
+  processing activity (the capture sink already exists).
 - Residual risk to state: Stripe retries a failed delivery for up to three days with exponential
   backoff in live mode, and only three times within a few hours for test-mode events (source:
   https://docs.stripe.com/webhooks, "Automatic retries", read 2026-10-20). If the Inngest server stays
@@ -259,7 +292,7 @@ constraint 2). The merge needs a separate go naming the merge.
 
 ```yaml
 liveness_signal:
-  what: Sentry events tagged feature=stripe-webhook op=inngest-send-payment-failed (failure signal; absence alongside healthy Stripe deliveries means sends succeed)
+  what: Sentry message events (err=null path, #8629) tagged feature=stripe-webhook op=inngest-send-payment-failed (failure signal; absence alongside healthy Stripe deliveries means sends succeed)
   cadence: per Stripe invoice.payment_failed delivery
   alert_target: Sentry issue alert on the web-platform project
   configured_in: apps/web-platform/app/api/webhooks/stripe/route.ts (reportSilentFallback in the invoice.payment_failed catch block)
@@ -271,13 +304,13 @@ error_reporting:
 failure_modes:
   - mode: Inngest unreachable or send rejected after 3 attempts
     detection: Sentry event op=inngest-send-payment-failed; Stripe delivery shows 500 and redelivers
-    alert_route: Sentry issue alert to operator email
+    alert_route: none yet - Sentry search by tag only; the alert rule is tracked as #10660 (infra that auto-applies on merge, out of this PR's no-production-touch scope)
   - mode: dedup-row release DELETE fails after a send failure (redelivery will be short-circuited)
     detection: Sentry event op=dedup-release (existing releaseDedupRow reporting) alongside the send-failure event
-    alert_route: Sentry issue alert to operator email
+    alert_route: none yet - Sentry search by tag only (#10660 covers the send-failure rule; the existing dedup-release capture is untouched)
   - mode: deterministic non-transient send error (for example a 4xx) returns 500 on every redelivery
     detection: repeated Sentry events carrying the same eventId in extra, and Stripe delivery log showing repeated 500s
-    alert_route: Sentry issue alert to operator email; mitigation SOLEUR_FR5_ENABLED=false
+    alert_route: none yet (#10660); mitigation is the SOLEUR_FR5_ENABLED=false flip in Doppler prd, effective on the next container restart (a production write that needs the owner's separate go; not performed by this PR)
 
 logs:
   where: pino stdout aggregated to Better Stack, and Sentry
