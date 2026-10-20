@@ -149,6 +149,21 @@ v(re.search(r'--bundle\s+"\$\{MANIFEST\}\.sigstore\.json"', sbody) is not None,
   "sign-blob writes <manifest>.sigstore.json via --bundle")
 v(not re.search(r"--output-signature\b|--output-certificate\b", sbody),
   "sign-blob carries no removed cosign-2.x --output-signature/--output-certificate flags")
+
+# OCI-image pin (#10390): the host extract runs `docker create` + `docker cp`, and create
+# refuses a command-less scratch image ("no command specified") — a bare FROM scratch +
+# COPY image is un-pullable-for-extract, which is the exact first-pull failure measured on
+# the dedicated host (reason=extract).
+asm = [
+    s
+    for j in jobs.values()
+    for s in j.get("steps", [])
+    if str(s.get("name", "")).startswith("Assemble bundle tarball")
+]
+v(len(asm) == 1, "the Assemble-bundle step is found exactly once (%d found)" % len(asm))
+abody = str(asm[0].get("run", "")) if asm else ""
+v(re.search(r'\\nCMD\s*\[', abody) is not None,
+  "the OCI Dockerfile carries a CMD (docker create refuses command-less images)")
 open(body_out, "w").write(body)
 PY
 
@@ -549,6 +564,8 @@ elif name == "sign-adds-output-certificate":
 elif name == "sign-step-deleted":
     s = must_sub(r"      - name: Keyless sign-blob the manifest.*?      - name: Assemble",
                  "      - name: Assemble", s)
+elif name == "dockerfile-cmd-dropped":
+    s = must_sub(r'CMD \["true"\]\\n', "", s)
 elif name == "variant-no-if":
     s = must_sub(r"(id: zot_mirror\n)\s+if: [^\n]*\n", r"\1", s)
 elif name == "variant-reworded":
@@ -646,6 +663,7 @@ else
     "sign-adds-output-signature|struct|no removed cosign-2.x"
     "sign-adds-output-certificate|struct|no removed cosign-2.x"
     "sign-step-deleted|struct|exactly one step invokes cosign sign-blob"
+    "dockerfile-cmd-dropped|struct|carries a CMD"
   )
   for row in "${ROWS[@]}"; do
     IFS='|' read -r m kind expect <<< "$row"
@@ -700,7 +718,7 @@ fi
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # ANTI-VACUITY FLOOR. Equal to the green-run count: raise it in the same edit that adds a case. It sits
 # directly above its `if` so guard-vacuity-floor can slice it.
-MIN_ASSERTIONS=88
+MIN_ASSERTIONS=90
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   echo "FATAL: only $((PASS + FAIL)) assertions ran (floor $MIN_ASSERTIONS); the suite did not execute what it claims to." >&2
   exit 1
