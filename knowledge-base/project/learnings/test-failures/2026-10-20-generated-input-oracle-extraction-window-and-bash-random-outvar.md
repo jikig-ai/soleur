@@ -91,6 +91,6 @@ The meta-shape is `2026-07-17-every-hole-was-a-claim-quantified-over-a-set-sampl
 ## References
 
 - PR #10624 (draft); `scripts/lib/property-harness.sh` + `scripts/lib/property-harness.md`; `scripts/lib/legal-normalise-property.test.sh`
-- Review dedup ledger: `knowledge-base/project/specs/feat-one-shot-10398-property-based-testing/session-state.md`
+- Review dedup ledger: `knowledge-base/project/specs/archive/20261020-034022-feat-one-shot-10398-property-based-testing/session-state.md`
 - Sibling class: `knowledge-base/project/learnings/2026-07-17-every-hole-was-a-claim-quantified-over-a-set-sampled-once.md`; `knowledge-base/project/learnings/2026-06-11-cross-file-drift-guards-extract-every-operand-by-shape.md` (extract by shape, exactly-one count, integer-validate)
 - Routed insight appended to `plugins/soleur/skills/review/SKILL.md` §Sharp Edges (generated-input oracle checklist)
