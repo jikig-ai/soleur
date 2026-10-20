@@ -252,6 +252,7 @@ for a in "$@"; do
 done
 if [[ "$hb" == 1 && "$hbw" == 0 ]]; then
   printf '%s\n' "$*" >> "${STUB_HB_ARGV:-/dev/null}"
+  [[ -n "${STUB_HB_ENVDUMP:-}" ]] && env | grep -E '^URL=|uptime\.betterstack\.test' > "$STUB_HB_ENVDUMP"   # filtered by VALUE (any name holding the URL is kept), never the whole ambient environment
   [[ "$hbcfg" == 1 && "${STUB_HB_NOSTDIN:-}" != 1 ]] && cat >> "${STUB_HB_STDIN:-/dev/null}"
   hbn=$(wc -l < "${STUB_HB_ARGV:-/dev/null}")
   [[ "${STUB_HB_FAIL_FIRST:-}" == 1 && "$hbn" -eq 1 ]] && exit 7
@@ -337,16 +338,16 @@ HB_OTHER='https://uptime.betterstack.test/api/v1/heartbeat/A.b_c~d:9?x=1&y=%2B+z
 HB_ARGV_FORM='--disable --noproxy * -gfsS -m 10 -o /dev/null --config -'
 HB_MARKER_HEAD='SOLEUR_CREDENTIAL_REFUSED script=web-zot-consumer-probe'
 # HEC / HB_ARGV / HB_STDIN / HB_REGARGV / HOUT (files) / HOUTTXT / N_HB (heartbeat curls) / N_MARK / N_WARN.
-run_hb() {  # <WEB_ZOT_CONSUMER_URL value> [extra env assignments, applied last so they win]
+run_hb() {  # <resolved heartbeat URL value, delivered under the key-named variable> [extra env assignments, applied last so they win]
   local url="$1" ec=0; shift
   MARKER_N=$((MARKER_N + 1))
   HB_ARGV="$(mktemp "$TMP/hbargv.XXXXXX")"; HB_STDIN="$(mktemp "$TMP/hbstdin.XXXXXX")"
   HB_REGARGV="$TMP/hbreg.argv.$MARKER_N"; HOUT="$(mktemp "$TMP/hbout.XXXXXX")"
-  env -u SOLEUR_ZOT_PROBE_PING_LOG -u SOLEUR_ZOT_PROBE_STATUS_OVERRIDE \
+  env -u SOLEUR_ZOT_PROBE_PING_LOG -u SOLEUR_ZOT_PROBE_STATUS_OVERRIDE -u WEB_ZOT_CONSUMER_URL \
     STUB_ARGV="$HB_REGARGV" STUB_STDIN="$TMP/hbreg.stdin.$MARKER_N" STUB_HB_ARGV="$HB_ARGV" STUB_HB_STDIN="$HB_STDIN" \
     PATH="$TMP/stubbin:$PATH" SOLEUR_PROBE_REPOS_MARKER="$TMP/repos.$MARKER_N" SOLEUR_PROBE_CANARY_MARKER="$TMP/canary.$MARKER_N" \
     SOLEUR_PROBE_REFUSAL_MARKER="$TMP/refusal.$MARKER_N" \
-    ZOT_ENDPOINT=127.0.0.1:9 ZOT_PROBE_REPO=known/repo ZUSER=zuser ZTOK=ztok "WEB_ZOT_CONSUMER_URL=$url" "$@" \
+    ZOT_ENDPOINT=127.0.0.1:9 ZOT_PROBE_REPO=known/repo ZUSER=zuser ZTOK=ztok WEB_ZOT_CONSUMER_URL_KEY=WEB_ZOT_CONSUMER_URL_SYNTH "WEB_ZOT_CONSUMER_URL_SYNTH=$url" "$@" \
     timeout 20 bash "$SUT" >"$HOUT" 2>&1 || ec=$?
   HEC=$ec
   # shellcheck disable=SC2034  # read by NAME inside the assert() eval strings
@@ -1262,16 +1263,156 @@ else
   TF_SKIPPED=$((TF_SKIPPED + 3)); echo "  SKIP: 3 terraform-console rows (terraform is not installed here) — NOT counted toward MIN_ASSERTS"
 fi
 
+# --- #9639 F6 (lean subset): the unit stops expanding the secret; the script resolves it AFTER its refusal ----------------
+# Same defect and fix as web-private-nic-guard (see that suite for the full row set and the hostile-key table). This unit's
+# refusal is conditional on the pull credential (ZOT_PULL_TOKEN / ZTOK) being set, or on the heartbeat key name
+# (WEB_ZOT_CONSUMER_URL_KEY) being set outside --canary-only; under `doppler run` both always are, and the launches below
+# set both unless a row says otherwise. The --canary-only ExecStartPre runs outside doppler and reads no URL, so the key
+# name alone does not refuse it (the canary-only rows pin that).
+echo "--- F6 (#9639): zot unit wrapper expands nothing; lookup follows the refusal ---"
+# shellcheck disable=SC2016  # the F6 conditions are single-quoted on purpose: assert() evals them in this shell, where the variables are live
+F6_URL='https://uptime.betterstack.test/api/v1/heartbeat/F6-SECRET-9639'
+# shellcheck disable=SC2034  # read inside the single-quoted assert() conditions
+F6_TOK=F6-SECRET-9639
+F6_SCRIPT_PATH=/usr/local/bin/web-zot-consumer-probe.sh
+F6_LINE="$(sed -n 's/^ExecStart=//p' "$SVC" | sed -n '1p' | sed 's/\$\$/$/g')"   # systemd's $$ is a literal $
+# The pre-fix ExecStart, kept ONLY as the leak control's mutant (never compared with the tree).
+F6_OLD_LINE="/bin/bash -c 'doppler run --project soleur --config prd -- bash -c '\\''export WEB_ZOT_CONSUMER_URL=\"\${!WEB_ZOT_CONSUMER_URL_KEY}\"; exec $F6_SCRIPT_PATH'\\'''"
+F6_EXEC="$TMP/f6-exec-web-zot-consumer-probe.sh"; cp "$SUT" "$F6_EXEC"; chmod +x "$F6_EXEC"   # the unit execs the path itself; the repo copy is not mode +x
+printf 'set -x\n' > "$TMP/f6-xt.env"
+# `doppler run ... -- CMD`: skip to the `--` and exec CMD. It never expands the secret itself (its own xtrace would print
+# the value and void the leak control); the test environment pre-exports the secret, as doppler would inject it.
+printf '#!/usr/bin/env bash\nwhile [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done\nshift\nexec "$@"\n' > "$TMP/stubbin/doppler"
+chmod +x "$TMP/stubbin/doppler"
+mkdir -p "$TMP/f6-dead"; printf '#!/usr/bin/env bash\nexit 0\n' > "$TMP/f6-dead/doppler"; chmod +x "$TMP/f6-dead/doppler"
+run_unit() {   # <ExecStart text> <none|xtrace|benv> [extra env words, applied last] : script path rewritten to the (mutant) script
+  local line="$1" form="$2" ec=0 sut="${F6_SUT:-$F6_EXEC}"; shift 2
+  [[ "$line" == *"$F6_SCRIPT_PATH"* ]] || { printf '[FATAL] run_unit: the ExecStart text does not name %s; the rewrite would be a silent no-op\n' "$F6_SCRIPT_PATH" >&2; exit 1; }
+  local -a fenv=()
+  case "$form" in xtrace) fenv=(SHELLOPTS=xtrace) ;; benv) fenv=(BASH_ENV="$TMP/f6-xt.env") ;; esac
+  MARKER_N=$((MARKER_N + 1))
+  HB_ARGV="$(mktemp "$TMP/hbargv.XXXXXX")"; HB_STDIN="$(mktemp "$TMP/hbstdin.XXXXXX")"; HOUT="$(mktemp "$TMP/hbout.XXXXXX")"
+  env -u SOLEUR_ZOT_PROBE_PING_LOG -u SOLEUR_ZOT_PROBE_STATUS_OVERRIDE -u WEB_ZOT_CONSUMER_URL -u SHELLOPTS -u BASH_ENV -u ZOT_PULL_TOKEN -u ZOT_PULL_USER -u ZTOK -u ZUSER \
+    STUB_ARGV="$TMP/hbreg.argv.$MARKER_N" STUB_STDIN="$TMP/hbreg.stdin.$MARKER_N" STUB_HB_ARGV="$HB_ARGV" STUB_HB_STDIN="$HB_STDIN" \
+    PATH="$TMP/stubbin:$PATH" SOLEUR_PROBE_REPOS_MARKER="$TMP/repos.$MARKER_N" SOLEUR_PROBE_CANARY_MARKER="$TMP/canary.$MARKER_N" \
+    SOLEUR_PROBE_REFUSAL_MARKER="$TMP/refusal.$MARKER_N" \
+    ZOT_ENDPOINT=127.0.0.1:9 ZOT_PROBE_REPO=known/repo ZOT_PULL_USER=zuser ZOT_PULL_TOKEN=ztok \
+    WEB_ZOT_CONSUMER_URL_KEY=WEB_ZOT_CONSUMER_URL_SYNTH WEB_ZOT_CONSUMER_URL_SYNTH="$F6_URL" \
+    ${fenv[@]+"${fenv[@]}"} "$@" \
+    timeout 20 bash -c 'eval "$1"' _ "${line//"$F6_SCRIPT_PATH"/$sut}" >"$HOUT" 2>&1 || ec=$?
+  HEC=$ec
+  # shellcheck disable=SC2034  # read by NAME inside the assert() eval strings
+  HOUTTXT="$(cat "$HOUT")"
+  N_HB="$(wc -l < "$HB_ARGV" | tr -d ' ')"
+}
+assert "F6 static: no Exec* directive of the zot unit holds an indirect expansion" \
+  '[[ "$(grep -cE "^[[:space:]]*Exec[A-Za-z]*=.*[$]{1,2}[{][!]" "$SVC" || true)" -eq 0 ]]'
+assert "F6 static: ExecStart runs the probe directly under doppler run: names it, no dollar sign, no export" \
+  '[[ "$F6_LINE" == *"$F6_SCRIPT_PATH"* && "$F6_LINE" != *\$* && "$F6_LINE" != *export* && "$F6_LINE" == *"doppler run"* ]]'
+for f6_form in xtrace benv; do
+  run_unit "$F6_LINE" "$f6_form"
+  assert "F6 unit[$f6_form]: the real ExecStart exits 78 with the refusal on a non-trace line (the script RAN; got rc=$HEC)" \
+    '[[ "$HEC" -eq 78 && "$(grep -v "^+" "$HOUT" | grep -c "refusing to trace with a live credential" || true)" -ge 1 ]]'
+  assert "F6 unit[$f6_form]: the heartbeat URL (and its secret path token) is in neither stream and no request was made" \
+    '[[ "$HOUTTXT" != *"$F6_TOK"* && "$N_HB" -eq 0 ]]'
+done
+run_unit "$F6_OLD_LINE" xtrace
+assert "F6 control: the PRE-FIX ExecStart under SHELLOPTS=xtrace prints the secret (the harness can see the defect; rc=$HEC)" \
+  '[[ "$HOUTTXT" == *"$F6_TOK"* && "$HEC" -eq 78 ]]'
+run_unit "$F6_LINE" xtrace PATH="$TMP/f6-dead:$TMP/stubbin:$PATH"
+assert "F6 dispatch: with a doppler that never execs the probe there is NO refusal text (so the rows above discriminate)" \
+  '[[ "$HOUTTXT" != *"refusing to trace"* && "$HEC" -eq 0 ]]'
+run_unit "$F6_LINE" none
+assert "F6 positive: the untraced real ExecStart delivers the URL to the heartbeat curl on its stdin config, once (rc=$HEC)" \
+  '[[ "$HEC" -eq 0 && "$N_HB" -eq 1 ]] && hb_stdin_all_are "$F6_URL"'
+run_unit "$F6_LINE" none WEB_ZOT_CONSUMER_URL_KEY=WEB_ZOT_CONSUMER_URL_WEB_1 WEB_ZOT_CONSUMER_URL_WEB_1="$F6_URL"
+assert "F6 production-shaped key [WEB_ZOT_CONSUMER_URL_WEB_1] resolves and delivers" '[[ "$N_HB" -eq 1 ]] && hb_stdin_all_are "$F6_URL"'
+run_unit "$F6_LINE" none WEB_ZOT_CONSUMER_URL=https://uptime.betterstack.test/api/v1/heartbeat/STRAY-9639
+assert "F6 transitional: a stray exported bare WEB_ZOT_CONSUMER_URL (old wrapper) loses to the key's value" '[[ "$N_HB" -eq 1 ]] && hb_stdin_all_are "$F6_URL"'
+F6_PLANT="$TMP/f6-plant"; rm -f "$F6_PLANT"
+run_unit "$F6_LINE" none "WEB_ZOT_CONSUMER_URL_KEY=a[\$(touch $F6_PLANT)]"
+assert "F6 hostile key a[\$(touch ...)]: nothing executed, no heartbeat, a key line that does not echo the name, exit 0" \
+  '[[ ! -e "$F6_PLANT" && "$N_HB" -eq 0 && "$HEC" -eq 0 && "$HOUTTXT" == *"WEB_ZOT_CONSUMER_URL_KEY"* && "$HOUTTXT" != *touch* ]]'
+run_unit "$F6_LINE" none "WEB_ZOT_CONSUMER_URL_KEY=lowercase"
+assert "F6 lowercase key: refused, no heartbeat, exit 0" '[[ "$N_HB" -eq 0 && "$HEC" -eq 0 && "$HOUTTXT" == *"WEB_ZOT_CONSUMER_URL_KEY"* ]]'
+# Every Exec* line of the unit (backslash continuations joined, as systemd reads them): ExecStartPre AND ExecStart.
+# shellcheck disable=SC2034  # read inside the single-quoted assert() condition
+F6_ALLEXEC="$(awk '{ if (sub(/\\$/, "")) { buf = buf $0; next } print buf $0; buf = "" }' "$SVC" | grep -E '^[[:space:]]*Exec[A-Za-z]*=' || true)"
+assert "F6 static: EVERY Exec* directive of the zot unit (continuations joined) is dollar-free and export-free, so no second line can expand the secret" \
+  '[[ -n "$F6_ALLEXEC" && "$F6_ALLEXEC" != *\$* && "$F6_ALLEXEC" != *export* ]]'
+# Both refusal disjuncts: the pull credential alone, and the heartbeat key name alone (outside --canary-only).
+run_unit "$F6_LINE" xtrace ZOT_PULL_TOKEN=
+assert "F6 refusal[key only]: with the key name set and no pull credential, a traced launch exits 78 with the URL in neither stream (rc=$HEC)" \
+  '[[ "$HEC" -eq 78 && "$HOUTTXT" == *"refusing to trace"* && "$HOUTTXT" != *"$F6_TOK"* && "$N_HB" -eq 0 ]]'
+run_unit "$F6_LINE" xtrace WEB_ZOT_CONSUMER_URL_KEY=
+assert "F6 refusal[credential only]: with the pull credential set and no key name, a traced launch exits 78 (rc=$HEC)" \
+  '[[ "$HEC" -eq 78 && "$HOUTTXT" == *"refusing to trace"* && "$N_HB" -eq 0 ]]'
+# --canary-only (the ExecStartPre, outside doppler): the key name alone must NOT refuse it, a pull credential still does.
+F6_CANARY_LINE="$(sed -n 's/^ExecStartPre=-//p' "$SVC" | sed -n '1p')"
+run_unit "$F6_CANARY_LINE" xtrace ZOT_PULL_TOKEN=
+assert "F6 canary-only[key only, traced]: the canary RUNS: no refusal, exit 0, the Source-4 canary line is emitted and its marker written, the URL is in no stream (rc=$HEC)" \
+  '[[ "$HEC" -eq 0 && "$HOUTTXT" != *"refusing to trace"* && "$HOUTTXT" != *"$F6_TOK"* && -s "$TMP/canary.$MARKER_N" && "$(grep -v "^+" "$HOUT" | grep -c "SOLEUR_PROBE_CANARY" || true)" -ge 1 ]]'
+# The legacy credential name (ZTOK) is a disjunct of its own, and the argument shapes that are NOT the exact --canary-only
+# launch must refuse (a looser test of "${1:-}" would admit them).
+run_unit "$F6_LINE" xtrace ZOT_PULL_TOKEN= ZTOK=ztok WEB_ZOT_CONSUMER_URL_KEY=
+assert "F6 refusal[legacy ZTOK only]: with only the legacy-named pull credential set, a traced launch exits 78 (rc=$HEC)" \
+  '[[ "$HEC" -eq 78 && "$HOUTTXT" == *"refusing to trace"* && "$N_HB" -eq 0 ]]'
+F6_EMPTYARG="''"
+for f6_shape in "foo --canary-only" "--canary-only=1" "$F6_EMPTYARG"; do
+  run_unit "${F6_CANARY_LINE/--canary-only/$f6_shape}" xtrace ZOT_PULL_TOKEN=
+  assert "F6 canary-only shape [$f6_shape]: only the exact --canary-only argument is exempt; any other argument shape with the key name set refuses (rc=$HEC)" \
+    '[[ "$HEC" -eq 78 && "$HOUTTXT" == *"refusing to trace"* && "$HOUTTXT" != *"$F6_TOK"* ]]'
+done
+run_unit "$F6_CANARY_LINE" xtrace WEB_ZOT_CONSUMER_URL_KEY=
+assert "F6 canary-only[credential, traced]: a pull credential still refuses the canary, exactly as before (rc=$HEC)" \
+  '[[ "$HEC" -eq 78 && "$HOUTTXT" == *"refusing to trace"* ]]'
+# Not exported: the heartbeat curl dumps ITS environment; only the key-named line (where doppler injects the secret) may hold the URL.
+F6_ENVDUMP="$TMP/f6-envdump"; rm -f "$F6_ENVDUMP"
+run_unit "$F6_LINE" none STUB_HB_ENVDUMP="$F6_ENVDUMP"
+assert "F6 not exported: the resolved URL reaches no child environment (only the injected key-named variable holds it)" \
+  '[[ -s "$F6_ENVDUMP" && "$(grep -v "^WEB_ZOT_CONSUMER_URL_SYNTH=" "$F6_ENVDUMP" | grep -cF -- "$F6_URL" || true)" -eq 0 && "$(grep -cF -- "$F6_URL" "$F6_ENVDUMP" || true)" -eq 1 ]]'
+rm -f "$F6_ENVDUMP"
+run_unit "$F6_LINE" none STUB_HB_ENVDUMP="$F6_ENVDUMP" URL=https://uptime.betterstack.test/api/v1/heartbeat/PRESET-9639
+assert "F6 preset URL: an exported URL inherited from the environment does not ride the heartbeat curl's environment (no URL= line)" \
+  '[[ -s "$F6_ENVDUMP" && "$(grep -c "^URL=" "$F6_ENVDUMP" || true)" -eq 0 && "$N_HB" -eq 1 ]]'
+# The BODY clause of _key_ok: upper-case-led names whose only illegal bytes are the ones bash evaluates inside ${!name}.
+# A lowercase lead is refused by the earlier clause and would never reach it.
+for f6_k in "A[\$(touch $F6_PLANT)]" "A[0]" "A[B]" "A=B" "A.B" "A/B" "A@" "A*"; do
+  rm -f "$F6_PLANT"; run_unit "$F6_LINE" none "WEB_ZOT_CONSUMER_URL_KEY=$f6_k"
+  assert "F6 body-clause key [$f6_k]: nothing executed, no heartbeat, a key line that does not echo the name, exit 0" \
+    '[[ ! -e "$F6_PLANT" && "$N_HB" -eq 0 && "$HEC" -eq 0 && "$HOUTTXT" == *"WEB_ZOT_CONSUMER_URL_KEY"* && "$HOUTTXT" != *"$f6_k"* ]]'
+done
+# Every printable ASCII character outside [A-Z0-9_], inside an upper-case-led name, is refused: a generated list, not a hand-picked one.
+f6_bodybad=""
+for f6_ord in $(seq 33 126); do
+  f6_c="$(printf "\\x$(printf '%02x' "$f6_ord")")"
+  case "$f6_c" in [A-Z0-9_]) continue ;; esac
+  rm -f "$F6_PLANT"; run_unit "$F6_LINE" none "WEB_ZOT_CONSUMER_URL_KEY=A${f6_c}B"
+  { [[ ! -e "$F6_PLANT" && "$N_HB" -eq 0 && "$HEC" -eq 0 && "$HOUTTXT" == *"WEB_ZOT_CONSUMER_URL_KEY"* ]]; } || f6_bodybad+="$f6_c"
+done
+assert "F6 body clause (generated): every printable ASCII character outside [A-Z0-9_] inside an upper-case-led key is refused (offenders: [$f6_bodybad])" \
+  '[[ -z "$f6_bodybad" ]]'
+# Order: a mutant that resolves the URL above the refusal leaks it under SHELLOPTS=xtrace.
+F6_MUT="$TMP/f6-mut-hoist-zot.sh"
+sed '/^set -u$/a\
+__leak="${!WEB_ZOT_CONSUMER_URL_KEY:-}"' "$SUT" > "$F6_MUT"; chmod +x "$F6_MUT"
+assert "F6 mutant[hoist]: the edit landed (the copy differs from the SUT)" '! cmp -s "$SUT" "$F6_MUT"'
+F6_SUT="$F6_MUT" run_unit "$F6_LINE" xtrace
+assert "F6 mutant[hoist]: a lookup hoisted above the refusal leaks the URL under SHELLOPTS=xtrace (the order row can see it)" '[[ "$HOUTTXT" == *"$F6_TOK"* ]]'
+f6z_line_of() { awk -v n="$1" 'index($0, n) && $0 !~ /^[[:space:]]*#/ { print NR; exit }' "$SUT"; }   # first NON-comment line holding the text
+assert "F6 order: the indirect lookup is on a later line than the refusal AND than the --canary-only exit" \
+  '[[ -n "$(f6z_line_of "refusing to trace with a live credential")" && "$(f6z_line_of "\${!WEB_ZOT_CONSUMER_URL_KEY")" -gt "$(f6z_line_of "refusing to trace with a live credential")" && "$(f6z_line_of "\${!WEB_ZOT_CONSUMER_URL_KEY")" -gt "$(f6z_line_of "if [ \"\${1:-}\" = \"--canary-only\" ]")" ]]'
+
 [[ "$TF_SKIPPED" -eq 0 ]] || echo "=== $TF_SKIPPED terraform-console rows skipped (not counted) ==="
 echo
 echo "=== $PASS passed, $FAIL failed ==="
 # Anti-vacuity floor (ADR-193): a disarmed assert() or a skipped block must not read as green. Raise it in
 # the SAME edit that adds rows; it is reported with printf, never through assert().
-# 391 assertions run with terraform installed; the 3 terraform-console rows are gated and a skip never counts, so
-# a box without terraform floors at the count WITHOUT them (388) and must not read as a disarmed suite. The threshold
+# 427 assertions run with terraform installed; the 3 terraform-console rows are gated and a skip never counts, so
+# a box without terraform floors at the count WITHOUT them (424) and must not read as a disarmed suite. The threshold
 # literal sits directly above the `if` (scripts/guard-vacuity-floor.test.sh builds its mutant from that adjacency);
 # the stricter full count applies in a SECOND check wherever terraform ran, so no row can be deleted behind slack.
-MIN_ASSERTS=388
+MIN_ASSERTS=424
 if [[ "$((PASS + FAIL))" -lt "$MIN_ASSERTS" ]]; then
   printf 'FAIL: only %s assertions ran (floor %s) — a block was skipped or assert() was disarmed\n' "$((PASS + FAIL))" "$MIN_ASSERTS"
   exit 1

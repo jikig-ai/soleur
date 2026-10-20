@@ -14,6 +14,11 @@ import {
   rmSync,
   existsSync,
   writeFileSync,
+  statSync,
+  utimesSync,
+  openSync,
+  fstatSync,
+  closeSync,
 } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -22,10 +27,14 @@ import net from "node:net";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }));
+import * as SentryMock from "@sentry/nextjs";
 
 import { buildAgentEnv } from "@/server/agent-env";
 import { buildAgentSandboxConfig } from "@/server/agent-runner-sandbox-config";
 import {
+  withoutTokenPath,
+  egressGwTarget,
+  writeTokenFile,
   spawnEgressForwarder,
   teardownEgressForwarder,
   hasEgressForwarder,
@@ -315,6 +324,168 @@ describe("egress-forwarder lifecycle (#9534)", () => {
     // inside the tunnel stream.
     expect(text).not.toContain("\r\n\r\n\r\n");
   }, 15000);
+
+  it("token file is world-readable (0644): the gateway's auth helper runs as the squid `proxy` uid and READS the file", async () => {
+    // Measured against the pinned ubuntu/squid image: the helper (uid 13) gets
+    // `Permission denied` on a 0600 uid-1001 file, so every session token would be
+    // rejected even with the dir mounted. Content is only the workspace id; the 0711
+    // dir (and the unguessable 192-bit name) keep it unlistable to other host uids.
+    const h = await spawnEgressForwarder("conv-1", "ws-123");
+    expect(statSync(join(tokenDir, h.token)).mode & 0o777).toBe(0o644);
+  }, 15000);
+
+  it("writeTokenFile chmods explicitly: a restrictive pre-existing/umask-narrowed mode is widened to 0644", () => {
+    // writeFileSync's `mode` only applies on CREATE (and is masked by the umask), so a
+    // 0600 file already on disk stays 0600 unless the code chmods. Deleting the chmod reds this.
+    const p = join(tokenDir, "pre-existing-0600");
+    writeFileSync(p, "old\n", { mode: 0o600 });
+    writeTokenFile(p, "ws-9");
+    // One descriptor for both reads: stat-then-read by path is a check/use race (CodeQL js/file-system-race).
+    const fd = openSync(p, "r");
+    try {
+      expect(fstatSync(fd).mode & 0o777).toBe(0o644);
+      expect(readFileSync(fd, "utf8")).toBe("ws-9\n");
+    } finally {
+      closeSync(fd);
+    }
+  });
+
+  it("writeTokenFile leaves NO file behind when the write fails (the name is a live credential)", () => {
+    const p = join(tokenDir, "no-such-subdir", "tok");
+    expect(() => writeTokenFile(p, "ws-9")).toThrow();
+    expect(existsSync(p)).toBe(false);
+  });
+
+  it("the exported spawn entry point scrubs token paths at the boundary (source-level wire check)", () => {
+    // Every throw out of spawnEgressForwarder reaches cc-dispatcher's reportSilentFallback raw;
+    // the scrub must sit at the public entry point, not only at three inner report sites.
+    const src = readFileSync(join(__dirname, "..", "server", "egress-forwarder.ts"), "utf8")
+      .split("\n")
+      .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+      .join("\n");
+    expect(src).toMatch(
+      /export async function spawnEgressForwarder\([^)]*\)[^{]*\{[\s\S]{0,400}catch \(err\)[\s\S]{0,80}throw withoutTokenPath\(err\)/,
+    );
+  });
+
+  describe("withoutTokenPath", () => {
+    const TOK = "SECRETSECRETSECRETSECRET1234";
+    it.each([
+      { label: "plain dir", dir: "/var/lib/soleur/egress-tokens" },
+      { label: "dir with a trailing slash", dir: "/var/lib/soleur/egress-tokens/" },
+      { label: "dir with regex metacharacters", dir: "/var/lib/soleur+x(1)/egress-tokens" },
+    ])("removes the token name from message, stack and path ($label)", ({ dir }) => {
+      vi.stubEnv("EGRESS_TOKEN_DIR", dir);
+      const norm = dir.replace(/\/+$/, "");
+      const e = Object.assign(
+        new Error(`EISDIR: illegal operation on a directory, rm '${norm}/${TOK}'`),
+        { code: "EISDIR", syscall: "rm", path: `${norm}/${TOK}` },
+      );
+      const out = withoutTokenPath(e) as NodeJS.ErrnoException;
+      expect(out).toBeInstanceOf(Error);
+      expect(out.code).toBe("EISDIR");
+      expect(out.message).toContain("<token-dir>");
+      const everything = `${out.message}\n${out.stack ?? ""}\n${JSON.stringify(out, Object.getOwnPropertyNames(out))}`;
+      expect(everything).not.toContain(TOK);
+    });
+
+    it("returns the ORIGINAL error (stack intact) when there is nothing to scrub, and non-Errors unchanged", () => {
+      vi.stubEnv("EGRESS_TOKEN_DIR", "/var/lib/soleur/egress-tokens");
+      const e = new Error("egress gateway unreachable at 172.31.100.2:8443");
+      expect(withoutTokenPath(e)).toBe(e);
+      expect(withoutTokenPath("str")).toBe("str");
+      expect(withoutTokenPath(undefined)).toBe(undefined);
+    });
+  });
+
+  it.each(["teardown", "reap", "exit"] as const)(
+    "a failing token-file delete is reported WITHOUT the token file name (%s path)",
+    async (site) => {
+      // rmSync(<non-empty dir>, {force:true}) throws EISDIR with the full path in its message.
+      const h = await spawnEgressForwarder("conv-1", "ws-123");
+      const tokPath = join(tokenDir, h.token);
+      rmSync(tokPath, { force: true });
+      mkdirSync(tokPath);
+      writeFileSync(join(tokPath, "x"), "x");
+      vi.mocked(SentryMock.captureException).mockClear();
+      if (site === "teardown") {
+        teardownEgressForwarder("conv-1");
+      } else if (site === "reap") {
+        // drop the registry entry first (the live registry would protect this token), then
+        // sweep the leftover directory that is named like a token.
+        teardownEgressForwarder("conv-1");
+        vi.mocked(SentryMock.captureException).mockClear();
+        mkdirSync(tokPath, { recursive: true });
+        writeFileSync(join(tokPath, "x"), "x");
+        reapOrphanEgressForwarders();
+      } else {
+        process.kill(h.pid, "SIGKILL"); // the registered exit handler then deletes the token file
+        for (let i = 0; i < 40 && vi.mocked(SentryMock.captureException).mock.calls.length === 0; i++) {
+          await new Promise((r) => setTimeout(r, 100));
+        }
+      }
+      const calls = vi.mocked(SentryMock.captureException).mock.calls;
+      expect(calls.length).toBeGreaterThan(0); // positive control: the failure WAS reported
+      for (const [err] of calls) {
+        const e = err as Error;
+        expect(`${e.message}\n${e.stack ?? ""}`).not.toContain(h.token);
+      }
+      rmSync(tokPath, { recursive: true, force: true });
+    },
+    20000,
+  );
+
+  describe("egressGwTarget (.gw-target is only honoured inside the bootstrap's own subnets)", () => {
+    beforeEach(() => {
+      vi.stubEnv("EGRESS_GW_HOST", "");
+      vi.stubEnv("EGRESS_GW_PORT", "");
+    });
+    it.each(["172.31.100.2:8443", "172.31.101.2:8443", "172.31.102.2:9443", "172.31.103.2:8443"])(
+      "honours %s",
+      (line) => {
+        writeFileSync(join(tokenDir, ".gw-target"), `${line}\n`);
+        const [host, port] = line.split(":");
+        expect(egressGwTarget()).toEqual({ host, port: Number(port) });
+      },
+    );
+    it.each([
+      "10.9.9.9:4444",
+      "172.31.99.2:8443",
+      "172.31.104.2:8443",
+      "172.30.100.2:8443",
+      "10.172.31.100.2:8443",
+      "172.31.100.2.5:8443",
+      "172.31.100.1:8443", // the bridge's host-side address, not the gateway (.2)
+      "172.31.100.999:8443",
+      "172.31.100.2:0",
+      "172.31.100.2:99999",
+      "garbage",
+    ])("ignores %s and falls back to the pinned default", (line) => {
+      writeFileSync(join(tokenDir, ".gw-target"), `${line}\n`);
+      expect(egressGwTarget()).toEqual({ host: "172.31.100.2", port: 8443 });
+    });
+  });
+
+  it("reaper keeps a FRESH probe-* token (a host cron probe mints these in the same dir) but sweeps a stale one", async () => {
+    // A boot-time sweep landing between the probe writing its file and its curl
+    // authenticating would 407 a healthy gateway and page a false gw_allow_fail.
+    const at = (name: string, ageMs: number) => {
+      writeFileSync(join(tokenDir, name), "probe\n");
+      const t = new Date(Date.now() - ageMs);
+      utimesSync(join(tokenDir, name), t, t);
+    };
+    at("probe-fresh0123456789", 0);
+    at("probe-4min00123456789", 4 * 60 * 1000); // inside the 10-minute grace
+    at("probe-stale0123456789", 11 * 60 * 1000); // outside it
+    at("probe-future01234567", -24 * 60 * 60 * 1000); // a future mtime must NOT be kept forever
+    writeFileSync(join(tokenDir, "stale-token-3"), "ws-z\n");
+    reapOrphanEgressForwarders();
+    expect(existsSync(join(tokenDir, "probe-fresh0123456789"))).toBe(true);
+    expect(existsSync(join(tokenDir, "probe-4min00123456789"))).toBe(true);
+    expect(existsSync(join(tokenDir, "probe-stale0123456789"))).toBe(false);
+    expect(existsSync(join(tokenDir, "probe-future01234567"))).toBe(false);
+    expect(existsSync(join(tokenDir, "stale-token-3"))).toBe(false);
+  });
 
   it("reaper removes stale token files (registry-empty boundary)", async () => {
     writeFileSync(join(tokenDir, "stale-token-1"), "ws-x\n");

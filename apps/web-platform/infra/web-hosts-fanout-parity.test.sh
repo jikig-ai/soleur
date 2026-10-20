@@ -5,8 +5,12 @@
 # (variables.tf). A drift means a deploy fans out to the wrong peers → a host
 # silently ships stale code (single-user incident). The in-repo copies this guard
 # covers (operands 2-4 below): web-platform-release.yml (the tagged-release deploy
-# fan-out, ×1), apply-web-platform-infra.yml (×2, the inline pin_load steps) and
-# git-data-cutover.yml (×1, feeding the redeploy and the finalizer).
+# fan-out, ×2 — the deploy job env and its identical verify-peer-deploy sibling),
+# apply-web-platform-infra.yml (×2, the inline pin_load steps) and
+# git-data-cutover.yml (×1, feeding the redeploy and the finalizer). Operand 6 (#10136) adds
+# inngest-link-flip.yml (×1, job-level env): its flip/off/revert redeploys go through track.sh with this
+# roster, and an empty or stale roster would redeploy one host and leave the fleet MIXED between http and
+# verified TLS (the script also refuses an empty roster, but a wrong-but-valid one only this guard catches).
 #
 # Operand 5 (#8211) is the SET of host KEYS the cutover workflow's per-host readback
 # loop names, compared with the keys of var.web_hosts. The per-host Better Stack
@@ -44,6 +48,7 @@ VARS_TF="${WHP_VARS_TF:-${DIR}/variables.tf}"
 WORKFLOW="${DIR}/../../../.github/workflows/web-platform-release.yml"
 APPLY_WORKFLOW="${DIR}/../../../.github/workflows/apply-web-platform-infra.yml"
 CUTOVER_WORKFLOW="${WHP_CUTOVER_WORKFLOW:-${DIR}/../../../.github/workflows/git-data-cutover.yml}"
+FLIP_WORKFLOW="${WHP_FLIP_WORKFLOW:-${DIR}/../../../.github/workflows/inngest-link-flip.yml}"
 
 passes=0
 fails=0
@@ -112,7 +117,10 @@ check_all_copies() {
   done
 }
 
-# Operand 2: web-platform-release.yml — 1 copy (the tagged-release deploy fan-out).
+# Operand 2: web-platform-release.yml — 2 copies (the tagged-release deploy
+# fan-out in `deploy`'s env + the identical sibling in `verify-peer-deploy`'s
+# env; floor stays 1 so a silently-removed copy still reds, and BOTH are
+# compared per-copy).
 check_all_copies "$WORKFLOW" "release-workflow" 1
 # Operand 3: apply-web-platform-infra.yml — 2 copies (#8211 PR2: the inline pin_load steps in
 # git_data_host_replace + git_data_host_create each fan the webhook redeploy to the full peer set).
@@ -120,6 +128,8 @@ check_all_copies "$APPLY_WORKFLOW" "apply-workflow" 2
 # Operand 4: git-data-cutover.yml — 1 copy (the top-level env feeds the redeploy + finalizer steps;
 # a fleet change that drops a peer here would silently produce a mixed-flag fleet).
 check_all_copies "$CUTOVER_WORKFLOW" "cutover-workflow" 1
+# Operand 6 (#10136): inngest-link-flip.yml — 1 copy (the job-level env feeding every track.sh redeploy of the link flip).
+check_all_copies "$FLIP_WORKFLOW" "flip-workflow" 1
 
 # Operand 5 (#8211): the per-host git_data_store= READBACK in git-data-cutover.yml names each host
 # by its var.web_hosts KEY (`for h in "web-1|<host_name spellings>" "web-2|..."`). The readback needs
@@ -147,6 +157,20 @@ elif [ "$tf_key_n" -ne "$tf_ip_n" ]; then fail "readback: var.web_hosts has $tf_
 elif [ "$tf_keys" = "$rb_keys" ]; then pass
 else fail "readback host-key drift: var.web_hosts=[$tf_keys] readback loop=[$rb_keys] — a host would be redeployed but never read back"; fi
 
+# Operand 6 (#8743 review): the `Verify peer deploy completion` step excludes the
+# `deploy.` ingress host from the expected-peer set by a LITERAL IP
+# (`grep -vxF '10.0.1.10'`). tunnel.tf:54 expresses that ingress as
+# `var.web_hosts["web-1"].private_ip`, so the excluded literal MUST equal the
+# web-1 entry — a re-addressed web-1 otherwise puts web-1 in its own peer gate
+# and leaves the real peer unaudited.
+wh1_ip="$(printf '%s\n' "$wh_block" | awk '/"web-1"[[:space:]]*=[[:space:]]*\{/{f=1} f{print} f&&/\}/{exit}' \
+  | grep -oE 'private_ip[[:space:]]*=[[:space:]]*"10\.0\.1\.[0-9]+"' | grep -oE '10\.0\.1\.[0-9]+' | head -1)"
+excl_ips="$(grep -oE "grep -vxF '10\.0\.1\.[0-9]+'" "$WORKFLOW" | grep -oE '10\.0\.1\.[0-9]+' | sort -u | paste -sd, -)"
+if [ -z "$wh1_ip" ]; then fail "ingress-exclusion bind: could not extract var.web_hosts[\"web-1\"].private_ip (parser drift)"
+elif [ -z "$excl_ips" ]; then fail "ingress-exclusion bind: no 'grep -vxF 10.0.1.*' exclusion found in $WORKFLOW"
+elif [ "$excl_ips" != "$wh1_ip" ]; then fail "ingress-exclusion bind: the peer gate excludes [$excl_ips] but var.web_hosts[\"web-1\"].private_ip (the deploy. ingress target, tunnel.tf) is [$wh1_ip]"
+else pass; fi
+
 # --- Self-test: the operand above must go RED on the edits it exists to catch (Guard 1 matrix,
 # #8211 plan). Each mutant is a COPY of the real file fed through a seam; the suite re-invokes
 # itself with WHP_SELFTEST=1 so the rows cannot recurse. A row that does not LAND (the sed changed
@@ -165,18 +189,18 @@ if [ -z "${WHP_SELFTEST:-}" ]; then
   MUT="$(mktemp -d "${TMPDIR:-/var/tmp}/whp-mut.XXXXXXXX")" || { echo "FAIL: mktemp for the self-test" >&2; exit 2; }
   assert_fixture_dir "$MUT"
   trap 'rm -rf "$MUT"' EXIT
-  # whp_row <name> <expect red|green> <var|wf> <sed-script> [<message the RED run must print>]
+  # whp_row <name> <expect red|green> <var|wf|flip> <sed-script> [<message the RED run must print>]
   rows_run=0
   whp_row() {
     local name="$1" expect="$2" which="$3" script="$4" want="${5:-}" src rc
     rows_run=$((rows_run + 1))
     assert_fixture_dir "$MUT"
-    cp "$VARS_TF" "$MUT/variables.tf" && cp "$CUTOVER_WORKFLOW" "$MUT/git-data-cutover.yml" || { fail "self-test $name: could not copy the sources"; return; }
-    if [ "$which" = var ]; then src="$MUT/variables.tf"; else src="$MUT/git-data-cutover.yml"; fi
+    cp "$VARS_TF" "$MUT/variables.tf" && cp "$CUTOVER_WORKFLOW" "$MUT/git-data-cutover.yml" && cp "$FLIP_WORKFLOW" "$MUT/inngest-link-flip.yml" || { fail "self-test $name: could not copy the sources"; return; }
+    case "$which" in var) src="$MUT/variables.tf" ;; flip) src="$MUT/inngest-link-flip.yml" ;; *) src="$MUT/git-data-cutover.yml" ;; esac
     cp "$src" "$MUT/pristine"
     sed -E -i "$script" "$src"
     if cmp -s "$src" "$MUT/pristine"; then fail "self-test $name: the mutation did not land"; return; fi
-    WHP_SELFTEST=1 WHP_VARS_TF="$MUT/variables.tf" WHP_CUTOVER_WORKFLOW="$MUT/git-data-cutover.yml" \
+    WHP_SELFTEST=1 WHP_VARS_TF="$MUT/variables.tf" WHP_CUTOVER_WORKFLOW="$MUT/git-data-cutover.yml" WHP_FLIP_WORKFLOW="$MUT/inngest-link-flip.yml" \
       bash "${BASH_SOURCE[0]}" > "$MUT/out" 2>&1
     rc=$?
     # A RED row must be red for the reason it names: a harness fault also exits non-zero.
@@ -203,8 +227,11 @@ if [ -z "${WHP_SELFTEST:-}" ]; then
   whp_row "reordered-entries" green wf 's#for h in ("web-1\|[^"]*") ("web-2\|[^"]*"); do#for h in \2 \1; do#'
   # 5b: reorder plus extra whitespace between the entries stays GREEN too.
   whp_row "reordered-entries-spaced" green wf 's#for h in ("web-1\|[^"]*") ("web-2\|[^"]*"); do#for h in   \2    \1  ; do#'
+  # 6 (#10136): the link-flip workflow's roster drifts from var.web_hosts (a valid-looking, WRONG list), and its copy is removed.
+  whp_row "flip-roster-drift" red flip 's#(WEB_HOST_PRIVATE_IPS: ")10\.0\.1\.10,10\.0\.1\.11"#\110.0.1.10"#' 'flip-workflow copy #1 fan-out peer list drift'
+  whp_row "flip-roster-removed" red flip '/^ *WEB_HOST_PRIVATE_IPS: /d' 'flip-workflow: expected >=1 WEB_HOST_PRIVATE_IPS copies'
   # The self-test's own floor: deleting rows must not read as a pass.
-  [ "$rows_run" -eq 9 ] || fail "self-test: $rows_run rows ran, expected exactly 9 — a row was deleted or added without restating the floor"
+  [ "$rows_run" -eq 11 ] || fail "self-test: $rows_run rows ran, expected exactly 11 — a row was deleted or added without restating the floor"
 fi
 
 total=$((passes + fails))

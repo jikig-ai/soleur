@@ -246,13 +246,16 @@ function budgetOk() {
 // <!-- harness-model-map:start -->
 function resolveWorkflowModel(tier) {
   var env = (typeof process !== 'undefined' && process.env) ? process.env : {}
-  var grok = !env.CLAUDECODE && (env.GROK_HOME || env.GROK_AGENT || env.GROK_DEFAULT_MODEL || env.GROK_SUBAGENTS)
   var claude = !!env.CLAUDECODE
+  var opencode = !claude && !!env.OPENCODE
+  var grok = !claude && !opencode && (env.GROK_HOME || env.GROK_AGENT || env.GROK_DEFAULT_MODEL || env.GROK_SUBAGENTS)
   var map = grok
     ? { cheap: 'grok-4.5', standard: 'grok-4.7', strong: 'grok-4.7', advisor: 'grok-4.7', inherit: 'inherit' }
     : claude
       ? { cheap: 'haiku', standard: 'sonnet', strong: 'opus', advisor: 'fable', inherit: 'inherit' }
-      : { cheap: 'inherit', standard: 'inherit', strong: 'inherit', advisor: 'inherit', inherit: 'inherit' }
+      : opencode
+        ? { cheap: 'opencode/glm-5.3-flash-free', standard: 'opencode/big-pickle', strong: 'opencode/big-pickle', advisor: 'opencode/big-pickle', inherit: 'inherit' }
+        : { cheap: 'inherit', standard: 'inherit', strong: 'inherit', advisor: 'inherit', inherit: 'inherit' }
   var resolved = map[tier]
   if (!resolved) throw new Error('unknown semantic tier: ' + String(tier))
   return resolved

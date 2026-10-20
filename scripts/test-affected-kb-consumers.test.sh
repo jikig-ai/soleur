@@ -722,8 +722,9 @@ fi
 # other file; every malformed minted edge covers by construction (never narrows).
 # A dir ref is covered only when EVERY tracked member beneath it matches the glob
 # tail (#10117 all-containment — the old nest clause certified a dir whose charged
-# classes the tail declines, e.g. knowledge-base under **.sh). knowledge-base/legal
-# is the all-.md member set; knowledge-base/project is mixed; docs/ exists on disk
+# classes the tail declines, e.g. knowledge-base under **.sh). knowledge-base/legal/drafts
+# is the all-.md member set. knowledge-base/legal itself is mixed once it holds a
+# non-md manifest. knowledge-base/project is mixed; docs/ exists on disk
 # but holds no tracked kb members (the empty-set decline). The kb literal is
 # COMPOSED — a bare token here would be charged to this suite as a read.
 cases=$((cases + 1))
@@ -747,8 +748,8 @@ tests = [
     ("^glob:glob:x:y/*.sh", KB + "/x.sh"),          # charset verbatim: always-cover
     ("^glob:" + KB + "/**.sh", KB),                 # dir ref = head; members mixed → decline
     ("^glob:" + KB + "/**.sh", KB + "/project"),    # dir ref under head; mixed members → decline
-    ("^glob:" + KB + "/**.md", KB + "/legal"),      # dir ref, all members match — accept
-    ("^glob:" + KB + "/**.sh", KB + "/legal"),      # dir ref, members all .md — decline
+    ("^glob:" + KB + "/**.md", KB + "/legal/drafts"),  # dir ref, all members match — accept
+    ("^glob:" + KB + "/**.sh", KB + "/legal"),      # dir ref, members are not .sh — decline
     ("^glob:" + KB + "/**.md", KB + "/project"),    # dir ref, mixed members — decline
     ("^glob:" + KB + "/**.sh", "plugins/soleur"),   # non-kb dir ref — decline
     ("^glob:" + KB + "/**.md", "docs"),             # dir with zero kb members — decline
@@ -760,7 +761,7 @@ tests = [
     ("^glob:" + KB + "/**.md", KB + "/legal/art-22-assessments"),  # single-member dir → accept
     ("^glob:" + KB + "/legal/audits/**.md", KB + "/legal"),        # head ⊋ ref: members outside head decline
     ("^glob:" + KB + "/project/**.md", KB),                        # same at root scale → decline
-    ("^glob:" + KB + "/*.md", KB + "/legal"),                      # single-* crosses / like ** (parity) → accept
+    ("^glob:" + KB + "/*.md", KB + "/legal/drafts"),              # single-* crosses / like ** (parity) → accept
 ]
 print(" ".join("1" if o.covers(e, p) else "0" for e, p in tests))
 COVPY
@@ -833,7 +834,7 @@ spec = importlib.util.spec_from_file_location("o", sys.argv[1]); o = importlib.u
 KB = "knowledge" + "-base"
 print(" ".join("1" if o.covers(e, p) else "0" for e, p in [
     ("^glob:" + KB + "/**.md", "docs"),              # vacuous-all mutant: 1
-    ("^glob:" + KB + "/**.md", KB + "/legal"),       # populated dir: stays 1
+    ("^glob:" + KB + "/**.md", KB + "/legal/drafts"),  # populated all-md dir: stays 1
 ]))
 COVPY
 )
@@ -855,28 +856,40 @@ else
 fi
 
 # k6-m5: member-boundary mutant — dropping the trailing slash from the member
-#        prefix pulls a sibling dir's members (knowledge-base/legal-x/) into a
-#        legal/ dir ref. The synthetic member is injected because no legal-x/
-#        exists in the index; without it the mutant is indistinguishable.
+#        prefix pulls a sibling dir's members into the dir ref. drafts/ is the
+#        all-md set. legal/ itself is mixed (the yml manifest), so an unmutated
+#        legal/ probe is already 0 and cannot show the flip. The synthetic
+#        sibling is injected because no drafts-x/ exists in the index.
 cases=$((cases + 1))
 cp "$ORACLE" "$TESTROOT/oracle-k6m5.py"
 _k6m5_n=$(grep -cF 'members = [f for f in _tracked()[0] if f.startswith(pre)]' "$TESTROOT/oracle-k6m5.py")
 sed -i 's|f.startswith(pre)|f.startswith(p)|' "$TESTROOT/oracle-k6m5.py"
+_k6m5_real=$(cd "$REPO_ROOT" && python3 - "$ORACLE" <<'COVPY'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("o", sys.argv[1]); o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
+KB = "knowledge" + "-base"
+o._TRACKED = (o._tracked()[0] | {KB + "/legal/drafts-x/evil.sh"}, o._tracked()[1] | {KB + "/legal/drafts-x"})
+print(" ".join("1" if o.covers(e, p) else "0" for e, p in [
+    ("^glob:" + KB + "/**.md", KB + "/legal/drafts"),
+    ("^glob:" + KB + "/**.md", KB + "/legal/audits"),
+]))
+COVPY
+)
 _k6m5=$(cd "$REPO_ROOT" && python3 - "$TESTROOT/oracle-k6m5.py" <<'COVPY'
 import sys, importlib.util
 spec = importlib.util.spec_from_file_location("o", sys.argv[1]); o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
 KB = "knowledge" + "-base"
-o._TRACKED = (o._tracked()[0] | {KB + "/legal-x/evil.sh"}, o._tracked()[1] | {KB + "/legal-x"})
+o._TRACKED = (o._tracked()[0] | {KB + "/legal/drafts-x/evil.sh"}, o._tracked()[1] | {KB + "/legal/drafts-x"})
 print(" ".join("1" if o.covers(e, p) else "0" for e, p in [
-    ("^glob:" + KB + "/**.md", KB + "/legal"),        # boundary mutant leaks evil.sh → 0
-    ("^glob:" + KB + "/**.md", KB + "/legal/audits"), # deeper dir unaffected → stays 1
+    ("^glob:" + KB + "/**.md", KB + "/legal/drafts"),  # boundary mutant leaks evil.sh → 0
+    ("^glob:" + KB + "/**.md", KB + "/legal/audits"),  # deeper dir unaffected → stays 1
 ]))
 COVPY
 )
-if [[ "$_k6m5_n" == "1" && "$_k6m5" == "0 1" ]]; then
+if [[ "$_k6m5_n" == "1" && "$_k6m5_real" == "1 1" && "$_k6m5" == "0 1" ]]; then
   pass "k6-m5: dropping the member-prefix slash leaks a sibling member (the boundary binds)"
 else
-  fail "k6-m5: landed=$_k6m5_n mutant='${_k6m5}' (want landed=1 mutant='0 1')"
+  fail "k6-m5: landed=$_k6m5_n real='${_k6m5_real}' mutant='${_k6m5}' (want landed=1 real='1 1' mutant='0 1')"
 fi
 
 # k6-m6/m7: member-enumeration and dispatch mutants need shapes the live index

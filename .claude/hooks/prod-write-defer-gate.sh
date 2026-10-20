@@ -44,6 +44,15 @@ set -uo pipefail
 # shellcheck source=lib/incidents.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/incidents.sh"
 
+# Shared context-sanitize lib (#10395). When it is unreadable the same-name
+# fallback carries the STRONGEST pre-change strip set among this file's sites
+# (C0+DEL plus the LS/PS sed) — never weaker than today at any call site.
+_ctx_lib="$(dirname "${BASH_SOURCE[0]}")/lib/context-sanitize.sh"
+# shellcheck source=/dev/null
+[[ -r "$_ctx_lib" ]] && . "$_ctx_lib" || true
+declare -F soleur_ctx_sanitize >/dev/null 2>&1 \
+  || soleur_ctx_sanitize() { LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C sed -e $'s/\xe2\x80\xa8//g' -e $'s/\xe2\x80\xa9//g'; }
+
 SOLEUR_DEFER_DRYRUN="${SOLEUR_DEFER_DRYRUN:-0}"
 # Empirically verified: "defer" gives silent pause, suitable for claude --resume.
 # See .claude/hooks/DEFER-DECISION-PAYLOAD-SHAPE.md.
@@ -401,7 +410,7 @@ if [[ "${CLAUDE_HOOK_BYPASS:-}" == "1" ]]; then
     "$CMD_SNIPPET" "PreToolUse" "bypass"
   # Strip C0 control bytes + DEL + U+2028/U+2029 from operator-facing stderr
   # (CWE-117 log/terminal injection — operator's terminal hygiene).
-  CMD_DISPLAY=$(printf '%s' "$CMD_SNIPPET" | LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C sed -e $'s/\xe2\x80\xa8//g' -e $'s/\xe2\x80\xa9//g')
+  CMD_DISPLAY=$(printf '%s' "$CMD_SNIPPET" | soleur_ctx_sanitize)
   echo "[prod-write-defer-gate] BYPASS by $BYPASS_OPERATOR — $BYPASS_REASON :: $CMD_DISPLAY" >&2
   OPACK_DECIDED=1
   echo '{}'
@@ -429,8 +438,8 @@ case "$SOLEUR_DEFER_DRYRUN" in
     # Resume hint on stderr — CC renders defer silently, operator needs the
     # session_id+command somewhere visible. See DEFER-DECISION-PAYLOAD-SHAPE.md.
     # Strip C0 control bytes + DEL + U+2028/U+2029 from operator-facing stderr.
-    CMD_DISPLAY=$(printf '%s' "$CMD_SNIPPET" | LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C sed -e $'s/\xe2\x80\xa8//g' -e $'s/\xe2\x80\xa9//g')
-    SESSION_ID_SAFE=$(printf '%s' "$SESSION_ID" | LC_ALL=C tr -d '\000-\037\177')
+    CMD_DISPLAY=$(printf '%s' "$CMD_SNIPPET" | soleur_ctx_sanitize)
+    SESSION_ID_SAFE=$(printf '%s' "$SESSION_ID" | soleur_ctx_sanitize)
     echo "[prod-write-defer-gate] DEFERRED $MATCHED_RULE: $CMD_DISPLAY" >&2
     if [[ -n "$SESSION_ID_SAFE" ]]; then
       echo "[prod-write-defer-gate] resume via: claude --resume $SESSION_ID_SAFE" >&2

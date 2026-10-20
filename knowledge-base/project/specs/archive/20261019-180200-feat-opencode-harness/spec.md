@@ -81,9 +81,13 @@ commands directory (measurement §4.0). `$ARGUMENTS` is the argument placeholder
 ### FR5: Guards and hooks
 
 The credential guard, destructive-command guard, session-start behaviour, and compaction re-read
-directive are delivered through an OpenCode **plugin** (measurement §6.0), not a `hooks.json`.
-`session.idle` stands in for the Stop event and `experimental.session.compacting` for PreCompact;
-D3 and D4 below state what is and is not preserved.
+directive are delivered through an OpenCode **plugin** (measurement §6.6, §12) written against the V2
+contract — `export default { id, setup(ctx) }` — not a `hooks.json`. The guard surface is
+`ctx.permission.hook("evaluate")`, whose event carries the tool as `action`, the command as
+`resources[0]`, and a mutable `effect: allow | ask | deny` plus `message`; session-start rule
+injection is `ctx.session.hook("context")`; the compaction re-read is `ctx.session.hook("compaction")`
+plus `context`. There is **no** Stop hook — `session.idle` is an observation, not a boundary. D3 and
+D4 below state what is and is not preserved.
 
 ### FR6: Repository instructions
 
@@ -129,23 +133,31 @@ non-zero on drift. Its scope is set by measurement §10.0 item 7:
 ### TR3: Tool-translation table
 
 `plugins/soleur/opencode/INSTRUCTIONS.md` carries a `## Tools` table covering the closed
-`CLAUDE_CODE_TOOLS` vocabulary (measurement §5.0 for the OpenCode side). Rows with no OpenCode
+`CLAUDE_CODE_TOOLS` vocabulary (measurement §12.8 for the OpenCode side; §5.0 read the V1 doc tree, whose tool names V2 changed). Rows with no OpenCode
 equivalent are stated as unsupported — the record shows no `todo`, `Monitor`/`AwaitShell`, or
 `Cron*`/`PushNotification`/`RemoteTrigger` (measurement §5.4).
 
 ### TR4: Model tier map
 
 `harness-model-map.ts` gains an `opencode` entry mapping `cheap` / `standard` / `strong` /
-`advisor` to OpenCode `provider/model#variant` slugs. Slug choices follow ADR-110's
-bump-one-table rule; `inherit` stays a passthrough (measured harmless — `model: inherit` resolves
-to null, measurement §3.0).
+`advisor` to `opencode/<model>` ids (measurement §12.7: the keyless catalog is ten Zen models, the API exposes no cost or capability metadata, and the tier order comes from the catalog's published prices). No `#variant` is used — the flag supports one, none of these ids carries one. Slug choices follow ADR-110's
+bump-one-table rule; `inherit` stays a passthrough — it is a source-form value, not a semantic
+tier, and it is never written into a generated agent stub (measurement §11.2).
 
 ### TR5: Per-harness hook registry (ADR-223)
 
 The OpenCode hook set is its own registry — an OpenCode plugin module — with a disposition row per
-hook, mirroring `.claude/hooks/devin-dispositions.tsv`'s shape. Event-to-hook mapping:
-`PreToolUse(Bash)` → `tool.execute.before`; `SessionStart` → `event`/plugin init; `Stop` →
-`session.idle`; `PreCompact` → `experimental.session.compacting`.
+hook, mirroring `.claude/hooks/devin-dispositions.tsv`'s shape. Event-to-hook mapping against the V2
+surface (measurement §6.6, corrected by §12): `PreToolUse(Bash)` → `ctx.permission.hook("evaluate")`,
+because it is the one surface with a blocking channel (`effect: deny` blocks with the reason;
+`effect: ask` is a real prompt) and because it fires *after* `tool.execute.before`, so a throw there
+could not preempt the ask. `SessionStart` → plugin `setup` plus `ctx.session.hook("context")` for
+rule injection; `PreCompact` → `ctx.session.hook("compaction")`; `Stop` → **no equivalent** — the row
+is `observation-only (session.idle)`, never a block. The module must be
+`export default { id, setup(ctx) }`; the V1 named-export form is rejected by the runtime (measurement
+§6.6 arm A). The guard scripts' input contract is a shell command string, and the shell tool's wire
+name is `shell` — the plugin maps both `shell` and `bash` to Claude's `Bash` before deciding
+(measurement §12.1).
 
 ### TR6: Discovery-smoke parser + CI job
 
@@ -187,44 +199,68 @@ surface with a user's own bare-named skills is **accepted and recorded**: no col
 
 Measured: without `mode: subagent`, every canonical agent registers as `primary` and is
 unspawnable; `name:` frontmatter is ignored and the id is the path (measurement §3.0). The generator
-therefore emits `mode: subagent`, `description:`, `model: inherit`, and a body pointing at the
-canonical agent file, at a path that **is** the id (`opencode/agents/engineering/cto.md` →
-`engineering/cto`).
+therefore emits `mode: subagent`, `description:`, and a body pointing at the canonical agent file,
+at a path that **is** the id (`opencode/agents/engineering/cto.md` → `engineering/cto`).
 
-### D3 — Completion: `session.idle` is advisory; structural checks are the contract
+**Amended 2026-10-18 (§11.2).** The first draft also emitted `model: inherit`, reasoning that a
+Claude SKU alias (`sonnet`, `opus`) must not leak and `inherit` was the measured-harmless literal
+(§3.0). That reading is **refuted**: `inherit` is not an OpenCode `provider/model` id, and an agent
+carrying it produces no document and **does not register at all** — with all 67 stubs emitting it,
+`GET /api/agent` returned only the 7 built-ins. The generator now emits **no `model:` line**, which
+is this harness's spelling of "inherits the session model" (a stub with `mode: subagent` and no
+`model` registers with no `model` key and inherits, §11.2).
 
-OpenCode has no Stop hook (measurement §6.4). The plugin observes `session.idle`, but a plugin
-`event` hook has no documented contract for **blocking** a stop the way Claude's `stop-hook.sh`
-does, so the `<promise>DONE</promise>` marker is downgraded to advisory on this harness and
-autonomous skills lean on their already-preferred structural completion (exit codes, CLI-output
-checks — AGENTS.md's stated preference, and the reason `/goal` was rejected). Following the Codex
-precedent, a gate with no equivalent is **reported as unsupported, never silently skipped**.
-Whether a `session.idle` hook can inject a continuation is listed as unmeasured below.
+### D3 — Completion: there is no Stop hook, so structural checks are the contract
 
-### D4 — Compaction is preserved (a difference from Codex/Devin)
+OpenCode V2 has no Stop hook (measurement §6.6). The complete hook surface is
+`session(prompt | context | compaction | generate | title | model.request | http.request |
+http.response | experimental.ws.* | retry)`, `permission.evaluate`, `shell.create.before`, and
+`tool.execute.before | after` — each communicates only by mutating the event object it is handed —
+and the event surface (`ctx.event.subscribe`) is a one-way iterator with no return channel. No hook
+can defer a stop, force a continuation, or veto a completion. "Session went quiet" (`session.idle`,
+and the `Session.Message.Idle` record) is therefore *observation only*, so the
+`<promise>DONE</promise>` marker is downgraded to advisory on this harness and autonomous skills lean
+on their already-preferred structural completion (exit codes, CLI-output checks — AGENTS.md's stated
+preference, and the reason `/goal` was rejected). Following the Codex precedent, a gate with no
+equivalent is **reported as unsupported, never silently skipped**.
 
-`experimental.session.compacting` and `experimental.compaction.autocontinue` exist (measurement
-§6.2), so the post-compaction re-read directive and the synthetic-continue control **do** fire here,
-unlike Codex and Devin where `compaction-state.sh` has no equivalent. `opencode/INSTRUCTIONS.md`'s
-"Hooks and completion" section states this as a preserved behaviour rather than a gap.
+Recording a distinction that the mutation sentence above invites a reader to flatten (measurement
+§12.2): **a tool call CAN be blocked on this harness; a completion cannot.** `permission.evaluate` is
+handed a mutable `effect`, and setting it to `deny` ends the tool as `permission.rejected` with the
+message, while `ask` holds it open for a person. The guard surface therefore binds there at full
+parity — a `deny` blocks and an `ask` prompts, neither downgraded. What remains absent, and what D3
+is about, is only the *completion* boundary.
+
+### D4 — Compaction re-read is preserved; continuation is not (a split from Codex/Devin)
+
+The checkpoint-summary boundary is reachable — `ctx.session.hook("compaction")`, and `context` runs
+for every agent-loop request including tool-driven continuations (measurement §6.6) — so the
+post-compaction re-read directive **can** be delivered here, unlike Codex and Devin where
+`compaction-state.sh` has no equivalent. The **autocontinue** half does not survive: V2 has no
+`experimental.compaction.autocontinue` hook and no hook can force a continuation, so the re-read
+lands on the next real request instead of resuming a stop. `opencode/INSTRUCTIONS.md`'s "Hooks and
+completion" section states exactly this split — re-read preserved, continuation not.
 
 ### D5 — Distribution: config fragment + plugin module
 
 OpenCode has no declarative plugin manifest; its install surface is config plus a code plugin
-(measurement §6.1, §10.0 item 8). The spec ships a generated `opencode/opencode.json` fragment (skills
-roots, instructions) and a hand-written hook plugin module. The config fragment is generated; the
-module is adapter source.
+(measurement §6.6, §10.0 item 8). The spec ships a generated `opencode/opencode.json` fragment (skills
+roots, instructions) and a hand-written hook plugin module written against the V2 package,
+`@opencode/plugin@2.0.32` — **not** `@opencode-ai/plugin`, which is the V1 package the runtime
+rejects (§6.6). Both delivery routes for the module were measured to load: the global discovery
+directory `<configdir>/plugins/*` with no config entry, and the `plugins` config key with a path
+relative to the config file. The config fragment is generated; the module is adapter source.
 
 ## Unmeasured steps (gates to run, not questions to ask)
 
 1. **Detection CLI-specificity** — prove `OPENCODE` is not set by a non-CLI OpenCode process
    (ADR-274's bar). Measurement §1.0 shows presence only.
-2. **`session.idle` continuation** — whether a plugin hook can defer/continue a stop, or whether
-   D3's advisory downgrade is the final word.
-3. **Hook firing end-to-end** — the credential guard and destructive-command guard actually
+2. **Hook firing end-to-end** — the credential guard and destructive-command guard actually
    dispatching under a live OpenCode plugin, captured the way Devin's envelope-capture was.
-4. **Install path** — a hermetic install from this checkout registering the declared set, so FR7's
-   arm has a non-polluted fixture.
+
+Closed since the first draft: **`session.idle` continuation** (§6.6 — no blocking Stop contract
+exists, so D3's advisory downgrade is the final word) and the **hermetic install path** (§11.4,
+§11.6 — a hermetic install from this checkout registers exactly the declared set).
 
 ## User-Brand Impact
 

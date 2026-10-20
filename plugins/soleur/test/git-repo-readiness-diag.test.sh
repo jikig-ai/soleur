@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Tests for plugins/soleur/skills/git-worktree/scripts/git-repo-readiness-diag.sh —
 # the SOLEUR_BARE_ROOT_CWD source=readiness-diag arm (#10383) and predicate parity
-# with .claude/hooks/bare-root-cwd-guard.sh.
+# with .claude/hooks/bare-root-cwd-guard.sh AND plugins/soleur/hooks/
+# bare-root-cwd-guard.sh (the plugin SessionStart arm, #10392 — third inline copy).
 #
 # Synthesized fixtures only. No `set -e`: accumulate-then-exit; every deliberately
 # non-zero call is captured with `rc=0; x=$(...) || rc=$?`.
@@ -14,6 +15,7 @@ trap 'rm -rf "$SANDBOX"' EXIT
 SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 DIAG="$SCRIPT_DIR/../skills/git-worktree/scripts/git-repo-readiness-diag.sh"
 GUARD="$SCRIPT_DIR/../../../.claude/hooks/bare-root-cwd-guard.sh"
+PGUARD="$SCRIPT_DIR/../hooks/bare-root-cwd-guard.sh"
 
 # shellcheck source=lib/git-fixture-env.sh
 source "$SCRIPT_DIR/lib/git-fixture-env.sh"
@@ -31,8 +33,10 @@ assert_fixture_dir() {
 }
 
 command -v git >/dev/null 2>&1 || { echo "UNRESOLVED: git missing — this suite asserted nothing; install git"; exit 3; }
+command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — the plugin arm's D5 leg needs it to build envelopes; install jq"; exit 3; }
 [[ -x "$DIAG" ]] || { echo "FAIL: $DIAG not executable or missing"; exit 1; }
 [[ -x "$GUARD" ]] || { echo "FAIL: $GUARD not executable or missing"; exit 1; }
+[[ -f "$PGUARD" ]] || { echo "FAIL: $PGUARD missing — the D5 three-way parity leg requires it"; exit 1; }
 
 PASS=0; FAIL=0; FAILURES=(); CUR=""; CASE_N=0
 begin() { CUR="$1"; CASE_N=0; }
@@ -135,9 +139,12 @@ case "$OUT" in
 esac
 
 begin D5
-# Parity: the diag copy and the hook copy must agree on every fixture class the
-# hook suite enumerates. Derive it behaviourally, not by grep: run both on the
-# same fixtures and require identical fire/no-fire verdicts.
+# Parity: the diag copy, the repo-hook copy, and the plugin SessionStart arm must
+# agree on every fixture class the hook suite enumerates. Derive it behaviourally,
+# not by grep: run all three on the same fixtures and require identical
+# fire/no-fire verdicts. The plugin arm reads the SessionStart envelope ({.cwd})
+# rather than argv/$PWD, so its leg pipes a jq-built envelope on stdin; the
+# project/plugin env vars are scrubbed so resolution can never leave the fixture.
 parity_ok=1
 for shape in bare plain masked wtmask sym truebare imposter nonrepo; do
   case "$shape" in
@@ -154,11 +161,17 @@ for shape in bare plain masked wtmask sym truebare imposter nonrepo; do
   g_fires=0; [[ "$GOUT" == SOLEUR_BARE_ROOT_CWD* ]] && g_fires=1
   run_diag "$d"
   d_fires=0; [[ "$OUT" == *SOLEUR_BARE_ROOT_CWD* ]] && d_fires=1
-  if [[ "$g_fires" != "$d_fires" ]]; then
-    parity_ok=0; bad "parity: shape=$shape guard=$g_fires diag=$d_fires"
+  RC=0
+  POUT=$(
+    unset DEVIN_PROJECT_DIR CLAUDE_PROJECT_DIR CLAUDE_PLUGIN_ROOT
+    jq -nc --arg cwd "$d" '{cwd:$cwd}' | bash "$PGUARD" 2>/dev/null
+  ) || RC=$?
+  p_fires=0; [[ "$POUT" == *SOLEUR_BARE_ROOT_CWD* ]] && p_fires=1
+  if [[ "$g_fires" != "$d_fires" || "$g_fires" != "$p_fires" ]]; then
+    parity_ok=0; bad "parity: shape=$shape guard=$g_fires diag=$d_fires plugin=$p_fires"
   fi
 done
-if [[ "$parity_ok" == "1" ]]; then ok "guard and diag predicates agree on all 8 fixture classes"; fi
+if [[ "$parity_ok" == "1" ]]; then ok "guard, diag, and plugin-arm predicates agree on all 8 fixture classes"; fi
 
 begin D6
 # Env-injection parity (#10386 A-P2): GIT_DIR pointed at a plain clone must not
