@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -u
 # Refuse to run under shell tracing while the pull credential is set: `set -x` would write the
-# Basic-auth token into the journal that Vector ships off-box (#7797).
+# Basic-auth token into the journal that Vector ships off-box (#7797). The refusal is CONDITIONAL on that credential
+# (under `doppler run` it is always set). The heartbeat URL is a credential too: it is resolved BELOW, after this
+# refusal, from the variable NAME in WEB_ZOT_CONSUMER_URL_KEY, and the unit's ExecStart expands nothing (#9639).
 case "$-" in
   *x*)
     if [ -n "${ZOT_PULL_TOKEN:+x}${ZTOK:+x}" ]; then
@@ -39,7 +41,7 @@ esac
 #
 # CONFIG IS ENV (delivered both by the SSH provisioner to web-1 AND baked into cloud-init for future
 # hosts; web-1 gets the PINNED list, a host born later gets the BARE list, see the pin paragraph): ZOT_ENDPOINT + ZOT_PROBE_REPO from /etc/default/web-zot-consumer-probe;
-# ZUSER/ZTOK/WEB_ZOT_CONSUMER_URL from the doppler-run env.
+# ZUSER/ZTOK and the heartbeat URL (under the variable named by WEB_ZOT_CONSUMER_URL_KEY) from the doppler-run env.
 #
 # ZOT_PROBE_REPO IS A COMMA-SEPARATED LIST (#7258). A host pulls MORE than one platform repository
 # (the web image and the inngest bootstrap image), so a probe of one repo certifies only that repo.
@@ -100,7 +102,9 @@ ENDPOINT="${ZOT_ENDPOINT:-10.0.1.30:5000}"
 REPO="${ZOT_PROBE_REPO:-}"
 ZUSER="${ZUSER:-${ZOT_PULL_USER:-}}"
 ZTOK="${ZTOK:-${ZOT_PULL_TOKEN:-}}"
-URL="${WEB_ZOT_CONSUMER_URL:-}"
+# URL is resolved after the xtrace refusal and the --canary-only exit (see "THE HEARTBEAT URL" below); until then it is empty.
+URL=""
+KEY_BAD=false
 # Happy-path stderr is shipped off-box via Vector Source 4 (SyslogIdentifier=web-zot-consumer-probe);
 # the heartbeat ping is the actual off-box liveness signal, so the "servable (200)" narration is
 # redundant there and pure quota cost at 60s cadence. Gate it behind a debug flag (default OFF);
@@ -130,7 +134,11 @@ _ping() {
     printf 'PING %s\n' "$1" >> "$SOLEUR_ZOT_PROBE_PING_LOG"
     return 0
   fi
-  [ -n "$URL" ] || { echo "[zot-probe] WARN: WEB_ZOT_CONSUMER_URL unset — servable but cannot ping." >&2; return 0; }
+  if [ -z "$URL" ]; then
+    echo "[zot-probe] WARN: WEB_ZOT_CONSUMER_URL unset — servable but cannot ping." >&2
+    [ "$KEY_BAD" = true ] && echo "[zot-probe] WARN: WEB_ZOT_CONSUMER_URL_KEY is unset or is not an upper-case variable name (the value is not shown); the heartbeat URL cannot be resolved." >&2
+    return 0
+  fi
   if ! _hb_url_ok "$URL"; then
     _refused
     return 0
@@ -239,6 +247,16 @@ if [ "${1:-}" = "--canary-only" ]; then
   _canary
   exit 0
 fi
+
+# THE HEARTBEAT URL (#9639). The unit no longer exports it: it names the variable doppler injected it under
+# (WEB_ZOT_CONSUMER_URL_KEY, one per host, written by the *_install provisioner) and this script reads that variable
+# HERE, after the xtrace refusal above and after the --canary-only exit (which runs outside `doppler run` and sends no
+# heartbeat). The NAME comes from an env file, and `${!name}` evaluates array subscripts and command substitutions
+# inside `name`, so it is judged first: an upper-case identifier or nothing (LC_ALL=C: a locale-collated [A-Z] admits
+# lowercase). No fallback to a bare variable of any other name; the value stays in this shell's variable, never exported.
+_key_ok() { local LC_ALL=C; case "${1:-}" in ''|[!A-Z]*|*[!A-Z0-9_]*) return 1 ;; esac; }
+_key="${WEB_ZOT_CONSUMER_URL_KEY:-}"
+if _key_ok "$_key"; then URL="${!_key:-}"; else KEY_BAD=true; fi
 
 if [ -z "$REPO" ]; then
   echo "[zot-probe] FATAL: ZOT_PROBE_REPO unset (source /etc/default/web-zot-consumer-probe) — cannot probe serviceability without a real repository path." >&2
