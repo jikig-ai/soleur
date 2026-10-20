@@ -132,3 +132,32 @@ preflight, promotion and ship remain held. Hosted authentication stays BLOCKED;
 alternate route stays PENDING. PR remains OPEN/draft/disarmed and CONFLICTING;
 reported GitHub checks are not a complete CI verdict. Archive these live planning
 artifacts before any eventual ready/merge action.
+
+## Fixed pre-consumption stage diagnostic — 2026-10-20
+
+The approved acquisition command exited with its sanitized incomplete result.
+The preserved output directory contained only the original mode-0600 manifest;
+the marker and receipt were absent. Source ordering creates the marker before
+the first DNS/HTTP request, so this attempt did not reach network activity. The
+local predicate that failed remains unknown, and the command approval is spent.
+The private failed-attempt directory remains unchanged and must not be reused.
+
+At `40b21cf4fff125207861b756189a0689fc08d0fb`, the source adds a closed set of
+fixed pre-consumption stage labels and reports only that label outside caught
+exception context. The synthesized CLI regression covers source-binding
+failure, no marker and no request. Full offline discovery passed **397 tests**;
+the added focused tests passed. Security review passed with no authority or
+network behavior change. Code-quality review passed (8/10, no findings). Test
+design review passed (8.6/10, Grade B) and independently reran the two new
+tests. It notes that only source-binding placement is exercised through the
+real CLI; other stage placements are injected, and a `gate_write` label does
+not establish marker absence. This diagnostic does not identify the historical
+failure cause or authorize another attempt.
+
+The exact failed attempt remains immutable. The next separately approved action
+is file-only refresh of current source/input/CA/platform bindings and preparation
+of one fresh unused manifest in a new private directory. It excludes marker,
+receipt, DNS, network and execution. Review the actual manifest and exact
+expanded command as separate gates; fresh exact-command authorization and
+separate evidence review remain required. All profile, recovery, qualification,
+resync/full CI and ship holds persist.

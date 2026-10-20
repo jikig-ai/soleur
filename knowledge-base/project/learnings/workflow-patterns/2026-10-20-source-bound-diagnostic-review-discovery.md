@@ -164,3 +164,20 @@ after the patch had landed; the diff was inspected and the focused test was run
 separately. A scoped `sed` lookup used a repository-relative path while already
 in the component directory; it read no file and was corrected by reading from
 the worktree root. None of these results support an acquisition verdict.
+
+## Resume diagnostic follow-through — 2026-10-20
+
+A read-only probe ran branch-relative KB paths from the bare repository root and
+received a missing-file error; repeat branch-content reads from the linked
+worktree, whose paths are authoritative. The first installed go-command lookup
+also used the wrong plugin subdirectory; resolve with `rg --files` under the
+verified plugin root before reading. The required session-start merged-worktree
+cleanup ran from the bare root but its lock files were outside the writable
+filesystem boundary, so cleanup was skipped with an explicit warning. Do not
+claim cleanup completed; if the gate must be retried, request the prescribed
+filesystem escalation rather than bypassing the lock. These failures made no
+repository or acquisition changes.
+
+The first combined append patch did not match the learning's exact tail and
+applied no hunks; re-read both file tails and applied the records against their
+actual anchors. Confirm the final diff before committing multi-file notes.
