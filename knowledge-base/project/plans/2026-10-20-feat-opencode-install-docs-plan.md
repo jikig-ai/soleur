@@ -608,10 +608,11 @@ on this harness; steps are tracked in the skill's own Markdown.
 
 ### Decisions
 
-- **Do not add a public OpenCode/Cursor/Antigravity support claim** to `README.md` or
-  `getting-started.njk`. `Ruled by: pending — assumed default (CTO unreachable from this
-  runtime): withhold until the support bar's live evidence lands in #10591 item 1; ADR-291
-  §Status/§Consequences and ADR-274 §Consequences state this verbatim and ADR-291 is `accepted`.`
+- **Do not add a public OpenCode/Cursor/Antigravity support claim** to any public surface
+  (`README.md`, `plugins/soleur/README.md`, `getting-started.njk`, `index.njk`). `Ruled by: pending
+  — assumed default (CTO unreachable from this runtime): withhold until the support bar's live
+  evidence lands in #10591 item 1; ADR-291 §Status/§Consequences and ADR-274 §Consequences state
+  this verbatim and ADR-291 is `accepted`.`
 - Re-scope the ask to the work the ADRs leave open: completeness/labeling for the
   already-claimed harnesses, de-monopolized framing, pointer coverage, and the OpenCode
   in-repo uninstall gap (#10591 item 4).
@@ -623,7 +624,12 @@ on this harness; steps are tracked in the skill's own Markdown.
 - `plan` skill (inline, on this harness) — Phase 0 context load, Phase 0.6 premise validation,
   Phase 0.6b mechanism-minimality gate, Phase 0.7 skeleton, Phase 1.7 consolidation, Step 2/2.4/
   2.6/2.10/2.9 gates.
+- `deepen-plan` skill (inline) — phase manifest, mechanical halt gates 4.6/4.8/4.12 (passed) and
+  4.7/4.9/4.10/4.11 (skipped: pure-docs), enrichment with the `index.njk` surface discovery, the
+  Grok-Build-no-install-command reality check, and the per-block CLI-verification marker finding;
+  Enhancement Summary written.
 - Inline research (no `subagent` fan-out available): reads of `README.md`,
-  `plugins/soleur/README.md`, `getting-started.njk`, ADR-291/ADR-274/ADR-245, `harness.ts`,
-  `go.md`, the per-harness `INSTRUCTIONS.md` set, `stats.js`, and the docs gates; `gh issue view
-  10591`.
+  `plugins/soleur/README.md`, `getting-started.njk`, `index.njk`, ADR-291/ADR-274/ADR-245,
+  `harness.ts`, `go.md`, the per-harness `INSTRUCTIONS.md` set, `grok-onboarding.md`, `stats.js`,
+  `.claude/hooks/docs-cli-verification.sh`, `scripts/sync-readme-counts.sh` and
+  `marketing-content-drift.test.ts`; `gh issue view 10591`.
