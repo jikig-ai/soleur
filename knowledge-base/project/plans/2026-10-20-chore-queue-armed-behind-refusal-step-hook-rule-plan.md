@@ -12,6 +12,22 @@ draft_pr: 10655
 
 # chore(ship): extend the queue-armed BEHIND refusal to `--step` and the pre-merge hook, and add the queue exception to the BEHIND rule
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-20
+**Agents used:** soleur:engineering:cto (re-ruling), architecture-strategist, security-sentinel, spec-flow-analyzer, test-design-reviewer, plus the plan-review panel (DHH, Kieran, code-simplicity, CTO devex). Halt gates 4.6, 4.7, 4.8, 4.11, 4.12 passed; 4.9, 4.10 not triggered; `lint-guard-contract.py` green; every cited rule id resolves (the one id not on main, `hr-no-secret-in-buildarg-or-image-metadata`, is named as open PR #7390's addition).
+
+### Key Improvements
+1. Flagless `--step` refusal moved from exit 11 to a dedicated exit 14: an old pasted fence now stops loudly instead of livelocking silently (CTO Fork 2', reverses Fork 2).
+2. `--queue-wait` and flagless `--step` read ONE `pr view` snapshot (state, mergeStateStatus, autoMergeRequest); no duplicate GraphQL read; GitHub `UNKNOWN` counts like `BEHIND` so the hook does not push on recompute lag.
+3. Rule wording fixed before pins/hash/ack and made to point a post-compaction reader at the deciding executable; AC-R1 now matches Phase 5.1.
+4. Test plan made executable: new `install_gh_wait` helper, hook stub knobs, hand-maintained floors (122 / `EXPECTED_CASES` / `MIN_VERDICTS`), the S1 direct `--step` caller, T-Q ids renumbered to T-Q17+, QGH rules-arm glob fix, a stripped-`--fence` fixture, a grep test that no surface teaches `--fence`.
+5. Hardening: exact-line verdict parse in the hook, 20 s outer wrapper over two bounded reads, sanitised `queue_state_read` detail, strict `pr view` match, mode-flag exclusivity.
+
+### New Considerations Discovered
+- Ack/CODEOWNERS: the weakening ack is self-attested; the PR body must say it adds an exception to a hard rule and awaits code-owner review.
+- Stale text found outside the first Files-to-Edit list: `merge-queue-dequeue.md` ~15, `ship/SKILL.md` ~2544, `constitution.md` ~177 (now listed).
+
 ## Overview
 
 On a repository whose `main` carries a `merge_queue` rule (ADR-270), a PR that GitHub reports BEHIND while
