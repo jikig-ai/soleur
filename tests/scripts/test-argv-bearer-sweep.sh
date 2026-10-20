@@ -4667,9 +4667,9 @@ for f in files:
 print(n_ok, n_sig, n_brr, ",".join(bad))
 '
 read -r S4_G_OK S4_G_SIG S4_G_BRR S4_G_BAD < <(cd "$REPO_ROOT" && python3 -I -c "$s4_guard_py" "$BEARER_FN" "$CUT" $S4_OK_DERIVED)
-# BOTH operands are literals above the `if`: 77 `_bearer_ok` definitions outside the cutover script (the four S4 inline-wrapper files hold 10 of them: release 6,
-# deploy-inngest-image 2, luks 1, verify-tunnel 1; the rest are the ops scripts and followthrough probes converted by S1 to S3), 6 `_sig_curl`, 2 `_bearer_curl`.
-S4_GUARD_FLOOR=77
+# BOTH operands are literals above the `if`: 76 `_bearer_ok` definitions outside the cutover script (the four S4 inline-wrapper files hold 10 of them: release 6,
+# deploy-inngest-image 2, luks 1, verify-tunnel 1; the rest are the ops scripts and followthrough probes converted by S1 to S3; #10546 retired two of those probes, the outer-wrap soak and the sandbox readback, taking the count from 77 to 76), 6 `_sig_curl`, 2 `_bearer_curl`.
+S4_GUARD_FLOOR=76
 if [[ -z "$S4_G_BAD" && "$S4_G_OK" -ge "$S4_GUARD_FLOOR" && "$S4_G_OK" == "$S4_OK_DEFS" && "$S4_G_SIG" == 6 && "$S4_G_BRR" == 2 ]]; then
   row "S4 inline guard pin: all $S4_G_OK _bearer_ok definitions of the $(printf '%s\n' "$S4_OK_DERIVED" | grep -c .) tracked files that define one equal the canonical text byte for byte (the count equals git grep's), and the $S4_G_SIG _sig_curl and $S4_G_BRR _bearer_curl wrappers equal the cutover script's (marker name and its --max-time normalized); floor $S4_GUARD_FLOOR"  ok
 else row "S4 inline guard pin: an inline guard or wrapper differs from the canonical text" fail "ok=$S4_G_OK defs=$S4_OK_DEFS sig=$S4_G_SIG brr=$S4_G_BRR bad=$S4_G_BAD"; fi
