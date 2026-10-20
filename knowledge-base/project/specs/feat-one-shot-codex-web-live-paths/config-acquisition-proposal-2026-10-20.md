@@ -1,8 +1,9 @@
 # Config-only acquisition proposal — 2026-10-20
 
-Status: proposed; independent engineering/security acceptance pending. This is
-documentation only. It grants no transport implementation, preparation or
-execution authority. PR #9051 remains draft/disarmed and customer-blocked.
+Status: accepted as a source-only design; see the independent acceptance record
+below. This is documentation only. It grants no transport implementation,
+preparation or execution authority. PR #9051 remains draft/disarmed and
+customer-blocked.
 
 ## Scope and evidence
 
@@ -259,3 +260,46 @@ browser/account operations, recovery, qualification, permitted Web/CLO matrices,
 full branch review/QA/preflight, promotion and ship remain held. Hosted auth
 is BLOCKED and alternate route PENDING. This record is live planning material;
 archive with the other artifacts before any eventual PR-ready/merge action.
+
+## Independent proposal acceptance — 2026-10-20
+
+Reviewed design source: pushed `b7bd072a877279932df5e083cc06fb4c94774481`.
+This section records subsequent review; it changes no design requirement.
+
+Security independently verified the primary Docker listing and conditionally
+accepted the exact destination for this one-shot boundary. Initial review at
+`f6cd79cc03` found two medium design blockers: OCI optional-null/schema
+precedence and an undefined receipt projection. Narrow re-review at
+`b7bd072a87` passed both corrections, with no blocking contradiction found.
+The closed contract deliberately excludes even Config field presence maps.
+
+Ruled by CTO agent, 2026-10-20: accept the source-only design at
+`b7bd072a87`, including exact `production.cloudfront.docker.com:443`, normative
+OCI null handling, closed receipt and restrictive Content-Length-only policy.
+Docker's primary listing and the reviewed registry observation support the
+limited delivery-service inference; digest/schema checks remain separate from
+publisher provenance. No implementation, preparation or execution authority
+is granted. Rejected alternatives are wildcard/automatic redirects, credential
+forwarding, ambient trust/proxy substitution, address/framing fallback and
+historical approval replay. Dissent: actual CDN framing, Config compatibility
+and resolver/transport enforcement remain unverified; a future attempt may
+safely refuse, with no retry permission and no admission/qualification effect.
+
+The next operator authorization action is permission to implement only transport
+source and synthesized offline boundary/mutation tests. It excludes real-origin
+requests, action manifests, markers and acquisition. Subsequent source review,
+separately authorized preparation, actual-manifest review, exact-command approval
+and separate evidence review remain mandatory and distinct.
+
+These are scoped proposal reviews, not full branch review, QA or ship clearance.
+Reviewers made no file changes or origin probes; they read source/documents and
+consulted public primary documentation. This session changed Markdown only.
+Whitespace and staged secret checks passed; local linked file targets exist.
+The repository Markdown lint selector excludes these planning/learning paths,
+so it performed no lint of their contents. Its user-Ruff adapter reported
+not adopted; no adoption or source/test/build run was attempted for this prose
+delta. The historical 329-test result is unchanged, not rerun by this session.
+GitHub's push warning was checked against open Dependabot alerts: 270 and 273
+both name the existing moderate `sprintf-js` advisory `GHSA-hp3w-g68c-fv3c`;
+no dependency was changed. Full CI is not established and main remains
+conflicting; resync is not performed by this proposal-only scope.

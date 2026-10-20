@@ -822,3 +822,9 @@ chain, credential/address/TLS isolation, exact Config integrity/schema checks,
 minimal outputs and the tests/review/approval sequence. Independent engineering
 and security acceptance is pending. This append-only planning update grants
 neither implementation nor execution authority; all preceding holds persist.
+
+Subsequent independent security re-review and CTO confirmation passed corrected
+proposal source `b7bd072a87`; the [acceptance record](config-acquisition-proposal-2026-10-20.md#independent-proposal-acceptance--2026-10-20)
+owns the decision, dissent and validation limits. The next authorization is
+source and offline tests only. No implementation, manifest preparation or
+execution is authorized by this acceptance, and broader holds remain unchanged.

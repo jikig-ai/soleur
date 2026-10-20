@@ -2347,3 +2347,25 @@
   It authorizes neither implementation nor execution. Full constraints and
   dissent are in `prebuild-acquisition-2026-10-16.md`, “Reviewed redirect evidence
   and next boundary”. No new transport or destination request was made.
+
+### Config-only proposal accepted; source authorization pending — 2026-10-20
+
+- [Proposal and acceptance record](config-acquisition-proposal-2026-10-20.md#independent-proposal-acceptance--2026-10-20)
+  owns the primary Docker/OCI evidence, exact-host inference, credential/network
+  isolation, exact Config checks, receipt contract and review decisions.
+- Independent security re-review and CTO confirmation passed pushed design
+  `b7bd072a877279932df5e083cc06fb4c94774481`. Initial OCI-null and undefined
+  receipt findings are corrected. These were scoped proposal reviews only.
+- Ruled by CTO agent: next obtain explicit permission for transport source and
+  synthesized offline boundary/mutation tests only. No real-origin requests,
+  action manifests, markers or acquisition are included. No source implementation
+  or action preparation occurred; historical spent evidence remains untouched.
+- Documentation whitespace, local link-target and staged secret checks passed;
+  Markdown paths are excluded from the repository lint selector. No new runtime
+  test result, source review or full CI clearance is claimed.
+- PR #9051 remains OPEN/draft/disarmed and CONFLICTING. Main resync/full CI,
+  full review/QA/preflight, build/Docker/SQL/provider/browser/account, recovery,
+  qualification, permitted Web/CLO, promotion and ship remain held. Hosted auth
+  BLOCKED; alternate route PENDING. Source review → separately authorized
+  preparation → actual-manifest review → fresh exact-command approval → separate
+  evidence review → profile/recovery/qualification remains the acceptance chain.
