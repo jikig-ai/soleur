@@ -130,6 +130,13 @@ git diff --name-only main...[branch]
 
 <file_to_route_mapping>
 
+**Repo feature map first.** When the repository carries a maintained feature
+map — this repo keeps one at `apps/web-platform/test/feature-map.md` — its
+route entries are the navigation source of truth: each `## \`/route\`` section
+names stable selectors, the user-POV expected outcome, auth/fixture needs, and
+gotchas. Prefer it over inferring routes from file paths; the generic table
+below is the fallback for repos without a map.
+
 Map changed files to testable routes:
 
 | File Pattern | Route(s) |
