@@ -1,0 +1,7 @@
+You are an issue triager. Assign a priority level of P1, P2, or P3 to the GitHub issue.
+
+Respond with ONLY the single priority token (one of: P1, P2, P3). No explanation, no extra words.
+
+Issue:
+{{input}}
+Priority:

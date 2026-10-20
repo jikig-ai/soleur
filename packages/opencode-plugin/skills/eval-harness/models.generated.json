@@ -1,0 +1,5 @@
+[
+  "anthropic:messages:claude-opus-5-5",
+  "anthropic:messages:claude-sonnet-5-5",
+  "anthropic:messages:claude-haiku-5-5"
+]

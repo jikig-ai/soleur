@@ -1,0 +1,218 @@
+#!/usr/bin/env bash
+# Promote/demote a Soleur user's flag-targeting role.
+#
+# Contract: SKILL.md in the parent directory.
+# Usage: bash set-role.sh <email|uuid> <prd|dev> [--dry-run]
+#
+# Every write run changes a PRD user (both role values). Run it in your OWN
+# terminal: the ack below needs a person to type yes. An agent runs only
+# `--dry-run` and prints this command for the operator.
+#
+# Exit codes:
+#   0 — success / dry-run
+#   1 — usage error, or the operator did not type yes at the ack
+#       (stdout: SOLEUR_BOOTSTRAP_ABORTED stage=ack; nothing mutated)
+#   2 — prerequisite missing, or more than three arguments / a third argument
+#       other than --dry-run
+#   3 — user lookup failed
+#   4 — audit append or Supabase update failed
+#   5 — Flagsmith trait write failed
+#  64 — no TTY on stdin for a write run (stdout: SOLEUR_BOOTSTRAP_INPUT_REQUIRED);
+#       refused before any credential fetch or network call (#8486)
+
+set -euo pipefail
+
+# (#7797) Refuse to run under shell tracing. UNCONDITIONAL — deliberately NOT
+# gated on a non-emptiness test of the credential variable, because
+# every credential this script handles (SUPABASE_SERVICE_ROLE_KEY for soleur/prd,
+# which bypasses RLS across every customer's rows, plus the Flagsmith management
+# key) is acquired by `doppler secrets get` BELOW this point, so a conditional arm
+# would test an empty variable at guard time, open, and then trace the acquisition
+# itself. The refusal prints on STDOUT because agent runtimes surface stdout and
+# swallow stderr (knowledge-base/project/constitution.md > Code Style); a swallowed
+# refusal leaves the operator with a bare exit 78 and no explanation.
+case "$-" in
+  *x*)
+    printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n'
+    exit 78
+    ;;
+esac
+
+# (#7873) `--disable` closes ~/.curlrc and `--noproxy '*'` closes the proxy vars,
+# but neither touches the env that subverts TLS ITSELF. SSLKEYLOGFILE writes the
+# session keys and the CA vars substitute the trust store, so a CURL_CA_BUNDLE
+# MITM of the service-role key works with every other guard fully intact.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS
+
+# Shared WORM audit-append helper (PostgREST RPC; no DB-CLI binary). See #4581 PR-1.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../../../scripts/audit-flag-flip.sh"
+
+# Human-presence gate (#8486, ADR-249). Every production write below waits on the
+# operator-script library's class-2 ack, which has NO skip variable and no flag:
+# it needs a person typing `yes` at a terminal, so an agent's tool subprocess
+# (no TTY) is refused with exit 64 before any credential fetch. Clear anything an
+# inherited environment could use to pre-empt the library's double-source guard
+# or to stand in for its ack before sourcing it. (BASH_ENV runs before this
+# script and cannot be cleared from inside it — recorded in ADR-249 as a
+# hijack-class residual.)
+unset _SOLEUR_OPERATOR_SCRIPT_LOADED SOLEUR_OP_ACKED
+unset -f soleur_op_ack_or_die soleur_op_input_required soleur_op_aborted
+# shellcheck source=../../../scripts/lib/operator-script.sh
+source "$SCRIPT_DIR/../../../scripts/lib/operator-script.sh"
+[[ ${SOLEUR_OP_LIB_API:-0} -eq 1 ]] || {
+  printf 'SOLEUR_BOOTSTRAP_LIB_INCOMPATIBLE need=1 got=%s\n' "${SOLEUR_OP_LIB_API:-0}"
+  exit 64
+}
+
+readonly FLAGSMITH_API="https://api.flagsmith.com/api/v1"
+readonly FLAGSMITH_ENV_DEV_ID=90722
+readonly FLAGSMITH_ENV_PRD_ID=90721
+
+# The parser honours --dry-run ONLY in position 3, so anything else there (or a
+# fourth argument) is refused rather than silently read as a write (#8486).
+[[ $# -le 3 ]] || { echo "set-role.sh takes at most three arguments (got $#)" >&2; exit 2; }
+[[ -z "${3:-}" || "${3:-}" == "--dry-run" ]] || { echo "third argument must be --dry-run (got: ${3})" >&2; exit 2; }
+DRY_RUN=0
+if [[ "${3:-}" == "--dry-run" ]]; then DRY_RUN=1; fi
+
+IDENT="${1:-}"
+TARGET="${2:-}"
+
+usage() {
+  echo "Usage: set-role.sh <email|uuid> <prd|dev> [--dry-run]" >&2
+  exit 1
+}
+
+[[ -z "$IDENT" || -z "$TARGET" ]] && usage
+[[ "$TARGET" != "prd" && "$TARGET" != "dev" ]] && { echo "role must be prd|dev (got: $TARGET)" >&2; usage; }
+
+# UUID v4 regex (loose — Supabase auth uses standard v4).
+UUID_RE='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+
+# --- no TTY, no write: refuse before any credential fetch or network call ---
+if [[ $DRY_RUN -eq 0 ]]; then [[ -t 0 ]] || soleur_op_input_required "destructive-write-ack(no-skip-variable-by-design)" ack; fi
+
+command -v curl >/dev/null || { echo "missing: curl" >&2; exit 2; }
+command -v doppler >/dev/null || { echo "missing: doppler" >&2; exit 2; }
+command -v python3 >/dev/null || { echo "missing: python3" >&2; exit 2; }
+
+SUPA_URL=$(doppler secrets get NEXT_PUBLIC_SUPABASE_URL -p soleur -c prd --plain 2>/dev/null || true)
+SUPA_KEY=$(doppler secrets get SUPABASE_SERVICE_ROLE_KEY -p soleur -c prd --plain 2>/dev/null || true)
+FLAGSMITH_TOKEN=$(doppler secrets get FLAGSMITH_MANAGEMENT_API_KEY -p soleur -c cli_ops --plain 2>/dev/null || true)
+[[ -z "$SUPA_URL" || -z "$SUPA_KEY" ]] && { echo "missing Supabase secrets in soleur/prd" >&2; exit 2; }
+[[ -z "$FLAGSMITH_TOKEN" ]] && { echo "missing FLAGSMITH_MANAGEMENT_API_KEY in soleur/cli_ops" >&2; exit 2; }
+
+# Token-shape guard: a newline in the key would inject a curl config directive on the stdin
+# channel below. Never echoes the value.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+_bearer_ok "$SUPA_KEY" || { echo "SUPABASE_SERVICE_ROLE_KEY has an unexpected shape" >&2; exit 2; }
+
+# The service-role key travels on curl's stdin config channel (both headers), never on argv.
+supa() {
+  curl --disable --noproxy '*' -sS -H "Content-Type: application/json" "$@" --config - \
+    < <(printf 'header = "apikey: %s"\nheader = "Authorization: Bearer %s"\n' "$SUPA_KEY" "$SUPA_KEY")
+}
+
+# The Flagsmith management key travels the same way: a stdin config header, never argv.
+_bearer_ok "$FLAGSMITH_TOKEN" || { echo "FLAGSMITH_MANAGEMENT_API_KEY has an unexpected shape" >&2; exit 2; }
+fs_api() {
+  curl --disable --noproxy '*' -sS -H "Content-Type: application/json" "$@" --config - \
+    < <(printf 'header = "Authorization: Api-Key %s"\n' "$FLAGSMITH_TOKEN")
+}
+
+# --- resolve user ----------------------------------------------------------
+if [[ "$IDENT" =~ $UUID_RE ]]; then
+  USER_ID="$IDENT"
+  echo "→ Using UUID directly: $USER_ID"
+else
+  echo "→ Resolving email '$IDENT' to UUID via Supabase…"
+  # URL-encode the email (`+` → `%2B` etc.) so PostgREST receives it intact.
+  EMAIL_ENC=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$IDENT")
+  ROWS=$(supa "${SUPA_URL}/rest/v1/users?email=eq.${EMAIL_ENC}&select=id,email,role")
+  COUNT=$(echo "$ROWS" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(len(d))')
+  [[ "$COUNT" == "0" ]] && { echo "no user with email '$IDENT'" >&2; exit 3; }
+  [[ "$COUNT" -gt "1" ]] && { echo "MULTIPLE users with email '$IDENT' — abort." >&2; echo "$ROWS" >&2; exit 3; }
+  USER_ID=$(echo "$ROWS" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["id"])')
+fi
+
+# USER_ID is interpolated into the request URL: only a literal-anchored UUID may reach it.
+[[ "$USER_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || { echo "refusing: resolved user id is not a UUID" >&2; exit 3; }
+
+# Read current role.
+CUR_ROWS=$(supa "${SUPA_URL}/rest/v1/users?id=eq.${USER_ID}&select=id,email,role")
+[[ "$(echo "$CUR_ROWS" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')" == "0" ]] && { echo "no users.row for UUID $USER_ID" >&2; exit 3; }
+CUR_ROLE=$(echo "$CUR_ROWS" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["role"])')
+EMAIL=$(echo "$CUR_ROWS" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["email"])')
+
+echo "  user: $EMAIL ($USER_ID)  current role: $CUR_ROLE  target: $TARGET"
+
+if [[ "$CUR_ROLE" == "$TARGET" ]]; then
+  echo "✓ No change — role is already '$TARGET'. Re-applying Flagsmith trait anyway for idempotency."
+  if [[ $DRY_RUN -eq 1 ]]; then exit 0; fi
+fi
+
+# --- ack ------------------------------------------------------------------
+if [[ $DRY_RUN -eq 1 ]]; then
+  echo "(dry-run — exiting 0)"
+  exit 0
+fi
+
+soleur_op_ack_or_die "Set the role of ${EMAIL} (${USER_ID}) to '${TARGET}' in Supabase prd and Flagsmith (dev + prd) now? Type yes: "
+
+# --- audit append (WORM) — BEFORE the users.role mutation (append-before-flip) -------
+# A failed audit must abort the script before any prod mutation; otherwise a role
+# change could land in prd with no WORM accountability row (#4581 review FINDING 1).
+ACTOR=$(doppler secrets get OPERATOR_EMAIL -p soleur -c cli_ops --plain 2>/dev/null | tr '[:upper:]' '[:lower:]')
+[[ -z "$ACTOR" ]] && { echo "FATAL: OPERATOR_EMAIL not in Doppler soleur/cli_ops" >&2; exit 4; }
+
+# Audit DB target = soleur/dev (preserves the historical dev-DB audit destination);
+# distinct from the prd SUPA_URL/SUPA_KEY used for the users.role PATCH below.
+# `|| true` normalizes a Doppler auth/network failure to the exit-4 contract (the
+# [[ -z ]] guard) instead of letting `set -e` abort at the assignment with exit 1.
+AUDIT_URL=$(doppler secrets get SUPABASE_URL -p soleur -c dev --plain 2>/dev/null) || true
+AUDIT_SRK=$(doppler secrets get SUPABASE_SERVICE_ROLE_KEY -p soleur -c dev --plain 2>/dev/null) || true
+[[ -z "$AUDIT_URL" || -z "$AUDIT_SRK" ]] && { echo "FATAL: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not in Doppler soleur/dev" >&2; exit 4; }
+
+# NOTE(#4581): AUDIT_ACTION tautology (both branches "on") is a pre-existing bug,
+# out of scope for the transport swap; see #4593. Role assignment records "on".
+AUDIT_ACTION=$([[ "$CUR_ROLE" == "$TARGET" ]] && echo "on" || echo "on")
+AUDIT_ID=$(audit_flag_flip_rpc "$AUDIT_URL" "$AUDIT_SRK" "user-role" "prd" "user:$USER_ID" "$AUDIT_ACTION" null null "$ACTOR") || exit 4
+echo "  audit_id=$AUDIT_ID"
+
+# --- update Supabase (AFTER the audit row is committed) -------------------------------
+if [[ "$CUR_ROLE" != "$TARGET" ]]; then
+  echo "→ Updating Supabase users.role…"
+  RESP=$(supa -X PATCH "${SUPA_URL}/rest/v1/users?id=eq.${USER_ID}" \
+    -H 'Prefer: return=representation' \
+    -d "{\"role\": \"$TARGET\"}")
+  echo "$RESP" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+if not isinstance(d, list) or not d:
+    print(json.dumps(d), file=sys.stderr); sys.exit(4)
+print("  updated:", d[0]["email"], "role →", d[0]["role"])
+' || exit 4
+fi
+
+# --- update Flagsmith identity trait (both envs) --------------------------
+for ENV_PAIR in "dev:$FLAGSMITH_ENV_DEV_ID" "prd:$FLAGSMITH_ENV_PRD_ID"; do
+  ENV_NAME=${ENV_PAIR%:*}
+  ENV_ID=${ENV_PAIR#*:}
+  echo "→ Writing Flagsmith trait role=$TARGET for identity $USER_ID in env=$ENV_NAME ($ENV_ID)…"
+  fs_api -X POST "${FLAGSMITH_API}/environments/${ENV_ID}/identities/${USER_ID}/traits/" \
+    -d "{\"trait_key\":\"role\",\"trait_value\":\"$TARGET\"}" \
+    | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+if isinstance(d, dict) and d.get("trait_key") == "role":
+    print("  ✓ wrote:", d)
+else:
+    print("  ! response:", json.dumps(d), file=sys.stderr); sys.exit(5)
+' || exit 5
+done
+
+echo
+echo "✓ Done. The per-role flag cache TTL is 30s; user's resolved flags update within that window."
+exit 0

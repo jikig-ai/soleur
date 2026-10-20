@@ -1,0 +1,138 @@
+# Deploy Status Debugging
+
+When the release workflow's deploy step fails or times out, query `/hooks/deploy-status` to get the structured exit reason from ci-deploy.sh.
+
+## Call Pattern
+
+Run this as ONE Bash call (variables do not persist between calls). Fetch the credentials from Doppler `prd_terraform`, sign, then GET (read-only endpoint; the HMAC is computed over the empty body). The signature and the Access service-token pair ride curl's stdin config, never its argument list (argv shows in `/proc/<pid>/cmdline`). Bash only; `bash -x` would print them.
+
+```bash
+WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET --project soleur --config prd_terraform --plain)
+CF_ACCESS_CLIENT_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID --project soleur --config prd_terraform --plain)
+CF_ACCESS_CLIENT_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET --project soleur --config prd_terraform --plain)
+SIGNATURE=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
+(LC_ALL=C; for n in SIGNATURE CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do case "${!n}" in ''|*[!A-Za-z0-9._~+/=-]*) echo "$n unset or not [A-Za-z0-9._~+/=-] (refused, not sent)" >&2; exit 1;; esac; done) || exit 1
+curl --disable --proto '=https' -m 30 -fsS -X GET --config - https://deploy.soleur.ai/hooks/deploy-status \
+  < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "$SIGNATURE" "$CF_ACCESS_CLIENT_ID" "$CF_ACCESS_CLIENT_SECRET")
+```
+
+## When NOT to use this probe
+
+This runbook covers debugging the deploy-status webhook code path itself. Do NOT use this probe for **post-apply verification** of `terraform apply -target=terraform_data.deploy_pipeline_fix`. The HTTP probe is a proxy-layer signal: it observes "webhook is up + HMAC validates" but the post-apply question is provisioner-layer: "did the file provisioners write to disk and did remote-exec restart the service?" When CF Access landed in front of `/hooks/*`, the proxy-layer signal degraded silently — anonymous probes return 403 from Access — while provisioner-layer reality was unaffected. Eight prior remediations succeeded with a green AC marker that was actually red.
+
+For post-apply verification, use the file+systemd contract:
+
+```bash
+SERVER_IP=$(cd apps/web-platform/infra && terraform output -raw server_ip)
+LOCAL_HASH=$(sha256sum apps/web-platform/infra/ci-deploy.sh | awk '{print $1}')
+ssh -o ConnectTimeout=5 root@"$SERVER_IP" \
+  "sha256sum /usr/local/bin/ci-deploy.sh && systemctl is-active webhook"
+```
+
+The remote hash must equal `$LOCAL_HASH` and `systemctl is-active webhook` must return `active`. Extend the same pattern to `webhook.service`, `cat-deploy-state.sh`, and `hooks.json` if you want to verify all four provisioners landed (the `ci-deploy.sh` hash typically suffices because the provisioners run in sequence and any earlier failure aborts the resource creation).
+
+The `soleur:ship` Phase 5.5 "Deploy Pipeline Fix Drift Gate" surfaces this contract automatically when a PR edits any of the four trigger files. See [`2026-04-29-deploy-pipeline-fix-postapply-verification-cf-access.md`](../../../../../knowledge-base/project/learnings/bug-fixes/2026-04-29-deploy-pipeline-fix-postapply-verification-cf-access.md) for the root cause and contract design.
+
+## Reason Taxonomy
+
+| reason | exit_code | Meaning | Remediation |
+|---|---|---|---|
+| `ok` | 0 | Deploy succeeded | None |
+| `running` | -1 | ci-deploy.sh is in progress | Poll again |
+| `no_prior_deploy` | -2 | State file missing (fresh server) | Trigger deploy |
+| `insufficient_disk_space` | 1 | Less than 5GB free on server | Run disk-monitor, consider pruning docker images earlier |
+| `lock_contention` | 1 | Another ci-deploy.sh holds flock | Wait for prior run to finish; if stuck >10min, SSH to kill |
+| `doppler_unavailable` | 1 | doppler binary missing on server | Re-run terraform apply to reprovision |
+| `doppler_token_missing` | 1 | DOPPLER_TOKEN env var not set | Check `/etc/default/webhook-deploy` on server |
+| `doppler_fetch_failed` | 1 | Transient Doppler API failure | Retry deploy |
+| `command_missing` | 1 | Empty SSH_ORIGINAL_COMMAND | Check webhook -> ssh trigger wiring |
+| `command_malformed` | 1 | Wrong arg count | Check CI payload shape |
+| `action_unknown` | 1 | Unknown action verb in command | Fix CI workflow |
+| `component_unknown` | 1 | Unknown component name | Check ALLOWED_COMPONENTS allowlist |
+| `image_mismatch` | 1 | Image doesn't match component | Check ALLOWED_IMAGES mapping |
+| `tag_malformed` | 1 | Tag doesn't match semver | Check CI tag format |
+| `canary_sandbox_failed` | 1 | bwrap verification failed on canary | Read the `DEPLOY_ROLLBACK: bwrap sandbox non-functional` row without SSH: `knowledge-base/engineering/operations/runbooks/canary-probe-set.md#blocking-bwrap-sandbox-probe--reading-its-self-report-8016-pr-8026` |
+| `canary_sandbox_failed` | 1 | stderr `bwrap: Unexpected capabilities but not setuid, old file caps config?` (read `bwrap_err=` on the `DEPLOY_ROLLBACK: bwrap sandbox non-functional` journald row, Better Stack tag `ci-deploy` — the deploy-status JSON carries only `reason`) — a file-cap'd `/usr/bin/bwrap` OR ambient/bounding capabilities reaching a non-root exec (e.g. a stale installed `ci-deploy.sh` still passing `--cap-add SYS_ADMIN`); released bwrap 0.8–0.12 aborts on `real_uid != 0 && has_caps()` (upstream has no file-cap support) | Merged is not delivered: the host runs the INSTALLED `ci-deploy.sh` until `apply-deploy-pipeline-fix.yml` (push-triggered on `apps/web-platform/infra/ci-deploy.sh`; `workflow_dispatch` when the push arm is cancelled) delivers it — verify by comparing `.ci_deploy_sha256` in the deploy-status hook's JSON body against `git show origin/main:apps/web-platform/infra/ci-deploy.sh \| sha256sum` (or run `scripts/check-deploy-script-parity.sh`). If drifted, dispatch the apply; if the host script is current, the image itself still carries the `setcap` — confirm the deployed tag postdates the #9874 revert build. Resolution trail: incident #9871, apply run 37976212395, green deploy run 37980286319 |
+| `canary_sandbox_failed` | 1 | stderr `/usr/local/bin/bwrap: line 424: /usr/bin/bwrap: Operation not permitted` (the shim's final `exec`; inner rc 126; read `bwrap_err=` on the `DEPLOY_ROLLBACK: bwrap sandbox non-functional` journald row, Better Stack tag `ci-deploy`) — execve EPERM: file caps on the real binary not covered by the container bounding set (capped image + clean container, no `--cap-add`) | Deploy the cap-free image tag (post-#9874 build — in #9871 the fix landed as `v0.334.1` after a rerun of the upstream flaked `test-scripts` job re-armed the `ci_not_green`-skipped deploy). If the image is clean but `--cap-add` symptoms persist, the host script is stale: merged is not delivered — the installed `ci-deploy.sh` runs until `apply-deploy-pipeline-fix.yml` delivers it; verify `.ci_deploy_sha256` in the deploy-status hook's JSON body vs `git show origin/main:apps/web-platform/infra/ci-deploy.sh \| sha256sum` (or `scripts/check-deploy-script-parity.sh`) and re-dispatch the apply on drift |
+| `canary_failed` | 1 | Canary health-check failed 10x | Roll back; inspect canary container logs |
+| `production_start_failed` | 1 | Production container didn't start post-swap | Check docker state; consider manual rollback |
+| `plugin_seed_mount_unsafe` | 1 | The plugin-mount seed REFUSED to run: `PLUGIN_MOUNT_DIR` was not non-empty/absolute/under `/mnt/data/` ending `/plugins/soleur`. The seed's container-side `find -delete` runs as root on the bind source, so a wrong-path env value would be a recursive delete on an arbitrary host path — this reason means the guard caught that, not that the copy failed. Emits the stderr/journald marker `PLUGIN_SEED_MOUNT_UNSAFE` | Check what set `PLUGIN_MOUNT_DIR` (webhook.service env, `/etc/default/webhook-deploy`, an infra-config delivery) — the deploy never attempted the seed, so nothing was deleted. The correct value is `/mnt/data/plugins/soleur` |
+| `plugin_seed_copy_failed` | 1 | The plugin-mount seed failed. Post-#8743 the seed is container-side (`docker run --rm -u 0 --entrypoint /bin/sh -v $PLUGIN_MOUNT_DIR:/plugin-mount`: clear → `cp -a` → `.seed-complete`, all inside the image), so a foreign-uid or root-seeded tree CANNOT wedge it the way the pre-#8743 deploy-uid `docker cp` did (the `fchmodat2 .claude-plugin: operation not permitted` EPERM that killed every web-2 deploy for 25 days — cloud-init's root-run seed produces a uid-1001 tree that uid-1000's client-side untar cannot chmod/delete) | Read the `PLUGIN_SEED_PROBE dst_owner=<u>:<g> marker=<u>:<g>\|absent findmnt=<src>` journald row emitted immediately before the mutation (Better Stack — ships only when the probe line reaches stderr/PRIORITY 3, the arm that admitted the fchmodat2 rows; discriminating uid/gid/mount-source probe — the facts the fchmodat2 root cause needed and could not get off-box). A post-#8743 `plugin_seed_copy_failed` with a seed that is ownership-agnostic means the mount itself is broken (read-only remount, missing dir, image missing `/opt/soleur/plugin`), not ownership — grep Better Stack for the container's stderr around the timestamp. Do NOT SSH the host. |
+| `ok_peer_fanout_degraded` | 0 | Deploy SUCCEEDED locally, but a PEER web host did not ACCEPT the fan-out (missing 202: unreachable / HMAC-rejected / secret unreadable / signature uncomputable). Non-ACCEPTANCE, NOT peer-failed — the peer's own async verdict is the `.peers["<ip>"]` slot (see below) | Deploy is live on this host; the peer is the problem. Grep Better Stack (tag `ci-deploy`) for `FANOUT: peer <ip> NOT accepted`, `FANOUT: webhook secret unavailable`, `FANOUT: could not compute the request signature`. Check the peer's webhook on the private net (`:9000` firewall is private-only). Do NOT SSH the host. |
+| `inngest_restart_failed` | 1 | `systemctl restart inngest-server.service` itself exited non-zero (restart path, before any health probe) | Check Sentry + Better Stack for OOM/unit errors around the timestamp; re-dispatch `restart-inngest-server.yml` once — repeated failures mean a unit/host problem, not a transient |
+| `inngest_health_failed` | 1 | `/health` unreachable after the verify budget (`verify_inngest_health`) | **Post-#5159 the verify gates on `/health` (process liveness) only; a missing cron-plan is ADVISORY** (the cron-plan loop polls `/v1/functions` best-effort and returns success even with no cron re-armed) — so this reason now means the `inngest-server` process itself never came back healthy, NOT a de-planned registry. A standalone restart de-plans crons and CANNOT re-arm them (a loopback `PUT /api/inngest` returns `modified:false`, proven #5159), so do NOT re-dispatch `restart-inngest-server.yml` to fix missing crons. For a genuinely dead process: check Sentry + Better Stack for OOM/unit errors around the timestamp, then recover by **redeploying / restarting web-platform** (restarting the app container makes it reconnect; the inngest-server re-discovers it and re-arms crons — reconnection-driven, the SDK sets no `appVersion`. Re-run the latest **deploy-arm** `web-platform-release` run — `gh run rerun "$(gh run list --workflow=web-platform-release.yml --event workflow_run -L1 --json databaseId -q '.[0].databaseId')"`; `--event workflow_run` is required because since #5806/ADR-217 every merge also produces a push-arm run that only builds and publishes and restarts NOTHING — or `docker restart soleur-web-platform`). If the Sentry cron monitors (monitors API curl in postmerge SKILL.md) show persistent missed check-ins, that is real H9b — recover the same way (redeploy web-platform, immediate; or wait for the `--poll-interval` self-heal). Confirm host delivery the no-SSH way before re-dispatch (`apply-deploy-pipeline-fix.yml` run green for the merge SHA + infra-config-status per-file sha256 match, per the soleur:ship Deploy Pipeline Fix Drift Gate — NOT the SSH post-apply contract above) |
+| `quiesced` | 0 | `quiesce inngest _ _` (op=quiesce-web, #6178) succeeded — inngest is not-serving AND unit-inactive AND not-enabled on this host, and (where the unit exists) the quiesce marker `/var/lib/inngest/quiesced-by-op` attributes it, so the tri-state reads `quiesced` (#6921) | None (the no-SSH web-host scheduler quiesce for the dedicated-host cutover 2.2 gap). Re-run `op=execute`. |
+| `quiesce_capture_failed` | 1 | `quiesce inngest _ _` found the unit `active` and ran the bounded (120 s) capture of still-armed reminders BEFORE writing the marker or disabling/stopping; the capture failed or timed out, so the handler stopped NOTHING (#6921) | The scheduler is still running — no reminder is at risk. Read the cause from Better Stack (tag `ci-deploy`): `INNGEST_QUIESCE_CAPTURE_FAILED rc=… stderr_tail=…` — the tail is passed through `_cred_err_tail` and then a URI/DSN scrub before it is logged. If the unit is active but its loopback GQL is dead (the capture can never succeed), the unit is still `enabled`, so it is not quiesced and a restart is allowed: dispatch `restart-inngest-server.yml`, then re-dispatch `op=quiesce-web`. There is no override flag. Do NOT SSH the host. |
+| `quiesce_capture_unavailable` | 1 | `quiesce inngest _ _` found the unit neither `active`, nor already quiesced, nor absent (`failed`, `activating`, `deactivating`, inactive-but-enabled, or `disabled_unattributed`), so there was no trustworthy capture to take; nothing was disabled or stopped (#6921). Journald (tag `ci-deploy`) `INNGEST_QUIESCE_CAPTURE_UNAVAILABLE unit= enabled= state=` | `state=disabled_unattributed` → dispatch `op=rollback`, then `op=quiesce-web`. `enabled=enabled` (unit failed/activating/inactive) → not quiesced, so dispatch `restart-inngest-server.yml` and re-dispatch `op=quiesce-web` once it serves. `unit=deactivating` → a stop is in flight; re-dispatch after 180 s. Do NOT SSH the host. |
+| `quiesce_marker_write_failed` | 1 | the capture succeeded but the atomic write of the quiesce marker `/var/lib/inngest/quiesced-by-op` failed; nothing was disabled or stopped (#6921) | Re-dispatch `op=quiesce-web` (it captures again). If it repeats, the `/var/lib/inngest` write path on the host is broken: read the `ci-deploy` rows around the failure in Better Stack and file an issue with the run URL. Do NOT SSH the host. |
+| `quiesced_shape_unrecognized` | 1 | `quiesce inngest _ _` verified not-serving + not-enabled, but on a host that has the unit the tri-state did not read `quiesced` (marker missing, unparseable, or voided) (#6921) | The unit is stopped and disabled, so no scheduler runs, but 2.2 will not certify it and 2.1 cannot resume. Dispatch `op=rollback` (retires the capture, removes any marker, re-enables), then a fresh `op=quiesce-web`. Do NOT SSH the host. |
+| `inngest_still_serving` | 1 | quiesce ran but inngest is STILL serving `/health` OR the unit is still active (a scheduler executing queued jobs can outlive `/health`) | Persistent still-serving = the unit is being RESURRECTED. Pull `reason=` from `/hooks/deploy-status` + Better Stack (`logger -t ci-deploy`) and investigate what restarts it (e.g. a stray deploy). Do NOT SSH the host. |
+| `inngest_still_enabled` | 1 | quiesce stopped inngest but the unit is STILL `enabled` (the `disable` failed on a unit WITH an `[Install]` section) — a reboot would re-arm the old scheduler | The enabled-state assertion caught what a serving-only verify would miss. Check Better Stack for the disable failure; a persistent case means the unit is being re-enabled (stray deploy). Do NOT SSH the host. |
+| `quiesced_peer_fanout_unaccepted` | 1 | quiesce succeeded locally but a PEER web host did not ACCEPT the fan-out (missing 202: unreachable / HMAC-rejected). **NOTE: non-ACCEPTANCE, NOT peer-not-quiesced** — the peer's own quiesce verdict lands on the PEER's deploy-status slot (DI-C3, unreadable from here) | Check the peer host's reachability + the web→web:9000 firewall + the run log, then re-dispatch `op=quiesce-web`. Not always transient: the same reason is written when the originating host cannot read the `deploy-peer` secret from its own `hooks.json`, where a re-dispatch does not converge, and when the originating host cannot compute the request signature (python3 missing or the signer failing) — grep Better Stack for `FANOUT: webhook secret unavailable` and `FANOUT: could not compute the request signature` before re-dispatching. Do NOT SSH the host. |
+| `inngest_quiesced_restart_refused` | 1 | `restart inngest` found the unit in the quiesced shape (`is-active` ∈ {`inactive`, `failed`} AND `is-enabled` = `disabled`) WITH a valid quiesce marker, and refused — a restart STARTS a disabled unit (#8077). Journald (tag `ci-deploy`) `INNGEST_RESTART_REFUSED` | Deliberate, not a fault: the web scheduler was quiesced by `op=quiesce-web` for the dedicated-host cutover. Only `op=rollback` (the `enable` verb) re-arms it; a restart never does. If the quiesce was not intended, dispatch `op=rollback`. Do NOT SSH the host. |
+| `inngest_disabled_unattributed_restart_refused` | 1 | `restart inngest` found the stopped+disabled shape with NO valid quiesce marker (absent, unparseable, or voided because the unit started after it) and refused. The refusal is on the shape alone, so a lost marker never turns into a restart (#6921/#8077) | Not a deliberate quiesce: something else disabled the unit (typically a failed `systemctl enable` in `inngest-bootstrap.sh`, or a manual disable). The watchdog also reports it as `DISABLED_UNATTRIBUTED`. Dispatch `op=rollback` to re-enable and start it. Do NOT SSH the host. |
+| `inngest_quiesced_deploy_refused` | 1 | `deploy inngest <tag>` found the quiesced shape with a valid quiesce marker and refused at the top of the arm, before the image pull and the bootstrap (which would `enable` and restart the unit) | Same as `inngest_quiesced_restart_refused`: only `op=rollback` re-arms a quiesced web scheduler. Re-run the image deploy after `op=rollback` if the scheduler is meant to serve again. Do NOT SSH the host. |
+| `inngest_disabled_unattributed_deploy_refused` | 1 | `deploy inngest <tag>` found the stopped+disabled shape with NO valid quiesce marker and refused before the image pull | Same as `inngest_disabled_unattributed_restart_refused`: dispatch `op=rollback`, then re-run the image deploy. Do NOT SSH the host. |
+| `enabled` | 0 | `enable inngest _ _` (op=rollback reverse, #6178) succeeded — the cutover capture was retired to `cutover-capture.json.retired-<epoch>` and the quiesce marker removed BEFORE enable, then inngest re-enabled + started + serving on this host (journald `INNGEST_ENABLE: retired capture=… marker_removed=…`) | None (the no-SSH reverse of quiesce; restores the `[Install]` symlink a quiesce-disable removed). |
+| `inngest_enable_failed` | 1 | `systemctl enable inngest-server.service` itself exited non-zero (enable path) | On **web-2** this is expected: web-2 has no `inngest-server.service`, and the `op=rollback` fan-out writes this reason to web-2's own slot — tolerated, nothing to do. On web-1: check Better Stack for the unit error around the timestamp; re-dispatch `op=rollback`. Do NOT SSH the host. |
+| `inngest_start_failed` | 1 | enable succeeded but `systemctl start inngest-server.service` exited non-zero | Check Better Stack + Sentry for OOM/unit errors; re-dispatch `op=rollback`. Do NOT SSH the host. |
+| `inngest_reenable_unverified` | 1 | enable+start ran but the unit is not serving `/health` OR is not `enabled` afterward | Pull `reason=` from `/hooks/deploy-status` + Better Stack and investigate; re-dispatch `op=rollback`. Do NOT SSH the host. |
+| `enabled_peer_fanout_unaccepted` | 1 | enable succeeded locally but a PEER did not ACCEPT the fan-out (non-ACCEPTANCE, NOT peer-not-enabled; DI-C3) | Check the peer host + firewall + run log, re-dispatch `op=rollback`. Do NOT SSH the host. |
+| `component_not_quiescible` | 1 | `quiesce` targeted a non-inngest component | Only `quiesce inngest _ _` is valid (web-platform quiesce is docker-level). Fix the CI payload. |
+| `component_not_enableable` | 1 | `enable` targeted a non-inngest component | Only `enable inngest _ _` is valid. Fix the CI payload. |
+| `no_handler` | 1 | Component has no case handler in ci-deploy.sh | Add handler (code change) |
+| `unhandled` | 1 | EXIT trap fired; specific reason not instrumented | Check journalctl; consider adding explicit final_write_state call |
+| `timeout` | 124 | Wall-clock cap (`ci-deploy-wrapper.sh` 1800s, raised from 900s in #5061) sent SIGTERM and `ci-deploy.sh`'s TERM trap fired before bash exited (#3704) | SSH and run `journalctl -u webhook -t ci-deploy --since '-15m'` for the last successful step before silence; likely culprit is hung `docker pull`, `docker exec bwrap`, or canary probe. |
+| `corrupt_state` | -3 | State file is unparseable JSON | Server-side disk issue; SSH to investigate |
+
+## Response fields: `.peers` (per-fan-out-peer verdict merge)
+
+`cat-deploy-state.sh` merges a top-level `peers` object when the state file
+carries `fanout_peers` — written by the deploy arm when it fanned out. A
+`deploy-peer`-received run writes no `fanout_peers` (no re-fan), so the merge is
+inert on a peer and cannot recurse.
+
+Each key is a peer private IP (`10.0.1.x`); each value is that peer's **whole**
+deploy-status JSON, fetched `GET http://<ip>:9000/hooks/deploy-status` over the
+private net with the shared `webhook_deploy_secret` HMAC (`curl --max-time 3`,
+stdin `--config` — the `fan_out_to_peers` pattern). An unreadable peer fills its
+slot with `{"error":"unreachable"|"http_<code>"|"not_json"|"unsigned"|"bad_peer"}`
+— the merge never fails the hook; the release workflow owns the verdict.
+
+Error-slot vocabulary: `unreachable` (connect/timeout), `http_<code>` (non-200),
+`not_json` (200 but unparseable), `bad_peer` (the fanout_peers entry was not
+`^[0-9.]+$` — it never reached curl), `unsigned` (web-1 could not sign the read
+— its hooks.json deploy-status secret unreadable/uncomputable). The workflow
+treats **`unsigned` as TERMINAL** (exit 1 on first sight — a credential defect
+cannot heal inside the poll budget); every other class, a missing slot, and a
+non-object `.peers` are polled until the budget exhausts. If the budget
+exhausts while every body still lacks a `.peers` key entirely, web-1's
+`cat-deploy-state.sh` predates the peers merge — its delivery rides
+`apply-deploy-pipeline-fix.yml` / `terraform_data.deploy_pipeline_fix_web2`,
+and that red is a delivery gap, not a peer failure.
+
+The release workflow's `Verify peer deploy completion` step grades each expected
+peer (every `WEB_HOST_PRIVATE_IPS` member except the `deploy.` ingress host):
+`exit_code==0 && tag=="v$VERSION"` passes; `exit_code` in `-1/-2/-3` or a missing
+slot keeps polling (the peer's deploy starts when web-1's ends — async by
+design); any other `exit_code` or an `error` slot fails the run **fail-closed** —
+a peer deploy failure now reaches the run result instead of hiding behind
+web-1's `/health` (the gap that let #8743 burn 25 days).
+
+Because the slot embeds the peer's own JSON, `.peers["10.0.1.11"].ci_deploy_sha256`
+also answers "is web-2's installed script current" — the parity read
+`scripts/check-deploy-script-parity.sh` formalizes.
+
+## When NOT to SSH
+
+Per AGENTS.md: SSH is for infrastructure provisioning (Terraform) only, never for logs. Use `/hooks/deploy-status` + Sentry API + Better Stack as the three observability layers. SSH is read-only last-resort diagnosis for `canary_sandbox_failed` only (bwrap capability errors live in journalctl).
+
+## Rerun Safety
+
+**Do not `gh run rerun --failed` while ci-deploy.sh may still be running on prod.** A new `/hooks/deploy` POST will hit `flock -n` failure and write `reason=lock_contention` -- masking the original deploy's actual fate. The advisory flock in ci-deploy.sh is held by FD 200 for the full lifetime of the script (release is implicit on FD close at process exit; there is no manual `flock -u` path that could leak). A `lock_contention` reason on rerun therefore means the prior invocation is **still in its critical section**, not a release-path leak.
+
+**In-workflow self-gating (PR #3408).** `web-platform-release.yml`'s `deploy` job now begins with a `Pre-rerun lock probe` step that GETs `/hooks/deploy-status` before the deploy POST and short-circuits with an `::error::` annotation when the prior run is still in its critical section (`.exit_code == -1` and `(now - start_ts) <= 1800s` since #5061). The probe is degraded-permissive: any non-JSON / empty / HTTP-error response falls through to the deploy step. flock remains the load-bearing safety net; the probe is a fast-path UX improvement that surfaces "still running" up front instead of after an 1800s downstream-step timeout. `gh run rerun --failed` therefore self-gates against in-flight POSTs in the common case.
+
+The operator-side advice below still applies for **out-of-workflow** scenarios (manual triggers, cross-component deploys, ad-hoc curl reruns) where the in-workflow probe doesn't run.
+
+If the workflow's verify-completion step times out, **first poll `/hooks/deploy-status` directly** (per the call pattern at the top of this file) and confirm `exit_code` is no longer `-1` before retrying. The verify-completion ceiling is **1800s** as of #5061 (`STATUS_POLL_MAX_ATTEMPTS=360 × INTERVAL_S=5` in `.github/workflows/web-platform-release.yml`); the matching `Verify deploy health and version` ceiling is also 1800s (`HEALTH_POLL_MAX_ATTEMPTS=180 × INTERVAL_S=10`); the `Pre-rerun lock probe` `IN_FLIGHT_CEILING_S` is also 1800s and must be kept in sync with the verify-completion ceiling if either is changed. Wait at least that long before considering the workflow truly stuck. See [`2026-05-07-deploy-poll-ceiling-must-track-realistic-deploy-window.md`](../../../../../knowledge-base/project/learnings/best-practices/2026-05-07-deploy-poll-ceiling-must-track-realistic-deploy-window.md) for the recurrence pattern and prevention checklist, and issue [#3408](https://github.com/jikig-ai/soleur/issues/3408) for the workflow-level pre-rerun probe.

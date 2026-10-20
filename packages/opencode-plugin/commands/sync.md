@@ -1,0 +1,977 @@
+---
+name: sync
+description: Analyze codebase and populate knowledge-base with conventions, patterns, and technical debt
+argument-hint: "[area: conventions|architecture|testing|debt|project|c4|domain-model|all]"
+---
+
+# Sync Codebase to Knowledge Base
+
+Analyze an existing codebase and populate knowledge-base files with coding conventions, architecture decisions, testing practices, and technical debt markers.
+
+**Use this command when:**
+
+- Adopting Soleur on an existing project (initial bootstrap)
+- Periodically updating knowledge-base as codebase evolves (maintenance)
+
+<!-- operator-typed-render:start -->
+**Any message this skill PRINTS that tells the operator to run a skill or command renders at emit time.** The doc names it canonically (`soleur:<name>`, ADR-226); before printing, render it as the active harness's **operator-typed form** per `formatSkillInvocation` (`plugins/soleur/lib/harness.ts`), which owns the per-harness slash and sigil forms — the operator types that string into a fresh session where no routing contract is in context, so a bare canonical name is model-discretion there rather than a dispatch. This covers abort messages, `AskUserQuestion` prompts and options, `Display`/`echo` lines and resume prompts alike; an agent-read instruction stays canonical.
+<!-- operator-typed-render:end -->
+
+## Input
+
+<sync_area> #$ARGUMENTS </sync_area>
+
+**Valid areas:** `conventions`, `architecture`, `testing`, `debt`, `project`, `c4`, `domain-model`, `all` (default)
+
+**Note on `rule-prune` (undocumented, monorepo-only):** This area is excluded
+from `all` dispatch AND from the advertised area list above, because its
+producers (`scripts/rule-metrics-aggregate.sh`, `scripts/rule-prune.sh`) live at
+the monorepo root outside the plugin payload and cannot be shipped to a
+marketplace install (#7442). It also has no input source on a customer machine:
+its telemetry producer `emit_incident()` is defined in
+`.claude/hooks/lib/incidents.sh`, which is likewise not in the payload.
+Advertising it would invite a customer into a path that always halts. It remains
+invocable by name inside this repo, gated on the sentinel below. Append
+`--weeks=<n>` (default 8) to override the staleness threshold.
+
+**Note on `c4`:** Generates a LikeC4 diagram from the component docs the `project`
+area writes, so it runs AFTER `project` in `all` dispatch. Non-destructive: it
+emits a distinct composing file and refuses to overwrite anything it did not
+write.
+
+**Note on `domain-model`:** This area runs in `all` dispatch AND standalone, with
+**two different contracts** — see Domain Model Analysis below. Standalone, it is
+terminal: the drift report plus the per-row approval-gated write ARE the output.
+Under `all` (and in headless mode, where there is no operator to approve rows) it
+bootstraps the register if absent, drift-checks, appends candidates to the
+`## Auto-inferred (unreviewed)` section only, and feeds its row count into the
+coverage summary rather than terminating the run.
+
+## Execution Flow
+
+### Phase 0: Setup
+
+**Load project conventions:**
+
+```bash
+# Load project conventions
+if [[ -f "CLAUDE.md" ]]; then
+  cat CLAUDE.md
+fi
+```
+
+Read `CLAUDE.md` if it exists - apply project conventions during sync analysis.
+
+**Validate knowledge-base directory exists:**
+
+```bash
+if [[ ! -d "knowledge-base" ]]; then
+  mkdir -p knowledge-base/project/{learnings,brainstorms,specs,plans,components}
+  echo "Created knowledge-base/ directory structure"
+fi
+```
+
+If `knowledge-base/` does not exist, create it with standard subdirectories.
+
+**Validate git repository:**
+
+```bash
+if [[ ! -d ".git" ]]; then
+  echo "Warning: Not a git repository. Some analysis features may be limited."
+fi
+```
+
+Warn but continue if not a git repo.
+
+**Validate the plugin root is OUR plugin (fail closed — #7442):**
+
+```bash
+SOLEUR_ROOT_OK=0
+if [ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
+   && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" \
+   && [ -d "${CLAUDE_PLUGIN_ROOT}/scripts" ]; then
+  SOLEUR_ROOT_OK=1
+fi
+if [ "$SOLEUR_ROOT_OK" -ne 1 ]; then
+  echo "SOLEUR_SYNC_ROOT_UNRESOLVED reason=plugin-root-unverified"
+  echo "soleur:sync — the plugin root did not verify as the Soleur payload; refusing to run any producer (ADR-179)." >&2
+  exit 1
+fi
+```
+
+**Probe the producer toolchain (named degradation, not a silent 127):**
+
+```bash
+command -v bun >/dev/null 2>&1 \
+  || echo "SOLEUR_SYNC_TOOLCHAIN_MISSING tool=bun affects=c4,coverage"
+```
+
+`bun` absent is not fatal — the areas that do not need it still run — but without
+this line the failure surfaces only as `bun: command not found` with no marker,
+which is indistinguishable from the area having nothing to do. Report the missing
+toolchain to the user alongside whatever else the run produced.
+
+**A producer missing from a VERIFIED root is named, not silent.** The gate above
+answers whether the root is genuinely the Soleur payload, and answers it
+correctly. It cannot answer whether that root actually *carries* the producer a
+given area invokes — an incomplete or torn payload satisfies every predicate
+above. Each producer invocation below is therefore wrapped in its own presence
+check, in the same subprocess, so an absent producer is skipped rather than
+invoked and reports:
+
+```text
+SOLEUR_SYNC_PRODUCER_MISSING producer=<payload-relative-path> affects=<area> reason=absent-from-verified-root
+```
+
+`reason=` states what was **observed** — this path is absent under a root that
+verified — never why it is absent. A stale install, an interrupted install, and a
+packaging change that dropped a file are indistinguishable from here, and naming
+one of them would be a diagnosis the guard cannot support.
+
+When one of these fires, report to the user verbatim:
+
+> Soleur couldn't find one of its own files (`<producer>`), so the `<area>` step
+> didn't run. This is a problem with the Soleur installation, not with your
+> project. The most likely fix is to reinstall the Soleur plugin — updating the
+> marketplace alone does not update an installed plugin. Run
+> `claude plugin marketplace update && claude plugin update soleur@<marketplace>`,
+> then start a new session. `<marketplace>` is the id `claude plugin list` prints
+> beside `soleur` — `soleur-marketplace` if you installed from the published
+> marketplace. If the same line comes back, reinstall outright with
+> `claude plugin uninstall soleur@<marketplace> && claude plugin install soleur@<marketplace>`.
+> If it still comes back, this is a bug in Soleur: please report it with this line.
+> Everything else in this run completed normally.
+
+Give the commands, not just the advice. The message names the marketplace-vs-install
+distinction, and a founder who is told that and handed no command is left exactly where the
+report that opened #7474 started. The plugin half is QUALIFIED (`soleur@<marketplace>`) rather
+than bare: upstream anthropics/claude-code#76882 (collaborator comment 5310894439, 2026-08-17)
+records that the bare plugin name can fail with "Plugin not found" on current releases. It stays
+a PLACEHOLDER rather than a literal because the marketplace half differs by install path —
+`soleur-marketplace` on the published path, `soleur` when the monorepo was added directly — and
+this string is read by an operator whose path this code does not know. That is why
+`claude plugin list` is named in the same breath: without it the placeholder is not runnable. The reinstall fallback is still worth naming, though it is no
+longer the only thing that can converge an install: `plugin.json` carried a frozen `0.0.0-dev`
+sentinel until 2026-08-12, which is why an install could sit months stale while reporting success
+(measured in ADR-178). The manifests are keyless now and the recorded version changes with every
+delivered commit, so `plugin update` has something to act on — see ADR-182.
+
+**Do not attempt the reinstall yourself.** It mutates `${CLAUDE_PLUGIN_ROOT}` underneath a
+run that is still executing. Report it and let the operator run it between sessions.
+
+**Headless variant.** Under `--headless` (the post-clone auto-sync at
+`/api/repo/setup`) the user has no plugin installed, so "reinstall the plugin" is
+actively misdirecting. Report instead: *"A Soleur component (`<producer>`) was
+missing, so the `<area>` step didn't run. That's a Soleur-side defect and needs
+nothing from you — everything else completed normally."*
+
+**STOP if the plugin-root block exits non-zero.** Report to the user verbatim: *"I can't run
+`soleur:sync` here — I couldn't verify where the Soleur plugin is installed.
+Please reinstall the plugin and try again."* Do **not** try to locate the
+producers yourself, do **not** substitute a relative path, and do **not**
+continue to the phases below. Resolving the plugin root by hand is the defect
+this gate exists to prevent, and the refusal message is the point at which it is
+most tempting.
+
+Every producer below is anchored to `${CLAUDE_PLUGIN_ROOT}` — **bare, never
+`:-` or `:?`** — the operand is **quoted** (an install path may contain spaces),
+and its path is **payload-relative** (the root already *is* `plugins/soleur`, so
+it is `"${CLAUDE_PLUGIN_ROOT}/scripts/foo.ts"`, never the token followed by a second
+`plugins/soleur/` segment).
+
+Why this gate checks plugin IDENTITY and not directory shape: `CLAUDE_PLUGIN_ROOT`
+is an ordinary environment variable, and the Bash tool inherits the user's
+profile — so a `.envrc`, a `~/.bashrc` line, or a package `postinstall` can
+export it. A `test -d "$X/scripts"` predicate is satisfied by *any* directory
+with a `scripts/` child, which measurably lets an ambient value execute
+attacker-chosen bytes. Verifying the payload manifest raises the bar from
+"set any variable" to "plant a complete fake plugin". The bare form remains
+strictly better than a `:-` default, which needs no attacker precondition at all
+— but it is not safe *by construction*, and this gate is what carries it.
+
+### Phase 1: Analyze
+
+Based on the area specified (or `all` if none):
+
+**1.1 Parse Area Filter**
+
+If `<sync_area>` is empty or `all`, analyze all areas EXCEPT `rule-prune` (which must be invoked explicitly). Otherwise, analyze only the specified area. If the argument is `rule-prune`, skip all other phases and jump straight to Rule Prune Analysis below.
+
+`domain-model` and `c4` both participate in `all` dispatch, and both have a
+distinct standalone contract:
+
+- **`domain-model` standalone** — skip all other phases and jump straight to
+  Domain Model Analysis; it is terminal (drift report + approval-gated write ARE
+  the output). **Under `all`** — run the non-interactive path (§Domain Model
+  Analysis, "`all`-dispatch path"), then continue into the remaining phases.
+- **`c4`** — runs after the `project` area, since it consumes the component docs
+  that area writes. Standalone it emits only the diagram artifacts.
+
+**Ordering within `all`:** `project` → `c4` → `domain-model` → coverage summary.
+The C4 producer reads component docs, so it must not run before they are written.
+
+**1.2 Codebase Analysis**
+
+For each selected area, analyze the codebase:
+
+#### Conventions Analysis
+
+Look for coding conventions by examining:
+
+- **Naming patterns**: Variable naming (camelCase, snake_case), file naming, class naming
+- **Code style**: Indentation, bracket style, import ordering
+- **Linting config**: `.eslintrc`, `.rubocop.yml`, `pyproject.toml`, etc.
+- **Common patterns**: Guard clauses, early returns, error handling style
+
+Extract as constitution.md rules in Always/Never/Prefer format.
+
+#### Architecture Analysis
+
+Look for architecture patterns by examining:
+
+- **Directory structure**: Layer organization (models, services, controllers)
+- **Module boundaries**: How code is organized into modules/packages
+- **Dependency patterns**: Import relationships, service dependencies
+- **Design patterns**: Repository pattern, service objects, etc.
+
+Extract as learnings in `learnings/architecture/` with YAML frontmatter.
+
+#### Testing Analysis
+
+Look for testing practices by examining:
+
+- **Test file patterns**: Where tests live, naming conventions
+- **Test frameworks**: What testing tools are used
+- **Fixture/factory patterns**: How test data is managed
+- **Coverage config**: What coverage tools and thresholds are configured
+
+Extract as constitution.md rules (Testing section).
+
+#### Technical Debt Analysis
+
+Look for technical debt by examining:
+
+- **TODO/FIXME comments**: Grep for TODO, FIXME, HACK, XXX
+- **Complexity hotspots**: Large files, deeply nested code
+- **Outdated dependencies**: Package versions, deprecation warnings
+- **Code smells**: Duplicate code patterns, long methods
+
+Extract as learnings in `learnings/technical-debt/` with severity tags.
+
+#### Project Analysis
+
+Generate or update project documentation by examining:
+
+- **Project structure**: Top-level directories, entry points, main components
+- **Component boundaries**: Logical groupings of related code (not just directories)
+- **Data flow**: How information moves between components
+- **Dependencies**: Internal and external dependencies per component
+
+**Component Detection Heuristics:**
+
+1. Top-level directories under primary source path (e.g., `src/`, `plugins/`, `lib/`)
+2. Directories containing index files or multiple related modules
+3. Exclude: `tests/`, `dist/`, `node_modules/`, generated code
+
+**Output:**
+
+- `knowledge-base/project/README.md` - Project purpose, architecture diagram, component index
+- `knowledge-base/project/components/<name>.md` - One file per detected component
+
+**Component Template:** Use the template from the `spec-templates` skill.
+
+**Dependency emission (load-bearing — the C4 producer parses it).** For every
+component doc, emit internal dependencies in BOTH forms:
+
+- `dependencies:` frontmatter — a YAML list of the kebab-case `component` names
+  this component uses. This is the machine-readable form.
+- the prose `- **Internal**:` line under `## Dependencies` — human context.
+
+The two must agree. Omit `dependencies:` (or write `[]`) only when the component
+genuinely uses no other component; do not write prose-only forms such as
+`**Internal**: None (agents are standalone)` and leave the frontmatter absent.
+The `c4` area below builds diagram edges from this field (falling back to
+markdown links in the prose line for docs written before this contract), and a
+corpus with no parseable dependencies renders a valid diagram of *disconnected
+boxes* — which the relationship-count gate reports as **degraded**.
+
+**Update Behavior:**
+
+- **New components**: Create new `.md` file from template
+- **Existing components**: Check if `updated` date is current; if not, offer to refresh
+- **Removed components**: Add `status: deprecated` to frontmatter (do not delete)
+
+#### C4 Analysis
+
+Runs when `<sync_area>` is `c4`, and as part of `all` **after** the `project`
+area (it consumes the component docs that area writes).
+
+```bash
+# Guarded per ADR-179 decision 5 (#7474): the presence check and the invocation
+# share a subprocess, so a producer missing from an otherwise identity-valid
+# plugin root cannot be invoked, and its absence is named rather than surfacing
+# as a bare interpreter error. Changing this shape reds
+# tests/commands/test-sync-producer-reachability.sh (T0j/T0k/T0l) and
+# apps/web-platform/test/plugin-root-anchoring.test.ts (P6).
+if [ -f "${CLAUDE_PLUGIN_ROOT}/scripts/generate-c4-from-components.ts" ]; then
+  bun "${CLAUDE_PLUGIN_ROOT}/scripts/generate-c4-from-components.ts"
+else
+  echo "SOLEUR_SYNC_PRODUCER_MISSING producer=scripts/generate-c4-from-components.ts affects=c4 reason=absent-from-verified-root"
+fi
+```
+
+The producer parses each component doc's `dependencies:` frontmatter (falling back
+to `**Internal**: [name](name.md)` links for docs written before that contract),
+skips `status: deprecated` docs, and writes the diagram artifacts into
+`knowledge-base/engineering/architecture/diagrams/`.
+
+**It is non-destructive by construction, via three different mechanisms.**
+`soleur:architecture` writes `spec.c4` / `model.c4` / `views.c4` cwd-relative and
+the agent sandbox pins `cwd = workspacePath` — two writers, one directory. The
+producer never writes those three names. What protects each artifact differs, and
+the difference matters when reading the marker:
+
+| Artifact | Protection | Marker field |
+|---|---|---|
+| `generated-components.c4` | `GENERATED` header; refuses to overwrite a file whose first line is not that header | `skipped=` |
+| `spec.c4`, `views.c4`, `c4-model.md` | seeded **only when absent**, via `O_CREAT\|O_EXCL` — an existing one is never touched | `seeded=` |
+| `model.likec4.json` | rendered **off-tree** and published only when the verdict is not `failed` | `published=` |
+
+`model.likec4.json` carries no header — it is JSON, and it is a regenerable
+lockfile, so replacing it after a *successful* render is correct. What must never
+happen is replacing it after a *failed* one, which is what the off-tree render
+prevents. Any target that is a **symlink** is refused outright, for every artifact.
+
+A hand-corrected edge is never silently reverted, and each refusal is reported —
+`skipped=` for a protected file, `seeded=` for one that already existed, so the
+normal steady state is distinguishable from a refusal.
+
+**Report the marker, and read its `status`:**
+
+- `status=ok` — elements and relationships both non-zero.
+- `status=degraded` — **not a failure.** Either the component docs declare no
+  parseable dependencies (the diagram is a set of disconnected boxes — the docs
+  are the defect, not the run), or a hand-edited file was skipped, or the pinned
+  likec4 CLI was unreachable. Surface the reason; do not fail the sync.
+- `status=failed` (exit 1) — likec4 reported a source fault (`source-fault`),
+  produced an empty model (`empty-model`), or produced an elements-but-no-views
+  model (`zero-views` — a layout failure, not a source fault). For
+  `source-fault`/`empty-model`, surface the diagnostic and fix the `.c4`
+  source. For `zero-views`, do NOT edit the `.c4` source — retry the render,
+  then report; the committed artifact is left untouched either way.
+
+**Delivery precondition — state this, do not assume otherwise.** The KB viewer
+reads the diagram from the **GitHub source of truth**, not the on-disk clone
+(a clone holding un-pushed commits goes permanently stale). Headless sync commits
+locally and opens a PR, so a generated diagram is not visible in the viewer until
+that PR is **pushed and merged**.
+
+#### Coverage Summary
+
+Runs at the END of an `all` sync, after every other area. Writes
+`knowledge-base/project/kb-coverage.md` and prints the same marker to stdout:
+
+```bash
+if [ -f "${CLAUDE_PLUGIN_ROOT}/scripts/write-kb-coverage.ts" ]; then
+  bun "${CLAUDE_PLUGIN_ROOT}/scripts/write-kb-coverage.ts"
+else
+  echo "SOLEUR_SYNC_PRODUCER_MISSING producer=scripts/write-kb-coverage.ts affects=coverage reason=absent-from-verified-root"
+fi
+```
+
+Add one `--degraded "<reason>"` for each producer that reported `status=degraded`
+earlier in the run (the `reason=` token from its marker is the right string).
+
+For a `SOLEUR_SYNC_PRODUCER_MISSING` marker, pass the **subject as well as the
+reason** — write `--degraded "<area>: producer-missing (<producer>)"`, matching the
+area-prefixed house form shown in the `--degraded` example further down. `write-kb-coverage.ts` renders this string
+verbatim, so passing the bare `reason=` token alone would put
+`absent-from-verified-root` in the durable row with no producer and no area — the
+same unattributed signal this guard exists to replace, one layer down.
+
+Two limits, stated once: this carry-forward is unavailable when
+`write-kb-coverage.ts` is itself the missing producer, and for standalone area
+invocations (which write no coverage at all). In both cases a PRIOR
+`kb-coverage.md` still sits on disk and still satisfies the existing
+`SOLEUR_KB_SYNC_PRODUCERS` grep — so that grep certifies the *previous* run, not
+this one.
+
+```bash
+if [ -f "${CLAUDE_PLUGIN_ROOT}/scripts/write-kb-coverage.ts" ]; then
+  bun "${CLAUDE_PLUGIN_ROOT}/scripts/write-kb-coverage.ts" \
+    --degraded "c4: no-generated-relationships"
+else
+  echo "SOLEUR_SYNC_PRODUCER_MISSING producer=scripts/write-kb-coverage.ts affects=coverage reason=absent-from-verified-root"
+fi
+```
+
+**Do not hand-author `kb-coverage.md`, and do not pass the counts in.** Every count
+is derived from the tree by the script itself — the rendered `model.likec4.json`, the
+domain-model register, and the expected-path probe. That is deliberate: an earlier
+design took `--c4-elements`/`--c4-relationships`/`--domain-model-rows` flags, and an
+absent flag silently became `0`, which is byte-identical to the very failure state
+this artifact exists to detect. There is now no flag to forget.
+
+Standalone area invocations (`soleur:sync c4`, `soleur:sync domain-model`) do NOT
+write this file — its counts describe the whole knowledge base, and a partial run
+would record zeros for the areas that did not execute.
+
+**Wording is a hard constraint, not a style preference.** The report states what
+Soleur *expects* versus what is *present*. It never asserts what the business
+lacks. Write "no `privacy-policy.md` present in this knowledge base" — never
+"missing: privacy policy". This file lands in the customer's own repository,
+committed and permanently git-blamed; a deficiency framing is a durable,
+discoverable assertion that their business lacks a compliance artifact, written
+by us, about them, into a record they cannot erase.
+
+**Determinism is required.** No embedded timestamp, stable ordering — an
+unchanged KB must produce a byte-identical file, or every sync emits a one-field
+diff forever. `knowledge-base/INDEX.md` is the in-repo warning for this exact
+shape.
+
+**Emit the `SOLEUR_KB_SYNC_PRODUCERS` marker twice** — on stdout AND as a line
+inside `kb-coverage.md` — carrying `{c4_elements, c4_relationships,
+domain_model_rows, coverage_present, coverage_expected}`. This is observability
+**layer 7 (`cli-stdout-artifact`)**: on a self-hosted CLI there is no Soleur-side
+sink and there must not be one (ADR-171 §Observability boundary), so stdout alone
+would evaporate with the session and the durable artifact IS the queryable
+surface. Verify with:
+
+```bash
+grep -n 'SOLEUR_KB_SYNC_PRODUCERS' knowledge-base/project/kb-coverage.md
+```
+
+The marker carries **counts only** — no path, filename, or repo URL. On a
+producer failure emit `SOLEUR_KB_SYNC_ERROR` on stdout and record a degraded row
+in the artifact, so the failure survives the session. This is NOT
+`reportSilentFallback`: that lives in `apps/web-platform/server/observability.ts`,
+and nothing under `plugins/` imports Sentry.
+
+#### Rule Prune Analysis
+
+Runs only when `<sync_area>` is literally `rule-prune`. Surfaces AGENTS.md rules that have zero recorded hits over the threshold window as GitHub issues milestoned to "Post-MVP / Later". Does NOT edit `AGENTS.md` — a human reviews each issue and decides whether to prune. The shortlist is an investigation aid, not retirement evidence: the log records enforcement events only, so an obeyed rule never appears and zero hits nominates the best-obeyed rules first (#8030). Retirement stays an editorial call; headroom comes from migration per `cq-agents-md-tier-gate`.
+
+1. **Parse `--weeks=<n>`** from `<sync_area>` additional tokens (e.g., `rule-prune --weeks=4`). Default: 8. Also supports `--dry-run` (forwarded to `rule-prune.sh`).
+2. **Ensure `knowledge-base/project/rule-metrics.json` exists.** If missing, run the aggregator first. Both producers in this area are repo-root scripts outside the plugin payload, so the invocation is gated on a monorepo sentinel that fails closed — run this block verbatim rather than the bare command, so the halt executes whether or not this paragraph was read:
+
+   ```bash
+   # Fail closed (#7442). scripts/ here is the CUSTOMER's scripts/ on any repo
+   # that is not this monorepo, so a same-named file would execute as theirs.
+   # The sentinel is the self-hosted plugin checkout -- the same condition
+   # Phase 4.1 already gates on, and one a marketplace install never satisfies.
+   #
+   # SOLEUR_MONOREPO is what makes the invocation line safe ON ITS OWN. If the
+   # line is ever separated from this gate -- a reader that takes the last line
+   # of the block, a tool that extracts invocations line-wise -- the variable is
+   # unset and the operand becomes "/scripts/...": root-anchored, nonexistent,
+   # not writable by a non-root user. Fail-closed. A bare relative operand would
+   # instead resolve into the customer's tree and execute their file.
+   SOLEUR_MONOREPO="$(test -f plugins/soleur/.claude-plugin/plugin.json && pwd || true)"
+   if [[ -z "$SOLEUR_MONOREPO" ]]; then
+     echo "SOLEUR_SYNC_AREA_UNAVAILABLE area=rule-prune reason=monorepo-only-maintenance-area"
+     exit 2
+   fi
+   bash "${SOLEUR_MONOREPO:?monorepo sentinel not evaluated}/scripts/rule-metrics-aggregate.sh"
+   ```
+
+   Append `--dry-run` to preview the summary without writing. Do not create a stub file.
+
+   **Local telemetry source:** `.claude/.rule-incidents.jsonl` (gitignored, one line per deny/bypass written by the hooks under `.claude/hooks/`). The aggregator reads this file to produce `rule-metrics.json`. Monthly rotation archives it to `.claude/.rule-incidents-<YYYY-MM>.jsonl.gz` when `AGGREGATOR_ROTATE=1` is set (CI only).
+3. **Invoke** the pruner behind the same fail-closed sentinel (again, run the block, not the bare command):
+
+   ```bash
+   SOLEUR_MONOREPO="$(test -f plugins/soleur/.claude-plugin/plugin.json && pwd || true)"
+   if [[ -z "$SOLEUR_MONOREPO" ]]; then
+     echo "SOLEUR_SYNC_AREA_UNAVAILABLE area=rule-prune reason=monorepo-only-maintenance-area"
+     exit 2
+   fi
+   bash "${SOLEUR_MONOREPO:?monorepo sentinel not evaluated}/scripts/rule-prune.sh" --weeks=<n>
+   ```
+
+   Append `--dry-run` to preview candidates without filing. The script:
+   - Reads `knowledge-base/project/rule-metrics.json`.
+   - Filters rules with `hit_count == 0` AND `first_seen` older than the cutoff.
+   - Validates every rule_id against `^(hr|wg|cq|rf|pdr|cm)-[a-z0-9-]{3,60}$`; malformed ids are skipped with a stderr warning (never filed as issues).
+   - For each candidate, checks via `gh issue list --state open -L 200 --search "<title> in:title"` whether an open issue already exists (idempotent).
+   - Files a new issue via `gh issue create --milestone "Post-MVP / Later"` for each new candidate. Issue body contains a `### Verify` block with a paste-ready `jq` query against `rule-metrics.json` plus the `generated_at` timestamp, and explicitly states that filing does NOT authorize removal; a human must edit AGENTS.md.
+4. **Report** the candidate count and list of filed issue URLs. No constitution / learnings promotion paths apply.
+
+Skip Phase 2 through Phase 4 when the area is `rule-prune` — the gh issue filing IS the output.
+
+#### Domain Model Analysis
+
+Runs when `<sync_area>` is literally `domain-model` (#5754) **and** as part of `all` dispatch — with
+**two different contracts**, reconciled explicitly below so the difference does not survive as
+ambiguity. Drift-checks the business-rules register at
+`knowledge-base/engineering/architecture/domain-model.md` against the repo's data model
+and proposes newly-inferred rows. All extraction is deterministic
+(a bash analyzer); the LLM only phrases candidate statements at approval time — never in the
+drift-detection or write path. **Guarantee is bounded to structural documentation coverage, NOT
+semantic access-control correctness** — dynamic RLS, function-body logic, and un-merged `ALTER POLICY`
+are disclosed as blind spots, never counted.
+
+1. **Emit the drift report** (read-only). Run:
+
+   ```bash
+   if [ -f "${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh" ]; then
+     bash "${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh" drift --repo . --register knowledge-base/engineering/architecture/domain-model.md
+   else
+     echo "SOLEUR_SYNC_PRODUCER_MISSING producer=scripts/domain-model-drift.sh affects=domain-model reason=absent-from-verified-root"
+   fi
+   ```
+
+   Exit `0` = clean, `1` = drift found, `2` = error, `3` = secret-shape refuse. **This mapping
+   describes the producer's own exit codes and applies only when the producer actually ran.** If
+   the guard above emitted `SOLEUR_SYNC_PRODUCER_MISSING`, the fence still exits `0` because the
+   `echo` succeeded — that is "could not check", NOT "clean". Report it as unchecked; never fold it
+   into the register-agrees-with-source verdict. Present the report verbatim
+   to the operator — it has three sections: **stale register citations** (a cited symbol/migration no longer
+   resolves), **undocumented source facts** (a table with RLS/constraints the register never names), and a
+   **blind-spots** disclosure line. Every report carries the completeness disclaimer.
+
+2. **Approval-gated write (optional).** For each `undocumented` table the operator wants to record, extract a
+   candidate anchor + statement from the drift output and run the accept/skip/edit review (reuse the Phase 2
+   AskUserQuestion machinery — this is a self-contained reuse of the review UX, NOT a Phase-2 re-entry). For each
+   **accepted** candidate, append it via the safe primitive:
+
+   ```bash
+   if [ -f "${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh" ]; then
+     bash "${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh" write-row \
+       --register knowledge-base/engineering/architecture/domain-model.md \
+       --anchor "<migration-file › table.object>" --statement "<candidate statement>"
+   else
+     echo "SOLEUR_SYNC_PRODUCER_MISSING producer=scripts/domain-model-drift.sh affects=domain-model reason=absent-from-verified-root"
+   fi
+   ```
+
+   The primitive writes into the `## Auto-inferred (unreviewed)` section only — it NEVER touches the curated
+   `## Business Rules` table, NEVER mints a `BR-*` id, escapes markdown hazards, refuses secret-shaped content
+   (fail-closed), dedups by content anchor (an already-known anchor is a no-op, so accepted rows are not
+   re-proposed on re-run), and writes atomically. Promotion of an `Auto-inferred` row to a curated `BR-*` rule
+   is a deliberate human edit (assign an id + keep the source anchor).
+
+3. **Report** the drift counts (stale / undocumented / blind-spots) and any rows written. No constitution /
+   learnings promotion paths apply. **If any guard above emitted `SOLEUR_SYNC_PRODUCER_MISSING`,
+   report ZERO rows written and say the register was not consulted** — the `write-row` fence exits 0
+   on the guard's `echo`, so "no error" is not evidence a row landed. Reporting rows that were never
+   appended is a false statement about the operator's own data, and it is the one thing here worse
+   than the bare error this guard replaced.
+
+##### Standalone contract (`soleur:sync domain-model`)
+
+Skip Phase 2 through Phase 4 when the area is **explicitly** `domain-model` — the drift report +
+approval-gated write ARE the output. This contract is unchanged.
+
+##### `all`-dispatch path (and any headless run)
+
+The interactivity was never in the script — `write-row` is already a non-interactive primitive. It
+lives in the per-row `AskUserQuestion` gate above, which the Headless Execution Contract auto-skips,
+so under `all` (or headless) that gate would write **zero rows**. Take this path instead, then
+**continue into the remaining phases** rather than terminating:
+
+1. **Bootstrap the register if absent** — a fresh repo has none, and `drift` / `write-row` both die
+   on a path they cannot resolve:
+
+   ```bash
+   if [ -f "${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh" ]; then
+     bash "${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh" init --repo . \
+       --register knowledge-base/engineering/architecture/domain-model.md
+   else
+     echo "SOLEUR_SYNC_PRODUCER_MISSING producer=scripts/domain-model-drift.sh affects=domain-model reason=absent-from-verified-root"
+   fi
+   ```
+
+   Idempotent: an existing register is a no-op exit 0, so this is safe to run unconditionally.
+   **But exit 0 here has two meanings.** If the guard above emitted
+   `SOLEUR_SYNC_PRODUCER_MISSING`, the fence also exits 0 — because the `echo` succeeded, not
+   because the register exists. Do not read that as "already initialized": no register was
+   created, and the steps below would then append to a file that is not there. Treat a fired
+   guard as **unchecked** and skip the rest of this area.
+
+2. **Emit the drift report** exactly as in step 1 above.
+
+3. **Append every candidate directly**, via the same `write-row` primitive — no approval gate.
+
+4. **Feed the row count into the coverage summary** (`domain_model_rows`) rather than reporting it as
+   a terminal output.
+
+**Why auto-appending is safe here, and only here.** `## Auto-inferred (unreviewed)` **is** the
+staging area for unreviewed content. Appending there is not auto-approving a business rule —
+promotion to a curated `BR-*` id remains a deliberate human edit. That distinction is the whole
+reason the section exists, and it is precisely why this can be automated when a per-row approval gate
+cannot.
+
+Because no human now reads each row before it lands, every safety property `write-row` already had
+becomes load-bearing rather than advisory, and each is pinned by a red-when-broken test in
+[`domain-model-headless-append.test.sh`](../test/domain-model-headless-append.test.sh): fail-closed
+secret-shape refusal, content-anchor dedup (re-runs are no-ops), atomic temp-then-rename write,
+appends under `## Auto-inferred (unreviewed)` only, never minting a `BR-*` id, and never touching the
+curated table.
+
+**1.3 Assign Confidence Scores**
+
+For each finding, assign confidence:
+
+- **high**: Clear, explicit pattern (linting rule, documented convention)
+- **medium**: Consistent but implicit pattern (80%+ of files follow it)
+- **low**: Possible pattern (some evidence but not conclusive)
+
+**1.4 Limit Findings**
+
+Present only the top 20 findings by confidence. If more exist, inform user: "Found N findings. Showing top 20 by confidence. Run `soleur:sync` again to discover more."
+
+### Phase 2: Review
+
+**2.1 Load Existing Entries**
+
+Before reviewing findings, load existing knowledge-base content for deduplication:
+
+- **Constitution rules:** Parse `knowledge-base/project/constitution.md` and extract all bullet points under Always/Never/Prefer sections
+- **Learnings:** List files in `knowledge-base/project/learnings/` and extract titles from YAML frontmatter or first heading
+
+Store as a list of existing entry texts for comparison.
+
+**2.2 Check for Duplicates (Exact and Fuzzy)**
+
+For each finding, check for duplicates:
+
+**Exact match check:**
+
+- For constitution.md: Check if exact rule text exists in target section
+- For learnings/: Check if file with same title exists
+- If exact duplicate found, skip silently. Track count for summary.
+
+**Fuzzy match check (Jaccard similarity):**
+
+Compute word-based Jaccard similarity between the finding and all existing entries:
+
+```text
+Jaccard(a, b) = |intersection(words_a, words_b)| / |union(words_a, words_b)|
+
+Where:
+- words_a = lowercase words from text a (split by whitespace)
+- words_b = lowercase words from text b (split by whitespace)
+```
+
+Find the existing entry with highest similarity score.
+
+**If max similarity > 0.8:**
+
+Use **AskUserQuestion** to prompt user:
+
+```text
+## Similar Entry Found
+
+**New finding:**
+[finding text]
+
+**Similar to existing:**
+[existing entry text]
+
+**Similarity:** [score as percentage]%
+```
+
+**Options:**
+
+1. **Skip** - Don't add this finding (likely a duplicate)
+2. **Keep** - Proceed to review this finding anyway
+
+If user selects **Skip**, continue to next finding. If user selects **Keep**, proceed to normal Accept/Skip/Edit review.
+
+**2.3 Sequential Review** (for findings that pass deduplication checks)
+
+Present remaining findings one at a time using the **AskUserQuestion tool**:
+
+**Format:**
+
+```text
+## Sync Review (1/N)
+
+**Finding:** [type] [description]
+**Target:** [constitution.md > Section > Subsection] or [learnings/category/filename.md]
+**Confidence:** [high/medium/low]
+```
+
+**Options:**
+
+1. **Accept** - Add this to knowledge-base
+2. **Skip** - Don't add this finding
+3. **Edit** - Modify the finding before accepting
+
+**If user selects Edit:**
+
+Use AskUserQuestion with a text input option to let user modify the finding text. Then present the modified version for final approval.
+
+**Continue until all findings reviewed or user selects "Done reviewing".**
+
+### Phase 3: Write
+
+**3.1 Write Constitution Entries**
+
+For accepted constitution findings:
+
+1. Read current `knowledge-base/project/constitution.md`
+2. Find the target section (Code Style, Architecture, Testing, etc.)
+3. Find the subsection (Always, Never, Prefer)
+4. Append the new rule as a bullet point: `- [Rule text]`
+5. Write updated file
+
+**Format:**
+
+```markdown
+## Code Style
+
+### Prefer
+
+- Prefer early returns over nested conditionals
+- [NEW] Prefer snake_case for local variables
+```
+
+**3.2 Write Learnings Entries**
+
+For accepted learnings findings:
+
+1. Create new file in appropriate category: `learnings/[category]/[kebab-case-title].md`
+2. Use compound-capture YAML schema with `problem_type: best_practice`
+
+**Template:**
+
+```yaml
+---
+module: [Extracted module name or "General"]
+date: [TODAY]
+problem_type: best_practice
+component: [Mapped component type]
+tags: [relevant, tags]
+severity: [info|low|medium|high]
+---
+
+# [Finding Title]
+
+## Context
+
+[Why this pattern exists or was chosen]
+
+## Pattern
+
+[Description of the pattern or convention]
+
+## Examples
+
+[Code examples if applicable]
+```
+
+**3.3 Generate Summary**
+
+After writing, display summary:
+
+```text
+## Sync Complete
+
+**Created:** N new entries
+**Skipped:** M exact duplicates (already in knowledge-base)
+**Fuzzy duplicates:** F similar entries (user chose to skip)
+**User skipped:** P findings (during review)
+
+### New Constitution Rules
+- [Rule 1] (Code Style > Prefer)
+- [Rule 2] (Testing > Always)
+
+### New Learnings
+- learnings/architecture/service-layer-pattern.md
+- learnings/technical-debt/legacy-api-endpoints.md
+
+Run `soleur:sync` again to discover additional patterns.
+```
+
+### Phase 4: Definition Sync
+
+Scan accumulated learnings against skill, agent, and command definitions. Propose one-line bullet edits to route institutional knowledge to the definitions that need it. This complements the per-session routing in compound-capture Step 8 by catching cross-cutting learnings, retroactive learnings, and learnings from sessions where the relevant definition was not directly invoked.
+
+**4.1 Gate**
+
+Skip Phase 4 with an info message if any of these conditions are true:
+
+- Area is a specific scope (`conventions`, `architecture`, `testing`, `debt`, `project`, `rule-prune`, `domain-model`) -- Phase 4 only runs when area is `all` or unspecified
+- `knowledge-base/project/learnings/` directory does not exist
+- `plugins/soleur/` directory does not exist
+
+**4.2 Load**
+
+List all learning files from `knowledge-base/project/learnings/` recursively, excluding `archive/` and `patterns/` directories. For each learning, extract:
+
+- Title (from first `#` heading)
+- Tags or metadata (from YAML frontmatter, ad-hoc tags sections, or title keywords -- any format)
+- `synced_to` array from YAML frontmatter (treat as empty if absent)
+
+List all definitions by name:
+
+- Skills: `plugins/soleur/skills/*/SKILL.md` (flat, one level)
+- Agents: `plugins/soleur/agents/**/*.md` (recursive)
+- Commands: `plugins/soleur/commands/*.md` (flat)
+
+**4.3 Match**
+
+For each learning, determine which definitions it is relevant to. Skip pairs where the definition name is already in the learning's `synced_to` array.
+
+For each relevant pair, read the full learning content and the full definition content. Draft a one-line bullet capturing the sharp-edge gotcha -- non-obvious insight only, skip if the point is general knowledge. Check the definition does not already contain a bullet covering this topic -- if it does, discard silently.
+
+**4.4 Review**
+
+Present proposals one at a time using **AskUserQuestion** with options:
+
+```text
+## Definition Sync (1/N)
+
+**Learning:** [learning-title]
+**Definition:** [definition-name] ([skill|agent|command])
+**Section:** [target-section-name]
+**Proposed bullet:** "- [one-line bullet text]"
+```
+
+**Options:**
+
+1. **Accept** - Write the bullet to the definition file and add the definition name to the learning's `synced_to` frontmatter. If the learning has no YAML frontmatter block, prepend a minimal `---` block with only `synced_to: [definition-name]`.
+2. **Skip** - Move to next proposal. No tracking written (proposal may reappear on next run).
+3. **Edit** - Modify the bullet text, then re-display for final Accept/Skip.
+4. **Done reviewing** - Stop Phase 4. Unreviewed proposals reappear on next `soleur:sync` run.
+
+**4.5 Summary**
+
+```text
+## Definition Sync Complete
+
+- Learnings scanned: N
+- Proposals generated: P
+- Accepted: A
+- Skipped: S
+- Not reviewed: U (will reappear next run)
+
+### Definitions Updated
+- [definition-name]: +N bullets
+```
+
+If zero proposals were generated: "Phase 4: All learnings already synced to relevant definitions (N learnings, M definitions scanned)."
+
+## Headless Execution Contract (`--headless`)
+
+When invoked with the `--headless` flag (e.g. the post-clone auto-sync at
+`/api/repo/setup` runs `soleur:sync --headless`), there is no operator at a
+terminal and the checked-out branch is the freshly-cloned **protected default**
+(`git clone --depth 1` leaves you on the repo's default branch). The sync agent
+MUST obey the following in headless mode:
+
+1. **Commit knowledge-base scaffolding LOCALLY only.** Stage and commit the
+   generated `knowledge-base/` files in the workspace. Do this with a local
+   `git commit` — never assume the commit will be pushed.
+
+2. **NEVER raw `git push` the checked-out default branch.** A raw
+   `git push` to the protected default branch is rejected by branch protection
+   / push protection and returns `GH013: Repository rule violations`
+   (`! [remote rejected]`). If the changes should reach the remote, use the
+   **worktree→PR workflow** (create a feature branch / worktree, push *that*
+   branch, and open a PR) — matching the project's `pushBranch` MCP tool
+   contract, which already refuses to write a protected branch. Do **not** push
+   to the default branch under any circumstance.
+
+3. **Handle `GH013` / `! [remote rejected]` / push-rule rejection as a
+   DEGRADED status, not a hard error.** If a push (even of a feature branch /
+   PR open) is rejected by branch protection or a push rule, surface a clear,
+   actionable degraded status — e.g. "knowledge-base committed locally; could
+   not open a PR — branch protection rejected the push" — and finish
+   successfully. The local commit is the durable result; the missing PR is a
+   degradation the operator can resolve, not a failure of the sync.
+
+4. **Auto-skip the interactive `AskUserQuestion` gates.** The Phase 2 fuzzy-dup
+   review (§2.2/§2.3) and the Phase 4 Definition Sync review (§4.4) prompt the
+   operator via `AskUserQuestion`. In headless mode there is no one to answer,
+   so **do not pause** on these gates — auto-skip them (treat fuzzy-dup matches
+   as Skip, and skip Phase 4 Definition Sync entirely) and log the skip rather
+   than blocking on a prompt that can never be answered.
+
+## Output Locations
+
+| Finding Type | Destination |
+| ------------ | ----------- |
+| Coding conventions | `knowledge-base/project/constitution.md` |
+| Architecture decisions | `knowledge-base/project/learnings/architecture/` |
+| Testing practices | `knowledge-base/project/constitution.md` (Testing section) |
+| Technical debt | `knowledge-base/project/learnings/technical-debt/` |
+| Project docs | `knowledge-base/project/README.md` |
+| Component docs | `knowledge-base/project/components/` |
+| Definition sync bullets | `plugins/soleur/{skills,agents,commands}/*.md` |
+
+## Design Decisions
+
+### Single Command, No Separate Agents
+
+Analysis happens inline in this command rather than spawning separate agents. This keeps the implementation simple and debuggable.
+
+### Sequential Review
+
+Each finding is reviewed one at a time with y/n/edit options. This is familiar UX with no custom query syntax to learn.
+
+### Two-Stage Deduplication
+
+**Stage 1 (Exact match):** If an identical entry exists, skip silently.
+
+**Stage 2 (Fuzzy match):** If a similar entry exists (Jaccard similarity > 0.8), prompt user to skip or keep. Word-based Jaccard coefficient catches textual variations like "use const" vs "always use const" without external dependencies.
+
+### Existing Learnings Schema
+
+Uses the `compound-capture` YAML schema with `problem_type: best_practice` for non-problem learnings. This ensures compatibility with existing learnings tooling.
+
+## Examples
+
+**Bootstrap entire knowledge-base:**
+
+```bash
+soleur:sync all
+# or just
+soleur:sync
+```
+
+**Sync only coding conventions:**
+
+```bash
+soleur:sync conventions
+```
+
+**Sync only technical debt:**
+
+```bash
+soleur:sync debt
+```
+
+**Sync project docs:**
+
+```bash
+soleur:sync project
+```
+
+## Cursor name map
+
+When a canonical skill or agent file in this repository changes, regenerate the Cursor stubs by running bun "${CLAUDE_PLUGIN_ROOT}/scripts/sync-cursor-name-map.ts".
+
+Running bun "${CLAUDE_PLUGIN_ROOT}/scripts/sync-cursor-name-map.ts" --check prints cursor-name-map ok when the committed stubs match that walk. This command does not run as part of `all`.
+
+## OpenCode adapter tree
+
+The `opencode/` front door — routing instructions, the agent and command stubs, and the `opencode.json` config fragment — is generated from the canonical tree. When a canonical agent, command, or the routing prose changes, regenerate it by running bun "${CLAUDE_PLUGIN_ROOT}/scripts/sync-opencode-adapter.ts".
+
+Running bun "${CLAUDE_PLUGIN_ROOT}/scripts/sync-opencode-adapter.ts" --check exits non-zero when the committed tree drifts from the canonical one. Like the Cursor walk above, this does not run as part of `all`.
+
+Generated files carry `__SOLEUR_PLUGIN_ROOT__` rather than an absolute path, so the committed tree is machine-independent. Resolve that token once per machine with bun "${CLAUDE_PLUGIN_ROOT}/scripts/install-opencode-adapter.ts": it unions the fragment's `skills`/`instructions` entries into `~/.config/opencode/opencode.json` and preserves an operator's other keys **when it can read that file**. A config it cannot parse (JSONC comments, a syntax error, a torn write) is **refused** — replacing it would discard every key the operator set — and `--force` replaces it only after writing a timestamped `.bak-<ts>` beside it. The installer copies the stubs and the hook module, removes stubs this generator no longer emits (attributed by their own text, so an operator's own command or agent in the same roots is untouched), and `--target DIR` installs into a project `.opencode` instead. `--check` reports `MISSING` / `STALE` / `EXTRA` without writing. Skills are deliberately not copied: they register from the canonical tree through the config's `skills` key, so a second skill tree is never created to drift.
+
+**Removing the adapter** (no `--uninstall` today; tracked in #10591 item 4): delete `<configdir>/agents/` and `<configdir>/commands/` entries whose body names the canonical path (they are the generated stubs), `<configdir>/plugins/soleur-plugin.ts`, `<configdir>/soleur/`, and the `skills`/`instructions` entries the installer added to `<configdir>/opencode.json`. Leaving the entries behind points OpenCode at a missing tree; leaving the plugin behind fails every shell call closed with a `guard-did-not-run` deny.
+
+## Limitations
+
+- No PR analysis (requires GitHub token - deferred)
+- No semantic similarity (word-based Jaccard only - embeddings deferred)
+- No sampling for large codebases (analyze what fits)
+- No parallel agent execution (single-pass analysis)
+- No constitution cross-check (deferred - separate concern)
+- Definition sync skips when area is scoped (only runs on `all` or default)
+
+Run `soleur:sync` multiple times to discover more patterns as the codebase evolves.

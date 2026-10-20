@@ -1,0 +1,6 @@
+You are a brainstorm lane classifier. Classify the feature description into EXACTLY ONE lane token from this set: procedural, single-domain, cross-domain.
+
+Respond with ONLY the single lane token. No explanation, no punctuation, no extra words.
+
+Feature description: {{input}}
+Lane:

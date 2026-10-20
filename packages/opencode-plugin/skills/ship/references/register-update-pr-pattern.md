@@ -1,0 +1,88 @@
+# Register / Policy Update PR Pattern
+
+When the PR diff is bounded to `knowledge-base/legal/**` or `docs/legal/**` and
+the body documents controls introduced by an ALREADY-MERGED upstream PR
+(typical for follow-through register updates per `soleur:ship` Phase 7
+Step 3.5 — see PR #3882), the PR-body authoring rules differ from a normal
+code-change PR.
+
+## Cite by semantic identifier in the body
+
+Reference upstream PR contents via SEMANTIC IDENTIFIERS, not by file path:
+
+- ✅ Function / method / handler names — `getFreshTenantClient`,
+  `runWithByokLease`, `assertWriteScope`, `refreshSubscriptionStatus.tenantFor`
+- ✅ RPC names — `accept_terms`, `sum_user_mtd_cost`, `anonymise_tc_acceptances`
+- ✅ Migration anchors — `001`, `018_team_names.sql`, `029` (full filename or
+  bare stem; both forms are anchored by the `verify-migrations` auto-close job)
+- ✅ Symbol references inside the register file itself — `PA1 row (6)`,
+  `PA2 row (4)`, `counsel-review item 6`
+
+AVOID full file paths in PROSE when those paths are not in this PR's diff:
+
+- ❌ `apps/web-platform/server/cc-dispatcher.ts:889`
+- ❌ `docs/legal/privacy-policy.md`
+- ❌ `server/byok-lease.ts`
+
+If a file-path reference is genuinely necessary for clarity, wrap it in inline
+backticks — `` `server/cc-dispatcher.ts:889` `` — which the `pr-body-vs-diff`
+gate exempts (see [`#3882`](https://github.com/jikig-ai/soleur/pull/3882) and
+[`check-pr-body-vs-diff.sh`](../../../../../.github/scripts/check-pr-body-vs-diff.sh)
+inline-`code`-span strip).
+
+## Which register — there is more than one
+
+Three register files live under `knowledge-base/legal/`, and a register-update PR is routed to
+the wrong one if only the first is known:
+
+| Register | File | What belongs in it |
+|---|---|---|
+| Art. 30(1) — processing activities | `knowledge-base/legal/article-30-register.md` | Processing Activities, kept in **controller** capacity |
+| Art. 30(2) — processor records | `knowledge-base/legal/article-30-2-register.md` | Processing carried out on behalf of a controller, kept in **processor** capacity |
+| Art. 33(5) — breach documentation | `knowledge-base/legal/breach-register.md` | Personal-data breach **determinations**, as an index with canonical pointers |
+
+**Art. 33(5) determinations do not go in the Art. 30 register.** Art. 30(1)'s limbs are a closed
+list and breach documentation is not among them; see
+[ADR-200](../../../../../knowledge-base/engineering/architecture/decisions/ADR-200-art-33-5-documentation-is-a-distinct-register-discharged-by-an-index.md),
+which also fixes the breach register's inclusion predicate and its column set. The `soleur:legal:clo` agent is
+the custodian and adds the row in the **same PR** that lands the determination;
+`scripts/lint-legal-registers.sh` asserts that nothing determination-shaped under
+`knowledge-base/legal/audits/` is dropped without a committed, issue-citing reason.
+
+## Editing an evidentiary record without destroying it
+
+- **A register fails in four ways a code file does not, and all four stay green under grep.** (1) **A fabricated authority** — before writing any word from the family *signed / attested / approved / reviewed by*, grep the source for it; if it is absent the sentence is yours, so say so. When the authority is unreachable (an agent that will not return), record the absence: put what you can honestly produce under a **different filename**, carry `attested_by: "NOBODY"`, leave the attestation path deliberately empty, and file the gap. (2) **An in-place edit of a dated cell** — if the cell is cited downstream, the edit is an amendment: append `> **Superseded YYYY-MM-DD (#N):**` quoting the prior text rather than overwriting it. Resolving a placeholder inside a dated or signed instrument is an amendment too. (3) **A correction that reached only the canonical copy** — grep the claim's SUBJECT corpus-wide, read every hit, and re-read the underlying record before writing the replacement; a correction sourced from memory lands on a superseded state. (4) **Discarded table cells** — GFM splits a row on `|` *even inside a backticked code span*, and cells past the header count are dropped at render time, so a row can be complete in the raw markdown and truncated in the rendered document. Assert `cells == header_cells` for every row added or edited; escape as `\|`. **Why:** #7717 shipped all four before review caught them, and the sweep found a signed counsel review (`audits/2026-07-counsel-review-6588.md`) whose per-row `CONFIRMED` verdict cell had never rendered. See `knowledge-base/project/learnings/2026-09-03-four-ways-i-destroyed-evidence-in-the-pr-that-exists-to-preserve-it.md`.
+
+## The register file itself is implementation-cited
+
+The Article 30 register
+([`knowledge-base/legal/article-30-register.md`](../../../../../knowledge-base/legal/article-30-register.md))
+follows the PA10/PA11 convention of citing exact file paths + line numbers
+inline in the TOM cells — that's the load-bearing accountability evidence
+under GDPR Art. 5(2). This guidance applies to the **PR BODY only**, not to
+the register's prose.
+
+The asymmetry is deliberate: the register's audience is a supervisory
+authority probing for traceability (paths + line numbers help); the PR body's
+audience is the reviewer + the `pr-body-vs-diff` CI gate (paths read as
+"diff-claim hallucinations" when they're not in the diff).
+
+## Why the gate fires on legitimate citations
+
+`.github/scripts/check-pr-body-vs-diff.sh` (issue #2905) fails when fewer than
+50% of file-path tokens in the PR body's prose appear in the PR's diff. The
+gate cannot distinguish a legitimate cross-reference from a hallucinated path.
+Register / policy-update PRs document controls implemented in OTHER files;
+those file paths legitimately are not in the diff.
+
+As of PR #3882's follow-up fix, inline-backtick code spans are stripped before
+path extraction. Plain-prose paths are still checked — a body claim like
+"I edited foo.ts to fix the bug" must still match the diff.
+
+## Override (last resort)
+
+If a PR body genuinely needs plain-prose file-path citations and the gate
+fires, add the `confirm:claude-config-change` label. The label name is a
+precedent artifact (originally for `.claude/` config changes); reusing it for
+legal/register PRs is acceptable until a more semantically-fit label is
+introduced.

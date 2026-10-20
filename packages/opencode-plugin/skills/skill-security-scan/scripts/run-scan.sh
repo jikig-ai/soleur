@@ -1,0 +1,342 @@
+#!/usr/bin/env bash
+# run-scan.sh — orchestrate the five category checks, aggregate verdict,
+# emit markdown findings + mandatory disclaimer footer, write .scan-meta.json
+# (with PII redaction).
+#
+# Stdin: SKILL.md content. Or: positional file path.
+# Stdout: markdown findings table + disclaimer footer.
+# Exit code: NOT guaranteed 0. This header claimed "0 always (advisory)" and
+# that was false the moment `set -euo pipefail` below was added: any internal
+# command failure, unset variable, or failing pipeline aborts this script with a
+# non-zero status. Callers MUST check it. The claim was load-bearing in the
+# wrong direction -- the skill-security-scan workflows relied on it to justify
+# `2>/dev/null | head -1 | grep ... || echo UNKNOWN`, which converted a crashed
+# scanner into a verdict the gate then accepted (#7629).
+#
+# The VERDICT is advisory; the EXIT STATUS is not. A non-zero exit means no
+# verdict was produced, which is not the same as a clean skill.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+SCANNER_VERSION="0.1.0"
+
+# Resolve input file
+if [ "$#" -ge 1 ] && [ -f "$1" ]; then
+  INPUT="$1"
+  CLEANUP=""
+else
+  INPUT="$(mktemp -t skill-scan-input-XXXXXX)"
+  CLEANUP="$INPUT"
+  cat > "$INPUT"
+fi
+trap '[ -n "$CLEANUP" ] && rm -f "$CLEANUP"' EXIT
+
+# ---------------------------------------------------------------------------
+# Self-defense: rule-pack SHA validation (per Phase 5)
+# ---------------------------------------------------------------------------
+manifest="$SKILL_DIR/references/rules/manifest.yaml"
+rule_pack_sha="unknown"
+rule_pack_version="unknown"
+if [ -f "$manifest" ]; then
+  rule_pack_version="$(awk '/^version:/ { gsub(/^version:[[:space:]]*"?|"?$/, ""); print; exit }' "$manifest")"
+  # Compute current manifest SHA over the manifest file itself for traceability.
+  rule_pack_sha="$(sha256sum "$manifest" | cut -d' ' -f1)"
+  # Validate per-file SHAs declared in manifest. Tampered file → flag and
+  # short-circuit to REVIEW. Manifest format: list of `- path:`/`sha256:`
+  # tuples relative to the rules/ directory.
+  tampered=""
+  while IFS= read -r line; do
+    case "$line" in
+      *path:*)
+        cur_path="${line#*path:}"
+        cur_path="${cur_path// /}"
+        cur_path="${cur_path//\"/}"
+        cur_path="${cur_path//\'/}"
+        ;;
+      *sha256:*)
+        cur_sha="${line#*sha256:}"
+        cur_sha="${cur_sha// /}"
+        cur_sha="${cur_sha//\"/}"
+        cur_sha="${cur_sha//\'/}"
+        actual="$(sha256sum "$SKILL_DIR/references/$cur_path" 2>/dev/null | cut -d' ' -f1 || echo "")"
+        if [ -n "$actual" ] && [ "$actual" != "$cur_sha" ]; then
+          tampered+="$cur_path "
+        fi
+        cur_path=""
+        ;;
+    esac
+  done < "$manifest"
+  if [ -n "$tampered" ]; then
+    # Tamper short-circuits to HIGH-RISK (deny-by-default), not REVIEW.
+    # Rationale: REVIEW maps to `ask` in the PreToolUse hook, which an operator
+    # can confirm-through; an attacker with rule-pack write access could then
+    # downgrade a real HIGH-RISK skill to REVIEW and have the operator accept.
+    # HIGH-RISK on tamper forces an override-artifact path and audit trail.
+    cat <<EOF
+# skill-security-scan verdict: HIGH-RISK
+
+**Self-defense:** rule pack tampered. Files with SHA mismatch:
+
+$(echo "$tampered" | tr ' ' '\n' | grep -v '^$' | sed 's/^/  - /')
+
+Re-run with \`scripts/run-self-test.sh --regenerate-manifest\` (dev) or fix
+the rule pack before scanning. Override requires a structured artifact under
+\`knowledge-base/engineering/security/skill-overrides/\`.
+
+---
+Advisory static analysis only. LOW-RISK does not constitute a security audit,
+certification, or warranty of safety. The skill executes in your environment
+under your account; you remain responsible for review.
+
+Scanner version: $SCANNER_VERSION  Rule pack: ${rule_pack_sha:0:12}  Scanned: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+EOF
+    exit 0
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# Run the five category checks. Each consumes stdin (the SKILL.md content)
+# and emits a JSON document on stdout. We collect into a temp dir.
+# ---------------------------------------------------------------------------
+results_dir="$(mktemp -dt skill-scan-results-XXXXXX)"
+trap '[ -n "$CLEANUP" ] && rm -f "$CLEANUP"; rm -rf "$results_dir"' EXIT
+
+run_category() {
+  local script="$1" out="$2"
+  bash "$SCRIPT_DIR/$script" < "$INPUT" > "$out" 2>/dev/null || \
+    echo '{"verdict":"REVIEW","category":"unknown","findings":[{"rule_id":"check-failed","severity":"REVIEW","line":0,"snippet":"category script error"}]}' > "$out"
+}
+
+run_category check-codeexec.sh           "$results_dir/code-execution.json" &
+run_category check-prompt-injection.sh   "$results_dir/prompt-injection.json" &
+run_category check-supply-chain.sh       "$results_dir/supply-chain.json" &
+run_category check-filesystem-boundary.sh "$results_dir/filesystem-boundary.json" &
+run_category check-telemetry-surface.sh  "$results_dir/telemetry-surface.json" &
+wait
+
+# Aggregate verdict (max-severity wins).
+agg_verdict="LOW-RISK"
+for f in "$results_dir"/*.json; do
+  v="$(jq -r '.verdict' "$f" 2>/dev/null || echo "REVIEW")"
+  case "$v" in
+    HIGH-RISK) agg_verdict="HIGH-RISK"; break ;;
+    REVIEW)    [ "$agg_verdict" = "LOW-RISK" ] && agg_verdict="REVIEW" ;;
+  esac
+done
+
+# Build findings_summary JSON (with PII + secret redaction).
+# Per GDPR-DataMin-1 (PII) and security review P2-4 (high-entropy secrets):
+# redact email/IPv4/IBAN PLUS JWT, Anthropic/OpenAI keys, GitHub PAT/OAuth,
+# Doppler tokens, GitLab PAT, Slack tokens, AWS access keys.
+redact_pii() {
+  sed -E '
+    s/\bghp_[A-Za-z0-9._~+/=-]{20,}/<github-pat>/g;
+    s/\bgho_[A-Za-z0-9._~+/=-]{20,}/<github-oauth>/g;
+    s/\bghs_[A-Za-z0-9._~+/=-]{20,}/<github-server>/g;
+    s/\bghr_[A-Za-z0-9._~+/=-]{20,}/<github-refresh>/g;
+    s/\bghu_[A-Za-z0-9._~+/=-]{20,}/<github-user>/g;
+    s/\bgithub_pat_[A-Za-z0-9._~+/=-]{40,}/<github-pat>/g;
+    s/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/<email>/g;
+    s/\b([0-9]{1,3}\.){3}[0-9]{1,3}\b/<ip>/g;
+    s/\b[A-Z]{2}[0-9]{2}[A-Z0-9]{4,}\b/<iban>/g;
+    s/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/<jwt>/g;
+    s/sk-ant-[A-Za-z0-9_-]{8,}/<anthropic-key>/g;
+    s/sk-[A-Za-z0-9]{20,}/<openai-key>/g;
+    s/\bglpat-[A-Za-z0-9_-]{8,}/<gitlab-pat>/g;
+    s/dp\.ct\.[A-Za-z0-9_-]{20,}/<doppler-token>/g;
+    s/dp\.pt\.[A-Za-z0-9_-]{20,}/<doppler-token>/g;
+    s/dp\.st\.[A-Za-z0-9_-]{20,}/<doppler-token>/g;
+    s/xox[bopas]-[A-Za-z0-9-]{10,}/<slack-token>/g;
+    s/\bAKIA[A-Z0-9]{16}\b/<aws-access-key>/g
+  '
+}
+
+# ARGV CEILING (#6736). Both the per-category body and the accumulated summary are
+# kept in FILES and bound with `--rawfile … | fromjson`, never `--argjson`. A shell
+# variable bound via --argjson is ONE argv argument, and the kernel caps a SINGLE argv
+# argument at MAX_ARG_STRLEN = 131,072 B — verified by bisect on this host: 131,071 B
+# passes, 131,072 B fails E2BIG. This is NOT `getconf ARG_MAX` (2,097,152 B, the
+# argv+envp total); a payload at 6% of ARG_MAX still dies.
+#
+# Nothing bounds this: snippets are capped at 200 chars by apply_yaml_rules, but the
+# FINDING COUNT is uncapped (one grep hit per matching line), and $findings_summary is
+# the sum over all five categories — so it crosses the ceiling before any single
+# category does. Pre-fix this died with `Argument list too long` mid-scan, after the
+# per-category checks had already succeeded.
+#
+# The scratch files live in "$results_dir/.agg" rather than "$results_dir" itself:
+# the markdown-table loop below re-globs "$results_dir"/*.json, and a summary file
+# sitting there would be read back as a sixth bogus category row. A dot-prefixed
+# subdirectory is invisible to that glob and is still cleaned by the existing
+# `rm -rf "$results_dir"` EXIT trap, so this adds no new cleanup obligation.
+agg_dir="$results_dir/.agg"
+mkdir -p "$agg_dir"
+summary_file="$agg_dir/findings-summary.json"
+body_file="$agg_dir/body-redacted.json"
+echo '{}' > "$summary_file"
+for f in "$results_dir"/*.json; do
+  cat="$(jq -r '.category' "$f")"
+  jq '{verdict, findings}' "$f" | redact_pii > "$body_file"
+  jq --arg c "$cat" --rawfile b "$body_file" '. + {($c): ($b | fromjson)}' \
+    "$summary_file" > "$summary_file.next"
+  mv "$summary_file.next" "$summary_file"
+done
+
+# Write .scan-meta.json under meta_base (XDG_RUNTIME_DIR, else /tmp).
+# umask 077 ensures persisted findings are not world-readable on shared hosts.
+ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+meta_base="${SKILL_SCAN_META_BASE:-${XDG_RUNTIME_DIR:-/tmp}}"
+
+# Bound the per-invocation meta_dir leak (#6789). Each run creates
+# skill-security-scan-<pid>/ and NOTHING removes it: measured 12,889 leaked
+# dirs. The fix is a STARTUP age-reap of OLDER siblings — deliberately NOT a
+# `trap 'rm -rf "$meta_dir"' EXIT`. `.scan-meta.json` is GDPR Art. 32 evidence:
+# override-mechanism.md instructs the operator to reference this path in an
+# override artifact AFTER the scan exits (see the "written to:" line below), so
+# a naive EXIT trap would delete the very artifact the override flow needs (R1).
+# The current process's own dir is created after this reap and is never a
+# candidate here, so the artifact this run writes always survives this run.
+# Age-only is the correct sole dimension: these dirs are per-pid and single-use,
+# so an OLD one is definitionally abandoned (name-scoped age is safe here —
+# unlike a generic /tmp reaper, which cannot distinguish producer families).
+#
+# The floor defaults to 7 DAYS, not 24h: .scan-meta.json is Art. 32 evidence an
+# operator may reference when building an override artifact, and that can happen
+# a day or more after the scan. A generous floor keeps a still-referenceable
+# evidence dir alive across a realistic operator gap while still bounding the
+# leak — these dirs are tiny (one JSON file) and live in the runtime tmpfs,
+# which is near-empty, so the leak's cost is inode COUNT, not bytes, and a 7-day
+# window caps that at a manageable steady state. A longer-lived reference is the
+# same pre-existing fragility the override mechanism already carries
+# ($XDG_RUNTIME_DIR is cleared on logout regardless), out of scope here.
+# SKILL_SCAN_META_REAP_MIN overrides the floor (minutes). Non-numeric values
+# fall back to the default rather than silently disabling BOTH reaps below;
+# `10#` normalizes leading zeros — unnormalized, the expansion error on
+# `08`/`09` silently strands the literal string (the `||` fallback and the
+# clamp both skip on arithmetic error), so find reads an octal-legal floor
+# BELOW the 60-minute minimum.
+_reap_min="${SKILL_SCAN_META_REAP_MIN:-10080}"
+[[ "$_reap_min" =~ ^[0-9]{1,9}$ ]] && _reap_min=$((10#${_reap_min})) || _reap_min=10080
+# Both sweeps clamp to >=60 minutes: `-mmin "+0"` matches ANY past mtime,
+# so a pathological or test-seam floor below an hour reaps a CONCURRENT
+# scan's live scratch and meta dir — the exclusions below cover only this
+# run's own entries. 60 bounds a plausible scan lifetime; the operator's
+# floor above it is verbatim.
+_reap_min=$(( _reap_min < 60 ? 60 : _reap_min ))
+meta_root="$(cd -P "$meta_base" 2>/dev/null && pwd -P || true)"
+if [ -n "$meta_root" ]; then
+  # -maxdepth 1 -type d, older than the floor, own the current uid. `-mmin` on
+  # each dir is safe here: the dir is written once at creation and never touched
+  # again, so its own mtime IS the run's age. cd -P canonicalizes the base —
+  # find under default -P does not descend a symlinked startpoint, so a
+  # symlinked meta_base would silently no-op the whole reap. rm failures (a
+  # sibling reaping the same dir) are tolerated; a non-zero find exit warns
+  # instead of silently disabling the reap.
+  find "$meta_root" -mindepth 1 -maxdepth 1 -type d \
+    -name 'skill-security-scan-*' -user "$(id -u)" -mmin "+${_reap_min}" \
+    -exec rm -rf {} + 2>/dev/null \
+    || echo "run-scan: meta_dir reap failed; orphans retained" >&2
+fi
+
+# #6760: age-floor sweep for the scratch families under ${TMPDIR:-/tmp} —
+# orphans the meta-base reap cannot reach. Three classes: the `skill-scan-*`
+# scratch producers (skill-scan-input-*, skill-scan-results-*,
+# skill-scan-XXXXXX + .code/.fm/.body/.req/.resp siblings — created by
+# `mktemp -t` under TMPDIR and EXIT-trap-cleaned only on a clean exit);
+# `skill-security-scan-*` meta dirs stranded under /tmp by the
+# XDG_RUNTIME_DIR env flip (when ${TMPDIR:-/tmp} resolves to that base —
+# with a custom TMPDIR the pre-flip orphans sit on a root this sweep does
+# not scan); and `sss-write.*.err` captures from the skill's own write-hook.
+# Top-level `-mmin` is the sole age test because every producer write creates
+# a new entry (dir mtime tracks its last child) — a write-once invariant
+# matching the meta reap's, so an OLD entry is definitionally orphaned.
+#
+# The `! -samefile` exclusions are load-bearing and asymmetric with the meta
+# reap: INPUT and results_dir are created BEFORE this reap (meta_dir is
+# created after), so this run's own live scratch is otherwise a candidate —
+# a positional INPUT can carry an mtime far older than any floor (a stale
+# file is a legitimate scan target); results_dir's mtime is refreshed by
+# aggregation writes right before this reap, so its exclusion covers only
+# stalls/suspension between creation and this point — belt-and-suspenders
+# for the same self-reap class. `-samefile` (inode compare), never `-path`
+# (literal/fnmatch string compare): a relative or glob-shaped INPUT spelling
+# defeats string equality and could rm -rf the very file the operator asked
+# to scan. The `[ -e ]` gates skip an exclusion whose referent died or
+# became unstatable mid-scan — a dead -samefile operand would error the
+# whole find (now a warn, not a silent no-op).
+#
+# Residual surfaces, accepted: a PEER's live input named like a family
+# member under TMPDIR is indistinguishable from an orphan by age (do not
+# name scan targets skill-scan-*/sss-write.* inside TMPDIR); a same-uid
+# bind/FUSE mount inside a family-named dir is descended by rm -rf (same-uid
+# blast radius — find's -mount is a no-op at maxdepth 1 and cannot reach
+# rm's own recursion); a family-named symlink entry loses the link, never
+# its target; a find build without -samefile/-mmin (a stripped BusyBox
+# config — both are default-on features upstream — or heirloom) warns and
+# skips rather than sweeping; an unreachable base canonicalizes to empty
+# and skips silently (nothing reapable there anyway).
+_excl=()
+[ -e "$INPUT" ] && _excl+=("!" -samefile "$INPUT")
+[ -e "$results_dir" ] && _excl+=("!" -samefile "$results_dir")
+tmp_root="$(cd -P "${TMPDIR:-/tmp}" 2>/dev/null && pwd -P || true)"
+if [ -n "$tmp_root" ]; then
+  # cd -P resolves a symlinked base (macOS /tmp -> private/tmp) — find under
+  # default -P does not descend a symlinked startpoint, so without
+  # canonicalization the sweep silently no-ops there.
+  find "$tmp_root" -mindepth 1 -maxdepth 1 -user "$(id -u)" \
+    -mmin "+${_reap_min}" \
+    \( -name 'skill-security-scan-*' -o -name 'skill-scan-*' -o -name 'sss-write.*.err' \) \
+    ${_excl[@]+"${_excl[@]}"} \
+    -exec rm -rf {} + 2>/dev/null \
+    || echo "run-scan: scratch reap failed; orphans retained" >&2
+fi
+
+(umask 077; mkdir -p "$meta_base/skill-security-scan-$$")
+meta_dir="$meta_base/skill-security-scan-$$"
+meta_path="$meta_dir/.scan-meta.json"
+jq -n \
+  --arg sv "$SCANNER_VERSION" \
+  --arg rpv "$rule_pack_version" \
+  --arg sha "$rule_pack_sha" \
+  --arg v "$agg_verdict" \
+  --arg ts "$ts" \
+  --rawfile fs "$summary_file" \
+  '{scanner_version: $sv, rule_pack_version: $rpv, rule_pack_sha256: $sha, verdict: $v, timestamp: $ts, findings_summary: ($fs | fromjson)}' \
+  > "$meta_path"
+
+# Emit markdown findings table + mandatory disclaimer.
+echo "# skill-security-scan verdict: $agg_verdict"
+echo ""
+echo "| Category | Verdict | Findings |"
+echo "|---|---|---|"
+for f in "$results_dir"/*.json; do
+  cat="$(jq -r '.category' "$f")"
+  v="$(jq -r '.verdict' "$f")"
+  n="$(jq -r '.findings | length' "$f")"
+  echo "| $cat | $v | $n |"
+done
+echo ""
+echo "Per-finding details (operator-facing, unredacted):"
+echo ""
+for f in "$results_dir"/*.json; do
+  v="$(jq -r '.verdict' "$f")"
+  if [ "$v" != "LOW-RISK" ]; then
+    cat="$(jq -r '.category' "$f")"
+    echo "## $cat ($v)"
+    echo ""
+    jq -r '.findings[] | "- **\(.rule_id)** (\(.severity)) line \(.line): `\(.snippet)`"' "$f"
+    echo ""
+  fi
+done
+echo ".scan-meta.json written to: $meta_path"
+echo ""
+cat <<EOF
+---
+Advisory static analysis only. LOW-RISK does not constitute a security audit,
+certification, or warranty of safety. The skill executes in your environment
+under your account; you remain responsible for review.
+
+Scanner version: $SCANNER_VERSION  Rule pack: ${rule_pack_sha:0:12}  Scanned: $ts
+EOF

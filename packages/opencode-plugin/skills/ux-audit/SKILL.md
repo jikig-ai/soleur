@@ -1,0 +1,251 @@
+---
+name: ux-audit
+description: This skill should be used when auditing live web-platform UI for decay. Screenshots bot routes, delegates to soleur:product:design:ux-design-lead audit mode, dedupes, files capped issues.
+---
+
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
+# ux-audit
+
+Recurring UX-review agent loop. Scheduled via `.github/workflows/scheduled-ux-audit.yml` on push to `main` under `apps/web-platform/{app,components}/**` and a monthly `0 9 1 * *` cron. Can be run locally in dry-run mode for calibration.
+
+**Architecture:** thin orchestrator (this skill) → delegates screenshot analysis to the `soleur:product:design:ux-design-lead` agent in audit mode. Mirrors the `soleur:competitive-analysis` / `soleur:product:competitive-intelligence` split.
+
+## Invocation
+
+**Primary:** the scheduled workflow (`.github/workflows/scheduled-ux-audit.yml`) runs this skill via `claude-code-action`. That's the production path.
+
+**Local / dev:** invoke from a Claude Code session (terminal, IDE, web) with Doppler secrets loaded into the environment. The skill is registered as `soleur:ux-audit`:
+
+```bash
+# Load credentials (one terminal session)
+doppler run -c prd_scheduled -- \
+  doppler run -c prd --fallback-only -- \
+  claude
+
+# Then inside Claude Code, invoke the skill via its slash form:
+soleur:ux-audit
+# Or with a single-route override:
+soleur:ux-audit --route /dashboard
+```
+
+**From another agent:** use the Skill tool:
+
+```text
+Skill(skill: "soleur:ux-audit")
+Skill(skill: "soleur:ux-audit", args: "--route /dashboard")
+```
+
+Dry-run toggle: export `UX_AUDIT_DRY_RUN=true` before launching Claude Code. The skill reads the env var at runtime. In the scheduled workflow (`.github/workflows/scheduled-ux-audit.yml`) the env is hardcoded to `'true'` per plan #2341 Phase 3 calibration outcome (#2378 MISS) — file mode must be re-enabled by editing the workflow directly, not via a workflow input.
+
+Env vars required (loaded from Doppler `prd_scheduled`, falling back to `prd`):
+
+- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `NEXT_PUBLIC_APP_URL` — from `prd`
+- `UX_AUDIT_BOT_EMAIL`, `UX_AUDIT_BOT_PASSWORD` — from `prd_scheduled`
+- `UX_AUDIT_DRY_RUN` — `true` writes findings JSON to stdout + workflow artifact; `false` files issues
+- `GH_TOKEN` — for `gh issue create` / `gh issue list`
+
+Single dry-run knob: `UX_AUDIT_DRY_RUN` env. In the scheduled workflow it is hardcoded to `'true'`; locally it is controlled by the exported env var. One plumbing path either way.
+
+## Constants (inline, not configurable)
+
+- `CAP_OPEN_ISSUES = 20` — global cap on open `ux-audit`-labeled issues; skill refuses to file when reached
+- `CAP_PER_RUN = 5` — severity-ranked top-N findings filed per run
+- `CAP_PER_ROUTE = 2` — no single route may contribute more than 2 findings to the top-N, so anonymous funnel pages (login/signup) cannot monopolize output and crowd out bot-authenticated dashboard findings. Ref #2378.
+- `FINDING_CATEGORIES = ["real-estate", "ia", "consistency", "responsive", "comprehension", "anti-slop"]` — dedup hash keys on this exact set. `anti-slop` covers source-code findings from `soleur:frontend-anti-slop`.
+
+## Workflow
+
+### 1. Load route list + bot creds
+
+Read [route-list.yaml](./references/route-list.yaml). Each route has `{path, auth, fixture_prereqs, viewport}`. If `--route <path>` is passed (dev affordance), filter to that single route.
+
+### 2. Global-cap check
+
+```bash
+OPEN_COUNT=$(gh issue list --label ux-audit --state open --json number --jq 'length')
+if [ "$OPEN_COUNT" -ge 20 ]; then
+  echo "::warning::Global ux-audit cap reached ($OPEN_COUNT open). Refusing to file new issues."
+  exit 0
+fi
+```
+
+### 3. Per-route screenshot capture
+
+For each route:
+
+1. If `auth: bot`, invoke [bot-signin.ts](./scripts/bot-signin.ts) once per run (the storage-state file is reused across routes). Script writes the Supabase SSR auth cookie to `${GITHUB_WORKSPACE}/tmp/ux-audit/storage-state.json` (absolute path, per [hr-mcp-tools-playwright-etc-resolve-paths]).
+2. Verify route `fixture_prereqs` are satisfied. If `kb_workspace_deferred` appears in `fixture_prereqs`, log `route skipped: missing prereq kb_workspace_deferred (tracked in #2351)` and continue. The [bot-fixture.ts](./scripts/bot-fixture.ts) `seed` subcommand idempotently satisfies `tcs_accepted`, `billing_active`, and `chat_conversations`.
+3. Launch Playwright MCP. Use `browser_navigate` + `browser_take_screenshot` at the route's `viewport` size. If the first browser call fails with `Chromium sandboxing failed!` or `No usable sandbox!`, stop and read the sandbox entry in `agent-browser/SKILL.md` troubleshooting; never edit the Playwright config or env to disable the sandbox (the proxy refuses it and the MCP server then fails to start), and tell the user the host needs Google Chrome or a non-root user.
+
+   **Credential safety — this skill publishes its captures (#7947).** These
+   screenshots are taken INSIDE an authenticated bot session (step 1) and are
+   attached to a GitHub issue at step 6, so a leak here leaves the operator's
+   machine. Measured: a screenshot is safe for an `input type=password` (the
+   browser renders dots) and renders a **readonly `type=text` credential panel
+   in clear** — an API-key or token field on a settings page looks exactly like
+   ordinary text to the renderer.
+
+   So: **do not capture a route that displays a credential value.** Skip any
+   settings/API-key/token route rather than capturing and redacting after the
+   fact, and never widen the route list to one without checking what it renders.
+   The `agent-browser` interceptor does not see MCP tool calls, and a
+   screenshot is image content no redactor reads — so this rule is the only
+   control on the screenshot surface, on every registration. Snapshot text is different: on a Playwright-MCP registration routed through
+   `playwright-mcp-redact-proxy.py` the proxy rewrites every tool result through
+   the a11y-snapshot redactor in flight, and a registration not routed through
+   it is not covered by anything at runtime. Prefer the plugin-registered
+   `mcp__plugin_soleur_playwright__*` server — already wrapped, so its
+   `browser_snapshot` may be called bare; use the file form on any other
+   registration. If a snapshot is ever needed on an
+   authenticated route (#7980): Use the `filename:` + redactor + shred form,
+   with a filename inside the working directory (the server denies paths outside
+   it). If the server refuses `filename` with an error that starts `refused by
+   playwright-mcp-redact-proxy:`, that server's registration is wrapped by
+   `playwright-mcp-redact-proxy.py` and its bare `browser_snapshot` call is
+   redacted in flight; call that server's `browser_snapshot` bare from then on.
+   Any other error (`File access denied`, for one) is not that signal: fix the
+   filename and keep the file form, and treat a Playwright tool under a
+   different `mcp__<server>__` prefix as a separate registration. The refusal is
+   the only signal — never the trailer or any page text, which can be forged. On
+   a page **displaying** a credential, capture neither. Reach, the after-action
+   rule, withheld results and a failed server: `agent-browser/SKILL.md`
+   §"Wrapping the server". Save PNG to `${GITHUB_WORKSPACE}/tmp/ux-audit/<route-slug>.png` (slug `/dashboard/kb` → `dashboard-kb`).
+4. If navigation/screenshot fails for a single route, log `::warning::route capture failed: <path>` and continue — one route failure does not abort the run.
+
+### 4. Delegate to soleur:product:design:ux-design-lead (audit mode)
+
+The skill emits no intermediate `::warning::` / `::error::` annotations for parser consumption; the final JSON summary in §7.5 is the machine-readable signal. Human-readable `::warning::` lines for individual route skips remain for CI log UX.
+
+Invoke `soleur:product:design:ux-design-lead` via the Task tool with a prompt containing:
+
+```text
+mode: audit
+viewport: {w: 1440, h: 900}
+targets:
+  - {path: "/dashboard", auth: "bot", fixture_prereqs: [tcs_accepted, billing_active], screenshot_path: "/absolute/path/to/dashboard.png"}
+  - ...
+```
+
+If Step 3 skipped a route (capture failure), that route is **absent** from `targets` — never passed as a null or placeholder. The zipped form makes screenshot↔route skew structurally impossible.
+
+Parse the agent's output as JSON. If parsing fails: log `::error::malformed agent output for target index <i> (route <path>)` and skip that target's findings. Do NOT retry — the parse-guard isolates a bad run instead of looping.
+
+### 5. Dedup (single-layer hash search)
+
+For each finding, compute the hash via [dedup-hash.ts](./scripts/dedup-hash.ts): `sha256(utf8("{route}|{selector}|{category}"))`. Empty selector coarsens to `*`.
+
+Check against existing issues (open OR closed) in a single search:
+
+```bash
+EXISTS=$(gh issue list --label ux-audit --state all -L 200 --search "ux-audit-hash: $HASH" --json number --jq 'length')
+if [ "$EXISTS" -gt 0 ]; then
+  echo "dedup-suppressed: $HASH"
+  continue
+fi
+```
+
+Closed issues count. If the founder wants to resurface a closed finding, they reopen it. No time-based expiry.
+
+### 6. Severity-rank + cap
+
+Sort surviving findings by severity (`critical` > `high` > `medium` > `low`) then stable by `route`. Then apply `CAP_PER_ROUTE = 2`: walk the sorted list and drop any finding that would be the 3rd+ entry for a route already seen. Finally, take the top `CAP_PER_RUN = 5` of what remains.
+
+The per-route cap runs **before** `CAP_PER_RUN` so dropped anonymous-route findings free up slots for dashboard findings rather than the reverse. (`CAP_OPEN_ISSUES` is a separate check at Step 2; it does not participate in this ordering.) If fewer than 5 findings survive both caps, file what remains — the output is intentionally under-filled rather than padded with dropped-route duplicates.
+
+### 7. File issues (or dry-run to stdout)
+
+**Dry run** (`UX_AUDIT_DRY_RUN=true`): write the capped findings array as JSON to stdout AND to `${GITHUB_WORKSPACE}/tmp/ux-audit/findings.json` (workflow uploads as an artifact). Do not call `gh issue create`.
+
+**File mode** (`UX_AUDIT_DRY_RUN=false`): for each finding, write a body file under `${GITHUB_WORKSPACE}/tmp/ux-audit/body-<hash>.md` containing:
+
+```markdown
+**Route:** `<route>`
+**Category:** `<category>`
+**Severity:** `<severity>`
+
+<description>
+
+**Fix hint:** <fix_hint>
+
+**Screenshot:** attached below.
+
+<!-- ux-audit-hash: <64-hex> -->
+```
+
+Then (pass body and title via `env:` vars, never inline — heredocs and multi-line shell strings that drop below the YAML literal block's base indentation break the YAML parser; see `plugins/soleur/skills/ship/references/ci-workflow-authoring.md`):
+
+```bash
+gh issue create \
+  --title "ux: $TITLE" \
+  --body-file "$BODY_FILE" \
+  --label ux-audit,agent:ux-design-lead,domain/product \
+  --milestone "Post-MVP / Later"
+```
+
+Attach the screenshot to the issue via `gh api /repos/:owner/:repo/issues/:number -f body=...` after creation (GitHub's issue-attachment upload requires a multipart POST against the issue ID, not available on `gh issue create`).
+
+### 7.5 Stdout summary
+
+Before Step 8 cleanup, emit a single-line JSON object to stdout so parent agents can `tail -n 1 | jq .` the run outcome:
+
+```text
+{"filed":N,"suppressed":M,"skipped":K,"hashes":["<hex>", ...]}
+```
+
+Fields (all four required, in this order):
+
+- `filed` — number of `gh issue create` calls that succeeded this run (0 in dry-run mode; the dry-run findings array length does NOT count as `filed` — dry-run surfaces the full array in `findings.json` instead)
+- `suppressed` — number of findings dropped by the dedup hash search (Step 5)
+- `skipped` — number of findings dropped by `CAP_PER_ROUTE` or `CAP_PER_RUN` (Step 6)
+- `hashes` — sorted `string[]` of hex hashes that were either filed (file mode) or would have been filed (dry-run). Stable ordering so parent agents diffing runs see byte-stable output.
+
+Also write the same JSON to `${GITHUB_WORKSPACE}/tmp/ux-audit/summary.json` so the workflow can upload it as an artifact sibling to `findings.json`.
+
+**Early-exit shape (CAP_OPEN_ISSUES reached at Step 2):** emit `{"filed":0,"suppressed":0,"skipped":0,"hashes":[]}` so parent agents always see a parseable line.
+
+**Do not** include absolute paths, timestamps, or widen the shape without a `schema` version field — byte-stability across runs matters for downstream diffs.
+
+### 8. Cleanup
+
+Call `browser_close` to release the Playwright session (ADR-271: a browser's lifetime belongs to its launching session, and no hook reaps it for you). Leave `storage-state.json` in place — it's gitignored and the workflow runner is ephemeral.
+
+## Bot fixture spec
+
+Managed by [bot-fixture.ts](./scripts/bot-fixture.ts) (DB-only v1). Seeds idempotently via `conversations.session_id` markers.
+
+Satisfies (sets on `public.users`):
+
+- `tc_accepted_version = '1.0.0'` (matches current `TC_VERSION`), `tc_accepted_at = NOW()`
+- `onboarding_completed_at = NOW()`
+- `subscription_status = 'active'`, synthetic `stripe_customer_id='cus_ux_audit_fixture'`, `stripe_subscription_id='sub_ux_audit_fixture'`, `current_period_end = NOW() + 365d`
+
+Creates:
+
+- 2 `conversations` rows with `session_id` keys `ux-audit-fixture-conv-1|2` (CMO + CTO domain leaders)
+- 3 + 4 `messages` rows across the 2 conversations
+
+Does NOT create:
+
+- KB files — deferred to #2351 (files live in GitHub workspace, not Supabase). `/dashboard/kb` audits empty state; fixture_prereqs marker `kb_workspace_deferred` skips the route.
+- Team members — no team-members table exists in Phase 1 schema
+- Service integrations — no services table exists
+
+**Fixture invariants** (audited during every seed):
+
+- Only `ux-audit-bot@jikigai.com` appears as a real email. `@example.com` and placeholder Stripe IDs are the only synthetic strings.
+- No real API keys, no real payment info, no strings matching `sk_live_`, `cus_[A-Za-z0-9]{14,}`, or GitHub `ghp_` / `ghs_` patterns.
+
+## References
+
+- [route-list.yaml](./references/route-list.yaml) — route manifest (path, auth, fixture_prereqs, viewport)
+- [bot-fixture.ts](./scripts/bot-fixture.ts) — seed/reset bot DB state
+- [bot-signin.ts](./scripts/bot-signin.ts) — sign in, write Playwright storageState
+- [dedup-hash.ts](./scripts/dedup-hash.ts) — canonical finding-hash computation
+- Agent: `plugins/soleur/agents/product/design/ux-design-lead.md` (`## UX Audit (Screenshots)` section)

@@ -1,0 +1,337 @@
+#!/usr/bin/env bash
+# notice-frontmatter.sh — pure-bash parser for the NOTICE YAML frontmatter.
+#
+# Subcommands:
+#   field <name>      Print scalar value (upstream, pinned-commit,
+#                     last-verified, registry).
+#   days-stale        Integer days since last-verified. Future date / parse
+#                     fail / missing frontmatter all return 999 (treat as
+#                     stale immediately, per plan TR2 + SpecFlow P1.5).
+#                     Always exits 0 — the gdpr-gate hook subshell-execs this
+#                     and depends on the always-exit-0 advisory contract.
+#   cron-run-stale    Integer days since the content-vendor-drift check last
+#                     produced its attestation artifact — the weekly
+#                     `ci/vendor-attest-*` PR the Inngest cron writes on every
+#                     completed run (ADR-203), read via `gh pr list --search
+#                     head:ci/vendor-attest`. 999 on any failure mode (no
+#                     GH_TOKEN, no gh CLI, network blocked, empty result,
+#                     malformed timestamp, timeout). The `gdpr-gate.sh` caller
+#                     computes MIN(days-stale, cron-run-stale) to defend
+#                     against a backdated last-verified field (issue #3535).
+#   lifted-files      One `<path>:<local-blob-sha>` per line. Local blob SHAs
+#                     pin the file as it exists in this repo (post-attribution
+#                     header) and are consumed by `vendor-pin-integrity.sh`.
+#   soleur-authored   One `<path>:<local-blob-sha>` per line, for the reference
+#                     files written from scratch for this plugin. Same record
+#                     shape and same consumer as `lifted-files`, but no
+#                     upstream provenance: these never appear in
+#                     `upstream-files`. Pinning them keeps a tamper check on
+#                     the files the gate's own GDPR framing depends on while
+#                     leaving them editable through the normal update-the-pin
+#                     flow (#7710).
+#   record-count <block>
+#                     Integer count of `- path:` records DECLARED in the named
+#                     block, regardless of whether each record is complete.
+#
+#                     This exists because every other view here is a FILTERED
+#                     projection: `_emit_files` flushes a record only when BOTH
+#                     its path key and its sha key are non-empty, so a record
+#                     that loses `upstream-blob-sha` is silently absent from
+#                     `upstream-files`. A consumer that derives "how many files
+#                     should I have compared?" from that view is comparing the
+#                     parser's output against itself — the denominator shrinks
+#                     with the numerator and a partial comparison reads as
+#                     complete (#7710 review). `record-count` is the
+#                     unfiltered denominator.
+#   upstream-files    One `<upstream-path>:<upstream-blob-sha>` per line.
+#                     Upstream blob SHAs pin the file as it exists at
+#                     `pinned-commit` and are consumed by the drift workflow.
+#
+# NOTICE location: $NOTICE_FILE if set, else <script-dir>/../NOTICE.
+#
+# `set -euo pipefail` is internal; subcommand wrappers catch failures so the
+# caller (`gdpr-gate.sh`) can `bash notice-frontmatter.sh days-stale 2>/dev/null
+# || echo 999` without aborting the gate on parser death.
+#
+# TR2: target p95 <50ms over 100 invocations of `days-stale`.
+
+set -euo pipefail
+
+# Refuse to run under `set -x` while a live credential is in the environment
+# (#7797). An xtrace of this script echoes every expansion, and the token would
+# land in whatever captured that trace — a CI log, a `bash -x` debugging
+# session, a pasted transcript. Placed immediately after `set` so nothing
+# credential-bearing executes ahead of it.
+case "$-" in
+  *x*)
+    if [ -n "${GH_TOKEN:+x}${GITHUB_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NOTICE_FILE="${NOTICE_FILE:-$SCRIPT_DIR/../NOTICE}"
+
+# Print only the YAML body between the first two `---` lines.
+# Returns empty + exit 1 if no frontmatter.
+extract_frontmatter() {
+  [[ -f "$NOTICE_FILE" ]] || return 1
+  awk '
+    BEGIN { count=0; in_fm=0 }
+    /^---[[:space:]]*$/ {
+      count++
+      if (count == 1) { in_fm = 1; next }
+      if (count == 2) { in_fm = 0; exit }
+    }
+    in_fm { print }
+    END { if (count < 2) exit 1 }
+  ' "$NOTICE_FILE"
+}
+
+cmd_field() {
+  local name="$1"
+  local fm
+  fm=$(extract_frontmatter) || return 1
+  [[ -n "$fm" ]] || return 1
+  # Match top-level scalar lines (`<name>: <value>`); skip indented (nested).
+  printf '%s\n' "$fm" | awk -v key="$name" '
+    /^[[:space:]]/ { next }
+    {
+      idx = index($0, ":")
+      if (idx == 0) next
+      k = substr($0, 1, idx - 1)
+      v = substr($0, idx + 1)
+      sub(/^[[:space:]]+/, "", v)
+      sub(/[[:space:]]+$/, "", v)
+      if (k == key) { print v; exit }
+    }
+  '
+}
+
+cmd_days_stale() {
+  local last_verified last_epoch today_epoch days
+  last_verified=$(cmd_field last-verified 2>/dev/null) || { echo 999; return 0; }
+  [[ -n "$last_verified" ]] || { echo 999; return 0; }
+  # Strict ISO-8601 date guard. `date -d` otherwise accepts "now",
+  # "yesterday", etc., letting a malicious NOTICE PR set last-verified to
+  # any natural-language value and pin days-stale at 0 forever.
+  [[ "$last_verified" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo 999; return 0; }
+  # Anchor to UTC midnight so the comparison against `date -u +%s` is
+  # consistent across timezones (otherwise a UTC+12 host computes a day
+  # off the UTC-anchored today_epoch).
+  last_epoch=$(date -u -d "${last_verified}T00:00:00Z" +%s 2>/dev/null) || { echo 999; return 0; }
+  today_epoch=$(date -u +%s)
+  days=$(( (today_epoch - last_epoch) / 86400 ))
+  # Future date → treat as stale immediately (per SpecFlow P1.5).
+  if (( days < 0 )); then
+    echo 999
+  else
+    echo "$days"
+  fi
+}
+
+_emit_files() {
+  # Args: $1 = block-key ("lifted-files" | "soleur-authored"), $2 = path-key
+  # ("path" | "upstream-path"), $3 = sha-key ("local-blob-sha" |
+  # "upstream-blob-sha"). Walks the named block and prints
+  # `<path-value>:<sha-value>` per entry.
+  #
+  # The block key is a parameter rather than a literal because the registry
+  # has TWO lists with the same record shape and opposite provenance
+  # (#7710): upstream-derived files in `lifted-files`, Soleur-authored files
+  # in `soleur-authored`. Both are pinned by `local-blob-sha` and both are
+  # checked by vendor-pin-integrity.sh; only the former carries an upstream
+  # SHA, so only the former is a valid input to `upstream-files`.
+  local block_key="$1"
+  local path_key="$2"
+  local sha_key="$3"
+  local fm
+  fm=$(extract_frontmatter) || return 0
+  [[ -n "$fm" ]] || return 0
+  printf '%s\n' "$fm" | awk -v block_key="$block_key" -v path_key="$path_key" -v sha_key="$sha_key" '
+    BEGIN { in_block=0; cur_path=""; cur_sha="" }
+    $0 ~ "^" block_key ":[[:space:]]*$" { in_block=1; next }
+    /^[A-Za-z]/ { in_block=0 }
+    in_block {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      n = split(line, tok, /[[:space:]]+/)
+      # New entry sentinel: `- path: <value>` always opens a record. Flush
+      # the previous record before starting the new one.
+      # Normalize `key : value` (YAML-legal space-before-colon) to `key:`.
+      # Without this, tok[1] is the bare key and tok[2] is `:`, silently
+      # dropping the entry from the registry view.
+      sub(/[[:space:]]+:[[:space:]]+/, ": ", line)
+      n = split(line, tok, /[[:space:]]+/)
+      if (n >= 3 && tok[1] == "-" && tok[2] == "path:") {
+        if (cur_path != "" && cur_sha != "") print cur_path ":" cur_sha
+        cur_path = ""
+        cur_sha = ""
+        if (path_key == "path") cur_path = tok[3]
+      } else if (n >= 2 && tok[1] == path_key ":") {
+        # tok layout for `path:` and `upstream-path:` lines without leading dash.
+        cur_path = tok[2]
+      } else if (n >= 2 && tok[1] == sha_key ":") {
+        cur_sha = tok[2]
+      }
+    }
+    END {
+      if (cur_path != "" && cur_sha != "") print cur_path ":" cur_sha
+    }
+  '
+}
+
+cmd_cron_run_stale() {
+  # Days since the content-vendor-drift check last produced its attestation
+  # artifact. Always exits 0 — any failure mode (no token, no gh, network
+  # blocked, empty result, malformed timestamp, non-zero clock skew) resolves
+  # to 999 so the caller's subshell-exec contract holds. Wrap the network call
+  # with `timeout 5s` to bound the runtime-banner wall clock.
+  #
+  # DATA SOURCE (#7255). The check is the Inngest cron
+  # `apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts`
+  # — it has no GitHub Actions run, so a `gh run list` query can never see it
+  # (that is exactly how this probe once went dead at 999 with nobody
+  # noticing). What the run DOES leave behind on every completed execution is
+  # a GitHub artifact: the self-merging attestation PR on head branch
+  # `ci/vendor-attest-*` (`ATTEST_BRANCH_PREFIX` in the function file;
+  # ADR-203's unchanged-attestation machinery creates one even when zero
+  # files drift). "Days since the newest such PR was CREATED" is the honest
+  # "days since the check last ran to completion" — PR creation is the run's
+  # output, whereas mergedAt lags days behind the run and is unrelated to
+  # cron health.
+  #
+  # Query notes, both measured: `--state all` is load-bearing (the search
+  # treats merged/closed PRs correctly; a `--state merged` variant of this
+  # same query returned empty while the merged attest PR exists); and the
+  # `max` aggregation over `--limit 10` removes any dependence on
+  # search-result ordering. If this job's artifact moves again — new branch
+  # prefix, different substrate — the probe goes back to 999; the
+  # `TS-cron-argv` case in the notice-frontmatter suites pins the query shape
+  # so that regression is loud.
+  local token raw ts cron_epoch today_epoch days
+  token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+  [[ -n "$token" ]] || { echo 999; return 0; }
+  command -v gh >/dev/null 2>&1 || { echo 999; return 0; }
+  # `// empty` collapses the empty result set to empty string.
+  # Belt-and-suspenders with the strict-ISO regex below — a softened guard
+  # alone would silently slip a null through.
+  raw=$(GH_TOKEN="$token" timeout 5s gh pr list \
+          --search "head:ci/vendor-attest" --state all --limit 10 \
+          --json createdAt --jq '[.[].createdAt] | max // empty' \
+          2>/dev/null) || { echo 999; return 0; }
+  ts="${raw%%[[:space:]]*}"
+  [[ -n "$ts" ]] || { echo 999; return 0; }
+  [[ "$ts" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] \
+    || { echo 999; return 0; }
+  cron_epoch=$(date -u -d "$ts" +%s 2>/dev/null) || { echo 999; return 0; }
+  today_epoch=$(date -u +%s)
+  days=$(( (today_epoch - cron_epoch) / 86400 ))
+  if (( days < 0 )); then echo 999; else echo "$days"; fi
+}
+
+cmd_lifted_files() {
+  _emit_files lifted-files path local-blob-sha
+}
+
+cmd_upstream_files() {
+  _emit_files lifted-files upstream-path upstream-blob-sha
+}
+
+cmd_record_count() {
+  # Count `- path:` record openers in the named block. Deliberately does NOT
+  # require the record to be complete: the whole point is to expose records
+  # that the filtered views drop.
+  local block_key="${1:-lifted-files}"
+  local fm
+  fm=$(extract_frontmatter) || { echo 0; return 0; }
+  [[ -n "$fm" ]] || { echo 0; return 0; }
+  printf '%s\n' "$fm" | awk -v block_key="$block_key" '
+    BEGIN { in_block=0; n=0 }
+    $0 ~ "^" block_key ":[[:space:]]*$" { in_block=1; next }
+    /^[A-Za-z]/ { in_block=0 }
+    in_block {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      sub(/[[:space:]]+:[[:space:]]+/, ": ", line)
+      n_tok = split(line, tok, /[[:space:]]+/)
+      if (n_tok >= 3 && tok[1] == "-" && tok[2] == "path:") n++
+    }
+    END { print n+0 }
+  '
+}
+
+cmd_key_count() {
+  # Count occurrences of a KEY inside the named block, independent of record
+  # boundaries.
+  #
+  # This exists as a SECOND, differently-derived view of the registry's size.
+  # `record-count` counts `- path:` openers, so it shares its record-opener
+  # predicate with `_emit_files` — which means deleting an OPENER line shrinks
+  # both views together and a completeness check comparing them holds while a
+  # record was silently absorbed into its predecessor (measured: declared 7,
+  # emitted 7, one record lost, #7710 review). Counting a key that every record
+  # carries but the opener predicate does NOT consume breaks that coupling.
+  local block_key="${1:-lifted-files}"
+  local want_key="${2:-status}"
+  local fm
+  fm=$(extract_frontmatter) || { echo 0; return 0; }
+  [[ -n "$fm" ]] || { echo 0; return 0; }
+  printf '%s\n' "$fm" | awk -v block_key="$block_key" -v want_key="$want_key" '
+    BEGIN { in_block=0; n=0 }
+    $0 ~ "^" block_key ":[[:space:]]*$" { in_block=1; next }
+    /^[A-Za-z]/ { in_block=0 }
+    in_block {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      sub(/[[:space:]]+:[[:space:]]+/, ": ", line)
+      split(line, tok, /[[:space:]]+/)
+      if (tok[1] == want_key ":") n++
+    }
+    END { print n+0 }
+  '
+}
+
+cmd_soleur_authored() {
+  # Soleur-authored reference files. These are NOT upstream-derived, so they
+  # carry a `local-blob-sha` only and never appear in `upstream-files` — a
+  # `lifted-files` row for one of them would attest goSprinto MIT provenance
+  # for Soleur's own writing, falsifying provenance in both directions.
+  _emit_files soleur-authored path local-blob-sha
+}
+
+case "${1:-}" in
+  field)
+    cmd_field "${2:-}" || true
+    ;;
+  days-stale)
+    cmd_days_stale
+    ;;
+  cron-run-stale)
+    cmd_cron_run_stale
+    ;;
+  lifted-files)
+    cmd_lifted_files
+    ;;
+  soleur-authored)
+    cmd_soleur_authored
+    ;;
+  record-count)
+    cmd_record_count "${2:-lifted-files}"
+    ;;
+  key-count)
+    cmd_key_count "${2:-lifted-files}" "${3:-status}"
+    ;;
+  upstream-files)
+    cmd_upstream_files
+    ;;
+  *)
+    echo "Usage: $0 {field <name>|days-stale|cron-run-stale|lifted-files|soleur-authored|upstream-files|record-count [block]|key-count [block] [key]}" >&2
+    exit 2
+    ;;
+esac
+
+exit 0

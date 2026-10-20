@@ -1,0 +1,10 @@
+{
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "### Result\n{\n  \"snap\": \"- textbox \\\"Token\\\" [ref=e1]: ZZQP-SENTINEL-7980\\n- button \\\"Go\\\" [ref=e2]\"\n}\n### Ran Playwright code\n```js\nawait page.evaluate('() => x');\n```"
+      }
+    ]
+  }
+}

@@ -1,0 +1,784 @@
+#!/usr/bin/env bash
+# discord-setup.sh -- Discord bot setup API operations
+#
+# SECURITY: Token MUST be in DISCORD_BOT_TOKEN_INPUT env var.
+# Never pass tokens as CLI arguments (visible in ps/history).
+#
+# Usage: discord-setup.sh <command> [args]
+# Commands:
+#   validate-token                  - Verify token via API, output app ID
+#   discover-guilds                 - List guilds as JSON
+#   list-channels <guild_id>        - List text channels as JSON
+#   create-webhook <channel_id>     - Create webhook, output webhook URL
+#   write-env <guild_id>            - Write to .env with chmod 600 (secrets from the environment)
+#   verify                          - Run guild-info check
+#
+# Environment variables:
+#   DISCORD_BOT_TOKEN_INPUT              - Bot token (required for API commands and write-env)
+#   DISCORD_WEBHOOK_URL_INPUT            - Webhook URL (required, write-env only; never an argument)
+#   DISCORD_RELEASES_WEBHOOK_URL_INPUT   - Releases channel webhook (optional, write-env only)
+#   DISCORD_BLOG_WEBHOOK_URL_INPUT       - Blog channel webhook (optional, write-env only)
+#
+# write-env no longer takes the webhook URL as an argument (it would sit in the process list
+# and the shell history). Set it, and the bot token, in the environment without echoing them. In a
+# terminal:
+#   read -rs DISCORD_WEBHOOK_URL_INPUT; export DISCORD_WEBHOOK_URL_INPUT
+#   read -rs DISCORD_BOT_TOKEN_INPUT; export DISCORD_BOT_TOKEN_INPUT
+# `read -rs` needs a terminal. With no terminal (an agent runtime, a pipe, a script) keep each
+# value out of the COMMAND TEXT, because the text of a tool call lands in the transcript, in shell
+# history, and (when the runtime wraps it in `bash -c`) on that wrapper's argument list. An inline
+# `VAR=value discord-setup.sh ...` is only free of an argument list in THIS process: the caller's
+# command still carries the value, so it is not offered. The form that works is to read each value
+# from a mode-600 file. Create each file in your own terminal (not through an agent), mode first,
+# and type the value at the prompt: `(umask 077; cat > /path/to/bot-token.txt)`; an existing file
+# keeps its wider mode through a redirect, so chmod 600 it before writing. Then, in one command whose
+# parentheses keep both values out of the shell you stay in:
+#   ( read -r DISCORD_WEBHOOK_URL_INPUT < /path/to/webhook-url.txt; read -r DISCORD_BOT_TOKEN_INPUT < /path/to/bot-token.txt; export DISCORD_WEBHOOK_URL_INPUT DISCORD_BOT_TOKEN_INPUT; discord-setup.sh write-env <guild_id> )
+# (`create-webhook` also needs DISCORD_BOT_TOKEN_INPUT in its environment: read it from the bot-token
+# file first, as _print_env_remedy shows.)
+# Residual, stated plainly: the file names are in the command text, the values are not; the values
+# sit in those files until deleted; `create-webhook` prints the webhook URL on stdout (so it is in
+# the transcript once) unless its output is redirected into the file, which is the way to avoid it;
+# and the values end up in .env (mode 600), which is the point of the command.
+# Every value written to .env is checked against an allow-list first (see _wenv_validate).
+#
+# Exit codes:
+#   0 - Success
+#   1 - General error (including a write-env value outside the allow-list: the stderr marker
+#       SOLEUR_CREDENTIAL_REFUSED carries `reason=token_shape|control_char var=<NAME> phase=write-env`;
+#       or an operational write-env fault: the same marker with `reason=env_* var=ENV_FILE`, to diagnose
+#       and retry once. The one human line is on stdout; and a non-numeric guild_id, whose one line is on
+#       stderr like every other command's)
+#   2 - Retryable error from the Discord API (e.g., webhook limit on channel). write-env never exits 2:
+#       its faults exit 1
+#   64 - Usage error (write-env only: no guild_id, the webhook URL passed as an argument, or
+#        DISCORD_WEBHOOK_URL_INPUT or DISCORD_BOT_TOKEN_INPUT missing or empty). The usage text
+#        is printed on STDOUT, and so is the remedy for every one of these except the missing guild_id.
+#
+# Output: JSON or plain text to stdout
+# Errors: Messages to stderr, exit 1 (write-env: the usage errors (exit 64), the allow-list line
+#         and the confirmation line are on stdout, see above)
+
+set -euo pipefail
+
+# (#7797) Xtrace refusal -- the FIRST thing after `set …`, so nothing above it is
+# traced. This script ships to installed Soleur CLIs: the terminal it runs in
+# belongs to the founder, and `bash -x` would print their live Discord bot token.
+# The `:+x` form tests non-emptiness WITHOUT expanding the value, so the guard
+# cannot leak the thing it is refusing over. CONDITIONAL, and that is measured
+# rather than inherited: the token is bound BEFORE the prologue runs (it arrives in
+# DISCORD_BOT_TOKEN_INPUT, or DISCORD_BOT_TOKEN for a caller that already holds it),
+# so the guard can never be empty while one is live. The one runtime acquisition is
+# `verify`, which sources the repo's .env -- cmd_verify carries its own refusal for
+# that path. A founder tracing with none set keeps full tracing.
+# Refusal goes to STDOUT, not stderr: agent runtimes surface stdout and swallow
+# stderr (constitution.md > Code Style > Always), and a swallowed security refusal
+# leaves the user with a bare `exit 78` and no text at all.
+case "$-" in
+  *x*)
+    if [ -n "${DISCORD_BOT_TOKEN_INPUT:+x}${DISCORD_BOT_TOKEN:+x}${DISCORD_WEBHOOK_URL_INPUT:+x}${DISCORD_RELEASES_WEBHOOK_URL_INPUT:+x}${DISCORD_BLOG_WEBHOOK_URL_INPUT:+x}" ]; then
+      printf 'Refusing to run under `bash -x`: a Discord bot token or webhook URL is set, and tracing would print it to your terminal. To trace safely, unset them and re-run.\n'
+      exit 78
+    fi
+    ;;
+esac
+
+# (#7873) `--disable` closes ~/.curlrc and `--noproxy '*'` closes the proxy
+# variables, but NEITHER touches the trust store or the TLS session-key log. On an
+# installed CLI the environment belongs to someone who is not us, so
+# a substituted `CURL_CA_BUNDLE` is a clean MITM of the founder's platform
+# token with every other guard fully intact, and `SSLKEYLOGFILE` is passive
+# decryption with no MITM at all. Matches the line in scripts/betterstack-query.sh.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS
+
+# --- Transport-confinement diagnostics (#7873) --------------------------------
+# Every credentialed `curl` below carries `--disable --noproxy '*'` and discards
+# curl's own stderr (which can carry the URL). A failed request then has four
+# competing causes the founder cannot tell apart: the proxy this script
+# deliberately bypassed, a ~/.curlrc that `--disable` dropped, a TLS trust
+# variable it cleared, or an ordinary network failure. So each failure emits ONE
+# structured marker carrying the discriminators, beside a human line that names
+# the bypass instead of blaming the founder's connectivity.
+SOLEUR_TRANSPORT_SCRIPT="discord-setup.sh"
+SOLEUR_TRANSPORT_PLATFORM="Discord"
+
+# The request helpers below run inside `$(...)`, where fd 1 is the capture pipe.
+# Save the script's real stdout so the marker reaches the founder's terminal (and
+# the always-on PostToolUse Bash extractor) instead of being swallowed into a
+# variable. The marker is on stdout BY DESIGN -- the call sites' `2>/dev/null` is
+# what keeps curl's URL-carrying stderr out of the transcript, and it must not be
+# able to suppress the diagnostic too.
+exec 3>&1
+
+# Which proxy variables are non-empty, or `none`.
+proxy_env_names() {
+  local names="" n
+  for n in HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy; do
+    if [[ -n "${!n-}" ]]; then
+      names="${names},${n}"
+    fi
+  done
+  if [[ -z "$names" ]]; then
+    printf 'none'
+  else
+    printf '%s' "${names#,}"
+  fi
+}
+
+# True when a proxy this script deliberately bypasses is configured. NO_PROXY
+# alone is not one -- it only ever narrows proxying, so it cannot be the cause.
+proxy_bypassed() {
+  [[ -n "${HTTP_PROXY:-}${HTTPS_PROXY:-}${ALL_PROXY:-}${http_proxy:-}${https_proxy:-}${all_proxy:-}" ]]
+}
+
+# One line, eight fields, on the saved stdout.
+#
+# Two fields were literals in the first cut and are now MEASURED (#7898 review):
+# `noproxy_applied` was the constant "true", which ASSERTS the property instead of
+# observing it -- dropping --noproxy from a call site left the diagnostic still
+# claiming it was applied. It now reports whether a proxy was actually configured
+# for this request to bypass, which is the fact a reader needs. `refusal` was the
+# constant "none" at every call site, so the cause it exists to discriminate could
+# never appear; the field stays for a caller that can refuse for a named cause, and
+# this script has none, so it passes "none".
+#
+# `tls_env_cleared` is new. The prologue unsets CURL_CA_BUNDLE/SSL_CERT_FILE et al,
+# which is correct against an attacker and BREAKS a founder whose corporate CA
+# arrives that way -- curl then exits 60 and, without this field, the event is
+# indistinguishable from an ordinary network failure.
+emit_transport_diag() {
+  local curl_exit="$1" refusal="$2" surface="installed-cli" curlrc="false" noproxy="false"
+  # The hosted sandbox always sets this (agent-env.ts > AGENT_ENV_OVERRIDES); an
+  # installed CLI does not. A label on the event, not a gate on behaviour.
+  if [[ -n "${CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:-}" ]]; then
+    surface="in-sandbox"
+  fi
+  if [[ -f "${HOME:-}/.curlrc" ]]; then
+    curlrc="true"
+  fi
+  if proxy_bypassed; then
+    noproxy="true"
+  fi
+  printf 'SOLEUR_TRANSPORT_DIAG surface=%s script=%s curl_exit=%s refusal=%s proxy_env=%s curlrc_present=%s noproxy_applied=%s tls_env_cleared=%s\n' \
+    "$surface" "$SOLEUR_TRANSPORT_SCRIPT" "$curl_exit" "$refusal" \
+    "$(proxy_env_names)" "$curlrc" "$noproxy" "true" >&3
+}
+
+# Replaces the bare "Check your network connection and try again." on a
+# credentialed-curl failure. With a proxy set, that line blames the founder for a
+# bypass this script chose.
+report_transport_failure() {
+  local curl_exit="${1:-unknown}"
+  local detail="${2:-Failed to connect to the ${SOLEUR_TRANSPORT_PLATFORM} API.}"
+  emit_transport_diag "$curl_exit" "none"
+  echo "Error: ${detail}" >&2
+  # Ordered by how specific the evidence is. Each arm names something THIS script
+  # did, so the founder is never told to go debug their own network for a choice
+  # made here. The bare "check your connection" line is the LAST resort, not the
+  # default -- it was the default in the first cut, which meant a founder whose
+  # corporate CA or curlrc we had just discarded was blamed for it (#7898 review).
+  if [[ "$curl_exit" == "60" || "$curl_exit" == "35" || "$curl_exit" == "77" ]]; then
+    # 60 peer-certificate, 35 TLS handshake, 77 CA-bundle unreadable.
+    echo "This looks like a TLS trust failure. This script deliberately clears CURL_CA_BUNDLE, SSL_CERT_FILE, SSL_CERT_DIR and SSLKEYLOGFILE before the request, because those variables can redirect or expose a request carrying your ${SOLEUR_TRANSPORT_PLATFORM} credential." >&2
+    echo "If your machine needs a corporate CA to reach ${SOLEUR_TRANSPORT_PLATFORM}, that is not currently supported -- please open an issue at https://github.com/jikig-ai/soleur/issues." >&2
+  elif proxy_bypassed; then
+    echo "This request deliberately bypasses your proxy ($(proxy_env_names)), because a proxy can redirect a request carrying your ${SOLEUR_TRANSPORT_PLATFORM} token." >&2
+    echo "If you need Soleur to reach ${SOLEUR_TRANSPORT_PLATFORM} through your proxy, that is not currently supported -- please open an issue at https://github.com/jikig-ai/soleur/issues." >&2
+  elif [[ -f "${HOME:-}/.curlrc" ]]; then
+    echo "You have a ~/.curlrc, and this request deliberately ignores it (--disable), because a curlrc can redirect a request carrying your ${SOLEUR_TRANSPORT_PLATFORM} token. If it configures a proxy or a CA bundle you need, that is why this failed." >&2
+    echo "That is not currently supported -- please open an issue at https://github.com/jikig-ai/soleur/issues." >&2
+  else
+    echo "Check your network connection and try again." >&2
+  fi
+}
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../../../scripts/resolve-git-root.sh"
+
+DISCORD_API="https://discord.com/api/v10"
+
+# --- Helpers ---
+
+require_token() {
+  if [[ -z "${DISCORD_BOT_TOKEN_INPUT:-}" ]]; then
+    echo "Error: DISCORD_BOT_TOKEN_INPUT env var is not set." >&2
+    echo "Pass the token via environment variable, not as a CLI argument." >&2
+    exit 1
+  fi
+}
+
+require_jq() {
+  if ! command -v jq &>/dev/null; then
+    echo "Error: jq is required but not installed." >&2
+    echo "Install it: https://jqlang.github.io/jq/download/" >&2
+    exit 1
+  fi
+}
+
+# (#9597) The Bot token rides curl's STDIN config channel (`--config -`), never its
+# argument list (readable by every local user in /proc/<pid>/cmdline). That channel is
+# line-oriented, so a token holding a quote or a newline could append a `url = "..."`
+# directive and make curl issue a second request. This guard refuses anything outside
+# the base64url.base64url.base64url shape BEFORE the value is formatted into the stream.
+# (The same check discord-community.sh's validate_env runs; the `=~` runs in the C locale
+# so the ranges are ASCII.) The refusal line is fixed and value-free (never the
+# token), goes to stderr, and exits 1; it is not a connect failure.
+_discord_token_ok() {
+  local LC_ALL=C t="${1:-}"
+  [[ "$t" =~ ^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$ ]]
+}
+refuse_token_shape() {
+  printf 'SOLEUR_CREDENTIAL_REFUSED script=%s reason=token_shape\n' "$SOLEUR_TRANSPORT_SCRIPT" >&2
+  echo "Error: DISCORD_BOT_TOKEN_INPUT is not shaped like a Discord bot token, so nothing was sent. Expected three dot-separated base64url segments (letters, digits, '-' and '_'), with no 'Bot ' prefix, quotes, spaces, or line breaks (including a trailing CR or newline). The value is not shown." >&2
+  exit 1
+}
+
+# (#9597) write-env value allow-list. `.env` values are written UNQUOTED and later SOURCED
+# (`verify`, the community scripts), so a value holding a command substitution, a backtick, a
+# quote, a semicolon, a space or a newline would execute or split on the next source, and a leading
+# tilde would silently change a stored credential (tilde expansion on source). Validation is an
+# allow-list, fail-closed, and runs for EVERY value BEFORE the first write: a refused value prints
+# the value-free marker plus ONE human line naming only the VARIABLE, writes nothing, exits 1 and
+# leaves any existing .env untouched. A value outside the list that is legitimate is added to .env
+# by hand (a thread-scoped webhook URL with a query string is outside the list). The glob runs
+# under LC_ALL=C and is not grep, which is line-oriented and lets a multi-line value through.
+_wenv_class() { # <value>: 0 allowed, 1 outside the allow-list or empty, 2 holds a control character
+  local LC_ALL=C
+  case "${1-}" in
+    '') return 1 ;;
+    *[[:cntrl:]]*) return 2 ;;
+    *[!A-Za-z0-9._:/@%+=,-]*) return 1 ;;
+  esac
+  return 0
+}
+_wenv_refuse() { # <reason> <VARIABLE>
+  printf 'SOLEUR_CREDENTIAL_REFUSED script=%s reason=%s var=%s phase=write-env\n' "$SOLEUR_TRANSPORT_SCRIPT" "$1" "$2" >&2
+  echo "Error: ${2} holds a character this script does not write to .env (allowed: letters, digits and . _ : / @ % + = , -), so nothing was written and your existing .env is unchanged. The value is not shown. If the value is legitimate, add it to .env by hand."
+  exit 1
+}
+# _wenv_validate <VARIABLE>...: every NON-EMPTY named variable passes the allow-list. The required
+# variables are checked non-empty by the caller before this runs; an empty optional one is skipped.
+_wenv_validate() {
+  local _wn _wrc
+  for _wn in "$@"; do
+    [[ -n "${!_wn:-}" ]] || continue
+    _wrc=0
+    _wenv_class "${!_wn}" || _wrc=$?
+    case "$_wrc" in
+      0) ;;
+      2) _wenv_refuse control_char "$_wn" ;;
+      *) _wenv_refuse token_shape "$_wn" ;;
+    esac
+  done
+}
+
+# (#10091) write-env commit: ONE helper, byte-identical in the four setup scripts (a drift row pins
+# it, from this comment line through the closing brace of `_wenv_write`). `_wenv_write <env_file>
+# <remove-ERE> <KEY=VALUE>...` replaces the old remove-then-append, which raced (two writers each read
+# the file, each rewrote it, the later mv lost the earlier's keys), was not atomic (the append hit the
+# live file after the mv) and widened a new file before the chmod.
+# The edit is built in a temp file `<.env>.wenv.XXXXXX` beside the RESOLVED .env (same filesystem, so the
+# final `mv -f` is one atomic rename; a namespace of its own, so the sweep below touches only that
+# namespace (a file there that is not a regular file this user owns is left alone), never the operator
+# library's `.env.tmp.*` temps) under `umask 077` (0600 from birth), serialized by
+# ONE mutual-exclusion mechanism on every platform: an owner-pid `mkdir` lock directory
+# (`<.env>.lock.d`) that is held until AFTER that rename. No flock (a flock run and a mkdir run exclude
+# nothing against each other, flock without a timeout blocks forever, and `exec {fd}<` needs bash 4.1
+# while macOS ships 3.2).
+# Stale-lock recovery is serialized as well, by a second `mkdir` mutex `<.env>.lock.d.recover`. A waiter
+# judges a lock stale when its owner pid is dead (or its owner file stayed empty for _WENV_EMPTY_POLLS
+# passes), then tries to take the mutex; a waiter that loses it keeps waiting. The winner RE-READS the
+# owner of the lock UNDER the mutex (the snapshot it judged on is never trusted; the re-read narrows the
+# window to the few instructions between the read and the removal, it does not close it), removes the lock
+# only if the owner is still a dead pid, or if the snapshot AND the re-read (after a short pause) both found
+# no pid, ALWAYS releases the mutex, and goes round the loop again. A lock whose owner turned from a dead pid
+# into nothing has changed hands and is left alone. A recovering waiter never writes while it recovers,
+# nothing is renamed away and put back, and the lock path is never empty while a live holder exists, so two
+# waiters cannot both hold the lock. A SOLEUR_WENV_LOCK_TICKS below 2 never attempts recovery.
+# The wait is ONE bounded loop. Every failed `mkdir` pass either sleeps one tick (0.1 s; 1 s where
+# `sleep` takes no fraction) or fails at once, and every pass counts against SOLEUR_WENV_LOCK_TICKS
+# (digits only, at most _WENV_TICKS_MAX, else _WENV_TICKS_DEFAULT): about 10 s by default with a
+# fractional `sleep`, about 100 s without one. It FAILS CLOSED: no write, a value-free marker, exit 1,
+# .env untouched. A lock path that exists but is not a directory fails at once (env_lock_not_dir). grep
+# exit 1 (nothing left) is normal; exit 2 (an unreadable .env) aborts, because swallowing it would
+# install an empty file over the credentials. A symlinked .env is resolved first (the real target is
+# rewritten, the link survives); a dangling link or a non-regular target is refused.
+# Signals: this helper owns the EXIT, INT, TERM and HUP traps for its duration and restores nothing (no
+# caller installs one today; a caller that needs its own must chain them). On those four it removes its
+# temp and its recovery mutex and releases the lock, and it removes the lock ONLY when the owner file
+# reads exactly this process. Residual, stated: SIGKILL leaves its lock (recovered by the next run
+# through the dead pid), its temp (swept by the next run, under the lock) and, if it died mid-recovery,
+# `<.env>.lock.d.recover`, which the next runs report after the bounded wait ("remove that directory");
+# a recycled pid can keep a dead owner looking live until the wait times out; the owner check uses
+# `kill -0`, so a lock held by another user reads as dead; a holder stalled between its `mkdir` and its
+# owner write for longer than the empty-owner window can be treated as ownerless and recovered.
+_WENV_TICK=0.1          # seconds per wait tick (a `sleep` without fractions falls back to 1 s)
+_WENV_TICKS_DEFAULT=100 # the default bound: about 10 s
+_WENV_TICKS_MAX=1000    # the largest SOLEUR_WENV_LOCK_TICKS accepted: about 100 s
+_WENV_EMPTY_POLLS=30    # passes an ownerless lock directory is waited on before recovery is tried: about 3 s
+_WENV_EMPTY_PAUSE=0.3   # pause between the two owner reads under the recovery mutex when the owner is not a pid
+_WENV_LOCK="" _WENV_TMP="" _WENV_REC=""
+_wenv_unlock() { # idempotent: remove our temp and recovery mutex; release the lock ONLY if its owner file reads exactly this process
+  local _wo=""
+  if [[ -n "$_WENV_TMP" ]]; then rm -f -- "$_WENV_TMP"; _WENV_TMP=""; fi
+  if [[ -n "$_WENV_REC" ]]; then rmdir -- "$_WENV_REC" 2>/dev/null || true; _WENV_REC=""; fi
+  if [[ -n "$_WENV_LOCK" ]]; then
+    { read -r _wo < "$_WENV_LOCK/owner"; } 2>/dev/null || _wo=""
+    if [[ "$_wo" == "$$" ]]; then rm -rf -- "$_WENV_LOCK"; fi
+    _WENV_LOCK=""
+  fi
+}
+_wenv_fail() { # <reason> <human text>: value-free marker on stderr, one human line on stdout, exit 1
+  printf 'SOLEUR_CREDENTIAL_REFUSED script=%s reason=%s var=ENV_FILE phase=write-env\n' "$SOLEUR_TRANSPORT_SCRIPT" "$1" >&2
+  echo "Error: $2 Nothing was written and your existing .env is unchanged."
+  exit 1
+}
+_wenv_write() {
+  local _wf="$1" _wre="$2" _wr _wl _wm _wd _wi=0 _ws=0 _wt _wown _wo2 _wsnap="" _wstale _wgone _wwhy="" _wn _wrc _wum
+  shift 2
+  if _wr="$(readlink -f -- "$_wf" 2>/dev/null)" && [[ -n "$_wr" ]]; then
+    :
+  elif [[ -L "$_wf" ]]; then
+    _wenv_fail env_unresolvable "The .env link at ${_wf} could not be resolved."
+  else
+    _wr="$_wf"
+  fi
+  if [[ -L "$_wf" && ! -e "$_wr" ]]; then
+    _wenv_fail env_dangling_link "The .env at ${_wf} is a link to a file that does not exist."
+  fi
+  if [[ -e "$_wr" && ! -f "$_wr" ]]; then
+    _wenv_fail env_not_regular "The .env at ${_wf} is not a regular file."
+  fi
+  _wl="${_wr}.lock.d"
+  _wm="${_wl}.recover"
+  _wt="${SOLEUR_WENV_LOCK_TICKS:-$_WENV_TICKS_DEFAULT}"
+  if [[ "$_wt" =~ ^[0-9]{1,4}$ ]] && (( 10#$_wt <= _WENV_TICKS_MAX )); then _wt=$((10#$_wt)); else _wt=$_WENV_TICKS_DEFAULT; fi
+  _wum="$(umask)"
+  umask 077
+  trap '_wenv_unlock' EXIT
+  trap '_wenv_unlock; exit 130' INT
+  trap '_wenv_unlock; exit 143' TERM
+  trap '_wenv_unlock; exit 129' HUP
+  while :; do
+    if mkdir -- "$_wl" 2>/dev/null; then
+      _WENV_LOCK="$_wl"
+      if ! printf '%s\n' "$$" > "$_wl/owner"; then
+        rm -rf -- "$_wl"; _WENV_LOCK=""
+        _wenv_fail env_write_failed "The lock at ${_wl} could not be recorded."
+      fi
+      break
+    fi
+    if [[ -L "$_wl" || -f "$_wl" ]]; then
+      _wenv_fail env_lock_not_dir "The lock path ${_wl} exists but is not a directory; remove it."
+    fi
+    _wi=$((_wi + 1))
+    _wstale=0
+    if [[ ! -d "$_wl" ]]; then
+      # mkdir failed with the path absent: the lock was released in between, or mkdir fails for another
+      # reason (a name too long, no space): a pass that made no progress, so it sleeps below like any other.
+      _ws=0; _wwhy=""
+      _wd="${_wr%/*}"; [[ "$_wd" != "$_wr" ]] || _wd=.
+      [[ -d "$_wd" && -w "$_wd" ]] || _wenv_fail env_dir_unwritable "The directory of ${_wf} does not allow a lock to be created."
+    else
+      _wown=""
+      { read -r _wown < "$_wl/owner"; } 2>/dev/null || _wown=""
+      if [[ "$_wown" =~ ^[0-9]+$ ]]; then
+        _ws=0; _wsnap=pid
+        if [[ "$_wown" == "$$" ]] || ! kill -0 "$_wown" 2>/dev/null; then _wstale=1; _wwhy=stale; else _wwhy=live; fi
+      else
+        _ws=$((_ws + 1)); _wwhy=""; _wsnap=empty
+        if (( _ws > _WENV_EMPTY_POLLS )); then _wstale=1; fi
+      fi
+    fi
+    if (( _wstale == 1 && _wi < _wt )); then
+      if mkdir -- "$_wm" 2>/dev/null; then
+        _WENV_REC="$_wm"
+        _wo2=""
+        { read -r _wo2 < "$_wl/owner"; } 2>/dev/null || _wo2=""
+        if [[ "$_wsnap" == empty && ! "$_wo2" =~ ^[0-9]+$ ]]; then
+          sleep "$_WENV_EMPTY_PAUSE" 2>/dev/null || sleep 1
+          { read -r _wo2 < "$_wl/owner"; } 2>/dev/null || _wo2=""
+        fi
+        _wgone=0
+        if [[ "$_wo2" =~ ^[0-9]+$ ]]; then
+          if [[ "$_wo2" == "$$" ]] || ! kill -0 "$_wo2" 2>/dev/null; then rm -rf -- "$_wl"; _ws=0; _wgone=1; fi
+        elif [[ "$_wsnap" == empty ]]; then
+          rm -rf -- "$_wl"; _ws=0; _wgone=1
+        fi
+        _wenv_unlock
+        if (( _wgone == 1 )); then continue; fi
+      fi
+    fi
+    if (( _wi >= _wt )); then
+      if [[ "$_wwhy" != live && -d "$_wm" ]]; then _wwhy=recover; fi
+      case "$_wwhy" in
+        live) _wenv_fail env_lock_timeout "Another write-env run is still holding the lock at ${_wl}; wait for it to finish and run this again. If no other run is active, remove that directory." ;;
+        recover) _wenv_fail env_lock_timeout "A lock recovery is in progress or was interrupted (${_wm} exists); waited and gave up. If no other run is active, remove that directory." ;;
+        *) _wenv_fail env_lock_timeout "The lock at ${_wl} could not be taken or recovered; waited and gave up. If no other run is active, remove that directory." ;;
+      esac
+    fi
+    sleep "$_WENV_TICK" 2>/dev/null || sleep 1
+  done
+  for _wn in "${_wr}".wenv.??????; do
+    if [[ -f "$_wn" && ! -L "$_wn" && -O "$_wn" ]]; then rm -f -- "$_wn"; fi
+  done
+  _WENV_TMP="$(mktemp "${_wr}.wenv.XXXXXX")" || _wenv_fail env_write_failed "A temp file could not be created beside ${_wf}."
+  if [[ -f "$_wr" ]]; then
+    _wrc=0
+    LC_ALL=C grep -a -v -E "$_wre" "$_wr" > "$_WENV_TMP" || _wrc=$?
+    if (( _wrc > 1 )); then
+      _wenv_fail env_unreadable "The existing .env at ${_wf} could not be read."
+    fi
+  fi
+  printf '%s\n' "$@" >> "$_WENV_TMP" || _wenv_fail env_write_failed "The new values could not be written beside ${_wf}."
+  chmod 600 "$_WENV_TMP" || _wenv_fail env_write_failed "The temp file beside ${_wf} could not be restricted to mode 600."
+  mv -f -- "$_WENV_TMP" "$_wr" || _wenv_fail env_write_failed "The new .env could not be moved into place at ${_wf}."
+  _WENV_TMP=""
+  _wenv_unlock
+  trap - EXIT INT TERM HUP
+  umask "$_wum"
+}
+
+# Make a Discord API request. Suppresses curl stderr to prevent token leakage
+# in debug output. Returns body on 2xx, handles errors.
+#
+# For create-webhook (POST to /channels/{id}/webhooks), HTTP 400 returns
+# exit code 2 so the SKILL.md orchestrator can retry with a different channel.
+discord_request() {
+  local endpoint="$1"
+  local method="${2:-GET}"
+  local data="${3:-}"
+  local depth="${4:-0}"
+
+  if (( depth >= 3 )); then
+    echo "Error: Discord API rate limit exceeded after 3 retries." >&2
+    exit 2
+  fi
+
+  # The guard sits IMMEDIATELY before the call it protects.
+  _discord_token_ok "${DISCORD_BOT_TOKEN_INPUT}" || refuse_token_shape
+
+  local response http_code body
+  # The bot token is NOT in this array (an array on argv is the same /proc/<pid>/cmdline
+  # surface) -- it is fed to `--config -` below. `--disable --noproxy '*'` stay literal on
+  # the call, first, where the transport-confinement lint (Rule D) can see them.
+  local curl_args=(
+    -s -w "\n%{http_code}"
+    --config -
+    -X "$method"
+    -H "Content-Type: application/json"
+  )
+
+  if [[ -n "$data" ]]; then
+    curl_args+=(-d "$data")
+  fi
+
+  # Suppress stderr to prevent token leakage in curl debug output
+  local __curl_rc=0
+  response=$(curl --disable --noproxy '*' "${curl_args[@]}" "${DISCORD_API}${endpoint}" 2>/dev/null \
+      < <(printf 'header = "Authorization: Bot %s"\n' "$DISCORD_BOT_TOKEN_INPUT")) || __curl_rc=$?
+  if (( __curl_rc != 0 )); then
+    report_transport_failure "$__curl_rc" "Failed to connect to Discord API (endpoint: ${endpoint})."
+    exit 1
+  fi
+
+  http_code=$(echo "$response" | tail -1)
+  body=$(echo "$response" | sed '$d')
+
+  case "$http_code" in
+    2[0-9][0-9])
+      # Validate JSON
+      if ! echo "$body" | jq . >/dev/null 2>&1; then
+        echo "Error: Discord API returned malformed JSON for ${endpoint}" >&2
+        exit 1
+      fi
+      echo "$body"
+      ;;
+    401)
+      echo "Error: Invalid or expired bot token." >&2
+      exit 1
+      ;;
+    400)
+      local message
+      message=$(echo "$body" | jq -r '.message // "Bad request"' 2>/dev/null || echo "Bad request")
+      echo "Error: Discord API returned HTTP 400: ${message}" >&2
+      exit 2
+      ;;
+    429)
+      local retry_after
+      retry_after=$(echo "$body" | jq -r '.retry_after // 5' 2>/dev/null || echo "5")
+      # Clamp retry_after to sane range [1, 60]
+      # Use printf to truncate float to integer for arithmetic comparison
+      # (sleep accepts floats natively, but bash (( )) does not)
+      local retry_int
+      retry_int=$(printf '%.0f' "$retry_after" 2>/dev/null || echo "5")
+      if (( retry_int > 60 )); then
+        retry_after=60
+      elif (( retry_int < 1 )); then
+        retry_after=1
+      fi
+      echo "Rate limited. Retrying after ${retry_after}s (attempt $((depth + 1))/3)..." >&2
+      sleep "$retry_after"
+      discord_request "$endpoint" "$method" "$data" "$((depth + 1))"
+      ;;
+    *)
+      local message
+      message=$(echo "$body" | jq -r '.message // "Unknown error"' 2>/dev/null || echo "Unknown error")
+      echo "Error: Discord API returned HTTP ${http_code}: ${message}" >&2
+      exit 1
+      ;;
+  esac
+}
+
+# --- Commands ---
+
+validate_snowflake_id() {
+  local id="$1"
+  local label="$2"
+  if [[ ! "$id" =~ ^[0-9]+$ ]]; then
+    # The value is never echoed: a caller that put a secret (the webhook URL) in this slot would
+    # otherwise see it printed.
+    echo "Error: ${label} must be numeric. The value is not shown." >&2
+    exit 1
+  fi
+}
+
+cmd_validate_token() {
+  require_token
+
+  # Verify token via /users/@me
+  discord_request "/users/@me" > /dev/null
+
+  # Get application info for app ID
+  local app_info
+  app_info=$(discord_request "/oauth2/applications/@me")
+
+  local app_id app_name
+  app_id=$(echo "$app_info" | jq -r '.id // empty')
+  app_name=$(echo "$app_info" | jq -r '.name // empty')
+
+  if [[ -z "$app_id" ]]; then
+    echo "Error: Could not extract application ID from Discord API response." >&2
+    exit 1
+  fi
+
+  # Output app ID on stdout (used by SKILL.md for OAuth2 URL)
+  echo "${app_id}"
+  echo "Token valid. Application: ${app_name}" >&2
+}
+
+cmd_discover_guilds() {
+  require_token
+
+  discord_request "/users/@me/guilds?with_counts=true" | \
+    jq '[.[] | {id, name, approximate_member_count}]'
+}
+
+cmd_list_channels() {
+  local guild_id="${1:?Usage: discord-setup.sh list-channels <guild_id>}"
+  validate_snowflake_id "$guild_id" "guild_id"
+  require_token
+
+  discord_request "/guilds/${guild_id}/channels" | \
+    jq '[.[] | select(.type == 0) | {id, name, position}] | sort_by(.position)'
+}
+
+cmd_create_webhook() {
+  local channel_id="${1:?Usage: discord-setup.sh create-webhook <channel_id>}"
+  validate_snowflake_id "$channel_id" "channel_id"
+  require_token
+
+  local result
+  result=$(discord_request "/channels/${channel_id}/webhooks" "POST" '{"name":"soleur-community"}')
+
+  local webhook_id webhook_token
+  webhook_id=$(echo "$result" | jq -r '.id // empty')
+  webhook_token=$(echo "$result" | jq -r '.token // empty')
+
+  if [[ -z "$webhook_id" ]] || [[ -z "$webhook_token" ]]; then
+    echo "Error: Could not extract webhook ID or token from API response." >&2
+    exit 1
+  fi
+
+  # Output the full webhook URL
+  echo "https://discord.com/api/webhooks/${webhook_id}/${webhook_token}"
+}
+
+# The remedy for a write-env usage error (exit 64). Printed on STDOUT: it is a signal the caller
+# must act on and the command has no stdout payload, and agent runtimes surface stdout and swallow
+# stderr. Both required inputs are named (the webhook URL AND the bot token), so following it once
+# does not produce a second exit 64. The interactive form needs a terminal, so when stdin is not one
+# the form that works without it is named too: the values are read from mode-600 files, so they are
+# never in the text of the command (the transcript, shell history, a wrapper's argument list). An
+# inline `VAR=value command` is deliberately NOT offered. Nothing here prints a value, and the
+# placeholders are literal text.
+_print_env_remedy() {
+  echo "Pass the webhook URL and the bot token in the environment, without echoing them. In a terminal:"
+  echo "  read -rs DISCORD_WEBHOOK_URL_INPUT; export DISCORD_WEBHOOK_URL_INPUT"
+  echo "  read -rs DISCORD_BOT_TOKEN_INPUT; export DISCORD_BOT_TOKEN_INPUT"
+  echo "  discord-setup.sh write-env <guild_id>"
+  if [ ! -t 0 ]; then
+    echo "Your stdin is not a terminal, so read -rs has nothing to read. Do not type either value into the command: its text is kept in the transcript and the shell history. Run the terminal form above yourself, or put each value alone on one line of a mode-600 file and read it from there. Create each file in your own terminal, not through an agent, and type the value at the prompt (end it with Ctrl-D), so the value is never in a command's text and the mode is set before it is written:"
+    echo "  (umask 077; cat > /path/to/webhook-url.txt)"
+    echo "  (umask 077; cat > /path/to/bot-token.txt)"
+    echo "If a file already exists, run chmod 600 on it before writing: a redirect keeps an existing file's wider mode. Then run the script in one command; the parentheses keep both values out of the shell you stay in:"
+    echo "  ( read -r DISCORD_WEBHOOK_URL_INPUT < /path/to/webhook-url.txt; read -r DISCORD_BOT_TOKEN_INPUT < /path/to/bot-token.txt; export DISCORD_WEBHOOK_URL_INPUT DISCORD_BOT_TOKEN_INPUT; discord-setup.sh write-env <guild_id> )"
+    echo "Instead of typing the webhook URL, the webhook URL file can be written without printing the URL, once the bot token file exists (create-webhook needs the bot token in the environment too): ( read -r DISCORD_BOT_TOKEN_INPUT < /path/to/bot-token.txt; export DISCORD_BOT_TOKEN_INPUT; umask 077; discord-setup.sh create-webhook <channel_id> > /path/to/webhook-url.txt ). Delete both files afterwards: the values stay in them until you do."
+  fi
+}
+
+cmd_write_env() {
+  # (#9597) The webhook URL is a write-capable secret, so it never rides this command line (the
+  # process list, the shell history). A second positional is refused BEFORE anything else reads
+  # it, whether or not the environment variable is also set (the secret is already on this
+  # command line). The argument is never echoed. Exit 64 (usage, text on STDOUT) is distinct from
+  # the exit 1 of a value outside the .env allow-list, and covers every missing REQUIRED input of
+  # this command: the guild_id, the webhook URL and the bot token, so the exit code names the class.
+  # Not covered, and exit 1 on purpose: a guild_id that is present but not numeric
+  # (validate_snowflake_id, shared with the other commands, one line on stderr, the value not shown).
+  if [[ $# -ge 2 ]]; then
+    echo "Error: write-env no longer takes the webhook URL as an argument, because an argument is visible in the process list and your shell history."
+    _print_env_remedy
+    echo "The argument you passed is not shown. It was already on this command line, so rotate that webhook if anyone else can read your process list or shell history."
+    exit 64
+  fi
+  if [[ $# -eq 0 ]]; then
+    echo "Usage: discord-setup.sh write-env <guild_id>"
+    echo "Error: guild_id is missing. The webhook URL and the bot token go in DISCORD_WEBHOOK_URL_INPUT and DISCORD_BOT_TOKEN_INPUT, never as arguments."
+    exit 64
+  fi
+  local guild_id="$1"
+  if [[ -z "${DISCORD_WEBHOOK_URL_INPUT:-}" ]]; then
+    echo "Usage: discord-setup.sh write-env <guild_id>"
+    echo "Error: DISCORD_WEBHOOK_URL_INPUT is not set (or is empty). Pass the webhook URL in that environment variable, not as an argument."
+    _print_env_remedy
+    exit 64
+  fi
+  validate_snowflake_id "$guild_id" "guild_id"
+  if [[ -z "${DISCORD_BOT_TOKEN_INPUT:-}" ]]; then
+    echo "Usage: discord-setup.sh write-env <guild_id>"
+    echo "Error: DISCORD_BOT_TOKEN_INPUT is not set (or is empty). Pass the bot token in that environment variable, not as an argument."
+    _print_env_remedy
+    exit 64
+  fi
+  # Every value is checked BEFORE the first write (see the allow-list above).
+  _wenv_validate DISCORD_BOT_TOKEN_INPUT DISCORD_WEBHOOK_URL_INPUT DISCORD_RELEASES_WEBHOOK_URL_INPUT DISCORD_BLOG_WEBHOOK_URL_INPUT
+
+  local repo_root="$GIT_ROOT"
+  local env_file="${repo_root}/.env"
+
+  # The required three, then the optional channel-specific webhooks if provided.
+  local -a kv=(
+    "DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN_INPUT}"
+    "DISCORD_GUILD_ID=${guild_id}"
+    "DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL_INPUT}"
+  )
+  if [[ -n "${DISCORD_RELEASES_WEBHOOK_URL_INPUT:-}" ]]; then
+    kv+=("DISCORD_RELEASES_WEBHOOK_URL=${DISCORD_RELEASES_WEBHOOK_URL_INPUT}")
+  fi
+  if [[ -n "${DISCORD_BLOG_WEBHOOK_URL_INPUT:-}" ]]; then
+    kv+=("DISCORD_BLOG_WEBHOOK_URL=${DISCORD_BLOG_WEBHOOK_URL_INPUT}")
+  fi
+  # One atomic, serialized, mode-600-from-birth write (see _wenv_write above).
+  _wenv_write "$env_file" '^(DISCORD_BOT_TOKEN|DISCORD_GUILD_ID|DISCORD_WEBHOOK_URL|DISCORD_RELEASES_WEBHOOK_URL|DISCORD_BLOG_WEBHOOK_URL)=' "${kv[@]}"
+  local var_count=${#kv[@]}
+
+  # The confirmation is on STDOUT like the rest of write-env's human text (agent runtimes surface
+  # stdout and swallow stderr, so a success printed on stderr reads as silence).
+  echo "Wrote ${var_count} variables to ${env_file} (permissions: 600)"
+}
+
+cmd_verify() {
+  # Verify .env configuration by running guild-info
+  local repo_root="$GIT_ROOT"
+  local env_file="${repo_root}/.env"
+
+  if [[ ! -f "$env_file" ]]; then
+    echo "Error: .env file not found at ${env_file}" >&2
+    exit 1
+  fi
+
+  # `source` binds DISCORD_BOT_TOKEN at runtime, AFTER the prologue's guard ran, so the
+  # prologue cannot see it. Refuse tracing here, before the credential is bound.
+  case "$-" in
+    *x*)
+      printf 'Refusing to run under `bash -x`: sourcing %s would bind a Discord bot token and tracing would print it to your terminal. To trace safely, re-run without -x.\n' "$env_file"
+      exit 78
+      ;;
+  esac
+
+  # shellcheck disable=SC1090
+  set -a
+  source "$env_file"
+  set +a
+
+  if [[ -z "${DISCORD_BOT_TOKEN:-}" ]] || [[ -z "${DISCORD_GUILD_ID:-}" ]]; then
+    echo "Error: .env is missing DISCORD_BOT_TOKEN or DISCORD_GUILD_ID." >&2
+    exit 1
+  fi
+
+  local script_dir
+  script_dir="$(cd "$(dirname "$0")" && pwd)"
+
+  local community_script="${script_dir}/discord-community.sh"
+  if [[ ! -x "$community_script" ]]; then
+    echo "Error: Required script not found: ${community_script}" >&2
+    exit 1
+  fi
+
+  local guild_info
+  guild_info=$("${community_script}" guild-info)
+
+  local name member_count
+  name=$(echo "$guild_info" | jq -r '.name // empty')
+  member_count=$(echo "$guild_info" | jq -r '.approximate_member_count // empty')
+
+  if [[ -z "$name" ]]; then
+    echo "Error: Could not extract guild info from API response." >&2
+    exit 1
+  fi
+
+  echo "${name}"
+  echo "${member_count:-0}"
+}
+
+# --- Main ---
+
+main() {
+  local command="${1:-}"
+  shift || true
+
+  if [[ -z "$command" ]]; then
+    echo "Usage: discord-setup.sh <command> [args]" >&2
+    echo "" >&2
+    echo "Commands:" >&2
+    echo "  validate-token                  - Verify token via API, output app ID" >&2
+    echo "  discover-guilds                 - List guilds as JSON" >&2
+    echo "  list-channels <guild_id>        - List text channels as JSON" >&2
+    echo "  create-webhook <channel_id>     - Create webhook, output webhook URL" >&2
+    echo "  write-env <guild_id>            - Write to .env with chmod 600 (webhook URL in DISCORD_WEBHOOK_URL_INPUT," >&2
+    echo "                                    bot token in DISCORD_BOT_TOKEN_INPUT; with no terminal, read each from a" >&2
+    echo "                                    mode-600 file, never typed into the command; write-env prints the exact form)" >&2
+    echo "  verify                          - Run guild-info check" >&2
+    exit 1
+  fi
+
+  require_jq
+
+  case "$command" in
+    validate-token)  cmd_validate_token ;;
+    discover-guilds) cmd_discover_guilds ;;
+    list-channels)   cmd_list_channels "$@" ;;
+    create-webhook)  cmd_create_webhook "$@" ;;
+    write-env)       cmd_write_env "$@" ;;
+    verify)          cmd_verify ;;
+    *)
+      echo "Error: Unknown command '${command}'" >&2
+      echo "Run 'discord-setup.sh' without arguments for usage." >&2
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

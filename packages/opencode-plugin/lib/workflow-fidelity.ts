@@ -1,0 +1,388 @@
+/**
+ * Workflow fidelity contract — prevents Grok Build (and Claude) agents from
+ * cherry-picking pipeline steps after `/go` routes to a registered skill, or
+ * stopping mid-chain when a lifecycle skill is invoked standalone.
+ *
+ * Failure mode (#6325 session): `/go` routed to one-shot; the parent ran
+ * worktree setup + inline implementation and stopped — skipping plan, review, ship.
+ * Extension (#6320 lifecycle): same bypass at `/brainstorm`, `/plan`, `/work` entry.
+ */
+
+import type { Harness } from "./harness";
+import { cursorSkillSlash } from "../scripts/sync-cursor-name-map";
+
+/** Skills that own a multi-phase pipeline — must be invoked, never inlined. */
+export const PIPELINE_SKILLS = [
+  "one-shot",
+  "brainstorm",
+  "drain-labeled-backlog",
+  "drain-prs",
+] as const;
+
+export type PipelineSkill = (typeof PIPELINE_SKILLS)[number];
+
+/** Exploration handoff after brainstorm completes (shortcut: one-shot when reqs clear). */
+export const BRAINSTORM_CHILD_SKILLS = ["plan", "one-shot"] as const;
+
+/** Planning prefix before the shared implementation tail. */
+export const PLAN_PIPELINE_PREFIX = ["plan", "deepen-plan"] as const;
+
+/** Shared implementation tail — one-shot Steps 3–8 and standalone `/work` Phase 4. */
+export const IMPLEMENTATION_TAIL = [
+  "work",
+  "review",
+  "qa",
+  "compound",
+  "ship",
+] as const;
+
+/** Child skills one-shot must invoke in order (Steps 1–7). */
+export const ONE_SHOT_CHILD_SKILLS = [
+  ...PLAN_PIPELINE_PREFIX,
+  ...IMPLEMENTATION_TAIL,
+] as const;
+
+/** Standalone skills with mandatory successor invokes (not full orchestrators). */
+export const HANDOFF_SKILLS = ["plan", "work", "review", "compound", "ship"] as const;
+
+export type HandoffSkill = (typeof HANDOFF_SKILLS)[number];
+
+/** Post-merge production verification — ship Step 3.8, one-shot Step 8 prerequisite. */
+export const POST_MERGE_VERIFICATION_SKILLS = ["postmerge"] as const;
+
+/** Emitted only after merge + release workflows + postmerge verification (one-shot Step 8). */
+export const ONE_SHOT_DONE_MARKER = "<promise>DONE</promise>";
+
+/** Sentinel markers skills/docs must retain — drift-guarded in tests. */
+export const GO_POST_ROUTE_SENTINEL = "go-post-route";
+export const ONE_SHOT_ANTI_BYPASS_SENTINEL = "one-shot-anti-bypass-protocol";
+export const GROK_PRE_PUSH_GATE_SENTINEL = "grok-pre-push-gate";
+
+/** Repo-relative path — run from root before `git push` under Grok Build. */
+export const GROK_PRE_PUSH_GATE_SCRIPT = "plugins/soleur/scripts/grok-pre-push-gate.sh";
+export const BRAINSTORM_ANTI_BYPASS_SENTINEL = "brainstorm-anti-bypass-protocol";
+export const PLAN_ANTI_BYPASS_SENTINEL = "plan-anti-bypass-protocol";
+export const WORK_ANTI_BYPASS_SENTINEL = "work-anti-bypass-protocol";
+export const LIFECYCLE_HANDOFF_SENTINEL = "lifecycle-handoff-protocol";
+export const SHIP_MERGE_DEPLOY_SENTINEL = "ship-merge-deploy-protocol";
+export const POSTMERGE_HARNESS_SENTINEL = "postmerge-harness-protocol";
+
+/**
+ * Grok has no Skill or Monitor tool. Do not invent matchers for them.
+ * Distinct from an untrusted session (no live grok --trust token on the
+ * 2026-09-11 host). Drain-prs Grok polling is AwaitShell, not Monitor.
+ */
+export const GROK_HOOK_SKIP_NO_TOOL = "SOLEUR_HOOK_SKIP reason=no-tool";
+export const GROK_HOOK_SKIP_UNTRUSTED = "SOLEUR_HOOK_SKIP reason=untrusted-session";
+
+/** Re-export for workflow tests — BEHIND resync lives in pr-merge-poll.ts. */
+export { PR_BEHIND_SYNC_SENTINEL } from "./pr-merge-poll";
+
+export function isPipelineSkill(skill: string): skill is PipelineSkill {
+  return (PIPELINE_SKILLS as readonly string[]).includes(skill);
+}
+
+export function isHandoffSkill(skill: string): skill is HandoffSkill {
+  return (HANDOFF_SKILLS as readonly string[]).includes(skill);
+}
+
+/** Map /go routing labels to soleur skill names (soleur: prefix stripped at dispatch). */
+export const GO_SKILL_ROUTES: Record<string, string> = {
+  fix: "one-shot",
+  implement: "one-shot",
+  drain: "drain-labeled-backlog",
+  "drain-prs": "drain-prs",
+  review: "review",
+  incident: "incident",
+  questionnaire: "questionnaire-generate",
+  glossary: "kb-glossary",
+  default: "brainstorm",
+};
+
+export function resolveGoSkillRoute(label: string): string {
+  return GO_SKILL_ROUTES[label] ?? GO_SKILL_ROUTES.default;
+}
+
+export function isOneShotRoute(label: string): boolean {
+  return resolveGoSkillRoute(label) === "one-shot";
+}
+
+export function isBrainstormRoute(label: string): boolean {
+  return resolveGoSkillRoute(label) === "brainstorm";
+}
+
+/** Mandatory successors when a handoff skill runs standalone (no parent orchestrator). */
+export function mandatorySuccessors(skill: string): readonly string[] {
+  switch (skill) {
+    case "brainstorm":
+      return BRAINSTORM_CHILD_SKILLS;
+    case "plan":
+      return ["work"];
+    case "work":
+      return ["review", "compound", "ship"];
+    case "review":
+      return ["compound"];
+    case "compound":
+      return ["ship"];
+    case "ship":
+      return [...POST_MERGE_VERIFICATION_SKILLS];
+    default:
+      return [];
+  }
+}
+
+/**
+ * The operator-typed / adapter-rendered form of one skill on one harness. The cursor
+ * arm is `formatSkillRef`-only until `detectHarness` returns `cursor`. `formatSkillInvocation`
+ * does not share that arm in slice 1. Docs name skills as `soleur:<name>` and
+ * leave THIS to the adapter (ADR-226); every fidelity string below goes through it so no
+ * harness receives another harness's form (arch F3, #8299).
+ */
+export function formatSkillRef(skill: string, harness: Harness): string {
+  switch (harness) {
+    case "codex":
+      return `$soleur:${skill}`;
+    case "grok":
+      return `/${skill}`;
+    case "devin":
+      return `/soleur:${skill}`;
+    case "antigravity":
+      return `/soleur:${skill}`;
+    case "cursor":
+      return cursorSkillSlash(skill);
+    case "opencode":
+      // The bare id is OpenCode's registration key (measurements §2.3): it has no namespaced form.
+      return skill;
+    default:
+      return `soleur:${skill}`;
+  }
+}
+
+/**
+ * The declared TRANSITION set — every edge a session may legally take, including
+ * back-edges.
+ *
+ * DELIBERATELY SEPARATE FROM `mandatorySuccessors()`, which is not a transition
+ * set: its result is rendered into the prompt as
+ * "When standalone, invoke next: /X, /Y" (see `workflowFidelityInstructions`).
+ * A permitted transition is legal-if-taken; a mandatory successor is a directive.
+ * Putting `plan` into `work`'s successors to express the `work -> plan` back-edge
+ * would instruct the model to re-enter planning after EVERY work run.
+ *
+ * The four back-edges are operator-approved: `review -> work` (review produced
+ * findings that need implementing), `ship -> work` (a pre-merge gate —
+ * preflight/QA — failed), `postmerge -> work` (post-merge verification failed;
+ * declared 2026-09-19 on #8325 — 7 sessions took it, 5 re-entered
+ * `work -> review -> compound -> ship -> postmerge` in full, 2 ended at `work`,
+ * none skipped `ship`) and `work -> plan` (implementation invalidated the
+ * plan). The first, second and fourth were approved on #8302.
+ *
+ * `plan -> ship` is deliberately ABSENT. It is the path that lets a session skip
+ * `review` entirely, which surfaces only after merge — the operator-facing loss
+ * this edge set exists to make visible. Its absence is asserted directly in
+ * `workflow-fidelity.test.ts`, because nothing else in the suite would notice if
+ * it were added.
+ *
+ * This is a bundled TypeScript const, NOT a runtime read of
+ * `.claude/phase-surface-map.json`. The plugin ships as `./plugins/soleur`
+ * (`.claude-plugin/marketplace.json`) and does not carry `.claude/`, so a runtime
+ * read returns nothing on a customer install — and `mandatorySuccessors()` would
+ * then silently emit no next-step directive at all. The JSON is a derived view
+ * kept honest by a parity test; the same reasoning already produced the bundled
+ * web copy at `apps/web-platform/server/phase-surface-map.ts`. See ADR-229.
+ */
+export const DECLARED_TRANSITIONS: Readonly<Record<string, readonly string[]>> = {
+  brainstorm: ["plan", "one-shot"],
+  plan: ["work"],
+  work: ["review", "compound", "ship", "plan"],
+  review: ["compound", "work"],
+  compound: ["ship"],
+  ship: ["postmerge", "work"],
+  postmerge: ["work"],
+};
+
+/**
+ * Node skills that another node's SKILL.md invokes as a designed SUB-STEP of
+ * its own run, keyed by the invoking node. Each entry names the section that
+ * makes the call (pinned per entry by the anchor test in workflow-fidelity.test.ts):
+ *   - brainstorm: runs `compound` to capture learnings, then hands off to
+ *     `plan`, so the log shows `brainstorm compound plan` for the handoff.
+ *   - plan: §Exit Gate step 1 runs `compound` (direct invocation only; in a
+ *     pipeline the gate is skipped and the entry is simply unused — sound
+ *     either way, since `plan -> work` is the only pair it can declare).
+ *   - postmerge: §Phase 6 (Update Issue and Compound) runs `compound`.
+ *   - ship: §Phase 2 (Capture Learnings) runs `compound` inside ship.
+ *     §Phase 1.5 (Review Evidence Gate: the missing-evidence option and the
+ *     `sequential-fallback` re-run) and §Phase 5.5 (Pre-Ship Review Gates ->
+ *     Code Review Completion Gate) run `review` inside ship. These are
+ *     interactive arms only; headless aborts instead (PR #8627). The log
+ *     records starts only, so the classifier collapses ANY review whose
+ *     previous kept node is ship, whatever invoked it; see ADR-229's
+ *     2026-09-23 re-baseline for what that masks.
+ * The classifier drops a record whose skill is a sub-step of the PREVIOUS KEPT
+ * node before pairing, so `plan compound work` pairs as `plan -> work`. This is
+ * NOT an edge: no `K -> compound` edge is declared for any key K, and because
+ * the collapse joins K to its NEXT node, `plan compound ship` surfaces as the
+ * review skip `plan -> ship` instead of hiding behind the declared
+ * `compound -> ship` (#8399). `review: ["compound"]` is the entry the rules
+ * below forbid: `compound` is a declared successor of `review`, so the collapse
+ * would turn `review compound work` into the declared `review -> work`.
+ * Mirrored in .claude/workflow-transitions.json under `sub_steps`
+ * (parity-pinned). See ADR-229 (amended 2026-09-21, #8399; 2026-09-23, PR #8627).
+ *
+ * To add an entry: the key and every value must be DECLARED_TRANSITIONS nodes
+ * (a non-node is removed by the classifier's node filter first, so the entry
+ * would be dead); a value must not be a declared successor of its key (the
+ * collapse would silently delete a declared pair from `pairs`). An entry also
+ * hands the value's outgoing edges to the key: any successor of the key that is
+ * not a successor of the value becomes a declared pair after the collapse, so
+ * measure which pairs vanish before adding one. Edit this const first, then
+ * mirror it in the JSON view (and its `_comment` amendment list), then update in
+ * the same PR: the exact-set pin, the `ANCHORS` heading list and its heading
+ * total in workflow-fidelity.test.ts (a new KEY also moves the view key-set pin
+ * there and `LOOP_KEYS` in the classifier suite), a case in
+ * scripts/classify-workflow-transitions.test.sh (plus its `MIN_CASES` floor),
+ * and ADR-229's Status line, a re-baseline bullet and its Verification counts.
+ * Run `bun test plugins/soleur/test/workflow-fidelity.test.ts`.
+ */
+export const DECLARED_SUB_STEPS: Readonly<Record<string, readonly string[]>> = {
+  brainstorm: ["compound"],
+  plan: ["compound"],
+  postmerge: ["compound"],
+  ship: ["compound", "review"],
+};
+
+/** Edges declared FROM `skill`. Unknown nodes declare nothing. */
+export function declaredTransitions(skill: string): readonly string[] {
+  return DECLARED_TRANSITIONS[skill] ?? [];
+}
+
+/** Whether `from -> to` is a declared edge. */
+export function isDeclaredTransition(from: string, to: string): boolean {
+  return declaredTransitions(from).includes(to);
+}
+
+function formatSkillList(skills: readonly string[], harness: Harness): string {
+  return skills.map((s) => `\`${formatSkillRef(s, harness)}\``).join(", ");
+}
+
+/**
+ * Markdown block appended to harness routing instructions.
+ * Cite in go.md Step 2.1 (`<!-- workflow-fidelity:block:go-post-route:start -->`).
+ */
+export function workflowFidelityInstructions(harness: Harness): string {
+  if (harness === "cursor") {
+    return [
+      "**Workflow fidelity (Cursor CLI)**",
+      "- Read the canonical file the stub names, relative to the plugin root, and follow that file.",
+      `- \`${formatSkillRef("go", harness)}\` and \`${formatSkillRef("sync", harness)}\` stay bare. Every other name is prefixed, including \`${formatSkillRef("plan", harness)}\`, \`${formatSkillRef("help", harness)}\`, and \`${formatSkillRef("review", harness)}\`.`,
+      "- Slice 1 does not run hooks and does not classify the session as cursor.",
+    ].join("\n");
+  }
+
+  const invokeSurface =
+    harness === "codex"
+      ? "skill loading (skills.read when available; otherwise read the installed SKILL.md and execute its full workflow)"
+      : harness === "grok"
+        ? "slash command (`/brainstorm`, `/one-shot`, `/plan`, `/work`, `/review`, `/ship`, …)"
+        : harness === "antigravity"
+          ? "slash command or reading SKILL.md (`/soleur:brainstorm`, `/soleur:one-shot`, …)"
+          : harness === "claude"
+            ? "Skill tool (`soleur:<skill>`)"
+            : harness === "opencode"
+              ? "**skill** tool with the bare id (`soleur:plan` → `plan`, `soleur:one-shot` → `one-shot`, …)"
+              : "registered skill invocation";
+
+  const brainstormNext = formatSkillList(BRAINSTORM_CHILD_SKILLS, harness);
+  const workTail = formatSkillList(
+    ["review", "qa", "compound", "ship"] as const,
+    harness,
+  );
+
+  const ref = (skill: string): string => `\`${formatSkillRef(skill, harness)}\``;
+  const go = ref("go");
+
+  const nextActionLine =
+    harness === "grok"
+      ? "- After `/go` routes to a pipeline skill (`one-shot`, `brainstorm`, `drain-*`), your **next action** MUST be to Read that skill's SKILL.md in this process and run it to completion (Grok has no nested Skill tool). Forbidden is executing a subset or writing product code before the child skill finishes — not the Read itself."
+      : `- After ${go} routes to a pipeline skill (\`one-shot\`, \`brainstorm\`, \`drain-*\`), your **next action** MUST be that skill's ${invokeSurface} — not reading SKILL.md and executing steps selectively.`;
+
+  const lines = [
+    "**Workflow fidelity (never bypass)**",
+    nextActionLine,
+    `- **FORBIDDEN after routing to \`brainstorm\`:** product code (Write/Edit/Shell); ending after spec/brainstorm doc without handoff. **REQUIRED next:** ${brainstormNext}.`,
+    `- **FORBIDDEN after routing to \`one-shot\`:** inline implementation before Steps 1–8 complete; ending after push/draft PR; reporting "done" without \`${ONE_SHOT_DONE_MARKER}\`.`,
+    `- **FORBIDDEN on standalone \`plan\` / \`work\`:** implementing or pushing without the mandated successor chain. \`plan\` → ${ref("work")}; \`work\` → ${workTail}.`,
+    `- **Merge → deploy (never ask the operator):** after ${ref("ship")} queues merge, YOU poll through release workflows and invoke ${ref("postmerge")} — do not ask "want me to monitor?" or end the turn at MERGED.`,
+    `- **Parking finished work is not a hand-off:** a stop is legitimate only for something you cannot clear — an in-flight CI run or agent, authorization for an irreversible production action (\`hr-menu-option-ack-not-prod-write-auth\`), cost/scope, an outward-facing effect, or a genuine requirements fork. Handing a reviewed, green PR back for a merge/review/ship is none of those: \`rf-never-skip-qa-review-before-merging\` requires carrying it to MERGED in-session, and "review-gated" means ${ref("review")} RAN and its findings were fixed, never that a person approves. Claude Code blocks this at its Stop hook; you have no hook, so this line is your copy of the rule.`,
+    `- **\`${ONE_SHOT_DONE_MARKER}\` gate:** emit ONLY after merge + release workflows + ${ref("postmerge")} verification complete — not at draft PR, not at merge alone.`,
+    `- **Deliverables:** brainstorm = artifacts + handoff; plan = plan file + ${ref("work")}; work/one-shot = **merged PR + healthy deploy**. Draft PRs are checkpoints only.`,
+    "- Skill exit summaries (`## Work Phase Complete`, `## Review Phase Complete`) are **continuation gates**, not turn boundaries.",
+  ];
+
+  if (harness === "grok") {
+    lines.push(
+      `- **Before \`git push\`:** run \`bash ${GROK_PRE_PUSH_GATE_SCRIPT}\` from repo root (local CI parity: \`test-all.sh\` + fast required checks + \`grok-fidelity\`). Abort push on non-zero exit; do not wait for CI.`,
+    );
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Strengthen skill invocation text for pipeline and handoff skills. Every skill named in the
+ * suffix is rendered in the ACTIVE harness's form. `harness` is REQUIRED, not defaulted: a
+ * default of "grok" would reproduce the pre-ADR-226 strings (`/postmerge`, `/ship`) for any
+ * caller that forgot it — the exact defect this function was changed to remove — and would do
+ * so silently on three of four harnesses. A required parameter makes forgetting a type error — the grok arm reads exactly as before, and
+ * `invokeSkill("ship")` on Codex names `$soleur:postmerge`, never `/postmerge` (arch F3).
+ */
+export function pipelineInvocationSuffix(skill: string, harness: Harness): string {
+  const ref = (s: string): string => formatSkillRef(s, harness);
+  if (skill === "one-shot") {
+    return (
+      ` Run **all** Steps 0–8 to completion. ` +
+      `Do NOT implement product code inline. ` +
+      `Poll merge→deploy yourself; invoke ${ref("postmerge")} after ${ref("ship")}. ` +
+      `Emit \`${ONE_SHOT_DONE_MARKER}\` only after postmerge completes.`
+    );
+  }
+  if (skill === "brainstorm") {
+    return (
+      " Run the full brainstorm pipeline to completion. " +
+      "Do NOT write product code. " +
+      `Hand off via ${ref("plan")} or ${ref("one-shot")} when exploration is done.`
+    );
+  }
+  if (skill === "plan") {
+    return (
+      " Run the full plan pipeline. " +
+      `Do NOT implement product code inline — invoke ${ref("work")} when the plan artifact is ready.`
+    );
+  }
+  if (skill === "work") {
+    return (
+      ` Run implementation then the post-work tail (${ref("review")} → ${ref("compound")} → ${ref("ship")} → ${ref("postmerge")}). ` +
+      "Do NOT stop after push — merged PR + deploy verification is the deliverable."
+    );
+  }
+  if (skill === "ship") {
+    return (
+      ` Poll merge and release workflows to completion; invoke ${ref("postmerge")} before cleanup. ` +
+      "Do NOT ask the operator to monitor — you own the wait."
+    );
+  }
+  if (skill === "postmerge") {
+    return " Run all postmerge phases through Phase 7 report — production health gate.";
+  }
+  if (isPipelineSkill(skill)) {
+    return " Run the skill's full pipeline — do not stop after the first phase.";
+  }
+  if (isHandoffSkill(skill)) {
+    const next = mandatorySuccessors(skill);
+    if (next.length > 0) {
+      return ` When standalone, invoke next: ${next.map(ref).join(", ")} — do not end the turn at artifacts.`;
+    }
+  }
+  return "";
+}

@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: "incident brand_survival_threshold accuracy — skill arm (Phase 1 criteria) vs baseline (label set only)"
+
+# Model IDs are single-sourced. Run `bash scripts/gen-models.sh` to (re)generate
+# models.generated.json from the TS registry; no model literal is hardcoded here.
+providers: file://models.generated.json
+
+# Two arms become two grid columns. The skill arm embeds the incident §Phase 1 criteria;
+# the baseline arm knows only the threshold token set (the control — "that delta is the point").
+prompts:
+  - file://prompts/incident-threshold-skill.txt
+  - file://prompts/incident-threshold-baseline.txt
+
+defaultTest:
+  vars:
+    # Closed 3-value enum (single source). promptfoo passes this file:// ref to the
+    # custom asserts VERBATIM; the asserts read the file themselves via loadEnum().
+    enum: file://enums/incident-threshold.json
+  assert:
+    # MEASUREMENT: always passes, records threshold-correct rate (1.0 / 0.0).
+    - type: javascript
+      value: file://scripts/measure-classification.cjs
+    # GATE: fails if the emitted label is not a member of the enum.
+    - type: javascript
+      value: file://scripts/gate-classification.cjs
+
+# N runs per cell come from the `--repeat N` CLI flag. Unlike lane-inference, the incident
+# threshold is a genuine LLM-applied prose rubric, so a meaningful skill-vs-baseline delta
+# is expected.
+#
+# Golden tasks: { vars: { input, golden_label } } per line.
+tests: file://tasks/incident-threshold.jsonl

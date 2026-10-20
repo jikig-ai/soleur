@@ -1,0 +1,136 @@
+---
+name: trigger-cron
+description: "This skill should be used to fire an allowlisted cron manual-trigger on demand via POST /api/internal/trigger-cron, without SSH. Reads the secret read-only from Doppler, lists allowlisted events, supports optional event data and a dry-run."
+---
+
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
+# trigger-cron
+
+Fires a `cron/<name>.manual-trigger` event on demand by POSTing to the internal
+trigger route `POST /api/internal/trigger-cron` — the no-SSH replacement for the
+on-host `inngest send` loopback path (#4734, #4742). Use this instead of SSH-ing
+to the Hetzner box whenever a cron needs an on-demand run.
+
+## When to use
+
+- Re-running a probe/audit cron after fixing a secret (e.g. `cron/oauth-probe.manual-trigger`).
+- Targeting a specific issue with the bug-fixer (`cron/bug-fixer.manual-trigger`
+  with `data: { issue_number: N }`).
+- Any operator/agent "fire this cron now" need — see the runbooks
+  `knowledge-base/engineering/operations/runbooks/inngest-server.md` and
+  `oauth-probe-failure.md`.
+
+The cron CRUD set: `soleur:schedule` (Create), `soleur:cron-list` (Read),
+`soleur:cron-delete` (Delete), **`soleur:trigger-cron` (Run-now — this)**.
+
+## How it works
+
+The route authenticates a fail-closed shared secret
+(`INNGEST_MANUAL_TRIGGER_SECRET`, Doppler-provisioned) via a `Bearer` header,
+validates the event against the allowlist derived from `EXPECTED_CRON_FUNCTIONS`
+(`apps/web-platform/server/inngest/cron-manifest.ts`), and dispatches the event
+through the app's wired Inngest client. Route-controlled keys (`trigger`, `at`)
+are stamped server-side and CANNOT be overridden by caller `data`.
+
+## Usage
+
+The wrapper script is [scripts/trigger.sh](./scripts/trigger.sh):
+
+**Run this preflight first, and abort on a non-zero exit.** `trigger.sh` reads
+`INNGEST_MANUAL_TRIGGER_SECRET` from Doppler at `-c prd` and fires a real production event,
+so this is a secret gate in the sense of ADR-179 decision 2 — and until #7450 it carried no
+env-var precondition at all, which made it **cheaper to exploit than the redaction gates that
+issue was filed about**. A `:-` default resolves into the caller's working tree; on the review
+path that tree is a contributor's PR, so the defaulted form of this path would run *their*
+script with the operator's prod secret in reach. (The rejected literal is deliberately not
+reproduced here: a corpus-wide body-grep cannot tell an explanation from an occurrence, so
+quoting it would make this paragraph a residual site in the sweep that hunts it.)
+
+```bash
+[ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
+  && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" \
+  || { echo "SOLEUR_TRIGGER_CRON_HALT reason=plugin-root-unverified root=[${CLAUDE_PLUGIN_ROOT}]"
+       echo "trigger-cron: cannot verify the Soleur plugin installation — stopping before any event fires." >&2
+       echo "  Resolved plugin root: [${CLAUDE_PLUGIN_ROOT}]" >&2
+       echo "  If that is EMPTY: no Soleur plugin is loaded in this session. Install it and start a NEW session — re-running here resolves the same empty root." >&2
+       echo "  If it names a path: that path is not a Soleur install (a repo checkout is not an install). Run 'claude plugin update soleur@soleur-marketplace' (or the id 'claude plugin list' prints, if you added the repository directly), then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
+       echo "  No event has been fired and no secret has been read." >&2
+       exit 2; }
+TRIGGER="${CLAUDE_PLUGIN_ROOT}/skills/trigger-cron/scripts/trigger.sh"
+[ -x "$TRIGGER" ] || { echo "SOLEUR_TRIGGER_CRON_HALT reason=producer-missing producer=scripts/trigger.sh"
+       echo "SOLEUR_TRIGGER_CRON_PRODUCER_MISSING producer=scripts/trigger.sh reason=absent-from-verified-root"
+       echo "trigger-cron: the plugin root verifies but does not carry trigger.sh — halt (fail closed)" >&2
+       echo "  Your project is not at fault: the installed Soleur payload is incomplete or stale." >&2
+       echo "  What to do: run 'claude plugin update soleur@soleur-marketplace' (or the id 'claude plugin list' prints, if you added the repository directly), then RESTART Claude Code (updates apply only on restart);" >&2
+       echo "  if you installed with --scope project or --scope local, pass the same scope. If it still persists," >&2
+       echo "  reinstall the plugin. Updating the MARKETPLACE alone does not update an INSTALLED plugin." >&2
+       echo "  Do NOT let the agent run the reinstall — it mutates the plugin root under a live run." >&2
+       exit 2; }
+```
+
+With the preflight passed, `$TRIGGER` is the verified producer:
+
+```bash
+# List the allowlisted manual-trigger events (sourced from the cron manifest).
+"${CLAUDE_PLUGIN_ROOT}/skills/trigger-cron/scripts/trigger.sh" --list
+
+# Dry-run: print the curl without firing.
+"${CLAUDE_PLUGIN_ROOT}/skills/trigger-cron/scripts/trigger.sh" \
+  --event cron/bug-fixer.manual-trigger --data '{"issue_number":4383}' --dry-run
+
+# Fire (default config: prd).
+"${CLAUDE_PLUGIN_ROOT}/skills/trigger-cron/scripts/trigger.sh" \
+  --event cron/workspace-sync-health.manual-trigger
+```
+
+### Flags
+
+| Flag | Meaning |
+|---|---|
+| `--list` | Print the allowlisted events (from `cron-manifest.ts`) and exit. |
+| `--event <name>` | The `cron/<name>.manual-trigger` event to fire (validated against the allowlist). |
+| `--data '<json>'` | Optional per-cron `event.data` (must be a JSON object). Forwarded verbatim; the route stamps `trigger`/`at` over it. |
+| `--config prd\|dev` | Doppler config to read the secret from (default `prd`). |
+| `--dry-run` | Print the curl invocation without firing. |
+
+## Sharp edges
+
+- **Run from a worktree, never the bare-repo root.** `trigger.sh` locates the allowlist via the repo's `cron-manifest.ts` and fails on a bare repo (`not inside a git repo (cannot locate cron-manifest.ts)`). From a bare-root session, `cd` into any `.worktrees/<feature>/` first (or run the script by absolute path while CWD is inside a worktree) — the firing curl is server-side-allowlist-validated, so the worktree's local manifest version does not affect correctness. See `knowledge-base/project/learnings/integration-issues/2026-06-05-cloud-task-silence-per-producer-triage-and-handler-fallback.md`.
+- **Read-only secret access.** The script reads `INNGEST_MANUAL_TRIGGER_SECRET`
+  via `doppler secrets get … --plain` only — it never writes or mutates the
+  secret, never echoes or logs it, and `unset`s the token immediately after the
+  `curl` call. The token is passed as the `curl` `Authorization` header argument
+  (same exposure profile as every other operator `curl` in the runbooks); the
+  `--dry-run` path prints the command form with `$TOKEN` unexpanded, so it never
+  mints or reveals the secret.
+- **The route is a dumb forwarder.** Per-cron field validation (e.g.
+  `issue_number` positive-integer) lives in each cron, not the route. A bad
+  `--data` shape that the route accepts (any plain object) may still be rejected
+  cron-side with a Sentry fallback.
+- **Allowlist is the blast-radius bound.** A non-allowlisted event returns 400.
+  The allowlist auto-tracks `cron-*.ts` via `EXPECTED_CRON_FUNCTIONS` — there is
+  no second hand-maintained list.
+- **The 18 Claude-spawning functions are throttled and capped (#8611).** Each carries
+  `throttle {limit 2, period 1h}` (`apps/web-platform/server/inngest/cron-budgets.ts`). A third
+  fire within the hour is **queued, not rejected** — the route still returns `202` — and runs
+  (and bills) later, so check `routine_runs_list` for up to an hour before re-firing. Every fire is
+  a new run with its own `--max-budget-usd` cap (`CLAUDE_BUDGET_USD` in the same file). A run that
+  hits its cap shows as a FAILED run with reason `budget-capped`, and as
+  `subtype=error_max_budget_usd` on its `SOLEUR_CLAUDE_COST` marker (query recipe in
+  `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`).
+- **Mutating crons spend budget / open PRs / post publicly.** `cron/bug-fixer.manual-trigger`
+  opens a PR; content/competitive/growth crons spend API budget;
+  `cron/weekly-release-digest.manual-trigger` POSTS a digest to the public
+  community `#releases` channel (no dry-run mode — every fire publishes). Use
+  `--dry-run` first; never smoke-test a mutating cron post-merge — use a
+  data-free, side-effect-light event like
+  `cron/workspace-sync-health.manual-trigger`. (The digest's one-time
+  post-merge verification fire per #5080 plan Phase 6.2 was the sanctioned
+  launch post, not a precedent.)

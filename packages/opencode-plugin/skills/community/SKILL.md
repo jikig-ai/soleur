@@ -1,0 +1,210 @@
+---
+name: community
+description: "This skill should be used when managing community presence across platforms (Discord, GitHub, X/Twitter, Bluesky, LinkedIn, Hacker News). It provides sub-commands for generating digests, checking health metrics, and listing enabled platforms."
+---
+
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
+# Community Management
+
+Manage community presence across Discord, GitHub, X/Twitter, Bluesky, LinkedIn, and Hacker News. Detects enabled platforms from environment variables (or always-on for GitHub and HN) and delegates data collection to platform-specific scripts.
+
+<!-- operator-typed-render:start -->
+**Any message this skill PRINTS that tells the operator to run a skill or command renders at emit time.** The doc names it canonically (`soleur:<name>`, ADR-226); before printing, render it as the active harness's **operator-typed form** per `formatSkillInvocation` (`plugins/soleur/lib/harness.ts`), which owns the per-harness slash and sigil forms — the operator types that string into a fresh session where no routing contract is in context, so a bare canonical name is model-discretion there rather than a dispatch. This covers abort messages, `AskUserQuestion` prompts and options, `Display`/`echo` lines and resume prompts alike; an agent-read instruction stays canonical.
+<!-- operator-typed-render:end -->
+
+## Arguments
+
+`$ARGUMENTS` is parsed for a sub-command and optional flags:
+
+```text
+community [sub-command] [--headless] [--platform PLATFORM]
+community engage [--max-results N] [--headless]
+```
+
+If `$ARGUMENTS` is empty or unrecognized, present the sub-command menu below.
+
+If `--headless` is present, skip all interactive prompts and approval gates.
+
+## Platform Detection
+
+Platform detection is centralized in [community-router.sh](./scripts/community-router.sh). Run at the start of every sub-command:
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/community-router.sh" platforms
+```
+
+The anchor is **bare and quoted** (ADR-179 decision 1), not a `:-` default arm on the token
+and not a bare `plugins/soleur/…` path. The router dispatches to the scripts that consume
+`DISCORD_BOT_TOKEN`, `X_API_SECRET` and `LINKEDIN_ACCESS_TOKEN`, so a CWD-relative resolution would
+hand those credentials to whatever `skills/community/scripts/community-router.sh` exists in the tree
+the session happens to sit in.
+
+The same applies to the four `*-setup.sh` invocations under `platforms` below — those were
+**bare repo-relative** until #7450 review, which is strictly worse than the `:-` form removed here,
+since a bare path is CWD-relative unconditionally. All five are pinned by `redact-sentinel.test.sh`
+Test 24, which discovers credential-**acquiring** scripts on disk and asserts none is reachable
+through a CWD-relative path.
+
+This prints each platform's name, enabled/disabled status, and script filename. The router's `PLATFORMS` array is the single source of truth for platform names, required env vars, and auth checks. To add a new platform, add one entry to the array and create the script.
+
+## Scripts
+
+Platform scripts are located at `plugins/soleur/skills/community/scripts/`:
+
+- [community-router.sh](./scripts/community-router.sh) -- Platform dispatch router (single source of truth for platform detection)
+- [discord-community.sh](./scripts/discord-community.sh) -- Discord Bot API wrapper (messages, members, guild-info, channels)
+- [discord-setup.sh](./scripts/discord-setup.sh) -- Discord credential setup and validation
+- [github-community.sh](./scripts/github-community.sh) -- GitHub API wrapper (activity, contributors, discussions, repo-stats)
+- [x-community.sh](./scripts/x-community.sh) -- X/Twitter API v2 wrapper (fetch-metrics, fetch-mentions, fetch-timeline, fetch-user-timeline, post-tweet)
+- [x-setup.sh](./scripts/x-setup.sh) -- X/Twitter credential setup and validation
+- [bsky-community.sh](./scripts/bsky-community.sh) -- Bluesky AT Protocol wrapper (create-session, post, get-metrics, get-notifications)
+- [bsky-setup.sh](./scripts/bsky-setup.sh) -- Bluesky credential setup and validation
+- [linkedin-community.sh](./scripts/linkedin-community.sh) -- LinkedIn API wrapper (post-content, fetch-metrics stub, fetch-activity stub)
+- [linkedin-setup.sh](./scripts/linkedin-setup.sh) -- LinkedIn credential setup, token introspection, and OAuth token generation
+- [hn-community.sh](./scripts/hn-community.sh) -- Hacker News Algolia API wrapper (mentions, trending, thread)
+
+## Sub-Commands
+
+### `digest`
+
+Generate a multi-platform community digest. Spawns the `soleur:support:community-manager` agent with digest instructions.
+
+1. Run platform detection
+2. Spawn agent: `soleur:support:community-manager` with prompt: "Generate a community digest covering the last 7 days. Enabled platforms: [list]. Collect data from each enabled platform and produce a unified digest."
+3. The agent writes the digest to `knowledge-base/support/community/YYYY-MM-DD-digest.md`
+
+**Filename collision with the unattended cron.** The scheduled `cron-community-monitor` writes the same
+`knowledge-base/support/community/YYYY-MM-DD-digest.md` name, rendered by its handler from a closed schema (counts and statuses only:
+no Top Contributors, Community Interactions or stargazer usernames; #7122). This interactive digest keeps the full contract in the
+agent's "Digest File Contract", but running it on a day the cron also publishes **overwrites** the cron's file. Check for today's
+file first and confirm the overwrite with the operator when it exists.
+
+If `--headless` is set, skip the Discord posting approval gate (the agent handles this).
+
+### `health`
+
+Display community health metrics across all enabled platforms. Spawns the `soleur:support:community-manager` agent with health instructions.
+
+1. Run platform detection
+2. Spawn agent: `soleur:support:community-manager` with prompt: "Display community health metrics. Enabled platforms: [list]. Show metrics from each enabled platform."
+3. Metrics are displayed inline (no file output)
+
+### `platforms`
+
+List all platforms with their configuration status. Does NOT spawn an agent -- runs directly.
+
+1. Run `bash "${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/community-router.sh" platforms`
+2. For disabled platforms, **run** the platform's setup script for the operator — do not print
+   the command for them to paste. These are execution sites, not display strings: the anchor
+   below is loader-substituted for the AGENT, but `CLAUDE_PLUGIN_ROOT` is unset in the
+   operator's own shell, so a pasted `bash "${CLAUDE_PLUGIN_ROOT}/…"` resolves to `/skills/…`
+   and fails. Run it and relay what it asks for:
+   - Discord: Run `bash "${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/discord-setup.sh"` to configure
+   - X/Twitter: Run `bash "${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/x-setup.sh" validate-credentials` to verify, or run `bash "${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/x-setup.sh" write-env` to save credentials
+   - Bluesky: Run `bash "${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/bsky-setup.sh" write-env` to save credentials, or run `bash "${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/bsky-setup.sh" verify` to test
+   - LinkedIn: Run `bash "${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/linkedin-setup.sh" generate-token` to set up credentials, or run `bash "${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/linkedin-setup.sh" verify` to test
+
+### `engage`
+
+Reply to recent mentions on X/Twitter or Bluesky using brand-voice drafts with human approval. Spawns the `soleur:support:community-manager` agent with engagement instructions.
+
+**Platform selection:** The `--platform` flag specifies which platform to engage on. If `--platform` is not provided, use AskUserQuestion to prompt the user to choose from enabled platforms that support engagement (X/Twitter, Bluesky).
+
+The selected platform must be enabled. If not configured, report the missing credentials and stop.
+
+**Flow (X/Twitter):**
+
+1. Run platform detection -- verify X/Twitter is enabled
+2. Read the since-id state file (`.soleur/x-engage-since-id`, resolved via `git rev-parse --show-toplevel`). If the file exists and contains a valid numeric ID, pass it as `--since-id` to the fetch command. If missing or non-numeric, skip (fetches last N mentions).
+3. Spawn agent: `soleur:support:community-manager` with prompt: "Engage with recent X/Twitter mentions. Use Capability 4: Mention Engagement. Max results: [N]. Since ID: [ID or none]."
+4. The agent fetches mentions via `community-router.sh x fetch-mentions`
+5. For each mention, the agent drafts a reply following brand guide voice (`knowledge-base/marketing/brand-guide.md` sections `## Voice` and `## Channel Notes > ### X/Twitter`). If the brand guide is missing, the agent warns but proceeds with a professional, declarative tone.
+6. Each draft is presented via AskUserQuestion with options:
+   - **Accept** -- post this reply via `community-router.sh x post-tweet --reply-to <mention_id>`
+   - **Edit** -- modify the reply text (validate 280-character limit; re-prompt if over)
+   - **Skip** -- move to the next mention
+   - **Skip all remaining** -- end the session (available after the first mention)
+7. After all mentions are processed, the agent updates the since-id state file with the `newest_id` from the fetch response and displays a session summary (processed, posted, skipped counts).
+
+**Since-id state file:**
+
+- Path: `.soleur/x-engage-since-id` (relative to repo root)
+- Format: plain text, single line containing the tweet ID
+- Created on first run with `mkdir -p .soleur && chmod 600` before writing
+- Updated only after all mentions are processed (not per-reply)
+
+**Free tier degradation:** If `fetch-mentions` returns 403 (client-not-enrolled), the soleur:support:community-manager agent switches to manual mode — prompting for tweet URLs instead of fetching mentions automatically. The rest of the pipeline (brand-voice draft, approval, post-tweet) runs unchanged. See Capability 4 Step 1b. When the paid tier activates, this fallback is never triggered.
+
+**Flow (Bluesky):**
+
+1. Run platform detection -- verify Bluesky is enabled (`BSKY_HANDLE` + `BSKY_APP_PASSWORD`)
+2. Read the cursor state file (`.soleur/bsky-engage-cursor`, resolved via `git rev-parse --show-toplevel`). If the file exists and contains a non-empty value, pass it as `--cursor` to the fetch command.
+3. Spawn agent: `soleur:support:community-manager` with prompt: "Engage with recent Bluesky mentions. Use Capability 4: Bluesky Mention Engagement. Limit: [N]. Cursor: [cursor or none]."
+4. The agent fetches mentions via `community-router.sh bsky get-notifications`
+5. For each mention, the agent drafts a reply following brand guide voice (`knowledge-base/marketing/brand-guide.md` sections `## Voice` and `## Channel Notes > ### Bluesky`). 300-character limit.
+6. Same approval flow as X/Twitter (Accept, Edit, Skip, Skip all remaining) but with 300-character validation.
+7. Accepted replies posted via `community-router.sh bsky post "<text>" --reply-to-uri <uri> --reply-to-cid <cid>`
+8. After processing, the agent updates the cursor state file (`.soleur/bsky-engage-cursor`) and displays a session summary.
+
+**Bluesky cursor state file:**
+
+- Path: `.soleur/bsky-engage-cursor` (relative to repo root)
+- Format: plain text, single line containing the cursor string
+- Created on first run with `mkdir -p .soleur && chmod 600` before writing
+- Updated only after all mentions are processed (not per-reply)
+
+If `--headless` is set, skip all mentions with a summary message ("Skipped N mentions in headless mode -- engage requires interactive approval"). No replies are posted in headless mode.
+
+## Sub-Command Menu
+
+If no sub-command is provided, present options using the AskUserQuestion tool:
+
+**Question:** "Which community operation would you like to run?"
+
+**Options:**
+
+1. **digest** -- Generate a multi-platform community digest
+2. **health** -- Display community health metrics
+3. **platforms** -- List platform configuration status
+4. **engage** -- Reply to recent X/Twitter or Bluesky mentions
+
+## Important Guidelines
+
+- Platform detection runs at the start of every sub-command -- use `community-router.sh platforms` instead of checking env vars directly
+- All platform API calls go through `community-router.sh <platform> <command>` -- do not call platform scripts or APIs directly
+- The `soleur:support:community-manager` agent handles data collection, analysis, and output formatting
+- This skill is the entry point; the agent does the work
+- Ownership boundary: community = monitoring + engagement. Broadcasting/distribution is handled by the `social-distribute` skill.
+- Posting requires explicit opt-in via environment variables (defense-in-depth guard). Monitoring workflows omit these variables intentionally:
+  - LinkedIn: `LINKEDIN_ALLOW_POST=true`
+  - X/Twitter: `X_ALLOW_POST=true`
+  - Bluesky: `BSKY_ALLOW_POST=true`
+- **Scheduled-cron context:** when the monitor runs via the Inngest cron (`apps/web-platform/server/inngest/functions/cron-community-monitor.ts`), a platform is enabled only if its required vars are in BOTH Doppler (`prd_scheduled`) AND the `buildSpawnEnv()` spawn-env allowlist that forwards env to the spawned `claude --print`. A platform shown `disabled` in the digest despite its creds being in Doppler means the allowlist omits them — widen `buildSpawnEnv()`, not the secret store. See `knowledge-base/project/learnings/integration-issues/2026-06-03-platform-disabled-despite-creds-check-spawn-env-allowlist.md`.
+- **Credential refusals:** the Discord and Bluesky community scripts check a credential's shape before it reaches curl (the X and LinkedIn scripts emit the marker only from `write-env`) and print one value-free line, `SOLEUR_CREDENTIAL_REFUSED script=<name> reason=<token_shape|control_char>`, then exit 1. It means the value in `.env` (or the environment) is malformed (a leading "Bot" word, quotes, a stray CR or newline from a CRLF-edited `.env`), not that the platform is down: fix the value and re-run, do not retry or fall back to another transport. Printed inside an agent Bash call on the platform surface (not the local CLI, which registers no hook) the marker is mirrored to telemetry; on a hosted `content-publisher` run the fallback issue carries it (that path is not mirrored). The marker covers the request-side credential checks (the token before it is sent, the bsky handle and password before the session call); a malformed session token returned by the platform is refused with a plain message and no marker. The setup scripts that write `.env` (`discord-setup.sh`, `bsky-setup.sh`, `x-setup.sh` and `linkedin-setup.sh`, command `write-env`) emit the same marker with two extra value-free fields, `var=<NAME> phase=write-env`, when a value falls outside the `.env` allow-list (letters, digits and `. _ : / @ % + = , -`), exit 1, write nothing and leave an existing `.env` untouched; the one human line is on stdout. For that marker the remedy is not "fix the value": if the value is legitimate, add it to `.env` by hand. The same marker also reports operational `write-env` faults as `reason=env_*` with `var=ENV_FILE phase=write-env` (`env_lock_timeout`, `env_lock_not_dir`, `env_unreadable`, `env_unresolvable`, `env_dangling_link`, `env_not_regular`, `env_dir_unwritable`, `env_write_failed`); these are not a malformed value. Branch on the reason prefix: `token_shape` or `control_char` means fix the value and do not retry, and `env_*` means diagnose the `.env` or lock the one human line names (a live holder: wait and retry once; a `<.env>.lock.d` or `<.env>.lock.d.recover` directory left by a killed run: remove it), then retry once. In `x-setup.sh` and `bsky-setup.sh`, `write-env` prints its missing-credentials text (exit 1, no marker) and its `Wrote N variables` line on stdout too; the marker is the only `write-env` output left on stderr, so exit 1 with a `token_shape` or `control_char` marker means the allow-list, exit 1 with an `env_*` marker means an `.env` or lock fault, and exit 1 without a marker means a missing credential. `discord-setup.sh write-env` takes the webhook URL only from `DISCORD_WEBHOOK_URL_INPUT` and the bot token only from `DISCORD_BOT_TOKEN_INPUT` (never an argument). A missing guild_id, webhook URL or bot token exits 64 with the usage text on stdout; the missing webhook URL, the missing bot token and a webhook URL passed as an argument also print a remedy that names both variables (a non-numeric guild_id exits 1 with one line on stderr, like the other commands). With no terminal on stdin (an agent runtime) the remedy does not offer an inline `VAR=value discord-setup.sh ...`: the value would then sit in the text of the tool call (the transcript, the shell history, a wrapper's process list). It points to the operator's own terminal (`read -rs`) or to reading each value from a mode-600 file. Each file is created in the operator's own terminal with the mode set first and the value typed at the prompt (`(umask 077; cat > /path/to/bot-token.txt)`; an existing file is `chmod 600`'d before writing, because a redirect keeps its wider mode), then one parenthesised command reads both (`( read -r DISCORD_WEBHOOK_URL_INPUT < /path/to/webhook-url.txt; ...; export both; discord-setup.sh write-env <guild_id> )`) so neither value stays exported in the shell the operator keeps. The webhook URL file can instead be written without printing the URL by redirecting `create-webhook` into it, after reading the bot token file into `DISCORD_BOT_TOKEN_INPUT` in the same parenthesised command (`create-webhook` needs it). Residual: the values sit in those files until they are deleted, and `create-webhook` prints the webhook URL once on stdout (so it is in the transcript) unless its output is redirected.
+
+## Platform Surface Check
+
+After a new platform is set up and verified via its setup script (confirmed by the `platforms` sub-command showing `[enabled]`), check whether the platform has been added to all public-facing surfaces. Read each file and verify:
+
+| File | What to look for |
+|------|------------------|
+| `plugins/soleur/docs/_data/site.json` | URL entry for the platform |
+| `plugins/soleur/docs/pages/community.njk` | Card in the Connect section |
+| `knowledge-base/marketing/brand-guide.md` | Platform handle mention |
+
+If any surface is missing, output a warning:
+
+```text
+[WARNING] Platform <platform-name> is missing from: <list-of-files>.
+These files need updating before the integration is complete.
+Consider filing: gh issue create --title 'feat(docs): add <platform-name> to website and brand guide' --milestone 'Post-MVP / Later'
+```
+
+This check does not block provisioning -- it is advisory only. The soleur:operations:ops-provisioner agent has a broader version of this check for non-community tools.

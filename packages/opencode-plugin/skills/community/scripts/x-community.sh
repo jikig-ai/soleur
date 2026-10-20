@@ -1,0 +1,890 @@
+#!/usr/bin/env bash
+# x-community.sh -- X/Twitter API v2 wrapper for community operations
+#
+# Usage: x-community.sh <command> [args]
+# Commands:
+#   fetch-metrics                                    - Fetch account metrics (followers, following, tweets)
+#   fetch-mentions [--max-results N] [--since-id ID] - Fetch recent mentions of the authenticated user
+#   fetch-timeline [--max N]                         - Fetch recent tweets (paid API)
+#   fetch-user-timeline <user_id> [--max N]          - Fetch another user's recent tweets
+#   post-tweet <text> [--reply-to ID]                - Post a tweet (optionally as a reply)
+#
+# Environment variables (required):
+#   X_API_KEY              - API key (consumer key)
+#   X_API_SECRET           - API secret (consumer secret)
+#   X_ACCESS_TOKEN         - Access token
+#   X_ACCESS_TOKEN_SECRET  - Access token secret
+#   X_ALLOW_POST           - Set to "true" to enable posting (defense-in-depth guard)
+#
+# Exit codes:
+#   0 - Success
+#   1 - General error
+#   2 - Retryable error (rate limit)
+#
+# Output: JSON to stdout
+# Errors: Messages to stderr, exit 1
+
+set -euo pipefail
+
+# (#7797) Xtrace refusal -- the FIRST thing after `set …`, so nothing above it is
+# traced. This script ships to installed Soleur CLIs: the terminal it runs in
+# belongs to the founder, and `bash -x` would print their live X
+# credentials. The `:+x` form tests non-emptiness WITHOUT expanding the value, so
+# the guard cannot leak the thing it is refusing over. CONDITIONAL, and that is
+# measured rather than inherited: every credential this file handles is bound
+# BEFORE the prologue runs (this script's own credential check reads them from
+# the environment, it never acquires one at runtime), so the guard can never be
+# empty while a credential is live -- and a founder tracing with none set keeps
+# full tracing.
+# Refusal goes to STDOUT, not stderr: agent runtimes surface stdout and swallow
+# stderr (constitution.md > Code Style > Always), and a swallowed security refusal
+# leaves the user with a bare `exit 78` and no text at all.
+case "$-" in
+  *x*)
+    if [ -n "${X_ACCESS_TOKEN:+x}${X_ACCESS_TOKEN_SECRET:+x}${X_API_KEY:+x}${X_API_SECRET:+x}" ]; then
+      printf 'Refusing to run under `bash -x`: X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET, X_API_KEY, X_API_SECRET are set, and tracing would print them to your terminal. To trace safely, unset all of them and re-run.\n'
+      exit 78
+    fi
+    ;;
+esac
+
+# (#7873) `--disable` closes ~/.curlrc and `--noproxy '*'` closes the proxy
+# variables, but NEITHER touches the trust store or the TLS session-key log. On an
+# installed CLI the environment belongs to someone who is not us, so
+# a substituted `CURL_CA_BUNDLE` is a clean MITM of the founder's platform
+# token with every other guard fully intact, and `SSLKEYLOGFILE` is passive
+# decryption with no MITM at all. Matches the line in scripts/betterstack-query.sh.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS
+
+# --- Transport-confinement diagnostics (#7873) --------------------------------
+# Every credentialed `curl` below carries `--disable --noproxy '*'` and discards
+# curl's own stderr (which can carry the URL). A failed request then has four
+# competing causes the founder cannot tell apart: the xtrace refusal, the proxy
+# this script deliberately bypassed, a ~/.curlrc that `--disable` dropped, or an
+# ordinary network failure. So each failure emits ONE structured marker carrying
+# all four discriminators, beside a human line that names the bypass instead of
+# blaming the founder's connectivity.
+SOLEUR_TRANSPORT_SCRIPT="x-community.sh"
+SOLEUR_TRANSPORT_PLATFORM="X"
+
+# The request helpers below run inside `$(...)`, where fd 1 is the capture pipe.
+# Save the script's real stdout so the marker reaches the founder's terminal (and
+# the always-on PostToolUse Bash extractor) instead of being swallowed into a
+# variable. The marker is on stdout BY DESIGN -- the call sites' `2>/dev/null` is
+# what keeps curl's URL-carrying stderr out of the transcript, and it must not be
+# able to suppress the diagnostic too.
+exec 3>&1
+
+# Which proxy variables are non-empty, or `none`.
+proxy_env_names() {
+  local names="" n
+  for n in HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy; do
+    if [[ -n "${!n-}" ]]; then
+      names="${names},${n}"
+    fi
+  done
+  if [[ -z "$names" ]]; then
+    printf 'none'
+  else
+    printf '%s' "${names#,}"
+  fi
+}
+
+# True when a proxy this script deliberately bypasses is configured. NO_PROXY
+# alone is not one -- it only ever narrows proxying, so it cannot be the cause.
+proxy_bypassed() {
+  [[ -n "${HTTP_PROXY:-}${HTTPS_PROXY:-}${ALL_PROXY:-}${http_proxy:-}${https_proxy:-}${all_proxy:-}" ]]
+}
+
+# One line, eight fields, on the saved stdout.
+#
+# Two fields were literals in the first cut and are now MEASURED (#7898 review):
+# `noproxy_applied` was the constant "true", which ASSERTS the property instead of
+# observing it -- dropping --noproxy from a call site left the diagnostic still
+# claiming it was applied. It now reports whether a proxy was actually configured
+# for this request to bypass, which is the fact a reader needs. `refusal` was the
+# constant "none" at every call site, so the cause it exists to discriminate could
+# never appear; it now carries `env-rebind-refused` and `xtrace-credential-bound`.
+#
+# `tls_env_cleared` is new. The prologue unsets CURL_CA_BUNDLE/SSL_CERT_FILE et al,
+# which is correct against an attacker and BREAKS a founder whose corporate CA
+# arrives that way -- curl then exits 60 and, without this field, the event is
+# indistinguishable from an ordinary network failure.
+emit_transport_diag() {
+  local curl_exit="$1" refusal="$2" surface="installed-cli" curlrc="false" noproxy="false"
+  # The hosted sandbox always sets this (agent-env.ts > AGENT_ENV_OVERRIDES); an
+  # installed CLI does not. A label on the event, not a gate on behaviour.
+  if [[ -n "${CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:-}" ]]; then
+    surface="in-sandbox"
+  fi
+  if [[ -f "${HOME:-}/.curlrc" ]]; then
+    curlrc="true"
+  fi
+  if proxy_bypassed; then
+    noproxy="true"
+  fi
+  printf 'SOLEUR_TRANSPORT_DIAG surface=%s script=%s curl_exit=%s refusal=%s proxy_env=%s curlrc_present=%s noproxy_applied=%s tls_env_cleared=%s\n' \
+    "$surface" "$SOLEUR_TRANSPORT_SCRIPT" "$curl_exit" "$refusal" \
+    "$(proxy_env_names)" "$curlrc" "$noproxy" "true" >&3
+}
+
+# Replaces the bare "Check your network connection and try again." on a
+# credentialed-curl failure. With a proxy set, that line blames the founder for a
+# bypass this script chose.
+report_transport_failure() {
+  local curl_exit="${1:-unknown}"
+  local detail="${2:-Failed to connect to the ${SOLEUR_TRANSPORT_PLATFORM} API.}"
+  emit_transport_diag "$curl_exit" "none"
+  echo "Error: ${detail}" >&2
+  # Ordered by how specific the evidence is. Each arm names something THIS script
+  # did, so the founder is never told to go debug their own network for a choice
+  # made here. The bare "check your connection" line is the LAST resort, not the
+  # default -- it was the default in the first cut, which meant a founder whose
+  # corporate CA or curlrc we had just discarded was blamed for it (#7898 review).
+  if [[ "$curl_exit" == "60" || "$curl_exit" == "35" || "$curl_exit" == "77" ]]; then
+    # 60 peer-certificate, 35 TLS handshake, 77 CA-bundle unreadable.
+    echo "This looks like a TLS trust failure. This script deliberately clears CURL_CA_BUNDLE, SSL_CERT_FILE, SSL_CERT_DIR and SSLKEYLOGFILE before the request, because those variables can redirect or expose a request carrying your ${SOLEUR_TRANSPORT_PLATFORM} credential." >&2
+    echo "If your machine needs a corporate CA to reach ${SOLEUR_TRANSPORT_PLATFORM}, that is not currently supported -- please open an issue at https://github.com/jikig-ai/soleur/issues." >&2
+  elif proxy_bypassed; then
+    echo "This request deliberately bypasses your proxy ($(proxy_env_names)), because a proxy can redirect a request carrying your ${SOLEUR_TRANSPORT_PLATFORM} token." >&2
+    echo "If you need Soleur to reach ${SOLEUR_TRANSPORT_PLATFORM} through your proxy, that is not currently supported -- please open an issue at https://github.com/jikig-ai/soleur/issues." >&2
+  elif [[ -f "${HOME:-}/.curlrc" ]]; then
+    echo "You have a ~/.curlrc, and this request deliberately ignores it (--disable), because a curlrc can redirect a request carrying your ${SOLEUR_TRANSPORT_PLATFORM} token. If it configures a proxy or a CA bundle you need, that is why this failed." >&2
+    echo "That is not currently supported -- please open an issue at https://github.com/jikig-ai/soleur/issues." >&2
+  else
+    echo "Check your network connection and try again." >&2
+  fi
+}
+
+# readonly (#7898 review): `cmd_verify` and friends run `set -a; source "$env_file"; set +a`
+# BELOW this line, so a plain assignment here is rebindable by the repo's .env --
+# which retargets the credentialed request while every transport flag stays intact.
+# That is the "--disable and --noproxy are intact and irrelevant" shape this change
+# exists to close, one layer up. readonly makes the destination non-rebindable.
+readonly X_API="https://api.x.com"
+
+# (#9597) OAuth 1.0a request signing (HMAC-SHA1) without the key on any process's argument list.
+# The helper library is sourced LAZILY, inside oauth_sign at each signature, not here: it
+# refuses `bash -x` unconditionally at load time (it names its key indirectly, so it has no
+# literal credential name to test), and loading it up here would make `bash -x x-community.sh`
+# with no credentials set exit 78 instead of printing usage -- the case this file's conditional
+# prologue above promises to keep working.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# --- Dependency checks ---
+
+require_openssl() {
+  if ! command -v openssl &>/dev/null; then
+    echo "Error: openssl is required for OAuth 1.0a signing but not found." >&2
+    echo "Install it via your package manager (e.g., apt install openssl)." >&2
+    exit 1
+  fi
+}
+
+require_jq() {
+  if ! command -v jq &>/dev/null; then
+    echo "Error: jq is required but not installed." >&2
+    echo "Install it: https://jqlang.github.io/jq/download/" >&2
+    exit 1
+  fi
+}
+
+# --- Credential validation ---
+
+require_credentials() {
+  local missing=()
+
+  if [[ -z "${X_API_KEY:-}" ]]; then
+    missing+=("X_API_KEY")
+  fi
+  if [[ -z "${X_API_SECRET:-}" ]]; then
+    missing+=("X_API_SECRET")
+  fi
+  if [[ -z "${X_ACCESS_TOKEN:-}" ]]; then
+    missing+=("X_ACCESS_TOKEN")
+  fi
+  if [[ -z "${X_ACCESS_TOKEN_SECRET:-}" ]]; then
+    missing+=("X_ACCESS_TOKEN_SECRET")
+  fi
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    echo "Error: Missing X API credentials: ${missing[*]}" >&2
+    echo "" >&2
+    echo "To configure:" >&2
+    echo "  1. Go to https://developer.x.com/en/portal/dashboard" >&2
+    echo "  2. Create or select a project and app" >&2
+    echo "  3. Generate API Key, API Secret, Access Token, and Access Token Secret" >&2
+    echo "  4. Export them as environment variables, without typing a value into the command (its text is kept in the transcript and the shell history): in a terminal, read -rs X_API_KEY; export X_API_KEY, and the same for each of the other three" >&2
+    exit 1
+  fi
+}
+
+# (#9597) The OAuth 1.0a Authorization header carries the signature and the access
+# token, so it rides curl's stdin config channel (`--config -`), never its argument
+# list (readable by every local user in /proc/<pid>/cmdline). The channel is
+# line-oriented: a CR/LF or other control character in the header would end the
+# `header = "..."` directive and let the following bytes act as a new one, so a header
+# holding one is refused BEFORE it is formatted into the stream. The header's own
+# quotes (`oauth_token="..."`) are legitimate and are escaped by `_cfg_q`. The consumer
+# secret and token secret never reach curl at all: they only key the HMAC in oauth_sign.
+_hdr_ok() { local LC_ALL=C; case "${1:-}" in ''|*[[:cntrl:]]*) return 1 ;; esac; }
+_cfg_q() { local v="${1-}"; v=${v//\\/\\\\}; v=${v//\"/\\\"}; printf '%s' "$v"; }
+
+# --- OAuth 1.0a signing ---
+
+# URL-encode a string per RFC 3986 (RFC 5849 3.6 for OAuth). Byte-wise: under LC_ALL=C each byte
+# is one character, so a multi-byte UTF-8 character encodes as its bytes (%C3%A9), not as a
+# code point (the `printf '%02X' "'é"` form gives E9 in a UTF-8 locale, which is not the encoding).
+urlencode() {
+  local LC_ALL=C
+  local string="$1"
+  local encoded=""
+  local i c o
+  for (( i = 0; i < ${#string}; i++ )); do
+    c="${string:i:1}"
+    case "$c" in
+      [A-Za-z0-9._~-]) encoded+="$c" ;;
+      *)
+        o=$(printf '%02X' "'$c")
+        encoded+="%${o}"
+        ;;
+    esac
+  done
+  echo "$encoded"
+}
+
+# Generate OAuth 1.0a signature for a request
+# Arguments: method url [param_key=param_value ...]
+oauth_sign() {
+  local method="$1"
+  local url="$2"
+  shift 2
+
+  local oauth_nonce
+  oauth_nonce=$(openssl rand -hex 16)
+  local oauth_timestamp
+  oauth_timestamp=$(date +%s)
+
+  # Collect all parameters (OAuth + request params)
+  local -a params=()
+  params+=("oauth_consumer_key=$(urlencode "${X_API_KEY}")")
+  params+=("oauth_nonce=$(urlencode "${oauth_nonce}")")
+  params+=("oauth_signature_method=HMAC-SHA1")
+  params+=("oauth_timestamp=${oauth_timestamp}")
+  params+=("oauth_token=$(urlencode "${X_ACCESS_TOKEN}")")
+  params+=("oauth_version=1.0")
+
+  # Add request parameters
+  local param
+  for param in "$@"; do
+    local key="${param%%=*}"
+    local val="${param#*=}"
+    params+=("$(urlencode "$key")=$(urlencode "$val")")
+  done
+
+  # Sort parameters lexicographically
+  local sorted_params
+  sorted_params=$(printf '%s\n' "${params[@]}" | sort)
+
+  # Build parameter string
+  local param_string=""
+  while IFS= read -r line; do
+    if [[ -n "$param_string" ]]; then
+      param_string+="&"
+    fi
+    param_string+="$line"
+  done <<< "$sorted_params"
+
+  # Build signature base string
+  local base_string="${method}&$(urlencode "$url")&$(urlencode "$param_string")"
+
+  # Build signing key (read BY NAME inside the HMAC function below)
+  # shellcheck disable=SC2034
+  local signing_key="$(urlencode "${X_API_SECRET}")&$(urlencode "${X_ACCESS_TOKEN_SECRET}")"
+
+  # Generate HMAC-SHA1 signature (#9597). The signing key is handed to the function by NAME and
+  # lives only in bash builtins and pipes: it is on no process's argument list. A failed
+  # computation yields no signature and the request is never sent unsigned.
+  # oauth_sign runs inside `$(...)`, so the load's stdout (the library's xtrace refusal text) goes
+  # to the saved real stdout (fd 3), where the founder sees it, not into the captured header.
+  # The load happens at EACH signature, not once: this function body is a command-substitution
+  # subshell, so a function defined here dies with it and nothing is cached for the next call (the
+  # library is one small file). Any function of this name inherited from the environment (an
+  # exported bash function) is dropped first, so an inherited function named hmac_sha1_b64 cannot
+  # stand in for the library's. That is all this closes: the key stays readable by any other
+  # exported function (one named od, tr, openssl, base64 or cat still receives it on its stdin),
+  # which is the same exposure as the exported secret variables themselves.
+  unset -f hmac_sha1_b64 2>/dev/null || true
+  source "$SCRIPT_DIR/lib/hmac-sha1-b64.sh" >&3 || {
+    echo "Error: could not load the OAuth signing helper; refusing to send an unsigned request." >&2
+    return 1
+  }
+  local signature
+  signature=$(printf '%s' "$base_string" | hmac_sha1_b64 signing_key) || signature=""
+  if [[ -z "$signature" ]]; then
+    echo "Error: could not compute the OAuth signature; refusing to send an unsigned request." >&2
+    return 1
+  fi
+
+  # Build Authorization header
+  local auth_header="OAuth "
+  auth_header+="oauth_consumer_key=\"$(urlencode "${X_API_KEY}")\", "
+  auth_header+="oauth_nonce=\"$(urlencode "${oauth_nonce}")\", "
+  auth_header+="oauth_signature=\"$(urlencode "$signature")\", "
+  auth_header+="oauth_signature_method=\"HMAC-SHA1\", "
+  auth_header+="oauth_timestamp=\"${oauth_timestamp}\", "
+  auth_header+="oauth_token=\"$(urlencode "${X_ACCESS_TOKEN}")\", "
+  auth_header+="oauth_version=\"1.0\""
+
+  echo "$auth_header"
+}
+
+# --- Response handler ---
+
+# Handle HTTP response status codes from X API
+# Arguments: http_code body endpoint depth retry_cmd...
+# On 2xx: validates JSON, echoes body to stdout
+# On 429: sleeps and invokes retry_cmd (caller with incremented depth)
+# On error: prints diagnostic to stderr, exits 1 (or 2 for rate limit exhaustion)
+handle_response() {
+  local http_code="$1"
+  local body="$2"
+  local endpoint="$3"
+  local depth="$4"
+  shift 4
+  local -a retry_cmd=("$@")
+
+  case "$http_code" in
+    2[0-9][0-9])
+      if ! echo "$body" | jq . >/dev/null 2>&1; then
+        echo "Error: X API returned malformed JSON for ${endpoint}" >&2
+        exit 1
+      fi
+      echo "$body"
+      ;;
+    401)
+      echo "Error: X API returned 401 Unauthorized for ${endpoint}." >&2
+      echo "Your credentials may be expired or invalid." >&2
+      echo "" >&2
+      echo "To fix:" >&2
+      echo "  1. Go to https://developer.x.com/en/portal/dashboard" >&2
+      echo "  2. Regenerate your Access Token and Secret" >&2
+      echo "  3. Update environment variables" >&2
+      exit 1
+      ;;
+    403)
+      local reason
+      reason=$(echo "$body" | jq -r '.reason // "unknown"' 2>/dev/null || echo "unknown")
+      echo "Error: X API returned 403 Forbidden for ${endpoint}." >&2
+      if [[ "$reason" == "client-not-enrolled" ]]; then
+        # CONTRACT: community-manager agent matches on this string for 403 fallback detection.
+        # Changing this message requires updating agents/support/community-manager.md Capability 4 Step 1b.
+        echo "This endpoint requires paid API access." >&2
+        echo "Visit https://developer.x.com to purchase credits." >&2
+      elif [[ "$reason" == "official-client-forbidden" ]]; then
+        echo "Your app may lack the required permissions." >&2
+      else
+        echo "Your app may lack the required permissions or your account may be suspended." >&2
+      fi
+      exit 1
+      ;;
+    429)
+      local retry_after
+      retry_after=$(echo "$body" | jq -r '.retry_after // 5' 2>/dev/null || echo "5")
+      # Clamp retry_after to sane range [1, 60]
+      # Use printf to truncate float to integer for arithmetic comparison
+      # (sleep accepts floats natively, but bash (( )) does not)
+      local retry_int
+      retry_int=$(printf '%.0f' "$retry_after" 2>/dev/null || echo "5")
+      if (( retry_int > 60 )); then
+        retry_after=60
+      elif (( retry_int < 1 )); then
+        retry_after=1
+      fi
+      echo "Rate limited. Retrying after ${retry_after}s (attempt $((depth + 1))/3)..." >&2
+      sleep "$retry_after"
+      "${retry_cmd[@]}"
+      ;;
+    *)
+      local message
+      message=$(echo "$body" | jq -r '.detail // .title // "Unknown error"' 2>/dev/null || echo "Unknown error")
+      echo "Error: X API returned HTTP ${http_code} for ${endpoint}: ${message}" >&2
+      exit 1
+      ;;
+  esac
+}
+
+# --- POST request helper ---
+
+# Make an authenticated POST request to the X API
+# Arguments: endpoint [json_body] [depth]
+# Retries on 429 up to 3 times
+post_request() {
+  local endpoint="$1"
+  local json_body="${2:-}"
+  local depth="${3:-0}"
+
+  if (( depth >= 3 )); then
+    echo "Error: X API rate limit exceeded after 3 retries for ${endpoint}." >&2
+    exit 2
+  fi
+
+  local url="${X_API}${endpoint}"
+  local auth_header
+  # `|| exit 1`: a failed signature (it has already said why) stops here. These helpers run inside
+  # `$(...)`, where errexit does not apply, so without it the empty header would fall through to the
+  # shape check below and print a second, misleading "unexpected shape" line.
+  auth_header=$(oauth_sign "POST" "$url") || exit 1
+
+  local -a curl_args=(
+    -s -w "\n%{http_code}"
+    --config -
+    -H "Content-Type: application/json"
+  )
+
+  if [[ -n "$json_body" ]]; then
+    curl_args+=(-X POST -d "$json_body")
+  fi
+
+  if ! _hdr_ok "$auth_header"; then
+    echo "Error: the OAuth Authorization header has an unexpected shape; refusing to send it." >&2
+    exit 1
+  fi
+
+  local response http_code body
+  # Suppress stderr to prevent credential leakage. The signed header rides curl's stdin
+  # config channel, never its argument list.
+  local __curl_rc=0
+  response=$(curl --disable --noproxy '*' "${curl_args[@]}" "$url" 2>/dev/null \
+    < <(printf 'header = "Authorization: %s"\n' "$(_cfg_q "$auth_header")")) || __curl_rc=$?
+  if (( __curl_rc != 0 )); then
+    report_transport_failure "$__curl_rc" "Failed to connect to X API."
+    exit 1
+  fi
+
+  http_code=$(echo "$response" | tail -1)
+  body=$(echo "$response" | sed '$d')
+
+  handle_response "$http_code" "$body" "$endpoint" "$depth" \
+    post_request "$endpoint" "$json_body" "$((depth + 1))"
+}
+
+# --- GET request helper ---
+
+# Make an authenticated GET request to the X API with query params
+# Arguments: endpoint query_params [depth]
+# Query params are included in the OAuth signature
+# Retries on 429 up to 3 times
+get_request() {
+  local endpoint="$1"
+  local query_params="${2:-}"
+  local depth="${3:-0}"
+
+  if (( depth >= 3 )); then
+    echo "Error: X API rate limit exceeded after 3 retries for ${endpoint}." >&2
+    exit 2
+  fi
+
+  local url="${X_API}${endpoint}"
+
+  # Build OAuth signature with query params included
+  local auth_header
+  if [[ -n "$query_params" ]]; then
+    # Split query_params on & and pass as varargs to oauth_sign
+    local -a param_args=()
+    local param
+    while IFS= read -r param; do
+      [[ -n "$param" ]] && param_args+=("$param")
+    done <<< "${query_params//&/$'\n'}"
+    auth_header=$(oauth_sign "GET" "$url" "${param_args[@]}") || exit 1
+  else
+    auth_header=$(oauth_sign "GET" "$url") || exit 1
+  fi
+
+  # Build request URL with query string
+  local request_url="$url"
+  if [[ -n "$query_params" ]]; then
+    request_url="${url}?${query_params}"
+  fi
+
+  local response http_code body
+  if ! _hdr_ok "$auth_header"; then
+    echo "Error: the OAuth Authorization header has an unexpected shape; refusing to send it." >&2
+    exit 1
+  fi
+  local __curl_rc=0
+  # The signed header rides curl's stdin config channel, never its argument list.
+  response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" --config - \
+    "$request_url" 2>/dev/null \
+    < <(printf 'header = "Authorization: %s"\n' "$(_cfg_q "$auth_header")")) || __curl_rc=$?
+  if (( __curl_rc != 0 )); then
+    report_transport_failure "$__curl_rc" "Failed to connect to X API."
+    exit 1
+  fi
+
+  http_code=$(echo "$response" | tail -1)
+  body=$(echo "$response" | sed '$d')
+
+  handle_response "$http_code" "$body" "$endpoint" "$depth" \
+    get_request "$endpoint" "$query_params" "$((depth + 1))"
+}
+
+# Resolve the authenticated user's numeric ID
+resolve_user_id() {
+  local response
+  response=$(get_request "/2/users/me" "")
+
+  local user_id
+  user_id=$(echo "$response" | jq -r '.data.id' 2>/dev/null || echo "")
+
+  if [[ ! "$user_id" =~ ^[0-9]+$ ]]; then
+    echo "Error: Failed to resolve user ID from /2/users/me." >&2
+    echo "Response did not contain a valid numeric ID." >&2
+    exit 1
+  fi
+
+  echo "$user_id"
+}
+
+# --- Shared helpers ---
+
+# Fetch tweets for a given user ID and return the data array.
+# Arguments: user_id max_results
+_fetch_tweets_for_user() {
+  local user_id="$1"
+  local max_results="$2"
+  local query_params="tweet.fields=created_at,public_metrics,text&max_results=${max_results}"
+  local body
+  body=$(get_request "/2/users/${user_id}/tweets" "$query_params")
+  echo "$body" | jq '.data // []'
+}
+
+# --- Anomaly detection ---
+
+# Detect anomalous public_metrics patterns and emit warnings to stderr.
+# Shell boolean convention: returns 0 (true) if anomaly exists, 1 (false) if normal.
+# Arguments: metrics_json (JSON object with followers_count, following_count, tweet_count)
+_has_metrics_anomaly() {
+  local metrics_json="$1"
+
+  local followers following tweets
+  read -r followers following tweets < <(
+    echo "$metrics_json" | jq -r '[.followers_count // 0, .following_count // 0, .tweet_count // 0] | @tsv'
+  )
+
+  # Fail safe on non-numeric jq output (malformed API response)
+  if [[ ! "$followers" =~ ^[0-9]+$ ]] || [[ ! "$following" =~ ^[0-9]+$ ]] || [[ ! "$tweets" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+
+  # Genuinely new/empty account: all zeros is not anomalous
+  if (( followers == 0 && following == 0 && tweets == 0 )); then
+    return 1
+  fi
+
+  # All-zeros degradation: followers=0, following=0, but tweets>0
+  if (( followers == 0 && following == 0 && tweets > 0 )); then
+    echo "Warning: X API returned all-zero social metrics for account with ${tweets} tweets. Possible API degradation." | head -c 200 >&2
+    return 0
+  fi
+
+  # Active account with zero followers: followers=0 but tweets>0 and following>0
+  if (( followers == 0 && tweets > 0 && following > 0 )); then
+    echo "Warning: X API returned 0 followers for active account (${tweets} tweets, ${following} following). This may indicate unfollows, spam cleanup, or API degradation." | head -c 200 >&2
+    return 0
+  fi
+
+  return 1
+}
+
+# --- Commands ---
+
+cmd_fetch_metrics() {
+  local body
+  body=$(get_request "/2/users/me" "user.fields=public_metrics,description,created_at")
+
+  local output metrics_json
+  output=$(echo "$body" | jq '{
+    username: .data.username,
+    name: .data.name,
+    description: .data.description,
+    created_at: .data.created_at,
+    metrics: .data.public_metrics
+  }')
+  metrics_json=$(echo "$output" | jq '.metrics // {}')
+
+  # Run anomaly check (warnings go to stderr, stdout unchanged)
+  _has_metrics_anomaly "$metrics_json" || true
+
+  echo "$output"
+}
+
+cmd_fetch_mentions() {
+  local max_results=10
+  local since_id=""
+
+  # Parse optional arguments
+  while [[ $# -gt 0 ]]; do
+    case "${1:-}" in
+      --max-results)
+        local mr_val="${2:-}"
+        if [[ -z "$mr_val" ]]; then
+          echo "Error: --max-results requires a numeric value." >&2
+          exit 1
+        fi
+        if ! [[ "$mr_val" =~ ^[0-9]+$ ]]; then
+          echo "Error: --max-results must be a numeric value." >&2
+          exit 1
+        fi
+        if (( mr_val < 5 || mr_val > 100 )); then
+          echo "Error: --max-results must be between 5 and 100." >&2
+          exit 1
+        fi
+        max_results="$mr_val"
+        shift 2
+        ;;
+      --since-id)
+        local si_val="${2:-}"
+        if [[ -z "$si_val" ]]; then
+          echo "Error: --since-id requires a numeric value." >&2
+          exit 1
+        fi
+        if ! [[ "$si_val" =~ ^[0-9]+$ ]]; then
+          echo "Error: --since-id must be a numeric value." >&2
+          exit 1
+        fi
+        since_id="$si_val"
+        shift 2
+        ;;
+      *)
+        echo "Error: Unknown option." >&2
+        echo "Usage: x-community.sh fetch-mentions [--max-results N] [--since-id ID]" >&2
+        exit 1
+        ;;
+    esac
+  done
+
+  # Resolve authenticated user ID
+  local user_id
+  user_id=$(resolve_user_id)
+
+  # Build query parameters
+  local query_params="max_results=${max_results}&tweet.fields=author_id,created_at,conversation_id,referenced_tweets&expansions=author_id&user.fields=username,name,profile_image_url,public_metrics"
+  if [[ -n "$since_id" ]]; then
+    query_params="${query_params}&since_id=${since_id}"
+  fi
+
+  # Use shared GET helper with retry and enhanced error handling
+  local body
+  body=$(get_request "/2/users/${user_id}/mentions" "$query_params")
+
+  # Handle empty data (no mentions)
+  local data_count
+  data_count=$(echo "$body" | jq '.data | length // 0' 2>/dev/null || echo "0")
+  if [[ "$data_count" == "0" ]] || [[ "$data_count" == "null" ]]; then
+    echo '{"mentions":[],"meta":{"newest_id":null,"result_count":0}}'
+    return 0
+  fi
+
+  # Transform: join includes.users to data by author_id
+  # Use INDEX to build a lookup map so tweets without a matching user
+  # are preserved with "unknown" fallbacks (not silently dropped)
+  echo "$body" | jq '
+    ((.includes.users // []) | INDEX(.id)) as $users |
+    {
+      mentions: [
+        .data[] |
+        ($users[.author_id] // {}) as $user |
+        {
+          id: .id,
+          text: .text,
+          author_id: .author_id,
+          author_username: ($user.username // "unknown"),
+          author_name: ($user.name // "unknown"),
+          author_profile_image_url: ($user.profile_image_url // null),
+          author_followers_count: ($user.public_metrics.followers_count // 0),
+          created_at: .created_at,
+          conversation_id: .conversation_id,
+          referenced_tweets: (.referenced_tweets // null)
+        }
+      ],
+      meta: {
+        newest_id: (.meta.newest_id // null),
+        result_count: (.meta.result_count // 0)
+      }
+    }'
+}
+
+cmd_fetch_timeline() {
+  local max_results=10
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --max)
+        max_results="${2:?--max requires a number}"
+        shift 2
+        ;;
+      *)
+        echo "Error: Unknown option." >&2
+        exit 1
+        ;;
+    esac
+  done
+
+  # Validate --max is a positive integer (prevents query param injection)
+  if [[ ! "$max_results" =~ ^[0-9]+$ ]]; then
+    echo "Error: --max must be a positive integer." >&2
+    exit 1
+  fi
+
+  # Clamp max_results to API range 5-100
+  if (( max_results < 5 )); then
+    echo "Warning: --max ${max_results} is below API minimum of 5, clamping to 5." >&2
+    max_results=5
+  elif (( max_results > 100 )); then
+    echo "Warning: --max ${max_results} is above API maximum of 100, clamping to 100." >&2
+    max_results=100
+  fi
+
+  local user_id
+  user_id=$(resolve_user_id)
+
+  _fetch_tweets_for_user "$user_id" "$max_results"
+}
+
+cmd_fetch_user_timeline() {
+  local user_id="${1:-}"
+  shift || true
+
+  if [[ -z "$user_id" ]]; then
+    echo "Error: fetch-user-timeline requires a user_id argument." >&2
+    echo "Usage: x-community.sh fetch-user-timeline <user_id> [--max N]" >&2
+    exit 1
+  fi
+
+  # Validate user_id is a positive integer (prevents path traversal)
+  if [[ ! "$user_id" =~ ^[0-9]+$ ]]; then
+    echo "Error: user_id must be a positive integer." >&2
+    exit 1
+  fi
+
+  local max_results=5
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --max)
+        max_results="${2:?--max requires a number}"
+        shift 2
+        ;;
+      *)
+        echo "Error: Unknown option." >&2
+        exit 1
+        ;;
+    esac
+  done
+
+  # Validate --max is a positive integer
+  if [[ ! "$max_results" =~ ^[0-9]+$ ]]; then
+    echo "Error: --max must be a positive integer." >&2
+    exit 1
+  fi
+
+  # Clamp max_results to API range 5-100
+  if (( max_results < 5 )); then
+    echo "Warning: --max ${max_results} is below API minimum of 5, clamping to 5." >&2
+    max_results=5
+  elif (( max_results > 100 )); then
+    echo "Warning: --max ${max_results} is above API maximum of 100, clamping to 100." >&2
+    max_results=100
+  fi
+
+  _fetch_tweets_for_user "$user_id" "$max_results"
+}
+
+cmd_post_tweet() {
+  # Guard: require explicit opt-in to post.
+  if [[ "${X_ALLOW_POST:-}" != "true" ]]; then
+    echo "Error: X_ALLOW_POST is not set to 'true'." >&2
+    echo "Set X_ALLOW_POST=true to enable posting." >&2
+    return 1
+  fi
+
+  local text="${1:?Usage: x-community.sh post-tweet <text> [--reply-to TWEET_ID]}"
+  shift
+
+  local reply_to=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --reply-to)
+        reply_to="${2:?--reply-to requires a tweet ID}"
+        shift 2
+        ;;
+      *)
+        echo "Error: Unknown option." >&2
+        exit 1
+        ;;
+    esac
+  done
+
+  # Build JSON body
+  local json_body
+  if [[ -n "$reply_to" ]]; then
+    json_body=$(jq -n --arg text "$text" --arg reply "$reply_to" \
+      '{text: $text, reply: {in_reply_to_tweet_id: $reply}}')
+  else
+    json_body=$(jq -n --arg text "$text" '{text: $text}')
+  fi
+
+  local result
+  result=$(post_request "/2/tweets" "$json_body")
+
+  # Output the created tweet
+  echo "$result" | jq '{
+    id: .data.id,
+    text: .data.text
+  }'
+
+  echo "Tweet posted successfully." >&2
+}
+
+# --- Main ---
+
+main() {
+  local command="${1:-}"
+  shift || true
+
+  if [[ -z "$command" ]]; then
+    echo "Usage: x-community.sh <command> [args]" >&2
+    echo "" >&2
+    echo "Commands:" >&2
+    echo "  fetch-metrics                                    - Fetch account metrics" >&2
+    echo "  fetch-mentions [--max-results N] [--since-id ID] - Fetch recent mentions" >&2
+    echo "  fetch-timeline [--max N]                         - Fetch recent tweets (paid API)" >&2
+    echo "  fetch-user-timeline <user_id> [--max N]          - Fetch another user's tweets" >&2
+    echo "  post-tweet <text> [--reply-to ID]                - Post a tweet" >&2
+    exit 1
+  fi
+
+  require_jq
+  require_openssl
+  require_credentials
+
+  case "$command" in
+    fetch-metrics)  cmd_fetch_metrics ;;
+    fetch-mentions) cmd_fetch_mentions "$@" ;;
+    fetch-timeline)      cmd_fetch_timeline "$@" ;;
+    fetch-user-timeline) cmd_fetch_user_timeline "$@" ;;
+    post-tweet)          cmd_post_tweet "$@" ;;
+    *)
+      echo "Error: Unknown command." >&2
+      echo "Run 'x-community.sh' without arguments for usage." >&2
+      exit 1
+      ;;
+  esac
+}
+
+# Guard: allow sourcing without executing main (for test harness)
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi

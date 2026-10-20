@@ -1,0 +1,499 @@
+#!/usr/bin/env bash
+# Emit the machine-readable "a review actually ran on this branch" signal (#6724).
+#
+# WHY THIS IS A SCRIPT AND NOT A PROSE INSTRUCTION
+#
+# The pre-existing convention was a sentence in review/SKILL.md telling the
+# agent to commit review artifacts. Its measured compliance is zero on
+# zero-finding branches, because the same skill explicitly says:
+#
+#   "If there are no local changes, skip the commit (this is the expected
+#    case — review's primary output is GitHub issues, which are remote-only)."
+#
+# So the cleanest branches — the ones where review found nothing — produce no
+# local evidence at all. Every downstream review-evidence gate then reads
+# "review never ran" and denies the merge, with no escape hatch. That is the
+# P0 this script exists to close, and it is why `--allow-empty` below is
+# load-bearing rather than a convenience: without it, a zero-finding review
+# makes no commit, emits no trailer, and deadlocks exactly the branches that
+# had nothing wrong with them.
+#
+# The trailer is emitted by a script rather than described in prose because a
+# described `git commit` line is advisory and a script invocation is not.
+#
+# WHAT THIS TRAILER DOES AND DOES NOT MEAN (ADR-127)
+#
+# It is a BOOLEAN: "a review ran on this branch". It is NOT an attestation that
+# the merged tree is the tree that was reviewed. Reviewing early and then
+# pushing further commits leaves the trailer in range and the gate passes.
+#
+# That is deliberate, not an oversight. The consuming gate is a three-signal
+# OR in which every leg is a boolean — the legacy `review: ` subject pattern is
+# checked BEFORE this trailer, and Signal 3 (a labelled GitHub issue) cannot be
+# bound to a tree at all. Content-binding this one leg would therefore close
+# nothing: `git commit --allow-empty -m "review: x"` still satisfies the gate.
+# Making the binding real means deleting the legacy patterns (stranding every
+# branch reviewed before this shipped) and re-architecting Signal 3 — a much
+# larger change, landing a re-review treadmill on a gate already denying most
+# open PRs. Gates that block constantly get bypassed; that is how #6724 was
+# created.
+#
+# Threat model: agent forgetfulness on a trusted single-operator repo. These
+# hooks live in the operator's own checkout and are editable by the same agent
+# they constrain, so there is no enforcement boundary to build on. A boolean is
+# the honest instrument for that.
+#
+# `Reviewed-Commit:` below records the reviewed sha WITHOUT any consumer reading
+# it, so the forensic data exists if the threat model ever changes (external
+# contributors merging without operator review) and enforcement becomes
+# warranted. Adding the field later would be the expensive part; enforcing a
+# field already present is cheap.
+#
+# WHAT `Reviewed-Coverage:` ADDS, AND WHY IT IS NOT A CONTRADICTION OF ADR-127
+#
+# ADR-127 settled ONE axis: the trailer does not attest that the merged tree is
+# the reviewed tree, and content-binding was rejected. `Reviewed-Coverage:`
+# records a DIFFERENT axis — HOW MUCH review ran — and leaves that decision
+# untouched.
+#
+# The gap it closes is measured, not hypothetical. review/SKILL.md's Rate Limit
+# Fallback gate reads "if ANY agent returned substantive output: proceed
+# normally with available results", which is the right call and is silent about
+# WHICH agents did not. So a 10-agent review where every agent concurred and a
+# review where 7 of 10 died on `529 Overloaded` — losing security-sentinel,
+# test-design-reviewer and architecture-strategist — emit a BYTE-IDENTICAL
+# trailer. Downstream, `/ship` reads that boolean and merges. Observed
+# 2026-07-29 on PR #7066: 7 of 9 agents terminated early on 529s, and nothing
+# in the repo would have recorded it.
+#
+# The worse shape is a review that could not spawn agents AT ALL — a harness
+# constraint, a headless run with no agent surface. The Rate Limit Fallback gate
+# cannot see that state, because it is defined over agents that COMPLETED and
+# nothing ever completes. The reviewer then either does an inline pass (correct)
+# or skips review (silent), and both emit the full-strength trailer.
+#
+# This field is emitted with NO consumer, by exactly the argument ADR-127 used
+# for `Reviewed-Commit:`: adding a field once the key is in main's permanent
+# history and read by three consumers is the expensive part. Recording it now is
+# cheap; a future gate that wants to weight a merge by review strength — or an
+# operator asking "was this PR actually reviewed, or reviewed-shaped?" — needs
+# the data to already be there.
+#
+# It is NOT a quality score. Ten agents returning nothing useful outranks two
+# that found a P1 on every axis this field measures. It answers one narrow
+# question: how many of the intended reviewers actually ran.
+#
+# Usage:
+#   emit-review-trailer.sh [--findings <n>] [--summary <text>]
+#                          [--agents-ran <n>] [--agents-expected <n>]
+#                          [--agents-missing <comma-separated-names>]
+#                          [--mode full|degraded|inline-fallback|sequential-fallback]
+#                          [--risk-tier 'none|single-user incident|aggregate pattern']
+#
+# `Reviewed-Risk-Tier:` (ADR-267) records the risk tier the review panel was
+# scaled to — the resolved 3-value enum only; `undeclared` is a classifier
+# parse state and is rejected like any other invalid value. No consumer reads
+# it (the ADR-127 argument: recording a field whose key is already in main's
+# history is cheap; adding it later is the expensive part).
+#
+# Exit codes:
+#   0  trailer committed and verified parseable
+#   0  skipped (on main/master, or evidence already present for this branch)
+#   1  commit succeeded but the trailer does not parse — see VERIFY below
+#   2  usage / environment error
+set -euo pipefail
+
+# (#7797) Refuse to run under shell tracing while a live credential is set: `set -x`
+# echoes commands AFTER expansion, so a bound credential reaches the transcript
+# before it reaches any command. `case "$-" in *x*)` tests whether tracing is ON
+# rather than enumerating the ways to turn it on, two of which carry no `-x`
+# token at all.
+case "$-" in
+  *x*)
+    if [ -n "${COVERAGE_KEY:+x}${RISK_TIER_KEY:+x}${TRAILER_KEY:+x}${FIX_ROUND_KEY:+x}${FIX_RANGE_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
+usage() {
+  cat <<'EOF'
+Usage: emit-review-trailer.sh [--findings <n>] [--summary <text>]
+                             [--agents-ran <n>] [--agents-expected <n>]
+                             [--agents-missing <comma-separated-names>]
+                             [--mode full|degraded|inline-fallback|sequential-fallback]
+                             [--risk-tier 'none|single-user incident|aggregate pattern']
+                             [--fix-round --since <sha>]
+
+Pass --agents-ran AND --agents-expected or the trailer records
+`Reviewed-Coverage: unknown`, and nothing downstream can distinguish a
+full review from one where the agents that mattered never ran.
+
+Commits an empty commit carrying the Reviewed-By-Soleur: trailer, the
+machine-readable proof that soleur:review ran on this branch (#6724).
+
+--fix-round (ADR-267): emits a targeted-round attestation with DIFFERENT keys
+— `Reviewed-Fix-Round:`/`Reviewed-Fix-Range:` — and NEVER `Reviewed-Coverage:`.
+A fix round covers only the fix-commit range; writing `full` there would be a
+coverage overclaim on the merge gate, and the main trailer's idempotence guard
+would swallow it anyway. Requires --since <sha> (the panel snapshot).
+
+Exit codes:
+  0  trailer committed and verified parseable
+  0  skipped (on main/master, or evidence already present for this branch)
+  1  commit succeeded but the trailer does not parse
+  2  usage / environment error
+EOF
+}
+
+TRAILER_KEY="Reviewed-By-Soleur"
+COVERAGE_KEY="Reviewed-Coverage"
+RISK_TIER_KEY="Reviewed-Risk-Tier"
+FIX_ROUND_KEY="Reviewed-Fix-Round"
+FIX_RANGE_KEY="Reviewed-Fix-Range"
+FINDINGS=""
+SUMMARY=""
+AGENTS_RAN=""
+AGENTS_EXPECTED=""
+AGENTS_MISSING=""
+MODE=""
+RISK_TIER=""
+FIX_ROUND=0
+FIX_SINCE=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --findings) FINDINGS="${2:?--findings needs a value}"; shift 2 ;;
+    --summary)  SUMMARY="${2:?--summary needs a value}";  shift 2 ;;
+    --agents-ran)      AGENTS_RAN="${2:?--agents-ran needs a value}"; shift 2 ;;
+    --agents-expected) AGENTS_EXPECTED="${2:?--agents-expected needs a value}"; shift 2 ;;
+    --agents-missing)  AGENTS_MISSING="${2:?--agents-missing needs a value}"; shift 2 ;;
+    --mode)            MODE="${2:?--mode needs a value}"; shift 2 ;;
+    --risk-tier)       RISK_TIER="${2:?--risk-tier needs a value}"; shift 2 ;;
+    --fix-round)       FIX_ROUND=1; shift ;;
+    --since)           FIX_SINCE="${2:?--since needs a value}"; shift 2 ;;
+    -h|--help)  usage; exit 0 ;;
+    *) echo "emit-review-trailer: unknown argument '$1'" >&2; exit 2 ;;
+  esac
+done
+
+# Validate the coverage inputs BEFORE committing anything. A malformed count
+# would land in main's permanent history as an unparseable coverage claim, which
+# is the same "looks like evidence to a human, invisible to a consumer" defect
+# the VERIFY block at the bottom exists to prevent — just on a different field.
+for _pair in "AGENTS_RAN:$AGENTS_RAN" "AGENTS_EXPECTED:$AGENTS_EXPECTED"; do
+  _name="${_pair%%:*}"; _val="${_pair#*:}"
+  if [[ -n "$_val" && ! "$_val" =~ ^[0-9]+$ ]]; then
+    echo "emit-review-trailer: --${_name,,} must be a non-negative integer (got '${_val}')" >&2
+    exit 2
+  fi
+done
+# `sequential-fallback` is distinct from `inline-fallback`: the former means the
+# plugin subagent surface was unavailable (a Devin Cloud session) so the review
+# roles ran sequentially inline, the latter that there was no agent surface at
+# all. Both are degraded coverage, but a consumer weighting review strength can
+# legitimately score them differently.
+if [[ -n "$MODE" && ! "$MODE" =~ ^(full|degraded|inline-fallback|sequential-fallback)$ ]]; then
+  echo "emit-review-trailer: --mode must be one of full|degraded|inline-fallback|sequential-fallback (got '${MODE}')" >&2
+  exit 2
+fi
+# Only the resolved 3-value enum reaches main's history — `undeclared` is a
+# classifier parse state, rejected here like any other invalid token (ADR-267).
+if [[ -n "$RISK_TIER" && ! "$RISK_TIER" =~ ^(none|single-user incident|aggregate pattern)$ ]]; then
+  echo "emit-review-trailer: --risk-tier must be one of 'none'|'single-user incident'|'aggregate pattern' (got '${RISK_TIER}')" >&2
+  exit 2
+fi
+# `ran > expected` is a contradiction, and silently accepting it would let the
+# field overclaim in exactly the direction that matters.
+if [[ -n "$AGENTS_RAN" && -n "$AGENTS_EXPECTED" && "$AGENTS_RAN" -gt "$AGENTS_EXPECTED" ]]; then
+  echo "emit-review-trailer: --agents-ran ($AGENTS_RAN) exceeds --agents-expected ($AGENTS_EXPECTED)" >&2
+  exit 2
+fi
+
+# DERIVE the mode rather than trusting the caller's label where the counts
+# already answer it. A caller that passes `--mode full` alongside `--agents-ran 2
+# --agents-expected 10` is either confused or overclaiming; the counts win.
+#
+# Exception: `sequential-fallback` is NOT a count axis — it attests that the
+# plugin subagent surface was unavailable and the roles ran inline. A cloud
+# review that ran all N roles sequentially passes N/N, which counts alone would
+# "upgrade" to `full` — silently defeating the /ship gate that keys on the
+# sequential-fallback prefix. An explicit `--mode sequential-fallback` survives
+# derivation; the counts still annotate the coverage string.
+if [[ -n "$AGENTS_RAN" && -n "$AGENTS_EXPECTED" && "$MODE" != "sequential-fallback" ]]; then
+  if [[ "$AGENTS_RAN" -eq 0 ]]; then
+    MODE="inline-fallback"
+  elif [[ "$AGENTS_RAN" -lt "$AGENTS_EXPECTED" ]]; then
+    MODE="degraded"
+  else
+    MODE="full"
+  fi
+fi
+
+# UNKNOWN is the honest default, and it is deliberately not "full". A caller that
+# does not pass the flags has told us nothing about coverage, and defaulting an
+# absent measurement to the strongest value is how a field like this becomes
+# decorative — every legacy call site would silently read as a 10-agent review.
+COVERAGE_VALUE="unknown"
+if [[ -n "$AGENTS_RAN" && -n "$AGENTS_EXPECTED" ]]; then
+  COVERAGE_VALUE="${MODE} ${AGENTS_RAN}/${AGENTS_EXPECTED} agents"
+  if [[ -n "$AGENTS_MISSING" ]]; then
+    # Commas separate names; keep them, they cannot break trailer parsing (only a
+    # newline or a non-`Key: value` line can).
+    COVERAGE_VALUE="${COVERAGE_VALUE} (missing: ${AGENTS_MISSING})"
+  fi
+elif [[ -n "$MODE" ]]; then
+  COVERAGE_VALUE="$MODE"
+fi
+# Newlines would split the final paragraph and void every trailer below this one.
+COVERAGE_VALUE="${COVERAGE_VALUE//$'\n'/ }"
+
+# --fix-round/--since pairing: the flag means nothing without an explicit
+# panel-snapshot sha (the merge-base fallback would scope the "targeted" round
+# to the whole branch — the overclaim this key set exists to prevent), and
+# --since outside --fix-round is a stranded operand.
+if [[ "$FIX_ROUND" -eq 1 && -z "$FIX_SINCE" ]]; then
+  echo "emit-review-trailer: --fix-round requires --since <sha>" >&2
+  exit 2
+fi
+if [[ "$FIX_ROUND" -eq 0 && -n "$FIX_SINCE" ]]; then
+  echo "emit-review-trailer: --since requires --fix-round" >&2
+  exit 2
+fi
+
+if ! git rev-parse --git-dir >/dev/null 2>&1; then
+  echo "emit-review-trailer: not a git repository" >&2
+  exit 2
+fi
+
+if [[ "$FIX_ROUND" -eq 1 ]] && ! git rev-parse --verify --quiet "${FIX_SINCE}^{commit}" >/dev/null 2>&1; then
+  echo "emit-review-trailer: --since '${FIX_SINCE}' does not resolve to a commit" >&2
+  exit 2
+fi
+# Canonicalize to the full sha — rev expressions like HEAD~2 would otherwise
+# land in permanent history and alias the idempotence key. Then prove the base
+# is an ANCESTOR of HEAD: a stale sha still resolves post-rebase but computes a
+# range over unrelated history.
+if [[ "$FIX_ROUND" -eq 1 ]]; then
+  FIX_SINCE="$(git rev-parse "$FIX_SINCE")"
+  git merge-base --is-ancestor "$FIX_SINCE" HEAD 2>/dev/null || {
+    echo "emit-review-trailer: --since ${FIX_SINCE} is not an ancestor of HEAD" >&2
+    echo "  (a rebase may have invalidated the panel snapshot — recover the base per references/risk-tier-and-fix-rounds.md)" >&2
+    exit 2
+  }
+fi
+
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+if [[ -z "$BRANCH" ]]; then
+  echo "emit-review-trailer: could not resolve branch" >&2
+  exit 2
+fi
+
+# Never emit on main/master or in detached HEAD: nothing to mark there. The gate
+# reads the merged PR's own head (#8778), so the trailer must land on the PR's
+# branch — run this from that checkout, then push.
+if [[ "$BRANCH" == "main" || "$BRANCH" == "master" || "$BRANCH" == "HEAD" ]]; then
+  echo "emit-review-trailer: on '$BRANCH' — nothing to mark, skipping."
+  exit 0
+fi
+
+# Resolve the branch's base ref explicitly. `origin/main..HEAD` is the right
+# scope in the real repo, but silently degrades to an ERROR — and therefore to
+# an empty result — anywhere that ref is absent (throwaway fixtures, clones
+# with a different default branch, detached CI checkouts). An empty result
+# reads identically to "no trailer yet", so the idempotence check below would
+# fail open and stack a duplicate empty commit on every invocation. Falling
+# back to the whole of HEAD is the conservative direction: it can only ever
+# suppress an extra commit, never emit a spurious one.
+BASE_REF=""
+for cand in origin/main origin/master main master; do
+  if git rev-parse --verify --quiet "$cand" >/dev/null 2>&1; then BASE_REF="$cand"; break; fi
+done
+if [[ -n "$BASE_REF" ]] && [[ "$(git rev-parse "$BASE_REF")" != "$(git rev-parse HEAD)" ]]; then
+  SCOPE="${BASE_REF}..HEAD"
+else
+  SCOPE="HEAD"
+fi
+
+# Idempotence: if this branch already carries the trailer, a second review pass
+# should not stack duplicate empty commits. Scoped to commits unique to the
+# branch, for the same reason the gate is (see below).
+# Fix-round idempotence is keyed on the full reviewed RANGE, not the branch
+# trailer: the main-panel trailer is expected to exist already, so the
+# branch-level skip would make every fix-round emission unreachable — and a
+# left-edge-only match would swallow a SECOND round covering further commits.
+# The right edge is the newest commit WITHOUT a review-attestation trailer —
+# matched on trailers, not subjects, because `review: <summary> (P<N>)` is also
+# this repo's prescribed FIX-commit subject (SKILL.md) and a subject filter
+# would over-exclude real fixes, collapsing the recorded range and re-swallowing
+# the second-round attestation this keying exists to preserve.
+if [[ "$FIX_ROUND" -eq 1 ]]; then
+  # The walk is scoped to the round's range (an unbounded HEAD walk into an
+  # early-exiting consumer is a SIGPIPE-under-pipefail trap on big histories),
+  # and the awk consumes ALL input (no early `exit`) for the same reason.
+  # $1 must be a full sha — a trailer VALUE on a continuation line must not be
+  # mistaken for a commit.
+  EFFECTIVE_HEAD=$(git log --format='%H %(trailers:key='"$TRAILER_KEY"',valueonly)%(trailers:key='"$FIX_ROUND_KEY"',valueonly)' "${FIX_SINCE}..HEAD" \
+    | awk 'NF == 1 && $1 ~ /^[0-9a-f]{40}$/ && !found { found = $1 } END { print found }')
+  # All-attestation range (repeat call with no new fix commits) → the effective
+  # range is empty: record since..since. Falling back to HEAD would point at
+  # the prior ATTESTATION commit, rotating the range on every call and never
+  # deduping.
+  [[ -n "$EFFECTIVE_HEAD" ]] || EFFECTIVE_HEAD="$FIX_SINCE"
+  RANGE="${FIX_SINCE}..${EFFECTIVE_HEAD}"
+  if grep -qF "$RANGE" \
+       < <(git log "$SCOPE" --format='%(trailers:key='"$FIX_RANGE_KEY"',valueonly)' 2>/dev/null); then
+    echo "emit-review-trailer: a fix-round attestation over ${RANGE} already exists — skipping."
+    exit 0
+  fi
+elif grep -q '[^[:space:]]' \
+     < <(git log "$SCOPE" --format='%(trailers:key='"$TRAILER_KEY"',valueonly)' 2>/dev/null); then
+  # Skipping is right for a REPEATED pass and wrong when the recorded reality CHANGED — e.g. a
+  # degraded 0/N review whose agents later ran to N/N (#7220, 2026-08-04). The stale trailer then
+  # misdescribes coverage to every downstream consumer, in the direction that looks safe. To
+  # supersede, commit a trailer by hand whose final paragraph is trailers ONLY, and say in the body
+  # which commit it supersedes and why.
+  echo "emit-review-trailer: branch already carries a $TRAILER_KEY trailer (scope: $SCOPE) — skipping."
+  echo "emit-review-trailer: if coverage CHANGED since that trailer, supersede it by hand — see the comment at this line." >&2
+  exit 0
+fi
+
+if [[ -z "$SUMMARY" ]]; then
+  if [[ "$FIX_ROUND" -eq 1 ]]; then
+    SUMMARY="targeted fix-commit round"
+  elif [[ "$FINDINGS" == "0" ]]; then
+    SUMMARY="no findings"
+  elif [[ -n "$FINDINGS" ]]; then
+    SUMMARY="$FINDINGS finding(s) triaged"
+  else
+    SUMMARY="review complete"
+  fi
+fi
+
+# The subject deliberately matches the legacy Signal 2 regex (`review: `) so
+# this commit is recognised by gates that predate the trailer and have not been
+# updated yet. The trailer is the durable signal; the subject is the fallback.
+#
+# The final paragraph is trailers ONLY. Git parses just the last contiguous
+# block of `Token: value` lines, so a stray `Refs #6724.` there would silently
+# void every trailer below it — including this one. Issue references therefore
+# stay in the body prose above.
+#
+# `Reviewed-Commit:` records the sha under review. NO consumer reads it — see
+# the ADR-127 note in the header. It is recorded now because adding a field
+# later, once the key is in main's permanent history and read by three
+# consumers, is the expensive part; enforcing a field already present is cheap.
+REVIEWED_SHA=$(git rev-parse HEAD)
+# The tier line is absent entirely when the flag is absent — a fabricated
+# `unknown` literal would be a claim the caller never measured. RISK_TIER is
+# enum-validated above, so it can never carry the newline that would split the
+# trailers paragraph.
+RISK_TIER_LINE=""
+if [[ -n "$RISK_TIER" ]]; then
+  RISK_TIER_LINE="${RISK_TIER_KEY}: ${RISK_TIER}"$'\n'
+fi
+if [[ "$FIX_ROUND" -eq 1 ]]; then
+  # Distinct keys, never Reviewed-Coverage — a targeted round covers only the
+  # fix-commit range, and ship's gate reads Reviewed-Coverage for the BRANCH.
+  # The coverage-shaped value is kept on the round's own key so the seat counts
+  # still record.
+  # The fix-round subject deliberately does NOT match the legacy Signal-2
+  # `review(\(scope\))?: ` regex — a targeted round is not branch-level review
+  # evidence, and matching that leg would let a standalone round pass the
+  # merge gate's "did review run" signal exactly like the coverage overclaim
+  # the distinct trailer keys exist to prevent.
+  COMMIT_MSG=$(printf '%s\n\n%s\n\n%s: %s\n%s: %s\n%s: %s..%s\n%s' \
+    "review-fix-round: ${SUMMARY}" \
+    "Records that a targeted fix-commit review round ran on this branch (ADR-267). It re-reviews only the named fix range with seats mapped to the areas the fix touched; it carries no branch-level coverage claim — the main panel's Reviewed-Coverage remains the branch signal." \
+    "$FIX_ROUND_KEY" "$COVERAGE_VALUE" \
+    "Reviewed-Commit" "$REVIEWED_SHA" \
+    "$FIX_RANGE_KEY" "$FIX_SINCE" "$EFFECTIVE_HEAD" \
+    "$RISK_TIER_LINE")
+else
+  COMMIT_MSG=$(printf '%s\n\n%s\n\n%s: soleur:review\n%s: %s\n%s%s: %s\n' \
+    "review: ${SUMMARY}" \
+    "Records that soleur:review ran on this branch (see issue 6724). Empty by design: a review that finds nothing still needs to prove it ran. This is a boolean, not an attestation that the merged tree is the reviewed tree — see ADR-127. Reviewed-Coverage records HOW MUCH review ran (a separate axis from ADR-127's tree-binding decision); 'unknown' means the caller did not measure, never that coverage was full. Reviewed-Risk-Tier records the resolved risk tier the panel was scaled to (ADR-267); absent when the caller did not resolve one." \
+    "$TRAILER_KEY" \
+    "Reviewed-Commit" "$REVIEWED_SHA" \
+    "$RISK_TIER_LINE" \
+    "$COVERAGE_KEY" "$COVERAGE_VALUE")
+fi
+
+# `--allow-empty` does NOT mean "empty" — it commits the INDEX, so anything
+# staged is silently absorbed into a commit whose subject reads
+# "review: no findings". That is reachable: review's step 2 stages artifacts and
+# its commit is conditional, while step 3 runs unconditionally right after.
+# Refuse rather than absorb; the caller can commit or unstage and re-run.
+if ! git diff --cached --quiet 2>/dev/null; then
+  echo "emit-review-trailer: refusing to run with staged changes." >&2
+  echo "  --allow-empty commits the index, so these would be silently absorbed" >&2
+  echo "  into a commit subject 'review: ${SUMMARY}':" >&2
+  git diff --cached --name-only 2>/dev/null | sed 's/^/    /' >&2
+  echo "  Commit or unstage them first, then re-run." >&2
+  exit 2
+fi
+
+if ! git commit --allow-empty -q -m "$COMMIT_MSG"; then
+  echo "emit-review-trailer: git commit failed" >&2
+  exit 2
+fi
+
+# VERIFY: a trailer that does not parse is worse than no trailer — it looks
+# like evidence to a human reading the log and is invisible to the gate that
+# actually consumes it. This repo has shipped that exact defect before, so the
+# script refuses to report success on an unparseable trailer.
+if [[ "$FIX_ROUND" -eq 1 ]]; then
+  # The fix-round block must parse as trailers; the range key is the round's
+  # load-bearing field, so it is the verified one.
+  PARSED=$(git log -1 --format='%(trailers:key='"$FIX_RANGE_KEY"',valueonly)' | tr -d '[:space:]')
+  if [[ -z "$PARSED" ]]; then
+    echo "emit-review-trailer: FAILED — commit landed but '$FIX_RANGE_KEY' does not parse." >&2
+    exit 1
+  fi
+  echo "emit-review-trailer: emitted $FIX_ROUND_KEY on '$BRANCH' ($(git rev-parse --short HEAD)) over ${FIX_SINCE}.."
+  exit 0
+fi
+PARSED=$(git log -1 --format='%(trailers:key='"$TRAILER_KEY"',valueonly)' | tr -d '[:space:]')
+if [[ -z "$PARSED" ]]; then
+  echo "emit-review-trailer: FAILED — commit landed but '$TRAILER_KEY' does not parse." >&2
+  echo "  The final paragraph of the commit message must contain ONLY 'Token: value' lines." >&2
+  echo "  Inspect with: git interpret-trailers --parse < <(git log -1 --format=%B)" >&2
+  exit 1
+fi
+
+# Verify the coverage key SEPARATELY. `Reviewed-By-Soleur` parsing does not imply
+# its siblings parse: git needs the whole final paragraph to be `Key: value`
+# lines, but a value containing a newline splits the block and voids only the
+# keys BELOW the split — which is exactly where this one sits. Checking the first
+# key alone would report success while the field this change exists to add is
+# silently absent.
+PARSED_COVERAGE=$(git log -1 --format='%(trailers:key='"$COVERAGE_KEY"',valueonly)' | tr -d '[:space:]')
+if [[ -z "$PARSED_COVERAGE" ]]; then
+  echo "emit-review-trailer: FAILED — commit landed but '$COVERAGE_KEY' does not parse." >&2
+  echo "  It is the LAST trailer, so it is the first casualty of a split final paragraph." >&2
+  echo "  Inspect with: git interpret-trailers --parse < <(git log -1 --format=%B)" >&2
+  exit 1
+fi
+
+echo "emit-review-trailer: emitted $TRAILER_KEY on '$BRANCH' ($(git rev-parse --short HEAD))"
+echo "emit-review-trailer: $COVERAGE_KEY: $COVERAGE_VALUE"
+if [[ "$COVERAGE_VALUE" == "unknown" ]]; then
+  echo "emit-review-trailer: NOTE — coverage is 'unknown' because no --agents-ran/--agents-expected was passed." >&2
+  echo "  This is recorded honestly, but it means nothing downstream can tell a full review from a degraded one." >&2
+fi
+
+# Lifecycle successor, printed at the one moment it is actionable.
+#
+# Emitting this trailer means review is DONE, and review is not a stopping point
+# (rf-never-skip-qa-review-before-merging). Twice in one session (2026-09-03) the
+# lead pushed `review:` fixes, reported status, and ended the turn — the operator
+# had to ask "why did you stop?" both times. The rule was present and had already
+# been routed into review/SKILL.md as prose after the first occurrence; prose was
+# not the gap, and a second paragraph would not have closed it.
+#
+# So the reminder is emitted by the tool at the checkpoint instead of relied upon
+# as recall. This is stdout, not an error: it cannot fail a pipeline, and it costs
+# two lines at exactly the point where the next action is unambiguous.
+echo "emit-review-trailer: NEXT → /soleur:compound, then /soleur:ship (carry the PR to MERGED)."
+echo "emit-review-trailer: review is not a turn boundary — 'CI is running' is not a handoff."

@@ -1,0 +1,58 @@
+---
+name: provision-doppler
+description: "This skill should be used when provisioning Doppler projects and OIDC identities for tenants."
+disable-model-invocation: true
+---
+
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
+# Provision Doppler
+
+Create a Doppler project + config via Terraform and configure an OIDC service-account-identity via the Doppler API for a tenant's deploy pipeline.
+
+## Art. 32 Pre-condition
+
+**MUST run on the operator's local machine. MUST NOT run in CI.** Bootstrap credentials are accepted via `read -s` (interactive terminal only) and never persisted to disk, env exports, or CLI args. The `read -s` call blocks non-interactive shells by design.
+
+## Usage
+
+```
+soleur:provision-doppler <tenant-slug> <tenant-org> <tenant-repo> [--dry-run]
+```
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `tenant-slug` | Yes | Canonical tenant identifier (kebab-case, e.g. `acme-prd`) |
+| `tenant-org` | Yes | GitHub org owning the tenant repo (for OIDC trust binding) |
+| `tenant-repo` | Yes | GitHub repo name (for OIDC trust binding) |
+| `--dry-run` | No | Print TF plan + API commands without executing |
+
+## Execution
+
+Run the provisioning script:
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/skills/provision-doppler/scripts/provision-doppler.sh" <slug> <org> <repo> [--dry-run]
+```
+
+The script:
+
+1. Validates prerequisites (DPA gate, slug format, tool availability)
+2. Checks idempotency (warns if Doppler project already exists)
+3. Generates `provisioning/<slug>/doppler.tf` with R2 remote backend
+4. Emits a copy-pasteable `terraform apply` compound command with credential re-entry
+5. After operator confirms TF apply, configures OIDC service-account-identity via Doppler API
+6. Smoke-tests the service account
+7. Prints teardown commands and bootstrap revocation reminder
+
+## Sharp Edges
+
+- R2 backend has no state locking. Single operator at N=2. Coordinate manually if parallel applies ever become possible.
+- OIDC trust binding cannot be fully verified locally. Test via deploy workflow (runbook Step 9) after all provisioning.
+- The Doppler API for service accounts (`POST /v3/workplace/service_accounts`) has no CLI equivalent and no TF resource.

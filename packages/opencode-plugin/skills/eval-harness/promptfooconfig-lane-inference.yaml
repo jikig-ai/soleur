@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: "brainstorm lane-inference accuracy — skill arm (lane rule) vs baseline (label set only)"
+
+# Model IDs are single-sourced. Run `bash scripts/gen-models.sh` to (re)generate
+# models.generated.json from the TS registry; no model literal is hardcoded here.
+providers: file://models.generated.json
+
+# Two arms become two grid columns. The skill arm embeds the §Lane Inference rule;
+# the baseline arm knows only the lane token set (the control — "that delta is the point").
+prompts:
+  - file://prompts/lane-inference-skill.txt
+  - file://prompts/lane-inference-baseline.txt
+
+defaultTest:
+  vars:
+    # Closed 3-lane enum (single source). promptfoo passes this file:// ref to the
+    # custom asserts VERBATIM; the asserts read the file themselves via loadEnum().
+    enum: file://enums/lane.json
+  assert:
+    # MEASUREMENT: always passes, records lane-correct rate (1.0 / 0.0).
+    - type: javascript
+      value: file://scripts/measure-classification.cjs
+    # GATE: fails if the emitted label is not a member of the enum.
+    - type: javascript
+      value: file://scripts/gate-classification.cjs
+
+# N runs per cell come from the `--repeat N` CLI flag. lane-inference is a deterministic
+# keyword scan, so the skill-vs-baseline delta is expected to be MUTED — the harness value
+# here is regression detection (an edit to the lane table must not drop a passing task), not
+# arm uplift. See README.
+#
+# Golden tasks: { vars: { input, golden_label } } per line.
+tests: file://tasks/lane-inference.jsonl

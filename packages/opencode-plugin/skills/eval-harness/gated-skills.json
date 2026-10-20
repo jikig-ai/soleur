@@ -1,0 +1,34 @@
+[
+  {
+    "source_file": "plugins/soleur/commands/go.md",
+    "block_id": "go-routing",
+    "block_start_marker": "<!-- eval-gate:block:go-routing:start -->",
+    "block_end_marker": "<!-- eval-gate:block:go-routing:end -->",
+    "target": "go-routing",
+    "projected_prompt_path": "plugins/soleur/skills/eval-harness/prompts/go-skill.txt"
+  },
+  {
+    "source_file": "plugins/soleur/agents/support/ticket-triage.md",
+    "block_id": "ticket-triage",
+    "block_start_marker": "<!-- eval-gate:block:ticket-triage:start -->",
+    "block_end_marker": "<!-- eval-gate:block:ticket-triage:end -->",
+    "target": "ticket-triage",
+    "projected_prompt_path": "plugins/soleur/skills/eval-harness/prompts/triage-skill.txt"
+  },
+  {
+    "source_file": "plugins/soleur/skills/brainstorm/references/brainstorm-domain-config.md",
+    "block_id": "lane-inference",
+    "block_start_marker": "<!-- eval-gate:block:lane-inference:start -->",
+    "block_end_marker": "<!-- eval-gate:block:lane-inference:end -->",
+    "target": "lane-inference",
+    "projected_prompt_path": "plugins/soleur/skills/eval-harness/prompts/lane-inference-skill.txt"
+  },
+  {
+    "source_file": "plugins/soleur/skills/incident/SKILL.md",
+    "block_id": "incident-threshold",
+    "block_start_marker": "<!-- eval-gate:block:incident-threshold:start -->",
+    "block_end_marker": "<!-- eval-gate:block:incident-threshold:end -->",
+    "target": "incident-threshold",
+    "projected_prompt_path": "plugins/soleur/skills/eval-harness/prompts/incident-threshold-skill.txt"
+  }
+]

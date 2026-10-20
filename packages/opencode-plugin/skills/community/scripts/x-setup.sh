@@ -1,0 +1,713 @@
+#!/usr/bin/env bash
+# x-setup.sh -- X/Twitter API credential setup and validation
+#
+# SECURITY: Credentials MUST be in environment variables.
+# Never pass tokens as CLI arguments (visible in ps/history).
+#
+# Usage: x-setup.sh <command> [args]
+# Commands:
+#   validate-credentials            - Verify all 4 env vars via GET /2/users/me
+#   write-env                       - Write credentials to .env with chmod 600
+#   verify                          - Source .env and run round-trip API check
+#
+# Environment variables (required for API commands):
+#   X_API_KEY              - API key (consumer key)
+#   X_API_SECRET           - API secret (consumer secret)
+#   X_ACCESS_TOKEN         - Access token
+#   X_ACCESS_TOKEN_SECRET  - Access token secret
+#
+# Exit codes:
+#   0 - Success
+#   1 - General error, including missing credentials and a write-env value outside the .env
+#       allow-list, or an operational write-env fault (a held lock, an unreadable or dangling .env).
+#       Told apart by the value-free stderr marker `SOLEUR_CREDENTIAL_REFUSED`: `reason=token_shape` or
+#       `control_char` with `var=<NAME>` is the allow-list (fix the value, do not retry); `reason=env_*`
+#       with `var=ENV_FILE phase=write-env` is a write fault (diagnose, retry once). Exit 1 with no marker
+#       is a missing credential.
+#
+# Output: JSON or plain text to stdout
+# Errors: Messages to stderr, exit 1. The exception is `write-env`, which has no stdout payload and
+#         whose human text is therefore all on STDOUT (agent runtimes surface stdout and swallow
+#         stderr): the missing-credentials diagnostic, the allow-list line, and the "Wrote N
+#         variables" confirmation. Only the allow-list marker stays on stderr.
+
+set -euo pipefail
+
+# (#7797) Xtrace refusal -- the FIRST thing after `set …`, so nothing above it is
+# traced. This script ships to installed Soleur CLIs: the terminal it runs in
+# belongs to the founder, and `bash -x` would print their live X
+# credentials. UNCONDITIONAL, and that is measured rather than inherited:
+# `cmd_verify` does `set -a; source "$env_file"; set +a`, loading the founder's
+# .env at RUNTIME, AFTER this prologue. A conditional hatch keyed on whether the
+# credential is already set would therefore be empty at guard time and open, and
+# `source` under xtrace echoes EVERY assignment in the file -- so the leak would
+# be the whole .env, not one token. (Written without the literal parameter
+# expansion on purpose: a bare-token grep for it cannot tell this comment from
+# real code, and the 4-vs-11 arm split is asserted by exactly such a grep.)
+# Refusal goes to STDOUT, not stderr: agent runtimes surface stdout and swallow
+# stderr (constitution.md > Code Style > Always), and a swallowed security refusal
+# leaves the user with a bare `exit 78` and no text at all.
+case "$-" in
+  *x*)
+    printf 'Refusing to run under `bash -x`: this script loads X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET from your .env at runtime, and tracing would print them to your terminal. Unsetting them first does not help -- the .env is the source. Re-run without `bash -x`.\n'
+    exit 78
+    ;;
+esac
+
+# (#7873) `--disable` closes ~/.curlrc and `--noproxy '*'` closes the proxy
+# variables, but NEITHER touches the trust store or the TLS session-key log. On an
+# installed CLI the environment belongs to someone who is not us, so
+# a substituted `CURL_CA_BUNDLE` is a clean MITM of the founder's platform
+# token with every other guard fully intact, and `SSLKEYLOGFILE` is passive
+# decryption with no MITM at all. Matches the line in scripts/betterstack-query.sh.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS
+
+# --- Transport-confinement diagnostics (#7873) --------------------------------
+# Every credentialed `curl` below carries `--disable --noproxy '*'` and discards
+# curl's own stderr (which can carry the URL). A failed request then has four
+# competing causes the founder cannot tell apart: the xtrace refusal, the proxy
+# this script deliberately bypassed, a ~/.curlrc that `--disable` dropped, or an
+# ordinary network failure. So each failure emits ONE structured marker carrying
+# all four discriminators, beside a human line that names the bypass instead of
+# blaming the founder's connectivity.
+SOLEUR_TRANSPORT_SCRIPT="x-setup.sh"
+SOLEUR_TRANSPORT_PLATFORM="X"
+
+# The request helpers below run inside `$(...)`, where fd 1 is the capture pipe.
+# Save the script's real stdout so the marker reaches the founder's terminal (and
+# the always-on PostToolUse Bash extractor) instead of being swallowed into a
+# variable. The marker is on stdout BY DESIGN -- the call sites' `2>/dev/null` is
+# what keeps curl's URL-carrying stderr out of the transcript, and it must not be
+# able to suppress the diagnostic too.
+exec 3>&1
+
+# Which proxy variables are non-empty, or `none`.
+proxy_env_names() {
+  local names="" n
+  for n in HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy; do
+    if [[ -n "${!n-}" ]]; then
+      names="${names},${n}"
+    fi
+  done
+  if [[ -z "$names" ]]; then
+    printf 'none'
+  else
+    printf '%s' "${names#,}"
+  fi
+}
+
+# True when a proxy this script deliberately bypasses is configured. NO_PROXY
+# alone is not one -- it only ever narrows proxying, so it cannot be the cause.
+proxy_bypassed() {
+  [[ -n "${HTTP_PROXY:-}${HTTPS_PROXY:-}${ALL_PROXY:-}${http_proxy:-}${https_proxy:-}${all_proxy:-}" ]]
+}
+
+# One line, eight fields, on the saved stdout.
+#
+# Two fields were literals in the first cut and are now MEASURED (#7898 review):
+# `noproxy_applied` was the constant "true", which ASSERTS the property instead of
+# observing it -- dropping --noproxy from a call site left the diagnostic still
+# claiming it was applied. It now reports whether a proxy was actually configured
+# for this request to bypass, which is the fact a reader needs. `refusal` was the
+# constant "none" at every call site, so the cause it exists to discriminate could
+# never appear; it now carries `env-rebind-refused` and `xtrace-credential-bound`.
+#
+# `tls_env_cleared` is new. The prologue unsets CURL_CA_BUNDLE/SSL_CERT_FILE et al,
+# which is correct against an attacker and BREAKS a founder whose corporate CA
+# arrives that way -- curl then exits 60 and, without this field, the event is
+# indistinguishable from an ordinary network failure.
+emit_transport_diag() {
+  local curl_exit="$1" refusal="$2" surface="installed-cli" curlrc="false" noproxy="false"
+  # The hosted sandbox always sets this (agent-env.ts > AGENT_ENV_OVERRIDES); an
+  # installed CLI does not. A label on the event, not a gate on behaviour.
+  if [[ -n "${CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:-}" ]]; then
+    surface="in-sandbox"
+  fi
+  if [[ -f "${HOME:-}/.curlrc" ]]; then
+    curlrc="true"
+  fi
+  if proxy_bypassed; then
+    noproxy="true"
+  fi
+  printf 'SOLEUR_TRANSPORT_DIAG surface=%s script=%s curl_exit=%s refusal=%s proxy_env=%s curlrc_present=%s noproxy_applied=%s tls_env_cleared=%s\n' \
+    "$surface" "$SOLEUR_TRANSPORT_SCRIPT" "$curl_exit" "$refusal" \
+    "$(proxy_env_names)" "$curlrc" "$noproxy" "true" >&3
+}
+
+# Replaces the bare "Check your network connection and try again." on a
+# credentialed-curl failure. With a proxy set, that line blames the founder for a
+# bypass this script chose.
+report_transport_failure() {
+  local curl_exit="${1:-unknown}"
+  local detail="${2:-Failed to connect to the ${SOLEUR_TRANSPORT_PLATFORM} API.}"
+  emit_transport_diag "$curl_exit" "none"
+  echo "Error: ${detail}" >&2
+  # Ordered by how specific the evidence is. Each arm names something THIS script
+  # did, so the founder is never told to go debug their own network for a choice
+  # made here. The bare "check your connection" line is the LAST resort, not the
+  # default -- it was the default in the first cut, which meant a founder whose
+  # corporate CA or curlrc we had just discarded was blamed for it (#7898 review).
+  if [[ "$curl_exit" == "60" || "$curl_exit" == "35" || "$curl_exit" == "77" ]]; then
+    # 60 peer-certificate, 35 TLS handshake, 77 CA-bundle unreadable.
+    echo "This looks like a TLS trust failure. This script deliberately clears CURL_CA_BUNDLE, SSL_CERT_FILE, SSL_CERT_DIR and SSLKEYLOGFILE before the request, because those variables can redirect or expose a request carrying your ${SOLEUR_TRANSPORT_PLATFORM} credential." >&2
+    echo "If your machine needs a corporate CA to reach ${SOLEUR_TRANSPORT_PLATFORM}, that is not currently supported -- please open an issue at https://github.com/jikig-ai/soleur/issues." >&2
+  elif proxy_bypassed; then
+    echo "This request deliberately bypasses your proxy ($(proxy_env_names)), because a proxy can redirect a request carrying your ${SOLEUR_TRANSPORT_PLATFORM} token." >&2
+    echo "If you need Soleur to reach ${SOLEUR_TRANSPORT_PLATFORM} through your proxy, that is not currently supported -- please open an issue at https://github.com/jikig-ai/soleur/issues." >&2
+  elif [[ -f "${HOME:-}/.curlrc" ]]; then
+    echo "You have a ~/.curlrc, and this request deliberately ignores it (--disable), because a curlrc can redirect a request carrying your ${SOLEUR_TRANSPORT_PLATFORM} token. If it configures a proxy or a CA bundle you need, that is why this failed." >&2
+    echo "That is not currently supported -- please open an issue at https://github.com/jikig-ai/soleur/issues." >&2
+  else
+    echo "Check your network connection and try again." >&2
+  fi
+}
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../../../scripts/resolve-git-root.sh"
+# (#9597) OAuth 1.0a request signing (HMAC-SHA1) without the key on any process's argument list.
+# A function of this name inherited from the environment (an exported bash function) is dropped
+# first, so it cannot stand in for the library's when the library loads without defining it
+# (truncated or emptied); the check after the load refuses to run at all in that case. Only an
+# inherited function NAMED hmac_sha1_b64 is closed here: the key stays readable by any other
+# exported function, the same exposure as the exported secret variables.
+unset -f hmac_sha1_b64 2>/dev/null || true
+source "$SCRIPT_DIR/lib/hmac-sha1-b64.sh"
+if ! declare -F hmac_sha1_b64 >/dev/null; then
+  echo "Error: the OAuth signing helper did not define hmac_sha1_b64; refusing to run." >&2
+  exit 1
+fi
+
+# readonly (#7898 review): `cmd_verify` and friends run `set -a; source "$env_file"; set +a`
+# BELOW this line, so a plain assignment here is rebindable by the repo's .env --
+# which retargets the credentialed request while every transport flag stays intact.
+# That is the "--disable and --noproxy are intact and irrelevant" shape this change
+# exists to close, one layer up. readonly makes the destination non-rebindable.
+readonly X_API="https://api.x.com"
+
+# (#9597) write-env value allow-list. `.env` values are written UNQUOTED and later SOURCED
+# (`verify`, the community scripts), so a value holding a command substitution, a backtick, a
+# quote, a semicolon, a space or a newline would execute or split on the next source, and a leading
+# tilde would silently change a stored credential (tilde expansion on source). Validation is an
+# allow-list, fail-closed, and runs for EVERY value BEFORE the first write: a refused value prints
+# the value-free marker plus ONE human line naming only the VARIABLE, writes nothing, exits 1 and
+# leaves any existing .env untouched. A value outside the list that is legitimate is added to .env
+# by hand. The glob runs under LC_ALL=C and is not grep, which is line-oriented and lets a
+# multi-line value through.
+_wenv_class() { # <value>: 0 allowed, 1 outside the allow-list or empty, 2 holds a control character
+  local LC_ALL=C
+  case "${1-}" in
+    '') return 1 ;;
+    *[[:cntrl:]]*) return 2 ;;
+    *[!A-Za-z0-9._:/@%+=,-]*) return 1 ;;
+  esac
+  return 0
+}
+_wenv_refuse() { # <reason> <VARIABLE>
+  printf 'SOLEUR_CREDENTIAL_REFUSED script=%s reason=%s var=%s phase=write-env\n' "$SOLEUR_TRANSPORT_SCRIPT" "$1" "$2" >&2
+  echo "Error: ${2} holds a character this script does not write to .env (allowed: letters, digits and . _ : / @ % + = , -), so nothing was written and your existing .env is unchanged. The value is not shown. If the value is legitimate, add it to .env by hand."
+  exit 1
+}
+# _wenv_validate <VARIABLE>...: every NON-EMPTY named variable passes the allow-list. The required
+# variables are checked non-empty by the caller before this runs; an empty optional one is skipped.
+_wenv_validate() {
+  local _wn _wrc
+  for _wn in "$@"; do
+    [[ -n "${!_wn:-}" ]] || continue
+    _wrc=0
+    _wenv_class "${!_wn}" || _wrc=$?
+    case "$_wrc" in
+      0) ;;
+      2) _wenv_refuse control_char "$_wn" ;;
+      *) _wenv_refuse token_shape "$_wn" ;;
+    esac
+  done
+}
+
+# (#10091) write-env commit: ONE helper, byte-identical in the four setup scripts (a drift row pins
+# it, from this comment line through the closing brace of `_wenv_write`). `_wenv_write <env_file>
+# <remove-ERE> <KEY=VALUE>...` replaces the old remove-then-append, which raced (two writers each read
+# the file, each rewrote it, the later mv lost the earlier's keys), was not atomic (the append hit the
+# live file after the mv) and widened a new file before the chmod.
+# The edit is built in a temp file `<.env>.wenv.XXXXXX` beside the RESOLVED .env (same filesystem, so the
+# final `mv -f` is one atomic rename; a namespace of its own, so the sweep below touches only that
+# namespace (a file there that is not a regular file this user owns is left alone), never the operator
+# library's `.env.tmp.*` temps) under `umask 077` (0600 from birth), serialized by
+# ONE mutual-exclusion mechanism on every platform: an owner-pid `mkdir` lock directory
+# (`<.env>.lock.d`) that is held until AFTER that rename. No flock (a flock run and a mkdir run exclude
+# nothing against each other, flock without a timeout blocks forever, and `exec {fd}<` needs bash 4.1
+# while macOS ships 3.2).
+# Stale-lock recovery is serialized as well, by a second `mkdir` mutex `<.env>.lock.d.recover`. A waiter
+# judges a lock stale when its owner pid is dead (or its owner file stayed empty for _WENV_EMPTY_POLLS
+# passes), then tries to take the mutex; a waiter that loses it keeps waiting. The winner RE-READS the
+# owner of the lock UNDER the mutex (the snapshot it judged on is never trusted; the re-read narrows the
+# window to the few instructions between the read and the removal, it does not close it), removes the lock
+# only if the owner is still a dead pid, or if the snapshot AND the re-read (after a short pause) both found
+# no pid, ALWAYS releases the mutex, and goes round the loop again. A lock whose owner turned from a dead pid
+# into nothing has changed hands and is left alone. A recovering waiter never writes while it recovers,
+# nothing is renamed away and put back, and the lock path is never empty while a live holder exists, so two
+# waiters cannot both hold the lock. A SOLEUR_WENV_LOCK_TICKS below 2 never attempts recovery.
+# The wait is ONE bounded loop. Every failed `mkdir` pass either sleeps one tick (0.1 s; 1 s where
+# `sleep` takes no fraction) or fails at once, and every pass counts against SOLEUR_WENV_LOCK_TICKS
+# (digits only, at most _WENV_TICKS_MAX, else _WENV_TICKS_DEFAULT): about 10 s by default with a
+# fractional `sleep`, about 100 s without one. It FAILS CLOSED: no write, a value-free marker, exit 1,
+# .env untouched. A lock path that exists but is not a directory fails at once (env_lock_not_dir). grep
+# exit 1 (nothing left) is normal; exit 2 (an unreadable .env) aborts, because swallowing it would
+# install an empty file over the credentials. A symlinked .env is resolved first (the real target is
+# rewritten, the link survives); a dangling link or a non-regular target is refused.
+# Signals: this helper owns the EXIT, INT, TERM and HUP traps for its duration and restores nothing (no
+# caller installs one today; a caller that needs its own must chain them). On those four it removes its
+# temp and its recovery mutex and releases the lock, and it removes the lock ONLY when the owner file
+# reads exactly this process. Residual, stated: SIGKILL leaves its lock (recovered by the next run
+# through the dead pid), its temp (swept by the next run, under the lock) and, if it died mid-recovery,
+# `<.env>.lock.d.recover`, which the next runs report after the bounded wait ("remove that directory");
+# a recycled pid can keep a dead owner looking live until the wait times out; the owner check uses
+# `kill -0`, so a lock held by another user reads as dead; a holder stalled between its `mkdir` and its
+# owner write for longer than the empty-owner window can be treated as ownerless and recovered.
+_WENV_TICK=0.1          # seconds per wait tick (a `sleep` without fractions falls back to 1 s)
+_WENV_TICKS_DEFAULT=100 # the default bound: about 10 s
+_WENV_TICKS_MAX=1000    # the largest SOLEUR_WENV_LOCK_TICKS accepted: about 100 s
+_WENV_EMPTY_POLLS=30    # passes an ownerless lock directory is waited on before recovery is tried: about 3 s
+_WENV_EMPTY_PAUSE=0.3   # pause between the two owner reads under the recovery mutex when the owner is not a pid
+_WENV_LOCK="" _WENV_TMP="" _WENV_REC=""
+_wenv_unlock() { # idempotent: remove our temp and recovery mutex; release the lock ONLY if its owner file reads exactly this process
+  local _wo=""
+  if [[ -n "$_WENV_TMP" ]]; then rm -f -- "$_WENV_TMP"; _WENV_TMP=""; fi
+  if [[ -n "$_WENV_REC" ]]; then rmdir -- "$_WENV_REC" 2>/dev/null || true; _WENV_REC=""; fi
+  if [[ -n "$_WENV_LOCK" ]]; then
+    { read -r _wo < "$_WENV_LOCK/owner"; } 2>/dev/null || _wo=""
+    if [[ "$_wo" == "$$" ]]; then rm -rf -- "$_WENV_LOCK"; fi
+    _WENV_LOCK=""
+  fi
+}
+_wenv_fail() { # <reason> <human text>: value-free marker on stderr, one human line on stdout, exit 1
+  printf 'SOLEUR_CREDENTIAL_REFUSED script=%s reason=%s var=ENV_FILE phase=write-env\n' "$SOLEUR_TRANSPORT_SCRIPT" "$1" >&2
+  echo "Error: $2 Nothing was written and your existing .env is unchanged."
+  exit 1
+}
+_wenv_write() {
+  local _wf="$1" _wre="$2" _wr _wl _wm _wd _wi=0 _ws=0 _wt _wown _wo2 _wsnap="" _wstale _wgone _wwhy="" _wn _wrc _wum
+  shift 2
+  if _wr="$(readlink -f -- "$_wf" 2>/dev/null)" && [[ -n "$_wr" ]]; then
+    :
+  elif [[ -L "$_wf" ]]; then
+    _wenv_fail env_unresolvable "The .env link at ${_wf} could not be resolved."
+  else
+    _wr="$_wf"
+  fi
+  if [[ -L "$_wf" && ! -e "$_wr" ]]; then
+    _wenv_fail env_dangling_link "The .env at ${_wf} is a link to a file that does not exist."
+  fi
+  if [[ -e "$_wr" && ! -f "$_wr" ]]; then
+    _wenv_fail env_not_regular "The .env at ${_wf} is not a regular file."
+  fi
+  _wl="${_wr}.lock.d"
+  _wm="${_wl}.recover"
+  _wt="${SOLEUR_WENV_LOCK_TICKS:-$_WENV_TICKS_DEFAULT}"
+  if [[ "$_wt" =~ ^[0-9]{1,4}$ ]] && (( 10#$_wt <= _WENV_TICKS_MAX )); then _wt=$((10#$_wt)); else _wt=$_WENV_TICKS_DEFAULT; fi
+  _wum="$(umask)"
+  umask 077
+  trap '_wenv_unlock' EXIT
+  trap '_wenv_unlock; exit 130' INT
+  trap '_wenv_unlock; exit 143' TERM
+  trap '_wenv_unlock; exit 129' HUP
+  while :; do
+    if mkdir -- "$_wl" 2>/dev/null; then
+      _WENV_LOCK="$_wl"
+      if ! printf '%s\n' "$$" > "$_wl/owner"; then
+        rm -rf -- "$_wl"; _WENV_LOCK=""
+        _wenv_fail env_write_failed "The lock at ${_wl} could not be recorded."
+      fi
+      break
+    fi
+    if [[ -L "$_wl" || -f "$_wl" ]]; then
+      _wenv_fail env_lock_not_dir "The lock path ${_wl} exists but is not a directory; remove it."
+    fi
+    _wi=$((_wi + 1))
+    _wstale=0
+    if [[ ! -d "$_wl" ]]; then
+      # mkdir failed with the path absent: the lock was released in between, or mkdir fails for another
+      # reason (a name too long, no space): a pass that made no progress, so it sleeps below like any other.
+      _ws=0; _wwhy=""
+      _wd="${_wr%/*}"; [[ "$_wd" != "$_wr" ]] || _wd=.
+      [[ -d "$_wd" && -w "$_wd" ]] || _wenv_fail env_dir_unwritable "The directory of ${_wf} does not allow a lock to be created."
+    else
+      _wown=""
+      { read -r _wown < "$_wl/owner"; } 2>/dev/null || _wown=""
+      if [[ "$_wown" =~ ^[0-9]+$ ]]; then
+        _ws=0; _wsnap=pid
+        if [[ "$_wown" == "$$" ]] || ! kill -0 "$_wown" 2>/dev/null; then _wstale=1; _wwhy=stale; else _wwhy=live; fi
+      else
+        _ws=$((_ws + 1)); _wwhy=""; _wsnap=empty
+        if (( _ws > _WENV_EMPTY_POLLS )); then _wstale=1; fi
+      fi
+    fi
+    if (( _wstale == 1 && _wi < _wt )); then
+      if mkdir -- "$_wm" 2>/dev/null; then
+        _WENV_REC="$_wm"
+        _wo2=""
+        { read -r _wo2 < "$_wl/owner"; } 2>/dev/null || _wo2=""
+        if [[ "$_wsnap" == empty && ! "$_wo2" =~ ^[0-9]+$ ]]; then
+          sleep "$_WENV_EMPTY_PAUSE" 2>/dev/null || sleep 1
+          { read -r _wo2 < "$_wl/owner"; } 2>/dev/null || _wo2=""
+        fi
+        _wgone=0
+        if [[ "$_wo2" =~ ^[0-9]+$ ]]; then
+          if [[ "$_wo2" == "$$" ]] || ! kill -0 "$_wo2" 2>/dev/null; then rm -rf -- "$_wl"; _ws=0; _wgone=1; fi
+        elif [[ "$_wsnap" == empty ]]; then
+          rm -rf -- "$_wl"; _ws=0; _wgone=1
+        fi
+        _wenv_unlock
+        if (( _wgone == 1 )); then continue; fi
+      fi
+    fi
+    if (( _wi >= _wt )); then
+      if [[ "$_wwhy" != live && -d "$_wm" ]]; then _wwhy=recover; fi
+      case "$_wwhy" in
+        live) _wenv_fail env_lock_timeout "Another write-env run is still holding the lock at ${_wl}; wait for it to finish and run this again. If no other run is active, remove that directory." ;;
+        recover) _wenv_fail env_lock_timeout "A lock recovery is in progress or was interrupted (${_wm} exists); waited and gave up. If no other run is active, remove that directory." ;;
+        *) _wenv_fail env_lock_timeout "The lock at ${_wl} could not be taken or recovered; waited and gave up. If no other run is active, remove that directory." ;;
+      esac
+    fi
+    sleep "$_WENV_TICK" 2>/dev/null || sleep 1
+  done
+  for _wn in "${_wr}".wenv.??????; do
+    if [[ -f "$_wn" && ! -L "$_wn" && -O "$_wn" ]]; then rm -f -- "$_wn"; fi
+  done
+  _WENV_TMP="$(mktemp "${_wr}.wenv.XXXXXX")" || _wenv_fail env_write_failed "A temp file could not be created beside ${_wf}."
+  if [[ -f "$_wr" ]]; then
+    _wrc=0
+    LC_ALL=C grep -a -v -E "$_wre" "$_wr" > "$_WENV_TMP" || _wrc=$?
+    if (( _wrc > 1 )); then
+      _wenv_fail env_unreadable "The existing .env at ${_wf} could not be read."
+    fi
+  fi
+  printf '%s\n' "$@" >> "$_WENV_TMP" || _wenv_fail env_write_failed "The new values could not be written beside ${_wf}."
+  chmod 600 "$_WENV_TMP" || _wenv_fail env_write_failed "The temp file beside ${_wf} could not be restricted to mode 600."
+  mv -f -- "$_WENV_TMP" "$_wr" || _wenv_fail env_write_failed "The new .env could not be moved into place at ${_wf}."
+  _WENV_TMP=""
+  _wenv_unlock
+  trap - EXIT INT TERM HUP
+  umask "$_wum"
+}
+
+# --- Dependency checks ---
+
+require_openssl() {
+  if ! command -v openssl &>/dev/null; then
+    echo "Error: openssl is required for OAuth 1.0a signing but not found." >&2
+    echo "Install it via your package manager (e.g., apt install openssl)." >&2
+    exit 1
+  fi
+}
+
+require_jq() {
+  if ! command -v jq &>/dev/null; then
+    echo "Error: jq is required but not installed." >&2
+    echo "Install it: https://jqlang.github.io/jq/download/" >&2
+    exit 1
+  fi
+}
+
+# --- Credential validation ---
+
+require_credentials() {
+  local missing=()
+
+  if [[ -z "${X_API_KEY:-}" ]]; then
+    missing+=("X_API_KEY")
+  fi
+  if [[ -z "${X_API_SECRET:-}" ]]; then
+    missing+=("X_API_SECRET")
+  fi
+  if [[ -z "${X_ACCESS_TOKEN:-}" ]]; then
+    missing+=("X_ACCESS_TOKEN")
+  fi
+  if [[ -z "${X_ACCESS_TOKEN_SECRET:-}" ]]; then
+    missing+=("X_ACCESS_TOKEN_SECRET")
+  fi
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    echo "Error: Missing X API credentials: ${missing[*]}" >&2
+    echo "" >&2
+    echo "To configure:" >&2
+    echo "  1. Go to https://developer.x.com/en/portal/dashboard" >&2
+    echo "  2. Create or select a project and app" >&2
+    echo "  3. Generate API Key, API Secret, Access Token, and Access Token Secret" >&2
+    echo "  4. Export them as environment variables, without typing a value into the command (its text is kept in the transcript and the shell history): in a terminal, read -rs X_API_KEY; export X_API_KEY, and the same for each of the other three" >&2
+    exit 1
+  fi
+}
+
+# (#9597) The OAuth 1.0a Authorization header carries the signature and the access
+# token, so it rides curl's stdin config channel (`--config -`), never its argument
+# list (readable by every local user in /proc/<pid>/cmdline). The channel is
+# line-oriented: a CR/LF or other control character in the header would end the
+# `header = "..."` directive and let the following bytes act as a new one, so a header
+# holding one is refused BEFORE it is formatted into the stream. The header's own
+# quotes (`oauth_token="..."`) are legitimate and are escaped by `_cfg_q`. The consumer
+# secret and token secret never reach curl at all: they only key the HMAC in oauth_sign.
+_hdr_ok() { local LC_ALL=C; case "${1:-}" in ''|*[[:cntrl:]]*) return 1 ;; esac; }
+_cfg_q() { local v="${1-}"; v=${v//\\/\\\\}; v=${v//\"/\\\"}; printf '%s' "$v"; }
+
+# --- OAuth 1.0a signing ---
+
+# URL-encode a string per RFC 3986 (RFC 5849 3.6 for OAuth). Byte-wise: under LC_ALL=C each byte
+# is one character, so a multi-byte UTF-8 character encodes as its bytes (%C3%A9), not as a
+# code point (the `printf '%02X' "'é"` form gives E9 in a UTF-8 locale, which is not the encoding).
+urlencode() {
+  local LC_ALL=C
+  local string="$1"
+  local encoded=""
+  local i c o
+  for (( i = 0; i < ${#string}; i++ )); do
+    c="${string:i:1}"
+    case "$c" in
+      [A-Za-z0-9._~-]) encoded+="$c" ;;
+      *)
+        o=$(printf '%02X' "'$c")
+        encoded+="%${o}"
+        ;;
+    esac
+  done
+  echo "$encoded"
+}
+
+# Generate OAuth 1.0a signature for a request
+# Arguments: method url [param_key=param_value ...]
+oauth_sign() {
+  local method="$1"
+  local url="$2"
+  shift 2
+
+  local oauth_nonce
+  oauth_nonce=$(openssl rand -hex 16)
+  local oauth_timestamp
+  oauth_timestamp=$(date +%s)
+
+  # Collect all parameters (OAuth + request params)
+  local -a params=()
+  params+=("oauth_consumer_key=$(urlencode "${X_API_KEY}")")
+  params+=("oauth_nonce=$(urlencode "${oauth_nonce}")")
+  params+=("oauth_signature_method=HMAC-SHA1")
+  params+=("oauth_timestamp=${oauth_timestamp}")
+  params+=("oauth_token=$(urlencode "${X_ACCESS_TOKEN}")")
+  params+=("oauth_version=1.0")
+
+  # Add request parameters
+  local param
+  for param in "$@"; do
+    local key="${param%%=*}"
+    local val="${param#*=}"
+    params+=("$(urlencode "$key")=$(urlencode "$val")")
+  done
+
+  # Sort parameters lexicographically
+  local sorted_params
+  sorted_params=$(printf '%s\n' "${params[@]}" | sort)
+
+  # Build parameter string
+  local param_string=""
+  while IFS= read -r line; do
+    if [[ -n "$param_string" ]]; then
+      param_string+="&"
+    fi
+    param_string+="$line"
+  done <<< "$sorted_params"
+
+  # Build signature base string
+  local base_string="${method}&$(urlencode "$url")&$(urlencode "$param_string")"
+
+  # Build signing key (read BY NAME inside the HMAC function below)
+  # shellcheck disable=SC2034
+  local signing_key="$(urlencode "${X_API_SECRET}")&$(urlencode "${X_ACCESS_TOKEN_SECRET}")"
+
+  # Generate HMAC-SHA1 signature (#9597). The signing key is handed to the function by NAME and
+  # lives only in bash builtins and pipes: it is on no process's argument list. A failed
+  # computation yields no signature and the request is never sent unsigned.
+  local signature
+  signature=$(printf '%s' "$base_string" | hmac_sha1_b64 signing_key) || signature=""
+  if [[ -z "$signature" ]]; then
+    echo "Error: could not compute the OAuth signature; refusing to send an unsigned request." >&2
+    return 1
+  fi
+
+  # Build Authorization header
+  local auth_header="OAuth "
+  auth_header+="oauth_consumer_key=\"$(urlencode "${X_API_KEY}")\", "
+  auth_header+="oauth_nonce=\"$(urlencode "${oauth_nonce}")\", "
+  auth_header+="oauth_signature=\"$(urlencode "$signature")\", "
+  auth_header+="oauth_signature_method=\"HMAC-SHA1\", "
+  auth_header+="oauth_timestamp=\"${oauth_timestamp}\", "
+  auth_header+="oauth_token=\"$(urlencode "${X_ACCESS_TOKEN}")\", "
+  auth_header+="oauth_version=\"1.0\""
+
+  echo "$auth_header"
+}
+
+# --- Commands ---
+
+cmd_validate_credentials() {
+  require_credentials
+
+  local url="${X_API}/2/users/me"
+  local auth_header
+  auth_header=$(oauth_sign "GET" "$url")
+
+  local response http_code body
+  # Suppress stderr to prevent credential leakage
+  if ! _hdr_ok "$auth_header"; then
+    echo "Error: the OAuth Authorization header has an unexpected shape; refusing to send it." >&2
+    exit 1
+  fi
+  local __curl_rc=0
+  # The signed header rides curl's stdin config channel, never its argument list.
+  response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" --config - \
+    "${url}" 2>/dev/null \
+    < <(printf 'header = "Authorization: %s"\n' "$(_cfg_q "$auth_header")")) || __curl_rc=$?
+  if (( __curl_rc != 0 )); then
+    report_transport_failure "$__curl_rc" "Failed to connect to X API."
+    exit 1
+  fi
+
+  http_code=$(echo "$response" | tail -1)
+  body=$(echo "$response" | sed '$d')
+
+  case "$http_code" in
+    2[0-9][0-9])
+      local user_id username name
+      user_id=$(echo "$body" | jq -r '.data.id // empty')
+      username=$(echo "$body" | jq -r '.data.username // empty')
+      name=$(echo "$body" | jq -r '.data.name // empty')
+
+      if [[ -z "$user_id" ]]; then
+        echo "Error: Could not extract user info from X API response." >&2
+        echo "Response: ${body}" >&2
+        exit 1
+      fi
+
+      # Output user info as JSON on stdout
+      echo "$body" | jq '.data'
+      echo "Credentials valid. Account: @${username} (${name})" >&2
+      ;;
+    401)
+      echo "Error: X API returned 401 Unauthorized." >&2
+      echo "Your credentials may be expired or invalid." >&2
+      echo "" >&2
+      echo "To fix:" >&2
+      echo "  1. Go to https://developer.x.com/en/portal/dashboard" >&2
+      echo "  2. Regenerate your Access Token and Secret" >&2
+      echo "  3. Update environment variables" >&2
+      exit 1
+      ;;
+    403)
+      echo "Error: X API returned 403 Forbidden." >&2
+      echo "Your app may lack the required permissions or your account may be suspended." >&2
+      exit 1
+      ;;
+    429)
+      echo "Error: X API rate limit exceeded." >&2
+      echo "Wait and try again later." >&2
+      exit 1
+      ;;
+    *)
+      local message
+      message=$(echo "$body" | jq -r '.detail // .title // "Unknown error"' 2>/dev/null || echo "Unknown error")
+      echo "Error: X API returned HTTP ${http_code}: ${message}" >&2
+      exit 1
+      ;;
+  esac
+}
+
+cmd_write_env() {
+  # write-env has no stdout payload, so its missing-credentials diagnostic goes to STDOUT too
+  # (require_credentials writes it to stderr, shared with the other commands; exit 1 either way).
+  require_credentials 2>&1
+  # Every value is checked BEFORE the first write (see the allow-list above).
+  _wenv_validate X_API_KEY X_API_SECRET X_ACCESS_TOKEN X_ACCESS_TOKEN_SECRET
+
+  local repo_root="$GIT_ROOT"
+  local env_file="${repo_root}/.env"
+
+  # One atomic, serialized, mode-600-from-birth write (see _wenv_write above).
+  _wenv_write "$env_file" '^(X_API_KEY|X_API_SECRET|X_ACCESS_TOKEN|X_ACCESS_TOKEN_SECRET)=' \
+    "X_API_KEY=${X_API_KEY}" \
+    "X_API_SECRET=${X_API_SECRET}" \
+    "X_ACCESS_TOKEN=${X_ACCESS_TOKEN}" \
+    "X_ACCESS_TOKEN_SECRET=${X_ACCESS_TOKEN_SECRET}"
+
+  echo "Wrote 4 variables to ${env_file} (permissions: 600)"
+}
+
+cmd_verify() {
+  # Verify .env configuration by running validate-credentials
+  local repo_root="$GIT_ROOT"
+  local env_file="${repo_root}/.env"
+
+  if [[ ! -f "$env_file" ]]; then
+    echo "Error: .env file not found at ${env_file}" >&2
+    exit 1
+  fi
+
+  # shellcheck disable=SC1090
+  set -a
+  # The API base above is `readonly` (#7898 review), so if this .env tries to
+  # rebind it `source` returns non-zero. Do NOT let `set -e` abort here: that
+  # would be a silent death on the credential-loading path. Capture the status,
+  # report it, and continue -- the credentials in the same file still load, and
+  # the pinned destination keeps its legitimate value.
+  _env_rc=0
+  source "$env_file" || _env_rc=$?
+  set +a
+  if (( _env_rc != 0 )); then
+    printf 'Note: at least one assignment in %s was refused. A pinned request destination cannot be overridden from .env -- your credentials loaded normally and the request still goes to the real API.\n' "$env_file"
+    emit_transport_diag "none" "env-rebind-refused"
+  fi
+
+  local missing=()
+  [[ -z "${X_API_KEY:-}" ]] && missing+=("X_API_KEY")
+  [[ -z "${X_API_SECRET:-}" ]] && missing+=("X_API_SECRET")
+  [[ -z "${X_ACCESS_TOKEN:-}" ]] && missing+=("X_ACCESS_TOKEN")
+  [[ -z "${X_ACCESS_TOKEN_SECRET:-}" ]] && missing+=("X_ACCESS_TOKEN_SECRET")
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    echo "Error: .env is missing: ${missing[*]}" >&2
+    exit 1
+  fi
+
+  # Validate via API
+  cmd_validate_credentials
+}
+
+# --- Main ---
+
+main() {
+  local command="${1:-}"
+  shift || true
+
+  if [[ -z "$command" ]]; then
+    echo "Usage: x-setup.sh <command>" >&2
+    echo "" >&2
+    echo "Commands:" >&2
+    echo "  validate-credentials  - Verify credentials via GET /2/users/me" >&2
+    echo "  write-env             - Write credentials to .env with chmod 600" >&2
+    echo "  verify                - Source .env and run round-trip check" >&2
+    exit 1
+  fi
+
+  require_jq
+  require_openssl
+
+  case "$command" in
+    validate-credentials) cmd_validate_credentials ;;
+    write-env)            cmd_write_env ;;
+    verify)               cmd_verify ;;
+    *)
+      echo "Error: Unknown command '${command}'" >&2
+      echo "Run 'x-setup.sh' without arguments for usage." >&2
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

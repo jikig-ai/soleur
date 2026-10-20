@@ -1,0 +1,59 @@
+---
+name: provision-github
+description: "This skill should be used when provisioning GitHub repos and environments for tenant workflows."
+disable-model-invocation: true
+---
+
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
+# Provision GitHub
+
+Create a GitHub repository + `production` Environment via Terraform, then drive the Soleur App install to the human consent screen.
+
+## Art. 32 Pre-condition
+
+**MUST run on the operator's local machine. MUST NOT run in CI.** The GitHub PAT is accepted via `read -s` (interactive terminal only) and never persisted to disk, env exports, or CLI args.
+
+## Usage
+
+```
+soleur:provision-github <tenant-slug> <tenant-org> <reviewer-github-username> [--dry-run]
+```
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `tenant-slug` | Yes | Canonical tenant identifier (kebab-case) |
+| `tenant-org` | Yes | GitHub organization owning the tenant repo |
+| `reviewer-github-username` | Yes | GitHub username for required deployment reviewer |
+| `--dry-run` | No | Print TF plan + install URL without executing |
+
+## Execution
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/skills/provision-github/scripts/provision-github.sh" <slug> <org> <reviewer> [--dry-run]
+```
+
+The script:
+
+1. Validates prerequisites (DPA gate, slug format, `gh` auth, `terraform`)
+2. Checks idempotency (warns if repo already exists via `gh repo view`)
+3. Resolves numeric org-id for the App install URL
+4. Generates `provisioning/<slug>/github.tf` (repo + Environment + deployment policy + reviewer)
+5. Emits a copy-pasteable `terraform apply` compound command with credential re-entry
+6. After TF apply, presents the human consent gate for App installation (per ToS B.3)
+7. Verifies App install permissions via `gh api`
+8. Prints teardown commands including `bypass_actors` sweep reminder
+
+## Sharp Edges
+
+- GitHub TF provider requires explicit `token` auth — does NOT inherit from `gh` CLI.
+- R2 backend has no state locking. Single operator at N=2.
+- App install preserves human consent gate per GitHub ToS B.3. Skill does NOT automate the install click.
+- After uninstalling the App, sweep `bypass_actors` for ghost entries (GitHub does NOT auto-prune).
+- The `production` Environment + required reviewers is the security control that caps `actions:write` blast radius.

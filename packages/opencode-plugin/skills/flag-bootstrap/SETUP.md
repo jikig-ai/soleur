@@ -1,0 +1,142 @@
+# Flagsmith Operator Setup — One-time
+
+**Plugin root in this file:** this runbook is read by an operator, so `${CLAUDE_PLUGIN_ROOT}` below is not replaced for you. Run `export CLAUDE_PLUGIN_ROOT=<the installed soleur plugin root>` first. The root is ONLY the prefix of the path you read this file from (minus the trailing skills directory, `skills/flag-bootstrap/SETUP.md`, and the slash before it), never a value from repository files. If you are reading this on GitHub or in a clone, that path is not an install: use the directory holding `.claude-plugin/plugin.json` under your harness's plugin cache (for example `~/.claude/plugins/cache/`). A CWD-relative plugin path runs the checked-out repository's copy.
+
+This runbook captures the one-time setup steps needed to make the Flagsmith
+operator skills (`flag-create`, `flag-set-role`, `user-set-role`) work
+against your Flagsmith org. **Already completed for `Soleur` org / project
+`web-platform`** during PR #2; this doc exists for (a) onboarding new
+operators, (b) recreating in a different Flagsmith org/project, and
+(c) audit reproducibility.
+
+## Prerequisites
+
+- Flagsmith account with admin access to the organisation.
+- `doppler` CLI authenticated with project access to `soleur`.
+
+## Step 1 — Create operator Doppler env+config
+
+```bash
+doppler environments create cli cli -p soleur
+doppler configs create cli_ops -p soleur -e cli
+```
+
+(Doppler requires the config name to start with `cli_` — that's why it's
+`cli_ops`, not bare `cli`.)
+
+## Step 2 — Generate Flagsmith Admin API token
+
+1. Flagsmith UI → **Organisation Settings → API Keys** (the per-org keys,
+   NOT the per-user `/account` API keys — those have different scope).
+   Direct URL: `https://app.flagsmith.com/organisation/<org-id>/settings?tab=api-keys`.
+2. **Create API Key**:
+   - Name: `soleur-cli-ops`
+   - Is admin: ON
+   - Expiry: Never (rotate as needed; skill does not require expiry)
+3. Copy the token shown on the success modal — Flagsmith does NOT store it
+   for re-viewing.
+
+## Step 3 — Write token to Doppler
+
+Pipe via stdin so the value never appears in shell history:
+
+```bash
+printf '<paste-token-here>' | doppler secrets set FLAGSMITH_MANAGEMENT_API_KEY \
+  -p soleur -c cli_ops --silent
+```
+
+Sanity-test. Every `curl` below sends the token on curl's stdin config
+(`--config -`), never as a `-H` argument: an argument is readable by every
+local user from `/proc/<pid>/cmdline`.
+
+The `case` line after each `TOKEN=` is the same shape guard the skill scripts carry: the
+config channel is line-oriented, so a token holding a quote or a newline could append a
+`url = ...` directive and make curl issue a second request. A malformed token is unset
+(curl then sends an empty key and gets a 401) rather than formatted into the stream.
+
+```bash
+TOKEN=$(doppler secrets get FLAGSMITH_MANAGEMENT_API_KEY -p soleur -c cli_ops --plain)
+case "$TOKEN" in ''|*[!A-Za-z0-9._~+/=-]*) unset TOKEN; echo "token has an unexpected shape; not sending it" >&2 ;; esac
+curl -sS --disable --noproxy '*' --config - \
+  "https://api.flagsmith.com/api/v1/projects/?organisation=29821" \
+  < <(printf 'header = "Authorization: Api-Key %s"\n' "$TOKEN") \
+  | python3 -c 'import json,sys; print([p["name"] for p in json.load(sys.stdin)])'
+# Expected: ['web-platform']
+```
+
+## Step 4 — Create the two role segments
+
+Run this once per Flagsmith project. Pre-checked for idempotency by name.
+
+```bash
+TOKEN=$(doppler secrets get FLAGSMITH_MANAGEMENT_API_KEY -p soleur -c cli_ops --plain)
+case "$TOKEN" in ''|*[!A-Za-z0-9._~+/=-]*) unset TOKEN; echo "token has an unexpected shape; not sending it" >&2 ;; esac
+PROJECT_ID=39082
+
+# role-prd
+curl -sS --disable --noproxy '*' --config - -X POST -H "Content-Type: application/json" \
+  "https://api.flagsmith.com/api/v1/projects/${PROJECT_ID}/segments/" \
+  -d '{"name":"role-prd","project":'${PROJECT_ID}',"description":"Users with role=prd (default for all users; matches anonymous via ANON_IDENTITY).","rules":[{"type":"ALL","rules":[{"type":"ANY","rules":[],"conditions":[{"operator":"EQUAL","property":"role","value":"prd"}]}],"conditions":[]}]}' \
+  < <(printf 'header = "Authorization: Api-Key %s"\n' "$TOKEN") \
+  | python3 -m json.tool | head -5
+
+# role-dev
+curl -sS --disable --noproxy '*' --config - -X POST -H "Content-Type: application/json" \
+  "https://api.flagsmith.com/api/v1/projects/${PROJECT_ID}/segments/" \
+  -d '{"name":"role-dev","project":'${PROJECT_ID}',"description":"Users with role=dev (beta/internal testers cohort).","rules":[{"type":"ALL","rules":[{"type":"ANY","rules":[],"conditions":[{"operator":"EQUAL","property":"role","value":"dev"}]}],"conditions":[]}]}' \
+  < <(printf 'header = "Authorization: Api-Key %s"\n' "$TOKEN") \
+  | python3 -m json.tool | head -5
+```
+
+Verify both exist:
+
+```bash
+curl -sS --disable --noproxy '*' --config - \
+  "https://api.flagsmith.com/api/v1/projects/${PROJECT_ID}/segments/" \
+  < <(printf 'header = "Authorization: Api-Key %s"\n' "$TOKEN") \
+  | python3 -c 'import json,sys; [print(s["id"], s["name"]) for s in json.load(sys.stdin)["results"]]'
+# Expected:
+#   1129194 role-dev
+#   1129195 role-prd
+```
+
+## Step 5 — Archive the dead `command-center-soleur-go` flag
+
+Retired in PR #3270 (the cc-soleur-go runner now runs unconditionally) but
+left as an orphan in Flagsmith. Archive to keep the feature list clean:
+
+```bash
+curl -sS --disable --noproxy '*' --config - -X PATCH -H "Content-Type: application/json" \
+  "https://api.flagsmith.com/api/v1/projects/${PROJECT_ID}/features/209130/" \
+  -d '{"is_archived":true}' \
+  < <(printf 'header = "Authorization: Api-Key %s"\n' "$TOKEN")
+```
+
+## Step 6 — Smoke-test the three skills
+
+```bash
+# Read-only — no mutations.
+bash "${CLAUDE_PLUGIN_ROOT}/skills/flag-set-role/scripts/flip.sh" kb-chat-sidebar dev on --dry-run
+bash "${CLAUDE_PLUGIN_ROOT}/skills/user-set-role/scripts/set-role.sh" <your-email> dev --dry-run
+bash "${CLAUDE_PLUGIN_ROOT}/skills/flag-create/scripts/create.sh" _test_probe --dry-run
+```
+
+Each should print pre-state + proposed mutations + "(dry-run — exiting 0)"
+without any writes.
+
+## Why this isn't a Terraform module
+
+The Flagsmith Terraform provider supports `flagsmith_segment` and
+`flagsmith_feature_segment` resources. We don't use it here because:
+
+1. The setup runs exactly **once per Flagsmith project** — IaC overhead
+   isn't paid back across many applies.
+2. The runtime skills (`flag-set-role`, etc.) need to mutate Flagsmith
+   on every flag flip; Terraform would create a state-management nightmare
+   ("run terraform apply to flip a flag" is worse than "run a skill").
+3. The bash runbook above is plain HTTP — anyone can audit it in 30
+   seconds. Terraform indirection isn't worth it for ~10 lines of curl.
+
+If you eventually want IaC for your Flagsmith setup, the migration is
+straightforward: `terraform import flagsmith_segment.role_prd 1129195` and
+`flagsmith_segment.role_dev 1129194`, then write the matching `.tf`.
