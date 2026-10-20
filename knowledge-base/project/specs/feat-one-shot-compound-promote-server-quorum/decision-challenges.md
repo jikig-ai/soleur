@@ -22,3 +22,19 @@ Rows classed `technical` carry the CTO ruling; no row below is waiting on the op
 | Count only quorum-passing proposals in the headroom divisor, and slice after normalisation to stop slot crowding (spec-flow seat tagged the second a user-challenge against F6) | taste | Not adopted. CTO F6 already ruled crowding is documented not fixed; the operator's brief states no direction on slots, so there is no stated direction to challenge. The headroom-divisor consequence is recorded in the ADR-092 Amendment. The mechanical part is adopted: the phase-1 prompt tells the model to return exact corpus key paths, at least the quorum distinct. |
 | Raw pre-normalisation list length as a second numeric Sentry extra (observability seat) | taste | Adopted as a mechanical extension of CTO F5: `proposed_count` is a bare integer in `extra` beside `source_count`, internal to `ProposedCluster` and `EditRefusal`, and never reaches the marker, so the two integers separate the model proposing too few from normalisation dropping paths. |
 | Closing the deferral line "Server-side quorum of 5 source learnings: unchanged (pre-existing)" in the archived decision record of #10552 | taste | Honoured as the brief directs: that archived record is left untouched (point-in-time); closure is recorded in this feature's plan, the ADR-092 Amendment and the PR body. Issues 10552 and 8443 are neither edited nor closed. |
+
+## Implementation notes (work and review rounds)
+
+The rulings above stand; two implementation details they describe were refined after the first review
+panel (commit `0e640621cd`), and the rows are left as the point-in-time record:
+
+- F1/F5 say the reason widens `EditRefusal` and the count is an optional `sourceCount` "internal to
+  `EditRefusal`". The code instead has `QuorumRefusal` as its own union member with a required
+  `sourceCount`; `EditRefusal` kept its original shape.
+- The `proposed_count` row says it is internal to `ProposedCluster` and `EditRefusal`. The route through
+  the drafter and the refusal was cut: the handler reads `proposed.raw_source_count` directly when it
+  builds the Sentry `extra`.
+- Review also left two pre-existing, out-of-scope observations unfiled (wontfix, no change in
+  exposure from this PR): `computeClusterHash` covers only the sorted source list, so two clusters with
+  identical sources but different targets share a hash (the quorum neither causes nor worsens it), and a
+  sub-quorum cluster on an already-drafted target is reported `edit-target-duplicate` (ruled in F4).

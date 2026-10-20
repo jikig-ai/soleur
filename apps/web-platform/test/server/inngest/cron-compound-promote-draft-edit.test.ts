@@ -643,6 +643,25 @@ describe("draftAdditiveEdit -- the model call", () => {
       }
     });
 
+    it("Q1b: the refusal is unconditional -- empty rationale, every target class and runId set or unset all refuse", async () => {
+      // A gate skipped for a SUBSET of clusters (an extra `&&` operand) passes every row that
+      // varies nothing but the source count; vary the other inputs the cluster and call carry.
+      const sub = quorumSources.slice(0, PROMOTION_QUORUM - 1);
+      for (const target of [AGENTS, SKILL_ALPHA, SKILL_HYPHEN, SKILL_LINK, "not/allowlisted.md"]) {
+        for (const rationale of ["", "r", "x".repeat(5000)]) {
+          for (const runId of ["RUN-1", undefined]) {
+            const post = answer(good);
+            const r = await draftAdditiveEdit(
+              args(post, { runId, cluster: { target_path: target, rationale, source_learnings: sub } }),
+            );
+            const label = `${target} / ${rationale.length} / ${String(runId)}`;
+            expect(r, label).toEqual({ ok: false, reason: "quorum-not-met", cause: "below-quorum", sourceCount: sub.length });
+            expect(post, label).not.toHaveBeenCalled();
+          }
+        }
+      }
+    });
+
     it("Q2: exactly the quorum proceeds to the model call and derives an applying diff", async () => {
       const post = answer(good);
       const r = await draftAdditiveEdit(args(post));

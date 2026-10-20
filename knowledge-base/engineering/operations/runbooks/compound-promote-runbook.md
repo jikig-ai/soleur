@@ -155,8 +155,9 @@ What a streak means when you read the weekly marker:
   distinct corpus-resolved count and `extra.proposed_count` is the model's raw list length, so
   `proposed_count` well above `source_count` means unknown or duplicate paths (a prompt or corpus-key
   problem), and both low means the model really proposed a thin cluster. The same two integers are on the
-  pino `draft-edit-refused` row in Better Stack (`scripts/betterstack-query.sh --grep draft-edit-refused`,
-  see `betterstack-log-query.md`). A recurring `cluster_hash` with `source_count` 0 is the hash of an EMPTY
+  mirrored error row in Better Stack (`scripts/betterstack-query.sh --grep draft-edit-refused` matches it
+  and the `hash`-keyed warn line; only the error row, key `cluster_hash`, carries the counts; see
+  `betterstack-log-query.md`). A recurring `cluster_hash` with `source_count` 0 is the hash of an EMPTY
   list (a constant), not one cluster recurring.
 - **A red `lint-rule-ids` on an `AGENTS.rules.md` draft is expected, not a defect.** The cron edits one
   file; the corpus lint requires an `AGENTS.md` pointer line for every rule body. The draft PR body names

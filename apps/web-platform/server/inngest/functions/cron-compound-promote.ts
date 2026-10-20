@@ -655,7 +655,7 @@ interface ProposedCluster {
    * marker), so one event separates "the model proposed too few" from "normalisation dropped
    * unknown or duplicate paths".
    */
-  raw_source_count?: number;
+  raw_source_count: number;
 }
 
 /** A proposal plus the diff the SERVER derived for it; the only shape the apply step reads. */
@@ -1847,7 +1847,7 @@ export async function cronCompoundPromoteHandler({
               ...(result.reason === "quorum-not-met"
                 ? {
                     source_count: result.sourceCount,
-                    ...(proposed.raw_source_count === undefined ? {} : { proposed_count: proposed.raw_source_count }),
+                    proposed_count: proposed.raw_source_count,
                   }
                 : {}),
             },

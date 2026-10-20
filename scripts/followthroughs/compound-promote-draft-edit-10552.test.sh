@@ -24,7 +24,7 @@
 # the query helper's argv (the --since window and both --limit values), freeze the
 # probe's clock with a PATH-shimmed `date` for the 35-day boundary pair, and prove
 # nothing raw from the query helper's stderr reaches the output. Mutation rows M-5 ..
-# M-13 prove each of those guards is load-bearing. Rows P-4b / P-4c and M-14 / M-15 pin the
+# M-13 prove each of those guards is load-bearing. Rows P-4b / P-4c / P-4d and M-14 .. M-16 pin the
 # server-enforced quorum refusal `quorum-not-met` as class N (never PASS, never FAIL; P-4d
 # pins that it also never hides a class-F defect beside it).
 #
@@ -656,6 +656,13 @@ h_quorum() {
   rc=$(run_probe "$d")
   [[ "$rc" == 2 ]] && grep -q -- "quorum-not-met" "$d/err"
 }
+# A class-F defect beside a quorum refusal must still be exit 1 (the sub-quorum refusal never shields it).
+h_quorum_f() {
+  local d rc
+  d=$(make_sandbox "$(fx "$C" "$(mk_row "$(marker cron completed 0 '["quorum-not-met","git-apply-check-failed"]')" "$D1")")" "$1")
+  rc=$(run_probe "$d")
+  [[ "$rc" == 1 ]]
+}
 
 mut_row() { # mut_row <id> <description> <old> <new> <healthy-predicate>
   local id="$1" desc="$2" m
@@ -690,11 +697,14 @@ mut_row M-14 "quorum-not-met dropped from the N set -> it is bucketed unknown an
   ',"quorum-not-met"];' '];' h_quorum
 mut_row M-15 "quorum-not-met added to the P set -> a quorum-only window becomes a false PASS" \
   'def pset: ["byte-budget-overflow"];' 'def pset: ["byte-budget-overflow","quorum-not-met"];' h_quorum
+mut_row M-16 "a quorum refusal shields a class-F defect beside it -> the defect window stops being exit 1" \
+  'elif ($rs | any(isF)) then "F" else "N" end)' \
+  'elif ($rs | any(isF) and ($rs | index("quorum-not-met") | not)) then "F" else "N" end)' h_quorum_f
 }
 
 
 # --- verdict: floor + conservation reported DIRECTLY, never via pass()/fail() --
-MIN_CASES=184
+MIN_CASES=186
 total=$((passes + fails))
 if (( total < MIN_CASES )); then
   printf 'FATAL: only %d case(s) ran; floor is %d - the suite asserted nothing\n' "$total" "$MIN_CASES" >&2

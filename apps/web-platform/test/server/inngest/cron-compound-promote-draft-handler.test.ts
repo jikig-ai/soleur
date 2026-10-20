@@ -333,7 +333,7 @@ describe("model-supplied source_learnings never reach the commit trailers or PR 
       null,
       expect.objectContaining({
         op: "draft-edit-refused",
-        extra: expect.objectContaining({ source_count: 0, proposed_count: 2 }),
+        extra: { cluster_hash: expect.any(String), source_count: 0, proposed_count: 2 },
       }),
     );
   });

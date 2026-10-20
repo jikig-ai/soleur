@@ -51,4 +51,4 @@ fixed vocabulary of seven.
    returns the refusal and ends before the first `readEditTarget(`/`post(` in its function.
 6. **Do not thread a diagnostic through a function that never uses it.** A raw list length rode
    ProposedCluster -> drafter parameter -> refusal field -> handler just to reach one Sentry field; the handler already
-   held the proposal, so the route was cut and the three-name drift (raw/proposed/proposedCount) went with it.
+   held the proposal, so the route was cut and the `proposedCount` copy of the name went with it.

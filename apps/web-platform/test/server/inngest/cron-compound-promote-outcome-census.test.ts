@@ -830,12 +830,16 @@ export function censusQuorum(src: string): {
   trailerQuorumSpans: number;
   trailerHasNumericDenominator: boolean;
   comparisons: number;
-  /** The comparison's `if` returns the quorum refusal (not an empty or unrelated body). */
+  /** The comparison IS the `if` condition (no `&&`/`||`) and the `if` is a top-level statement of `draftAdditiveEdit`. */
+  gateIsPlain: boolean;
+  /** The gate's body directly returns `{ ok: false, reason: "quorum-not-met", sourceCount }`. */
   gateReturnsRefusal: boolean;
-  /** The comparison's `if` ends before every `readEditTarget(` and `post(` call in its function. */
+  /** Only pure in-memory calls precede the gate in its function, and >= 2 readEditTarget(/post( calls follow it. */
   gateBeforeIo: boolean;
   /** The quorum span in the phase-1 prompt follows a `>=` (the sense of the threshold). */
   promptSenseOk: boolean;
+  /** The prompt's second line reads "<quorum> or more distinct" from the constant. */
+  promptOrMoreOk: boolean;
   emits: number;
 } {
   const sf = ts.createSourceFile("t.ts", src, ts.ScriptTarget.Latest, true);
@@ -847,9 +851,12 @@ export function censusQuorum(src: string): {
   let trailerHasNumericDenominator = false;
   let trailerSeen = 0;
   let comparisons = 0;
+  let gateIsPlain = false;
   let gateReturnsRefusal = false;
   let gateBeforeIo = false;
   let promptSenseOk = false;
+  let promptOrMoreOk = false;
+  let shadows = 0;
   let emits = 0;
   const isQuorum = (e: ts.Node): boolean => ts.isIdentifier(e) && e.text === "PROMOTION_QUORUM";
   const pieces = (t: ts.TemplateExpression): string[] => [t.head.text, ...t.templateSpans.map((s) => s.literal.text)];
@@ -857,7 +864,14 @@ export function censusQuorum(src: string): {
     if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === "PROMOTION_QUORUM") {
       decls.push(n.initializer && ts.isNumericLiteral(n.initializer) ? Number(n.initializer.text) : Number.NaN);
     }
+    // A parameter or destructured binding of the same name would shadow the constant inside the gate.
+    if ((ts.isParameter(n) || ts.isBindingElement(n)) && ts.isIdentifier(n.name) && n.name.text === "PROMOTION_QUORUM") {
+      shadows++;
+    }
     if (ts.isTemplateExpression(n)) {
+      for (const span of n.templateSpans) {
+        if (isQuorum(span.expression) && span.literal.text.startsWith(" or more distinct")) promptOrMoreOk = true;
+      }
       if (n.head.text.includes("clustering agent")) {
         promptSeen++;
         promptQuorumSpans += n.templateSpans.filter((s) => isQuorum(s.expression)).length;
@@ -885,33 +899,53 @@ export function censusQuorum(src: string): {
           isQuorum(n.left)))
     ) {
       comparisons++;
-      // The gate's `if`: it must return the refusal, and it must end before the first read or
-      // model call in the same function (so it cannot be moved below them, or emptied).
+      // The gate must be (1) an `if` whose condition IS the comparison (no `&&`/`||` that could
+      // skip it for a subset of clusters), (2) a TOP-LEVEL statement of `draftAdditiveEdit`
+      // (not nested under another condition, not in a helper or a never-called closure),
+      // (3) returning the refusal as a direct statement of its body, with `ok: false`, the
+      // reason literal and `sourceCount`, and (4) preceded in that function only by pure
+      // statements: every call before it must be on an allowlist of in-memory helpers, so a
+      // new read or model call placed above it (under any spelling) turns this RED. At least
+      // two `readEditTarget(`/`post(` calls must follow it, so renaming the I/O cannot make
+      // the "before" scan vacuous.
+      const unparen = (e: ts.Expression): ts.Expression => (ts.isParenthesizedExpression(e) ? unparen(e.expression) : e);
       let gate: ts.Node | undefined = n;
       while (gate && !ts.isIfStatement(gate)) gate = gate.parent;
       let fn: ts.Node | undefined = n;
       while (fn && !ts.isFunctionDeclaration(fn) && !ts.isFunctionExpression(fn) && !ts.isArrowFunction(fn)) fn = fn.parent;
-      if (gate && ts.isIfStatement(gate) && fn) {
-        const gateEnd = gate.getEnd();
-        let returnsRefusal = false;
-        const scanThen = (m: ts.Node): void => {
-          if (ts.isReturnStatement(m) && m.expression && /["']quorum-not-met["']/.test(m.expression.getText(sf))) {
-            returnsRefusal = true;
+      if (gate && ts.isIfStatement(gate) && fn && ts.isFunctionDeclaration(fn) && fn.body) {
+        const conditionIsComparison = unparen(gate.expression) === n;
+        const inDrafter = fn.name?.text === "draftAdditiveEdit" && gate.parent === fn.body;
+        gateIsPlain = conditionIsComparison && inDrafter;
+        const then = gate.thenStatement;
+        const thenStmts = ts.isBlock(then) ? [...then.statements] : [then];
+        gateReturnsRefusal = thenStmts.some((st) => {
+          if (!ts.isReturnStatement(st) || !st.expression || !ts.isObjectLiteralExpression(st.expression)) return false;
+          const props = new Map<string, string>();
+          for (const p of st.expression.properties) {
+            if (ts.isPropertyAssignment(p) && ts.isIdentifier(p.name)) props.set(p.name.text, p.initializer.getText(sf));
           }
-          m.forEachChild(scanThen);
-        };
-        scanThen(gate.thenStatement);
-        gateReturnsRefusal = returnsRefusal;
-        let before = true;
-        const scanIo = (m: ts.Node): void => {
+          return (
+            props.get("ok") === "false" && /^["']quorum-not-met["']$/.test(props.get("reason") ?? "") && props.has("sourceCount")
+          );
+        });
+        const PURE_CALLS = new Set(["corpusSummaries.get", "sources.some", "sources.push"]);
+        const gateIdx = fn.body.statements.indexOf(gate);
+        let pure = gateIdx >= 0;
+        let ioAfter = 0;
+        const scanCalls = (m: ts.Node, before: boolean): void => {
           if (ts.isCallExpression(m)) {
             const callee = m.expression.getText(sf);
-            if ((callee === "readEditTarget" || callee === "post") && m.getStart(sf) < gateEnd) before = false;
+            if (before && !PURE_CALLS.has(callee)) pure = false;
+            if (!before && (callee === "readEditTarget" || callee === "post")) ioAfter++;
           }
-          m.forEachChild(scanIo);
+          m.forEachChild((c) => scanCalls(c, before));
         };
-        scanIo(fn);
-        gateBeforeIo = before;
+        fn.body.statements.forEach((st, i) => {
+          if (i < gateIdx) scanCalls(st, true);
+          else if (i > gateIdx) scanCalls(st, false);
+        });
+        gateBeforeIo = pure && ioAfter >= 2;
       }
     }
     if (
@@ -928,6 +962,7 @@ export function censusQuorum(src: string): {
   visit(sf);
   if (decls.length !== 1) throw new Error(`expected exactly 1 PROMOTION_QUORUM declaration, found ${decls.length}`);
   if (Number.isNaN(decls[0])) throw new Error("PROMOTION_QUORUM must be initialised with a numeric literal");
+  if (shadows > 0) throw new Error(`PROMOTION_QUORUM is shadowed by ${shadows} parameter/binding name(s)`);
   if (promptSeen !== 1) throw new Error(`expected exactly 1 phase-1 prompt template, found ${promptSeen}`);
   if (trailerSeen !== 1) throw new Error(`expected exactly 1 Threshold-Hit template, found ${trailerSeen}`);
   return {
@@ -937,9 +972,11 @@ export function censusQuorum(src: string): {
     trailerQuorumSpans,
     trailerHasNumericDenominator,
     comparisons,
+    gateIsPlain,
     gateReturnsRefusal,
     gateBeforeIo,
     promptSenseOk,
+    promptOrMoreOk,
     emits,
   };
 }
@@ -959,11 +996,14 @@ describe("Guard 1d -- PROMOTION_QUORUM is the single source of the quorum", () =
     expect(c.trailerHasNumericDenominator).toBe(false);
     expect(c.comparisons).toBe(1);
     expect(c.emits).toBe(1);
-    // The wire, not only the endpoints: the comparison's `if` returns the refusal, it ends
-    // before the first readEditTarget(/post( call in its function, and the prompt says `>=` Q.
+    // The wire, not only the endpoints: the comparison IS the `if` condition of a top-level
+    // statement of draftAdditiveEdit, that `if` directly returns the refusal, only pure
+    // in-memory calls precede it, and the prompt says `>=` Q and "Q or more distinct".
+    expect(c.gateIsPlain).toBe(true);
     expect(c.gateReturnsRefusal).toBe(true);
     expect(c.gateBeforeIo).toBe(true);
     expect(c.promptSenseOk).toBe(true);
+    expect(c.promptOrMoreOk).toBe(true);
   });
 
   it("quorum-not-met is NOT an edit-* member: EDIT_REFUSAL_REASONS stays at seven", () => {
@@ -1010,6 +1050,38 @@ describe("Guard 1d -- PROMOTION_QUORUM is the single source of the quorum", () =
     expect(c.gateBeforeIo).toBe(false);
   });
 
+  it("mutation: a gate that skips a subset of clusters (extra && operand) is RED", () => {
+    const c = censusQuorum(
+      mutate("sources.length < PROMOTION_QUORUM", "sources.length < PROMOTION_QUORUM && cluster.rationale.length > 0"),
+    );
+    expect(c.comparisons).toBe(1);
+    expect(c.gateIsPlain).toBe(false);
+  });
+
+  it("mutation: the gate nested under another condition is RED", () => {
+    const c = censusQuorum(
+      mutate(
+        "  if (sources.length < PROMOTION_QUORUM) {",
+        "  if (cluster.rationale.length > 0) if (sources.length < PROMOTION_QUORUM) {",
+      ),
+    );
+    expect(c.gateIsPlain).toBe(false);
+  });
+
+  it("mutation: an I/O call placed above the gate under another spelling is RED", () => {
+    for (const spelling of ["await args.post({})", "await readFile(cluster.target_path)", "await (0, readEditTarget)(cluster.target_path, '')"]) {
+      const c = censusQuorum(
+        mutate("  if (sources.length < PROMOTION_QUORUM) {", `  ${spelling};\n  if (sources.length < PROMOTION_QUORUM) {`),
+      );
+      expect(c.gateBeforeIo, spelling).toBe(false);
+    }
+  });
+
+  it("mutation: the I/O helpers renamed (so 'before' would be vacuous) is RED", () => {
+    const c = censusQuorum(read().replaceAll("readEditTarget(", "readTarget(").replaceAll("await post({", "await send({"));
+    expect(c.gateBeforeIo).toBe(false);
+  });
+
   it("mutation: the gate's body emptied (no refusal returned) is RED", () => {
     const c = censusQuorum(
       mutate(
@@ -1020,6 +1092,25 @@ describe("Guard 1d -- PROMOTION_QUORUM is the single source of the quorum", () =
     expect(c.gateReturnsRefusal).toBe(false);
   });
 
+  it("mutation: a refusal-shaped string returned from an unrelated place is not the gate's refusal", () => {
+    const c = censusQuorum(
+      mutate(
+        'return { ok: false, reason: "quorum-not-met", cause: "below-quorum", sourceCount: sources.length };',
+        'return { ok: true, diff: "quorum-not-met" };',
+      ),
+    );
+    expect(c.gateReturnsRefusal).toBe(false);
+  });
+
+  it("mutation: the second prompt line's sense changed ('or more' becomes 'or fewer') is RED", () => {
+    const c = censusQuorum(mutate("${PROMOTION_QUORUM} or more distinct ones", "${PROMOTION_QUORUM} or fewer distinct ones"));
+    expect(c.promptOrMoreOk).toBe(false);
+  });
+
+  it("dispatch: a parameter that shadows the constant THROWS", () => {
+    expect(() => censusQuorum(read() + "\nexport function _s(PROMOTION_QUORUM: number) { return PROMOTION_QUORUM; }\n")).toThrow(/shadowed/);
+  });
+
   it("mutation: the prompt's sense flipped (>= becomes >) is RED", () => {
     const c = censusQuorum(mutate("(each with >=${PROMOTION_QUORUM} source learnings", "(each with >${PROMOTION_QUORUM} source learnings"));
     expect(c.promptSenseOk).toBe(false);
@@ -1028,6 +1119,7 @@ describe("Guard 1d -- PROMOTION_QUORUM is the single source of the quorum", () =
   it("refactor-tolerance: the operand-swapped spelling of the same gate stays GREEN", () => {
     const c = censusQuorum(mutate("sources.length < PROMOTION_QUORUM", "PROMOTION_QUORUM > sources.length"));
     expect(c.comparisons).toBe(1);
+    expect(c.gateIsPlain).toBe(true);
     expect(c.gateReturnsRefusal).toBe(true);
     expect(c.gateBeforeIo).toBe(true);
   });
