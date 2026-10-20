@@ -54,5 +54,5 @@ Closes (by Ref, ship step owns the body): #9869, #9868. Draft PR: #10655.
 - [x] 6.1 ADR-270 addendum 2026-10-20 (decision + four residuals); check-adr-ordinals; c4-count-parity
 
 ## Phase 7: validation
-- [ ] 7.1 All suites GREEN; scripts/test-all.sh --affected under the lock
-- [ ] 7.2 AC-X1 diff-scope check; PR body uses Ref #9869 / Ref #9868
+- [x] 7.1 All suites GREEN; scripts/test-all.sh --affected under the lock
+- [x] 7.2 AC-X1 diff-scope check; PR body uses Ref #9869 / Ref #9868
