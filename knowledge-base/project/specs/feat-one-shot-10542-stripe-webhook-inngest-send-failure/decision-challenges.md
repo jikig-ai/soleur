@@ -1,0 +1,8 @@
+# Decision Classes — feat-one-shot-10542-stripe-webhook-inngest-send-failure
+
+| Item | Class | Ruling |
+|------|-------|--------|
+| Sentry mirror shape for the failed send (keep `inngest-emit` tags vs sibling-style tags) | technical | Ruled by CTO agent, 2026-10-20: use `feature: "stripe-webhook"`, `op: "inngest-send-payment-failed"` - the failure is now a request-failing 5xx, not a silent fallback, and no alert rule or Terraform names `inngest-emit`. Plan keeps `reportSilentFallback` (it already does pino `logger.error` plus `Sentry.captureException`, per the CTO's "thin wrapper is acceptable" clause and `cq-silent-fallback-must-mirror-to-sentry`). |
+| Dedup-row release itself fails after a send failure | technical | Ruled by CTO agent, 2026-10-20: return 500 anyway, rely on the existing `releaseDedupRow` log + Sentry report; no new compensating mechanism - 200 would make the loss worse. |
+| Founder-lookup DB error (and `isGranted` DB error) swallowed in the same case | technical | Ruled by CTO agent, 2026-10-20: out of scope; tracked as #10657 (founder lookup, same release-and-500 pattern); `isGranted` stays fail-closed by design (TR9). Dissent noted: the lookup fix is small enough to fold in. |
+| 500 for every send failure vs transient-only | technical | Ruled by CTO agent, 2026-10-20: 500 for every send failure - `isTransientFetchError` covers only network errors, so a transient-only 500 would silently lose the draft on a 4xx; retry is idempotent via event id `stripe-${event.id}`. Residual risk: a deterministic 4xx 500s on every redelivery until Stripe's retry window ends; mitigated by the Sentry tag and the `SOLEUR_FR5_ENABLED=false` kill switch. |
