@@ -11,6 +11,24 @@ lane: single-domain
 
 # chore(quality): drop the drawdown constant and header from lint-ratchet
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-20
+**Scope of the pass:** proportionate to a one-engine-file, deletion-class change. The full agent fan-out was replaced by the mechanical halt gates, direct verification of every claim against the repo, and the earlier simplicity review plus CTO ruling. No external library, vendor or infrastructure surface is involved, so no framework-docs or best-practices research was spawned.
+
+### Key Improvements
+
+1. Halt gates 4.6 (user-brand impact, threshold `none` with scope-out), 4.7 (observability, probe passes the verb gate), 4.8 (no PAT shapes), 4.11 (`lint-guard-contract.py` green, one entry), 4.12 (one unfenced Scope Check, no BLOCKED marker) all pass. 4.9, 4.10 and 4.55 do not trigger (no UI surface, no store or connection, no downtime class).
+2. Verified that the default `recovery` of `render_baseline` equals what `update()` passes for the Soleur scopes: `_recovery(config)` returns `python3 <SCRIPT_REL> <name>` when `recovery_cmd` is unset, and the Soleur `SCOPES` entries set neither `recovery_cmd` nor `header_recovery`. This is what lets the parity test call `render_baseline(name, [])` without building a config.
+3. Verified `USER_SCOPES` is a module constant defined before any `render_baseline` call, and that no other `config["drawdown"]` reader exists (only `update()`).
+4. The observability probe was changed from running `--check` to a header grep after reasoning about preflight Check 10's sandbox (tmpfs `HOME`, 15-second cap).
+
+### New Considerations Discovered
+
+- Every cited issue, ADR and learning path resolves (`kb paths` sweep found no broken path; the only rule id cited, `cq-write-failing-tests-before`, is active in AGENTS.md).
+- The probe command was run through `probe-verb-gate.sh` (rc 0) and its planned output was checked against the planned header text (one matching line).
+- Residual risk accepted: a scope added to `SCOPES` later is not covered by the parity test (recorded in the Guard Contract Assembly).
+
 ## Overview
 
 Both Soleur lint-ratchet baselines (`scripts/lint-ratchet-ruff.baseline.txt`, `scripts/lint-ratchet-eslint-test-dirs.baseline.txt`) hold no entries, and the tracker the engine names as their drawdown (#10433) is closed. Three things are now dead weight: the `DRAWDOWN = "#10433"` constant in `plugins/soleur/scripts/lint-ratchet.py`, the `drawdown` scope-config key that threads it to `render_baseline`, and the `# Drawdown tracking: #10433` line (plus the provenance wording around it) in the two baseline headers.
