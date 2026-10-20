@@ -41,3 +41,11 @@
 - Findings fixed inline: (a) enumerate ALL `provider "cloudflare"` blocks across ALL `*.tf` in each root (sibling-file escape; jikigai-com.tf precedent); (b) brace-depth records replace col-0 `}` anchors (indented opener/next-line `{`/non-col-0 `}`); (c) cla-evidence first-block-only `exit` → all-block loop; (d) provision-cloudflare.sh:135 generator now emits the trio; (e) `${key}` braces.
 - Dispositioned: text-grep can't distinguish string-embedded `key = N` (bounded residual); infra-validation `if [[ -f main.test.sh ]]` skip-on-delete is pre-existing workflow property outside this PR's zero-YAML scope; 6× comment duplication — HCL has no provider inheritance (declined); T6 RED-first evidence exists in-session (suite ran 18/19 FAIL pre-fix).
 - Verified post-fix: both suites green; sibling-.tf mutation reds naming the file.
+
+## Fix Round (ADR-267)
+- security-sentinel: CLEAN. structural-enumeration: 3 new P1 escapes → hardened (comment-stripped brace counting; modules/**/*.tf recursion; *.tf.json fail-closed; generator pin in suite).
+- Verified: web-platform 23/23, cla-evidence OK, indented+comment-brace mutation RC=1, sibling-.tf reds.
+
+## QA Phase
+- All plan Test Scenarios exercised: unit suites green, Guard Contract mutations 1-4 RED + row 5 PASS, run-registered-suites --enumerate registers the new suite (1 hit), e2e unschedulable by design (pyramid-justified).
+- HEAD: 3652ea0efc pushed. Reviewed-Fix-Round: 1 of max 2.
