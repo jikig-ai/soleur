@@ -1861,6 +1861,7 @@ ROWS = [
     ("g-lower",   "none",    "run",  "curl -sS -X get https://api.hetzner.cloud/v1/servers"),
     ("g-hcloud",  "none",    "run",  "hcloud server list"),
     ("g-doppler", "none",    "run",  "doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain"),
+    ("g-doppler-ro", "none", "run", "doppler secrets get HCLOUD_TOKEN_READONLY -p soleur -c prd_terraform --plain"),
     ("g-gh",      "none",    "run",  "gh issue create --title t --body-file b"),
     ("sc-x-delete", "write",  "scrun", "curl -sS -X DELETE https://api.hetzner.cloud/v1/volumes/1"),
     ("sc-detach",   "write",  "scrun", "hcloud volume detach 1"),
@@ -2020,10 +2021,27 @@ else
   fail "a filer body no longer names '${_head}', the runbook heading was renamed or demoted, or the heading check cannot reject a prose-only mention — the issue would point at nothing"
 fi
 
+# R6 (#9927 item 8b) -- the two pasteable listing blocks use the READ-ONLY Hetzner token with no
+# fallback. The filers print a GET-only listing, so the token it loads must be the read-permission
+# one: a pasted block that loads the destroy-capable token turns "list the survivors" into one
+# typo away from "delete them". The checks assert BEHAVIOUR of the printed text (the read-only
+# name is read, the bare name is not, the prose no longer claims the token is read/write), and a
+# word-bounded name test, because `HCLOUD_TOKEN` is a PREFIX of `HCLOUD_TOKEN_READONLY`.
+echo "R6: the listing blocks load the read-only Hetzner token, with no read/write fallback"
+_r6ro=$(grep -cE "^[[:space:]]*echo 'TOKEN=\"\\$\(doppler secrets get HCLOUD_TOKEN_READONLY -p soleur -c prd_terraform --plain\)\"'$" "$WF") || _r6ro=0
+_r6rw=$(grep -cE "doppler secrets get HCLOUD_TOKEN([[:space:]]|\"|'|$)" "$WF") || _r6rw=0
+_r6prose=$(grep -cE "still (the|a) read/write|read/write one\)" "$WF") || _r6prose=0
+if [[ "$_r6ro" -eq 2 ]]; then pass "R6a both listing blocks load HCLOUD_TOKEN_READONLY (found ${_r6ro})"
+else fail "R6a expected 2 listing blocks loading HCLOUD_TOKEN_READONLY, found ${_r6ro}"; fi
+if [[ "$_r6rw" -eq 0 ]]; then pass "R6b no step or printed block reads the bare read/write HCLOUD_TOKEN from Doppler"
+else fail "R6b ${_r6rw} read(s) of the bare read/write HCLOUD_TOKEN remain in the workflow"; fi
+if [[ "$_r6prose" -eq 0 ]]; then pass "R6c the filer prose no longer says the listing token is the read/write one"
+else fail "R6c ${_r6prose} line(s) still describe the listing token as read/write"; fi
+
 # R5 — the mutation table runs in-process (python, one YAML load); each row injects one spelling into a
 # copy of the workflow. A red row must be flagged under its OWN unit; a green row must produce no
 # finding. The control rows prove the verdict rule can fail in both directions and the table is intact.
-R5_MIN=101
+R5_MIN=102
 echo "R5: mutation rows — every spelling of an injected write/destroy is RED, legitimate steps are GREEN"
 R5_OUT=$(python3 -c "$SCAN_PY" mutate "$WF") || { echo "FATAL: the mutation runner crashed" >&2; exit 2; }
 r5_line() { if [[ "$1" == "PASS" ]]; then pass "R5/$2: $3"; else fail "R5/$2: $3"; fi; }
