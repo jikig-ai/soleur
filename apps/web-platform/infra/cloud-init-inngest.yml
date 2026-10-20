@@ -226,7 +226,7 @@ write_files:
         if [ -b "$1" ] && [ "$(/usr/bin/timeout -k 2 10 /usr/sbin/blockdev --getsize64 "$1" 2>/dev/null || echo 0)" -gt 0 ]; then
           return 0
         fi
-        emit reopen_device_wait 0 n/a "waiting up to 300s for $1 — the volume attachment is still in flight"
+        emit reopen_device_wait 0 n/a "waiting up to 300s for $1"
         while [ "$_i" -lt 300 ]; do
           sleep 1; _i=$((_i+1))
           if [ -b "$1" ] && [ "$(/usr/bin/timeout -k 2 10 /usr/sbin/blockdev --getsize64 "$1" 2>/dev/null || echo 0)" -gt 0 ]; then
@@ -302,7 +302,7 @@ write_files:
             _em_i=$((_em_i+1))
             [ "$_em_i" -le 8 ] || fail reopen_mount 1 n/a "umount loop at $2 did not converge in 8 passes"
             [ "$(readlink -f "$_em_src")" = "$(readlink -f "$1")" ] && break
-            emit reopen_mount 0 n/a "$2 is mounted from $${_em_src:-unknown}, not $1 — converging to the verified source"
+            emit reopen_mount 0 n/a "$2 is mounted from $${_em_src:-unknown}, not $1"
             umount "$2" || fail reopen_mount 1 n/a "umount of a wrong-source layer at $2 failed"
           done
           if mountpoint -q "$2" && [ -n "$_em_src" ]; then
@@ -536,7 +536,7 @@ write_files:
       fi
       bs_token="$(cat "$tok_file" 2>/dev/null)"
       if [ -z "$bs_token" ]; then
-        logger -t inngest-boot-phone-home "SOLEUR_INNGEST_BOOT_TRACE_LOST stage=$stage reason=token-file-empty path=$tok_file — the token file exists but is EMPTY, so the boot-trace channel is dead. A Doppler fetch that failed after the file was created leaves exactly this state. #7228"
+        logger -t inngest-boot-phone-home "SOLEUR_INNGEST_BOOT_TRACE_LOST stage=$stage reason=token-file-empty path=$tok_file — token file empty, boot-trace channel dead. #7228"
         exit 0
       fi
       host="$(hostname 2>/dev/null)"
@@ -566,7 +566,7 @@ write_files:
       # that simply stopped reporting. rc alone is enough to separate them: 6/7 = egress, 22 =
       # HTTP >=400 under -f, 28 = the 8s timeout, 35/60 = TLS.
       if [ "$crc" -ne 0 ]; then
-        logger -t inngest-boot-phone-home "SOLEUR_INNGEST_BOOT_TRACE_LOST stage=$stage reason=post-failed rc=$crc — the marker was built and the POST to Better Stack failed, so this stage is missing from the boot trace even though the host reached it. curl rc: 6/7 egress, 22 HTTP>=400 (revoked token), 28 timeout, 35/60 TLS. #7228"
+        logger -t inngest-boot-phone-home "SOLEUR_INNGEST_BOOT_TRACE_LOST stage=$stage reason=post-failed rc=$crc — POST failed; curl rc 6/7 egress, 22 revoked token, 28 timeout, 35/60 TLS. #7228"
       fi
       exit 0
     owner: root:root
@@ -882,7 +882,7 @@ write_files:
       # BOOT, not per call site, so the cost is ~1 row per reboot — and without it a healthy
       # host and a host whose unit never ran produce the identical observation (no rows),
       # which is the ADR-117 failure this whole PR is about.
-      logger -t inngest-bs-token-restage "SOLEUR_INNGEST_BS_TOKEN_RESTAGED ok=1 path=$tok — boot-trace channel re-armed for this boot. #7228"
+      logger -t inngest-bs-token-restage "SOLEUR_INNGEST_BS_TOKEN_RESTAGED ok=1 path=$tok #7228"
       # AND on the VECTOR-INDEPENDENT channel. The line above rides journald -> Vector, which is
       # the one path that is dead on a host whose Vector never came up — and this unit IS the
       # positive control that separates "channel healthy" from "channel never re-armed". Reported
@@ -1097,7 +1097,7 @@ write_files:
           fi
         else
           last_stage=zot-creds-EMPTY
-          echo "[inngest] WARN: baked zot creds empty — the bootstrap pull will miss and end this attempt"; /usr/local/bin/inngest-boot-phone-home.sh zot-creds-EMPTY "$ZOT_EP"
+          echo "[inngest] WARN: baked zot creds empty"; /usr/local/bin/inngest-boot-phone-home.sh zot-creds-EMPTY "$ZOT_EP"
         fi
       fi
       set -e
@@ -1173,7 +1173,7 @@ write_files:
       n_total="$(printf '%s\n' "$names" | grep -c . || true)"
       n_inngest="$(printf '%s\n' "$names" | grep -Ec '^(INNGEST_(SIGNING_KEY|EVENT_KEY|REDIS_PASSWORD|POSTGRES_URI|CUTOVER_FLIP|DIAGNOSTIC_BOOT|CONFIG_DIGEST|REDIS_LUKS_KEY|LUKS_CUTOVER|LUKS_ACTIVE_VOLUME_ID|TLS_KEY|TLS_CERT|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)$' || true)"
       if [ "$n_total" -ne "$n_inngest" ] || [ "$n_inngest" -lt 5 ]; then
-        echo "[inngest] FATAL: boot credential not isolated (sees $n_total non-DOPPLER, $n_inngest INNGEST_) — refusing to bootstrap"; exit 1
+        echo "[inngest] FATAL: boot credential not isolated (sees $n_total non-DOPPLER, $n_inngest INNGEST_)"; exit 1
       fi
       echo "[inngest] boot credential isolated ($n_inngest INNGEST_ secrets, no foreign)"
       CHKEOF
@@ -1181,7 +1181,7 @@ write_files:
         last_stage=isolation-check-passed
         /usr/local/bin/inngest-boot-phone-home.sh isolation-check-passed "attempt=$attempt iid=$IID" || true
       else
-        echo "[inngest] FATAL: doppler isolation self-check failed — inngest will NOT bootstrap on this attempt" >&2
+        echo "[inngest] FATAL: doppler isolation self-check failed" >&2
         last_stage=isolation-check-FAILED
         /usr/local/bin/inngest-boot-phone-home.sh isolation-check-FAILED "attempt=$attempt iid=$IID" || true
         exit 1
@@ -1461,7 +1461,7 @@ write_files:
         _q=$((_q + 5))
       done
       if [ -n "$_busy" ]; then
-        echo "[inngest] a cutover FSM step is still activating after $_q s ($_busy) — not bootstrapping over it; the unit retries" >&2
+        echo "[inngest] a cutover FSM step is still activating after $_q s ($_busy); unit retries" >&2
         last_stage=provision-fsm-busy
         /usr/local/bin/inngest-boot-phone-home.sh provision-fsm-busy "units=[$_busy] waited_s=$_q attempt=$attempt iid=$IID" || true
         exit 1
@@ -2417,7 +2417,7 @@ runcmd:
       if [ -b "$1" ] && [ "$(/usr/bin/timeout -k 2 10 /usr/sbin/blockdev --getsize64 "$1" 2>/dev/null || echo 0)" -gt 0 ]; then
         return 0
       fi
-      luks_emit "$STAGE" 0 n/a "waiting up to 300s for $1 — the volume attachment is still in flight"
+      luks_emit "$STAGE" 0 n/a "waiting up to 300s for $1"
       while [ "$_i" -lt 300 ]; do
         sleep 1; _i=$((_i+1))
         if [ -b "$1" ] && [ "$(/usr/bin/timeout -k 2 10 /usr/sbin/blockdev --getsize64 "$1" 2>/dev/null || echo 0)" -gt 0 ]; then
@@ -2490,7 +2490,7 @@ runcmd:
         CANON_DEV="$${BYID}$${POINTER}"
         ;;
       *)
-        echo "FATAL: the pointer names volume $POINTER, which is not this host's volume ($LUKS_ID) — refusing rather than guessing which one holds the store" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1
+        echo "FATAL: the pointer names volume $POINTER, which is not this host's volume ($LUKS_ID)" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1
         ;;
     esac
     luks_emit resolve 0 n/a "mode=$MODE pointer=$${POINTER:-absent}"
@@ -2508,7 +2508,7 @@ runcmd:
       ( umask 0177 && printf 'INNGEST_LUKS_ACTIVE_VOLUME_ID=%s\n' "$POINTER" >> /etc/default/inngest-luks )
     fi
     chown root:root /etc/default/inngest-luks
-    [ -s /etc/default/inngest-luks ] || { echo "FATAL: /etc/default/inngest-luks is empty after staging — the boot-reopen unit would fail on every later boot" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+    [ -s /etc/default/inngest-luks ] || { echo "FATAL: /etc/default/inngest-luks is empty after staging" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
     if [ -n "$POINTER" ]; then
       grep -qx "INNGEST_LUKS_ACTIVE_VOLUME_ID=$POINTER" /etc/default/inngest-luks || { echo "FATAL: the pointer did not land in /etc/default/inngest-luks — the boot-reopen unit would take the unpointed arm on boot 2" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
     fi
@@ -2519,7 +2519,7 @@ runcmd:
     # active. The image-baked script reads a plaintext id from this file too and now refuses every
     # flagged run `volume-ids-unreadable` (#9786): the cutover is complete, that refusal is the intent.
     printf 'INNGEST_LUKS_ADDITIVE_VOLUME_ID=%s\n' "$LUKS_ID" > /etc/default/inngest-luks-volumes
-    grep -qx "INNGEST_LUKS_ADDITIVE_VOLUME_ID=$LUKS_ID" /etc/default/inngest-luks-volumes || { echo "FATAL: /etc/default/inngest-luks-volumes did not land — the cutover unit would refuse every run" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+    grep -qx "INNGEST_LUKS_ADDITIVE_VOLUME_ID=$LUKS_ID" /etc/default/inngest-luks-volumes || { echo "FATAL: /etc/default/inngest-luks-volumes did not land" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
 
     if [ "$MODE" = pointer ]; then
       # ── POINTER ARM — the post-cutover world ─────────────────────────────────────────────
@@ -2531,9 +2531,9 @@ runcmd:
       STAGE=pointer_blkid_probe
       _blk_rc=0
       BLK_TYPE="$(/usr/sbin/blkid -p -o value -s TYPE "$CANON_DEV" 2>/dev/null)" || _blk_rc=$?
-      { [ "$_blk_rc" -eq 0 ] || [ "$_blk_rc" -eq 2 ]; } || { echo "FATAL: blkid could not read $CANON_DEV (rc=$_blk_rc) — refusing to open a device whose contents are unknown" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+      { [ "$_blk_rc" -eq 0 ] || [ "$_blk_rc" -eq 2 ]; } || { echo "FATAL: blkid could not read $CANON_DEV (rc=$_blk_rc)" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
       luks_emit pointer_blkid_probe 0 "$${BLK_TYPE:-empty}"
-      [ "$${BLK_TYPE:-}" = crypto_LUKS ] || { echo "FATAL: the pointer names $CANON_DEV but it reads TYPE='$${BLK_TYPE:-empty}', not crypto_LUKS — the pointer cannot certify an unencrypted device as the store" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+      [ "$${BLK_TYPE:-}" = crypto_LUKS ] || { echo "FATAL: the pointer names $CANON_DEV but it reads TYPE='$${BLK_TYPE:-empty}', not crypto_LUKS" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
       STAGE=pointer_luks_open
       [ -e "$MAPPER" ] || printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksOpen --key-file - "$CANON_DEV" inngest-redis 2>>"$INNGEST_LUKS_DETAIL"
       STAGE=pointer_mapper_probe
@@ -2542,7 +2542,7 @@ runcmd:
       { [ "$_map_rc" -eq 0 ] || [ "$_map_rc" -eq 2 ]; } || { echo "FATAL: blkid could not read $MAPPER (rc=$_map_rc)" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
       # Never mkfs here. An empty mapper under a pointer means the store the cutover recorded is
       # not there; creating a filesystem would hand Redis an empty store and call it the store.
-      [ "$${MAP_TYPE:-}" = ext4 ] || { echo "FATAL: the canonical mapper reads TYPE='$${MAP_TYPE:-empty}', not ext4 — refusing to create a filesystem over the store the pointer names" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+      [ "$${MAP_TYPE:-}" = ext4 ] || { echo "FATAL: the canonical mapper reads TYPE='$${MAP_TYPE:-empty}', not ext4" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
       STAGE=mount_luks
       mkdir -p /mnt/data
       mountpoint -q /mnt/data || mount "$MAPPER" /mnt/data 2>>"$INNGEST_LUKS_DETAIL"
@@ -2556,7 +2556,7 @@ runcmd:
       # the luksFormat arm. A volume that is merely slow to attach must not be read as blank.
       STAGE=device_wait
       wait_dev "$DEV" || true
-      [ -b "$DEV" ] || { echo "FATAL: $DEV is not a block device after 300s — refusing to proceed" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+      [ -b "$DEV" ] || { echo "FATAL: $DEV is not a block device after 300s" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
       [ "$(/usr/bin/timeout -k 2 10 /usr/sbin/blockdev --getsize64 "$DEV" 2>/dev/null || echo 0)" -gt 0 ] || { echo "FATAL: $DEV reports zero size after 300s" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
 
       # blkid's OWN rc is checked: 0=signature found, 2=none found. Anything else is "could not
@@ -2566,7 +2566,7 @@ runcmd:
       STAGE=blkid_probe
       _blk_rc=0
       BLK_TYPE="$(/usr/sbin/blkid -p -o value -s TYPE "$DEV" 2>/dev/null)" || _blk_rc=$?
-      { [ "$_blk_rc" -eq 0 ] || [ "$_blk_rc" -eq 2 ]; } || { echo "FATAL: blkid could not read $DEV (rc=$_blk_rc) — refusing to write to a device whose contents are unknown" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+      { [ "$_blk_rc" -eq 0 ] || [ "$_blk_rc" -eq 2 ]; } || { echo "FATAL: blkid could not read $DEV (rc=$_blk_rc)" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
       luks_emit blkid_probe 0 "$${BLK_TYPE:-empty}"
 
       case "$${BLK_TYPE:-}" in
@@ -2608,7 +2608,7 @@ runcmd:
         *)
           # ARM 4 — an unrecognised signature. Refuse. A device carrying LVM, swap, a foreign
           # filesystem or a damaged header is a device whose contents we cannot account for.
-          echo "FATAL: $DEV carries an unhandled signature TYPE=$BLK_TYPE — refusing to write to a device whose contents are unknown" | tee -a "$INNGEST_LUKS_DETAIL"
+          echo "FATAL: $DEV carries an unhandled signature TYPE=$BLK_TYPE" | tee -a "$INNGEST_LUKS_DETAIL"
           exit 1
           ;;
       esac
@@ -2742,7 +2742,7 @@ runcmd:
       chmod 644 /etc/docker/daemon.json
       echo "[inngest] zot allowlisted as an insecure registry: $ZOT_EP"
     else
-      echo "[inngest] no zot endpoint baked — the bootstrap pull will fail closed (no second registry)"
+      echo "[inngest] no zot endpoint baked"
     fi
 
   # Ensure docker is up before the provision unit (zot login + container extract) is armed.

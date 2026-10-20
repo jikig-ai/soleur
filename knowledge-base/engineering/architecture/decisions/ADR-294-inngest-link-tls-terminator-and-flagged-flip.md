@@ -118,7 +118,10 @@ see what moved.
   certificate, so there is no overlap window.
 - **User-data headroom (Context).** The 1,852 B and 1,384 B figures in the Constraints list are the pre-PR measurements and stay as
   dated. The same script (`apps/web-platform/infra/inngest-userdata-budget.sh`) reports 32,420 B stored against the 32,768 B cap, a
-  headroom of 348 B, for this branch on 2026-10-19.
+  headroom of 348 B, for this branch on 2026-10-19. After the sibling Inngest-host changes landed on `main` (the nftables re-read
+  emit and a pin bump), the merged tree measured 32,596 B (172 B) and the merge-time plan's size precondition failed in CI, because
+  the CI render is larger than the offline one by an amount the offline script cannot see. Message prose was trimmed (no behaviour
+  change) to 32,096 B stored, a headroom of 672 B offline on 2026-10-20.
 - **Leg 3, the Cloudflare hop (Status).** The 2026-10-18 text said the Cloudflare-to-origin hop is plain "while the zone is `flexible`".
   The repository shows something narrower. `apps/web-platform/infra/seo-config-rules.tf` carries a rule with expression
   `(http.host eq "app.soleur.ai")` and `ssl = "flexible"`, and a comment in the same file records the zone default as strict, with
