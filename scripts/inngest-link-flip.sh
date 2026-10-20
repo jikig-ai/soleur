@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# inngest-link-flip.sh - the orchestration body of .github/workflows/inngest-link-flip.yml (#10136, ADR-292).
+# inngest-link-flip.sh - the orchestration body of .github/workflows/inngest-link-flip.yml (#10136, ADR-294).
 #
 # Flips the web -> Inngest link between http://10.0.1.40:8288 and https://10.0.1.40:8443 by changing ONE
 # Doppler flag (INNGEST_LINK_TLS in soleur/prd) and redeploying the running web image so ci-deploy.sh's

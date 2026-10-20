@@ -49,7 +49,7 @@ Spec lacks a valid `lane:`; defaulted to cross-domain (fail-closed).
 - 4.1 Drift guard `betterstack-send-failed-alert.test.sh` baseline 79/9 to 81/10 (`BASELINE_PASSES`, `BASELINE_CASES`) plus a mutation row; decode rows in `monitor-send-failed-alert.md` (fix the "web-1 monitor unit" wording) and `betterstack-log-query.md`; synthetic `synthetic=1` proof through `scripts/betterstack-query.sh`
 - 4.2 `scripts/followthroughs/inngest-tls-soak-10136.sh` plus test covering every Guard 2 row (query `--limit 1000` or more, trusted-verdict read of T, exit 2 on empty or transport failure); sweeper dry run
 - 4.3 `inngest-server.md` runbook section "Link TLS (#10136)" with the Production Envelope, flag semantics, rollback, release-blocking note, replace order including A1b, cert expiry, replace duration and event behaviour, best-effort off step
-- 4.4 ADR-292 (provisional; ordinal re-derived across all `origin/*` refs), ADR-100 addendum, C4 edits, C4 count-parity and render tests
+- 4.4 ADR-294 (provisional; ordinal re-derived across all `origin/*` refs), ADR-100 addendum, C4 edits, C4 count-parity and render tests
 - 4.5 `BASELINE_DECLARED_PROBES` bump in `preflight-discoverability-test.test.ts` with the PLACEMENT/TRUTH/NO-SUBSTITUTE comment
 - 4.6 File the deferral issues before merge (plan "Deferral Tracking", items 1-11)
 

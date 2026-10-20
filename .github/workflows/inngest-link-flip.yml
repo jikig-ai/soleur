@@ -1,5 +1,5 @@
 # Flip (or roll back) the web -> Inngest scheduler link between plaintext http://10.0.1.40:8288 and verified
-# TLS https://10.0.1.40:8443 (#10136, ADR-292 provisional ordinal; runbook inngest-server.md "Link TLS").
+# TLS https://10.0.1.40:8443 (#10136, ADR-294 provisional ordinal; runbook inngest-server.md "Link TLS").
 #
 # DISPATCH-ONLY, and a production act: the owner's recorded go names the PR build, not this flag write (plan
 # Production Actions A3), so `flip` needs its own dated go and the typo-guard below. `off` is the rollback and needs

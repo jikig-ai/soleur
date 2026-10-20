@@ -1126,7 +1126,7 @@
 },
 "technology": "Dedicated Hetzner host, private-net 10.0.1.40:8288/:8289",
 "description": {
-"txt": "Durable trigger layer for server-side agents — cron, oneshot, and HTTP-armed reminders. Extracted to its own single-host private-net node so exactly-one-scheduler is enforced by topology, unblocking active-active web (ADR-030, ADR-100, #6178). The CLI binary is version-pinned in inngest.tf (inngest_cli_version + per-arch sha256, verified against ONE upstream checksums.txt at pin time) with a named freshness owner since #7463: the rule-audit.yml poll detects drift, inngest-cli-staleness.test.sh enforces coherence, inngest-cli.provenance.md is the analysis of record. ADOPTING (#10136, ADR-292): a host-level stunnel4 systemd unit (soleur-inngest-tls.service, not a process inside the Inngest process and not a dependency of it) terminates TLS on 10.0.1.40:8443 and forwards to 127.0.0.1:8288; the legacy plaintext :8288 listener stays open and counted until a later replace"
+"txt": "Durable trigger layer for server-side agents — cron, oneshot, and HTTP-armed reminders. Extracted to its own single-host private-net node so exactly-one-scheduler is enforced by topology, unblocking active-active web (ADR-030, ADR-100, #6178). The CLI binary is version-pinned in inngest.tf (inngest_cli_version + per-arch sha256, verified against ONE upstream checksums.txt at pin time) with a named freshness owner since #7463: the rule-audit.yml poll detects drift, inngest-cli-staleness.test.sh enforces coherence, inngest-cli.provenance.md is the analysis of record. ADOPTING (#10136, ADR-294): a host-level stunnel4 systemd unit (soleur-inngest-tls.service, not a process inside the Inngest process and not a dependency of it) terminates TLS on 10.0.1.40:8443 and forwards to 127.0.0.1:8288; the legacy plaintext :8288 listener stays open and counted until a later replace"
 },
 "title": "Inngest Server",
 "kind": "container",
@@ -2424,7 +2424,7 @@
 "id": "e2yj2a"
 },
 "11o932f": {
-"title": "LEGACY (retired after the TLS soak, ADR-292): sends events, run-list reads and GraphQL probes in plaintext",
+"title": "LEGACY (retired after the TLS soak, ADR-294): sends events, run-list reads and GraphQL probes in plaintext",
 "technology": "HTTP private-net :8288",
 "source": {
 "model": "platform.webapp.api"
@@ -2435,7 +2435,7 @@
 "id": "11o932f"
 },
 "djd9es": {
-"title": "ADOPTING #10136 (ADR-292): the same sends over TLS 1.2+ to a host-local stunnel terminator that forwards to 127.0.0.1:8288; Node verifies a Terraform-minted pinned cert through NODE_EXTRA_CA_CERTS, selected per deploy by the INNGEST_LINK_TLS flag (absent means the legacy edge). Inert until the host replace and the flag flip",
+"title": "ADOPTING #10136 (ADR-294): the same sends over TLS 1.2+ to a host-local stunnel terminator that forwards to 127.0.0.1:8288; Node verifies a Terraform-minted pinned cert through NODE_EXTRA_CA_CERTS, selected per deploy by the INNGEST_LINK_TLS flag (absent means the legacy edge). Inert until the host replace and the flag flip",
 "technology": "HTTPS private-net :8443 (stunnel, pinned CA)",
 "source": {
 "model": "platform.webapp.api"
@@ -18078,7 +18078,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Durable trigger layer for server-side agents — cron, oneshot, and HTTP-armed reminders. Extracted to its own single-host private-net node so exactly-one-scheduler is enforced by topology, unblocking active-active web (ADR-030, ADR-100, #6178). The CLI binary is version-pinned in inngest.tf (inngest_cli_version + per-arch sha256, verified against ONE upstream checksums.txt at pin time) with a named freshness owner since #7463: the rule-audit.yml poll detects drift, inngest-cli-staleness.test.sh enforces coherence, inngest-cli.provenance.md is the analysis of record. ADOPTING (#10136, ADR-292): a host-level stunnel4 systemd unit (soleur-inngest-tls.service, not a process inside the Inngest process and not a dependency of it) terminates TLS on 10.0.1.40:8443 and forwards to 127.0.0.1:8288; the legacy plaintext :8288 listener stays open and counted until a later replace"
+"txt": "Durable trigger layer for server-side agents — cron, oneshot, and HTTP-armed reminders. Extracted to its own single-host private-net node so exactly-one-scheduler is enforced by topology, unblocking active-active web (ADR-030, ADR-100, #6178). The CLI binary is version-pinned in inngest.tf (inngest_cli_version + per-arch sha256, verified against ONE upstream checksums.txt at pin time) with a named freshness owner since #7463: the rule-audit.yml poll detects drift, inngest-cli-staleness.test.sh enforces coherence, inngest-cli.provenance.md is the analysis of record. ADOPTING (#10136, ADR-294): a host-level stunnel4 systemd unit (soleur-inngest-tls.service, not a process inside the Inngest process and not a dependency of it) terminates TLS on 10.0.1.40:8443 and forwards to 127.0.0.1:8288; the legacy plaintext :8288 listener stays open and counted until a later replace"
 },
 "tags": [],
 "notation": "Container",
@@ -45223,7 +45223,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Durable trigger layer for server-side agents — cron, oneshot, and HTTP-armed reminders. Extracted to its own single-host private-net node so exactly-one-scheduler is enforced by topology, unblocking active-active web (ADR-030, ADR-100, #6178). The CLI binary is version-pinned in inngest.tf (inngest_cli_version + per-arch sha256, verified against ONE upstream checksums.txt at pin time) with a named freshness owner since #7463: the rule-audit.yml poll detects drift, inngest-cli-staleness.test.sh enforces coherence, inngest-cli.provenance.md is the analysis of record. ADOPTING (#10136, ADR-292): a host-level stunnel4 systemd unit (soleur-inngest-tls.service, not a process inside the Inngest process and not a dependency of it) terminates TLS on 10.0.1.40:8443 and forwards to 127.0.0.1:8288; the legacy plaintext :8288 listener stays open and counted until a later replace"
+"txt": "Durable trigger layer for server-side agents — cron, oneshot, and HTTP-armed reminders. Extracted to its own single-host private-net node so exactly-one-scheduler is enforced by topology, unblocking active-active web (ADR-030, ADR-100, #6178). The CLI binary is version-pinned in inngest.tf (inngest_cli_version + per-arch sha256, verified against ONE upstream checksums.txt at pin time) with a named freshness owner since #7463: the rule-audit.yml poll detects drift, inngest-cli-staleness.test.sh enforces coherence, inngest-cli.provenance.md is the analysis of record. ADOPTING (#10136, ADR-294): a host-level stunnel4 systemd unit (soleur-inngest-tls.service, not a process inside the Inngest process and not a dependency of it) terminates TLS on 10.0.1.40:8443 and forwards to 127.0.0.1:8288; the legacy plaintext :8288 listener stays open and counted until a later replace"
 },
 "tags": [],
 "notation": "Container",
@@ -60296,7 +60296,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Durable trigger layer for server-side agents — cron, oneshot, and HTTP-armed reminders. Extracted to its own single-host private-net node so exactly-one-scheduler is enforced by topology, unblocking active-active web (ADR-030, ADR-100, #6178). The CLI binary is version-pinned in inngest.tf (inngest_cli_version + per-arch sha256, verified against ONE upstream checksums.txt at pin time) with a named freshness owner since #7463: the rule-audit.yml poll detects drift, inngest-cli-staleness.test.sh enforces coherence, inngest-cli.provenance.md is the analysis of record. ADOPTING (#10136, ADR-292): a host-level stunnel4 systemd unit (soleur-inngest-tls.service, not a process inside the Inngest process and not a dependency of it) terminates TLS on 10.0.1.40:8443 and forwards to 127.0.0.1:8288; the legacy plaintext :8288 listener stays open and counted until a later replace"
+"txt": "Durable trigger layer for server-side agents — cron, oneshot, and HTTP-armed reminders. Extracted to its own single-host private-net node so exactly-one-scheduler is enforced by topology, unblocking active-active web (ADR-030, ADR-100, #6178). The CLI binary is version-pinned in inngest.tf (inngest_cli_version + per-arch sha256, verified against ONE upstream checksums.txt at pin time) with a named freshness owner since #7463: the rule-audit.yml poll detects drift, inngest-cli-staleness.test.sh enforces coherence, inngest-cli.provenance.md is the analysis of record. ADOPTING (#10136, ADR-294): a host-level stunnel4 systemd unit (soleur-inngest-tls.service, not a process inside the Inngest process and not a dependency of it) terminates TLS on 10.0.1.40:8443 and forwards to 127.0.0.1:8288; the legacy plaintext :8288 listener stays open and counted until a later replace"
 },
 "tags": [],
 "notation": "Container",
@@ -61465,7 +61465,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Durable trigger layer for server-side agents — cron, oneshot, and HTTP-armed reminders. Extracted to its own single-host private-net node so exactly-one-scheduler is enforced by topology, unblocking active-active web (ADR-030, ADR-100, #6178). The CLI binary is version-pinned in inngest.tf (inngest_cli_version + per-arch sha256, verified against ONE upstream checksums.txt at pin time) with a named freshness owner since #7463: the rule-audit.yml poll detects drift, inngest-cli-staleness.test.sh enforces coherence, inngest-cli.provenance.md is the analysis of record. ADOPTING (#10136, ADR-292): a host-level stunnel4 systemd unit (soleur-inngest-tls.service, not a process inside the Inngest process and not a dependency of it) terminates TLS on 10.0.1.40:8443 and forwards to 127.0.0.1:8288; the legacy plaintext :8288 listener stays open and counted until a later replace"
+"txt": "Durable trigger layer for server-side agents — cron, oneshot, and HTTP-armed reminders. Extracted to its own single-host private-net node so exactly-one-scheduler is enforced by topology, unblocking active-active web (ADR-030, ADR-100, #6178). The CLI binary is version-pinned in inngest.tf (inngest_cli_version + per-arch sha256, verified against ONE upstream checksums.txt at pin time) with a named freshness owner since #7463: the rule-audit.yml poll detects drift, inngest-cli-staleness.test.sh enforces coherence, inngest-cli.provenance.md is the analysis of record. ADOPTING (#10136, ADR-294): a host-level stunnel4 systemd unit (soleur-inngest-tls.service, not a process inside the Inngest process and not a dependency of it) terminates TLS on 10.0.1.40:8443 and forwards to 127.0.0.1:8288; the legacy plaintext :8288 listener stays open and counted until a later replace"
 },
 "tags": [],
 "notation": "Container",
@@ -62250,7 +62250,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Durable trigger layer for server-side agents — cron, oneshot, and HTTP-armed reminders. Extracted to its own single-host private-net node so exactly-one-scheduler is enforced by topology, unblocking active-active web (ADR-030, ADR-100, #6178). The CLI binary is version-pinned in inngest.tf (inngest_cli_version + per-arch sha256, verified against ONE upstream checksums.txt at pin time) with a named freshness owner since #7463: the rule-audit.yml poll detects drift, inngest-cli-staleness.test.sh enforces coherence, inngest-cli.provenance.md is the analysis of record. ADOPTING (#10136, ADR-292): a host-level stunnel4 systemd unit (soleur-inngest-tls.service, not a process inside the Inngest process and not a dependency of it) terminates TLS on 10.0.1.40:8443 and forwards to 127.0.0.1:8288; the legacy plaintext :8288 listener stays open and counted until a later replace"
+"txt": "Durable trigger layer for server-side agents — cron, oneshot, and HTTP-armed reminders. Extracted to its own single-host private-net node so exactly-one-scheduler is enforced by topology, unblocking active-active web (ADR-030, ADR-100, #6178). The CLI binary is version-pinned in inngest.tf (inngest_cli_version + per-arch sha256, verified against ONE upstream checksums.txt at pin time) with a named freshness owner since #7463: the rule-audit.yml poll detects drift, inngest-cli-staleness.test.sh enforces coherence, inngest-cli.provenance.md is the analysis of record. ADOPTING (#10136, ADR-294): a host-level stunnel4 systemd unit (soleur-inngest-tls.service, not a process inside the Inngest process and not a dependency of it) terminates TLS on 10.0.1.40:8443 and forwards to 127.0.0.1:8288; the legacy plaintext :8288 listener stays open and counted until a later replace"
 },
 "tags": [],
 "notation": "Container",
@@ -62660,7 +62660,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Durable trigger layer for server-side agents — cron, oneshot, and HTTP-armed reminders. Extracted to its own single-host private-net node so exactly-one-scheduler is enforced by topology, unblocking active-active web (ADR-030, ADR-100, #6178). The CLI binary is version-pinned in inngest.tf (inngest_cli_version + per-arch sha256, verified against ONE upstream checksums.txt at pin time) with a named freshness owner since #7463: the rule-audit.yml poll detects drift, inngest-cli-staleness.test.sh enforces coherence, inngest-cli.provenance.md is the analysis of record. ADOPTING (#10136, ADR-292): a host-level stunnel4 systemd unit (soleur-inngest-tls.service, not a process inside the Inngest process and not a dependency of it) terminates TLS on 10.0.1.40:8443 and forwards to 127.0.0.1:8288; the legacy plaintext :8288 listener stays open and counted until a later replace"
+"txt": "Durable trigger layer for server-side agents — cron, oneshot, and HTTP-armed reminders. Extracted to its own single-host private-net node so exactly-one-scheduler is enforced by topology, unblocking active-active web (ADR-030, ADR-100, #6178). The CLI binary is version-pinned in inngest.tf (inngest_cli_version + per-arch sha256, verified against ONE upstream checksums.txt at pin time) with a named freshness owner since #7463: the rule-audit.yml poll detects drift, inngest-cli-staleness.test.sh enforces coherence, inngest-cli.provenance.md is the analysis of record. ADOPTING (#10136, ADR-294): a host-level stunnel4 systemd unit (soleur-inngest-tls.service, not a process inside the Inngest process and not a dependency of it) terminates TLS on 10.0.1.40:8443 and forwards to 127.0.0.1:8288; the legacy plaintext :8288 listener stays open and counted until a later replace"
 },
 "tags": [],
 "notation": "Container",

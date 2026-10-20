@@ -10,7 +10,7 @@ related_adrs: [ADR-100, ADR-140, ADR-118, ADR-241]
 brand_survival_threshold: single-user incident
 ---
 
-# ADR-292: The Inngest send path gets TLS from a host-local stunnel terminator, a Terraform-minted pinned certificate in Doppler, and a Doppler-flagged data-driven flip
+# ADR-294: The Inngest send path gets TLS from a host-local stunnel terminator, a Terraform-minted pinned certificate in Doppler, and a Doppler-flagged data-driven flip
 
 ## Status
 

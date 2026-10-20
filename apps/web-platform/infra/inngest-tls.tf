@@ -1,4 +1,4 @@
-# TLS for the web -> Inngest scheduler link (#10136, ADR-292 provisional ordinal).
+# TLS for the web -> Inngest scheduler link (#10136, ADR-294 provisional ordinal).
 #
 # The dedicated Inngest host (10.0.1.40) serves its control API and the event/registry endpoints on
 # :8288 in cleartext. `inngest start` v1.45.1 has no TLS flag (measured, plan Phase 0), so a stunnel4
@@ -15,7 +15,7 @@
 # validate, so a leaked key can impersonate THIS endpoint only, never mint certificates for another.
 # The only SAN is the private IP (no DNS name exists for the host). The web-side resolver does NOT
 # re-check the SAN or purpose: the host-side `curl --cacert` self-gate and the canary's CA-withheld
-# negative control prove the pinned file against the real listener (ADR-292).
+# negative control prove the pinned file against the real listener (ADR-294).
 #
 # FOUR PROPERTIES THAT ARE EASY TO "FIX" AND MUST NOT BE:
 #   1. NOT count-gated, unlike proxy-tls.tf. ADR-118 gated that quartet because the proxy SERVER logged

@@ -1278,7 +1278,7 @@ Read the last `OK`/`SUSPECT` line. On `SUSPECT`, treat the QUIESCED notice as un
 
 ## Link TLS (#10136)
 
-Status: **adopting** ([ADR-292](../architecture/decisions/ADR-292-inngest-link-tls-terminator-and-flagged-flip.md)). Everything below is
+Status: **adopting** ([ADR-294](../architecture/decisions/ADR-294-inngest-link-tls-terminator-and-flagged-flip.md)). Everything below is
 **inert at merge**: the resolver's default is still `http://10.0.1.40:8288`, nothing reads the new secrets until the host is replaced,
 and the flag does not exist until the owner-gated flip. This section covers **leg 1 only** (the web app's sends and reads to the
 scheduler on `:8288`). The `sdk_url` poll (dated disposition to 2026-12-10, tracked as #10538) and the Cloudflare step-call leg (#10479) are not fixed

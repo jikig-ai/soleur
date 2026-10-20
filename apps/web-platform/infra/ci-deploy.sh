@@ -3407,7 +3407,7 @@ github_app_key_canary_check() {
 }
 
 # >>> inngest-link-resolver >>>
-# resolve_inngest_link <env-snapshot> (#10136, ADR-292): the SINGLE chokepoint that decides which Inngest link the
+# resolve_inngest_link <env-snapshot> (#10136, ADR-294): the SINGLE chokepoint that decides which Inngest link the
 # web container is handed, and the only writer of the CA file that becomes a trust anchor for EVERY Node outbound
 # TLS connection in that container (NODE_EXTRA_CA_CERTS). Everything downstream (the canary and prod `docker run`,
 # the probes through $INNGEST_LINK_DIR/inngest-link.env, docker-run-tuple.py) accepts exactly the pair it can produce:
@@ -4737,7 +4737,7 @@ case "$COMPONENT" in
       exit 1
     fi
 
-    # #10136 (ADR-292): resolve the Inngest link ONCE for both app starts. With the flag on, a CA/self-gate failure
+    # #10136 (ADR-294): resolve the Inngest link ONCE for both app starts. With the flag on, a CA/self-gate failure
     # ends the deploy here and the old container keeps serving; there is no http downgrade. Reason tokens are fixed
     # literals set inside the resolver (final_write_state splices the reason into JSON unquoted).
     INNGEST_LINK_RC=0
