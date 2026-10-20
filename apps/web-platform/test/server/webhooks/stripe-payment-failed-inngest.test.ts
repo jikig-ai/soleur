@@ -221,12 +221,9 @@ describe("Stripe invoice.payment_failed → Inngest bridge (FR5)", () => {
     await POST(makeRequest());
     expect(mockInngestSend).toHaveBeenCalledTimes(1);
 
-    // Redelivery: dedup INSERT fails with unique violation → handler
-    // short-circuits with 200 BEFORE the switch fires again.
-    mockInsert.mockResolvedValueOnce({
-      data: null,
-      error: { code: "23505", message: "duplicate key" },
-    });
+    // Redelivery: the row is still claimed (stateful dedup model), so the
+    // INSERT fails with a unique violation and the handler short-circuits
+    // with 200 BEFORE the switch fires again.
     const res2 = await POST(makeRequest());
     expect(res2.status).toBe(200);
     expect(mockInngestSend).toHaveBeenCalledTimes(1);
@@ -291,10 +288,73 @@ describe("Stripe invoice.payment_failed → Inngest bridge (FR5)", () => {
       invoiceId: "in_pf_001",
       errorName: "Error",
     });
-    expect(ctx.extra).not.toHaveProperty("founderId");
-    expect(ctx.extra).not.toHaveProperty("customerEmailHash");
-    // The raw error text can embed hosts or ids; only its name is reported.
+    // Exact key set, so nothing else (a raw founderId, the email hash, a
+    // nested payload) can ride along in the Sentry extra.
+    expect(Object.keys(ctx.extra ?? {}).sort()).toEqual([
+      "errorCode",
+      "errorName",
+      "eventId",
+      "invoiceId",
+      "userId",
+    ]);
+    // The raw error text can embed hosts or ids; only its name and code are reported.
     expect(JSON.stringify(ctx.extra)).not.toContain("ECONNREFUSED");
+  });
+
+  // The reported name and code come from the thrown value, not constants.
+  test("T1b: errorName and errorCode follow the thrown error; a non-Error is typed", async () => {
+    process.env.SOLEUR_FR5_ENABLED = "true";
+    mockConstructEvent.mockReturnValue(makePaymentFailedEvent());
+    // A code outside the transient list keeps this to one attempt.
+    mockInngestSend.mockRejectedValueOnce(
+      Object.assign(new RangeError("boom"), { code: "E_PIN" }),
+    );
+    expect((await POST(makeRequest())).status).toBe(500);
+    expect(mockReportSilentFallback.mock.calls[0][1]).toMatchObject({
+      extra: { errorName: "RangeError", errorCode: "E_PIN" },
+    });
+
+    mockReportSilentFallback.mockClear();
+    mockInngestSend.mockRejectedValueOnce("boom");
+    expect((await POST(makeRequest())).status).toBe(500);
+    const extra = (
+      mockReportSilentFallback.mock.calls[0][1] as {
+        extra: Record<string, unknown>;
+      }
+    ).extra;
+    expect(extra.errorName).toBe("string");
+    expect(extra.errorCode).toBeUndefined();
+  });
+
+  // The 500 must not return before the DELETE has settled: a serverless
+  // function can freeze right after responding, leaving the row claimed and
+  // the redelivery short-circuited (the original #10542 bug). The mock here
+  // settles on a later macrotask, so only an awaited release passes.
+  test("T5: the release is awaited before the 500 returns", async () => {
+    process.env.SOLEUR_FR5_ENABLED = "true";
+    mockConstructEvent.mockReturnValue(makePaymentFailedEvent());
+    mockInngestSend.mockRejectedValueOnce(new Error("ECONNREFUSED 127.0.0.1:8288"));
+    mockDeleteEq.mockImplementationOnce(async (_col: string, id: string) => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      claimed.delete(id);
+      return { error: null };
+    });
+
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(500);
+    expect(claimed.has("evt_pf_001")).toBe(false);
+  });
+
+  // The failure is reported before the release is attempted, so a release
+  // that throws (network error) cannot take the Sentry event with it.
+  test("T6: a throwing release still leaves the send failure reported", async () => {
+    process.env.SOLEUR_FR5_ENABLED = "true";
+    mockConstructEvent.mockReturnValue(makePaymentFailedEvent());
+    mockInngestSend.mockRejectedValueOnce(new Error("ECONNREFUSED 127.0.0.1:8288"));
+    mockDeleteEq.mockRejectedValueOnce(new Error("db down"));
+
+    await POST(makeRequest()).catch(() => undefined);
+    expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
   });
 
   // T3 (#10542): the behavior the old code lost. The stateful insert mock

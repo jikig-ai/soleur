@@ -555,8 +555,9 @@ export async function POST(request: Request) {
       // send releases that claim and returns 500 (see the catch below), so
       // Stripe's redelivery re-enters and re-attempts the send.
       if (process.env.SOLEUR_FR5_ENABLED === "true" && customerId) {
-        // The lookup error is ignored here and the event is acknowledged
-        // without a send (same loss class; tracked in #10657).
+        // The lookup error here (and an isGranted DB error below) is ignored
+        // and the event acknowledged without a send: same loss class, tracked
+        // in #10657.
         const { data: founderRow } = await supabase
           .from("users")
           .select("id")
@@ -636,19 +637,19 @@ export async function POST(request: Request) {
               { feature: "stripe-webhook", eventId: event.id },
             );
           } catch (err) {
-            // A failed send must not be acknowledged: release the dedup row
-            // and return 500 so Stripe redelivers (#10542). The retry is
-            // idempotent through the `stripe-${event.id}` Inngest event id,
-            // which Inngest treats as a duplicate for 24 hours, so a send
-            // that landed server-side but errored client-side cannot spawn a
-            // second CFO draft.
-            // Every send failure returns 500, transient or not; a
-            // deterministic failure is escaped by SOLEUR_FR5_ENABLED=false.
+            // A failed send must not be acknowledged (#10542): release the
+            // dedup row and return 500 so Stripe redelivers, for every
+            // failure, transient or not. A deterministic failure is stopped by
+            // SOLEUR_FR5_ENABLED=false (Doppler prd, read at process start).
+            // The only duplicate guard on the retry is Inngest's event-id dedup
+            // for `stripe-${event.id}` (24 h window): the CFO function inserts
+            // its draft without a source_ref, so a redelivery after that window
+            // of a send that landed but errored can add a second draft.
             //
-            // `err` is passed as null (the message path): an Error is
-            // captured first by the pino mirror without our tags and Sentry
-            // drops the tagged second capture (#8629). Only the error name
-            // and code are reported; the raw message can embed hosts or ids.
+            // `err` is passed as null (message path): an Error is captured
+            // first by the pino mirror without our tags and Sentry drops the
+            // tagged second capture (#8629). Only the error name and code are
+            // reported; the raw message can embed hosts or ids.
             const errorCode = (err as { code?: unknown } | null)?.code;
             reportSilentFallback(null, {
               feature: "stripe-webhook",
