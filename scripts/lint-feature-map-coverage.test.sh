@@ -18,12 +18,14 @@
 # ONCE in the mutated copy and exits 3 otherwise, so a drifted anchor aborts
 # the harness instead of scoring a phantom kill against an unmutated file.
 #
-# ROWS are the plan's Guard-Contract matrix verbatim (12) plus the C0 control:
+# ROWS are the plan's Guard-Contract matrix verbatim (12) plus the C0 control,
+# plus two review-added rows (R13/R14) pinning the consumer-grammar tightening:
 # R1 uncovered route, R2 map missing, R3 two uncovered routes both named,
 # R4 renamed directory, R5 reason-less exemption, R6 zero-route producer,
 # R7 tombstone entry, R8 stripped expects:, R9 contradictory classification,
 # R10 de-headed entry, R11/R12 must-PASS (route-group stripping; `###`
-# subsection + reasoned exemption staying green).
+# subsection + reasoned exemption staying green), R13 prose field-mention is
+# not a field bullet, R14 fenced code block in the map.
 set -uo pipefail
 
 # git exports these when this runs as a lefthook hook; they would repoint every
@@ -334,11 +336,41 @@ D="$WORK/r12"; mkrepo "$D"
 mutate "$D/apps/web-platform/test/feature-map.md" '### Selector notes' '### `/dashboard/ghost`'
 expect_green "R12 H3 with route-shaped text not a route heading" "$D"
 
+# --- R13: a prose mention of the field name is NOT the field bullet ------------
+# The completeness arm is anchored to the `- selectors:`/`- expects:` bullet
+# shape; rewriting both bullets of one entry into prose lines that still
+# contain the field names must red BOTH fields (a bare-substring check would
+# pass this fixture green).
+D="$WORK/r13"; mkrepo "$D"
+mutate "$D/apps/web-platform/test/feature-map.md" '- selectors: `chat-index-resume`' '- notes: selectors: inlined'
+mutate "$D/apps/web-platform/test/feature-map.md" '- expects: conversation index renders' '- notes: expects: inlined'
+expect_red "R13 prose field-mention is not a field bullet" "$D" "INCOMPLETE-ENTRY"
+if ! grep -q 'selectors:' "$WORK/out" || ! grep -q 'expects:' "$WORK/out"; then
+  notok "R13 -- RED but did not name BOTH missing fields"; cat "$WORK/out" >&2
+fi
+
+# --- R14: a fenced code block anywhere in the map -> RED ------------------------
+# A `## \`/route\`` line inside a fence counts as a real entry under the
+# line-anchored consumers; the guard fails closed on the fence itself rather
+# than teaching three parsers to skip fence ranges. The fenced ghost also
+# tombstones, so the discriminating token is FENCED-BLOCK, not the rc.
+D="$WORK/r14"; mkrepo "$D"
+cat >> "$D/apps/web-platform/test/feature-map.md" <<'MD'
+
+```markdown
+## `/dashboard/ghost`
+
+- selectors: `x`
+- expects: y
+```
+MD
+expect_red "R14 fenced code block in map" "$D" "FENCED-BLOCK"
+
 # --- Harness self-check -- deleting a row must red the battery -----------------
 # EXACT count, not a floor: a `>=` bound admits deleting rows unnoticed, which
 # is the defect this row exists to make visible. Bump DECLARED_ROWS in the same
 # edit that adds or removes a row.
-DECLARED_ROWS=14
+DECLARED_ROWS=16
 rows_run=$((rows_run + 1))
 if (( rows_run == DECLARED_ROWS )); then
   ok "battery executed ${rows_run}/${DECLARED_ROWS} rows (anti-vacuity)"

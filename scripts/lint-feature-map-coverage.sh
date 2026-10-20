@@ -22,11 +22,18 @@
 #                 page.tsx -- a tombstone entry for a deleted route reds
 #                 (deleting a page AND its entry in one PR is the DESIRED
 #                 consistency, not drift).
-#   Completeness: every mapped entry body carries `selectors:` and
-#                 `expects:` lines -- the issue's AC demands them, so a
-#                 presence-only heading would certify a non-conformant map.
+#   Completeness: every mapped entry body carries the `- selectors:` and
+#                 `- expects:` field bullets -- the issue's AC demands them,
+#                 so a presence-only heading (or a mere prose mention of the
+#                 field name inside the body) would certify a non-conformant
+#                 map.
 #   Contradiction: a route present in BOTH the mapped and exempted sets
 #                 reds -- a classification must pick one side.
+#   Grammar:      a fenced code block anywhere in the map reds -- the
+#                 consumers are line-anchored, so a `## \`/route\`` line
+#                 inside a fence would count as a real entry and could
+#                 certify a route with no conforming entry at all. The map
+#                 documents fields with inline backticks; it needs no fences.
 #
 # Exemption bullets carry a REASON: `- \`/route\` — <reason>` requires
 # non-empty text after the em-dash. A bullet without it is
@@ -82,6 +89,7 @@ tombstone=0
 contra=0
 incomplete=0
 malformed_n=0
+fenced=0
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 : > "$WORK/mapped"
@@ -166,9 +174,23 @@ else
   done < "$WORK/exempted_raw"
   LC_ALL=C sort -u -o "$WORK/exempted" "$WORK/exempted"
 
+  # Grammar arm: no fenced code blocks. Every consumer here is line-anchored,
+  # so a fence is not a neutral formatting choice -- a `## \`/route\`` line
+  # inside one counts as a real entry heading and its fenced body as real
+  # fields. Fail closed on the fence itself rather than teach three parsers
+  # to skip fence ranges: the map's convention is inline backticks.
+  fenced=$(grep -cE '^(```|~~~)' "$MAP_PATH" || true)
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    echo "FENCED-BLOCK: ${line} -- ${MAP_FILE} must not contain fenced code blocks; a \`## \`/route\`\` line inside a fence counts as a real entry"
+  done < <(grep -nE '^(```|~~~)' "$MAP_PATH" || true)
+
   # Entry completeness: each mapped heading's body (until the next `^## ` or
-  # EOF) must contain `selectors:` and `expects:` lines. `### ` subsections do
-  # not close a body (the anchor is two # then space).
+  # EOF) must contain the `- selectors:` and `- expects:` FIELD BULLETS --
+  # anchored to the bullet shape the entry convention documents, because a
+  # bare substring is satisfied by a prose mention (`- gotchas: see
+  # selectors:`) inside an entry that lacks the field entirely. `### `
+  # subsections do not close a body (the anchor is two # then space).
   awk '
     function emit() {
       if (route != "") printf "%s\t%d\t%d\n", route, sel, hasexp
@@ -180,8 +202,8 @@ else
     }
     /^## / { emit(); route="" }
     route != "" {
-      if ($0 ~ /selectors:/) sel=1
-      if ($0 ~ /expects:/) hasexp=1
+      if ($0 ~ /^[[:space:]]*-[[:space:]]*selectors:/) sel=1
+      if ($0 ~ /^[[:space:]]*-[[:space:]]*expects:/) hasexp=1
     }
     END { emit() }
   ' "$MAP_PATH" > "$WORK/completeness" || true
@@ -238,6 +260,12 @@ else
     malformed_n=$((malformed_n + 1))
     echo "MALFORMED-EXEMPTION: ${line} -- Deliberately-unmapped bullets must be '- \`/route\` — <reason>'; an exemption is a recorded decision"
   done < "$WORK/malformed"
+
+  # Single verdict channel: `fails` is the ONLY thing the exit-1 gate reads.
+  # Aggregating the arm counters here means an arm that echoes findings also
+  # moves the verdict -- a future arm that forgets to wire its counter into
+  # the ok-condition below cannot report-and-pass.
+  fails=$((fails + uncovered + tombstone + contra + incomplete + malformed_n + fenced))
 fi
 
 if (( fails > 0 )); then
@@ -247,7 +275,7 @@ fi
 mapped_n=$(wc -l < "$WORK/mapped" | tr -d ' ')
 exempted_n=$(wc -l < "$WORK/exempted" | tr -d ' ')
 
-if (( pages_n > 0 && uncovered == 0 && tombstone == 0 && contra == 0 && incomplete == 0 && malformed_n == 0 )); then
+if (( pages_n > 0 && uncovered == 0 && tombstone == 0 && contra == 0 && incomplete == 0 && malformed_n == 0 && fenced == 0 )); then
   echo "feature-map-coverage: ok (routes=${pages_n} mapped=${mapped_n} exempted=${exempted_n})"
   exit 0
 fi
