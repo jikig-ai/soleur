@@ -19,3 +19,10 @@
 ### Components Invoked
 - soleur:plan (inline phases), soleur:deepen-plan (partial, at-authoring gates), gh probes (issue/run/log/api), scripts/followthroughs/jobs1-stopgap-7432.sh (live run, exit 5), pr-overlap-preflight.sh (exit 0), soleur:engineering:cto (1 batched spawn)
 - cto_spawns=1
+
+## Pipeline checkpoint (post-review)
+- PR: #10722 draft, branch pushed, HEAD aad8061bcb. 5-seat panel ran (PANEL_SHA 03cdb40b78): 0 P1, 1 P2 (merge promptly — pre-merge bound-kills are permanent unjudged strikes), P3s all dispositioned inline. Fix-round verification PASS (281/0 suite).
+- Probe live: exit 2 NOT YET, strikes 0, 5/12 counted. Issue comment posted (6300063494).
+- QA: no browser/API test scenarios in plan — unit-level only, all green; skips gracefully.
+- Remaining: compound learnings, soleur:ship (ready → semver:patch → squash merge → Phase-7 poll → postmerge).
+- Watch: any NEW non-allowlisted RED in later counted runs stands (one = tolerated strike, two = revert trigger); pre-merge bound-kills at the live-360 bound are unjudged — merge promptly.
