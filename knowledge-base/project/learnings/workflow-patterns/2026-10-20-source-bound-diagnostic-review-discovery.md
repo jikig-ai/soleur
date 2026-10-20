@@ -69,3 +69,34 @@ read-only tool storage. Repeating that exact read through the approval tool
 succeeded and returned the PR's linked issue numbers. Treat shim-install
 failure as a tool-resolution failure, not as a GitHub result; keep the Git
 cleanliness probe separate so a failed first command cannot hide its status.
+
+## Approved source/offline implementation addendum — 2026-10-20
+
+The operator approved transport source and synthesized offline tests only.
+Initial coordinator, transport and schema imports failed before implementation.
+The coordinator's deadline regression then failed because gate time was outside
+the budget; the clock now starts before the gate and execution passes the same
+absolute deadline through preflight and collection. Failed coordinator results
+are raised outside exception handlers to avoid retaining decoder context.
+
+Harness corrections: the fake destination initially emitted body observations
+for an error status the real transport refuses header-only; restrict its events
+to the real path. Importing a TestCase directly duplicated unrelated discovery;
+import its fixture module instead. A multiline with statement lacked a
+continuation, an insertion displaced the output-replacement test tail, and a
+synthetic preparation Namespace omitted two explicit paths. Each failure was
+inspected and corrected before the successful run. Mutation oracles now require
+a pristine pass and assertion failures rather than accepting instrument errors.
+The schema BOM mutation originally removed only one of two independent guards;
+its coupled mutant removes both and demonstrates the refusal boundary.
+
+The first full offline run hit sandbox-denied local socket binds and resulting
+fixture cleanup warnings; it was not a source/runtime verdict. The approved
+rerun with local fixture access passed all 381 tests. Ruff initially scanned
+only 115 tracked files because the seven new files were untracked; stage exact
+paths before interpreting its coverage. It then found one unused test import,
+which was removed; all 122 files pass at the existing 44-finding baseline.
+The transport worker's guessed lint-script glob matched nothing; exact lefthook
+discovery found the ratchet. Semgrep auto config rejects metrics-off; explicit
+`p/python`, one worker and metrics off scanned all seven files with 151 rules,
+zero findings and no JSON errors. No operational preparation or acquisition ran.
