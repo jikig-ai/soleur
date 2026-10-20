@@ -2145,21 +2145,25 @@ _tq8_forms() {  # <wt> <head> → TQ8_FORMS
 # _q_synced <tmp> → 0 iff the hook merged origin/main into the branch and pushed it (the PR head is an ancestor of the remote branch)
 _q_synced() {
   local tmp="$1"
-  [[ "$(_prf_context)" == *"merged origin/main into feat-x and pushed"* ]] \
-    && git -C "$tmp/origin.git" merge-base --is-ancestor "$Q_HEAD" refs/heads/feat-x 2>/dev/null \
-    && [[ "$(git -C "$tmp/origin.git" rev-parse refs/heads/feat-x)" != "$Q_REMOTE" ]]
+  assert_fixture_dir "$tmp"
+  if [[ "$(_prf_context)" == *"merged origin/main into feat-x and pushed"* ]] \
+     && git -C "$tmp/origin.git" merge-base --is-ancestor "$Q_HEAD" refs/heads/feat-x 2>/dev/null \
+     && [[ "$(git -C "$tmp/origin.git" rev-parse refs/heads/feat-x)" != "$Q_REMOTE" ]]; then return 0; fi
+  return 1
 }
 # _q_skipped <tmp> → 0 iff nothing moved (HEAD, the remote branch, no merge commit) and the context is the armed-BEHIND skip
 _q_skipped() {
   local tmp="$1" wt="$1/wt-feat-x" ctx; ctx="$(_prf_context)"
-  [[ "$PRF_RC" -eq 0 && "$(_prf_decision)" != "deny" ]] \
-    && [[ "$ctx" == *"is BEHIND with auto-merge armed"* && "$ctx" == *"merge queue"* ]] \
-    && [[ "$ctx" != *"merged origin/main into"* ]] \
-    && [[ "$(git -C "$wt" rev-parse HEAD)" == "$Q_HEAD" ]] \
-    && [[ "$(git -C "$tmp/origin.git" rev-parse refs/heads/feat-x)" == "$Q_REMOTE" ]] \
-    && [[ "$(git -C "$wt" cat-file -p HEAD | grep -c '^parent ')" == "1" ]]
+  assert_fixture_dir "$tmp"
+  if [[ "$PRF_RC" -eq 0 && "$(_prf_decision)" != "deny" ]] \
+     && [[ "$ctx" == *"is BEHIND with auto-merge armed"* && "$ctx" == *"merge queue"* ]] \
+     && [[ "$ctx" != *"merged origin/main into"* ]] \
+     && [[ "$(git -C "$wt" rev-parse HEAD)" == "$Q_HEAD" ]] \
+     && [[ "$(git -C "$tmp/origin.git" rev-parse refs/heads/feat-x)" == "$Q_REMOTE" ]] \
+     && [[ "$(git -C "$wt" cat-file -p HEAD | grep -c '^parent ')" == "1" ]]; then return 0; fi
+  return 1
 }
-_q_snap() { Q_HEAD=$(git -C "$1/wt-feat-x" rev-parse HEAD); Q_REMOTE=$(git -C "$1/origin.git" rev-parse refs/heads/feat-x); }
+_q_snap() { assert_fixture_dir "$1"; Q_HEAD=$(git -C "$1/wt-feat-x" rev-parse HEAD); Q_REMOTE=$(git -C "$1/origin.git" rev-parse refs/heads/feat-x); }
 
 t_q17_armed_behind_skips_every_form() {
   local tmp; tmp=$(mktemp -d)
@@ -2267,6 +2271,7 @@ t_q22_proceed_syncs_silently() {
 # _q20_hook <tmp> <variant> — a COPY of the hook tree whose helper answers `--queue-wait` per <variant> (sets Q20_HOOK); `real` = no change.
 _q20_hook() {
   local tmp="$1" variant="$2" code="" helper
+  assert_fixture_dir "$tmp"
   _q_hook_copy "$tmp"
   helper="$tmp/hookcopy/plugins/soleur/scripts/sync-pr-behind.sh"
   case "$variant" in
@@ -2290,7 +2295,7 @@ _q20_hook() {
   Q20_HOOK="$tmp/hookcopy/.claude/hooks/pre-merge-rebase.sh"
 }
 # _q20_noted <tmp> <text> → 0 iff <text> carries the named cause and the stderr warn names it too
-_q20_noted() { [[ "$2" == *"cause=queue_wait_unreadable"* ]] && grep -q 'cause=queue_wait_unreadable' "$1/hook.err"; }
+_q20_noted() { if [[ "$2" == *"cause=queue_wait_unreadable"* ]] && grep -q 'cause=queue_wait_unreadable' "$1/hook.err"; then return 0; fi; return 1; }
 
 # T-Q20: any --queue-wait answer the hook cannot trust (non-zero rc incl. an OLD script that exits 2, no verdict line, a forged
 # queue_wait followed by proceed, a suffix, empty output, a hung read) syncs as today AND is NAMED, never silent and never a block.

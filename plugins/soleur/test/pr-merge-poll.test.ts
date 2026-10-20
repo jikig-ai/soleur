@@ -155,8 +155,9 @@ describe("pr-merge-poll BEHIND contract", () => {
       const text = readFileSync(f, "utf-8");
       expect(text.match(/bash "\$SYNC_SNAP" "\$PR" --step/g)?.length).toBe(1);
       expect(text).toContain('bash "$SYNC_SNAP" "$PR" --step --fence || sync_rc=$?');
-      expect(text).toContain("--help 2>/dev/null | grep -q -- '--fence'");
-      expect(text).not.toContain("--help 2>/dev/null | grep -q -- '--step'");
+      // `[|]`, not a bare pipe: the probe is quoted text here, not a pipeline (scripts/lint-grep-q-pipe-guard scans for the shape)
+      expect(text).toMatch(/--help 2>\/dev\/null [|] grep -q -- '--fence'/);
+      expect(text).not.toMatch(/--help 2>\/dev\/null [|] grep -q -- '--step'/);
     }
   });
 
