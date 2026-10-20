@@ -28,3 +28,10 @@
 ### Technical-ruling gate
 - 4 `unruled-technical` rows → ONE batched `soleur:engineering:cto` spawn (Rule interface, report-only). All four assumed defaults confirmed with verified evidence (vendored cloudflare-go v0.116.0 retry loop, live schema probe, backoff arithmetic, sibling-root grep). Rulings written to `decision-challenges.md`; gate re-run: PASS.
 - cto_spawns=1
+
+## Work Phase
+- Status: complete. Commits: KB artifacts + `76d4ad2a4d` fix(infra) on branch feat-one-shot-10643-tf-plan-504-retry.
+- Evidence: cloudflare-provider-retry.test.sh 19/19 GREEN post-fix (was 18/19 FAIL = proper RED); cla-evidence main.test.sh green incl. new trio assertions; mutation battery 5/5 per Guard Contract (rows 1-4 RED, row 5 PASS); terraform fmt clean; fixture ratchets + lint-shell-capture clean; git grep census `retries =` = 7; workflow file untouched.
+- GDPR: skip — diff is infra .tf/.test.sh/runbook only, no regulated-data surfaces.
+- lint-ratchet: not adopted (relay only, do not adopt unattended).
+- Affected-shard: apps/web-platform/infra/** defers to ship Phase 4 battery; cla-evidence covered by infra-validation in CI.
