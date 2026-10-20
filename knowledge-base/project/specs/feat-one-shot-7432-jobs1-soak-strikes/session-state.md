@@ -17,4 +17,5 @@
 - #7432 stays open — soak mid-window (4/12 counted).
 
 ### Components Invoked
-- soleur:plan (inline phases), soleur:deepen-plan (partial, at-authoring gates), gh probes (issue/run/log/api), scripts/followthroughs/jobs1-stopgap-7432.sh (live run, exit 5), pr-overlap-preflight.sh (exit 0)
+- soleur:plan (inline phases), soleur:deepen-plan (partial, at-authoring gates), gh probes (issue/run/log/api), scripts/followthroughs/jobs1-stopgap-7432.sh (live run, exit 5), pr-overlap-preflight.sh (exit 0), soleur:engineering:cto (1 batched spawn)
+- cto_spawns=1

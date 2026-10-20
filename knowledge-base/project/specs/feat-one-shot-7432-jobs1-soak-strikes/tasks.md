@@ -3,7 +3,7 @@
 Plan: `knowledge-base/project/plans/2026-10-20-chore-jobs1-soak-strike-disposition-plan.md`
 
 ## Phase 0 — ruling check
-- [ ] Read `decision-challenges.md` fork row; if still `pending`, spawn `soleur:engineering:cto` with the packaged evidence before touching the probe
+- [x] Read `decision-challenges.md` fork row; if still `pending`, spawn `soleur:engineering:cto` with the packaged evidence before touching the probe — **Ruled by CTO agent 2026-10-20: Arm A (reproducing-in-intent). PR body must disclose neither literal reproduction test held + the judgment basis. Arm B / Phase 5b is dead.**
 
 ## Phase 1 — `_SUITE_BOUNDS` entry (either arm)
 - [ ] Add `"apps/web-platform/infra/git-data-wipe-assert.test.sh=720"` to `_SUITE_BOUNDS` in `apps/web-platform/infra/run-registered-suites.sh` with a comment citing #10654, #10523's growth, the two bound-kill run ids, and the 162 s serial measurement (dev host, faster-than-CI caveat)
@@ -21,4 +21,4 @@ Plan: `knowledge-base/project/plans/2026-10-20-chore-jobs1-soak-strike-dispositi
 - [ ] `python3 scripts/lint-guard-contract.py` on the plan; `npx markdownlint-cli2` on plan + tasks
 
 ## Phase 5b — Arm B only (fork rules letter-stands non-reproducing)
-- [ ] Restore infra-step `JOBS` pin in `.github/workflows/main-health-monitor.yml` + flip guard (12b) in `plugins/soleur/test/main-health-monitor-workflow.test.sh`; note on #9217
+- [x] ~~Restore infra-step `JOBS` pin + flip guard (12b)~~ — dead arm: CTO ruled reproducing-in-intent; no revert
