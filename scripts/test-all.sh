@@ -3805,7 +3805,7 @@ _aff_runner_banner() {
 # #8875: +1 always-on (emitter census is repo-global by construction); re-pinned at 114-5.
 # #10331: +2 always-on (the lint-ratchet pair); re-pinned at 116-5.
 # #7893: +1 always-on (the Art. 30 re-verification unit); re-pinned at 117-5.
-_MIN_ALWAYS_ON_DECLARED=112
+_MIN_ALWAYS_ON_DECLARED=113
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
