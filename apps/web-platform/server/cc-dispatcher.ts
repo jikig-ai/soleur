@@ -119,6 +119,7 @@ import {
 import { buildCrmTools } from "@/server/crm/crm-tools";
 import { updateConversationFor } from "./conversation-writer";
 import { registerLiveLoopProbe } from "./agent-session-registry";
+import { newAgentSessionsRefused, QUIET_WINDOW_MESSAGE, trackSessionStart } from "./quiet-window";
 import {
   getUserServiceTokens,
   patchWorkspacePermissions,
@@ -3286,6 +3287,14 @@ export function hasActiveCcQuery(conversationId: string): boolean {
   return _runner.hasActiveQuery(conversationId);
 }
 
+/**
+ * #8211 quiet-window read — the number of live cc-soleur-go Queries on this
+ * host. A bare count (never conversation ids). 0 when no runner exists yet.
+ */
+export function activeCcQueryCount(): number {
+  return _runner ? _runner.activeQueriesSize() : 0;
+}
+
 // Register into the shared cross-lineage liveness predicate
 // (agent-session-registry.ts): the stuck-active reaper and ws-handler's
 // dead-socket reap consult it, and the cc lineage's live Queries are
@@ -3825,6 +3834,19 @@ async function reportDispatchSoleurGoError(
 export async function dispatchSoleurGo(
   args: DispatchSoleurGoArgs,
 ): Promise<void> {
+  // #8211 quiet-window: held for the whole call so the live-session line cannot read 0 while a start
+  // that passed the gate is still resolving its workspace / cloning / leasing (its Query registers late).
+  const releaseStart = trackSessionStart();
+  try {
+    return await dispatchSoleurGoInner(args);
+  } finally {
+    releaseStart();
+  }
+}
+
+async function dispatchSoleurGoInner(
+  args: DispatchSoleurGoArgs,
+): Promise<void> {
   const {
     userId,
     conversationId,
@@ -3842,6 +3864,28 @@ export async function dispatchSoleurGo(
     attachments,
     onSessionIdPersisted,
   } = args;
+
+  // #8211 quiet-window — refuse a NEW agent session while the kill-switch is on.
+  // "New" = this conversation has no live Query, so a warm turn on a running
+  // session never reaches the refusal and is never dropped or altered. This sits
+  // ABOVE the ownership write, the user-message INSERT and the status flip, so a
+  // refused turn leaves no row behind and the conversation keeps its last honest
+  // status. Sent as an `error` frame with NO errorCode (the client renders the
+  // text as a chat message, same as the repo `cloning` block). Info breadcrumb
+  // only, no Sentry: an owner-set maintenance window is not an incident.
+  if (!hasActiveCcQuery(conversationId) && (await newAgentSessionsRefused())) {
+    log.info(
+      {
+        feature: "quiet-window",
+        op: "refuse-new-session",
+        surface: "cc-dispatcher",
+        userIdHash: hashUserId(userId),
+      },
+      "quiet-window: refused a new agent session (new-sessions-paused)",
+    );
+    sendToClient(userId, { type: "error", message: QUIET_WINDOW_MESSAGE });
+    return;
+  }
 
   // Verify conversation ownership AND bump `last_active` in a single
   // round-trip. `updateConversationFor` with `expectMatch: true` runs the

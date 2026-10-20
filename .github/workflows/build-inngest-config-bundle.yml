@@ -82,13 +82,15 @@ jobs:
           MANIFEST: ${{ steps.pack.outputs.manifest }}
         run: |
           set -euo pipefail
+          # cosign v3.1.1 (the pin on BOTH ends) dropped the 2.x detached-output flags
+          # entirely — the single .sigstore.json bundle (sig + cert + chain) travels INSIDE
+          # the tarball so the host `verify-blob --bundle` stays fully offline against the
+          # baked trusted root. The Assemble step tars $RUNNER_TEMP/bundle wholesale, so the
+          # bundle file lands in the tarball with no pack-script change.
           cosign sign-blob --yes \
-            --output-signature "${MANIFEST}.sig" \
-            --output-certificate "${MANIFEST}.cert" \
+            --bundle "${MANIFEST}.sigstore.json" \
             "${MANIFEST}"
-          # The .sig + .cert travel INSIDE the bundle so the host verify-blob is fully offline
-          # (cosign verify-blob --certificate <cert> --trusted-root <baked> --certificate-identity-regexp …).
-          echo "Signed ${MANIFEST}: wrote ${MANIFEST}.sig + ${MANIFEST}.cert"
+          echo "Signed ${MANIFEST}: wrote ${MANIFEST}.sigstore.json"
 
       - name: Assemble bundle tarball + minimal OCI context
         run: |
