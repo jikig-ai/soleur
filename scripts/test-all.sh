@@ -5902,6 +5902,12 @@ if want_scripts; then
   # .github/actions/**/*.test.sh is not in SUITE_GLOBS, so without this line the suite
   # runs in zero runners (the #5417 class: green CI over no coverage).
   run_suite "scripts/infra-credentials-loader" bash .github/actions/infra-credentials/infra-credentials.test.sh
+  # (#9927 item C1) The aggregate-only, read-only probe of the Inngest Postgres history. The suite drives the
+  # REAL script under `env -i` against a stub `curl` that records every request, so it asserts what the probe
+  # SENT (byte-equal allowlist literals, the pinned read-only endpoint, the credential on the config channel
+  # only) and what it PRINTED (shapes, never a body). Explicit run_suite: scripts/*.test.sh is not auto-globbed
+  # here, and a probe that holds an account-wide token must never run live from a tree whose suite did not run.
+  run_suite "scripts/inngest-history-probe" bash scripts/inngest-history-probe.test.sh
   # APP_DOMAIN_BASE derivation, consumed by both D10 arms of registry-luks-recut and by
   # cf-tunnel-registry-bridge. It replaced a Doppler read of a secret that exists in no config
   # of the soleur project. Explicit run_suite — scripts/*.test.sh is not auto-globbed here.

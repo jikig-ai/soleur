@@ -390,6 +390,7 @@ scripts/infra-config-red-alert	6
 scripts/infra-credentials-loader	8
 scripts/infra-drift-autoclose	4
 scripts/inngest-cutover-flip-rollout-7761	7
+scripts/inngest-history-probe	1
 scripts/inngest-host-not-serving-7674	4
 scripts/inngest-host-state	2
 scripts/inngest-liveness-classify	3
