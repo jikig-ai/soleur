@@ -19,6 +19,9 @@ Plan: `knowledge-base/project/plans/2026-10-20-feat-opencode-install-docs-plan.m
       per-harness pointer.
 - [ ] `getting-started.njk`: edit FAQ prose **and** its JSON-LD twin in the same change (P6).
 - [ ] `getting-started.njk`: bump `last_updated:`.
+- [ ] `index.njk`: hero install note + self-hosted FAQ answers → harness-neutral.
+- [ ] `index.njk`: edit FAQ prose **and** its JSON-LD twin in the same change (P6).
+- [ ] `index.njk`: bump `last_updated:`.
 
 ## Phase 3 — OpenCode in-repo doc (surface C, ADR-291-bounded)
 

@@ -219,13 +219,15 @@ and link each named harness to its committed instruction doc (`grok-onboarding.m
 Claude Code install. Apply the identical harness-table edit to `plugins/soleur/README.md` in the
 same PR.
 
-**B. `plugins/soleur/docs/pages/getting-started.njk` — de-monopolize the framing and add pointers.**
-Change the section label from "Install in Claude Code." to a harness-neutral instruction, add a
-row/link per harness including the ones the page already names, and link the harnesses whose
-adapters ship with a committed doc **only where a public claim is already authorized**. Extend the
-harness table to the harnesses the page may name publicly (Claude Code, Grok Build; and Devin,
-Codex which are named on the README today). Keep the FAQ prose and its JSON-LD twin in sync in a
-single edit.
+**B. The two docs-site install surfaces — `plugins/soleur/docs/pages/getting-started.njk` and the
+homepage `plugins/soleur/docs/index.njk` — de-monopolize the framing and add pointers.**
+Change the getting-started section label from "Install in Claude Code." to a harness-neutral
+instruction, change the homepage's "Runs inside your own Claude Code" note, add a row/link per
+harness including the ones the pages already name, and link the harnesses whose adapters ship with
+a committed doc **only where a public claim is already authorized**. Extend the harness table to the
+harnesses the page may name publicly (Claude Code, Grok Build; and Devin, Codex which are named on
+the README today). Keep every FAQ prose answer and its JSON-LD twin in sync in a single edit, in
+**both** files.
 
 **C. OpenCode (in-repo only, per ADR-291).** Improve `plugins/soleur/opencode/INSTRUCTIONS.md`
 and `plugins/soleur/commands/sync.md` for the #10591 item-4 gap (**no uninstall path**): document
@@ -236,6 +238,58 @@ removal accurately, and note `--check` drift. **No public-page OpenCode install 
 decision requires (i) the live support-bar evidence in #10591 item 1 and (ii) a CTO ruling, and
 is therefore out of scope for this docs PR. This is the honest disposition of an ask whose
 literal form conflicts with an accepted ADR.
+
+## Enhancement Summary (deepen-plan)
+
+### Key Improvements
+
+Deepened inline (the `subagent` fan-out is unavailable in this Code Mode runtime; the mechanical
+halt gates below were run directly). Findings that changed the plan:
+
+- **New surface found: the docs-site homepage `plugins/soleur/docs/index.njk`.** The deepen pass
+  found that `index.njk` carries the same Claude-Code-only framing as `getting-started.njk`
+  (`Source-available. Runs inside your own Claude Code`, `Self-hosted runs inside your own Claude
+  Code`) **and** duplicates three FAQ answers verbatim in a JSON-LD block (lines ~209/217/225 ↔
+  ~258/274/290). It is a public install surface and a P6 JSON-LD-drift surface the first draft
+  missed. Added to surface B and to `Files to Edit`.
+- **Grok Build has no install command in the repo.** `knowledge-base/engineering/grok-onboarding.md`
+  documents first-run verification (`grok inspect`, interactive `grok`) and command naming, but
+  **no `grok plugin install …` command**. So surface A's "add a Grok Build install block" cannot
+  cross-check a command against the onboarding doc — it must add the **pointer + setup steps**
+  (`grok inspect` must list the Soleur plugin), and flag the missing install command as a gap,
+  rather than invent one. AC 1 reworded accordingly.
+- **`getting-started.njk` and `index.njk` are inside the `marketing-content-drift.test.ts` scan**
+  (`walkSiteCopy(join(DOCS_ROOT, "pages"))` + `join(DOCS_ROOT, "index.njk")`, neither allowlisted).
+  Any new hardcoded component-count numeral these edits introduce will red that test. Reinforces
+  NFR 10 (no new count literals; use `{{ stats.agents }}` etc.).
+- **`docs-cli-verification.sh` fires on fenced code blocks containing CLI first tokens** (`bun`,
+  `npm`, `gh`, `doppler`, …) in `.md`/`.njk`/README. The OpenCode install line
+  (`bun plugins/soleur/scripts/install-opencode-adapter.ts`) and any added Devin/Codex/Claude
+  fenced command block are exactly this shape, so every added/edited fenced CLI block needs a
+  `<!-- verified: YYYY-MM-DD source: <url> -->` marker within 5 lines — not just the file, the
+  **block**. NFR 11 sharpened to per-block.
+- **The `## Installation` section currently contains no literal "Install in Claude Code"/"two
+  commands" string in the root README** — that framing lives on the **website** (`getting-started`
+  section label, `seoTitle`; `index.njk` hero note). The root README's problem is the unlabeled
+  "From the marketplace (recommended)" heading and the absent Grok Build block. Surface A's edit
+  targets those two precisely.
+- **The FAQ/JSON-LD twin is 7 answers in `getting-started.njk` and ~3 in `index.njk`.** P6's
+  check must cover both files, not only getting-started.
+
+### New Considerations Discovered
+
+- **Mechanical halt gates run and passed:** Phase 4.6 (`## User-Brand Impact` present, threshold
+  `none`, no sensitive-path match in a docs-only diff), Phase 4.8 (no PAT-shaped variable —
+  clean), Phase 4.12 (`## Scope Check` present once, all three subsections, no `unmapped` row).
+  Phase 4.7 (Observability), 4.9 (UI-wireframe), 4.10 (Encryption Posture), 4.11 (Guard Contract)
+  **skip silently** — the diff is `*.md`/`*.njk` docs under `plugins/soleur/docs/` with no
+  UI-surface, store, or guard-shaped deliverable.
+- **The routed public-claim decision has a concrete trigger:** #10591 item 1 (live support-bar
+  evidence) is the gate that flips ADR-291's public-claim posture. When it closes, a *separate*
+  docs change adds the OpenCode install to the public surfaces and amends ADR-291's Status — it is
+  not this plan and should not be bundled into it.
+- **PLAN-DEEPENING is not implementation.** This document stops at the plan + Enhancement Summary;
+  no source file was edited.
 
 ## Technical Approach
 
@@ -254,7 +308,7 @@ literal form conflicts with an accepted ADR.
 - Success: both READMEs name Claude Code, Grok Build, Codex, Devin as install targets, each
   linking its doc; no new component-count literals.
 
-#### Phase 2: De-monopolize the getting-started page (surface B)
+#### Phase 2: De-monopolize the docs-site install surfaces (surface B)
 
 - Edit `plugins/soleur/docs/pages/getting-started.njk`:
   - Section label "Source-available. Install in Claude Code." → harness-neutral.
@@ -262,10 +316,16 @@ literal form conflicts with an accepted ADR.
     (Claude Code, Grok Build, Codex, Devin — the ADR-245 supported set), not Claude Code alone.
   - Harness table: add rows/columns for the harnesses the page may publicly name.
   - Add a `Learn More`-style link (or per-harness links) to the committed instruction docs.
-  - Update the FAQ answer **and** its JSON-LD twin in the same edit (P6).
+  - Update the FAQ answers **and** their JSON-LD twins in the same edit (P6).
+  - Bump `last_updated:` frontmatter.
+- Edit `plugins/soleur/docs/index.njk`:
+  - Hero install note ("Source-available. Runs inside your own Claude Code…") and the self-hosted
+    FAQ answer ("Self-hosted runs inside your own Claude Code…") → harness-neutral, matching
+    getting-started's wording.
+  - Update those answers' JSON-LD twins in the same edit (P6).
   - Bump `last_updated:` frontmatter.
 - Success: no page prose says "Claude Code" as if it were the only harness; every named harness
-  has a pointer; FAQ and JSON-LD match.
+  has a pointer; FAQ and JSON-LD match in both files.
 
 #### Phase 3: OpenCode in-repo doc completeness (surface C, ADR-291-bounded)
 
@@ -286,11 +346,13 @@ literal form conflicts with an accepted ADR.
 
 ## Files to Edit
 
-- `README.md` — `## Installation` section: label the Claude Code block, add a Grok Build block,
-  add per-harness doc pointers.
+- `README.md` — `## Installation` section: label the Claude Code block, add a Grok Build
+  setup/pointer block, add per-harness doc pointers.
 - `plugins/soleur/README.md` — mirror the identical install/harness-table edit.
 - `plugins/soleur/docs/pages/getting-started.njk` — section label, self-hosted prose, harness
   table, instruction-doc links, FAQ prose **and** JSON-LD twin, `last_updated` frontmatter.
+- `plugins/soleur/docs/index.njk` — hero install note, self-hosted prose/FAQ answers, matching
+  JSON-LD twins, `last_updated` frontmatter.
 - `plugins/soleur/opencode/INSTRUCTIONS.md` — add an accurate uninstall/removal subsection;
   confirm install flags.
 - `plugins/soleur/commands/sync.md` — point the manual-removal prose at the new subsection.
@@ -335,7 +397,7 @@ literal form conflicts with an accepted ADR.
 | Ask (parent brief) | Plan item |
 |---|---|
 | Fix inaccurate/stale/missing install instructions for OpenCode | Surface C (in-repo OpenCode doc + uninstall gap); public claim **routed** (surface D) — not taken, per ADR-291 |
-| …and other non-Claude harnesses (Grok Build, Codex, Devin CLI, Cursor CLI, Antigravity) | Surface A (Grok Build install block + pointers), Surface B (de-Westernize getting-started, add rows/links) |
+| …and other non-Claude harnesses (Grok Build, Codex, Devin CLI, Cursor CLI, Antigravity) | Surface A (Grok Build setup block + pointers), Surface B (de-monopolize getting-started + index.njk, add rows/links) |
 | Repo-root `README.md` | Surface A, `Files to Edit` |
 | Soleur.ai website (Eleventy docs site) | Surface B, `Files to Edit` |
 
@@ -357,17 +419,17 @@ silently executed.
 
 ### Split Assessment
 
-**No split.** The change is one coherent docs-accuracy unit across two public surfaces plus one
-in-repo doc. Splitting the README from the website would double the review surface for identical
-prose and risk the two drifting mid-flight; splitting OpenCode out would strand surface D
-unowned. Single PR.
+**Recommendation:** No split. The change is one coherent docs-accuracy unit across three public
+surfaces plus one in-repo doc. Splitting the README from the website would double the review surface
+for identical prose and risk the two drifting mid-flight; splitting OpenCode out would strand
+surface D unowned. Single PR.
 
 ## Open Code-Review Overlap
 
 `None` — files to edit are docs/prose only (`README.md`, `plugins/soleur/README.md`,
-`getting-started.njk`, `opencode/INSTRUCTIONS.md`, `sync.md`); no open `code-review` issue names
-them (checked against open issues at plan time). Opencode-adapter code-review residuals live in
-#10591 (not labeled `code-review`), and surface C only *references* that issue, it does not
+`getting-started.njk`, `index.njk`, `opencode/INSTRUCTIONS.md`, `sync.md`); no open `code-review`
+issue names them (checked against open issues at plan time). Opencode-adapter code-review residuals
+live in #10591 (not labeled `code-review`), and surface C only *references* that issue, it does not
 re-open its engineering items.
 
 ## Domain Review
@@ -414,20 +476,21 @@ re-open its engineering items.
 ### Functional Requirements
 
 1. `README.md` `## Installation` labels the Claude Code marketplace block as the Claude Code
-   install, and contains an install block for **Grok Build** (command cross-checked against
-   `knowledge-base/engineering/grok-onboarding.md`) or, if the onboarding doc provides none, a
-   documented pointer plus a note. — P1, P2
+   install, and adds a **Grok Build** block containing its first-run setup (`grok inspect` must
+   list the Soleur plugin, then an interactive `grok` session) plus a pointer to
+   `knowledge-base/engineering/grok-onboarding.md`. **It does not invent an install command** —
+   the onboarding doc documents none, so the block notes the gap instead. — P1, P2
 2. `README.md` and `plugins/soleur/README.md` carry the **same** harness table and the same
    per-harness instruction-doc links. — P1, P4
 3. Each of Claude Code, Grok Build, Codex, Devin in both READMEs links to its committed
    instruction doc. — P4
-4. `plugins/soleur/docs/pages/getting-started.njk` no longer states or implies that the
-   self-hosted install is Claude-Code-only (section label and self-hosted prose both changed).
-   — P1, P2
+4. `plugins/soleur/docs/pages/getting-started.njk` **and** `plugins/soleur/docs/index.njk` no longer
+   state or imply that the self-hosted install is Claude-Code-only (getting-started section label
+   + self-hosted prose; index hero note + self-hosted FAQ answers). — P1, P2
 5. The getting-started harness table names the publicly-claimed harness set (Claude Code,
    Grok Build, Codex, Devin) with a per-harness pointer. — P1, P4
-6. The getting-started FAQ prose and its JSON-LD `mainEntity` twin are identical for every edited
-   answer. — P6
+6. In **both** `getting-started.njk` and `index.njk`, every edited FAQ prose answer and its JSON-LD
+   `mainEntity` twin are identical. — P6
 7. `plugins/soleur/opencode/INSTRUCTIONS.md` documents an accurate **uninstall/removal** path and
    its install instructions match `install-opencode-adapter.ts`'s flags. — P5
 8. `plugins/soleur/commands/sync.md` points manual removal at that subsection. — P5
@@ -438,10 +501,10 @@ re-open its engineering items.
 
 10. No edited file introduces a hardcoded component count; existing placeholders
     (`{{ stats.agents }}` etc.) and existing literals are preserved. — Cut List
-11. Each edited or added CLI command carries a `<!-- verified: YYYY-MM-DD source: <url> -->`
-    marker where the surrounding file already uses that convention, satisfying
+11. Each edited or added **fenced CLI code block** (not merely the file) carries a
+    `<!-- verified: YYYY-MM-DD source: <url> -->` marker within 5 lines, satisfying
     `docs-cli-verification.sh`. — gates
-12. `getting-started.njk` `last_updated:` frontmatter is bumped to the edit date.
+12. `getting-started.njk` and `index.njk` `last_updated:` frontmatter is bumped to the edit date.
 
 ### Quality Gates
 
@@ -456,16 +519,18 @@ re-open its engineering items.
 1. **Grep: no new public claim.** `grep -rniE "support(s|ed)? (the )?(opencode|cursor|antigravity)" README.md plugins/soleur/README.md plugins/soleur/docs/pages/getting-started.njk`
    → returns no line that this PR added. (RED before: the AC is written before the edit; a naive
    implementer adding the OpenCode block reds here.)
-2. **Grep: Grok Build install present.** `grep -n "Grok Build" README.md` shows an install block
-   (or documented pointer) in `## Installation`. (RED before edit.)
+2. **Grep: Grok Build setup present.** `grep -n "Grok Build" README.md` shows a Grok Build block
+   with `grok inspect` and a pointer to `grok-onboarding.md`, and **no invented install command**.
+   (RED before edit.)
 3. **Grep: both READMEs' harness tables match.**
    `diff <(sed -n '/| Step | Claude Code | Grok Build |/,/^$/p' README.md) <(sed -n '/| Step | Claude Code | Grok Build |/,/^$/p' plugins/soleur/README.md)`
    → empty. (RED before sync edit.)
-4. **Grep: getting-started de-monopolized.**
-   `grep -n "Install in Claude Code" plugins/soleur/docs/pages/getting-started.njk` → no match.
+4. **Grep: both docs-site surfaces de-monopolized.**
+   `grep -n "Install in Claude Code" plugins/soleur/docs/pages/getting-started.njk` → no match;
+   `grep -n "inside your own Claude Code" plugins/soleur/docs/index.njk` → no match.
    (RED before edit.)
-5. **JSON-LD parity.** A small check comparing each FAQ prose answer to its JSON-LD `text`
-   counterpart in `getting-started.njk` → all equal. (RED before the twin edit.)
+5. **JSON-LD parity (both files).** A check comparing each FAQ prose answer to its JSON-LD `text`
+   counterpart in `getting-started.njk` **and** `index.njk` → all equal. (RED before twin edits.)
 6. **Uninstall documented.** `grep -niE "uninstall|removal" plugins/soleur/opencode/INSTRUCTIONS.md`
    → a subsection exists; `grep -n "opencode/INSTRUCTIONS" plugins/soleur/commands/sync.md`
    → pointer present. (RED before edit.)
