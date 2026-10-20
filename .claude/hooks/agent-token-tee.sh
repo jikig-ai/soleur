@@ -99,7 +99,7 @@ _ctx_lib="$(dirname "${BASH_SOURCE[0]}")/lib/context-sanitize.sh"
 # shellcheck source=/dev/null
 [[ -r "$_ctx_lib" ]] && . "$_ctx_lib" || true
 declare -F soleur_ctx_sanitize >/dev/null 2>&1 \
-  || soleur_ctx_sanitize() { LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C sed 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g'; }
+  || soleur_ctx_sanitize() { LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C sed -e $'s/\xe2\x80\xa8//g' -e $'s/\xe2\x80\xa9//g'; }
 
 sanitize_field() {
   local v

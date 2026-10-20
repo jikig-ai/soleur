@@ -88,6 +88,7 @@ plugins/soleur/skills/admin-ip-refresh/references/admin-ip-refresh-procedure.md|
 EOF
 )
 
+cd "$REPO_ROOT" || { printf 'FATAL: cannot cd to repo root\n' >&2; exit 2; }
 hits=$(grep -rlnE "tr -d ('\\\\0|'\[:cntrl:\])" .claude/hooks/ plugins/soleur/ 2>/dev/null | grep -v '\.test\.sh$' | sort)
 hit_count=$(printf '%s\n' "$hits" | grep -c .)
 [ "$hit_count" -ge 2 ] || fail "sentinel enumeration vacuous: $hit_count hits (lib defs alone should match)"

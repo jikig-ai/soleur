@@ -33,6 +33,7 @@ readonly MARKER=RUN_IN_PID_NAMESPACE_REFUSED
 # is unreadable the same-name fallback carries this site's pre-change strip set
 # (C0+DEL) — never weaker than today.
 _ctx_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)/lib/context-sanitize.sh"
+_ctx_lib="${_ctx_lib:-/nonexistent/context-sanitize.sh}"
 # shellcheck source=/dev/null
 [[ -r "$_ctx_lib" ]] && . "$_ctx_lib" || true
 declare -F soleur_ctx_sanitize >/dev/null 2>&1 \

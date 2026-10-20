@@ -62,7 +62,7 @@ unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
 _plugin_hooks_dir=$(cd -P "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P) || exit 0
 _ctx_lib="$_plugin_hooks_dir/../scripts/lib/context-sanitize.sh"
 # shellcheck source=/dev/null
-[[ -r "$_ctx_lib" ]] && . "$_ctx_lib"
+[[ -r "$_ctx_lib" ]] && . "$_ctx_lib" || true
 unset _ctx_lib _plugin_hooks_dir
 if ! declare -F soleur_ctx_sanitize >/dev/null 2>&1; then
   # Fallback — identical byte contract to the lib (C0 + DEL + NEL/LS/PS) so an

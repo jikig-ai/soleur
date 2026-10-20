@@ -41,12 +41,15 @@ assert_fixture_dir() {
   esac
 }
 {
+  # An inherited GIT_DIR would aim rev-parse at a foreign repo and print the
+  # cwd-derived toplevel (e.g. `/` — which passes the absolute check below and
+  # would mint `/.devin` on a uid-0 host). Same scrub list as the bare-root arms.
+  unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE
   _sentinel_root="$(git rev-parse --show-toplevel 2>/dev/null)" && \
-  # VERIFIED BUG CLOSED HERE: `$( )` assignment exits 0 even when git fails, so an
-  # unresolvable toplevel (bare root, non-repo cwd, detached GIT_DIR) left
-  # _sentinel_root EMPTY and the `&&` chain proceeded to `mkdir -p /.devin` — on
-  # a uid-0 host a write at the filesystem root. Require a non-empty ABSOLUTE
-  # path before any write; a bare-root session emits context only (#10392 audit).
+  # Guard: a non-empty ABSOLUTE path is required before any write — a relative or
+  # pathological toplevel (or a scrubbed-env empty) degrades to context-only;
+  # a bare-root session emits context only (#10392 audit).
   [[ -n "$_sentinel_root" && "$_sentinel_root" == /* ]] && \
   _sentinel_source="${SOLEUR_HOOK_SOURCE:-}" && \
   if [[ -z "$_sentinel_source" ]]; then

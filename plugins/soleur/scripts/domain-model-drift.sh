@@ -33,7 +33,7 @@ _ctx_lib="$SCRIPT_DIR/lib/context-sanitize.sh"
 # shellcheck source=/dev/null
 [[ -r "$_ctx_lib" ]] && . "$_ctx_lib" || true
 declare -F soleur_ctx_sanitize_lines >/dev/null 2>&1 \
-  || soleur_ctx_sanitize_lines() { LC_ALL=C tr -d '\000-\010\013-\037\177' | LC_ALL=C sed 's/\xc2\x85//g; s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g'; }
+  || soleur_ctx_sanitize_lines() { LC_ALL=C tr -d '\000-\010\013-\037\177' | LC_ALL=C sed -e $'s/\xc2\x85//g' -e $'s/\xe2\x80\xa8//g' -e $'s/\xe2\x80\xa9//g'; }
 
 SCHEMA_VERSION=1
 DISCLAIMER="Best-effort structural extraction from migrations/RLS/types; NOT a security audit or access-control attestation. Absence from this report does not imply an invariant is unenforced, and presence does not imply it is correctly enforced. Dynamic SQL and function-body logic are disclosed as blind_spots, not analyzed."

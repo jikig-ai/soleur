@@ -94,6 +94,7 @@ VERIFIER="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/../../../scripts/d
 # LC_ALL=C pin, so the fallback never strips less than the site did) — never
 # weaker than today.
 _ctx_lib="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)/../../../scripts/lib/context-sanitize.sh"
+_ctx_lib="${_ctx_lib:-/nonexistent/context-sanitize.sh}"
 # shellcheck source=/dev/null
 [[ -r "$_ctx_lib" ]] && . "$_ctx_lib" || true
 declare -F soleur_ctx_sanitize >/dev/null 2>&1 \

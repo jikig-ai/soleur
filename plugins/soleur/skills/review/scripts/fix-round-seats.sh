@@ -170,9 +170,13 @@ fi
 # never echoed raw to stdout. `set -f` kills pathname expansion, so a forged
 # `*`/`?`/glob token cannot expand into cwd filenames mid-validation.
 _ctx_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../scripts/lib" 2>/dev/null && pwd -P)/context-sanitize.sh"
-[[ -r "$_ctx_lib" ]] && . "$_ctx_lib"
+_ctx_lib="${_ctx_lib:-/nonexistent/context-sanitize.sh}"
+# shellcheck source=/dev/null
+[[ -r "$_ctx_lib" ]] && . "$_ctx_lib" || true
+# Ambient-locale [:cntrl:] on purpose — mirrors technical-ruling-gate.sh: a C-pinned
+# fallback could strip less than the pre-change site under UTF-8 locales (C1 range).
 declare -F soleur_ctx_sanitize >/dev/null 2>&1 \
-  || soleur_ctx_sanitize() { LC_ALL=C tr -d '[:cntrl:]'; }
+  || soleur_ctx_sanitize() { tr -d '[:cntrl:]'; }
 if [[ -n "$FINDING_SEATS" ]]; then
   set -f
   for tok in $(printf '%s' "$FINDING_SEATS" | tr ',' ' '); do
