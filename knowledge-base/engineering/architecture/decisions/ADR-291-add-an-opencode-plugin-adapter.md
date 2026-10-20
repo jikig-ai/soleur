@@ -33,7 +33,7 @@ landed 2026-10-19** (`plugins/soleur/scripts/sync-opencode-adapter.ts`, drift-ga
 met.
 
 Ordinal census on 2026-10-17, after `git fetch origin --prune`, over `refs/heads` and
-`refs/remotes/origin`: ADR-291 was unused. The highest ordinal present is ADR-290, carried only by
+`refs/remotes/origin`: ADR-291 was unused. The highest ordinal present was ADR-290, carried only by
 `feat-one-shot-10331-pr3a-ruff-eslint-scope` and its origin ref. The checked-out tree held up to
 ADR-288. ADR-289 and ADR-290 are taken, so this record does not reuse them; no citation of 291
 existed in the corpus.
