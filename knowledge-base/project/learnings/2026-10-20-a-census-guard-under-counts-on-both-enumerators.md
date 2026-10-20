@@ -165,6 +165,6 @@ Convention notes (followed existing rules, no new rule needed):
 - `2026-09-24-a-line-scanner-is-not-a-lexer-and-my-guard-fixture-hid-the-suite.md`
   — the general "lex, don't scan" lesson; this guard's fenced-block arm is
   the cheaper dual when the document convention is yours to constrain.
-- `knowledge-base/project/specs/feat-one-shot-10399-webplat-feature-map/decision-challenges.md`
+- `knowledge-base/project/specs/archive/20261020-171633-feat-one-shot-10399-webplat-feature-map/decision-challenges.md`
   — CTO rulings on map format, gate scope, bidirectionality, and the
   in-map exemption registry.
