@@ -150,7 +150,7 @@ Extend the DRIFT-pin block so the new vocabulary member is itself pinned: update
 
 #### Phase 2: Wire the two skill surfaces
 
-- 2.1 `work/SKILL.md`: widen the RED vocabulary + add the selection line + reference link at both sites (todo-structure step, TDD gate).
+- 2.1 `work/SKILL.md`: widen the RED vocabulary + add the selection line + reference link at ONE site (the todo-structure step's RED-task bullet) — cut to one site per CTO ruling 2026-10-20 (byte ceiling).
 - 2.2 `plan-issue-templates.md`: add the "properties that must never break" sentence to all three `## Test Scenarios` blocks.
 - 2.3 `test-pyramid-fixtures.test.sh`: extend the DRIFT pin + floor.
 

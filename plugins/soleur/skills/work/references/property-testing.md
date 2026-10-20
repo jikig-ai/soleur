@@ -31,7 +31,7 @@ alphabet is too large to enumerate.
 
 1. **Start with a pure function.** Property tests want deterministic,
    side-effect-free cores. If the behavior is tangled in I/O, extract the pure
-   part first (the TDD gate's extraction discipline applies unchanged).
+   part first (the TDD gate's RED-first discipline applies unchanged).
 2. **Say the property in plain English first.** "Every normalized URL re-parses
    to the same host" before `fc.property(...)`. If you cannot state it in one
    sentence, you do not have a property yet — you have a fuzzy unit test.

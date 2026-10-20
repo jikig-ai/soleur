@@ -35,3 +35,12 @@ soleur:plan (full workflow, inline), soleur:deepen-plan (halt gates 4.5–4.55 i
 - Seats: 462dfa1b git-history, d823dbb3 pattern-recognition, b5fb1f50 architecture, b723c78c security, 232e4fa4 performance, 37504a3e data-integrity, d06387e0 agent-native, 9974f96f code-quality
 - merge-tree rc=0 vs origin/main; mergeStateStatus=BEHIND (main moved after branch push — resync at ship)
 - Next after synthesis: fix findings inline (≤100 lines/≤4 files auto-flip) or file code-review issues + pr-comment-resolver + fix-round; then qa → compound → ship
+
+## Review Synthesis (in progress)
+- Panel findings: 4 seats converged on P1 tautological Hypothesis example — FIXED at eaab20329e (Counter oracle + idempotence). P3s fixed same commit: invertible-pairs wording, unverified tool-map rows, pin for 'properties that must never break' ×3 (MIN_ASSERTIONS 85), header re-wrap, home-layer label clause.
+- Later fixes (uncommitted->committing now): 'extraction discipline'->'RED-first discipline' reword; plan 2.1 'both sites'->'ONE site per CTO ruling'.
+- Seats returned: security (P2+P3), performance (PASS), pattern (P1+P3s), agent-native (P2+P3), architecture (P1+P3), code-quality (P1+P3s).
+- Seats PENDING: 462dfa1b git-history, 37504a3e data-integrity.
+- Next after last 2: fix-round invocation `soleur:review 10718 --fix-round --since <panel-sha>` if new findings, else skip; qa (no Test Scenarios browser flows — docs change, QA skips gracefully); compound; ship.
+- Epic #10397 checklist: #10398 #10399 tickable NOW (both closed+merged); #10400 on merge.
+- #10726 (fix-10693): ready + merge-queued, full battery running on ready.
