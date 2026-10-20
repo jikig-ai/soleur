@@ -59,7 +59,7 @@ unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
 # strip runs through the lib when it is readable. Plugin-side copy lives under
 # scripts/lib/ (the plugin ships only plugins/soleur/**); the repo-side copy lives at
 # .claude/hooks/lib/ and is byte-equal (context-sanitize.test.sh pins `cmp`).
-_plugin_hooks_dir=$(cd -P "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P) || exit 0
+_plugin_hooks_dir=$(cd -P "${BASH_SOURCE[0]%/*}" 2>/dev/null && pwd -P) || exit 0
 _ctx_lib="$_plugin_hooks_dir/../scripts/lib/context-sanitize.sh"
 # shellcheck source=/dev/null
 [[ -r "$_ctx_lib" ]] && . "$_ctx_lib" || true

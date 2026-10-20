@@ -93,7 +93,7 @@ VERIFIER="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/../../../scripts/d
 # (tr's [[:cntrl:]] class, under the ambient locale exactly as before — no
 # LC_ALL=C pin, so the fallback never strips less than the site did) — never
 # weaker than today.
-_ctx_lib="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)/../../../scripts/lib/context-sanitize.sh"
+_ctx_lib="$(cd -P "${BASH_SOURCE[0]%/*}/../../../scripts/lib" 2>/dev/null && pwd -P)/context-sanitize.sh"
 _ctx_lib="${_ctx_lib:-/nonexistent/context-sanitize.sh}"
 # shellcheck source=/dev/null
 [[ -r "$_ctx_lib" ]] && . "$_ctx_lib" || true

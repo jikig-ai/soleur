@@ -16,8 +16,15 @@
 # No `set` options here — this file is sourced into hooks that own their
 # own option state.
 
+# When sed is absent (restricted-PATH callers — e.g. run-in-pid-namespace's
+# private-PATH probe fixtures), degrade to the tr-only set: exactly every
+# site's pre-change strip set. Never weaker than the adoption contract.
 _soleur_ctx_sed() {
-  LC_ALL=C sed -e $'s/\xc2\x85//g' -e $'s/\xe2\x80\xa8//g' -e $'s/\xe2\x80\xa9//g'
+  if command -v sed >/dev/null 2>&1; then
+    LC_ALL=C sed -e $'s/\xc2\x85//g' -e $'s/\xe2\x80\xa8//g' -e $'s/\xe2\x80\xa9//g'
+  else
+    cat
+  fi
 }
 
 # strip-all: single-line fields (no C0 survives).

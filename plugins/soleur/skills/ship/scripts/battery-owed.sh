@@ -54,7 +54,7 @@ VERDICT_UNDECIDABLE=2
 # Shared context-sanitize lib (#10395), three levels up at scripts/lib/. When it
 # is unreadable the same-name fallback carries this site's pre-change strip set
 # (C0+DEL plus the LS/PS sed) — never weaker than today.
-_ctx_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)/../../../scripts/lib/context-sanitize.sh"
+_ctx_lib="$(cd "${BASH_SOURCE[0]%/*}/../../../scripts/lib" 2>/dev/null && pwd -P)/context-sanitize.sh"
 _ctx_lib="${_ctx_lib:-/nonexistent/context-sanitize.sh}"
 # shellcheck source=/dev/null
 [[ -r "$_ctx_lib" ]] && . "$_ctx_lib" || true

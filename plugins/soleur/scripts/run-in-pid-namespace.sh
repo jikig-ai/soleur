@@ -32,7 +32,7 @@ readonly MARKER=RUN_IN_PID_NAMESPACE_REFUSED
 # Shared context-sanitize lib (#10395), beside this script under lib/. When it
 # is unreadable the same-name fallback carries this site's pre-change strip set
 # (C0+DEL) — never weaker than today.
-_ctx_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)/lib/context-sanitize.sh"
+_ctx_lib="$(cd "${BASH_SOURCE[0]%/*}" 2>/dev/null && pwd -P)/lib/context-sanitize.sh"
 _ctx_lib="${_ctx_lib:-/nonexistent/context-sanitize.sh}"
 # shellcheck source=/dev/null
 [[ -r "$_ctx_lib" ]] && . "$_ctx_lib" || true
