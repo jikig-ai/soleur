@@ -15,7 +15,7 @@ POINTER='The check executes knowledge-base/legal/art30-reverification-triggers.y
 CELL_BASE='| **(f) Retention** | Reviewed **(1)** **(2)** **(3)** **(4)** **(5)** **(6)** **(7)** on 2020-01-01 with word alpha.'
 ROW1_WANT=1
 # Floor is the green-run pass count.
-MIN_ASSERTIONS=56
+MIN_ASSERTIONS=59
 
 fails=0
 passes=0
@@ -112,6 +112,54 @@ write_register() {
     '## Processing Activity 9 — Next' \
     '| **(f) Retention** | next activity word. |' \
     > "$d/knowledge-base/legal/article-30-register.md"
+}
+
+write_decoy_first_cell() {
+  local d="$1"
+  assert_fixture_dir "$d"
+  printf '%s\n' \
+    '## Processing Activity 2 — Example' \
+    '| **(f) Retention** | other activity word 2019-01-01.' \
+    '' \
+    '## Processing Activity 8 — Operational Telemetry' \
+    '| **(b) Purpose** | telemetry |' \
+    '| **(f) Retention** | Reviewed **(1)** **(2)** **(3)** **(4)** **(5)** **(6)** **(7)** on 2026-10-21 with word noted.' \
+    '| **(f) Retention** | Reviewed **(1)** **(2)** **(3)** **(4)** **(5)** **(6)** **(7)** on 2020-01-01 with word alpha.' \
+    '' \
+    '## Processing Activity 9 — Next' \
+    '| **(f) Retention** | next activity word. |' \
+    > "$d/knowledge-base/legal/article-30-register.md"
+}
+
+write_fake_pa8_pair() {
+  local d="$1"
+  assert_fixture_dir "$d"
+  printf '%s\n' \
+    '## Processing Activity 8 — Decoy' \
+    '| **(f) Retention** | Reviewed **(1)** **(2)** **(3)** **(4)** **(5)** **(6)** **(7)** on 2026-10-21 with word noted.' \
+    '## Processing Activity 9 — Decoy' \
+    '## Processing Activity 2 — Example' \
+    '| **(f) Retention** | other activity word 2019-01-01.' \
+    '' \
+    '## Processing Activity 8 — Operational Telemetry' \
+    '| **(b) Purpose** | telemetry |' \
+    '| **(f) Retention** | Reviewed **(1)** **(2)** **(3)** **(4)** **(5)** **(6)** **(7)** on 2020-01-01 with word alpha.' \
+    '' \
+    '## Processing Activity 9 — Next' \
+    '| **(f) Retention** | next activity word. |' \
+    > "$d/knowledge-base/legal/article-30-register.md"
+}
+
+replace_register_with_symlink() {
+  local d="$1"
+  assert_fixture_dir "$d"
+  printf '%s\n' \
+    '## Processing Activity 8 — Decoy' \
+    '| **(f) Retention** | Reviewed **(1)** **(2)** **(3)** **(4)** **(5)** **(6)** **(7)** on 2026-10-21 with word noted.' \
+    '## Processing Activity 9 — Decoy' \
+    > "$d/knowledge-base/legal/decoy-register.md"
+  rm -f -- "$d/knowledge-base/legal/article-30-register.md"
+  ln -s decoy-register.md -- "$d/knowledge-base/legal/article-30-register.md"
 }
 
 write_runbook() {
@@ -258,12 +306,6 @@ overwrite() {
   local d="$1" rel="$2" text="$3"
   assert_fixture_dir "$d"
   printf '%s\n' "$text" > "$d/$rel"
-}
-
-write_raw() {
-  local d="$1" rel="$2" text="$3"
-  assert_fixture_dir "$d"
-  printf '%s' "$text" > "$d/$rel"
 }
 
 write_nul_payload() {
@@ -746,12 +788,36 @@ commit_all "$D" head
 RC="$(run_gate "$D")"
 expect_rc "row 34 reorder marks an old fired id added" 0 "$RC"
 
+reset_seed
+D="$(seed)"
+add_line "$D" apps/web-platform/infra/ci-deploy.sh 'docker run --log-opt max-size=1m'
+write_decoy_first_cell "$D"
+commit_all "$D" head
+RC="$(run_gate "$D")"
+expect_rc "row 35 earlier retention row is not the cell" 1 "$RC"
+
+reset_seed
+D="$(seed)"
+add_line "$D" apps/web-platform/infra/ci-deploy.sh 'docker run --log-opt max-size=1m'
+write_fake_pa8_pair "$D"
+commit_all "$D" head
+RC="$(run_gate "$D")"
+expect_rc "row 36 earlier activity pair is not the cell" 1 "$RC"
+
+reset_seed
+D="$(seed)"
+add_line "$D" apps/web-platform/infra/ci-deploy.sh 'docker run --log-opt max-size=1m'
+replace_register_with_symlink "$D"
+commit_all "$D" head
+RC="$(run_gate "$D")"
+expect_rc "row 37 symlink register blob is not the cell" 1 "$RC"
+
 if grep -n 'docs/legal/' "$GATE" >/dev/null; then
   fail "script references docs/legal"
 else
   pass "script does not reference docs/legal"
 fi
-if grep -F -q 'legal_resolve_base ""' "$GATE" && grep -F -q 'base_rc=0' "$GATE" && grep -F -q 'filter_rc=0' "$GATE" && grep -F -q 'diff_rc=0' "$GATE" && grep -F -q '${EVENT_NAME:-}' "$GATE" && grep -F -q '${MERGE_GROUP_BASE_SHA:-}' "$GATE" && grep -F -q -- '--no-ext-diff' "$GATE" && grep -F -q -- '--no-renames' "$GATE"; then
+if grep -F -q 'legal_resolve_base ""' "$GATE" && grep -F -q 'base_rc=0' "$GATE" && grep -F -q 'filter_rc=0' "$GATE" && grep -F -q 'diff_rc=0' "$GATE" && grep -F -q '${EVENT_NAME:-}' "$GATE" && grep -F -q '${MERGE_GROUP_BASE_SHA:-}' "$GATE" && grep -F -q -- '--no-ext-diff' "$GATE" && grep -F -q -- '--no-textconv' "$GATE" && grep -F -q -- '--no-renames' "$GATE"; then
   pass "script keeps the capture and diff pins"
 else
   fail "script is missing a capture or diff pin"

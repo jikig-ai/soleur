@@ -856,28 +856,40 @@ else
 fi
 
 # k6-m5: member-boundary mutant — dropping the trailing slash from the member
-#        prefix pulls a sibling dir's members (knowledge-base/legal-x/) into a
-#        legal/ dir ref. The synthetic member is injected because no legal-x/
-#        exists in the index; without it the mutant is indistinguishable.
+#        prefix pulls a sibling dir's members into the dir ref. drafts/ is the
+#        all-md set. legal/ itself is mixed (the yml manifest), so an unmutated
+#        legal/ probe is already 0 and cannot show the flip. The synthetic
+#        sibling is injected because no drafts-x/ exists in the index.
 cases=$((cases + 1))
 cp "$ORACLE" "$TESTROOT/oracle-k6m5.py"
 _k6m5_n=$(grep -cF 'members = [f for f in _tracked()[0] if f.startswith(pre)]' "$TESTROOT/oracle-k6m5.py")
 sed -i 's|f.startswith(pre)|f.startswith(p)|' "$TESTROOT/oracle-k6m5.py"
+_k6m5_real=$(cd "$REPO_ROOT" && python3 - "$ORACLE" <<'COVPY'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("o", sys.argv[1]); o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
+KB = "knowledge" + "-base"
+o._TRACKED = (o._tracked()[0] | {KB + "/legal/drafts-x/evil.sh"}, o._tracked()[1] | {KB + "/legal/drafts-x"})
+print(" ".join("1" if o.covers(e, p) else "0" for e, p in [
+    ("^glob:" + KB + "/**.md", KB + "/legal/drafts"),
+    ("^glob:" + KB + "/**.md", KB + "/legal/audits"),
+]))
+COVPY
+)
 _k6m5=$(cd "$REPO_ROOT" && python3 - "$TESTROOT/oracle-k6m5.py" <<'COVPY'
 import sys, importlib.util
 spec = importlib.util.spec_from_file_location("o", sys.argv[1]); o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
 KB = "knowledge" + "-base"
-o._TRACKED = (o._tracked()[0] | {KB + "/legal-x/evil.sh"}, o._tracked()[1] | {KB + "/legal-x"})
+o._TRACKED = (o._tracked()[0] | {KB + "/legal/drafts-x/evil.sh"}, o._tracked()[1] | {KB + "/legal/drafts-x"})
 print(" ".join("1" if o.covers(e, p) else "0" for e, p in [
-    ("^glob:" + KB + "/**.md", KB + "/legal"),        # boundary mutant leaks evil.sh → 0
-    ("^glob:" + KB + "/**.md", KB + "/legal/audits"), # deeper dir unaffected → stays 1
+    ("^glob:" + KB + "/**.md", KB + "/legal/drafts"),  # boundary mutant leaks evil.sh → 0
+    ("^glob:" + KB + "/**.md", KB + "/legal/audits"),  # deeper dir unaffected → stays 1
 ]))
 COVPY
 )
-if [[ "$_k6m5_n" == "1" && "$_k6m5" == "0 1" ]]; then
+if [[ "$_k6m5_n" == "1" && "$_k6m5_real" == "1 1" && "$_k6m5" == "0 1" ]]; then
   pass "k6-m5: dropping the member-prefix slash leaks a sibling member (the boundary binds)"
 else
-  fail "k6-m5: landed=$_k6m5_n mutant='${_k6m5}' (want landed=1 mutant='0 1')"
+  fail "k6-m5: landed=$_k6m5_n real='${_k6m5_real}' mutant='${_k6m5}' (want landed=1 real='1 1' mutant='0 1')"
 fi
 
 # k6-m6/m7: member-enumeration and dispatch mutants need shapes the live index

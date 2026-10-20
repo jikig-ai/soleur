@@ -339,8 +339,7 @@ ids_match_closed_list() {
 }
 
 runbook_ids_text() {
-  local file="$1" line p=0
-  [[ -f "$file" ]] || return 1
+  local text="$1" line p=0
   while IFS= read -r line || [[ -n "${line:-}" ]]; do
     if [[ "$line" == "### Re-verification triggers" ]]; then
       p=1
@@ -352,47 +351,32 @@ runbook_ids_text() {
     if [[ "$p" == 1 && "$line" =~ ^([0-9]+)\. ]]; then
       printf '%s\n' "${BASH_REMATCH[1]}"
     fi
-  done < "$file"
+  done <<< "$text"
   [[ "$p" == 1 ]]
 }
 
-pa8_cell_file() {
-  local file="$1" line p=0 found=0
-  [[ -f "$file" ]] || return 1
-  while IFS= read -r line || [[ -n "${line:-}" ]]; do
-    if [[ "$line" == "## Processing Activity 8 "* ]]; then
-      p=1
-      continue
-    fi
-    if [[ "$p" == 1 && "$line" == "## Processing Activity 9 "* ]]; then
-      break
-    fi
-    if [[ "$p" == 1 && "$line" == *"(f) Retention"* ]]; then
-      printf '%s\n' "$line"
-      found=1
-      break
-    fi
-  done < "$file"
-  [[ "$found" == 1 ]]
-}
-
+# The cell is the committed blob, not a worktree read. Exactly one PA-8
+# heading and exactly one (f) Retention line in that section. A symlink blob
+# is the link text, so it cannot supply the cell.
 pa8_cell_text() {
-  local text="$1" line p=0 found=0
+  local text="$1" line p=0 found=0 headings=0 cell=""
   while IFS= read -r line || [[ -n "${line:-}" ]]; do
     if [[ "$line" == "## Processing Activity 8 "* ]]; then
+      headings=$((headings + 1))
       p=1
       continue
     fi
     if [[ "$p" == 1 && "$line" == "## Processing Activity 9 "* ]]; then
-      break
+      p=0
+      continue
     fi
     if [[ "$p" == 1 && "$line" == *"(f) Retention"* ]]; then
-      printf '%s\n' "$line"
-      found=1
-      break
+      cell="$line"
+      found=$((found + 1))
     fi
   done <<< "$text"
-  [[ "$found" == 1 ]]
+  [[ "$headings" -eq 1 && "$found" -eq 1 ]] || return 1
+  printf '%s\n' "$cell"
 }
 
 bold_ids_text() {
@@ -423,16 +407,24 @@ parse_manifest "$MANIFEST_REL"
 check_shape
 
 cell_rc=0
+head_register=""
+head_register=$(git cat-file blob "HEAD:${REGISTER_REL}") || cell_rc=$?
 HEAD_CELL=""
-HEAD_CELL=$(pa8_cell_file "$REGISTER_REL") || cell_rc=$?
+if (( cell_rc == 0 )); then
+  HEAD_CELL=$(pa8_cell_text "$head_register") || cell_rc=$?
+fi
 if (( cell_rc != 0 || ${#HEAD_CELL} == 0 )); then
   emit_error "id census rejected"
   exit 1
 fi
 
 rb_rc=0
+rb_blob=""
+rb_blob=$(git cat-file blob "HEAD:${RUNBOOK_REL}") || rb_rc=$?
 RB_IDS=""
-RB_IDS=$(runbook_ids_text "$RUNBOOK_REL") || rb_rc=$?
+if (( rb_rc == 0 )); then
+  RB_IDS=$(runbook_ids_text "$rb_blob") || rb_rc=$?
+fi
 if (( rb_rc != 0 )); then
   emit_error "id census rejected"
   exit 1
@@ -462,7 +454,7 @@ current_path=""
 
 filter_rc=0
 flag_diff=""
-flag_diff=$(git diff --no-ext-diff --no-color "${MERGE_BASE}...HEAD" -- "${PATH_TOKEN_PATHS[@]}") || filter_rc=$?
+flag_diff=$(git diff --no-ext-diff --no-textconv --no-color "${MERGE_BASE}...HEAD" -- "${PATH_TOKEN_PATHS[@]}") || filter_rc=$?
 if (( filter_rc != 0 )); then
   emit_error "git diff of watched flag paths failed"
   exit 2
@@ -520,7 +512,7 @@ fi
 
 ns_rc=0
 ns_out=""
-ns_out=$(git diff --name-status --no-renames "${MERGE_BASE}...HEAD" -- "${FILE_PATHS[@]}") || ns_rc=$?
+ns_out=$(git diff --name-status --no-renames --no-textconv "${MERGE_BASE}...HEAD" -- "${FILE_PATHS[@]}") || ns_rc=$?
 if (( ns_rc != 0 )); then
   emit_error "git diff name-status of the journald path failed"
   exit 2
@@ -546,7 +538,7 @@ fi
 
 show_rc=0
 base_register=""
-base_register=$(git show "${MERGE_BASE}:${REGISTER_REL}") || show_rc=$?
+base_register=$(git cat-file blob "${MERGE_BASE}:${REGISTER_REL}") || show_rc=$?
 if (( show_rc != 0 )); then
   emit_error "cannot read the base register"
   exit 2
