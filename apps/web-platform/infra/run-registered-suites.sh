@@ -79,6 +79,20 @@
 # web-host-provisioner-parity-mutation's 43 is hundreds of lines from EOF, so a `tail` shows
 # only trailing passes and destroys the one datum worth having).
 #
+# ATTRIBUTION (#7376) — the recorded -P 4 flakes, per-hypothesis verdicts
+# (2026-10-20 audit; evidence ledger posted on the issue):
+#   H1 `producer | grep -q` early-exit under pipefail — CONFIRMED proximate mechanism,
+#      FIXED + guarded (removed by #9554; zero-sweep in grep-q-pipe-guard.test.sh).
+#      Contention only opened the scheduling gap.
+#   H2 OOM / shim kill (wrapping bash -c dies, no .meta) — UNPROVEN, no occurrence
+#      observed. Any future instance self-attributes: no .meta → UNACCOUNTED + xargs rc 125.
+#   H3 shared-state collision — AUDITED to a small residual set; two `mktemp -u` races
+#      namespaced this pass and pinned by the T12 sweep in run-registered-suites.test.sh.
+#   H4 CPU/disk contention → suite exceeds its bound (rc=124) — CONFIRMED class, owned
+#      by _SUITE_BOUNDS; tune per-suite at ≥1.5x worst observed.
+# Exit-code-first attribution for any future RED: rc=124 → H4; signal-shaped or
+# UNACCOUNTED → H2; marker FAIL → real defect or H3.
+#
 # That is deliberate for local DX, and it is why CI does NOT rely on the skip:
 # infra-validation.yml has a separate `docker info` assertion step that reds the job when the
 # daemon is absent, rather than letting any suite pass vacuously. That step must stay
