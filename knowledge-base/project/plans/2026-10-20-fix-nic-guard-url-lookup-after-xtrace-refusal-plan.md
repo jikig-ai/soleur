@@ -12,6 +12,23 @@ type: fix
 
 PR body: `Ref #9639` and `Part of tracker #9217`. No closing keyword (F7 and F8 stay open; two sibling units are recorded not fixed). Draft PR: #10637.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-20
+**Gates run:** 4.6 User-Brand Impact (pass; `none` with the sensitive-path scope-out bullet), 4.7 Observability (pass; 5 fields present, probe verb `grep`, no shell-active characters, literal `expected_output`, fits the 15 s cap, run pre-fix to prove it discriminates), 4.8 PAT-shaped variable (none), 4.9 UI wireframe (no UI surface, skipped), 4.10 Encryption Posture (no `.tf`/cloud-init/migration in the file lists and no new store or connection, skipped), 4.11 Guard Contract (`scripts/lint-guard-contract.py` green, 2 entries; adequacy read done: Guard 1 assembly is the scanner's enumerated surfaces and the `analyse_exec` chokepoint, not a member list), 4.12 Scope Check (1 unfenced section, 3 subsections, a `Recommendation:` line, no unmapped ask).
+**Verification instead of agent fan-out:** the change is two shell scripts, two unit files and one test scanner; every claim was verified directly (greps, a scratch xtrace experiment, `gh`), which is the proportionate depth, as for F5. The plan-review panel (DHH, Kieran, code-simplicity) and two CTO rulings supplied the independent reads.
+
+### Key improvements over the first draft
+1. Kieran's scratch scanner experiment falsified "script-side indirect = population reason, census unchanged": the unrestricted form pulled `inngest-luks-cutover.service` in (population 10 -> 11, rc 6). CTO amended F2: only `*_KEY`-named indirect expansion counts script-side (row G1.9).
+2. The behavioral test mechanics were corrected from measurement: the stub `doppler` must not expand the secret (its own xtrace would leak it and void the G2.1 control); `SHELLOPTS=xtrace` cannot prefix `eval`; the env-capture row must exclude the key-named line.
+3. The zot lookup moves to just after the `--canary-only` early exit (verified: `$URL` is used only inside functions defined earlier and called later, plus `_ping "$URL"` at the end, so nothing between the old and new site reads it).
+4. Rollback order corrected (revert applies OLD script + NEW wrapper for one tick) and accepted.
+5. Post-merge check 1 anchored on `Creation complete` after measuring that the bare resource name appears in a no-op apply log.
+
+### New considerations discovered
+- A one-line verification of the premise "no unit-side `${!`" is not enough for the scanner: keep the unit-side wrapper finding on the broader any-name form while the script-side reason is `_KEY`-bound.
+- Cited issue/PR states checked live 2026-10-20: #9639 OPEN, #9217 OPEN, #10576 MERGED, #10501/#10546/#7390 OPEN, #7797 OPEN, #9638 OPEN; no open PR touches any file in "Files to Edit" (re-run on 2026-10-20 over every open PR).
+
 ## Overview
 
 `apps/web-platform/infra/web-private-nic-guard.service` runs `doppler run ... -- bash -c 'export WEB_NIC_GUARD_URL="$${!WEB_NIC_GUARD_URL_KEY}"; exec /usr/local/bin/web-private-nic-guard.sh'` (`$$` is systemd's escape, so bash receives `${!WEB_NIC_GUARD_URL_KEY}`). The heartbeat URL is itself the credential (its path is the secret). The guard script refuses to run under xtrace (`web-private-nic-guard.sh` lines 11-13, exit 78), but the inner `bash -c` expands and exports the secret BEFORE the script starts, so a `SHELLOPTS=xtrace` or `BASH_ENV` `set -x` launch prints `+ export WEB_NIC_GUARD_URL=https://...` to the journal that Vector ships to Better Stack. The refusal never gets to run on that expansion.
