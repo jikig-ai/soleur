@@ -54,7 +54,11 @@ DEFAULT_max_backoff=30
 # column-0 `}`: an indented opener, a `{` on the next line, or a `}` not at
 # column 0 must still flush the record. Each record is "file|body".
 BLOCKS=()
-for tf in "$SCRIPT_DIR"/*.tf; do
+# Top-level *.tf of this root PLUS modules/**/*.tf — a wired child module is
+# live plan-time config (git-data-userdata is sourced at git-data.tf:382).
+# Sibling rehearsal roots are subdirs but NOT under modules/, so they stay
+# out of scope.
+for tf in "$SCRIPT_DIR"/*.tf "$SCRIPT_DIR"/modules/*/*.tf; do
   [[ -e "$tf" ]] || continue
   while IFS= read -r -d '' blk; do
     BLOCKS+=("$(basename "$tf")|$blk")
@@ -63,8 +67,13 @@ for tf in "$SCRIPT_DIR"/*.tf; do
       /^[[:space:]]*provider[[:space:]]+"cloudflare"/ { inblk=1; blk=""; depth=0 }
       inblk {
         blk = blk $0 "\n"
-        n = gsub(/\{/, "{")
-        m = gsub(/\}/, "}")
+        # Strip HCL line comments before depth counting: a stray { or }
+        # inside a comment must never suppress the record flush.
+        line = $0
+        sub(/#.*/, "", line)
+        sub(/\/\/.*/, "", line)
+        n = gsub(/\{/, "{", line)
+        m = gsub(/\}/, "}", line)
         depth += n - m
         if (depth <= 0 && (n + m) > 0) { inblk=0; printf "%s\0", blk }
       }
@@ -78,6 +87,21 @@ NUM_BLOCKS=${#BLOCKS[@]}
 # guard's own dispatch path (Guard Contract mutation row 3).
 assert "census: at least one provider \"cloudflare\" block enumerated" \
   "[[ '$NUM_BLOCKS' -ge 1 ]]"
+
+# *.tf.json merges into the same root configuration but uses JSON syntax the
+# HCL enumerator cannot see — fail closed rather than silently miss it.
+JSON_TF="$(find "$SCRIPT_DIR" -maxdepth 1 -name '*.tf.json' -print0 | xargs -0 grep -l '"cloudflare"' 2>/dev/null || true)"
+assert "census: no *.tf.json declares cloudflare provider (out-of-window syntax — needs manual review)" \
+  "[[ -z '$JSON_TF' ]]"
+
+# Generator pin: provision-cloudflare.sh emits provider blocks for new tenant
+# roots — it must emit the trio too, or every generated root starts unhardened.
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+PROV_SH="$REPO_ROOT/plugins/soleur/skills/provision-cloudflare/scripts/provision-cloudflare.sh"
+for key in $EXPECTED_KEYS; do
+  assert "generator: provision-cloudflare.sh emits ${key}" \
+    "grep -qE '${key}[[:space:]]*=' '$PROV_SH'"
+done
 
 if [[ "$NUM_BLOCKS" -ge 1 ]]; then
   for i in "${!BLOCKS[@]}"; do

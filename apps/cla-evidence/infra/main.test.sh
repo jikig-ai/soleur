@@ -121,7 +121,7 @@ fi
 # optional attribute pass silently — presence + value are pinned here.
 # v5 renames the trio `max_retries`; a v5 migration must update these keys too.
 cf_blocks=()
-for tf in ./*.tf; do
+for tf in ./*.tf ./modules/*/*.tf; do
   [[ -e "$tf" ]] || continue
   while IFS= read -r -d '' blk; do
     cf_blocks+=("$(basename "$tf")|$blk")
@@ -129,8 +129,11 @@ for tf in ./*.tf; do
     /^[[:space:]]*provider[[:space:]]+"cloudflare"/ { inblk=1; blk=""; depth=0 }
     inblk {
       blk = blk $0 "\n"
-      n = gsub(/\{/, "{")
-      m = gsub(/\}/, "}")
+      line = $0
+      sub(/#.*/, "", line)
+      sub(/\/\/.*/, "", line)
+      n = gsub(/\{/, "{", line)
+      m = gsub(/\}/, "}", line)
       depth += n - m
       if (depth <= 0 && (n + m) > 0) { inblk=0; printf "%s\0", blk }
     }
@@ -138,6 +141,11 @@ for tf in ./*.tf; do
 done
 if [[ "${#cf_blocks[@]}" -lt 1 ]]; then
   red "FAIL: no provider \"cloudflare\" block in any *.tf of this root (census floor — the guard must never read green on zero blocks)."
+  fail=1
+fi
+json_tf=$(find . -maxdepth 1 -name '*.tf.json' -print0 | xargs -0 grep -l '"cloudflare"' 2>/dev/null || true)
+if [[ -n "$json_tf" ]]; then
+  red "FAIL: $json_tf declares a cloudflare provider in *.tf.json — outside this guard's HCL window; needs manual review."
   fail=1
 fi
 for rec in "${cf_blocks[@]}"; do
