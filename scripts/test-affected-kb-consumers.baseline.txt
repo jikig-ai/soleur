@@ -24,6 +24,15 @@
 .claude/hooks/iac-plan-write-guard.test.sh	knowledge-base/project/plans
 .claude/hooks/iac-plan-write-guard.test.sh	knowledge-base/project/plans/archive
 .claude/hooks/iac-plan-write-guard.test.sh	knowledge-base/project/specs
+.claude/hooks/lib/context-sanitize.test.sh	knowledge-base/engineering/architecture/diagrams/model.likec4.json
+.claude/hooks/lib/context-sanitize.test.sh	knowledge-base/engineering/architecture/domain-model.md
+.claude/hooks/lib/context-sanitize.test.sh	knowledge-base/project/brainstorms
+.claude/hooks/lib/context-sanitize.test.sh	knowledge-base/project/brainstorms/archive
+.claude/hooks/lib/context-sanitize.test.sh	knowledge-base/project/plans
+.claude/hooks/lib/context-sanitize.test.sh	knowledge-base/project/plans/archive
+.claude/hooks/lib/context-sanitize.test.sh	knowledge-base/project/specs
+.claude/hooks/lib/context-sanitize.test.sh	knowledge-base/project/specs/.gitkeep
+.claude/hooks/lib/context-sanitize.test.sh	knowledge-base/project/specs/archive
 .claude/hooks/lib/filing-shape.test.sh	knowledge-base
 .claude/hooks/no-memory-write.test.sh	knowledge-base/project/constitution.md
 .claude/hooks/no-memory-write.test.sh	knowledge-base/project/learnings
