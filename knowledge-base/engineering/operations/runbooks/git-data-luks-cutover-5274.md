@@ -194,6 +194,35 @@ held sentinel (its step says so; `mode=proof` reads it, and the `cutover_frozen`
 it fails itself (no `RESEND_API_KEY`, an issues API error), the email step records its outcome in the issue, and a
 failed `notify-failure` job shows red on the run's own summary, which is then the only signal.
 
+### Quiet window before the flip (#8211, CTO ruling 2026-10-19)
+
+The flip's flag-on window can strand a working tree under `WORKTREE_ROOT` that is a user's only copy, and web-2 has no SSH ingress, so no read can show it there. The control is a runtime kill-switch that refuses NEW agent sessions, plus a counts-only read of live sessions per host. Both ship with the flag `new-sessions-paused` **absent**, which means sessions are allowed; creating and flipping it are production writes and stay owner acts. **No `mode=flip` dispatch is safe until this control is merged, the flag is created and on, and the read-back below passes on both hosts** (the first live flip attempt on 2026-10-19 ran without it).
+
+Owner commands (each needs a TTY and a typed `yes`, run from a worktree that holds the merged change):
+
+```bash
+bash plugins/soleur/skills/flag-create/scripts/create.sh new-sessions-paused --flagsmith-only
+bash plugins/soleur/skills/flag-set-role/scripts/flip.sh new-sessions-paused prd on
+bash plugins/soleur/skills/flag-set-role/scripts/flip.sh new-sessions-paused prd off
+```
+
+`flip.sh ... prd on` also writes the Doppler mirror `FLAG_NEW_SESSIONS_PAUSED=1` in `dev` and `prd`, and `off` writes 0, so a container that (re)starts while Flagsmith is unreachable comes up refusing during the window. A container that is already running holds the last value Flagsmith gave it for up to 10 minutes of Flagsmith failure, so a single slow Flagsmith response (the client waits 200 ms) does not re-open the gate. A stale mirror of 1 left after the window would pause the fleet on the next Flagsmith failure, so run the `off` command and confirm the mirror is 0 when the window closes.
+
+**What it refuses:** a new or resumed agent session (cc `dispatchSoleurGo` with no live Query, legacy `sendUserMessage` and `startAgentSession`), a first message on a new conversation (before the conversation row is created), `POST /api/repo/setup` and `POST /api/repo/create` (503, `Retry-After: 300`, code `quiet_window`, the connect-repo page shows calm retry copy), and the auto-sync agent. A refused message is **not** persisted and not sent: the user sends it again after the window. While the window is on, starting or resuming another conversation does not abort a legacy session that is already running.
+
+**What it does not cover (the read-back does not either):** sessions started by Inngest functions (`spawnClaudeEval` crons run in ephemeral clones, not under `WORKTREE_ROOT`; `agent-on-spawn-requested` touches no host filesystem), the volume-bound Inngest reconcilers, KB upload/edit/sync and repo disconnect (they act through GitHub and only pull, so they cannot create an only-copy tree), the support route (it goes through `dispatchSoleurGo`, so it IS refused), and a warm turn on a session that is already live. Check the volume-bound Inngest functions are idle before dispatching.
+
+**Read-back before dispatching `mode=flip`** (both hosts, by `host_name`: `soleur-web-platform` is web-1, `soleur-web-2` is web-2). One line per minute per host:
+
+```bash
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 10m --grep 'agent_sessions_live=' --limit 400 \
+  | jq -r '"\(.dt) \(.raw|fromjson|.host_name) \(.raw|capture("(?<line>agent_sessions_live=[0-9]+ cc_queries=[0-9]+ legacy_sessions=[0-9]+ starting=[0-9]+ new_sessions_paused=[01] refused_since_last=[0-9]+)").line)"' | sort
+```
+
+Proceed only when, for EACH host: the newest row is under 2 minutes old (a stopped container emits nothing, so an old green row proves nothing), and the last two rows at least 90 seconds apart both read `new_sessions_paused=1` and `agent_sessions_live=0`. `agent_sessions_live` is cc queries + legacy sessions + `starting`, where `starting` counts entry calls still in flight (a start that passed the gate but has not registered yet), so it is an upper bound and never reads 0 while a clone is mid-flight. `refused_since_last` is the number of real refusals since the previous row: a non-zero value is the off-box proof that the gates fired.
+
+Treat any row with `new_sessions_paused=0` from the moment of the pre-flip read until after the exit read (`mode=proof`) or the rollback as an **abort**, and read both hosts again immediately before and immediately after the `mode=flip` dispatch. Refusal reaches a host within the 30 s flag cache TTL. A host that emits no row at all is not quiet; it is unread.
+
 ### Before the first `flip`: the rollback rehearsal
 
 The first `flip` is not authorized until a flip-then-rollback rehearsal has run once with the erasure

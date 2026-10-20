@@ -180,6 +180,7 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
       "untrusted-content-wrap": false,
       "egress-audit-collection": false,
       "agent-sandbox-unix-deny": false,
+      "new-sessions-paused": false,
     });
   });
 
@@ -208,6 +209,7 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
       "untrusted-content-wrap": false,
       "egress-audit-collection": false,
       "agent-sandbox-unix-deny": false,
+      "new-sessions-paused": false,
     });
   });
 
@@ -236,6 +238,7 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
       "untrusted-content-wrap": false,
       "egress-audit-collection": false,
       "agent-sandbox-unix-deny": false,
+      "new-sessions-paused": false,
     });
   });
 
@@ -465,6 +468,7 @@ describe("getIdentityFlags timeout → warn-level debounced mirror (Sentry-bug r
       "untrusted-content-wrap": false,
       "egress-audit-collection": false,
       "agent-sandbox-unix-deny": false,
+      "new-sessions-paused": false,
     });
   });
 

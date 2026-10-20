@@ -108,6 +108,16 @@ const RUNTIME_FLAGS = {
   // production write that waits for a green deploy SDK Bash smoke (tracker #10548). Fail-closed:
   // FLAG_AGENT_SANDBOX_UNIX_DENY=0 mirror.
   "agent-sandbox-unix-deny": "FLAG_AGENT_SANDBOX_UNIX_DENY",
+  // #8211 T2 build 1 — quiet-window kill-switch. ON refuses NEW agent sessions
+  // on every web host with a maintenance message (server/quiet-window.ts); a
+  // session already running is never touched. Default OFF, and ABSENT (no
+  // Flagsmith feature, no env mirror) means sessions are allowed. Global, never
+  // per-org: read ONLY through `isNewAgentSessionsPaused` with the anonymous
+  // identity so a segment override cannot split the fleet. The owner creates the
+  // Flagsmith feature (flag-create --flagsmith-only) and mirrors Doppler; the
+  // code ships dark. Fail-OPEN on a Flagsmith outage: FLAG_NEW_SESSIONS_PAUSED=0
+  // mirror, so the live read-back line (new_sessions_paused=) is the proof.
+  "new-sessions-paused": "FLAG_NEW_SESSIONS_PAUSED",
 } as const;
 
 export type EnvFlagName = keyof typeof ENV_FLAGS;
@@ -167,11 +177,17 @@ type RuntimeSnapshot = Record<RuntimeFlagName, boolean>;
 const CACHE_MAX_ENTRIES = parseInt(process.env.FLAGSMITH_CACHE_MAX_ENTRIES || "1000");
 let _roleCache = new LRUCache<string, RuntimeSnapshot>(CACHE_MAX_ENTRIES, CACHE_TTL_MS);
 
+// Snapshots built from the env mirror because the Flagsmith fetch failed. A WeakSet, not a
+// field, so the snapshot shape every consumer reads is unchanged. `isNewAgentSessionsPaused`
+// uses it to tell "Flagsmith said off" from "Flagsmith did not answer".
+const _fallbackSnapshots = new WeakSet<RuntimeSnapshot>();
+
 function runtimeEnvFallback(): RuntimeSnapshot {
   const out = {} as RuntimeSnapshot;
   for (const [name, envVar] of Object.entries(RUNTIME_FLAGS) as [RuntimeFlagName, string][]) {
     out[name] = envIsOn(envVar);
   }
+  _fallbackSnapshots.add(out);
   return out;
 }
 
@@ -320,8 +336,39 @@ export async function isAgentSandboxUnixDenyEnabled(identity: Identity = ANON_ID
   return getRuntimeFlag("agent-sandbox-unix-deny", identity);
 }
 
+/**
+ * #8211 T2 build 1 — the quiet-window kill-switch. Global by construction: the
+ * anonymous identity means the same answer on every host and for every user, and
+ * an absent feature reads `false` (the SDK reports an unknown feature disabled),
+ * so the default is "sessions allowed". The 30 s snapshot cache bounds how long
+ * a flip takes to reach a host.
+ */
+export async function isNewAgentSessionsPaused(): Promise<boolean> {
+  const snap = await getRuntimeSnapshot(ANON_IDENTITY.role, ANON_IDENTITY.orgId);
+  const now = Date.now();
+  if (!_fallbackSnapshots.has(snap)) {
+    // Flagsmith answered: this is the authoritative value, remember it.
+    _pausedLastKnown = { value: snap["new-sessions-paused"], at: now };
+    return snap["new-sessions-paused"];
+  }
+  // Flagsmith did not answer (a 200 ms timeout is routine, not rare). The env-mirror snapshot is
+  // cached for the full TTL, so trusting it would re-open the gate for 30 s on one slow response in
+  // the middle of the flip window. Hold the last value Flagsmith gave, for a bounded time, and let
+  // the mirror turn the gate ON (never off): the mirror is set to 1 by flip.sh when the owner flips on.
+  const mirrorOn = snap["new-sessions-paused"];
+  if (_pausedLastKnown && now - _pausedLastKnown.at <= PAUSED_STALE_MAX_MS) {
+    return _pausedLastKnown.value || mirrorOn;
+  }
+  return mirrorOn;
+}
+
+/** How long a last-known value of the kill-switch outlives a failing Flagsmith (10 min). */
+const PAUSED_STALE_MAX_MS = 10 * 60_000;
+let _pausedLastKnown: { value: boolean; at: number } | null = null;
+
 export function __resetFeatureFlagsForTests(): void {
   _client = null;
+  _pausedLastKnown = null;
   const maxEntries = parseInt(process.env.FLAGSMITH_CACHE_MAX_ENTRIES || "1000");
   _roleCache = new LRUCache<string, RuntimeSnapshot>(maxEntries, CACHE_TTL_MS);
 }
