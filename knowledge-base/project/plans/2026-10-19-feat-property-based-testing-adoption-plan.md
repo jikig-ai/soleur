@@ -13,7 +13,7 @@ lane: single-domain
 
 ## Overview
 
-Adopt property-based testing in the soleur monorepo (Epic #10397 child 1, issue #10398). Add `fast-check` to `apps/web-platform` devDependencies, ship four property suites covering the round-trip, invariant, and idempotency classes against existing pure functions, land a seeded generated-input harness for the `.test.sh` shell corpus with one reference suite and a documented pattern, and verify the new suites are reached by the repo's affected-suite selection machinery. Scope is deliberately small per the issue ("start small — do not boil the ocean"): no mass rollout, no SUT changes, no CI workflow edits.
+Adopt property-based testing in the soleur monorepo (Epic #10397 child 1, issue #10398). Add `fast-check` to `apps/web-platform` devDependencies, ship four property suites covering the round-trip, invariant, and idempotency classes against existing pure functions, land a seeded generated-input harness for the `.test.sh` shell corpus with one reference suite and a documented pattern, and verify the new suites are reached by the repo's affected-suite selection machinery. Scope is deliberately small per the issue ("start small — do not boil the ocean"): no mass rollout, no CI workflow edits; the single SUT change (`apps/web-platform/lib/repo-url.ts` re-trim) was sanctioned in-flight — it is the repo-url property suite's first yield (ADR-293 "First yield").
 
 ## Enhancement Summary
 
@@ -365,7 +365,7 @@ Explicitly **not** edited: `scripts/ci-pr-selection.sh`, `scripts/test-all.sh`, 
 - [ ] **AC11.** `ADR-2*-property-based-testing-adoption.md` exists under `knowledge-base/engineering/architecture/decisions/` (provisional 293, renumbered on collision) and records the third-test-class decision + rejected alternatives.
 - [ ] **AC12.** No `it.skip`/`it.only`/`fc.assert(..., { seed })` pinned seeds in the new files; `grep -n 'seed:' apps/web-platform/test/**/*.property.test.ts` returns only regression-fixture comments.
 - [ ] **AC13.** `PROP_FAIL` and fast-check failure output both expose replay info (seed + iteration / seed + path) — verified by triggering one deliberate failure locally during implementation, then reverting.
-- [ ] **AC14.** Diff scope guard: the PR adds no other `fast-check` suites, no new `run_suite` lines, no workflow edits — `git diff origin/main --name-only | grep -vE '(apps/web-platform/(package(-lock)?\.json|test/)|scripts/lib/|\.claude/hooks/README\.md|knowledge-base/)'` is empty.
+- [ ] **AC14.** Diff scope guard: the PR adds no other `fast-check` suites, no new `run_suite` lines, no workflow edits — `git diff origin/main...HEAD --name-only | grep -vE '(apps/web-platform/(package(-lock)?\.json|test/|lib/repo-url\.ts)|scripts/lib/|\.claude/hooks/README\.md|knowledge-base/)'` is empty (`lib/repo-url.ts` is the sanctioned SUT fix; three-dot diff scopes to branch changes).
 - [ ] **AC15.** `bash scripts/test-all.sh --affected` (or the fixture equivalent in `test-all-affected.test.sh`) on a diff containing only the new files: selects the `apps/web-platform [unit]` registration for the `apps/web-platform/test/` additions (inside which `vitest related` narrows to the property files on SUT diffs), and `scripts/lib/legal-normalise-property.test.sh` for the `scripts/lib/` additions (argv-literal edge on the suite file itself).
 
 ## Test Scenarios
