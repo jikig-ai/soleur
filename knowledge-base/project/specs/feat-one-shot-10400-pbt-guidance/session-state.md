@@ -19,4 +19,4 @@ soleur:plan (full workflow, inline), soleur:deepen-plan (halt gates 4.5–4.55 i
 ## Collision Gate (post-planning re-probe)
 - #10400 OPEN; linked-PR + body probes clean.
 - Anchor probe over planned files: open PRs #6778 (stale WIP, plan-issue-templates.md) and #9051 (work/SKILL.md). pr-overlap-preflight exit=13 → continue; disjoint sections, re-verified at merge.
-- cto_spawns=0
+- cto_spawns=1
