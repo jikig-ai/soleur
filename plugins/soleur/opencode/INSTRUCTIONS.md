@@ -138,10 +138,12 @@ Four things were created; remove all four, because a partial removal is worse th
 3. **`<configdir>/plugins/soleur-plugin.ts`** — the hook carrier. Leaving it behind fails
    every shell call closed with a `guard-did-not-run` deny, because the guards it registers
    no longer resolve.
-4. **The `skills` and `instructions` entries the installer added to**
-   `<configdir>/opencode.json`**. Edit the file and drop those two keys; leaving them behind
-   points OpenCode at a tree that no longer exists.
+4. **The `skills` and `instructions` entries the installer added to `<configdir>/opencode.json`.**
+   Edit the file and drop those two keys; leaving them behind points OpenCode at a tree that
+   no longer exists.
 
-`install-opencode-adapter.ts --check` reports what is missing, not what is stale, so run it
-after removal to confirm the adapter is gone (it should report an uninstalled state rather
-than a partial one).
+Do **not** use `install-opencode-adapter.ts --check` to confirm removal. It is an
+idempotence check for an *installed* adapter: it reports `MISSING` for every path it expects
+and exits 1, so a correct removal is indistinguishable from a broken install. Verify by hand
+instead — the four paths above are absent, and no shell call fails closed with a
+`guard-did-not-run` deny.
