@@ -568,19 +568,20 @@ cleanup_tokens() {
 trap cleanup_tokens EXIT
 removed_tokens="$token_dir/removed"
 added_tokens="$token_dir/added"
-tokenize_cell() {
-  local cell="$1" dest="$2" token
-  local -a parts=()
-  read -ra parts <<< "$cell"
-  : > "$dest"
-  if ((${#parts[@]})); then
-    for token in "${parts[@]}"; do
-      printf '%s\n' "$token" >> "$dest"
-    done
-  fi
-}
-tokenize_cell "$REMOVED_CELL" "$removed_tokens"
-tokenize_cell "$HEAD_CELL" "$added_tokens"
+read -ra removed_parts <<< "$REMOVED_CELL"
+: > "$removed_tokens"
+if ((${#removed_parts[@]})); then
+  for token in "${removed_parts[@]}"; do
+    printf '%s\n' "$token" >> "$removed_tokens"
+  done
+fi
+read -ra added_parts <<< "$HEAD_CELL"
+: > "$added_tokens"
+if ((${#added_parts[@]})); then
+  for token in "${added_parts[@]}"; do
+    printf '%s\n' "$token" >> "$added_tokens"
+  done
+fi
 diff_rc=0
 diff "$removed_tokens" "$added_tokens" > "$token_dir/token.diff" || diff_rc=$?
 if (( diff_rc == 2 )); then

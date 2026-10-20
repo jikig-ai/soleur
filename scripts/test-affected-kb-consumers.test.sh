@@ -722,8 +722,9 @@ fi
 # other file; every malformed minted edge covers by construction (never narrows).
 # A dir ref is covered only when EVERY tracked member beneath it matches the glob
 # tail (#10117 all-containment — the old nest clause certified a dir whose charged
-# classes the tail declines, e.g. knowledge-base under **.sh). knowledge-base/legal
-# is the all-.md member set; knowledge-base/project is mixed; docs/ exists on disk
+# classes the tail declines, e.g. knowledge-base under **.sh). knowledge-base/legal/drafts
+# is the all-.md member set. knowledge-base/legal itself is mixed once it holds a
+# non-md manifest. knowledge-base/project is mixed; docs/ exists on disk
 # but holds no tracked kb members (the empty-set decline). The kb literal is
 # COMPOSED — a bare token here would be charged to this suite as a read.
 cases=$((cases + 1))
@@ -747,8 +748,8 @@ tests = [
     ("^glob:glob:x:y/*.sh", KB + "/x.sh"),          # charset verbatim: always-cover
     ("^glob:" + KB + "/**.sh", KB),                 # dir ref = head; members mixed → decline
     ("^glob:" + KB + "/**.sh", KB + "/project"),    # dir ref under head; mixed members → decline
-    ("^glob:" + KB + "/**.md", KB + "/legal"),      # dir ref, all members match — accept
-    ("^glob:" + KB + "/**.sh", KB + "/legal"),      # dir ref, members all .md — decline
+    ("^glob:" + KB + "/**.md", KB + "/legal/drafts"),  # dir ref, all members match — accept
+    ("^glob:" + KB + "/**.sh", KB + "/legal"),      # dir ref, members are not .sh — decline
     ("^glob:" + KB + "/**.md", KB + "/project"),    # dir ref, mixed members — decline
     ("^glob:" + KB + "/**.sh", "plugins/soleur"),   # non-kb dir ref — decline
     ("^glob:" + KB + "/**.md", "docs"),             # dir with zero kb members — decline
@@ -760,7 +761,7 @@ tests = [
     ("^glob:" + KB + "/**.md", KB + "/legal/art-22-assessments"),  # single-member dir → accept
     ("^glob:" + KB + "/legal/audits/**.md", KB + "/legal"),        # head ⊋ ref: members outside head decline
     ("^glob:" + KB + "/project/**.md", KB),                        # same at root scale → decline
-    ("^glob:" + KB + "/*.md", KB + "/legal"),                      # single-* crosses / like ** (parity) → accept
+    ("^glob:" + KB + "/*.md", KB + "/legal/drafts"),              # single-* crosses / like ** (parity) → accept
 ]
 print(" ".join("1" if o.covers(e, p) else "0" for e, p in tests))
 COVPY
@@ -833,7 +834,7 @@ spec = importlib.util.spec_from_file_location("o", sys.argv[1]); o = importlib.u
 KB = "knowledge" + "-base"
 print(" ".join("1" if o.covers(e, p) else "0" for e, p in [
     ("^glob:" + KB + "/**.md", "docs"),              # vacuous-all mutant: 1
-    ("^glob:" + KB + "/**.md", KB + "/legal"),       # populated dir: stays 1
+    ("^glob:" + KB + "/**.md", KB + "/legal/drafts"),  # populated all-md dir: stays 1
 ]))
 COVPY
 )
