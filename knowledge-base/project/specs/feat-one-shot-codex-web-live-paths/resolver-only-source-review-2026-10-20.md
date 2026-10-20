@@ -164,7 +164,7 @@ attempt. Preparation, actual-manifest review, exact-command execution approval
 and separate evidence review remain future, distinct gates. Hosted auth BLOCKED;
 alternate route PENDING. PR #9051 remains draft/disarmed/conflicting.
 
-### Corrected source candidate — awaiting independent re-review
+### Corrected source candidate — independent re-review complete
 
 The source author reached an API usage limit before applying the finalization
 correction. The primary agent completed the saved RED-first correction, without
@@ -182,16 +182,15 @@ failures in late publication/deadline/close behavior; the expanded 55-check run
 exposed the missing provisional fields, missing completion API, and the same
 rollback failures. Actual pipe-reader boundary cases were included. After the
 correction, `/usr/bin/python3.14 -E -B -W error -m unittest
-test_resolver_diagnostic test_resolver_lifecycle` passed **61 tests** (2.303s),
+test_resolver_diagnostic test_resolver_lifecycle` passed **61 tests** (2.174s),
 and cached Ruff 0.16.10 over the five scoped source/test files passed. This is
 offline source evidence only; no operational census, preparation, helper,
 resolver, DNS or network action ran.
 
-The corrected source is not accepted until the three independent scoped
-reviewers re-review its pushed full SHA. The initial 37-test findings above
-remain historical and are not replaced by this local result.
+The initial 37-test findings above remain historical and are not replaced by
+this local result.
 
-### Re-review corrections — new candidate not yet pushed
+### Additional independent review corrections — resolved
 
 Independent re-review of `08eb1c4c810cc4b255a44045f2178262bd799f9f` found four
 additional fail-closed requirements: bootstrap the supervisor's local import
@@ -201,9 +200,31 @@ the real `os.close(None)` behavior in the fault test; and reject completion pair
 with any non-admitted receipt. Engineering, security and test-design reviews also
 required a deadline check after final pin closes.
 
-These corrections are now present locally. The 61-test suite includes isolated
-supervisor startup with a malformed synthesized manifest, bounded reader rejection
-for symlink/FIFO/oversize files, deadline expiry after final receipt-pin close,
-and a refusal-receipt/completion contradiction. Focused tests and Ruff pass, but
-the corrected changes have not yet been committed, pushed or independently
-re-reviewed. No operational action ran.
+These corrections were pushed in commits through
+`218e092ef098016243a10b9651b398eb6783efc4`. The 61-test suite includes isolated
+supervisor startup with a malformed synthesized manifest, bounded reader
+rejection for symlink/FIFO/oversize files, deadline expiry after the final
+directory-pin close, and a refusal-receipt/completion contradiction. Focused
+tests and Ruff pass; no operational action ran.
+
+### Independent scoped source acceptance — 2026-10-20
+
+Engineering, security and test-design reviewers independently accepted the
+corrected pushed SHA `218e092ef098016243a10b9651b398eb6783efc4`. All reviewed the
+scope as source conformance and synthesized offline tests only. Engineering and
+security found no remaining source blocker; test design scored **8.8/10, Grade B**
+and passed both the filesystem/pipe unit layer and synthesized process-integration
+layer. Independent focused Python 3.14 runs each reported 61 tests passing.
+
+One security full-suite run reported that the foreign-replacement fixture file was
+absent. The exact test then passed 100 isolated repetitions, followed by another
+full 61-test pass. The cause remains unknown; neither source-caused deletion nor
+concurrent interference was established. Preserve this uncertainty when reporting
+the result. No production resolver/helper, real DNS/network, preparation or
+operational manifest/marker/receipt was used or created.
+
+This acceptance authorizes no next stage. Separate operator authorization for
+file-only binding refresh and creation of one fresh diagnostic manifest is still
+required. Actual-manifest review, fresh exact-command execution approval and
+separate evidence review remain distinct gates; all broader CI, recovery,
+qualification and shipping holds remain in place.

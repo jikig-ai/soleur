@@ -2425,7 +2425,10 @@
   tests only. The corrected source candidate now has provisional-only receipts
   and supervisor completion evidence; its 61-test focused suite and scoped Ruff
   pass are recorded in [the source-review record](resolver-only-source-review-2026-10-20.md).
-- Independent source re-review is pending. Real resolver/helper execution,
-  diagnostics, preparation, DNS/network, retries, resync/full CI, full review,
+- Engineering, security and test-design source re-reviews passed at
+  `218e092ef098016243a10b9651b398eb6783efc4`. One unexplained fixture-absence
+  failure was followed by 100 isolated passes and a full 61-test pass; see the
+  source-review record. Real resolver/helper execution, diagnostics, preparation,
+  DNS/network, retries, resync/full CI, full review,
   QA, preflight, recovery, qualification, promotion and ship remain held.
   Historical evidence and hashes are unchanged; no operational artifact exists.
