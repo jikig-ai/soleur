@@ -1194,6 +1194,11 @@ jobs:
 
   deploy:
     needs: [resolve-target, migrate, verify-migrations, verify-doppler-secrets]
+    outputs:
+      # Consumed by verify-peer-deploy's `if:` — a superseded deploy ends GREEN
+      # having shipped nothing, so its peers must not be polled. (A job output
+      # is the only way a step signal crosses the job boundary.)
+      superseded: ${{ steps.ordering.outputs.superseded }}
     # verify-doppler-secrets must succeed — skipped/failed blocks deploy (unlike
     # migrate which tolerates 'skipped' when no migrations changed).
     # verify-migrations tolerates 'skipped' because it only runs on
@@ -1290,6 +1295,24 @@ jobs:
       # state (workflow gives up before kill) or wasted polling cycles
       # (kill fires before workflow times out).
       IN_FLIGHT_CEILING_S: 4800
+      # 2-host deploy fan-out (#5274 Phase 3, ADR-068). JOB-LEVEL canonical copy —
+      # feeds the `Deploy via webhook` step's `peers:` payload; the `Verify peer
+      # deploy completion` step's expected-peer derivation reads the identical
+      # sibling copy in the `verify-peer-deploy` job (env does not cross the job
+      # boundary). The receiving
+      # host forwards the deploy to these peer private IPs over the private net so
+      # one POST delivers to BOTH hosts; the host self-excludes at runtime.
+      # MUST equal var.web_hosts private_ips (variables.tf) — pinned per-copy by
+      # apps/web-platform/infra/web-hosts-fanout-parity.test.sh (single-user
+      # incident: a drift means web-2 silently misses deploys). Exactly TWO
+      # identical copies exist in this file — this canonical one and the
+      # verify-peer-deploy job's (a job's env does not cross the job boundary);
+      # the peer-gate test pins both the count and their equality.
+      # web-2 (10.0.1.11) receives the deploy so its app container stays release-current +
+      # health-monitored as an out-of-band standby (ADR-143 #6459). Deploy-membership is NOT
+      # serving-membership: web-2 runs the container but serves no ingress (weight 0, no
+      # DNS/tunnel/LB) — the anti-pooling gate (lb-weight-gate.sh) guards serving, not deploy.
+      WEB_HOST_PRIVATE_IPS: "10.0.1.10,10.0.1.11"
     steps:
       # FR-A9 — record whether the image this deploy is about to pull was actually
       # verified present in zot. DELIBERATELY NOT a blocking conjunct: gating the deploy
@@ -1506,17 +1529,8 @@ jobs:
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
           VERSION: ${{ needs.resolve-target.outputs.version }}
-          # 2-host deploy fan-out (#5274 Phase 3, ADR-068). The receiving host
-          # forwards the deploy to these peer private IPs over the private net so
-          # one POST delivers to BOTH hosts; the host self-excludes at runtime.
-          # MUST equal var.web_hosts private_ips (variables.tf) — pinned by
-          # apps/web-platform/infra/web-hosts-fanout-parity.test.sh (single-user
-          # incident: a drift means web-2 silently misses deploys).
-          # web-2 (10.0.1.11) receives the deploy so its app container stays release-current +
-          # health-monitored as an out-of-band standby (ADR-143 #6459). Deploy-membership is NOT
-          # serving-membership: web-2 runs the container but serves no ingress (weight 0, no
-          # DNS/tunnel/LB) — the anti-pooling gate (lb-weight-gate.sh) guards serving, not deploy.
-          WEB_HOST_PRIVATE_IPS: "10.0.1.10,10.0.1.11"
+          # WEB_HOST_PRIVATE_IPS is inherited from the job-level env above (the
+          # single canonical copy, shared with `Verify peer deploy completion`).
         run: |
           PAYLOAD=$(printf '{"command":"deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v%s","peers":"%s"}' "$VERSION" "$WEB_HOST_PRIVATE_IPS")
           # ADR-280 inline wrapper (this job has no checkout by design): the signature and the
@@ -1810,6 +1824,233 @@ jobs:
           else
             echo "::error::Deploy-failure email FAILED (HTTP ${HTTP_CODE}) — nobody was notified that the deploy for v${VERSION} failed."
           fi
+  verify-peer-deploy:
+    # #8743 Phase 2 / ADR-068 constraint (c) — the fan-out only proved each peer
+    # ACCEPTED the deploy (HTTP 202). The peer's ASYNC verdict — including the
+    # web-2 plugin-mount fchmodat2 abort this gate exists to surface — reaches
+    # the run only through cat-deploy-state.sh's `.peers` merge on web-1's
+    # /hooks/deploy-status.
+    #
+    # WHY A SEPARATE JOB (review finding, #8743): inside `deploy:` this poll
+    # shared that job's 90m ceiling with web-1's own 4800s status poll, and the
+    # peer's deploy starts when web-1's ENDS (its ci-deploy-wrapper is also
+    # 4800s) — a ~160m serial worst case a 90m ceiling cannot hold, so a
+    # slow-but-healthy deploy would have been killed mid-peer-poll. Own job →
+    # own 90m, and the web-1-swap lock releases at `deploy` end instead of
+    # outliving the peer wait (this job only READS status; it swaps nothing).
+    #
+    # FAIL-CLOSED on the verdict (CTO ruling 2026-10-19): a warn-only arm
+    # reproduces the exact silent-failure class this gate exists to kill, and a
+    # failed weight-0 standby is real (stale build, absent watchdog clock) even
+    # while serving impact is zero — the `ok_peer_fanout_degraded` precedent
+    # already treats a degraded peer as a report-worthy state.
+    needs: [resolve-target, deploy]
+    # `deploy` skipped (should_deploy=false / skip_deploy dispatch) skips this
+    # job too. A SUPERSEDED deploy completes GREEN having shipped nothing — the
+    # superseded signal must come off deploy's job output, or this poll would
+    # burn its whole budget on peers that were never asked.
+    if: always() && needs.deploy.result == 'success' && needs.deploy.outputs.superseded != 'true'
+    runs-on: ubuntu-latest
+    # Own ceiling — see WHY above. Holds the full peer window below.
+    timeout-minutes: 90
+    env:
+      # Peer poll window: MUST equal the peer's own deploy ceiling — the peer
+      # runs the same ci-deploy-wrapper.sh 4800s cap as web-1, so a shorter
+      # poll would fail a slow-but-healthy peer deploy closed (the same
+      # STATUS/HEALTH/IN_FLIGHT alignment the deploy job pins).
+      STATUS_POLL_MAX_ATTEMPTS: 960
+      STATUS_POLL_INTERVAL_S: 5
+      # SECOND literal copy of the fan-out peer list — the canonical copy is
+      # the deploy job's env (it feeds the `peers:` webhook payload); this one
+      # feeds the expected-peer derivation below. Both are bound to
+      # var.web_hosts by web-hosts-fanout-parity.test.sh's per-copy check, and
+      # web-platform-release-peer-gate.test.sh pins this file to exactly these
+      # two identical declarations.
+      WEB_HOST_PRIVATE_IPS: "10.0.1.10,10.0.1.11"
+    steps:
+      - name: Verify peer deploy completion
+        # #8743 / ADR-068 constraint (c) — the fan-out only proved each peer
+        # ACCEPTED the deploy (HTTP 202). The peer's ASYNC verdict — including
+        # the web-2 plugin-mount fchmodat2 abort this step exists to surface —
+        # reaches the run only through cat-deploy-state.sh's `.peers` merge on
+        # the SAME /hooks/deploy-status endpoint, on the SAME poll budget: a
+        # peer's deploy starts when web-1's ends, and the peer's own
+        # ci-deploy-wrapper is also 4800s, so the lock-probe arithmetic is
+        # untouched.
+        #
+        # FAIL-CLOSED on the verdict (CTO ruling 2026-10-19): a warn-only arm
+        # reproduces the exact silent-failure class this step exists to kill,
+        # and a failed weight-0 standby is real (stale build, absent watchdog
+        # clock) even while serving impact is zero — the
+        # `ok_peer_fanout_degraded` precedent already treats a degraded peer as
+        # a report-worthy state.
+        #
+        # STATUS_POLL_MAX_ATTEMPTS / STATUS_POLL_INTERVAL_S inherited from
+        # job-level env (see top of `deploy:` job for the alignment rationale).
+        env:
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          VERSION: ${{ needs.resolve-target.outputs.version }}
+        run: |
+          # Expected peers = WEB_HOST_PRIVATE_IPS (job env) minus 10.0.1.10, the
+          # host `deploy.` resolves to — derived, never hardcoded: a future
+          # web-N host joins this guard automatically when it joins
+          # var.web_hosts (web-hosts-fanout-parity.test.sh binds the env).
+          # GET-only signed read, same shape as "Verify deploy script completion"
+          # in the deploy job.
+          # ADR-280 inline wrapper (this job has no checkout by design): the signature and the
+          # Cloudflare Access pair ride curl's stdin config, never its argument list. A refused value
+          # makes zero requests and prints the marker on every attempt; the loop then ends at the
+          # poll-budget error below, the same terminal red as any other failed read.
+          # ADR-280 inline-wrapper clause: trims leading and trailing ASCII whitespace of the Cloudflare Access pair (same judgement as bc_ok under LC_ALL=C for trailing; tolerant of the leading blank the old argv form tolerated); the HMAC key is never trimmed; interior whitespace and non-ASCII spaces are still refused.
+          for _v in CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do _t="${!_v:-}"; _t="${_t#"${_t%%[!$' \t\r\n\v\f']*}"}"; _t="${_t%"${_t##*[!$' \t\r\n\v\f']}"}"; printf -v "$_v" '%s' "$_t"; done
+          _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+          _sig_curl() {
+            local _sigvar="${1:-}"
+            shift
+            _bearer_ok "${!_sigvar:-}" || { echo "_sig_curl: ${_sigvar} unusable" >&2; echo "SOLEUR_CREDENTIAL_REFUSED script=web-platform-release reason=token_shape" >&2; return 2; }
+            _bearer_ok "${CF_ACCESS_CLIENT_ID:-}" || { echo "_sig_curl: CF_ACCESS_CLIENT_ID unusable" >&2; echo "SOLEUR_CREDENTIAL_REFUSED script=web-platform-release reason=token_shape" >&2; return 2; }
+            _bearer_ok "${CF_ACCESS_CLIENT_SECRET:-}" || { echo "_sig_curl: CF_ACCESS_CLIENT_SECRET unusable" >&2; echo "SOLEUR_CREDENTIAL_REFUSED script=web-platform-release reason=token_shape" >&2; return 2; }
+            curl --disable --noproxy '*' "$@" --config - < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "${!_sigvar}" "${CF_ACCESS_CLIENT_ID}" "${CF_ACCESS_CLIENT_SECRET}")
+          }
+          # shellcheck disable=SC2034  # read by NAME inside _sig_curl (indirect expansion)
+          SIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
+          EXPECTED_PEERS="$(printf '%s' "$WEB_HOST_PRIVATE_IPS" | tr ', ' '\n' | grep -vxF '10.0.1.10' | grep . || true)"
+          if [ -z "$EXPECTED_PEERS" ]; then
+            # The dormant single-host path ADR-068 requires: an expected set of
+            # zero is vacuously green, byte-identical to a fleet of one.
+            echo "::notice::no expected peers in WEB_HOST_PRIVATE_IPS ($WEB_HOST_PRIVATE_IPS) besides the deploy. ingress host — peer verification is vacuously green on a single-host fleet"
+            exit 0
+          fi
+          echo "Expecting peer deploy verdicts for v$VERSION from: $(printf '%s' "$EXPECTED_PEERS" | tr '\n' ' ')"
+          # UNRESOLVED tracks which expected peers have not yet passed. It is
+          # rebuilt on every parseable poll; a poll that cannot be read keeps
+          # the previous value, and the pre-loop value covers "never read once".
+          UNRESOLVED="$EXPECTED_PEERS"
+          PEERS_KEY=never_read
+          for i in $(seq 1 "$STATUS_POLL_MAX_ATTEMPTS"); do
+            # Stale-body ambiguity: a failed curl leaves the PREVIOUS attempt's
+            # file behind, and `cat` would then parse a stale poll as fresh.
+            rm -f /tmp/status-body
+            # Capture HTTP code alongside body for easier triage (#2205).
+            HTTP_CODE=$(_sig_curl SIG -s --max-time 10 \
+              -o /tmp/status-body \
+              -w '%{http_code}' \
+              -X GET \
+              "https://deploy.soleur.ai/hooks/deploy-status" || echo "000")
+            BODY=$(cat /tmp/status-body 2>/dev/null || echo "")
+            if [ -z "$BODY" ]; then
+              echo "Attempt $i/$STATUS_POLL_MAX_ATTEMPTS: HTTP $HTTP_CODE, empty body (endpoint not ready)"
+              sleep "$STATUS_POLL_INTERVAL_S"
+              continue
+            fi
+            # Tolerate non-JSON bodies (endpoint cold-start, 404 HTML, transient
+            # Cloudflare edge error). Without this guard, jq's parse error under
+            # bash -e kills the step before the retry loop can react (#2214).
+            if ! echo "$BODY" | jq -e . >/dev/null 2>&1; then
+              echo "Attempt $i/$STATUS_POLL_MAX_ATTEMPTS: HTTP $HTTP_CODE, non-JSON body (endpoint not ready)"
+              sleep "$STATUS_POLL_INTERVAL_S"
+              continue
+            fi
+            # Records whether THIS body carried a .peers object at all — the
+            # budget-exhaust arm reads it to tell "web-1's cat-deploy-state.sh
+            # predates the merge" (key ABSENT — delivery pending) apart from
+            # "slots present but unresolved".
+            PEERS_KEY=$(echo "$BODY" | jq -r 'if (.peers | type) == "object" then "present" else "absent" end')
+            UNRESOLVED=""
+            for PEER_IP in $EXPECTED_PEERS; do
+              # .peers["<ip>"] carries the peer's WHOLE deploy-status JSON, or an
+              # {"error": "unreachable|http_<code>|not_json"} slot when web-1
+              # could not read it. A non-object .peers, a missing key, or a
+              # non-object slot all read as "no usable slot yet": web-1's
+              # cat-deploy-state.sh may predate the merge, or the peer read is
+              # mid-flight — unresolved, never terminal on its own (a slot that
+              # NEVER arrives fails closed at the budget below).
+              PEER_JSON=$(echo "$BODY" | jq -c --arg ip "$PEER_IP" '.peers | if type == "object" then .[$ip] else empty end')
+              if [ -z "$PEER_JSON" ] || ! echo "$PEER_JSON" | jq -e 'type == "object"' >/dev/null 2>&1; then
+                UNRESOLVED="${UNRESOLVED}${UNRESOLVED:+ }${PEER_IP}"
+                echo "Attempt $i/$STATUS_POLL_MAX_ATTEMPTS: peer $PEER_IP has no usable status slot yet"
+                continue
+              fi
+              # Peer-supplied fields are annotation-injection surfaces — a `\n`
+              # in `.error`/`.tag`/`.reason` line-splits a forged `::error::`
+              # through echo. Strip every extracted field to a safe alphabet
+              # before it reaches a workflow command line (fix-round, #8743).
+              PEER_ERROR=$(echo "$PEER_JSON" | jq -r '.error // ""')
+              PEER_ERROR="${PEER_ERROR//[^A-Za-z0-9._ -]/}"
+              if [ -n "$PEER_ERROR" ]; then
+                # `unsigned` is terminal: web-1 could not sign the peer read —
+                # a credential/hooks.json defect that cannot heal inside this
+                # poll budget. Transport classes (unreachable|http_<code>|
+                # not_json) are web-1's observation of the channel, not the
+                # peer's verdict — a slow-but-healthy peer answering inside
+                # `curl --max-time 3` mid-deploy would burn a good release on a
+                # first-glance transient, so they read as UNRESOLVED and still
+                # fail closed at the budget below (design-pass finding, #8743).
+                if [ "$PEER_ERROR" = "unsigned" ]; then
+                  echo "::error::peer $PEER_IP deploy failed (reason=$PEER_ERROR)"
+                  echo "$PEER_JSON" | jq .
+                  exit 1
+                fi
+                UNRESOLVED="${UNRESOLVED}${UNRESOLVED:+ }${PEER_IP}"
+                echo "Attempt $i/$STATUS_POLL_MAX_ATTEMPTS: peer $PEER_IP slot error=$PEER_ERROR (transport-class — polling)"
+                continue
+              fi
+              PEER_EXIT=$(echo "$PEER_JSON" | jq -r '.exit_code // -99' | tr -cd '0-9-')
+              PEER_TAG=$(echo "$PEER_JSON" | jq -r '.tag // ""')
+              PEER_TAG="${PEER_TAG//[^A-Za-z0-9._ -]/}"
+              case "$PEER_EXIT" in
+                0)
+                  if [ "$PEER_TAG" = "v$VERSION" ]; then
+                    echo "Attempt $i/$STATUS_POLL_MAX_ATTEMPTS: peer $PEER_IP reported v$VERSION complete"
+                  else
+                    # exit 0 on an EARLIER tag: this deploy's fan-out reaches
+                    # the peer when web-1's deploy ends — keep polling.
+                    UNRESOLVED="${UNRESOLVED}${UNRESOLVED:+ }${PEER_IP}"
+                    echo "Attempt $i/$STATUS_POLL_MAX_ATTEMPTS: peer $PEER_IP last deploy was for ${PEER_TAG:-<none>} (want v$VERSION)"
+                  fi
+                  ;;
+                -1|-2|-3|-99)
+                  # still running / no prior deploy / transient corrupt read /
+                  # object slot without a verdict — the sanctioned async-poll
+                  # states, same tolerances as the sibling step. Never terminal.
+                  UNRESOLVED="${UNRESOLVED}${UNRESOLVED:+ }${PEER_IP}"
+                  echo "Attempt $i/$STATUS_POLL_MAX_ATTEMPTS: peer $PEER_IP unresolved (exit_code=$PEER_EXIT)"
+                  ;;
+                *)
+                  # .reason is PEER-SUPPLIED text landing in an ::error::
+                  # annotation — strip anything outside the token alphabet so a
+                  # crafted reason cannot smuggle a newline or a second
+                  # annotation command into the workflow parser.
+                  PEER_REASON=$(echo "$PEER_JSON" | jq -r '.reason // "unknown"')
+                  PEER_REASON="${PEER_REASON//[^A-Za-z0-9._ -]/}"
+                  echo "::error::peer $PEER_IP deploy failed (reason=$PEER_REASON, exit_code=$PEER_EXIT, tag=${PEER_TAG:-none})"
+                  echo "$PEER_JSON" | jq .
+                  exit 1
+                  ;;
+              esac
+            done
+            if [ -z "$UNRESOLVED" ]; then
+              echo "All expected peers reported v$VERSION deploy completion"
+              exit 0
+            fi
+            sleep "$STATUS_POLL_INTERVAL_S"
+          done
+          if [ "$PEERS_KEY" = "absent" ]; then
+            # Cold-start ordering: web-1's deployed cat-deploy-state.sh predates
+            # this change (its delivery rides apply-deploy-pipeline-fix.yml /
+            # terraform_data.deploy_pipeline_fix_web2), so no peer slot was ever
+            # observable this run. Distinct from unresolved slots — the fix is
+            # delivery, not a peer.
+            echo "::error::peer verification inconclusive: web-1's deploy-status body carried no .peers key — its cat-deploy-state.sh predates the peers merge (delivery pending); the peer verdict was never observable this run"
+          else
+            for PEER_IP in $UNRESOLVED; do
+              echo "::error::peer $PEER_IP did not report completion for v$VERSION within $((STATUS_POLL_MAX_ATTEMPTS * STATUS_POLL_INTERVAL_S))s"
+            done
+          fi
+          exit 1
+
 
   # ───────────────────────────────────────────────────────────────────────────
   # BLOCKING live-verify gate (#5463 — flipped from report-only 2026-06-18 after
@@ -2358,6 +2599,7 @@ jobs:
       - verify-migrations
       - verify-doppler-secrets
       - deploy
+      - verify-peer-deploy
       - live-verify
       - notify-gated
     runs-on: ubuntu-latest
@@ -2435,6 +2677,7 @@ jobs:
           R_VERIFY_MIGRATIONS: ${{ needs.verify-migrations.result }}
           R_VERIFY_DOPPLER: ${{ needs.verify-doppler-secrets.result }}
           R_DEPLOY: ${{ needs.deploy.result }}
+          R_VERIFY_PEER_DEPLOY: ${{ needs.verify-peer-deploy.result }}
           R_LIVE_VERIFY: ${{ needs.live-verify.result }}
           R_NOTIFY_GATED: ${{ needs.notify-gated.result }}
         run: |
@@ -2498,6 +2741,7 @@ jobs:
           classify verify-migrations "${R_VERIFY_MIGRATIONS}" "Double-checking the database changes"
           classify verify-doppler-secrets "${R_VERIFY_DOPPLER}" "Checking production has the credentials it needs"
           classify deploy "${R_DEPLOY}" "Rolling the new version out to the production server"
+          classify verify-peer-deploy "${R_VERIFY_PEER_DEPLOY}" "Checking the second web host picked up the release"
           classify live-verify "${R_LIVE_VERIFY}" "Checking the live site after the rollout"
           classify notify-gated "${R_NOTIFY_GATED}" "Sending the deploy-blocked notification"
           if [ -z "$FAILED" ]; then
