@@ -1082,6 +1082,12 @@
     background: var(--color-bg-secondary);
     font-weight: 600;
   }
+  /* A landing-section table (getting-started's per-harness command table) widens past the
+     viewport on a phone once it gains columns: it lives outside `.prose`, so the rule above
+     does not reach it. Same narrow-only scroll treatment. */
+  @media (max-width: 768px) {
+    .landing-section-inner table { display: block; max-width: 100%; overflow-x: auto; }
+  }
 
   /* Changelog overrides -- applied alongside .prose on #changelog-content */
   #changelog-content h2 {
