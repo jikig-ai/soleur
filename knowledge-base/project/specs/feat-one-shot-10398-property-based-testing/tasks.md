@@ -44,5 +44,5 @@ Derived from `2026-10-19-feat-property-based-testing-adoption-plan.md` (post-rev
 
 ## Phase 6: Verify + ship
 
-- [ ] 6.1 Full AC sweep AC1–AC15; `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` (AC4)
-- [ ] 6.2 Confirm diff scope: `git diff origin/main --name-only | grep -vE '(apps/web-platform/(package(-lock)?\.json|test/)|scripts/lib/|\.claude/hooks/README\.md|knowledge-base/)'` empty (AC14)
+- [x] 6.1 Full AC sweep AC1–AC15; `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` (AC4)
+- [x] 6.2 Confirm diff scope: `git diff origin/main --name-only | grep -vE '(apps/web-platform/(package(-lock)?\.json|test/)|scripts/lib/|\.claude/hooks/README\.md|knowledge-base/)'` empty (AC14)
