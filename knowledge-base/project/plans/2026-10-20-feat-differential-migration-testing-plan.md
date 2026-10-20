@@ -290,14 +290,14 @@ This plan ships no new guard; its diff is made safe by three **pre-existing** en
 
 ## Acceptance Criteria
 
-- [ ] AC1 — `plugins/soleur/skills/plan/references/differential-migration-testing.md` exists and names all five technique elements: `grep -ci 'oracle' <file>` >= 1, `grep -ci 'normaliz' <file>` >= 1, `grep -ci 'approved' <file>` >= 1, and `grep -i 'old system' <file>` hits the delete-the-old exit criterion.
-- [ ] AC2 — the doc prescribes both concrete harness shapes by their named anchors: `grep -c 'CLI diff' <file>` >= 1 and `grep -c 'recorded-fixture replay' <file>` >= 1, and the control-vs-treatment arm pattern is named (`grep -c 'control' <file>` >= 1 with the old system as the control arm).
-- [ ] AC3 — `grep -c 'differential-migration-testing.md' plugins/soleur/skills/plan/references/plan-issue-templates.md` returns `3` (one pointer per `## Test Scenarios` block), and `bun test plugins/soleur/test/components.test.ts` passes the references-reachability census.
-- [ ] AC4 — the approved-changes convention is load-bearing, not decorative: the doc states that every accepted divergence is recorded with a reason, and that "different" without a ledger entry is a bug in the new system.
-- [ ] AC5 — template pins intact: `bash plugins/soleur/test/test-pyramid-fixtures.test.sh` exits 0; `^## Test Scenarios` count in `plan-issue-templates.md` remains `3`; `pyramid layer` count remains `3`; `bun test plugins/soleur/test/observability-schema-parity.test.ts plugins/soleur/test/plan-skeleton-checkpoint.test.ts` green.
-- [ ] AC6 — `git diff origin/main...HEAD -- plugins/soleur/skills/plan/SKILL.md plugins/soleur/skills/work/SKILL.md plugins/soleur/skills/review/SKILL.md plugins/soleur/docs/_data/skills.js` is empty (no capped-file edits, no component registration — a reference is not a component).
-- [ ] AC7 — markdownlint clean on all touched `.md` files.
-- [ ] AC8 — self-containment: `grep -nE 'knowledge-base/|scripts/lib/|apps/web-platform' plugins/soleur/skills/plan/references/differential-migration-testing.md` returns nothing (the shipped doc carries no repo-internal links).
+- [x] AC1 — `plugins/soleur/skills/plan/references/differential-migration-testing.md` exists and names all five technique elements: `grep -ci 'oracle' <file>` >= 1, `grep -ci 'normaliz' <file>` >= 1, `grep -ci 'approved' <file>` >= 1, and `grep -i 'old system' <file>` hits the delete-the-old exit criterion.
+- [x] AC2 — the doc prescribes both concrete harness shapes by their named anchors: `grep -c 'CLI diff' <file>` >= 1 and `grep -c 'recorded-fixture replay' <file>` >= 1, and the control-vs-treatment arm pattern is named (`grep -c 'control' <file>` >= 1 with the old system as the control arm).
+- [x] AC3 — `grep -c 'differential-migration-testing.md' plugins/soleur/skills/plan/references/plan-issue-templates.md` returns `3` (one pointer per `## Test Scenarios` block), and `bun test plugins/soleur/test/components.test.ts` passes the references-reachability census.
+- [x] AC4 — the approved-changes convention is load-bearing, not decorative: the doc states that every accepted divergence is recorded with a reason, and that "different" without a ledger entry is a bug in the new system.
+- [x] AC5 — template pins intact: `bash plugins/soleur/test/test-pyramid-fixtures.test.sh` exits 0; `^## Test Scenarios` count in `plan-issue-templates.md` remains `3`; `pyramid layer` count remains `3`; `bun test plugins/soleur/test/observability-schema-parity.test.ts plugins/soleur/test/plan-skeleton-checkpoint.test.ts` green.
+- [x] AC6 — `git diff origin/main...HEAD -- plugins/soleur/skills/plan/SKILL.md plugins/soleur/skills/work/SKILL.md plugins/soleur/skills/review/SKILL.md plugins/soleur/docs/_data/skills.js` is empty (no capped-file edits, no component registration — a reference is not a component).
+- [x] AC7 — markdownlint clean on all touched `.md` files.
+- [x] AC8 — self-containment: `grep -nE 'knowledge-base/|scripts/lib/|apps/web-platform' plugins/soleur/skills/plan/references/differential-migration-testing.md` returns nothing (the shipped doc carries no repo-internal links).
 
 ## Test Scenarios
 

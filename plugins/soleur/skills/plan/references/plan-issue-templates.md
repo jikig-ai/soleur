@@ -210,6 +210,8 @@ Derive from acceptance criteria. Use Given/When/Then format for logic tests, and
 
 Label each scenario's pyramid layer — `unit`, `integration`, or `e2e` — and prefer the lowest layer that exercises the behavior. An `e2e` scenario's test must carry a `pyramid-justified: <reason>` marker at write time (or the PR body a `## Test Pyramid` block).
 
+If the feature rewrites, ports, or replaces a running system, prescribe the differential loop — run old and new side-by-side on generated and replayed inputs with the old system as oracle — and cite [differential-migration-testing.md](${CLAUDE_PLUGIN_ROOT}/skills/plan/references/differential-migration-testing.md).
+
 If the feature touches external services, include verification commands:
 
 - **Browser:** [Navigate to URL, fill form, submit, verify UI state]
@@ -443,6 +445,8 @@ Translate each acceptance criterion into a testable scenario:
 - Given [error condition], when [action], then [graceful handling]
 
 Label each scenario's pyramid layer — `unit`, `integration`, or `e2e` — and prefer the lowest layer that exercises the behavior. An `e2e` scenario's test must carry a `pyramid-justified: <reason>` marker at write time (or the PR body a `## Test Pyramid` block).
+
+If the feature rewrites, ports, or replaces a running system, prescribe the differential loop — run old and new side-by-side on generated and replayed inputs with the old system as oracle — and cite [differential-migration-testing.md](${CLAUDE_PLUGIN_ROOT}/skills/plan/references/differential-migration-testing.md).
 
 Include regression scenarios for any bugs this work addresses.
 
@@ -699,6 +703,8 @@ per ask, verbatim quote; every plan item cites the user words it answers or is
 ## Test Scenarios
 
 Label each scenario's pyramid layer — `unit`, `integration`, or `e2e` — and prefer the lowest layer that exercises the behavior. An `e2e` scenario's test must carry a `pyramid-justified: <reason>` marker at write time (or the PR body a `## Test Pyramid` block).
+
+If the feature rewrites, ports, or replaces a running system, prescribe the differential loop — run old and new side-by-side on generated and replayed inputs with the old system as oracle — and cite [differential-migration-testing.md](${CLAUDE_PLUGIN_ROOT}/skills/plan/references/differential-migration-testing.md).
 
 ### Acceptance Tests (RED phase targets)
 
