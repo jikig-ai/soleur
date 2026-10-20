@@ -460,7 +460,7 @@ kill_row K27a-canary-no-workspaces-vol 'm_del canary "-v /mnt/data/workspaces:/w
 kill_row K27b-canary-no-port          'm_del canary "-p 0.0.0.0:3001:3000"'                 'MISSING_DECLARED: port 0.0.0.0:3001:3000 missing from ci-deploy.sh canary' '!prod' '!cloud-init.yml' '#1'
 kill_row K27c-canary-no-host-id-env   'm_del canary "-e SOLEUR_HOST_ID"'                   'MISSING_DECLARED: env SOLEUR_HOST_ID missing from ci-deploy.sh canary' '!prod' '!cloud-init.yml' '#1'
 kill_row K27d-first-boot-no-reaper-env 'm_del first-boot "-e SOLEUR_EGRESS_REAPER"'         'MISSING_DECLARED: env SOLEUR_EGRESS_REAPER missing from cloud-init.yml first-boot' '!ci-deploy.sh' '#1'
-kill_row K27e-first-boot-no-inngest-env 'm_del first-boot "-e INNGEST_BASE_URL"'            'MISSING_DECLARED: env INNGEST_BASE_URL missing from cloud-init.yml first-boot' '!ci-deploy.sh' '#1'
+kill_row K27e-first-boot-no-inngest-env 'm_del first-boot "-e INNGEST_BASE_URL"'            'MISSING_DECLARED: env INNGEST_BASE_URL missing from cloud-init.yml first-boot' 'MISSING_REQUIRED: -e INNGEST_BASE_URL is required in every tuple' '!ci-deploy.sh' '#2'
 kill_row K27f-first-boot-no-port      'm_del first-boot "-p 0.0.0.0:3000:3000"'             'MISSING_DECLARED: port 0.0.0.0:3000:3000 missing from cloud-init.yml first-boot' '!ci-deploy.sh' '#1'
 kill_row K27g-prod-two-members-gone   'm_del prod "-v /mnt/data/workspaces:/workspaces"; m_del prod "-e SOLEUR_EGRESS_REAPER"' 'MISSING_DECLARED: volume /mnt/data/workspaces:/workspaces missing from ci-deploy.sh prod' 'MISSING_DECLARED: env SOLEUR_EGRESS_REAPER missing from ci-deploy.sh prod' '!canary' '#2'
 kill_row K27h-prod-unbalanced-quote   'm_repl prod "-e SOLEUR_HOST_ID=\"\$HOST_ID\"" "-e SOLEUR_HOST_ID=\"\$HOST_ID"' 'UNPARSEABLE_OPTION' 'ci-deploy.sh prod' '!MISSING_DECLARED'
@@ -714,7 +714,7 @@ if [ "$((PASS + FAIL))" -ne "$ROWS" ]; then
   printf '[FATAL] accounting identity: passes(%s) + fails(%s) != rows(%s) - a verdict was discarded\n' "$PASS" "$FAIL" "$ROWS" >&2
   exit 1
 fi
-MIN_ROWS=266
+MIN_ROWS=296
 if [ "$ROWS" -lt "$MIN_ROWS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s rows ran, floor is %s\n' "$ROWS" "$MIN_ROWS" >&2
   exit 1
