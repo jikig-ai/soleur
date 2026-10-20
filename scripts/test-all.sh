@@ -5471,6 +5471,7 @@ if want_scripts; then
   # scripts/lib/legal-normalise.test.sh is the detector for that, and it is fixture-anchored so
   # it cannot red on a legal edit.
   run_suite "scripts/lint-legal-scope-block-placement-unit" bash scripts/lint-legal-scope-block-placement.test.sh
+  run_suite "scripts/lint-art30-reverification-unit" bash scripts/lint-art30-reverification.test.sh
   run_suite "scripts/lint-legal-scope-block-placement-live" bash scripts/lint-legal-scope-block-placement.sh
   run_suite "scripts/lint-legal-mirror-drift-baseline-unit" bash scripts/lint-legal-mirror-drift-baseline.test.sh
   run_suite "scripts/lint-legal-mirror-drift-baseline-live" bash scripts/lint-legal-mirror-drift-baseline.sh
