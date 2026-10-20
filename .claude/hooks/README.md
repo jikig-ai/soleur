@@ -489,6 +489,10 @@ PostToolUse runs after the tool's write, so these cannot block. Most are telemet
   - If the suite carries an anti-vacuity floor, add a `PROMOTED_FILES` entry in `scripts/guard-vacuity-floor.test.sh`.
     That ratchet reads tracked files, so measure it only after `git add` (#8616).
 
+## Property tests
+
+Generated-input (property-style) suites for hook/lib contracts use `scripts/lib/property-harness.sh` — a seeded `RANDOM` loop with `PROP_SEED` replay + `PROP_RUNS` budget — documented in `scripts/lib/property-harness.md`. Reference suite: `scripts/lib/legal-normalise-property.test.sh`. Property suites for hooks live in `.claude/hooks/` (this directory's glob), for repo libs in `scripts/lib/`; either way the `SUITE_GLOBS` registration plus the placement + edge rules from "Adding a hook test suite" apply unchanged.
+
 ## macOS note
 
 `flock` is not installed by default on macOS. Dev machines need:
