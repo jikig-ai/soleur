@@ -3805,7 +3805,7 @@ _aff_runner_banner() {
 # #8875: +1 always-on (emitter census is repo-global by construction); re-pinned at 114-5.
 # #10331: +2 always-on (the lint-ratchet pair); re-pinned at 116-5.
 # #7893: +1 always-on (the Art. 30 re-verification unit); re-pinned at 117-5.
-_MIN_ALWAYS_ON_DECLARED=112
+_MIN_ALWAYS_ON_DECLARED=113
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -5454,6 +5454,13 @@ if want_scripts; then
   # adds a gated suite must meet it on every run, not only on diff-touch.
   run_suite "scripts/lint-integration-env-gates-live" bash scripts/lint-integration-env-gates.sh
   run_suite "scripts/lint-integration-env-gates-battery" bash scripts/lint-integration-env-gates.test.sh
+  # #10399 feature-map coverage sentinel. The LIVE line checks the committed
+  # tree (route coverage/staleness/completeness/contradiction); the battery
+  # drives each Guard-Contract row on synthetic fixture repos. Same
+  # live+battery pairing as the env-gates sentinel above — registered
+  # unconditionally, seconds on a scratch tree.
+  run_suite "scripts/lint-feature-map-coverage-live" bash scripts/lint-feature-map-coverage.sh
+  run_suite "scripts/lint-feature-map-coverage-battery" bash scripts/lint-feature-map-coverage.test.sh
   # #7387 legal-corpus write-time gates. Each gate registers its unit suite AND a LIVE run
   # against the working tree: the unit suite proves the gate detects a planted defect in a
   # sandbox, the live line is the only thing that ever points it at the real corpus. The unit
