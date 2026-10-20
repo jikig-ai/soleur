@@ -19,6 +19,7 @@ PR body: `Ref #9639` and `Part of tracker #9217`. No closing keyword (F7 and F8 
 **Verification instead of agent fan-out:** the change is two shell scripts, two unit files and one test scanner; every claim was verified directly (greps, a scratch xtrace experiment, `gh`), which is the proportionate depth, as for F5. The plan-review panel (DHH, Kieran, code-simplicity) and two CTO rulings supplied the independent reads.
 
 ### Key improvements over the first draft
+
 1. Kieran's scratch scanner experiment falsified "script-side indirect = population reason, census unchanged": the unrestricted form pulled `inngest-luks-cutover.service` in (population 10 -> 11, rc 6). CTO amended F2: only `*_KEY`-named indirect expansion counts script-side (row G1.9).
 2. The behavioral test mechanics were corrected from measurement: the stub `doppler` must not expand the secret (its own xtrace would leak it and void the G2.1 control); `SHELLOPTS=xtrace` cannot prefix `eval`; the env-capture row must exclude the key-named line.
 3. The zot lookup moves to just after the `--canary-only` early exit (verified: `$URL` is used only inside functions defined earlier and called later, plus `_ping "$URL"` at the end, so nothing between the old and new site reads it).
@@ -26,6 +27,7 @@ PR body: `Ref #9639` and `Part of tracker #9217`. No closing keyword (F7 and F8 
 5. Post-merge check 1 anchored on `Creation complete` after measuring that the bare resource name appears in a no-op apply log.
 
 ### New considerations discovered
+
 - A one-line verification of the premise "no unit-side `${!`" is not enough for the scanner: keep the unit-side wrapper finding on the broader any-name form while the script-side reason is `_KEY`-bound.
 - Cited issue/PR states checked live 2026-10-20: #9639 OPEN, #9217 OPEN, #10576 MERGED, #10501/#10546/#7390 OPEN, #7797 OPEN, #9638 OPEN; no open PR touches any file in "Files to Edit" (re-run on 2026-10-20 over every open PR).
 
