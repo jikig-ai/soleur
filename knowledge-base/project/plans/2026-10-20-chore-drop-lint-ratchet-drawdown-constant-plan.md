@@ -65,7 +65,7 @@ PR body must carry `Closes #10583` and a non-closing epic reference line (the wo
 
 Persisted in `knowledge-base/project/specs/feat-one-shot-10583-drop-drawdown-constant/decision-challenges.md`.
 
-- Ruled by CTO agent, 2026-10-20: user-vs-Soleur form switch is `name in USER_SCOPES` (F1).
+- Ruled by CTO agent, 2026-10-20: user-vs-Soleur form switch is `name in USER_SCOPES` (F1). Amended at review the same day: the switch is `name == "user-ruff"` (`auto` never renders); see `decision-challenges.md`.
 - Ruled by CTO agent, 2026-10-20: Soleur header becomes a short zero-findings-gate header keeping the `--list`/`--update`/merge-conflict lines, no tracker or PR3a provenance; baselines regenerated with `--update`; a parity test is added (F2).
 - Ruled by CTO agent, 2026-10-20: ADR-290 contract sentence edited in place plus a short Amendment 3; Amendment 2 untouched (F3).
 
@@ -246,7 +246,7 @@ The probe reads the committed baseline header rather than running `--check`: pre
 - [ ] AC2: both committed baselines hold zero entries: `grep -vcE '^(#|[[:space:]]*$)' scripts/lint-ratchet-ruff.baseline.txt scripts/lint-ratchet-eslint-test-dirs.baseline.txt` prints `0` for each file; neither file contains the strings `Shrink-only`, `# lint-ratchet baseline`, `PR3a` or `#10331`.
 - [ ] AC3: `python3 plugins/soleur/scripts/lint-ratchet.py ruff --check` and `python3 plugins/soleur/scripts/lint-ratchet.py eslint-test-dirs --check` both exit 0, run from the worktree, before the push.
 - [ ] AC4: `python3 -m unittest tests.scripts.test_lint_ratchet` exits 0; the parity test and the user-form byte-pin test exist and were observed RED before the engine edit; the passing count is N (Phase 0) minus 1 (deleted `test_the_drawdown_reference_is_one_constant`) plus 2 (the two new tests).
-- [ ] AC5: `git grep -n "DRAWDOWN" -- plugins/soleur/scripts tests/scripts` returns no match (the negative pin in the parity test spells the word in lower case).
+- [ ] AC5: `git grep -n "DRAWDOWN" -- plugins/soleur/scripts tests/scripts` returns no match.
 - [ ] AC6: the user-form baseline output is unchanged: the byte-pin test passes, its expected text was captured from `origin/main` before the engine edit, and `git diff origin/main...HEAD -- plugins/soleur/scripts/lint-ratchet.py` shows no change to the user-form header lines.
 - [ ] AC7: `git diff --stat origin/main...HEAD -- plugins/soleur/skills/work/SKILL.md` is empty.
 - [ ] AC8: ADR-290 no longer names `drawdown` in the PR3b contract sentence, carries Amendment 3, and Amendment 2 is byte-unchanged (`git diff origin/main...HEAD` on the ADR shows no removed or modified line inside the Amendment 2 section). The ADR's historical mentions of drawdown (the Amendment 1 `Tracker: ... Drawdown: #10433.` line and Amendment 2) are deliberately left; AC8 covers the contract sentence only.

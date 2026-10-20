@@ -296,8 +296,10 @@ def parse_baseline(text: str) -> list:
 
 def render_baseline(name: str, entries: list, *, recovery=None, header=None) -> str:
     recovery = recovery or "python3 {} {}".format(SCRIPT_REL, name)
-    if name in USER_SCOPES:
-        # User baseline: machine-independent text (no absolute path, no tracker reference).
+    # The user form belongs to the one config build_user_config builds ("user-ruff"); "auto" resolves to it
+    # before any render, so it never reaches here.
+    if name == "user-ruff":
+        # User baseline: machine-independent text (no absolute path).
         lines = [
             "# lint-ratchet baseline (ruff) for this repository; engine: the Soleur plugin, design in ADR-290.",
             "# Shrink-only: this file always equals the live census, and per (path, rule) it may never hold more",
@@ -312,8 +314,12 @@ def render_baseline(name: str, entries: list, *, recovery=None, header=None) -> 
         if header:
             lines.append(header)
         return "\n".join(lines + [format_entry(*entry) for entry in sorted(entries)]) + "\n"
+    # Wording is a property of the two Soleur scopes, whose committed baselines are empty by ADR-290; the
+    # shrink-only guard rejects any entry against an empty merge-base copy. A Soleur scope that legitimately
+    # holds entries must change this header and its pin test.
     header = [
-        "# lint-ratchet scope '{}' is a zero-findings gate (design in ADR-290): fix findings, never baseline them.".format(name),
+        "# lint-ratchet scope '{}' is a zero-findings gate (design in ADR-290): "
+        "fix findings, never baseline them.".format(name),
         "# List the live findings:  {} --list".format(recovery),
         "# After fixing findings:   {} --update  (it refuses to add)".format(recovery),
         "# After a merge conflict, take the base branch's copy of this file and re-run --update.",

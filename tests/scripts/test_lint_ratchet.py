@@ -1193,8 +1193,8 @@ class TestConfigPins(unittest.TestCase):
             self.assertRegex(scope["baseline"], r"^scripts/lint-[a-z-]+\.baseline\.txt$")
 
     def test_the_user_form_is_byte_identical(self):
-        # Captured from origin/main before the drawdown parameter was removed: a user repo's committed
-        # .lint-ratchet/ruff.baseline.txt must not churn because the renderer's switch changed.
+        # A user repo's committed .lint-ratchet/ruff.baseline.txt must not churn because the renderer's
+        # switch changed.
         self.assertEqual(lr.render_baseline("user-ruff", []), (
             "# lint-ratchet baseline (ruff) for this repository; engine: the Soleur plugin, design in ADR-290.\n"
             "# Shrink-only: this file always equals the live census, and per (path, rule) it may never hold more\n"
@@ -1209,6 +1209,8 @@ class TestConfigPins(unittest.TestCase):
 
     def test_the_committed_soleur_baselines_equal_the_rendered_empty_form(self):
         # Byte equality covers both properties: zero entries, and a header that is the renderer's own.
+        # After a header wording change, regenerate with `lint-ratchet.py <scope> --update` (needs the tool).
+        self.assertEqual(sorted(lr.SCOPES), ["eslint-test-dirs", "ruff"], "a new Soleur scope needs a row here")
         for name in ("ruff", "eslint-test-dirs"):
             path = REPO_ROOT / lr.SCOPES[name]["baseline"]
             self.assertEqual(path.read_text(), lr.render_baseline(name, []), name)
@@ -2353,10 +2355,6 @@ class TestUserModeWaiversAndSoleurIsolation(UserModeBase):
             "lint-ratchet(fixture): remedy: REMEDY-TEXT",
             "lint-ratchet(fixture): inline waivers (# noqa, eslint-disable) are NOT honoured here, and --update must "
             "not be used to admit a new finding"])
-        text = lr.render_baseline("ruff", [])
-        self.assertTrue(text.startswith("# lint-ratchet scope 'ruff' is a zero-findings gate (design in ADR-290)"), text)
-        for gone in ("Drawdown", "Shrink-only", "PR3a", "10331"):
-            self.assertNotIn(gone, text)
 
 
 class TestUserModeGuards(UserModeBase):

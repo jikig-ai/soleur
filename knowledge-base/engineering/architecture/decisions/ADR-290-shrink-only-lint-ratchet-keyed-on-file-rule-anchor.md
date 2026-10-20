@@ -90,4 +90,4 @@ Tracker: Ref #10331. Drawdown: #10433 (closed by this change).
 
 ## Amendment 3 (2026-10-20, #10583: drawdown plumbing removed)
 
-The `DRAWDOWN` constant, the `drawdown` scope-config key and the `# Drawdown tracking` header line are removed. `render_baseline` now switches between the user form and the Soleur form on `name in USER_SCOPES`. The Soleur baseline header is a short zero-findings-gate header, and a test pins both committed Soleur baselines to the rendered empty form.
+The `DRAWDOWN` constant, the `drawdown` scope-config key and the `# Drawdown tracking` header line are removed. `render_baseline` now switches between the user form and the Soleur form on the `user-ruff` config name, and its `recovery` and `header` parameters are keyword-only. The Soleur baseline header is a short zero-findings-gate header, and a test pins both committed Soleur baselines to the rendered empty form.
