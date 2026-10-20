@@ -916,40 +916,47 @@ fi
 #   EXEMPT\t<file>:<line>\t<reason>      a `tmpns-exempt:` marker (never a hit)
 # Single-quoted spans are stripped up front because they cannot execute (the
 # workspaces-luks-g4-mutation `mktemp -u` payload is exactly such a literal).
-# Double-quoted spans are dropped one at a time and the strip STOPS at the first
-# span carrying `$(` — `"$(mktemp -u)"` executes and must stay visible, while a
-# literal "mktemp -u" inside double quotes drops with its span.
+# RESIDUAL: a quoted span that IS executed as an argument — `bash -c 'mktemp -u'`,
+# `eval '…'` — is out of sweep scope; quote-interior scanning would re-import
+# the g4-mutation false-positives the strip exists to kill, and the corpus is
+# clean today. Double-quoted spans are dropped one at a time and the strip STOPS
+# at the first span carrying `$(` — `"$(mktemp -u)"` executes and must stay
+# visible, while a literal "mktemp -u" inside double quotes drops with its span.
 tmpns_scan() { # <file>...
-  local f raw text span frag w skip1 n hit_line
+  local f raw text span frag w skip1 n hit_line i next_arg
   local -a _w
   # In a variable, not inline: an unquoted `#` after `=~` opens a comment and
   # truncates the line (a `[[ =~ ]]` RHS needs the regex unquoted to stay regex).
   local TMPNS_EXEMPT_RE='#[[:space:]]*tmpns-exempt:'
-  # Heredoc-aware prefilter, built once per scan: `<<'TAG'` bodies are literal
-  # text (fixture content, container payloads) — they cannot execute a mktemp in
-  # this process, so they are emitted to no consumer and skipped. The opener
-  # regex refuses `<<<` herestrings (char before `<<` is `<`) and comment lines.
-  if [[ -z "${TMPNS_AWK_PROG:-}" ]]; then
-    TMPNS_AWK_PROG="${TMP:-/tmp}/tmpns-heredoc.$$.awk"
-    cat >"$TMPNS_AWK_PROG" <<'AWK'
+  # Heredoc-aware prefilter, REBUILT EVERY CALL: the program path must not be
+  # env-readable — a pre-set TMPNS_AWK_PROG would point awk at an arbitrary file
+  # (/dev/null emits nothing and the sweep reports 0 hits having scanned 0
+  # lines, the env-readable-flag vacuity class). `<<'TAG'`/`<<"TAG"` bodies are
+  # literal text (fixtures, container payloads): skipped. UNQUOTED `<<TAG` is
+  # NOT swallowed — its body expands `$(...)` in this shell, so `$(mktemp -u)`
+  # inside one executes here and must stay visible. The opener regex requires a
+  # quoted tag (so `<<` inside regexes/sed patterns does not open a window),
+  # refuses `<<<` herestrings (char before the match is `<`), skips comment
+  # lines (a `#`-comment naming `<<'TAG'` opens no window), and accepts `-`/`.`
+  # in tags so `<<'A-B'` cannot truncate the tag to `A` and swallow to EOF.
+  TMPNS_AWK_PROG="${TMP:-/tmp}/tmpns-heredoc.$$.awk"
+  cat >"$TMPNS_AWK_PROG" <<'AWK'
 inhd {
   l = $0; gsub(/^[[:space:]]+/, "", l)
   if (l == tag) inhd = 0
   next
 }
-/<<-?[[:space:]]*['"]?[A-Za-z_][A-Za-z0-9_]*['"]?/ {
-  if (substr($0, RSTART - 1, 1) != "<") {
-    t = substr($0, RSTART, RLENGTH)
-    sub(/<<-?[[:space:]]*/, "", t)
-    gsub(/['"]/, "", t)
-    tag = t; inhd = 1
-  }
-}
+/^[[:space:]]*#/ { if ($0 ~ /mktemp|tmpns-exempt/) print NR ":" $0; next }
 /mktemp|tmpns-exempt/ { print NR ":" $0 }
+match($0, /<<-?[[:space:]]*['"][A-Za-z_][A-Za-z0-9_.-]*['"]/) && substr($0, RSTART - 1, 1) != "<" {
+  t = substr($0, RSTART, RLENGTH)
+  sub(/<<-?[[:space:]]*['"]/, "", t)
+  sub(/['"]$/, "", t)
+  tag = t; inhd = 1
+}
 AWK
-  fi
   for f in "$@"; do
-    [[ -f "$f" ]] || continue
+    if [[ ! -f "$f" ]]; then printf 'MISSING\t%s\n' "$f"; continue; fi
     while IFS= read -r hit_line || [[ -n "$hit_line" ]]; do
       n="${hit_line%%:*}"; raw="${hit_line#*:}"
       [[ "$raw" =~ ^[[:space:]]*# ]] && continue
@@ -957,22 +964,48 @@ AWK
       while [[ "$text" =~ \"[^\"]*\" ]]; do
         span="${BASH_REMATCH[0]}"
         [[ "$span" == *'$('* ]] && break
-        text="${text/"$span"/}"
+        # Literal removal, not `${text/"$span"/}`: a span containing glob
+        # metacharacters (`*`, `?`, `[`) would make the substitution erase
+        # through a later `$(mktemp -u)` on the same line.
+        text="${text%%"$span"*}${text#*"$span"}"
       done
       if [[ "$text" =~ ${TMPNS_EXEMPT_RE} ]]; then
         printf 'EXEMPT\t%s:%s\t%s\n' "$f" "$n" "${text##*tmpns-exempt: }"
         continue
       fi
+      # Trailing comments: `#` at a word boundary (space/;/|/&/paren) opens a
+      # comment — a `code # note: mktemp -u` line is prose, not a violation.
+      # `#` inside `${#var}`/`a#b` is NOT a comment (not at a boundary).
+      text="$(printf '%s' "$text" | sed 's/\([[:space:];|&()]\)#.*/\1/')"
       while IFS= read -r frag; do
         frag="${frag//\"/}"; frag="${frag//)/ }"; frag="${frag//\}/ }"
         _w=(); read -ra _w <<<"$frag"
         skip1=0
-        for w in "${_w[@]:1}"; do
+        for i in "${!_w[@]}"; do
+          (( i == 0 )) && continue
+          w="${_w[i]}"
           if (( skip1 )); then skip1=0; continue; fi
           case "$w" in
             '#'*) break ;;
-            -p|--tmpdir|--suffix) skip1=1 ;;
-            -t|-d|--directory|-q|--quiet|--suffix=*|--tmpdir=*) ;;
+            # -p/--tmpdir consume a DIR argument: skipping it without reading
+            # it would let `mktemp -p /tmp` (a TMPDIR-ignoring absolute scratch
+            # path) evade the sweep. --suffix consumes a name suffix — safe.
+            -p|--tmpdir)
+              next_arg="${_w[i+1]:-}"
+              if [[ "$next_arg" == /tmp || "$next_arg" == /tmp/* ]]; then
+                printf 'HIT\t%s:%s\t%s\n' "$f" "$n" "$raw"; break
+              fi
+              skip1=1 ;;
+            --suffix) skip1=1 ;;
+            -p?*)
+              if [[ "${w#-p}" == /tmp || "${w#-p}" == /tmp/* ]]; then
+                printf 'HIT\t%s:%s\t%s\n' "$f" "$n" "$raw"; break
+              fi ;;
+            --tmpdir=*)
+              if [[ "${w#--tmpdir=}" == /tmp || "${w#--tmpdir=}" == /tmp/* ]]; then
+                printf 'HIT\t%s:%s\t%s\n' "$f" "$n" "$raw"; break
+              fi ;;
+            -t|-d|--directory|-q|--quiet|--suffix=*) ;;
             -*u*) printf 'HIT\t%s:%s\t%s\n' "$f" "$n" "$raw"; break ;;
             -*) ;;
             /tmp|/tmp/*) printf 'HIT\t%s:%s\t%s\n' "$f" "$n" "$raw"; break ;;
@@ -1019,22 +1052,56 @@ FIX
   cat >"$TMPNS_FIX/viol-dryrun.test.sh" <<'FIX'
 st=$(mktemp --dry-run)
 FIX
+  cat >"$TMPNS_FIX/viol-p-tmp.test.sh" <<'FIX'
+st=$(mktemp -p /tmp)
+FIX
+  cat >"$TMPNS_FIX/viol-pglued.test.sh" <<'FIX'
+st=$(mktemp -p/tmp)
+FIX
+  cat >"$TMPNS_FIX/viol-hd-unquoted.test.sh" <<'FIX'
+cat <<EOF
+st=$(mktemp -u)
+EOF
+FIX
+  cat >"$TMPNS_FIX/viol-comment-opener.test.sh" <<'FIX'
+# demo of a quoted heredoc: cat <<'SINK' ... SINK
+st=$(mktemp -u)
+SINK
+FIX
+  cat >"$TMPNS_FIX/viol-dash-tag.test.sh" <<'FIX'
+cat <<'A-B'
+literal mktemp -u payload text
+A-B
+st=$(mktemp -u)
+FIX
+  cat >"$TMPNS_FIX/viol-glob-span.test.sh" <<'FIX'
+a="*.log"; st=$(mktemp -u)
+FIX
   cat >"$TMPNS_FIX/exempt.test.sh" <<'FIX'
 demo=$(mktemp -u)  # tmpns-exempt: fixture-demonstrates-the-anti-pattern
 FIX
   cat >"$TMPNS_FIX/payload.test.sh" <<'FIX'
 if grep -qE 'case "\$\(mktemp -u\)" in' "$BODY_NC"; then ok "present"; fi
 FIX
+  cat >"$TMPNS_FIX/compliant-comment.test.sh" <<'FIX'
+x=1 # historical note: this used to call mktemp -u here
+FIX
 
   TMPNS_FIX_OUT="$(tmpns_scan "$TMPNS_FIX"/*.test.sh)"
   TMPNS_FIX_HITS="$(printf '%s\n' "$TMPNS_FIX_OUT" | grep -c $'^HIT\t' || true)"
-  if (( TMPNS_FIX_HITS == 3 )) \
+  if (( TMPNS_FIX_HITS == 9 )) \
      && grep -qF $'HIT\t'"$TMPNS_FIX/viol-u.test.sh:1" <<<"$TMPNS_FIX_OUT" \
      && grep -qF $'HIT\t'"$TMPNS_FIX/viol-tmp.test.sh:1" <<<"$TMPNS_FIX_OUT" \
-     && grep -qF $'HIT\t'"$TMPNS_FIX/viol-dryrun.test.sh:1" <<<"$TMPNS_FIX_OUT"; then
-    ok "T12b: the sweep fires on planted mktemp -u, --dry-run and positional-/tmp hits (and stays silent on the compliant/payload fixtures)"
+     && grep -qF $'HIT\t'"$TMPNS_FIX/viol-dryrun.test.sh:1" <<<"$TMPNS_FIX_OUT" \
+     && grep -qF $'HIT\t'"$TMPNS_FIX/viol-p-tmp.test.sh:1" <<<"$TMPNS_FIX_OUT" \
+     && grep -qF $'HIT\t'"$TMPNS_FIX/viol-pglued.test.sh:1" <<<"$TMPNS_FIX_OUT" \
+     && grep -qF $'HIT\t'"$TMPNS_FIX/viol-hd-unquoted.test.sh:2" <<<"$TMPNS_FIX_OUT" \
+     && grep -qF $'HIT\t'"$TMPNS_FIX/viol-comment-opener.test.sh:2" <<<"$TMPNS_FIX_OUT" \
+     && grep -qF $'HIT\t'"$TMPNS_FIX/viol-dash-tag.test.sh:4" <<<"$TMPNS_FIX_OUT" \
+     && grep -qF $'HIT\t'"$TMPNS_FIX/viol-glob-span.test.sh:1" <<<"$TMPNS_FIX_OUT"; then
+    ok "T12b: the sweep fires on planted mktemp -u, --dry-run, positional-/tmp, -p /tmp, -p/tmp, unquoted-heredoc, comment-opener, dash-tag and glob-span hits (and stays silent on the compliant/payload/comment fixtures)"
   else
-    no "T12b: fixture battery produced ${TMPNS_FIX_HITS} hit(s) (want exactly the 3 planted):"$'\n'"$TMPNS_FIX_OUT"
+    no "T12b: fixture battery produced ${TMPNS_FIX_HITS} hit(s) (want exactly the 9 planted):"$'\n'"$TMPNS_FIX_OUT"
   fi
 
   if grep -qF $'EXEMPT\t'"$TMPNS_FIX/exempt.test.sh:1" <<<"$TMPNS_FIX_OUT" \
@@ -1046,11 +1113,12 @@ FIX
 
   TMPNS_OUT="$(tmpns_scan "${TMPNS_SET[@]}")"
   TMPNS_HITS="$(printf '%s\n' "$TMPNS_OUT" | grep -c $'^HIT\t' || true)"
-  if (( TMPNS_HITS == 0 )) && (( ${#TMPNS_SET[@]} > 0 )); then
-    ok "T12d: zero mktemp -u / positional-/tmp sites across the ${#TMPNS_SET[@]}-suite execute set"
+  TMPNS_MISSING="$(printf '%s\n' "$TMPNS_OUT" | grep -c $'^MISSING\t' || true)"
+  if (( TMPNS_HITS == 0 )) && (( ${#TMPNS_SET[@]} > 0 )) && (( TMPNS_MISSING == 0 )); then
+    ok "T12d: zero mktemp -u / positional-/tmp sites across the ${#TMPNS_SET[@]}-suite execute set (all members read)"
     printf '%s\n' "$TMPNS_OUT" | grep $'^EXEMPT\t' | sed 's/^/    /' || true
   else
-    no "T12d: ${TMPNS_HITS} tmpns violation(s) in the execute set:"$'\n'"$(printf '%s\n' "$TMPNS_OUT" | grep $'^HIT\t' | sed 's/^/    /')"
+    no "T12d: ${TMPNS_HITS} tmpns violation(s), ${TMPNS_MISSING} unreadable member(s) in the execute set:"$'\n'"$(printf '%s\n' "$TMPNS_OUT" | grep -E $'^(HIT|MISSING)\t' | sed 's/^/    /')"
   fi
 fi
 
