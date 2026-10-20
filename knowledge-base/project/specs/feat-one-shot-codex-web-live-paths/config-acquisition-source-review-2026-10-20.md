@@ -192,3 +192,16 @@ or transport probes are rejected; the profile/recovery chain remains gated on
 successful acquisition. The independent review and ruling authorize no further
 operational action. Historical diagnostic attempts and this Config attempt are
 all spent; never remove or reuse their markers or output directories.
+
+## Explicit proposal-only scope change — 2026-10-20
+
+The operator subsequently answered “Authorize proposal-only planning” to an
+explicit scope-change question superseding STOP solely for drafting a bounded
+proposal for independent engineering/security review. Preparation, diagnostics,
+execution, retries, resync and shipping remain held. The
+[resolver-only proposal and independent acceptance record](resolver-only-proposal-2026-10-20.md#independent-proposal-review)
+now own that limited design scope. Both reviewers accepted its prose boundary at
+`d63d82a43306d4d04134bd02e8a571616d6c3678`. Source implementation and synthesized
+offline tests require separate operator permission, still ungranted. The spent
+attempt, exact historical cause uncertainty and all operational holds above are
+unchanged; no new evidence, resolver execution or acquisition is claimed.

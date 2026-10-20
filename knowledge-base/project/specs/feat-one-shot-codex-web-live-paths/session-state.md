@@ -2394,3 +2394,27 @@
   → profile/recovery → qualification → permitted Web/CLO → resync/full CI/full
   review/QA/preflight/promotion remains pending. PR draft/disarmed/conflicting;
   hosted auth BLOCKED; alternate route PENDING; no ship authority granted.
+
+### Explicit resolver-only proposal scope and acceptance — 2026-10-20
+
+- Operator explicitly authorized proposal-only planning to supersede STOP solely
+  for a bounded independently reviewed proposal. All operational holds persist.
+- [Resolver-only proposal](resolver-only-proposal-2026-10-20.md#independent-proposal-review)
+  received engineering and security PASS at pushed
+  `d63d82a43306d4d04134bd02e8a571616d6c3678`. Initial security findings on helper
+  containment and OS/NSS exposure were corrected and independently re-reviewed.
+- The design proposes a separate one-use action passing `auth.docker.io` once to
+  one resolver helper, with no application connection/TLS/HTTP, retained addresses
+  or automatic continuation. This is unimplemented prose, not runtime evidence.
+- Ruled by CTO agent: next request separate permission for source changes and
+  synthesized offline tests only. Permission remains ungranted. Source review,
+  separately authorized preparation, actual-manifest review, fresh exact-command
+  approval and independent evidence review remain distinct future gates.
+- No source/test/operational artifact changed; historical evidence was untouched.
+  No new operational hash verification or test result is claimed. Whitespace and
+  staged secret checks passed for the proposal documentation; hooks resolve to
+  `/dev/null`, so no hook execution is claimed. Automatic draft-check observation
+  grants no full CI verdict; the branch remains draft/disarmed/conflicting.
+- Main resync/full CI, full review/QA/preflight, build/recovery, qualification,
+  permitted Web/CLO matrices, promotion and ship remain held. Hosted auth BLOCKED;
+  alternate route PENDING; all attempts/approvals spent and bindings unrefreshed.

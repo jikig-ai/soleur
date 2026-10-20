@@ -1,6 +1,7 @@
 # Resolver-only diagnostic proposal — 2026-10-20
 
-Status: proposal only; independent engineering/security acceptance pending.
+Status: prose design accepted by independent engineering and security review;
+source/offline-test authorization pending.
 PR #9051 remains OPEN/draft/disarmed. No implementation or operational authority
 is granted by this document.
 
@@ -181,5 +182,20 @@ remain unrefreshed. Archive live planning artifacts before eventual ready/merge.
 
 ## Independent proposal review
 
-Pending review of the pushed proposal. No implementation permission is requested
-until both reviewers have assessed a concrete version and findings are resolved.
+Both seats reviewed pushed `d63d82a43306d4d04134bd02e8a571616d6c3678` using local
+document/source reads only. No test, probe, resolver or operational action ran.
+
+- Security initially blocked `cf695fc1fb` on outer-timeout coverage of the helper
+  and ambiguous OS/NSS exposure. The concrete correction requires coordinator/
+  helper termination containment and parent-death/outer-timeout tests, discloses
+  resolver daemons/search suffixes and later system-service traffic, and narrows
+  the prohibited alternatives to tool-directed choices and Docker daemon access.
+  Security re-review **PASS** at `d63d82a433` with no remaining proposal blocker.
+- Engineering re-review **PASS** at the same version. **Ruled by CTO agent:**
+  after security PASS, request separate operator authorization for source changes
+  and synthesized offline tests only. Proposal acceptance grants no such authority.
+
+Containment, cleanup, truthful category consistency and unreachable transport
+continuation remain requirements to prove during source review, not established
+runtime capabilities. No acquisition or historical-cause inference follows.
+The next authorization has not been granted. All continuing holds above stand.
