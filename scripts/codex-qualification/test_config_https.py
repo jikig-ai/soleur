@@ -421,53 +421,92 @@ class MutationTests(unittest.TestCase):
     def test_mutated_runtime_guards_are_detected_by_behavior(self):
         source = Path(transport.__file__).read_text()
         mutations = [
-            ("parsed.netloc not in (DESTINATION, DESTINATION + ':443')", 'False',
-             lambda module: module.checked_location('https://evil/a'), 'location'),
-            ("names.get('content-length') != ['2646']", 'False', None, 'headers'),
-            ("            _peer(connection, address)\n", '            pass\n', None, 'peer'),
-            ("row[2:] != [443, 0, 0]", 'False',
-             lambda module: module.selected_address([[10, '2606:4700:4700::1111', 443, 0, 2]]), 'dns'),
+            ("parsed.netloc not in (DESTINATION, DESTINATION + ':443')", 'False', 'location'),
+            ("names.get('content-length') != ['2646']", 'False', 'headers'),
+            ("            _peer(connection, address)\n", '            pass\n', 'peer'),
+            ("row[2:] != [443, 0, 0]", 'False', 'dns'),
         ]
-        for index, (old, new, action, code) in enumerate(mutations):
+        for index, (old, new, code) in enumerate(mutations):
             with self.subTest(guard=code), tempfile.TemporaryDirectory() as directory:
+                # Each mutated fixture first proves the exact refusal on pristine
+                # code. An internal error or different refusal is never a kill.
+                self.assert_guard_behavior(transport, code, mutated=False)
                 self.assertEqual(source.count(old), 1)
                 path = Path(directory) / 'mutant.py'
                 path.write_text(source.replace(old, new))
                 spec = importlib.util.spec_from_file_location('mutant' + str(index), path)
                 module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)
-                if action is not None:
-                    # The same refusal oracle must reject this deliberately broken source.
-                    with self.assertRaises(AssertionError):
-                        with self.assertRaises(module.TransportRefused):
-                            action(module)
-                elif code == 'headers':
-                    sock = FakeSocket(response(headers=[('Content-Length', '2645'),
-                        ('Content-Type', 'application/octet-stream')], body=b'x' * 2646))
-                    self.assert_mutant_request_survives(module, sock, expected='headers')
-                else:
-                    sock = FakeSocket(peer=('1.1.1.1', 443))
-                    self.assert_mutant_request_survives(module, sock, expected='peer')
+                self.assert_guard_behavior(module, code, mutated=True)
 
-    def assert_mutant_request_survives(self, module, sock, *, expected):
+    def assert_guard_behavior(self, module, code, *, mutated):
+        if code == 'location':
+            if mutated:
+                self.assertEqual(module.checked_location('https://evil/a'), '/a')
+            else:
+                with self.assertRaises(module.TransportRefused) as caught:
+                    module.checked_location('https://evil/a')
+                self.assertEqual(caught.exception.code, 'location')
+            return
+        if code == 'dns':
+            rows = [[10, '2606:4700:4700::1111', 443, 0, 2]]
+            if mutated:
+                self.assertEqual(module.selected_address(rows),
+                    (socket.AF_INET6, ('2606:4700:4700::1111', 443, 0, 0)))
+            else:
+                with self.assertRaises(module.TransportRefused) as caught:
+                    module.selected_address(rows)
+                self.assertEqual(caught.exception.code, 'dns')
+            return
+        self.assert_request_guard_behavior(module, code, mutated=mutated)
+
+    def assert_request_guard_behavior(self, module, code, *, mutated):
+        self.assertIn(code, ('headers', 'peer'))
+        body = b'x' * 2646
+        sock = FakeSocket(response(headers=[('Content-Length', '2645' if code == 'headers' else '2646'),
+            ('Content-Type', 'application/octet-stream')], body=body),
+            peer=('1.1.1.1', 443) if code == 'peer' else ('8.8.8.8', 443))
         context = Mock()
         context.wrap_socket.return_value = sock
-        if expected == 'peer':
+        if code == 'peer':
             def wrap(*_args, **_kwargs):
                 sock.peer = ('8.8.8.8', 443)
                 return sock
             context.wrap_socket.side_effect = wrap
+        events = []
         with patch.object(module, '_tls_context', return_value=context), \
                 patch.object(module, 'resolve_addresses', return_value=[[2, '8.8.8.8', 443, 0, 0]]), \
                 patch.object(module.socket, 'socket', return_value=sock):
             client = module.BoundedHTTPS(b'CA', module.sha(b'CA'), clock=lambda: 1.0)
+            result, caught = None, None
             try:
-                client.request('destination', location='https://production.cloudfront.docker.com/a',
-                    deadline=11, observe=lambda *_: None)
-                caught = None
+                result = client.request('destination', location='https://production.cloudfront.docker.com/a',
+                    deadline=11, observe=lambda event, value: events.append((event, value)))
             except module.TransportRefused as error:
                 caught = error.code
-        self.assertNotEqual(caught, expected)
+        self.assertTrue(sock.closed)
+        if mutated:
+            self.assertIsNone(caught)
+            self.assertEqual(result, (200, body))
+            context.wrap_socket.assert_called_once()
+            self.assertEqual(events.count(('send', None)), 1)
+            self.assertIn(('body_bytes', 2646), events)
+            self.assertEqual(bytes(sock.response), b'')
+        else:
+            self.assertEqual(caught, code)
+            self.assertIsNone(result)
+            self.assertTrue(bytes(sock.response).endswith(body))
+            self.assertFalse(any(event == 'body_bytes' for event, _ in events))
+            if code == 'peer':
+                context.wrap_socket.assert_not_called()
+                self.assertNotIn(('send', None), events)
+
+    def test_mutation_oracle_rejects_an_unrelated_internal_refusal(self):
+        with patch.object(transport.Wire, 'read_headers', side_effect=transport.TransportRefused('internal')):
+            # Exercise normal socket cleanup, then prove the oracle rejects
+            # specifically the unrelated category rather than missing cleanup.
+            with self.assertRaisesRegex(AssertionError, "'internal' is not None"):
+                self.assert_request_guard_behavior(transport, 'headers', mutated=True)
 
 
 class ImplementationRequired(unittest.TestCase):

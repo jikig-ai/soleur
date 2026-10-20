@@ -100,3 +100,33 @@ The transport worker's guessed lint-script glob matched nothing; exact lefthook
 discovery found the ratchet. Semgrep auto config rejects metrics-off; explicit
 `p/python`, one worker and metrics off scanned all seven files with 151 rules,
 zero findings and no JSON errors. No operational preparation or acquisition ran.
+
+Independent source review reproduced a contradictory refused receipt: it claimed
+Config validation without a destination send. New rehashed negative cases failed
+first; validation now requires destination send/status/peer/TLS evidence for any
+Config observation, and full length/digest evidence before the validation stage.
+Each new invariant has a behavioral guard-removal oracle.
+
+Test review found refusal rows whose incomplete event traces could fail later
+for the wrong reason. Rebuild a valid trace with exactly one edited event and
+assert refusal at that event, not merely eventual failure. The transport battery
+now has exact pristine controls and explicit forbidden mutant outcomes; unrelated
+internal errors are not mutation evidence. Real execution tests keep binding
+verification connected while mocking only lower-level source inputs. They cover
+binding drift before consumption and after token return, persisted fixed failure
+receipts, CLI canaries, publication failure and a shrinking cross-stage budget.
+
+Those execution tests found a raw receipt-write OSError escaping the direct API;
+the new public execution wrapper raises a fixed refusal outside the handler.
+They also exposed source-binding refusal misclassified as output failure; the
+composite callback now preserves fixed binding/deadline categories. Moving that
+callback into a handler changed its indentation, so mutation targets were updated
+only after their explicit anchor-count failure; pristine controls still must pass.
+The first receipt mutant was redundantly blocked by the schema-stage invariant;
+its fixture now isolates length/digest observations from schema observations.
+
+The execution-test worker guessed `config_transport.py`; discovery identified
+`config_https.py`. The independent test reviewer's extra workspace mutation
+allocator refused unavailable disk-backed bases; it performed no fallback
+mutation and did not claim one. Committed test batteries use synthesized temporary
+module fixtures and expose their own pristine/failure controls.

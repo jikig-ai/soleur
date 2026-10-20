@@ -240,19 +240,68 @@ class ConfigAcquisition(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(Refused):
                 acquisition.checked_receipt(bad, self.plan, self.digest, '7' * 64)
 
-    def test_transport_observer_rejects_fake_events_before_more_requests(self):
-        for event, value in [('extra', 'private'), ('send', 'private'),
-                             ('http_status', True), ('body_bytes', 2647),
-                             ('peer_ok', 'true')]:
+    def test_receipt_requires_destination_send_and_status_for_config_observations(self):
+        good = self.success()
+        for count, status, schema_stage in ((2, None, 'destination'),
+                                           (3, 307, 'destination'),
+                                           (3, 200, 'destination')):
+            bad = copy.deepcopy(good)
+            bad.update(status='refused', stage=schema_stage, failure='internal', request_count=count)
+            bad['actions'][2]['http_status'] = status
+            if count != 3 or status != 200:
+                bad['config_checks']['schema_ok'] = None
+            if count == 2:
+                bad['actions'][2].update(peer_ok=None, tls_ok=None)
+            bad['receipt_sha256'] = sha(canonical({k: v for k, v in bad.items() if k != 'receipt_sha256'}))
+            with self.subTest(count=count, status=status), self.assertRaises(Refused):
+                acquisition.checked_receipt(bad, self.plan, self.digest, '7' * 64)
+
+    def test_transport_observer_rejects_one_bad_event_in_otherwise_valid_trace(self):
+        for target_role, position, bad_event, bad_value in (
+                ('token', 0, 'extra', 'private'),
+                ('token', 0, 'peer_ok', 'true'),
+                ('token', 1, 'tls_ok', 'true'),
+                ('token', 2, 'send', 'private'),
+                ('token', 3, 'http_status', True),
+                ('destination', 4, 'body_bytes', 2647)):
             self.setUp()
-            def bad(role, *, observe, **_kwargs):
-                observe(event, value)
-                return self.responses[0]
+            delivered, returned = [], []
+            respond = self.respond
+            def bad(role, *, observe, **kwargs):
+                if role != target_role:
+                    return respond(role, observe=observe, **kwargs)
+                index = ('token', 'registry', 'destination').index(role)
+                trace = [('peer_ok', True), ('tls_ok', True), ('send', None),
+                         ('http_status', self.responses[index][0])]
+                if role == 'destination':
+                    trace.append(('body_bytes', 2646))
+                if bad_event == 'extra':
+                    trace.insert(position, (bad_event, bad_value))
+                else:
+                    trace[position] = (bad_event, bad_value)
+                for event, value in trace:
+                    delivered.append((event, value))
+                    observe(event, value)
+                returned.append(role)
+                return self.responses[index]
             self.transport.request.side_effect = bad
             with self.assertRaises(acquisition.AcquisitionFailure) as raised:
                 self.collector().collect()
-            self.assertEqual(self.transport.request.call_count, 1)
+            self.assertEqual(raised.exception.receipt['failure'], 'binding')
+            self.assertEqual(self.transport.request.call_count, 3 if target_role == 'destination' else 1)
+            self.assertEqual(delivered[-1], (bad_event, bad_value))
+            self.assertEqual(len(delivered), position + 1)
+            self.assertEqual(returned, [], 'the bad event itself must stop this request')
             self.assertNotIn(b'private', canonical(raised.exception.receipt))
+
+    def test_validation_stage_requires_completed_length_and_digest_observations(self):
+        bad = self.success()
+        bad.update(status='refused', stage='validation', failure='internal')
+        bad['config_checks'] = {'bytes_read': 0, 'length_ok': None,
+                                'digest_ok': None, 'schema_ok': None}
+        bad['receipt_sha256'] = sha(canonical({k: v for k, v in bad.items() if k != 'receipt_sha256'}))
+        with self.assertRaises(Refused):
+            acquisition.checked_receipt(bad, self.plan, self.digest, '7' * 64)
 
     def test_private_output_store_replay_and_replacement_are_real_filesystem_checks(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -425,6 +474,16 @@ class ConfigAcquisition(unittest.TestCase):
             ("                current.st_uid == os.getuid() and stat.S_IMODE(current.st_mode) == 0o700 and",
              "                current.st_uid == os.getuid() and True and",
              'test_private_output_store_replay_and_replacement_are_real_filesystem_checks'),
+            ("                        raise https.TransportRefused('binding')\n",
+             "                        pass\n",
+             'test_transport_observer_rejects_one_bad_event_in_otherwise_valid_trace'),
+            ("not has_config or (count == 3", "True or (count == 3",
+             'test_receipt_requires_destination_send_and_status_for_config_observations'),
+            ("checks['schema_ok'] is None or value['stage'] in ('validation', 'complete')",
+             'True', 'test_receipt_requires_destination_send_and_status_for_config_observations'),
+            ("value['stage'] != 'validation' or (checks['bytes_read'] == CONFIG_SIZE",
+             "True or (checks['bytes_read'] == CONFIG_SIZE",
+             'test_validation_stage_requires_completed_length_and_digest_observations'),
         ]
         for index, (old, new, oracle) in enumerate(mutants):
             with self.subTest(oracle=oracle), tempfile.TemporaryDirectory() as directory:

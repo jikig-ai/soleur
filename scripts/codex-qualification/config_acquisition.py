@@ -31,7 +31,8 @@ ROLES = ('token', 'registry', 'destination')
 AUTHORITY = ('destination_ownership', 'publisher_verified', 'issuer_verified', 'profile_admitted',
              'runtime_authorized', 'recovery_authorized', 'hosted_auth_cleared', 'qualified')
 DEPENDENCIES = ('config_acquisition.py', 'config_https.py', 'config_resolver.py', 'config_schema.py',
-                'test_config_acquisition.py', 'test_config_https.py', 'test_config_schema.py')
+                'test_config_acquisition.py', 'test_config_https.py', 'test_config_schema.py',
+                'test_config_execution.py')
 
 
 def _ensure(value, code='binding'):
@@ -159,6 +160,13 @@ def checked_receipt(value, manifest, digest, marker):
         _ensure(checks['length_ok'] is not True or checks['bytes_read'] == CONFIG_SIZE)
         _ensure(checks['digest_ok'] is None or checks['length_ok'] is True)
         _ensure(checks['schema_ok'] is None or checks['digest_ok'] is True)
+        has_config = checks['bytes_read'] != 0 or any(checks[k] is not None for k in
+                                                   ('length_ok', 'digest_ok', 'schema_ok'))
+        _ensure(not has_config or (count == 3 and rows[2]['http_status'] == 200 and
+                rows[2]['peer_ok'] is True and rows[2]['tls_ok'] is True))
+        _ensure(checks['schema_ok'] is None or value['stage'] in ('validation', 'complete'))
+        _ensure(value['stage'] != 'validation' or (checks['bytes_read'] == CONFIG_SIZE and
+                checks['length_ok'] is True and checks['digest_ok'] is True))
         _ensure(value['status'] in ('complete', 'refused') and value['stage'] in
                 ('preflight', *ROLES, 'validation', 'complete'))
         if value['status'] == 'complete':
@@ -243,6 +251,8 @@ class ConfigAcquisition:
         def output_check():
             try:
                 self.output()
+            except https.TransportRefused:
+                raise
             except Exception:
                 raise https.TransportRefused('output') from None
 
@@ -480,7 +490,7 @@ def _verify_inputs(manifest, args):
     return ca
 
 
-def execute_action(args, *, clock=time.monotonic):
+def _execute_action(args, *, clock):
     """Dormant operational source; separate exact-command approval remains mandatory."""
     started = clock()
     require(metadata.base._finite(started), ERROR)
@@ -509,8 +519,11 @@ def execute_action(args, *, clock=time.monotonic):
             return marker
         def binding():
             store.check()
-            require(store.read(MANIFEST) == canonical(manifest) + b'\n', ERROR)
-            _verify_inputs(manifest, args)
+            _ensure(store.read(MANIFEST) == canonical(manifest) + b'\n', 'binding')
+            try:
+                _verify_inputs(manifest, args)
+            except Exception:
+                raise https.TransportRefused('binding') from None
             remaining()
         collector = ConfigAcquisition(manifest, transport, consume,
             manifest_sha256=args.manifest_sha256, output_binding=binding,
@@ -522,6 +535,18 @@ def execute_action(args, *, clock=time.monotonic):
             raise Refused(ERROR) from None
         binding()
         store.publish(result, manifest, args.manifest_sha256, marker)
+
+
+def execute_action(args, *, clock=time.monotonic):
+    """Sanitize every operational failure, including filesystem publication errors."""
+    failed = False
+    try:
+        _execute_action(args, clock=clock)
+    except Exception:
+        failed = True
+    if failed:
+        # Outside the handler, so exception context cannot retain private errors.
+        raise Refused(ERROR) from None
 
 
 def main():
