@@ -21,10 +21,11 @@ Environment=HOME=/root
 SyslogIdentifier=web-zot-consumer-probe
 # /etc/default/web-zot-consumer-probe (baked per-host) carries ZOT_ENDPOINT, ZOT_PROBE_REPO, and
 # WEB_ZOT_CONSUMER_URL_KEY (the per-host Doppler var name, e.g. WEB_ZOT_CONSUMER_URL_WEB_1). doppler
-# run injects that var + ZOT_PULL_USER/ZOT_PULL_TOKEN; bash indirect expansion (${!KEY}) resolves
-# the host's own heartbeat URL under the generic name the (host-agnostic) script reads. Shipping
-# the unit as a FILE (not a heredoc) keeps this nested-quoted doppler ExecStart intact — the
-# container-restart-monitor precedent (server.tf).
+# run injects that var + ZOT_PULL_USER/ZOT_PULL_TOKEN, and the (host-agnostic) probe resolves the host's own
+# heartbeat URL itself through that key NAME, AFTER its xtrace refusal. The ExecStart below expands and exports
+# NOTHING (#9639): the URL is a credential, and a wrapper that expanded it would print it under a traced launch
+# before the probe could refuse. doppler-injection-bound.test.sh rejects an indirect expansion in the Exec
+# directives of a doppler-run unit.
 EnvironmentFile=/etc/default/web-zot-consumer-probe
 # #7103 R3 — the Source-4 positive control is emitted HERE, outside the doppler wrapper below.
 # Inside it, a dead prd token makes `doppler run` exit before the probe ever execs, so the
@@ -35,4 +36,4 @@ EnvironmentFile=/etc/default/web-zot-consumer-probe
 #
 # `-` prefix: a failure to emit the beacon must never prevent the probe itself from running.
 ExecStartPre=-/usr/local/bin/web-zot-consumer-probe.sh --canary-only
-ExecStart=/bin/bash -c 'doppler run --project soleur --config prd -- bash -c '\''export WEB_ZOT_CONSUMER_URL="$${!WEB_ZOT_CONSUMER_URL_KEY}"; exec /usr/local/bin/web-zot-consumer-probe.sh'\'''
+ExecStart=/bin/bash -c 'doppler run --project soleur --config prd -- /usr/local/bin/web-zot-consumer-probe.sh'

@@ -925,6 +925,27 @@ else
   FAIL=$((FAIL+1))
 fi
 
+# ------------- Test 38: separator-laden path bytes are stripped (#10395) ----
+# A bare-root fixture path containing DEL + U+2028/U+2029 must not smuggle a
+# fake line break into the emitted context — LS/PS render as line breaks in
+# JSON viewers (the P3 finding this consolidation closes).
+TOTAL=$((TOTAL+1))
+T38=$(mktemp -d); LATE_TMPDIRS+=("$T38")
+SEP38="$T38/dir$(printf '\xe2\x80\xa8')sep$(printf '\x7f')x"
+mkdir -p "$SEP38" && setup_repo "$SEP38" && ( cd "$SEP38" && git config core.bare true )
+ctx38=$(invoke_hook "$SEP38" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
+# The emit legitimately contains \n and \t; what must be gone is every other
+# C0 byte, DEL, NEL, and the LS/PS sequences.
+# (grep -P: PCRE, GNU-only — this suite runs on the Linux dev host)
+if ! LC_ALL=C grep -qP '[\x00-\x08\x0b-\x1f\x7f]|\xc2\x85|\xe2\x80\xa8|\xe2\x80\xa9' <<<"$ctx38"; then
+  echo "PASS: separator-laden path emits no C0-high/DEL/NEL/LS/PS bytes"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: separator bytes survived into emitted context"
+  printf '%s' "$ctx38" | od -An -tx1 | grep -nE '7f|c2|e2' | head -5
+  FAIL=$((FAIL+1))
+fi
+
 echo ""
 echo "RESULT: $PASS/$TOTAL passed ($FAIL failed)"
 [[ $FAIL -eq 0 ]] || exit 1

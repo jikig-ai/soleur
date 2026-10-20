@@ -3804,7 +3804,8 @@ _aff_runner_banner() {
 # #9763: 38 heavy/stale labels withdrawn to edge-selection; the floor pins count-5.
 # #8875: +1 always-on (emitter census is repo-global by construction); re-pinned at 114-5.
 # #10331: +2 always-on (the lint-ratchet pair); re-pinned at 116-5.
-_MIN_ALWAYS_ON_DECLARED=111
+# #7893: +1 always-on (the Art. 30 re-verification unit); re-pinned at 117-5.
+_MIN_ALWAYS_ON_DECLARED=112
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -5471,6 +5472,7 @@ if want_scripts; then
   # scripts/lib/legal-normalise.test.sh is the detector for that, and it is fixture-anchored so
   # it cannot red on a legal edit.
   run_suite "scripts/lint-legal-scope-block-placement-unit" bash scripts/lint-legal-scope-block-placement.test.sh
+  run_suite "scripts/lint-art30-reverification-unit" bash scripts/lint-art30-reverification.test.sh
   run_suite "scripts/lint-legal-scope-block-placement-live" bash scripts/lint-legal-scope-block-placement.sh
   run_suite "scripts/lint-legal-mirror-drift-baseline-unit" bash scripts/lint-legal-mirror-drift-baseline.test.sh
   run_suite "scripts/lint-legal-mirror-drift-baseline-live" bash scripts/lint-legal-mirror-drift-baseline.sh
@@ -5788,6 +5790,10 @@ if want_scripts; then
   # (0 closes, 1 reopens a tracker whose close releases four snapshots), an argv-asserting curl stub
   # that answers by requested id, the exact run-id pin on the explained groups, and a pinned clock.
   run_suite "scripts/inngest-soak-6178" bash scripts/followthroughs/inngest-soak-6178.test.sh
+  # #10136 Inngest link TLS soak probe (Guard 2). Drives the predicate over a 48 h synthetic `tls-health` series through a
+  # fake gh (trusted-verdict lib) and an argv-asserting fake betterstack-query.sh: the seven Guard 2 mutation rows, the two
+  # harness rows, the anchor trust rows, and per-check deletion mutants of the probe copy.
+  run_suite "scripts/inngest-tls-soak-10136" bash scripts/followthroughs/inngest-tls-soak-10136.test.sh
   # CPX22 invoice reconciliation (#7437). An operator-confirmed probe reads a production ledger
   # verdict out of free text a human typed, so the suite pins the two properties that decide
   # whether it can be trusted: the verdict is anchored at line start (an unanchored grep closes

@@ -152,8 +152,9 @@ resource "logtail_exploration_alert" "monitor_send_failed" {
 
   # The one field most likely rendered in the email, so it carries a CLICKABLE runbook URL —
   # a repo path is not actionable for a non-technical reader. A count alert's email carries no
-  # row text; the runbook's step 1 is the readback SQL that names the marker.
-  incident_cause = "SOLEUR_*_SEND_FAILED / _REFUSED row from a web-1 monitor unit — the monitor's own Resend/Sentry send failed. Runbook: ${local.monitor_send_failed_runbook_url}"
+  # row text; the runbook's step 1 is the readback SQL that names the marker. Host-neutral on purpose
+  # (#10136): since the Inngest host's TLS check opted in, a page can come from that host and not web-1.
+  incident_cause = "SOLEUR_*_SEND_FAILED / _REFUSED row from a host monitor unit — either a web-1 monitor's own Resend/Sentry send failed, or the Inngest host's TLS check logged SOLEUR_INNGEST_TLS_REFUSED (listener down or certificate near expiry). The runbook's readback names the marker and the host. Runbook: ${local.monitor_send_failed_runbook_url}"
   metadata = {
     runbook = local.monitor_send_failed_runbook_url
   }

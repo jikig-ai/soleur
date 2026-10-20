@@ -396,6 +396,7 @@ scripts/inngest-provision-unit-8562	1061	measured
 scripts/inngest-restart-age-gate	75	measured
 scripts/inngest-restart-poll-classify	125	measured
 scripts/inngest-soak-6178	22033	measured
+scripts/inngest-tls-soak-10136	1196	floor
 scripts/inngest-zot-boot-7462	426	measured
 scripts/inngest-zot-client-authz-6500	499	measured
 scripts/learning-retrieval-bench	922	measured
@@ -423,6 +424,7 @@ scripts/lint-agents-rule-budget-live	37	measured
 scripts/lint-agents-rule-budget-unit	415	measured
 scripts/lint-anthropic-content-position	356	measured
 scripts/lint-anthropic-content-position-live	222	measured
+scripts/lint-art30-reverification-unit	4374	measured
 scripts/lint-credential-path-literals	2180	measured
 scripts/lint-diagnosis-claims	1660	measured
 scripts/lint-doppler-description-length-live	84	measured

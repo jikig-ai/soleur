@@ -36,6 +36,17 @@ set -uo pipefail
 # The PLUGIN directory: this script's own, made absolute before any `cd` (ADR-179 A17).
 _plugin_scripts_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)" || _plugin_scripts_dir=""
 readonly PLUGIN_SCRIPTS_DIR="$_plugin_scripts_dir"
+
+# Shared context-sanitize lib (#10395), beside this script under lib/. When it
+# is unreadable the same-name fallbacks carry each site's pre-change strip set —
+# never weaker than today.
+_ctx_lib="${PLUGIN_SCRIPTS_DIR:-/nonexistent}/lib/context-sanitize.sh"
+# shellcheck source=/dev/null
+[[ -r "$_ctx_lib" ]] && . "$_ctx_lib" || true
+declare -F soleur_ctx_sanitize >/dev/null 2>&1 \
+  || soleur_ctx_sanitize() { LC_ALL=C tr -d '\000-\037\177'; }
+declare -F soleur_ctx_sanitize_nl >/dev/null 2>&1 \
+  || soleur_ctx_sanitize_nl() { LC_ALL=C tr -d '\000-\011\013-\037\177'; }
 # The REPO: the caller's, from the CWD — never BASH_SOURCE/../.., which is the plugin.
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 
@@ -47,7 +58,7 @@ WORK=""; RENDER_PID=""; MERGING=0
 # One line per exit for machines (stdout), one for humans (stderr).
 _marker() { printf 'SOLEUR_REGEN_ON_CONFLICT rc=1 class=%s reason=%s\n' "$1" "$2"; }
 # Strip control characters: the tail of a renderer log is attacker-influenced text.
-_clean() { LC_ALL=C tr -d '\000-\011\013-\037\177' | tail -n 4 | tr '\n' '|' | sed 's/|$//; s/|/ | /g'; }
+_clean() { soleur_ctx_sanitize_nl | tail -n 4 | tr '\n' '|' | sed 's/|$//; s/|/ | /g'; }
 
 # na <slug> <message> — refuse before anything was touched.
 na() { _marker na "$1"; echo "[regen-on-conflict] not applicable: $2" >&2; exit 1; }
@@ -165,7 +176,7 @@ _clean_or_why() {
   [[ ! -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]] || { printf 'a merge is already in progress — finish it or run git merge --abort'; return; }
   local st; st="$(git status --porcelain --untracked-files=all)"
   [[ -z "$st" ]] || printf 'working tree is not clean (%s) — commit or discard your changes' \
-    "$(printf '%s\n' "$st" | head -n1 | cut -c4- | LC_ALL=C tr -d '\000-\037\177' | cut -c1-200)"
+    "$(printf '%s\n' "$st" | head -n1 | cut -c4- | soleur_ctx_sanitize | cut -c1-200)"
 }
 _why="$(_clean_or_why)"; [[ -z "$_why" ]] || na dirty-tree "$_why, then re-run"
 

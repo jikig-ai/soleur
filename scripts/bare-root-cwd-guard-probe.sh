@@ -35,4 +35,22 @@ export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=fal
 )
 
 bash "$GUARD" "$TMP" || true
+
+# Extension (#10392/#10395): also pipe a fixture SessionStart envelope through
+# the plugin arm and a DEL+NEL+LS/PS fixture through the shared sanitizer lib.
+# `sanitizer-ok` is the LAST line only when every arm ran to completion — the
+# discoverability_test.command expects exactly that spelling.
+PLUGIN_GUARD="$REPO_ROOT/plugins/soleur/hooks/bare-root-cwd-guard.sh"
+CTX_LIB="$REPO_ROOT/.claude/hooks/lib/context-sanitize.sh"
+
+if [[ -x "$PLUGIN_GUARD" ]]; then
+  printf '{"cwd":%s}\n' "$(printf '%s' "$TMP" | sed 's/"/\\"/g; s/.*/"&"/')" | bash "$PLUGIN_GUARD" || true
+fi
+
+if [[ -r "$CTX_LIB" ]]; then
+  . "$CTX_LIB" || exit 0
+  cleaned=$(printf 'a\x7fb\xc2\x85c\xe2\x80\xa8d\xe2\x80\xa9e' | soleur_ctx_sanitize_lines)
+  [ "$cleaned" = "abcde" ] && echo "sanitizer-ok"
+fi
+
 exit 0

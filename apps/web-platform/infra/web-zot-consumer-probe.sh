@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 set -u
 # Refuse to run under shell tracing while the pull credential is set: `set -x` would write the
-# Basic-auth token into the journal that Vector ships off-box (#7797).
+# Basic-auth token into the journal that Vector ships off-box (#7797). The refusal is CONDITIONAL: it fires when the
+# pull credential is set, OR when the heartbeat key name (WEB_ZOT_CONSUMER_URL_KEY, always in the env file) is set and
+# this is not the --canary-only launch. The heartbeat URL is a credential too: it is resolved BELOW, after this
+# refusal, from the variable NAME in WEB_ZOT_CONSUMER_URL_KEY, and the unit's ExecStart expands nothing (#9639).
+# --canary-only runs outside `doppler run` with no URL to resolve, so the key name alone does not refuse it and a traced
+# canary still emits (only a pull credential refuses it, exactly as before).
 case "$-" in
   *x*)
-    if [ -n "${ZOT_PULL_TOKEN:+x}${ZTOK:+x}" ]; then
+    if [ -n "${ZOT_PULL_TOKEN:+x}${ZTOK:+x}" ] || { [ "${1:-}" != "--canary-only" ] && [ -n "${WEB_ZOT_CONSUMER_URL_KEY:+x}" ]; }; then
       printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
       exit 78
     fi
@@ -39,7 +44,7 @@ esac
 #
 # CONFIG IS ENV (delivered both by the SSH provisioner to web-1 AND baked into cloud-init for future
 # hosts; web-1 gets the PINNED list, a host born later gets the BARE list, see the pin paragraph): ZOT_ENDPOINT + ZOT_PROBE_REPO from /etc/default/web-zot-consumer-probe;
-# ZUSER/ZTOK/WEB_ZOT_CONSUMER_URL from the doppler-run env.
+# ZUSER/ZTOK and the heartbeat URL (under the variable named by WEB_ZOT_CONSUMER_URL_KEY) from the doppler-run env.
 #
 # ZOT_PROBE_REPO IS A COMMA-SEPARATED LIST (#7258). A host pulls MORE than one platform repository
 # (the web image and the inngest bootstrap image), so a probe of one repo certifies only that repo.
@@ -100,7 +105,11 @@ ENDPOINT="${ZOT_ENDPOINT:-10.0.1.30:5000}"
 REPO="${ZOT_PROBE_REPO:-}"
 ZUSER="${ZUSER:-${ZOT_PULL_USER:-}}"
 ZTOK="${ZTOK:-${ZOT_PULL_TOKEN:-}}"
-URL="${WEB_ZOT_CONSUMER_URL:-}"
+# URL is resolved after the xtrace refusal and the --canary-only exit (see "THE HEARTBEAT URL" below); until then it is empty.
+# `unset` first: an exported URL in the inherited environment would keep its export attribute through the assignments below.
+unset URL
+URL=""
+KEY_BAD=false
 # Happy-path stderr is shipped off-box via Vector Source 4 (SyslogIdentifier=web-zot-consumer-probe);
 # the heartbeat ping is the actual off-box liveness signal, so the "servable (200)" narration is
 # redundant there and pure quota cost at 60s cadence. Gate it behind a debug flag (default OFF);
@@ -130,7 +139,13 @@ _ping() {
     printf 'PING %s\n' "$1" >> "$SOLEUR_ZOT_PROBE_PING_LOG"
     return 0
   fi
-  [ -n "$URL" ] || { echo "[zot-probe] WARN: WEB_ZOT_CONSUMER_URL unset — servable but cannot ping." >&2; return 0; }
+  if [ -z "$URL" ]; then
+    # "WEB_ZOT_CONSUMER_URL unset" is a stable decode label (the runbook and the post-merge check grep it), not the name of a
+    # variable this script reads: the real name is whatever WEB_ZOT_CONSUMER_URL_KEY holds.
+    echo "[zot-probe] WARN: WEB_ZOT_CONSUMER_URL unset — servable but cannot ping." >&2
+    [ "$KEY_BAD" = true ] && echo "[zot-probe] WARN: WEB_ZOT_CONSUMER_URL_KEY is unset or is not an upper-case variable name (the value is not shown); the heartbeat URL cannot be resolved." >&2
+    return 0
+  fi
   if ! _hb_url_ok "$URL"; then
     _refused
     return 0
@@ -151,6 +166,7 @@ _refused() {
   now=$(date +%s 2>/dev/null || echo 0)
   reason=token_shape
   case "$URL" in *[[:cntrl:]]*) reason=control_char ;; esac
+  # var=WEB_ZOT_CONSUMER_URL is a stable decode label, not the name of a variable this script reads (that name is held by WEB_ZOT_CONSUMER_URL_KEY).
   echo "SOLEUR_CREDENTIAL_REFUSED script=web-zot-consumer-probe reason=$reason var=WEB_ZOT_CONSUMER_URL" >&2
   echo "[zot-probe] WARN: heartbeat URL refused (servable, no ping sent)" >&2
   _stamp "$m" "$now"
@@ -225,8 +241,8 @@ _repo_markers() {
 # that runs OUTSIDE the `doppler run` wrapper.
 #
 # THE DEFECT THIS CLOSES. The unit's ExecStart is
-#   doppler run --project soleur --config prd -- bash -c '... exec web-zot-consumer-probe.sh'
-# so on a dead prd token `doppler run` exits before the inner bash ever execs and the canary is
+#   doppler run --project soleur --config prd -- /usr/local/bin/web-zot-consumer-probe.sh
+# so on a dead prd token `doppler run` exits before the probe ever execs and the canary is
 # never emitted. The positive control for "is vector shipping?" was therefore gated behind
 # exactly the credential whose failure it is used to certify — and its absence reads as
 # "vector is dead" rather than "the token is dead". That is the reading that made #7095's
@@ -239,6 +255,18 @@ if [ "${1:-}" = "--canary-only" ]; then
   _canary
   exit 0
 fi
+
+# THE HEARTBEAT URL (#9639). The unit no longer exports it: it names the variable doppler injected it under
+# (WEB_ZOT_CONSUMER_URL_KEY, one per host, written by the *_install provisioner) and this script reads that variable
+# HERE, after the xtrace refusal above and after the --canary-only exit (which runs outside `doppler run` and sends no
+# heartbeat). The NAME comes from an env file, and `${!name}` evaluates array subscripts and command substitutions
+# inside `name`, so it is judged first: an upper-case identifier or nothing (LC_ALL=C pins ASCII ranges: with
+# globasciiranges off under a UTF-8 locale [A-Z] collates over b..z; the nic-guard suite's "F6 locale[ranges off]" row
+# makes that case against the byte-identical _key_ok there, and its parity row ties this copy to that one).
+# No fallback to a bare variable of any other name. This script never exports the resolved value; doppler's own injected
+# copy under the key-named variable is still inherited by children, as before this change.
+_key_ok() { local LC_ALL=C; case "${1:-}" in ''|[!A-Z]*|*[!A-Z0-9_]*) return 1 ;; esac; }
+if _key_ok "${WEB_ZOT_CONSUMER_URL_KEY:-}"; then URL="${!WEB_ZOT_CONSUMER_URL_KEY:-}"; else KEY_BAD=true; fi
 
 if [ -z "$REPO" ]; then
   echo "[zot-probe] FATAL: ZOT_PROBE_REPO unset (source /etc/default/web-zot-consumer-probe) — cannot probe serviceability without a real repository path." >&2

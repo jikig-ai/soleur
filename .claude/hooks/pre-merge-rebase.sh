@@ -40,6 +40,15 @@ set -eo pipefail
 # shellcheck source=lib/incidents.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/incidents.sh"
 
+# Shared context-sanitize lib (#10395). When it is unreadable the same-name
+# fallback carries this site's pre-change strip set (C0+DEL) — never weaker
+# than today.
+_ctx_lib="$(dirname "${BASH_SOURCE[0]}")/lib/context-sanitize.sh"
+# shellcheck source=/dev/null
+[[ -r "$_ctx_lib" ]] && . "$_ctx_lib" || true
+declare -F soleur_ctx_sanitize >/dev/null 2>&1 \
+  || soleur_ctx_sanitize() { LC_ALL=C tr -d '\000-\037\177'; }
+
 # shellcheck source=../../plugins/soleur/scripts/lib/session-state.sh
 # headless_or_stderr routes warns to a log file under $GIT_COMMON_DIR/
 # soleur-session-state/logs/$PPID.log when stderr is not a TTY and
@@ -830,7 +839,7 @@ if ! git -C "$WORK_DIR" merge origin/main >/dev/null 2>&1; then
     [[ -n "$REGEN_ERR" ]] && headless_or_stderr info "regen-on-conflict declined: $REGEN_ERR"
     # The resolver's refusal is the diagnosis; carry its last [regen-on-conflict] line into the
     # deny reason, which is the only text an agent sees (stderr of a PreToolUse hook is not).
-    REGEN_WHY="$(printf '%s\n' "$REGEN_ERR" | grep '^\[regen-on-conflict\]' | grep -v '\] regenerating ' | tail -1 | LC_ALL=C tr -d '\000-\037\177' | cut -c1-400)" || REGEN_WHY=""
+    REGEN_WHY="$(printf '%s\n' "$REGEN_ERR" | grep '^\[regen-on-conflict\]' | grep -v '\] regenerating ' | tail -1 | soleur_ctx_sanitize | cut -c1-400)" || REGEN_WHY=""
     emit_incident "hr-when-a-command-exits-non-zero-or-prints" deny \
       "When a command exits non-zero or prints a warning" "$CMD"
     jq -n --arg files "${CONFLICT_FILES:-unknown}" --arg why "$REGEN_WHY" --arg qnote "$_Q_NOTE" '{

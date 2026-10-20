@@ -60,13 +60,16 @@
 # irreversible destroy. The runbook carries one operator action per code.
 #
 #   0  every required reference restored AND verified (blobs + signature)
-#   2  SOURCE unavailable — GHCR could not be read. Classified sub-cause in the message.
+#   2  SOURCE unavailable — GHCR could not be read. Classified sub-cause in the message. Also: the
+#      `crane auth login` command for ghcr.io failed LOCALLY (the message says so; see exit 5).
 #   3  SINK unavailable — the target registry did not accept or serve the write. RETRYABLE:
 #      this is the code the chained restore job retries on, because a host replace can outrun
 #      the Cloudflare Tunnel's re-convergence onto the replaced origin.
 #   4  VERIFICATION failed — digest parity mismatch, missing blob, or missing signature. The
 #      copy "succeeded" and the result is not usable. NOT retryable.
-#   5  CREDENTIAL unusable — absent, empty, or REJECTED by the sink. NOT retryable: retrying an
+#   5  CREDENTIAL unusable — absent, empty, or REJECTED by the sink; or the `crane auth login` COMMAND
+#      failed locally (the message says so: crane login stores the credential and never contacts the
+#      registry, so a wrong credential surfaces later, at `digest`/`copy`). NOT retryable: retrying an
 #      authorisation failure only wastes the window. Deliberately distinct from 3, mirroring the
 #      abort/degrade boundary the D10 gate's removed A5 predicate used: authorisation and
 #      availability failures are different classes with different verdicts. (A5 itself was
@@ -74,6 +77,9 @@
 #      engine is where it still lives, post-destroy, against the host that actually applies.)
 #   6  COULD NOT CLASSIFY — the failure matched no known shape. Loudest arm. An unclassified
 #      failure must never read as either "absent" or "fine".
+#  78  TRACED INVOCATION ONLY — run under `bash -x` (or SHELLOPTS=xtrace) with a registry
+#      credential in the environment. Refused before any network call so the token never reaches
+#      THIS engine's trace (a parent shell's own trace is outside this guard). Remove the trace; nothing else is wrong.
 #
 # Usage:
 #   scripts/registry-restore-from-ghcr.sh --target <host:port> --tags-from <manifest.json>
@@ -86,13 +92,31 @@
 
 set -uo pipefail
 
+# Refuse to run traced while a credential this engine expands is in the environment (the three names below;
+# GH_TOKEN_FOR_ENGINE is only unset later, never expanded): `bash -x` would print the token (or any expansion
+# of it) into the CI log. This precedes every other command on
+# purpose (the credential-trace lint's Rule A). Multi-line `case` on purpose: the lint's regexes
+# are line-anchored and the one-line spelling fails it.
+case "$-" in
+  *x*)
+    if [ -n "${DOPPLER_TOKEN:+x}${GHCR_TOKEN:+x}${ZOT_PUSH_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 TARGET=""
 TAGS_FROM=""
 CRANE="${REGISTRY_RESTORE_CRANE_CMD:-crane}"
 
 die() { # $1 = exit code, rest = message
   local code="$1"; shift
-  echo "::error::registry-restore-from-ghcr: $*" >&2
+  # CR/LF flattened HERE, for every die site: GitHub parses workflow commands per line, and several
+  # messages interpolate registry- or manifest-derived text (a `jq -r` value keeps an embedded newline).
+  local msg="$*"
+  msg="${msg//[$'\r\n']/ }"
+  echo "::error::registry-restore-from-ghcr: ${msg}" >&2
   exit "$code"
 }
 
@@ -247,7 +271,7 @@ crane_capture() {
 
 # last_err <errfile> — the classification input, injection-guarded.
 #
-# The `tr '\n' ' '` is a WORKFLOW-COMMAND INJECTION GUARD, not formatting. This is
+# The `tr '\r\n' '  '` is a WORKFLOW-COMMAND INJECTION GUARD, not formatting. This is
 # externally-influenced text from a registry and it is interpolated into `::error::` output
 # below; GitHub parses workflow commands per LINE, so a newline followed by `::add-mask::` or
 # `::error::` inside registry stderr would be EXECUTED. Collapsing newlines makes the whole
@@ -269,7 +293,7 @@ last_err() {
   # (not retryable) instead of 3 (retryable), AFTER the destroy, with the store empty. The
   # suite could not see it because every `.err` fixture is written with `printf '%s'`, i.e.
   # without the terminating newline real crane emits.
-  tail -c 400 "$1" 2>/dev/null | tail -n 1 | tr '\n' ' ' | sed 's/[[:space:]]*$//' || true
+  tail -c 400 "$1" 2>/dev/null | tail -n 1 | tr '\r\n' '  ' | sed 's/[[:space:]]*$//' || true
 }
 
 # digest_of <file> — keep only a bare sha256 token.
@@ -555,20 +579,35 @@ case "$TARGET" in
   *) SINK_TLS_FLAG="" ;;   # a non-loopback sink must use TLS
 esac
 
-if ! $CRANE auth login "$TARGET" -u "$ZOT_PUSH_USER" -p "$ZOT_PUSH_TOKEN" $SINK_TLS_FLAG \
+# The password rides STDIN (`--password-stdin`), fed by the `printf` builtin: it never appears in
+# any argv (`/proc/<pid>/cmdline`, `ps`). A trace of this line WOULD print the expanded token: the
+# exit-78 refusal at the top of the file is what keeps it out of the log. NOT a here-string: on bash
+# older than 5.1 a here-string is a temp file, which would put the secret on disk (a process
+# substitution is also a valid feed; the pipe is chosen because a failed feeder is absorbed below). The pipeline sits inside `if !` and this script runs
+# `set -uo pipefail` WITHOUT `-e`, so a failed (or SIGPIPE'd, 141) login still takes the die arm.
+# A die here means the login COMMAND failed locally (e.g. a crane without --password-stdin, a
+# missing crane, an unwritable DOCKER_CONFIG). Measured against crane v0.20.2 (#9757): login stores the credential and
+# never contacts the registry, so a merely wrong credential is classified later, at `digest`/`copy`.
+if ! printf '%s' "$ZOT_PUSH_TOKEN" | $CRANE auth login "$TARGET" -u "$ZOT_PUSH_USER" --password-stdin $SINK_TLS_FLAG \
      >"$WORK/login.out" 2>"$WORK/login.err"; then
-  die 5 "could not authenticate to the sink ${TARGET} as '${ZOT_PUSH_USER}'. crane: $(tail -c 300 "$WORK/login.err" 2>/dev/null | tr '\n' ' ')"
+  die 5 "the crane login command for the sink ${TARGET} (as '${ZOT_PUSH_USER}') failed locally — e.g. a crane without --password-stdin, a missing crane, or an unwritable DOCKER_CONFIG (crane login stores the credential and does not contact the registry, so a wrong credential surfaces later, at digest/copy). crane: $(tail -c 300 "$WORK/login.err" 2>/dev/null | tr '\r\n' '  ')"
 fi
 
 # GHCR is a PRIVATE package set: an anonymous read 401s. Optional here because the caller may
 # already hold a keychain entry (the release path does), but when the vars are supplied we log
 # in explicitly rather than hoping an ambient one exists.
 if [[ -n "${GHCR_USER:-}" && -n "${GHCR_TOKEN:-}" ]]; then
-  if ! $CRANE auth login ghcr.io -u "$GHCR_USER" -p "$GHCR_TOKEN" \
+  if ! printf '%s' "$GHCR_TOKEN" | $CRANE auth login ghcr.io -u "$GHCR_USER" --password-stdin \
        >"$WORK/ghlogin.out" 2>"$WORK/ghlogin.err"; then
-    die 2 "could not authenticate to ghcr.io as '${GHCR_USER}'. crane: $(tail -c 300 "$WORK/ghlogin.err" 2>/dev/null | tr '\n' ' ')"
+    die 2 "the crane login command for ghcr.io (as '${GHCR_USER}') failed locally — e.g. a crane without --password-stdin, a missing crane, or an unwritable DOCKER_CONFIG (crane login stores the credential and does not contact the registry, so a wrong credential surfaces later, at digest/copy). crane: $(tail -c 300 "$WORK/ghlogin.err" 2>/dev/null | tr '\r\n' '  ')"
   fi
 fi
+
+# The credentials are only needed by the two logins above; the dozens of `crane` children below
+# must not inherit them. (This process's own initial /proc/<pid>/environ still holds them, each login
+# child inherits the other credentials while it runs, and they rest base64 in
+# $DOCKER_CONFIG/config.json until the EXIT trap's rm -rf.)
+unset ZOT_PUSH_TOKEN GHCR_TOKEN DOPPLER_TOKEN GH_TOKEN_FOR_ENGINE
 
 restored=0
 skipped=0
