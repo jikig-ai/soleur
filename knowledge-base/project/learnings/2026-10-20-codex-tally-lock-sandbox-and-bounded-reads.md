@@ -30,3 +30,13 @@ and automatic CI observation. No acquisition entry point, resolver/transport
 probe, new operational manifest, binding refresh, main resync or qualification
 was authorized. Historical receipt and marker hashes and private modes matched
 under read-only verification; the spent evidence remained unchanged.
+
+The proposal-only continuation repeated output truncation when independent read
+results together exceeded the orchestration tool's aggregate output limit. Bound
+the sum of the batch, not just each nested command; use narrow symbol/section
+reads for long prose lines. A no-match `rg` returned 1 and short-circuited an
+unrelated read joined with `&&`; repeat that read independently. A guessed
+`apps/web-platform/scripts/*config*py` path did not exist; the source-review record
+correctly locates the modules under `scripts/codex-qualification/`. Discover paths
+before searching their contents. None of these tooling errors diagnoses the
+historical Config refusal or authorizes an operational probe.
