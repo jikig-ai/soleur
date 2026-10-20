@@ -47,3 +47,19 @@ Prefer retained tool session identifiers for liveness. Docker documentation's
 Edit link returned a web-tool internal error; the official documentation page
 itself loaded successfully and supplies the cited exact-host listing. No failed
 probe is used as a successful check or as origin/ownership evidence.
+
+Git staging and the workflow tally initially encountered read-only Git metadata
+in the sandbox; rerunning the necessary operation through the approval tool
+resolved it. A commit hook evaluated the ambient bare-root context despite the
+shell tool's workdir argument and blocked the attempt as a main-branch commit.
+Verified the feature branch, then used an explicit `cd <worktree> && git commit`
+so hook and shell resolved the same location; the commit succeeded. The first
+hook-source lookup also guessed the installed plugin's path; discovery located
+the project's `.claude/hooks/guardrails.sh`. These refusals were not commits.
+
+Security proposal review found two design omissions before implementation:
+OCI's normative optional-null rule disagrees with its supplied schema, and a
+promise to define a receipt later leaves its disclosure boundary undefined.
+The proposal now states prose precedence and the exact closed receipt contract.
+Its future validator must pair omitted/null/invalid-type tests and reject all
+unlisted receipt fields rather than exporting validator messages.

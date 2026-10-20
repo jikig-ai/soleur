@@ -128,8 +128,14 @@ digest. Decode strict UTF-8 without BOM; reject duplicate keys at every depth,
 non-finite numbers, trailing data, non-object root and nesting deeper than 32.
 Never hash a normalized/re-serialized JSON substitute.
 
-Use the linked versioned OCI properties/schema as the explicit validation
-reference, with no remote `$ref` fetch or executable/package installation.
+The normative OCI v1.1.1 Config prose takes precedence over its supplied JSON
+schema: prose permits every optional field to be null, whereas the schema
+rejects null for some optional fields. The schema is a structural reference,
+not an unmodified conformance oracle. The local contract is
+`oci-config-v1.1.1-normative-null-v1`: treat optional null as absent for typing,
+preserve its distinction in memory, and require paired omitted/null/invalid-type
+tests for each known optional field. Pin the complete local reference closure,
+including schema definitions, with no remote `$ref` fetch or package install.
 Require `os == linux`, `architecture == amd64`, a `rootfs` object with
 `type == layers` and string `diff_ids` in digest syntax. Type-check known
 execution/history fields; distinguish missing/null optional values from
@@ -141,20 +147,55 @@ absence/null, which OCI permits. The future local validator and reference
 bytes must be pinned and reviewed; the current dict/platform check is not
 full schema validation. Do not execute Env, labels, Entrypoint, Cmd or history.
 
-An acquisition receipt would assert only byte/digest/schema observations.
-No raw Config, labels, environment values or history are retained. Define a
-closed projection of schema results and presence/type/count observations for
-subsequent independent review; actual field-value profiling is a separate
-proposal if needed. Memory-only handling cannot promise physical zeroization
+An acquisition receipt would assert only byte/digest/schema observations under
+the closed contract below. Config field values, names, presence/type maps,
+labels, environment and history are unretained; actual field-value profiling
+needs a separate proposal. Evidence review cannot reconstruct Config contents
+from this receipt. Memory-only handling cannot promise physical zeroization
 or defeat privileged process inspection; prohibit core dumps and secret-bearing
 child processes, minimize lifetimes and discard buffers on every exit.
 Publisher/issuer/ownership verification remains pending, and all profile,
 runtime, recovery, hosted-auth and qualification authority remains false.
 
+## Closed receipt contract
+
+All fields are required, no additional keys at any depth. Integers exclude
+booleans. A SHA-256 is exactly 64 lowercase hex characters. Construct each
+object from constants and vetted scalar results; never merge untrusted JSON.
+Null check results mean not measured, never passed. Reject an invalid receipt
+before publication; keep the spent marker and report a fixed local failure.
+
+| Field | Exact type and bounds |
+| --- | --- |
+| `schema` | Constant `config-acquisition-receipt-v1`. |
+| `schema_contract` | Constant `oci-config-v1.1.1-normative-null-v1`. |
+| `bindings` | Object with only `source_head` (40 lowercase hex), and SHA-256 fields `manifest_canonical`, `runner`, `operational`, `image_inputs`, `retained_manifest`, `ca`, `platform`, `schema_reference_closure`, `marker`. All equal the reviewed local bindings. |
+| `expected_config` | Object with only `media_type` (pinned OCI media type), `size` (2646), `digest` (full pinned `sha256:` value above). Constants, never echoed from a response. |
+| `output_identity` | Object with only `device`, `inode` (integers 0..2^64-1), `uid` (0..2^32-1), `mode` (constant `0700`); must equal the bound directory identity. |
+| `status` | `complete` or `refused`. |
+| `stage` | `preflight`, `token`, `registry`, `destination`, `validation`, `complete`. |
+| `failure` | Null or one fixed code: `binding`, `output`, `replay`, `deadline`, `dns`, `peer`, `tls`, `headers`, `status`, `token`, `location`, `body`, `digest`, `schema`, `internal`. |
+| `request_count` | Integer 0..3, incremented immediately before each attempted HTTP send. |
+| `actions` | Exactly three objects in token/registry/destination order. Each has only `role` (the corresponding constant), `http_status` (null or integer 100..599), `peer_ok`, `tls_ok` (boolean or null). Unattempted stages may report peer/TLS outcomes but no HTTP status. |
+| `config_checks` | Object with only `bytes_read` (integer 0..2646), `length_ok`, `digest_ok`, `schema_ok` (boolean or null). No observed wrong digest or schema details. |
+| `authority` | Object with only `destination_ownership`, `publisher_verified`, `issuer_verified`, `profile_admitted`, `runtime_authorized`, `recovery_authorized`, `hosted_auth_cleared`, `qualified`; every value is constant false. |
+| `review` | Constant `pending`; separate review never rewrites this receipt. |
+| `receipt_sha256` | SHA-256 of canonical JSON of every other field, using sorted keys, ASCII encoding, compact separators, no NaN. Integrity checksum, not authentication. |
+
+`complete` requires count 3, statuses 200/307/200, every peer/TLS check true,
+bytes_read 2646, all Config checks true, stage complete and failure null.
+`refused` requires a non-null failure and a non-complete stage; later stages
+cannot report HTTP status after a refusal. Tests must cover contradictory
+combinations, additional nested fields and secret canaries on every failure
+path. No arbitrary strings, Config keys, unknown-field counts, JSON paths,
+validation messages, addresses, header values or exception text are retained.
+The manifest alone holds executable paths/versions and reference inventory;
+their receipt binding is its canonical hash.
+
 ## Budgets, outputs and observability
 
 Retain the 60-second absolute overall budget, ten seconds per request (including
-resolution/connect/TLS/headers/body), and a separately approved outer timeout
+resolution/connect/TLS/headers/body), and a separately approved 90-second outer timeout
 with five-second kill grace. Limit each header block to 16,384 bytes and 100
 fields; preserve the existing 16,384-byte token decoded-body ceiling. No phase
 resets a deadline. Source tests must exercise stalled DNS as well as trickling
@@ -171,8 +212,8 @@ Historical manifests, markers and receipts remain untouched.
 ## Observability
 
 - Layer: local bounded CLI and private receipt, no production telemetry surface.
-- Signal: source/manifest/CA/platform/Config bindings, request count/status,
-  framing category, exact byte/digest/schema results, peer-policy result and
+- Signal: the closed receipt's binding hashes, request count/status,
+  exact byte/digest/schema results, peer-policy result and
   fixed failure category; authority flags false and review status pending.
 - Failure coverage: URL/DNS/peer/TLS/header/body/schema refusal is reported by
   the local receipt layer, with sanitized partial stages and a spent marker;
