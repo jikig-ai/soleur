@@ -84,7 +84,6 @@ plugins/soleur/skills/review/scripts/fix-round-seats.sh|adopted — declare -F f
 plugins/soleur/skills/ship/scripts/hold-gate-eval.sh|superset — strips strictly more (cntrl + C1 + wider e2 classes + BOM); leave as-is
 plugins/soleur/skills/preflight/SKILL.md|doc snippet — canonical form, recorded
 plugins/soleur/skills/preflight/references/check-13-founder-check.md|doc snippet — canonical form, recorded
-plugins/soleur/skills/admin-ip-refresh/references/admin-ip-refresh-procedure.md|doc snippet — canonical form, recorded
 EOF
 )
 
