@@ -10,9 +10,13 @@ import json
 import os
 from pathlib import Path
 import signal
+import stat
 import subprocess
 import sys
 import time
+
+if __name__ == '__main__':
+    sys.path.insert(0, str(Path(__file__).absolute().parent))
 
 STAGES = ('startup', 'manifest', 'source_binding', 'private_output', 'gate_publication')
 CLOSED_MESSAGES = tuple('Resolver diagnostic refused; preconsume_stage=' + stage + '\n' for stage in STAGES) + (
@@ -46,6 +50,32 @@ def checked_completion(value, *, manifest_sha256, source_sha, supervisor_sha256,
     if (type(value) is not dict or value != signal_value or type(supervisor_exit) is not int
             or supervisor_exit != 0):
         raise RuntimeError('Resolver completion refused')
+
+
+def _read_manifest(path):
+    """Read one bounded private regular file without following links or blocking."""
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        before = os.fstat(descriptor)
+        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or
+                stat.S_IMODE(before.st_mode) != 0o600 or before.st_uid != os.getuid() or
+                before.st_size > 32768):
+            raise RuntimeError('Resolver manifest refused')
+        raw = bytearray()
+        while len(raw) <= 32768:
+            part = os.read(descriptor, min(4096, 32769 - len(raw)))
+            if not part:
+                break
+            raw.extend(part)
+        after = os.fstat(descriptor)
+        if len(raw) > 32768 or (before.st_dev, before.st_ino, before.st_mode, before.st_nlink,
+                before.st_uid, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+                after.st_dev, after.st_ino, after.st_mode, after.st_nlink,
+                after.st_uid, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+            raise RuntimeError('Resolver manifest refused')
+        return bytes(raw)
+    finally:
+        os.close(descriptor)
 
 
 class ClosedParser(argparse.ArgumentParser):
@@ -201,7 +231,7 @@ def main():
         if hashlib.sha256(Path(__file__).read_bytes()).hexdigest() != args.supervisor_sha256:
             raise RuntimeError('Resolver supervisor binding refused')
         from prepare import canonical, sha
-        raw_manifest = Path(args.manifest).read_bytes()
+        raw_manifest = _read_manifest(args.manifest)
         manifest = json.loads(raw_manifest.decode('ascii'))
         if len(raw_manifest) > 32768 or sha(canonical(manifest)) != args.manifest_sha256:
             raise RuntimeError('Resolver manifest binding refused')

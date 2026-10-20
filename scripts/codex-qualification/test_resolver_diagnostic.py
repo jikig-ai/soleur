@@ -165,6 +165,12 @@ class Contracts(unittest.TestCase):
             with self.subTest(exit_code=exit_code), self.assertRaises(diagnostic.Refused):
                 diagnostic.checked_completed_action(result, signal, self.plan, self.digest,
                                                     self.marker, supervisor_exit=exit_code)
+        refused = self.receipt('resolution_refusal', 'resolution', 1, 'reaped')
+        contradictory = supervisor.completion_signal({**candidate,
+            'receipt_sha256': refused['receipt_sha256']}, expected)
+        with self.assertRaises(diagnostic.Refused):
+            diagnostic.checked_completed_action(refused, contradictory, self.plan, self.digest,
+                                                self.marker, supervisor_exit=0)
         for field, value in (('finalization', 'complete'), ('action_accepted', True)):
             forged = {**result, field: value}
             forged['receipt_sha256'] = diagnostic.sha(diagnostic.canonical(
@@ -500,10 +506,34 @@ class CoordinateComposition(unittest.TestCase):
             patch.object(diagnostic.PrivateOutput, '__exit__', close_then_fail))), 1)
         self.assert_marker_only()
 
+    def test_deadline_after_final_receipt_pin_close_leaves_only_provisional_completion_state(self):
+        real_close, receipt_closes = os.close, []
+        def close_then_expire(fd):
+            if type(fd) is not int:
+                return real_close(fd)
+            target = os.readlink('/proc/self/fd/' + str(fd))
+            if target.endswith('/' + diagnostic.RECEIPT):
+                receipt_closes.append(fd)
+                if len(receipt_closes) == 2:
+                    real_close(fd)
+                    self.now = 11.
+                    raise OSError(CANARY)
+            return real_close(fd)
+        self.assertEqual(self.invoke(extra=lambda stack: stack.enter_context(
+            patch.object(diagnostic.os, 'close', side_effect=close_then_expire))), 1)
+        self.assertEqual(len(receipt_closes), 2)
+        self.assertTrue((self.directory / diagnostic.MARKER).exists())
+        self.assertNotIn('resolver-coordinator-completion-v1', self.output.getvalue())
+        result = self.result()
+        self.assertEqual(result['finalization'], 'provisional')
+        self.assertIs(result['action_accepted'], False)
+
     def test_final_receipt_pin_close_uncertainty_retains_only_provisional_evidence(self):
         real_close = os.close
         receipt_closes, failed_slots = [], []
         def close_final_pin_once(fd):
+            if type(fd) is not int:
+                return real_close(fd)
             target = os.readlink('/proc/self/fd/' + str(fd))
             if target.endswith('/' + diagnostic.RECEIPT):
                 receipt_closes.append(fd)
@@ -518,6 +548,7 @@ class CoordinateComposition(unittest.TestCase):
         self.assertEqual(len(failed_slots), 1)
         self.assertTrue((self.directory / diagnostic.MARKER).exists())
         self.assertNotIn('resolver-coordinator-completion-v1', self.output.getvalue())
+        self.assertIn('Resolver diagnostic publication refused', self.output.getvalue())
         target = self.directory / diagnostic.RECEIPT
         if target.exists():
             result = self.result()
@@ -591,6 +622,27 @@ class HelperReader(unittest.TestCase):
 
 
 class SourceAndCLI(unittest.TestCase):
+    def test_supervisor_manifest_reader_is_bounded_and_rejects_links_and_special_files(self):
+        with tempfile.TemporaryDirectory(prefix='resolver-manifest-test-') as scratch:
+            root = Path(scratch)
+            regular = root / 'manifest.json'
+            regular.write_bytes(b'{}')
+            regular.chmod(0o600)
+            self.assertEqual(supervisor._read_manifest(str(regular)), b'{}')
+            link = root / 'manifest-link'
+            link.symlink_to(regular)
+            with self.assertRaises(OSError):
+                supervisor._read_manifest(str(link))
+            fifo = root / 'manifest-fifo'
+            os.mkfifo(fifo, 0o600)
+            with self.assertRaises(RuntimeError):
+                supervisor._read_manifest(str(fifo))
+            oversized = root / 'manifest-large.json'
+            oversized.write_bytes(b'{}' + b' ' * 32767)
+            oversized.chmod(0o600)
+            with self.assertRaises(RuntimeError):
+                supervisor._read_manifest(str(oversized))
+
     def test_valid_supervisor_cli_uses_mocked_containment_and_closed_completion(self):
         manifest = plan()
         raw_source = b'synthetic-supervisor-source'
@@ -615,7 +667,7 @@ class SourceAndCLI(unittest.TestCase):
         try:
             with (patch('sys.argv', argv), patch.object(supervisor.sys, 'executable', '/synthetic/python'),
                   patch.object(Path, 'read_bytes', new=lambda path: raw_source if Path(path).name == 'resolver_supervisor.py' else diagnostic.canonical(manifest)),
-                  patch.object(diagnostic.policy.metadata.base, '_read', return_value=diagnostic.canonical(manifest)),
+                  patch.object(supervisor, '_read_manifest', return_value=diagnostic.canonical(manifest)),
                   patch.object(supervisor, 'arm_parent_death'),
                   patch.object(supervisor, 'supervise', side_effect=synthetic_supervision) as containment,
                   patch.object(supervisor.time, 'monotonic', return_value=0.), redirect_stdout(output)):

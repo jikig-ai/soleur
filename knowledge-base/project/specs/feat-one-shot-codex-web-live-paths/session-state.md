@@ -2423,7 +2423,7 @@
 
 - Operator separately authorized source implementation and synthesized offline
   tests only. The corrected source candidate now has provisional-only receipts
-  and supervisor completion evidence; its 58-test focused suite and scoped Ruff
+  and supervisor completion evidence; its 61-test focused suite and scoped Ruff
   pass are recorded in [the source-review record](resolver-only-source-review-2026-10-20.md).
 - Independent source re-review is pending. Real resolver/helper execution,
   diagnostics, preparation, DNS/network, retries, resync/full CI, full review,

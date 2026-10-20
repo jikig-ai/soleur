@@ -20,9 +20,12 @@ _OFFLINE_GUARDS = []
 def setUpModule():
     def synthetic_only(command, *args, **kwargs):
         script = Path(command[4]) if type(command) is list and len(command) >= 5 else Path('/')
-        if (command[1:4] != ['-I', '-S', '-B'] or
-                not script.parent.name.startswith('resolver-lifecycle-test-') or
-                not script.name.startswith('synthetic_') or script.suffix != '.py'):
+        scratch_script = (script.parent.name.startswith('resolver-lifecycle-test-') and
+                          script.name.startswith('synthetic_') and script.suffix == '.py')
+        scratch_supervisor = (script == Path(supervisor.__file__).resolve() and
+            '--manifest' in command and
+            Path(command[command.index('--manifest') + 1]).parent.name.startswith('resolver-lifecycle-test-'))
+        if command[1:4] != ['-I', '-S', '-B'] or not (scratch_script or scratch_supervisor):
             raise AssertionError('Only synthesized scratch processes permitted')
         return _REAL_POPEN(command, *args, **kwargs)
     for target in ('socket.getaddrinfo', 'socket.socket', 'socket.create_connection'):
@@ -65,6 +68,24 @@ class Lifecycle(unittest.TestCase):
             ' os._exit(0)\n'
             'signal.signal(signal.SIGTERM,signal.SIG_IGN)\n'
             'time.sleep(30)\n')
+
+    def test_isolated_supervisor_cli_bootstraps_local_import_and_refuses_bad_manifest(self):
+        manifest_path = self.root / 'synthetic-manifest.json'
+        from prepare import canonical
+        raw = canonical({'source_sha': 'a' * 40}) + b'\n'
+        manifest_path.write_bytes(raw)
+        manifest_path.chmod(0o600)
+        supervisor_path = Path(supervisor.__file__).resolve()
+        command = [sys.executable, '-I', '-S', '-B', str(supervisor_path), 'execute',
+            '--manifest', str(manifest_path), '--manifest-sha256', diagnostic.sha(canonical({'source_sha': 'a' * 40})),
+            '--supervisor-sha256', diagnostic.sha(supervisor_path.read_bytes())]
+        child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, close_fds=True, env={}, cwd='/')
+        stdout, stderr = child.communicate(timeout=5.)
+        self.assertEqual(child.returncode, 1, stderr.decode('ascii', errors='replace'))
+        self.assertIn(b'preconsume_stage=manifest', stdout)
+        self.assertFalse((self.root / diagnostic.MARKER).exists())
+        self.assertFalse((self.root / diagnostic.RECEIPT).exists())
 
     def assert_gone(self, pid):
         with self.assertRaises(ProcessLookupError):

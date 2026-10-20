@@ -139,6 +139,8 @@ def checked_receipt(value, manifest, digest, marker):
 def checked_completed_action(value, completion, manifest, digest, marker, *, supervisor_exit):
     try:
         checked_receipt(value, manifest, digest, marker)
+        ensure((value['category'], value['stage'], value['helper_launches'], value['cleanup']) ==
+               ('admitted', 'complete', 1, 'reaped'))
         ensure(type(supervisor_exit) is int and supervisor_exit == 0)
         import resolver_supervisor
         resolver_supervisor.checked_completion(completion, manifest_sha256=digest,
@@ -594,13 +596,16 @@ def coordinate(args, *, clock=time.monotonic):
             descriptor = publication[index]
             publication[index] = None
             os.close(descriptor)
+            budget.remaining()
         publication = None
+        if result['category'] != 'admitted':
+            return 1
         candidate = {'schema': 'resolver-coordinator-completion-v1',
             'manifest_sha256': args.manifest_sha256, 'source_sha': manifest['source_sha'],
             'supervisor_sha256': manifest['files']['resolver_supervisor.py'],
             'receipt_sha256': result['receipt_sha256']}
         print('Resolver diagnostic candidate=' + json.dumps(candidate, sort_keys=True, separators=(',', ':')))
-        return 0 if result['category'] == 'admitted' else 1
+        return 0
     except Exception:
         cleanup_uncertain = False
         if publication is not None:
@@ -610,9 +615,11 @@ def coordinate(args, *, clock=time.monotonic):
             except Exception:
                 cleanup_uncertain = True
             for descriptor in publication:
+                if descriptor is None:
+                    continue
                 try:
                     os.close(descriptor)
-                except OSError:
+                except Exception:
                     cleanup_uncertain = True
         # A failed marker write may already have consumed the action. Never remove
         # it, fabricate a receipt, claim absence, or infer permission to retry.

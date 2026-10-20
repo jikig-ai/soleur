@@ -180,7 +180,7 @@ failures in late publication/deadline/close behavior; the expanded 55-check run
 exposed the missing provisional fields, missing completion API, and the same
 rollback failures. Actual pipe-reader boundary cases were included. After the
 correction, `/usr/bin/python3.14 -E -B -W error -m unittest
-test_resolver_diagnostic test_resolver_lifecycle` passed **58 tests** (2.152s),
+test_resolver_diagnostic test_resolver_lifecycle` passed **61 tests** (2.303s),
 and cached Ruff 0.16.10 over the five scoped source/test files passed. This is
 offline source evidence only; no operational census, preparation, helper,
 resolver, DNS or network action ran.
@@ -188,3 +188,20 @@ resolver, DNS or network action ran.
 The corrected source is not accepted until the three independent scoped
 reviewers re-review its pushed full SHA. The initial 37-test findings above
 remain historical and are not replaced by this local result.
+
+### Re-review corrections — new candidate not yet pushed
+
+Independent re-review of `08eb1c4c810cc4b255a44045f2178262bd799f9f` found four
+additional fail-closed requirements: bootstrap the supervisor's local import
+under isolated `-I -S`; read the manifest as a bounded no-follow private regular
+file; skip already-consumed descriptor slots after ambiguous close and preserve
+the real `os.close(None)` behavior in the fault test; and reject completion paired
+with any non-admitted receipt. Engineering, security and test-design reviews also
+required a deadline check after final pin closes.
+
+These corrections are now present locally. The 61-test suite includes isolated
+supervisor startup with a malformed synthesized manifest, bounded reader rejection
+for symlink/FIFO/oversize files, deadline expiry after final receipt-pin close,
+and a refusal-receipt/completion contradiction. Focused tests and Ruff pass, but
+the corrected changes have not yet been committed, pushed or independently
+re-reviewed. No operational action ran.
