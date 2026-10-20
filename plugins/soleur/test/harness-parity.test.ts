@@ -108,6 +108,17 @@ describe("harness-parity fixtures — index and policy plumbing", () => {
     expect(regionPolicyForPath("plugins/soleur/agents/product/cpo.md")).toBe("agent");
     expect(regionPolicyForPath("plugins/soleur/agents/engineering/review/security-sentinel.md")).toBe("agent");
     expect(regionPolicyForPath("vendor/plugins/soleur/agents/legal/clo.md")).toBeUndefined();
+    // The OpenCode front doors (#ADR-291): generated agent stubs and commands. The stub
+    // policy is `agent` even though the file is generated — the classifier reads the
+    // SHIPPED bytes, and what an OpenCode session resolves is the stub, not the source it
+    // came from. Depth 6 exercises `**` on the generated side too.
+    expect(regionPolicyForPath("plugins/soleur/opencode/agents/engineering/cto.md")).toBe("agent");
+    expect(regionPolicyForPath("plugins/soleur/opencode/agents/engineering/review/security-sentinel.md")).toBe("agent");
+    expect(regionPolicyForPath("plugins/soleur/opencode/commands/go.md")).toBe("command");
+    // The OpenCode commands glob is `*`, not `**`: a nested file under commands/ is not a
+    // command, and only the canonical `commands/*.md` shape is a front door.
+    expect(regionPolicyForPath("plugins/soleur/opencode/commands/nested/go.md")).toBeUndefined();
+    expect(regionPolicyForPath("plugins/soleur/opencode/agents/engineering/cto.md.bak")).toBeUndefined();
     // The glob→regex must be ANCHORED at both ends. Without the anchors the two cases above
     // still resolve to undefined for an unrelated reason (`[^/]+` cannot cross `/`), so they
     // do not cover it: a prefix or a suffix is what proves it (measured — dropping both

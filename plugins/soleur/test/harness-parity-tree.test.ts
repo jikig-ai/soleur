@@ -46,6 +46,14 @@ const OWN_DEVIN_SKILLS = ":(glob)plugins/soleur/devin/skills/*/SKILL.md";
 const OWN_SKILL_REFERENCES = ":(glob)plugins/soleur/skills/*/references/**/*.md";
 /** The agent-body half of NG-P (#8317). */
 const OWN_AGENTS = ":(glob)plugins/soleur/agents/**/*.md";
+/**
+ * The OpenCode front doors (ADR-291). Distinct from the Codex/Devin rows above: those
+ * harnesses re-use the skill tree, while OpenCode's front doors are the GENERATED agent
+ * stubs and commands. Own literals, like every other pathspec here, so the admission
+ * proof stays independent of `POPULATION_GLOBS`.
+ */
+const OWN_OPENCODE_AGENTS = ":(glob)plugins/soleur/opencode/agents/**/*.md";
+const OWN_OPENCODE_COMMANDS = ":(glob)plugins/soleur/opencode/commands/*.md";
 
 function lsFiles(pathspec: string): string[] {
   return execFileSync("git", ["ls-files", "--full-name", "--", pathspec], { cwd: REPO_ROOT, encoding: "utf-8" })
@@ -112,7 +120,9 @@ describe("harness-parity tree census (Guard 3)", () => {
       lsFiles(OWN_CODEX_SKILLS).length +
       lsFiles(OWN_DEVIN_SKILLS).length +
       referenceDocs.length +
-      lsFiles(OWN_AGENTS).length -
+      lsFiles(OWN_AGENTS).length +
+      lsFiles(OWN_OPENCODE_AGENTS).length +
+      lsFiles(OWN_OPENCODE_COMMANDS).length -
       EXCLUDED_BY_PATH.size;
     expect(expected).toBeGreaterThan(100);
     // Per-source floors, not one union figure: a single total is dispatch-blind — it
@@ -125,6 +135,13 @@ describe("harness-parity tree census (Guard 3)", () => {
       lsFiles(OWN_AGENTS).length,
       "every .md under plugins/soleur/agents/ loads as a Claude subagent; agent-owned reference text belongs in the agent body",
     ).toBe(EXPECTED_SOLEUR_AGENT_COUNT);
+    // The generated stub set is the registry's, one stub per agent and per command
+    // (measured 2026-10-19: 67 and 4). A count floor alone would admit the drift this
+    // pins — a stub for a RETIRED agent keeps the count right while the `new` set is
+    // wrong — so the path SETS are compared in the dedicated test below; these two
+    // assertions are what make the tie explicit here.
+    expect(lsFiles(OWN_OPENCODE_AGENTS).length).toBe(EXPECTED_SOLEUR_AGENT_COUNT);
+    expect(lsFiles(OWN_OPENCODE_COMMANDS).length).toBe(lsFiles(OWN_COMMAND_FILES).length);
     expect(docs.length).toBe(expected);
     // Every excluded path must be one the globs would otherwise have admitted — an exclusion
     // naming a path outside the population is dead weight that reads as a deliberate carve-out.
@@ -135,8 +152,39 @@ describe("harness-parity tree census (Guard 3)", () => {
       ...lsFiles(OWN_DEVIN_SKILLS),
       ...referenceDocs,
       ...lsFiles(OWN_AGENTS),
+      ...lsFiles(OWN_OPENCODE_AGENTS),
+      ...lsFiles(OWN_OPENCODE_COMMANDS),
     ]);
     expect([...EXCLUDED_BY_PATH.keys()].filter((p) => !admitted.has(p))).toEqual([]);
+  });
+
+  // The admission proof above pins COUNTS; this pins the SET. A count cannot tell a stub for
+  // a RETIRED agent (right size, wrong members) from one for a live agent, and the generator
+  // writes by canonical-derived name, so a renamed agent would leave a stale stub behind
+  // while the count stayed correct. Measured 2026-10-19: 67 stubs == 67 registry agent files
+  // and 4 == 4 slash-command files.
+  //
+  // The expectation is a PREFIX SWAP over the canonical tree, not a re-run of the generator's
+  // walk: if the generator's naming changed, the two lists diverge and this reds, which is the
+  // property. A generator that renamed its output directory AND this constant would still
+  // agree — that is what `--check` in `opencode-adapter-drift.test.ts` covers.
+  test("the generated OpenCode stubs are exactly the registry's paths", () => {
+    const toStub = (canonical: string, from: string, to: string): string => {
+      const mapped = canonical.replace(from, to);
+      expect(mapped, `${canonical} does not begin with ${from}`).not.toBe(canonical);
+      return mapped;
+    };
+    const expectedAgents = lsFiles(OWN_AGENTS).map((p) =>
+      toStub(p, "plugins/soleur/agents/", "plugins/soleur/opencode/agents/"),
+    );
+    const expectedCommands = lsFiles(OWN_COMMAND_FILES).map((p) =>
+      toStub(p, "plugins/soleur/commands/", "plugins/soleur/opencode/commands/"),
+    );
+    // Non-vacuity: both sides must be populated before equality means anything.
+    expect(expectedAgents.length).toBeGreaterThan(0);
+    expect(expectedCommands.length).toBeGreaterThan(0);
+    expect(lsFiles(OWN_OPENCODE_AGENTS).slice().sort()).toEqual(expectedAgents.slice().sort());
+    expect(lsFiles(OWN_OPENCODE_COMMANDS).slice().sort()).toEqual(expectedCommands.slice().sort());
   });
 
   // The exempt surface is the compensation channel this design rejected a baseline to avoid, so
@@ -146,7 +194,9 @@ describe("harness-parity tree census (Guard 3)", () => {
     const exemptDocs = result.docs.filter((d) => d.counts.EXEMPT > 0).map((d) => d.path);
     expect(exemptDocs).toEqual(["plugins/soleur/commands/go.md"]);
     // 2026-10-06: Cursor spellings inside the three existing regions move 21 to 44.
-    expect(result.totals.EXEMPT).toBe(44);
+    // 2026-10-19: OpenCode spellings inside the same three regions move 44 to 48 — one `soleur:`
+    // site per region plus the Step 2.0 table row; the region count and the file set are unchanged.
+    expect(result.totals.EXEMPT).toBe(48);
     const goMd = docs.find((d) => d.path === "plugins/soleur/commands/go.md");
     expect(goMd).toBeDefined();
     const starts = (goMd as { text: string }).text.match(/^<!-- harness-forms:start -->$/gm) ?? [];

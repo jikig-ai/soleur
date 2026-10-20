@@ -32,6 +32,13 @@ beforeEach(() => {
     CODEX_THREAD_ID: process.env.CODEX_THREAD_ID,
     GROK_HOME: process.env.GROK_HOME,
     DEVIN: process.env.DEVIN,
+    // OPENCODE outranks the Antigravity markers, so a suite that calls the
+    // env-reading helpers (formatSkillInvocation, invokeSkill, spawnAgent,
+    // formatAgentSpawn) would otherwise observe a live `OPENCODE=1` it never set.
+    OPENCODE: process.env.OPENCODE,
+    OPENCODE_SESSION_ID: process.env.OPENCODE_SESSION_ID,
+    OPENCODE_TERMINAL: process.env.OPENCODE_TERMINAL,
+    AI_AGENT: process.env.AI_AGENT,
   };
   delete process.env.CLAUDECODE;
   delete process.env.ANTIGRAVITY_CLI;
@@ -40,6 +47,10 @@ beforeEach(() => {
   delete process.env.CODEX_THREAD_ID;
   delete process.env.GROK_HOME;
   delete process.env.DEVIN;
+  delete process.env.OPENCODE;
+  delete process.env.OPENCODE_SESSION_ID;
+  delete process.env.OPENCODE_TERMINAL;
+  delete process.env.AI_AGENT;
 });
 
 afterEach(() => {

@@ -5,8 +5,9 @@ work is tracked. This table lives here rather than in an ADR (ADR-245) because i
 changes every time a gate is added, and an ADR is not the home for a table with
 that lifecycle.
 
-Soleur ships ONE plugin tree to four harnesses — Claude Code, Grok Build, Codex and
-Devin — each with its own invocation syntax and its own tool vocabulary. Every gate
+Soleur ships ONE plugin tree to five detected harnesses — Claude Code, Grok Build,
+Codex, Devin and OpenCode (plus Cursor's name-mapped slice) — each with its own
+invocation syntax and its own tool vocabulary. Every gate
 below exists because some part of that tree is read by an agent on a harness the
 author was not using.
 
@@ -28,7 +29,7 @@ CI job rather than a file at all.
 | `plugins/soleur/test/harness-parity-tree.test.ts` + `plugins/soleur/test/harness-parity.test.ts` | Every component reference in agent-read prose is the canonical `soleur:<name>` / registry id — skills, commands, the Codex/Devin shims, `skills/*/references/**` and agent bodies (each agent's own frontmatter `name:` is its one SELF-NAME) | A harness-specific form (`/plan`, `$soleur:plan`) or a bare agent leaf (dead on Grok) entered the corpus. `harness-parity-census.ts --fix` repairs the mechanical shapes on a clean tree | ADR-226. The references half closed with #8570; the agent half closes with #8317 (self-name carve-out, ADR-226 §3 amendment) |
 | `apps/web-platform/test/plugin-root-anchoring.test.ts` (command + secret-gate axes) | No customer-facing command or secret-gate script is reached through a CWD-controllable anchor | Zero tolerance — rewrite as `"${CLAUDE_PLUGIN_ROOT}/…"` with no default | #7450 (closed) |
 | `apps/web-platform/test/plugin-root-anchoring.test.ts` (skills ratchet axis) | The non-gate CWD-controllable anchors cannot GROW | A NEW anchor, or an existing one gaining occurrences. Do NOT add a baseline row — fix the anchor | #7453 owns migrating the existing rows (open) |
-| `plugins/soleur/test/harness-discovery-smoke.test.ts` + the `harness-discovery` job in `.github/workflows/ci.yml` | Codex and Devin, installed hermetically from the checkout, register every skill their manifest's roots declare, with ONE multiplicity mode per run | Exit 1 = a real set or multiplicity mismatch. Exit 3 = UNRESOLVED (CLI absent, install failed, version drift, or a structurally unreadable listing) and is never a pass | ADR-245; #8574 owns promoting the job to required (open) |
+| `plugins/soleur/test/harness-discovery-smoke.test.ts` + the `harness-discovery` job in `.github/workflows/ci.yml` | Codex, Devin and OpenCode, installed hermetically from the checkout, register every skill their manifest's roots declare, with ONE multiplicity mode per run | Exit 1 = a real set or multiplicity mismatch. Exit 3 = UNRESOLVED (CLI absent, install failed, version drift, or a structurally unreadable listing) and is never a pass. The OpenCode arm keys on `path` (bare ids collide) and polls to settlement (the scan is async) | ADR-245, ADR-291; #8574 owns promoting the job to required (open) |
 | `plugins/soleur/test/components.test.ts` (`ACKED_CROSS_ROOT_DUPES`) | Slash-name uniqueness across harness component namespaces | A new cross-root duplicate. The discovery gate above proves REGISTRATION, not uniqueness — this is where uniqueness lives | ADR-224 decision 5; #8236 (open) |
 | `plugins/soleur/test/devin-cloud-mode.test.ts` | The cloud-mode marker fleet is byte-identical across its curated set | A skill's cloud-mode block drifted | ADR-221 |
 | `plugins/soleur/test/workflow-fidelity.test.ts` | Grok routing semantics, asserted without reading the invoke block's bytes | The routing contract changed. This is the anchor OUTSIDE the Grok block's own md5 pin | #6320 (closed) |
@@ -54,19 +55,20 @@ no check.
 
 ## Vendor-CLI pins
 
-`harness-discovery` (Codex, Devin) and `grok-fidelity` (Grok) drive third-party
-CLIs, pinned exactly and asserted at install time (ADR-245):
+`harness-discovery` (Codex, Devin, OpenCode) and `grok-fidelity` (Grok) drive
+third-party CLIs, pinned exactly and asserted at install time (ADR-245):
 
 | CLI | Pin | Install path | Depth of the pin |
 |---|---|---|---|
 | Codex | `0.156.1` | `npm i -g @openai/codex@<pin>` | npm resolves the version to immutable published bytes |
 | Devin | `3000.11.1` | `https://static.devin.ai/cli/<pin>/setup.sh` — the top-level `install.sh` leaves `PINNED_VERSION` empty and installs latest | A version in a URL is a NAME the vendor can re-serve, so the job also pins the fetched script by `sha256sum -c` and refuses to execute a changed one |
+| OpenCode | `2.0.32` | `npm i -g @opencode/cli@<pin>` | npm resolves the version to immutable published bytes. The package is `@opencode/cli`; `opencode-ai` is the previous API generation (1.19.3) and the 2.x runtime rejects its plugin module shape (ADR-291) |
 | Grok | `1.0.41` | `https://x.ai/cli/grok-<pin>-linux-x86_64` | xAI publishes no versioned installer URL and no checksum, so the job content-pins the binary itself by `sha256sum -c` (either source) and never runs `install.sh` |
 
 Every arm then asserts the installed binary reports the pin, exiting 3 on drift.
 
 The pins are declared ONCE each, as job-level `env` (`CODEX_PIN`, `DEVIN_PIN`,
-`DEVIN_SETUP_SHA256`, `GROK_PIN`, `GROK_SHA256`) — a `--pin` lagging its own install step silently turns the
+`DEVIN_SETUP_SHA256`, `OPENCODE_PIN`, `GROK_PIN`, `GROK_SHA256`) — a `--pin` lagging its own install step silently turns the
 script's version check into a no-op.
 
 A pin is stale the day the vendor ships. **#8574 owns the freshness criterion**: a

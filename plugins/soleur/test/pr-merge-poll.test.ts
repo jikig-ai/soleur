@@ -87,7 +87,7 @@ describe("pr-merge-poll BEHIND contract", () => {
   test("behindSyncInstructions agrees with queue mode: a queue_wait heartbeat on BEHIND is not a reason to sync (#9710)", () => {
     // Every harness gets the exception: the default case is appended for codex, devin and unknown, and without it the
     // amended FORBIDDEN/resolve lines sit above an unconditional "BEHIND -> merge origin/main and push".
-    for (const h of ["grok", "claude", "codex", "devin", "cursor", "unknown"] as const) {
+    for (const h of ["grok", "claude", "codex", "devin", "opencode", "cursor", "unknown"] as const) {
       const md = behindSyncInstructions(h);
       if (h === "cursor") continue; // cursor prescribes no wait primitive and no sync at all
       expect(md).toContain("[ship.phase7.queue_wait]");
@@ -124,7 +124,7 @@ describe("pr-merge-poll BEHIND contract", () => {
       "devin/INSTRUCTIONS.md": readFileSync(resolve(PLUGIN_ROOT, "devin/INSTRUCTIONS.md"), "utf-8"),
       "drain-prs/SKILL.md": readFileSync(resolve(PLUGIN_ROOT, "skills/drain-prs/SKILL.md"), "utf-8"),
     };
-    for (const h of ["grok", "claude", "codex", "devin", "unknown"] as const) {
+    for (const h of ["grok", "claude", "codex", "devin", "opencode", "unknown"] as const) {
       surfaces[`behindSyncInstructions(${h})`] = behindSyncInstructions(h);
       surfaces[`pollInstructions(${h})`] = pollInstructions(h);
     }

@@ -2975,14 +2975,22 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // through the deploy-webhook HMAC (Doppler soleur/prd_terraform) plus the Cloudflare Access service token, and `gh api`
   // compare with GH_TOKEN. NO SUBSTITUTE: the deploy-status hook has no unauthenticated read path and the host is no-SSH;
   // the offline suite drives the script against stubs and proves the verdict logic, not the live deployed state. Genuine.
-  // #10453 (2026-10-19): +1 (70 -> 71) for `2026-10-19-fix-sandbox-incident-followups-plan.md`.
+  // #10552 (2026-10-19): +1 (70 -> 71) for `2026-10-19-fix-compound-promote-diff-underivable-apply-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash scripts/followthroughs/compound-promote-draft-edit-10552.sh`) reads Better Stack through the
+  // ClickHouse HTTP connection credential (BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}, Doppler soleur/prd_terraform) and
+  // grades the stored SOLEUR_COMPOUND_PROMOTE_OUTCOME rows of the weekly cron against an allowlist of refusals that can
+  // only occur after a server-derived diff was accepted. NO SUBSTITUTE: the warehouse has no unauthenticated read path;
+  // the offline suite drives the script against stubs and proves the verdict classification, not the stored stream or
+  // that the model's anchors match real files in production. Genuine.
+  // #10453 (2026-10-19): +1 (71 -> 72) for `2026-10-19-fix-sandbox-incident-followups-plan.md`.
   // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
   // TRUTH: the command (`bash scripts/followthroughs/sdk-bash-smoke-verdict-10548.sh`) reads the host's /hooks/deploy-status
   // through the deploy-webhook HMAC (Doppler soleur/prd_terraform) plus the Cloudflare Access service token, and prints the
   // `.sdk_bash_smoke` ledger (verdict, coverage, soak counters). NO SUBSTITUTE: the deploy-status hook has no unauthenticated
   // read path and the host is no-SSH; the offline suite drives the script against stubs and proves the verdict logic, not
   // the live deployed state. Genuine.
-  const BASELINE_DECLARED_PROBES = 71;
+  const BASELINE_DECLARED_PROBES = 72;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
