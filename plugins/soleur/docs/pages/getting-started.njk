@@ -4,8 +4,8 @@ seoTitle: "Get Started with Soleur — Install Your AI Organization in Two Comma
 description: "Install Soleur in two commands and run a full AI organization — marketing, legal, finance, operations, sales, and support — without hiring anyone."
 layout: base.njk
 permalink: getting-started/
-date: 2026-10-06
-last_updated: 2026-10-06
+date: 2026-10-20
+last_updated: 2026-10-20
 ---
 
     <!-- Hero -->
@@ -29,12 +29,12 @@ last_updated: 2026-10-06
     <!-- Plain-language definition + external citations (#4410) -->
     <section class="page-freshness" aria-label="What Soleur is">
       <div class="container">
-        <p class="page-definition">Soleur is a source-available <a href="https://docs.claude.com/en/docs/claude-code" rel="noopener noreferrer">Claude Code</a> platform that turns a solo founder into a full company: {{ stats.agents }} AI agents and {{ stats.skills }} workflow skills across {{ stats.departments }} departments, all sharing one knowledge base. You delegate work in plain language; the agents execute and remember every decision.</p>
+        <p class="page-definition">Soleur is a source-available platform that turns a solo founder into a full company: {{ stats.agents }} AI agents and {{ stats.skills }} workflow skills across {{ stats.departments }} departments, all sharing one knowledge base. You delegate work in plain language; the agents execute and remember every decision.</p>
         <div class="page-citations">
           <p>Built on open standards:</p>
           <ul>
             <li>Source-available under the <a href="{{ site.github }}/blob/main/LICENSE" rel="noopener noreferrer">Business Source License 1.1</a> &mdash; free to use, modify, and self-host; converts to Apache-2.0 four years after each release.</li>
-            <li>Runs on <a href="https://docs.claude.com/en/docs/claude-code" rel="noopener noreferrer">Claude Code</a>, Anthropic&rsquo;s agentic coding environment.</li>
+            <li>Runs on agentic coding harnesses &mdash; self-hosted today on Claude Code, Grok Build, Codex, and Devin CLI, each with its own setup guide below.</li>
             <li>Connects tools and context through the <a href="https://modelcontextprotocol.io" rel="noopener noreferrer">Model Context Protocol (MCP)</a> open specification.</li>
           </ul>
         </div>
@@ -44,12 +44,16 @@ last_updated: 2026-10-06
     <!-- Run it yourself (self-hosted) -->
     <section class="landing-section" id="self-hosted">
       <div class="landing-section-inner">
-        <p class="section-label">Source-available. Install in Claude Code.</p>
+        <p class="section-label">Source-available. Install in your own harness.</p>
         <h2 class="section-title">Run it yourself</h2>
 
-        <p>Prefer to run it yourself? Soleur is source-available and works in Claude Code today. Install it in two commands, keep your knowledge base as plain files on your own machine, and join the waitlist if you want the hosted version when it opens.</p>
+        <p>Prefer to run it yourself? Soleur is source-available and runs self-hosted on Claude Code, Grok Build, Codex, and Devin CLI today &mdash; the same {{ stats.agents }} agents and {{ stats.skills }} skills on each. Keep your knowledge base as plain files on your own machine, and join the waitlist if you want the hosted version when it opens.</p>
 
-        <p>To run the self-hosted version you need <a href="https://docs.claude.com/en/docs/claude-code" rel="noopener noreferrer">Claude Code</a>, signed in with your Claude plan or an Anthropic API key.</p>
+        <p>The blocks below install Soleur on each harness. The <a href="https://docs.claude.com/en/docs/claude-code" rel="noopener noreferrer">Claude Code</a> path is the one with a published marketplace; the other three install from this repository and each has its own setup guide. Every harness needs its own session: nothing is shared between them.</p>
+
+        <h3 class="section-subtitle">Claude Code</h3>
+
+        <p>Signed in with your Claude plan or an Anthropic API key. This is the path with the published marketplace, and <strong>two commands</strong> is all it takes.</p>
 
         <!-- verified: 2026-08-12 source: https://code.claude.com/docs/en/plugins -->
         <div class="quickstart-code">
@@ -57,13 +61,48 @@ last_updated: 2026-10-06
 claude plugin install soleur@soleur-marketplace</code></pre>
         </div>
 
-        <p>Claude Code: <code>/soleur:go</code>. Grok Build: <code>/go</code>.</p>
+        <h3 class="section-subtitle">Grok Build</h3>
+
+        <p>Soleur loads from this repository as a Grok Build plugin. Check it loaded first, then start a session:</p>
+
+        <!-- verified: 2026-09-21 source: knowledge-base/engineering/grok-onboarding.md -->
+        <div class="quickstart-code">
+          <pre><code>grok inspect    # the soleur plugin, skills, agents, and MCP servers must appear
+grok            # interactive session</code></pre>
+        </div>
+
+        <p>Full setup &mdash; subagent spawning, trust, and the command names Grok Build uses instead of Claude Code&rsquo;s &mdash; is in the <a href="{{ site.github }}/blob/main/knowledge-base/engineering/grok-onboarding.md" rel="noopener noreferrer">Grok Build onboarding guide</a>.</p>
+
+        <h3 class="section-subtitle">Codex</h3>
+
+        <p>Codex installs from a marketplace defined in this repository:</p>
+
+        <!-- verified: 2026-09-11 source: knowledge-base/engineering/codex-onboarding.md -->
+        <div class="quickstart-code">
+          <pre><code>codex plugin marketplace add jikig-ai/soleur --sparse .agents/plugins --sparse plugins/soleur
+codex plugin add soleur@soleur</code></pre>
+        </div>
+
+        <p>Then read the <a href="{{ site.github }}/blob/main/knowledge-base/engineering/codex-onboarding.md" rel="noopener noreferrer">Codex setup guide</a> for local development, updates, and compatibility details.</p>
+
+        <h3 class="section-subtitle">Devin CLI</h3>
+
+        <!-- verified: 2026-08-12 source: https://docs.devin.ai/cli -->
+        <div class="quickstart-code">
+          <pre><code>devin plugins install jikig-ai/soleur#plugins/soleur -y</code></pre>
+        </div>
+
+        <p>Use <code>-y</code> to skip the confirmation prompt. Devin <strong>Cloud</strong> sessions run under Soleur Cloud Mode &mdash; skills, rules, and MCP carry, but plugin subagents and session hooks do not. See the <a href="{{ site.github }}/blob/main/plugins/soleur/devin/INSTRUCTIONS.md" rel="noopener noreferrer">Devin compatibility instructions</a> for the cloud-vs-local capability matrix.</p>
+
+        <p>Claude Code: <code>/soleur:go</code>. Grok Build: <code>/go</code>. Codex: <code>$soleur:go</code>. Devin CLI: <code>/soleur:go</code>.</p>
         <table>
           <thead>
             <tr>
               <th>Step</th>
               <th>Claude Code</th>
               <th>Grok Build</th>
+              <th>Codex</th>
+              <th>Devin CLI</th>
             </tr>
           </thead>
           <tbody>
@@ -71,28 +110,36 @@ claude plugin install soleur@soleur-marketplace</code></pre>
               <td>Entry</td>
               <td><code>/soleur:go</code></td>
               <td><code>/go</code></td>
+              <td><code>$soleur:go</code></td>
+              <td><code>/soleur:go</code></td>
             </tr>
             <tr>
               <td>Sync</td>
               <td><code>/soleur:sync</code></td>
               <td><code>/sync</code></td>
+              <td><code>$soleur:sync</code></td>
+              <td><code>/soleur:sync</code></td>
             </tr>
             <tr>
               <td>Help</td>
               <td><code>/soleur:help</code></td>
-              <td><code>/help</code></td>
+              <td><code>/local:help</code></td>
+              <td><code>$soleur:help</code></td>
+              <td><code>/soleur:help</code></td>
             </tr>
             <tr>
               <td>Next skill</td>
               <td>Skill tool <code>soleur:&lt;skill&gt;</code></td>
               <td>Read <code>SKILL.md</code> in this process (<code>/&lt;skill&gt;</code>)</td>
+              <td>Load <code>$soleur:&lt;skill&gt;</code>, or read <code>SKILL.md</code></td>
+              <td>Slash <code>/soleur:&lt;skill&gt;</code></td>
             </tr>
           </tbody>
         </table>
 
         <div class="callout">
-          <strong>Existing project?</strong> Claude Code: <code>/soleur:sync</code>. Grok Build: <code>/sync</code>. Analyze the codebase and populate the knowledge base.<br>
-          <strong>Starting fresh?</strong> Claude Code: <code>/soleur:go</code>. Grok Build: <code>/go</code>. Describe what you need.
+          <strong>Existing project?</strong> Claude Code and Devin CLI: <code>/soleur:sync</code>. Grok Build: <code>/sync</code>. Codex: <code>$soleur:sync</code>. Analyze the codebase and populate the knowledge base.<br>
+          <strong>Starting fresh?</strong> Claude Code and Devin CLI: <code>/soleur:go</code>. Grok Build: <code>/go</code>. Codex: <code>$soleur:go</code>. Describe what you need.
         </div>
 
         <div class="callout">
@@ -102,7 +149,7 @@ claude plugin install soleur@soleur-marketplace</code></pre>
         <h3 class="section-subtitle" style="margin-top: var(--space-8);">The Workflow</h3>
         <p>Soleur follows a structured 6-step workflow for software development:</p>
 
-        <p>The 6-step workflow (invoked automatically via <code>/soleur:go</code> or Skill tool <code>soleur:&lt;skill&gt;</code> on Claude Code; via <code>/go</code> then Read <code>SKILL.md</code> in this process on Grok Build):</p>
+        <p>The 6-step workflow (invoked automatically via <code>/soleur:go</code> or Skill tool <code>soleur:&lt;skill&gt;</code> on Claude Code; via <code>/go</code> then Read <code>SKILL.md</code> in this process on Grok Build; via <code>$soleur:go</code> on Codex; via the <code>/soleur:&lt;skill&gt;</code> slash command on Devin CLI):</p>
 
         <div class="commands-list">
           <div class="command-item">
@@ -199,7 +246,7 @@ claude plugin install soleur@soleur-marketplace</code></pre>
         <div class="faq-list">
           <details class="faq-item">
             <summary class="faq-question">What do I need to run Soleur?</summary>
-            <p class="faq-answer">Nothing to install. The hosted version runs in your browser once your access opens -- bring a workspace and your team. Prefer to self-host? The self-hosted version runs inside Claude Code on macOS, Linux, or Windows (WSL) and takes two commands to set up.</p>
+            <p class="faq-answer">Nothing to install. The hosted version runs in your browser once your access opens -- bring a workspace and your team. Prefer to self-host? The self-hosted version runs inside your own agentic harness -- Claude Code, Grok Build, Codex, or Devin CLI, on macOS, Linux, or Windows (WSL). Setup is two commands on Claude Code; the other harnesses install from this repository and each has its own setup guide.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">Why a waitlist?</summary>
@@ -207,7 +254,7 @@ claude plugin install soleur@soleur-marketplace</code></pre>
           </details>
           <details class="faq-item">
             <summary class="faq-question">Does Soleur work on Windows, Linux, and macOS?</summary>
-            <p class="faq-answer">The self-hosted version runs anywhere Claude Code runs -- Linux, macOS, and Windows via WSL. The hosted version will be accessible from any browser on any operating system.</p>
+            <p class="faq-answer">The self-hosted version runs anywhere its harnesses run: Claude Code, Grok Build, Codex, and Devin CLI all support Linux, macOS, and Windows via WSL &mdash; install inside whichever one you already use. The hosted version will be accessible from any browser on any operating system.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">How much does Soleur cost?</summary>
@@ -223,7 +270,7 @@ claude plugin install soleur@soleur-marketplace</code></pre>
           </details>
           <details class="faq-item">
             <summary class="faq-question">What is the difference between the hosted version and self-hosted?</summary>
-            <p class="faq-answer">Both versions ship the same agents and skills. The self-hosted version runs inside Claude Code on your machine -- full access to your own files. The hosted version (coming soon) adds a web dashboard, managed infrastructure, real-time agent orchestration, team collaboration, and email support. Both access the same {{ stats.agents }} agents and {{ stats.skills }} skills.</p>
+            <p class="faq-answer">Both versions ship the same agents and skills. The self-hosted version runs inside your own harness &mdash; Claude Code, Grok Build, Codex, or Devin CLI &mdash; with full access to your own files. The hosted version (coming soon) adds a web dashboard, managed infrastructure, real-time agent orchestration, team collaboration, and email support. Both access the same {{ stats.agents }} agents and {{ stats.skills }} skills.</p>
           </details>
         </div>
       </div>
@@ -239,7 +286,7 @@ claude plugin install soleur@soleur-marketplace</code></pre>
           "name": "What do I need to run Soleur?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Nothing to install. The hosted version runs in your browser once your access opens -- bring a workspace and your team. Prefer to self-host? The self-hosted version runs inside Claude Code on macOS, Linux, or Windows (WSL) and takes two commands to set up."
+            "text": "Nothing to install. The hosted version runs in your browser once your access opens -- bring a workspace and your team. Prefer to self-host? The self-hosted version runs inside your own agentic harness -- Claude Code, Grok Build, Codex, or Devin CLI, on macOS, Linux, or Windows (WSL). Setup is two commands on Claude Code; the other harnesses install from this repository and each has its own setup guide."
           }
         },
         {
@@ -255,7 +302,7 @@ claude plugin install soleur@soleur-marketplace</code></pre>
           "name": "Does Soleur work on Windows, Linux, and macOS?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "The self-hosted version runs anywhere Claude Code runs -- Linux, macOS, and Windows via WSL. The hosted version will be accessible from any browser on any operating system."
+            "text": "The self-hosted version runs anywhere its harnesses run: Claude Code, Grok Build, Codex, and Devin CLI all support Linux, macOS, and Windows via WSL — install inside whichever one you already use. The hosted version will be accessible from any browser on any operating system."
           }
         },
         {
@@ -287,7 +334,7 @@ claude plugin install soleur@soleur-marketplace</code></pre>
           "name": "What is the difference between the hosted version and self-hosted?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": {{ ("Both versions ship the same agents and skills. The self-hosted version runs inside Claude Code on your machine -- full access to your own files. The hosted version (coming soon) adds a web dashboard, managed infrastructure, real-time agent orchestration, team collaboration, and email support. Both access the same " + stats.agents + " agents and " + stats.skills + " skills.") | jsonLdSafe | safe }}
+            "text": {{ ("Both versions ship the same agents and skills. The self-hosted version runs inside your own harness — Claude Code, Grok Build, Codex, or Devin CLI — with full access to your own files. The hosted version (coming soon) adds a web dashboard, managed infrastructure, real-time agent orchestration, team collaboration, and email support. Both access the same " + stats.agents + " agents and " + stats.skills + " skills.") | jsonLdSafe | safe }}
           }
         }
       ]
