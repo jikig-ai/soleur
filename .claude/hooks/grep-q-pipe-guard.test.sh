@@ -2056,6 +2056,7 @@ PRODUCER_JOIN=(
   '.github/scripts/test/fixtures-validate-infra-templates.sh | terraform | exempt | unverified reach probe: suite did not finish green here (cap or host), no matching piped call seen (1 non-test producers) (reach T1; t1:rc1/10s red:rc1/5s; hits 0)'
   '.github/scripts/test/test-mint-inngest-bootstrap-tag~.sh | gh | exempt | arm-drain all-arms-keyed: def 112 `body=$(cat)` at opener+29, after the arg parse; the earlier exits (FORBID 99, unmodelled flag 64, DELETE) are rows where no piped call may arrive (reach T2; t2:rc0/175s; hits 62 (stdin-flag))'
   'apps/cla-evidence/scripts/bootstrap-r2-probe.test.sh | doppler | drains | 1 | *'
+  'apps/web-platform/infra/cat-deploy-state.test.sh | docker | exempt | text-only derived site ci-deploy.sh is grep-pinned only (the SDK_BASH_SMOKE_STATE_FILE default-path assert); the docker mock serves docker inspect alone and no piped call reaches it'
   'apps/web-platform/infra/ci-deploy.test.sh | curl | exempt | text-only derived sites cloud-init-inngest.yml (its two printf-to-curl -K - pipes: the Better Stack and the Sentry phone-home emitters) are grep-pinned only; ci-deploy.sh:378 feeds --config - via < <(printf) not a pipe'
   'apps/web-platform/infra/ci-deploy.test.sh | docker | drains | 2 | --password-stdin'
   'apps/web-platform/infra/ci-deploy.test.sh | doppler | exempt | unverified reach probe: suite did not finish green here (cap or host), no matching piped call seen (1 non-test producers) (reach T1; t1:rc124/300s; hits 0 (stdin-flag))'

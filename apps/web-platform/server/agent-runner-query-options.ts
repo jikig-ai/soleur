@@ -37,8 +37,17 @@ import { agentSessionTmpDir } from "./agent-session-tmp";
 import { makeSandboxedSpawn, outerWrapEnabled } from "./agent-outer-wrap";
 import { resolveWorkspaceMode, type WorkspaceMode } from "./workspace-mode";
 import { assertTrustedPluginPath, getPluginPath } from "./plugin-path";
-import { warnSilentFallback } from "./observability";
+import { mirrorWarnWithDebounce, warnSilentFallback } from "./observability";
 import { buildAgentSandboxConfig } from "./agent-runner-sandbox-config";
+import {
+  checkSeccompAgreement,
+  isSameArtifactPath,
+  sandboxPostureOf,
+  SECCOMP_BASE_ARTIFACT,
+  SECCOMP_SELECTOR_ENV,
+  unixdenyArtifactPath,
+  usesUnixDenyArtifact,
+} from "./agent-sandbox-seccomp";
 import { createSandboxHook } from "./sandbox-hook";
 import { createContextQueriesHook } from "./context-queries-hook";
 import { createPhaseSurfaceHook } from "./phase-surface-hook";
@@ -128,6 +137,13 @@ export interface AgentQueryOptionsArgs {
    *    honors process-env proxy). `WebSearch` stays disallowed in Phase A.
    */
   webEgress?: { workspaceId: string; token: string; port: number };
+  /**
+   * #10455 (a) — the resolved runtime flag `agent-sandbox-unix-deny` (`resolveSandboxUnixDeny()`,
+   * default and fail-closed value OFF). With it ON, a session that has no egress at all is spawned
+   * with the AF_UNIX-deny seccomp artifact. Both runners resolve it once per query, just before this
+   * builder; an omitted value is OFF (today's posture).
+   */
+  sandboxUnixDeny?: boolean;
   systemPrompt: string;
   /** SDK chain step 5 — the canUseTool callback. Required. */
   // biome-ignore lint/suspicious/noExplicitAny: SDK CanUseTool is a typed callable; helper accepts the SDK's type
@@ -319,6 +335,9 @@ export function buildAgentQueryOptions(
     egressProxy: args.webEgress,
     // #10445: per-tenant CLI temp base; the sandbox config denies its shared root.
     claudeTmpDir: agentSessionTmpDir(args.workspaceId ?? path.basename(args.workspacePath)),
+    // #10455 (a): the resolved `agent-sandbox-unix-deny` flag (default OFF). The SAME value feeds the
+    // sandbox config below, and `checkSeccompAgreement` checks the pair before the query is built.
+    sandboxUnixDeny: args.sandboxUnixDeny,
   });
   const buildAgentEnvHome = agentEnv.HOME ?? "/home/soleur";
 
@@ -364,6 +383,7 @@ export function buildAgentQueryOptions(
     // startAgentSession never passes ghToken → its sandbox stays fully
     // closed (fail-closed, zero behavior change).
     sandbox: buildAgentSandboxConfig(args.workspacePath, {
+      sandboxUnixDeny: args.sandboxUnixDeny,
       allowGithubEgress: Boolean(args.ghToken),
       // ADR-113 — support persona runs read-only (allowWrite:[]) so a
       // cwd=pluginPath session cannot write into the shared platform plugin root.
@@ -496,6 +516,29 @@ export function buildAgentQueryOptions(
   if (args.maxBudgetUsd !== undefined) opts.maxBudgetUsd = args.maxBudgetUsd;
   if (args.abortController !== undefined) opts.abortController = args.abortController;
 
+  // #10455 (a): spawn-time agreement, FAIL-SAFE (ADR-075 addendum 2026-10-19). The selector in `env` and the
+  // posture recorded on `sandbox` were derived from the same arguments a few lines above. A disagreement
+  // is mirrored to Sentry and never thrown: a throw here would fail every tenant query start, and the
+  // weaker posture is today's base artifact. The only correction is TOWARD the base artifact: an
+  // unixdeny selector on a session that is not variant-eligible (e.g. an ambient incident-time
+  // SOLEUR_BWRAP_SECCOMP_BPF equal to the unixdeny path on an egress session, which would break the SDK's
+  // socat UNIX-CONNECT bridges). Never the other direction.
+  const disagreement = checkSeccompAgreement(opts.env, opts.sandbox);
+  if (disagreement) {
+    // Debounced: a persistent disagreement (an ambient override on every egress session) would otherwise emit one
+    // warning per query for every tenant. `global` is an in-process dedup token, never emitted.
+    mirrorWarnWithDebounce(
+      null,
+      { feature: "agent-sandbox", op: "seccomp-agreement", message: disagreement },
+      "global",
+      "agent-sandbox-seccomp-agreement",
+    );
+  }
+  const posture = sandboxPostureOf(opts.sandbox);
+  const variantEligible = posture !== undefined && usesUnixDenyArtifact(posture.hasEgress, posture.unixDenyFlag);
+  if (isSameArtifactPath(opts.env[SECCOMP_SELECTOR_ENV], unixdenyArtifactPath()) && !variantEligible) {
+    opts.env[SECCOMP_SELECTOR_ENV] = SECCOMP_BASE_ARTIFACT;
+  }
   return opts;
 }
 

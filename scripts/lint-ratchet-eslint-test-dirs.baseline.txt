@@ -1,8 +1,4 @@
-# lint-ratchet baseline for scope 'eslint-test-dirs' (PR3a of #10331; design in ADR-290).
-# Shrink-only: this file always equals the live census, and per (path, rule) it may never
-# hold more entries than the merge base. Entry: path|rule|anchor|n, where anchor is a 12-hex
-# fingerprint of the normalised source line (the line itself is never stored).
+# lint-ratchet scope 'eslint-test-dirs' is a zero-findings gate (design in ADR-290): fix findings, never baseline them.
 # List the live findings:  python3 plugins/soleur/scripts/lint-ratchet.py eslint-test-dirs --list
 # After fixing findings:   python3 plugins/soleur/scripts/lint-ratchet.py eslint-test-dirs --update  (it refuses to add)
 # After a merge conflict, take the base branch's copy of this file and re-run --update.
-# Drawdown tracking: #10433

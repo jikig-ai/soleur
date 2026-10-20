@@ -94,12 +94,21 @@ vi.mock("@/server/agent-runner", () => ({
   patchWorkspacePermissions: mockPatchWorkspacePermissions,
 }));
 
+// #10455 (a): these suites replace both builders with mocks, so the spawn-time seccomp agreement
+// assertion (which reads the posture the REAL buildAgentSandboxConfig records) is a no-op here. The
+// real pairing is pinned by test/agent-sandbox-seccomp-selector.test.ts.
+vi.mock("@/server/agent-sandbox-seccomp", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/agent-sandbox-seccomp")>()),
+  checkSeccompAgreement: vi.fn(),
+}));
 vi.mock("@/server/agent-runner-sandbox-config", () => ({
   buildAgentSandboxConfig: mockBuildAgentSandboxConfig,
 }));
 
-vi.mock("@/server/agent-env", () => ({
+vi.mock("@/server/agent-env", async (importOriginal) => ({
   buildAgentEnv: mockBuildAgentEnv,
+  // The egress predicate is the real one (the dispatcher skips the flag read for an egress session with it).
+  sessionHasEgress: (await importOriginal<typeof import("@/server/agent-env")>()).sessionHasEgress,
   // feat-open-web-egress (#9534): the sandbox-config deny census derives
   // from this set at module load — keep it non-empty.
   ALLOWED_SERVICE_ENV_VARS: new Set(["GITHUB_TOKEN", "STRIPE_SECRET_KEY"]),
