@@ -62,7 +62,18 @@ export interface TriggerHeadlessSyncSeams {
     userId: string,
     opts: { onErrorReturn: boolean },
   ) => Promise<boolean>;
+  /** #8211 quiet-window: true while the kill-switch refuses NEW agent sessions.
+   *  Default reads the real flag through a dynamic import so the flag SDK graph
+   *  stays out of the `/api/repo/setup` static import graph. */
+  newAgentSessionsRefused?: () => Promise<boolean>;
 }
+
+/** What `triggerHeadlessSync` did. "skipped-*" are NOT successes. */
+export type TriggerHeadlessSyncOutcome =
+  | "started"
+  | "skipped-keyless"
+  | "skipped-quiet-window"
+  | "failed";
 
 const HEADLESS_SYNC_PROMPT = "/soleur:sync --headless";
 
@@ -107,7 +118,36 @@ export async function triggerHeadlessSync(
   userId: string,
   repoUrl: string,
   seams: TriggerHeadlessSyncSeams,
-): Promise<void> {
+): Promise<TriggerHeadlessSyncOutcome> {
+  // #8211 quiet-window (CTO ruling: refuse, do not exempt). The sync agent acts on
+  // the user's workspace tree, which is exactly what the window protects, and it is
+  // a convenience. FIRST statement: no BYOK read, no conversation row (an orphan
+  // "active" conversation behind the ready screen is what the header warns about),
+  // no repo_status change. Info breadcrumb with a hashed id; no Sentry, no error
+  // frame to the user. The startAgentSession gate stays as the race backstop.
+  const refused =
+    seams.newAgentSessionsRefused ??
+    (async () => (await import("@/server/quiet-window")).newAgentSessionsRefused());
+  // Fail OPEN: a rejected dynamic import or a throwing flag read must never reject the helper (the
+  // route's catch would mark repo_status='error' after a successful clone). Allowed means proceed.
+  let isRefused = false;
+  try {
+    isRefused = await refused();
+  } catch {
+    isRefused = false;
+  }
+  if (isRefused) {
+    logger.info(
+      {
+        feature: "quiet-window",
+        op: "auto-sync-skipped",
+        userIdHash: hashUserIdValue(userId),
+      },
+      "quiet-window: skipped the auto-sync (new-sessions-paused)",
+    );
+    return "skipped-quiet-window";
+  }
+
   const serviceClient = seams.serviceClient ?? createServiceClient();
   const resolveWorkspaceId = seams.resolveWorkspaceId ?? resolveCurrentWorkspaceId;
   const userHasEffectiveByokKey =
@@ -121,7 +161,7 @@ export async function triggerHeadlessSync(
   const hasEffectiveKey = await userHasEffectiveByokKey(userId, {
     onErrorReturn: true,
   });
-  if (!hasEffectiveKey) return;
+  if (!hasEffectiveKey) return "skipped-keyless";
 
   // --- Conversation INSERT: ONCE, OUTSIDE the retry boundary (P0-3) ---
   const conversationId = crypto.randomUUID();
@@ -149,7 +189,7 @@ export async function triggerHeadlessSync(
         extra: { userId, repoUrl },
       });
     });
-    return;
+    return "failed";
   }
 
   // --- Retry wraps ONLY startAgentSession, reusing the SAME conversationId ---
@@ -163,7 +203,7 @@ export async function triggerHeadlessSync(
         undefined,
         HEADLESS_SYNC_PROMPT,
       );
-      return; // success
+      return "started"; // success
     } catch (err) {
       lastErr = err;
       // Only the lease/auth-unavailable classes are retried; everything else
@@ -191,4 +231,5 @@ export async function triggerHeadlessSync(
       extra: { userId, repoUrl },
     });
   });
+  return "failed";
 }
