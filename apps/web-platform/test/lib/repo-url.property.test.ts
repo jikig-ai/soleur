@@ -105,6 +105,43 @@ describe("normalizeRepoUrl — regression fixtures", () => {
   it("space before a stripped slash suffix leaves no trailing whitespace", () => {
     expect(normalizeRepoUrl("http://a.aa /")).toBe("http://a.aa");
   });
+
+  // regression fixture: fast-check seed -1029694662 path 68:0:0:0:0:0:1:0:0
+  // Counterexample " http://a.aa/..git/" (merge_group run 39400877769): the
+  // `.git` strip leaves a `.` dot-segment (`http://a.aa/.`) which the NEXT
+  // call's URL parse resolves away (`http://a.aa`), so one pass was not a
+  // fixpoint. SUT fix: run the pass until the output stops changing.
+  it("a .git strip that exposes a dot-segment is idempotent", () => {
+    const once = normalizeRepoUrl(" http://a.aa/..git/");
+    expect(once).toBe("http://a.aa");
+    expect(normalizeRepoUrl(once)).toBe(once);
+  });
+
+  // pinned example (scratch fuzz 2026-10-20, no fast-check seed): shapes the
+  // same convergence loop must reach; each needs more than 3 passes or a
+  // different mechanism, so a too-small fixed pass cap fails them.
+  it("a deep chain of dot-segment-exposing strips converges", () => {
+    const once = normalizeRepoUrl("http://a.aa/" + "..git/".repeat(5));
+    expect(once).toBe("http://a.aa");
+    expect(normalizeRepoUrl(once)).toBe(once);
+  });
+
+  // pinned example (scratch fuzz 2026-10-20, no fast-check seed): an
+  // opaque-path scheme gains an authority on re-parse (`xx:B` -> `xx://b`).
+  it("an opaque-path input converges to its re-parsed form", () => {
+    const once = normalizeRepoUrl("xx:B");
+    expect(once).toBe("xx://b");
+    expect(normalizeRepoUrl(once)).toBe(once);
+  });
+
+  // pinned example (scratch fuzz 2026-10-20, no fast-check seed): each
+  // strip exposes one more whitespace-shielded `/`, so peeling is linear in
+  // the input length.
+  it("a long whitespace/slash peel chain converges", () => {
+    const once = normalizeRepoUrl("x" + " /".repeat(8));
+    expect(once).toBe("x");
+    expect(normalizeRepoUrl(once)).toBe(once);
+  });
 });
 
 // Negative control (anti-vacuity, AC6): the harness must be able to fail.

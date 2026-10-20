@@ -64,3 +64,11 @@ re-trimming after the strips (`lib/repo-url.ts` step 5); the shrunk
 counterexamples are pinned as regression fixtures. The same shape exists in
 the SQL twin (`031_normalize_repo_url.sql`) and is tracked as a follow-up —
 the TS↔SQL parity boundary only covers URL-parseable inputs.
+
+## Second yield
+
+A later random seed (merge_group run 39400877769, 2026-10-20) found
+`normalizeRepoUrl(" http://a.aa/..git/")` returning `http://a.aa/.`: the strip
+exposed a dot-segment the next call's `new URL()` resolves away. Fixed by
+running the pass to a fixpoint, bounded by input length (`lib/repo-url.ts`
+step 6); the counterexample is pinned as a regression fixture.
