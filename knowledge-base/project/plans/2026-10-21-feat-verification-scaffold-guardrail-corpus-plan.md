@@ -709,45 +709,45 @@ each bound to an implementation site (paper-resolution lint — no orphan FRs):
 
 ## Acceptance Criteria
 
-- [ ] AC1: `references/guardrail-audit.md` classifies EVERY `.claude/hooks/*.sh`
+- [x] AC1: `references/guardrail-audit.md` classifies EVERY `.claude/hooks/*.sh`
   non-test file + `scripts/lint-*` (excluding `.test.sh`/`.baseline.txt`/`.highwater`)
   as `generic` / `generic-after-extraction` / `soleur-coupled` with a one-line
   rationale; `manifest.test.sh` drives the corpus from `git ls-files` so a new
   member missing a classification reds CI.
-- [ ] AC2: `bash verification-scaffold.sh --target <fixture> --headless` installs
+- [x] AC2: `bash verification-scaffold.sh --target <fixture> --headless` installs
   the v1 set (secret-scan, commit-on-main, block-stash, orphan-test): emitted
   files present at fixture-relative paths, settings.json hook entries
   registered, `verification-gates.yml` at repo root.
-- [ ] AC3: On the default (advisory) install, every emitted CI job carries
+- [x] AC3: On the default (advisory) install, every emitted CI job carries
   `continue-on-error: true` and every emitted hook warns/asks instead of
   denying; `--mode enforce` produces deny-decisions; emitted README documents
   the promotion step per artifact.
-- [ ] AC4: Bite-proof on the fixture repo: each installed guard passes clean →
+- [x] AC4: Bite-proof on the fixture repo: each installed guard passes clean →
   fails on an injected violation → passes after revert, per-guard, with logs.
-- [ ] AC5: Non-destructive: pre-existing `.gitleaks.toml`, settings.json,
+- [x] AC5: Non-destructive: pre-existing `.gitleaks.toml`, settings.json,
   workflow, or hook file causes refusal with zero writes; second full run
   refuses; `--uninstall <guard>` removes only that guard's artifacts.
-- [ ] AC6: Self-cleanup: a TERM/failure after first write but before bite-proof
+- [x] AC6: Self-cleanup: a TERM/failure after first write but before bite-proof
   completion leaves `git status` identical to pre-install.
-- [ ] AC7: settings.json merge: absent file created; existing file preserves
+- [x] AC7: settings.json merge: absent file created; existing file preserves
   unrelated entries; malformed JSON refused pre-write; re-run dedupes (no
   double hook entries).
-- [ ] AC8: Emitted-content hygiene: zero `SOLEUR_`/`knowledge-base/`/
+- [x] AC8: Emitted-content hygiene: zero `SOLEUR_`/`knowledge-base/`/
   `plugins/soleur` references in emitted runtime text; zero network egress
   tokens (`curl|wget|https?://`) outside comments in emitted artifacts.
-- [ ] AC9: Registrations green: `components.test.ts` (budget bump), cursor stub
+- [x] AC9: Registrations green: `components.test.ts` (budget bump), cursor stub
   exists (`cursor-name-map.test.ts`), skills.js entry, `suite-shard-legs.tsv`
   regenerated (new suites have legs), README skills count = 104.
-- [ ] AC10: `ADR-295-*.md` (or renumbered ordinal) exists; `model.c4` +
+- [x] AC10: `ADR-295-*.md` (or renumbered ordinal) exists; `model.c4` +
   `views.c4` carry `verificationscaffold`; `c4-code-syntax.test.ts` +
   `c4-render.test.ts` pass.
-- [ ] AC11: `manifest.test.sh` one-hunk parity: `precommit-guard.sh.template`
+- [x] AC11: `manifest.test.sh` one-hunk parity: `precommit-guard.sh.template`
   renders byte-identical to `plugins/soleur/scripts/precommit-guard.sh` when
   the `@DEFAULT_BRANCHES@` placeholder substitutes `main|master` (and
   `wrapper-boundary` pair is raw `cmp`), so the canonical source and the emit
   cannot drift silently.
 - [ ] AC12: PR carries `semver:minor` label + `## Changelog` section
-  (`plugins/soleur/` touched).
+  (`plugins/soleur/` touched). *(review-phase note 2026-10-21: pending — ship applies the label/changelog at ship time)*
 
 ## Domain Review
 
