@@ -15,7 +15,7 @@ Issue: #10741 (closes). Tracker under verification: #8743.
 
 ## Phase 2 — The fix (GREEN)
 
-- 2.1 `scripts/followthroughs/web2-plugin-seed-8743.sh` ABSENCE_SQL: `toDateTime('${first_marker_dt}')` → `toDateTime64('${first_marker_dt}', 6)`.
+- 2.1 `scripts/followthroughs/web2-plugin-seed-8743.sh` ABSENCE_SQL: `toDateTime('${first_marker_dt}')` → `toDateTime64('${first_marker_dt}', 6, 'UTC')`.
 - 2.2 Update the adjacent comment (probe:221-223) to name the `DateTime64` fractional rendering (e.g. `minIf` over `DateTime64` renders `…SS.ffffff`; `toDateTime64` keeps the sub-second floor).
 - 2.3 Re-run `bash scripts/followthroughs/web2-plugin-seed-8743.test.sh` — all 19 assertions pass, exit 0.
 

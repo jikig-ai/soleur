@@ -54,7 +54,7 @@ No stale premises. This is a fix plan, not a build plan — the cited artifact e
 
 | Proposed mechanism | Property | Already covered by? | Verdict |
 |---|---|---|---|
-| `toDateTime64('${first_marker_dt}', 6)` in `ABSENCE_SQL` | P1, P2 | Nothing on `origin/main` — the code IS the mechanism | KEEP (issue's named fix) |
+| `toDateTime64('${first_marker_dt}', 6, 'UTC')` in `ABSENCE_SQL` | P1, P2 | Nothing on `origin/main` — the code IS the mechanism | KEEP (issue's named fix) |
 | Bash fraction-strip `first_marker_dt="${first_marker_dt%%.*}"` + keep `toDateTime` | P1 only | — | CUT — floors the boundary to the second; a same-second pre-marker `fchmodat2` row grades post-marker → false FAIL on a P1 tracker (violates P2) |
 | `parseDateTime64BestEffort('${first_marker_dt}', …, 'UTC')` | P1, P2 | Precedent exists (`registry-clientip-alert-7530.sh:473`, `inngest-provision-rehearsal-capture.sh:211`) | CUT as prescribed fix — BestEffort is looser than needed for a known-shape literal; kept as recorded alternative |
 | Fractional-marker fixture + stub-side ClickHouse strictness emulation in `web2-plugin-seed-8743.test.sh` | P3 | Existing stub answers every query shape (a looser-than-production stub — the 2026-09-21 learning class) | KEEP |
@@ -97,7 +97,7 @@ Mechanical grep `toDateTime|toDateTime64|parseDateTime` over `scripts/followthro
 
 ## Files to Edit
 
-- `scripts/followthroughs/web2-plugin-seed-8743.sh` — line 230: `toDateTime('${first_marker_dt}')` → `toDateTime64('${first_marker_dt}', 6)`; adjacent comment (221-223) updated to name the fractional `DateTime64` rendering.
+- `scripts/followthroughs/web2-plugin-seed-8743.sh` — line 230: `toDateTime('${first_marker_dt}')` → `toDateTime64('${first_marker_dt}', 6, 'UTC')`; adjacent comment (221-223) updated to name the fractional `DateTime64` rendering.
 - `scripts/followthroughs/web2-plugin-seed-8743.test.sh` — stub arm emulating ClickHouse's Code-6 rejection; fractional-marker case; SQL-shape pin on the calls log; anti-vacuity floor 17→19.
 
 ## Files to Create

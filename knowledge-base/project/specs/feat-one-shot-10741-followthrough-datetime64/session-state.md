@@ -15,6 +15,9 @@
 - lane: cross-domain (fail-closed, no spec.md); brand_survival_threshold: none.
 - deepen-plan sequential fallback (no Task fan-out); halt gates 4.4-4.12 all green.
 
+### Rulings
+- cto_spawns=1 (batched, 3 rows)
+
 ### Components Invoked
 - skills/plan/SKILL.md, skills/deepen-plan/SKILL.md (full runs)
 - plan-issue-templates.md, plan-scope-check.md, plan-sharp-edges.md
