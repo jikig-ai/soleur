@@ -385,6 +385,86 @@ for the two-path walk (fail-again → fix path; pass-on-retry → quarantine).
 None — `gh issue list --label code-review --state open` (200 cap) searched
 against all four planned paths; zero bodies reference them.
 
+## Observability
+
+The shipped surface is agent-facing prose plus a reference doc;
+"observability" is whether the landed convention stays mechanically wired —
+the references-reachability census and the body-budget lint are the
+enforcement layer and this block declares the probe.
+
+```yaml
+liveness_signal:
+  what: "`test-fix-loop/references/determinism-checklist.md` exists and is named (markdown link) from `test-fix-loop/SKILL.md`; `test-design-reviewer.md` and `qa/SKILL.md` both cite it"
+  cadence: "per-PR: components.test.ts references-reachability census + lint-skill-body-budget.py on plugin diffs"
+  alert_target: "CI check failure (plugin test shard / lint)"
+  configured_in: "plugins/soleur/test/components.test.ts + scripts/lint-skill-body-budget.py (pre-existing — no new guard added by this diff)"
+error_reporting:
+  destination: "CI job log — census failure names the orphaned reference path; budget lint names the over-ceiling file"
+  fail_loud: "yes — orphan references and budget overruns are suite failures, not warnings"
+failure_modes:
+  - mode: "reference file orphaned (a later diff deletes the SKILL.md pointer)"
+    detection: "components.test.ts references-reachability census"
+    alert_route: "CI red on the next diff touching the plugin shard"
+  - mode: "qa/SKILL.md edit pushes the body over its 37,000 B ceiling"
+    detection: "scripts/lint-skill-body-budget.py --base <merge-base>"
+    alert_route: "CI red"
+  - mode: "a consumer pointer rots (skill path renamed)"
+    detection: "AC4/AC5 battery — basename literal present in SKILL.md, test-design-reviewer.md, qa/SKILL.md"
+    alert_route: "review-time AC check"
+logs:
+  where: "CI job log (suite assertion lines)"
+  retention: "GitHub Actions retention"
+discoverability_test:
+  command: "grep -q 'determinism-checklist.md' plugins/soleur/skills/test-fix-loop/SKILL.md && grep -q 'determinism-checklist.md' plugins/soleur/agents/engineering/review/test-design-reviewer.md && grep -q 'determinism-checklist.md' plugins/soleur/skills/qa/SKILL.md && echo checklist-wired"
+  expected_output: "checklist-wired"
+```
+
+## Guard Contract
+
+This plan ships no new guard; its diff is made safe by two **pre-existing**
+enforcement surfaces plus the AC battery. Each is recorded because the plan's
+correctness claims stand on them.
+
+### Guard 1 — References-reachability census (`plugins/soleur/test/components.test.ts`)
+
+**Property.** Every `references/*.md` inside a skill directory is named (by
+basename substring) from another file in the same skill directory — the new
+`test-fix-loop/references/determinism-checklist.md` can never ship orphaned.
+
+**Assembly.** The suite walks every skill directory's `references/` (depth
+< 2) and asserts each basename appears in a same-skill sibling file — a
+census over the live tree, not a pinned name list. `test-fix-loop/` gains
+its first `references/` member via this diff; the
+`[determinism-checklist.md](./references/determinism-checklist.md)` link in
+SKILL.md is the naming surface.
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|----------|----------|
+| 1 | Create `references/determinism-checklist.md` with no SKILL.md link | RED — census reports the orphan reference |
+| 2 | Rename the file so the basename no longer matches the link text | RED — census reports the orphan |
+| 3 | Add a second `references/*.md` later with no naming surface | RED — same census, second member |
+| 4 | Point the link at `./references/determinism-checklist.md` using backticks instead of a markdown link | RED — no-backtick convention test (`components.test.ts`) |
+
+### Guard 2 — SKILL body-budget lint (`scripts/lint-skill-body-budget.py` + `plugins/soleur/test/skill-body-budget.json`)
+
+**Property.** `qa/SKILL.md` body stays ≤ 37,000 B — the pointer must fit
+inside the ~60 B headroom or carry a same-bullet trim.
+
+**Assembly.** The lint compares the working-tree byte count of every
+ceiling-keyed lifecycle SKILL.md against the merge-base-anchored ceilings
+table; `qa` is a ceiling key (36,940 B today). `test-fix-loop` is NOT keyed —
+edits there are unbounded by this guard.
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|----------|----------|
+| 1 | `qa` pointer added as a new paragraph, net growth > 60 B | RED — body exceeds ceiling |
+| 2 | Ceiling table hand-edited upward to fit the edit | RED at review — the table ratchets down only; a raise is a separate reviewed PR |
+| 3 | Pointer lands in `test-design-reviewer.md` but `qa/SKILL.md` is skipped entirely | RED at review — AC4 unmet; consumer wiring incomplete |
+
 ## Scope Check
 
 ### Ask Mapping
@@ -555,3 +635,75 @@ gates, not runtime behavior.
 - Learnings: see `## Research Insights` §Applicable institutional learnings.
 - Source: Addy Osmani, *Agentic Verification*
   (https://addyo.substack.com/p/agentic-verification).
+
+## Enhancement Summary (deepen-plan, 2026-10-21)
+
+### Gate results
+
+- **§4.4 Precedent-diff:** pattern-bound behaviors are the `flaky`-label
+  create-then-add (precedent: `reproduce-bug/SKILL.md` Phase 8's
+  `action-required` label idiom — same `gh label create … || true` +
+  `--add-label` shape) and the file/dedup/auto-close tracker protocol
+  (precedent: `.github/workflows/scheduled-integration-suites.yml`). Both
+  cited inline; no novel pattern introduced. No scheduled job added — the
+  cron-pattern check is N/A.
+- **§4.45 realism passes:** verify-the-negative — every `never`/`NOT` claim
+  in the plan constrains the artifact being authored (the step must not
+  prescribe test-file edits; the label step must not rewrite an existing
+  label); none asserts a fact about existing code that a grep could
+  contradict. Post-edit self-audit: no symbols dropped; no stale references.
+- **§4.5 Network-outage:** trigger token `timeout` matched once — inside a
+  learnings citation in Research Insights ("not a timeout bump"), not a
+  connectivity symptom the plan addresses. Evaluated; not applicable.
+- **§4.55 Downtime & Cutover:** no infra/DB/deploy operation → skip.
+- **§4.6 User-Brand Impact:** PASS — section present, threshold `none`, no
+  sensitive-path files touched (SENSITIVE_PATH_RE: zero matches on all four
+  planned paths).
+- **§4.7 Observability:** section added this pass — shipped `plugins/*/skills/`
+  markdown does not meet the pure-docs exemption; 5-field block present,
+  `discoverability_test.command` is a `grep`-led probe (<15 s, allowlisted
+  verb), `expected_output` is the literal `checklist-wired`. PASS.
+- **§4.8 PAT:** zero matches → PASS.
+- **§4.9 UI-wireframe:** no UI-surface files → skip.
+- **§4.10 Encryption Posture:** no persistent store / new connection → skip.
+- **§4.11 Guard Contract:** section added this pass; `lint-guard-contract.py`
+  scans it clean (2 guard entries, ≥3 matrix rows each). PASS.
+- **§4.12 Scope Check:** verified mechanically — exactly one unfenced
+  `## Scope Check`, zero unmapped asks, 3 `inferred` rows all carrying
+  justifications, no `status: BLOCKED`. PASS.
+
+### Deepen-pass agents/lenses (sequential in-process — Devin harness)
+
+- **spec-flow-analyzer (Phase 3 of plan + deepen re-walk):** surfaced and
+  folded eight edge cases into the quarantine step — unfilterable-runner
+  fallback (suite-level re-run), errored re-run is not a pass, build-error
+  carve-out, KILLED/rc-3 ordering ahead of screening, per-test partial
+  quarantine, no fix-round tally consumption, load-only-flake
+  under-detection honesty (NON_CONVERGENCE recommendation arm), open-issue
+  dedup before filing.
+- **code-simplicity:** every proposed mechanism maps to a Property-List
+  entry or carries a written justification; recommended keeping the
+  quarantine set run-scoped rather than inventing re-entry heuristics —
+  applied (re-failure is noted, not re-entered).
+- **kieran (correctness/convention):** flagged test-name keying — same
+  `it()` title in two files must be distinct entries — applied
+  (file + test name key).
+- **dhh:** no overengineering findings — one reference, three pointer/logic
+  edits, no new machinery beyond what the issue scoped.
+- **cto (devex):** assessed in-process under plan Phase 2.5 — recorded in
+  `## Domain Review`; no capability gaps, no architectural decision (no ADR).
+- **plan-review panel (dhh/kieran/simplicity + cto named-panel):** ran at
+  plan time with all findings mechanical → applied inline.
+
+### Key improvements folded in
+
+- Detection positioned as the final sub-step of §1 Parse Failures so §2's
+  delta/Circular bookkeeping reads the post-screen set (advisor-pass
+  finding — placement ambiguity closed).
+- Pathological all-flake-suite ceiling stated: converges to the iteration
+  cap with the quarantined set enumerated — an honest bound, not a hang.
+- `bun test -t`/`--test-name-pattern` verified against bun 1.4.3 `--help`
+  (CLI-verification gate) — `--filter` would have been fabricated.
+- `## Observability` + `## Guard Contract` sections added for the
+  deepen-plan halt gates, mirroring the sibling-plan shape (#10727/#10735).
+- Flake screening keys on file + test name (kieran mechanical finding).
