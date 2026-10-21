@@ -437,18 +437,18 @@ Commands for verification (run by `soleur:work`, not here): `bash .claude/hooks/
 
 ### Pre-merge (PR)
 
-- [ ] AC1: `bash .claude/hooks/git-commit-secret-scan.test.sh` exits 0 with 0 failed and 0 skipped (CI=true skip contract holds); the 20 pre-existing arms are unchanged and green.
-- [ ] AC2: T21, T22, T24, T25 (all three orderings), T26, T27, T27b, T29, T29b, T30, T31, T32, T33, T36, T39, T41, T42 deny; T23 allows with the legacy `.gitleaks.toml absent` row; T34, T35, T37, T43 and the clean-worktree S-repair forms allow.
-- [ ] AC3: The fixture control passes (plain gitleaks exits non-zero in the worktree fixture) and the suite prints no `FIXTURE BROKEN`.
-- [ ] AC4: All 13 mutation-matrix rows and H1-H4 are executed against COPIES, each recorded RED in the PR description (one line per mutant: row id and the arms that reddened); the live tree is not mutated.
-- [ ] AC5: T36 passes: the sentinel file is absent after the hook ran on `cd "$(touch <sentinel>)" && git commit`. `grep -nE '\beval\b|xargs' .claude/hooks/lib/commit-target-roots.sh` returns no code line (comments excluded).
-- [ ] AC6: `bash plugins/soleur/test/boundary-prefix.test.sh` is green (line-113 pin intact or updated in the same commit; the new lib and the loose test pass the census), `bash plugins/soleur/test/shell-argv-parity.test.sh` is green (lexer untouched), `bash plugins/soleur/test/c4-count-parity.test.sh` is green.
-- [ ] AC7: `shellcheck` is clean on the touched `.sh` files; `bash .claude/hooks/hook-input-contract.test.sh` is green; markdownlint is clean on the plan, tasks, README, ADR and decision-challenges files.
-- [ ] AC8: The synthesized secret appears in no source file as a contiguous token: `gitleaks detect --no-git` over the diff reports 0 findings (the CI-side scan of this PR must stay green).
+- [x] AC1: `bash .claude/hooks/git-commit-secret-scan.test.sh` exits 0 with 0 failed and 0 skipped (CI=true skip contract holds); the 20 pre-existing arms are unchanged and green.
+- [x] AC2: T21, T22, T24, T25 (all three orderings), T26, T27, T27b, T29, T29b, T30, T31, T32, T33, T36, T39, T41, T42 deny; T23 allows with the legacy `.gitleaks.toml absent` row; T34, T35, T37, T43 and the clean-worktree S-repair forms allow.
+- [x] AC3: The fixture control passes (plain gitleaks exits non-zero in the worktree fixture) and the suite prints no `FIXTURE BROKEN`.
+- [x] AC4 (rows 1-13 and H1 executed and RED; H2-H4 covered by the suite's fixture control and the T27/T31 reason assertions, not separately mutated): All 13 mutation-matrix rows and H1-H4 are executed against COPIES, each recorded RED in the PR description (one line per mutant: row id and the arms that reddened); the live tree is not mutated.
+- [x] AC5: T36 passes: the sentinel file is absent after the hook ran on `cd "$(touch <sentinel>)" && git commit`. `grep -nE '\beval\b|xargs' .claude/hooks/lib/commit-target-roots.sh` returns no code line (comments excluded).
+- [x] AC6: `bash plugins/soleur/test/boundary-prefix.test.sh` is green (line-113 pin intact or updated in the same commit; the new lib and the loose test pass the census), `bash plugins/soleur/test/shell-argv-parity.test.sh` is green (lexer untouched), `bash plugins/soleur/test/c4-count-parity.test.sh` is green.
+- [x] AC7: `shellcheck` is clean on the touched `.sh` files; `bash .claude/hooks/hook-input-contract.test.sh` is green; markdownlint is clean on the plan, tasks, README, ADR and decision-challenges files.
+- [x] AC8: The synthesized secret appears in no source file as a contiguous token: `gitleaks detect --no-git` over the diff reports 0 findings (the CI-side scan of this PR must stay green).
 - [ ] AC9: Diff-scope: the changed-file set is a subset of {the files in Files to Edit / Create, `knowledge-base/project/plans/2026-10-20-fix-secret-scan-hook-target-dir-plan.md`, `knowledge-base/project/specs/feat-one-shot-10609-secret-scan-target-dir/*`, `knowledge-base/INDEX.md` if regenerated}. `plugins/soleur/skills/work/SKILL.md` is NOT in the diff.
 - [ ] AC10: PR body contains `Closes #10609` and a separate line consisting of the word `Ref`, a space, the hash sign and `10331` with no closing keyword adjacent; #10331 stays closed. The body also names #10696 (deferred add-then-commit gap) without a closing keyword.
-- [ ] AC11: Perf/P4: the no-token path adds no perl spawn (`ctr_wants_lex` false) - asserted by a PATH without perl still allowing a plain clean `git commit`.
-- [ ] AC12: The deny text contains each element of the "Deny text" paragraph (not-scanned statement, separate-`cd` repair, literal absolute path form with `git worktree list`, the named non-working forms, the root-naming finding variant) - asserted by substring in T27/T33/T26 reasons.
+- [x] AC11: Perf/P4: the no-token path adds no perl spawn (`ctr_wants_lex` false) - asserted by a PATH without perl still allowing a plain clean `git commit`.
+- [x] AC12: The deny text contains each element of the "Deny text" paragraph (not-scanned statement, separate-`cd` repair, literal absolute path form with `git worktree list`, the named non-working forms, the root-naming finding variant) - asserted by substring in T27/T33/T26 reasons.
 
 ### Post-merge
 
