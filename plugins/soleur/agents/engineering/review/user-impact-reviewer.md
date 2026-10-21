@@ -67,4 +67,4 @@ You are the only reviewer that asks: *"If this lands as written, what is the wor
 - AGENTS.md rule: `hr-weigh-every-decision-against-target-user-impact`
 - Triggering incident: #2887 (dev/prd Supabase config collapse)
 - Workflow gate definition: #2888
-- Plan template: `plugins/soleur/skills/plan/references/plan-issue-templates.md` (`## User-Brand Impact` section)
+- Plan template: `${CLAUDE_PLUGIN_ROOT}/skills/plan/references/plan-issue-templates.md` (`## User-Brand Impact` section)

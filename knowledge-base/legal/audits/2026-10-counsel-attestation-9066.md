@@ -9,7 +9,7 @@ signed_off_at: 2026-10-09
 signed_off_by: "soleur:legal:clo (v1 internal attestation authority); operator retains optional veto"
 disposition: DISCHARGED
 scope: "the wording in PR #9839 only, subject to condition C1 below. NOT a finding that the Art. 17 residue is gone, bounded or measured."
-re_evaluation_triggers: "(1) 2026-10-22 passes with hcloud_volume.git_data present (ledger expires_on; re-opens ADR-239, the ledger exception and the CLO before 2026-10-23; date not extended quietly); (2) 2026-10-24 CLO re-ruling on DPD §10.3(b) (issue trigger: the fix and the served-store purge slip); inputs are wipe, purge and flip state; (3) a count or measurement of the residue, or of Hetzner snapshot retention; (4) the .gc-cursor payload fix lands or is declined by the owner; (5) first arms-length user, EEA-out subject, or regulated-industry subject (external counsel)"
+re_evaluation_triggers: "(1) 2026-10-22 passes with hcloud_volume.git_data present (ledger expires_on; re-opens ADR-239, the ledger exception and the CLO before 2026-10-23; date not extended quietly; superseded 2026-10-19 (#6897) as to the 2026-10-22 date and the derived 'before 2026-10-23': see ADR-239 Amendment 2026-10-12, the outer date is 2026-11-12); (2) 2026-10-24 CLO re-ruling on DPD §10.3(b) (issue trigger: the fix and the served-store purge slip); inputs are wipe, purge and flip state; (3) a count or measurement of the residue, or of Hetzner snapshot retention; (4) the .gc-cursor payload fix lands or is declined by the owner; (5) first arms-length user, EEA-out subject, or regulated-industry subject (external counsel)"
 supersedes: "the 2026-10-09 first attestation of this file (blanket DISCHARGED, no wording change), withdrawn after the 11-seat review"
 ---
 
@@ -19,7 +19,7 @@ Draft material; v1 internal sign-off, not external counsel review. This PR chang
 
 ## What changed since the first attestation
 
-Withdrawn: "the running host still serves the pre-#9226 wrappers". `git_data_host_replace` ran 2026-10-08 (run 37846545572, head d0b5d2e35b, contains #9226); read from the run, not from the host. Added: the plaintext-volume residue comes from erasures between host birth (2026-09-14) and the plaintext-serving host's destruction on 2026-09-24; files written on the LUKS-served store between the first LUKS-serving host (2026-09-25) and the 2026-10-08 replace are a separate limb removed only by the unrun freeze-window purge; existence of both is unmeasured (hedged "may"). "no later than 2026-10-22" is now a target (wipe not implemented on main). A second id-bearing file, `.gc-cursor`, is disclosed and unfixed.
+Withdrawn: "the running host still serves the pre-#9226 wrappers". `git_data_host_replace` ran 2026-10-08 (run 37846545572, head d0b5d2e35b, contains #9226); read from the run, not from the host. Added: the plaintext-volume residue comes from erasures between host birth (2026-09-14) and the plaintext-serving host's destruction on 2026-09-24; files written on the LUKS-served store between the first LUKS-serving host (2026-09-25) and the 2026-10-08 replace are a separate limb removed only by the unrun freeze-window purge; existence of both is unmeasured (hedged "may"). [Superseded 2026-10-20 (#10138), as to "unrun": the freeze step of run 39253824891 (2026-10-19) ran the legacy-lock purge (verdict ok); the count is not in the public log; see the Art. 30 register PA-36 Status row.] "no later than 2026-10-22" is now a target (wipe not implemented on main). [Superseded 2026-10-19 (#6897), as to "no later than 2026-10-22": see ADR-239 Amendment 2026-10-12; the outer date is 2026-11-12.] A second id-bearing file, `.gc-cursor`, is disclosed and unfixed.
 
 ## Per-artifact verdicts
 
@@ -47,6 +47,7 @@ Applied: C1, E1, E2 and E3 were applied in the review follow-up commit (the regi
 2. `.gc-cursor` limb: unfixed; needs a hash-bound payload change (DC-4); tracked on #9066.
 3. Existence of the residue: unmeasured on both limbs; Hetzner snapshot retention unmeasured.
 4. The DL-2 wipe (and Hetzner volume delete evidence): not implemented; 2026-10-22 is a target.
+   > **Superseded 2026-10-19 (#6897), as to "2026-10-22 is a target": see ADR-239 Amendment 2026-10-12; the outer date is 2026-11-12.**
 5. The #5914 dated addendum is PR-body text for the owner, not a rewrite of that record.
 
 ## Standing conditions
