@@ -11,7 +11,7 @@ description: "This skill should be used when installing the generic guardrail se
 
 Installs a fixed, tested set of **generic** repo guardrails into a user repository —
 the repo-generic fraction of Soleur's own hook/lint corpus, classified in
-`references/guardrail-audit.md` (which corpus member is `generic`,
+[guardrail-audit.md](references/guardrail-audit.md) (which corpus member is `generic`,
 `generic-after-extraction`, or `soleur-coupled`, and why). This is the
 `constraint-scaffold` sibling for the guardrail *corpus* rather than a single gate
 (#10404, epic #10397).
@@ -23,7 +23,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/skills/verification-scaffold/scripts/verification-sc
 ```
 
 Installs the v1 set into the current repo. Flags: `--target <path>` (default
-cwd), `--guards a,b` / `--all` (default: all v1 rows of `references/guards.tsv`),
+cwd), `--guards a,b` / `--all` (default: all v1 rows of [guards.tsv](references/guards.tsv)),
 `--mode advisory|enforce` (default `advisory`), `--dry-run`, `--list`,
 `--uninstall <guard>`.
 
@@ -32,9 +32,9 @@ cwd), `--guards a,b` / `--all` (default: all v1 rows of `references/guards.tsv`)
 | Guard | Surfaces | Emitted |
 |---|---|---|
 | `secret-scan` | hook + CI | `.claude/hooks/secret-scan.sh` (gitleaks staged scan), `.gitleaks.toml` (only when absent — a default-ruleset pointer, never overwrites a user's), the `secret-scan` job in `.github/workflows/verification-gates.yml` |
-| `commit-on-main` | hook | `.claude/hooks/commit-on-main.sh` → `scripts/verification/precommit-guard.sh` + `lib/wrapper-boundary.sh` (the near-verbatim canonical emit, default-branch set stamped) |
+| `commit-on-main` | hook | `.claude/hooks/commit-on-main.sh` → `./scripts/verification/precommit-guard.sh` + `lib/wrapper-boundary.sh` (the near-verbatim canonical emit, default-branch set stamped) |
 | `block-stash` | hook | `.claude/hooks/block-stash.sh` (chain-boundary `git stash`; `list`/`show` are documented read-only exceptions) |
-| `orphan-test` | CI | `scripts/verification/orphan-test-check.sh` + the `orphan-test` job + `.github/verification-known-orphans.txt` (reason-required exclusion manifest, seeded with grandfathered rows) |
+| `orphan-test` | CI | `./scripts/verification/orphan-test-check.sh` + the `orphan-test` job + `.github/verification-known-orphans.txt` (reason-required exclusion manifest, seeded with grandfathered rows) |
 
 Hooks are registered as `PreToolUse` `Bash` entries in `.claude/settings.json`
 (node-first, `jq` fallback — a repo with neither is refused with the dependency
