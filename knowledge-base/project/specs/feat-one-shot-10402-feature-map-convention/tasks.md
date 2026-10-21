@@ -12,7 +12,7 @@ issue: 10402
 
 ## Phase 2 — SKILL.md edits
 
-- [ ] 2.1 `plugins/soleur/skills/test-browser/SKILL.md` — §3 "Repo feature map first": generalize to the `docs/feature-map.md` convention with `[feature-map.md](./references/feature-map.md)` markdown link (never a backtick ref). Soleur path named as the noted exception.
+- [ ] 2.1 `plugins/soleur/skills/test-browser/SKILL.md` — §3 "Repo feature map first": generalize to the `docs/feature-map.md` convention with `[feature-map.md](./references/feature-map.md)` markdown link (never a backtick ref). Soleur path named as the noted exception. Fallback sentence names the file→route table as fallback for repos without a map AND for routes a partial map does not cover.
 - [ ] 2.2 `plugins/soleur/skills/test-browser/SKILL.md` — new `### 5b. Write or refresh the feature map` after `</test_pages>`, before `### 6.`: three producer arms (seed exercised-routes-only when absent+web+≥1 route; field-scoped refresh + append when present; skip non-web / zero-route), working-tree edit lands with the PR, Step-8 summary reports `written`/`refreshed`/`skipped`+reason.
 - [ ] 2.3 `plugins/soleur/skills/qa/SKILL.md` — replace line 132 with the plan's verbatim generalized line. Verify `wc -c` delta ≤ ~100 B; run `python3 scripts/lint-skill-body-budget.py --base origin/main` — must exit 0.
 - [ ] 2.4 `plugins/soleur/skills/ux-audit/SKILL.md` + `plugins/soleur/skills/reproduce-bug/SKILL.md` — same one-line generalization of each soleur-path citation to name `docs/feature-map.md`.

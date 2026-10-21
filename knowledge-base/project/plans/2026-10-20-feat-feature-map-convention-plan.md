@@ -12,6 +12,23 @@ brand_survival_threshold: none
 lane: cross-domain
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-20
+**Passes applied (in-process, sequential per harness):** halt gates §4.6–4.12 (all pass — User-Brand section valid at `none`, Observability schema valid, PAT grep clean, lint-guard-contract green 3/3, Scope Check 1 unfenced + compliant), precedent-diff §4.4 (convention doc follows the plan/references canonical form from #10401; map schema follows the #10666 artifact — no novel pattern), verify-the-negative §4.45 (all negative claims re-probed and confirmed), spec-flow gap pass, in-process review panel (DHH/Kieran/simplicity/CTO-devex).
+
+### Key findings applied by the deepen pass
+
+1. **Partial-map fallback semantics** — a maintained map is authoritative *per-route*, never a reason to skip an unmapped route; §3's fallback sentence now names the file→route table as fallback for repos without a map AND for routes a partial map does not cover.
+2. **Uniform citation shape** — ux-audit/reproduce-bug edits now prescribe the identical parenthetical as the qa line so all four citations share one sweepable phrasing.
+3. **`discoverability_test` made deterministic** — the `grep -c`/literal-"2" pair (count nondeterministic vs substring-matching) replaced with `grep -q … && echo map-convention-wired`.
+4. **Plan-review findings applied** — fenced-example copy warning in the doc outline; §5b reports `written`/`refreshed`/`skipped`+reason in the Step 8 summary. One taste finding (trim the five-arm lint sketch) persisted to `decision-challenges.md`, kept.
+
+### New considerations discovered
+
+- `qa` is the only byte-capped file in the edit set (36,900/37,000 B) — its pointer must be an in-place line generalization, verified by `lint-skill-body-budget.py` at work time.
+- `test-browser/` gains its first `references/` member — the census is the enforcement, proven by AC6's negative control.
+
 ## Overview
 
 Ship a feature-map convention to plugin users: a canonical, committed `docs/feature-map.md` that navigation-driven skills (`test-browser`, `qa`) read as their navigation source of truth — with a write-or-refresh-on-run producer inside `test-browser` and file-to-route mapping as the fallback when no map exists. The artifact shape and durability lessons mirror the self-side implementation delivered for `apps/web-platform/test/feature-map.md` (#10399, PR #10666), generalized to a framework-tolerant user-repo convention rather than a shipped route scanner.
@@ -130,7 +147,7 @@ Doc outline (~150 lines, plain `# Title`, no frontmatter, kebab-case, markdown l
 
 Two changes inside `<file_to_route_mapping>` / `<test_pages>`:
 
-1. **§3 "Repo feature map first"** — replace the soleur-only mention with the conventional path: "When the repository carries a maintained feature map — convention: `docs/feature-map.md` (soleur's own lives at `apps/web-platform/test/feature-map.md`; the entry schema and update contract are in [feature-map.md](./references/feature-map.md)) — its route entries are the navigation source of truth." Fallback sentence unchanged.
+1. **§3 "Repo feature map first"** — replace the soleur-only mention with the conventional path: "When the repository carries a maintained feature map — convention: `docs/feature-map.md` (soleur's own lives at `apps/web-platform/test/feature-map.md`; the entry schema and update contract are in [feature-map.md](./references/feature-map.md)) — its route entries are the navigation source of truth." Extend the fallback sentence: the generic file→route table is the fallback for repos without a map **AND for routes a partial map does not cover** — a map is authoritative per-route, never a reason to skip testing an unmapped route (deepen-pass spec-flow finding; partial maps are legal per the convention doc's edge cases).
 2. **New `### 5b. Write or refresh the feature map`** (after `</test_pages>`, before `### 6.`): after all affected routes are tested —
    - **Absent + web app + ≥1 route exercised:** write `docs/feature-map.md` seeded with the exercised routes only — real observed `selectors`/`expects`/`gotchas`, the update-contract header, a `## Deliberately unmapped` section (empty is fine). Do not enumerate unvisited routes as entries.
    - **Present:** refresh only the fields a run contradicted; append `## \`/route\`` entries for exercised routes that were missing; leave every untouched entry and the header byte-identical (operator annotations survive).
@@ -150,7 +167,7 @@ Delta ≈ +45 B against a 36,900/37,000 B ceiling — fits inside headroom; veri
 
 ### Edit surface 4 — `plugins/soleur/skills/ux-audit/SKILL.md` + `plugins/soleur/skills/reproduce-bug/SKILL.md`
 
-Same one-line generalization of each soleur-path citation to name `docs/feature-map.md` as the convention (uncapped files; inferred scope for consumer consistency — all four navigation skills should read the same map contract).
+Same one-line generalization of each soleur-path citation (uncapped files; inferred scope for consumer consistency — all four navigation skills should read the same map contract). Use the identical parenthetical shape as the qa line — `(docs/feature-map.md` by convention; soleur's own: `apps/web-platform/test/feature-map.md`) — so all four citations share one phrasing a future edit can sweep.
 
 ## Observability
 
