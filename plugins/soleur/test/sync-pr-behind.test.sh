@@ -1407,7 +1407,7 @@ f6_ok() { fsync_ok && [[ "$(fw_n '^pr view')" == 0 && "$(fw_n 'rules/branches')"
 # F1: refused. The refusal line says what to do and opens with "NOT AN ERROR in itself" (an errexit reader must not fall back to a
 # hand merge); the guard took ONE pr view and ONE rules read.
 fw_run bare notqueued "$FQ" queue
-if f1_ok && grep -q 'NOT AN ERROR' "$QW_D/out" && grep -q 'merge-queue-dequeue.md' "$QW_D/out" && grep -q 're-paste the fence' "$QW_D/out" \
+if f1_ok && grep -q 'NOT AN ERROR' "$QW_D/out" && grep -q 'merge-queue-dequeue.md' "$QW_D/out" && grep -q 're-paste its fence' "$QW_D/out" \
    && [[ "$(fw_n '^pr view')" == 1 && "$(fw_n 'rules/branches')" == 1 ]]; then
   pass "F1 flagless --step, OPEN BEHIND armed, merge_queue rule: kind=queue_wait rc=14 (not kind=queued), nothing fetched/merged/pushed, one pr view and one rules read"
 else fail "F1 flagless --step refusal: rc=$QW_RC moved=$QW_MOVED pv=$(fw_n '^pr view') rules=$(fw_n 'rules/branches') out=$(tr '\n' ' ' < "$QW_D/out" | cut -c1-300) err=$(tr '\n' ' ' < "$QW_D/err" | cut -c1-200)"; fi

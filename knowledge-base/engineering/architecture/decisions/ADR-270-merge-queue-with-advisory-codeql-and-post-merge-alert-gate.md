@@ -175,8 +175,8 @@ Adopt option A, as declarative IaC in `infra/github/ruleset-ci-required.tf`:
      new exception, see the 2026-10-09 addendum): a failed
      rules read or an empty required-check set leaves queue mode off for the poll, a failed armed read
      ends the wait for that tick, and a failed checks read counts as idle. A repo with no `merge_queue`
-     rule runs today's code unchanged. `sync-pr-behind.sh --step` and the `pre-merge-rebase.sh` hook are not
-     changed (the hook runs once per `gh pr merge`, not per poll tick; the script's standalone loop gained a guard, see
+     rule runs today's code unchanged. `sync-pr-behind.sh --step` and the `pre-merge-rebase.sh` hook were not
+     changed by this decision (the hook runs once per `gh pr merge`, not per poll tick; the script's standalone loop gained a guard, see
      the 2026-10-09 addendum; a flagless `--step` and the hook gained one too, see the 2026-10-20 addendum). Accepted residuals: (1) some
      required contexts post a PASS on `merge_group` without re-running their suites
      (`tenant-integration-required` and `vendor-pin-required`; see each workflow's `merge_group`
@@ -653,12 +653,12 @@ merged or pushed) when GitHub reports the PR BEHIND (not DIRTY), auto-merge is a
 (read by `.type`, never by position). An unreadable rules read while armed (after the same one retry the queue read
 has) fails closed (`kind=gh`, exit 4, cause in the line). That supersedes, for the standalone loop only, the Decision 5
 rule that every unreadable answer falls toward today's sync: the fence keeps that rule, but a standalone run has no
-poll behind it and an unknown answer is not a yes (extended to a flagless `--step` and the pre-merge hook by the 2026-10-20 addendum). The standalone answer has no expiry of its own; re-arming the Phase 7
-poll, whose fallback sync is the sanctioned one, is the bound. `--step` stays the Phase 7 fence's call and the fence owns the rule, armed, expiry and
-DIRTY decisions (its expiry fallback must keep syncing) — superseded for any OTHER `--step` caller by the 2026-10-20 addendum. Trigger: PR 9839 (2026-10-09) took a resync push 12 minutes
+poll behind it and an unknown answer is not a yes. The standalone answer has no expiry of its own; re-arming the Phase 7
+poll, whose fallback sync is the sanctioned one, is the bound. `--step` stays the Phase 7 fence's unguarded call: the fence owns the rule, armed, expiry and
+DIRTY decisions, and its expiry fallback must keep syncing. Trigger: PR 9839 (2026-10-09) took a resync push 12 minutes
 after it was armed and before it was enqueued, because a hand-written poll loop treated BEHIND as an error; the skill
-text scoped the ban to a Phase 7 poll that had already emitted `queue_wait`, a marker a hand-written loop never emits. Accepted residual at the time: a loop that calls `--step` directly, and the `pre-merge-rebase.sh` hook, were still unguarded
-(closed by the 2026-10-20 addendum, #9869). Rationale and boundaries: `plugins/soleur/skills/ship/references/queue-mode.md`, "Standalone guard".
+text scoped the ban to a Phase 7 poll that had already emitted `queue_wait`, a marker a hand-written loop never emits. Accepted residual: a loop that calls `--step` directly, and the `pre-merge-rebase.sh` hook, are still unguarded
+(tracked in #9869). Rationale and boundaries: `plugins/soleur/skills/ship/references/queue-mode.md`, "Standalone guard".
 
 ### Addendum 2026-10-11 (#9454, canary item 5): `check_response_timeout_minutes` 60 to 75
 
@@ -719,8 +719,9 @@ not the fence. (3) An OLD pasted fence paired with the NEW script now STOPS the 
 SKILL.md) — a loud, bounded stop where it previously synced; in-flight sessions hold pasted fences that are never re-read
 from disk, and a NEW fence with an OLD script is stopped by the tightened probe. (4) Spellings the hook's parser does not
 resolve (flag before the number, a URL operand) stay state L and still sync (the T-Q13 limitation). (5) A PR that GitHub
-never enqueues, or that stays UNKNOWN, makes the hook skip its push indefinitely; that is quiet and bounded, and the
-fence's queue-wait expiry fallback performs the sync. (6) The base is `main`, as everywhere in the script. No C4 change:
+never enqueues makes the hook skip its push; the fence's queue-wait expiry fallback (BEHIND only) performs the sync. A PR
+that stays UNKNOWN has no writer: the fence's wait, expiry and sync arms key on `OPEN BEHIND`, so the bound is the poll's
+`MAX_POLL_MIN` and the 'Armed and green but never enqueued' recipe in `merge-queue-dequeue.md`. (6) The base is `main`, as everywhere in the script. No C4 change:
 no new actor, system, container or data store, and the access relationships are unchanged; only which local script or hook
 writes a push changes. Rationale and boundaries: `plugins/soleur/skills/ship/references/queue-mode.md`, "Standalone guard".
 

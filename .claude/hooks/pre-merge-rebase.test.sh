@@ -2417,8 +2417,8 @@ t_q22b_instrument_bounds() {
   _verdict "T-Q22b the --queue-wait reads run under PR_QUEUE_ATTEMPTS=1 and the 5 s default PR_QUEUE_TIMEOUT" "$ok" "qw-env=$(sort -u "$tmp/stub/qw-env" 2>/dev/null | tr '\n' ';')"
   rm -f "$tmp/stub/qw-env"
   PR_QUEUE_TIMEOUT=3 _prf_run_e "$tmp" "$tmp/wt-feat-x" "gh pr merge 4242 --squash"
-  ok=1; _qw_env_ok "$tmp" 1 3 || ok=0
-  _verdict "T-Q22b a PR_QUEUE_TIMEOUT in the caller's environment is passed to the --queue-wait reads" "$ok" "qw-env=$(sort -u "$tmp/stub/qw-env" 2>/dev/null | tr '\n' ';')"
+  ok=1; _qw_env_ok "$tmp" 1 5 || ok=0
+  _verdict "T-Q22b a PR_QUEUE_TIMEOUT in the caller's environment is ignored: the --queue-wait reads stay at 5 s inside the 20 s wrapper" "$ok" "qw-env=$(sort -u "$tmp/stub/qw-env" 2>/dev/null | tr '\n' ';')"
   # why this needs a real wait: the outer wrapper is a 20 s timeout around a call that would otherwise hang the hook for 60 s
   local tmp2; tmp2=$(mktemp -d)
   trap 'rm -rf "$tmp" "$tmp2"; trap - RETURN' RETURN

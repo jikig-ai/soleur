@@ -770,7 +770,7 @@ if [[ -n "$PR_HEAD_NUMBER" ]]; then
       if command -v timeout >/dev/null 2>&1; then _to20=(timeout -k 2 20)
       elif command -v gtimeout >/dev/null 2>&1; then _to20=(gtimeout -k 2 20); fi
       _qw_rc=0
-      _qw_out=$(cd "$WORK_DIR" && PR_QUEUE_ATTEMPTS=1 PR_QUEUE_TIMEOUT="${PR_QUEUE_TIMEOUT:-5}" ${_to20[@]+"${_to20[@]}"} bash "$_QS_SH" "$PR_HEAD_NUMBER" --queue-wait 2>/dev/null) || _qw_rc=$?
+      _qw_out=$(cd "$WORK_DIR" && PR_QUEUE_ATTEMPTS=1 PR_QUEUE_TIMEOUT=5 ${_to20[@]+"${_to20[@]}"} bash "$_QS_SH" "$PR_HEAD_NUMBER" --queue-wait 2>/dev/null) || _qw_rc=$?
       _qw_clean=$(printf '%s\n' "$_qw_out" | tr -d '\r' || true)
       _qw_verdict=""
       if [[ "$_qw_rc" -eq 0 && "$(grep -cxE 'queue_wait|proceed' <<<"$_qw_clean" || true)" == "1" ]]; then
@@ -781,7 +781,7 @@ if [[ -n "$PR_HEAD_NUMBER" ]]; then
         jq -n --arg n "$PR_HEAD_NUMBER" '{
           hookSpecificOutput: {
             hookEventName: "PreToolUse",
-            additionalContext: ("Pre-merge hook: PR #" + $n + " is BEHIND with auto-merge armed (GitHub merge state BEHIND or UNKNOWN) on a merge-queue repo and is not in the queue yet; skipped the origin/main sync. The merge queue makes the PR current itself, and a resync push restarts every required check for nothing, so no sync is needed. Red required check? Push the fix itself, not a resync. Green and never enqueued? Follow plugins/soleur/skills/ship/references/merge-queue-dequeue.md (\u0027Armed and green but never enqueued\u0027). The Phase 7 poll\u0027s expiry fallback is the sanctioned sync. A --admin merge bypasses the queue and lands the head as pushed, so a not-up-to-date refusal there is real: gate it with plugins/soleur/scripts/admin-merge-ready.sh.")
+            additionalContext: ("Pre-merge hook: PR #" + $n + " is BEHIND with auto-merge armed (GitHub merge state BEHIND or UNKNOWN) on a merge-queue repo and is not in the queue yet; skipped the origin/main sync. The merge queue makes the PR current itself, and a resync push restarts every required check for nothing, so no sync is needed. Red required check? Push the fix itself, not a resync. Green and never enqueued? Follow plugins/soleur/skills/ship/references/merge-queue-dequeue.md (\u0027Armed and green but never enqueued\u0027). The Phase 7 poll\u0027s expiry fallback is the sanctioned sync. Keep polling for MERGED; if you truly need a hand sync, disarm first (gh pr merge " + $n + " --disable-auto), sync, then re-arm. A --admin merge bypasses the queue and lands the head as pushed, so a not-up-to-date refusal there is real: gate it with plugins/soleur/scripts/admin-merge-ready.sh.")
           }
         }'
         exit 0

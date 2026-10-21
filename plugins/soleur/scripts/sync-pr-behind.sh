@@ -67,7 +67,7 @@
 # silently ignored unknown flags, so `--step` ran a full standalone sync and exited 0
 # on "no sync needed" — which a fence would print as `pushed`. The fences refuse a
 # copy whose --help does not name --fence (a copy that predates the queue-armed
-# refusal; --fence implies --step).
+# refusal; --fence is valid only with --step, so a copy naming it has --step).
 #
 # Portability: runs on customer hosts including macOS's bash 3.2 — no mapfile, no
 # ${x,,}, no associative arrays, no date; `timeout` only when present and `sleep` only between
@@ -111,14 +111,15 @@ usage: sync-pr-behind.sh <pr-number> [--max-attempts N]
                     reported once, so a re-armed PR is not reported again (a current removal event needs no marker)
                     Env: PR_QUEUE_TIMEOUT (s, default 10), PR_QUEUE_ATTEMPTS (default 2 = one retry),
                     PR_QUEUE_RETRY_SLEEP (s, default 2), PR_QUEUE_REPO=OWNER/REPO (else the cwd repo);
-                    the same four also govern the merge-queue rule read and the pr view read
+                    the same four govern the merge-queue rule read; the pr view read honors only
+                    PR_QUEUE_TIMEOUT and PR_QUEUE_REPO (one attempt, no retry)
   --queue-wait      print `queue_wait` or `proceed` and exit 0, or `kind=gh` exit 4 (a failed, hung or
                     unparseable read is never read as `proceed`). `queue_wait` = the PR is OPEN, GitHub
                     reports BEHIND or UNKNOWN (not DIRTY), auto-merge is armed and main has a merge_queue
                     rule. One pr view snapshot (state, mergeStateStatus, autoMergeRequest) and one rules
                     read; no GraphQL queue read, no worktree, nothing written. The pre-merge hook calls it
                     after --queue-state said not_queued. `--queue-state`: is the PR in the queue;
-                    `--queue-wait`: should a sync be skipped. Same env as --queue-state
+                    `--queue-wait`: should a sync be skipped. Env: PR_QUEUE_TIMEOUT and PR_QUEUE_REPO (the pr view read is a single attempt)
   --max-attempts N  standalone loop (N = 1..999): check the PR's head branch is the
                     current branch, read state, sync while BEHIND, up to N times
 
@@ -320,7 +321,7 @@ queue_wait_eval() {  # <state_line: "<STATE> <MERGESTATE>"> <armed|disarmed|->
 
 # The refusal text shared by every caller that refuses (the standalone loop, a flagless --step): what to do instead of a resync.
 qw_refusal() {
-  printf '%s' "PR #$PR is BEHIND, auto-merge is armed (not in the queue yet) and main has a merge queue: not syncing — a resync alone restarts every required check and the queue makes the PR current. Wait for MERGED or a dequeue; with no poll running, re-arm the Phase 7 poll with CLAUDE_PLUGIN_ROOT exported — its expiry fallback after 6 idle ticks is the sanctioned sync. Red required check? Push the fix itself, not a resync. Green and never enqueued? Follow plugins/soleur/skills/ship/references/merge-queue-dequeue.md ('Armed and green but never enqueued')."
+  printf '%s' "PR #$PR is BEHIND, auto-merge is armed (not in the queue yet) and main has a merge queue: not syncing — a resync alone restarts every required check and the queue makes the PR current. Wait for MERGED or a dequeue; with no poll running, re-arm the Phase 7 poll with CLAUDE_PLUGIN_ROOT exported — its expiry fallback after 6 idle ticks is the sanctioned sync. Red required check? Push the fix itself, not a resync. Truly need a hand sync? Disarm first (gh pr merge $PR --disable-auto), sync, then re-arm. Green and never enqueued? Follow plugins/soleur/skills/ship/references/merge-queue-dequeue.md ('Armed and green but never enqueued')."
 }
 # ... and the unreadable-rules text (fail closed): an unknown answer is not a yes.
 qw_unreadable() {  # <detail>
@@ -377,7 +378,7 @@ step_guard() {
   qw_snapshot
   queue_wait_eval "$QW_STATE" "$QW_ARMED"
   case "$QW_VERDICT" in
-    wait) tag queue_wait 14 "NOT AN ERROR in itself (GitHub says: $QW_STATE) — $(qw_refusal) If this copy of the fence predates --fence, re-paste the fence from the current ship/SKILL.md."
+    wait) tag queue_wait 14 "NOT AN ERROR in itself (GitHub says: $QW_STATE) — exit 14 means this caller is not the current Phase 7 fence: re-READ ship/SKILL.md from disk and re-paste its fence (a copy held in context predates --fence); the PR itself needs no sync. $(qw_refusal)"
           exit 14 ;;
     unreadable) tag gh 4 "$(qw_unreadable "$QW_DETAIL")"; exit 4 ;;
   esac
