@@ -228,7 +228,7 @@ fi
 # naive-literal convention: registry-clientip-alert-7530.sh,
 # inngest-provision-rehearsal-capture.sh — a naive literal otherwise parses in
 # the session TZ and silently shifts the boundary).
-if ! [[ "$first_marker_dt" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2} ]]; then
+if ! [[ "$first_marker_dt" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,6})?$ ]]; then
   printf 'NOT YET: first_marker_dt did not decode (%s): %s\n' "$first_marker_dt" "${SCAN_OUT:0:300}" >&2
   verdict not_yet - 2
 fi

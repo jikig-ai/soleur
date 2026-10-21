@@ -47,7 +47,7 @@ cat > "$WORK/bin/bsq" <<'STUB'
 printf 'INVOCATION\n%s\n' "$*" >> "${STUB_CALLS:?}"
 case "$*" in
   *first_marker_dt*) printf '%s\n' "${STUB_SCAN_OUT:-}"; exit "${STUB_SCAN_RC:-0}" ;;
-  *"toDateTime('"*"."[0-9][0-9][0-9][0-9][0-9][0-9]"'"*) printf '%s\n' "Code: 6. DB::Exception: Cannot parse string '<literal>' as DateTime: syntax error" >&2; exit 22 ;;
+  *"toDateTime('"*"."[0-9][0-9][0-9][0-9][0-9][0-9]"'"*) printf '%s\n' "Code: 6. DB::Exception: Cannot parse string '<literal>' as DateTime: syntax error"; exit 22 ;;
   *) printf '%s\n' "${STUB_COUNT_OUT:-}"; exit "${STUB_COUNT_RC:-0}" ;;
 esac
 STUB
@@ -100,11 +100,11 @@ run_case "fchmodat2 after the first post-fix marker is FAIL" 1 0 \
 # 3. Channel alive but no post-fix marker: the fix has not exercised web-2 —
 #    in-window fchmodat2 rows are pre-delivery history, so NOT YET not FAIL.
 run_case "marker absent (fix not exercised) is NOT YET" 2 0 \
-  "$(scan_row 9 0 0 8 "1970-01-01 00:00:00" 1)" 0 "$(count_row 0)"
+  "$(scan_row 9 0 0 8 "1970-01-01 00:00:00.000000" 1)" 0 "$(count_row 0)"
 
 # 4. Zero control rows = dark channel: unmeasurable, never a clean zero.
 run_case "dark channel (0 control rows) is CANNOT ESTABLISH" 3 0 \
-  "$(scan_row 0 0 0 8 "1970-01-01 00:00:00" 0)" 0 "$(count_row 0)"
+  "$(scan_row 0 0 0 8 "1970-01-01 00:00:00.000000" 0)" 0 "$(count_row 0)"
 
 # 5. A marker is a marker whichever literal produced it — the
 #    Deploy-succeeded-class arm alone (no PLUGIN_SEED_PROBE) still anchors the
@@ -148,7 +148,7 @@ env -i PATH="$PATH" HOME="$WORK" \
   BETTERSTACK_QUERY_HOST=h BETTERSTACK_QUERY_USERNAME=u BETTERSTACK_QUERY_PASSWORD=p \
   SOLEUR_FT_EARLIEST="$EARLIEST" FT8743_QUERY_SH="$WORK/bin/bsq" \
   STUB_CALLS="$WORK/calls-marker.log" \
-  STUB_SCAN_RC=0 STUB_SCAN_OUT="$(scan_row 9 0 0 8 "1970-01-01 00:00:00" 1)" \
+  STUB_SCAN_RC=0 STUB_SCAN_OUT="$(scan_row 9 0 0 8 "1970-01-01 00:00:00.000000" 1)" \
   STUB_COUNT_RC=0 STUB_COUNT_OUT="$(count_row 0)" \
   bash "$PROBE" >/dev/null 2>&1
 rc=$?
@@ -178,7 +178,7 @@ else
 fi
 # The absence query is the second invocation; pin the fraction-preserving
 # parse (a ${var%%.*} strip-then-toDateTime equivalent must fail this pin).
-if awk '/^INVOCATION$/{n++} n==2' "$WORK/calls-frac.log" | grep -qF "toDateTime64('2026-10-19 05:12:33.456789'"; then
+if awk '/^INVOCATION$/{n++} n==2' "$WORK/calls-frac.log" | grep -qF "toDateTime64('2026-10-19 05:12:33.456789', 6, 'UTC')"; then
   pass "absence query parses the marker via toDateTime64 (fraction preserved)"
 else
   fail "absence query must embed first_marker_dt via toDateTime64, not a stripped toDateTime"
