@@ -19,7 +19,7 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../../../.." && pwd)"
 SKILL="$REPO_ROOT/plugins/soleur/skills/verification-scaffold"
 TSV="$SKILL/references/guards.tsv"
 AUDIT="$SKILL/references/guardrail-audit.md"
@@ -44,9 +44,12 @@ done < "$TSV"
 orphaned=0
 while IFS= read -r t; do
   rel="${t#"$SKILL/"}"
-  grep -qF "$rel" "$TSV" || { fail "orphaned template (no guards.tsv row): $rel"; orphaned=1; }
+  # A template is owned by a guards.tsv row (guard artifacts) or by the
+  # generator itself (the doc block: verification-readme.template).
+  grep -qF "$rel" "$TSV" || grep -qF "$rel" "$SKILL/scripts/verification-scaffold.sh" \
+    || { fail "orphaned template (named by nothing): $rel"; orphaned=1; }
 done < <(find "$SKILL/references" -name '*.template' | sort)
-[[ "$orphaned" -eq 0 ]] && pass "every template is named by a guards.tsv row"
+[[ "$orphaned" -eq 0 ]] && pass "every template is named by a guards.tsv row or the generator"
 
 # --- 2. audit census over the live tree -------------------------------------------
 # The producer is git ls-files — identical to this file's own corpus definition,

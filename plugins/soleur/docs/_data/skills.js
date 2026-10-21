@@ -112,8 +112,8 @@ const SKILL_CATEGORIES = {
   work: "Workflow",
   "test-browser": "Workflow",
   "test-fix-loop": "Workflow",
-  "xcode-test": "Workflow",
   "verification-scaffold": "Workflow",
+  "xcode-test": "Workflow",
 };
 
 // CSS variable for category dot color
