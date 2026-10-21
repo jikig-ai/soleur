@@ -1713,9 +1713,9 @@ chk "marker: files_read counts the walk (the suite and the .sh, .py and .ts file
 # computed ONCE here; a mutant run re-runs only the python side. A renamed function FAILS the suite with a named reason, it never skips.
 EDGE_ROWS=()
 er() { EDGE_ROWS+=("$1"$'\t'"$2"$'\t'"$3"); }   # er <edge> <path> <name>; the empty entry is spelled <empty> (a tab is IFS whitespace and would collapse it)
-er '^glob:knowledge-base/**.sh' 'knowledge-base/a/b/c.sh' 'wf-cross'          # * crosses /
-er '^glob:knowledge-base/**.sh' 'knowledge-base/a/b/c.txt' 'wf-tail-rejects'
-er '^glob:knowledge-base/**.sh' 'other/a.sh' 'wf-head-rejects'
+er '^glob:docs-tree/**.sh' 'docs-tree/a/b/c.sh' 'wf-cross'          # * crosses /
+er '^glob:docs-tree/**.sh' 'docs-tree/a/b/c.txt' 'wf-tail-rejects'
+er '^glob:docs-tree/**.sh' 'other/a.sh' 'wf-head-rejects'
 er '^glob:scripts/*.sh' 'scripts/x.sh' 'wf-plain'
 er '^glob:scripts/*.sh' 'scripts/x.txt' 'wf-plain-rejects'
 er '^scripts/' 'scripts/a.sh' 'dir-prefix'
