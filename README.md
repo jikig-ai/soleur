@@ -15,6 +15,20 @@ Soleur gives a single founder the leverage of a full organization. **67 agents**
 
 ## Installation
 
+**OpenCode:**
+
+```bash
+npx @soleur/opencode install
+```
+
+Or with Bun:
+
+```bash
+bunx @soleur/opencode install
+```
+
+This installs the Soleur plugin for OpenCode into your config directory (`~/.config/opencode` by default). Start a new OpenCode session and use `/go <what you want to do>`. See the [OpenCode package README](packages/opencode-plugin/README.md) for manual setup and troubleshooting.
+
 **Devin CLI:**
 
 ```bash

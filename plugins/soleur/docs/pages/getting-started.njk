@@ -49,15 +49,22 @@ last_updated: 2026-10-06
 
         <p>Prefer to run it yourself? Soleur is source-available and works in Claude Code today. Install it in two commands, keep your knowledge base as plain files on your own machine, and join the waitlist if you want the hosted version when it opens.</p>
 
-        <p>To run the self-hosted version you need <a href="https://docs.claude.com/en/docs/claude-code" rel="noopener noreferrer">Claude Code</a>, signed in with your Claude plan or an Anthropic API key.</p>
+        <p>To run the self-hosted version you need <a href="https://docs.claude.com/en/docs/claude-code" rel="noopener noreferrer">Claude Code</a>, signed in with your Claude plan or an Anthropic API key. Soleur also runs on <a href="https://opencode.ai" rel="noopener noreferrer">OpenCode</a>.</p>
 
         <!-- verified: 2026-08-12 source: https://code.claude.com/docs/en/plugins -->
+        <h3 class="section-subtitle">Claude Code</h3>
         <div class="quickstart-code">
           <pre><code>claude plugin marketplace add jikig-ai/soleur-marketplace
 claude plugin install soleur@soleur-marketplace</code></pre>
         </div>
 
-        <p>Claude Code: <code>/soleur:go</code>. Grok Build: <code>/go</code>.</p>
+        <h3 class="section-subtitle">OpenCode</h3>
+        <div class="quickstart-code">
+          <pre><code>npx @soleur/opencode install</code></pre>
+        </div>
+        <p>Or with Bun: <code>bunx @soleur/opencode install</code>. This installs to <code>~/.config/opencode</code> by default.</p>
+
+        <p>Claude Code: <code>/soleur:go</code>. OpenCode: <code>/go</code>. Grok Build: <code>/go</code>.</p>
         <table>
           <thead>
             <tr>
