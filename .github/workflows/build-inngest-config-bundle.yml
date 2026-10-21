@@ -157,7 +157,7 @@ jobs:
           ZOT_DST="127.0.0.1:5000/${IMAGE#ghcr.io/}:v${VERSION}"
           degraded() {
             local reason="$1" rc="$2" detail="${3:-}" dst="${ZOT_DST}"
-            [[ "$reason" == cosign_* ]] && dst="${COSIGN_DST:-unset}"
+            [[ "$reason" == cosign_* ]] && dst="${COSIGN_DST:-unset}"  # cosign_ prefix = the second leg's reason namespace
             echo "mirror_status=degraded" >> "$GITHUB_OUTPUT"
             echo "mirror_reason=${reason}" >> "$GITHUB_OUTPUT"
             echo "::warning::zot mirror degraded for ${dst} (reason=${reason} rc=${rc} ${detail}). The GHCR bundle publish is unaffected; this run did not confirm a zot copy, and no automated backfill exists."

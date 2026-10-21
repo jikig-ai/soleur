@@ -492,6 +492,11 @@ evaluate() {
   degraded_ok "$d/cosigndigestfail" "cosign digest lookup failing" cosign_digest_lookup 7 1 any "$EXPECT_COSIGN_DST"
   fi
 
+  if want cosigndigestshape; then
+  run_arm "$d/cosigndigestshape" success STUB_COSIGN_ZOT_DIGEST="not-a-digest"
+  degraded_ok "$d/cosigndigestshape" "cosign digest returning garbage" cosign_digest_lookup 1 1 any "$EXPECT_COSIGN_DST"
+  fi
+
   if [[ "$mode" != "full" ]]; then return 0; fi
   run_arm "$d/copyflaky" success STUB_CRANE_COPY_FAIL_N=2
   ok=1
@@ -645,6 +650,10 @@ elif name == "cosign-copy-route-dropped":
     s = must_sub(r'(retry timeout 180 crane copy "gcr\.io/projectsigstore/cosign[^\n]*?) \|\| degraded cosign_copy [^\n]*\n', r"\1\n", s)
 elif name == "cosign-digest-check-dropped":
     s = must_sub(r'          \[\[ "\$COSIGN_ZOT_DIGEST" == "sha256:[^\n]*\|\| degraded cosign_digest_mismatch[^\n]*\n', "", s)
+elif name == "cosign-digest-lookup-unrouted":
+    s = must_sub(r' \|\| degraded cosign_digest_lookup "\$\?" "cosign digest lookup failed after the copy"', "", s)
+elif name == "cosign-digest-shape-unchecked":
+    s = must_sub(r'          \[\[ "\$COSIGN_ZOT_DIGEST" =~ \^sha256[^\n]*\n', "", s)
 elif name == "cosign-dst-retargeted":
     s = must_sub(r'jikig-ai/cosign:v3\.1\.1', "jikig-ai/cosign-tools:v3.1.1", s)
 elif name == "variant-no-if":
@@ -748,6 +757,8 @@ else
     "cosign-copy-dropped|struct|cosign verifier image is copied"
     "cosign-copy-route-dropped|cosigncopyfail|cosign copy failing every time"
     "cosign-digest-check-dropped|cosigndigestbad|cosign digest mismatch after the copy"
+    "cosign-digest-lookup-unrouted|cosigndigestfail|cosign digest lookup failing"
+    "cosign-digest-shape-unchecked|cosigndigestshape|cosign digest returning garbage"
     "cosign-dst-retargeted|struct|cosign mirror destination"
   )
   for row in "${ROWS[@]}"; do
@@ -803,7 +814,7 @@ fi
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # ANTI-VACUITY FLOOR. Equal to the green-run count: raise it in the same edit that adds a case. It sits
 # directly above its `if` so guard-vacuity-floor can slice it.
-MIN_ASSERTIONS=105
+MIN_ASSERTIONS=108
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   echo "FATAL: only $((PASS + FAIL)) assertions ran (floor $MIN_ASSERTIONS); the suite did not execute what it claims to." >&2
   exit 1
