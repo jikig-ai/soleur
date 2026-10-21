@@ -22,4 +22,4 @@ issue: 10402
 - [x] 3.1 AC3–AC5 grep battery: `docs/feature-map.md` count per file (test-browser ≥1, qa =1, ux-audit =1, reproduce-bug =1); `Write or refresh` heading present in test-browser.
 - [x] 3.2 `bun test plugins/soleur/test/components.test.ts` green; negative control — on a scratch copy with the SKILL.md link removed, the reachability census reds naming `test-browser/references/feature-map.md`.
 - [x] 3.3 `bash scripts/markdown-lint.sh` clean on all touched files.
-- [ ] 3.4 AC8: `git diff origin/main...HEAD -- plugins/soleur/docs/_data/skills.js 'plugins/soleur/skills/*/SKILL.md'` — no `description:` delta, no skills.js change.
+- [x] 3.4 AC8: `git diff origin/main...HEAD -- plugins/soleur/docs/_data/skills.js 'plugins/soleur/skills/*/SKILL.md'` — no `description:` delta, no skills.js change.
