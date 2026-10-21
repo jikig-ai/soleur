@@ -24,4 +24,11 @@ terraform {
 
 provider "cloudflare" {
   api_token = var.cf_api_token
+
+  # 5xx retry budget ~7.75min/request (15+30+60+120+120+120s vs ~7s v4
+  # default) — rides out multi-minute Cloudflare API blips at plan (#10643).
+  # v5 renames this trio `max_retries`; carry the budget across a migration.
+  retries     = 6
+  min_backoff = 15
+  max_backoff = 120
 }

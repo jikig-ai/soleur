@@ -14,12 +14,14 @@ devin plugins install jikig-ai/soleur#plugins/soleur -y
 
 Start a Devin session and use `/soleur:go <what you want to do>`. Use `-y` to skip the confirmation prompt. If the install hangs or fails, clone the repository and install from `./soleur/plugins/soleur`.
 
-**Claude Code (marketplace):**
+**Claude Code (recommended, via the published marketplace):**
 
 ```bash
 claude plugin marketplace add jikig-ai/soleur-marketplace
 claude plugin install soleur@soleur-marketplace
 ```
+
+**Grok Build:** load the same in-repo plugin from the repository root — `grok inspect` must list the Soleur plugin, then start a session with `grok`. Use `/go <intent>`. See the [Grok Build onboarding guide](../../knowledge-base/engineering/grok-onboarding.md).
 
 ## The Soleur Workflow
 
@@ -51,15 +53,17 @@ The recommended way to use Soleur is through the unified entry point:
 
 This classifies your intent and routes to the right workflow skill. For existing codebases, run `/soleur:sync` first to populate your knowledge-base.
 
-Claude Code: `/soleur:go`. Grok Build: `/go`.
+Claude Code: `/soleur:go`. Grok Build: `/go`. Codex: `$soleur:go`. Devin CLI: `/soleur:go`.
 
-| Step | Claude Code | Grok Build |
-|------|-------------|------------|
-| Entry | `/soleur:go` | `/go` |
-| Sync | `/soleur:sync` | `/sync` |
-| Help | `/soleur:help` | `/help` |
-| Version | `/soleur:version` (Claude Code only) | not available |
-| Next skill | Skill tool `soleur:<skill>` | Read `SKILL.md` in this process (`/<skill>`) |
+| Step | Claude Code | Grok Build | Codex | Devin CLI |
+|------|-------------|------------|-------|-----------|
+| Entry | `/soleur:go` | `/go` | `$soleur:go` | `/soleur:go` |
+| Sync | `/soleur:sync` | `/sync` | `$soleur:sync` | `/soleur:sync` |
+| Help | `/soleur:help` | `/local:help` | `$soleur:help` | `/soleur:help` |
+| Version | `/soleur:version` (Claude Code only) | not available | not available | not available |
+| Next skill | Skill tool `soleur:<skill>` | Read `SKILL.md` in this process (`/<skill>`) | Load `$soleur:<skill>`, or read `SKILL.md` | Slash `/soleur:<skill>` |
+
+Per-harness setup guides: [Claude Code](https://code.claude.com/docs/en/plugins) · [Grok Build](../../knowledge-base/engineering/grok-onboarding.md) · [Codex](codex/INSTRUCTIONS.md) · [Devin](devin/INSTRUCTIONS.md).
 
 The 6-step workflow (invoked automatically via `/soleur:go` or Skill tool `soleur:<skill>` on Claude Code; via `/go` then Read `SKILL.md` in this process on Grok Build):
 
@@ -382,7 +386,7 @@ devin plugins install jikig-ai/soleur#plugins/soleur -y
 
 Use `-y` to skip the confirmation prompt. You must be signed in (`devin auth login`) for plugin installation. If the remote install hangs or fails, clone the repository and install from `./soleur/plugins/soleur`.
 
-**From the marketplace (recommended):**
+**Claude Code (recommended, via the published marketplace):**
 
 ```bash
 claude plugin marketplace add jikig-ai/soleur-marketplace
@@ -390,6 +394,15 @@ claude plugin install soleur@soleur-marketplace
 ```
 
 This installs the plugin subtree only — about 10 MiB in well under a minute.
+
+**Grok Build:** Soleur loads the same in-repo plugin under Grok Build. From the repository root, confirm discovery and start a session:
+
+```bash
+grok inspect    # the soleur plugin, skills, agents, and MCP servers must appear
+grok            # interactive session
+```
+
+Use `/go <intent>` (Grok's bare entry name), not `/soleur:go`. If `grok inspect` does not list Soleur, stop — there is no `grok plugin install` command to fall back on today. See the [Grok Build onboarding guide](../../knowledge-base/engineering/grok-onboarding.md).
 
 <details>
 <summary>Installing from the monorepo directly (slower, and may time out)</summary>

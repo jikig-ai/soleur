@@ -1,6 +1,6 @@
 # Web Platform Test Suite
 
-This directory holds the unit + integration test files for the web platform. Test runner: `vitest`. Most tests are gated behind their own opt-in env flag because the integration suites mutate the real Supabase `dev` project and require Doppler-provided credentials.
+This directory holds the unit + integration test files for the web platform. Test runner: `vitest`. Most tests are gated behind their own opt-in env flag because the integration suites mutate the real Supabase `dev` project and require Doppler-provided credentials. `feature-map.md` is the user-POV route inventory consumed by navigation skills (`test-browser`, `qa`, `ux-audit`) — keep it in sync with `app/**/page.tsx` (enforced, advisory, by `scripts/lint-feature-map-coverage.sh`).
 
 ## Integration tests (opt-in)
 

@@ -80,6 +80,10 @@ gh workflow run apply-web-platform-infra.yml --ref main \
 It holds the fleet-wide apply mutex (`terraform-apply-web-platform-host`) for up to 47 minutes in
 the worst case, so an emergency dispatch issued at the same time will queue behind it.
 
+Cloudflare provider calls now retry API 5xx up to ~8 min per request (#10643), so a plan step red
+on `received gateway timeout response (HTTP 504)` post-change means the upstream degradation
+outlasted that budget — re-running once Cloudflare settles is the documented remedy.
+
 ## Do NOT fire this on these
 
 | Symptom | Meaning | What to do instead |
