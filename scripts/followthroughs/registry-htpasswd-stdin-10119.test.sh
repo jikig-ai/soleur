@@ -217,6 +217,17 @@ else
   fail "clock: the date shim does not pin 'now' or breaks other date calls"
 fi
 
+# The shim matches the exact string `-u +%s`. If the probe's "now" call ever changes shape (`date +%s`, extra flags,
+# `printf %(%s)T`, `$EPOCHSECONDS`), the shim silently stops pinning it and the time bomb returns while the row above
+# stays green -- so pin the probe's clock source itself: exactly one `date -u +%s` read, and no other clock source.
+_probe_code="$(grep -vE '^[[:space:]]*#' "$PROBE_SRC" || true)"
+_n_now="$(grep -cE 'date -u \+%s\)' <<<"$_probe_code" || true)"
+if [[ "$_n_now" == "1" ]] && ! grep -qE 'EPOCHSECONDS|\$SECONDS|%\(%s\)T|date \+%s' <<<"$_probe_code"; then
+  pass "clock: the probe reads 'now' through exactly one 'date -u +%s' (the shim's exact match) and no other clock source"
+else
+  fail "clock: the probe's clock source changed shape (date -u +%s count=$_n_now, or another clock source): the date shim no longer pins it"
+fi
+
 # Positive control: the helpers move both counters, and the case counter matches the cases run.
 _p="$passes"; _f="$fails"; pass "control (expected)" >/dev/null; fail "control (expected, retracted)" >/dev/null 2>&1
 if [[ "$passes" -ne $((_p + 1)) || "$fails" -ne $((_f + 1)) ]]; then echo "FATAL: pass()/fail() do not count" >&2; exit 2; fi
