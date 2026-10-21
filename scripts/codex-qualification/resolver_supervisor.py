@@ -23,6 +23,18 @@ CLOSED_MESSAGES = tuple('Resolver diagnostic refused; preconsume_stage=' + stage
     'Resolver diagnostic publication refused\n',)
 CANDIDATE_PREFIX = 'Resolver diagnostic candidate='
 COMPLETION_PREFIX = 'Resolver diagnostic completion='
+SUPERVISOR_STAGES = frozenset((
+    'startup', 'source_binding', 'local_import', 'manifest_read', 'manifest_decode',
+    'manifest_binding', 'parent_death', 'supervision', 'subreaper', 'signal_setup',
+    'spawn', 'monitor', 'interrupted', 'output_limit', 'timeout', 'cleanup',
+    'protocol', 'completion', 'coordinator_exit', 'finalization'))
+
+
+def refusal(stage):
+    """Closed observation boundary, never an exception or historical root cause."""
+    if type(stage) is not str or stage not in SUPERVISOR_STAGES:
+        stage = 'supervision'
+    return 'Resolver diagnostic refused; supervisor_stage=' + stage
 
 
 def completion_signal(candidate, expected):
@@ -80,7 +92,7 @@ def _read_manifest(path):
 
 class ClosedParser(argparse.ArgumentParser):
     def error(self, _message):
-        print('Resolver diagnostic refused; preconsume_stage=startup')
+        print(refusal('startup'))
         raise SystemExit(1)
 
 
@@ -139,13 +151,15 @@ def supervise(command, *, timeout=12., grace=1., report=None, expected=None, com
     The final quarter of the grace interval is reserved for SIGKILL and reaping.
     Any adopted child or timeout makes the outer result uncertain (exit 2).
     """
-    enable_subreaper()
     interrupted = [False]
     def terminate(_signum, _frame):
         interrupted[0] = True
-    previous = {sig: signal.signal(sig, terminate) for sig in (signal.SIGTERM, signal.SIGINT)}
+    previous = {}
     process = None
     uncertain = False
+    stage, failure = 'subreaper', None
+    code, result = None, 2
+    message_to_report, signal_value = None, None
     raw = bytearray()
     def drain():
         while len(raw) < 769:
@@ -157,17 +171,30 @@ def supervise(command, *, timeout=12., grace=1., report=None, expected=None, com
                 return
             raw.extend(part)
     try:
+        enable_subreaper()
+        stage = 'signal_setup'
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            previous[sig] = signal.signal(sig, terminate)
+        stage = 'spawn'
         started = time.monotonic()
         process = subprocess.Popen(command, env={}, cwd='/', close_fds=True,
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL, start_new_session=True)
         os.set_blocking(process.stdout.fileno(), False)
+        stage = 'monitor'
         while not _exited(process.pid):
             drain()
-            if interrupted[0] or len(raw) > 768 or time.monotonic() >= started + timeout:
+            if interrupted[0]:
+                failure = 'interrupted'
+            elif len(raw) > 768:
+                failure = 'output_limit'
+            elif time.monotonic() >= started + timeout:
+                failure = 'timeout'
+            if failure is not None:
                 uncertain = True
                 break
             time.sleep(min(.01, max(0., started + timeout - time.monotonic())))
+        stage = 'cleanup'
         cleanup_end = time.monotonic() + grace
         if uncertain:
             os.killpg(process.pid, signal.SIGTERM)
@@ -177,46 +204,76 @@ def supervise(command, *, timeout=12., grace=1., report=None, expected=None, com
         # The unreaped leader still owns this group, even on the normal path.
         os.killpg(process.pid, signal.SIGKILL)
         code, adopted, reaped = _reap_group(process, cleanup_end)
+        if adopted or not reaped or code is None:
+            failure = 'cleanup'
+        stage = 'protocol'
         drain()
-        if raw:
+        if len(raw) > 768:
+            failure = 'output_limit'
+        if failure is None and raw:
             message = bytes(raw)
             accepted = next((value for value in CLOSED_MESSAGES if message == value.encode('ascii')), None)
             if accepted is not None and code == 1:
-                if report is not None:
-                    report(accepted.rstrip('\n'))
+                message_to_report = accepted.rstrip('\n')
             elif expected is not None and code == 0 and not adopted and reaped and not uncertain:
+                stage = 'completion'
                 try:
                     prefix = CANDIDATE_PREFIX.encode('ascii')
                     if not message.startswith(prefix) or not message.endswith(b'\n'):
                         raise RuntimeError('Resolver completion refused')
                     candidate = json.loads(message[len(prefix):-1].decode('ascii'))
                     signal_value = completion_signal(candidate, expected)
-                    if completed is not None:
-                        completed.append(signal_value)
-                    if report is not None:
-                        report(COMPLETION_PREFIX + json.dumps(signal_value, sort_keys=True, separators=(',', ':')))
                 except Exception:
                     uncertain = True
+                    failure = 'completion'
             else:
                 uncertain = True
-        elif expected is not None and code == 0:
+                failure = 'protocol'
+        elif failure is None and expected is not None and code == 0:
             uncertain = True
-        return 2 if uncertain or adopted or not reaped or interrupted[0] or code is None else (0 if code == 0 else 1)
+            failure = 'completion'
+        elif failure is None and code != 0:
+            failure = 'coordinator_exit'
+        if interrupted[0] and failure is None:
+            failure = 'interrupted'
+        result = 2 if uncertain or adopted or not reaped or interrupted[0] or code is None else (0 if code == 0 else 1)
     except Exception:
         # Never print OS errors, paths, helper output or exception context.
         # On exceptional setup failure, a known unreaped leader still owns PGID.
+        failure, result = stage, 2
         if process is not None and process.returncode is None:
             try:
                 os.killpg(process.pid, signal.SIGKILL)
                 _reap_group(process, time.monotonic() + max(.01, grace))
             except Exception:
-                return 2
-        return 2
+                failure = 'cleanup'
     finally:
         if process is not None and process.stdout is not None:
-            process.stdout.close()
+            try:
+                process.stdout.close()
+            except Exception:
+                failure, result = 'finalization', 2
         for sig, handler in previous.items():
-            signal.signal(sig, handler)
+            try:
+                signal.signal(sig, handler)
+            except Exception:
+                failure, result = 'finalization', 2
+    if interrupted[0] and failure is None:
+        failure, result = 'interrupted', 2
+    # Publish nothing until pipe closure and every installed handler restoration
+    # have finished; no reporting failure can bypass owned-process cleanup.
+    if failure is not None:
+        if report is not None:
+            report(refusal(failure))
+    else:
+        if report is not None and message_to_report is not None:
+            report(message_to_report)
+        if result == 0 and signal_value is not None:
+            if report is not None:
+                report(COMPLETION_PREFIX + json.dumps(signal_value, sort_keys=True, separators=(',', ':')))
+            if completed is not None:
+                completed.append(signal_value)
+    return result
 
 
 def main():
@@ -226,16 +283,23 @@ def main():
     parser.add_argument('--manifest-sha256', required=True)
     parser.add_argument('--supervisor-sha256', required=True)
     args = parser.parse_args()
+    stage = 'source_binding'
     try:
         import hashlib
         if hashlib.sha256(Path(__file__).read_bytes()).hexdigest() != args.supervisor_sha256:
             raise RuntimeError('Resolver supervisor binding refused')
+        stage = 'local_import'
         from prepare import canonical, sha
+        stage = 'manifest_read'
         raw_manifest = _read_manifest(args.manifest)
+        stage = 'manifest_decode'
         manifest = json.loads(raw_manifest.decode('ascii'))
+        stage = 'manifest_binding'
         if len(raw_manifest) > 32768 or sha(canonical(manifest)) != args.manifest_sha256:
             raise RuntimeError('Resolver manifest binding refused')
+        stage = 'parent_death'
         arm_parent_death(os.getppid(), terminate=True)
+        stage = 'supervision'
         command = [sys.executable, '-I', '-S', '-B',
             str(Path(__file__).with_name('resolver_diagnostic.py').absolute()), '_coordinate',
             '--manifest', args.manifest, '--manifest-sha256', args.manifest_sha256,
@@ -246,8 +310,10 @@ def main():
                     'supervisor_sha256': args.supervisor_sha256}
         code = supervise(command, report=print, expected=expected, completed=completion)
         if code == 0 and len(completion) != 1:
+            print(refusal('completion'))
             code = 2
     except Exception:
+        print(refusal(stage))
         code = 2
     print('Resolver diagnostic terminated; independent evidence review required' if code == 0
           else 'Resolver diagnostic refused; no retry authority')

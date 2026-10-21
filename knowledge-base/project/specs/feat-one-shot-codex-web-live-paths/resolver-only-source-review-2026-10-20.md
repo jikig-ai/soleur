@@ -228,3 +228,61 @@ file-only binding refresh and creation of one fresh diagnostic manifest is still
 required. Actual-manifest review, fresh exact-command execution approval and
 separate evidence review remain distinct gates; all broader CI, recovery,
 qualification and shipping holds remain in place.
+
+## Separately authorized refusal-stage correction — 2026-10-21
+
+The operator separately authorized read-only actual-manifest review, one exact
+supervisor execution, then read-only outcome review. The one execution at source
+`c0ee6d2d3d0de6bf6af23397988e28f89c6e1b73` exited **2**, printing only
+`Resolver diagnostic refused; no retry authority`. No coordinator stage or
+supervisor completion was emitted. That execution permission is spent.
+
+The manifest's canonical JSON digest is
+`087199313bd50848b8a4148f02793fa7360231a617b138ccca9e4c552800556e`;
+the stored-file digest is
+`cb13857cf469604998e381b77b085cbfe30262ddb692c2435a94ee3810958f38`.
+The stored file equals canonical JSON plus one newline; those different digests
+do not indicate changed content. Independent engineering/security manifest review
+accepted the canonical digest for the CLI. The initial comparison of unlike
+digests unnecessarily requested another review permission; see the
+[session learning](../../learnings/runtime-errors/2026-10-21-resolver-refusal-stages-and-canonical-digests.md).
+
+Separate engineering/security outcome review confirmed the same private directory
+identity and modes, unchanged manifest and all 18 source/runtime bindings. Only
+the manifest existed; marker and receipt were absent. A read-only current process
+snapshot found no matching supervisor/coordinator/helper among 695 readable
+processes. These current observations do not prove historical zero helper launches,
+zero DNS activity or successful cleanup. The actual refusal cause remains unknown;
+do not label this attempt a DNS failure or infer retry authority.
+
+Ruled by CTO agent: record refused/outcome-unestablished and correct the dormant
+supervisor's sanitized failure stages with synthesized offline tests. The operator
+then explicitly **approved that source-only correction and offline testing**.
+Real resolver/helper execution, DNS/network, operational preparation, diagnostics,
+retries, acquisition, resync/full CI, full review/QA/preflight, recovery,
+qualification, legal/promotion and shipping remain held. Historical operational
+files were not modified; their old source bindings must not be reused.
+
+The correction distinguishes fixed supervisor boundaries for source/import and
+manifest checks, parent-death/subreaper and signal setup, spawn/monitor, timeout,
+interruption/output limits, cleanup, protocol/completion, child exit and finalization.
+Labels describe an observed boundary, not a historical root cause. Exception text,
+stderr and unrecognized child output remain suppressed. Failure reports and valid
+completion publication follow owned-process cleanup, pipe closure and restoration
+of installed handlers; a late close/restoration/interruption failure cannot publish
+completion. Existing containment, host, address policy, budgets, one-use evidence
+and provisional receipt authority remain unchanged.
+
+RED-first evidence: the six initial new unit methods failed with **17 assertion
+failures and five errors** against the old source. Three additional fault cases
+failed for missing timeout/interruption/output-limit stages. A later synthetic
+late-interruption regression failed with returned success before its correction.
+No operational inputs or production helper were used. The expanded focused suite
+passed **71 tests**, exit 0, 3.126 seconds, using `/usr/bin/python3.14 -E -B -W error
+-m unittest test_resolver_diagnostic test_resolver_lifecycle`. Cached Ruff 0.16.10
+passed for the three changed Python files; whitespace checks passed. One existing
+lifecycle expectation was updated to include the newly required sanitized protocol
+stage after a rejected child message. This is scoped offline verification only.
+
+Independent review of the corrected committed/pushed source remains pending.
+No new binding census, manifest, marker, receipt or operational attempt was made.

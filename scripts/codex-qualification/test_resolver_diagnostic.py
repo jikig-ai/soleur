@@ -804,6 +804,213 @@ class SourceAndCLI(unittest.TestCase):
             self.assertIn('Resolver diagnostic refused', output.getvalue())
 
 
+class SupervisorStages(unittest.TestCase):
+    """Fault injection only: no real containment, source census or child launch."""
+
+    def main_fixture(self, stack):
+        manifest = plan()
+        source = b'synthetic-supervisor-source'
+        digest = diagnostic.sha(source)
+        argv = ['synthetic', 'execute', '--manifest', '/synthetic/manifest',
+                '--manifest-sha256', diagnostic.sha(diagnostic.canonical(manifest)),
+                '--supervisor-sha256', digest]
+        stack.enter_context(patch('sys.argv', argv))
+        stack.enter_context(patch.object(Path, 'read_bytes', return_value=source))
+        stack.enter_context(patch.object(supervisor, '_read_manifest',
+                                         return_value=diagnostic.canonical(manifest)))
+        stack.enter_context(patch.object(supervisor, 'arm_parent_death'))
+        run = stack.enter_context(patch.object(supervisor, 'supervise', return_value=2))
+        return run
+
+    def test_unknown_failure_stages_cannot_disclose_caller_values(self):
+        for stage in (CANARY, None, True, [CANARY]):
+            self.assertEqual(supervisor.refusal(stage),
+                             'Resolver diagnostic refused; supervisor_stage=supervision')
+
+    def assert_stage(self, output, stage):
+        lines = output.splitlines()
+        self.assertEqual(lines.count('Resolver diagnostic refused; supervisor_stage=' + stage), 1)
+        self.assertNotIn(CANARY, output)
+        self.assertNotIn('Resolver diagnostic completion=', output)
+
+    def test_main_reports_each_prelaunch_boundary_without_exception_details(self):
+        real_import = __import__
+        def refuse_prepare(name, *args, **kwargs):
+            if name == 'prepare':
+                raise ImportError(CANARY)
+            return real_import(name, *args, **kwargs)
+        faults = [
+            ('source_binding', lambda: patch.object(Path, 'read_bytes', side_effect=OSError(CANARY))),
+            ('local_import', lambda: patch('builtins.__import__', side_effect=refuse_prepare)),
+            ('manifest_read', lambda: patch.object(supervisor, '_read_manifest', side_effect=OSError(CANARY))),
+            ('manifest_decode', lambda: patch.object(supervisor.json, 'loads', side_effect=ValueError(CANARY))),
+            ('manifest_binding', lambda: patch.object(supervisor, '_read_manifest', return_value=b'{}')),
+            ('parent_death', lambda: patch.object(supervisor, 'arm_parent_death', side_effect=RuntimeError(CANARY))),
+        ]
+        for stage, fault in faults:
+            with self.subTest(stage=stage), ExitStack() as stack:
+                run = self.main_fixture(stack)
+                stack.enter_context(fault())
+                output = stack.enter_context(redirect_stdout(io.StringIO()))
+                self.assertEqual(supervisor.main(), 2)
+                run.assert_not_called()
+                self.assert_stage(output.getvalue(), stage)
+
+    def test_main_reports_missing_completion_and_supervision_exception(self):
+        for stage, result in [('completion', 0), ('supervision', RuntimeError(CANARY))]:
+            with self.subTest(stage=stage), ExitStack() as stack:
+                run = self.main_fixture(stack)
+                if isinstance(result, Exception):
+                    run.side_effect = result
+                else:
+                    run.return_value = result
+                output = stack.enter_context(redirect_stdout(io.StringIO()))
+                self.assertEqual(supervisor.main(), 2)
+                self.assert_stage(output.getvalue(), stage)
+
+    def supervise_fixture(self, stack, *, raw=b'', code=1):
+        process = Mock(pid=3456, returncode=None)
+        process.stdout.fileno.return_value = 7
+        stack.enter_context(patch.object(supervisor, 'enable_subreaper'))
+        stack.enter_context(patch.object(supervisor.signal, 'signal', return_value=0))
+        launch = stack.enter_context(patch.object(supervisor.subprocess, 'Popen', return_value=process))
+        stack.enter_context(patch.object(supervisor.os, 'set_blocking'))
+        read = stack.enter_context(patch.object(supervisor.os, 'read', side_effect=[raw, b'', b'']))
+        stack.enter_context(patch.object(supervisor.os, 'killpg'))
+        stack.enter_context(patch.object(supervisor, '_exited', return_value=True))
+        reap = stack.enter_context(patch.object(supervisor, '_reap_group', return_value=(code, False, True)))
+        return process, launch, read, reap
+
+    def test_supervise_reports_setup_spawn_monitor_and_cleanup_faults(self):
+        faults = [
+            ('subreaper', lambda: patch.object(supervisor, 'enable_subreaper', side_effect=RuntimeError(CANARY))),
+            ('signal_setup', lambda: patch.object(supervisor.signal, 'signal', side_effect=RuntimeError(CANARY))),
+            ('spawn', lambda: patch.object(supervisor.subprocess, 'Popen', side_effect=OSError(CANARY))),
+            ('monitor', lambda: patch.object(supervisor, '_exited', side_effect=RuntimeError(CANARY))),
+            ('cleanup', lambda: patch.object(supervisor, '_reap_group', side_effect=RuntimeError(CANARY))),
+        ]
+        for stage, fault in faults:
+            with self.subTest(stage=stage), ExitStack() as stack:
+                _process, launch, _read, _reap = self.supervise_fixture(stack)
+                stack.enter_context(fault())
+                report = []
+                self.assertEqual(supervisor.supervise(['synthetic'], report=report.append), 2)
+                self.assert_stage('\n'.join(report), stage)
+                if stage in ('subreaper', 'signal_setup'):
+                    launch.assert_not_called()
+
+    def test_partial_signal_setup_restores_the_installed_handler(self):
+        with ExitStack() as stack:
+            _process, launch, _read, _reap = self.supervise_fixture(stack)
+            calls = []
+            def install(sig, handler):
+                calls.append((sig, handler))
+                if len(calls) == 2:
+                    raise RuntimeError(CANARY)
+                return 17
+            stack.enter_context(patch.object(supervisor.signal, 'signal', side_effect=install))
+            report = []
+            self.assertEqual(supervisor.supervise(['synthetic'], report=report.append), 2)
+            launch.assert_not_called()
+            self.assertEqual(calls[-1], (supervisor.signal.SIGTERM, 17))
+            self.assert_stage('\n'.join(report), 'signal_setup')
+
+    def test_abnormal_child_outputs_and_cleanup_have_closed_stages(self):
+        cases = [
+            ('coordinator_exit', b'', 1, False, True, None),
+            ('completion', b'', 0, False, True, {'synthetic': 'binding'}),
+            ('completion', CANARY.encode(), 0, False, True, {'synthetic': 'binding'}),
+            ('protocol', CANARY.encode(), 1, False, True, None),
+            ('cleanup', b'', 0, True, True, None),
+            ('cleanup', b'', None, False, False, None),
+        ]
+        for stage, raw, code, adopted, reaped, expected in cases:
+            with self.subTest(stage=stage, code=code, raw=bool(raw)), ExitStack() as stack:
+                _process, _launch, _read, reap = self.supervise_fixture(stack, raw=raw, code=code)
+                reap.return_value = (code, adopted, reaped)
+                report, completed = [], []
+                self.assertEqual(supervisor.supervise(['synthetic'], report=report.append,
+                    expected=expected, completed=completed), 1 if stage == 'coordinator_exit' else 2)
+                self.assert_stage('\n'.join(report), stage)
+                self.assertEqual(completed, [])
+
+    def test_late_finalization_failure_suppresses_completion_and_restores_signals(self):
+        expected = {'manifest_sha256': 'a' * 64, 'source_sha': 'b' * 40,
+                    'supervisor_sha256': 'c' * 64}
+        candidate = {'schema': 'resolver-coordinator-completion-v1', **expected,
+                     'receipt_sha256': 'd' * 64}
+        raw = (supervisor.CANDIDATE_PREFIX + json.dumps(candidate) + '\n').encode()
+        for fault in ('pipe_close', 'signal_restore'):
+            with self.subTest(fault=fault), ExitStack() as stack:
+                process, _launch, _read, _reap = self.supervise_fixture(stack, raw=raw, code=0)
+                restores = []
+                def install(sig, handler):
+                    if handler == 0:
+                        restores.append(sig)
+                        if fault == 'signal_restore':
+                            raise RuntimeError(CANARY)
+                    return 0
+                stack.enter_context(patch.object(supervisor.signal, 'signal', side_effect=install))
+                if fault == 'pipe_close':
+                    process.stdout.close.side_effect = OSError(CANARY)
+                report, completed = [], []
+                self.assertEqual(supervisor.supervise(['synthetic'], report=report.append,
+                    expected=expected, completed=completed), 2)
+                self.assert_stage('\n'.join(report), 'finalization')
+                self.assertEqual(completed, [])
+                self.assertEqual(restores, [supervisor.signal.SIGTERM, supervisor.signal.SIGINT])
+
+    def test_timeout_interruption_and_output_limit_are_reported_after_reaping(self):
+        for stage in ('timeout', 'interrupted', 'output_limit'):
+            with self.subTest(stage=stage), ExitStack() as stack:
+                process, _launch, _read, reap = self.supervise_fixture(
+                    stack, raw=b'x' * 769 if stage == 'output_limit' else b'', code=-9)
+                handlers = {}
+                def install(sig, handler):
+                    if callable(handler):
+                        handlers[sig] = handler
+                    return 0
+                stack.enter_context(patch.object(supervisor.signal, 'signal', side_effect=install))
+                calls = []
+                def exited(_pid):
+                    calls.append(_pid)
+                    if stage == 'interrupted' and len(calls) == 1:
+                        handlers[supervisor.signal.SIGTERM](0, None)
+                    return len(calls) > 1
+                stack.enter_context(patch.object(supervisor, '_exited', side_effect=exited))
+                stack.enter_context(patch.object(supervisor.time, 'monotonic',
+                    side_effect=[0., 20., 20., 20.] if stage == 'timeout' else None,
+                    return_value=0.))
+                report = []
+                def reported(message):
+                    reap.assert_called_once()
+                    process.stdout.close.assert_called_once()
+                    report.append(message)
+                self.assertEqual(supervisor.supervise(['synthetic'], report=reported), 2)
+                self.assert_stage('\n'.join(report), stage)
+
+    def test_late_interruption_during_pipe_close_cannot_report_success(self):
+        expected = {'manifest_sha256': 'a' * 64, 'source_sha': 'b' * 40,
+                    'supervisor_sha256': 'c' * 64}
+        candidate = {'schema': 'resolver-coordinator-completion-v1', **expected,
+                     'receipt_sha256': 'd' * 64}
+        raw = (supervisor.CANDIDATE_PREFIX + json.dumps(candidate) + '\n').encode()
+        with ExitStack() as stack:
+            process, _launch, _read, _reap = self.supervise_fixture(stack, raw=raw, code=0)
+            handlers = {}
+            def install(sig, handler):
+                if callable(handler):
+                    handlers[sig] = handler
+                return 0
+            stack.enter_context(patch.object(supervisor.signal, 'signal', side_effect=install))
+            process.stdout.close.side_effect = lambda: handlers[supervisor.signal.SIGTERM](0, None)
+            report, completed = [], []
+            self.assertEqual(supervisor.supervise(['synthetic'], report=report.append,
+                expected=expected, completed=completed), 2)
+            self.assert_stage('\n'.join(report), 'interrupted')
+            self.assertEqual(completed, [])
+
+
 class Output(unittest.TestCase):
     def setUp(self):
         self.scratch = tempfile.TemporaryDirectory(prefix='resolver-offline-test-')

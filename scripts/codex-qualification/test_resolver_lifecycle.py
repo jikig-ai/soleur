@@ -150,7 +150,17 @@ class Lifecycle(unittest.TestCase):
             result = supervisor.supervise([sys.executable, '-I', '-S', '-B', str(program)],
                                           timeout=2., grace=.2, report=report.append)
             self.assertEqual(result, code)
-        self.assertEqual(report, ['Resolver diagnostic refused; preconsume_stage=source_binding'])
+        self.assertEqual(report, ['Resolver diagnostic refused; preconsume_stage=source_binding',
+                                 'Resolver diagnostic refused; supervisor_stage=protocol'])
+
+    def test_synthetic_startup_failure_reports_child_exit_without_stderr(self):
+        program = self.root / 'synthetic_bad_import.py'
+        program.write_text('raise ImportError("SYNTHETIC_SECRET_DO_NOT_RETAIN")\n')
+        report = []
+        result = supervisor.supervise([sys.executable, '-I', '-S', '-B', str(program)],
+                                      timeout=2., grace=.2, report=report.append)
+        self.assertEqual(result, 1)
+        self.assertEqual(report, ['Resolver diagnostic refused; supervisor_stage=coordinator_exit'])
 
     def test_supervisor_error_path_kills_and_reaps_live_descendants(self):
         original = supervisor._exited
