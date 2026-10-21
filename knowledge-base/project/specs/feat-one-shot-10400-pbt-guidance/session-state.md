@@ -69,3 +69,10 @@ soleur:plan (full workflow, inline), soleur:deepen-plan (halt gates 4.5–4.55 i
 - NEXT (ship tail): `soleur:qa` (docs-only — Test Scenarios has no browser/API flows → exits gracefully) → `soleur:compound` → `soleur:ship` (mark ready → full battery → merge queue → postmerge → `gh issue close 10400` → epic tick) → then #10402 (feature-map convention), #10403, #10401, #10404.
 - PR: #10718 draft; branch tip = latest fix commit. mergeStateStatus was BEHIND — resync at ship.
 - Attestations owed at ship: Reviewed-By + Reviewed-Fix-Round/Reviewed-Fix-Range (955863414e..<ship-sha>) trailers in squash commit message.
+
+## Compound Phase COMPLETE
+- Learnings written: best-practices/2026-10-21-shipped-guidance-examples-must-survive-trivial-implementations-and-self-oracles.md (P1 vacuous example + second-order vacuity + P2 self-oracular RHS + unverified tool rows); workflow-patterns/2026-10-21-one-site-rulings-need-count-pins-not-presence-pins.md (found->count cardinality).
+- Route-to-definition: 1 bounded bullet appended to plugins/soleur/skills/review/references/generated-input-oracle-surfaces.md (eval-gate: gated:false). Solution insights already live in property-testing.md via fix commits.
+- Session error inventory: crates.io UA-403 (one-off, UA header); deepen-plan 4.7 pure-docs boundary (deliberate — plugins/*/skills/*.md is gate-bearing by design).
+- Auto-Consolidation Step E DEFERRED to ship Phase 6.45 — decision-challenges.md must stay live for ship Phase 6 step 2.5 Model Dissents render.
+- NEXT: soleur:ship (mark ready -> battery -> merge queue -> postmerge -> close 10400 -> epic tick). Attestations: Reviewed-By + Reviewed-Fix-Round/Reviewed-Fix-Range (955863414e..<ship-sha>) trailers in squash message.
