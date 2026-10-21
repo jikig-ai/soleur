@@ -129,7 +129,7 @@ A non-zero exit FAILS this QA run. The assertions read invariants jsdom cannot: 
 For each test scenario in the plan, execute the steps it describes. Scenarios contain three possible step types, identified by their prefix:
 
 - **Browser:** steps — Execute via Playwright MCP tools (`browser_navigate`, `browser_fill_form`, `browser_click`, `browser_snapshot`, `browser_take_screenshot`)
-- **Route lookup:** when the repository carries a maintained feature map (this repo: `apps/web-platform/test/feature-map.md`), resolve Browser-step targets against its `## \`/route\`` entries — selectors, expected outcome, auth, gotchas — before navigating
+- **Route lookup:** when the repository carries a maintained feature map (`docs/feature-map.md` by convention; soleur's own: `apps/web-platform/test/feature-map.md`), resolve Browser-step targets against its `## \`/route\`` entries — selectors, expected outcome, auth, gotchas — before navigating
 
 **Credential safety on the Playwright-MCP path (#7947, #7980).** An
 accessibility snapshot serializes the **value** of input fields, including a
