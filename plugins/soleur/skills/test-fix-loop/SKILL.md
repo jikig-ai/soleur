@@ -74,11 +74,17 @@ Distinguish build/compilation errors from test failures. If the suite fails to c
 
 Count `^[KILLED]` lines separately from failures, and record both alongside `rc`. A terminated suite emits no assertion output, so it parses to zero failures and produces zero clusters: "non-zero `rc`, nothing parseable" is a real shape, and it is *unresolved coverage*, not an empty failure set. Never let it fall through to "all tests pass".
 
+**Flake screen — the failure set §2's delta rows and §3's clustering read is the POST-SCREEN set.** For each *newly*-failed test — keyed by file + test name (the same `it()` title in two files is two entries, not one flake) — re-run that test alone on the unchanged code via the runner's filter flag (`vitest -t`, `pytest -k`, `go test -run`, `bun test -t` / `--test-name-pattern`; when the runner cannot filter, one suite-level re-run answers the same question by absence). **A pass on that re-run — same code, no fix applied — is a flake signature.** A re-run that itself errors or times out is NOT a pass: the failure stays on the fix path. Mixed sets compose per-test — passers quarantine, failers proceed to §3. The screen never runs on a `^[KILLED]` / `rc` 3 suite (the *Suite terminated* row owns those — ADR-177) nor on build/compile errors (no single test to isolate). Per quarantined test, three acts:
+
+- **Quarantine it** — remove it from the failure set driving fix/cluster bookkeeping and from every later delta count: a test quarantined in iteration N stays quarantined for the run, never counts toward "fixed", and never trips *Circular fix*. It consumes no fix-round tally (no fix was attempted).
+- **File it** — when a GitHub remote and `gh` exist: search open issues for the title first (`gh issue list --state open --search 'in:title "flake: <test> — <signature>"' --json number --jq '.[0].number // empty'`) and comment on the existing tracker rather than duplicate (mirroring `scheduled-integration-suites.yml`); on a miss, `gh issue create` titled `flake: <test> — <signature>` with the `flaky` label create-then-add (`gh label create flaky --color FBCA04 --description "Intermittently-failing test" 2>/dev/null || true`, then `gh issue edit <N> --add-label flaky` — the create self-heals on a repo lacking the label and never rewrites an existing one), body carrying the pass-on-retry signature, the runner command, and a pointer to [determinism-checklist.md](./references/determinism-checklist.md). With no `gh`/remote the quarantine is report-only and the report says so.
+- **Report it** — a `Quarantined flakes:` block in the Diagnostic Report naming each test + its issue. Once quarantined, a later re-failure is noted in the report and the filed issue, not re-entered for fixing; if the flaked test's path intersects files this loop's commits touched, flag **possible diff-interaction** — quarantine must never launder a real regression this branch caused. Quarantine never edits, skips, or deletes a test file.
+
 ### 2. Check Termination Conditions
 
 Before attempting fixes, check whether to stop. Rows are checked top to bottom; the first match wins.
 
-**The count driving every delta row below is `failures + killed`, and a suite that is KILLED in either of the two iterations being compared is excluded from the delta rather than counted as fixed.** A failures-only count is arithmetically unsafe here: a suite that FAILED in iteration N and is KILLED in N+1 lowers it, which reads as a fabricated improvement; when the same suite completes again in N+2 the count jumps back, which reads as **Regression** and would `git reset --hard HEAD` over real fixes on the strength of a signal artifact.
+**The count driving every delta row below is `failures + killed` on the post-screen set (the §1 flake screen's quarantines never enter it), and a suite that is KILLED in either of the two iterations being compared is excluded from the delta rather than counted as fixed.** A failures-only count is arithmetically unsafe here: a suite that FAILED in iteration N and is KILLED in N+1 lowers it, which reads as a fabricated improvement; when the same suite completes again in N+2 the count jumps back, which reads as **Regression** and would `git reset --hard HEAD` over real fixes on the strength of a signal artifact.
 
 | Condition | Detection | Action |
 |-----------|-----------|--------|
@@ -134,8 +140,9 @@ On termination (success or failure), write a report to stdout:
 - **Termination reason**: one-line explanation
 - **Iteration history**: failure count per iteration with delta
 - **Remaining failures**: test name and error message for each (if not success)
+- **Quarantined flakes**: one line per quarantined test — name + filed issue (or `report-only` when no `gh`/remote); a SUCCESS with quarantines renders `SUCCESS (N quarantined — issues #…)`, never a bare green
 - **Fixes applied**: files modified and what changed (last iteration)
-- **Recommendation**: what the user should investigate next (if not success). CIRCULAR or NON_CONVERGENCE on one cluster is an architecture signal, not a fix signal: recommend `soleur:engineering:review:legacy-code-expert` for that cluster's seams and characterization tests before another loop. Likewise when a fix landed but no existing test asserts the behaviour it changed -- this loop never writes tests, so name the agent that should.
+- **Recommendation**: what the user should investigate next (if not success). CIRCULAR or NON_CONVERGENCE on one cluster is an architecture signal, not a fix signal: recommend `soleur:engineering:review:legacy-code-expert` for that cluster's seams and characterization tests before another loop. Likewise when a fix landed but no existing test asserts the behaviour it changed -- this loop never writes tests, so name the agent that should. On NON_CONVERGENCE or MAX_ITERATIONS, name the remaining failures as load-only flake candidates to review against [determinism-checklist.md](./references/determinism-checklist.md) — the isolated re-run under-detects the contention class (fails only under suite load), so the honest answer there is determinism work on the test, not retry.
 
 On success, fixes are staged but NOT committed. The user reviews and commits via `soleur:ship` or manually.
 
@@ -148,3 +155,4 @@ On success, fixes are staged but NOT committed. The user reviews and commits via
 - Exit early -- stop as soon as the trajectory indicates non-convergence
 - Stage, do not commit -- respect the Workflow Completion Protocol
 - Probes are not fixes -- a `[DEBUG-<hex4>]` line never checkpoints or stages (ADR-230)
+- Pass-on-retry is a flake to quarantine, not a fix to report
