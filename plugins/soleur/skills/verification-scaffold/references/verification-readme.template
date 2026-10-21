@@ -37,8 +37,10 @@ bash <plugin>/skills/verification-scaffold/scripts/verification-scaffold.sh --ta
 
 removes only that guard's emitted files plus its `.claude/settings.json` hook
 entry; shared artifacts (the workflow, `.gitleaks.toml` when another guard
-still needs it) stay. `--uninstall` on a never-installed guard is a no-op that
-lists what is installed.
+still needs it) stay — the workflow is only edited when this guard's job block
+is actually present. `--uninstall` on a never-installed guard is a no-op that
+lists what is installed, and once no guard artifact remains this marker block
+is pruned (a file that held only this block is removed).
 
 ### Requirements
 

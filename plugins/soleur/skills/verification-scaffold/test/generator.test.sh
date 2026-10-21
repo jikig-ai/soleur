@@ -243,5 +243,77 @@ OUT="$(run_gen_out "$FX" --list)"
   && pass "--list prints the guard manifest" \
   || fail "--list failed: ${OUT%%|*}"
 
+# --- 64: a v2-candidate guard is refused (#10759) --------------------------------
+FX="$(mkrepo v2refuse)"; assert_fixture_dir "$FX"
+RC="$(run_gen "$FX" --guards block-rm-rf --headless)"
+[[ "$RC" == "64" && ! -e "$FX/.claude/hooks/block-rm-rf.sh" ]] \
+  && pass "exit 64: v2-candidate guard refused, nothing emitted" \
+  || fail "expected 64 for v2-tier guard, got $RC"
+
+# --- 69: TMPDIR resolving inside the repo is refused pre-write (#10759) ----------
+FX="$(mkrepo tmpinside)"; assert_fixture_dir "$FX"
+mkdir -p "$FX/tmp"
+RC=0; TMPDIR="$FX/tmp" bash "$GEN" --target "$FX" --headless >/dev/null 2>&1 || RC=$?
+if [[ "$RC" == "69" && ! -e "$FX/.claude/hooks/secret-scan.sh" && ! -e "$FX/.claude/settings.json" ]]; then
+  pass "exit 69: TMPDIR inside the target repo refused before any artifact"
+else
+  fail "TMPDIR-inside-repo arm: expected 69, got rc=$RC"
+fi
+
+# --- --uninstall secret-scan: strip only its job from the shared workflow --------
+FX="$(mkrepo jobstrip)"; assert_fixture_dir "$FX"
+RC="$(run_gen "$FX" --guards secret-scan,orphan-test --headless)"
+[[ "$RC" == "0" ]] || fail "secret-scan+orphan-test install failed rc=$RC"
+OUT="$(run_gen_out "$FX" --uninstall secret-scan)"
+if [[ "${OUT%%|*}" == "0" && "${OUT#*|}" == *job-stripped* \
+   && -f "$FX/.github/workflows/verification-gates.yml" \
+   && -f "$FX/scripts/verification/orphan-test-check.sh" \
+   && ! -e "$FX/.claude/hooks/secret-scan.sh" && ! -e "$FX/.gitleaks.toml" ]]; then
+  pass "--uninstall secret-scan strips only its job block from the shared workflow"
+else
+  fail "shared-artifact uninstall arm: rc=${OUT%%|*} out=${OUT#*|}"
+fi
+WF="$FX/.github/workflows/verification-gates.yml"
+if grep -qF '# verification-scaffold:begin:orphan-test' "$WF" \
+   && ! grep -qF 'verification-scaffold:begin:secret-scan' "$WF"; then
+  pass "shared workflow keeps the orphan-test job, drops secret-scan's"
+else
+  fail "shared workflow job blocks wrong after strip: $(grep -c 'begin:' "$WF" 2>/dev/null)"
+fi
+
+# --- --uninstall of a never-installed ci guard: no phantom job-strip (#10759) -----
+FX="$(mkrepo neverci)"; assert_fixture_dir "$FX"
+RC="$(run_gen "$FX" --guards secret-scan --headless)"
+[[ "$RC" == "0" ]] || fail "secret-scan-only install failed rc=$RC"
+OUT="$(run_gen_out "$FX" --uninstall orphan-test)"
+if [[ "${OUT%%|*}" == "0" && "${OUT#*|}" == *"not installed"* && "${OUT#*|}" != *"job-stripped"* ]]; then
+  pass "--uninstall of a never-installed ci guard reports not-installed (no phantom job-strip)"
+else
+  fail "never-installed ci guard arm: rc=${OUT%%|*} out=${OUT#*|}"
+fi
+grep -qF 'verification-scaffold:begin:secret-scan' "$FX/.github/workflows/verification-gates.yml" \
+  && pass "shared workflow untouched by the never-installed guard's uninstall" \
+  || fail "workflow lost its secret-scan block on a phantom uninstall"
+
+# --- doc block is pruned once no v1 artifact remains (#10759) --------------------
+OUT="$(run_gen_out "$FX" --uninstall secret-scan)"
+if [[ "${OUT%%|*}" == "0" && ! -e "$FX/VERIFICATION.md" \
+   && ! -e "$FX/.github/workflows/verification-gates.yml" ]]; then
+  pass "last-guard uninstall prunes the stale VERIFICATION.md marker block"
+else
+  fail "doc-block prune arm: rc=${OUT%%|*} VERIFICATION.md=$(ls "$FX/VERIFICATION.md" 2>/dev/null || echo absent)"
+fi
+
+# --- default branch named a&b still emits a working regex (#10759) ----------------
+FX="$(mkrepo ampbranch)"; assert_fixture_dir "$FX"
+git -C "$FX" update-ref refs/remotes/origin/a\&b "$(git -C "$FX" rev-parse HEAD)"
+git -C "$FX" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/a\&b
+RC="$(run_gen "$FX" --guards commit-on-main --mode enforce --headless)"
+if [[ "$RC" == "0" ]] && ! grep -qF '@DEFAULT_BRANCHES@' "$FX/scripts/verification/precommit-guard.sh"; then
+  pass "default branch 'a&b': emitted regex is literal — enforce install + bite green"
+else
+  fail "a&b default-branch arm: rc=$RC"
+fi
+
 printf '\n%d pass(es), %d fail(s)\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]

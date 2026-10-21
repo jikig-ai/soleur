@@ -55,7 +55,8 @@ artifact is a refusal — there is no `--force`.
 Same model as `constraint-scaffold`: the agent owns the emitted files; the
 target user never hand-edits a gate. `--uninstall <guard>` removes only that
 guard's artifacts + settings entry; it is idempotent and prints "not installed"
-for a never-installed guard.
+for a never-installed guard, and it strips the marker doc block from
+VERIFICATION.md/README.md once no guard artifact remains.
 
 ## Bite-proof
 

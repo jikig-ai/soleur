@@ -218,14 +218,20 @@ _vs_cleanup() {
 
 # --- template emission -----------------------------------------------------------
 # emit_tpl <template-rel> <target-rel> <mode>: render @MODE@/@DEFAULT_BRANCHES@/
-# @CI_CONTINUE_ON_ERROR@ substitutions, write, record.
+# @CI_CONTINUE_ON_ERROR@ substitutions, write, record. Substitution is bash
+# parameter expansion — a literal-replacement pass with no delimiter: under sed
+# an unescaped `&` in DEFAULT_BRANCHES re-inserted the literal placeholder
+# (fail-open: the emitted regex then never matched the real default branch) and
+# sed's replacement layer ate the regex escapes outright (#10759).
 emit_tpl() {
   local tpl="$REF_DIR/$1" out="$TARGET/$2" mode="${3:-0644}"
   ensure_dir "$(dirname "$out")"
-  sed -e "s~@MODE@~$MODE~g" \
-      -e "s~@DEFAULT_BRANCHES@~$DEFAULT_BRANCHES~g" \
-      -e "s~@CI_CONTINUE_ON_ERROR@~$CI_CONTINUE_ON_ERROR~g" \
-      "$tpl" > "$out"
+  local content
+  content="$(cat "$tpl")"
+  content="${content//@MODE@/$MODE}"
+  content="${content//@DEFAULT_BRANCHES@/$DEFAULT_BRANCHES}"
+  content="${content//@CI_CONTINUE_ON_ERROR@/$CI_CONTINUE_ON_ERROR}"
+  printf '%s\n' "$content" > "$out"
   chmod "$mode" "$out"
   record_emit "$out"
 }
@@ -377,12 +383,16 @@ resolve_default_branches() {
   local ref
   ref="$(git -C "$TARGET" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null || true)"
   if [[ -n "$ref" ]]; then
-    DEFAULT_BRANCHES="${ref#origin/}"
+    # ERE-escape every metachar legal in a ref name — emit_tpl substitutes this
+    # string literally into the emitted pattern, so a default named release/1.0
+    # or a&b compiles to the intended literal (#10759: a bare & once re-inserted
+    # the @DEFAULT_BRANCHES@ placeholder through sed's replacement).
+    DEFAULT_BRANCHES="$(printf '%s' "${ref#origin/}" | sed 's/[][\.*^$/|&~()+?{}]/\\&/g')"
   else
+    # Raw | — the intended alternation, which is why the escape stays inside
+    # the ref-resolved branch only.
     DEFAULT_BRANCHES="main|master"
   fi
-  # Regex-escape: a default named release/1.0 must not let . match a literal.
-  DEFAULT_BRANCHES="$(printf '%s' "$DEFAULT_BRANCHES" | sed 's/[][\.*^$/]/\\&/g')"
 }
 
 # --- bite-proof ------------------------------------------------------------------
@@ -421,9 +431,13 @@ bite_fail() { # bite_fail <code> <guard> <msg>
 }
 
 # Run an emitted hook: stdin payload, cwd = $WT. Captures stdout JSON + stderr.
+# stderr APPENDS to a per-hook log: truncation dropped every earlier arm's
+# diagnostics, while one shared file would let an earlier guard's refusal WARN
+# satisfy a later guard's stderr grep (#10759).
 run_hook() { # run_hook <hook-path> <command> <cwd-override?>
   local hook="$1" cmd="$2" cwd="${3:-$WT}"
-  ( cd "$cwd" && printf '%s' "$(payload_json "$cmd" "$cwd")" | bash "$hook" ) 2>"$BITE_DIR/hook-err.log"
+  ( cd "$cwd" && printf '%s' "$(payload_json "$cmd" "$cwd")" | bash "$hook" ) \
+    2>>"$BITE_DIR/hook-err.$(basename "$hook" .sh).log"
 }
 payload_json() { # payload_json <command> <cwd>
   if command -v jq >/dev/null 2>&1; then
@@ -454,7 +468,7 @@ bite_secret_scan() {
   git -C "$WT" add bite-clean.txt
   out="$(run_hook "$hook" "git commit -m x")" || true
   expect_decision secret-scan pass <(printf '%s' "$out") allow \
-    || bite_fail 71 secret-scan "clean staged tree did not allow (got: $out; stderr: $(cat "$BITE_DIR/hook-err.log"))"
+    || bite_fail 71 secret-scan "clean staged tree did not allow (got: $out; stderr: $(cat "$BITE_DIR/hook-err.secret-scan.log"))"
   # fail: staged secret-shaped string
   # Synthetic-but-shaped secret (the AWS docs example key is allowlisted in
   # gitleaks's default ruleset — this variant keeps the 40-char shape only).
@@ -463,7 +477,7 @@ bite_secret_scan() {
   out="$(run_hook "$hook" "git commit -m x")" || true
   if [[ "$MODE" == "enforce" ]]; then want=deny; else want=ask; fi
   expect_decision secret-scan fail <(printf '%s' "$out") "$want" \
-    || bite_fail 72 secret-scan "staged secret did not produce $want (got: $out; stderr: $(cat "$BITE_DIR/hook-err.log"))"
+    || bite_fail 72 secret-scan "staged secret did not produce $want (got: $out; stderr: $(cat "$BITE_DIR/hook-err.secret-scan.log"))"
   # pass again: revert
   git -C "$WT" rm -q --cached bite-secret.txt && rm -f "$WT/bite-secret.txt"
   out="$(run_hook "$hook" "git commit -m x")" || true
@@ -490,16 +504,16 @@ bite_commit_on_main() {
   # pass: feature branch
   out="$(run_hook "$hook" "git -C $fx commit -m x" "$WT")" || true
   expect_decision commit-on-main pass <(printf '%s' "$out") allow \
-    || bite_fail 71 commit-on-main "feature-branch payload was not allowed (got: $out; stderr: $(cat "$BITE_DIR/hook-err.log"))"
+    || bite_fail 71 commit-on-main "feature-branch payload was not allowed (got: $out; stderr: $(cat "$BITE_DIR/hook-err.commit-on-main.log"))"
   # fail: default branch
   git -C "$fx" checkout -q "$first"
   out="$(run_hook "$hook" "git -C $fx commit -m x" "$WT")" || true
   expect_decision commit-on-main fail <(printf '%s' "$out") "$want" \
-    || bite_fail 72 commit-on-main "default-branch ($first) payload did not produce $want (got: $out; stderr: $(cat "$BITE_DIR/hook-err.log"))"
+    || bite_fail 72 commit-on-main "default-branch ($first) payload did not produce $want (got: $out; stderr: $(cat "$BITE_DIR/hook-err.commit-on-main.log"))"
   # Advisory must warn a REFUSAL on stderr — an allow with no signal is a silent
   # guard, and a tool-error warn must not satisfy the arm either.
-  if [[ "$MODE" == "advisory" ]] && ! grep -qE 'not allowed|refused' "$BITE_DIR/hook-err.log"; then
-    bite_fail 72 commit-on-main "advisory refusal carried no refusal WARN on stderr (got: $out; stderr: $(cat "$BITE_DIR/hook-err.log"))"
+  if [[ "$MODE" == "advisory" ]] && ! grep -qE 'not allowed|refused' "$BITE_DIR/hook-err.commit-on-main.log"; then
+    bite_fail 72 commit-on-main "advisory refusal carried no refusal WARN on stderr (got: $out; stderr: $(cat "$BITE_DIR/hook-err.commit-on-main.log"))"
   fi
   # pass again
   git -C "$fx" checkout -q feat-bite
@@ -518,8 +532,8 @@ bite_block_stash() {
   out="$(run_hook "$hook" "git add x && git stash pop")" || true
   expect_decision block-stash fail <(printf '%s' "$out") "$want" \
     || bite_fail 72 block-stash "chained 'git stash pop' did not produce $want (got: $out)"
-  if [[ "$MODE" == "advisory" ]] && ! grep -qE 'not allowed' "$BITE_DIR/hook-err.log"; then
-    bite_fail 72 block-stash "advisory refusal carried no refusal WARN on stderr (got: $out)"
+  if [[ "$MODE" == "advisory" ]] && ! grep -qE 'not allowed' "$BITE_DIR/hook-err.block-stash.log"; then
+    bite_fail 72 block-stash "advisory refusal carried no refusal WARN on stderr (got: $out; stderr: $(cat "$BITE_DIR/hook-err.block-stash.log"))"
   fi
   out="$(run_hook "$hook" "git stash list")" || true
   expect_decision block-stash pass2 <(printf '%s' "$out") allow \
@@ -599,12 +613,15 @@ if [[ -n "$UNINSTALL" ]]; then
           esac
         done
         if [[ -f "$f" ]]; then
-          if [[ "$other_ci" -eq 1 ]]; then
+          if [[ "$other_ci" -eq 0 ]]; then
+            rm -f -- "$f"; removed="$removed $p"
+          elif grep -qF "# verification-scaffold:begin:$g" "$f"; then
             sed "/# verification-scaffold:begin:$g/,/# verification-scaffold:end:$g/d" "$f" > "$f.tmp" && mv "$f.tmp" "$f"
             removed="$removed $p($g-job-stripped)"
-          else
-            rm -f -- "$f"; removed="$removed $p"
           fi
+          # other_ci=1 with no begin:$g marker: this guard's job block was never
+          # emitted (subset install) — the shared file stays byte-identical and
+          # nothing is reported (#10759 phantom-job-strip).
         fi ;;
       .gitleaks.toml)
         if [[ -f "$f" ]]; then
@@ -634,6 +651,21 @@ if [[ -n "$UNINSTALL" ]]; then
   done
   [[ -z "$left" ]] && rm -f -- "$TARGET/.claude/.verification-scaffold-dirs" \
     && rmdir "$TARGET/.claude" 2>/dev/null || true
+  # Nothing installed -> the marker doc block is a stale claim that guards are
+  # present; strip the begin:end range (only when BOTH markers are present, so a
+  # truncated block can never delete to EOF) and drop the file if it emptied
+  # (#10759 — VERIFICATION.md is the block alone; README.md keeps its content).
+  if [[ -z "$left" ]]; then
+    for doc in "$TARGET/VERIFICATION.md" "$TARGET/README.md"; do
+      [[ -f "$doc" && ! -L "$doc" ]] || continue
+      grep -qF 'verification-scaffold:readme:start' "$doc" || continue
+      grep -qF 'verification-scaffold:readme:end' "$doc" || continue
+      sed '/verification-scaffold:readme:start/,/verification-scaffold:readme:end/d' "$doc" > "$WORK/docstrip" \
+        && mv "$WORK/docstrip" "$doc"
+      [[ -s "$doc" ]] || rm -f -- "$doc"
+      removed="$removed ${doc#"$TARGET"/}(doc-block)"
+    done
+  fi
   if [[ -z "$removed" ]]; then
     say "$g: not installed — nothing removed."
     for og in $(v1_guards); do
