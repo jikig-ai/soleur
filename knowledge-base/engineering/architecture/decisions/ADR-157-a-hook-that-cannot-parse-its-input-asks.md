@@ -175,3 +175,20 @@ commit, and stash guard on the call.
 | **Size cap, oversize ⇒ fail-open** | **Rejected.** A one-line padded payload disarms it by construction, and it fires on routine large `Write` payloads (this repo tracks an 806 KB lockfile). Any ceiling now asks. |
 | **Every hook emits the `ask`** | **Rejected.** Turns a persistent fault into an unrecoverable loop; see Designated responder. |
 | **A new AGENTS.md rule instead of a lint** | **Rejected.** It would fit the always-loaded budget, but a red CI check is fail-closed and costs zero always-loaded bytes. Prose is what failed for four months. |
+
+## Addendum — 2026-10-21 (#10609): a content-level scan gate denies when it cannot determine its target
+
+This ADR governs the hook **envelope**: stdin that cannot be parsed asks, never denies. It does not
+govern a decision about command text the envelope parsed fine. `git-commit-secret-scan.sh` is such a
+gate: its purpose is preventing a credential from reaching git history, which reverting a commit
+cannot undo. When it cannot determine which repository a `git commit` targets (a `$VAR` or `$(...)`
+path, `~`, `cd -`, `GIT_DIR=` / `--git-dir` / `--work-tree`, a `bash -c` / `eval` script held in a
+variable, or the command lexer or its helper library being unavailable), it **denies** with a named
+cause and a repair, instead of skipping the scan. Reasons: an unscanned commit is the exact failure
+the hook exists to prevent; the repair is one extra tool call (`cd <abs path>` as its own command,
+then a plain `git commit`); and an `ask` has no answerer in a headless pipeline
+([ADR-165](./ADR-165-what-ask-means-on-a-harness-with-no-ask-state.md)), so it would degenerate into
+the same skip. An unrunnable or timed-out gitleaks keeps its existing allow plus bypass row (an
+environment fault, not an undeterminable target). There is no override variable: an override is the
+skip. This is a second scoped exception beside ADR-256's, with the same shape: every other failure
+still asks.

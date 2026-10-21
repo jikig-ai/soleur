@@ -662,6 +662,18 @@ _t_target_resolution() {
   _expect "T26 a -C on a non-commit command does not displace the cwd repo (fallback roots stay unioned)" \
     "$B" "git -C $A status; git commit -m x" deny "leak.json"
 
+  # Each fallback root is its own contract: process cwd and payload .cwd can differ.
+  _expect "T26b the PROCESS-cwd root is scanned even when the command names a clean target" \
+    "$B" "git -C $A commit -m x" deny "leak.json"
+  PAYLOAD_CWD="$B" _expect "T26c the PAYLOAD-cwd root is scanned even when the command names a clean target" \
+    "$A" "git -C $A commit -m x" deny "leak.json"
+  PAYLOAD_CWD="$A" _expect "T26d the PROCESS-cwd root is scanned when the payload .cwd differs" \
+    "$B" "git -C $A commit -m x" deny "leak.json"
+  _expect "T43d must-ALLOW: a loose-match non-commit in a LEAKY repo is not scanned (the lexer must confirm a commit)" \
+    "$B" "git --no-pager log --grep commit" allow
+  _expect "T43e must-ALLOW: quoted 'git -C x commit' in a LEAKY repo is data" \
+    "$B" 'echo "git -C x commit"' allow
+
   for s in 'cd "$WT" && git commit -m x' \
            'cd $WT && git commit -m x' \
            'cd "$(pwd)/wt" && git commit -m x' \

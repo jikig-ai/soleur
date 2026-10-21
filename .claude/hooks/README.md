@@ -177,6 +177,18 @@ failure that was its own, not the code's — the same "declared-verifiable but
 never executed" gap that #7164's `@sh`-is-safe comment belongs to. Corrected
 here after running it.
 
+### `git-commit-secret-scan` target resolution (#10609)
+
+The hook scans the repository a `git commit` **targets**, not the one the hook process happens to
+run in. `lib/commit-target-roots.sh` lexes the command with `plugins/soleur/hooks/lib/shell-argv.pl`
+(a runtime dependency: if perl, the lexer or the library is missing the hook denies, never skips)
+and collects every literal `cd` / `pushd` / `git -C` / `env -C` path. It scans the union of those
+repositories plus the cwd-derived and payload-`cwd` roots. A target it cannot read statically
+(`$VAR`, `$(...)`, `~`, `cd -`, a glob, `GIT_DIR=`, `--git-dir`, `--work-tree`, or a `bash -c` /
+`eval` string held in a variable) is **denied**, with the repair: run `cd <absolute worktree path>`
+as its own command, then `git commit` with no `cd`/`-C`; or use a literal absolute path. There is
+no override variable. Rationale: ADR-157 addendum (2026-10-21).
+
 ### Scope of the mandate
 
 **Mandatory** for hooks on the `Bash` matcher and for blocking write guards —
