@@ -197,3 +197,5 @@ recorded in the plan's `## SpecFlow Findings`).
 | Named panel — cmo | content-strategy.md entry in scope (sibling pattern). | no change |
 | Named panel — cto (devex) | Sibling-mechanism reuse minimizes install friction; no new concepts for operators. | no change |
 
+| 10 | Mode mechanism: install-time `--mode advisory|enforce` flag vs runtime `SOLEUR_GUARDS_MODE` env var | technical | ruled | Ruled in-session, 2026-10-21: `--mode` install flag — mode is stamped into the emitted artifacts at install; a runtime env var is invisible to CI and ungreppable, the flag makes the mode a reviewable property of the emitted files |
+| 11 | `SOLEUR_*` internal variable names inside the near-verbatim `precommit-guard.sh`/`wrapper-boundary.sh` emit | technical | ruled | Ruled in-session, 2026-10-21: rename to `VERIFICATION_*` at emit — cosmetic coupling that would mislead user-repo maintainers; byte-parity test compares against a rename-normalized copy |
