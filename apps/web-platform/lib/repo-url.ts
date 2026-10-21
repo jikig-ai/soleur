@@ -60,6 +60,12 @@ export function normalizeRepoUrl(raw: string | null | undefined): string {
   working = working.replace(/(\.git)+$/i, "");
   // Strip any trailing `/` the `.git` strip may have exposed.
   working = working.replace(/\/+$/, "");
+  // The `.git` strip can also expose a trailing dot-segment: `a/..git` →
+  // `a/..`. URL parsing collapses `..` on the NEXT normalize() call, so
+  // leaving it in place breaks idempotence — strip exposed trailing `/.`/`..`
+  // segments to the same fixpoint URL normalization would reach. (#10716)
+  working = working.replace(/(\/\.{1,2})+$/, "");
+  working = working.replace(/\/+$/, "");
   // Re-trim: a `/` or `.git` strip can expose whitespace it was shielding
   // ("foo .git" -> "foo ", "x /" -> "x "), and an output with trailing
   // whitespace is not a fixpoint — the next call's input trim() would

@@ -1,9 +1,9 @@
 ---
 title: "Property-Based Testing Adopted — First Property Found a Real Bug"
 type: feature-tweet
-publish_date: ""
+publish_date: 2026-10-22
 channels: x, discord
-status: draft
+status: scheduled
 pr_reference: "#10624"
 issue_reference: "#10398"
 ---
