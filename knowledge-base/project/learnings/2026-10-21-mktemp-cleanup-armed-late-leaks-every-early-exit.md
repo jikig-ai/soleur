@@ -12,6 +12,7 @@ root_cause: logic_error
 resolution_type: code_fix
 severity: medium
 tags: [mktemp, cleanup, exit-trap, verification-scaffold, shell]
+synced_to: [plan]
 ---
 
 # Learning: A mktemp dir whose cleanup is armed late leaks every exit before the trap — and rm placed before the last reader breaks the artifact it feeds
