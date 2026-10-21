@@ -210,6 +210,7 @@ def supervise(command, *, timeout=12., grace=1., report=None, expected=None, com
         drain()
         if len(raw) > 768:
             failure = 'output_limit'
+            uncertain = True
         if failure is None and raw:
             message = bytes(raw)
             accepted = next((value for value in CLOSED_MESSAGES if message == value.encode('ascii')), None)

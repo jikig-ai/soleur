@@ -37,3 +37,10 @@ The first commit was blocked because the harness hook resolved its ambient bare
 root's `main` rather than the shell tool's feature-worktree `workdir`. The guard's
 documented `git -C <worktree>` resolution arm lets it verify the actual feature
 branch. Use that explicit command context without disabling the guard.
+
+The timeout-after-candidate synthetic lifecycle test assumed child import and
+receipt publication fit in 500 ms. A concurrent run violated that assumption;
+a deliberate 600 ms startup delay reproduced the failure. Signal fixture
+readiness after candidate flush, trigger the synthetic timeout only then, and
+retain an independent real startup cap. Keep production budgets unchanged.
+This proves that fixture race, not any historical operational failure.

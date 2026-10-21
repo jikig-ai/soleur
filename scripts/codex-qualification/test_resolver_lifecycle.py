@@ -214,7 +214,9 @@ class Lifecycle(unittest.TestCase):
             'patch.object(socket,"socket",side_effect=AssertionError("Offline connection refused")),'
             'patch.object(subprocess,"Popen",side_effect=AssertionError("Production child refused")):\n'
             f' result=d.coordinate(Namespace(**{args!r}),clock=lambda:0.)\n'
-            + ('sys.stdout.flush()\ntime.sleep(30)\n' if pause_after else '') + 'sys.exit(result)\n')
+            + ('sys.stdout.flush()\n'
+               f'Path({str(directory / "synthetic-ready")!r}).touch()\n'
+               'time.sleep(30)\n' if pause_after else '') + 'sys.exit(result)\n')
         expected = {'manifest_sha256': digest, 'source_sha': manifest['source_sha'], 'supervisor_sha256': 'b' * 64}
         return script, directory, manifest, digest, expected
 
@@ -231,9 +233,21 @@ class Lifecycle(unittest.TestCase):
 
     def test_candidate_before_outer_timeout_never_yields_completion_signal(self):
         script, directory, manifest, digest, expected = self.synthetic_coordinate(pause_after=True)
+        # Deliberate slow synthetic startup pins the old half-second fixture race.
+        script.write_text('import time\ntime.sleep(.6)\n' + script.read_text())
         signals = []
-        result = supervisor.supervise([sys.executable, '-I', '-S', '-B', str(script), str(os.getpid())],
-            timeout=.5, grace=.2, expected=expected, completed=signals)
+        real_clock = time.monotonic
+        started = real_clock()
+        ready = directory / 'synthetic-ready'
+        def after_candidate_clock():
+            elapsed = real_clock() - started
+            # Trigger the synthetic timeout after flush, not during fixture import.
+            # The real five-second startup cap prevents a broken fixture hanging.
+            return elapsed + 5. if ready.exists() or elapsed >= 5. else 0.
+        with patch.object(supervisor.time, 'monotonic', side_effect=after_candidate_clock):
+            result = supervisor.supervise([sys.executable, '-I', '-S', '-B', str(script), str(os.getpid())],
+                timeout=.5, grace=.2, expected=expected, completed=signals)
+        self.assertTrue(ready.exists(), 'Synthetic candidate was not ready before the bounded startup cap')
         self.assertEqual(result, 2)
         self.assertEqual(signals, [])
         receipt = json.loads((directory / diagnostic.RECEIPT).read_bytes())

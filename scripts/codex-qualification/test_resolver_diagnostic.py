@@ -852,9 +852,11 @@ class SupervisorStages(unittest.TestCase):
                 run = self.main_fixture(stack)
                 stack.enter_context(fault())
                 output = stack.enter_context(redirect_stdout(io.StringIO()))
+                stderr = stack.enter_context(redirect_stderr(io.StringIO()))
                 self.assertEqual(supervisor.main(), 2)
                 run.assert_not_called()
                 self.assert_stage(output.getvalue(), stage)
+                self.assertEqual(stderr.getvalue(), '')
 
     def test_main_reports_missing_completion_and_supervision_exception(self):
         for stage, result in [('completion', 0), ('supervision', RuntimeError(CANARY))]:
@@ -865,8 +867,10 @@ class SupervisorStages(unittest.TestCase):
                 else:
                     run.return_value = result
                 output = stack.enter_context(redirect_stdout(io.StringIO()))
+                stderr = stack.enter_context(redirect_stderr(io.StringIO()))
                 self.assertEqual(supervisor.main(), 2)
                 self.assert_stage(output.getvalue(), stage)
+                self.assertEqual(stderr.getvalue(), '')
 
     def supervise_fixture(self, stack, *, raw=b'', code=1):
         process = Mock(pid=3456, returncode=None)
@@ -921,6 +925,8 @@ class SupervisorStages(unittest.TestCase):
             ('completion', b'', 0, False, True, {'synthetic': 'binding'}),
             ('completion', CANARY.encode(), 0, False, True, {'synthetic': 'binding'}),
             ('protocol', CANARY.encode(), 1, False, True, None),
+            ('output_limit', b'x' * 769, 0, False, True, None),
+            ('output_limit', b'x' * 769, 1, False, True, None),
             ('cleanup', b'', 0, True, True, None),
             ('cleanup', b'', None, False, False, None),
         ]
@@ -966,9 +972,12 @@ class SupervisorStages(unittest.TestCase):
                 process, _launch, _read, reap = self.supervise_fixture(
                     stack, raw=b'x' * 769 if stage == 'output_limit' else b'', code=-9)
                 handlers = {}
+                restores = []
                 def install(sig, handler):
                     if callable(handler):
                         handlers[sig] = handler
+                    else:
+                        restores.append(sig)
                     return 0
                 stack.enter_context(patch.object(supervisor.signal, 'signal', side_effect=install))
                 calls = []
@@ -985,6 +994,7 @@ class SupervisorStages(unittest.TestCase):
                 def reported(message):
                     reap.assert_called_once()
                     process.stdout.close.assert_called_once()
+                    self.assertEqual(restores, [supervisor.signal.SIGTERM, supervisor.signal.SIGINT])
                     report.append(message)
                 self.assertEqual(supervisor.supervise(['synthetic'], report=reported), 2)
                 self.assert_stage('\n'.join(report), stage)
@@ -1009,6 +1019,23 @@ class SupervisorStages(unittest.TestCase):
                 expected=expected, completed=completed), 2)
             self.assert_stage('\n'.join(report), 'interrupted')
             self.assertEqual(completed, [])
+
+    def test_reporter_failure_occurs_after_all_cleanup_and_restoration(self):
+        with ExitStack() as stack:
+            process, _launch, _read, reap = self.supervise_fixture(stack)
+            restores = []
+            def install(sig, handler):
+                if handler == 0:
+                    restores.append(sig)
+                return 0
+            stack.enter_context(patch.object(supervisor.signal, 'signal', side_effect=install))
+            def report(_message):
+                reap.assert_called_once()
+                process.stdout.close.assert_called_once()
+                self.assertEqual(restores, [supervisor.signal.SIGTERM, supervisor.signal.SIGINT])
+                raise RuntimeError(CANARY)
+            with self.assertRaisesRegex(RuntimeError, CANARY):
+                supervisor.supervise(['synthetic'], report=report)
 
 
 class Output(unittest.TestCase):

@@ -286,3 +286,27 @@ stage after a rejected child message. This is scoped offline verification only.
 
 Independent review of the corrected committed/pushed source remains pending.
 No new binding census, manifest, marker, receipt or operational attempt was made.
+
+### Offline boundary and fixture corrections
+
+Primary review added two RED cases where a final post-exit pipe drain exceeds
+768 bytes with child exit 0 or 1. The correction explicitly marks that observation
+uncertain, preserving exit 2 rather than merely printing a refusal. These rows
+failed with 0/1 before the one-line correction. They do not describe the prior
+operational attempt.
+
+One concurrent full focused run failed because the timeout-after-candidate
+lifecycle fixture had not published its receipt within its fixed half-second
+startup window. Adding a deliberate 600 ms synthesized startup delay reproduced
+the missing receipt deterministically. That fixture now signals readiness after
+candidate flush, and an injected clock triggers timeout only after readiness;
+a separate real five-second startup cap prevents an indefinite fixture wait.
+The deliberate startup delay remains as a regression discriminator. Production
+timeouts were not changed. This explains the reproduced fixture failure only,
+not the different historical foreign-replacement fixture uncertainty above.
+
+Test-design review recommended stderr assertions, handler-restoration ordering
+and a throwing reporter regression; all three are now covered. The expanded
+focused suite passed **72 tests**, exit 0, 3.716 seconds, with the same Python 3.14
+command. Scoped Ruff and whitespace checks passed. Independent final-source
+re-review remains pending; these are offline results, not operational clearance.
