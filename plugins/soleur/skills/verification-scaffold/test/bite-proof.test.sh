@@ -71,6 +71,7 @@ done
 HOOK="$FX/.claude/hooks/commit-on-main.sh"
 # A fixture repo ON a feature branch: pass arm.
 F2="$TMPROOT/feat-repo"; assert_fixture_dir "$F2"
+mkdir -p "$F2"
 git -C "$F2" init -q; git -C "$F2" config user.email t@t; git -C "$F2" config user.name t
 git -C "$F2" symbolic-ref HEAD refs/heads/main
 t="$(git -C "$F2" write-tree)"; c="$(echo x | git -C "$F2" commit-tree "$t")"; git -C "$F2" update-ref refs/heads/main "$c"
@@ -139,7 +140,9 @@ if command -v gitleaks >/dev/null 2>&1; then
   OUT="$(cd "$FX" && payload "git commit -m x" "$FX" | bash "$HOOK" 2>/dev/null)"
   [[ "$(decide <<<"$OUT")" == "allow" ]] && pass "secret-scan: clean staged file allows" \
     || fail "secret-scan clean arm: $OUT"
-  printf 'AWS_SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"\n' > "$FX/secret.txt"
+  # Synthetic-but-shaped secret (the AWS docs example key is allowlisted in
+  # gitleaks's default ruleset — this variant keeps the 40-char shape only).
+  printf 'AWS_SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYSYNTHETIC0"\n' > "$FX/secret.txt"
   git -C "$FX" add secret.txt
   OUT="$(cd "$FX" && payload "git commit -m x" "$FX" | bash "$HOOK" 2>/dev/null)"
   [[ "$(decide <<<"$OUT")" == "ask" ]] && pass "secret-scan: staged secret surfaces as ask (advisory)" \
