@@ -516,6 +516,16 @@ jobs:
       - name: Lint integration env gates (every process.env gate must be wired + collected)
         if: ${{ !cancelled() }}
         run: bash scripts/lint-integration-env-gates.sh
+      # Same advisory level as the job: `lint-bot-statuses` is absent from
+      # scripts/required-checks.txt and the ruleset, so a PR merges with this
+      # red — it reports, it does not block. Promotion is the #6883/ADR-139
+      # path, same as every step here. The guard is bidirectional over
+      # git ls-files: a new app/**/page.tsx with no map entry reds, a
+      # tombstone entry for a deleted route reds, and a map deletion fails
+      # closed — deterministic, no network.
+      - name: Lint feature-map coverage (#10399, advisory)
+        if: ${{ !cancelled() }}
+        run: bash scripts/lint-feature-map-coverage.sh
       # THE THIRD DISPATCH of the no-list guard (#8289). lefthook's pre-commit and pre-push
       # entries see only the staged / pushed set; `git commit --no-verify` and a
       # merge-resolution commit reach the repository through neither. So CI walks the WHOLE

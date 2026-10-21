@@ -140,6 +140,8 @@ mcp__plugin_soleur_playwright__browser_navigate({ url: "http://localhost:3000/[a
 mcp__plugin_soleur_playwright__browser_snapshot({})
 ```
 
+Resolve `[affected_route]` against the repository's maintained feature map (`docs/feature-map.md` by convention; soleur's own: `apps/web-platform/test/feature-map.md`) when it carries one — its `## \`/route\`` entries name selectors, the expected outcome, and gotchas for the surface under reproduction.
+
 ### Step 3: Capture Screenshots
 
 Take screenshots at each step of reproducing the bug:

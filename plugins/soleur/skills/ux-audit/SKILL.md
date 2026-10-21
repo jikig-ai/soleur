@@ -64,7 +64,7 @@ Single dry-run knob: `UX_AUDIT_DRY_RUN` env. In the scheduled workflow it is har
 
 ### 1. Load route list + bot creds
 
-Read [route-list.yaml](./references/route-list.yaml). Each route has `{path, auth, fixture_prereqs, viewport}`. If `--route <path>` is passed (dev affordance), filter to that single route.
+Read [route-list.yaml](./references/route-list.yaml). Each route has `{path, auth, fixture_prereqs, viewport}`. If `--route <path>` is passed (dev affordance), filter to that single route. For per-route selectors, expected outcomes, and gotchas, cross-reference the repository's maintained feature map (`docs/feature-map.md` by convention; soleur's own: `apps/web-platform/test/feature-map.md`) when it carries one — soleur's does; the map names this list rather than re-encoding auth/fixture detail.
 
 ### 2. Global-cap check
 
