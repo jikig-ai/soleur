@@ -168,6 +168,9 @@ WORK="$(mktemp -d -t verification-scaffold-XXXXXX)"
 EMITTED_LOG="$WORK/emitted"     # one target-absolute path per line, as written
 DIRS_LOG="$WORK/dirs-created"   # dirs mkdir -p created THIS run (deepest first)
 : > "$EMITTED_LOG"; : > "$DIRS_LOG"
+# Remove the bookkeeping dir on every pre-arm exit (early dies, --dry-run,
+# --uninstall). The fuller _vs_cleanup trap replaces this at the arming site.
+trap 'rm -rf -- "$WORK"' EXIT
 
 record_emit()   { printf '%s\n' "$1" >> "$EMITTED_LOG"; }
 record_dir()    { grep -qxF "$1" "$DIRS_LOG" 2>/dev/null || printf '%s\n' "$1" >> "$DIRS_LOG"; }
