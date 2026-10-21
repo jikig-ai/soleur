@@ -44,7 +44,8 @@ _run() {
   payload=$(jq -nc \
     --arg t "$tool" \
     --arg c "$command" \
-    '{tool_name: $t, tool_input: {command: $c}}')
+    --arg w "$cwd" \
+    '{tool_name: $t, cwd: $w, tool_input: {command: $c}}')
   (cd "$cwd" && CLAUDE_PROJECT_DIR="$REPO_ROOT" bash "$HOOK" <<<"$payload")
 }
 
@@ -85,12 +86,14 @@ gl_probe
 # Build a PATH from symlinks to the tools the hook needs, WITHOUT gitleaks and
 # WITHOUT timeout/gtimeout. Dropping one PATH entry cannot remove a tool that
 # lives in /usr/bin beside git and jq, so the absent/no-timeout arms need this.
-# $1 = gitleaks stub mode: absent | unrunnable | emptyreport | findings
+# $1 = gitleaks stub mode: absent | unrunnable | emptyreport | findings | clean | byroot
+# $2 = perl links perl as well (the lexer needs it; the default stub PATH has none)
 _mk_stub_path() {
-  local mode="$1" d t p
+  local mode="$1" d t p extra=""
+  [[ "${2:-}" == perl ]] && extra=perl
   d=$(mktemp -d "$SUITE_TMP/path.XXXXXX")
   for t in bash sh git jq mktemp grep cat dirname basename rm date flock sed awk tr \
-           head tail cut wc sort env readlink realpath mkdir chmod touch id stat ls; do
+           head tail cut wc sort env readlink realpath mkdir chmod touch id stat ls $extra; do
     p=$(command -v "$t" 2>/dev/null) || continue
     [[ "$p" == /* ]] && ln -s "$p" "$d/$t"
   done
@@ -110,6 +113,24 @@ STUB
 #!/bin/sh
 [ "$1" = version ] && { echo 8.24.2; exit 0; }
 exit 2
+STUB
+      ;;
+    clean)
+      # Runnable; the scan finds nothing (exit 0, no report).
+      cat > "$d/gitleaks" <<'STUB'
+#!/bin/sh
+[ "$1" = version ] && { echo 8.24.2; exit 0; }
+exit 0
+STUB
+      ;;
+    byroot)
+      # Runnable; fails with no report ONLY when run inside $GL_STUB_FAIL_DIR, and
+      # delegates to the real binary ($GL_REAL) everywhere else.
+      cat > "$d/gitleaks" <<'STUB'
+#!/bin/sh
+[ "$1" = version ] && { echo 8.24.2; exit 0; }
+case "$PWD" in *"$GL_STUB_FAIL_DIR") exit 2 ;; esac
+exec "$GL_REAL" "$@"
 STUB
       ;;
     findings)
@@ -137,7 +158,7 @@ _run_stub() {
   # prefix than its predecessor left, so inserting a case between them could make
   # an arm assert on a row it did not produce.
   _JOURNAL_MARK=$(wc -l < "$SOLEUR_TEST_INCIDENT_ROOT/.claude/.rule-incidents.jsonl" 2>/dev/null || echo 0)
-  payload=$(jq -nc '{tool_name: "Bash", tool_input: {command: "git commit -m x"}}')
+  payload=$(jq -nc --arg w "$cwd" '{tool_name: "Bash", cwd: $w, tool_input: {command: "git commit -m x"}}')
   OUT=$(cd "$cwd" && env PATH="$pd" CLAUDE_PROJECT_DIR="$REPO_ROOT" "$pd/bash" "$HOOK" \
           <<<"$payload" 2>"$errf") || true
   ERR=$(cat "$errf")
@@ -242,7 +263,7 @@ _t_colour_denies() {  # $1 = config key
     git add leakc.json .gitleaks.toml
   )
   local payload out
-  payload=$(jq -nc '{tool_name: "Bash", tool_input: {command: "git commit -m x"}}')
+  payload=$(jq -nc --arg w "$tmp" '{tool_name: "Bash", cwd: $w, tool_input: {command: "git commit -m x"}}')
   out=$(cd "$tmp" && env GIT_CONFIG_COUNT=1 "GIT_CONFIG_KEY_0=$key" GIT_CONFIG_VALUE_0=always \
           CLAUDE_PROJECT_DIR="$REPO_ROOT" bash "$HOOK" <<<"$payload")
   if [[ "$(_decision "$out")" == "deny" ]]; then
@@ -294,7 +315,7 @@ _t_nodiff_attr() {  # $1 = withsecret|clean ; $2 = expected decision
     fi
   fi
   local payload out
-  payload=$(jq -nc '{tool_name: "Bash", tool_input: {command: "git commit -m x"}}')
+  payload=$(jq -nc --arg w "$tmp" '{tool_name: "Bash", cwd: $w, tool_input: {command: "git commit -m x"}}')
   out=$(cd "$tmp" && CLAUDE_PROJECT_DIR="$REPO_ROOT" bash "$HOOK" <<<"$payload")
   if [[ "$(_decision "$out")" == "$want" ]]; then
     _report "$label" ok
@@ -506,6 +527,309 @@ _t_colour_denies color.diff
 _t_nodiff_attr withsecret deny
 _t_nodiff_attr clean allow
 
+# ---- #10609: the scan targets the repository the commit names -----------------
+# The incident (2026-10-19): the session cwd was a core.bare=true root with no
+# .gitleaks.toml, the commit was `cd <worktree> && git commit`, and the hook scanned
+# nothing ("bypass .gitleaks.toml absent"). Every arm below runs the hook with the
+# process cwd AND the payload .cwd set to that bare root unless stated.
+
+# Run the hook with an arbitrary command. $1 = process cwd, $2 = command, $3 = a
+# _mk_stub_path directory (optional). PAYLOAD_CWD overrides the payload .cwd; RUN_ENV
+# (array of NAME=value) is exported to the hook; HOOK_OVERRIDE swaps the script. The
+# command rides jq --arg and the hook's stdin only — it is never evaluated here.
+# Sets OUT and ERR.
+RUN_ENV=()
+_run_cmd() {
+  local cwd="$1" command="$2" pd="${3:-}" payload errf hook="${HOOK_OVERRIDE:-$HOOK}"
+  errf=$(mktemp "$SUITE_TMP/err.XXXXXX")
+  _JOURNAL_MARK=$(wc -l < "$SOLEUR_TEST_INCIDENT_ROOT/.claude/.rule-incidents.jsonl" 2>/dev/null || echo 0)
+  payload=$(jq -nc --arg c "$command" --arg w "${PAYLOAD_CWD:-$cwd}" \
+    '{tool_name: "Bash", cwd: $w, tool_input: {command: $c}}')
+  if [[ -n "$pd" ]]; then
+    OUT=$(cd "$cwd" && env PATH="$pd" ${RUN_ENV[@]+"${RUN_ENV[@]}"} CLAUDE_PROJECT_DIR="$REPO_ROOT" \
+            "$pd/bash" "$hook" <<<"$payload" 2>"$errf") || true
+  else
+    OUT=$(cd "$cwd" && env ${RUN_ENV[@]+"${RUN_ENV[@]}"} CLAUDE_PROJECT_DIR="$REPO_ROOT" \
+            bash "$hook" <<<"$payload" 2>"$errf") || true
+  fi
+  ERR=$(cat "$errf")
+}
+
+# _expect <label> <process cwd> <command> <allow|deny> [substring | !substring ...]
+# A leading ! on a substring means the reason must NOT contain it. EXPECT_PD names a
+# _mk_stub_path directory. The decision is compared exactly; OUT/ERR stay set.
+_expect() {
+  local label="$1" cwd="$2" cmd="$3" want="$4" d r s; shift 4
+  _run_cmd "$cwd" "$cmd" "${EXPECT_PD:-}"
+  d=$(_decision "$OUT"); r=$(_reason "$OUT")
+  for s in "$@"; do
+    if [[ "$s" == '!'* ]]; then
+      if [[ "$r" == *"${s#!}"* ]]; then
+        _report "$label" fail "reason must not contain '${s#!}' (decision=$d reason=${r:0:240})"; return 0
+      fi
+    elif [[ "$r" != *"$s"* ]]; then
+      _report "$label" fail "reason lacks '$s' (decision=$d reason=${r:0:240})"; return 0
+    fi
+  done
+  if [[ "$d" == "$want" ]]; then
+    _report "$label" ok
+  else
+    _report "$label" fail "decision=$d want=$want reason=${r:0:240} err=${ERR:0:160}"
+  fi
+}
+
+# The incident topology: a core.bare=true root with NO .gitleaks.toml, plus a linked
+# worktree carrying the toml. $1 = leak (a staged fake PEM, assembled by _mk_pem) or
+# clean. Sets FX_ROOT and FX_WT to PHYSICAL paths (git reports toplevels physically).
+_mk_bare_root_with_worktree() {
+  local mode="$1" root
+  root=$(mktemp -d "$SUITE_TMP/bare.XXXXXX")
+  (
+    cd "$root"
+    git init -q -b main
+    git config user.email t@t; git config user.name t
+    echo seed > seed.txt; git add seed.txt; git commit -q -m seed
+    git config core.bare true
+    git worktree add -q .worktrees/wt -b wtb
+    cd .worktrees/wt
+    cp "$GITLEAKS_TOML" .gitleaks.toml
+    if [[ "$mode" == leak ]]; then
+      jq -n --arg p "$(_mk_pem "t5_bareroot_syntheticpayload_$(date +%s)")" \
+        '{variables: {private_key: {value: $p}}}' > leak.json
+      git add leak.json .gitleaks.toml
+    else
+      echo hello > f.txt; git add f.txt .gitleaks.toml
+    fi
+  )
+  FX_ROOT=$(cd "$root" && pwd -P); FX_WT=$(cd "$root/.worktrees/wt" && pwd -P)
+}
+
+# A plain repo (own .gitleaks.toml) with a staged fake PEM.
+_mk_leaky_repo() {
+  local tmp; tmp=$(mktemp -d "$SUITE_TMP/leaky.XXXXXX")
+  (
+    cd "$tmp"
+    git init -q -b main
+    git config user.email t@t; git config user.name t
+    cp "$GITLEAKS_TOML" .gitleaks.toml
+    jq -n --arg p "$(_mk_pem "t5_leakyrepo_syntheticpayload_$(date +%s)")" \
+      '{variables: {private_key: {value: $p}}}' > leak.json
+    git add leak.json .gitleaks.toml
+  )
+  (cd "$tmp" && pwd -P)
+}
+
+# FIXTURE CONTROL: a plain staged scan inside the leaky worktree must report the
+# finding, or every deny below would be passing for a reason that is not the hook's.
+_fx_control() {
+  local rc=0 rp; rp=$(mktemp "$SUITE_TMP/plain.XXXXXX")
+  ( cd "$1" && gitleaks git --pre-commit --staged --redact --no-banner --exit-code 1 \
+      --report-format json --report-path "$rp" >/dev/null 2>&1 ) || rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    _report "T21-T43 fixture control" fail "FIXTURE BROKEN: plain gitleaks found nothing in $1 (rc=$rc), so no deny below proves anything"
+    return 1
+  fi
+}
+
+_t_target_resolution() {
+  _needs_gl "T21-T43 target resolution" || return 0
+  local R W R2 W2 A B pd cp s1 s2 cmd
+  _mk_bare_root_with_worktree leak; R="$FX_ROOT"; W="$FX_WT"
+  _mk_bare_root_with_worktree clean; R2="$FX_ROOT"; W2="$FX_WT"
+  _fx_control "$W" || return 0
+  A=$(_mk_repo_with_toml); B=$(_mk_leaky_repo)
+
+  _expect "T21 incident replay: bare-root cwd, 'cd <wt> && git commit' → deny naming the leak and the worktree" \
+    "$R" "cd $W && git commit -m x" deny "leak.json" "$W"
+  _expect "T22 'git -C <wt> commit' → deny (detection must see global options)" \
+    "$R" "git -C $W commit -m x" deny "leak.json"
+  _expect "T23 no cd, bare root → allow via the legacy '.gitleaks.toml absent' bypass (old behaviour unchanged)" \
+    "$R" "git commit -m x" allow
+  if [[ "$(_last_prefix)" == ".gitleaks.toml absent"* ]]; then
+    _report "T23b the legacy bypass row is still '.gitleaks.toml absent'" ok
+  else
+    _report "T23b the legacy bypass row is still '.gitleaks.toml absent'" fail "prefix=$(_last_prefix)"
+  fi
+  _expect "T24 relative target 'cd .worktrees/wt' → deny" \
+    "$R" "cd .worktrees/wt && git commit -m x" deny "leak.json"
+
+  _expect "T25a leaky repo is the SECOND target (cd A && cd wt)" \
+    "$R" "cd $A && cd $W && git commit -m x" deny "leak.json"
+  _expect "T25b leaky repo is the SECOND target (git -C A status && git -C wt commit)" \
+    "$R" "git -C $A status && git -C $W commit -m x" deny "leak.json"
+  _expect "T25c leaky repo is the FIRST target (cd wt && cd A)" \
+    "$R" "cd $W && cd $A && git commit -m x" deny "leak.json"
+  _expect "T26 a -C on a non-commit command does not displace the cwd repo (fallback roots stay unioned)" \
+    "$B" "git -C $A status; git commit -m x" deny "leak.json"
+
+  for s in 'cd "$WT" && git commit -m x' \
+           'cd $WT && git commit -m x' \
+           'cd "$(pwd)/wt" && git commit -m x' \
+           'cd `pwd` && git commit -m x' \
+           'cd - && git commit -m x' \
+           'cd ~someone && git commit -m x' \
+           'cd ~/wt && git commit -m x' \
+           'cd .worktrees/* && git commit -m x'; do
+    _expect "T27 non-literal target is DENIED, never skipped: $s" \
+      "$R" "$s" deny "cannot determine" "NOT scanned" "its own command" "git worktree list"
+  done
+  _expect "T27c the deny text names the forms that do not work" \
+    "$R" 'cd "$WT" && git commit -m x' deny '$(...)' "GIT_DIR" "bash -c"
+
+  _expect "T29 bash -c 'cd <wt> && git commit' → deny" \
+    "$R" "bash -c 'cd $W && git commit -m x'" deny "leak.json"
+  _expect "T29b the commit hidden in a variable (eval \"\$CMD\") → deny" \
+    "$R" "CMD='cd $W && git commit -m x'; eval \"\$CMD\"" deny "cannot determine"
+  _expect "T29c the commit hidden in a variable (bash -c \"\$SCRIPT\") → deny" \
+    "$R" "SCRIPT='cd $W && git commit -m x'; bash -c \"\$SCRIPT\"" deny "cannot determine"
+
+  _expect "T30a GIT_WORK_TREE= on a commit → deny (cannot determine)" \
+    "$R" "GIT_WORK_TREE=$W git commit -m x" deny "cannot determine"
+  _expect "T30b git --work-tree= on a commit → deny (cannot determine)" \
+    "$R" "git --work-tree=$W commit -m x" deny "cannot determine"
+  _expect "T30c git --git-dir= on a commit → deny (cannot determine)" \
+    "$R" "git --git-dir=$R/.git commit -m x" deny "cannot determine"
+
+  pd=$(_mk_stub_path findings)
+  EXPECT_PD="$pd" _expect "T31 no perl → a tokenised commit is DENIED naming the cause (stub gitleaks would report a finding: that must not be the reason)" \
+    "$R" "cd $W && git commit -m x" deny "cannot determine" "perl" "!private-key"
+  _expect "T32 unbalanced quote (lexer error) → deny" \
+    "$R" "cd \"$W && git commit -m x" deny "cannot determine"
+
+  cp=$(mktemp -d "$SUITE_TMP/hookcopy.XXXXXX")
+  mkdir -p "$cp/.claude"
+  cp -R "$REPO_ROOT/.claude/hooks" "$cp/.claude/hooks"
+  rm -f "$cp/.claude/hooks/lib/commit-target-roots.sh"
+  HOOK_OVERRIDE="$cp/.claude/hooks/git-commit-secret-scan.sh" \
+    _expect "T33 library missing → a commit is DENIED with the literal repair" \
+    "$R" "git commit -m x" deny "git checkout -- .claude/hooks/lib"
+  HOOK_OVERRIDE="$cp/.claude/hooks/git-commit-secret-scan.sh" \
+    _expect "T33b library missing leaves a non-commit call untouched" \
+    "$R" "git status" allow
+
+  _expect "T34 must-ALLOW control: cd into a CLEAN worktree" \
+    "$R2" "cd $W2 && git commit -m x" allow
+  cmd=$(printf '%s\n' "git -C $W2 commit -m \"\$(cat <<'EOF'" 'cd "$WT" && git commit' 'EOF' ')"')
+  _expect "T35 must-ALLOW: a heredoc message that MENTIONS a non-literal cd is data, not a target" \
+    "$R2" "$cmd" allow
+
+  s1="$SUITE_TMP/sentinel1"; s2="$SUITE_TMP/sentinel2"
+  _expect "T36a nothing is executed while resolving: cd \"\$(touch <sentinel>)\"" \
+    "$R" 'cd "$(touch '"$s1"')" && git commit -m x' deny "cannot determine"
+  if [[ ! -e "$s1" ]]; then _report "T36a the sentinel does not exist (command substitution never ran)" ok
+  else _report "T36a the sentinel does not exist (command substitution never ran)" fail "$s1 was created"; fi
+  _expect "T36b nothing is executed while resolving: eval-shaped text" \
+    "$R" 'eval "touch '"$s2"'"; cd "$X" && git commit -m x' deny "cannot determine"
+  if [[ ! -e "$s2" ]]; then _report "T36b the sentinel does not exist (eval never ran)" ok
+  else _report "T36b the sentinel does not exist (eval never ran)" fail "$s2 was created"; fi
+
+  _expect "T37 must-ALLOW: a literal target that does not exist drops out (no false deny)" \
+    "$A" "cd /nonexistent/dir && git commit -m x" allow
+
+  RUN_ENV=("GIT_DIR=$A/.git")
+  _expect "T39 an inherited GIT_DIR cannot redirect the resolver or the scan" \
+    "$R" "cd $W && git commit -m x" deny "leak.json"
+  RUN_ENV=()
+
+  pd=$(_mk_stub_path byroot perl)
+  RUN_ENV=("GL_STUB_FAIL_DIR=${A##*/}" "GL_REAL=$(command -v gitleaks)")
+  EXPECT_PD="$pd" _expect "T41 the loop does not end at a root whose scan errored (clean A errors, leaky B still denies)" \
+    "$R" "cd $A && git -C $B commit -m x" deny "leak.json"
+  RUN_ENV=()
+
+  PAYLOAD_CWD="$W" _expect "T42 the separate-cd repair: payload .cwd is the worktree, the command carries no cd" \
+    "$R" "git commit -m x" deny "leak.json"
+
+  _expect "T43a must-ALLOW: 'git -C <wt> log' is not a commit" "$R" "git -C $W log --oneline" allow
+  _expect "T43b must-ALLOW: 'git --no-pager status' is not a commit" "$R" "git --no-pager status" allow
+  _expect "T43c must-ALLOW: a quoted mention of 'git -C x commit' is data" "$R" 'echo "git -C x commit"' allow
+
+  # S-repair: the repairs the deny text recommends must themselves pass THROUGH the
+  # hook (be scanned), and must not dead-end a clean worktree.
+  _expect "S-repair 1 literal 'cd <abs> && git commit' is scanned (leak → deny)" "$R" "cd $W && git commit -m x" deny "leak.json"
+  _expect "S-repair 2 literal 'git -C <abs> commit' is scanned (leak → deny)" "$R" "git -C $W commit -m x" deny "leak.json"
+  _expect "S-repair 3 literal 'cd <abs>; git commit' is scanned (leak → deny)" "$R" "cd $W; git commit -m x" deny "leak.json"
+  _expect "S-repair 4 a lazily bound WT=<abs>; cd \"\$WT\" is still denied" "$R" "WT=$W; cd \"\$WT\" && git commit -m x" deny "cannot determine"
+  _expect "S-repair 5 literal 'cd <abs> && git commit' ALLOWS a clean worktree" "$R2" "cd $W2 && git commit -m x" allow
+  _expect "S-repair 6 literal 'git -C <abs> commit' ALLOWS a clean worktree" "$R2" "git -C $W2 commit -m x" allow
+  _expect "S-repair 7 literal 'cd <abs>; git commit' ALLOWS a clean worktree" "$R2" "cd $W2; git commit -m x" allow
+
+  # AC11: a command with no directory-affecting token never spawns perl.
+  pd=$(_mk_stub_path clean)
+  if [[ -e "$pd/perl" ]]; then _report "AC11 fixture PATH carries perl" fail "stub PATH must not contain perl"
+  else
+    EXPECT_PD="$pd" _expect "AC11 plain 'git commit' on a PATH with no perl still scans and allows a clean repo" \
+      "$A" "git commit -m x" allow
+  fi
+}
+
+# Walker rows: source the library and read what ctr_collect extracts. The command
+# is passed as an ARGUMENT to a child bash — it is data, never evaluated.
+_w_row() {  # label command want_targets want_nbad want_commit
+  local label="$1" cmd="$2" want="T=$3|B=$4|C=$5" got lib="$REPO_ROOT/.claude/hooks/lib/commit-target-roots.sh"
+  got=$(env HOME=/h bash -c '
+    source "$1" || { echo "SOURCE-FAILED"; exit 0; }
+    ctr_collect "$2"
+    printf "T="; for t in ${CTR_TARGETS[@]+"${CTR_TARGETS[@]}"}; do printf "%s;" "$t"; done
+    printf "|B=%s|C=%s" "${#CTR_BAD[@]}" "$CTR_COMMIT_SEEN"
+  ' _ "$lib" "$cmd" 2>&1) || true
+  if [[ "$got" == "$want" ]]; then _report "walker: $label" ok
+  else _report "walker: $label" fail "got '$got' want '$want'"; fi
+}
+
+_t_walker() {
+  local lib="$REPO_ROOT/.claude/hooks/lib/commit-target-roots.sh"
+  if [[ ! -r "$lib" ]]; then _report "walker: library exists" fail "$lib is not readable"; return 0; fi
+  _w_row "redirect after cd (2>&1)"            'cd /a 2>&1 && git commit -m x'        '/a;'   0 1
+  _w_row "redirect after cd (&>)"              'cd /a &> /dev/null && git commit -m x' '/a;'  0 1
+  _w_row "cd inside a substitution"            'echo $(cd /s && true) && git commit -m x' '/s;' 0 1
+  _w_row "# mid-word is not a comment"         'cd /a#b && git commit -m x'           '/a#b;' 0 1
+  _w_row "builtin cd / command git"            'builtin cd /a && command git commit -m x' '/a;' 0 1
+  _w_row "cd -P -- <dir>"                      'cd -P -- /a && git commit -m x'       '/a;'   0 1
+  _w_row "pushd"                               'pushd /a >/dev/null && git commit -m x' '/a;' 0 1
+  _w_row "repeated -C"                         'git -C /a -C b commit -m x'           '/a;b;' 0 1
+  _w_row "-c k=v is not a target"              'git -c k=v commit -m x'               ''      0 1
+  _w_row "commit -C HEAD: -C after the subcommand is not a global option" 'git commit -C HEAD' '' 0 1
+  _w_row "quoted path with a space"            'cd "/a b" && git commit -m x'         '/a b;' 0 1
+  _w_row "env -C <dir>"                        'env -C /a git commit -m x'            '/a;'   0 1
+  _w_row "subshell"                            '(cd /a && git commit -m x)'           '/a;'   0 1
+  _w_row "eval \"\$CMD\" is bad and may hide a commit" 'eval "$CMD"'                  ''      1 1
+  _w_row "bash -c \"\$SCRIPT\" is bad and may hide a commit" 'bash -c "$SCRIPT"'      ''      1 1
+  _w_row "bare cd goes to HOME"                'cd && git commit -m x'                '/h;'   0 1
+  _w_row "--git-dir is bad"                    'git --git-dir=/g commit -m x'         ''      1 1
+  _w_row "GIT_DIR= is bad"                     'GIT_DIR=/g git commit -m x'           ''      1 1
+  _w_row "an expanded -C operand is bad"       'git -C "$X" commit -m x'              ''      1 1
+  _w_row "quoted cd text is data"              'echo "cd /a"; git commit -m x'        ''      0 1
+  _w_row "git log is not a commit"             'git -C /a log --oneline'              '/a;'   0 0
+  _w_row "cd ~ is bad"                         'cd ~ && git commit -m x'              ''      1 1
+
+  local w
+  for w in 'cd x' 'pushd x' 'GIT_DIR=x git commit' 'GIT_WORK_TREE=x git commit' 'git --git-dir=x commit' \
+           'git --work-tree=x commit' 'git -C x commit' 'env -C x git commit' 'bash -c "git commit"' 'eval "$X"'; do
+    if bash -c 'source "$1" && ctr_wants_lex "$2"' _ "$lib" "$w"; then _report "pre-filter matches: $w" ok
+    else _report "pre-filter matches: $w" fail "ctr_wants_lex returned false"; fi
+  done
+  for w in 'git commit -m x' 'git commit --amend --no-edit' 'git status && git commit -m x'; do
+    if bash -c 'source "$1" && ctr_wants_lex "$2"' _ "$lib" "$w"; then _report "pre-filter skips: $w" fail "ctr_wants_lex returned true (a perl spawn on the no-token path)"
+    else _report "pre-filter skips: $w" ok; fi
+  done
+}
+
+# T40: the walker depends on shell-argv.pl's record framing, which no other suite pins
+# (shell-argv-parity.test.sh pins argv traces, not the NUL framing).
+_t_lexer_contract() {
+  local lib="$REPO_ROOT/.claude/hooks/lib/commit-target-roots.sh" got lexer
+  if [[ ! -r "$lib" ]]; then _report "T40 lexer contract" fail "library missing"; return 0; fi
+  lexer=$(bash -c 'source "$1" && printf "%s" "$CTR_LEXER"' _ "$lib" 2>/dev/null) || lexer=""
+  if [[ -z "$lexer" || ! -r "$lexer" ]]; then
+    _report "T40 the hook's resolved lexer path is a readable file" fail "CTR_LEXER='$lexer'"; return 0
+  fi
+  _report "T40 the hook's resolved lexer path is a readable file" ok
+  got=$(printf '%s' 'cd /a' | perl "$lexer" | tr '\0' '|')
+  if [[ "$got" == 'C|top|2|-|cd|-|/a|OK|' ]]; then _report "T40 lexer framing (C, ctx, argc, flags, arg, OK)" ok
+  else _report "T40 lexer framing (C, ctx, argc, flags, arg, OK)" fail "got '$got'"; fi
+}
+
 # T19: the CI fail-on-skip contract, asserted against the epilogue's REAL BYTES.
 # That contract is the only thing stopping 8 arms from reading as green on a
 # runner without gitleaks, and nothing asserted it — a refactor of the tail, or a
@@ -559,6 +883,12 @@ _t_journal_watermark() {
   fi
 }
 _t_journal_watermark
+
+# The #10609 arms run AFTER the watermark control: _run_cmd advances _JOURNAL_MARK too,
+# and T20 expects the mark to advance across ITS OWN invocation.
+_t_target_resolution
+_t_walker
+_t_lexer_contract
 
 _t_ci_contract
 

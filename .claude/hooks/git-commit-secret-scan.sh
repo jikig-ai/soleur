@@ -28,8 +28,8 @@
 #                                                    (bypass "gitleaks unrunnable (rc=N)")
 #   - a RUNNABLE gitleaks exits non-zero with no report — plausibly transient
 #                                                    (bypass "gitleaks exit=N, empty report")
-#   - Not inside a git work tree
-#   - .gitleaks.toml not present at the repo root
+#   - No repository to scan: not inside a git work tree, or no .gitleaks.toml at
+#     a resolved root (per root; a command naming a root without one still scans the rest)
 # These are operator-environment issues, not secret-leak signals — the
 # user should fix their tooling but a missing binary should not block
 # every commit. CI re-scans on every push as the load-bearing gate.
@@ -111,11 +111,53 @@ command="$HOOK_CMD"
 # after a chain operator (`&&`, `||`, `;`, `|`), or `$(`. Then requires a
 # trailing space-or-end so `commit-tree` / `commit-graph` are not matched.
 if ! grep -qE '(^|[[:space:]]|&&|\|\||;|\$\()[[:space:]]*git[[:space:]]+commit([[:space:]]|$)' <<<"$command"; then
+  strict_match=0
+fi
+
+# STRICT detection above only sees `git commit` with nothing between the two words, so
+# `git -C <dir> commit`, `git --work-tree=<dir> commit` and `git -c k=v commit` were allowed
+# before anything was scanned (#10609). The loose test below widens detection; the command
+# lexer then CONFIRMS a commit record (a quoted mention of the words is not a commit).
+strict_match="${strict_match-1}"
+
+# Sourced fail-soft ON PURPOSE and checked explicitly: a missing or broken library must
+# DENY a commit (it is the safety core), never skip the scan. See deny_undeterminable.
+ctr_ok=0
+ctr_lib="$(dirname "${BASH_SOURCE[0]}")/lib/commit-target-roots.sh"
+# shellcheck source=lib/commit-target-roots.sh
+if [ -r "$ctr_lib" ] && . "$ctr_lib" 2>/dev/null && declare -f ctr_collect >/dev/null 2>&1; then
+  ctr_ok=1
+fi
+
+loose_match=0
+if [[ "$command" == *git* && "$command" == *commit* ]]; then
+  if [ "$ctr_ok" -eq 1 ]; then
+    if ctr_wants_lex "$command"; then loose_match=1; fi
+  else
+    loose_match=1
+  fi
+fi
+if [ "$strict_match" -eq 0 ] && [ "$loose_match" -eq 0 ]; then
   allow
 fi
 
+# Ambient git env must not redirect any probe or scan below: an inherited GIT_DIR outranks
+# `git -C` and would point every one of them at the wrong repository.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+
+lex_state=skipped
+if [ "$ctr_ok" -eq 1 ] && ctr_wants_lex "$command"; then
+  ctr_collect "$command"
+  lex_state="$CTR_LEX_STATE"
+  # A loose-only match that the lexer shows is not a commit is not a commit.
+  if [ "$strict_match" -eq 0 ] && [ "$lex_state" = ok ] && [ "$CTR_COMMIT_SEEN" -eq 0 ]; then
+    allow
+  fi
+fi
+
 # At this point: the tool call is a `git commit` (or a chain containing one).
-# Run gitleaks against the staged index. Fail-open if gitleaks is missing.
+# Run gitleaks against the staged index of every repository it targets. Fail-open if
+# gitleaks is missing.
 
 GL_REMEDIATION="CI pins gitleaks 8.24.2 — install that version or pin it in your version manager (e.g. 'mise use gitleaks@8.24.2')."
 
@@ -125,65 +167,132 @@ if ! command -v gitleaks >/dev/null 2>&1; then
   allow
 fi
 
-if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  emit git-commit-secret-scan bypass "not inside git work tree"
-  allow
-fi
-
-repo_root="$(git rev-parse --show-toplevel 2>/dev/null || echo "")"
-if [ -z "$repo_root" ] || [ ! -f "$repo_root/.gitleaks.toml" ]; then
-  echo "[git-commit-secret-scan] WARN: .gitleaks.toml not found at repo root — skipping scan." >&2
-  emit git-commit-secret-scan bypass ".gitleaks.toml absent"
-  allow
-fi
-
 # Placed AFTER the cheap repo/config guards on purpose: the probe spawns
 # timeout+gitleaks and costs ~400 ms (measured). Above them it paid that on
 # EVERY `git commit`, including ones outside a repo or in a repo with no
-# .gitleaks.toml — calls that exit without ever scanning.
-
+# .gitleaks.toml — calls that exit without ever scanning. It is memoized and runs
+# at most once per hook call, in the main shell (a $(...) would lose the memo flag
+# and could not allow/exit the hook).
+#
 # RESOLVABLE IS NOT RUNNABLE (#8266). `command -v` only proves the name resolves;
 # an unpinned mise shim resolves and exits non-zero on every call. Probe by
 # running the tool. Bound it with timeout when one exists — stock macOS has
 # neither `timeout` nor `gtimeout`, and a missing bound must never be misread as
 # a broken gitleaks, or every macOS commit would skip the scan.
-gl_to=()
-if command -v timeout >/dev/null 2>&1; then gl_to=(timeout 10)
-elif command -v gtimeout >/dev/null 2>&1; then gl_to=(gtimeout 10); fi
-# `${a[@]+"${a[@]}"}`, not `"${a[@]}"`: bash 3.2 (stock macOS /bin/bash) treats an
-# EMPTY array as unbound under `set -u`, which is exactly the no-timeout host.
-gl_probe_rc=0
-gl_probe_err="$( { ${gl_to[@]+"${gl_to[@]}"} gitleaks version >/dev/null; } 2>&1 )" || gl_probe_rc=$?
-# A BOUND EXPIRY IS NOT AN UNRUNNABLE BINARY. `timeout` reports 124 when the bound
-# expires (137 when it escalates to SIGKILL) — that is a statement about host LOAD,
-# not about gitleaks. Treating it as "unrunnable" bypasses the scan on a host whose
-# only problem is that it is busy, and prints a remediation (install/pin 8.24.2)
-# that cannot fix it. This matters here specifically: #8231 exists to run these
-# suites in PARALLEL, and concurrency is what expires a 10 s bound. Retry once at a
-# wider bound before concluding anything.
-case "$gl_probe_rc" in
-  124|137)
-    gl_retry_to=()
-    if command -v timeout >/dev/null 2>&1; then gl_retry_to=(timeout 60)
-    elif command -v gtimeout >/dev/null 2>&1; then gl_retry_to=(gtimeout 60); fi
-    gl_probe_rc=0
-    gl_probe_err="$( { ${gl_retry_to[@]+"${gl_retry_to[@]}"} gitleaks version >/dev/null; } 2>&1 )" || gl_probe_rc=$?
-    case "$gl_probe_rc" in
-      124|137)
-        printf '[git-commit-secret-scan] WARN: the gitleaks probe timed out twice (rc=%s) — this host is too loaded to verify the scanner, so the staged content was NOT scanned. This is a load condition, not a broken install; re-run the commit when the machine is quieter.\n' \
-          "$gl_probe_rc" >&2
-        emit git-commit-secret-scan-probe-timeout bypass "gitleaks probe timed out (rc=$gl_probe_rc)"
-        allow
-        ;;
-    esac
-    ;;
-esac
-if [ "$gl_probe_rc" -ne 0 ]; then
-  printf '[git-commit-secret-scan] WARN: gitleaks is on PATH but cannot run (rc=%s, %q) — skipping scan. %s\n' \
-    "$gl_probe_rc" "${gl_probe_err%%$'\n'*}" "$GL_REMEDIATION" >&2
-  emit git-commit-secret-scan bypass "gitleaks unrunnable (rc=$gl_probe_rc)"
+gl_probed=0
+gitleaks_runnable() {
+  [ "$gl_probed" -eq 0 ] || return 0
+  gl_probed=1
+  local gl_to=() gl_retry_to=() gl_probe_rc=0 gl_probe_err
+  if command -v timeout >/dev/null 2>&1; then gl_to=(timeout 10)
+  elif command -v gtimeout >/dev/null 2>&1; then gl_to=(gtimeout 10); fi
+  # `${a[@]+"${a[@]}"}`, not `"${a[@]}"`: bash 3.2 (stock macOS /bin/bash) treats an
+  # EMPTY array as unbound under `set -u`, which is exactly the no-timeout host.
+  gl_probe_err="$( { ${gl_to[@]+"${gl_to[@]}"} gitleaks version >/dev/null; } 2>&1 )" || gl_probe_rc=$?
+  # A BOUND EXPIRY IS NOT AN UNRUNNABLE BINARY. `timeout` reports 124 when the bound
+  # expires (137 when it escalates to SIGKILL) — that is a statement about host LOAD,
+  # not about gitleaks. Treating it as "unrunnable" bypasses the scan on a host whose
+  # only problem is that it is busy, and prints a remediation (install/pin 8.24.2)
+  # that cannot fix it. This matters here specifically: #8231 exists to run these
+  # suites in PARALLEL, and concurrency is what expires a 10 s bound. Retry once at a
+  # wider bound before concluding anything.
+  case "$gl_probe_rc" in
+    124|137)
+      if command -v timeout >/dev/null 2>&1; then gl_retry_to=(timeout 60)
+      elif command -v gtimeout >/dev/null 2>&1; then gl_retry_to=(gtimeout 60); fi
+      gl_probe_rc=0
+      gl_probe_err="$( { ${gl_retry_to[@]+"${gl_retry_to[@]}"} gitleaks version >/dev/null; } 2>&1 )" || gl_probe_rc=$?
+      case "$gl_probe_rc" in
+        124|137)
+          printf '[git-commit-secret-scan] WARN: the gitleaks probe timed out twice (rc=%s) — this host is too loaded to verify the scanner, so the staged content was NOT scanned. This is a load condition, not a broken install; re-run the commit when the machine is quieter.\n' \
+            "$gl_probe_rc" >&2
+          emit git-commit-secret-scan-probe-timeout bypass "gitleaks probe timed out (rc=$gl_probe_rc)"
+          allow
+          ;;
+      esac
+      ;;
+  esac
+  if [ "$gl_probe_rc" -ne 0 ]; then
+    printf '[git-commit-secret-scan] WARN: gitleaks is on PATH but cannot run (rc=%s, %q) — skipping scan. %s\n' \
+      "$gl_probe_rc" "${gl_probe_err%%$'\n'*}" "$GL_REMEDIATION" >&2
+    emit git-commit-secret-scan bypass "gitleaks unrunnable (rc=$gl_probe_rc)"
+    allow
+  fi
+}
+
+# A target the scan cannot determine is a DENY, never a skip (#10609): an unscanned
+# commit is the failure this hook exists to prevent, the repair is one extra tool call,
+# and an `ask` has no answerer in a headless pipeline (ADR-165), so it would degenerate
+# into the same skip. There is deliberately NO override variable: an override is the skip.
+deny_undeterminable() {
+  deny "BLOCKED: cannot determine which repository this git commit targets (${1}), so the staged content was NOT scanned and the commit is blocked. Repair: run 'cd <absolute worktree path>' as its own command first, then run 'git commit' with no cd or -C in it (the shell cwd persists between Bash calls). Or name the repository as a literal absolute path in the same command: 'git -C /abs/path commit ...' or 'cd /abs/path && git commit ...' (list the paths with 'git worktree list'). Forms that cannot be resolved and are denied: a variable (\$VAR), \$(...), backticks, ~, a glob, 'cd -', GIT_DIR= / GIT_WORK_TREE= / --git-dir / --work-tree, and a string held in a variable that is run by bash -c or by eval, (any of these hides the target). Do not route around this hook with a script or an alias: that skips the scan too."
+}
+
+undeterminable=""
+if [ "$ctr_ok" -ne 1 ]; then
+  undeterminable="the helper library .claude/hooks/lib/commit-target-roots.sh is missing or unreadable; restore it with: git checkout -- .claude/hooks/lib"
+elif [ "$lex_state" = unavailable ]; then
+  undeterminable="$CTR_LEX_WHY; install perl and keep plugins/soleur intact"
+elif [ "$lex_state" = ok ] && [ "${#CTR_BAD[@]}" -gt 0 ]; then
+  undeterminable="${CTR_BAD[0]}"
+  if [ "${#CTR_BAD[@]}" -gt 1 ]; then undeterminable="$undeterminable; and $(( ${#CTR_BAD[@]} - 1 )) more"; fi
+fi
+if [ -n "$undeterminable" ]; then
+  # Honour an unrunnable or timed-out gitleaks first: that is an environment fault and
+  # keeps its existing allow + bypass row, exactly as a plain commit would.
+  gitleaks_runnable
+  deny_undeterminable "$undeterminable"
+fi
+
+# The repositories to scan: every literal target named in the command, UNIONED with the
+# cwd-derived root and the payload-cwd root. The fallback roots are always included: a -C
+# can belong to a non-commit segment (`git -C A status; git commit`), and the separate-cd
+# repair relies on the payload cwd following the shell. Trade-off accepted: an unrelated
+# staged secret in the cwd repo can deny a commit aimed elsewhere; the deny reason names the
+# root that held the finding.
+scan_roots=()
+add_root() {
+  local r="$1" x
+  [ -n "$r" ] || return 0
+  for x in ${scan_roots[@]+"${scan_roots[@]}"}; do if [ "$x" = "$r" ]; then return 0; fi; done
+  scan_roots+=("$r")
+}
+if [ "$lex_state" = ok ]; then
+  ctr_resolve_roots
+  for _r in ${CTR_ROOTS[@]+"${CTR_ROOTS[@]}"}; do add_root "$_r"; done
+fi
+add_root "$(git rev-parse --show-toplevel 2>/dev/null || echo "")"
+if [ -n "${HOOK_CWD-}" ] && [ -d "$HOOK_CWD" ]; then
+  add_root "$(git -C "$HOOK_CWD" rev-parse --show-toplevel 2>/dev/null || echo "")"
+fi
+
+if [ "${#scan_roots[@]}" -eq 0 ]; then
+  # No repository to scan: the legacy reasons, in the legacy order. (`git rev-parse
+  # --is-inside-work-tree` exits 0 and prints "false" at a core.bare=true root, so this
+  # is the .gitleaks.toml row there — a `git commit` in a bare root cannot stage anything.)
+  if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    emit git-commit-secret-scan bypass "not inside git work tree"
+    allow
+  fi
+  echo "[git-commit-secret-scan] WARN: .gitleaks.toml not found at repo root — skipping scan." >&2
+  emit git-commit-secret-scan bypass ".gitleaks.toml absent"
   allow
 fi
+
+toml_roots=()
+for _r in "${scan_roots[@]}"; do
+  if [ -f "$_r/.gitleaks.toml" ]; then
+    toml_roots+=("$_r")
+  else
+    echo "[git-commit-secret-scan] WARN: .gitleaks.toml not found at repo root $_r — skipping scan of it." >&2
+    emit git-commit-secret-scan bypass ".gitleaks.toml absent"
+  fi
+done
+if [ "${#toml_roots[@]}" -eq 0 ]; then
+  allow
+fi
+
+gitleaks_runnable
 
 # Run the same scan lefthook.yml configures, against the staged index only.
 # `--exit-code 1` makes gitleaks return non-zero on findings.
@@ -196,120 +305,131 @@ nodiff_dir="$(mktemp -d -t gitleaks-nodiff-XXXXXX)"
 nodiff_report="$(mktemp -t gitleaks-nodiff-XXXXXX.json)"
 trap 'rm -f "$report_file" "$nodiff_report"; rm -rf "$nodiff_dir"' EXIT INT TERM
 
-# GITATTRIBUTE BYPASS GUARD. `gitleaks git` reads a PATCH, so a path marked
-# `-diff` renders as `Binary files a/x and b/x differ` with no `+` lines and
-# scans clean — measured: `.git/info/attributes` containing `creds.txt -diff`
-# took a staged AWS key from rc=1/1 finding to rc=0/0 findings. No colour pin
-# closes it, and neither does `core.attributesFile=/dev/null` nor
-# `GIT_ATTR_NOSYSTEM=1` (both measured): those govern the GLOBAL and SYSTEM
-# attributes files, while `.git/info/attributes` is per-repo and always read.
-# This is the same class the colour pin above exists for — ambient local git
-# config silently disarming the scanner — so it is closed here, not documented.
-#
-# `check-attr` discriminates precisely: an explicit `-diff` reports `unset`,
-# while an auto-detected binary (a PNG) reports `unspecified` (measured), so a
-# legitimately-binary staged file is never caught by this.
-# Affected paths are re-scanned from their STAGED blobs with `detect --no-git`,
-# which never consults git's diff machinery at all — the same mechanism
-# code-to-prd.sh's Layer 3 already relies on.
-gl_nodiff=()
-while IFS= read -r -d '' _p; do
-  [ -n "$_p" ] || continue
-  if [ "$(git -C "$repo_root" check-attr diff -- "$_p" 2>/dev/null | sed 's/.*: //')" = "unset" ]; then
-    gl_nodiff+=("$_p")
+# scan_root <root> — scan ONE repository's staged index. It returns 0 when the root is
+# clean or its scan failed transiently (a bypass row is emitted and the loop moves on) and
+# NEVER allows or exits the hook: only a finding denies. All state is per call, so a root
+# that errors cannot leak into, or end the scan of, the next.
+scan_root() {
+  local repo_root="$1" _p gl_nodiff=() gl_cfg_n scan_rc=0 nodiff_rc nd_count nd_files
+  local findings_count=0 findings_summary="" reason
+  : > "$report_file"; : > "$nodiff_report"
+  rm -rf "$nodiff_dir"; mkdir -p "$nodiff_dir"
+
+  # GITATTRIBUTE BYPASS GUARD. `gitleaks git` reads a PATCH, so a path marked
+  # `-diff` renders as `Binary files a/x and b/x differ` with no `+` lines and
+  # scans clean — measured: `.git/info/attributes` containing `creds.txt -diff`
+  # took a staged AWS key from rc=1/1 finding to rc=0/0 findings. No colour pin
+  # closes it, and neither does `core.attributesFile=/dev/null` nor
+  # `GIT_ATTR_NOSYSTEM=1` (both measured): those govern the GLOBAL and SYSTEM
+  # attributes files, while `.git/info/attributes` is per-repo and always read.
+  # This is the same class the colour pin above exists for — ambient local git
+  # config silently disarming the scanner — so it is closed here, not documented.
+  #
+  # `check-attr` discriminates precisely: an explicit `-diff` reports `unset`,
+  # while an auto-detected binary (a PNG) reports `unspecified` (measured), so a
+  # legitimately-binary staged file is never caught by this.
+  # Affected paths are re-scanned from their STAGED blobs with `detect --no-git`,
+  # which never consults git's diff machinery at all — the same mechanism
+  # code-to-prd.sh's Layer 3 already relies on.
+  while IFS= read -r -d '' _p; do
+    [ -n "$_p" ] || continue
+    if [ "$(git -C "$repo_root" check-attr diff -- "$_p" 2>/dev/null | sed 's/.*: //')" = "unset" ]; then
+      gl_nodiff+=("$_p")
+    fi
+  done < <(git -C "$repo_root" diff --cached --name-only -z --diff-filter=ACMR 2>/dev/null)
+
+  # `gitleaks git --pre-commit --staged` scans only files added to the index
+  # (matches the lefthook-staged invocation byte-for-byte). The hook's CWD
+  # may not be the repo root, so cd into it first.
+  #
+  # COLOUR IS PINNED OFF for this invocation. `gitleaks git` runs git itself and
+  # inherits the user's config; under color.ui=always or color.diff=always it
+  # parses ANSI-wrapped patch lines and reports ZERO findings on a staged key
+  # (measured). lefthook.yml's gitleaks-staged step carries the same two pins.
+  #
+  # BOTH config surfaces must be pinned, not just GIT_CONFIG_COUNT.
+  # GIT_CONFIG_PARAMETERS is a SEPARATE source that git reads AFTER the
+  # GIT_CONFIG_COUNT list, so it beats the count-list pin outright — and `git -c
+  # <anything>` EXPORTS it into every hook git spawns. Measured: with only the
+  # count-list pin, `git -c color.diff=always commit` on a staged AWS key scanned
+  # rc=0 / 0 findings and the key landed in history; appending the pin to
+  # GIT_CONFIG_PARAMETERS restores rc=1 / 1 finding. We APPEND rather than replace
+  # so a caller's own `-c` settings survive.
+  #
+  # Within GIT_CONFIG_COUNT later entries win, so appending is the correct
+  # direction there too. But the append is only safe when the caller's count is a
+  # shape git AND this clamp agree on: git tolerates a leading space (" 2"), which
+  # the clamp below rewrites to 0, so the pin would then OVERWRITE the caller's
+  # first two entries rather than follow them. That is safe for the colour pin
+  # itself (it still lands, and still wins) and is why the clamp stays.
+  #
+  # A `-diff` gitattribute defeats colour pinning entirely (it removes the `+`
+  # lines rather than decorating them); that is closed separately by the
+  # check-attr guard above, not by these two pins.
+  gl_cfg_n="${GIT_CONFIG_COUNT:-0}"
+  case "$gl_cfg_n" in ''|*[!0-9]*) gl_cfg_n=0 ;; esac
+  (
+    cd "$repo_root" || exit 1
+    env "GIT_CONFIG_COUNT=$((gl_cfg_n + 2))" \
+      "GIT_CONFIG_KEY_${gl_cfg_n}=color.ui" "GIT_CONFIG_VALUE_${gl_cfg_n}=never" \
+      "GIT_CONFIG_KEY_$((gl_cfg_n + 1))=color.diff" "GIT_CONFIG_VALUE_$((gl_cfg_n + 1))=never" \
+      "GIT_CONFIG_PARAMETERS=${GIT_CONFIG_PARAMETERS:+${GIT_CONFIG_PARAMETERS} }'color.ui'='never' 'color.diff'='never'" \
+      gitleaks git --pre-commit --staged --redact --no-banner --exit-code 1 \
+        --report-format json --report-path "$report_file" >/dev/null 2>&1
+  ) || scan_rc=$?
+
+  # Re-scan any `-diff` path from its STAGED blob before trusting a clean verdict.
+  # `gitleaks git` structurally could not see these (no `+` lines), so "clean" above
+  # is not a statement about them. `detect --no-git` reads file CONTENT and never
+  # consults git's diff machinery, so no gitattribute can reach it.
+  if (( ${#gl_nodiff[@]} > 0 )); then
+    nodiff_rc=0
+    for _p in "${gl_nodiff[@]}"; do
+      mkdir -p "$nodiff_dir/$(dirname "$_p")" 2>/dev/null || true
+      git -C "$repo_root" show ":$_p" > "$nodiff_dir/$_p" 2>/dev/null || true
+    done
+    gitleaks detect --no-git --source "$nodiff_dir" --redact --no-banner --exit-code 1 \
+      --report-format json --report-path "$nodiff_report" >/dev/null 2>&1 || nodiff_rc=$?
+    if [ "$nodiff_rc" -eq 1 ] && [ -s "$nodiff_report" ] && grep -q '"RuleID"' "$nodiff_report" 2>/dev/null; then
+      nd_count="$(jq -r 'length' "$nodiff_report" 2>/dev/null || echo 0)"
+      nd_files="$(printf '%s, ' "${gl_nodiff[@]}")"
+      deny "BLOCKED: gitleaks found ${nd_count} secret-shaped string(s) in staged file(s) of ${repo_root} carrying a \`-diff\` gitattribute: ${nd_files%, }. A \`-diff\` attribute makes git emit \"Binary files … differ\" with no added lines, so the normal staged scan sees NOTHING in these files — they were re-scanned from their staged blobs. Recovery: (1) scrub the secret bytes (never commit-then-rotate); (2) if the \`-diff\` attribute is not deliberate, remove it from .gitattributes / .git/info/attributes."
+    fi
+    if [ "$nodiff_rc" -ne 0 ] && [ "$nodiff_rc" -ne 1 ]; then
+      echo "[git-commit-secret-scan] WARN: the \`-diff\` re-scan exited $nodiff_rc without a findings report; those paths were NOT verified." >&2
+      emit git-commit-secret-scan-nodiff-rescan-failed bypass "-diff re-scan exit=$nodiff_rc, empty report"
+    fi
   fi
-done < <(git -C "$repo_root" diff --cached --name-only -z --diff-filter=ACMR 2>/dev/null)
 
-# `gitleaks git --pre-commit --staged` scans only files added to the index
-# (matches the lefthook-staged invocation byte-for-byte). The hook's CWD
-# may not be the repo root, so cd into it first.
-#
-# COLOUR IS PINNED OFF for this invocation. `gitleaks git` runs git itself and
-# inherits the user's config; under color.ui=always or color.diff=always it
-# parses ANSI-wrapped patch lines and reports ZERO findings on a staged key
-# (measured). lefthook.yml's gitleaks-staged step carries the same two pins.
-#
-# BOTH config surfaces must be pinned, not just GIT_CONFIG_COUNT.
-# GIT_CONFIG_PARAMETERS is a SEPARATE source that git reads AFTER the
-# GIT_CONFIG_COUNT list, so it beats the count-list pin outright — and `git -c
-# <anything>` EXPORTS it into every hook git spawns. Measured: with only the
-# count-list pin, `git -c color.diff=always commit` on a staged AWS key scanned
-# rc=0 / 0 findings and the key landed in history; appending the pin to
-# GIT_CONFIG_PARAMETERS restores rc=1 / 1 finding. We APPEND rather than replace
-# so a caller's own `-c` settings survive.
-#
-# Within GIT_CONFIG_COUNT later entries win, so appending is the correct
-# direction there too. But the append is only safe when the caller's count is a
-# shape git AND this clamp agree on: git tolerates a leading space (" 2"), which
-# the clamp below rewrites to 0, so the pin would then OVERWRITE the caller's
-# first two entries rather than follow them. That is safe for the colour pin
-# itself (it still lands, and still wins) and is why the clamp stays.
-#
-# A `-diff` gitattribute defeats colour pinning entirely (it removes the `+`
-# lines rather than decorating them); that is closed separately by the
-# check-attr guard above, not by these two pins.
-gl_cfg_n="${GIT_CONFIG_COUNT:-0}"
-case "$gl_cfg_n" in ''|*[!0-9]*) gl_cfg_n=0 ;; esac
-scan_rc=0
-(
-  cd "$repo_root" || exit 1
-  env "GIT_CONFIG_COUNT=$((gl_cfg_n + 2))" \
-    "GIT_CONFIG_KEY_${gl_cfg_n}=color.ui" "GIT_CONFIG_VALUE_${gl_cfg_n}=never" \
-    "GIT_CONFIG_KEY_$((gl_cfg_n + 1))=color.diff" "GIT_CONFIG_VALUE_$((gl_cfg_n + 1))=never" \
-    "GIT_CONFIG_PARAMETERS=${GIT_CONFIG_PARAMETERS:+${GIT_CONFIG_PARAMETERS} }'color.ui'='never' 'color.diff'='never'" \
-    gitleaks git --pre-commit --staged --redact --no-banner --exit-code 1 \
-      --report-format json --report-path "$report_file" >/dev/null 2>&1
-) || scan_rc=$?
-
-# Re-scan any `-diff` path from its STAGED blob before trusting a clean verdict.
-# `gitleaks git` structurally could not see these (no `+` lines), so "clean" above
-# is not a statement about them. `detect --no-git` reads file CONTENT and never
-# consults git's diff machinery, so no gitattribute can reach it.
-if (( ${#gl_nodiff[@]} > 0 )); then
-  nodiff_rc=0
-  for _p in "${gl_nodiff[@]}"; do
-    mkdir -p "$nodiff_dir/$(dirname "$_p")" 2>/dev/null || true
-    git -C "$repo_root" show ":$_p" > "$nodiff_dir/$_p" 2>/dev/null || true
-  done
-  gitleaks detect --no-git --source "$nodiff_dir" --redact --no-banner --exit-code 1 \
-    --report-format json --report-path "$nodiff_report" >/dev/null 2>&1 || nodiff_rc=$?
-  if [ "$nodiff_rc" -eq 1 ] && [ -s "$nodiff_report" ] && grep -q '"RuleID"' "$nodiff_report" 2>/dev/null; then
-    nd_count="$(jq -r 'length' "$nodiff_report" 2>/dev/null || echo 0)"
-    nd_files="$(printf '%s, ' "${gl_nodiff[@]}")"
-    deny "BLOCKED: gitleaks found ${nd_count} secret-shaped string(s) in staged file(s) carrying a \`-diff\` gitattribute: ${nd_files%, }. A \`-diff\` attribute makes git emit \"Binary files … differ\" with no added lines, so the normal staged scan sees NOTHING in these files — they were re-scanned from their staged blobs. Recovery: (1) scrub the secret bytes (never commit-then-rotate); (2) if the \`-diff\` attribute is not deliberate, remove it from .gitattributes / .git/info/attributes."
+  if [ "$scan_rc" -eq 0 ]; then
+    return 0
   fi
-  if [ "$nodiff_rc" -ne 0 ] && [ "$nodiff_rc" -ne 1 ]; then
-    echo "[git-commit-secret-scan] WARN: the \`-diff\` re-scan exited $nodiff_rc without a findings report; those paths were NOT verified." >&2
-    emit git-commit-secret-scan-nodiff-rescan-failed bypass "-diff re-scan exit=$nodiff_rc, empty report"
+
+  # scan_rc != 0 → findings present (or gitleaks crashed). Build a redacted
+  # deny reason that names the files + rule IDs but never the secret body.
+  if [ -s "$report_file" ]; then
+    findings_count="$(jq -r 'length' "$report_file" 2>/dev/null || echo 0)"
+    # Each finding: {RuleID, File, StartLine}. Cap at 5 to keep the deny
+    # reason terse; the operator can re-run gitleaks locally to see the rest.
+    findings_summary="$(jq -r '
+      [.[] | "\(.File):\(.StartLine) (\(.RuleID))"] | .[0:5] | join("; ")
+    ' "$report_file" 2>/dev/null || echo "")"
   fi
-fi
 
-if [ "$scan_rc" -eq 0 ]; then
-  allow
-fi
+  if [ "$findings_count" = "0" ] || [ -z "$findings_summary" ]; then
+    # gitleaks exited non-zero but the report file is empty/missing — likely
+    # a transient gitleaks error rather than a real finding. Fail-open with
+    # a warn so a broken binary doesn't block every commit.
+    echo "[git-commit-secret-scan] WARN: gitleaks exited $scan_rc but produced no findings report for $repo_root; allowing it. Run 'gitleaks git --pre-commit --staged' there to diagnose." >&2
+    emit git-commit-secret-scan bypass "gitleaks exit=$scan_rc, empty report"
+    return 0
+  fi
 
-# scan_rc != 0 → findings present (or gitleaks crashed). Build a redacted
-# deny reason that names the files + rule IDs but never the secret body.
-findings_count=0
-findings_summary=""
-if [ -s "$report_file" ]; then
-  findings_count="$(jq -r 'length' "$report_file" 2>/dev/null || echo 0)"
-  # Each finding: {RuleID, File, StartLine}. Cap at 5 to keep the deny
-  # reason terse; the operator can re-run gitleaks locally to see the rest.
-  findings_summary="$(jq -r '
-    [.[] | "\(.File):\(.StartLine) (\(.RuleID))"] | .[0:5] | join("; ")
-  ' "$report_file" 2>/dev/null || echo "")"
-fi
+  reason="BLOCKED: gitleaks found ${findings_count} secret-shaped string(s) in the staged index of ${repo_root}. Locations: ${findings_summary}. The default action is to scrub the secrets — never commit-then-rotate. Recovery: (1) unstage the offending file(s) in ${repo_root} with 'git restore --staged <path>'; (2) redact the secret bytes in place; (3) re-stage and retry. If the staged content is a captured-real fixture from 'terraform show -json' or similar, strip the '.variables' block — terraform-show-json embeds sensitive HCL variables verbatim regardless of sensitive=true. See knowledge-base/project/learnings/security-issues/2026-05-25-terraform-show-json-leaks-sensitive-variables-into-fixtures.md."
+  deny "$reason"
+}
 
-if [ "$findings_count" = "0" ] || [ -z "$findings_summary" ]; then
-  # gitleaks exited non-zero but the report file is empty/missing — likely
-  # a transient gitleaks error rather than a real finding. Fail-open with
-  # a warn so a broken binary doesn't block every commit.
-  echo "[git-commit-secret-scan] WARN: gitleaks exited $scan_rc but produced no findings report; allowing commit. Run 'gitleaks git --pre-commit --staged' locally to diagnose." >&2
-  emit git-commit-secret-scan bypass "gitleaks exit=$scan_rc, empty report"
-  allow
-fi
-
-reason="BLOCKED: gitleaks found ${findings_count} secret-shaped string(s) in the staged index. Locations: ${findings_summary}. The default action is to scrub the secrets — never commit-then-rotate. Recovery: (1) unstage the offending file(s) with 'git restore --staged <path>'; (2) redact the secret bytes in place; (3) re-stage and retry. If the staged content is a captured-real fixture from 'terraform show -json' or similar, strip the '.variables' block — terraform-show-json embeds sensitive HCL variables verbatim regardless of sensitive=true. See knowledge-base/project/learnings/security-issues/2026-05-25-terraform-show-json-leaks-sensitive-variables-into-fixtures.md."
-
-deny "$reason"
+for _r in "${toml_roots[@]}"; do
+  scan_root "$_r"
+done
+allow
