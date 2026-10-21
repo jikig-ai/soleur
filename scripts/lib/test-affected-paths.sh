@@ -120,6 +120,7 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-dual-lockfile-live"
   "scripts/lint-gh-argv-arg-live"
   "scripts/lint-guard-contract-live"
+  "scripts/lint-feature-map-coverage-live"
   "scripts/lint-integration-env-gates-live"
   "scripts/lint-legal-mirror-drift-baseline-live"
   "scripts/lint-legal-registers-live"
@@ -2072,6 +2073,21 @@ AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS=(
   "glob:spike/**.test.sh"
   "glob:todos/**.test.sh"
   "scripts/test-all.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/lint-feature-map-coverage-battery — mutation battery over the
+# feature-map sentinel + synthetic fixture repos; its verdict moves only with
+# its SUT, itself, or the canonical fixture-dir guard it copies. The real map
+# is an edge because the battery's fixture maps mirror its entry grammar — a
+# convention change there must re-drive this suite (the live suite is
+# always-on and covers the map itself).
+AFFECTED_SCRIPTS_LINT_FEATURE_MAP_COVERAGE_BATTERY_PATHS=(
+
+  "scripts/lint-feature-map-coverage.sh"
+  "scripts/lint-feature-map-coverage.test.sh"
+  "apps/web-platform/test/feature-map.md"
+  "plugins/soleur/test/test-helpers.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 

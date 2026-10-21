@@ -35,6 +35,17 @@ const paddedArb = fc
 const inputArb = fc.oneof(fc.string(), urlishArb, paddedArb);
 
 describe("normalizeRepoUrl — idempotency (property)", () => {
+  // Pinned counterexamples: the `.git` strip can expose a trailing dot-segment
+  // (`a/..git` → `a/..`) that URL parsing then collapses — #10716, surfaced by
+  // fast-check seeds -590792931 and -1488952269.
+  it.each(["http://a.aa/..git.git", " http://a.aa/..git.git/", "https://x.io/a/..git"])(
+    "pinned #10716: %j is a fixpoint",
+    (x) => {
+      const once = normalizeRepoUrl(x);
+      expect(normalizeRepoUrl(once)).toBe(once);
+    },
+  );
+
   it("normalize(normalize(x)) === normalize(x) over arbitrary + URL-ish inputs", () => {
     fc.assert(
       fc.property(inputArb, (x) => {

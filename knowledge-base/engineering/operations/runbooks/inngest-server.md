@@ -3463,6 +3463,8 @@ doppler secrets get SOLEUR_FR5_ENABLED -p soleur -c prd --plain
 doppler secrets set SOLEUR_FR5_ENABLED=false -p soleur -c prd
 ```
 
+The web container reads this value from the env snapshot taken at container start, so the flip takes effect only after the web containers restart (a redeploy).
+
 Stripe redelivery (up to 3 days) preserves at-least-once if the flip+rollback cycle drops events in flight.
 
 ### Synthetic smoke procedure (one-off, no separate script)

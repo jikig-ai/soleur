@@ -130,6 +130,17 @@ git diff --name-only main...[branch]
 
 <file_to_route_mapping>
 
+**Repo feature map first.** When the repository carries a maintained feature
+map — convention: `docs/feature-map.md` (soleur's own lives at
+`apps/web-platform/test/feature-map.md`; the entry schema and update contract
+are in [feature-map.md](./references/feature-map.md)) — its route entries are
+the navigation source of truth: each `## \`/route\`` section names stable
+selectors, the user-POV expected outcome, auth/fixture needs, and gotchas.
+Prefer it over inferring routes from file paths; the generic table below is
+the fallback for repos without a map AND for routes a partial map does not
+cover — a map is authoritative per-route, never a reason to skip testing an
+unmapped route.
+
 Map changed files to testable routes:
 
 | File Pattern | Route(s) |
@@ -247,6 +258,34 @@ agent-browser screenshot --full page-name-full.png  # Full page
 
 </test_pages>
 
+### 5b. Write or refresh the feature map
+
+After all affected routes are tested, maintain the repository's feature map —
+`docs/feature-map.md` by convention (soleur's own lives at
+`apps/web-platform/test/feature-map.md`); see
+[feature-map.md](./references/feature-map.md) for the schema and update
+contract:
+
+- **No map at either path + web app + ≥1 route exercised:** write
+  `docs/feature-map.md` seeded with the exercised routes only — real
+  observed `selectors`, `expects`, and `gotchas`, the update-contract
+  header, and a `## Deliberately unmapped` section (empty is fine). Do not
+  enumerate unvisited routes as entries.
+- **Map present at either path:** refresh only the fields a run
+  contradicted; append
+  `## \`/route\`` entries for exercised routes that were missing; leave every
+  untouched entry and the header byte-identical (operator annotations
+  survive).
+- **Skip:** non-web repos (no route surfaces found) and runs that exercised
+  zero routes — never write a vacuous map.
+
+The map is a working-tree edit that lands with the feature's PR — same
+change, per the update contract.
+
+**Report:** the Step 8 test summary names the map action taken — `written`,
+`refreshed`, or `skipped` + one-word reason (`non-web`, `no-routes`) — so a
+silently-absent map is never mistaken for a maintained one.
+
 ### 6. Human Verification (When Required)
 
 <human_verification>
@@ -328,6 +367,7 @@ After all tests complete, present summary:
 
 **Test Scope:** PR #[number] / [branch name]
 **Server:** http://localhost:3000
+**Feature map:** [written | refreshed | skipped: <reason>]
 
 ### Pages Tested: [count]
 
