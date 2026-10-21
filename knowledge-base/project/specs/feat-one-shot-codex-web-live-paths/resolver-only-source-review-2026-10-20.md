@@ -330,3 +330,48 @@ fresh one-time execution permission and separate evidence review remain distinct
 later gates. The old manifest and all historical attempt evidence remain untouched;
 old source bindings and the spent execution approval cannot be reused. The cause
 and historical helper activity of the refused attempt remain unestablished.
+
+## Expanded continuation authority and completed resolver action — 2026-10-21
+
+After the correction acceptance above, the operator said **“approved for all the
+remaining items”** and **“No need to ask me for each”**. This supersedes the earlier
+per-phase operator holds for remaining non-production preparation, reviews,
+diagnostics, acquisition, source/tests, isolated recovery, reconciliation and
+shipping work. Continue those already authorized steps without repeated permission
+questions. Technical review, fresh source/action bindings, containment and evidence
+requirements still apply. Destructive shared-production commands retain their
+repository-mandated exact-command approval; owner consent does not grant provider
+permission or establish missing legal/account facts.
+
+File-only preparation at clean pushed
+`da4b1b80a53538f7509993f4c30f7d9e05d54e18` created one new private resolver manifest.
+Engineering and security independently accepted the actual manifest and exact
+supervisor command before execution. Canonical manifest SHA:
+`0531dcf72806ada63e12cfbbf6223dc10a21a54ae09d74f803002dc7a31402ce`;
+stored-file SHA:
+`1a43515d0babc97adaba1314ddde3fa3f6a711d2646b9563faf52fb295c159d0`.
+All 18 source bindings, interpreter, private identity/modes and unused directory
+passed. The earlier spent manifest was not reused.
+
+That exact new command ran once and exited **0**, emitting the reviewed supervisor
+completion signal. The private receipt records `admitted/complete`, one helper,
+reaped cleanup, provisional finalization, `action_accepted=false`, pending review
+and all authority fields false. Independent engineering/security evidence reviews
+accepted those bindings paired with the observed exit/completion. The separate
+private execution observation preserves root's actual tool output; reviewers
+verified its consistency rather than independently witnessing the original call.
+
+- Marker raw SHA:
+  `fe08d41b96c92beac637c8c4f0ffc1135359c6dfc4abe1fd5b57779a24770ee4`.
+- Receipt raw SHA:
+  `09a6d45a349d893a5aef95c4012873f4e99353625b4f5fa4dbf64513f8a0616c`.
+- Receipt self-hash:
+  `fac29c3c1c9057556dac7e043ac6873efd124fa036bb2f04b2fa0136dbb0fdeb`.
+
+This establishes this invocation's bounded resolution/address-policy result and
+corroborated completion. It does not explain the older refusals or establish HTTP,
+Config, publisher, profile, recovery or qualification admission. The new attempt
+is consumed. Ruled by CTO agent: proceed to fresh Config file-only preparation and
+actual-command review under the expanded authorization. The subsequent containment
+finding and correction are recorded in the
+[Config source review](config-acquisition-source-review-2026-10-20.md#config-helper-containment-finding--2026-10-21).

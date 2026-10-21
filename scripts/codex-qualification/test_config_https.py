@@ -316,7 +316,8 @@ class ResolverTests(unittest.TestCase):
         args, kwargs = popen.call_args
         self.assertEqual(args[0][1:4], ['-I', '-S', '-B'])
         self.assertTrue(Path(args[0][0]).is_absolute())
-        self.assertEqual(args[0][-1], 'auth.docker.io')
+        self.assertEqual(args[0][-2:], ['auth.docker.io', str(os.getpid())])
+        self.assertIs(kwargs['start_new_session'], False)
         self.assertEqual(kwargs['env'], {})
         self.assertTrue(kwargs['close_fds'])
         self.assertEqual(kwargs['stdin'], transport.subprocess.DEVNULL)
@@ -374,9 +375,9 @@ class ResolverTests(unittest.TestCase):
                 self.assertTrue(child.stdout.closed)
                 with self.assertRaises(ChildProcessError):
                     os.waitpid(child.pid, os.WNOHANG)
-                # The new session/group contains no surviving child or descendant.
+                # The helper shares this coordinator's process group; its own PID is reaped.
                 with self.assertRaises(ProcessLookupError):
-                    os.killpg(child.pid, 0)
+                    os.kill(child.pid, 0)
             finally:
                 # A regression in the oracle must never leave the sleeper alive.
                 for child in launched:
@@ -403,17 +404,74 @@ class ResolverTests(unittest.TestCase):
         import config_resolver
         output = Mock()
         output.buffer = io.BytesIO()
-        with patch.object(config_resolver.sys, 'argv', ['helper', 'auth.docker.io']), \
+        with patch.object(config_resolver.sys, 'argv', ['helper', 'auth.docker.io', str(os.getpid())]), \
+                patch('resolver_supervisor.arm_parent_death') as arm, \
                 patch.object(config_resolver.sys, 'stdout', output), \
                 patch.object(config_resolver.socket, 'getaddrinfo', return_value=[
                     (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', ('8.8.8.8', 443))]) as resolve:
             self.assertEqual(config_resolver.main(), 0)
         self.assertEqual(json.loads(output.buffer.getvalue()), [[2, '8.8.8.8', 443, 0, 0]])
         resolve.assert_called_once()
+        arm.assert_called_once_with(os.getpid())
         with patch.object(config_resolver.sys, 'argv', ['helper', 'CANARY']), \
                 patch.object(config_resolver.socket, 'getaddrinfo') as resolve:
             self.assertEqual(config_resolver.main(), 1)
             resolve.assert_not_called()
+
+
+    def test_helper_refuses_invalid_parent_before_arming_or_resolution(self):
+        import config_resolver
+        for parent in ('', '1', '0', '-2', '+123', ' 123', '123 ', '1.5', '１２３', '9' * 100):
+            with self.subTest(parent=parent), \
+                    patch.object(config_resolver.sys, 'argv', ['helper', 'auth.docker.io', parent]), \
+                    patch('resolver_supervisor.arm_parent_death') as arm, \
+                    patch.object(config_resolver.socket, 'getaddrinfo') as resolve:
+                self.assertEqual(config_resolver.main(), 1)
+                arm.assert_not_called()
+                resolve.assert_not_called()
+
+    def test_helper_refuses_parent_group_or_session_mismatch_before_resolution(self):
+        import config_resolver
+        for target in ('getpgid', 'getsid'):
+            original = getattr(os, target)
+            def mismatched(pid):
+                return original(pid) + (1 if pid == os.getpid() else 0)
+            with self.subTest(target=target), \
+                    patch.object(config_resolver.sys, 'argv', ['helper', 'auth.docker.io', str(os.getpid())]), \
+                    patch('resolver_supervisor.arm_parent_death'), \
+                    patch.object(os, target, side_effect=mismatched), \
+                    patch.object(config_resolver.socket, 'getaddrinfo') as resolve:
+                self.assertEqual(config_resolver.main(), 1)
+                resolve.assert_not_called()
+
+    def test_helper_parent_race_and_arming_failure_prevent_resolution(self):
+        import config_resolver
+        for failure in (RuntimeError('parent changed'), OSError('prctl unavailable')):
+            with patch.object(config_resolver.sys, 'argv', ['helper', 'auth.docker.io', str(os.getpid())]), \
+                    patch('resolver_supervisor.arm_parent_death', side_effect=failure) as arm, \
+                    patch.object(config_resolver.socket, 'getaddrinfo') as resolve:
+                self.assertEqual(config_resolver.main(), 1)
+                arm.assert_called_once_with(os.getpid())
+                resolve.assert_not_called()
+
+    def test_helper_import_or_prctl_failure_refuses_before_resolution(self):
+        import builtins
+        import config_resolver
+        import resolver_supervisor
+        original_import = builtins.__import__
+
+        def refused_import(name, *args, **kwargs):
+            if name == 'resolver_supervisor':
+                raise ImportError('synthetic containment dependency unavailable')
+            return original_import(name, *args, **kwargs)
+
+        for guard in (patch('builtins.__import__', side_effect=refused_import),
+                      patch.object(resolver_supervisor, '_prctl', side_effect=OSError('synthetic unavailable'))):
+            with guard, \
+                    patch.object(config_resolver.sys, 'argv', ['helper', 'auth.docker.io', str(os.getpid())]), \
+                    patch.object(config_resolver.socket, 'getaddrinfo') as resolve:
+                self.assertEqual(config_resolver.main(), 1)
+                resolve.assert_not_called()
 
 
 @unittest.skipIf(transport is None, 'implementation absent; required import checked separately')

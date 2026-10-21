@@ -119,9 +119,9 @@ def resolve_addresses(host, *, deadline, clock):
         child_deadline = deadline - 0.25
         _remaining(clock, child_deadline)
         process = subprocess.Popen([sys.executable, '-I', '-S', '-B',
-            str(Path(__file__).with_name('config_resolver.py').resolve()), host],
+            str(Path(__file__).with_name('config_resolver.py').resolve()), host, str(os.getpid())],
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            env={}, close_fds=True, cwd='/', start_new_session=True)
+            env={}, close_fds=True, cwd='/', start_new_session=False)
         os.set_blocking(process.stdout.fileno(), False)
         while True:
             remaining = _remaining(clock, child_deadline)

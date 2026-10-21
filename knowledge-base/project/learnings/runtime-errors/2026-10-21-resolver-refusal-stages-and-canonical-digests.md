@@ -44,3 +44,7 @@ a deliberate 600 ms startup delay reproduced the failure. Signal fixture
 readiness after candidate flush, trigger the synthetic timeout only then, and
 retain an independent real startup cap. Keep production budgets unchanged.
 This proves that fixture race, not any historical operational failure.
+
+A later wildcard discovery guessed nonexistent `.soleur/*config*.py` helpers.
+List the directory's real filenames first; the existence of Config JSON records
+does not imply similarly named preparation scripts exist.

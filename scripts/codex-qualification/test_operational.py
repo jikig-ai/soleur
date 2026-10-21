@@ -41,7 +41,7 @@ class Operational(unittest.TestCase):
                      'redirect_diagnostic.py', 'test_redirect_diagnostic.py',
                      'config_acquisition.py', 'config_https.py', 'config_resolver.py', 'config_schema.py',
                      'test_config_acquisition.py', 'test_config_https.py', 'test_config_schema.py',
-                     'test_config_execution.py'):
+                     'test_config_execution.py', 'resolver_supervisor.py', 'test_config_resolver_lifecycle.py'):
             (self.component.parent / name).write_bytes((Path(__file__).parent / name).read_bytes())
         for name in ('40_race_holder.sql', '41_race_waiter.sql', '42_race_observe.sql', '43_race_assert.sql'):
             path = self.component.parent / 'scenarios' / name
@@ -113,6 +113,8 @@ class Operational(unittest.TestCase):
 
     def test_prepared_contract_binds_config_dependencies_and_refuses_each_omission(self):
         dependencies = config_acquisition._dependencies(self.repo, self.contract)
+        self.assertIn('resolver_supervisor.py', dependencies)
+        self.assertIn('test_config_resolver_lifecycle.py', dependencies)
         for name in config_acquisition.DEPENDENCIES:
             with self.subTest(name=name):
                 path = 'scripts/codex-qualification/' + name
@@ -238,7 +240,7 @@ class Operational(unittest.TestCase):
                      'redirect_diagnostic.py', 'test_redirect_diagnostic.py',
                      'config_acquisition.py', 'config_https.py', 'config_resolver.py', 'config_schema.py',
                      'test_config_acquisition.py', 'test_config_https.py', 'test_config_schema.py',
-                     'test_config_execution.py'):
+                     'test_config_execution.py', 'resolver_supervisor.py', 'test_config_resolver_lifecycle.py'):
             component = self.component.parent / name
             original = component.read_bytes()
             component.unlink()

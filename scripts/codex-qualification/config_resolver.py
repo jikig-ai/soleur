@@ -1,5 +1,7 @@
 """Fresh-interpreter, secret-free resolver helper; not an acquisition entry point."""
 import json
+import os
+from pathlib import Path
 import socket
 import sys
 
@@ -8,7 +10,18 @@ HOSTS = ('auth.docker.io', 'registry-1.docker.io', 'production.cloudfront.docker
 
 def main():
     try:
-        if len(sys.argv) != 2 or sys.argv[1] not in HOSTS:
+        if (len(sys.argv) != 3 or sys.argv[1] not in HOSTS or
+                not sys.argv[2].isascii() or not sys.argv[2].isdecimal() or
+                len(sys.argv[2]) > 10 or not 1 < int(sys.argv[2]) <= 2147483647):
+            return 1
+        # Fixed sibling import works with -I -S; no caller import path is used.
+        sys.path.insert(0, str(Path(__file__).absolute().parent))
+        from resolver_supervisor import arm_parent_death
+        parent = int(sys.argv[2])
+        arm_parent_death(parent)
+        # Share the coordinator's timeout group/session; parent-death handling
+        # also covers an individual coordinator loss before outer cancellation.
+        if os.getpgid(parent) != os.getpgrp() or os.getsid(parent) != os.getsid(0):
             return 1
         rows = socket.getaddrinfo(sys.argv[1], 443, type=socket.SOCK_STREAM,
                                   proto=socket.IPPROTO_TCP)

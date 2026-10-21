@@ -215,3 +215,65 @@ preparation, real resolver execution, DNS/network, retries, resync or shipping.
 See the [corrected source record](resolver-only-source-review-2026-10-20.md) for
 the offline results and independent review status. Historical evidence is
 unchanged.
+
+## Config helper containment finding — 2026-10-21
+
+The operator expanded authorization to all remaining work and expressly removed
+repeated per-phase permission questions; the
+[continuation record](resolver-only-source-review-2026-10-20.md#expanded-continuation-authority-and-completed-resolver-action--2026-10-21)
+owns the scope and completed resolver evidence. After independent acceptance of
+that resolver result, file-only preparation at source
+`da4b1b80a53538f7509993f4c30f7d9e05d54e18` created fresh operational/image inputs
+and Config manifest
+`bb5e493296b42938b66570c45da1a444f073aa0dd9d2a259dc08fcd340cae19a`.
+The candidate directory was not assembled or created. Primary Docker exact-host
+service-use documentation was rechecked on October 21; its allowlist still lists
+the authentication and registry/CDN endpoints. This does not attest ownership or
+publisher provenance.
+
+Actual-manifest review passed its private identities, CA, retained platform,
+runtime, schema, 37 source references and 21 dependency bindings, but engineering
+and security **blocked execution** on a containment defect. The Config helper
+started a separate session and lacked parent-death protection, so a forcibly
+terminated coordinator could leave a blocking helper outside the outer timeout's
+group. Normal `finally` cleanup did not establish safety on that path. The finding
+was tracked before source correction as [Ref #10760](https://github.com/jikig-ai/soleur/issues/10760).
+No Config command was executed. Preserve that unused manifest and all older
+evidence; the correction requires new bindings rather than reusing it.
+
+Ruled by CTO agent: retain the helper in its coordinator's timeout group/session,
+pass only the allowlisted host and expected parent PID, bootstrap the fixed local
+import, arm reviewed parent-death termination, and verify parent group/session
+before the sole resolution call. Preserve environment, descriptor, output,
+deadline, address-policy and network boundaries. Bind the imported supervisor
+and new lifecycle suite in both the operational source-reference census and
+Config dependency inventory. A killed coordinator cannot publish evidence of
+successful cleanup.
+
+RED-first synthetic helper/lifecycle tests exposed the missing parent contract,
+startup refusal and surviving blocking helper after coordinator death. Separate
+contract tests failed when the supervisor or lifecycle suite was omitted from
+either source inventory; both inventories now require them. The focused helper
+suite passed 34 tests after correction; the source author reports independent
+group/parent-death mutation discriminators, parent-loss-before-arm, real synthetic
+outer-group termination, guard/import failure and cancellation/reaping coverage.
+All resolver seams in those tests are synthesized; no real DNS or Config request
+was made. Complete offline discovery and independent corrected-source review are
+pending at this point. The earlier refusal causes remain unknown.
+
+The [October 21 CLO recheck](../../../legal/audits/2026-10-21-codex-web-hosted-auth-recheck.md)
+retains both hosted authentication blocks and the separate alternative-route
+pending disposition. Expanded owner approval permits continuing technical work;
+it does not manufacture provider permission or allow live hosted qualification.
+
+### Complete offline verification of the containment candidate
+
+Primary rerun: `/usr/bin/python3.14 -E -B -W error -m unittest discover -s .
+-p 'test_*.py'` from `scripts/codex-qualification/` passed **480 tests**, exit 0,
+64.789 seconds. The focused operational-contract suite separately passed
+**14 tests**, including missing supervisor/lifecycle source, after RED runs
+showed both omission boundaries accepted absent bindings. Cached Ruff 0.16.10
+passed all seven changed Python files; whitespace checks passed. The complete
+discovery includes only offline/synthetic qualification tests, not an operational
+Config attempt or live provider matrix. Corrected-source independent review is
+still required before replacing the preserved unused manifest.

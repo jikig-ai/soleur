@@ -34,7 +34,7 @@ PRECONSUMPTION_STAGES = ('startup', 'manifest', 'source_binding', 'private_outpu
                          'tls_setup', 'preconsume', 'gate_write')
 DEPENDENCIES = ('config_acquisition.py', 'config_https.py', 'config_resolver.py', 'config_schema.py',
                 'test_config_acquisition.py', 'test_config_https.py', 'test_config_schema.py',
-                'test_config_execution.py')
+                'test_config_execution.py', 'resolver_supervisor.py', 'test_config_resolver_lifecycle.py')
 
 
 def _ensure(value, code='binding'):
