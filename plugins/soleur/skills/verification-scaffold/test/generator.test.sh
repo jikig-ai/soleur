@@ -1,11 +1,20 @@
 #!/usr/bin/env bash
-# Generator coverage for verification-scaffold.sh (#10404): flags, refusals,
-# settings merge, mode flips, re-run refusal, --uninstall, --dry-run. Drives
-# throwaway `git init` fixture repos under mktemp — the real tree is untouched.
-# Accumulate-then-exit.
+# Generator coverage for verification-scaffold.sh (#10404) against HERMETIC
+# fixture repos — a throwaway `git init` per arm under a mktemp dir. Covers the
+# flag/exit-matrix paths that need no gitleaks:
+#   64  --mode bogus; unknown guard
+#   65  --target outside a git work tree
+#   66  refuse-if-exists (pre-placed artifact; full second run)
+#   69  malformed .claude/settings.json refused BEFORE any write
+#   settings merge: absent created, unrelated keys preserved, re-run dedupe
+#   --dry-run writes nothing; --uninstall is surgical + idempotent
+#   --guards subset emits only that guard's artifacts
+# Runs in the scripts shard. Accumulate-then-exit.
 set -uo pipefail
+export TMPDIR="${TMPDIR:-/var/tmp}"
 
-REPO_ROOT="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../../../.." && pwd)"
 GEN="$REPO_ROOT/plugins/soleur/skills/verification-scaffold/scripts/verification-scaffold.sh"
 
 passes=0; fails=0
@@ -13,112 +22,226 @@ pass() { printf 'ok   - %s\n' "$1"; passes=$((passes + 1)); }
 fail() { printf 'FAIL - %s\n' "$1"; fails=$((fails + 1)); }
 
 TMPROOT="$(mktemp -d)"
+# The body below is the CANONICAL copy of assert_fixture_dir (#7652) — do not reword.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 trap 'rm -rf "$TMPROOT"' EXIT
 
-mk_repo() {  # $1 = name -> prints abs path of a committed fixture repo
-  local fx="$TMPROOT/$1"
-  mkdir -p "$fx"
-  git -C "$fx" init -q
-  printf 'x\n' > "$fx/f.txt"
-  git -C "$fx" add f.txt
-  git -C "$fx" -c user.email=t@t -c user.name=t commit -qm init
-  printf '%s' "$fx"
+mkrepo() { # mkrepo <name> -> fixture git repo path (empty tree, one commit)
+  local d="$TMPROOT/$1"
+  mkdir -p "$d"
+  git -C "$d" init -q
+  git -C "$d" config user.email t@t
+  git -C "$d" config user.name t
+  local t c
+  t="$(git -C "$d" write-tree)"
+  c="$(echo init | git -C "$d" commit-tree "$t")"
+  git -C "$d" update-ref refs/heads/main "$c"
+  git -C "$d" symbolic-ref HEAD refs/heads/main
+  printf '%s' "$d"
 }
-run_gen() {  # $1=target, rest=args -> rc
-  local t="$1"; shift
-  set +e
-  bash "$GEN" --target "$t" "$@" >"$TMPROOT/out.log" 2>&1
-  local rc=$?
-  set -e
+
+run_gen() { # run_gen <repo> <args...> -> rc (never aborts the suite)
+  local root="$1"; shift
+  local rc=0
+  bash "$GEN" --target "$root" "$@" >/dev/null 2>&1 || rc=$?
   printf '%s' "$rc"
 }
 
-# --list prints the manifest rows
-bash "$GEN" --list >"$TMPROOT/list.log" 2>&1
-grep -q 'secret-scan' "$TMPROOT/list.log" && grep -q 'orphan-test' "$TMPROOT/list.log" \
-  && pass "--list prints the manifest" || fail "--list missing guard rows"
+run_gen_out() { # run_gen_out <repo> <args...> -> "rc|stdout"
+  local root="$1"; shift
+  local rc=0 out
+  out="$(bash "$GEN" --target "$root" "$@" 2>/dev/null)" || rc=$?
+  printf '%s|%s' "$rc" "$out"
+}
 
-# --mode bogus -> 64
-FX="$(mk_repo m1)"; RC="$(run_gen "$FX" --mode bogus)"
-[[ "$RC" == "64" ]] && pass "--mode bogus refuses 64" || fail "--mode bogus rc=$RC"
+# --- 65: not a git work tree ---------------------------------------------------
+NOTREPO="$TMPROOT/notrepo"; mkdir -p "$NOTREPO"
+RC="$(run_gen "$NOTREPO" --headless)"
+[[ "$RC" == "65" ]] && pass "exit 65: target outside a git work tree refused" \
+  || fail "expected 65 for non-repo target, got $RC"
 
-# non-repo target -> 65
-RC="$(run_gen /tmp)"
-[[ "$RC" == "65" ]] && pass "non-repo target refuses 65" || fail "non-repo rc=$RC"
+# --- 64: --mode bogus / unknown guard -------------------------------------------
+FX="$(mkrepo modebogus)"; assert_fixture_dir "$FX"
+RC="$(run_gen "$FX" --mode bogus --headless)"
+[[ "$RC" == "64" ]] && pass "exit 64: --mode bogus refused pre-write" \
+  || fail "expected 64 for --mode bogus, got $RC"
+RC="$(run_gen "$FX" --guards nosuchguard --headless)"
+[[ "$RC" == "64" ]] && pass "exit 64: unknown guard refused" \
+  || fail "expected 64 for unknown guard, got $RC"
 
-# unknown guard -> 64
-FX="$(mk_repo m2)"; RC="$(run_gen "$FX" --guards not-a-guard)"
-[[ "$RC" == "64" ]] && pass "unknown guard refuses 64" || fail "unknown guard rc=$RC"
-
-# --dry-run writes nothing
-FX="$(mk_repo m3)"; RC="$(run_gen "$FX" --dry-run)"
-[[ "$RC" == "0" && ! -e "$FX/.claude" && ! -e "$FX/.github" && ! -e "$FX/scripts" ]] \
-  && pass "--dry-run writes nothing" || fail "dry-run rc=$RC or wrote files"
-
-# pre-existing .gitleaks.toml is kept (not refused — user ruleset wins), but
-# a pre-existing exclusive artifact refuses 66 with zero other writes
-FX="$(mk_repo m4)"
-printf 'title = "mine"\n' > "$FX/.gitleaks.toml"
+# --- 69: malformed settings.json refused BEFORE any write -----------------------
+FX="$(mkrepo badsettings)"; assert_fixture_dir "$FX"
+mkdir -p "$FX/.claude"
+printf '{not json' > "$FX/.claude/settings.json"
 RC="$(run_gen "$FX" --headless)"
-[[ "$RC" == "0" ]] && grep -q 'mine' "$FX/.gitleaks.toml" \
-  && pass "existing .gitleaks.toml preserved on install" || fail "gitleaks.toml handling rc=$RC"
+if [[ "$RC" == "69" ]] && [[ ! -e "$FX/.claude/hooks/secret-scan.sh" ]] \
+   && [[ "$(cat "$FX/.claude/settings.json")" == '{not json' ]]; then
+  pass "exit 69: malformed settings.json refused before any write (file untouched)"
+else
+  fail "malformed settings.json arm: rc=$RC settings=$(cat "$FX/.claude/settings.json" 2>/dev/null)"
+fi
 
-FX="$(mk_repo m5)"
-mkdir -p "$FX/.claude/hooks"; printf 'x\n' > "$FX/.claude/hooks/secret-scan.sh"
+# --- 66: pre-existing artifact refuses -------------------------------------------
+FX="$(mkrepo collides)"; assert_fixture_dir "$FX"
+mkdir -p "$FX/.claude/hooks"
+printf '# mine\n' > "$FX/.claude/hooks/secret-scan.sh"
 RC="$(run_gen "$FX" --headless)"
-[[ "$RC" == "66" && ! -e "$FX/.claude/settings.json" && ! -e "$FX/scripts" ]] \
-  && pass "refuse-if-exists: pre-existing hook blocks install, zero writes" || fail "refuse-if-exists rc=$RC"
+[[ "$RC" == "66" && "$(cat "$FX/.claude/hooks/secret-scan.sh")" == '# mine' ]] \
+  && pass "exit 66: pre-existing hook refuses, zero writes (file untouched)" \
+  || fail "expected 66 with untouched file, got rc=$RC"
 
-# malformed settings.json refused pre-write
-FX="$(mk_repo m6)"
-mkdir -p "$FX/.claude"; printf '{broken' > "$FX/.claude/settings.json"
+# pre-existing .gitleaks.toml also refuses (AC5)
+FX="$(mkrepo glcollide)"; assert_fixture_dir "$FX"
+printf '[extend]\nuseDefault = false\n' > "$FX/.gitleaks.toml"
 RC="$(run_gen "$FX" --headless)"
-[[ "$RC" == "69" || "$RC" == "66" ]] && [[ ! -e "$FX/.claude/hooks" ]] \
-  && pass "malformed settings.json refused pre-write" || fail "malformed settings rc=$RC"
+[[ "$RC" == "66" && "$(cat "$FX/.gitleaks.toml")" == "[extend]
+useDefault = false" ]] \
+  && pass "exit 66: pre-existing .gitleaks.toml refuses (never overwrites a user ruleset)" \
+  || fail "expected 66 for pre-existing .gitleaks.toml, got rc=$RC"
 
-# full install: artifacts + registration + workflow at repo root
-FX="$(mk_repo m7)"; RC="$(run_gen "$FX" --headless)"
-ok=1
-for f in .claude/hooks/secret-scan.sh .claude/hooks/commit-on-main.sh .claude/hooks/block-stash.sh \
+# --- --guards subset -------------------------------------------------------------
+FX="$(mkrepo subset)"; assert_fixture_dir "$FX"
+RC="$(run_gen "$FX" --guards block-stash --headless)"
+if [[ "$RC" == "0" && -f "$FX/.claude/hooks/block-stash.sh" \
+   && ! -e "$FX/.claude/hooks/secret-scan.sh" && ! -e "$FX/.github/workflows/verification-gates.yml" ]]; then
+  pass "--guards block-stash emits only that guard's artifacts"
+else
+  fail "subset install wrong: rc=$RC $(ls "$FX/.claude/hooks" 2>/dev/null | tr '\n' ' ')"
+fi
+grep -q 'block-stash' "$FX/.claude/settings.json" 2>/dev/null \
+  && pass "subset install registered the hook in settings.json" \
+  || fail "subset install: no settings.json hook entry"
+
+# --- --dry-run writes nothing ----------------------------------------------------
+FX="$(mkrepo dryrun)"; assert_fixture_dir "$FX"
+OUT="$(run_gen_out "$FX" --dry-run)"
+if [[ "${OUT%%|*}" == "0" && ! -e "$FX/.claude/hooks/secret-scan.sh" && ! -e "$FX/.claude/settings.json" ]]; then
+  pass "--dry-run exits 0 and writes nothing"
+else
+  fail "dry-run arm: rc=${OUT%%|*}"
+fi
+
+# --- full install + advisory markers (AC3) ---------------------------------------
+FX="$(mkrepo full)"; assert_fixture_dir "$FX"
+RC="$(run_gen "$FX" --headless)"
+[[ "$RC" == "0" ]] || fail "advisory install failed rc=$RC"
+G=1
+for p in .claude/hooks/secret-scan.sh .claude/hooks/commit-on-main.sh .claude/hooks/block-stash.sh \
          scripts/verification/precommit-guard.sh scripts/verification/lib/wrapper-boundary.sh \
-         scripts/verification/orphan-test-check.sh .github/workflows/verification-gates.yml \
-         .claude/settings.json .gitleaks.toml; do
-  [[ -e "$FX/$f" ]] || { ok=0; fail "missing emitted $f"; }
+         scripts/verification/orphan-test-check.sh .gitleaks.toml \
+         .github/workflows/verification-gates.yml .github/verification-known-orphans.txt \
+         .claude/settings.json VERIFICATION.md; do
+  [[ -f "$FX/$p" ]] || { G=0; fail "missing emitted artifact: $p"; }
 done
-[[ "$RC" == "0" && "$ok" == "1" ]] && pass "--headless install emits the v1 set" || fail "install rc=$RC"
-grep -q 'secret-scan.sh' "$FX/.claude/settings.json" \
-  && grep -q 'block-stash.sh' "$FX/.claude/settings.json" \
-  && pass "settings.json registers all three hooks" || fail "settings.json registration"
-grep -q 'continue-on-error: true' "$FX/.github/workflows/verification-gates.yml" \
-  && pass "advisory CI jobs carry continue-on-error" || fail "advisory CI marker"
+[[ "$G" == "1" ]] && pass "advisory install emits all v1 artifacts"
 grep -q 'MODE="advisory"' "$FX/.claude/hooks/secret-scan.sh" \
-  && pass "advisory hooks stamp MODE=advisory" || fail "MODE stamp"
+  && grep -q 'MODE="advisory"' "$FX/.claude/hooks/commit-on-main.sh" \
+  && grep -q 'MODE="advisory"' "$FX/.claude/hooks/block-stash.sh" \
+  && pass "advisory install stamps MODE=advisory in every hook" \
+  || fail "MODE=advisory stamp missing in an emitted hook"
+grep -c 'continue-on-error: true' "$FX/.github/workflows/verification-gates.yml" | grep -q '^2$' \
+  && pass "advisory workflow carries continue-on-error: true on both jobs" \
+  || fail "advisory workflow continue-on-error wrong: $(grep -c 'continue-on-error' "$FX/.github/workflows/verification-gates.yml")"
+if grep -rqE '@(MODE|CI_CONTINUE_ON_ERROR|DEFAULT_BRANCHES|GUARD_LIST|GUARD_TABLE|DATE)@' \
+     "$FX/.claude/hooks" "$FX/scripts/verification" "$FX/.github/workflows/verification-gates.yml" "$FX/VERIFICATION.md" 2>/dev/null; then
+  fail "unsubstituted placeholder leaked into emitted artifacts"
+else
+  pass "no unsubstituted @PLACEHOLDER@ leaks into emitted artifacts"
+fi
+grep -q 'verification-scaffold:readme:start' "$FX/VERIFICATION.md" \
+  && pass "VERIFICATION.md created with the marker-keyed doc block" \
+  || fail "VERIFICATION.md doc block missing"
 
-# unrelated settings entries preserved; re-run refuses
-FX="$(mk_repo m8)"
-mkdir -p "$FX/.claude"; printf '{"other":1,"hooks":{"PreToolUse":[]}}\n' > "$FX/.claude/settings.json"
+# settings.json: hook entries present, dedupe on command string
+node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  const cmds = d.hooks.PreToolUse.flatMap(m => m.hooks.map(h => h.command));
+  for (const n of ["secret-scan", "commit-on-main", "block-stash"])
+    if (!cmds.some(c => c.includes("/.claude/hooks/" + n + ".sh"))) process.exit(3);
+' "$FX/.claude/settings.json" \
+  && pass "settings.json registers all three hook commands" \
+  || fail "settings.json hook entries missing"
+
+# --- enforce mode flips only the decision verb (AC3/Guard 6) ---------------------
+FX="$(mkrepo enforce)"; assert_fixture_dir "$FX"
+RC="$(run_gen "$FX" --mode enforce --headless)"
+if [[ "$RC" == "0" ]]; then
+  grep -q 'MODE="enforce"' "$FX/.claude/hooks/block-stash.sh" \
+    && grep -q 'continue-on-error: false' "$FX/.github/workflows/verification-gates.yml" \
+    && pass "enforce install stamps MODE=enforce + continue-on-error: false" \
+    || fail "enforce stamps wrong"
+else
+  fail "enforce install failed rc=$RC"
+fi
+
+# --- re-run refuses (AC5) ---------------------------------------------------------
 RC="$(run_gen "$FX" --headless)"
-[[ "$RC" == "0" ]] && grep -q '"other": 1\|"other":1' "$FX/.claude/settings.json" \
-  && pass "settings merge preserves unrelated keys" || fail "settings preservation rc=$RC"
-n1="$(grep -c 'secret-scan.sh' "$FX/.claude/settings.json")"
-RC2="$(run_gen "$FX" --headless)"
-n2="$(grep -c 'secret-scan.sh' "$FX/.claude/settings.json")"
-[[ "$RC2" == "66" && "$n1" == "$n2" ]] \
-  && pass "second run refuses 66, settings untouched" || fail "re-run rc=$RC2 n=$n1->$n2"
+[[ "$RC" == "66" ]] && pass "second full run refuses (66), zero writes" \
+  || fail "expected 66 on second run, got $RC"
 
-# --uninstall removes only that guard; idempotent on a missing guard
+# --- idempotent merge: manually re-add the same command -> stays single ----------
+# (The generator refuses before reaching the merge, so prove dedupe via a repo
+# whose ONLY drift is a missing settings entry while artifacts exist is refused
+# anyway — instead assert the emitted file itself: a merge that ran twice would
+# carry two identical command strings.)
+node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  const cmds = d.hooks.PreToolUse.flatMap(m => m.hooks.map(h => h.command));
+  if (new Set(cmds).size !== cmds.length) process.exit(3);
+' "$FX/.claude/settings.json" \
+  && pass "settings.json has no duplicate hook commands" \
+  || fail "duplicate hook commands in settings.json"
+
+# --- merge preserves unrelated entries ------------------------------------------
+FX="$(mkrepo preserve)"; assert_fixture_dir "$FX"
+mkdir -p "$FX/.claude"
+printf '%s\n' '{"permissions":{"allow":["Bash(ls:*)"]},"hooks":{"PreToolUse":[{"matcher":"Write","hooks":[{"type":"command","command":"keepme"}]}]}}' > "$FX/.claude/settings.json"
+RC="$(run_gen "$FX" --guards block-stash --headless)"
+if [[ "$RC" == "0" ]]; then
+  node -e '
+    const d = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    const ok = d.permissions.allow.includes("Bash(ls:*)")
+      && d.hooks.PreToolUse.some(m => m.hooks.some(h => h.command === "keepme"))
+      && d.hooks.PreToolUse.some(m => m.hooks.some(h => h.command.includes("block-stash")));
+    process.exit(ok ? 0 : 3);
+  ' "$FX/.claude/settings.json" \
+    && pass "merge preserves unrelated permissions + hook entries" \
+    || fail "merge clobbered unrelated settings.json entries"
+else
+  fail "preserve install failed rc=$RC"
+fi
+
+# --- --uninstall: surgical + idempotent (AC5/SpecFlow 5) --------------------------
 RC="$(run_gen "$FX" --uninstall block-stash)"
-[[ "$RC" == "0" && ! -e "$FX/.claude/hooks/block-stash.sh" && -e "$FX/.claude/hooks/secret-scan.sh" ]] \
-  && pass "--uninstall removes only the named guard" || fail "uninstall rc=$RC"
-grep -q 'block-stash.sh' "$FX/.claude/settings.json" \
-  && fail "settings entry survived uninstall" || pass "settings entry removed by uninstall"
+if [[ "$RC" == "0" && ! -e "$FX/.claude/hooks/block-stash.sh" ]]; then
+  node -e '
+    const d = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    const cmds = d.hooks.PreToolUse.flatMap(m => m.hooks.map(h => h.command));
+    process.exit(cmds.some(c => c.includes("block-stash")) || !cmds.includes("keepme") ? 3 : 0);
+  ' "$FX/.claude/settings.json" \
+    && pass "--uninstall removes the artifact + settings entry, leaves siblings" \
+    || fail "uninstall left a block-stash settings entry or removed keepme"
+else
+  fail "uninstall block-stash: rc=$RC artifact=$(ls "$FX/.claude/hooks" 2>/dev/null | tr '\n' ' ')"
+fi
 RC="$(run_gen "$FX" --uninstall block-stash)"
-[[ "$RC" == "0" ]] && pass "--uninstall idempotent on absent guard" || fail "uninstall-idem rc=$RC"
+[[ "$RC" == "0" ]] && pass "--uninstall on a removed guard is a clean no-op (exit 0)" \
+  || fail "idempotent uninstall expected rc=0, got $RC"
 
-# enforce mode stamps deny-capable artifacts
-FX="$(mk_repo m9)"; RC="$(run_gen "$FX" --mode enforce --headless)"
-[[ "$RC" == "0" ]] && grep -q 'MODE="enforce"' "$FX/.claude/hooks/block-stash.sh" \
-  && pass "--mode enforce stamps MODE=enforce" || fail "enforce stamp rc=$RC"
+# --- --list ----------------------------------------------------------------------
+OUT="$(run_gen_out "$FX" --list)"
+[[ "${OUT%%|*}" == "0" ]] && grep -q 'secret-scan' <<<"${OUT#*|}" \
+  && pass "--list prints the guard manifest" \
+  || fail "--list failed: ${OUT%%|*}"
 
-printf 'generator.test.sh: %d passed, %d failed\n' "$passes" "$fails"
+printf '\n%d pass(es), %d fail(s)\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]

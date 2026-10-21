@@ -257,6 +257,10 @@ model {
         technology "Constraint Generator"
         description "Generates the L1 dep-cruiser import-boundary gate (client→server-secret) plus the two-stage pull_request→workflow_run auto-recovery workflows (ADR-074) into the product codebase CI"
       }
+      verificationscaffold = component "verification-scaffold skill" {
+        technology "Guardrail Corpus Generator"
+        description "Generates the generic guardrail set (secret-scan, commit-on-main, block-stash, orphan-test) into a user repo's .claude/hooks + settings.json and repo-root .github/workflows/verification-gates.yml, advisory-first (ADR-295)"
+      }
       // #7980 / ADR-213 — the browser-snapshot credential guard, modelled as ONE component
       // because its code artifacts share ONE predicate (redact-a11y-snapshot.py's
       // redact_text; the proxy importlib-loads it by path and defines no predicate itself).
@@ -970,6 +974,7 @@ model {
   architecture -> connectedRepoKb "Writes spec.c4 / model.c4 / views.c4 cwd-relative — same directory sync generates into (ADR-171 two-writer precedence)" { technology "File I/O" }
   compound -> evalharness "Validates classifier-skill edits before applying"
   constraintscaffold -> webapp "Generates L1 import-boundary gate (CI)"
+  verificationscaffold -> webapp "Generates generic guardrail set into user-repo hooks + CI"
 
   // ---- Browser-snapshot credential guard (ADR-213 addendum 2026-09-14, #7980) ----
   // Three edges, two paths, one predicate. The MCP path is the transport relay (claude ->

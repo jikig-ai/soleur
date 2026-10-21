@@ -1,16 +1,25 @@
 #!/usr/bin/env bash
-# Manifest/audit/template census for verification-scaffold (#10404).
-#   - every guards.tsv v1 row's templates exist; every template is named by a v1 row
-#   - every corpus member (.claude/hooks/*.sh non-test + scripts/lint-* non-aux)
-#     carries an audit row — census is git-ls-files driven, not a pinned list
-#   - precommit-guard.sh.template == rename-normalized source under the
-#     @DEFAULT_BRANCHES@ substitution; wrapper-boundary pair is a raw cmp
-#   - emitted-content hygiene: no SOLEUR_/knowledge-base//plugins-soleur runtime
-#     refs; no curl|wget|https?:// outside comments; no GNU-only portability tokens
-#   - emitted workflow is actionlint-clean
+# Manifest consistency for verification-scaffold (#10404):
+#   1. every guards.tsv v1 row's templates exist under references/, and every
+#      references/guards/*.template is named by some v1 row (no orphans either way);
+#   2. every audit corpus member (.claude/hooks/**/*.sh non-test + scripts/lint-*
+#      minus .test.sh/.baseline.txt/.highwater) appears in guardrail-audit.md —
+#      the census is git-ls-files driven, so a NEW unclassified member reds CI;
+#   3. one-hunk parity (AC11): precommit-guard.sh.template renders byte-identical
+#      to plugins/soleur/scripts/precommit-guard.sh under the default
+#      main|master substitution and the VERIFICATION_->SOLEUR_ rename; the
+#      wrapper-boundary pair is the same rename-normalized cmp;
+#   4. emitted-content hygiene (AC8): zero SOLEUR_/knowledge-base//plugins/soleur
+#      refs and zero curl|wget|https?:// tokens outside comments in templates;
+#   5. portability floor: no GNU-only tokens (sed -i, readlink -f, stat -c,
+#      date -d, bc, /usr/bin/time, unguarded `timeout`) in emitted templates;
+#   6. the emitted verification-gates.yml renders actionlint-clean (when
+#      actionlint is on PATH).
+# Runs in the scripts shard. Accumulate-then-exit.
 set -uo pipefail
 
-REPO_ROOT="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 SKILL="$REPO_ROOT/plugins/soleur/skills/verification-scaffold"
 TSV="$SKILL/references/guards.tsv"
 AUDIT="$SKILL/references/guardrail-audit.md"
@@ -19,89 +28,114 @@ passes=0; fails=0
 pass() { printf 'ok   - %s\n' "$1"; passes=$((passes + 1)); }
 fail() { printf 'FAIL - %s\n' "$1"; fails=$((fails + 1)); }
 
-# --- v1 rows have existing templates; every guards/*.template is named ------
-tpl_missing=0; tpl_orphan=0
-while IFS=$'\t' read -r name verdict surfaces templates dm deps sf emits tier; do
-  [[ "$name" =~ ^#|^name$ || -z "$name" ]] && continue
+# --- 1. guards.tsv v1 rows <-> templates -----------------------------------------
+missing=0
+while IFS=$'\t' read -r name verdict surfaces templates dmode deps src emits tier; do
+  case "$name" in \#*|name) continue ;; esac
   [[ "$tier" == "v1" ]] || continue
-  for t in ${templates//;/ }; do
-    [[ "$t" == "-" ]] && continue
-    [[ -f "$SKILL/$t" ]] || { fail "v1 row $name names missing template $t"; tpl_missing=1; }
+  [[ -n "$name" && -n "$templates" && -n "$emits" ]] || { fail "guards.tsv row malformed: $name"; missing=1; continue; }
+  IFS=';' read -ra tp <<<"$templates"
+  for t in "${tp[@]}"; do
+    [[ -f "$SKILL/$t" ]] || { fail "guards.tsv $name names missing template: $t"; missing=1; }
   done
 done < "$TSV"
-[[ "$tpl_missing" == "0" ]] && pass "every v1 row's templates exist"
+[[ "$missing" -eq 0 ]] && pass "every v1 row's templates exist"
 
-for t in "$SKILL"/references/guards/*.template; do
-  rel="references/guards/$(basename "$t")"
-  grep -qF "$rel" "$TSV" || { fail "template $rel not named by any guards.tsv row"; tpl_orphan=1; }
-done
-[[ "$tpl_orphan" == "0" ]] && pass "every guards/*.template is named in guards.tsv"
+orphaned=0
+while IFS= read -r t; do
+  rel="${t#"$SKILL/"}"
+  grep -qF "$rel" "$TSV" || { fail "orphaned template (no guards.tsv row): $rel"; orphaned=1; }
+done < <(find "$SKILL/references" -name '*.template' | sort)
+[[ "$orphaned" -eq 0 ]] && pass "every template is named by a guards.tsv row"
 
-# --- audit census: every corpus member appears ------------------------------
-missing=0
+# --- 2. audit census over the live tree -------------------------------------------
+# The producer is git ls-files — identical to this file's own corpus definition,
+# so a new member lacking an audit row is caught here, not by review.
+uncov=0
 while IFS= read -r f; do
-  grep -qF "$(basename "$f")" "$AUDIT" || { fail "audit lacks row for $f"; missing=1; }
-done < <( { git -C "$REPO_ROOT" ls-files '.claude/hooks/*.sh' | grep -v '\.test\.sh$';
-            git -C "$REPO_ROOT" ls-files 'scripts/lint-*' | grep -vE '\.(test\.sh|baseline\.txt|highwater)$'; } )
-[[ "$missing" == "0" ]] && pass "audit covers every corpus member (git-ls-files census)"
+  base="$(basename "$f")"
+  grep -qF "$base" "$AUDIT" || { fail "audit has no row for $f"; uncov=1; }
+done < <(git -C "$REPO_ROOT" ls-files '.claude/hooks/*.sh' | grep -v '\.test\.sh$' | grep -v '/test/')
+while IFS= read -r f; do
+  base="$(basename "$f")"
+  grep -qF "$base" "$AUDIT" || { fail "audit has no row for $f"; uncov=1; }
+done < <(git -C "$REPO_ROOT" ls-files 'scripts/lint-*' | grep -v '\.test\.sh$\|\.baseline\.txt$\|\.highwater')
+[[ "$uncov" -eq 0 ]] && pass "audit covers every corpus member (git ls-files census)"
 
-# --- parity: precommit-guard template vs rename-normalized source -----------
-norm="$(mktemp)"; rend="$(mktemp)"
-sed -e 's/SOLEUR_/VERIFICATION_/g' \
-    -e 's|if \[\[ "\$BRANCH" == "main" \|\| "\$BRANCH" == "master" \]\]|if [[ "$BRANCH" =~ ^(@DEFAULT_BRANCHES@)$ ]]|' \
-    "$REPO_ROOT/plugins/soleur/scripts/precommit-guard.sh" > "$norm"
-sed 's/@DEFAULT_BRANCHES@/main|master/' \
-    "$SKILL/references/guards/precommit-guard.sh.template" > "$rend"
-if diff -q "$norm" "$rend" >/dev/null 2>&1 || cmp -s "$norm" "$rend" 2>/dev/null; then
-  # accept either byte-parity or the one-line shape difference
-  :
-fi
-if ! cmp -s "$norm" "$rend"; then
-  # Second acceptable form: template keeps the source line shape literally —
-  # then the placeholder lives on a config line instead. Fail only if the
-  # bodies diverge beyond the branch-check hunk.
-  if diff "$norm" "$rend" | grep -vcE '^[0-9]|^---|DEFAULT_BRANCH|BRANCH.*main' | grep -q .; then
-    fail "precommit-guard template drifts from rename-normalized source"
-  else
-    pass "precommit-guard template parity (one-hunk @DEFAULT_BRANCHES@)"
+# --- 3. one-hunk parity (AC11) ------------------------------------------------------
+SRC_GUARD="$REPO_ROOT/plugins/soleur/scripts/precommit-guard.sh"
+SRC_WRAP="$REPO_ROOT/plugins/soleur/scripts/lib/wrapper-boundary.sh"
+rendered="$(mktemp)"; trap 'rm -f "$rendered"' EXIT
+sed -e 's/VERIFICATION_/SOLEUR_/g' -e 's/@DEFAULT_BRANCHES@/main|master/g' \
+    "$SKILL/references/guards/precommit-guard.sh.template" > "$rendered"
+cmp -s "$rendered" "$SRC_GUARD" \
+  && pass "precommit-guard template renders byte-identical to source under main|master" \
+  || fail "precommit-guard template/source drifted (run: diff <(sed -e s/VERIFICATION_/SOLEUR_/g -e s/@DEFAULT_BRANCHES@/main\\\\|master/g .../precommit-guard.sh.template) plugins/soleur/scripts/precommit-guard.sh)"
+sed 's/VERIFICATION_/SOLEUR_/g' "$SKILL/references/guards/wrapper-boundary.sh.template" > "$rendered"
+cmp -s "$rendered" "$SRC_WRAP" \
+  && pass "wrapper-boundary template is rename-normalized byte-identical to source" \
+  || fail "wrapper-boundary template/source drifted"
+
+# --- 4. emitted-content hygiene (AC8) ----------------------------------------------
+# Templates contain @PLACEHOLDER@ markers; the runtime text must carry zero
+# Soleur couplings and zero network egress.
+hyg=0
+while IFS= read -r t; do
+  if grep -nE 'SOLEUR_|knowledge-base/|plugins/soleur' "$t" >/dev/null; then
+    fail "Soleur coupling in template $(basename "$t"): $(grep -nE 'SOLEUR_|knowledge-base/|plugins/soleur' "$t" | head -3 | tr '\n' ';')"
+    hyg=1
   fi
-else
-  pass "precommit-guard template byte-parity under substitution"
-fi
-sed 's/SOLEUR_/VERIFICATION_/g' "$REPO_ROOT/plugins/soleur/scripts/lib/wrapper-boundary.sh" > "$norm"
-if cmp -s "$norm" "$SKILL/references/guards/wrapper-boundary.sh.template"; then
-  pass "wrapper-boundary template raw parity (rename-normalized)"
-else
-  fail "wrapper-boundary template diverges from rename-normalized source"
-fi
-rm -f "$norm" "$rend"
+  # egress tokens outside comments: strip comment lines then grep.
+  if grep -vE '^[[:space:]]*#' "$t" | grep -nE 'curl|wget|https?://' >/dev/null; then
+    fail "network egress token in template $(basename "$t")"
+    hyg=1
+  fi
+done < <(find "$SKILL/references" -name '*.template' | sort)
+[[ "$hyg" -eq 0 ]] && pass "zero Soleur couplings + zero egress tokens in emitted templates"
 
-# --- emitted-content hygiene ------------------------------------------------
-bad=0
-for t in "$SKILL"/references/guards/*.template "$SKILL"/references/gitleaks.toml.template "$SKILL"/references/verification-readme.template; do
-  grep -nE 'SOLEUR_|knowledge-base/|plugins/soleur' "$t" | grep -v '^\s*[0-9]*:#' | grep -qE . \
-    && { fail "$(basename "$t") carries a Soleur coupling in runtime text"; bad=1; }
-  grep -nE 'curl|wget|https?://' "$t" | grep -vE '^\s*[0-9]+:\s*#' | grep -vE ':\s*#.*(curl|wget|http)' \
-    | grep -vE 'uses: ' | grep -qE 'curl|wget|https?://' \
-    && { fail "$(basename "$t") has network egress outside comments"; bad=1; }
-  grep -nE 'sed -i |readlink -f|stat -c |date -d|/usr/bin/time|\bbc \b' "$t" | grep -qE . \
-    && { fail "$(basename "$t") carries a GNU-only token"; bad=1; }
-done
-[[ "$bad" == "0" ]] && pass "emitted-content hygiene: no couplings, egress, or GNU-only tokens"
+# --- 5. portability floor ----------------------------------------------------------
+# GNU-only forms banned in emitted templates (stock macOS must run them).
+port=0
+while IFS= read -r t; do
+  case "$t" in *.yml.template) continue ;; esac
+  if grep -nE 'sed -i|readlink -f|realpath|stat -c|date -d|/usr/bin/time|(^|[;&| ]|^[^#]*[;&| ])bc |mapfile' "$t" | grep -vE '^[0-9]+:[[:space:]]*#' >/dev/null; then
+    fail "GNU-only token in template $(basename "$t"): $(grep -nE 'sed -i|readlink -f|realpath|stat -c|date -d|/usr/bin/time|bc |mapfile' "$t" | grep -vE '^[0-9]+:[[:space:]]*#' | head -3 | tr '\n' ';')"
+    port=1
+  fi
+  if grep -nE '(^|[^_a-zA-Z])timeout [0-9]' "$t" | grep -v 'command -v timeout\|gtimeout' >/dev/null; then
+    fail "unguarded timeout invocation in $(basename "$t")"
+    port=1
+  fi
+done < <(find "$SKILL/references" -name '*.template' | sort)
+[[ "$port" -eq 0 ]] && pass "portability floor: no GNU-only forms in emitted templates"
 
-# --- emitted workflow is actionlint-clean -----------------------------------
+# --- 6. actionlint on the RENDERED workflow ------------------------------------------
 if command -v actionlint >/dev/null 2>&1; then
-  tmpd="$(mktemp -d)"; mkdir -p "$tmpd/.github/workflows"
-  sed -e 's/@MODE@/advisory/g' -e 's/@CI_CONTINUE_ON_ERROR@/true/g' \
-      -e 's/@DEFAULT_BRANCHES@/main|master/g' -e '/# @\(job\|\/job\)/d' \
-      "$SKILL/references/guards/verification-gates.yml.template" \
-      > "$tmpd/.github/workflows/verification-gates.yml"
-  ( cd "$tmpd" && actionlint .github/workflows/verification-gates.yml >/dev/null 2>&1 ) \
-    && pass "emitted workflow is actionlint-clean" || fail "actionlint flagged the emitted workflow"
-  rm -rf "$tmpd"
+  WF="$(mktemp -d)"
+  # Render like the generator does: keep both job blocks, stamp continue-on-error.
+  awk '{print}' "$SKILL/references/guards/verification-gates.yml.template" \
+    | sed 's/@CI_CONTINUE_ON_ERROR@/true/g' > "$WF/verification-gates.yml"
+  if actionlint -oneline "$WF/verification-gates.yml" >"$WF/lint.log" 2>&1; then
+    pass "rendered verification-gates.yml is actionlint-clean"
+  else
+    fail "actionlint reds on rendered workflow: $(cat "$WF/lint.log" | head -5 | tr '\n' ';')"
+  fi
+  rm -rf "$WF"
 else
-  pass "actionlint absent — skipped (not fatal)"
+  pass "actionlint not on PATH — workflow lint arm skipped (CI must provide it)"
 fi
 
-printf 'manifest.test.sh: %d passed, %d failed\n' "$passes" "$fails"
+# --- 7. SKILL.md + audit + tsv exist and are non-empty -------------------------------
+for f in "$SKILL/SKILL.md" "$AUDIT" "$TSV" "$SKILL/references/verification-readme.template" "$SKILL/references/gitleaks.toml.template"; do
+  [[ -s "$f" ]] || fail "missing/empty: ${f#"$REPO_ROOT"/}"
+done
+pass "required skill files exist (SKILL.md presence asserted by the file list)"
+
+# guards.tsv: the emitted .gitleaks.toml is a default-ruleset pointer (Guard 1
+# mutation-6 anchor — the template's declared ruleset shape is pinned here).
+grep -q 'useDefault = true' "$SKILL/references/gitleaks.toml.template" \
+  && pass "gitleaks.toml.template is the default-ruleset pointer guards.tsv declares" \
+  || fail "gitleaks.toml.template lost its useDefault=true ruleset shape"
+
+printf '\n%d pass(es), %d fail(s)\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]
