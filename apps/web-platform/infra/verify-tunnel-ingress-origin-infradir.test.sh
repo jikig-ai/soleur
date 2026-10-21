@@ -37,8 +37,12 @@ fails=0
 # it proves the cd resolved. It exits 0 with no output; the script then fails its
 # own IP-regex check and exits 1 — expected, and irrelevant to this test.
 STUB_DIR="$(mktemp -d)"
-MARKER="$(mktemp -u)"
-trap 'rm -rf "$STUB_DIR"; rm -f "$MARKER"' EXIT
+# MARKER lives inside the unique STUB_DIR and is created ONLY by the stub's
+# `touch` below — so the `-e` check on it is the stub-hit observable. Creating
+# it up front (plain `mktemp`) would make that arm vacuous: the file would
+# exist whether or not the script ever reached doppler.
+MARKER="$STUB_DIR/marker"
+trap 'rm -rf "$STUB_DIR"' EXIT
 cat >"$STUB_DIR/doppler" <<STUB
 #!/usr/bin/env bash
 touch "$MARKER"

@@ -39,7 +39,18 @@ Start a new Codex session, review the bundled hooks in `/hooks`, and use
 [Codex setup guide](knowledge-base/engineering/codex-onboarding.md) for local
 development, updates, and compatibility details.
 
-**From the marketplace (recommended):**
+**Grok Build:**
+
+Soleur loads the same in-repo plugin under Grok Build. From the repository root, confirm the plugin is discovered and start a session:
+
+```bash
+grok inspect    # the soleur plugin, skills, agents, and MCP servers must appear
+grok            # interactive session
+```
+
+Use `/go <what you want to do>` (Grok's bare entry name), not `/soleur:go`. If `grok inspect` does not list Soleur, stop — there is no `grok plugin install` command to fall back on today, so install is done by pointing Grok at this repository (`.grok/config.toml`, merged via the project plugin loader) rather than a marketplace command. Full setup — subagent spawning, trust, and command naming — is in the [Grok Build onboarding guide](knowledge-base/engineering/grok-onboarding.md).
+
+**Claude Code (recommended, via the published marketplace):**
 
 ```bash
 claude plugin marketplace add jikig-ai/soleur-marketplace
@@ -190,14 +201,17 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound
 | `/soleur:help` | List all available Soleur commands, agents, and skills |
 | `/soleur:version` | Show the installed plugin version and whether a newer release exists (Claude Code only) |
 
-Claude Code: `/soleur:go`. Grok Build: `/go`.
+Claude Code: `/soleur:go`. Grok Build: `/go`. Codex: `$soleur:go`. Devin CLI: `/soleur:go`.
 
-| Step | Claude Code | Grok Build |
-|------|-------------|------------|
-| Entry | `/soleur:go` | `/go` |
-| Sync | `/soleur:sync` | `/sync` |
-| Help | `/soleur:help` | `/help` |
-| Next skill | Skill tool `soleur:<skill>` | Read `SKILL.md` in this process (`/<skill>`) |
+| Step | Claude Code | Grok Build | Codex | Devin CLI |
+|------|-------------|------------|-------|-----------|
+| Entry | `/soleur:go` | `/go` | `$soleur:go` | `/soleur:go` |
+| Sync | `/soleur:sync` | `/sync` | `$soleur:sync` | `/soleur:sync` |
+| Help | `/soleur:help` | `/local:help` | `$soleur:help` | `/soleur:help` |
+| Version | `/soleur:version` (Claude Code only) | not available | not available | not available |
+| Next skill | Skill tool `soleur:<skill>` | Read `SKILL.md` in this process (`/<skill>`) | Load `$soleur:<skill>`, or read `SKILL.md` | Slash `/soleur:<skill>` |
+
+Per-harness setup guides: [Claude Code](https://code.claude.com/docs/en/plugins) · [Grok Build](knowledge-base/engineering/grok-onboarding.md) · [Codex](knowledge-base/engineering/codex-onboarding.md) · [Devin](plugins/soleur/devin/INSTRUCTIONS.md).
 
 ### Workflow Skills
 
