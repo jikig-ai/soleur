@@ -85,14 +85,14 @@ Added per #10591 item 1's closing action ("quote both captures in SHAPE-NOTE as 
 
 ### Capture 1 — §7.1.2: pipeline gates end to end
 
-Parent session `ses_ea52a8fc0ffeRai0PcxRs6eVC6` (OpenCode session store; directory = the `feat-one-shot-opencode-install-docs` worktree of the soleur checkout) ran the `/go` feature-work path — which dispatches `one-shot` — to completion: planning-phase child session → worktree implementation → 5-seat review panel → ship. This is the one run in the captures below that is traceable end-to-end on this adapter host (the parent references it in 61 messages; the archived spec ships in the PR).
+Parent session `ses_ea52a8fc0ffeRai0PcxRs6eVC6` (OpenCode session store; directory = the `feat-one-shot-opencode-install-docs` worktree of the soleur checkout) ran the `/go` feature-work path — which dispatches `one-shot` — through its planning, implementation and review stages, each verified in the session store: planning-phase child session → worktree implementation → 5-seat review panel on the PR. This is the one run in the captures below that is traceable end-to-end on this adapter host (the parent references the PR in 61 messages; the archived spec ships in the PR). The parent's own transcript continues past the PR's merge (its phase-7 poll reports `DONE` afterwards), so the run's tail overlaps the next pipeline iteration rather than stopping at this PR's ship.
 
 - PR #10725's body carries the pipeline's own gate artifacts: the `<!-- Maintained by the /one-shot pipeline. -->` marker, the `screenshot-gate.mjs` PASS row (critical-css, 20 routes; caught and fixed an overflow on `/getting-started/` at a 320px viewport), and the brand-survival self-review row (result: SKIP, no sensitive paths).
 - Five `feat-one-shot-*` PRs **merged** after the install — #10722, #10725, #10727, #10735, #10738 — plus #10679 (`feat-one-shot-10643-…`), whose one-shot run pre-dated the install though its merge postdated it. Only #10725's run is demonstrated on this host; the others carry one-shot provenance as repo artifacts (archived spec dirs), not OpenCode session records. (#10726 merged in the same window but is `fix-10693-feature-map-pointers`, a CTO-ruling flow — not a one-shot ship; an earlier draft of this note listed it in error.)
 
 ### Capture 2 — §7.1.3: live agent spawns
 
-`subagent` tool-call records from the same parent (`state.status: "completed"` in `session_message` rows; complete census — 7 dispatches, one per child session):
+`subagent` tool-call records from the same parent (`state.status: "completed"` in `session_message` rows; complete census of session-parented dispatches — 7, one per child session):
 
 | agent id dispatched | result |
 | --- | --- |
