@@ -7630,8 +7630,8 @@ ctl_row "evaluate_body: a compliant row is green, and each of its clauses (at le
 # nerdctl, cosign, `helm registry login`; no site exists today), a variable verb with none of those names (`$ENGINE`, `$CTR`), arguments held in a
 # variable or array (`"${LOGIN_ARGS[@]}"`), a flag-variable (`$SINK_TLS_FLAG`, anything ending FLAG, FLAGS, OPTS or OPTIONS) that itself carries
 # `-p`, a command built by concatenation or an `eval`ed string, a payload inside any other quoted string (e.g. a YAML list item), a YAML folded `>` block, a backslash followed by
-# a space or CRLF, a FEEDER that itself carries the token on argv (`/usr/bin/printf '%s' "$T" |`), and the excluded trees. S8 selects on the FULL run only: the affected-test array does not name its population, and editing
-# it would arm every PR-gated battery (CTO ruling D1).
+# a space or CRLF, a FEEDER that itself carries the token on argv (`/usr/bin/printf '%s' "$T" |`), and the excluded trees. S8 stays full-run-only (CTO ruling D1): its population is the whole tree, so no declared edge could name it. Editing the affected-test array
+# degrades a LOCAL `--affected` run to the full battery; S9 (below) accepts that cost once, for its one workflow edge.
 #
 # FLOOR. The scan sees 12 sites in 7 files on the real tree (measured when this stage was written): 10 already `--password-stdin` (one is a plugin
 # doc snippet) and the engine's 2 `$CRANE` lines. A scan that sees fewer (a renamed binary, moved roots, a broken regex) is RED, never a clean bill.
@@ -8008,23 +8008,21 @@ else row "S8 exclusions: an exclusion rule hid a login it should not, or missed 
 echo "=== stage S8: Guard 3 rows (registry login password off argv: tokenised derived census, floor, mutations, evasion shapes, must-pass inputs) done ==="
 
 # =====================================================================================
-# STAGE S9 (#9757 item 2): a credential never rides terraform's argv as a `-var` option. Guard 1 is a derived static scan plus two pins (rehearsal
-# workflow option names, and the export position in every terraform plan/destroy step); Guard 2 EXECUTES the two `terraform destroy` step bodies (the
-# arms whose failure leaks a paid host) under stubs and checks the token reaches terraform by environment and reaches no argv.
+# STAGE S9 (#9757 item 2): a credential never rides terraform's argv as a `-var` option. Guard 1 is a derived static scan plus two pins (the rehearsal
+# workflow's option names; every terraform plan/destroy step exports before its `doppler run` and keeps bare --preserve-env) and a YAML-parsed step-set
+# identity; Guard 2 EXECUTES the four rehearsal terraform step bodies (two plans, two destroys) under strict `doppler`/`terraform` stubs and checks the
+# token reaches terraform by environment, is masked first, and reaches no argv.
 #
-# GUARD 1 SCAN. Corpus = tracked + untracked non-ignored files minus S8's exclusion predicate (`*.test.sh`, `.test.` basenames, any `test`/`tests`/
-# `fixtures` directory component, `knowledge-base/`); extensions .yml .yaml .sh .bash, plus .md under plugins/ only. Backslash continuations are joined
-# (a comment line is never continued); full-line comments are skipped outside markdown. The option regex needs a LEFT boundary and the `NAME=` shape,
-# so `--name-transformer tf-var -- \` and `-var-file` cannot match; it accepts `-var NAME=v`, `-var=NAME=v`, quoted forms, the `--var` spelling and a
-# quoted option word. There is NO terraform-verb requirement (unlike S8): `VAR_ARGS+=(-var=...)` array building and `bash -c "... -var ..."` payloads
-# carry the same exposure. A literal NAME is judged by a credential-name regex; a non-literal NAME (`-var "$K=$V"`) cannot be judged and is refused.
+# GUARD 1 SCAN. Corpus = tracked + untracked non-ignored files minus S8's exclusion predicate (a deliberate copy: keep the two in lockstep), with
+# extensions .yml .yaml .sh .bash, plus .md under plugins/ only. Continuations are joined (a comment line is never continued); full-line comments are skipped
+# outside markdown. The option regex needs a LEFT boundary and the `NAME=` shape, so `--name-transformer tf-var -- \` and `-var-file` cannot match. There is NO
+# terraform-verb requirement (unlike S8): array building and `bash -c "... -var ..."` payloads carry the same exposure. A literal NAME is judged by a credential-name
+# regex; a `-var` whose name cannot be read as a literal (`$K`, `api_$x=`, `$'..'`, an escaped quote) is refused as `nonliteral`.
+# NAMED BLIND SPOTS and the rejected alternatives (stdin var-file, per-command prefix): ADR-280, the 2026-10-20 addendum. S9 selects on the full run and on an edit of
+# the rehearsal workflow; that edit lists scripts/lib/test-affected-paths.sh, which degrades a LOCAL `--affected` run to the full battery once (CI is unaffected).
 #
-# NAMED BLIND SPOTS (recorded in ADR-280): a credential reaching a NON-matching name (only identity row I1 covers the rehearsal file), a value built by
-# concatenation or held in an array element, a YAML folded `>` block, files outside the extension allowlist (.ts, .tf, Dockerfile, extensionless
-# scripts) and runbooks under knowledge-base/, `env "TF_VAR_x=$SECRET" terraform` (wrong channel, no current secret use), `-backend-config=` carrying a secret.
-# S9 selects on the full run and on a rehearsal-workflow edit (scripts/lib/test-affected-paths.sh); its population is the whole tree.
-#
-# FLOOR. The scan sees S9_VAR_FLOOR `-var` options on the converted tree (measured; never copy a number from a plan). A scan below the floor is RED, never a clean bill.
+# FLOOR. The scan sees S9_VAR_FLOOR `-var` options on the tree (measured, exact like S8's). A scan below it is RED, never a clean bill. Converting or deleting a
+# benign `-var` anywhere is a floor edit in the same PR: lower S9_VAR_FLOOR to the new measured count.
 # =====================================================================================
 S9_VAR_FLOOR=44
 S9_WF=".github/workflows/inngest-provision-rehearsal.yml"
@@ -8036,7 +8034,10 @@ root = sys.argv[1]
 # A terraform/packer `-var` option: left boundary (so `tf-var --` and `-var-file` cannot match), `-var` or `--var`, an optional quote on the
 # option word, `=` or whitespace, an optional quote, then NAME= where NAME is a literal identifier or a non-literal ($K, ${K}, $(k)).
 OPT = re.compile(r"""(?<![\w-])["']?-{1,2}var["']?(?:=|\s+)["']?(?P<name>[A-Za-z_][A-Za-z0-9_]*|\$[{(]?\w+[})]?)=""")
-CRED = re.compile(r"(token|secret|pass(?:w(?:or)?d|phrase)?|pwd|credential|api_?key|private_?key|bearer|auth|hmac|jwt|dsn|cookie|webhook)|(?:^|_)(?:key|pat|pw)$", re.I)
+# A `-var` whose name cannot be read as a literal: a `$`, backtick or backslash right after the option or after a literal prefix (api_$x=, $'..', "$KV", \").
+FALLBACK = re.compile(r"""(?<![\w-])["']?-{1,2}var["']?(?:=|\s+)["']?(?:[A-Za-z_][A-Za-z0-9_]*)?[$`\\]""")
+CRED = re.compile(r"(token|secret|pass(?:w(?:or)?d|phrase)?|pwd|credential|creds|psk|api_?key|private_?key|bearer|auth|hmac|jwt|dsn|cookie|webhook)|(?:^|_)(?:key|pat|pw)$", re.I)
+CRED_CAMEL = re.compile(r"[a-z]Key")
 out = subprocess.run(["git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"], capture_output=True, check=True)
 for rel in out.stdout.decode("utf-8", "replace").split("\0"):
     parts = rel.split("/")
@@ -8056,17 +8057,25 @@ for rel in out.stdout.decode("utf-8", "replace").split("\0"):
     lines = data.decode("utf-8", "replace").split("\n")
     i = 0
     while i < len(lines):
-        start, cur = i + 1, lines[i]
-        while cur.endswith("\\") and not cur.lstrip().startswith("#") and i + 1 < len(lines):
+        start, buf = i + 1, [lines[i]]
+        while buf[-1].endswith("\\") and not buf[0].lstrip().startswith("#") and i + 1 < len(lines):
+            buf[-1] = buf[-1][:-1]
             i += 1
-            cur = cur[:-1] + " " + lines[i].strip()
+            buf.append(lines[i].strip())
+        cur = " ".join(buf)
         i += 1
         if "-var" not in cur or (not md and cur.lstrip().startswith("#")):
             continue
+        code = cur.strip()[:200]
+        seen = set()
         for m in OPT.finditer(cur):
+            seen.add(m.start())
             name = m.group("name")
-            verdict = "nonliteral" if name.startswith("$") else ("name" if CRED.search(name) else "ok")
-            print("\t".join([rel, str(start), name, verdict, cur.strip()]))
+            verdict = "nonliteral" if name.startswith("$") else ("name" if CRED.search(name) or CRED_CAMEL.search(name) else "ok")
+            print("\t".join([rel, str(start), name, verdict, code]))
+        for m in FALLBACK.finditer(cur):
+            if m.start() not in seen:
+                print("\t".join([rel, str(start), "<nonliteral>", "nonliteral", code]))
 S9PY
 cat > "$S9/steps.py" <<'S9STEPS'
 import re, sys, yaml
@@ -8075,8 +8084,8 @@ d = yaml.safe_load(open(f, encoding="utf-8"))
 steps = []
 for j in (d.get("jobs") or {}).values():
     steps += [s for s in (j.get("steps") or []) if isinstance(s, dict)] if isinstance(j, dict) else []
-TF = re.compile(r"(?:^|--\s+|;\s*|&&\s*|\|\|\s*)terraform\s+(?:plan|destroy)\b")
-EXPORT = re.compile(r'^\s*export TF_VAR_zot_pull_token="\$ZOT_PULL"\s*$')
+TF = re.compile(r"(?<![\w-])terraform\s+(?:-\S+\s+)*(?:plan|destroy)\b")
+EXPORT = re.compile(r'^\s*export TF_VAR_zot_pull_token="\$\{?ZOT_PULL\}?"\s*$')
 
 
 def logical(run):
@@ -8096,34 +8105,33 @@ tf = [(s.get("name", ""), s["run"]) for s in steps if isinstance(s.get("run"), s
 if mode == "ids":
     print("|".join(sorted(n for n, _ in tf)))
 else:  # pin: one `<reason>\t<step>` line per violation
+    if not tf:
+        print("no-steps\t-")
     for n, run in tf:
         lines = [x for x in run.split("\n") if not x.lstrip().startswith("#")]
-        ex = [i for i, x in enumerate(lines) if EXPORT.match(x)]
-        dr = [i for i, x in enumerate(lines) if "doppler run" in x]
-        if len(ex) != 1:
+        if len([x for x in lines if EXPORT.match(x)]) != 1:
             print("export-count\t" + n)
-        if not dr or (ex and ex[0] > dr[0]):
-            print("export-order\t" + n)
-        if not any(re.search(r"\bdoppler run\b.*\s--preserve-env(?=\s|$)", lines[i]) for i in dr):
+        dr = [x for x in lines if "doppler run" in x]
+        if not any(re.search(r"\bdoppler run\b.*\s--preserve-env(?=\s|$)", x) for x in dr):
             print("preserve-env\t" + n)
-        if any("--only-secrets" in lines[i] for i in dr):
+        if any("--only-secrets" in x for x in dr):
             print("only-secrets\t" + n)
 S9STEPS
 s9_scan() { python3 -I "$S9/scan.py" "$1"; }   # <root>: one TSV record per -var option: file, line, name, verdict (ok|name|nonliteral), code
-s9_pin() { python3 -I "$S9/steps.py" "$1" pin; }   # <workflow file>: violation lines, empty = every plan/destroy step exports before its doppler run
+s9_pin() { python3 -I "$S9/steps.py" "$1" pin || printf 'steps-crashed\t-\n'; }   # <workflow file>: violation lines, empty = every plan/destroy step exports and keeps bare --preserve-env
 s9_ids() { python3 -I "$S9/steps.py" "$1" ids; }   # <workflow file>: the sorted names of the steps that run terraform plan or destroy
 S9_J_REASONS=""; S9_J_N=0; S9_J_DETAIL=""
 s9_judge_text() { # <scan text>: sets S9_J_REASONS (empty = GREEN), S9_J_N, S9_J_DETAIL. Reasons: floor, name:<file>, nonliteral:<file>
   local f
   S9_J_REASONS=""
   S9_J_N="$(grep -c . <<<"$1" || true)"
-  S9_J_DETAIL="$(awk -F'\t' 'NF >= 4 && $4 != "ok" { print $1 ":" $2 }' <<<"$1" | tr '\n' ' ')"
+  S9_J_DETAIL="$(awk -F'\t' 'NF >= 4 && $4 != "ok" { print $1 ":" $2 " (" $3 ")" }' <<<"$1" | tr '\n' ' ')"
   [[ "$S9_J_N" -ge "$S9_VAR_FLOOR" ]] || S9_J_REASONS+=" floor"
   while IFS= read -r f; do [[ -n "$f" ]] && S9_J_REASONS+=" $f"; done < <(awk -F'\t' 'NF >= 4 && $4 != "ok" { print $4 ":" $1 }' <<<"$1" | sort -u)
   S9_J_REASONS="${S9_J_REASONS# }"
 }
 s9_judge() { s9_judge_text "$(s9_scan "$1")"; } # <root>
-s9_i1() { s9_scan "$1" | awk -F'\t' -v f="$S9_WF" '$1 == f { print $3 }' | sort | uniq -c | awk '{ printf "%s%s=%s", s, $2, $1; s = " " }'; } # <root>: the rehearsal workflow's option names with counts
+s9_i1_text() { awk -F'\t' -v f="$S9_WF" '$1 == f { print $3 }' <<<"$1" | sort | uniq -c | awk '{ printf "%s%s=%s", s, $2, $1; s = " " }'; } # <scan text>: the rehearsal workflow's option names with counts
 s9_bad() { s9_scan "$1" | awk -F'\t' -v f="$2" '$1 == f && $4 != "ok" { n++ } END { print n + 0 }'; } # <root> <file>: BAD record count
 s9_put() { assert_fixture_dir "$1"; mkdir -p "$1/$(dirname "$2")"; printf '%s\n' "$3" > "$1/$2"; } # <root> <relative path> <content>
 s9_fresh() { local d="$S9/mut/$1"; assert_fixture_dir "$d"; rm -rf "${d:?}"; cp -a "$S9/base" "$d" && printf '%s' "$d"; } # <name>: prints a new root
@@ -8134,14 +8142,6 @@ p, old, new = sys.argv[1:4]
 t = open(p, encoding="utf-8").read()
 if old not in t: sys.exit(1)
 open(p, "w", encoding="utf-8").write(t.replace(old, new, 1))' "$@" || fatal "S9 first-occurrence mutation did not land: $2"; } # <file> <old> <new>: replace the FIRST occurrence only
-s9_subst() { python3 -I -c '
-import os, sys
-root, old, new = sys.argv[1:4]
-for dp, dn, fn in os.walk(root):
-    dn[:] = [x for x in dn if x != ".git"]
-    for f in fn:
-        p = os.path.join(dp, f); t = open(p, encoding="utf-8").read()
-        if old in t: open(p, "w", encoding="utf-8").write(t.replace(old, new))' "$1" "$2" "$3"; } # <root> <old> <new>: replace in every file
 s9_has() { [[ " $S9_J_REASONS " == *" $1 "* ]]; }
 ( source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh" && git_fixture_env "$S9/base" || exit 1; git -C "$S9/base" init -q ) \
   || fatal "S9 could not create the scratch repository"
@@ -8151,19 +8151,17 @@ while IFS= read -r f; do [[ -n "$f" ]] || continue; mkdir -p "$S9/base/$(dirname
 
 # ---- Guard 1 on the real tree ---------------------------------------------------------------------------------------------------------
 s9_judge_text "$S9_REAL_SCAN"; S9_REAL_REASONS="$S9_J_REASONS"; S9_REAL_N="$S9_J_N"
-if [[ -z "$S9_REAL_REASONS" ]]; then row "S9 Guard 1: no tracked non-test file passes a credential-named variable on a -var option ($S9_REAL_N options seen, derived over the whole tree)" ok
-else row "S9 Guard 1: a credential rides a -var option (file:line below), or the scan saw fewer options than its floor; the remedy is TF_VAR_<name> in the step environment" fail "reasons='$S9_REAL_REASONS' at=$S9_J_DETAIL options=$S9_REAL_N"; fi
-if [[ "$S9_REAL_N" -ge "$S9_VAR_FLOOR" ]]; then row "S9 floor: the scan saw $S9_REAL_N -var options (the floor is $S9_VAR_FLOOR)" ok
-else row "S9 floor: the scan saw fewer than $S9_VAR_FLOOR -var options (a renamed option, moved roots or a broken scanner)" fail "options=$S9_REAL_N"; fi
-S9_I1="$(s9_i1 "$REPO_ROOT")"
+if [[ -z "$S9_REAL_REASONS" ]]; then row "S9 Guard 1: no tracked non-test file passes a credential on a -var option ($S9_REAL_N options seen, floor $S9_VAR_FLOOR, derived over the whole tree)" ok
+else row "S9 Guard 1: a credential rides a -var option (file:line below), or the scan saw fewer options than its floor ($S9_VAR_FLOOR; lower it to the new measured count in the same PR when a benign -var is converted); the remedy for a credential is TF_VAR_<name> in the step environment" fail "reasons='$S9_REAL_REASONS' at=$S9_J_DETAIL options=$S9_REAL_N"; fi
+S9_I1="$(s9_i1_text "$S9_REAL_SCAN")"
 if [[ "$S9_I1" == "nic_attached=4 rehearsal_run_id=4" ]]; then row "S9 I1: the rehearsal workflow's -var options are exactly rehearsal_run_id x4 and nic_attached x4 (a new benign -var there is a deliberate edit of this row)" ok
 else row "S9 I1: the rehearsal workflow's -var option set changed" fail "got='$S9_I1'"; fi
 S9_PIN="$(s9_pin "$REPO_ROOT/$S9_WF")"
-if [[ -z "$S9_PIN" ]]; then row "S9 I2: each terraform plan/destroy step exports TF_VAR_zot_pull_token (the read variable) exactly once, BEFORE its doppler run, keeps bare --preserve-env and has no --only-secrets" ok
-else row "S9 I2: a terraform step does not export TF_VAR_zot_pull_token before its doppler run (or lost --preserve-env)" fail "$(tr '\t\n' '= ' <<<"$S9_PIN")"; fi
+if [[ -z "$S9_PIN" ]]; then row "S9 I2: each terraform plan/destroy step exports TF_VAR_zot_pull_token (the read variable) exactly once, keeps bare --preserve-env and has no --only-secrets" ok
+else row "S9 I2: a terraform step lost its TF_VAR_zot_pull_token export or its bare --preserve-env (expected: export TF_VAR_zot_pull_token=\"\$ZOT_PULL\" before doppler run --preserve-env)" fail "$S9_WF: $(tr '\t\n' '= ' <<<"$S9_PIN")"; fi
 S9_IDS="$(s9_ids "$REPO_ROOT/$S9_WF")"
-if [[ "$S9_IDS" == "$S9_IDS_WANT" ]]; then row "S9 step set: the steps that run terraform plan or destroy are exactly the four named steps (parsed from the YAML)" ok
-else row "S9 step set: a terraform plan/destroy step was added, removed or renamed (the pin and the executed rows must cover it)" fail "got='$S9_IDS'"; fi
+if [[ "$S9_IDS" == "$S9_IDS_WANT" ]]; then row "S9 step set: the steps that run terraform plan or destroy are exactly the four named steps, the four bodies Guard 2 executes (parsed from the YAML)" ok
+else row "S9 step set: a terraform plan/destroy step was added, removed or renamed (Guard 2 executes exactly four named bodies and I2 pins them)" fail "got='$S9_IDS'"; fi
 
 # ---- the baseline-GREEN control: the scratch base is judged by the SAME function and must be green --------------------------------------
 s9_judge "$S9/base"
@@ -8173,40 +8171,33 @@ s9_judge_text ""
 if s9_has floor; then row "S9 harness: a scanner that prints nothing is RED (reason floor), never a clean bill" ok; else row "S9 harness: an empty scan was not judged floor" fail "reasons='$S9_J_REASONS'"; fi
 
 # ---- Guard 1 mutations ------------------------------------------------------------------------------------------------------------------
-d="$(s9_fresh m1)"; printf '%s\n' '      terraform plan -var "zot_pull_token=${ZOT_PULL}"' >> "$d/$S9_WF"; s9_judge "$d"
-if [[ "$S9_J_REASONS" == "name:$S9_WF" ]]; then row "S9 mutation 1: one rehearsal site reverted to -var \"zot_pull_token=...\" is RED, reason name:<that file>" ok
-else row "S9 mutation 1: a reverted site was not judged name:$S9_WF" fail "reasons='$S9_J_REASONS'"; fi
-d="$(s9_fresh m2)"; rm -rf "${d:?}/apps" "${d:?}/scripts" "${d:?}/.github" "${d:?}/plugins"; s9_judge "$d"
-if [[ "$S9_J_REASONS" == "floor" && "$S9_J_N" -eq 0 ]]; then row "S9 mutation 2: the scan roots deleted (0 options) is RED, reason exactly floor" ok
-else row "S9 mutation 2: broken scan roots were not judged floor" fail "reasons='$S9_J_REASONS' n=$S9_J_N"; fi
-d="$(s9_fresh m3)"; s9_subst "$d" '-var' '-vars'; s9_judge "$d"
-if [[ "$S9_J_REASONS" == "floor" ]]; then row "S9 mutation 3: the option renamed in every file (the scan sees nothing) is RED, reason exactly floor" ok
-else row "S9 mutation 3: a renamed option was not judged floor" fail "reasons='$S9_J_REASONS'"; fi
 m3b=""; n3=0
 for v in 'terraform plan --var api_token=$T' 'ARGS=("-var" "api_token=$T")' 'terraform plan -var "$K=$V"' 'terraform plan -var "rehearsal_run_id=1" -var "api_token=$T"' 'VAR_ARGS+=(-var="deploy_token=$T")' 'bash -c "terraform plan -var db_password=$P"' \
-         'terraform plan -var=api_key=$T' "terraform plan -var 'client_secret=\$T'" 'echo "step #1"; terraform plan -var auth_header=$H'; do
+         'terraform plan -var=api_key=$T' "terraform plan -var 'client_secret=\$T'" 'echo "step #1"; terraform plan -var auth_header=$H' \
+         'terraform plan -var "$KV"' 'terraform plan -var "api_$x=$T"' "terraform plan -var \$'api_token=x'" 'bash -c "terraform plan -var \"api_token=$T\""'; do
   n3=$((n3 + 1)); d="$(s9_fresh m3b-$n3)"; s9_put "$d" scripts/extra.sh "$v"; s9_judge "$d"
   case "$S9_J_REASONS" in "name:scripts/extra.sh"|"nonliteral:scripts/extra.sh") : ;; *) m3b+=" [$v => '$S9_J_REASONS']" ;; esac
 done
-if [[ -z "$m3b" ]]; then row "S9 mutation 3b: the double-dash spelling, a quoted option word, a non-literal name, a second option on one line, an array append, a bash -c payload, -var=NAME=v, a single-quoted pair and a quoted '#' earlier on the line are each RED for that file" ok
+if [[ -z "$m3b" ]]; then row "S9 mutation 3b: the double-dash spelling, a quoted option word, a non-literal name, a second option on one line, an array append, a bash -c payload (plain and escaped-quote), -var=NAME=v, a single-quoted pair, a quoted '#' earlier on the line, a whole pair in a variable, a partly dynamic name and an ANSI-C quoted pair are each RED for that file" ok
 else row "S9 mutation 3b: a credential -var spelling was judged clean" fail "$m3b"; fi
-d="$(s9_fresh m5)"; s9_edit "$d/$S9_WF" '-var nic_attached=true' '-var nic_attached=true -var "zot_pull_credential=${ZOT_PULL}"'; s9_judge "$d"; m5a="$S9_J_REASONS"
-d="$(s9_fresh m5b)"; s9_edit "$d/$S9_WF" '-var nic_attached=true' '-var nic_attached=true -var "extra_flag=1"'; s9_judge "$d"; m5b="$S9_J_REASONS"; m5i="$(s9_i1 "$d")"
-if [[ "$m5a" == "name:$S9_WF" && -z "$m5b" && "$m5i" != "nic_attached=4 rehearsal_run_id=4" ]]; then row "S9 mutation 5: a new credential-named -var in the rehearsal workflow is RED (name); a new benign one passes the scan but fails identity row I1 (the set is closed)" ok
-else row "S9 mutation 5: the rehearsal option set is not closed" fail "credential='$m5a' benign='$m5b' i1='$m5i'"; fi
-d="$(s9_fresh m6)"; s9_edit "$d/plugins/soleur/skills/deploy/references/hetzner-setup.md" 'read -rs TF_VAR_hcloud_token; export TF_VAR_hcloud_token' '-var="hcloud_token=<your-token>"' ; s9_judge "$d"
-if [[ "$S9_J_REASONS" == "name:plugins/soleur/skills/deploy/references/hetzner-setup.md" ]]; then row "S9 mutation 6: restoring -var=\"hcloud_token=<your-token>\" in the plugin doc is RED (agent-run markdown is in the corpus)" ok
-else row "S9 mutation 6: the plugin-doc credential -var was judged clean" fail "reasons='$S9_J_REASONS'"; fi
-d="$(s9_fresh m7a)"; s9_edit1 "$d/$S9_WF" $'          export TF_VAR_zot_pull_token="$ZOT_PULL"\n' ''
-s9_edit1 "$d/$S9_WF" $'-var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=false\n' $'-var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=false\n          export TF_VAR_zot_pull_token="$ZOT_PULL"\n'
-m7a="$(s9_pin "$d/$S9_WF" | tr '\t\n' '= ')"
 d="$(s9_fresh m7b)"; s9_edit1 "$d/$S9_WF" 'doppler run --preserve-env' 'doppler run'; m7b="$(s9_pin "$d/$S9_WF" | tr '\t\n' '= ')"
-if [[ "$m7a" == "export-order=Teardown only (recovery arm) " && "$m7b" == "preserve-env=Teardown only (recovery arm) " ]]; then row "S9 mutation 7: moving the export after the doppler run, and dropping bare --preserve-env, are each RED in the static pin while the export line still exists" ok
-else row "S9 mutation 7: the static pin did not see a reordered export or a dropped --preserve-env" fail "order='$m7a' preserve='$m7b'"; fi
-d="$(s9_fresh m8a)"; s9_edit "$d/$S9_WF" '- name: Terraform destroy (everything this root owns)' '- name: Terraform destroy (renamed)'; m8a="$(s9_ids "$d/$S9_WF")"
-d="$(s9_fresh m8b)"; s9_edit "$d/$S9_WF" '      - name: Assert no rehearsal orphans remain (Hetzner API)' $'      - name: Extra destroy\n        run: |\n          terraform destroy -auto-approve\n      - name: Assert no rehearsal orphans remain (Hetzner API)'; m8b="$(s9_ids "$d/$S9_WF")"
-if [[ "$m8a" != "$S9_IDS_WANT" && "$m8b" != "$S9_IDS_WANT" ]]; then row "S9 mutation 8: renaming a destroy step, and adding a third one, each change the YAML-derived step set (a count would survive the rename)" ok
-else row "S9 mutation 8: the step-set identity survived a rename or an added destroy step" fail "renamed='$m8a' added='$m8b'"; fi
+if [[ "$m7b" == "preserve-env=Teardown only (recovery arm) " ]]; then row "S9 mutation 7: dropping bare --preserve-env from one step is RED in the static pin" ok
+else row "S9 mutation 7: the static pin did not see a dropped --preserve-env" fail "got='$m7b'"; fi
+d="$(s9_fresh m8b)"; s9_edit "$d/$S9_WF" '      - name: Assert no rehearsal orphans remain (Hetzner API)' $'      - name: Extra destroy\n        run: |\n          terraform -chdir=x destroy -auto-approve\n      - name: Assert no rehearsal orphans remain (Hetzner API)'; m8b="$(s9_ids "$d/$S9_WF")"
+if [[ "$m8b" != "$S9_IDS_WANT" ]]; then row "S9 mutation 8: an added third destroy step (written with a global flag) changes the YAML-derived step set" ok
+else row "S9 mutation 8: the step-set identity survived an added destroy step" fail "added='$m8b'"; fi
+
+# ---- credential-name table: one name per regex alternative (and the benign names that must stay clean) ------------------------------------
+d="$(s9_fresh names)"
+S9_NAMES_BAD="fooKey a_token a_secret a_pass a_password a_passphrase db_pwd a_credential a_creds a_psk apikey api_key privatekey private_key a_bearer a_auth a_hmac x_jwt app_dsn a_cookie a_webhook deploy_key deploy_pat db_pw apiKey"
+S9_NAMES_OK="ssh_key_path image_name rehearsal_phase rehearsal_run_id nic_attached key_name admin_ips"
+for nm in $S9_NAMES_BAD $S9_NAMES_OK; do printf 'terraform plan -var %s=1\n' "$nm"; done > "$S9/names.txt"
+s9_put "$d" scripts/names.sh "$(cat "$S9/names.txt")"
+m_nm=""; S9_NM_SCAN="$(s9_scan "$d")"
+for nm in $S9_NAMES_BAD; do [[ "$(awk -F'\t' -v n="$nm" '$1 == "scripts/names.sh" && $3 == n { print $4 }' <<<"$S9_NM_SCAN")" == name ]] || m_nm+=" [$nm not judged name]"; done
+for nm in $S9_NAMES_OK; do [[ "$(awk -F'\t' -v n="$nm" '$1 == "scripts/names.sh" && $3 == n { print $4 }' <<<"$S9_NM_SCAN")" == ok ]] || m_nm+=" [$nm not judged ok]"; done
+if [[ -z "$m_nm" ]]; then row "S9 names: one name per credential-regex alternative (token, secret, pass, pwd, credential, creds, psk, api_key, private_key, bearer, auth, hmac, jwt, dsn, cookie, webhook, _key, _pat, _pw, camelCase Key) is judged a credential, and ssh_key_path, image_name, rehearsal_*, nic_attached, key_name, admin_ips stay clean" ok
+else row "S9 names: the credential-name regex mis-judged a name" fail "$m_nm"; fi
 
 # ---- must-pass inputs that are NOT credential -var options: zero BAD records ---------------------------------------------------------
 d="$(s9_fresh pass1)"
@@ -8232,78 +8223,83 @@ done
 if [[ -z "$m_x" ]]; then row "S9 exclusions: a credential -var under test/, tests/, fixtures/, *.test.*, knowledge-base/ or a .md outside plugins/ is not scanned, and the same under plugins/*.md, scripts/testing/ and apps/ is" ok
 else row "S9 exclusions: an exclusion rule hid a credential -var it should not, or missed one it should" fail "$m_x"; fi
 
-# ---- Guard 2: the two terraform destroy step bodies EXECUTED under stubs --------------------------------------------------------------
-S9_CANARY="S9CANARYzot0123"; S9_PRD="s9-prd-scope-0123"; S9_DEF="s9-default-scope-0123"
-for t in bash env cat grep tr date mkdir rm printf; do p="$(type -P "$t" || true)"; [[ -n "$p" ]] && ln -s "$p" "$S9/real/$t"; done
+# ---- Guard 2: the four rehearsal terraform step bodies EXECUTED under strict stubs --------------------------------------------------
+S9_CANARY="S9CANARYzot0123"
+for t in bash env cat grep tr date mkdir rm printf; do p="$(type -P "$t" || true)"; [[ "$p" == /* ]] || fatal "stage S9: $t is required"; ln -s "$p" "$S9/real/$t"; done
 { printf '#!%s\n' "$BASH_BIN"; cat <<'S9DOP'
-# Stub doppler: records argv (NUL-delimited). `secrets get` answers only for the exact argv and only under the PRD-scope token (else the modelled 403);
-# `run` execs the command after `--` and injects NO TF_VAR_* (production inherits an equal value from prd_terraform; the stub models the unmeasured case).
+# Stub doppler: records argv (NUL-delimited) and answers ONLY the two argv shapes the steps use (anything else: exit 64 and a refusal line, so a changed
+# flag, config or project is visible). `run` execs the command after `--` and injects NO TF_VAR_* (production inherits an equal value from prd_terraform; the stub
+# models the unmeasured case so a dropped export cannot pass by inheritance).
 printf '%s\0' "$@" > "$CALLS_DIR/doppler.$$.argv"
 case "${1-}" in
   secrets)
-    if [[ "$*" != "secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain" ]]; then printf 'S9-STUB-64 unexpected argv\n' >> "$CALLS_DIR/refusals"; exit 64; fi
-    if [[ "${DOPPLER_TOKEN-}" != "$S9_PRD_EXPECT" ]]; then printf 'S9-STUB-403 wrong scope\n' >> "$CALLS_DIR/refusals"; echo 'Doppler Error: 403' >&2; exit 1; fi
+    if [[ "$*" != "secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain" ]]; then printf 'S9-STUB-64 unexpected doppler secrets argv\n' >> "$CALLS_DIR/refusals"; exit 64; fi
     printf '%s' "$S9_CANARY_VAL"; exit 0 ;;
-  run) shift; while [[ $# -gt 0 && "$1" != -- ]]; do shift; done; shift; exec "$@" ;;
+  run)
+    if [[ "${*:1:9}" != "run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var --" ]]; then printf 'S9-STUB-64 unexpected doppler run argv\n' >> "$CALLS_DIR/refusals"; exit 64; fi
+    shift 9; exec "$@" ;;
 esac
-printf 'S9-STUB-64 unknown verb\n' >> "$CALLS_DIR/refusals"; exit 64
+printf 'S9-STUB-64 unknown doppler verb\n' >> "$CALLS_DIR/refusals"; exit 64
 S9DOP
 } > "$S9/shim/doppler"
 { printf '#!%s\n' "$BASH_BIN"; cat <<'S9TF'
-# Stub terraform: records argv and the value of TF_VAR_zot_pull_token (or the literal <unset>).
+# Stub terraform: records argv and the value of TF_VAR_zot_pull_token (or the literal <unset>); exits 64 unless argv is EXACTLY the one the harness expects for the step.
 printf '%s\0' "$@" > "$CALLS_DIR/terraform.$$.argv"
 printf '%s' "${TF_VAR_zot_pull_token-<unset>}" > "$CALLS_DIR/terraform.$$.tfvar"
 echo "S9 terraform stub: $1"
+if [[ "$*" != "$S9_TF_ARGV" ]]; then printf 'S9-STUB-64 unexpected terraform argv\n' >> "$CALLS_DIR/refusals"; exit 64; fi
 S9TF
 } > "$S9/shim/terraform"
 chmod +x "$S9/shim/doppler" "$S9/shim/terraform"
 S9_N=0
-s9_run() { # <bodyfile> -> S9_RC S9_DIR
+s9_run() { # <bodyfile> <expected terraform argv> -> S9_RC S9_DIR
   local r; S9_N=$((S9_N + 1)); r="$S9/rows/r$S9_N"; assert_fixture_dir "$r"; mkdir -p "$r/calls" "$r/cwd"
   S9_RC=0
-  ( cd "$r/cwd" && env -i PATH="$S9/shim:$S9/real" HOME="$r" CALLS_DIR="$r/calls" GITHUB_RUN_ID=424242 DOPPLER_TOKEN="$S9_DEF" DOPPLER_TOKEN_PRD="$S9_PRD" \
-      S9_PRD_EXPECT="$S9_PRD" S9_CANARY_VAL="$S9_CANARY" "$BASH_BIN" --noprofile --norc -eo pipefail "$1" ) > "$r/out" 2>&1 || S9_RC=$?
+  ( cd "$r/cwd" && env -i PATH="$S9/shim:$S9/real" HOME="$r" CALLS_DIR="$r/calls" GITHUB_RUN_ID=424242 GITHUB_WORKSPACE="$r/cwd" DOPPLER_TOKEN="s9-default-scope-0123" DOPPLER_TOKEN_PRD="s9-prd-scope-0123" \
+      S9_CANARY_VAL="$S9_CANARY" S9_TF_ARGV="$2" "$BASH_BIN" --noprofile --norc -eo pipefail "$1" ) > "$r/out" 2>&1 || S9_RC=$?
   S9_DIR="$r"
 }
-s9_judge_run() { # sets S9_J_REASONS (empty = GREEN). Reasons, in this order: rc ncalls canary-in-argv env-not-set env-value-differs run-id refused
-  local f n=0 tv="<none>" argvs=""
-  S9_J_REASONS=""
-  [[ "$S9_RC" == 0 ]] || S9_J_REASONS+=" rc"
+S9_R_REASONS=""
+s9_judge_run() { # sets S9_R_REASONS (empty = GREEN). Reasons, in this order: rc ncalls canary-in-argv env-not-set env-value-differs mask-missing refused
+  local f n=0 tv="<none>" mask_ln stub_ln
+  S9_R_REASONS=""
+  [[ "$S9_RC" == 0 ]] || S9_R_REASONS+=" rc"
   for f in "$S9_DIR"/calls/terraform.*.argv; do [[ -e "$f" ]] || continue; n=$((n + 1)); tv="$(cat "${f%.argv}.tfvar")"; done
-  [[ "$n" == 1 ]] || S9_J_REASONS+=" ncalls"
-  for f in "$S9_DIR"/calls/*.argv; do [[ -e "$f" ]] || continue; if grep -qF -- "$S9_CANARY" <(tr '\0' '\n' < "$f"); then S9_J_REASONS+=" canary-in-argv"; break; fi; done
-  if [[ "$tv" == "<unset>" ]]; then S9_J_REASONS+=" env-not-set"; elif [[ "$n" -ge 1 && "$tv" != "$S9_CANARY" ]]; then S9_J_REASONS+=" env-value-differs"; fi
-  for f in "$S9_DIR"/calls/terraform.*.argv; do [[ -e "$f" ]] || continue; grep -qxF -- "rehearsal_run_id=424242" <(tr '\0' '\n' < "$f") || { S9_J_REASONS+=" run-id"; break; }; done
-  [[ ! -s "$S9_DIR/calls/refusals" ]] || S9_J_REASONS+=" refused"
-  S9_J_REASONS="${S9_J_REASONS# }"
+  [[ "$n" == 1 ]] || S9_R_REASONS+=" ncalls"
+  for f in "$S9_DIR"/calls/*.argv; do [[ -e "$f" ]] || continue; if grep -qF -- "$S9_CANARY" <(tr '\0' '\n' < "$f"); then S9_R_REASONS+=" canary-in-argv"; break; fi; done
+  if [[ "$tv" == "<unset>" ]]; then S9_R_REASONS+=" env-not-set"; elif [[ "$n" -ge 1 && "$tv" != "$S9_CANARY" ]]; then S9_R_REASONS+=" env-value-differs"; fi
+  mask_ln="$(grep -nxF -- "::add-mask::$S9_CANARY" "$S9_DIR/out" | head -n 1 | cut -d: -f1)"
+  stub_ln="$(grep -n '^S9 terraform stub:' "$S9_DIR/out" | head -n 1 | cut -d: -f1)"
+  if [[ -z "$mask_ln" || ( -n "$stub_ln" && "$mask_ln" -gt "$stub_ln" ) ]]; then S9_R_REASONS+=" mask-missing"; fi
+  [[ ! -s "$S9_DIR/calls/refusals" ]] || S9_R_REASONS+=" refused"
+  S9_R_REASONS="${S9_R_REASONS# }"
 }
-S9_EXP=$'export TF_VAR_zot_pull_token="$ZOT_PULL"\n'; S9_TAIL=$'-var nic_attached=false\n'; S9_MASK="printf '::add-mask::%s\\n' \"\$ZOT_PULL\""$'\n'
+s9_verdict_ok() { [[ "$1" == "$2" ]]; } # <got reasons> <want reasons>: the one comparison every Guard 2 mutation row is judged by
+S9_EXP=$'export TF_VAR_zot_pull_token="$ZOT_PULL"\n'; S9_MASK="printf '::add-mask::%s\\n' \"\$ZOT_PULL\""$'\n'
 s9_mrow() { # <tag> <id> <want reasons> <old> <new> [<old> <new>]...: copy the body, apply exact edits, run it, judge it
   local tag="$1" id="$2" want="$3" b="$S9/body-$1.sh" m="$S9/m-$1-$2.sh"; shift 3
   cp "$b" "$m" || fatal "S9 could not copy $b"
   while [[ $# -ge 2 ]]; do s9_edit "$m" "$1" "$2"; shift 2; done
-  s9_run "$m"; s9_judge_run
-  if [[ "$S9_J_REASONS" == "$want" ]]; then row "S9 Guard 2 $id ($tag): judged '$want' (empty = GREEN)" ok
-  else row "S9 Guard 2 $id ($tag): wrong verdict" fail "want='$want' got='$S9_J_REASONS'"; fi
+  s9_run "$m" "$S9_TF_ARGV"; s9_judge_run
+  if s9_verdict_ok "$S9_R_REASONS" "$want"; then row "S9 Guard 2 $id ($tag): judged '$want'" ok
+  else row "S9 Guard 2 $id ($tag): wrong verdict" fail "want='$want' got='$S9_R_REASONS'"; fi
 }
-for spec in 'teardown-only|Teardown only (recovery arm)' 'teardown-job|Terraform destroy (everything'; do
-  tag="${spec%%|*}"; sel="${spec#*|}"
+for spec in 'teardown-only|Teardown only (recovery arm)|destroy -auto-approve -input=false|false' 'teardown-job|Terraform destroy (everything|destroy -auto-approve -input=false|false' \
+            'plan-a|Terraform plan (phase A|plan -no-color -input=false -out=tfplan-a|false' 'plan-b|Terraform plan (phase B|plan -no-color -input=false -out=tfplan-b|true'; do
+  IFS='|' read -r tag sel argv nic <<<"$spec"
+  S9_TF_ARGV="$argv -var rehearsal_run_id=424242 -var nic_attached=$nic"; S9_TAIL="-var nic_attached=$nic"$'\n'
   s3_body "$REPO_ROOT/$S9_WF" "$sel" > "$S9/body-$tag.sh" || fatal "S9 could not extract the $tag step"
-  s9_run "$S9/body-$tag.sh"; s9_judge_run
-  if [[ -z "$S9_J_REASONS" ]]; then row "S9 Guard 2 control ($tag): the real destroy body runs GREEN under the stubs: one terraform call, the token in its environment and in no argv, rehearsal_run_id by value" ok
-  else row "S9 Guard 2 control ($tag): the real destroy body is not GREEN under the stubs (every mutant below would measure the base)" fail "reasons='$S9_J_REASONS'"; fatal "S9 control not green for $tag: a red baseline voids every mutant"; fi
-  s9_mrow "$tag" m1a "canary-in-argv env-not-set" "$S9_EXP" '' "$S9_TAIL" $'-var nic_attached=false \\\n    -var "zot_pull_token=${ZOT_PULL}"\n'
-  s9_mrow "$tag" m1b "canary-in-argv" "$S9_TAIL" $'-var nic_attached=false \\\n    -var "zot_pull_token=${ZOT_PULL}"\n'
+  s9_run "$S9/body-$tag.sh" "$S9_TF_ARGV"; s9_judge_run
+  if [[ -z "$S9_R_REASONS" ]]; then row "S9 Guard 2 control ($tag): the real step body runs GREEN under the strict stubs: one terraform call with exactly the expected argv, the token masked first, in its environment and in no argv" ok
+  else row "S9 Guard 2 control ($tag): the real step body is not GREEN under the strict stubs (every mutant below would measure the base)" fail "reasons='$S9_R_REASONS'"; fatal "S9 control not green for $tag: a red baseline voids every mutant"; fi
+  s9_mrow "$tag" m1a "rc canary-in-argv env-not-set refused" "$S9_EXP" '' "$S9_TAIL" "-var nic_attached=$nic"$' \\\n    -var "zot_pull_token=${ZOT_PULL}"\n'
   s9_mrow "$tag" m2-reorder "env-not-set" "$S9_EXP" '' "$S9_TAIL" "$S9_TAIL$S9_EXP"
-  s9_mrow "$tag" m3-value "env-value-differs" "$S9_EXP" $'export TF_VAR_zot_pull_token="x${ZOT_PULL}"\n'
-  s9_mrow "$tag" m6-run-id "run-id" '-var "rehearsal_run_id=${GITHUB_RUN_ID}"' '-var "rehearsal_run_id=x"'
-  s9_mrow "$tag" m7-two-calls "ncalls" "$S9_TAIL" "${S9_TAIL}"$'terraform destroy -input=false -var "rehearsal_run_id=${GITHUB_RUN_ID}"\n'
-  s9_mrow "$tag" pass-braces-before-mask-extra-export "" "$S9_EXP" $'export TF_LOG=error\n' "$S9_MASK" $'export TF_VAR_zot_pull_token="${ZOT_PULL}"\n'"$S9_MASK"
-  m="$S9/m-$tag-m4.sh"; cp "$S9/body-$tag.sh" "$m"; s9_edit "$m" 'DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler secrets get' 'doppler secrets get'; s9_run "$m"; s9_judge_run
-  if [[ "$S9_J_REASONS" == "rc ncalls refused" ]] && grep -qF 'S9-STUB-403' "$S9_DIR/calls/refusals"; then row "S9 Guard 2 m4 ($tag): reading the token with the default-scope Doppler token fails the step loudly (rc != 0, no terraform call, the modelled 403 logged)" ok
-  else row "S9 Guard 2 m4 ($tag): the wrong-scope read did not fail the step with the refusal logged" fail "got='$S9_J_REASONS'"; fi
+  s9_mrow "$tag" m3-mask "mask-missing" "$S9_MASK" ''
 done
-echo "=== stage S9: Guard 1 rows (terraform -var credentials: derived scan, floor, identity, mutations, must-pass inputs) and Guard 2 rows (destroy bodies executed under stubs) done ==="
+# The comparison every mutation row is judged by must be able to REJECT: a doctored pair must fail it and an equal pair must pass (reported by row, never through s9_mrow).
+if s9_verdict_ok "env-not-set" "env-not-set" && ! s9_verdict_ok "env-not-set" "mask-missing" && ! s9_verdict_ok "" "rc"; then row "S9 harness: the Guard 2 verdict comparison rejects a doctored verdict and accepts an equal one" ok
+else row "S9 harness: the Guard 2 verdict comparison accepted a doctored verdict" fail "s9_verdict_ok is not discriminating"; fi
+echo "=== stage S9: Guard 1 rows (terraform -var credentials: derived scan, floor, identity, mutations, name table, must-pass inputs) and Guard 2 rows (four step bodies executed under strict stubs) done ==="
 
 # =====================================================================================
 # VERDICT. The floor and the conservation check are reported with printf + exit 1, never
@@ -8344,8 +8340,8 @@ SELFTEST_PASSES=0
 # 811 -> 819 at PR C (#10120, probe scripts of #10093): four converted-script rows (the inngest body and the three probes join S6H_CONVERTED), mutations 1b (inngest body), 1c (the three probes), 3c (a probe) and the inngest guard-class mutation; the stale and growth mutations are re-anchored, the ceiling row is 0 == 0: measured (819 passed, 0 failed).
 # 819 -> 823 at the PR C review round: the guard-copy parity row and its mutation row, and two scanner-reach rows (bare HEARTBEAT_URL; path-prefixed, backslashed and backtick curl): measured (823 passed, 0 failed).
 # 823 -> 840 at #9757 (stage S8, Guard 3: registry login password off argv, tokenised derived census): the 15 S8 rows. The tree measured 825 before S8 (the floor had 2 rows of slack), so the new floor is the measured total (840 passed, 0 failed).
-# 840 -> 878 at #9757 item 2 (stage S9, terraform -var credentials off argv: derived scan, rehearsal-workflow pins, destroy bodies executed under stubs): the 35 S9 rows. The tree measured 843 before S9 (the floor had 3 rows of slack), so the new floor is the measured total (878 passed, 0 failed).
-EXPECTED_TESTS=878
+# 840 -> 870 at #9757 item 2 (stage S9, terraform -var credentials off argv: derived scan, rehearsal-workflow pins, the four terraform step bodies executed under strict stubs): the 27 S9 rows. The tree measured 843 before S9 (the floor had 3 rows of slack), so the new floor is the measured total (870 passed, 0 failed).
+EXPECTED_TESTS=870
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2

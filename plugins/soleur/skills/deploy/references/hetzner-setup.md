@@ -13,8 +13,11 @@ Always provision infrastructure via Terraform for reproducibility and cloud port
 ```bash
 cd apps/<app>/infra
 terraform init
-read -rs TF_VAR_hcloud_token; export TF_VAR_hcloud_token   # the token stays off the argument list and out of shell history
+# Interactive shell: enter the token at the prompt (it stays off the argument list and out of shell history).
+# An agent or CI run has no terminal: export TF_VAR_hcloud_token from its secret store instead.
+read -rsp "Hetzner API token: " TF_VAR_hcloud_token && export TF_VAR_hcloud_token
 terraform apply -var='admin_ips=["<your-ip>/32"]'
+unset TF_VAR_hcloud_token
 ```
 
 Terraform handles: server creation, SSH key upload, volume attachment, firewall rules, and cloud-init (Docker install, volume mount, container start, SSH hardening).

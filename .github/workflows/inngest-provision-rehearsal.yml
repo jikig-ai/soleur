@@ -231,9 +231,9 @@ jobs:
       # passed explicitly (the parent root mirrors it to soleur-registry/prd AND keeps it in
       # soleur/prd — measured by registry-zot-inventory.yml; but THAT read needs
       # DOPPLER_TOKEN_PRD: secrets.DOPPLER_TOKEN is prd_terraform-scoped and 403s on soleur/prd,
-      # which is what the first dry run proved; prd_terraform lists an equal ZOT_PULL_TOKEN, and the
-      # explicit read stays until the CI token's read of that name is measured). It reaches terraform
-      # as TF_VAR_zot_pull_token in the step environment, never as a -var option (ADR-280).
+      # which is what the first dry run proved; prd_terraform listed an equal ZOT_PULL_TOKEN on
+      # 2026-10-20, a snapshot, so the explicit read stays: see ADR-280 and #10675). It reaches
+      # terraform as TF_VAR_zot_pull_token in the step environment, never as a -var option.
       - name: Terraform plan (phase A — NIC absent)
         id: plan_a
         if: '!inputs.teardown_only'
