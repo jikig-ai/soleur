@@ -218,16 +218,23 @@ if [[ "$marker_rows" -eq 0 ]]; then
   verdict not_yet - 2
 fi
 
-# first_marker_dt is '1970-01-01 00:00:00' on an empty minIf — marker_rows > 0
-# already excludes that, but refuse a non-date shape defensively: feeding it to
-# toDateTime would floor the absence window at the epoch and re-grade history.
+# first_marker_dt is '1970-01-01 00:00:00.000000' on an empty minIf —
+# marker_rows > 0 already excludes that, but refuse a non-date shape
+# defensively: feeding it to the parser would floor the absence window at the
+# epoch and re-grade history. The column is DateTime64, so a real marker
+# renders with microseconds ('2026-10-21 03:26:45.242796') — toDateTime rejects
+# the fraction outright (Code: 6, HTTP 400), which is the #10741 defect; the
+# absence bound parses via toDateTime64 with an explicit 'UTC' (the codebase's
+# naive-literal convention: registry-clientip-alert-7530.sh,
+# inngest-provision-rehearsal-capture.sh — a naive literal otherwise parses in
+# the session TZ and silently shifts the boundary).
 if ! [[ "$first_marker_dt" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2} ]]; then
   printf 'NOT YET: first_marker_dt did not decode (%s): %s\n' "$first_marker_dt" "${SCAN_OUT:0:300}" >&2
   verdict not_yet - 2
 fi
 
 ABSENCE_SQL="SELECT count() AS n FROM ${SRC}
-WHERE dt >= toDateTime('${first_marker_dt}')
+WHERE dt >= toDateTime64('${first_marker_dt}', 6, 'UTC')
   AND JSONExtractString(raw,'host_name') = '${HOST_NAME}'
   AND raw LIKE '%fchmodat2%'
 FORMAT JSONEachRow"

@@ -47,6 +47,7 @@ cat > "$WORK/bin/bsq" <<'STUB'
 printf 'INVOCATION\n%s\n' "$*" >> "${STUB_CALLS:?}"
 case "$*" in
   *first_marker_dt*) printf '%s\n' "${STUB_SCAN_OUT:-}"; exit "${STUB_SCAN_RC:-0}" ;;
+  *"toDateTime('"*"."[0-9][0-9][0-9][0-9][0-9][0-9]"'"*) printf '%s\n' "Code: 6. DB::Exception: Cannot parse string '<literal>' as DateTime: syntax error" >&2; exit 22 ;;
   *) printf '%s\n' "${STUB_COUNT_OUT:-}"; exit "${STUB_COUNT_RC:-0}" ;;
 esac
 STUB
@@ -157,12 +158,38 @@ else
   fail "no-marker arm must stop after the scan query (rc=$rc, calls: $(grep -c '^INVOCATION$' "$WORK/calls-marker.log" 2>/dev/null))"
 fi
 
+# 18-19. A real DateTime64 first_marker_dt renders with microseconds; the
+#        absence query must parse it (toDateTime64), not feed it to
+#        toDateTime (which rejects the fraction: ClickHouse Code: 6, HTTP
+#        400 — the defect behind #10741).
+: > "$WORK/calls-frac.log"
+env -i PATH="$PATH" HOME="$WORK" \
+  BETTERSTACK_QUERY_HOST=h BETTERSTACK_QUERY_USERNAME=u BETTERSTACK_QUERY_PASSWORD=p \
+  SOLEUR_FT_EARLIEST="$EARLIEST" FT8743_QUERY_SH="$WORK/bin/bsq" \
+  STUB_CALLS="$WORK/calls-frac.log" \
+  STUB_SCAN_RC=0 STUB_SCAN_OUT="$(scan_row 9 2 1 4 "2026-10-19 05:12:33.456789" 1)" \
+  STUB_COUNT_RC=0 STUB_COUNT_OUT="$(count_row 0)" \
+  bash "$PROBE" >/dev/null 2>&1
+rc=$?
+if [ "$rc" -eq 0 ]; then
+  pass "fractional first_marker_dt still grades PASS (rc=0)"
+else
+  fail "fractional first_marker_dt: want rc=0 (PASS), got rc=$rc"
+fi
+# The absence query is the second invocation; pin the fraction-preserving
+# parse (a ${var%%.*} strip-then-toDateTime equivalent must fail this pin).
+if awk '/^INVOCATION$/{n++} n==2' "$WORK/calls-frac.log" | grep -qF "toDateTime64('2026-10-19 05:12:33.456789'"; then
+  pass "absence query parses the marker via toDateTime64 (fraction preserved)"
+else
+  fail "absence query must embed first_marker_dt via toDateTime64, not a stripped toDateTime"
+fi
+
 if [ "${#FAILURES[@]}" -gt 0 ]; then
   printf '%s passed, %s failed\n' "$passes" "${#FAILURES[@]}"; exit 1
 fi
 # Anti-vacuity floor, reported outside the helpers it backstops (ADR-193: printf + exit 1).
-if [[ "$passes" -lt 17 ]]; then
-  printf '[FATAL] anti-vacuity floor: only %s cases passed (expected 17)\n' "$passes" >&2
+if [[ "$passes" -lt 19 ]]; then
+  printf '[FATAL] anti-vacuity floor: only %s cases passed (expected 19)\n' "$passes" >&2
   exit 1
 fi
 printf '%s passed, 0 failed\n' "$passes"
