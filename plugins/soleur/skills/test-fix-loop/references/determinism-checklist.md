@@ -7,8 +7,9 @@ disappears on the next run of *unchanged* code was never fixed — it was
 nondeterministic, and it will be back.
 
 This reference is shared by three consumers: `test-fix-loop` applies its
-signatures and quarantine protocol inside the loop, `test-design-reviewer`
-cites its axes when scoring a test's Repeatable property, and `qa` lands
+signatures and quarantine protocol inside the loop,
+`soleur:engineering:review:test-design-reviewer` cites its axes when
+scoring a test's Repeatable property, and `qa` lands
 its flake-vs-regression discrimination here for the follow-through fix.
 
 ## Flake signatures
@@ -135,10 +136,10 @@ the determinism work itself, not the retry.
 - `test-fix-loop`: the §1 quarantine screen applies the signatures and
   protocol above; a filed flake's issue body points here for the fix
   work.
-- `test-design-reviewer`: a new test carrying flake-signal sources
-  (unseeded RNG, wall-clock reads, real network, shared mutable state,
-  nondeterministic output) with no determinism control is a Repeatable
-  WARN — cite the axis.
+- `soleur:engineering:review:test-design-reviewer`: a new test carrying
+  flake-signal sources (unseeded RNG, wall-clock reads, real network,
+  shared mutable state, nondeterministic output) with no determinism
+  control is a Repeatable WARN — cite the axis.
 - `qa` and humans: the flake-vs-regression discriminator lands here for
   the "what makes it deterministic" remediation.
 
