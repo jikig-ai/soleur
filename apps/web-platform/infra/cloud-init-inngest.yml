@@ -1845,7 +1845,11 @@ write_files:
       STATE_DIR="$${REFRESH_STATE_DIR:-/var/lib/inngest-config}"
       ZOT_ENV_FILE="$${REFRESH_ZOT_ENV_FILE:-/etc/default/soleur-zot-read}"
       # The SAME pinned cosign image ci-deploy.sh uses (v3.1.1); the suite parity-pins it.
-      COSIGN_IMAGE="$${REFRESH_COSIGN_IMAGE:-gcr.io/projectsigstore/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870}"
+      # Seam read only — the real default resolves AFTER ZOT_EP below (#10390 defect 2):
+      # this host is deny-all-public egress, so a gcr ref can never pull here; the
+      # verifier image rides the same private zot as the bundle (mirrored there by the
+      # bundle producer's zot_mirror leg).
+      COSIGN_IMAGE="$${REFRESH_COSIGN_IMAGE:-}"
       TRUSTED_ROOT="$${REFRESH_TRUSTED_ROOT:-/etc/soleur/cosign-trusted-root.json}"
       BUNDLE_REPO="$${REFRESH_BUNDLE_REPO:-jikig-ai/soleur-inngest-config}"
       # Provenance is pinned to the bundle producer's workflow on main — nothing else may sign.
@@ -2007,6 +2011,7 @@ write_files:
       ZOT_EP="$ZOT_REGISTRY_ENDPOINT"
       [ -n "$ZOT_EP" ] || verify_fail pull-endpoint-absent
       BREF="$${ZOT_EP}/$${BUNDLE_REPO}@sha256:$${pointer}"
+      COSIGN_IMAGE="$${COSIGN_IMAGE:-$${ZOT_EP}/jikig-ai/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870}"
 
       # Staging lives under the STATE DIR — the docker daemon resolves -v binds in ITS mount
       # namespace, so a PrivateTmp /tmp staging dir would not exist for it (see header).
@@ -2028,6 +2033,11 @@ write_files:
       # Bounded digest-pinned pull — the @sha256 pin, not TLS, is the integrity control on
       # the private net; provenance is the cosign gate below.
       timeout "$PULL_TIMEOUT_S" "$DOCKER_BIN" pull "$BREF" >/dev/null 2>&1 || verify_fail pull
+      # The verifier image must already be local before the `docker run` below — its
+      # daemon-side implicit pull is what emitted reason=signature pre-fix (a fetch
+      # failure misattributed to provenance). member=cosign-image keeps the miss
+      # distinguishable from the bundle pull above.
+      timeout "$PULL_TIMEOUT_S" "$DOCKER_BIN" pull "$COSIGN_IMAGE" >/dev/null 2>&1 || verify_fail pull "" "member=cosign-image"
 
       "$DOCKER_BIN" rm -f inngest-config-extract >/dev/null 2>&1 || true
       cid="$("$DOCKER_BIN" create --name inngest-config-extract "$BREF" 2>/dev/null)" || verify_fail extract
