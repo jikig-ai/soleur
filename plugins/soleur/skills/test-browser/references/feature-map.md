@@ -106,7 +106,7 @@ There is no universal route glob — the agent enumerates route surfaces from
 the repository's own shapes:
 
 - Next.js app router: `git ls-files '<app dir>' | grep -E '/page\.tsx$'`
-- Next.js pages router: `git ls-files '<pages dir>' | grep -vE '_(app|document|error)\.'`
+- Next.js pages router: `git ls-files '<pages dir>' | grep -vE '/_(app|document|error)\.'`
 - Rails: `config/routes.rb` plus the `app/views` tree
 - SPAs: the router config (`createRouter`, route tables, `<Route>` elements)
 

@@ -261,16 +261,18 @@ agent-browser screenshot --full page-name-full.png  # Full page
 ### 5b. Write or refresh the feature map
 
 After all affected routes are tested, maintain the repository's feature map —
-`docs/feature-map.md` by convention; see
+`docs/feature-map.md` by convention (soleur's own lives at
+`apps/web-platform/test/feature-map.md`); see
 [feature-map.md](./references/feature-map.md) for the schema and update
 contract:
 
-- **Map absent + web app + ≥1 route exercised:** write `docs/feature-map.md`
-  seeded with the exercised routes only — real observed `selectors`,
-  `expects`, and `gotchas`, the update-contract header, and a
-  `## Deliberately unmapped` section (empty is fine). Do not enumerate
-  unvisited routes as entries.
-- **Map present:** refresh only the fields a run contradicted; append
+- **No map at either path + web app + ≥1 route exercised:** write
+  `docs/feature-map.md` seeded with the exercised routes only — real
+  observed `selectors`, `expects`, and `gotchas`, the update-contract
+  header, and a `## Deliberately unmapped` section (empty is fine). Do not
+  enumerate unvisited routes as entries.
+- **Map present at either path:** refresh only the fields a run
+  contradicted; append
   `## \`/route\`` entries for exercised routes that were missing; leave every
   untouched entry and the header byte-identical (operator annotations
   survive).
@@ -365,6 +367,7 @@ After all tests complete, present summary:
 
 **Test Scope:** PR #[number] / [branch name]
 **Server:** http://localhost:3000
+**Feature map:** [written | refreshed | skipped: <reason>]
 
 ### Pages Tested: [count]
 
