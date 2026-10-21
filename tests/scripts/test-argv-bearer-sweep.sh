@@ -8255,7 +8255,7 @@ S9_N=0
 s9_run() { # <bodyfile> <expected terraform argv> -> S9_RC S9_DIR
   local r; S9_N=$((S9_N + 1)); r="$S9/rows/r$S9_N"; assert_fixture_dir "$r"; mkdir -p "$r/calls" "$r/cwd"
   S9_RC=0
-  ( cd "$r/cwd" && env -i PATH="$S9/shim:$S9/real" HOME="$r" CALLS_DIR="$r/calls" GITHUB_RUN_ID=424242 GITHUB_WORKSPACE="$r/cwd" DOPPLER_TOKEN="s9-default-scope-0123" DOPPLER_TOKEN_PRD="s9-prd-scope-0123" \
+  ( cd "$r/cwd" && env -i PATH="$S9/shim:$S9/real" HOME="$r" CALLS_DIR="$r/calls" GITHUB_RUN_ID=424242 GITHUB_WORKSPACE="$r/cwd" DOPPLER_TOKEN="default-scope" DOPPLER_TOKEN_PRD="prd-scope" \
       S9_CANARY_VAL="$S9_CANARY" S9_TF_ARGV="$2" "$BASH_BIN" --noprofile --norc -eo pipefail "$1" ) > "$r/out" 2>&1 || S9_RC=$?
   S9_DIR="$r"
 }

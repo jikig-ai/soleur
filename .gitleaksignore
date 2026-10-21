@@ -28,3 +28,6 @@ fe234ddc6d259bd885a5a5fe85c89a7f6cbd9f87:plugins/soleur/test/preflight-founder-c
 # #10546: the verdict suite stubs the signed deploy-status call with a synthetic webhook-secret literal (whsec-synth-...,
 # cfid-synth-..., cfsec-synth-...), no real credential. The PR-diff scan reads each commit as it was, so a tip rewrite would not clear it.
 61672531bb5e2a9342ab44319a84313c0e045167:scripts/followthroughs/sdk-bash-smoke-verdict-10548.test.sh:generic-api-key:49
+# #10663: S9 row runner passed synthetic scope strings as DOPPLER_TOKEN values (generic-api-key shape, no credential). The tip rewords them;
+# the PR-diff scan reads each commit as it was, so the tip fix alone does not clear it.
+8b131226728169f441fe67773581b1386ea74dd2:tests/scripts/test-argv-bearer-sweep.sh:generic-api-key:8258
