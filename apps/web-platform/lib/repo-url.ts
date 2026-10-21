@@ -15,18 +15,27 @@
  *      `foo `): the function's idempotence contract requires the
  *      output to be trim-stable. Defect found by the fast-check
  *      property suite (test/lib/repo-url.property.test.ts).
+ *   6. Repeat 1-5 until the output stops changing (the loop in the exported
+ *      function): a strip can expose a dot-segment (`/..git/` -> `/.`) that
+ *      the next call's URL parse resolves away, so a single pass is not a
+ *      fixpoint. Found by the same suite (merge_group run 39400877769).
  *
  * Non-URL input passes through as the trimmed + string-only-op'd value.
  * `null`/`undefined`/`""` → `""`.
  *
  * Coupled with the Postgres backfill in
- * `supabase/migrations/031_normalize_repo_url.sql` — any change here
- * must be mirrored in the SQL regex chain (see migration header).
+ * `supabase/migrations/031_normalize_repo_url.sql` — steps 1-5 on string
+ * input must be mirrored in the SQL regex chain (see migration header).
+ * Step 6 and the `new URL()` rewrites (dot-segments, opaque paths) have no SQL
+ * twin: the migration is a one-time backfill that never parses a URL, so the
+ * two already diverge on those inputs; realistic stored values
+ * (`https://github.com/<owner>/<repo>`) contain none. The missing SQL re-trim
+ * is tracked separately in #10633.
  *
  * See plan:
  *   `knowledge-base/project/plans/2026-04-22-refactor-drain-web-platform-code-review-2775-2776-2777-plan.md`
  */
-export function normalizeRepoUrl(raw: string | null | undefined): string {
+function normalizeRepoUrlPass(raw: string | null | undefined): string {
   if (raw == null) return "";
   const trimmed = raw.trim();
   if (trimmed.length === 0) return "";
@@ -74,4 +83,20 @@ export function normalizeRepoUrl(raw: string | null | undefined): string {
 
   return working;
 }
-/* #9815 e2e probe — REVERTED BEFORE COMMIT */
+
+export function normalizeRepoUrl(raw: string | null | undefined): string {
+  // Run the pass to a fixpoint: one pass is not enough, because a suffix strip
+  // can expose a dot-segment (`/..git/` -> `/.`) or an opaque path that the
+  // next call's URL parse rewrites, and each such rewrite needs another pass.
+  // The cap is derived from the input length so a long peel chain still
+  // converges (a fixed small cap leaves it non-idempotent); every other pass
+  // shortens the value, so the loop terminates well inside it.
+  let current: string = normalizeRepoUrlPass(raw);
+  const cap = (raw?.length ?? 0) + 3;
+  for (let i = 0; i < cap; i++) {
+    const next = normalizeRepoUrlPass(current);
+    if (next === current) return current;
+    current = next;
+  }
+  return current;
+}
