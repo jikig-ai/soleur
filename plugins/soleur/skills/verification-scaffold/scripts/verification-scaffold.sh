@@ -212,6 +212,7 @@ _vs_cleanup() {
     rm -rf -- "$WT"
   fi
   [[ -n "${BITE_DIR:-}" && -d "$BITE_DIR" ]] && rm -rf -- "$BITE_DIR"
+  rm -rf -- "$WORK"
   return 0
 }
 
@@ -744,5 +745,6 @@ CLEANUP_ARMED=0
 trap - EXIT INT TERM
 
 emit_doc
+rm -rf -- "$WORK"
 say "done (mode=$MODE). Guards: ${GUARDS}. Promote per VERIFICATION.md after >=1 clean run."
 exit 0
