@@ -23,6 +23,8 @@ When seats disagree on size, the question is not "bigger or smaller" but "what o
 7. **A seat's claim about an OPEN PR (a same-line `PJ_TRIPLES` collision) was stale; the PR had merged.** Recovery: the CTO ruling checked `gh pr view` first. **Prevention:** re-check PR state before acting on any seat claim about another PR.
 8. **`rm -rf "$(dirname "$d")"` was refused by the safety check.** Recovery: reran without the removal and left the scratch dir. **Prevention:** never remove a command-substitution target; print the path first, then remove the literal.
 9. **My Terraform fixture used a sensitive variable in a plain output.** Recovery: wrapped it in `nonsensitive()`. **Prevention:** none (one-off).
+10. **A synthetic `DOPPLER_TOKEN="s9-default-scope-0123"` in a fixture env tripped gitleaks `generic-api-key`, and the PR-diff scan reads each commit, so the tip reword did not clear it.** Recovery: reworded the values and fingerprinted the intermediate commit in `.gitleaksignore` (the repo's precedent). **Prevention:** run `gitleaks git --redact --log-opts="--no-merges <base>..HEAD"` before the first push; give fixture credentials words, not token-shaped strings.
+11. **A bare `knowledge-base/runbook.sh` literal in a new S9 fixture line made `test-affected-kb-consumers` read it as a real-tree read, and it reddened the full battery (the affected run had skipped that suite).** Recovery: built the path from a variable (a variable-rooted path is read as a scratch tree). **Prevention:** after adding any `knowledge-base/` literal to a registered suite, run `scripts/test-affected-kb-consumers.test.sh`; the affected gate did not select it for this diff.
 
 ## Tags
 

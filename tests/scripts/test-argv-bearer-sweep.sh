@@ -8212,7 +8212,8 @@ terraform plan -var "image_name=${PINNED}"
 S9PASS
 )"
 s9_put "$d" scripts/bad.test.sh 'terraform plan -var "api_token=$T"'
-s9_put "$d" knowledge-base/runbook.sh 'terraform plan -var "api_token=$T"'
+s9_kb_root=knowledge-base  # built from a variable so test-affected-kb-consumers reads this as a scratch-tree path, not a read of the real tree
+s9_put "$d" "$s9_kb_root/runbook.sh" 'terraform plan -var "api_token=$T"'
 if [[ "$(s9_bad "$d" scripts/ok.sh)" -eq 0 && "$(s9_scan "$d" | awk -F'\t' '$1 == "scripts/ok.sh" { n++ } END { print n + 0 }')" -eq 3 ]]; then row "S9 must-pass: a clean ssh_key_path/image_name option, -var-file, the tf-var transformer line, a comment, and a file that reads a secret AND passes a clean -var are judged GREEN (3 options counted, 0 bad)" ok
 else row "S9 must-pass: a non-credential -var shape was judged bad or mis-counted" fail "bad=$(s9_bad "$d" scripts/ok.sh)"; fi
 m_x=""; n_x=0
