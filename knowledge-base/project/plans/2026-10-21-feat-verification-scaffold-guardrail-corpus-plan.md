@@ -942,6 +942,16 @@ warns-and-allows loudly; in enforce mode it denies with the install remediation.
 Emitted guards are local-only: zero network egress, findings redacted
 (`--redact`), nothing transmitted.
 
+### Portability floor (sharp-edges pass)
+
+Emitted scripts/hooks run on arbitrary user hosts — stock macOS included.
+Templates must use the repo's `timeout`→`gtimeout`→bare-fallback pattern
+(`.claude/hooks/git-commit-secret-scan.sh` reference) and avoid GNU-only
+forms: `sed -i` (use `sed -i ''`-safe temp+mv), `readlink -f`, `stat -c`,
+`date -d`, `bc`, `/usr/bin/time`, unguarded `timeout`. `manifest.test.sh`
+greps emitted templates for these tokens as a portability lint (AC8's
+emitted-content battery).
+
 ### Templates, not copies
 
 Every corpus member carries Soleur couplings (`lib/hook-input.sh`,
