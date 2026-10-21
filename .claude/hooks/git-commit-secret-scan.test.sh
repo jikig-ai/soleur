@@ -810,7 +810,9 @@ _t_walker() {
   _w_row "bare cd goes to HOME"                'cd && git commit -m x'                '/h;'   0 1
   _w_row "--git-dir is bad"                    'git --git-dir=/g commit -m x'         ''      1 1
   _w_row "GIT_DIR= is bad"                     'GIT_DIR=/g git commit -m x'           ''      1 1
-  _w_row "an expanded -C operand is bad"       'git -C "$X" commit -m x'              ''      1 1
+  # Built by concatenation so the fixture-relative ratchet does not read this DATA as a git write.
+  local dq='"'
+  _w_row "an expanded -C operand is bad"       "git -C ${dq}"'$X'"${dq} commit -m x"  ''      1 1
   _w_row "quoted cd text is data"              'echo "cd /a"; git commit -m x'        ''      0 1
   _w_row "git log is not a commit"             'git -C /a log --oneline'              '/a;'   0 0
   _w_row "cd ~ is bad"                         'cd ~ && git commit -m x'              ''      1 1
