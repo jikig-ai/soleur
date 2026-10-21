@@ -82,13 +82,15 @@ jobs:
           MANIFEST: ${{ steps.pack.outputs.manifest }}
         run: |
           set -euo pipefail
+          # cosign v3.1.1 (the pin on BOTH ends) dropped the 2.x detached-output flags
+          # entirely — the single .sigstore.json bundle (sig + cert + chain) travels INSIDE
+          # the tarball so the host `verify-blob --bundle` stays fully offline against the
+          # baked trusted root. The Assemble step tars $RUNNER_TEMP/bundle wholesale, so the
+          # bundle file lands in the tarball with no pack-script change.
           cosign sign-blob --yes \
-            --output-signature "${MANIFEST}.sig" \
-            --output-certificate "${MANIFEST}.cert" \
+            --bundle "${MANIFEST}.sigstore.json" \
             "${MANIFEST}"
-          # The .sig + .cert travel INSIDE the bundle so the host verify-blob is fully offline
-          # (cosign verify-blob --certificate <cert> --trusted-root <baked> --certificate-identity-regexp …).
-          echo "Signed ${MANIFEST}: wrote ${MANIFEST}.sig + ${MANIFEST}.cert"
+          echo "Signed ${MANIFEST}: wrote ${MANIFEST}.sigstore.json"
 
       - name: Assemble bundle tarball + minimal OCI context
         run: |
@@ -96,7 +98,10 @@ jobs:
           tar -C "$RUNNER_TEMP/bundle" -czf "$RUNNER_TEMP/bundle.tar.gz" .
           mkdir -p "$RUNNER_TEMP/oci"
           mv "$RUNNER_TEMP/bundle.tar.gz" "$RUNNER_TEMP/oci/bundle.tar.gz"
-          printf 'FROM scratch\nCOPY bundle.tar.gz /bundle.tar.gz\n' > "$RUNNER_TEMP/oci/Dockerfile"
+          # The CMD is load-bearing, not decorative: the host's extract does `docker create`
+          # + `docker cp`, and `docker create` refuses a command-less scratch image with
+          # "no command specified" (verify_fail reason=extract — #10390, first real pull).
+          printf 'FROM scratch\nCOPY bundle.tar.gz /bundle.tar.gz\nCMD ["true"]\n' > "$RUNNER_TEMP/oci/Dockerfile"
 
       - name: Docker login (GHCR)
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0

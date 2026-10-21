@@ -53,7 +53,7 @@
 #
 # Credentials, each bound in exactly one step's env (the credential census suite pins this):
 #   - secrets.DOPPLER_TOKEN_PRD             `prd` read — the flag precheck steps (the cutover job's; the wipe job's precheck and flag re-read)
-#   - secrets.DOPPLER_TOKEN_GIT_DATA_FLAG   `prd` write — the flag WRITE steps ONLY (#8573)
+#   - secrets.DOPPLER_TOKEN_GIT_DATA_FLAG   `prd` write — the flag WRITE steps ONLY (#8573); the rollback's soak-anchor delete (#10297) rides the same step
 #   - secrets.DOPPLER_TOKEN                 prd_terraform read — bridge + webhook creds
 #   - secrets.DOPPLER_TOKEN_GIT_DATA_ROOT   soleur-git-data-root/prd read — the key fetch
 #   - secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED the Tier-B read token — the `wipe` job's loader step (the Hetzner write token), and the cutover flip's reachability check
@@ -507,6 +507,9 @@ jobs:
           bash apps/web-platform/infra/git-data-cutover.sh
 
       # --- the flag write (flip writes true; rollback writes false) -------------------
+      #     A rollback also clears GIT_DATA_LUKS_CUTOVER_AT first, inside the precheck script (FLAG_MODE=rollback and
+      #     FLAG_WRITE_VALUE=false), with this step's own token and a read-back; a failure stops BEFORE the flag is
+      #     written (#10297). The flip's write and stamp step are unchanged.
       - name: Write GIT_DATA_STORE_ENABLED (via the #8573 seam)
         id: flag_write
         if: ((steps.confirm.outputs.mode == 'flip' && steps.flag_precheck.outputs.resume != 'arm_b') || steps.confirm.outputs.mode == 'rollback') && steps.flag_precheck.outputs.nothing_to_rollback != '1'
@@ -928,7 +931,7 @@ jobs:
 
       # W3 has two variants (ADR-239 Amendment 2026-10-15), chosen by the precheck from the flag and the stamp only.
       # flip_chained: the flag is exactly true, the stamp is present, the 7-day soak has elapsed (one pinned constant in
-      # the script), and no rollback ran after the stamp (the interim guard; #10297 retires it).
+      # the script), and no rollback ran after the stamp (the interim guard; it backs up the rollback arm's stamp clear, #10297, until that is proven).
       # separated: the flag is exactly false/unset and there is no stamp; the run-record scan below must read store_clean.
       # wipe_check reports the verdict it WOULD have returned and exits 0. snapshot_clear runs this step in pin_only mode
       # ONLY to write the git-data host-key pin the ssh_config step requires; it evaluates no predicate.

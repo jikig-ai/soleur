@@ -93,3 +93,5 @@ control and the always-`ignored` canary both ran 126/0.
 
 category: test-failures
 module: apps/web-platform/infra
+
+See also: `../best-practices/2026-10-20-copied-template-links-and-coverage-negative-controls.md` — same detector-side negative-control principle applied to a coverage claim (prove suite X covers artifact Y by deleting Y and watching X go red).

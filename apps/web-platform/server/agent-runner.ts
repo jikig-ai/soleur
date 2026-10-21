@@ -99,6 +99,7 @@ import { applyPrefillGuard } from "./agent-prefill-guard";
 import { updateConversationFor } from "./conversation-writer";
 import { releaseSlot, SLOT_STALENESS_THRESHOLD_SECONDS } from "./concurrency";
 import { buildAgentQueryOptions } from "./agent-runner-query-options";
+import { resolveSandboxUnixDeny } from "./resolve-sandbox-unix-deny";
 import {
   CREDENTIALS_PROMPT_DIRECTIVE,
   READ_TOOL_PDF_CAPABILITY_DIRECTIVE,
@@ -217,6 +218,7 @@ import {
   hasLiveAgentLoop,
 } from "./agent-session-registry";
 import { classifyAbortReason, SessionAbortError } from "./abort-classifier";
+import { newAgentSessionsRefused, QUIET_WINDOW_MESSAGE, trackSessionStart } from "./quiet-window";
 import { classifySandboxStartupError } from "./sandbox-startup-classifier";
 import { checkpointInflightWorkForConversation } from "./inflight-checkpoint";
 import { resolveWorkspaceMode } from "./workspace-mode";
@@ -907,6 +909,18 @@ export function startStuckActiveReaper(): NodeJS.Timeout {
 // Start agent session
 // ---------------------------------------------------------------------------
 export async function startAgentSession(
+  ...args: Parameters<typeof startAgentSessionInner>
+): Promise<void> {
+  // #8211 quiet-window: in flight until this entry returns (see trackSessionStart).
+  const releaseStart = trackSessionStart();
+  try {
+    return await startAgentSessionInner(...args);
+  } finally {
+    releaseStart();
+  }
+}
+
+async function startAgentSessionInner(
   userId: string,
   conversationId: string,
   leaderId?: DomainLeaderId,
@@ -919,6 +933,26 @@ export async function startAgentSession(
    *  session_ended after all leaders finish (see #2428). */
   skipSessionEnded?: boolean,
 ): Promise<void> {
+  // #8211 quiet-window — refuse a NEW agent session while the kill-switch is on.
+  // MUST be the first statement, ABOVE the repo-readiness read and the
+  // supersede-abort below: a refusal never aborts the user's in-flight prior
+  // session and never registers a dangling one. No lease, no clone, no spawn.
+  // Info breadcrumb only (an owner-set window is not an incident); hashed user
+  // id, no conversation id.
+  if (await newAgentSessionsRefused()) {
+    log.info(
+      {
+        feature: "quiet-window",
+        op: "refuse-new-session",
+        surface: "agent-runner",
+        userIdHash: hashUserId(userId),
+      },
+      "quiet-window: refused a new agent session (new-sessions-paused)",
+    );
+    sendToClient(userId, { type: "error", message: QUIET_WINDOW_MESSAGE });
+    return;
+  }
+
   // #5399 — legacy-leader repo-readiness gate (AC10 follow-up to #5395).
   //
   // This MUST be the FIRST statement of startAgentSession — ABOVE the
@@ -2110,9 +2144,13 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       ? `${systemPrompt}\n\n${contextResetNotice}`
       : systemPrompt;
 
+    // #10455 (a): runtime flag for the AF_UNIX-deny seccomp artifact (no-egress sessions only; the legacy
+    // runner never passes ghToken or webEgress, so every legacy session is no-egress). OFF on any error.
+    const sandboxUnixDeny = await resolveSandboxUnixDeny();
     const q = query({
       prompt,
       options: buildAgentQueryOptions({
+        sandboxUnixDeny,
         workspacePath,
         // Outer-wrap cohort + log-correlation fields (#5863) — same identity
         // pair cc-dispatcher passes; the flag's workspace allowlist keys off
@@ -2958,12 +2996,44 @@ async function dispatchToLeaders(
 // Send user message into running session
 // ---------------------------------------------------------------------------
 export async function sendUserMessage(
+  ...args: Parameters<typeof sendUserMessageInner>
+): Promise<void> {
+  const releaseStart = trackSessionStart();
+  try {
+    return await sendUserMessageInner(...args);
+  } finally {
+    releaseStart();
+  }
+}
+
+async function sendUserMessageInner(
   userId: string,
   conversationId: string,
   content: string,
   conversationContext?: import("@/lib/types").ConversationContext,
   attachments?: AttachmentRef[],
 ): Promise<void> {
+  // #8211 quiet-window (review P2): refuse BEFORE this function's own writes. The gate in
+  // startAgentSession sits after the messages INSERT, the attachment download into the user's
+  // working tree, the BYOK routing call and the status flip to active, so gating only there left a
+  // stored message, written files and a conversation stuck "active" with no session. No warm
+  // exemption: every message here ends in startAgentSession, whose gate refuses unconditionally, so
+  // an exemption would only move the refusal back below the writes. The prior session is never
+  // touched (nothing below runs), so it stays alive and registered.
+  if (await newAgentSessionsRefused()) {
+    log.info(
+      {
+        feature: "quiet-window",
+        op: "refuse-new-session",
+        surface: "agent-runner-send",
+        userIdHash: hashUserId(userId),
+      },
+      "quiet-window: refused a message before any write (new-sessions-paused)",
+    );
+    sendToClient(userId, { type: "error", message: QUIET_WINDOW_MESSAGE });
+    return;
+  }
+
   // feat-stream-since-disconnect (#5273) — turn boundary. Clear the prior
   // turn's replay frames (keeping the monotonic seq counter) so a new turn's
   // buffer starts fresh and a long, never-disconnected conversation doesn't

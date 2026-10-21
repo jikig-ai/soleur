@@ -99,6 +99,8 @@ import {
 import {
   classifySandboxStartupError,
   classifyBashSandboxFailure,
+  isPreExecSandboxDenialOutput,
+  BASH_UNAVAILABLE_NOTICE,
 } from "./sandbox-startup-classifier";
 import { redactCommandForDisplay } from "../lib/safety/redaction-allowlist";
 import { CC_ROUTER_TIER3_DENYLIST } from "./tool-tiers";
@@ -119,6 +121,7 @@ import {
 import { buildCrmTools } from "@/server/crm/crm-tools";
 import { updateConversationFor } from "./conversation-writer";
 import { registerLiveLoopProbe } from "./agent-session-registry";
+import { newAgentSessionsRefused, QUIET_WINDOW_MESSAGE, trackSessionStart } from "./quiet-window";
 import {
   getUserServiceTokens,
   patchWorkspacePermissions,
@@ -200,6 +203,9 @@ import {
   resolveC4FlagEnabled,
 } from "./resolve-c4-eligible";
 import { resolveUntrustedContentFlags } from "./resolve-untrusted-content-flags";
+import { resolveSandboxUnixDeny } from "./resolve-sandbox-unix-deny";
+import { sessionHasEgress } from "./agent-env";
+import { sandboxPostureOf, usesUnixDenyArtifact } from "./agent-sandbox-seccomp";
 import { parseConnectedRepo } from "./github-repo-parse";
 import { createProtectedBranchResolver } from "./resolve-protected-branches";
 import { emitDebugEvent } from "./debug-event";
@@ -350,8 +356,9 @@ export function shouldMirrorUnregisteredPlatformToolUse(
  * #10032 follow-up — mirror a Bash `tool_result` that carries a sandbox denial to Sentry.
  * Exported for unit testability. Per-user debounced; the event carries ONLY the scrubbed, capped matched
  * line (never the tool output, the command, or workspace paths) and the Error message is the classifier's
- * code, never the output. `helper_userns_eperm` pages through the Better Stack alert `agent_sandbox_bash_denial`
- * (betterstack-logs-alerts.tf); the other codes stay Sentry-only until #10052 (blocked on #7985).
+ * code, never the output. `helper_userns_eperm` and `helper_step_eperm` page through the Better Stack alert
+ * `agent_sandbox_bash_denial` (betterstack-logs-alerts.tf); the other codes stay Sentry-only until #10052 (blocked
+ * on #7985).
  */
 export function mirrorBashSandboxFailure(
   output: string,
@@ -360,6 +367,11 @@ export function mirrorBashSandboxFailure(
 ): void {
   const failure = classifyBashSandboxFailure(output);
   if (!failure) return;
+  // The artifact the conversation's sandbox config was PAIRED with at build time (undefined when the registry has no
+  // entry, e.g. a unit-test call). A plain socket EPERM is unclassified, so this field is the only artifact context
+  // a classified helper-line event carries. Looked up after the classify guard so the common unclassified result
+  // pays no registry lookup.
+  const seccompArtifact = _ccSeccompArtifact.get(makeAckPostureKey(userId, conversationId));
   // null first arg, never a real Error — the pino mirror captures a passed Error first as
   // `feature=pino-mirror` with no user and Sentry drops the tagged second capture (#8629). The code lives in
   // `message` and `extra`. Sibling emitters of this failure: the deploy canary's `SANDBOX_CANARY_FAIL` /
@@ -379,6 +391,7 @@ export function mirrorBashSandboxFailure(
         conversationId,
         sandboxErrorCode: failure.errorCode,
         sandboxStderr: failure.matchedLine,
+        ...(seccompArtifact ? { seccompArtifact } : {}),
       },
     },
     userId,
@@ -386,6 +399,19 @@ export function mirrorBashSandboxFailure(
     // `helper_userns_eperm` row that pages.
     `agent-sandbox-bash-tool-result:${failure.errorCode}`,
   );
+}
+
+/**
+ * #10455 c — the text streamed into the chat as a Bash block's output. A Bash tool_result that is, as a whole, ONE
+ * pre-exec platform denial (error-flagged, single non-blank line, any classified helper step except `waitpid` (all run before
+ * the tenant command) or a line starting `bwrap: ` that carries EPERM) is replaced by the fixed platform notice; everything else is returned unchanged. Applies to
+ * the streamed `command_stream` text only, in autonomous sessions only: the SDK-visible tool_result is not
+ * rewritable (no hook), so the model still sees the raw line and `BASH_UNAVAILABLE_PROMPT_DIRECTIVE` keys on it.
+ * The mirror event is emitted BEFORE this and reads the raw output, so the rewrite never removes the page.
+ * Exported for unit testability.
+ */
+export function selectCommandStreamOutput(output: string, isError: boolean | undefined): string {
+  return isPreExecSandboxDenialOutput(output, isError) ? BASH_UNAVAILABLE_NOTICE : output;
 }
 
 /**
@@ -439,6 +465,27 @@ const GH_403_PROMPT_DIRECTIVE =
   "re-consent — the Soleur platform diagnoses and repairs installation/" +
   "permission issues server-side and will retry with the correct installation " +
   "automatically. State only what the error literally says.";
+
+// #10455 c — a Bash call can fail because the platform's command sandbox did not start (the #10445 outage shape).
+// The model sees the RAW single-line error from the helper or bubblewrap (the SDK-visible tool_result cannot be
+// rewritten); only the user-facing stream is replaced by a plain notice. This directive keys on the raw line, keeps
+// the model from echoing it, and bounds the retry. It deliberately carves out the "report LITERAL output verbatim"
+// rule of GH_403_PROMPT_DIRECTIVE above, for these sandbox error lines only. It does not claim the command did not
+// run: a tenant or a prompt-injected file can print such a line after a command that ran.
+export const BASH_UNAVAILABLE_PROMPT_DIRECTIVE =
+  "## Command execution unavailable\n" +
+  "If a Bash call FAILED (its result is marked as an error) and its whole output is a single line starting with " +
+  "`apply-seccomp:` or `bwrap:` and ending in `Operation not permitted` (or `EPERM`), and it is not an " +
+  "`apply-seccomp: waitpid:` line " +
+  "(for example `apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted`), the platform's command " +
+  "sandbox failed to start. That is a platform problem, not a problem with the user's project or command. " +
+  "This takes precedence over the rule above to report literal command output verbatim, for these sandbox " +
+  "error lines only: do NOT quote, repeat, or paraphrase the raw sandbox text to the user, and do not " +
+  "speculate about its cause or suggest fixes. Say that command execution is temporarily unavailable on our " +
+  "side and that this is a platform issue, not a problem with their project. You may retry the SAME command " +
+  "ONCE, and only if it is read-only or idempotent (it changes nothing, or running it twice is harmless); " +
+  "otherwise ask the user before running it again. After a second failure with a sandbox error line, stop " +
+  "running commands, do not try again, and tell the user to try again later.";
 
 // #5041 follow-up — when no entitled GitHub token was minted for this
 // dispatch, the sandbox network allowlist is empty and every gh/git network
@@ -1307,6 +1354,29 @@ function makeAckPostureKey(userId: string, conversationId: string): string {
   return `${userId}:${conversationId}`;
 }
 
+// #10455 (a) — which seccomp artifact each live conversation's sandbox config is PAIRED with, so the classified
+// bash-tool-result mirror event can carry it (the only seccompArtifact surface that reaches Sentry / Better Stack).
+// The factory (`realSdkQueryFactory`) and the tool_result observer (`dispatchSoleurGo`) are different scopes, hence a
+// registry keyed like `_ccAutonomousAckPosture` and drained with it.
+type CcSeccompArtifact = "base" | "unixdeny";
+const _ccSeccompArtifact = new Map<string, CcSeccompArtifact>();
+
+/** Exported for unit testability. */
+export function recordCcSeccompArtifact<T extends { sandbox?: object }>(
+  userId: string,
+  conversationId: string,
+  opts: T,
+): T {
+  const posture = opts.sandbox ? sandboxPostureOf(opts.sandbox) : undefined;
+  if (posture) {
+    _ccSeccompArtifact.set(
+      makeAckPostureKey(userId, conversationId),
+      usesUnixDenyArtifact(posture.hasEgress, posture.unixDenyFlag) ? "unixdeny" : "base",
+    );
+  }
+  return opts;
+}
+
 /**
  * Register the per-conversation mutable ack-posture cell. Called from the
  * dispatch scope (per cold conversation). Idempotent overwrite — a warm-query
@@ -1665,6 +1735,7 @@ export function cleanupCcBashGatesForConversation(
   // P1 — drain the in-session ack-posture cell so it does not leak past the
   // conversation (and a reused conversationId can't inherit a prior ack).
   _ccAutonomousAckPosture.delete(makeAckPostureKey(userId, conversationId));
+  _ccSeccompArtifact.delete(makeAckPostureKey(userId, conversationId));
 }
 
 /**
@@ -2686,6 +2757,8 @@ export const realSdkQueryFactory: QueryFactory = async (
   // Always append the gh-403 honesty directive (feat-one-shot-concierge-gh-403)
   // — independent of repo/flag state, since any conversation can run `gh`.
   effectiveSystemPrompt += `\n\n${GH_403_PROMPT_DIRECTIVE}`;
+  // #10455 c — plain-language handling of a sandbox start failure (carves out the verbatim rule above).
+  effectiveSystemPrompt += `\n\n${BASH_UNAVAILABLE_PROMPT_DIRECTIVE}`;
   // feat-reasoning-chat-boxes (#5370) — narrate/summarize are always registered,
   // so the directive is appended unconditionally (mirrors GH_403's "always-on").
   effectiveSystemPrompt += `\n\n${NARRATION_PROMPT_DIRECTIVE}`;
@@ -3051,9 +3124,16 @@ export const realSdkQueryFactory: QueryFactory = async (
       ? await resolveUntrustedContentFlags(args.userId)
       : { classify: false, wrap: false };
 
+    // #10455 (a): runtime flag for the AF_UNIX-deny seccomp artifact; applies to no-egress sessions only
+    // (buildAgentEnv/buildAgentSandboxConfig read ghToken/webEgress from this same call). OFF on any error.
+    // An egress session never uses the variant whatever the flag says, so its turn does not wait on the flag at all
+    // (`sessionHasEgress` is the same predicate buildAgentEnv uses).
+    const sandboxUnixDeny = sessionHasEgress(ghToken, webEgress) ? false : await resolveSandboxUnixDeny();
+
     return sdkQuery({
       prompt: args.prompt,
-      options: buildAgentQueryOptions({
+      options: recordCcSeccompArtifact(args.userId, args.conversationId, buildAgentQueryOptions({
+        sandboxUnixDeny,
         // ADR-113 — agentWorkspacePath = pluginPath for support (sandbox +
         // file-tool containment target the corpus root), the user's workspace for
         // Command Center. `mode` drives cwd + the sandbox write-set from the same
@@ -3191,7 +3271,7 @@ export const realSdkQueryFactory: QueryFactory = async (
         // as a separate matcher-less PreToolUse entry (full-surface capture).
         // Flushed once at `handleCcCloseQuery`. Observe-only + fail-open.
         toolAttemptPreToolUseHook: toolAttemptCollector.preToolUseHook,
-      }),
+      })),
     });
   } catch (err) {
     // #5274 PR B — release the write-lease if it was acquired just above before
@@ -3217,6 +3297,7 @@ export const realSdkQueryFactory: QueryFactory = async (
     // never runs → the cell leaks. Fold its cleanup into this same F1 cleanup path.
     // No-op when the ack posture was never registered (e.g. threw before line ~1734).
     _ccAutonomousAckPosture.delete(makeAckPostureKey(args.userId, args.conversationId));
+    _ccSeccompArtifact.delete(makeAckPostureKey(args.userId, args.conversationId));
     // No askpass cleanup needed here: the helper is a fixed-name, token-free
     // file reused per workspace (written into `.git/`), so a startup throw
     // leaves nothing to leak (item 1).
@@ -3284,6 +3365,14 @@ let _runnerSendToClient:
 export function hasActiveCcQuery(conversationId: string): boolean {
   if (!_runner) return false;
   return _runner.hasActiveQuery(conversationId);
+}
+
+/**
+ * #8211 quiet-window read — the number of live cc-soleur-go Queries on this
+ * host. A bare count (never conversation ids). 0 when no runner exists yet.
+ */
+export function activeCcQueryCount(): number {
+  return _runner ? _runner.activeQueriesSize() : 0;
 }
 
 // Register into the shared cross-lineage liveness predicate
@@ -3825,6 +3914,19 @@ async function reportDispatchSoleurGoError(
 export async function dispatchSoleurGo(
   args: DispatchSoleurGoArgs,
 ): Promise<void> {
+  // #8211 quiet-window: held for the whole call so the live-session line cannot read 0 while a start
+  // that passed the gate is still resolving its workspace / cloning / leasing (its Query registers late).
+  const releaseStart = trackSessionStart();
+  try {
+    return await dispatchSoleurGoInner(args);
+  } finally {
+    releaseStart();
+  }
+}
+
+async function dispatchSoleurGoInner(
+  args: DispatchSoleurGoArgs,
+): Promise<void> {
   const {
     userId,
     conversationId,
@@ -3842,6 +3944,28 @@ export async function dispatchSoleurGo(
     attachments,
     onSessionIdPersisted,
   } = args;
+
+  // #8211 quiet-window — refuse a NEW agent session while the kill-switch is on.
+  // "New" = this conversation has no live Query, so a warm turn on a running
+  // session never reaches the refusal and is never dropped or altered. This sits
+  // ABOVE the ownership write, the user-message INSERT and the status flip, so a
+  // refused turn leaves no row behind and the conversation keeps its last honest
+  // status. Sent as an `error` frame with NO errorCode (the client renders the
+  // text as a chat message, same as the repo `cloning` block). Info breadcrumb
+  // only, no Sentry: an owner-set maintenance window is not an incident.
+  if (!hasActiveCcQuery(conversationId) && (await newAgentSessionsRefused())) {
+    log.info(
+      {
+        feature: "quiet-window",
+        op: "refuse-new-session",
+        surface: "cc-dispatcher",
+        userIdHash: hashUserId(userId),
+      },
+      "quiet-window: refused a new agent session (new-sessions-paused)",
+    );
+    sendToClient(userId, { type: "error", message: QUIET_WINDOW_MESSAGE });
+    return;
+  }
 
   // Verify conversation ownership AND bump `last_active` in a single
   // round-trip. `updateConversationFor` with `expectMatch: true` runs the
@@ -4610,9 +4734,10 @@ export async function dispatchSoleurGo(
       // gate (TR4) with a fallthrough probe → Sentry. Emit failures mirror.
       if (!bashAutonomousPosture) return;
       try {
-        // 1) Per-chunk cap on the RAW output (caps regex back-tracking too).
+        // 1) Per-chunk cap on the RAW output (caps regex back-tracking too). #10455 c: a lone pre-exec platform
+        //    denial is swapped for the fixed notice first (the mirror above already read the raw output).
         const chunkCapped = capUtf8Bytes(
-          block.output,
+          selectCommandStreamOutput(block.output, block.isError),
           COMMAND_STREAM_CHUNK_CAP_BYTES,
         );
 
@@ -5209,6 +5334,7 @@ export function __resetDispatcherForTests(): void {
   _runnerSendToClient = null;
   _ccBashGates.clear();
   _ccAutonomousAckPosture.clear();
+  _ccSeccompArtifact.clear();
   // Held worktree-lease records registered via the
   // `__registerCcWorktreeLeaseForTests` seam must not leak across tests.
   _ccWorktreeLeases.clear();
