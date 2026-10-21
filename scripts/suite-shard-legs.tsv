@@ -2,8 +2,8 @@
 # n=8
 # generated-from-run=incremental
 # generated-from-runs=incremental
-# default-weight-ms=1184
-# generated-at=2026-10-18T01:51:18Z
+# default-weight-ms=1200
+# generated-at=2026-10-19T13:55:54Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -374,6 +374,7 @@ scripts/followthroughs/ci-push-dedupe-soak-9512	3
 scripts/followthroughs/inngest-provision-rehearsal-capture	8
 scripts/followthroughs/pr-battery-gate-saving-9323	4
 scripts/followthroughs/registry-clientip-alert-7530	1
+scripts/followthroughs/sdk-bash-smoke-verdict-10548	1
 scripts/followthroughs/t5-skip-persistence-bound-7510	8
 scripts/followthroughs/tty-ack-migration-9387	7
 scripts/generate-kb-index-live	7
@@ -398,6 +399,7 @@ scripts/inngest-provision-unit-8562	5
 scripts/inngest-restart-age-gate	1
 scripts/inngest-restart-poll-classify	3
 scripts/inngest-soak-6178	7
+scripts/inngest-tls-soak-10136	1
 scripts/inngest-zot-boot-7462	5
 scripts/inngest-zot-client-authz-6500	3
 scripts/learning-retrieval-bench	7
@@ -425,6 +427,7 @@ scripts/lint-agents-rule-budget-live	6
 scripts/lint-agents-rule-budget-unit	6
 scripts/lint-anthropic-content-position	7
 scripts/lint-anthropic-content-position-live	4
+scripts/lint-art30-reverification-unit	1
 scripts/lint-credential-path-literals	4
 scripts/lint-diagnosis-claims	3
 scripts/lint-doppler-description-length-live	7
@@ -509,7 +512,6 @@ scripts/supabase-watchdog-classify	5
 scripts/sweep-followthroughs	8
 scripts/tenant-dpa-register-guard-live	2
 scripts/tenant-dpa-register-guard-unit	1
-scripts/tenant-outer-wrap-soak-5863	3
 scripts/test-affected-derive	2
 scripts/test-affected-derive-cache	2
 scripts/test-affected-kb-consumers	4

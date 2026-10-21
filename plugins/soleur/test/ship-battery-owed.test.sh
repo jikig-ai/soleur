@@ -759,21 +759,25 @@ fi
 
 # /ship --full runs the FULL battery unconditionally — before battery-owed.sh
 # is even consulted, so a SKIPPABLE verdict cannot demote an explicit ask.
-if printf '%s\n' "$DISPATCH" | grep -c >/dev/null 'test-all\.sh --full' \
+# Since #9307 the command is the plugin gate `affected-tests.sh --full`, which
+# delegates `--full` to a capability-positive runner — the mode flag is the pin.
+if printf '%s\n' "$DISPATCH" | grep -c >/dev/null 'affected-tests\.sh" --full\|affected-tests\.sh --full' \
    && ! printf '%s\n' "$DISPATCH" | grep -c >/dev/null 'battery-owed\.sh.*--full'; then
-  assert_eq "ok" "ok" "T16b the FULL_BATTERY arm runs test-all.sh --full unconditionally"
+  assert_eq "ok" "ok" "T16b the FULL_BATTERY arm runs affected-tests.sh --full unconditionally"
 else
   assert_eq "MISSING" "ok" "T16b the FULL_BATTERY arm does not run --full — operator opt-in demoted"
 fi
 
-# The OWED arm runs the AFFECTED gate. Extract the else-branch: the lines
-# between the battery-owed verdict check and the closing fi.
+# The OWED arm runs the AFFECTED gate — the plugin gate's bare spelling, which
+# delegates `--affected` to a capability-positive runner (#9307). Extract the
+# else-branch: the lines between the battery-owed verdict check and the
+# closing fi.
 OWED_ARM="$(printf '%s\n' "$DISPATCH" | awk '/battery-owed\.sh/{f=1} f{print}')"
-if printf '%s\n' "$OWED_ARM" | grep -c >/dev/null 'test-all\.sh --affected' \
-   && ! printf '%s\n' "$OWED_ARM" | grep -c >/dev/null 'test-all\.sh --full'; then
-  assert_eq "ok" "ok" "T16c the OWED arm runs --affected, never --full"
+if printf '%s\n' "$OWED_ARM" | grep -c >/dev/null 'affected-tests\.sh' \
+   && ! printf '%s\n' "$OWED_ARM" | grep -c >/dev/null 'affected-tests\.sh" --full\|affected-tests\.sh --full\|test-all\.sh --full'; then
+  assert_eq "ok" "ok" "T16c the OWED arm runs the affected gate, never --full"
 else
-  assert_eq "MISSING" "ok" "T16c the OWED arm does not run --affected — default gate demoted"
+  assert_eq "MISSING" "ok" "T16c the OWED arm does not run the affected gate — default gate demoted"
 fi
 
 # 42 is still the ONLY skip. The dispatch must keep `rc -eq 42` as the skip

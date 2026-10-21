@@ -232,6 +232,8 @@ longer an outstanding obligation.
 
 ### Re-verification triggers
 
+The check executes knowledge-base/legal/art30-reverification-triggers.yml. This list stays numbered 1 through 7. That file is the predicate.
+
 **Triggers 3 and 4 have already fired, and this section records that rather
 than leaving them in the future tense.** Both were discharged on 2026-09-06 by
 the corrections above; the measurement they would have called for is the one

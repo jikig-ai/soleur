@@ -152,8 +152,9 @@ resource "logtail_exploration_alert" "monitor_send_failed" {
 
   # The one field most likely rendered in the email, so it carries a CLICKABLE runbook URL —
   # a repo path is not actionable for a non-technical reader. A count alert's email carries no
-  # row text; the runbook's step 1 is the readback SQL that names the marker.
-  incident_cause = "SOLEUR_*_SEND_FAILED / _REFUSED row from a web-1 monitor unit — the monitor's own Resend/Sentry send failed. Runbook: ${local.monitor_send_failed_runbook_url}"
+  # row text; the runbook's step 1 is the readback SQL that names the marker. Host-neutral on purpose
+  # (#10136): since the Inngest host's TLS check opted in, a page can come from that host and not web-1.
+  incident_cause = "SOLEUR_*_SEND_FAILED / _REFUSED row from a host monitor unit — either a web-1 monitor's own Resend/Sentry send failed, or the Inngest host's TLS check logged SOLEUR_INNGEST_TLS_REFUSED (listener down or certificate near expiry). The runbook's readback names the marker and the host. Runbook: ${local.monitor_send_failed_runbook_url}"
   metadata = {
     runbook = local.monitor_send_failed_runbook_url
   }
@@ -1651,10 +1652,13 @@ resource "logtail_exploration_alert" "registry_zot_log_credential_shape" {
 # WHAT IT DETECTS. A hosted agent's Bash tool_result carried the SDK command-side helper's own line
 #   apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted
 # (the shim's seccomp filter is inherited by the helper, which then cannot create its user namespace; every
-# Bash call in the session fails). server/cc-dispatcher.ts `mirrorBashSandboxFailure` classifies the output
-# (server/sandbox-startup-classifier.ts `classifyBashSandboxFailure`, errorCode `helper_userns_eperm`) and
-# mirrors ONE pino row per user per debounce window: feature `agent-sandbox`, op `bash-tool-result`, with the
-# code in `extra.sandboxErrorCode`. The row lands in this same prd Logs source under the app container.
+# Bash call in the session fails), or the same helper failing with EPERM at ANY other of its steps (#10455 e: an exact
+# allowlist of the 16 step strings in the vendored binary). server/cc-dispatcher.ts `mirrorBashSandboxFailure`
+# classifies the output (server/sandbox-startup-classifier.ts `classifyBashSandboxFailure`; errorCode
+# `helper_userns_eperm` for the userns step, `helper_step_eperm` for every other step, and the predicate below pages on
+# BOTH) and mirrors ONE pino row per user per debounce window per code: feature `agent-sandbox`, op
+# `bash-tool-result`, with the code in `extra.sandboxErrorCode`. The row lands in this same prd Logs source under the
+# app container.
 #
 # ROW SHAPE (verified on sibling pino rows that reach this source, 2026-10-16; no row of THIS emitter had ever arrived, so
 # its first real hit is its positive control): `raw.CONTAINER_NAME` is
@@ -1680,7 +1684,7 @@ locals {
       AND JSONExtractString(raw, 'CONTAINER_NAME') = 'soleur-web-platform'
       AND JSONExtractString(raw, 'message', 'feature') = 'agent-sandbox'
       AND JSONExtractString(raw, 'message', 'op') = 'bash-tool-result'
-      AND JSONExtractString(raw, 'message', 'sandboxErrorCode') = 'helper_userns_eperm'
+      AND JSONExtractString(raw, 'message', 'sandboxErrorCode') IN ('helper_userns_eperm', 'helper_step_eperm')
     GROUP BY time
   SQL
 
@@ -1732,9 +1736,105 @@ resource "logtail_exploration_alert" "agent_sandbox_bash_denial" {
   sms            = false
   critical_alert = false
 
-  incident_cause = "A live hosted-agent Bash call failed in the SDK apply-seccomp helper (apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted), so Bash is unavailable to the affected tenant session(s). The row is the app container's op=bash-tool-result mirror with sandboxErrorCode=helper_userns_eperm; it carries only the scrubbed matched line, so read the count and timestamps via the runbook Query block without SSH. This incident auto-resolves after 10 quiet minutes; resolution does NOT mean the cause was fixed. Runbook: ${local.agent_sandbox_bash_denial_runbook_url}"
+  incident_cause = "A live hosted-agent Bash call failed in a step of the SDK apply-seccomp helper (for example apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted), so Bash is unavailable to the affected tenant session(s). The row is the app container's op=bash-tool-result mirror with sandboxErrorCode=helper_userns_eperm (the user-namespace step) or helper_step_eperm (any other helper step); it carries only the matched line, so read the count and timestamps via the runbook Query block without SSH. This incident auto-resolves after 10 quiet minutes; resolution does NOT mean the cause was fixed. Runbook: ${local.agent_sandbox_bash_denial_runbook_url}"
   metadata = {
     runbook = local.agent_sandbox_bash_denial_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+# ── #10453: the deploy-time SDK Bash smoke reported the build cannot run a real wrapped Bash call ──
+# WHAT IT DETECTS. ci-deploy.sh `run_sdk_bash_smoke` (non-blocking, ADR-079 addendum 2026-10-19) execs the baked
+# `infra/lib/sdk-bash-probe.mjs` in the CANARY container and runs ONE real Bash call through the real Agent SDK, the
+# shipped shim and the production sandbox config. When the probe's verdict is `sdk_bash_smoke_failed` (Bash was dispatched
+# and the per-run nonce did not come back, or the call hung, or the tool_result carries a sandbox error) the script writes
+# exactly one journald row under `logger -t ci-deploy` through `sandbox_canary_sentry_event`, whose message STARTS with
+#   SANDBOX_CANARY_FAIL: verdict=sandbox_broken reason=sdk_bash_smoke_failed: <detail> sdk= (op=sandbox-canary; report-only canary, never gated)
+# This is the #10445 shape the faithful canary was blind to (its replay ends in `-- true` and never runs the command-side
+# wrapper); the smoke closes it on the deploy that carries the break, with no tenant text and no Vector-side dependence
+# beyond the journald shipper every ci-deploy row already uses.
+#
+# THREE conjuncts, and each is load-bearing (CTO ruling 2026-10-19):
+#   * SYSLOG_IDENTIFIER = 'ci-deploy' — a row that merely QUOTES the marker (inngest ships GitHub-webhook logs quoting issue
+#     and PR bodies to this same source under another identifier) cannot alert;
+#   * startsWith(message, '…verdict=sandbox_broken reason=sdk_bash_smoke_failed') — the `reason=` needle is MANDATORY: the
+#     inner faithful canary's `bwrap_*` rows share the `verdict=sandbox_broken` prefix, and so did the standing outer-wrap rows
+#     (retired by #10454, still in the 90-day retention window);
+#   * position(message, '(op=sandbox-canary;') > 0 — the `;` terminator keeps `op=sandbox-canary-outer-wrap` out.
+# `smoke_infra_error` does NOT page (it is the smoke's own failure to run; three in a row warn through Sentry as
+# SDK_BASH_SMOKE_STALE). NO host_name conjunct, on purpose, the same divergence bwrap_probe_rollback records above: the
+# signal belongs to every deploy host and a host conjunct would silence web-2.
+#
+# Paging semantics are bwrap_probe_rollback's (ADR-218): one matching row in the 5-min window alerts, treat_as_zero so the
+# open incident observes recovery; on the free tier the channel is team email only. ONE row per failed deploy, so the alert
+# cannot flap. The drift guard (test/infra/faithful-canary-sandbox-alert.test.sh) reads all three needles FROM ci-deploy.sh.
+# Both -target= lines are enforced only by that guard (see header step 4).
+locals {
+  faithful_canary_sandbox_broken_sql = <<-SQL
+    SELECT {{time}} AS time, count(*) AS value
+    FROM {{source}}
+    WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'ci-deploy'
+      AND startsWith(JSONExtractString(raw, 'message'), 'SANDBOX_CANARY_FAIL: verdict=sandbox_broken reason=sdk_bash_smoke_failed')
+      AND position(JSONExtractString(raw, 'message'), '(op=sandbox-canary;') > 0
+    GROUP BY time
+  SQL
+
+  faithful_canary_sandbox_broken_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/canary-probe-set.md#sdk-bash-smoke-and-the-helper_userns_eperm-denial-10445"
+}
+
+resource "logtail_exploration" "faithful_canary_sandbox_broken" {
+  name      = "soleur-faithful-canary-sandbox-broken-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.faithful_canary_sandbox_broken_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "faithful_canary_sandbox_broken" {
+  exploration_id = logtail_exploration.faithful_canary_sandbox_broken.id
+  name           = "soleur-faithful-canary-sandbox-broken-prd"
+
+  # bwrap_probe_rollback's values: one row alerts within about a minute, the 5-min window holds ONE incident across a CI
+  # retry's repeated failed-smoke rows, and 10 quiet minutes auto-resolve it.
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 60
+  query_period        = 300
+  confirmation_period = 0
+  recovery_period     = 600
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "Report-only signal (the smoke does not gate the deploy): a canary build could not run one real wrapped Bash call through the real Agent SDK, the shim and the production sandbox config (reason sdk_bash_smoke_failed). The deploy was NOT rolled back and this build is promoted to production in the same run: treat hosted Bash as failing in production until the reason is read and cleared (the 2026-10-06 incident shape, #10445); if only the AF_UNIX variant fails the consequence applies only once the agent-sandbox-unix-deny flag is ON. The email has no row body: read the failure detail without SSH from the deploy-status field sdk_bash_smoke (reason carries the first sandbox error line) or the runbook's Query block. This incident auto-resolves after 10 quiet minutes; resolution does NOT mean the cause was fixed. Runbook: ${local.faithful_canary_sandbox_broken_runbook_url}"
+  metadata = {
+    runbook = local.faithful_canary_sandbox_broken_runbook_url
   }
 
   escalation_target {

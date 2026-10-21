@@ -11,6 +11,10 @@
  *   3. Strip trailing `.git` case-insensitively (suffix-anchored so
  *      `bar.git.bak` is left alone).
  *   4. Strip trailing `/` (one or more).
+ *   5. Re-trim whitespace a suffix strip can expose (`foo .git` →
+ *      `foo `): the function's idempotence contract requires the
+ *      output to be trim-stable. Defect found by the fast-check
+ *      property suite (test/lib/repo-url.property.test.ts).
  *
  * Non-URL input passes through as the trimmed + string-only-op'd value.
  * `null`/`undefined`/`""` → `""`.
@@ -56,6 +60,11 @@ export function normalizeRepoUrl(raw: string | null | undefined): string {
   working = working.replace(/(\.git)+$/i, "");
   // Strip any trailing `/` the `.git` strip may have exposed.
   working = working.replace(/\/+$/, "");
+  // Re-trim: a `/` or `.git` strip can expose whitespace it was shielding
+  // ("foo .git" -> "foo ", "x /" -> "x "), and an output with trailing
+  // whitespace is not a fixpoint — the next call's input trim() would
+  // move the value again, breaking the documented idempotence contract.
+  working = working.trim();
 
   return working;
 }

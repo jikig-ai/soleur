@@ -280,7 +280,9 @@ readonly PROD_NODE_MAX_OLD_SPACE_MB="${PROD_NODE_MAX_OLD_SPACE_MB:-3072}"
 readonly CANARY_NODE_MAX_OLD_SPACE_MB="${CANARY_NODE_MAX_OLD_SPACE_MB:-1152}"
 
 # Plugin bind-mount target. Test harness overrides via env so the seed block
-# writes under a tmpdir instead of /mnt/data (which the GH runner cannot create).
+# writes under a tmpdir instead of /mnt/data (which the GH runner cannot create)
+# — paired with PLUGIN_MOUNT_DIR_ALLOW_UNSAFE=1, the harness-only opt-out of the
+# mount shape guard that runs before the seed's container-side `find -delete`.
 PLUGIN_MOUNT_DIR="${PLUGIN_MOUNT_DIR:-/mnt/data/plugins/soleur}"
 
 # -----------------------------------------------------------------------------
@@ -430,21 +432,6 @@ CRON_DRAIN_STATE_FILE="${CRON_DRAIN_STATE_FILE:-/var/run/ci-deploy-cron-drain.js
 # durability tier as CRON_DEPLOY_LEASE_FILE. Reader default MUST match
 # cat-deploy-state.sh sandbox_canary_json().
 SANDBOX_CANARY_STATE_FILE="${SANDBOX_CANARY_STATE_FILE:-/mnt/data/ci-deploy-sandbox-canary.json}"
-# #5863 arm F: the outer-wrap canary gets its OWN durable soak state — same
-# cross-deploy accumulator shape as the inner canary but a separate ledger so
-# the two arms' soak windows never alias. Report-only at first deploy
-# (wg-dark-launch-deploy-gates); the #5863 follow-through script reads this
-# file via /hooks/deploy-status's outer_wrap_canary field.
-SANDBOX_OUTER_WRAP_CANARY_STATE_FILE="${SANDBOX_OUTER_WRAP_CANARY_STATE_FILE:-/mnt/data/ci-deploy-outer-wrap-canary.json}"
-# Aliasing guard: an env override pointing the outer ledger at the inner file
-# would let the #5863 soak read the #8752 arm's state (wrong mechanism's
-# greens counting toward promotion). Warn AND skip the outer arm entirely —
-# interleaved writes under one file is worse than a missing arm.
-OUTER_LEDGER_ALIAS=0
-if [[ "$SANDBOX_OUTER_WRAP_CANARY_STATE_FILE" == "$SANDBOX_CANARY_STATE_FILE" ]]; then
-  OUTER_LEDGER_ALIAS=1
-  logger -t "$LOG_TAG" "SANDBOX_OUTER_WRAP_CANARY_STATE_FILE == SANDBOX_CANARY_STATE_FILE ($SANDBOX_OUTER_WRAP_CANARY_STATE_FILE) — outer canary SKIPPED: aliasing would let the inner ledger's greens count toward the #5863 soak; fix the env override"
-fi
 # Where the canary payload + fixture live INSIDE the image (Dockerfile COPY).
 SANDBOX_CANARY_MJS="${SANDBOX_CANARY_MJS:-/app/scripts/sandbox-canary.mjs}"
 # Cross-workspace isolation probe verdict (#2640). Written per deploy by
@@ -464,15 +451,42 @@ WORKSPACE_ISOLATION_TIMEOUT="${WORKSPACE_ISOLATION_TIMEOUT:-300}"
 # 0/non-numeric would DISABLE the cap (timeout(1) treats 0 as unbounded) —
 # that is the opposite of the knob's contract; fail-safe back to the default.
 [[ "$WORKSPACE_ISOLATION_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || WORKSPACE_ISOLATION_TIMEOUT=300
-# Same aliasing failure class as OUTER_LEDGER_ALIAS above: an env override
-# pointing the #2640 ledger at either canary ledger would interleave verdict
-# vocabularies (sandbox_broken vs workspace_isolation_*) and corrupt both
-# soaks. Warn AND skip the probe entirely — a missing arm beats a wrong file.
+# Aliasing guard: an env override pointing the #2640 ledger at the canary
+# ledger would interleave verdict vocabularies (sandbox_broken vs
+# workspace_isolation_*) and corrupt both soaks. Warn AND skip the probe
+# entirely — a missing arm beats a wrong file.
 WORKSPACE_ISOLATION_LEDGER_ALIAS=0
-if [[ "$WORKSPACE_ISOLATION_STATE_FILE" == "$SANDBOX_CANARY_STATE_FILE" \
-   || "$WORKSPACE_ISOLATION_STATE_FILE" == "$SANDBOX_OUTER_WRAP_CANARY_STATE_FILE" ]]; then
+if [[ "$WORKSPACE_ISOLATION_STATE_FILE" == "$SANDBOX_CANARY_STATE_FILE" ]]; then
   WORKSPACE_ISOLATION_LEDGER_ALIAS=1
   logger -t "$LOG_TAG" "WORKSPACE_ISOLATION_STATE_FILE aliases a canary ledger ($WORKSPACE_ISOLATION_STATE_FILE) — workspace-isolation probe SKIPPED: interleaved writes would corrupt both soaks; fix the env override" || true
+fi
+# Deploy-time SDK Bash smoke verdict (#10453, ADR-079 addendum 2026-10-19). Written per deploy by run_sdk_bash_smoke through
+# write_sandbox_canary_state (one atomic write, extra-JSON argument carrying `coverage` and `consecutive_infra_error`),
+# surfaced on /hooks/deploy-status by cat-deploy-state.sh (sdk_bash_smoke_json). DURABLE on purpose, same /mnt/data rationale as
+# SANDBOX_CANARY_STATE_FILE above: the file alone carries the promotion soak's CROSS-DEPLOY accumulator (consecutive_pass +
+# first_pass_at) and the stale-probe counter. Reader default MUST match cat-deploy-state.sh sdk_bash_smoke_json().
+SDK_BASH_SMOKE_STATE_FILE="${SDK_BASH_SMOKE_STATE_FILE:-/mnt/data/ci-deploy-sdk-bash-smoke.json}"
+# The ledger identity stamp of the smoke (the write_sandbox_canary_state $6 argument). ONE variable for every use in this file;
+# cat-deploy-state.sh keeps its own literal (it is a separate script on the host) and ci-deploy.test.sh pins the two equal.
+readonly SDK_BASH_SMOKE_LEDGER_STAMP="sdk-bash-smoke"
+# The probe baked into the image (Dockerfile `COPY --from=builder /app/infra/lib/sdk-bash-probe.mjs`). An image that predates
+# it is `smoke_infra_error reason=probe_absent`; test/sdk-bash-probe-parity.test.ts pins this path to the Dockerfile COPY.
+SDK_BASH_SMOKE_PROBE="${SDK_BASH_SMOKE_PROBE:-/app/infra/lib/sdk-bash-probe.mjs}"
+# Host-side cap on the smoke's PROBE `docker exec`, above the probe's own 120 s internal cap (a hang INSIDE the probe is reported
+# by the probe; this fires only when the probe itself is wedged). Same 0/non-numeric fail-safe as WORKSPACE_ISOLATION_TIMEOUT.
+SDK_BASH_SMOKE_TIMEOUT="${SDK_BASH_SMOKE_TIMEOUT:-150}"
+[[ "$SDK_BASH_SMOKE_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || SDK_BASH_SMOKE_TIMEOUT=150
+# Separate, much shorter cap on the PRE-exec (probe presence + container HOME: a `test -f` and a printf). It used to share the
+# 150 s cap, so a wedged daemon could burn 150 s before the probe even started. The smoke's total time is therefore bounded
+# by SDK_BASH_SMOKE_PREEXEC_TIMEOUT + SDK_BASH_SMOKE_TIMEOUT (170 s by default), plus the bounded DIAG bundle on a failure.
+SDK_BASH_SMOKE_PREEXEC_TIMEOUT="${SDK_BASH_SMOKE_PREEXEC_TIMEOUT:-20}"
+[[ "$SDK_BASH_SMOKE_PREEXEC_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || SDK_BASH_SMOKE_PREEXEC_TIMEOUT=20
+# Aliasing guard (the WORKSPACE_ISOLATION_LEDGER_ALIAS pattern): an env override pointing the smoke ledger at another
+# canary ledger would interleave verdict vocabularies and corrupt both soaks. Warn AND skip the smoke.
+SDK_BASH_SMOKE_LEDGER_ALIAS=0
+if [[ "$SDK_BASH_SMOKE_STATE_FILE" == "$SANDBOX_CANARY_STATE_FILE" || "$SDK_BASH_SMOKE_STATE_FILE" == "$WORKSPACE_ISOLATION_STATE_FILE" ]]; then
+  SDK_BASH_SMOKE_LEDGER_ALIAS=1
+  logger -t "$LOG_TAG" "SDK_BASH_SMOKE_STATE_FILE aliases another canary ledger ($SDK_BASH_SMOKE_STATE_FILE) — SDK Bash smoke SKIPPED: interleaved writes would corrupt both soaks; fix the env override" || true
 fi
 # #8609: the GitHub App key probe baked into the image (Dockerfile `COPY --from=builder
 # /app/scripts/github-app-key-probe.mjs ./scripts/…` under WORKDIR /app). soleur-host-bootstrap.sh's
@@ -546,10 +560,43 @@ write_state() {
       gak+=",\"github_app_key_probe_reason\":\"$(_gak_enum "$GITHUB_APP_KEY_PROBE_REASON" 'no_app_id|unparseable_key|http_401|http_404|wrong_app|http_other|unspecified|no_verdict')\""
     fi
   fi
+  # #8743 Phase 2 (ADR-068 constraint (c)): persist `fanout_peers` — the
+  # EFFECTIVE SOLEUR_DEPLOY_PEERS list (blank-stripped, minus this host's own
+  # IPs) — so cat-deploy-state.sh's `peers` merge knows which peer hosts to
+  # poll for the per-host verdict. ABSENT when unset or filtered empty: a
+  # deploy-peer-received run never carries it (no re-fan → the merge is inert
+  # on a peer and cannot recurse). THE FILTER IS THE SAME ONE fan_out_to_peers
+  # applies — keep in sync. Deliberately duplicated rather than shared: the
+  # fan-out test harness extracts fan_out_to_peers' body alone.
+  local fp=""
+  if [[ -n "${SOLEUR_DEPLOY_PEERS:-}" ]]; then
+    local _fp_self _fp _fp_csv="" _fp_json="" _fp_arr
+    _fp_self=" $(ip -4 -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | tr '\n' ' ') "
+    # Fail-safe (review finding): when the self-IP probe yields NOTHING the
+    # filter below cannot exclude this host's own address, so a persisted list
+    # could contain self and make cat-deploy-state.sh's peers merge poll the
+    # host's own hook (self-slot recursion). An empty probe persists NO
+    # fanout_peers rather than an unfiltered one.
+    if [[ -n "${_fp_self// /}" ]]; then
+    IFS=',' read -ra _fp_arr <<< "$SOLEUR_DEPLOY_PEERS"
+    for _fp in "${_fp_arr[@]}"; do
+      _fp="${_fp//[[:space:]]/}"
+      [[ -n "$_fp" ]] || continue
+      [[ "$_fp_self" == *" $_fp "* ]] && continue
+      _fp_csv+="${_fp_csv:+,}$_fp"
+    done
+    if [[ -n "$_fp_csv" ]]; then
+      # JSON-escaped via jq — the peer list is webhook-payload-derived and must
+      # never be able to corrupt the state document.
+      _fp_json="$(printf '%s' "$_fp_csv" | jq -Rs . 2>/dev/null || true)"
+      [[ -n "$_fp_json" ]] && fp=",\"fanout_peers\":$_fp_json"
+    fi
+    fi
+  fi
   # start_ts: schema-stable, consumed by web-platform-release.yml elapsed
   # annotation (#3398). Do NOT rename without updating that workflow.
-  printf '{"start_ts":%d,"end_ts":%d,"exit_code":%d,"component":"%s","image":"%s","tag":"%s","reason":"%s"%s}\n' \
-    "$START_TS" "$(date +%s)" "$exit_code" "${COMPONENT:-}" "${IMAGE:-}" "${TAG:-}" "$reason" "$gak" \
+  printf '{"start_ts":%d,"end_ts":%d,"exit_code":%d,"component":"%s","image":"%s","tag":"%s","reason":"%s"%s%s}\n' \
+    "$START_TS" "$(date +%s)" "$exit_code" "${COMPONENT:-}" "${IMAGE:-}" "${TAG:-}" "$reason" "$gak" "$fp" \
     > "$tmp" 2>/dev/null || {
     logger -t "$LOG_TAG" "write_state: printf/redirect failed"
     rm -f "$tmp"
@@ -695,21 +742,26 @@ write_cron_drain_state() {
 #                       deploy — no operator timestamp to hand-pin).
 #   - `sandbox_broken`→ reset both to 0 (a faithful FAIL restarts the soak).
 #     (reset set is actually $5 reset_re — `sandbox_broken` is just the
-#     default for the faithful/outer-wrap callers; the #2640 probe passes its
+#     default for the faithful caller; the #2640 probe passes its
 #     own RED classes.)
 #   - infra_error/*   → HOLD prior counters (a docker/exec hiccup or the
 #                       dark-launch `fixture_uncaptured` state is a non-signal).
+# $7 extra (optional): a JSON OBJECT merged into the one atomic write (the SDK Bash smoke's `coverage` and
+# `consecutive_infra_error`), so a verdict and the fields that qualify it can never be observed apart. An argument that is not
+# a JSON object is ignored (the base record is still written). Internal literal from the call site, never operator input.
 # $6 ledger: an identity stamp naming WHICH mechanism's ledger this write
-# belongs to (the Sentry-op vocabulary: sandbox-canary / sandbox-canary-
-# outer-wrap / workspace-isolation). The readers in cat-deploy-state.sh refuse
+# belongs to (the Sentry-op vocabulary: sandbox-canary / workspace-isolation).
+# The readers in cat-deploy-state.sh refuse
 # a file whose stamp is present-but-foreign — closing the env-alias blind spot
 # where an override points a canary ledger AT another ledger's path and foreign
 # `pass` verdicts would otherwise inflate the wrong soak.
 write_sandbox_canary_state() {
   # $5 reset_re: an ERE alternation naming this ledger's RED verdict classes
   # (soak-reset). Internal literal from the call sites, never operator input.
-  local verdict="$1" reason="$2" sdk_version="${3:-}" state_file="${4:-$SANDBOX_CANARY_STATE_FILE}" reset_re="${5:-sandbox_broken}" ledger="${6:-sandbox-canary}" tmp now prior_pass prior_first
+  local verdict="$1" reason="$2" sdk_version="${3:-}" state_file="${4:-$SANDBOX_CANARY_STATE_FILE}" reset_re="${5:-sandbox_broken}" ledger="${6:-sandbox-canary}" extra="${7:-}" tmp now prior_pass prior_first
   now="$(date +%s)"
+  if [[ -n "$extra" ]] && ! jq -e 'type == "object"' <<<"$extra" >/dev/null 2>&1; then extra=""; fi
+  [[ -n "$extra" ]] || extra='{}'
   prior_pass=0; prior_first=0
   if [[ -f "$state_file" ]]; then
     # Foreign-ledger guard: a file carrying another mechanism's `ledger` stamp
@@ -740,8 +792,8 @@ write_sandbox_canary_state() {
   tmp="$(mktemp "${state_file}.XXXXXX" 2>/dev/null)" || return 0
   jq -nc \
     --arg v "$verdict" --arg r "$reason" --arg s "$sdk_version" --arg l "$ledger" --argjson ts "$now" \
-    --argjson cp "$consecutive_pass" --argjson fp "$first_pass_at" \
-    '{verdict:$v, reason:$r, sdk_version:$s, checked_at:$ts, consecutive_pass:$cp, first_pass_at:$fp, ledger:$l}' \
+    --argjson cp "$consecutive_pass" --argjson fp "$first_pass_at" --argjson x "$extra" \
+    '{verdict:$v, reason:$r, sdk_version:$s, checked_at:$ts, consecutive_pass:$cp, first_pass_at:$fp, ledger:$l} + $x' \
     > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
   mv "$tmp" "$state_file" 2>/dev/null || { rm -f "$tmp"; return 0; }
   return 0
@@ -780,6 +832,14 @@ sandbox_canary_sentry_event() {
 write_workspace_isolation_state() {
   write_sandbox_canary_state "$1" "$2" "" "$WORKSPACE_ISOLATION_STATE_FILE" \
     'workspace_isolation_failed|workspace_isolation_timeout' 'workspace-isolation'
+}
+
+# write_sdk_bash_smoke_state <verdict> <reason> <extra-json>: the SDK Bash smoke's ledger write (#10453), a thin wrapper over
+# write_sandbox_canary_state like write_workspace_isolation_state above. Its RED class is sdk_bash_smoke_failed (resets the
+# soak); smoke_infra_error HOLDS the counters. The ledger stamp is SDK_BASH_SMOKE_LEDGER_STAMP, the only spelling in this file.
+# Always returns 0 (NON-BLOCKING): the caller reads the ledger back to learn whether the write landed.
+write_sdk_bash_smoke_state() {
+  write_sandbox_canary_state "$1" "$2" "" "$SDK_BASH_SMOKE_STATE_FILE" 'sdk_bash_smoke_failed' "$SDK_BASH_SMOKE_LEDGER_STAMP" "${3:-}"
 }
 
 # workspace_isolation_sentry_event: loud, no-SSH page on a RED isolation verdict
@@ -1682,7 +1742,7 @@ v=$(timeout 5 /usr/bin/bwrap --unshare-user --unshare-pid --dev /dev --bind / / 
 p sdk_noproc "rc=$r $(printf %s "$v" | head -n 1 | cut -c1-120)"
 p kernel_ns "restrict=$(k /proc/sys/kernel/apparmor_restrict_unprivileged_userns) clone=$(k /proc/sys/kernel/unprivileged_userns_clone) max=$(k /proc/sys/user/max_user_namespaces)"'
 
-# _canary_diag_emit <trigger> <section> <raw>: the ONLY emitter. Scrubs first, then writes one line with
+# _canary_diag_emit <trigger: legacy|faithful|sdk_smoke> <section> <raw>: the ONLY emitter. Scrubs first, then writes one line with
 # the free text LAST and quote-bounded (ADR-115 trusted region: consumers anchor on val="[^"]*"$). The
 # `||` printf keeps the record on the webhook leg if journald is unavailable.
 _canary_diag_emit() {
@@ -1815,7 +1875,7 @@ _canary_kdeny_read() {
   return 0
 }
 
-# emit_canary_sandbox_diag <legacy|faithful>: always returns 0. In-container section names are an
+# emit_canary_sandbox_diag <legacy|faithful|sdk_smoke>: always returns 0. In-container section names are an
 # allowlist -- anything else the exec prints (a daemon error, a forged first word) is `raw`, so only
 # this function can mint host/hostsec/kernel/kdeny/done.
 emit_canary_sandbox_diag() {
@@ -2879,10 +2939,11 @@ verify_image_signature() {
 # "faithful FAIL + legacy PASS" disagreement is the alertable promote signal).
 # Exit-code classification: a failed `docker exec` (125/126/127 / ENOENT) is a
 # canary_infra_error, NOT sandbox_broken — the #4941 false-rollback guard.
-# run_canary_replay <mode-flag> <state-file> <sentry-op> <label>: the shared
-# canary runner — one copy of the false-rollback guard (docker/exec failures
-# classify canary_infra_error, never sandbox_broken) for both replay arms.
-# Each arm's soak lives in its own state file.
+# run_canary_replay <mode-flag> <state-file> <sentry-op> <label>: the canary
+# replay runner — the false-rollback guard (docker/exec failures classify
+# canary_infra_error, never sandbox_broken). The outer-wrap arm that shared it
+# is retired (#10454, ADR-079 addendum 2026-10-19), so the faithful canary is its
+# only caller and its soak lives in the one state file it is handed.
 run_canary_replay() {
   local mode_flag="$1" state_file="$2" sentry_op="$3" label="$4"
   local verdict reason sdk_version exec_rc out err_file docker_err detail
@@ -2935,12 +2996,10 @@ run_canary_replay() {
   if [[ "$verdict" == "sandbox_broken" ]]; then
     # #9860: this verdict has been recorded since 2026-10-09 with no cause beyond
     # bwrap_operation_not_permitted. Only the inner faithful canary (sentry_op sandbox-canary) is
-    # diagnosed: the outer-wrap arm's sandbox_broken is the expected report-only state.
+    # diagnosed (the retired outer-wrap arm never was; see ADR-079 addendum 2026-10-19), and it is this function's only caller.
     sandbox_canary_sentry_event "$verdict" "$reason" "$sdk_version" "$sentry_op" || true
     # After the page, so a slow bundle never delays it.
-    if [[ "$sentry_op" == "sandbox-canary" ]]; then
-      emit_canary_sandbox_diag faithful || true
-    fi
+    emit_canary_sandbox_diag faithful || true
   fi
   return 0
 }
@@ -2951,21 +3010,6 @@ run_faithful_sandbox_canary() {
   # (that gap is why #5849 shipped green).
   run_canary_replay "--replay" "$SANDBOX_CANARY_STATE_FILE" "sandbox-canary" \
     "Faithful sandbox canary (non-blocking)"
-}
-
-# run_outer_wrap_canary: the #5863 outer-wrap arm — NON-BLOCKING report-only.
-# Replays the SELF-AUTHORED outer mount-table fixture inside the canary
-# container (the elevation posture the prod wrap depends on)
-# and runs the shared isolation payload in the resulting namespace. Its
-# verdict accumulates in SANDBOX_OUTER_WRAP_CANARY_STATE_FILE for the
-# #5863 soak follow-through; promotion to gating is a separate change after
-# a green soak.
-run_outer_wrap_canary() {
-  if [[ "$OUTER_LEDGER_ALIAS" == "1" ]]; then
-    return 0 # aliased ledger: refuse to write into the inner ledger
-  fi
-  run_canary_replay "--replay-outer" "$SANDBOX_OUTER_WRAP_CANARY_STATE_FILE" \
-    "sandbox-canary-outer-wrap" "Outer-wrap canary (report-only)"
 }
 
 # run_workspace_isolation_probe: NON-BLOCKING dark-launch (#2640; the
@@ -3095,6 +3139,224 @@ run_workspace_isolation_probe() {
   # green probe never pages.
   if [[ "$verdict" == "workspace_isolation_failed" || "$verdict" == "workspace_isolation_timeout" ]]; then
     workspace_isolation_sentry_event "$verdict" "$reason" || true
+  fi
+  return 0
+}
+
+# sdk_bash_smoke_stale_event: the persistent-blindness warning of the SDK Bash smoke (#10453). Three smoke_infra_error
+# verdicts in a row mean the smoke cannot see anything (a Dockerfile regression that drops the probe, a broken exec path), and an
+# infra error never pages, so a dead probe would otherwise stay silent forever. A journald row plus a Sentry WARNING (op
+# sandbox-canary, level warning): deliberately not the SANDBOX_CANARY_FAIL marker the Better Stack alert keys on, so it never
+# emails. Best-effort + env-guarded, fail-open under set -e (mirrors cosign_verify_event).
+sdk_bash_smoke_stale_event() {
+  local n="$1" reason="$2" what msg
+  if [[ "$reason" == "ledger_write_failed" ]]; then
+    # Its own wording: the counter did NOT advance in the ledger (the write failed), so "N deploys in a row" would be false.
+    what="SDK smoke ledger write failed (consecutive_infra_error not advanced)"
+    msg="SDK smoke ledger write failed (consecutive_infra_error not advanced)"
+  else
+    what="the smoke has not produced a verdict for $n deploys in a row"
+    msg="sdk bash smoke stale: $n consecutive smoke_infra_error ($reason) - the deploy-time Bash check is blind"
+  fi
+  logger -t "$LOG_TAG" "SDK_BASH_SMOKE_STALE: consecutive_infra_error=$n last_reason=$reason ($what; warning, not a page)" || true
+  if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
+    local payload
+    payload="$(jq -n --arg n "$n" --arg r "$reason" --arg m "$msg" \
+      '{message: $m,
+        level: "warning", platform: "other", logger: "ci-deploy",
+        tags: {feature: "agent-sandbox", op: "sandbox-canary", verdict: "smoke_infra_error", event: "sdk_bash_smoke_stale"},
+        extra: {consecutive_infra_error: $n, reason: $r}}' 2>/dev/null)" || return 0
+    curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
+      "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
+      -H "Content-Type: application/json" \
+      -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
+      -d "$payload" 2>/dev/null \
+      || logger -t "$LOG_TAG" "SDK_BASH_SMOKE: Sentry POST failed" || true
+  fi
+  return 0
+}
+
+# run_sdk_bash_smoke: NON-BLOCKING dark-launch (#10453; wg-dark-launch-deploy-gates; ADR-079 addendum 2026-10-19). The faithful
+# canary's replay ends in `-- true` and never runs the process the Agent SDK wraps around every sandboxed Bash command, so a
+# green canary over a total Bash outage was possible (#10445, ten days). This runs ONE real Bash call end to end (the real
+# Agent SDK, the shipped shim and the production sandbox config) in the CANARY container via the baked probe, records the
+# verdict to its own ledger, and pages through journald (the faithful_canary_sandbox_broken alert) on a failure. It NEVER
+# changes the deploy's outcome: every verdict returns 0, the call site is `|| true`, no verdict rolls back or aborts.
+#
+# Probe contract (infra/lib/sdk-bash-probe.mjs, SMOKE=1): prints one `SDK_BASH_RESULT {verdict,reason,coverage}` line, preceded by
+# one `SDK_BASH_DISPATCHED` line once the Bash tool_use turn has been delivered (the `grep '^SDK_BASH_RESULT '` parse ignores it).
+#   pass                  the per-run NONCE came back in the real tool_result AND coverage is sdk_wrapper_shim_prodtuple
+#   sdk_bash_smoke_failed Bash was dispatched and no verified nonce came back (error, no nonce, hang): signature-independent
+#   smoke_infra_error     Bash was never dispatched; also a pass-shaped result with coverage replay_only (a HOLD)
+# docker-exec classification (the #4941 false-rollback guard): a non-zero rc whose output already carries the WHOLE LINE
+# `SDK_BASH_DISPATCHED` (Bash was handed to the SDK, so a hang or a death after that is the #10445 shape) is sdk_bash_smoke_failed:
+# 124 as host_timeout_<N>s, any other rc as probe_rc_<N>_after_dispatch, EXCEPT 137 and 143 (SIGKILL / SIGTERM: the OOM killer, a
+# container stop or a deploy-side signal, not a Bash result), which are smoke_infra_error probe_killed_rc_<N>. Without the marker
+# a 124 is a daemon stall or a wedged node start (smoke_infra_error host_timeout_before_dispatch), 125/126/127 (daemon /
+# not-executable / not-found) are docker_exec_rc_<N> and any other rc (the probe crashed before printing) is probe_rc_<N>, all
+# smoke_infra_error. The ONE pre-exec (probe presence + container HOME, capped by SDK_BASH_SMOKE_PREEXEC_TIMEOUT) maps rc 66 ONLY
+# to `probe_absent` (an image that predates the probe); its 124 is host_timeout_before_dispatch and every other non-zero rc
+# (docker's 125/126/127, a missing container's 1) is `preflight_rc_<N>` with docker's first scrubbed stderr line, all
+# smoke_infra_error. A nonce that /dev/urandom could not supply is `nonce_unavailable` (never a $RANDOM-derived nonce, the nonce
+# is the proof the tool_result came from this run; the probe verifies the TRANSFORMED nonce its command computes, so a result
+# that merely quotes the command text cannot pass).
+# Total time: SDK_BASH_SMOKE_PREEXEC_TIMEOUT (20 s) + SDK_BASH_SMOKE_TIMEOUT (150 s), each a separate `timeout`, plus the bounded
+# DIAG bundle after a failure page.
+# Ordering (2026-10-19 review ruling; rationale: ADR-079 addendum): the call site is AFTER github_app_key_canary_check, under its own CANARY_HEALTHY check. The
+# canary runs with `--memory 1536m --memory-swap 1536m` and already hosts the Next server; a probe OOM, or a probe still running
+# after a host-cap 124 (only the `docker exec` client is killed), could fail the key gate and roll back a healthy deploy. After the
+# gate the canary is torn down immediately, so the smoke cannot change the outcome even indirectly.
+# Targeting: ONLY soleur-web-platform-canary, never the live prod container. Ledger: ONE atomic write through
+# write_sandbox_canary_state (the extra-JSON argument carries coverage and consecutive_infra_error), read back afterwards: a
+# failed write can never leave a coverage-less pass (it is reported smoke_infra_error reason=ledger_write_failed instead).
+# Exec envelope: the canary's Config.Env is the FULL prd env and the probe copies process.env into the SDK child, so the exec is
+# `/usr/bin/env -i` with an explicit allowlist and a decoy ANTHROPIC_API_KEY (no `-u`), under a host `timeout`, with the
+# container's real HOME (the transcript mask derives from it; /tmp would silently change it).
+run_sdk_bash_smoke() {
+  if [[ "$SDK_BASH_SMOKE_LEDGER_ALIAS" == "1" ]]; then
+    return 0 # aliased ledger: refuse to write into another canary's ledger
+  fi
+  local ctr="soleur-web-platform-canary"
+  local verdict reason coverage="" exec_rc=0 out="" err_file docker_err home="" nonce="" line="" json="" t0
+  local prior_ledger prior_cie=0 cie=0 extra ledger_ok=0 pre_rc=0 stale_emitted=0 ledger_ours=0
+  t0="$(date +%s)"
+  err_file="$(mktemp 2>/dev/null || echo /dev/null)"
+  # ONE capped pre-exec (was two bare execs): probe presence (rc 66) and the container's real HOME in a single `docker exec`
+  # under its own short cap, so a wedged daemon cannot stall the deploy outside it. `if` (not a bare capture): a failed exec must
+  # not abort under set -e. rc 66 is the ONLY "probe absent" answer; the cap's 124 and every other non-zero rc (docker's own
+  # 125/126/127, a missing container) are an infra error that names the rc, with docker's first stderr line (scrubbed, then cut).
+  if home="$(timeout "$SDK_BASH_SMOKE_PREEXEC_TIMEOUT" docker exec "$ctr" /bin/sh -c 'test -f "$1" || exit 66; printf %s "$HOME"' sh "$SDK_BASH_SMOKE_PROBE" 2>"$err_file")"; then
+    pre_rc=0
+  else
+    pre_rc=$?
+  fi
+  if [[ "$pre_rc" -eq 124 ]]; then
+    verdict="smoke_infra_error"; reason="host_timeout_before_dispatch: preflight"
+  elif [[ "$pre_rc" -ne 0 ]]; then
+    docker_err="$(_cred_err_tail "$(head -1 "$err_file" 2>/dev/null)" | cut -c1-120)"
+    if [[ "$pre_rc" -eq 66 ]]; then
+      verdict="smoke_infra_error"; reason="probe_absent${docker_err:+: $docker_err}"
+    else
+      verdict="smoke_infra_error"; reason="preflight_rc_${pre_rc}${docker_err:+: $docker_err}"
+    fi
+  else
+    nonce="$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' || true)"
+    if ! [[ "$nonce" =~ ^[0-9a-f]{32}$ ]]; then
+      verdict="smoke_infra_error"; reason="nonce_unavailable"
+    elif ! [[ "$home" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+      verdict="smoke_infra_error"; reason="container_home_unresolved"
+    else
+      # `if` (not a bare capture + `exec_rc=$?`): under `set -e` a failed exec aborts before the read.
+      if out="$(timeout "$SDK_BASH_SMOKE_TIMEOUT" docker exec -w /app "$ctr" /usr/bin/env -i \
+          PATH=/usr/local/bin:/usr/bin:/bin HOME="$home" APP=/app SMOKE=1 NONCE="$nonce" \
+          ANTHROPIC_API_KEY=decoy-api-key-sentinel \
+          node "$SDK_BASH_SMOKE_PROBE" 2>"$err_file")"; then
+        exec_rc=0
+      else
+        exec_rc=$?
+      fi
+      docker_err="$(_cred_err_tail "$(head -1 "$err_file" 2>/dev/null)" | cut -c1-120)"
+      case "$exec_rc" in
+        0)
+          line="$(printf '%s\n' "$out" | { grep -a '^SDK_BASH_RESULT ' || true; } | tail -n 1)"
+          json="${line#SDK_BASH_RESULT }"
+          verdict="$(printf '%s' "$json" | jq -r '.verdict // ""' 2>/dev/null || echo '')"
+          reason="$(printf '%s' "$json" | jq -r '.reason // ""' 2>/dev/null || echo '')"
+          coverage="$(printf '%s' "$json" | jq -r '.coverage // ""' 2>/dev/null || echo '')"
+          [[ "$coverage" == "sdk_wrapper_shim_prodtuple" || "$coverage" == "replay_only" ]] || coverage=""
+          case "$verdict" in
+            pass)
+              # The probe already holds a replay_only pass; refuse one here too (defense in depth): only the
+              # shim-and-wrapper tuple may count toward promotion.
+              if [[ "$coverage" != "sdk_wrapper_shim_prodtuple" ]]; then
+                verdict="smoke_infra_error"; reason="coverage_replay_only"
+              fi ;;
+            sdk_bash_smoke_failed|smoke_infra_error) : ;;
+            *) verdict="smoke_infra_error"; reason="no_result_line${docker_err:+: $docker_err}"; coverage="" ;;
+          esac ;;
+        124)
+          # `out` still holds whatever the probe printed before `timeout` killed the docker exec client.
+          if [[ $'\n'"$out"$'\n' == *$'\nSDK_BASH_DISPATCHED\n'* ]]; then
+            verdict="sdk_bash_smoke_failed"; reason="host_timeout_${SDK_BASH_SMOKE_TIMEOUT}s${docker_err:+: $docker_err}"
+          else
+            verdict="smoke_infra_error"; reason="host_timeout_before_dispatch${docker_err:+: $docker_err}"
+          fi ;;
+        *)
+          # Any other non-zero rc: if the probe had already printed SDK_BASH_DISPATCHED, Bash was handed to the SDK and the
+          # run died after that (a crash, a kill): the #10445 shape, not an infra hiccup. Otherwise it never got that far.
+          if [[ $'\n'"$out"$'\n' == *$'\nSDK_BASH_DISPATCHED\n'* ]]; then
+            if [[ "$exec_rc" == "137" || "$exec_rc" == "143" ]]; then
+              # SIGKILL / SIGTERM after dispatch: the OOM killer, a container stop or a deploy signal, not a Bash result. Not a
+              # page; the reason says what happened.
+              verdict="smoke_infra_error"; reason="probe_killed_rc_${exec_rc}${docker_err:+: $docker_err}"
+            else
+              verdict="sdk_bash_smoke_failed"; reason="probe_rc_${exec_rc}_after_dispatch${docker_err:+: $docker_err}"
+            fi
+          elif [[ "$exec_rc" == "125" || "$exec_rc" == "126" || "$exec_rc" == "127" ]]; then
+            verdict="smoke_infra_error"; reason="docker_exec_rc_${exec_rc}${docker_err:+: $docker_err}"
+          else
+            verdict="smoke_infra_error"; reason="probe_rc_${exec_rc}${docker_err:+: $docker_err}"
+          fi ;;
+      esac
+    fi
+  fi
+  if [[ "$err_file" != "/dev/null" ]]; then rm -f "$err_file" 2>/dev/null || true; fi
+  # The reason rides journald, Sentry and the deploy-status frame: scrub it (secret shapes, env values, control chars) and cap it.
+  reason="$(_cred_err_tail "$reason" | cut -c1-200)"
+
+  # Stale-probe counter: bumped on an infra error, reset by any other verdict. Foreign-stamped ledgers
+  # contribute nothing (the write_sandbox_canary_state guard).
+  if [[ -f "$SDK_BASH_SMOKE_STATE_FILE" ]]; then
+    prior_ledger="$(jq -r '.ledger // ""' "$SDK_BASH_SMOKE_STATE_FILE" 2>/dev/null || echo '')"
+    if [[ -z "$prior_ledger" || "$prior_ledger" == "$SDK_BASH_SMOKE_LEDGER_STAMP" ]]; then
+      prior_cie="$(jq -r '.consecutive_infra_error // 0' "$SDK_BASH_SMOKE_STATE_FILE" 2>/dev/null || echo 0)"
+      [[ "$prior_cie" =~ ^[0-9]+$ ]] || prior_cie=0
+    fi
+  fi
+  if [[ "$verdict" == "smoke_infra_error" ]]; then cie=$((prior_cie + 1)); else cie=0; fi
+  extra="$(jq -nc --arg c "$coverage" --argjson n "$cie" '{coverage:$c, consecutive_infra_error:$n}' 2>/dev/null || echo '{}')"
+  write_sdk_bash_smoke_state "$verdict" "$reason" "$extra"
+  # write_sandbox_canary_state always returns 0 (it must never abort a deploy), so read the ledger back: the new verdict, its
+  # coverage and a fresh timestamp must be there, or the write did not land.
+  if jq -e --arg v "$verdict" --arg c "$coverage" --argjson t0 "$t0" --arg stamp "$SDK_BASH_SMOKE_LEDGER_STAMP" \
+      '.verdict == $v and (.coverage // "") == $c and ((.checked_at // 0) >= $t0) and .ledger == $stamp' \
+      "$SDK_BASH_SMOKE_STATE_FILE" >/dev/null 2>&1; then
+    ledger_ok=1
+  fi
+  if [[ "$ledger_ok" != "1" ]]; then
+    logger -t "$LOG_TAG" "SDK_BASH_SMOKE: ledger_write_failed state_file=$SDK_BASH_SMOKE_STATE_FILE intended_verdict=$verdict" || true
+    # A failed write means the stale-probe counter cannot accumulate in the ledger, so a persistent write failure would stay
+    # silent forever: warn from here with the prior counter + 1 (and never again below for the same deploy).
+    sdk_bash_smoke_stale_event "$((prior_cie + 1))" "ledger_write_failed" || true
+    stale_emitted=1
+    if [[ "$verdict" == "pass" ]]; then
+      # Never report (or count) a pass whose coverage-bearing record did not land.
+      verdict="smoke_infra_error"; reason="ledger_write_failed"; coverage=""
+    elif [[ "$verdict" == "sdk_bash_smoke_failed" ]]; then
+      # A failed verdict that did not land must not leave the PREVIOUS record behind: a stale consecutive_pass would keep
+      # reading as a soak that this failure should have reset. Remove ONLY a record that is ours (ledger stamp checked first)
+      # and OLDER than this run (checked_at < t0), so a record that did land is never deleted; an unparseable file goes too.
+      # The removal needs the directory permission whose absence usually broke the write: when it is not writable the stale
+      # record survives (the page and the stale warning above still fire).
+      if jq -e --argjson t0 "$t0" --arg stamp "$SDK_BASH_SMOKE_LEDGER_STAMP" \
+          '((.ledger // "") == "" or .ledger == $stamp) and ((.checked_at // 0) < $t0)' \
+          "$SDK_BASH_SMOKE_STATE_FILE" >/dev/null 2>&1 \
+        || { [[ -f "$SDK_BASH_SMOKE_STATE_FILE" ]] && ! jq -e . "$SDK_BASH_SMOKE_STATE_FILE" >/dev/null 2>&1; }; then
+        ledger_ours=1
+      fi
+      if [[ "$ledger_ours" == "1" ]]; then rm -f "$SDK_BASH_SMOKE_STATE_FILE" 2>/dev/null || true; fi
+    fi
+  fi
+  logger -t "$LOG_TAG" "SDK_BASH_SMOKE: verdict=$verdict reason=$reason coverage=$coverage" || true
+  echo "SDK Bash smoke (non-blocking): verdict=$verdict reason=$reason coverage=$coverage"
+  if [[ "$verdict" == "sdk_bash_smoke_failed" ]]; then
+    # The page: ONE journald row per failed deploy. Verdict `sandbox_broken` + the `sdk_bash_smoke_failed` reason prefix + op
+    # `sandbox-canary` is the contract of the faithful_canary_sandbox_broken alert (its drift guard reads this very line).
+    sandbox_canary_sentry_event sandbox_broken "sdk_bash_smoke_failed: ${reason}" "" "sandbox-canary" || true
+    # After the page, so a slow bundle never delays it.
+    emit_canary_sandbox_diag sdk_smoke || true
+  elif [[ "$verdict" == "smoke_infra_error" && "$cie" -ge 3 && "$stale_emitted" != "1" ]]; then
+    sdk_bash_smoke_stale_event "$cie" "$reason" || true
   fi
   return 0
 }
@@ -3370,6 +3632,398 @@ github_app_key_canary_check() {
   CANARY_FAIL_REASON="canary_github_app_key_rejected"
   return 1
 }
+
+# >>> inngest-link-resolver >>>
+# resolve_inngest_link <env-snapshot> (#10136, ADR-294): the SINGLE chokepoint that decides which Inngest link the
+# web container is handed, and the only writer of the CA file that becomes a trust anchor for EVERY Node outbound
+# TLS connection in that container (NODE_EXTRA_CA_CERTS). Everything downstream (the canary and prod `docker run`,
+# the probes through $INNGEST_LINK_DIR/inngest-link.env, docker-run-tuple.py) accepts exactly the pair it can produce:
+#   http://10.0.1.40:8288   only on a CLEAN not-found of the flag, or a lapsed `pending:` lease;
+#   https://10.0.1.40:8443  otherwise, or the deploy FAILS (non-zero, the old container keeps serving). Never a downgrade.
+# The flag is INNGEST_LINK_TLS in the soleur/prd snapshot resolve_env_file already wrote (a missing key is
+# authoritative absence; stderr is never parsed): allowlist ^(1|pending:[0-9]{1,10})$, a `pending:<epoch>` is honoured
+# only while epoch <= now+31 min AND now < epoch+30 min, any other non-empty value fails the deploy. The two Doppler
+# metadata lines of the snapshot (`doppler secrets download` always injects DOPPLER_PROJECT/DOPPLER_CONFIG, see
+# .github/actions/infra-credentials/action.yml) must name soleur/prd when PRESENT (a mis-bound token must never read
+# "absent"); a snapshot that lacks them cannot be judged wrong, so with the flag ABSENT it resolves http with a
+# `scope_unverified` warning UNLESS this host last ran https (last-scheme, below): a legitimate `off` always has a verified scope
+# (Doppler injects the lines), so an unverifiable snapshot on a host that was https is a wrong-token or partial download and
+# fails closed (scope_mismatch field=unverified previous=https). With the flag set it always fails closed. A run whose scope
+# was unverified never records a scheme (it must not erase the evidence).
+# TRUST-ANCHOR ORDERING (security F1/F2): the CA (INNGEST_TLS_CA, base64) is touched ONLY when https is resolved. With the
+# flag absent (or a lapsed lease) nothing is read from Doppler or validated: the docker bind source is only ensured to exist as an
+# EMPTY placeholder FILE (created if missing; an empty directory docker made there is removed; a NON-empty regular file left by
+# an earlier https deploy is replaced by an empty one only AFTER the new container started - staged here, done atomically (new inode)
+# by inngest_link_commit_scheme, because the old https container stays live through the canary and the cron drain and a restart of
+# it re-mounts the path), so a bad
+# or substituted secret can neither fail a flag-off deploy nor become a trust anchor in a non-strict state. With https resolved the CA is
+# read (from the snapshot, else Doppler with retries), VALIDATED, proven by the host-side `curl --cacert <CANDIDATE>` self-gate
+# against the real listener, and only THEN installed (mktemp + rename under $INNGEST_LINK_DIR, /mnt/data/inngest-link, deploy-owned,
+# created here with mkdir -p; the docker bind source is the FILE, so it must exist before `docker run`). A gate failure leaves
+# the previously installed file untouched. The validator is a deny-list: <= 4 KiB, no PRIVATE KEY, EXACTLY ONE CERTIFICATE
+# block, parses, not expired, not CA:TRUE, keyUsage without Certificate Sign (a no-basicConstraints keyCertSign certificate is a
+# working issuing CA). Any of {CA read error, CA empty/invalid, self-gate failure, install failure} fails the strict deploy. The
+# self-gate proves only the host OUTPUT path and the pinned bytes, not container egress or Node trust (the canary does); a
+# substituted CA fails against the real host, so it denies service rather than enabling a MITM.
+# DOWNGRADE MEMORY (security F4): $INNGEST_LINK_DIR/last-scheme (https|http, atomic, validated on read) remembers the scheme
+# the last deploy actually STARTED (recorded by inngest_link_commit_scheme after the production container started, never at
+# resolve time, so a failed flip canary plus its revert leaves it alone). A host that last ran https and now resolves http with a
+# VERIFIED scope emits a warning event `https_to_http` (Sentry level warning; no alert rule routes it yet, tracked in #10556,
+# so it is journald/Sentry-issue evidence only) and proceeds; with an UNVERIFIED scope it fails closed (above).
+# $INNGEST_LINK_DIR/inngest-link.env is written from enum branches and constants ONLY, never from flag or CA text; the
+# probes parse it with a key allowlist and never source it. Sets: INNGEST_BASE_URL_RESOLVED, INNGEST_LINK_STATE
+# (http_default|http_lease_expired|https_flag|https_pending), INNGEST_LINK_REASON (a fixed token on failure),
+# INNGEST_LINK_CA_STRICT. Returns 0, or 1 with INNGEST_LINK_REASON set. The caller invokes it with
+# `|| rc=$?` (set -e is OFF inside), so every step below handles its own failure.
+INNGEST_LINK_HTTP_URL="http://10.0.1.40:8288"
+INNGEST_LINK_HTTPS_URL="https://10.0.1.40:8443"
+INNGEST_LINK_DIR="${INNGEST_LINK_DIR:-/mnt/data/inngest-link}"
+INNGEST_BASE_URL_RESOLVED=""
+INNGEST_LINK_STATE=""
+INNGEST_LINK_REASON=""
+INNGEST_LINK_CA_STRICT=0
+INNGEST_LINK_PENDING_SCHEME=""
+INNGEST_LINK_PENDING_CA_RESET=0
+
+inngest_link_event() { # <class> <level> [detail]: journald always, Sentry for warning/error (best effort)
+  local cls="$1" level="$2" detail="${3:-}" payload
+  logger -t "$LOG_TAG" "INNGEST_LINK: class=$cls level=$level${detail:+ $detail}" || true
+  [[ "$level" == info ]] && return 0
+  if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
+    payload="$(jq -nc --arg c "$cls" --arg l "$level" --arg d "$detail" --arg t "${TAG:-}" \
+      '{message: ("inngest link " + $c), level: $l, platform: "other", logger: "ci-deploy",
+        tags: {feature: "ci-deploy", op: "inngest-link", classification: $c},
+        extra: {detail: $d, tag: $t}}' 2>/dev/null)" || return 0
+    curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
+      "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
+      -H "Content-Type: application/json" \
+      -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
+      -d "$payload" 2>/dev/null \
+      || logger -t "$LOG_TAG" "INNGEST_LINK: Sentry POST failed" || true
+  fi
+  return 0
+}
+
+# _inngest_link_snap_get <file> <KEY>: sets _IL_N (matching lines) and _IL_VAL (the last value). Returns 2 when the
+# snapshot cannot be read (a read error is never an absence).
+_inngest_link_snap_get() {
+  local line
+  _IL_N=0; _IL_VAL=""
+  [[ -f "$1" && -r "$1" ]] || return 2
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" == "$2="* ]]; then _IL_N=$((_IL_N + 1)); _IL_VAL="${line#*=}"; fi
+  done < "$1" || return 2
+  return 0
+}
+
+# _inngest_link_validate_ca <base64>: decode and validate; the single certificate block is left in _IL_CERT (the caller
+# writes it to its own mktemp file). Returns 0 valid, 1 invalid (_IL_CERT empty) with _IL_WHY naming the first failed check (a
+# fixed token, so the ca_invalid event is diagnosable without SSH): tool|decode|size|empty|key|count|parse|expired|ca. Deliberately
+# small: <= 4 KiB, no PRIVATE KEY, EXACTLY ONE CERTIFICATE block (a second one would become a trust anchor for ALL outbound TLS of
+# the container), parses, not expired, and ONE deny-list grep over the basicConstraints and keyUsage lines: no CA:TRUE and no
+# `Certificate Sign` (why=ca for both: a v3 certificate WITHOUT basicConstraints and keyUsage=keyCertSign is a working issuing CA).
+# Name/SAN/EKU/self-signature are NOT re-checked here: the host-side `curl --cacert ... https://10.0.1.40:8443/health` self-gate
+# and the canary's CA-withheld negative control prove the pinned file against the real listener. `openssl` is required
+# (ca-certificates depends on it, so it is on every Ubuntu host): without it a flag-on deploy fails closed with why=tool rather than
+# trusting an unvalidated file.
+_inngest_link_validate_ca() {
+  local b64="$1" wd raw n_begin n_cert x509 rc=1
+  _IL_WHY=""; _IL_CERT=""
+  command -v openssl >/dev/null 2>&1 || { _IL_WHY=tool; return 1; }
+  # at most 4 KiB decoded is <= 5462 base64 characters; refuse an oversize secret before decoding it
+  if (( ${#b64} == 0 || ${#b64} > 6000 )); then _IL_WHY=size; return 1; fi
+  wd="$(mktemp -d /tmp/inngest-ca-check.XXXXXX 2>/dev/null)" || { _IL_WHY=tool; return 1; }  # lint-trap-ownership: ok rm -rf on every path below; the unit has PrivateTmp, so an abort leaks nothing outside its namespace
+  raw="$wd/raw"
+  while :; do
+    printf '%s' "$b64" | base64 -d 2>/dev/null | tr -d '\r' > "$raw" || { _IL_WHY=decode; break; }
+    [[ "$(wc -c < "$raw" 2>/dev/null | tr -d ' ')" -le 4096 ]] || { _IL_WHY=size; break; }
+    [[ -s "$raw" ]] || { _IL_WHY=empty; break; }
+    if grep -q 'PRIVATE KEY' "$raw"; then _IL_WHY=key; break; fi
+    n_begin="$(grep -cE '^[[:space:]]*-----BEGIN ' "$raw")" || n_begin=0
+    n_cert="$(grep -cE '^[[:space:]]*-----BEGIN CERTIFICATE-----[[:space:]]*$' "$raw")" || n_cert=0
+    [[ "$n_begin" == 1 && "$n_cert" == 1 ]] || { _IL_WHY=count; break; }
+    # keep only the block itself: text around it never reaches the CA file
+    awk '
+      /^[[:space:]]*-----BEGIN CERTIFICATE-----[[:space:]]*$/ { inb = 1 }
+      inb { sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, ""); print }
+      /^[[:space:]]*-----END CERTIFICATE-----[[:space:]]*$/ { inb = 0 }' "$raw" > "$wd/cert.pem" || { _IL_WHY=parse; break; }
+    # ONE parse: -checkend prints "will not expire" (rc 0) or "will expire" (rc 1); -ext prints the basicConstraints and keyUsage lines
+    x509="$(timeout 10 openssl x509 -in "$wd/cert.pem" -noout -checkend 0 -ext basicConstraints,keyUsage 2>/dev/null)" || true
+    case "$x509" in
+      *"will not expire"*) : ;;
+      *"will expire"*) _IL_WHY=expired; break ;;
+      *) _IL_WHY=parse; break ;;
+    esac
+    if grep -qE 'CA:TRUE|Certificate Sign' <<< "$x509"; then _IL_WHY=ca; break; fi
+    _IL_CERT="$(cat "$wd/cert.pem")"
+    [[ -n "$_IL_CERT" ]] || { _IL_WHY=parse; break; }
+    rc=0
+    break
+  done
+  rm -rf "$wd"
+  return "$rc"
+}
+
+# _inngest_link_install <content-file> <dest> <mode>: mkdir -p the (deploy-owned, under /mnt/data) directory, remove an EMPTY
+# directory sitting at <dest> (what docker creates for a missing bind source; the deploy owns the parent, so it can), then a temp
+# file beside the target (install copies the bytes and sets the mode in one step), renamed over it (mv -T never descends into
+# a directory). A NON-empty directory at <dest> stays and the rename fails.
+_inngest_link_install() {
+  local tmp
+  mkdir -p "$(dirname "$2")" 2>/dev/null || true
+  if [[ -d "$2" && ! -L "$2" ]]; then rmdir "$2" 2>/dev/null || true; fi
+  tmp="$(mktemp "$(dirname "$2")/.$(basename "$2").XXXXXX" 2>/dev/null)" || return 1
+  if install -m "$3" "$1" "$tmp" 2>/dev/null && mv -fT "$tmp" "$2" 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+
+_inngest_link_selfgate() { # <cafile>: no -k, no --capath; success = TLS verified against the pinned file AND 200
+  local i=1 max="${INNGEST_LINK_SELFGATE_ATTEMPTS:-3}" code rc=0
+  case "$max" in '' | *[!0-9]*) max=3 ;; esac
+  while :; do
+    rc=0
+    code="$(timeout 20 curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 \
+      --cacert "$1" "$INNGEST_LINK_HTTPS_URL/health" 2>/dev/null)" || rc=$?
+    if [[ "$rc" -eq 0 && "$code" == 200 ]]; then return 0; fi
+    if [[ "$i" -ge "$max" ]]; then break; fi
+    sleep 2
+    i=$((i + 1))
+  done
+  inngest_link_event selfgate_failed error "rc=$rc http=${code:-none} attempts=$i"
+  return 1
+}
+
+# _inngest_link_last_scheme: sets _IL_PREV to https|http from $INNGEST_LINK_DIR/last-scheme, else empty. A regular file (never a
+# symlink), <= 16 bytes, whose WHOLE content is exactly one of the two tokens; anything else reads as "unknown" (no event).
+_inngest_link_last_scheme() {
+  local f="$INNGEST_LINK_DIR/last-scheme" content=""
+  _IL_PREV=""
+  [[ -f "$f" && ! -L "$f" && -r "$f" ]] || return 0
+  [[ "$(wc -c < "$f" 2>/dev/null | tr -d ' ')" -le 16 ]] || return 0
+  content="$(cat "$f" 2>/dev/null)" || return 0
+  case "$content" in https | http) _IL_PREV="$content" ;; esac
+  return 0
+}
+
+resolve_inngest_link() {
+  local snap="${1:-}" flag="" now epoch ca_dest ca_env_dest b64="" cand="" try=1 scheme url cacert
+  local proj_n proj_v cfg_n cfg_v scope_verified=1
+  INNGEST_BASE_URL_RESOLVED=""; INNGEST_LINK_STATE=""; INNGEST_LINK_REASON=""; INNGEST_LINK_CA_STRICT=0; INNGEST_LINK_PENDING_SCHEME=""; INNGEST_LINK_PENDING_CA_RESET=0
+  ca_dest="$INNGEST_LINK_DIR/inngest-ca.pem"
+  ca_env_dest="$INNGEST_LINK_DIR/inngest-link.env"
+
+  # 1. the snapshot: readable, the flag read from it, and its scope (when it names one) soleur/prd
+  _inngest_link_snap_get "$snap" INNGEST_LINK_TLS || { INNGEST_LINK_REASON=inngest_link_snapshot_unreadable; inngest_link_event snapshot_unreadable error; return 1; }
+  if [[ "$_IL_N" -gt 1 ]]; then INNGEST_LINK_REASON=inngest_link_flag_invalid; inngest_link_event flag_invalid error "lines=$_IL_N"; return 1; fi
+  flag="$_IL_VAL"
+  _inngest_link_snap_get "$snap" DOPPLER_PROJECT || { INNGEST_LINK_REASON=inngest_link_snapshot_unreadable; inngest_link_event snapshot_unreadable error; return 1; }
+  proj_n="$_IL_N"; proj_v="$_IL_VAL"
+  _inngest_link_snap_get "$snap" DOPPLER_CONFIG || { INNGEST_LINK_REASON=inngest_link_snapshot_unreadable; inngest_link_event snapshot_unreadable error; return 1; }
+  cfg_n="$_IL_N"; cfg_v="$_IL_VAL"
+  # a line that is PRESENT and wrong (or repeated) is a mis-bound token: always a hard failure
+  if [[ "$proj_n" -gt 1 || ( "$proj_n" == 1 && "$proj_v" != soleur ) ]]; then INNGEST_LINK_REASON=inngest_link_scope_mismatch; inngest_link_event scope_mismatch error "field=project"; return 1; fi
+  if [[ "$cfg_n" -gt 1 || ( "$cfg_n" == 1 && "$cfg_v" != prd ) ]]; then INNGEST_LINK_REASON=inngest_link_scope_mismatch; inngest_link_event scope_mismatch error "field=config"; return 1; fi
+  # a line that is ABSENT cannot be judged: with the flag set the scope is unverifiable, so a flagged fleet fails closed
+  if [[ "$proj_n" == 0 || "$cfg_n" == 0 ]]; then
+    if [[ -n "$flag" ]]; then INNGEST_LINK_REASON=inngest_link_scope_mismatch; inngest_link_event scope_mismatch error "field=unverified"; return 1; fi
+    # flag absent: indistinguishable from "never flipped" unless the host remembers it ran https (a legitimate off has a verified scope)
+    _inngest_link_last_scheme
+    if [[ "$_IL_PREV" == https ]]; then INNGEST_LINK_REASON=inngest_link_scope_mismatch; inngest_link_event scope_mismatch error "field=unverified previous=https"; return 1; fi
+    scope_verified=0
+    inngest_link_event scope_unverified warning "project_lines=$proj_n config_lines=$cfg_n action=http_default"
+  fi
+
+  # 2. the flag -> a state (enum), never a value
+  if [[ -z "$flag" ]]; then
+    INNGEST_LINK_STATE=http_default
+  elif [[ "$flag" == 1 ]]; then
+    INNGEST_LINK_STATE=https_flag
+  elif [[ "$flag" =~ ^pending:([0-9]{1,10})$ ]]; then
+    epoch=$((10#${BASH_REMATCH[1]}))
+    now="$(date +%s)"
+    if (( epoch > now + 1860 )); then
+      INNGEST_LINK_REASON=inngest_link_flag_invalid; inngest_link_event flag_invalid error "pending_epoch=future"; return 1
+    elif (( now >= epoch + 1800 )); then
+      INNGEST_LINK_STATE=http_lease_expired
+      inngest_link_event lease_expired warning "age_secs=$(( now - epoch )) action=http_default"
+    else
+      INNGEST_LINK_STATE=https_pending
+    fi
+  else
+    INNGEST_LINK_REASON=inngest_link_flag_invalid; inngest_link_event flag_invalid error "len=${#flag}"; return 1
+  fi
+  case "$INNGEST_LINK_STATE" in https_flag | https_pending) INNGEST_LINK_CA_STRICT=1 ;; esac
+
+  # 3. the CA file. http: only the bind-source placeholder, nothing read or validated. https: read, validate, self-gate the
+  #    CANDIDATE, install last.
+  cand="$(mktemp /tmp/inngest-ca-cand.XXXXXX 2>/dev/null)" || cand=""  # lint-trap-ownership: ok rm -f on every path below; PrivateTmp bounds an abort leak
+  if [[ "$INNGEST_LINK_CA_STRICT" != 1 ]]; then
+    if [[ -f "$ca_dest" && ! -L "$ca_dest" && ! -s "$ca_dest" ]]; then
+      :   # already an empty regular file (an earlier placeholder): left as it is
+    elif [[ -f "$ca_dest" && ! -L "$ca_dest" ]]; then
+      # a NON-empty regular file: the pinned CA of an earlier https deploy, now off. It is NOT touched here: the previous https
+      # container is still the live one (through the canary and the cron drain) and a bind mount of a host path is re-resolved on
+      # every container restart, so an empty file now would break an OOM/crash restart of it. The reset is staged (verified
+      # scope only) and performed by inngest_link_commit_scheme once the new container started.
+      if [[ "$scope_verified" == 1 ]]; then INNGEST_LINK_PENDING_CA_RESET=1; fi
+    elif [[ -z "$cand" ]] || ! _inngest_link_install "$cand" "$ca_dest" 0644; then
+      # missing, a symlink or an empty directory: none of these can hold a trust anchor (installers never create a symlink; an
+      # empty directory has no bytes), so the empty placeholder replaces them right away - docker must find a FILE at the path
+      inngest_link_event ca_unwritable warning "dir=$INNGEST_LINK_DIR action=continue"
+    fi
+    rm -f "$cand"
+  else
+    # the snapshot already carries INNGEST_TLS_CA (soleur/prd): no extra Doppler call; otherwise read it, retried
+    _inngest_link_snap_get "$snap" INNGEST_TLS_CA || true
+    if [[ "$_IL_N" == 1 && -n "$_IL_VAL" ]]; then
+      b64="$_IL_VAL"
+    else
+      while :; do
+        if _doppler_get_observed INNGEST_TLS_CA b64; then break; fi
+        b64=""
+        if [[ "$try" -ge 3 ]]; then break; fi
+        try=$((try + 1)); sleep 2
+      done
+      if [[ -z "$b64" ]]; then
+        rm -f "$cand"
+        INNGEST_LINK_REASON=inngest_link_ca_unavailable
+        inngest_link_event ca_unavailable error "rc=${CRED_RC:-?} empty=${CRED_EMPTY:-?} attempts=$try"
+        return 1
+      fi
+    fi
+    if [[ -z "$cand" ]]; then
+      INNGEST_LINK_REASON=inngest_link_write_failed; inngest_link_event write_failed error "file=ca_candidate"; return 1
+    fi
+    if ! _inngest_link_validate_ca "$b64" || ! printf '%s\n' "$_IL_CERT" > "$cand"; then
+      rm -f "$cand"
+      INNGEST_LINK_REASON=inngest_link_ca_invalid; inngest_link_event ca_invalid error "b64_len=${#b64} why=${_IL_WHY:-unknown}"; return 1
+    fi
+    # 4. the self-gate against the CANDIDATE (the pinned bytes against the real listener, from the host OUTPUT chain), BEFORE install
+    if ! _inngest_link_selfgate "$cand"; then rm -f "$cand"; INNGEST_LINK_REASON=inngest_link_selfgate_failed; return 1; fi
+    if ! _inngest_link_install "$cand" "$ca_dest" 0644; then
+      rm -f "$cand"
+      INNGEST_LINK_REASON=inngest_link_write_failed; inngest_link_event write_failed error "file=ca"; return 1
+    fi
+    rm -f "$cand"
+  fi
+
+  # 5. the outputs: URL and link env from enum branches and constants only
+  case "$INNGEST_LINK_STATE" in
+    https_flag | https_pending) url="$INNGEST_LINK_HTTPS_URL"; scheme=https; cacert="$ca_dest" ;;
+    *) url="$INNGEST_LINK_HTTP_URL"; scheme=http; cacert="" ;;
+  esac
+  cand="$(mktemp /tmp/inngest-link-env.XXXXXX 2>/dev/null)" || cand=""  # lint-trap-ownership: ok rm -f on every path below; PrivateTmp bounds an abort leak
+  if [[ -z "$cand" ]] \
+     || ! printf 'INNGEST_LINK_URL=%s\nINNGEST_LINK_SCHEME=%s\nINNGEST_LINK_CACERT=%s\n' "$url" "$scheme" "$cacert" > "$cand" \
+     || ! _inngest_link_install "$cand" "$ca_env_dest" 0644; then
+    rm -f "$cand"
+    if [[ "$INNGEST_LINK_CA_STRICT" == 1 ]]; then
+      INNGEST_LINK_REASON=inngest_link_write_failed; inngest_link_event write_failed error "file=link_env"; return 1
+    fi
+    inngest_link_event link_env_unwritable warning "dir=$INNGEST_LINK_DIR action=continue"
+  fi
+  rm -f "$cand"
+
+  # 6. the downgrade memory: a host that last ran https and now resolves http (verified scope) is signalled, never failed here.
+  #    The scheme is only STAGED (INNGEST_LINK_PENDING_SCHEME): inngest_link_commit_scheme records it once the container started,
+  #    and never on a run whose scope was unverified.
+  _inngest_link_last_scheme
+  if [[ "$scheme" == http && "$_IL_PREV" == https ]]; then
+    inngest_link_event https_to_http warning "state=$INNGEST_LINK_STATE previous=https"
+  fi
+  if [[ "$scope_verified" == 1 ]]; then INNGEST_LINK_PENDING_SCHEME="$scheme"; fi
+  INNGEST_BASE_URL_RESOLVED="$url"
+  inngest_link_event resolved info "state=$INNGEST_LINK_STATE scheme=$scheme"
+  return 0
+}
+
+# inngest_link_commit_scheme: record the staged scheme in $INNGEST_LINK_DIR/last-scheme (atomic). Called once, right after the
+# production container started (the point where the scheme was actually deployed); a failed canary, an aborted deploy or a
+# scope-unverified run leaves the file untouched. Best effort: never fails the deploy.
+inngest_link_commit_scheme() {
+  local cand=""
+  # the staged on->off reset of the stale pinned CA (http arm, verified scope): atomic, a new inode, so the container that just
+  # started keeps the bytes it mounted (harmless in http mode) while every FUTURE container start mounts the empty file
+  if [[ "$INNGEST_LINK_PENDING_CA_RESET" == 1 ]]; then
+    INNGEST_LINK_PENDING_CA_RESET=0
+    cand="$(mktemp /tmp/inngest-ca-reset.XXXXXX 2>/dev/null)" || cand=""  # lint-trap-ownership: ok rm -f on every path below; PrivateTmp bounds an abort leak
+    if [[ -z "$cand" ]] || ! _inngest_link_install "$cand" "$INNGEST_LINK_DIR/inngest-ca.pem" 0644; then
+      inngest_link_event ca_reset_failed warning "dir=$INNGEST_LINK_DIR action=continue"
+    fi
+    rm -f "$cand"
+  fi
+  [[ "$INNGEST_LINK_PENDING_SCHEME" == https || "$INNGEST_LINK_PENDING_SCHEME" == http ]] || return 0
+  cand="$(mktemp /tmp/inngest-link-scheme.XXXXXX 2>/dev/null)" || cand=""  # lint-trap-ownership: ok rm -f on every path below; PrivateTmp bounds an abort leak
+  if [[ -z "$cand" ]] || ! printf '%s\n' "$INNGEST_LINK_PENDING_SCHEME" > "$cand" || ! _inngest_link_install "$cand" "$INNGEST_LINK_DIR/last-scheme" 0644; then
+    inngest_link_event last_scheme_unwritable warning "dir=$INNGEST_LINK_DIR action=continue"
+  fi
+  rm -f "$cand"
+  INNGEST_LINK_PENDING_SCHEME=""
+  return 0
+}
+
+# inngest_link_canary_check (#10136, canary layer 5 of canary-probe-set.md): the container-level proof, run against the CANARY
+# before promotion and ONLY when the resolver chose https (the host-side self-gate proves the host OUTPUT path and the pinned
+# bytes, never container egress or Node trust). Five checks: (1) `docker inspect` shows the canary was handed exactly the https
+# URL and the CA path; (2) one in-container fetch of THAT URL (`/health`, and `/v1/events?limit=1` with the hashed-signing-key
+# Bearer, the same derivation lib/inngest/list-runs.ts uses); (3) one real in-container send of the synthetic event
+# `soleur.tls-canary.ping` (no function triggers on it: apps/web-platform/test/server/inngest/tls-canary-event-no-trigger.test.ts)
+# through the event API the SDK posts to; (4) a NEGATIVE CONTROL in the same container with the CA withheld
+# (`env -u NODE_EXTRA_CA_CERTS`), which must fail with a certificate-verification error - a container that trusts everything would
+# otherwise pass every other check; (5) the registry read over https is non-empty. The scripts print fixed tokens only (never an
+# env value, a key or a response body) and the host parses them anchored, so anything else is a failure. Each positive check prints
+# `ok` or `fail[:<CAUSE>]` where CAUSE is mapped inside the container from a FIXED allowlist (errno / TLS-verification codes, `HTTP_<status>`,
+# `EMPTY`, else `other`; never raw error text), so the `canary_failed` event reads `check=<name> cause=<token>` and a failed check is not a
+# boolean (egress dropped = ETIMEDOUT/ECONNREFUSED, Node not trusting the pin = DEPTH_ZERO_SELF_SIGNED_CERT, the listener answering = HTTP_5xx).
+# Sets CANARY_FAIL_REASON (a constant: the cause lives in the event, Better Stack tag ci-deploy, Sentry op=inngest-link).
+INNGEST_LINK_CANARY_POS='const c=require("crypto"),b=process.env.INNGEST_BASE_URL,o=[];const g=v=>typeof v==="string"?v:"";const w=e=>{const x=g(e&&e.cause&&e.cause.code)||g(e&&e.code)||g(e&&e.name);return /^(ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|UND_ERR_[A-Z_]{1,30}|DEPTH_ZERO_SELF_SIGNED_CERT|SELF_SIGNED_CERT_IN_CHAIN|UNABLE_TO_VERIFY_LEAF_SIGNATURE|UNABLE_TO_GET_ISSUER_CERT_LOCALLY|CERT_HAS_EXPIRED|ERR_TLS_[A-Z_]{1,30}|TimeoutError|AbortError|SyntaxError)$/.test(x)?x:"other"};const k=(n,v)=>o.push(n+"="+(v?"fail:"+v:"ok"));const h=r=>r.status===200?"":"HTTP_"+r.status;const hs=s=>{const p=(s.match(/^signkey-\w+-/)||[""])[0];return p+c.createHash("sha256").update(s.slice(p.length),"hex").digest("hex")};const t=(u,x)=>fetch(u,Object.assign({signal:AbortSignal.timeout(15000)},x));(async()=>{try{k("health",h(await t(b+"/health")))}catch(e){k("health",w(e))}try{k("events",h(await t(b+"/v1/events?limit=1",{headers:{Authorization:"Bearer "+hs(process.env.INNGEST_SIGNING_KEY||"")}})))}catch(e){k("events",w(e))}try{k("send",h(await t(b+"/e/"+encodeURIComponent(process.env.INNGEST_EVENT_KEY||""),{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify([{name:"soleur.tls-canary.ping",data:{canary:true}}])})))}catch(e){k("send",w(e))}try{const r=await t(b+"/v0/gql",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({query:"query{functions{id}}"})});const j=await r.json();k("registry",r.status!==200?"HTTP_"+r.status:(Array.isArray(j&&j.data&&j.data.functions)&&j.data.functions.length>0?"":"EMPTY"))}catch(e){k("registry",w(e))}console.log("inngest_link_canary "+o.join(" "))})()'
+INNGEST_LINK_CANARY_NEG='fetch(process.env.INNGEST_BASE_URL+"/health",{signal:AbortSignal.timeout(15000)}).then(()=>console.log("inngest_link_canary_neg=accepted"),e=>{const c=(e&&e.cause&&e.cause.code)||"";console.log("inngest_link_canary_neg="+(/^(DEPTH_ZERO_SELF_SIGNED_CERT|SELF_SIGNED_CERT_IN_CHAIN|UNABLE_TO_VERIFY_LEAF_SIGNATURE|UNABLE_TO_GET_ISSUER_CERT_LOCALLY|ERR_TLS_CERT_ALTNAME_INVALID)$/.test(c)?"verify_error":"other"))})'
+inngest_link_canary_check() {
+  local cname="soleur-web-platform-canary" envs out="" rc=0 why="" cause="none" part name val
+  local -a parts
+  [[ "$INNGEST_LINK_CA_STRICT" == 1 ]] || return 0
+  envs="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$cname" 2>/dev/null)" || envs=""
+  if [[ "$(printf '%s\n' "$envs" | grep -c '^INNGEST_BASE_URL=')" != 1 \
+     || "$(printf '%s\n' "$envs" | grep -cxF "INNGEST_BASE_URL=$INNGEST_LINK_HTTPS_URL")" != 1 \
+     || "$(printf '%s\n' "$envs" | grep -cxF 'NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem')" != 1 ]]; then
+    why="inspect"
+  fi
+  if [[ -z "$why" ]]; then
+    out="$(timeout 90 docker exec "$cname" /usr/local/bin/node -e "$INNGEST_LINK_CANARY_POS" 2>/dev/null)" || rc=$?
+    # each check is `ok` or `fail[:<CAUSE>]` (a bounded [A-Za-z0-9_] token the in-container script maps from a fixed allowlist, else `other`)
+    if [[ "$rc" -ne 0 || ! "$out" =~ ^inngest_link_canary\ health=(ok|fail(:[A-Za-z0-9_]{1,40})?)\ events=(ok|fail(:[A-Za-z0-9_]{1,40})?)\ send=(ok|fail(:[A-Za-z0-9_]{1,40})?)\ registry=(ok|fail(:[A-Za-z0-9_]{1,40})?)$ ]]; then
+      why="no_verdict"
+    else
+      read -r -a parts <<< "${out#inngest_link_canary }"
+      for part in "${parts[@]}"; do
+        name="${part%%=*}"; val="${part#*=}"
+        if [[ "$val" != ok ]]; then
+          why="$name"; cause="${val#fail}"; cause="${cause#:}"; cause="${cause:-unknown}"
+          break
+        fi
+      done
+    fi
+  fi
+  if [[ -z "$why" ]]; then
+    rc=0
+    out="$(timeout 90 docker exec "$cname" env -u NODE_EXTRA_CA_CERTS /usr/local/bin/node -e "$INNGEST_LINK_CANARY_NEG" 2>/dev/null)" || rc=$?
+    if [[ "$rc" -ne 0 || "$out" != "inngest_link_canary_neg=verify_error" ]]; then
+      why="negative_control"
+      cause="${out#inngest_link_canary_neg=}"; [[ "$rc" -eq 0 && "$cause" =~ ^[a-z_]{1,20}$ ]] || cause="no_verdict"
+    fi
+  fi
+  if [[ -n "$why" ]]; then
+    inngest_link_event canary_failed error "check=$why cause=$cause"
+    CANARY_FAIL_REASON="canary_inngest_link_failed"
+    return 1
+  fi
+  inngest_link_event canary_ok info "checks=inspect,health,events,send,registry,negative_control"
+  return 0
+}
+# <<< inngest-link-resolver <<<
 
 # Verify inngest-server is healthy after restart (#4538), with an ADVISORY
 # cron-plan check (#4650 / AC9, reframed #5159).
@@ -4193,40 +4847,72 @@ case "$COMPONENT" in
     # Source of truth: /opt/soleur/plugin in the image (vendored at build time).
     # Must run BEFORE the canary docker run so the canary itself sees populated
     # content on first read — the Layer 3 probe script lives in the same mount.
-    # Uses an ephemeral container (`docker create` + `docker cp` + `docker rm`)
-    # so we never run a second instance of the new image during the canary phase.
-    # `docker cp src/. dst/` copies *contents* of src into dst (NOT src as a
-    # child of dst); `find -mindepth 1 -delete` is a single POSIX-portable
-    # cleanup form shared with cloud-init.yml — handles dotfiles like
-    # `.claude-plugin/` correctly.
-    echo "Seeding plugin mount from image..."
-    # Pre-flight: a prior SIGKILLed deploy may have left this container behind.
-    # `docker create --name` would otherwise fail with "container already exists".
-    docker rm -f soleur-plugin-seed >/dev/null 2>&1 || true
-    if ! docker create --name soleur-plugin-seed "$VERIFIED_REF" >/dev/null; then
-      final_write_state 1 "plugin_seed_create_failed"
+    #
+    # #8743: ONE container-side `docker run -u 0` clears, copies and
+    # sentinel-writes INSIDE the image — replacing the former host-side
+    # `docker create` + `docker cp` + `docker rm` sequence. `docker cp` untars
+    # client-side AS THE INVOKING UID (deploy, 1000), so it can neither delete
+    # nor re-chmod entries owned by a foreign uid: a mount tree seeded at birth
+    # by cloud-init.yml (root) carrying the image's uid-1001 ownership wedged
+    # every subsequent deploy on that host with `fchmodat2` EPERM →
+    # plugin_seed_copy_failed. Container-side root makes the seed
+    # ownership-agnostic and SELF-HEALING: the first deploy after delivery
+    # repairs a wedged mount in place — no host replace, no new privilege
+    # surface (deploy is docker-group = documented root-equivalent). `-u 0`
+    # overrides the image's `USER soleur`; `--entrypoint /bin/sh` pins the
+    # interpreter so a future Dockerfile ENTRYPOINT cannot reinterpret the
+    # args. `cp -a` preserves the image's 1001 ownership — now harmless: every
+    # later clear+copy is container-side root, and the app container only reads
+    # the :ro mount (world-readable). cloud-init.yml keeps its own host-side
+    # root `docker cp` seed (birth path, works once, never repaired thereafter
+    # — a DIFFERENT contract than this block; the first deploy after a boot
+    # rewrites whatever it left).
+    # PLUGIN_MOUNT_DIR shape guard (review finding, #8743): the seed below runs
+    # `find "$DST" -mindepth 1 -delete` on the bind source AS CONTAINER ROOT, so
+    # an env-derived PLUGIN_MOUNT_DIR pointing anywhere else turns the seed into
+    # a recursive delete on that host path. Refuse unless it is non-empty,
+    # absolute, under /mnt/data/, and basename `soleur` (i.e. ends
+    # /plugins/soleur — a trailing slash is tolerated; a `..` segment is not).
+    # The discriminating stderr marker is PLUGIN_SEED_MOUNT_UNSAFE; the state
+    # reason is plugin_seed_mount_unsafe. Harness opt-out: tests redirect the
+    # mount under a mktemp dir, so they set PLUGIN_MOUNT_DIR_ALLOW_UNSAFE=1 —
+    # a value production env never carries, same posture as the MOCK_* levers.
+    _pmd="${PLUGIN_MOUNT_DIR%/}"
+    if [[ "${PLUGIN_MOUNT_DIR_ALLOW_UNSAFE:-0}" != "1" ]] && \
+       [[ -z "$_pmd" || "$_pmd" != /mnt/data/* || "$_pmd" != */plugins/soleur || "$_pmd" == *..* ]]; then
+      echo "PLUGIN_SEED_MOUNT_UNSAFE: refusing the plugin-mount seed — PLUGIN_MOUNT_DIR='$PLUGIN_MOUNT_DIR' is not under /mnt/data/ ending /plugins/soleur" >&2
+      logger -t "$LOG_TAG" "DEPLOY_ABORT: PLUGIN_SEED_MOUNT_UNSAFE PLUGIN_MOUNT_DIR='$PLUGIN_MOUNT_DIR' refused by the seed shape guard"
+      final_write_state 1 "plugin_seed_mount_unsafe"
       exit 1
     fi
-    # Pre-create the mount dir so the sentinel write below cannot fail with
-    # ENOENT in test harnesses that run with PLUGIN_MOUNT_DIR pointed at a
-    # tmpdir. In production cloud-init.yml already creates /mnt/data/plugins/
-    # soleur, so this is a no-op there.
+    echo "Seeding plugin mount from image..."
+    # Pre-flight: a prior SIGKILLed deploy may have left this container behind.
+    docker rm -f soleur-plugin-seed >/dev/null 2>&1 || true
+    # Pre-create the mount dir so the -v bind cannot fail with ENOENT in test
+    # harnesses that point PLUGIN_MOUNT_DIR at a tmpdir. In production
+    # cloud-init.yml already creates /mnt/data/plugins/soleur — a no-op there.
     mkdir -p "$PLUGIN_MOUNT_DIR"
-    find "$PLUGIN_MOUNT_DIR" -mindepth 1 -delete 2>/dev/null || true
-    # Redirect cp stdout so it stays out of the docker-trace assertion stream
-    # used by ci-deploy.test.sh (which greps DOCKER_TRACE:* from script stdout).
-    # Stderr is preserved for journalctl debugging on real failures.
-    if ! docker cp soleur-plugin-seed:/opt/soleur/plugin/. "$PLUGIN_MOUNT_DIR/" >/dev/null; then
-      docker rm soleur-plugin-seed >/dev/null 2>&1 || true
+    # PLUGIN_SEED_PROBE is emitted INSIDE the container BEFORE any mutation on
+    # STDERR (>&2 — not stdout): Docker demultiplexes fd 2 to the client's
+    # stderr, which journald records at PRIORITY 3 for webhook.service — the
+    # one arm (Source 1 include_matches.PRIORITY {3,4}) that admits a
+    # ci-deploy.sh-tagged row to Better Stack; stdout lands at PRIORITY 6 and
+    # ships nowhere. dst ownership, the .claude-plugin marker's ownership and
+    # the mount source are the uid/gid facts that adjudicate the fchmodat2
+    # root cause and cannot be read off-box any other
+    # way. The .seed-complete sentinel is written LAST inside the container —
+    # same atomic-position semantics as before: a killed run leaves it absent
+    # and verifyPluginMountOnce still detects a partial copy.
+    # The -c script stays a SINGLE physical line: docker-run-tuple.py's census
+    # cannot tokenize a quote that spans the run's continuation lines, and a
+    # tokenization failure would also mask the site's named exemption.
+    if ! docker run --rm --name soleur-plugin-seed -u 0 --entrypoint /bin/sh \
+         -v "$PLUGIN_MOUNT_DIR":/plugin-mount \
+         -e "SEED_TAG=$TAG" \
+         "$VERIFIED_REF" -c 'set -eu; DST=/plugin-mount; echo "PLUGIN_SEED_PROBE dst_owner=$(stat -c %u:%g "$DST" 2>/dev/null || echo unknown) marker=$(stat -c %u:%g "$DST/.claude-plugin" 2>/dev/null || echo absent) findmnt=$(findmnt -no SOURCE "$DST" 2>/dev/null || echo unknown)" >&2; find "$DST" -mindepth 1 -delete; cp -a /opt/soleur/plugin/. "$DST"/; printf "%s\n" "seeded $(date -u +%Y-%m-%dT%H:%M:%SZ) tag=$SEED_TAG" > "$DST/.seed-complete"'; then
       final_write_state 1 "plugin_seed_copy_failed"
       exit 1
     fi
-    docker rm soleur-plugin-seed >/dev/null
-    # Sentinel marker — written LAST so a SIGKILL mid-cp leaves the marker
-    # absent. `verifyPluginMountOnce` checks for it to distinguish "manifest
-    # extracted early but partial copy" from a healthy mount.
-    printf '%s\n' "seeded $(date -u +%Y-%m-%dT%H:%M:%SZ) tag=$TAG" \
-      > "$PLUGIN_MOUNT_DIR/.seed-complete"
 
     # Prepare environment (shared between canary and production)
     sudo chown 1001:1001 /mnt/data/workspaces
@@ -4278,6 +4964,17 @@ case "$COMPONENT" in
       exit 1
     fi
 
+    # #10136 (ADR-294): resolve the Inngest link ONCE for both app starts. With the flag on, a CA/self-gate failure
+    # ends the deploy here and the old container keeps serving; there is no http downgrade. Reason tokens are fixed
+    # literals set inside the resolver (final_write_state splices the reason into JSON unquoted).
+    INNGEST_LINK_RC=0
+    resolve_inngest_link "$ENV_FILE" || INNGEST_LINK_RC=$?
+    if (( INNGEST_LINK_RC != 0 )); then
+      logger -t "$LOG_TAG" "DEPLOY_ABORT: the Inngest link could not be resolved (${INNGEST_LINK_REASON:-inngest_link_failed}) — keeping previous version"
+      final_write_state 1 "${INNGEST_LINK_REASON:-inngest_link_failed}"
+      exit 1
+    fi
+
     # The container's NODE_OPTIONS is ours alone: the heap cap via `-e NODE_OPTIONS=` below. The
     # #5417 lever (append the cap to an operator-set NODE_OPTIONS from the Doppler env-file) is
     # retired under #8609: the overlay above refuses any prd env carrying a NODE_* name other than
@@ -4304,22 +5001,27 @@ case "$COMPONENT" in
       --tmpfs /tmp:rw,nosuid,nodev,size=256m \
       --env-file "$ENV_FILE" \
       --add-host host.docker.internal:host-gateway \
-      -e INNGEST_BASE_URL=http://10.0.1.40:8288 \
+      -e INNGEST_BASE_URL="$INNGEST_BASE_URL_RESOLVED" \
+      -e NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem \
       -e CRON_WORKSPACE_ROOT=/workspaces \
       -e SOLEUR_HOST_ID="$HOST_ID" \
       -e NODE_OPTIONS="$CANARY_NODE_OPTIONS" \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
+      -v /mnt/data/inngest-link/inngest-ca.pem:/etc/soleur/inngest-ca.pem:ro \
       -p 0.0.0.0:3001:3000 \
       "$VERIFIED_REF"
 
     # Layered canary probe set. Contract:
     #   knowledge-base/engineering/operations/runbooks/canary-probe-set.md
-    readonly CANARY_HEALTH_HTTP="/tmp/canary-health-http"
-    readonly CANARY_LOGIN_HTTP="/tmp/canary-login-http"
-    readonly CANARY_LOGIN_BODY="/tmp/canary-login-body.html"
-    readonly CANARY_DASH_HTTP="/tmp/canary-dash-http"
-    readonly CANARY_DASH_BODY="/tmp/canary-dash-body.html"
+    # The probe scratch files live under CANARY_PROBE_TMPDIR (default /tmp). The override exists so concurrent runs of
+    # ci-deploy.test.sh (and a deploy next to one) cannot read each other's files: four fixed /tmp paths shared by every
+    # run made canary-health rows flake under load.
+    readonly CANARY_HEALTH_HTTP="${CANARY_PROBE_TMPDIR:-/tmp}/canary-health-http"
+    readonly CANARY_LOGIN_HTTP="${CANARY_PROBE_TMPDIR:-/tmp}/canary-login-http"
+    readonly CANARY_LOGIN_BODY="${CANARY_PROBE_TMPDIR:-/tmp}/canary-login-body.html"
+    readonly CANARY_DASH_HTTP="${CANARY_PROBE_TMPDIR:-/tmp}/canary-dash-http"
+    readonly CANARY_DASH_BODY="${CANARY_PROBE_TMPDIR:-/tmp}/canary-dash-body.html"
     # Structured marker emitted by `components/error-boundary-view.tsx`.
     # Stable across copy edits — replaces the brittle "An unexpected error
     # occurred" sentinel which only renders when `error.digest` is falsy.
@@ -4551,8 +5253,10 @@ case "$COMPONENT" in
       # on a faithful FAIL, but never gates/rolls back this deploy. `|| true`
       # keeps a canary hiccup from aborting the deploy under set -e.
       run_faithful_sandbox_canary || true
-      # Outer-wrap canary (#5863) — report-only, same non-blocking posture.
-      run_outer_wrap_canary || true
+      # no outer-wrap verdict: retired, see ADR-079 addendum 2026-10-19 (#10454). Its pass condition
+      # (privileged elevation) was dropped on purpose by ADR-075's 2026-10-09 addendum, so it could never go green.
+
+      # (The deploy-time SDK Bash smoke, #10453, runs after the GitHub App key gate below, not here.)
 
       # Cross-workspace isolation probe (#2640) — NON-BLOCKING dark-launch
       # (wg-dark-launch-deploy-gates). Runs the direct tier of the cross-workspace
@@ -4566,6 +5270,23 @@ case "$COMPONENT" in
     # #8609 (plan §3.3): the GitHub App key check is the last gate before promotion.
     if [[ "$CANARY_HEALTHY" == "true" ]] && ! github_app_key_canary_check; then
       CANARY_HEALTHY=false
+    fi
+
+    # #10136 (canary-probe-set.md layer 5): with the verified-TLS link on, the container-level proof (https URL handed, an
+    # in-container fetch and a real synthetic send, the CA-withheld negative control, a non-empty registry) gates promotion.
+    # A no-op while the resolver chose the legacy http link.
+    if [[ "$CANARY_HEALTHY" == "true" ]] && ! inngest_link_canary_check; then
+      CANARY_HEALTHY=false
+    fi
+
+    # Deploy-time SDK Bash smoke (#10453) — NON-BLOCKING dark-launch (wg-dark-launch-deploy-gates). One real wrapped Bash call
+    # through the real Agent SDK in the CANARY container: the check the faithful canary cannot make (its replay ends in `-- true`,
+    # the #10445 shape). Records a verdict to its own ledger and pages on a failure, but never gates or rolls back this deploy.
+    # It runs AFTER the last promotion gates (the key and Inngest link checks above) so that a probe OOM in the memory-capped canary, or a probe
+    # still running after a host-cap 124, cannot fail that gate and roll back a healthy deploy, even indirectly (2026-10-19 review ruling; rationale: ADR-079 addendum).
+    # `|| true` is LOAD-BEARING: no verdict may abort a deploy under set -e. Promotion is #10548.
+    if [[ "$CANARY_HEALTHY" == "true" ]]; then
+      run_sdk_bash_smoke || true
     fi
 
     if [[ "$CANARY_HEALTHY" == "true" ]]; then
@@ -4637,6 +5358,18 @@ case "$COMPONENT" in
       # tmpfs /tmp (closes #2473): see canary block above for rationale.
       # Post-GIT_ASKPASS migration, git auth is in $HOME (git-auth.ts) so
       # /tmp no longer needs to be exec-able for git credential helpers.
+      #
+      # Egress session tokens: the host dir /var/lib/soleur/egress-tokens (server.tf
+      # owns it, 1001:1001 mode 0711) is bind-mounted so the per-session egress
+      # forwarder can create its token file; without the mount the forwarder's mkdir
+      # fails EACCES and an entitled web-egress session has zero egress. The fresh-host
+      # start in cloud-init.yml carries the same mount and flag. SOLEUR_EGRESS_REAPER=1
+      # is for the prod and first-boot starts only (ADR-278 canary isolation): the
+      # canary's argv above carries neither. Least privilege for the mount (the canary
+      # runs no egress sessions); for the flag, its /proc cannot see the prod forwarders
+      # and a canary reaper would revoke live tokens. lib/docker-run-tuple.py pins both
+      # halves of the ARGV; env injected through --env-file (Doppler prd) or
+      # EGRESS_TOKEN_DIR is a stated residual there.
       if docker run -d \
         --name soleur-web-platform \
         --log-driver journald \
@@ -4649,12 +5382,16 @@ case "$COMPONENT" in
         --tmpfs /tmp:rw,nosuid,nodev,size=256m \
         --env-file "$ENV_FILE" \
         --add-host host.docker.internal:host-gateway \
-        -e INNGEST_BASE_URL=http://10.0.1.40:8288 \
+        -e INNGEST_BASE_URL="$INNGEST_BASE_URL_RESOLVED" \
+        -e NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem \
         -e CRON_WORKSPACE_ROOT=/workspaces \
         -e SOLEUR_HOST_ID="$HOST_ID" \
         -e NODE_OPTIONS="$PROD_NODE_OPTIONS" \
+        -e SOLEUR_EGRESS_REAPER=1 \
         -v /mnt/data/workspaces:/workspaces \
         -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
+        -v /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens \
+        -v /mnt/data/inngest-link/inngest-ca.pem:/etc/soleur/inngest-ca.pem:ro \
         -p 0.0.0.0:80:3000 \
         -p 0.0.0.0:3000:3000 \
         "$VERIFIED_REF"; then
@@ -4667,6 +5404,9 @@ case "$COMPONENT" in
         # apply-deploy-pipeline-fix.yml asserts this == sha256(committed) with no
         # SSH — the "applied ≠ loaded" gap closer. Best-effort; never gates.
         write_seccomp_profile_hash
+
+        # #10136: the production container is up on the resolved Inngest link - only now record the scheme (downgrade memory).
+        inngest_link_commit_scheme
 
         # Clear the deploy lease so the new container's crons resume immediately
         # (#5669 / ADR-078). Best-effort: the substrate's TTL fail-open is the

@@ -1,0 +1,8 @@
+{
+  "skills": [
+    "__SOLEUR_PLUGIN_ROOT__/skills"
+  ],
+  "instructions": [
+    "__SOLEUR_PLUGIN_ROOT__/opencode/INSTRUCTIONS.md"
+  ]
+}

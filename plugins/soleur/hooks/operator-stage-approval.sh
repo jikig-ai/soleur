@@ -342,7 +342,16 @@ esac
 # The impact and rollback sentences are read from the SCRIPT FILE, which the agent can
 # edit, so the prompt says so. Control characters are dropped and each sentence is
 # capped: the text can mislead a person, it cannot spoof the prompt's own framing.
-clean() { printf '%s' "$1" | tr -d '\000-\037\177' | cut -c1-500; }
+#
+# Shared context-sanitize lib (#10395), one tree up at scripts/lib/. When it is
+# unreadable the same-name fallback carries this site's pre-change strip set
+# (C0+DEL) — never weaker than today.
+_ctx_lib="$HOOK_DIR/../scripts/lib/context-sanitize.sh"
+# shellcheck source=/dev/null
+[[ -r "$_ctx_lib" ]] && . "$_ctx_lib" || true
+declare -F soleur_ctx_sanitize >/dev/null 2>&1 \
+  || soleur_ctx_sanitize() { LC_ALL=C tr -d '\000-\037\177'; }
+clean() { printf '%s' "$1" | soleur_ctx_sanitize | cut -c1-500; }
 IMPACT="$(clean "$IMPACT")"; ROLLBACK="$(clean "$ROLLBACK")"
 REASON="Soleur is about to run stage '${STAGE}' of a generated operator script and change production. The script describes what it does as: ${IMPACT} It describes how to undo it as: ${ROLLBACK} (Both sentences come from the script file and are not verified by Soleur.) Approving runs exactly the command shown."
 # The Bash tool shows a `description` the AGENT wrote next to the command in the

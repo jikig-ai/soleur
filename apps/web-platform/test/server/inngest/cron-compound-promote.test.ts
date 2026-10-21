@@ -18,6 +18,8 @@ import { stripFrontmatter } from "../../../../../scripts/lib/frontmatter-strip/s
 import {
   ANTHROPIC_MAX_TOKENS,
   ANTHROPIC_MODEL,
+  CLUSTER_OUTPUT_SCHEMA,
+  EDIT_OUTPUT_SCHEMA,
   MAX_DIFF_BYTES,
   PII_REGEX,
   TARGET_ALLOW_RE,
@@ -214,6 +216,58 @@ describe("synthetic checks (AC18)", () => {
 });
 
 // =============================================================================
+// T17 (#10552): the model contract
+// =============================================================================
+
+describe("model contract (#10552)", () => {
+  /** Every object-typed node in a JSON schema. */
+  function objectNodes(node: unknown, out: Array<Record<string, unknown>> = []): Array<Record<string, unknown>> {
+    if (node && typeof node === "object") {
+      const o = node as Record<string, unknown>;
+      if (o.type === "object") out.push(o);
+      for (const v of Object.values(o)) objectNodes(v, out);
+    }
+    return out;
+  }
+
+  it("the phase-1 schema offers the model neither a diff field nor a byte_impact field", () => {
+    const text = JSON.stringify(CLUSTER_OUTPUT_SCHEMA);
+    expect(text).not.toContain("proposed_diff_unified");
+    expect(text).not.toContain("byte_impact");
+    // ...and keeps the fields the clustering call genuinely owns.
+    for (const key of ["cluster_hash", "tier", "target_path", "source_learnings", "rationale"]) {
+      expect(text).toContain(key);
+    }
+  });
+
+  it("the phase-2 schema asks for exactly an anchor and the lines, closed at every object level", () => {
+    const root = EDIT_OUTPUT_SCHEMA as unknown as {
+      required?: string[];
+      properties?: Record<string, { type?: string; items?: { type?: string } }>;
+    };
+    expect([...(root.required ?? [])].sort()).toEqual(["insert_after_line", "new_lines"]);
+    expect(root.properties?.insert_after_line?.type).toBe("string");
+    expect(root.properties?.new_lines?.type).toBe("array");
+    expect(root.properties?.new_lines?.items?.type).toBe("string");
+    const nodes = objectNodes(EDIT_OUTPUT_SCHEMA);
+    expect(nodes.length).toBeGreaterThan(0);
+    for (const n of nodes) expect(n.additionalProperties).toBe(false);
+  });
+
+  it("the phase-1 prompt no longer names a diff or a byte impact", () => {
+    const src = readFileSync(
+      join(__dirname, "../../../server/inngest/functions/cron-compound-promote.ts"),
+      "utf-8",
+    );
+    const start = src.indexOf("You are a clustering agent");
+    expect(start).toBeGreaterThan(-1);
+    const prompt = src.slice(start, src.indexOf("].join(", start));
+    expect(prompt).not.toContain("proposed_diff_unified");
+    expect(prompt).not.toContain("byte_impact");
+  });
+});
+
+// =============================================================================
 // MAX_DIFF_BYTES constant
 // =============================================================================
 
@@ -248,6 +302,32 @@ describe("handler-side persistence (#5111)", () => {
     expect(SUT_SOURCE).toContain("commitBody: trailer");
     // The private staging pipeline must not return.
     expect(SUT_SOURCE).not.toContain("spawnGitChecked");
+  });
+
+  it("spawnGitCapture resolves on `close`, not `exit` (a successful git read must never resolve with undelivered stdout)", () => {
+    const start = SUT_SOURCE.indexOf("function spawnGitCapture(");
+    expect(start).toBeGreaterThan(-1);
+    const body = SUT_SOURCE.slice(start, SUT_SOURCE.indexOf("\n}\n", start))
+      .split("\n")
+      .map((l) => l.replace(/^\s*\/\/.*$/, ""))
+      .join("\n");
+    expect(body).toMatch(/child\.on\("close",/);
+    // Neither spelling of an `exit` listener may resolve the capture (on/once/addListener).
+    expect(body).not.toMatch(/\.(?:on|once|addListener)\(\s*"exit"/);
+  });
+
+  it("the sibling crons that capture a child's stdout resolve on `close`, not `exit`", () => {
+    const dir = join(__dirname, "../../../server/inngest/functions");
+    // The output-capturing listeners today: weekly-analytics 1, vendor-drift 2. Reverting any one
+    // to `exit` lowers its file's `close` count (the other `exit` listeners there use stdio:ignore).
+    const expected: Record<string, number> = { "cron-weekly-analytics.ts": 1, "cron-content-vendor-drift.ts": 2 };
+    for (const [f, n] of Object.entries(expected)) {
+      const src = readFileSync(join(dir, f), "utf-8")
+        .split("\n")
+        .map((l) => l.replace(/^\s*\/\/.*$/, ""))
+        .join("\n");
+      expect((src.match(/\.on\("close",/g) ?? []).length, f).toBe(n);
+    }
   });
 
   it("inlines stripFrontmatter — does NOT cross-root-import repo-root scripts/ (#6794/#6860)", () => {

@@ -1,8 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Tests the seed sequence used by ci-deploy.sh and cloud-init.yml to populate
+# Tests the seed sequence cloud-init.yml uses to populate
 # /mnt/data/plugins/soleur from the image's baked plugin tree (#3045).
+#
+# SCOPE NOTE (#8743): this suite covers the cloud-init BIRTH path only. Since
+# #8743, ci-deploy.sh seeds the mount CONTAINER-SIDE — one `docker run --rm
+# -u 0 --entrypoint /bin/sh -v <mount>:/plugin-mount` that probes
+# (PLUGIN_SEED_PROBE), clears, `cp -a`s and writes .seed-complete inside the
+# image — because the host-side `docker cp` untars as the deploy uid and cannot
+# touch a foreign-uid tree. cloud-init.yml keeps its host-side root `docker
+# cp` seed (runs once at birth; the first deploy's container-side seed rewrites
+# whatever it leaves), which is the sequence exercised below.
 #
 # Asserts:
 #   - manifest (.claude-plugin/plugin.json) lands at the mount root, not nested
@@ -57,11 +66,11 @@ echo "stale" > "$TARGET/stale-file.txt"
 mkdir -p "$TARGET/.stale-dir"
 touch "$TARGET/.stale-dir/keep"
 
-# Run the seed sequence verbatim. `find -mindepth 1 -delete` is the single
-# POSIX-portable cleanup form used by both ci-deploy.sh (bash) and
-# cloud-init.yml (dash) so this test exercises the production form on both
-# paths. Sentinel `.seed-complete` is written LAST so partial-copy detection
-# in `verifyPluginMountOnce` works; the test asserts both are present.
+# Run the CLOUD-INIT seed sequence verbatim (since #8743 the ci-deploy.sh path
+# is a different, container-side contract — see the header). `find -mindepth 1
+# -delete` stays the POSIX-portable cleanup form cloud-init.yml's dash-run
+# `- |` block needs. Sentinel `.seed-complete` is written LAST so partial-copy
+# detection in `verifyPluginMountOnce` works; the test asserts both are present.
 # Kept after the $$-scoping, on a narrower rationale than it originally had. With a FIXED
 # name this cleared a container a crashed prior run had left behind; $$-scoping plus the EXIT
 # trap removes that path. What survives is PID reuse combined with a trap bypass (SIGKILL,

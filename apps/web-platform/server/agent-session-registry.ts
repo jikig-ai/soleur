@@ -149,6 +149,13 @@ export function clearActiveTurnConversation(
   }
 }
 
+/** #8211 quiet-window read — the number of in-flight legacy-leader sessions on
+ *  this host. A bare count: never the keys (they embed user and conversation
+ *  ids). The cc-soleur-go lineage is counted separately (cc-dispatcher). */
+export function activeLegacySessionCount(): number {
+  return activeSessions.size;
+}
+
 /** Look up a single session by exact key. */
 export function getSession(
   userId: string,

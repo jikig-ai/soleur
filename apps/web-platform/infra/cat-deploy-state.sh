@@ -373,16 +373,34 @@ workspace_isolation_json() {
   canary_state_json "${WORKSPACE_ISOLATION_STATE_FILE:-/mnt/data/ci-deploy-workspace-isolation.json}" "workspace-isolation"
 }
 
+# Deploy-time SDK Bash smoke verdict (#10453, ADR-079 addendum 2026-10-19). The no-SSH surface for the dark-launched
+# smoke: the last deploy's verdict (pass | sdk_bash_smoke_failed | smoke_infra_error), its reason, the soak
+# accumulators the promotion follow-through reads (scripts/followthroughs/sdk-bash-smoke-verdict-10548.sh), plus the two
+# fields the shared ledger shape does not carry: `coverage` (sdk_wrapper_shim_prodtuple | replay_only: a replay-only pass
+# never counts toward promotion) and `consecutive_infra_error` (the stale-probe counter, three in a row warn). The shared
+# reader supplies the base fields and the foreign-ledger refusal; the two extras are read only from a file whose stamp is
+# absent or its own, so a foreign ledger leaks neither. Safe sentinel (verdict "unknown", coverage "", counter 0) when the
+# file is absent: an old script with a new image, or a deploy that never reached the smoke. Best-effort + read-only.
+# DURABLE path, MUST match ci-deploy.sh SDK_BASH_SMOKE_STATE_FILE.
+sdk_bash_smoke_json() {
+  local f="${SDK_BASH_SMOKE_STATE_FILE:-/mnt/data/ci-deploy-sdk-bash-smoke.json}" base cov="" cie=0 stamp
+  base="$(canary_state_json "$f" "sdk-bash-smoke")"
+  if [[ -f "$f" ]]; then
+    stamp="$(jq -r '.ledger // ""' "$f" 2>/dev/null || echo '')"
+    if [[ -z "$stamp" || "$stamp" == "sdk-bash-smoke" ]]; then
+      cov="$(jq -r '.coverage // ""' "$f" 2>/dev/null || echo '')"
+      cie="$(jq -r '.consecutive_infra_error // 0' "$f" 2>/dev/null || echo 0)"
+    fi
+  fi
+  [[ "$cov" == "sdk_wrapper_shim_prodtuple" || "$cov" == "replay_only" ]] || cov=""
+  [[ "$cie" =~ ^[0-9]+$ ]] || cie=0
+  jq -nc --argjson b "$base" --arg cov "$cov" --argjson cie "$cie" '$b + {coverage: $cov, consecutive_infra_error: $cie}'
+}
+
 # The canary-promotion follow-through
 # (scripts/followthroughs/canary-promotion-5875.sh) reads this field.
 sandbox_canary_json() {
   canary_state_json "${SANDBOX_CANARY_STATE_FILE:-/mnt/data/ci-deploy-sandbox-canary.json}" "sandbox-canary"
-}
-
-# Same shape, separate ledger (#5863): the outer-wrap canary's report-only
-# soak state. Read by the #5863 follow-through via /hooks/deploy-status.
-outer_wrap_canary_json() {
-  canary_state_json "${SANDBOX_OUTER_WRAP_CANARY_STATE_FILE:-/mnt/data/ci-deploy-outer-wrap-canary.json}" "sandbox-canary-outer-wrap"
 }
 
 # Loaded seccomp profile hash (#5875 item 4 / ADR-079). The no-SSH surface for
@@ -773,10 +791,120 @@ JOURNALD_STORAGE="$(journald_storage_json)"
 CONTAINER_RESTART="$(container_restart_json)"
 CRON_DRAIN="$(cron_drain_json)"
 SANDBOX_CANARY="$(sandbox_canary_json)"
-OUTER_WRAP_CANARY="$(outer_wrap_canary_json)"
 WORKSPACE_ISOLATION="$(workspace_isolation_json)"
+SDK_BASH_SMOKE="$(sdk_bash_smoke_json)"
 SECCOMP_PROFILE_SHA256="$(seccomp_profile_sha256_value)"
 SECCOMP_LIVE="$(seccomp_live_json)"
+
+# #8743 Phase 2 (ADR-068 constraint (c) — the recorded-but-unbuilt private-net
+# peer verification). ci-deploy.sh write_state persists `fanout_peers` (the
+# effective SOLEUR_DEPLOY_PEERS minus self); for each entry this GETs
+# http://<peer>:9000/hooks/deploy-status signed with the shared
+# webhook_deploy_secret read from hooks.json — the SAME HMAC-over-empty-body +
+# stdin `--config` pattern fan_out_to_peers uses (adnanh/webhook verifies
+# payload-hmac-sha256 over the GET's empty body; the signature rides curl's
+# stdin, never argv, and the key rides the python3 child's env). Each slot
+# carries the peer's WHOLE status JSON — including its ci_deploy_sha256 — or a
+# discriminating error: unreachable | http_<code> | not_json | unsigned |
+# bad_peer.
+# BOUNDED (--max-time 3 per peer) and FAIL-OPEN: a peer error fills its slot
+# and can never fail this hook — the release workflow's
+# `Verify peer deploy completion` step owns the verdict. Callers: emits `{}`
+# when fanout_peers is absent/empty (the deploy-peer-received shape), so the
+# merge below adds no `peers` key and the read cannot recurse on a peer.
+peers_json() {
+  local peers_csv="$1"
+  [[ -n "$peers_csv" ]] || { printf '{}'; return 0; }
+
+  local hooks_file="${SOLEUR_HOOKS_JSON:-/etc/webhook/hooks.json}" secret
+  # Scoped to id=="deploy-status" — the hook this code CALLS on the peer —
+  # never a sibling hook's matcher secret (the T-9294 first-HMAC-match form).
+  secret=$(jq -r '[.[] | select(.id=="deploy-status") | .["trigger-rule"] | .. | objects | select(.type=="payload-hmac-sha256")] | first | .secret | select(type=="string")' \
+    "$hooks_file" 2>/dev/null || true)
+
+  local sig="" can_sign=1
+  if [[ -z "$secret" || "$secret" == "null" ]]; then
+    can_sign=0
+  else
+    # The deploy-status rule verifies the HMAC over the (empty) GET body.
+    sig=$(printf '' | HMAC_KEY="$secret" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())' 2>/dev/null) || sig=""
+    [[ "$sig" =~ ^[0-9a-f]{64}$ ]] || can_sign=0
+  fi
+
+  # _peer_fetch <ip>: prints the peer's slot — its whole status JSON, or the
+  # discriminating error object. One bounded read: -w appends a newline and
+  # %{http_code} after the body, so the last line is the code and the rest is
+  # the body. --max-filesize caps a misbehaving/bloating peer at 1 MiB (the
+  # slot embeds the response verbatim into this hook's own body).
+  _peer_fetch() {
+    local p="$1" resp code body s
+    resp=$(curl --disable --noproxy '*' -s -w $'\n%{http_code}' --max-time 3 \
+      --max-filesize 1048576 \
+      --config - \
+      "http://${p}:9000/hooks/deploy-status" \
+      < <(printf 'header = "X-Signature-256: sha256=%s"\n' "$sig") 2>/dev/null || true)
+    code="${resp##*$'\n'}"
+    body="${resp%$'\n'*}"
+    [[ "$code" =~ ^[0-9]{3}$ ]] || code="000"
+    if [[ "$code" == "200" ]]; then
+      if s=$(printf '%s' "$body" | jq -c 'if type=="object" then . else error end' 2>/dev/null); then :; else
+        s='{"error":"not_json"}'
+      fi
+    elif [[ "$code" == "000" ]]; then
+      s='{"error":"unreachable"}'
+    else
+      s="{\"error\":\"http_$code\"}"
+    fi
+    printf '%s' "$s"
+  }
+
+  local result="{}" peer slot merged _parr _ptmpdir
+  local -a _pending=()
+  IFS=',' read -ra _parr <<< "$peers_csv"
+  # PARALLEL fetch (review finding): N serial --max-time-3 curls can exceed the
+  # caller's 10s read bound on a 4-peer fleet; one backgrounded _peer_fetch per
+  # peer into a per-peer slot file bounds the wall-clock by the SLOWEST peer,
+  # not the sum. A missing/empty slot file reads as `unreachable` below — the
+  # same slot a crashed fetch would have produced serially.
+  _ptmpdir=$(mktemp -d 2>/dev/null) || _ptmpdir=""
+  # lint-trap-ownership (#6734): peers_json is only invoked via $() at the
+  # merge site, so this EXIT trap lives and dies with that subshell — it
+  # removes the slot dir even if the script dies between allocation and the
+  # tail rm, and never clobbers the main shell's trap table.
+  if [[ -n "$_ptmpdir" ]]; then
+    trap "rm -rf '$_ptmpdir' 2>/dev/null || true" EXIT
+  fi
+  for peer in "${_parr[@]}"; do
+    peer="${peer//[[:space:]]/}"
+    [[ -n "$peer" ]] || continue
+    if [[ ! "$peer" =~ ^[0-9.]+$ ]]; then
+      # fanout_peers is webhook-payload-derived state: a token that is not bare
+      # digits-and-dots never reaches curl's URL position (a flag-shaped entry
+      # would otherwise be parsed as a curl OPTION).
+      slot='{"error":"bad_peer"}'
+    elif [[ "$can_sign" -eq 0 ]]; then
+      slot='{"error":"unsigned"}'
+    elif [[ -n "$_ptmpdir" ]]; then
+      _pending+=("$peer")
+      _peer_fetch "$peer" > "$_ptmpdir/$peer" &
+      continue
+    else
+      # mktemp -d unavailable — serial fallback, identical slot taxonomy.
+      slot=$(_peer_fetch "$peer")
+    fi
+    # A jq failure here must not propagate under set -e — keep the slots
+    # collected so far and let the malformed peer simply be absent.
+    merged=$(printf '%s' "$result" | jq --arg p "$peer" --argjson s "$slot" '. + {($p): $s}' 2>/dev/null) && result="$merged" || true
+  done
+  wait 2>/dev/null || true
+  for peer in "${_pending[@]}"; do
+    slot="$(cat "$_ptmpdir/$peer" 2>/dev/null || true)"
+    [[ -n "$slot" ]] || slot='{"error":"unreachable"}'
+    merged=$(printf '%s' "$result" | jq --arg p "$peer" --argjson s "$slot" '. + {($p): $s}' 2>/dev/null) && result="$merged" || true
+  done
+  [[ -z "$_ptmpdir" ]] || rm -rf "$_ptmpdir" 2>/dev/null || true
+  printf '%s' "$result"
+}
 
 STATE_FILE="${CI_DEPLOY_STATE:-/var/lock/ci-deploy.state}"
 
@@ -788,6 +916,14 @@ if [[ ! -f "$STATE_FILE" ]]; then
 elif ! BASE="$(jq -c . "$STATE_FILE" 2>/dev/null)"; then
   BASE='{"exit_code":-3,"reason":"corrupt_state"}'
 fi
+
+# #8743 Phase 2: the peers map rides the TOP-LEVEL merge (not services.*) —
+# the release workflow reads `.peers["<ip>"].exit_code` / `.tag` directly.
+# fanout_peers comes off the base state; absent → {} → no `peers` key added.
+# The trailing `|| printf '{}'` + object check keep a mid-loop failure from
+# ever turning this hook non-200 or breaking --argjson.
+PEERS_JSON="$(peers_json "$(printf '%s' "$BASE" | jq -r '.fanout_peers // ""' 2>/dev/null || true)" || printf '{}')"
+printf '%s' "$PEERS_JSON" | jq -e 'type == "object"' >/dev/null 2>&1 || PEERS_JSON='{}'
 
 jq -nc \
   --argjson base "$BASE" \
@@ -805,10 +941,11 @@ jq -nc \
   --argjson cr "$CONTAINER_RESTART" \
   --argjson cd "$CRON_DRAIN" \
   --argjson sc "$SANDBOX_CANARY" \
-  --argjson owc "$OUTER_WRAP_CANARY" \
   --argjson wi "$WORKSPACE_ISOLATION" \
+  --argjson sb "$SDK_BASH_SMOKE" \
   --arg sps "$SECCOMP_PROFILE_SHA256" \
   --argjson sl "$SECCOMP_LIVE" \
+  --argjson pj "$PEERS_JSON" \
   --arg hid "$HOST_ID" \
   --arg cds "$CI_DEPLOY_SHA256" \
   --arg rs "$INNGEST_REDIS_STATUS" \
@@ -820,7 +957,7 @@ jq -nc \
   --arg rb "$INNGEST_REDIS_BINARY" \
   --arg rts "$INNGEST_REDIS_TAIL_STATUS" \
   --arg vci "$VECTOR_CONFIG_IDENTITY" \
-  '$base + $cr + $cd + $sl + {host_id: $hid, ci_deploy_sha256: $cds, sandbox_canary: $sc, outer_wrap_canary: $owc, workspace_isolation: $wi, seccomp_profile_sha256: $sps, journald_storage: $js, services: (($base.services // {}) + {
+  '$base + $cr + $cd + $sl + (if ($pj | length) > 0 then {peers: $pj} else {} end) + {host_id: $hid, ci_deploy_sha256: $cds, sandbox_canary: $sc, workspace_isolation: $wi, sdk_bash_smoke: $sb, seccomp_profile_sha256: $sps, journald_storage: $js, services: (($base.services // {}) + {
     inngest_heartbeat: $hb,
     inngest_heartbeat_journal_tail: $hbj,
     inngest_heartbeat_dark_arm: $hbd,

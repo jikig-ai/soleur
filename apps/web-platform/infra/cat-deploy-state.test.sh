@@ -60,6 +60,40 @@ MOCK
   chmod +x "$1/docker"
 }
 
+# --- curl mock factory for the #8743 peers_json coverage ---------------------
+# peers_json GETs http://<peer>:9000/hooks/deploy-status HMAC-signed over the
+# empty GET body, the signature riding curl's stdin `--config` channel. This
+# mock answers per-peer fixtures: MOCK_PEER_DIR/<ip>.status is the HTTP code
+# (`000` models a connect failure — curl exits non-zero), <ip>.body the body.
+# Emulates `-w '\n%{http_code}'` by printing body, newline, code. Records argv
+# and the stdin config block to MOCK_PEER_CURL_LOG so the signature channel and
+# the --max-time bound are observable. Drains stdin ONLY when `--config -` is in
+# argv — a hook invoked with real stdin would otherwise hang the mock on `cat`.
+create_peer_curl_mock() {
+  cat > "$1/curl" << 'MOCK'
+#!/usr/bin/env bash
+url=""; drain=0; prev=""
+for a in "$@"; do
+  case "$a" in http://*) url="$a" ;; esac
+  [[ "$prev" == "--config" && "$a" == "-" ]] && drain=1
+  prev="$a"
+done
+ip="${url#http://}"; ip="${ip%%:*}"
+if [[ "$drain" == "1" ]]; then
+  cfg="$(cat 2>/dev/null || true)"
+  [[ -n "${MOCK_PEER_CURL_LOG:-}" ]] && printf 'CFG %s\n' "$cfg" >> "$MOCK_PEER_CURL_LOG"
+fi
+[[ -n "${MOCK_PEER_CURL_LOG:-}" ]] && printf 'ARGV %s\n' "$*" >> "$MOCK_PEER_CURL_LOG"
+code="200"; body='{}'
+if [[ -n "${MOCK_PEER_DIR:-}" && -f "${MOCK_PEER_DIR}/${ip}.status" ]]; then code="$(cat "${MOCK_PEER_DIR}/${ip}.status")"; fi
+if [[ -n "${MOCK_PEER_DIR:-}" && -f "${MOCK_PEER_DIR}/${ip}.body" ]]; then body="$(cat "${MOCK_PEER_DIR}/${ip}.body")"; fi
+if [[ "$code" == "000" ]]; then printf '\n000'; exit 7; fi
+printf '%s\n%s' "$body" "$code"
+exit 0
+MOCK
+  chmod +x "$1/curl"
+}
+
 echo "=== cat-deploy-state.sh tests ==="
 echo ""
 
@@ -229,26 +263,17 @@ SC_BAD=$(CI_DEPLOY_STATE="$TMP/ok.state" SANDBOX_CANARY_STATE_FILE="$TMP/bad-can
 assert "malformed sandbox_canary.checked_at falls back to sentinel 0" \
   "[[ \$(printf '%s' '$SC_BAD' | jq -r .sandbox_canary.checked_at) == '0' ]]"
 
-# Outer-wrap canary verdict (#5863) surfaced under outer_wrap_canary — the
-# same canary_state_json shape on the separate
-# SANDBOX_OUTER_WRAP_CANARY_STATE_FILE ledger.
-OWC_ABSENT=$(CI_DEPLOY_STATE="$TMP/ok.state" SANDBOX_OUTER_WRAP_CANARY_STATE_FILE="$TMP/no-owc.json" bash "$TARGET")
-assert "outer_wrap_canary.verdict sentinel 'unknown' when no state file" \
-  "[[ \$(printf '%s' '$OWC_ABSENT' | jq -r .outer_wrap_canary.verdict) == 'unknown' ]]"
-assert "outer_wrap_canary.consecutive_pass sentinel 0 when no state file" \
-  "[[ \$(printf '%s' '$OWC_ABSENT' | jq -r .outer_wrap_canary.consecutive_pass) == '0' ]]"
-echo '{"verdict":"pass","reason":"ok","sdk_version":"0.3.197","checked_at":1751000600,"consecutive_pass":3,"first_pass_at":1750900000}' > "$TMP/owc.json"
-OWC_PRESENT=$(CI_DEPLOY_STATE="$TMP/ok.state" SANDBOX_OUTER_WRAP_CANARY_STATE_FILE="$TMP/owc.json" bash "$TARGET")
-assert "outer_wrap_canary.verdict read from state file (pass)" \
-  "[[ \$(printf '%s' '$OWC_PRESENT' | jq -r .outer_wrap_canary.verdict) == 'pass' ]]"
-assert "outer_wrap_canary.consecutive_pass surfaced (3)" \
-  "[[ \$(printf '%s' '$OWC_PRESENT' | jq -r .outer_wrap_canary.consecutive_pass) == '3' ]]"
-assert "outer_wrap_canary.first_pass_at surfaced" \
-  "[[ \$(printf '%s' '$OWC_PRESENT' | jq -r .outer_wrap_canary.first_pass_at) == '1750900000' ]]"
-echo '{"verdict":"pass","reason":"ok","sdk_version":"0.3.197","checked_at":"not-a-number"}' > "$TMP/owc-bad.json"
-OWC_BAD=$(CI_DEPLOY_STATE="$TMP/ok.state" SANDBOX_OUTER_WRAP_CANARY_STATE_FILE="$TMP/owc-bad.json" bash "$TARGET")
-assert "malformed outer_wrap_canary.checked_at falls back to sentinel 0" \
-  "[[ \$(printf '%s' '$OWC_BAD' | jq -r .outer_wrap_canary.checked_at) == '0' ]]"
+# Outer-wrap canary RETIRED (#10454, ADR-079 addendum 2026-10-19): deploy-status carries no outer_wrap_canary key
+# and the reader function is gone, even when a legacy ledger file is still on the host's /mnt/data volume or the
+# old env override is still exported. Positive control: the sibling sandbox_canary key IS still emitted.
+echo '{"verdict":"pass","reason":"ok","sdk_version":"0.3.197","checked_at":1751000600,"consecutive_pass":3,"first_pass_at":1750900000,"ledger":"sandbox-canary-outer-wrap"}' > "$TMP/owc.json"
+OWC_RETIRED=$(CI_DEPLOY_STATE="$TMP/ok.state" SANDBOX_OUTER_WRAP_CANARY_STATE_FILE="$TMP/owc.json" bash "$TARGET")
+assert "retired: deploy-status has no outer_wrap_canary key even with a legacy ledger present" \
+  "[[ \$(printf '%s' '$OWC_RETIRED' | jq 'has(\"outer_wrap_canary\")') == 'false' ]]"
+assert "retired positive control: sandbox_canary key is still emitted" \
+  "[[ \$(printf '%s' '$OWC_RETIRED' | jq 'has(\"sandbox_canary\")') == 'true' ]]"
+assert "retired: cat-deploy-state.sh has no outer_wrap_canary_json / OUTER_WRAP_CANARY / sandbox-canary-outer-wrap reference" \
+  "! grep -qE 'outer_wrap_canary|OUTER_WRAP_CANARY|sandbox-canary-outer-wrap' \"$TARGET\""
 
 # Workspace-isolation probe verdict (#2640) surfaced under workspace_isolation —
 # the same canary_state_json shape on the separate WORKSPACE_ISOLATION_STATE_FILE
@@ -287,6 +312,40 @@ echo '{"verdict":"pass","reason":"ok","sdk_version":"","checked_at":1751000900,"
 WI_OWN=$(CI_DEPLOY_STATE="$TMP/ok.state" WORKSPACE_ISOLATION_STATE_FILE="$TMP/wi-own.json" bash "$TARGET")
 assert "workspace_isolation reads normally on its own ledger stamp" \
   "[[ \$(printf '%s' '$WI_OWN' | jq -r .workspace_isolation.verdict) == 'pass' && \$(printf '%s' '$WI_OWN' | jq -r .workspace_isolation.consecutive_pass) == '9' ]]"
+
+# SDK Bash smoke (#10453, ADR-079 addendum): deploy-status carries sdk_bash_smoke from its OWN ledger. Beyond the shared
+# ledger shape it surfaces `coverage` (a replay_only pass never counts toward promotion) and `consecutive_infra_error`
+# (the stale-probe counter). An ABSENT file reads as the `unknown` sentinel (an old script + a new image, or a deploy that
+# never reached the smoke), distinguishable from a failed verdict, never a false green.
+SB_ABSENT=$(CI_DEPLOY_STATE="$TMP/ok.state" SDK_BASH_SMOKE_STATE_FILE="$TMP/no-sb.json" bash "$TARGET")
+assert "sdk_bash_smoke.verdict sentinel 'unknown' when no state file" \
+  "[[ \$(printf '%s' '$SB_ABSENT' | jq -r .sdk_bash_smoke.verdict) == 'unknown' ]]"
+assert "sdk_bash_smoke sentinel carries coverage '' and consecutive_infra_error 0 and consecutive_pass 0" \
+  "[[ \$(printf '%s' '$SB_ABSENT' | jq -c '.sdk_bash_smoke | [.coverage, .consecutive_infra_error, .consecutive_pass]') == '[\"\",0,0]' ]]"
+echo '{"verdict":"pass","reason":"ok","sdk_version":"","checked_at":1751001000,"consecutive_pass":4,"first_pass_at":1750800000,"ledger":"sdk-bash-smoke","coverage":"sdk_wrapper_shim_prodtuple","consecutive_infra_error":0}' > "$TMP/sb-pass.json"
+SB_PASS=$(CI_DEPLOY_STATE="$TMP/ok.state" SDK_BASH_SMOKE_STATE_FILE="$TMP/sb-pass.json" bash "$TARGET")
+assert "sdk_bash_smoke reads verdict, coverage and the soak accumulators from its ledger" \
+  "[[ \$(printf '%s' '$SB_PASS' | jq -c '.sdk_bash_smoke | [.verdict, .coverage, .consecutive_pass, .first_pass_at, .consecutive_infra_error]') == '[\"pass\",\"sdk_wrapper_shim_prodtuple\",4,1750800000,0]' ]]"
+echo '{"verdict":"smoke_infra_error","reason":"probe_absent","sdk_version":"","checked_at":1751001100,"consecutive_pass":4,"first_pass_at":1750800000,"ledger":"sdk-bash-smoke","coverage":"replay_only","consecutive_infra_error":3}' > "$TMP/sb-infra.json"
+SB_INFRA=$(CI_DEPLOY_STATE="$TMP/ok.state" SDK_BASH_SMOKE_STATE_FILE="$TMP/sb-infra.json" bash "$TARGET")
+assert "sdk_bash_smoke surfaces consecutive_infra_error and a held consecutive_pass" \
+  "[[ \$(printf '%s' '$SB_INFRA' | jq -c '.sdk_bash_smoke | [.verdict, .reason, .consecutive_pass, .consecutive_infra_error]') == '[\"smoke_infra_error\",\"probe_absent\",4,3]' ]]"
+echo '{"verdict":"pass","reason":"ok","checked_at":"not-a-number","consecutive_pass":"x","ledger":"sdk-bash-smoke","coverage":"<script>","consecutive_infra_error":"many"}' > "$TMP/sb-bad.json"
+SB_BAD=$(CI_DEPLOY_STATE="$TMP/ok.state" SDK_BASH_SMOKE_STATE_FILE="$TMP/sb-bad.json" bash "$TARGET")
+assert "malformed sdk_bash_smoke fields fall back to sentinels (numbers 0, unrecognised coverage '')" \
+  "[[ \$(printf '%s' '$SB_BAD' | jq -c '.sdk_bash_smoke | [.checked_at, .consecutive_pass, .coverage, .consecutive_infra_error]') == '[0,0,\"\",0]' ]]"
+printf 'not json{' > "$TMP/sb-garbage.json"
+SB_GARBAGE=$(CI_DEPLOY_STATE="$TMP/ok.state" SDK_BASH_SMOKE_STATE_FILE="$TMP/sb-garbage.json" bash "$TARGET")
+assert "an unparseable sdk_bash_smoke ledger is still a well-formed object with a string verdict" \
+  "printf '%s' '$SB_GARBAGE' | jq -e '.sdk_bash_smoke | (.verdict | type) == \"string\" and (.consecutive_infra_error | type) == \"number\"' >/dev/null"
+echo '{"verdict":"pass","reason":"ok","sdk_version":"","checked_at":1751001200,"consecutive_pass":9,"first_pass_at":1750700000,"ledger":"workspace-isolation","coverage":"sdk_wrapper_shim_prodtuple","consecutive_infra_error":0}' > "$TMP/sb-foreign.json"
+SB_FOREIGN=$(CI_DEPLOY_STATE="$TMP/ok.state" SDK_BASH_SMOKE_STATE_FILE="$TMP/sb-foreign.json" bash "$TARGET")
+assert "sdk_bash_smoke refuses a foreign ledger stamp: 'unknown', reason names it, coverage and counters do not leak through" \
+  "[[ \$(printf '%s' '$SB_FOREIGN' | jq -c '.sdk_bash_smoke | [.verdict, .reason, .consecutive_pass, .coverage]') == '[\"unknown\",\"foreign_ledger_stamp\",0,\"\"]' ]]"
+assert "the other ledgers' fields are unchanged by the new key (sandbox_canary and workspace_isolation still present)" \
+  "printf '%s' '$SB_PASS' | jq -e 'has(\"sandbox_canary\") and has(\"workspace_isolation\") and has(\"sdk_bash_smoke\")' >/dev/null"
+assert "cat-deploy-state.sh default ledger path matches ci-deploy.sh SDK_BASH_SMOKE_STATE_FILE" \
+  "grep -qF 'SDK_BASH_SMOKE_STATE_FILE:-/mnt/data/ci-deploy-sdk-bash-smoke.json' \"$TARGET\" && grep -qF 'SDK_BASH_SMOKE_STATE_FILE:-/mnt/data/ci-deploy-sdk-bash-smoke.json' \"$SCRIPT_DIR/ci-deploy.sh\""
 
 # --- #5960 live seccomp loaded/host discriminators (Phase 1) ------------------
 # seccomp_profile_loaded_matches_host (reload leg, host-jq skew-immune),
@@ -857,6 +916,117 @@ assert "no_prior_deploy still carries the measured version" \
 
 rm -rf "$ISV_DIR"
 
+# --- #8743 Phase 2: the `peers` map (ADR-068 constraint (c)) -----------------
+# peers_json reads .fanout_peers off the state file (written by ci-deploy.sh
+# write_state from the effective SOLEUR_DEPLOY_PEERS minus self) and GETs each
+# peer's /hooks/deploy-status over the private net, HMAC-signed over the empty
+# GET body with the shared webhook_deploy_secret read from hooks.json. The slot
+# embeds the peer's WHOLE status JSON; errors are discriminating
+# (unreachable | http_<code> | not_json | unsigned) and NEVER fail the hook —
+# the release workflow's `Verify peer deploy completion` owns the verdict.
+PEER_MOCK=$(mktemp -d)
+create_peer_curl_mock "$PEER_MOCK"
+PEER_DIR=$(mktemp -d)
+jq -n '[{id:"deploy-status","trigger-rule":{match:{type:"payload-hmac-sha256",secret:"fixture-peer-secret",parameter:{source:"header",name:"X-Signature-256"}}}}]' \
+  > "$PEER_DIR/hooks.json"
+# A decoy hook first: the secret read must be scoped to id=="deploy-status" (the
+# hook being called), never a sibling's.
+jq -n '[{id:"deploy","trigger-rule":{match:{type:"payload-hmac-sha256",secret:"decoy-secret",parameter:{source:"header",name:"X-Signature-256"}}}},{id:"deploy-status","trigger-rule":{match:{type:"payload-hmac-sha256",secret:"fixture-peer-secret",parameter:{source:"header",name:"X-Signature-256"}}}}]' \
+  > "$PEER_DIR/hooks-decoy.json"
+
+echo '{"exit_code":0,"reason":"ok","tag":"v1.0.0","fanout_peers":"10.9.9.1,10.9.9.2,10.9.9.3,10.9.9.4,10.9.9.5"}' > "$TMP/peers.state"
+printf '200' > "$PEER_DIR/10.9.9.1.status"
+printf '%s' '{"exit_code":0,"reason":"ok","tag":"v1.0.0","ci_deploy_sha256":"deadbeef01"}' > "$PEER_DIR/10.9.9.1.body"
+printf '200' > "$PEER_DIR/10.9.9.2.status"
+printf '%s' '{"exit_code":1,"reason":"plugin_seed_copy_failed","tag":"v1.0.0"}' > "$PEER_DIR/10.9.9.2.body"
+printf '000' > "$PEER_DIR/10.9.9.3.status"
+printf '403' > "$PEER_DIR/10.9.9.4.status"
+printf 'Forbidden' > "$PEER_DIR/10.9.9.4.body"
+printf '200' > "$PEER_DIR/10.9.9.5.status"
+printf 'webhook trigger mismatch' > "$PEER_DIR/10.9.9.5.body"
+
+PEERS_RC=0
+PEERS_OUT=$(PATH="$PEER_MOCK:$PATH" MOCK_PEER_DIR="$PEER_DIR" \
+  MOCK_PEER_CURL_LOG="$PEER_DIR/curl.log" \
+  SOLEUR_HOOKS_JSON="$PEER_DIR/hooks.json" \
+  CI_DEPLOY_STATE="$TMP/peers.state" bash "$TARGET") || PEERS_RC=$?
+
+assert "peers: hook still exits 0 with a mixed peer set (fail-open)" "[[ '$PEERS_RC' == '0' ]]"
+assert "peers: top-level exit_code preserved (0)" \
+  "[[ \$(printf '%s' '$PEERS_OUT' | jq -r .exit_code) == '0' ]]"
+assert "peers: peer-ok slot embeds the peer's whole status JSON" \
+  "[[ \$(printf '%s' '$PEERS_OUT' | jq -r '.peers[\"10.9.9.1\"].exit_code') == '0' && \$(printf '%s' '$PEERS_OUT' | jq -r '.peers[\"10.9.9.1\"].reason') == 'ok' ]]"
+assert "peers: peer-ok slot carries ci_deploy_sha256 (parity read)" \
+  "[[ \$(printf '%s' '$PEERS_OUT' | jq -r '.peers[\"10.9.9.1\"].ci_deploy_sha256') == 'deadbeef01' ]]"
+assert "peers: a FAILING peer's verdict lands verbatim (plugin_seed_copy_failed)" \
+  "[[ \$(printf '%s' '$PEERS_OUT' | jq -r '.peers[\"10.9.9.2\"].exit_code') == '1' && \$(printf '%s' '$PEERS_OUT' | jq -r '.peers[\"10.9.9.2\"].reason') == 'plugin_seed_copy_failed' ]]"
+assert "peers: connect failure → error=unreachable" \
+  "[[ \$(printf '%s' '$PEERS_OUT' | jq -r '.peers[\"10.9.9.3\"].error') == 'unreachable' ]]"
+assert "peers: non-200 HTTP → error=http_<code>" \
+  "[[ \$(printf '%s' '$PEERS_OUT' | jq -r '.peers[\"10.9.9.4\"].error') == 'http_403' ]]"
+assert "peers: 200 with a non-JSON body → error=not_json" \
+  "[[ \$(printf '%s' '$PEERS_OUT' | jq -r '.peers[\"10.9.9.5\"].error') == 'not_json' ]]"
+
+# The wire contract: every peer curl is --max-time 3, takes the signature on
+# stdin `--config -` (never argv), and signs the EMPTY GET body — the signature
+# is hmac-sha256(secret, "") like the workflow's own deploy-status reads.
+WANT_SIG=$(printf '' | openssl dgst -sha256 -hmac fixture-peer-secret | sed 's/.*= //')
+# NOTE: the SUT's -w $'\n%{http_code}' arg embeds a literal newline, so each ARGV
+# record wraps to two log lines — --max-time/--config land on the continuation,
+# hence non-anchored greps below.
+assert "peers: every peer fetch is bounded (--max-time 3) and stdin-config signed" \
+  "[[ \$(grep -c '^ARGV ' '$PEER_DIR/curl.log') == '5' ]] \
+   && [[ \$(grep -c -- '--max-time 3 ' '$PEER_DIR/curl.log') == '5' ]] \
+   && [[ \$(grep -c -- '--config - ' '$PEER_DIR/curl.log') == '5' ]] \
+   && [[ \$(grep -c 'X-Signature-256: sha256=$WANT_SIG' '$PEER_DIR/curl.log') == '5' ]]"
+assert "peers: the HMAC signature never rides curl's argv" \
+  "! grep -c 'sha256=$WANT_SIG' <(grep '^ARGV ' '$PEER_DIR/curl.log') >/dev/null"
+
+# Decoy-secret scoping: the secret must come from the deploy-status hook's own
+# trigger-rule — a reader scoped to deploy-peer (fan_out_to_peers' id) would
+# sign with the WRONG key here because this fixture only carries deploy-status.
+rm -f "$PEER_DIR/curl.log"
+PEERS_DECOY=$(PATH="$PEER_MOCK:$PATH" MOCK_PEER_DIR="$PEER_DIR" \
+  MOCK_PEER_CURL_LOG="$PEER_DIR/curl.log" \
+  SOLEUR_HOOKS_JSON="$PEER_DIR/hooks-decoy.json" \
+  CI_DEPLOY_STATE="$TMP/peers.state" bash "$TARGET")
+assert "peers: the signature is the deploy-status hook secret, not a decoy hook's" \
+  "[[ \$(grep -c 'X-Signature-256: sha256=$WANT_SIG' '$PEER_DIR/curl.log') == '5' ]] \
+   && [[ \$(printf '%s' '$PEERS_DECOY' | jq -r '.peers[\"10.9.9.1\"].reason') == 'ok' ]]"
+
+# Absent fanout_peers → NO peers key at all (an absent key distinguishes a
+# deploy-peer-received/stale-script host from one whose deploy fanned out).
+NOPEERS_OUT=$(CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
+assert "peers: absent fanout_peers emits NO peers key (merge inert)" \
+  "printf '%s' '$NOPEERS_OUT' | jq -e 'has(\"peers\") | not' >/dev/null"
+
+# ...and no peers key means no peer curl fires at all.
+rm -f "$PEER_DIR/curl.log"
+NOPEERS_MOCKED=$(PATH="$PEER_MOCK:$PATH" MOCK_PEER_DIR="$PEER_DIR" \
+  MOCK_PEER_CURL_LOG="$PEER_DIR/curl.log" \
+  SOLEUR_HOOKS_JSON="$PEER_DIR/hooks.json" \
+  CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
+assert "peers: absent fanout_peers never issues a peer curl" \
+  "[[ ! -s '$PEER_DIR/curl.log' ]] && printf '%s' '$NOPEERS_MOCKED' | jq -e 'has(\"peers\") | not' >/dev/null"
+
+# No signing secret (missing/unreadable hooks.json) → per-peer error slots,
+# still fail-open, never a non-200.
+PEERS_NOSEC=$(PATH="$PEER_MOCK:$PATH" MOCK_PEER_DIR="$PEER_DIR" \
+  SOLEUR_HOOKS_JSON="$PEER_DIR/no-such-hooks.json" \
+  CI_DEPLOY_STATE="$TMP/peers.state" bash "$TARGET")
+assert "peers: an unreadable hooks.json fills every slot with a discriminating error" \
+  "[[ \$(printf '%s' '$PEERS_NOSEC' | jq -r '.peers[\"10.9.9.1\"].error') != '' && \$(printf '%s' '$PEERS_NOSEC' | jq -r '.peers[\"10.9.9.1\"].error') != 'null' ]] \
+   && [[ \$(printf '%s' '$PEERS_NOSEC' | jq -r '.exit_code') == '0' ]]"
+
+rm -rf "$PEER_MOCK" "$PEER_DIR"
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
+# Assertion floor (literal, read straight off the counter, derived from a green run): a suite that silently stops reaching its
+# assertions (an early return, a swallowed extraction failure, an emptied loop) must not pass on the strength of the few that ran.
+MIN_ASSERTIONS=151
+if (( TOTAL < MIN_ASSERTIONS )); then
+  printf 'FAIL: only %d assertions ran (floor %d)\n' "$TOTAL" "$MIN_ASSERTIONS"
+  exit 1
+fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

@@ -170,6 +170,7 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-legal-mirror-drift-baseline-unit"
   "scripts/lint-legal-registers-unit"
   "scripts/lint-legal-scope-block-placement-unit"
+  "scripts/lint-art30-reverification-unit"
   "scripts/lint-migrated-rule-ids-unit"
   "scripts/lint-shell-capture-exit"
   "scripts/lint-shell-trace-credential-refusal-repo"
@@ -403,6 +404,16 @@ AFFECTED_APPS_CLA_EVIDENCE_SCRIPTS_BOOTSTRAP_R2_PROBE_TEST_SH_PATHS=(
 # Suites the repo-wide-idiom census arm flags (their fixture code walks a tree)
 # whose real subject is a narrow SUT set, declared here rather than always-on:
 # the scan is scoped, so the edges are honest.
+
+# .claude/hooks/lib/context-sanitize.test.sh (#10395) — corpus walker: the drift
+# sentinel greps every production file under .claude/hooks/ and plugins/soleur/
+# for raw `tr -d` strips, so any file in those trees is its subject. Directory
+# entries are prefix edges; the scan is exactly those two trees.
+AFFECTED_CLAUDE_HOOKS_LIB_CONTEXT_SANITIZE_TEST_SH_PATHS=(
+  ".claude/hooks/"
+  "plugins/soleur/"
+  "scripts/lib/test-affected-paths.sh"            # THIS FILE
+)
 
 AFFECTED_CLAUDE_HOOKS_GREP_REWRITE_TEST_SH_PATHS=(
   ".claude/hooks/grep-rewrite.sh"
@@ -1900,6 +1911,7 @@ AFFECTED_TESTS_SCRIPTS_INFRA_PRIVILEGED_TIER_CENSUS_PATHS=(
   ".github/"
   "apps/"
   "infra/"
+  "knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md"
   "tests/scripts/test-infra-privileged-tier-census.sh"
   "scripts/lib/test-affected-paths.sh"
 )
@@ -2340,4 +2352,23 @@ AFFECTED_SCRIPTS_FOLLOWTHROUGHS_REGISTRY_CLIENTIP_ALERT_7530_PATHS=(
   "scripts/lib/test-affected-paths.sh"
   "scripts/suite-durations.tsv"
   "scripts/suite-shard-legs.tsv"
+)
+
+# plugins/soleur/scripts/affected-tests.test.sh — the #9307 plugin-gate contract suite. The
+# corpus-walk arm flagged its `find .` calls: those run INSIDE PATH-shim fixture binaries
+# (stub vitest/jest/pytest) executing under the suite's own mktemp world — a synthesized
+# corpus, not the tracked tree, so the scan is scoped and a declared edge is the right
+# classification. Declared from what the suite actually reads: the SUT and its sourced
+# libs, its own sourced helpers, and the two repo files its live-repo row (B7) observes
+# — .soleur-test-gate.json (parsed on --explain) and scripts/test-all.sh (the delegated
+# runner whose --print-selection capability it probes).
+AFFECTED_PLUGINS_SOLEUR_SCRIPTS_AFFECTED_TESTS_TEST_SH_PATHS=(
+  ".soleur-test-gate.json"
+  "plugins/soleur/scripts/affected-tests.sh"
+  "plugins/soleur/scripts/affected-tests.test.sh"
+  "plugins/soleur/scripts/lib/affected-tests/"
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "plugins/soleur/test/test-helpers.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+  "scripts/test-all.sh"
 )

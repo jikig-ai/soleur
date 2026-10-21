@@ -50,16 +50,44 @@ function isCutoverQuiesced(): boolean {
 // not the window length.
 const RETRY_AFTER_S = "120";
 
-// inngest.send surfaces a refused loopback as TypeError("fetch failed") with the
-// errno on `cause` (measured, inngest 3.54.2) — match the code, never message text.
-function isConnectionRefused(err: unknown): boolean {
+// inngest.send surfaces a transport failure as TypeError("fetch failed") with the errno/TLS code on
+// `cause` (refusal measured on inngest 3.54.2; TLS codes surface the same way from undici) — match the
+// code, never message text. Every code here means "the scheduler is not reachable / not verifiable right
+// now", so the caller must re-arm (inngest-rearm-reminders.sh aborts on the `backend-refused` 503 instead
+// of continuing past a lost arm). The event carries `id: reminderId`, so a re-arm after an ambiguous failure
+// (a reset or timeout AFTER the request left may have been persisted) is deduplicated by Inngest rather than
+// armed twice. The set:
+//   ECONNREFUSED                  the cutover window after op=quiesce-web, or a restart;
+//   ETIMEDOUT, UND_ERR_CONNECT_TIMEOUT, ECONNRESET, UND_ERR_SOCKET   a host replace / restart, or a listener
+//                                 or pooled socket that dropped the connection;
+//   EHOSTUNREACH, ENETUNREACH     the private-net peer gone while a replaced host comes up;
+//   ERR_TLS_*, and the certificate-verification codes (DEPTH_ZERO_SELF_SIGNED_CERT, SELF_SIGNED_CERT_IN_CHAIN,
+//   UNABLE_TO_VERIFY_LEAF_SIGNATURE, UNABLE_TO_GET_ISSUER_CERT_LOCALLY, CERT_HAS_EXPIRED)   the verified-TLS
+//                                 link (#10136) failing verification (pinned CA missing, wrong or expired).
+// The verification codes are the SAME list the host canary's negative control accepts as "verification failed"
+// (INNGEST_LINK_CANARY_NEG in apps/web-platform/infra/ci-deploy.sh); the route test derives them from that
+// regex, so the two cannot drift. Only a FAILURE changes behaviour here; a successful send is untouched.
+const UNAVAILABLE_CAUSE_CODES = new Set([
+  "ECONNREFUSED",
+  "ETIMEDOUT",
+  "ECONNRESET",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_SOCKET",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+  "CERT_HAS_EXPIRED",
+]);
+function isBackendUnavailable(err: unknown): boolean {
   if (!(err instanceof TypeError)) return false;
   const cause = (err as { cause?: unknown }).cause;
-  return (
-    typeof cause === "object" &&
-    cause !== null &&
-    (cause as { code?: unknown }).code === "ECONNREFUSED"
-  );
+  if (typeof cause !== "object" || cause === null) return false;
+  const code = (cause as { code?: unknown }).code;
+  if (typeof code !== "string") return false;
+  return UNAVAILABLE_CAUSE_CODES.has(code) || code.startsWith("ERR_TLS_");
 }
 
 export async function POST(request: Request) {
@@ -143,11 +171,12 @@ export async function POST(request: Request) {
       op: "dispatch",
       extra: { reminder_id: reminderId },
     });
-    // A REFUSED connection means the scheduler is not listening — the cutover
-    // window after op=quiesce-web, or a restart. Answer like the quiesce gate
-    // (retry later) instead of a terminal-looking 502; nothing was persisted
-    // either way, so the caller must re-arm.
-    if (isConnectionRefused(err)) {
+    // An unreachable or unverifiable scheduler (refused, timed out, reset, unreachable, or failing
+    // TLS verification) — the cutover window after op=quiesce-web, a restart or replace, or a
+    // link misconfiguration. Answer like the quiesce gate (retry later) instead of a terminal-looking
+    // 502. The send may or may not have been persisted (a reset after the request left is ambiguous), and
+    // that is safe: the caller re-arms and the event id (= reminderId, above) deduplicates a repeat.
+    if (isBackendUnavailable(err)) {
       return NextResponse.json(
         { error: "Reminder arming temporarily unavailable (Inngest backend not accepting connections)" },
         { status: 503, headers: { "Retry-After": RETRY_AFTER_S, "X-Soleur-Unavailable": "backend-refused" } },

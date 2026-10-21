@@ -43,7 +43,11 @@ HOST_ID=$( (cat /var/lib/cloud/data/instance-id 2>/dev/null || hostname) | tr -d
 # complete Sentry JSON body (message/level/tags) and passes it as $1.
 _sentry_emit() {
   ( set +e
-    . /etc/default/webhook-deploy 2>/dev/null || true
+    # Read the one token; never source it (the file is deploy-owned and this runs as root, #9639 F5).
+    # Matches the canonical unquoted KEY=VALUE line only (its sole writer is cloud-init.yml); the last one wins, as under sourcing.
+    _t=$(sed -n 's/^DOPPLER_TOKEN=//p' /etc/default/webhook-deploy 2>/dev/null | tail -n 1)
+    # shellcheck disable=SC2034  # no export on purpose (parity with the old `.`): the doppler child inherits it only when the caller already exported one
+    [ -z "$_t" ] || DOPPLER_TOKEN=$_t
     DSN="${SOLEUR_SENTRY_DSN:-}"
     [ -n "$DSN" ] || DSN=$(timeout 15 doppler secrets get SENTRY_DSN --plain --project soleur --config prd 2>/dev/null \
           || timeout 15 doppler secrets get NEXT_PUBLIC_SENTRY_DSN --plain --project soleur --config prd 2>/dev/null \

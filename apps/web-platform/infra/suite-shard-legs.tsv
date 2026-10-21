@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1000
-# generated-at=2026-10-14T19:16:08Z
+# generated-at=2026-10-19T09:37:54Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --group infra --incremental --write   # suite added/removed; --group infra --runs 5 --write rebalances
 # runner: apps/web-platform/infra/run-registered-suites.sh manifest/hashing assignment (untabled labels hash-fallback)
@@ -96,6 +96,7 @@ apps/web-platform/infra/inngest-luks-sole-copy.test.sh	1
 apps/web-platform/infra/inngest-nic-wait.test.sh	2
 apps/web-platform/infra/inngest-provision-rehearsal.test.sh	2
 apps/web-platform/infra/inngest-rearm-reminders.test.sh	4
+apps/web-platform/infra/inngest-redis-luks-import-rehearsal.test.sh	1
 apps/web-platform/infra/inngest-redis-luks.test.sh	2
 apps/web-platform/infra/inngest-registry-probe.test.sh	1
 apps/web-platform/infra/inngest-rls/apply-inngest-rls-workflow.test.sh	3

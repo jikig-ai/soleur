@@ -35,6 +35,9 @@ Live standing alarms over this source:
   Sentry send failed. `SOLEUR_*_SEND_SKIPPED` and `SOLEUR_*_HALT` never match by construction.
   Since #8706 it also pages on `SOLEUR_WORKSPACES_LUKS_SEND_FAILED reason=no_dsn|send_failed`, which
   `workspaces-luks-emit.sh` logs at `user.crit` when a LUKS drift event cannot reach Sentry.
+  Since #10136 it also pages on `SOLEUR_INNGEST_TLS_REFUSED reason=listener_down|cert_expiring`, which the dedicated
+  Inngest host's `soleur-inngest-tls-health` timer logs at `user.crit` (the stunnel :8443 listener is down, or its
+  certificate is under 90 days from expiry); the periodic `--grep stage=tls-health` row carries the detail.
   Defined in `apps/web-platform/infra/betterstack-logs-alerts.tf`; verified through the real apply
   path by `terraform_data.send_failed_alert_probe` + `scripts/followthroughs/send-failed-alert-probe-8097.sh`;
   self-health via the `logs_alert` arm of `reconcile-live-heartbeats.ts`. Runbook:
@@ -149,13 +152,18 @@ Live standing alarms over this source:
   every 60 s, missing data counts as zero): `soleur-agent-sandbox-bash-denial-prd`. **What it matches:** one row
   from the app container (`CONTAINER_NAME = 'soleur-web-platform'`, no `host_name` conjunct: the name is the
   same on web-1 and web-2) with `message.feature = 'agent-sandbox'`, `message.op = 'bash-tool-result'` AND
-  `message.sandboxErrorCode = 'helper_userns_eperm'`. That is the live-session mirror of a hosted agent's Bash
-  `tool_result` whose line is exactly `apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted` (line-anchored,
-  nothing trailing): the SDK's command-side helper could not create its user namespace, so EVERY Bash call in that
-  session fails. Other helper-step EPERMs are NOT matched (tracked in #10455). **Coverage:** the legacy agent-runner
-  loop has no tool_result observer, so the alert covers the cc-soleur-go path only. It filters on the new
-  code, not on the whole `op`, so an older `bwrap_eperm` / `proc_mount_eperm` row never pages it. The row carries
-  only the scrubbed matched line and counts, never the command or the output. **First move (no SSH):** (1) read
+  `message.sandboxErrorCode IN ('helper_userns_eperm', 'helper_step_eperm')`. That is the live-session mirror of a
+  hosted agent's Bash `tool_result` whose line is exactly `apply-seccomp: <step>: Operation not permitted` (or the
+  `EPERM` spelling; line-anchored, nothing trailing) for one of the 16 step strings of the SDK's command-side helper
+  (exact allowlist read from the vendored binary, `HELPER_STEPS` in `server/sandbox-startup-classifier.ts`).
+  `helper_userns_eperm` is the `unshare(CLONE_NEWUSER)` step (the helper could not create its user namespace, so EVERY
+  Bash call in that session fails); `helper_step_eperm` is any other step (the #10455 e regression net: while
+  `allowAllUnixSockets` is set the helper is skipped, so these lines only appear if that knob regresses). EACCES and
+  EINVAL helper failures are NOT matched (a recorded residual). **Coverage:** the legacy agent-runner
+  loop has no tool_result observer, so the alert covers the cc-soleur-go path only (a helper EPERM on the legacy runner is neither
+  mirrored nor paged, and a variant-induced AF_UNIX EPERM has no signal on either runner). It filters on these two
+  codes, not on the whole `op`, so an older `bwrap_eperm` / `proc_mount_eperm` row never pages it. The row carries
+  only the matched line (a fixed string for the helper codes) and counts, never the command or the output. **First move (no SSH):** (1) read
   the count and first timestamp with the SQL below; (2) pull `/hooks/deploy-status` (call pattern in
   `plugins/soleur/skills/postmerge/references/deploy-status-debugging.md`) and read `sandbox_canary` (green
   throughout the original outage, so a pass does not clear the alert) and the `seccomp_profile_*` fields; (3) if the
@@ -167,7 +175,9 @@ Live standing alarms over this source:
   only.** On the free tier the alert emails the team and nothing else; the Slack wake of
   [ADR-260](../../architecture/decisions/ADR-260-db-outage-paging-and-bounded-auto-restart.md) is a
   dashboard-side integration that has NOT been verified for this alert, so do not assume a Slack message
-  accompanies the email until that verification is recorded. **Accepted limitation:** a tenant (or a
+  accompanies the email until that verification is recorded. (2026-10-19 read-only check: the account has one Slack integration and every
+  Logs alert carries a team-email escalation target only, so delivery to Slack is not provable from the API; the dated result and the two
+  reads are in `canary-probe-set.md`, "Slack wake check".) **Accepted limitation:** a tenant (or a
   prompt-injected agent) printing the exact helper line every few minutes can keep ONE incident open and suppress new
   pages for everyone (`recovery_period 600`, `treat_as_zero`, per-user 5-minute debounce). Accepted at current scale;
   mitigation (page on at least 2 distinct users, or verify server-side) is tracked in #10455. It auto-resolves after 10 quiet minutes,
@@ -178,7 +188,8 @@ Live standing alarms over this source:
 
   ```bash
   # Count, distinct users (userIdHash) and first/last time of helper denials over the last day (hot window plus
-  # archive); rows is not users: the mirror is per-user debounced.
+  # archive); rows is not users: the mirror is per-user debounced. Add sandboxErrorCode and sandboxStderr to the
+  # SELECT to see WHICH helper step failed.
   doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
     "SELECT count() AS rows, uniqExact(JSONExtractString(raw,'message','userIdHash')) AS users,
             min(dt) AS first, max(dt) AS last
@@ -188,7 +199,7 @@ Live standing alarms over this source:
        AND JSONExtractString(raw,'CONTAINER_NAME') = 'soleur-web-platform'
        AND JSONExtractString(raw,'message','feature') = 'agent-sandbox'
        AND JSONExtractString(raw,'message','op') = 'bash-tool-result'
-       AND JSONExtractString(raw,'message','sandboxErrorCode') = 'helper_userns_eperm'
+       AND JSONExtractString(raw,'message','sandboxErrorCode') IN ('helper_userns_eperm', 'helper_step_eperm')
      FORMAT JSONEachRow"
   ```
 
@@ -205,6 +216,49 @@ Live standing alarms over this source:
      WHERE dt > now() - INTERVAL 1 HOUR
        AND JSONExtractString(raw,'CONTAINER_NAME') = 'soleur-web-platform'
        AND JSONExtractInt(raw,'message','level') >= 40
+     FORMAT JSONEachRow"
+  ```
+
+- **`logtail_exploration_alert.faithful_canary_sandbox_broken`** (#10453, `higher_than 0` over 300 s, evaluated every
+  60 s, missing data counts as zero): `soleur-faithful-canary-sandbox-broken-prd`. **What it matches:** one `ci-deploy`
+  row (`SYSLOG_IDENTIFIER = 'ci-deploy'`, no `host_name` conjunct: web-2 must page too) whose message STARTS with
+  `SANDBOX_CANARY_FAIL: verdict=sandbox_broken reason=sdk_bash_smoke_failed` AND contains `(op=sandbox-canary;`. That is
+  the deploy-time SDK Bash smoke (`run_sdk_bash_smoke` in `ci-deploy.sh`) reporting that a real wrapped Bash call through
+  the real Agent SDK, the shim and the production sandbox config failed in the canary image: the #10445 shape the faithful
+  canary's replay cannot see. The `reason=` needle is mandatory (the inner canary's `bwrap_*` rows and the standing
+  outer-wrap rows share the `verdict=sandbox_broken` prefix) and the `;` terminator keeps `op=sandbox-canary-outer-wrap`
+  out. `smoke_infra_error` does NOT page by email: three in a row are recorded in journald and Sentry as `SDK_BASH_SMOKE_STALE` and
+  flagged on the #10548 tracker by the follow-through (exit 1 at `consecutive_infra_error >= 3`), not emailed; the sweeper does not run
+  that script before the directive's `earliest=2026-10-26T00:00:00Z`, so for the first ~7 days a blind probe is visible only in
+  journald and Sentry. The deploy is NOT rolled back (report-only until #10548 promotes it) and this build IS promoted to
+  production in the same run, so a page here means hosted Bash may be failing in production right now (the alert's own incident text:
+  "treat hosted Bash as failing in production until the reason is read and cleared"; if only the AF_UNIX variant fails, the
+  consequence applies only once the `agent-sandbox-unix-deny` flag is ON). **First move (no SSH):** read `sdk_bash_smoke` from `/hooks/deploy-status` (call
+  pattern in `plugins/soleur/skills/postmerge/references/deploy-status-debugging.md`; `reason` carries the first sandbox error
+  line) and decode it with the table in
+  [`canary-probe-set.md`](./canary-probe-set.md#sdk-bash-smoke-and-the-helper_userns_eperm-denial-10445). **Wake path: email
+  only** (the same unverified Slack caveat as the siblings above). **Positive control (run 2026-10-19, counts only):** the
+  predicate's non-reason conjuncts match live rows: 167 `ci-deploy` rows in 14 days start `SANDBOX_CANARY_FAIL:
+  verdict=sandbox_broken` with `(op=sandbox-canary-outer-wrap;` (the retired arm), 45 more carry `(op=sandbox-canary;`
+  (inner `bwrap_*` reasons), and the full predicate matches 0 of them, which is the discrimination the alert depends on. The
+  first real hit is its own positive control; no deliberate failing deploy is run against production. Defined in
+  `apps/web-platform/infra/betterstack-logs-alerts.tf`; drift guard
+  `apps/web-platform/test/infra/faithful-canary-sandbox-alert.test.sh` (needles read from `ci-deploy.sh`, the predicate
+  evaluated against fixture rows, a `-target=` census, mutation rows). It auto-resolves after 10 quiet minutes, which does
+  not mean the cause was fixed.
+
+  ```bash
+  # Failed smoke rows over the last 30 days (hot window plus archive); expect 0 until a build actually breaks Bash.
+  # Swap the reason needle for the OTHER shapes to re-run the positive control: reason=bwrap_ (inner canary) or
+  # (op=sandbox-canary-outer-wrap; (retired arm, rows until ~2026-10-19 plus the retention window).
+  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+    "SELECT count() AS rows, min(dt) AS first, max(dt) AS last
+     FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
+           UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
+     WHERE dt > now() - INTERVAL 30 DAY
+       AND JSONExtractString(raw,'SYSLOG_IDENTIFIER') = 'ci-deploy'
+       AND startsWith(JSONExtractString(raw,'message'),'SANDBOX_CANARY_FAIL: verdict=sandbox_broken reason=sdk_bash_smoke_failed')
+       AND position(JSONExtractString(raw,'message'),'(op=sandbox-canary;') > 0
      FORMAT JSONEachRow"
   ```
 
@@ -640,6 +694,39 @@ Reading it:
   `refusals[]` breaks on all six values, not just `diff-empty`; nothing in this
   repo has one, and a saved query outside it cannot be verified from here. An empty proposal was never a derivation failure; this is a
   reclassification, not a compatibility break to route around.
+- **The model no longer authors the diff (#10552), and seven `edit-*` reasons name why a draft was refused BEFORE `checkDiffPaths`.**
+  Phase 2 asks the model for an anchor line and the lines to insert; the server splices them into the
+  real HEAD text and derives the diff with git. A refusal at that step is one of:
+
+  | reason | what actually happened | probe class |
+  |---|---|---|
+  | `edit-target-unreadable` | path not in HEAD, not a regular file, no trailing newline, or contains a carriage return | N (no proof) |
+  | `edit-target-too-large` | base over 120,000 bytes (about 30k tokens); `review`, `work`, `ship`, `brainstorm` today (#10551) | N |
+  | `edit-invalid` | schema, empty, charset, length, credential shape, rule-bullet shape, frontmatter or fence anchor, no resolvable source learning, or a `max_tokens` stop; the cause is the Sentry `cause` tag | N |
+  | `edit-anchor-not-found` | the anchor line does not occur in the file | N |
+  | `edit-anchor-ambiguous` | the anchor line occurs more than once | N |
+  | `edit-target-duplicate` | a second cluster on a target already drafted this run (both PRs would fork from one base) | N |
+  | `edit-derive-failed` | a SERVER defect: the derived diff was not additive, or the derivation itself failed (Sentry op `draft-edit-error`) | F (defect) |
+
+  `diff-path-off-target`, `corpus-shrink-refused` and `agents-core-hr-rule-edit-refused` can no longer fire
+  for a correct server derivation (the diff touches only the declared target, removes nothing, and cannot mint
+  an `hr-` id), so the follow-through probe grades them as server defects (class F), not as proof.
+
+  `diff-underivable-apply` is retained for the residual case (a derived diff that git then rejects) and is
+  also a server defect; `edit-derive-failed` and `diff-underivable-apply` are told apart by the Sentry op
+  (`draft-edit-error` vs `diff-path-refused`). The marker field set is unchanged: the cause lives in Sentry,
+  not here. **Where the cause is readable (no SSH):** each refused draft emits a Sentry MESSAGE event
+  (feature `cron-compound-promote`, op `draft-edit-refused`) tagged `reason` and `cause` with `cluster_hash` in
+  `extra`; a derivation fault emits op `draft-edit-error` tagged `cause` (`bad-base`, `git-exit`, `non-additive`,
+  `error`). `cluster_hash` sits in the event's `extra`, which Sentry does NOT index: search Sentry by the
+  `reason` / `cause` / `op` tags, then read `cluster_hash` off the matching event. Better Stack carries the same
+  value in two shapes: the pino `draft-edit-refused` warn line keys it `hash`, and the error row mirrored by
+  `reportSilentFallback` keys it `cluster_hash`; the marker's `refusal_detail[].cluster_hash` is the join key
+  to either. Example, no SSH (one marker row to its cause):
+  `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 8d --grep draft-edit-refused`,
+  then decode each row and select the one whose `hash` or `cluster_hash` equals the marker's. The `diff-path-refused`
+  site is on the same message path with a `reason` tag. The events are MESSAGE events on purpose: on the Error path
+  the pino mirror captures the same Error first and Sentry drops the tagged capture (#8629).
 - **Do not write `.diff_fenced // "-"` in a jq projection.** jq's `//` yields
   its right-hand side when the left is `null` **or `false`**, so every `false`
   renders identically to an absent field — and `false` is a meaningful value for
