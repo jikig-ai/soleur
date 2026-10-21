@@ -1,0 +1,53 @@
+<!-- verification-scaffold:readme:start -->
+## Verification gates (installed by soleur:verification-scaffold)
+
+Installed mode: **@MODE@** · installed guards: **@GUARD_LIST@** · generated @DATE@.
+
+| Guard | Artifacts | Decides |
+|---|---|---|
+@GUARD_TABLE@
+
+### What advisory means
+
+Every guard was installed **advisory-first**: hooks warn (or ask, on a real
+secret-scan finding) instead of denying, and each CI job carries
+`continue-on-error: true`, so nothing blocks a commit or a PR yet. Advisory is
+a decision-verb difference only — the detection predicates are identical to
+enforcement mode.
+
+### Promoting a guard to enforcement (one line per surface)
+
+Promote only after **at least one observed clean advisory run** — a gate that
+has never run green is a wall, not a floor.
+
+- Hooks (`.claude/hooks/<guard>.sh`): change `MODE="advisory"` to `MODE="enforce"`.
+- CI (`.github/workflows/verification-gates.yml`): set the job's
+  `continue-on-error` to `false` (or remove the line), then add the check to
+  the branch's required status checks. Note `commit-on-main`/`block-stash` are
+  hook-only — branch protection on the remote is the enforcement floor for the
+  *default branch itself*.
+- Re-running the scaffold NEVER overwrites your edits: re-install refuses on
+  any existing artifact (there is no `--force`).
+
+### Uninstall
+
+```bash
+bash <plugin>/skills/verification-scaffold/scripts/verification-scaffold.sh --target . --uninstall <guard>
+```
+
+removes only that guard's emitted files plus its `.claude/settings.json` hook
+entry; shared artifacts (the workflow, `.gitleaks.toml` when another guard
+still needs it) stay. `--uninstall` on a never-installed guard is a no-op that
+lists what is installed.
+
+### Requirements
+
+- bash + POSIX tools (stock macOS included). Emitted hooks resolve `gitleaks`
+  via `command -v` at exec time; the CI job uses the SHA-pinned
+  `gitleaks/gitleaks-action`.
+- The secret-scan hook needs `gitleaks` on PATH to run locally (8.24.x
+  recommended); without it the hook warns and allows (advisory) — the CI job
+  still scans every PR.
+- `.claude/settings.json` hook entries serve Claude-Code-compatible agent
+  sessions; the workflow is the floor for everyone else.
+<!-- verification-scaffold:readme:end -->

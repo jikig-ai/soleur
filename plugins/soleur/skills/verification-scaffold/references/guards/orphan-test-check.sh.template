@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# orphan-test-check.sh — emitted by soleur:verification-scaffold.
+#
+# Fail when a tracked *.test.sh ANYWHERE in the repo is run by no declared
+# registration surface. A test nothing executes gates nothing while looking
+# exactly like coverage — the green summary is read as evidence.
+#
+# THE PRODUCER IS `git ls-files '*.test.sh'` — the whole repo, never a
+# directory list.
+#
+# REGISTRATION SURFACES (a suite is registered when its BASENAME appears in at
+# least one):
+#   1. any `.github/workflows/*.{yml,yaml}` file, and
+#   2. any file matched by a word of $RUNNER_GLOBS (default below — declare
+#      your own in the workflow job env).
+# or, by decision rather than registration:
+#   3. a reason-carrying line in `.github/verification-known-orphans.txt`
+#      (`repo-relative/path.test.sh # <reason>` — keyed on the PATH, never the
+#      basename: two suites can share a basename).
+#
+# Exit 0 clean (or zero suites — a pass with a printed notice), exit 1 naming
+# every orphan by path, exit 2 when the check cannot see (zero registration
+# surfaces resolved — a guard whose producer enumerates nothing must fail
+# LOUDLY, not pass vacuously).
+set -euo pipefail
+export LC_ALL=C
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+cd "$ROOT"
+
+RUNNER_GLOBS="${RUNNER_GLOBS:-scripts/test-all.sh scripts/run-tests* Makefile makefile package.json}"
+KNOWN=".github/verification-known-orphans.txt"
+
+# --- producer ----------------------------------------------------------------
+TRACKED="$(git ls-files '*.test.sh' | sort -u)"
+if [ -z "$TRACKED" ]; then
+  printf 'orphan-test: no tracked *.test.sh files — nothing to check\n'
+  exit 0
+fi
+
+# --- surfaces ------------------------------------------------------------------
+SURFACES=""
+if [ -d .github/workflows ]; then
+  for f in .github/workflows/*.yml .github/workflows/*.yaml; do
+    [ -f "$f" ] && SURFACES="$SURFACES $f"
+  done
+fi
+for pat in $RUNNER_GLOBS; do
+  for f in $pat; do
+    [ -f "$f" ] && SURFACES="$SURFACES $f"
+  done
+done
+
+if [ -z "${SURFACES# }" ]; then
+  printf 'orphan-test: FAIL — zero registration surfaces resolved (.github/workflows/*.{yml,yaml} + RUNNER_GLOBS="%s"). The check cannot see anything; refusing to certify vacuously.\n' "$RUNNER_GLOBS" >&2
+  exit 2
+fi
+# shellcheck disable=SC2086
+SURFACE_TEXT="$(cat $SURFACES)"
+
+# --- exclusion manifest ---------------------------------------------------------
+# Lines: `<path> # <reason>` (reason required). Bare-path lines are reported as
+# findings — a reasonless exclusion is a silent absorption. Stale entries (the
+# path is no longer tracked, or the suite is now registered) are WARNED on.
+fails=0
+if [ -f "$KNOWN" ]; then
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|'#'*) continue ;; esac
+    entry_path="${line%%#*}"
+    entry_path="$(printf '%s' "$entry_path" | sed 's/[[:space:]]*$//; s/^[[:space:]]*//')"
+    entry_reason="${line#*#}"
+    if [ "$entry_reason" = "$line" ] || [ -z "$(printf '%s' "$entry_reason" | tr -d '[:space:]')" ]; then
+      printf 'orphan-test: FAIL — %s carries a reasonless exclusion: %s (every line must read `<path> # <reason>`)\n' "$KNOWN" "$line" >&2
+      fails=$((fails + 1))
+      continue
+    fi
+    if ! printf '%s\n' "$TRACKED" | grep -qxF "$entry_path"; then
+      printf 'orphan-test: WARN — %s names %s, which is no longer a tracked *.test.sh; a stale exclusion can re-hide the next regression. Remove the line.\n' "$KNOWN" "$entry_path" >&2
+    fi
+  done < "$KNOWN"
+fi
+
+# --- verdict --------------------------------------------------------------------
+while IFS= read -r suite; do
+  [ -n "$suite" ] || continue
+  base="$(basename "$suite")"
+  if printf '%s' "$SURFACE_TEXT" | grep -qF -- "$base"; then
+    continue
+  fi
+  if [ -f "$KNOWN" ] && grep -qE "^${suite}[[:space:]]*#" "$KNOWN"; then
+    continue
+  fi
+  printf 'orphan-test: FAIL — %s is tracked but named by no registration surface (workflows, RUNNER_GLOBS files, or %s with a reason)\n' "$suite" "$KNOWN" >&2
+  fails=$((fails + 1))
+done <<<"$TRACKED"
+
+if [ "$fails" -eq 0 ]; then
+  printf 'orphan-test: %s tracked suite(s), all registered\n' "$(printf '%s\n' "$TRACKED" | grep -c .)"
+  exit 0
+fi
+printf 'orphan-test: %d finding(s)\n' "$fails" >&2
+exit 1
