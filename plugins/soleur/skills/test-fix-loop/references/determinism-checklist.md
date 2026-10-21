@@ -41,14 +41,18 @@ For each test the screen marks pass-on-retry:
    `--test-name-pattern`). When the runner cannot filter, one suite-level
    re-run of unchanged code answers the same question by absence.
 2. **File** — when the repo has a GitHub remote and `gh` is available,
-   file `flake: <test> — <signature>`. Dedup first: search open issues
-   for the title and comment on the existing tracker instead of filing a
-   duplicate (the dedup arm of `scheduled-integration-suites.yml` in this
-   repo). Apply the `flaky` label create-then-add (`gh label create` with
-   `|| true`, then `--add-label` — the create self-heals on a repo that
-   lacks the label and never rewrites an existing one). The issue body
-   carries the pass-on-retry signature, the runner command, and a pointer
-   to this checklist. With no `gh`/remote, the quarantine is report-only
+   file `flake: <test> — <signature>`. Ensure the `flaky` label first
+   (`gh label create` with `|| true` — self-heals on a repo that lacks
+   it and never rewrites an existing one), then dedupe on a sentinel,
+   not the title: `gh issue list --state open --label flaky --json
+   number,body` and match `<!-- soleur:flake test="<file>::<name>" -->`
+   in the bodies — comment on the existing tracker instead of filing a
+   duplicate (the sentinel-dedup arm of `check-red-on-main.sh` in this
+   repo; an `in:title "…"` phrase breaks on a test name carrying `"` or
+   search-significant punctuation). The issue body carries the sentinel
+   line, the pass-on-retry signature, the runner command, and a pointer
+   to this checklist; apply `--label flaky` on create or via
+   `gh issue edit`. With no `gh`/remote, the quarantine is report-only
    and says so.
 3. **Track** — the quarantined set is run-scoped: excluded from the
    failure set driving fix/cluster bookkeeping and the delta counts,
@@ -56,10 +60,12 @@ For each test the screen marks pass-on-retry:
    re-failure is noted in the report and the filed issue instead). It
    consumes no fix-round tally — no fix was attempted.
 4. **Un-quarantine** — a flake tracker that stays open forever trains the
-   label to be ignored. Convention: auto-close the issue after N
-   consecutive green scheduled runs, mirroring the auto-close-stale arm
-   of `scheduled-integration-suites.yml` ("a transient flake leaves a
-   permanently open issue and trains the label to be ignored").
+   label to be ignored. Convention: auto-close the issue on the next
+   green run of the same suite, mirroring the auto-close-stale arm of
+   `scheduled-integration-suites.yml` (one green run closes it — "a
+   transient flake leaves a permanently open issue and trains the label
+   to be ignored"). A repo with no scheduled re-runner keeps the tracker
+   until a later loop or a human observes green.
 
 Quarantine is bookkeeping + tracker + report — it never edits, skips, or
 deletes a test file, and a quarantined failure never counts toward
