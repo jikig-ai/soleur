@@ -8011,7 +8011,7 @@ echo "=== stage S8: Guard 3 rows (registry login password off argv: tokenised de
 # STAGE S9 (#9757 item 2): a credential never rides terraform's argv as a `-var` option. Guard 1 is a derived static scan plus two pins (the rehearsal
 # workflow's option names; every terraform plan/destroy step exports before its `doppler run` and keeps bare --preserve-env) and a YAML-parsed step-set
 # identity; Guard 2 EXECUTES the four rehearsal terraform step bodies (two plans, two destroys) under strict `doppler`/`terraform` stubs and checks the
-# token reaches terraform by environment, is masked first, and reaches no argv.
+# token reaches terraform by environment, is masked before terraform runs, and reaches no argv.
 #
 # GUARD 1 SCAN. Corpus = tracked + untracked non-ignored files minus S8's exclusion predicate (a deliberate copy: keep the two in lockstep), with
 # extensions .yml .yaml .sh .bash, plus .md under plugins/ only. Continuations are joined (a comment line is never continued); full-line comments are skipped
@@ -8019,7 +8019,7 @@ echo "=== stage S8: Guard 3 rows (registry login password off argv: tokenised de
 # terraform-verb requirement (unlike S8): array building and `bash -c "... -var ..."` payloads carry the same exposure. A literal NAME is judged by a credential-name
 # regex; a `-var` whose name cannot be read as a literal (`$K`, `api_$x=`, `$'..'`, an escaped quote) is refused as `nonliteral`.
 # NAMED BLIND SPOTS and the rejected alternatives (stdin var-file, per-command prefix): ADR-280, the 2026-10-20 addendum. S9 selects on the full run and on an edit of
-# the rehearsal workflow; that edit lists scripts/lib/test-affected-paths.sh, which degrades a LOCAL `--affected` run to the full battery once (CI is unaffected).
+# the rehearsal workflow; that array entry lives in scripts/lib/test-affected-paths.sh, whose edit degrades a LOCAL `--affected` run to the full battery once (CI is unaffected).
 #
 # FLOOR. The scan sees S9_VAR_FLOOR `-var` options on the tree (measured, exact like S8's). A scan below it is RED, never a clean bill. Converting or deleting a
 # benign `-var` anywhere is a floor edit in the same PR: lower S9_VAR_FLOOR to the new measured count.
@@ -8151,7 +8151,7 @@ while IFS= read -r f; do [[ -n "$f" ]] || continue; mkdir -p "$S9/base/$(dirname
 
 # ---- Guard 1 on the real tree ---------------------------------------------------------------------------------------------------------
 s9_judge_text "$S9_REAL_SCAN"; S9_REAL_REASONS="$S9_J_REASONS"; S9_REAL_N="$S9_J_N"
-if [[ -z "$S9_REAL_REASONS" ]]; then row "S9 Guard 1: no tracked non-test file passes a credential on a -var option ($S9_REAL_N options seen, floor $S9_VAR_FLOOR, derived over the whole tree)" ok
+if [[ -z "$S9_REAL_REASONS" ]]; then row "S9 Guard 1: no scanned non-test file (tracked, or untracked and not ignored) passes a credential on a -var option ($S9_REAL_N options seen, floor $S9_VAR_FLOOR, derived over the whole tree)" ok
 else row "S9 Guard 1: a credential rides a -var option (file:line below), or the scan saw fewer options than its floor ($S9_VAR_FLOOR; lower it to the new measured count in the same PR when a benign -var is converted); the remedy for a credential is TF_VAR_<name> in the step environment" fail "reasons='$S9_REAL_REASONS' at=$S9_J_DETAIL options=$S9_REAL_N"; fi
 S9_I1="$(s9_i1_text "$S9_REAL_SCAN")"
 if [[ "$S9_I1" == "nic_attached=4 rehearsal_run_id=4" ]]; then row "S9 I1: the rehearsal workflow's -var options are exactly rehearsal_run_id x4 and nic_attached x4 (a new benign -var there is a deliberate edit of this row)" ok
@@ -8225,7 +8225,7 @@ else row "S9 exclusions: an exclusion rule hid a credential -var it should not, 
 
 # ---- Guard 2: the four rehearsal terraform step bodies EXECUTED under strict stubs --------------------------------------------------
 S9_CANARY="S9CANARYzot0123"
-for t in bash env cat grep tr date mkdir rm printf; do p="$(type -P "$t" || true)"; [[ "$p" == /* ]] || fatal "stage S9: $t is required"; ln -s "$p" "$S9/real/$t"; done
+for t in date; do p="$(type -P "$t" || true)"; [[ "$p" == /* ]] || fatal "stage S9: $t is required"; ln -s "$p" "$S9/real/$t"; done # phase B writes a timestamp with date; every other command in the four bodies is a builtin
 { printf '#!%s\n' "$BASH_BIN"; cat <<'S9DOP'
 # Stub doppler: records argv (NUL-delimited) and answers ONLY the two argv shapes the steps use (anything else: exit 64 and a refusal line, so a changed
 # flag, config or project is visible). `run` execs the command after `--` and injects NO TF_VAR_* (production inherits an equal value from prd_terraform; the stub
@@ -8290,11 +8290,12 @@ for spec in 'teardown-only|Teardown only (recovery arm)|destroy -auto-approve -i
   S9_TF_ARGV="$argv -var rehearsal_run_id=424242 -var nic_attached=$nic"; S9_TAIL="-var nic_attached=$nic"$'\n'
   s3_body "$REPO_ROOT/$S9_WF" "$sel" > "$S9/body-$tag.sh" || fatal "S9 could not extract the $tag step"
   s9_run "$S9/body-$tag.sh" "$S9_TF_ARGV"; s9_judge_run
-  if [[ -z "$S9_R_REASONS" ]]; then row "S9 Guard 2 control ($tag): the real step body runs GREEN under the strict stubs: one terraform call with exactly the expected argv, the token masked first, in its environment and in no argv" ok
+  if [[ -z "$S9_R_REASONS" ]]; then row "S9 Guard 2 control ($tag): the real step body runs GREEN under the strict stubs: one terraform call with exactly the expected argv, the token masked before terraform runs, in its environment and in no argv" ok
   else row "S9 Guard 2 control ($tag): the real step body is not GREEN under the strict stubs (every mutant below would measure the base)" fail "reasons='$S9_R_REASONS'"; fatal "S9 control not green for $tag: a red baseline voids every mutant"; fi
   s9_mrow "$tag" m1a "rc canary-in-argv env-not-set refused" "$S9_EXP" '' "$S9_TAIL" "-var nic_attached=$nic"$' \\\n    -var "zot_pull_token=${ZOT_PULL}"\n'
   s9_mrow "$tag" m2-reorder "env-not-set" "$S9_EXP" '' "$S9_TAIL" "$S9_TAIL$S9_EXP"
   s9_mrow "$tag" m3-mask "mask-missing" "$S9_MASK" ''
+  s9_mrow "$tag" m4-doppler-scope "rc ncalls refused" "-c prd_terraform" "-c prd"
 done
 # The comparison every mutation row is judged by must be able to REJECT: a doctored pair must fail it and an equal pair must pass (reported by row, never through s9_mrow).
 if s9_verdict_ok "env-not-set" "env-not-set" && ! s9_verdict_ok "env-not-set" "mask-missing" && ! s9_verdict_ok "" "rc"; then row "S9 harness: the Guard 2 verdict comparison rejects a doctored verdict and accepts an equal one" ok
@@ -8340,8 +8341,8 @@ SELFTEST_PASSES=0
 # 811 -> 819 at PR C (#10120, probe scripts of #10093): four converted-script rows (the inngest body and the three probes join S6H_CONVERTED), mutations 1b (inngest body), 1c (the three probes), 3c (a probe) and the inngest guard-class mutation; the stale and growth mutations are re-anchored, the ceiling row is 0 == 0: measured (819 passed, 0 failed).
 # 819 -> 823 at the PR C review round: the guard-copy parity row and its mutation row, and two scanner-reach rows (bare HEARTBEAT_URL; path-prefixed, backslashed and backtick curl): measured (823 passed, 0 failed).
 # 823 -> 840 at #9757 (stage S8, Guard 3: registry login password off argv, tokenised derived census): the 15 S8 rows. The tree measured 825 before S8 (the floor had 2 rows of slack), so the new floor is the measured total (840 passed, 0 failed).
-# 840 -> 870 at #9757 item 2 (stage S9, terraform -var credentials off argv: derived scan, rehearsal-workflow pins, the four terraform step bodies executed under strict stubs): the 27 S9 rows. The tree measured 843 before S9 (the floor had 3 rows of slack), so the new floor is the measured total (870 passed, 0 failed).
-EXPECTED_TESTS=870
+# 841 -> 874 at #9757 item 2 (stage S9, terraform -var credentials off argv: derived scan, rehearsal-workflow pins, the four terraform step bodies executed under strict stubs): the 33 S9 rows. The tree measured 841 after merging main (the floor said 840, so it had 1 row of slack), so the new floor is the measured total (874 passed, 0 failed).
+EXPECTED_TESTS=874
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2

@@ -14,8 +14,8 @@ Always provision infrastructure via Terraform for reproducibility and cloud port
 cd apps/<app>/infra
 terraform init
 # Interactive shell: enter the token at the prompt (it stays off the argument list and out of shell history).
-# An agent or CI run has no terminal: export TF_VAR_hcloud_token from its secret store instead.
-read -rsp "Hetzner API token: " TF_VAR_hcloud_token && export TF_VAR_hcloud_token
+# An agent or CI run has no terminal: export TF_VAR_hcloud_token from its secret store before this block (the guard keeps it).
+if [ -z "${TF_VAR_hcloud_token:-}" ]; then printf 'Hetzner API token: ' >&2; read -rs TF_VAR_hcloud_token && echo >&2 && export TF_VAR_hcloud_token; fi
 terraform apply -var='admin_ips=["<your-ip>/32"]'
 unset TF_VAR_hcloud_token
 ```
