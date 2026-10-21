@@ -90,7 +90,7 @@ Before attempting fixes, check whether to stop. Rows are checked top to bottom; 
 |-----------|-----------|--------|
 | Suite terminated (unresolved) | Any `^[KILLED]` line in the output, or runner `rc` 3 | Do NOT stage, do NOT report success, do NOT reset. Re-run that suite alone; if it is KILLED again, STOP and report UNRESOLVED naming the suite |
 | All tests pass | `rc` 0 (zero failures **and** zero killed) | Run the probe grep from §4 first (on output, remove the probes and re-run the suite); when it is silent, stage fixes with `git add -A`, report success |
-| All failures screened out | Post-screen failure set empty while `rc` non-zero — every failed test passed its isolated re-run | Run the same probe grep as the row above; when silent, `git add -A` and report `SUCCESS (N quarantined — issues #…)` — never NON_CONVERGENCE or MAX_ITERATIONS on an all-flake set |
+| All failures screened out | Post-screen failure set empty while `rc` non-zero **and ≥1 test was quarantined this run** — every parsed failure passed its isolated re-run (a zero-failure parse with non-zero `rc` is NOT this row: nothing screened is nothing proven, and it falls through to the rows below) | Run the same probe grep as the row above; when silent, `git add -A` and report `SUCCESS (N quarantined — issues #…)` — never NON_CONVERGENCE or MAX_ITERATIONS on an all-flake set |
 | Max iterations | iteration == limit | `git reset --hard <initial-sha>` (revert all iterations), report |
 | Regression | Failure count increased vs previous iteration | `git reset --hard HEAD` (discard uncommitted fixes), report |
 | Circular fix | Failure name set matches any prior iteration | `git reset --hard <initial-sha>` (revert all iterations), report |
