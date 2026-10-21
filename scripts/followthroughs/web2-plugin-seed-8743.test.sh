@@ -178,7 +178,7 @@ else
 fi
 # The absence query is the second invocation; pin the fraction-preserving
 # parse (a ${var%%.*} strip-then-toDateTime equivalent must fail this pin).
-if awk '/^INVOCATION$/{n++} n==2' "$WORK/calls-frac.log" | grep -qF "toDateTime64('2026-10-19 05:12:33.456789', 6, 'UTC')"; then
+if grep -qF "toDateTime64('2026-10-19 05:12:33.456789', 6, 'UTC')" < <(awk '/^INVOCATION$/{n++} n==2' "$WORK/calls-frac.log"); then
   pass "absence query parses the marker via toDateTime64 (fraction preserved)"
 else
   fail "absence query must embed first_marker_dt via toDateTime64, not a stripped toDateTime"
