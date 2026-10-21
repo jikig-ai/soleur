@@ -310,3 +310,23 @@ and a throwing reporter regression; all three are now covered. The expanded
 focused suite passed **72 tests**, exit 0, 3.716 seconds, with the same Python 3.14
 command. Scoped Ruff and whitespace checks passed. Independent final-source
 re-review remains pending; these are offline results, not operational clearance.
+
+### Independent correction acceptance — 2026-10-21
+
+Engineering, security and test-design reviewers independently accepted pushed
+`2516b7561ec323771e04ba16e1e132068e576837`, reviewing the complete source correction
+against `c0ee6d2d3d0de6bf6af23397988e28f89c6e1b73` and the final correction delta.
+All three independently reran the permitted guarded focused suite: **72 tests
+passed**, exit 0, respectively 3.870, 3.759 and 3.949 seconds. Test-design score:
+**8.8/10, Grade B**, unit and synthetic OS lifecycle checks PASS. No blocking
+findings remain in this scoped correction. The test-design recommendations were
+implemented before final-source acceptance. These scoped seats are not the held
+full PR review, QA, preflight, CI, legal or runtime qualification gates.
+
+Ruled by CTO agent: source conformance PASS; the next gate requires separate
+operator permission for file-only binding refresh and one fresh unused diagnostic
+manifest. No preparation was performed. Actual-manifest/exact-command review,
+fresh one-time execution permission and separate evidence review remain distinct
+later gates. The old manifest and all historical attempt evidence remain untouched;
+old source bindings and the spent execution approval cannot be reused. The cause
+and historical helper activity of the refused attempt remain unestablished.
