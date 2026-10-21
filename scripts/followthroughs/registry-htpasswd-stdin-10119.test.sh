@@ -32,6 +32,14 @@ done
 OLDBOOT="4b8e0d27-31c6-4f5a-a2d9-60e7c1f3b8aa"   # fabricated pre-merge boot
 NEWBOOT="9f2c41d6-5b7a-4e08-9c31-7ad0e2b41f55"   # fabricated post-replace boot
 MERGED="2026-10-20T10:00:00Z"
+# THE PROBE'S CLOCK IS PINNED (#10762). Every fixture row and PR timestamp above is a fixed 2026-10-20 value, and
+# the probe turns a wait older than 24h after the merge into exit 3 (`stale_*`) against the REAL clock -- so this
+# suite was green until 2026-10-21T10:00Z and then red on every branch with no change at all. A `date` shim in each
+# probe root answers the one call the probe makes for "now" (`date -u +%s`) with merge + 2h and passes every other
+# invocation to the real binary, so the cases are independent of the day they run. The stale-wait case keeps its
+# explicit 2026-01-01 merge time and still reads as stale against the pinned clock.
+FROZEN_NOW_EPOCH="$(date -u -d "2026-10-20T12:00:00Z" +%s)"
+REAL_DATE="$(command -v date)"
 T_MERGED="$MERGED"      # per-case override of the merge time (the stale-wait case moves it into the past)
 T_RUNS=success          # per-case dispatcher-run listing: success | none | fail
 DT_FORM=space           # row dt form: space (Better Stack's real shape) | iso
@@ -65,6 +73,8 @@ run_probe() {
   rm -rf "$root"; mkdir -p "$root/scripts/followthroughs" "$root/scripts/lib" "$root/bin"
   cp "$PROBE_SRC" "$root/scripts/followthroughs/"
   cp "$HERE/../lib/zot-telemetry-parse.sh" "$root/scripts/lib/"
+  printf '#!/usr/bin/env bash\nif [ "$*" = "-u +%%s" ]; then echo %s; exit 0; fi\nexec %q "$@"\n' "$FROZEN_NOW_EPOCH" "$REAL_DATE" > "$root/bin/date"
+  chmod +x "$root/bin/date"
   printf '#!/usr/bin/env bash\ncase "$*" in *"--since 24h"*"--grep SOLEUR_ZOT_DISK"*) cat %q ;; *) echo "STUB: unexpected argv: $*" >&2; exit 64 ;; esac\n' "$fixture" > "$root/scripts/betterstack-query.sh"
   local body="Fix text"; [[ "$bodyboot" != none ]] && body="$body"$'\n'"Pre-merge boot_id: $bodyboot"$'\n'"more text"
   local comment='[]'
@@ -199,6 +209,13 @@ if [[ "$got" == 2 ]] && grep -qF "[branch=creds_unset]" "$WORK/out-nocreds"; the
 cases=$((cases + 1))
 ( cd "$WORK/root-pass" && env -i PATH="$WORK/root-pass/bin:/usr/bin:/bin" HOME="$WORK" BETTERSTACK_QUERY_PASSWORD=p bash -x scripts/followthroughs/registry-htpasswd-stdin-10119.sh ) > "$WORK/out-xtrace" 2>&1; got=$?
 if [[ "$got" == 78 ]] && ! grep -qE "BETTERSTACK_QUERY_PASSWORD=p|PASSWORD=p" "$WORK/out-xtrace"; then pass "xtrace: refused with exit 78 and no credential traced"; else fail "xtrace: got $got"; fi
+
+# The pinned clock is real: the shim answers `date -u +%s` with the frozen epoch and passes other calls through.
+if [[ "$("$WORK/root-pass/bin/date" -u +%s)" == "$FROZEN_NOW_EPOCH" && "$("$WORK/root-pass/bin/date" -u -d "2026-01-01T00:00:00Z" +%Y)" == "2026" ]]; then
+  pass "clock: the probe's now is pinned to the fixtures (merge + 2h) and other date calls reach the real binary"
+else
+  fail "clock: the date shim does not pin 'now' or breaks other date calls"
+fi
 
 # Positive control: the helpers move both counters, and the case counter matches the cases run.
 _p="$passes"; _f="$fails"; pass "control (expected)" >/dev/null; fail "control (expected, retracted)" >/dev/null 2>&1
