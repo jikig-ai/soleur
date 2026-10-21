@@ -268,6 +268,10 @@ on:
       # (#7530) The registry clientIP alert's drift guard asserts the runbook its incident link points at
       # exists and still carries the legal-consequence anchors; a docs-only edit must run the guard.
       - "knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-7530.md"
+      # (#10453) The SDK Bash smoke alert's drift guard resolves the runbook anchor in its incident link against
+      # canary-probe-set.md; a docs-only heading rename must run the guard. The probe's literal sandbox config and
+      # its verdict table are pinned by test/sdk-bash-probe-parity.test.ts (vitest, run by the web-platform test job).
+      - "knowledge-base/engineering/operations/runbooks/canary-probe-set.md"
   workflow_dispatch:
 
 permissions:
@@ -856,6 +860,13 @@ jobs:
       # resource in the .tf, and the mutation rows that each require this guard to red.
       - name: Run agent sandbox Bash denial alert drift guard (#10445)
         run: bash apps/web-platform/test/infra/sandbox-alerts.test.sh
+
+      # (#10453) The deploy-time SDK Bash smoke Logs alert: the marker, reason and op needles read from ci-deploy.sh's
+      # own sandbox_canary_sentry_event format and the smoke's page call, the three-conjunct predicate EVALUATED against
+      # fixture rows in the real raw shape (outer-wrap, inner bwrap_*, quoting rows must not match), the paging semantics,
+      # a -target= census over every logtail alert in the .tf, the runbook anchor, and the mutation rows.
+      - name: Run faithful canary sandbox-broken (SDK Bash smoke) alert drift guard (#10453)
+        run: bash apps/web-platform/test/infra/faithful-canary-sandbox-alert.test.sh
 
       # (#8408 a) The registry store-not-LUKS / escrow-not-ok Logs alert: head-scoped per-arm
       # predicate, exact literals, unpaused, both -target lines, and its mutation rows.

@@ -98,7 +98,10 @@ jobs:
           tar -C "$RUNNER_TEMP/bundle" -czf "$RUNNER_TEMP/bundle.tar.gz" .
           mkdir -p "$RUNNER_TEMP/oci"
           mv "$RUNNER_TEMP/bundle.tar.gz" "$RUNNER_TEMP/oci/bundle.tar.gz"
-          printf 'FROM scratch\nCOPY bundle.tar.gz /bundle.tar.gz\n' > "$RUNNER_TEMP/oci/Dockerfile"
+          # The CMD is load-bearing, not decorative: the host's extract does `docker create`
+          # + `docker cp`, and `docker create` refuses a command-less scratch image with
+          # "no command specified" (verify_fail reason=extract — #10390, first real pull).
+          printf 'FROM scratch\nCOPY bundle.tar.gz /bundle.tar.gz\nCMD ["true"]\n' > "$RUNNER_TEMP/oci/Dockerfile"
 
       - name: Docker login (GHCR)
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0

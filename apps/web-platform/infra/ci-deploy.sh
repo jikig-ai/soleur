@@ -432,21 +432,6 @@ CRON_DRAIN_STATE_FILE="${CRON_DRAIN_STATE_FILE:-/var/run/ci-deploy-cron-drain.js
 # durability tier as CRON_DEPLOY_LEASE_FILE. Reader default MUST match
 # cat-deploy-state.sh sandbox_canary_json().
 SANDBOX_CANARY_STATE_FILE="${SANDBOX_CANARY_STATE_FILE:-/mnt/data/ci-deploy-sandbox-canary.json}"
-# #5863 arm F: the outer-wrap canary gets its OWN durable soak state — same
-# cross-deploy accumulator shape as the inner canary but a separate ledger so
-# the two arms' soak windows never alias. Report-only at first deploy
-# (wg-dark-launch-deploy-gates); the #5863 follow-through script reads this
-# file via /hooks/deploy-status's outer_wrap_canary field.
-SANDBOX_OUTER_WRAP_CANARY_STATE_FILE="${SANDBOX_OUTER_WRAP_CANARY_STATE_FILE:-/mnt/data/ci-deploy-outer-wrap-canary.json}"
-# Aliasing guard: an env override pointing the outer ledger at the inner file
-# would let the #5863 soak read the #8752 arm's state (wrong mechanism's
-# greens counting toward promotion). Warn AND skip the outer arm entirely —
-# interleaved writes under one file is worse than a missing arm.
-OUTER_LEDGER_ALIAS=0
-if [[ "$SANDBOX_OUTER_WRAP_CANARY_STATE_FILE" == "$SANDBOX_CANARY_STATE_FILE" ]]; then
-  OUTER_LEDGER_ALIAS=1
-  logger -t "$LOG_TAG" "SANDBOX_OUTER_WRAP_CANARY_STATE_FILE == SANDBOX_CANARY_STATE_FILE ($SANDBOX_OUTER_WRAP_CANARY_STATE_FILE) — outer canary SKIPPED: aliasing would let the inner ledger's greens count toward the #5863 soak; fix the env override"
-fi
 # Where the canary payload + fixture live INSIDE the image (Dockerfile COPY).
 SANDBOX_CANARY_MJS="${SANDBOX_CANARY_MJS:-/app/scripts/sandbox-canary.mjs}"
 # Cross-workspace isolation probe verdict (#2640). Written per deploy by
@@ -466,15 +451,42 @@ WORKSPACE_ISOLATION_TIMEOUT="${WORKSPACE_ISOLATION_TIMEOUT:-300}"
 # 0/non-numeric would DISABLE the cap (timeout(1) treats 0 as unbounded) —
 # that is the opposite of the knob's contract; fail-safe back to the default.
 [[ "$WORKSPACE_ISOLATION_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || WORKSPACE_ISOLATION_TIMEOUT=300
-# Same aliasing failure class as OUTER_LEDGER_ALIAS above: an env override
-# pointing the #2640 ledger at either canary ledger would interleave verdict
-# vocabularies (sandbox_broken vs workspace_isolation_*) and corrupt both
-# soaks. Warn AND skip the probe entirely — a missing arm beats a wrong file.
+# Aliasing guard: an env override pointing the #2640 ledger at the canary
+# ledger would interleave verdict vocabularies (sandbox_broken vs
+# workspace_isolation_*) and corrupt both soaks. Warn AND skip the probe
+# entirely — a missing arm beats a wrong file.
 WORKSPACE_ISOLATION_LEDGER_ALIAS=0
-if [[ "$WORKSPACE_ISOLATION_STATE_FILE" == "$SANDBOX_CANARY_STATE_FILE" \
-   || "$WORKSPACE_ISOLATION_STATE_FILE" == "$SANDBOX_OUTER_WRAP_CANARY_STATE_FILE" ]]; then
+if [[ "$WORKSPACE_ISOLATION_STATE_FILE" == "$SANDBOX_CANARY_STATE_FILE" ]]; then
   WORKSPACE_ISOLATION_LEDGER_ALIAS=1
   logger -t "$LOG_TAG" "WORKSPACE_ISOLATION_STATE_FILE aliases a canary ledger ($WORKSPACE_ISOLATION_STATE_FILE) — workspace-isolation probe SKIPPED: interleaved writes would corrupt both soaks; fix the env override" || true
+fi
+# Deploy-time SDK Bash smoke verdict (#10453, ADR-079 addendum 2026-10-19). Written per deploy by run_sdk_bash_smoke through
+# write_sandbox_canary_state (one atomic write, extra-JSON argument carrying `coverage` and `consecutive_infra_error`),
+# surfaced on /hooks/deploy-status by cat-deploy-state.sh (sdk_bash_smoke_json). DURABLE on purpose, same /mnt/data rationale as
+# SANDBOX_CANARY_STATE_FILE above: the file alone carries the promotion soak's CROSS-DEPLOY accumulator (consecutive_pass +
+# first_pass_at) and the stale-probe counter. Reader default MUST match cat-deploy-state.sh sdk_bash_smoke_json().
+SDK_BASH_SMOKE_STATE_FILE="${SDK_BASH_SMOKE_STATE_FILE:-/mnt/data/ci-deploy-sdk-bash-smoke.json}"
+# The ledger identity stamp of the smoke (the write_sandbox_canary_state $6 argument). ONE variable for every use in this file;
+# cat-deploy-state.sh keeps its own literal (it is a separate script on the host) and ci-deploy.test.sh pins the two equal.
+readonly SDK_BASH_SMOKE_LEDGER_STAMP="sdk-bash-smoke"
+# The probe baked into the image (Dockerfile `COPY --from=builder /app/infra/lib/sdk-bash-probe.mjs`). An image that predates
+# it is `smoke_infra_error reason=probe_absent`; test/sdk-bash-probe-parity.test.ts pins this path to the Dockerfile COPY.
+SDK_BASH_SMOKE_PROBE="${SDK_BASH_SMOKE_PROBE:-/app/infra/lib/sdk-bash-probe.mjs}"
+# Host-side cap on the smoke's PROBE `docker exec`, above the probe's own 120 s internal cap (a hang INSIDE the probe is reported
+# by the probe; this fires only when the probe itself is wedged). Same 0/non-numeric fail-safe as WORKSPACE_ISOLATION_TIMEOUT.
+SDK_BASH_SMOKE_TIMEOUT="${SDK_BASH_SMOKE_TIMEOUT:-150}"
+[[ "$SDK_BASH_SMOKE_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || SDK_BASH_SMOKE_TIMEOUT=150
+# Separate, much shorter cap on the PRE-exec (probe presence + container HOME: a `test -f` and a printf). It used to share the
+# 150 s cap, so a wedged daemon could burn 150 s before the probe even started. The smoke's total time is therefore bounded
+# by SDK_BASH_SMOKE_PREEXEC_TIMEOUT + SDK_BASH_SMOKE_TIMEOUT (170 s by default), plus the bounded DIAG bundle on a failure.
+SDK_BASH_SMOKE_PREEXEC_TIMEOUT="${SDK_BASH_SMOKE_PREEXEC_TIMEOUT:-20}"
+[[ "$SDK_BASH_SMOKE_PREEXEC_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || SDK_BASH_SMOKE_PREEXEC_TIMEOUT=20
+# Aliasing guard (the WORKSPACE_ISOLATION_LEDGER_ALIAS pattern): an env override pointing the smoke ledger at another
+# canary ledger would interleave verdict vocabularies and corrupt both soaks. Warn AND skip the smoke.
+SDK_BASH_SMOKE_LEDGER_ALIAS=0
+if [[ "$SDK_BASH_SMOKE_STATE_FILE" == "$SANDBOX_CANARY_STATE_FILE" || "$SDK_BASH_SMOKE_STATE_FILE" == "$WORKSPACE_ISOLATION_STATE_FILE" ]]; then
+  SDK_BASH_SMOKE_LEDGER_ALIAS=1
+  logger -t "$LOG_TAG" "SDK_BASH_SMOKE_STATE_FILE aliases another canary ledger ($SDK_BASH_SMOKE_STATE_FILE) — SDK Bash smoke SKIPPED: interleaved writes would corrupt both soaks; fix the env override" || true
 fi
 # #8609: the GitHub App key probe baked into the image (Dockerfile `COPY --from=builder
 # /app/scripts/github-app-key-probe.mjs ./scripts/…` under WORKDIR /app). soleur-host-bootstrap.sh's
@@ -730,21 +742,26 @@ write_cron_drain_state() {
 #                       deploy — no operator timestamp to hand-pin).
 #   - `sandbox_broken`→ reset both to 0 (a faithful FAIL restarts the soak).
 #     (reset set is actually $5 reset_re — `sandbox_broken` is just the
-#     default for the faithful/outer-wrap callers; the #2640 probe passes its
+#     default for the faithful caller; the #2640 probe passes its
 #     own RED classes.)
 #   - infra_error/*   → HOLD prior counters (a docker/exec hiccup or the
 #                       dark-launch `fixture_uncaptured` state is a non-signal).
+# $7 extra (optional): a JSON OBJECT merged into the one atomic write (the SDK Bash smoke's `coverage` and
+# `consecutive_infra_error`), so a verdict and the fields that qualify it can never be observed apart. An argument that is not
+# a JSON object is ignored (the base record is still written). Internal literal from the call site, never operator input.
 # $6 ledger: an identity stamp naming WHICH mechanism's ledger this write
-# belongs to (the Sentry-op vocabulary: sandbox-canary / sandbox-canary-
-# outer-wrap / workspace-isolation). The readers in cat-deploy-state.sh refuse
+# belongs to (the Sentry-op vocabulary: sandbox-canary / workspace-isolation).
+# The readers in cat-deploy-state.sh refuse
 # a file whose stamp is present-but-foreign — closing the env-alias blind spot
 # where an override points a canary ledger AT another ledger's path and foreign
 # `pass` verdicts would otherwise inflate the wrong soak.
 write_sandbox_canary_state() {
   # $5 reset_re: an ERE alternation naming this ledger's RED verdict classes
   # (soak-reset). Internal literal from the call sites, never operator input.
-  local verdict="$1" reason="$2" sdk_version="${3:-}" state_file="${4:-$SANDBOX_CANARY_STATE_FILE}" reset_re="${5:-sandbox_broken}" ledger="${6:-sandbox-canary}" tmp now prior_pass prior_first
+  local verdict="$1" reason="$2" sdk_version="${3:-}" state_file="${4:-$SANDBOX_CANARY_STATE_FILE}" reset_re="${5:-sandbox_broken}" ledger="${6:-sandbox-canary}" extra="${7:-}" tmp now prior_pass prior_first
   now="$(date +%s)"
+  if [[ -n "$extra" ]] && ! jq -e 'type == "object"' <<<"$extra" >/dev/null 2>&1; then extra=""; fi
+  [[ -n "$extra" ]] || extra='{}'
   prior_pass=0; prior_first=0
   if [[ -f "$state_file" ]]; then
     # Foreign-ledger guard: a file carrying another mechanism's `ledger` stamp
@@ -775,8 +792,8 @@ write_sandbox_canary_state() {
   tmp="$(mktemp "${state_file}.XXXXXX" 2>/dev/null)" || return 0
   jq -nc \
     --arg v "$verdict" --arg r "$reason" --arg s "$sdk_version" --arg l "$ledger" --argjson ts "$now" \
-    --argjson cp "$consecutive_pass" --argjson fp "$first_pass_at" \
-    '{verdict:$v, reason:$r, sdk_version:$s, checked_at:$ts, consecutive_pass:$cp, first_pass_at:$fp, ledger:$l}' \
+    --argjson cp "$consecutive_pass" --argjson fp "$first_pass_at" --argjson x "$extra" \
+    '{verdict:$v, reason:$r, sdk_version:$s, checked_at:$ts, consecutive_pass:$cp, first_pass_at:$fp, ledger:$l} + $x' \
     > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
   mv "$tmp" "$state_file" 2>/dev/null || { rm -f "$tmp"; return 0; }
   return 0
@@ -815,6 +832,14 @@ sandbox_canary_sentry_event() {
 write_workspace_isolation_state() {
   write_sandbox_canary_state "$1" "$2" "" "$WORKSPACE_ISOLATION_STATE_FILE" \
     'workspace_isolation_failed|workspace_isolation_timeout' 'workspace-isolation'
+}
+
+# write_sdk_bash_smoke_state <verdict> <reason> <extra-json>: the SDK Bash smoke's ledger write (#10453), a thin wrapper over
+# write_sandbox_canary_state like write_workspace_isolation_state above. Its RED class is sdk_bash_smoke_failed (resets the
+# soak); smoke_infra_error HOLDS the counters. The ledger stamp is SDK_BASH_SMOKE_LEDGER_STAMP, the only spelling in this file.
+# Always returns 0 (NON-BLOCKING): the caller reads the ledger back to learn whether the write landed.
+write_sdk_bash_smoke_state() {
+  write_sandbox_canary_state "$1" "$2" "" "$SDK_BASH_SMOKE_STATE_FILE" 'sdk_bash_smoke_failed' "$SDK_BASH_SMOKE_LEDGER_STAMP" "${3:-}"
 }
 
 # workspace_isolation_sentry_event: loud, no-SSH page on a RED isolation verdict
@@ -1717,7 +1742,7 @@ v=$(timeout 5 /usr/bin/bwrap --unshare-user --unshare-pid --dev /dev --bind / / 
 p sdk_noproc "rc=$r $(printf %s "$v" | head -n 1 | cut -c1-120)"
 p kernel_ns "restrict=$(k /proc/sys/kernel/apparmor_restrict_unprivileged_userns) clone=$(k /proc/sys/kernel/unprivileged_userns_clone) max=$(k /proc/sys/user/max_user_namespaces)"'
 
-# _canary_diag_emit <trigger> <section> <raw>: the ONLY emitter. Scrubs first, then writes one line with
+# _canary_diag_emit <trigger: legacy|faithful|sdk_smoke> <section> <raw>: the ONLY emitter. Scrubs first, then writes one line with
 # the free text LAST and quote-bounded (ADR-115 trusted region: consumers anchor on val="[^"]*"$). The
 # `||` printf keeps the record on the webhook leg if journald is unavailable.
 _canary_diag_emit() {
@@ -1850,7 +1875,7 @@ _canary_kdeny_read() {
   return 0
 }
 
-# emit_canary_sandbox_diag <legacy|faithful>: always returns 0. In-container section names are an
+# emit_canary_sandbox_diag <legacy|faithful|sdk_smoke>: always returns 0. In-container section names are an
 # allowlist -- anything else the exec prints (a daemon error, a forged first word) is `raw`, so only
 # this function can mint host/hostsec/kernel/kdeny/done.
 emit_canary_sandbox_diag() {
@@ -2914,10 +2939,11 @@ verify_image_signature() {
 # "faithful FAIL + legacy PASS" disagreement is the alertable promote signal).
 # Exit-code classification: a failed `docker exec` (125/126/127 / ENOENT) is a
 # canary_infra_error, NOT sandbox_broken — the #4941 false-rollback guard.
-# run_canary_replay <mode-flag> <state-file> <sentry-op> <label>: the shared
-# canary runner — one copy of the false-rollback guard (docker/exec failures
-# classify canary_infra_error, never sandbox_broken) for both replay arms.
-# Each arm's soak lives in its own state file.
+# run_canary_replay <mode-flag> <state-file> <sentry-op> <label>: the canary
+# replay runner — the false-rollback guard (docker/exec failures classify
+# canary_infra_error, never sandbox_broken). The outer-wrap arm that shared it
+# is retired (#10454, ADR-079 addendum 2026-10-19), so the faithful canary is its
+# only caller and its soak lives in the one state file it is handed.
 run_canary_replay() {
   local mode_flag="$1" state_file="$2" sentry_op="$3" label="$4"
   local verdict reason sdk_version exec_rc out err_file docker_err detail
@@ -2970,12 +2996,10 @@ run_canary_replay() {
   if [[ "$verdict" == "sandbox_broken" ]]; then
     # #9860: this verdict has been recorded since 2026-10-09 with no cause beyond
     # bwrap_operation_not_permitted. Only the inner faithful canary (sentry_op sandbox-canary) is
-    # diagnosed: the outer-wrap arm's sandbox_broken is the expected report-only state.
+    # diagnosed (the retired outer-wrap arm never was; see ADR-079 addendum 2026-10-19), and it is this function's only caller.
     sandbox_canary_sentry_event "$verdict" "$reason" "$sdk_version" "$sentry_op" || true
     # After the page, so a slow bundle never delays it.
-    if [[ "$sentry_op" == "sandbox-canary" ]]; then
-      emit_canary_sandbox_diag faithful || true
-    fi
+    emit_canary_sandbox_diag faithful || true
   fi
   return 0
 }
@@ -2986,21 +3010,6 @@ run_faithful_sandbox_canary() {
   # (that gap is why #5849 shipped green).
   run_canary_replay "--replay" "$SANDBOX_CANARY_STATE_FILE" "sandbox-canary" \
     "Faithful sandbox canary (non-blocking)"
-}
-
-# run_outer_wrap_canary: the #5863 outer-wrap arm — NON-BLOCKING report-only.
-# Replays the SELF-AUTHORED outer mount-table fixture inside the canary
-# container (the elevation posture the prod wrap depends on)
-# and runs the shared isolation payload in the resulting namespace. Its
-# verdict accumulates in SANDBOX_OUTER_WRAP_CANARY_STATE_FILE for the
-# #5863 soak follow-through; promotion to gating is a separate change after
-# a green soak.
-run_outer_wrap_canary() {
-  if [[ "$OUTER_LEDGER_ALIAS" == "1" ]]; then
-    return 0 # aliased ledger: refuse to write into the inner ledger
-  fi
-  run_canary_replay "--replay-outer" "$SANDBOX_OUTER_WRAP_CANARY_STATE_FILE" \
-    "sandbox-canary-outer-wrap" "Outer-wrap canary (report-only)"
 }
 
 # run_workspace_isolation_probe: NON-BLOCKING dark-launch (#2640; the
@@ -3130,6 +3139,224 @@ run_workspace_isolation_probe() {
   # green probe never pages.
   if [[ "$verdict" == "workspace_isolation_failed" || "$verdict" == "workspace_isolation_timeout" ]]; then
     workspace_isolation_sentry_event "$verdict" "$reason" || true
+  fi
+  return 0
+}
+
+# sdk_bash_smoke_stale_event: the persistent-blindness warning of the SDK Bash smoke (#10453). Three smoke_infra_error
+# verdicts in a row mean the smoke cannot see anything (a Dockerfile regression that drops the probe, a broken exec path), and an
+# infra error never pages, so a dead probe would otherwise stay silent forever. A journald row plus a Sentry WARNING (op
+# sandbox-canary, level warning): deliberately not the SANDBOX_CANARY_FAIL marker the Better Stack alert keys on, so it never
+# emails. Best-effort + env-guarded, fail-open under set -e (mirrors cosign_verify_event).
+sdk_bash_smoke_stale_event() {
+  local n="$1" reason="$2" what msg
+  if [[ "$reason" == "ledger_write_failed" ]]; then
+    # Its own wording: the counter did NOT advance in the ledger (the write failed), so "N deploys in a row" would be false.
+    what="SDK smoke ledger write failed (consecutive_infra_error not advanced)"
+    msg="SDK smoke ledger write failed (consecutive_infra_error not advanced)"
+  else
+    what="the smoke has not produced a verdict for $n deploys in a row"
+    msg="sdk bash smoke stale: $n consecutive smoke_infra_error ($reason) - the deploy-time Bash check is blind"
+  fi
+  logger -t "$LOG_TAG" "SDK_BASH_SMOKE_STALE: consecutive_infra_error=$n last_reason=$reason ($what; warning, not a page)" || true
+  if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
+    local payload
+    payload="$(jq -n --arg n "$n" --arg r "$reason" --arg m "$msg" \
+      '{message: $m,
+        level: "warning", platform: "other", logger: "ci-deploy",
+        tags: {feature: "agent-sandbox", op: "sandbox-canary", verdict: "smoke_infra_error", event: "sdk_bash_smoke_stale"},
+        extra: {consecutive_infra_error: $n, reason: $r}}' 2>/dev/null)" || return 0
+    curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
+      "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
+      -H "Content-Type: application/json" \
+      -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
+      -d "$payload" 2>/dev/null \
+      || logger -t "$LOG_TAG" "SDK_BASH_SMOKE: Sentry POST failed" || true
+  fi
+  return 0
+}
+
+# run_sdk_bash_smoke: NON-BLOCKING dark-launch (#10453; wg-dark-launch-deploy-gates; ADR-079 addendum 2026-10-19). The faithful
+# canary's replay ends in `-- true` and never runs the process the Agent SDK wraps around every sandboxed Bash command, so a
+# green canary over a total Bash outage was possible (#10445, ten days). This runs ONE real Bash call end to end (the real
+# Agent SDK, the shipped shim and the production sandbox config) in the CANARY container via the baked probe, records the
+# verdict to its own ledger, and pages through journald (the faithful_canary_sandbox_broken alert) on a failure. It NEVER
+# changes the deploy's outcome: every verdict returns 0, the call site is `|| true`, no verdict rolls back or aborts.
+#
+# Probe contract (infra/lib/sdk-bash-probe.mjs, SMOKE=1): prints one `SDK_BASH_RESULT {verdict,reason,coverage}` line, preceded by
+# one `SDK_BASH_DISPATCHED` line once the Bash tool_use turn has been delivered (the `grep '^SDK_BASH_RESULT '` parse ignores it).
+#   pass                  the per-run NONCE came back in the real tool_result AND coverage is sdk_wrapper_shim_prodtuple
+#   sdk_bash_smoke_failed Bash was dispatched and no verified nonce came back (error, no nonce, hang): signature-independent
+#   smoke_infra_error     Bash was never dispatched; also a pass-shaped result with coverage replay_only (a HOLD)
+# docker-exec classification (the #4941 false-rollback guard): a non-zero rc whose output already carries the WHOLE LINE
+# `SDK_BASH_DISPATCHED` (Bash was handed to the SDK, so a hang or a death after that is the #10445 shape) is sdk_bash_smoke_failed:
+# 124 as host_timeout_<N>s, any other rc as probe_rc_<N>_after_dispatch, EXCEPT 137 and 143 (SIGKILL / SIGTERM: the OOM killer, a
+# container stop or a deploy-side signal, not a Bash result), which are smoke_infra_error probe_killed_rc_<N>. Without the marker
+# a 124 is a daemon stall or a wedged node start (smoke_infra_error host_timeout_before_dispatch), 125/126/127 (daemon /
+# not-executable / not-found) are docker_exec_rc_<N> and any other rc (the probe crashed before printing) is probe_rc_<N>, all
+# smoke_infra_error. The ONE pre-exec (probe presence + container HOME, capped by SDK_BASH_SMOKE_PREEXEC_TIMEOUT) maps rc 66 ONLY
+# to `probe_absent` (an image that predates the probe); its 124 is host_timeout_before_dispatch and every other non-zero rc
+# (docker's 125/126/127, a missing container's 1) is `preflight_rc_<N>` with docker's first scrubbed stderr line, all
+# smoke_infra_error. A nonce that /dev/urandom could not supply is `nonce_unavailable` (never a $RANDOM-derived nonce, the nonce
+# is the proof the tool_result came from this run; the probe verifies the TRANSFORMED nonce its command computes, so a result
+# that merely quotes the command text cannot pass).
+# Total time: SDK_BASH_SMOKE_PREEXEC_TIMEOUT (20 s) + SDK_BASH_SMOKE_TIMEOUT (150 s), each a separate `timeout`, plus the bounded
+# DIAG bundle after a failure page.
+# Ordering (2026-10-19 review ruling; rationale: ADR-079 addendum): the call site is AFTER github_app_key_canary_check, under its own CANARY_HEALTHY check. The
+# canary runs with `--memory 1536m --memory-swap 1536m` and already hosts the Next server; a probe OOM, or a probe still running
+# after a host-cap 124 (only the `docker exec` client is killed), could fail the key gate and roll back a healthy deploy. After the
+# gate the canary is torn down immediately, so the smoke cannot change the outcome even indirectly.
+# Targeting: ONLY soleur-web-platform-canary, never the live prod container. Ledger: ONE atomic write through
+# write_sandbox_canary_state (the extra-JSON argument carries coverage and consecutive_infra_error), read back afterwards: a
+# failed write can never leave a coverage-less pass (it is reported smoke_infra_error reason=ledger_write_failed instead).
+# Exec envelope: the canary's Config.Env is the FULL prd env and the probe copies process.env into the SDK child, so the exec is
+# `/usr/bin/env -i` with an explicit allowlist and a decoy ANTHROPIC_API_KEY (no `-u`), under a host `timeout`, with the
+# container's real HOME (the transcript mask derives from it; /tmp would silently change it).
+run_sdk_bash_smoke() {
+  if [[ "$SDK_BASH_SMOKE_LEDGER_ALIAS" == "1" ]]; then
+    return 0 # aliased ledger: refuse to write into another canary's ledger
+  fi
+  local ctr="soleur-web-platform-canary"
+  local verdict reason coverage="" exec_rc=0 out="" err_file docker_err home="" nonce="" line="" json="" t0
+  local prior_ledger prior_cie=0 cie=0 extra ledger_ok=0 pre_rc=0 stale_emitted=0 ledger_ours=0
+  t0="$(date +%s)"
+  err_file="$(mktemp 2>/dev/null || echo /dev/null)"
+  # ONE capped pre-exec (was two bare execs): probe presence (rc 66) and the container's real HOME in a single `docker exec`
+  # under its own short cap, so a wedged daemon cannot stall the deploy outside it. `if` (not a bare capture): a failed exec must
+  # not abort under set -e. rc 66 is the ONLY "probe absent" answer; the cap's 124 and every other non-zero rc (docker's own
+  # 125/126/127, a missing container) are an infra error that names the rc, with docker's first stderr line (scrubbed, then cut).
+  if home="$(timeout "$SDK_BASH_SMOKE_PREEXEC_TIMEOUT" docker exec "$ctr" /bin/sh -c 'test -f "$1" || exit 66; printf %s "$HOME"' sh "$SDK_BASH_SMOKE_PROBE" 2>"$err_file")"; then
+    pre_rc=0
+  else
+    pre_rc=$?
+  fi
+  if [[ "$pre_rc" -eq 124 ]]; then
+    verdict="smoke_infra_error"; reason="host_timeout_before_dispatch: preflight"
+  elif [[ "$pre_rc" -ne 0 ]]; then
+    docker_err="$(_cred_err_tail "$(head -1 "$err_file" 2>/dev/null)" | cut -c1-120)"
+    if [[ "$pre_rc" -eq 66 ]]; then
+      verdict="smoke_infra_error"; reason="probe_absent${docker_err:+: $docker_err}"
+    else
+      verdict="smoke_infra_error"; reason="preflight_rc_${pre_rc}${docker_err:+: $docker_err}"
+    fi
+  else
+    nonce="$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' || true)"
+    if ! [[ "$nonce" =~ ^[0-9a-f]{32}$ ]]; then
+      verdict="smoke_infra_error"; reason="nonce_unavailable"
+    elif ! [[ "$home" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+      verdict="smoke_infra_error"; reason="container_home_unresolved"
+    else
+      # `if` (not a bare capture + `exec_rc=$?`): under `set -e` a failed exec aborts before the read.
+      if out="$(timeout "$SDK_BASH_SMOKE_TIMEOUT" docker exec -w /app "$ctr" /usr/bin/env -i \
+          PATH=/usr/local/bin:/usr/bin:/bin HOME="$home" APP=/app SMOKE=1 NONCE="$nonce" \
+          ANTHROPIC_API_KEY=decoy-api-key-sentinel \
+          node "$SDK_BASH_SMOKE_PROBE" 2>"$err_file")"; then
+        exec_rc=0
+      else
+        exec_rc=$?
+      fi
+      docker_err="$(_cred_err_tail "$(head -1 "$err_file" 2>/dev/null)" | cut -c1-120)"
+      case "$exec_rc" in
+        0)
+          line="$(printf '%s\n' "$out" | { grep -a '^SDK_BASH_RESULT ' || true; } | tail -n 1)"
+          json="${line#SDK_BASH_RESULT }"
+          verdict="$(printf '%s' "$json" | jq -r '.verdict // ""' 2>/dev/null || echo '')"
+          reason="$(printf '%s' "$json" | jq -r '.reason // ""' 2>/dev/null || echo '')"
+          coverage="$(printf '%s' "$json" | jq -r '.coverage // ""' 2>/dev/null || echo '')"
+          [[ "$coverage" == "sdk_wrapper_shim_prodtuple" || "$coverage" == "replay_only" ]] || coverage=""
+          case "$verdict" in
+            pass)
+              # The probe already holds a replay_only pass; refuse one here too (defense in depth): only the
+              # shim-and-wrapper tuple may count toward promotion.
+              if [[ "$coverage" != "sdk_wrapper_shim_prodtuple" ]]; then
+                verdict="smoke_infra_error"; reason="coverage_replay_only"
+              fi ;;
+            sdk_bash_smoke_failed|smoke_infra_error) : ;;
+            *) verdict="smoke_infra_error"; reason="no_result_line${docker_err:+: $docker_err}"; coverage="" ;;
+          esac ;;
+        124)
+          # `out` still holds whatever the probe printed before `timeout` killed the docker exec client.
+          if [[ $'\n'"$out"$'\n' == *$'\nSDK_BASH_DISPATCHED\n'* ]]; then
+            verdict="sdk_bash_smoke_failed"; reason="host_timeout_${SDK_BASH_SMOKE_TIMEOUT}s${docker_err:+: $docker_err}"
+          else
+            verdict="smoke_infra_error"; reason="host_timeout_before_dispatch${docker_err:+: $docker_err}"
+          fi ;;
+        *)
+          # Any other non-zero rc: if the probe had already printed SDK_BASH_DISPATCHED, Bash was handed to the SDK and the
+          # run died after that (a crash, a kill): the #10445 shape, not an infra hiccup. Otherwise it never got that far.
+          if [[ $'\n'"$out"$'\n' == *$'\nSDK_BASH_DISPATCHED\n'* ]]; then
+            if [[ "$exec_rc" == "137" || "$exec_rc" == "143" ]]; then
+              # SIGKILL / SIGTERM after dispatch: the OOM killer, a container stop or a deploy signal, not a Bash result. Not a
+              # page; the reason says what happened.
+              verdict="smoke_infra_error"; reason="probe_killed_rc_${exec_rc}${docker_err:+: $docker_err}"
+            else
+              verdict="sdk_bash_smoke_failed"; reason="probe_rc_${exec_rc}_after_dispatch${docker_err:+: $docker_err}"
+            fi
+          elif [[ "$exec_rc" == "125" || "$exec_rc" == "126" || "$exec_rc" == "127" ]]; then
+            verdict="smoke_infra_error"; reason="docker_exec_rc_${exec_rc}${docker_err:+: $docker_err}"
+          else
+            verdict="smoke_infra_error"; reason="probe_rc_${exec_rc}${docker_err:+: $docker_err}"
+          fi ;;
+      esac
+    fi
+  fi
+  if [[ "$err_file" != "/dev/null" ]]; then rm -f "$err_file" 2>/dev/null || true; fi
+  # The reason rides journald, Sentry and the deploy-status frame: scrub it (secret shapes, env values, control chars) and cap it.
+  reason="$(_cred_err_tail "$reason" | cut -c1-200)"
+
+  # Stale-probe counter: bumped on an infra error, reset by any other verdict. Foreign-stamped ledgers
+  # contribute nothing (the write_sandbox_canary_state guard).
+  if [[ -f "$SDK_BASH_SMOKE_STATE_FILE" ]]; then
+    prior_ledger="$(jq -r '.ledger // ""' "$SDK_BASH_SMOKE_STATE_FILE" 2>/dev/null || echo '')"
+    if [[ -z "$prior_ledger" || "$prior_ledger" == "$SDK_BASH_SMOKE_LEDGER_STAMP" ]]; then
+      prior_cie="$(jq -r '.consecutive_infra_error // 0' "$SDK_BASH_SMOKE_STATE_FILE" 2>/dev/null || echo 0)"
+      [[ "$prior_cie" =~ ^[0-9]+$ ]] || prior_cie=0
+    fi
+  fi
+  if [[ "$verdict" == "smoke_infra_error" ]]; then cie=$((prior_cie + 1)); else cie=0; fi
+  extra="$(jq -nc --arg c "$coverage" --argjson n "$cie" '{coverage:$c, consecutive_infra_error:$n}' 2>/dev/null || echo '{}')"
+  write_sdk_bash_smoke_state "$verdict" "$reason" "$extra"
+  # write_sandbox_canary_state always returns 0 (it must never abort a deploy), so read the ledger back: the new verdict, its
+  # coverage and a fresh timestamp must be there, or the write did not land.
+  if jq -e --arg v "$verdict" --arg c "$coverage" --argjson t0 "$t0" --arg stamp "$SDK_BASH_SMOKE_LEDGER_STAMP" \
+      '.verdict == $v and (.coverage // "") == $c and ((.checked_at // 0) >= $t0) and .ledger == $stamp' \
+      "$SDK_BASH_SMOKE_STATE_FILE" >/dev/null 2>&1; then
+    ledger_ok=1
+  fi
+  if [[ "$ledger_ok" != "1" ]]; then
+    logger -t "$LOG_TAG" "SDK_BASH_SMOKE: ledger_write_failed state_file=$SDK_BASH_SMOKE_STATE_FILE intended_verdict=$verdict" || true
+    # A failed write means the stale-probe counter cannot accumulate in the ledger, so a persistent write failure would stay
+    # silent forever: warn from here with the prior counter + 1 (and never again below for the same deploy).
+    sdk_bash_smoke_stale_event "$((prior_cie + 1))" "ledger_write_failed" || true
+    stale_emitted=1
+    if [[ "$verdict" == "pass" ]]; then
+      # Never report (or count) a pass whose coverage-bearing record did not land.
+      verdict="smoke_infra_error"; reason="ledger_write_failed"; coverage=""
+    elif [[ "$verdict" == "sdk_bash_smoke_failed" ]]; then
+      # A failed verdict that did not land must not leave the PREVIOUS record behind: a stale consecutive_pass would keep
+      # reading as a soak that this failure should have reset. Remove ONLY a record that is ours (ledger stamp checked first)
+      # and OLDER than this run (checked_at < t0), so a record that did land is never deleted; an unparseable file goes too.
+      # The removal needs the directory permission whose absence usually broke the write: when it is not writable the stale
+      # record survives (the page and the stale warning above still fire).
+      if jq -e --argjson t0 "$t0" --arg stamp "$SDK_BASH_SMOKE_LEDGER_STAMP" \
+          '((.ledger // "") == "" or .ledger == $stamp) and ((.checked_at // 0) < $t0)' \
+          "$SDK_BASH_SMOKE_STATE_FILE" >/dev/null 2>&1 \
+        || { [[ -f "$SDK_BASH_SMOKE_STATE_FILE" ]] && ! jq -e . "$SDK_BASH_SMOKE_STATE_FILE" >/dev/null 2>&1; }; then
+        ledger_ours=1
+      fi
+      if [[ "$ledger_ours" == "1" ]]; then rm -f "$SDK_BASH_SMOKE_STATE_FILE" 2>/dev/null || true; fi
+    fi
+  fi
+  logger -t "$LOG_TAG" "SDK_BASH_SMOKE: verdict=$verdict reason=$reason coverage=$coverage" || true
+  echo "SDK Bash smoke (non-blocking): verdict=$verdict reason=$reason coverage=$coverage"
+  if [[ "$verdict" == "sdk_bash_smoke_failed" ]]; then
+    # The page: ONE journald row per failed deploy. Verdict `sandbox_broken` + the `sdk_bash_smoke_failed` reason prefix + op
+    # `sandbox-canary` is the contract of the faithful_canary_sandbox_broken alert (its drift guard reads this very line).
+    sandbox_canary_sentry_event sandbox_broken "sdk_bash_smoke_failed: ${reason}" "" "sandbox-canary" || true
+    # After the page, so a slow bundle never delays it.
+    emit_canary_sandbox_diag sdk_smoke || true
+  elif [[ "$verdict" == "smoke_infra_error" && "$cie" -ge 3 && "$stale_emitted" != "1" ]]; then
+    sdk_bash_smoke_stale_event "$cie" "$reason" || true
   fi
   return 0
 }
@@ -4787,11 +5014,14 @@ case "$COMPONENT" in
 
     # Layered canary probe set. Contract:
     #   knowledge-base/engineering/operations/runbooks/canary-probe-set.md
-    readonly CANARY_HEALTH_HTTP="/tmp/canary-health-http"
-    readonly CANARY_LOGIN_HTTP="/tmp/canary-login-http"
-    readonly CANARY_LOGIN_BODY="/tmp/canary-login-body.html"
-    readonly CANARY_DASH_HTTP="/tmp/canary-dash-http"
-    readonly CANARY_DASH_BODY="/tmp/canary-dash-body.html"
+    # The probe scratch files live under CANARY_PROBE_TMPDIR (default /tmp). The override exists so concurrent runs of
+    # ci-deploy.test.sh (and a deploy next to one) cannot read each other's files: four fixed /tmp paths shared by every
+    # run made canary-health rows flake under load.
+    readonly CANARY_HEALTH_HTTP="${CANARY_PROBE_TMPDIR:-/tmp}/canary-health-http"
+    readonly CANARY_LOGIN_HTTP="${CANARY_PROBE_TMPDIR:-/tmp}/canary-login-http"
+    readonly CANARY_LOGIN_BODY="${CANARY_PROBE_TMPDIR:-/tmp}/canary-login-body.html"
+    readonly CANARY_DASH_HTTP="${CANARY_PROBE_TMPDIR:-/tmp}/canary-dash-http"
+    readonly CANARY_DASH_BODY="${CANARY_PROBE_TMPDIR:-/tmp}/canary-dash-body.html"
     # Structured marker emitted by `components/error-boundary-view.tsx`.
     # Stable across copy edits — replaces the brittle "An unexpected error
     # occurred" sentinel which only renders when `error.digest` is falsy.
@@ -5023,8 +5253,10 @@ case "$COMPONENT" in
       # on a faithful FAIL, but never gates/rolls back this deploy. `|| true`
       # keeps a canary hiccup from aborting the deploy under set -e.
       run_faithful_sandbox_canary || true
-      # Outer-wrap canary (#5863) — report-only, same non-blocking posture.
-      run_outer_wrap_canary || true
+      # no outer-wrap verdict: retired, see ADR-079 addendum 2026-10-19 (#10454). Its pass condition
+      # (privileged elevation) was dropped on purpose by ADR-075's 2026-10-09 addendum, so it could never go green.
+
+      # (The deploy-time SDK Bash smoke, #10453, runs after the GitHub App key gate below, not here.)
 
       # Cross-workspace isolation probe (#2640) — NON-BLOCKING dark-launch
       # (wg-dark-launch-deploy-gates). Runs the direct tier of the cross-workspace
@@ -5045,6 +5277,16 @@ case "$COMPONENT" in
     # A no-op while the resolver chose the legacy http link.
     if [[ "$CANARY_HEALTHY" == "true" ]] && ! inngest_link_canary_check; then
       CANARY_HEALTHY=false
+    fi
+
+    # Deploy-time SDK Bash smoke (#10453) — NON-BLOCKING dark-launch (wg-dark-launch-deploy-gates). One real wrapped Bash call
+    # through the real Agent SDK in the CANARY container: the check the faithful canary cannot make (its replay ends in `-- true`,
+    # the #10445 shape). Records a verdict to its own ledger and pages on a failure, but never gates or rolls back this deploy.
+    # It runs AFTER the last promotion gates (the key and Inngest link checks above) so that a probe OOM in the memory-capped canary, or a probe
+    # still running after a host-cap 124, cannot fail that gate and roll back a healthy deploy, even indirectly (2026-10-19 review ruling; rationale: ADR-079 addendum).
+    # `|| true` is LOAD-BEARING: no verdict may abort a deploy under set -e. Promotion is #10548.
+    if [[ "$CANARY_HEALTHY" == "true" ]]; then
+      run_sdk_bash_smoke || true
     fi
 
     if [[ "$CANARY_HEALTHY" == "true" ]]; then

@@ -415,6 +415,8 @@ kernel stream it needed.
 
 ## Addendum — 2026-10-16 (#10445): AF_UNIX blocking inside the inner sandbox is deliberately not enforced
 
+> **Partly superseded by the 2026-10-19 addendum below (#10455 a):** the "single `socket(AF_UNIX)` deny in the one filter" follow-up and the "proxy auth is the only remaining AF_UNIX control" assumption no longer hold as written; read that addendum first.
+
 **Context.** The #8752 plan recorded the vendored `apply-seccomp` helper as "inert today (our config sets no
 `allowUnixSockets`)", and the 2026-10-11 addendum above (its "Invariance caveat") recorded that the multicall "dies at
 `unshare(CLONE_NEWUSER)` on every kernel posture measured". The first was false, and the second was measured on a host
@@ -470,3 +472,77 @@ blocking again, the replacement is a single `socket(AF_UNIX)` deny in the one bw
 allowed: libuv child processes need it), tracked in #10455. The vendored-binary pins in
 `test/sandbox-vendored-argv-tail.test.ts` (helper-selection literals and the settings mapping) turn red on an SDK bump
 that changes how the helper is selected, so the premise is re-proved rather than inherited.
+
+## Addendum — 2026-10-19 (#10455 a): AF_UNIX is denied for no-egress sessions by a second seccomp artifact, behind a runtime flag
+
+**This addendum SUPERSEDES three statements of the earlier addenda above.** (1) The "Follow-up" paragraph said the
+replacement for the lost per-command AF_UNIX block is "a single `socket(AF_UNIX)` deny in the one bwrap-level filter". That is not
+buildable: the vendored builder starts in-sandbox `socat TCP-LISTEN:3128/1080 ... UNIX-CONNECT:<sock>` bridges before every user
+command (measured 2026-10-19 from the bwrap argv the real SDK emits, with `allowedDomains: []`, and pinned in
+`test/sandbox-vendored-argv-tail.test.ts`), so a blanket deny breaks the proxy bridge of every egress session. (2) The
+"Load-bearing assumption" said SDK proxy auth is the only remaining AF_UNIX control. For **no-egress sessions with the runtime flag
+on** it is no longer the only control: they cannot create an AF_UNIX socket at all. (3) The 2026-10-06 (#8752) addendum's "one artifact
+(`bwrap-userns-clone3-deny.bpf`) serves both paths" is now two artifacts: the base artifact still serves the C4 render path and every session with egress or the flag OFF, and the unixdeny artifact serves only no-egress sessions with the flag ON.
+
+**Decision (CTO-ruled, 2026-10-19; the flag architecture-reviewed).** A second generated artifact,
+`infra/bwrap-userns-clone3-unixdeny.bpf` (`gen-bwrap-userns-seccomp.mjs --variant unixdeny`): the base rules plus
+`socket(AF_UNIX)` (nr 41 and its x32 twin, the LOW 32 bits of arg0 equal to 1) returning `EPERM`; `socketpair` is untouched (libuv
+and Node IPC); the arch gate is kept; `--check` verifies both artifacts. The base artifact is byte-identical to today's (golden
+bytes pinned by sha256 and compared with `origin/main`), so egress sessions and the C4 render path are provably unchanged.
+
+- **Selection.** `usesUnixDenyArtifact` (`server/agent-sandbox-seccomp.ts`) is the single predicate and `seccompArtifactFor` the single path resolver.
+  `buildAgentEnv` sets `SOLEUR_BWRAP_SECCOMP_BPF` to the variant only for a session with **no egress of any kind** (no GitHub
+  installation token, no web-egress handle) while the runtime flag `agent-sandbox-unix-deny` is ON; otherwise it passes the ambient value
+  through unchanged (the #8752 incident-time override is preserved for non-variant sessions only; the CTO's "always set" is amended because
+  the flag defaults OFF). With the flag ON, an ambient `SOLEUR_BWRAP_SECCOMP_BPF` is IGNORED for no-egress sessions, because the selector is
+  assigned after the allowlist copy; to use the incident override, flip the flag OFF first.
+  `buildAgentSandboxConfig` records the same posture, and `buildAgentQueryOptions` checks at spawn time that env and config agree
+  (CTO-ruled fail-safe, 2026-10-19: a disagreement mirrors to Sentry (`op=seccomp-agreement`) and corrects to base; it never throws, because a
+  throw at query start would turn defense-in-depth into a total tenant outage. The only correction is toward the base artifact: an unixdeny
+  selector on a session that is not variant-eligible, e.g. an ambient `SOLEUR_BWRAP_SECCOMP_BPF` incident override equal to the unixdeny path
+  on an egress session, is reset to the base artifact). Both runners resolve the flag once per query.
+- **Kill switch.** The flag defaults OFF. The resolver (`server/resolve-sandbox-unix-deny.ts`) is fail-closed only for its OWN failures: a throw or a
+  read that exceeds its 300 ms per-read bound resolves OFF with one debounced warning, and that answer is memoised for 30 s. It is NOT true that a
+  failed Flagsmith read resolves OFF: `isAgentSandboxUnixDenyEnabled` falls back to the container's `FLAG_AGENT_SANDBOX_UNIX_DENY` mirror
+  (`runtimeEnvFallback` in `lib/feature-flags/server.ts`), which is `1` after an ON flip. **A rollback is therefore complete only when the Flagsmith flag
+  is OFF, the Doppler mirror is `0` AND the container has restarted** (the flip writes Flagsmith first and exits before the Doppler mirror if that
+  write fails, so with Flagsmith down the mirror stays `1` and the fallback stays ON until a redeploy with Doppler at `0`). With a healthy Flagsmith,
+  flipping it OFF takes effect on new queries after up to about 60 s (that 30 s memo on top of the 30 s flag cache; re-check after 60 s before
+  concluding the flip failed). An active cc-soleur-go conversation keeps the artifact it started with until the idle reaper closes it (the reaper runs every 300 s and
+  closes after 10 min of inactivity, so 10 to 15 minutes after the last activity; a conversation parked on a prompt is skipped), and a conversation
+  in active use never idles, so the user must start a NEW conversation; the legacy runner picks it up on the next message; a restart is the only way to force it and it is not routine. The post-flip check is a real hosted Bash call from a NEW conversation. Turning it ON is a production write, taken only after the deploy SDK Bash smoke has been
+  green on a real deploy and with the operator's explicit authorization at that time (tracker #10548). The deploy smoke runs the
+  no-egress tuple **with the variant selected**, so a variant that breaks Bash start is reported on the deploy that carries it before
+  the flag is ever on. The variant is a strict superset of the base program for FILTER semantics, but the smoke runs the variant artifact under the no-egress shape only: it does not exercise the base file itself (the flag-OFF production artifact; covered by the blocking legacy probe and the canary `base_af_unix_control`) nor the egress shape (pre-merge arm only).
+- **Verified both ways.** `probeAgentSandboxHardening` (boot) checks that both artifacts are present and `sock_filter`-sized (size % 8); the
+  deploy canary hardening probes check the behavior: under the variant `socket(AF_UNIX)` must be `EPERM`, under the base it must still work. Real-SDK arms
+  (`test/sandbox-wrapped-command-runtime.test.ts`): no-egress + flag on, Bash starts, AF_UNIX is `EPERM`, `socketpair` and `AF_INET`
+  sockets work and `curl` fails fast ("Proxy CONNECT aborted"); egress session, base artifact, the bridge reaches the proxy ("CONNECT
+  tunnel failed, response 502"); flag off, today's posture.
+- **io_uring.** `IORING_OP_SOCKET` (kernel 5.19+) would bypass a `socket()` filter, but the production run-tuple profile
+  (`infra/seccomp-bwrap.json`, a default-deny allowlist) names no `io_uring_*` syscall, so a ring cannot be created: measured live on
+  2026-10-19 (`io_uring_setup` returns EPERM under the committed profile and docker's built-in default, rc 3 unconfined as the positive
+  control). The variant therefore needs no ENOSYS rule; a static test fails if the profile ever allowlists an `io_uring_*` name.
+
+**What stays as it was.** Egress sessions (any GitHub installation token or web egress) remain at "per-session proxy auth + masks"
+(the five bounds of the 2026-10-16 addendum) with the base artifact; **proxy auth is still the load-bearing control for them**. Covering
+them needs a per-command wrapper, tracked in #10549. Pre-existing weaker-than-baseline posture for egress sessions is unchanged by this
+addendum.
+
+**Tenant-visible effect (flag on).** A no-egress session can no longer create AF_UNIX sockets: a local Postgres or Redis socket path,
+Node or other runtimes' local IPC listeners and `ssh-agent` or SSH ControlMaster (`openssh-client` is in the image) fail with
+"Operation not permitted". The runner image (`node:22-slim` plus `ca-certificates git bubblewrap socat qpdf jq openssh-client libcap2-bin`, `curl`
+and `gh`) installs no Python, `gpg` or `tmux`; a tenant who installs them into their workspace is affected the same way: Python `multiprocessing`
+Manager/Listener (and `Pool` / `ProcessPoolExecutor` on Python 3.14 and later, whose default start method is forkserver), `gpg-agent`
+(`git commit -S`), `tmux` / `screen` sockets and D-Bus clients. Child processes spawned with `socketpair` (libuv, Node `child_process` IPC) are unaffected. Variant assignment can differ per
+conversation: egress is derived from best-effort handles (a GitHub token mint failure is non-fatal and a web-egress forwarder spawn failure
+proceeds zero-egress), so an entitled tenant can get the AF_UNIX-deny artifact for one conversation and working AF_UNIX in the next. Release-notes and support lines: `knowledge-base/engineering/operations/runbooks/canary-probe-set.md`
+("Tenant-visible: no-egress AF_UNIX deny").
+
+**Residuals.** The deny is by `socket()` family: AF_UNIX use through `socketpair` and fd passing between two processes of the same
+sandbox is allowed by design. The flag is global (anonymous identity), not per organisation (CTO ruling G, 2026-10-19: keep it global and
+enable it through the staged, operator-attended procedure in `canary-probe-set.md`; a per-organisation cohort was deferred, not built). The
+anonymous identity resolves to the `prd` segment, so a dev-only flip is a no-op and flag writes touch both Flagsmith environments. The
+`agent_sandbox_bash_denial` alert and the notice rewrite cover cc-soleur-go sessions only; the legacy runner has no tool_result observer, so a
+variant-induced AF_UNIX EPERM has no signal on either runner (CTO ruling E, 2026-10-19). The Flagsmith outage fallback is the
+`FLAG_AGENT_SANDBOX_UNIX_DENY` env mirror (default `0`, so an outage resolves OFF unless an operator set the mirror to `1`; the ON flip does set it to `1`, so after the enable an outage resolves ON until the mirror is set back to `0` and the container restarts, see the Kill switch bullet).

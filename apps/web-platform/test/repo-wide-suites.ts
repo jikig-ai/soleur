@@ -79,6 +79,7 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/bwrap-shim.test.ts",
   "test/sandbox-relative-paths.test.ts",
   "test/sandbox.test.ts",
+  "test/agent-sandbox-seccomp-selector.test.ts",
   "test/scripts/run-migrations-unmerged-gate.test.ts",
   "test/sentry-egress-ghcr-deny-alert-op-contract.test.ts",
   "test/sentry-seccomp-alerts-op-contract.test.ts",

@@ -51,7 +51,9 @@ const {
   mockResolveC4FlagEnabled,
   mockWriteC4Diagram,
   mockGetSessionMessages,
+  mockResolveSandboxUnixDeny,
 } = vi.hoisted(() => ({
+  mockResolveSandboxUnixDeny: vi.fn(async () => false),
   mockResolveC4FlagEnabled: vi.fn(async () => false),
   mockWriteC4Diagram: vi.fn(),
   mockLogInfo: vi.fn(),
@@ -120,12 +122,21 @@ vi.mock("@/server/agent-runner", () => ({
   patchWorkspacePermissions: mockPatchWorkspacePermissions,
 }));
 
+// #10455 (a): these suites replace both builders with mocks, so the spawn-time seccomp agreement
+// assertion (which reads the posture the REAL buildAgentSandboxConfig records) is a no-op here. The
+// real pairing is pinned by test/agent-sandbox-seccomp-selector.test.ts.
+vi.mock("@/server/agent-sandbox-seccomp", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/agent-sandbox-seccomp")>()),
+  checkSeccompAgreement: vi.fn(),
+}));
 vi.mock("@/server/agent-runner-sandbox-config", () => ({
   buildAgentSandboxConfig: mockBuildAgentSandboxConfig,
 }));
 
-vi.mock("@/server/agent-env", () => ({
+vi.mock("@/server/agent-env", async (importOriginal) => ({
   buildAgentEnv: mockBuildAgentEnv,
+  // The egress predicate is the real one (the dispatcher skips the flag read for an egress session with it).
+  sessionHasEgress: (await importOriginal<typeof import("@/server/agent-env")>()).sessionHasEgress,
   // feat-open-web-egress (#9534): the sandbox-config deny census derives
   // from this set at module load — keep it non-empty.
   ALLOWED_SERVICE_ENV_VARS: new Set(["GITHUB_TOKEN", "STRIPE_SECRET_KEY"]),
@@ -175,6 +186,11 @@ vi.mock("@/server/git-auth", async () => {
 // tests dispatch with the review-gate intact.
 vi.mock("@/server/resolve-bash-autonomous", () => ({
   resolveBashAutonomous: mockResolveBashAutonomous,
+}));
+
+// #10455 (a) / A4 — the AF_UNIX-deny flag resolver. Default OFF; the wiring rows below flip it.
+vi.mock("@/server/resolve-sandbox-unix-deny", () => ({
+  resolveSandboxUnixDeny: mockResolveSandboxUnixDeny,
 }));
 
 // feat-open-web-egress (#9534) — default off (false): entitlement
@@ -465,6 +481,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     mockResolveInstallationId.mockResolvedValue(null);
     mockGenerateInstallationToken.mockResolvedValue("ghs_default_test_token");
     mockResolveBashAutonomous.mockResolvedValue(false);
+    mockResolveSandboxUnixDeny.mockResolvedValue(false);
     mockResolveWebEgress.mockResolvedValue(false);
     mockResolveAutonomousAck.mockResolvedValue(null);
     mockResolveIsWorkspaceOwner.mockResolvedValue(false);
@@ -655,7 +672,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     // this dispatch has no connected repo, so no GitHub egress (#5041
     // follow-up).
     expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
-      allowGithubEgress: false,
+      allowGithubEgress: false, sandboxUnixDeny: false,
       readOnly: false,
       // #9534 — entitlement-derived quarantine flag (unentitled → false).
       allowWebEgress: false,
@@ -831,7 +848,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       // Issue A: third opts arg always present; ghToken undefined here
       // because the default mock resolves no installation (null). Slice B:
       // pluginPath (getPluginPath() = deployed root) is always threaded.
-      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur", claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/) },
+      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur", claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/), sandboxUnixDeny: false },
     );
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.env.ANTHROPIC_API_KEY).toBe("sk-test");
@@ -869,9 +886,64 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
         gitAskpassScriptPath: `${WORKSPACE_PATH}/.askpass-fixed-test.sh`,
         gitInstallationToken: "ghs_minted_xyz",
         pluginPath: "/app/shared/plugins/soleur",
-        claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/),
+        claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/), sandboxUnixDeny: false,
       },
     );
+  });
+
+  // -------------------------------------------------------------------------
+  // #10455 (a) / A4 — the AF_UNIX-deny flag reaches BOTH builders through buildAgentQueryOptions, and an egress session
+  // never waits on the flag (the variant is no-egress only, so the answer cannot change its artifact).
+  // -------------------------------------------------------------------------
+  describe("AF_UNIX-deny flag wiring (A4)", () => {
+    const envOpts = () => mockBuildAgentEnv.mock.calls[0][2];
+    const sandboxOpts = () => mockBuildAgentSandboxConfig.mock.calls[0][1];
+
+    it("no-egress dispatch + flag ON → sandboxUnixDeny:true reaches buildAgentEnv AND buildAgentSandboxConfig", async () => {
+      mockResolveSandboxUnixDeny.mockResolvedValue(true);
+      await realSdkQueryFactory(makeArgs());
+      expect(mockResolveSandboxUnixDeny).toHaveBeenCalledTimes(1);
+      expect(envOpts().sandboxUnixDeny).toBe(true);
+      expect(sandboxOpts().sandboxUnixDeny).toBe(true);
+    });
+
+    it("no-egress dispatch + flag OFF → false in both", async () => {
+      mockResolveSandboxUnixDeny.mockResolvedValue(false);
+      await realSdkQueryFactory(makeArgs());
+      expect(envOpts().sandboxUnixDeny).toBe(false);
+      expect(sandboxOpts().sandboxUnixDeny).toBe(false);
+    });
+
+    it("GitHub-egress dispatch (minted token) → false in both, and the resolver is NEVER called", async () => {
+      mockResolveSandboxUnixDeny.mockResolvedValue(true);
+      mockResolveInstallationId.mockResolvedValueOnce(987654);
+      mockGenerateInstallationToken.mockResolvedValueOnce("ghs_minted_xyz");
+      await realSdkQueryFactory(makeArgs());
+      expect(envOpts().ghToken).toBe("ghs_minted_xyz");
+      expect(envOpts().sandboxUnixDeny).toBe(false);
+      expect(sandboxOpts().sandboxUnixDeny).toBe(false);
+      expect(mockResolveSandboxUnixDeny).not.toHaveBeenCalled();
+    });
+
+    it("web-egress dispatch (forwarder handle) → false in both, and the resolver is NEVER called", async () => {
+      mockResolveSandboxUnixDeny.mockResolvedValue(true);
+      mockResolveWebEgress.mockResolvedValue(true);
+      mockSpawnEgressForwarder.mockResolvedValue({ port: 28711, token: "tok-abc", pid: 4242 });
+      await realSdkQueryFactory(makeArgs());
+      expect(envOpts().egressProxy).toMatchObject({ token: "tok-abc" });
+      expect(envOpts().sandboxUnixDeny).toBe(false);
+      expect(sandboxOpts().sandboxUnixDeny).toBe(false);
+      expect(mockResolveSandboxUnixDeny).not.toHaveBeenCalled();
+    });
+
+    it("a degraded-to-zero-egress web dispatch (forwarder spawn failed) is a no-egress session and DOES read the flag", async () => {
+      mockResolveSandboxUnixDeny.mockResolvedValue(true);
+      mockResolveWebEgress.mockResolvedValue(true);
+      mockSpawnEgressForwarder.mockRejectedValue(new Error("bind boom"));
+      await realSdkQueryFactory(makeArgs());
+      expect(mockResolveSandboxUnixDeny).toHaveBeenCalledTimes(1);
+      expect(envOpts().sandboxUnixDeny).toBe(true);
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -954,7 +1026,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
         gitAskpassScriptPath: undefined,
         gitInstallationToken: undefined,
         pluginPath: "/app/shared/plugins/soleur",
-        claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/),
+        claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/), sandboxUnixDeny: false,
       },
     );
   });
@@ -999,7 +1071,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     expect(mockBuildAgentEnv).toHaveBeenCalledWith(
       { value: "sk-test", scheme: "api_key" },
       {},
-      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur", claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/) },
+      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur", claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/), sandboxUnixDeny: false },
     );
     expect(mockQuery).toHaveBeenCalledOnce();
   });
@@ -1019,7 +1091,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     expect(mockBuildAgentEnv).toHaveBeenCalledWith(
       { value: "sk-test", scheme: "api_key" },
       {},
-      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur", claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/) },
+      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur", claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/), sandboxUnixDeny: false },
     );
   });
 
@@ -1264,7 +1336,7 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
       );
       // (b) the SAME dispatch opens GitHub egress — the two move in lockstep.
       expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
-        allowGithubEgress: true,
+        allowGithubEgress: true, sandboxUnixDeny: false,
         readOnly: false,
         // #9534 — unentitled dispatch (webEgress grant off).
         allowWebEgress: false,
@@ -1287,7 +1359,7 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
 
       expect(mockGenerateInstallationToken).not.toHaveBeenCalled();
       expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
-        allowGithubEgress: false,
+        allowGithubEgress: false, sandboxUnixDeny: false,
         readOnly: false,
         // #9534 — entitlement-derived quarantine flag (unentitled → false).
         allowWebEgress: false,
@@ -1306,7 +1378,7 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
 
       expect(mockQuery).toHaveBeenCalledOnce();
       expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
-        allowGithubEgress: false,
+        allowGithubEgress: false, sandboxUnixDeny: false,
         readOnly: false,
         // #9534 — entitlement-derived quarantine flag (unentitled → false).
         allowWebEgress: false,
@@ -1493,7 +1565,7 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
     expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(
       "/app/shared/plugins/soleur",
       expect.objectContaining({
-        allowGithubEgress: false,
+        allowGithubEgress: false, sandboxUnixDeny: false,
         readOnly: true,
         // Internal KB obscured from the read-only support session (containment).
         denyReadExtra: ["/app/shared/knowledge-base"],
@@ -1528,7 +1600,7 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
     expect(mockBuildAgentEnv).toHaveBeenCalledWith(
       { value: "sk-test", scheme: "api_key" },
       {},
-      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur", claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/) },
+      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur", claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/), sandboxUnixDeny: false },
     );
     // Egress closed (also pinned in T2 via the sandbox-config call).
     expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(
@@ -1561,7 +1633,7 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
     expect(mockBuildAgentEnv).toHaveBeenCalledWith(
       { value: "sk-test", scheme: "api_key" },
       { STRIPE_SECRET_KEY: "sk_live_other" },
-      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur", claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/) },
+      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur", claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/), sandboxUnixDeny: false },
     );
   });
 
@@ -1615,7 +1687,7 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
     expect(mockBuildAgentSandboxConfig).toHaveBeenCalledOnce();
     // No-token dispatch → fail-closed egress (#5041 follow-up).
     expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
-      allowGithubEgress: false,
+      allowGithubEgress: false, sandboxUnixDeny: false,
       readOnly: false,
       // #9534 — entitlement-derived quarantine flag (unentitled → false).
       allowWebEgress: false,

@@ -26,6 +26,8 @@ import {
   classifyFdCensusProbe,
   classifyProcMaskProbe,
   classifyForkProbe,
+  classifyUnixdenyFilterProbe,
+  classifyBaseAfUnixControlProbe,
   classifyReplayVerdict,
   classifyUsernsDenyProbe,
   computeCanaryPaths,
@@ -1075,6 +1077,56 @@ describe("classifyUsernsDenyProbe — nested-userns deny must EPERM", () => {
       verdict: "canary_infra_error",
       reason: "userns_probe_spawn_enoent",
     });
+  });
+});
+
+// #10455 (a): the deploy-time hardening probe verifies BOTH seccomp artifacts. The variant must deny socket(AF_UNIX) and the base
+// must still allow it (the egress sessions' proxy bridges depend on it). A node connect() to a path that does not exist
+// reports EPERM when socket() itself is denied and ENOENT when the socket was created and the connect failed.
+describe("classifyUnixdenyFilterProbe — the variant artifact denies socket(AF_UNIX)", () => {
+  it("EPERM from the probe's own connect ⇒ the variant is live (null)", () => {
+    expect(classifyUnixdenyFilterProbe({ status: 0, stdout: "EPERM\n" })).toBeNull();
+  });
+  it("ENOENT ⇒ the socket was created: the variant did not install ⇒ sandbox_broken unixdeny_filter_bypass", () => {
+    expect(classifyUnixdenyFilterProbe({ status: 0, stdout: "ENOENT\n" })).toMatchObject({
+      verdict: "sandbox_broken",
+      reason: "unixdeny_filter_bypass",
+      probe: "unixdeny_filter",
+    });
+  });
+  it("the shim refusing the variant (absent or unreadable artifact) ⇒ sandbox_broken unixdeny_artifact_unusable", () => {
+    expect(
+      classifyUnixdenyFilterProbe({ status: 65, stderr: "bwrap-shim: seccomp artifact not readable: /app/infra/x.bpf\n" }),
+    ).toMatchObject({ verdict: "sandbox_broken", reason: "unixdeny_artifact_unusable" });
+  });
+  it("anything else (spawn error, timeout, unparseable) is canary_infra_error, never a sandbox verdict", () => {
+    for (const res of [
+      { errorCode: "ETIMEDOUT" },
+      { status: null, stdout: "" },
+      { status: 0, stdout: "TIMEOUT\n" },
+      { status: 0, stdout: "" },
+      { status: 1, stdout: "ENOENT\n" },
+    ]) {
+      expect(classifyUnixdenyFilterProbe(res), JSON.stringify(res)).toMatchObject({ verdict: "canary_infra_error" });
+    }
+  });
+});
+
+describe("classifyBaseAfUnixControlProbe — the base artifact still allows socket(AF_UNIX)", () => {
+  it("ENOENT ⇒ the base allowed the socket (null)", () => {
+    expect(classifyBaseAfUnixControlProbe({ status: 0, stdout: "ENOENT\n" })).toBeNull();
+  });
+  it("EPERM ⇒ the base artifact denies AF_UNIX (egress bridges would break) ⇒ sandbox_broken base_denies_af_unix", () => {
+    expect(classifyBaseAfUnixControlProbe({ status: 0, stdout: "EPERM\n" })).toMatchObject({
+      verdict: "sandbox_broken",
+      reason: "base_denies_af_unix",
+      probe: "base_af_unix_control",
+    });
+  });
+  it("anything else is canary_infra_error", () => {
+    for (const res of [{ errorCode: "ENOENT" }, { status: null }, { status: 0, stdout: "" }, { status: 2, stdout: "ENOENT" }]) {
+      expect(classifyBaseAfUnixControlProbe(res), JSON.stringify(res)).toMatchObject({ verdict: "canary_infra_error" });
+    }
   });
 });
 
