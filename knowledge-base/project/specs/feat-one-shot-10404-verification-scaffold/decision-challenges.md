@@ -179,3 +179,21 @@ Rejected alternatives: `aggregate pattern` — underestimates a per-user emit in
 surface; `none` — contradicts the write-into-user-repo blast radius.
 
 Dissent: None.
+
+## Plan-review panel (in-process, 2026-10-21 — no Task substrate on Devin CLI)
+
+5-agent eng panel (single-user-incident threshold) + named panel, run as sequential
+in-process lenses over the plan file; spec-flow-analyzer ran at Phase 3 (findings
+recorded in the plan's `## SpecFlow Findings`).
+
+| Seat | Findings | Disposition |
+|---|---|---|
+| dhh-rails-reviewer | Plan mirrors constraint-scaffold's proven generator/template/bite-proof shape — convention-following. Flag surface (`--target/--guards/--all/--mode/--dry-run/--list/--uninstall/--headless`) is on the generous side but each flag maps to an AC; no mechanism answers no ask. | no change |
+| kieran-rails-reviewer | P1: SpecFlow #1 stamped the per-repo default branch into emitted `precommit-guard.sh` while AC11 asserted `cmp` byte-parity with the plugin source — the canonical script hardcodes `main|master` (line 107), so stamping breaks the anchor. P2: `jq` is not guaranteed on a Claude Code user's host; `node` is. | applied — `@DEFAULT_BRANCHES@` placeholder with one-hunk parity (renders byte-identical under `main|master`); node-first/jq-fallback merge |
+| code-simplicity-reviewer | Per-mechanism check against the Scope Check ask list: every mechanism maps to an asked or guard-required item; `--all` is justified day-one because guards.tsv ships v2 rows; `--uninstall` justified by the User-Brand Impact warn-noise path. No cut candidates. | no change |
+| architecture-strategist | New trust boundary (emitted hook code executing on every Bash call in a customer session) is flagged and ADR-bound; `verificationscaffold` C4 component preserves modeling parity with `constraintscaffold`. Settings.json merge blast-radius is fail-closed. | no change |
+| spec-flow-analyzer | 7 resolutions recorded in `## SpecFlow Findings` (Phase 3). | recorded |
+| Named panel — cpo | User-facing capability; emitted VERIFICATION.md/README block carries the legibility contract; sign-off row rendered at ship (decision 9). | recorded |
+| Named panel — cmo | content-strategy.md entry in scope (sibling pattern). | no change |
+| Named panel — cto (devex) | Sibling-mechanism reuse minimizes install friction; no new concepts for operators. | no change |
+

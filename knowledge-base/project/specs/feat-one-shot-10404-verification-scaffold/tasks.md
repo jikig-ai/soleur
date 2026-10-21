@@ -63,7 +63,8 @@ branch: feat-one-shot-10404-verification-scaffold
 - 4.2 `test/bite-proof.test.sh`: per-guard pass→fail→pass on fixture repo
   (secret fixture, orphan suite fixture, main-checkout commit fixture).
 - 4.3 `test/manifest.test.sh`: guards.tsv↔templates↔audit census (git-ls-files
-  driven); precommit-guard template↔source byte-parity; emitted-content grep
+  driven); precommit-guard template↔source one-hunk parity (placeholder
+  renders to `main|master`); emitted-content grep
   (zero SOLEUR_/knowledge-base//plugins-soleur runtime refs; zero egress).
 - 4.4 Registrations: `docs/_data/skills.js` ("Workflow"), cursor stub via
   `sync-cursor-name-map.ts`, `components.test.ts` budget bump (+~20),

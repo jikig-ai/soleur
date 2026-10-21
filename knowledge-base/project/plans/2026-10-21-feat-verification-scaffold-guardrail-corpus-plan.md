@@ -26,6 +26,53 @@ repo's hooks and CI, advisory-first where a gate can block.
 
 Spec lacks `lane:` (no spec.md on the one-shot path) — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary (deepen-plan, 2026-10-21)
+
+**Deepened on:** 2026-10-21 · **Mode:** sequential in-process (Devin harness — no Task
+substrate; per-section lenses applied inline per the sibling-plan precedent).
+
+### Gate results
+
+| Gate | Verdict |
+|---|---|
+| 4.6 User-Brand Impact | PASS — `single-user incident` + challengeable threshold + CPO row |
+| 4.7 Observability | PASS — 5 fields; probe is a single `grep` call, allowlisted verb, literal `secret-scan` output (fixed from an `&&`-chained form Check 10's shell-active reject would have killed) |
+| 4.8 PAT halt | PASS — no PAT-shaped tokens |
+| 4.9 UI-wireframe | N/A — no UI-surface files |
+| 4.10 Encryption posture | N/A — no persistent store / cross-component connection |
+| 4.11 Guard Contract | PASS — lint green (6 entries), assemblies chokepoint-structural, matrices carry own-dispatch + second-member + must-PASS + anchor rows |
+| 4.12 Scope Check | PASS — 1 live section, 5 mapped asks, inferred items all justified, `Recommendation:` present |
+
+### Deepen-pass findings folded in
+
+1. **`precommit-guard.sh` + `wrapper-boundary.sh` coupling audit (verify-the-negative).**
+   Grep shows zero domain coupling (no `emit_incident` — its own header says so — no KB/
+   vendor paths); the only hits are `SOLEUR_*` *internal variable names* in
+   `wrapper-boundary.sh`'s boundary-prefix regexes (`SOLEUR_ENV_ASN_RE`,
+   `SOLEUR_LAUNCHER_RE`, `SOLEUR_RTK_RE`, `SOLEUR_BOUNDARY_PFX`). Cosmetic but
+   misleading in a user repo — the emitted templates rename them to
+   `VERIFICATION_*` (byte-parity test then compares against a rename-normalized
+   copy, not raw bytes; SpecFlow row for the template task).
+2. **Sharp-edges additions (Phase 6.5).** SpecFlow findings #8 (gitleaks
+   `GIT_CONFIG_*` colour pin — `color.diff=always` yields zero findings, measured)
+   and #9 (binary-resolution via `command -v` + PATH-stub arm; `actionlint` on the
+   emitted workflow fixture).
+3. **Probe fix.** `discoverability_test.command` replaced: `grep` first-token
+   allowlist, no shell-active tokens (`&&`/`|`/`;`), sub-second, literal
+   `secret-scan` output.
+4. **Existence checks.** `regenerate-shard-manifest.py`, `suite-shard-legs.tsv`,
+   `scripts/sync-cursor-name-map.ts`, `plugins/soleur/cursor/skills/`,
+   `knowledge-base/marketing/content-strategy.md` all verified present — Files to
+   Create/Edit paths real.
+
+### New considerations discovered
+
+- `worktree-manager.sh` is the repo's only existing settings.json-touching
+  script (registration-side precedent for the jq merge — review it for the
+  dedup-on-command-string idiom during Phase 3, no blocking fork).
+- `hookify` (anthropics/claude-code) noted as Tier-1 community overlap — fixed
+  corpus vs LLM-authored rules; not adopted.
+
 ## Research Insights
 
 ### Premise Validation (Phase 0.6)
@@ -200,8 +247,10 @@ constitution headless convention).
 Emission contract (mirrors constraint-scaffold): refuse to overwrite any existing
 artifact (no `--force`); marker-keyed append-once doc block (`VERIFICATION.md`
 created if absent, else a marker block in `README.md`); `.claude/settings.json`
-merged via `jq` — created if absent, malformed JSON refused pre-write, hook
-entries deduped on their `command` string; workflows land at **repo root**
+merged via `node` (guaranteed present for any Claude Code user; `jq` fallback,
+refuse-and-name-the-dependency if neither resolves) — created if absent,
+malformed JSON refused pre-write, hook entries deduped on their `command`
+string; workflows land at **repo root**
 `.github/workflows/` (monorepo lesson: subdir workflows are dormant); a `mkdir`
 lock in the git common dir serializes concurrent runs; a TMPDIR-detached-worktree
 bite-proof proves every installed guard pass→fail→pass before the doc block is
@@ -280,7 +329,7 @@ self-cleanup, lock, `--uninstall`, `--dry-run`, `--list`.
 mode flips), `test/bite-proof.test.sh` (per-guard pass→fail→pass on fixture
 repo), `test/manifest.test.sh` (every guards.tsv v1 row has a template + audit
 entry; every audit corpus member appears — census over the live tree, not a
-pinned list; `precommit-guard.sh` template↔source byte-parity). Registrations:
+pinned list; `precommit-guard.sh` template↔source one-hunk parity). Registrations:
 `docs/_data/skills.js` (`"verification-scaffold": "Workflow"`), cursor stub via
 `sync-cursor-name-map.ts`, `components.test.ts` budget bump, shard manifest
 regen, README 103→104, content-strategy entry.
@@ -436,8 +485,8 @@ logs:
   where: "CI job log (suite assertion lines)"
   retention: "GitHub Actions retention"
 discoverability_test:
-  command: "grep -q 'verification-scaffold' plugins/soleur/docs/_data/skills.js && grep -q 'secret-scan' plugins/soleur/skills/verification-scaffold/references/guards.tsv && echo verification-wired"
-  expected_output: "verification-wired"
+  command: "grep secret-scan plugins/soleur/skills/verification-scaffold/references/guards.tsv"
+  expected_output: "secret-scan"
 ```
 
 ## Guard Contract
@@ -489,7 +538,7 @@ chokepoint as Guard 1) → emitted `scripts/verification/precommit-guard.sh`
 | 2 | settings.json hook entry deleted while script remains (registration severed) | RED — generator bite-proof asserts the registration, not just the file; `generator.test.sh` asserts idempotent re-registration dedupes on command string |
 | 3 | `cd repo && git commit` chained payload (second member after a bare `git commit`) | RED — boundary-prefixed detection covers chain operators |
 | 4 | Harness: payload fixture `git commit` on a `feat-x` branch | PASS — must-PASS input differing from canonical main; proves the guard is not deny-everything |
-| 5 | Same diff weakens `precommit-guard.sh` detection AND the emitted template | RED — anchor: `manifest.test.sh` byte-parity `cmp` of template vs `plugins/soleur/scripts/precommit-guard.sh` catches drift, and the fixture battery catches a weakened detector on BOTH sides of the parity |
+| 5 | Same diff weakens `precommit-guard.sh` detection AND the emitted template | RED — anchor: `manifest.test.sh` one-hunk parity (template renders byte-identical to `plugins/soleur/scripts/precommit-guard.sh` under the default `main|master` substitution) catches drift, and the fixture battery catches a weakened detector on BOTH sides of the parity |
 
 ### Guard 3 — emitted `block-stash` (hook only)
 
@@ -580,8 +629,11 @@ each bound to an implementation site (paper-resolution lint — no orphan FRs):
 1. **Default-branch detection.** The emitted commit-on-main guard must not
    hardcode `main|master`: `verification-scaffold.sh` resolves the target's
    default via `git symbolic-ref refs/remotes/origin/HEAD` (fallback
-   `main|master`) and stamps it into the emitted `precommit-guard.sh` config
-   line. Covers `trunk`/custom defaults.
+   `main|master`) and substitutes it into the emitted copy's
+   `@DEFAULT_BRANCHES@` placeholder — the canonical `precommit-guard.sh:107`
+   hardcodes `main|master`, so the template renders byte-identical to source
+   under the default substitution and the one-hunk parity anchor (AC11) still
+   holds. Covers `trunk`/custom defaults.
 2. **Target precondition.** Target must be a git work tree (`git rev-parse
    --is-inside-work-tree`); non-repo targets refuse pre-write — the git-common-
    dir lock requires git anyway. Same class as constraint-scaffold's
@@ -607,6 +659,12 @@ each bound to an implementation site (paper-resolution lint — no orphan FRs):
    a user's `color.ui=always`/`color.diff=always` makes gitleaks report ZERO
    findings on a staged key. The bite battery runs one arm under
    `color.diff=always`.
+9. **Binary resolution + emitted workflow lint.** The emitted hook resolves
+   `gitleaks` via `command -v` at exec time — the bite battery stubs PATH so a
+   name-resolving wrong binary is caught (not just a missing one), per the
+   installed-BINARY sharp edge (#8615). The emitted `verification-gates.yml`
+   template is `actionlint`-clean; `manifest.test.sh` runs actionlint on the
+   emitted fixture workflow, not only the template text.
 
 ## Scope Check
 
@@ -683,10 +741,11 @@ each bound to an implementation site (paper-resolution lint — no orphan FRs):
 - [ ] AC10: `ADR-295-*.md` (or renumbered ordinal) exists; `model.c4` +
   `views.c4` carry `verificationscaffold`; `c4-code-syntax.test.ts` +
   `c4-render.test.ts` pass.
-- [ ] AC11: `manifest.test.sh` byte-parity:
-  `precommit-guard.sh.template` == `plugins/soleur/scripts/precommit-guard.sh`
-  (and `wrapper-boundary` pair), so the canonical source and the emit cannot
-  drift silently.
+- [ ] AC11: `manifest.test.sh` one-hunk parity: `precommit-guard.sh.template`
+  renders byte-identical to `plugins/soleur/scripts/precommit-guard.sh` when
+  the `@DEFAULT_BRANCHES@` placeholder substitutes `main|master` (and
+  `wrapper-boundary` pair is raw `cmp`), so the canonical source and the emit
+  cannot drift silently.
 - [ ] AC12: PR carries `semver:minor` label + `## Changelog` section
   (`plugins/soleur/` touched).
 
@@ -775,9 +834,9 @@ matches the "taste compounds" positioning. One `content-strategy.md` entry
 
 ## Dependencies & Prerequisites
 
-- `jq` at generator runtime for settings.json merge — degrade: refuse hook
-  registration with a named remediation rather than corrupt the file (CI legs
-  still emit).
+- `node` (guaranteed for Claude Code users) or `jq` at generator runtime for
+  settings.json merge — degrade: refuse hook registration with a named
+  remediation rather than corrupt the file (CI legs still emit).
 - `gitleaks` on the user's PATH for the emitted secret-scan hook; the CI job
   pins a version (`GL_REMEDIATION` precedent: 8.24.x).
 - `git` worktree support for the bite-proof's detached TMPDIR staging.
@@ -788,7 +847,7 @@ matches the "taste compounds" positioning. One `content-strategy.md` entry
 
 - **Risk: emitted guards drift from repo sources.** Mitigation: templates are
   the shipped form (the repo versions are NOT their source of truth at
-  runtime); `manifest.test.sh` byte-parity on the one verbatim pair;
+  runtime); `manifest.test.sh` one-hunk parity on the one verbatim pair;
   guards.tsv provenance column.
 - **Risk: settings.json merge corrupts a user's config.** Mitigation:
   jq-parse-then-write, refuse on malformed input pre-write, dedupe on command
