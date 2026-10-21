@@ -922,44 +922,6 @@ else
   fail "siteB: the PR-plan step could not be extracted (the workflow no longer has the verdict word, or the step was renamed)"
 fi
 
-# ======================================================================
-# CONSUMERS of the loader's legacy-arm absence (#9927 item 8b). The legacy arm now exports NOTHING
-# when the read-only token is missing, so a consumer that checks `[[ -z "$HCLOUD_TOKEN" ]]` under
-# `set -u` dies with "unbound variable" at the guard instead of reaching its named abort. All ten
-# such checks in apply-web-platform-infra.yml sit in steps that run under `set -u` (measured by a
-# YAML walk, 2026-10-20), so each must read the name as `${HCLOUD_TOKEN:-}`. The row is static on
-# purpose: the ten bodies are 60 to 150 lines of Terraform plumbing each, and the property is the
-# spelling of one test expression. The mutant re-bares one guard and the predicate must see it.
-# ======================================================================
-APPLY_YML="$HERE/../../workflows/apply-web-platform-infra.yml"
-consumer_guards_ok() { # <workflow.yml> -- 0 only when no bare guard remains and at least ten guarded ones exist
-  local bare guarded
-  bare="$(grep -cF '[[ -z "$HCLOUD_TOKEN" ]]' "$1" || true)"
-  guarded="$(grep -cF '[[ -z "${HCLOUD_TOKEN:-}" ]]' "$1" || true)"
-  [[ "${bare:-1}" -eq 0 && "${guarded:-0}" -ge 10 ]]
-}
-if consumer_guards_ok "$APPLY_YML"; then
-  pass "consumers: every empty-token guard in apply-web-platform-infra.yml tolerates an unset HCLOUD_TOKEN under set -u"
-else
-  fail "consumers: a bare [[ -z \"\$HCLOUD_TOKEN\" ]] remains (it aborts with 'unbound variable' under set -u instead of its named abort)"
-fi
-assert_fixture_dir "$WORK"
-sed -E '0,/\[\[ -z "\$\{HCLOUD_TOKEN:-\}" \]\]/s//[[ -z "$HCLOUD_TOKEN" ]]/' "$APPLY_YML" > "$WORK/apply.mut.yml"
-if ! cmp -s "$APPLY_YML" "$WORK/apply.mut.yml" && ! consumer_guards_ok "$WORK/apply.mut.yml"; then
-  pass "consumers mutant: re-baring ONE guard makes the predicate fail (mutation landed and was seen)"
-else
-  fail "consumers mutant: the mutation did not land or the predicate stayed green"
-fi
-# Behavioural control for the claim the row rests on: under `set -u` the bare form aborts and the
-# defaulted form does not.
-if ( set -u; unset HCLOUD_TOKEN; bash -c 'set -u; [[ -z "$HCLOUD_TOKEN" ]]' ) >/dev/null 2>&1; then
-  fail "consumers control: the bare guard did not abort under set -u (the row's premise is false)"
-else
-  ( unset HCLOUD_TOKEN; bash -c 'set -u; [[ -z "${HCLOUD_TOKEN:-}" ]]' ) >/dev/null 2>&1 \
-    && pass "consumers control: under set -u the bare guard aborts and the defaulted guard does not" \
-    || fail "consumers control: the defaulted guard failed on an unset variable"
-fi
-
 # ---- Verdict --------------------------------------------------------------
 #
 # Failures print FIRST, then the floor. The floor must enforce ITSELF -- a direct printf
@@ -1011,10 +973,10 @@ fi
 # further up is UNBOUND in the mutant slice, so the mutant dies at `set -u` and the floor
 # scores CONSTRUCTION FAILURE rather than FIRES. The literal is safe because the self-test
 # already asserts `PASSES == 1` at that point and aborts otherwise.
-# 78 -> 120 (#9927 item 8b): the rewritten legacy-arm rows (1c, 1d, 1f), the new rows 1h and 1i, the two Guard 1 mutants, the
-# site B block and the consumer-guard rows. Measured: 120 ran, with rows 8.8 and 9 skipped (no pinned CLI, no DOPPLER_TOKEN) as on the CI runner.
+# 78 -> 117 (#9927 item 8b): the rewritten legacy-arm rows (1c, 1d, 1f), the new rows 1h and 1i, the two Guard 1 mutants and the
+# site B block (the consumer-guard rows live in token-drift-workflow-causes.test.sh, R7). Measured: 117 ran, with rows 8.8 and 9 skipped (no pinned CLI, no DOPPLER_TOKEN) as on the CI runner.
 SELFTEST_PASSES=1
-MIN_ASSERTIONS=120
+MIN_ASSERTIONS=117
 REAL=$((PASSES - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s real assertions ran, floor is %s — rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$MIN_ASSERTIONS" >&2

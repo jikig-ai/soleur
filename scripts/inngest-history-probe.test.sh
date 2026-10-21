@@ -202,7 +202,8 @@ n_curl="$(grep -vE '^[[:space:]]*#' "$PROBE" | grep -cE '(^|[;&|(]|[[:space:]])c
 [[ "$n_bc" -eq 1 && "$n_curl" -eq 0 ]] && pass "A5: exactly one transport call site (bc_curl) and no bare curl" || fail "A5: bc_curl=$n_bc bare-curl=$n_curl"
 [[ "$(grep -c '^readonly PINNED_REF=' "$PROBE")" -eq 1 && "$(grep -c '^readonly API_HOST="https://api.supabase.com"$' "$PROBE")" -eq 1 ]] \
   && pass "A6: the project ref and the API host are each one pinned literal" || fail "A6: pin literals missing or duplicated"
-grep -qF -- '/database/query/read-only"' "$PROBE" && ! grep -vE '^[[:space:]]*#' "$PROBE" | grep -qE 'database/query"' \
+code_only="$(grep -vE '^[[:space:]]*#' "$PROBE" || true)"
+grep -qF -- '/database/query/read-only"' "$PROBE" && ! grep -qE 'database/query"' <<<"$code_only" \
   && pass "A7: the only endpoint is the dedicated read-only one" || fail "A7: the general query endpoint is referenced"
 
 # ======================================================================

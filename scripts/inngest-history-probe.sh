@@ -94,7 +94,7 @@ _sql_ok() {
   [[ "$sql" == select\ * ]] || return 1
   lower="$(printf '%s' "$sql" | tr 'A-Z' 'a-z')"
   # `select *` is excluded by the forbidden set's `\*`; so is every jsonb operator and a `;`.
-  if printf '%s' "$lower" | grep -qE "$SQL_FORBIDDEN_RE"; then return 1; fi
+  if grep -qE "$SQL_FORBIDDEN_RE" <<<"$lower"; then return 1; fi
   # Every identifier that precedes a `(` must be an allowed function or keyword.
   while IFS= read -r fn; do
     [[ -n "$fn" ]] || continue
