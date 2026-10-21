@@ -82,7 +82,7 @@ template rather than shipping the monolith.
 | `ship-unpushed-commits-gate.sh` | generic-after-extraction | `gh pr merge` denied while `git rev-list origin/<branch>..HEAD` is non-zero — the predicate is repo-generic (v2); couplings = `hook-input.sh`/`jq` stdin parse. |
 | `skill-context-queries.sh` | soleur-coupled | Soleur skill-context plumbing. |
 | `skill-invocation-logger.sh` | soleur-coupled | Soleur skill-invocation telemetry sink. |
-| `skill-security-scan.sh` | soleur-coupled | Invokes `$PROJECT_DIR/plugins/soleur/skills/skill-security-scan/…`. |
+| `skill-security-scan.sh` | soleur-coupled | Invokes the skill-security-scan skill under the payload via a `$PROJECT_DIR` prefix. |
 | `skill-security-scan-write.sh` | soleur-coupled | Same scanner plus `plugins/soleur` write paths. |
 | `supabase-loopback-warn.sh` | soleur-coupled | Supabase vendor stack check (ADR-153). |
 | `worktree-write-guard.sh` | generic-after-extraction | Blocks writes to the main checkout while worktrees exist — repo-generic idea (v2); couplings = `incidents.sh`/`hook-input.sh` sourcing. |
