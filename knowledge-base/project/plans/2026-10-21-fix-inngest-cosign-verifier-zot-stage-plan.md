@@ -642,7 +642,12 @@ Sequenced, each step's gate named:
    apply recipe (operator window).
 5. `gh workflow run apply-web-platform-infra.yml -f
    apply_target=inngest-host-replace -f reason='inngest arc: stage cosign
-   verifier image via zot (#10390)'` — AFTER step 3's mirror leg confirmed.
+   verifier image via zot (#10390)'` — AFTER step 2's mirror leg confirmed.
+   Run conclusion cannot confirm it: `zot_mirror` degrades with `exit 0`, so a
+   `cosign_copy`/`cosign_digest_*` failure still concludes `success`. The
+   confirmation check is the step's own output — e.g.
+   `gh run view <run-id> --log | grep -c 'mirror_status=ok'` plus absence of
+   `reason=cosign_` warnings (or `gh api repos/{owner}/{repo}/actions/runs/<id>/jobs --jq '.jobs[] | select(.name | contains("zot")) | .conclusion'` — assert the mirror output line `mirror_status=ok`, not merely the run's conclusion).
 6. Verify (no host login): `doppler run -p soleur -c prd_terraform --
    scripts/betterstack-query.sh --since 1h --grep SOLEUR_INFRA_PULL --limit 12`
    — expect `SOLEUR_INFRA_PULL_APPLIED version=<N> sha256=<digest> verify=ok`

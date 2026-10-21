@@ -70,7 +70,7 @@ Issue: #10390 (epic — defect 2). Lane: cross-domain (defaulted; no spec.md).
       `-f comment` required) — operator window.
 - [ ] 5.3 Pointer: keep v2 (recommended) or promote v3 via
       `doppler_secret.inngest_config_digest` targeted apply.
-- [ ] 5.4 `gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f reason='inngest arc: stage cosign verifier image via zot (#10390)'` — AFTER 5.2's mirror confirmed.
+- [ ] 5.4 `gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f reason='inngest arc: stage cosign verifier image via zot (#10390)'` — AFTER 5.2's mirror confirmed by output, not conclusion (a degraded leg exits 0): assert `mirror_status=ok` in the step log / no `reason=cosign_*` warning.
 - [ ] 5.5 Verify `SOLEUR_INFRA_PULL_APPLIED` via
       `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep SOLEUR_INFRA_PULL --limit 12`.
 

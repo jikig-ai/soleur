@@ -101,7 +101,7 @@ with a freshly baked public key. That residual does not apply to the chosen keyl
 | Mode | Detection | Signal |
 |---|---|---|
 | bad/missing signature | host `cosign verify-blob` non-zero | `SOLEUR_INFRA_PULL_VERIFY_FAIL` |
-| verifier image unfetchable | zot pull of `jikig-ai/cosign@sha256:…` fails before the verify run — `reason=pull` with `member=cosign-image` distinguishes it from a bundle-pull miss; PRE-FIX `reason=signature` could also mean this (the daemon-side pull inside `docker run` misattributed to provenance — #10390 defect 2) | `SOLEUR_INFRA_PULL_VERIFY_FAIL` |
+| verifier image unfetchable | zot pull of `jikig-ai/cosign@sha256:…` fails before the verify run — `reason=pull` with `member=cosign-image` distinguishes it from a bundle-pull miss; PRE-FIX `reason=signature` could also mean this (the daemon-side pull inside `docker run` misattributed to provenance — #10390 defect 2). Remediation: re-dispatch `build-inngest-config-bundle.yml` — its `zot_mirror` leg re-mirrors the verifier image unconditionally (check the run's step output for `mirror_status=ok`, not just conclusion: a degraded leg still exits 0) | `SOLEUR_INFRA_PULL_VERIFY_FAIL` |
 | version rollback/replay | monotonic gate reject (version read only from signed bytes) | `SOLEUR_INFRA_PULL_VERIFY_FAIL` |
 | manifest sha mismatch | per-file sha256 compare fail | `SOLEUR_INFRA_PULL_VERIFY_FAIL` |
 | dead timer (silent) | Better Stack absence-heartbeat (no APPLIED marker in window) | absence alarm |

@@ -122,8 +122,8 @@ grep -qF 'PrivateTmp=yes' <<<"$SVC" && fail "S2c: PrivateTmp=yes mis-spelling (w
 _ts="$(printf '%s' "$SVC" | grep -oE 'TimeoutStartSec=[0-9]+' | cut -d= -f2)"
 _pto="$(printf '%s' "$SC" | grep -oE 'REFRESH_PULL_TIMEOUT_S:-[0-9]+' | grep -oE '[0-9]+$' | head -1)"
 _vto="$(printf '%s' "$SC" | grep -oE 'REFRESH_VERIFY_TIMEOUT_S:-[0-9]+' | grep -oE '[0-9]+$' | head -1)"
-[ "$((60 + ${_pto:-0} + ${_vto:-0}))" -lt "${_ts:-0}" ] \
-  && pass || fail "S2c: worst-case tick (60+${_pto:-?}+${_vto:-?}) not under TimeoutStartSec=${_ts:-?}"
+[ "$((60 + 2 * ${_pto:-0} + ${_vto:-0}))" -lt "${_ts:-0}" ] \
+  && pass || fail "S2c: worst-case tick (60+2*${_pto:-?}+${_vto:-?}) not under TimeoutStartSec=${_ts:-?}"
 
 # S3: timer shape — 60 s cadence, enabled on timers.target, persistent.
 for pin in 'OnBootSec=' 'OnUnitActiveSec=60s' 'Persistent=true' 'WantedBy=timers.target'; do
@@ -539,7 +539,8 @@ grep -q 'SOLEUR_INFRA_PULL_VERIFY_FAIL reason=pull' "$FX/markers.log" \
 [ "$(cat "$FX/state/applied.version")" = "0" ] && pass || fail "F13: version advanced on pull failure"
 [ "$(ls "$FX/dest" | wc -l)" -eq 0 ] && pass || fail "F13: files installed despite pull failure"
 
-# F14 — no-seam cosign repoint: with --fixture-seams but NO REFRESH_COSIGN_IMAGE, the zot
+# F14 — no-seam cosign repoint: with --fixture-seams but REFRESH_COSIGN_IMAGE set EMPTY
+# (`:-`-equivalent to absent for the code under test; the prod seam gate unsets it anyway), the zot
 # default must resolve after ZOT_EP and BOTH the stage pull and the verify run must carry
 # the zot.internal:5000/jikig-ai/cosign@sha256:… ref, pull before run (#10390 defect 2).
 reset_fx

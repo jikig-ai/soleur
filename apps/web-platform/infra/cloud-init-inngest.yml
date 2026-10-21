@@ -1844,12 +1844,6 @@ write_files:
       PHONE_HOME_CMD="$${REFRESH_PHONE_HOME_CMD:-/usr/local/bin/inngest-boot-phone-home.sh}"
       STATE_DIR="$${REFRESH_STATE_DIR:-/var/lib/inngest-config}"
       ZOT_ENV_FILE="$${REFRESH_ZOT_ENV_FILE:-/etc/default/soleur-zot-read}"
-      # The SAME pinned cosign image ci-deploy.sh uses (v3.1.1); the suite parity-pins it.
-      # Seam read only — the real default resolves AFTER ZOT_EP below (#10390 defect 2):
-      # this host is deny-all-public egress, so a gcr ref can never pull here; the
-      # verifier image rides the same private zot as the bundle (mirrored there by the
-      # bundle producer's zot_mirror leg).
-      COSIGN_IMAGE="$${REFRESH_COSIGN_IMAGE:-}"
       TRUSTED_ROOT="$${REFRESH_TRUSTED_ROOT:-/etc/soleur/cosign-trusted-root.json}"
       BUNDLE_REPO="$${REFRESH_BUNDLE_REPO:-jikig-ai/soleur-inngest-config}"
       # Provenance is pinned to the bundle producer's workflow on main — nothing else may sign.
@@ -2011,7 +2005,13 @@ write_files:
       ZOT_EP="$ZOT_REGISTRY_ENDPOINT"
       [ -n "$ZOT_EP" ] || verify_fail pull-endpoint-absent
       BREF="$${ZOT_EP}/$${BUNDLE_REPO}@sha256:$${pointer}"
-      COSIGN_IMAGE="$${COSIGN_IMAGE:-$${ZOT_EP}/jikig-ai/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870}"
+      # The SAME pinned cosign image ci-deploy.sh uses (v3.1.1); the suite parity-pins it.
+      # Resolved here, not with the seam block above: the default embeds $ZOT_EP, and the
+      # verifier image rides the same private zot as the bundle (mirrored there by the
+      # bundle producer's zot_mirror leg — #10390 defect 2; this host is deny-all-public,
+      # so a gcr ref can never pull). Re-derived from the seam var, not $COSIGN_IMAGE, so a
+      # COSIGN_IMAGE= line in the sourced env file above cannot redirect the verifier.
+      COSIGN_IMAGE="$${REFRESH_COSIGN_IMAGE:-$${ZOT_EP}/jikig-ai/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870}"
 
       # Staging lives under the STATE DIR — the docker daemon resolves -v binds in ITS mount
       # namespace, so a PrivateTmp /tmp staging dir would not exist for it (see header).
@@ -2066,8 +2066,8 @@ write_files:
       # cosign v3.1.1 (the pinned verifier image) dropped the 2.x detached sig/cert flags —
       # the single .sigstore.json bundle (sig + cert + chain) travels inside the tarball so
       # nothing here touches Fulcio/Rekor; the trusted root is baked and mounted :ro.
-      # --network none: the verify needs no egress at all — the daemon-side implicit pull of
-      # the cosign image is unaffected by it.
+      # --network none: the verify needs no egress at all. The image was staged by the
+      # explicit pull above, so docker's implicit pull is a no-op cache hit here.
       if ! timeout "$VERIFY_TIMEOUT_S" "$DOCKER_BIN" run --rm --network none \
           -v "$STAGE/bundle:/bundle:ro" \
           -v "$TRUSTED_ROOT:/etc/cosign/trusted_root.json:ro" \
@@ -2168,9 +2168,10 @@ write_files:
 
       [Service]
       Type=oneshot
-      # 420 > the worst-case tick (login 60 + PULL_TIMEOUT_S 180 + VERIFY_TIMEOUT_S 120):
-      # a TimeoutStartSec kill lands mid-gate with NO marker — the flip's own value.
-      TimeoutStartSec=420
+      # 620 > the worst-case tick (login 60 + bundle pull 180 + cosign stage pull 180 +
+      # VERIFY_TIMEOUT_S 120, plus headroom): a TimeoutStartSec kill lands mid-gate
+      # with NO marker — the flip's own value.
+      TimeoutStartSec=620
       Environment=HOME=/root
       Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
       EnvironmentFile=/etc/default/inngest-server

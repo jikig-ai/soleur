@@ -371,9 +371,9 @@ chk() {
   if [[ "$1" == "1" ]]; then printf 'OK\t%s\n' "$2" >> "$VF"; else printf 'BAD\t%s\n' "$2" >> "$VF"; fi
 }
 # Reads a finished degrade arm and asserts the whole signal contract.
-degraded_ok() { # <dir> <label> <reason> <rc> <expected-crane-copies> <expected-stub-calls: any|none>
-  local a="$1" l="$2" r="$3" rc="$4" n="$5" calls="$6" ok=1
-  local head="::warning::zot mirror degraded for $EXPECT_DST (reason=$r rc=$rc "
+degraded_ok() { # <dir> <label> <reason> <rc> <expected-crane-copies> <expected-stub-calls: any|none> [dst]
+  local a="$1" l="$2" r="$3" rc="$4" n="$5" calls="$6" dst="${7:-$EXPECT_DST}" ok=1
+  local head="::warning::zot mirror degraded for $dst (reason=$r rc=$rc "
   [[ "$(cat "$a/rc")" == "0" ]] || ok=0
   [[ "$(count_eq "mirror_status=degraded" "$a/gho")" == "1" ]] || ok=0
   [[ "$(count_eq "mirror_reason=$r" "$a/gho")" == "1" ]] || ok=0
@@ -475,7 +475,7 @@ evaluate() {
 
   if want cosigncopyfail; then
   run_arm "$d/cosigncopyfail" success STUB_CRANE_COSIGN_COPY_FAIL_N=99 STUB_CRANE_COSIGN_COPY_RC=42
-  degraded_ok "$d/cosigncopyfail" "cosign copy failing every time" cosign_copy 42 1 any
+  degraded_ok "$d/cosigncopyfail" "cosign copy failing every time" cosign_copy 42 1 any "$EXPECT_COSIGN_DST"
   chk "$([[ "$(cosign_copies "$d/cosigncopyfail")" == "3" ]] && echo 1 || echo 0)" \
     "cosign copy failing every time: 3 cosign copy attempts, bundle copy still landed first"
   chk "$([[ "$(count_eq "sleep 3" "$d/cosigncopyfail/log")" == "1" && "$(count_eq "sleep 6" "$d/cosigncopyfail/log")" == "1" ]] && echo 1 || echo 0)" \
@@ -484,12 +484,12 @@ evaluate() {
 
   if want cosigndigestbad; then
   run_arm "$d/cosigndigestbad" success STUB_COSIGN_ZOT_DIGEST="$OTHER_DIGEST"
-  degraded_ok "$d/cosigndigestbad" "cosign digest mismatch after the copy" cosign_digest_mismatch 1 1 any
+  degraded_ok "$d/cosigndigestbad" "cosign digest mismatch after the copy" cosign_digest_mismatch 1 1 any "$EXPECT_COSIGN_DST"
   fi
 
   if want cosigndigestfail; then
   run_arm "$d/cosigndigestfail" success STUB_COSIGN_DIGEST_RC=7
-  degraded_ok "$d/cosigndigestfail" "cosign digest lookup failing" cosign_digest_lookup 7 1 any
+  degraded_ok "$d/cosigndigestfail" "cosign digest lookup failing" cosign_digest_lookup 7 1 any "$EXPECT_COSIGN_DST"
   fi
 
   if [[ "$mode" != "full" ]]; then return 0; fi
@@ -609,7 +609,7 @@ elif name == "retry-returns-1":
 elif name == "drop-cleanup":
     s = must_sub(r"          trap 'rm -f \"\$CRANE_TGZ\"' EXIT\n", "", s)
 elif name == "drop-step-timeout":
-    s = must_sub(r"        timeout-minutes: 20\n", "", s)
+    s = must_sub(r"        timeout-minutes: 30\n", "", s)
 elif name == "digest-check-dropped":
     s = must_sub(r'          \[\[ "\$ZOT_DIGEST" == "\$\{DIGEST:-\}" \]\] \|\| degraded digest_mismatch[^\n]*\n', "", s)
 elif name == "digest-lookup-unrouted":

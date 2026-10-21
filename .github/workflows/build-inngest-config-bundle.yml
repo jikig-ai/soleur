@@ -148,7 +148,7 @@ jobs:
         id: zot_mirror
         if: steps.docker_build.outcome == 'success'
         continue-on-error: true
-        timeout-minutes: 20
+        timeout-minutes: 30
         env:
           DIGEST: ${{ steps.docker_build.outputs.digest }}
           BRIDGE_OUTCOME: ${{ steps.zot_bridge.outcome }}
@@ -156,10 +156,11 @@ jobs:
           set -euo pipefail
           ZOT_DST="127.0.0.1:5000/${IMAGE#ghcr.io/}:v${VERSION}"
           degraded() {
-            local reason="$1" rc="$2" detail="${3:-}"
+            local reason="$1" rc="$2" detail="${3:-}" dst="${ZOT_DST}"
+            [[ "$reason" == cosign_* ]] && dst="${COSIGN_DST:-unset}"
             echo "mirror_status=degraded" >> "$GITHUB_OUTPUT"
             echo "mirror_reason=${reason}" >> "$GITHUB_OUTPUT"
-            echo "::warning::zot mirror degraded for ${ZOT_DST} (reason=${reason} rc=${rc} ${detail}). The GHCR bundle publish is unaffected; this run did not confirm a zot copy, and no automated backfill exists."
+            echo "::warning::zot mirror degraded for ${dst} (reason=${reason} rc=${rc} ${detail}). The GHCR bundle publish is unaffected; this run did not confirm a zot copy, and no automated backfill exists."
             echo "- zot mirror degraded (reason=${reason} rc=${rc}); this run's GHCR push succeeded before the mirror attempt" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           }
