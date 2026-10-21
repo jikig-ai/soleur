@@ -38,3 +38,9 @@ Class: non-code. Tier: none (source: plan `## User-Brand Impact`). Design-risk: 
 dedup: 7 raw → 7 unique. Structural-cause roll-up: two findings share the vacuous-guard family (diff-interaction spec that cannot fire; screened-out row that fired vacuously) — distinct mechanisms, recorded as one family.
 
 Seats run (main): git-history-analyzer, pattern-recognition-specialist, security-sentinel, code-quality-analyst + design-pass architecture-strategist, code-simplicity-reviewer + judgment-add test-design-reviewer. Fix round: code-quality-analyst, pattern-recognition-specialist, architecture-strategist, agent-native-reviewer, code-simplicity-reviewer, test-design-reviewer, security-sentinel (lead add — guard-shaped fix lines).
+
+## Compound Phase
+- Learning: `knowledge-base/project/learnings/workflow-patterns/2026-10-21-a-guard-that-cannot-fire-and-a-success-row-that-proves-nothing.md`
+- Definition edit: one bullet appended to `plugins/soleur/skills/plan/references/plan-sharp-edges.md` (spec-row vacuity checks — fireability + proof burden).
+- Coverage: sequential in-process (no Task surface). Deviation Analyst: no violations found. No `.claude/.rule-incidents.jsonl`. Rule budget: `[WARN] B_ALWAYS=44265 >= 44000`; constitution.md 320/300 (advisory only). Token-efficiency: skipped (0-line uncommitted diff).
+- Archival: DEFERRED to `soleur:ship` Phase 6.45 per pipeline instruction — do not archive this spec dir or the plan before ship's last live read.
