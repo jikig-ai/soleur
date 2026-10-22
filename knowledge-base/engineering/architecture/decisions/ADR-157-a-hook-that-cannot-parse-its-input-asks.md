@@ -175,3 +175,27 @@ commit, and stash guard on the call.
 | **Size cap, oversize ⇒ fail-open** | **Rejected.** A one-line padded payload disarms it by construction, and it fires on routine large `Write` payloads (this repo tracks an 806 KB lockfile). Any ceiling now asks. |
 | **Every hook emits the `ask`** | **Rejected.** Turns a persistent fault into an unrecoverable loop; see Designated responder. |
 | **A new AGENTS.md rule instead of a lint** | **Rejected.** It would fit the always-loaded budget, but a red CI check is fail-closed and costs zero always-loaded bytes. Prose is what failed for four months. |
+
+## Addendum — 2026-10-21 (#10609): a content-level scan gate denies when it cannot determine its target
+
+This ADR governs the hook **envelope**: stdin that cannot be parsed asks, never denies. It does not
+govern a decision about command text the envelope parsed fine. `git-commit-secret-scan.sh` is such a
+gate: its purpose is preventing a credential from reaching git history, which reverting a commit
+cannot undo. When it cannot determine which repository a `git commit` targets (a `$VAR` or `$(...)`
+path, `~`, `cd -`, `GIT_DIR=` / `--git-dir` / `--work-tree`, a `bash -c` / `eval` script held in a
+variable, or the command lexer or its helper library being unavailable), it **denies** with a named
+cause and a cause-specific repair, instead of skipping the scan. Reasons: an unscanned commit is the
+exact failure the hook exists to prevent; the repair is one extra tool call; and an `ask` has no
+answerer in a headless pipeline, so it would degenerate into the same skip. (ADR-165 is the record
+of a harness with no `ask` state at all; the headless-pipeline argument is this addendum's own.) An
+unrunnable or timed-out gitleaks keeps its existing allow plus bypass row (an environment fault, not
+an undeterminable target). There is no override variable: an override is the skip.
+
+This is a second scoped exception to "never denies", beside ADR-256's, with these differences,
+stated rather than implied. ADR-256 asks on a tripped lexer bound, a crash or a truncated stream
+for any command, and on a missing perl only for a filing-shaped command; this gate denies on all
+of those for a command that could be a `git commit` (a strict `git commit`, a loose
+`git ... commit` form, or a text that names a directory). The scoping is what answers ADR-165's
+self-repair argument: every repair this gate prescribes (`git checkout -- .claude/hooks/lib`,
+installing perl, splitting or rewriting the command, naming a literal path) is not itself a commit,
+so the deny cannot block its own repair. Every other failure still asks.
