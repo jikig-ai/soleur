@@ -2,6 +2,14 @@
 // whatever `bwrap` the PATH resolves (the shim, in the suite and production images). No model, no network, no real
 // credential. Two modes, one file (the production image has no TypeScript sources, so the probe is plain ESM):
 //
+//   runtime (SMOKE=1 and SDK_BASH_PROBE_RUNTIME=1)  The runtime Bash synthetic (infra/web-bash-synthetic.sh, ADR-079 addendum
+//                          2026-10-20) in the RUNNING production container. Same verdict function and result contract as the
+//                          deploy smoke, with three differences: the seccomp artifact comes from SDK_BASH_PROBE_SELECTOR (the
+//                          host asked the dispatcher's own resolver, so the synthetic tests what production would select now),
+//                          coverage names THAT artifact, and nothing is created outside the probe's own scratch dirs (the
+//                          masked dirs belong to real sessions: the ones that exist are masked, the rest are counted in the
+//                          result as masks_missing).
+//
 //   default (SMOKE unset)  The docker suite's control/treatment probe (infra/sandbox-masked-proc-docker.test.sh):
 //                          observes, under the production run tuple, what a hosted Bash call returns with and
 //                          without `network.allowAllUnixSockets` (#10445).
@@ -55,6 +63,19 @@ export function smokeSelectorPath() {
   return SMOKE_SELECTOR_PATHS.unixdeny;
 }
 
+/** Runtime mode: the pinned path for a selector NAME (`base` | `unixdeny`), else null. A closed lookup, never a path from the
+ *  environment: an unknown name (or a prototype key) is refused rather than turned into a file path. */
+export function runtimeSelectorPath(name) {
+  return typeof name === "string" && Object.hasOwn(SMOKE_SELECTOR_PATHS, name) ? SMOKE_SELECTOR_PATHS[name] : null;
+}
+
+/** Runtime mode's view of the masked dirs: the ones that already exist (real sessions create them) and the count that do not.
+ *  `exists` is injected so this is pure; it calls nothing else, so it can never create a directory. */
+export function runtimeMaskedDirs(uid, home, exists) {
+  const present = maskedDirs(uid, home).filter((d) => exists(d));
+  return { present, missing: maskedDirs(uid, home).length - present.length };
+}
+
 /** The per-session masked dirs of the production config for a container env with no XDG_RUNTIME_DIR /
  *  CLAUDE_CODE_TMPDIR / TMPDIR: `/tmp/cc-socks`, the CLI's `/tmp/cc-socks-<uid>` fallback and the shared-HOME transcript
  *  dir (server/agent-runner-sandbox-config.ts `peerMessagingSocketDirs` / `sessionTranscriptDirs`). */
@@ -67,7 +88,7 @@ export function maskedDirs(uid, home) {
  *  production builder is TypeScript and is not in the image, so this is a literal pinned by deep equality in
  *  test/sdk-bash-probe-parity.test.ts: a builder edit reds that test and prints the exact line to change here.
  *  `workspace` is the probe's scratch dir (production passes `<workspaces root>/<uuid>`); `uid`/`home` derive the masks. */
-export function smokeSandboxConfig({ workspace, uid, home }) {
+export function smokeSandboxConfig({ workspace, uid, home, masked = maskedDirs(uid, home) }) {
   return {
     enabled: true,
     failIfUnavailable: true,
@@ -85,7 +106,7 @@ export function smokeSandboxConfig({ workspace, uid, home }) {
         "/proc",
         "/sys",
         "/var/lib/soleur/egress-tokens",
-        ...maskedDirs(uid, home),
+        ...masked,
         "/tmp/.cs",
       ],
     },
@@ -212,9 +233,10 @@ export function measureShimAndFilter(pathEnv, bpfPath) {
   return { shim, filter: bytes > 0 && bytes % 8 === 0 };
 }
 
-/** `sdk_wrapper_shim_prodtuple` only when the command went through the real shim under the pinned artifact. */
-export function smokeCoverage({ shim, filter, bpfPath }) {
-  return shim && filter && bpfPath === smokeSelectorPath() ? SMOKE_COVERAGE_FULL : SMOKE_COVERAGE_REPLAY_ONLY;
+/** `sdk_wrapper_shim_prodtuple` only when the command went through the real shim under the artifact that was asked for: the
+ *  deploy smoke's pinned unixdeny path by default, the resolver-selected path in runtime mode (`expectedPath`). */
+export function smokeCoverage({ shim, filter, bpfPath, expectedPath = smokeSelectorPath() }) {
+  return shim && filter && bpfPath === expectedPath ? SMOKE_COVERAGE_FULL : SMOKE_COVERAGE_REPLAY_ONLY;
 }
 
 // ---- Entry point -------------------------------------------------------------------------------------------------
@@ -324,6 +346,11 @@ async function runSmoke() {
   if (!/^[0-9a-f]{16,64}$/.test(nonce)) infra("nonce_missing_or_malformed");
   const home = process.env.HOME;
   if (!home || !home.startsWith("/")) infra("home_not_absolute");
+  const runtime = process.env.SDK_BASH_PROBE_RUNTIME === "1";
+  // Runtime mode: the host passes the selector NAME it got from the dispatcher's resolver; deploy mode always runs unixdeny.
+  const selectorName = runtime ? process.env.SDK_BASH_PROBE_SELECTOR ?? "" : "unixdeny";
+  const selectedPath = runtime ? runtimeSelectorPath(selectorName) : smokeSelectorPath();
+  if (selectedPath === null) infra("selector_invalid");
   const APP = process.env.APP || "/app";
   let query;
   try {
@@ -346,18 +373,28 @@ async function runSmoke() {
   const ws = mkdtempSync(`${tmp}/sdk-bash-probe-`);
   const cfg = mkdtempSync(`${tmp}/sdk-bash-probe-cfg-`);
   const uid = process.getuid();
-  // Each masked dir must exist before the namespace is built (the SDK skips a deny landing that does not exist).
+  // Each masked dir must exist before the namespace is built (the SDK skips a deny landing that does not exist). The deploy
+  // smoke runs in a canary that has none, so it creates them; the runtime synthetic runs in the production container, where
+  // those paths belong to real sessions, so it creates nothing and masks only the ones that already exist.
+  let masked = maskedDirs(uid, home);
+  let masksMissing = 0;
   try {
-    for (const d of maskedDirs(uid, home)) mkdirSync(d, { recursive: true, mode: 0o700 });
+    if (!runtime) {
+      for (const d of maskedDirs(uid, home)) mkdirSync(d, { recursive: true, mode: 0o700 });
+    } else {
+      const r = runtimeMaskedDirs(uid, home, (d) => { try { return statSync(d).isDirectory(); } catch { return false; } });
+      masked = r.present;
+      masksMissing = r.missing;
+    }
   } catch (e) {
     try { rmSync(ws, { recursive: true, force: true }); rmSync(cfg, { recursive: true, force: true }); } catch { /* scratch */ }
     infra(`masked_dir_precreate_failed: ${String(e).slice(0, 120)}`);
   }
   // SDK_BASH_PROBE_BPF is a TEST-ONLY override (a dev machine has no /app/infra); ci-deploy.sh never sets it. Any value
   // other than the pinned path reports coverage replay_only, which the verdict treats as a hold, never a pass.
-  const bpfPath = process.env.SDK_BASH_PROBE_BPF || smokeSelectorPath();
-  const coverage = smokeCoverage({ ...measureShimAndFilter(process.env.PATH, bpfPath), bpfPath });
-  const sandbox = smokeSandboxConfig({ workspace: ws, uid, home });
+  const bpfPath = process.env.SDK_BASH_PROBE_BPF || selectedPath;
+  const coverage = smokeCoverage({ ...measureShimAndFilter(process.env.PATH, bpfPath), bpfPath, expectedPath: selectedPath });
+  const sandbox = smokeSandboxConfig({ workspace: ws, uid, home, masked });
   const env = {
     ...process.env,
     ANTHROPIC_API_KEY: SMOKE_DECOY_API_KEY,
@@ -408,7 +445,8 @@ async function runSmoke() {
   for (const d of [ws, cfg]) {
     try { rmSync(d, { recursive: true, force: true }); } catch { /* best-effort scratch cleanup */ }
   }
-  emit(v);
+  // Runtime mode adds two observations the host journals; the verdict contract is unchanged.
+  emit(runtime ? { ...v, selector: selectorName, masks_missing: masksMissing } : v);
   server.close();
   process.exit(0);
 }

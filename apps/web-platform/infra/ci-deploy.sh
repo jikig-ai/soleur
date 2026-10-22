@@ -488,6 +488,21 @@ if [[ "$SDK_BASH_SMOKE_STATE_FILE" == "$SANDBOX_CANARY_STATE_FILE" || "$SDK_BASH
   SDK_BASH_SMOKE_LEDGER_ALIAS=1
   logger -t "$LOG_TAG" "SDK_BASH_SMOKE_STATE_FILE aliases another canary ledger ($SDK_BASH_SMOKE_STATE_FILE) — SDK Bash smoke SKIPPED: interleaved writes would corrupt both soaks; fix the env override" || true
 fi
+# The rc/marker -> verdict mapping, shared with the runtime synthetic (web-bash-synthetic.sh) so the two cannot drift (ADR-079
+# addendum 2026-10-20). Repo layout: lib/ next to this file; on a host: delivered beside the other /usr/local/bin scripts by the
+# web_bash_synthetic install block (running host) and cloud-init (fresh host). A host that has this script but not yet the lib
+# reports smoke_infra_error reason=verdict_lib_absent (a HOLD, never a rollback): the smoke is non-blocking by design.
+if [[ -z "${SDK_BASH_VERDICT_LIB:-}" ]]; then
+  SDK_BASH_VERDICT_LIB=""
+  _sbv_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || _sbv_here=""
+  for _sbv_c in "$_sbv_here/lib/sdk-bash-verdict.sh" /usr/local/bin/sdk-bash-verdict.sh; do
+    if [[ -r "$_sbv_c" ]]; then SDK_BASH_VERDICT_LIB="$_sbv_c"; break; fi
+  done
+fi
+if [[ -n "$SDK_BASH_VERDICT_LIB" && -r "$SDK_BASH_VERDICT_LIB" ]]; then
+  # shellcheck source=lib/sdk-bash-verdict.sh
+  source "$SDK_BASH_VERDICT_LIB" || true
+fi
 # #8609: the GitHub App key probe baked into the image (Dockerfile `COPY --from=builder
 # /app/scripts/github-app-key-probe.mjs ./scripts/…` under WORKDIR /app). soleur-host-bootstrap.sh's
 # check and ci-deploy.test.sh Guard 7 (7.w) pin the same path; a drift reads as `probe_absent`.
@@ -3217,7 +3232,7 @@ run_sdk_bash_smoke() {
     return 0 # aliased ledger: refuse to write into another canary's ledger
   fi
   local ctr="soleur-web-platform-canary"
-  local verdict reason coverage="" exec_rc=0 out="" err_file docker_err home="" nonce="" line="" json="" t0
+  local verdict reason coverage="" exec_rc=0 out="" err_file docker_err home="" nonce="" t0
   local prior_ledger prior_cie=0 cie=0 extra ledger_ok=0 pre_rc=0 stale_emitted=0 ledger_ours=0
   t0="$(date +%s)"
   err_file="$(mktemp 2>/dev/null || echo /dev/null)"
@@ -3256,48 +3271,13 @@ run_sdk_bash_smoke() {
         exec_rc=$?
       fi
       docker_err="$(_cred_err_tail "$(head -1 "$err_file" 2>/dev/null)" | cut -c1-120)"
-      case "$exec_rc" in
-        0)
-          line="$(printf '%s\n' "$out" | { grep -a '^SDK_BASH_RESULT ' || true; } | tail -n 1)"
-          json="${line#SDK_BASH_RESULT }"
-          verdict="$(printf '%s' "$json" | jq -r '.verdict // ""' 2>/dev/null || echo '')"
-          reason="$(printf '%s' "$json" | jq -r '.reason // ""' 2>/dev/null || echo '')"
-          coverage="$(printf '%s' "$json" | jq -r '.coverage // ""' 2>/dev/null || echo '')"
-          [[ "$coverage" == "sdk_wrapper_shim_prodtuple" || "$coverage" == "replay_only" ]] || coverage=""
-          case "$verdict" in
-            pass)
-              # The probe already holds a replay_only pass; refuse one here too (defense in depth): only the
-              # shim-and-wrapper tuple may count toward promotion.
-              if [[ "$coverage" != "sdk_wrapper_shim_prodtuple" ]]; then
-                verdict="smoke_infra_error"; reason="coverage_replay_only"
-              fi ;;
-            sdk_bash_smoke_failed|smoke_infra_error) : ;;
-            *) verdict="smoke_infra_error"; reason="no_result_line${docker_err:+: $docker_err}"; coverage="" ;;
-          esac ;;
-        124)
-          # `out` still holds whatever the probe printed before `timeout` killed the docker exec client.
-          if [[ $'\n'"$out"$'\n' == *$'\nSDK_BASH_DISPATCHED\n'* ]]; then
-            verdict="sdk_bash_smoke_failed"; reason="host_timeout_${SDK_BASH_SMOKE_TIMEOUT}s${docker_err:+: $docker_err}"
-          else
-            verdict="smoke_infra_error"; reason="host_timeout_before_dispatch${docker_err:+: $docker_err}"
-          fi ;;
-        *)
-          # Any other non-zero rc: if the probe had already printed SDK_BASH_DISPATCHED, Bash was handed to the SDK and the
-          # run died after that (a crash, a kill): the #10445 shape, not an infra hiccup. Otherwise it never got that far.
-          if [[ $'\n'"$out"$'\n' == *$'\nSDK_BASH_DISPATCHED\n'* ]]; then
-            if [[ "$exec_rc" == "137" || "$exec_rc" == "143" ]]; then
-              # SIGKILL / SIGTERM after dispatch: the OOM killer, a container stop or a deploy signal, not a Bash result. Not a
-              # page; the reason says what happened.
-              verdict="smoke_infra_error"; reason="probe_killed_rc_${exec_rc}${docker_err:+: $docker_err}"
-            else
-              verdict="sdk_bash_smoke_failed"; reason="probe_rc_${exec_rc}_after_dispatch${docker_err:+: $docker_err}"
-            fi
-          elif [[ "$exec_rc" == "125" || "$exec_rc" == "126" || "$exec_rc" == "127" ]]; then
-            verdict="smoke_infra_error"; reason="docker_exec_rc_${exec_rc}${docker_err:+: $docker_err}"
-          else
-            verdict="smoke_infra_error"; reason="probe_rc_${exec_rc}${docker_err:+: $docker_err}"
-          fi ;;
-      esac
+      # The mapping is the shared function (lib/sdk-bash-verdict.sh): ONE definition for this smoke and the runtime synthetic.
+      if declare -F sdk_bash_map_result >/dev/null 2>&1; then
+        sdk_bash_map_result "$exec_rc" "$out" "$docker_err" "$SDK_BASH_SMOKE_TIMEOUT"
+        verdict="$SBV_VERDICT"; reason="$SBV_REASON"; coverage="$SBV_COVERAGE"
+      else
+        verdict="smoke_infra_error"; reason="verdict_lib_absent"; coverage=""
+      fi
     fi
   fi
   if [[ "$err_file" != "/dev/null" ]]; then rm -f "$err_file" 2>/dev/null || true; fi

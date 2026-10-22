@@ -182,8 +182,11 @@ describe("the probe is baked into the image and ci-deploy.sh execs the baked pat
     // printed right after the assignment, gated on the smoke-only `announce` flag so the docker suite's default mode stays one-line
     expect(src).toMatch(/state\.dispatched = true;\n\s*if \(state\.announce\) console\.log\("SDK_BASH_DISPATCHED"\);/);
     expect(src).toMatch(/const state = \{ dispatched: false, announce: true \};/);
-    // the 124 arm of run_sdk_bash_smoke reads the identical literal, and the result parse ignores it (it is anchored on `SDK_BASH_RESULT `)
-    const smokeFn = deploy.slice(deploy.indexOf("run_sdk_bash_smoke() {"));
+    // the 124 arm reads the identical literal, and the result parse ignores it (it is anchored on `SDK_BASH_RESULT `). The rc/marker
+    // mapping moved out of run_sdk_bash_smoke into the sourced lib shared with the runtime synthetic (ADR-079 addendum 2026-10-20),
+    // so the contract is the function plus the lib it calls.
+    const smokeFn = deploy.slice(deploy.indexOf("run_sdk_bash_smoke() {")) + read("infra", "lib", "sdk-bash-verdict.sh");
+    expect(deploy).toContain("sdk_bash_map_result");
     expect(smokeFn).toContain(`SDK_BASH_DISPATCHED`);
     expect(smokeFn).toContain("grep -a '^SDK_BASH_RESULT '");
     expect(smokeFn).toContain("host_timeout_before_dispatch");

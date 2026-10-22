@@ -1,0 +1,29 @@
+[Unit]
+Description=Runtime Bash synthetic: one real wrapped Bash call in the running web container (web host, #10455 b)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# HOME=/root: the ExecStart runs `doppler run` as ROOT (no User=). The Doppler CLI's os.UserHomeDir() init dies
+# "Doppler Error: $HOME is not defined" for a root systemd service BEFORE it can exec the script. With HOME=/root doppler uses
+# /root/.doppler; the prd DOPPLER_TOKEN arrives via the EnvironmentFile below. No DOPPLER_CONFIG_DIR, so never /tmp/.doppler
+# (the #6536 clash surface).
+Environment=HOME=/root
+# SyslogIdentifier retags the unit's journal output away from the ExecStart basename `bash` to an identifier shipped by
+# vector.toml Source 4 (host_scripts_journald), so the SOLEUR_WEB_BASH_SYNTHETIC verdict line reaches Better Stack off-box, not
+# SSH-only (hr-no-ssh-fallback-in-runbooks). Mirrored in vector.toml.
+SyslogIdentifier=web-bash-synthetic
+# /etc/default/web-bash-synthetic (baked per-host) carries WEB_BASH_SYNTHETIC_URL_KEY (the per-host Doppler var NAME, e.g.
+# WEB_BASH_SYNTHETIC_URL_WEB_1) and the read-scoped DOPPLER_TOKEN. doppler run injects that var, and the (host-agnostic) script
+# resolves the host's own heartbeat URL itself through that key NAME, AFTER its xtrace refusal. The ExecStart below expands and
+# exports NOTHING (#9639): the URL is a credential, and a wrapper that expanded it would print it under a traced launch before
+# the script could refuse. doppler-injection-bound.test.sh rejects an indirect expansion in the Exec directives of a doppler-run unit.
+EnvironmentFile=/etc/default/web-bash-synthetic
+# The consecutive-no_ping counter must survive between oneshot runs; /run is tmpfs, so a reboot resets it (intended).
+RuntimeDirectory=web-bash-synthetic
+RuntimeDirectoryPreserve=yes
+# Worst case is about 4 minutes (pre-exec 20 + resolver 30 + probe 150 + stats/inspect), well inside the 15 minute cadence. A
+# run that exceeds this is killed and sends no ping, which the heartbeat's grace turns into an incident.
+TimeoutStartSec=330
+ExecStart=/bin/bash -c 'doppler run --project soleur --config prd -- /usr/local/bin/web-bash-synthetic.sh'
