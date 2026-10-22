@@ -79,15 +79,15 @@ REACH (S4 index completion PR1b, #10448; frozen here and quoted by the ADR-276 a
 WHAT THIS AUDIT READS (the suite file, its source closure and the naming walk below, an approximation of the selector closure from inside):
 necessary, not sufficient. What the audit reads for one selector row, in this order:
   1. the suite's own file (a directory suite: its bun-discoverable test files);
-  2. the SOURCE CLOSURE of each of them: `source X` / `. X` lines, to depth 8 (the selector reads files at distance 0 to 7 and its 8th pass
-     only mints the edges of distance-8 files, so the audit reads one level further: it over-reports, the safe direction), breadth first, each
+  2. the SOURCE CLOSURE of each of them: `source X` / `. X` lines, to depth 8 (the selector expands the files at distance 0 to 7; its 8th pass
+     names the distance-8 files as edges without expanding them, so the audit reads one level further: it over-reports, the safe direction), breadth first, each
      real file once, a cycle ending at the visited file. Operands: `$(dirname "$0")/`, `$(dirname "${BASH_SOURCE[0]}")/`, `$SCRIPT_DIR/`,
      `${SCRIPT_DIR}/`, `$HERE/`, `${HERE}/`, `$DIR/` and `${DIR}/` resolve against the directory of the INCLUDING file (`..` normalised);
      `$REPO_ROOT/`, `${REPO_ROOT}/`, `$ROOT_DIR/`, any other `$X/` prefix and a bare path resolve against the repo root. Only a tracked .sh or
      .bash target is read, never a runner trigger;
   3. the NAMING WALK: a CODE file (.sh .bash .py .ts .tsx .jsx .js .mjs .cjs .mts .cts .rb) that the row lists in `pats` as an exact `^file`
      entry and that an already-read text names literally, to depth 8 (sorted within a level), per row. After each level is read, the source
-     closure of its files is read too (a fresh 8-level closure per walk file: an over-read) and both feed the next level's naming. The two
+     closure of its files is read too (a fresh 8-level closure per walk file, or the depth left for a file already read as a closure member) and both feed the next level's naming. The two
      runner triggers are never nodes; a `glob:` or `dir/` entry never is.
 Every file is read at most once per run and the read order is canonical (per row: each input followed by its closure; then, level by level,
 the walk files of the level by sorted path followed by their closures; the rows of a label ordered by their whole pattern list), so an
@@ -101,11 +101,14 @@ DECLARED LIMITS (what no run of this audit proves):
   - hops are `source` / `.` lines to .sh or .bash targets. The selector also mints edges from `bash|sh|python3|node|bun|exec` invocations of a
     path, from `VAR=path; source "$VAR"` assignments, `source --`, other extensions, dotted python imports (`import pkg.mod`), the stem fan of a
     stem suite and prefixes assigned from `$(cd ... && pwd)` (80 tracked lines use `. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/x.sh"`
-    and are not followed). Measured when this was reviewed: 121 of 536 labels have a code file in the selector closure that the audit never reads;
+    and are not followed; about 90 tracked lines use a `source` or `.` of a `$(cd ...)` prefix). Measured when this was reviewed: 295 of 536
+    audited labels list in `pats` a code file (CODE_EXT, exact `^file`) that the audit never reads (1,166 label-path pairs; command: code_pats_of(pats)
+    minus the files reach_texts() returns, over `test-all.sh --print-selection --paths=README.md`);
   - `$(dirname "$0")` inside a sourced file resolves against that file, as the selector's own convention does (bash resolves $0 to the entry script);
   - the first pattern of a row is taken to be the suite's own file (true by the selector's construction); a runner trigger as first pattern is unaudited;
   - data inputs in `pats` (manifests, workflows, SKILL.md files, baselines, tsv tables, docs) are checked as declared edges but their contents
-    are never scanned, and code reached only through them is not read;
+    are never scanned, and code reached only through them is not read; code files that a `dir/` or `glob:` entry covers are read by nothing
+    (making them nodes would add 621 pairs and 10 gap suites on the pinned tree);
   - suites the runner declines under `--pr-gated` (ADR-262), directory and glob reads, bun helper files and the bunfig preload are not modelled;
   - the comment table strips only a whole-line comment of the file's own language: a line inside a docstring or heredoc body that begins with the
     comment marker is blanked (under-read), other block-comment and heredoc lines stay an over-report;
@@ -900,14 +903,14 @@ def comment_prefix(path):
 
 
 def strip_comments(text, prefix):
-    """Blank whole-line comments of the file's own language (`prefix`, from comment_prefix; empty strips nothing): a path named only
-    in a comment is a mention, not a read. Lines are split on "\\n" only (bash does not split on a vertical tab, a form feed, a lone
+    """Blank whole-line comments of the file's own language (`prefix`, from comment_prefix; empty strips nothing; only space and tab may
+    precede the marker, as in bash): a path named only in a comment is a mention, not a read. Lines are split on "\\n" only (bash does not split on a vertical tab, a form feed, a lone
     carriage return or U+2028); a carriage return is removed only when it directly precedes the line feed (CRLF), a lone one is an
     ordinary character. A stripped line becomes an empty line, so every line keeps its number."""
     lines = text.replace("\r\n", "\n").split("\n")
     if not prefix:
         return "\n".join(lines)
-    return "\n".join("" if line.lstrip().startswith(prefix) else line for line in lines)
+    return "\n".join("" if line.lstrip(" \t").startswith(prefix) else line for line in lines)
 
 
 def tracked_files(root):
@@ -918,7 +921,6 @@ def tracked_files(root):
 
 
 GLOB_CHARSET = re.compile(r"[^A-Za-z0-9_./*-]")
-glob_regexes = {}
 
 
 def edge_hit(pt, path):
@@ -958,10 +960,19 @@ def edge_hit(pt, path):
             return True
         if "*" not in tail:             # a tail without a wildcard
             return True
-        rx = glob_regexes.get(g)
-        if rx is None:
-            rx = glob_regexes[g] = re.compile("".join(".*" if c == "*" else re.escape(c) for c in re.sub(r"\*+", "*", g)), re.S)
-        return path.startswith(head) and rx.fullmatch(path) is not None
+        # `*` matches any run of characters, `/` included, and a run of stars is one star: split on `*`, anchor the first and the last
+        # segment and find the middle ones in order. Linear in the path, where the equivalent regex is polynomial in the number of stars.
+        segs = g.split("*")
+        first, last = segs[0], segs[-1]
+        if len(path) < len(first) + len(last) or not path.startswith(first) or not path.endswith(last):
+            return False
+        pos, stop = len(first), len(path) - len(last)
+        for seg in segs[1:-1]:
+            k = path.find(seg, pos, stop)
+            if k < 0:
+                return False
+            pos = k + len(seg)
+        return True
     if e.endswith("/"):
         return path.startswith(e)
     return path == e
@@ -969,7 +980,7 @@ def edge_hit(pt, path):
 
 def suite_file(root, pattern):
     """The suite's own file is the FIRST pattern of its selector row (`^path`, dots literal). None when that is not a
-    readable file (a directory suite, or a pattern the selector derived differently): the caller counts it unaudited."""
+    readable file (a directory suite, a runner trigger, or a pattern the selector derived differently): the caller counts it unaudited."""
     path = pattern[1:] if pattern.startswith("^") else pattern
     full = os.path.join(root, path)
     return full if path and path not in RUNNER_TRIGGERS and not path.endswith("/") and os.path.isfile(full) else None
@@ -1329,7 +1340,7 @@ def reach_texts(root, inputs, pats, index, bad):
     code = set(code_pats_of(pats, index))
     if not code:
         return out
-    seen, tried, frontier = {t[0] for t in out}, set(), list(out)
+    seen, frontier = {t[0] for t in out}, list(out)
     for _ in range(WALK_DEPTH):
         named = set()
         for g in frontier:
@@ -1337,9 +1348,8 @@ def reach_texts(root, inputs, pats, index, bad):
         level = []
         for q in sorted(named):
             path = os.path.join(root, q)
-            if path in tried or os.path.realpath(path) in seen:
+            if os.path.realpath(path) in seen:
                 continue
-            tried.add(path)
             got = try_read(index, path, bad, root)
             if got is not None and got[0] not in seen:
                 seen.add(got[0])
