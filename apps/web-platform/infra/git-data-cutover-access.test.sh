@@ -1691,12 +1691,17 @@ else fail "MZ-P9: the probe refspec is outside the worktree namespace (the fence
 # ssh shim logs the remote bytes instead of executing them, so no row above can see a bare
 # `runuser` fail to resolve: on the git-data host runuser lives in /usr/sbin, which env -i's
 # PATH omits, and the live flip died at probe_failed reason=provision (run 39805041138).
-# Comment-stripped; the count pins the container (three sites: provision, remove, residue retry).
-_p14_all="$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'env -i PATH=/usr/bin:/bin .*runuser' || true)"
-_p14_bare="$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep 'env -i PATH=/usr/bin:/bin .*runuser' | grep -vc '/usr/sbin/runuser' || true)"
-if [ "$_p14_all" = 3 ] && [ "$_p14_bare" = 0 ]; then
+# A TEXTUAL pin: no row resolves runuser. Comment-stripped; it pins the exact per-site prefix (the
+# surrounding spaces and the payload tie each match to a real site, so a substring such as
+# runuser2 or /opt/usr/sbin/runuser, or a trailing comment, cannot satisfy it) and the TOTAL
+# number of env -i occurrences, so a fourth site on a continuation line is counted too. The
+# three sites are provision, remove and the residue retry; a legitimate fourth one edits this row.
+_p14_src="$(grep -v '^[[:space:]]*#' "$SCRIPT")"
+_p14_tot="$(printf '%s\n' "$_p14_src" | grep -o 'env -i' | wc -l | tr -d ' ')"
+_p14_ok="$(printf '%s\n' "$_p14_src" | grep -oE 'env -i PATH=/usr/bin:/bin SSH_ORIGINAL_COMMAND=(\\"\\\$id\\"|\$qp) /usr/sbin/runuser -u git -- /usr/local/bin/git-data-(provision|remove)\.sh' | wc -l | tr -d ' ')"
+if [ "$_p14_tot" = 3 ] && [ "$_p14_ok" = 3 ]; then
   pass "MZ-P14: the probe's three env -i remote calls name /usr/sbin/runuser — a bare runuser is not on env -i's PATH"
-else fail "MZ-P14: an env -i call reaches a bare runuser (sites=$_p14_all bare=$_p14_bare; want 3 and 0)"; fi
+else fail "MZ-P14: an env -i call does not carry the exact /usr/sbin/runuser prefix (env -i=$_p14_tot exact=$_p14_ok; want 3 and 3)"; fi
 
 # MZ-P5: provision failure -> probe_failed reason=provision.
 run_mode mz-p5-provfail probe SHIM_PROBE=provfail
@@ -3687,7 +3692,7 @@ fi
 # Review round 2 (#10138): 148 mutants x 2 = 296 (+10 over 143 x 2); no new standalone row (the G5 census, N-body and N-exprs were restated in place): 635.
 # Pin-fault read (#8211): WF-pinfault (1) and the executed FP1-FP3 rows (3): 636 -> 639 (the workflow verdict count 56 -> 57 moves with WF-pinfault).
 # #10297: 151 mutants x 2 = 302 (+6 over 148 x 2); one new standalone workflow verdict (WF-rbclear), which also moves the workflow verdict count 57 -> 58: 639 -> 646.
-# Probe runuser path (flip run 39805041138): one new standalone row (MZ-P14): 646 -> 647.
+# Probe runuser path (#8211): one new standalone row (MZ-P14): 646 -> 647.
 FLOOR=647
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -ne "$FLOOR" ]; then
