@@ -27,6 +27,13 @@ process.env.WORKSPACES_ROOT ||= join(tmpdir(), "soleur-vitest-workspaces");
 // to main while passing on a clean env. Clear it here; a test that needs the switch on sets it
 // itself, and that assignment runs after this setup.
 delete process.env.FLAG_NEW_SESSIONS_PAUSED;
+// The env mirror was only HALF of it (PR 10784 cleared it and the push run still failed 3/3): the dev
+// Doppler config ALSO carries FLAGSMITH_ENVIRONMENT_KEY, so `client()` in lib/feature-flags/server.ts
+// is live and `isNewAgentSessionsPaused()` reads the dev Flagsmith environment, where the flag is ON
+// during the rehearsal. A unit suite must never reach a vendor: with no key `client()` returns null and
+// the (now cleared) env mirror answers "allowed". A test that exercises the Flagsmith path mocks the
+// client or sets the key itself, after this setup.
+delete process.env.FLAGSMITH_ENVIRONMENT_KEY;
 
 // #5796 — raise vitest's `vi.waitFor` default timeout floor (1s → 10s) for the
 // node/unit project. Must mirror the identical install in setup-dom.ts: a
