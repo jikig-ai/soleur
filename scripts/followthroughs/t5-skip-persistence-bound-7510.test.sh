@@ -259,9 +259,9 @@ if [ "$_xt_rc2" -ne 78 ]; then pass; else
 fi
 
 # ── (k) END TO END: the REAL runner's stdout, fed to the probe (#10786) ──────
-# The probe reads the Actions log of infra-validation.yml. Since #8763 that log is produced by
-# apps/web-platform/infra/run-registered-suites.sh, which captures each suite's output into a
-# per-suite file and prints only `PASS <path>`; the suite's `SKIP (loud):` lines and terminal
+# The probe reads the Actions log of infra-validation.yml. Since #8763 the rehearsal suite runs inside
+# apps/web-platform/infra/run-registered-suites.sh, which (since #7423) captures each suite's output
+# into a per-suite file and prints only `PASS <path>`; the suite's `SKIP (loud):` lines and terminal
 # summary never reached the log, and the probe was TRANSIENT from 2026-09-28 on. The runner now
 # relays them as `SOLEUR| relay <basename>: <line>`. These rows run the REAL runner over a fixture
 # infra dir and feed ITS stdout to the probe, so the three-way contract (suite text, runner relay,
@@ -361,7 +361,7 @@ _lits=$(probe_literals "$PROBE") || _lits=""
 _t5=$(sed -n '2p' <<<"$_lits")
 if [ "$_skip_n" -eq 1 ] && [ -n "$_skip_ere" ] && [ -n "$_t5" ]; then
   _sx=${_skip_stmt#*echo \"}; _sx=${_sx%%\" >&2*}
-  _sx=${_sx//'$1'/"${_t5}MUTATION sample"}
+  _sx=${_sx//'$1'/"${_t5#SKIP (loud): }MUTATION sample"}
   case "$_sx" in
     *'$'*) fail "(k) suite end (skip): the arm_skip echo still has an unexpanded variable after substituting \$1: $_sx" ;;
     *) if grep -Eq -- "$_skip_ere" <<<"$_sx" && grep -qF -- "$_t5" <<<"$_sx"; then pass; else

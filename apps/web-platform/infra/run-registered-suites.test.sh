@@ -1136,8 +1136,9 @@ fi
 # fixtures with it instead of silently stopping T13f from proving the terminal line survives the cap.
 #
 # Fixture suites (sorted order is the runner's order, which no row depends on):
-#   git-data-runcmd-rehearsal  the MAPPED suite: CAP+10 stderr skips, two terminal-LOOKING decoys
-#                              (one not a summary, one indented), then its real terminal line
+#   git-data-runcmd-rehearsal  the MAPPED suite: CAP+10 stderr skips, five terminal-LOOKING decoys
+#                              (no summary shape, digits without "passed", "passed" without a count,
+#                              a different prefix, an indented one), then its real terminal line
 #   second-skip                a second member, one skip (a relay that stops after the first suite)
 #   flood                      CAP+150 skips, then a terminal-looking line under another basename
 #   red-early-skip             RED, with a skip line printed before its failure marker
@@ -1151,6 +1152,9 @@ cat > "$FIXRELAY/git-data-runcmd-rehearsal.test.sh" <<FIXEOF
 #!/usr/bin/env bash
 for i in \$(seq 1 $(( EVIDENCE_CAP_SUT + 10 ))); do echo "SKIP (loud): T5 MUTATION fixture skip \$i" >&2; done
 echo "git-data-runcmd-rehearsal: setup done"
+echo "git-data-runcmd-rehearsal: 12 checks ran"
+echo "git-data-runcmd-rehearsal:  passed (no count)"
+echo "other-suite: 5 passed"
 echo "  git-data-runcmd-rehearsal: 9 passed (indented decoy)"
 echo "git-data-runcmd-rehearsal: 73 passed, 0 failed, Skipped: 2 (75 assertions)"
 exit 0
@@ -1191,6 +1195,8 @@ cat > "$FIXRELAY/weird-lines.test.sh" <<'FIXEOF'
 #!/usr/bin/env bash
 printf 'SKIP (loud): W1 %s\n' "$(head -c 600 /dev/zero | tr '\0' x)" >&2
 printf 'SKIP (loud): W2 cr\r::error::x\n' >&2
+printf 'SKIP (loud): W3 esc\033[31m del\177 vt\013 ff\014 end\n' >&2
+echo "SKIP (loud): w4 lowercase-initial arm name" >&2
 exit 0
 FIXEOF
 chmod +x "$FIXRELAY"/*.test.sh
@@ -1226,10 +1232,10 @@ N13_FLOOD=$(t13_count '^SOLEUR\| relay flood\.test\.sh: SKIP \(loud\): ')
 if (( N13_FLOOD == EVIDENCE_CAP_SUT )); then ok "T13e: a suite printing $(( EVIDENCE_CAP_SUT + 150 )) skips is capped at exactly ${EVIDENCE_CAP_SUT} relayed lines"
 else no "T13e: the flooding suite relayed ${N13_FLOOD} lines, expected exactly ${EVIDENCE_CAP_SUT}"; fi
 
-N13_TERM=$(t13_count '^SOLEUR\| relay git-data-runcmd-rehearsal\.test\.sh: git-data-runcmd-rehearsal: ')
+N13_MAPPED=$(t13_count '^SOLEUR\| relay git-data-runcmd-rehearsal\.test\.sh: ')
 N13_TERM_REAL=$(t13_count '^SOLEUR\| relay git-data-runcmd-rehearsal\.test\.sh: git-data-runcmd-rehearsal: 73 passed, 0 failed')
-if (( N13_TERM == 1 && N13_TERM_REAL == 1 )); then ok "T13f: only the mapped suite's real terminal line is relayed, once, past a skip stream longer than the cap and past two terminal-looking decoys"
-else no "T13f: the mapped suite relayed ${N13_TERM} terminal-shaped line(s), ${N13_TERM_REAL} of them the real one (want 1 and 1: the cap must bind the skip stream only, and the anchor must reject the decoys)"; fi
+if (( N13_MAPPED == EVIDENCE_CAP_SUT + 1 && N13_TERM_REAL == 1 )); then ok "T13f: the mapped suite relays exactly ${EVIDENCE_CAP_SUT} skips plus its one real terminal line, past a skip stream longer than the cap and past five terminal-looking decoys"
+else no "T13f: the mapped suite relayed ${N13_MAPPED} line(s) in total (want $(( EVIDENCE_CAP_SUT + 1 ))), ${N13_TERM_REAL} of them the real terminal line (want 1): the cap must bind the skip stream only, and the anchor must reject every decoy"; fi
 
 N13_OTHERTERM=$(t13_count '^SOLEUR\| relay flood\.test\.sh: git-data-runcmd-rehearsal: ')
 if (( N13_OTHERTERM == 0 )) && (( N13_FLOOD >= 1 )); then ok "T13g: terminal text is relayed only for the mapped suite's basename"
@@ -1281,8 +1287,22 @@ else no "T13l: the skip after a NUL byte was relayed ${N13_NUL} time(s) as its e
 N13_LONGLEN=$(grep -E -- '^SOLEUR\| relay weird-lines\.test\.sh: SKIP \(loud\): W1 ' <<<"$OUT13" | awk '{ print length($0) }' | sed -n '1p')
 N13_PFX='SOLEUR| relay weird-lines.test.sh: '
 N13_LONGMAX=$(( ${#N13_PFX} + 400 ))
-if [[ "$N13_LONGLEN" =~ ^[0-9]+$ ]] && (( N13_LONGLEN > 100 && N13_LONGLEN <= N13_LONGMAX )); then ok "T13m: a 600-byte skip line is relayed cut to ${N13_LONGLEN} bytes (bound ${N13_LONGMAX})"
-else no "T13m: the long skip line is ${N13_LONGLEN:-absent} bytes, expected between 101 and ${N13_LONGMAX}"; fi
+if [[ "$N13_LONGLEN" =~ ^[0-9]+$ ]] && (( N13_LONGLEN == N13_LONGMAX )); then ok "T13m: a 616-byte skip line is relayed cut to exactly 400 bytes of suite text (${N13_LONGLEN} with the relay prefix)"
+else no "T13m: the long skip line is ${N13_LONGLEN:-absent} bytes, expected exactly ${N13_LONGMAX}"; fi
+
+# T13n — every other neutralised control class, and the name-agnostic claim: a lowercase-initial arm
+# name at column 0 is still relayed (the relay does not decide which arms matter; the probe does).
+N13_W3=$(t13_count '^SOLEUR\| relay weird-lines\.test\.sh: SKIP \(loud\): W3 esc \[31m del  vt  ff  end$')
+N13_W4=$(t13_count '^SOLEUR\| relay weird-lines\.test\.sh: SKIP \(loud\): w4 lowercase-initial arm name$')
+if (( N13_W3 == 1 && N13_W4 == 1 )); then ok "T13n: ESC, DEL, VT and FF are neutralised to spaces, and a lowercase-initial arm name is still relayed"
+else no "T13n: neutralised W3 line ${N13_W3} time(s), lowercase W4 line ${N13_W4} time(s) (want 1 and 1)"; fi
+
+# T13o — mapfile -t: a relay line must not keep its newline (it would double every line with a blank
+# SOLEUR| line right after it). The RED fixture's LAST relay line is legitimately followed by the blank
+# line that opens the "retained per-suite log dir" note, so exactly one such pair is expected.
+N13_BLANKAFTER=$(awk '/^SOLEUR\| relay /{r=1; next} r && /^SOLEUR\| $/{n++} {r=0} END{print n+0}' <<<"$OUT13")
+if (( N13_BLANKAFTER == 1 )); then ok "T13o: only the last relay line is followed by a blank SOLEUR| line (the retained-dir note's opener)"
+else no "T13o: ${N13_BLANKAFTER} relay line(s) are followed by a blank SOLEUR| line, expected exactly 1 (mapfile -t dropped?)"; fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 # T9 — MUTATION MATRIX. Every assertion above is a claim that some property holds;
@@ -1510,6 +1530,10 @@ open(p,'w').write(s)
   run_mutant relay-no-byte-bound "T13m:" \
     "a = ' | cut -b1-400'; assert s.count(a) == 1; s = s.replace(a, '')"
 
+  # `mapfile -t` dropped: every relayed line keeps its newline and is followed by a blank line.
+  run_mutant relay-mapfile-no-t "T13o:" \
+    "a = 'mapfile -t -n \"\$EVIDENCE_CAP\" lines'; assert s.count(a) == 1; s = s.replace(a, 'mapfile -n \"\$EVIDENCE_CAP\" lines')"
+
   # POSITIVE CONTROL for the scorer. A comment-only edit changes no behaviour, so every
   # assertion must stay green — if this row reports a kill, the matcher is matching noise and
   # every other row's verdict is worthless.
@@ -1520,16 +1544,16 @@ open(p,'w').write(s)
   # (incremented inside run_mutant), not `run_mutant` lines in this file — an earlier draft
   # grepped its own source text, which still counts 7 after gutting run_mutant's body to
   # `return 0`, i.e. it could not detect the failure mode its own comment named.
-  # Floor raised 19 -> 31 for the relay rows (#10786): 24 rows on main plus 7 relay rows, so the floor
-  # moved by 12 (the 5 rows of pre-existing slack plus the 7 new ones). Measured: 31 call sites.
+  # Floor raised 19 -> 32 for the relay rows (#10786): 24 rows on main plus 8 relay rows, so the floor
+  # moved by 13 (the 5 rows of pre-existing slack plus the 8 new ones). Measured: 32 call sites.
   # Earlier: 7 -> 19 with the Guard 2 rows (#7429). It must rise WITH the row count, not
   # merely stay satisfied by it: a floor of 7 against 19 rows is 12 rows of slack a deletion
   # could spend silently.
   MATRIX_CALLS=$(grep -c '^  run_mutant ' "${BASH_SOURCE[0]}" || true)
-  if (( MATRIX_RAN >= 31 && MATRIX_RAN == MATRIX_CALLS )); then
+  if (( MATRIX_RAN >= 32 && MATRIX_RAN == MATRIX_CALLS )); then
     ok "T9: mutation matrix dispatched ${MATRIX_RAN} rows (all ${MATRIX_CALLS} call sites ran)"
   else
-    no "T9: matrix dispatched ${MATRIX_RAN} of ${MATRIX_CALLS} call sites (expected >= 31, all run)"
+    no "T9: matrix dispatched ${MATRIX_RAN} of ${MATRIX_CALLS} call sites (expected >= 32, all run)"
   fi
 fi
 
@@ -1565,10 +1589,10 @@ fi
 # 73/50 after T10d gained its detection half (see the T10d block). 83/60 after
 # the #8736 T11 rows (shard partition, privileged bucket, per-suite bound,
 # timings feed, --enumerate, active/malformed manifest arms).
-# 112/73 after the #10786 relay rows, ITEMISED: T13a-T13m are 13 assertions in both, plus 7 matrix
+# 115/75 after the #10786 relay rows, ITEMISED: T13a-T13o are 15 assertions in both, plus 8 matrix
 # scoring lines (relay-dropped, -first-suite-only, -unprefixed, -after-reap, -drop-grep-a,
-# -no-sanitise, -no-byte-bound) in the parent only; measured on the green run (parent 112, child 73).
-if [[ -n "${SOLEUR_MUTATION_CHILD:-}" ]]; then MIN_ASSERTIONS=73; else MIN_ASSERTIONS=112; fi
+# -no-sanitise, -no-byte-bound, -mapfile-no-t) in the parent only; measured on the green run (parent 115, child 75).
+if [[ -n "${SOLEUR_MUTATION_CHILD:-}" ]]; then MIN_ASSERTIONS=75; else MIN_ASSERTIONS=115; fi
 TOTAL=$(( pass + fail ))
 if (( TOTAL < MIN_ASSERTIONS )); then
   echo "[FAIL] anti-vacuity: only ${TOTAL} assertion(s) ran, expected >= ${MIN_ASSERTIONS}" >&2

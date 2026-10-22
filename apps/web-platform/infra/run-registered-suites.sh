@@ -1123,7 +1123,8 @@ dump_one() {
 # probe's suite, which expands the real statement and matches it against this regex.
 # EVIDENCE_CAP binds the SKIP stream per suite (a suite printing 10,000 skips must not flood the
 # log); the terminal line is read by its own grep, so a long skip stream cannot push it out. The
-# rehearsal suite has nine arm_skip call sites, so its own stream cannot reach the cap in practice.
+# rehearsal suite has nine arm_skip invocations (five at line start, four as case arms), so its own
+# stream cannot reach the cap in practice.
 EVIDENCE_SKIP_ERE='^SKIP \(loud\): '
 EVIDENCE_TERMINAL_SUITE='git-data-runcmd-rehearsal.test.sh'
 EVIDENCE_TERMINAL_ERE='^git-data-runcmd-rehearsal: [0-9]+ passed'
@@ -1142,13 +1143,19 @@ EVIDENCE_CAP=50
 # included) become spaces so relayed text can never start a second log line. `mapfile -n`, never
 # `| head` (SIGPIPE under pipefail). The header line is opened lazily, so a run with nothing to
 # relay is byte-identical to one without this function.
+#
+# Scope, stated so the claim stays exact: the neutraliser removes ASCII control bytes (CR, ESC, DEL,
+# VT, FF and the rest below 0x20 except TAB), which is what lets a relayed line never start a second
+# log line for a line-oriented reader. C1 controls (U+0080-U+009F) and U+2028/U+2029 pass through
+# unchanged: no consumer in this pipeline reads them as a line break or command. The two rc>=2
+# "relay unavailable" arms mirror dump_one's and have no test row: the only way to make grep exit 2
+# is an unreadable capture, and a root CI user defeats chmod 000.
 relay_grep() {  # $1 = ERE, $2 = file; returns grep's own rc
   grep -a -m "$EVIDENCE_CAP" -E -- "$1" "$2" 2>/dev/null | cut -b1-400 | tr '\000-\010\013-\037\177' ' '
   return "${PIPESTATUS[0]}"
 }
 relay_evidence() {
   local s key f base sel grc opened=0 line
-  local unavailable="[relay unavailable — grep exited %s reading the capture]"
   local -a lines
   for s in "${SUITES[@]}"; do
     key="${s//\//_}"; f="$SOLEUR_SUITE_LOGDIR/$key.log"; base="${s##*/}"
@@ -1157,14 +1164,14 @@ relay_evidence() {
     case "$grc" in
       0) mapfile -t -n "$EVIDENCE_CAP" lines <<<"$sel" ;;
       1) lines=() ;;
-      *) lines=("$(printf "$unavailable" "$grc")") ;;
+      *) lines=("[relay unavailable — grep exited ${grc} reading the capture]") ;;
     esac
     if [[ "$base" == "$EVIDENCE_TERMINAL_SUITE" ]]; then
       sel="$(relay_grep "$EVIDENCE_TERMINAL_ERE" "$f")"; grc=$?
       case "$grc" in
         0) mapfile -t -n "$EVIDENCE_CAP" -O "${#lines[@]}" lines <<<"$sel" ;;
         1) ;;
-        *) lines+=("$(printf "$unavailable" "$grc")") ;;
+        *) lines+=("[relay unavailable — grep exited ${grc} reading the capture]") ;;
       esac
     fi
     (( ${#lines[@]} > 0 )) || continue
