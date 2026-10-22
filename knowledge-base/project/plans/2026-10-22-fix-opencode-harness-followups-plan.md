@@ -18,8 +18,8 @@ Four follow-ups filed against the OpenCode adapter rollout, each a single scoped
    a real guard hole (relative `rm -rf` is allowed from the session dir, asked from the workdir).
 2. **#10820** — the generated capability matrix never names the one approval gate OpenCode cannot
    carry, so the disclosure lives only in marketing copy.
-3. **#10821** — ADR-245's supported-harness set still excludes OpenCode while ADR-291 records the
-   OpenCode adapter; both are live records (ADR-245 `status: active`, ADR-291 `status: accepted`).
+3. **#10821** — ADR-245's supported-harness set still excludes OpenCode, while ADR-291 records the
+   OpenCode adapter; both are live records.
 4. **#10822** — `CONTRIBUTING.md` documents every harness but OpenCode, and four source comments
    still describe a four-harness world.
 
@@ -32,12 +32,15 @@ than inherited as phase fiction.
 
 | Spec claim | Reality | Plan response |
 |---|---|---|
-| #10819: `guardEnvelope` at `:183-189`, `decidePermission` at `:272` | Both exist at those anchors; `decidePermission` is `:264-273` and calls `decideBash(action, { command }, cwd, …)` | Plan cites the function anchor, not the issue's line numbers |
+| #10819: `guardEnvelope` at `:183-189`, `decidePermission` at `:272` | Both exist at those anchors; `decidePermission` calls `decideBash(action, { command }, cwd, …)` | Plan cites function and section anchors, not the issue's line numbers |
 | #10819: bind `workdir` into `tool_input`/`cwd` at two call sites | `permission.evaluate` carries **no** workdir (measured); the value exists only on `tool.execute.before`, keyed by a call id that `permission.evaluate.source.id` also carries | Fix publishes the value from the deciding hook and correlates by id; it cannot be read at the permission site |
-| #10820: `INSTRUCTIONS.md:109-116` is the limitations section | The limitations are prose paragraphs under `## Hooks and completion` (`:100-136` after regeneration); there is no `## Limitations` heading | Add the paragraph to the generator source (`instructions()`), regenerate, never hand-edit output |
-| #10821: ADR-291 reconciled §Context | The non-exhaustive parenthetical is in ADR-291 **§Status** (`:43`), not §Context | Amendment cites ADR-291 by ordinal + title; the parenthetical is quoted from §Status |
-| #10822: `CONTRIBUTING.md` has Grok at `:39`/`:48-63` and Codex at `:23` | Correct, but there is **no** `### Grok Build` heading — Grok is a paragraph inside `### Codex`, and `### Grok command naming` at `:48` is about command namespaces | Plan inserts `### OpenCode` after the Grok command-naming subsection, before `## Contributor License Agreement` |
-| #10822: stale comments at four anchors | All four exist as described; the `lib/harness.ts` module header omits OpenCode **and** Antigravity while the `Harness` union has both | Rewrite the header count-free instead of correcting a number that will stale again |
+| #10819: "open a relative dangerous path" | The hole is **both** classes: the `ask` is lost *and* the cwd-dependent **deny** is lost | Both are named in `## User-Brand Impact`; the Guard Contract covers the decision |
+| #10820: `INSTRUCTIONS.md:109-116` is the limitations section | Limitations are prose paragraphs under `## Hooks and completion`; there is no `## Limitations` heading | Add the paragraph to the generator source (`instructions()`), regenerate, never hand-edit output |
+| #10820: the matrix is the only disclosure owed | Three public surfaces already say the gate "refuses rather than approves" on OpenCode (`README.md`, `plugins/soleur/README.md`, `docs/pages/getting-started.njk`), and `skills/operator-bootstrap/SKILL.md` states the receipt path with no harness qualification | The new paragraph is scoped to what is actually true (no receipt can be minted here); the SKILL.md gap is filed, not silently absorbed |
+| #10821: ADR-291 reconciled §Context | The non-exhaustive parenthetical is in ADR-291 **§Status**, not §Context | Amendment cites ADR-291 by ordinal + title; the parenthetical is quoted from §Status |
+| #10821: ADR-245's set is a current claim | ADR-245 is `date: 2026-09-23`, `status: active`; the set appears in **§Context** and **Decision item 1**. ADR-291 §Decision also records `tool.execute.before` as "withdrawn as measured-false" | Amendment is dated 2026-09-23-anchored, scoped to those two clauses, with an inline pointer at item 1; ADR-291 gains a one-paragraph note that a capture-only binding now exists (no decision moves) |
+| #10822: `CONTRIBUTING.md` has Grok at `:39`/`:48-63` and Codex at `:23` | Correct, but there is **no** `### Grok Build` heading — Grok is a paragraph inside `### Codex`, and `### Grok command naming` is about command namespaces | Plan inserts `### OpenCode` after the Grok command-naming subsection, before `## Contributor License Agreement`, and adds one routing line above `### Codex` |
+| #10822: stale comments at four anchors | All four exist; the `lib/harness.ts` header omits OpenCode **and** Antigravity while the `Harness` union has both; `components.test.ts` has **four** count phrases, not two | Rewrite count-free where it is a total; name the three harnesses where the count is accurate and scoped |
 | Overlap preflight (`pr-overlap-preflight.sh --mode start`) | Ran twice, both `rc=2` (`jq: Argument list too long`); no result | **Overlap was NOT checked** by that tool; the Phase 1.7.5 code-review overlap check ran instead (see `## Open Code-Review Overlap`). Do not claim the diff is overlap-clear |
 
 ## Research Insights
@@ -66,34 +69,53 @@ PERMISSION   action="shell" resources=["echo probe-from-workdir","pwd"]
 Conclusions that bind the design:
 
 - `workdir` is visible **only** on `tool.execute.before`; `permission.evaluate` has no cwd field.
-- `source.id` on the permission event equals the tool hook's `id`, so the two hooks correlate.
+- `source.id` on the permission event equals the tool hook's `id`, and `source.messageID` equals the
+  tool hook's `messageID`, so the two hooks correlate on either alone or on the pair.
 - `external_directory` fires **first** with the same call id — consuming the correlation on any
-  action other than `shell` would lose it before the shell decision.
+  action other than the shell decision would lose it before that decision.
 - Guard pair run with the production envelope construction (both guards, ordered):
   `cwd=sessionDir` → no output, exit 0 (**allow**); `cwd=workdir` → `ask`,
   rule `recursive-delete-workdir`. The hole is real: a relative destructive command is silently
   allowed whenever `workdir` differs from the session directory.
 - The hole is worse than a missing `ask`: the guard's **deny** class is cwd-dependent too ("a bare
-  `*` `**` or `./*` when the working directory is home or an ancestor",
-  `hooks/destructive-command-guard.sh:23`). With `workdir=~` and envelope `cwd=<checkout>`,
-  `rm -rf *` lands in "not decided" and is allowed with no prompt of any class.
-- Running the guards with `cwd = workdir` is safe, checked rather than assumed:
-  `destructive-command-guard.sh` prefers the envelope's `cwd` over `CLAUDE_PROJECT_DIR`/`PWD` and
-  strips `GIT_*` by prefix; `browser-snapshot-credential-guard.sh` reads only
-  `tool_input.command` (no cwd reference) and sources its library via `BASH_SOURCE`. Both scripts
-  are invoked by absolute path, so the child cwd cannot change which script runs.
+  `*` `**` or `./*` when the working directory is home or an ancestor", the rule table's
+  `recursive-delete-home` arm). With `workdir=$HOME` and envelope `cwd=<checkout>`, `rm -rf *`
+  matches no rule at all and is allowed with no prompt of any class.
+- Running the guards with `cwd = workdir` is safe for the credential guard, checked rather than
+  assumed: `browser-snapshot-credential-guard.sh` reads `.tool_input.command` and gates on
+  `.tool_name` through `hook-tool-kind.sh`; it has **no cwd reference**, so repointing `cwd` cannot
+  change its verdict. Both scripts are invoked by absolute path, so the child cwd cannot change
+  which script runs.
+- **`cwd = workdir` is not verdict-neutral for the destructive guard, and the plan says which way.**
+  It prefers the envelope's `cwd` over `CLAUDE_PROJECT_DIR`/`PWD` and reads the default-branch set
+  from *that directory's own repository* (`git_ro "$repo" symbolic-ref
+  refs/remotes/<remote>/HEAD`, falling back to `main`/`master`). A workdir inside a repository with
+  no `refs/remotes/origin/HEAD` therefore narrows that set. Recorded as a residual in
+  `## User-Brand Impact`; not changed here.
+- **Relative `workdir` resolves against the session directory** — measured, not assumed. The
+  session was moved to a worktree while the OpenCode process kept its launch cwd in the bare
+  checkout; `shell` with `workdir: "plugins/soleur"` ran in
+  `<worktree>/plugins/soleur`, not `<bare>/plugins/soleur`. The two bases were distinct, so the
+  base is `location.directory`.
+- `effect = "ask"` + `message` is a **real prompt**, measured live (§12.2, quoted in the module
+  docblock): the tool stays `running` awaiting a decision. So a decision the plugin cannot compute
+  can be escalated to the operator instead of being guessed.
 
 ### Property list (Phase 0.6b)
 
 | # | Property | Mechanism that satisfies it |
 |---|---|---|
-| P1 | A `shell` decision uses the directory the command will run in | correlate `input.workdir` from `tool.execute.before` into the permission envelope's `cwd` |
-| P2 | A capture is never silently absent: every Bash tool call records an entry, with a sentinel when it has no `workdir` | entry = `{workdir?: string, consumed: boolean}`, keyed by call id; a lookup miss then means "the tool hook did not fire", not "no workdir" |
-| P3 | `external_directory` never consumes the entry | consume (mark consumed) only when `action === "shell"` |
-| P4 | Correlation never fails open without a loud complaint | unmatched id / unusable workdir / unconsumed eviction each `console.error` **and** write an event-log line — `console.error` because the log file is unset by default, the same reason `GUARD_RUN_FAILURE` announces itself |
-| P5 | The generated matrix names every absent gate with its consequence | generator source paragraph + regenerated output + drift `--check` |
-| P6 | Two accepted ADRs cannot disagree about the supported set | dated, clause-scoped amendment on ADR-245 naming ADR-291 |
+| P1 | A `shell` decision is judged against the directory the command **starts** in — the per-call `workdir` when one was usable, the session directory otherwise | correlate `input.workdir` from `tool.execute.before` into the permission envelope's `cwd` |
+| P2 | A capture is never silently absent: every Bash tool call records an entry, with a sentinel when it carries no workdir | entry keyed by `(messageID, id)`; a lookup miss then means "the tool hook did not fire", not "no workdir" |
+| P3 | The `external_directory` event never consumes the entry | the handler decides "is this a Bash action" first and returns before touching the map |
+| P4 | Correlation never fails open **silently**: every degraded decision `console.error`s a sentence and writes its event-log line | `console.error` because the log file is unset by default, plus the TSV line when it is armed |
+| P5 | The generated matrix names the one absent **approval** gate and its consequence, from the generator source | generator paragraph + regenerated output + drift `--check` |
+| P6 | Two accepted ADRs cannot disagree about the supported set, and neither can disagree about the hook posture this PR changes | dated, clause-scoped amendments on ADR-245 and ADR-291 |
 | P7 | Public/contributor docs name the fifth harness without a count that can stale | CONTRIBUTING subsection + count-free comments |
+
+P5 is deliberately narrowed from "every absent gate": the ledger carries six
+`absent-with-reason` rows and this PR discloses one. The other five are named in `## Out of Scope`
+so the narrower claim is visible rather than implied away.
 
 ### Cut list (Phase 0.6b)
 
@@ -101,6 +123,11 @@ Conclusions that bind the design:
   `permission.evaluate`; a throw there preempts a real `ask` and re-degrades it to a refusal. The
   binding is **capture-only**.
 - **Re-deriving the workdir at the permission site** — impossible (not on the event). Not attempted.
+- **A `consumed` flag and an eviction log line** — the only reader would be the eviction notice, and
+  the decision-time lookup already announces a lost capture (`cause=no-capture`). Eviction is
+  silent; the loud path is the one that fires where a wrong decision could actually be made.
+- **A per-call `workdir-correlated` stderr line** — the success path is the common path (the
+  generated matrix *tells* agents to set `workdir`); a line per call is noise. Log only.
 - **Adding OpenCode to the C4 model** — real pre-existing gap, filed as #10866; not folded in.
 - **Legal parenthetical re-pin** — excluded by the CLO ruling; not touched.
 
@@ -108,8 +135,8 @@ Conclusions that bind the design:
 
 - Publish the derived value from the hook that can see it; do not re-derive it at the consumer.
 - A correlation test must pin the wire: deleting either side must redden it.
-- A bounded map must not silently degrade to "no workdir → proceed"; eviction and fallback must be
-  visible.
+- A bounded map must not silently degrade to "no workdir → proceed"; a lookup miss must be visible
+  at the decision, which is where the damage would happen.
 - Test fixtures must carry a real `input.workdir`; a fixture without it tests the fallback.
 - After any doc/generated edit, run the whole prose-gate set (`harness-claim-parity`,
   `harness-tool-map`, adapter drift), not just the file's own test.
@@ -119,20 +146,23 @@ Conclusions that bind the design:
 - #10815 — parent OpenCode claim flip (closed); the four issues here are its follow-ups.
 - #10863 — draft PR for this branch.
 - #10866 — filed from this plan: C4 model has no OpenCode harness element.
-- #10591 (uninstall flag), #10587 (compaction `context` probe), #10819–#10822.
+- #10591 (uninstall flag), #10587 (compaction `context` probe).
 - #8593 — open `code-review` issue naming `plugins/soleur/test/components.test.ts`; see overlap
   section.
 
 ### Repository conventions
 
 - `plugins/soleur/opencode/plugin.ts` is a **source** file for the generator, not generated: edit it
-  directly, never add it to a template string.- `plugins/soleur/opencode/INSTRUCTIONS.md` is generated; edit `scripts/sync-opencode-adapter.ts`
+  directly, never add it to a template string.
+- `plugins/soleur/opencode/INSTRUCTIONS.md` is generated; edit `scripts/sync-opencode-adapter.ts`
   and regenerate.
 - `.claude/hooks/opencode-dispositions.tsv` is the canonical hook ledger: one row per registration,
-  every row with a disposition. A code change that invalidates a row must update the row in the
-  same PR.
-- ADRs are immutable records; corrections are dated amendments (see `adr-template.md:27`), citing
-  decisions by ordinal + title, never by position.
+  every row with a disposition **and** a binding column. A code change that invalidates a row must
+  update the row — and its legend, if the row needs a word the legend does not define — in the same
+  PR.
+- ADRs are immutable records; corrections are dated amendments citing decisions by ordinal + title,
+  never by position. A clause that now reads false conventionally gets an inline pointer **at the
+  clause** as well as the appended amendment (ADR-084, ADR-199), because readers stop at §Decision.
 - Harness claims are gated by `test/harness-claim-parity.test.ts`: name OpenCode explicitly or use
   count-free phrasing.
 
@@ -142,162 +172,251 @@ Conclusions that bind the design:
 
 **Design (decided; no open technical fork).** `tool.execute.before` is the only surface that sees
 `input.workdir`; `permission.evaluate` is the only surface that can block. So the tool hook
-**publishes** the value keyed by the call id, and the permission hook **consumes** it.
+**publishes** the value keyed by the call, and the permission hook **consumes** it. Ship Phase 1 as
+its own commit so a review finding on it cannot hold the three disclosure edits.
 
 1. `plugins/soleur/opencode/plugin.ts`
-   - `SetupContext` gains an optional `tool?: { hook(name: "execute.before", handler: …) }` member.
-     Optional because the plugin must load on a runtime that does not offer it; absence is
-     **announced once at setup**, not ignored.
-   - `PermissionEvaluateEvent` gains `readonly source?: { readonly id?: unknown }`.
-   - New exported `workdirForCall(input: unknown): string | undefined` — returns `input.workdir`
-     only when it is a non-empty string; a relative value is resolved against the session directory
-     (`isAbsolute`/`resolve` from `node:path`).
-   - `createSetup` holds `calls = new Map<string, { workdir?: string; consumed: boolean }>()`, LRU
-     bounded at 500 (same two-line shape as `sessions`). **Every Bash tool call records an entry**,
-     with `workdir: undefined` as the sentinel for "this call carries no workdir". Without the
-     sentinel a lookup miss cannot be distinguished from "no workdir", which is exactly the
-     pre-fix behavior.
-   - Bind `ctx.tool?.hook("execute.before", …)`: gate on `claudeToolName(event.tool) === "Bash"`
-     (the same map the guards use — not the literal `shell`, so the `bash` alias keeps working);
-     `calls.set(event.id, { workdir, consumed: false })`. **Never throw** here — capture-only.
-   - **Do not delete on consume.** Mark `consumed = true` instead: the measurement establishes one
-     tool event and two permission events per call, not that a call is evaluated exactly once. A
-     retry or re-prompt with a second `shell` evaluation would otherwise fall back to the session
-     directory — a correct decision turned into the hole. Call ids are not reused; the LRU bounds
-     memory.
-   - On eviction, if the evicted entry was never consumed, `console.error` **and** write
-     `soleur-opencode\tworkdir-evicted\tid=…\tworkdir=…`; a consumed entry is evicted silently
-     (normal LRU churn, not a fault).
-   - In the shell path of the permission handler, resolve the effective cwd **once**:
-     a missing/non-string `event.source.id` → `console.error` + `workdir-uncorrelated\tid=absent`;
-     an id with no entry → `console.error` + `workdir-uncorrelated\tid=…\tno-capture` (the tool hook
-     did not fire); an entry whose `workdir` is not an existing directory
-     (`existsSync` + `statSync().isDirectory()`) → `console.error` +
-     `workdir-unusable` and fall back to the session directory, because `spawnSync` with a
-     nonexistent cwd returns `status: null` and would be misreported as `guard-did-not-run` blaming
-     a moved checkout; an applied workdir → `workdir-correlated\tcwd=…`. No workdir (sentinel) is
-     the normal path and writes nothing.
-   - Non-`shell` permission events return **before** touching the map — the `external_directory`
-     event that fires first for the same call id must not consume the entry.
-   - Pass the resolved cwd as `cwd` into the existing `decidePermission(action, resources, cwd, …)`
-     — **no new parameter**: that cwd becomes both the envelope `cwd` and the runner cwd inside
-     `decideBash`. `decideBash`, `guardEnvelope`, and both guard scripts are unchanged.
-   - Update the module docblock paragraph that says `execute.before` is "deliberately not bound":
-     it is now bound **as a capture**, with the preemption reason retained.
+   - `SetupContext` gains an optional `tool?: { hook(name: "execute.before", handler: (event: ToolBeforeEvent) => Promise<void> | void): Promise<unknown> }`.
+     Optional because the plugin must load on a runtime that does not offer it; absence **and a
+     rejecting registration** are announced once at setup, not ignored.
+   - New `ToolBeforeEvent` (`tool`, `id`, `messageID`, `input` — all `unknown`) and
+     `PermissionEvaluateEvent` gains
+     `readonly source?: { readonly type?: unknown; readonly id?: unknown; readonly messageID?: unknown }`.
+   - New exported **`decidesBash(tool: string): boolean`** = `claudeToolName(tool) === "Bash"`, and
+     `guardEnvelope` uses it instead of its own inline comparison. **One predicate decides "is this
+     a call the Bash guards see", used by the envelope, the capture, and the consume.** Two
+     independent copies of that question is the rot that would silently reopen this hole.
+     Consumption is gated on `decidesBash(event.action)`, never on the literal `"shell"` — the
+     `bash` alias is exactly why the capture gate already uses the map.
+   - New exported `resolveWorkdir(input: unknown, baseDir: string): WorkdirCapture` where
+     `WorkdirCapture = { kind: "absent" } | { kind: "usable"; path: string } | { kind: "unusable"; raw: string }`:
+     a non-empty string `input.workdir`; relative values resolved against `baseDir` (measured —
+     see the measurement record); then `existsSync` + `statSync().isDirectory()` + `realpathSync`,
+     so the envelope names the physical directory the shell will `chdir` to rather than
+     `path.resolve`'s lexical answer. Any failure is `kind: "unusable"`, not a silent session-dir
+     fallback.
+   - `createSetup` holds `calls = new Map<string, WorkdirCapture>()`, keyed
+     `` `${typeof messageID === "string" ? messageID : ""}\u0000${id}` `` — both fields are measured
+     on both events, and the pair is what makes a colliding counter suffix harmless. Bounded FIFO at
+     500 (`MAX_CALLS`), evicting oldest-first **silently**: a lost capture is announced at the
+     decision (`cause=no-capture`), which is the surface where it could change a verdict.
+   - Bind `ctx.tool?.hook("execute.before", …)` **after** `ctx.permission.hook("evaluate", …)`, and
+     wrap registration in `try/catch`: a rejecting `hook()` must not abort `setup` and leave the
+     guards unbound. A throw is treated exactly like an absent surface.
+   - Handler: type-check `event.tool === "string"` and `decidesBash`; require a non-empty string
+     `event.id` (otherwise `console.error` + `soleur-opencode\tworkdir-uncapturable\tid=absent` and
+     return — never key the map on `undefined`); then
+     `calls.set(key, resolveWorkdir(event.input, sessionCwd))`. **Never throw** — capture-only.
+   - **Do not delete on consume** and do not re-insert on consume: the measurement establishes one
+     tool event and *two* permission events per call, not that a call is evaluated exactly once, and
+     a re-insert would reset recency and re-order eviction. Call keys are not reused within a
+     message; the FIFO bounds memory.
+   - Permission handler, in order: resolve `action`; **`if (!decidesBash(action)) return;`** before
+     the map is touched; resolve one effective cwd:
+     - `source.type !== "tool"` or a missing/non-string `source.id` → loud `id=absent` → session dir;
+     - no entry → loud `cause=no-capture` (the tool hook did not fire) → session dir;
+     - `kind: "absent"` → session dir, silent (the normal path);
+     - `kind: "usable"` → `entry.path`, and write `workdir-correlated\tcwd=…`;
+     - `kind: "unusable"` → **do not run the guards**. `event.effect = "ask"`,
+       `event.message` names the path and the reason, `console.error` + `workdir-unusable`. Judging
+       in a directory the operator did not ask about is the defect; a prompt is not.
+   - Pass the resolved cwd as the existing `cwd` argument of `decidePermission(action, resources, cwd, …)`
+     — **no new parameter**: that value becomes both the envelope `cwd` and the runner cwd inside
+     `decideBash`. `guardEnvelope` and both guard scripts change only as stated above.
+   - `ScriptRun` gains `error?: string`, filled from `spawnSync`'s `result.error?.code`. `runScript`
+     currently discards it, so a cwd that cannot be entered (`EACCES`, `ENOTDIR`, a directory
+     removed between the check and the spawn) is reported as a moved checkout and tells the operator
+     to re-run an installer that will answer `ok`. `decideBash`'s failure reason branches:
+     when `run.error !== undefined`, say the guard's working directory could not be entered and name
+     it; the moved-checkout sentence is reserved for a spawn that did happen.
+   - Every emitted value that can contain filesystem text (`workdir`, `cwd`, `id`) goes through the
+     existing `field()` before it reaches a TSV line.
+   - Rewrite the module docblock paragraph that says `execute.before` is "deliberately not bound":
+     it is now bound **as a capture**, with the preemption reason retained, and a short invariant
+     block stating capture gate = envelope gate, consume gate = `decidesBash(action)`, never delete
+     on consume, one entry per Bash call.
 2. `plugins/soleur/test/opencode-plugin.test.ts`
-   - Extend `fakeContext()` with a `tool` member that captures `tool:execute.before`; add a
-     `fakeContext({ tool: false })` form for the absent-surface case.
-   - New suite `workdir correlation` with at least: (a) workdir from the tool hook reaches the
-     envelope and the runner cwd, and writes `workdir-correlated`; (b) no workdir → session dir,
-     unchanged, no line; (c) workdir equal to the session dir → identical allow; (d) no
-     `source.id` → session dir **and** a `workdir-uncorrelated` line; (e) id with no capture → same
-     line with `no-capture`; (f) nonexistent workdir → `workdir-unusable` and session dir;
-     (g) eviction of an unconsumed entry writes `workdir-evicted`; (h) a consumed entry evicts
-     silently; (i) an `external_directory` event does not consume, and the following `shell` event
-     still correlates; (j) an absent `ctx.tool` writes `no-tool-hook-surface` once.
+   - Extend `fakeContext()` with a `tool` member that captures `tool:execute.before`; add
+     `fakeContext({ tool: false })` and `fakeContext({ toolRejects: true })` forms.
+   - New suite `workdir correlation`:
+     (a) a workdir from the tool hook reaches both the envelope and the runner cwd, and writes
+     `workdir-correlated`; (b) no workdir → session dir, no line; (c) workdir equal to the session
+     dir → identical envelope, correlated line **present** (pinned, not left to either reading);
+     (d) a **relative** workdir resolves against the session dir; (e) a symlinked workdir is
+     reported as its realpath; (f) no `source.id` → session dir + stderr + `id=absent`; (g) an id
+     with no capture → stderr + `cause=no-capture`; (h) a captured path that no longer exists →
+     `effect = "ask"`, message names the path, `workdir-unusable` written, **no guard spawned**;
+     (i) `action: "bash"` correlates and is decided (alias); (j) an `external_directory` event with
+     the same id does not consume, and the following `shell` event still correlates; (k) two `shell`
+     events for one id both correlate (never delete on consume); (l) same `id`, different
+     `messageID` → the second call does not inherit the first's workdir; (m) an absent `ctx.tool`
+     writes `no-tool-hook-surface` to **stderr** and the log once; (n) a rejecting `tool.hook` does
+     the same and the permission handler is still bound and decides; (o) the capture handler
+     tolerates a non-object input and a non-string `workdir` without throwing and without mutating
+     the event.
    - Every correlation assertion reads the **bytes handed to the guard** (`runs[0].stdin`), not an
      internal variable.
-   - Update the ledger suite (the case in this file that asserts the `tool.execute.before` row): its
-     comment says `tool.execute.before` is "deliberately unbound" and the assertion only checks a row
-     mentions it. After this change the row must be `bind`, so assert the disposition and that the
-     reason says *capture-only* — otherwise the test still passes while no longer testing its stated
-     claim.
+   - Update the ledger suite: the `tool.execute.before` row today sits in the case named for
+     "surfaces that were considered and **rejected**", because it was rejected. Flipping it to
+     `bind` in place would leave a green test whose stated claim is false. **Move** the row's
+     assertions out of that case and add a named case — "the capture-only binding is recorded as a
+     binding, with what it does and does not deliver" — asserting **all three** fields:
+     disposition `bind`, binding `ctx.tool.hook("execute.before")`, and a reason containing
+     *capture-only*.
 3. `.claude/hooks/opencode-dispositions.tsv` — the `tool.execute.before` row changes from
-   `absent-with-reason` to `bind` with reason "capture-only: publishes `input.workdir` for the
-   permission hook to consume by call id; never refuses (a throw here preempts the real ask)".
-   Evidence cites `plugin.ts workdirForCall()` + the correlation test.
+   `absent-with-reason` to `bind`; its **binding column** gains
+   `ctx.tool.hook("execute.before")` (the legend says the column names the call site or `-`); its
+   reason reads "capture-only: publishes `input.workdir` for the permission hook to consume by call
+   key; delivers no decision (a throw here would preempt the real ask)". Because that is a word the
+   legend does not define, extend the legend's `bind` line to say the reason states what is
+   delivered — a decision, or a capture published for another surface — and add the same value to
+   the test's allowed-disposition set in the same edit.
 
 ### Phase 2 — #10820: disclose the absent operator-stage approval gate
 
 1. `plugins/soleur/scripts/sync-opencode-adapter.ts` — inside `instructions()`, after the guards
    paragraph, add a paragraph naming `hooks/operator-stage-approval.sh` as **absent**, with the
-   consequence: the hook is what mints the digest-bound approval receipt a staged `--apply`
-   consumes, so `scripts/lib/operator-script.sh`'s `soleur_op_stage_gate` finds no receipt and exits
-   **75** (`SOLEUR_BOOTSTRAP_APPROVAL_REQUIRED`); where the script is driven from a real TTY the
-   fallback is a bare `tty-ack` confirmation. State that nothing is approved silently.
+   consequence and its **scope**:
+   - the hook is what mints the digest-bound approval receipt a staged `--apply` consumes, so
+     `plugins/soleur/scripts/lib/operator-script.sh`'s `soleur_op_stage_gate` finds no receipt and
+     exits **75** (`SOLEUR_BOOTSTRAP_APPROVAL_REQUIRED`);
+   - the typed-`yes` fallback is gated on `[[ -t 0 && -t 1 ]] && ! soleur_op_in_agent_harness`, and
+     that detector recognises only `CLAUDECODE` / `CLAUDE_CODE_ENTRYPOINT` — **neither is set under
+     OpenCode**, so the arm the harness check exists to close is open here whenever the spawned
+     shell has a pty. Do not describe the fallback as "a human ran it"; describe it as what it is: a
+     terminal confirmation that this harness cannot attribute to a person;
+   - the honest summary: **no receipt can be minted on this harness**; a staged `--apply` refuses
+     rather than approving, and nothing is approved silently.
 2. Regenerate `plugins/soleur/opencode/INSTRUCTIONS.md` with
    `bun plugins/soleur/scripts/sync-opencode-adapter.ts`; never hand-edit.
 3. Re-run `bun plugins/soleur/scripts/sync-opencode-adapter.ts --check` (expect `opencode-adapter ok`).
 4. `.claude/hooks/opencode-dispositions.tsv` — the operator-stage row's evidence gains
    "disclosed in `opencode/INSTRUCTIONS.md` §Hooks and completion" so ledger and matrix agree.
-5. **Operator-surface sweep (read-only).** The gate is named on several surfaces an operator may read
-   before the matrix: `plugins/soleur/skills/operator-bootstrap/SKILL.md`,
-   `plugins/soleur/hooks/hooks.json`, `scripts/lib/operator-script.sh`, ADR-264 and ADR-277. Sweep
-   them with
-   `git grep -n "operator-stage-approval\|SOLEUR_BOOTSTRAP_APPROVAL_REQUIRED" -- <those paths>` and
-   confirm none of them claims OpenCode carries the gate. **No edit to those files in this PR** — a
-   contradiction would be disclosed in the PR body as a follow-up, because widening this diff to the
-   operator-bootstrap skill or an accepted ADR is a different change with its own review.
+5. **Operator-surface sweep (read-only).** The gate is named on surfaces an operator reaches before
+   the matrix: `plugins/soleur/skills/operator-bootstrap/SKILL.md`,
+   `plugins/soleur/hooks/hooks.json`, `plugins/soleur/scripts/lib/operator-script.sh`, ADR-264,
+   ADR-277, `README.md`, `plugins/soleur/README.md`,
+   `plugins/soleur/docs/pages/getting-started.njk`. Sweep with
+   `git grep -n "operator-stage-approval\|SOLEUR_BOOTSTRAP_APPROVAL_REQUIRED" -- <those paths>`
+   (all paths exist; an unmatched pathspec exits 128 and must not be read as "no matches"). The
+   question is falsifiable: **does any surface present the receipt path as harness-neutral, or claim
+   OpenCode mints one?** Expected: the three public pages say the gate "refuses rather than
+   approves" (consistent); `SKILL.md` states the receipt mechanism with no qualification (a
+   contradiction). **No edit to those files in this PR** — the SKILL.md qualifier and the
+   `soleur_op_in_agent_harness` recognition gap are filed as their own issue (Phase 2.6), because
+   changing an operator gate's identity detection is a different change with its own review.
+6. File the tracking issue required by `wg-when-deferring-a-capability-create-a-tracking-issue`:
+   `soleur_op_in_agent_harness()` does not recognise `OPENCODE` (the marker `lib/harness.ts` and
+   `scripts/emit-decision.sh` already use), so the "a terminal is not evidence of a person" guard
+   does not apply on this harness, and
+   `skills/operator-bootstrap/SKILL.md` presents the receipt path as unconditional. Cite ADR-264's
+   honest-threshold paragraph. Record the issue number in the PR body and in `tasks.md`.
 
-### Phase 3 — #10821: amend ADR-245
+### Phase 3 — #10821: amend ADR-245 (and note the hook posture in ADR-291)
 
-Append `## Amendment — 2026-10-22 (#10821)` to
-`knowledge-base/engineering/architecture/decisions/ADR-245-*.md`. The amendment:
-
-- scopes itself to **Decision item 1** ("The supported harness set is Claude Code, Grok Build, Codex
-  and Devin") and to the **§Context** sentence "one plugin tree to four supported harnesses";
-- records that both are **the set at decision time (2026-10-14)**, not a current claim;
-- names the superseding record by ordinal and title: **ADR-291, "Add an OpenCode plugin adapter"**
-  (accepted) — and records that OpenCode **satisfies this ADR's own re-entry criterion**: a
-  `Harness` union member (`opencode` exists) and a generator (`sync-opencode-adapter.ts`). The
-  amendment does not claim ADR-291 restates the supported set; it does not, and that is why the
-  criterion is the bridge between the two records;
-- does **not** rewrite the original text, and does **not** assert a C4 or gate consequence.
-
-The issue also asks whether any other ADR names the set the same way. Verified:
-`git grep -n "Grok Build, Codex" knowledge-base/engineering/architecture/decisions/` returns only
-ADR-245 (**§Context**, **§Decision item 1**) and ADR-291 (its **§Context**, **§Status** parenthetical
-and the "before this adapter" paragraph — all correct as written, because ADR-291 states the
-pre-adapter set and calls its own parenthetical non-exhaustive). No further edit.
+1. **ADR-245** — append `## Amendment — 2026-10-22 (#10821)`, scoped to **Decision item 1** ("The
+   supported harness set is Claude Code, Grok Build, Codex and Devin") and to the **§Context**
+   sentence beginning "Soleur ships one plugin tree to four supported harnesses". The amendment:
+   - records that both are **the set at this record's date (2026-09-23)**, not a current claim;
+   - names the superseding record by ordinal and title: **ADR-291, "Add an OpenCode plugin
+     adapter"** (accepted), and records that OpenCode **satisfies this record's own re-entry
+     criterion**: a `Harness` union member (`opencode` exists) and a generator
+     (`sync-opencode-adapter.ts`). It does not claim ADR-291 restates the supported set — it does
+     not, and that is why the criterion is the bridge;
+   - scopes itself **without restating the four harness names**, so it adds no new statement of the
+     set and the record's occurrence count of the set phrase cannot increase;
+   - does not rewrite the original text and does not assert a C4 or gate consequence.
+2. **ADR-245, inline pointer.** Under Decision item 1's sentence, add
+   `*(Amended 2026-10-22 (#10821): the set recorded here is the set at this record's date; ADR-291
+   added OpenCode under this record's re-entry criterion. See §Amendment.)*` The original sentence
+   is untouched — an annotation, not a rewrite, following the convention the corpus already uses.
+   Without it, the reader who stops at §Decision still reads the stale claim, which is the defect
+   #10821 reports.
+3. **ADR-291** — append `## Amendment — 2026-10-22 (#10819)`, scoped to the §Decision paragraph that
+   records the earlier `tool.execute.before` binding as "withdrawn as measured-false". It records:
+   the surface is now bound **capture-only** (it publishes `input.workdir` for the permission hook
+   to consume by call key); the withdrawal stands for **decisions**, because the only channel there
+   is still a throw; and the decision surface's correctness now depends on that capture having
+   fired, with the degradation announced (`workdir-uncorrelated`) rather than assumed. Original text
+   unchanged.
+4. Verified: `git grep -n "Grok Build, Codex" knowledge-base/engineering/architecture/decisions/`
+   returns only ADR-245 (**§Context**, **Decision item 1**) and ADR-291 (**§Context**, **§Status**
+   parenthetical, the "before this adapter" paragraph). ADR-291's occurrences are correct as
+   written — it states the pre-adapter set and calls its own parenthetical non-exhaustive.
 
 ### Phase 4 — #10822: contributor path and count-free comments
 
-1. `CONTRIBUTING.md` — new `### OpenCode` subsection after `### Grok command naming`, before
-   `## Contributor License Agreement`. Content:
-   - install from the repo root: `bun plugins/soleur/scripts/install-opencode-adapter.ts`
-     (default `~/.config/opencode`, or `--target DIR`);
-   - verify the install: `… install-opencode-adapter.ts --check [--target DIR]`;
-   - after editing a generated input: `bun plugins/soleur/scripts/sync-opencode-adapter.ts` then
-     `… --check`;
-   - commands are bare (`/go`, `/help`, `/sync`, `/version`); skill ids are bare (`plan`, not
-     `soleur:plan`); agents spawn by path id (`engineering/cto`);
+1. `CONTRIBUTING.md` — one routing line above `### Codex` ("Harness setup: Codex and Grok below,
+   OpenCode at the end; Claude Code above"), then a new `### OpenCode` subsection after
+   `### Grok command naming`, before `## Contributor License Agreement`. Content:
+   - **install for branch work:** `bun plugins/soleur/scripts/install-opencode-adapter.ts --target DIR`
+     — lead with `--target`, because the default writes the operator's live `~/.config/opencode` and
+     the installer removes attributed stale stubs without prompting, so a worktree run silently
+     repoints real sessions at feature-branch code;
+   - **verify the install:** `… install-opencode-adapter.ts --check --target DIR`, and what exit 1 +
+     `MISSING`/`STALE`/`EXTRA` mean;
+   - **what is generated and what is not:** edit `plugins/soleur/opencode/plugin.ts` directly (it is
+     never generated); never hand-edit `INSTRUCTIONS.md`, `agents/`, `commands/`, `opencode.json`
+     — run `bun plugins/soleur/scripts/sync-opencode-adapter.ts` then `… --check`;
+   - **re-install after any edit**, including a regeneration: `--check` validates the committed
+     tree, it does not refresh an installed copy, so edited behaviour that "did nothing" is a stale
+     install;
+   - **no CI job checks this tree** — `--check` before pushing is the only gate, not belt-and-braces;
+   - **commands and ids are bare**: `/go`, `/help`, `/sync`, `/version`; skill ids `plan` not
+     `soleur:plan`; agents spawn by path id (`engineering/cto`);
    - **the checkout must stay put**: the installed config points at this tree for skills, routing
-     rules and guard scripts. Moving it makes every guard fail closed (`guard-did-not-run`).
+     rules and guard scripts; moving it makes every guard fail closed (`guard-did-not-run`);
+   - **the durable log**: `SOLEUR_OPENCODE_EVENT_LOG=<path>` arms the TSV event log; unset means the
+     log is not written and only stderr reports a degraded decision;
+   - **verify behaviour**: `cd plugins/soleur && bun test test/opencode-plugin.test.ts`;
+   - **the ledger**: a hook disposition change is part of the same PR
+     (`.claude/hooks/opencode-dispositions.tsv`);
+   - **the absent approval gate**: one line saying a staged `--apply` exits 75 on this harness;
    - link `plugins/soleur/opencode/INSTRUCTIONS.md`.
    The subsection names OpenCode literally (the parity gate's `FOUR_MEMBER_WITHOUT_FIFTH` scan
    covers `CONTRIBUTING.md`).
 2. `plugins/soleur/lib/harness.ts` module header docblock — replace the enumerated
-   "Claude Code, Grok Build, Codex, Devin CLI, or the Cursor CLI" with
-   "maps Soleur workflow invocations to each member of the `Harness` union" (count-free; the union
-   is the authority and includes OpenCode and Antigravity).
+   "Claude Code, Grok Build, Codex, Devin CLI, or the Cursor CLI" with "maps Soleur workflow
+   invocations to each member of the `Harness` union" (count-free; the union is the authority and
+   includes OpenCode and Antigravity).
 3. `plugins/soleur/lib/workflow-fidelity.ts` — in the `pipelineInvocationSuffix` docblock, "silently
    on three of four harnesses" → "silently for any caller that forgot it". The paragraph already
-   names the caller as the subject ("for any caller that forgot it"), so the sentence ends there
-   instead of replacing one harness count with a universal claim about harness behaviour that the
-   file does not establish.
-4. `plugins/soleur/test/components.test.ts` — the comment reading "blocked on the OTHER THREE
-   HARNESSES" → "blocked on the other harnesses that load them"; the comment reading "a real change
-   on three harnesses" → "a real change on those three harnesses". **Not** "every other harness":
-   OpenCode, Cursor and Antigravity do not declare those shim roots, so a universal claim would
-   introduce a new false statement in a fix for false statements. The adjacent "the other three
-   harnesses DO resolve these paths" is left as-is: it sits in the block that names which three, so
-   it is scoped by context and not a total. Comments only; no assertion changes.
+   names the caller as the subject, so the sentence ends there instead of replacing one harness
+   count with a universal claim about harness behaviour that the file does not establish.
+4. `plugins/soleur/test/components.test.ts` — four count phrases, two shapes:
+   - "blocked on the OTHER THREE HARNESSES" → "blocked on the harnesses that load them";
+   - "a real change on three harnesses" → "a real change on those three harnesses";
+   - "the other three harnesses DO resolve these paths" and "the other three do not" → name them:
+     "devin, codex and grok DO resolve these paths" / "devin, codex and grok do not".
+   **Not** "every other harness": OpenCode, Cursor and Antigravity do not declare those shim roots,
+   so a universal claim would introduce a new false statement in a fix for false statements. Naming
+   the three is the durable form: the count cannot stale, and the grep that finds "other three" no
+   longer finds a near-miss a future reader would "fix". Comments only; no assertion changes.
 
 ### Phase 5 — verification and disclosure
 
 1. Focused suite: `cd plugins/soleur && bun test test/opencode-plugin.test.ts
    test/opencode-adapter-drift.test.ts test/harness-claim-parity.test.ts test/harness-tool-map.test.ts`
-   (baseline before the change: 84 pass / 0 fail; expect **≥ 94** after the ≥10 new correlation rows,
-   0 fail). Quote the pass/fail counts in the PR body rather than asserting "green".
+   (baseline before the change: 84 pass / 0 fail). Expect **84 + N pass, 0 fail**, where N is the
+   number of new rows and is stated in the PR body — an exact count, because `≥` is also satisfied
+   by deleting cases elsewhere.
 2. `bun plugins/soleur/scripts/sync-opencode-adapter.ts --check` → `opencode-adapter ok`.
 3. `TARGET=$(mktemp -d)`; `bun plugins/soleur/scripts/install-opencode-adapter.ts --target "$TARGET"`,
    then `… install-opencode-adapter.ts --check --target "$TARGET"` → `opencode-install ok`. The
    `--check` arm writes nothing and reports `MISSING` against an empty target, so the install must
    come first; running `--check` on a bare `mktemp -d` reports a false red.
-4. Mutation pass (see `## Guard Contract`): delete each side of the correlation in a scratch copy,
-   confirm the new suite reddens, restore.
-5. PR body discloses: overlap preflight `rc=2` (not checked), C4 gap (#10866), and that
-   `plugins/soleur/scripts/` is CI-checked only by the fixture-based drift test — no workflow runs
+4. Run the C4 suite (`c4-from-components.test.ts`, `c4-count-parity.test.sh`,
+   `c4-model-freshness.test.sh`) and expect green, because no component is added — asserted rather
+   than waived.
+5. Mutation pass, in a **scratch copy** (`cp -a plugins/soleur` under `/tmp`, `sed -i` there, run,
+   discard; the real tree is never mutated): the six capture/consume mutations in `## Guard
+   Contract`, each shown red with its quoted fail count. If any mutation stays green, the suite is
+   vacuous and the phase is not done.
+6. PR body discloses: overlap preflight `rc=2` (not checked), C4 gap (#10866), the new tracking
+   issue from Phase 2.6, the ADR-291 capture note, the relative-workdir measurement, the
+   `cwd = workdir` default-branch narrowing residual, that stderr visibility in the TUI is
+   **unmeasured** (the log line is the durable record), and that `plugins/soleur/scripts/` is
+   CI-checked only by the fixture-based drift test — no workflow runs
    `sync-opencode-adapter.ts --check` against the committed tree.
 
 ## Files to Edit
@@ -308,6 +427,7 @@ pre-adapter set and calls its own parenthetical non-exhaustive). No further edit
 - `plugins/soleur/opencode/INSTRUCTIONS.md` (regenerated)
 - `.claude/hooks/opencode-dispositions.tsv`
 - `knowledge-base/engineering/architecture/decisions/ADR-245-retire-openhands-gemini-ports-and-prove-codex-devin-discovery-in-ci.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-291-add-an-opencode-plugin-adapter.md`
 - `CONTRIBUTING.md`
 - `plugins/soleur/lib/harness.ts`
 - `plugins/soleur/lib/workflow-fidelity.ts`
@@ -324,7 +444,7 @@ Check ran against 95 open `code-review` issues (two-stage `gh --json` + standalo
 `gh --jq --arg` form is not used).
 
 - #8593 ("#6793 probe gate window is narrower than the silent-truncation property it names") names
-  `plugins/soleur/test/components.test.ts`. **Acknowledge:** this plan's edit there is two comment
+  `plugins/soleur/test/components.test.ts`. **Acknowledge:** this plan's edit there is four comment
   sentences about harness counts; it does not touch the probe gate or its window. #8593 remains
   open.
 
@@ -340,66 +460,91 @@ All other planned paths: no match.
 | 2 | `[issue #10819]` "If a relative dangerous path is allowed: bind `workdir` into `tool_input`/`cwd` … add a `plugin.ts` unit test" | Phase 1 | mapped |
 | 3 | `[issue #10820]` "Add the absent-gate row to whatever source the generator renders the limitations section from, naming the consequence" | Phase 2.1 | mapped |
 | 4 | `[issue #10820]` "Regenerate + re-run the adapter drift gate" | Phase 2.2–2.3, Phase 5.2 | mapped |
-| 5 | `[issue #10821]` "Either add OpenCode to ADR-245's set … or mark it explicitly as the recorded state at decision time" | Phase 3 | mapped |
-| 6 | `[issue #10821]` "Check whether any other ADR names the harness set the same way" | Phase 3 (grep, recorded) | mapped |
-| 7 | `[issue #10822]` "Add an OpenCode subsection to CONTRIBUTING: install from the repo root, `--check` for drift, bare command and bare skill ids, and that the checkout must stay put" | Phase 4.1 | mapped |
-| 8 | `[issue #10822]` "Correct the four comments, or replace the counts with 'every harness'" | Phase 4.2–4.4 | mapped |
-| 9 | `[user directive]` "The CLO-signed legal parenthetical re-pin … remains its own PR, as ruled" | — | descoped — justification: CLO ruling recorded in #10815; touching the seven canonicals forces `TC_VERSION`/`TC_DOCUMENT_SHA`/`LEGAL_DOC_SHAS` re-pins and its own signature path |
-| 10 | `[user directive]` deliver all four in one merged PR | Single PR, Phase 1–5 | mapped |
+| 5 | `[issue #10820]` "Then the marketing clause can be reduced to a link, as the CLO asked" | — | descoped — justification: the clause lives in the CLO-signed canonicals; its re-pin is #10815 by ruling. This PR creates the link target and says so in the PR body |
+| 6 | `[issue #10821]` "Either add OpenCode to ADR-245's set … or mark it explicitly as the recorded state at decision time" | Phase 3.1–3.2 | mapped |
+| 7 | `[issue #10821]` "Check whether any other ADR names the harness set the same way" | Phase 3.4 (grep, recorded) | mapped |
+| 8 | `[issue #10822]` "Add an OpenCode subsection to CONTRIBUTING: install from the repo root, `--check` for drift, bare command and bare skill ids, and that the checkout must stay put" | Phase 4.1 | mapped |
+| 9 | `[issue #10822]` "Correct the four comments, or replace the counts with 'every harness'" | Phase 4.2–4.4 | mapped |
+| 10 | `[user directive]` "The CLO-signed legal parenthetical re-pin … remains its own PR, as ruled" | — | descoped — justification: touching the seven canonicals forces `TC_VERSION`/`TC_DOCUMENT_SHA`/`LEGAL_DOC_SHAS` re-pins and its own signature path |
+| 11 | `[user directive]` deliver all four in one merged PR | Single PR, Phases 1–5 | mapped |
 
 ### Plan-Item Provenance
 
 | Plan item | User words cited (verbatim quote) | Verdict |
 |-----------|-----------------------------------|---------|
-| Phase 1 correlation (`calls` map, effective cwd) | asks 1–2: "bind `workdir` into `tool_input`/`cwd` at `plugin.ts:183-189` and `:272`" | asked |
-| Phase 1 dispositions row | — | inferred — justification: the ledger's row says `tool.execute.before` is "deliberately NOT bound"; shipping the capture leaves a false record that the honesty contract forbids |
-| Phase 1 `ctx.tool` optional + degradation logs | — | inferred — justification: a bounded map or an absent hook surface that degrades to "no workdir → proceed" silently reintroduces the exact hole #10819 reports |
-| Phase 2 generator paragraph + regen | ask 3–4 | asked |
-| Phase 2 ledger evidence cross-reference | — | inferred — justification: #10820 exists because the matrix and the ledger diverged in what they disclose; leaving them uncross-referenced re-opens it |
-| Phase 3 ADR-245 amendment | ask 5–6: "mark it explicitly as the recorded state at decision time" | asked |
-| Phase 4.1 CONTRIBUTING subsection | ask 7 | asked |
-| Phase 4.2–4.4 comments | ask 8: "replace the counts with 'every harness'" | asked |
+| Phase 1 correlation (`calls` map, effective cwd) | asks 1–2: "bind `workdir` into `tool_input`/`cwd`" | asked |
+| Phase 1 `decidesBash` single predicate | — | inferred — justification: the capture gate and the envelope gate answer the same question; two copies is how a wire-name change reopens the hole at one site only |
+| Phase 1 dispositions row | — | inferred — justification: the ledger's row says `tool.execute.before` is "deliberately NOT bound"; shipping the capture leaves a false record the honesty contract forbids |
+| Phase 1 `ctx.tool` optional + guarded registration + degradation lines | — | inferred — justification: an absent or rejecting hook surface, or a bounded map that degrades to "no workdir → proceed", silently reintroduces the exact hole |
+| Phase 1 unusable-workdir `ask` | — | inferred from the stated property (P1): judging in a directory the operator did not ask about is the defect, so the honest answer is a prompt, and `ask` is a measured channel |
+| Phase 1 `runScript.error` | — | inferred — justification: making cwd variable makes an unenterable cwd reachable; without the field the operator is told to re-run an installer that will answer `ok` |
+| Phase 2 generator paragraph + regen | asks 3–4 | asked |
+| Phase 2.4 ledger evidence cross-reference | — | inferred — justification: #10820 exists because matrix and ledger diverged in what they disclose |
+| Phase 2.5 operator-surface sweep | — | inferred — justification: the disclosure is only honest if no faster-reached surface contradicts it |
+| Phase 2.6 tracking issue | — | inferred — justification: `wg-when-deferring-a-capability-create-a-tracking-issue`; a PR-body note is not a deferral |
+| Phase 3 ADR-245 amendment | asks 6–7: "mark it explicitly as the recorded state at decision time" | asked |
+| Phase 3.2 inline pointer | — | inferred — justification: appending alone leaves the clause reading current, which is the defect being fixed |
+| Phase 3.3 ADR-291 note | — | inferred — justification: this PR makes ADR-291's "withdrawn" paragraph partially stale; leaving it is a new false record |
+| Phase 4.1 CONTRIBUTING subsection | ask 8 | asked |
+| Phase 4.2–4.4 comments | ask 9: "replace the counts with 'every harness'" | asked |
 | Phase 5 verification | asks 2, 4 | asked |
 | Plan/tasks artifacts | — | inferred — justification: `plan` Phase 6 requires the plan on disk and `tasks.md` derived from it |
-| #10866 C4 follow-up | — | inferred — justification: C4 completeness mandate found a pre-existing gap that this diff does not create; a deferral without a tracking issue is invisible |
+| #10866 C4 follow-up | — | inferred — justification: a deferral without a tracking issue is invisible |
 
 ### Split Assessment
 
 - Subsystems touched: 4 — `plugins/soleur`, `knowledge-base`, `.claude`, repo root (`CONTRIBUTING.md`)
-- Planned files: 12 (10 edit + 2 create) | Estimated changed lines: ~260
+- Planned files: 13 (11 edit + 2 create) | Estimated changed lines: ~300
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
-- Recommendation: **single PR** — over the subsystem-root threshold by one, under both others.
-  Advisory split offered but overridden: the operator's stated objective is one merged PR closing
-  #10819–#10822; three of the four issues are disclosure edits in different roots (one file each),
-  and splitting would run four CI cycles and four ADR/ledger syncs for ~260 lines of one harness
-  concern. Seam if ever split: #10819 (code + test + ledger) vs #10820–#10822 (prose/records).
+- Recommendation: **single PR** — over the subsystem-root threshold by one, under both others. The
+  operator's stated objective is one merged PR closing #10819–#10822; three of the four issues are
+  disclosure edits in different roots (one file each), and splitting would run four CI cycles and
+  four ADR/ledger syncs for one harness concern.
+- **Isolation, adopted rather than hypothetical:** Phase 1 lands as its own commit, and Phases 2–4
+  depend on nothing in Phase 1. If review finds a defect in the guard change, the disclosure and
+  record fixes re-land ahead of it on that seam without waiting for a second review round.
+  `tasks.md` carries the seam as executable ordering, not prose.
 
 ## Domain Review
 
 ### Engineering
 
-CTO consult — **status: concern, no unresolved blocking finding**. The only genuine technical fork
-("read the workdir at the permission site" vs "publish it from the tool hook") is closed by
-measurement, so the second is the only implementable shape. The CTO's blocking findings are folded
-in: (1) the fail-visible claim no longer rests on an event log that is off by default — every
-degraded path `console.error`s; (2) a sentinel entry per Bash call removes the "no workdir vs lost
-capture" ambiguity; (3) the `workdir-correlated` token now has an emitter; (4) the
-`components.test.ts` "a real change on three harnesses" comment is corrected specifically instead of
-universalised; (5) Phase 5.3 installs before checking. Advisory
-findings also folded: gate capture on `claudeToolName` rather than the literal `shell`; never delete
-on consume; log eviction as informational for consumed entries; pre-check that the workdir exists;
-update the ledger assertion (the case asserting the `tool.execute.before` row); and state that
-`cwd = workdir` is safe for both guards (recorded in the measurement section). CTO also confirmed the
-label must stay `semver:patch` and that review must explicitly cover the guard change.
+CTO consult (Phase 2.5) — **status: concern, no unresolved blocking finding**. The only genuine
+technical fork ("read the workdir at the permission site" vs "publish it from the tool hook") is
+closed by measurement, so the second is the only implementable shape. Folded: (1) the fail-visible
+claim no longer rests on an event log that is off by default — every degraded path
+`console.error`s; (2) a sentinel entry per Bash call removes the "no workdir vs lost capture"
+ambiguity; (3) the `workdir-correlated` token now has an emitter (log-only, by ruling); (4) the
+`components.test.ts` count comment is corrected specifically instead of universalised; (5) Phase 5.3
+installs before checking. Advisory findings folded: gate capture and consume through one
+`decidesBash`; never delete on consume; pre-check that the workdir exists; update the ledger
+assertion; and state what repointing `cwd` does to the destructive guard's default-branch read.
+
+Plan-review panel (7 agents, this revision) folded: the absent-surface degradation becomes stderr;
+registration is guarded and ordered after the permission binding; the unusable-workdir path escalates
+to `ask` instead of judging in the session directory; relative resolution is measured; the `consumed`
+flag and its eviction line are cut; the workdir key carries `messageID`; `source.type` is checked;
+`runScript` keeps `spawnSync.error`; the ADR-245 amendment date is the record's date, not a guess;
+ADR-291 gains a clause-scoped note; the ledger legend and binding column are updated with the row;
+`bind`, not `absent-with-reason`, and the assertion moves out of the rejected-surfaces case; the
+operator-surface sweep has real paths and a falsifiable question; the CONTRIBUTING flow gains
+re-install, test, ledger and `--target`; `components.test.ts` names the three instead of keeping a
+near-miss; and the acceptance criteria stop pinning source shape.
+
+Kept against panel advice, with reasons: the `calls` map rather than a single last-workdir slot
+(interleaved calls), the sentinel entry (P2), and the two-channel announce (stderr **and** log).
 
 ### Product
 
-CPO sign-off — **granted**, with the threshold confirmed as `single-user incident` and four
-corrections applied: the false credential-guard vector is removed (that script reads only
-`tool_input.command`); the impact statement now names the cwd-dependent **deny** class loss
-(`rm -rf *` with `workdir=$HOME`), not just a missed ask; the placeholder `[data / workflow /
-money]` is resolved to `data` with a concrete artifact; and the deliberate residual (fallback to
-the session directory **allows**, loudly) is stated in the section rather than implied away.
+CPO sign-off — **granted** (Phase 2.5), threshold confirmed as `single-user incident`, with four
+corrections applied: the false credential-guard vector is removed; the impact statement names the
+cwd-dependent **deny** class loss; the placeholder `[data / workflow / money]` is resolved to `data`
+with a concrete artifact; and the residual is stated rather than implied away.
+
+Plan-review panel — the second CPO read kept the threshold, corrected the over-claim ("deleted"
+→ the working tree and uncommitted work), asked for the human-facing one-liner in CONTRIBUTING
+(added, Phase 4.1), and required the SKILL.md / `soleur_op_in_agent_harness` gap to carry an issue
+number rather than a PR-body note (Phase 2.6). It did **not** challenge the one-PR scope.
 
 ### Legal
 
@@ -409,19 +554,36 @@ canonical parenthetical) is explicitly excluded by the CLO ruling.
 ## User-Brand Impact
 
 **If this lands broken, the user experiences:** a `shell` call that supplies `workdir` is judged
-against the session directory because the capture was lost, evicted, or unusable. That is not
-merely a missed `ask`: the destructive guard's **deny** class is cwd-dependent, so `rm -rf *` with
-`workdir=$HOME` and envelope `cwd=<checkout>` is allowed with no prompt of any class, and the
-recursive-delete `ask` is lost too. The operator's checkout or home directory is deleted.
+against the session directory because the capture was lost or unusable. That is not merely a missed
+`ask`: the destructive guard's **deny** class is cwd-dependent, so `rm -rf *` with `workdir=$HOME`
+and envelope `cwd=<checkout>` matches no rule and is allowed with no prompt of any class, and the
+recursive-delete `ask` is lost too. The operator's **working tree and everything uncommitted** are
+deleted — `rm -rf *` does not match dotfiles, so `.git` and `~/.ssh` survive and the repository is
+recoverable from the remote.
 
 **If this leaks, the user's data is exposed via:** no new data path is introduced — the exposure
 vector is destruction, not disclosure. A mis-correlated `cwd` changes which paths the destructive
 guard recognises as protected (home, its ancestors, the working directory). The credential guard
-reads only `tool_input.command` and has no cwd-dependent rule, so it cannot be pointed at a
-directory. On an unmatched, evicted, or unusable capture the plan falls back to the session
-directory and **allows**, exactly as before the fix: that residual is deliberate (asking every call
-when no tool surface exists would make the harness unusable) and it is why every fallback is
-`console.error`-loud rather than silent.
+reads `.tool_input.command`/`.tool_name` and has no cwd-dependent rule, so it cannot be pointed at a
+directory. On an absent capture the plan falls back to the session directory and **allows**, exactly
+as before the fix: that residual is deliberate (asking every call when the tool surface never existed
+would make the harness unusable), it is announced on every occurrence, and it is the pre-fix
+behaviour rather than a new one. A *captured but unusable* workdir does not take that residual — it
+prompts.
+
+**Residuals this PR introduces or leaves, named rather than implied:**
+
+- **In-command `cd`.** The guard's contract covers the envelope `cwd` and a literal `cd`/`pushd` it
+  can see in the command; it does not follow a path built at runtime. `cd $HOME && rm -rf *` is
+  judged where the command starts, before and after this change.
+- **The destructive guard's default-branch read follows the new `cwd`.** Repointing it at a workdir
+  inside a repository without `refs/remotes/<remote>/HEAD` narrows its default-branch set to
+  `main`/`master`, so a force-push to another default that was asked about from the session checkout
+  is no longer asked. Disclosed here; not changed, because widening it is a guard-script change.
+- **stderr visibility is unmeasured.** The plugin's `console.error` is the operator-facing channel by
+  construction, but whether the TUI surfaces it was not measured in the probe. Every degraded path
+  therefore also writes the TSV line, and the CONTRIBUTING subsection documents
+  `SOLEUR_OPENCODE_EVENT_LOG` as the durable record.
 
 **Brand-survival threshold:** single-user incident
 
@@ -429,50 +591,51 @@ when no tool surface exists would make the harness unusable) and it is why every
 
 ```yaml
 liveness_signal:
-  what: "`soleur-opencode\tworkdir-correlated` per shell call that applies a captured workdir, and `workdir-uncorrelated` / `workdir-unusable` / `workdir-evicted` on each degraded decision"
-  cadence: "per shell call; plus one `no-tool-hook-surface` line at setup when ctx.tool is absent"
-  alert_target: "none — a local CLI writes to the operator's own log; the line is the record, not an alert"
-  configured_in: "SOLEUR_OPENCODE_EVENT_LOG (unset = no log file; the degraded paths still console.error)"
+  what: "`soleur-opencode\tworkdir-correlated` per shell call that applies a captured workdir, and one of `workdir-uncorrelated cause=absent|no-capture`, `workdir-unusable`, `workdir-uncapturable` on each degraded decision"
+  cadence: "per shell call; plus one `no-tool-hook-surface` at setup when the tool surface is absent or rejects registration"
+  alert_target: "none — a local CLI writes to the operator's own stderr and log; the line is the record, not an alert"
+  configured_in: "SOLEUR_OPENCODE_EVENT_LOG (unset = no log file; every degraded path still console.errors a sentence)"
 error_reporting:
-  destination: "console.error for every degraded correlation (the log file is off by default), plus the event-log line when armed; console.error for the existing guard-run failure"
+  destination: "console.error for every degraded correlation (the log file is off by default), plus the event-log line when armed; the success line is log-only"
   fail_loud: true
 failure_modes:
-  - mode: "workdir captured but the permission event carries no usable call id"
-    detection: "console.error + `soleur-opencode\tworkdir-uncorrelated\tid=absent` on the shell decision"
-    alert_route: "stderr and event log; the decision falls back to the session directory"
-  - mode: "call id present but no capture entry (the tool hook never fired)"
-    detection: "console.error + `soleur-opencode\tworkdir-uncorrelated\tid=…\tno-capture`"
-    alert_route: "stderr and event log; fallback to the session directory — the pre-fix behavior, deliberately loud"
-  - mode: "captured workdir is not an existing directory"
-    detection: "console.error + `soleur-opencode\tworkdir-unusable\tcwd=…`"
-    alert_route: "stderr and event log; session directory used, so a nonexistent cwd is not misreported as `guard-did-not-run`"
-  - mode: "bounded map evicts an entry that was never consumed"
-    detection: "console.error + `soleur-opencode\tworkdir-evicted\tid=…\tworkdir=…`; a consumed entry evicts silently"
-    alert_route: "stderr and event log"
-  - mode: "runtime exposes no tool hook surface"
-    detection: "`soleur-opencode\tno-tool-hook-surface\tworkdir-unavailable` written once at setup"
-    alert_route: "event log; every decision uses the session directory, as before the fix"
-  - mode: "a guard script cannot run (checkout moved, spawn error, timeout)"
-    detection: "existing GUARD_RUN_FAILURE deny path"
-    alert_route: "console.error + effect=deny naming the dead path"
+  - mode: "a shell decision arrives with no usable call id"
+    detection: "`[soleur] …` sentence on stderr + `soleur-opencode\tworkdir-uncorrelated\tid=absent`"
+    remedy: "the decision falls back to the session directory; if this repeats, the runtime stopped populating `source.id` — check the OpenCode version"
+  - mode: "call id present but no capture (the tool hook never fired)"
+    detection: "`[soleur] …` sentence on stderr + `workdir-uncorrelated\tid=…\tcause=no-capture`"
+    remedy: "session directory used — the pre-fix behaviour, deliberately loud; check the OpenCode version and re-run `install-opencode-adapter.ts --check`"
+  - mode: "captured workdir cannot be resolved to an existing, real directory"
+    detection: "`[soleur] …` sentence + `workdir-unusable\tcwd=…`; `effect = ask` with a message naming the path"
+    remedy: "the operator is prompted; nothing is judged in a directory they did not ask about"
+  - mode: "the capture cannot be keyed (no call id on the tool event)"
+    detection: "`[soleur] …` sentence + `workdir-uncapturable\tid=absent` at capture time"
+    remedy: "the following decision reports `cause=no-capture`; both lines point at the runtime's event shape"
+  - mode: "runtime exposes no tool hook surface, or rejects the registration"
+    detection: "one `[soleur] …` sentence on stderr + `soleur-opencode\tno-tool-hook-surface\tworkdir-unavailable` at setup"
+    remedy: "every decision uses the session directory, as before the fix; the permission guards remain bound"
+  - mode: "a guard script cannot run (moved checkout, unenterable cwd, spawn error, timeout)"
+    detection: "existing GUARD_RUN_FAILURE deny path, with the branch naming an unenterable working directory rather than blaming the checkout"
+    remedy: "re-run the installer for a moved checkout; otherwise fix the directory the guard could not enter"
 logs:
   where: "the file named by SOLEUR_OPENCODE_EVENT_LOG (operator-chosen; unset means no log file)"
   retention: "operator's filesystem policy; not a hosted log sink"
 discoverability_test:
-  command: 'grep -c "calls.set(" plugins/soleur/opencode/plugin.ts'
-  expected_output: "1"
+  command: 'grep -c "decidesBash" plugins/soleur/opencode/plugin.ts'
+  expected_output: "4"
 ```
 
 ## Architecture Decision (ADR/C4)
 
-No new architectural decision. The plan **amends an existing ADR** (Phase 3) because ADR-245's
-recorded set is read as current by readers, not because a decision changes: ADR-291 already made
-it. `wg-architecture-decision-is-a-plan-deliverable` is therefore satisfied by delivering the
-amendment in this PR, not by filing a follow-up.
+No new architectural decision. The plan **amends two existing ADRs** (Phase 3) because both records
+now describe a harness set or a hook posture that this repo no longer has — not because a decision
+changes. ADR-291 already made the adapter decision; this PR records its consequence.
+`wg-architecture-decision-is-a-plan-deliverable` is satisfied by delivering both amendments here.
 
 ### C4 views
 
-No C4 impact from this change, checked against all three model files:
+No C4 impact from this change, checked against all three model files **and** run through the C4
+suite rather than waived:
 
 - **External human actors** — founder/operator, product end user, support persona: none added,
   removed, or re-scoped.
@@ -483,36 +646,35 @@ No C4 impact from this change, checked against all three model files:
 - **Containers/data stores** — no container, no store, no network connection is added or changed.
 - **Access relationships** — no relationship changes: the harness still loads the same plugin tree.
 
-No `.c4` edit and no C4 test run are required because no model file changes; the absence of an
-OpenCode element is disclosed above and tracked in #10866.
+No `.c4` edit is required. `c4-from-components.test.ts`, `c4-count-parity.test.sh` and
+`c4-model-freshness.test.sh` are run in Phase 5.4 and expected green, because no component is added.
 
 ## Guard Contract
 
 ### Guard 1 — workdir correlation in the Bash guard envelope
 
-**Property.** A `shell` permission decision is judged against the directory the command will actually
-run in — the per-call `workdir` when one was supplied, the session directory otherwise — and never
-against the session directory when a different `workdir` was supplied.
+**Property.** A `shell` permission decision is judged against the directory the command **starts**
+in — the per-call `workdir` when one was usable, the session directory otherwise — and never against
+the session directory when a different, usable `workdir` was supplied.
 
 **Assembly.** Two hook surfaces, one chokepoint each. `tool.execute.before` is the **only** surface
-carrying `input.workdir`; it records `calls.set(event.id, { workdir, consumed: false })` for every
-call whose `claudeToolName` is `Bash` — including the sentinel entry when there is no workdir.
-Every `permission.evaluate` for `action === "shell"` flows through the single handler in
-`createSetup`, which resolves one effective cwd from `event.source.id` (missing id, missing entry,
-and unusable directory each have their own loud path) and passes it as `cwd` to `decidePermission` —
-the same value becomes the envelope `cwd` and the runner cwd inside `decideBash`, for **both**
+carrying `input.workdir`; it records `calls.set(key, resolveWorkdir(input, sessionCwd))` for every
+call for which `decidesBash` holds — including the sentinel when there is no workdir. Every
+`permission.evaluate` for a Bash action flows through the single handler in `createSetup`, which
+resolves one effective cwd from `event.source` and passes it as `cwd` to `decidePermission` — the
+same value becomes the envelope `cwd` and the runner cwd inside `decideBash`, for **both**
 `BASH_GUARDS`. There is no second envelope constructor and no other cwd writer. `external_directory`
-events reuse the same call id and must not mark the entry consumed.
+events reuse the same call id and cannot consume the entry, because they fail `decidesBash` and the
+handler returns before touching the map.
 
 | # | Mutation (must drive the guard RED) | Why it is derivable from the design |
 |---|--------------------------------------|--------------------------------------|
 | 1 | Delete the capture write in `execute.before` (`calls.set`) | The only source of the value; P1 cannot hold |
-| 2 | Delete the consume (ignore the map → always `sessionCwd`) | The property is about the decision, not the capture |
-| 3 | Consume on any action, not only `shell` | `external_directory` fires first with the same id, so a correct capture still loses the value |
-| 4 | Drop the eviction `console.error` + log for an unconsumed entry | P4: a silent fallback to the session dir is the hole, not a detail |
-| 5 | Drop the `no-tool-hook-surface` line | Guard's own dispatch: with no tool surface every decision silently reverts to the pre-fix behavior while every other row passes |
-| 6 | Record an entry only when a workdir exists (drop the sentinel) | A lookup miss becomes indistinguishable from "no workdir" — the ambiguity the sentinel exists to remove |
-| 7 | Move the lookup to setup time instead of per event | A snapshot at setup certifies a property about a per-call value |
+| 2 | Ignore the map in the consume (always `sessionCwd`) | The property is about the decision, not the capture |
+| 3 | Gate the consume on the literal `"shell"` instead of `decidesBash` | The `bash` alias then captures and never consumes — a silent fallback |
+| 4 | Consume on any action, not only a Bash one | `external_directory` fires first with the same call id, so a correct capture still loses the value |
+| 5 | Delete the entry inside the consume | A second evaluation for the same call falls back to the session directory |
+| 6 | Record an entry only when a workdir is usable (drop the sentinel) | A lookup miss becomes indistinguishable from "no workdir" — the ambiguity the sentinel exists to remove |
 
 **Harness rows.**
 
@@ -522,107 +684,117 @@ events reuse the same call id and must not mark the entry consumed.
 | H2 | Assert a local variable instead of `runs[0].stdin` | Proves the test reads the bytes the canonical guard parses |
 | H3 | **Must PASS:** workdir equal to the session directory | A guard that rejects everything cannot pass this |
 | H4 | **Must PASS:** no workdir at all | Unchanged pre-fix behavior is a permitted input |
+| H5 | **Must PASS:** `action: "bash"` with a captured workdir | The alias must decide *and* correlate |
 
 **Anchor.** The guard scripts are canonical and **unmodified** by this change; the assertions read
 the envelope bytes handed to them. A weakening therefore has to change the bytes the canonical
 script parses (or the script itself, which no diff in this PR touches), not an internal belief the
-suite could be edited to match. The tool-name map and the dispositions ledger are independent
-surfaces that also name the bound hook.
+suite could be edited to match. The `decidesBash` predicate, the tool-name map and the dispositions
+ledger are independent surfaces that also name the bound hook.
 
 ## Acceptance Criteria
 
 1. `plugins/soleur/opencode/plugin.ts` correlates `input.workdir` from `tool.execute.before` into
-   the envelope `cwd` used by both Bash guards, keyed by call id, marked consumed once per `shell`
-   decision and never deleted on consume, with a sentinel entry for calls that carry no workdir —
-   based on measurement §"Measurement record" above. Checkable:
-   `grep -c "calls.set(" plugins/soleur/opencode/plugin.ts` → `1`,
-   `grep -c "calls.delete(" …` → `0` (consumed entries are bounded by the LRU, not deleted), and
-   `grep -c "workdirForCall(" …` → `≥2` (declaration + call site).
+   the envelope `cwd` used by both Bash guards, keyed by `(messageID, id)`, with a sentinel entry
+   for calls that carry no workdir, and with one `decidesBash` predicate answering "is this a Bash
+   call" for the envelope, the capture and the consume. Proven by the behaviour in AC2 and the
+   mutation pass in AC3; **no source-shape grep is an acceptance criterion** — an implementation
+   detail that survives a rename is not a property.
 2. A unit test asserts the **envelope bytes** (`runs[0].stdin`) carry `cwd === workdir` and that
    `workdir-correlated` was written; a second asserts `cwd === sessionDir` on the sentinel path with
-   no degradation line.
-3. Deleting either the capture or the consume reddens the new suite, verified in a scratch copy:
-   each side is removed with `sed -i`, the suite is run and its **quoted fail count** recorded
-   (`not ok` lines), then the copy is discarded — the real tree is never mutated for this check.
-4. **Degraded-correlation paths, one assertion each:** a missing `source.id` (`id=absent`), a
-   missing capture (`no-capture`), and a nonexistent workdir (`workdir-unusable`) each
-   `console.error` **and** write their distinct line **and** fall back to the session directory; an
-   absent `ctx.tool` writes `no-tool-hook-surface` once at setup.
-5. **Eviction, asserted separately from fallback:** evicting an entry that was **never consumed**
-   writes `console.error` + `workdir-evicted`; evicting a **consumed** entry writes nothing. Neither
-   assertion may be folded into the fallback cases — the two mechanisms (bounded map vs. per-call
-   lookup miss) fail independently.
-6. The ledger suite in `plugins/soleur/test/opencode-plugin.test.ts` (the case asserting the
-   `tool.execute.before` row) asserts the row is `bind` and its reason says *capture-only* (the old
-   assertion passes on any mention and no longer tests its stated claim).
-7. `plugins/soleur/opencode/INSTRUCTIONS.md` names `hooks/operator-stage-approval.sh` as absent with
-   the `exit 75` / bare-`tty-ack` consequence, regenerated from
+   no degradation line; a third asserts a **relative** workdir resolves against the session
+   directory and a symlinked one is reported as its realpath.
+3. Each of the six Guard Contract mutations reddens the suite in a scratch copy, with the quoted
+   fail count recorded in the PR body; the real tree is never mutated for this check.
+4. **Degraded-correlation paths, one assertion each:** no usable `source.id` (`id=absent`), no
+   capture (`cause=no-capture`), and an unkeyable capture (`workdir-uncapturable`) each
+   `console.error` a sentence **and** write their distinct line **and** fall back to the session
+   directory; a captured-but-unusable workdir sets `effect = "ask"`, names the path, writes
+   `workdir-unusable`, and spawns no guard; an absent **or rejecting** `ctx.tool` writes
+   `no-tool-hook-surface` to stderr **and** the log once, and leaves the permission handler bound.
+5. The ledger suite asserts **all three** fields of the `tool.execute.before` row — disposition
+   `bind`, binding `ctx.tool.hook("execute.before")`, reason containing *capture-only* — in a case
+   named for the binding, not inside the case named for rejected surfaces; the legend defines what
+   `bind` means when the row delivers a capture rather than a decision.
+6. `plugins/soleur/opencode/INSTRUCTIONS.md` names `hooks/operator-stage-approval.sh` as absent with
+   the `exit 75` consequence, the scoped `tty-ack` statement (the harness detector does not
+   recognise OpenCode), and "no receipt can be minted here"; it is regenerated from
    `plugins/soleur/scripts/sync-opencode-adapter.ts`. Checkable:
-   `grep -c "operator-stage-approval" plugins/soleur/opencode/INSTRUCTIONS.md` → `≥1` **and**
-   `grep -c "operator-stage-approval" plugins/soleur/scripts/sync-opencode-adapter.ts` → `≥1`
-   (a match only in the generated file means it was hand-edited and the next regen reverts it).
+   `grep -c "operator-stage-approval"` and `grep -c "SOLEUR_BOOTSTRAP_APPROVAL_REQUIRED"` are each
+   ≥1 in **both** the generated file and the generator (a match only in the generated file means it
+   was hand-edited and the next regen reverts it).
+7. The operator-surface sweep ran over the eight named paths with `rc=0`, its question ("does any
+   surface present the receipt path as harness-neutral?") answered in writing, and the SKILL.md /
+   `soleur_op_in_agent_harness` gap carries an issue number in the PR body and `tasks.md`.
 8. `bun plugins/soleur/scripts/sync-opencode-adapter.ts --check` exits 0 with `opencode-adapter ok`.
-9. `ADR-245` carries a dated `## Amendment — 2026-10-22 (#10821)` scoped to **Decision item 1** and
-   the **§Context** "four supported harnesses" sentence, naming ADR-291 by ordinal and title and
-   citing ADR-245's own re-entry criterion, with the original text unchanged. Checkable:
-   `grep -c "^## Amendment — 2026-10-22 (#10821)" …` → `1`,
-   `grep -c "ADR-291" …ADR-245-*.md` → `≥1`,
-   `grep -c "Decision item 1" …` → `1`, and the pre-existing count of the set phrase does **not
-   increase** (`git grep -c "Grok Build, Codex" …ADR-245-*.md` unchanged from the branch base) —
-   an amendment adds no new statement of the set as current.
+9. ADR-245 carries (a) `## Amendment — 2026-10-22 (#10821)` scoped to Decision item 1 and the
+   §Context sentence, naming ADR-291 by ordinal and title, citing ADR-245's own re-entry criterion,
+   **without restating the four harness names**, and (b) an inline `*(Amended 2026-10-22 (#10821)…)*`
+   pointer beneath item 1's sentence, with the original text unchanged. ADR-291 carries
+   `## Amendment — 2026-10-22 (#10819)` recording the capture-only binding and stating that the
+   withdrawal stands for decisions. Checkable: `grep -c "^## Amendment — 2026-10-22"`
+   → `1` in ADR-245 and `1` in ADR-291; `git grep -c "Grok Build, Codex"` in **both** files is
+   unchanged from the branch base (an amendment adds no new statement of the set as current).
 10. No other ADR names the set as current: `git grep -n "Grok Build, Codex"
     knowledge-base/engineering/architecture/decisions/` returns only ADR-245 and ADR-291, and each
     occurrence is either ADR-245's retained-at-decision-time text or a correct ADR-291 statement.
-11. `CONTRIBUTING.md` has an `### OpenCode` subsection naming install, `--check`, bare ids, the
-    stay-put requirement, and a link to `opencode/INSTRUCTIONS.md`. Checkable with one multi-pattern
-    scan whose every hit is required:
-    `grep -niE "install-opencode-adapter|--check|bare|stay put|INSTRUCTIONS.md" …` under the
-    `### OpenCode` heading.
-12. `plugins/soleur/lib/harness.ts` no longer enumerates harnesses in its header, and the **stale**
-    counts are gone:
-    `grep -rn "three of four" plugins/soleur/lib plugins/soleur/test` → nothing;
-    `grep -rniE "other three harnesses?|[Aa] real change on three harnesses" plugins/soleur/test/components.test.ts`
-    → **exactly one** hit remains, in the block that enumerates which three (`devin skills list`,
-    `.codex-plugin`, `.grok/config.toml`) and is therefore accurate; the `:1516` "OTHER THREE
-    HARNESSES" is reworded to "the other harnesses that load them" and the `:1628` "a real change on
-    three harnesses" becomes "a real change on those three harnesses", so neither reads as a total.
-    The surviving hit is verified by reading the block, not by pattern alone — universalising it
-    would be a new false claim (OpenCode, Cursor and Antigravity do not load those shim trees).
-13. Focused suite green: `test/opencode-plugin.test.ts`, `test/opencode-adapter-drift.test.ts`,
-    `test/harness-claim-parity.test.ts`, `test/harness-tool-map.test.ts` — **≥ 94 pass / 0 fail**
-    (84-case baseline plus the ≥10 new correlation rows).
-14. The PR body closes #10819, #10820, #10821, #10822, discloses the overlap-preflight `rc=2` and the
-    #10866 C4 gap, and carries a `## Changelog` section; the same disclosures live under a
-    `## Disclosures` heading in `tasks.md` so they survive a lost PR body.
+11. `CONTRIBUTING.md` has an `### OpenCode` subsection covering install **and re-install**,
+    `--check`, bare commands/ids/skill ids, the stay-put requirement, the test command, the ledger
+    obligation, `SOLEUR_OPENCODE_EVENT_LOG`, the absent approval gate, and a link to
+    `opencode/INSTRUCTIONS.md`. Checkable with a heading-bounded scan
+    (`awk '/^### OpenCode/,/^## Contributor License Agreement/'`), each pattern ≥1: install script,
+    `--check`, `bare`, `stay put`, `re-install`, `bun test`, `opencode-dispositions.tsv`,
+    `SOLEUR_OPENCODE_EVENT_LOG`, `exit 75`, `opencode/INSTRUCTIONS.md`.
+12. `plugins/soleur/lib/harness.ts` no longer enumerates harnesses in its header;
+    `grep -rniE "three of four|other three harness" plugins/soleur/lib plugins/soleur/test` returns
+    **nothing** (the `components.test.ts` comments name devin, codex and grok instead of counting),
+    and no comment describes a four-harness total.
+13. Focused suite green with an **exact** count: 84 baseline + N new rows, 0 fail, N stated in the
+    PR body.
+14. The PR body closes #10819, #10820, #10821, #10822, carries a `## Changelog`, and discloses the
+    overlap-preflight `rc=2`, the #10866 C4 gap, the new tracking issue, the ADR-291 note, the
+    relative-workdir measurement, the default-branch narrowing residual, and that stderr visibility
+    is unmeasured. The same disclosures live under a `## Disclosures` heading in `tasks.md` so they
+    survive a lost PR body.
 
 ## Sharp Edges
 
 - **Do not bind `execute.before` as a blocker.** Measured: it fires before `permission.evaluate`;
   a throw preempts a real `ask`. Capture only.
+- **Do not gate capture and consume differently.** One predicate (`decidesBash`); a literal
+  `"shell"` on one side is how the `bash` alias silently keeps the hole.
 - **Do not consume on `external_directory`.** It fires first for the same call id.
 - **Do not treat an empty-map lookup as "no workdir".** Record a sentinel entry per Bash call; the
   miss means the tool hook did not fire and must be loud.
-- **Do not delete on consume.** A retry or re-prompt would fall back to the session directory;
-  mark consumed and let the LRU bound the map.
-- **`console.error` every degraded path.** The event log is unset by default, so a log-only
-  "fail-visible" claim is false in the default configuration.
+- **Do not delete on consume, and do not re-insert on consume.** The first loses a retry's capture;
+  the second silently re-orders the FIFO.
+- **Do not fall back to the session directory when a workdir *was* captured but is unusable.** That
+  is the one case where the operator asked for a different directory and can be told; `ask` is a
+  measured channel.
+- **`console.error` every degraded decision**, and write the log line too — the log is unset by
+  default, so a log-only claim is false in the default configuration; stderr visibility in the TUI
+  is unmeasured, so neither channel alone is enough.
+- **Keep the success line quiet.** `workdir-correlated` is log-only. The generated matrix tells
+  agents to set `workdir`, so the success path is the common one, and a stderr line per call is
+  noise that trains the operator to ignore the loud ones.
 - **The fixture must carry `input.workdir`.** A fake permission event cannot test this fix; the
   value is not on that event.
 - **Do not assert an internal variable.** Read `runs[0].stdin` — the bytes the guard parses.
-- **Do not universalise the `components.test.ts` harness-count comment.** Only devin, codex and grok
-  load those shim trees; "every other harness" would be a new false claim, and the adjacent "the
-  other three harnesses DO resolve these paths" is already scoped by the block that names them.
-- **Never `sed -i` the real tree for the mutation check.** Copy `plugins/soleur` to a scratch
-  directory, mutate there, run the suite there, discard it; a mutation left behind is a silent
-  regression in the diff.
-- **An amendment that restates the set increases the count.** Name ADR-291 and the re-entry
-  criterion in place; do not re-type "Claude Code, Grok Build, Codex and Devin" as current.
+- **Name the three harnesses; never count them.** "devin, codex and grok load these trees" survives
+  the sixth harness and cannot be "fixed" into a false universal by the next reader.
 - **Never hand-edit `plugins/soleur/opencode/INSTRUCTIONS.md`.** Regenerate, then `--check`.
 - **Run the prose gates after doc edits** (`harness-claim-parity`, `harness-tool-map`, drift), not
   just the file's own test; `CONTRIBUTING.md` is inside the parity scan.
 - **Cite ADRs by ordinal + title.** ADR-291's parenthetical lives in §Status, not §Context; ADR-245's
-  amendment must not be phrased as if it rewrote the decision.
-- **No count that will stale.** "Every other harness" survives the sixth harness; "four" does not.
+  amendment must not be phrased as if it rewrote the decision, and its date is the record's
+  (`2026-09-23`), not the amendment's.
+- **Do not restate the harness set inside an amendment.** Quoting it increases the occurrence count
+  the acceptance criterion holds steady, and re-typing it is how the stale claim outlives the fix.
+- **Never `sed -i` the real tree for the mutation check.** Copy `plugins/soleur`, mutate the copy,
+  run there, discard.
+- **`CLAUDE_PROJECT_DIR` now equals the workdir for the guard spawn.** Neither current guard reads
+  it as a project root (both checked), but a future guard that does must not assume it points at the
+  checkout — the envelope `cwd` is the operator's requested directory, and that is the point.
 - **The overlap preflight did not run.** Do not claim the diff is overlap-clear in the PR body.
 - **Do not sweep `AGENTS.md`/`AGENTS.rules.md`** while editing comments: `git add -A` in a user repo
   is forbidden by `hr-never-git-add-a-in-user-repo-agents`.
@@ -633,9 +805,13 @@ surfaces that also name the bound hook.
 |---|---|
 | Read `workdir` from `permission.evaluate.metadata` | Measured: no workdir key on that event; `source` carries only `type`/`messageID`/`id` |
 | Bind `tool.execute.before` as the guard itself | Its only refusal is a throw, which preempts the permission `ask` — a denial is not a prompt |
+| A single "last workdir" slot instead of a map | Interleaved calls would inherit each other's directory; the map is the same two lines |
+| Keep a `consumed` flag and log unconsumed evictions | Its only reader would be the eviction notice, and the decision-time `no-capture` line already reports a lost capture where it could change a verdict |
+| Judge in the session directory when the captured workdir is unusable | It is the defect this PR fixes, applied to the case where the operator explicitly asked for another directory; `ask` is available and measured |
+| Extract `lib/guard-envelope.ts` for the next harness | One consumer today; the contract that needs to survive is the predicate and the invariant block, not the envelope constructor. Revisit on the second carrier |
 | Patch `INSTRUCTIONS.md` directly for #10820 | It is generated and drift-gated; the next regeneration reverts it |
-| Add OpenCode to ADR-245's Decision text in place | Rewrites an accepted record's history; the plan amends with a dated note instead |
-| Correct the "four harness" counts to "six" | The next harness addition stales them again; count-free phrasing is the durable fix |
+| Add OpenCode to ADR-245's Decision text in place | Rewrites an accepted record's history; the plan amends with a dated note plus an inline pointer |
+| Correct the "four harness" counts to "six" | The next harness addition stales them again; naming the three that load the trees is durable |
 | Fold the C4 gap into this PR | A new external element + view includes is its own architectural change and review; filed as #10866 |
 
 ## Out of Scope
@@ -643,7 +819,15 @@ surfaces that also name the bound hook.
 - The CLO-signed legal parenthetical re-pin (`TC_VERSION` / `TC_DOCUMENT_SHA` / `LEGAL_DOC_SHAS`) —
   ruled to be its own PR (#10815).
 - A CI gate that runs `sync-opencode-adapter.ts --check` against the committed tree — the drift test
-  is fixture-based and no workflow runs it on the real tree. Disclosed in the PR body; not fixed here.
+  is fixture-based and no workflow runs it on the real tree. Disclosed in the PR body. Filing it as
+  its own issue is optional; the disclosure is required.
+- `soleur_op_in_agent_harness()` not recognising `OPENCODE`, and the harness-neutral receipt
+  wording in `skills/operator-bootstrap/SKILL.md` — filed as its own issue in Phase 2.6.
+- **The other five `absent-with-reason` ledger rows** (canonical loader additions, the user-visible
+  `systemMessage` hooks, and `bare-root-cwd-guard.sh`) remain undisclosed in the matrix. This PR's
+  P5 claims one gate, not six.
+- The destructive guard's default-branch set narrowing under a repointed `cwd` (named as a residual
+  in `## User-Brand Impact`).
 - The C4 OpenCode element (#10866).
 - OpenCode V1 support.
 
@@ -651,5 +835,5 @@ surfaces that also name the bound hook.
 
 - fix(opencode): judge shell calls against the per-call `workdir` instead of the session directory
 - docs(opencode): name the absent operator-stage approval gate and its fail-closed consequence
-- docs(adr): amend ADR-245's supported-harness set with a dated note naming ADR-291
-- docs: add the OpenCode contributor path and replace stale four-harness counts with count-free phrasing
+- docs(adr): amend ADR-245's supported-harness set and ADR-291's hook posture with dated, clause-scoped notes
+- docs: add the OpenCode contributor path and replace stale harness counts with named or count-free phrasing
