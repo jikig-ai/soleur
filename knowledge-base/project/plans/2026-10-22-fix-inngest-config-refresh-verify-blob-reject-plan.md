@@ -154,7 +154,11 @@ Ranked, each with the evidence for/against and the Phase-0 discriminator:
 ### Phase 0 — no-SSH diagnostic reproduction (dispatch workflow)
 
 Create `.github/workflows/diagnose-inngest-verify.yml` (`workflow_dispatch` only,
-`permissions: contents: read, packages: read`, no environment gate — it mutates nothing):
+`permissions: contents: read, packages: read`, no environment gate — it mutates nothing).
+Per CTO ruling it carries its own `concurrency` group (never shares
+`scheduled-vinngest-digest-freshness`), an explanatory header modeled on
+`web-host-escrow-diagnose.yml`, and a paired shape test mirroring
+`plugins/soleur/test/web-host-escrow-diagnose-workflow.test.sh`:
 
 1. `docker/login-action` to `ghcr.io` with `${{ github.actor }}`/`${{ github.token }}` (the
    vinngest-digest-freshness precedent), `docker pull ghcr.io/jikig-ai/soleur-inngest-config@sha256:4e17987c…`,
@@ -197,7 +201,9 @@ future `reason=signature` row, so it takes `digest` as a workflow input defaulti
 In `inngest-config-refresh.sh` (the templatefile-embedded script in `cloud-init-inngest.yml`):
 
 1. Replace `>/dev/null 2>&1` on the verify `docker run` with stdout kept discarded but stderr
-   captured to `$STATE_DIR/verify.stderr` (bounded: `head -c 4096`, mode 0600).
+   captured to `$STATE_DIR/verify.stderr` (bounded: `head -c 4096`, mode 0600). Capture must wrap
+   the `timeout` invocation — not live inside it — so an rc=124 kill still lands the partial
+   stderr for the `timeout` classifier arm.
 2. Classify the stderr into a bounded `detail=` token emitted on the `VERIFY_FAIL` row:
    `flag-newbundle` (`only supported with --new-bundle-format`), `tlog` (`log inclusion|tlog|
    rekor`), `identity` (`identity|SAN|issuer`), `chain` (`certificate chain|x509`), `timeout`
@@ -289,7 +295,9 @@ In `apps/web-platform/infra/inngest-config-refresh.test.sh`:
   existing S/F row weakened.
 - [ ] AC5: `inngest-config-drift.yml`'s `_summ_row` surfaces `detail=` on a fixture row.
 - [ ] AC6: Host replace run completes; post-replace ticks emit zero `reason=signature` VERIFY_FAIL
-  rows for the promoted digest within the first hour (off-box query, no SSH).
+  rows for the promoted digest within the first hour (off-box query, no SSH). Under the
+  `Verified OK` Phase-1 branch (capture-only fix) this re-scopes per CTO ruling: success is
+  `detail=` populated and actionable on the next failing tick, not zero VERIFY_FAIL rows.
 - [ ] AC7: Soak: zero `reason=signature` VERIFY_FAIL rows for ≥24h post-replace — enrolled via
   `scripts/followthroughs/inngest-verify-clean-10390.sh` + the tracker directive + sweeper wiring.
 - [ ] AC8: ADR-135 addendum + PIR committed; PIR `## Follow-ups` filed as issues.
