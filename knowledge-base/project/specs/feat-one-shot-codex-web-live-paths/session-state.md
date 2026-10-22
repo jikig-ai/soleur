@@ -40,6 +40,9 @@
 - One `apply_patch` hunk for the learning file omitted a `+` prefix and was rejected without changing the file; the patch was reread and applied correctly.
 - An inspection guessed the affected runner lived at `scripts/test-all-affected.sh`; that path does not exist. The failing regression was traced through the tracked `scripts/test-all-affected.test.sh` fixture and current main's fix.
 - A PR-check `jq` filter had incorrect pipeline precedence and tried to index a string; parenthesizing the name predicates fixed the query. The unfiltered `gh pr checks --watch` repeated the full check list and exceeded the output budget; it was stopped and replaced with bounded status queries.
+- `gh pr view --json ... checks` returned `Unknown JSON field`; the supported field is `statusCheckRollup`. Recovered using the field list from the CLI error; the existing field-query guidance is updated in `knowledge-base/project/learnings/build-errors/2026-09-28-worktree-paths-and-issue-body-pretool-hook.md`.
+- The initial pre-existing-CI issue command was blocked because it omitted the required milestone and attempted to write the body and create the issue in one shell call. Followed the separate-body-file and filing-exit contract, filed #10880, and verified it is OPEN.
+- `python -m ruff` failed because Ruff is not installed in this Python environment; the isolated `uvx --from ruff ruff` invocation passed, per the existing qualification-path learning.
 
 ## Verification as of 2026-09-27
 
@@ -2644,3 +2647,11 @@
   agent recovered by reading the installed canonical path at
   `plugins/soleur/local/codex/INSTRUCTIONS.md`. Future review prompts use the
   canonical file path.
+
+### CodeQL boundary continuation — 2026-10-23
+
+- Added `tls_proxy_from_receipts()` to construct the fixed-destination `TLSProxy` only after `namespace_recipe()` validates the owned network and Kong receipts. Its regression changes the valid observed Kong IP and asserts the proxy follows that receipt, keeps port 8000 across adversarial origin-form paths, and refuses a mismatched receipt. Existing HTTPS listener tests assert fixed-IP forwarding and refusal of unsafe response-header bytes before forwarding.
+- The focused namespace/TLS suite passes 12/12. `python -m py_compile`, Ruff via `uvx`, `git diff --check`, and the complete offline `scripts/lib/codex-qualification.test.sh` wrapper pass. Exact-head CodeQL reanalysis is still required; the three alerts on 869f098 are not dismissed.
+- The CTO addendum is preserved as `CodeQL alerts 288–292 in qualification boundaries-r` in `decision-challenges.md`. The remaining disposition depends on the new exact-head CodeQL result.
+- CI at 869f098 reports the intentional draft aggregate (`draft: full battery owed at ready`) and a separate mainline-preexisting failure in `cloud-init-inngest-bootstrap.test.sh` Guard A (`vector.toml` differs from the pinned `vinngest-v1.1.57` carrier). The main-based failure is tracked in OPEN issue #10880. Do not attribute that failure to the Codex qualification code.
+- `origin/main` is two commits ahead of this branch. PR #9051 remains OPEN/draft, auto-merge off; the exact-head rerun, resync, full review, QA, preflight, recovery/qualification, and legal/provider gates remain pending.

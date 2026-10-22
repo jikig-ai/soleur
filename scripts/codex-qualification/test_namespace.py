@@ -1,7 +1,7 @@
 """Synthetic namespace receipts refuse aliases and isolation declarations as proof."""
 import unittest
 from api_policy import Policy
-from namespace import Refused, namespace_recipe, exact_dns_reply
+from namespace import Refused, namespace_recipe, exact_dns_reply, tls_proxy_from_receipts
 from prepare import browser_contract
 import struct
 
@@ -46,6 +46,27 @@ class Namespace(unittest.TestCase):
                             **self.kong['NetworkSettings']['Networks'], 'foreign': {}}}}]:
             with self.assertRaises(Refused):
                 namespace_recipe(self.policy, self.network, changed, self.hostname)
+
+    def test_tls_proxy_uses_only_the_registered_kong_receipt_endpoint(self):
+        network = {**self.network,
+                   'Containers': {'b' * 64: {'IPv4Address': '172.28.5.4/24'}}}
+        kong = {**self.kong,
+                'NetworkSettings': {'Networks': {'fixture-internal': {
+                    'NetworkID': 'd' * 64, 'IPAddress': '172.28.5.4'}}}}
+        proxy = tls_proxy_from_receipts(self.policy, network, kong, self.hostname)
+
+        self.assertEqual((proxy.upstream_ip, proxy.upstream_port), ('172.28.5.4', 8000))
+        for target in ('/fixture?next=https://foreign.invalid/',
+                       '/https://foreign.invalid:443/path',
+                       '/%2F%2Fforeign.invalid:443/path'):
+            admitted = proxy.admit('GET', target, [('Host', self.hostname)])
+            self.assertEqual(admitted, target)
+            self.assertEqual((proxy.upstream_ip, proxy.upstream_port), ('172.28.5.4', 8000))
+
+        with self.assertRaises(Refused):
+            tls_proxy_from_receipts(self.policy, network,
+                                    {**self.kong, 'NetworkSettings': {'Networks': {}}},
+                                    self.hostname)
 
     def packet(self, hostname, kind=1):
         labels = b''.join(bytes([len(part)]) + part.encode() for part in hostname.split('.')) + b'\0'
