@@ -44,6 +44,7 @@ class LocalTLS(unittest.TestCase):
         worker.start()
         try:
             context = client_context(self.material['ca']) if trust else ssl.create_default_context()
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
             with socket.create_connection(listener.getsockname(), timeout=3) as connection:
                 with context.wrap_socket(connection, server_hostname=hostname) as tls:
                     tls.sendall(b'x')
@@ -162,6 +163,19 @@ class LocalTLS(unittest.TestCase):
                                                    {'Host': self.hostname, 'X-Forwarded-Proto': 'https'})
         connection.getresponse.assert_called_once_with()
         response.read.assert_called_once_with(TLSProxy.LIMIT + 1)
+        connection.close.assert_called_once_with()
+
+    def test_actual_https_listener_refuses_upstream_response_header_injection(self):
+        response = Mock(status=200)
+        response.getheaders.return_value = [('X-Synthetic', 'safe\r\nX-Injected: yes')]
+        connection = Mock()
+        connection.getresponse.return_value = response
+        upstream = Mock(return_value=connection)
+        status, payload = self.https_response(('GET /fixture HTTP/1.0\r\nHost: ' + self.hostname +
+                                              '\r\nConnection: close\r\n\r\n').encode(), upstream)
+        self.assertEqual(status, 502)
+        self.assertEqual(payload, b'')
+        response.read.assert_not_called()
         connection.close.assert_called_once_with()
 
     def test_foreign_host_oracle_detects_deleted_handler_admission(self):

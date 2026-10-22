@@ -126,7 +126,12 @@ export async function dispatchCodexConversationToWebSocket(options: CodexConvers
         && (event.payload.status === "completed" || event.payload.status === "failed" || event.payload.status === "cancelled")) {
         terminalStatus = event.payload.status;
       }
-      options.send(mapWebEvent(event));
+      const message = mapWebEvent(event);
+      if (terminalStatus === "completed") {
+        const finalSnapshot = mapWebEvent.takeFinalSnapshot();
+        if (finalSnapshot) options.send(finalSnapshot);
+      }
+      if (message) options.send(message);
     }
     if (terminalStatus === null) {
       throw Object.assign(new Error("Codex stream ended without a terminal status"), { code: "codex_terminal_missing" });

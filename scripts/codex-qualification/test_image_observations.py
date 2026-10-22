@@ -229,7 +229,7 @@ class ImageObservations(unittest.TestCase):
             attempts = [0]
             opened_directories = []
 
-            def record_open(file, flags, mode=0o777, *, dir_fd=None):
+            def record_open(file, flags, mode=0o600, *, dir_fd=None):
                 descriptor = real_open(file, flags, mode, dir_fd=dir_fd)
                 if flags & os.O_DIRECTORY:
                     opened_directories.append(descriptor)
@@ -327,7 +327,7 @@ class ImageObservations(unittest.TestCase):
             real_open = os.open
             swapped = [False]
 
-            def swap_before_leaf_open(file, flags, mode=0o777, *, dir_fd=None):
+            def swap_before_leaf_open(file, flags, mode=0o600, *, dir_fd=None):
                 if file == path.name and dir_fd is not None and not swapped[0]:
                     parent.rename(moved)
                     parent.symlink_to(outside, target_is_directory=True)

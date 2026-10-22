@@ -309,6 +309,15 @@ describe.skipIf(!canRunDatabaseTest)("migration 145 Codex mode SQL on disposable
       const migrationSql = readFileSync(migration, "utf8");
       const update = migrationSql.match(/UPDATE public\.workspace_engine_settings AS settings[\s\S]*?;\n\nCREATE INDEX/);
       expect(update, "migration 145 backfill statement").not.toBeNull();
+      const guard = migrationSql.match(/DO \$\$ BEGIN[\s\S]*?END \$\$;/);
+      expect(guard, "migration 145 fail-closed auth-mode guard").not.toBeNull();
+      runSql(database, `
+        CREATE SCHEMA codex_precheck;
+        CREATE TABLE codex_precheck.workspace_engine_settings (default_engine_id text, default_auth_mode text);
+        INSERT INTO codex_precheck.workspace_engine_settings VALUES ('codex', 'legacy-synthetic-mode');
+      `);
+      expect(() => runSql(database, guard![0].replaceAll("public.", "codex_precheck.")))
+        .toThrow("Migration 145 refused unsupported Codex auth mode; owner choice required");
       const backfill = update![0].replace(/\n\nCREATE INDEX[\s\S]*$/, "").replaceAll("public.", "codex_backfill.");
       const output = runSql(database, `
         CREATE SCHEMA codex_backfill;
@@ -316,7 +325,7 @@ describe.skipIf(!canRunDatabaseTest)("migration 145 Codex mode SQL on disposable
           workspace_id uuid PRIMARY KEY,
           default_engine_id text NOT NULL,
           default_auth_mode text NOT NULL,
-          codex_auth_mode text NOT NULL DEFAULT 'managed'
+          codex_auth_mode text NOT NULL DEFAULT 'managed' CHECK (codex_auth_mode IN ('managed', 'api-key'))
         );
         CREATE TABLE codex_backfill.agent_engine_runs (
           workspace_id uuid NOT NULL,

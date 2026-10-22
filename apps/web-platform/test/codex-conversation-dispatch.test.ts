@@ -105,7 +105,7 @@ describe("Codex conversation dispatch bridge", () => {
     const sent = [] as unknown[];
     const adapter = {
       start: vi.fn(async function* () {
-        yield { runId: "run-1", eventId: "e-1", sequence: 1, payload: { type: "text", text: "hello" } as const };
+        yield { runId: "run-1", eventId: "codex:item:synthetic-item:delta:1", sequence: 1, payload: { type: "text", text: "hello" } as const };
         yield { runId: "run-1", eventId: "e-2", sequence: 2, payload: { type: "status", status: "completed" } as const };
       }),
       dispose: vi.fn().mockResolvedValue(undefined),
@@ -159,6 +159,7 @@ describe("Codex conversation dispatch bridge", () => {
       payload: { type: "status", status: "completed" },
     }]);
     expect(sent).toEqual([
+      { type: "stream", content: "hello", partial: true, answerSnapshot: true, leaderId: "cc_router", conversationId: "conv-1" },
       { type: "stream", content: "hello", partial: true, answerSnapshot: true, leaderId: "cc_router", conversationId: "conv-1" },
       { type: "stream_end", leaderId: "cc_router", conversationId: "conv-1" },
     ]);

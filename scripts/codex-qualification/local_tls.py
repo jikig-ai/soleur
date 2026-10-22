@@ -192,6 +192,10 @@ class TLSProxy:
                     response = connection.getresponse()
                     response_headers = response.getheaders()
                     for name, value in response_headers:
+                        require(isinstance(name, str) and re.fullmatch(r'[!#$%&\'*+.^_`|~0-9A-Za-z-]+', name)
+                                and isinstance(value, str)
+                                and not any(ord(char) < 32 or ord(char) == 127 for char in value),
+                                'Invalid upstream response header refused')
                         if name.lower() == 'location':
                             proxy.redirect(value)
                         require(name.lower() != 'refresh', 'Upstream refresh redirect refused')

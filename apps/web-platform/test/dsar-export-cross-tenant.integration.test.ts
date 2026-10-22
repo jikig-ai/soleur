@@ -66,12 +66,14 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       email: syntheticEmail(),
       password: randomBytes(16).toString("hex"),
       phrase: "",
+      engineRunId: "",
     };
     const userB = {
       id: "",
       email: syntheticEmail(),
       password: randomBytes(16).toString("hex"),
       phrase: "",
+      engineRunId: "",
     };
 
     beforeAll(async () => {
@@ -123,6 +125,33 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           .select("id")
           .single();
         if (!conv) throw new Error("seed conversation insert failed");
+
+        const { data: engineRun, error: engineRunError } = await service
+          .from("agent_engine_runs")
+          .insert({
+            workspace_id: u.id,
+            execution_kind: "conversation",
+            conversation_id: conv.id,
+            engine_id: "codex",
+            auth_mode: "api-key",
+            adapter_version: "synthetic-v1",
+            status: "running",
+            created_by: u.id,
+          })
+          .select("id")
+          .single();
+        if (engineRunError || !engineRun) throw new Error("seed engine run insert failed");
+        u.engineRunId = engineRun.id;
+        const { error: attemptError } = await service.from("agent_engine_attempts").insert({
+          run_id: u.engineRunId,
+          attempt_key: `dsar-cross-tenant-${u.id}`,
+        });
+        if (attemptError) throw new Error("seed engine attempt insert failed");
+        const { error: checkpointError } = await service.from("agent_engine_recovery_checkpoints").insert({
+          run_id: u.engineRunId,
+          checkpoint: { threadId: `synthetic-checkpoint-${u.id}` },
+        });
+        if (checkpointError) throw new Error("seed recovery checkpoint insert failed");
 
         await service.from("messages").insert({
           conversation_id: conv.id,
@@ -182,6 +211,9 @@ describe.skipIf(!INTEGRATION_ENABLED)(
             if (t.table === "audit_byok_use") {
               expect((row as { founder_id: string }).founder_id).toBe(userA.id);
             }
+            if (t.table === "agent_engine_attempts" || t.table === "agent_engine_recovery_checkpoints") {
+              expect((row as { run_id: string }).run_id).toBe(userA.engineRunId);
+            }
           }
         }
 
@@ -190,6 +222,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         const dumped = JSON.stringify(tables);
         expect(dumped).not.toContain(userB.phrase);
         expect(dumped).toContain(userA.phrase);
+        expect(dumped).not.toContain(userB.engineRunId);
       },
       60_000,
     );

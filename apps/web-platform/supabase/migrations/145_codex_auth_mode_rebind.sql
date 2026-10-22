@@ -9,6 +9,19 @@ BEGIN;
 SET LOCAL lock_timeout = '30s';
 SET LOCAL statement_timeout = '5min';
 
+-- Keep owner intent explicit even when this migration is run outside the
+-- pre-migration guard. Never silently convert an unsupported legacy mode.
+DO $$ BEGIN
+  IF EXISTS (
+    SELECT 1 FROM public.workspace_engine_settings AS settings
+     WHERE settings.default_engine_id = 'codex'
+       AND (settings.default_auth_mode IS NULL
+         OR settings.default_auth_mode NOT IN ('managed', 'api-key'))
+  ) THEN
+    RAISE EXCEPTION 'Migration 145 refused unsupported Codex auth mode; owner choice required';
+  END IF;
+END $$;
+
 ALTER TABLE public.agent_engine_attempts
   ADD COLUMN accepted_at timestamptz;
 ALTER TABLE public.workspace_engine_settings

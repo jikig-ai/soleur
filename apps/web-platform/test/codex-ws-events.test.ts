@@ -9,13 +9,22 @@ describe("Codex Web cumulative text", () => {
   const text = (eventId: string, value: string): EngineEvent => ({
     runId: "synthetic-run", eventId, sequence: 1, payload: { type: "text", text: value },
   });
+  function createTestMapper() {
+    let now = 0;
+    const mapper = createCodexWebEventMapper(options, () => now);
+    return Object.assign((event: EngineEvent) => {
+      const frame = mapper(event);
+      now += 100;
+      return frame;
+    }, { takeFinalSnapshot: mapper.takeFinalSnapshot });
+  }
 
   function render(chunks: Array<[string, string]>) {
-    const map = createCodexWebEventMapper(options);
+    const map = createTestMapper();
     let result = applyStreamEvent([], new Map(), { type: "stream_start", leaderId: "cc_router" });
     for (const [eventId, value] of chunks) {
       const frame = map(text(eventId, value));
-      if (frame.type !== "stream") throw new Error("unexpected synthetic text frame");
+      if (!frame || frame.type !== "stream") throw new Error("unexpected synthetic text frame");
       result = applyStreamEvent(result.messages, result.activeStreams, frame);
     }
     return result.messages.at(-1);
@@ -56,7 +65,7 @@ describe("Codex Web cumulative text", () => {
   });
 
   it("converts translated deltas to snapshots without false reasoning steps", async () => {
-    const map = createCodexWebEventMapper(options);
+    const map = createTestMapper();
     const native = (async function* () {
       yield { method: "turn/started", params: { turnId: "synthetic-turn" } };
       for (const delta of ["Hello ", "world"]) {
@@ -66,21 +75,21 @@ describe("Codex Web cumulative text", () => {
     let result = applyStreamEvent([], new Map(), { type: "stream_start", leaderId: "cc_router" });
     for await (const event of translateCodexAppServerStream(native, "synthetic-run")) {
       const frame = map(event);
-      if (frame.type === "stream") result = applyStreamEvent(result.messages, result.activeStreams, frame);
+      if (frame?.type === "stream") result = applyStreamEvent(result.messages, result.activeStreams, frame);
     }
     expect(result.messages.at(-1)).toMatchObject({ content: "Hello world" });
     expect(result.messages.at(-1)?.activity ?? []).toEqual([]);
   });
 
   it("keeps interleaved items separate, including identities containing colons", () => {
-    const map = createCodexWebEventMapper(options);
+    const map = createTestMapper();
     map(text("codex:item:synthetic:a:delta:1", "One "));
     expect(map(text("codex:item:synthetic:b:delta:2", "Two "))).toMatchObject({ content: "One \n\nTwo " });
     expect(map(text("codex:item:synthetic:a:delta:3", "answer"))).toMatchObject({ content: "One answer\n\nTwo " });
   });
 
   it("replaces replay snapshots and seeds subsequent fragments without duplication", async () => {
-    const map = createCodexWebEventMapper(options);
+    const map = createTestMapper();
     map(text("codex:item:synthetic-item:delta:1", "Old "));
     const replay = createCodexReplayEvent(translateCodexPersistedItem({
       type: "agentMessage", id: "synthetic-item", text: "Full answer",
@@ -93,32 +102,92 @@ describe("Codex Web cumulative text", () => {
   });
 
   it("preserves snapshot semantics for injected neutral events and isolates mapper instances", () => {
-    const first = createCodexWebEventMapper(options);
+    const first = createTestMapper();
     first(text("codex:item:synthetic-item:delta:1", "First"));
     expect(first(text("synthetic-neutral-event", "Snapshot"))).toMatchObject({ content: "Snapshot" });
-    expect(createCodexWebEventMapper(options)(text("codex:item:synthetic-item:delta:1", "Next"))).toMatchObject({ content: "Next" });
+    expect(createTestMapper()(text("codex:item:synthetic-item:delta:1", "Next"))).toMatchObject({ content: "Next" });
   });
 
   it("clears retained fragments after terminal lifecycle events", () => {
-    const map = createCodexWebEventMapper(options);
+    const map = createTestMapper();
     map(text("codex:item:synthetic-item:delta:1", "Prior"));
     map({ runId: "synthetic-run", eventId: "synthetic-end", sequence: 2, payload: { type: "status", status: "completed" } });
     expect(map(text("codex:item:synthetic-item:delta:3", "Next"))).toMatchObject({ content: "Next" });
   });
 
   it("bounds aggregate UTF-8 bytes across items and allows an exact-boundary replacement", () => {
-    const map = createCodexWebEventMapper(options);
+    const map = createTestMapper();
     expect(map(text("codex:item:synthetic-item:message", "é".repeat(128 * 1024)))).toMatchObject({ content: "é".repeat(128 * 1024) });
     expect(() => map(text("codex:item:synthetic-other:delta:2", "a"))).toThrow("codex_web_text_limit");
     map(text("codex:item:synthetic-item:message", "short"));
     expect(map(text("codex:item:synthetic-other:delta:3", "a"))).toMatchObject({ content: "short\n\na" });
   });
 
+  it("counts appended delta bytes toward the aggregate UTF-8 limit", () => {
+    const map = createTestMapper();
+    const halfLimit = "a".repeat(128 * 1024);
+    map(text("codex:item:synthetic-item:delta:1", halfLimit));
+    map(text("codex:item:synthetic-item:delta:2", halfLimit));
+    expect(() => map(text("codex:item:synthetic-item:delta:3", "b"))).toThrow("codex_web_text_limit");
+  });
+
   it("bounds item count without evicting earlier answer fragments", () => {
-    const map = createCodexWebEventMapper(options);
+    const map = createTestMapper();
     for (let i = 0; i < 32; i++) map(text(`codex:item:synthetic-${i}:delta:${i + 1}`, "a"));
     expect(() => map(text("codex:item:synthetic-overflow:delta:33", "b"))).toThrow("codex_web_text_limit");
     expect(map(text("codex:item:synthetic-0:delta:34", "b"))).toMatchObject({ content: ["ab", ...Array<string>(31).fill("a")].join("\n\n") });
+  });
+
+  it("coalesces rapid deltas and makes the complete answer available before stream end", () => {
+    let now = 0;
+    const map = createCodexWebEventMapper(options, () => now);
+    expect(map(text("codex:item:synthetic-item:delta:1", "Hello "))).toMatchObject({ content: "Hello " });
+    expect(map(text("codex:item:synthetic-item:delta:2", "world"))).toBeUndefined();
+
+    const end = map({ runId: "synthetic-run", eventId: "synthetic-end", sequence: 3, payload: { type: "status", status: "completed" } });
+    expect(end).toMatchObject({ type: "stream_end" });
+    expect(map.takeFinalSnapshot()).toMatchObject({ type: "stream", content: "Hello world", answerSnapshot: true });
+  });
+
+  it("caps cumulative intermediate snapshot bytes while preserving the final answer", () => {
+    let now = 0;
+    const map = createCodexWebEventMapper(options, () => now);
+    const answer = "a".repeat(256 * 1024);
+    for (let i = 0; i < 32; i++) {
+      expect(map(text("codex:item:synthetic-item:message", answer))).toMatchObject({ type: "stream" });
+      now += 100;
+    }
+    expect(map(text("codex:item:synthetic-item:message", answer))).toBeUndefined();
+    expect(map({ runId: "synthetic-run", eventId: "synthetic-end", sequence: 34, payload: { type: "status", status: "completed" } })).toMatchObject({ type: "stream_end" });
+    expect(map.takeFinalSnapshot()).toMatchObject({ type: "stream", content: answer, answerSnapshot: true });
+  });
+
+  it("bounds unkeyed snapshots and flushes the final neutral answer", () => {
+    let now = 0;
+    const map = createCodexWebEventMapper(options, () => now);
+    const answer = "a".repeat(256 * 1024);
+    for (let i = 0; i < 32; i++) {
+      const frame = map(text("synthetic-neutral-event", answer));
+      if (frame?.type !== "stream") throw new Error("expected neutral snapshot frame");
+      expect(frame.content === answer).toBe(true);
+      now += 100;
+    }
+    expect(map(text("synthetic-neutral-event", answer)) === undefined).toBe(true);
+    expect(map({ runId: "synthetic-run", eventId: "synthetic-end", sequence: 34, payload: { type: "status", status: "completed" } })?.type).toBe("stream_end");
+    const finalSnapshot = map.takeFinalSnapshot();
+    if (finalSnapshot?.type !== "stream") throw new Error("expected final neutral snapshot");
+    expect(finalSnapshot.content === answer && finalSnapshot.answerSnapshot).toBe(true);
+  });
+
+  it("rejects an oversized unkeyed snapshot", () => {
+    const map = createCodexWebEventMapper(options, () => 0);
+    expect(() => map(text("synthetic-neutral-event", "a".repeat(256 * 1024 + 1)))).toThrow("codex_web_text_limit");
+  });
+
+  it("fails visibly after the per-turn text event limit", () => {
+    const map = createCodexWebEventMapper(options, () => 0);
+    for (let i = 0; i < 4096; i++) map(text(`codex:item:synthetic-item:delta:${i + 1}`, "a"));
+    expect(() => map(text("codex:item:synthetic-item:delta:4097", "a"))).toThrow("codex_web_text_limit");
   });
 });
 
