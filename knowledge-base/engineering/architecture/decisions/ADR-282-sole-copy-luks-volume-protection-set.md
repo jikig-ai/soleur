@@ -173,7 +173,13 @@ working assumption for the posture is that they are lost. **Who is affected is u
 jobs were in the store. The default is to treat **all active users** as potentially affected, because `schedule-reminder` persists nothing app-side
 and no per-user list exists. Whether a
 surviving source exists (Inngest Postgres run history, application logs) is open and tracked in #9927; until that is
-verified no one may state a narrower affected set. Who tells them: the repository owner (the founder, the single CODEOWNER) is the incident owner and sends the
+verified no one may state a narrower affected set. **Superseded 2026-10-22 (#9927 C1), as to "is open and tracked in #9927":**
+measured, evidence class **partial**: a candidate source exists (a dedicated Supabase Postgres project with estimated ~937k
+`history` and ~182k `events` rows and a column capable of holding a user reference, `events.event_user`, by name); the
+non-null count and the oldest row were NOT measured, the default of all active users stays, and no narrower set may be
+stated. No row, identifier, email, payload, event body or per-user count was selected, printed, logged or stored. Whether
+any surviving record identifies WHICH users had armed reminders or in-flight jobs was NOT established. Measured on
+2026-10-22 by `scripts/inngest-history-probe.sh round1` against project `pigsfuxruiopinouvjwy`. Who tells them: the repository owner (the founder, the single CODEOWNER) is the incident owner and sends the
 user notice, as a product notice via the owner, after assessing with counsel whether a loss of availability of personal
 data in the store triggers a notification duty (Art. 4(12), 33 and 34; the breach register is
 `knowledge-base/legal/breach-register.md`). Total loss of availability is not necessarily a personal-data breach, so the
@@ -327,3 +333,23 @@ Appended, with one exception to the append-only convention, stated here: the los
 **Correction.** This ADR and the runbook said an `import {}` block "plans as a no-op and passes the HALT". Measured, it does not: with the value supplied through a sensitive variable it plans "1 to import, 1 to add, 0 to change, 1 to destroy", errors on `prevent_destroy`, and (observed on terraform 1.9.8, recorded by the suite as a note and not as an assertion, like the fact that `terraform import` echoes the id) prints the value in the plan text. Neither route avoids the owner-local handling in the runbook.
 
 **Accepted residuals.** This ADR is now in the leg's PR `paths:` list (added by this PR, beside the runbook entry), so an edit to it runs the suite. As read on 2026-10-19, that edit overlaps the open PR 10501, which also edits `infra-validation.yml`; the two hunks are not adjacent. As read on 2026-10-19, the `deploy-script-tests` leg is advisory, not merge-blocking, so a red suite is visible but does not stop a merge; the main-branch health monitor (its own terraform pin is also 1.10.5, as read on 2026-10-19) opens an issue on a red main run, and a registry outage during the suite's `init` would show there as a red run.
+
+## Addendum — 2026-10-22 (#9927 items 6, 8b and C1, measured versus not measured)
+
+Appended. Measurements live in `knowledge-base/project/specs/feat-one-shot-9927-inngest-luks-items-6-8b-c1/measurements.md`; rulings in the sibling `decision-challenges.md`. Evidence classes: measured, documented (not measured), could-not-measure.
+
+| Item | Question | Answer | Evidence class | Date |
+|---|---|---|---|---|
+| 6 | Doppler plan tier | not exposed by the CLI identity | could-not-measure (`cli_exposes_no_plan_field`) | 2026-10-20 |
+| 6 | Version-history retention by tier | Developer 3 days, Team 90 days (pricing page) | documented, not measured | 2026-10-20 |
+| 6 | Oldest entry in the `soleur-inngest/prd` config log | 68 entries, oldest 2026-07-23 (89 days); project created 2026-07-08 | measured | 2026-10-20 |
+| 6 | Rollback scope | per log entry (documented); never run | documented, not measured | 2026-10-20 |
+| 8b | `HCLOUD_TOKEN_READONLY` listed, `HCLOUD_TOKEN` absent in `soleur/prd_terraform` | listed / absent (names only) | measured | 2026-10-20 |
+| C1 | Surviving source for the affected-user list | Inngest Postgres half is a dedicated Supabase project: 14 tables, estimated ~937k `history`, ~182k `events`, ~1.6M `spans` rows, candidate column `events.event_user` (by name) | measured (estimates; names only) | 2026-10-22 |
+| C1 | Non-null count, oldest row, rows tied to lost work, which users | not measured | not measured | 2026-10-22 |
+
+Decisions. Item 6: Route A (Doppler version history) stays "unverified; treat as unavailable"; Route B (Terraform state value) is the planned-on recovery; the loss-mode cell carries an in-cell Superseded marker. Item 8b: the legacy credential arm reads only `HCLOUD_TOKEN_READONLY` and refuses with a named verdict when it is absent or unusable (ADR-241 amendment-log entry of the same date; Site C `scripts/cutover-inngest.sh` deferred to #10664). Item C1: the probe is the only transport (dedicated read-only Management API endpoint, role `supabase_read_only_user`, one pinned project, closed allowlist of literal catalog-metadata queries, output limited to numbers and shape-checked identifiers). Evidence class **partial**: a candidate source exists and is untested; "complete" is unreachable by this probe. The default of treating all active users as potentially affected stays in force, and the ciphertext backup (1b) stays parked.
+
+CLO ruling 2026-10-22: C1 may ship, no stop condition. One published sentence (`docs/legal/data-protection-disclosure.md` section 2.3(o), "no external sub-processor") does not describe the Supabase-hosted run-history half; it predates C1 and is tracked in #10849. Retention and Art. 17 reach of the Postgres history are tracked in #10848.
+
+C4: no change. `inngestPostgres` and its edge from `inngest` already exist in `model.c4`; the probe is a one-off operator tool marked for deletion (SOLEUR-DEBT in the script), not a standing relationship, so no founder-to-Supabase edge is drawn.

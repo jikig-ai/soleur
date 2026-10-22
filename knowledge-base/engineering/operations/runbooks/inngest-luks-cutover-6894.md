@@ -530,6 +530,18 @@ scaffold the report. Who is affected is **unknowable from surviving data**: `sch
 default is to treat **all active users** as potentially affected: no per-user list exists, because `schedule-reminder` persists
 nothing app-side. Whether a surviving source exists (the Inngest Postgres run history, application logs) is open and tracked
 in #9927; until it is verified, do not state a narrower set.
+**Superseded 2026-10-22 (#9927 C1), as to "Whether a surviving source exists ... is open and tracked in #9927":** measured,
+evidence class **partial**. A candidate source exists: the Inngest Postgres half is a dedicated Supabase project with 14
+tables and estimated ~937k `history`, ~182k `events` and ~1.6M `spans` rows (estimates: they support present, never
+absent), and a column capable of holding a user reference (`events.event_user`, by name). The number of non-null rows was
+NOT measured and the oldest row was NOT measured. The default stays in force: treat all active users as potentially
+affected, and do not state a narrower set. Narrowing would need an incident-time row-level reconstruction, which was not
+tested and is separate processing needing its own owner decision. The ciphertext backup (1b) stays parked, and no second
+copy of identifying payloads may be created before an Art. 17 retention and erasure design exists (#10848). No row,
+identifier, email, payload, event body or per-user count was selected, printed, logged or stored. Whether any surviving
+record identifies WHICH users had armed reminders or in-flight jobs was NOT established. Measured on 2026-10-22 by
+`scripts/inngest-history-probe.sh round1` against project `pigsfuxruiopinouvjwy` (record:
+`knowledge-base/project/specs/feat-one-shot-9927-inngest-luks-items-6-8b-c1/measurements.md`).
 **Superseded 2026-10-20 (#9927), as to "the default is all active users":** the default stays, but it is not complete. The
 code read below shows two groups it does not cover: **users who are not currently active** (a founder with a connected GitHub
 installation or an unpaid invoice may be past due or churned yet still have a lost draft card), and **people who are not users
