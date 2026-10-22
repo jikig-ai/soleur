@@ -175,9 +175,9 @@ Adopt option A, as declarative IaC in `infra/github/ruleset-ci-required.tf`:
      new exception, see the 2026-10-09 addendum): a failed
      rules read or an empty required-check set leaves queue mode off for the poll, a failed armed read
      ends the wait for that tick, and a failed checks read counts as idle. A repo with no `merge_queue`
-     rule runs today's code unchanged. `sync-pr-behind.sh --step` and the `pre-merge-rebase.sh` hook are not
-     changed (the hook runs once per `gh pr merge`, not per poll tick; the script's standalone loop gained a guard, see
-     the 2026-10-09 addendum). Accepted residuals: (1) some
+     rule runs today's code unchanged. `sync-pr-behind.sh --step` and the `pre-merge-rebase.sh` hook were not
+     changed by this decision (the hook runs once per `gh pr merge`, not per poll tick; the script's standalone loop gained a guard, see
+     the 2026-10-09 addendum; a flagless `--step` and the hook gained one too, see the 2026-10-20 addendum). Accepted residuals: (1) some
      required contexts post a PASS on `merge_group` without re-running their suites
      (`tenant-integration-required` and `vendor-pin-required`; see each workflow's `merge_group`
      comment), so in queue mode their only real run is the PR-time one against the PR-time base,
@@ -682,6 +682,48 @@ a fresh build. The stall probe threshold stays 45 minutes, so the window between
 to 30 minutes. The Parameters row, the "Stall probe" section and canary item 10 state the new value; dated records
 above (Canary results of 2026-10-04, item 5's measurement text, the 2026-10-09 amendment quotation) are left as
 written. Raise again if a success approaches 75. The live value is verified after the apply on #9454.
+
+### Addendum 2026-10-20 (#9869, #9868): `--step` and the pre-merge hook refuse an armed BEHIND PR on a merge-queue repo
+
+Decision: the two writers the 2026-10-09 addendum left unguarded now carry the same refusal, and the always-injected rule
+states it. One predicate (`queue_wait_eval` in `sync-pr-behind.sh`: the PR is OPEN, GitHub reports BEHIND or UNKNOWN —
+UNKNOWN is recompute lag, DIRTY never —, auto-merge is armed, and `main` has a `merge_queue` rule) serves three callers.
+(1) A FLAGLESS `sync-pr-behind.sh <PR> --step` answers `kind=queue_wait` with exit 14 and nothing fetched, merged or
+pushed; the two Phase 7 fences (ship, merge-pr mirror) pass `--fence` at their single call site, which skips the guard and
+its extra reads entirely, so the fence's own sync arms (expiry fallback, DIRTY-derived BEHIND, no `merge_queue` rule, a
+failed armed read) are unchanged, and both fences tighten their `--help` probe to require `--fence`. The refusal gets a
+code of its own because exit 11 is the fences' uncounted "no sync needed" arm: an OLD pasted fence would loop on it
+silently, whereas 14 reaches its `*)` arm, a loud bounded stop with the script's line above it naming the action. (2) A new
+read-only mode, `--queue-wait`, prints `queue_wait` or `proceed` from ONE `gh pr view --json state,mergeStateStatus,autoMergeRequest`
+snapshot plus the rules read (no GraphQL queue read, nothing written); a failed, hung or unparseable read is `kind=gh`
+exit 4 (fail closed, as in the standalone loop). (3) After its own `--queue-state` read says `not_queued OPEN armed`, the
+`pre-merge-rebase.sh` hook asks `--queue-wait` (`PR_QUEUE_ATTEMPTS=1`, 5 s per read, a 20 s outer wrapper) and skips its
+origin/main merge-and-push on `queue_wait`; `proceed` syncs silently; ANY untrusted answer (non-zero rc, no or several
+verdict lines, a suffix, a hang) falls through to today's sync with a named `cause=queue_wait_unreadable` note on every
+exit path — the hook never blocks on this read. An UNARMED PR still syncs (the first arm's pre-sync is what the hook is
+for). The skip applies to every `gh pr merge` spelling the parser resolves, `--admin` included, and its context says an
+`--admin` merge bypasses the queue and lands the head as pushed (gate it with `admin-merge-ready.sh`). This supersedes
+the 2026-10-09 sentence "`--step` stays the Phase 7 fence's unguarded call" and the Decision 5 residual for these two
+writers. #9868: `hr-pipeline-skills-never-inline-after-go-route` (the one BEHIND statement that survives a context
+compaction) ends "BEHIND→resync main via the Phase 7 poll, except an armed PR on a merge-queue repo (the queue makes it
+current; sync-pr-behind.sh refuses it)", stated on facts and without the `[ship.phase7.queue_wait]` marker (the
+marker-conditioned class is test-banned); it stays in `AGENTS.rules.md` because compaction survival is the point, and its
+body-hash manifest row and a hash-bound weakening ack were regenerated in the same change.
+
+Accepted residuals, stated so they are not rediscovered: (1) `--fence` is accident prevention, not authentication: a
+hand-rolled loop that types it bypasses the guard (a test pins that no instruction surface outside the two fences and
+`--help` names the flag, and that nothing else calls `--step`). (2) The fences pass `--fence`, so the fence's own fail-open
+arms (armed-read flake, rules-read failure, `QUEUE_RULE=0`) still sync by design; the guard catches only callers that are
+not the fence. (3) An OLD pasted fence paired with the NEW script now STOPS the poll with
+`[ship.phase7.sync_failed] … exited 14` plus the script's `kind=queue_wait` line (re-paste the fence from the current
+SKILL.md) — a loud, bounded stop where it previously synced; in-flight sessions hold pasted fences that are never re-read
+from disk, and a NEW fence with an OLD script is stopped by the tightened probe. (4) Spellings the hook's parser does not
+resolve (flag before the number, a URL operand) stay state L and still sync (the T-Q13 limitation). (5) A PR that GitHub
+never enqueues makes the hook skip its push; the fence's queue-wait expiry fallback (BEHIND only) performs the sync. A PR
+that stays UNKNOWN has no writer: the fence's wait, expiry and sync arms key on `OPEN BEHIND`, so the bound is the poll's
+`MAX_POLL_MIN` and the 'Armed and green but never enqueued' recipe in `merge-queue-dequeue.md`. (6) The base is `main`, as everywhere in the script. No C4 change:
+no new actor, system, container or data store, and the access relationships are unchanged; only which local script or hook
+writes a push changes. Rationale and boundaries: `plugins/soleur/skills/ship/references/queue-mode.md`, "Standalone guard".
 
 ## Cost Impacts
 

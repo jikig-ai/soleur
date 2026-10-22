@@ -98,6 +98,8 @@ plugins/soleur/test/fixture-env-adoption.test.sh	knowledge-base/project/learning
 plugins/soleur/test/fixture-env-adoption.test.sh	knowledge-base/project/plans
 plugins/soleur/test/fixture-env-adoption.test.sh	knowledge-base/project/specs
 plugins/soleur/test/generate-kb-index.test.sh	knowledge-base/engineering/architecture/decisions/ADR-174-kb-index-exclusion-supersedes-per-feature-archival.md
+plugins/soleur/test/go-hold-routing.test.sh	knowledge-base/project/plans
+plugins/soleur/test/go-hold-routing.test.sh	knowledge-base/project/specs
 plugins/soleur/test/go-session-gates.test.sh	knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md
 plugins/soleur/test/go-session-gates.test.sh	knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7450-git-root-anchor-untrusted/arm4-probe/arm5-delivered.txt
 plugins/soleur/test/go-session-gates.test.sh	knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7450-git-root-anchor-untrusted/arm4-probe/commands/zzzprobe.md
@@ -167,6 +169,7 @@ scripts/followthrough-varq-ban	knowledge-base/project/specs
 scripts/followthroughs/registry-clientip-alert-7530	knowledge-base
 scripts/followthroughs/registry-clientip-alert-7530	knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-7530.md
 scripts/git-data-reboot-evidence-landed-8210	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md
+scripts/git-data-rehearsal-evidence-8211	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 scripts/guard-vacuity-floor	knowledge-base
 scripts/guard-vacuity-floor	knowledge-base/engineering/architecture/diagrams/model.c4
 scripts/guard-vacuity-floor	knowledge-base/engineering/operations/runbooks/cloudflare-pages-cutover.md
@@ -281,6 +284,7 @@ tests/scripts/scratch-residue	knowledge-base/project/weakness-digest.md
 tests/scripts/sentry-alert-drift-workflow	knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json
 tests/scripts/sentry-monitors-audit-class-d	knowledge-base/legal/article-30-register.md
 tests/scripts/sentry-monitors-audit-class-d	knowledge-base/legal/audits
+tests/scripts/trio-baseline-census	knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md
 tests/scripts/weakness-miner	knowledge-base/project
 tests/scripts/weakness-miner	knowledge-base/project/learnings
 tests/scripts/weakness-miner	knowledge-base/project/weakness-digest.md

@@ -41,11 +41,13 @@ The following workflows filter both label classes out of their input using the
 canonical jq clause (see
 [exclude-label-jq-snippet.md](./exclude-label-jq-snippet.md)):
 
-- `.github/workflows/scheduled-bug-fixer.yml` — per-priority selection loop
+- `apps/web-platform/server/inngest/functions/cron-bug-fixer.ts` — per-priority
+  selection loop (applies the equivalent `ux-audit` / `agent:*` skip in TypeScript
+  rather than the jq text)
 - `.github/workflows/scheduled-daily-triage.yml` — triage prompt's initial
   `gh issue list`
 
-Additionally, `scheduled-bug-fixer.yml` passes
+Additionally, `cron-bug-fixer.ts` passes
 `--exclude-label ux-audit --exclude-label 'agent:*'` to the skill invocation as
 defense-in-depth. The `fix-issue` skill's `Phase 0: Parse arguments` and
 `Phase 1: Read and Validate` short-circuit if the issue carries any excluded

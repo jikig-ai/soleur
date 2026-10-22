@@ -210,7 +210,7 @@ Derive from acceptance criteria. Use Given/When/Then format for logic tests, and
 - Given [precondition], when [action], then [expected result]
 - Given [edge case], when [action], then [expected handling]
 
-Label each scenario's pyramid layer — `unit`, `integration`, or `e2e` — and prefer the lowest layer that exercises the behavior. An `e2e` scenario's test must carry a `pyramid-justified: <reason>` marker at write time (or the PR body a `## Test Pyramid` block).
+Label each scenario's pyramid layer — `unit`, `integration`, or `e2e` — and prefer the lowest layer that exercises the behavior. An `e2e` scenario's test must carry a `pyramid-justified: <reason>` marker at write time (or the PR body a `## Test Pyramid` block). For contracts that must hold for every input, state the properties that must never break — a property-based test generates the input alphabet instead of enumerating examples; label it by its home pyramid layer (usually `unit`).
 
 If the feature rewrites, ports, or replaces a running system, prescribe the differential loop — run old and new side-by-side on generated and replayed inputs with the old system as oracle — and cite [differential-migration-testing.md](${CLAUDE_PLUGIN_ROOT}/skills/plan/references/differential-migration-testing.md).
 
@@ -446,7 +446,7 @@ Translate each acceptance criterion into a testable scenario:
 - Given [precondition], when [action], then [expected result]
 - Given [error condition], when [action], then [graceful handling]
 
-Label each scenario's pyramid layer — `unit`, `integration`, or `e2e` — and prefer the lowest layer that exercises the behavior. An `e2e` scenario's test must carry a `pyramid-justified: <reason>` marker at write time (or the PR body a `## Test Pyramid` block).
+Label each scenario's pyramid layer — `unit`, `integration`, or `e2e` — and prefer the lowest layer that exercises the behavior. An `e2e` scenario's test must carry a `pyramid-justified: <reason>` marker at write time (or the PR body a `## Test Pyramid` block). For contracts that must hold for every input, state the properties that must never break — a property-based test generates the input alphabet instead of enumerating examples; label it by its home pyramid layer (usually `unit`).
 
 If the feature rewrites, ports, or replaces a running system, prescribe the differential loop — run old and new side-by-side on generated and replayed inputs with the old system as oracle — and cite [differential-migration-testing.md](${CLAUDE_PLUGIN_ROOT}/skills/plan/references/differential-migration-testing.md).
 
@@ -704,7 +704,7 @@ per ask, verbatim quote; every plan item cites the user words it answers or is
 
 ## Test Scenarios
 
-Label each scenario's pyramid layer — `unit`, `integration`, or `e2e` — and prefer the lowest layer that exercises the behavior. An `e2e` scenario's test must carry a `pyramid-justified: <reason>` marker at write time (or the PR body a `## Test Pyramid` block).
+Label each scenario's pyramid layer — `unit`, `integration`, or `e2e` — and prefer the lowest layer that exercises the behavior. An `e2e` scenario's test must carry a `pyramid-justified: <reason>` marker at write time (or the PR body a `## Test Pyramid` block). For contracts that must hold for every input, state the properties that must never break — a property-based test generates the input alphabet instead of enumerating examples; label it by its home pyramid layer (usually `unit`).
 
 If the feature rewrites, ports, or replaces a running system, prescribe the differential loop — run old and new side-by-side on generated and replayed inputs with the old system as oracle — and cite [differential-migration-testing.md](${CLAUDE_PLUGIN_ROOT}/skills/plan/references/differential-migration-testing.md).
 

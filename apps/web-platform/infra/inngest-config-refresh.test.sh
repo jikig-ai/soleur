@@ -122,8 +122,8 @@ grep -qF 'PrivateTmp=yes' <<<"$SVC" && fail "S2c: PrivateTmp=yes mis-spelling (w
 _ts="$(printf '%s' "$SVC" | grep -oE 'TimeoutStartSec=[0-9]+' | cut -d= -f2)"
 _pto="$(printf '%s' "$SC" | grep -oE 'REFRESH_PULL_TIMEOUT_S:-[0-9]+' | grep -oE '[0-9]+$' | head -1)"
 _vto="$(printf '%s' "$SC" | grep -oE 'REFRESH_VERIFY_TIMEOUT_S:-[0-9]+' | grep -oE '[0-9]+$' | head -1)"
-[ "$((60 + ${_pto:-0} + ${_vto:-0}))" -lt "${_ts:-0}" ] \
-  && pass || fail "S2c: worst-case tick (60+${_pto:-?}+${_vto:-?}) not under TimeoutStartSec=${_ts:-?}"
+[ "$((60 + 2 * ${_pto:-0} + ${_vto:-0}))" -lt "${_ts:-0}" ] \
+  && pass || fail "S2c: worst-case tick (60+2*${_pto:-?}+${_vto:-?}) not under TimeoutStartSec=${_ts:-?}"
 
 # S3: timer shape — 60 s cadence, enabled on timers.target, persistent.
 for pin in 'OnBootSec=' 'OnUnitActiveSec=60s' 'Persistent=true' 'WantedBy=timers.target'; do
@@ -255,6 +255,16 @@ done
   && pass || fail "S9: verify call still carries a dropped cosign-2.x flag"
 grep -q 'cosign@sha256:57c0e93a' <<<"$SC" \
   && pass || fail "S9: cosign image not the pinned v3.1.1 digest"
+# Defect-2 pins (#10390): the prod default is the ZOT ref — resolved AFTER ZOT_EP (an early
+# resolution would yield a leading-slash ref), staged by an explicit pull before `docker run`.
+grep -qF 'jikig-ai/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870' <<<"$SC" \
+  && pass || fail "S9: COSIGN_IMAGE default not the zot ref"
+grep -qF 'COSIGN_IMAGE:-${ZOT_EP}/jikig-ai/cosign' <<<"$SC" \
+  && pass || fail "S9: COSIGN_IMAGE default not resolved from ZOT_EP"
+grep -qF 'pull "$COSIGN_IMAGE"' <<<"$SC" \
+  && pass || fail "S9: no explicit cosign-image stage pull"
+grep -qF 'member=cosign-image' <<<"$SC" \
+  && pass || fail "S9: cosign pull miss not distinguished (member=cosign-image)"
 grep -q 'IDENTITY_REGEXP.*build-inngest-config-bundle' <<<"$SC" \
   && pass || fail "S9: identity regexp does not name the bundle workflow"
 # Install goes through the allowlisted root helper, never a direct cp/install.
@@ -270,7 +280,9 @@ cat > "$FX/bin/docker" <<'EOF'
 echo "docker $*" >> "$FX_LOG"
 case "$1" in
   login) cat >/dev/null; exit 0 ;;
-  pull)  [ "${FX_FAIL_PULL:-0}" = "1" ] && exit 1; exit 0 ;;
+  pull)  [ "${FX_FAIL_PULL:-0}" = "1" ] && exit 1
+         [ "${FX_FAIL_COSIGN_PULL:-0}" = "1" ] && case "$2" in *cosign*) exit 1 ;; esac
+         exit 0 ;;
   create) echo "fixture-cid"; exit 0 ;;
   cp)    cp "$FX_BUNDLE_TGZ" "$3" 2>/dev/null || exit 1 ;;
   rm)    exit 0 ;;
@@ -347,13 +359,14 @@ run_refresh() {  # env: INNGEST_CONFIG_DIGEST + FX_* fault knobs
     REFRESH_STATE_DIR="$FX/state" \
     REFRESH_ZOT_ENV_FILE="$FX/zot.env" \
     REFRESH_TRUSTED_ROOT="$FX/trusted-root.json" \
-    REFRESH_COSIGN_IMAGE="fixture/cosign" \
+    REFRESH_COSIGN_IMAGE="${FX_COSIGN_SEAM_IMAGE-fixture/cosign}" \
     REFRESH_BUNDLE_REPO="fixture/repo" \
     REFRESH_IDENTITY_REGEXP="^fixture$" \
     REFRESH_NOOP_THROTTLE_S=0 \
     FX_LOG="$FX/calls.log" FX_MARKERS="$FX/markers.log" \
     FX_BUNDLE_TGZ="$FX/bundle.tar.gz" FX_DEST="$FX/dest" FX_NSEEN="$FX/nseen" \
     FX_FAIL_PULL="${FX_FAIL_PULL:-0}" FX_COSIGN_FAIL="${FX_COSIGN_FAIL:-0}" \
+    FX_FAIL_COSIGN_PULL="${FX_FAIL_COSIGN_PULL:-0}" \
     FX_INSTALL_FAIL_AFTER="${FX_INSTALL_FAIL_AFTER:-999}" \
     INNGEST_CONFIG_DIGEST="${INNGEST_CONFIG_DIGEST:-}" \
     ZOT_PULL_TOKEN="${ZOT_PULL_TOKEN:-}" \
@@ -526,9 +539,43 @@ grep -q 'SOLEUR_INFRA_PULL_VERIFY_FAIL reason=pull' "$FX/markers.log" \
 [ "$(cat "$FX/state/applied.version")" = "0" ] && pass || fail "F13: version advanced on pull failure"
 [ "$(ls "$FX/dest" | wc -l)" -eq 0 ] && pass || fail "F13: files installed despite pull failure"
 
+# F14 — no-seam cosign repoint: with --fixture-seams but REFRESH_COSIGN_IMAGE set EMPTY
+# (`:-`-equivalent to absent for the code under test; the prod seam gate unsets it anyway), the zot
+# default must resolve after ZOT_EP and BOTH the stage pull and the verify run must carry
+# the zot.internal:5000/jikig-ai/cosign@sha256:… ref, pull before run (#10390 defect 2).
+reset_fx
+echo 0 > "$FX/state/applied.version"
+mk_bundle 12 "$FX/members"
+FX_COSIGN_SEAM_IMAGE="" INNGEST_CONFIG_DIGEST="$PTR" run_refresh; rc=$?
+[ $rc -eq 0 ] && pass || fail "F14: no-seam cosign run rc=$rc (want 0)"
+CPULL_LN=$(grep -n '^docker pull .*jikig-ai/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870' "$FX/calls.log" | head -1 | cut -d: -f1)
+CRUN_LN=$(grep -n '^docker run .*jikig-ai/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870' "$FX/calls.log" | head -1 | cut -d: -f1)
+[ -n "$CPULL_LN" ] && pass || fail "F14: no zot-ref cosign stage pull in calls.log"
+[ -n "$CRUN_LN" ] && pass || fail "F14: no zot-ref cosign verify run in calls.log"
+{ [ -n "$CPULL_LN" ] && [ -n "$CRUN_LN" ] && [ "$CPULL_LN" -lt "$CRUN_LN" ]; } \
+  && pass || fail "F14: cosign pull does not precede the verify run"
+grep -q 'zot.internal:5000/jikig-ai/cosign@sha256:57c0e93a' "$FX/calls.log" \
+  && pass || fail "F14: cosign ref not resolved through the zot endpoint"
+
+# F15 — cosign stage-pull failure: VERIFY_FAIL reason=pull member=cosign-image (never
+# reason=signature — the pre-fix misattribution), nothing installed, version kept.
+reset_fx
+echo 0 > "$FX/state/applied.version"
+mk_bundle 13 "$FX/members"
+FX_FAIL_COSIGN_PULL=1 INNGEST_CONFIG_DIGEST="$PTR" run_refresh; rc=$?
+[ $rc -eq 1 ] && pass || fail "F15: cosign-pull-fail rc=$rc (want 1)"
+grep -q 'SOLEUR_INFRA_PULL_VERIFY_FAIL reason=pull' "$FX/markers.log" \
+  && pass || fail "F15: no VERIFY_FAIL reason=pull row"
+grep -q 'member=cosign-image' "$FX/markers.log" \
+  && pass || fail "F15: pull failure not attributed to the cosign image"
+! grep -q 'reason=signature' "$FX/markers.log" \
+  && pass || fail "F15: fetch failure misattributed to signature"
+[ "$(cat "$FX/state/applied.version")" = "0" ] && pass || fail "F15: version advanced on cosign pull failure"
+[ "$(ls "$FX/dest" | wc -l)" -eq 0 ] && pass || fail "F15: files installed despite cosign pull failure"
+
 # Anti-vacuity floor — the inngest.test.sh convention: a deleted block must red,
 # not silently pass fewer assertions. Raise it when adding rows.
-MIN_ASSERTIONS=98
+MIN_ASSERTIONS=113
 [ "$passes" -ge "$MIN_ASSERTIONS" ] \
   || { echo "FLOOR: ${passes} assertions < floor $MIN_ASSERTIONS — a block stopped running"; fails=$((fails+1)); }
 

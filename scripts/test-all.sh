@@ -5849,6 +5849,10 @@ if want_scripts; then
   # "the gate looked and the answer is no" (exit 2, NOT YET), keyed on the bracketed token of the
   # gate's verdict line. One arm per member of BOTH token sets, plus the never-0 invariant.
   run_suite "scripts/git-data-reboot-evidence-landed-8210" bash scripts/followthroughs/git-data-reboot-evidence-landed-8210.test.sh
+  # #8211 (T2 build 2): offline harness for the read-only rehearsal evidence collector. Registered EXPLICITLY
+  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). The collector prints the design's section 5 evidence block, so
+  # a regression that prints a zero for a read that did not run, counts a log decoy, or puts a bearer on argv must redden CI.
+  run_suite "scripts/git-data-rehearsal-evidence-8211" bash scripts/followthroughs/git-data-rehearsal-evidence.test.sh
   # #8450's close criterion (actions-queue-tail-8450.sh): PASS only on >=5
   # post-upgrade workflow_run runs with p95 deploy-arm wait < 15 min — never on
   # stale/empty/push-arm/queued-job samples, and never on an unmet precondition
@@ -6217,6 +6221,8 @@ if want_scripts; then
   run_suite "tests/scripts/git-data-root-key-arm" bash tests/scripts/test-git-data-root-key-arm.sh
   run_suite "tests/scripts/git-data-root-token-census" bash tests/scripts/test-git-data-root-token-census.sh
   run_suite "tests/scripts/infra-privileged-tier-census" bash tests/scripts/test-infra-privileged-tier-census.sh
+  # G1 (#9294): the deploy-channel trio census and its expiring (file, name) baseline.
+  run_suite "tests/scripts/trio-baseline-census" bash tests/scripts/test-trio-baseline-census.sh
   # apply-github-infra.yml::apply soleur-infra token shape (#9360): the third consumer of the
   # mint composite gets the shape rows its two siblings carry. tests/scripts/ is not
   # auto-discovered, so this line IS the registration.
