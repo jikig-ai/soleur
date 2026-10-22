@@ -72,6 +72,12 @@ Additional correction-delta findings:
   rebind `review.command_sha256` when testing the tool command hash, use a
   semantically valid tool mutation for the stale-record case, and remove the
   positive-control report before expiry. Assert each intended failure code.
+- **Low — recovery receipt directory can pollute the fixed action directory.**
+  `config_snapshot.py` › `fresh_record_directory()` admitted a nested child of
+  the action directory, creating an unlisted entry before the later census
+  refused. Reject the action directory and descendants before mkdir; test that
+  nested recovery leaves the action tree unchanged and keep the outside-path
+  positive control.
 
 ## Correction status
 
@@ -83,9 +89,10 @@ created; inspection validates the review seal and canonical bytes; report
 rollback failure reports cleanup uncertainty; and tool-result semantic tests
 use valid canonical framing, rebind both command and execution-record hashes,
 use a valid stale-record mutation, and remove the positive-control report before
-asserting expiry. The report-size test uses a stable oversized result. All
-eight findings remain open until independent correction-delta reviews pass at
-a pushed commit.
+asserting expiry. The report-size test uses a stable oversized result.
+`fresh_record_directory()` now rejects the action directory and all descendants
+before creating anything. All nine findings remain open until independent
+correction-delta reviews pass at a pushed commit.
 
 No external origin, account, provider or destructive action occurred during
 these reviews. No actual snapshot preparation or execution is authorized by

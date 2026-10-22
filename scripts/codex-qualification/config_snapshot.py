@@ -838,6 +838,9 @@ def inspect_action(args, *, clock=time.monotonic, utc=time.time):
 def fresh_record_directory(path, manifest, budget):
     """Admit one fresh separate private record directory, never extra action leaves."""
     metadata.base._path(path)
+    action_path = manifest['acquisition_plan']['context']['output_directory']
+    action_parts, recovery_parts = Path(action_path).parts, Path(path).parts
+    ensure(recovery_parts[:len(action_parts)] != action_parts, 'cleanup')
     parent, descriptor = metadata.base._parent(path), None
     try:
         os.mkdir(Path(path).name, mode=0o700, dir_fd=parent)

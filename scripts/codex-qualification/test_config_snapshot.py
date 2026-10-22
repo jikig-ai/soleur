@@ -190,27 +190,48 @@ class Snapshot(unittest.TestCase):
         self.success()
 
     def test_initial_marker_fstat_failure_closes_fd_and_preserves_spent_marker(self):
+        real_fstat, reached = os.fstat, []
+        def fail_marker(fd):
+            try:
+                name = Path(f'/proc/self/fd/{fd}').readlink().name
+            except OSError:
+                name = ''
+            if name == snapshot.MARKER and not reached:
+                reached.append(fd)
+                raise OSError('SYNTHETIC_FSTAT_FAILURE')
+            return real_fstat(fd)
+        with patch.object(os, 'fstat', side_effect=fail_marker), self.assertRaises(snapshot.SnapshotFailure) as caught:
+            self.execute()
+        self.assertTrue(reached)
+        self.assertEqual(caught.exception.stage, 'spent')
+        with self.assertRaises(OSError):
+            real_fstat(reached[0])
+        self.assertTrue((self.root / snapshot.MARKER).exists())
+        self.assertEqual(self.roles, [])
+
+    def test_initial_payload_fstat_failure_closes_fd_and_marks_cleanup_uncertain(self):
         budget = snapshot.Budget(5, clock=lambda: self.now, utc=lambda: self.utc, manifest=self.plan)
         with snapshot.Store(self.plan, budget) as store:
-            real_fstat, real_open = os.fstat, os.open
-            opened = []
-            def record_open(path, *args, **kwargs):
-                fd = real_open(path, *args, **kwargs)
-                if path == snapshot.MARKER:
-                    opened.append(fd)
-                return fd
-            def fail_leaf(fd):
-                if opened and fd == opened[0]:
+            real_fstat, reached = os.fstat, []
+            def fail_payload(fd):
+                try:
+                    name = Path(f'/proc/self/fd/{fd}').readlink().name
+                except OSError:
+                    name = ''
+                if name == snapshot.PAYLOAD and not reached:
+                    reached.append(fd)
                     raise OSError('SYNTHETIC_FSTAT_FAILURE')
                 return real_fstat(fd)
-            with patch.object(os, 'open', side_effect=record_open), patch.object(os, 'fstat', side_effect=fail_leaf):
-                with self.assertRaises(OSError):
-                    store.write(snapshot.MARKER, b'{}\n')
-            self.assertEqual(len(opened), 1)
+            with patch.object(os, 'fstat', side_effect=fail_payload), self.assertRaises(OSError):
+                store.write(snapshot.PAYLOAD, b'private-synthetic')
+            self.assertTrue(reached)
             with self.assertRaises(OSError):
-                real_fstat(opened[0])
-            self.assertIsNone(store.created[snapshot.MARKER])
-            self.assertTrue((self.root / snapshot.MARKER).exists())
+                real_fstat(reached[0])
+            self.assertIsNone(store.created[snapshot.PAYLOAD])
+            self.assertTrue((self.root / snapshot.PAYLOAD).exists())
+            with self.assertRaises(snapshot.SnapshotFailure) as caught:
+                store.remove_created([snapshot.PAYLOAD])
+            self.assertEqual(caught.exception.code, 'cleanup')
 
     def test_outer_deadline_after_spent_operation_keeps_spent_classification(self):
         calls = iter((self.now, self.now + 2))
@@ -378,8 +399,9 @@ class Snapshot(unittest.TestCase):
                 if command_binding:
                     review['command_sha256'] = value['command_sha256']
                 self.write(snapshot.REVIEW, snapshot.sealed({k: v for k, v in review.items() if k != 'self_sha256'}))
-                with self.assertRaises(snapshot.SnapshotFailure):
+                with self.assertRaises(snapshot.SnapshotFailure) as caught:
                     snapshot.inspect_action(self.args, clock=lambda: self.now, utc=lambda: self.utc)
+                self.assertEqual(caught.exception.code, 'binding')
                 self.assertNotIn(snapshot.REPORT, self.names())
         # Preserve a separate stale binding case after semantic negatives.
         self.tool_path.write_bytes(canonical(original) + b'\n')
@@ -389,8 +411,9 @@ class Snapshot(unittest.TestCase):
         self.tool_path.write_bytes(canonical(stale) + b'\n')
         self.write(snapshot.REVIEW, original_review)
         with patch.object(acquisition, '_config_sha256', side_effect=self.digest_seam), \
-                self.assertRaises(snapshot.SnapshotFailure):
+                self.assertRaises(snapshot.SnapshotFailure) as caught:
             snapshot.inspect_action(self.args, clock=lambda: self.now, utc=lambda: self.utc)
+        self.assertEqual(caught.exception.code, 'binding')
         self.tool_path.write_bytes(canonical(original) + b'\n')
         self.write(snapshot.REVIEW, original_review)
         with patch.object(acquisition, '_config_sha256', side_effect=self.digest_seam):
@@ -716,6 +739,21 @@ class Snapshot(unittest.TestCase):
         self.assertEqual(recovery.stat().st_mode & 0o777, 0o700)
         self.assertEqual({path.name for path in recovery.iterdir()}, {snapshot.CLEANUP})
         self.assertEqual((recovery / snapshot.CLEANUP).stat().st_mode & 0o777, 0o600)
+
+    def test_nested_recovery_directory_refuses_before_action_tree_mutation(self):
+        receipt = self.gate()
+        with patch.object(acquisition, '_config_sha256', side_effect=self.digest_seam):
+            report = snapshot.inspect_action(self.args, clock=lambda: self.now, utc=lambda: self.utc)
+        self.args.expected_payload = canonical(receipt['snapshot']).decode()
+        self.args.expected_report = canonical(report['report']).decode()
+        nested = self.root / 'nested-recovery'
+        self.args.recovery_directory = str(nested)
+        before = {path.name: path.read_bytes() for path in self.root.iterdir() if path.is_file()}
+        with self.assertRaises(snapshot.SnapshotFailure) as caught:
+            snapshot.cleanup_action(self.args, clock=lambda: self.now, utc=lambda: self.utc)
+        self.assertEqual(caught.exception.code, 'cleanup')
+        self.assertFalse(nested.exists())
+        self.assertEqual(before, {path.name: path.read_bytes() for path in self.root.iterdir() if path.is_file()})
 
     def test_killed_synthetic_coordinator_orphan_is_reaped_classified_and_not_replayed(self):
         ready_read, ready_write = os.pipe()
