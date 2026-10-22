@@ -137,6 +137,7 @@ The CPU bound is NOT touched: it remains the only instrument for in-C-call cost 
 - **Collision surface vs PR #10851:** all edits land at ~:27-28 (header prose), ~:947-1056 (`row_scan_ops` + call site), ~:2544+ (new `mutate` lines after the existing scan-mutant block), ~:2744-2758 (floor literals). The sibling inserts at old ~2114 and ~2668 and edits ~2740; disjoint hunks, clean merge. If the sibling merges first and shifts line numbers, anchors are content-anchored (`row_scan_ops()`, the `mutate` block tail, the `FLOOR_` literals), not positional.
 - **CPU-bound residual (accepted):** a future mutant whose C cost neither materializes the collections nor clears ~2x the bound could still flake the same way; that class is documented, not expanded — this plan does not relax or remove the bound (P3).
 - **NFR register:** no production surface; NFR impact is CI determinism (a pipeline property, not a register entry).
+- **Precedent-diff (deepen-plan §4.4):** no precedent; pattern is novel — `grep __iter__`/counting-probe across `plugins/soleur/test/` and `scripts/` finds no existing materialization counter; the only `sys.settrace` consumer is this file itself. Reviewers should scrutinize the probe shape directly (it is verified empirically, not inherited).
 
 ## Files to Edit
 
@@ -263,3 +264,11 @@ No cross-domain implications detected — internal test-instrument change on a C
 - PR #10851 (sibling collision map); ADR-276 (merge-group battery authority, sibling's)
 - `knowledge-base/project/learnings/2026-08-09-my-tests-pinned-a-constant-by-indexing-it-and-my-mutants-read-as-survivors.md`; `…/2026-10-13-…-bypass-model…`; `…/2026-07-19-…-self-graded-mutation-battery…`
 - Learnings consulted via grep: mutation-battery, flake and guard-contract corpus under `knowledge-base/project/learnings/`
+
+## Enhancement Summary (deepen-plan, 2026-10-22)
+
+- **Halt gates §4.6–4.12 verified:** User-Brand Impact present (threshold `none` + decision sentence); Observability/Encryption/PAT/UI-wireframe detection does not fire (test-only diff, no `.tf`/`.sql`/UI paths, no PAT-shaped tokens); Guard Contract lint clean (1 entry, ≥3 matrix rows, own-dispatch + second-member + must-PASS harness rows); exactly one live `## Scope Check` with all asks mapped and every `inferred` item justified.
+- **Agent fan-outs (skills/learnings/review seats):** not spawned — this pipeline context has no Task/run_subagent tool. The research the fan-outs would produce was done inline at plan time (SUT walk, mutant mechanics, probe semantics verified by execution, learnings corpus grep). Flagged for the review seat.
+- **Precedent-diff result:** pattern is novel — recorded in Technical Considerations.
+- **Round-1 realism passes (inline):** the plan's negative claims verified — `walk_text` touches neither `index.paths` nor `index.tracked` (read `scripts/ci-pr-affected-replay.py:1123-1173`); zero-SUT-diff is asserted by AC5 against the merge-base (`origin/main...HEAD`, not the moving tip).
+- **Suite baseline measured:** `bash plugins/soleur/test/ci-pr-affected-replay.test.sh` → 712 passed / 0 failed / 298 mutants on this runner (the flake is load-dependent, as diagnosed).
