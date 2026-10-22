@@ -152,41 +152,54 @@ explicit go-ahead that names the command, from the person who owns the budget.
 
 ## 7. The ratchet (S4 index completion PR3a, #10448)
 
-The audit exits 1 on `main` today (a baseline of 1,884 gap pairs over 294 suites on the tree PR3a measured), so a check that simply required the audit to pass could never
+The audit exits 1 on `main` today (294 gap suites on the tree PR3a measured, with 1,884 gap pairs on `4da1673510`; the committed baseline holds whatever
+`wc -l scripts/ci-pr-affected-audit.baseline.tsv` reports, which is those pairs plus the ones this PR's own test text creates), so a check that simply required the audit to pass could never
 be green. `python3 -I scripts/ci-pr-affected-replay.py ratchet` is the audit as a **ratchet**: the live set of `(suite, undeclared tracked path)` pairs, after the `--accept`
 exemptions, must EQUAL the committed shrink-only baseline `scripts/ci-pr-affected-audit.baseline.tsv`, and the baseline may only lose pairs against its base. Its contract
 (exit codes, the order of the checks, the baseline-state table, the formats) is the RATCHET section of `python3 scripts/ci-pr-affected-replay.py --help`; this section is how to
-operate it. What a green ratchet means is the one wording of section 4: literal-name completeness over what the audit reads, necessary but not sufficient.
+operate it. What a green ratchet means is the one wording of section 4: literal-name completeness over what the audit reads, necessary but not sufficient. The
+declared limits of that reading (what the audit cannot see: computed names, comment and heredoc text, glued or generated paths, and the others) are stated as mechanisms in the DECLARED LIMITS section of
+`python3 scripts/ci-pr-affected-replay.py --help`; they are pointed at here and in the ADR-276 amendment, not copied, so two copies cannot drift, and the failure text carries none of them: read a green run against that list.
 
 ### The dark phase
 
 Until PR3b (#10859) the job `affected-index-ratchet` in `.github/workflows/ci.yml` is **advisory**: job-level `continue-on-error: true`, absent from `scripts/required-checks.txt`, the
 canonical ruleset JSON and `infra/github`, and it runs on `pull_request` and `merge_group` only (never on push, so it cannot red the `CI` run that `web-platform-release.yml`
-reads before a deploy). It costs about 3 billed minutes per PR and queue run, docs-only PRs included (ceiling 210 s p95 wall, `timeout-minutes: 5`). How to read a run:
+reads before a deploy). It costs about 3.4 billed minutes per run (a 3 to 4 minute range), about 4,400 minutes a week (about 2.8% of the weekly total), of which about 2,250 on draft pushes (about +11% on each draft push).
+Draft, docs-only and bot PRs are NOT skipped: the job is in the always-on sets `UNGATED_PINNED` and `LIGHT_PINNED`, by ruling (CTO, 2026-10-23), because a `draft-light` condition would skip it on every light draft push and the
+window could then never observe a draft PR or the draft-push datapoint PR3b needs. The stop for this cost is the 30-day trigger of the ADR amendment (item 7), and it lowers the net saving that criterion (c) is measured against.
+Ceilings: 210 s p95 wall, 270 s maximum, `timeout-minutes: 5`; the two ceilings are PROVISIONAL (see the observation log). How to read a run:
 
 - the **marker line** in the job log, the last line the script prints: `SOLEUR_PR_AFFECTED_RATCHET exit=<0|1|2> reason=<token> live=<n> baseline=<n>`;
-- the **annotation** the workflow step emits from the exit code, `::error title=affected-index-ratchet::exit=<1|2> reason=<token>` (a non-success run with no annotation counts as exit 2);
-- the job summary, which carries the full uncapped failure text (the log prints the first 25 entries of each class and a count);
-- the jobs API, `.jobs[] | select(.name == "affected-index-ratchet")` for `conclusion`, `started_at` and `completed_at`. How a failing job-level `continue-on-error` job is reported there is
-  settled by the throwaway canary of PR3a (record the result in the observation log below); until then read the marker line, not the conclusion alone.
+- the **annotation** the workflow step emits from the exit code, `::error title=affected-index-ratchet::exit=<1|2> reason=<token>` (a run that printed no marker is annotated `exit=2 reason=no-marker`, a non-success run with no annotation at all counts as exit 2);
+- the job summary, which carries the fuller failure text (the log prints the first 25 entries of each class and a count);
+- the jobs API, `.jobs[] | select(.name == "affected-index-ratchet")` for `conclusion`, `started_at` and `completed_at`. `continue-on-error` keeps the `pull_request` and `merge_group` RUN conclusions green while the context is not required.
+  How a failing job-level `continue-on-error` job renders on the PR check list and in the jobs API is UNMEASURED until the throwaway canary (plan task 3.5; the result is recorded in the observation log below and replaces this sentence); until then
+  read the marker line, not the conclusion alone.
 
-`oracle-inputs-changed: <files>` in the output (also a `::warning` and a summary line) is a **non-blocking** notice that this diff touches the check's own oracle: `.github/workflows/ci.yml`,
-`scripts/ci-pr-affected-replay.py` or the baseline. Review it as the oracle: run `git show HEAD^1:scripts/ci-pr-affected-replay.py` on the PR tree and compare the verdicts of the base copy and
-the PR copy on the same tree (the check does not run the base copy as the gate, because a PR that legitimately changes the script would then be unmergeable).
+`oracle-inputs-changed: <files>` in the output (also a `::warning` and a summary line) is a **non-blocking** notice that this diff touches the check's own oracle: `scripts/ci-pr-affected-replay.py`, `.github/workflows/ci.yml`, the baseline,
+`plugins/soleur/scripts/lint-ratchet.py`, the accept file, `scripts/lib/test-affected-paths.sh` or `scripts/test-all.sh`. Review it as the oracle, and know what that review is: **no automated control checks that the suite does not read a file an accept row exempts;
+this check does not verify it.** A CODEOWNERS entry routes the review, but no required review exists in this repository's ruleset (verified: only the marketplace repo's ruleset sets `required_approving_review_count`), so the review is
+not an enforced control and PR3b must not claim one. For the replay script and ci.yml, compare the verdicts of the base copy (`git show HEAD^1:scripts/ci-pr-affected-replay.py`) and the PR copy on the same tree; the check does not run the base
+copy of the script as the gate, because a PR that legitimately changes the ratchet logic would then be unmergeable. The helper `plugins/soleur/scripts/lint-ratchet.py` is different: it is loaded from the MERGE-BASE commit, as ADR-290 runs its own ratchet script, so one PR
+cannot weaken the base-resolution helper together with the baseline; a PR that moves that helper must land the move first (a base without the file is exit 2 `internal`). Growth of the accept file is notice-only in PR3a.
 
 | Exit | Reason token | What it means | What to do |
 |---|---|---|---|
 | 0 | `pass` | live equals the baseline and every other check holds | nothing |
 | 1 | `new-pair` | a suite names a tracked path that is not declared, not accepted and not in the baseline | declare or accept it (below); never add a baseline line |
-| 1 | `baseline-deleted` | the baseline file was deleted while pairs are still live | restore it from main; only the strict-zero end state (nothing live) may delete it |
-| 1 | `stale-line` | a baseline line is no longer live (the suite or the path changed), or the file is malformed or holds conflict markers | delete the line the output prints; see the baseline-conflict recipe |
+| 1 | `baseline-deleted` | the baseline file was deleted while pairs are still live | confirm the file really was deleted on your branch (a run that exited 2 or printed partial selector output proves nothing), then restore it: `git checkout origin/main -- scripts/ci-pr-affected-audit.baseline.tsv`; only the strict-zero end state (nothing live) may delete it |
+| 1 | `stale-line` | a baseline line is no longer live (the suite or the path changed), or the file is malformed or holds conflict markers | first confirm the pair is really gone on a clean checkout; if the selector output was partial or this run exited 2, do not prune: rerun. Then delete the line the output prints; see the baseline-conflict recipe |
 | 1 | `baseline-dup`, `baseline-order` | a duplicate line, or the file is not C-locale sorted with a final newline | take main's copy, then the recipe below |
 | 1 | `grown` | the head baseline has a line the base does not (a new suite, or one pair swapped for another) | remove it: a baseline can only lose lines against its base |
 | 1 | `unaudited` | the audit could not read the suite in full | fix the selector row or make its inputs readable |
 | 1 | `star-row`, `stale-accept` | an accept row for a readable suite as a whole, or an accept row the tree no longer backs, or a malformed accept file | delete or correct the accept row |
 | 2 | `floor-*`, `selector-failed`, `selector-timeout` | infrastructure: the selector failed, hung, fell back, printed a short, extra or inconsistent output, or the census read nothing | re-run the job; a reproduction on the same SHA is a defect: report it on #10448 |
+| 2 | `floor-bad-row` | an `AFFECTED_SELECTED` row fails the selector grammar: the selected flag is not `0` or `1`, or the reason is not one of the `_AC_CLASS` literals derived at run time from `scripts/test-all.sh` | a defect in the selector output or in the derivation: report it on #10448; never prune the baseline on this run |
+| 2 | `floor-unreadable` | a tracked input could not be read for a reason other than being absent (a permission or I/O fault) | re-run on a clean checkout; a reproduction is a defect |
+| 2 | `timeout`, `no-marker` | `timeout`: the job was cancelled at its time limit (the observation probe's classification); `no-marker`: the script died before printing a marker line (the workflow annotation only) | re-run; a reproduction on the same SHA is a defect |
 | 2 | `base-unresolved` | `HEAD^1` does not resolve (a root commit or a shallow clone) | fetch more history (the job uses `fetch-depth: 2`) |
-| 2 | `baseline-unreadable`, `internal` | the baseline or accept file could not be read, or a helper (`plugins/soleur/scripts/lint-ratchet.py`) is missing or raised | re-run; a reproduction is a defect |
+| 2 | `baseline-unreadable`, `accept-unreadable`, `internal` | the baseline file (`baseline-unreadable`) or the accept file (`accept-unreadable`) could not be read, or the helper `plugins/soleur/scripts/lint-ratchet.py` at the merge base is missing, does not compile or raised | re-run; a reproduction is a defect |
 
 A re-run of a failed `pull_request` job reuses the old merge SHA, so after a push or a rebase let the new run decide; a PR with a merge conflict has no run at all (resolve the conflict first).
 
@@ -196,10 +209,10 @@ The failure text names the suite, the path and the referencing `file:line`, then
 reads); or it touched **neither** (main moved, or an edge or accept row that covered the pair was removed: rebase, then declare or accept). Then there are exactly two remedies, and the decision between them is the point:
 
 1. **Declare the path** in `AFFECTED_<LABEL>_PATHS` in `scripts/lib/test-affected-paths.sh`, only when the suite really reads or executes the file (that is what the selector must know to select the suite). Editing that file is a runner trigger and runs the full battery once.
-2. **Add an anchor-keyed accept row** to `scripts/ci-pr-affected-audit.accept.tsv` (`suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason>`; the anchor and ordinal are on the `ref` line of the failure text and in `audit --all-refs`) only when the suite merely names the file: a message, a fixture it writes into a scratch tree, a negative-test string. The reason names the line kind. **An accept row on a file the suite really reads is a false negative that becomes live once the lever flips**, so a reviewer blocks it.
+2. **Add an anchor-keyed accept row** to `scripts/ci-pr-affected-audit.accept.tsv` (`suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason>`; the anchor and ordinal are on the `ref` line of the failure text and in `audit --all-refs`) only when the suite merely names the file: a message, a fixture it writes into a scratch tree, a negative-test string. The reason names the line kind. **An accept row on a file the suite really reads is a false negative that becomes live once the lever flips**, and no automated control checks that the suite does not read the file: this check does not verify it. A CODEOWNERS entry routes the review, but no required review exists in this repository's ruleset, so the author and the reviewer must check the claim by reading the suite.
 
 A baseline row cannot be added: the failure text offers no way to, `ratchet --print-baseline` only removes pairs once a baseline exists, and the growth rule refuses any line the base does not have. Until PR4
-drains the 1,884 baselined pairs, **a PR that adds a new path mention to a suite fails the ratchet and must declare an edge** (or add an accept row for a mention) in the same PR.
+drains the baselined pairs (the file's `wc -l` count), **a PR that adds a new path mention to a suite fails the ratchet and must declare an edge** (or add an accept row for a mention) in the same PR.
 
 A rename or move of a path a baselined suite names reads as a new pair (growth, exit 1): a rename of a baselined path or suite is a **drain-class PR**. Declare or accept the renamed pairs first, then rename, or rename in the same PR with every renamed pair declared or accepted.
 While the job is advisory a red on such a rename is expected and is noted in the PR; rename-carry (an exact one-to-one rename of a pair already in the base baseline) is a PR3b entry condition, not built.
@@ -211,11 +224,12 @@ If the reveal is too large the widening lands dark (code present behind an off-b
 
 A new pair that landed on main (another PR's suite, merged while this one was open) turns later runs red with nobody forced to repair it. The repair owner is the **author who introduced the pair**; the owner of #10448 is the fallback
 when the author is a bot or unreachable. The fix-forward is a declare, accept or prune PR that never adds a baseline line, due within **one working day**. While the job has no push run, "main is red" means the latest `merge_group` conclusion of the job on the main tip.
-`ratchet --print-baseline` is prune-only: it removes lines that are no longer live and never adds one. In PR3a, where the base has no baseline, deleting the baseline file first and regenerating is legitimate (adoption absorbs it); after PR3a merges it is not.
+`ratchet --print-baseline` is prune-only: it removes lines that are no longer live and never adds one. Use it only after a full, clean `ratchet` run (it must reach a verdict; a run that exited 2 or printed partial selector output measured nothing, and pruning from it would delete real pairs that a shrink-only baseline can never get back). In PR3a, where the base has no baseline, deleting the baseline file first and regenerating is legitimate (adoption absorbs it); after PR3a merges it is not.
+The adoption arm (base has no baseline, HEAD has one) is a PR3a bootstrap path and an open hole once a baseline has been retired: PR5 (#10861), in the commit that deletes the baseline, also removes the adoption arm from the state table, with a row proving that a re-added baseline exits 1.
 
 ### The baseline-conflict recipe
 
-When the baseline file conflicts on a rebase (or holds conflict markers, a duplicate, or an order problem), never hand-resolve it by taking either side. Take main's copy of the file, then prune it with the tool and re-check. Do not redirect straight onto the file (the shell truncates it before the tool reads it):
+When the baseline file conflicts on a rebase (or holds conflict markers, a duplicate, or an order problem), never hand-resolve it by taking either side. Take main's copy of the file, then prune it with the tool and re-check (only when a plain `ratchet --base origin/main` run reached a verdict first, see above). Do not redirect straight onto the file (the shell truncates it before the tool reads it):
 
 ```bash
 git checkout origin/main -- scripts/ci-pr-affected-audit.baseline.tsv
@@ -234,14 +248,30 @@ restarts the window count (it changes the baseline, the live set and the runner 
 
 ### The observation log
 
-The window that PR3b waits for is enforced by the follow-through probe `scripts/followthroughs/ratchet-observation-window-10865.sh` (tracker #10865): at least 3 `pull_request` runs from 3 distinct PRs (one touching `scripts/` or a suite file) and 3 `merge_group` runs on distinct SHAs, every one
-`exit=0 reason=pass`, p95 wall at most 210 s and maximum at most 270 s; one docs-only PR, one draft PR and one bot PR when one occurs. A genuine `exit=1` pauses nothing by itself; a red latest `merge_group` run pauses the window until it is repaired; an exit 2 is classified by a same-SHA rerun with no code change
-(passes: an incident, excluded; reproduces: a defect, the window restarts). Closing #10865 records that the window passed; it does **not** authorize PR3b, which waits for the budget owner. Record here, per PR3a: the first real run's marker line, its wall time, and the jobs-API result of the canary (a throwaway DRAFT PR with one deliberate unbaselined pair, closed with its branch deleted afterwards, excluded from the distinct-PR count).
+The window that PR3b waits for is enforced by the follow-through probe `scripts/followthroughs/ratchet-observation-window-10865.sh` (tracker #10865). Its rules:
+
+- **Criteria.** At least 3 `pull_request` runs from 3 distinct PRs (one touching `scripts/` or a suite file) and 3 `merge_group` runs on distinct SHAs, every one `exit=0 reason=pass`; p95 wall at most 210 s and maximum at most 270 s; one docs-only PR, one draft PR and one bot PR when one occurs (when none occurs by the 30-day trigger the committed synthetic-green unit test substitutes and the substitution is recorded). The p95 and maximum are computed over every unit that ran and is not an excluded incident, red and timed-out units included, so a ceiling sees the tail.
+- **Exit codes.** An unmet criterion is exit 2 with a `NOT YET:` first token, the convention the sweeper and the sibling closing probes use; exit 1 is not used by this probe. Exit 3 means it could not establish the answer (a read failed, or a successful job carried no marker), 78 refusal under xtrace, 0 the window passed.
+- **Pause and restart.** A genuine `exit=1` pauses nothing by itself and restarts nothing; a red latest `merge_group` run pauses the window until it is repaired (a pause is `NOT YET`, not a restart). An exit 2 is classified by a same-SHA rerun with no code change (passes: an incident, excluded; reproduces: a defect, the window restarts at that run); an exit 2 never rerun is unclassified and `NOT YET`. A job cancelled or timed out with a wall of 290 s or more is a unit with exit 2 reason `timeout`; a shorter cancellation (a superseded push) is not a unit, and a run whose own conclusion is `cancelled` is skipped before any job read.
+- **Reads are bounded and oldest-first.** The probe lists runs created after the PR3a merge (up to 40 pages of 100 per event), reads jobs and logs for at most 250 runs per sweep oldest-first plus always the newest 10 `merge_group` runs, and prints `runs_listed=N units_read=M truncated=0|1`. A PASS certifies the earliest prefix plus the newest queue state. The probe is read-only: it writes no tracker comment, so evidence latches only because the oldest runs never change.
+- **Forgery bound.** A fork PR (head repository not this repository) and a PR whose file list touches an oracle input never count towards the distinct-PR or composition criteria; the file list is read up to 3 pages and a longer one counts as oracle-touching and not docs-only. The evidence is still the PR job's own log, which its author controls, so closing #10865 does not authorize PR3b.
+- **Cumulative shrink-only check.** The baseline is read through the contents API at the PR3a merge commit and at the main tip; every line present at the tip and absent at the merge commit is cumulative growth, and any growth is `NOT YET: baseline grew by <n> line(s) since the PR3a merge`. The baseline absent at the tip is the end state and fine; absent at the merge commit or an unreadable one is exit 3. Lines are compared as sets, so a moved line is not growth. Per-diff `grown` cannot see a PR that adds a pair and its baseline line and merges while the job is advisory: this check can.
+- **Ceilings are PROVISIONAL.** 210 s and 270 s are the ruled numbers, but the only prior figure is a local mean of 203 s and no hosted datapoint exists until the canary below supplies one. The probe's failure text for the wall criterion ends "ceiling re-rule owed: bring the measured series to the CTO agent". The CTO agent re-rules the two constants (a dated row with the series and a code change of the two constants, nothing else) at the close of the window or at the 30-day trigger, whichever is first; the budget owner is involved only if the new ceiling raises spend beyond the stated 4,400 minutes a week.
+
+Closing #10865 records that the window passed; it does **not** authorize PR3b (#10859), which waits for the budget owner and for the PR3b entry conditions of the ADR-276 amendment (item 9): a real oracle control (a code-owner-review ruleset, an `infra/github` change that is a hold for the budget owner, or the budget owner's written acceptance of the residual), a ruled accept-row growth design, the cumulative baseline check evaluated at PR3b merge time (`git diff <PR3a-merge-sha> origin/main -- scripts/ci-pr-affected-audit.baseline.tsv` has no added line), a ruled rename-carry design and the re-ruled ceilings. Record here, per PR3a: the first real run's marker line, its wall time, and the jobs-API result of the canary (a throwaway DRAFT PR with one deliberate unbaselined pair, closed with its branch deleted afterwards, excluded from the distinct-PR count), including the canary job duration (`completed_at` minus `started_at`, with the run URL), under the line "ceilings provisional; the only prior figure is local mean 203 s".
+
+Observation log entries (none yet): canary result and duration: PENDING (plan task 3.5); first real run: PENDING.
 
 ### Rolling the ratchet back
 
-Triggers: a defect verdict (a false red or false green), p95 wall over the ceiling after the first window, or a cost the owner of #10448 rejects; the decider is the owner of #10448. Until PR4 lands PR3a is independently revertible: `git revert` removes the job, the pins (`ALWAYS_RUN_JOBS`, `UNGATED_PINNED`, `LIGHT_PINNED`), the fan-out ledger row (28 back to 27), the subcommand, the baseline and this section together; the revert was simulated on 2026-10-22 in a scratch detached worktree (`git revert --no-commit` of the five PR3a commits)
-and the replay suite, `scripts/ci-push-dedupe.test.sh` and `scripts/ci-draft-light.test.sh` all passed on the reverted tree; repeat that check before relying on a revert. The ADR amendment stays (it is append-only) and gains a one-line dated note that the ratchet was withdrawn. After PR4 lands, withdrawal is a forward PR that deletes the job, the subcommand and the baseline together (a revert would be a modify/delete conflict on the baseline file). After PR3b it is a ruleset event, covered by PR3b's own plan, including a break-glass path for a required check that no longer reports.
+Triggers: a defect verdict (a false red or false green), p95 wall over the ceiling after the first window, or a cost the owner of #10448 rejects; the decider is the owner of #10448. The repository squash-merges, so PR3a is ONE commit on main and the recipe is squash-shaped. Until PR4 lands PR3a is independently revertible:
+
+1. First remove the `follow-through` label and the directive from #10865 (or close it with a withdrawal comment), so the sweeper never runs a probe whose file is gone.
+2. `git revert <squash-sha>` (single parent, no `-m`) on a branch. It removes the job, the pins (`ALWAYS_RUN_JOBS`, `UNGATED_PINNED`, `LIGHT_PINNED`), the fan-out ledger row (28 back to 27), the subcommand, the follow-through probe and its rows, the baseline and this section, and also the ADR-276 amendment.
+3. `git checkout <squash-sha> -- knowledge-base/engineering/architecture/decisions/ADR-276-demand-first-hosted-runner-budget-merge-group-is-the-full-battery-authority.md`, then append a dated one-line withdrawal note (ADR-276 is append-only; the revert would otherwise delete the amendment and the record of the decision).
+4. Update the bodies of #10859 and #10861.
+
+Receipt: the revert was simulated on 2026-10-22 in a scratch detached worktree in the PER-COMMIT shape (`git revert --no-commit` of the five PR3a code commits), and the replay suite, `scripts/ci-push-dedupe.test.sh` and `scripts/ci-draft-light.test.sh` all passed on the reverted tree. It was NOT simulated in the squash shape above, and the per-commit simulation omitted the follow-through probe; repeat the check in the squash shape (squash the branch onto main, `git revert` it, restore the ADR file as in step 3, run the same three suites) before relying on this recipe, and record the date, tree and results here as "simulated in the squash shape". After PR4 lands, withdrawal is a forward PR that deletes the job, the subcommand and the baseline together (a revert would be a modify/delete conflict on the baseline file). After PR3b it is a ruleset event, covered by PR3b's own plan, including a break-glass path for a required check that no longer reports.
 
 ## Rollback
 
