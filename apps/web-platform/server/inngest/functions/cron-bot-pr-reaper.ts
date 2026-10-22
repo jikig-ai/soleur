@@ -351,9 +351,25 @@ export async function reapBotPr(args: {
           !Number.isFinite(age) || age > QUEUE_INFLIGHT_BOUND_MS;
         // A failed read must not hide the PR that most needs the alert: treat
         // it as "still running" (soft skip until 24 h, alert after).
-        const terminal = await checksTerminal(octokit, headSha).catch(
-          () => false,
-        );
+        const terminal = await checksTerminal(octokit, headSha).catch((err) => {
+          // Log the status only: the message can carry the installation token.
+          const status = (err as { status?: number } | null)?.status;
+          logger.warn(
+            { fn: FUNCTION_NAME, pr: prNumber, status },
+            "check-runs read failed past the queue grace; treating checks as still running",
+          );
+          reportSilentFallback(
+            new Error(`check-runs read failed (status ${status ?? "n/a"})`),
+            {
+              feature: FUNCTION_NAME,
+              op: "bot-pr-checks-read-failed",
+              message:
+                "check-runs read failed for a queue-owned behind PR; held as still running, alerts past 24h",
+              extra: { fn: FUNCTION_NAME, pr: prNumber, status },
+            },
+          );
+          return false;
+        });
         if (!terminal && !pastInflight) {
           // Carry the reason so the stuck issue is held open meanwhile.
           return {

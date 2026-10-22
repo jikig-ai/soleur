@@ -463,9 +463,18 @@ describe("reapBotPr — decision table", () => {
         });
         return stub;
       };
+      h.reportSilentFallbackSpy.mockClear();
       const held = mkThrowing();
       const r1 = await run(held, { queueRule: "queue", createdAt: hoursAgo(7) });
       expect(r1.action).toBe("skipped-checks-in-flight");
+      // The swallowed read is mirrored (status only, never the message).
+      expect(h.reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
+      expect(h.reportSilentFallbackSpy.mock.calls[0][1]).toMatchObject({
+        op: "bot-pr-checks-read-failed",
+        extra: { pr: 1, status: 500 },
+      });
+      const mirrored = h.reportSilentFallbackSpy.mock.calls[0][0] as Error;
+      expect(mirrored.message).toBe("check-runs read failed (status 500)");
       const aged = mkThrowing();
       const r2 = await run(aged, { queueRule: "queue", createdAt: hoursAgo(25) });
       expect(r2.action).toBe("stuck-alerted");
@@ -491,6 +500,34 @@ describe("reapBotPr — decision table", () => {
       });
       expect(r.action).toBe("skipped-queue-owned");
       expect(updated(stub as never)).toBe(false);
+    });
+
+    it("a missing createdAt with a 30 h old detail.created_at alerts; with no created_at anywhere it alerts too (never hides)", async () => {
+      const aged = octokitStub({
+        pulls: [],
+        details: {
+          1: {
+            number: 1,
+            created_at: hoursAgo(30),
+            mergeable_state: "behind",
+            head: { sha: "abc123" },
+          },
+        },
+        checkRuns: { abc123: [{ status: "completed" }] },
+      });
+      const r1 = await run(aged as never, {
+        queueRule: "queue",
+        createdAt: undefined as unknown as string,
+      });
+      expect(r1.action).toBe("stuck-alerted");
+      expect(r1.reason).toBe("queue-stalled");
+      const bare = mk("behind", [{ status: "completed" }]);
+      const r2 = await run(bare, {
+        queueRule: "queue",
+        createdAt: undefined as unknown as string,
+      });
+      expect(r2.action).toBe("stuck-alerted");
+      expect(updated(aged as never) || updated(bare)).toBe(false);
     });
 
     it.each(["clean", "draft", "has_hooks"])(
@@ -829,9 +866,13 @@ describe("readMergeQueueRule — fail-closed verdict", () => {
     ["an entry without a type", [{}]],
     ["a null entry", [null]],
     ["a non-string type", [{ type: 7 }]],
+    ["a mixed list (typed + untyped)", [{ type: "deletion" }, {}]],
+    ["a mixed list (typed + null)", [{ type: "deletion" }, null]],
   ])("a degraded 200 (%s) → unreadable, never none", async (_n, rules) => {
     const { p } = read({ ...base, rules });
-    expect((await p).verdict).toBe("unreadable");
+    const r = await p;
+    expect(r.verdict).toBe("unreadable");
+    expect(r.cause).toContain(rules.length === 0 ? "empty" : "without a type");
   });
 
   it.each(["merge_queue_v2", "MERGE_QUEUE", "not_merge_queue", "queue"])(
@@ -972,7 +1013,8 @@ describe("cronBotPrReaperHandler — merge-queue deferral", () => {
     expect(create).toBeDefined();
     const body = String(create!.params.body);
     expect(body).toContain("#60");
-    expect(body).toContain("not enqueued after 6h");
+    expect(body).toContain("Some are unmergeable");
+    expect(body).toContain("not enqueued after 6h; no check still running, may include failures");
     // The reason line never claims the checks are green (the recipe's section
     // title elsewhere in the body legitimately does).
     const reasonLine = body.split("\n").find((l) => l.startsWith("- #60")) ?? "";
@@ -1002,6 +1044,8 @@ describe("cronBotPrReaperHandler — merge-queue deferral", () => {
     expect(create).toBeDefined();
     // A dirty-only cohort has no queue lines: the queue guidance stays out.
     expect(String(create!.params.body)).not.toContain("merge-queue-dequeue.md");
+    expect(String(create!.params.body)).toContain("They are unmergeable");
+    expect(String(create!.params.body)).not.toContain("Some are unmergeable");
     expect(h.reportSilentFallbackSpy.mock.calls[0][1]).toMatchObject({
       op: "bot-pr-unmergeable",
     });
@@ -1021,7 +1065,9 @@ describe("cronBotPrReaperHandler — merge-queue deferral", () => {
     const create = stub.calls.find((c) => c.route === "POST /repos/{owner}/{repo}/issues");
     expect(create).toBeDefined();
     const body = String(create!.params.body);
-    expect(body).toContain("merge-queue rule unreadable on this sweep");
+    expect(body).toContain(
+      "over 6h old; merge-queue rule unreadable on this sweep",
+    );
     expect(body).toContain("merge-queue-dequeue.md");
     const ops = h.reportSilentFallbackSpy.mock.calls.map(
       (c) => (c[1] as { op: string }).op,
@@ -1076,6 +1122,95 @@ describe("cronBotPrReaperHandler — merge-queue deferral", () => {
         (c) => c.route === "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
       ),
     ).toBe(false);
+  });
+
+  const STUCK_TITLE = "[ci/bot-pr-reaper] bot PRs unmergeable without intervention";
+  const closedPatch = (stub: ReturnType<typeof octokitStub>, n: number) =>
+    stub.calls.some(
+      (c) =>
+        c.route === "PATCH /repos/{owner}/{repo}/issues/{issue_number}" &&
+        c.params.issue_number === n &&
+        c.params.state === "closed",
+    );
+
+  it("an errored PR evaluation keeps an open stuck issue open (no close-and-reopen flap)", async () => {
+    const stub = octokitStub({
+      pulls: [BOT_PR(100, recently(1))],
+      details: {}, // the detail read 404s -> action "error"
+      rules: NO_QUEUE_RULES,
+      issues: [{ title: STUCK_TITLE, number: 8813 }],
+    });
+    h.requestSpy.mockImplementation(stub.request);
+    const result = await cronBotPrReaperHandler({ step: makeStep(), logger });
+    expect(result.ok).toBe(false);
+    expect(closedPatch(stub, 8813)).toBe(false);
+  });
+
+  it("an unreadable verdict with a 7 h old PR and re-running checks keeps the open issue open", async () => {
+    const stub = octokitStub({
+      pulls: [BOT_PR(101, recently(7))],
+      details: behindDetails([101]),
+      checkRuns: { sha101: [{ status: "in_progress" }] },
+      rulesThrow: Object.assign(new Error("Service Unavailable"), { status: 503 }),
+      issues: [{ title: STUCK_TITLE, number: 8814 }],
+    });
+    h.requestSpy.mockImplementation(stub.request);
+    await cronBotPrReaperHandler({ step: makeStep(), logger });
+    expect(closedPatch(stub, 8814)).toBe(false);
+  });
+
+  it("the stuck issue still self-closes when nothing is unresolved (queue-owned inside the grace + a clean PR)", async () => {
+    const stub = octokitStub({
+      pulls: [BOT_PR(102, recently(2)), BOT_PR(103, recently(1))],
+      details: {
+        102: { number: 102, mergeable_state: "behind", head: { sha: "sha102" } },
+        103: { number: 103, mergeable_state: "clean", head: { sha: "sha103" } },
+      },
+      rules: QUEUE_RULES,
+      issues: [{ title: STUCK_TITLE, number: 8815 }],
+    });
+    h.requestSpy.mockImplementation(stub.request);
+    await cronBotPrReaperHandler({ step: makeStep(), logger });
+    expect(closedPatch(stub, 8815)).toBe(true);
+  });
+
+  it("a no-queue in-flight skip (no reason) does not hold the issue open", async () => {
+    const stub = octokitStub({
+      pulls: [BOT_PR(104, recently(2))],
+      details: behindDetails([104]),
+      checkRuns: { sha104: [{ status: "in_progress" }] },
+      rules: NO_QUEUE_RULES,
+      issues: [{ title: STUCK_TITLE, number: 8816 }],
+    });
+    h.requestSpy.mockImplementation(stub.request);
+    await cronBotPrReaperHandler({ step: makeStep(), logger });
+    expect(updatesOf(stub)).toHaveLength(0);
+    expect(closedPatch(stub, 8816)).toBe(true);
+  });
+
+  it("a mixed cohort (dirty PR first + aged queue PR) keeps the queue guidance and both intro halves", { timeout: 15_000 }, async () => {
+    const stub = octokitStub({
+      pulls: [BOT_PR(110, "2026-09-01T08:00:00Z"), BOT_PR(111, recently(7))],
+      details: {
+        110: { number: 110, mergeable_state: "dirty", head: { sha: "x" } },
+        111: { number: 111, mergeable_state: "behind", head: { sha: "sha111" } },
+      },
+      checkRuns: { sha111: [{ status: "completed" }] },
+      rules: QUEUE_RULES,
+    });
+    h.requestSpy.mockImplementation(stub.request);
+    await cronBotPrReaperHandler({ step: makeStep(), logger });
+    const create = stub.calls.find((c) => c.route === "POST /repos/{owner}/{repo}/issues");
+    const body = String(create!.params.body);
+    expect(body).toContain("#110");
+    expect(body).toContain("#111");
+    expect(body).toContain("merge-queue-dequeue.md");
+    expect(body).toContain("Some are unmergeable");
+    const prs = (h.reportSilentFallbackSpy.mock.calls[0][1] as {
+      extra: { prs: Array<{ number: number; reason?: string }> };
+    }).extra.prs;
+    expect(prs.find((x) => x.number === 110)?.reason).toBeUndefined();
+    expect(prs.find((x) => x.number === 111)?.reason).toBe("queue-stalled");
   });
 
   it("replay: a memoizing step.run fake invoked twice reads the rules exactly once", async () => {

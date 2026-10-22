@@ -746,7 +746,9 @@ once per sweep to Sentry (`merge-queue-rule-unreadable`, token redacted), and ne
 (4) Accepted residuals: the PR list is not base-filtered, so the verdict is for `main` only; `created_at` over-approximates
 arm age for a re-armed PR (alerts early, the cheap direction); `blocked` while required checks are pending still alerts
 (pre-existing, unchanged); a PR held between 6 h and 24 h by re-running checks stays out of the alert set but keeps an open
-stuck issue open (no close and reopen flap); the 48 h stale-bot-PR watchdog in `cron-cloud-task-heartbeat` still words its
+stuck issue open (no close and reopen flap; the held issue's body may still list a PR that has since merged until the
+hold clears); a check-runs read that fails past the grace is held as still running, logged and mirrored to Sentry
+(`bot-pr-checks-read-failed`, status only), and alerts past 24 h; the 48 h stale-bot-PR watchdog in `cron-cloud-task-heartbeat` still words its
 warning for a disarmed PR ("rebase the branch") and can double-warn a queue-stalled one, a wording gap left as is; the
 no-queue update path is retained although this repository's `main` carries the rule, because
 the verdict is a runtime read and the rule has been reverted once before (the 2026-06-30 deadlock kill-switch). The
