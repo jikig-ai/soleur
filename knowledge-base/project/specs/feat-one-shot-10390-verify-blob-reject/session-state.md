@@ -66,3 +66,17 @@
   rulings to pass to every seat are the 7 rows in decision-challenges.md (all affirmed by CTO).
 - Then: one-shot Step 5 (resolve findings incl. ADR-267 fix round) → 5.5 soleur:qa →
   6 soleur:compound → 7 soleur:ship → 8 DONE. Tally: seats=0 agent_rounds=2.
+
+## Design-validity pass — COMPLETE, findings fixed (commit 2002c09aee)
+- code-simplicity (642c330d): mechanism affirmed; fixed — last-failure-only verify.stderr
+  semantics, vacuous S10 token pins → `_cls=<tok>` anchors, missing _summ_row pin (AC5),
+  stdout file dance removed.
+- architecture (1687d323): architecture affirmed; fixed — soak probe discriminator now
+  signature-scoped (sig_undetailed), NOT-YET scoped to sig_rows, instrument-absent→3,
+  digest input via env: + 64-hex gate, VF_STAMP keys reason:detail, F16 timeout arm,
+  probe .test.sh added + registered in test-all.sh.
+- inngest-config-refresh.test.sh 134/0, diagnose-inngest-verify-workflow.test.sh 26/0,
+  probe suite 9/0. Remaining panel: 6 seats (git-history-analyzer, pattern-recognition,
+  security-sentinel, performance-oracle, data-integrity-guardian, agent-native-reviewer,
+  code-quality-analyst = 7 — dedup arch-strategist done, code-simplicity reruns at Step 4)
+  + test-design-reviewer + structural-enumeration. Then Step 5 fix round → qa → compound → ship.

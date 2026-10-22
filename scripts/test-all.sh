@@ -5597,6 +5597,10 @@ if want_scripts; then
   # sweeper closes issue 8651 as completed — the observed-evidence condition zot-soak-6122.sh's
   # WEB_BLOCKER arm requires — so every sweeper exit code is driven by a fixture.
   run_suite "scripts/web-fresh-boot-zot-8651" bash scripts/followthroughs/web-fresh-boot-zot-8651.test.sh
+  # #10390 defect 3: verdict-matrix harness for the inngest verify-blob soak probe. Registered EXPLICITLY
+  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes
+  # the soak tracker — an undetailed reason=pull row must not read as FAIL.
+  run_suite "scripts/followthroughs/inngest-verify-clean-10390" bash scripts/followthroughs/inngest-verify-clean-10390.test.sh
   # #10548: exit-code harness for the SDK Bash smoke promotion soak (5 greens over 3 days with full coverage). Registered EXPLICITLY
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). A vacuous PASS (replay_only coverage, a held counter under an infra
   # error, 4 greens) would close the promotion tracker on a smoke that proved nothing, so it must redden CI.
