@@ -108,6 +108,19 @@ test is not dischargeable here either.
 delegation, so none exists and every production act stays a hold. Do not ask. File ONE `action-required` issue that names the
 ACTION (what the operator is being asked to approve, in plain words), print one plain sentence, and continue to the draft PR.
 
+**Interactive** (a person is in the session): a hold that stands only because no delegation is recorded is not an end state, and
+that includes a session-level instruction such as "any merge needs my go-ahead". Never end the turn on "Paused: awaiting merge
+approval": the Stop hook rejects it, and a non-technical operator cannot clear a parked merge. Instead, once the required
+checks and the review evidence are in hand, ask the epic-start question of
+[standing-delegation.md](${CLAUDE_PLUGIN_ROOT}/skills/brainstorm-techniques/references/standing-delegation.md) section 6 ONCE,
+as a real question (AskUserQuestion, options labelled `Yes ...` and `No ...`) with the Scope items for the pull requests at
+hand, the PR-specific outcome in plain words, and a 7-day expiry. Only a `Yes` answer is recorded: write it with
+`delegation-verify.sh render`, post it on the epic, read it back through `verify`, commit the Production Envelope in a runbook
+outside the folders ship archives, verify the exact command against it, then run that command byte for byte. A `No` keeps
+today's behaviour: ask once, naming the exact command. An answer that does not start with `Yes` (including "go per the CTO") is
+context, never the confirmation. A merge whose changes touch no production path needs the same record; the guards stay: the
+required checks green, `Reviewed-Coverage` present, the Excluded list, and no `--admin`.
+
 ## 4. Timing: twice, and the receipt after a delegated act
 
 Evaluate at the draft exit AND again at the start of Phase 6.45, before the plan is archived, through the same command
