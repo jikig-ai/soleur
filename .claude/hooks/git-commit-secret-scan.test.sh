@@ -1025,6 +1025,8 @@ _t_walker() {
   _w_row "git --super-prefix <p> -C <dir>"     'git --super-prefix p -C /a commit -m x' '/a;' 0 1
   _w_row "git --no-pager -c k=v -C <dir>"      'git --no-pager -c k=v -C /a commit -m x' '/a;' 0 1
   _w_row "an unknown git option then commit counts as a commit" 'git --frobnicate commit -m x' '' 0 1
+  _w_row "an unknown option that swallows the subcommand still counts as a commit" 'git --frobnicate val commit -m x' '' 0 1
+  _w_row "…and its -C operand is still collected" 'git --frobnicate val -C /a commit -m x' '/a;' 0 1
   _w_row "an unknown git option without commit is not a commit" 'git --frobnicate log' ''  0 0
   _w_row "git --no-pager log --grep commit is not a commit" 'git --no-pager log --grep commit' '' 0 0
   _w_row "git worktree add is not a commit"    'git worktree add /a b'                ''      0 0
@@ -1144,7 +1146,7 @@ _t_ci_contract
 # that goes silent still counts nothing, so deleting the calls — or neutering the helpers —
 # drops the total below this and the suite cannot exit 0 having asserted nothing. Reported by
 # printf + exit, never through the helpers it backstops. Raise it in the same edit that adds rows.
-MIN_ASSERTIONS=249
+MIN_ASSERTIONS=251
 if (( pass + fail < MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: %s assertion(s) ran, expected at least %s — rows or helpers were dropped\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
   exit 1

@@ -160,7 +160,7 @@ _ctr_env_walk() {
 
 # _ctr_git_walk <idx-of-git-word> — git's global options, then the subcommand.
 _ctr_git_walk() {
-  local j=$(($1 + 1)) n="${#_CTR_W[@]}" w unknown=0 sub m
+  local j=$(($1 + 1)) n="${#_CTR_W[@]}" w unknown=0 sub m q
   while [ "$j" -lt "$n" ]; do
     w="${_CTR_W[$j]}"
     case "$w" in
@@ -196,7 +196,16 @@ _ctr_git_walk() {
         if [ "$unknown" -eq 1 ]; then
           m=$((j + 1))
           while [ "$m" -lt "$n" ]; do
-            if [ "${_CTR_W[$m]}" = commit ]; then _ctr_mark_commit; break; fi
+            if [ "${_CTR_W[$m]}" = commit ]; then
+              # The option's operand hid the subcommand, so option words after it were never
+              # read either: collect the -C operands that precede the commit word.
+              q=$((j + 1))
+              while [ "$q" -lt "$m" ]; do
+                if [ "${_CTR_W[$q]}" = -C ] && [ $((q + 1)) -lt "$m" ]; then _ctr_add_idx $((q + 1)); fi
+                q=$((q + 1))
+              done
+              _ctr_mark_commit; break
+            fi
             m=$((m + 1))
           done
         fi ;;
