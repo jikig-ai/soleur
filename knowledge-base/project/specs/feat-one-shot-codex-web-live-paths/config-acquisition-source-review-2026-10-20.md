@@ -336,3 +336,63 @@ with successful acquisition, qualification or shipping clearance. Expanded
 operator authority remains the execution authority; actual bindings and the
 bounded command still require technical review, followed by separate evidence
 review. This documentation-only acceptance does not change runtime bytes.
+
+## Successful Config integrity/schema acquisition — 2026-10-22
+
+At clean pushed source `52c4fc8a03a5e7b0d05bd5848f9561cb15c880c8`, file-only
+preparation created a fresh unused action at
+`.soleur/config-acquisition-52c4fc8-20261022-01`. Its manifest canonical SHA-256
+is `c0fb1f2ebbac964e50708b8b15df7535eec1a22a80624cdfc6eda9010b481673`;
+stored-file SHA-256 is
+`7d9dadaa5e2d87106b4d76bb6c8ccd1e3809c2122f1988eb163049fd7d61fe3a`.
+The runner SHA-256 is
+`ea61db67b0fa1b6ffea12389dc67abd599ccbfa3c648d86e573c1e3ae584a5f9`.
+The operational pairing is
+`882f4e4657dd5f22609ec3b9538e22e7d485187a50583a56ede51a57db8955c3`;
+operational digest is
+`1bffc3aacde0bf9e532e9c3e824b26a08227cbb77dca8b774962a229914b07b8`.
+The candidate directory remains absent; preparation did not build it.
+
+Independent engineering/security actual-manifest reviews passed the exact clean
+source, 39 source references, 23 dependencies, retained platform, runtime,
+schema closure, private identities, unused directory and byte-exact command.
+Current root-owned mode-0444 CA bytes differ from the historical bundle:
+`9a9c1b798f6ae057ecb84545704e38c89e10f3db5519b24cd4647a1bb2dbf299`,
+182304 bytes, 118 parsed CA certificates. Both seats reviewed that actual binding.
+The command used an empty environment, the reviewed interpreter/runner, a
+90-second outer timeout and five-second kill grace. It allowed the same three
+fixed GET roles and 60-second total/10-second request budgets, without retry,
+destination bearer forwarding, image import or raw Config retention.
+
+Under the operator's expanded continuation authority, that exact command ran
+once: tool session 47725, start chunk `a9bf9a`, completion chunk `9bd08f`, exit 0.
+Its sole stdout was the fixed integrity/schema observation, with no stderr.
+The consumed marker raw SHA-256 is
+`0b45331b3d7f6ebb2721f082d3b7830c5319885447c68167451c564baa6cff3c`.
+Receipt raw SHA-256 is
+`0ab9d9b52b3d103cc85e5b2f09364f21a86ff845bc7220562b9bd0de06f5bc50`;
+canonical self-hash is
+`9f0b7dd08ae1ed9f033571aad7fe3b7bba1ff06d3cbd0c45eef7a2eb5d60aa05`.
+All three files remain mode 0600 in the bound mode-0700 action directory.
+
+Separate engineering and security evidence reviews **PASS**: `checked_receipt()`
+accepts complete status/stage, exactly three requests with HTTP **200/307/200**,
+all peer/TLS checks true, and **2646 Config bytes** with length/digest/schema
+checks true. Both seats verified the unchanged manifest, spent marker, receipt
+self-hash, identities and source/input consistency. The separate coordinator
+tool-result copy is consistent with those artifacts; reviewers did not claim
+independent witnessing of the original tool call. Persisted review stays pending
+and every authority flag stays false; independent acceptance lives in this
+separate record rather than mutating the receipt.
+
+This completes the bounded integrity/schema observation, not publisher
+provenance, raw payload retention, executable profiles, runtime/recovery,
+hosted authentication or qualification. Raw Config was discarded as specified.
+The consumed action cannot be retried; all earlier artifacts and failure-cause
+uncertainty remain unchanged.
+
+Ruled by CTO agent: the next technical stage is a separately reviewed dormant
+Config-snapshot retention protocol for exact inert bytes and private inspection,
+not profile admission. Preserve the current non-retaining protocol and require
+fresh source, manifest/command and evidence reviews. The complete eleven-role,
+owned-store/build/recovery/authenticated-QA and legal/shipping chain remains.

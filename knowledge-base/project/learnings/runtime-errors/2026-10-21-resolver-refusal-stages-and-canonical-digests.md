@@ -71,3 +71,16 @@ changes. Its preparation fixture correctly refused dirty source (481 tests,
 one setup error); that is not a green complete run. Commit the candidate before
 running tests whose contract binds the current clean revision, then report that
 exact revision and the fresh result separately.
+
+A continuation wrapper initially required mode 0700 on the general `.soleur`
+parent, but that owned directory is mode 0755. It refused before preparation or
+file creation. The reviewed protocol requires mode 0700 on each action directory
+and mode 0600 on private files; its ancestor traversal uses no-follow directory
+descriptors. Verify those actual requirements instead of adding an unsupported
+parent-mode assumption or changing a shared parent to make a wrapper pass.
+
+A delegated proposal patch briefly created a new placeholder with a leading
+space in its basename at the worktree root. The author read and removed only
+that new file, then used the assigned absolute KB destination. Validate the
+literal destination before applying a patch; whitespace in a patch path is
+part of the filename, not indentation or a worktree selector.

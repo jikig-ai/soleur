@@ -2450,3 +2450,19 @@
 - The [fresh CLO audit](../../../legal/audits/2026-10-21-codex-web-hosted-auth-recheck.md)
   preserves both hosted-authentication blocks and alternate-route PENDING. Do not
   convert owner consent into provider permission or drop retained feature phases.
+
+### Completed Config observation — 2026-10-22
+
+- Final containment source and instrument accepted by engineering, security and
+  test-design at `63fef0d2687c9510cdf9dcba2ccfab7600622de9`; complete offline
+  discovery passed 487 tests. No correction findings remain.
+- Fresh actual manifest/command at `52c4fc8a03a5e7b0d05bd5848f9561cb15c880c8`
+  passed engineering/security review, then the once-only acquisition exited 0.
+  Separate evidence reviews passed: HTTP 200/307/200, 2646 bytes, length/digest/
+  schema true. See the [successful Config record](config-acquisition-source-review-2026-10-20.md#successful-config-integrityschema-acquisition--2026-10-22)
+  for exact hashes, private artifacts and limits. The marker is spent. Raw Config
+  was discarded; no profile, publisher, runtime or qualification authority exists.
+- Ruled by CTO agent: draft and review a separate dormant Config-snapshot
+  retention contract, then RED/GREEN source tests and independent source review.
+  Fresh actual bindings/command and separate evidence review follow. Preserve
+  all original feature phases and both hosted-authentication legal blocks.
