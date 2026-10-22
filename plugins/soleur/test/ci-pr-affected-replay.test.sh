@@ -2021,7 +2021,7 @@ PY
       [[ "$rc" -eq "$want" ]] || { echo "B=$b added=$added: rc=$rc, wanted $want" >&2; return 1; }
       if (( want == 1 )); then [[ ! -e "$d/out.tsv" && ! -e "$d/out.tsv.part" ]] || { echo "B=$b added=$added: a file (or the stale one) is left at the stop line" >&2; return 1; }; continue; fi
       if grep -q STALE "$d/out.tsv"; then echo "B=$b added=$added: the stale file was not replaced" >&2; return 1; fi
-      head -n 1 "$d/out.tsv" | grep -qxE "# old_sut=$sha tree=$tree rows_sha256=$rsha base_pairs=$b new_pairs=$((b - gone + added)) added=$added removed=$gone" || { echo "B=$b added=$added: bad header" >&2; return 1; }
+      grep -qxE "# old_sut=$sha tree=$tree rows_sha256=$rsha base_pairs=$b new_pairs=$((b - gone + added)) added=$added removed=$gone" < <(head -n 1 "$d/out.tsv") || { echo "B=$b added=$added: bad header" >&2; return 1; }
       [[ "$(sed -n '/^# added/,/^# removed/p' "$d/out.tsv" | grep -vc '^#')" -eq "$added" ]] || { echo "B=$b added=$added: the added section differs from the header" >&2; return 1; }
       [[ "$(sed -n '/^# removed/,$p' "$d/out.tsv" | grep -vc '^#')" -eq "$gone" ]] || { echo "B=$b added=$added: the removed section differs from the header" >&2; return 1; }
       for part in '/^# added/,/^# removed/p' '/^# removed/,$p'; do
