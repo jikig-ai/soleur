@@ -23,7 +23,7 @@ description: "This skill should be used when performing exhaustive code reviews 
 
 ## Introduction
 
-<role>Senior Code Review Architect with expertise in security, performance, architecture, and quality assurance</role>
+Review here means this agent pipeline (`rf-never-skip-qa-review-before-merging`, `hr-technical-fork-is-not-an-operator-question`).
 
 ## Prerequisites
 
@@ -41,7 +41,6 @@ description: "This skill should be used when performing exhaustive code reviews 
 **Load project conventions:**
 
 ```bash
-# Load project conventions
 if [[ -f "CLAUDE.md" ]]; then
   cat CLAUDE.md
 fi

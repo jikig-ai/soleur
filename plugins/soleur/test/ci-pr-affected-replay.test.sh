@@ -17,6 +17,9 @@
 # over all 256 status combinations; the audit flags the PR 9404 shape, counts an unread suite as UNAUDITED (exit
 # 1), exempts always_on suites and reads the selector's own `^glob:` edge. The selector subprocess sees an
 # allowlisted environment (no credential, no CI switch, no git location variable).
+# THE AUDIT REACH (S4 index completion PR1b, #10448): the section `== audit reach (PR1b)` pins the source closure (depth, operand forms, symlinks, cycles, a fan-out lattice under a line-event cap), the
+# naming walk over the selector row's code files (per row, CODE_EXT per extension, closures feeding the next level, directory suites), the canonical read order, the comment table per extension, the edge
+# credit against the REAL bash `_diff_edge_hit`/`_diff_touches` (extracted by content anchors), a linear-time bound on one long `source` token and the reach-differential generator's stop line.
 # THE AUDIT SCAN (S4 index completion PR1, #10448). A reference is a tracked path named at a boundary: the character before it is
 # not [A-Za-z0-9_], after printf escapes (\t, \0, \x09, \u0009 ...) and an attached short option (-Iplugins/x) are blanked ONCE by
 # views(); the SUT's start regex and boundary() derive from that one definition, and this file keeps independent oracles of its own. The scan walks a trie of the tracked
@@ -1144,9 +1147,9 @@ row_regen_planted() {   # a SUT that loses a pair WITHOUT a dropped occurrence (
   cp "$REAL_SUT" "$m" && python3 - "$m" <<'PY' || return 1
 import sys
 p = sys.argv[1]; s = open(p).read()
-old = "r = index.refs[q] = scan_views(index, full, light)"
+old = "r = index.refs[got[0]] = scan_views(index, got[1], got[2])"
 assert s.count(old) == 1
-open(p, "w").write(s.replace(old, "r = index.refs[q] = scan_views(index, full[:-1], light[:-1])"))
+open(p, "w").write(s.replace(old, "r = index.refs[got[0]] = scan_views(index, got[1][:-1], got[2][:-1])"))
 PY
   python3 "$REGEN" "$SREPO" "$SANDBOX/s-eol.rows" --sut "$REAL_SUT" --out "$SANDBOX/regen-ctl.tsv" >/dev/null 2>&1 || return 1   # control: the real SUT is fine
   out="$(python3 "$REGEN" "$SREPO" "$SANDBOX/s-eol.rows" --sut "$m" --out "$SANDBOX/regen-bad.tsv" 2>&1)" || rc=$?
@@ -1167,7 +1170,7 @@ open(p, "w").write(s.replace(old, new))
 PY
 }
 row_regen_subset() {   # the check that the new refs are a subset of the old refs is what fails a SUT that names more than the brute-force scan
-  edit_copy "$REAL_SUT" "$SANDBOX/sut-extra.py" 'named |= r' 'named |= r | {"m.txt"}' || return 1
+  edit_copy "$REAL_SUT" "$SANDBOX/sut-extra.py" '        named |= refs_of(index, got)' '        named |= refs_of(index, got) | {"m.txt"}' || return 1
   regen_with "$REGEN" "$REAL_SUT" "$SANDBOX/s-eol.rows"; [[ "$RGRC" -eq 0 ]] || return 1                                       # control: the real SUT is fine
   regen_with "$REGEN" "$SANDBOX/sut-extra.py" "$SANDBOX/s-eol.rows"; [[ "$RGRC" -eq 1 ]] && grep -q 'NEW SCAN FOUND WHAT THE OLD ONE DID NOT' <<<"$RGOUT" || return 1
   edit_copy "$REGEN" "$SANDBOX/regen-nosubset.py" '[q(x) for x in sorted(extra)[:5]]))
@@ -1510,6 +1513,608 @@ PYCEN
 row_census && pass "audit_census(root, rows, accept) returns the gaps by suite, the unaudited and stale lists and the counters, and keeps the AFFECTED_SUMMARY and AFFECTED_FALLBACK lines for a later consumer (cmd_audit only formats)" || fail "census object"
 
 # ---------------------------------------------------------------------------------------------------------------------
+# PR1b of the S4 index completion (#10448, Ref #9729): the audit's REACH. A suite's reads are its own file, the `source` closure of it (to depth
+# 8, operands resolved against the INCLUDING file), and the code files its selector row lists that an already-read text names (the naming walk,
+# to depth 8); a path named in a comment of the file's OWN language is a mention; an edge is credited exactly when the selector would select the
+# suite. Fixtures live in their own repo ($RREPO, never $SREPO/$AREPO: new tracked files would change the populations the PR1 rows and the
+# 20,000-path fixture depend on). Every negative sits beside a positive control that IS reported, so an empty result cannot pass.
+echo "== audit reach (PR1b): source closure, naming walk, comment table, edge parity, canonical order, cost"
+RREPO="$SANDBOX/rrepo"
+assert_fixture_dir "$RREPO"
+rmk() {  # rmk <relpath> <content>: write one fixture file under the reach repo, content verbatim
+  assert_fixture_dir "$RREPO"; mkdir -p "$(dirname "$RREPO/$1")" && printf '%s' "$2" > "$RREPO/$1"
+}
+RDATA=(deep first second cyc inner decoy untr prose commented ctl w1 w1b w2 w3 w4 w5 w6 g1 dd1 h cls_sh cls_py cls_ts ord ord2 unr2 cm_own cm_other cm_live cm_quote cm_dollar wsrc sa sb g2)
+for n in d1 d2 d3 d4 d5 d6 d7 d8 d9 n1 n2 n3 n4 n5 n6 n7 n8 n9 op1 op2 op3 op4 op5 op6 op7 op8 op9 op10 op11 op12 op13 op14 op15 op16 op17 op18 tie wcl lvl lcl dsw wsd1 wsd2 dupz seed untrk dots cm_nbsp; do RDATA+=("$n"); done
+for n in "${RDATA[@]}"; do rmk "data/$n.txt" $'t\n'; done
+rmk zz/only-from-trigger.txt $'t\n'
+
+# --- the source closure
+rmk scripts/chain3.test.sh $'source libA/l1.sh\n'; rmk libA/l1.sh $'source libA/l2.sh\n'; rmk libA/l2.sh $'source libA/l3.sh\n'; rmk libA/l3.sh $'cat data/deep.txt\n'
+rmk scripts/depth9.test.sh $'source libB/l1.sh\n'
+for k in 1 2 3 4 5 6 7 8; do rmk "libB/l$k.sh" "source libB/l$((k + 1)).sh"$'\n'"cat data/d$k.txt"$'\n'; done
+rmk libB/l9.sh $'cat data/d9.txt\n'
+rmk scripts/twosrc.test.sh $'source libC/first.sh\nsource "$SCRIPT_DIR/second.sh"\n'; rmk libC/first.sh $'cat data/first.txt\n'; rmk scripts/second.sh $'cat data/second.txt\n'
+rmk scripts/cyc.test.sh $'source libD/a.sh\n'; rmk libD/a.sh $'source libD/b.sh\ncat data/cyc.txt\n'; rmk libD/b.sh $'source libD/a.sh\n'
+# operand forms: every form sits in an OUTER library under libG/ (the suite sources libG/outerN.sh), so a form that resolves against the including
+# file lands in libG/ while the same form resolved against the suite's directory (scripts/) or the repo root finds nothing; a root form lands in libH/
+OPF=('source "$(dirname "$0")/oplib1.sh"|libG/oplib1.sh' 'source "$(dirname "${BASH_SOURCE[0]}")/oplib2.sh"|libG/oplib2.sh'
+     'source "$SCRIPT_DIR/oplib3.sh"|libG/oplib3.sh' 'source "${SCRIPT_DIR}/oplib4.sh"|libG/oplib4.sh' 'source "$HERE/oplib5.sh"|libG/oplib5.sh'
+     'source "${HERE}/oplib6.sh"|libG/oplib6.sh' 'source "$DIR/oplib7.sh"|libG/oplib7.sh' 'source "${DIR}/oplib8.sh"|libG/oplib8.sh'
+     'source "$REPO_ROOT/libH/oplib9.sh"|libH/oplib9.sh' 'source "${REPO_ROOT}/libH/oplib10.sh"|libH/oplib10.sh'
+     'source "$ROOT_DIR/libH/oplib11.sh"|libH/oplib11.sh' 'source ./libH/oplib12.sh|libH/oplib12.sh' 'source "$X/libH/oplib13.sh"|libH/oplib13.sh'
+     '. libH/oplib14.sh|libH/oplib14.sh'
+     'source "$SCRIPT_DIR/../libH/oplib15.sh"|libH/oplib15.sh' "source '\$SCRIPT_DIR/oplib16.sh'|libG/oplib16.sh"
+     'source "$SCRIPT_DIR/oplib17.bash"|libG/oplib17.bash' $'source\t"$SCRIPT_DIR/oplib18.sh"|libG/oplib18.sh')
+i=0; for e in "${OPF[@]}"; do
+  i=$((i + 1)); rmk "scripts/op$i.test.sh" "source libG/outer$i.sh"$'\n'; rmk "libG/outer$i.sh" "${e%%|*}"$'\n'; rmk "${e##*|}" "cat data/op$i.txt"$'\n'
+done
+# a decoy for the two-hop reading: scripts/oplib3.sh would be the target if the form were resolved against the SUITE's directory
+rmk scripts/oplib3.sh $'cat data/decoy.txt\n'
+# negatives: an untracked target, a runner trigger, a prose "see. lib/x.sh", a commented source line; negctl sources the same libraries for real
+rmk scripts/negu.test.sh $'source libN/untracked.sh\n'
+rmk scripts/negt.test.sh $'source scripts/test-all.sh\nsource scripts/lib/test-affected-paths.sh\n'; rmk scripts/test-all.sh $'cat zz/only-from-trigger.txt\n'; rmk scripts/lib/test-affected-paths.sh $'cat zz/only-from-trigger.txt\n'
+rmk scripts/negd.test.sh $'echo x.. libN/dots.sh\n'; rmk libN/dots.sh $'cat data/dots.txt\n'
+rmk scripts/negp.test.sh $'echo see. libN/prose.sh\n'; rmk scripts/negc.test.sh $'# source libN/commented.sh\ntrue\n'
+rmk scripts/negctl.test.sh $'source libN/prose.sh\nsource libN/commented.sh\nsource libN/dots.sh\n'; rmk libN/prose.sh $'cat data/prose.txt\n'; rmk libN/commented.sh $'cat data/commented.txt\n'
+# unreadable reach: a dangling symlink at depth 3 of a closure, and a dangling code file in `pats`; a neighbour that must still be scanned
+rmk scripts/unr.test.sh $'source libU/u1.sh\n'; rmk libU/u1.sh $'source libU/u2.sh\n'; rmk libU/u2.sh $'source libU/dang.sh\n'; ln -s no-such-target.sh "$RREPO/libU/dang.sh"
+rmk scripts/unr2.test.sh $'cat data/unr2.txt\n'
+rmk scripts/unrw.test.sh $'bash walk/dangcode.sh\n'; mkdir -p "$RREPO/walk" && ln -s no-such-code.sh "$RREPO/walk/dangcode.sh"
+
+# --- the naming walk
+rmk scripts/wk.test.sh $'bash walk/code1.sh\ncat walk/notlisted.sh\ncat walk/doc.md walk/cfg.yml walk/tab.tsv\n'
+rmk walk/code1.sh $'cat data/w1.txt\n'; rmk walk/notlisted.sh $'cat data/w2.txt\n'; rmk walk/unnamed.sh $'cat data/w3.txt\n'
+rmk walk/doc.md $'cat data/w4.txt\n'; rmk walk/cfg.yml $'cat data/w5.txt\n'; rmk walk/tab.tsv $'cat data/w6.txt\n'
+rmk scripts/wchain.test.sh $'bash walk/n1.sh\n'
+for k in 1 2 3 4 5 6 7 8; do rmk "walk/n$k.sh" "cat walk/n$((k + 1)).sh"$'\n'"cat data/n$k.txt"$'\n'; done
+rmk walk/n9.sh $'cat data/n9.txt\n'
+rmk scripts/wtrig.test.sh $'bash scripts/test-all.sh\nbash scripts/lib/test-affected-paths.sh\nbash walk/ok.sh\n'; rmk walk/ok.sh $'cat data/w1b.txt\n'
+rmk scripts/wgl.test.sh $'bash walk/g1.sh\nbash walk/dir/d1.sh\nbash walk/ok.sh\ncat "glob:walk/*.sh"\n'; rmk walk/g1.sh $'cat data/g1.txt\n'; rmk 'glob:walk/*.sh' $'cat data/g2.txt\n'; rmk walk/dir/d1.sh $'cat data/dd1.txt\n'
+rmk scripts/lab.test.sh $'bash walk/helper.sh\n'; rmk scripts/lab2.test.sh $'bash walk/helper.sh\n'; rmk walk/helper.sh $'cat data/h.txt\n'
+rmk scripts/wsrc.test.sh $'bash walk/wsrc.sh\n'; rmk walk/wsrc.sh $'source libW/w.sh\n'; rmk libW/w.sh $'cat data/wsrc.txt\n'
+# a symlinked library: the selector resolves $SCRIPT_DIR against the file's LOGICAL directory (libS/a), not the directory of its target (libS/b)
+mkdir -p "$RREPO/libS/a" "$RREPO/libS/b"
+rmk libS/a/sib.sh $'cat data/sa.txt\n'; rmk libS/b/sib.sh $'cat data/sb.txt\n'; rmk libS/b/real.sh $'source "$SCRIPT_DIR/sib.sh"\n'; ln -s ../b/real.sh "$RREPO/libS/a/link.sh"
+rmk scripts/symlnk.test.sh $'source libS/a/link.sh\n'; rmk scripts/symreal.test.sh $'source libS/b/real.sh\n'
+rmk scripts/cls.test.sh $'bash walk/cls.sh\npython3 walk/cls.py\nbun walk/cls.ts\n'
+rmk walk/cls.sh $'cat data/cls_sh.txt\n'; rmk walk/cls.py $'print(open("data/cls_py.txt"))\n'; rmk walk/cls.ts $'readFileSync("data/cls_ts.txt")\n'
+# canonical order: identical reading lines in the suite, a closure library and a walk file
+rmk scripts/ord.test.sh $'cat data/ord.txt\nsource libO/lib.sh\nbash walk/ordw.sh\n'; rmk libO/lib.sh $'cat data/ord.txt\n'; rmk walk/ordw.sh $'cat data/ord.txt\n'
+rmk scripts/ord2a.test.sh $'cat data/ord2.txt\n'; rmk scripts/ord2b.test.sh $'cat data/ord2.txt\n'
+# row-order ties: two rows of ONE label share their first pattern and differ after it (and their LAST patterns order them the other way round)
+rmk scripts/tie.test.sh $'cat data/tie.txt\nbash walk/tiea.sh\nbash walk/tieb.sh\n'; rmk walk/tiea.sh $'cat data/tie.txt\n'; rmk walk/tieb.sh $'cat data/tie.txt\n'
+# a walk file's source closure feeds the naming of the next level
+rmk scripts/wcl.test.sh $'bash walk/wc1.sh\n'; rmk walk/wc1.sh $'source libX/wc.sh\n'; rmk libX/wc.sh $'bash walk/wc2.sh\n'; rmk walk/wc2.sh $'cat data/wcl.txt\n'
+# two walk files of ONE level with identical lines (read in sorted order, named in the opposite order), and their closures (read in walk order)
+LV=(a b c d e f); lv_lines=""; for x in f e d c b a; do lv_lines+="bash walk/lv$x.sh"$'\n'; done
+rmk scripts/lvl.test.sh "$lv_lines"; for x in "${LV[@]}"; do rmk "walk/lv$x.sh" $'cat data/lvl.txt\n'; done
+# a walk file in a SUBDIRECTORY: its closure resolves $SCRIPT_DIR and $(dirname "$0")/../ against that directory, not the root
+rmk scripts/wsd.test.sh $'bash walk/sub/w.sh\n'; rmk walk/sub/w.sh $'source "$SCRIPT_DIR/lib.sh"\nsource "$(dirname "$0")/../up.sh"\n'; rmk walk/sub/lib.sh $'cat data/wsd1.txt\n'; rmk walk/up.sh $'cat data/wsd2.txt\n'
+# the suite and a walk file both source one library: it is read, and its lines listed, once
+rmk scripts/dupz.test.sh $'source libZ/a.sh\nbash walk/dz.sh\n'; rmk libZ/a.sh $'cat data/dupz.txt\n'; rmk walk/dz.sh $'source libZ/a.sh\n'
+# only a closure library of the suite names the walk file
+rmk scripts/seed.test.sh $'source libZ/s.sh\n'; rmk libZ/s.sh $'bash walk/sd1.sh\n'; rmk walk/sd1.sh $'cat data/seed.txt\n'
+# a code pat that is not tracked (present on disk) is not a node
+rmk scripts/utk.test.sh $'bash walk/untracked.sh\n'
+rmk scripts/lcl.test.sh $'bash walk/lcb.sh\nbash walk/lca.sh\n'; rmk walk/lca.sh $'source libY/ya.sh\n'; rmk walk/lcb.sh $'source libY/yb.sh\n'
+rmk libY/ya.sh $'cat data/lcl.txt\n'; rmk libY/yb.sh $'cat data/lcl.txt\n'
+# a directory suite whose SECOND test file is the only one that names the walk file
+rmk dsw/a.test.ts $'export {}\n'; rmk dsw/b.test.ts $'readFileSync("walk/dsw.sh")\n'; rmk walk/dsw.sh $'cat data/dsw.txt\n'
+# one walk file per CODE_EXT member
+CE_EXT=(sh bash py ts tsx jsx js mjs cjs mts cts rb)
+ce_lines=""; for x in "${CE_EXT[@]}"; do ce_lines+="bash walk/ce.$x"$'\n'; rmk "walk/ce.$x" "cat data/ce_$x.txt"$'\n'; rmk "data/ce_$x.txt" $'t\n'; done
+rmk scripts/ce.test.sh "$ce_lines"
+
+# --- the comment table: one file per extension, each with a line comment in its own language, one in the OTHER language and a live line
+CM_HASH=(sh bash py rb yml yaml); CM_SLASH=(ts tsx js jsx mjs cjs mts cts); CM_NONE=(md tsv txt)
+mkdir -p "$RREPO/cm"
+for x in "${CM_HASH[@]}"; do rmk "cm/c.$x" $'# data/cm_own.txt\n// data/cm_other.txt\ncat data/cm_live.txt\n'; done
+for x in "${CM_SLASH[@]}"; do rmk "cm/c.$x" $'// data/cm_own.txt\n# data/cm_other.txt\ncat data/cm_live.txt\n'; done
+for x in "${CM_NONE[@]}"; do rmk "cm/c.$x" $'# data/cm_own.txt\n// data/cm_other.txt\ncat data/cm_live.txt\n'; done
+rmk cm/noext $'# data/cm_own.txt\n// data/cm_other.txt\ncat data/cm_live.txt\n'; rmk cm/.hidden $'# data/cm_own.txt\n// data/cm_other.txt\ncat data/cm_live.txt\n'
+rmk cm/x.test.ts $'// data/cm_own.txt\ncat data/cm_live.txt\n'; rmk cm/x.ts.snap $'// data/cm_own.txt\ncat data/cm_live.txt\n'
+ln -s c.sh "$RREPO/cm/link.txt"
+rmk cm/tab.py $'\t# data/cm_own.txt\ncat data/cm_live.txt\n'; rmk cm/crlf.ts $'// data/cm_own.txt\r\ncat data/cm_live.txt\r\n'
+rmk cm/nbsp.sh $'\xc2\xa0# data/cm_nbsp.txt\n'; rmk cm/q.sh $'echo "# data/cm_quote.txt"\necho ${#x} $# data/cm_dollar.txt\n'; rmk cm/ln.sh $'# one\n# two\ncat data/cm_live.txt\n'
+( cd "$RREPO" && gitq init -q -b main . && gitq add -A && gitq commit -qm seed ) || { echo "[FATAL] reach fixture" >&2; exit 1; }
+printf 'cat data/untr.txt\n' > "$RREPO/libN/untracked.sh"   # present, NOT tracked
+printf 'cat data/untrk.txt\n' > "$RREPO/walk/untracked.sh"   # present, NOT tracked
+rfix_ok=1
+for f in chain3.test.sh second.sh oplib3.sh test-all.sh negu.test.sh wk.test.sh; do gitq -C "$RREPO" ls-files --error-unmatch -- "scripts/$f" >/dev/null 2>&1 || { rfix_ok=0; echo "MISSING planted path: scripts/$f" >&2; }; done
+for f in cm/nbsp.sh walk/sub/lib.sh libZ/s.sh scripts/lib/test-affected-paths.sh dsw/b.test.ts walk/ce.rb libY/yb.sh walk/lcb.sh libG/oplib18.sh libH/oplib15.sh 'glob:walk/*.sh' libS/a/link.sh libW/w.sh walk/wsrc.sh libU/dang.sh walk/dangcode.sh cm/link.txt cm/.hidden cm/c.cts cm/noext walk/n9.sh libB/l9.sh libH/oplib14.sh libG/outer14.sh data/op14.txt; do gitq -C "$RREPO" ls-files --error-unmatch -- "$f" >/dev/null 2>&1 || { rfix_ok=0; echo "MISSING planted path: $f" >&2; }; done
+for f in libN/untracked.sh walk/untracked.sh; do gitq -C "$RREPO" ls-files --error-unmatch -- "$f" >/dev/null 2>&1 && { rfix_ok=0; echo "$f must NOT be tracked" >&2; }; done
+[[ "$rfix_ok" -eq 1 ]] && pass "the reach fixture repo tracks every planted path and leaves libN/untracked.sh untracked (a fixture that did not land would pass its negative rows vacuously)" || fail "the reach fixture repo is wrong"
+
+rrow() {  # rrow <label> [extra patterns, joined with |]: one selector row for scripts/<label>
+  printf 'AFFECTED_SELECTED\tscripts/%s\t0\tedge:derived\t^scripts/%s.test.sh%s\n' "$1" "$1" "${2:+|$2}"
+}
+raudit() { RC=0; AOUT="$(run_sut audit --root "$RREPO" --list "$1" ${2:+"$2"} ${3:+"$3"} 2>&1)" || RC=$?; }   # raudit <rows> [--all-refs | --accept F] [..]
+has_ref() { grep -qF -- "$(printf 'ref\t%s\t%s\t' "$2" "$3")" <<<"$1"; }   # has_ref <output> <suite> <path>: a ref line names the path for the suite
+chk() { local name="$1"; shift; if "$@"; then pass "$name"; else fail "$name"; fi; }   # chk <name> <cmd...>
+# instrument self-test for chk: it must record a pass for a true predicate and a failure for a false one (the assertions below ride on it)
+_c_p=$passes; _c_f=$fails; _c_n=${#FAILED[@]}
+{ chk "instrument: a true predicate" true; chk "instrument: a false predicate" false; } >/dev/null 2>&1
+if [[ "$passes" -ne $((_c_p + 1)) || "$fails" -ne $((_c_f + 1)) || "${#FAILED[@]}" -ne $((_c_n + 1)) ]]; then
+  printf '[FATAL] instrument self-test: chk did not record both a pass and a failure\n' >&2; exit 1
+fi
+passes=$_c_p; fails=$_c_f; if (( _c_n == 0 )); then FAILED=(); else FAILED=("${FAILED[@]:0:_c_n}"); fi
+
+# ---- hop closure
+{ rrow chain3; rrow depth9; rrow twosrc; rrow cyc; rrow symlnk '^libS/a/link.sh'; rrow symreal '^libS/b/real.sh'; } > "$SANDBOX/r-hop.rows"
+{ i=0; for e in "${OPF[@]}"; do i=$((i + 1)); rrow "op$i" "^libG/outer$i.sh"; done; } > "$SANDBOX/r-ops.rows"
+{ rrow negu; rrow negt; rrow negp; rrow negc; rrow negd; rrow negctl '^libN/prose.sh|^libN/commented.sh'; rrow unr; rrow unr2; } > "$SANDBOX/r-neg.rows"
+raudit "$SANDBOX/r-hop.rows" --all-refs; RO_HOP="$AOUT"; RC_HOP=$RC
+chk "closure: a path named only in the THIRD library of a chain suite -> l1 -> l2 -> l3 is a gap (PR1 read one hop)" has_ref "$RO_HOP" scripts/chain3 data/deep.txt
+chk "closure depth: the path named in the 8th library of a 9-library chain is reported" has_ref "$RO_HOP" scripts/depth9 data/d8.txt
+chk "closure depth: the path named in the 9th library is NOT reported (the closure stops at depth 8)" bash -c '! grep -qF -- "$(printf "ref\t%s\t%s\t" scripts/depth9 data/d9.txt)" <<<"$1"' _ "$RO_HOP"
+chk "closure depth: control, the paths of libraries 1 through 7 are all reported" bash -c 'for k in 1 2 3 4 5 6 7; do grep -qF -- "$(printf "ref\t%s\t%s\t" scripts/depth9 "data/d$k.txt")" <<<"$1" || exit 1; done' _ "$RO_HOP"
+chk "closure: a file with two source lines whose SECOND uses \$SCRIPT_DIR/ yields both libraries (no first-member stop)" bash -c 'grep -qF -- "$(printf "ref\t%s\t%s\t" scripts/twosrc data/first.txt)" <<<"$1" && grep -qF -- "$(printf "ref\t%s\t%s\t" scripts/twosrc data/second.txt)" <<<"$1"' _ "$RO_HOP"
+chk "closure: a cycle (a sources b sources a) terminates and lists the line of a once" bash -c '[[ "$(grep -c -P "^ref\tscripts/cyc\tdata/cyc\.txt\t" <<<"$1")" -eq 1 ]]' _ "$RO_HOP"
+chk "closure: a cycle's library line is listed once, in the first library" bash -c 'grep -qF -- "$(printf "ref\t%s\t%s\t%s" scripts/cyc data/cyc.txt libD/a.sh:2)" <<<"$1"' _ "$RO_HOP"
+raudit "$SANDBOX/r-ops.rows" --all-refs; RO_OPS="$AOUT"
+i=0; for e in "${OPF[@]}"; do
+  i=$((i + 1)); chk "operand form $i resolves to ${e##*|}: ${e%%|*}" has_ref "$RO_OPS" "scripts/op$i" "data/op$i.txt"
+done
+chk "closure: a symlinked library resolves \$SCRIPT_DIR against its LOGICAL directory (libS/a), never the directory of its target (libS/b)" bash -c 'grep -qF -- "$(printf "ref\t%s\t%s\t" scripts/symlnk data/sa.txt)" <<<"$1" && ! grep -qF -- "$(printf "ref\t%s\t%s\t" scripts/symlnk data/sb.txt)" <<<"$1"' _ "$RO_HOP"
+chk "closure: control, the same library reached by its REAL name resolves \$SCRIPT_DIR against libS/b (the memo does not keep the first resolution)" bash -c 'grep -qF -- "$(printf "ref\t%s\t%s\t" scripts/symreal data/sb.txt)" <<<"$1"' _ "$RO_HOP"
+[[ "${#OPF[@]}" -ge 18 ]] && pass "operand table floor: at least 18 forms ran (${#OPF[@]})" || fail "operand table shrank to ${#OPF[@]} forms"
+raudit "$SANDBOX/r-neg.rows" --all-refs; RO_NEG="$AOUT"; RC_NEG=$RC
+chk "operand decoy: \$SCRIPT_DIR in a library under libG/ is the LIBRARY's directory, not the suite's (scripts/oplib3.sh is never read)" bash -c '! grep -qF -- "$(printf "ref\t%s\t%s\t" scripts/op3 data/decoy.txt)" <<<"$1"' _ "$RO_OPS"
+chk "negative: an untracked library is not read" bash -c '! grep -qF -- "$(printf "ref\t%s\t%s\t" scripts/negu data/untr.txt)" <<<"$1"' _ "$RO_NEG"
+chk "negative: a runner trigger is never read as a hop target" bash -c '! grep -qF -- "zz/only-from-trigger.txt" <<<"$1"' _ "$RO_NEG"
+chk "negative: a prose 'see. lib/x.sh' is not a hop" bash -c '! grep -qF -- "$(printf "ref\t%s\t%s\t" scripts/negp data/prose.txt)" <<<"$1"' _ "$RO_NEG"
+chk "negative: a commented source line is not a hop" bash -c '! grep -qF -- "$(printf "ref\t%s\t%s\t" scripts/negc data/commented.txt)" <<<"$1"' _ "$RO_NEG"
+chk "control: the same two libraries sourced for real are read (their paths are reported)" bash -c 'grep -qF -- "$(printf "ref\t%s\t%s\t" scripts/negctl data/prose.txt)" <<<"$1" && grep -qF -- "$(printf "ref\t%s\t%s\t" scripts/negctl data/commented.txt)" <<<"$1"' _ "$RO_NEG"
+chk "unreadable reach: a dangling symlink at depth 3 of a closure makes ONLY that suite unaudited (unreadable:<rel>), exit 1" bash -c 'grep -qxF -- "$(printf "unaudited\tscripts/unr\tunreadable:libU/dang.sh")" <<<"$1" && [[ "$2" -eq 1 ]]' _ "$RO_NEG" "$RC_NEG"
+chk "unreadable reach: the neighbouring suite is still scanned (its gap is reported)" has_ref "$RO_NEG" scripts/unr2 data/unr2.txt
+
+# ---- naming walk
+{ rrow wk '^walk/code1.sh|^walk/unnamed.sh|^walk/doc.md|^walk/cfg.yml|^walk/tab.tsv'
+  rrow wchain "$(for k in 1 2 3 4 5 6 7 8 9; do printf '^walk/n%s.sh|' "$k"; done | sed 's/|$//')"
+  rrow wtrig '^scripts/test-all.sh|^scripts/lib/test-affected-paths.sh|^walk/ok.sh'; rrow wgl '^glob:walk/*.sh|^walk/dir/|^walk/ok.sh'
+  rrow cls '^walk/cls.sh|^walk/cls.py|^walk/cls.ts'; rrow unrw '^walk/dangcode.sh'; rrow wsrc '^walk/wsrc.sh'; } > "$SANDBOX/r-walk.rows"
+raudit "$SANDBOX/r-walk.rows" --all-refs; RO_WALK="$AOUT"; RC_WALK=$RC
+chk "walk: a code file listed in pats and named by the suite is read (its path is reported)" has_ref "$RO_WALK" scripts/wk data/w1.txt
+chk "walk: a code file named but NOT listed in pats is not read" bash -c '! grep -qF -- "$(printf "ref\t%s\t%s\t" scripts/wk data/w2.txt)" <<<"$1"' _ "$RO_WALK"
+chk "walk: a code file listed in pats but named by nothing is not read" bash -c '! grep -qF -- "data/w3.txt" <<<"$1"' _ "$RO_WALK"
+chk "walk: a .md, a .yml and a .tsv file listed in pats and named by the suite are NOT read (a declared limit)" bash -c '! grep -qE "data/w(4|5|6)\.txt" <<<"$1"' _ "$RO_WALK"
+chk "walk depth: the path named in the 8th file of a 9-level naming chain is reported" has_ref "$RO_WALK" scripts/wchain data/n8.txt
+chk "walk depth: the path named in the 9th file is NOT reported" bash -c '! grep -qF -- "data/n9.txt" <<<"$1"' _ "$RO_WALK"
+chk "walk depth: control, the paths of files 1 through 7 are reported" bash -c 'for k in 1 2 3 4 5 6 7; do grep -qF -- "$(printf "ref\t%s\t%s\t" scripts/wchain "data/n$k.txt")" <<<"$1" || exit 1; done' _ "$RO_WALK"
+chk "walk: a runner trigger listed in pats and named by the suite is never read (the path only it names is absent)" bash -c '! grep -qF -- "zz/only-from-trigger.txt" <<<"$1"' _ "$RO_WALK"
+chk "walk: control, the exact-listed neighbour in the same row is read" has_ref "$RO_WALK" scripts/wtrig data/w1b.txt
+chk "walk: a glob: entry and a dir/ entry are never nodes (their files are named and covered, and not read)" bash -c '! grep -qE "data/(g1|dd1|g2)\.txt" <<<"$1"' _ "$RO_WALK"
+chk "walk: control, the exact-listed file of the same row is read" has_ref "$RO_WALK" scripts/wgl data/w1b.txt
+chk "walk: a dangling code file listed in pats makes that suite unaudited (unreadable:<rel>)" bash -c 'grep -qxF -- "$(printf "unaudited\tscripts/unrw\tunreadable:walk/dangcode.sh")" <<<"$1" && [[ "$2" -eq 1 ]]' _ "$RO_WALK" "$RC_WALK"
+chk "walk: a code file read through the walk brings its own source closure (walk/wsrc.sh sources libW/w.sh)" has_ref "$RO_WALK" scripts/wsrc data/wsrc.txt
+chk "per-class: a .sh, a .py and a .ts file reached through the walk are each read (a class that scans zero files cannot pass)" bash -c 'for p in data/cls_sh.txt data/cls_py.txt data/cls_ts.txt; do grep -qF -- "$(printf "ref\t%s\t%s\t" scripts/cls "$p")" <<<"$1" || exit 1; done' _ "$RO_WALK"
+# per-row walk state: row A lists helper.sh and declares the path it names; row B names helper.sh, covers it by a dir/ entry and does not list it
+printf 'AFFECTED_SELECTED\tscripts/lab\t0\tedge:derived\t^scripts/lab.test.sh|^walk/helper.sh|^data/h.txt\nAFFECTED_SELECTED\tscripts/lab\t0\tedge:derived\t^scripts/lab2.test.sh|^walk/\n' > "$SANDBOX/r-lab-ab.rows"
+printf 'AFFECTED_SELECTED\tscripts/lab\t0\tedge:derived\t^scripts/lab2.test.sh|^walk/\nAFFECTED_SELECTED\tscripts/lab\t0\tedge:derived\t^scripts/lab.test.sh|^walk/helper.sh|^data/h.txt\n' > "$SANDBOX/r-lab-ba.rows"
+row_lab() { local f; for f in r-lab-ab r-lab-ba; do raudit "$SANDBOX/$f.rows"; [[ "$RC" -eq 0 ]] && grep -q 'gap_suites=0 gap_refs=0' <<<"$AOUT" || return 1; done; }
+chk "walk state is per row: row B (no helper.sh in its pats) does not read what row A listed, in either row order (no gap)" row_lab
+# a second label: row B LISTS helper.sh and does not declare data/h.txt; it must read the file row A read, in either order
+printf 'AFFECTED_SELECTED\tscripts/seen\t0\tedge:derived\t^scripts/lab.test.sh|^walk/helper.sh|^data/h.txt\nAFFECTED_SELECTED\tscripts/seen\t0\tedge:derived\t^scripts/lab2.test.sh|^walk/helper.sh\n' > "$SANDBOX/r-seen-ab.rows"
+printf 'AFFECTED_SELECTED\tscripts/seen\t0\tedge:derived\t^scripts/lab2.test.sh|^walk/helper.sh\nAFFECTED_SELECTED\tscripts/seen\t0\tedge:derived\t^scripts/lab.test.sh|^walk/helper.sh|^data/h.txt\n' > "$SANDBOX/r-seen-ba.rows"
+row_seen() { local f; for f in r-seen-ab r-seen-ba; do raudit "$SANDBOX/$f.rows" --all-refs; has_ref "$AOUT" scripts/seen data/h.txt || return 1; done; }
+chk "walk state is per row: row B (it LISTS helper.sh) still reads the file row A read, in either row order (the gap is reported)" row_seen
+
+# ---- canonical order
+{ rrow ord '^libO/lib.sh|^walk/ordw.sh'; } > "$SANDBOX/r-ord.rows"
+raudit "$SANDBOX/r-ord.rows" --all-refs; RO_ORD="$AOUT"; A_ORD="$(anchor_of 'cat data/ord.txt')"
+chk "order: identical reading lines in the suite, a closure library and a walk file are ordinals 1, 2, 3 (asserted through the FILE column)" bash -c 'grep -qF -- "$(printf "ref\tscripts/ord\tdata/ord.txt\tscripts/ord.test.sh:1\t$2/1\t")" <<<"$1" && grep -qF -- "$(printf "ref\tscripts/ord\tdata/ord.txt\tlibO/lib.sh:1\t$2/2\t")" <<<"$1" && grep -qF -- "$(printf "ref\tscripts/ord\tdata/ord.txt\twalk/ordw.sh:1\t$2/3\t")" <<<"$1"' _ "$RO_ORD" "$A_ORD"
+printf 'AFFECTED_SELECTED\tscripts/ord2\t0\tedge:derived\t^scripts/ord2a.test.sh\nAFFECTED_SELECTED\tscripts/ord2\t0\tedge:derived\t^scripts/ord2b.test.sh\n' > "$SANDBOX/r-ord2-ab.rows"
+printf 'AFFECTED_SELECTED\tscripts/ord2\t0\tedge:derived\t^scripts/ord2b.test.sh\nAFFECTED_SELECTED\tscripts/ord2\t0\tedge:derived\t^scripts/ord2a.test.sh\n' > "$SANDBOX/r-ord2-ba.rows"
+row_order_stable() {
+  local a b
+  raudit "$SANDBOX/r-ord2-ab.rows" --all-refs; a="$(grep '^ref' <<<"$AOUT")"
+  raudit "$SANDBOX/r-ord2-ba.rows" --all-refs; b="$(grep '^ref' <<<"$AOUT")"
+  [[ -n "$a" && "$a" == "$b" ]] && grep -qF -- "$(printf 'scripts/ord2a.test.sh:1\t%s/1' "$(anchor_of 'cat data/ord2.txt')")" <<<"$a" && grep -qF -- "$(printf 'scripts/ord2b.test.sh:1\t%s/2' "$(anchor_of 'cat data/ord2.txt')")" <<<"$a"
+}
+chk "order: the same two rows of one label presented in both orders print identical ref lines (rows ordered by their first pattern)" row_order_stable
+
+# row-order ties
+printf 'AFFECTED_SELECTED\tscripts/tie\t0\tedge:derived\t^scripts/tie.test.sh|^walk/tiea.sh|^data/zlast.txt\nAFFECTED_SELECTED\tscripts/tie\t0\tedge:derived\t^scripts/tie.test.sh|^walk/tieb.sh|^data/alast.txt\n' > "$SANDBOX/r-tie-ab.rows"
+printf 'AFFECTED_SELECTED\tscripts/tie\t0\tedge:derived\t^scripts/tie.test.sh|^walk/tieb.sh|^data/alast.txt\nAFFECTED_SELECTED\tscripts/tie\t0\tedge:derived\t^scripts/tie.test.sh|^walk/tiea.sh|^data/zlast.txt\n' > "$SANDBOX/r-tie-ba.rows"
+row_ties() {
+  local a b t; t="$(anchor_of 'cat data/tie.txt')"
+  raudit "$SANDBOX/r-tie-ab.rows" --all-refs; a="$(grep '^ref' <<<"$AOUT")"
+  raudit "$SANDBOX/r-tie-ba.rows" --all-refs; b="$(grep '^ref' <<<"$AOUT")"
+  [[ -n "$a" && "$a" == "$b" ]] && grep -qF -- "$(printf 'walk/tiea.sh:1\t%s/2' "$t")" <<<"$a" && grep -qF -- "$(printf 'walk/tieb.sh:1\t%s/3' "$t")" <<<"$a"
+}
+chk "order: two rows of one label that share their first pattern and differ after it print identical ref lines in both row orders (the whole pattern list is the sort key; the walk files are ordinals 2 and 3)" row_ties
+# walk-file closures, level order, directory suites, one walk file per extension, a runner trigger as a first pattern
+{ rrow wcl '^walk/wc1.sh|^walk/wc2.sh'; rrow lvl '^walk/lva.sh|^walk/lvb.sh|^walk/lvc.sh|^walk/lvd.sh|^walk/lve.sh|^walk/lvf.sh'; rrow wsd '^walk/sub/w.sh'; rrow dupz '^walk/dz.sh'; rrow seed '^walk/sd1.sh'; rrow utk '^walk/untracked.sh'; rrow lcl '^walk/lca.sh|^walk/lcb.sh'
+  rrow ce "$(for x in "${CE_EXT[@]}"; do printf '^walk/ce.%s|' "$x"; done | sed 's/|$//')"
+  printf 'AFFECTED_SELECTED\tdsw\t0\tedge:declared\t^dsw/|^walk/dsw.sh\n'
+  printf 'AFFECTED_SELECTED\tscripts/rt\t0\tedge:derived\t^scripts/test-all.sh\n'
+  printf 'AFFECTED_SELECTED\tscripts/rt2\t0\tedge:derived\t^scripts/lib/test-affected-paths.sh\n'; } > "$SANDBOX/r-reach2.rows"
+raudit "$SANDBOX/r-reach2.rows" --all-refs; RO_R2="$AOUT"; A_LVL="$(anchor_of 'cat data/lvl.txt')"; A_LCL="$(anchor_of 'cat data/lcl.txt')"
+chk "walk: a code pat named only by a library that a walk file sources is read (the closure of a walk file feeds the next level's naming)" has_ref "$RO_R2" scripts/wcl data/wcl.txt
+row_lvl_order() { local x n=0 a; a="$(anchor_of 'cat data/lvl.txt')"; for x in "${LV[@]}"; do n=$((n + 1))
+    grep -qF -- "$(printf 'ref\tscripts/lvl\tdata/lvl.txt\twalk/lv%s.sh:1\t%s/%s\t' "$x" "$a" "$n")" <<<"$AOUT" || return 1; done; }
+AOUT="$RO_R2"
+chk "order: six walk files of one level are read in sorted path order, whatever order the suite names them (ordinals 1 to 6 through the FILE column)" row_lvl_order
+chk "order: the source closures of the walk files follow them in walk order (ya.sh is ordinal 1, yb.sh ordinal 2)" bash -c 'grep -qF -- "$(printf "ref\tscripts/lcl\tdata/lcl.txt\tlibY/ya.sh:1\t$2/1\t")" <<<"$1" && grep -qF -- "$(printf "ref\tscripts/lcl\tdata/lcl.txt\tlibY/yb.sh:1\t$2/2\t")" <<<"$1"' _ "$RO_R2" "$A_LCL"
+chk "walk: every test file of a directory suite feeds the naming walk (only the SECOND file names walk/dsw.sh)" has_ref "$RO_R2" dsw data/dsw.txt
+chk "walk: one walk file per CODE_EXT member is read (12 extensions, 12 paths reported)" bash -c 'for x in $2; do grep -qF -- "$(printf "ref\tscripts/ce\tdata/ce_%s.txt\t" "$x")" <<<"$1" || exit 1; done' _ "$RO_R2" "${CE_EXT[*]}"
+chk "suite file: a runner trigger as a row's first pattern is not read as the suite (it is unaudited, with the pattern as the reason)" bash -c 'grep -qxF -- "$(printf "unaudited\tscripts/rt\t^scripts/test-all.sh")" <<<"$1"' _ "$RO_R2"
+chk "suite file: the second runner trigger as a first pattern is unaudited too" bash -c 'grep -qxF -- "$(printf "unaudited\tscripts/rt2\t^scripts/lib/test-affected-paths.sh")" <<<"$1"' _ "$RO_R2"
+chk "walk: a code file in a SUBDIRECTORY brings its closure resolved against that directory (\$SCRIPT_DIR/lib.sh and \$(dirname \"\$0\")/../up.sh)" bash -c 'grep -qF -- "$(printf "ref\tscripts/wsd\tdata/wsd1.txt\t")" <<<"$1" && grep -qF -- "$(printf "ref\tscripts/wsd\tdata/wsd2.txt\t")" <<<"$1"' _ "$RO_R2"
+chk "walk: a library that the suite and a walk file both source is read once (one ref line, not two)" bash -c '[[ "$(grep -c -P "^ref\tscripts/dupz\tdata/dupz\.txt\t" <<<"$1")" -eq 1 ]]' _ "$RO_R2"
+chk "walk: the suite's own source closure feeds level 1 (only libZ/s.sh, sourced by the suite, names walk/sd1.sh)" has_ref "$RO_R2" scripts/seed data/seed.txt
+chk "walk: a code pat that is not tracked is not a node (it is not read, and the suite is not unaudited)" bash -c '! grep -qF -- "data/untrk.txt" <<<"$1" && ! grep -qF -- "unaudited	scripts/utk" <<<"$1"' _ "$RO_R2"
+chk "negative: neither runner trigger is reported as a path a suite names (the refs exclude both)" bash -c '! grep -qP "^(gap|ref)\tscripts/negt\t" <<<"$1"' _ "$RO_NEG"
+chk "negative: a prose 'x.. lib/y.sh' is not a hop (the keyword may not follow a dot)" bash -c '! grep -qF -- "$(printf "ref\t%s\t%s\t" scripts/negd data/dots.txt)" <<<"$1" && grep -qF -- "$(printf "ref\t%s\t%s\t" scripts/negctl data/dots.txt)" <<<"$1"' _ "$RO_NEG"
+chk "tables: CODE_EXT is the 12 extensions the fixtures cover, and COMMENT_PREFIX holds exactly the comment-table extensions" python3 - "$SUT" "${CE_EXT[*]}" "${CM_HASH[*]} ${CM_SLASH[*]}" <<'PYTAB'
+import importlib.util as u, sys
+s = u.spec_from_file_location('m', sys.argv[1]); m = u.module_from_spec(s); s.loader.exec_module(m)
+ok = sorted(m.CODE_EXT) == sorted("." + x for x in sys.argv[2].split()) and sorted(m.COMMENT_PREFIX) == sorted("." + x for x in sys.argv[3].split())
+sys.exit(0 if ok else 1)
+PYTAB
+
+# ---- comment table
+{ for x in "${CM_HASH[@]}" "${CM_SLASH[@]}" "${CM_NONE[@]}"; do printf 'AFFECTED_SELECTED\tcm/c.%s\t0\tedge:derived\t^cm/c.%s\n' "$x" "$x"; done
+  for f in nbsp.sh noext .hidden x.test.ts x.ts.snap link.txt tab.py crlf.ts q.sh ln.sh; do printf 'AFFECTED_SELECTED\tcm/%s\t0\tedge:derived\t^cm/%s\n' "$f" "$f"; done; } > "$SANDBOX/r-cm.rows"
+raudit "$SANDBOX/r-cm.rows" --all-refs; RO_CM="$AOUT"
+for x in "${CM_HASH[@]}"; do
+  chk "comment table: .$x blanks its own # comment and keeps both the // line of the other language and the live line" bash -c '! grep -qF -- "$(printf "ref\t%s\t%s\t" "cm/c.$2" data/cm_own.txt)" <<<"$1" && grep -qF -- "$(printf "ref\t%s\t%s\t" "cm/c.$2" data/cm_other.txt)" <<<"$1" && grep -qF -- "$(printf "ref\t%s\t%s\t" "cm/c.$2" data/cm_live.txt)" <<<"$1"' _ "$RO_CM" "$x"
+done
+for x in "${CM_SLASH[@]}"; do
+  chk "comment table: .$x blanks its own // comment and keeps both the # line of the other language and the live line" bash -c '! grep -qF -- "$(printf "ref\t%s\t%s\t" "cm/c.$2" data/cm_own.txt)" <<<"$1" && grep -qF -- "$(printf "ref\t%s\t%s\t" "cm/c.$2" data/cm_other.txt)" <<<"$1" && grep -qF -- "$(printf "ref\t%s\t%s\t" "cm/c.$2" data/cm_live.txt)" <<<"$1"' _ "$RO_CM" "$x"
+done
+for x in "${CM_NONE[@]}"; do
+  chk "comment table: .$x strips nothing (its # and // lines are both reported)" bash -c 'grep -qF -- "$(printf "ref\t%s\t%s\t" "cm/c.$2" data/cm_own.txt)" <<<"$1" && grep -qF -- "$(printf "ref\t%s\t%s\t" "cm/c.$2" data/cm_other.txt)" <<<"$1"' _ "$RO_CM" "$x"
+done
+chk "comment table: an extensionless file and a dotfile strip nothing" bash -c 'for f in cm/noext cm/.hidden; do grep -qF -- "$(printf "ref\t%s\t%s\t" "$f" data/cm_own.txt)" <<<"$1" || exit 1; done' _ "$RO_CM"
+chk "comment table: x.test.ts is a .ts file (its // comment is blanked), x.ts.snap is a .snap file (its // comment is kept)" bash -c '! grep -qF -- "$(printf "ref\t%s\t%s\t" cm/x.test.ts data/cm_own.txt)" <<<"$1" && grep -qF -- "$(printf "ref\t%s\t%s\t" cm/x.ts.snap data/cm_own.txt)" <<<"$1"' _ "$RO_CM"
+chk "comment table: a symlink is read as its target (cm/link.txt -> c.sh: the # comment is blanked, the live line is reported)" bash -c '! grep -qF -- "$(printf "ref\t%s\t%s\t" cm/link.txt data/cm_own.txt)" <<<"$1" && grep -qF -- "$(printf "ref\t%s\t%s\t" cm/link.txt data/cm_live.txt)" <<<"$1"' _ "$RO_CM"
+chk "comment table: a tab-indented # comment in a .py and a CRLF // comment in a .ts are blanked, the live line is kept" bash -c '! grep -qF -- "data/cm_own.txt" <<<"$(grep -P "^ref\tcm/(tab\.py|crlf\.ts)\t" <<<"$1")" && grep -qF -- "$(printf "ref\t%s\t%s\t" cm/tab.py data/cm_live.txt)" <<<"$1" && grep -qF -- "$(printf "ref\t%s\t%s\t" cm/crlf.ts data/cm_live.txt)" <<<"$1"' _ "$RO_CM"
+chk "comment table: a comment marker after a NO-BREAK SPACE is a command word in bash and is kept (only space and tab may precede it)" bash -c 'grep -qF -- "$(printf "ref\t%s\t%s\t" cm/nbsp.sh data/cm_nbsp.txt)" <<<"$1"' _ "$RO_CM"
+chk "comment table: a # inside quotes and a \$# or \${#x} are not comments" bash -c 'grep -qF -- "$(printf "ref\t%s\t%s\t" cm/q.sh data/cm_quote.txt)" <<<"$1" && grep -qF -- "$(printf "ref\t%s\t%s\t" cm/q.sh data/cm_dollar.txt)" <<<"$1"' _ "$RO_CM"
+chk "comment table: a blanked comment keeps its line number (the live line after two comments is cm/ln.sh:3)" bash -c 'grep -qF -- "$(printf "ref\t%s\t%s\tcm/ln.sh:3\t" cm/ln.sh data/cm_live.txt)" <<<"$1"' _ "$RO_CM"
+[[ $(( ${#CM_HASH[@]} + ${#CM_SLASH[@]} + ${#CM_NONE[@]} )) -ge 17 ]] && pass "comment table floor: at least 17 extension rows ran" || fail "comment table shrank"
+
+# ---- marker
+raudit "$SANDBOX/r-walk.rows"
+row_marker_fields() { grep -qE '^SOLEUR_PR_AFFECTED_AUDIT suites=[0-9]+ always_on=[0-9]+ audited=[0-9]+ unaudited=[0-9]+ gap_suites=[0-9]+ gap_refs=[0-9]+ accepted=[0-9]+ stale=[0-9]+ refs=[0-9]+ files_read=[0-9]+$' <<<"$AOUT"; }
+chk "marker: the SOLEUR_PR_AFFECTED_AUDIT line keeps exactly its field list" row_marker_fields
+{ rrow chain3; } > "$SANDBOX/r-chain-only.rows"; raudit "$SANDBOX/r-chain-only.rows"
+chk "marker: files_read counts the closure (the suite and three libraries are 4 files, and no data file is read)" bash -c 'grep -q "files_read=4\$" <<<"$1"' _ "$AOUT"
+{ rrow cls '^walk/cls.sh|^walk/cls.py|^walk/cls.ts'; } > "$SANDBOX/r-cls-only.rows"; raudit "$SANDBOX/r-cls-only.rows"
+chk "marker: files_read counts the walk (the suite and the .sh, .py and .ts files reached through it are 4 files)" bash -c 'grep -q "files_read=4\$" <<<"$1"' _ "$AOUT"
+
+# ---- edge credit parity with the selector's own functions
+# The oracle is the REAL _NL line, _DEH_SRC/_DEH_N initialisers, _diff_edge_hit and _diff_touches of scripts/test-all.sh, cut out by content anchors
+# and run under LC_ALL=C with the early-return controls (CI, SOLEUR_TEST_FORCE_ALL, --full, --enumerate, the fail-safe arms) neutralised. It is
+# computed ONCE here; a mutant run re-runs only the python side. A renamed function FAILS the suite with a named reason, it never skips.
+EDGE_ROWS=()
+er() { EDGE_ROWS+=("$1"$'\t'"$2"$'\t'"$3"); }   # er <edge> <path> <name>; the empty entry is spelled <empty> (a tab is IFS whitespace and would collapse it)
+er '^glob:docs-tree/**.sh' 'docs-tree/a/b/c.sh' 'wf-cross'          # * crosses /
+er '^glob:docs-tree/**.sh' 'docs-tree/a/b/c.txt' 'wf-tail-rejects'
+er '^glob:docs-tree/**.sh' 'other/a.sh' 'wf-head-rejects'
+er '^glob:scripts/*.sh' 'scripts/x.sh' 'wf-plain'
+er '^glob:scripts/*.sh' 'scripts/x.txt' 'wf-plain-rejects'
+er '^glob:scripts/*.sh' 'scripts/x.sh.bak' 'wf-suffix-rejected'
+er '^glob:scripts/*.txt' 'scripts/a.txt' 'wf-same-head-other-tail'
+er '^glob:scripts/*.sh' 'scripts/b.sh' 'wf-same-head-first-tail-again'
+er '^glob:a./b/*.sh' 'lib/z.sh' 'wf-curdir-inside-the-head-is-not-malformed'
+er '^glob:a../b/*.sh' 'lib/z.sh' 'wf-parentdir-inside-the-head-is-not-malformed'
+er '^glob:x/*/y' 'x/y' 'wf-first-and-last-segments-overlap-rejected'
+er '^glob:scripts/*ab*bc' 'scripts/abc' 'wf-middle-segment-overlaps-the-tail-rejected'
+er '^glob:scripts/*a*b*c' 'scripts/xaybzc' 'wf-many-stars-match'
+er '^glob:scripts/***x.sh' 'scripts/a/x.sh' 'wf-star-run-is-one-star'
+er '^scripts/' 'scripts/a.sh' 'dir-prefix'
+er '^scripts/' 'x/scripts/a.sh' 'dir-not-infix'
+er '^scripts/a.sh' 'scripts/a.sh' 'exact'
+er '^scripts/a.sh' 'scripts/a.sh.bak' 'exact-not-prefix'
+er '^scripts/a.sh' 'x/scripts/a.sh' 'exact-not-suffix'
+er '^scripts' 'scripts/a.sh' 'exact-no-slash-is-exact'
+er '^apps/(auth)/p.tsx' 'apps/(auth)/p.tsx' 'exact-metachars'
+er '^apps/(auth)/p.tsx' 'apps/auth/p.tsx' 'exact-metachars-not-a-regex'
+er '^glob:scripts/**' 'scripts/a/b.sh' 'wf-star-tail-only'
+er '^glob:scripts/*/lib/*.sh' 'scripts/x/lib/y.sh' 'wf-two-stars'
+er '^glob:scripts/*/lib/*.sh' 'scripts/x/lib/y.txt' 'wf-two-stars-rejects'
+er '^glob:scripts/*/a-b_c.sh' 'scripts/x/a-b_c.sh' 'wf-charset-allowed'
+er '^glob:scripts/*.sh' 'scripts/a/b.sh' 'wf-star-crosses-in-a-plain-tail'
+er '^scripts/' 'scripts/' 'dir-equals-itself'
+er '^scripts/lib/' 'scripts/lib2/a.sh' 'dir-not-a-name-prefix'
+er '^glob:scripts/*/a?.sh' 'scripts/x/zz.sh' 'mal-charset-question'
+er '^glob:scripts/*/a[b].sh' 'scripts/x/zz.sh' 'mal-charset-bracket'
+er '^glob:scripts/*/a b.sh' 'scripts/x/zz.sh' 'mal-charset-space'
+er '^glob:scripts/*/a+.sh' 'scripts/x/zz.sh' 'mal-charset-plus'
+er '^glob:/*/x.sh' 'lib/z.sh' 'mal-head-absolute'
+er '^glob:./*/x.sh' 'lib/z.sh' 'mal-head-curdir'
+er '^glob:../*/x.sh' 'lib/z.sh' 'mal-head-parent'
+er '^glob:a//*/x.sh' 'lib/z.sh' 'mal-head-doubleslash'
+er '^glob:a/./*/x.sh' 'lib/z.sh' 'mal-head-slashdotslash'
+er '^glob:a/../*/x.sh' 'lib/z.sh' 'mal-head-slashdotdotslash'
+er '^glob:scripts/a*/x.sh' 'lib/z.sh' 'mal-head-not-slash'
+er '^glob:*.sh' 'lib/z.txt' 'mal-head-not-slash-empty'
+er '^glob:' 'lib/z.sh' 'mal-head-not-slash-bare'
+er '^glob:scripts/*/' 'lib/z.sh' 'mal-tail-slash'
+er '^glob:scripts/' 'lib/z.sh' 'mal-tail-no-star'
+er 'lib/x' 'a/lib/x.sh' 'noncaret-substring'
+er 'lib/x' 'a/other/y.sh' 'noncaret-substring-rejects'
+er 'scripts/a.sh' 'x/scripts/a.sh.bak' 'noncaret-is-a-substring-not-an-exact-name'
+er 'glob:scripts/*.sh' 'scripts/a.sh' 'noncaret-glob-is-dead'
+er '<empty>' 'scripts/a.sh' 'noncaret-empty-matches-all'
+er '^' 'scripts/a.sh' 'caret-bare-matches-nothing'
+printf '%s\n' "${EDGE_ROWS[@]}" > "$SANDBOX/edge.table"
+extract_oracle() {  # extract_oracle <test-all.sh> <out>: the pieces by content anchors; non-zero with a named reason when one is missing
+  local src="$1" out="$2" fn pat
+  assert_fixture_dir "${out%/*}"
+  : > "$out" || return 2
+  for pat in "_NL=\$'\\n'" '_DEH_SRC=""' '_DEH_N=""'; do
+    grep -m1 -xF -- "$pat" "$src" >> "$out" || { echo "oracle: the line $pat is not in $src" >&2; return 1; }
+  done
+  for fn in _diff_edge_hit _diff_touches; do
+    awk -v fn="$fn" '$0 == fn "() {" { on = 1 } on { print } on && $0 == "}" { exit }' "$src" > "$out.fn"
+    [[ -s "$out.fn" && "$(tail -n 1 "$out.fn")" == "}" ]] || { echo "oracle: the function $fn is not in $src" >&2; return 1; }
+    cat "$out.fn" >> "$out"
+  done
+}
+cat > "$SANDBOX/edge-run.sh" <<'EOS'
+LC_ALL=C; export LC_ALL
+unset CI SOLEUR_TEST_FORCE_ALL
+source "$1"
+_FULL_GATE=0; _ENUMERATE=0; _diff_detect_ok=1; _diff_head_ok=1; _pr_gate_canary_failed=0
+i=0
+while IFS=$'\t' read -r e p n; do
+  i=$((i + 1)); [[ "$e" == "<empty>" ]] && e=""
+  _diff_names="$p"
+  if _diff_touches "$e"; then echo "$i 1"; else echo "$i 0"; fi
+done < "$2"
+EOS
+EDGE_SRC="$SCRIPT_DIR/../../../scripts/test-all.sh"
+extract_oracle "$EDGE_SRC" "$SANDBOX/edge-oracle.sh" && bash "$SANDBOX/edge-run.sh" "$SANDBOX/edge-oracle.sh" "$SANDBOX/edge.table" > "$SANDBOX/edge.oracle" 2>/dev/null
+[[ "$(wc -l < "$SANDBOX/edge.oracle")" -eq "${#EDGE_ROWS[@]}" ]] && pass "edge oracle: the real _diff_touches answered all ${#EDGE_ROWS[@]} rows" || fail "edge oracle did not answer every row"
+edge_py() {  # the python side: edge_hit of the SUT under test, one '<row> <0|1>' line per table row
+  python3 - "$SUT" "$SANDBOX/edge.table" <<'PY'
+import importlib.util as u, sys
+s = u.spec_from_file_location('m', sys.argv[1]); m = u.module_from_spec(s); s.loader.exec_module(m)
+for i, line in enumerate(open(sys.argv[2], encoding="utf-8").read().split("\n"), 1):
+    if not line:
+        continue
+    e, p, n = line.split("\t")
+    print(i, 1 if m.edge_hit("" if e == "<empty>" else e, p) else 0)
+PY
+}
+row_edge() {  # row_edge <name prefix>: every table row whose name starts with the prefix agrees with the oracle, and at least one such row exists
+  local i=0 n=0 line name got want out
+  out="$(edge_py)" || return 1
+  for line in "${EDGE_ROWS[@]}"; do
+    i=$((i + 1)); name="${line##*$'\t'}"
+    [[ "$name" == "$1"* ]] || continue
+    n=$((n + 1)); got="$(sed -n "${i}p" <<<"$out")"; want="$(sed -n "${i}p" "$SANDBOX/edge.oracle")"
+    [[ -n "$want" && "$got" == "$want" ]] || return 1
+  done
+  [[ "$n" -ge 1 ]]
+}
+EDGE_OUT="$(edge_py)"
+i=0; for line in "${EDGE_ROWS[@]}"; do
+  i=$((i + 1)); name="${line##*$'\t'}"
+  chk "edge parity: row $name (edge ${line%%$'\t'*}) agrees with the selector's own _diff_touches" test "$(sed -n "${i}p" <<<"$EDGE_OUT")" = "$(sed -n "${i}p" "$SANDBOX/edge.oracle")"
+done
+[[ "${#EDGE_ROWS[@]}" -ge 50 ]] && pass "edge table floor: at least 50 rows ran" || fail "the edge table shrank to ${#EDGE_ROWS[@]} rows"
+row_edge_charset() { row_edge mal-charset; }; row_edge_head_abs() { row_edge mal-head-absolute; }; row_edge_head_dot() { row_edge mal-head-curdir; }
+row_edge_head_dotdot() { row_edge mal-head-parent; }; row_edge_head_dslash() { row_edge mal-head-doubleslash; }; row_edge_head_sds() { row_edge mal-head-slashdotslash; }
+row_edge_head_sddsl() { row_edge mal-head-slashdotdotslash; }; row_edge_head_notslash() { row_edge mal-head-not-slash; }; row_edge_tail_slash() { row_edge mal-tail-slash; }
+row_edge_tail_nostar() { row_edge mal-tail-no-star; }; row_edge_noncaret() { row_edge noncaret-; }; row_edge_cross() { row_edge wf-; }
+row_edge_exact() { row_edge exact; }; row_edge_dir() { row_edge dir-; }
+edge_oracle_missing_fn() {   # the harness row: an oracle extractor pointed at a copy whose _diff_edge_hit was renamed must FAIL with a named reason, never skip
+  sed 's/^_diff_edge_hit() {/_diff_edge_hit_renamed() {/' "$EDGE_SRC" > "$SANDBOX/test-all-renamed.sh"
+  local msg; msg="$(extract_oracle "$SANDBOX/test-all-renamed.sh" "$SANDBOX/edge-oracle-bad.sh" 2>&1)" && return 1
+  grep -q 'oracle: the function _diff_edge_hit is not in' <<<"$msg"
+}
+chk "edge oracle: a copy of test-all.sh whose _diff_edge_hit was renamed FAILS the extraction with a named reason (it never skips)" edge_oracle_missing_fn
+chk "edge credit has ONE function and ONE call site in the audit (a second implementation could drift from the differential)" bash -c '[[ "$(grep -cE "(^|[^_])edge_hit\(" "$1")" -eq 2 ]]' _ "$REAL_SUT"
+
+# ---- cost: line events, never a clock (the cap raises OverflowError, so a mutant that loses a bound fails fast instead of hanging)
+row_reach_cost() {
+  python3 - "$SUT" "$SANDBOX" <<'PY' 2>&1
+import importlib.util as u, os, sys, shutil, tempfile
+s = u.spec_from_file_location('m', sys.argv[1]); m = u.module_from_spec(s); s.loader.exec_module(m)
+base = tempfile.mkdtemp(prefix="reach-cost.", dir=sys.argv[2])
+def put(root, rel, text):
+    p = os.path.join(root, rel); os.makedirs(os.path.dirname(p) or root, exist_ok=True); open(p, "w").write(text)
+def events(fn, cap):
+    ev = [0]
+    def local(frame, event, arg):
+        if event == "line":
+            ev[0] += 1
+            if ev[0] > cap:
+                raise OverflowError
+        return local
+    sys.settrace(lambda f, e, a: local)
+    try:
+        fn(); ok = True
+    except OverflowError:
+        ok = False
+    finally:
+        sys.settrace(None)
+    return ok, ev[0]
+def reach(root, tracked, pats, inputs):
+    idx = m.PathIndex(tracked)
+    return lambda: m.reach_texts(root, inputs, pats, idx, [])
+def flat(name, n_named, width):
+    root = os.path.join(base, name); os.makedirs(root)
+    names = ["walk/w%d.sh" % i for i in range(n_named)]
+    put(root, "s.sh", "".join("bash %s\n" % x for x in names))
+    for x in names:
+        put(root, x, "true\n")
+    pats = ["^s.sh"] + ["^" + x for x in names] + ["^walk/pad%d.sh" % i for i in range(width - n_named)]
+    return reach(root, set(names) | {"s.sh"} | {"walk/pad%d.sh" % i for i in range(width - n_named)}, pats, [os.path.join(root, "s.sh")])
+def chain(name, n):
+    root = os.path.join(base, name); os.makedirs(root)
+    names = ["walk/c%d.sh" % i for i in range(n)]
+    put(root, "s.sh", "bash %s\n" % names[0])
+    for i, x in enumerate(names):
+        put(root, x, ("bash %s\n" % names[i + 1]) if i + 1 < n else "true\n")
+    return reach(root, set(names) | {"s.sh"}, ["^s.sh"] + ["^" + x for x in names], [os.path.join(root, "s.sh")])
+bad = []
+CAP = 2000000
+ok4, e400 = events(flat("w400", 20, 400), CAP); ok40, e4000 = events(flat("w4000", 20, 4000), CAP)
+if not (ok4 and ok40) or e4000 > 12 * e400:
+    bad.append("width of pats (400 vs 4000 entries, 20 named): events %d -> %d (ok=%s/%s)" % (e400, e4000, ok4, ok40))
+oka, e20 = events(flat("f20", 20, 20), CAP); okb, e200 = events(flat("f200", 200, 200), CAP)
+if not (oka and okb) or e200 > 14 * e20:
+    bad.append("files at one level (20 vs 200): events %d -> %d" % (e20, e200))
+okc, ech = events(chain("c8", 8), CAP); okf, efl = events(flat("f8", 8, 8), CAP)
+if not (okc and okf) or ech > 3 * efl:
+    bad.append("levels (an 8-file chain vs 8 files at one level): events %d vs %d" % (ech, efl))
+# the fan-out lattice: k libraries that each source every other one; a dropped visited set expands 5^8 paths and trips the cap
+root = os.path.join(base, "lat"); os.makedirs(root); k = 6
+for i in range(k):
+    put(root, "lib/n%d.sh" % i, "".join("source lib/n%d.sh\n" % j for j in range(k) if j != i))
+put(root, "s.sh", "source lib/n0.sh\n")
+tracked = {"s.sh"} | {"lib/n%d.sh" % i for i in range(k)}
+idx = m.PathIndex(tracked)
+okl, el = events(lambda: m.suite_texts(root, [os.path.join(root, "s.sh")], idx, []), 60000)   # measured 9,081 events with the visited set; without it the same walk passes 3,000,000
+if not okl:
+    bad.append("fan-out lattice (k=6): the closure exceeded the line-event cap (%d events): the visited set is gone" % el)
+shutil.rmtree(base, ignore_errors=True)
+print("; ".join(bad))
+sys.exit(1 if bad else 0)
+PY
+}
+chk "cost: reach_texts is linear in the width of pats and does not multiply by files or levels, and the fan-out lattice stays under the line-event cap" row_reach_cost
+
+# ---- the reach-differential generator: a fixture old SUT, the four boundaries, B=0, and no file written at the stop line
+RDIFF="$(find "$SPECS" -path '*/receipts/reach-differential.py' 2>/dev/null | sort | head -1)"
+row_rdiff_gen() {
+  [[ -n "$RDIFF" && -f "$RDIFF" ]] || { echo "reach-differential.py not found under $SPECS" >&2; return 1; }
+  local d="$SANDBOX/rdiff" b added gone resplit want out rc ncode nnon tree sha rsha
+  rm -rf "$d"; mkdir -p "$d" && printf 'AFFECTED_SELECTED\ts\t0\tedge:derived\t^s\n' > "$d/rows.txt"
+  cat > "$d/stub.py" <<'PY'
+import os
+class C:
+    def __init__(self, gaps, n): self.gaps, self.unaudited = gaps, ["u"] * n
+    def ref_lines(self, label, path):
+        if path not in self.gaps[label]:
+            raise KeyError(path)   # the generator must ask the census that REPORTED the pair
+        return [("a", 1, "f.sh", 3, "t")]
+def quote_field(s, comma=False): return "q:" + s
+CODE_EXT = frozenset((".md",))   # inverted on purpose: a generator with its own extension list classifies every path the wrong way
+def load_rows(path, root): return open(path).read().split("\n")
+def audit_census(root, rows, accept):
+    n, extra, gone = int(os.environ["RD_B"]), int(os.environ["RD_ADDED"]), int(os.environ["RD_REMOVED"])
+    base = ["p%d.sh" % i for i in range(n)]
+    if SIDE == "old":
+        return C({"s": base}, int(os.environ["RD_UNAUD_OLD"]))
+    return C({"s": base[gone:] + ["x%d.%s" % (i, "sh" if i % 2 == 0 else "md") for i in range(extra)]}, int(os.environ["RD_UNAUD_NEW"]))
+PY
+  { printf 'SIDE = "old"\n'; cat "$d/stub.py"; } > "$d/old.py"
+  { printf 'SIDE = "new"\n'; cat "$d/stub.py"; } > "$d/new.py"
+  ( cd "$d" && gitq init -q -b main . && gitq add -A && gitq commit -qm fixture ) >/dev/null 2>&1 || { echo "could not build the generator's git root" >&2; return 1; }
+  tree="$(gitq -C "$d" rev-parse HEAD)"; sha="$(gitq -C "$d" hash-object "$d/old.py")"; rsha="$(sha256sum "$d/rows.txt" | cut -c1-64)"
+  for b in 0 10 11; do
+    for added in 0 5 6 10 11; do
+      [[ "$b" -eq 0 && "$added" -gt 0 ]] && continue
+      gone=0; [[ "$b" -ge 10 ]] && gone=3
+      printf 'STALE\n' > "$d/out.tsv"; ln -sf "$d/victim" "$d/out.tsv.part"; : > "$d/victim"; rc=0
+      out="$(RD_B=$b RD_ADDED=$added RD_REMOVED=$gone RD_UNAUD_OLD=0 RD_UNAUD_NEW=0 python3 "$RDIFF" "$d" "$d/rows.txt" --old-sut "$d/old.py" --sut "$d/new.py" --out "$d/out.tsv" 2>&1)" || rc=$?
+      [[ ! -s "$d/victim" ]] || { echo "B=$b added=$added: a link at <out>.part was written through" >&2; return 1; }
+      resplit=$(( (b + 1) / 2 ))
+      if (( added >= b )); then want=1; else want=0; fi
+      [[ "$rc" -eq "$want" ]] || { echo "B=$b added=$added: rc=$rc, wanted $want" >&2; return 1; }
+      if (( want == 1 )); then [[ ! -e "$d/out.tsv" && ! -e "$d/out.tsv.part" ]] || { echo "B=$b added=$added: a file (or the stale one) is left at the stop line" >&2; return 1; }; continue; fi
+      if grep -q STALE "$d/out.tsv"; then echo "B=$b added=$added: the stale file was not replaced" >&2; return 1; fi
+      grep -qxE "# old_sut=$sha tree=$tree rows_sha256=$rsha base_pairs=$b new_pairs=$((b - gone + added)) added=$added removed=$gone" < <(head -n 1 "$d/out.tsv") || { echo "B=$b added=$added: bad header" >&2; return 1; }
+      [[ "$(sed -n '/^# added/,/^# removed/p' "$d/out.tsv" | grep -vc '^#')" -eq "$added" ]] || { echo "B=$b added=$added: the added section differs from the header" >&2; return 1; }
+      [[ "$(sed -n '/^# removed/,$p' "$d/out.tsv" | grep -vc '^#')" -eq "$gone" ]] || { echo "B=$b added=$added: the removed section differs from the header" >&2; return 1; }
+      for part in '/^# added/,/^# removed/p' '/^# removed/,$p'; do
+        sed -n "$part" "$d/out.tsv" | grep -v '^#' | cut -f2 > "$d/col2.txt"
+        LC_ALL=C sort -c "$d/col2.txt" 2>/dev/null || { echo "B=$b added=$added: a section is not sorted" >&2; return 1; }
+      done
+      ncode="$(awk -F'\t' '/^#/ {next} $3 == "code"' "$d/out.tsv" | wc -l)"; nnon="$(awk -F'\t' '/^#/ {next} $3 == "non-code"' "$d/out.tsv" | wc -l)"
+      [[ "$ncode" -eq $(( added / 2 )) && "$nnon" -eq $(( (added + 1) / 2 + gone )) ]] || { echo "B=$b added=$added: path classes code=$ncode non-code=$nnon" >&2; return 1; }
+      [[ "$(awk -F'\t' '/^#/ {next} $1 != "q:s" || $2 !~ /^q:/ || $4 != "q:f.sh:3"' "$d/out.tsv" | wc -l)" -eq 0 && "$(awk -F'\t' '/^#/ {next} NF != 4' "$d/out.tsv" | wc -l)" -eq 0 ]] || { echo "B=$b added=$added: a data row is not quoted, has the wrong via or the wrong column count" >&2; return 1; }
+      if (( added >= resplit )); then grep -q 'RE-SPLIT' <<<"$out" || { echo "B=$b added=$added: no re-split note" >&2; return 1; }
+      else ! grep -q 'RE-SPLIT' <<<"$out" || { echo "B=$b added=$added: a re-split note below the line" >&2; return 1; }; fi
+    done
+  done
+  rm -f "$d/out.tsv.part"; printf 'STALE\n' > "$d/out.tsv"; rc=0   # a new audit with more unaudited suites than the old one stops; one with fewer does not
+  RD_B=11 RD_ADDED=0 RD_REMOVED=3 RD_UNAUD_OLD=0 RD_UNAUD_NEW=1 python3 "$RDIFF" "$d" "$d/rows.txt" --old-sut "$d/old.py" --sut "$d/new.py" --out "$d/out.tsv" >/dev/null 2>&1 || rc=$?
+  [[ "$rc" -eq 1 && ! -e "$d/out.tsv" ]] || { echo "more unaudited suites: rc=$rc or the file survived" >&2; return 1; }
+  rc=0; RD_B=11 RD_ADDED=0 RD_REMOVED=3 RD_UNAUD_OLD=1 RD_UNAUD_NEW=0 python3 "$RDIFF" "$d" "$d/rows.txt" --old-sut "$d/old.py" --sut "$d/new.py" --out "$d/out.tsv" >/dev/null 2>&1 || rc=$?
+  [[ "$rc" -eq 0 && -s "$d/out.tsv" ]] || { echo "fewer unaudited suites: rc=$rc or no file" >&2; return 1; }
+  rc=0; RD_B=11 RD_ADDED=0 RD_REMOVED=0 RD_UNAUD_OLD=0 RD_UNAUD_NEW=0 python3 "$RDIFF" "$d" "$d/rows.txt" --old-sut "$d/old.py" --sut "$d/new.py" --out "$d/rows.txt" >/dev/null 2>&1 || rc=$?   # --out may not name an input
+  [[ "$rc" -eq 2 && -s "$d/rows.txt" ]] || { echo "--out naming the rows file: rc=$rc or the rows file was destroyed" >&2; return 1; }
+  mkdir -p "$d/up/scripts" "$d/up/a/b"; cp "$d/new.py" "$d/up/scripts/ci-pr-affected-replay.py"; cp "$RDIFF" "$d/up/a/b/reach-differential.py"   # no --sut: the SUT is found by walking up
+  rc=0; RD_B=11 RD_ADDED=2 RD_REMOVED=0 RD_UNAUD_OLD=0 RD_UNAUD_NEW=0 python3 "$d/up/a/b/reach-differential.py" "$d" "$d/rows.txt" --old-sut "$d/old.py" --out "$d/up/out.tsv" >/dev/null 2>&1 || rc=$?
+  [[ "$rc" -eq 0 && -s "$d/up/out.tsv" ]] || { echo "the default --sut was not found by walking up (rc=$rc)" >&2; return 1; }
+}
+chk "reach-differential: B=0, 10 and 11 (re-split line ceil(B/2), stop line B: nothing written, the stale file and a linked .part gone), the header's blob, tree and rows hashes, sorted added and removed sections, the code split by the SUT's own extension set, quoting, the census each pair comes from, the unaudited guard, an --out that names an input, and the default --sut" row_rdiff_gen
+# ---- rows for the mutation harness: each re-runs the audit with $SUT and judges ONE property (a pristine run must be GREEN)
+no_ref() { ! has_ref "$@"; }
+row_rc_closure() { raudit "$SANDBOX/r-hop.rows" --all-refs; has_ref "$AOUT" scripts/chain3 data/deep.txt; }
+row_rc_depth() { raudit "$SANDBOX/r-hop.rows" --all-refs; has_ref "$AOUT" scripts/depth9 data/d8.txt && no_ref "$AOUT" scripts/depth9 data/d9.txt; }
+row_rc_twosrc() { raudit "$SANDBOX/r-hop.rows" --all-refs; has_ref "$AOUT" scripts/twosrc data/first.txt && has_ref "$AOUT" scripts/twosrc data/second.txt; }
+row_rc_symlink() { raudit "$SANDBOX/r-hop.rows" --all-refs; has_ref "$AOUT" scripts/symlnk data/sa.txt && no_ref "$AOUT" scripts/symlnk data/sb.txt && has_ref "$AOUT" scripts/symreal data/sb.txt; }
+row_rc_ops() { local i; raudit "$SANDBOX/r-ops.rows" --all-refs; for i in $(seq 1 "${#OPF[@]}"); do has_ref "$AOUT" "scripts/op$i" "data/op$i.txt" || return 1; done; no_ref "$AOUT" scripts/op3 data/decoy.txt; }
+row_rc_neg_trigger() { raudit "$SANDBOX/r-neg.rows" --all-refs; ! grep -qF -- "zz/only-from-trigger.txt" <<<"$AOUT" && has_ref "$AOUT" scripts/negctl data/prose.txt; }
+row_rc_neg_untracked() { raudit "$SANDBOX/r-neg.rows" --all-refs; no_ref "$AOUT" scripts/negu data/untr.txt && has_ref "$AOUT" scripts/negctl data/prose.txt; }
+row_rc_neg_prose() { raudit "$SANDBOX/r-neg.rows" --all-refs; no_ref "$AOUT" scripts/negp data/prose.txt && no_ref "$AOUT" scripts/negc data/commented.txt && has_ref "$AOUT" scripts/negctl data/commented.txt; }
+row_rc_unreadable() { raudit "$SANDBOX/r-neg.rows" --all-refs; [[ "$RC" -eq 1 ]] && grep -qxF -- "$(printf 'unaudited\tscripts/unr\tunreadable:libU/dang.sh')" <<<"$AOUT" && has_ref "$AOUT" scripts/unr2 data/unr2.txt; }
+row_rc_unreadable_walk() { raudit "$SANDBOX/r-walk.rows" --all-refs; [[ "$RC" -eq 1 ]] && grep -qxF -- "$(printf 'unaudited\tscripts/unrw\tunreadable:walk/dangcode.sh')" <<<"$AOUT"; }
+row_rc_walk_listed() { raudit "$SANDBOX/r-walk.rows" --all-refs; has_ref "$AOUT" scripts/wk data/w1.txt && no_ref "$AOUT" scripts/wk data/w2.txt && ! grep -qF -- "data/w3.txt" <<<"$AOUT"; }
+row_rc_walk_data() { raudit "$SANDBOX/r-walk.rows" --all-refs; has_ref "$AOUT" scripts/wk data/w1.txt && ! grep -qE "data/w(4|5|6)\.txt" <<<"$AOUT"; }
+row_rc_walk_depth() { raudit "$SANDBOX/r-walk.rows" --all-refs; has_ref "$AOUT" scripts/wchain data/n8.txt && ! grep -qF -- "data/n9.txt" <<<"$AOUT"; }
+row_rc_walk_trigger() { raudit "$SANDBOX/r-walk.rows" --all-refs; has_ref "$AOUT" scripts/wtrig data/w1b.txt && ! grep -qF -- "zz/only-from-trigger.txt" <<<"$AOUT"; }
+row_rc_walk_nodes() { raudit "$SANDBOX/r-walk.rows" --all-refs; has_ref "$AOUT" scripts/wgl data/w1b.txt && ! grep -qE "data/(g1|dd1|g2)\.txt" <<<"$AOUT"; }
+row_rc_cls() { raudit "$SANDBOX/r-walk.rows" --all-refs; local p; for p in data/cls_sh.txt data/cls_py.txt data/cls_ts.txt; do has_ref "$AOUT" scripts/cls "$p" || return 1; done; }
+row_rc_walk_closure() { raudit "$SANDBOX/r-walk.rows" --all-refs; has_ref "$AOUT" scripts/wsrc data/wsrc.txt; }
+row_rc_order() {
+  local a; raudit "$SANDBOX/r-ord.rows" --all-refs; a="$(anchor_of 'cat data/ord.txt')"
+  grep -qF -- "$(printf 'ref\tscripts/ord\tdata/ord.txt\tscripts/ord.test.sh:1\t%s/1\t' "$a")" <<<"$AOUT" && grep -qF -- "$(printf 'ref\tscripts/ord\tdata/ord.txt\tlibO/lib.sh:1\t%s/2\t' "$a")" <<<"$AOUT" && grep -qF -- "$(printf 'ref\tscripts/ord\tdata/ord.txt\twalk/ordw.sh:1\t%s/3\t' "$a")" <<<"$AOUT"
+}
+row_rc_order_rows() { row_order_stable; }
+row_rc_lab() { row_lab; }
+row_rc_seen() { row_seen; }
+row_cm_hash() { local x; raudit "$SANDBOX/r-cm.rows" --all-refs; for x in "${CM_HASH[@]}"; do no_ref "$AOUT" "cm/c.$x" data/cm_own.txt && has_ref "$AOUT" "cm/c.$x" data/cm_other.txt && has_ref "$AOUT" "cm/c.$x" data/cm_live.txt || return 1; done; }
+row_cm_slash() { local x; raudit "$SANDBOX/r-cm.rows" --all-refs; for x in "${CM_SLASH[@]}"; do no_ref "$AOUT" "cm/c.$x" data/cm_own.txt && has_ref "$AOUT" "cm/c.$x" data/cm_other.txt && has_ref "$AOUT" "cm/c.$x" data/cm_live.txt || return 1; done; }
+row_cm_none() { local x; raudit "$SANDBOX/r-cm.rows" --all-refs; for x in "${CM_NONE[@]}"; do has_ref "$AOUT" "cm/c.$x" data/cm_own.txt && has_ref "$AOUT" "cm/c.$x" data/cm_other.txt || return 1; done; has_ref "$AOUT" cm/noext data/cm_own.txt && has_ref "$AOUT" cm/.hidden data/cm_own.txt; }
+row_cm_names() { raudit "$SANDBOX/r-cm.rows" --all-refs; no_ref "$AOUT" cm/x.test.ts data/cm_own.txt && has_ref "$AOUT" cm/x.ts.snap data/cm_own.txt && no_ref "$AOUT" cm/link.txt data/cm_own.txt && has_ref "$AOUT" cm/link.txt data/cm_live.txt; }
+row_cm_shapes() { raudit "$SANDBOX/r-cm.rows" --all-refs; no_ref "$AOUT" cm/tab.py data/cm_own.txt && no_ref "$AOUT" cm/crlf.ts data/cm_own.txt && has_ref "$AOUT" cm/q.sh data/cm_quote.txt && has_ref "$AOUT" cm/q.sh data/cm_dollar.txt && grep -qF -- "$(printf 'ref\tcm/ln.sh\tdata/cm_live.txt\tcm/ln.sh:3\t')" <<<"$AOUT"; }
+row_hop_redos() {   # one long identifier-like token after a source keyword must stay linear: a quadratic match runs for minutes, so it is killed at 8 s
+  timeout -k 2 8 python3 - "$SUT" <<'PYRE' 2>&1
+import importlib.util as u, sys
+s = u.spec_from_file_location('m', sys.argv[1]); m = u.module_from_spec(s); s.loader.exec_module(m)
+for lead in ("source $", "source ${", ". $", 'source "$'):
+    m.SOURCE_HOP.search(lead + "A" * 100000)
+hit = m.SOURCE_HOP.search('source "$SCRIPT_DIR/x.sh"')
+sys.exit(0 if hit and hit.group(1) == "$SCRIPT_DIR" and hit.group(2) == "/x.sh" else 1)
+PYRE
+}
+chk "cost: one 100,000-character token after a source keyword matches in linear time (and a real operand still parses)" row_hop_redos
+row_glob_cost() {   # separated stars against a long path: a regex is polynomial in the number of stars, the segment matcher is linear
+  timeout -k 2 8 python3 - "$SUT" <<'PYGC' 2>&1
+import importlib.util as u, sys
+s = u.spec_from_file_location('m', sys.argv[1]); m = u.module_from_spec(s); s.loader.exec_module(m)
+for k in (8, 40):
+    if m.edge_hit("^glob:a/" + "*b" * k + "*c", "a/" + "b" * 400 + "x"):
+        sys.exit(1)
+sys.exit(0 if m.edge_hit("^glob:a/*b*c", "a/xbyc") and not m.edge_hit("^glob:a/*b*c", "a/xbyd") else 1)
+PYGC
+}
+chk "cost: a glob with 40 separated stars against a 400-character path is decided in linear time (and a real glob still matches)" row_glob_cost
+row_rc_ties() { row_ties; }
+row_rc_wsd() { raudit "$SANDBOX/r-reach2.rows" --all-refs; has_ref "$AOUT" scripts/wsd data/wsd1.txt && has_ref "$AOUT" scripts/wsd data/wsd2.txt; }
+row_rc_dupz() { raudit "$SANDBOX/r-reach2.rows" --all-refs; [[ "$(grep -c -P '^ref\tscripts/dupz\tdata/dupz\.txt\t' <<<"$AOUT")" -eq 1 ]]; }
+row_rc_seed() { raudit "$SANDBOX/r-reach2.rows" --all-refs; has_ref "$AOUT" scripts/seed data/seed.txt; }
+row_rc_neg_dots() { raudit "$SANDBOX/r-neg.rows" --all-refs; no_ref "$AOUT" scripts/negd data/dots.txt && has_ref "$AOUT" scripts/negctl data/dots.txt; }
+row_cm_unicode() { raudit "$SANDBOX/r-cm.rows" --all-refs; has_ref "$AOUT" cm/nbsp.sh data/cm_nbsp.txt; }
+row_rc_wcl() { raudit "$SANDBOX/r-reach2.rows" --all-refs; has_ref "$AOUT" scripts/wcl data/wcl.txt; }
+row_rc_lvl() { raudit "$SANDBOX/r-reach2.rows" --all-refs; row_lvl_order; }
+row_rc_lcl() { local a; a="$(anchor_of 'cat data/lcl.txt')"; raudit "$SANDBOX/r-reach2.rows" --all-refs
+  grep -qF -- "$(printf 'ref\tscripts/lcl\tdata/lcl.txt\tlibY/ya.sh:1\t%s/1\t' "$a")" <<<"$AOUT" && grep -qF -- "$(printf 'ref\tscripts/lcl\tdata/lcl.txt\tlibY/yb.sh:1\t%s/2\t' "$a")" <<<"$AOUT"; }
+row_rc_dsw() { raudit "$SANDBOX/r-reach2.rows" --all-refs; has_ref "$AOUT" dsw data/dsw.txt; }
+row_rc_ce() { local x; raudit "$SANDBOX/r-reach2.rows" --all-refs; for x in "${CE_EXT[@]}"; do has_ref "$AOUT" scripts/ce "data/ce_$x.txt" || return 1; done; }
+row_rc_rt() { raudit "$SANDBOX/r-reach2.rows"; grep -qxF -- "$(printf 'unaudited\tscripts/rt\t^scripts/test-all.sh')" <<<"$AOUT" && grep -qxF -- "$(printf 'unaudited\tscripts/rt2\t^scripts/lib/test-affected-paths.sh')" <<<"$AOUT"; }
+# --- end of the reach rows; the mutation rows for them are at the end of the mutation section
+# ---------------------------------------------------------------------------------------------------------------------
 echo "== mutation rows (each edit lands once, leaves valid python, leaves the row GREEN on the pristine SUT, and the named row must then FAIL)"
 MUT_RUN=0; MUT_KILLED=0
 declare -A PRISTINE_OK=() PRISTINE_RC4=()
@@ -1678,7 +2283,7 @@ mutate redo-flag-inert '(redo and (u.get("cls") == "not-evaluable" or not u.get(
 mutate nonascii-quoted '"--first-parent", "-z", sha]' '"--first-parent", sha]' row_nonascii
 mutate cp-overflow 'math.exp(math.lgamma(n + 1) - math.lgamma(i + 1) - math.lgamma(n - i + 1)
                            + i * math.log(mid) + (n - i) * math.log1p(-mid))' 'math.comb(n, i) * mid ** i * (1 - mid) ** (n - i)' row_cp_big
-mutate audit-comments-counted 'keep.append("" if t.startswith("#") or t.startswith("//") else line)' 'keep.append(line)' row_audit_comment
+mutate audit-comments-counted '    return "\n".join("" if line.lstrip(" \t").startswith(prefix) else line for line in lines)' '    return "\n".join(lines)' row_audit_comment
 mutate audit-runner-not-excused 'f != suite and f not in own and f not in RUNNER_TRIGGERS)' 'f != suite and f not in own)' row_audit_runner
 mutate audit-gap-blind 'if not any(edge_hit(pt, r) for pt in pats)]' 'if False]' row_audit_bad
 mutate audit-zero-suites 'if c.suites == 0:' 'if False:' row_audit_zero
@@ -1739,7 +2344,7 @@ mutate internal-error-handler-dropped '    except Exception as e:  # an internal
 mutate flake-pr-threshold-lowered 'len({x.get("pr") or x["sha"] for x in us}) >= 3}' 'len({x.get("pr") or x["sha"] for x in us}) >= 2}' row_two_prs
 
 # PR1: the component-boundary scan, memoisation, directory suites and the anchor-keyed accept rows
-mutate scan-drops-last-char 'r = index.refs[q] = scan_views(index, full, light)' 'r = index.refs[q] = scan_views(index, full[:-1], light[:-1])' row_scan_eol
+mutate scan-drops-last-char 'r = index.refs[got[0]] = scan_views(index, got[1], got[2])' 'r = index.refs[got[0]] = scan_views(index, got[1][:-1], got[2][:-1])' row_scan_eol
 mutate scan-stops-at-first-member '                    out.add(leaf)' '                    out.add(leaf)
                     return out' row_scan_two
 mutate scan-component-charset-limited '                    nxt = t.get("")
@@ -1751,14 +2356,15 @@ mutate scan-boundary-ignored 'WORD_CHARS = "A-Za-z0-9_"' 'WORD_CHARS = "\x00"' r
 mutate scan-boundary-rejects-after-slash 'WORD_CHARS = "A-Za-z0-9_"' 'WORD_CHARS = "A-Za-z0-9_/"' row_scan_suffix
 mutate scan-boundary-rejects-after-tab 'WORD_CHARS = "A-Za-z0-9_"' 'WORD_CHARS = "A-Za-z0-9_\t"' row_scan_tab
 mutate scan-escape-not-a-boundary 'ESCAPE = re.compile(r"\\(?:[abefnrtv]|' 'ESCAPE = re.compile(r"\\(?:[ABEFNRTV]|' row_scan_esc
-mutate scan-memo-keyed-on-basename '        r = index.refs.get(q)
-        if r is None:
-            r = index.refs[q] = scan_views(index, full, light)' '        r = index.refs.get(os.path.basename(q))
-        if r is None:
-            r = index.refs[os.path.basename(q)] = scan_views(index, full, light)' row_scan_basename
-mutate scan-memo-poisoned-by-own-path 'r = index.refs[q] = scan_views(index, full, light)' 'r = index.refs[q] = scan_views(index, full, light) - {os.path.relpath(p, root) for p in inputs}' row_scan_poison
-mutate scan-library-hop-dropped '        for m in SOURCE_HOP.finditer(got[3]):' '        for m in []:' row_scan_basename
-mutate scan-memo-bypassed '        r = index.refs.get(q)' '        r = None' row_scan_memo
+mutate scan-memo-keyed-on-basename '    r = index.refs.get(got[0])
+    if r is None:
+        r = index.refs[got[0]] = scan_views(index, got[1], got[2])' '    r = index.refs.get(os.path.basename(got[0]))
+    if r is None:
+        r = index.refs[os.path.basename(got[0])] = scan_views(index, got[1], got[2])' row_scan_basename
+mutate scan-memo-poisoned-by-own-path '        named |= refs_of(index, got)' '        named |= refs_of(index, got)
+        index.refs[got[0]] = index.refs[got[0]] - {os.path.relpath(p, root) for p in inputs}' row_scan_poison
+mutate scan-library-hop-dropped 'for m in SOURCE_HOP.finditer(index.raws[real])]' 'for m in []]' row_rc_closure   # re-aimed: row_scan_basename lists its libraries in pats, so the naming walk reads them even when no hop is followed
+mutate scan-memo-bypassed '    r = index.refs.get(got[0])' '    r = None' row_scan_memo
 mutate scan-every-offset 'for m in index.start.finditer(text):' 'for m in re.finditer("", text):' row_scan_ops
 mutate scan-brute-force-find '    for m in index.start.finditer(text):' '    for p in index.paths:
         if text.find(p) >= 0:
@@ -1774,12 +2380,10 @@ mutate scan-hidden-quadratic-in-width '    for m in index.start.finditer(text):'
     for m in index.start.finditer(text):
         for _n in _tl:
             _n.startswith("zz")' row_scan_ops
-mutate comment-trailing-stripped 'keep.append("" if t.startswith("#") or t.startswith("//") else line)' 'keep.append("" if t.startswith("#") or t.startswith("//") else re.sub(r"\s#.*$", "", line))' row_scan_shapes
-mutate comment-tab-indent-kept '        t = line.lstrip()' '        t = line' row_scan_shapes
-mutate comment-line-deleted 'keep.append("" if t.startswith("#") or t.startswith("//") else line)' 'if t.startswith("#") or t.startswith("//"):
-            continue
-        keep.append(line)' row_scan_refs
-mutate comment-split-on-any-line-break 'for line in text.replace("\r\n", "\n").split("\n"):' 'for line in text.replace("\r\n", "\n").splitlines():' row_scan_vt
+mutate comment-trailing-stripped '    return "\n".join("" if line.lstrip(" \t").startswith(prefix) else line for line in lines)' '    return "\n".join("" if line.lstrip(" \t").startswith(prefix) else re.sub(r"\s#.*$", "", line) for line in lines)' row_scan_shapes
+mutate comment-tab-indent-kept 'line.lstrip(" \t").startswith(prefix)' 'line.startswith(prefix)' row_scan_shapes
+mutate comment-line-deleted '    return "\n".join("" if line.lstrip(" \t").startswith(prefix) else line for line in lines)' '    return "\n".join(line for line in lines if not line.lstrip(" \t").startswith(prefix))' row_scan_refs
+mutate comment-split-on-any-line-break 'lines = text.replace("\r\n", "\n").split("\n")' 'lines = text.replace("\r\n", "\n").splitlines()' row_scan_vt
 mutate dir-suite-unaudited '    return files or None' '    return None' row_dir_scan
 mutate dir-suite-no-underscore-tests 'BUN_TEST = re.compile(r"[._](?:test|spec)' 'BUN_TEST = re.compile(r"[.](?:test|spec)' row_dir_scan
 mutate dir-suite-no-spec-files 'BUN_TEST = re.compile(r"[._](?:test|spec)' 'BUN_TEST = re.compile(r"[._](?:test)' row_dir_scan
@@ -1855,16 +2459,16 @@ mutate start-regex-prefix-name-never-starts '        if "" in node:
             return ""' '        if "" in node:
             return "(?!)"' row_scan_mid
 mutate scan-light-view-ignored-by-the-anchors '        ll = fl if light is full else light.split("\n")' '        ll = fl' row_adj_accept
-mutate sourced-library-not-regular-file-skipped 'if os.path.relpath(q, root) in index.tracked:' 'if os.path.isfile(q) and os.path.relpath(q, root) in index.tracked:' row_hopd
-mutate sourced-library-deleted-file-skipped 'if os.path.relpath(q, root) in index.tracked:' 'if os.path.isfile(q) and os.path.relpath(q, root) in index.tracked:' row_hopg
-mutate sourced-library-directory-link-skipped 'if os.path.relpath(q, root) in index.tracked:' 'if os.path.isfile(q) and os.path.relpath(q, root) in index.tracked:' row_hopl
+mutate sourced-library-not-regular-file-skipped '                h = try_read(index, path, bad, root)' '                h = try_read(index, path, bad, root) if os.path.isfile(path) else None' row_hopd
+mutate sourced-library-deleted-file-skipped '                h = try_read(index, path, bad, root)' '                h = try_read(index, path, bad, root) if os.path.isfile(path) else None' row_hopg
+mutate sourced-library-directory-link-skipped '                h = try_read(index, path, bad, root)' '                h = try_read(index, path, bad, root) if os.path.isfile(path) else None' row_hopl
 mutate partial-suite-rows-judged-by-partial-text '        elif partial:' '        elif False:' row_partial
 mutate short-row-suite-labelled-unregistered '        if suite in c.short_rows and suite not in c.registered:' '        if False:' row_shortx
 mutate output-quoting-helper-removed '    return "".join("\\x%02x" % ord(c)' '    return s
     return "".join("\\x%02x" % ord(c)' row_quote
 mutate output-quoting-comma-kept 'or (comma and c == ",")' 'or False' row_quote
 mutate output-gap-line-unquoted 'quote_field(p, True) for p in (found if a.all_refs else found[:6])' 'p for p in (found if a.all_refs else found[:6])' row_quote
-mutate lone-carriage-return-becomes-a-line-break 'for line in text.replace("\r\n", "\n").split("\n"):' 'for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):' row_cr
+mutate lone-carriage-return-becomes-a-line-break 'lines = text.replace("\r\n", "\n").split("\n")' 'lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")' row_cr
 mutate rows-file-trailing-carriage-return-kept 'return [line.rstrip("\r") for line in fh.read().split("\n")]' 'return fh.read().split("\n")' row_crl
 mutate read-follows-links-outside-the-tree '        if real != top and not real.startswith(top.rstrip(os.sep) + os.sep):' '        if False:' row_sym
 mutate read-has-no-size-cap '            if size > MAX_READ:' '            if False:' row_sym
@@ -1899,12 +2503,9 @@ mutate boundary-twin-ignores-digits '    return i == 0 or WORD.match(text[i - 1]
 mutate audited-subtracts-each-state-separately 'return len(self.labels - self.always_on_labels - {u[0] for u in self.unaudited} - self.accepted_unread_labels)' 'return len(self.labels) - len(self.always_on_labels) - self.unaudited_labels - len(self.accepted_unread_labels)' row_audited_floor
 mutate boundary-twin-offset-one-is-a-start '    return i == 0 or WORD.match(text[i - 1]) is None' '    return i <= 1 or WORD.match(text[i - 1]) is None' row_bnd_two
 mutate star-row-accepts-a-tracked-suite '            tracked_suite = any(has_tracked_input(index, d) for d in dead)' '            tracked_suite = False' row_star_tracked
-mutate sourced-untracked-file-is-read 'if os.path.relpath(q, root) in index.tracked:' 'if os.path.relpath(q, root) in index.tracked or os.path.isfile(q):' row_hop_untracked
-mutate sourced-alias-is-read-twice '    real = os.path.realpath(path)
-    try:
-        full, light = read_text(index, real, base)' '    real = os.path.abspath(path)
-    try:
-        full, light = read_text(index, real, base)' row_hop_alias
+mutate sourced-untracked-file-is-read '        if q in tracked and q not in RUNNER_TRIGGERS and q not in out:' '        if q not in RUNNER_TRIGGERS and q not in out:' row_hop_untracked
+# sourced-alias-is-read-twice (try_read keyed on the logical path) SURVIVES BY DESIGN since PR1b and is EQUIVALENT: the closure's visited set (keyed on
+# the real path) never offers the alias to try_read, and suite_texts' seen set would drop it again. Three layers, none individually observable.
 mutate label-gap-anchored-in-every-row 'texts_of[path].extend(t for t in texts if t[0] not in have)' 'texts_of[path].extend(t for tt, _ in ok for t in tt if t[0] not in have)' row_label_rows
 mutate label-always-on-last-row-wins '        if f[3] == "always_on":
             g["always_on"] = True' '        g["always_on"] = f[3] == "always_on"' row_always_on_order
@@ -1950,6 +2551,123 @@ mutate read-oserror-unmapped '        raise ReadError("cannot read %s: %s" % (pa
         if not stat' row_sym
 mutate read-cap-is-exclusive 'if size > MAX_READ:' 'if size >= MAX_READ:' row_sym
 
+# --- PR1b reach: one mutant per property failure (the matrices of the plan's Guard Contract); every row above is GREEN on the pristine SUT first
+mutate reach-closure-stops-after-one-hop '    for _ in range(HOP_DEPTH):' '    for _ in range(1):' row_rc_closure
+mutate reach-walk-disabled '    code = set(code_pats_of(pats, index))' '    code = set()' row_rc_cls
+mutate reach-hop-depth-seven 'HOP_DEPTH = 8 ' 'HOP_DEPTH = 7 ' row_rc_depth
+mutate reach-hop-depth-unbounded 'HOP_DEPTH = 8 ' 'HOP_DEPTH = 99 ' row_rc_depth
+mutate reach-walk-depth-seven 'WALK_DEPTH = 8 ' 'WALK_DEPTH = 7 ' row_rc_walk_depth
+mutate reach-walk-depth-unbounded 'WALK_DEPTH = 8 ' 'WALK_DEPTH = 99 ' row_rc_walk_depth
+mutate reach-hop-first-member-stops '        if q in tracked and q not in RUNNER_TRIGGERS and q not in out:
+            out.append(q)
+' '        if q in tracked and q not in RUNNER_TRIGGERS and q not in out:
+            out.append(q)
+            break
+' row_rc_twosrc
+mutate reach-dir-operands-against-the-repo-root '            home = os.path.dirname(rel) if pre.startswith("$(dirname") or pre.strip("${}") in HOP_DIR_VARS else ""' '            home = ""' row_rc_ops
+mutate reach-dir-operands-against-the-suite-directory '                    nxt.append((h, q))' '                    nxt.append((h, rel))' row_rc_ops
+mutate reach-hop-memo-resolved-against-the-real-path '            for q in hops_of(index, g[0], r):' '            for q in hops_of(index, g[0], os.path.relpath(g[0], os.path.realpath(root))):' row_rc_symlink
+mutate reach-walk-ignores-pats '    code = set(code_pats_of(pats, index))' '    code = set(index.tracked)' row_rc_walk_listed
+mutate reach-walk-reads-data-files '".mts", ".cts", ".rb"))' '".mts", ".cts", ".rb", ".md", ".yml", ".tsv"))' row_rc_walk_data
+mutate reach-walk-reads-a-runner-trigger 'and e not in RUNNER_TRIGGERS
+                and os.path.splitext(e)[1] in CODE_EXT' '
+                and os.path.splitext(e)[1] in CODE_EXT' row_rc_walk_trigger
+mutate reach-hop-reads-a-runner-trigger '        if q in tracked and q not in RUNNER_TRIGGERS and q not in out:' '        if q in tracked and q not in out:' row_rc_neg_trigger
+mutate reach-hop-keyword-glued-to-a-word '    r"""(?<![\w.])(?:source|\.)[ \t]+["'\'']?"""' '    r"""(?:source|\.)[ \t]+["'\'']?"""' row_rc_neg_prose
+mutate reach-walk-nodes-include-globs '        if (pt.startswith("^") and e and not e.startswith("glob:") and not e.endswith("/")' '        if (pt.startswith("^") and e and not e.endswith("/")' row_rc_walk_nodes
+# reach-walk-nodes-include-dirs (a dir/ entry allowed as a walk node) SURVIVES BY DESIGN and is EQUIVALENT: the entry ends in a slash and no tracked path does,
+# so the `e in index.tracked` test excludes it whatever the dir check says. (The glob: twin is observable: the fixture tracks a file NAMED glob:walk/*.sh, the very text of the wgl row's glob entry.)
+mutate reach-unreadable-hop-skipped-silently '                h = try_read(index, path, bad, root)' '                h = try_read(index, path, [], root)' row_rc_unreadable
+mutate reach-unreadable-walk-file-skipped-silently '            got = try_read(index, path, bad, root)' '            got = try_read(index, path, [], root)' row_rc_unreadable_walk
+mutate reach-walk-files-bring-no-closure '            for g in source_closure(root, got, q, index, bad)[1:]:' '            for g in []:' row_rc_walk_closure
+mutate reach-walk-before-closure '                out.append(got)
+                level.append((got, q))' '                out.insert(0, got)
+                level.append((got, q))' row_rc_order
+mutate reach-rows-of-a-label-in-selector-order 'g["rows"].sort()' 'pass' row_rc_order_rows
+mutate reach-rows-sorted-by-the-first-pattern-only 'g["rows"].sort()' 'g["rows"].sort(key=lambda pats: pats[0])' row_rc_ties
+mutate reach-rows-sorted-by-the-last-pattern 'g["rows"].sort()' 'g["rows"].sort(key=lambda pats: pats[-1])' row_rc_ties
+mutate reach-walk-closure-does-not-feed-the-walk '                    out.append(g)
+                    frontier.append(g)' '                    out.append(g)
+                    pass' row_rc_wcl
+mutate reach-walk-level-in-reverse-order 'for q in sorted(named):' 'for q in sorted(named, reverse=True):' row_rc_lvl
+mutate reach-walk-closures-in-reverse-walk-order '        for got, q in level:
+            for g in source_closure(root, got, q, index, bad)[1:]:' '        for got, q in reversed(level):
+            for g in source_closure(root, got, q, index, bad)[1:]:' row_rc_lcl
+mutate reach-walk-seeded-by-the-first-input-only 'seen, frontier = {t[0] for t in out}, list(out)' 'seen, frontier = {t[0] for t in out}, list(out)[:1]' row_rc_dsw
+mutate reach-hop-operand-not-normalised 'q = os.path.normpath(os.path.join(home, rest.lstrip("/")))' 'q = os.path.join(home, rest.lstrip("/"))' row_rc_ops
+mutate reach-hop-bash-targets-dropped '([A-Za-z0-9_./-]+\.(?:sh|bash))"""' '([A-Za-z0-9_./-]+\.(?:sh))"""' row_rc_ops
+mutate reach-hop-single-quote-dropped '(?:source|\.)[ \t]+["'\'']?"""' '(?:source|\.)[ \t]+"?"""' row_rc_ops
+mutate reach-hop-tab-blank-dropped '(?:source|\.)[ \t]+' '(?:source|\.) +' row_rc_ops
+mutate reach-hop-prefix-without-the-slash-lookahead '\)(?=/)|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?(?=/))?"""' '\)|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?)?"""' row_hop_redos
+mutate edge-glob-first-and-last-segments-may-overlap 'if len(path) < len(first) + len(last) or not path.startswith(first) or not path.endswith(last):' 'if not path.startswith(first) or not path.endswith(last):' row_edge_cross
+mutate edge-glob-head-not-anchored 'if len(path) < len(first) + len(last) or not path.startswith(first) or not path.endswith(last):' 'if len(path) < len(first) + len(last) or not path.endswith(last):' row_edge_cross
+mutate edge-glob-tail-not-anchored 'if len(path) < len(first) + len(last) or not path.startswith(first) or not path.endswith(last):' 'if len(path) < len(first) + len(last) or not path.startswith(first):' row_edge_cross
+mutate edge-glob-middle-segments-may-overlap-the-tail 'pos, stop = len(first), len(path) - len(last)' 'pos, stop = len(first), len(path)' row_edge_cross
+mutate edge-glob-curdir-anywhere-in-the-head 'if head.startswith("./"):' 'if "./" in head:' row_edge_cross
+mutate edge-glob-parentdir-anywhere-in-the-head 'if head.startswith("../"):' 'if "../" in head:' row_edge_cross
+mutate reach-walk-closure-resolved-against-the-root '            for g in source_closure(root, got, q, index, bad)[1:]:' '            for g in source_closure(root, got, "", index, bad)[1:]:' row_rc_wsd
+mutate reach-walk-closure-rereads-a-seen-file '            for g in source_closure(root, got, q, index, bad)[1:]:
+                if g[0] not in seen:' '            for g in source_closure(root, got, q, index, bad)[1:]:
+                if True:' row_rc_dupz
+mutate reach-walk-seeded-without-the-suite-closure 'seen, frontier = {t[0] for t in out}, list(out)' 'seen, frontier = {t[0] for t in out}, [t for t in out if t[0] in {os.path.realpath(p) for p in inputs}]' row_rc_seed
+# reach-walk-node-need-not-be-tracked (code_pats_of without `e in index.tracked`) SURVIVES BY DESIGN and is EQUIVALENT: a node must also be NAMED, and only tracked paths are in the
+# scan trie, so an untracked pat can never be named; the behaviour is pinned by the `utk` check above instead.
+mutate runner-triggers-lose-their-second-member 'RUNNER_TRIGGERS = ("scripts/test-all.sh", "scripts/lib/test-affected-paths.sh")' 'RUNNER_TRIGGERS = ("scripts/test-all.sh",)' row_rc_neg_trigger
+mutate reach-hop-keyword-lookbehind-loses-the-dot '(?<![\w.])' '(?<![\w])' row_rc_neg_dots
+mutate strip-comments-blanks-a-marker-after-any-unicode-space 'line.lstrip(" \t").startswith(prefix)' 'line.lstrip().startswith(prefix)' row_cm_unicode
+mutate reach-code-ext-drops-bash 'CODE_EXT = frozenset((".sh", ".bash", ' 'CODE_EXT = frozenset((".sh", ' row_rc_ce
+mutate reach-code-ext-drops-jsx '".tsx", ".jsx", ".js"' '".tsx", ".js"' row_rc_ce
+mutate reach-code-ext-drops-the-module-flavours '".mjs", ".cjs", ".mts", ".cts", ".rb"))' '".rb"))' row_rc_ce
+mutate suite-file-reads-a-runner-trigger 'path and path not in RUNNER_TRIGGERS and not path.endswith("/")' 'path and not path.endswith("/")' row_rc_rt
+mutate comment-prefix-matched-anywhere-in-the-line '"" if line.lstrip(" \t").startswith(prefix) else line for line in lines' '"" if prefix in line else line for line in lines' row_cm_shapes
+mutate reach-walk-pats-unioned-across-rows '            texts = reach_texts(root, inputs, pats, index, bad)' '            texts = reach_texts(root, inputs, [x for r in g["rows"] for x in r], index, bad)' row_rc_lab
+mutate reach-walk-seen-set-lives-in-the-index 'if os.path.realpath(path) in seen:' 'if os.path.realpath(path) in index.raws:' row_rc_seen
+mutate reach-visited-set-dropped '                if real in visited:
+                    continue
+' '                if False:
+                    continue
+' row_reach_cost
+mutate reach-walk-loops-pats-per-node '        for g in frontier:
+            named |= refs_of(index, g) & code
+' '        for g in frontier:
+            for c in code:
+                if c in refs_of(index, g):
+                    named.add(c)
+' row_reach_cost
+mutate edge-question-mark-allowed-in-a-glob 'GLOB_CHARSET = re.compile(r"[^A-Za-z0-9_./*-]")' 'GLOB_CHARSET = re.compile(r"[^A-Za-z0-9_./*?-]")' row_edge_charset
+mutate edge-charset-arm-returns-false '        if GLOB_CHARSET.search(g):
+            return True' '        if GLOB_CHARSET.search(g):
+            return False' row_edge_charset
+mutate edge-head-absolute-arm-dropped 'if head.startswith("/"):' 'if False:' row_edge_head_abs
+mutate edge-head-curdir-arm-dropped 'if head.startswith("./"):' 'if False:' row_edge_head_dot
+mutate edge-head-parent-arm-dropped 'if head.startswith("../"):' 'if False:' row_edge_head_dotdot
+mutate edge-head-doubleslash-arm-dropped 'if "//" in head:' 'if False:' row_edge_head_dslash
+mutate edge-head-slashdotslash-arm-dropped 'if "/./" in head:' 'if False:' row_edge_head_sds
+mutate edge-head-slashdotdotslash-arm-dropped 'if "/../" in head:' 'if False:' row_edge_head_sddsl
+mutate edge-head-not-slash-terminated-arm-dropped 'if not head.endswith("/"):' 'if False:' row_edge_head_notslash
+mutate edge-tail-slash-arm-dropped 'if tail.endswith("/"):' 'if False:' row_edge_tail_slash
+mutate edge-tail-without-star-arm-dropped 'if "*" not in tail:' 'if False:' row_edge_tail_nostar
+mutate edge-noncaret-compared-by-equality '        return pt in path' '        return pt == path' row_edge_noncaret
+mutate edge-noncaret-glob-is-live '    if not pt.startswith("^"):
+        return pt in path
+    e = pt[1:]
+' '    if not pt.startswith("^") and not pt.startswith("glob:"):
+        return pt in path
+    e = pt[1:] if pt.startswith("^") else pt
+' row_edge_noncaret
+mutate edge-star-does-not-cross-a-slash '            k = path.find(seg, pos, stop)' '            k = path.find(seg, pos, stop) if "/" not in path[pos:stop] else -1' row_edge_cross
+mutate edge-exact-as-substring '    return path == e
+' '    return e in path
+' row_edge_exact
+mutate edge-dir-as-infix '        return path.startswith(e)
+    return path == e' '        return e in path
+    return path == e' row_edge_dir
+mutate comment-both-languages-stripped 'line.lstrip(" \t").startswith(prefix) else line for line in lines' 'line.lstrip().startswith(("#", "//")) else line for line in lines' row_cm_hash
+mutate comment-unknown-extension-strips-hash 'return COMMENT_PREFIX.get(os.path.splitext(path)[1], "")' 'return COMMENT_PREFIX.get(os.path.splitext(path)[1], "#")' row_cm_none
+mutate comment-table-drops-tsx '".tsx": "//", ' '' row_cm_slash
+mutate comment-table-drops-rb '".rb": "#", ' '' row_cm_hash
+mutate comment-extension-from-the-logical-name 'comment_prefix(path))' 'comment_prefix(os.path.basename(path).split(".")[0]))' row_cm_names
+
 # ---------------------------------------------------------------------------------------------------------------------
 echo "== controls: the harness reports a survivor, an unparseable mutant, a red row and an edit that did not land"
 row_always_red() { false; }
@@ -1991,7 +2709,7 @@ mutant_outcome ctl-cp-nameerror 'def cp_upper(k, n, conf=0.95):' 'def cp_upper(k
 mutant_outcome ctl-sel-error-nameerror 'def run_selector(root, args):' 'def run_selector(root, args):
     raise NameError("boom")' row_sel_error
 [[ "$MUT_RESULT" = crashed ]] && pass "control: a NameError on the selector path (row_sel_error, now run through run_sut) is CRASHED, not killed" || fail "control: selector NameError scored as '$MUT_RESULT'"
-mutant_outcome ctl-real-kill 'r = index.refs[q] = scan_views(index, full, light)' 'r = index.refs[q] = scan_views(index, full[:-1], light[:-1])' row_scan_eol
+mutant_outcome ctl-real-kill 'r = index.refs[got[0]] = scan_views(index, got[1], got[2])' 'r = index.refs[got[0]] = scan_views(index, got[1][:-1], got[2][:-1])' row_scan_eol
 [[ "$MUT_RESULT" = killed ]] && pass "control: a mutant that still runs and returns the wrong answer is KILLED" || fail "control: a real kill scored as '$MUT_RESULT'"
 ctl_mutate_records() {  # drive mutate() with a survivor: it must record a FAILURE, then unwind
   local p0=$passes f0=$fails n0=${#FAILED[@]} m0=$MUT_RUN k0=$MUT_KILLED f1
@@ -2022,12 +2740,12 @@ if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_
 # earlier one (same edit, same row), so a renamed duplicate adds no kill.
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
-FLOOR_ASSERTIONS=483   # base 476 (review rounds 1-3) + 7 added by review round 4 (measured)
+FLOOR_ASSERTIONS=712   # base 483 (PR1) + 229 added by PR1b incl. review rounds 1 and 2 (measured: 712 passed, 0 failed)
 total=$((passes + fails))
 if [[ "$total" -lt "$FLOOR_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$total" "$FLOOR_ASSERTIONS" >&2; exit 1
 fi
-FLOOR_MUTANTS=225   # base 220 (review rounds 1-3) + 5 added by review round 4 (measured)
+FLOOR_MUTANTS=298   # base 225 (PR1) - 1 (sourced-alias-is-read-twice, equivalent since PR1b) + 74 added by PR1b incl. review rounds 1 and 2 (measured: 298 mutants, all killed)
 if [[ "$MUT_RUN" -lt "$FLOOR_MUTANTS" ]]; then
   printf '[FATAL] mutation floor: only %s mutants ran, floor is %s\n' "$MUT_RUN" "$FLOOR_MUTANTS" >&2; exit 1
 fi
