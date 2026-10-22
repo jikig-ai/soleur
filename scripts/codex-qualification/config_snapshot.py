@@ -229,9 +229,13 @@ class Store:
         ensure(name in LEAVES and type(raw) is bytes and len(raw) <= (32768 if name == REPORT else 65536))
         self.check()
         fd = os.open(name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=self.fd)
-        info = os.fstat(fd)
-        self.created[name] = info
+        # O_EXCL creation is already durable ownership intent for this action,
+        # even if the first fstat fails. None means created but not safely
+        # identified, so rollback must preserve it rather than unlink by name.
+        self.created[name] = None
         try:
+            info = os.fstat(fd)
+            self.created[name] = info
             offset = 0
             while offset < len(raw):
                 self.budget.check()
@@ -253,7 +257,7 @@ class Store:
     def remove_created(self, names):
         # Check+unlink is safe only under the documented quiescent writer model.
         for name in names:
-            if name in self.created:
+            if self.created.get(name) is not None:
                 self.named(name, self.created[name])
                 os.unlink(name, dir_fd=self.fd)
         os.fsync(self.fd)
@@ -459,6 +463,7 @@ def locked_action(seconds):
         @functools.wraps(function)
         def run(args, *, clock=time.monotonic, utc=time.time):
             descriptor = None
+            arguments = None
             failed = False
             code, stage = 'binding', 'preconsume'
             try:
@@ -485,6 +490,8 @@ def locked_action(seconds):
                     except OSError:
                         failed, code = True, 'cleanup'
             if failed:
+                if arguments is not None and getattr(arguments, '_snapshot_spent', False):
+                    stage = 'spent'
                 raise SnapshotFailure(code, stage) from None
             return result
         return run
@@ -559,6 +566,7 @@ def execute_action(args, *, clock=time.monotonic, utc=time.time):
                     store.write(MARKER, canonical({'manifest_sha256': args.manifest_sha256}) + b'\n')
                 finally:
                     consumed = MARKER in store.created
+                    args._snapshot_spent = consumed
                 marker = sha(store.read(MARKER)[0])
                 return marker
             plan = manifest['acquisition_plan']
@@ -789,11 +797,17 @@ def inspect_action(args, *, clock=time.monotonic, utc=time.time):
             store.census()
             receipt, marker, raw = _pair(store, manifest, args.manifest_sha256)
             tool = _private_tool(args.tool_result)
-            review = metadata.base._decode_json(store.read(REVIEW)[0])
+            review_raw, _review_info = store.read(REVIEW)
+            review = metadata.base._decode_json(review_raw)
+            fields = {'schema', 'state', 'manifest_sha256', 'command_sha256', 'marker_sha256',
+                'receipt_sha256', 'snapshot', 'execution_exit', 'execution_record_sha256',
+                'engineering', 'security', 'prepared_at', 'reviewed_at', 'expires_at',
+                'observer_kind', 'authority'}
+            check_seal(review, fields)
             expected = review_record(manifest, args.manifest_sha256, marker_sha256=marker,
                 receipt=receipt, tool_result=tool, engineering=review['engineering'],
                 security=review['security'], reviewed_at=review['reviewed_at'])
-            ensure(review == expected)
+            ensure(review_raw == canonical(expected) + b'\n')
             fields = inspect_fields(raw)
             report = {'schema': 'config-snapshot-fields-v1', 'manifest_sha256': args.manifest_sha256,
                 'payload_sha256': receipt['snapshot']['sha256'], 'expires_at': manifest['expires_at'],
@@ -803,13 +817,19 @@ def inspect_action(args, *, clock=time.monotonic, utc=time.time):
             try:
                 info = store.write(REPORT, serialized)
                 budget.check()
-            except Exception:
+            except Exception as error:
                 store.budget = Budget(10, clock=clock, utc=utc, manifest=manifest, expiry=False)
-                store.remove_created([REPORT])
-                raise SnapshotFailure('payload_output', 'inspection') from None
+                try:
+                    store.remove_created([REPORT])
+                except Exception:
+                    raise SnapshotFailure('cleanup', 'inspection') from None
+                code = error.code if isinstance(error, SnapshotFailure) and error.code in ('expiry', 'deadline') else 'payload_output'
+                raise SnapshotFailure(code, 'inspection') from None
             return {'outcome': 'private-field-report-written', 'report': identity(info, serialized),
                     'authority': dict(AUTHORITY)}
-    except Exception:
+    except Exception as error:
+        if isinstance(error, SnapshotFailure):
+            raise SnapshotFailure(error.code, error.stage) from None
         raise SnapshotFailure('binding', 'inspection') from None
 
 

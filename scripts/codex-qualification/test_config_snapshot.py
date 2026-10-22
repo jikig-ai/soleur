@@ -189,6 +189,54 @@ class Snapshot(unittest.TestCase):
             os.close(fd)
         self.success()
 
+    def test_initial_marker_fstat_failure_closes_fd_and_preserves_spent_marker(self):
+        budget = snapshot.Budget(5, clock=lambda: self.now, utc=lambda: self.utc, manifest=self.plan)
+        with snapshot.Store(self.plan, budget) as store:
+            real_fstat, real_open = os.fstat, os.open
+            opened = []
+            def record_open(path, *args, **kwargs):
+                fd = real_open(path, *args, **kwargs)
+                if path == snapshot.MARKER:
+                    opened.append(fd)
+                return fd
+            def fail_leaf(fd):
+                if opened and fd == opened[0]:
+                    raise OSError('SYNTHETIC_FSTAT_FAILURE')
+                return real_fstat(fd)
+            with patch.object(os, 'open', side_effect=record_open), patch.object(os, 'fstat', side_effect=fail_leaf):
+                with self.assertRaises(OSError):
+                    store.write(snapshot.MARKER, b'{}\n')
+            self.assertEqual(len(opened), 1)
+            with self.assertRaises(OSError):
+                real_fstat(opened[0])
+            self.assertIsNone(store.created[snapshot.MARKER])
+            self.assertTrue((self.root / snapshot.MARKER).exists())
+
+    def test_outer_deadline_after_spent_operation_keeps_spent_classification(self):
+        calls = iter((self.now, self.now + 2))
+        @snapshot.locked_action(1)
+        def completed(args, *, clock, utc):
+            args._snapshot_spent = True
+        with self.assertRaises(snapshot.SnapshotFailure) as caught:
+            completed(self.args, clock=lambda: next(calls), utc=lambda: self.utc)
+        self.assertEqual((caught.exception.code, caught.exception.stage), ('deadline', 'spent'))
+
+    def test_outer_descriptor_close_failure_after_spent_operation_is_spent(self):
+        locked = []
+        @snapshot.locked_action(10)
+        def completed(args, *, clock, utc):
+            args._snapshot_spent = True
+            locked.append(args._snapshot_directory_fd)
+        real_close = os.close
+        def close_then_fail(fd):
+            real_close(fd)
+            if locked and fd == locked[0]:
+                raise OSError('SYNTHETIC_CLOSE_FAILURE')
+        with patch.object(os, 'close', side_effect=close_then_fail), \
+                self.assertRaises(snapshot.SnapshotFailure) as caught:
+            completed(self.args, clock=lambda: self.now, utc=lambda: self.utc)
+        self.assertEqual((caught.exception.code, caught.exception.stage), ('cleanup', 'spent'))
+
     def test_expiry_before_marker_and_independent_monotonic_deadline(self):
         self.utc = 101000
         with self.assertRaises(snapshot.SnapshotFailure) as caught:
@@ -300,9 +348,20 @@ class Snapshot(unittest.TestCase):
         with patch.object(acquisition, '_config_sha256', side_effect=self.digest_seam):
             snapshot.inspect_action(self.args, clock=lambda: self.now, utc=lambda: self.utc)
 
+    def test_review_boolean_integer_equality_cannot_bypass_seal(self):
+        self.gate()
+        value = self.read(snapshot.REVIEW)
+        value['execution_exit'] = False
+        self.write(snapshot.REVIEW, value)
+        with patch.object(acquisition, '_config_sha256', side_effect=self.digest_seam), \
+                self.assertRaises(snapshot.SnapshotFailure):
+            snapshot.inspect_action(self.args, clock=lambda: self.now, utc=lambda: self.utc)
+        self.assertNotIn(snapshot.REPORT, self.names())
+
     def test_tool_result_unknown_nonzero_mismatch_and_staleness_refuse(self):
         self.gate()
         original = json.loads(self.tool_path.read_bytes())
+        original_review = self.read(snapshot.REVIEW)
         changes = [lambda r: r.update(exit_code=1), lambda r: r.update(exit_code=None),
             lambda r: r.update(command_sha256='0' * 64), lambda r: r.update(stdout_sha256='0' * 64),
             lambda r: r.update(stderr_sha256='0' * 64), lambda r: r.update(reference=''),
@@ -310,13 +369,30 @@ class Snapshot(unittest.TestCase):
         for change in changes:
             value = copy.deepcopy(original)
             change(value)
-            self.tool_path.write_bytes(canonical(snapshot.sealed({k: v for k, v in value.items() if k != 'self_sha256'})))
+            value = snapshot.sealed({k: v for k, v in value.items() if k != 'self_sha256'})
+            self.tool_path.write_bytes(canonical(value) + b'\n')
             with self.subTest(change=change), \
                     patch.object(acquisition, '_config_sha256', side_effect=self.digest_seam):
+                review = copy.deepcopy(original_review)
+                review['execution_record_sha256'] = sha(canonical(value) + b'\n')
+                self.write(snapshot.REVIEW, snapshot.sealed({k: v for k, v in review.items() if k != 'self_sha256'}))
                 with self.assertRaises(snapshot.SnapshotFailure):
                     snapshot.inspect_action(self.args, clock=lambda: self.now, utc=lambda: self.utc)
                 self.assertNotIn(snapshot.REPORT, self.names())
-        self.tool_path.write_bytes(canonical(original))
+        # Preserve a separate stale binding case after semantic negatives.
+        self.tool_path.write_bytes(canonical(original) + b'\n')
+        stale = copy.deepcopy(original)
+        stale['stdout_sha256'] = '0' * 64
+        stale = snapshot.sealed({k: v for k, v in stale.items() if k != 'self_sha256'})
+        self.tool_path.write_bytes(canonical(stale) + b'\n')
+        self.write(snapshot.REVIEW, original_review)
+        with patch.object(acquisition, '_config_sha256', side_effect=self.digest_seam), \
+                self.assertRaises(snapshot.SnapshotFailure):
+            snapshot.inspect_action(self.args, clock=lambda: self.now, utc=lambda: self.utc)
+        self.tool_path.write_bytes(canonical(original) + b'\n')
+        self.write(snapshot.REVIEW, original_review)
+        with patch.object(acquisition, '_config_sha256', side_effect=self.digest_seam):
+            snapshot.inspect_action(self.args, clock=lambda: self.now, utc=lambda: self.utc)
         self.utc = self.plan['expires_at']
         with self.assertRaises(snapshot.SnapshotFailure):
             snapshot.inspect_action(self.args, clock=lambda: self.now, utc=lambda: self.utc)
@@ -692,17 +768,27 @@ class Snapshot(unittest.TestCase):
 
     def test_report_serialized_size_limit_never_truncates(self):
         self.gate()
-        original = snapshot.inspect_fields
-        calls = []
-        def oversized(raw):
-            calls.append(raw)
-            return original(raw) if len(calls) == 1 else {'extension': 'x' * 32769}
         with patch.object(acquisition, '_config_sha256', side_effect=self.digest_seam), \
-                patch.object(snapshot, 'inspect_fields', side_effect=oversized):
+                patch.object(snapshot, 'inspect_fields', return_value={'extension': 'x' * 32769}):
             with self.assertRaises(snapshot.SnapshotFailure):
                 snapshot.inspect_action(self.args, clock=lambda: self.now, utc=lambda: self.utc)
-        self.assertEqual(len(calls), 2)
         self.assertNotIn(snapshot.REPORT, self.names())
+
+    def test_report_rollback_failure_is_reported_as_cleanup_and_preserves_owned_leaf(self):
+        self.gate()
+        real_write = snapshot.Store.write
+        def publish_then_fail(store, name, raw):
+            result = real_write(store, name, raw)
+            if name == snapshot.REPORT:
+                raise OSError('SYNTHETIC_REPORT_PUBLISH_FAILURE')
+            return result
+        with patch.object(acquisition, '_config_sha256', side_effect=self.digest_seam), \
+                patch.object(snapshot.Store, 'write', new=publish_then_fail), \
+                patch.object(snapshot.Store, 'remove_created', side_effect=OSError('SYNTHETIC_ROLLBACK_FAILURE')), \
+                self.assertRaises(snapshot.SnapshotFailure) as caught:
+            snapshot.inspect_action(self.args, clock=lambda: self.now, utc=lambda: self.utc)
+        self.assertEqual((caught.exception.code, caught.exception.stage), ('cleanup', 'inspection'))
+        self.assertIn(snapshot.REPORT, self.names())
 
     def test_receipt_and_payload_corruption_each_refuse_a_previously_valid_pair(self):
         for kind in ('payload', 'receipt', 'authority'):

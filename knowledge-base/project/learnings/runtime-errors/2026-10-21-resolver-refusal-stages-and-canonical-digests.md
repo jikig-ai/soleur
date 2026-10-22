@@ -106,3 +106,8 @@ known continuation work: 24 dispatched turns, 17 review seats, 5 pushes and
 3 fix iterations. This catch-up does not pretend pre-dispatch gates ran. On
 resume, initialize/show the tally before the first fan-out and gate/count each
 subsequent batch; an existing summary is not execution of that required step.
+
+The focused snapshot suite command was first run from the worktree root, where
+its `test_config_snapshot` top-level import correctly failed. Re-run from the
+test package directory `scripts/codex-qualification/`; the module invocation's
+working directory is part of this test harness contract.
