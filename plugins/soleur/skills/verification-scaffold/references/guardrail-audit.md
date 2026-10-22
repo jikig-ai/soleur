@@ -15,7 +15,7 @@ CI failure):
 | `generic-after-extraction` | The *guard idea* is repo-generic but the file carries couplings (incident machinery, shared libs, Soleur paths or rule ids) that dead-reference in a user repo. Shippable only as a template. |
 | `soleur-coupled` | The guard's *purpose* is Soleur's: it enforces a Soleur rule id, a Soleur corpus path, a vendor in Soleur's stack, or Soleur telemetry/workflow machinery. Not shipped. |
 
-**Counts:** hooks — 0 generic / 10 generic-after-extraction / 46 soleur-coupled.
+**Counts:** hooks — 0 generic / 10 generic-after-extraction / 47 soleur-coupled.
 lints — 9 generic / 8 generic-after-extraction / 29 soleur-coupled.
 
 The canonical emit pair `plugins/soleur/scripts/precommit-guard.sh` +
@@ -52,6 +52,7 @@ template rather than shipping the monolith.
 | `lib/hook-tool-kind.sh` | generic-after-extraction | Devin→Claude tool-kind map (#8205) — harness-generic, not Soleur-domain (v2). |
 | `lib/incidents.sh` | soleur-coupled | The `emit_incident` sink — the corpus's named coupling; emitted guards strip its calls. |
 | `lib/log-rotation.sh` | generic-after-extraction | `.claude/*.jsonl` rotation util; logic portable, callers Soleur telemetry sinks (v2). |
+| `lib/commit-target-roots.sh` | soleur-coupled | Commit-target argv walker for `git-commit-secret-scan.sh` (#10609) — depends on `plugins/soleur/hooks/lib/shell-argv.pl`, the repo's hardened lexer; the emitted `secret-scan` template self-contains its parse instead. |
 | `lib/monitor-sig.sh` | soleur-coupled | Monitor-ledger signature shared by the two monitor hooks. |
 | `lib/technical-fork-cues.sh` | soleur-coupled | Cue vocabulary for `hr-technical-fork-is-not-an-operator-question`. |
 | `lib/test-incident-sandbox.sh` | soleur-coupled | Test sandbox for `incidents.sh`. |
