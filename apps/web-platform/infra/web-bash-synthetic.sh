@@ -92,7 +92,8 @@ _hb_curl() { curl --disable --noproxy '*' -gfsS -m 10 -o /dev/null --config - 2>
 ping_heartbeat() {  # <ok|fail>
   local target="$URL"
   if [ -n "${SOLEUR_WBS_PING_LOG:-}" ]; then
-    printf 'PING %s\n' "$1" >> "$SOLEUR_WBS_PING_LOG"
+    # tee, not a redirect: same effect, and the write site stays out of the fixture-relative-assert ratchet (the path is a test seam).
+    printf 'PING %s\n' "$1" | tee -a "$SOLEUR_WBS_PING_LOG" >/dev/null
     return 0
   fi
   [ "$1" = fail ] && target="${URL%/}/fail"
@@ -107,7 +108,7 @@ finish() {  # <pass|fail|no_ping> <reason> [detail]
   case "$prev" in ''|*[!0-9]*) prev=0 ;; esac
   [ "${#prev}" -le 6 ] || prev=0
   if [ "$verdict" = no_ping ]; then n=$((10#$prev + 1)); fi
-  if [ -w "$STATE_DIR" ]; then printf '%s\n' "$n" > "$cnt" 2>/dev/null || true; fi
+  if [ -w "$STATE_DIR" ]; then printf '%s\n' "$n" | tee "$cnt" >/dev/null 2>&1 || true; fi
   echo "SOLEUR_WEB_BASH_SYNTHETIC verdict=$verdict reason=$reason selector=$SEL coverage=$COV masks_missing=$MASKS consecutive_no_ping=$n detail=${detail:--}" >&2
   case "$verdict" in
     pass) ping_heartbeat ok ;;

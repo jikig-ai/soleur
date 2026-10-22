@@ -234,7 +234,8 @@ export function measureShimAndFilter(pathEnv, bpfPath) {
 }
 
 /** `sdk_wrapper_shim_prodtuple` only when the command went through the real shim under the artifact that was asked for: the
- *  deploy smoke's pinned unixdeny path by default, the resolver-selected path in runtime mode (`expectedPath`). */
+ *  deploy smoke's pinned unixdeny path by default, the resolver-selected path in runtime mode (`expectedPath`).
+ *  @param {{ shim: boolean, filter: boolean, bpfPath: string, expectedPath?: string }} o */
 export function smokeCoverage({ shim, filter, bpfPath, expectedPath = smokeSelectorPath() }) {
   return shim && filter && bpfPath === expectedPath ? SMOKE_COVERAGE_FULL : SMOKE_COVERAGE_REPLAY_ONLY;
 }

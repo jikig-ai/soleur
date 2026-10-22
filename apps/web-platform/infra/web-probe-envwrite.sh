@@ -23,6 +23,18 @@
 # file holds a live prd read token). NOT "closes the TOCTOU" — it narrows it to root-group-only.
 set -euo pipefail
 
+# Refuse to run under xtrace while the probe token is set (#7797): this script writes the read-scoped web_probes token into the
+# per-host env files, and `set -x` would print it into the cloud-init journal. Added with the web-bash-synthetic env file (#10455 b),
+# which made the credential-refusal lint see this script as binding a live credential.
+case "$-" in
+  *x*)
+    if [ -n "${SOLEUR_HOST_KEY:+x}${SOLEUR_WEB_PROBES_TOKEN:+x}${WEB_BASH_SYNTHETIC_URL_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 # Fail LOUD on any unset required input — no silent Doppler/env fallback (fresh-boot readiness
 # contract; 2026-04-03-doppler-not-installed-env-fallback-outage). A missing value here means the
 # render/wiring is broken; a probe env file half-written from empty vars is worse than none.
