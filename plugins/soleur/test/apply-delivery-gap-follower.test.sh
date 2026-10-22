@@ -21,7 +21,7 @@
 #
 # Knobs (tests only): ADG_ONLY=<ids> run only those groups/sub-cases; ADG_NO_META=1 skip the self-referential groups
 # (H1 and M; children set it); ADG_SUT=<path> run against another script copy; ADG_WF=<path> run the wiring leg against
-# another workflow copy; ADG_PRINT_COUNTS=1 print per-group assertion counts (used to record the floor table).
+# another workflow copy; ADG_MUT_LOGS=<dir> keep the per-mutant logs there; ADG_PRINT_COUNTS=1 print per-group assertion counts (used to record the floor table).
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
 set -uo pipefail
@@ -42,8 +42,15 @@ FIX="$SCRIPT_DIR/fixtures/apply-delivery-gap"
 SELF="$SCRIPT_DIR/apply-delivery-gap-follower.test.sh"
 
 MUTANT_FLOOR=22
-# Per-group assertion floors, recorded from the first green run (ADG_PRINT_COUNTS=1). Enforced only on a full run.
-declare -A FLOOR=()
+# Per-group assertion floors, recorded from the first green full run (ADG_PRINT_COUNTS=1 prints the counts to re-derive
+# them). Enforced only on a full run: a group that silently stops asserting reds the suite.
+declare -A FLOOR=(
+  [H1]=2 [H3]=3 [H3b]=3 [H4]=5 [H5]=5 [M]=24 [R]=22 [REASONS]=1 [S1]=18 [S10]=7 [S11a]=2 [S11b]=2 [S11c]=2 [S11d]=3 [S12a]=4
+  [S12b]=5 [S13a]=9 [S13b]=2 [S13c]=2 [S14]=7 [S15]=14 [S16]=5 [S17]=3 [S1live]=1 [S2]=13 [S2b-ahead]=4 [S2b-behind]=4
+  [S2b-diverged]=4 [S2b-identical]=4 [S3]=6 [S3c]=4 [S4]=10 [S4c]=3 [S4l]=2 [S4m]=3 [S4n]=4 [S4o]=3 [S4x]=3 [S5]=13
+  [S6]=5 [S6d]=2 [S7]=6 [S7a]=40 [S7c]=1 [S7o]=4 [S8a]=9 [S8b]=9 [S8c]=9 [S8d]=9 [S8dg]=29 [S8e]=9 [S8f]=9 [S8g]=9
+  [S8h]=9 [S8i]=9 [S8in]=7 [S8m]=48 [S8n]=5 [S8ok]=4 [S8r]=26 [S8t]=3 [S8t2]=10 [S8ti]=9 [S8u]=11 [S9]=23 [S9f]=7 [W]=35
+)
 
 ASSERTS=0 passes=0 fails=0 FAILED=()
 pass() { passes=$((passes + 1)); ASSERTS=$((ASSERTS + 1)); }
@@ -631,6 +638,7 @@ if want S8:trigger; then
   run_sut TRIGGER_RUN_ID=900
   eq "S8 trigger run in_progress on attempt 1 and completed on attempt 2: proceeds" "$SUT_RC" 0
   eq "S8 both workflows were re-read" "$(cnt "$ST/out/reads.log" 'apply-deploy-pipeline-fix.yml/runs')" 2
+  gend
   grp S8t2
   mk_case s8-trigger-never
   runs_file "$ST/runs.deploy-fix.json" "$(mkrun 900 push main in_progress - 0x900 "$(ago 5)" "$(ago 4)")"
@@ -853,6 +861,7 @@ if want S13:boundary; then
   runs_file "$ST/runs.deploy-fix.p3.json" "$(mkrun 1405 push main completed success 0x1405 "$(ago 14400)" "$(ago 14399)")" "$(mkrun 1406 push main completed success 0x1406 "$(ago 14500)" "$(ago 14499)")"
   run_sut APPLY_DELIVERY_GAP_PAGE_SIZE=2 APPLY_DELIVERY_GAP_MAX_PAGES=3
   eq "S13 page 3 full but entirely beyond the cutoff is accepted" "$SUT_RC" 0
+  gend
   grp S13c
   mk_case s13-dedup
   runs_file "$ST/runs.deploy-fix.json" "$(mkrun 1411 push main completed success 0x1411 "$(ago 20)" "$(ago 19)")" "$(mkrun 1410 push main completed cancelled 0x1410 "$(ago 60)" "$(ago 59)")"
@@ -970,6 +979,7 @@ if want H3; then
   run_sut APPLY_DELIVERY_GAP_PAGE_SIZE=2 APPLY_DELIVERY_GAP_MAX_PAGES=5
   eq "H3 a candidate on page 2 of 3, on the SECOND listed workflow, is found" "$(rows)" 1
   has "H3 the row is the infra one" "$ST/all.txt" "row workflow=infra sha=$(sha 0x1803) "
+  gend
   grp H3b
   mk_case h3b
   runs_file "$ST/runs.deploy-fix.json" "$(mkrun 1811 push main completed success 0x1811 "$(ago 20)" "$(ago 19)" "$(ago 20)" 'a different commit message')"
@@ -1088,16 +1098,16 @@ fi
 
 # Mutation battery: one row per guard (plan table M1..M20, Y1, Y2). Fields (tab-separated):
 #   id <TAB> target (script|workflow) <TAB> function (empty = whole file) <TAB> old <TAB> new <TAB> pinned sub-cases
-# `\n` in old/new is a newline. The anchor must match EXACTLY ONCE inside the function; a mutant that does not land, or
+# `<NL>` in old/new is a newline; `-` as the function means the whole file. The anchor must match EXACTLY ONCE inside the function; a mutant that does not land, or
 # whose pristine control does not pass, is an instrument error and fails the suite. Only a child rc of 1 (an assertion
 # failed) counts as "caught": 124/127/2 are reported as instrument errors.
 MUTANTS=()
 mut() { MUTANTS+=("$(printf '%s\t%s\t%s\t%s\t%s\t%s' "$@")"); }
 mut M1 script descendant_status 'identical|ahead)' 'identical|ahead|behind)' 'S2,S2b:behind,R'
 mut M2 script reconcile_workflow '| .[] | [.id, .sha, .ue] | @tsv'"'"' "$nf")"' '| .[] | [.id, .sha, .ue] | @tsv'"'"' "$WORK"/n.*.json)"' 'S10'
-mut M3 script fail_loud 'apply_delivery_gap_%s\n'"'"' "$reason"\n  exit 1' 'apply_delivery_gap_%s\n'"'"' "$reason"\n  return 0' 'S8:malformed'
+mut M3 script fail_loud 'apply_delivery_gap_%s\n'"'"' "$reason"<NL>  exit 1' 'apply_delivery_gap_%s\n'"'"' "$reason"<NL>  return 0' 'S8:malformed'
 mut M4 script reconcile_workflow 'if "$ks" "$msg"; then' 'if false; then' 'S4'
-mut M5 script '' '|Apply web-platform infra (Doppler/Cloudflare/BetterStack/GitHub-App/Inngest/firewall)|ks_infra|' '|Apply web-platform infra (Doppler/Cloudflare/BetterStack/GitHub-App/Inngest/firewall)|ks_deploy_fix|' 'S4'
+mut M5 script - '|Apply web-platform infra (Doppler/Cloudflare/BetterStack/GitHub-App/Inngest/firewall)|ks_infra|' '|Apply web-platform infra (Doppler/Cloudflare/BetterStack/GitHub-App/Inngest/firewall)|ks_deploy_fix|' 'S4'
 mut M6 script reconcile_workflow 'if is_descendant "$sha" "$rsha" && apply_job_ok "$rid"; then' 'if is_descendant "$sha" "$rsha"; then' 'S11:skipped'
 mut M7 script jobs_have_apply_success '.conclusion == "success")'"'" '.conclusion == "success" or .conclusion == "skipped")'"'" 'S11:skipped'
 mut M8 script reconcile_issue 'if [[ "$N_INFLIGHT" -gt 0 ]]; then' 'if false; then' 'S7:otherwf,S12:inflight'
@@ -1105,24 +1115,24 @@ mut M9 script read_runs 'if [[ "$p" -eq "$MAX_PAGES" ]]; then fail_loud run_wind
 mut M10 script reconcile_issue 'lbls="${LABEL},action-required"' 'lbls="${LABEL}"' 'S9'
 mut M11 script is_descendant 'CMP[$k]="unresolvable"' 'CMP[$k]="ahead"' 'S8:compare404'
 mut M12 script main 'if trigger_visible; then break; fi' 'break' 'S8:trigger-invisible'
-mut M13 script reconcile_workflow '          break\n        fi\n      done <<<"$runs"' '          break\n        fi\n        break\n      done <<<"$runs"' 'S2'
+mut M13 script reconcile_workflow '          break<NL>        fi<NL>      done <<<"$runs"' '          break<NL>        fi<NL>        break<NL>      done <<<"$runs"' 'S2'
 mut M14 script ks_deploy_fix "(^|\$'\\n')\\[skip-deploy-fix-apply\\]($|\$'\\n')" '\[skip-deploy-fix-apply\]' 'S4:midline'
 mut M15 script read_runs '&page=${p}"' '&page=${p}&status=cancelled"' 'S1'
-mut M16 script api_get 'if [[ "$rc" -eq 0 ]]; then\n      API_OUT' 'if true; then\n      API_OUT' 'S8:runs-p1,S8:compare-5xx'
+mut M16 script api_get 'if [[ "$rc" -eq 0 ]]; then<NL>      API_OUT' 'if true; then<NL>      API_OUT' 'S8:runs-p1,S8:compare-5xx'
 mut M17 script reconcile_issue 'elif [[ "$N_DELIVERED" -ge 1 ]]; then' 'elif true; then' 'S5'
 mut M18 script render_body 'total="$(wc -l <"$ROWS")"' 'total="$(wc -l <"$WORK/rows.shown")"' 'S14'
 mut M19 script degraded_upsert 'nums="$(issue_numbers "$DEGRADED_TITLE")"' 'nums="$(issue_numbers "$TITLE")"' 'S8:degraded'
 mut M20 script issue_numbers ' and (.title == $t))' ')' 'S9:foreign-title'
-mut Y1 workflow '' '    timeout-minutes: 10\n' '    timeout-minutes: 10\n    permissions:\n      contents: write\n' 'W'
-mut Y2 workflow '' 'group: apply-delivery-gap-follower' 'group: terraform-apply-web-platform-host' 'W'
+mut Y1 workflow - '    timeout-minutes: 10<NL>' '    timeout-minutes: 10<NL>    permissions:<NL>      contents: write<NL>' 'W'
+mut Y2 workflow - 'group: apply-delivery-gap-follower' 'group: terraform-apply-web-platform-host' 'W'
 
 if [[ -z "${ADG_NO_META:-}" ]] && want M; then
   grp M
   MD="$SANDBOX/mut"; mkdir -p "$MD"
   cat >"$MD/mutate.py" <<'PY'
 import os, re, sys
-src, dst, func, old, new = os.environ["MUT_SRC"], os.environ["MUT_DST"], os.environ["MUT_FUNC"], os.environ["MUT_OLD"], os.environ["MUT_NEW"]
-old, new = old.replace("\\n", "\n"), new.replace("\\n", "\n")
+src, dst, func, old, new = os.environ["MUT_SRC"], os.environ["MUT_DST"], os.environ["MUT_FUNC"].lstrip("-"), os.environ["MUT_OLD"], os.environ["MUT_NEW"]
+old, new = old.replace("<NL>", "\n"), new.replace("<NL>", "\n")
 text = open(src).read()
 if func:
     lines = text.split("\n")
@@ -1177,10 +1187,24 @@ JOB
     seen["$target|$pins"]=1
   done
   ctl_bad=0
-  for k in "${!seen[@]}"; do
-    tgt="${k%%|*}"; pins="${k#*|}"; rc=0
-    ADG_SUT="$SUT" ADG_WF="$WF" ADG_ONLY="$pins" ADG_NO_META=1 timeout -k 5 150 bash "$SELF" >"$MD/ctl.log" 2>&1 || rc=$?
-    if [[ "$rc" -ne 0 ]]; then ctl_bad=1; fail "M pristine control for pins <$pins> failed (rc $rc): mutation results for it would be meaningless"; fi
+  # pristine controls run in parallel (one child per distinct pin set); only an rc of 0 is a clean control
+  : >"$MD/ctl.list"
+  for k in "${!seen[@]}"; do printf '%s\n' "${k#*|}" >>"$MD/ctl.list"; done
+  ci=0
+  while IFS= read -r pins; do ci=$((ci + 1)); printf '%s\t%s\n' "$ci" "$pins" >"$MD/ctlspec.$ci"; done <"$MD/ctl.list"
+  cat >"$MD/ctl.sh" <<'CTL'
+#!/usr/bin/env bash
+i="$1"; MD="$2"; SUT="$3"; WF="$4"; SELF="$5"
+IFS=$'\t' read -r _ pins <"$MD/ctlspec.$i"
+rc=0
+ADG_SUT="$SUT" ADG_WF="$WF" ADG_ONLY="$pins" ADG_NO_META=1 timeout -k 5 150 bash "$SELF" >"$MD/ctl.$i.log" 2>&1 || rc=$?
+printf '%s\t%s\n' "$rc" "$pins" >"$MD/ctl.$i.res"
+CTL
+  chmod +x "$MD/ctl.sh"
+  seq 1 "$ci" | xargs -P 8 -I{} bash "$MD/ctl.sh" {} "$MD" "$SUT" "$WF" "$SELF"
+  for ((cj = 1; cj <= ci; cj++)); do
+    IFS=$'\t' read -r crc cpins <"$MD/ctl.$cj.res"
+    if [[ "$crc" -ne 0 ]]; then ctl_bad=1; fail "M pristine control for pins <$cpins> failed (rc $crc): mutation results for it would be meaningless"; fi
   done
   [[ "$ctl_bad" -eq 0 ]] && pass "M every pristine control passes (${#seen[@]} pin sets)"
   eq "M the mutant table length equals MUTANT_FLOOR" "${#MUTANTS[@]}" "$MUTANT_FLOOR"
@@ -1200,6 +1224,7 @@ JOB
     esac
   done
   printf '[M] %s/%s mutants caught\n' "$caught" "${#MUTANTS[@]}"
+  if [[ -n "${ADG_MUT_LOGS:-}" ]]; then mkdir -p "$ADG_MUT_LOGS" && cp "$MD"/*.log "$ADG_MUT_LOGS"/ 2>/dev/null; fi
   gend
 fi
 
