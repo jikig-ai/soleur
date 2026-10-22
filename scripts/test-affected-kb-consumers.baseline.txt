@@ -167,6 +167,7 @@ scripts/followthrough-varq-ban	knowledge-base/project/specs
 scripts/followthroughs/registry-clientip-alert-7530	knowledge-base
 scripts/followthroughs/registry-clientip-alert-7530	knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-7530.md
 scripts/git-data-reboot-evidence-landed-8210	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md
+scripts/git-data-rehearsal-evidence-8211	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 scripts/guard-vacuity-floor	knowledge-base
 scripts/guard-vacuity-floor	knowledge-base/engineering/architecture/diagrams/model.c4
 scripts/guard-vacuity-floor	knowledge-base/engineering/operations/runbooks/cloudflare-pages-cutover.md

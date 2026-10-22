@@ -148,7 +148,7 @@ jobs:
         id: zot_mirror
         if: steps.docker_build.outcome == 'success'
         continue-on-error: true
-        timeout-minutes: 20
+        timeout-minutes: 30
         env:
           DIGEST: ${{ steps.docker_build.outputs.digest }}
           BRIDGE_OUTCOME: ${{ steps.zot_bridge.outcome }}
@@ -156,10 +156,11 @@ jobs:
           set -euo pipefail
           ZOT_DST="127.0.0.1:5000/${IMAGE#ghcr.io/}:v${VERSION}"
           degraded() {
-            local reason="$1" rc="$2" detail="${3:-}"
+            local reason="$1" rc="$2" detail="${3:-}" dst="${ZOT_DST}"
+            [[ "$reason" == cosign_* ]] && dst="${COSIGN_DST:-unset}"  # cosign_ prefix = the second leg's reason namespace
             echo "mirror_status=degraded" >> "$GITHUB_OUTPUT"
             echo "mirror_reason=${reason}" >> "$GITHUB_OUTPUT"
-            echo "::warning::zot mirror degraded for ${ZOT_DST} (reason=${reason} rc=${rc} ${detail}). The GHCR bundle publish is unaffected; this run did not confirm a zot copy, and no automated backfill exists."
+            echo "::warning::zot mirror degraded for ${dst} (reason=${reason} rc=${rc} ${detail}). The GHCR bundle publish is unaffected; this run did not confirm a zot copy, and no automated backfill exists."
             echo "- zot mirror degraded (reason=${reason} rc=${rc}); this run's GHCR push succeeded before the mirror attempt" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           }
@@ -190,6 +191,18 @@ jobs:
           ZOT_DIGEST="$(timeout 60 crane digest "${ZOT_DST}")" || degraded digest_lookup "$?" "crane digest lookup failed after the copy"
           [[ "$ZOT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || degraded digest_lookup 1 "crane digest returned an unexpected shape"
           [[ "$ZOT_DIGEST" == "${DIGEST:-}" ]] || degraded digest_mismatch 1 "the zot digest differs from the built digest"
+          # The cosign verifier image is the last un-mirrored registry read on the host
+          # (#10390 defect 2): the host is deny-all-public egress, so its
+          # `docker run gcr.io/…cosign@sha256:…` verify dies on the daemon-side pull.
+          # Mirror it here — AFTER the bundle copy, so a cosign failure can never starve
+          # the owner leg — and equality-check the zot digest against the pin (a tag dst
+          # makes digest preservation a measured check, not an asserted one; the host
+          # pulls by @sha256 regardless).
+          COSIGN_DST="127.0.0.1:5000/jikig-ai/cosign:v3.1.1"
+          retry timeout 180 crane copy "gcr.io/projectsigstore/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870" "$COSIGN_DST" || degraded cosign_copy "$?" "cosign mirror copy failed after 3 attempts"
+          COSIGN_ZOT_DIGEST="$(timeout 60 crane digest "$COSIGN_DST")" || degraded cosign_digest_lookup "$?" "cosign digest lookup failed after the copy"
+          [[ "$COSIGN_ZOT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || degraded cosign_digest_lookup 1 "cosign digest returned an unexpected shape"
+          [[ "$COSIGN_ZOT_DIGEST" == "sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870" ]] || degraded cosign_digest_mismatch 1 "the zot cosign digest differs from the pinned digest"
           echo "mirror_status=ok" >> "$GITHUB_OUTPUT"
 
       - name: Tear down cloudflared registry bridge
