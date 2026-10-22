@@ -44,3 +44,9 @@ Constraints: the PR stops before merge (no `gh pr merge`, no `--auto`, no postme
 - 5.2 Run the infra-step lint and markdownlint on every edited Markdown file; read exit codes on their own line.
 - 5.3 Residual grep for the retired review phrases; merge-base diff proves AGENTS files, rulesets and workflows are untouched.
 - 5.4 PR body: first line says merging mutates no production system; `Ref #10205`, `Ref #10136`; stop before merge.
+
+## Deepen-plan hardening (applies inside Phases 1 to 3)
+
+- H.1 Runbook intro: verifier exit 0 for form (a), owner's own session turn for form (b), delegable list A0/A1/A3/A4 (A2 under A3), unlisted acts owner-human, A1 delegable only without confirm or rollback_ack inputs and without sole-copy loss, A1b approval never delegable, "satisfies A1" carries its tls-health evidence.
+- H.2 go.md Step 1.5: authorAssociation check on the epic body, plan-path rules, Scope items from the CTO and the owner only, trigger never discharges a hold, headless dedupe against owner or bot issues keyed on the epic number, order ask then render then verify then worktree then CTO writes holds and envelope.
+- H.3 ship form: cite the envelope, run verify with `--envelope`, `--audit --at` for acts that already ran, exclusion clause, a failed verify makes the bullet an operator step.
