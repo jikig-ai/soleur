@@ -13,8 +13,8 @@
 #   regardless of `/review`, and cannot be bypassed by `git commit --no-verify`.
 #   It is the FIRST net; the frontend-anti-slop scanner (#4635) is the second.
 #
-# Modelled on .claude/hooks/git-commit-secret-scan.sh — same trigger regex,
-# same fail-open philosophy, same JSON permissionDecision contract.
+# Modelled on git-commit-secret-scan.sh (JSON contract, fail-open). Its trigger regex began
+# as an identical copy; the secret scan has since widened detection and target resolution (#10609).
 #
 # Decision mechanism: this hook emits the repo-standard PreToolUse JSON
 # `{permissionDecision: deny}` with exit 0 (NOT a bare `exit 2`). Every sibling

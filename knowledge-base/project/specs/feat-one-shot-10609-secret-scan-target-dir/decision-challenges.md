@@ -24,3 +24,14 @@ Headless planning (2026-10-20). Technical forks were ruled by the CTO agent, nev
 | T16 commit detection: line 113 stays byte-identical (pinned positionally by boundary-prefix.test.sh); a loose test after line 115 plus lexer confirmation covers `git <global options> commit` | technical | Ruled by CTO agent, 2026-10-20: approved - a loose-only match with no lexer commit record allows, an unavailable lexer denies only when the loose test matched; widening line 113 and allowing on an unavailable lexer were rejected |
 | T17 deny text repairs | technical | Ruled by CTO agent, 2026-10-20: name two repairs (install perl when the lexer is the cause; run `cd <abs path>` as its own command first) and do not rely on cwd persistence alone - it is unverified for hook payloads |
 | T18 ADR-157 handling | technical | Ruled by CTO agent, 2026-10-20: an addendum to ADR-157 citing ADR-256 as the precedent for a scoped exception, not a new ADR |
+
+## Review round (2026-10-22, 11-seat panel; fix round applied from SHA f4c67d21aa)
+
+| Item | Class | Ruling |
+|---|---|---|
+| T2 amended by T14 | technical | Superseded by T14: `--git-dir` / `--work-tree` / `GIT_DIR` / `GIT_WORK_TREE` are denies, not unioned targets. The code follows T14. |
+| T9 scope when the helper library is missing | technical | Amended by the plan author as a clarification inside the CTO's deny ruling, not a new fork: the deny applies to a plain `git commit` and to option-bearing `git -...` forms; a command with no option form (`git log --grep=commit`) is left alone. Substring-only matching had denied `echo "no git here, just commit msg"`. |
+| T19 walker shape: closed wrapper table vs look-through | technical | Ruled by plan author, inside T5/T6 (fail toward scanning): the walker looks through any unmodelled first word for a later `git` / `cd` / `env` / runner / `eval` word and treats an unknown git option followed by a `commit` word as a commit, instead of maintaining a wrapper table that must be complete (four seats found launchers outside the table). Over-recognition only adds scans. |
+| T20 refusals after the last commit | technical | Ruled by plan author: dropped (a later `cd "$X"` cannot retarget an earlier commit); a refusal before or at a commit is kept. |
+| T21 same-call `git add` / `commit -a` | technical | Unchanged: tracked as #10696 (T15); now listed as an accepted residual in the README and the ADR-157 addendum. |
+| T22 sibling hook `brand-hex-commit-gate.sh` resolves its repo from the process cwd (same shape) | technical | Filed as its own issue (a different hook, a different decision); not folded in here. |

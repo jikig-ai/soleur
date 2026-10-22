@@ -179,15 +179,28 @@ here after running it.
 
 ### `git-commit-secret-scan` target resolution (#10609)
 
-The hook scans the repository a `git commit` **targets**, not the one the hook process happens to
-run in. `lib/commit-target-roots.sh` lexes the command with `plugins/soleur/hooks/lib/shell-argv.pl`
-(a runtime dependency: if perl, the lexer or the library is missing the hook denies, never skips)
-and collects every literal `cd` / `pushd` / `git -C` / `env -C` path. It scans the union of those
-repositories plus the cwd-derived and payload-`cwd` roots. A target it cannot read statically
-(`$VAR`, `$(...)`, `~`, `cd -`, a glob, `GIT_DIR=`, `--git-dir`, `--work-tree`, or a `bash -c` /
-`eval` string held in a variable) is **denied**, with the repair: run `cd <absolute worktree path>`
-as its own command, then `git commit` with no `cd`/`-C`; or use a literal absolute path. There is
-no override variable. Rationale: ADR-157 addendum (2026-10-21).
+The hook scans the repository a `git commit` **targets**, not the one the hook process happens
+to run in. `lib/commit-target-roots.sh` lexes the command with
+`plugins/soleur/hooks/lib/shell-argv.pl` (a runtime dependency) and collects every literal
+`cd` / `pushd` / `git -C` / `env -C` path, looking through any launcher in front of `git`
+(`timeout`, `sudo`, `nice`, `xargs`, `rtk`, ...). It scans the union of those repositories plus
+the cwd-derived and payload-`cwd` roots. A target it cannot read statically is **denied**, with
+a repair that matches the cause: `$VAR`, `$(...)`, `~`, `cd -`, a glob, more than 32 targets,
+`GIT_DIR=` / `GIT_WORK_TREE=` / `GIT_INDEX_FILE=` (inline, after `env`, or via `export`),
+`--git-dir`, `--work-tree`, `-c core.worktree=`, a path that does not exist yet in a command
+that creates paths, and a script held in a variable that `bash -c` or `eval` runs. When the
+scanner's own tooling is missing (perl, the lexer, the helper library) every command that
+could be a commit is denied too, and the text says no rewrite can help. There is no override
+variable. Rationale: ADR-157 addendum (2026-10-21).
+
+Accepted residuals (the threat model is a fallible cooperative agent, not a hostile one):
+aliases (`git -c alias.ci=commit ci`), a script or stdin-fed shell that runs the commit,
+`find -exec`, `git commit-tree`, `CDPATH`, a symlink-vs-logical `cd`, and the commit-time
+index changes the command makes itself (`git add -A && git commit`, `commit -a`, a pathspec
+commit): the hook scans the index as it is BEFORE the command runs (#10696). A `git commit`
+into a repository that has no `.gitleaks.toml` is skipped with a bypass row, as it always was.
+Sessions anchored at the bare-root mirror pick the fix up after `worktree-manager.sh
+sync-bare-files`.
 
 ### Scope of the mandate
 

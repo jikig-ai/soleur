@@ -9,6 +9,12 @@ set -euo pipefail
 # to full isolation. See the helper header.
 . "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
 
+# A hook, `git rebase --exec` or an exported shell can hand this suite GIT_DIR / GIT_INDEX_FILE;
+# either beats cwd and `git -C`, so every fixture below would write into the CALLER's
+# repository. Clear them before anything runs (T39 sets GIT_DIR on the hook call itself).
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
+      GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_PREFIX
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HOOK="$REPO_ROOT/.claude/hooks/git-commit-secret-scan.sh"
 GITLEAKS_TOML="$REPO_ROOT/.gitleaks.toml"
@@ -588,7 +594,8 @@ _mk_bare_root_with_worktree() {
     cd "$root"
     git init -q -b main
     git config user.email t@t; git config user.name t
-    echo seed > seed.txt; git add seed.txt; git commit -q -m seed
+    echo seed > seed.txt; git add seed.txt
+    git -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -q -m seed
     git config core.bare true
     git worktree add -q .worktrees/wt -b wtb
     cd .worktrees/wt
@@ -654,13 +661,13 @@ _t_target_resolution() {
     "$R" "cd .worktrees/wt && git commit -m x" deny "leak.json"
 
   _expect "T25a leaky repo is the SECOND target (cd A && cd wt)" \
-    "$R" "cd $A && cd $W && git commit -m x" deny "leak.json"
+    "$R" "cd $A && cd $W && git commit -m x" deny "leak.json" "$W"
   _expect "T25b leaky repo is the SECOND target (git -C A status && git -C wt commit)" \
-    "$R" "git -C $A status && git -C $W commit -m x" deny "leak.json"
+    "$R" "git -C $A status && git -C $W commit -m x" deny "leak.json" "$W"
   _expect "T25c leaky repo is the FIRST target (cd wt && cd A)" \
-    "$R" "cd $W && cd $A && git commit -m x" deny "leak.json"
+    "$R" "cd $W && cd $A && git commit -m x" deny "leak.json" "$W"
   _expect "T26 a -C on a non-commit command does not displace the cwd repo (fallback roots stay unioned)" \
-    "$B" "git -C $A status; git commit -m x" deny "leak.json"
+    "$B" "git -C $A status; git commit -m x" deny "leak.json" "$B"
 
   # Each fallback root is its own contract: process cwd and payload .cwd can differ.
   _expect "T26b the PROCESS-cwd root is scanned even when the command names a clean target" \
@@ -674,16 +681,18 @@ _t_target_resolution() {
   _expect "T43e must-ALLOW: quoted 'git -C x commit' in a LEAKY repo is data" \
     "$B" 'echo "git -C x commit"' allow
 
-  for s in 'cd "$WT" && git commit -m x' \
-           'cd $WT && git commit -m x' \
-           'cd "$(pwd)/wt" && git commit -m x' \
-           'cd `pwd` && git commit -m x' \
-           'cd - && git commit -m x' \
-           'cd ~someone && git commit -m x' \
-           'cd ~/wt && git commit -m x' \
-           'cd .worktrees/* && git commit -m x'; do
-    _expect "T27 non-literal target is DENIED, never skipped: $s" \
-      "$R" "$s" deny "cannot determine" "NOT scanned" "its own command" "git worktree list"
+  local frag
+  for s in 'expansion::cd "$WT" && git commit -m x' \
+           'expansion::cd $WT && git commit -m x' \
+           'expansion::cd "$(pwd)/wt" && git commit -m x' \
+           'expansion::cd `pwd` && git commit -m x' \
+           "cd -::cd - && git commit -m x" \
+           'uses ~::cd ~someone && git commit -m x' \
+           'uses ~::cd ~/wt && git commit -m x' \
+           'glob::cd .worktrees/* && git commit -m x'; do
+    frag="${s%%::*}"; cmd="${s#*::}"
+    _expect "T27 non-literal target is DENIED, never skipped (cause: $frag): $cmd" \
+      "$R" "$cmd" deny "cannot determine" "NOT scanned" "its own command" "git worktree list" "$frag"
   done
   _expect "T27c the deny text names the forms that do not work" \
     "$R" 'cd "$WT" && git commit -m x' deny '$(...)' "GIT_DIR" "bash -c"
@@ -691,22 +700,22 @@ _t_target_resolution() {
   _expect "T29 bash -c 'cd <wt> && git commit' → deny" \
     "$R" "bash -c 'cd $W && git commit -m x'" deny "leak.json"
   _expect "T29b the commit hidden in a variable (eval \"\$CMD\") → deny" \
-    "$R" "CMD='cd $W && git commit -m x'; eval \"\$CMD\"" deny "cannot determine"
+    "$R" "CMD='cd $W && git commit -m x'; eval \"\$CMD\"" deny "cannot determine" "string held in an expansion"
   _expect "T29c the commit hidden in a variable (bash -c \"\$SCRIPT\") → deny" \
-    "$R" "SCRIPT='cd $W && git commit -m x'; bash -c \"\$SCRIPT\"" deny "cannot determine"
+    "$R" "SCRIPT='cd $W && git commit -m x'; bash -c \"\$SCRIPT\"" deny "cannot determine" "script held in an expansion"
 
   _expect "T30a GIT_WORK_TREE= on a commit → deny (cannot determine)" \
-    "$R" "GIT_WORK_TREE=$W git commit -m x" deny "cannot determine"
+    "$R" "GIT_WORK_TREE=$W git commit -m x" deny "cannot determine" "GIT_WORK_TREE"
   _expect "T30b git --work-tree= on a commit → deny (cannot determine)" \
-    "$R" "git --work-tree=$W commit -m x" deny "cannot determine"
+    "$R" "git --work-tree=$W commit -m x" deny "cannot determine" "--work-tree"
   _expect "T30c git --git-dir= on a commit → deny (cannot determine)" \
-    "$R" "git --git-dir=$R/.git commit -m x" deny "cannot determine"
+    "$R" "git --git-dir=$R/.git commit -m x" deny "cannot determine" "--git-dir"
 
   pd=$(_mk_stub_path findings)
   EXPECT_PD="$pd" _expect "T31 no perl → a tokenised commit is DENIED naming the cause (stub gitleaks would report a finding: that must not be the reason)" \
     "$R" "cd $W && git commit -m x" deny "cannot determine" "perl" "!private-key"
   _expect "T32 unbalanced quote (lexer error) → deny" \
-    "$R" "cd \"$W && git commit -m x" deny "cannot determine"
+    "$R" "cd \"$W && git commit -m x" deny "cannot determine" "not parseable"
 
   cp=$(mktemp -d "$SUITE_TMP/hookcopy.XXXXXX")
   mkdir -p "$cp/.claude"
@@ -747,6 +756,10 @@ _t_target_resolution() {
   RUN_ENV=("GL_STUB_FAIL_DIR=${A##*/}" "GL_REAL=$(command -v gitleaks)")
   EXPECT_PD="$pd" _expect "T41 the loop does not end at a root whose scan errored (clean A errors, leaky B still denies)" \
     "$R" "cd $A && git -C $B commit -m x" deny "leak.json"
+  # Witness: root A's scan really errored (the stub exits 2 there), so the row proves the
+  # loop continued PAST an errored root rather than never meeting one.
+  if [[ "$ERR" == *"exited 2"* ]]; then _report "T41b root A's scan errored (the stub fired) and the loop continued" ok
+  else _report "T41b root A's scan errored (the stub fired) and the loop continued" fail "stderr: ${ERR:0:200}"; fi
   RUN_ENV=()
 
   PAYLOAD_CWD="$W" _expect "T42 the separate-cd repair: payload .cwd is the worktree, the command carries no cd" \
@@ -775,18 +788,158 @@ _t_target_resolution() {
   fi
 }
 
+# #10609 review round: every launcher, option form, quoting form and ordering the walker must
+# see through, each as its own row with a DIFFERENT leaky member (a first-only or last-only
+# resolver, or a swapped cause, fails at least one).
+_t_target_resolution2() {
+  _needs_gl "T44-T70 launcher/option/ordering/root rows" || return 0
+  local R W R2 W2 A B NT pd w o r s cp many i
+  _mk_bare_root_with_worktree leak; R="$FX_ROOT"; W="$FX_WT"
+  _mk_bare_root_with_worktree clean; R2="$FX_ROOT"; W2="$FX_WT"
+  _fx_control "$W" || return 0
+  A=$(_mk_repo_with_toml); B=$(_mk_leaky_repo)
+  NT=$(mktemp -d "$SUITE_TMP/notoml.XXXXXX")
+  ( cd "$NT" && git init -q -b main && echo x > f.txt && git add f.txt )
+
+  # T44: a launcher in front of git must not hide the target (the whole #10609 class).
+  for w in 'timeout 5' 'sudo' 'nice -n 5' 'xargs' 'rtk' 'flock /tmp/soleur-lock' 'exec -a x' 'command' 'setsid' 'stdbuf -oL'; do
+    _expect "T44 launcher '$w' before 'git -C <wt> commit' → deny" "$R" "$w git -C $W commit -m x" deny "leak.json" "$W"
+  done
+  _expect "T44b 'sudo -D <wt> git commit' → deny" "$R" "sudo -D $W git commit -m x" deny "leak.json"
+  _expect "T44c 'sudo env -C <wt> git commit' → deny" "$R" "sudo env -C $W git commit -m x" deny "leak.json"
+
+  # T45: git global options that take a separate operand.
+  for o in '--namespace n' '--config-env k=V' '--attr-source HEAD' '--super-prefix p' '--no-pager -c k=v' '-c k=v --no-pager'; do
+    _expect "T45 git $o -C <wt> commit → deny" "$R" "git $o -C $W commit -m x" deny "leak.json"
+  done
+
+  # T46: quoting and path forms the strict regex and the old pre-filter could not see.
+  for s in 'git "-C" WT commit -m x' '/usr/bin/git -C WT commit -m x' "'git' -C WT commit -m x" '(git -C WT commit -m x)' 'git -C "WT" commit -m x'; do
+    _expect "T46 quoting/path form: $s" "$R" "${s//WT/$W}" deny "leak.json"
+  done
+
+  # T47: env forms.
+  for s in '/usr/bin/env -C WT git commit -m x' 'env -CWT git commit -m x' 'env -iC WT git commit -m x' 'env --ch WT git commit -m x' 'env -u FOO -C WT git commit -m x'; do
+    _expect "T47 env form: $s" "$R" "${s//WT/$W}" deny "leak.json"
+  done
+
+  # T48: repository-location variables set by something other than a leading assignment.
+  _expect "T48a 'export GIT_DIR=...; git commit' → deny" "$R" "export GIT_DIR=$W/.git; git commit -m x" deny "cannot determine" "GIT_DIR"
+  _expect "T48b 'declare -x GIT_WORK_TREE=...; git commit' → deny" "$R" "declare -x GIT_WORK_TREE=$W; git commit -m x" deny "cannot determine" "GIT_WORK_TREE"
+  _expect "T48c 'GIT_INDEX_FILE=... git commit' → deny" "$R" "GIT_INDEX_FILE=$W/.git/index git commit -m x" deny "cannot determine" "GIT_INDEX_FILE"
+  _expect "T48d 'git -c core.worktree=... commit' → deny" "$R" "git -c core.worktree=$W commit -m x" deny "cannot determine" "core.worktree"
+
+  # T49: a shell runner whose script is held in a variable, in every option spelling.
+  for r in 'sh -c' 'zsh -c' 'bash -lc' 'bash -ce' 'bash -o pipefail -c' 'sudo bash -c' 'timeout 5 bash -c'; do
+    _expect "T49 runner '$r' with a script in a variable → deny" "$R" "S='cd $W && git commit -m x'; $r \"\$S\"" deny "cannot determine" "script held in an expansion"
+  done
+
+  # T50: a target created by the same command does not exist yet.
+  _expect "T50a 'git worktree add <new> && cd <new> && git commit' → deny" \
+    "$R" "git worktree add $R/.worktrees/newwt && cd $R/.worktrees/newwt && git commit -m x" deny "cannot determine" "does not exist yet"
+  _expect "T50b 'mkdir -p <new> && cd <new> && git commit' → deny" \
+    "$R" "mkdir -p $R/newdir && cd $R/newdir && git commit -m x" deny "cannot determine" "does not exist yet"
+
+  # T51: a bounded number of targets (an unbounded chain outlives the hook's timeout).
+  many=""
+  for i in $(seq 1 40); do many+="cd d$i && "; done
+  _expect "T51 more than 32 distinct targets → deny, quickly" "$R" "${many}git commit -m x" deny "cannot determine" "more than 32"
+
+  # T52: a refusal after the last commit cannot change its target; the one before still can.
+  _expect "T52a 'git -C <clean> commit && cd -' → allow (the later cd cannot retarget the commit)" \
+    "$R2" "git -C $W2 commit -m x && cd - >/dev/null" allow
+  _expect "T52b 'cd \"\$X\" && git -C <clean> commit' → deny (the refusal precedes the commit)" \
+    "$R2" "cd \"\$X\" && git -C $W2 commit -m x" deny "cannot determine"
+
+  # T53: a lexer failure on a loose-only match is denied for ITS cause, with the right repair.
+  _expect "T53a unbalanced quote on a loose-only form → deny (parse)" "$R" "git -C \"$W commit -m x" deny "cannot determine" "not parseable" "balanced quotes" "!install perl"
+  pd=$(_mk_stub_path findings)
+  EXPECT_PD="$pd" _expect "T53b no perl on a loose-only form → deny (tooling)" "$R" "git -C $W commit -m x" deny "cannot determine" "perl" "Install perl" "!private-key"
+
+  # T54: a broken library denies a commit and leaves a non-commit alone.
+  cp=$(mktemp -d "$SUITE_TMP/hookcopy2.XXXXXX")
+  mkdir -p "$cp/.claude"
+  cp -R "$REPO_ROOT/.claude/hooks" "$cp/.claude/hooks"
+  rm -f "$cp/.claude/hooks/lib/commit-target-roots.sh"
+  HOOK_OVERRIDE="$cp/.claude/hooks/git-commit-secret-scan.sh" \
+    _expect "T54a library missing: 'git log --grep=commit' (no option form) → allow" "$R" "git log --grep=commit" allow
+  HOOK_OVERRIDE="$cp/.claude/hooks/git-commit-secret-scan.sh" \
+    _expect "T54b library missing: the deny says no rewrite can help" "$R" "git commit -m x" deny "cannot determine" "No rewrite of the command can help" "git checkout -- .claude/hooks/lib"
+
+  # T55: an unrunnable gitleaks keeps its allow + bypass row AHEAD of the undeterminable deny.
+  pd=$(_mk_stub_path unrunnable perl)
+  EXPECT_PD="$pd" _expect "T55 unrunnable gitleaks + undeterminable target → allow via the bypass row" "$R" 'cd "$X" && git commit -m x' allow
+  if [[ "$(_last_prefix)" == "gitleaks unrunnable"* ]]; then _report "T55b the allow carries the 'gitleaks unrunnable' row" ok
+  else _report "T55b the allow carries the 'gitleaks unrunnable' row" fail "prefix=$(_last_prefix)"; fi
+
+  # T56: a target without .gitleaks.toml is skipped, and the scan CONTINUES to the next root.
+  _expect "T56a toml-less root first, leaky root second → deny" "$R" "cd $NT && cd $W && git commit -m x" deny "leak.json" "$W"
+  _expect "T56b a toml-less target alone → allow (existing per-root policy) via the bypass row" "$R2" "git -C $NT commit -m x" allow
+
+  # T57: relative targets resolve against each base on its own, and compose.
+  PAYLOAD_CWD="$A" _expect "T57a relative target reachable only from the PROCESS cwd" "$R" "cd .worktrees/wt && git commit -m x" deny "leak.json"
+  PAYLOAD_CWD="$R" _expect "T57b relative target reachable only from the PAYLOAD cwd" "$A" "cd .worktrees/wt && git commit -m x" deny "leak.json"
+  _expect "T57c relative targets compose ('cd .worktrees && cd wt')" "$R" "cd .worktrees && cd wt && git commit -m x" deny "leak.json"
+
+  # T58: the deny names its cause, and the causes carry DIFFERENT repairs.
+  _expect "T58a target causes lead with the literal-path repair" "$R" 'cd "$X" && git commit -m x' deny "git -C /abs/path commit" "cd /abs/path && git commit" "as its own command"
+}
+
+# The verdict helpers must be able to REJECT: a helper that always says yes leaves every
+# assertion green, and the count floor below cannot see it (a neutered helper still counts).
+_t_helper_selftest() {
+  local out
+  out=$( ( _expect "selftest-expect-mismatch" "$REPO_ROOT" "git status" deny ) 2>&1 ) || true
+  if [[ "$out" != *"[FAIL] selftest-expect-mismatch"* ]]; then
+    printf '[FATAL] instrument self-test: _expect did not report a decision mismatch (got: %s)\n' "${out:0:200}" >&2; exit 1
+  fi
+  out=$( ( _expect "selftest-expect-match" "$REPO_ROOT" "git status" allow ) 2>&1 ) || true
+  if [[ "$out" != *"[ok] selftest-expect-match"* ]]; then
+    printf '[FATAL] instrument self-test: _expect did not report a matching decision (got: %s)\n' "${out:0:200}" >&2; exit 1
+  fi
+  out=$( ( _expect "selftest-expect-fragment" "$REPO_ROOT" "git status" allow "no-such-fragment" ) 2>&1 ) || true
+  if [[ "$out" != *"[FAIL] selftest-expect-fragment"* ]]; then
+    printf '[FATAL] instrument self-test: _expect ignored a missing reason fragment (got: %s)\n' "${out:0:200}" >&2; exit 1
+  fi
+  out=$( ( _w_row "selftest-row-mismatch" 'cd /a' '/zzz;' 0 0 ) 2>&1 ) || true
+  if [[ "$out" != *"[FAIL] walker: selftest-row-mismatch"* ]]; then
+    printf '[FATAL] instrument self-test: _w_row did not report a mismatch (got: %s)\n' "${out:0:200}" >&2; exit 1
+  fi
+  out=$( ( _w_row "selftest-row-fragment" 'cd "$X"' '' 1 0 "no-such-fragment" ) 2>&1 ) || true
+  if [[ "$out" != *"[FAIL] walker: selftest-row-fragment"* ]]; then
+    printf '[FATAL] instrument self-test: _w_row ignored a missing reason fragment (got: %s)\n' "${out:0:200}" >&2; exit 1
+  fi
+  out=$( ( _w_row "selftest-row-match" 'cd /a' '/a;' 0 0 ) 2>&1 ) || true
+  if [[ "$out" != *"[ok] walker: selftest-row-match"* ]]; then
+    printf '[FATAL] instrument self-test: _w_row did not report a match (got: %s)\n' "${out:0:200}" >&2; exit 1
+  fi
+}
+
 # Walker rows: source the library and read what ctr_collect extracts. The command
 # is passed as an ARGUMENT to a child bash — it is data, never evaluated.
-_w_row() {  # label command want_targets want_nbad want_commit
-  local label="$1" cmd="$2" want="T=$3|B=$4|C=$5" got lib="$REPO_ROOT/.claude/hooks/lib/commit-target-roots.sh"
+_w_row() {  # label command want_targets want_nbad want_commit [fragment of the FIRST refusal reason]
+  local label="$1" cmd="$2" want="T=$3|B=$4|C=$5" frag="${6:-}" got head reason lib="$REPO_ROOT/.claude/hooks/lib/commit-target-roots.sh"
   got=$(env HOME=/h bash -c '
     source "$1" || { echo "SOURCE-FAILED"; exit 0; }
     ctr_collect "$2"
     printf "T="; for t in ${CTR_TARGETS[@]+"${CTR_TARGETS[@]}"}; do printf "%s;" "$t"; done
-    printf "|B=%s|C=%s" "${#CTR_BAD[@]}" "$CTR_COMMIT_SEEN"
+    printf "|B=%s|C=%s|R=%s" "${#CTR_BAD[@]}" "$CTR_COMMIT_SEEN" "${CTR_BAD[0]-}"
   ' _ "$lib" "$cmd" 2>&1) || true
-  if [[ "$got" == "$want" ]]; then _report "walker: $label" ok
-  else _report "walker: $label" fail "got '$got' want '$want'"; fi
+  head="${got%%|R=*}"; reason="${got#*|R=}"
+  if [[ "$head" == "$want" && ( -z "$frag" || "$reason" == *"$frag"* ) ]]; then _report "walker: $label" ok
+  else _report "walker: $label" fail "got '$got' want '$want' reason-fragment '$frag'"; fi
+}
+
+# What ctr_collect reports about the LEXER itself (state, kind). $2 is data, never evaluated.
+_w_lex() {  # label command want ("S=ok K=" | "S=unavailable K=parse" ...) [PATH override]
+  local label="$1" cmd="$2" want="$3" lp="${4:-$PATH}" got lib="$REPO_ROOT/.claude/hooks/lib/commit-target-roots.sh"
+  got=$(env PATH="$lp" bash -c '
+    source "$1" || { echo "SOURCE-FAILED"; exit 0; }
+    ctr_collect "$2"
+    printf "S=%s K=%s" "$CTR_LEX_STATE" "$CTR_LEX_KIND"
+  ' _ "$lib" "$cmd" 2>&1) || true
+  if [[ "$got" == "$want" ]]; then _report "lexer state: $label" ok
+  else _report "lexer state: $label" fail "got '$got' want '$want'"; fi
 }
 
 _t_walker() {
@@ -815,15 +968,94 @@ _t_walker() {
   _w_row "an expanded -C operand is bad"       "git -C ${dq}"'$X'"${dq} commit -m x"  ''      1 1
   _w_row "quoted cd text is data"              'echo "cd /a"; git commit -m x'        ''      0 1
   _w_row "git log is not a commit"             'git -C /a log --oneline'              '/a;'   0 0
-  _w_row "cd ~ is bad"                         'cd ~ && git commit -m x'              ''      1 1
+  _w_row "cd ~ is bad (cause)"                 'cd ~ && git commit -m x'              ''      1 1 "uses ~"
+  _w_row "cd - is bad (cause)"                 'cd - && git commit -m x'              ''      1 1 "cd -"
+  _w_row "glob ? is bad"                       'cd /a? && git commit -m x'            ''      1 1 "glob"
+  _w_row "glob [ is bad"                       'cd /a[1] && git commit -m x'          ''      1 1 "glob"
+  _w_row "brace is bad"                        'cd /a{b,c} && git commit -m x'        ''      1 1 "glob"
+  _w_row "expansion in cd is bad (cause)"      'cd "$X" && git commit -m x'           ''      1 1 "expansion"
+  _w_row "sh -c \"\$S\" is bad"                 'sh -c "$S"'                           ''      1 1 "expansion"
+  _w_row "zsh -c \"\$S\" is bad"                'zsh -c "$S"'                          ''      1 1 "expansion"
+  _w_row "dash -c \"\$S\" is bad"               'dash -c "$S"'                         ''      1 1 "expansion"
+  _w_row "ksh -c \"\$S\" is bad"                'ksh -c "$S"'                          ''      1 1 "expansion"
+  _w_row "bash -lc \"\$S\" is bad"              'bash -lc "$S"'                        ''      1 1 "expansion"
+  _w_row "bash -ce \"\$S\" is bad"              'bash -ce "$S"'                        ''      1 1 "expansion"
+  _w_row "bash -o pipefail -c \"\$S\" is bad"   'bash -o pipefail -c "$S"'             ''      1 1 "expansion"
+  _w_row "sudo bash -c \"\$S\" is bad"          'sudo bash -c "$S"'                    ''      1 1 "expansion"
+  _w_row "timeout 5 bash -c \"\$S\" is bad"     'timeout 5 bash -c "$S"'               ''      1 1 "expansion"
+  _w_row "a literal bash -c script is re-lexed" 'bash -c "cd /a && git commit -m x"'  '/a;'   0 1
+  _w_row "env --chdir=<dir>"                   'env --chdir=/a git commit -m x'       '/a;'   0 1
+  _w_row "env --chdir <dir>"                   'env --chdir /a git commit -m x'       '/a;'   0 1
+  _w_row "env --ch <dir> (abbreviation)"       'env --ch /a git commit -m x'          '/a;'   0 1
+  _w_row "env -C<dir> (attached)"              'env -C/a git commit -m x'             '/a;'   0 1
+  _w_row "env -iC <dir> (bundled)"             'env -iC /a git commit -m x'           '/a;'   0 1
+  _w_row "/usr/bin/env -C <dir>"               '/usr/bin/env -C /a git commit -m x'   '/a;'   0 1
+  _w_row "env -S hides a command"              "env -S 'git -C /a commit'"            ''      1 1 "env -S"
+  _w_row "env -u NAME skips its operand"       'env -u FOO git -C /a commit -m x'     '/a;'   0 1
+  _w_row "env NAME=v prefix"                   'env FOO=1 git -C /a commit -m x'      '/a;'   0 1
+  _w_row "env GIT_DIR=x is bad"                'env GIT_DIR=/g git commit -m x'       ''      1 1 "GIT_DIR"
+  _w_row "git --git-dir <path> (separate) is bad" 'git --git-dir /g commit -m x'      ''      1 1 "--git-dir"
+  _w_row "git --work-tree <path> (separate) is bad" 'git --work-tree /w commit -m x'  ''      1 1 "--work-tree"
+  _w_row "a leading NAME=v is skipped"         'FOO=1 git -C /a commit -m x'          '/a;'   0 1
+  _w_row "GIT_WORK_TREE= is bad"               'GIT_WORK_TREE=/w git commit -m x'     ''      1 1 "GIT_WORK_TREE"
+  _w_row "GIT_INDEX_FILE= is bad"              'GIT_INDEX_FILE=/i git commit -m x'    ''      1 1 "GIT_INDEX_FILE"
+  _w_row "GIT_COMMON_DIR= is bad"              'GIT_COMMON_DIR=/c git commit -m x'    ''      1 1 "GIT_COMMON_DIR"
+  _w_row "export GIT_DIR is bad"               'export GIT_DIR=/g; git commit -m x'   ''      1 1 "GIT_DIR"
+  _w_row "declare -x GIT_WORK_TREE is bad"     'declare -x GIT_WORK_TREE=/w; git commit -m x' '' 1 1 "GIT_WORK_TREE"
+  _w_row "git -c core.worktree= is bad"        'git -c core.worktree=/w commit -m x'  ''      1 1 "core.worktree"
+  _w_row "pushd +1 rotates the stack (bad)"    'pushd +1 && git commit -m x'          ''      1 1 "rotates"
+  _w_row "pushd with no operand is bad"        'pushd && git commit -m x'             ''      1 1 "no operand"
+  _w_row "exec wrapper"                        'exec git -C /a commit -m x'           '/a;'   0 1
+  _w_row "nohup wrapper"                       'nohup git -C /a commit -m x'          '/a;'   0 1
+  _w_row "time wrapper"                        'time git -C /a commit -m x'           '/a;'   0 1
+  _w_row "command -p wrapper"                  'command -p git -C /a commit -m x'     '/a;'   0 1
+  _w_row "timeout 5 git -C"                    'timeout 5 git -C /a commit -m x'      '/a;'   0 1
+  _w_row "sudo git -C"                         'sudo git -C /a commit -m x'           '/a;'   0 1
+  _w_row "nice -n 5 git -C"                    'nice -n 5 git -C /a commit -m x'      '/a;'   0 1
+  _w_row "xargs git -C"                        'xargs git -C /a commit -m x'          '/a;'   0 1
+  _w_row "rtk git -C"                          'rtk git -C /a commit -m x'            '/a;'   0 1
+  _w_row "flock <file> git -C"                 'flock /l git -C /a commit -m x'       '/a;'   0 1
+  _w_row "exec -a <name> git -C"               'exec -a x git -C /a commit -m x'      '/a;'   0 1
+  _w_row "sudo -D <dir> git commit"            'sudo -D /a git commit -m x'           '/a;'   0 1
+  _w_row "sudo env -C <dir> git commit"        'sudo env -C /a git commit -m x'       '/a;'   0 1
+  _w_row "a launcher with -D and no git after it" 'ls -D /a'                          ''      0 0
+  _w_row "git --namespace <n> -C <dir>"        'git --namespace n -C /a commit -m x'  '/a;'   0 1
+  _w_row "git --config-env <k=V> -C <dir>"     'git --config-env k=V -C /a commit -m x' '/a;' 0 1
+  _w_row "git --attr-source <rev> -C <dir>"    'git --attr-source HEAD -C /a commit -m x' '/a;' 0 1
+  _w_row "git --super-prefix <p> -C <dir>"     'git --super-prefix p -C /a commit -m x' '/a;' 0 1
+  _w_row "git --no-pager -c k=v -C <dir>"      'git --no-pager -c k=v -C /a commit -m x' '/a;' 0 1
+  _w_row "an unknown git option then commit counts as a commit" 'git --frobnicate commit -m x' '' 0 1
+  _w_row "an unknown git option without commit is not a commit" 'git --frobnicate log' ''  0 0
+  _w_row "git --no-pager log --grep commit is not a commit" 'git --no-pager log --grep commit' '' 0 0
+  _w_row "git worktree add is not a commit"    'git worktree add /a b'                ''      0 0
+  _w_row "a quoted global option"              'git "-C" /a commit -m x'              '/a;'   0 1
+  _w_row "an absolute git path"                '/usr/bin/git -C /a commit -m x'       '/a;'   0 1
+  _w_row "a quoted command word"               "'git' -C /a commit -m x"              '/a;'   0 1
+  _w_row "an expanded command word is bad"    '"$GIT" -C /a commit -m x'             ''      1 1 "command word"
+  _w_row "a refusal AFTER the last commit is dropped" 'git -C /a commit -m x && cd "$X"' '/a;' 0 1
+  _w_row "a refusal BEFORE the commit is kept" 'cd "$X" && git -C /a commit -m x'     '/a;'   1 1
+  _w_row "a second commit re-arms the refusals" 'git commit -m a; cd "$X"; git commit -m b' '' 1 1
+  _w_row "duplicate targets collapse"          'cd /a && cd /a && git commit -m x'    '/a;'   0 1
+  local many="" expmany="" i
+  for i in $(seq 1 40); do many+="cd /d$i && "; if [ "$i" -le 32 ]; then expmany+="/d$i;"; fi; done
+  _w_row "more than 32 distinct targets is refused" "${many}git commit -m x" "$expmany" 1 1 "more than 32"
+  _w_lex "a parseable command"                 'cd /a && git commit -m x'             "S=ok K="
+  _w_lex "an unbalanced quote is a parse failure" 'git -C "/a commit'                "S=unavailable K=parse"
+  local deep="" tail=""
+  for i in $(seq 1 20); do deep+='echo $('; tail+=')'; done
+  _w_lex "20-deep nesting trips a bound"       "${deep}true${tail}"                   "S=unavailable K=bound"
+  local nopl; nopl=$(_mk_stub_path absent)
+  _w_lex "no perl is a tooling failure"        'cd /a && git commit -m x'             "S=unavailable K=tooling" "$nopl"
 
   local w
   for w in 'cd x' 'pushd x' 'GIT_DIR=x git commit' 'GIT_WORK_TREE=x git commit' 'git --git-dir=x commit' \
-           'git --work-tree=x commit' 'git -C x commit' 'env -C x git commit' 'bash -c "git commit"' 'eval "$X"'; do
+           'git --work-tree=x commit' 'git -C x commit' 'env -C x git commit' 'bash -c "git commit"' 'eval "$X"' \
+           'sudo -D x git commit' '/usr/bin/env -C x git commit' 'export GIT_DIR=x; git commit' 'GIT_INDEX_FILE=x git commit' \
+           'git -c core.worktree=x commit' 'sh -c "git commit"' 'zsh -c "git commit"' 'doas git commit'; do
     if bash -c 'source "$1" && ctr_wants_lex "$2"' _ "$lib" "$w"; then _report "pre-filter matches: $w" ok
     else _report "pre-filter matches: $w" fail "ctr_wants_lex returned false"; fi
   done
-  for w in 'git commit -m x' 'git commit --amend --no-edit' 'git status && git commit -m x'; do
+  for w in 'git commit -m x' 'git commit --amend --no-edit' 'git status && git commit -m x' 'git add -A && git commit -m "fix: tidy"'; do
     if bash -c 'source "$1" && ctr_wants_lex "$2"' _ "$lib" "$w"; then _report "pre-filter skips: $w" fail "ctr_wants_lex returned true (a perl spawn on the no-token path)"
     else _report "pre-filter skips: $w" ok; fi
   done
@@ -900,11 +1132,23 @@ _t_journal_watermark
 
 # The #10609 arms run AFTER the watermark control: _run_cmd advances _JOURNAL_MARK too,
 # and T20 expects the mark to advance across ITS OWN invocation.
+_t_helper_selftest
 _t_target_resolution
+_t_target_resolution2
 _t_walker
 _t_lexer_contract
 
 _t_ci_contract
+
+# Assertion-count FLOOR (not equality: every added row would otherwise need a bump). A helper
+# that goes silent still counts nothing, so deleting the calls — or neutering the helpers —
+# drops the total below this and the suite cannot exit 0 having asserted nothing. Reported by
+# printf + exit, never through the helpers it backstops. Raise it in the same edit that adds rows.
+MIN_ASSERTIONS=249
+if (( pass + fail < MIN_ASSERTIONS )); then
+  printf '[FATAL] assertion floor: %s assertion(s) ran, expected at least %s — rows or helpers were dropped\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
+  exit 1
+fi
 
 # >>> ci-contract-epilogue
 echo "=== $pass passed, $fail failed, ${#SKIPPED_ARMS[@]} arm(s) skipped ==="

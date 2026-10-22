@@ -184,11 +184,17 @@ gate: its purpose is preventing a credential from reaching git history, which re
 cannot undo. When it cannot determine which repository a `git commit` targets (a `$VAR` or `$(...)`
 path, `~`, `cd -`, `GIT_DIR=` / `--git-dir` / `--work-tree`, a `bash -c` / `eval` script held in a
 variable, or the command lexer or its helper library being unavailable), it **denies** with a named
-cause and a repair, instead of skipping the scan. Reasons: an unscanned commit is the exact failure
-the hook exists to prevent; the repair is one extra tool call (`cd <abs path>` as its own command,
-then a plain `git commit`); and an `ask` has no answerer in a headless pipeline
-([ADR-165](./ADR-165-what-ask-means-on-a-harness-with-no-ask-state.md)), so it would degenerate into
-the same skip. An unrunnable or timed-out gitleaks keeps its existing allow plus bypass row (an
-environment fault, not an undeterminable target). There is no override variable: an override is the
-skip. This is a second scoped exception beside ADR-256's, with the same shape: every other failure
-still asks.
+cause and a cause-specific repair, instead of skipping the scan. Reasons: an unscanned commit is the
+exact failure the hook exists to prevent; the repair is one extra tool call; and an `ask` has no
+answerer in a headless pipeline, so it would degenerate into the same skip. (ADR-165 is the record
+of a harness with no `ask` state at all; the headless-pipeline argument is this addendum's own.) An
+unrunnable or timed-out gitleaks keeps its existing allow plus bypass row (an environment fault, not
+an undeterminable target). There is no override variable: an override is the skip.
+
+This is a second scoped exception to "never denies", beside ADR-256's, with these differences,
+stated rather than implied. ADR-256 asks on a tripped lexer bound, a crash, a truncated stream and a
+missing perl, for ANY command; this gate denies on those, for a command that could be a `git commit`
+(it contains `git` and `commit`, or is a plain `git commit`). The scoping is what answers ADR-165's
+self-repair argument: every repair this gate prescribes (`git checkout -- .claude/hooks/lib`,
+installing perl, splitting or rewriting the command, naming a literal path) is not itself a commit,
+so the deny cannot block its own repair. Every other failure still asks.

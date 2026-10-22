@@ -57,8 +57,8 @@ allow() {
 }
 
 deny() {
-  local reason="$1"
-  emit git-commit-secret-scan deny "git-commit-secret-scan: $reason"
+  local reason="$1" rule="${2:-git-commit-secret-scan}"
+  emit "$rule" deny "git-commit-secret-scan: $reason"
   jq -nc --arg r "$reason" \
     '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'
   exit 0
@@ -96,7 +96,7 @@ tool_kind="$HOOK_TOOL_KIND"
 # Only fire on Bash (or its Devin kind twin, exec — #8205).
 [ "$tool_kind" = "Bash" ] || allow
 
-command="$HOOK_CMD"
+command="$HOOK_CMD"; strict_match=1  # the strict test below lowers it to 0
 [ -n "$command" ] || allow
 
 # Match `git commit` as a command-leading verb. Tolerates:
@@ -115,30 +115,34 @@ if ! grep -qE '(^|[[:space:]]|&&|\|\||;|\$\()[[:space:]]*git[[:space:]]+commit([
 fi
 
 # STRICT detection above only sees `git commit` with nothing between the two words, so
-# `git -C <dir> commit`, `git --work-tree=<dir> commit` and `git -c k=v commit` were allowed
-# before anything was scanned (#10609). The loose test below widens detection; the command
-# lexer then CONFIRMS a commit record (a quoted mention of the words is not a commit).
-strict_match="${strict_match-1}"
+# `git -C <dir> commit`, a launcher (`timeout 5 git -C <dir> commit`), quoting (`git "-C" ...`)
+# and `git -c k=v commit` were allowed before anything was scanned (#10609). A command that
+# lacks either word cannot be a commit; every other one goes to the command lexer, which
+# CONFIRMS a commit record (a quoted mention of the words is not a commit).
+if [ "$strict_match" -eq 0 ] && { [[ "$command" != *git* ]] || [[ "$command" != *commit* ]]; }; then
+  allow
+fi
 
 # Sourced fail-soft ON PURPOSE and checked explicitly: a missing or broken library must
 # DENY a commit (it is the safety core), never skip the scan. See deny_undeterminable.
+# Sourced only past the cheap test above, so the common non-git Bash call never pays for it.
 ctr_ok=0
-ctr_lib="$(dirname "${BASH_SOURCE[0]}")/lib/commit-target-roots.sh"
+case "${BASH_SOURCE[0]}" in */*) ctr_dir="${BASH_SOURCE[0]%/*}" ;; *) ctr_dir=. ;; esac
+ctr_lib="$ctr_dir/lib/commit-target-roots.sh"
 # shellcheck source=lib/commit-target-roots.sh
 if [ -r "$ctr_lib" ] && . "$ctr_lib" 2>/dev/null && declare -f ctr_collect >/dev/null 2>&1; then
   ctr_ok=1
 fi
 
-loose_match=0
-if [[ "$command" == *git* && "$command" == *commit* ]]; then
-  if [ "$ctr_ok" -eq 1 ]; then
-    if ctr_wants_lex "$command"; then loose_match=1; fi
-  else
-    loose_match=1
-  fi
-fi
-if [ "$strict_match" -eq 0 ] && [ "$loose_match" -eq 0 ]; then
-  allow
+# Which commands go to the lexer: every loose-only match (always), and a strict match only
+# when it carries a directory-affecting token, so a plain `git commit -m x` never spawns perl.
+need_lex=0
+if [ "$ctr_ok" -eq 1 ]; then
+  if [ "$strict_match" -eq 0 ] || ctr_wants_lex "$command"; then need_lex=1; fi
+elif [ "$strict_match" -eq 0 ]; then
+  # Library unavailable: only an option-bearing `git -...` form can still be a loose commit.
+  loose_re='git[[:space:]]+-'
+  [[ "$command" =~ $loose_re ]] || allow
 fi
 
 # Ambient git env must not redirect any probe or scan below: an inherited GIT_DIR outranks
@@ -146,12 +150,17 @@ fi
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 
 lex_state=skipped
-if [ "$ctr_ok" -eq 1 ] && ctr_wants_lex "$command"; then
+if [ "$need_lex" -eq 1 ]; then
   ctr_collect "$command"
   lex_state="$CTR_LEX_STATE"
-  # A loose-only match that the lexer shows is not a commit is not a commit.
-  if [ "$strict_match" -eq 0 ] && [ "$lex_state" = ok ] && [ "$CTR_COMMIT_SEEN" -eq 0 ]; then
-    allow
+  if [ "$lex_state" = ok ]; then
+    # A loose-only match that the lexer shows is not a commit is not a commit.
+    if [ "$strict_match" -eq 0 ] && [ "$CTR_COMMIT_SEEN" -eq 0 ]; then
+      allow
+    fi
+    # Before the undeterminable check below: a missing target in a command that creates
+    # paths is itself a refusal that ctr_resolve_roots records.
+    ctr_resolve_roots
   fi
 fi
 
@@ -225,23 +234,36 @@ gitleaks_runnable() {
 # and an `ask` has no answerer in a headless pipeline (ADR-165), so it would degenerate
 # into the same skip. There is deliberately NO override variable: an override is the skip.
 deny_undeterminable() {
-  deny "BLOCKED: cannot determine which repository this git commit targets (${1}), so the staged content was NOT scanned and the commit is blocked. Repair: run 'cd <absolute worktree path>' as its own command first, then run 'git commit' with no cd or -C in it (the shell cwd persists between Bash calls). Or name the repository as a literal absolute path in the same command: 'git -C /abs/path commit ...' or 'cd /abs/path && git commit ...' (list the paths with 'git worktree list'). Forms that cannot be resolved and are denied: a variable (\$VAR), \$(...), backticks, ~, a glob, 'cd -', GIT_DIR= / GIT_WORK_TREE= / --git-dir / --work-tree, and a string held in a variable that is run by bash -c or by eval, (any of these hides the target). Do not route around this hook with a script or an alias: that skips the scan too."
+  local kind="$1" cause="$2" repair
+  case "$kind" in
+    lib) repair="No rewrite of the command can help: the scanner's helper library is damaged. Restore it with: git checkout -- .claude/hooks/lib  and retry." ;;
+    tooling) repair="No rewrite of the command can help: the scanner's tooling is unavailable. Install perl and keep plugins/soleur/hooks/lib/shell-argv.pl intact, then retry." ;;
+    parse) repair="Rewrite the command so the shell can parse it (balanced quotes, terminated substitutions and heredocs; a stray quote or backtick inside an unquoted message is the usual cause), or run 'git -C /abs/path commit ...' as its own call." ;;
+    bound) repair="Split the command: run the long or deeply nested parts as separate calls, then 'git -C /abs/path commit ...' on its own." ;;
+    *) repair="Repair: name the repository as a literal absolute path in the same command — 'git -C /abs/path commit ...' or 'cd /abs/path && git commit ...' (list the paths with 'git worktree list'). Or, where the harness reports the shell's cwd to hooks (not Devin), run 'cd <absolute worktree path>' as its own command first and then 'git commit' with no cd or -C in it. Forms that cannot be resolved and are denied: a variable (\$VAR), \$(...), backticks, ~, a glob, 'cd -', GIT_DIR= / GIT_WORK_TREE= / GIT_INDEX_FILE= (inline, after env, or via export), --git-dir / --work-tree, a path that does not exist yet in a command that creates it, and a string held in a variable that is run by bash -c or by eval. Do not route around this hook with a script or an alias: that skips the scan too." ;;
+  esac
+  deny "BLOCKED: cannot determine which repository this git commit may target (${cause}), so the staged content was NOT scanned and the commit is blocked. ${repair}" git-commit-secret-scan-undeterminable
 }
 
-undeterminable=""
+undeterminable=""; undet_kind=target
 if [ "$ctr_ok" -ne 1 ]; then
-  undeterminable="the helper library .claude/hooks/lib/commit-target-roots.sh is missing or unreadable; restore it with: git checkout -- .claude/hooks/lib"
+  undet_kind=lib
+  undeterminable="the helper library .claude/hooks/lib/commit-target-roots.sh is missing or unreadable"
 elif [ "$lex_state" = unavailable ]; then
-  undeterminable="$CTR_LEX_WHY; install perl and keep plugins/soleur intact"
+  undet_kind="$CTR_LEX_KIND"
+  undeterminable="$CTR_LEX_WHY"
 elif [ "$lex_state" = ok ] && [ "${#CTR_BAD[@]}" -gt 0 ]; then
+  # List up to three causes: one repair round-trip is cheaper than three.
   undeterminable="${CTR_BAD[0]}"
-  if [ "${#CTR_BAD[@]}" -gt 1 ]; then undeterminable="$undeterminable; and $(( ${#CTR_BAD[@]} - 1 )) more"; fi
+  [ "${#CTR_BAD[@]}" -gt 1 ] && undeterminable="$undeterminable; ${CTR_BAD[1]}"
+  [ "${#CTR_BAD[@]}" -gt 2 ] && undeterminable="$undeterminable; ${CTR_BAD[2]}"
+  [ "${#CTR_BAD[@]}" -gt 3 ] && undeterminable="$undeterminable; and $(( ${#CTR_BAD[@]} - 3 )) more"
 fi
 if [ -n "$undeterminable" ]; then
   # Honour an unrunnable or timed-out gitleaks first: that is an environment fault and
   # keeps its existing allow + bypass row, exactly as a plain commit would.
   gitleaks_runnable
-  deny_undeterminable "$undeterminable"
+  deny_undeterminable "$undet_kind" "$undeterminable"
 fi
 
 # The repositories to scan: every literal target named in the command, UNIONED with the
@@ -257,10 +279,7 @@ add_root() {
   for x in ${scan_roots[@]+"${scan_roots[@]}"}; do if [ "$x" = "$r" ]; then return 0; fi; done
   scan_roots+=("$r")
 }
-if [ "$lex_state" = ok ]; then
-  ctr_resolve_roots
-  for _r in ${CTR_ROOTS[@]+"${CTR_ROOTS[@]}"}; do add_root "$_r"; done
-fi
+for _r in ${CTR_ROOTS[@]+"${CTR_ROOTS[@]}"}; do add_root "$_r"; done
 add_root "$(git rev-parse --show-toplevel 2>/dev/null || echo "")"
 if [ -n "${HOOK_CWD-}" ] && [ -d "$HOOK_CWD" ]; then
   add_root "$(git -C "$HOOK_CWD" rev-parse --show-toplevel 2>/dev/null || echo "")"
@@ -388,7 +407,7 @@ scan_root() {
       mkdir -p "$nodiff_dir/$(dirname "$_p")" 2>/dev/null || true
       git -C "$repo_root" show ":$_p" > "$nodiff_dir/$_p" 2>/dev/null || true
     done
-    gitleaks detect --no-git --source "$nodiff_dir" --redact --no-banner --exit-code 1 \
+    gitleaks detect --no-git --source "$nodiff_dir" --config "$repo_root/.gitleaks.toml" --redact --no-banner --exit-code 1 \
       --report-format json --report-path "$nodiff_report" >/dev/null 2>&1 || nodiff_rc=$?
     if [ "$nodiff_rc" -eq 1 ] && [ -s "$nodiff_report" ] && grep -q '"RuleID"' "$nodiff_report" 2>/dev/null; then
       nd_count="$(jq -r 'length' "$nodiff_report" 2>/dev/null || echo 0)"
@@ -420,7 +439,7 @@ scan_root() {
     # gitleaks exited non-zero but the report file is empty/missing — likely
     # a transient gitleaks error rather than a real finding. Fail-open with
     # a warn so a broken binary doesn't block every commit.
-    echo "[git-commit-secret-scan] WARN: gitleaks exited $scan_rc but produced no findings report for $repo_root; allowing it. Run 'gitleaks git --pre-commit --staged' there to diagnose." >&2
+    echo "[git-commit-secret-scan] WARN: gitleaks exited $scan_rc but produced no findings report for $repo_root; continuing with the remaining roots. Run 'gitleaks git --pre-commit --staged' there to diagnose." >&2
     emit git-commit-secret-scan bypass "gitleaks exit=$scan_rc, empty report"
     return 0
   fi
