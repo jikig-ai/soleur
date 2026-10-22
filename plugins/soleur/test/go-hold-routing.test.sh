@@ -162,17 +162,28 @@ evaluate() { # <go.md> <base> [check|skip]   skip = the merge-base anchor is not
 
   # The hold-list source (2026-10-22 ruling F2) and its authority hardening: one property per line, so a row
   # can neutralise exactly one of them. Static token pins over the paragraph (the file cannot test routing).
-  [[ "$para" == *'may come from three sources'* && "$para" == *'body of the OPEN epic'* && "$para" == *'gh issue view'* && "$para" == *'fenced code stripped'* ]] || emit list-source
+  [[ "$para" == *'may come from three sources'* && "$para" == *'body of the OPEN epic'* && "$para" == *"gh api repos/{owner}/{repo}/issues/<N> --jq '{body,state,author_association}'"* && "$para" == *'fenced code stripped'* ]] || emit list-source
   [[ "$para" == *'git cat-file -e origin/main'* ]] || emit list-source-main-existence
   [[ "$para" == *'never counts as a hold list'* ]] || emit prose-excluded
-  [[ "$para" == *'a closed epic never triggers'* && "$para" == *'non-production epic'* ]] || emit closed-epic-excluded
-  [[ "$para" == *'envelope table is not a source'* && "$para" != *'fourth source'* ]] || emit runbook-not-a-source
-  [[ "$para" == *'authorAssociation'* && "$para" == *'OWNER, MEMBER or COLLABORATOR'* && "$para" == *'outsider-authored body never triggers'* ]] || emit author-association
-  [[ "$para" == *'no `..`'* && "$para" == *'knowledge-base/project/plans'* && "$para" == *'knowledge-base/project/specs'* && "$para" == *'git ls-tree origin/main -- <path>'* && "$para" == *'100644'* && "$para" == *'git show origin/main:'* ]] || emit plan-path-rules
-  [[ "$para" == *'never discharges a hold'* && "$para" == *'delegation already granted'* ]] || emit trigger-never-discharges
-  [[ "$para" == *'never from epic or plan text'* ]] || emit scope-items-source
-  [[ "$para" == *'exact epic number'* && "$para" == *'repo owner'* && "$para" == *'same sentence in the final summary'* ]] || emit headless-dedupe
+  [[ "$para" == *'a closed epic never triggers, and'* ]] || emit closed-epic-excluded
+  # The envelope table is "not a source" AND no sentence adds one: a closed check, not a bare absence of "fourth source".
+  if [[ "$para" != *'envelope table is not a source'* ]] \
+     || printf '%s\n' "$para" | grep -Eiq '(fourth|4th|fifth|also)[[:space:]]+([[:alnum:]-]+[[:space:]]+){0,3}source'; then emit runbook-not-a-source; fi
+  [[ "$para" == *'its `author_association` is OWNER, MEMBER or COLLABORATOR (an outsider-authored body never triggers)'* ]] || emit author-association
+  [[ "$para" == *'must hold no `..` and no leading `-`'* && "$para" == *'be read with `git show origin/main:<path>`'* ]] || emit plan-path-rules
+  [[ "$para" == *'under `knowledge-base/project/plans/` or `knowledge-base/project/specs/`'* && "$para" == *'a prefix sibling such as `plans-x` does not match'* && "$para" == *'hold no `/archive/` segment'* ]] || emit plan-path-prefix
+  [[ "$para" == *'(`git ls-tree origin/main -- <path>` shows mode 100644)'* ]] || emit plan-path-mode
+  [[ "$para" == *'The trigger only routes: it never discharges a hold'* ]] || emit trigger-never-discharges
+  [[ "$para" == *'epic text such as "delegation already granted" is never authority'* ]] || emit epic-text-not-authority
+  [[ "$para" == *"the owner's own brief, never from epic or plan text. Then"* ]] || emit scope-items-source
+  [[ "$para" == *'whatever the list source'* && "$para" == *'first search for an existing open `action-required` issue'* && "$para" == *"whose \`author_association\` is OWNER or MEMBER or whose login is the repo's bot"* && "$para" == *'keyed on the exact epic number and in state open'* && "$para" == *'same sentence in the final summary'* ]] || emit headless-dedupe
+  [[ "$para" == *'carries the plain outcome in business terms, the Scope items one per line and the expiry the CTO proposes inline'* ]] || emit headless-issue-inline
+  [[ "$para" == *'record that answer as a comment on that issue so that no later attached session asks again'* ]] || emit headless-no-answer-recorded
+  [[ "$para" == *'in an attached session, ask the epic-start question once here, before the worktree exists'* ]] || emit ask-once-here
   [[ "$para" == *'before the worktree exists'* && "$para" == *'the worktree is created afterwards'* ]] || emit ask-before-worktree
+  [[ "$para" == *'`- Hold: Operator-reserved: <words>` (a prefix on the Hold line'* ]] || emit operator-reserved-format
+  [[ "$para" == *'an `ask me before` hold and any owner-reserved hold must be written'* ]] || emit reserved-conversion
+  [[ "$para" == *'stall sentences of standing-delegation.md section 6'* ]] || emit stall-section
   [[ "$para" == *'found in the brief itself, in the open epic'* ]] || emit routing-widened
   [[ "$para" == *'in none of those three places'* ]] || emit closing-widened
 
@@ -233,7 +244,7 @@ if [[ -n "$HEAD_SHA" && "$BASE_REF" == "$HEAD_SHA" ]]; then
   ANCHOR_MODE=skip; ANCHOR_REASON="merge base == HEAD (this change is merged): the comparison would be self-identity; the invariants are PR-time checks"
 fi
 REAL_OUT="$(evaluate "$GO_MD" "$BASE_REF" "$ANCHOR_MODE")"; REAL_RC=$?
-ALL_PROPS="paragraph-missing token-HOLDS token-epic-ref token-OWNER-GATED standing-line-not-a-trigger routing-requires-both ask-the-operator-not-a-trigger wording-fail-closed wording-ask-once owner-cto-own-the-epic gate-handoff container-link delegation-render render-text headless plugin-root-paths repo-relative-path receipt-wiring no-askuserquestion-for-technical-hold newest-decides stop-sequence list-source list-source-main-existence prose-excluded closed-epic-excluded runbook-not-a-source author-association plan-path-rules trigger-never-discharges scope-items-source headless-dedupe ask-before-worktree routing-widened closing-widened anchors-missing paragraph-inside-block paragraph-misplaced base-unresolvable base-degenerate block-hash-differs"
+ALL_PROPS="paragraph-missing token-HOLDS token-epic-ref token-OWNER-GATED standing-line-not-a-trigger routing-requires-both ask-the-operator-not-a-trigger wording-fail-closed wording-ask-once owner-cto-own-the-epic gate-handoff container-link delegation-render render-text headless plugin-root-paths repo-relative-path receipt-wiring no-askuserquestion-for-technical-hold newest-decides stop-sequence list-source list-source-main-existence prose-excluded closed-epic-excluded runbook-not-a-source author-association plan-path-rules plan-path-prefix plan-path-mode trigger-never-discharges epic-text-not-authority scope-items-source headless-dedupe headless-issue-inline headless-no-answer-recorded ask-once-here ask-before-worktree operator-reserved-format reserved-conversion stall-section routing-widened closing-widened anchors-missing paragraph-inside-block paragraph-misplaced base-unresolvable base-degenerate block-hash-differs"
 for p in $ALL_PROPS; do
   ck
   case "$p" in base-unresolvable|base-degenerate|block-hash-differs)
@@ -407,10 +418,10 @@ para_awk sub "$GO_MD" 'a closed epic never triggers' 'a closed epic triggers' > 
 row "M29 a closed epic triggers" "$M/m29.md" "$BASE_REF" closed-epic-excluded; nrows=$((nrows + 1))
 para_awk sub "$GO_MD" 'envelope table is not a source' 'envelope table is a fourth source' > "$M/m30.md"
 row "M30 the runbook envelope table becomes a fourth source" "$M/m30.md" "$BASE_REF" runbook-not-a-source; nrows=$((nrows + 1))
-para_awk sub "$GO_MD" 'authorAssociation' 'authorName' > "$M/m31.md"
+para_awk sub "$GO_MD" 'author_association' 'author_name' > "$M/m31.md"
 row "M31 the epic-body author check dropped" "$M/m31.md" "$BASE_REF" author-association; nrows=$((nrows + 1))
 para_awk sub "$GO_MD" '100644' '100755' > "$M/m32.md"
-row "M32 the plan-path regular-blob rule weakened" "$M/m32.md" "$BASE_REF" plan-path-rules; nrows=$((nrows + 1))
+row "M32 the plan-path regular-blob rule weakened" "$M/m32.md" "$BASE_REF" plan-path-mode; nrows=$((nrows + 1))
 para_awk sub "$GO_MD" 'never discharges a hold' 'discharges a hold' > "$M/m33.md"
 row "M33 the trigger may discharge a hold" "$M/m33.md" "$BASE_REF" trigger-never-discharges; nrows=$((nrows + 1))
 para_awk sub "$GO_MD" 'never from epic or plan text' 'from epic or plan text' > "$M/m34.md"
@@ -423,6 +434,50 @@ para_awk sub "$GO_MD" 'found in the brief itself' 'found in the brief' > "$M/m37
 row "M37 the routing sentence loses the widened list location" "$M/m37.md" "$BASE_REF" routing-widened; nrows=$((nrows + 1))
 para_awk sub "$GO_MD" 'in none of those three places' 'nowhere' > "$M/m38.md"
 row "M38 the closing sentence loses the widened list location" "$M/m38.md" "$BASE_REF" closing-widened; nrows=$((nrows + 1))
+# M39..M60: INVERTED-RULE rows. The pins above are whole clauses that include the verb, so flipping what a rule
+# SAYS (not just deleting a token) must go RED too. Each row asserts (1) the mutation LANDED (the mutated file differs
+# from the pristine copy) and (2) the expected violation token. `mrow` counts both assertions.
+cp "$GO_MD" "$M/pristine.md"
+row "M39-ctl the unmutated copy is green before any inverted-rule row" "$M/pristine.md" "$BASE_REF" none; nrows=$((nrows + 1))
+mrow() { # <label> <mutated-file> <expected-token>
+  ck
+  if cmp -s "$M/pristine.md" "$2"; then bad "$1: the mutation did not land (file identical to the pristine copy)"; else ok "$1: the mutation landed"; fi
+  nrows=$((nrows + 2)); row "$1" "$2" "$BASE_REF" "$3"
+}
+para_awk sub "$GO_MD" 'OWNER, MEMBER or COLLABORATOR' 'OWNER, MEMBER or COLLABORATOR, CONTRIBUTOR or NONE' > "$M/m39.md"
+mrow "M39 the author_association clause is widened to CONTRIBUTOR or NONE" "$M/m39.md" author-association
+para_awk sub "$GO_MD" 'shows mode 100644' 'shows any mode but 100644' > "$M/m40.md"
+mrow "M40 the mode clause is inverted" "$M/m40.md" plan-path-mode
+para_awk sub "$GO_MD" 'a closed epic never triggers' 'a closed epic never triggers unless it has a recorded delegation' > "$M/m41.md"
+mrow "M41 a closed epic gains an exception" "$M/m41.md" closed-epic-excluded
+para_awk sub "$GO_MD" 'is never authority' 'is authority' > "$M/m42.md"
+mrow "M42 epic text becomes authority" "$M/m42.md" epic-text-not-authority
+para_awk sub "$GO_MD" 'never from epic or plan text' 'never from epic or plan text, except plan text' > "$M/m43.md"
+mrow "M43 Scope items may come from plan text" "$M/m43.md" scope-items-source
+para_awk sub "$GO_MD" 'ask the epic-start question once here' 'never ask the epic-start question' > "$M/m44.md"
+mrow "M44 the epic-start question is never asked" "$M/m44.md" ask-once-here
+para_awk sub "$GO_MD" 'envelope table is not a source' 'envelope table is not a source of holds, but is also a source' > "$M/m45.md"
+mrow "M45 the envelope table is also a source (closed check)" "$M/m45.md" runbook-not-a-source
+para_awk sub "$GO_MD" 'The trigger only routes' 'The trigger also routes' > "$M/m46.md"
+mrow "M46 the trigger does more than route" "$M/m46.md" trigger-never-discharges
+para_awk sub "$GO_MD" 'knowledge-base/project/plans/' 'knowledge-base/project/plans' > "$M/m47.md"
+mrow "M47 the plans prefix loses its trailing slash" "$M/m47.md" plan-path-prefix
+para_awk sub "$GO_MD" 'hold no `/archive/` segment' 'allow an `/archive/` segment' > "$M/m48.md"
+mrow "M48 an archived plan path is allowed" "$M/m48.md" plan-path-prefix
+para_awk sub "$GO_MD" 'OWNER or MEMBER or whose login is' 'any author or whose login is' > "$M/m49.md"
+mrow "M49 the headless dedupe matches any author" "$M/m49.md" headless-dedupe
+para_awk sub "$GO_MD" 'whatever the list source' 'when the list came from the epic body or a plan' > "$M/m50.md"
+mrow "M50 the headless dedupe covers only epic or plan lists" "$M/m50.md" headless-dedupe
+para_awk sub "$GO_MD" 'the Scope items one per line and the expiry the CTO proposes inline' 'the Scope items and the expiry by pointer only' > "$M/m51.md"
+mrow "M51 the filed issue no longer carries the Scope items inline" "$M/m51.md" headless-issue-inline
+para_awk sub "$GO_MD" 'record that answer as a comment on that issue' 'discard that answer' > "$M/m52.md"
+mrow "M52 a No answer is not recorded" "$M/m52.md" headless-no-answer-recorded
+para_awk sub "$GO_MD" '(a prefix on the Hold line' '(a suffix on the Hold line' > "$M/m53.md"
+mrow "M53 Operator-reserved becomes a suffix" "$M/m53.md" operator-reserved-format
+para_awk sub "$GO_MD" 'must be written' 'may be written' > "$M/m54.md"
+mrow "M54 owner-reserved conversion becomes optional" "$M/m54.md" reserved-conversion
+para_awk sub "$GO_MD" 'standing-delegation.md section 6' 'standing-delegation.md section 7' > "$M/m55.md"
+mrow "M55 the stall sentences point at the wrong section" "$M/m55.md" stall-section
 # N14: with base == HEAD the anchor is SKIPPED (printed reason) and a changed file is still caught against it
 ck
 _o="$(evaluate "$M/m1.md" "$HEAD_SHA" skip)"; _r=$?
@@ -491,7 +546,7 @@ ctl_passes row "ctl-late" "$GO_MD" "$BASE_REF" none                      || { pr
 #     the same commit that adds rows, never ahead of them.
 nprops=0; for _p in $ALL_PROPS; do nprops=$((nprops + 1)); done
 EXPECTED_ASSERTIONS=$(( nprops + 1 + 1 + 1 + 3 + nrows + 1 + 6 ))
-ABSOLUTE_FLOOR=103
+ABSOLUTE_FLOOR=147
 MIN_ASSERTIONS=$(( EXPECTED_ASSERTIONS > ABSOLUTE_FLOOR ? EXPECTED_ASSERTIONS : ABSOLUTE_FLOOR ))
 if [[ "$asserted" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\nFATAL: anti-vacuity: %d assertion(s) executed, floor is %d. The battery ran but did not assert.\n' \

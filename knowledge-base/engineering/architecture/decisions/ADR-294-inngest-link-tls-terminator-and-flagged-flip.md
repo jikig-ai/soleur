@@ -135,8 +135,9 @@ see what moved.
   environment and origins. These are key-derived values, not secrets in themselves, but the owner-signed leg-2 record (#10538) should
   list them. Not verified: which sync kind (in-band or out-of-band) Inngest server v1.45.1 sends on the `sdk_url` poll, and whether this
   deployment's SDK runs in the mode that fills `inspection`.
-- **The owner's go is procedural.** `infra-privileged` has no required reviewer (ADR-241), so the dated go for a flag write is a process
-  control; the typo-guard on `inngest-link-flip.yml` is not an authorization.
+- **The go is procedural.** `infra-privileged` has no required reviewer (ADR-241), so the authorization for a flag write is a process
+  control, with authority per the runbook Production Envelope: form (a) or (b); the typo-guard on `inngest-link-flip.yml` is not an
+  authorization.
 - **Filed follow-ups.** #10538 (`sdk_url` poll), #10539 (loopback bind), #10540 (key rotation apply route, including the event-key
   decision), #10541 (TLS key out of the server environment), #10542 (Stripe send swallow, P1, blocks the host-replace go), #10543
   (dashboard send), #10544 (`inngest-host-replace` confirm and id-pin), #10545 (nft loader idempotency), #10556 (Sentry alert rule for
