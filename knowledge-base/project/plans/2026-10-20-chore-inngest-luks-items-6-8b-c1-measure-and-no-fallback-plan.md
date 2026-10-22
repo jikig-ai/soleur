@@ -279,8 +279,8 @@ logs:
   where: GitHub Actions run logs for the loader; the probe prints counts and structure to the agent session only and writes no repository file or log beyond counts, names and timestamps
   retention: GitHub Actions default 90 days (repository setting); probe output is not written to any log or file
 discoverability_test:
-  command: grep -q "verdict=legacy_hcloud_readonly_absent" .github/actions/infra-credentials/action.yml && printf 'present\n'
-  expected_output: present
+  command: grep -o "verdict=legacy_hcloud_readonly_absent" .github/actions/infra-credentials/action.yml
+  expected_output: verdict=legacy_hcloud_readonly_absent
 ```
 
 ## Guard Contract
