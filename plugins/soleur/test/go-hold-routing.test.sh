@@ -438,8 +438,8 @@ row "M25 the stop sequence deletes only one comment" "$M/m25.md" "$BASE_REF" sto
 # M26..M38: the hold-list source and its authority hardening, one mutation per property
 para_awk dropline "$GO_MD" 'may come from three sources' > "$M/m26.md"
 row "M26 delete the list-source bullet" "$M/m26.md" "$BASE_REF" list-source; nrows=$((nrows + 1))
-para_awk sub "$GO_MD" 'git cat-file -e origin/main' 'git ls-files' > "$M/m27.md"
-row "M27 the main-existence check reads the index instead of main" "$M/m27.md" "$BASE_REF" list-source-main-existence; nrows=$((nrows + 1))
+para_awk sub "$GO_MD" 'git cat-file -e origin/main' 'git cat-file -e HEAD' > "$M/m27.md"
+row "M27 the main-existence check reads the branch head instead of main" "$M/m27.md" "$BASE_REF" list-source-main-existence; nrows=$((nrows + 1))
 para_awk sub "$GO_MD" 'never counts as a hold list' 'counts as a hold list' > "$M/m28.md"
 row "M28 prose may count as a hold list" "$M/m28.md" "$BASE_REF" prose-excluded; nrows=$((nrows + 1))
 para_awk sub "$GO_MD" 'a closed epic never triggers' 'a closed epic triggers' > "$M/m29.md"
