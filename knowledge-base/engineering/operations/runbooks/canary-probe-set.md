@@ -630,6 +630,54 @@ agent-sandbox-unix-deny prd off`, operator-authorized). The flip reaches new que
 **Reading the probes.** Boot: `op=sandbox-hardening-selfprobe` now carries `unixdenyFilter` beside `filter`; an `ok: false` with
 `unixdenyFilter: false` means the image lacks the variant artifact (flag must stay OFF). Deploy: the three hardening reasons above.
 
+## Runtime Bash synthetic (#10455 b, ADR-079 addendum 2026-10-22)
+
+One real wrapped Bash call, every 15 minutes, in the RUNNING web container on each web host; a per-host Better Stack heartbeat
+(`soleur-web-bash-synthetic-<host>`, period 900 s, grace 1800 s) is pinged only on a verified pass. It exists because the deploy smoke above sees
+only a sandbox that is broken AT deploy (#10445 lasted ten days between deploys).
+
+**Read it without SSH.**
+
+```bash
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep web-bash-synthetic
+```
+
+Expected on a healthy host: `SOLEUR_WEB_BASH_SYNTHETIC verdict=pass reason=ok … consecutive_no_ping=0`, one row per run per host
+(`host_name` tells web-1 from web-2). The heartbeat itself is in Better Stack Uptime, which pages by email when it goes missing.
+
+| Signal | Meaning | What to do |
+|---|---|---|
+| heartbeat missing, journal rows under `web-bash-synthetic` but NONE carrying a `SOLEUR_WEB_BASH_SYNTHETIC` marker | the unit starts and dies BEFORE the script's first journal line: a Doppler/token failure (`doppler run`'s stderr ships under the tag, systemd's `Failed with result` row ships from the `systemd` identifier), a missing or unreadable `/etc/default/web-bash-synthetic`, or the xtrace refusal (exit 78) | read the stderr rows for the cause; fix the Doppler secret or the env file (a web-1 token rotation re-fires the installer; web-2's derived file only changes on a host replacement) |
+| heartbeat missing, no journal rows at all | the DETECTOR is dead: timer stopped, host dark, or Vector broken | check host health first (web uptime monitors and the host's own Vector rows). A STOPPED timer is not restarted by re-running apply (the installer's `triggers_replace` hashes the four delivered files plus, on web-1, the token): a merge that changes any of `web-bash-synthetic.{sh,service,timer}` or `sdk-bash-verdict.sh` re-fires `systemctl enable --now` on both hosts, and so does a `-replace` rotation of the probe token on web-1. Only if neither is possible is host access the last resort |
+| `/fail` incident, `verdict=fail` | Bash was dispatched and no verified nonce came back: the #10445 shape. `detail=` carries the probe's reason | treat as a sandbox outage; compare with the `agent_sandbox_bash_denial` alert and the deploy smoke ledger |
+| `verdict=no_ping reason=deploy_lock` | a deploy holds the lock; normal for the length of a deploy | none unless `consecutive_no_ping` keeps climbing |
+| `reason=container_down` (`detail=container not found` or `container not running`) / `container_restarted` | no container, or it was replaced or stopped during the run (a deploy swap) | none for one run; persistent means the web container is down. A dark docker DAEMON is NOT this row: it journals `infra_error detail=docker_inspect_rc_1: …` |
+| `reason=memory_pressure` | the container's memory is at or above 70 % of its cap (sampled at the start and again right before the probe exec; the detail names the stage); the run did not exec into it. The probe tree adds 172-293 MB of cgroup memory, see the ADR addendum | investigate the container memory, not the synthetic |
+| `reason=memory_pressure_host` | the HOST's `MemAvailable` is below 700 MB (on a 4 GB web host the container cap is the whole host); same two sample points; the run did not exec | investigate host memory, not the synthetic |
+| `reason=selector_unresolved` (journal `selector=unresolved`) | the dispatcher's flag read did not answer within the resolver's 3 s budget (Flagsmith slow or down, or the read fell back to the env mirror), so the host refuses to guess which artifact to test. `infra_error detail=selector_unresolved: no single sentinel line` is a different case: the resolver's output itself was malformed | none for one run; persistent means the flag service or the container's Flagsmith env is broken, and the beat goes dark after about 45 minutes. The fallback is visible here, never a silent `selector=base` |
+| `reason=selector_mismatch` | the probe reported a different `selector` than the host asked for (a stale probe in the image, or the selector env not reaching it) | treat as an image/probe skew: redeploy the web image that carries the current probe |
+| `reason=verdict_lib_absent` | `sdk-bash-verdict.sh` is not on the host (the SSH install block that delivers it has not run since the lib was added), so the host cannot map the probe result and claims nothing. | Re-run the web-host install via an infra apply; the same blindness applies to the deploy smoke until then (ADR-079 addendum, known limitation; #10777). |
+| probe `infra` reason `cli_tmp_path_too_long` | the probe's scratch config dir path exceeds the SDK CLI's 44-byte temp-path limit, so the probe refused to run rather than fall back to the shared `/tmp/claude-<uid>`. | Check the container's `TMPDIR`/`/tmp` mount: the scratch base must be short (`/tmp`). |
+| `reason=probe_absent` | the running image predates the probe or the resolver bundle (this reason now comes only from the pre-exec presence check) | expected on the first merge until the new image is deployed |
+| `verdict=fail`, `detail=host_timeout_<N>s` | Bash hung after dispatch; N is the cap that fired (150 only when the host cap fired, else the in-container 130) | treat as a sandbox outage |
+| `reason=host_timeout_before_dispatch` | docker stalled or node did not start before Bash was handed to the SDK | a daemon-level problem, not a Bash result |
+| `reason=infra_error`, `detail=probe_killed_rc_137` / `_143`, or `cli_child_killed: …` from the probe | the probe exec was killed after dispatch (the kernel OOM killer, a container stop, a deploy signal); this is not a Bash result, so it does not page `/fail` | with `memory_pressure*` rows around it, treat as memory; alone, look for a deploy or container restart at that minute |
+| `reason=infra_error`, `detail=…` | everything else that is not a claim: docker error, bad selector output, unreadable lock table, replay-only coverage | read `detail=` |
+| `reason=no_heartbeat_url` | the per-host URL secret or key name is missing or malformed (a `SOLEUR_CREDENTIAL_REFUSED script=web-bash-synthetic` row says which). The key name must be `WEB_BASH_SYNTHETIC_URL_<HOST>`, and the URL is pinned to `https://uptime.betterstack.com/api/v1/heartbeat/<token>` with no query: if Better Stack ever changes its heartbeat host this unit goes dark until the pin in `web-bash-synthetic.sh` is updated | fix the Doppler secret or the env file |
+| `[wbs] WARN: heartbeat ping FAILED (ok\|fail, url_present=yes)` next to `verdict=pass` or `verdict=fail` | the verdict is good but BOTH curl attempts to Better Stack failed (egress, a revoked or 404 heartbeat URL, Better Stack down). The beat will go dark in about 45 minutes even though the sandbox is healthy, and a real `/fail` would not have reached anyone | check Better Stack reachability and that the heartbeat still exists (`arm-heartbeats.sh --status soleur-web-bash-synthetic-<host>`); do not read the missing beat as a sandbox outage while this row is present |
+
+`consecutive_no_ping=<n>` in the journal separates a long deploy lock from a dead host: the beat goes dark after about 45 minutes either way,
+and the journal tells which. `selector=` is the artifact the dispatcher's resolver chose (`base` until the `agent-sandbox-unix-deny` flag is on);
+`masks_missing=<n>` counts masked dirs that did not exist in the production container (informational, they belong to real sessions); a `pass` with
+`masks_missing>0` journals `coverage=prodtuple_partial` because it tested a weaker config than production.
+
+**Arming.** The beats are born paused. `arm-heartbeats.sh` unpauses each host's beat after a measured ping with a 300 s window and a soft landing.
+Arming is PROBABILISTIC: the cadence is 900 s against a 300 s window, so a healthy synthetic lands a beat inside one apply's window with p ~ 1/3 per
+host, and an unlanded beat is a `::warning::` that is not a fault on its own. The journal separates the cases: `reason=probe_absent` means the image
+carrying the probe's resolver is not running yet; `verdict=pass` means the synthetic is healthy and the window was missed. A beat that stays paused is
+watched by the twice-daily `heartbeat-live-reconcile` job (its `fed-but-paused` class) and by `arm-heartbeats.sh --status`; no post-merge check does.
+Manual arming: `arm-heartbeats.sh --status soleur-web-bash-synthetic-<host>` for the id, then `--arm-one soleur-web-bash-synthetic-<host> --id <id>`.
+
 ## Outer-wrap canary - RETIRED 2026-10-19 (#10454)
 
 The deploy-time outer-wrap arm (`run_outer_wrap_canary`, deploy-state key `outer_wrap_canary`, ledger

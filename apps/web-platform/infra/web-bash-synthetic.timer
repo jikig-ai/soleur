@@ -1,0 +1,15 @@
+[Unit]
+Description=Run the runtime Bash synthetic every 15 min (#10455 b)
+
+[Timer]
+# First run shortly after the timer starts (a fresh install proves itself without waiting a full period), then every 15 minutes
+# from the last activation. A small randomized delay keeps web-1 and web-2 from exec'ing into their containers in lockstep.
+# Persistent=false: a missed run while the host was off is not replayed on boot; the heartbeat's grace is what reports a dark host.
+OnActiveSec=30s
+OnUnitActiveSec=15min
+RandomizedDelaySec=60
+AccuracySec=10s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

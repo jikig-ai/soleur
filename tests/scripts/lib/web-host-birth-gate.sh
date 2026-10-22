@@ -94,7 +94,7 @@
 # never reformats it, so the volume a birth hands it must be planned with NO `format`
 # (null or absent; Hetzner formats at create when `format` is set). And web-1 is refused by
 # name because `hcloud_volume_attachment.workspaces_luks` is hard-bound to web-1 and is
-# outside the ten-address fan-out above; a web-1 birth through this job would hand back a
+# outside the birth fan-out above; a web-1 birth through this job would hand back a
 # host without its LUKS attachment. The raw-volume arm sits AFTER the prohibitions and the NIC /
 # attachment requirement so those arms keep owning their own messages; the web-1 refusal sits FIRST,
 # before the plan is even read, because it needs only the request (its pinned key is bound to the
@@ -125,8 +125,10 @@ _WEB_HOST_BIRTH_ALLOW='def allow($k): [
       "cloudflare_record.app",
       "betteruptime_heartbeat.web_zot_consumer[\"\($k)\"]",
       "betteruptime_heartbeat.web_nic_guard[\"\($k)\"]",
+      "betteruptime_heartbeat.web_bash_synthetic[\"\($k)\"]",
       "doppler_secret.web_zot_consumer_url[\"\($k)\"]",
-      "doppler_secret.web_nic_guard_url[\"\($k)\"]"
+      "doppler_secret.web_nic_guard_url[\"\($k)\"]",
+      "doppler_secret.web_bash_synthetic_url[\"\($k)\"]"
 ];'
 
 # The host key whose LUKS attachment lives OUTSIDE the birth fan-out (singleton
@@ -275,7 +277,7 @@ web_host_birth_gate() {
         | select(.change.actions | any(. == "create" or . == "update" or . == "delete" or . == "forget"))
         | select(IN(.address; allow($k)[]) | not) | .address ] | .[0:10] | join(", ")' \
       < "$plan_json" 2>/dev/null)
-    echo "web_host_birth_gate: ABORT — ${out_of_scope} out-of-scope change(s), outside the birth fan-out for '${host_key}': ${offenders}. One authorization births one host and touches only that host's ten fan-out addresses. A sibling host's volume, or a Cloudflare ruleset riding along, is a different operation that has not been authorized here."
+    echo "web_host_birth_gate: ABORT — ${out_of_scope} out-of-scope change(s), outside the birth fan-out for '${host_key}': ${offenders}. One authorization births one host and touches only that host's birth fan-out addresses. A sibling host's volume, or a Cloudflare ruleset riding along, is a different operation that has not been authorized here."
     return 1
   fi
 
@@ -288,19 +290,19 @@ web_host_birth_gate() {
   # prevent. The allow-set could not close it: it says these addresses are PERMITTED to
   # change, not that they must.
   #
-  # WHY THESE TWO AND NOT ALL NINE. Both are bound to the server's id
+  # WHY THESE TWO AND NOT THE WHOLE FAN-OUT. Both are bound to the server's id
   # (`hcloud_server_network.web[k]` and `hcloud_volume_attachment.workspaces[k]` reference
   # `hcloud_server.web[k].id`), so a NEW server implies a NEW instance of each — the
   # implication holds by construction, which is what makes the requirement safe to assert.
-  # The other six do not have it:
+  # The others do not have it:
   #   • hcloud_volume.workspaces[k] can legitimately pre-exist. A retry after a partial
   #     apply that created the volume but not the server re-plans the volume as a no-op,
   #     and that retry is the documented recovery path — requiring its create would break
   #     the one case the apply-failure message tells the operator is safe.
   #   • hcloud_firewall_attachment.web is a fleet singleton: it UPDATES (server_ids grows),
   #     it does not create.
-  #   • the four web-probe resources are per-key but may pre-exist for the same
-  #     partial-apply reason as the volume.
+  #   • the per-host web-probe resources (one heartbeat and one URL secret per beat) are per-key
+  #     but may pre-exist for the same partial-apply reason as the volume.
   #
   # So the rule is not "require the fan-out", it is "require exactly those members whose
   # existence the server's own creation entails". Anything looser breaks a legitimate
