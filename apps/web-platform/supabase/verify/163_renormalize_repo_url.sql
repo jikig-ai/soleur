@@ -14,19 +14,23 @@
 -- runs it on the live engine against fixed inputs, so an engine or locale change
 -- that alters regex semantics shows up here instead of silently on data.
 -- users.repo_url was dropped by migration 112 and is not probed.
+--
+-- verify-migrations currently does not run on the workflow_run deploy arm (#9471), so
+-- this file executes on a release dispatch and when run by hand, not on every merge.
 
 SELECT 'conversations_noncanonical' AS check_name, count(*)::int AS bad
   FROM public.conversations x
   -- canon-expr begin
-  CROSS JOIN LATERAL (SELECT regexp_replace(x.repo_url, '^[ \t\n\r\f\v]+|[ \t\n\r\f\v]+$', '', 'g') AS t) a
+  CROSS JOIN LATERAL (SELECT regexp_replace(x.repo_url, '^[ \t\n\r\f\v]+|[ \t\n\r\f\v]+$', '', 'g') AS t OFFSET 0) a
   CROSS JOIN LATERAL (SELECT regexp_replace(
           lower(substring(a.t FROM '^([^/]*//[^/]+)')) || COALESCE(substring(a.t FROM '^[^/]*//[^/]+(/.*)$'), ''),
-          '(/|\.git|[ \t\n\r\f\v])+$', '', 'i') AS canon) b
+          '(/|\.git|[ \t\n\r\f\v])+$', '', 'i') AS canon OFFSET 0) b
   CROSS JOIN LATERAL (SELECT CASE
           WHEN a.t !~ '[ \t\n\r\f\v]'
+           AND octet_length(a.t) = char_length(a.t)
            AND char_length(a.t) <= 2048
            AND b.canon ~ '^https?://([a-z0-9-]+[.])*[a-z][a-z0-9-]*(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)*$'
-          THEN b.canon END AS canon_ok) c
+          THEN b.canon END AS canon_ok OFFSET 0) c
   -- canon-expr end
  WHERE x.repo_url IS NOT NULL
    AND c.canon_ok IS NOT NULL
@@ -35,15 +39,16 @@ UNION ALL
 SELECT 'workspaces_noncanonical', count(*)::int
   FROM public.workspaces x
   -- canon-expr begin
-  CROSS JOIN LATERAL (SELECT regexp_replace(x.repo_url, '^[ \t\n\r\f\v]+|[ \t\n\r\f\v]+$', '', 'g') AS t) a
+  CROSS JOIN LATERAL (SELECT regexp_replace(x.repo_url, '^[ \t\n\r\f\v]+|[ \t\n\r\f\v]+$', '', 'g') AS t OFFSET 0) a
   CROSS JOIN LATERAL (SELECT regexp_replace(
           lower(substring(a.t FROM '^([^/]*//[^/]+)')) || COALESCE(substring(a.t FROM '^[^/]*//[^/]+(/.*)$'), ''),
-          '(/|\.git|[ \t\n\r\f\v])+$', '', 'i') AS canon) b
+          '(/|\.git|[ \t\n\r\f\v])+$', '', 'i') AS canon OFFSET 0) b
   CROSS JOIN LATERAL (SELECT CASE
           WHEN a.t !~ '[ \t\n\r\f\v]'
+           AND octet_length(a.t) = char_length(a.t)
            AND char_length(a.t) <= 2048
            AND b.canon ~ '^https?://([a-z0-9-]+[.])*[a-z][a-z0-9-]*(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)*$'
-          THEN b.canon END AS canon_ok) c
+          THEN b.canon END AS canon_ok OFFSET 0) c
   -- canon-expr end
  WHERE x.repo_url IS NOT NULL
    AND c.canon_ok IS NOT NULL
@@ -66,17 +71,19 @@ SELECT 'canon_expr_selftest', count(*)::int
     ('https://0/x', NULL),
     ('http://.git', NULL),
     ('a://A', NULL),
+    ('https://' || chr(304) || '.com/o/', NULL),
     ('foo/bar', NULL)
   ) AS x(repo_url, expected)
   -- canon-expr begin
-  CROSS JOIN LATERAL (SELECT regexp_replace(x.repo_url, '^[ \t\n\r\f\v]+|[ \t\n\r\f\v]+$', '', 'g') AS t) a
+  CROSS JOIN LATERAL (SELECT regexp_replace(x.repo_url, '^[ \t\n\r\f\v]+|[ \t\n\r\f\v]+$', '', 'g') AS t OFFSET 0) a
   CROSS JOIN LATERAL (SELECT regexp_replace(
           lower(substring(a.t FROM '^([^/]*//[^/]+)')) || COALESCE(substring(a.t FROM '^[^/]*//[^/]+(/.*)$'), ''),
-          '(/|\.git|[ \t\n\r\f\v])+$', '', 'i') AS canon) b
+          '(/|\.git|[ \t\n\r\f\v])+$', '', 'i') AS canon OFFSET 0) b
   CROSS JOIN LATERAL (SELECT CASE
           WHEN a.t !~ '[ \t\n\r\f\v]'
+           AND octet_length(a.t) = char_length(a.t)
            AND char_length(a.t) <= 2048
            AND b.canon ~ '^https?://([a-z0-9-]+[.])*[a-z][a-z0-9-]*(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)*$'
-          THEN b.canon END AS canon_ok) c
+          THEN b.canon END AS canon_ok OFFSET 0) c
   -- canon-expr end
  WHERE c.canon_ok IS DISTINCT FROM x.expected;

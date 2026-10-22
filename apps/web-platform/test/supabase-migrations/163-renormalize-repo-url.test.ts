@@ -19,7 +19,8 @@ const DOWN = readFileSync(path.join(ROOT, "supabase/migrations/163_renormalize_r
 const VERIFY = readFileSync(path.join(ROOT, "supabase/verify/163_renormalize_repo_url.sql"), "utf8");
 const GOLDEN = readFileSync(path.join(ROOT, "test/fixtures/sql/normalize-repo-url-163-golden.sql"), "utf8");
 
-const stripComments = (sql: string) => sql.replace(/--[^\n]*/g, "");
+const stripComments = (sql: string) =>
+  sql.replace(/\/\*[\s\S]*?\*\//g, "").replace(/--[^\n]*/g, "");
 const collapse = (s: string) => s.replace(/\s+/g, " ").trim();
 
 // The markers are comments, so extract BEFORE stripping comments.
@@ -58,6 +59,26 @@ describe("migration 163_renormalize_repo_url", () => {
     expect(executable).not.toMatch(/public\.users/i);
   });
 
+  it("is exactly one DO block and two UPDATEs, with no other write verbs", () => {
+    expect(executable.match(/DO \$\$/g)?.length).toBe(1);
+    expect(executable.match(/\bUPDATE\b/g)?.length).toBe(2);
+    expect(executable).not.toMatch(/\b(DELETE|DROP|TRUNCATE|ALTER|INSERT)\b/i);
+  });
+
+  it("each UPDATE reads its own table and joins on id, compare-and-swapping the value it read", () => {
+    const conv = executable.split("UPDATE public.conversations t")[1]!.split("UPDATE public.workspaces t")[0]!;
+    const ws = executable.split("UPDATE public.workspaces t")[1]!;
+    expect(conv).toMatch(/FROM public\.conversations x/);
+    expect(conv).not.toMatch(/public\.workspaces/);
+    expect(ws).toMatch(/FROM public\.workspaces x/);
+    expect(ws).not.toMatch(/public\.conversations/);
+    for (const stmt of [conv, ws]) {
+      expect(stmt).toMatch(/SELECT x\.id, x\.repo_url AS old_url, c\.canon_ok/);
+      expect(stmt).toMatch(/WHERE n\.id = t\.id/);
+      expect(stmt).toMatch(/AND t\.repo_url = n\.old_url/);
+    }
+  });
+
   describe("precondition DO block", () => {
     const body = executable.split("DO $$")[1]!.split("END $$")[0]!;
 
@@ -65,8 +86,10 @@ describe("migration 163_renormalize_repo_url", () => {
       expect(body).toMatch(/x\.repo_url IS NOT NULL/);
       expect(body).toMatch(/x\.context_path IS NOT NULL/);
       expect(body).toMatch(/x\.archived_at IS NULL/);
-      expect(body).toMatch(/GROUP BY x\.user_id, COALESCE\(c\.canon_ok, x\.repo_url\), x\.context_path/);
-      expect(body).toMatch(/HAVING count\(\*\) > 1/);
+      expect(body).toMatch(
+        /GROUP BY x\.user_id, COALESCE\(c\.canon_ok, x\.repo_url\), x\.context_path\s+HAVING count\(\*\) > 1/,
+      );
+      expect(body).toMatch(/IF collisions > 0 THEN\s+RAISE EXCEPTION/);
     });
 
     it("raises with a count only: one placeholder, one count variable, no row data", () => {
@@ -98,6 +121,12 @@ describe("canonical expression identity (migration, verify, golden script)", () 
     expect(verify.length).toBe(3); // two probes + the selftest
     expect(golden.length).toBe(1);
     expect(new Set([...migration, ...verify, ...golden]).size).toBe(1);
+  });
+
+  it("the expression keeps the planner fence and the ASCII-only eligibility clause", () => {
+    const [expr] = canonBlocks(MIGRATION);
+    expect(expr!.match(/OFFSET 0\)/g)?.length).toBe(3);
+    expect(expr).toContain("octet_length(a.t) = char_length(a.t)");
   });
 
   it("the expression carries the ASCII whitespace class in both trim and tail strip", () => {

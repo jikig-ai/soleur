@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import fc from "fast-check";
@@ -24,7 +25,8 @@ import { normalizeRepoUrl } from "@/lib/repo-url";
 // golden SQL fixture test/fixtures/sql/normalize-repo-url-163-golden.sql with
 // PG_GOLDEN_163 regenerated from Postgres, and a NEW migration plus verify file
 // (migration 163 is frozen once applied; a defect in it ships as 164, never an
-// edit). Parity domain = URL-clean ASCII input. Out of domain (SQL cannot
+// edit). That new verify file supersedes verify/163: delete or relax verify/163 in
+// the same PR, or the two will disagree on what "canonical" means. Parity domain = URL-clean ASCII input. Out of domain (SQL cannot
 // mirror, see OUT_OF_PARITY): D4 URL-parser effects (%20 path encoding,
 // dot-segments, userinfo/port, numeric-host IPv4 canonicalization), D5 exotic
 // Unicode whitespace, D6 rows that are not scheme://host.
@@ -140,8 +142,10 @@ describe("normalizeRepoUrl slug→URL parity — webhook compose-before-normaliz
 // ---------------------------------------------------------------------------
 
 const ASCII_WS_TRIM = /^[ \t\n\r\f\v]+|[ \t\n\r\f\v]+$/g;
+const TAIL_STRIP = /(\/|\.git|[ \t\n\r\f\v])+$/i;
 const CLEAN_SHAPE =
   /^https?:\/\/([a-z0-9-]+[.])*[a-z][a-z0-9-]*(\/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)*$/;
+const MAX_LEN = 2048;
 
 // JS port of the 163 canon-expr chain: ASCII-class trim, lowercase scheme+host,
 // ONE tail strip over `/`, `.git` (any case) and ASCII whitespace in any
@@ -151,28 +155,30 @@ function sqlChain163(raw: string): string | null {
   const schemeHost = t.match(/^([^/]*\/\/[^/]+)/);
   if (!schemeHost) return null;
   const rest = t.match(/^[^/]*\/\/[^/]+(\/[\s\S]*)$/);
-  const canon = (schemeHost[1]!.toLowerCase() + (rest ? rest[1] : "")).replace(
-    /(\/|\.git|[ \t\n\r\f\v])+$/i,
-    "",
-  );
+  const canon = (schemeHost[1]!.toLowerCase() + (rest ? rest[1] : "")).replace(TAIL_STRIP, "");
   return /^[^/]*\/\/[^/]+/.test(canon) ? canon : null;
 }
 
-// What the migration writes: the chain, but only for rows where SQL provably
-// equals normalizeRepoUrl (no internal whitespace, at most 2048 characters, a
-// clean http(s) shape). Everything else is left exactly as stored.
+// What the migration writes: the chain, but only for rows where SQL is expected
+// to equal normalizeRepoUrl (ASCII only, no internal whitespace, at most MAX_LEN
+// characters, a clean http(s) shape). Everything else is left exactly as stored.
 function sqlBackfill163(raw: string): string {
   const canon = sqlChain163(raw);
   if (canon === null) return raw;
   const t = raw.replace(ASCII_WS_TRIM, "");
+  // octet_length(t) = char_length(t): lower() is locale-dependent and TS
+  // punycodes non-ASCII hosts, so anything outside printable ASCII is skipped.
+  if (/[^ -~]/.test(t)) return raw;
   if (/[ \t\n\r\f\v]/.test(t)) return raw;
-  if (Array.from(t).length > 2048) return raw;
+  // ASCII only, so UTF-16 length equals PG char_length.
+  if (t.length > MAX_LEN) return raw;
   return CLEAN_SHAPE.test(canon) ? canon : raw;
 }
 
 // PG_GOLDEN_163: produced by POSTGRES, not by the ports. Regenerate with the
 // recipe in test/fixtures/sql/normalize-repo-url-163-golden.sql (dev, SELECT
-// only) and paste the output; never fill it from the JS ports above.
+// only) and paste the output; never fill it from the JS ports above. A raw longer
+// than 200 characters is written as the repeat() expression that builds it.
 const PG_GOLDEN_163: ReadonlyArray<readonly [raw: string, pg031: string | null, pg163Chain: string | null, pg163Backfill: string | null]> = [
   ["http://a.aa .git", "http://a.aa ", "http://a.aa", "http://a.aa .git"],
   ["http://a.aa /", "http://a.aa ", "http://a.aa", "http://a.aa /"],
@@ -196,13 +202,106 @@ const PG_GOLDEN_163: ReadonlyArray<readonly [raw: string, pg031: string | null, 
   ["a://A", "a://a", "a://a", "a://A"],
   ["https://github.com/Owner/Repo", "https://github.com/Owner/Repo", "https://github.com/Owner/Repo", "https://github.com/Owner/Repo"],
   ["foo/bar", "foo/bar", null, "foo/bar"],
+  ["https://0/x/", "https://0/x", "https://0/x", "https://0/x/"],
+  ["http://a.aa:80/x/", "http://a.aa:80/x", "http://a.aa:80/x", "http://a.aa:80/x/"],
+  ["http://a.aa/./x.git", "http://a.aa/./x", "http://a.aa/./x", "http://a.aa/./x.git"],
+  ["https://github.com/o%20x/", "https://github.com/o%20x", "https://github.com/o%20x", "https://github.com/o%20x/"],
+  ["https://github.com/o?q=1", "https://github.com/o?q=1", "https://github.com/o?q=1", "https://github.com/o?q=1"],
+  ["https://github.com/o#f", "https://github.com/o#f", "https://github.com/o#f", "https://github.com/o#f"],
+  ["https://github.com//o/", "https://github.com//o", "https://github.com//o", "https://github.com//o/"],
+  ["https://github.com/.github.git", "https://github.com/.github", "https://github.com/.github", "https://github.com/.github.git"],
+  ["https://h.1a/x/", "https://h.1a/x", "https://h.1a/x", "https://h.1a/x/"],
+  ["https://İ.com/o/", "https://i̇.com/o", "https://i̇.com/o", "https://İ.com/o/"],
+  ["https://K.com/o/", "https://k.com/o", "https://k.com/o", "https://K.com/o/"],
+  ["https://github.com/o ", "https://github.com/o ", "https://github.com/o ", "https://github.com/o "],
+  ["https://github.com/o\r", "https://github.com/o\r", "https://github.com/o", "https://github.com/o"],
+  ["https://github.com/o/\f\u000b", "https://github.com/o/\f\u000b", "https://github.com/o", "https://github.com/o"],
+  ["https://My-Host.Example.io/my_repo/~x/Repo.git.git/", "https://my-host.example.io/my_repo/~x/Repo", "https://my-host.example.io/my_repo/~x/Repo", "https://my-host.example.io/my_repo/~x/Repo"],
+  ["https://h.io/" + "a".repeat(2034) + "/", "https://h.io/" + "a".repeat(2034), "https://h.io/" + "a".repeat(2034), "https://h.io/" + "a".repeat(2034)],
+  ["https://h.io/" + "a".repeat(2035) + "/", "https://h.io/" + "a".repeat(2035), "https://h.io/" + "a".repeat(2035), "https://h.io/" + "a".repeat(2035) + "/"],
 ];
 
+const MIGRATION_SQL = readFileSync(
+  path.resolve(__dirname, "../supabase/migrations/163_renormalize_repo_url.sql"),
+  "utf8",
+);
+const VERIFY_SQL = readFileSync(
+  path.resolve(__dirname, "../supabase/verify/163_renormalize_repo_url.sql"),
+  "utf8",
+);
 const GOLDEN_SCRIPT = readFileSync(
   path.resolve(__dirname, "fixtures/sql/normalize-repo-url-163-golden.sql"),
   "utf8",
 );
 const golden = new Map(PG_GOLDEN_163.map((r) => [r[0], r] as const));
+
+// Pinned hash of the canon-expr block (whitespace collapsed). Editing the SQL
+// expression in every copy keeps the identity test green, so this is what forces
+// the golden table to be regenerated from Postgres: when it fails, re-run the
+// recipe in the golden script, update PG_GOLDEN_163 and the ports, then re-pin.
+const CANON_EXPR_SHA256 = "4f52a75bb7322f66c9d429db1004f281f90f6f33cb9bbc4b6b45294d5b27a16b";
+const canonBlock = (() => {
+  const m = /-- canon-expr begin([\s\S]*?)-- canon-expr end/.exec(MIGRATION_SQL);
+  if (!m) throw new Error("canon-expr block not found in the 163 migration");
+  return m[1]!.replace(/\s+/g, " ").trim();
+})();
+
+// A tiny evaluator for the SQL string expressions the golden script and the
+// verify selftest use: 'text' literals, chr(n), repeat('x', n), `||`, `::text`.
+function splitTop(s: string, sep: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let inStr = false;
+  let cur = "";
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]!;
+    if (inStr) {
+      cur += ch;
+      if (ch === "'") {
+        if (s[i + 1] === "'") cur += s[++i]!;
+        else inStr = false;
+      }
+      continue;
+    }
+    if (ch === "'") { inStr = true; cur += ch; continue; }
+    if (ch === "(") depth++;
+    if (ch === ")") depth--;
+    if (depth === 0 && s.startsWith(sep, i)) { out.push(cur.trim()); cur = ""; i += sep.length - 1; continue; }
+    cur += ch;
+  }
+  out.push(cur.trim());
+  return out;
+}
+function evalSqlExpr(expr: string): string | null {
+  const e = expr.trim().replace(/::text$/, "");
+  if (e === "NULL") return null;
+  return splitTop(e, "||")
+    .map((tok) => {
+      let m = /^'((?:[^']|'')*)'$/.exec(tok);
+      if (m) return m[1]!.replace(/''/g, "'");
+      m = /^chr\((\d+)\)$/.exec(tok);
+      if (m) return String.fromCodePoint(Number(m[1]));
+      m = /^repeat\('((?:[^']|'')*)',\s*(\d+)\)$/.exec(tok);
+      if (m) return m[1]!.repeat(Number(m[2]));
+      throw new Error("unsupported SQL expression token: " + tok);
+    })
+    .join("");
+}
+const scriptRaws = GOLDEN_SCRIPT.split("-- golden-rows begin")[1]!
+  .split("-- golden-rows end")[0]!
+  .split("\n")
+  .map((l) => /^\s*\((.*)\),?\s*$/.exec(l))
+  .filter((m): m is RegExpExecArray => m !== null)
+  .map((m) => evalSqlExpr(m[1]!) as string);
+const selftestRows = VERIFY_SQL.split("FROM (VALUES")[1]!
+  .split(") AS x(repo_url, expected)")[0]!
+  .split("\n")
+  .map((l) => /^\s*\((.*)\),?\s*$/.exec(l))
+  .filter((m): m is RegExpExecArray => m !== null)
+  .map((m) => {
+    const [a, b] = splitTop(m[1]!, ",");
+    return [evalSqlExpr(a!) as string, evalSqlExpr(b!)] as const;
+  });
 
 // Shielded whitespace: a strip exposes whitespace it was shielding. A space
 // shield is admitted in HOST position only (a space after a path segment is
@@ -228,17 +327,34 @@ const D031_DEFECTS: ReadonlyArray<[label: string, raw: string]> = [
 // What the backfill does to a stored value. 031-shaped stored forms are
 // rewritten to the TS form; everything the eligibility guard rejects is left
 // untouched (the setup route's write boundary keeps these shapes out in practice).
+// Ineligible rows that WOULD change under the bare chain are the discriminating
+// ones: a loosened guard rewrites them.
 const BACKFILL_FIXTURES: ReadonlyArray<[raw: string, written: string]> = [
   ["http://a.aa ", "http://a.aa"],
   ["https://github.com/Foo/Bar/ ", "https://github.com/Foo/Bar"],
   ["HTTPS://GitHub.com/foo/bar.git/", "https://github.com/foo/bar"],
   ["https://github.com/Owner/Repo", "https://github.com/Owner/Repo"],
+  ["https://github.com/o\r", "https://github.com/o"],
+  ["https://github.com/o/\f\v", "https://github.com/o"],
+  ["https://My-Host.Example.io/my_repo/~x/Repo.git.git/", "https://my-host.example.io/my_repo/~x/Repo"],
   ["https://github.com/o .git", "https://github.com/o .git"],
   ["http://a.aa .git", "http://a.aa .git"],
   ["https://u:p@Host/x", "https://u:p@Host/x"],
   ["http://a.aa:80/x", "http://a.aa:80/x"],
+  ["http://a.aa:80/x/", "http://a.aa:80/x/"],
   ["http://a.aa/./x", "http://a.aa/./x"],
+  ["http://a.aa/./x.git", "http://a.aa/./x.git"],
   ["https://0/x", "https://0/x"],
+  ["https://0/x/", "https://0/x/"],
+  ["https://h.1a/x/", "https://h.1a/x/"],
+  ["https://github.com/o%20x/", "https://github.com/o%20x/"],
+  ["https://github.com/o?q=1", "https://github.com/o?q=1"],
+  ["https://github.com/o#f", "https://github.com/o#f"],
+  ["https://github.com//o/", "https://github.com//o/"],
+  ["https://github.com/.github.git", "https://github.com/.github.git"],
+  ["https://\u0130.com/o/", "https://\u0130.com/o/"],
+  ["https://\u212a.com/o/", "https://\u212a.com/o/"],
+  ["https://github.com/o\u00a0", "https://github.com/o\u00a0"],
   ["http://.git", "http://.git"],
   ["a://A", "a://A"],
 ];
@@ -253,6 +369,19 @@ const OUT_OF_PARITY: ReadonlyArray<[raw: string, ts: string, sql: string | null]
 ];
 
 describe("163 golden table (Postgres is the oracle for the ports)", () => {
+  test("the canon-expr hash is pinned: a changed expression forces a golden regeneration", () => {
+    expect(createHash("sha256").update(canonBlock).digest("hex")).toBe(CANON_EXPR_SHA256);
+  });
+
+  test("the port constants equal the SQL literals", () => {
+    const literals = [...canonBlock.matchAll(/'([^']*)'/g)].map((m) => m[1]!);
+    expect(literals).toContain(ASCII_WS_TRIM.source);
+    expect(literals).toContain(TAIL_STRIP.source.replace(/\\\//g, "/"));
+    expect(literals).toContain(CLEAN_SHAPE.source.replace(/\\\//g, "/"));
+    expect(canonBlock).toContain(`char_length(a.t) <= ${MAX_LEN}`);
+    expect(canonBlock).toContain("octet_length(a.t) = char_length(a.t)");
+  });
+
   test("every fixture raw appears in PG_GOLDEN_163", () => {
     const raws = [
       ...SHIELDED_WS_FIXTURES.map((f) => f[0]),
@@ -263,14 +392,22 @@ describe("163 golden table (Postgres is the oracle for the ports)", () => {
     for (const raw of raws) expect(golden.has(raw), JSON.stringify(raw)).toBe(true);
   });
 
-  test("the table has exactly the rows the generator script declares", () => {
-    const block = GOLDEN_SCRIPT.split("-- golden-rows begin")[1]!.split("-- golden-rows end")[0]!;
-    const declared = block.split("\n").filter((l) => /^\s*\(.*\),?\s*$/.test(l)).length;
-    expect(declared).toBeGreaterThan(0);
-    expect(PG_GOLDEN_163.length).toBe(declared);
+  test("the table holds exactly the generator script's rows, in order", () => {
+    expect(scriptRaws.length).toBeGreaterThan(0);
+    expect(PG_GOLDEN_163.map((r) => r[0])).toEqual(scriptRaws);
   });
 
-  test.each(PG_GOLDEN_163.map((r) => [JSON.stringify(r[0]), r] as const))(
+  test("the verify selftest expectations agree with the golden backfill column", () => {
+    expect(selftestRows.length).toBeGreaterThanOrEqual(8);
+    for (const [raw, expected] of selftestRows) {
+      const row = golden.get(raw);
+      expect(row, "selftest raw missing from the golden table: " + JSON.stringify(raw)).toBeDefined();
+      // NULL means "ineligible": the backfill leaves the row as stored.
+      expect(row![3], JSON.stringify(raw)).toBe(expected ?? raw);
+    }
+  });
+
+  test.each(PG_GOLDEN_163.map((r) => [JSON.stringify(r[0]).slice(0, 80), r] as const))(
     "ports equal Postgres for %s",
     (_label, [raw, pg031, pg163Chain, pg163Backfill]) => {
       expect(sqlNormalize031(raw)).toBe(pg031);
@@ -323,6 +460,14 @@ describe("163 backfill — what a stored row becomes", () => {
       expect(sqlBackfill163(once)).toBe(once);
     }
   });
+
+  test("the 2048-character boundary: 2048 is rewritten, 2049 is left as stored", () => {
+    const at = "https://h.io/" + "a".repeat(MAX_LEN - 14) + "/";
+    const over = "https://h.io/" + "a".repeat(MAX_LEN - 13) + "/";
+    expect(at.length).toBe(MAX_LEN);
+    expect(sqlBackfill163(at)).toBe(at.slice(0, -1));
+    expect(sqlBackfill163(over)).toBe(over);
+  });
 });
 
 describe("OUT_OF_PARITY — the documented gap, pinned on both sides", () => {
@@ -337,15 +482,16 @@ describe("OUT_OF_PARITY — the documented gap, pinned on both sides", () => {
 });
 
 describe("TS ↔ SQL(163) parity and backfill safety (property)", () => {
+  const alnum = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".split("");
   const letterLabel = fc
     .tuple(
       fc.constantFrom(..."abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".split("")),
-      fc.string({ unit: fc.constantFrom(..."abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".split("")), maxLength: 5 }),
+      fc.string({ unit: fc.constantFrom(...alnum), maxLength: 5 }),
     )
     .map(([a, b]) => a + b);
   const hostArb = fc.array(letterLabel, { minLength: 1, maxLength: 3 }).map((l) => l.join("."));
   const segArb = fc.string({
-    unit: fc.constantFrom(..."abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-".split("")),
+    unit: fc.constantFrom(...alnum, "_", "-"),
     minLength: 1,
     maxLength: 6,
   });
@@ -377,11 +523,39 @@ describe("TS ↔ SQL(163) parity and backfill safety (property)", () => {
     );
   });
 
+  // Eligible shapes: no internal whitespace, segments of [A-Za-z0-9_~-] / dots.
+  const eligSegArb = fc
+    .tuple(
+      fc.constantFrom(...alnum, "_", "~", "-"),
+      fc.string({ unit: fc.constantFrom(...alnum, "_", "~", "-", "."), maxLength: 5 }),
+    )
+    .map(([a, b]) => a + b);
+  const eligibleArb = fc
+    .tuple(
+      fc.constantFrom("https", "http", "HTTPS"),
+      hostArb,
+      fc.array(eligSegArb, { maxLength: 3 }),
+      fc.constantFrom("", "/", ".git", ".GIT", ".git.git/", "/.git/.git", "\n", "/\n"),
+      fc.constantFrom("", " ", "\t", "\n", "\r", "\f"),
+      fc.constantFrom("", " ", "\t", "\n", "\r", "\v"),
+    )
+    .map(([scheme, host, segs, tail, lead, trail]) =>
+      lead + `${scheme}://${host}${segs.map((s) => "/" + s).join("")}` + tail + trail,
+    );
+
+  test("P3 (completeness): an eligible clean URL is rewritten to exactly the TS form", () => {
+    fc.assert(
+      fc.property(eligibleArb, (x) => {
+        expect(sqlBackfill163(x)).toBe(normalizeRepoUrl(x));
+      }),
+    );
+  });
+
   // Adversarial pieces for the safety property: everything the URL parser or the
   // eligibility guard treats specially.
   const pieceArb = fc.constantFrom(
-    "%20", "%2e", "/./", "/..", ":80", "@", "?q=A", "#F", "//", ".git", " ", "\n", "\t",
-    "/", "x", "A", "0", ".", "-", "https://", "http://", "a://", "ftp://",
+    "%20", "%2e", "/./", "/..", ":80", "@", "?q=A", "#F", "//", ".git", " ", "\n", "\t", "\r", "\f", "\v",
+    "/", "x", "A", "0", ".", "-", "https://", "http://", "a://", "ftp://", "\u0130", "\u212a", "\u00a0",
   );
   const adversarialArb = fc.oneof(
     fc.array(pieceArb, { maxLength: 8 }).map((p) => p.join("")),
@@ -390,23 +564,28 @@ describe("TS ↔ SQL(163) parity and backfill safety (property)", () => {
     fc.integer({ min: 2040, max: 2056 }).map((n) => "https://h.io/" + "a".repeat(Math.max(0, n - 13)) + " "),
   );
 
+  // The migration's key property: a row is only ever rewritten to the TS result.
+  const p2Holds = (backfill: (x: string) => string, x: string): boolean => {
+    const written = backfill(x);
+    return written === x || written === normalizeRepoUrl(x);
+  };
+
   test("P2: the backfill only writes what normalizeRepoUrl would return", () => {
     fc.assert(
       fc.property(adversarialArb, (x) => {
+        expect(p2Holds(sqlBackfill163, x)).toBe(true);
         const written = sqlBackfill163(x);
-        if (written !== x) expect(written).toBe(normalizeRepoUrl(x));
         expect(sqlBackfill163(written)).toBe(written);
       }),
     );
   });
 
-  test("negative control: a backfill without the eligibility guard breaks P2", () => {
+  test("negative control: P2 fails for a backfill without the eligibility guard", () => {
     const unguarded = (x: string) => sqlChain163(x) ?? x;
-    const counterexamples = ["https://github.com/o .git", "https://u:p@Host/x", "http://a.aa:80/x"];
-    const broken = counterexamples.filter((x) => {
-      const w = unguarded(x);
-      return w !== x && w !== normalizeRepoUrl(x);
-    });
-    expect(broken.length).toBeGreaterThan(0);
+    const counterexamples = ["https://github.com/o .git", "http://a.aa:80/x/", "http://a.aa/./x.git"];
+    for (const x of counterexamples) {
+      expect(p2Holds(unguarded, x), "unguarded should violate P2 on " + x).toBe(false);
+      expect(p2Holds(sqlBackfill163, x), "guarded should hold on " + x).toBe(true);
+    }
   });
 });

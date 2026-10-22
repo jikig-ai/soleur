@@ -519,7 +519,8 @@ Glob check: every existing path above is verified with `git ls-files`; for new p
 
 ### Post-merge (automated, no operator action)
 
-- [ ] `migrate` job green; `verify-migrations` job conclusion is `success` (NOT `skipped`: the deploy gate tolerates a skipped verify) and its log shows `verify/163` with `conversations_noncanonical`, `workspaces_noncanonical` and `canon_expr_selftest` at `bad = 0`; the follow-through scan closes any issue naming the migration.
+- [ ] `migrate` job green and its log shows `Applying: 163_renormalize_repo_url.sql`. `verify-migrations` is skipped on the `workflow_run` deploy arm (#9471, open), so the merge deploy cannot run `verify/163`; the equivalent evidence is the pre-merge dev run of the verify file (all three rows `bad = 0` after CI applies 163) and the prd read-only run of the same file recorded in the PR body. Once #9471 lands, `verify/163` runs on every release.
+  > Amended 2026-10-23 (review): the original criterion required the `verify-migrations` conclusion to be `success`; the deployment-verification seat showed the merge arm skips it.
 - [ ] Forward-fix procedure (documented in the migration header): a defect in 163 ships as migration 164; 163 is never edited. A precondition raise is resolved as a data decision (which conversation to keep), then `migrate` re-runs.
 
 ## Test Scenarios
