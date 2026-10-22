@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createCodexWebEventMapper, mapCodexEngineEventToWsMessage } from "@/server/codex-ws-events";
 import type { EngineEvent } from "@/server/agent-engine-contract";
 import { translateCodexAppServerStream, createCodexReplayEvent, translateCodexPersistedItem } from "@/server/codex-code-message-translator";
@@ -180,6 +180,19 @@ describe("Codex Web cumulative text", () => {
   it("rejects an oversized unkeyed snapshot", () => {
     const map = createCodexWebEventMapper(options, () => 0);
     expect(() => map(text("synthetic-neutral-event", "a".repeat(256 * 1024 + 1)))).toThrow("codex_web_text_limit");
+  });
+
+  it("rejects oversized text before encoding its full payload", () => {
+    const encode = vi.spyOn(TextEncoder.prototype, "encode");
+    const map = createCodexWebEventMapper(options, () => 0);
+    const oversized = "a".repeat(1024 * 1024);
+    try {
+      expect(() => map(text("codex:item:synthetic-item:delta:1", oversized))).toThrow("codex_web_text_limit");
+      expect(() => map(text("synthetic-neutral-event", oversized))).toThrow("codex_web_text_limit");
+      expect(encode).not.toHaveBeenCalled();
+    } finally {
+      encode.mockRestore();
+    }
   });
 
   it("fails visibly after the per-turn text event limit", () => {

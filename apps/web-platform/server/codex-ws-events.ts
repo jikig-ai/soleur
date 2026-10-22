@@ -2,6 +2,8 @@ import type { WSMessage } from "@/lib/types";
 import type { DomainLeaderId } from "./domain-leaders";
 import type { EngineEvent } from "./agent-engine-contract";
 
+const MAX_TEXT_BYTES = 256 * 1024;
+
 /** One mapper per admitted Web turn. The neutral adapter keeps native text
  * semantics for routine consumers; the Web reducer requires complete answers.
  * codex-code-message-translator.ts › translateCodexAppServerStream() assigns
@@ -20,6 +22,16 @@ export function createCodexWebEventMapper(
   let intermediateSnapshotsSuppressed = false;
   let finalSnapshot: WSMessage | undefined;
   const encoder = new TextEncoder();
+  const textBytes = (text: string): number => {
+    if (text.length > MAX_TEXT_BYTES) {
+      throw Object.assign(new Error("codex_web_text_limit"), { code: "codex_web_text_limit" });
+    }
+    const byteLength = encoder.encode(text).byteLength;
+    if (byteLength > MAX_TEXT_BYTES) {
+      throw Object.assign(new Error("codex_web_text_limit"), { code: "codex_web_text_limit" });
+    }
+    return byteLength;
+  };
   const map = ((event: EngineEvent): WSMessage | undefined => {
     if (event.payload.type === "text") {
       textEventCount++;
@@ -31,13 +43,13 @@ export function createCodexWebEventMapper(
       const itemId = delta?.[1] ?? snapshot?.[1];
       if (itemId) {
         const previous = items.get(itemId);
-        const contentBytes = encoder.encode(event.payload.text).byteLength;
+        const contentBytes = textBytes(event.payload.text);
         const nextBytes = delta && previous
           ? retainedBytes + contentBytes
           : retainedBytes - (previous?.byteLength ?? 0) + contentBytes;
         // Fail visibly instead of silently dropping older answer fragments.
         // This retention is scoped to one turn and never persisted.
-        if (nextBytes > 256 * 1024 || (!items.has(itemId) && items.size >= 32)) {
+        if (nextBytes > MAX_TEXT_BYTES || (!items.has(itemId) && items.size >= 32)) {
           throw Object.assign(new Error("codex_web_text_limit"), { code: "codex_web_text_limit" });
         }
         if (delta && previous) {
@@ -60,10 +72,7 @@ export function createCodexWebEventMapper(
           payload: { type: "text", text: [...items.values()].map((item) => item.chunks.join("")).join("\n\n") },
         }, options);
       }
-      const contentBytes = encoder.encode(event.payload.text).byteLength;
-      if (contentBytes > 256 * 1024) {
-        throw Object.assign(new Error("codex_web_text_limit"), { code: "codex_web_text_limit" });
-      }
+      const contentBytes = textBytes(event.payload.text);
       // Unkeyed text has no contractually defined delta/snapshot identity.
       // Preserve its original pass-through behavior and fail visibly if its
       // output would exceed the same bounded per-turn budget.

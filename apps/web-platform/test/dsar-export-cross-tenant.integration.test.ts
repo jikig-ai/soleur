@@ -194,6 +194,11 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         const controller = new AbortController();
         const tables = await exportSqlTable.call(null, userA.id, randomBytes(32), controller.signal);
 
+        const attempts = tables.find((t) => t.table === "agent_engine_attempts")?.rows ?? [];
+        const checkpoints = tables.find((t) => t.table === "agent_engine_recovery_checkpoints")?.rows ?? [];
+        expect(attempts.filter((row) => (row as { run_id: string }).run_id === userA.engineRunId)).toHaveLength(1);
+        expect(checkpoints.filter((row) => (row as { run_id: string }).run_id === userA.engineRunId)).toHaveLength(1);
+
         // Per-row invariant: every row's owner field matches userA.id.
         for (const t of tables) {
           for (const row of t.rows) {

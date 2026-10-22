@@ -48,3 +48,11 @@ the entire expected text into a failure diff.
 The preflight environment-isolation check can run where `dig` is not installed;
 follow its prescribed `resolvectl query --type=CNAME <host>` fallback and still
 require a canonical Supabase hostname before comparing project refs.
+
+Before delegating, resolve agent-definition paths with `rg --files
+plugins/soleur/agents/...` and copy the exact current SHA from `git rev-parse
+HEAD` into every prompt. A guessed top-level `agents/` path or a mistyped SHA
+causes avoidable failed reads; agents should report the actual SHA they verify.
+
+Vitest spies need an explicit `vi` import in files that do not enable globals;
+`tsc --noEmit` catches the missing symbol before tests run.

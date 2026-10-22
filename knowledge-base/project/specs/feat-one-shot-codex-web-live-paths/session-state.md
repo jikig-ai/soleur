@@ -2496,3 +2496,23 @@
   full review/QA, preflight completion and shipping gates remain pending. Hosted
   auth remains BLOCKED, alternate route PENDING, and no profile admission or
   qualification authority is claimed.
+
+### Targeted post-panel review — 2026-10-22
+
+- The design-validity pass on pushed `01cd24fcf45e17e385836f841ffb10f8428bc714`
+  found that unkeyed text events have no snapshot/delta identity contract. The
+  pass-through correction is committed as `243867622d`; neutral events no
+  longer clear keyed fragments or produce an inferred terminal answer.
+- Targeted performance review found oversized strings were UTF-8 encoded before
+  the 256 KiB rejection. The mapper now rejects by UTF-16 length before encoding,
+  then still enforces the byte limit; a spy regression proves oversized keyed
+  and unkeyed payloads are rejected without calling `TextEncoder.encode()`.
+- Targeted data-integrity review found the DSAR child-row loop could pass when
+  attempts or checkpoints were absent. The test now requires exactly one row
+  for each seeded requester-owned run before checking all exported ownership.
+  Targeted security review found no actionable issue.
+- The first follow-up typecheck found the new spy lacked an explicit Vitest `vi`
+  import. That was corrected. Latest typecheck and focused mapper/dispatch suite
+  pass (40 tests); the development-only DSAR integration test passes 3/3 with
+  the stronger row-presence assertions. Review fixes and this record are local
+  and still need a clean commit/push and targeted re-review.
