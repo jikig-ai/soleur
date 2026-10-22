@@ -282,7 +282,7 @@ for name, body in hcl_blocks(srv, "terraform_data"):
                "two terraform_data resources must not resolve to one identity")
         ssh_resources[nk] = body
 
-FLOOR_RESOURCES = 22  # +1 #9151: deploy_pipeline_fix_web2; +2 #9534: egress_gateway + egress_gateway_web2; +1 journald_persistent_web2
+FLOOR_RESOURCES = 24  # +1 #9151: deploy_pipeline_fix_web2; +2 #9534: egress_gateway + egress_gateway_web2; +1 journald_persistent_web2; +2 #10455: web_bash_synthetic_install + web_bash_synthetic_install_web2
 if len(ssh_resources) >= FLOOR_RESOURCES:
     ok(f"1: swept {len(ssh_resources)} SSH-connected terraform_data resources (floor {FLOOR_RESOURCES})")
 else:
@@ -828,7 +828,7 @@ for dest in sorted(all_dests):
 # extractor is fail-closed by over-extraction by design, and the path is genuinely installed
 # on the fresh-boot path by soleur-host-bootstrap.sh, so it clears §2 truthfully rather than
 # needing an exception. Measured, not assumed: origin/main sweeps 57, this tree sweeps 59.
-FLOOR_DESTS = 79  # +16 #9151: the web-2 sibling's destinations not already swept via the web-1 bridge (7 FILE_MAP scripts, 4 drop-in confs, 5 others — measured, margin-zero); +4 #9534: egress_gateway writes (squid.conf, auth helper, deny CIDRs, bootstrap script)
+FLOOR_DESTS = 84  # +5 #10455: the web_bash_synthetic_install_web2 destinations not already swept (measured, margin-zero); +16 #9151: the web-2 sibling's destinations not already swept via the web-1 bridge (7 FILE_MAP scripts, 4 drop-in confs, 5 others — measured, margin-zero); +4 #9534: egress_gateway writes (squid.conf, auth helper, deny CIDRs, bootstrap script)
 if len(all_dests) >= FLOOR_DESTS:
     if not uncovered:
         ok(f"2: all {len(all_dests)} SSH-written destinations have a fresh-boot writer "
