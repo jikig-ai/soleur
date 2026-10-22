@@ -1,0 +1,138 @@
+# Inngest config-bundle verify-blob diagnosis: a dispatch-only, read-only reproduction (#10390 defect 3).
+#
+# WHAT IT DOES. Pulls a promoted `ghcr.io/jikig-ai/soleur-inngest-config` bundle image by digest, extracts
+# `bundle.tar.gz`, `jq`-inspects the cosign `.sigstore.json`, then runs the EXACT verify-blob invocation the
+# inngest host runs each tick (pinned cosign v3.1.1 image, `--network none`, baked trusted root, pinned
+# identity regexp + OIDC issuer) — with stderr VISIBLE, which the host swallows (`>/dev/null 2>&1`). Two
+# discriminator arms follow: a 0700 stage-dir arm modelling the host's `mktemp -d` perms under the UID-65532
+# image, and a `--network host` arm isolating the network dimension. Verdicts and bounded stderr land in the
+# job summary.
+#
+# WHAT IT CANNOT DO. No environment gate, no Doppler, no GitHub write, no SSH: `contents: read` +
+# `packages: read` on the workflow token only. It mutates nothing; it exists so a `reason=signature`
+# VERIFY_FAIL row can be diagnosed without a host login (hr-no-ssh-fallback-in-runbooks).
+#
+# WHY DISPATCH-ONLY. It is a probe, not a gate — it is run when the verify channel is misbehaving, and kept
+# permanently so the NEXT `reason=signature` row is self-diagnosing. Its own concurrency group is keyed on
+# the digest input; it never shares `scheduled-vinngest-digest-freshness`'s serialized group.
+# Shape suite: plugins/soleur/test/diagnose-inngest-verify-workflow.test.sh.
+name: Diagnose inngest config-bundle verify-blob (read-only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      digest:
+        description: "sha256 digest of ghcr.io/jikig-ai/soleur-inngest-config (the promoted bundle pointer)"
+        required: true
+        default: "4e17987c200a355a4c9e51d95d621e9fe1ff0febbb390d3e6d40f825d726d0c1"
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: diagnose-inngest-verify-${{ inputs.digest }}
+  cancel-in-progress: false
+
+jobs:
+  repro:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out this repository (for the baked trusted root)
+        timeout-minutes: 3
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Login to GHCR
+        timeout-minutes: 2
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Reproduce the host verify-blob invocation (stderr visible)
+        run: |
+          set -uo pipefail
+          BUNDLE_DIGEST="${{ inputs.digest }}"
+          S="$RUNNER_TEMP/diag"; mkdir -p "$S"
+          BREF="ghcr.io/jikig-ai/soleur-inngest-config@sha256:${BUNDLE_DIGEST#sha256:}"
+          # Same digest bytes as the host's zot mirror; CI can reach public gcr directly.
+          COSIGN="gcr.io/projectsigstore/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870"
+          IDENTITY_REGEXP='^https://github\.com/jikig-ai/soleur/\.github/workflows/build-inngest-config-bundle\.yml@refs/heads/main$'
+          OIDC_ISSUER='https://token.actions.githubusercontent.com'
+          TRUSTED_ROOT="$GITHUB_WORKSPACE/apps/web-platform/infra/cosign-trusted-root.json"
+
+          {
+            echo "### inputs"
+            echo "- bundle: \`$BREF\`"
+            echo "- verifier: \`$COSIGN\`"
+            echo "- trusted-root (repo): \`apps/web-platform/infra/cosign-trusted-root.json\` sha256 \`$(sha256sum "$TRUSTED_ROOT" | cut -d' ' -f1)\`"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+          echo "== pull bundle =="
+          docker pull "$BREF"
+          cid="$(docker create "$BREF")"
+          docker cp "$cid:/bundle.tar.gz" "$S/bundle.tar.gz"
+          docker rm -f "$cid" >/dev/null
+          echo "== pull verifier =="
+          docker pull "$COSIGN"
+
+          mkdir -p "$S/bundle"
+          tar -xzf "$S/bundle.tar.gz" -C "$S/bundle"
+          {
+            echo "### bundle members"
+            echo '```'
+            tar -tzf "$S/bundle.tar.gz"
+            echo '```'
+            echo "### manifest.txt"
+            echo '```'
+            cat "$S/bundle/manifest.txt" 2>/dev/null || echo "(absent)"
+            echo '```'
+            echo "### .sigstore.json structure (jq)"
+            echo '```'
+            jq '{mediaType, verificationMaterial_keys: (.verificationMaterial | keys),
+                 tlogEntries: (.verificationMaterial.tlogEntries | length),
+                 has_inclusionProof: (any(.verificationMaterial.tlogEntries[]?; has("inclusionProof"))),
+                 has_inclusionPromise: (any(.verificationMaterial.tlogEntries[]?; has("inclusionPromise"))),
+                 has_tsVerificationData: (.verificationMaterial | has("timestampVerificationData")),
+                 has_certificate: (.verificationMaterial | has("certificate")),
+                 has_chain: (.verificationMaterial | has("x509CertificateChain"))}' \
+              "$S/bundle/manifest.txt.sigstore.json" 2>&1 || true
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+          run_verify() {  # $1=label; extra argv after
+            local label="$1"; shift
+            echo "== verify arm: $label =="
+            timeout 120 docker run --rm "$@" \
+              -v "$S/bundle:/bundle:ro" \
+              -v "$TRUSTED_ROOT:/etc/cosign/trusted_root.json:ro" \
+              "$COSIGN" verify-blob \
+              --trusted-root /etc/cosign/trusted_root.json \
+              --bundle /bundle/manifest.txt.sigstore.json \
+              --certificate-identity-regexp "$IDENTITY_REGEXP" \
+              --certificate-oidc-issuer "$OIDC_ISSUER" \
+              /bundle/manifest.txt >"$S/out.$label" 2>"$S/err.$label"
+            local rc=$?
+            echo "rc=$rc"
+            {
+              echo "### arm \`$label\` — rc=$rc"
+              echo '```'
+              head -c 8192 "$S/err.$label"; echo
+              cat "$S/out.$label"
+              echo '```'
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+            return 0  # a failing arm is DATA, never a step failure
+          }
+
+          # Arm A — verbatim host shape: --network none.
+          run_verify verbatim --network none
+          # Arm B — host-mktemp model: stage dir 0700 (what UID-65532 sees on the host).
+          chmod 0700 "$S/bundle"
+          run_verify stage0700 --network none
+          chmod 0755 "$S/bundle"
+          # Arm C — network dimension: --network host.
+          run_verify nethost --network host
