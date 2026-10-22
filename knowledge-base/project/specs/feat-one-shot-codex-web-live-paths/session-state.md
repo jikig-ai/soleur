@@ -2520,3 +2520,15 @@
   actionable findings; the quality reviewer found only this stale status text.
   Fresh-head CI, Semgrep, QA, preflight, full fix-round verification/trailer,
   qualification, legal, and shipping gates remain pending.
+
+### Migration-ledger correction — 2026-10-22
+
+- Tenant integration CI found that migration 145's committed bytes differed
+  from the already-applied dev-ledger body. Restored the exact ledger blob
+  `18282434482be03df053d014aa94ad0f153a631b`; its fail-closed owner-choice
+  check remains injected by `run-migrations.sh` from the separate SQL guard
+  inside the same locked transaction.
+- Updated the isolated PostgreSQL integration test to exercise that guard
+  rather than requiring mutable logic inside the applied migration. Focused
+  migration tests pass 18/18. This code-only correction performs no shared
+  database write; fresh-head CI and remaining review/QA/ship gates are pending.

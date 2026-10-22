@@ -63,3 +63,12 @@ it reports a false commit-on-main refusal, verify `pwd` and
 `git branch --show-current`, then issue the commit as a separate `git -C
 <absolute-worktree> commit ...` command. The explicit `-C` pins the exact
 repository for both the command preflight and the canonical commit guard.
+
+For migration-ledger drift, retrieve the applied Git blob and restore the
+historical migration byte-for-byte; move new admission logic to the migration
+runner's transactional pre-guard and test that runner ordering. An isolated
+test of a guard using `SET LOCAL` or `LOCK TABLE` must wrap it in a transaction.
+Before reading a plan or review artifact, resolve its actual tracked path with
+`rg --files` instead of guessing a date or slug. Keep one Playwright browser
+install process active per cache; concurrent installers can remove or replace
+each other's browser directories and stall QA.
