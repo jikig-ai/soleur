@@ -161,7 +161,7 @@ priority/p3-low, type/chore, domain/engineering). The PR body states the counter
 | Claim (issue / ADR-188) | Reality | Plan response |
 |---|---|---|
 | TRANSIENT "since 2026-10-18" | Since 2026-09-28; 10-18 is the 3/3 escalation day | Plan cites the real window; no code depends on it |
-| Hypothesis A: output marker moved | Confirmed (#8763 runner capture) | Fix the visibility path (Phase 2) |
+| Hypothesis A: output marker moved | Confirmed (#8763 moved the suite from its own workflow step into the runner, whose per-suite capture dates from #7423) | Fix the visibility path (Phase 2) |
 | Hypothesis B: sampled runs genuinely skipped | Refuted for whole-suite skips (a PASS under CI=true means the suite ran to completion); arm-level skips were never observable, which is the defect | Not planned; the diagnosis is recorded here and the end-to-end rows keep it from recurring silently |
 | "only the two-consecutive-red trigger is live" | True until the relay lands | ADR-188 note updated in Phase 4 once verified post-merge |
 

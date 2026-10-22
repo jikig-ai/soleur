@@ -70,14 +70,18 @@
 # called it a "visible SKIP", which was false in the one file where it mattered most.)
 #
 # EVIDENCE RELAY (#10786). One observer reads those captured lines from the Actions log: the
-# daily skip-persistence probe (scripts/followthroughs/t5-skip-persistence-bound-7510.sh). Between
-# #8763 (2026-09-25) and this relay the capture hid them from it, and it was TRANSIENT from
-# 2026-09-28 on. After the suites finish the parent now relays, as `SOLEUR| relay <basename>: <line>`,
+# daily skip-persistence probe (scripts/followthroughs/t5-skip-persistence-bound-7510.sh). The
+# per-suite capture is older (#7423, 2026-08); it was harmless while the rehearsal suite ran as its own
+# workflow step with its output going straight to the log. #8763 (2026-09-25) moved that suite INSIDE
+# this captured runner, which hid its lines from the probe: TRANSIENT from 2026-09-28 on. After the
+# suites finish the parent now relays, as `SOLEUR| relay <basename>: <line>`,
 # (a) every column-0 `SKIP (loud): ` line of any suite's captured log (capped per suite) and (b) the
 # terminal summary line of the suite named in EVIDENCE_TERMINAL_SUITE. Coverage is exactly that:
 # an INDENTED skip line, or any other suite text, is not relayed. The probe's literals match the
 # relayed text unchanged; run-registered-suites.test.sh (T13) and the probe's own suite (k) pin the
-# suite-text / relay / probe-literal chain end to end.
+# suite-text / relay / probe-literal chain end to end. The relay is name-agnostic: ANY suite that
+# prints a column-0 `SKIP (loud): T5 `, `S1 ` or `T17 ` line is counted by the probe as a rehearsal
+# skip, exactly as the probe's own arm-name note says.
 #
 # DIAGNOSTICS ON RED (#7376). Until 2026-08-10 the executor was
 # `bash "{}" >/dev/null 2>&1` and printed only `PASS`/`RED`, so a CI failure carried no
@@ -1118,7 +1122,8 @@ dump_one() {
 # EVIDENCE_TERMINAL_ERE must match the terminal `echo` of that suite — pinned by value in the
 # probe's suite, which expands the real statement and matches it against this regex.
 # EVIDENCE_CAP binds the SKIP stream per suite (a suite printing 10,000 skips must not flood the
-# log); the terminal line is read by its own grep, so a long skip stream cannot push it out.
+# log); the terminal line is read by its own grep, so a long skip stream cannot push it out. The
+# rehearsal suite has nine arm_skip call sites, so its own stream cannot reach the cap in practice.
 EVIDENCE_SKIP_ERE='^SKIP \(loud\): '
 EVIDENCE_TERMINAL_SUITE='git-data-runcmd-rehearsal.test.sh'
 EVIDENCE_TERMINAL_ERE='^git-data-runcmd-rehearsal: [0-9]+ passed'
@@ -1132,26 +1137,34 @@ EVIDENCE_CAP=50
 # grep's rc is inspected as dump_one does: 1 = nothing matched, 2 = an error (unreadable file, bad
 # regex) which is REPORTED — reading it as "no skip" would name a cause this runner did not measure.
 # `grep -a` so a NUL byte in a docker or apt log does not turn a match into "binary file matches".
-# `mapfile -n`, never `| head` (SIGPIPE under pipefail). The header line is opened lazily, so a run
-# with nothing to relay is byte-identical to one without this function.
+# The read is BOUNDED AT THE SOURCE (`-m` lines, `cut -b` bytes) before anything lands in a shell
+# variable, so one multi-hundred-MB line cannot balloon the parent, and control characters (a CR
+# included) become spaces so relayed text can never start a second log line. `mapfile -n`, never
+# `| head` (SIGPIPE under pipefail). The header line is opened lazily, so a run with nothing to
+# relay is byte-identical to one without this function.
+relay_grep() {  # $1 = ERE, $2 = file; returns grep's own rc
+  grep -a -m "$EVIDENCE_CAP" -E -- "$1" "$2" 2>/dev/null | cut -b1-400 | tr '\000-\010\013-\037\177' ' '
+  return "${PIPESTATUS[0]}"
+}
 relay_evidence() {
   local s key f base sel grc opened=0 line
+  local unavailable="[relay unavailable — grep exited %s reading the capture]"
   local -a lines
   for s in "${SUITES[@]}"; do
     key="${s//\//_}"; f="$SOLEUR_SUITE_LOGDIR/$key.log"; base="${s##*/}"
     [[ -e "$f" ]] || continue   # no capture: dump_one names that case for a RED/UNACCOUNTED suite
-    sel="$(grep -a -E -- "$EVIDENCE_SKIP_ERE" "$f" 2>/dev/null)"; grc=$?
+    sel="$(relay_grep "$EVIDENCE_SKIP_ERE" "$f")"; grc=$?
     case "$grc" in
       0) mapfile -t -n "$EVIDENCE_CAP" lines <<<"$sel" ;;
       1) lines=() ;;
-      *) lines=("[relay unavailable — grep exited ${grc} reading the capture]") ;;
+      *) lines=("$(printf "$unavailable" "$grc")") ;;
     esac
     if [[ "$base" == "$EVIDENCE_TERMINAL_SUITE" ]]; then
-      sel="$(grep -a -E -- "$EVIDENCE_TERMINAL_ERE" "$f" 2>/dev/null)"; grc=$?
+      sel="$(relay_grep "$EVIDENCE_TERMINAL_ERE" "$f")"; grc=$?
       case "$grc" in
         0) mapfile -t -n "$EVIDENCE_CAP" -O "${#lines[@]}" lines <<<"$sel" ;;
         1) ;;
-        *) lines+=("[relay unavailable — grep exited ${grc} reading the capture]") ;;
+        *) lines+=("$(printf "$unavailable" "$grc")") ;;
       esac
     fi
     (( ${#lines[@]} > 0 )) || continue
@@ -1161,7 +1174,7 @@ relay_evidence() {
       opened=1
     fi
     for line in "${lines[@]}"; do
-      printf 'relay %s: %s\n' "$base" "${line:0:400}"
+      printf 'relay %s: %s\n' "$base" "$line"
     done
   done
 }

@@ -110,9 +110,9 @@ mkcase() {
 # each incremented the SAME counter and (g) escalated to exit 1 on a streak it
 # did not earn. That is the probe behaving correctly and the harness measuring
 # the wrong thing -- exactly the class this suite exists to catch, one level up.
-run_probe() {  # $1 = case root; sets RC and OUT
+run_probe() {  # $1 = case root, $2 = optional probe file (default $PROBE); sets RC and OUT
   OUT="$SANDBOX/out.$RANDOM"
-  ( PATH="$1/bin:$PATH" GH_TOKEN=fake T5_PROBE_STATE="$1/streak" bash "$PROBE" ) >"$OUT" 2>&1
+  ( PATH="$1/bin:$PATH" GH_TOKEN=fake T5_PROBE_STATE="$1/streak" bash "${2:-$PROBE}" ) >"$OUT" 2>&1
   RC=$?
 }
 
@@ -269,11 +269,15 @@ fi
 #
 # The fixture text is DERIVED from this probe's own literals, not hand-copied: a probe literal edit
 # moves the fixture, and the (hard-coded) runner regex then no longer matches it, which reddens.
+# That holds for the TERMINAL line only: the skip fixture is built from the probe's T5 marker, which
+# always matches the runner's generic skip prefix, so the skip end of the pair is pinned separately,
+# by value, against the real suite's own `arm_skip` echo (the "suite end (skip)" row below).
 RUNNER="$REPO_ROOT/apps/web-platform/infra/run-registered-suites.sh"
 SUITE_SRC="$REPO_ROOT/apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh"
 [ -x "$RUNNER" ] || { printf 'FAIL: runner not executable at %s\n' "$RUNNER" >&2; exit 2; }
 
-# $1 = probe file to read the literals from. Prints: SUITE_TERMINAL, then the first SKIP_MARKERS entry.
+# $1 = probe file to read the literals from. Prints: SUITE_TERMINAL, then the T5 marker (the sed is
+# keyed on that literal, not on array position).
 probe_literals() {
   local f="$1" term mark
   term=$(sed -n "s/^SUITE_TERMINAL='\\(.*\\)'\$/\\1/p" "$f" | sed -n '1p')
@@ -295,24 +299,18 @@ k_case() {
     [ "$variant" != neither ] && printf 'echo %q\n' "${term} 73 passed, 0 failed, Skipped: 2 (75 assertions)"
     printf 'exit 0\n'
   } > "$fx/git-data-runcmd-rehearsal.test.sh"
-  {
-    printf '#!/usr/bin/env bash\n'
-    [ "$variant" = skip ] && printf 'echo %q >&2\n' "SKIP (loud): S1 MUTATION fixture second member"
-    printf 'exit 0\n'
-  } > "$fx/second.test.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$fx/second.test.sh"
   chmod +x "$fx"/*.test.sh
   RUNNER_LOG="$SANDBOX/kout.$name"
   ( cd "$REPO_ROOT" && SOLEUR_INFRA_DIR="$fx" timeout 120 bash "$rfile" ) > "$RUNNER_LOG" 2>&1 || true
   local root; root=$(mkcase "k.$name" 20 < "$RUNNER_LOG")
-  OUT="$SANDBOX/out.k.$name"
-  ( PATH="$root/bin:$PATH" GH_TOKEN=fake T5_PROBE_STATE="$root/streak" bash "$pfile" ) >"$OUT" 2>&1
-  RC=$?
+  run_probe "$root" "$pfile"
 }
 
 k_case skip skip "$PROBE" "$RUNNER"
-_k_relays=$(grep -cE '^SOLEUR\| relay ' "$RUNNER_LOG" || true)
+_k_relays=$(grep -cE '^SOLEUR\| relay git-data-runcmd-rehearsal\.test\.sh: SKIP \(loud\): T5 ' "$RUNNER_LOG" || true)
 if [ "$_k_relays" -ge 1 ]; then pass; else
-  fail "(k) precondition: the runner's own stdout carries ${_k_relays} relay line(s) — the probe is being fed a log the runner never produced evidence into"
+  fail "(k) precondition: the runner's own stdout carries ${_k_relays} relayed T5 skip line(s) — the probe is being fed a log the runner never produced evidence into"
 fi
 expect "(k) skip via the real runner" 1 "a loud skip the suite prints must survive the runner's per-suite capture and reach the probe; this is the exit-2 TRANSIENT of 2026-09-28 onwards"
 
@@ -351,6 +349,29 @@ else
   fail "(k) suite end: found ${_term_n} terminal echo statement(s) in the rehearsal suite and regex '${_ere}' in the runner, expected exactly 1 and a non-empty regex"
 fi
 
+# The suite end of the SKIP contract, by VALUE: expand the real `arm_skip` emitter with a T5 name and
+# require that the result (a) matches the runner's relay regex and (b) contains the probe's own T5
+# marker. Without this the prefix text `SKIP (loud): ` is pinned only by hand-written fixtures, and a
+# one-word edit to the real emitter zeroes the relay and the probe while the terminal-line positive
+# control keeps reporting a healthy PASS.
+_skip_stmt=$(grep -oF 'echo "SKIP (loud): $1" >&2' "$SUITE_SRC" || true)
+_skip_n=$(grep -c . <<<"$_skip_stmt" || true)
+_skip_ere=$(sed -n "s/^EVIDENCE_SKIP_ERE='\\(.*\\)'\$/\\1/p" "$RUNNER" | sed -n '1p')
+_lits=$(probe_literals "$PROBE") || _lits=""
+_t5=$(sed -n '2p' <<<"$_lits")
+if [ "$_skip_n" -eq 1 ] && [ -n "$_skip_ere" ] && [ -n "$_t5" ]; then
+  _sx=${_skip_stmt#*echo \"}; _sx=${_sx%%\" >&2*}
+  _sx=${_sx//'$1'/"${_t5}MUTATION sample"}
+  case "$_sx" in
+    *'$'*) fail "(k) suite end (skip): the arm_skip echo still has an unexpanded variable after substituting \$1: $_sx" ;;
+    *) if grep -Eq -- "$_skip_ere" <<<"$_sx" && grep -qF -- "$_t5" <<<"$_sx"; then pass; else
+         fail "(k) suite end (skip): the real arm_skip output '$_sx' no longer matches the runner's EVIDENCE_SKIP_ERE '$_skip_ere' and the probe's T5 marker '$_t5' — the relay and the probe would both go blind to every real skip"
+       fi ;;
+  esac
+else
+  fail "(k) suite end (skip): found ${_skip_n} arm_skip echo statement(s), regex '${_skip_ere}', marker '${_t5}' — expected exactly 1, and both non-empty"
+fi
+
 # Edit-the-pair harness: a mutation to ONE end of the pair must turn the terminal-only case from 0
 # into something else. The runner suite's T9 mutates only the runner copy and greps its own output,
 # so it cannot score an edit to the PROBE literal; this can.
@@ -366,10 +387,15 @@ for _mut in probe-literal runner-regex; do
     continue
   fi
   k_case "mut.$_mut" terminal "$_mp" "$_mr"
-  if [ "$RC" -ne 0 ]; then pass; else
-    fail "(k) harness[$_mut]: an edit to one end of the probe/runner pair left the terminal-only case at exit 0 — the pin does not hold"
+  if [ "$RC" -eq 2 ]; then pass; else
+    fail "(k) harness[$_mut]: an edit to one end of the probe/runner pair left the terminal-only case at exit $RC, expected 2 (TRANSIENT: the positive control lost the evidence) — the pin does not hold"
   fi
 done
+# The unmutated control through the SAME copy path must read 0, or the rows above prove only that
+# copying a file breaks it.
+cp "$PROBE" "$SANDBOX/mut.control.probe.sh"; cp "$RUNNER" "$SANDBOX/mut.control.runner.sh"; chmod +x "$SANDBOX/mut.control.runner.sh"
+k_case "mut.control" terminal "$SANDBOX/mut.control.probe.sh" "$SANDBOX/mut.control.runner.sh"
+expect "(k) harness control" 0 "an unmutated copy of the pair through the harness's own copy path must read exit 0, or the mutation rows prove nothing"
 
 # ── Assertion floor (not routed through fail(), deliberately) ────────────────
 # RAISED 9 -> 12 (#7535 Phase 2), ITEMISED: (i) the T17 marker registration, plus
@@ -377,8 +403,10 @@ done
 # RAISED 12 -> 20 (#10786), ITEMISED: (k) has 8 assertions: the relay-line precondition, three real-runner
 # cases (skip, terminal only, neither), the pre-fix log shape, the suite-end value pin, and the two
 # edit-the-pair harness rows (probe literal, runner regex). Measured on the green run: 20.
+# RAISED 20 -> 22 after review (#10786), ITEMISED: the skip-side value pin against the real `arm_skip`
+# echo, and the unmutated control through the harness's own copy path. Measured: 22.
 _total=$((passes + fails))
-_FLOOR=20
+_FLOOR=22
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf 'FAIL: assertion floor: %d ran, floor %d — the harness lost coverage rather than passing it\n' \
     "$_total" "$_FLOOR" >&2
