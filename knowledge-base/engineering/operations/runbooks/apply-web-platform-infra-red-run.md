@@ -77,7 +77,7 @@ gh workflow run apply-web-platform-infra.yml --ref main \
   -f reason='re-run after a non-green apply'
 ```
 
-It holds the fleet-wide apply mutex (`terraform-apply-web-platform-host`) for up to 47 minutes in
+It holds the fleet-wide apply mutex (`terraform-apply-web-platform-host`) for up to 59 minutes in
 the worst case, so an emergency dispatch issued at the same time will queue behind it.
 
 Cloudflare provider calls now retry API 5xx up to ~8 min per request (#10643), so a plan step red

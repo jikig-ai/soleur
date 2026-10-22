@@ -2998,7 +2998,13 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // `.sdk_bash_smoke` ledger (verdict, coverage, soak counters). NO SUBSTITUTE: the deploy-status hook has no unauthenticated
   // read path and the host is no-SSH; the offline suite drives the script against stubs and proves the verdict logic, not
   // the live deployed state. Genuine.
-  const BASELINE_DECLARED_PROBES = 73;
+  // #10455 (2026-10-22): +1 (73 -> 74) for `2026-10-20-feat-sandbox-runtime-synthetic-and-detection-gaps-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`scripts/betterstack-query.sh --since 1h --grep web-bash-synthetic`) reads the Better Stack log warehouse
+  // through the Doppler soleur/prd_terraform BETTERSTACK_QUERY_* connection; the warehouse has no unauthenticated read path.
+  // NO SUBSTITUTE: the offline suite drives the synthetic against a mock docker and proves the verdict logic, not that a live
+  // host emitted the line. Genuine.
+  const BASELINE_DECLARED_PROBES = 74;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

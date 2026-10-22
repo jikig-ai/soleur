@@ -319,11 +319,13 @@ jobs:
     # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §apply (test-anchored lines kept below)
     #   (1) arm_step_timeout ≥ Σ over call sites of
     #       (deadline_i + poll_interval + (3 + rollback_attempts) × curl_max_time)
-    #       → 2100 ≥ (200+440+200+440+200+30) + 6 × 85 = 1510 + 510 = 2020      ✓ slack 80 s
+    #       → 2820 ≥ (200+440+200+440+200+300+300+30) + 8 × 85 = 2110 + 680 = 2790      ✓ slack 30 s
     #   (2) job_timeout − arm_step_timeout ≥ max(pre-gate) + post-gate budget
-    #       → 2460 − 2100 = 360 ≥ 111 + 180 = 291                               ✓ slack 69 s
-    #   Mutex sum (three push-chain jobs): preflight 1 + apply 41 + notify-apply-failure 5 = 47 min.
-    timeout-minutes: 41
+    #       → 3180 − 2820 = 360 ≥ 111 + 210 = 321                               ✓ slack 39 s
+    #   (2026-10-22, #10455 b: two web-bash-synthetic arms at 300 s each took the ladder from 2020 < 2100 < 2460 to 2790 < 2820 < 3180;
+    #    runbooks/apply-web-platform-infra-job-rationale.md carries the dated addendum.)
+    #   Mutex sum (three push-chain jobs): preflight 1 + apply 53 + notify-apply-failure 5 = 59 min.
+    timeout-minutes: 53
     # No `environment:` reviewer gate. PR #4220 removed it: the per-apply
     # reviewer click was duplicative friction on top of the PR-merge gate,
     # and was blocking apply runs for up to 13h (#4204 on 2026-05-20). The
@@ -636,10 +638,12 @@ jobs:
               -target=doppler_secret.cf_api_token_dns_edit \
               -target=betteruptime_heartbeat.web_zot_consumer \
               -target=betteruptime_heartbeat.web_nic_guard \
+              -target=betteruptime_heartbeat.web_bash_synthetic \
               -target=betteruptime_heartbeat.inngest_consumer \
               -target=doppler_secret.inngest_consumer_url \
               -target=doppler_secret.web_zot_consumer_url \
               -target=doppler_secret.web_nic_guard_url \
+              -target=doppler_secret.web_bash_synthetic_url \
               -target=doppler_service_token.web_probes \
               -target=doppler_service_token.web_arm_write \
               -target=github_actions_secret.doppler_token_web_arm \
@@ -1258,6 +1262,8 @@ jobs:
               -target=terraform_data.orphan_reaper_install \
               -target=terraform_data.cron_egress_firewall \
               -target=terraform_data.private_nic_guard_install \
+              -target=terraform_data.web_bash_synthetic_install \
+              -target=terraform_data.web_bash_synthetic_install_web2 \
               -target=terraform_data.zot_consumer_probe_install \
               -target=terraform_data.git_data_probe_install \
               -target=terraform_data.inngest_consumer_probe_install \
@@ -1335,13 +1341,13 @@ jobs:
         # is nothing to arm.
         if: always() && steps.ssh_token_gate.outputs.ssh_apply_skip != 'true'
         # STEP-LEVEL CEILING (#7587), the lower rung of the ladder documented on the job's own
-        # `timeout-minutes` above: 2020 (the script's worst-case wall clock) < 2100 (this step)
-        # < 2460 (the job). It is what makes an over-running ARM gate fail INSIDE the job — where
+        # `timeout-minutes` above: 2790 (the script's worst-case wall clock) < 2820 (this step)
+        # < 3180 (the job). It is what makes an over-running ARM gate fail INSIDE the job — where
         # the `if: always()` re-pause sweep below and the post-apply summary still run — instead
         # of being cancelled WITH the job, which is #7587's shape: the in-script rollback never
         # runs and a heartbeat is left unpaused-and-unfed until its grace window expires and it
         # pages, at whatever hour.
-        timeout-minutes: 35
+        timeout-minutes: 47
         working-directory: ${{ env.INFRA_DIR }}
         env:
           # Passed as DOPPLER_TOKEN (the CLI's own variable) rather than on argv: `--token <secret>`
@@ -1401,8 +1407,8 @@ jobs:
         # POST-GATE CEILING (#7657 D3). The ARM step got a ceiling and the LAST-CHANCE ROLLBACK did
         # not, and the correlation is adversarial: the state file is non-empty precisely when the
         # ARM step was cut, i.e. exactly when the least job budget remains. 3 min covers the whole
-        # post-gate budget the job's ladder reserves — six re-PATCHes at `--max-time 15` (90 s) plus
-        # the `timeout 30` mint — with 60 s of slack.
+        # post-gate budget the ladder reserves for the sweep — eight re-PATCHes at `--max-time 15` (120 s) plus
+        # the `timeout 30` mint, with 30 s of slack (full derivation: the rationale runbook's 2026-10-22 addendum).
         timeout-minutes: 3
         env:
           # See the ARM step: DOPPLER_TOKEN, not `--token` on argv (#7661 G11).
@@ -1517,7 +1523,7 @@ jobs:
     runs-on: ubuntu-24.04
     # Bounds the fleet-mutex hold this job adds; GitHub's default is 360 minutes. The
     # `concurrency` group is WORKFLOW-level, so the run-level worst case is the SUM across every
-    # job that can execute on a push, chained by `needs:`: preflight 1 + apply 41 + this 5 = 47 min.
+    # job that can execute on a push, chained by `needs:`: preflight 1 + apply 53 + this 5 = 59 min.
     # `preflight` is counted — it was omitted from the earlier "40 min" arithmetic, which was 41.
     # Pinned to exactly 5 by the guard suite (raising it silently falsifies all three copies of the
     # sum, so the guard asserts the literal rather than a ceiling).
@@ -3099,7 +3105,7 @@ jobs:
 
   # Selected by `-f apply_target=registry-luks-recut` (#6929, ADR-096 amendment 2026-07-24).
   # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §registry_luks_recut (test-anchored lines kept below)
-  # preflight 1 + apply 41 + notify 5 = 47 min rather than 15. (`preflight` is chained by `needs:`
+  # preflight 1 + apply 53 + notify 5 = 59 min rather than 15. (`preflight` is chained by `needs:`
   registry_luks_recut:
     environment: infra-privileged
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'registry-luks-recut'
@@ -4966,8 +4972,10 @@ jobs:
               -target="cloudflare_record.app" \
               -target="betteruptime_heartbeat.web_zot_consumer[\"${WEB_HOST_KEY}\"]" \
               -target="betteruptime_heartbeat.web_nic_guard[\"${WEB_HOST_KEY}\"]" \
+              -target="betteruptime_heartbeat.web_bash_synthetic[\"${WEB_HOST_KEY}\"]" \
               -target="doppler_secret.web_zot_consumer_url[\"${WEB_HOST_KEY}\"]" \
               -target="doppler_secret.web_nic_guard_url[\"${WEB_HOST_KEY}\"]" \
+              -target="doppler_secret.web_bash_synthetic_url[\"${WEB_HOST_KEY}\"]" \
               -var="ssh_key_path=${CI_SSH_PUB}" \
               -var="image_name=${PINNED}"
           rc=$?
@@ -4990,9 +4998,9 @@ jobs:
           # path inngest-host, and the difference is the fan-out. The birth gate above proves
           # the plan is the exact scoped birth; it cannot prove the create is FEASIBLE.
           # terraform creates this host's dependencies FIRST — the workspaces volume and the
-          # two Better Stack heartbeats — and only then the server. So a server_type with no
+          # per-host Better Stack heartbeats — and only then the server. So a server_type with no
           # stock in the target DC does not fail cleanly here: it strands a 20 GB volume
-          # attached to nothing, plus two heartbeat resources for a host that will never
+          # attached to nothing, plus the heartbeat resources for a host that will never
           # exist. That is not "recoverable, not a strand" (the inngest-host reasoning, which
           # holds for a host with no such fan-out) — it is billed debris and a dirty state
           # slot, caught by a gate we already own and can run in 2 seconds.
@@ -5008,7 +5016,7 @@ jobs:
           # the right reason.
           #
           # KNOWN GAP (not fixed here): the same fact means a SUCCESSFUL birth also leaves the
-          # new host's two heartbeats paused, so it has no active heartbeat coverage until a
+          # new host's heartbeats paused, so it has no active heartbeat coverage until a
           # later merge-to-main apply arms them. The Dispatch summary says so explicitly.
           #
           # HCLOUD_TOKEN: this step's env: is DOPPLER_TOKEN only and the sourced gate runs
@@ -5112,9 +5120,9 @@ jobs:
             echo "**Status:** ${JOB_STATUS}"
             echo "**Run:** ${RUN_URL}"
             echo ""
-            echo "Purely additive +create of the host's ten-address fan-out on a digest-pinned image. A green apply is not a green boot — see the fresh-host Sentry pointer above for the last-reached boot stage."
+            echo "Purely additive +create of the host's birth fan-out on a digest-pinned image. A green apply is not a green boot — see the fresh-host Sentry pointer above for the last-reached boot stage."
             echo ""
-            echo "**This host has NO active heartbeat coverage yet.** Its two Better Stack heartbeats were REGISTERED by this dispatch but are \`paused\` (web-probe.tf ships \`paused = true\` + \`ignore_changes = [paused]\`; ADR-117 arms a heartbeat only after a real beat is measured). The arming step lives in the \`apply\` job, so coverage begins at the next merge-to-main infra apply. To arm now: \`gh workflow run apply-web-platform-infra.yml -f apply_target=manual-rerun -f reason='arm ${WEB_HOST_KEY:-?} heartbeats'\`."
+            echo "**This host has NO active heartbeat coverage yet.** Its Better Stack heartbeats were REGISTERED by this dispatch but are \`paused\` (web-probe.tf ships \`paused = true\` + \`ignore_changes = [paused]\`; ADR-117 arms a heartbeat only after a real beat is measured). The arming step lives in the \`apply\` job, so coverage begins at the next merge-to-main infra apply. To arm now: \`gh workflow run apply-web-platform-infra.yml -f apply_target=manual-rerun -f reason='arm ${WEB_HOST_KEY:-?} heartbeats'\`."
           } >> "$GITHUB_STEP_SUMMARY"
 
   # --- #6969 (ADR-148): the web-host REPLACE path -------------------------------
@@ -5529,7 +5537,7 @@ jobs:
             echo ""
             echo "Scoped \`-replace\` of the host plus its private NIC, its workspaces volume attachment and the fleet firewall re-attachment, on a digest-pinned image. The workspaces volume, the LUKS volume and the LUKS passphrase were all kept OUT of the \`-target\` set. The workspaces volume is still in the plan graph as a no-op (\`-target\` prunes dependents, not dependencies) and is held by \`prevent_destroy\` plus two gate arms; the LUKS volume and passphrase are outside the graph entirely. A green apply is not a green boot — see the fresh-host Sentry pointer above for the last-reached boot stage."
             echo ""
-            echo "**This host's heartbeat coverage is unchanged by this dispatch.** Its two Better Stack heartbeats already exist and are not in this job's \`-target\` set; if they are still \`paused\` (web-probe.tf ships \`paused = true\` + \`ignore_changes = [paused]\`; ADR-117 arms a heartbeat only after a real beat is measured), the arming step lives in the \`apply\` job. To arm now: \`gh workflow run apply-web-platform-infra.yml -f apply_target=manual-rerun -f reason='arm ${WEB_HOST_KEY:-?} heartbeats'\`."
+            echo "**This host's heartbeat coverage is unchanged by this dispatch.** Its Better Stack heartbeats already exist and are not in this job's \`-target\` set; if they are still \`paused\` (web-probe.tf ships \`paused = true\` + \`ignore_changes = [paused]\`; ADR-117 arms a heartbeat only after a real beat is measured), the arming step lives in the \`apply\` job. To arm now: \`gh workflow run apply-web-platform-infra.yml -f apply_target=manual-rerun -f reason='arm ${WEB_HOST_KEY:-?} heartbeats'\`."
           } >> "$GITHUB_STEP_SUMMARY"
 
   # --- #6767: read-only retrospective entrypoint drift AUDIT --------------------

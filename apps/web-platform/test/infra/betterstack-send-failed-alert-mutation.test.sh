@@ -168,7 +168,8 @@ expect_green_added() {
 # 79 -> 81 and 9 -> 10 guard cases at #10136: cloud-init-inngest.yml joins the paging population (the Inngest host's
 # soleur-inngest-tls script emits SOLEUR_INNGEST_TLS_REFUSED through ONE multi-line crit emit_refusal call): +1 emitter-crit
 # check and +1 marker-matches-a-needle check. A second call line would add a second marker check, so the script keeps one.
-BASELINE_PASSES=81
+# 81 -> 82 at #10455: web-bash-synthetic.sh now emits SOLEUR_CREDENTIAL_REFUSED (non-paging), one stays-below-crit check; the case count is unchanged.
+BASELINE_PASSES=82
 BASELINE_CASES=10
 restore; cases=$((cases + 1))
 if run_guard; then ok "baseline: guard is GREEN against the unmutated sandbox"

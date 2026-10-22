@@ -279,8 +279,20 @@ assert "P3-6 the journal dir is created BEFORE vector.service is restarted (orde
 # not the whole file — a name relocated into a comment / exclude / other sink would defeat a file-wide
 # grep while breaking Source-4 delivery (test-design + pattern review).
 HSJ="$(awk '/^\[sources\.host_scripts_journald\]/{f=1;next} f&&/^\[[a-z]/{f=0} f' "$SCRIPT_DIR/vector.toml")"
-assert "Source 4 (host_scripts_journald) include list carries all 3 probe SyslogIdentifiers" \
+assert "Source 4 (host_scripts_journald) include list carries the zot-consumer, git-data and nic-guard probe SyslogIdentifiers (the inngest probe and the synthetic have their own rows)" \
   "grep -q 'web-zot-consumer-probe' <<<\"\$HSJ\" && grep -q 'web-git-data-probe' <<<\"\$HSJ\" && grep -q 'web-nic-guard' <<<\"\$HSJ\""
+
+# --- #10455 b: the runtime Bash synthetic's tag, on BOTH sides of the join, and in all three vector.toml arrays ---
+# Exact-value equality (see R3-4.5 below): an allowlist entry with no unit emitting that tag is a silent no-op, and a unit tag
+# with no entry is a silent drop. The identifier is INCLUDED by Source 4 and EXCLUDED by the two other journald sources, so its
+# verdict line cannot ship twice.
+WBS_UNIT="$SCRIPT_DIR/web-bash-synthetic.service"
+assert "WBS-1: web-bash-synthetic is in the Source 4 (host_scripts_journald) allowlist" \
+  "grep -qE '^[[:space:]]*\"web-bash-synthetic\",?\$' <<<\"\$HSJ\""
+assert "WBS-2: the unit sets SyslogIdentifier=web-bash-synthetic (the join's other half)" \
+  "grep -qE '^SyslogIdentifier=web-bash-synthetic\$' \"\$WBS_UNIT\""
+assert "WBS-3: vector.toml carries the identifier in exactly three arrays (one include, two excludes)" \
+  "[[ \"\$(grep -cE '^[[:space:]]*\"web-bash-synthetic\",?\$' '$SCRIPT_DIR/vector.toml')\" -eq 3 ]]"
 
 # --- #6617c (A5): the dedicated-host tag trio, asserted on BOTH sides of the join ---
 # Source 4's include_matches.SYSLOG_IDENTIFIER is sd_journal_add_match EXACT-VALUE equality,
@@ -801,7 +813,8 @@ echo ""
 # equality — developer-incremented. Reports directly, never through assert/pass/fail.
 # Ratcheted 101 -> 110 by #6551 (the 9963m/9963m-bis exclude-direction pins);
 # -> 113 here (the #7596 CF-4e..g restage lockstep adds 3 rows over 110).
-MIN_TOTAL=113
+# -> 116 (#10455 b: WBS-1..3, the runtime Bash synthetic's identifier on both sides of the join and in all three arrays).
+MIN_TOTAL=116
 if (( TOTAL < MIN_TOTAL )); then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$TOTAL" "$MIN_TOTAL" >&2
   exit 1
