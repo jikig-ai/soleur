@@ -120,6 +120,7 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-dual-lockfile-live"
   "scripts/lint-gh-argv-arg-live"
   "scripts/lint-guard-contract-live"
+  "scripts/lint-feature-map-coverage-live"
   "scripts/lint-integration-env-gates-live"
   "scripts/lint-legal-mirror-drift-baseline-live"
   "scripts/lint-legal-registers-live"
@@ -1014,6 +1015,9 @@ AFFECTED_TESTS_SCRIPTS_ARGV_BEARER_SWEEP_PATHS=(
   "scripts/inngest-restart-poll-classify.sh"
   "plugins/soleur/skills/ship/SKILL.md"
   "plugins/soleur/skills/postmerge/references/deploy-status-debugging.md"
+  # S9 (#9757 item 2): the stage extracts and EXECUTES the rehearsal workflow's two terraform destroy step bodies under stubs and pins the
+  # export position in all four terraform steps, so an edit to that workflow must select it. The scan itself rides the full run.
+  ".github/workflows/inngest-provision-rehearsal.yml"
 )
 
 # tests/scripts/rule-id-regex-parity — derived edges could not reach its subject; declared from the
@@ -1916,6 +1920,93 @@ AFFECTED_TESTS_SCRIPTS_INFRA_PRIVILEGED_TIER_CENSUS_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# tests/scripts/trio-baseline-census — the deploy-channel trio census, Guard 1a (#9294 G1). Its population is
+# `git ls-files --cached --others` repo-wide (every file can name the trio: .github, scripts, plugins, apps, and the
+# .md skill docs), minus the prose and media under knowledge-base/ and docs/ (a CODE extension there is scanned); it
+# reads the sibling census for the Tier-B environment set, and its ratchet reads git history. So the edge is every
+# top-level entry (declared, not derived: no argv literal reaches the files it scans; a new top-level entry needs a
+# line here, and the suite's A5 row fails when one is missing) plus one `glob:knowledge-base/**.<ext>` per code
+# extension it scans there (the suite pins that list as the `@kbcode` record and A5 checks the two agree). ADR-241 is
+# declared individually: the ratchet diffs its Re-date and Allow lines. The self-edge literal is required by the
+# declared-edge census.
+AFFECTED_TESTS_SCRIPTS_TRIO_BASELINE_CENSUS_PATHS=(
+  ".agents/"
+  ".bun-version"
+  ".claude-plugin/"
+  ".claude/"
+  ".codex/"
+  ".cursor-plugin/"
+  ".devin/"
+  ".doppler.yaml"
+  ".gitattributes"
+  ".github/"
+  ".gitignore"
+  ".gitleaks.toml"
+  ".gitleaksignore"
+  ".grok/"
+  ".markdownlint.json"
+  ".markdownlintignore"
+  ".mcp.json"
+  ".nvmrc"
+  ".soleur-test-gate.json"
+  "AGENTS.md"
+  "AGENTS.rules.md"
+  "CLAUDE.md"
+  "CODE_OF_CONDUCT.md"
+  "CONTRIBUTING.md"
+  "LICENSE"
+  "LICENSES/"
+  "README.md"
+  "apps/"
+  "bin/"
+  "bunfig.toml"
+  "cla-smoke-test.md"
+  "docs/"
+  "eleventy.config.js"
+  "feature-request-plugin-dir-settings.md"
+  "feature-request-plugin-update-surfaces-install-divergence.md"
+  "infra/"
+  "lefthook.yml"
+  "package-lock.json"
+  "package.json"
+  "plugins/"
+  "pricing-wireframe.pen"
+  "ruff.toml"
+  "scripts/"
+  "spike/"
+  "test/"
+  "tests/"
+  "todos/"
+  "glob:knowledge-base/**.sh"
+  "glob:knowledge-base/**.bash"
+  "glob:knowledge-base/**.zsh"
+  "glob:knowledge-base/**.py"
+  "glob:knowledge-base/**.pl"
+  "glob:knowledge-base/**.rb"
+  "glob:knowledge-base/**.ps1"
+  "glob:knowledge-base/**.mk"
+  "glob:knowledge-base/**Makefile"
+  "glob:knowledge-base/**.ts"
+  "glob:knowledge-base/**.tsx"
+  "glob:knowledge-base/**.js"
+  "glob:knowledge-base/**.jsx"
+  "glob:knowledge-base/**.mjs"
+  "glob:knowledge-base/**.cjs"
+  "glob:knowledge-base/**.yml"
+  "glob:knowledge-base/**.yaml"
+  "glob:knowledge-base/**.tf"
+  "glob:knowledge-base/**.tfvars"
+  "glob:knowledge-base/**.tmpl"
+  "glob:knowledge-base/**.hcl"
+  "glob:knowledge-base/**.toml"
+  "glob:knowledge-base/**.json"
+  "glob:knowledge-base/**.cfg"
+  "glob:knowledge-base/**.service"
+  "glob:knowledge-base/**.timer"
+  "knowledge-base/engineering/architecture/decisions/ADR-241-terraform-credentials-are-tiered-main-only-environment-secrets.md"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # scripts/battery-tag-authorship — census of tag-authoring git commands reachable from the battery:
 # the write-boundary softening in repo-write-boundary.sh and the runner's own command surface.
 AFFECTED_SCRIPTS_BATTERY_TAG_AUTHORSHIP_PATHS=(
@@ -2072,6 +2163,21 @@ AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS=(
   "glob:spike/**.test.sh"
   "glob:todos/**.test.sh"
   "scripts/test-all.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/lint-feature-map-coverage-battery — mutation battery over the
+# feature-map sentinel + synthetic fixture repos; its verdict moves only with
+# its SUT, itself, or the canonical fixture-dir guard it copies. The real map
+# is an edge because the battery's fixture maps mirror its entry grammar — a
+# convention change there must re-drive this suite (the live suite is
+# always-on and covers the map itself).
+AFFECTED_SCRIPTS_LINT_FEATURE_MAP_COVERAGE_BATTERY_PATHS=(
+
+  "scripts/lint-feature-map-coverage.sh"
+  "scripts/lint-feature-map-coverage.test.sh"
+  "apps/web-platform/test/feature-map.md"
+  "plugins/soleur/test/test-helpers.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 

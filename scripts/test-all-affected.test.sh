@@ -2613,10 +2613,10 @@ cases=$((cases + 1))
 _f1_floor=$(sed -n 's/^_MIN_ALWAYS_ON_DECLARED=\([0-9][0-9]*\)$/\1/p' "$RUNNER")
 # shellcheck source=/dev/null
 _f1_count=$( ( source "$AFF_LIB" >/dev/null 2>&1; echo "${#ALWAYS_ON_SUITES[@]}" ) )
-if [[ "$_f1_floor" == "112" && "$_f1_count" =~ ^[0-9]+$ ]] && (( _f1_count >= _f1_floor && _f1_count - _f1_floor <= 5 )); then
-  pass "f1: _MIN_ALWAYS_ON_DECLARED is pinned at 112 (#9763 + #9947 + #9814 + #8875 + #10331 + #7893 registrations: 117-count minus the slack of 5) and ALWAYS_ON_SUITES ($_f1_count) meets it"
+if [[ "$_f1_floor" == "113" && "$_f1_count" =~ ^[0-9]+$ ]] && (( _f1_count >= _f1_floor && _f1_count - _f1_floor <= 5 )); then
+  pass "f1: _MIN_ALWAYS_ON_DECLARED is pinned at 113 (#9763 + #9947 + #9814 + #8875 + #10331 + #7893 + #10399 feature-map pair registrations: 118-count minus the slack of 5) and ALWAYS_ON_SUITES ($_f1_count) meets it"
 else
-  fail "f1: floor='${_f1_floor}' (want 112) always-on count='${_f1_count}' (need floor <= count <= floor + 5; move the floor to count - 5 here and in the runner together)"
+  fail "f1: floor='${_f1_floor}' (want 113) always-on count='${_f1_count}' (need floor <= count <= floor + 5; move the floor to count - 5 here and in the runner together)"
 fi
 
 # --- Rows p1-p6 + m4: --print-selection (#9307) -------------------------------------
@@ -3067,18 +3067,19 @@ else
 fi
 
 # The receipt carries the minted edge verbatim (real index, print arm). The
-# family is six since #9969: the five tg walkers plus repo-write-boundary.test.sh,
-# whose new declared array carries the same ^glob:knowledge-base/**.sh edge.
+# family is seven since #9294: the five tg walkers, repo-write-boundary.test.sh (#9969),
+# and the trio-baseline census, whose declared array carries the same ^glob:knowledge-base/**.sh edge
+# (it scans the CODE files under the knowledge base, never its prose).
 # The probe and needle are COMPOSED — a literal `knowledge-base/<path>` here is a
 # fixture the kb-consumers oracle would otherwise charge to this suite as a read.
 cases=$((cases + 1))
 _tg_rcpt_n=$(cd "$REPO_ROOT" && env -u CI -u TEST_GROUP SOLEUR_DISABLE_SESSION_STATE=1 timeout 300 \
   bash "$RUNNER" --print-selection --paths="knowledge""-base/project/specs/foo.md" all 2>/dev/null \
   | awk -F'\t' '$1=="AFFECTED_SELECTED" && index($5, "^glob:knowledge" "-base/**.sh") && $3=="0" {n++} END{print n+0}')
-if [[ "$_tg_rcpt_n" == "6" ]]; then
-  pass "tg6: the six kb-.sh glob: walkers' kb-.md AFFECTED_SELECTED rows carry the ^glob: edge, selected=0"
+if [[ "$_tg_rcpt_n" == "7" ]]; then
+  pass "tg6: the seven kb-.sh glob: walkers' kb-.md AFFECTED_SELECTED rows carry the ^glob: edge, selected=0"
 else
-  fail "tg6: ^glob: sel=0 rows: ${_tg_rcpt_n} (want 6)"
+  fail "tg6: ^glob: sel=0 rows: ${_tg_rcpt_n} (want 7)"
 fi
 
 # ---- th rows (#9969): whole-tree corpus suites' `glob:` edges ---------------
@@ -3405,10 +3406,12 @@ _th6_missing=$(
       || echo "lint-orphan-test-suites:${_r}$(_th6_declined AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS "$_r" | sed 's/^ */ [declined: /;s/$/]/')"
     _th6_root_covered AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS "$_r" .sh \
       || echo "repo-write-boundary.test.sh:${_r}$(_th6_declined AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS "$_r" | sed 's/^ */ [declined: /;s/$/]/')"
+    _th6_root_covered AFFECTED_TESTS_SCRIPTS_TRIO_BASELINE_CENSUS_PATHS "$_r" .sh \
+      || echo "trio-baseline-census:${_r}$(_th6_declined AFFECTED_TESTS_SCRIPTS_TRIO_BASELINE_CENSUS_PATHS "$_r" | sed 's/^ */ [declined: /;s/$/]/')"
   done <<<"$_TH_ROOTS"
 )
 if [[ -z "$_th6_missing" ]]; then
-  pass "th6: every tracked top-level root is edge-covered by all three corpus suites"
+  pass "th6: every tracked top-level root is edge-covered by all three corpus suites and by the trio-baseline census"
 else
   fail "th6: uncovered roots — ${_th6_missing//$'\n'/ }"
 fi
