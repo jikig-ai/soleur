@@ -332,7 +332,7 @@ describe("TC-12: delegated-act authoring form (ruling F1 + R4, detection unchang
     // the load directive for the reference, and the no-exemption rule for an Operator bullet.
     const pointer = undeferred.slice(lead);
     expect(pointer).toContain("`DETECT_RE` and `ship-operator-step-gate.sh` stay unchanged on purpose");
-    expect(pointer).toContain("[delegated-act-authoring-form.md](./references/delegated-act-authoring-form.md)");
+    expect(pointer).toContain("[delegated-act-authoring-form.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/delegated-act-authoring-form.md)");
     expect(pointer).toContain("read [delegated-act-authoring-form.md]");
     expect(pointer).toContain(
       "A bullet that starts with `Operator` and a verb is still detected and still needs its `Tracks` companion",
