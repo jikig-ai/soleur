@@ -47,6 +47,7 @@ SUBCOMMANDS
   verdict      --a S --b S --c S --d S     (status: pass | fail | within-10% | unmeasured; a and c only for within-10%)
   cp-upper     K N [CONF]                  (a FRACTION, not a percent: 0.009936 is 0.99%)
   audit        [--root DIR] [--list FILE] [--accept FILE] [--all-refs]
+  ratchet      [--root DIR] [--list FILE] [--baseline FILE] [--accept FILE] [--base REF] [--print-baseline] [--report FILE]
 The receipt paths are arguments; no repository path literal lives in this file.
 
 AUDIT OUTPUT. `gap<TAB>suite<TAB>N<TAB>paths` (the first six, all with --all-refs, which also prints under it one
@@ -129,6 +130,29 @@ it), anchor-not-live, path-untracked, suite-unaudited, suite-unregistered, suite
 star-row-unreadable-members, star-row-tracked-suite (git tracks the suite's input, so it is not a suite with no inputs even if the
 file is missing, dangling or a directory link). Delete the row.
 
+RATCHET (S4 index completion PR3a, #10448; the amendment of ADR-276). `ratchet` is the audit as a CI check that is green on a tree whose audit exits 1: the live gap
+set (after the --accept exemptions) must EQUAL a committed, shrink-only baseline (scripts/ci-pr-affected-audit.baseline.tsv, repo-relative, one
+`suite<TAB>path` line per pair, each field written by quote_field, sorted and unique in the C locale, with a final newline). What it proves is the
+literal-name completeness over what the audit reads (REACH above): necessary but not sufficient, and never "index complete". It is advisory until a later PR
+makes its CI context required. Everything is read from the checkout; only the growth rule reads the base (HEAD^1, or --base REF: on a developer checkout
+HEAD^1 is just the previous local commit, so the growth rule is not meaningful there; read the CI result or pass --base).
+  EXIT CODES  0 clean; 1 drift (a verdict about the tree); 2 infrastructure (the check could not be trusted). A usage error is argparse's rc 2 and prints no marker.
+  ORDER  every exit-2 condition comes before every exit-1 verdict, so infrastructure is never a verdict: the selector (rc, hang), then the FLOORS on what it
+         printed (exactly one AFFECTED_SUMMARY; fallback=none; no other non-blank line; no short row; the AFFECTED_SELECTED row count equals its of=; at least
+         one suite and one file read), then the base. Then the verdicts, each class printed and the first one named in the marker: unaudited suite; a `*`
+         accept row for a readable suite; a stale or invalid accept row; a new pair (or baseline-deleted); a stale baseline line; a duplicate baseline
+         line; a baseline not in C-locale order or without its final newline; a baseline line the base does not have (grown).
+  BASELINE STATE  base absent / HEAD present: adoption, passes when live equals the baseline. Base present / HEAD absent: passes only when nothing is live
+         (the strict-zero end state), else baseline-deleted. Absent at both: strict zero (a live pair is a new pair). Present at both: equality, plus the
+         growth rule as a GLOBAL pair-set check (`head lines - base lines` must be empty, so a swap, a new suite and a count that did not move are all refused).
+  The baseline is compared as OPAQUE rendered lines (there is no baseline parser); the failure text names the suite, the path and the referencing file:line, gives the two
+  remedies (declare an edge only when the suite really reads the file; add an anchor-keyed accept row when it merely names it) and never offers a way to add a pair.
+  --print-baseline writes ONLY the baseline bytes to stdout (the marker and diagnostics go to stderr, nothing is written to disk): with no baseline file it prints every
+  live pair; once one exists it prints only the baseline lines that are still live (prune-only), so a regeneration can shrink the file and never grow it.
+  --report FILE also writes the full, uncapped failure text (stdout prints the first 25 entries of each class and a count). The last stdout line is
+  `SOLEUR_PR_AFFECTED_RATCHET exit=<0|1|2> reason=<token> live=<n> baseline=<n>`; `oracle-inputs-changed: <files>` is printed, non-blocking, when the diff to the base
+  touches .github/workflows/ci.yml, this script or the baseline.
+
 EXIT CODES (collect, ejections, aggregate, audit): 0 done and clean; 1 audit found gaps, unaudited suites or stale accept rows; 2 usage or
 a value error (a malformed --since, an unknown status, an incomplete aggregate directory); 3 a remote or local READ
 failed (git, the selector, a file the audit must read, the --accept or --list file); 4 an internal error. `verdict` and `cp-upper` exit 0 whatever they print: read `computed=GO|NO-GO|UNDECIDED`
@@ -136,6 +160,7 @@ on stdout, the exit code carries no verdict. An uncaught Python error is rc 4, n
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -161,7 +186,7 @@ ALWAYS_RUN_JOBS = frozenset((
     "encryption-posture", "marketplace-manifest-guard", "service-role-allowlist-gate", "tc-document-sha-guard",
     "adr-ordinals", "rule-body-lint", "lockfile-sync", "sandbox-canary-capture-gate", "plugin-root-propagation-gate",
     "lint-webplat", "web-platform-build", "shard-totality-mutations", "grok-fidelity", "harness-discovery", "test", "e2e",
-    "critical-css-gate",
+    "critical-css-gate", "affected-index-ratchet",
 ))
 FAIL_LINE = re.compile(r"^\[(?:FAIL|KILLED)\] ([A-Za-z0-9._/+-]+) \((?:\d+ms|exit=)")
 FULL_EVENTS = ("merge_group", "push")
@@ -1680,6 +1705,297 @@ def load_rows(list_path, root):
     return sp.stdout.split("\n")
 
 
+# ---- ratchet (S4 index completion PR3a): the audit as a check that is green on a tree the audit fails -----------------------------------------------
+RATCHET_BASELINE = "scripts/ci-pr-affected-audit.baseline.tsv"
+RATCHET_ACCEPT = "scripts/ci-pr-affected-audit.accept.tsv"
+RATCHET_LINT = "plugins/soleur/scripts/lint-ratchet.py"
+RATCHET_MARKER = "SOLEUR_PR_AFFECTED_RATCHET"
+RATCHET_CAP = 25
+RATCHET_ORACLE = (".github/workflows/ci.yml", "scripts/ci-pr-affected-replay.py")
+STAR_WHYS = ("star-row-readable-suite", "star-row-unreadable-members", "star-row-tracked-suite")
+RATCHET_REMEDY_NEW = (
+    "remedy: declare the path in AFFECTED_<LABEL>_PATHS in scripts/lib/test-affected-paths.sh only when the suite really reads or executes the file "
+    "(that is what the selector must know); editing that file runs the full battery once",
+    "remedy: or add an anchor-keyed accept row to " + RATCHET_ACCEPT + " only when the suite merely names the file (a message, a fixture it writes "
+    "into a scratch tree, a negative-test string); the reason names the line kind",
+    "remedy: accept row shape: suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason> (anchor and ordinal are on the ref line above)",
+    "remedy: an accept row on a file the suite really reads is a false negative once the lever flips; a reviewer blocks it",
+    "remedy: a baseline row cannot be added",
+)
+QUOTE_CTL = re.compile("[\x00-\x08\x0a-\x1f\x7f]")
+
+
+class RatchetInfra(Exception):
+    """Infrastructure, not a verdict: the ratchet exits 2 with `reason`, a fixed token that never carries a path, a ref or a SHA."""
+
+    def __init__(self, reason, message):
+        super().__init__(message)
+        self.reason = reason
+
+
+def no_suites(c):
+    """True, after one stderr line, when the selector printed no AFFECTED_SELECTED row: a census over nothing proves nothing (audit and ratchet share this)."""
+    if c.suites == 0:
+        print("replay audit: the selector printed no AFFECTED_SELECTED rows", file=sys.stderr)
+        return True
+    return False
+
+
+def ratchet_floors(c):
+    """Every input the ratchet cannot trust is exit 2, never a verdict. `c.extra` is a CLOSED set: after the AFFECTED_SELECTED rows the real selector
+    prints exactly one AFFECTED_SUMMARY on stdout in this mode (a measurement, plan Phase 0), so any other non-blank line (AFFECTED_FALLBACK,
+    AFFECTED_UNRESOLVED, AFFECTED_RUNNER_IN_SCOPE, AFFECTED_DIVERGENT, an unknown prefix, a stray line, a space-prefixed row) is a hazard."""
+    summaries = [x for x in c.extra if x.startswith("AFFECTED_SUMMARY ")]
+    if len(summaries) != 1:
+        raise RatchetInfra("floor-summary", "want exactly one AFFECTED_SUMMARY line, the selector printed %d" % len(summaries))
+    fb = re.search(r"\bfallback=(\S+)", summaries[0])
+    if fb is None:
+        raise RatchetInfra("floor-summary", "the AFFECTED_SUMMARY line names no fallback=")
+    if fb.group(1) != "none":
+        raise RatchetInfra("floor-fallback", "the selector fell back (fallback=%s) and printed no per-suite decision" % quote_field(fb.group(1)))
+    others = [x for x in c.extra if not x.startswith("AFFECTED_SUMMARY ")]
+    if others:
+        raise RatchetInfra("floor-extra", "%d unexpected selector line(s), the first starts %s" % (len(others), quote_field(others[0][:24])))
+    if c.short_rows:
+        raise RatchetInfra("floor-short-row", "%d AFFECTED_SELECTED row(s) too short to name their edges" % len(c.short_rows))
+    of = re.search(r"\bof=(\d+)\b", summaries[0])
+    if of is None:
+        raise RatchetInfra("floor-summary", "the AFFECTED_SUMMARY line names no of=<n>")
+    if c.suites != int(of.group(1)):
+        raise RatchetInfra("floor-rows-vs-of", "the selector printed %d AFFECTED_SELECTED row(s) but its summary says of=%s" % (c.suites, of.group(1)))
+    empty = no_suites(c)
+    if empty:
+        raise RatchetInfra("floor-no-suites", "a census over zero suites proves nothing")
+    if c.files_read == 0:
+        raise RatchetInfra("floor-no-suites", "a census that read zero files proves nothing")
+
+
+def ratchet_load(root):
+    """The helpers of plugins/soleur/scripts/lint-ratchet.py, loaded from the checkout by path (the file name is hyphenated); a missing one is exit 2."""
+    path = os.path.join(root, RATCHET_LINT)
+    try:
+        spec = importlib.util.spec_from_file_location("lint_ratchet", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    except Exception as e:
+        raise RatchetInfra("internal", "cannot load %s: %s: %s" % (RATCHET_LINT, type(e).__name__, e))
+    for name in ("resolve_base", "baseline_at", "InfraError"):
+        if getattr(mod, name, None) is None:
+            raise RatchetInfra("internal", "%s has no %s" % (RATCHET_LINT, name))
+    return mod
+
+
+def ratchet_base(root, ref, rel):
+    """-> (sha, the baseline text at the base or None when the base has no such file). An unresolvable base is exit 2, never an adoption."""
+    mod = ratchet_load(root)
+    env = dict(os.environ)
+    for k in GIT_LOCATION_VARS:
+        env.pop(k, None)   # the helpers' git calls ignore any inherited git location, like run() does
+    try:
+        sha = mod.resolve_base(root, ref, env)
+        if sha is None:
+            raise RatchetInfra("base-unresolved", "%s does not resolve to a commit (a root commit or a shallow clone): fetch more history, fetch-depth: 2 is the minimum" % quote_field(ref))
+        return sha, mod.baseline_at(root, sha, rel, env)
+    except mod.InfraError as e:
+        raise RatchetInfra("base-unresolved", "%s" % quote_field(str(e)))
+
+
+def ratchet_changed(root, sha):
+    """-> (added, touched): the paths the committed diff from the base to HEAD adds, and all it names."""
+    raw = run(["git", "diff", "--name-status", "-z", "--no-renames", sha, "HEAD", "--"], cwd=root, binary=True).stdout
+    toks = [t.decode("utf-8", errors="replace") for t in raw.split(b"\0") if t]
+    added, touched = set(), set()
+    for status, path in zip(toks[0::2], toks[1::2]):
+        touched.add(path)
+        if status == "A":
+            added.add(path)
+    return added, touched
+
+
+def ratchet_oracle(touched, rel):
+    """The files whose change makes this check's own oracle part of the diff (a non-blocking notice, never a verdict)."""
+    return [p for p in RATCHET_ORACLE + (rel,) if p in touched]
+
+
+def ratchet_read(root, rel):
+    """The baseline text of the checkout, or None when the file is absent (any other read failure is an OSError, exit 2)."""
+    try:
+        with open(os.path.join(root, rel), "rb") as fh:
+            return fh.read().decode("utf-8", errors="replace")
+    except FileNotFoundError:
+        return None
+
+
+def baseline_split(text):
+    """-> (lines, final_newline) of a baseline text: the lines are opaque."""
+    if text is None:
+        return [], True
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines, text == "" or text.endswith("\n")
+
+
+def shown(line):
+    """A baseline line for the failure text: as written, unless it holds a control character (other than the TAB column separator) or a character quote_field escapes."""
+    return quote_field(line) if QUOTE_CTL.search(line) or QUOTE_U.search(line) else line
+
+
+def ratchet_new_entry(c, pair, added, touched):
+    """The failure text of one new pair: suite, path, referencing file:line, then the cause (precedence: the change added the file; else it edited the file
+    that names it; else neither), then the line(s) an accept row is keyed on."""
+    s, p = pair
+    refs = c.ref_lines(s, p)
+    q = quote_field
+    entry = ["new-pair\t%s\t%s\t%s" % (q(s), q(p), "%s:%d" % (q(refs[0][2]), refs[0][3]) if refs else "-")]
+    edited = [r[2] for r in refs if r[2] in touched]
+    if p in added:
+        cause = "your change added file %s, which suite %s names" % (q(p), q(s))
+    elif edited:
+        cause = "your change edited %s, which suite %s reads and which names %s" % (q(edited[0]), q(s), q(p))
+    else:
+        cause = ("your change touched neither %s nor %s (main moved, or an edge or accept row that covered it was removed): rebase, then declare the "
+                 "edge or add an accept row" % (q(refs[0][2]) if refs else "the suite", q(p)))
+    entry.append("  cause: " + cause)
+    for anchor, ordinal, rel, no, text in refs[:3]:
+        entry.append("  ref\t%s:%d\t%s/%d\t%s" % (q(rel), no, anchor, ordinal, q(text)))
+    return entry
+
+
+def ratchet_marker(code, reason, st):
+    return "%s exit=%d reason=%s live=%d baseline=%d" % (RATCHET_MARKER, code, reason, st["live"], st["baseline"])
+
+
+def ratchet_infra(a, st, reason, message):
+    """Exit 2: one stderr line naming the reason, then the marker (stderr in --print-baseline mode, where stdout is only the baseline)."""
+    print("replay: ratchet: %s: %s" % (reason, message), file=sys.stderr)
+    print(ratchet_marker(2, reason, st), file=sys.stderr if a.print_baseline else sys.stdout)
+    return 2
+
+
+def cmd_ratchet(a):
+    """See RATCHET in --help. The four arms below are distinct on purpose and every one maps to exit 2 (never 3 or 4): a failure of the check is not a verdict."""
+    st = {"stage": "root", "live": 0, "baseline": 0}
+    try:
+        return ratchet_run(a, st)
+    except RatchetInfra as e:
+        return ratchet_infra(a, st, e.reason, str(e))
+    except ReadError as e:
+        reason = {"rows": "selector-timeout" if "timed out" in str(e) else "selector-failed", "accept": "baseline-unreadable",
+                  "baseline": "baseline-unreadable"}.get(st["stage"], "internal")
+        return ratchet_infra(a, st, reason, str(e))
+    except OSError as e:
+        return ratchet_infra(a, st, "baseline-unreadable", "%s: %s" % (type(e).__name__, e))
+    except Exception as e:
+        print("replay: internal error: %s: %s" % (type(e).__name__, e), file=sys.stderr)
+        return ratchet_infra(a, st, "internal", "an unexpected error stopped the check")
+
+
+def ratchet_run(a, st):
+    root = a.root or repo_root()
+    rel = a.baseline or RATCHET_BASELINE
+    st["stage"] = "accept"
+    accept, accept_err = {}, None
+    apath = a.accept or (os.path.join(root, RATCHET_ACCEPT) if os.path.exists(os.path.join(root, RATCHET_ACCEPT)) else "")
+    if apath:
+        try:
+            accept = load_accept(apath)
+        except ValueError as e:
+            accept_err = str(e)
+    st["stage"] = "rows"
+    rows = load_rows(a.list, root)
+    st["stage"] = "census"
+    c = audit_census(root, rows, accept)
+    ratchet_floors(c)
+    pairs = {"%s\t%s" % (quote_field(s), quote_field(p)): (s, p) for s, ps in c.gaps.items() for p in ps}
+    live = sorted(pairs)
+    st["live"] = len(live)
+    st["stage"] = "baseline"
+    head_text = ratchet_read(root, rel)
+    head_lines, final_nl = baseline_split(head_text)
+    st["baseline"] = len(head_lines)
+    st["stage"] = "base"
+    if a.print_baseline:
+        keep = live if head_text is None else sorted(set(head_lines) & set(live))
+        try:
+            sha = ratchet_base(root, a.base or "HEAD^1", rel)[0]
+            touched = ratchet_changed(root, sha)[1]
+            oracle = ratchet_oracle(touched, rel)
+        except RatchetInfra:
+            oracle = []   # a developer checkout without a base still prints its baseline
+        if oracle:
+            print("oracle-inputs-changed: " + " ".join(oracle), file=sys.stderr)
+        sys.stdout.write("".join(line + "\n" for line in keep))
+        print(ratchet_marker(0, "pass", st), file=sys.stderr)
+        return 0
+    sha, base_text = ratchet_base(root, a.base or "HEAD^1", rel)
+    added, touched = ratchet_changed(root, sha)
+    oracle = ratchet_oracle(touched, rel)
+    live_set, head_set = set(live), set(head_lines)
+    uniq = list(dict.fromkeys(head_lines))
+    base_set = set(baseline_split(base_text)[0])
+    q = quote_field
+    findings = []   # (reason, [entry, ...], remedy lines); an entry is a list of output lines
+    if c.unaudited:
+        findings.append(("unaudited", [["unaudited\t%s\t%s" % (q(s), why if quoted else q(why))] for s, why, quoted in c.unaudited],
+                         ["remedy: the audit could not read the suite above in full: make its inputs readable or correct its selector row"]))
+    stars = [x for x in c.stale if x[3] in STAR_WHYS]
+    if stars:
+        findings.append(("star-row", [["star-row\t%s\t%s\t%s\t%s" % (q(s), q(p), key, why)] for s, p, key, why in stars],
+                         ["remedy: delete the accept row: a suite with any tracked input cannot be accepted whole"]))
+    stales = [["stale-accept\t%s\t%s\t%s\t%s" % (q(s), q(p), key, why)] for s, p, key, why in c.stale if why not in STAR_WHYS]
+    if accept_err:
+        stales.append(["stale-accept\t-\t-\t-\t%s" % q(accept_err)])
+    if stales:
+        findings.append(("stale-accept", stales, ["remedy: delete the accept row: the tree no longer backs it, or it is malformed"]))
+    new = [line for line in live if line not in head_set]
+    if new and head_text is None and base_text is not None:
+        findings.append(("baseline-deleted", [["baseline-deleted\t%s\t%d pair(s) are still live" % (q(rel), len(new))]], []))
+    elif new:
+        findings.append(("new-pair", [ratchet_new_entry(c, pairs[line], added, touched) for line in new], list(RATCHET_REMEDY_NEW)))
+    gone = [line for line in uniq if line not in live_set]
+    if gone:
+        findings.append(("stale-line", [["stale-line\t%s\t%s" % (q(rel), shown(line))] for line in gone], []))
+    dups = [line for line in uniq if head_lines.count(line) > 1]
+    if dups:
+        findings.append(("baseline-dup", [["baseline-dup\t%s\t%s" % (q(rel), shown(line))] for line in dups], []))
+    if uniq != sorted(uniq) or not final_nl:
+        findings.append(("baseline-order", [["baseline-order\t%s\tnot in C-locale sorted order with a final newline" % q(rel)]], []))
+    if base_text is not None and head_text is not None:
+        grown = [line for line in uniq if line not in base_set]
+        if grown:
+            findings.append(("grown", [["grown\t%s\t%s" % (q(rel), shown(line))] for line in grown], []))
+    out, rep = [], []
+    for reason, entries, remedy in findings:
+        for entry in entries:
+            rep.extend(entry)
+        for entry in entries[:RATCHET_CAP]:
+            out.extend(entry)
+        if len(entries) > RATCHET_CAP:
+            out.append("more\t%s\t%d" % (reason, len(entries) - RATCHET_CAP))
+        out.extend(remedy)
+        rep.extend(remedy)
+    if any(f[0] in ("baseline-deleted", "stale-line", "baseline-dup", "baseline-order", "grown") for f in findings):
+        tail = ("remedy: delete the offending line(s) above from %s; if the file is in conflict, take main's copy, then run: python3 -I scripts/ci-pr-affected-replay.py "
+                "ratchet --print-baseline > %s.new && mv %s.new %s" % (rel, rel, rel, rel))
+        out.append(tail)
+        rep.append(tail)
+    if oracle:
+        out.append("oracle-inputs-changed: " + " ".join(oracle))
+        rep.append(out[-1])
+    code = 1 if findings else 0
+    out.append(ratchet_marker(code, findings[0][0] if findings else "pass", st))
+    if a.report:
+        try:
+            with open(a.report, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(rep + [out[-1]]) + "\n")
+        except OSError as e:
+            print("replay: ratchet: cannot write --report %s: %s" % (a.report, e.strerror or e), file=sys.stderr)
+    sys.stdout.write("\n".join(out) + "\n")
+    return code
+
+
+
 def cmd_audit(a):
     """Index-completeness audit over the selector's own rows: every tracked path a registered suite names
     must be hit by one of that suite's declared/derived edges. Prints one `gap` line per suite with gaps (the first six
@@ -1692,8 +2008,7 @@ def cmd_audit(a):
     root = a.root or repo_root()
     accept = load_accept(a.accept) if a.accept else {}
     c = audit_census(root, load_rows(a.list, root), accept)
-    if c.suites == 0:
-        print("replay audit: the selector printed no AFFECTED_SELECTED rows", file=sys.stderr)
+    if no_suites(c):
         return 2
     for suite, found in c.gaps.items():
         print("gap\t%s\t%d\t%s" % (quote_field(suite), len(found), ",".join(quote_field(p, True) for p in (found if a.all_refs else found[:6]))))
@@ -1757,13 +2072,21 @@ def main(argv):
                   "anchor = first 12 hex of sha256(\" \".join(line.split())) of the comment-stripped line; ordinal = the Nth identical line (suite file, its source closure, then the naming-walk files); "
                   "a missing file exempts nothing; the full format and the stale reasons are in the ACCEPT FILE section of the top-level --help)")
     u.add_argument("--all-refs", action="store_true", dest="all_refs", help="print every undeclared path, not the first six, and a ref line (file:line, anchor/ordinal, text) per boundary line")
+    r = sub.add_parser("ratchet", help="the audit as a check that is green on a tree the audit fails: live gap pairs must equal the committed shrink-only baseline")
+    r.add_argument("--root", default="", help="the tree to check (default: the current checkout)")
+    r.add_argument("--list", default="", help="read the selector output from FILE instead of running the selector")
+    r.add_argument("--baseline", default="", help="repo-relative baseline path (default scripts/ci-pr-affected-audit.baseline.tsv)")
+    r.add_argument("--accept", default="", help="the accept TSV (default scripts/ci-pr-affected-audit.accept.tsv when it exists)")
+    r.add_argument("--base", default="", help="the ref the growth rule compares against (default HEAD^1; meaningful in CI, where HEAD is a merge commit)")
+    r.add_argument("--print-baseline", action="store_true", dest="print_baseline", help="print the baseline to stdout (every live pair when no baseline exists, else the baseline lines still live) and write nothing")
+    r.add_argument("--report", default="", help="also write the full, uncapped failure text to FILE")
     a = ap.parse_args(argv)
     if a.cmd == "collect" and not re.match(r"^[1-9][0-9]*/[1-9][0-9]*$", a.chunk):
         print("replay: --chunk must be I/K with I,K >= 1", file=sys.stderr)
         return 2
     try:
         return {"collect": cmd_collect, "ejections": cmd_ejections, "aggregate": cmd_aggregate, "verdict": cmd_verdict,
-                "cp-upper": cmd_cp, "audit": cmd_audit}[a.cmd](a)
+                "cp-upper": cmd_cp, "audit": cmd_audit, "ratchet": cmd_ratchet}[a.cmd](a)
     except ReadError as e:
         print("replay: %s" % e, file=sys.stderr)
         return 3
