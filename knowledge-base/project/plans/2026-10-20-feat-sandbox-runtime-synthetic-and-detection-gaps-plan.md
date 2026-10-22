@@ -274,12 +274,12 @@ Harness rows: (a) a mock `docker` that always exits 0 with no output must still 
 
 ## Acceptance Criteria
 
-- [ ] AC1: `web-bash-synthetic.test.sh`, `arm-heartbeats.test.sh` and the parity suites pass, and each Guard 1 mutation row goes RED when applied.
-- [ ] AC2: `terraform validate`/`tflint` pass for `apps/web-platform/infra/`; both install blocks are in the `-target` list; `terraform-target-parity.test.ts` (including the ARM-gate ladder) and `c4-count-parity.test.sh` are green.
-- [ ] AC3: the existing `run_sdk_bash_smoke` tests pass unchanged after the verdict-mapping extraction.
-- [ ] AC4: the synthetic writes nothing outside its scratch dir (asserted in `web-bash-synthetic.test.sh` against the probe's file operations).
+- [x] AC1: `web-bash-synthetic.test.sh`, `arm-heartbeats.test.sh` and the parity suites pass, and each Guard 1 mutation row goes RED when applied.
+- [x] AC2 (tflint is not installed locally; CI runs it): `terraform validate`/`tflint` pass for `apps/web-platform/infra/`; both install blocks are in the `-target` list; `terraform-target-parity.test.ts` (including the ARM-gate ladder) and `c4-count-parity.test.sh` are green.
+- [x] AC3: the existing `run_sdk_bash_smoke` tests pass unchanged after the verdict-mapping extraction.
+- [x] AC4: the synthetic writes nothing outside its scratch dir (asserted in `web-bash-synthetic.test.sh` against the probe's file operations).
 - [ ] AC5: PR body uses `Ref #10455` and never a closing keyword for #10455, #10548, #10549 or #10604; a #10455 note lists what shipped and the PR-B items.
-- [ ] AC6: one debt issue (table-driven host-timer registry) is filed with the issue-filing gate's required line.
+- [x] AC6 (#10777): one debt issue (table-driven host-timer registry) is filed with the issue-filing gate's required line.
 - [ ] Post-merge verification (owned by `soleur:postmerge`, not an AC of the diff): every `var.web_hosts` beat reads not-paused through `arm-heartbeats.sh`'s read-back, and the `discoverability_test` returns `SOLEUR_WEB_BASH_SYNTHETIC verdict=pass` after the first timer run.
 
 ## Test Scenarios
