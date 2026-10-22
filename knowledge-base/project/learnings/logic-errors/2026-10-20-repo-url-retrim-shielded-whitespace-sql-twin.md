@@ -68,7 +68,7 @@ See the paired harness-defect learning (`../test-failures/2026-10-20-generated-i
 ## References
 
 - PR #10624 (draft); issue #10398; epic #10397 child 1
-- ADR-293 (`knowledge-base/engineering/architecture/decisions/ADR-293-property-based-testing-adoption.md`) §"First yield" — records the defect and the SQL-twin follow-up
+- ADR-293 (`knowledge-base/engineering/architecture/decisions/ADR-293-property-based-testing-adoption.md`) §"First yield" — records the defect and its SQL-twin resolution (migration 163)
 - **Prior instance:** `knowledge-base/project/learnings/best-practices/2026-04-22-ts-sql-normalizer-parity-when-shipping-backfill-migration.md` — the same `normalizeRepoUrl` ↔ `031_normalize_repo_url.sql` pair drifted twice already (order-of-operations `.git` vs `/`; single-`\.git$` vs `(\.git)+$`). That learning's "two implementations of the same function WILL drift" claim is now measured three times.
 - Parity gate: `apps/web-platform/test/repo-url-sql-parity.test.ts` (`sqlNormalize031` JS port of the 031 chain)
 - Resolved by #10633 (migration `163_renormalize_repo_url.sql` + `verify/163`): the SQL twin re-trim and the stored-row re-normalization. Findings beyond this learning: 031 had two more divergences (D2 the strip was not interleaving-complete, D3 `trim()` removed only U+0020); the issue's own example `https://x/y .git` is `https://x/y%20` in TS, so path-position whitespace is out of the parity domain; and 031's immutability forced a new migration rather than an edit, with an eligibility guard so the backfill only writes values the TS normalizer agrees with.
