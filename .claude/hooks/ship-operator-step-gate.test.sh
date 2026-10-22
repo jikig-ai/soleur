@@ -76,7 +76,7 @@ if [[ "$TRIGGER_N" != 1 ]]; then
   echo "FATAL: expected exactly one 'if ! grep -qE <pattern> <<<\"\$SCAN\"; then' trigger line in the hook, found $TRIGGER_N" >&2
   exit 1
 fi
-TRIGGER_LINE=$(grep -E "$TRIGGER_PAT" "$HOOK")
+TRIGGER_LINE=$(grep -E "$TRIGGER_PAT" "$HOOK" || true)
 TRIGGER_ARG=${TRIGGER_LINE#'if ! grep -qE '}
 TRIGGER_ARG=${TRIGGER_ARG%' <<<"$SCAN"; then'}
 if [[ "$TRIGGER_ARG" != \'* || "$TRIGGER_ARG" != *\' ]]; then
@@ -211,10 +211,10 @@ fi
 #   issue #5: OPEN, body carries the deferred-automation sentinel
 #   issue #6: CLOSED
 #   issue #7: OPEN, body lacks the sentinel
-# Not mktemp: the incident sandbox root is already private and removed by the EXIT trap in
-# lib/test-incident-sandbox.sh, so a per-pid directory inside it needs no trap of its own.
-STUB_DIR="${SOLEUR_TEST_INCIDENT_ROOT:?incident sandbox not initialised}/stubgh-$$"
-mkdir -p "$STUB_DIR"
+STUB_DIR=$(mktemp -d -t soleur-run.$$.XXXXXXXX)
+# Own the stub dir, and keep the sandbox helper's cleanup in the same trap: a bare `trap ... EXIT`
+# here would replace the one lib/test-incident-sandbox.sh composed and leak the sandbox root.
+trap 'rm -rf "$STUB_DIR"; _soleur_inc_sb_cleanup' EXIT
 GH_STUB_LOG="$STUB_DIR/calls.log"
 GH_STUB_BAD="$STUB_DIR/unexpected.log"
 GH_STUB_BODY="$STUB_DIR/body.md"
