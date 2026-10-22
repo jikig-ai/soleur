@@ -35,8 +35,8 @@ map(select(
   the `ux-audit` tag NOR any `agent:*` label. Removing either branch regresses
   real tracker state (see note above).
 - The filter preserves input order. When composed with `sort_by(.createdAt) | .[0]`
-  (as in `scheduled-bug-fixer.yml`), filter BEFORE sort so the FIFO contract
-  holds.
+  (the FIFO contract of the `cron-bug-fixer.ts` selection loop), filter BEFORE sort so
+  the FIFO contract holds.
 - `startswith("agent:")` is a jq string method, not a regex. Implicitly
   left-anchored; colon is a literal — no escaping required.
 - `index("ux-audit")` matches exact label name only; no substring semantics.
@@ -62,7 +62,8 @@ bare `!` anywhere in the expression.
 
 ## Consumers
 
-- `.github/workflows/scheduled-bug-fixer.yml` — per-priority selection loop
+- `apps/web-platform/server/inngest/functions/cron-bug-fixer.ts` — per-priority
+  selection loop (equivalent TypeScript skip, not this jq text)
 - `.github/workflows/scheduled-daily-triage.yml` — triage prompt's initial
   `gh issue list` invocation
 

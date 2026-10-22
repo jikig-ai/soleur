@@ -177,6 +177,47 @@ failure that was its own, not the code's — the same "declared-verifiable but
 never executed" gap that #7164's `@sh`-is-safe comment belongs to. Corrected
 here after running it.
 
+### `git-commit-secret-scan` target resolution (#10609)
+
+The hook scans the repository a `git commit` **targets**, not the one the hook process happens
+to run in. `lib/commit-target-roots.sh` lexes the command with
+`plugins/soleur/hooks/lib/shell-argv.pl` (a runtime dependency) and collects every literal
+`cd` / `pushd` / `git -C` / `env -C` path, looking through any launcher in front of `git`
+(`timeout`, `sudo`, `nice`, `xargs`, `rtk`, `flock`, ...) rather than keeping a launcher table.
+It scans the union of those repositories plus the cwd-derived and payload-`cwd` roots. A target
+it cannot read statically is **denied**, with a repair that matches the cause: `$VAR`, `$(...)`,
+`~`, `cd -`, a glob, more than 32 targets, launchers nested more than 32 deep,
+`GIT_DIR=` / `GIT_WORK_TREE=` / `GIT_INDEX_FILE=` / `GIT_COMMON_DIR=` (inline, after `env`, or
+via `export` / `declare`), `--git-dir`, `--work-tree`, `-c core.worktree=` / `core.bare=`
+(also `--config-env`), `chroot` / `nsenter`, a shell that reads its script from stdin (heredoc,
+here-string or pipe), a launcher that takes the command as one string (`flock -c`, `su -c`,
+`ssh`, ...), more than 8 command words behind one unmodelled launcher, more than 500 walker steps in one record, a script held in a variable that `bash -c` or `eval` runs, and a path that does not
+exist yet in a command that also creates paths (run the creating command as its own call first).
+In a command with a loop or a function every refusal is kept, because its text order is not its
+run order; in a straight-line list a refusal after the last commit is dropped.
+
+When the scanner's own tooling is unavailable the hook denies, and the text says so: a missing
+helper library denies every strict `git commit` and every loose form that carries an option or a
+quoting character; a missing perl or lexer denies a command that names a directory (`cd`, `-C`,
+`env`, ...) or is a loose `git ... commit` form, while a plain `git commit` with no directory
+token is still scanned. There is no override variable.
+
+Accepted residuals (the threat model is a fallible cooperative agent, not a hostile one): a
+`git` or `commit` word spelled with quoting inside the word (`g''it`, `git com''mit`) or built
+from an expansion (`"$GIT" commit`, `c=commit; git -C A $c`); a commit that runs later (`trap`,
+an alias, a stored string run as `$cmd`, `git -c alias.ci=commit ci`); `git commit-tree`;
+`git submodule foreach`; `xargs -I@` placeholders; creators the walker does not know (`./setup.sh`,
+`gh repo clone`) and an existing empty directory that the command turns into a repository;
+a stdin-fed shell BEHIND a launcher (`sudo bash <<EOF`), launchers that take a command string or a chdir option the walker does not know (`tmux new-session`, `at`, `python -c`, `mise -C`, `yarn --cwd`, `direnv exec`, `systemd-run -p WorkingDirectory=`); `CDPATH`, a symlink-vs-logical `cd`, `GIT_CONFIG_COUNT` / `GIT_CONFIG_PARAMETERS`, `read` / `printf -v`
+into `GIT_DIR`, and a `GIT_DIR` exported by an earlier call; and the commit-time index changes the
+command makes itself (`git add -A && git commit`, `commit -a`, a pathspec commit): the hook scans
+the index as it is BEFORE the command runs (#10696). A `git commit` into a repository that has no
+`.gitleaks.toml` is skipped with a bypass row, as it always was. On a harness whose hook payload
+carries no `cwd` (Devin), a plain `git commit` after a separate `cd` call is scanned against the
+process cwd only: name the repository as a literal path (`git -C /abs/path commit`) there.
+Sessions anchored at the bare-root mirror pick the fix up after
+`worktree-manager.sh sync-bare-files`. Rationale: ADR-157 addendum (2026-10-21).
+
 ### Scope of the mandate
 
 **Mandatory** for hooks on the `Bash` matcher and for blocking write guards —
