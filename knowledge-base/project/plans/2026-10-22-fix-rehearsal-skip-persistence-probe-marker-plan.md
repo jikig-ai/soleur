@@ -13,6 +13,42 @@ brand_survival_threshold: none
 
 # ci(infra): repair the #8856 rehearsal skip-persistence probe
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-22
+**Sections enhanced:** Overview, Research Insights, Implementation Phases, Guard Contract, Scope Check
+**Research and review used:** CTO ruling (design fork), DHH, Kieran and code-simplicity plan review, live `gh` and `git` verification of every cited run, PR, issue and ADR, and the plan-time gates below.
+
+### Key Improvements
+
+1. Root cause pinned to a commit, not an inference: before #8763 the workflow ran the suite as its own step
+   (`git show 50ae36eff7^:.github/workflows/infra-validation.yml` carries `run: bash apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh`,
+   the same file at `50ae36eff7` carries zero occurrences), so its stdout reached the Actions log; after it, the
+   runner's per-suite capture is the only path.
+2. Review cuts applied: the probe-side diagnostic, the ADR-188 second-PR edit, five of nine mutation rows, the
+   duplicate harness rows and the associative array; review corrections applied: the cap binds skip lines only so
+   the terminal line cannot be dropped, T13 uses one fixture and one runner invocation (T9 re-runs the file about
+   25 times), mutation rows are assigned to the harness that can actually score them, and the suite end of the
+   three-way pin compares by value.
+3. Post-merge verification hardened against the measured intermittent empty `gh run list` (rc 0, `[]`).
+
+### New Considerations Discovered
+
+- The streak-cache carrier is evicted under the 10 GB Actions cache cap (11.9 GB in use); deferred to its own issue.
+- The first post-merge read will have `observed` of 1 against 19 pre-relay logs in the 20-run window; the ADR note
+  and the closing comment must be worded around the observed count, not "20 clean runs".
+
+### Deepen-pass gate results
+
+Always-on halts: Phase 4.6 User-Brand Impact present, threshold `none` with the sensitive-path scope-out bullet;
+4.7 Observability present, probe verb allowlisted, no `ssh`, `expected_output` literal, non-placeholder
+`credentials_required`; 4.8 no PAT-shaped variable; 4.11 `lint-guard-contract.py` green and the Assembly names the
+chokepoint, not the members; 4.12 exactly one unfenced `## Scope Check`, every row compliant. Conditional halts not
+fired: 4.5 network outage (no SSH or timeout symptom), 4.55 downtime (CI tooling only), 4.9 UI wireframe (no UI
+surface), 4.10 encryption posture (no `.tf`, migration or cloud-init edit, no new store or connection). Cited
+issues and PRs (#8763 merged, #9394, #8856, #7510, #7574, #7376, #10786) and both ADR files resolved live; the one
+rule id cited (`cq-write-failing-tests-before`) is an active rule.
+
 ## Overview
 
 The daily skip-persistence monitor (`.github/workflows/scheduled-rehearsal-skip-monitor.yml`) runs
