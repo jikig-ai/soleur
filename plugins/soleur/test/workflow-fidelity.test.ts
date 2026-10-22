@@ -638,6 +638,11 @@ describe("Guard 1 — locked skills cite adapter and Grok in-process Read", () =
     expect(core).toContain("hr-pipeline-skills-never-inline-after-go-route");
     expect(core).toContain("BEHIND");
     expect(core).toContain("resync main");
+    // #9868: the always-injected BEHIND statement carries the merge-queue exception on facts, so it survives a context compaction.
+    // The wording omits the `[ship.phase7.queue_wait]` marker (the marker-conditioned class is banned in pr-merge-poll.test.ts).
+    expect(core).toContain("merge-queue repo");
+    expect(core).toContain("queue makes it current");
+    expect(core).toContain("sync-pr-behind.sh refuses it");
     expect(core).not.toContain("hr-lifecycle-skills-never-inline-after-handoff");
     const syncScript = readFileSync(
       resolve(PLUGIN_ROOT, "scripts/sync-pr-behind.sh"),

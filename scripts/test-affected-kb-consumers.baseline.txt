@@ -282,6 +282,7 @@ tests/scripts/scratch-residue	knowledge-base/project/weakness-digest.md
 tests/scripts/sentry-alert-drift-workflow	knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json
 tests/scripts/sentry-monitors-audit-class-d	knowledge-base/legal/article-30-register.md
 tests/scripts/sentry-monitors-audit-class-d	knowledge-base/legal/audits
+tests/scripts/trio-baseline-census	knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md
 tests/scripts/weakness-miner	knowledge-base/project
 tests/scripts/weakness-miner	knowledge-base/project/learnings
 tests/scripts/weakness-miner	knowledge-base/project/weakness-digest.md
