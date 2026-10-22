@@ -1,6 +1,6 @@
 # Web Platform Test Suite
 
-This directory holds the unit + integration test files for the web platform. Test runner: `vitest`. Most tests are gated behind their own opt-in env flag because the integration suites mutate the real Supabase `dev` project and require Doppler-provided credentials.
+This directory holds the unit + integration test files for the web platform. Test runner: `vitest`. Most tests are gated behind their own opt-in env flag because the integration suites mutate the real Supabase `dev` project and require Doppler-provided credentials. `feature-map.md` is the user-POV route inventory consumed by navigation skills (`test-browser`, `qa`, `ux-audit`) — keep it in sync with `app/**/page.tsx` (enforced, advisory, by `scripts/lint-feature-map-coverage.sh`).
 
 ## Integration tests (opt-in)
 
@@ -64,6 +64,25 @@ Every suite that creates synthetic auth users MUST tear them down through `tearD
 3. Call `tearDownTenantUser(service, { id, email })` in `afterAll` — it runs the parity-guarded 22-RPC anonymise cascade, verifies the id↔email binding against `auth.users`, then deletes. For a batch of users use `tearDownTenantUsers(service, users)` — a sequential singular loop abandons the remaining users on the first teardown failure (#10249).
 
 `test/server/teardown-deleteuser-sentinel.test.ts` censuses every `.ts` file under `test/` for deleteUser call shapes: any carrier outside the canonical helper, the reviewed `MANUAL_TEARDOWN_ALLOWLIST`, or the #10096 legacy drain set fails the always-on shard — and the per-file call counts are pinned, so adding a raw call inside an allowlisted file fails too.
+
+## Test file placement
+
+New tests live under `test/<area>/`, namespaced after the subsystem under test — `test/app/` for `app/` routes and pages, `test/server/` for `server/` modules, `test/api/` for API handlers — mirroring the SUT path rather than collecting flat at the `test/` root. Flat `test/*.test.ts` files are grandfathered: do not mass-move them, but do not add new ones. A `*.integration.test.*` file keeps its suffix and its env-gate table row above wherever it lands.
+
+## Property-based tests
+
+`fast-check` (devDependency) is the sanctioned property-testing library for the `unit` project — see ADR-293 (`knowledge-base/engineering/architecture/decisions/ADR-293-property-based-testing-adoption.md`). Property suites live at `test/<area>/<subject>.property.test.ts` mirroring the SUT path, one `describe` per property, `fc.assert(fc.property(arb, pred))` at default `numRuns`.
+
+Conventions that keep the class honest:
+
+- **Assert a real oracle** — round-trip, invariant, idempotence — never "does not throw" alone (vacuous).
+- **Negative control required**: every property file carries at least one `it` asserting a deliberately-false property throws, so a suite that can only pass is caught.
+- **Regression fixtures**: when a property finds a counterexample, shrink it and pin it as a permanent `it()` labelled `// regression fixture: fast-check seed <seed> path <path>`. Never commit `{ seed }` params or `it.only`/`it.skip` — the stream must keep moving.
+- Shell `.test.sh` suites use the sibling harness: `scripts/lib/property-harness.sh` + `scripts/lib/property-harness.md`.
+
+## Flaky-test policy
+
+Retries exist to absorb infrastructure flake, never to mask a product or test defect: the cap is CI-only (`playwright.config.ts` `retries: process.env.CI ? 1 : 0`) and is never raised per-suite to buy a green. A flaky test gets a filed GitHub issue; `fixme`/`skip` is allowed only with the issue ref inline, so a silenced test is always tracked. The nightly leg in `scheduled-integration-suites.yml` auto-files a `ci/integration-suites` issue on red and auto-closes it on green — a flake that only appears on the schedule is still tracked there.
 
 ## Engine-floor guard (pdfjs-dist)
 

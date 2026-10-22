@@ -165,8 +165,11 @@ expect_green_added() {
 # 67 -> 71 at #9597 (S5): the four Better Stack posting scripts of cloud-init-registry.yml (disk heartbeat, log shipper,
 # private-NIC guard, boot block) each print SOLEUR_CREDENTIAL_REFUSED on a refused ingest token, to stderr and never at crit. The guard
 # scans cloud-init*.yml, so each emitter is one NON_PAGING census row (+4); the case count is unchanged. No mutation row changes.
-BASELINE_PASSES=79
-BASELINE_CASES=9
+# 79 -> 81 and 9 -> 10 guard cases at #10136: cloud-init-inngest.yml joins the paging population (the Inngest host's
+# soleur-inngest-tls script emits SOLEUR_INNGEST_TLS_REFUSED through ONE multi-line crit emit_refusal call): +1 emitter-crit
+# check and +1 marker-matches-a-needle check. A second call line would add a second marker check, so the script keeps one.
+BASELINE_PASSES=81
+BASELINE_CASES=10
 restore; cases=$((cases + 1))
 if run_guard; then ok "baseline: guard is GREEN against the unmutated sandbox"
 else no "baseline: guard is RED against the UNMUTATED sandbox; every RED below is meaningless. Output: $(<"$OUT")"
@@ -261,15 +264,15 @@ assert s.count(old) == 1, "anchor"
 s = s.replace(old, "vector_prd_source_id = \"2457082\"")'
 expect_red "M8 (source id 2457082)" betterstack-logs-alerts.tf "source id != vector.toml sink"
 
-# SIXTEEN explorations carry this line (monitor_send_failed #8097 — the first occurrence and the one mutated below; #6894, #8408's registry_store_not_luks, #7530's registry_clientip_not_rfc1918, #10321's registry_zot_log_credential_shape, #8611's three, #8706's
+# SEVENTEEN explorations carry this line (monitor_send_failed #8097 — the first occurrence and the one mutated below; #6894, #8408's registry_store_not_luks, #7530's registry_clientip_not_rfc1918, #10321's registry_zot_log_credential_shape, #8611's three, #8706's
 # luks_monitor_host_timer_dark, #9045's workspaces_luks_deadman_fired, #9342's bwrap_probe_rollback, #9391's ghcr_hostsfile_deny_lost, #9534's egress_gw_deny_spike and
-# egress_gw_probe_silent, the review follow-up's egress_gw_probe_fail, and #10445's agent_sandbox_bash_denial), and the guard
+# egress_gw_probe_silent, the review follow-up's egress_gw_probe_fail, #10445's agent_sandbox_bash_denial and #10453's faithful_canary_sandbox_broken), and the guard
 # reads the monitor_send_failed block only — so the mutation must land in THAT block, which is the
 # first occurrence in the file. The count is asserted exactly (not `>= 1`), and the first-occurrence
 # premise is asserted directly below, so a reordered file cannot make "the first" mean another block.
 MUT='
 old = "    values        = [local.vector_prd_source_id]"
-assert s.count(old) == 16, "anchor"
+assert s.count(old) == 17, "anchor"
 assert s.index(old) > s.index("resource \"logtail_exploration\" \"monitor_send_failed\" {") and s.index(old) < s.index("resource \"logtail_exploration\" \"inngest_luks_wrong_volume\" {"), "first occurrence is not in monitor_send_failed"
 s = s.replace(old, "    values        = [\"2734275\"]", 1)'
 expect_red "M17 (exploration values literal, not the pinned local)" betterstack-logs-alerts.tf "exploration source not pinned"
@@ -384,7 +387,21 @@ assert s.count(old) == 1, "anchor"
 s = s.replace(old, "  # " + old.strip())'
 expect_red "M19 (the crit logger inside disk-monitor.sh's definer commented out)" scripts/disk-monitor.sh "emitter not crit: disk-monitor.sh"
 
-# ── H1a: every emit_refusal CALL removed from the five units → floor fires ────────────
+# ── The Inngest host's TLS emitter (#10136): the definer severity and the routing ────────────────
+MUT='
+old = "logger -p user.crit -t inngest-tls-health \"$1\""
+assert s.count(old) == 1, "anchor"
+s = s.replace(old, "logger -p user.warning -t inngest-tls-health \"$1\"")'
+expect_red "M25 (cloud-init-inngest.yml TLS emit_refusal at user.warning)" scripts/cloud-init-inngest.yml "emitter not crit: cloud-init-inngest.yml"
+
+MUT='
+old = "emit_refusal \"SOLEUR_INNGEST_TLS_REFUSED reason="
+assert s.count(old) == 1, "anchor"
+s = s.replace(old, "logger -p user.crit -t inngest-tls-health \"SOLEUR_INNGEST_TLS_REFUSED reason=")'
+expect_red "M26 (TLS refusal marker on a direct crit logger, bypassing emit_refusal)" scripts/cloud-init-inngest.yml \
+  "needle marker not routed through emit_refusal: SOLEUR_INNGEST_TLS_REFUSED (cloud-init-inngest.yml)"
+
+# ── H1a: every emit_refusal CALL removed from the six units → floor fires ────────────
 # workspaces-luks-emit.sh (#8706) calls emit_refusal mid-line (`then emit_refusal …`, `|| emit_refusal …`),
 # so each whole call expression, marker literal included, is replaced by the `:` builtin in place.
 h1a_apply() {
@@ -398,6 +415,12 @@ assert s != before, "no emit_refusal call lines in this unit"'
     mutate "scripts/$u" "$MUT" || return 1
     landed "scripts/$u" || return 1
   done
+  MUT='
+import re
+s, n = re.subn(r"(?m)^[ \t]*\[ -z \"\$r\" \] \|\| emit_refusal \"SOLEUR_INNGEST_TLS_REFUSED[^\n]*\n", "", s)
+assert n == 1, "expected exactly 1 emit_refusal call in the Inngest TLS script"'
+  mutate scripts/cloud-init-inngest.yml "$MUT" || return 1
+  landed scripts/cloud-init-inngest.yml || return 1
   MUT='
 import re
 s, n = re.subn(r"emit_refusal \"SOLEUR_[^\n]*?unspecified\}\"\)\"", ":", s)
@@ -462,7 +485,7 @@ emit_refusal "SOLEUR_BAZ2_REFUSED channel=sentry reason=shape"
 '
 
 # ── Floor on the battery itself — exact, no slack ────────────────────────────────────
-EXPECTED_ROWS=36
+EXPECTED_ROWS=38
 if [[ "$cases" -ne "$EXPECTED_ROWS" ]]; then no "battery ran $cases rows, expected exactly $EXPECTED_ROWS — a row was added or skipped; re-pin deliberately"; fi
 
 echo "=== betterstack-send-failed-alert mutation: $pass passed, $fail failed ($cases cases) ==="

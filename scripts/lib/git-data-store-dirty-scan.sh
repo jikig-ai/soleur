@@ -9,8 +9,8 @@
 # (ADR-239 keeps one out of the apply workflow): the store is DIRTY once any run of git-data-cutover.yml
 # executed the flag-write step, whatever that step concluded, because a failed or cancelled write may
 # still have landed. A rollback does not make it clean: rollback is flag-off only and the data stays on LUKS.
-# The flag value and the GIT_DATA_LUKS_CUTOVER_AT stamp are deliberately NOT inputs (the stamp survives a
-# rollback, so it decides nothing).
+# The flag value and the GIT_DATA_LUKS_CUTOVER_AT stamp are deliberately NOT inputs (a rollback clears the
+# stamp since #10297 and may have left it before, so it decides nothing).
 #
 # API (no function calls exit or fail: they run inside $(...), and every failure is an explicit check):
 #   git_data_store_dirty_job_verdict <jobs-json> [preseam]   prints ONE token, returns 0 iff `clean`:

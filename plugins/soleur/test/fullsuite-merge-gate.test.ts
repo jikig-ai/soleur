@@ -1,13 +1,16 @@
 import { describe, test, expect } from "bun:test";
-import { readFileSync } from "fs";
+import { existsSync, readFileSync } from "fs";
+import { spawnSync } from "child_process";
 import { resolve } from "path";
 
 /**
  * Guards the ordering established by #7352 / ADR-183 and re-specified by
- * #8322: `/ship` Phase 4 runs `test-all.sh --affected` by default (and
- * `--full` only on the operator's explicit `/ship --full`), and the `/work`
- * Phase 2 exit runs the same affected gate — never a bare, mode-less
- * `test-all.sh` invocation.
+ * #8322, and the dispatch re-pointed by #9307 deliverable 2: `/ship` Phase 4
+ * and `/work` Phase 2 now prescribe the plugin gate
+ * `plugins/soleur/scripts/affected-tests.sh` (`--full` only on the operator's
+ * explicit `/ship --full`), which itself delegates `--affected`/`--full` to a
+ * capability-positive `scripts/test-all.sh` when the repo ships one. No bare,
+ * mode-less `test-all.sh` battery invocation survives in the scanned skills.
  *
  * Three properties, none of them a bare-token grep — a search for "test-all.sh"
  * in either SKILL.md hits a dozen Sharp Edges and can never fail.
@@ -46,6 +49,11 @@ import { resolve } from "path";
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const SHIP_SKILL = resolve(REPO_ROOT, "plugins/soleur/skills/ship/SKILL.md");
 const WORK_SKILL = resolve(REPO_ROOT, "plugins/soleur/skills/work/SKILL.md");
+const REVIEW_SKILL = resolve(REPO_ROOT, "plugins/soleur/skills/review/SKILL.md");
+const TESTFIX_SKILL = resolve(REPO_ROOT, "plugins/soleur/skills/test-fix-loop/SKILL.md");
+const PRE_PUSH_GATE = resolve(REPO_ROOT, "plugins/soleur/scripts/grok-pre-push-gate.sh");
+const GATE_SCRIPT = resolve(REPO_ROOT, "plugins/soleur/scripts/affected-tests.sh");
+const GATE_TOKEN = "affected-tests.sh";
 const WORK_REFS = [
   resolve(REPO_ROOT, "plugins/soleur/skills/work/references/work-agent-teams.md"),
   resolve(REPO_ROOT, "plugins/soleur/skills/work/references/work-subagent-fanout.md"),
@@ -57,7 +65,7 @@ const SHARDS = ["webplat", "bun", "scripts", "scripts-heavy", "infra"] as const;
 const FALLBACK_ANCHOR = "Full-suite fallback (projects with no CI-enforced full-suite gate)";
 const POINTER = "**Full-suite fallback**";
 const INFRA_REASON = "no required status check runs that shard";
-const SHIP_PRESCRIPTION = "Then run the project's test gate.";
+const SHIP_PRESCRIPTION = "Then run the affected-suite gate";
 const CONDITIONAL_CLAUSE =
   "when the project has no CI-enforced full-suite gate on the merge branch, the full battery stays at implementation exit";
 const FAILSAFE_CLAUSE =
@@ -112,6 +120,18 @@ function invocationLines(region: string): string[] {
   return fencedBodies(region)
     .split("\n")
     .filter((l) => /scripts\/test-all\.sh/.test(l) && !/^\s*#/.test(l));
+}
+
+/**
+ * Every non-comment line inside a fenced block that invokes the plugin gate —
+ * the dispatch the skills now prescribe (#9307 PR 2). Spelling-agnostic for the
+ * same reason invocationLines is: `bash`, env prefixes and indentation all
+ * count.
+ */
+function gateLines(region: string): string[] {
+  return fencedBodies(region)
+    .split("\n")
+    .filter((l) => /affected-tests\.sh/.test(l) && !/^\s*#/.test(l));
 }
 
 /**
@@ -194,18 +214,20 @@ describe("CEILING — /ship Phase 4 runs the gate unsharded, with an explicit mo
   const shipPhase4 = () =>
     sliceSection(readFileSync(SHIP_SKILL, "utf8"), "## Phase 4: Run Tests", "\n## Phase 5: Final Checklist");
 
-  test("Phase 4 prescribes at least one invocation that actually RUNS the battery", () => {
-    const battery = invocationLines(shipPhase4()).filter((l) => !isQueryInvocation(l));
+  test("Phase 4 prescribes the plugin gate as the dispatch", () => {
+    // The floor moved: since #9307 PR 2 the prescribed command is
+    // affected-tests.sh (which delegates --affected/--full to a
+    // capability-positive runner), not a direct test-all.sh invocation.
+    const gates = gateLines(shipPhase4());
     expect(
-      battery.length,
-      "ship Phase 4 prescribes no battery-running test-all.sh invocation — a query-mode " +
-        "flag (--capacity/--print-suite-globs) runs zero suites and cannot satisfy this",
+      gates.length,
+      "ship Phase 4 prescribes no affected-tests.sh invocation — the #9307 dispatch was reverted",
     ).toBeGreaterThan(0);
   });
 
-  test("every fenced test-all.sh invocation in Phase 4 is unsharded, in any spelling", () => {
-    const lines = invocationLines(shipPhase4());
-    expect(lines.length, "ship Phase 4 prescribes no test-all.sh invocation at all").toBeGreaterThan(0);
+  test("every fenced gate or test-all.sh invocation in Phase 4 is unsharded, in any spelling", () => {
+    const lines = [...invocationLines(shipPhase4()), ...gateLines(shipPhase4())];
+    expect(lines.length, "ship Phase 4 prescribes no gate invocation at all").toBeGreaterThan(0);
 
     for (const line of lines) {
       expect(
@@ -215,15 +237,15 @@ describe("CEILING — /ship Phase 4 runs the gate unsharded, with an explicit mo
     }
   });
 
-  test("every battery-running invocation in Phase 4 carries an explicit mode flag (#8322)", () => {
+  test("no surviving battery-running test-all.sh invocation in Phase 4 is mode-less (#8322)", () => {
     // A bare `test-all.sh` inherits the operator's ambient default — the same
-    // demotion class as a shard, and the mutation this pins.
-    const battery = invocationLines(shipPhase4()).filter((l) => !isQueryInvocation(l));
-    expect(battery.length, "ship Phase 4 prescribes no battery-running invocation").toBeGreaterThan(0);
-    for (const line of battery) {
+    // demotion class as a shard, and the mutation this pins. Where a direct
+    // test-all.sh line survives at all (the --print-selection preview is a
+    // query, exempt), it must still name its mode.
+    for (const line of invocationLines(shipPhase4()).filter((l) => !isQueryInvocation(l))) {
       expect(
         modeFlagsOn(line),
-        `ship Phase 4 invocation must name its mode (--affected or --full): ${line.trim()}`,
+        `ship Phase 4 test-all.sh invocation must name its mode (--affected or --full): ${line.trim()}`,
       ).not.toEqual([]);
     }
   });
@@ -286,15 +308,24 @@ describe("FLOOR — /work Phase 2 exits on the affected gate, not the battery", 
       "\n### Phase 2.5:",
     );
 
-  test("§9 prescribes the affected gate", () => {
-    const affected = invocationLines(workGate()).filter((l) => modeFlagsOn(l).includes("--affected"));
+  test("§9 prescribes the plugin gate", () => {
+    const gates = gateLines(workGate());
     expect(
-      affected.length,
-      "work §9 no longer prescribes `test-all.sh --affected` — the reordering has been reverted",
+      gates.length,
+      "work §9 no longer prescribes affected-tests.sh — the #9307 dispatch was reverted",
     ).toBeGreaterThan(0);
   });
 
-  test("§9 prescribes NO unsharded battery run — every invocation carries a mode flag or is a query", () => {
+  test("§9's gate invocation is the affected run — never --full at implementation exit", () => {
+    for (const line of gateLines(workGate())) {
+      expect(
+        /--full(\s|$|'|")/.test(line),
+        `work §9 prescribes --full at implementation exit — that is the pre-#8322 state: ${line.trim()}`,
+      ).toBe(false);
+    }
+  });
+
+  test("§9 prescribes NO unsharded battery run — surviving test-all.sh lines carry a mode flag or are queries", () => {
     for (const line of invocationLines(workGate())) {
       expect(
         shardTokensOn(line),
@@ -367,6 +398,57 @@ describe("OD1 — the project-agnostic relaxation fails safe", () => {
       expect(
         window.includes(POINTER),
         `project-agnostic prescription lacks the fallback conditional: ${anchor}`,
+      ).toBe(true);
+    }
+  });
+});
+
+describe("DISPATCH — the prescribed entry point is plugins/soleur/scripts/affected-tests.sh (#9307)", () => {
+  test("every wired call site names the gate entry point", () => {
+    // Per-site, not a count — the same reason as the OD1 sweep: four mentions
+    // in one file satisfy a cardinality check while a real call site carries none.
+    const sites: Array<[string, string]> = [
+      [SHIP_SKILL, "ship/SKILL.md"],
+      [WORK_SKILL, "work/SKILL.md"],
+      [REVIEW_SKILL, "review/SKILL.md"],
+      [TESTFIX_SKILL, "test-fix-loop/SKILL.md"],
+      [PRE_PUSH_GATE, "grok-pre-push-gate.sh"],
+    ];
+    for (const [file, label] of sites) {
+      expect(
+        readFileSync(file, "utf8").includes(GATE_TOKEN),
+        `${label} does not name ${GATE_TOKEN} — its dispatch was not re-pointed`,
+      ).toBe(true);
+    }
+  });
+
+  test("the gate script exists and answers --self-check inside its 15s bound", () => {
+    expect(
+      existsSync(GATE_SCRIPT),
+      "plugins/soleur/scripts/affected-tests.sh is missing — the gate was never built",
+    ).toBe(true);
+    const r = spawnSync("bash", [GATE_SCRIPT, "--self-check"], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      timeout: 20_000,
+    });
+    expect(r.status, `--self-check exited ${r.status}: ${r.stderr?.trim()}`).toBe(0);
+    expect(
+      (r.stdout + r.stderr).includes("AFFECTED_GATE_SELF_CHECK ok"),
+      `--self-check did not print the marker: ${(r.stdout + r.stderr).trim().slice(0, 400)}`,
+    ).toBe(true);
+  });
+
+  test("the gate is delegation-capable: probe token + --affected/--full in its source", () => {
+    // Source-level pin only — the BEHAVIORAL half (a capability-positive
+    // scripts/test-all.sh is handed --affected/--full, a foreign one never is)
+    // is asserted by scripts/affected-tests.test.sh's Guard-2 fixture rows.
+    expect(existsSync(GATE_SCRIPT), "affected-tests.sh is missing").toBe(true);
+    const src = readFileSync(GATE_SCRIPT, "utf8");
+    for (const token of ["--print-selection", "scripts/test-all.sh", "--affected", "--full"]) {
+      expect(
+        src.includes(token),
+        `affected-tests.sh lacks ${token} — it cannot delegate to a capability-positive runner`,
       ).toBe(true);
     }
   });

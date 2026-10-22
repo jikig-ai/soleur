@@ -6,13 +6,15 @@
 # WHAT THE ALERT IS FOR. server/cc-dispatcher.ts `mirrorBashSandboxFailure` mirrors a live Bash tool_result that
 # carries a sandbox denial as ONE pino row (feature agent-sandbox, op bash-tool-result, extra.sandboxErrorCode).
 # For the SDK helper line `apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted` the code is
-# `helper_userns_eperm` (server/sandbox-startup-classifier.ts). Before this alert that row reached Sentry only,
-# and "no alert pages on this op" was the recorded posture; this alert is the paging path.
+# `helper_userns_eperm`; for every OTHER helper step line (#10455 e) it is `helper_step_eperm`
+# (server/sandbox-startup-classifier.ts). Before this alert that row reached Sentry only, and "no alert pages on
+# this op" was the recorded posture; this alert is the paging path, on BOTH codes.
 #
 # WHAT THIS FILE PROTECTS, and why each row exists:
-#   * The SQL's feature/op needles are READ FROM THE EMITTER (the mirrorBashSandboxFailure body) and the code
-#     needle from the classifier, never retyped, so a reworded emitter reds here instead of silently disarming it.
-#   * The predicate is exactly four ANDed conjuncts (container, feature, op, code) plus GROUP BY time, with the
+#   * The SQL's feature/op needles are READ FROM THE EMITTER (the mirrorBashSandboxFailure body) and BOTH code
+#     needles from the classifier (its helper_* union members), never retyped, so a reworded emitter or a helper code
+#     the alert does not page on reds here instead of silently disarming it.
+#   * The predicate is exactly four ANDed conjuncts (container, feature, op, code IN (both codes)) plus GROUP BY time, with the
 #     NESTED `JSONExtractString(raw, 'message', '<key>')` form the production row shape needs, and NO host_name.
 #   * A fixture row shaped like the pino rows this app container writes (no row of THIS op has arrived yet; raw.message is an OBJECT with top-level feature, op,
 #     level, msg and the extra keys; raw.CONTAINER_NAME = soleur-web-platform) is run through the SAME predicate:
@@ -116,15 +118,30 @@ grep -qE '^[[:space:]]*sandboxErrorCode: failure\.errorCode,[[:space:]]*$' <<< "
   && ok "the emitter forwards the classifier code as extra.sandboxErrorCode (the row key the alert reads)" \
   || no "mirrorBashSandboxFailure no longer sets sandboxErrorCode: failure.errorCode — the code never reaches the row"
 
-# The code needle is read from the ALERT's SQL and must exist in the classifier in both places it is declared.
-SQL_CODE="$(sed -n "s/^AND JSONExtractString(raw, 'message', 'sandboxErrorCode') = '\([a-z_]*\)'\$/\1/p" <<< "$SQL_N")"
-if [ -n "$SQL_CODE" ] \
-   && grep -qE "^export interface BashSandboxFailure" "$CLS" \
-   && grep -qE "^[[:space:]]*errorCode: \"proc_mount_eperm\" \| \"bwrap_eperm\" \| \"$SQL_CODE\";[[:space:]]*\$" "$CLS" \
-   && [ "$(grep -cE "^[[:space:]]*\? \"$SQL_CODE\"[[:space:]]*\$" "$CLS")" -eq 1 ]; then
-  ok "the classifier declares and returns the alert's code '$SQL_CODE' (union member plus the helper-arm return)"
+# The code needles are read from the ALERT's SQL (one IN list) and must exist in the classifier in both places each is
+# declared (the errorCode union and the return arm); the set the alert pages on must EQUAL the classifier's helper_* set,
+# so a helper code added to the classifier but not to the alert (or the reverse) reds.
+SQL_CODES="$(sed -n "s/^AND JSONExtractString(raw, 'message', 'sandboxErrorCode') IN (\(.*\))\$/\1/p" <<< "$SQL_N" | tr -d " '" | tr ',' '\n' | sort)"
+SQL_CODE_N="$(grep -c . <<< "$SQL_CODES")"
+CLS_UNION_LINE="$(grep -E '^[[:space:]]*errorCode: "proc_mount_eperm"' "$CLS" | head -1)"
+CLS_HELPER_CODES="$(grep -o '"helper_[a-z_]*"' <<< "$CLS_UNION_LINE" | tr -d '"' | sort)"
+_cls_ok=1
+[ "$SQL_CODE_N" -ge 2 ] || _cls_ok=0
+grep -qE "^export interface BashSandboxFailure" "$CLS" || _cls_ok=0
+while IFS= read -r _c; do
+  [ -n "$_c" ] || continue
+  grep -qF "\"$_c\"" <<< "$CLS_UNION_LINE" || _cls_ok=0
+  [ "$(grep -cE "^[[:space:]]*[?:] \"$_c\"[[:space:]]*\$" "$CLS")" -eq 1 ] || _cls_ok=0
+done <<< "$SQL_CODES"
+if [ "$_cls_ok" -eq 1 ]; then
+  ok "the classifier declares and returns every code the alert's SQL pages on ($(paste -sd' ' <<< "$SQL_CODES"))"
 else
-  no "the classifier no longer declares and returns the code the alert's SQL pages on ('${SQL_CODE:-?}')"
+  no "the classifier no longer declares and returns the codes the alert's SQL pages on ('$(paste -sd' ' <<< "$SQL_CODES")')"
+fi
+if [ -n "$CLS_HELPER_CODES" ] && [ "$CLS_HELPER_CODES" = "$SQL_CODES" ]; then
+  ok "the alert pages on exactly the classifier's helper_* codes (both needles read from the classifier source)"
+else
+  no "the alert's code set ('$(paste -sd' ' <<< "$SQL_CODES")') no longer equals the classifier's helper_* codes ('$(paste -sd' ' <<< "$CLS_HELPER_CODES")')"
 fi
 
 # ── The four conjuncts, each against the emitter's own value ──────────────────────────────────
@@ -141,8 +158,8 @@ if [ -n "$EM_OP" ] && sql_has "JSONExtractString(raw, 'message', 'op') = '$EM_OP
 else
   no "the message.op conjunct is missing, altered, or no longer equals the emitter's op"
 fi
-[ -n "$SQL_CODE" ] \
-  && ok "the code conjunct reads the NESTED message.sandboxErrorCode: '$SQL_CODE'" \
+[ "$SQL_CODE_N" -ge 2 ] \
+  && ok "the code conjunct reads the NESTED message.sandboxErrorCode and is an IN list: $(paste -sd' ' <<< "$SQL_CODES")" \
   || no "the message.sandboxErrorCode conjunct is missing or altered"
 
 # Exactly the head, four AND conjuncts and GROUP BY: no OR, no negation, no fifth clause.
@@ -177,9 +194,13 @@ raw = json.loads(sys.argv[2])
 conj = []
 for line in sql:
     m = re.match(r"^AND JSONExtractString\(raw((?:, '[A-Za-z0-9_]+')+)\) = '([^']*)'$", line)
+    mi = re.match(r"^AND JSONExtractString\(raw((?:, '[A-Za-z0-9_]+')+)\) IN \(('[^']*'(?:, '[^']*')*)\)$", line)
     if m:
         path = re.findall(r"'([A-Za-z0-9_]+)'", m.group(1))
-        conj.append((path, m.group(2)))
+        conj.append((path, [m.group(2)]))
+    elif mi:
+        path = re.findall(r"'([A-Za-z0-9_]+)'", mi.group(1))
+        conj.append((path, re.findall(r"'([^']*)'", mi.group(2))))
     elif line.startswith("AND "):
         print("UNPARSED " + line); sys.exit(2)
 if not conj:
@@ -190,11 +211,13 @@ def extract(node, path):
             return ""
         node = node[k]
     return node if isinstance(node, str) else ""
-print("MATCH" if all(extract(raw, p) == v for p, v in conj) else "NOMATCH")
+print("MATCH" if all(extract(raw, p) in vs for p, vs in conj) else "NOMATCH")
 PY
 }
 
 PROD_ROW='{"CONTAINER_NAME":"soleur-web-platform","message":{"level":50,"feature":"agent-sandbox","op":"bash-tool-result","msg":"bash sandbox denial: helper_userns_eperm","userIdHash":"0123456789abcdef","conversationId":"c0ffee00-0000-4000-8000-000000000001","sandboxErrorCode":"helper_userns_eperm","sandboxStderr":"apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted"}}'
+STEP_ROW='{"CONTAINER_NAME":"soleur-web-platform","message":{"level":50,"feature":"agent-sandbox","op":"bash-tool-result","msg":"bash sandbox denial: helper_step_eperm","userIdHash":"0123456789abcdef","conversationId":"c0ffee00-0000-4000-8000-000000000001","sandboxErrorCode":"helper_step_eperm","sandboxStderr":"apply-seccomp: prctl(PR_CAP_AMBIENT_CLEAR_ALL): Operation not permitted"}}'
+NEG_OTHER_HELPER_CODE='{"CONTAINER_NAME":"soleur-web-platform","message":{"level":50,"feature":"agent-sandbox","op":"bash-tool-result","msg":"x","sandboxErrorCode":"helper_step_epermX"}}'
 NEG_OTHER_CODE='{"CONTAINER_NAME":"soleur-web-platform","message":{"level":50,"feature":"agent-sandbox","op":"bash-tool-result","msg":"bash sandbox denial: proc_mount_eperm","sandboxErrorCode":"proc_mount_eperm"}}'
 NEG_OTHER_OP='{"CONTAINER_NAME":"soleur-web-platform","message":{"level":50,"feature":"agent-sandbox","op":"sdk-startup","msg":"x","sandboxErrorCode":"helper_userns_eperm"}}'
 NEG_OTHER_CONTAINER='{"CONTAINER_NAME":"soleur-inngest","message":{"level":50,"feature":"agent-sandbox","op":"bash-tool-result","msg":"x","sandboxErrorCode":"helper_userns_eperm"}}'
@@ -205,12 +228,16 @@ _v="$(eval_row "$PROD_ROW")"
 [ "$_v" = "MATCH" ] \
   && ok "the production-shaped row (message is an object with top-level feature/op/sandboxErrorCode) matches the predicate" \
   || no "the production-shaped fixture row does NOT match the predicate (got '$_v') — the alert would never fire on a real row"
+_v="$(eval_row "$STEP_ROW")"
+[ "$_v" = "MATCH" ] \
+  && ok "a helper_step_eperm row (any other helper step) matches the predicate too" \
+  || no "the helper_step_eperm fixture row does NOT match the predicate (got '$_v') — a non-userns helper failure would never page"
 _neg_ok=1
-for neg in "$NEG_OTHER_CODE" "$NEG_OTHER_OP" "$NEG_OTHER_CONTAINER" "$NEG_STRING_MESSAGE" "$NEG_FLAT_KEYS"; do
+for neg in "$NEG_OTHER_HELPER_CODE" "$NEG_OTHER_CODE" "$NEG_OTHER_OP" "$NEG_OTHER_CONTAINER" "$NEG_STRING_MESSAGE" "$NEG_FLAT_KEYS"; do
   [ "$(eval_row "$neg")" = "NOMATCH" ] || _neg_ok=0
 done
 [ "$_neg_ok" -eq 1 ] \
-  && ok "near-miss rows do not match: another code, another op, another container, a string message, flat keys" \
+  && ok "near-miss rows do not match: a lookalike helper code, another code, another op, another container, a string message, flat keys" \
   || no "a near-miss fixture row matches the predicate — it is wider than the rows it names"
 
 # ── Resource wiring and paging semantics ──────────────────────────────────────────────────────
@@ -300,8 +327,8 @@ _ex_n="$(grep -c '^resource "logtail_exploration" "' "$TF")"; _al_n="$(grep -c '
 # OUTER RUN ONLY. Each row copies ONE source file into $SCRATCH/mut, mutates the copy, and re-runs this guard with
 # MUT_SKIP=1 and the matching SANDBOX_ALERTS_GUARD_* override pointing at the copy.
 SELF="${BASH_SOURCE[0]}"
-PRESENCE_ROWS=32
-MUT_ROWS=16
+PRESENCE_ROWS=34
+MUT_ROWS=22
 if [ -z "${MUT_SKIP:-}" ]; then
   MUT_DIR="$SCRATCH/mut"; mkdir -p "$MUT_DIR" || { printf '[FATAL] mkdir failed\n' >&2; exit 2; }
   assert_fixture_dir "$MUT_DIR"
@@ -358,14 +385,35 @@ PY
     esac
   }
 
-  # G3-1 — the needle changes in the TF only (the alert stops matching what the classifier emits).
-  mutate RED "the code needle changes in the alert only (helper_userns_eperm -> helper_userns_epermX)" TF \
-    "the classifier no longer declares and returns the code" \
-    's = sql_replace(s, "= \x27helper_userns_eperm\x27", "= \x27helper_userns_epermX\x27")'
-  # G3-1b — the classifier is renamed while the alert is untouched.
-  mutate RED "the classifier code is renamed while the alert keeps the old needle" CLS \
-    "the classifier no longer declares and returns the code" \
+  # G3-1 — a code needle changes in the TF only (the alert stops matching what the classifier emits). One row per
+  # IN-list member, so neither the first nor the second code can drift unpinned.
+  mutate RED "the first code needle changes in the alert only (helper_userns_eperm -> helper_userns_epermX)" TF \
+    "the classifier no longer declares and returns the codes" \
+    's = sql_replace(s, "IN (\x27helper_userns_eperm\x27", "IN (\x27helper_userns_epermX\x27")'
+  mutate RED "the second code needle changes in the alert only (helper_step_eperm -> helper_step_epermX)" TF \
+    "the classifier no longer declares and returns the codes" \
+    's = sql_replace(s, "\x27helper_step_eperm\x27)", "\x27helper_step_epermX\x27)")'
+  mutate RED "the alert drops helper_step_eperm from the IN list (a non-userns helper failure would never page)" TF \
+    "the alert's code set" \
+    's = sql_replace(s, "IN (\x27helper_userns_eperm\x27, \x27helper_step_eperm\x27)", "IN (\x27helper_userns_eperm\x27)")'
+  mutate RED "the IN list repeats the first code instead of naming the second (the step fixture row stops matching)" TF \
+    "the helper_step_eperm fixture row does NOT match" \
+    's = sql_replace(s, "\x27helper_step_eperm\x27)", "\x27helper_userns_eperm\x27)")'
+  mutate RED "the IN list is widened with a non-helper code (a near-miss row would page)" TF \
+    "a near-miss fixture row matches the predicate" \
+    's = sql_replace(s, "\x27helper_step_eperm\x27)", "\x27helper_step_eperm\x27, \x27proc_mount_eperm\x27)")'
+  # G3-1b — the classifier is changed while the alert is untouched.
+  mutate RED "the userns classifier code is renamed while the alert keeps the old needle" CLS \
+    "the classifier no longer declares and returns the codes" \
     's = s.replace("helper_userns_eperm", "helper_userns_renamed")'
+  mutate RED "the step classifier code is renamed while the alert keeps the old needle" CLS \
+    "the classifier no longer declares and returns the codes" \
+    's = s.replace("helper_step_eperm", "helper_step_renamed")'
+  mutate RED "the classifier gains a helper_* code the alert does not page on" CLS \
+    "the alert's code set" \
+    'old = "| \"helper_step_eperm\";"
+assert s.count(old) == 1
+s = s.replace(old, "| \"helper_step_eperm\" | \"helper_other_eperm\";")'
   # G3-1c — the emitter's op is reworded: the alert would silently stop matching live rows.
   mutate RED "the emitter op is reworded (the alert would silently stop matching)" DISP \
     "the message.op conjunct is missing, altered, or no longer equals the emitter" \

@@ -68,8 +68,12 @@ a re-run on a later tree will not print 190). The receipts are in the PR C spec 
 All of these, in this order:
 
 1. The audit exits 0: `gap_suites=0` and `unaudited=0` after the human exemptions in an `--accept` file (one row per exempted name,
-   `suite<TAB>path-or-*<TAB>false-positive: <reason>`, the reason mandatory; the one directory suite `plugins/soleur` is `unaudited` until
-   the audit reads it or a `*` row accepts it). `unaudited` rows must be READ or accepted by a human, never argued away.
+   `suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason>`, or `suite<TAB>*<TAB>-<TAB>-<TAB>false-positive: <reason>` for a
+   suite with no tracked input at all; the reason is mandatory. The anchor is the first 12 hex of sha256 over the source line with its
+   whitespace collapsed (`" ".join(line.split())`), the ordinal counts the lines whose collapsed whitespace form (`" ".join(line.split())`) is hashed to the same anchor, in the suite file then its
+   sourced libraries; `--all-refs` prints both. A row whose anchor matches no live line, or whose pair is no longer a gap, is `stale` and
+   fails the audit. The 3-column row of earlier revisions is retired and exits 2. The directory suite `plugins/soleur` is now audited
+   (its bun-discoverable test files are scanned); a tracked file that cannot be read makes its suite `unaudited`, and a `*` row accepts only a suite that has no tracked input at all. Otherwise it is `stale`, with one of two reasons: `star-row-tracked-suite` when git tracks the suite's input but the work tree lost or cannot open it (deleted, dangling symlink, link to a directory), and `star-row-unreadable-members` when the suite has readable inputs and some member cannot be read). `unaudited` rows must be READ or accepted by a human, never argued away.
 2. A ratchet that fails on any suite naming an undeclared tracked path is a **required** CI check.
 3. The escape replay, the saving and the reader audit are re-run on a fresh window (section 4) and the go/no-go is re-ruled.
 
@@ -87,11 +91,15 @@ python3 -I scripts/ci-pr-affected-replay.py audit --root /var/tmp/s4-audit --all
 git worktree remove --force /var/tmp/s4-audit
 ```
 
-`audit` prints `gap` and `unaudited` lines and `SOLEUR_PR_AFFECTED_AUDIT suites=… always_on=… audited=… unaudited=… gap_suites=…
-gap_refs=… accepted=…`. It exits 0 only when no gap and no unaudited suite remain; `gap_suites=0` beside `unaudited>0` is not a clean
+`audit` prints `gap`, `unaudited` and `stale` lines and `SOLEUR_PR_AFFECTED_AUDIT suites=… always_on=… audited=… unaudited=… gap_suites=…
+gap_refs=… accepted=… stale=… refs=… files_read=…` (a stale row also exits 1; `suites` counts selector rows; `always_on`, `audited`, `unaudited` and `gap_suites` are per suite label (rows sharing a label are one suite, and `audited` never counts a label that is also unaudited or always_on); `gap_refs`, `refs` and `accepted` count (label, path) pairs (`refs` before any exemption, `gap_refs` after, `accepted` plus one per suite accepted whole by a `*` row); `stale` counts accept-row entries; `files_read` is the number of distinct files read, so a change of the audit's reach shows even when the gaps do not move). It exits 0 only when no gap and no unaudited suite remain; `gap_suites=0` beside `unaudited>0` is not a clean
 audit (a suite the audit never read is not a suite with no gaps). `always_on` suites run on every diff and are exempt. The audit sees literal path names only: a path assembled from a variable, or read through a helper the audit does not follow, is invisible to it, so `gap_suites=0` is a lower bound, never proof of completeness. Edges are read with
 the selector's own grammar (`^dir/` prefix, `^file` exact, `^glob:` bash glob), not as regexes. Tally the most frequent undeclared paths
 from the `--all-refs` output (the default prints only the first six per suite).
+
+What the audit reads is frozen, and `python3 scripts/ci-pr-affected-replay.py --help` (the REACH and DECLARED LIMITS sections of its docstring) is the single place that defines it: the suite's own file; the `source` closure of it to depth 8, operands resolved against the including file for `$(dirname ...)`, `$SCRIPT_DIR`, `$HERE` and `$DIR` and against the repo root for `$REPO_ROOT`, `$ROOT_DIR`, any other `$X` and a bare path; and the code files the suite's own selector row lists that an already-read text names, to depth 8, each with its own source closure. `gap_suites=0` is literal-name completeness over what the audit reads, an approximation of the selector closure: necessary but not sufficient. The limits that matter most when reading a clean result: hops are `source` and `.` only (not `bash x.sh`, `VAR=path; source "$VAR"`, python imports, or a prefix assigned from `cd ... && pwd`), and data files in `pats` are never scanned.
+
+Reach moves through declared edges and through the text of files it reads (the drain-reveal rule): declaring a code file as an edge makes the audit read it, which can reveal more pairs, and it can shift the ordinals of accept rows (a `stale ... anchor-not-live` row). So accept an anchor-keyed row when the suite does not read or execute the file, declare an edge only when it does, and re-run the audit until `refs`, `files_read`, `gap_refs` and `stale` stop changing.
 
 ```bash
 OUT=/var/tmp/s4-replay

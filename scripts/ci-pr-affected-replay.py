@@ -49,9 +49,89 @@ SUBCOMMANDS
   audit        [--root DIR] [--list FILE] [--accept FILE] [--all-refs]
 The receipt paths are arguments; no repository path literal lives in this file.
 
-EXIT CODES (collect, ejections, aggregate, audit): 0 done and clean; 1 audit found gaps or unaudited suites; 2 usage or
+AUDIT OUTPUT. `gap<TAB>suite<TAB>N<TAB>paths` (the first six, all with --all-refs, which also prints under it one
+`ref<TAB>suite<TAB>path<TAB>file:line<TAB>anchor/ordinal<TAB>text` line per boundary line naming each path: the data an accept row
+is written from); `unaudited<TAB>suite<TAB>why` (why: short-row, the first pattern when the suite has no readable input, or
+`unreadable:<relpath>[,<relpath>]` when a tracked test file of a directory suite cannot be read; its readable files are still
+scanned); `stale<TAB>suite<TAB>path<TAB>anchor/ordinal<TAB>why`; then one SOLEUR_PR_AFFECTED_AUDIT summary line:
+`suites= always_on= audited= unaudited= gap_suites= gap_refs= accepted= stale= refs= files_read=`. UNITS: `suites` counts selector ROWS.
+Per suite LABEL (rows that share a label are one suite: always_on if any of its rows is, its gaps and accept rows merged, each gap
+attributed to the rows whose text names it): `always_on`, `audited` (labels that are none of always_on, unaudited or accepted
+unread: never negative), `unaudited` and `gap_suites`. Per (label, path) PAIR: `gap_refs` (after the exemptions), `refs` (before any
+exemption) and `accepted` (pairs exempted, plus one per suite accepted whole by a `*` row). Per accept-row entry: `stale`. Distinct
+real files read: `files_read`. A change of the audit's REACH shows in `refs` and `files_read` even when the gaps do not move. The SET
+of gaps does not depend on the order of the selector rows; the printed ORDER of the gap paths (and so which six `gap` shows) follows it.
+Every path printed has a backslash, a control character and, inside a comma-joined list, the comma written as
+\\xHH, and a C1 control, soft hyphen, zero-width or joiner character, U+2028/2029 or bidi control (the classes are listed on quote_field)
+written as \\uXXXX, so a tracked name cannot add a line or a column or reorder the text. A suite or library is read only when it is a regular file of at most
+8 MiB inside the tree (a symlink is followed only to a regular file inside the tree); anything else is `unreadable:`, including a
+`source`d tracked file that is a dangling symlink, a directory or deleted from the work tree. While a suite has an unreadable member
+its accept rows are not judged by their text (only `*` rows and untracked paths are stale).
+
+DECLARED LIMITS. The walk costs the text length times the longest tracked component name when both are adversarial: a tracked 255-character
+name such as 'a-a-...' against a suite that repeats it took 2.7 s at 100 KB and 11.5 s at 400 KB (about 230 s per view at the 8 MiB read cap);
+real names and real suites are far below this, and it needs a hostile tracked name plus a hostile suite on the pinned tree. A tracked path
+that contains a newline is found by the scan (it is reported as a gap) but lines are split on newline, so it has no `ref` line and no accept
+row can exempt it: fail-closed, and no such name is tracked. A path glued to the tail of an ANSI colour code is display text and is not a
+read. The reach and its limits are in the next section.
+
+REACH (S4 index completion PR1b, #10448; frozen here and quoted by the ADR-276 amendment). `gap_suites=0` means LITERAL-NAME COMPLETENESS OVER
+WHAT THIS AUDIT READS (the suite file, its source closure and the naming walk below, an approximation of the selector closure from inside):
+necessary, not sufficient. What the audit reads for one selector row, in this order:
+  1. the suite's own file (a directory suite: its bun-discoverable test files);
+  2. the SOURCE CLOSURE of each of them: `source X` / `. X` lines, to depth 8 (the selector expands the files at distance 0 to 7; its 8th pass
+     names the distance-8 files as edges without expanding them, so the audit reads one level further: it over-reports, the safe direction), breadth first, each
+     real file once, a cycle ending at the visited file. Operands: `$(dirname "$0")/`, `$(dirname "${BASH_SOURCE[0]}")/`, `$SCRIPT_DIR/`,
+     `${SCRIPT_DIR}/`, `$HERE/`, `${HERE}/`, `$DIR/` and `${DIR}/` resolve against the directory of the INCLUDING file (`..` normalised);
+     `$REPO_ROOT/`, `${REPO_ROOT}/`, `$ROOT_DIR/`, any other `$X/` prefix and a bare path resolve against the repo root. Only a tracked .sh or
+     .bash target is read, never a runner trigger;
+  3. the NAMING WALK: a CODE file (.sh .bash .py .ts .tsx .jsx .js .mjs .cjs .mts .cts .rb) that the row lists in `pats` as an exact `^file`
+     entry and that an already-read text names literally, to depth 8 (sorted within a level), per row. After each level is read, the source
+     closure of its files is read too (a fresh 8-level closure per walk file, or the depth left for a file already read as a closure member) and both feed the next level's naming. The two
+     runner triggers are never nodes; a `glob:` or `dir/` entry never is.
+Every file is read at most once per run and the read order is canonical (per row: each input followed by its closure; then, level by level,
+the walk files of the level by sorted path followed by their closures; the rows of a label ordered by their whole pattern list), so an
+accept row's ordinal never depends on the order the selector printed the rows. An edge is credited exactly when the selector would select
+the suite for a diff naming the path (edge_hit mirrors `_diff_touches`).
+DRAIN-REVEAL: reach is frozen as a definition but its result moves through declared edges and through the text of files it reads: declaring
+a code file as an edge makes the audit read that file, which can reveal more pairs. Accept an anchor-keyed row when the suite does not read or
+execute the file, declare an edge only when it does, and re-run the audit to a fixpoint.
+DECLARED LIMITS (what no run of this audit proves):
+  - literal names only: no computed path, glob expansion or variable-indirect operand;
+  - hops are `source` / `.` lines to .sh or .bash targets. The selector also mints edges from `bash|sh|python3|node|bun|exec` invocations of a
+    path, from `VAR=path; source "$VAR"` assignments, `source --`, other extensions, dotted python imports (`import pkg.mod`), the stem fan of a
+    stem suite and prefixes assigned from `$(cd ... && pwd)` (80 tracked lines use `. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/x.sh"`
+    and are not followed; about 90 tracked lines use a `source` or `.` of a `$(cd ...)` prefix). Measured when this was reviewed: 295 of 536
+    audited labels list in `pats` a code file (CODE_EXT, exact `^file`) that the audit never reads (1,166 label-path pairs; command: code_pats_of(pats)
+    minus the files reach_texts() returns, over `test-all.sh --print-selection --paths=README.md`);
+  - `$(dirname "$0")` inside a sourced file resolves against that file, as the selector's own convention does (bash resolves $0 to the entry script);
+  - the first pattern of a row is taken to be the suite's own file (true by the selector's construction); a runner trigger as first pattern is unaudited;
+  - data inputs in `pats` (manifests, workflows, SKILL.md files, baselines, tsv tables, docs) are checked as declared edges but their contents
+    are never scanned, and code reached only through them is not read; code files that a `dir/` or `glob:` entry covers are read by nothing
+    (making them nodes would add 621 pairs and 10 gap suites on the pinned tree);
+  - suites the runner declines under `--pr-gated` (ADR-262), directory and glob reads, bun helper files and the bunfig preload are not modelled;
+  - the comment table strips only a whole-line comment of the file's own language: a line inside a docstring or heredoc body that begins with the
+    comment marker is blanked (under-read), other block-comment and heredoc lines stay an over-report;
+  - a tracked name holding a TAB or a double quote is framed differently in the selector's diff blob (no such name is tracked);
+  - a runner trigger is covered by the trigger list (a diff touching one runs the full battery), not by its own edges; the registration-only and
+    staged-diff premise of the runner classifier is unchanged.
+
+ACCEPT FILE (--accept FILE; tab-separated, `#` lines and blank lines skipped; a missing file exempts nothing and says so on stderr):
+  suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason>     one row per source line that names the path
+  suite<TAB>*<TAB>-<TAB>-<TAB>false-positive: <reason>                   a whole suite that has NO inputs at all (never one with any)
+  anchor    the first 12 hex of sha256 over `" ".join(line.split())`, where `line` is the comment-stripped source line AS WRITTEN
+            (whitespace collapsed; Unicode whitespace too, as str.split() does; a comment line is blanked, never removed)
+  ordinal   1, 2, ...: the Nth line with that anchor, counted over the files in the canonical read order (see REACH): the suite file, its
+            source closure, then the naming-walk files
+A gap is accepted only when every boundary line that names it has a row. The 3-column form `suite<TAB>path<TAB>reason` was retired.
+STALE rows (exit 1, reason printed): not-a-gap (the pair is not a gap before the exemptions: an edge declares it, or no line names
+it), anchor-not-live, path-untracked, suite-unaudited, suite-unregistered, suite-always-on, star-row-readable-suite,
+star-row-unreadable-members, star-row-tracked-suite (git tracks the suite's input, so it is not a suite with no inputs even if the
+file is missing, dangling or a directory link). Delete the row.
+
+EXIT CODES (collect, ejections, aggregate, audit): 0 done and clean; 1 audit found gaps, unaudited suites or stale accept rows; 2 usage or
 a value error (a malformed --since, an unknown status, an incomplete aggregate directory); 3 a remote or local READ
-failed; 4 an internal error. `verdict` and `cp-upper` exit 0 whatever they print: read `computed=GO|NO-GO|UNDECIDED`
+failed (git, the selector, a file the audit must read, the --accept or --list file); 4 an internal error. `verdict` and `cp-upper` exit 0 whatever they print: read `computed=GO|NO-GO|UNDECIDED`
 on stdout, the exit code carries no verdict. An uncaught Python error is rc 4, never rc 1.
 """
 import argparse
@@ -60,9 +140,11 @@ import json
 import math
 import os
 import re
+import stat
 import subprocess
 import sys
 import time
+from bisect import bisect_left
 
 RULE_TEXT = (
     "skip a suite iff AFFECTED_SELECTED sel=0 and reason is not always_on and "
@@ -106,15 +188,18 @@ GIT_LOCATION_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_D
 SELECT_ENV_KEEP = ("PATH", "LANG", "TMPDIR", "TZ", "USER", "SHELL")
 
 
-def run(cmd, cwd=None, env=None, check=True, timeout=None):
+def run(cmd, cwd=None, env=None, check=True, timeout=None, binary=False):
     if env is None and cmd and cmd[0] == "git":
         env = {k: v for k, v in os.environ.items() if k not in GIT_LOCATION_VARS}
     try:
-        p = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, errors="replace", timeout=timeout)
+        if binary:
+            p = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, timeout=timeout)
+        else:
+            p = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, errors="replace", timeout=timeout)
     except subprocess.TimeoutExpired:
         raise ReadError("%s timed out after %ss" % (cmd[0], timeout))
     if check and p.returncode != 0:
-        raise ReadError("%s rc=%d %s" % (cmd[0], p.returncode, p.stderr.strip()[:160]))
+        raise ReadError("%s rc=%d %s" % (cmd[0], p.returncode, (p.stderr.decode("utf-8", "replace") if binary else p.stderr).strip()[:160]))
     return p
 
 
@@ -187,12 +272,13 @@ def durations(root):
         p = os.path.join(root, "scripts", name)
         if not os.path.exists(p):
             continue
-        for line in open(p):
-            if line.startswith("#") or not line.strip():
-                continue
-            f = line.rstrip("\n").split("\t")
-            if len(f) >= 2 and f[1].isdigit():
-                d[f[0]] = int(f[1])
+        with open(p) as fh:
+            for line in fh:
+                if line.startswith("#") or not line.strip():
+                    continue
+                f = line.rstrip("\n").split("\t")
+                if len(f) >= 2 and f[1].isdigit():
+                    d[f[0]] = int(f[1])
     return d
 
 
@@ -475,36 +561,36 @@ def cmd_collect(a):
     path = os.path.join(a.out, "units-commits-%d-of-%d.jsonl" % (i_, k_))
     done = read_done(path, a.redo_unevaluable, a.reclassify)
     cache = os.path.join(a.out, "joblogs")
-    out = open(path, "a")
-    n = 0
-    for idx, sha in enumerate(shas):
-        if idx % k_ != i_ - 1 or ("commit", sha) in done:
-            continue
-        u = base_unit("commit", idx, sha)
-        try:
-            fill_selection(u, root, commit_files(root, sha), dur)
-        except ReadError as e:
-            u["sel_error"] = str(e)
-            u["fallback"] = "selection-error"
-        try:
-            runs = ci_runs(a.repo, sha)
-        except ReadError as e:
-            runs, u["reason"] = None, "runs-read: %s" % e
-        if runs is not None:
-            if runs:
-                ok = [r for r in runs if r["conclusion"] == "success"]
-                pick = ok[0] if ok else sorted(runs, key=lambda r: r["created_at"])[-1]
-                u["run"] = {"id": pick["id"], "event": pick["event"], "conclusion": pick["conclusion"],
-                            "attempt": pick["run_attempt"]}
-                u["runs_n"] = len(runs)
-                u["attempts_failed"] = pick["run_attempt"] if pick["conclusion"] != "success" else 0
-            # a success run is picked first and classes `clean`, so a failed commit unit never has a same-sha success to clear it
-            classify(u, a.repo, cache, lambda unit: False)
-        if u["cls"] == "not-evaluable" and not u["reason"]:
-            u["reason"] = "no-run"
-        out.write(json.dumps(u, sort_keys=True) + "\n")
-        out.flush()
-        n += 1
+    with open(path, "a") as out:
+        n = 0
+        for idx, sha in enumerate(shas):
+            if idx % k_ != i_ - 1 or ("commit", sha) in done:
+                continue
+            u = base_unit("commit", idx, sha)
+            try:
+                fill_selection(u, root, commit_files(root, sha), dur)
+            except ReadError as e:
+                u["sel_error"] = str(e)
+                u["fallback"] = "selection-error"
+            try:
+                runs = ci_runs(a.repo, sha)
+            except ReadError as e:
+                runs, u["reason"] = None, "runs-read: %s" % e
+            if runs is not None:
+                if runs:
+                    ok = [r for r in runs if r["conclusion"] == "success"]
+                    pick = ok[0] if ok else sorted(runs, key=lambda r: r["created_at"])[-1]
+                    u["run"] = {"id": pick["id"], "event": pick["event"], "conclusion": pick["conclusion"],
+                                "attempt": pick["run_attempt"]}
+                    u["runs_n"] = len(runs)
+                    u["attempts_failed"] = pick["run_attempt"] if pick["conclusion"] != "success" else 0
+                # a success run is picked first and classes `clean`, so a failed commit unit never has a same-sha success to clear it
+                classify(u, a.repo, cache, lambda unit: False)
+            if u["cls"] == "not-evaluable" and not u["reason"]:
+                u["reason"] = "no-run"
+            out.write(json.dumps(u, sort_keys=True) + "\n")
+            out.flush()
+            n += 1
     print("replay collect: chunk %s wrote %d units to %s" % (a.chunk, n, path))
     return 0
 
@@ -556,58 +642,58 @@ def cmd_ejections(a):
             files_of[r["head_sha"]] = api_commit_files(a.repo, r["head_sha"])
         return files_of[r["head_sha"]]
 
-    out = open(path, "a")
-    n = 0
-    # Every conclusion except `success` is a queue run the full battery REFUSED or could not finish (`failure`, `timed_out`,
-    # `startup_failure`, an unfinished run, and `cancelled`: a cancelled shard fails the aggregate `test`, so the run is
-    # classed from its jobs, where an unsettled shard makes it not-evaluable). None is dropped. The conclusion histogram
-    # below names the whole population.
-    fail_runs = sorted([r for r in runs if r["conclusion"] != "success"], key=lambda r: r["created_at"])
-    hist = {}
-    for r in runs:
-        k = r["conclusion"] or "in-progress"
-        hist[k] = hist.get(k, 0) + 1
-    for idx, r in enumerate(fail_runs):
-        if ("ejection", r["head_sha"]) in done:
-            continue
-        u = base_unit("ejection", idx, r["head_sha"])
-        u["run"] = {"id": r["id"], "event": "merge_group", "conclusion": r["conclusion"] or "in-progress",
-                    "attempt": r["run_attempt"]}
-        u["attempts_failed"] = r["run_attempt"]
-        u["pr"] = pr_of(r.get("head_branch"))
-        try:
-            pairs = files_for(r)
-            u["content_key"] = content_key(pairs)
-            fill_selection(u, root, [x[0] for x in pairs], dur)
-        except ReadError as e:
-            u["sel_error"] = str(e)
-            u["fallback"] = "selection-error"
-            u["reason"] = "files: %s" % e
-            if "selector" not in str(e):
-                u["cls"] = "not-evaluable"
-                out.write(json.dumps(u, sort_keys=True) + "\n")
-                out.flush()
-                n += 1
+    with open(path, "a") as out:
+        n = 0
+        # Every conclusion except `success` is a queue run the full battery REFUSED or could not finish (`failure`, `timed_out`,
+        # `startup_failure`, an unfinished run, and `cancelled`: a cancelled shard fails the aggregate `test`, so the run is
+        # classed from its jobs, where an unsettled shard makes it not-evaluable). None is dropped. The conclusion histogram
+        # below names the whole population.
+        fail_runs = sorted([r for r in runs if r["conclusion"] != "success"], key=lambda r: r["created_at"])
+        hist = {}
+        for r in runs:
+            k = r["conclusion"] or "in-progress"
+            hist[k] = hist.get(k, 0) + 1
+        for idx, r in enumerate(fail_runs):
+            if ("ejection", r["head_sha"]) in done:
                 continue
+            u = base_unit("ejection", idx, r["head_sha"])
+            u["run"] = {"id": r["id"], "event": "merge_group", "conclusion": r["conclusion"] or "in-progress",
+                        "attempt": r["run_attempt"]}
+            u["attempts_failed"] = r["run_attempt"]
+            u["pr"] = pr_of(r.get("head_branch"))
+            try:
+                pairs = files_for(r)
+                u["content_key"] = content_key(pairs)
+                fill_selection(u, root, [x[0] for x in pairs], dur)
+            except ReadError as e:
+                u["sel_error"] = str(e)
+                u["fallback"] = "selection-error"
+                u["reason"] = "files: %s" % e
+                if "selector" not in str(e):
+                    u["cls"] = "not-evaluable"
+                    out.write(json.dumps(u, sort_keys=True) + "\n")
+                    out.flush()
+                    n += 1
+                    continue
 
-        def cleared(unit, r=r):
-            # a LATER queue run of the SAME PR whose changed files are the identical (name, blob) set and succeeded.
-            # A run whose branch names no PR cannot be tied to one, so nothing clears it.
-            pr = pr_of(r.get("head_branch"))
-            if not pr or not unit.get("content_key"):
+            def cleared(unit, r=r):
+                # a LATER queue run of the SAME PR whose changed files are the identical (name, blob) set and succeeded.
+                # A run whose branch names no PR cannot be tied to one, so nothing clears it.
+                pr = pr_of(r.get("head_branch"))
+                if not pr or not unit.get("content_key"):
+                    return False
+                for o in by_pr.get(pr, []):
+                    if o["created_at"] > r["created_at"] and o["conclusion"] == "success":
+                        try:
+                            if content_key(files_for(o)) == unit["content_key"]:
+                                return True
+                        except ReadError:
+                            return False
                 return False
-            for o in by_pr.get(pr, []):
-                if o["created_at"] > r["created_at"] and o["conclusion"] == "success":
-                    try:
-                        if content_key(files_for(o)) == unit["content_key"]:
-                            return True
-                    except ReadError:
-                        return False
-            return False
-        classify(u, a.repo, cache, cleared)
-        out.write(json.dumps(u, sort_keys=True) + "\n")
-        out.flush()
-        n += 1
+            classify(u, a.repo, cache, cleared)
+            out.write(json.dumps(u, sort_keys=True) + "\n")
+            out.flush()
+            n += 1
     with open(os.path.join(a.out, "ejections-window.json"), "w") as fh:
         json.dump({"since": since, "until": until, "runs": len(runs), "refused": len(fail_runs), "conclusions": hist}, fh, sort_keys=True)
     print("replay ejections: wrote %d units to %s (window %s..%s, %d merge_group runs, %d failed)"
@@ -803,29 +889,90 @@ def cmd_cp(a):
 RUNNER_TRIGGERS = ("scripts/test-all.sh", "scripts/lib/test-affected-paths.sh")
 
 
-def strip_comments(text):
-    """Drop whole-line comments: a path named only in a comment is a mention, not a read."""
-    keep = []
-    for line in text.splitlines():
-        t = line.lstrip()
-        if t.startswith("#") or t.startswith("//"):
-            continue
-        keep.append(line)
-    return "\n".join(keep)
+# The whole-line comment marker of a file's OWN language, by extension of its real path. A line that is a comment in a different
+# language is not blanked (`// docs/a.md` in a .sh is a command word and a path), and an extension that is not listed strips
+# nothing: over-reporting is the audit's safe direction. Block comments, docstrings and heredoc bodies are a declared over-report.
+COMMENT_PREFIX = {
+    ".sh": "#", ".bash": "#", ".py": "#", ".rb": "#", ".yml": "#", ".yaml": "#",
+    ".ts": "//", ".tsx": "//", ".js": "//", ".jsx": "//", ".mjs": "//", ".cjs": "//", ".mts": "//", ".cts": "//",
+}
+
+
+def comment_prefix(path):
+    return COMMENT_PREFIX.get(os.path.splitext(path)[1], "")
+
+
+def strip_comments(text, prefix):
+    """Blank whole-line comments of the file's own language (`prefix`, from comment_prefix; empty strips nothing; only space and tab may
+    precede the marker, as in bash): a path named only in a comment is a mention, not a read. Lines are split on "\\n" only (bash does not split on a vertical tab, a form feed, a lone
+    carriage return or U+2028); a carriage return is removed only when it directly precedes the line feed (CRLF), a lone one is an
+    ordinary character. A stripped line becomes an empty line, so every line keeps its number."""
+    lines = text.replace("\r\n", "\n").split("\n")
+    if not prefix:
+        return "\n".join(lines)
+    return "\n".join("" if line.lstrip(" \t").startswith(prefix) else line for line in lines)
 
 
 def tracked_files(root):
-    return set(run(["git", "ls-files"], cwd=root).stdout.splitlines())
+    """Every tracked path, read with -z as BYTES: without -z git prints a name holding a non-ASCII byte as a quoted ASCII string, which
+    no read can ever match, and text mode would turn a carriage return in a name into a line feed. Decoded like the files are
+    (UTF-8, undecodable bytes replaced), so a name and a mention of it agree."""
+    return {f.decode("utf-8", errors="replace") for f in run(["git", "ls-files", "-z"], cwd=root, binary=True).stdout.split(b"\0") if f}
+
+
+GLOB_CHARSET = re.compile(r"[^A-Za-z0-9_./*-]")
 
 
 def edge_hit(pt, path):
-    """The selector's own edge grammar (`_diff_edge_hit` in the runner), applied to one path: `^glob:<head>/<tail>` is a
-    bash `[[ == ]]` glob (`*` crosses `/`); `^dir/` is a prefix; `^file` is exact equality. Nothing is a regex: a path
-    holding ( ) [ ] + $ matches itself, and `^a.sh` does not match `a.sh.bak`."""
-    e = pt[1:] if pt.startswith("^") else pt
+    """True exactly when the selector would select the suite for a diff whose only name is `path`: `_diff_touches` with the single
+    entry `pt`, over `_diff_edge_hit` (one function, one call site; a bash-versus-python differential in the suite pins it to the
+    real functions). An entry WITHOUT a `^` is a plain substring of the path (a non-caret `glob:` entry is therefore dead, and the
+    empty entry matches everything). A `^` entry is `glob:<head>/<tail>` (a bash `[[ == ]]` glob over the whole path, `*` crosses
+    `/`), `dir/` (a prefix) or a file (exact equality). Nothing is a regex: a path holding ( ) [ ] + $ matches itself, and `^a.sh`
+    does not match `a.sh.bak`. EVERY malformed glob shape matches (a glob edge can only widen a selection): a byte outside
+    [A-Za-z0-9_./*-], a head that is absolute, begins with `./` or `../`, or holds `//`, `/./` or `/../`, a head not ending in `/`, a tail
+    ending in `/`, a tail without `*`. A tracked name holding a TAB or a double quote is framed differently in the selector's diff blob and
+    is not modelled (no such name is tracked)."""
+    if not pt.startswith("^"):
+        return pt in path
+    e = pt[1:]
     if e.startswith("glob:"):
         g = e[len("glob:"):]
-        return re.match("^" + "".join(".*" if c == "*" else "." if c == "?" else re.escape(c) for c in g) + "$", path) is not None
+        if GLOB_CHARSET.search(g):
+            return True
+        head = g.split("*", 1)[0]
+        if head.startswith("/"):        # the head is not repo-relative: six shapes, one line each
+            return True
+        if head.startswith("./"):
+            return True
+        if head.startswith("../"):
+            return True
+        if "//" in head:
+            return True
+        if "/./" in head:
+            return True
+        if "/../" in head:
+            return True
+        if not head.endswith("/"):      # head not /-terminated
+            return True
+        tail = g[len(head):]
+        if tail.endswith("/"):          # unmatchable tail
+            return True
+        if "*" not in tail:             # a tail without a wildcard
+            return True
+        # `*` matches any run of characters, `/` included, and a run of stars is one star: split on `*`, anchor the first and the last
+        # segment and find the middle ones in order. Linear in the path, where the equivalent regex is polynomial in the number of stars.
+        segs = g.split("*")
+        first, last = segs[0], segs[-1]
+        if len(path) < len(first) + len(last) or not path.startswith(first) or not path.endswith(last):
+            return False
+        pos, stop = len(first), len(path) - len(last)
+        for seg in segs[1:-1]:
+            k = path.find(seg, pos, stop)
+            if k < 0:
+                return False
+            pos = k + len(seg)
+        return True
     if e.endswith("/"):
         return path.startswith(e)
     return path == e
@@ -833,98 +980,734 @@ def edge_hit(pt, path):
 
 def suite_file(root, pattern):
     """The suite's own file is the FIRST pattern of its selector row (`^path`, dots literal). None when that is not a
-    readable file (a directory suite, or a pattern the selector derived differently): the caller counts it unaudited."""
+    readable file (a directory suite, a runner trigger, or a pattern the selector derived differently): the caller counts it unaudited."""
     path = pattern[1:] if pattern.startswith("^") else pattern
     full = os.path.join(root, path)
-    return full if path and not path.endswith("/") and os.path.isfile(full) else None
+    return full if path and path not in RUNNER_TRIGGERS and not path.endswith("/") and os.path.isfile(full) else None
 
 
-def suite_refs(root, suite, suite_path, tracked):
-    """Tracked repo paths this suite file (and the libs it sources, one level) names literally."""
-    with open(suite_path, errors="replace") as fh:
-        t = strip_comments(fh.read())
-    texts = [t]
-    for m in re.finditer(r"""(?:source|\.)\s+["']?(?:\$\{?[A-Za-z_]+\}?/)?([A-Za-z0-9_./-]+\.sh)""", t):
-        q = os.path.join(root, m.group(1))
-        if os.path.isfile(q):
-            with open(q, errors="replace") as fh:
-                texts.append(strip_comments(fh.read()))
-    blob = "\n".join(texts)
-    own = os.path.relpath(suite_path, root)
-    return sorted(f for f in tracked if f not in (suite, own) and f not in RUNNER_TRIGGERS and len(f) > 6 and f in blob)
+# ONE BOUNDARY DEFINITION. A match starts where the character before it is not a word character [A-Za-z0-9_] (or at the start of
+# the text): after `/`, a quote, a tab, `=`, `$(`, `-` inside a word and so on a path starts a new component. Two spellings in the
+# SOURCE text stand for a character that is not a word character at run time: a printf/echo escape (`A\tdocs/x`: a letter in the
+# source, a tab in the running program) and an attached short option (`-Iplugins/x`: the option letter is not part of the path; a
+# `-` counts as an option only after whitespace, a quote or the start of the text, so `${V:-docs/x.md}` and `a-docs/x.md` keep their
+# path). views() returns TWO views of equal length (offsets and line numbers do not move), and a path is named when EITHER view names
+# it: the FULL view blanks the whole escape or option with spaces (`\x09docs/x`, `-Iplugins/x`), the LIGHT view is the text as written,
+# for the case where the escape or option letter is the head of the path (`\tests/x`, `\bin/x`, `-docs/x`: the backslash and the dash
+# are not word characters, so they already end the previous component; blanking only the introducer would change nothing). Over-keeping
+# is the audit's safe direction. A mention that starts inside a word (`xlib/mid.txt` for the
+# tracked `lib/mid.txt`) is a different name, not a read, and so is a path glued to the tail of a colour code (`\033[0m<path>`: the
+# leftover m is a word character in BOTH views; DECLARED DROP, display text). The right edge is deliberately open: `a.sh` is still
+# named by `a.sh.bak`. The start regex of PathIndex and boundary() derive from WORD_CHARS.
+WORD_CHARS = "A-Za-z0-9_"
+WORD = re.compile("[%s]" % WORD_CHARS)
+ESCAPE = re.compile(r"\\(?:[abefnrtv]|0[0-7]{0,3}|x[0-9A-Fa-f]{1,2}|u[0-9A-Fa-f]{4})")
+SHORT_OPTION = re.compile(r"""(?<![^\s"'])-[A-Za-z](?=\S)""")
+# A `source X` / `. X` line. group 1 is the operand prefix (`$(dirname "$0")`, `$(dirname "${BASH_SOURCE[0]}")` or `$VAR` / `${VAR}`), group 2 the
+# rest of the path (it starts with `/` after a prefix). The keyword must not be glued to a word or to a dot (`resource x.sh` and a prose
+# `see. lib/x.sh` are not hops), and the blank after it is a space or tab (never a newline). Only .sh and .bash targets are followed. A prefix
+# is recognised only when a `/` follows it (the lookahead), which also keeps one long `source $<identifier>` token linear instead of quadratic.
+SOURCE_HOP = re.compile(
+    r"""(?<![\w.])(?:source|\.)[ \t]+["']?"""
+    r"""(\$\(dirname[ \t]+"?(?:\$0|\$\{BASH_SOURCE\[0\]\})"?\)(?=/)|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?(?=/))?"""
+    r"""([A-Za-z0-9_./-]+\.(?:sh|bash))""")
+# The operand prefixes that stand for the INCLUDING file's directory (the selector's `_affected_edge_token` resolves `$HERE`, `$SCRIPT_DIR`
+# and both `$(dirname ...)` spellings that way; `$DIR` is added). Every other prefix (`$REPO_ROOT`, `$ROOT_DIR`, an unknown `$X`, no prefix)
+# is tried at the repo root; only a TRACKED target is ever read, so a wrong guess costs nothing.
+HOP_DIR_VARS = frozenset(("SCRIPT_DIR", "HERE", "DIR"))
+HOP_DEPTH = 8    # source-hop levels followed from a suite input (the selector reads distance 0 to 7: the audit reads one level further, the safe direction)
+WALK_DEPTH = 8   # naming-walk levels followed over code files the selector row lists
+# The files the naming walk may read: code, by extension. A data file in `pats` is a declared input the audit checks but never scans.
+CODE_EXT = frozenset((".sh", ".bash", ".py", ".ts", ".tsx", ".jsx", ".js", ".mjs", ".cjs", ".mts", ".cts", ".rb"))
+# bun's test discovery: *.test.* *_test.* *.spec.* *_spec.* over js, jsx, ts, tsx and the module-flavoured mjs, cjs, mts, cts. A
+# SUPERSET on purpose: bunfig `pathIgnorePatterns` are not applied (over-scanning is the safe direction).
+BUN_TEST = re.compile(r"[._](?:test|spec)\.(?:js|jsx|ts|tsx|mjs|cjs|mts|cts)$")
+MAX_READ = 8 * 1024 * 1024   # a suite or library larger than this is not read (unreadable:), whatever it is
+
+
+def views(text):
+    """-> (full, light), equal length: `full` is `text` with every printf escape and attached short option replaced by spaces;
+    `light` is `text` as written (see the boundary note above). Both are the same object when there is nothing to blank."""
+    full = SHORT_OPTION.sub(lambda m: " " * len(m.group(0)), ESCAPE.sub(lambda m: " " * len(m.group(0)), text))
+    return (text, text) if full == text else (full, text)
+
+
+def boundary(text, i):
+    """True when a match at offset i of ONE view of the text starts a path component (see WORD_CHARS)."""
+    return i == 0 or WORD.match(text[i - 1]) is None
+
+
+QUOTE_U = re.compile("[\u0080-\u009f\u00ad\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u2064\u2066-\u2069\ufeff]")   # C1, soft hyphen, Arabic letter mark, Mongolian vowel separator, zero-width/word joiners, separators, bidi controls
+
+
+def quote_field(s, comma=False):
+    """`s` for a line of audit output. A backslash, a C0 control, DEL and, in a comma-joined list, the comma become \\xHH. These become \\uXXXX: a C1 control (U+0080-009F), U+00AD, U+061C, U+180E, the zero-width and joiner characters (U+200B-200F, U+2060-2064, U+FEFF), U+2028/2029 and the bidi controls (U+202A-202E, U+2066-2069). No tracked name can add a line, a column or a list member to the output or reorder it, and the escape is injective (the backslash itself is escaped). Other invisible or look-alike Unicode is printed as is."""
+    return "".join("\\x%02x" % ord(c) if ord(c) < 0x20 or c == "\x7f" or c == "\\" or (comma and c == ",")
+                   else "\\u%04x" % ord(c) if QUOTE_U.match(c) else c for c in s)
+
+
+def name_regex(names):
+    """A regex (no group around it) that matches the start of any of `names`, built from a PREFIX TRIE of the names: the work at a
+    position is bounded by the alphabet, not by the number of names. Characters are escaped. A name that is a prefix of another
+    ends the descent (the shorter name already starts a match)."""
+    trie = {}
+    for n in names:
+        node = trie
+        for ch in n:
+            node = node.setdefault(ch, {})
+        node[""] = True
+
+    def emit(node):
+        if "" in node:
+            return ""
+        alts = [re.escape(ch) + emit(node[ch]) for ch in sorted(node)]
+        return alts[0] if len(alts) == 1 else "(?:%s)" % "|".join(alts)
+    return emit(trie)
+
+
+def trie_leaf(trie, name):
+    """The dict of the character trie `trie` at the end of `name`, created on the way (the leaf value lives under the key "")."""
+    for ch in name:
+        trie = trie.setdefault(ch, {})
+    return trie
+
+
+class PathNode:
+    """One directory of the tracked tree: character tries of its file names (`ftrie`, leaf = the tracked path) and of its
+    sub-directory names (`dtrie`, leaf = the sub-directory's PathNode), so a walk costs the characters it matches and not the
+    number of names or of distinct name lengths."""
+    __slots__ = ("dtrie", "ftrie")
+
+    def __init__(self):
+        self.dtrie, self.ftrie = {}, {}
+
+
+class PathIndex:
+    """The tracked paths as a component trie, plus what one audit run memoises across suites: each file's comment-stripped text as
+    written (`raws`), its two views (`views`), the RAW `source` operands it holds (`hops`: (prefix, rest) pairs, resolved per call against
+    the including file's logical path) and the tracked paths it names (`refs`), keyed on the FULL path (two libraries named helper.sh in
+    different directories are two entries). `ops` counts every start candidate and every trie step, so a test can
+    bound the work by an operation count instead of a clock."""
+
+    def __init__(self, tracked):
+        self.tracked = set(tracked)
+        self.paths = sorted(self.tracked)
+        self.root = PathNode()
+        for p in self.paths:
+            comps = p.split("/")
+            node = self.root
+            for c in comps[:-1]:
+                leaf = trie_leaf(node.dtrie, c)
+                if "" not in leaf:
+                    leaf[""] = PathNode()
+                node = leaf[""]
+            trie_leaf(node.ftrie, comps[-1])[""] = p
+        names = {p.split("/")[0] for p in self.paths}
+        self.start = re.compile(r"(?<![%s])(?=%s)" % (WORD_CHARS, name_regex(names))) if names else None
+        self.ops = 0
+        self.raws = {}
+        self.views = {}
+        self.refs = {}
+        self.hops = {}
+
+    def under(self, prefix):
+        """The tracked paths that start with `prefix`, in order."""
+        i = bisect_left(self.paths, prefix)
+        out = []
+        while i < len(self.paths) and self.paths[i].startswith(prefix):
+            out.append(self.paths[i])
+            i += 1
+        return out
+
+
+def walk_text(index, text):
+    """Every tracked path that ONE view of a text names starting at a component boundary. A candidate start is a boundary where
+    some top-level name begins; from there the match is extended component by component through the character tries of the tracked
+    tree and stops at the first component that is not tracked, so the work follows the text and not the number of tracked paths,
+    names or name lengths."""
+    out = set()
+    if index.start is None:
+        return out
+    for m in index.start.finditer(text):
+        index.ops += 1
+        cur, node = m.start(), index.root
+        while node is not None:
+            t, i = node.ftrie, cur       # every file name that starts here (a name that is a prefix of another is named by both)
+            while True:
+                leaf = t.get("")
+                if leaf is not None:
+                    out.add(leaf)
+                ch = text[i:i + 1]
+                t = t.get(ch) if ch else None
+                if t is None:
+                    break
+                i += 1
+                index.ops += 1
+            t, i, nxt = node.dtrie, cur, None   # the sub-directory whose name is followed by a slash
+            while True:
+                ch = text[i:i + 1]
+                if not ch:
+                    break
+                if ch == "/":
+                    nxt = t.get("")
+                    break
+                t = t.get(ch)
+                if t is None:
+                    break
+                i += 1
+                index.ops += 1
+            node, cur = nxt, i + 1
+    return out
+
+
+def scan_views(index, full, light):
+    """The union of the tracked paths the full and the light view name (one walk when they are the same text)."""
+    out = walk_text(index, full)
+    if light is not full:
+        out |= walk_text(index, light)
+    return out
+
+
+def scan_text(index, text):
+    """Every tracked path that `text` (as written, comments already stripped) names at a component boundary in either view."""
+    return scan_views(index, *views(text))
+
+
+def read_bytes(path, base):
+    """The bytes of a regular file of at most MAX_READ bytes, or ReadError. A symlink is followed only when it resolves to a path
+    inside `base` (the tree under audit); the file is opened non-blocking and without following a link, and must be a regular file,
+    so a device, a FIFO, a directory or a link to a file outside the tree is refused rather than read."""
+    real = os.path.realpath(path)
+    if base is not None:
+        top = os.path.realpath(base)
+        if real != top and not real.startswith(top.rstrip(os.sep) + os.sep):
+            raise ReadError("cannot read %s: it resolves outside %s" % (path, base))
+    try:
+        fd = os.open(real, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as e:
+        raise ReadError("cannot read %s: %s" % (path, e.strerror or e))
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ReadError("cannot read %s: not a regular file" % path)
+        chunks, size = [], 0
+        while True:
+            b = os.read(fd, 1 << 20)
+            if not b:
+                return b"".join(chunks)
+            chunks.append(b)
+            size += len(b)
+            if size > MAX_READ:
+                raise ReadError("cannot read %s: larger than %d bytes" % (path, MAX_READ))
+    except OSError as e:
+        raise ReadError("cannot read %s: %s" % (path, e.strerror or e))
+    finally:
+        os.close(fd)
+
+
+def read_text(index, path, base=None):
+    """The comment-stripped text of one file as written (`index.raws[path]`) and its two views, read once per run; returns the
+    views. ReadError when the file is not a readable regular file (see read_bytes)."""
+    v = index.views.get(path)
+    if v is None:
+        raw = strip_comments(read_bytes(path, base).decode("utf-8", errors="replace"), comment_prefix(path))
+        index.raws[path] = raw
+        v = index.views[path] = views(raw)
+    return v
+
+
+def suite_inputs(root, pattern, index):
+    """The files a suite's reads are taken from: its own file, or for a directory suite (the first pattern is a `dir/`
+    prefix) the tracked bun-discoverable test files under it. None when there is neither, and the caller counts it unaudited."""
+    path = suite_file(root, pattern)
+    if path is not None:
+        return [path]
+    d = pattern[1:] if pattern.startswith("^") else pattern
+    if not d.endswith("/") or d.startswith("glob:") or not os.path.isdir(os.path.join(root, d)):
+        return None
+    files = [os.path.join(root, f) for f in index.under(d) if BUN_TEST.search(f)]
+    return files or None
+
+
+def try_read(index, path, bad, base=None):
+    """-> (real path, full, light, as written), or None with `path` appended to `bad`; with bad=None an unreadable file raises
+    ReadError. EVERY 'can this file be read' question goes through here. Everything read is keyed on the REAL path, so two names for
+    one file (a symlink, a symlinked directory) are one read, one memo entry and one set of ordinals."""
+    real = os.path.realpath(path)
+    try:
+        full, light = read_text(index, real, base)
+    except ReadError:
+        if bad is None:
+            raise
+        if path not in bad:
+            bad.append(path)
+        return None
+    return real, full, light, index.raws[real]
+
+
+def hop_targets(rel, raws, tracked):
+    """The tracked, repo-relative targets of the `source` operands `raws` of the file whose LOGICAL repo-relative path is `rel`, in text
+    order. A prefix that stands for the including file's directory resolves against it, every other prefix and a bare path against the
+    repo root; a target that is not tracked, is a runner trigger or leaves the tree is dropped."""
+    out = []
+    for pre, rest in raws:
+        if pre:
+            if not rest.startswith("/"):
+                continue
+            home = os.path.dirname(rel) if pre.startswith("$(dirname") or pre.strip("${}") in HOP_DIR_VARS else ""
+            q = os.path.normpath(os.path.join(home, rest.lstrip("/")))
+        elif rest.startswith("/"):
+            continue
+        else:
+            q = os.path.normpath(rest)
+        if q in tracked and q not in RUNNER_TRIGGERS and q not in out:
+            out.append(q)
+    return out
+
+
+def hops_of(index, real, rel):
+    """The tracked files the file at `real` (logical path `rel`) sources. The raw matches are memoised per real path, unexcluded;
+    the resolution is per call, because it depends on the logical path the file was reached by."""
+    raws = index.hops.get(real)
+    if raws is None:
+        raws = index.hops[real] = [(m.group(1) or "", m.group(2)) for m in SOURCE_HOP.finditer(index.raws[real])]
+    return hop_targets(rel, raws, index.tracked)
+
+
+def source_closure(root, got, rel, index, bad):
+    """-> [try_read() tuple]: `got` (reached as the repo-relative path `rel`), then the files it sources, then theirs, breadth first, in
+    discovery order, to HOP_DEPTH levels. A visited set keyed on the real path ends a cycle. A tracked target that cannot be read is
+    listed in `bad` (the suite is then unaudited, never clean)."""
+    out, visited, level = [got], {got[0]}, [(got, rel)]
+    for _ in range(HOP_DEPTH):
+        nxt = []
+        for g, r in level:
+            for q in hops_of(index, g[0], r):
+                path = os.path.normpath(os.path.join(root, q))
+                real = os.path.realpath(path)
+                if real in visited:
+                    continue
+                visited.add(real)
+                h = try_read(index, path, bad, root)
+                if h is not None:
+                    out.append(h)
+                    nxt.append((h, q))
+        level = nxt
+        if not level:
+            break
+    return out
+
+
+def suite_texts(root, inputs, index, bad=None):
+    """-> [(real path, full view, light view, text as written)]: the suite's own files, each followed by the libraries it sources (the
+    `source` closure to HOP_DEPTH levels, breadth first, discovery order), each real file once. A file that cannot be read is skipped
+    and listed in `bad` (ReadError when `bad` is None). A sourced path counts only when it is a TRACKED path (so the count does not
+    depend on untracked files in the work tree); one that is not a readable regular file inside the tree (a dangling symlink, a
+    directory, a file deleted from the work tree) is an unreadable file; a sourced name that is not tracked is not read. This is the
+    closure only: the naming walk over the selector row's code files is reach_texts()."""
+    out, seen = [], set()
+    for p in inputs:
+        path = os.path.normpath(p)
+        got = try_read(index, path, bad, root)
+        if got is None:
+            continue
+        for g in source_closure(root, got, os.path.relpath(path, root), index, bad):
+            if g[0] not in seen:
+                seen.add(g[0])
+                out.append(g)
+    return out
+
+
+def code_pats_of(pats, index):
+    """The tracked code files a selector row lists as exact `^file` entries, in order, once each: the nodes of the naming walk. A
+    `glob:` or `dir/` entry, a non-caret entry, a data file and a runner trigger are never a node."""
+    out, seen = [], set()
+    for pt in pats:
+        e = pt[1:]
+        if (pt.startswith("^") and e and not e.startswith("glob:") and not e.endswith("/") and e not in RUNNER_TRIGGERS
+                and os.path.splitext(e)[1] in CODE_EXT and e in index.tracked and e not in seen):
+            seen.add(e)
+            out.append(e)
+    return out
+
+
+def reach_texts(root, inputs, pats, index, bad):
+    """suite_texts() plus the naming walk: from the files read so far, every code file the selector row lists in `pats` (code_pats_of)
+    that one of them names literally is read, level by level to WALK_DEPTH (sorted within a level); after each level the source closure
+    of its files is read too, and both feed the next level's naming (the selector expands every file's edges, so a library a walk file
+    sources can name the next code pat). All state is row-local (`seen` is per call; PathIndex only memoises contents), so a verdict
+    never depends on the order of the rows."""
+    out = suite_texts(root, inputs, index, bad)
+    code = set(code_pats_of(pats, index))
+    if not code:
+        return out
+    seen, frontier = {t[0] for t in out}, list(out)
+    for _ in range(WALK_DEPTH):
+        named = set()
+        for g in frontier:
+            named |= refs_of(index, g) & code
+        level = []
+        for q in sorted(named):
+            path = os.path.join(root, q)
+            if os.path.realpath(path) in seen:
+                continue
+            got = try_read(index, path, bad, root)
+            if got is not None and got[0] not in seen:
+                seen.add(got[0])
+                out.append(got)
+                level.append((got, q))
+        frontier = [got for got, _ in level]
+        for got, q in level:
+            for g in source_closure(root, got, q, index, bad)[1:]:
+                if g[0] not in seen:
+                    seen.add(g[0])
+                    out.append(g)
+                    frontier.append(g)
+        if not frontier:
+            break
+    return out
+
+
+def refs_of(index, got):
+    """The tracked paths one file (a try_read() tuple) names, memoised on the real path and UNEXCLUDED: the suite's own path is
+    dropped by the caller, per call, because the same library is read for other suites that do name it. The ONE scan site of the
+    audit: suite_refs() and the naming walk both read through it."""
+    r = index.refs.get(got[0])
+    if r is None:
+        r = index.refs[got[0]] = scan_views(index, got[1], got[2])
+    return r
+
+
+def suite_refs(root, suite, inputs, index, texts=None, bad=None):
+    """Tracked repo paths that the texts of this suite name literally. `texts` is reach_texts() (the suite's files, the libraries they
+    source and the code files its selector row lists and the texts name); without it only the suite_texts() closure is read, which is
+    what the memoisation fixtures want. The per-file result is memoised UNEXCLUDED: the suite's own path is dropped here, per call,
+    because the same library is read for other suites that do name it."""
+    named = set()
+    for got in (texts if texts is not None else suite_texts(root, inputs, index, bad)):
+        named |= refs_of(index, got)
+    top = os.path.realpath(root)
+    own = {os.path.relpath(p, root) for p in inputs} | {os.path.relpath(os.path.realpath(p), top) for p in inputs}
+    return sorted(f for f in named if f != suite and f not in own and f not in RUNNER_TRIGGERS)
+
+
+def boundary_lines(texts, path):
+    """-> [(file, lineno, line as written)] for every line of the suite's texts in which either view holds a boundary match of
+    `path`, in order. A file that does not contain the path at all is skipped before it is split."""
+    out = []
+    for q, full, light, written in texts:
+        if path not in full and path not in light:
+            continue
+        wl, fl = written.split("\n"), full.split("\n")
+        ll = fl if light is full else light.split("\n")
+        for no, (a, b) in enumerate(zip(fl, ll), 1):
+            for line in ((a,) if a is b or a == b else (a, b)):
+                i = line.find(path)
+                while i >= 0 and not boundary(line, i):
+                    i = line.find(path, i + 1)
+                if i >= 0:
+                    out.append((q, no, wl[no - 1]))
+                    break
+    return out
+
+
+def pair_anchors(texts, path):
+    """-> [(anchor, ordinal, file, lineno, text)] for every line of the suite's texts that holds a boundary match of `path` in
+    either view, in order. The anchor and `text` are the line AS WRITTEN with its whitespace collapsed (" ".join(line.split()), so
+    re-indenting or CRLF do not move it), and the anchor is the first 12 hex of its sha256. The ordinal numbers identical anchors
+    1, 2, ... over the files in the canonical read order (the suite file, its source closure, then the naming-walk files; see REACH), so two
+    identical reading lines are two rows.
+    `lineno` counts physical lines (a comment line is blanked, never removed)."""
+    count, out = {}, []
+    for q, no, written in boundary_lines(texts, path):
+        text = " ".join(written.split())
+        a = hashlib.sha256(text.encode()).hexdigest()[:12]
+        count[a] = count.get(a, 0) + 1
+        out.append((a, count[a], q, no, text))
+    return out
 
 
 def load_accept(path):
-    """Human-written exemptions: TSV `suite<TAB>path-or-*<TAB>false-positive: <reason>`. The reason is mandatory and must
-    start with `false-positive:` (a gap cannot be waved off by a bare name); `*` accepts a whole unaudited suite."""
+    """Exemptions: see the ACCEPT FILE section of --help. A missing file is no exemptions (one stderr line says so); a file that
+    cannot be read is a ReadError (rc 3); a malformed row is a ValueError (rc 2) that names the failing column.
+    -> {suite: {path: [(anchor, ordinal, reason)]}}"""
     acc = {}
-    with open(path) as fh:
-        for n, line in enumerate(fh, 1):
-            if not line.strip() or line.startswith("#"):
-                continue
-            f = line.rstrip("\n").split("\t")
-            if len(f) != 3 or not f[0] or not f[1] or not re.match(r"^false-positive: \S", f[2]):
-                raise ValueError("%s:%d: want `suite<TAB>path|*<TAB>false-positive: <reason>`" % (path, n))
-            acc.setdefault(f[0], {})[f[1]] = f[2]
+    if not os.path.exists(path):
+        print("replay: --accept %s does not exist: no exemptions" % path, file=sys.stderr)
+        return acc
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError as e:
+        raise ReadError("cannot read the accept file %s: %s" % (path, e.strerror or e))
+    seen = set()
+    for n, line in enumerate(text.split("\n"), 1):
+        if not line.strip() or line.startswith("#"):
+            continue
+        f = line.split("\t")
+        where = "%s:%d" % (path, n)
+        if len(f) != 5:
+            raise ValueError("%s: %d column(s), want 5: suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason>; the 3-column "
+                             "form `suite<TAB>path<TAB>reason` was retired (see --help, ACCEPT FILE)" % (where, len(f)))
+        if not f[0]:
+            raise ValueError("%s: col 1 (suite) is empty" % where)
+        if not f[1]:
+            raise ValueError("%s: col 2 (path) is empty" % where)
+        if f[1] == "*":
+            if f[2:4] != ["-", "-"]:
+                raise ValueError("%s: col 3 and col 4 of a `*` row must both be `-`: suite<TAB>*<TAB>-<TAB>-<TAB>false-positive: <reason>" % where)
+        else:
+            if not re.match(r"^[0-9a-f]{12}$", f[2]):
+                raise ValueError("%s: col 3 (anchor) must be 12 lowercase hex characters (the first 12 of the sha256, see --help)" % where)
+            if not re.match(r"^[1-9][0-9]*$", f[3]):
+                raise ValueError("%s: col 4 (ordinal) must be 1, 2, ... (the Nth identical line)" % where)
+        if not re.match(r"^false-positive: \S", f[4]):
+            raise ValueError("%s: col 5 (reason) must be `false-positive: ` followed by a reason" % where)
+        if tuple(f[:4]) in seen:
+            raise ValueError("%s: duplicate accept row" % where)
+        seen.add(tuple(f[:4]))
+        acc.setdefault(f[0], {}).setdefault(f[1], []).append((f[2], int(f[3]) if f[3] != "-" else 0, f[4]))
     return acc
+
+
+class Census:
+    """What one audit run found; cmd_audit only formats it, and a later ratchet reads it instead of parsing stdout. The unit is the
+    suite LABEL: selector rows that share a label are one suite (texts, gaps, accept rows and the always_on decision are merged),
+    except `suites`, which counts selector rows.
+      gaps        {label: [paths still undeclared after the exemptions]}, in row order
+      miss        {label: [paths undeclared BEFORE the exemptions]}
+      pair_texts  {label: {path: reach_texts() of the rows that left the path undeclared}} for the gaps (ref_lines)
+      unaudited   [(label, why, quoted)] unique; `quoted` says `why` was already passed through quote_field
+      stale       [(label, path, anchor/ordinal, why)], sorted and unique
+      extra       the selector lines that are not AFFECTED_SELECTED rows (AFFECTED_SUMMARY, AFFECTED_FALLBACK)
+      registered  {label: reason} (`always_on` when any row of the label is)
+      labels      every label seen   refs  distinct (label, path) pairs found before any exemption   files_read  distinct real files read"""
+
+    def __init__(self, root, index):
+        self.root, self.index = root, index
+        self.suites = self.accepted = self.refs = 0
+        self.gaps, self.miss, self.registered, self.pair_texts = {}, {}, {}, {}
+        self.labels, self.short_rows, self.always_on_labels, self.accepted_unread_labels = set(), set(), set(), set()
+        self.unaudited, self.stale, self.extra = [], [], []
+
+    @property
+    def gap_refs(self):
+        return sum(len(v) for v in self.gaps.values())
+
+    @property
+    def files_read(self):
+        return len(self.index.raws)
+
+    @property
+    def always_on(self):
+        return len(self.always_on_labels)
+
+    @property
+    def unaudited_labels(self):
+        return len({u[0] for u in self.unaudited})
+
+    @property
+    def audited(self):
+        """Labels that are none of always_on, unaudited or accepted-without-reading: a set difference, so a label in two states (a short
+        row beside an always_on row) is subtracted once and the count cannot go negative."""
+        return len(self.labels - self.always_on_labels - {u[0] for u in self.unaudited} - self.accepted_unread_labels)
+
+    def add_unaudited(self, label, why, quoted=False):
+        if (label, why, quoted) not in self.unaudited:
+            self.unaudited.append((label, why, quoted))
+
+    def ref_lines(self, label, path):
+        """The boundary lines of `label` that name `path`: [(anchor, ordinal, file, lineno, text)], file relative to the root."""
+        top = os.path.realpath(self.root)
+        return [(a, o, os.path.relpath(q, top), no, t) for a, o, q, no, t in pair_anchors(self.pair_texts[label][path], path)]
+
+
+def stale_entries(suite, path, entries, why):
+    return [(suite, path, "-/-" if e[0] == "-" else "%s/%d" % (e[0], e[1]), why) for e in entries]
+
+
+def judge_rules(suite, rules, miss, texts_of, tracked, star_why, partial=False):
+    """The accept rows of one readable suite against its live gaps -> (stale, accepted, kept). `texts_of[path]` is the reach_texts()
+    of the rows that left `path` undeclared. A row is stale when it is a `*` row (a suite with any input is not accepted whole),
+    names an untracked path, names a pair that is not a gap before the exemptions (an edge now declares it, or no line names it any
+    more), or an (anchor, ordinal) that no live boundary line carries. A gap is accepted only when EVERY boundary line of the pair has
+    a row; the rest are kept. With `partial` (some member of the suite could not be read, so the text is incomplete) nothing is
+    judged by its text: only `*` rows and untracked paths are stale and nothing is accepted, so no row that is correct for the whole
+    text is reported as one to delete."""
+    stale, anchors, miss_set = [], {}, set(miss)
+    for path, entries in rules.items():
+        if path == "*":
+            stale += stale_entries(suite, path, entries, star_why)
+        elif path not in tracked:
+            stale += stale_entries(suite, path, entries, "path-untracked")
+        elif partial:
+            continue
+        elif path not in miss_set:
+            stale += stale_entries(suite, path, entries, "not-a-gap")
+        else:
+            anchors[path] = pair_anchors(texts_of.get(path, []), path)
+            live = {(a[0], a[1]) for a in anchors[path]}
+            stale += stale_entries(suite, path, [e for e in entries if (e[0], e[1]) not in live], "anchor-not-live")
+    accepted, kept = 0, []
+    for path in miss:
+        want = {(e[0], e[1]) for e in rules.get(path, [])}
+        lines = anchors.get(path, [])
+        if lines and all((a[0], a[1]) in want for a in lines):
+            accepted += 1
+        else:
+            kept.append(path)
+    return stale, accepted, kept
+
+
+def has_tracked_input(index, pattern):
+    """True when git tracks the suite's input(s) for the first selector pattern: the file itself, or a bun-discoverable test file
+    under a directory pattern (whatever the work tree holds)."""
+    path = pattern[1:] if pattern.startswith("^") else pattern
+    if path.startswith("glob:"):
+        return False
+    if path.endswith("/"):
+        return any(BUN_TEST.search(f) for f in index.under(path))
+    return path in index.tracked
+
+
+def audit_census(root, rows, accept):
+    """Index-completeness census over the selector's own rows (`rows`: every line the selector printed): the tracked paths each
+    registered suite names that none of its declared/derived edges cover. One pass groups the rows by label; the second judges each
+    label once, so the SET of results does not depend on row order (the printed order of paths does): a label is always_on if any of its rows is; a path is a gap of the label when
+    some row's text names it and that row's edges do not cover it, and its anchors come from the texts of those rows only."""
+    index = PathIndex(tracked_files(root))
+    c = Census(root, index)
+    groups = {}
+    for line in rows:
+        f = line.split("\t")
+        if f[0] != "AFFECTED_SELECTED":
+            if line.strip():
+                c.extra.append(line)
+            continue
+        c.suites += 1
+        label = f[1] if len(f) > 1 else "?"
+        c.labels.add(label)
+        if len(f) < 5:
+            c.add_unaudited(label, "short-row")
+            c.short_rows.add(label)
+            continue
+        g = groups.setdefault(label, {"always_on": False, "reason": f[3], "rows": []})
+        if f[3] == "always_on":
+            g["always_on"] = True
+        g["reason"] = f[3]
+        g["rows"].append(f[4].split("|"))
+    for label, g in groups.items():
+        g["rows"].sort()   # ordinals must not depend on the order the selector printed a label's rows: the whole pattern list is the key
+        c.registered[label] = "always_on" if g["always_on"] else g["reason"]
+        if g["always_on"]:
+            c.always_on_labels.add(label)
+            continue
+        rules = accept.get(label, {})
+        bad, dead, ok, found = [], [], [], set()
+        for pats in g["rows"]:
+            inputs = suite_inputs(root, pats[0], index)
+            if inputs is None:
+                dead.append(pats[0])
+                continue
+            texts = reach_texts(root, inputs, pats, index, bad)
+            refs = suite_refs(root, label, inputs, index, texts)
+            found.update(refs)
+            ok.append((texts, [r for r in refs if not any(edge_hit(pt, r) for pt in pats)]))
+        c.refs += len(found)
+        if not ok:   # no row has an input to read
+            tracked_suite = any(has_tracked_input(index, d) for d in dead)
+            if "*" in rules and not tracked_suite:
+                c.accepted += 1
+                c.accepted_unread_labels.add(label)
+            else:
+                for d in dead:
+                    c.add_unaudited(label, d)
+            if "*" in rules and tracked_suite:
+                c.stale += stale_entries(label, "*", rules["*"], "star-row-tracked-suite")
+            for path, entries in rules.items():
+                if path != "*":
+                    c.stale += stale_entries(label, path, entries, "suite-unaudited")
+            continue
+        for d in dead:   # a sibling row of the label with nothing to read
+            c.add_unaudited(label, d)
+        if bad:
+            c.add_unaudited(label, "unreadable:" + ",".join(sorted(quote_field(os.path.relpath(b, root), True) for b in bad)), True)
+        miss, texts_of = [], {}
+        for texts, m in ok:
+            for path in m:
+                if path not in texts_of:
+                    miss.append(path)
+                    texts_of[path] = []
+                have = {t[0] for t in texts_of[path]}
+                texts_of[path].extend(t for t in texts if t[0] not in have)
+        c.miss[label] = miss
+        if rules:
+            stale, accepted, kept = judge_rules(label, rules, miss, texts_of, index.tracked,
+                                                "star-row-unreadable-members" if bad else "star-row-readable-suite", partial=bool(bad))
+            c.stale += stale
+            c.accepted += accepted
+        else:
+            kept = miss
+        if kept:
+            c.gaps[label] = kept
+            c.pair_texts[label] = {x: texts_of[x] for x in kept}
+    for suite, rules in accept.items():
+        if suite in c.short_rows and suite not in c.registered:
+            why = "suite-unaudited"
+        elif suite not in c.registered:
+            why = "suite-unregistered"
+        elif c.registered[suite] == "always_on":
+            why = "suite-always-on"
+        else:
+            continue
+        for path, entries in rules.items():
+            c.stale += stale_entries(suite, path, entries, why)
+    c.stale = sorted(set(c.stale))
+    return c
+
+
+def load_rows(list_path, root):
+    """Every line the selector printed (or the file `list_path` holds), AFFECTED_SUMMARY and AFFECTED_FALLBACK included; a trailing
+    carriage return is dropped from each, so the last edge of a CRLF file still hits."""
+    if list_path:
+        try:
+            with open(list_path, encoding="utf-8", errors="replace", newline="") as fh:
+                return [line.rstrip("\r") for line in fh.read().split("\n")]
+        except OSError as e:
+            raise ReadError("cannot read the rows file %s: %s" % (list_path, e.strerror or e))
+    sp = run_selector(root, ["--paths=README.md"])
+    if sp.returncode != 0:
+        raise ReadError("selector rc=%d: rows printed before a failure are not an audit" % sp.returncode)
+    return sp.stdout.split("\n")
 
 
 def cmd_audit(a):
     """Index-completeness audit over the selector's own rows: every tracked path a registered suite names
     must be hit by one of that suite's declared/derived edges. Prints one `gap` line per suite with gaps (the first six
-    paths, or all with --all-refs) and one `unaudited` line per suite whose file could not be read. Exit 0 only when no gap
-    and no unaudited suite remain after the --accept exemptions: a suite the audit never read is not a suite with no gaps.
-    always_on suites run on every diff, so their index is moot. A row too short to name its edges is unaudited."""
+    paths, or all with --all-refs, which also prints one `ref` line per boundary line), one `unaudited` line per suite whose
+    inputs could not be read in full and one `stale` line per accept row the tree no longer backs (see audit_census). Exit 0 only
+    when no gap, no unaudited suite and no stale row remain after the --accept exemptions: a suite the audit never read is not a
+    suite with no gaps. always_on suites run on every diff, so their index is moot. A row too short to name its edges is
+    unaudited. A directory suite is read through its bun test files; one it cannot read in full is `unreadable:<relpath>`.
+    Every path in the output goes through quote_field."""
     root = a.root or repo_root()
     accept = load_accept(a.accept) if a.accept else {}
-    if a.list:
-        with open(a.list) as fh:
-            rows = fh.read().splitlines()
-    else:
-        sp = run_selector(root, ["--paths=README.md"])
-        if sp.returncode != 0:
-            raise ReadError("selector rc=%d: rows printed before a failure are not an audit" % sp.returncode)
-        rows = sp.stdout.splitlines()
-    tracked = tracked_files(root)
-    suites = always_on = accepted = accepted_unread = 0
-    gaps, unaudited = [], []
-    for line in rows:
-        f = line.split("\t")
-        if f[0] != "AFFECTED_SELECTED":
-            continue
-        suites += 1
-        if len(f) < 5:
-            unaudited.append((f[1] if len(f) > 1 else "?", "short-row"))
-            continue
-        suite, reason, pats = f[1], f[3], f[4].split("|")
-        if reason == "always_on":
-            always_on += 1
-            continue
-        path = suite_file(root, pats[0])
-        if path is None:
-            if "*" in accept.get(suite, {}):
-                accepted += 1
-                accepted_unread += 1
-            else:
-                unaudited.append((suite, pats[0]))
-            continue
-        miss = [r for r in suite_refs(root, suite, path, tracked) if not any(edge_hit(pt, r) for pt in pats)]
-        ok = accept.get(suite, {})
-        kept = [r for r in miss if r not in ok]
-        accepted += len(miss) - len(kept)
-        if kept:
-            gaps.append((suite, kept))
-    if suites == 0:
+    c = audit_census(root, load_rows(a.list, root), accept)
+    if c.suites == 0:
         print("replay audit: the selector printed no AFFECTED_SELECTED rows", file=sys.stderr)
         return 2
-    for suite, miss in gaps:
-        print("gap\t%s\t%d\t%s" % (suite, len(miss), ",".join(miss if a.all_refs else miss[:6])))
-    for suite, why in unaudited:
-        print("unaudited\t%s\t%s" % (suite, why))
-    print("SOLEUR_PR_AFFECTED_AUDIT suites=%d always_on=%d audited=%d unaudited=%d gap_suites=%d gap_refs=%d accepted=%d"
-          % (suites, always_on, suites - always_on - len(unaudited) - accepted_unread, len(unaudited), len(gaps),
-             sum(len(m) for _, m in gaps), accepted))
-    return 0 if not gaps and not unaudited else 1
+    for suite, found in c.gaps.items():
+        print("gap\t%s\t%d\t%s" % (quote_field(suite), len(found), ",".join(quote_field(p, True) for p in (found if a.all_refs else found[:6]))))
+        if a.all_refs:
+            for path in found:
+                for anchor, ordinal, rel, no, text in c.ref_lines(suite, path):
+                    print("ref\t%s\t%s\t%s:%d\t%s/%d\t%s" % (quote_field(suite), quote_field(path), quote_field(rel), no, anchor, ordinal, quote_field(text)))
+    for suite, why, quoted in c.unaudited:
+        print("unaudited\t%s\t%s" % (quote_field(suite), why if quoted else quote_field(why)))
+    for suite, p, key, why in c.stale:
+        print("stale\t%s\t%s\t%s\t%s" % (quote_field(suite), quote_field(p), key, why))
+    print("SOLEUR_PR_AFFECTED_AUDIT suites=%d always_on=%d audited=%d unaudited=%d gap_suites=%d gap_refs=%d accepted=%d stale=%d refs=%d files_read=%d"
+          % (c.suites, c.always_on, c.audited, c.unaudited_labels, len(c.gaps), c.gap_refs, c.accepted, len(c.stale), c.refs, c.files_read))
+    return 0 if not c.gaps and not c.unaudited and not c.stale else 1
 
 
 def main(argv):
@@ -970,8 +1753,10 @@ def main(argv):
     u = sub.add_parser("audit", help="index-completeness audit; run it on a pinned origin/main tree")
     u.add_argument("--root", default="", help="the tree to audit (default: the current checkout; use a pinned detached one)")
     u.add_argument("--list", default="", help="read AFFECTED_SELECTED rows from FILE instead of running the selector")
-    u.add_argument("--accept", default="", help="TSV of human exemptions: suite<TAB>path|*<TAB>false-positive: <reason>")
-    u.add_argument("--all-refs", action="store_true", dest="all_refs", help="print every undeclared path, not the first six")
+    u.add_argument("--accept", default="", help="TSV of exemptions: suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason>, or suite<TAB>*<TAB>-<TAB>-<TAB>false-positive: <reason> for a suite with no inputs; "
+                  "anchor = first 12 hex of sha256(\" \".join(line.split())) of the comment-stripped line; ordinal = the Nth identical line (suite file, its source closure, then the naming-walk files); "
+                  "a missing file exempts nothing; the full format and the stale reasons are in the ACCEPT FILE section of the top-level --help)")
+    u.add_argument("--all-refs", action="store_true", dest="all_refs", help="print every undeclared path, not the first six, and a ref line (file:line, anchor/ordinal, text) per boundary line")
     a = ap.parse_args(argv)
     if a.cmd == "collect" and not re.match(r"^[1-9][0-9]*/[1-9][0-9]*$", a.chunk):
         print("replay: --chunk must be I/K with I,K >= 1", file=sys.stderr)

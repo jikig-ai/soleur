@@ -44,3 +44,7 @@ test/helpers/
 # vendor-pin-integrity. Restore, never re-pin.
 plugins/soleur/skills/gdpr-gate/references/
 plugins/soleur/skills/legal-generate/references/
+
+# DELEGATED-ACT ENVELOPES (#9757). A Production Envelope is parsed by delegation-verify.sh and its sha256 is bound into a receipt
+# comment; reformatting it to satisfy the linter (a URL in angle brackets, an extra blank line) changes the hash and voids the receipt.
+knowledge-base/engineering/operations/runbooks/delegated-merge-10663-envelope.md

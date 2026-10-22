@@ -19,6 +19,7 @@ PLAYWRIGHT_MCP_PING_TIMEOUT_MS the server was started with, `<unset>` when it is
 argument WRITES the raw fixture tree to that path (as the real server does).
 """
 import base64, json, os, signal, subprocess, sys, time  # noqa: E401
+from pathlib import Path
 
 E = os.environ
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -30,7 +31,7 @@ TOOL_FILE = {"browser_navigate": "navigate", "browser_snapshot": "snapshot", "br
              "browser_evaluate": "evaluate", "browser_take_screenshot": "screenshot", "browser_close": "close"}
 out = sys.stdout.buffer
 if E.get("FAKE_PW_ARGV_OUT"):
-    open(E["FAKE_PW_ARGV_OUT"], "w").write("\n".join(sys.argv[1:]) + "\n")
+    Path(E["FAKE_PW_ARGV_OUT"]).write_text("\n".join(sys.argv[1:]) + "\n")
 if E.get("FAKE_PW_ENV_ECHO"):
     sys.stderr.write("fake-playwright-mcp: env PLAYWRIGHT_MCP_PING_TIMEOUT_MS=%s\n" % E.get("PLAYWRIGHT_MCP_PING_TIMEOUT_MS", "<unset>"))
     sys.stderr.flush()
@@ -78,7 +79,7 @@ for raw in sys.stdin.buffer:
         respond(rid, fixture("tools-list")["result"])
     elif method == "ping":
         if E.get("FAKE_PW_PING_RESULT_FILE"):
-            respond(rid, json.load(open(E["FAKE_PW_PING_RESULT_FILE"]))["result"])
+            respond(rid, json.loads(Path(E["FAKE_PW_PING_RESULT_FILE"]).read_text())["result"])
         else:
             respond(rid, {})
     elif method == "tools/call":
@@ -102,7 +103,7 @@ for raw in sys.stdin.buffer:
             pad = int(E["FAKE_PW_OVERSIZE"]) - len(head)
             out.write(head[:-len('"}]}}')].encode() + b"A" * pad + b'"}]}}\n'); out.flush()
         elif E.get("FAKE_PW_RESULT_FILE"):
-            odd = json.load(open(E["FAKE_PW_RESULT_FILE"]))
+            odd = json.loads(Path(E["FAKE_PW_RESULT_FILE"]).read_text())
             if "list_of" in odd:
                 pending_list.append(rid)
                 if len(pending_list) == 2:
@@ -116,7 +117,7 @@ for raw in sys.stdin.buffer:
         else:
             if name == "browser_snapshot" and args.get("filename"):
                 tree = fixture("snapshot-meta-raw")["result"]["content"][0]["text"]
-                open(args["filename"], "w").write(tree)
+                Path(args["filename"]).write_text(tree)
                 respond(rid, fixture("snapshot-filename")["result"])
             elif name == "browser_snapshot" and "_meta" in args:
                 respond(rid, fixture("snapshot-meta-json")["result"])

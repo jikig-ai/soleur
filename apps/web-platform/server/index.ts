@@ -19,18 +19,23 @@ import {
   startStuckActiveReaper,
 } from "./agent-runner";
 import {
+  activeCcQueryCount,
   drainCcQueriesForShutdown,
   startCcIdleReaper,
 } from "./cc-dispatcher";
+import { activeLegacySessionCount } from "./agent-session-registry";
+import { startQuietWindowReporter } from "./quiet-window";
 // feat-open-web-egress (#9534) — the orphan-forwarder reaper runs at BOOT,
 // not lazily on first dispatch (getSoleurGoRunner): a dispatcher restart
 // leaves the previous generation's forwarders reparented to init with live
 // token files — waiting for the first dispatch leaves a window where dead
 // sessions' credentials still authenticate at the gateway.
-// GATED on SOLEUR_EGRESS_REAPER=1: only the dir-owning app container sets it.
-// A second container sharing the host dir (the deploy canary, ci-deploy.sh)
-// runs this same server — its /proc cannot see the prod forwarders, so an
-// ungated sweep would mass-revoke the prod dispatcher's live tokens.
+// GATED on SOLEUR_EGRESS_REAPER=1: only the dir-owning app containers (prod and
+// the fresh-host start) set it. The deploy canary (ci-deploy.sh) runs this same
+// server but neither mounts the dir nor sets the flag (ADR-278 canary isolation,
+// pinned by lib/docker-run-tuple.py); the gate is the second layer — its /proc
+// cannot see the prod forwarders, so an ungated sweep would mass-revoke the prod
+// dispatcher's live tokens.
 import { reapOrphanEgressForwarders } from "./egress-forwarder";
 import { handleConversationMessages } from "./api-messages";
 import { releaseAllHeldLeases } from "./worktree-write-lease";
@@ -198,6 +203,17 @@ app.prepare().then(() => {
   // the ws-handler grace timer). Capture the timer so SIGTERM can stop it;
   // .unref() already prevents shutdown blocking (see startCcIdleReaper).
   const ccIdleReaperTimer = startCcIdleReaper();
+
+  // #8211 quiet-window — the counts-only live agent-session read. One fixed-
+  // grammar line per minute per host (agent_sessions_live= ... new_sessions_paused=),
+  // read from Better Stack by host_name because web-2 has no SSH ingress. Counts
+  // and one bit only; unref'd and fenced, so it cannot block shutdown or crash.
+  const quietWindowReporterTimer = startQuietWindowReporter({
+    readCounts: () => ({
+      ccQueries: activeCcQueryCount(),
+      legacySessions: activeLegacySessionCount(),
+    }),
+  });
 
   // #8495 / ADR-248 — the watchdog dispatch clock: fires workflow_dispatch for
   // the external Inngest watchdog (every 15 min) and the zot restart-loop alarm
@@ -389,6 +405,7 @@ app.prepare().then(() => {
     clearInterval(stuckActiveReaperTimer);
     // #5371 — stop the cc idle reaper before draining for the same reason.
     clearInterval(ccIdleReaperTimer);
+    clearInterval(quietWindowReporterTimer);
     // #8495 — stop the watchdog dispatch clock (synchronous; an in-flight tick is
     // bounded at 90 s and the other web host covers its slot).
     watchdogClock.stop();

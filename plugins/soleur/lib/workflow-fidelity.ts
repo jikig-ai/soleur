@@ -146,8 +146,13 @@ export function formatSkillRef(skill: string, harness: Harness): string {
       return `/${skill}`;
     case "devin":
       return `/soleur:${skill}`;
+    case "antigravity":
+      return `/soleur:${skill}`;
     case "cursor":
       return cursorSkillSlash(skill);
+    case "opencode":
+      // The bare id is OpenCode's registration key (measurements §2.3): it has no namespaced form.
+      return skill;
     default:
       return `soleur:${skill}`;
   }
@@ -280,9 +285,13 @@ export function workflowFidelityInstructions(harness: Harness): string {
       ? "skill loading (skills.read when available; otherwise read the installed SKILL.md and execute its full workflow)"
       : harness === "grok"
         ? "slash command (`/brainstorm`, `/one-shot`, `/plan`, `/work`, `/review`, `/ship`, …)"
-        : harness === "claude"
-          ? "Skill tool (`soleur:<skill>`)"
-          : "registered skill invocation";
+        : harness === "antigravity"
+          ? "slash command or reading SKILL.md (`/soleur:brainstorm`, `/soleur:one-shot`, …)"
+          : harness === "claude"
+            ? "Skill tool (`soleur:<skill>`)"
+            : harness === "opencode"
+              ? "**skill** tool with the bare id (`soleur:plan` → `plan`, `soleur:one-shot` → `one-shot`, …)"
+              : "registered skill invocation";
 
   const brainstormNext = formatSkillList(BRAINSTORM_CHILD_SKILLS, harness);
   const workTail = formatSkillList(

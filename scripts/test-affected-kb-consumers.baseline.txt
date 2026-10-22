@@ -24,6 +24,15 @@
 .claude/hooks/iac-plan-write-guard.test.sh	knowledge-base/project/plans
 .claude/hooks/iac-plan-write-guard.test.sh	knowledge-base/project/plans/archive
 .claude/hooks/iac-plan-write-guard.test.sh	knowledge-base/project/specs
+.claude/hooks/lib/context-sanitize.test.sh	knowledge-base/engineering/architecture/diagrams/model.likec4.json
+.claude/hooks/lib/context-sanitize.test.sh	knowledge-base/engineering/architecture/domain-model.md
+.claude/hooks/lib/context-sanitize.test.sh	knowledge-base/project/brainstorms
+.claude/hooks/lib/context-sanitize.test.sh	knowledge-base/project/brainstorms/archive
+.claude/hooks/lib/context-sanitize.test.sh	knowledge-base/project/plans
+.claude/hooks/lib/context-sanitize.test.sh	knowledge-base/project/plans/archive
+.claude/hooks/lib/context-sanitize.test.sh	knowledge-base/project/specs
+.claude/hooks/lib/context-sanitize.test.sh	knowledge-base/project/specs/.gitkeep
+.claude/hooks/lib/context-sanitize.test.sh	knowledge-base/project/specs/archive
 .claude/hooks/lib/filing-shape.test.sh	knowledge-base
 .claude/hooks/no-memory-write.test.sh	knowledge-base/project/constitution.md
 .claude/hooks/no-memory-write.test.sh	knowledge-base/project/learnings
@@ -149,6 +158,7 @@ scripts/compound-promote	knowledge-base/project/plans
 scripts/compound-promote	knowledge-base/project/plans/archive/20261013-014038-2026-05-19-feat-learnings-retrieval-bench-plan.md
 scripts/compound-promote	knowledge-base/project/promotion-config.yml
 scripts/compound-promote	knowledge-base/project/specs/archive/20261013-014038-feat-learnings-retrieval-bench/spec.md
+scripts/compound-promote-draft-edit-10552	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 scripts/content-publisher-residue	knowledge-base/marketing/distribution-content
 scripts/followthrough-predicate-parity	knowledge-base/engineering/operations/runbooks/followthrough-convention.md
 scripts/followthrough-varq-ban	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
@@ -157,6 +167,7 @@ scripts/followthrough-varq-ban	knowledge-base/project/specs
 scripts/followthroughs/registry-clientip-alert-7530	knowledge-base
 scripts/followthroughs/registry-clientip-alert-7530	knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-7530.md
 scripts/git-data-reboot-evidence-landed-8210	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md
+scripts/git-data-rehearsal-evidence-8211	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 scripts/guard-vacuity-floor	knowledge-base
 scripts/guard-vacuity-floor	knowledge-base/engineering/architecture/diagrams/model.c4
 scripts/guard-vacuity-floor	knowledge-base/engineering/operations/runbooks/cloudflare-pages-cutover.md
@@ -271,6 +282,7 @@ tests/scripts/scratch-residue	knowledge-base/project/weakness-digest.md
 tests/scripts/sentry-alert-drift-workflow	knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json
 tests/scripts/sentry-monitors-audit-class-d	knowledge-base/legal/article-30-register.md
 tests/scripts/sentry-monitors-audit-class-d	knowledge-base/legal/audits
+tests/scripts/trio-baseline-census	knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md
 tests/scripts/weakness-miner	knowledge-base/project
 tests/scripts/weakness-miner	knowledge-base/project/learnings
 tests/scripts/weakness-miner	knowledge-base/project/weakness-digest.md

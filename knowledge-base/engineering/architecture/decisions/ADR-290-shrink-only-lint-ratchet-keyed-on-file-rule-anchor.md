@@ -3,9 +3,9 @@ title: Shrink-only lint ratchet keyed on path, rule and anchor
 status: active
 date: 2026-10-16
 issue: 10331
-amended: 2026-10-18
+amended: 2026-10-20
 supersedes: null
-related: [10433]
+related: [10433, 10583]
 ---
 
 # ADR-290: Shrink-only lint ratchet keyed on path, rule and anchor
@@ -35,13 +35,13 @@ Registration: a `run_suite` pair (`tests/scripts/lint-ratchet`, `scripts/lint-ra
 
 **Control.** CODEOWNERS is documentation only here: the repository has a `* @deruelle` fallback and no ruleset requires code-owner review. The controls are the merge-base comparison, the pin tests in `tests/scripts/test_lint_ratchet.py` (the whole parsed `ruff.toml` document, a sha256 of the eslint config, both scope tuples and both floors), a registration test that fails when a `run_suite` line, an `ALWAYS_ON_SUITES` entry, a lefthook entry or the vitest manifest entry is deleted, and human PR review of the tooling. The pin tests cover the Soleur scopes only; a user's ruff configuration is the user's, and Amendment 1 states what stops it from silently weakening the ratchet.
 
-**PR3b contract (realized, see Amendment 1).** The entry format, the exit codes and the scope-config dict that `check()` takes (`name`, `baseline`, `floor`, `run`, `remedy`, `drawdown`, optionally `script`, `recovery_cmd` and the user-mode keys listed in the module docstring) are the interface; `run(root)` returns `(findings, file_count)` and may raise `Vacuous`, `InfraError` or `Skip`, and `Skip` propagates to the caller. The script now lives in the plugin tree; the Soleur scopes derive `REPO_ROOT` from the script location, the pins are script-relative, and `SCRIPT_REL` is `plugins/soleur/scripts/lint-ratchet.py`.
+**PR3b contract (realized, see Amendment 1).** The entry format, the exit codes and the scope-config dict that `check()` takes (`name`, `baseline`, `floor`, `run`, `remedy`, optionally `script`, `recovery_cmd` and the user-mode keys listed in the module docstring) are the interface; `run(root)` returns `(findings, file_count)` and may raise `Vacuous`, `InfraError` or `Skip`, and `Skip` propagates to the caller. The script now lives in the plugin tree; the Soleur scopes derive `REPO_ROOT` from the script location, the pins are script-relative, and `SCRIPT_REL` is `plugins/soleur/scripts/lint-ratchet.py`.
 
 **Bumping ruff.** Take the version and one sha256 per wheel from `https://pypi.org/pypi/ruff/<version>/json`, replace the pin and all hash lines in `plugins/soleur/scripts/ruff-requirements.txt`, then run `python3 plugins/soleur/scripts/lint-ratchet.py ruff --update`; any finding the new version adds is fixed or the bump is held.
 
 ## Consequences
 
-A new unclosed file, empty handler, unused import or unused binding in tracked Python, or an unused binding in the scoped test and fixture directories, now fails `lefthook` and the required `test` context. The 62 ruff and 20 eslint findings that exist today are baselined and tracked for drawdown in #10433; none is fixed here. A Dependabot eslint bump that moves findings fails the vitest arm and is fixed or held (no escape hatch is built until one is first needed).
+A new unclosed file, empty handler, unused import or unused binding in tracked Python, or an unused binding in the scoped test and fixture directories, now fails `lefthook` and the required `test` context. The 62 ruff and 20 eslint findings that exist today are baselined and tracked for drawdown in #10433; none is fixed here (both baselines were later drawn down to empty, see Amendment 2). A Dependabot eslint bump that moves findings fails the vitest arm and is fixed or held (no escape hatch is built until one is first needed).
 
 Accepted residuals, none of which the check can see:
 
@@ -81,3 +81,13 @@ Realizes the PR3b contract. The engine and its pinned ruff now ship in the plugi
 **Accepted residuals (new).** The cwd-dependent root (a repository nested in another resolves its own toplevel); `extend` targets, `requires-python` (ruff infers `target-version` from it) and a user-global ruff config sit outside the fingerprint, and dotted-key spellings of the ruff table (`tool.ruff.x = 1` outside a table header) are not detected; the in-flight-PR window for residual 3 (`config["script"]` changed path, so a PR whose merge base predates the move sees no script at the old path); the guard is dark in cloud runs and in the hosted image (see above); `.ipynb` files and any `extend-include` extension are outside the scan (the pathspec is `*.py`, `*.pyi`, `*.pyw`); a deletion is not detectable when the base is unresolvable outside CI (the `base unresolvable` line says so); native Windows (no `os.getuid`) is reported as an unsupported platform; the same-user trust in an existing cache `bin/ruff`; `git diff` for rename detection reads the working tree, so a hostile `.git/config` `filter.*.clean` command can run (`core.fsmonitor` is blocked; a clone does not carry `.git/config`); a fork PR can make a reviewing machine fetch the pinned wheel and run ruff for up to two 900 s runs by committing a config and a baseline. The pinned wheel is fetched from PyPI over TLS and verified by sha256 for each of the 17 wheels; a TLS-intercepting proxy is trusted by the user. Precedents for a shipped user-machine surface: ADR-178 and ADR-254. Without Soleur a team can run the same ratchet in CI with `python3 <plugin>/scripts/lint-ratchet.py user-ruff --check` and `fetch-depth: 0`. Deferred follow-ups (JS/TS, monorepo, telemetry, streaming of very large reports, a shared deadline for `auto`) are tracked in #10515.
 
 Tracker: Ref #10331. Drawdown: #10433.
+
+## Amendment 2 (2026-10-19, slice 3 of #10331: baselines drawn down to empty)
+
+Both Soleur baselines, `scripts/lint-ratchet-ruff.baseline.txt` (44 entries, 49 findings) and `scripts/lint-ratchet-eslint-test-dirs.baseline.txt` (20 entries, 27 findings), now hold no entries, so the two scopes behave as plain zero-findings gates. The fixes preserve behaviour: silenced handlers use `contextlib.suppress` or a sentinel assignment, file handles use `with` or `Path.read_text`, and dead bindings are deleted. The engine and its suite are untouched. Removing the `DRAWDOWN` constant and the baseline header lines is tracked in #10583.
+
+Tracker: Ref #10331. Drawdown: #10433 (closed by this change).
+
+## Amendment 3 (2026-10-20, #10583: drawdown plumbing removed)
+
+The `DRAWDOWN` constant, the `drawdown` scope-config key and the `# Drawdown tracking` header line are removed. `render_baseline` now switches between the user form and the Soleur form on the `user-ruff` config name, and its `recovery` and `header` parameters are keyword-only. The Soleur baseline header is a short zero-findings-gate header, and a test pins both committed Soleur baselines to the rendered empty form.

@@ -120,6 +120,7 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-dual-lockfile-live"
   "scripts/lint-gh-argv-arg-live"
   "scripts/lint-guard-contract-live"
+  "scripts/lint-feature-map-coverage-live"
   "scripts/lint-integration-env-gates-live"
   "scripts/lint-legal-mirror-drift-baseline-live"
   "scripts/lint-legal-registers-live"
@@ -170,6 +171,7 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-legal-mirror-drift-baseline-unit"
   "scripts/lint-legal-registers-unit"
   "scripts/lint-legal-scope-block-placement-unit"
+  "scripts/lint-art30-reverification-unit"
   "scripts/lint-migrated-rule-ids-unit"
   "scripts/lint-shell-capture-exit"
   "scripts/lint-shell-trace-credential-refusal-repo"
@@ -403,6 +405,16 @@ AFFECTED_APPS_CLA_EVIDENCE_SCRIPTS_BOOTSTRAP_R2_PROBE_TEST_SH_PATHS=(
 # Suites the repo-wide-idiom census arm flags (their fixture code walks a tree)
 # whose real subject is a narrow SUT set, declared here rather than always-on:
 # the scan is scoped, so the edges are honest.
+
+# .claude/hooks/lib/context-sanitize.test.sh (#10395) — corpus walker: the drift
+# sentinel greps every production file under .claude/hooks/ and plugins/soleur/
+# for raw `tr -d` strips, so any file in those trees is its subject. Directory
+# entries are prefix edges; the scan is exactly those two trees.
+AFFECTED_CLAUDE_HOOKS_LIB_CONTEXT_SANITIZE_TEST_SH_PATHS=(
+  ".claude/hooks/"
+  "plugins/soleur/"
+  "scripts/lib/test-affected-paths.sh"            # THIS FILE
+)
 
 AFFECTED_CLAUDE_HOOKS_GREP_REWRITE_TEST_SH_PATHS=(
   ".claude/hooks/grep-rewrite.sh"
@@ -1003,6 +1015,9 @@ AFFECTED_TESTS_SCRIPTS_ARGV_BEARER_SWEEP_PATHS=(
   "scripts/inngest-restart-poll-classify.sh"
   "plugins/soleur/skills/ship/SKILL.md"
   "plugins/soleur/skills/postmerge/references/deploy-status-debugging.md"
+  # S9 (#9757 item 2): the stage extracts and EXECUTES the rehearsal workflow's two terraform destroy step bodies under stubs and pins the
+  # export position in all four terraform steps, so an edit to that workflow must select it. The scan itself rides the full run.
+  ".github/workflows/inngest-provision-rehearsal.yml"
 )
 
 # tests/scripts/rule-id-regex-parity — derived edges could not reach its subject; declared from the
@@ -1900,7 +1915,95 @@ AFFECTED_TESTS_SCRIPTS_INFRA_PRIVILEGED_TIER_CENSUS_PATHS=(
   ".github/"
   "apps/"
   "infra/"
+  "knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md"
   "tests/scripts/test-infra-privileged-tier-census.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# tests/scripts/trio-baseline-census — the deploy-channel trio census, Guard 1a (#9294 G1). Its population is
+# `git ls-files --cached --others` repo-wide (every file can name the trio: .github, scripts, plugins, apps, and the
+# .md skill docs), minus the prose and media under knowledge-base/ and docs/ (a CODE extension there is scanned); it
+# reads the sibling census for the Tier-B environment set, and its ratchet reads git history. So the edge is every
+# top-level entry (declared, not derived: no argv literal reaches the files it scans; a new top-level entry needs a
+# line here, and the suite's A5 row fails when one is missing) plus one `glob:knowledge-base/**.<ext>` per code
+# extension it scans there (the suite pins that list as the `@kbcode` record and A5 checks the two agree). ADR-241 is
+# declared individually: the ratchet diffs its Re-date and Allow lines. The self-edge literal is required by the
+# declared-edge census.
+AFFECTED_TESTS_SCRIPTS_TRIO_BASELINE_CENSUS_PATHS=(
+  ".agents/"
+  ".bun-version"
+  ".claude-plugin/"
+  ".claude/"
+  ".codex/"
+  ".cursor-plugin/"
+  ".devin/"
+  ".doppler.yaml"
+  ".gitattributes"
+  ".github/"
+  ".gitignore"
+  ".gitleaks.toml"
+  ".gitleaksignore"
+  ".grok/"
+  ".markdownlint.json"
+  ".markdownlintignore"
+  ".mcp.json"
+  ".nvmrc"
+  ".soleur-test-gate.json"
+  "AGENTS.md"
+  "AGENTS.rules.md"
+  "CLAUDE.md"
+  "CODE_OF_CONDUCT.md"
+  "CONTRIBUTING.md"
+  "LICENSE"
+  "LICENSES/"
+  "README.md"
+  "apps/"
+  "bin/"
+  "bunfig.toml"
+  "cla-smoke-test.md"
+  "docs/"
+  "eleventy.config.js"
+  "feature-request-plugin-dir-settings.md"
+  "feature-request-plugin-update-surfaces-install-divergence.md"
+  "infra/"
+  "lefthook.yml"
+  "package-lock.json"
+  "package.json"
+  "plugins/"
+  "pricing-wireframe.pen"
+  "ruff.toml"
+  "scripts/"
+  "spike/"
+  "test/"
+  "tests/"
+  "todos/"
+  "glob:knowledge-base/**.sh"
+  "glob:knowledge-base/**.bash"
+  "glob:knowledge-base/**.zsh"
+  "glob:knowledge-base/**.py"
+  "glob:knowledge-base/**.pl"
+  "glob:knowledge-base/**.rb"
+  "glob:knowledge-base/**.ps1"
+  "glob:knowledge-base/**.mk"
+  "glob:knowledge-base/**Makefile"
+  "glob:knowledge-base/**.ts"
+  "glob:knowledge-base/**.tsx"
+  "glob:knowledge-base/**.js"
+  "glob:knowledge-base/**.jsx"
+  "glob:knowledge-base/**.mjs"
+  "glob:knowledge-base/**.cjs"
+  "glob:knowledge-base/**.yml"
+  "glob:knowledge-base/**.yaml"
+  "glob:knowledge-base/**.tf"
+  "glob:knowledge-base/**.tfvars"
+  "glob:knowledge-base/**.tmpl"
+  "glob:knowledge-base/**.hcl"
+  "glob:knowledge-base/**.toml"
+  "glob:knowledge-base/**.json"
+  "glob:knowledge-base/**.cfg"
+  "glob:knowledge-base/**.service"
+  "glob:knowledge-base/**.timer"
+  "knowledge-base/engineering/architecture/decisions/ADR-241-terraform-credentials-are-tiered-main-only-environment-secrets.md"
   "scripts/lib/test-affected-paths.sh"
 )
 
@@ -2060,6 +2163,21 @@ AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS=(
   "glob:spike/**.test.sh"
   "glob:todos/**.test.sh"
   "scripts/test-all.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/lint-feature-map-coverage-battery — mutation battery over the
+# feature-map sentinel + synthetic fixture repos; its verdict moves only with
+# its SUT, itself, or the canonical fixture-dir guard it copies. The real map
+# is an edge because the battery's fixture maps mirror its entry grammar — a
+# convention change there must re-drive this suite (the live suite is
+# always-on and covers the map itself).
+AFFECTED_SCRIPTS_LINT_FEATURE_MAP_COVERAGE_BATTERY_PATHS=(
+
+  "scripts/lint-feature-map-coverage.sh"
+  "scripts/lint-feature-map-coverage.test.sh"
+  "apps/web-platform/test/feature-map.md"
+  "plugins/soleur/test/test-helpers.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 
@@ -2349,4 +2467,23 @@ AFFECTED_SCRIPTS_FOLLOWTHROUGHS_REGISTRY_CLIENTIP_ALERT_7530_PATHS=(
   "scripts/lib/test-affected-paths.sh"
   "scripts/suite-durations.tsv"
   "scripts/suite-shard-legs.tsv"
+)
+
+# plugins/soleur/scripts/affected-tests.test.sh — the #9307 plugin-gate contract suite. The
+# corpus-walk arm flagged its `find .` calls: those run INSIDE PATH-shim fixture binaries
+# (stub vitest/jest/pytest) executing under the suite's own mktemp world — a synthesized
+# corpus, not the tracked tree, so the scan is scoped and a declared edge is the right
+# classification. Declared from what the suite actually reads: the SUT and its sourced
+# libs, its own sourced helpers, and the two repo files its live-repo row (B7) observes
+# — .soleur-test-gate.json (parsed on --explain) and scripts/test-all.sh (the delegated
+# runner whose --print-selection capability it probes).
+AFFECTED_PLUGINS_SOLEUR_SCRIPTS_AFFECTED_TESTS_TEST_SH_PATHS=(
+  ".soleur-test-gate.json"
+  "plugins/soleur/scripts/affected-tests.sh"
+  "plugins/soleur/scripts/affected-tests.test.sh"
+  "plugins/soleur/scripts/lib/affected-tests/"
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "plugins/soleur/test/test-helpers.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+  "scripts/test-all.sh"
 )

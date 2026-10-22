@@ -130,6 +130,59 @@ tm = mirror.get("timeout-minutes")
 v(isinstance(tm, int) and 0 < tm <= 30, "the mirror step has a timeout-minutes bound of at most 30")
 body = mirror.get("run", "")
 v(len(re.findall(r"^\s*degraded\(\)\s*\{", body, re.M)) == 1, "degraded() is defined exactly once")
+
+# Producer sign-step pin (#10390): the workflow's cosign invocation must stay on the v3
+# `--bundle` contract — the single .sigstore.json (sig + cert + chain) is what the host's
+# offline `verify-blob --bundle` consumes. Anchored on the call form inside run bodies, not
+# the step name (a rename must not lose the pin) and not a comment (a body grep sees prose).
+sign_steps = [
+    s
+    for j in jobs.values()
+    for s in j.get("steps", [])
+    if re.search(r"^\s*cosign\s+sign-blob\b", str(s.get("run", "")), re.M)
+]
+v(len(sign_steps) == 1, "exactly one step invokes cosign sign-blob (%d found)" % len(sign_steps))
+sbody = str(sign_steps[0].get("run", "")) if sign_steps else ""
+v(len(re.findall(r"^\s*cosign\s+sign-blob\s+--yes\b", sbody, re.M)) == 1,
+  "sign-blob runs once with --yes (keyless CI signing is non-interactive)")
+v(re.search(r'--bundle\s+"\$\{MANIFEST\}\.sigstore\.json"', sbody) is not None,
+  "sign-blob writes <manifest>.sigstore.json via --bundle")
+v(not re.search(r"--output-signature\b|--output-certificate\b", sbody),
+  "sign-blob carries no removed cosign-2.x --output-signature/--output-certificate flags")
+
+# OCI-image pin (#10390): the host extract runs `docker create` + `docker cp`, and create
+# refuses a command-less scratch image ("no command specified") — a bare FROM scratch +
+# COPY image is un-pullable-for-extract, which is the exact first-pull failure measured on
+# the dedicated host (reason=extract).
+asm = [
+    s
+    for j in jobs.values()
+    for s in j.get("steps", [])
+    if str(s.get("name", "")).startswith("Assemble bundle tarball")
+]
+v(len(asm) == 1, "the Assemble-bundle step is found exactly once (%d found)" % len(asm))
+abody = str(asm[0].get("run", "")) if asm else ""
+v(re.search(r'\\nCMD\s*\[', abody) is not None,
+  "the OCI Dockerfile carries a CMD (docker create refuses command-less images)")
+
+# Cosign-verifier staging pin (#10390 defect 2): the host is deny-all-public egress, so its
+# `docker run gcr.io/…cosign@sha256:…` verify dies on the daemon-side pull. The producer must
+# mirror the pinned verifier image into zot inside this step — after the bundle copy (a cosign
+# failure may never starve the owner leg), before mirror_status=ok — and equality-check the
+# mirrored digest against the pin. Anchored on call forms in the body, never comments.
+v(re.search(r'crane copy "gcr\.io/projectsigstore/cosign@sha256:[0-9a-f]{64}"', body) is not None,
+  "the cosign verifier image is copied from the full-digest gcr ref")
+v(re.search(r'127\.0\.0\.1:5000/jikig-ai/cosign:v[0-9]', body) is not None,
+  "the cosign mirror destination is the zot tag ref jikig-ai/cosign:v*")
+v(re.search(r'\|\| degraded cosign_copy ', body) is not None,
+  "the cosign copy routes failure through degraded cosign_copy")
+v(re.search(r'degraded cosign_digest_mismatch', body) is not None,
+  "the cosign zot digest is equality-checked against the pinned digest (cosign_digest_mismatch)")
+dm = body.find("digest_mismatch")
+cc = body.find('crane copy "gcr.io/projectsigstore/cosign')
+ok_i = body.find("mirror_status=ok")
+v(dm != -1 and cc != -1 and ok_i != -1 and dm < cc < ok_i,
+  "the cosign leg sits after the bundle digest check and before mirror_status=ok")
 open(body_out, "w").write(body)
 PY
 
@@ -191,17 +244,34 @@ echo "crane $*" >> "$STUB_LOG"
 case "${1:-}" in
   copy)
     if [[ "$#" -ne 3 ]]; then echo "REFUSE crane $*" >> "$STUB_LOG"; exit 64; fi
-    n=0
-    [[ -f "$STUB_COPY_COUNT" ]] && n=$(cat "$STUB_COPY_COUNT")
-    n=$((n + 1))
-    echo "$n" > "$STUB_COPY_COUNT"
-    [[ "$n" -le "${STUB_CRANE_COPY_FAIL_N:-0}" ]] && exit "${STUB_CRANE_COPY_RC:-1}"
-    exit 0 ;;
+    if [[ "$2" == "$EXPECT_SRC" && "$3" == "$EXPECT_DST" ]]; then
+      n=0
+      [[ -f "$STUB_COPY_COUNT" ]] && n=$(cat "$STUB_COPY_COUNT")
+      n=$((n + 1))
+      echo "$n" > "$STUB_COPY_COUNT"
+      [[ "$n" -le "${STUB_CRANE_COPY_FAIL_N:-0}" ]] && exit "${STUB_CRANE_COPY_RC:-1}"
+      exit 0
+    elif [[ "$2" == "$EXPECT_COSIGN_SRC" && "$3" == "$EXPECT_COSIGN_DST" ]]; then
+      n=0
+      [[ -f "$STUB_COSIGN_COPY_COUNT" ]] && n=$(cat "$STUB_COSIGN_COPY_COUNT")
+      n=$((n + 1))
+      echo "$n" > "$STUB_COSIGN_COPY_COUNT"
+      [[ "$n" -le "${STUB_CRANE_COSIGN_COPY_FAIL_N:-0}" ]] && exit "${STUB_CRANE_COSIGN_COPY_RC:-1}"
+      exit 0
+    fi
+    echo "REFUSE crane $*" >> "$STUB_LOG"; exit 64 ;;
   digest)
-    if [[ "$#" -ne 2 || "$2" != "$EXPECT_DST" ]]; then echo "REFUSE crane $*" >> "$STUB_LOG"; exit 64; fi
-    [[ "${STUB_DIGEST_RC:-0}" == "0" ]] || exit "$STUB_DIGEST_RC"
-    printf '%s\n' "${STUB_ZOT_DIGEST-$GOOD_DIGEST}"
-    exit 0 ;;
+    if [[ "$#" -ne 2 ]]; then echo "REFUSE crane $*" >> "$STUB_LOG"; exit 64; fi
+    if [[ "$2" == "$EXPECT_DST" ]]; then
+      [[ "${STUB_DIGEST_RC:-0}" == "0" ]] || exit "$STUB_DIGEST_RC"
+      printf '%s\n' "${STUB_ZOT_DIGEST-$GOOD_DIGEST}"
+      exit 0
+    elif [[ "$2" == "$EXPECT_COSIGN_DST" ]]; then
+      [[ "${STUB_COSIGN_DIGEST_RC:-0}" == "0" ]] || exit "$STUB_COSIGN_DIGEST_RC"
+      printf '%s\n' "${STUB_COSIGN_ZOT_DIGEST-$COSIGN_PIN_DIGEST}"
+      exit 0
+    fi
+    echo "REFUSE crane $*" >> "$STUB_LOG"; exit 64 ;;
   *)
     echo "REFUSE crane $*" >> "$STUB_LOG"; exit 64 ;;
 esac
@@ -223,6 +293,12 @@ GOOD_DIGEST=$(printf 'sha256:%064d' 0 | tr '0' 'a')
 OTHER_DIGEST=$(printf 'sha256:%064d' 0 | tr '0' 'b')
 EXPECT_SRC="ghcr.io/jikig-ai/soleur-inngest-config:v7"
 EXPECT_DST="127.0.0.1:5000/jikig-ai/soleur-inngest-config:v7"
+# The pinned cosign verifier image (#10390 defect 2). The full 64-hex literal is the integrity
+# anchor — it is asserted whole, never prefix-matched, and lives identically in the workflow src
+# leg, the dst equality check, the cloud-init default and these constants.
+COSIGN_PIN_DIGEST="sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870"
+EXPECT_COSIGN_SRC="gcr.io/projectsigstore/cosign@${COSIGN_PIN_DIGEST}"
+EXPECT_COSIGN_DST="127.0.0.1:5000/jikig-ai/cosign:v3.1.1"
 
 # run_arm <dir> <bridge-outcome|__unset__> [NAME=value knobs...]
 # Executes the extracted body exactly as the runner does (bash -eo pipefail), SOURCED so a
@@ -236,13 +312,14 @@ run_arm() {
   : > "$d/gho"
   : > "$d/sum"
   : > "$d/log"
-  rm -f "$d/copycount"
+  rm -f "$d/copycount" "$d/cosigncopycount"
   local -a benv=()
   if [[ "$bridge" == "__unset__" ]]; then benv=(-u BRIDGE_OUTCOME); else benv=("BRIDGE_OUTCOME=$bridge"); fi
   local rc=0
   (
     env "${benv[@]}" "$@" IMAGE="ghcr.io/jikig-ai/soleur-inngest-config" VERSION="7" DIGEST="$GOOD_DIGEST" GOOD_DIGEST="$GOOD_DIGEST" EXPECT_DST="$EXPECT_DST" \
-      GITHUB_OUTPUT="$d/gho" GITHUB_STEP_SUMMARY="$d/sum" STUB_LOG="$d/log" STUB_COPY_COUNT="$d/copycount" \
+      EXPECT_SRC="$EXPECT_SRC" EXPECT_COSIGN_SRC="$EXPECT_COSIGN_SRC" EXPECT_COSIGN_DST="$EXPECT_COSIGN_DST" COSIGN_PIN_DIGEST="$COSIGN_PIN_DIGEST" \
+      GITHUB_OUTPUT="$d/gho" GITHUB_STEP_SUMMARY="$d/sum" STUB_LOG="$d/log" STUB_COPY_COUNT="$d/copycount" STUB_COSIGN_COPY_COUNT="$d/cosigncopycount" \
       RUNNER_TEMP="$d" PIN_SHA="$PIN_SHA" EXPECT_URL="$EXPECT_URL" PATH="$STUBS:$REAL_PATH" \
       bash --noprofile --norc -eo pipefail -c 'source "$1"; echo SENTINEL_REACHED' _ "$BODY_FILE" > "$d/stdout" 2>&1
   ) || rc=$?
@@ -266,6 +343,9 @@ count_pfx() { # lines STARTING with the string (a mid-line occurrence is not a w
 }
 copies() {
   if [[ -f "$1/copycount" ]]; then cat "$1/copycount"; else echo 0; fi
+}
+cosign_copies() {
+  if [[ -f "$1/cosigncopycount" ]]; then cat "$1/cosigncopycount"; else echo 0; fi
 }
 
 # The ONE decision every caller uses: how many verdict lines are not OK. An empty or missing
@@ -291,9 +371,9 @@ chk() {
   if [[ "$1" == "1" ]]; then printf 'OK\t%s\n' "$2" >> "$VF"; else printf 'BAD\t%s\n' "$2" >> "$VF"; fi
 }
 # Reads a finished degrade arm and asserts the whole signal contract.
-degraded_ok() { # <dir> <label> <reason> <rc> <expected-crane-copies> <expected-stub-calls: any|none>
-  local a="$1" l="$2" r="$3" rc="$4" n="$5" calls="$6" ok=1
-  local head="::warning::zot mirror degraded for $EXPECT_DST (reason=$r rc=$rc "
+degraded_ok() { # <dir> <label> <reason> <rc> <expected-crane-copies> <expected-stub-calls: any|none> [dst]
+  local a="$1" l="$2" r="$3" rc="$4" n="$5" calls="$6" dst="${7:-$EXPECT_DST}" ok=1
+  local head="::warning::zot mirror degraded for $dst (reason=$r rc=$rc "
   [[ "$(cat "$a/rc")" == "0" ]] || ok=0
   [[ "$(count_eq "mirror_status=degraded" "$a/gho")" == "1" ]] || ok=0
   [[ "$(count_eq "mirror_reason=$r" "$a/gho")" == "1" ]] || ok=0
@@ -351,7 +431,12 @@ evaluate() {
   [[ "$(count_eq "timeout 180 crane copy $EXPECT_SRC $EXPECT_DST" "$d/ok/log")" == "1" ]] || ok=0
   [[ "$(count_eq "timeout 60 crane digest $EXPECT_DST" "$d/ok/log")" == "1" ]] || ok=0
   [[ "$(count_eq "crane digest $EXPECT_DST" "$d/ok/log")" == "1" ]] || ok=0
-  chk "$ok" "bridge success: only mirror_status=ok, no workflow command or summary line, one bounded crane copy of the expected source and destination, one bounded digest lookup"
+  [[ "$(cosign_copies "$d/ok")" == "1" ]] || ok=0
+  [[ "$(count_eq "crane copy $EXPECT_COSIGN_SRC $EXPECT_COSIGN_DST" "$d/ok/log")" == "1" ]] || ok=0
+  [[ "$(count_eq "timeout 180 crane copy $EXPECT_COSIGN_SRC $EXPECT_COSIGN_DST" "$d/ok/log")" == "1" ]] || ok=0
+  [[ "$(count_eq "timeout 60 crane digest $EXPECT_COSIGN_DST" "$d/ok/log")" == "1" ]] || ok=0
+  [[ "$(count_eq "crane digest $EXPECT_COSIGN_DST" "$d/ok/log")" == "1" ]] || ok=0
+  chk "$ok" "bridge success: only mirror_status=ok, no workflow command or summary line, one bounded crane copy of the expected source and destination, one bounded digest lookup, one bounded cosign copy and cosign digest lookup"
   chk "$([[ "$(count_has "REFUSE" "$d/ok/log")" == "0" ]] && echo 1 || echo 0)" \
     "stub contracts: no stub refused its argv or pinned-value contract (bridge success)"
   chk "$([[ ! -e "$d/ok/crane.tgz" ]] && echo 1 || echo 0)" "archive removed after the step (bridge success)"
@@ -388,6 +473,30 @@ evaluate() {
   degraded_ok "$d/digestshape" "crane digest returning garbage" digest_lookup 1 1 any
   fi
 
+  if want cosigncopyfail; then
+  run_arm "$d/cosigncopyfail" success STUB_CRANE_COSIGN_COPY_FAIL_N=99 STUB_CRANE_COSIGN_COPY_RC=42
+  degraded_ok "$d/cosigncopyfail" "cosign copy failing every time" cosign_copy 42 1 any "$EXPECT_COSIGN_DST"
+  chk "$([[ "$(cosign_copies "$d/cosigncopyfail")" == "3" ]] && echo 1 || echo 0)" \
+    "cosign copy failing every time: 3 cosign copy attempts, bundle copy still landed first"
+  chk "$([[ "$(count_eq "sleep 3" "$d/cosigncopyfail/log")" == "1" && "$(count_eq "sleep 6" "$d/cosigncopyfail/log")" == "1" ]] && echo 1 || echo 0)" \
+    "cosign copy failing every time: backoff sleeps 3 then 6 between the three attempts"
+  fi
+
+  if want cosigndigestbad; then
+  run_arm "$d/cosigndigestbad" success STUB_COSIGN_ZOT_DIGEST="$OTHER_DIGEST"
+  degraded_ok "$d/cosigndigestbad" "cosign digest mismatch after the copy" cosign_digest_mismatch 1 1 any "$EXPECT_COSIGN_DST"
+  fi
+
+  if want cosigndigestfail; then
+  run_arm "$d/cosigndigestfail" success STUB_COSIGN_DIGEST_RC=7
+  degraded_ok "$d/cosigndigestfail" "cosign digest lookup failing" cosign_digest_lookup 7 1 any "$EXPECT_COSIGN_DST"
+  fi
+
+  if want cosigndigestshape; then
+  run_arm "$d/cosigndigestshape" success STUB_COSIGN_ZOT_DIGEST="not-a-digest"
+  degraded_ok "$d/cosigndigestshape" "cosign digest returning garbage" cosign_digest_lookup 1 1 any "$EXPECT_COSIGN_DST"
+  fi
+
   if [[ "$mode" != "full" ]]; then return 0; fi
   run_arm "$d/copyflaky" success STUB_CRANE_COPY_FAIL_N=2
   ok=1
@@ -397,6 +506,9 @@ evaluate() {
   [[ ! -s "$d/copyflaky/sum" ]] || ok=0
   [[ "$(count_pfx "::" "$d/copyflaky/stdout")" == "0" ]] || ok=0
   [[ "$(copies "$d/copyflaky")" == "3" ]] || ok=0
+  [[ "$(cosign_copies "$d/copyflaky")" == "1" ]] || ok=0
+  [[ "$(count_eq "crane copy $EXPECT_COSIGN_SRC $EXPECT_COSIGN_DST" "$d/copyflaky/log")" == "1" ]] || ok=0
+  [[ "$(count_eq "timeout 60 crane digest $EXPECT_COSIGN_DST" "$d/copyflaky/log")" == "1" ]] || ok=0
   [[ "$(count_has "REFUSE" "$d/copyflaky/log")" == "0" ]] || ok=0
   chk "$ok" "crane copy failing twice then succeeding: mirror_status=ok after 3 attempts, no warning or summary line"
 
@@ -502,7 +614,7 @@ elif name == "retry-returns-1":
 elif name == "drop-cleanup":
     s = must_sub(r"          trap 'rm -f \"\$CRANE_TGZ\"' EXIT\n", "", s)
 elif name == "drop-step-timeout":
-    s = must_sub(r"        timeout-minutes: 20\n", "", s)
+    s = must_sub(r"        timeout-minutes: 30\n", "", s)
 elif name == "digest-check-dropped":
     s = must_sub(r'          \[\[ "\$ZOT_DIGEST" == "\$\{DIGEST:-\}" \]\] \|\| degraded digest_mismatch[^\n]*\n', "", s)
 elif name == "digest-lookup-unrouted":
@@ -515,6 +627,35 @@ elif name == "copy-timeout-dropped":
     s = must_sub(r"retry timeout 180 crane copy", "retry crane copy", s)
 elif name == "digest-timeout-dropped":
     s = must_sub(r'"\$\(timeout 60 crane digest', '"$(crane digest', s)
+elif name == "sign-drops-yes":
+    s = must_sub(r"cosign sign-blob --yes", "cosign sign-blob", s)
+elif name == "sign-drops-bundle":
+    s = must_sub(r'\n            --bundle "\$\{MANIFEST\}\.sigstore\.json" \\', "", s)
+elif name == "sign-renames-bundle":
+    s = must_sub(r'--bundle "\$\{MANIFEST\}\.sigstore\.json"', '--bundle "${MANIFEST}.sig.json"', s)
+elif name == "sign-adds-output-signature":
+    s = must_sub(r"(cosign sign-blob --yes \\\n)",
+                 "\\1            --output-signature \"${MANIFEST}.sig\" \\\n", s)
+elif name == "sign-adds-output-certificate":
+    s = must_sub(r"(cosign sign-blob --yes \\\n)",
+                 "\\1            --output-certificate \"${MANIFEST}.cert\" \\\n", s)
+elif name == "sign-step-deleted":
+    s = must_sub(r"      - name: Keyless sign-blob the manifest.*?      - name: Assemble",
+                 "      - name: Assemble", s)
+elif name == "dockerfile-cmd-dropped":
+    s = must_sub(r'CMD \["true"\]\\n', "", s)
+elif name == "cosign-copy-dropped":
+    s = must_sub(r'          retry timeout 180 crane copy "gcr\.io/projectsigstore/cosign[^\n]*\n', "", s)
+elif name == "cosign-copy-route-dropped":
+    s = must_sub(r'(retry timeout 180 crane copy "gcr\.io/projectsigstore/cosign[^\n]*?) \|\| degraded cosign_copy [^\n]*\n', r"\1\n", s)
+elif name == "cosign-digest-check-dropped":
+    s = must_sub(r'          \[\[ "\$COSIGN_ZOT_DIGEST" == "sha256:[^\n]*\|\| degraded cosign_digest_mismatch[^\n]*\n', "", s)
+elif name == "cosign-digest-lookup-unrouted":
+    s = must_sub(r' \|\| degraded cosign_digest_lookup "\$\?" "cosign digest lookup failed after the copy"', "", s)
+elif name == "cosign-digest-shape-unchecked":
+    s = must_sub(r'          \[\[ "\$COSIGN_ZOT_DIGEST" =~ \^sha256[^\n]*\n', "", s)
+elif name == "cosign-dst-retargeted":
+    s = must_sub(r'jikig-ai/cosign:v3\.1\.1', "jikig-ai/cosign-tools:v3.1.1", s)
 elif name == "variant-no-if":
     s = must_sub(r"(id: zot_mirror\n)\s+if: [^\n]*\n", r"\1", s)
 elif name == "variant-reworded":
@@ -606,6 +747,19 @@ else
     "digest-check-dropped|digestbad|digest mismatch after the copy"
     "digest-lookup-unrouted|digestfail|crane digest lookup failing"
     "digest-shape-unchecked|digestshape|crane digest returning garbage"
+    "sign-drops-yes|struct|sign-blob runs once with --yes"
+    "sign-drops-bundle|struct|via --bundle"
+    "sign-renames-bundle|struct|via --bundle"
+    "sign-adds-output-signature|struct|no removed cosign-2.x"
+    "sign-adds-output-certificate|struct|no removed cosign-2.x"
+    "sign-step-deleted|struct|exactly one step invokes cosign sign-blob"
+    "dockerfile-cmd-dropped|struct|carries a CMD"
+    "cosign-copy-dropped|struct|cosign verifier image is copied"
+    "cosign-copy-route-dropped|cosigncopyfail|cosign copy failing every time"
+    "cosign-digest-check-dropped|cosigndigestbad|cosign digest mismatch after the copy"
+    "cosign-digest-lookup-unrouted|cosigndigestfail|cosign digest lookup failing"
+    "cosign-digest-shape-unchecked|cosigndigestshape|cosign digest returning garbage"
+    "cosign-dst-retargeted|struct|cosign mirror destination"
   )
   for row in "${ROWS[@]}"; do
     IFS='|' read -r m kind expect <<< "$row"
@@ -660,7 +814,7 @@ fi
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # ANTI-VACUITY FLOOR. Equal to the green-run count: raise it in the same edit that adds a case. It sits
 # directly above its `if` so guard-vacuity-floor can slice it.
-MIN_ASSERTIONS=78
+MIN_ASSERTIONS=108
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   echo "FATAL: only $((PASS + FAIL)) assertions ran (floor $MIN_ASSERTIONS); the suite did not execute what it claims to." >&2
   exit 1

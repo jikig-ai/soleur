@@ -61,6 +61,13 @@
 #   2026-09-30   #9245 row move (source edit, not detector): regenerate-shard-manifest.test.sh
 #                  45->51 — fixture P's two-page artifacts fixture adds six relative-operand
 #                  rows (the bin/gh stub's cat > payloads and the python zip writes).
+#   2026-10-19   #10389 row moves (source edit, not detector): the new plugin-generic
+#                  affected-test gate adds six files — affected-tests.sh (+2),
+#                  affected-tests.test.sh (+30) and lib/affected-tests/{go,js,nx-turbo,
+#                  python}.sh (+1 each). The rows are the new files' own mktemp/git -C/
+#                  redirect operands; the gate is a fixture-repo SUT, so its suite's
+#                  shim bodies carry real write verbs the scanner cannot resolve to an
+#                  absolute root.
 #
 #   isolated, against the shipped scanner:
 #     `-t` re-treated as a destination flag          +858 rows
@@ -156,8 +163,8 @@
 4	apps/web-platform/infra/arm-heartbeats.sh
 1	apps/web-platform/infra/arm-heartbeats.test.sh
 4	apps/web-platform/infra/canary-bundle-claim-check.test.sh
-18	apps/web-platform/infra/ci-deploy.sh
-7	apps/web-platform/infra/ci-deploy.test.sh
+19	apps/web-platform/infra/ci-deploy.sh
+10	apps/web-platform/infra/ci-deploy.test.sh
 1	apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh
 1	apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh
 7	apps/web-platform/infra/container-restart-monitor.sh
@@ -221,6 +228,7 @@
 1	apps/web-platform/infra/resource-monitor.sh
 12	apps/web-platform/infra/resource-monitor.test.sh
 5	apps/web-platform/infra/run-registered-suites.sh
+1	apps/web-platform/infra/run-registered-suites.test.sh
 2	apps/web-platform/infra/scripts/gen-github-egress-cidr.sh
 1	apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh
 1	apps/web-platform/infra/ssl-full-mitigation-mutation.test.sh
@@ -278,6 +286,7 @@
 8	.claude/hooks/pre-merge-rebase.sh
 1	.claude/hooks/prod-write-defer-gate.sh
 1	.claude/hooks/session-rules-loader.sh
+3	.claude/hooks/session-rules-loader.test.sh
 8	.claude/hooks/ship-kb-archive-gate.sh
 3	.claude/hooks/ship-kb-archive-gate.test.sh
 1	.claude/hooks/ship-soak-followthrough-gate.test.sh
@@ -291,11 +300,17 @@
 3	plugins/soleur/hooks/memory-backstop.sh
 1	plugins/soleur/hooks/operator-stage-approval.sh
 3	plugins/soleur/hooks/stop-hook.sh
+2	plugins/soleur/scripts/affected-tests.sh
+30	plugins/soleur/scripts/affected-tests.test.sh
 14	plugins/soleur/scripts/delegation-verify.sh
 2	plugins/soleur/scripts/delegation-verify.test.sh
 4	plugins/soleur/scripts/domain-model-drift.sh
 2	plugins/soleur/scripts/emit-decision.sh
 1	plugins/soleur/scripts/ext-filter-divergence.sh
+1	plugins/soleur/scripts/lib/affected-tests/go.sh
+1	plugins/soleur/scripts/lib/affected-tests/js.sh
+1	plugins/soleur/scripts/lib/affected-tests/nx-turbo.sh
+1	plugins/soleur/scripts/lib/affected-tests/python.sh
 9	plugins/soleur/scripts/lib/operator-script.sh
 8	plugins/soleur/scripts/lib/session-state.sh
 3	plugins/soleur/scripts/lib/tmp-classify.sh

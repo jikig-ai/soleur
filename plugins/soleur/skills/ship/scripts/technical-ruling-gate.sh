@@ -87,6 +87,18 @@ LABEL_RE='owner[ \t-]+(decision|ruling)s?[ \t]+((is|are)[ \t]+)?(needed|required
 RULING_RE='^Ruled by (CTO|CLO) agent, [0-9]{4}-[0-9]{2}-[0-9]{2}: .+'
 PENDING_RE='pending[ \t]*[^a-z0-9 \t]+[ \t]*assumed'
 VERIFIER="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/../../../scripts/delegation-verify.sh"
+
+# Shared context-sanitize lib (#10395), three levels up at scripts/lib/. When it
+# is unreadable the same-name fallback carries this site's pre-change strip set
+# (tr's [[:cntrl:]] class, under the ambient locale exactly as before — no
+# LC_ALL=C pin, so the fallback never strips less than the site did) — never
+# weaker than today.
+_ctx_lib="$(cd -P "${BASH_SOURCE[0]%/*}/../../../scripts/lib" 2>/dev/null && pwd -P)/context-sanitize.sh"
+_ctx_lib="${_ctx_lib:-/nonexistent/context-sanitize.sh}"
+# shellcheck source=/dev/null
+[[ -r "$_ctx_lib" ]] && . "$_ctx_lib" || true
+declare -F soleur_ctx_sanitize >/dev/null 2>&1 \
+  || soleur_ctx_sanitize() { tr -d '[:cntrl:]'; }
 DELEG_RE='^Authorized by delegation (https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(issues|pull)/([0-9]+)#issuecomment-[0-9]+), envelope ([A-Za-z0-9_./#@ -]+)(, ran ([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z))?$'
 SHAPE_ONLY=0
 SHAPE_ROWS=0
@@ -275,8 +287,8 @@ check_delegation_row_inner() {
   fi
   dv_rc="$(cat "$work_dir/dv.$n.rc")"
   dv_line="$(head -1 "$work_dir/dv.$n.out")"
-  reason="$(printf '%s\n' "$dv_line" | sed -n 's/^delegation: [a-z]* reason=\(.*\)$/\1/p' | tr -d '[:cntrl:]' | cut -c1-60)"
-  why="$(head -1 "$work_dir/dv.$n.err" | tr -d '[:cntrl:]' | cut -c1-200)"
+  reason="$(printf '%s\n' "$dv_line" | sed -n 's/^delegation: [a-z]* reason=\(.*\)$/\1/p' | soleur_ctx_sanitize | cut -c1-60)"
+  why="$(head -1 "$work_dir/dv.$n.err" | soleur_ctx_sanitize | cut -c1-200)"
   if (( dv_rc == 0 )) && [[ "$dv_line" != "delegation: valid reason="* ]]; then dv_rc=2; reason="verifier-error"; why="the delegation checker exited cleanly without saying valid"; fi # mut:deleg-line
   (( dv_rc == 1 )) && { printf '[FAIL] %s:%s: delegation-invalid - %s (reason: %s)\n' "$shown" "$ln" "$why" "$reason" >&2; DR=1; return; }
   (( dv_rc == 0 )) || { printf '[FAIL] %s:%s: delegation-unverifiable - %s (reason: %s); the row was not examined, which is never a pass\n' "$shown" "$ln" "$why" "${reason:-none}" >&2; DR=2; return; } # mut:deleg-unv

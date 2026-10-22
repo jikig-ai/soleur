@@ -301,6 +301,29 @@
     }
   },
   {
+    "__comment": "#10136 — Inngest link TLS handshake evidence (plan A2). Runs the registry probe in its --tls-handshake mode with a FIXED argument (webhook source=string, never request-controlled): (a) curl --cacert on the pinned CA returns 200 from https://10.0.1.40:8443/health and (b) the same request without the CA fails with a certificate-verification error (curl exit 60). The body is ONE line of fixed tokens plus numeric exit codes, never curl stderr; the exit code is 0 only when both legs hold. A separate hook because inngest-registry-probe has no argument pass-through and cutover-inngest.sh parses its body as registry JSON. Terminates on web-1 (web-2 is a standby): the per-host proof is each host's own ci-deploy canary.",
+    "id": "inngest-tls-handshake",
+    "execute-command": "/usr/local/bin/inngest-registry-probe.sh",
+    "command-working-directory": "/",
+    "include-command-output-in-response": true,
+    "include-command-output-in-response-on-error": true,
+    "http-methods": ["GET"],
+    "trigger-rule-mismatch-http-response-code": 403,
+    "pass-arguments-to-command": [
+      { "source": "string", "name": "--tls-handshake" }
+    ],
+    "trigger-rule": {
+      "match": {
+        "type": "payload-hmac-sha256",
+        "secret": ${jsonencode(webhook_deploy_secret)},
+        "parameter": {
+          "source": "header",
+          "name": "X-Signature-256"
+        }
+      }
+    }
+  },
+  {
     "__comment": "#6919 — the op=verify HTTP 500 fix. The cutover arms forward the STARTED_AT window lower bound (from) and an optional functionIDs scope (function_ids) as URL query params so the wide default scan can be cost-cut without a code change. All three are read into the probe's env seams (INNGEST_DOUBLEFIRE_FROM / INNGEST_DOUBLEFIRE_FUNCTION_IDS / #6940's INNGEST_GQL_PAGE_SIZE — fail-closed 1..1000 in the probe, garbage refuses rather than parses). from MUST respect the window-superset invariant (FROM <= cutover_instant - 2*max_cron_period ~= 182d); the caller passes cutover-200d. HMAC is over the (empty) GET body, so query params do not affect the signature. Values are injection-safe: the script binds from via jq --arg and splits function_ids via jq -R.",
     "id": "inngest-doublefire-probe",
     "execute-command": "/usr/local/bin/inngest-doublefire-probe.sh",

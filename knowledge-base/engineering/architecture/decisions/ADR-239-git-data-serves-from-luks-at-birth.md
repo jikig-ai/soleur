@@ -376,6 +376,7 @@ Plan: `knowledge-base/project/plans/archive/20261003-090828-2026-10-02-feat-git-
   the ledger `expires_on` for this store and two days before the 2026-10-24 date in the issue. Hetzner-side
   snapshot retention of the volume remains unmeasured (Art. 30 PA-36 (f)), so this records an end for the
   device and claims nothing about copies of it.
+  > **Superseded 2026-10-12 (#6897), as to "Target: 2026-10-22": see Amendment 2026-10-12 below; the outer date is 2026-11-12. Pointer added 2026-10-19.**
 - **A second id-bearing file the repo-root check cannot see: the gc cursor.** `git-data-gc.sh` writes the
   basename of the last repo it completed (`<id>.git`) to `.gc-cursor` at the mount root, one level above the
   repo root, and a later run that completes a repo overwrites it. The timer is nominally weekly (Sunday 03:20), but a
@@ -393,6 +394,8 @@ Plan: `knowledge-base/project/plans/archive/20261003-090828-2026-10-02-feat-git-
   quietly.** Until the volume is deleted, the files remain readable to anyone holding the volume or a snapshot of
   it. The lint warns inside 14 days of `expires_on` and fails CI after it.
 
+> **Superseded 2026-10-12 (#6897), as to "before 2026-10-23, the first day the ledger lint fails": that date followed from the 2026-10-22 target, the re-opening it describes is Amendment 2026-10-12 below, and the outer date is 2026-11-12. Pointer added 2026-10-19.**
+>
 > **Superseded 2026-10-15 (#6897): "it is gated by the flip chain" no longer holds for the separated wipe variant; see Amendment 2026-10-15 below. The flip chain still gates the flip-chained variant.**
 
 - **Inputs for the CLO re-ruling.** The issue sets the trigger: if the fix and the served-store purge slip past
@@ -456,6 +459,8 @@ The 2026-10-09 amendment set 2026-10-22 as the target for destroying `hcloud_vol
 
 **New date: 2026-11-12, at the latest.** The ledger row `hcloud_volume.git_data` is renewed to that date (tracking #6897). The date is bound to the flip chain, not to a calendar: a second slip past it re-opens this ADR again and goes back to the CLO. It is not rolled quietly. The CLO's final re-ruling is due 2026-10-24; this amendment is provisional until then. No published legal wording changes in this PR (the hold on privacy-policy and DPD wording stays).
 
+> **Superseded 2026-10-19 (#10138; fires on the merge of PR #10528), as to "the hold on privacy-policy and DPD wording stays": it stays for every passage except DPD section 10.3(b) and T&C section 14.1b, whose interim wording the CLO ruling of 2026-10-19 allows ahead of the 2026-10-24 re-ruling. The Privacy Policy and GDPR Policy holds are unchanged.**
+>
 > **Superseded 2026-10-15 (#6897): "bound to the flip chain" no longer holds for the separated wipe variant; the 2026-11-12 date is unchanged. See Amendment 2026-10-15 below.**
 
 **State as measured (Hetzner API read-only and Better Stack, 2026-10-12; none of it read from a host):**
@@ -563,3 +568,12 @@ Unchanged for both: typed volume id equal to what Hetzner names, same-session ho
 **Residuals (recorded on #6897, comment 6188355137, 2026-10-15; told to the CLO and attested as labelled, A.11, 2026-10-15).** (1) The run-record scan does not see a flag set by hand in Doppler; the on-host count shows the LUKS store holds no repositories at that moment, not that the flag never flipped (CTO, inferred). (2) The soleur-ai runtime App key residual of #8609 (ADR-241 D2) applies to every Tier-B consumer, including the `wipe` job (inherited from #8609, measured there 2026-09-22). (3) Erased-user `.<id>.init.lock` and `.gc-cursor` residue on the plaintext volume, and any Hetzner snapshot or backup retention, are unmeasured (inherited, Amendment 2026-10-09); the 404 read-back is the end event for the device only. (4) An untrappable kill during the `wipe_check` listing can leave the throwaway `git-data-pt-snap` until an owner-named `snapshot_clear` dispatch (CTO, inferred).
 
 **Unchanged.** The 2026-11-12 outer date; a second slip goes back to the CLO; moving the ledger `expires_on` past 2026-11-12 needs a CLO re-ruling linked on #6897; the CLO re-ruling due 2026-10-24 concerns DPD §10.3(b) and the #10136 items and does not gate this amendment, whose wording was re-attested as final on 2026-10-15 (A.11). Nothing here claims reopen, passphrase-loss recovery (#9948), re-escrow (#9949), the state-restore substrate (#7992), or emptiness for web-2.
+
+## Amendment 2026-10-19 — the rollback arm clears the soak anchor (#10297)
+
+The `flag_write` step of `mode=rollback` deletes `GIT_DATA_LUKS_CUTOVER_AT` with the step's own `DOPPLER_TOKEN_GIT_DATA_FLAG` (no new binding site), reads it back, and only then writes `GIT_DATA_STORE_ENABLED=false`; a failed clear is `verdict=cutover_at_clear_failed` (exit 5) with the flag still `true` and the fleet unchanged. The clear runs before the flag write on purpose: after it, a failure would skip the redeploy of a fleet still on the store and a re-dispatch would read `nothing_to_rollback`.
+
+1. The statement above that "the stamp survives a rollback" no longer holds for a rollback that finds the flag `true`. It still holds for a rollback that finds the flag already off (`nothing_to_rollback` clears nothing), for the finalizer's flip-arm unwind, and for every rollback that ran before this change.
+2. A flipped-then-rolled-back store is now flag `false` with no stamp, which `select_variant` classes `separated` (alternative (c) above anticipated the shape). Its barriers are the run-record scan (`wipe_separated_store_dirty`) and the on-host `store_root_repos=0` count; the earlier `flip_chained` refusal (`wipe_precondition_flag_not_true`) no longer applies to that state.
+3. The interim guard `wipe_precondition_rollback_after_stamp` stays. It retires only once the clear has been read from a real run, because the DELETE permission of `DOPPLER_TOKEN_GIT_DATA_FLAG` on `prd` is UNVERIFIED (the suites run against a shim). Until then, a missing permission blocks the rollback of a stamped flip at `step=delete`; the fallback is an owner-gated delete with read-back (R8), recorded in the runbook Verdict map.
+4. Open on #10297: a flip-start clear (before the flag-on write) would also cover a stamp left by a manual flag-off or a finalizer unwind; it waits for the rehearsal to measure DELETE.

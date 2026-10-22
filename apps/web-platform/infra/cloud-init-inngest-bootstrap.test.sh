@@ -1020,7 +1020,7 @@ assert "Row2: the pin carrier and the zot ref pin the SAME digest (crane copy is
   "[[ -n '$ZG_ZOT_DIGEST' && '$ZG_ZOT_DIGEST' == '$ZG_GHCR_DIGEST' ]]"
 
 # --- Row 3: every registry outcome is reported off-box ------------------------------------
-# The Better Stack half. inngest-boot-phone-home.sh's signature is `<stage> [detail]` with NO
+# The Better Stack half. inngest-boot-phone-home.sh's signature is `<stage> [detail] [marker]` with NO
 # severity argument, so the STAGE NAME carries the whole signal. The same outcomes ALSO reach
 # Sentry through a host-local soleur-boot-emit (#6500); that half is Guard 1b below, which pins
 # the call sites per ARM rather than per file. No emitted stage begins with `inngest_zot` other

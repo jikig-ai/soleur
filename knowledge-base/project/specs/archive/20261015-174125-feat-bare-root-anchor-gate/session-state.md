@@ -1,0 +1,66 @@
+# Session State
+
+## Plan Phase
+- Plan file: /data/git-repositories/jikig-ai/soleur/.worktrees/feat-bare-root-anchor-gate/knowledge-base/project/plans/2026-10-15-chore-bare-root-cwd-session-gate-plan.md
+- Status: complete (plan + deepen-plan by subagent; Reviewed-Coverage: sequential-fallback inside subagent)
+- Plan artifact: complete (selector=branch)
+
+### Errors
+- Plan subagent's exec shells spawned at the bare repo root (the defect this issue fixes); worked around with explicit cd/workdir.
+- Plan subagent had no run_subagent surface — research/plan-review/GDPR ran sequential-inline; disclosed.
+- First `git commit` denied by guardrails.sh block-commit-on-main (bare-root CWD resolution); retried with explicit `cd <worktree>` (per #8254 workaround).
+
+### Decisions
+- Detection predicate: config-FILE conjunction (`.git` real non-symlink dir + `core.bare=true` via `git config --file` + `--absolute-git-dir == $root/.git`), NOT `git rev-parse --is-bare-repository` (ADR-173; verbatim reuse of bare-head-self-heal.sh pattern). Confirmed by CTO ruling.
+- Gate placement: new `.claude/hooks/bare-root-cwd-guard.sh` child arm of `session-rules-loader.sh` + marker arm in `git-repo-readiness-diag.sh`. NOT worktree-manager/cleanup-merged (legitimate bare-root population). Confirmed by CTO ruling.
+- Redirect, not refuse: marker + injected context naming worktree-manager --yes create; hard PreToolUse deny stays in #3206's scope. Confirmed by CTO ruling.
+- Manifest writes at bare root: keep (forensic record). Confirmed by CTO ruling.
+- Marker payload: `source=` only on mirrored line; absolute CWD only in session-local context block. Confirmed by CTO ruling.
+- Tracked overlay is a maintained `sync_bare_files` mirror — deletion descoped; follow-ups #10391 (scratch cleanup) and #10392 (plugin-level arm) filed.
+- `SOLEUR_BARE_ROOT_CWD` added to MARKER_RE in git-lock-marker-telemetry.ts (drift-guard requirement).
+- cto_spawns=1 (batched, all five technical rows confirmed).
+
+### Components Invoked
+- soleur:plan, soleur:plan-review, soleur:deepen-plan (via subagent, sequential-fallback)
+- soleur:engineering:cto (batched ruling spawn, main session)
+- technical-ruling-gate.sh --branch (PASS)
+
+## Work Phase (in progress)
+- Plan: /data/git-repositories/jikig-ai/soleur/.worktrees/feat-bare-root-anchor-gate/knowledge-base/project/plans/2026-10-15-chore-bare-root-cwd-session-gate-plan.md
+- Branch: feat-bare-root-anchor-gate | Worktree: /data/git-repositories/jikig-ai/soleur/.worktrees/feat-bare-root-anchor-gate | PR: #10386 (draft) | Issue: #10383
+- DONE so far: .claude/hooks/bare-root-cwd-guard.sh + .test.sh (30/30 pass); session-rules-loader.sh arm + tests 34-36 (35/35 pass); README subsection; git-repo-readiness-diag.sh marker arm + plugins/soleur/test/git-repo-readiness-diag.test.sh (8/8 pass); MARKER_RE + MIRRORED-NOT-PAGED comment in apps/web-platform/server/git-lock-marker-telemetry.ts; scripts/bare-root-cwd-guard-probe.sh (verified prints marker).
+- REMAINING: telemetry test row in apps/web-platform/test/git-lock-marker-telemetry.test.ts; ADR-099 amendment; go.md one-line touch (Step 1 bare-repo paragraph, outside eval-gate block); tasks.md checkboxes; commit+push; then soleur:review -> qa -> compound -> ship -> merge -> postmerge -> DONE.
+- Follow-ups already filed by plan phase: #10391, #10392.
+- Test invocation note: run hook/test scripts with `unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_TEMPLATE_DIR GIT_EXEC_PATH` first (fixture tripwire).
+
+## Work Phase (complete)
+- Implementation commit: 6fc8f59869 pushed to origin/feat-bare-root-anchor-gate (PR #10386 draft)
+- All suites green: bare-root-cwd-guard.test.sh 30/30, session-rules-loader.test.sh 35/35, git-repo-readiness-diag.test.sh 8/8, git-lock-marker-telemetry.test.ts 32/32, probe verified.
+- NEXT: soleur:review (Step 4) → resolve findings → soleur:qa → soleur:compound → soleur:ship → merge → postmerge → DONE
+
+## Review Phase (in progress)
+- Review commit 2: review fixes pushed. Security seat: clean except P3-1 (fixed) + P3-2 sanitizer gap (pre-existing codebase-wide: DEL/U+2028/U+2029 pass `tr -d '\000-\037'` — follow-up issue to file). Simplicity+arch seat: A-P2 fixed (diag env scrub); A-P3s noted (guard↔heal parity unpinned — acknowledge; MARKER_RE bare-token vs loader space asymmetry — note only).
+- Test-design seat (b880e82a) still running.
+- NEXT: collect test-design seat → file P3-2 follow-up issue → soleur:qa → soleur:compound → soleur:ship → merge → postmerge → DONE
+
+## Review+QA Phase (complete)
+- Review fixes committed+pushed (9c650a4f8d). All suites green incl. T37 + D6. E2E verified: real SessionStart envelope at a bare-root fixture carries marker + redirect block; probe prints marker in 0.03s.
+- P3-2 sanitizer follow-up filed: #10395. Test-design seat (b880e82a) still running in background.
+- NEXT: soleur:compound → soleur:ship → merge → postmerge → DONE. PR #10386 draft, issue #10383.
+
+## Compound Phase (complete)
+- Learning written: knowledge-base/project/learnings/2026-10-15-a-predicate-parity-claim-needs-an-env-injection-fixture.md
+- NEXT: soleur:ship (Phases: commit artifacts, docs verify, tests, semver label, PR ready, CI, merge, postmerge) → merge → DONE
+
+## Ship Phase (starting)
+- Branch feat-bare-root-anchor-gate, PR #10386 (draft), issue #10383 (Closes via PR body — verify), HEAD pushed.
+- All implementation+review complete; suites green; learnings committed.
+- Semver label to set: semver:patch (machinery fix, no new user-facing component? — new hook+marker is a feature-ish addition; plan title says chore(machinery); choose semver:patch).
+- Remaining: ship phases (PR body/changelog, ready, CI watch, squash auto-merge, postmerge) then <promise>DONE</promise>.
+- Test-design seat b880e82a still running — fold findings if it lands pre-merge.
+
+## Ship Phase (merge poll)
+- HEAD bf33cc6be8 (merged origin/main — fixes stale-test flake: my old action-sends-worm test vs deployed mig 162). tenant-integration now SUCCESS.
+- Only remaining red: test-scripts (3/8) flake `test-all-orphan-log-retention` (reap timing) — rerun requested.
+- Auto-merge armed; awaiting shard rerun + `test` aggregate, then MERGED → postmerge → DONE.
+- Issues filed: #10391 #10392 #10395 #10407 (tenant break root-caused to #10385 mig-162 deploy lag; resolved by main sync).

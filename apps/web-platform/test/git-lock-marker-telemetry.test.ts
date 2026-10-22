@@ -172,6 +172,22 @@ describe("extractGitLockMarkers", () => {
     expect(extractGitLockMarkers("SOLEUR_DOCKER_PRUNED x=1").length).toBe(0);
   });
 
+  // #10383 — the bare-root CWD marker. Informational, never paged; both
+  // producer variants must mirror and a mid-sentence mention must not.
+  test("mirrors SOLEUR_BARE_ROOT_CWD without paging", () => {
+    for (const line of [
+      "SOLEUR_BARE_ROOT_CWD source=session-start",
+      "SOLEUR_BARE_ROOT_CWD source=readiness-diag",
+    ]) {
+      expect(extractGitLockMarkers(line).length, `${line} must be mirrored`).toBe(1);
+      expect(extractGitLockMarkers(line)[0]?.wedged, `${line} must not page`).toBe(false);
+    }
+    expect(
+      extractGitLockMarkers("note: SOLEUR_BARE_ROOT_CWD was discussed").length,
+    ).toBe(0);
+    expect(extractGitLockMarkers("SOLEUR_BARE_ROOT_CWDED x=1").length).toBe(0);
+  });
+
   // #7394 — the bare-config polarity markers. Classification is by `branch=`, not by
   // marker name, because one name covers both a recoverable and an unrecoverable outcome.
   test("mirrors both SOLEUR_GIT_BARE_POISON branches without paging (the run proceeded)", () => {

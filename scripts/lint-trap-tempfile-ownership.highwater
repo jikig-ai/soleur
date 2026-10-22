@@ -1,4 +1,7 @@
-36  # class-b accept (ADR-129): tracked *.sh calling mktemp with ZERO trap...EXIT.
+35  # class-b accept (ADR-129): tracked *.sh calling mktemp with ZERO trap...EXIT.
+# 36 -> 35 (2026-10-20, #7376): --census measured 35 on this branch; the
+# ratchet-down note in the CI failure named the accept. No new entrant.
+
 # 70 -> 36 (2026-10-12, #10017 / tmpfs-guard count-shaped-leak incident): the
 # mktemp census sweep. 34 files left the population — 23 test suites gained a
 # SUITE_TMP root + owning EXIT trap (the #7490 pattern), 4 community setup

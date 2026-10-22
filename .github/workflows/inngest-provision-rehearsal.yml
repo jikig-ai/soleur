@@ -215,13 +215,13 @@ jobs:
           set -euo pipefail
           ZOT_PULL="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain)"
           printf '::add-mask::%s\n' "$ZOT_PULL"
+          export TF_VAR_zot_pull_token="$ZOT_PULL"
           # nic_attached=false: destroy is state-driven (the flag's value does not decide
           # what is destroyed), and false keeps the conditional NIC resource out of the
           # destroy graph — so a transiently-unreadable prod network cannot fail teardown.
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform destroy -auto-approve -input=false \
-              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=false \
-              -var "zot_pull_token=${ZOT_PULL}"
+              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=false
           echo "teardown-only complete"
 
       # ── PHASE A: birth WITHOUT the private NIC ────────────────────────────────────
@@ -231,7 +231,9 @@ jobs:
       # passed explicitly (the parent root mirrors it to soleur-registry/prd AND keeps it in
       # soleur/prd — measured by registry-zot-inventory.yml; but THAT read needs
       # DOPPLER_TOKEN_PRD: secrets.DOPPLER_TOKEN is prd_terraform-scoped and 403s on soleur/prd,
-      # which is what the first dry run proved).
+      # which is what the first dry run proved; prd_terraform listed an equal ZOT_PULL_TOKEN on
+      # 2026-10-20, a snapshot, so the explicit read stays: see ADR-280 and #10675). It reaches
+      # terraform as TF_VAR_zot_pull_token in the step environment, never as a -var option.
       - name: Terraform plan (phase A — NIC absent)
         id: plan_a
         if: '!inputs.teardown_only'
@@ -244,10 +246,10 @@ jobs:
           set -euo pipefail
           ZOT_PULL="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain)"
           printf '::add-mask::%s\n' "$ZOT_PULL"
+          export TF_VAR_zot_pull_token="$ZOT_PULL"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan-a \
-              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=false \
-              -var "zot_pull_token=${ZOT_PULL}"
+              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=false
 
       # THE PLAN-SHAPE GUARD RUNS ON THE REAL ARM TOO, not only dry_run: the dangerous
       # dispatch is precisely the one with dry_run=false. The shape step reads EXACTLY the
@@ -370,10 +372,10 @@ jobs:
           date -u +%Y-%m-%dT%H:%M:%S > "$GITHUB_WORKSPACE/phase-b-since.txt"
           ZOT_PULL="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain)"
           printf '::add-mask::%s\n' "$ZOT_PULL"
+          export TF_VAR_zot_pull_token="$ZOT_PULL"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan-b \
-              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=true \
-              -var "zot_pull_token=${ZOT_PULL}"
+              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=true
 
       - name: Assert the phase-B delta is exactly the NIC attachment (plan-shape nic-attach)
         if: ${{ !inputs.teardown_only && !inputs.dry_run }}
@@ -637,19 +639,21 @@ jobs:
           # assertion below is skipped, and a real run leaks the paid stack.
           ZOT_PULL="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain)"
           printf '::add-mask::%s\n' "$ZOT_PULL"
+          export TF_VAR_zot_pull_token="$ZOT_PULL"
           # nic_attached=false: destroy is state-driven (the flag's value does not decide
           # what is destroyed), and false keeps the conditional NIC resource out of the
           # destroy graph — so a transiently-unreadable prod network cannot fail teardown.
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform destroy -auto-approve -input=false \
-              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=false \
-              -var "zot_pull_token=${ZOT_PULL}"
+              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=false
 
       # THE ORPHAN ASSERTION, IN-WORKFLOW. `terraform destroy` acts only on state, so a
       # destroy that half-ran leaves paying objects behind — the drift sweep DETECTS those
       # later, but this step makes a leaked host fail loudly in the run that leaked it.
       # Query by LABEL (the sweep's axis), and the trailing hyphen prefix by name.
       - name: Assert no rehearsal orphans remain (Hetzner API)
+        # always() — a failed destroy above is the partial-teardown case this step exists for.
+        if: always()
         timeout-minutes: 8
         run: |
           set -euo pipefail
@@ -670,3 +674,52 @@ jobs:
             exit 1
           fi
           echo "no rehearsal orphans"
+
+      # The scratch Doppler environment is NOT a Hetzner object, so the assert above cannot
+      # see it — and the scheduled sweep's token is config-scoped by construction, so the
+      # sweep's own probe arm could never enumerate the project (#9919: that arm is deleted;
+      # this check moved to the one job that holds a credential able to see what it created).
+      # The credential here is the Doppler provider token the rehearsal root itself
+      # authenticates with (DOPPLER_TOKEN_TF, exported by the infra-credentials loader
+      # — a tier_b_names entry the census requires to arrive through the loader, so
+      # this step reads the exported var ONLY, fail-closed on empty).
+      - name: Assert no scratch Doppler environment remains (Doppler API)
+        # always() — a failed destroy or Hetzner assert above is the partial-teardown case
+        # this check exists for; default success() would skip it exactly then.
+        if: always()
+        timeout-minutes: 3
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          # Declared floor, mirroring the sweep's honest-verdict shape: the project must
+          # enumerate at least `prd` before a "no rehearsal_*" answer means anything. A
+          # token that cannot see the project returns zero and FAILS this check rather than
+          # reporting a clean verdict it never measured.
+          ENV_FLOOR: 1
+        run: |
+          set -euo pipefail
+          ENV_TOKEN="${DOPPLER_TOKEN_TF:-}"
+          [[ -n "$ENV_TOKEN" ]] || { echo "::error::DOPPLER_TOKEN_TF is empty — the infra-credentials loader exported no provider token, so the scratch-environment check has no verdict. Fail-closed."; exit 1; }
+          printf '::add-mask::%s\n' "$ENV_TOKEN"
+          env_rc=0
+          env_raw="$(DOPPLER_TOKEN="$ENV_TOKEN" doppler environments -p soleur-inngest --json)" || env_rc=$?
+          if [[ "$env_rc" -ne 0 ]]; then
+            echo "::error::doppler environments -p soleur-inngest failed (rc=${env_rc}) — the scratch-environment check has no verdict. Fail-closed."
+            exit 1
+          fi
+          env_total="$(printf '%s' "$env_raw" | jq -r 'if type == "array" then length else "notarray" end' 2>/dev/null)" || env_total=""
+          if [[ ! "$env_total" =~ ^[0-9]+$ ]]; then
+            echo "::error::could not parse the doppler environments listing as a JSON array — fail-closed rather than reporting a clean verdict on an unreadable listing."
+            exit 1
+          fi
+          if [[ "$env_total" -lt "$ENV_FLOOR" ]]; then
+            echo "::error::doppler listed ${env_total} soleur-inngest environment(s), below the declared floor of ${ENV_FLOOR} (prd must exist) — the token cannot see what the rehearsal created; the check measured nothing."
+            exit 1
+          fi
+          # Either field can carry the prefix — `.slug // .name` alone would miss a
+          # rehearsal_ NAME under a non-matching slug, so both are probed independently.
+          env_left="$(printf '%s' "$env_raw" | jq -r '[.[]? | select(((.slug? // "") | tostring | startswith("rehearsal_")) or ((.name? // "") | tostring | startswith("rehearsal_"))) | (.slug? // .name? // "")] | .[]')"
+          if [[ -n "$env_left" ]]; then
+            echo "::error::scratch Doppler environment(s) remain in soleur-inngest after destroy: $(printf '%s\n' "$env_left" | paste -sd' ' - | tr -d '\000-\037\177' | tr '%' '_'). Reclaim per the inngest-provision-rehearsal runbook."
+            exit 1
+          fi
+          echo "no scratch rehearsal_* Doppler environments remain (${env_total} listed)"

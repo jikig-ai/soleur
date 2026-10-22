@@ -30,6 +30,14 @@ if [ -f "$_HOOK_DIR/lib/log-rotation.sh" ]; then
   # shellcheck source=/dev/null
   . "$_HOOK_DIR/lib/log-rotation.sh" || true
 fi
+# Shared context-sanitize lib (#10395). When it is unreadable the same-name
+# fallback carries this site's pre-change strip set (newline and tab only —
+# the weakest set in the census) — never weaker than today.
+_ctx_lib="$_HOOK_DIR/lib/context-sanitize.sh"
+# shellcheck source=/dev/null
+[ -r "$_ctx_lib" ] && . "$_ctx_lib" || true
+declare -F soleur_ctx_sanitize >/dev/null 2>&1 \
+  || soleur_ctx_sanitize() { LC_ALL=C tr -d '\n\t'; }
 export SOLEUR_HOOK_NAME="monitor-arm-recorder"
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
@@ -69,7 +77,10 @@ SIG="$(monitor_sig "$INPUT")"
 [ -n "$SIG" ] || exit 0
 
 TASK=$(printf '%s' "$INPUT" | jq -r '(.tool_response.taskId? // .tool_response.task_id? // "") | if type=="string" then . else "" end' 2>/dev/null) || TASK=""
-DESC=$(printf '%s' "$INPUT" | jq -r 'if ((.tool_input.description? // null)|type)=="string" then .tool_input.description else "" end' 2>/dev/null | tr -d '\n\t' | cut -c1-200) || DESC=""
+# DESC is model-supplied free text bound for a JSONL ledger other hooks read —
+# strip the full control-char class (not just \n\t as before #10395), via the
+# shared lib, so ESC/DEL/NEL/LS/PS cannot reach the ledger either.
+DESC=$(printf '%s' "$INPUT" | jq -r 'if ((.tool_input.description? // null)|type)=="string" then .tool_input.description else "" end' 2>/dev/null | soleur_ctx_sanitize | cut -c1-200) || DESC=""
 TIMEOUT_MS=$(printf '%s' "$INPUT" | jq -r '.tool_input.timeout_ms // 300000' 2>/dev/null) || TIMEOUT_MS=300000
 PERSISTENT=$(printf '%s' "$INPUT" | jq -r '.tool_input.persistent // false' 2>/dev/null) || PERSISTENT=false
 case "$TIMEOUT_MS" in ''|*[!0-9]*) TIMEOUT_MS=300000 ;; esac

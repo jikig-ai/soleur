@@ -63,7 +63,8 @@ function spawnScriptCapture(
     child.stdout?.on("data", (d: Buffer) => {
       stdout += d.toString();
     });
-    child.on("exit", (exitCode) => resolve({ exitCode, stdout }));
+    // `close`, not `exit`: `exit` can fire before stdout has been fully delivered (#10553).
+    child.on("close", (exitCode) => resolve({ exitCode, stdout }));
     child.on("error", () => resolve({ exitCode: -1, stdout }));
   });
 }

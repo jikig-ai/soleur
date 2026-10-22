@@ -489,6 +489,10 @@ PostToolUse runs after the tool's write, so these cannot block. Most are telemet
   - If the suite carries an anti-vacuity floor, add a `PROMOTED_FILES` entry in `scripts/guard-vacuity-floor.test.sh`.
     That ratchet reads tracked files, so measure it only after `git add` (#8616).
 
+## Property tests
+
+Generated-input (property-style) suites for hook/lib contracts use `scripts/lib/property-harness.sh` — a seeded `RANDOM` loop with `PROP_SEED` replay + `PROP_RUNS` budget — documented in `scripts/lib/property-harness.md`. Reference suite: `scripts/lib/legal-normalise-property.test.sh`. Property suites for hooks live in `.claude/hooks/` (this directory's glob), for repo libs in `scripts/lib/`; either way the `SUITE_GLOBS` registration plus the placement + edge rules from "Adding a hook test suite" apply unchanged.
+
 ## macOS note
 
 `flock` is not installed by default on macOS. Dev machines need:
@@ -616,6 +620,49 @@ tokens and always exits 0.
   moving `HEAD` (a root-level `git checkout`, `git branch -m`, or `gh pr merge --delete-branch`).
   Only then is a guardrail blocking `git symbolic-ref HEAD` / `git branch -m` at the bare root
   worth filing. It is deliberately not built now.
+
+### Bare-root CWD marker
+
+A session anchored at the bare repo root is a valid maintenance context (`cleanup-merged`,
+`sync-bare-files`, the `.mcp.json` restore all legitimately run there) but the wrong place for
+file-touching work — `go.md`'s Step 1 guard only reaches sessions routed through `/soleur:go`,
+so every other misanchored session had no signal at all (#10383).
+
+`session-rules-loader.sh` calls `bare-root-cwd-guard.sh` as a time-boxed child process (5 s
+where `timeout` exists; `SOLEUR_BARE_CWD_TIMEOUT_S` for tests), after the corpus read. The
+helper applies the same three-term config-FILE predicate as `bare-head-self-heal.sh` —
+`<dir>/.git` real non-symlink dir, `core.bare=true` read from the config FILE (never
+`--is-bare-repository`, ADR-173), `--absolute-git-dir` identity — so a plain clone, a linked
+worktree, a true-bare repo, a masked config, and a symlinked `.git` all stay silent.
+
+- **Marker:** one line `SOLEUR_BARE_ROOT_CWD source=session-start` plus a bounded
+  `[bare-root-cwd]` block, appended LAST in `additionalContext` (after the heal marker). The
+  block redirects file-touching work to `worktree-manager.sh --yes create <name>`, names the
+  legitimate bare-root maintenance commands, and warns that a `.env` at the root is not
+  project configuration. It is advisory — SessionStart can only emit context; the hard
+  PreToolUse deny is #3206's scope. `git-repo-readiness-diag.sh` emits the sibling
+  `source=readiness-diag` variant under the same predicate, and `SOLEUR_BARE_ROOT_CWD` is
+  registered in MARKER_RE (`apps/web-platform/server/git-lock-marker-telemetry.ts`) as
+  MIRRORED-NOT-PAGED.
+- **Fail-open:** the loader accepts only the documented shape (marker first line +
+  `[bare-root-cwd]` lines, control chars stripped, capped at 12 lines); a missing, failing,
+  noisy or hung helper cannot inject anything or fail the hook.
+- **Scope:** fires only when the session's cwd IS the bare root — a bare-root subdirectory
+  does not match the gitdir-identity term (tracked as a #10392 candidate). Legitimate
+  maintenance sessions see the block on every start; that is the disclosure, not a refusal.
+- **Plugin-level arm (#10392):** `plugins/soleur/hooks/bare-root-cwd-guard.sh` carries the
+  same three-term predicate in the plugin payload, registered in `hooks.json` with a `""`
+  SessionStart matcher so OTHER repos on the machine get the arm. It dedups against repos
+  already carrying `session-rules-loader.sh` (marker grep + registry reference), emits
+  `SOLEUR_BARE_ROOT_CWD source=plugin-session-start`, and uses topology-generic
+  `git worktree add` redirect text — a genuinely bare customer repo (truebare) stays silent.
+- **Shared context sanitizer (#10395):** `.claude/hooks/lib/context-sanitize.sh` (byte-equal
+  copy at `plugins/soleur/scripts/lib/context-sanitize.sh`) is the single strip helper all
+  context/display boundaries call — three variants (strip-all / keep-`\t\n` / keep-`\n`-only)
+  that additionally remove DEL and the UTF-8 line-break class (NEL, U+2028, U+2029). Each
+  adopt site keeps a `declare -F` fallback carrying its pre-change strip set so an
+  unreadable lib degrades to status quo. `context-sanitize.test.sh` pins the byte contract,
+  the `cmp` parity, and the drift-sentinel enumeration.
 
 ### Sharp Edges (SessionStart hook design)
 

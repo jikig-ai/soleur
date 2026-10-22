@@ -157,6 +157,16 @@ on:
       # its admission literal and its 30-odd renders. Same class as the two comments above and
       # as #8378 ("the gate that caught it was the one suite I had no reason to run").
       - "scripts/cutover-inngest.sh"
+      # (#10136) inngest-link-flip-workflow.test.sh asserts the flip workflow's posture (dispatch-only, least privilege,
+      # the revert step's exact `if`) and drives its body, scripts/inngest-link-flip.sh, against stubbed gh/curl. Neither
+      # file is under apps/*/infra/**, so a PR editing only one of them would skip the suite whose job is to turn that
+      # edit red - the same defect class as the #6178 and #8079 entries above. (apply-web-platform-infra.yml, which holds
+      # the Tier-B flag job the suite also reads, is already listed.)
+      - ".github/workflows/inngest-link-flip.yml"
+      - "scripts/inngest-link-flip.sh"
+      # The flip's redeploy is the shared driver (track.sh), which the same suite runs for real against a degraded
+      # fan-out frame, and its roster literal is pinned by web-hosts-fanout-parity.test.sh (under apps/*/infra/**).
+      - ".github/actions/dispatch-web-redeploy/track.sh"
       - "tests/scripts/lib/inngest-host-dark-gate.sh"
       - "scripts/lib/betterstack-read-classify.sh"
       # (#8846) the shared probe-row predicate the dark-gate lib, the cutover liveness counters and
@@ -200,6 +210,9 @@ on:
       # skill's (H2). A docs-only heading rename or runbook command edit would otherwise skip the suite. PR list only:
       # the push list above is deliberately narrower.
       - "knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md"
+      # (#9927 item 5) inngest-redis-luks-import-rehearsal.test.sh pins that this ADR's "Terraform state entry lost"
+      # row names it (and the runbook row above). PR list only, like the runbook entry.
+      - "knowledge-base/engineering/architecture/decisions/ADR-282-sole-copy-luks-volume-protection-set.md"
       - "plugins/soleur/skills/postmerge/SKILL.md"
       # (#3366) supabase-advisor/scan-workflow.test.sh reads all of these. The
       # guard's whole job is to catch a gate that looks present but does nothing
@@ -255,6 +268,10 @@ on:
       # (#7530) The registry clientIP alert's drift guard asserts the runbook its incident link points at
       # exists and still carries the legal-consequence anchors; a docs-only edit must run the guard.
       - "knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-7530.md"
+      # (#10453) The SDK Bash smoke alert's drift guard resolves the runbook anchor in its incident link against
+      # canary-probe-set.md; a docs-only heading rename must run the guard. The probe's literal sandbox config and
+      # its verdict table are pinned by test/sdk-bash-probe-parity.test.ts (vitest, run by the web-platform test job).
+      - "knowledge-base/engineering/operations/runbooks/canary-probe-set.md"
   workflow_dispatch:
 
 permissions:
@@ -843,6 +860,13 @@ jobs:
       # resource in the .tf, and the mutation rows that each require this guard to red.
       - name: Run agent sandbox Bash denial alert drift guard (#10445)
         run: bash apps/web-platform/test/infra/sandbox-alerts.test.sh
+
+      # (#10453) The deploy-time SDK Bash smoke Logs alert: the marker, reason and op needles read from ci-deploy.sh's
+      # own sandbox_canary_sentry_event format and the smoke's page call, the three-conjunct predicate EVALUATED against
+      # fixture rows in the real raw shape (outer-wrap, inner bwrap_*, quoting rows must not match), the paging semantics,
+      # a -target= census over every logtail alert in the .tf, the runbook anchor, and the mutation rows.
+      - name: Run faithful canary sandbox-broken (SDK Bash smoke) alert drift guard (#10453)
+        run: bash apps/web-platform/test/infra/faithful-canary-sandbox-alert.test.sh
 
       # (#8408 a) The registry store-not-LUKS / escrow-not-ok Logs alert: head-scoped per-arm
       # predicate, exact literals, unpaused, both -target lines, and its mutation rows.

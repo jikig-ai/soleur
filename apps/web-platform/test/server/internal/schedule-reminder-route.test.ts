@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // INNGEST_MANUAL_TRIGGER_SECRET is security-relevant — capture + restore so a
@@ -195,12 +197,13 @@ describe("POST /api/internal/schedule-reminder — backend refusing connections"
     expect(res.headers.get("Retry-After")).toBeNull();
   });
 
-  it("stays 502 when the cause code is ECONNRESET even if its message mentions ECONNREFUSED", async () => {
+  it("503 (not 502) when the cause code is ECONNRESET, whatever the message says (#10136: a reset is retryable too)", async () => {
     const cause = Object.assign(new Error("read ECONNRESET (after ECONNREFUSED)"), { code: "ECONNRESET" });
     mockSendInngestWithRetry.mockRejectedValueOnce(new TypeError("fetch failed", { cause }));
     const res = await POST(makeRequest(validBody()));
-    expect(res.status).toBe(502);
-    expect(res.headers.get("X-Soleur-Unavailable")).toBeNull();
+    expect(res.status).toBe(503);
+    expect(res.headers.get("Retry-After")).toBe("120");
+    expect(res.headers.get("X-Soleur-Unavailable")).toBe("backend-refused");
   });
 
   it("stays 502 for a non-TypeError whose cause carries code ECONNREFUSED", async () => {
@@ -212,5 +215,117 @@ describe("POST /api/internal/schedule-reminder — backend refusing connections"
   it("stays 502 for a non-TypeError carrying ECONNREFUSED text only in its message", async () => {
     mockSendInngestWithRetry.mockRejectedValueOnce(new Error("upstream said ECONNREFUSED"));
     expect((await POST(makeRequest(validBody()))).status).toBe(502);
+  });
+});
+
+// #10136 (CTO G4): the verified-TLS link adds failure modes the refusal branch did not cover. Each of these is a
+// "scheduler unreachable or unverifiable right now" outcome, so the caller (inngest-rearm-reminders.sh, which aborts on
+// X-Soleur-Unavailable: backend-refused) must see a retryable 503 rather than a terminal-looking 502 and keep going past a lost
+// arm. The send may have been persisted (a reset after the request left is ambiguous): the event id is the reminder id, so the
+// re-arm is deduplicated. Error shapes are synthesized: TypeError("fetch failed") with the code on `cause`.
+function fetchFailedWith(code: string, message = `synthetic ${code}`): TypeError {
+  return new TypeError("fetch failed", { cause: Object.assign(new Error(message), { code }) });
+}
+
+describe("POST /api/internal/schedule-reminder — timeout and TLS-verification causes are retryable (503)", () => {
+  it.each([
+    "ECONNREFUSED",
+    "ETIMEDOUT",
+    "ECONNRESET",
+    "UND_ERR_CONNECT_TIMEOUT",
+    "ERR_TLS_CERT_ALTNAME_INVALID",
+    "ERR_TLS_HANDSHAKE_TIMEOUT",
+    "ERR_TLS_INVALID_PROTOCOL_VERSION",
+    "DEPTH_ZERO_SELF_SIGNED_CERT",
+    "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+    "SELF_SIGNED_CERT_IN_CHAIN",
+    "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+    "CERT_HAS_EXPIRED",
+    "UND_ERR_SOCKET",
+    "EHOSTUNREACH",
+    "ENETUNREACH",
+  ])("%s -> 503 + Retry-After + X-Soleur-Unavailable: backend-refused, mirrored to Sentry", async (code) => {
+    mockSendInngestWithRetry.mockRejectedValueOnce(fetchFailedWith(code));
+    const res = await POST(makeRequest(validBody()));
+    expect(res.status).toBe(503);
+    expect(res.headers.get("Retry-After")).toBe("120");
+    expect(res.headers.get("X-Soleur-Unavailable")).toBe("backend-refused");
+    expect(mockReportSilentFallback.mock.calls[0][1].op).toBe("dispatch");
+  });
+
+  it.each(["ENOTFOUND", "EAI_AGAIN", "EPIPE", "ERR_TLSX", "ERR_TLS", "err_tls_cert", "UND_ERR_BODY_TIMEOUT", ""])(
+    "%s stays 502 (only the listed causes are retryable; ERR_TLS_ needs its underscore and exact case)",
+    async (code) => {
+      mockSendInngestWithRetry.mockRejectedValueOnce(fetchFailedWith(code));
+      const res = await POST(makeRequest(validBody()));
+      expect(res.status).toBe(502);
+      expect(res.headers.get("Retry-After")).toBeNull();
+      expect(res.headers.get("X-Soleur-Unavailable")).toBeNull();
+    },
+  );
+
+  it("stays 502 for a retryable code on something that is not a TypeError, or with no object cause", async () => {
+    mockSendInngestWithRetry.mockRejectedValueOnce(Object.assign(new Error("wrapped"), { cause: { code: "ETIMEDOUT" } }));
+    expect((await POST(makeRequest(validBody()))).status).toBe(502);
+    mockSendInngestWithRetry.mockRejectedValueOnce(new TypeError("fetch failed: ETIMEDOUT"));
+    expect((await POST(makeRequest(validBody()))).status).toBe(502);
+    mockSendInngestWithRetry.mockRejectedValueOnce(new TypeError("fetch failed", { cause: "ETIMEDOUT" }));
+    expect((await POST(makeRequest(validBody()))).status).toBe(502);
+  });
+
+  // One list, two consumers: the host canary's negative control (INNGEST_LINK_CANARY_NEG in ci-deploy.sh) accepts a fixed set of codes as
+  // "certificate verification failed". Two directions are pinned, both derived from SOURCE: (1) the route answers every one of those
+  // codes with the retryable 503 (below), and (2) the route's own retryable set is EXACTLY (the canary's codes that are not ERR_TLS_*,
+  // which the route covers by prefix) + the listed transport codes + CERT_HAS_EXPIRED, so a code added to the route alone, or dropped
+  // from either side, turns this red.
+  const CI_DEPLOY = resolve(__dirname, "../../../../../apps/web-platform/infra/ci-deploy.sh");
+  const canaryVerifyCodes = (): string[] => {
+    const line = readFileSync(CI_DEPLOY, "utf8")
+      .split("\n")
+      .find((l) => l.startsWith("INNGEST_LINK_CANARY_NEG="));
+    const m = line?.match(/\/\^\(([A-Z_|]+)\)\$\/\.test\(c\)/);
+    return m ? m[1].split("|") : [];
+  };
+  it("derives a non-trivial verification-code list from the canary negative control (the parity test below is not vacuous)", () => {
+    const codes = canaryVerifyCodes();
+    expect(codes.length).toBeGreaterThanOrEqual(5);
+    expect(codes).toContain("DEPTH_ZERO_SELF_SIGNED_CERT");
+    expect(codes).toContain("ERR_TLS_CERT_ALTNAME_INVALID");
+  });
+  it("the route's retryable set equals the canary verification codes (minus the ERR_TLS_ prefix family) plus the transport codes", () => {
+    const src = readFileSync(resolve(__dirname, "../../../app/api/internal/schedule-reminder/route.ts"), "utf8");
+    const block = src.match(/const UNAVAILABLE_CAUSE_CODES = new Set\(\[([^\]]*)\]\)/)?.[1] ?? "";
+    const routeCodes = [...block.matchAll(/"([A-Z0-9_]+)"/g)].map((m) => m[1]).sort();
+    const TRANSPORT = ["ECONNREFUSED", "ETIMEDOUT", "ECONNRESET", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_SOCKET", "EHOSTUNREACH", "ENETUNREACH", "CERT_HAS_EXPIRED"];
+    const expected = [...new Set([...canaryVerifyCodes().filter((c) => !c.startsWith("ERR_TLS_")), ...TRANSPORT])].sort();
+    expect(routeCodes.length).toBeGreaterThanOrEqual(10);
+    expect(routeCodes).toEqual(expected);
+  });
+  it.each(canaryVerifyCodes())("canary verification code %s -> the route answers the retryable 503", async (code) => {
+    mockSendInngestWithRetry.mockRejectedValueOnce(fetchFailedWith(code));
+    const res = await POST(makeRequest(validBody()));
+    expect(res.status).toBe(503);
+    expect(res.headers.get("X-Soleur-Unavailable")).toBe("backend-refused");
+  });
+
+  it("a re-arm after an ambiguous reset carries the SAME event id (= reminder_id), so Inngest deduplicates a send that did persist", async () => {
+    mockSendInngestWithRetry.mockImplementationOnce(async (fn: () => Promise<unknown>) => {
+      await fn();
+      throw fetchFailedWith("ECONNRESET");
+    });
+    const first = await POST(makeRequest(validBody()));
+    expect(first.status).toBe(503);
+    const second = await POST(makeRequest(validBody()));
+    expect(second.status).toBe(202);
+    expect(mockInngestSend).toHaveBeenCalledTimes(2);
+    const ids = mockInngestSend.mock.calls.map((c) => c[0].id);
+    expect(ids).toEqual(["r-123", "r-123"]);
+  });
+
+  it("a successful send is untouched (202, no Retry-After)", async () => {
+    mockSendInngestWithRetry.mockResolvedValueOnce(undefined);
+    const res = await POST(makeRequest(validBody()));
+    expect(res.status).toBe(202);
+    expect(res.headers.get("Retry-After")).toBeNull();
   });
 });

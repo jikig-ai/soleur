@@ -490,6 +490,202 @@ test_rp_id_only_degrades_to_empty_triggers() {
   rm -f "$fixture"
 }
 
+
+# =====================================================================================================
+# #10136 — scheme-aware link resolution (/mnt/data/inngest-link/inngest-link.env) and the --tls-handshake mode
+# =====================================================================================================
+LINK_TMP=$(mktemp -d)  # lint-trap-ownership: ok removed by the EXIT trap just below
+trap 'rm -rf "$LINK_TMP"' EXIT
+mkdir -p "$LINK_TMP/bin"
+# curl stub: records argv, answers a one-function registry for the /v0/gql POST, and models --cacert verification for
+# /health (rc 60 without it, 200 with a non-empty file). FX_CURL_STDERR is written to stderr to prove it never leaks.
+cat > "$LINK_TMP/bin/curl" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "${LINK_TMP:?}/curl.argv"
+[ -n "${FX_CURL_STDERR:-}" ] && printf '%s\n' "$FX_CURL_STDERR" >&2
+case "$*" in
+  *"/v0/gql"*) printf '%s' '{"data":{"functions":[{"id":"fn-a","slug":"a","triggers":[]}]}}'; exit 0 ;;
+esac
+if [ "${FX_HS_MODE:-}" = unverified_accepted ]; then printf '200'; exit 0; fi
+case "$*" in
+  *"--cacert"*) if [ "${FX_HS_MODE:-}" = verified_fail ]; then exit 60; fi; printf '200'; exit 0 ;;
+  *) [ "${FX_HS_MODE:-}" = unverified_refused ] && exit 7; exit 60 ;;
+esac
+STUB
+cat > "$LINK_TMP/bin/logger" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "${LINK_TMP:?}/logger.log"
+exit 0
+STUB
+chmod +x "$LINK_TMP/bin/curl" "$LINK_TMP/bin/logger"
+
+link_run() { # <env-file or -> [extra env assignments...]: runs the probe against the curl stub, no fixture
+  local envf="$1"; shift
+  : > "$LINK_TMP/curl.argv"; : > "$LINK_TMP/logger.log"
+  env -u INNGEST_REMOTE_GQL_URL -u INNGEST_PROBE_FUNCTIONS_FIXTURE LINK_TMP="$LINK_TMP" PATH="$LINK_TMP/bin:$PATH" \
+    INNGEST_LINK_ENV_FILE="$envf" "$@" bash "$TARGET" 2>"$LINK_TMP/stderr"
+}
+write_link_env() { printf '%s\n' "$2" > "$LINK_TMP/$1"; }
+
+test_rp_link_https_env_file() {
+  echo "TEST: registry-probe — a valid https link env sends the query to https://10.0.1.40:8443 with --cacert and --noproxy"
+  write_link_env https.env $'INNGEST_LINK_URL=https://10.0.1.40:8443\nINNGEST_LINK_SCHEME=https\nINNGEST_LINK_CACERT=/mnt/data/inngest-link/inngest-ca.pem'
+  link_run "$LINK_TMP/https.env" >/dev/null || true
+  local argv; argv="$(cat "$LINK_TMP/curl.argv")"
+  case "$argv" in *"https://10.0.1.40:8443/v0/gql"*) echo "  PASS: query goes to the https endpoint"; PASS=$((PASS + 1)) ;; *) echo "  FAIL: query did not go to https (argv: $argv)"; FAIL=$((FAIL + 1)) ;; esac
+  case "$argv" in *"--cacert /mnt/data/inngest-link/inngest-ca.pem"*) echo "  PASS: --cacert pins the host CA file"; PASS=$((PASS + 1)) ;; *) echo "  FAIL: no --cacert on the https query (argv: $argv)"; FAIL=$((FAIL + 1)) ;; esac
+  case "$argv" in *"--noproxy"*) echo "  PASS: --noproxy on the https query"; PASS=$((PASS + 1)) ;; *) echo "  FAIL: no --noproxy on the https query"; FAIL=$((FAIL + 1)) ;; esac
+  case " $argv " in *" -k "*|*"--insecure"*|*"--capath"*) echo "  FAIL: the probe disables or widens verification (argv: $argv)"; FAIL=$((FAIL + 1)) ;; *) echo "  PASS: no -k/--insecure/--capath"; PASS=$((PASS + 1)) ;; esac
+  # curl honours --disable (skip ~/.curlrc) only as its FIRST argument: the https data-path curl must lead with it
+  case "$(head -n1 "$LINK_TMP/curl.argv")" in "--disable "*) echo "  PASS: --disable is curl's FIRST argument on the https query"; PASS=$((PASS + 1)) ;; *) echo "  FAIL: --disable is not the first curl argument (argv: $argv)"; FAIL=$((FAIL + 1)) ;; esac
+}
+test_rp_link_env_beats_inherited_url() {
+  echo "TEST: registry-probe — the link env OVERRIDES an inherited INNGEST_REMOTE_GQL_URL (server.tf writes an explicit http one)"
+  write_link_env https.env $'INNGEST_LINK_URL=https://10.0.1.40:8443\nINNGEST_LINK_SCHEME=https\nINNGEST_LINK_CACERT=/mnt/data/inngest-link/inngest-ca.pem'
+  link_run "$LINK_TMP/https.env" INNGEST_REMOTE_GQL_URL=http://10.0.1.40:8288/v0/gql >/dev/null || true
+  local argv; argv="$(cat "$LINK_TMP/curl.argv")"
+  case "$argv" in *"https://10.0.1.40:8443/v0/gql"*) echo "  PASS: https wins over the inherited http URL"; PASS=$((PASS + 1)) ;; *) echo "  FAIL: the inherited http URL won (argv: $argv)"; FAIL=$((FAIL + 1)) ;; esac
+}
+test_rp_link_http_env_file() {
+  echo "TEST: registry-probe — a valid http link env keeps http and passes no TLS flags"
+  write_link_env http.env $'INNGEST_LINK_URL=http://10.0.1.40:8288\nINNGEST_LINK_SCHEME=http\nINNGEST_LINK_CACERT='
+  link_run "$LINK_TMP/http.env" >/dev/null || true
+  local argv; argv="$(cat "$LINK_TMP/curl.argv")"
+  case "$argv" in *"http://10.0.1.40:8288/v0/gql"*) echo "  PASS: http endpoint"; PASS=$((PASS + 1)) ;; *) echo "  FAIL: wrong endpoint (argv: $argv)"; FAIL=$((FAIL + 1)) ;; esac
+  case "$argv" in *"--cacert"*) echo "  FAIL: --cacert on a plain http query"; FAIL=$((FAIL + 1)) ;; *) echo "  PASS: no --cacert on http"; PASS=$((PASS + 1)) ;; esac
+  # the http arm is byte-unchanged: no --disable is added to it
+  case "$argv" in *"--disable"*) echo "  FAIL: --disable leaked into the http arm"; FAIL=$((FAIL + 1)) ;; *) echo "  PASS: the http arm carries no --disable"; PASS=$((PASS + 1)) ;; esac
+}
+test_rp_link_absent_defaults_http() {
+  echo "TEST: registry-probe — no link env: default http; an inherited INNGEST_REMOTE_GQL_URL still applies"
+  link_run "$LINK_TMP/does-not-exist.env" >/dev/null || true
+  case "$(cat "$LINK_TMP/curl.argv")" in *"http://10.0.1.40:8288/v0/gql"*) echo "  PASS: default http"; PASS=$((PASS + 1)) ;; *) echo "  FAIL: default is not http"; FAIL=$((FAIL + 1)) ;; esac
+  link_run "$LINK_TMP/does-not-exist.env" INNGEST_REMOTE_GQL_URL=http://10.9.9.9:8288/v0/gql >/dev/null || true
+  case "$(cat "$LINK_TMP/curl.argv")" in *"http://10.9.9.9:8288/v0/gql"*) echo "  PASS: inherited URL honoured when there is no link env"; PASS=$((PASS + 1)) ;; *) echo "  FAIL: inherited URL ignored"; FAIL=$((FAIL + 1)) ;; esac
+}
+test_rp_link_invalid_env_is_parsed_not_sourced() {
+  echo "TEST: registry-probe — a malformed/hostile link env is never sourced and never selects another endpoint"
+  local n=0 body
+  for body in \
+    $'INNGEST_LINK_URL=http://10.0.1.40:8443\nINNGEST_LINK_SCHEME=http\nINNGEST_LINK_CACERT=' \
+    $'INNGEST_LINK_URL=https://evil.invalid:8443\nINNGEST_LINK_SCHEME=https\nINNGEST_LINK_CACERT=/mnt/data/inngest-link/inngest-ca.pem' \
+    $'INNGEST_LINK_URL=https://10.0.1.40:8443\nINNGEST_LINK_SCHEME=http\nINNGEST_LINK_CACERT=/mnt/data/inngest-link/inngest-ca.pem' \
+    $'INNGEST_LINK_URL=https://10.0.1.40:8443\nINNGEST_LINK_SCHEME=https\nINNGEST_LINK_CACERT=/tmp/other.pem' \
+    $'INNGEST_LINK_URL=https://10.0.1.40:8443\nINNGEST_LINK_SCHEME=https\nINNGEST_LINK_CACERT=/etc/soleur/inngest-ca.pem' \
+    $'INNGEST_LINK_URL=https://10.0.1.40:8443\nINNGEST_LINK_SCHEME=https\nINNGEST_LINK_CACERT=/mnt/data/inngest-link/inngest-ca.pem\nEXTRA=1' \
+    $'INNGEST_LINK_URL=$(touch '"$LINK_TMP"$'/PWNED)\nINNGEST_LINK_SCHEME=http\nINNGEST_LINK_CACERT=' \
+    $'INNGEST_LINK_URL=http://10.0.1.40:8288;touch '"$LINK_TMP"$'/PWNED\nINNGEST_LINK_SCHEME=http\nINNGEST_LINK_CACERT=' \
+    $'INNGEST_LINK_URL=https://10.0.1.40:8443 \nINNGEST_LINK_SCHEME=https\nINNGEST_LINK_CACERT=/mnt/data/inngest-link/inngest-ca.pem' ; do
+    n=$((n + 1))
+    write_link_env "bad$n.env" "$body"
+    link_run "$LINK_TMP/bad$n.env" >/dev/null || true
+    local argv; argv="$(cat "$LINK_TMP/curl.argv")"
+    if [[ "$argv" == *"http://10.0.1.40:8288/v0/gql"* && "$argv" != *"--cacert"* && ! -e "$LINK_TMP/PWNED" ]] && grep -q 'SOLEUR_INNGEST_LINK_ENV_INVALID' "$LINK_TMP/logger.log"; then
+      echo "  PASS: bad link env #$n -> default endpoint, loud marker, nothing executed"; PASS=$((PASS + 1))
+    else
+      echo "  FAIL: bad link env #$n (argv: $argv; pwned=$([[ -e "$LINK_TMP/PWNED" ]] && echo yes || echo no))"; FAIL=$((FAIL + 1))
+    fi
+  done
+  # a symlinked link env is refused, not followed
+  ln -sf "$LINK_TMP/https.env" "$LINK_TMP/sym.env"
+  write_link_env https.env $'INNGEST_LINK_URL=https://10.0.1.40:8443\nINNGEST_LINK_SCHEME=https\nINNGEST_LINK_CACERT=/mnt/data/inngest-link/inngest-ca.pem'
+  link_run "$LINK_TMP/sym.env" >/dev/null || true
+  if [[ "$(cat "$LINK_TMP/curl.argv")" == *"http://10.0.1.40:8288/v0/gql"* ]] && grep -q 'SOLEUR_INNGEST_LINK_ENV_INVALID' "$LINK_TMP/logger.log"; then
+    echo "  PASS: a symlinked link env is not followed"; PASS=$((PASS + 1))
+  else echo "  FAIL: a symlinked link env was followed"; FAIL=$((FAIL + 1)); fi
+}
+hs_run() { # <FX_HS_MODE or ''> [extra env]
+  local mode="$1"; shift
+  : > "$LINK_TMP/curl.argv"; HS_RC=0
+  HS_OUT="$(env LINK_TMP="$LINK_TMP" PATH="$LINK_TMP/bin:$PATH" FX_HS_MODE="$mode" FX_CURL_STDERR="curl: (60) SSL certificate problem SECRET-STDERR-MARKER" \
+    INNGEST_CA_FILE="$LINK_TMP/ca.pem" "$@" bash "$TARGET" --tls-handshake 2>&1)" || HS_RC=$?
+}
+test_rp_tls_handshake_mode() {
+  echo "TEST: registry-probe — --tls-handshake: verified 200 with the CA, certificate-verification failure (60) without it"
+  printf 'synthetic-ca\n' > "$LINK_TMP/ca.pem"
+  hs_run ''
+  assert_eq "pass: exit 0" "0" "$HS_RC"
+  case "$HS_OUT" in *"verified=200"*"unverified=fail"*) echo "  PASS: output carries verified=200 unverified=fail"; PASS=$((PASS + 1)) ;; *) echo "  FAIL: output: $HS_OUT"; FAIL=$((FAIL + 1)) ;; esac
+  case "$HS_OUT" in *SECRET-STDERR-MARKER*|*"SSL certificate problem"*) echo "  FAIL: curl stderr leaked into the output"; FAIL=$((FAIL + 1)) ;; *) echo "  PASS: curl stderr never reaches the output"; PASS=$((PASS + 1)) ;; esac
+  local argv; argv="$(cat "$LINK_TMP/curl.argv")"
+  case "$argv" in *"--cacert $LINK_TMP/ca.pem"*) echo "  PASS: (a) uses --cacert on the CA file"; PASS=$((PASS + 1)) ;; *) echo "  FAIL: (a) did not use --cacert (argv: $argv)"; FAIL=$((FAIL + 1)) ;; esac
+  assert_eq "exactly two curl calls (verified, unverified)" "2" "$(wc -l < "$LINK_TMP/curl.argv" | tr -d ' ')"
+  assert_eq "exactly one of the two carries --cacert" "1" "$(grep -c -- '--cacert' "$LINK_TMP/curl.argv")"
+  # --disable (skip ~/.curlrc) only works as curl's FIRST argument: BOTH legs must lead with it, or a curlrc `insecure`/`cacert` voids the proof
+  assert_eq "both handshake curls lead with --disable" "2" "$(grep -c '^--disable ' "$LINK_TMP/curl.argv")"
+  case " $argv " in *" -k "*|*"--insecure"*|*"--capath"*) echo "  FAIL: handshake mode weakens verification"; FAIL=$((FAIL + 1)) ;; *) echo "  PASS: no -k/--insecure/--capath"; PASS=$((PASS + 1)) ;; esac
+  case "$argv" in *"https://10.0.1.40:8443/health"*) echo "  PASS: probes https://10.0.1.40:8443/health"; PASS=$((PASS + 1)) ;; *) echo "  FAIL: wrong URL"; FAIL=$((FAIL + 1)) ;; esac
+  # the verified leg fails -> non-zero
+  hs_run verified_fail
+  if [[ "$HS_RC" -ne 0 && "$HS_OUT" == *"verified=fail"* ]]; then echo "  PASS: a failed verified leg exits non-zero"; PASS=$((PASS + 1)); else echo "  FAIL: verified leg failure not reported ($HS_RC: $HS_OUT)"; FAIL=$((FAIL + 1)); fi
+  # the unverified leg is ACCEPTED (no CA needed) -> the proof is void -> non-zero
+  hs_run unverified_accepted
+  if [[ "$HS_RC" -ne 0 && "$HS_OUT" == *"unverified=ACCEPTED"* ]]; then echo "  PASS: an unverified request that succeeds is a failure"; PASS=$((PASS + 1)); else echo "  FAIL: accepted unverified request not flagged ($HS_RC: $HS_OUT)"; FAIL=$((FAIL + 1)); fi
+  # the unverified leg fails for a reason other than verification (connection refused, rc 7): no proof
+  hs_run unverified_refused
+  if [[ "$HS_RC" -ne 0 && "$HS_OUT" == *"unverified=other"* ]]; then echo "  PASS: a non-verification failure (rc 7) is not accepted as proof"; PASS=$((PASS + 1)); else echo "  FAIL: rc 7 accepted as verification proof ($HS_RC: $HS_OUT)"; FAIL=$((FAIL + 1)); fi
+  # output is rc + fixed tokens only
+  hs_run ''
+  if grep -qxE 'inngest-tls-handshake verified=(200|fail) verified_rc=[0-9]{1,3} unverified=(fail|ACCEPTED|other) unverified_rc=[0-9]{1,3} result=(pass|fail)' < <(printf '%s' "$HS_OUT"); then
+    echo "  PASS: output is one line of fixed tokens"; PASS=$((PASS + 1))
+  else echo "  FAIL: output is not the fixed-token line: $HS_OUT"; FAIL=$((FAIL + 1)); fi
+}
+test_rp_no_verification_bypass_in_source() {
+  echo "TEST: registry-probe — the source never spells curl -k/--insecure/--capath"
+  if grep -qE '(^|[[:space:]])(-k|--insecure|--capath)([[:space:]]|$)' < <(grep -vE '^[[:space:]]*#' "$TARGET"); then
+    echo "  FAIL: a verification bypass is spelled in the source"; FAIL=$((FAIL + 1))
+  else echo "  PASS: no -k/--insecure/--capath"; PASS=$((PASS + 1)); fi
+}
+
+# The webhook wire between three literals: hooks.json.tmpl (the hook), scripts/inngest-link-flip.sh (FLIP_HANDSHAKE_URL, the caller)
+# and this script (`--tls-handshake`). Each end used to be pinned only by its own literal. The template is rendered with a stub
+# secret (the only interpolation it carries) and parsed, so a renamed id, another argument, a POST-able method or a dropped
+# HMAC rule is caught here. FLIP_SRC / HOOKS_SRC are overridable so a mutation can edit a COPY.
+test_rp_handshake_hook_wire() {
+  echo "TEST: registry-probe — the inngest-tls-handshake hook (id, argument, method, HMAC) matches the flip caller and this script"
+  local hooks="${HOOKS_SRC:-$SCRIPT_DIR/hooks.json.tmpl}" flip="${FLIP_SRC:-$SCRIPT_DIR/../../../scripts/inngest-link-flip.sh}" out rc=0
+  out="$(python3 -I - "$hooks" "$flip" "$TARGET" <<'PY' 2>&1
+import json, re, sys
+hooks, flip, probe = sys.argv[1:4]
+tmpl = open(hooks).read()
+rest = re.sub(r'\$\{jsonencode\(webhook_deploy_secret\)\}', '"stub-secret"', tmpl)
+if '${' in rest or '%{' in rest:
+    print("template carries an interpolation other than webhook_deploy_secret"); sys.exit(1)
+doc = json.loads(rest)
+hs = [h for h in doc if h.get("id") == "inngest-tls-handshake"]
+if len(hs) != 1:
+    print("expected exactly one inngest-tls-handshake hook, found %d" % len(hs)); sys.exit(1)
+h = hs[0]
+m = re.search(r'^FLIP_HANDSHAKE_URL="([^"]+)"', open(flip).read(), re.M)
+if not m:
+    print("FLIP_HANDSHAKE_URL not found in the flip script"); sys.exit(1)
+seg = m.group(1).rsplit("/", 1)[1]
+if seg != h["id"]:
+    print("flip calls /hooks/%s but the hook id is %s" % (seg, h["id"])); sys.exit(1)
+if "/hooks/" not in m.group(1):
+    print("FLIP_HANDSHAKE_URL does not use the /hooks/ path: %s" % m.group(1)); sys.exit(1)
+if h.get("execute-command") != "/usr/local/bin/inngest-registry-probe.sh":
+    print("execute-command is %r" % h.get("execute-command")); sys.exit(1)
+if h.get("pass-arguments-to-command") != [{"source": "string", "name": "--tls-handshake"}]:
+    print("pass-arguments-to-command is %r (must be the fixed, non-request-controlled --tls-handshake)" % h.get("pass-arguments-to-command")); sys.exit(1)
+if "--tls-handshake)" not in open(probe).read():
+    print("the probe does not accept --tls-handshake"); sys.exit(1)
+if h.get("http-methods") != ["GET"]:
+    print("http-methods is %r" % h.get("http-methods")); sys.exit(1)
+if h.get("include-command-output-in-response") is not True or h.get("include-command-output-in-response-on-error") is not True:
+    print("the hook must return the output body on success AND error (flip_verify prints it)"); sys.exit(1)
+mt = h.get("trigger-rule", {}).get("match", {})
+if mt.get("type") != "payload-hmac-sha256" or mt.get("parameter") != {"source": "header", "name": "X-Signature-256"} or mt.get("secret") != "stub-secret":
+    print("trigger-rule is not the HMAC rule over X-Signature-256: %r" % mt); sys.exit(1)
+if h.get("trigger-rule-mismatch-http-response-code") != 403:
+    print("mismatch code is not 403"); sys.exit(1)
+print("ok")
+PY
+)" || rc=$?
+  if [[ "$rc" -eq 0 && "$out" == "ok" ]]; then echo "  PASS: hook id == flip URL segment; fixed --tls-handshake argument; GET only; HMAC on X-Signature-256"; PASS=$((PASS + 1))
+  else echo "  FAIL: handshake hook wire: $out"; FAIL=$((FAIL + 1)); fi
+}
+
 echo "=== inngest-registry-probe.sh test suite ==="
 test_rp_query_carries_triggers
 test_rp_functions_field_cron
@@ -513,6 +709,34 @@ test_pf_scrub_encoding_shapes
 test_pf_scrub_raw_control_bytes
 test_pf_scrub_widened_over_redaction
 test_pf_scrub_bodies_byte_identical
+test_rp_link_https_env_file
+test_rp_link_env_beats_inherited_url
+test_rp_link_http_env_file
+test_rp_link_absent_defaults_http
+test_rp_link_invalid_env_is_parsed_not_sourced
+test_rp_tls_handshake_mode
+test_rp_no_verification_bypass_in_source
+test_rp_handshake_hook_wire
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
+
+# ANTI-VACUITY FLOOR (exact count). Reported by printf + exit, never through assert_eq/the counters it backstops (ADR-193): deleting
+# a block of rows (or neutering assert_eq so it stops counting) must be visible. First an instrument self-test: a subshell drives the
+# suite's own assert_eq once with a comparison that MUST fail and requires the FAIL counter, not PASS, to have moved.
+ST_GOT="$( PASS=0; FAIL=0; assert_eq selftest-must-fail 1 2 >/dev/null; printf '%s/%s' "$PASS" "$FAIL" )"
+if [[ "$ST_GOT" != "0/1" ]]; then
+  printf 'INSTRUMENT FAIL - %s: assert_eq self-test got pass/fail %s, want 0/1\n' "$(basename "${BASH_SOURCE[0]}")" "$ST_GOT" >&2
+  exit 2
+fi
+SELFTEST_PASSES=0
+REAL_PASSES=$((PASS - SELFTEST_PASSES))
+MIN_PASSES=128
+if [[ "$FAIL" -eq 0 && "$REAL_PASSES" -lt "$MIN_PASSES" ]]; then
+  printf 'FATAL: anti-vacuity floor - %s assertions passed, expected exactly %s (a block of rows was deleted or skipped)\n' "$REAL_PASSES" "$MIN_PASSES" >&2
+  exit 1
+fi
+if [[ "$FAIL" -eq 0 && "$REAL_PASSES" -gt "$MIN_PASSES" ]]; then
+  printf 'FATAL: floor drift - %s assertions passed but MIN_PASSES is %s - set MIN_PASSES=%s\n' "$REAL_PASSES" "$MIN_PASSES" "$REAL_PASSES" >&2
+  exit 1
+fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

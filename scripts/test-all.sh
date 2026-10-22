@@ -3804,7 +3804,8 @@ _aff_runner_banner() {
 # #9763: 38 heavy/stale labels withdrawn to edge-selection; the floor pins count-5.
 # #8875: +1 always-on (emitter census is repo-global by construction); re-pinned at 114-5.
 # #10331: +2 always-on (the lint-ratchet pair); re-pinned at 116-5.
-_MIN_ALWAYS_ON_DECLARED=111
+# #7893: +1 always-on (the Art. 30 re-verification unit); re-pinned at 117-5.
+_MIN_ALWAYS_ON_DECLARED=113
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -5453,6 +5454,13 @@ if want_scripts; then
   # adds a gated suite must meet it on every run, not only on diff-touch.
   run_suite "scripts/lint-integration-env-gates-live" bash scripts/lint-integration-env-gates.sh
   run_suite "scripts/lint-integration-env-gates-battery" bash scripts/lint-integration-env-gates.test.sh
+  # #10399 feature-map coverage sentinel. The LIVE line checks the committed
+  # tree (route coverage/staleness/completeness/contradiction); the battery
+  # drives each Guard-Contract row on synthetic fixture repos. Same
+  # live+battery pairing as the env-gates sentinel above — registered
+  # unconditionally, seconds on a scratch tree.
+  run_suite "scripts/lint-feature-map-coverage-live" bash scripts/lint-feature-map-coverage.sh
+  run_suite "scripts/lint-feature-map-coverage-battery" bash scripts/lint-feature-map-coverage.test.sh
   # #7387 legal-corpus write-time gates. Each gate registers its unit suite AND a LIVE run
   # against the working tree: the unit suite proves the gate detects a planted defect in a
   # sandbox, the live line is the only thing that ever points it at the real corpus. The unit
@@ -5471,6 +5479,7 @@ if want_scripts; then
   # scripts/lib/legal-normalise.test.sh is the detector for that, and it is fixture-anchored so
   # it cannot red on a legal edit.
   run_suite "scripts/lint-legal-scope-block-placement-unit" bash scripts/lint-legal-scope-block-placement.test.sh
+  run_suite "scripts/lint-art30-reverification-unit" bash scripts/lint-art30-reverification.test.sh
   run_suite "scripts/lint-legal-scope-block-placement-live" bash scripts/lint-legal-scope-block-placement.sh
   run_suite "scripts/lint-legal-mirror-drift-baseline-unit" bash scripts/lint-legal-mirror-drift-baseline.test.sh
   run_suite "scripts/lint-legal-mirror-drift-baseline-live" bash scripts/lint-legal-mirror-drift-baseline.sh
@@ -5588,10 +5597,14 @@ if want_scripts; then
   # sweeper closes issue 8651 as completed — the observed-evidence condition zot-soak-6122.sh's
   # WEB_BLOCKER arm requires — so every sweeper exit code is driven by a fixture.
   run_suite "scripts/web-fresh-boot-zot-8651" bash scripts/followthroughs/web-fresh-boot-zot-8651.test.sh
-  # #10445: exit-code harness for the hosted-Bash-outage readback. Registered EXPLICITLY (scripts/followthroughs/*.test.sh
-  # is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes the PIR-flip tracker, so "PASS only when the
-  # fix PR's merge commit is contained in the deployed tag" must redden CI if it regresses to a bare canary-green exit 0.
-  run_suite "scripts/sandbox-readback-10445" bash scripts/followthroughs/sandbox-readback-10445.test.sh
+  # #10548: exit-code harness for the SDK Bash smoke promotion soak (5 greens over 3 days with full coverage). Registered EXPLICITLY
+  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). A vacuous PASS (replay_only coverage, a held counter under an infra
+  # error, 4 greens) would close the promotion tracker on a smoke that proved nothing, so it must redden CI.
+  run_suite "scripts/followthroughs/sdk-bash-smoke-verdict-10548" bash scripts/followthroughs/sdk-bash-smoke-verdict-10548.test.sh
+  # #10552: exit-code + row-class harness for the compound-promote derived-diff probe. Registered EXPLICITLY
+  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes #10552,
+  # so a PASS on a refusal that is not proof (or on a quiet week) must redden CI.
+  run_suite "scripts/compound-promote-draft-edit-10552" bash scripts/followthroughs/compound-promote-draft-edit-10552.test.sh
   # #10119: exit-code + branch harness for the registry htpasswd-stdin delivery probe. Registered explicitly
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes
   # #10119 after the unattended registry host replace, so a vacuous PASS (old-host rows, forged tails, quoted
@@ -5608,11 +5621,6 @@ if want_scripts; then
   # #7432 (Item I of #9217): exit-code harness for the JOBS-pin soak probe. Registered explicitly:
   # scripts/followthroughs/*.test.sh is not in SUITE_GLOBS. A vacuous PASS would close #7432, and through it #7376.
   run_suite "scripts/jobs1-stopgap-7432" bash scripts/followthroughs/jobs1-stopgap-7432.test.sh
-  # #5863: exit-code harness for the outer-wrap soak follow-through (stub-curl
-  # arms for verdict binding, freshness window, and HTTP classes). Registered
-  # explicitly (orphan-suite class above) — its PASS authorizes promoting the
-  # report-only canary to gating, so the promotion decision must be driven.
-  run_suite "scripts/tenant-outer-wrap-soak-5863" bash scripts/followthroughs/tenant-outer-wrap-soak-5863.test.sh
   # #9237: exit-code harness for the watchdog-arm soak probe. Registered
   # explicitly (orphan-suite class above). The probe is notify-only (never 0/1);
   # its arms drive whether the sweeper reports NOT YET / CANNOT ESTABLISH /
@@ -5789,6 +5797,10 @@ if want_scripts; then
   # (0 closes, 1 reopens a tracker whose close releases four snapshots), an argv-asserting curl stub
   # that answers by requested id, the exact run-id pin on the explained groups, and a pinned clock.
   run_suite "scripts/inngest-soak-6178" bash scripts/followthroughs/inngest-soak-6178.test.sh
+  # #10136 Inngest link TLS soak probe (Guard 2). Drives the predicate over a 48 h synthetic `tls-health` series through a
+  # fake gh (trusted-verdict lib) and an argv-asserting fake betterstack-query.sh: the seven Guard 2 mutation rows, the two
+  # harness rows, the anchor trust rows, and per-check deletion mutants of the probe copy.
+  run_suite "scripts/inngest-tls-soak-10136" bash scripts/followthroughs/inngest-tls-soak-10136.test.sh
   # CPX22 invoice reconciliation (#7437). An operator-confirmed probe reads a production ledger
   # verdict out of free text a human typed, so the suite pins the two properties that decide
   # whether it can be trusted: the verdict is anchored at line start (an unanchored grep closes
@@ -5837,6 +5849,10 @@ if want_scripts; then
   # "the gate looked and the answer is no" (exit 2, NOT YET), keyed on the bracketed token of the
   # gate's verdict line. One arm per member of BOTH token sets, plus the never-0 invariant.
   run_suite "scripts/git-data-reboot-evidence-landed-8210" bash scripts/followthroughs/git-data-reboot-evidence-landed-8210.test.sh
+  # #8211 (T2 build 2): offline harness for the read-only rehearsal evidence collector. Registered EXPLICITLY
+  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). The collector prints the design's section 5 evidence block, so
+  # a regression that prints a zero for a read that did not run, counts a log decoy, or puts a bearer on argv must redden CI.
+  run_suite "scripts/git-data-rehearsal-evidence-8211" bash scripts/followthroughs/git-data-rehearsal-evidence.test.sh
   # #8450's close criterion (actions-queue-tail-8450.sh): PASS only on >=5
   # post-upgrade workflow_run runs with p95 deploy-arm wait < 15 min — never on
   # stale/empty/push-arm/queued-job samples, and never on an unmet precondition
@@ -5847,6 +5863,14 @@ if want_scripts; then
   # transaction rows carry measurements.{lcp,fcp,cls,inp,ttfb}. Explicit
   # run_suite — scripts/followthroughs/ is covered by no glob here.
   run_suite "scripts/cwv-field-rum-9178" bash scripts/followthroughs/cwv-field-rum-9178.test.sh
+  # #8743: exit-code harness for the web-2 plugin-seed (fchmodat2) soak probe.
+  # Registered explicitly — scripts/followthroughs/*.test.sh is not in SUITE_GLOBS,
+  # and this probe's exit 0 auto-closes the tracker. The load-bearing arms are the
+  # PASS conjunction (positive control + post-fix marker + zero post-marker
+  # fchmodat2), the marker-anchored absence floor (pre-delivery rows are history,
+  # not a verdict), and every transport fault mapping to NOT YET / CANNOT
+  # ESTABLISH, never PASS.
+  run_suite "scripts/web2-plugin-seed-8743" bash scripts/followthroughs/web2-plugin-seed-8743.test.sh
   # #8450 standing monitor core (scripts/actions-queue-health.sh): the verdict
   # logic behind scheduled-actions-queue-health.yml — live queue depth +
   # delivered-vs-entitled concurrency + median live queued age ->
@@ -6197,6 +6221,8 @@ if want_scripts; then
   run_suite "tests/scripts/git-data-root-key-arm" bash tests/scripts/test-git-data-root-key-arm.sh
   run_suite "tests/scripts/git-data-root-token-census" bash tests/scripts/test-git-data-root-token-census.sh
   run_suite "tests/scripts/infra-privileged-tier-census" bash tests/scripts/test-infra-privileged-tier-census.sh
+  # G1 (#9294): the deploy-channel trio census and its expiring (file, name) baseline.
+  run_suite "tests/scripts/trio-baseline-census" bash tests/scripts/test-trio-baseline-census.sh
   # apply-github-infra.yml::apply soleur-infra token shape (#9360): the third consumer of the
   # mint composite gets the shape rows its two siblings carry. tests/scripts/ is not
   # auto-discovered, so this line IS the registration.

@@ -173,18 +173,18 @@ _last="$(printf '%s\n' "$LUKS_BLOCK" | tail -1)"
 case "$_first" in *"bash -s <<'LUKSEOF'") _fok=1 ;; *) _fok=0 ;; esac
 case "$_last"  in *LUKSEOF)               _lok=1 ;; *) _lok=0 ;; esac
 if [ "$_fok" -eq 1 ] && [ "$_lok" -eq 1 ]; then ok "T1.7a3 the block is bounded by its own opener and terminator"; else no "T1.7a3 the extracted block is not bounded by the LUKS heredoc (first='${_first}' last='${_last}') — the range drifted and T1.7b/c grade the wrong text"; fi
-printf '%s\n' "$LUKS_BLOCK" > /tmp/.ilt-block.$$ 2>/dev/null || true
+printf '%s\n' "$LUKS_BLOCK" > "${TMPDIR:-/tmp}/.ilt-block.$$" 2>/dev/null || true
 # `[^|]*` CANNOT SPAN AN EARLIER `||`, and every mount in this stage is written as
 # `mountpoint -q X || mount …`. So the swallow-form that would actually appear in this file was
 # the one form the pattern could not see; the arm was green against the only mutation that
 # matters. `.*` sees the whole line, and the trailing anchor still pins the swallow to the END.
-if [ -s /tmp/.ilt-block.$$ ] && ! grep -qE '^[[:space:]]*(mount|mountpoint|mkfs|cryptsetup).*\|\|[[:space:]]*(true|:)[[:space:]]*$' /tmp/.ilt-block.$$; then ok "T1.7b no mount/mkfs/cryptsetup step is suffixed with || true"; else no "T1.7b a mount/mkfs/cryptsetup step swallows its failure"; fi
+if [ -s "${TMPDIR:-/tmp}/.ilt-block.$$" ] && ! grep -qE '^[[:space:]]*(mount|mountpoint|mkfs|cryptsetup).*\|\|[[:space:]]*(true|:)[[:space:]]*$' "${TMPDIR:-/tmp}/.ilt-block.$$"; then ok "T1.7b no mount/mkfs/cryptsetup step is suffixed with || true"; else no "T1.7b a mount/mkfs/cryptsetup step swallows its failure"; fi
 # ANCHORED ON SYNTAX, NOT ON THE BARE TOKEN. The stage's own comment says "No `|| true`, no
 # `|| :`, and no `set +e`" — so a bare-literal grep matches the SUT's documentation of the rule and
 # reports a violation that does not exist. This is the collision `cq-assert-anchor-not-bare-token`
 # names, and it fired here on the first run: a comment line starts with `#`, a statement does not.
-if [ -s /tmp/.ilt-block.$$ ] && ! grep -qE '^[[:space:]]*set[[:space:]]+\+e' /tmp/.ilt-block.$$; then ok "T1.7c the stage never disarms errexit"; else no "T1.7c the LUKS stage contains a live 'set +e' statement"; fi
-rm -f /tmp/.ilt-block.$$
+if [ -s "${TMPDIR:-/tmp}/.ilt-block.$$" ] && ! grep -qE '^[[:space:]]*set[[:space:]]+\+e' "${TMPDIR:-/tmp}/.ilt-block.$$"; then ok "T1.7c the stage never disarms errexit"; else no "T1.7c the LUKS stage contains a live 'set +e' statement"; fi
+rm -f "${TMPDIR:-/tmp}/.ilt-block.$$"
 
 # T1.8 `nofail` is RETAINED in every fstab line the stage writes. A strict fstab on a host with no
 # SSH and no console converts a slow attach into an unrecoverable boot wedge; loud failure belongs
@@ -544,7 +544,7 @@ _VAR_RE='^(export[[:space:]]+)?(DEV|MAPPER|BYID|LUKS_ID|CANON_DEV|POINTER|MNT|CA
 # by-mountpoint mount). #9786 removed the staging block's fstab/mount/luksFormat set and the
 # plaintext arm's sites with it.
 _exp_ops="$(cat <<'EXPEOF'
-- cryptsetup # #7695 guest-side LUKS-at-rest for /mnt/data (the Redis AOF store)
+- cryptsetup
 Description=Open the LUKS mapper, then complete the mount for the arm it verified — never formats, never mkfs (#7695)
 After=cryptsetup-pre.target systemd-udev-settle.service
 printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksOpen --key-file - "$1" "$2"
