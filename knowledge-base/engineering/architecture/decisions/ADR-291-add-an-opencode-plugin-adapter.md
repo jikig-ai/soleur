@@ -35,7 +35,7 @@ multi-harness install instructions naming Claude Code, Grok Build, Codex, and De
 is the claim, and none of those pages made it. What remained was a brand-level editorial decision rather than
 an evidence question.
 
-**The claim was made (2026-10-22).** This PR names OpenCode on `README.md` and on the getting-started, index,
+**The claim was made (2026-10-22, #10815).** That PR names OpenCode on `README.md` and on the getting-started, index,
 pricing, and `llms.txt` pages, and states the capability differences beside the install instructions: guards
 decide shell calls only (code-mode `execute` is not covered), and the `<promise>DONE</promise>` completion
 marker is advisory because OpenCode V2 has no Stop hook. The CLO ruled **PUBLISH WITH LISTED CHANGES** on the
@@ -45,7 +45,7 @@ seven canonicals, and `docs/legal/privacy-policy.md` already discloses the provi
 class-wide, so naming a fifth harness creates no new Jikigai processor. A CLO-signed follow-up in a separate
 PR — not a precondition for this claim — would add the fifth member to the seven canonicals and their
 mirrors, which forces the `TC_VERSION`, `TC_DOCUMENT_SHA`, and `LEGAL_DOC_SHAS` re-pins. The ruling and the
-deferral are recorded in this PR.
+deferral are recorded in #10815.
 
 In this record, **harness** means the `Harness` union in `plugins/soleur/lib/harness.ts`. The word is not in
 `knowledge-base/project/glossary.md`.
