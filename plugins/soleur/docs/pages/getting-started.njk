@@ -4,8 +4,8 @@ seoTitle: "Get Started with Soleur — Install Your AI Organization in Two Comma
 description: "Install Soleur in two commands and run a full AI organization — marketing, legal, finance, operations, sales, and support — without hiring anyone."
 layout: base.njk
 permalink: getting-started/
-date: 2026-10-20
-last_updated: 2026-10-20
+date: 2026-10-22
+last_updated: 2026-10-22
 ---
 
     <!-- Hero -->
@@ -34,7 +34,7 @@ last_updated: 2026-10-20
           <p>Built on open standards:</p>
           <ul>
             <li>Source-available under the <a href="{{ site.github }}/blob/main/LICENSE" rel="noopener noreferrer">Business Source License 1.1</a> &mdash; free to use, modify, and self-host; converts to Apache-2.0 four years after each release.</li>
-            <li>Runs on agentic coding harnesses &mdash; self-hosted today on <a href="https://docs.claude.com/en/docs/claude-code" rel="noopener noreferrer">Claude Code</a>, Grok Build, Codex, and Devin CLI, each with its own setup guide below.</li>
+            <li>Runs on agentic coding harnesses &mdash; self-hosted today on <a href="https://docs.claude.com/en/docs/claude-code" rel="noopener noreferrer">Claude Code</a>, Grok Build, Codex, Devin CLI, and OpenCode, each with its own setup guide below.</li>
             <li>Connects tools and context through the <a href="https://modelcontextprotocol.io" rel="noopener noreferrer">Model Context Protocol (MCP)</a> open specification.</li>
           </ul>
         </div>
@@ -47,9 +47,9 @@ last_updated: 2026-10-20
         <p class="section-label">Source-available. Install in your own harness.</p>
         <h2 class="section-title">Run it yourself</h2>
 
-        <p>Prefer to run it yourself? Soleur is source-available and runs self-hosted on Claude Code, Grok Build, Codex, and Devin CLI today &mdash; the same {{ stats.agents }} agents and {{ stats.skills }} skills on each. Keep your knowledge base as plain files on your own machine, and join the waitlist if you want the hosted version when it opens.</p>
+        <p>Prefer to run it yourself? Soleur is source-available and runs self-hosted on Claude Code, Grok Build, Codex, Devin CLI, and OpenCode today &mdash; the same {{ stats.agents }} agents and {{ stats.skills }} skills on each. Keep your knowledge base as plain files on your own machine, and join the waitlist if you want the hosted version when it opens.</p>
 
-        <p>The blocks below install Soleur on each harness. The <a href="https://docs.claude.com/en/docs/claude-code" rel="noopener noreferrer">Claude Code</a> path is the one with a published marketplace; the other three install from this repository and each has its own setup guide. Every harness needs its own session: nothing is shared between them.</p>
+        <p>The blocks below install Soleur on each harness. The <a href="https://docs.claude.com/en/docs/claude-code" rel="noopener noreferrer">Claude Code</a> path is the one with a published marketplace; the other four install from this repository and each has its own setup guide. Every harness needs its own session: nothing is shared between them.</p>
 
         <h3 class="section-subtitle">Claude Code</h3>
 
@@ -94,7 +94,19 @@ codex plugin add soleur@soleur</code></pre>
 
         <p>Use <code>-y</code> to skip the confirmation prompt. Devin <strong>Cloud</strong> sessions run under Soleur Cloud Mode &mdash; skills, rules, and MCP carry, but plugin subagents and session hooks do not. See the <a href="{{ site.github }}/blob/main/plugins/soleur/devin/INSTRUCTIONS.md" rel="noopener noreferrer">Devin compatibility instructions</a> for the cloud-vs-local capability matrix.</p>
 
-        <p>Claude Code: <code>/soleur:go</code>. Grok Build: <code>/go</code>. Codex: <code>$soleur:go</code>. Devin CLI: <code>/soleur:go</code>.</p>
+        <h3 class="section-subtitle">OpenCode</h3>
+
+        <p>From the repository root (this needs <code>bun</code>), install Soleur into your OpenCode config directory, then start a session. Keep this checkout where it is &mdash; the installed config points at it for skills, routing rules, and the guard scripts.</p>
+
+        <!-- verified: 2026-10-22 source: plugins/soleur/opencode/INSTRUCTIONS.md -->
+        <div class="quickstart-code">
+          <pre><code>bun plugins/soleur/scripts/install-opencode-adapter.ts
+bun plugins/soleur/scripts/install-opencode-adapter.ts --check    # prints opencode-install ok when the tree matches</code></pre>
+        </div>
+
+        <p>Commands are bare (<code>/go</code>, <code>/sync</code>, <code>/help</code>) and skills are invoked by bare id (<code>plan</code>, not <code>soleur:plan</code>), because OpenCode has no <code>soleur:</code> namespace. Two guards decide shell commands on OpenCode, and both run for real &mdash; a <code>deny</code> blocks the call, an <code>ask</code> opens a prompt &mdash; but they decide shell calls only: actions taken through OpenCode&rsquo;s code-mode <code>execute</code> are not covered. Soleur&rsquo;s operator-stage approval gate is not wired on OpenCode: those flows refuse rather than approve. OpenCode has no Stop hook, so the pipeline&rsquo;s <code>&lt;promise&gt;DONE&lt;/promise&gt;</code> completion marker is advisory: a finished gate sequence is reported rather than hard-stopped, and autonomous skills rely on their own structural checks. <code>/version</code> is installed but reports an unknown version, because the canonical command resolves the plugin through <code>CLAUDE_PLUGIN_ROOT</code>, which this harness does not set. Full routing rules and the remaining capability differences: <a href="{{ site.github }}/blob/main/plugins/soleur/opencode/INSTRUCTIONS.md" rel="noopener noreferrer">OpenCode instructions</a>.</p>
+
+        <p>Claude Code: <code>/soleur:go</code>. Grok Build: <code>/go</code>. Codex: <code>$soleur:go</code>. Devin CLI: <code>/soleur:go</code>. OpenCode: <code>/go</code>.</p>
         <table>
           <thead>
             <tr>
@@ -103,6 +115,7 @@ codex plugin add soleur@soleur</code></pre>
               <th>Grok Build</th>
               <th>Codex</th>
               <th>Devin CLI</th>
+              <th>OpenCode</th>
             </tr>
           </thead>
           <tbody>
@@ -112,6 +125,7 @@ codex plugin add soleur@soleur</code></pre>
               <td><code>/go</code></td>
               <td><code>$soleur:go</code></td>
               <td><code>/soleur:go</code></td>
+              <td><code>/go</code></td>
             </tr>
             <tr>
               <td>Sync</td>
@@ -119,6 +133,7 @@ codex plugin add soleur@soleur</code></pre>
               <td><code>/sync</code></td>
               <td><code>$soleur:sync</code></td>
               <td><code>/soleur:sync</code></td>
+              <td><code>/sync</code></td>
             </tr>
             <tr>
               <td>Help</td>
@@ -126,6 +141,7 @@ codex plugin add soleur@soleur</code></pre>
               <td><code>/local:help</code></td>
               <td><code>$soleur:help</code></td>
               <td><code>/soleur:help</code></td>
+              <td><code>/help</code></td>
             </tr>
             <tr>
               <td>Next skill</td>
@@ -133,13 +149,14 @@ codex plugin add soleur@soleur</code></pre>
               <td>Read <code>SKILL.md</code> in this process (<code>/&lt;skill&gt;</code>)</td>
               <td>Load <code>$soleur:&lt;skill&gt;</code>, or read <code>SKILL.md</code></td>
               <td>Slash <code>/soleur:&lt;skill&gt;</code></td>
+              <td><code>skill</code> tool, bare id (<code>plan</code>)</td>
             </tr>
           </tbody>
         </table>
 
         <div class="callout">
-          <strong>Existing project?</strong> Claude Code and Devin CLI: <code>/soleur:sync</code>. Grok Build: <code>/sync</code>. Codex: <code>$soleur:sync</code>. Analyze the codebase and populate the knowledge base.<br>
-          <strong>Starting fresh?</strong> Claude Code and Devin CLI: <code>/soleur:go</code>. Grok Build: <code>/go</code>. Codex: <code>$soleur:go</code>. Describe what you need.
+          <strong>Existing project?</strong> Claude Code and Devin CLI: <code>/soleur:sync</code>. Grok Build and OpenCode: <code>/sync</code>. Codex: <code>$soleur:sync</code>. Analyze the codebase and populate the knowledge base.<br>
+          <strong>Starting fresh?</strong> Claude Code and Devin CLI: <code>/soleur:go</code>. Grok Build and OpenCode: <code>/go</code>. Codex: <code>$soleur:go</code>. Describe what you need.
         </div>
 
         <div class="callout">
@@ -149,7 +166,7 @@ codex plugin add soleur@soleur</code></pre>
         <h3 class="section-subtitle" style="margin-top: var(--space-8);">The Workflow</h3>
         <p>Soleur follows a structured 6-step workflow for software development:</p>
 
-        <p>The 6-step workflow (invoked automatically via <code>/soleur:go</code> or Skill tool <code>soleur:&lt;skill&gt;</code> on Claude Code; via <code>/go</code> then Read <code>SKILL.md</code> in this process on Grok Build; via <code>$soleur:go</code> on Codex; via the <code>/soleur:&lt;skill&gt;</code> slash command on Devin CLI):</p>
+        <p>The 6-step workflow (each harness invokes it with its own entry command &mdash; see the table above):</p>
 
         <div class="commands-list">
           <div class="command-item">
@@ -246,7 +263,7 @@ codex plugin add soleur@soleur</code></pre>
         <div class="faq-list">
           <details class="faq-item">
             <summary class="faq-question">What do I need to run Soleur?</summary>
-            <p class="faq-answer">Nothing to install. The hosted version runs in your browser once your access opens -- bring a workspace and your team. Prefer to self-host? The self-hosted version runs inside your own agentic harness -- Claude Code, Grok Build, Codex, or Devin CLI, on macOS, Linux, or Windows (WSL). Setup is two commands on Claude Code; the other harnesses install from this repository and each has its own setup guide.</p>
+            <p class="faq-answer">Nothing to install. The hosted version runs in your browser once your access opens -- bring a workspace and your team. Prefer to self-host? The self-hosted version runs inside your own agentic harness -- Claude Code, Grok Build, Codex, Devin CLI, or OpenCode. Setup is two commands on Claude Code; the other harnesses install from this repository and each has its own setup guide.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">Why a waitlist?</summary>
@@ -254,23 +271,23 @@ codex plugin add soleur@soleur</code></pre>
           </details>
           <details class="faq-item">
             <summary class="faq-question">Does Soleur work on Windows, Linux, and macOS?</summary>
-            <p class="faq-answer">The self-hosted version runs anywhere its harnesses run: Claude Code, Grok Build, Codex, and Devin CLI all support Linux, macOS, and Windows via WSL &mdash; install inside whichever one you already use. The hosted version will be accessible from any browser on any operating system.</p>
+            <p class="faq-answer">The self-hosted version runs anywhere its harnesses run: Claude Code, Grok Build, Codex, and Devin CLI all support Linux, macOS, and Windows via WSL, and OpenCode follows its own platform support &mdash; install inside whichever one you already use. The hosted version will be accessible from any browser on any operating system.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">How much does Soleur cost?</summary>
-            <p class="faq-answer">See the <a href="/pricing/">pricing page</a> for hosted plans (coming soon; join the waitlist) -- founder pricing starts at $49/month. The self-hosted version is free; your costs depend entirely on your Claude usage through Anthropic.</p>
+            <p class="faq-answer">See the <a href="/pricing/">pricing page</a> for hosted plans (coming soon; join the waitlist) -- founder pricing starts at $49/month. The self-hosted version is free; your costs depend entirely on the model provider you use through your harness.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">What is the difference between /soleur:go and individual skills?</summary>
-            <p class="faq-answer"><code>/soleur:go</code> (Claude Code) or <code>/go</code> (Grok Build) is the unified entry point that classifies your intent and routes to the right workflow automatically. Individual skills like brainstorm, plan, work, and review can be invoked directly when you know exactly which stage you need &mdash; Skill tool <code>soleur:&lt;skill&gt;</code> on Claude Code; Read that skill&rsquo;s <code>SKILL.md</code> in this process on Grok Build.</p>
+            <p class="faq-answer"><code>/soleur:go</code> (Claude Code and Devin CLI), <code>/go</code> (Grok Build and OpenCode), or <code>$soleur:go</code> (Codex) is the unified entry point that classifies your intent and routes to the right workflow automatically. Individual skills like brainstorm, plan, work, and review can be invoked directly when you know exactly which stage you need &mdash; Skill tool <code>soleur:&lt;skill&gt;</code> on Claude Code; Read that skill&rsquo;s <code>SKILL.md</code> in this process on Grok Build; the skill tool with the bare id on OpenCode.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">Can I use Soleur with an existing project?</summary>
-            <p class="faq-answer">Yes. Claude Code: <code>/soleur:sync</code>. Grok Build: <code>/sync</code>. Analyze the codebase and populate the knowledge base with your project's conventions, architecture, and patterns. Soleur adapts to your existing codebase rather than requiring a fresh start.</p>
+            <p class="faq-answer">Yes. Claude Code and Devin CLI: <code>/soleur:sync</code>. Grok Build and OpenCode: <code>/sync</code>. Codex: <code>$soleur:sync</code>. Analyze the codebase and populate the knowledge base with your project's conventions, architecture, and patterns. Soleur adapts to your existing codebase rather than requiring a fresh start.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">What is the difference between the hosted version and self-hosted?</summary>
-            <p class="faq-answer">Both versions ship the same agents and skills. The self-hosted version runs inside your own harness &mdash; Claude Code, Grok Build, Codex, or Devin CLI &mdash; with full access to your own files. The hosted version (coming soon) adds a web dashboard, managed infrastructure, real-time agent orchestration, team collaboration, and email support. Both access the same {{ stats.agents }} agents and {{ stats.skills }} skills.</p>
+            <p class="faq-answer">Both versions ship the same agents and skills. The self-hosted version runs inside your own harness &mdash; Claude Code, Grok Build, Codex, Devin CLI, or OpenCode &mdash; with full access to your own files. The hosted version (coming soon) adds a web dashboard, managed infrastructure, real-time agent orchestration, team collaboration, and email support. Both access the same {{ stats.agents }} agents and {{ stats.skills }} skills.</p>
           </details>
         </div>
       </div>
@@ -286,7 +303,7 @@ codex plugin add soleur@soleur</code></pre>
           "name": "What do I need to run Soleur?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Nothing to install. The hosted version runs in your browser once your access opens -- bring a workspace and your team. Prefer to self-host? The self-hosted version runs inside your own agentic harness -- Claude Code, Grok Build, Codex, or Devin CLI, on macOS, Linux, or Windows (WSL). Setup is two commands on Claude Code; the other harnesses install from this repository and each has its own setup guide."
+            "text": "Nothing to install. The hosted version runs in your browser once your access opens -- bring a workspace and your team. Prefer to self-host? The self-hosted version runs inside your own agentic harness -- Claude Code, Grok Build, Codex, Devin CLI, or OpenCode. Setup is two commands on Claude Code; the other harnesses install from this repository and each has its own setup guide."
           }
         },
         {
@@ -302,7 +319,7 @@ codex plugin add soleur@soleur</code></pre>
           "name": "Does Soleur work on Windows, Linux, and macOS?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "The self-hosted version runs anywhere its harnesses run: Claude Code, Grok Build, Codex, and Devin CLI all support Linux, macOS, and Windows via WSL — install inside whichever one you already use. The hosted version will be accessible from any browser on any operating system."
+            "text": "The self-hosted version runs anywhere its harnesses run: Claude Code, Grok Build, Codex, and Devin CLI all support Linux, macOS, and Windows via WSL, and OpenCode follows its own platform support — install inside whichever one you already use. The hosted version will be accessible from any browser on any operating system."
           }
         },
         {
@@ -310,7 +327,7 @@ codex plugin add soleur@soleur</code></pre>
           "name": "How much does Soleur cost?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "See the pricing page for hosted plans (coming soon; join the waitlist) -- founder pricing starts at $49/month. The self-hosted version is free; your costs depend entirely on your Claude usage through Anthropic."
+            "text": "See the pricing page for hosted plans (coming soon; join the waitlist) -- founder pricing starts at $49/month. The self-hosted version is free; your costs depend entirely on the model provider you use through your harness."
           }
         },
         {
@@ -318,7 +335,7 @@ codex plugin add soleur@soleur</code></pre>
           "name": "What is the difference between /soleur:go and individual skills?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "/soleur:go (Claude Code) or /go (Grok Build) is the unified entry point that classifies your intent and routes to the right workflow automatically. Individual skills like brainstorm, plan, work, and review can be invoked directly when you know exactly which stage you need — Skill tool soleur:<skill> on Claude Code; Read that skill's SKILL.md in this process on Grok Build."
+            "text": "/soleur:go (Claude Code and Devin CLI), /go (Grok Build and OpenCode), or $soleur:go (Codex) is the unified entry point that classifies your intent and routes to the right workflow automatically. Individual skills like brainstorm, plan, work, and review can be invoked directly when you know exactly which stage you need — Skill tool soleur:<skill> on Claude Code; Read that skill's SKILL.md in this process on Grok Build; the skill tool with the bare id on OpenCode."
           }
         },
         {
@@ -326,7 +343,7 @@ codex plugin add soleur@soleur</code></pre>
           "name": "Can I use Soleur with an existing project?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Yes. Claude Code: /soleur:sync. Grok Build: /sync. Analyze the codebase and populate the knowledge base with your project's conventions, architecture, and patterns. Soleur adapts to your existing codebase rather than requiring a fresh start."
+            "text": "Yes. Claude Code and Devin CLI: /soleur:sync. Grok Build and OpenCode: /sync. Codex: $soleur:sync. Analyze the codebase and populate the knowledge base with your project's conventions, architecture, and patterns. Soleur adapts to your existing codebase rather than requiring a fresh start."
           }
         },
         {
@@ -334,7 +351,7 @@ codex plugin add soleur@soleur</code></pre>
           "name": "What is the difference between the hosted version and self-hosted?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": {{ ("Both versions ship the same agents and skills. The self-hosted version runs inside your own harness — Claude Code, Grok Build, Codex, or Devin CLI — with full access to your own files. The hosted version (coming soon) adds a web dashboard, managed infrastructure, real-time agent orchestration, team collaboration, and email support. Both access the same " + stats.agents + " agents and " + stats.skills + " skills.") | jsonLdSafe | safe }}
+            "text": {{ ("Both versions ship the same agents and skills. The self-hosted version runs inside your own harness — Claude Code, Grok Build, Codex, Devin CLI, or OpenCode — with full access to your own files. The hosted version (coming soon) adds a web dashboard, managed infrastructure, real-time agent orchestration, team collaboration, and email support. Both access the same " + stats.agents + " agents and " + stats.skills + " skills.") | jsonLdSafe | safe }}
           }
         }
       ]
