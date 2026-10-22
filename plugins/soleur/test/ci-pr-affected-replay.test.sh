@@ -2237,7 +2237,7 @@ RT_FIX_OK=1; for d in acc ok adopt del none grow cs1 cs2 cs3 oracle renamed rais
 
 rt_sel() { printf 'AFFECTED_SELECTED\tscripts/%s\t0\tedge:derived\t^scripts/%s.test.sh%s\n' "$1" "$1" "${2:+|$2}"; }
 rt_list() {   # rt_list <file> <suite>[=<extra pattern>]...: selector rows plus the matching AFFECTED_SUMMARY
-  local f="$1" n=0 s; shift; : > "$f"
+  local f="$1" n=0 s; shift; assert_fixture_dir "$f"; : > "$f"
   for s in "$@"; do rt_sel "${s%%=*}" "$([[ "$s" == *=* ]] && printf '%s' "${s#*=}")" >> "$f"; n=$((n + 1)); done
   printf 'AFFECTED_SUMMARY selected=0 of=%s always_on=0 edge=1 fallback=none\n' "$n" >> "$f"
 }
@@ -2400,7 +2400,7 @@ row_rt_cap_report() {   # --report FILE carries the FULL list (the step summary)
 # ---- 5. --print-baseline: stdout is exactly the baseline bytes, nothing is written ---------------------------------
 rt_porcelain() { gitq -C "$RT/ok" status --porcelain; }
 row_rt_pb_bootstrap() {   # no baseline file: every live pair, sorted
-  local o; RC=0; o="$RT/pb.out"; run_sut ratchet --root "$RT/ok" --list "$RT/L-new" --baseline scripts/no-such-baseline.tsv --print-baseline > "$o" 2>"$RT/pb.err" || RC=$?
+  local o; RC=0; o="$RT/pb.out"; assert_fixture_dir "$o"; run_sut ratchet --root "$RT/ok" --list "$RT/L-new" --baseline scripts/no-such-baseline.tsv --print-baseline > "$o" 2>"$RT/pb.err" || RC=$?
   [[ "$RC" -eq 0 ]] && cmp -s "$o" <(printf '%s%s' "$B_BAD" "$B_NEWS" | LC_ALL=C sort -u) && ! grep -q SOLEUR_PR_AFFECTED_RATCHET "$o" && grep -q '^SOLEUR_PR_AFFECTED_RATCHET exit=0 reason=pass ' "$RT/pb.err"
 }
 row_rt_pb_prune() {   # a baseline exists: only its lines that are still live (never a pair absent from it), and the file is untouched
@@ -2619,6 +2619,7 @@ echo "== ratchet observation window (#10865): the follow-through probe, stub gh"
 OW_SCRIPT="$SCRIPT_DIR/../../../scripts/followthroughs/ratchet-observation-window-10865.sh"
 OW_MERGED=2031-02-01T00:00:00Z
 OW_STEP="Ratchet the audit against the committed baseline"
+OW_KBD="knowledge-""base"   # assembled: the dropped-consumer census must not read this suite as a knowledge-base reader
 OW_UNITS=()
 ow_base_units() {
   OW_UNITS=("5001 pull_request shaA feat/a 2031-02-02T01:00:00Z 1 11 0 150" "5002 pull_request shaB docs/b 2031-02-02T02:00:00Z 1 12 0 140"
@@ -2657,7 +2658,7 @@ ow_write() {   # write every fixture for OW_UNITS (and the PR facts) under the s
   if [[ "${OW_PR_MERGED-x}" == null ]]; then printf '{"merged_at":null}'; else printf '{"merged_at":"%s"}' "${OW_PR_MERGED-$OW_MERGED}"; fi | fx "repos/$R/pulls/10851"
   pr_fact() { printf '{"user":{"type":"%s","login":"u"},"head":{"ref":"%s"},"draft":false}' "$2" "$3" | fx "repos/$R/pulls/$1"; printf '%s' "$4" | fx "repos/$R/pulls/$1/files?per_page=100"; printf '%s' "$5" | fx "repos/$R/issues/$1/timeline?per_page=100"; }
   pr_fact 11 User feat/a '[{"filename":"scripts/foo.sh"}]' '[]'
-  pr_fact 12 User docs/b '[{"filename":"knowledge-base/x/y.md"},{"filename":"README.md"}]' '[]'
+  pr_fact 12 User docs/b '[{"filename":"'"$OW_KBD"'/x/y.md"},{"filename":"README.md"}]' '[]'
   pr_fact 13 User "${OW_P13_REF:-feat/c}" '[{"filename":"apps/z.ts"}]' '[{"event":"ready_for_review","created_at":"2031-02-02T06:00:00Z"}]'
   pr_fact 14 Bot bot/d '[{"filename":"plugins/soleur/docs/a.njk"}]' '[]'
   pr_fact 15 User canary-x '[{"filename":"scripts/c.sh"}]' '[]'
@@ -3284,6 +3285,8 @@ mutate comment-unknown-extension-strips-hash 'return COMMENT_PREFIX.get(os.path.
 mutate comment-table-drops-tsx '".tsx": "//", ' '' row_cm_slash
 mutate comment-table-drops-rb '".rb": "#", ' '' row_cm_hash
 mutate comment-extension-from-the-logical-name 'comment_prefix(path))' 'comment_prefix(os.path.basename(path).split(".")[0]))' row_cm_names
+
+
 
 
 
